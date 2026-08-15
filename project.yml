@@ -1,0 +1,373 @@
+name: PendingCrew
+options:
+  bundleIdPrefix: com.pendingname
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    minVersion: 8.0.0
+    maxVersion: 9.0.0
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    minVersion: 2.4.0
+    maxVersion: 3.0.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.2
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    minVersion: 2.0.0
+    maxVersion: 3.0.0
+  SwiftMath:
+    url: https://github.com/mgriebling/SwiftMath
+    minVersion: 1.0.0
+    maxVersion: 2.0.0
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.13.0
+  TOMLKit:
+    url: https://github.com/LebJe/TOMLKit
+    minVersion: 0.5.0
+    maxVersion: 1.0.0
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # 签名策略(与 apps/pendingbot 对齐 —— 同源的 keychain 坑)：
+    # macOS + iOS Simulator 都用 **Apple Development** 身份(不是 ad-hoc /
+    # "Sign to Run Locally")。`KeychainStore`(device-grant token，默认钥匙串、
+    # kSecAttrService=com.pendingname.pendingcrew)的 ACL 绑当前签名身份；ad-hoc
+    # 每次重构身份就变 → 系统认不出重建的 app → **反复弹"存取钥匙串"授权框 /
+    # -34018 存不住** → 登录态丢失。用 Apple Development(稳定身份)根治。
+    # headless 无证书构建会回落 ad-hoc(仅编译校验用，不影响 GUI/有证书环境正常签名)。
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: M42BKJN82S
+    "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "Apple Development"
+    "CODE_SIGN_IDENTITY[sdk=macosx*]": "Apple Development"
+    # 发布工具链读这两个键（scripts/release/build-macos-update.sh 用
+    # sed 从 project.yml 取 MARKETING_VERSION）；Info.plist 用
+    # $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) 变量替换，
+    # 构建期 -MARKETING_VERSION=... 才能真正落进产物。对齐 apps/pendingbot。
+    MARKETING_VERSION: "0.1.13"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  PendingCrew:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      # Sources/Mcp（McpServer/HookEmitter/McpHelperMain）编进 app：re-exec self ——
+      # app 二进制带 --mcp-serve/--mcp-hook argv 时当 crew-comms helper 跑（PendingCrewEntry）。
+      - path: Sources
+      - path: Resources
+      - path: Shared/AppUpdate
+    scheme:
+      testTargets:
+        - PendingCrewTests
+      gatherCoverageData: false
+    # 版本戳地基(Shared/)：把「这个产物从哪个 commit 出的」写进产物
+    # Info.plist。跑在 code signing 之前，所以不会让签名失效。
+    # basedOnDependencyAnalysis: false —— 没有输入/输出文件可声明，必须每次
+    # 构建都跑，否则增量构建会沿用上一次的戳（戳就成了谎报）。
+    postBuildScripts:
+      - name: Stamp build info
+        script: |
+          "$SRCROOT/Shared/scripts/stamp-build-info.sh"
+        basedOnDependencyAnalysis: false
+    dependencies:
+      - package: GoogleSignIn
+        product: GoogleSignIn
+      - package: MarkdownUI
+        product: MarkdownUI
+      - package: Sparkle
+        product: Sparkle
+        destinationFilters: [macOS]
+      - package: Supabase
+        product: Supabase
+      - package: SwiftMath
+        product: SwiftMath
+      - package: SwiftTerm
+      - package: TOMLKit
+        product: TOMLKit
+    settings:
+      base:
+        # macOS 的嵌入式框架在 Contents/Frameworks、可执行文件在 Contents/MacOS，
+        # 所以 rpath 必须是 `../Frameworks`。XcodeGen 对 supportedDestinations 多端
+        # target 只生成 iOS 约定的 `@executable_path/Frameworks`，那会解析到
+        # Contents/MacOS/Frameworks —— 那儿什么都没有。
+        # 2026-08-06 实测：Sparkle 是本 app 第一个**嵌入式二进制框架**（其余 SPM
+        # 依赖都编进主二进制了），所以这个缺失以前从没暴露；加了 Sparkle 之后
+        # macOS 版**编译链接全过、一启动就 dyld "Library not loaded" SIGABRT**。
+        "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
+        PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew
+        PRODUCT_NAME: PendingCrew
+        # keychain-access-groups entitlement —— 让 KeychainStore 的
+        # data-protection 钥匙串项落进 app 自己的 access group(entitlement-gated)，
+        # macOS 上不再反复弹"存取钥匙串"授权框。对齐 PendingBot。
+        CODE_SIGN_ENTITLEMENTS: Resources/PendingCrew.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # 1,2 = iPhone + iPad（对齐 apps/pendingbot）。曾是 "2"(仅 iPad) ——
+        # 那会让 `simctl install` 到 iPhone 被系统直接拒（"app is compatible
+        # with (2) but this device supports (1)"）。iPhone 形态见
+        # Sources/Views/IPadShell.swift 的 compact 分支。
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_PREVIEWS: YES
+        SUPPORTS_MACCATALYST: NO
+  # PendingCrewTests —— macOS-only XCTest bundle for LocalRunner module.
+  # 不挂 iOS，因为待测代码全在 `#if os(macOS)` guard 后面。
+  PendingCrewTests:
+    type: bundle.unit-test
+    supportedDestinations: [macOS]
+    sources:
+      - path: Tests/PendingCrewTests
+        # Fixtures/ 是**不入 git** 的真实群聊数据（#443，见 .gitignore +
+        # scripts/make-chat-fixtures.sh）。必须排掉：否则 xcodegen 会把当时碰巧
+        # 存在的那几个文件名逐个写进 pbxproj，干净机器上一 regen 就 diff、
+        # 而且 pbxproj 里会引用根本不存在的文件。测试是用 `#filePath` 从磁盘读的，
+        # 本来就不需要它们进 bundle 资源。
+        excludes:
+          - "Fixtures/LEDDriverCrew/**"
+      # 直接把 LocalRunner 源码编进 test bundle 而不是从 app 链接 ——
+      # scaffold 阶段 app 不签名，无法做完整 macOS host-app injection；
+      # bundle_loader + 无 test host 又会触发 dlopen 时 swift symbol 找不到。
+      # LocalRunner 模块是纯 Foundation 代码（不依赖 SwiftUI / NSApplicationMain），
+      # 重复编译进 test bundle 完全没问题。
+      - path: Sources/Mac/LocalRunner
+      # SessionProxy codec + WS transport（遥控 Step 0：从 Sources/Mac/LocalRunner
+      # 搬进三端共用的 Sources/Remote 后，不再随 LocalRunner 整目录进 bundle）。
+      # SessionProxyProtocolTests 单测 codec；SessionPermissionRelay.swift（仍在
+      # LocalRunner）引用 SessionProxyClient，所以两个都要带上。纯 Foundation。
+      - path: Sources/Remote/SessionProxyProtocol.swift
+      - path: Sources/Remote/SessionProxyClient.swift
+      # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
+      # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
+      - path: Sources/Stores/MultiProcessJSONStore.swift
+      # LocalWhiteboardStore 同理：自包含 Foundation 代码（本地白板持久化，
+      # 不引 CrewWhiteboardEntry / app module），单独编进 bundle 单测。
+      - path: Sources/Stores/LocalWhiteboardStore.swift
+      # 目录监听的合流 + 相关性判定（#443 点进群聊转彩虹圈）。纯 Foundation，
+      # LocalWhiteboardStore 依赖它，所以 test bundle 也要带上。
+      - path: Sources/Stores/DirectoryWatchCoalescing.swift
+      # 白板消息 → session 注入面的可见性判定（#543 定向 @ 扩散根因修复）。
+      # hook 注入路 / 收听路 / 唤醒上下文共用同一份标准，纯 Foundation。
+      - path: Sources/Stores/CrewWhiteboardVisibility.swift
+      # 待审批/待决策 store（ask 工具 + 权限 hook 用），同自包含。
+      - path: Sources/Stores/LocalApprovalStore.swift
+      # 定时唤醒账本（schedule_wakeup 持久化，#528 从 runner 抽出），同自包含。
+      - path: Sources/Stores/LocalWakeupStore.swift
+      # agent 侧会话号账本（Todo #28：重启成员时 --resume / thread/resume 回原对话），同自包含。
+      - path: Sources/Stores/LocalAgentSessionStore.swift
+      # 人类 Todo 列表 store（respond_todo 工具 + 右栏面板数据层），同自包含。
+      - path: Sources/Stores/LocalTodoStore.swift
+      # crew-naming（2026-06-17）：控制通道 store（机长 rename_crew 写待改名）+
+      # LocalCrewStore（setTitle/地名兜底）+ PlaceNames（地名池）。均自包含 Foundation；
+      # PlaceNames 读 Bundle.main，测试 bundle 无 crewground_places.txt → 回落 ["Atlantis"]，
+      # 不崩，断言「非『未命名』」仍成立。
+      - path: Sources/Stores/LocalCrewControlStore.swift
+      - path: Sources/Stores/LocalCrewStore.swift
+      - path: Sources/Stores/PlaceNames.swift
+      # 新建 crew 的「最近工作目录」MRU 纯逻辑（Todo #29）。纯 Foundation，自包含。
+      - path: Sources/Stores/RecentWorkingDirectories.swift
+      # 成员状态快照（机长 list_sessions 数据源，纯 Foundation Codable）。
+      - path: Sources/Stores/CrewSessionsSnapshot.swift
+      # 通讯录（2026-08-11）：号码解析 + 全机汇总 + contact 寻址。纯 Foundation，
+      # 依赖 LocalCrewStore.swift 的 LocalCrew / LocalCrewFile 与上面的快照类型
+      # （都已编进 bundle），所以整套编号/寻址逻辑能脱离 app 单测。
+      - path: Sources/Stores/CrewDirectory.swift
+      # 家族 SSO 凭据共享组存储（纯 Foundation+Security，自包含）。
+      - path: Sources/Support/FamilyCredentialStore.swift
+      # fd 软上限抬升（2026-08-12 P0 的触发闸）。纯 Darwin syscall + 一个可单测的
+      # 纯判定函数，自包含。
+      - path: Sources/Support/FileDescriptorLimit.swift
+      # 机器分组纯函数（依赖 Models 里的 Machine / CrewSummary，已编进 bundle）。
+      - path: Sources/Support/MachineGrouping.swift
+      # 子 crew 深度 cap 纯判定（create_child_crew 机长命令）。CrewStore 依赖
+      # AppModel（未编进 bundle），逻辑摘到这个自包含文件供单测直接编译。
+      # crew 状态点聚合纯函数（侧栏头像右上角;红>黄>绿>灰）。自包含 Foundation。
+      - path: Sources/Support/CrewStatusAggregation.swift
+      # session 状态点语义（头像右下角那**唯一**一颗；绿=干活/黄=空闲/红=需要人
+      # 出手/灰=已退出）。自包含 Foundation+SwiftUI(只用 Color)，与上面那套 crew
+      # 级聚合是两回事，别混。
+      - path: Sources/Support/SessionStatusDot.swift
+      # 新起的 run 该不该跳过去（Todo #42：程序在背后起的不许抢用户正开着的那个）。
+      # 纯 Foundation，自包含。
+      - path: Sources/Support/SessionForegroundClaim.swift
+      # 「这个 session 正在等人回复」的判定（Todo #25 层 2：待回复要标红）。
+      # 纯 Foundation，自包含。
+      - path: Sources/Support/SessionAwaitingReply.swift
+      # 侧栏拖拽改父子关系的判定层（Todo #27：禁环/移动语义/摘到顶层/负载编解码）。
+      # 纯 Foundation，只依赖 CrewSummary（Sources/Models 已在 bundle）。
+      - path: Sources/Support/CrewDragDropLogic.swift
+      # 根祖先判定（crew 名字后面那行黄字标注：标的是最顶层的根 crew，多父就是多个）。
+      # 纯 Foundation，只依赖 CrewSummary（Sources/Models 已在 bundle）。
+      - path: Sources/Support/CrewRootLineage.swift
+      # 侧栏行右键「在这下面建子 crew」的目标解析（Todo #35：钉死作用于被右键的
+      # 那一行，不看选中态 / 不看父边）。同上，纯 Foundation + CrewSummary。
+      - path: Sources/Support/CrewChildCreationTarget.swift
+      # 白板/crew 时间戳解析 + crew「最新活动时间」口径（侧栏两种视图共用的单一
+      # 真值）。CrewTimeSeparator 转发到它 —— 纯 Foundation，所以能进 test bundle。
+      - path: Sources/Support/CrewTimestamp.swift
+      # 侧栏时间流视图的排序 / 血缘次要行 / 视图模式持久化（Todo #50）。
+      # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。
+      - path: Sources/Support/CrewTimelineOrdering.swift
+      # create_child_crew brief 的启动 payload + fail-loud 回执纯逻辑（Todo #41）。
+      - path: Sources/Support/CaptainBriefDelivery.swift
+      # 「正在输入」圆点（CoreAnimation 驱动）—— 布局自激回归测试要直接跑线上这版。
+      # 自包含 SwiftUI+AppKit，不引 Theme/CrewSessionRun。
+      - path: Sources/Mac/Views/Chat/TypingDotsLayerView.swift
+      # Todo 状态圆圈的呼吸（同样 CoreAnimation 驱动，2026-08-10 第二条自激的修复）——
+      # 布局自激回归测试要直接跑线上这版。自包含 SwiftUI+AppKit，不引 Theme。
+      - path: Sources/Mac/Views/BreathingSymbolView.swift
+      # 「需要人出手」的呼吸红点（同样 CoreAnimation 驱动）—— 布局自激回归测试
+      # 要直接跑线上这版。自包含 SwiftUI+AppKit/UIKit。
+      - path: Sources/Views/BreathingDotView.swift
+      # Todo 列表展示纯逻辑（#4/#5 从新到旧排序 + #11 状态→圆圈图标映射）。
+      # 依赖 LocalTodoItem（LocalTodoStore.swift 已编进 bundle），纯 Foundation。
+      - path: Sources/Support/TodoListPresentation.swift
+      # 额度圆环判定层（Todo #8/#10：颜色阈值 / 窗口→环映射 / 模型名字段 /
+      # 快照新鲜度）。依赖 AgentQuota.swift 的类型（已随 LocalRunner 编进 bundle）。
+      - path: Sources/Support/QuotaRingLayout.swift
+      # 自绘终端滚动条的几何换算（Todo #34）：knob 长度/位置 ↔ 拖动位置互逆。
+      # 纯 CoreGraphics，自包含。
+      - path: Sources/Support/TerminalScrollbarGeometry.swift
+      # 本地 prompts：PromptTemplate（纯 {{var}}）+ LocalPromptLoader（bundle 读）
+      # 自包含，编进 bundle 单测；Resources/Prompts 作为 test bundle 资源，从
+      # test bundle 加载验证 bundling + lookup 端到端。
+      - path: Sources/Stores/PromptTemplate.swift
+      - path: Sources/Stores/LocalPromptLoader.swift
+      - path: Sources/Stores/LocalSessionWorldModel.swift
+      # McpServer.swift / HookEmitter.swift（纯逻辑，不含 main.swift 顶层代码）编进
+      # bundle 测 JSON-RPC dispatch + hook 注入。
+      - path: Sources/Mcp/McpServer.swift
+      - path: Sources/Mcp/HookEmitter.swift
+      # 未读游标单一真值（hook 路与唤醒/提及注入路共用），自包含 Foundation。
+      - path: Sources/Mcp/WhiteboardCursor.swift
+      - path: Sources/Mcp/McpPermissionHook.swift
+      # 回合结束留痕（#25 层 1）：判定纯函数 + marker 记账 + Stop hook 宿主。
+      # 自包含 Foundation（只依赖 LocalWhiteboardStore，已在 bundle）。
+      - path: Sources/Mcp/SessionTurnTrace.swift
+      - path: Sources/Mcp/McpTurnHook.swift
+      - path: Resources/Prompts
+      # CrewChatAdapter + isMine 单一真值源 + GroupBubbleSender SHIM（A6）
+      # 只列纯 Foundation 逻辑文件，**不**整目录纳入 —— Chat/Adapter 下还有
+      # CrewAvatarBadges.swift / ThemeCrewExtras.swift 等依赖 Vendored/Theme/BotAvatar
+      # 的 SwiftUI 文件，整目录会把它们拖进 test bundle 而 Vendored 不在 bundle 里 → 编不过。
+      - path: Sources/Chat/Adapter/CrewChatAdapter.swift
+      - path: Sources/Chat/Adapter/CrewChatMessage.swift
+      - path: Sources/Chat/Adapter/GroupBubbleSender.swift
+      # CrewComposerMentions.swift：composer @ 候选构建/过滤 + @token 解析 +
+      # staged 撤销对账 + reply 自动@推导(Phase 6)。纯 Foundation，自包含。
+      - path: Sources/Chat/Adapter/CrewComposerMentions.swift
+      # CrewSessionTitle.swift：session 精简标题 clamp/derive（≤18 字、剥项目名）。纯 Foundation。
+      - path: Sources/Chat/Adapter/CrewSessionTitle.swift
+      # CrewPasteAttachments.swift（Todo #9）：剪贴板快照 → 附件的优先级判定 +
+      # macOS 可粘贴类型清单（⌘V 能否派发的病根守卫）。只依赖 Foundation/AppKit
+      # 与 PendingComposerAttachment（同为纯 Foundation，一并编进 bundle）。
+      - path: Sources/Chat/Adapter/CrewPasteAttachments.swift
+      - path: Sources/Chat/Adapter/PendingComposerAttachment.swift
+      # CrewFileAttachmentIntake.swift：拖入 / `+ 面板▸文件` → 附件托盘的唯一一条路
+      # （大小上限判定、目录/package 拒收、mime 推导、原样复制进暂存区）。
+      # 只依赖 Foundation/ImageIO + PendingComposerAttachment + CrewChatAttachmentStore。
+      - path: Sources/Chat/Adapter/CrewFileAttachmentIntake.swift
+      # CrewChatAttachmentStore.swift：附件落盘（save(data:) / save(fileAt:) 搬文件 /
+      # 暂存区）。自包含 Foundation，只依赖 LocalWhiteboardAttachment（已在 bundle）。
+      - path: Sources/Stores/CrewChatAttachmentStore.swift
+      # CrewLocalAttachmentPersist.swift（Todo #52）：托盘待发附件 → 落盘条目的
+      # 唯一一条路（群聊 / 新建 Todo / Todo 追问三个调用方共用）。纯 Foundation，
+      # 只依赖上面两个（PendingComposerAttachment + CrewChatAttachmentStore）。
+      - path: Sources/Chat/Adapter/CrewLocalAttachmentPersist.swift
+      - path: Sources/Mac/Views/Chat/CrewSenderResolver.swift
+      # CrewSenderNaming.swift：session/成员显示名兜底 + groupSender factory 收口
+      # （纯 Foundation，只依赖 CrewMember/GroupBubbleSender，均已在 bundle）。
+      # CrewComposerMentions / CrewSenderResolver 依赖它。
+      - path: Sources/Chat/Adapter/CrewSenderNaming.swift
+      # CrewMemberOrdering.swift（Todo #15）：成员列表排序单一真值（创建时刻倒序 +
+      # 机长/人类置顶）。纯 Foundation，只依赖 CrewMember。
+      - path: Sources/Chat/Adapter/CrewMemberOrdering.swift
+      # CrewLocalImageCache.swift（#443 病根 2）：本地附件图的后台解码 + 降采样 +
+      # mtime 失效缓存。只依赖 AppKit/ImageIO，不引 SwiftUI/Theme。
+      - path: Sources/Mac/Support/CrewLocalImageCache.swift
+      # CrewChatRefreshGate.swift（#443 第二道闸）：内容没变就不碰 @State，
+      # 免得整条消息列表被 LazyVStack 重新测量。纯 Foundation + Equatable。
+      - path: Sources/Chat/Adapter/CrewChatRefreshGate.swift
+      # CrewChatWindow.swift（#443 第三道闸）：群聊时间线的渲染窗口（只把最近一页
+      # 交给 ForEach）。纯 Foundation，自包含。
+      - path: Sources/Chat/Adapter/CrewChatWindow.swift
+      # ── #443 主线程渲染成本的可量化基座 ────────────────────────────────────
+      # `CrewChatOpenCostTests` 要拿**线上这版** MarkdownText 在离屏 NSHostingView
+      # 里量真实的 70 条消息，所以整条 markdown 渲染链要编进 test bundle。这一组
+      # 都是自包含的 SwiftUI/Foundation 文件（不引 AppModel / 后端 / Supabase），
+      # 顺序无关，缺一个就编不过：
+      #   Theme ← Platform / ColorHex / ColorHash / AppearanceMode / ThemeCrewExtras
+      #   MarkdownText ← Theme / MathRendering(SwiftMath) / Haptics / MessageCitation
+      #   CrewBubbleTextSelection：`crewBubbleSelectable` 环境值（按需 textSelection）
+      - path: Sources/Chat/Vendored/Platform.swift
+      - path: Sources/Chat/Vendored/ColorHex.swift
+      - path: Sources/Chat/Vendored/ColorHash.swift
+      - path: Sources/Chat/Vendored/AppearanceMode.swift
+      - path: Sources/Chat/Vendored/Theme.swift
+      - path: Sources/Chat/Vendored/AppThemeAlias.swift
+      - path: Sources/Chat/Adapter/ThemeCrewExtras.swift
+      - path: Sources/Chat/Vendored/Haptics.swift
+      - path: Sources/Chat/Vendored/PlatformImage.swift
+      - path: Sources/Chat/Vendored/MathRendering.swift
+      # MathMarkup.swift：从 MathRendering.swift 切出来的纯 Foundation 字符串层
+      # （围栏/行内代码分段 + 数学重写）。MathRendering 仍需要它，且
+      # MathMarkupFenceTests 就靠它把「围栏经重写后必须原样还在」钉成单测。
+      - path: Sources/Chat/Vendored/MathMarkup.swift
+      - path: Sources/Chat/Vendored/MarkdownText.swift
+      - path: Sources/Chat/Adapter/CrewBubbleTextSelection.swift
+      # CrewChatBottomFollow.swift（Todo #45）：群聊「跟随底部」判定 —— 在不在底部、
+      # 行高输入令牌、用户滑走后还跟不跟。只依赖 CoreGraphics。
+      - path: Sources/Chat/Adapter/CrewChatBottomFollow.swift
+      # CrewComposerDrafts.swift（Todo #45 配套）：每 crew 未发出草稿的内存态。
+      # 只依赖 CrewStagedMention / CrewReplyTarget（均已在 bundle）。
+      - path: Sources/Chat/Adapter/CrewComposerDrafts.swift
+      # CrewModels.swift：从 PendingCrewAPI.swift 提取的 whiteboard/crew 纯
+      # Foundation 模型（CrewWhiteboardEntry / CrewMember / CrewAttachment 等），
+      # 不含 PendingCrewAPI 类或 URLSession 依赖。
+      - path: Sources/Services/CrewModels.swift
+      # CrewRealtimeClient.swift：crew 级 hub WS 客户端 + codec（纯 Foundation，
+      # 跨平台）。原在 Sources/Mac/LocalRunner（随整目录编进 bundle），移到
+      # Sources/Services 后需显式列出 —— CrewRealtimeClientTests 单测 codec。
+      - path: Sources/Services/CrewRealtimeClient.swift
+      # InMemoryKeyValueStore.swift：纯内存 KV（无 Supabase import），供
+      # InMemoryAuthStorageTests 单测。CrewSupabaseStack.swift 有 import Supabase
+      # 不能进 test bundle。
+      - path: Sources/Services/InMemoryKeyValueStore.swift
+      # CrewLoginIdentity.swift：确认卡展示模型，从 FamilyCredential 派生（纯
+      # Foundation，自包含）。FamilyCredentialStore 已在 bundle。
+      - path: Sources/Services/CrewLoginIdentity.swift
+      # CrewLoginExchange.swift：临时 session → pfa_ → pdg_ 兑换编排（纯
+      # Foundation，不含 Supabase import）。teardown 在成败两路都 await。
+      - path: Sources/Services/CrewLoginExchange.swift
+      # Sources/Models/（CrewDetail / CrewSummary / UserSubject / DeviceLogin /
+      # ModelCatalogEntry）：LocalRunner 传递引用了这些类型。
+      - path: Sources/Models
+      # Shared/AppUpdate（版本戳 + 更新检查闸门）：纯 Foundation，直接编进 bundle 单测。
+      - path: Shared/AppUpdate/UpdateCheckGate.swift
+      - path: Shared/AppUpdate/AppBuildStamp.swift
+    # AgentTerminalSession.swift（在 LocalRunner 里）import SwiftTerm，所以
+    # test bundle 也要链 SwiftTerm，否则编不过。
+    # WorkspaceSync/WorkspaceManifest.swift import TOMLKit，同理 test bundle 直编
+    # 源码需要直接链 TOMLKit。
+    dependencies:
+      - package: SwiftTerm
+      - package: TOMLKit
+        product: TOMLKit
+      # MarkdownUI / SwiftMath：MarkdownText.swift 直编进 bundle 后需要它们
+      # （#443 主线程渲染成本测量要跑线上那版 markdown 渲染，不能拿仿制品量）。
+      - package: MarkdownUI
+        product: MarkdownUI
+      - package: SwiftMath
+        product: SwiftMath
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.tests
+        GENERATE_INFOPLIST_FILE: YES
+        # standalone test bundle —— 不挂 host app
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""

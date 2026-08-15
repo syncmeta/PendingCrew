@@ -1,0 +1,286 @@
+#if os(macOS)
+import Combine
+import SwiftUI
+
+/// 侧栏里的**一行 crew** —— 层级视图（`CrewDAGTreeView`）和时间流视图
+/// （`CrewTimelineListView`）共用**同一个**行视图。
+///
+/// 为什么必须共用：行上挂的东西已经很多（状态点、根黄字标注、最新消息摘要、
+/// 相对时间、选中高亮、右键菜单、拖拽改从属），新开一种视图最容易翻的车就是
+/// "在新视图里少了一样"。共用一个行 = 两种视图**结构性地**不可能不一致，
+/// 想掉也掉不了。两视图的差别只有三项，都由参数表达：
+/// - `expansion`：展开三角的开关（nil = 不画三角，只占位保持左缘对齐）；
+/// - `lineageLine`：扁平视图才有的"挂在谁下面"次要行（推导在
+///   `CrewTimelineOrdering.lineageLine`）；
+/// - `parentId`：本行这次渲染所处的那条父边（拖拽要摘的就是它）。
+///
+/// 会话行样式对齐 PendingBot `ConversationListRow`：细竖色条（谱系二分色，见
+/// `CrewColorBar`）+ 无衬线-14 标题 + 最近一条消息 + 相对时间。
+///
+/// **不贴每行「本机/云端」location tag**（#369：层级视图已按 machine 分组；时间流
+/// 视图是跨机器扁平的，机器归属由竖色条 + 血缘行承担）。
+struct CrewSidebarCrewRow: View {
+    let crew: CrewSummary
+    /// 算竖色条色链用（本组/全量 crew 的 id → crew）。
+    let crewsById: [String: CrewSummary]
+    /// 名字后面那行黄字标注（根 crew 标题）。整表一次算好传进来，别每行重算。
+    let rootTitles: [String]
+    /// 扁平视图的血缘次要行；层级视图传 nil（缩进本身就说明了层级）。
+    var lineageLine: String?
+    /// 展开三角；nil = 无子节点或本视图不支持展开 → 画透明占位（左缘仍对齐）。
+    var expansion: Binding<Bool>?
+    /// 本行这次渲染所处的那条父边（nil = 顶层）。多父 crew 在每个父下各画一次，
+    /// 拖走的是当前这条边，别的父边不动。
+    let parentId: String?
+    /// 合法性判定的数据面（层级视图 = 本机器分组；时间流视图 = 全量）。
+    let groupCrews: [CrewSummary]
+    @ObservedObject var dragState: CrewDragState
+    /// 右键「在这下面建子 crew」的目标（侧栏持有，表单也在那层弹）。
+    @Binding var childCrewTarget: CrewChildCreationTarget?
+    /// 末条白板消息从哪来。层级视图用 `.load`（行自己读，行数少）；时间流视图
+    /// 传 `.prefetched` —— 它为了排序**本来就得**把每个 crew 的白板读一遍，行里
+    /// 再读一遍就是把整份白板 JSON 解码两次 × crew 数。
+    var lastMessageSource: LastMessageSource = .load
+
+    @EnvironmentObject private var crewStore: CrewStore
+    /// session 状态源（isWorking/health/退出）—— 状态点聚合用。由 `MacRootView`
+    /// 注入 sidebar（与中/右栏同一实例，才看得到同一批 run）。
+    @EnvironmentObject private var sessionRunner: CrewSessionRunner
+    @State private var isDropTargeted = false
+
+    /// 此刻拖着的那个 crew 能不能落到本行上（非法目标不高亮、也不接受）。
+    private var acceptsDrop: Bool { dragState.accepts(targetId: crew.id, in: groupCrews) }
+    private var isSelected: Bool { crewStore.selectedCrewId == crew.id }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            // 三角槽**恒占位**（无三角时画透明占位）—— 同层级的色条/标题左缘必须
+            // 对齐，不能因为某行有子带三角就被推出去。
+            if let expansion {
+                Button { expansion.wrappedValue.toggle() } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.Palette.inkMuted)
+                        .rotationEffect(.degrees(expansion.wrappedValue ? 90 : 0))
+                }
+                .buttonStyle(.plain)
+                .frame(width: 12)
+                .padding(.top, 10)
+            } else {
+                Color.clear.frame(width: 12, height: 1)
+            }
+
+            CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
+                // 状态点浮在色条右上角（spec §3）：红=异常、黄=机长 attention、
+                // 绿=干活中、灰=全闲/退；无 session 且无 attention 不画。
+                .overlay(alignment: .topTrailing) {
+                    CrewStatusDotView(
+                        attentionReason: crew.attentionReason,
+                        runs: sessionRunner.runs.filter { $0.crewId == crew.id }
+                    )
+                    .offset(x: 6, y: -5)
+                }
+
+            let last = resolvedLastMessage
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    CrewTitleRootBadge(
+                        title: crew.title,
+                        titleFont: Theme.Fonts.system(size: 14, weight: .semibold),
+                        titleColor: Theme.Palette.ink,
+                        rootTitles: rootTitles,
+                        badgeSize: 11
+                    )
+                    Spacer(minLength: 8)
+                    if let date = CrewActivityTime.resolve(
+                        lastMessageCreatedAt: last?.createdAt, crewUpdatedAt: crew.updatedAt) {
+                        // 相对时间要随 now 老化 —— 不包 TimelineView 的话首次渲染
+                        // 算死的文案会一直冻住（同 CrewTimeSeparator）。
+                        TimelineView(.everyMinute) { _ in
+                            Text(date.formatted(.relative(presentation: .numeric)))
+                                .font(Theme.Fonts.caption2)
+                                .foregroundStyle(Theme.Palette.inkMuted)
+                                // 同 PendingBot 会话行：加了黄字标注后横向变紧，
+                                // 不钉住的话相对时间会折行把整行撑高。该让位的是黄字。
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(CrewSidebarCrewRow.preview(of: last))
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.inkMuted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if crew.parentCrewIds.count > 1 {
+                        Spacer(minLength: 6)
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(Theme.Fonts.caption2)
+                            .foregroundStyle(Theme.Palette.inkMuted)
+                            .help("此 crew 挂在多个父 crew 之下,在每个父下都会出现")
+                    }
+                }
+                // 扁平视图专有：直接父 crew 名。层级视图靠缩进说这件事，不画。
+                if let lineageLine {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.turn.up.right")
+                            .font(Theme.Fonts.caption2)
+                        Text(lineageLine)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .font(Theme.Fonts.caption2)
+                    .foregroundStyle(Theme.Palette.inkMuted.opacity(0.75))
+                    .help("挂在 \(lineageLine) 之下")
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
+                .fill(isSelected ? Theme.Palette.accentBg : Color.clear)
+        )
+        // 拖拽落点高亮：只有**合法**目标才描边（自己 / 自己的子树不高亮，
+        // 也接不了 drop）—— 判定全在 `CrewDragDropLogic`。
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
+                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .opacity(isDropTargeted && acceptsDrop ? 1 : 0)
+        )
+        .opacity(dragState.draggingCrewId == crew.id && dragState.draggingParentId == parentId ? 0.4 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture { crewStore.selectCrew(crew.id) }
+        // 行右键菜单（Todo #35）。目标恒为**本行这个 crew**（`crew` 是本行自己的
+        // 数据），不看 `crewStore.selectedCrewId` —— 右键不改变选中，看选中就会建到
+        // 别的 crew 下面。解析走 `CrewChildCreationTarget.forRow`（单测钉死）。
+        .contextMenu {
+            Button {
+                childCrewTarget = .forRow(crew)
+            } label: {
+                Label("在这下面建子 crew", systemImage: "plus")
+            }
+        }
+        // 拖起：负载带上「哪个 crew + 当前这条父边」，落地时才知道该摘哪条边。
+        .draggable(CrewDragDropLogic.encode(crewId: crew.id, parentId: parentId)) {
+            Text(crew.title)
+                .font(Theme.Fonts.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .onAppear { dragState.begin(crewId: crew.id, parentId: parentId) }
+        }
+        .dropDestination(for: String.self) { items, _ in
+            dragState.handleDrop(items, targetId: crew.id, crews: groupCrews, store: crewStore)
+        } isTargeted: { isDropTargeted = $0 }
+        // 每个 crew 之间留一道竖向呼吸间距 —— 加在高亮 pill 之外(背景/点击区已闭合),
+        // 所以是 crew 之间的留白,不是把 pill 撑高;根 crew(独立 list row)与展开的
+        // 子 crew(同 VStack 内堆叠)都吃这道下边距,间距统一。
+        .padding(.bottom, 6)
+    }
+
+    /// 末条白板消息的来源。
+    enum LastMessageSource {
+        /// 行自己读本地 store。
+        case load
+        /// 由列表统一读好（`nil` = 该 crew 白板确实是空的，不是"没读"）。
+        case prefetched(LocalWhiteboardMessage?)
+    }
+
+    private var resolvedLastMessage: LocalWhiteboardMessage? {
+        switch lastMessageSource {
+        case .load:
+            // 传 whiteboardRevision 进读取：本身不参与文案，但让本行订阅 CrewStore 的
+            // 白板变更计数 —— 白板一变（含 helper 子进程跨进程写）行重渲染、预览与
+            // 行尾时间重新求值。删掉它就退化成「点选才刷新」。
+            return CrewSidebarCrewRow.lastMessage(
+                crewId: crew.id, revision: crewStore.whiteboardRevision)
+        case .prefetched(let message):
+            // 预取方（时间流列表）自己订阅了 whiteboardRevision，刷新链没断。
+            return message
+        }
+    }
+
+    /// 最近一条白板消息(本地 store)。`revision` = `CrewStore.whiteboardRevision`,
+    /// 值本身不用 —— 只为把「白板变了」变成本视图的依赖,变更时重新同步读 store
+    /// (spec 2026-07-06 §2 方案 A)。
+    static func lastMessage(crewId: String, revision: Int) -> LocalWhiteboardMessage? {
+        LocalWhiteboardStore.shared.list(crewId: crewId).last
+    }
+
+    /// 最近一条消息的预览文案;空则"还没有消息"。
+    static func preview(of last: LocalWhiteboardMessage?) -> String {
+        let text = last?.text ?? ""
+        return text.isEmpty ? "还没有消息" : text
+    }
+}
+
+/// 头像右上角的 crew 状态点。聚合逻辑在 `CrewStatusAggregation`（纯函数，单测
+/// 覆盖优先级），这里只负责取信号 + 画点。
+///
+/// **嵌套 ObservableObject 观察**：`run.isWorking` / `run.health` / `run.status`
+/// 是各 run 自己的 `@Published` —— 父视图观察 `CrewSessionRunner` 看不到 run 内
+/// 部变更（同 `SessionBarItemView` 的问题）。这里 merge 所有 run 的
+/// `objectWillChange` 撞一下本视图的 `@State revision`，任一 run 状态变化即重
+/// 渲染重新聚合。runs 列表本身增删由父视图（观察 runner.runs）驱动重建。
+struct CrewStatusDotView: View {
+    let attentionReason: String?
+    let runs: [CrewSessionRun]
+
+    @State private var revision = 0
+
+    var body: some View {
+        Group {
+            if let color = dotColor {
+                ZStack {
+                    // 2pt 背景色描边 —— 让点从头像盘上浮出（点 10pt + 描边圈 14pt）。
+                    Circle()
+                        .fill(Theme.Palette.canvas)
+                        .frame(width: 14, height: 14)
+                    Circle()
+                        .fill(fill(color))
+                        .frame(width: 10, height: 10)
+                }
+                .help(helpText(color) ?? "")
+            }
+        }
+        .onReceive(Publishers.MergeMany(runs.map(\.objectWillChange))) { _ in
+            revision &+= 1
+        }
+    }
+
+    private var dotColor: CrewStatusDotColor? {
+        _ = revision // 把 revision 变成 body 依赖：run 内部状态一变即重新聚合。
+        return CrewStatusAggregation.dot(
+            sessions: runs.map {
+                CrewSessionStatusSignal(
+                    isAlive: $0.status == .running,
+                    isWorking: $0.isWorking,
+                    hasHealthIssue: $0.health != nil,
+                    // 侧栏折起来时人只看得到这一级 —— 群里有人卡着等回复要冒得上来（#25 层 2）。
+                    isAwaitingReply: $0.awaitingReply != nil)
+            },
+            attentionReason: attentionReason)
+    }
+
+    /// 配色对齐右栏切换条状态点（`SessionBarItemView`）：系统语义色。
+    private func fill(_ color: CrewStatusDotColor) -> Color {
+        switch color {
+        case .red: return .red
+        case .yellow: return .yellow
+        case .green: return .green
+        case .gray: return .gray
+        }
+    }
+
+    /// 悬浮提示：黄 = 机长的 attention reason；红 = 首个异常 session 的 health
+    /// detail（实现顺手，spec 允许）。绿/灰不带。
+    private func helpText(_ color: CrewStatusDotColor) -> String? {
+        switch color {
+        case .yellow: return attentionReason
+        case .red: return runs.first(where: { $0.health != nil && $0.status == .running })?.health?.detail
+        case .green, .gray: return nil
+        }
+    }
+}
+#endif

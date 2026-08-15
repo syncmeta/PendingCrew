@@ -1,0 +1,189 @@
+import XCTest
+
+/// **接线断言** —— 防「零件造好了没装到车上」。
+///
+/// 病根（2026-07-26）：Todo 面板返工（Todo #4/#5/#11）新增了排序纯逻辑、状态圆圈、
+/// 详细窗口三样零件，单测全绿、也合了 main，但**没有任何一个现有视图去用它们** ——
+/// 用户装上新构建看到的还是老界面。单测只测零件本身，测不出「没装车」。
+///
+/// 这里补的就是那一刀：对每个「只要没人调用、功能就等于不存在」的符号，断言它在
+/// 定义文件**之外**至少还有一处出现。扫的是仓库源码文本（路径由 `#filePath` 推出），
+/// 不依赖运行期，也不需要把视图跑起来。
+///
+/// 加新零件时的规矩：如果它是「用户能看见的东西的入口」，在下面 `wirings` 里加一行。
+final class ViewWiringTests: XCTestCase {
+
+    /// (符号, 定义它的文件名, 人话说明它没接线会怎样)
+    private static let wirings: [(symbol: String, definedIn: String, impact: String)] = [
+        ("TodoListPresentation.newestFirst", "TodoListPresentation.swift",
+         "Todo 列表不会从新到旧排，新建的条目不在最上面"),
+        ("CrewTodoStatusCircle(", "CrewTodoStatusCircle.swift",
+         "Todo 行还是旧的方块状态标签，没有提醒事项那种圆圈/呼吸"),
+        ("CrewTodoDetailWindowPresenter.shared", "CrewTodoDetailWindow.swift",
+         "Todo 详细窗口没有任何入口，永远打不开"),
+        ("CrewTodoFollowUp.perform", "CrewTodoFollowUp.swift",
+         "Todo 追问/重开不发群也不唤醒机长，人的追问石沉大海"),
+        ("GlassCloseButton(", "GlassCloseButton.swift",
+         "玻璃白关闭件没人用，各浮层的关闭按钮还是各画各的（Todo #22 失效）"),
+        ("CrewTodoPanel(", "CrewTodoPanel.swift",
+         "右栏根本不显示 Todo 面板"),
+        ("QuotaRingLayout.footnote", "QuotaRingLayout.swift",
+         "额度行不显示重置时刻（Todo #14 的悬停效果失效）"),
+        ("QuotaRingsFooter(", "QuotaRingsFooter.swift",
+         "侧栏底部看不到额度环"),
+        ("CrewMemberOrdering.sorted", "CrewMemberOrdering.swift",
+         "成员列表不按创建时间倒序（Todo #15 失效）"),
+        ("UncaughtExceptionLog.install", "UncaughtExceptionLog.swift",
+         "未捕获异常不留痕，下次闪退又只剩一份没有异常名的 .ips"),
+        ("UpdateSettingsSection(", "UpdateSettingsSection.swift",
+         "设置里没有「更新」区，检查更新点不到（Sparkle 接入失效）"),
+    ]
+
+    func testEveryUserFacingPieceIsActuallyWiredUp() throws {
+        let sources = try Self.sourceFiles()
+        XCTAssertGreaterThan(sources.count, 50, "源码扫描没扫到东西，测试本身失效了")
+
+        for wiring in Self.wirings {
+            let callSites = sources.filter { url, text in
+                url.lastPathComponent != wiring.definedIn && text.contains(wiring.symbol)
+            }
+            XCTAssertFalse(
+                callSites.isEmpty,
+                """
+                「\(wiring.symbol)」在 \(wiring.definedIn) 之外没有任何调用点 —— \
+                零件造好了没装到车上：\(wiring.impact)。
+                """)
+        }
+    }
+
+    /// 上面那条只保证「有人用」；这条钉死**用户实际看的那个面板**在用。
+    /// 2026-07-26 的漏接正是这种：详细窗口自己用了新零件，而右栏那块面板没有，
+    /// 于是「有调用点」成立、用户却什么变化都看不到。
+    func testTodoOverviewPanelUsesTheNewPresentation() throws {
+        let panel = try Self.text(of: "CrewTodoPanel.swift")
+        XCTAssertTrue(panel.contains("TodoListPresentation.newestFirst"),
+                      "右栏 Todo 概览面板没按从新到旧排")
+        XCTAssertTrue(panel.contains("CrewTodoStatusCircle("),
+                      "右栏 Todo 概览面板还在用旧的状态标签，没换成状态圆圈")
+        XCTAssertTrue(panel.contains("CrewTodoDetailWindowPresenter.shared"),
+                      "右栏 Todo 概览面板没有开详细窗口的入口")
+        XCTAssertFalse(panel.contains(".strikethrough("),
+                       "已完成的 Todo 不该划删除线（人类明确要求，只变灰）")
+
+        let cockpit = try Self.text(of: "CockpitTasksView.swift")
+        XCTAssertTrue(cockpit.contains("TodoListPresentation.newestFirst"),
+                      "驾驶舱任务段的 Todo 没走同一套排序")
+        XCTAssertTrue(cockpit.contains("CrewTodoStatusCircle("),
+                      "驾驶舱任务段的 Todo 没用同一套状态圆圈")
+    }
+
+    /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。
+    func testTodoDetailWindowHasEditDeleteFollowUp() throws {
+        let detail = try Self.text(of: "CrewTodoDetailWindow.swift")
+        XCTAssertTrue(detail.contains("LocalTodoStore.shared.edit("),
+                      "Todo 详细窗口改不了条目正文")
+        XCTAssertTrue(detail.contains("LocalTodoStore.shared.delete("),
+                      "Todo 详细窗口删不掉条目")
+        XCTAssertTrue(detail.contains("CrewTodoFollowUp.perform"),
+                      "Todo 详细窗口的追问没接发群+唤醒机长那条编排")
+        // 「在详细的列表里面回复」= 就地输入，不弹新窗/新 sheet。
+        XCTAssertTrue(detail.contains("TextField("),
+                      "追问/改正文没有行内输入框，人被迫跳出去填")
+        XCTAssertFalse(detail.contains(".sheet("),
+                       "输入不该弹 sheet —— 人类要求在详细列表里就地做完")
+    }
+
+    /// Todo #21：详细窗口不能再「开出来就是最小的」。
+    func testTodoDetailWindowOpensAtAUsableSize() throws {
+        let detail = try Self.text(of: "CrewTodoDetailWindow.swift")
+        XCTAssertTrue(detail.contains("sizingOptions = []"),
+                      "没关掉 NSHostingController 的自动定尺，窗口会被 SwiftUI 理想尺寸压回最小")
+        XCTAssertTrue(detail.contains("setContentSize("),
+                      "没显式给初始内容尺寸")
+        XCTAssertTrue(detail.contains("setFrameAutosaveName("),
+                      "人拉过的窗口尺寸不会被记住，下次开又得重拉")
+    }
+
+    /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
+    func testCloseButtonStyleIsDefinedOnlyOnce() throws {
+        for file in ["CockpitView.swift", "CrewLoginSheet.swift"] {
+            let text = try Self.text(of: file)
+            XCTAssertTrue(text.contains("GlassCloseButton("),
+                          "\(file) 的关闭按钮没用共用的玻璃白件")
+            XCTAssertFalse(text.contains("Theme.Palette.danger, in: Circle())"),
+                           "\(file) 还留着自己那颗红圆叉，样式又分了两处")
+        }
+    }
+
+    /// Todo #4/#5：不能只造 protocol/store 零件。人必须能从正在看的 Codex
+    /// session 切模式，且同一详情页必须挂着按 sessionId 过滤的可操作卡。
+    func testCodexApprovalModeAndCardsAreWiredIntoSessionDetail() throws {
+        let view = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(view.contains("SessionApprovalModeControl(run: run"),
+                      "Codex session 详情没有审批模式切换入口")
+        XCTAssertTrue(view.contains("sessionRunner.applyCodexApprovalMode("),
+                      "模式控件没有接 thread/settings/update + 持久化编排")
+        XCTAssertTrue(view.contains("SessionApprovalCardsView(crewId: run.crewId, sessionId: run.sessionId)"),
+                      "手动模式请求即使入账也没有挂到当前 session 的可操作卡")
+
+        let backend = try Self.text(of: "CodexAppServerBackend.swift")
+        XCTAssertTrue(backend.contains("approvalRequestDisposition(reviewer: approvalsReviewer)"),
+                      "auto_review 没走禁止建卡/通知的门禁")
+    }
+
+    /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
+    func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
+        let view = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(view.contains("Image(systemName: \"apple.terminal\")"),
+                      "新建 session 页没有统一的终端图标")
+        XCTAssertTrue(view.contains(".pickerStyle(.segmented)"),
+                      "Claude Code / Codex / 终端没有做成分段药丸")
+        XCTAssertTrue(view.contains("Text(\"终端\").tag(LocalCodingAgentKind.terminal)"),
+                      "新建 session 页没有纯终端选项")
+        XCTAssertTrue(view.contains("case .terminal:\n                break"),
+                      "纯终端启动分支没有与世界观/MCP 注入明确断开")
+        XCTAssertTrue(view.contains("$0.crewId == crewStore.selectedDetail?.crew.id && $0.kind.isAgent"),
+                      "右栏成员富列表仍可能把纯终端画成 crew 成员")
+
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("for run in runs where run.kind.isAgent"),
+                      "list_sessions 快照仍可能登记纯终端")
+        XCTAssertTrue(runner.contains("if role != .captain, config.kind.isAgent"),
+                      "纯终端仍可能登记进成员花名册/@ 候选")
+        XCTAssertTrue(runner.contains("guard run.status == .running, run.kind.isAgent else { return }"),
+                      "crew 唤醒仍可能向纯终端注入文本")
+
+        let launch = try Self.text(of: "LocalSessionLaunch.swift")
+        XCTAssertTrue(launch.contains("guard runnerKind.isAgent else { return nil }"),
+                      "世界观渲染入口没有拒绝纯终端")
+    }
+
+    // MARK: - 源码扫描
+
+    /// 按文件名取源码原文（找不到 → 失败，不静默放过）。
+    private static func text(of fileName: String) throws -> String {
+        guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
+        else { throw XCTSkip("找不到源码文件 \(fileName)") }
+        return hit.1
+    }
+
+    /// 仓库里 `apps/pendingcrew/Sources` 下的全部 .swift（路径由本文件位置推出）。
+    private static func sourceFiles() throws -> [(URL, String)] {
+        let root = URL(fileURLWithPath: #filePath)      // .../Tests/PendingCrewTests/ViewWiringTests.swift
+            .deletingLastPathComponent()                 // .../Tests/PendingCrewTests
+            .deletingLastPathComponent()                 // .../Tests
+            .deletingLastPathComponent()                 // .../apps/pendingcrew
+            .appendingPathComponent("Sources", isDirectory: true)
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else {
+            throw XCTSkip("读不到源码目录 \(root.path)（不在开发机上跑）")
+        }
+        return walker.compactMap { any in
+            guard let url = any as? URL, url.pathExtension == "swift",
+                  let text = try? String(contentsOf: url, encoding: .utf8)
+            else { return nil }
+            return (url, text)
+        }
+    }
+}

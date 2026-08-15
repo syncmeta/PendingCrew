@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- data-protection 钥匙串的默认 access group = app 自己的 application-identifier
+       ($(AppIdentifierPrefix)com.pendingname.pendingcrew = M42BKJN82S.com.pendingname.pendingcrew)。
+       这是 app 隐式拥有的组(非受限能力,无需额外 provisioning),entitlement-gated →
+       KeychainStore 走 kSecUseDataProtectionKeychain 后静默、跨重构不弹。对齐 PendingBot。 -->
+  <key>keychain-access-groups</key>
+  <array>
+    <string>$(AppIdentifierPrefix)com.pendingname.pendingcrew</string>
+    <!-- 家族 SSO 共享组：同 team 的 PendingBot 也声明它，双方经 kSecAttrAccessGroup
+         显式读写家族凭据(pfa_)。keychain group 无需 Apple Developer portal 配置 ——
+         profile 自动允许 TEAMID.* 下所有组(与 App Groups 不同)。 -->
+    <string>$(AppIdentifierPrefix)com.pendingname.shared</string>
+  </array>
+</dict>
+</plist>

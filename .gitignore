@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Xcode
+**/xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
+.build/
+*.xcarchive
+
+# 发布产物
+dist/
+
+# 本地 agent 工作目录
+.claude/
+.codex/
+.pendingcrew/
+
+# CrewChatOpenCostTests 用的真实群聊 fixture —— 现取，不入版本历史。
+# 生成：scripts/make-chat-fixtures.sh <crew-id>
+Tests/PendingCrewTests/Fixtures/
+
+# 环境 / 密钥
+.env
+.env.local
+*.p8
+*.pem
