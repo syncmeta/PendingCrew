@@ -37,11 +37,6 @@ struct CrewSidebarCrewRow: View {
     @ObservedObject var dragState: CrewDragState
     /// 右键「在这下面建子 crew」的目标（侧栏持有，表单也在那层弹）。
     @Binding var childCrewTarget: CrewChildCreationTarget?
-    /// 末条白板消息从哪来。层级视图用 `.load`（行自己读，行数少）；时间流视图
-    /// 传 `.prefetched` —— 它为了排序**本来就得**把每个 crew 的白板读一遍，行里
-    /// 再读一遍就是把整份白板 JSON 解码两次 × crew 数。
-    var lastMessageSource: LastMessageSource = .load
-
     @EnvironmentObject private var crewStore: CrewStore
     /// session 状态源（isWorking/health/退出）—— 状态点聚合用。由 `MacRootView`
     /// 注入 sidebar（与中/右栏同一实例，才看得到同一批 run）。
@@ -179,33 +174,14 @@ struct CrewSidebarCrewRow: View {
         .padding(.bottom, 6)
     }
 
-    /// 末条白板消息的来源。
-    enum LastMessageSource {
-        /// 行自己读本地 store。
-        case load
-        /// 由列表统一读好（`nil` = 该 crew 白板确实是空的，不是"没读"）。
-        case prefetched(LocalWhiteboardMessage?)
-    }
-
+    /// 本行的末条白板消息。**只读 store 的现成快照，不碰磁盘**（`CrewStore`
+    /// 在后台按指纹门控算好、真变了才发布 —— 见 `lastWhiteboardMessages`）。
+    ///
+    /// 这里以前是 `LocalWhiteboardStore.shared.list(crewId:).last`：在 SwiftUI
+    /// body 里、主线程上、每个 crew 各解一份整板 JSON，目录一有动静就来一遍。
+    /// 那是 2026-08-17「开久了卡」的头号病根，别再改回去。
     private var resolvedLastMessage: LocalWhiteboardMessage? {
-        switch lastMessageSource {
-        case .load:
-            // 传 whiteboardRevision 进读取：本身不参与文案，但让本行订阅 CrewStore 的
-            // 白板变更计数 —— 白板一变（含 helper 子进程跨进程写）行重渲染、预览与
-            // 行尾时间重新求值。删掉它就退化成「点选才刷新」。
-            return CrewSidebarCrewRow.lastMessage(
-                crewId: crew.id, revision: crewStore.whiteboardRevision)
-        case .prefetched(let message):
-            // 预取方（时间流列表）自己订阅了 whiteboardRevision，刷新链没断。
-            return message
-        }
-    }
-
-    /// 最近一条白板消息(本地 store)。`revision` = `CrewStore.whiteboardRevision`,
-    /// 值本身不用 —— 只为把「白板变了」变成本视图的依赖,变更时重新同步读 store
-    /// (spec 2026-07-06 §2 方案 A)。
-    static func lastMessage(crewId: String, revision: Int) -> LocalWhiteboardMessage? {
-        LocalWhiteboardStore.shared.list(crewId: crewId).last
+        crewStore.lastWhiteboardMessages[crew.id]
     }
 
     /// 最近一条消息的预览文案;空则"还没有消息"。

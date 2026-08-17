@@ -151,6 +151,10 @@ targets:
       # 目录监听的合流 + 相关性判定（#443 点进群聊转彩虹圈）。纯 Foundation，
       # LocalWhiteboardStore 依赖它，所以 test bundle 也要带上。
       - path: Sources/Stores/DirectoryWatchCoalescing.swift
+      # 侧栏「每个 crew 末条消息」的指纹门控缓存（2026-08-17：开久了卡的头号病根）。
+      # 纯 Foundation，只依赖上面两个 —— 所以「一次目录 tick 到底真解码几次」能脱离
+      # app 直接单测 + 基准（CrewLastMessageCacheTests）。
+      - path: Sources/Stores/CrewLastMessageCache.swift
       # 白板消息 → session 注入面的可见性判定（#543 定向 @ 扩散根因修复）。
       # hook 注入路 / 收听路 / 唤醒上下文共用同一份标准，纯 Foundation。
       - path: Sources/Stores/CrewWhiteboardVisibility.swift

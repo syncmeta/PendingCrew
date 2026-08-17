@@ -60,11 +60,24 @@ final class CrewStore: ObservableObject {
     /// 文件归 runner（`MacRootView` 观察接线）。
     @Published var sessionOpsRequests: [SessionOpsRequest] = []
 
-    /// 白板目录变更计数（crew-sidebar-status spec §2 方案 A）。`directoryChanged`
-    /// 每 tick +1；侧栏行（`CrewDAGNode`）读一下它，白板一变（本进程 append /
-    /// helper 子进程跨进程写）就触发行重渲染，让同步读 `LocalWhiteboardStore` 的
-    /// `lastMessagePreview` 重新求值 —— 否则最新消息预览只在点选等偶发重渲染时刷新。
-    @Published private(set) var whiteboardRevision: Int = 0
+    /// 每个 crew 白板的**末条消息**（键缺失 = 该 crew 白板是空的）。侧栏两种视图
+    /// 共用的单一数据源：时间流的排序键、行里的预览文案与行尾相对时间都读它。
+    ///
+    /// 以前这里是一个 `whiteboardRevision` 计数：目录一 tick 就 +1，侧栏行拿它当
+    /// 依赖、在 **body 里同步读整份白板 JSON** 重新求值。28 个 crew × 4 次/秒 =
+    /// 主线程每秒解析约 11 MB JSON（2026-08-17「开久了卡」的头号病根）。现在改成
+    /// 「store 在后台按指纹门控算好、只在**真变了**时发布」：
+    /// - SwiftUI body 里零磁盘 IO；
+    /// - 值没变就不赋值 → 连 `objectWillChange` 都不发，无关文件的写不再让整个
+    ///   侧栏（乃至所有观察 `CrewStore` 的视图）重渲染。
+    @Published private(set) var lastWhiteboardMessages: [String: LocalWhiteboardMessage] = [:]
+
+    /// 上面那份快照的算法（指纹门控，只有指纹变了的 crew 才重新解码）。
+    private let lastMessageCache = CrewLastMessageCache(store: .shared)
+    /// 刷新在这条队列上做 —— stat + 解码都是磁盘 IO，不许上主线程；串行也顺带
+    /// 保证目录 tick 密集时不会并发重入同一个 cache。
+    private let lastMessageQueue = DispatchQueue(
+        label: "com.pendingname.pendingcrew.sidebar-last-message", qos: .userInitiated)
 
     private unowned let appModel: AppModel
 
@@ -73,6 +86,9 @@ final class CrewStore: ObservableObject {
     /// 仅 macOS（本地 crew 的家）；只起一次。
     private var didStartRenameWatch = false
     private var renameWatch: AnyCancellable?
+    /// 本进程 append（人类发送 / relay 搬入）的即时信号 —— 目录监听有 250ms 合流
+    /// 窗口，自己发的消息不该等它。
+    private var localWhiteboardWatch: AnyCancellable?
 
     init(appModel: AppModel) {
         self.appModel = appModel
@@ -110,6 +126,9 @@ final class CrewStore: ObservableObject {
         do {
             let result = try await backend.listCrews()
             crews = result
+            // 列表变了（新 crew / 删掉的 crew）→ 末条消息快照跟着补齐一次，
+            // 否则新 crew 的预览要等下一次目录 tick 才出现。
+            refreshLastWhiteboardMessages()
             // 选中项消失（比如刚被删）的话清掉。
             if let sel = selectedCrewId, !result.contains(where: { $0.id == sel }) {
                 selectedCrewId = nil
@@ -272,6 +291,8 @@ final class CrewStore: ObservableObject {
     /// 用户退出登录时调，清掉所有内存态。`AppModel.clearAuth` 时一并调。
     func reset() {
         crews = []
+        lastWhiteboardMessages = [:]
+        lastMessageCache.clear()
         details = [:]
         subjects = []
         machines = []
@@ -310,14 +331,42 @@ final class CrewStore: ObservableObject {
         renameWatch = LocalWhiteboardStore.shared.directoryChanged
             .sink { [weak self] in
                 Task { @MainActor in
-                    // 白板有变 → 计数 +1，驱动侧栏最新消息预览重渲染（spec §2）。
-                    self?.whiteboardRevision += 1
+                    // 白板可能有变 → 后台按指纹门控重算侧栏末条消息快照（真变了才
+                    // 发布）。以前这里是 `whiteboardRevision += 1`，等于让侧栏在
+                    // 主线程 body 里把 28 份白板整份重解一遍。
+                    self?.refreshLastWhiteboardMessages()
                     await self?.applyPendingRenames()
                     await self?.applyPendingAttentions()
                     await self?.drainPendingCommands()
                 }
             }
+        localWhiteboardWatch = LocalWhiteboardStore.shared.changes
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.refreshLastWhiteboardMessages() }
+            }
         #endif
+    }
+
+    /// 后台重算「每个 crew 的末条消息」，只在快照真变了时发布。
+    ///
+    /// 指纹门控在 `CrewLastMessageCache` 里：先 stat 一遍（28 次 stat），只有白板
+    /// 文件的 mtime+size 真变了的那个 crew 才重新读+解码。主线程这边只剩一次
+    /// 字典比较 + 可能的一次赋值。
+    private func refreshLastWhiteboardMessages() {
+        let crewIds = crews.map(\.id)
+        let cache = lastMessageCache
+        lastMessageQueue.async { [weak self] in
+            let snapshot = cache.refresh(crewIds: crewIds)
+            Task { @MainActor in self?.publishLastWhiteboardMessages(snapshot) }
+        }
+    }
+
+    /// 发布快照 —— **相等就不赋值**。`@Published` 一赋值就发 `objectWillChange`，
+    /// 而 `CrewStore` 是整个侧栏（乃至更多视图）的 `EnvironmentObject`：无关文件的
+    /// 写若还照旧赋值，仍会 4 次/秒把它们全部重渲染一遍。
+    private func publishLastWhiteboardMessages(_ snapshot: [String: LocalWhiteboardMessage]) {
+        guard lastWhiteboardMessages != snapshot else { return }
+        lastWhiteboardMessages = snapshot
     }
 
     /// 排空 `LocalCrewControlStore` 的待改名，逐条落到 `LocalCrewStore`；有变更才刷新列表。

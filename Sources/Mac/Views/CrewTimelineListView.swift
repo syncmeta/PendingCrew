@@ -25,20 +25,16 @@ struct CrewTimelineListView: View {
     @EnvironmentObject private var crewStore: CrewStore
 
     var body: some View {
-        // 白板一变（含 helper 子进程跨进程写）就重排重渲染 —— 时间流的排序键就是
-        // 白板末条消息时间，不订阅这个计数它会一直停在打开那一刻的顺序。
-        let revision = crewStore.whiteboardRevision
         let crewsById = Dictionary(crews.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // 黄字标注要看**全量** crew（父边可以跨机器），与层级视图同一口径。
         let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
-        // 每个 crew 的白板只读一遍：排序键和行里显示的摘要/时间用的是**同一条**
-        // 末条消息，两处必然一致（也省掉一轮整份 JSON 解码）。
-        let lastMessages = Dictionary(uniqueKeysWithValues: crews.map { crew in
-            (crew.id, CrewSidebarCrewRow.lastMessage(crewId: crew.id, revision: revision))
-        })
+        // 排序键 = 白板末条消息时间，取 store 的现成快照（行里画预览读的是同一份，
+        // 两处必然一致）。**body 里不碰磁盘**：白板真变了 store 会在后台重算并发布
+        // 新快照，本视图跟着重排；无关文件的写不再触发任何读取（2026-08-17 病根）。
+        let lastMessages = crewStore.lastWhiteboardMessages
         let entries = CrewTimelineOrdering.ordered(crews: crews) { crew in
             CrewActivityTime.resolve(
-                lastMessageCreatedAt: lastMessages[crew.id]??.createdAt,
+                lastMessageCreatedAt: lastMessages[crew.id]?.createdAt,
                 crewUpdatedAt: crew.updatedAt)
         }
 
@@ -61,8 +57,7 @@ struct CrewTimelineListView: View {
                     parentId: entry.crew.parentCrewIds.first,
                     groupCrews: crews,
                     dragState: dragState,
-                    childCrewTarget: $childCrewTarget,
-                    lastMessageSource: .prefetched(lastMessages[entry.crew.id] ?? nil)
+                    childCrewTarget: $childCrewTarget
                 )
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             }
