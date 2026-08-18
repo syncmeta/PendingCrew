@@ -101,6 +101,32 @@ final class LocalCrewStore {
         persistToDisk()
     }
 
+    /// 改 crew 的工作目录（仓库搬家 / 目录改名）。**内存里立刻生效**，不要求重启 app ——
+    /// `loadFromDisk` 只在启动跑一次，手改 JSON 会被 `persistToDisk` 整份覆写掉，
+    /// 这就是必须有这个入口的原因。
+    ///
+    /// 只改字段。agent 侧上下文（claude 的会话日志 / 项目记忆、两家的目录信任与权限）
+    /// 按路径分家，要一起搬 —— 那套规划与执行在 `WorkdirMigrationPlan` /
+    /// `WorkdirMigrationExecutor`，由 UI 编排（先预览再执行），这里不代劳。
+    ///
+    /// 空路径 / crew 不存在 / 值没变 → 忽略（幂等，避免无谓重写）。
+    func setWorkingDirectory(_ id: String, _ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, var crew = crews[id], crew.workingDirectory != trimmed else { return }
+        crew.workingDirectory = trimmed
+        crew.updatedAt = ISO8601DateFormatter().string(from: Date())
+        crews[id] = crew
+        persistToDisk()
+    }
+
+    /// 迁移规划层要的全部 crew 字段（id / 名 / 工作目录 / 父边）。返回元组而非专用类型 ——
+    /// store 不必反过来依赖 `WorkdirMigrationPlan`。
+    func workdirRows() -> [(id: String, title: String, workingDirectory: String?, parentCrewIds: [String])] {
+        crews.values
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { ($0.id, $0.title, $0.workingDirectory, $0.parentCrewIds) }
+    }
+
     /// 点亮/熄灭机长 attention 黄点（`raise_attention` / `clear_attention` 经控制
     /// 通道落地，由 `CrewStore` 调）。`reason == nil`（或 trim 后空）= 熄灭。
     /// crew 不存在 / 值未变 → 忽略（幂等，避免无谓重写 + 变更信号）。
@@ -643,7 +669,9 @@ struct LocalCrew: Codable, Equatable {
     var titleSource: LocalCrewTitleSource?
     let responsibleSubjectId: String
     let runtimeLocation: String
-    let workingDirectory: String?
+    /// `var` —— 仓库搬家后经 `LocalCrewStore.setWorkingDirectory` 改（含 agent 上下文
+    /// 迁移，见 `WorkdirMigrationPlan`）。建 crew 时定下、之后无从更改是原来的病。
+    var workingDirectory: String?
     /// 所选 machine id（nil = 本机）。登录态多机时记录 crew 运行在哪台机；
     /// 本机/BYOK 路径恒 nil。
     let machineId: String?
