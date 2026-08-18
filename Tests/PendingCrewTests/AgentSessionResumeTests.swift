@@ -29,10 +29,16 @@ final class AgentSessionResumeTests: XCTestCase {
 
     // MARK: - claude 日志路径
 
+    /// `projectSlug` 只做一件事：把 `/` 和 `.` 换成 `-`（claude 的
+    /// `~/.claude/projects/<slug>/` 就是这么拼的）。所以输入里的 `x` 出来还是 `x`。
+    ///
+    /// 期望值曾经写成 `-Users-hey-…` —— 输入是 `/Users/x/…`，看着像谁做过一次
+    /// 「把用户名替换进来」的批量改，只改中了期望值那半边。是**期望值错**，不是
+    /// 实现该变：隔壁 `testClaudeTranscriptURL` 用的也是同一个占位用户 `x`。
     func testProjectSlugReplacesSlashesAndDots() {
         XCTAssertEqual(
             AgentSessionResume.projectSlug(forWorkdir: "/Users/x/dev/.pendingcrew/wt"),
-            "-Users-hey-dev--pendingcrew-wt")
+            "-Users-x-dev--pendingcrew-wt")
     }
 
     func testClaudeTranscriptURL() {
