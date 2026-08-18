@@ -20,7 +20,40 @@ final class ActivityTerminalView: LocalProcessTerminalView {
     /// SwiftTerm 的 `Buffer.resize` 在列数变化时会遍历 `lines.maxLength` 把每个槽位都
     /// 实例化，所以窗口第一次改宽度就会一次性吃满这份内存。再往上取值不划算：50000 行
     /// 时单次改宽 resize 实测 28ms（10000 行是 4.5ms），拖窗口会掉帧。
+    ///
+    /// **2026-08-18 更正上面那段的一半**：「不是按需增长 / 窗口第一次改宽就一次性吃满」
+    /// 是 **SwiftTerm 1.13** 的行为（`Buffer.resize` 遍历 `lines.maxLength`，下标 getter
+    /// 给每个空槽位 `makeEmpty`）。本仓库现在锁的是 **1.18.0**，那段循环已改成只遍历
+    /// `lines.count` —— 占用改回「按实际行数」，短命 session 不再预付整份容量，
+    /// 那两个 resize 耗时数字同理也不再是「一次性全量」的量级。上面留 10000 行的
+    /// **结论没变**（历史够长 + 窄列 reflow 有余量），只是理由的第二半过期了。
+    ///
+    /// 这个值只管**在跑**的 session。进程一终止就按 `TerminatedScrollbackPlan` 收下来
+    /// （那里逐条回应了上面两条理由为什么对已终止的 session 不再成立）—— 停掉的 run
+    /// 故意留在列表里给人回看，但没理由继续各占几十 MB。
     static let scrollbackLines = 10_000
+
+    /// 进程已终止 → 把回滚缓冲收到「够回看的尾巴」，其余槽位交还给系统。
+    ///
+    /// `changeScrollback` 会走到 `Buffer.changeHistorySize` → `CircularList.maxLength`
+    /// 的 didSet：重建底层数组、只搬留下的那些行，多出来的 `BufferLine`（每行
+    /// `cols × 24 B`）随旧数组一起释放。终端视图本身不动 —— 颜色/选择/复制/
+    /// `inspect_session` 读画面全照旧。
+    ///
+    /// 幂等：再调一次算出同一个值，`changeHistorySize` 见 `newMaxLength == oldMaxLength`
+    /// 直接 no-op。
+    /// - Returns: 实际保留的行数（没收窄时返回当前上限）。
+    @discardableResult
+    func collapseScrollbackAfterExit() -> Int {
+        let retained = TerminatedScrollbackPlan.retainedLines(
+            rows: getTerminal().rows,
+            thumbSize: Double(scrollThumbsize),
+            canScroll: canScroll)
+        let current = getTerminal().options.scrollback
+        guard retained < current else { return current }
+        changeScrollback(retained)
+        return retained
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -123,7 +156,14 @@ final class ActivityTerminalView: LocalProcessTerminalView {
 final class AgentTerminalSession: ObservableObject, SessionBackend {
     let kind: LocalCodingAgentKind
     let terminalView: ActivityTerminalView
-    @Published private(set) var status: SessionStatus = .running
+    /// 进程终止的那一拍顺手把回滚缓冲收窄（2026-08-18 第二条）——
+    /// 挂在 `didSet` 上而不是各个退出路径里：正常退出 / 用户停 / 拉起失败自检
+    /// 三条路都各自翻 `status`，逐个去加容易漏，且漏掉的那条就是内存不放的那条。
+    @Published private(set) var status: SessionStatus = .running {
+        didSet {
+            if case .exited = status { terminalView.collapseScrollbackAfterExit() }
+        }
+    }
     var statusPublisher: Published<SessionStatus>.Publisher { $status }
     /// 唤醒注入门禁用：PTY 终端无可编程 turn-state，交互式 claude 自带输入排队，
     /// 注入随时安全 → 恒 false（main 语义保留，别让 @我的定向消息因 busy 漏注入）。

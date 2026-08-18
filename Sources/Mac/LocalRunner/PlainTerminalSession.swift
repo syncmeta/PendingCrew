@@ -14,7 +14,13 @@ final class PlainTerminalSession: ObservableObject, SessionBackend {
     let kind: LocalCodingAgentKind = .terminal
     let terminalView: ActivityTerminalView
 
-    @Published private(set) var status: SessionStatus = .running
+    /// 同 `AgentTerminalSession`：进程一终止就把回滚缓冲收窄，别让停掉的
+    /// shell 继续攥着 10000 行的缓冲（见 `TerminatedScrollbackPlan`）。
+    @Published private(set) var status: SessionStatus = .running {
+        didSet {
+            if case .exited = status { terminalView.collapseScrollbackAfterExit() }
+        }
+    }
     var statusPublisher: Published<SessionStatus>.Publisher { $status }
 
     let isBusy = false
