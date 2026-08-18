@@ -78,6 +78,15 @@ final class LocalApprovalStore: @unchecked Sendable {
         list(crewId: crewId).first { $0.id == id }
     }
 
+    /// 本 crew 审批账本文件的指纹（mtime+size，**只 stat 不读内容、不拿锁**）。
+    /// 点名快照那 2 秒一拍的门控用（`SessionAwaitingReplyInputsCache`）：指纹没变
+    /// 就不必再来一次 flock + 整份解码。语义论证见那个类型的注释。
+    func fingerprint(crewId: String) -> FileChangeGate.Fingerprint? {
+        FileChangeGate.fingerprint(atPath: directoryPath + "/" + crewId + ".approvals.json")
+    }
+    /// `directory.path` 缓存一份 —— 指纹路径拼接每拍要走几十次，别每次都问 URL。
+    private var directoryPath: String { directory.path }
+
     // MARK: - Write
 
     /// raise 一条待处理（kind: "decision" | "permission"）。返回新 id。

@@ -233,9 +233,12 @@ struct SessionTurnMarker {
     let crewId: String
     let sessionId: String
 
-    private var url: URL {
+    /// marker 文件路径。对外只用来 stat 指纹（点名快照那一拍的门控），
+    /// 读写一律走下面的 `read()` / `write(_:)`。
+    var fileURL: URL {
         directory.appendingPathComponent("\(crewId).\(sessionId).turn")
     }
+    private var url: URL { fileURL }
 
     struct State: Codable, Equatable {
         var lastMessageId: String?

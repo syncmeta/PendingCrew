@@ -590,6 +590,21 @@ final class CrewSessionRunner: ObservableObject {
     /// 最迟 2 秒进快照,机长点名够用,不追帧。
     private var snapshotTimer: Timer?
 
+    /// 「在等谁回话」那两样磁盘输入（审批账本 + 回合 marker）的指纹门控缓存。
+    ///
+    /// 2026-08-18「开久了卡」第三条：这一拍原本在 MainActor 上按 crew 逐个
+    /// flock + 整份解码审批 JSON、再按 run 逐个读 turn marker，而 crew / run 只增
+    /// 不减 —— 开一天下来每 2 秒几十次加锁读盘挂在主线程。现在两样都走指纹门控
+    /// （没变就不读）且整段挪到后台队列，主线程只剩「把结果写回 @Published + 组装
+    /// 快照」。判定口径一个字没改，详见 `SessionAwaitingReplyInputsCache`。
+    private let awaitingInputs = SessionAwaitingReplyInputsCache(
+        directory: LocalWhiteboardStore.defaultDirectory)
+
+    /// 一拍还在后台跑时不再起第二拍（定时器 + start 即写两条来源会撞上）；
+    /// 期间来的请求记一笔，跑完立刻补一拍 —— 「新成员立刻进快照」不能被吞掉。
+    private var snapshotTickInFlight = false
+    private var snapshotTickQueued = false
+
     func startSessionsSnapshotTimer() {
         guard snapshotTimer == nil else { return }
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -597,30 +612,64 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    /// 重算每个 run 的「在等谁回话」（人类 Todo #25 层 2）。跟着点名快照的 2 秒定时器
-    /// 走 —— 红点晚 2 秒亮完全够用，换来的是**每拍重算**：不存在「进得去出不来」。
+    /// 走一拍：后台读两样输入 → 回主线程重算「在等谁回话」+ 落点名快照。
     ///
-    /// 待办 store 每个 crew 只拉一次（`pending` 要拿文件锁读 JSON），再按 sessionId
-    /// 分发下去。ask 与权限钩子写的是同一份，两类都算「它被挡在那儿等人」。
-    private func refreshAwaitingReplies() {
-        var pendingByCrew: [String: [String: String]] = [:]
-        let agentRuns = runs.filter { $0.kind.isAgent }
-        for crewId in Set(agentRuns.map(\.crewId)) {
-            var bySession: [String: String] = [:]
-            for item in LocalApprovalStore.shared.pending(crewId: crewId)
-            where bySession[item.sessionId] == nil {
-                bySession[item.sessionId] = item.summary
-            }
-            pendingByCrew[crewId] = bySession
+    /// 重算而不是驻留仍是**每拍**做（口径没变，见 `SessionAwaitingReply`）；变的只是
+    /// 「输入从哪来」——从主线程现读现解，改成后台指纹门控缓存。红点/点名的延迟因此
+    /// 不会变差：定时器周期仍是 2 秒，多出来的只是一次后台 hop（微秒级），而省掉的是
+    /// 主线程上几十次加锁读盘。
+    func persistSessionsSnapshot() {
+        guard !snapshotTickInFlight else {
+            snapshotTickQueued = true
+            return
         }
-        for run in agentRuns {
-            run.refreshAwaitingReply(
-                pendingApprovalSummary: pendingByCrew[run.crewId]?[run.sessionId])
+        snapshotTickInFlight = true
+        let keys = runs.filter { $0.kind.isAgent }.map {
+            SessionAwaitingReplyInputsCache.RunKey(crewId: $0.crewId, sessionId: $0.sessionId)
+        }
+        let cache = awaitingInputs
+        Task.detached(priority: .utility) { [weak self] in
+            let inputs = cache.refresh(runs: keys)
+            await self?.applySnapshotTick(inputs)
         }
     }
 
-    func persistSessionsSnapshot() {
-        refreshAwaitingReplies()
+    /// 一拍的主线程那半：把后台读到的输入写回 run，再组装 + 落盘点名快照。
+    @MainActor
+    private func applySnapshotTick(_ inputs: [SessionAwaitingReplyInputsCache.RunKey:
+                                              SessionAwaitingReplyInputsCache.Inputs]) {
+        snapshotTickInFlight = false
+        refreshAwaitingReplies(inputs)
+        writeSessionsSnapshot()
+        if snapshotTickQueued {
+            snapshotTickQueued = false
+            persistSessionsSnapshot()
+        }
+    }
+
+    /// 重算每个 run 的「在等谁回话」（人类 Todo #25 层 2）。跟着点名快照的 2 秒定时器
+    /// 走 —— 红点晚 2 秒亮完全够用，换来的是**每拍重算**：不存在「进得去出不来」。
+    ///
+    /// 两样磁盘输入（审批账本里本 session 的 pending 摘要 / 上一轮的收尾问句）由
+    /// `SessionAwaitingReplyInputsCache` 在后台按 crew、按 run 各取一次分发下来，
+    /// 这里只做纯内存的判定与赋值。ask 与权限钩子写的是同一份，两类都算「它被挡在
+    /// 那儿等人」。
+    private func refreshAwaitingReplies(
+        _ inputs: [SessionAwaitingReplyInputsCache.RunKey:
+                   SessionAwaitingReplyInputsCache.Inputs]
+    ) {
+        for run in runs where run.kind.isAgent {
+            let key = SessionAwaitingReplyInputsCache.RunKey(
+                crewId: run.crewId, sessionId: run.sessionId)
+            run.refreshAwaitingReply(
+                pendingApprovalSummary: inputs[key]?.pendingApprovalSummary,
+                trailingQuestion: inputs[key]?.trailingQuestion)
+        }
+    }
+
+    /// 组装点名快照并落盘。编码在主线程（对象小、必须与 runs 同一拍取值），
+    /// **写盘挪到后台** —— 那是 2 秒一次的同步磁盘 IO，没有理由占着主线程。
+    private func writeSessionsSnapshot() {
         var snapshot = CrewSessionsSnapshot()
         snapshot.updatedAt = ISO8601DateFormatter().string(from: Date())
         for run in runs where run.kind.isAgent {
@@ -650,10 +699,11 @@ final class CrewSessionRunner: ObservableObject {
                 state: state, healthDetail: healthDetail))
         }
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(
-            to: LocalWhiteboardStore.defaultDirectory
-                .appendingPathComponent(CrewSessionsSnapshot.fileName),
-            options: .atomic)
+        let url = LocalWhiteboardStore.defaultDirectory
+            .appendingPathComponent(CrewSessionsSnapshot.fileName)
+        Task.detached(priority: .utility) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     // MARK: - 撞墙自动挂钩 + 额度警戒广播（#455 增补：不只靠 session 自觉）
@@ -1925,14 +1975,18 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     }
 
     /// 重算「在等谁回话」（Todo #25 层 2）。跟着点名快照的 2 秒定时器走。
-    /// - Parameter pendingApprovalSummary: 待办 store 里本 session 的 pending 条目摘要
-    ///   （由 runner 每 crew 拉一次分发下来，避免每个 run 各读一遍带锁的 JSON）。
-    func refreshAwaitingReply(pendingApprovalSummary: String?) {
+    ///
+    /// 两样磁盘输入都由 runner 在**后台**取好分发下来（`SessionAwaitingReplyInputsCache`，
+    /// 2026-08-18）—— 这个方法里一次磁盘 IO 都没有，纯内存判定 + 赋值。
+    /// - Parameters:
+    ///   - pendingApprovalSummary: 审批账本里本 session 的 pending 条目摘要（每 crew 取一次）。
+    ///   - trailingQuestion: 上一轮收尾那句问句（`SessionTurnMarker`，每 run 取一次）。
+    func refreshAwaitingReply(pendingApprovalSummary: String?, trailingQuestion: String?) {
         let next = SessionAwaitingReply.reason(.init(
             isRunning: status == .running,
             pendingApprovalSummary: pendingApprovalSummary,
             pendingMenuPrompt: pendingDecision?.prompt,
-            trailingQuestion: turnMarker.read().awaitingQuestion,
+            trailingQuestion: trailingQuestion,
             isProducingOutput: displayIsTyping))
         if next != awaitingReply { awaitingReply = next }
     }

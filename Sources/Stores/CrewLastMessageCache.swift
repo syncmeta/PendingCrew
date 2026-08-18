@@ -48,21 +48,14 @@ import Foundation
 ///
 /// 非 `@MainActor`：**刻意**要在后台队列上跑（stat 与解码都是磁盘 IO，`FileChangeGate`
 /// 自己的注释就写着别在主线程调）。`CrewStore` 在后台队列刷新它、把结果 hop 回主线程
-/// 发布，所以 SwiftUI body 里零磁盘 IO。内部可变状态由 `lock` 保护。
+/// 发布，所以 SwiftUI body 里零磁盘 IO。
+///
+/// ## 门控本身不在这里
+///
+/// 「指纹没变就别读」那套记账已经抽成 `FileFingerprintCache`（2026-08-18，点名快照
+/// 那条路要用同一套）。这层只剩「白板 → 末条消息」这一个语义，不再自己管缓存表。
 final class CrewLastMessageCache: @unchecked Sendable {
-    private struct Entry {
-        /// 上次求值时白板文件的指纹（nil = 那时文件不存在，也是一种状态）。
-        var fingerprint: FileChangeGate.Fingerprint?
-        /// 那次求值得到的末条消息（nil = 白板确实是空的）。
-        var message: LocalWhiteboardMessage?
-    }
-
-    private let lock = NSLock()
-    private var entries: [String: Entry] = [:]
-    private var decodes = 0
-
-    private let fingerprintOf: (String) -> FileChangeGate.Fingerprint?
-    private let loadLast: (String) -> LocalWhiteboardMessage?
+    private let cache: FileFingerprintCache<String, LocalWhiteboardMessage>
 
     /// 生产用：直接挂在一个白板 store 上。
     convenience init(store: LocalWhiteboardStore) {
@@ -74,66 +67,22 @@ final class CrewLastMessageCache: @unchecked Sendable {
     /// 单测 / 基准用：两条 IO 都可注入，好数「到底真读了几次」。
     init(fingerprintOf: @escaping (String) -> FileChangeGate.Fingerprint?,
          loadLast: @escaping (String) -> LocalWhiteboardMessage?) {
-        self.fingerprintOf = fingerprintOf
-        self.loadLast = loadLast
+        cache = FileFingerprintCache(fingerprintOf: fingerprintOf, load: loadLast)
     }
 
     /// 本 cache 迄今真正做过多少次「读文件 + 全量解码」。缓存命中不计。
     /// 这是 fix 的验收口径：一次 tick 里它涨多少 = 主线程本来要付几份整板解码。
-    var decodeCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return decodes
-    }
+    var decodeCount: Int { cache.loadCount }
 
     /// 刷新这批 crew 的末条消息。
     ///
     /// - Returns: crewId → 末条消息。**键缺失 = 该 crew 白板是空的**（不是「没读」）
     ///   —— 每次调用都覆盖全表，所以调用方拿到的恒是完整快照。
-    ///
-    /// 不在表里的 crew（被删/被过滤掉）顺带从缓存里淘汰，不会随开机时长无限长。
     @discardableResult
     func refresh(crewIds: [String]) -> [String: LocalWhiteboardMessage] {
-        lock.lock()
-        let previous = entries
-        lock.unlock()
-
-        var next: [String: Entry] = [:]
-        next.reserveCapacity(crewIds.count)
-        var result: [String: LocalWhiteboardMessage] = [:]
-        var decodedNow = 0
-
-        for crewId in crewIds {
-            let fingerprint = fingerprintOf(crewId)
-            if let cached = previous[crewId], cached.fingerprint == fingerprint {
-                next[crewId] = cached
-                if let message = cached.message { result[crewId] = message }
-                continue
-            }
-            let message: LocalWhiteboardMessage?
-            if fingerprint == nil {
-                // 文件不存在 = 白板必然是空的（`list` 也只会返回空表），没必要为了
-                // 拿一个已知的 nil 去开一次 flock。
-                message = nil
-            } else {
-                decodedNow += 1
-                message = loadLast(crewId)
-            }
-            next[crewId] = Entry(fingerprint: fingerprint, message: message)
-            if let message { result[crewId] = message }
-        }
-
-        lock.lock()
-        entries = next
-        decodes += decodedNow
-        lock.unlock()
-        return result
+        cache.refresh(keys: crewIds)
     }
 
     /// 丢掉全部缓存（退出登录 / 换后端时 `CrewStore.reset` 调）。
-    func clear() {
-        lock.lock()
-        entries = [:]
-        lock.unlock()
-    }
+    func clear() { cache.clear() }
 }

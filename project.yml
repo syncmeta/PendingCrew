@@ -155,6 +155,12 @@ targets:
       # 纯 Foundation，只依赖上面两个 —— 所以「一次目录 tick 到底真解码几次」能脱离
       # app 直接单测 + 基准（CrewLastMessageCacheTests）。
       - path: Sources/Stores/CrewLastMessageCache.swift
+      # 指纹门控缓存底座（2026-08-18 抽出，上面那个和下面那个共用同一套）。
+      - path: Sources/Stores/FileFingerprintCache.swift
+      # 点名快照那 2 秒一拍要的两样磁盘输入（审批账本 + 回合 marker）的指纹门控
+      # 缓存（「开久了卡」第三条）。依赖 LocalApprovalStore / SessionTurnTrace，
+      # 两个都已在 bundle —— 所以「一拍到底真读了几次」能脱离 app 直接单测。
+      - path: Sources/Stores/SessionAwaitingReplyInputsCache.swift
       # 白板消息 → session 注入面的可见性判定（#543 定向 @ 扩散根因修复）。
       # hook 注入路 / 收听路 / 唤醒上下文共用同一份标准，纯 Foundation。
       - path: Sources/Stores/CrewWhiteboardVisibility.swift
