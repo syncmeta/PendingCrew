@@ -14,6 +14,14 @@ import XCTest
 /// 造数据量不出真问题 —— 本 crew（PendingCrew）338 条、82k 字、也有图，实测**比这
 /// 70 条还快**，所以「消息多才卡」是错的，必须拿这一份特定数据跑。
 ///
+/// **那 70 条是定标口径，不是「当天碰巧多少条」**（2026-08-18 钉死）：白板只增不删，
+/// 这个 crew 今天已经 342 条。直接拿全量重取 fixture 会把本文件里所有绝对预算变成
+/// 看运气 —— 实测同一个用例单独跑 73 ms、跟在那个「重复 5 倍」的大表用例后面跑
+/// 139 ms（同进程做过大表布局之后，后续每次布局都贵近一倍），100 ms 预算于是时红
+/// 时绿。所以 `make-chat-fixtures.sh` 默认只取**前 70 条**（append-only ⇒ 前 70 条
+/// 就是当初那份快照本身，仍是真数据，且跨机器跨时间可复现）。要看今天的全量加
+/// `--full`，但别拿它的绝对毫秒去对这里的预算。
+///
 /// ## 这个测量到什么、量不到什么（重要，别含糊）
 ///
 /// **量得到**：白板 JSON 解码 → 消息模型构造 → Markdown 视图构建+布局（离屏
@@ -73,9 +81,13 @@ final class CrewChatOpenCostTests: XCTestCase {
           \(fixtureDir.path)
 
           这份 fixture 是人类真实的群聊内容 + 真实聊天截图，故意不提交进 git。
-          请先跑一次：
+          在**仓库根目录**跑一次（脚本要一个 crew id）：
 
-            apps/pendingcrew/scripts/make-chat-fixtures.sh
+            scripts/make-chat-fixtures.sh <crew-id>
+
+          crew id 从本机白板目录里挑（「LED驱动板」那份就是这套基线的来源）：
+
+            ls "$HOME/Library/Application Support/PendingCrew/whiteboards"
 
           本测试不静默跳过 —— 没有真数据的「打开成本」测量等于没测（造的数据量不出
           真问题：本 crew 338 条比 LED 那 70 条还快）。
