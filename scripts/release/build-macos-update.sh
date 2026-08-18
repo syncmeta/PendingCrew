@@ -22,27 +22,88 @@ cleanup() {
   rm -rf "$snap"
 }
 trap cleanup EXIT HUP INT TERM
-build_number=$(git -C "$snap/src" rev-list --count HEAD)
+# build 号 = 纪元日时间戳「天.秒」（例 20683.07783）。
+#
+# 为什么**不**再从 git 历史算（原来是 `rev-list --count HEAD`）：2026-08 仓库重建，
+# 提交数从三千多掉到个位数，而线上已发布 3703 —— 从新仓库一版都发不出去（下面那道
+# 闸会正确地拒）。历史是这个仓库里最脆的东西，build 号不该建在它上面。改成从时钟
+# 派生：天生单调，不依赖仓库状态，tarball / 浅克隆 / 重建过的仓库构建都对。
+#
+# 为什么是「天.秒」而不是别的时钟格式（这三条别删，否则以后有人嫌不好看又改回去）：
+#   - 不用 `YYYYMMDDHHMM`：12 位单段 ≈ 2.03e11，**超 2^31**。Apple 只规定「不超过
+#     18 个字符」，不管每段数值能有多大，ASC parser 宽度无从证实 —— 不赌。
+#   - 不用 Unix 秒：10 位虽在 2^31 内，但 2038-01-19 会越线；且它是三个候选里**最大**
+#     的，一旦发出去就再也换不回更小的格式（闸只放行递增）。
+#   - 纪元日是三者里**最小**的：20683 → 20260818（YYYYMMDD）→ 1787018157（Unix 秒）
+#     逐级都是增，所以以后想改主意，每条路都还走得通。
+#   - 第二段**必须零填充**（`%05d`）：补零之后「按整数比」和「按字符串比」得出的先后
+#     一致（07431 < 10000 两种解法都成立），不补零就只剩整数解一条路能对。
+#
+# 时钟**只读一次**、两段都从它派生 —— 分两次读会在跨日那一瞬撕成
+# 「今天的日期 + 明天 00:00:00 的秒数」。
+# 与 PendingBot 同一方案（2026-08-18 两边机长议定）。
+_epoch=$(date -u +%s)
+build_number=$(printf '%d.%05d' "$((_epoch / 86400))" "$((_epoch % 86400))")
 
 # 版本号必须从快照里读（构建/tag 全基于这份快照）——建快照之前的工作区
 # 可能是脏的，读那份会所见≠所装。
 version=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*//p' "$snap/src/project.yml" | head -n 1 | tr -d '"')
 test -n "$version"
 
+# 逐段比较两个 1~3 段版本号。退出码 0 = $1 严格大于 $2。
+#
+# 不用 `[ -le ]`：那是 shell **整数**比较，喂带句点的版本号会直接
+# `integer expression expected` 报错。也不用 `sort -V`：BSD/GNU 行为不完全一致。
+# 段数不同的按缺位补 0 比（`20683` vs `20683.00001` → 后者大），与 Sparkle 的
+# `SUStandardVersionComparator` 同一口径。`+0` 让 `07431` 这类零填充段按整数解。
+version_gt() {
+  awk -v a="$1" -v b="$2" '
+    BEGIN {
+      n = split(a, xa, "."); m = split(b, ya, ".")
+      k = (n > m ? n : m)
+      for (i = 1; i <= k; i++) {
+        xv = (i <= n ? xa[i] + 0 : 0)
+        yv = (i <= m ? ya[i] + 0 : 0)
+        if (xv > yv) exit 0
+        if (xv < yv) exit 1
+      }
+      exit 1          # 完全相等也不算「大于」
+    }'
+}
+
 # 不许倒退：build 号必须严格大于线上 feed 里的最大值，否则已装机的用户永远
-# 收不到这次更新（Sparkle 比的是 CFBundleVersion）。这里的 build 号取自 main 的
-# commit 数、本该天然单调，但 rebase / squash 会让它变小 —— 拦一道。
-# 首发时 feed 还不存在，跳过。
-live_max=$(curl -fsS --max-time 20 "https://updates.pendingname.com/$product/appcast.xml" 2>/dev/null \
-  | sed -n 's/.*<sparkle:version>\([0-9][0-9]*\)<\/sparkle:version>.*/\1/p' \
-  | sort -n | tail -n 1 || true)
-if [ -n "${live_max:-}" ]; then
-  if [ "$build_number" -le "$live_max" ]; then
-    echo "build 号 $build_number 不大于线上已发布的 $live_max —— 已装机的用户收不到这次更新" >&2
-    exit 2
+# 收不到这次更新（Sparkle 比的是 CFBundleVersion）。
+#
+# **三态**，缺一不可（2026-08-18）：以前这里是 `curl ... || true`，于是
+# 「网络失败」和「feed 里确实没有任何版本（首发）」长得一模一样 —— 网络抖一下，
+# 这道防倒退的闸就**静默失效**。拿不到数据时默认放行，正是这类闸最典型的死法。
+#   ① 拉到了、且有版本  → 正常比大小
+#   ② 拉到了、但确实为空 → 这才是合法的首发，放行
+#   ③ 拉取失败          → 退出，**不放行**
+#
+# 版本号正则要吃带句点的（`[0-9][0-9.]*`）—— build 号已改成「天.秒」两段式，
+# 旧那个只认纯数字的 `[0-9][0-9]*` 会一条都匹配不上，然后一路走进 ②「首发」。
+feed_url="https://updates.pendingname.com/$product/appcast.xml"
+if feed=$(curl -fsS --max-time 20 "$feed_url"); then
+  live_versions=$(printf '%s\n' "$feed" \
+    | sed -n 's/.*<sparkle:version>\([0-9][0-9.]*\)<\/sparkle:version>.*/\1/p')
+  if [ -z "$live_versions" ]; then
+    echo "note: 线上 feed 拉到了，但里面没有任何已发布版本（首发），跳过不许倒退的检查"
+  else
+    live_max=""
+    for v in $live_versions; do
+      if [ -z "$live_max" ] || version_gt "$v" "$live_max"; then live_max=$v; fi
+    done
+    if ! version_gt "$build_number" "$live_max"; then
+      echo "build 号 $build_number 不大于线上已发布的 $live_max —— 已装机的用户收不到这次更新" >&2
+      exit 2
+    fi
+    echo "note: build 号 $build_number > 线上最大 $live_max，不倒退"
   fi
 else
-  echo "note: 线上 feed 还没有已发布版本（首发），跳过版本号不许倒退的检查"
+  echo "拉不到线上 feed（$feed_url）—— 无法确认这次不会版本倒退，拒绝构建。" >&2
+  echo "这是 fail-closed：网络失败绝不能和「首发」共用一条放行路径。" >&2
+  exit 2
 fi
 
 release_dir="$root/dist/updates/$product"
