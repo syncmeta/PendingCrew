@@ -14,11 +14,22 @@ import Foundation
 ///   新路径没有条目 → 新目录下第一个 session 撞信任弹框卡死。
 /// - `~/.codex/config.toml` 的 `[projects."<绝对路径>"] trust_level` 同理。
 /// - codex 的 rollout 文件按日期+threadId 存，**不**按路径分目录，且我们 `thread/resume`
-///   显式带新 `cwd` → 换路径不影响接回原 thread（本轮实测确认，见 docs/）。
+///   显式带新 `cwd` → 换路径不影响接回原 thread（2026-08-18 实测：A 目录起 thread、
+///   杀进程、B 目录 resume 同一 threadId，暗号照样答得出）。
 ///
 /// 而旧工作目录是**多个 crew 共用**的（本机 16 个 crew 都指着同一个 dev 目录），所以
 /// 绝不能整目录 rename/move —— 只能按 `LocalAgentSessionStore` 里记着的、属于被迁 crew
 /// 的会话号精确挑文件搬；共享的 `memory/` 只能复制不能搬。
+///
+/// **两条为「机长自己调」而立的规矩**（人面走界面时不成立，机长走 MCP 工具时必成立）：
+///
+/// 1. **调用者自己不算拦路**。机长本身就是本 crew 里一个在跑的 session，若沿用
+///    「有 session 在跑就拒绝」，它永远调不动这个工具。所以拦的只是**别人家还在
+///    干活的 worker**；空闲的 worker 和调用者自己都不拦。
+/// 2. **活着的成员，会话记录一律不搬**。claude 正往那个 `.jsonl` 里写，这时候搬走
+///    要么搬到半截、要么它接着写旧文件。这些成员标成「留待清扫」，等它们停了**再调
+///    一次**这个工具补搬 —— 所以规划必须**幂等/可重复**：路径已经是新的时候再调，
+///    要能靠 `previousWorkingDirectory` 找回旧目录、把剩下的尾巴收干净。
 ///
 /// 这一层**只算「要做哪些动作」**，不碰文件系统（存在性判定由调用方以闭包喂进来），
 /// 照 `AgentSessionResume` 的路子写，供单测直接跑。真正落地在
@@ -32,12 +43,17 @@ enum WorkdirMigrationPlan {
         let id: String
         let title: String
         let workingDirectory: String?
+        /// 上一次改工作目录之前的那个路径。**清扫模式的唯一线索** —— 迁完之后
+        /// `workingDirectory` 已经是新的，再调一次要靠它才知道剩下的会话该去哪儿找。
+        let previousWorkingDirectory: String?
         let parentCrewIds: [String]
 
-        init(id: String, title: String, workingDirectory: String?, parentCrewIds: [String] = []) {
+        init(id: String, title: String, workingDirectory: String?,
+             previousWorkingDirectory: String? = nil, parentCrewIds: [String] = []) {
             self.id = id
             self.title = title
             self.workingDirectory = workingDirectory
+            self.previousWorkingDirectory = previousWorkingDirectory
             self.parentCrewIds = parentCrewIds
         }
     }
@@ -45,7 +61,7 @@ enum WorkdirMigrationPlan {
     /// 一条 agent 侧会话号（`LocalAgentSessionStore.Record` + 成员显示名）。
     struct AgentSessionInput: Equatable {
         let crewId: String
-        /// 本机 session id（成员身份），只用来对上显示名 / 排查。
+        /// 本机 session id（成员身份）—— 也用来对上「这个成员此刻是不是还活着」。
         let sessionId: String
         /// runner 名："claude" / "codex"。判定只认这两个，别的当「不认识 → 不搬」。
         let kind: String
@@ -55,11 +71,20 @@ enum WorkdirMigrationPlan {
         let memberName: String
     }
 
-    /// 一个正在跑的 session（拒绝执行时要能点名说清是哪几个）。
+    /// 一个还活着的 session。`isWorking` = 正在跑回合（区别于「存活但空闲」）。
     struct RunningSessionInput: Equatable {
         let crewId: String
         let sessionId: String
         let displayName: String
+        /// 正在干活 → 拦路（除非它就是调用者）。空闲 → 不拦，但会话记录仍不搬。
+        let isWorking: Bool
+
+        init(crewId: String, sessionId: String, displayName: String, isWorking: Bool = false) {
+            self.crewId = crewId
+            self.sessionId = sessionId
+            self.displayName = displayName
+            self.isWorking = isWorking
+        }
     }
 
     /// crew 的最小引用（回执/预览列表用）。
@@ -76,26 +101,30 @@ enum WorkdirMigrationPlan {
         var rootCrewId: String
         /// 勾了哪些 crew 一起迁（必须含 rootCrewId）。
         var selectedCrewIds: Set<String>
-        /// 目标工作目录（用户选的）。
+        /// 目标工作目录（用户选的 / 机长填的）。
         var newWorkdir: String
         var agentSessions: [AgentSessionInput]
         var runningSessions: [RunningSessionInput]
+        /// 谁在调（机长自己的 localSessionId）。它不算拦路；nil = 人面走界面。
+        var callerSessionId: String?
         var home: URL
 
         init(crews: [CrewInput], rootCrewId: String, selectedCrewIds: Set<String>,
              newWorkdir: String, agentSessions: [AgentSessionInput] = [],
-             runningSessions: [RunningSessionInput] = [], home: URL) {
+             runningSessions: [RunningSessionInput] = [],
+             callerSessionId: String? = nil, home: URL) {
             self.crews = crews
             self.rootCrewId = rootCrewId
             self.selectedCrewIds = selectedCrewIds
             self.newWorkdir = newWorkdir
             self.agentSessions = agentSessions
             self.runningSessions = runningSessions
+            self.callerSessionId = callerSessionId
             self.home = home
         }
     }
 
-    /// `~/.claude.json` 里一个路径条目的快照。**只看「哪几个键有实质值」**，不搬整条 —— 
+    /// `~/.claude.json` 里一个路径条目的快照。**只看「哪几个键有实质值」**，不搬整条 ——
     /// 实测新路径可能已经有条目、但 `hasTrustDialogAccepted` 是 `false`（人没进去过就
     /// 被别的路径写出来了）。整条「已存在就跳过」会把信任弹框留在那儿等着卡人，所以
     /// 按键合并：目标缺的 / 目标是空值的才补，目标已有实质值的一律不动。
@@ -176,11 +205,11 @@ enum WorkdirMigrationPlan {
         case newWorkdirMissing(String)
         case newWorkdirNotADirectory(String)
         case newWorkdirNotWritable(String)
-        case newWorkdirSameAsCurrent(String)
         case rootCrewNotFound(String)
         case noCrewSelected
-        /// 该 crew（或被勾上的子 crew）下还有 session 在跑 —— 先停了再迁。
-        case sessionsRunning([RunningSessionInput])
+        /// 被迁 crew 里还有**别人**正在干活的 session —— 先停了再迁。
+        /// 调用者自己不进这个列表（否则机长永远调不动），空闲的 worker 也不进。
+        case sessionsBusy([RunningSessionInput])
     }
 
     /// 要做的动作，**按这个顺序执行**：先补新路径的信任/权限（补错了不损坏旧路径），
@@ -204,10 +233,13 @@ enum WorkdirMigrationPlan {
         case setCrewWorkingDirectory(crewId: String, title: String, from: String?, to: String)
     }
 
-    /// 没做的事 —— 每一条都要能对人说清楚（撞名跳过 / 源不存在 / 天生不用搬）。
+    /// 没做的事 —— 每一条都要能对人说清楚（撞名跳过 / 源不存在 / 天生不用搬 / 留待清扫）。
     enum Skip: Equatable {
         case transcriptSourceMissing(agentSessionId: String, memberName: String, path: String)
         case transcriptTargetExists(agentSessionId: String, memberName: String, path: String)
+        /// 这个成员**此刻还活着**，claude 正往它那份日志里写 —— 现在搬会搬到半截。
+        /// 等它停了再调一次这个工具补搬（本层幂等，专为这一步设计）。
+        case sessionStillLive(agentSessionId: String, memberName: String)
         /// codex 的会话按日期+threadId 存，不按路径分家，且 resume 显式带新 cwd → 不用搬。
         case codexSessionNeedsNoMove(agentSessionId: String, memberName: String)
         case unknownAgentKind(kind: String, memberName: String)
@@ -232,6 +264,8 @@ enum WorkdirMigrationPlan {
         var affectedMembers: [String] = []
         /// 真正会改字段的 crew。
         var crews: [CrewRef] = []
+        /// 这次是**清扫**（目标路径已经生效，只补搬上次没搬完的尾巴），不是首迁。
+        var isSweep: Bool = false
 
         /// 能不能按「确认执行」。没有动作也算不能 —— 别让人点一个什么都不干的按钮。
         var isExecutable: Bool { blockers.isEmpty && !actions.isEmpty }
@@ -241,6 +275,14 @@ enum WorkdirMigrationPlan {
         }
         var memoryCopyCount: Int {
             actions.filter { if case .copyClaudeMemoryFile = $0 { return true }; return false }.count
+        }
+        /// 「留待清扫」的成员名（活着所以没搬）。
+        var pendingSweepMembers: [String] {
+            var seen = Set<String>()
+            return skips.compactMap { skip in
+                guard case .sessionStillLive(_, let name) = skip else { return nil }
+                return seen.insert(name).inserted ? name : nil
+            }
         }
     }
 
@@ -267,12 +309,11 @@ enum WorkdirMigrationPlan {
             plan.blockers.append(.rootCrewNotFound(inputs.rootCrewId))
             return plan
         }
-        let rootOld = root.workingDirectory.map(normalize)
-        if let rootOld, !newDir.isEmpty, rootOld == newDir {
-            plan.blockers.append(.newWorkdirSameAsCurrent(newDir))
-        }
+        // 「已经在新目录上了」不再是拦路条件 —— 那正是**清扫模式**：上一轮因为成员
+        // 还活着而留下的会话，等它们停了再调一次补搬。
+        plan.isSweep = root.workingDirectory.map(normalize) == newDir && !newDir.isEmpty
 
-        // ── 2. 选中的 crew（root 恒在内，即使 UI 没勾）。
+        // ── 2. 选中的 crew（root 恒在内，即使调用方没勾）。
         let selected = inputs.crews
             .filter { inputs.selectedCrewIds.contains($0.id) || $0.id == inputs.rootCrewId }
         if selected.isEmpty {
@@ -281,44 +322,46 @@ enum WorkdirMigrationPlan {
         }
         let selectedIds = Set(selected.map(\.id))
 
-        // ── 3. 有 session 在跑就拒绝，并点名是哪几个。
-        let running = inputs.runningSessions.filter { selectedIds.contains($0.crewId) }
-        if !running.isEmpty {
-            plan.blockers.append(.sessionsRunning(running))
+        // ── 3. 拦路的只有「**别人**正在干活」。调用者自己（机长）不拦，空闲 worker 不拦。
+        let live = inputs.runningSessions.filter { selectedIds.contains($0.crewId) }
+        let busy = live.filter { $0.isWorking && $0.sessionId != inputs.callerSessionId }
+        if !busy.isEmpty {
+            plan.blockers.append(.sessionsBusy(busy))
         }
+        // 活着的（含调用者、含空闲 worker）都不搬会话 —— 它们正握着那份日志。
+        let liveSessionIds = Set(live.map(\.sessionId))
 
         let projects = inputs.home.appendingPathComponent(".claude/projects", isDirectory: true).path
+        let rootSource = sourceDirectory(for: root, newDir: newDir)
 
-        // ── 4. `~/.claude.json` 的 per-project 条目：复制不搬走。
-        if let rootOld, !newDir.isEmpty {
-            let src = probe.claudeProjectSettings(rootOld)
+        // ── 4/5/6. 信任 / 权限 / 记忆：以 root 的旧目录为源。
+        if let rootSource, !newDir.isEmpty {
+            let src = probe.claudeProjectSettings(rootSource)
             let dst = probe.claudeProjectSettings(newDir)
             let keys = claudeSettingsKeys.filter {
                 src.meaningfulKeys.contains($0) && !dst.meaningfulKeys.contains($0)
             }
             if !src.exists || src.meaningfulKeys.isEmpty {
-                plan.skips.append(.claudeProjectSettingsSourceEmpty(path: rootOld))
+                plan.skips.append(.claudeProjectSettingsSourceEmpty(path: rootSource))
             } else if keys.isEmpty {
                 plan.skips.append(.claudeProjectSettingsAlreadyComplete(path: newDir))
             } else {
                 plan.actions.append(.copyClaudeProjectSettings(
-                    fromPath: rootOld, toPath: newDir, keys: keys))
+                    fromPath: rootSource, toPath: newDir, keys: keys))
             }
 
-            // ── 5. `~/.codex/config.toml` 的 trust_level：同样是补一条，旧的留着。
-            if let trust = probe.codexTrustLevel(rootOld) {
+            if let trust = probe.codexTrustLevel(rootSource) {
                 if probe.codexTrustLevel(newDir) != nil {
                     plan.skips.append(.codexTrustTargetExists(path: newDir))
                 } else {
                     plan.actions.append(
-                        .copyCodexTrust(fromPath: rootOld, toPath: newDir, trustLevel: trust))
+                        .copyCodexTrust(fromPath: rootSource, toPath: newDir, trustLevel: trust))
                 }
             } else {
-                plan.skips.append(.codexTrustSourceMissing(path: rootOld))
+                plan.skips.append(.codexTrustSourceMissing(path: rootSource))
             }
 
-            // ── 6. claude 项目记忆：整个项目共享 → 复制，撞名不覆盖。
-            let memFrom = projects + "/" + projectSlug(forWorkdir: rootOld) + "/memory"
+            let memFrom = projects + "/" + projectSlug(forWorkdir: rootSource) + "/memory"
             let memTo = projects + "/" + projectSlug(forWorkdir: newDir) + "/memory"
             if !probe.isDirectory(memFrom) {
                 plan.skips.append(.memoryDirectoryMissing(path: memFrom))
@@ -335,11 +378,11 @@ enum WorkdirMigrationPlan {
             }
         }
 
-        // ── 7. claude 会话日志：只挑属于被迁 crew 的那些会话号。
+        // ── 7. claude 会话日志：只挑属于被迁 crew 的那些会话号，且成员此刻**不在跑**。
         var seenMembers = Set<String>()
         for record in inputs.agentSessions where selectedIds.contains(record.crewId) {
             guard let crew = byId[record.crewId],
-                  let old = crew.workingDirectory.map(normalize), !old.isEmpty,
+                  let old = sourceDirectory(for: crew, newDir: newDir),
                   !newDir.isEmpty else { continue }
             if seenMembers.insert(record.memberName).inserted {
                 plan.affectedMembers.append(record.memberName)
@@ -349,6 +392,12 @@ enum WorkdirMigrationPlan {
                 plan.skips.append(.codexSessionNeedsNoMove(
                     agentSessionId: record.agentSessionId, memberName: record.memberName))
             case "claude":
+                guard !liveSessionIds.contains(record.sessionId) else {
+                    // 还活着 → 它正在写这份日志，现在搬会搬到半截。留待清扫。
+                    plan.skips.append(.sessionStillLive(
+                        agentSessionId: record.agentSessionId, memberName: record.memberName))
+                    continue
+                }
                 let fromDir = projects + "/" + projectSlug(forWorkdir: old)
                 let toDir = projects + "/" + projectSlug(forWorkdir: newDir)
                 let src = fromDir + "/" + record.agentSessionId + ".jsonl"
@@ -399,7 +448,20 @@ enum WorkdirMigrationPlan {
         return plan
     }
 
-    // MARK: - 子树（UI 勾选框的数据源）
+    /// 一个 crew 的会话该去**哪个目录**里找。
+    ///
+    /// - 还没迁（当前目录 ≠ 目标）→ 当前目录。
+    /// - 已经迁过（当前目录 == 目标）→ 上一次的目录，也就是**清扫模式**。
+    /// - 两个都对不上 → nil（没什么可搬的，只改字段）。
+    static func sourceDirectory(for crew: CrewInput, newDir: String) -> String? {
+        if let current = crew.workingDirectory.map(normalize),
+           !current.isEmpty, current != newDir { return current }
+        if let prev = crew.previousWorkingDirectory.map(normalize),
+           !prev.isEmpty, prev != newDir { return prev }
+        return nil
+    }
+
+    // MARK: - 子树（勾选框 / 机长指定目标的数据源）
 
     /// `rootId` 自己 + 全部后代（沿 `parentCrewIds` 反推 children，BFS，带 visited 防脏数据成环）。
     /// 顺序：root 在前，其余按 title 稳定排序 —— 预览列表每次打开都一样。
@@ -418,6 +480,22 @@ enum WorkdirMigrationPlan {
             }
         }
         return result
+    }
+
+    /// 机长 `change_workdir` 的 `crew` 参数解析：**只在本 crew 的子树里找**（不能拿它去
+    /// 改别的部门）。id 精确 → 标签名精确（忽略大小写）→ **唯一**前缀。歧义/无匹配 → nil。
+    /// 口径与 `LocalCrewStore.resolveChild` 一致，只是范围换成整棵子树（含 root 自己）。
+    static func resolveTarget(hint: String, rootId: String, crews: [CrewInput]) -> String? {
+        let h = hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !h.isEmpty else { return rootId }
+        let scope = subtree(rootId: rootId, crews: crews)
+        if let exact = scope.first(where: { $0.id == h }) { return exact.id }
+        let lower = h.lowercased()
+        let byTitle = scope.filter { $0.title.lowercased() == lower }
+        if byTitle.count == 1 { return byTitle[0].id }
+        if !byTitle.isEmpty { return nil }
+        let prefix = scope.filter { $0.title.lowercased().hasPrefix(lower) }
+        return prefix.count == 1 ? prefix[0].id : nil
     }
 
     // MARK: - 路径

@@ -236,6 +236,20 @@ final class McpServer {
                     "inputSchema": ["type": "object", "properties": [String: Any]()],
                 ])
                 tools.append([
+                    "name": "change_workdir",
+                    "description": "（机长专用）改这个 crew 的工作目录，并把 agent 侧的上下文一起迁过去（claude 的会话记录与项目记忆、两家 agent 的「这个目录信任过 / 这些工具允许过」）。仓库搬家、目录改名时用它，别去手改文件。\n\n**不带 confirm 就是预览**：返回要搬什么、影响哪些成员、有什么拦路的，什么都不动。看过没问题再带 confirm:true 调一次才真执行。\n\n几件必须知道的事：\n· 新目录必须**已经存在**，不会替你创建。\n· 有**别的成员正在干活**会拒绝执行并点名；你自己（发起的机长）和空闲的成员都不拦路。\n· **还活着的成员，会话记录不会搬**（它正写着那份日志，搬会搬到半截）——这些成员会列在「留待清扫」里。等它们停了，**用同一个路径再调一次**，就会把剩下的补搬过去。这个工具可以反复调，幂等。\n· 新目录只对**之后新起/重启**的 session 生效；此刻在跑的（包括你自己）还在旧目录里，直到重启。\n· 动手前会把 ~/.claude.json、~/.codex/config.toml、crew 账本各备份一份。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "new_path": ["type": "string", "description": "新工作目录的绝对路径（必须已存在）。"],
+                            "crew": ["type": "string", "description": "改哪一个：本 crew 的标签名或 id，也可以是你名下任一子 crew。省略 = 本 crew。只能动自己这棵子树。"],
+                            "include_children": ["type": "boolean", "description": "连同子 crew 一起迁。默认 true。"],
+                            "confirm": ["type": "boolean", "description": "true = 真执行；省略/false = 只出预览。"],
+                        ],
+                        "required": ["new_path"],
+                    ],
+                ])
+                tools.append([
                     "name": "start_session",
                     "description": "（机长专用）在当前 crew 里起一个 worker session 去干一件明确的编码任务。brief 写清要干什么。title 可选但强烈建议：一句 ≤18 字、不带项目名的任务概括——它是这个 session 在群聊气泡和成员列表里的显示名（不传就从 brief 兜底截断，可能不够精简）。runner 默认随本 crew（不填即可），可填 \"claude\"/\"codex\" 覆盖。isolation 必填：机长必须根据并行冲突、改动范围和任务关系明确决定；false 使用 crew 共享目录，true 新建独立 worktree，创建失败会直接报错而不会偷偷退回共享目录。model/effort 可选：按任务难度配置；不填沿用对应 runner 默认。派的活对应人类 Todo 条目（「To do +1: #N」）时，把 #N 显式写进 brief，并要求 worker 落 main 时顺手 respond_todo 翻牌——别只更 task 账漏翻 Todo。起完 worker 会自己报到，你在群聊看得到。\n"
                         + catalogHint(agents: ["claude", "codex"]),
@@ -598,6 +612,28 @@ final class McpServer {
                 crewId: crewId, requesterSessionId: sessionId,
                 targetSessionId: target, reason: reason)
             return toolResult(id: id, text: awaitCommandResponse(commandId: cmdId))
+        case "change_workdir":
+            // 机长专用：改工作目录 + 迁 agent 上下文。规划/执行都在 app 侧（helper 是
+            // 离线子进程，读不到 crew store，也看不到在跑的 run），这里只做参数卫生 +
+            // long-poll 拿预览或回执。
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let newPath = ((args["new_path"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !newPath.isEmpty else {
+                return toolResult(id: id, text: "ERROR: new_path 不能为空（要一个已经存在的目录的绝对路径）")
+            }
+            let targetHint = (args["crew"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let includeChildren = (args["include_children"] as? Bool) ?? true
+            let confirm = (args["confirm"] as? Bool) ?? false
+            let cmdId = control.enqueueChangeWorkdir(
+                crewId: crewId, sessionId: sessionId, targetHint: targetHint,
+                path: newPath, includeChildren: includeChildren, confirm: confirm)
+            // 迁移可能要搬上百个文件 + 重试写 ~/.claude.json，默认 10 秒不够 —— 放宽 12 倍
+            // （按 `commandResponseMaxWaits` 成比例，单测把基数调小后不会被这条拖慢）。
+            return toolResult(id: id, text: awaitCommandResponse(
+                commandId: cmdId, maxWaits: commandResponseMaxWaits * 12,
+                timeoutHint: "注意：它**可能仍在执行**——迁移回执会照常发进群聊，去群里看那条，别当成没跑过。"))
         case "get_quota":
             let url = quotaDirectory.appendingPathComponent("quota.json")
             guard let data = try? Data(contentsOf: url),
@@ -939,9 +975,15 @@ final class McpServer {
 
     /// long-poll 一条机长命令的应答文件（`LocalCrewControlStore.takeCommandResponse`）。
     /// 超时 → 提示 app 可能没在跑（helper 是离线子进程，只有 app 活着才有人执行命令）。
-    func awaitCommandResponse(commandId: String) -> String {
+    /// long-poll 一条命令的应答。`maxWaits` 默认 `commandResponseMaxWaits`（10 秒够
+    /// inspect/nudge/stop 这类瞬时操作）；**真会干活一阵子的命令要显式放宽**
+    /// —— 比如 `change_workdir` 要搬上百个会话文件、复制记忆、还可能重试写
+    /// `~/.claude.json`。超时那句必须留活口：命令**可能已经在执行**，别让机长以为没跑。
+    func awaitCommandResponse(commandId: String, maxWaits: Int? = nil,
+                              timeoutHint: String? = nil) -> String {
         var waits = 0
-        while waits < commandResponseMaxWaits {
+        let budget = maxWaits ?? commandResponseMaxWaits
+        while waits < budget {
             if let text = control.takeCommandResponse(crewId: crewId, commandId: commandId) {
                 return text
             }
@@ -949,6 +991,7 @@ final class McpServer {
             Thread.sleep(forTimeInterval: commandResponsePollInterval)
         }
         return "（超时无应答 —— PendingCrew app 可能没在运行，或该命令未被执行。）"
+            + (timeoutHint.map { " " + $0 } ?? "")
     }
 
     func awaitReply(reqId: String, pollInterval: TimeInterval = 0.5, maxWaits: Int = 3600) -> String {

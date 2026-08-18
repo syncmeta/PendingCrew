@@ -30,6 +30,11 @@ enum WorkdirMigrationExecutor {
         var codexTrustCopied: Bool = false
         var crewsUpdated: [WorkdirMigrationPlan.CrewRef] = []
         var skips: [WorkdirMigrationPlan.Skip] = []
+        /// 做了、但**没能确认落住**的事（如 claude.json 被别的进程覆盖）。
+        /// 绝不当成功report —— 人得知道第一次进新目录可能还要手点一次信任框。
+        var warnings: [String] = []
+        /// 这次是清扫（补搬上次留下的尾巴）而非首迁。
+        var isSweep: Bool = false
         /// 非 nil = 中途停了，上面那些是「已经做了的」。
         var failure: Failure?
 
@@ -131,7 +136,8 @@ enum WorkdirMigrationExecutor {
         fileManager fm: FileManager = .default,
         applyCrewWorkingDirectory: (String, String) throws -> Void
     ) -> Receipt {
-        var receipt = Receipt(backupDirectory: backupDirectory.path, skips: plan.skips)
+        var receipt = Receipt(backupDirectory: backupDirectory.path, skips: plan.skips,
+                              isSweep: plan.isSweep)
 
         guard plan.blockers.isEmpty else {
             receipt.failure = Failure(step: "预检",
@@ -157,8 +163,16 @@ enum WorkdirMigrationExecutor {
             do {
                 switch action {
                 case .copyClaudeProjectSettings(let from, let to, let keys):
-                    try copyClaudeProjectSettings(home: home, from: from, to: to, keys: keys)
-                    receipt.claudeSettingsKeysCopied = keys
+                    let (confirmed, tries) = try copyClaudeProjectSettingsVerified(
+                        home: home, from: from, to: to, keys: keys)
+                    receipt.claudeSettingsKeysCopied = confirmed
+                    let lost = keys.filter { !confirmed.contains($0) }
+                    if !lost.isEmpty {
+                        receipt.warnings.append(
+                            "claude 的目录信任/权限有 \(lost.joined(separator: "、")) 没落住"
+                            + "（写了 \(tries) 次，读回来还是没有 —— `~/.claude.json` 被别的 claude 进程覆盖了）。"
+                            + "第一次进新目录可能要人手点一次「信任这个文件夹」。")
+                    }
 
                 case .copyCodexTrust(_, let to, let trustLevel):
                     try addCodexTrust(home: home, path: to, trustLevel: trustLevel)
@@ -253,6 +267,37 @@ enum WorkdirMigrationExecutor {
         }
     }
 
+    /// 写 + **读回校验**，没落住就重试。返回真正确认落住的键。
+    ///
+    /// 为什么非要读回来：`~/.claude.json` 是 claude 自己也在写的整份文件（每个 session
+    /// 退出都会覆写一遍），本机常年十几个 claude 在跑 —— 我们刚写进去的条目**真的可能
+    /// 被别的进程覆盖掉**。这是「读—改—写」这套玩法的固有窄口，我们这侧没有可用的锁，
+    /// 只能靠重试 + 如实报（`confirmed` 少于 `keys` 时调用方必须把话说出去，不许默默
+    /// 当成功）。
+    static func copyClaudeProjectSettingsVerified(
+        home: URL, from: String, to: String, keys: [String],
+        attempts: Int = 3, waitBetween: TimeInterval = 0.35
+    ) throws -> (confirmed: [String], attemptsUsed: Int) {
+        var lastError: Error?
+        for attempt in 1...max(1, attempts) {
+            do {
+                try copyClaudeProjectSettings(home: home, from: from, to: to, keys: keys)
+            } catch {
+                // 源条目没了之类的硬错误，重试也没用 —— 直接抛。
+                throw error
+            }
+            let landed = loadClaudeProjects(home: home)[to] ?? [:]
+            let confirmed = keys.filter { WorkdirMigrationPlan.isMeaningful(landed[$0]) }
+            if confirmed.count == keys.count { return (confirmed, attempt) }
+            lastError = MigrationError("写进去的键没全部落住（第 \(attempt) 次）")
+            if attempt < max(1, attempts) { Thread.sleep(forTimeInterval: waitBetween) }
+        }
+        let landed = loadClaudeProjects(home: home)[to] ?? [:]
+        let confirmed = keys.filter { WorkdirMigrationPlan.isMeaningful(landed[$0]) }
+        _ = lastError
+        return (confirmed, max(1, attempts))
+    }
+
     // MARK: - ~/.codex/config.toml
 
     /// 给新路径补一条 `[projects."<路径>"] trust_level`（旧的留着）。
@@ -301,11 +346,13 @@ enum WorkdirMigrationExecutor {
 
     // MARK: - 回执文案（纯函数，可单测）
 
-    /// 迁完往群里发的那条。**如实**：搬了多少、什么没搬、停在哪一步。
+    /// 迁完往群里发的那条。**如实**：搬了多少、什么没搬、停在哪一步、什么没落住。
     static func receiptText(_ r: Receipt, newWorkdir: String) -> String {
         var lines: [String] = []
         if let failure = r.failure {
             lines.append("**迁移工作目录：中途停了。** 停在「\(failure.step)」：\(failure.message)")
+        } else if r.isSweep {
+            lines.append("**清扫完成**（补搬上一轮留下的尾巴）。目录 `\(newWorkdir)`")
         } else {
             lines.append("**迁移工作目录：完成。** 新目录 `\(newWorkdir)`")
         }
@@ -325,11 +372,111 @@ enum WorkdirMigrationExecutor {
             lines.append("- **没搬的**：")
             lines.append(contentsOf: notable.map { "  - " + $0 })
         }
+        for w in r.warnings { lines.append("- ⚠️ " + w) }
         lines.append("- 备份在 `\(r.backupDirectory)`")
+
+        let sweep = pendingSweepMembers(r.skips)
+        if !sweep.isEmpty {
+            lines.append("- **留待清扫**：\(sweep.joined(separator: "、"))"
+                + " —— 它们此刻还活着、正在写自己的会话日志，现在搬会搬到半截。"
+                + "等它们停了**再调一次** `change_workdir`（同一个路径即可）就会把这批补搬过去。")
+        }
         if r.failure != nil {
             lines.append("上面列的是**已经做完**的部分。剩下的没做，crew 字段没改完的仍指着旧目录。")
+        } else {
+            lines.append(effectiveScopeNote)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// 生效边界 —— 每份回执都要带，免得人以为点完当场全员换了目录。
+    static let effectiveScopeNote =
+        "**生效边界**：新目录只对**之后新起 / 重启**的 session 生效；此刻还在跑的（包括发起这次"
+        + "迁移的机长自己）仍然工作在旧目录里，直到它重启为止。"
+
+    /// 「留待清扫」的成员名（去重，按出现顺序）。
+    static func pendingSweepMembers(_ skips: [WorkdirMigrationPlan.Skip]) -> [String] {
+        var seen = Set<String>()
+        return skips.compactMap { skip in
+            guard case .sessionStillLive(_, let name) = skip else { return nil }
+            return seen.insert(name).inserted ? name : nil
+        }
+    }
+
+    // MARK: - 预览文案（dry-run，机长 `change_workdir` 不带 confirm 时返回这个）
+
+    /// 把一份计划渲染成人/机长都能一眼看懂的预览。纯函数，可单测。
+    static func previewText(_ plan: WorkdirMigrationPlan.Plan, newWorkdir: String) -> String {
+        var lines: [String] = []
+        lines.append(plan.isSweep
+            ? "**预览（清扫模式）**：目录已经是 `\(newWorkdir)`，这次只补搬上一轮留下的尾巴。"
+            : "**预览（还没动手）**：把工作目录改成 `\(newWorkdir)`。")
+
+        if !plan.blockers.isEmpty {
+            lines.append("")
+            lines.append("**拦路的（不解决就不能执行）**：")
+            for b in plan.blockers { lines.append("- " + blockerText(b)) }
+        }
+
+        lines.append("")
+        lines.append("**会做这些**：")
+        lines.append("- 改工作目录的 crew：" + (plan.crews.isEmpty
+            ? "无（都已经在新目录上了）"
+            : plan.crews.map { "「\($0.title)」" }.joined(separator: "、")))
+        lines.append("- 搬 claude 会话：\(plan.claudeTranscriptMoveCount) 个")
+        lines.append("- 复制 claude 项目记忆：\(plan.memoryCopyCount) 个文件（旧目录原样留着，别的 crew 还在用）")
+        lines.append("- 目录信任 / 工具权限：" + trustSummary(plan))
+        if !plan.affectedMembers.isEmpty {
+            lines.append("- 涉及的成员：" + plan.affectedMembers.joined(separator: "、"))
+        }
+
+        let notable = plan.skips.compactMap(skipLine)
+        if !notable.isEmpty {
+            lines.append("")
+            lines.append("**搬不了 / 不搬的**：")
+            lines.append(contentsOf: notable.map { "- " + $0 })
+        }
+
+        lines.append("")
+        if !plan.isExecutable {
+            lines.append(plan.blockers.isEmpty
+                ? "**没有要做的动作** —— 已经是这个目录、也没有剩下要搬的东西了。"
+                : "**现在不能执行**，先把上面拦路的解决掉。")
+        } else {
+            lines.append("确认无误就再调一次，带上 `confirm: true`。")
+        }
+        lines.append(effectiveScopeNote)
+        return lines.joined(separator: "\n")
+    }
+
+    /// 拦路条件的人话（预览 / UI 共用同一份文案，别写两遍）。
+    static func blockerText(_ b: WorkdirMigrationPlan.Blocker) -> String {
+        switch b {
+        case .emptyNewWorkdir: return "还没给新目录。"
+        case .newWorkdirMissing(let p): return "目录不存在：\(p)（不会替你创建）"
+        case .newWorkdirNotADirectory(let p): return "这不是一个目录：\(p)"
+        case .newWorkdirNotWritable(let p): return "目录不可写：\(p)"
+        case .rootCrewNotFound(let id): return "找不到这个 crew：\(id)"
+        case .noCrewSelected: return "一个 crew 都没选。"
+        case .sessionsBusy(let busy):
+            let names = busy.map { "「\($0.displayName)」" }.joined(separator: "、")
+            return "这些成员**正在干活**，先让它们停下来再迁：\(names)"
+        }
+    }
+
+    /// 「信任/权限这一栏」的一句话（预览 / UI 共用）。
+    static func trustSummary(_ plan: WorkdirMigrationPlan.Plan) -> String {
+        var parts: [String] = []
+        for action in plan.actions {
+            switch action {
+            case .copyClaudeProjectSettings(_, _, let keys):
+                parts.append("claude 补 " + keys.joined(separator: "、"))
+            case .copyCodexTrust(_, _, let level):
+                parts.append("codex 补 trust_level=\(level)")
+            default: break
+            }
+        }
+        return parts.isEmpty ? "无需改动（源没有，或新路径已经有了）" : parts.joined(separator: "；")
     }
 
     /// 只把「人需要知道」的跳过项渲染出来；纯粹「本来就不用搬」的不进回执，免得刷屏。
@@ -341,6 +488,8 @@ enum WorkdirMigrationExecutor {
             return "「\(name)」的会话 \(id)：旧目录里已经找不到了（它重启会是新脑子）"
         case .memoryTargetExists(let rel, _):
             return "记忆 `\(rel)`：新目录下已有同名文件，跳过没覆盖，要合请自己合"
+        case .sessionStillLive(_, let name):
+            return "「\(name)」此刻还活着（正在写自己的会话日志），会话记录留待清扫"
         case .memoryDirectoryMissing:
             return "旧目录下没有项目记忆，没什么可复制的"
         case .claudeProjectSettingsSourceEmpty:

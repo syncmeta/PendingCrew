@@ -230,6 +230,25 @@ final class LocalCrewControlStore: @unchecked Sendable {
         return id
     }
 
+    /// 机长改工作目录（含 agent 上下文迁移）：`path` 目标目录；`targetHint` 指定本 crew
+    /// 子树里的哪一个（空 = 本 crew）；`includeChildren` 连子 crew 一起迁；`confirm=false`
+    /// 只出预览。目标解析 / 规划 / 执行全归 app 侧（helper 读不到 crew store 与在跑的 run）。
+    /// 返回命令 id —— helper long-poll 拿预览或回执。
+    @discardableResult
+    func enqueueChangeWorkdir(crewId: String, sessionId: String, targetHint: String?,
+                              path: String, includeChildren: Bool, confirm: Bool) -> String {
+        let id = UUID().uuidString.lowercased()
+        let hint = targetHint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        enqueue(CrewCommand(
+            id: id, crewId: crewId, kind: "change_workdir",
+            brief: "-", runner: nil, isolation: nil,
+            title: (hint?.isEmpty == false) ? hint : nil,
+            sessionId: sessionId, path: path,
+            includeChildren: includeChildren, confirm: confirm,
+            ts: ISO8601DateFormatter().string(from: Date())))
+        return id
+    }
+
     // MARK: - Command responses（inspect/nudge 的应答半边）
     //
     // 有些机长命令要**带结果回来**（inspect 的终端快照）：app 侧执行完写
@@ -410,7 +429,7 @@ struct CrewCommand: Codable, Equatable {
     let crewId: String
     /// "start_session" | "create_child_crew" | "set_profile" | "schedule_wakeup" |
     /// "listen" | "crew_message" | "inspect_session" | "nudge_session" | "stop_session" |
-    /// "adopt_crew" | "release_crew" | "create_parent_crew" | "adopt_parent"
+    /// "adopt_crew" | "release_crew" | "create_parent_crew" | "adopt_parent" | "change_workdir"
     let kind: String
     let brief: String
     let runner: String?     // start_session：nil=随 crew captainAgentKind；"claude"/"codex" 覆盖
@@ -436,5 +455,11 @@ struct CrewCommand: Codable, Equatable {
     var senders: [String]? = nil
     /// listen：true=停止收听（此时 fireAt/senders 忽略）。
     var off: Bool? = nil
+    /// change_workdir：目标工作目录的绝对路径。
+    var path: String? = nil
+    /// change_workdir：连同子 crew 一起迁（nil = true）。
+    var includeChildren: Bool? = nil
+    /// change_workdir：true=真执行；nil/false=只出预览（dry-run）。
+    var confirm: Bool? = nil
     let ts: String
 }

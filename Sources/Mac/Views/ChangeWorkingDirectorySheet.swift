@@ -130,7 +130,7 @@ struct ChangeWorkingDirectorySheet: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(plan.blockers.enumerated()), id: \.offset) { _, b in
-                            Label(blockerText(b), systemImage: "exclamationmark.octagon.fill")
+                            Label(WorkdirMigrationExecutor.blockerText(b), systemImage: "exclamationmark.octagon.fill")
                                 .foregroundStyle(.red)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -142,7 +142,7 @@ struct ChangeWorkingDirectorySheet: View {
                     row("要改工作目录的 crew", "\(plan.crews.count) 个")
                     row("claude 会话搬过去", "\(plan.claudeTranscriptMoveCount) 个")
                     row("claude 项目记忆复制", "\(plan.memoryCopyCount) 个文件（旧目录原样留着）")
-                    row("目录信任 / 工具权限", trustSummary(plan))
+                    row("目录信任 / 工具权限", WorkdirMigrationExecutor.trustSummary(plan))
                     if !plan.affectedMembers.isEmpty {
                         row("影响的成员", plan.affectedMembers.joined(separator: "、"))
                     }
@@ -162,20 +162,6 @@ struct ChangeWorkingDirectorySheet: View {
         }
     }
 
-    private func trustSummary(_ plan: WorkdirMigrationPlan.Plan) -> String {
-        var parts: [String] = []
-        for action in plan.actions {
-            switch action {
-            case .copyClaudeProjectSettings(_, _, let keys):
-                parts.append("claude 补 " + keys.joined(separator: "、"))
-            case .copyCodexTrust(_, _, let level):
-                parts.append("codex 补 trust_level=\(level)")
-            default: break
-            }
-        }
-        return parts.isEmpty ? "无需改动（源没有，或新路径已经有了）" : parts.joined(separator: "；")
-    }
-
     private func row(_ title: String, _ value: String) -> some View {
         HStack(alignment: .top) {
             Text(title).foregroundStyle(.secondary)
@@ -183,21 +169,6 @@ struct ChangeWorkingDirectorySheet: View {
             Text(value).multilineTextAlignment(.trailing)
         }
         .font(.callout)
-    }
-
-    private func blockerText(_ b: WorkdirMigrationPlan.Blocker) -> String {
-        switch b {
-        case .emptyNewWorkdir: return "还没选新目录。"
-        case .newWorkdirMissing(let p): return "目录不存在：\(p)"
-        case .newWorkdirNotADirectory(let p): return "这不是一个目录：\(p)"
-        case .newWorkdirNotWritable(let p): return "目录不可写：\(p)"
-        case .newWorkdirSameAsCurrent(let p): return "新目录和当前目录是同一个：\(p)"
-        case .rootCrewNotFound(let id): return "找不到这个 crew：\(id)"
-        case .noCrewSelected: return "一个 crew 都没勾。"
-        case .sessionsRunning(let running):
-            let names = running.map { "「\($0.displayName)」" }.joined(separator: "、")
-            return "还有 session 在跑，先停了再迁：\(names)"
-        }
     }
 
     // MARK: - 回执
@@ -241,11 +212,7 @@ struct ChangeWorkingDirectorySheet: View {
     // MARK: - 编排
 
     private func reload() {
-        let rows = LocalCrewStore.shared.workdirRows().map {
-            WorkdirMigrationPlan.CrewInput(id: $0.id, title: $0.title,
-                                           workingDirectory: $0.workingDirectory,
-                                           parentCrewIds: $0.parentCrewIds)
-        }
+        let rows = LocalCrewStore.shared.workdirCrewInputs()
         subtree = WorkdirMigrationPlan.subtree(rootId: crewId, crews: rows)
         selected = Set(subtree.map(\.id))
         recomputePlan()
@@ -257,40 +224,14 @@ struct ChangeWorkingDirectorySheet: View {
                                          probe: WorkdirMigrationExecutor.probe(home: homeURL))
     }
 
+    /// 与机长工具那条路**共用同一个构造**（`WorkdirChangeCommand.makeInputs`）——
+    /// 免得两边对「谁算活着 / 谁算拦路」各有一套说法。人面走界面时没有「调用者」，
+    /// 所以 callerSessionId 传 nil：任何在干活的 session 都拦路。
     private func makeInputs() -> WorkdirMigrationPlan.Inputs {
-        let allRows = LocalCrewStore.shared.workdirRows().map {
-            WorkdirMigrationPlan.CrewInput(id: $0.id, title: $0.title,
-                                           workingDirectory: $0.workingDirectory,
-                                           parentCrewIds: $0.parentCrewIds)
-        }
-        let ids = Set(subtree.map(\.id))
-        let sessions = LocalAgentSessionStore.shared.list()
-            .filter { ids.contains($0.crewId) }
-            .map { record in
-                WorkdirMigrationPlan.AgentSessionInput(
-                    crewId: record.crewId, sessionId: record.sessionId, kind: record.kind,
-                    agentSessionId: record.agentSessionId,
-                    memberName: memberName(crewId: record.crewId, sessionId: record.sessionId))
-            }
-        let running = sessionRunner.runs
-            .filter { $0.status == .running && ids.contains($0.crewId) }
-            .map { WorkdirMigrationPlan.RunningSessionInput(
-                crewId: $0.crewId, sessionId: $0.sessionId, displayName: $0.displayName) }
-        return .init(crews: allRows, rootCrewId: crewId, selectedCrewIds: selected,
-                     newWorkdir: newDir, agentSessions: sessions,
-                     runningSessions: running, home: homeURL)
-    }
-
-    /// 成员显示名：优先 crew 账本里登记的持久成员名，没有就退回会话号前缀。
-    private func memberName(crewId: String, sessionId: String) -> String {
-        if let m = LocalCrewStore.shared.sessionMembers(crewId: crewId)
-            .first(where: { $0.sessionId == sessionId }), !m.displayName.isEmpty {
-            return m.displayName
-        }
-        if let run = sessionRunner.runs.first(where: { $0.sessionId == sessionId }) {
-            return run.displayName
-        }
-        return "session " + String(sessionId.prefix(6))
+        WorkdirChangeCommand.makeInputs(
+            crews: LocalCrewStore.shared.workdirCrewInputs(),
+            rootCrewId: crewId, selected: selected, newPath: newDir,
+            runs: sessionRunner.runs, callerSessionId: nil)
     }
 
     private var homeURL: URL { URL(fileURLWithPath: NSHomeDirectory()) }
@@ -303,23 +244,9 @@ struct ChangeWorkingDirectorySheet: View {
         guard fresh.isExecutable else { return }
 
         executing = true
-        let stamp = ISO8601DateFormatter().string(from: Date())
-            .replacingOccurrences(of: ":", with: "-")
-        let backup = LocalWhiteboardStore.defaultDirectory
-            .deletingLastPathComponent()
-            .appendingPathComponent("backups/workdir-migration-\(stamp)", isDirectory: true)
-        let crewLedger = LocalWhiteboardStore.defaultDirectory
-            .deletingLastPathComponent()
-            .appendingPathComponent("local-crews.json")
-
         // 文件动作都是同卷 rename / 小文件复制，量级在毫秒 —— 就地跑，
         // 免得把 `LocalCrewStore`（@MainActor）的写入甩到别的线程上。
-        let result = WorkdirMigrationExecutor.execute(
-            plan: fresh, home: homeURL, backupDirectory: backup,
-            extraBackupFiles: [crewLedger],
-            applyCrewWorkingDirectory: { id, path in
-                LocalCrewStore.shared.setWorkingDirectory(id, path)
-            })
+        let result = WorkdirChangeCommand.execute(plan: fresh, newWorkdir: newDir)
         executing = false
         receipt = result
 

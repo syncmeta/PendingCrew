@@ -227,6 +227,87 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         XCTAssertEqual(applied, 0)
     }
 
+    // MARK: - 写回校验（~/.claude.json 是 claude 自己也在写的文件）
+
+    /// 正常路径：写完读回来确认，键真的落住了。
+    func testVerifiedCopyConfirmsKeysLanded() throws {
+        try write(claudeJSON, to: ".claude.json")
+        let (confirmed, tries) = try WorkdirMigrationExecutor.copyClaudeProjectSettingsVerified(
+            home: home, from: "/old", to: "/new", keys: ["hasTrustDialogAccepted"])
+        XCTAssertEqual(confirmed, ["hasTrustDialogAccepted"])
+        XCTAssertEqual(tries, 1)
+    }
+
+    /// 源那边这个键本来就是空的 → 写不进去也确认不了。**不许当成功**：
+    /// 返回的 confirmed 里没有它，调用方据此往回执里写「没落住」。
+    func testVerifiedCopyReportsKeysThatNeverLanded() throws {
+        try write(#"{"projects":{"/old":{"hasTrustDialogAccepted":false},"/new":{}}}"#,
+                  to: ".claude.json")
+        let (confirmed, tries) = try WorkdirMigrationExecutor.copyClaudeProjectSettingsVerified(
+            home: home, from: "/old", to: "/new",
+            keys: ["hasTrustDialogAccepted"], attempts: 2, waitBetween: 0)
+        XCTAssertTrue(confirmed.isEmpty)
+        XCTAssertEqual(tries, 2, "没落住要重试，不是写一次就算完")
+    }
+
+    /// 没落住 → 回执必须出现 ⚠️ 并把「可能要手点信任框」说出来。
+    func testExecuteWarnsWhenTrustKeyDidNotLand() throws {
+        try write(#"{"projects":{"/old":{"hasTrustDialogAccepted":false},"/new":{}}}"#,
+                  to: ".claude.json")
+        var plan = WorkdirMigrationPlan.Plan()
+        plan.actions = [.copyClaudeProjectSettings(
+            fromPath: "/old", toPath: "/new", keys: ["hasTrustDialogAccepted"])]
+        let receipt = WorkdirMigrationExecutor.execute(
+            plan: plan, home: home, backupDirectory: home.appendingPathComponent("backup"),
+            applyCrewWorkingDirectory: { _, _ in })
+        XCTAssertNil(receipt.failure)
+        XCTAssertTrue(receipt.claudeSettingsKeysCopied.isEmpty)
+        XCTAssertEqual(receipt.warnings.count, 1)
+        let text = WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
+        XCTAssertTrue(text.contains("没落住"))
+        XCTAssertTrue(text.contains("信任"))
+    }
+
+    // MARK: - 预览文案
+
+    /// 预览必须说清「还没动手」「怎么才算真执行」，以及生效边界。
+    func testPreviewTextSaysNothingHappenedYet() {
+        var plan = WorkdirMigrationPlan.Plan()
+        plan.crews = [.init(id: "c1", title: "本群")]
+        plan.actions = [.setCrewWorkingDirectory(crewId: "c1", title: "本群", from: "/old", to: "/new")]
+        let text = WorkdirMigrationExecutor.previewText(plan, newWorkdir: "/new")
+        XCTAssertTrue(text.contains("还没动手"))
+        XCTAssertTrue(text.contains("confirm"))
+        XCTAssertTrue(text.contains("生效边界"))
+    }
+
+    /// 有人在干活 → 预览要点名，并说明现在不能执行。
+    func testPreviewTextNamesBusySessions() {
+        var plan = WorkdirMigrationPlan.Plan()
+        plan.blockers = [.sessionsBusy([
+            .init(crewId: "c1", sessionId: "s1", displayName: "打杂的", isWorking: true)])]
+        let text = WorkdirMigrationExecutor.previewText(plan, newWorkdir: "/new")
+        XCTAssertTrue(text.contains("打杂的"))
+        XCTAssertTrue(text.contains("现在不能执行"))
+    }
+
+    /// 清扫模式的预览要自报家门，别让人以为又要整迁一遍。
+    func testPreviewTextAnnouncesSweepMode() {
+        var plan = WorkdirMigrationPlan.Plan()
+        plan.isSweep = true
+        plan.actions = [.moveClaudeTranscript(agentSessionId: "aaa", memberName: "小明",
+                                              from: "/a", to: "/b")]
+        let text = WorkdirMigrationExecutor.previewText(plan, newWorkdir: "/new")
+        XCTAssertTrue(text.contains("清扫模式"))
+    }
+
+    /// 无事可做时不能显示成「可以执行」。
+    func testPreviewTextSaysNothingToDo() {
+        let text = WorkdirMigrationExecutor.previewText(
+            WorkdirMigrationPlan.Plan(), newWorkdir: "/new")
+        XCTAssertTrue(text.contains("没有要做的动作"))
+    }
+
     // MARK: - 回执
 
     /// 撞名跳过的必须出现在回执里 —— 不然人以为全搬过去了。
@@ -243,5 +324,27 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         XCTAssertTrue(text.contains("a.md"))
         XCTAssertFalse(text.contains("codex 的"), "本来就不用搬的不进回执，别刷屏")
         XCTAssertTrue(text.contains("/b"), "备份位置要写清楚")
+        XCTAssertTrue(text.contains("生效边界"), "别让人以为点完当场全员换了目录")
+    }
+
+    /// 「留待清扫」的成员要点名，并告诉人怎么收尾（再调一次）。
+    func testReceiptTextExplainsPendingSweep() {
+        var receipt = WorkdirMigrationExecutor.Receipt(backupDirectory: "/b")
+        receipt.skips = [
+            .sessionStillLive(agentSessionId: "aaa", memberName: "机长"),
+            .sessionStillLive(agentSessionId: "bbb", memberName: "打杂的"),
+        ]
+        let text = WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
+        XCTAssertTrue(text.contains("留待清扫"))
+        XCTAssertTrue(text.contains("机长"))
+        XCTAssertTrue(text.contains("打杂的"))
+        XCTAssertTrue(text.contains("再调一次"))
+    }
+
+    func testReceiptTextMarksSweepRun() {
+        var receipt = WorkdirMigrationExecutor.Receipt(backupDirectory: "/b")
+        receipt.isSweep = true
+        XCTAssertTrue(WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
+            .contains("清扫完成"))
     }
 }

@@ -17,8 +17,10 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     // MARK: - 造输入
 
     private func crew(_ id: String, _ title: String, dir: String? = nil,
+                      previous: String? = nil,
                       parents: [String] = []) -> WorkdirMigrationPlan.CrewInput {
-        .init(id: id, title: title, workingDirectory: dir, parentCrewIds: parents)
+        .init(id: id, title: title, workingDirectory: dir,
+              previousWorkingDirectory: previous, parentCrewIds: parents)
     }
 
     private func session(_ crewId: String, _ agentId: String, kind: String = "claude",
@@ -59,11 +61,18 @@ final class WorkdirMigrationPlanTests: XCTestCase {
                         selected: Set<String>? = nil,
                         sessions: [WorkdirMigrationPlan.AgentSessionInput] = [],
                         running: [WorkdirMigrationPlan.RunningSessionInput] = [],
+                        caller: String? = nil,
                         newWorkdir: String? = nil) -> WorkdirMigrationPlan.Inputs {
         .init(crews: crews, rootCrewId: root,
               selectedCrewIds: selected ?? Set(crews.map(\.id)),
               newWorkdir: newWorkdir ?? newDir,
-              agentSessions: sessions, runningSessions: running, home: home)
+              agentSessions: sessions, runningSessions: running,
+              callerSessionId: caller, home: home)
+    }
+
+    private func run(_ crewId: String, _ sessionId: String, _ name: String,
+                     working: Bool) -> WorkdirMigrationPlan.RunningSessionInput {
+        .init(crewId: crewId, sessionId: sessionId, displayName: name, isWorking: working)
     }
 
     // MARK: - 目标目录校验
@@ -96,39 +105,170 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     }
 
     /// 尾部斜杠 / `~` 不该变成「另一个目录」—— slug 是从路径字面量算的，
-    /// 归一化没做对就会把上下文搬进一个谁也找不到的 slug。
-    func testTrailingSlashIsSameDirectory() {
+    /// 归一化没做对就会把上下文搬进一个谁也找不到的 slug。归一化后与当前目录相同 →
+    /// 不是拦路条件（那正是清扫模式），而是「这个 crew 已经在新目录上了」。
+    func testTrailingSlashNormalizesToSameDirectory() {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)], newWorkdir: oldDir + "/"),
             probe: .init(pathExists: { _ in true }, isDirectory: { _ in true },
                          isWritable: { _ in true }))
-        XCTAssertEqual(p.blockers, [.newWorkdirSameAsCurrent(oldDir)])
+        XCTAssertTrue(p.blockers.isEmpty)
+        XCTAssertTrue(p.isSweep)
+        XCTAssertTrue(p.skips.contains(.crewAlreadyAtNewWorkdir(crewId: "c1", title: "本群")))
+        XCTAssertFalse(p.actions.contains {
+            if case .setCrewWorkingDirectory = $0 { return true }
+            return false
+        })
     }
 
     // MARK: - 正在跑的 session
 
-    /// 有 session 在跑就拒绝，而且要**点名**是哪几个（让人知道去停谁）。
-    func testRunningSessionsBlockAndAreNamed() {
-        let running = [
-            WorkdirMigrationPlan.RunningSessionInput(crewId: "c1", sessionId: "s1", displayName: "机长"),
-            WorkdirMigrationPlan.RunningSessionInput(crewId: "c2", sessionId: "s2", displayName: "打杂的"),
-        ]
+    /// **正在干活**的成员拦路，而且要点名（让人知道去停谁）。
+    func testBusySessionsBlockAndAreNamed() {
+        let busy = [run("c1", "s1", "打杂的", working: true),
+                    run("c2", "s2", "子群的", working: true)]
         let crews = [crew("c1", "本群", dir: oldDir), crew("c2", "子群", dir: oldDir, parents: ["c1"])]
-        let p = WorkdirMigrationPlan.make(inputs(crews: crews, running: running), probe: probe())
-        XCTAssertEqual(p.blockers, [.sessionsRunning(running)])
+        let p = WorkdirMigrationPlan.make(inputs(crews: crews, running: busy), probe: probe())
+        XCTAssertEqual(p.blockers, [.sessionsBusy(busy)])
         XCTAssertFalse(p.isExecutable)
+    }
+
+    /// **调用者自己不算拦路** —— 机长就是本 crew 里一个正在跑的 session，
+    /// 沿用「有 session 在跑就拒绝」它永远调不动这个工具。
+    func testCallerItselfDoesNotBlock() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: oldDir)],
+                   running: [run("c1", "captain", "机长", working: true)],
+                   caller: "captain"),
+            probe: probe())
+        XCTAssertTrue(p.blockers.isEmpty, "机长自己不该拦住自己：\(p.blockers)")
+        XCTAssertTrue(p.isExecutable)
+    }
+
+    /// 空闲的 worker 不拦路（它没在写东西，等它下次重启就换目录了）。
+    func testIdleWorkerDoesNotBlock() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: oldDir)],
+                   running: [run("c1", "w1", "闲着的", working: false)],
+                   caller: "captain"),
+            probe: probe())
+        XCTAssertTrue(p.blockers.isEmpty)
     }
 
     /// 没被勾上的 crew 里在跑的 session 不该拦路 —— 拦的是「要动的那些」。
     func testRunningSessionInUnselectedCrewDoesNotBlock() {
         let crews = [crew("c1", "本群", dir: oldDir), crew("c2", "别人家", dir: oldDir)]
-        let running = [WorkdirMigrationPlan.RunningSessionInput(
-            crewId: "c2", sessionId: "s2", displayName: "别人家的成员")]
         let p = WorkdirMigrationPlan.make(
-            inputs(crews: crews, selected: ["c1"], running: running), probe: probe())
+            inputs(crews: crews, selected: ["c1"],
+                   running: [run("c2", "s2", "别人家的成员", working: true)]),
+            probe: probe())
         XCTAssertTrue(p.blockers.isEmpty)
     }
 
+    // MARK: - 活着的成员：会话留待清扫
+
+    /// 成员还活着 → 它正往那份 `.jsonl` 里写，现在搬会搬到半截。不搬，记进「留待清扫」。
+    func testLiveMemberTranscriptIsHeldBackForSweep() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: oldDir)],
+                   sessions: [session("c1", "aaa", name: "还活着的")],
+                   running: [run("c1", "local-aaa", "还活着的", working: false)],
+                   caller: "captain"),
+            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
+        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
+        XCTAssertTrue(p.skips.contains(.sessionStillLive(
+            agentSessionId: "aaa", memberName: "还活着的")))
+        XCTAssertEqual(p.pendingSweepMembers, ["还活着的"])
+        // 字段照改 —— 迁移本身不该被「有人活着」挡住。
+        XCTAssertTrue(p.actions.contains(.setCrewWorkingDirectory(
+            crewId: "c1", title: "本群", from: oldDir, to: newDir)))
+    }
+
+    /// **调用者自己的**会话同样不搬（机长正写着自己那份日志）。
+    func testCallerOwnTranscriptIsHeldBackToo() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: oldDir)],
+                   sessions: [session("c1", "cap", name: "机长")],
+                   running: [run("c1", "local-cap", "机长", working: true)],
+                   caller: "local-cap"),
+            probe: probe(existing: [oldProjectDir + "/cap.jsonl"]))
+        XCTAssertTrue(p.blockers.isEmpty)
+        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
+        XCTAssertEqual(p.pendingSweepMembers, ["机长"])
+    }
+
+    // MARK: - 清扫模式（幂等：同一个路径再调一次）
+
+    /// 迁过之后再调一次：目录已经是新的，靠 `previousWorkingDirectory` 回旧目录
+    /// 把此时已经停下的成员的会话补搬过去 —— 而不是报「已经迁过了」什么都不做。
+    func testSweepModeMovesRemainingTranscriptsAfterMembersStopped() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: newDir, previous: oldDir)],
+                   sessions: [session("c1", "aaa", name: "已经停了的")]),
+            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
+        XCTAssertTrue(p.isSweep)
+        XCTAssertTrue(p.blockers.isEmpty)
+        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
+        XCTAssertTrue(p.isExecutable)
+        // 字段已经是新的 → 不重复改。
+        XCTAssertTrue(p.skips.contains(.crewAlreadyAtNewWorkdir(crewId: "c1", title: "本群")))
+    }
+
+    /// 清扫模式下成员还活着 → 还是不搬，也不该编出动作来（可以一直重复调）。
+    func testSweepModeWithNothingLeftIsNotExecutable() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: newDir, previous: oldDir)],
+                   sessions: [session("c1", "aaa", name: "还活着的")],
+                   running: [run("c1", "local-aaa", "还活着的", working: false)],
+                   caller: "captain"),
+            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"],
+                         claudeSourceExists: false, codexOld: nil))
+        XCTAssertTrue(p.isSweep)
+        XCTAssertFalse(p.isExecutable, "没有可做的动作时不该让人点执行")
+        XCTAssertEqual(p.pendingSweepMembers, ["还活着的"])
+    }
+
+    /// 没记过旧路径（从没迁过）+ 目录已经相同 → 找不到源，安静地什么都不做。
+    func testSameDirectoryWithoutPreviousYieldsNothing() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: newDir)],
+                   sessions: [session("c1", "aaa")]),
+            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
+        XCTAssertTrue(p.blockers.isEmpty)
+        XCTAssertFalse(p.isExecutable)
+    }
+
+    // MARK: - 目标解析（机长 `crew` 参数）
+
+    func testResolveTargetDefaultsToRootWhenHintEmpty() {
+        let crews = [crew("c1", "根"), crew("c2", "子", parents: ["c1"])]
+        XCTAssertEqual(WorkdirMigrationPlan.resolveTarget(hint: "", rootId: "c1", crews: crews), "c1")
+    }
+
+    func testResolveTargetMatchesTitleAndPrefixWithinSubtree() {
+        let crews = [crew("c1", "根"), crew("c2", "驾驶舱改造", parents: ["c1"])]
+        XCTAssertEqual(
+            WorkdirMigrationPlan.resolveTarget(hint: "驾驶舱改造", rootId: "c1", crews: crews), "c2")
+        XCTAssertEqual(
+            WorkdirMigrationPlan.resolveTarget(hint: "驾驶舱", rootId: "c1", crews: crews), "c2")
+        XCTAssertEqual(
+            WorkdirMigrationPlan.resolveTarget(hint: "c2", rootId: "c1", crews: crews), "c2")
+    }
+
+    /// **不能拿这个工具去改别的部门** —— 子树外的一律解析不到。
+    func testResolveTargetRefusesCrewsOutsideSubtree() {
+        let crews = [crew("c1", "根"), crew("c9", "别的部门")]
+        XCTAssertNil(WorkdirMigrationPlan.resolveTarget(hint: "别的部门", rootId: "c1", crews: crews))
+        XCTAssertNil(WorkdirMigrationPlan.resolveTarget(hint: "c9", rootId: "c1", crews: crews))
+    }
+
+    func testResolveTargetRefusesAmbiguousTitles() {
+        let crews = [crew("c1", "根"), crew("c2", "同名", parents: ["c1"]),
+                     crew("c3", "同名", parents: ["c1"])]
+        XCTAssertNil(WorkdirMigrationPlan.resolveTarget(hint: "同名", rootId: "c1", crews: crews))
+    }
+
+    // MARK: - 共用目录：只搬自己那份
     // MARK: - 共用目录：只搬自己那份
 
     /// 旧目录是多个 crew 共用的。只有**被迁 crew 的成员**的会话号才准搬走 ——

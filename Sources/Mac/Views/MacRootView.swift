@@ -157,6 +157,19 @@ struct MacThreePaneView: View {
             crewStore.sessionOpsRequests = []
             for req in reqs { sessionRunner.applySessionOp(req) }
         }
+        // 机长 change_workdir（改工作目录 + 迁 agent 上下文）。规划要看在跑的 run，
+        // 那份状态只有 runner 有 —— 所以和 sessionOps 一样在这儿接线：算完/干完把
+        // 文本写回应答文件，机长那侧的 long-poll 就拿到预览或回执了。
+        .onChange(of: crewStore.workdirChangeRequests) { _, reqs in
+            guard !reqs.isEmpty else { return }
+            crewStore.workdirChangeRequests = []
+            for req in reqs {
+                let text = WorkdirChangeCommand.run(req, runs: sessionRunner.runs)
+                LocalCrewControlStore.shared.writeCommandResponse(
+                    crewId: req.crewId, commandId: req.commandId, text: text)
+                Task { await crewStore.refreshDetail(req.crewId) }
+            }
+        }
         // 群聊收听登记（listen；#465）→ runner 登记 + 白板观察 + 广播直投。
         .onChange(of: crewStore.listenRequests) { _, reqs in
             guard !reqs.isEmpty else { return }

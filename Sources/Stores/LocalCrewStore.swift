@@ -113,6 +113,11 @@ final class LocalCrewStore {
     func setWorkingDirectory(_ id: String, _ path: String) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, var crew = crews[id], crew.workingDirectory != trimmed else { return }
+        // 记下旧路径 —— 迁移那一侧靠它做「清扫」（活着的成员当时不能搬，停了之后要
+        // 能回旧目录把会话补搬过来）。只在真换路径时更新，别被无谓写入冲掉。
+        if let old = crew.workingDirectory, !old.isEmpty {
+            crew.previousWorkingDirectory = old
+        }
         crew.workingDirectory = trimmed
         crew.updatedAt = ISO8601DateFormatter().string(from: Date())
         crews[id] = crew
@@ -121,11 +126,27 @@ final class LocalCrewStore {
 
     /// 迁移规划层要的全部 crew 字段（id / 名 / 工作目录 / 父边）。返回元组而非专用类型 ——
     /// store 不必反过来依赖 `WorkdirMigrationPlan`。
-    func workdirRows() -> [(id: String, title: String, workingDirectory: String?, parentCrewIds: [String])] {
+    func workdirRows() -> [(id: String, title: String, workingDirectory: String?,
+                            previousWorkingDirectory: String?, parentCrewIds: [String])] {
         crews.values
             .sorted { $0.createdAt < $1.createdAt }
-            .map { ($0.id, $0.title, $0.workingDirectory, $0.parentCrewIds) }
+            .map { ($0.id, $0.title, $0.workingDirectory,
+                    $0.previousWorkingDirectory, $0.parentCrewIds) }
     }
+
+    /// 迁移规划层要的 crew 行（直接给 `WorkdirMigrationPlan.CrewInput`）。
+    /// 界面与机长工具两条路共用同一份构造，别各拼各的。
+    /// macOS-only —— `WorkdirMigrationPlan` 整个在 `#if os(macOS)` 后面（迁移只在 Mac 端做）。
+    #if os(macOS)
+    func workdirCrewInputs() -> [WorkdirMigrationPlan.CrewInput] {
+        workdirRows().map {
+            WorkdirMigrationPlan.CrewInput(
+                id: $0.id, title: $0.title, workingDirectory: $0.workingDirectory,
+                previousWorkingDirectory: $0.previousWorkingDirectory,
+                parentCrewIds: $0.parentCrewIds)
+        }
+    }
+    #endif
 
     /// 点亮/熄灭机长 attention 黄点（`raise_attention` / `clear_attention` 经控制
     /// 通道落地，由 `CrewStore` 调）。`reason == nil`（或 trim 后空）= 熄灭。
@@ -672,6 +693,11 @@ struct LocalCrew: Codable, Equatable {
     /// `var` —— 仓库搬家后经 `LocalCrewStore.setWorkingDirectory` 改（含 agent 上下文
     /// 迁移，见 `WorkdirMigrationPlan`）。建 crew 时定下、之后无从更改是原来的病。
     var workingDirectory: String?
+    /// 改工作目录之前的那个路径。**清扫模式的唯一线索**：迁完之后 `workingDirectory`
+    /// 已经是新的，但活着的成员的会话还留在旧目录里；等它们停了再调一次迁移，就靠
+    /// 这个字段找回旧目录把尾巴收干净（见 `WorkdirMigrationPlan.sourceDirectory`）。
+    /// optional → 旧 JSON 缺键向后兼容。
+    var previousWorkingDirectory: String? = nil
     /// 所选 machine id（nil = 本机）。登录态多机时记录 crew 运行在哪台机；
     /// 本机/BYOK 路径恒 nil。
     let machineId: String?
@@ -763,6 +789,8 @@ struct LocalCrew: Codable, Equatable {
         responsibleSubjectId = try c.decode(String.self, forKey: .responsibleSubjectId)
         runtimeLocation = try c.decode(String.self, forKey: .runtimeLocation)
         workingDirectory = try c.decodeIfPresent(String.self, forKey: .workingDirectory)
+        previousWorkingDirectory = try c.decodeIfPresent(
+            String.self, forKey: .previousWorkingDirectory)
         machineId = try c.decodeIfPresent(String.self, forKey: .machineId)
         captainBotId = try c.decodeIfPresent(String.self, forKey: .captainBotId)
         captainName = try c.decodeIfPresent(String.self, forKey: .captainName)

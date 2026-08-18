@@ -60,6 +60,11 @@ final class CrewStore: ObservableObject {
     /// 文件归 runner（`MacRootView` 观察接线）。
     @Published var sessionOpsRequests: [SessionOpsRequest] = []
 
+    /// 机长 `change_workdir`（改工作目录 + 迁 agent 上下文）待执行队列。规划要看
+    /// **在跑的 run**（谁还活着 / 谁在干活），那份状态只有 runner 有 —— 所以同
+    /// `sessionOpsRequests`：这里只排队，执行 + 写应答归 `MacRootView` 接线。
+    @Published var workdirChangeRequests: [WorkdirChangeRequest] = []
+
     /// 每个 crew 白板的**末条消息**（键缺失 = 该 crew 白板是空的）。侧栏两种视图
     /// 共用的单一数据源：时间流的排序键、行里的预览文案与行尾相对时间都读它。
     ///
@@ -444,6 +449,13 @@ final class CrewStore: ObservableObject {
                 sessionOpsRequests.append(SessionOpsRequest(
                     commandId: cmd.id, crewId: cmd.crewId, requesterSessionId: requester,
                     targetSessionId: sid, input: nil, stopReason: reason))
+            case "change_workdir":
+                workdirChangeRequests.append(WorkdirChangeRequest(
+                    commandId: cmd.id, crewId: cmd.crewId,
+                    callerSessionId: cmd.sessionId, targetHint: cmd.title,
+                    newPath: cmd.path ?? "",
+                    includeChildren: cmd.includeChildren ?? true,
+                    confirm: cmd.confirm ?? false))
             case "crew_message":
                 executeCrewMessage(cmd)
             case "create_child_crew":
@@ -819,6 +831,20 @@ struct SessionOpsRequest: Equatable {
     let targetSessionId: String
     let input: String?
     let stopReason: String?
+}
+
+/// `change_workdir` 命令排空后的一次待执行迁移。`confirm == false` = 只出预览。
+/// `targetHint` 指本 crew 子树里的哪一个（nil = 本 crew）。
+struct WorkdirChangeRequest: Equatable {
+    let commandId: String
+    /// 发起 crew —— 也是允许改动的**子树根**（不能拿它去动别的部门）。
+    let crewId: String
+    /// 发起的机长 session id：它自己不算「拦路的正在跑的 session」。
+    let callerSessionId: String?
+    let targetHint: String?
+    let newPath: String
+    let includeChildren: Bool
+    let confirm: Bool
 }
 
 /// `set_profile` 命令排空后的一次待切换请求（session 自切模型/effort）。
