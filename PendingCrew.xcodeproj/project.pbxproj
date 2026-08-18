@@ -155,6 +155,7 @@
 		4F39D5013295C91BD4C3FA72 /* WorkdirMigrationExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B9B8D3528EFD0CDCB2D2765 /* WorkdirMigrationExecutorTests.swift */; };
 		4F43E660427C08A99A303621 /* RecentWorkingDirectories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 350EF8F1F3E052F654F6BEE1 /* RecentWorkingDirectories.swift */; };
 		4F59538F204A70290C10B1C5 /* CrewTimeSeparator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653E5262E263AED9996AF100 /* CrewTimeSeparator.swift */; };
+		4F716272D05068509DC59F54 /* ChangeWorkingDirectorySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3853615CA60D782F36313F83 /* ChangeWorkingDirectorySheet.swift */; };
 		4FB514980B00DE74F822E8EA /* AgentModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCB5DF57E240E6FB7DD946A7 /* AgentModelCatalog.swift */; };
 		4FF7409811948D140C31E9E2 /* SessionPendingDecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = F317D91E5A6FD8B678BE9B3E /* SessionPendingDecision.swift */; };
 		5034E5718BF25004385C5444 /* CrewRelayHubLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449915257B6A7A1C5057BA06 /* CrewRelayHubLogicTests.swift */; };
@@ -626,6 +627,7 @@
 		360A8274A85AB07936C46F2E /* CrewChatWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatWindow.swift; sourceTree = "<group>"; };
 		37325956B9504E5FFA86D188 /* LocalApprovalStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalApprovalStoreTests.swift; sourceTree = "<group>"; };
 		373E64A85EDA4D661F1D2AE0 /* CrewWhiteboardVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewWhiteboardVisibilityTests.swift; sourceTree = "<group>"; };
+		3853615CA60D782F36313F83 /* ChangeWorkingDirectorySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangeWorkingDirectorySheet.swift; sourceTree = "<group>"; };
 		386CB624A9BF3A3EEE171092 /* CrewRecentContextRender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRecentContextRender.swift; sourceTree = "<group>"; };
 		38F5E570088DE41977747A62 /* session-world-model.en.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "session-world-model.en.md"; sourceTree = "<group>"; };
 		39C82A3CCDE95321F76BB53E /* FileFingerprintCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileFingerprintCache.swift; sourceTree = "<group>"; };
@@ -1125,6 +1127,7 @@
 				10CE71B99772AB7C3D2086DA /* AgentTerminalView.swift */,
 				D444497957C2DC933C72B2C8 /* BreathingSymbolView.swift */,
 				0CE071C18780F51F195B101C /* CaptainTemplateEditorSheet.swift */,
+				3853615CA60D782F36313F83 /* ChangeWorkingDirectorySheet.swift */,
 				C634D67C3DBDBB99D75EC2BD /* CockpitPageView.swift */,
 				B58FDB03CAE29769929979F2 /* CockpitRoadmapView.swift */,
 				CBFBE89484080C95FD6DFA9B /* CockpitTasksView.swift */,
@@ -1731,6 +1734,7 @@
 				3CD877B94EF6574C22D60CBD /* CaptainBriefDelivery.swift in Sources */,
 				827AE4A12634BCEFAD3456FB /* CaptainTemplateEditorSheet.swift in Sources */,
 				7CF0B6C668567CC7BF21CEDC /* CaptainTemplateStore.swift in Sources */,
+				4F716272D05068509DC59F54 /* ChangeWorkingDirectorySheet.swift in Sources */,
 				BDCF6993E7EE5266C06EF827 /* ChatActionSheet.swift in Sources */,
 				67294C5DD0B6053F3B5789D5 /* CockpitModel.swift in Sources */,
 				FD94DC5B61CEA48D20E88543 /* CockpitPageView.swift in Sources */,

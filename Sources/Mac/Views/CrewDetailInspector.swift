@@ -12,6 +12,8 @@ struct CrewDetailInspector: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var crewStore: CrewStore
+    /// 「更改工作目录」要看本 crew 下有没有 session 在跑（在跑就拒绝迁）。
+    @EnvironmentObject private var sessionRunner: CrewSessionRunner
 
     /// 「挂到父 crew」操作的进行中 / 失败态。
     @State private var dagBusy = false
@@ -39,6 +41,8 @@ struct CrewDetailInspector: View {
 
     /// 「新建子 crew」sheet 显隐 —— 建完自动 attachParent 到本 crew 之下。
     @State private var showingChildCrewSheet = false
+    /// 「更改工作目录…」sheet（含 agent 上下文迁移，见 `ChangeWorkingDirectorySheet`）。
+    @State private var showingWorkdirSheet = false
     @State private var displayedTitle = ""
     @State private var titleDraft = ""
     @State private var editingTitle = false
@@ -82,6 +86,11 @@ struct CrewDetailInspector: View {
             CreateCrewSheet(parentCrewId: detail.crew.id)
                 .environmentObject(crewStore)
         }
+        .sheet(isPresented: $showingWorkdirSheet) {
+            ChangeWorkingDirectorySheet(crewId: detail.crew.id, crewTitle: detail.crew.title)
+                .environmentObject(crewStore)
+                .environmentObject(sessionRunner)
+        }
     }
 
     @ViewBuilder
@@ -113,20 +122,25 @@ struct CrewDetailInspector: View {
             }
             .font(.callout)
             .foregroundStyle(.secondary)
-            if let wd = detail.crew.workingDirectory, !wd.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder").foregroundStyle(.secondary)
-                    Text(wd)
-                        .font(.system(.callout, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            HStack(spacing: 6) {
+                Image(systemName: "folder").foregroundStyle(.secondary)
+                let wd = detail.crew.workingDirectory ?? ""
+                Text(wd.isEmpty ? "（未设置工作目录）" : wd)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if !wd.isEmpty {
                     Button { revealInFinder(wd) } label: {
                         Image(systemName: "arrow.up.right.square")
                     }
                     .buttonStyle(.borderless)
                     .help("在 Finder 中打开")
                 }
+                // 仓库搬家用的：改目录 + 把 agent 侧上下文（会话/记忆/目录信任）一起迁过去。
+                Button("更改工作目录…") { showingWorkdirSheet = true }
+                    .buttonStyle(.link)
+                    .help("换一个工作目录，并把成员的 agent 会话、项目记忆、目录信任一起迁过去")
             }
         }
     }

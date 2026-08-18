@@ -98,6 +98,9 @@ struct CrewCenterView: View {
             if let detail = crewStore.selectedDetail {
                 CrewDetailInspector(detail: detail)
                     .environmentObject(crewStore)
+                    // 「更改工作目录」要读在跑的 session（在跑就拒绝迁）。sheet 不继承
+                    // 父视图的 environmentObject，得显式再喂一次。
+                    .environmentObject(sessionRunner)
             }
         }
         .sheet(isPresented: $showingRemoteSessions) {
