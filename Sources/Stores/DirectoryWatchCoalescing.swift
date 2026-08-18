@@ -91,16 +91,41 @@ struct FileChangeGate {
         last = current
     }
 
-    /// 读一个文件的指纹。文件不存在 / 读不到属性 → nil。
-    /// **别在主线程调**：一次 stat 比重拉整板便宜几个数量级，但它仍是磁盘 IO。
+    /// 读一个文件的指纹。文件不存在 / stat 不了 → nil。
+    /// **别在主线程调**：一次 stat 比重拉整份文件便宜几个数量级，但它仍是磁盘 IO。
+    ///
+    /// 走裸 `stat(2)` 而不是 `URL.resourceValues`（2026-08-18 改）：后者每次要新建
+    /// NSURL、组一个 resource-value 字典，本机实测约 **12 µs/次**；而门控的全部意义
+    /// 就是「比读文件便宜一个数量级」，一次 tick 要 stat 几十上百个文件时它自己就成了
+    /// 大头（点名快照那条路 84 次 stat = 1.0 ms，比它要省掉的整份解码还贵）。
+    /// `stat` 约 1 µs，顺带也没有了 NSURL 那个 resource-value 缓存拿到陈旧结果的坑
+    /// （老实现每次新建 URL 值就是为了绕开它）。
+    ///
+    /// `modified` 的**单位口径变了**（原来是 `timeIntervalSinceReferenceDate`，
+    /// 现在是 unix epoch 秒）—— 无妨：这个值只用来做相等比较，从不被解释成日期，
+    /// 也不落盘；`st_mtimespec` 是纳秒精度，分辨力只多不少。
     static func fingerprint(of url: URL) -> Fingerprint? {
-        // 每次新建 URL 值来读，避开 NSURL 的 resource-value 缓存拿到陈旧结果。
-        let fresh = URL(fileURLWithPath: url.path)
-        guard let values = try? fresh.resourceValues(
-                forKeys: [.contentModificationDateKey, .fileSizeKey]),
-              let modified = values.contentModificationDate,
-              let size = values.fileSize else { return nil }
-        return Fingerprint(modified: modified.timeIntervalSinceReferenceDate, size: size)
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return nil }
+            return fingerprint(atSystemPath: path)
+        }
+    }
+
+    /// 同上，但直接吃文件系统路径字符串。
+    ///
+    /// 一拍要 stat 几十上百个文件时，**光是把路径拼成 `URL` 就比 stat 本身贵**
+    /// （`appendingPathComponent` 每次都要走一遍 URL 解析/规范化）。调用方按
+    /// 「目录路径 + 字符串拼接」造路径走这条，别为了一次 stat 建一个 URL。
+    static func fingerprint(atPath path: String) -> Fingerprint? {
+        path.withCString { fingerprint(atSystemPath: $0) }
+    }
+
+    private static func fingerprint(atSystemPath path: UnsafePointer<CChar>) -> Fingerprint? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        let modified = Double(info.st_mtimespec.tv_sec)
+            + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
+        return Fingerprint(modified: modified, size: Int(info.st_size))
     }
 }
 
