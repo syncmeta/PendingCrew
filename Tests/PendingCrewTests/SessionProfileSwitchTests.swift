@@ -152,4 +152,75 @@ final class SessionProfileSwitchTests: XCTestCase {
         XCTAssertEqual(SessionProfileSwitchCommand(knob: .effort, value: "xhigh").line, "/effort xhigh")
         XCTAssertEqual(SessionProfileSwitchCommand(knob: .model, value: "opus").summary, "模型→opus")
     }
+
+    // MARK: - squeeze：等价性 + 耗时预算（Todo #59）
+
+    /// **老实现的原样拷贝**，只当参照系用。它是 O(n²)（`text.count` 是 O(n) 的
+    /// grapheme 遍历），正因为这样才被换掉 —— 但它定义了「对」的语义，所以留在这里
+    /// 逐字符比对新实现。改 `squeeze` 时不要动这个函数。
+    private func squeezeReferenceQuadratic(_ s: String) -> (text: String, origin: [String.Index]) {
+        var text = ""
+        var origin: [String.Index] = []
+        var i = s.startIndex
+        while i < s.endIndex {
+            let c = s[i]
+            if !c.isWhitespace {
+                text.append(contentsOf: c.lowercased())
+                while origin.count < text.count { origin.append(i) }
+            }
+            i = s.index(after: i)
+        }
+        return (text, origin)
+    }
+
+    /// 仿真的 claude TUI 尾窗：ASCII 为主 + CJK/emoji + 大量空白换行 + 组合记号。
+    private func syntheticTail(_ n: Int) -> String {
+        var s = ""
+        let units = ["Set model to ", "Haiku 4.5 ", "and saved ", "as your default ",
+                     "⎿  ", "· Thinking… ", "中文一行 ", "for new sessions\n",
+                     "  ✻ Welcome  ", "tokens 12345 ", "e\u{301}\u{327} ", "🇨🇳👩‍👩‍👧 ", "\n"]
+        var k = 0
+        while s.count < n { s += units[k % units.count]; k += 1 }
+        return String(s.prefix(n))
+    }
+
+    /// 新实现必须与老实现**逐字符等价** —— 包括小写化 1→n、组合记号并进前一个
+    /// grapheme、emoji ZWJ 序列这些边界。
+    func testSqueezeMatchesLegacyImplementation() {
+        let cases: [String] = [
+            "", "   \n\t ", "abc", "ABC def",
+            realModelEcho, realEffortEcho,
+            "İstanbul TÜRKÇE",                 // 小写化把 1 个字符变成多个
+            "e\u{301}\u{327}x",                // 组合记号：并进前一个 grapheme
+            "🇨🇳 👩‍👩‍👧 ✻",                       // 旗帜 / ZWJ 家庭 / 装饰符
+            syntheticTail(700),
+        ]
+        for c in cases {
+            let want = squeezeReferenceQuadratic(c)
+            let got = SessionProfileEchoVerdict.squeeze(c)
+            XCTAssertEqual(got.text, want.text, "text 不等价：\(c.debugDescription)")
+            XCTAssertEqual(got.origin, want.origin, "origin 不等价：\(c.debugDescription)")
+        }
+    }
+
+    /// **这是一条防回归的红线，不是微基准攀比。**
+    ///
+    /// `squeeze` 挂在 `dataReceived` 上、对最大 16384 字符的尾窗每笔 PTY 输出跑一次，
+    /// 全程在主线程。老实现在这个尺寸上要 253.7 ms（-O 实测），一个 session 拉起后的
+    /// 45 秒窗口足够把主线程占死 —— 那就是 Todo #59 报的「打字慢、滑动卡」。
+    ///
+    /// 预算给得很松（新实现 -O 下 0.94 ms、本 target 的 Debug 下实测 42 ms），
+    /// 因为它要拦的是**复杂度回退**、不是几毫秒的机器抖动：老实现在这个尺寸上
+    /// 光 -O 就要 253 ms，Debug 下更是几秒起 —— 任何把 O(n) 写回 O(n²) 的改动
+    /// 都会超出这条线一个数量级以上。别为了"更严"把它往下调，那只会换来偶发红。
+    func testSqueezeStaysLinearOnAFullTailWindow() {
+        let tail = syntheticTail(16384)
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let out = SessionProfileEchoVerdict.squeeze(tail)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+        XCTAssertEqual(out.text.count, out.origin.count)
+        XCTAssertLessThan(ms, 250,
+                          "16K 尾窗一次 squeeze 花了 \(String(format: "%.1f", ms)) ms —— "
+                          + "复杂度回退了（老的 O(n²) 实现在这里 -O 下就要 253 ms）")
+    }
 }
