@@ -730,7 +730,7 @@ grep -n "import SwiftUI\|import AppKit" Sources/Mac/Services/SessionHost.swift
 
 预期：**零结果**。它将来要在没有画面的进程里跑，现在就不许沾。
 
-- [ ] **Step 4: 合回 main + 汇报**
+- [x] **Step 4: 合回 main + 汇报**
 
 按仓库惯例合回 `main`（**不要 push**），然后 `post_to_crew` 报一句：P0 完成、测试条数与 0 failures、Step 2/3 的 grep 证据、以及有没有发现漏网的长期对象。
 
