@@ -704,7 +704,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
     /// 在任何时刻问到的都是同一份画面（spec §5.1）。
 ```
 
-- [ ] **Step 2: 全量验收**
+- [x] **Step 2: 全量验收**
 
 ```bash
 xcodegen
@@ -713,7 +713,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'gene
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' test 2>&1 | tail -30
 ```
 
-- [ ] **Step 3: 收集结构证据**
+- [x] **Step 3: 收集结构证据**
 
 ```bash
 # 内核不许沾 UI —— 它要能原样搬进无画面进程
