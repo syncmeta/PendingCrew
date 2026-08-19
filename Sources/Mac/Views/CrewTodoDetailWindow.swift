@@ -6,9 +6,10 @@ import UniformTypeIdentifiers
 /// Todo 详细窗口（Todo #11）：完整列表 + 可读回应 + 重开入口。
 ///
 /// **为什么是自建 NSWindow 而不是 `WindowGroup` 场景**：重开要走 `CrewSessionRunner`
-/// 唤醒机长，而 runner 是 view-local（`MacRootView` 的 `@StateObject`，一个主窗口一份），
-/// 独立 Scene 拿不到它。用 NSHostingController 起一个真窗口、把依赖显式传进去，
-/// 既是真窗口（可缩放、独立于主窗，人能一直开着看）又不用把 runner 提成全局单例。
+/// 唤醒机长，而 runner 归 app 级的 `SessionHost` 持有（前后端分离 P0；此前是
+/// `MacRootView` 的 view-local `@StateObject`），独立 Scene 拿不到它。用
+/// NSHostingController 起一个真窗口、把依赖显式传进去，既是真窗口（可缩放、独立于
+/// 主窗，人能一直开着看）又不用把 runner 提成全局单例。
 ///
 /// 每 crew 最多一个窗口：再次调用 `open` 只是前置已有窗口。
 @MainActor
