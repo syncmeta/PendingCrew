@@ -108,6 +108,14 @@ final class AnsiPlainTextTail {
     private enum AnsiState { case normal, esc, skipOne, csi, osc, oscEsc }
     private var ansiState: AnsiState = .normal
     private(set) var tail = ""
+    /// `tail` 的 **ASCII 小写字节镜像**（A–Z→a–z，其余字节原样）。
+    ///
+    /// 为什么要它（Todo #59）：扫描器原来每笔 PTY 输出都 `tail.lowercased()` 新建
+    /// 一份整窗 String，再逐条 `String.contains` —— Foundation 的 `contains` 走
+    /// grapheme 级朴素搜索，实测 8K 窗 3 个扫描器一笔要 6.3 ms、16K 窗 10.2 ms，
+    /// 全在主线程、按在跑的 session **线性叠加**。短语表全是 ASCII，改成在这份
+    /// 字节镜像上搜，11 条短语一共 0.08 ms（快两个数量级）。
+    private(set) var loweredASCII: [UInt8] = []
     private let tailLimit: Int
 
     /// 尾窗上限（字符）。超过 2 倍才截，保证截断永远不会切在
@@ -149,12 +157,46 @@ final class AnsiPlainTextTail {
         }
         guard !plain.isEmpty else { return false }
         tail += String(decoding: plain, as: UTF8.self)
-        if tail.count > tailLimit * 2 { tail = String(tail.suffix(tailLimit)) }
+        loweredASCII.reserveCapacity(loweredASCII.count + plain.count)
+        for b in plain { loweredASCII.append(Self.asciiLowered(b)) }
+        if tail.count > tailLimit * 2 {
+            tail = String(tail.suffix(tailLimit))
+            // 截完从 `tail` 重建镜像，保证两者永远同一段内容（这条每窗只跑一次）。
+            loweredASCII = tail.utf8.map(Self.asciiLowered)
+        }
         return true
     }
 
+    /// 在 ASCII 小写镜像里做子串搜索。`needle` 必须是**已小写**的 UTF-8 字节
+    /// （短语表是常量，调用方预先转好一次即可）。
+    func containsLoweredASCII(_ needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty, needle.count <= loweredASCII.count else { return false }
+        let first = needle[0]
+        let last = loweredASCII.count - needle.count
+        var i = 0
+        while i <= last {
+            if loweredASCII[i] == first {
+                var j = 1
+                while j < needle.count, loweredASCII[i + j] == needle[j] { j += 1 }
+                if j == needle.count { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
+    private static func asciiLowered(_ b: UInt8) -> UInt8 {
+        (b >= 0x41 && b <= 0x5a) ? b + 0x20 : b
+    }
+
+    /// 把一条短语转成可以喂给 `containsLoweredASCII` 的字节。短语表是常量，
+    /// 每个扫描器**转一次**存成 static，别在 `feed` 里现转。
+    static func loweredNeedle(_ phrase: String) -> [UInt8] {
+        phrase.utf8.map(asciiLowered)
+    }
+
     /// 清空尾窗（ANSI 状态机保留 —— 序列可能正跨在清空点上）。
-    func clear() { tail = "" }
+    func clear() { tail = ""; loweredASCII = [] }
 }
 
 /// claude PTY 输出的健康扫描器：喂原始终端字节，产出**首次**命中的健康异常
@@ -191,6 +233,13 @@ final class SessionHealthScanner {
     private let stripper = AnsiPlainTextTail()
     private var fired: Set<CrewSessionHealth.Kind> = []
 
+    /// 短语表的**已小写 UTF-8 字节**形式 —— 匹配走 `containsLoweredASCII`
+    /// （见 `AnsiPlainTextTail.loweredASCII` 上那段为什么）。短语全是 ASCII
+    /// （`you’ve` 的弯引号是多字节，但按字节比一样精确），所以字节比与原来的
+    /// `lowercased()` + `contains` 在这张表上等价，有单测钉。
+    static let authNeedles = authPhrases.map(AnsiPlainTextTail.loweredNeedle)
+    static let quotaNeedles = quotaPhrases.map(AnsiPlainTextTail.loweredNeedle)
+
     /// 本扫描器只可能翻这两类（`rateLimited` 归 `RateLimitMenuScanner`、
     /// `launchFailed` 归 `SessionLaunchProbe`）——两类都报过就彻底收工。
     private static let scannerKinds: Set<CrewSessionHealth.Kind> = [.authRequired, .usageLimit]
@@ -200,17 +249,16 @@ final class SessionHealthScanner {
         guard !fired.isSuperset(of: Self.scannerKinds) else { return [] }
         guard stripper.feed(bytes) else { return [] }
 
-        let lower = stripper.tail.lowercased()
         var out: [CrewSessionHealth] = []
         if !fired.contains(.authRequired),
-           Self.authPhrases.contains(where: { lower.contains($0) }) {
+           Self.authNeedles.contains(where: { stripper.containsLoweredASCII($0) }) {
             fired.insert(.authRequired)
             out.append(CrewSessionHealth(
                 kind: .authRequired,
                 detail: "Claude Code 未登录或登录已失效 —— 打开这个 session 的终端跑 /login 登录后再继续。"))
         }
         if !fired.contains(.usageLimit),
-           Self.quotaPhrases.contains(where: { lower.contains($0) }) {
+           Self.quotaNeedles.contains(where: { stripper.containsLoweredASCII($0) }) {
             fired.insert(.usageLimit)
             out.append(CrewSessionHealth(
                 kind: .usageLimit,
@@ -239,6 +287,9 @@ final class RateLimitMenuScanner {
         "stop and wait for limit to reset",
     ]
 
+    /// 同上：已小写 UTF-8 字节形式，匹配走 `containsLoweredASCII`。
+    static let menuNeedles = menuPhrases.map(AnsiPlainTextTail.loweredNeedle)
+
     private let stripper = AnsiPlainTextTail()
     private let cooldown: TimeInterval
     private var lastFiredAt: Date?
@@ -250,8 +301,8 @@ final class RateLimitMenuScanner {
     /// 喂一段 PTY 原始字节；返回 true = 新检测到菜单（该自动应答了）。
     func feed(_ bytes: ArraySlice<UInt8>, now: Date = Date()) -> Bool {
         guard stripper.feed(bytes) else { return false }
-        let lower = stripper.tail.lowercased()
-        guard Self.menuPhrases.contains(where: { lower.contains($0) }) else { return false }
+        guard Self.menuNeedles.contains(where: { stripper.containsLoweredASCII($0) })
+        else { return false }
         if let last = lastFiredAt, now.timeIntervalSince(last) < cooldown { return false }
         lastFiredAt = now
         stripper.clear()

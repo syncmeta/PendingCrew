@@ -38,6 +38,17 @@ final class CrewLocalMentionWaker {
     /// 悬空，而「悬空」在旧实现里等于「全是新的」—— 全机 session 被几周前的 @ 拉起来
     /// 照过期指令返工。带上时间戳后，悬空也只切出真正更新的那批。
     private var cursors: [String: WhiteboardCursorPosition] = [:]
+    /// per-crew 白板文件指纹门（Todo #59）。
+    ///
+    /// 目录事件不带文件名，所以 `directoryChanged` 一来就要把 `watched` 里**每个**
+    /// crew 扫一遍 —— 而「扫」= 取文件锁 + 整份读 + 整份 JSON 解码，全在主线程。
+    /// 原来的注释写「读增量靠游标，很廉价」，那是错的：游标只裁剪解完之后的行，
+    /// 读和解一分钱没省。本机白板目录 67 个 json / 3.8 MB，全量走一遍实测 9~11 ms，
+    /// 而 helper 子进程每发一条 post_to_crew 就是一个 tick。
+    ///
+    /// 门就是 `FileChangeGate` 本来的用途（#443 建它时的原话）：一次 `stat` 约 1 µs，
+    /// 67 个文件 0.07~0.10 ms —— 比它省下的那一遍便宜两个数量级。
+    private var fileGates: [String: FileChangeGate] = [:]
 
     init(runner: CrewSessionRunner, backendProvider: @escaping () -> PendingCrewBackend?) {
         self.runner = runner
@@ -62,13 +73,14 @@ final class CrewLocalMentionWaker {
                 Task { @MainActor in self?.scan(crewId: crewId) }
             }
             .store(in: &watchers)
-        // helper 子进程 post_to_crew 写盘 → 目录事件无 crewId → 扫所有已钉 crew
-        // （读增量靠游标，很廉价；与 listen 路同款策略）。
+        // helper 子进程 post_to_crew 写盘 → 目录事件无 crewId → 扫所有已钉 crew。
+        // 每个 crew 先过一道文件指纹门（`fileGates`）——「靠游标就很廉价」是错的，
+        // 游标只裁剪解完之后的行，读和解一分钱不省（Todo #59）。
         store.directoryChanged
             .sink { [weak self] in
                 Task { @MainActor in
                     guard let self else { return }
-                    for crewId in self.watched { self.scan(crewId: crewId) }
+                    for crewId in self.watched { self.scan(crewId: crewId, gated: true) }
                 }
             }
             .store(in: &watchers)
@@ -97,12 +109,25 @@ final class CrewLocalMentionWaker {
 
     /// 扫一个 crew 的新增条目 → 逐条投递。游标先行推进：投递触发的白板写
     /// （告警/回执）再进扫描时是新批次，不会重扫本批。
-    private func scan(crewId: String) {
+    ///
+    /// `gated: true` 用于目录 tick 那条扇出路 —— 先比一次白板文件指纹，没变就
+    /// 什么都不做（见 `fileGates`）。进程内 `changes` 那条带着 crewId 直投，不门控，
+    /// 只把指纹同步进门里，免得随后必然到达的目录 tick 再解一遍同一份文件。
+    private func scan(crewId: String, gated: Bool = false) {
         guard pinned.contains(crewId) else {
             // 上次读失败没钉上 —— 这次事件顺手补钉（仍钉在当前尾，不回放历史）。
             if watched.contains(crewId) { pin(crewId) }
             return
         }
+        // 指纹必须在读**之前**取：反过来的话，取指纹与读之间落进来的那次写会被
+        // 记成「已读过」，下一拍就跳过 —— 那是真丢消息。现在这个顺序最坏只是
+        // 多解一遍（游标会把它变成零投递）。
+        let fingerprint = LocalWhiteboardStore.shared.fingerprint(crewId: crewId)
+        var gate = fileGates[crewId] ?? FileChangeGate(seed: nil)
+        let changed = gate.shouldYield(fingerprint)
+        fileGates[crewId] = gate
+        if gated, !changed { return }
+
         let entries = LocalWhiteboardStore.shared.entries(crewId: crewId, after: cursors[crewId])
         guard let last = entries.last else { return }
         cursors[crewId] = WhiteboardCursorPosition(id: last.id, createdAt: last.createdAt)

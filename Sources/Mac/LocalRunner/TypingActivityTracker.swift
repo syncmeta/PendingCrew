@@ -93,8 +93,38 @@ struct TypingActivityTracker {
 
     /// 指纹 = 折叠所有空白后的可见文本（前 `limit` 字符）。折叠空白是为了让
     /// 「同一句话换个位置重画」（终端重绘常见）也能认出是同一帧。
+    ///
+    /// **单趟折叠、够 `limit` 个字符就停**（Todo #59）。老实现是
+    /// `split(whereSeparator:)` → `[Substring]` → `joined` → `count` → `prefix`：
+    /// 整段输入都要付钱（三次遍历 + 两次分配），而结果只用前 512 个字符。
+    /// 它挂在 `dataReceived` 的主线程回调里，采样实测占单个忙碌 session 主线程的
+    /// **5.7%**（见 `docs/2026-08-19-ui-jank-profile.md`），且按 session 线性叠加。
+    ///
+    /// 输出与老实现**逐字符相同**（有单测钉）：同样丢掉首尾空白、同样把空白串
+    /// 折成单个空格，只是不再把 `limit` 之后的部分也折一遍。
+    ///
+    /// `appended` 是「已追加的字符数」，它是真实 grapheme 数的**上界**（组合记号
+    /// 会并进前一个 grapheme，只会让真实数更小），所以到达门槛后还要用真的
+    /// `out.count` 校验一次，不够就再往后取一段 —— 否则遇到组合记号会比老实现少切。
     static func signature(_ text: String, limit: Int) -> String {
-        let collapsed = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        return collapsed.count > limit ? String(collapsed.prefix(limit)) : collapsed
+        guard limit > 0 else { return "" }
+        var out = ""
+        out.reserveCapacity(limit * 2)
+        var pendingSpace = false
+        var appended = 0
+        var checkpoint = limit
+        for c in text {
+            if c.isWhitespace {
+                if !out.isEmpty { pendingSpace = true }
+                continue
+            }
+            if pendingSpace { out.append(" "); appended += 1; pendingSpace = false }
+            out.append(c); appended += 1
+            if appended >= checkpoint {
+                if out.count >= limit { break }
+                checkpoint = appended + 64
+            }
+        }
+        return out.count > limit ? String(out.prefix(limit)) : out
     }
 }

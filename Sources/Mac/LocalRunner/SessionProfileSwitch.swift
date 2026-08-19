@@ -80,18 +80,43 @@ enum SessionProfileEchoVerdict {
 
     /// 去掉全部空白 + 小写；同时留一张「新下标 → 原字符下标」的映射，
     /// 命中后能从**原文**截可读片段（回执里引用 claude 的原话，不引用压扁版）。
+    ///
+    /// **两趟、O(n)** —— 这里曾经是界面卡顿的头号来源（Todo #59）。老实现在循环里
+    /// 写 `while origin.count < text.count`，而 `String.count` 是
+    /// `distance(from:to:)`，对 Swift String 是 **O(n) 的 grapheme 遍历、不是 O(1)**，
+    /// 于是整个函数是 O(n²)。它被 `SessionLaunchParameterScanner` 挂在 `dataReceived`
+    /// 上、对 8~16K 的尾窗**每笔 PTY 输出跑一次**：实测 8192 字符 63.6 ms、16384 字符
+    /// 253.7 ms，一个 session 刚拉起的 45 秒里足够把主线程占死（采样见
+    /// `docs/2026-08-19-ui-jank-profile.md`）。
+    ///
+    /// 语义与老实现**逐字符等价**（有单测钉）：
+    /// - 第一趟按 unicode scalar 记来源（小写化可能 1→n 个 scalar，全部指回同一原位）；
+    /// - 第二趟按 grapheme 走一遍 `text`，每个字符取它**首个 scalar** 的来源。
+    ///   追加的字符与前一个合并成同一 grapheme 时（组合记号），首 scalar 仍属前者 ——
+    ///   这正是老实现「`text.count` 没涨、while 不进、origin 保留旧下标」的结果。
     static func squeeze(_ s: String) -> (text: String, origin: [String.Index]) {
         var text = ""
-        var origin: [String.Index] = []
+        text.reserveCapacity(s.utf8.count)
+        var scalarOwner: [String.Index] = []
+        scalarOwner.reserveCapacity(s.unicodeScalars.count)
+
         var i = s.startIndex
         while i < s.endIndex {
             let c = s[i]
             if !c.isWhitespace {
-                text.append(contentsOf: c.lowercased())
-                // 小写化可能把 1 个字符变成多个（土耳其语等）——每个都指回同一原位。
-                while origin.count < text.count { origin.append(i) }
+                let piece = c.lowercased()
+                text.append(contentsOf: piece)
+                for _ in piece.unicodeScalars { scalarOwner.append(i) }
             }
             i = s.index(after: i)
+        }
+
+        var origin: [String.Index] = []
+        origin.reserveCapacity(scalarOwner.count)
+        var k = 0
+        for ch in text {
+            origin.append(scalarOwner[k])
+            k += ch.unicodeScalars.count
         }
         return (text, origin)
     }
