@@ -1,6 +1,12 @@
 #!/bin/sh
-# 用法: PENDING_NOTARY_PROFILE=<profile> [PENDING_PUBLISH_R2=1] \
+# 用法: PENDING_NOTARY_PROFILE=pendingcrew-notary [PENDING_PUBLISH_R2=1] \
 #       scripts/release/build-macos-update.sh
+#
+# 公证 profile 叫 `pendingcrew-notary`，在登录钥匙串里，用本机那把 App Store
+# Connect API key 建的（团队 M42BKJN82S，与 PendingBot 传 TestFlight 同一把）。
+# 没有的话按 `docs/release-macos.md` 里的 `notarytool store-credentials` 重建 ——
+# **别在这儿翻半天然后把公证关掉**：2026-08-19 查出线上装着的包正是这么来的，
+# 签名对、hardened runtime 对，就是没公证票，换台机器直接被 Gatekeeper 拦。
 #
 # 干净快照（钉 main HEAD）里构建 Release → Developer ID 签名（含 Sparkle
 # 内嵌件）→ 公证 → staple → 生成更新说明 → generate_appcast 签 feed
