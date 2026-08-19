@@ -183,5 +183,50 @@ final class TypingActivityTrackerTests: XCTestCase {
         XCTAssertTrue(tracker.isTyping(isRunning: true, now: at(0)),
                       "没 resize 过的首屏输出仍算干活")
     }
+
+    // MARK: - 指纹：等价性 + 耗时预算（Todo #59）
+
+    /// **老实现的原样拷贝**，只当参照系。它把整段折叠完再截断，正因为这样才被
+    /// 换掉 —— 但它定义了「对」的输出，所以留在这里逐字符比对。别改这个函数。
+    private func signatureReferenceWholeText(_ text: String, limit: Int) -> String {
+        let collapsed = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return collapsed.count > limit ? String(collapsed.prefix(limit)) : collapsed
+    }
+
+    func testSignatureMatchesLegacyImplementation() {
+        var long = ""
+        while long.count < 4000 { long += "⎿  · Thinking… 中文一行  tokens 12345 \n\n  " }
+        let cases: [String] = [
+            "", "   ", "\n\t\n", "abc", "  abc  ", "a   b\n\nc  ",
+            "e\u{301}\u{327} x", "🇨🇳 👩‍👩‍👧 ✻", String(repeating: "e\u{301}", count: 900),
+            long,
+        ]
+        for limit in [1, 8, 512] {
+            for c in cases {
+                XCTAssertEqual(TypingActivityTracker.signature(c, limit: limit),
+                               signatureReferenceWholeText(c, limit: limit),
+                               "limit=\(limit) 上与老实现不等价：\(c.prefix(24).debugDescription)")
+            }
+        }
+    }
+
+    /// 指纹的代价必须与**输入长度脱钩** —— 它只用前 512 个字符，却挂在主线程的
+    /// PTY 回调上。老实现整段都要折一遍：agent 打印一份大文件时那一笔就很贵。
+    /// 这条量的是「喂 100 倍长的输入，耗时不该跟着涨 100 倍」。
+    func testSignatureCostIsDecoupledFromInputLength() {
+        var short = ""
+        while short.count < 2_000 { short += "⎿  · Thinking… 中文一行 tokens 12345 " }
+        let long = String(repeating: short, count: 100)   // ~200K 字符
+        func cost(_ s: String) -> Double {
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<20 { _ = TypingActivityTracker.signature(s, limit: 512) }
+            return Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+        }
+        _ = cost(short)                                   // 预热
+        let cShort = cost(short), cLong = cost(long)
+        XCTAssertLessThan(cLong, max(cShort * 5, 20),
+                          "短 \(String(format: "%.1f", cShort)) ms vs 长 \(String(format: "%.1f", cLong)) ms"
+                          + " —— 指纹代价又跟输入长度挂钩了")
+    }
 }
 #endif
