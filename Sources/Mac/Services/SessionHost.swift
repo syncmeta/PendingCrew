@@ -88,6 +88,16 @@ final class SessionHost: ObservableObject {
     /// 推到主队列之后再 `MainActor.assumeIsolated` —— `.receive(on: .main)` 保证了
     /// 线程，assumeIsolated 只是把它翻译成编译器认的隔离，好让闭包体能原样保留
     /// `.onChange` 里的写法（含内部继承 MainActor 的 `Task { }`）。
+    ///
+    /// **为什么这样是安全的，逐条留证**（assumeIsolated 猜错就是当场崩，不是随手加的）：
+    /// 1. 本文件里**每一个** `.sink` 的上游都有 `.receive(on: DispatchQueue.main)`，
+    ///    没有例外路径 —— 改这个方法时请保持这条不变量。
+    /// 2. 唯一容易漏想的坑是「`@Published` 订阅瞬间会同步发一次当前值」：那一发
+    ///    **也**要过 `receive(on:)`。`receive(on:)` 是无条件调度（哪怕上游已经在
+    ///    目标队列上也照样 async 一拍），所以首值同样是异步落到主队列的，不存在
+    ///    「首值绕过 receive(on:) 直达」这条路。
+    /// 3. `DispatchQueue.main` 上执行 = 主线程 = 主 actor 的执行器，这正是
+    ///    `MainActor.assumeIsolated` 成立的条件。
     private func wire(crewStore: CrewStore, model: AppModel) {
         let sessionRunner = self.runner
 
