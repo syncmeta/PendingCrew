@@ -500,6 +500,48 @@ final class TerminalMirrorParityTests: XCTestCase {
         }
     }
 
+    /// **agent 的 TUI 大部分时间活在 alt-screen 里**（claude/codex 的全屏界面），
+    /// 所以「退回主屏之后两份一致」根本没验到我们真正要还原的那块画面。
+    /// 这条在**仍处于 alt-screen 时**断言，并且在 alt-screen 里改宽度。
+    ///
+    /// 注意 alt-screen 没有回滚缓冲、resize 语义也与主屏不同（不 reflow，由应用
+    /// 自己重画）—— 这里不假设哪种语义对，只要求**两份缓冲区得出同一个结果**。
+    @MainActor
+    func testMirrorMatchesCoreWhileInsideAltScreen() {
+        let core = Terminal(delegate: NullTerminalDelegate(),
+                            options: Self.options(cols: 100, rows: 30))
+        let mirror = TerminalMirrorView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        mirror.getTerminal().resize(cols: 100, rows: 30)
+
+        var s = ""
+        s += "\u{1b}[2J\u{1b}[H主屏上先留一点历史\r\n"
+        for i in 0..<50 { s += "history \(i)\r\n" }
+        s += "\u{1b}[?1049h"                       // 进 alt-screen，**不再退出来**
+        s += "\u{1b}[2J\u{1b}[H"
+        s += "\u{1b}[1;36m╭─ AGENT TUI ─────────╮\u{1b}[0m\r\n"
+        s += "\u{1b}[36m│\u{1b}[0m 中文宽字符 + emoji ✅ \u{1b}[36m│\u{1b}[0m\r\n"
+        s += "\u{1b}[36m╰─────────────────────╯\u{1b}[0m\r\n"
+        s += "\u{1b}[2;5H"                          // alt 屏里定位光标
+        let bytes = Array(s.utf8)
+
+        core.feed(buffer: bytes[...])
+        mirror.feed(byteArray: bytes[...])
+        assertGridsEqual(core, mirror.getTerminal(), "仍在 alt-screen 内")
+
+        // alt-screen 里改宽度 —— agent TUI 运行期间拖窗口就是这条路径。
+        for width in [60, 160, 100] {
+            core.resize(cols: width, rows: 30)
+            mirror.getTerminal().resize(cols: width, rows: 30)
+            assertGridsEqual(core, mirror.getTerminal(), "alt-screen 内 resize 到 \(width) 列后")
+        }
+
+        // 退回主屏后，之前那 50 行历史两边都要还在、且一致。
+        let leave = Array("\u{1b}[?1049l".utf8)
+        core.feed(buffer: leave[...])
+        mirror.feed(byteArray: leave[...])
+        assertGridsEqual(core, mirror.getTerminal(), "退出 alt-screen 回到主屏后")
+    }
+
     private static func options(cols: Int, rows: Int) -> TerminalOptions {
         var o = TerminalOptions.default
         o.cols = cols; o.rows = rows; o.scrollback = AgentSessionCore.scrollbackLines
@@ -516,7 +558,9 @@ private final class NullTerminalDelegate: TerminalDelegate {
 #endif
 ```
 
-> `TerminalOptions` 的字段名、`NullTerminalDelegate` 需要实现的方法集合，**以编译器为准**。断言的两件事不能少：**同一批字节两份缓冲区逐格一致**、**reflow 之后仍逐格一致**。
+> `TerminalOptions` 的字段名、`NullTerminalDelegate` 需要实现的方法集合，**以编译器为准**。断言的三件事不能少：**同一批字节两份缓冲区逐格一致**、**reflow 之后仍逐格一致**、**alt-screen 内（含在 alt-screen 内改宽度）仍逐格一致**。
+>
+> 第三条是父机长点出来的、我原本会漏的：agent 的 TUI 大部分时间就活在 alt-screen 里，「退回主屏后一致」等于没验到真正要还原的那块画面。
 
 - [ ] **Step 2: 跑测试确认它失败**
 
@@ -694,7 +738,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 
 1. 测试「Executed N tests, with 0 failures」原文 + 三端全绿。
 2. Step 3 的三条 grep 证据。
-3. **一致性测试的具体断言**（同一批字节逐格相等、reflow 到 60/160/80 列后仍相等）。
+3. **一致性测试的具体断言**（同一批字节逐格相等、reflow 到 60/160/80 列后仍相等、**alt-screen 内及其 resize 后仍相等**）。
 4. **给人类的三条手工清单** —— 写进 `docs/2026-08-19-backend-split-manual-checks.md`（新建），**不要催人现在就点**（见下）。
 
 **⚠️ 节奏要求（父机长定的，别自作主张提前）**：这三下必须装新版才能验，而装新版要 ⌘Q、所有 session 一起死 —— **那正是本项目要消灭的痛点，为验证它而制造它是本末倒置**。所以清单**攒着**，等下一次本来就要装包的时候（P3 完成、或期间有别的原因要发版）一起点。P1 在单进程内、可单 commit revert，自动化已经覆盖了缓冲区语义 / reflow / 回滚长度 / 选中文本这些**数据层**一致性；人手这三下验的是**交互层手感**，晚几天验、真出问题也 revert 得掉。
