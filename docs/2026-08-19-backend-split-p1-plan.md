@@ -724,7 +724,7 @@ grep -rn "ActivityTerminalView\|LocalProcessTerminalView" Sources/              
 git diff --stat main~N -- Sources/Mac/Services/CrewSessionRunner.swift                    # 期望只有 terminalTail 那一处
 ```
 
-- [ ] **Step 4: 合回 main（不要 push）+ 在主目录跑真口径全量**
+- [x] **Step 4: 合回 main（不要 push）+ 在主目录跑真口径全量**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' test 2>&1 | tail -30
@@ -732,7 +732,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 
 口径：**真的 0 failures**，条数 ≥ 1433 + 本阶段新增。
 
-- [ ] **Step 5: 汇报（含给人类的手工清单）**
+- [x] **Step 5: 汇报（含给人类的手工清单）**
 
 `post_to_crew` 报：
 
