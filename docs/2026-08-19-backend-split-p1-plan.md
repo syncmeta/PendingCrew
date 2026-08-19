@@ -689,7 +689,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Files:**
 - Modify: `Sources/Mac/Services/CrewSessionRunner.swift`（`terminalTail` / `inspect`）
 
-- [ ] **Step 1: 改读权威画面**
+- [x] **Step 1: 改读权威画面**
 
 `CrewSessionRunner.terminalTail(_ view:maxLines:)`（`:851`、`:856` 两处调用）改成读 `core.screenText(maxLines:)`。
 

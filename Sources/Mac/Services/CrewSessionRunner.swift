@@ -852,39 +852,30 @@ final class CrewSessionRunner: ObservableObject {
         default:             state = "空闲"
         }
         var lines = ["「\(run.displayName)」（\(run.sessionId)）状态：\(state)"]
+        // 终端后端读的是**权威画面**（core 那份无画面 `Terminal` 的当前屏幕），
+        // 与任何窗口滚到哪无关。改动前读的是 SwiftTerm 的当前可见区（按 `yDisp`）
+        // —— 也就是**人把那个终端往上滚，机长看到的文本就跟着变**。那是实现细节
+        // 漏出来的，不是设计：机长要的是「它现在卡在哪一屏」，不是「人正在看哪一屏」。
+        // 改完之后同一个 sessionId 在任何时刻问到的都是同一份画面（spec §5.1）。
+        // `getLine` / `translateToString` 在无画面的 `Terminal` 上一模一样，所以
+        // P4 之后这段由 daemon 侧执行，app 连不连着都问得到同一份画面。
         switch run.backend {
         case let term as AgentTerminalSession:
-            let tail = Self.terminalTail(term.terminalView, maxLines: 40)
+            let tail = term.core.screenText(maxLines: 40)
             lines.append(tail.isEmpty
                 ? "（终端画面为空）"
-                : "终端画面（当前可见区，尾部空行已去）：\n\(tail)")
+                : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
         case let term as PlainTerminalSession:
-            let tail = Self.terminalTail(term.terminalView, maxLines: 40)
+            let tail = term.core.screenText(maxLines: 40)
             lines.append(tail.isEmpty
                 ? "（终端画面为空）"
-                : "终端画面（当前可见区，尾部空行已去）：\n\(tail)")
+                : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
         case let codex as CodexAppServerBackend:
             lines.append("transcript 尾部：\n\(Self.codexTail(codex))")
         default:
             lines.append("（该后端类型无可读输出）")
         }
         return lines.joined(separator: "\n")
-    }
-
-    /// claude PTY：读 SwiftTerm 当前可见屏幕（按 yDisp —— 通常贴底即最新画面；
-    /// 用户把该终端手动上滚时读到的是滚动处视图，机长场景可接受）。
-    private static func terminalTail(_ view: TerminalMirrorView, maxLines: Int) -> String {
-        let terminal = view.getTerminal()
-        var lines: [String] = []
-        for row in 0..<terminal.rows {
-            guard let line = terminal.getLine(row: row) else { continue }
-            lines.append(line.translateToString(trimRight: true))
-        }
-        while let last = lines.last,
-              last.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeLast()
-        }
-        return lines.suffix(maxLines).joined(separator: "\n")
     }
 
     /// codex：无 PTY，回 transcript 尾部条目的紧凑渲染。
