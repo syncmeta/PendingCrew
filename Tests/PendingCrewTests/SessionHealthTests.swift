@@ -188,4 +188,57 @@ final class QuotaHealthRecoveryTests: XCTestCase {
             CrewSessionStateDerivation.state(isRunning: true, health: nil, isWorking: true),
             "working")
     }
+
+    // MARK: - ASCII 字节匹配（Todo #59）
+
+    /// 字节匹配必须与老的 `tail.lowercased().contains(phrase)` 在**整张短语表**上
+    /// 同判。这条同时覆盖大小写、弯引号多字节、跨 chunk 拼接三种情况。
+    func testByteMatchingAgreesWithLowercasedContains() {
+        let allPhrases = SessionHealthScanner.authPhrases
+            + SessionHealthScanner.quotaPhrases
+            + RateLimitMenuScanner.menuPhrases
+        let noise = "⎿  · Thinking… 中文 tokens 12345\n  ✻ Welcome  "
+        var cases: [String] = [noise, "", "完全无关的一段输出"]
+        for p in allPhrases {
+            cases.append(noise + p + noise)
+            cases.append(noise + p.uppercased() + noise)      // 大小写不敏感
+            cases.append(noise + p.prefix(p.count - 1) + noise)  // 差一个字符不该命中
+        }
+        for text in cases {
+            let tail = AnsiPlainTextTail()
+            tail.feed(Array(text.utf8)[...])
+            let lower = tail.tail.lowercased()
+            for p in allPhrases {
+                XCTAssertEqual(
+                    tail.containsLoweredASCII(AnsiPlainTextTail.loweredNeedle(p)),
+                    lower.contains(p),
+                    "短语 \(p.debugDescription) 在 \(text.prefix(40).debugDescription) 上判定不一致")
+            }
+        }
+    }
+
+    /// 镜像必须在**截窗之后**仍与 `tail` 指同一段内容 —— 否则截完就再也匹配不上。
+    func testLoweredMirrorSurvivesTailTruncation() {
+        let tail = AnsiPlainTextTail(tailLimit: 64)
+        for _ in 0..<20 { tail.feed(Array("PADDING padding ".utf8)[...]) }
+        tail.feed(Array("please Run /Login now".utf8)[...])
+        XCTAssertTrue(tail.containsLoweredASCII(AnsiPlainTextTail.loweredNeedle("run /login")))
+        XCTAssertEqual(Array(tail.tail.lowercased().utf8).count, tail.loweredASCII.count)
+    }
+
+    /// 整窗匹配的耗时红线：11 条短语 × 16K 尾窗，全在主线程、按 session 叠加。
+    /// 老实现（每个扫描器 `lowercased()` 整窗 + grapheme 级 `contains`）在这个
+    /// 尺寸上 -O 实测 10.2 ms/笔。预算松给，拦的是"改回全窗 String 搜索"。
+    func testFullWindowMatchingStaysCheap() {
+        let tail = AnsiPlainTextTail(tailLimit: 8192)
+        var filler = ""
+        while filler.count < 16000 { filler += "⎿  · Thinking… 中文一行 tokens 12345\n" }
+        tail.feed(Array(filler.utf8)[...])
+        let needles = SessionHealthScanner.authNeedles
+            + SessionHealthScanner.quotaNeedles + RateLimitMenuScanner.menuNeedles
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        for n in needles { _ = tail.containsLoweredASCII(n) }
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+        XCTAssertLessThan(ms, 40, "整窗匹配 \(String(format: "%.1f", ms)) ms —— 退回全窗 String 搜索了")
+    }
 }
