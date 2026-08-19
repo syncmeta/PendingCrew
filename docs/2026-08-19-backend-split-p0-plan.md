@@ -697,7 +697,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Files:** 无（只跑验证）
 
-- [ ] **Step 1: 三端全绿**
+- [x] **Step 1: 三端全绿**
 
 ```bash
 xcodegen
@@ -708,7 +708,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 
 把 test 的「Executed N tests, with 0 failures」原文抄进汇报。
 
-- [ ] **Step 2: 证明视图里已经没有长期对象了**
+- [x] **Step 2: 证明视图里已经没有长期对象了**
 
 ```bash
 grep -n "@StateObject" Sources/Mac/Views/*.swift
@@ -722,7 +722,7 @@ grep -rn "QuotaCenter.shared.start\|ModelCatalogCenter.shared.start\|\.start(app
 
 预期：**零结果**。
 
-- [ ] **Step 3: 证明 SessionHost 里没有 UI 依赖**
+- [x] **Step 3: 证明 SessionHost 里没有 UI 依赖**
 
 ```bash
 grep -n "import SwiftUI\|import AppKit" Sources/Mac/Services/SessionHost.swift
