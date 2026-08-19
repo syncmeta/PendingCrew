@@ -75,6 +75,23 @@ final class AgentSessionCoreTests: XCTestCase {
         XCTAssertEqual(core.cols, 120, "零尺寸不许下传")
         XCTAssertEqual(core.rows, 40)
     }
+
+    /// 内核**不许沾 UI** —— 它要能原样搬进没有画面的后台进程（P4）。
+    /// 这条盯的是源码本身：`import AppKit` / `import SwiftUI` 一出现就红。
+    func testCoreSourceDoesNotImportAnyUIFramework() throws {
+        let core = URL(fileURLWithPath: #filePath)      // Tests/PendingCrewTests/…
+            .deletingLastPathComponent()                 // Tests/PendingCrewTests
+            .deletingLastPathComponent()                 // Tests
+            .deletingLastPathComponent()                 // 仓库根
+            .appendingPathComponent("Sources/Mac/LocalRunner/AgentSessionCore.swift")
+        let src = try String(contentsOf: core, encoding: .utf8)
+        for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            XCTAssertFalse(t == "import AppKit" || t == "import SwiftUI",
+                           "AgentSessionCore 不许 import UI 框架（这一行：\(t)）——"
+                           + "它必须能原样搬进无画面的后台进程")
+        }
+    }
 }
 
 /// 线程安全的字节累加器（`onOutput` 从 PTY 队列回调）。

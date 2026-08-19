@@ -20,14 +20,14 @@ final class TerminalScrollbackTests: XCTestCase {
     /// 测试会假绿（本轮就先踩了一次：40 字宽 × 400 行只折出 8000 行，没到 10000）。
     private let lineWidth = 90
 
-    private func makeView() -> ActivityTerminalView {
-        let view = ActivityTerminalView(frame: NSRect(origin: .zero, size: viewport))
+    private func makeView() -> TerminalMirrorView {
+        let view = TerminalMirrorView(frame: NSRect(origin: .zero, size: viewport))
         // init(frame:) 不走 setFrameSize，这里显式跑一次真布局把 cols/rows 定下来。
         view.setFrameSize(viewport)
         return view
     }
 
-    private func feedLines(_ view: ActivityTerminalView, count: Int) {
+    private func feedLines(_ view: TerminalMirrorView, count: Int) {
         for i in 1...count {
             let tag = "L\(i)-"
             view.feed(text: tag + String(repeating: "#", count: max(0, lineWidth - tag.count)) + "\r\n")
@@ -37,7 +37,7 @@ final class TerminalScrollbackTests: XCTestCase {
     /// 回滚缓冲里现存的全部非空行（含被卷上去的历史 + 当前视口）。
     /// `getScrollInvariantLine` 用的是「从没被裁掉过的绝对行号」，所以顶部被裁时低位
     /// 行号会返回 nil —— 正好用来看有没有掉历史。
-    private func retainedLines(_ view: ActivityTerminalView) -> [String] {
+    private func retainedLines(_ view: TerminalMirrorView) -> [String] {
         let terminal = view.getTerminal()
         var out: [String] = []
         for row in 0..<200_000 {
@@ -55,9 +55,9 @@ final class TerminalScrollbackTests: XCTestCase {
 
     func testScrollbackLimitIsRaisedWellAboveSwiftTermDefault() {
         let view = makeView()
-        XCTAssertEqual(view.getTerminal().options.scrollback, ActivityTerminalView.scrollbackLines,
+        XCTAssertEqual(view.getTerminal().options.scrollback, TerminalMirrorView.scrollbackLines,
                        "终端构造完必须把 scrollback 顶上去，别留 SwiftTerm 的 500 行默认值")
-        XCTAssertGreaterThanOrEqual(ActivityTerminalView.scrollbackLines, 10_000,
+        XCTAssertGreaterThanOrEqual(TerminalMirrorView.scrollbackLines, 10_000,
                                     "10000 行是这次定的量级（对齐 Terminal.app），调低要连注释里的理由一起改")
     }
 
@@ -96,12 +96,12 @@ final class TerminalScrollbackTests: XCTestCase {
     }
 
     func testDegenerateSizesAreRejectedAndRealOnesAccepted() {
-        XCTAssertFalse(ActivityTerminalView.isRealLayout(.zero))
-        XCTAssertFalse(ActivityTerminalView.isRealLayout(NSSize(width: 900, height: 0)))
-        XCTAssertFalse(ActivityTerminalView.isRealLayout(NSSize(width: 0, height: 600)))
-        XCTAssertTrue(ActivityTerminalView.isRealLayout(NSSize(width: 900, height: 600)))
+        XCTAssertFalse(TerminalMirrorView.isRealLayout(.zero))
+        XCTAssertFalse(TerminalMirrorView.isRealLayout(NSSize(width: 900, height: 0)))
+        XCTAssertFalse(TerminalMirrorView.isRealLayout(NSSize(width: 0, height: 600)))
+        XCTAssertTrue(TerminalMirrorView.isRealLayout(NSSize(width: 900, height: 600)))
         // 用户自己把栏拖窄那种**真实**窄布局照常放行 —— 那是终端应有的 reflow 行为。
-        XCTAssertTrue(ActivityTerminalView.isRealLayout(NSSize(width: 120, height: 80)))
+        XCTAssertTrue(TerminalMirrorView.isRealLayout(NSSize(width: 120, height: 80)))
     }
 
     // MARK: - 自绘滚动条的可滚范围 vs 真实历史

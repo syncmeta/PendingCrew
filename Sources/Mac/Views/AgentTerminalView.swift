@@ -3,16 +3,16 @@ import SwiftUI
 import AppKit
 import SwiftTerm
 
-/// 把一个本地 PTY 的 LocalProcessTerminalView 宿主进 SwiftUI。
+/// 把「只负责画的那半」(`TerminalMirrorView`) 宿主进 SwiftUI。
 struct AgentTerminalView: NSViewRepresentable {
-    let terminalView: ActivityTerminalView
+    let terminalView: TerminalMirrorView
     /// 当前外观（跟随系统/应用的浅深主题）。SwiftTerm 自己画一层不透明底，**不跟**
     /// macOS appearance —— 默认黑底白字，于是浅色主题下也是黑的。这里把它接上：
     /// 按 colorScheme 设 nativeBackground/Foreground（写进 terminal 的底色/默认前景，
     /// 也让 OSC 11 背景查询拿到正确值，TUI 能据此挑浅/深配色）。
     @Environment(\.colorScheme) private var colorScheme
 
-    func makeNSView(context: Context) -> LocalProcessTerminalView {
+    func makeNSView(context: Context) -> TerminalMirrorView {
         let view = terminalView
         // 紧凑等宽字体 —— SwiftTerm 默认 13pt 系统等宽，cell ~7.8pt，在 ~400pt 宽的
         // inspector 栏里只排得下 ~50 列；而 Claude/Codex 的全屏 TUI（边框盒、开场横幅）
@@ -31,13 +31,13 @@ struct AgentTerminalView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+    func updateNSView(_ nsView: TerminalMirrorView, context: Context) {
         // 主题切换（系统/应用浅深）时重涂底色/前景 —— nativeBackgroundColor 在 set 时
         // 立刻把动态 NSColor 求值成固定终端色，不会自动跟 appearance 变，必须这里重设。
         applyTheme(nsView, scheme: colorScheme)
     }
 
-    private func applyTheme(_ view: LocalProcessTerminalView, scheme: ColorScheme) {
+    private func applyTheme(_ view: TerminalMirrorView, scheme: ColorScheme) {
         let dark = scheme == .dark
         // 与 Theme.Palette.canvas / .ink 对齐（浅 #FFFFFF/#1B1A14，深 #161512/#ECE9E0）。
         let bg = NSColor(srgb: dark ? 0x161512 : 0xFFFFFF)

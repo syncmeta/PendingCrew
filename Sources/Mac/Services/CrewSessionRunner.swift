@@ -873,7 +873,7 @@ final class CrewSessionRunner: ObservableObject {
 
     /// claude PTY：读 SwiftTerm 当前可见屏幕（按 yDisp —— 通常贴底即最新画面；
     /// 用户把该终端手动上滚时读到的是滚动处视图，机长场景可接受）。
-    private static func terminalTail(_ view: ActivityTerminalView, maxLines: Int) -> String {
+    private static func terminalTail(_ view: TerminalMirrorView, maxLines: Int) -> String {
         let terminal = view.getTerminal()
         var lines: [String] = []
         for row in 0..<terminal.rows {
@@ -1687,7 +1687,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 类型转换访问：仅当后端是终端（claude）时非 nil，供 `AgentTerminalView` 使用。
     var agentTerminalSession: AgentTerminalSession? { backend as? AgentTerminalSession }
     /// claude 与纯终端都提供 PTY 视图；codex 没有。
-    var terminalView: ActivityTerminalView? {
+    var terminalView: TerminalMirrorView? {
         if let agent = backend as? AgentTerminalSession { return agent.terminalView }
         if let plain = backend as? PlainTerminalSession { return plain.terminalView }
         return nil

@@ -9,36 +9,27 @@ import SwiftTerm
 /// 它只实现 session 的进程生命周期与终端 IO，不扫描 agent 状态、不接世界观/MCP、
 /// 不参与白板、唤醒、额度或待决策编排。`CrewSessionRunner` 负责把这种后端只留在
 /// session 切换条与 inspector，绝不登记成 crew 成员。
+///
+/// P1 之后它与 `AgentTerminalSession` 同构：一个无画面内核（`.plainShell` 模式 ——
+/// 什么都不扫）+ 一个只负责画的 `TerminalMirrorView`。
 @MainActor
 final class PlainTerminalSession: ObservableObject, SessionBackend {
     let kind: LocalCodingAgentKind = .terminal
-    let terminalView: ActivityTerminalView
+    let core: AgentSessionCore
+    let mirror: TerminalMirrorView
 
-    /// 同 `AgentTerminalSession`：进程一终止就把回滚缓冲收窄，别让停掉的
-    /// shell 继续攥着 10000 行的缓冲（见 `TerminatedScrollbackPlan`）。
-    @Published private(set) var status: SessionStatus = .running {
-        didSet {
-            if case .exited = status { terminalView.collapseScrollbackAfterExit() }
-        }
-    }
-    var statusPublisher: Published<SessionStatus>.Publisher { $status }
+    var terminalView: TerminalMirrorView { mirror }
+
+    var status: SessionStatus { core.status }
+    var statusPublisher: Published<SessionStatus>.Publisher { core.$status }
 
     let isBusy = false
-    @Published private(set) var isWorking = false
-    var isWorkingPublisher: Published<Bool>.Publisher { $isWorking }
+    var isWorking: Bool { core.isWorking }
+    var isWorkingPublisher: Published<Bool>.Publisher { core.$isWorking }
 
-    @Published private(set) var health: CrewSessionHealth?
-    var healthPublisher: Published<CrewSessionHealth?>.Publisher { $health }
+    var health: CrewSessionHealth? { core.health }
+    var healthPublisher: Published<CrewSessionHealth?>.Publisher { core.$health }
 
-    private final class Delegate: LocalProcessTerminalViewDelegate {
-        var onExit: ((Int32?) -> Void)?
-        func processTerminated(source: TerminalView, exitCode: Int32?) { onExit?(exitCode) }
-        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    }
-
-    private let delegate = Delegate()
     /// `$SHELL` 必须是可执行的绝对路径；无效时退到系统 zsh。
     nonisolated static func defaultShell(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -56,47 +47,36 @@ final class PlainTerminalSession: ObservableObject, SessionBackend {
     }
 
     init(shell: String, workdir: String, environment: [String: String]) {
-        terminalView = ActivityTerminalView(frame: .zero)
-        terminalView.useNativeScroller()
-        terminalView.processDelegate = delegate
-        delegate.onExit = { [weak self] rawCode in
-            Task { @MainActor in
-                guard let self, self.status == .running else { return }
-                let code = rawCode.map(AgentTerminalSession.decodeWaitStatus)
-                self.status = .exited(code)
-            }
-        }
-
-        var env = environment.map { "\($0.key)=\($0.value)" }
-        if !env.contains(where: { $0.hasPrefix("TERM=") }) { env.append("TERM=xterm-256color") }
-        terminalView.startProcess(
+        // argv 走 `SessionConfig(kind: .terminal).argv()` = `["-l"]`（登录 shell）。
+        core = AgentSessionCore(
+            config: SessionConfig(kind: .terminal),
+            mode: .plainShell,
             executable: shell,
-            args: ["-l"],
-            environment: env,
-            currentDirectory: workdir
-        )
-        if terminalView.process?.running != true || (terminalView.process?.shellPid ?? 0) <= 0 {
-            status = .exited(127)
+            workdir: workdir,
+            env: environment)
+        mirror = TerminalMirrorView(frame: .zero)
+        mirror.core = core
+        mirror.terminalDelegate = mirror
+        mirror.useNativeScroller()           // 普通终端保留 SwiftTerm 原生滚动条
+        core.onOutput = { [weak mirror] slice in
+            MainActor.assumeIsolated { mirror?.feedFromCore(slice) }
+        }
+        // 同 `AgentTerminalSession`：进程一终止就把两份回滚缓冲一起收窄，别让停掉的
+        // shell 继续攥着 10000 行的缓冲（见 `TerminatedScrollbackPlan`）。
+        core.onExited = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let retained = self.mirror.collapseScrollbackAfterExit()
+                self.core.changeScrollback(retained)
+            }
         }
     }
 
     /// 协议要求的程序化写入；普通使用路径直接由 SwiftTerm 接收人的键盘输入。
-    func send(_ text: String) {
-        guard status == .running else { return }
-        terminalView.process?.send(data: Array(text.utf8)[...])
-    }
+    func send(_ text: String) { core.sendPlainShell(text) }
 
-    func interrupt() {
-        guard status == .running else { return }
-        terminalView.process?.send(data: Array<UInt8>([0x03])[...]) // Ctrl-C
-    }
+    func interrupt() { core.interruptPlainShell() }
 
-    func stop() {
-        guard status == .running else { return }
-        let pid = terminalView.process?.shellPid ?? 0
-        terminalView.terminate()
-        status = .exited(nil)
-        Task { await terminateTree(pid: pid, graceSeconds: 2.0) }
-    }
+    func stop() { core.stop() }
 }
 #endif

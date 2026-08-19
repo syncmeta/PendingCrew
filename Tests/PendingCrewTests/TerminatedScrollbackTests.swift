@@ -94,8 +94,8 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
         return (mallocInUseBytes() / 1_048_576, physFootprintBytes() / 1_048_576)
     }
 
-    private func makeTerminal(cols: CGFloat, rows: CGFloat) -> ActivityTerminalView {
-        let view = ActivityTerminalView(frame: NSRect(x: 0, y: 0, width: cols, height: rows))
+    private func makeTerminal(cols: CGFloat, rows: CGFloat) -> TerminalMirrorView {
+        let view = TerminalMirrorView(frame: NSRect(x: 0, y: 0, width: cols, height: rows))
         // 与线上一致的紧凑等宽字体（`AgentTerminalView.makeNSView`）——
         // 字号决定列数，列数决定每行 `cols × 24 B`，量的必须是同一把尺子。
         view.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -110,7 +110,7 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
     /// —— 1.13 那版遍历 `maxLength` 把整个容量都实例化，注释里那句「不是按需增长」
     /// 说的是老版本，现在不成立了）。所以一个 session 的占用 =
     /// `min(实际输出行数, scrollback) × cols × 24 B`：跑得越久越贵，顶到 10000 行封顶。
-    private func fill(_ view: ActivityTerminalView, lines: Int) {
+    private func fill(_ view: TerminalMirrorView, lines: Int) {
         var text = ""
         text.reserveCapacity(lines * 72)
         for i in 0..<lines {
@@ -123,14 +123,14 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
     /// 跑久了的 session（回滚已经顶满）终止后，必须把大头放掉，且终端仍可回看。
     ///
     /// 为什么夹具喂 11000 行：这就是「开一天」的稳态 —— claude 的 TUI 持续重绘，
-    /// 500 行上限当初「跑一小会儿就顶满」正是这么来的（见 `ActivityTerminalView`
+    /// 500 行上限当初「跑一小会儿就顶满」正是这么来的（见 `TerminalMirrorView`
     /// 那段注释），10000 行也只是把顶满的时间拉长到小时级。**短命 session 本来就
     /// 不占多少**（占用按实际行数算），下面另有一条把这一点也钉住。
     func test_跑满回滚的session终止后释放内存() throws {
         let sessionCount = 3
         let baseline = Self.measure()
 
-        var views: [ActivityTerminalView] = []
+        var views: [TerminalMirrorView] = []
         for _ in 0..<sessionCount {
             let view = makeTerminal(cols: 600, rows: 500)
             fill(view, lines: 11_000)           // 顶满 10000 行回滚
@@ -164,7 +164,7 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
         \(String(format: "%.1f", freedFootprint)) MB\
         （footprint 归还与否看这一刻堆的碎片，不做断言）
           保留行数：\(retained)（上限 \(TerminatedScrollbackPlan.cap) / 下限 \
-        \(TerminatedScrollbackPlan.floor)，原 \(ActivityTerminalView.scrollbackLines)）
+        \(TerminatedScrollbackPlan.floor)，原 \(TerminalMirrorView.scrollbackLines)）
 
         """)
 
@@ -184,7 +184,7 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
         let retained = view.collapseScrollbackAfterExit()
         XCTAssertGreaterThan(retained, 300,
                              "300 行的 session 收到 \(retained) 行 —— 把还在的历史裁掉了")
-        XCTAssertLessThan(retained, ActivityTerminalView.scrollbackLines)
+        XCTAssertLessThan(retained, TerminalMirrorView.scrollbackLines)
     }
 
     /// 行为不许退化：收窄之后终端**还在**、当前画面一字不差、仍然能往上翻。
@@ -218,7 +218,7 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(
             session.terminalView.getTerminal().options.scrollback,
             TerminatedScrollbackPlan.cap,
-            "进程都退了，回滚上限还挂在 \(ActivityTerminalView.scrollbackLines) 行上")
+            "进程都退了，回滚上限还挂在 \(TerminalMirrorView.scrollbackLines) 行上")
     }
 
     /// 轮询等条件成立（避免固定 sleep 的脆弱等待）。
@@ -233,7 +233,7 @@ final class TerminatedScrollbackMemoryTests: XCTestCase {
         XCTFail("等待超时（\(timeout)s）：条件始终没成立")
     }
 
-    private static func visibleText(_ view: ActivityTerminalView) -> String {
+    private static func visibleText(_ view: TerminalMirrorView) -> String {
         let terminal = view.getTerminal()
         return (0..<terminal.rows)
             .compactMap { terminal.getLine(row: $0)?.translateToString(trimRight: true) }

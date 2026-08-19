@@ -51,7 +51,7 @@ final class AgentTerminalLaunchFailureTests: XCTestCase {
         defer { session.stop() }
 
         try await waitUntil(timeout: 8) {
-            session.terminalView.lastOutputAt != Date.distantPast
+            session.core.lastOutputAt != Date.distantPast
         }
         // 给看门狗几轮机会误报。
         try await Task.sleep(nanoseconds: 2_500_000_000)

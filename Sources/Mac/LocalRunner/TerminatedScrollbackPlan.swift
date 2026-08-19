@@ -15,7 +15,7 @@ import Foundation
 /// 本机实测（210 列、回滚顶满）：**一个已终止 session 52.9 MB**。而 claude 的 TUI 持续
 /// 重绘，几小时就能把 10000 行顶满（当初 500 行「跑一小会儿就顶满」就是这么来的）。
 ///
-/// ⚠️ `ActivityTerminalView.scrollbackLines` 那段注释里「不是按需增长、窗口第一次改宽
+/// ⚠️ `TerminalMirrorView.scrollbackLines` 那段注释里「不是按需增长、窗口第一次改宽
 /// 就一次性吃满」说的是 **SwiftTerm 1.13**（那时 `resize` 遍历 `lines.maxLength`，
 /// 下标 getter 会给每个空槽位 `makeEmpty`）。**1.18 已经改成只遍历 `lines.count`**，
 /// 这条不再成立 —— 短命 session 本来就不占多少，别照着老心智模型去调参数。
@@ -27,7 +27,7 @@ import Foundation
 /// 终端视图**照旧留着** —— 颜色、选择、复制、`inspect_session` 读画面全不变，
 /// 只是往上能翻的历史短了一截。
 ///
-/// ## 回应 `ActivityTerminalView.scrollbackLines` 那段注释（为什么敢往下调）
+/// ## 回应 `TerminalMirrorView.scrollbackLines` 那段注释（为什么敢往下调）
 ///
 /// 那段注释给 10000 行写了两条理由，逐条看它们对**已终止**的 session 还成不成立：
 ///
@@ -35,7 +35,7 @@ import Foundation
 ///    这条只对**在跑**的 session 成立：新行不断把老行挤出去。进程都没了就不会再有
 ///    新行，此刻留下的就是它最后的样子，稳定不掉。
 /// 2. 「`Buffer.resize` 在列数变化时按 2 列 reflow 会把历史截顶」——
-///    这条的根治手段是 `ActivityTerminalView.setFrameSize` 那道零尺寸闸
+///    这条的根治手段是 `TerminalMirrorView.setFrameSize` 那道零尺寸闸
 ///    （`isRealLayout`，**没动**）。剩下的只是「人**真的**把栏拖得很窄」时折行后
 ///    可能溢出上限、顶部被裁 —— 所以这里保留 `reflowHeadroom` 倍余量，
 ///    并且下限不低于 `floor` 行。

@@ -353,13 +353,13 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **搬迁时唯一允许的改动**：把 `terminalView.lastOutputAt` 换成 `lastOutputAt`、`terminalView.process?.send` 换成 `write(...)`、`terminalView.process?.shellPid` 换成 `process.shellPid`、`terminalView.getTerminal()` 换成 `terminal`。**其余逐字不动。**
 
-- [ ] **Step 1: 搬扫描器与派生状态**
+- [x] **Step 1: 搬扫描器与派生状态**
 
 按上表逐条搬。core 上把这些声明成 `@Published private(set)`（`status` / `isWorking` / `displayIsTyping` / `health` / `pendingDecision` / `launchParameterProblem`），门面转发它们的 publisher。
 
 `dataReceived` 里的旁路顺序**保持原样**（原 `onData` 闭包里那一串：launchFailed 自我纠正 → healthScanner → rateLimitScanner → decisionTracker → typingStripper → profileEchoScanner → launchParameterScanner）。
 
-- [ ] **Step 2: `AgentTerminalSession` 退化成薄门面**
+- [x] **Step 2: `AgentTerminalSession` 退化成薄门面**
 
 它继续实现 `SessionBackend`（上层一行不用改），但内部只做三件事：持有 core、持有 mirror（Task 3 之前先临时持有一个空的）、把协议方法转发给 core。
 
@@ -388,7 +388,7 @@ final class AgentTerminalSession: ObservableObject, SessionBackend {
 
 > `SessionBackend` 要求的是 `Published<T>.Publisher`，转发别人的 `@Published` 需要 core 把它们暴露出来（`core.$status`）。若类型对不上，改成协议里用 `AnyPublisher` 也可以 —— **但那要改 `SessionBackend`，属于额外风险，优先用直接转发。**
 
-- [ ] **Step 3: 编译 + 全量测试**
+- [x] **Step 3: 编译 + 全量测试**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' build 2>&1 | tail -5
@@ -397,7 +397,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 
 预期：现有的扫描器/终止/拉起失败那批测试（`AgentTerminationTests`、`AgentTerminalLaunchFailureTests` 等）**全部照旧通过** —— 它们是这次搬家的回归网。挂了就是搬错了，**别改测试去迁就实现**。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add Sources/Mac/LocalRunner/AgentSessionCore.swift Sources/Mac/LocalRunner/AgentTerminalSession.swift
@@ -423,7 +423,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Consumes: `AgentSessionCore.onOutput` / `.write(_:)` / `.resize(cols:rows:)`
 - Produces: `final class TerminalMirrorView: TerminalView, TerminalViewDelegate`
 
-- [ ] **Step 1: 先写一致性测试（本阶段最重要的一条）**
+- [x] **Step 1: 先写一致性测试（本阶段最重要的一条）**
 
 新建 `Tests/PendingCrewTests/TerminalMirrorParityTests.swift`：
 
@@ -562,7 +562,7 @@ private final class NullTerminalDelegate: TerminalDelegate {
 >
 > 第三条是父机长点出来的、我原本会漏的：agent 的 TUI 大部分时间就活在 alt-screen 里，「退回主屏后一致」等于没验到真正要还原的那块画面。
 
-- [ ] **Step 2: 跑测试确认它失败**
+- [x] **Step 2: 跑测试确认它失败**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
@@ -571,7 +571,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 预期：`cannot find 'TerminalMirrorView' in scope`。
 
-- [ ] **Step 3: 实现 mirror**
+- [x] **Step 3: 实现 mirror**
 
 新建 `Sources/Mac/LocalRunner/TerminalMirrorView.swift`。它是 `TerminalView` 的子类（**不是** `LocalProcessTerminalView` —— 它不再自己开进程），并把 `ActivityTerminalView` 里**与画面有关的那半**原样搬过来：
 
@@ -608,7 +608,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 `onViewportChange` 接到 core 的 `typingActivity.noteViewportChange(at:)`（原来挂在 `delegate.onSizeChanged` 上的那条：切 crew 导致的整屏重绘不该点亮「正在输入」气泡，Todo #32）。
 
-- [ ] **Step 4: 门面接上 mirror**
+- [x] **Step 4: 门面接上 mirror**
 
 `AgentTerminalSession` 里：
 
@@ -623,7 +623,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 `var terminalView: ...` 这类对外暴露改成返回 mirror。`Sources/Mac/Views/AgentTerminalView.swift` 与 `CrewSessionWindowView.swift` 的类型跟着改（把 `ActivityTerminalView` 换成 `TerminalMirrorView`）。
 
-- [ ] **Step 5: 编译三端 + 全量测试 + 提交**
+- [x] **Step 5: 编译三端 + 全量测试 + 提交**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' build 2>&1 | tail -5
@@ -656,11 +656,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Modify: `Sources/Mac/LocalRunner/PlainTerminalSession.swift`
 - Delete: `ActivityTerminalView`（它在 `AgentTerminalSession.swift` 顶部）
 
-- [ ] **Step 1: PlainTerminalSession 改成 core + mirror**
+- [x] **Step 1: PlainTerminalSession 改成 core + mirror**
 
 它只有 102 行、没有任何扫描器，改法与门面一致：持有一个 `AgentSessionCore`（config 用它的 shell argv）+ 一个 `TerminalMirrorView`（`useNativeScroller()`，普通 shell 保留 SwiftTerm 原生滚动条）。
 
-- [ ] **Step 2: 删掉 `ActivityTerminalView`**
+- [x] **Step 2: 删掉 `ActivityTerminalView`**
 
 它是 `LocalProcessTerminalView` 的子类 —— 只要还有人用它，就还有「视图自己开进程」的路子。删干净，然后：
 
@@ -670,7 +670,7 @@ grep -rn "ActivityTerminalView\|LocalProcessTerminalView" Sources/
 
 预期：**零结果**。**这是 P1 是否真的做完的判定条件** —— 有残留就说明还有一条路绕过了劈分。
 
-- [ ] **Step 3: 编译三端 + 全量测试 + 提交**
+- [x] **Step 3: 编译三端 + 全量测试 + 提交**
 
 ```bash
 git add Sources/Mac/LocalRunner/PlainTerminalSession.swift Sources/Mac/LocalRunner/AgentTerminalSession.swift

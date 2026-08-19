@@ -8,7 +8,7 @@ import SwiftUI
 /// 几何与信号全部来自 `AgentTerminalSession.scrollState`（取自 SwiftTerm 公开滚动接口
 /// canScroll/scrollPosition/scrollThumbsize）；拖动/点击回调走 `session.scrollTerminal(toPosition:)`
 /// 驱动 SwiftTerm `scroll(toPosition:)`。SwiftTerm 内部那条焊死的 NSScroller 已被
-/// `ActivityTerminalView` 藏掉，这里是它的替身。
+/// `TerminalMirrorView` 藏掉，这里是它的替身。
 struct TerminalScrollbarOverlay: View {
     @ObservedObject var session: AgentTerminalSession
 

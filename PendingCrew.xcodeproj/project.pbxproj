@@ -79,6 +79,7 @@
 		2A8BC084A6ADD9A883045A11 /* LocalCrewStoreOrgMoveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2432C5B09BB0FC752307F79 /* LocalCrewStoreOrgMoveTests.swift */; };
 		2A98D9201F9EBB912AA7A70C /* SessionLaunchOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C561F8B7ABA97CAEFEE8475 /* SessionLaunchOptions.swift */; };
 		2A9DE0446B8D40FAC1E60E69 /* UpdateSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4103430667D47097C3FB9037 /* UpdateSettingsSection.swift */; };
+		2AF713AD14145CCEF38BE684 /* TerminalMirrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D463833D0E583C11903CE62C /* TerminalMirrorView.swift */; };
 		2B8D801218F8A38E3D2BD3FB /* ThemeCrewExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AB79A50FE00814FF10A7AB1 /* ThemeCrewExtras.swift */; };
 		2C5E9ADC4EF5B0D2767865CA /* Machine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D22DD7E3911B65CBC9847EB /* Machine.swift */; };
 		2D21EC1305BF21E24EB3B1AC /* AgentQuota.swift in Sources */ = {isa = PBXBuildFile; fileRef = 929BC3329566D029E1403A56 /* AgentQuota.swift */; };
@@ -301,6 +302,7 @@
 		8CB35FDACA8093A745FBD3B9 /* WorkspaceGitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 444418D7EB5A989E86228CD0 /* WorkspaceGitTests.swift */; };
 		8D0F2BB0533AC1C37B60045C /* MachineRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E001BE060851385E2952F0E6 /* MachineRegistration.swift */; };
 		8D1A72F8E8A626E4F7852523 /* CrewAppleSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D1A669F343B00BD10A0345 /* CrewAppleSignIn.swift */; };
+		8D803558CAF88EE35D9F7F27 /* TerminalMirrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D463833D0E583C11903CE62C /* TerminalMirrorView.swift */; };
 		8DC0646C274174874759C802 /* WorkdirMigrationPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE733889935BCE71D20449F1 /* WorkdirMigrationPlanTests.swift */; };
 		8E58D6A9589C0F604CD276D9 /* CodexAppServerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6EBD108E8EF2047AA56F4ED /* CodexAppServerConnection.swift */; };
 		8E6A94DA55553F65247040AE /* McpServerTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99073B6D81C549F7D1EE9A35 /* McpServerTodoTests.swift */; };
@@ -357,6 +359,7 @@
 		A9B245CF14AC8C3B9C969D83 /* PendingCrewAuthCredential.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6388019E8C2DDFED3A85E99 /* PendingCrewAuthCredential.swift */; };
 		A9CEA093FAD9AFB1B66DFA1D /* CrewRootLineage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B69D7FD1AD6D63C295EE4452 /* CrewRootLineage.swift */; };
 		AA997E38D04E4B2DB4A55FB7 /* CrewTurnstileWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2188C8E4999E046EDB7B64DE /* CrewTurnstileWebView.swift */; };
+		AB06991AB47E52468FB7C6A5 /* TerminalMirrorParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026AA6D67142B92B7F1D2DA9 /* TerminalMirrorParityTests.swift */; };
 		AC3B08C06163DCF3E7FC2195 /* WorkspaceRepoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECEF3B3ED1B95EB5D78259C8 /* WorkspaceRepoService.swift */; };
 		AD24C96B84AE7DCB15D7CEDD /* CrewChatBottomFollow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5268E9892E52DCCB1FE00FBF /* CrewChatBottomFollow.swift */; };
 		ADD79344E8C5B17BF6F44EEA /* SessionBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 937DEE031D3D9DA550B8AFCA /* SessionBackend.swift */; };
@@ -550,6 +553,7 @@
 		0182AFDD43BF3BACB78AC8DA /* CrewLocalMentionWaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalMentionWaker.swift; sourceTree = "<group>"; };
 		019D307CB37D1BEF56AD332A /* SessionProxyProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionProxyProtocol.swift; sourceTree = "<group>"; };
 		023022BA240D7EFFC08D6BF2 /* CrewQRLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewQRLoginView.swift; sourceTree = "<group>"; };
+		026AA6D67142B92B7F1D2DA9 /* TerminalMirrorParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMirrorParityTests.swift; sourceTree = "<group>"; };
 		03CA3D2BEF7E0448E10D391F /* WorkspaceManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManifestTests.swift; sourceTree = "<group>"; };
 		04BEFDC570344C36FF6489B0 /* CrewSenderNaming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSenderNaming.swift; sourceTree = "<group>"; };
 		04D483AE4AA363994E5FEE6F /* MultiProcessJSONStoreReadFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiProcessJSONStoreReadFailureTests.swift; sourceTree = "<group>"; };
@@ -846,6 +850,7 @@
 		D4368B745709AF4685183778 /* CrewPasteAttachmentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPasteAttachmentsTests.swift; sourceTree = "<group>"; };
 		D44095AB668456416C8960C2 /* LocalWakeupStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalWakeupStoreTests.swift; sourceTree = "<group>"; };
 		D444497957C2DC933C72B2C8 /* BreathingSymbolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreathingSymbolView.swift; sourceTree = "<group>"; };
+		D463833D0E583C11903CE62C /* TerminalMirrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMirrorView.swift; sourceTree = "<group>"; };
 		D60CE404DBA41800A4216C77 /* CrewListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewListView.swift; sourceTree = "<group>"; };
 		D61EF9C80E279F17B39492B4 /* MachineGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineGrouping.swift; sourceTree = "<group>"; };
 		D6447BDB872CAA8AB0D2B333 /* AccountConfirmCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountConfirmCard.swift; sourceTree = "<group>"; };
@@ -989,6 +994,7 @@
 				7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */,
 				4AD149A1C9920818A01A3FDC /* SessionStopCoordinator.swift */,
 				B10C395014B9A67808D52E7A /* SessionWorkspace.swift */,
+				D463833D0E583C11903CE62C /* TerminalMirrorView.swift */,
 				1D40D19B870668A9D72004FD /* TerminatedScrollbackPlan.swift */,
 				64E91CB08ACAB98E0616E633 /* TypingActivityTracker.swift */,
 				7F08FE518FBFBFE1C5441F5F /* WorkdirMigrationExecutor.swift */,
@@ -1440,6 +1446,7 @@
 				87E5A371B34927F6567957C3 /* SessionTurnTraceTests.swift */,
 				5594432969488545065C8D45 /* SyncEngineDownTests.swift */,
 				DBD6F9E63BA640A9384FAFEF /* SyncEngineTests.swift */,
+				026AA6D67142B92B7F1D2DA9 /* TerminalMirrorParityTests.swift */,
 				A2F9E015A85ED1A0DCA8E12A /* TerminalScrollbackTests.swift */,
 				8E1FBAD677A6F46B7721D984 /* TerminalScrollbarGeometryTests.swift */,
 				F271252C46BEA6D06D53C893 /* TerminatedScrollbackTests.swift */,
@@ -1952,6 +1959,7 @@
 				DE7E6AD7E1FBFD63657A6BF6 /* Subject.swift in Sources */,
 				8192D46A9438BA19CC0F5943 /* SyncEngine.swift in Sources */,
 				BFD5016A816DA94B4F109B5C /* SyncReceipt.swift in Sources */,
+				2AF713AD14145CCEF38BE684 /* TerminalMirrorView.swift in Sources */,
 				773699A00BE0BD047630F89A /* TerminalScrollbarGeometry.swift in Sources */,
 				244E9BE5225D0776F9FA160E /* TerminalScrollbarOverlay.swift in Sources */,
 				5F5FC262382BCE0C198143F2 /* TerminatedScrollbackPlan.swift in Sources */,
@@ -2221,6 +2229,8 @@
 				430E662C5948EF78449FFEFB /* SyncEngineDownTests.swift in Sources */,
 				36FD57CD5F9F6F897B2ACFBF /* SyncEngineTests.swift in Sources */,
 				29371851B2367FA1DC8A557D /* SyncReceipt.swift in Sources */,
+				AB06991AB47E52468FB7C6A5 /* TerminalMirrorParityTests.swift in Sources */,
+				8D803558CAF88EE35D9F7F27 /* TerminalMirrorView.swift in Sources */,
 				2E42D1228BEF590CBB53E849 /* TerminalScrollbackTests.swift in Sources */,
 				4D14730A2E6B6FF5AB9EF1B5 /* TerminalScrollbarGeometry.swift in Sources */,
 				DE9CFEB5F36B566128A66CE9 /* TerminalScrollbarGeometryTests.swift in Sources */,
