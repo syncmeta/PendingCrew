@@ -56,7 +56,14 @@ final class CrewLocalMentionWaker {
     }
 
     /// 订阅白板变更 + 钉现有 run 所在 crew 的游标。幂等。
+    ///
+    /// ⚠️ 只有编排者进程有资格起它（spec §6.2 闸门 1）。viewer 里误起 = 当场崩，
+    /// 不是悄悄跑成双头 —— 双头会让同一批账被两个进程交替覆盖、唤醒发两遍，
+    /// 而那种症状事后基本查不出来。
     func start() {
+        precondition(
+            ProcessRole.current == .orchestrator,
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
         guard watchers.isEmpty else { return }
         for crewId in Set(runner?.runs.map(\.crewId) ?? []) { pin(crewId) }
         // 通讯录 `contact`（2026-08-11）：来电可以打给一个此刻一个 run 都没有的 crew

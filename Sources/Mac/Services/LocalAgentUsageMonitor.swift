@@ -18,7 +18,13 @@ final class LocalAgentUsageMonitor: ObservableObject {
 
     private var pollTask: Task<Void, Never>?
 
+    /// ⚠️ 只有编排者进程有资格起它（spec §6.2 闸门 1）。viewer 里误起 = 当场崩，
+    /// 不是悄悄跑成双头 —— 双头会让同一批账被两个进程交替覆盖、唤醒发两遍，
+    /// 而那种症状事后基本查不出来。
     func start() {
+        precondition(
+            ProcessRole.current == .orchestrator,
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
         guard pollTask == nil else { return }
         doRefresh()
         pollTask = Task { [weak self] in
