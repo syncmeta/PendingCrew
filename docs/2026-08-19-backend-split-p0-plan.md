@@ -420,13 +420,13 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **留在视图里不动的**：`.onChange(of: crewStore.selectedCrewId)`（`switchCrew` 是**界面选中态**，属于视图）、`.background(WindowSeparatorRemover(...))`、`.onAppear { AppUpdater.shared.isBusy = … }`（后者见 Step 4）。
 
-- [ ] **Step 1: 关键陷阱先读一遍（否则会写出难查的 bug）**
+- [x] **Step 1: 关键陷阱先读一遍（否则会写出难查的 bug）**
 
 `.onChange(of:)` 在**值已经写入之后**触发；而 `@Published` 的 publisher 是 **willSet** 语义 —— 在赋值**之前**发。所以直接 `crewStore.$sessionSpawnRequests.sink { … }` 里再去读/写 `crewStore.sessionSpawnRequests` 会读到旧值、写入会被随后的赋值覆盖。
 
 **统一解法：所有订阅都加 `.receive(on: DispatchQueue.main)`**，把回调推到下一个 runloop 转，那时值已落定，语义与 `.onChange` 一致。这条不是优化，是正确性前提。
 
-- [ ] **Step 2: 填充 `wire`**
+- [x] **Step 2: 填充 `wire`**
 
 `SessionHost.swift` 里把空的 `wire` 换成（**逐条对照 `MacRootView.swift` 原文照搬，注释一起搬走**，不要重写逻辑）：
 
@@ -487,7 +487,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
             .store(in: &bag)
 ```
 
-- [ ] **Step 3: 从 MacRootView 删掉搬走的部分**
+- [x] **Step 3: 从 MacRootView 删掉搬走的部分**
 
 删掉那 10 个 `.onChange` 与整个 `.task { … }`；保留 `.onChange(of: crewStore.selectedCrewId)`、`.background(WindowSeparatorRemover…)`。
 
@@ -510,7 +510,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
         }
 ```
 
-- [ ] **Step 4: `AppUpdater.shared.isBusy` 也搬进 SessionHost**
+- [x] **Step 4: `AppUpdater.shared.isBusy` 也搬进 SessionHost**
 
 `MacRootView.swift` 的 `.onAppear` 里：
 
@@ -532,7 +532,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 并删掉视图里的 `.onAppear`。
 
-- [ ] **Step 5: 编译 + 全量测试**
+- [x] **Step 5: 编译 + 全量测试**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' build 2>&1 | tail -5
@@ -542,7 +542,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 
 预期：两条 build `BUILD SUCCEEDED`；test `TEST SUCCEEDED`，**执行条数 ≥ 1433**（原 1428 + ProcessRoleTests 的 5 条），**0 failures**。条数变少或有失败 → 停下来查，不要继续。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add Sources/Mac/Services/SessionHost.swift Sources/Mac/Views/MacRootView.swift

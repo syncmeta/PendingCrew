@@ -21,8 +21,6 @@ struct MacThreePaneView: View {
     /// 长期职责的唯一所有者（spec §6）—— app 级持有，视图只观察不创建。
     @EnvironmentObject private var sessionHost: SessionHost
     private var sessionRunner: CrewSessionRunner { sessionHost.runner }
-    /// 额度中心（SessionHost start;快照变化的警戒广播也归 SessionHost 订阅）。
-    @ObservedObject private var quotaCenter = QuotaCenter.shared
     /// 左 sidebar 可见性 —— 由原生 sidebar 折叠开关控制（默认 `.all`：三栏全开）。
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -64,175 +62,13 @@ struct MacThreePaneView: View {
         .onChange(of: crewStore.selectedCrewId) { old, new in
             sessionRunner.switchCrew(from: old, to: new)
         }
-        // 建 crew 后自动起机长（用户要的零摩擦：新建即启动 + 群里报到，无需手动点
-        // 「启动 Captain」）。store 在 createCrew 完成后 append payload；这里持有
-        // sessionRunner，捕获整批并立即清空，再逐条拉起。
-        .onChange(of: crewStore.captainAutostartRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.captainAutostartRequests = []
-            Task {
-                for req in reqs {
-                    if crewStore.details[req.crewId] == nil {
-                        await crewStore.refreshDetail(req.crewId)
-                    }
-                    guard let detail = crewStore.details[req.crewId], detail.captain != nil else {
-                        if let receipt = req.deliveryFailureReceipt(reason: "找不到子机长信息") {
-                            crewStore.postSystemNotice(crewId: receipt.crewId, text: receipt.text)
-                        }
-                        continue
-                    }
-                    do {
-                        try await sessionRunner.startCaptain(
-                            detail: detail, backend: model.backend, openingBrief: req.brief)
-                    } catch {
-                        // 不再静默吞错：落到 runner 的共享通道，inspector 成员列表模式会显
-                        // （否则建完 crew captain 没起、用户也不知道为什么）。
-                        sessionRunner.reportStartFailure(
-                            crewId: req.crewId, brief: req.brief,
-                            error: error, mentionCaptain: false)
-                        if let receipt = req.deliveryFailureReceipt(
-                            reason: "子机长启动失败：\(error.localizedDescription)") {
-                            crewStore.postSystemNotice(crewId: receipt.crewId, text: receipt.text)
-                        }
-                    }
-                }
-            }
-        }
-        // 机长 `start_session` 命令排空后的待起 worker session 队列（chunk2 §2）。
-        // **数组**：同一 tick 里连续多条命令落地时,单值 `@Published` 在 SwiftUI 合并
-        // 同步赋值会丢掉中间几条 —— 见 `CrewStore.sessionSpawnRequests` 注释。这里立刻
-        // 捕获 + 清空,避免同一批命令被 `.onChange` 重复触发处理。
-        .onChange(of: crewStore.sessionSpawnRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.sessionSpawnRequests = []
-            Task {
-                for req in reqs {
-                    // detail 缓存只在 UI 打开过该 crew 后才有 —— app 刚启动时为空，
-                    // 不现拉就丢请求（曾静默吞掉整批机长派工）。对齐
-                    // executeCreateChildCrew：缓存 miss 就 refreshDetail，仍拿不到才
-                    // fail-loud 落白板。
-                    if crewStore.details[req.crewId] == nil {
-                        await crewStore.refreshDetail(req.crewId)
-                    }
-                    guard let detail = crewStore.details[req.crewId] else {
-                        crewStore.postSystemNotice(
-                            crewId: req.crewId,
-                            text: "起 session 失败：拉不到 crew 详情，brief 已丢弃：\(req.brief.prefix(60))…")
-                        continue
-                    }
-                    let kind: LocalCodingAgentKind? = req.runner.flatMap {
-                        $0 == "claude" ? .claudeCode : ($0 == "codex" ? .codex : nil)
-                    }
-                    do {
-                        try await sessionRunner.startForBrief(
-                            detail: detail, backend: model.backend, brief: req.brief,
-                            runnerOverride: kind, isolation: req.isolation,
-                            model: req.model, effort: req.effort, title: req.title)
-                    } catch {
-                        // fail-loud（#541）：此前只落 lastStartError（UI 横幅），机长
-                        // 那边毫无动静 —— 排队派出去的 brief 就此蒸发。现在同时 @机长。
-                        sessionRunner.reportStartFailure(
-                            crewId: req.crewId, brief: req.brief, error: error)
-                    }
-                }
-            }
-        }
-        // session 自切模型/effort（set_session_profile）：claude 注入 /model /effort,
-        // codex 白板说明。数组语义同 sessionSpawnRequests（防同 tick 丢命令）。
-        .onChange(of: crewStore.profileChangeRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.profileChangeRequests = []
-            Task { for req in reqs { await sessionRunner.applyProfileChange(req) } }
-        }
-        // 定时唤醒登记（schedule_wakeup）→ runner 持久化 + 挂定时器。
-        .onChange(of: crewStore.wakeupRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.wakeupRequests = []
-            for req in reqs { sessionRunner.scheduleWakeup(req) }
-        }
-        // 机长 session 操作（inspect / nudge / stop）→ runner 执行 + 写应答文件。
-        .onChange(of: crewStore.sessionOpsRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.sessionOpsRequests = []
-            for req in reqs { sessionRunner.applySessionOp(req) }
-        }
-        // 机长 change_workdir（改工作目录 + 迁 agent 上下文）。规划要看在跑的 run，
-        // 那份状态只有 runner 有 —— 所以和 sessionOps 一样在这儿接线：算完/干完把
-        // 文本写回应答文件，机长那侧的 long-poll 就拿到预览或回执了。
-        .onChange(of: crewStore.workdirChangeRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.workdirChangeRequests = []
-            for req in reqs {
-                let text = WorkdirChangeCommand.run(req, runs: sessionRunner.runs)
-                LocalCrewControlStore.shared.writeCommandResponse(
-                    crewId: req.crewId, commandId: req.commandId, text: text)
-                Task { await crewStore.refreshDetail(req.crewId) }
-            }
-        }
-        // 群聊收听登记（listen；#465）→ runner 登记 + 白板观察 + 广播直投。
-        .onChange(of: crewStore.listenRequests) { _, reqs in
-            guard !reqs.isEmpty else { return }
-            crewStore.listenRequests = []
-            for req in reqs { sessionRunner.applyListen(req) }
-        }
-        // 跨 crew 汇报线消息 → 唤醒目标 crew 机长（#463）。idle 才直投注入（busy
-        // 的机长下轮白板注入自然看到）；机长没在跑 → **直接拉起**（@ 唤醒语义：
-        // 不在跑不能只留白板），开场 prompt 带上这条消息;拉起失败才落白板注记。
-        .onChange(of: crewStore.crewMessageWakes) { _, wakes in
-            guard !wakes.isEmpty else { return }
-            crewStore.crewMessageWakes = []
-            for wake in wakes {
-                let captainRun = sessionRunner.runs.first {
-                    $0.crewId == wake.targetCrewId && $0.role == .captain && $0.status == .running
-                }
-                if let run = captainRun {
-                    if !run.backend.isBusy {
-                        run.send(CrewLocalMentionInjectLogic.renderInjection(
-                            messageText: wake.text, senderName: wake.senderLabel))
-                    }
-                } else {
-                    Task {
-                        do {
-                            guard let backend = model.backend else { throw CancellationError() }
-                            let detail = try await backend.getCrew(wake.targetCrewId)
-                            try await sessionRunner.startCaptain(
-                                detail: detail, backend: backend,
-                                wakeText: "\(wake.senderLabel)：\(wake.text)")
-                        } catch {
-                            LocalWhiteboardStore.shared.appendSessionMessage(
-                                crewId: wake.targetCrewId, sessionId: "system",
-                                text: "收到「\(wake.senderLabel)」的消息，但自动拉起机长失败：\(error.localizedDescription)。",
-                                senderName: "系统")
-                        }
-                    }
-                }
-            }
-        }
-        // 额度快照更新 → 过按档位计算的提醒线、且未临近重置时按 runner 分流广播
-        // （按重置周期去重；门槛/时机/事实文案见 QuotaWarningPlan）。
-        // 两家快照由 runner 自己从 QuotaCenter 现取，这里只招呼一声。
-        .onChange(of: quotaCenter.claude) { _, _ in
-            sessionRunner.broadcastQuotaWarningIfNeeded()
-        }
-        .onChange(of: quotaCenter.codex) { _, _ in
-            sessionRunner.broadcastQuotaWarningIfNeeded()
-        }
         // 去掉 toolbar 底部那条灰色分隔线（详见 WindowSeparatorRemover）。tick 传
         // selectedCrewId —— 切 crew 时借 updateNSView 重设，抢在 SwiftUI 把它重置回去之后。
         .background(WindowSeparatorRemover(tick: crewStore.selectedCrewId ?? ""))
         .task {
-            // app 重启后重挂持久化的定时唤醒（schedule_wakeup 不因重启失约）。
-            sessionRunner.rearmWakeups()
-            // 成员状态快照定时器（机长 list_sessions 的数据源）。
-            sessionRunner.startSessionsSnapshotTimer()
-            // 本地 mention 唤醒器（wake-resilience 根因修复）：session/机长
-            // post_to_crew 的定向 @ → 注入 idle run / 拉起缺席目标。幂等。
-            if sessionRunner.localMentionWaker == nil {
-                let waker = CrewLocalMentionWaker(
-                    runner: sessionRunner, backendProvider: { model.backend })
-                sessionRunner.localMentionWaker = waker
-                waker.start()
-            }
+            // 长期职责（编排器/中继/唤醒器/两个轮询中心/用量监视 + 那一串编排
+            // 订阅）全在 SessionHost 里起，这里只招呼一声。幂等。
+            sessionHost.start(model: model, crewStore: crewStore)
             // 首次进入时把列表 + subjects 都拉一遍 —— subjects 用于创建
             // crew sheet 的 picker，提前 prefetch 避免 sheet 打开时空。
             await crewStore.refreshList()
@@ -240,15 +76,6 @@ struct MacThreePaneView: View {
             // 机器清单（侧栏按机器分组的数据源）由 authenticatedRoot.task 的
             // registerSelfMachine + refreshMachines 负责（它包着 MacThreePaneView，
             // 首屏即跑），登录态切换再由 PendingCrewApp.onChange 刷一次 —— 这里不重复。
-            // relay 同步代理常开（幂等启动）；未登录时 tick 是 no-op。
-            // sessionRunner 一并注入 —— relay 拉到 task_request 时在本机自动
-            // 起 session（#242 遥控 v1），与 inspector 手动起的 run 同一个切换条。
-            sessionHost.relay.start(appModel: model, sessionRunner: sessionRunner)
-        }
-        .onAppear {
-            AppUpdater.shared.isBusy = { [weak sessionRunner] in
-                sessionRunner?.runs.contains { $0.status == .running } ?? false
-            }
         }
     }
 }
