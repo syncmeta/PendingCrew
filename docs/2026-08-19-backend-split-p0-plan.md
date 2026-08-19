@@ -62,7 +62,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'gene
   - `static func resolve(argv: [String], backendFlag: String?) -> ProcessRole`
   - `static var current: ProcessRole`（进程内只算一次）
 
-- [ ] **Step 0: 确认 LocalRunner 目录在两个 target 里都是整目录纳入**
+- [x] **Step 0: 确认 LocalRunner 目录在两个 target 里都是整目录纳入**
 
 ```bash
 grep -n "Sources/Mac/LocalRunner" project.yml
@@ -70,7 +70,7 @@ grep -n "Sources/Mac/LocalRunner" project.yml
 
 预期：两处（app target 一处、test target 一处）。**如果只有一处，把缺的那处补上再继续**，否则新文件不会被编译，后面所有步骤都会以奇怪的方式失败。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 新建 `Tests/PendingCrewTests/ProcessRoleTests.swift`：
 
@@ -131,7 +131,7 @@ final class ProcessRoleTests: XCTestCase {
 #endif
 ```
 
-- [ ] **Step 2: 跑测试确认它失败**
+- [x] **Step 2: 跑测试确认它失败**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
@@ -140,7 +140,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 预期：编译失败，`cannot find 'ProcessRole' in scope`。
 
-- [ ] **Step 3: 写最小实现**
+- [x] **Step 3: 写最小实现**
 
 新建 `Sources/Mac/LocalRunner/ProcessRole.swift`：
 
@@ -189,7 +189,7 @@ enum ProcessRole: String {
 #endif
 ```
 
-- [ ] **Step 4: 跑测试确认它通过**
+- [x] **Step 4: 跑测试确认它通过**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
@@ -198,7 +198,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 预期：`Test Suite 'ProcessRoleTests' passed`，5 条全过。
 
-- [ ] **Step 5: 重生工程并提交**
+- [x] **Step 5: 重生工程并提交**
 
 ```bash
 xcodegen

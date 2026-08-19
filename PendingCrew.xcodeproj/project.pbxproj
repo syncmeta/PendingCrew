@@ -308,6 +308,7 @@
 		8FBD95AE30967AF50F5CBFD0 /* WorkspaceSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D2D7E9257F84AADDF8BD909 /* WorkspaceSetupTests.swift */; };
 		902AF2700BDF817359CF22CB /* CreateCrewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A3C8AAD5F35F08DAC72F931 /* CreateCrewSheet.swift */; };
 		91EE4232C8883E1AE6FA4E60 /* CrewChatRefreshGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA08BEA4EC77F9304EC252 /* CrewChatRefreshGate.swift */; };
+		925788E9058181C1F9963F60 /* ProcessRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B4829144C42B8EC8550EBD /* ProcessRole.swift */; };
 		9347FC62A561CF8BFD786EC0 /* CrewDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE268DAD47EF9D09BA481621 /* CrewDirectory.swift */; };
 		93864A012F832F77B88FE34A /* QuotaRingLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC47F84B3A1CB404ADDA14E9 /* QuotaRingLayout.swift */; };
 		939E2030BF3C9753C1F54C67 /* CodexThreadItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE34BA1080CD0D29F160C9A6 /* CodexThreadItem.swift */; };
@@ -334,6 +335,7 @@
 		A2B010B68657346369784FF7 /* ProjectSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E37F2CBED6AB4D98B6B7425 /* ProjectSyncService.swift */; };
 		A2EF3DA159444D2FA80648BE /* CrewMailboxWakeLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F40D59113575AA4C63F7C17 /* CrewMailboxWakeLogic.swift */; };
 		A47AB832FB4F2E968FDAE540 /* CodexRPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60A91B2E730386ADCD52A3B9 /* CodexRPCMessage.swift */; };
+		A480B1CDA9AAD37FA08C5198 /* ProcessRoleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D32A75D450B97F384C440342 /* ProcessRoleTests.swift */; };
 		A4E099C910B5400D8A645F0C /* LocalCodingAgentExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */; };
 		A4E148969B130D4DA1A5646E /* ColorHex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85701E0A44CE34A85B831771 /* ColorHex.swift */; };
 		A5BE8F0CD8972F4E3561FB7A /* SessionProfileSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */; };
@@ -512,6 +514,7 @@
 		F2043412C601F5DF98BC83E8 /* SessionHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BB2FDABEF05224B243CE704 /* SessionHealth.swift */; };
 		F2FDB106DDDBDE7EAE73A174 /* CrewSessionStateDerivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0DC6F1A1D280B23B63BA84A /* CrewSessionStateDerivationTests.swift */; };
 		F31E1336842FAD56B712AAB8 /* MachineGroupingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86C11AF588B698D08A77D2F /* MachineGroupingTests.swift */; };
+		F3FD0332567FD6AD80E4FE17 /* ProcessRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B4829144C42B8EC8550EBD /* ProcessRole.swift */; };
 		F3FE93BE64E53CE32FA8CA42 /* CrewLocalMentionWakeLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A3F32F8E8CF679E9828A4C /* CrewLocalMentionWakeLogic.swift */; };
 		F406C388A44A3EBBA538E929 /* LocalRunnerPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CC4D38A8ADADF050411F604 /* LocalRunnerPlaceholder.swift */; };
 		F43C89BB52209762B9A07489 /* LocalTodoStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24169ABE6E0F33196E22C001 /* LocalTodoStoreTests.swift */; };
@@ -647,6 +650,7 @@
 		4103430667D47097C3FB9037 /* UpdateSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateSettingsSection.swift; sourceTree = "<group>"; };
 		42F31D2E3BD084EEFE454085 /* CrewListenLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewListenLogicTests.swift; sourceTree = "<group>"; };
 		437EC206ED3E345A7C0E304B /* CrewChildCreationTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChildCreationTargetTests.swift; sourceTree = "<group>"; };
+		43B4829144C42B8EC8550EBD /* ProcessRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRole.swift; sourceTree = "<group>"; };
 		444418D7EB5A989E86228CD0 /* WorkspaceGitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceGitTests.swift; sourceTree = "<group>"; };
 		4452E801174262B66265E9B7 /* PendingCrewAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCrewAPI.swift; sourceTree = "<group>"; };
 		449915257B6A7A1C5057BA06 /* CrewRelayHubLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRelayHubLogicTests.swift; sourceTree = "<group>"; };
@@ -831,6 +835,7 @@
 		D13CB4287864AEB5C5A8FECC /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		D1A9FCA930C6487C96B9A211 /* MacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRootView.swift; sourceTree = "<group>"; };
 		D2432C5B09BB0FC752307F79 /* LocalCrewStoreOrgMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCrewStoreOrgMoveTests.swift; sourceTree = "<group>"; };
+		D32A75D450B97F384C440342 /* ProcessRoleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRoleTests.swift; sourceTree = "<group>"; };
 		D36E53A3EEA55369A75ADB82 /* McpPermissionHookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpPermissionHookTests.swift; sourceTree = "<group>"; };
 		D4368B745709AF4685183778 /* CrewPasteAttachmentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPasteAttachmentsTests.swift; sourceTree = "<group>"; };
 		D44095AB668456416C8960C2 /* LocalWakeupStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalWakeupStoreTests.swift; sourceTree = "<group>"; };
@@ -963,6 +968,7 @@
 				2CC4D38A8ADADF050411F604 /* LocalRunnerPlaceholder.swift */,
 				DE16EE932E2CBB87B2A7D691 /* LocalSessionLaunch.swift */,
 				DAA3C19B41EF18AA3378B768 /* PlainTerminalSession.swift */,
+				43B4829144C42B8EC8550EBD /* ProcessRole.swift */,
 				BE174F684386551180E6B50C /* QuotaWarningPlan.swift */,
 				937DEE031D3D9DA550B8AFCA /* SessionBackend.swift */,
 				69B4AFC537A8402CC846122F /* SessionConfig.swift */,
@@ -1189,13 +1195,6 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		5E4BBC3286F9E0957A1D0A0B /* Fixtures */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Fixtures;
-			sourceTree = "<group>";
-		};
 		6783BFF7A796E79A75BEB76A /* Support */ = {
 			isa = PBXGroup;
 			children = (
@@ -1410,6 +1409,7 @@
 				04D483AE4AA363994E5FEE6F /* MultiProcessJSONStoreReadFailureTests.swift */,
 				3F6A7589E05154A7718F7B10 /* NoSwiftUIRepeatForeverTests.swift */,
 				DA44DF2D442B3A564929D554 /* PermissionRelayLogicTests.swift */,
+				D32A75D450B97F384C440342 /* ProcessRoleTests.swift */,
 				1D7BE1F16FD824A5099B2D08 /* ProjectSyncServiceTests.swift */,
 				76C210B9708141CE1293B918 /* PromptTemplateTests.swift */,
 				2D271DB3CF14DAC4F915C249 /* QuotaRingLayoutTests.swift */,
@@ -1444,7 +1444,6 @@
 				E785F722D418A95C0988384E /* WorkspaceRepoLayoutTests.swift */,
 				16896B310BE02FA39332BAAC /* WorkspaceRepoServiceTests.swift */,
 				1D2D7E9257F84AADDF8BD909 /* WorkspaceSetupTests.swift */,
-				5E4BBC3286F9E0957A1D0A0B /* Fixtures */,
 			);
 			path = PendingCrewTests;
 			sourceTree = "<group>";
@@ -1908,6 +1907,7 @@
 				8BAE00F15D98D768928BCF42 /* Platform.swift in Sources */,
 				37E9586B5C65BBD58EB74F3C /* PlatformImage.swift in Sources */,
 				D0314E5A7888AB1A42BEA8AA /* PlatformModifiers.swift in Sources */,
+				925788E9058181C1F9963F60 /* ProcessRole.swift in Sources */,
 				40E2977EF88E7144A6CC4E0C /* ProjectSyncService.swift in Sources */,
 				092A82A123D30DFE80145B50 /* PromptTemplate.swift in Sources */,
 				F9CA1E459F346741BBC14AB5 /* QuotaCenter.swift in Sources */,
@@ -2159,6 +2159,8 @@
 				A70F6F04E48909328C3577F6 /* PlainTerminalSession.swift in Sources */,
 				B5588EFE93ACB994195E47BF /* Platform.swift in Sources */,
 				765C61EBEB8DA35CEFAD299F /* PlatformImage.swift in Sources */,
+				F3FD0332567FD6AD80E4FE17 /* ProcessRole.swift in Sources */,
+				A480B1CDA9AAD37FA08C5198 /* ProcessRoleTests.swift in Sources */,
 				A2B010B68657346369784FF7 /* ProjectSyncService.swift in Sources */,
 				4EC6387C889A5F2802EBF8C3 /* ProjectSyncServiceTests.swift in Sources */,
 				055DFE844FB3BA1547AEC159 /* PromptTemplate.swift in Sources */,
