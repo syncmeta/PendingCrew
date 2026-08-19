@@ -69,7 +69,7 @@
   - `var lastOutputAt: Date`
   - `static let scrollbackLines = 10_000`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 新建 `Tests/PendingCrewTests/AgentSessionCoreTests.swift`：
 
@@ -155,7 +155,7 @@ private final class ByteBox: @unchecked Sendable {
 
 > `SessionConfig.plainShellForTesting()` 需要你按 `SessionConfig` 的真实构造器补一个 `#if DEBUG` 的测试构造（或直接在测试里构造一个最小 config）。**先读 `Sources/Mac/LocalRunner/SessionConfig.swift` 再决定怎么写** —— 别硬套上面的名字。上面的 `await MainActor.run` 包法也要按 core 实际的隔离标注调整；**测试的形状可以改，要断言的三件事不能少**：无画面能读到画面、`onOutput` 给出原始字节、`stop()` 真的停掉。
 
-- [ ] **Step 2: 跑测试确认它失败**
+- [x] **Step 2: 跑测试确认它失败**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
@@ -164,7 +164,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 预期：编译失败，`cannot find 'AgentSessionCore' in scope`。
 
-- [ ] **Step 3: 实现 core 的骨架**
+- [x] **Step 3: 实现 core 的骨架**
 
 新建 `Sources/Mac/LocalRunner/AgentSessionCore.swift`。**结构照抄 `HeadlessTerminal.swift`**（它就是官方给的「无画面终端 + 本地进程」组合），再加上我们要的东西：
 
@@ -300,7 +300,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
 
 > `TerminalDelegate` 的必需方法集合以**编译器报错为准** —— SwiftTerm 1.18 的协议可能与上面列的不完全一致，缺哪个补哪个空实现。`TerminalOptions` 的 `scrollback` 字段名同理，编不过就照 `TerminalOptions.swift` 改。
 
-- [ ] **Step 4: 加进 project.yml（如需）并跑测试**
+- [x] **Step 4: 加进 project.yml（如需）并跑测试**
 
 `Sources/Mac/LocalRunner` 是整目录纳入，通常不用改 `project.yml`。确认一下再跑：
 
@@ -313,7 +313,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 预期：三条测试全过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add Sources/Mac/LocalRunner/AgentSessionCore.swift \
