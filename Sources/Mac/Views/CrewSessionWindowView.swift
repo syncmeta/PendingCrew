@@ -40,10 +40,6 @@ struct CrewSessionWindowView: View {
     @State private var captainBotId: String?
     /// 待审批卡的回复草稿，按 permission_request_id 存。
     @State private var replyDrafts: [String: String] = [:]
-    /// Sessions this app has already claimed+run (or is running), so the
-    /// auto-claim loop (K: captain-created queued sessions) doesn't double-run
-    /// them. Includes both manual starts and auto-claimed ones.
-    @State private var handledSessionIds: Set<String> = []
     /// 未读角标的轻量刷新计数（chunk2 T6）—— 每次白板变更事件自增，逼 badgeCount
     /// 重算（store 数据在文件里，无 ObservableObject 推送）。Phase 5 把驱动从 2s
     /// 墙钟 timer 换成 `whiteboardChanges` 订阅：agent 经 `post_to_crew` 写白板
@@ -66,10 +62,6 @@ struct CrewSessionWindowView: View {
         .frame(maxWidth: .infinity)
         // 无 navigationTitle —— 这是 inspector 内容,标题会漏到主窗标题栏(显成
         // "Session" 盖掉 crew 名)。窗标题由中栏 toolbar 的 crew 名负责。
-        // K (edge→Mac channel): for the selected crew, auto-claim + run sessions
-        // the captain queued on the server (status='queued'). local_host = this
-        // Mac is the executor; the captain just creates the queued row on edge.
-        .task(id: crewStore.selectedDetail?.crew.id) { await autoClaimLoop() }
         // 成员列表模式要的白板/roster 数据 —— 事件驱动订阅（去 3s 轮询，与中栏各订各的）。
         .task(id: crewStore.selectedDetail?.crew.id) { await subscribeRoster() }
         // 切前台 = 看过了：清掉新选中 run 的未读（T6）。
@@ -824,7 +816,6 @@ struct CrewSessionWindowView: View {
         // 遥控可跟看）在 block 3（信箱）重建本地↔edge 绑定后再启用 ——
         // 此前恒为 nil，prepareServerSession 保留不删，届时复用。
         let serverLink: CrewSessionServerLink? = nil
-        if let sid = serverLink?.sessionId { handledSessionIds.insert(sid) }
         do {
             var cfg = SessionConfig(
                 kind: selectedKind,
@@ -876,12 +867,10 @@ struct CrewSessionWindowView: View {
                 userInitiated: true
             )
             // 指令已在 argv 里(positional prompt)—— 不再等 REPL 就绪 sleep + 事后注入。
-            // server link 恢复启用（block 3）后，登录态 run 同步接 waker + permission
-            // relay（#204）——与 auto-claim 路径一致；现 serverLink 恒 nil 时不跑。
-            if let link = serverLink {
-                attachMailboxWaker(crewId: detail.crew.id, api: link.api)
-                attachPermissionRelay(crewId: detail.crew.id, sessionId: link.sessionId, api: link.api)
-            }
+            // 登录态 run 的信箱唤醒 / 审批中继接线在这里删掉了（前后端分离 P0）：
+            // `serverLink` 恒 nil，这条接线从来没被走到过。实现仍在
+            // `CrewSessionRunner.ensureMailboxWaker` / `ensurePermissionRelay`，
+            // 等 edge session 通道真开时由那边接，别再从视图接。见 docs/tech-debt.md。
             draft = ""
         } catch {
             localError = error.localizedDescription
@@ -939,103 +928,6 @@ struct CrewSessionWindowView: View {
                                          label: String? = nil) -> (settings: String?, mcp: String?) {
         LocalSessionLaunch.prepareLocalCommsConfig(
             crewId: crewId, sessionId: sessionId, captain: captain, label: label)
-    }
-
-    // MARK: - auto-claim (K: captain-created queued sessions)
-
-    /// Poll the crew's server sessions; when something queues one on edge (e.g.
-    /// remote control from the phone, status='queued') and this Mac is free,
-    /// claim it + run it locally with the crew's working dir. 登录态能力叠加,
-    /// gate 用 isAuthenticated。
-    /// 接合 v2：本地 crew 与 edge 队列的绑定在 block 3（信箱）重建后再启用 ——
-    /// 本地 crew id 目前在 edge 没有对应行，轮询只会空转。loop 保留不删，届时翻开关。
-    private var edgeQueueBindingReady: Bool { false }
-
-    private func autoClaimLoop() async {
-        guard edgeQueueBindingReady else { return }
-        while !Task.isCancelled {
-            if appModel.isAuthenticated,
-               let detail = crewStore.selectedDetail,
-               sessionRunner.current == nil || sessionRunner.current?.status != .running,
-               let api = try? appModel.loggedAPIClient(),
-               let sessions = try? await api.listCrewSessions(crewId: detail.crew.id) {
-                if let queued = sessions.first(where: { $0.status == "queued" && !handledSessionIds.contains($0.id) }) {
-                    handledSessionIds.insert(queued.id) // claim-once guard before the await
-                    await runQueuedSession(queued, detail: detail, api: api)
-                }
-            }
-            try? await Task.sleep(nanoseconds: 4_000_000_000) // 4s
-        }
-    }
-
-    /// Claim + run an already-created (captain-queued) session. Mirrors the
-    /// manual start but skips createSession (the row already exists).
-    private func runQueuedSession(_ s: CrewSessionSummary, detail: CrewDetail, api: PendingCrewAPI) async {
-        guard let wd = detail.crew.workingDirectory, !wd.isEmpty else { return }
-        let dir = URL(fileURLWithPath: (wd as NSString).expandingTildeInPath)
-        do {
-            let subjects = try await api.listMySubjects()
-            guard let subjectId = subjects.first?.id else { return }
-            let hostId = try await appModel.ensureRunnerHost(
-                api: api,
-                subjectId: subjectId,
-                allowedRunnerKinds: [
-                    LocalCodingAgentKind.claudeCode.serverRunnerKind,
-                    LocalCodingAgentKind.codex.serverRunnerKind,
-                ].compactMap { $0 }
-            )
-            _ = try await api.claimSession(runnerHostId: hostId, sessionId: s.id)
-            let link = CrewSessionServerLink(api: api, runnerHostId: hostId, sessionId: s.id)
-            let kind: LocalCodingAgentKind = s.runnerKind.contains("codex") ? .codex : .claudeCode
-            // codex 走 app-server：世界观经 developerInstructions、MCP 经 mcpServers dict
-            // 传入（claude 的 hook/settings 文件通道在此 auto-claim 路径本就没接）。
-            var codexDevInstructions: String? = nil
-            var codexMcp: [String: Any]? = nil
-            if kind == .codex {
-                codexDevInstructions = await renderWorldModelString(
-                    detail: detail, taskBrief: s.taskBrief, workdir: dir, sessionId: s.id)
-                let workerLabel = kind.displayName + " · " + String(s.id.prefix(6))
-                codexMcp = LocalSessionLaunch.codexMcpServers(
-                    crewId: detail.crew.id, sessionId: s.id, label: workerLabel)
-            }
-            try await sessionRunner.start(
-                crewId: detail.crew.id,
-                sessionId: s.id,
-                config: SessionConfig(kind: kind, initialPrompt: s.taskBrief),
-                workingDirectory: dir,
-                taskBrief: s.taskBrief,
-                serverLink: link,
-                developerInstructions: codexDevInstructions,
-                codexMcpServers: codexMcp
-            )
-            // 登录态 run → 接上事件驱动唤醒（Phase 4b）：一个 crew 一条 hub 连接，
-            // 收到「该 crew 有动静」→ 拉本 session inbox → 空闲且有@我的项 → 注入唤醒。
-            attachMailboxWaker(crewId: detail.crew.id, api: api)
-            // 登录态 run → 接上 permission relay（#204 permission over WS）：
-            // 本地待审批实时推给远端 viewer，远端 allow/deny 经 WS 回来解 hook 阻塞。
-            attachPermissionRelay(crewId: detail.crew.id, sessionId: s.id, api: api)
-            // taskBrief 已在 argv —— 不再 0.6s sleep + send(brief)。
-        } catch {
-            localError = "自动认领 session 失败: \(error.localizedDescription)"
-            handledSessionIds.remove(s.id) // allow a retry next poll
-        }
-    }
-
-    /// 登录态 run 起好后接上 crew 的事件驱动唤醒 waker（Phase 4b）。需要
-    /// device-grant token + baseURL —— 用 `appModel.imageAuth`（同一对 (baseURL,
-    /// token)）取，非登录态返回 nil 时静默跳过（理论上走到这里必登录，防御性）。
-    private func attachMailboxWaker(crewId: String, api: PendingCrewAPI) {
-        guard let auth = appModel.imageAuth else { return }
-        sessionRunner.ensureMailboxWaker(
-            crewId: crewId, api: api, baseURL: auth.baseURL, token: auth.token)
-    }
-
-    /// 登录态 run 起好后接上本 session 的 permission relay（#204）。依赖同
-    /// waker：device-grant token（runner:write）+ baseURL；非登录态静默跳过。
-    private func attachPermissionRelay(crewId: String, sessionId: String, api: PendingCrewAPI) {
-        guard let auth = appModel.imageAuth else { return }
-        sessionRunner.ensurePermissionRelay(
-            crewId: crewId, sessionId: sessionId, api: api, baseURL: auth.baseURL, token: auth.token)
     }
 
     /// `taskBrief` is the session's first instruction — the edge requires a

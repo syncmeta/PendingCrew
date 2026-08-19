@@ -569,7 +569,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Modify: `Sources/Mac/Views/MacRootView.swift`
 - Modify: `Sources/Mac/Services/SessionHost.swift`
 
-- [ ] **Step 1: 每 session 的两个后台服务改由 runner 自己接线**
+- [x] **Step 1: 每 session 的两个后台服务改由 runner 自己接线**
 
 `CrewSessionWindowView.swift:882,1013,1027-1031`（`CrewMailboxWaker`）与 `:883,1016,1035-1039`（`SessionPermissionRelay`）现在是**视图在展示某个 session 时**才去 `ensureMailboxWaker` / `ensurePermissionRelay`。
 
@@ -579,7 +579,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 > 动手前先读一遍这两处：`grep -n "ensureMailboxWaker\|ensurePermissionRelay" Sources/`，把参数（api / baseURL / token 从哪来）看清楚 —— 视图里能拿到的登录态，runner 里未必是同一条路径。**拿不到就在群里问，不要凭猜换来源。**
 
-- [ ] **Step 2: 视图不许再写共享账本**
+- [x] **Step 2: 视图不许再写共享账本**
 
 `MacRootView.swift:168` 里视图直接调了 `LocalCrewControlStore.shared.writeCommandResponse(...)`（`change_workdir` 的回执）。这一整段随 Task 3 的 `workdirChangeRequests` 订阅一起搬进 `SessionHost` 后，视图里就不该再有这一行。
 
@@ -591,7 +591,7 @@ grep -rn "LocalCrewControlStore.shared.write\|LocalWhiteboardStore.shared.append
 
 预期：`CrewTodoFollowUp.swift` 那几处是**用户在界面上的操作**（人点了追问/重开），属于界面职责，留着；除此之外应当为零。有别的就在汇报里点名。
 
-- [ ] **Step 3: 删掉那条被关着的死循环**
+- [x] **Step 3: 删掉那条被关着的死循环**
 
 `CrewSessionWindowView.swift:949-968` 有一条 4s 的 edge queued-session auto-claim 轮询，被 `:952` 的 `edgeQueueBindingReady` 恒 `false` 关着 —— 死代码。**删掉整段**，别把它搬进后台。
 
@@ -603,7 +603,7 @@ grep -n "edgeQueueBindingReady" Sources/
 
 若发现别处会把它置真，**停手改为在群里报告**，不要删。
 
-- [ ] **Step 4: 编译 + 全量测试 + 提交**
+- [x] **Step 4: 编译 + 全量测试 + 提交**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' build 2>&1 | tail -5
@@ -641,7 +641,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `ProcessRole.current`（Task 1）
 
-- [ ] **Step 1: 先把六处启动方法找出来**
+- [x] **Step 1: 先把六处启动方法找出来**
 
 ```bash
 grep -n "func start" Sources/Mac/Services/*.swift
@@ -649,7 +649,7 @@ grep -n "func start" Sources/Mac/Services/*.swift
 
 把结果抄进任务笔记 —— 下面每一处都要加同一行。
 
-- [ ] **Step 2: 逐个加断言**
+- [x] **Step 2: 逐个加断言**
 
 每个 `start`（或等价启动方法）的**第一行**加：
 
@@ -667,7 +667,7 @@ grep -n "func start" Sources/Mac/Services/*.swift
     /// 而那种症状事后基本查不出来。
 ```
 
-- [ ] **Step 3: 编译 + 全量测试**
+- [x] **Step 3: 编译 + 全量测试**
 
 ```bash
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' build 2>&1 | tail -5
@@ -678,7 +678,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 
 ⚠️ 如果**测试**因为这些 precondition 挂了，说明有单测在 `.helper` 或 `.viewer` 角色下起这些服务 —— 那是真发现，不是误报。停下来在群里报告，别把断言改松。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add Sources/Mac/Services/

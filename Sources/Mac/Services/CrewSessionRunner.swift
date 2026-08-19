@@ -232,6 +232,12 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 登录态 run 起好后由 call site 调（同 `ensureMailboxWaker` 的时机与
     /// 依赖：device-grant token + baseURL）。幂等 —— 已有 relay 则 no-op。
+    ///
+    /// ⚠️ **当前没有任何调用点**（前后端分离 P0 查出）。原来的调用点在
+    /// `CrewSessionWindowView` 里，被 `let serverLink: CrewSessionServerLink? = nil`
+    /// 这条写死的 nil 挡着，从来没走到过 —— P0 已把那段死接线删掉，实现留在这里。
+    /// 等 edge session 通道（接合 v2 block 3）真开时由**这一侧**接上，别再从视图接。
+    /// 见 `docs/tech-debt.md`「登录态信箱唤醒与审批中继从未接通」。
     func ensurePermissionRelay(
         crewId: String, sessionId: String, api: PendingCrewAPI, baseURL: URL, token: String
     ) {
@@ -975,6 +981,12 @@ final class CrewSessionRunner: ObservableObject {
     /// 登录态 run 启动后由 call site 调（传入已鉴权的 `api` + device-grant `token`
     /// + `baseURL`）。已存在则只补拉一次 inbox（刚起的 run 可能已有@我的待处理项，
     /// 不等下一个 hub 事件）。
+    ///
+    /// ⚠️ **当前没有任何调用点**（前后端分离 P0 查出）。原来的调用点在
+    /// `CrewSessionWindowView` 里，被 `let serverLink: CrewSessionServerLink? = nil`
+    /// 这条写死的 nil 挡着，从来没走到过 —— P0 已把那段死接线删掉，实现留在这里。
+    /// 等 edge session 通道（接合 v2 block 3）真开时由**这一侧**接上，别再从视图接。
+    /// 见 `docs/tech-debt.md`「登录态信箱唤醒与审批中继从未接通」。
     func ensureMailboxWaker(crewId: String, api: PendingCrewAPI, baseURL: URL, token: String) {
         if let existing = mailboxWakers[crewId] {
             Task { await existing.drain() }   // 新 run 加入，补一次
