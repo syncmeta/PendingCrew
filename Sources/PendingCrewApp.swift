@@ -6,6 +6,11 @@ import SwiftUI
 struct PendingCrewApp: App {
     @StateObject private var model: AppModel
     @StateObject private var crewStore: CrewStore
+    #if os(macOS)
+    /// 长期职责的唯一所有者（spec §6）。**必须挂在 App 上而不是任何视图上** ——
+    /// 挂视图上就会随视图生灭，那正是我们要修的病。
+    @StateObject private var sessionHost = SessionHost()
+    #endif
     /// Captain 模板池(BYOK 模式的"本机 captain 池",spec v2 §5.2)。
     /// 登录态下也注入但 UI 不消费 —— 登录态走真 bot 库(后续 task)。
     @StateObject private var captainTemplates = CaptainTemplateStore.shared
@@ -34,6 +39,9 @@ struct PendingCrewApp: App {
                 .environmentObject(model)
                 .environmentObject(crewStore)
                 .environmentObject(captainTemplates)
+                #if os(macOS)
+                .environmentObject(sessionHost)
+                #endif
                 // 外观跟随设置(跟随系统/浅/深)。`.system` → nil → 跟随 OS。
                 // 同时覆盖 macOS + iOS/iPadOS。对齐 PendingBot #299。
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)

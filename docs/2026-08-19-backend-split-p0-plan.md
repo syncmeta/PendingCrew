@@ -235,7 +235,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
   - `var usage: LocalAgentUsageMonitor`
   - `func start(model: AppModel, crewStore: CrewStore)`（幂等）
 
-- [ ] **Step 1: 建 SessionHost（只搬持有权，先不搬 .onChange）**
+- [x] **Step 1: 建 SessionHost（只搬持有权，先不搬 .onChange）**
 
 新建 `Sources/Mac/Services/SessionHost.swift`：
 
@@ -313,7 +313,7 @@ final class SessionHost: ObservableObject {
 #endif
 ```
 
-- [ ] **Step 2: app 级持有并注入**
+- [x] **Step 2: app 级持有并注入**
 
 `Sources/PendingCrewApp.swift`：在 `@StateObject private var crewStore: CrewStore` 旁边加
 
@@ -335,7 +335,7 @@ final class SessionHost: ObservableObject {
 
 > 动手前先 `grep -n "environmentObject(crewStore)" Sources/PendingCrewApp.swift` 找到全部注入点，**每一处都要补**（漏一处会在运行时崩在 `@EnvironmentObject` 找不到）。
 
-- [ ] **Step 3: 三个视图改成观察者**
+- [x] **Step 3: 三个视图改成观察者**
 
 `Sources/Mac/Views/MacRootView.swift`：
 
@@ -377,7 +377,7 @@ final class SessionHost: ObservableObject {
 > ```
 > **动手前先 `grep -n "usageMonitor" Sources/Mac/Views/CrewSidebarView.swift` 看它到底被怎么用**：如果只在 `Text(LocalAgentUsageMonitor.formatTokens(n))` 这种静态方法上用（`:378`、`:385` 看起来就是），那它根本不需要重绘订阅，直接计算属性即可，上面这一整段顾虑作废。**以 grep 结果为准。**
 
-- [ ] **Step 4: 编译三端**
+- [x] **Step 4: 编译三端**
 
 ```bash
 xcodegen
@@ -389,7 +389,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'gene
 
 此时 app 的行为已经**坏了一半**（`.task` 里的启动还在 MacRootView 里、`.onChange` 还在），Task 3 会补齐。**所以本任务不单独运行 app 验证，只要求编译过。**
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add project.yml PendingCrew.xcodeproj/project.pbxproj \

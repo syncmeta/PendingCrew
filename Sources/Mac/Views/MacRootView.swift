@@ -14,16 +14,15 @@ import AppKit
 ///（docs/tech-debt.md「inspector 被切」那条回归）。
 ///
 /// Sidebar / Center / SessionWindow 都用 @EnvironmentObject 拿 CrewStore + AppModel；
-/// CrewSessionRunner 是 view-local（一个窗口一份，多 run 并存由它自己管，见 chunk2 T1）。
+/// CrewSessionRunner 归 app 级的 `SessionHost` 持有（前后端分离 P0）——这里只观察，不创建。
 struct MacThreePaneView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
-    @StateObject private var sessionRunner = CrewSessionRunner()
-    /// 额度中心（侧栏 start;这里观察快照变化做警戒广播）。
+    /// 长期职责的唯一所有者（spec §6）—— app 级持有，视图只观察不创建。
+    @EnvironmentObject private var sessionHost: SessionHost
+    private var sessionRunner: CrewSessionRunner { sessionHost.runner }
+    /// 额度中心（SessionHost start;快照变化的警戒广播也归 SessionHost 订阅）。
     @ObservedObject private var quotaCenter = QuotaCenter.shared
-    /// edge 信箱同步代理（接合 v2 block 3）—— window 级常驻，登录态下对已
-    /// 接入 PendingBot 的 crew 跑 5s 拉/推循环。
-    @StateObject private var relayAgent = CrewRelayAgent()
     /// 左 sidebar 可见性 —— 由原生 sidebar 折叠开关控制（默认 `.all`：三栏全开）。
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -244,7 +243,7 @@ struct MacThreePaneView: View {
             // relay 同步代理常开（幂等启动）；未登录时 tick 是 no-op。
             // sessionRunner 一并注入 —— relay 拉到 task_request 时在本机自动
             // 起 session（#242 遥控 v1），与 inspector 手动起的 run 同一个切换条。
-            relayAgent.start(appModel: model, sessionRunner: sessionRunner)
+            sessionHost.relay.start(appModel: model, sessionRunner: sessionRunner)
         }
         .onAppear {
             AppUpdater.shared.isBusy = { [weak sessionRunner] in

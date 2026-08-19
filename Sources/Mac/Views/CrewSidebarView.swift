@@ -25,7 +25,8 @@ struct CrewSidebarView: View {
     /// 家族凭据里的真实显示名 —— subjects 还没拉回来(或拉取失败)时的标题兜底,
     /// 避免 footer 显示"已登录"占位。generic 凭据(无 displayName)不算。
     @State private var credentialDisplayName: String?
-    @StateObject private var usageMonitor = LocalAgentUsageMonitor()
+    /// 长期职责的唯一所有者（spec §6）—— 用量监视归它持有，这里只观察。
+    @EnvironmentObject private var sessionHost: SessionHost
     @ObservedObject private var quota = QuotaCenter.shared
     /// 层级 / 时间流（Todo #50）。写 UserDefaults，与外观模式同一条持久化路子 ——
     /// 用户切过一次，下次开 app 还停在那儿。默认层级（不动现有肌肉记忆）。
@@ -61,8 +62,6 @@ struct CrewSidebarView: View {
             // 让 user 始终能看见"我现在以谁的身份在花钱"。
             identityFooter
         }
-        // 额度中心 + 可用模型表中心一起常开（都是幂等启动、都要落文件给 helper 读）。
-        .task { quota.start(); ModelCatalogCenter.shared.start() }
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
         // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
         // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由
@@ -125,7 +124,6 @@ struct CrewSidebarView: View {
                 .environmentObject(model)
                 .frame(minWidth: 420, minHeight: 480)
         }
-        .onAppear { usageMonitor.start() }
     }
 
     // MARK: - 视图切换（层级 / 时间流）
@@ -366,29 +364,8 @@ struct CrewSidebarView: View {
     }
 
     /// 今日 CC / Codex token 用量小字行（两项都 nil 时隐藏）。
-    @ViewBuilder
     private var agentUsageLine: some View {
-        let cc = usageMonitor.claudeTodayTokens
-        let cx = usageMonitor.codexTodayTokens
-        if cc != nil || cx != nil {
-            HStack(spacing: 6) {
-                if let n = cc {
-                    HStack(spacing: 2) {
-                        Text("Claude")
-                        Text(LocalAgentUsageMonitor.formatTokens(n))
-                    }
-                }
-                if cc != nil, cx != nil { Text("·") }
-                if let n = cx {
-                    HStack(spacing: 2) {
-                        Text("Codex")
-                        Text(LocalAgentUsageMonitor.formatTokens(n))
-                    }
-                }
-            }
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-        }
+        AgentUsageLine(monitor: sessionHost.usage)
     }
 
     // identity 三件套只在已登录 footer 渲染(未登录 footer 是登录菜单,
@@ -411,6 +388,40 @@ struct CrewSidebarView: View {
         model.clearAuth()
         // crewStore.reset() 由 RootView 监听登录态变化自动调,
         // 不在这里重复 wire 以避免双触发顺序歧义。
+    }
+}
+
+/// 今日 CC / Codex token 用量小字行（两项都 nil 时隐藏）。
+///
+/// 单独成 View 是因为它读 `LocalAgentUsageMonitor` 的 `@Published`：monitor 现在
+/// 由 app 级 `SessionHost` 持有（前后端分离 P0），侧栏从 `sessionHost.usage` 取到的
+/// 计算属性拿不到刷新 —— 得有个 `@ObservedObject` 才会随它重绘。
+private struct AgentUsageLine: View {
+    @ObservedObject var monitor: LocalAgentUsageMonitor
+
+    @ViewBuilder
+    var body: some View {
+        let cc = monitor.claudeTodayTokens
+        let cx = monitor.codexTodayTokens
+        if cc != nil || cx != nil {
+            HStack(spacing: 6) {
+                if let n = cc {
+                    HStack(spacing: 2) {
+                        Text("Claude")
+                        Text(LocalAgentUsageMonitor.formatTokens(n))
+                    }
+                }
+                if cc != nil, cx != nil { Text("·") }
+                if let n = cx {
+                    HStack(spacing: 2) {
+                        Text("Codex")
+                        Text(LocalAgentUsageMonitor.formatTokens(n))
+                    }
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
     }
 }
 

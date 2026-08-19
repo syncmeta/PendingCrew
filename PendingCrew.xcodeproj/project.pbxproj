@@ -130,6 +130,7 @@
 		4553DD6A124DBDAE9BABA0B4 /* ChatCodeBlockRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5BD109F24112A63BFE678D6 /* ChatCodeBlockRenderTests.swift */; };
 		455CDF65E099EAF95CDCB358 /* CrewLoginExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79A72EA93DFADA5C2FFF1954 /* CrewLoginExchange.swift */; };
 		45D975F513800EED97366F86 /* CrewBubbleSelectionOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1486E525D7299C2A93C4853 /* CrewBubbleSelectionOwnerTests.swift */; };
+		466B9AD72281B8F44E05E38A /* SessionHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9E2B2219863BD12B066E3C /* SessionHost.swift */; };
 		469E2D78C9AA56F8108AFCE5 /* SessionProxyClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91D666530B88778AF9E03A37 /* SessionProxyClient.swift */; };
 		470D540DFCC76B8234C1258A /* InMemoryAuthStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5908EBD3AB592D0B2DDF6C53 /* InMemoryAuthStorageTests.swift */; };
 		47999E599AF8C4DC363E6FFF /* CockpitRoadmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B58FDB03CAE29769929979F2 /* CockpitRoadmapView.swift */; };
@@ -711,6 +712,7 @@
 		6A4FBE88C4EE22D059C9E4D0 /* TodoListPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoListPresentation.swift; sourceTree = "<group>"; };
 		6B9B8D3528EFD0CDCB2D2765 /* WorkdirMigrationExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationExecutorTests.swift; sourceTree = "<group>"; };
 		6C09067E3C1637408FEED8F2 /* PendingCrewApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCrewApp.swift; sourceTree = "<group>"; };
+		6C9E2B2219863BD12B066E3C /* SessionHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHost.swift; sourceTree = "<group>"; };
 		6DC96033C34D0F52DAC35549 /* CrewChatWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatWindowTests.swift; sourceTree = "<group>"; };
 		6DF772B8B2CDA31EC1209797 /* ModelCatalogCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalogCenter.swift; sourceTree = "<group>"; };
 		6FDCC99A15C5B160DB0D82DD /* BreathingDotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreathingDotView.swift; sourceTree = "<group>"; };
@@ -1086,6 +1088,7 @@
 				483CACFDBC40DE9D8B588BF3 /* LocalAgentUsageMonitor.swift */,
 				6DF772B8B2CDA31EC1209797 /* ModelCatalogCenter.swift */,
 				B1726EF91AEA2E677DC7BB02 /* QuotaCenter.swift */,
+				6C9E2B2219863BD12B066E3C /* SessionHost.swift */,
 				E23AE5148E95C7F88396A5DA /* WorkdirChangeCommand.swift */,
 			);
 			path = Services;
@@ -1924,6 +1927,7 @@
 				D9D094DE3C39F9662B62B800 /* SessionConfig.swift in Sources */,
 				4AF0F34346789C815463BC1B /* SessionForegroundClaim.swift in Sources */,
 				4F36A7C796D84FFE4B6349C7 /* SessionHealth.swift in Sources */,
+				466B9AD72281B8F44E05E38A /* SessionHost.swift in Sources */,
 				2A98D9201F9EBB912AA7A70C /* SessionLaunchOptions.swift in Sources */,
 				63E2BAB5C22A7CE4D7071C4B /* SessionLaunchParameterEcho.swift in Sources */,
 				6503FF564F0B6C814B5A6AFC /* SessionLaunchProbe.swift in Sources */,
