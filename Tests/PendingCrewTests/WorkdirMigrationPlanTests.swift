@@ -23,7 +23,11 @@ final class WorkdirMigrationPlanTests: XCTestCase {
               previousWorkingDirectory: previous, parentCrewIds: parents)
     }
 
-    private func session(_ crewId: String, _ agentId: String, kind: String = "claude",
+    /// `kind` 的默认值**故意写死字面量 `"claude_code"`** —— 账本里存的就是
+    /// `LocalCodingAgentKind.rawValue`。这里原本默认 `"claude"`，于是整套测试全绿、
+    /// 真迁移时一条会话都没搬（2026-08-19）。不要改成从 enum 取值：测试要钉的正是
+    /// 「磁盘上那个字符串」，从同一个 enum 取值会让 rawValue 被改名时测试跟着漂。
+    private func session(_ crewId: String, _ agentId: String, kind: String = "claude_code",
                          name: String = "成员") -> WorkdirMigrationPlan.AgentSessionInput {
         .init(crewId: crewId, sessionId: "local-" + agentId, kind: kind,
               agentSessionId: agentId, memberName: name)
@@ -462,6 +466,31 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     }
 
     // MARK: - codex
+
+    // MARK: - runner 名（2026-08-19 真迁移暴露的漏判）
+
+    /// 账本里 claude 那条腿存的是 `claude_code`。判定必须认它，否则整批会话被
+    /// 当成「不认识的 runner」跳过 —— 首次真迁移就是这样搬了 0 条。
+    func testClaudeCodeRunnerNameIsRecognized() {
+        XCTAssertEqual(LocalCodingAgentKind.claudeCode.rawValue, "claude_code",
+                       "账本写的是 rawValue；改了它就要同步 WorkdirMigrationPlan 的判定")
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: oldDir)],
+                   sessions: [session("c1", "aaa", kind: "claude_code", name: "成员")]),
+            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
+        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
+        XCTAssertFalse(p.skips.contains(.unknownAgentKind(kind: "claude_code", memberName: "成员")),
+                       "claude_code 不该被当成不认识的 runner")
+    }
+
+    /// 旧账本里可能还留着 `claude`（写入方换成 rawValue 之前的行）——一并认，别漏搬。
+    func testLegacyClaudeRunnerNameStillRecognized() {
+        let p = WorkdirMigrationPlan.make(
+            inputs(crews: [crew("c1", "本群", dir: oldDir)],
+                   sessions: [session("c1", "aaa", kind: "claude", name: "成员")]),
+            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
+        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
+    }
 
     /// codex 的会话按日期+threadId 存、resume 显式带新 cwd → 不用搬，但要在预览里说出来。
     func testCodexSessionsAreNotMovedButReported() {

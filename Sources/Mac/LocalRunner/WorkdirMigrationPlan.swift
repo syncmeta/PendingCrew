@@ -63,7 +63,9 @@ enum WorkdirMigrationPlan {
         let crewId: String
         /// 本机 session id（成员身份）—— 也用来对上「这个成员此刻是不是还活着」。
         let sessionId: String
-        /// runner 名："claude" / "codex"。判定只认这两个，别的当「不认识 → 不搬」。
+        /// runner 名 —— 账本里存的是 `LocalCodingAgentKind.rawValue`，即
+        /// **`claude_code`** / `codex`（旧账本可能是 `claude`，一并认）。
+        /// 别的当「不认识 → 不搬」。
         let kind: String
         /// agent 那侧的会话号：claude 的 session uuid / codex 的 threadId。
         let agentSessionId: String
@@ -388,10 +390,15 @@ enum WorkdirMigrationPlan {
                 plan.affectedMembers.append(record.memberName)
             }
             switch record.kind.lowercased() {
-            case "codex":
+            case LocalCodingAgentKind.codex.rawValue:
                 plan.skips.append(.codexSessionNeedsNoMove(
                     agentSessionId: record.agentSessionId, memberName: record.memberName))
-            case "claude":
+            // 账本里存的是 `LocalCodingAgentKind.rawValue`，claude 那条腿是
+            // **`claude_code`** —— 这里原本只认字面量 "claude"，于是每一条 claude
+            // 会话都掉进 default 被当成「不认识的 runner」跳过（2026-08-19 首次真迁移
+            // 时暴露：88 个成员、搬 0 条）。改成认 enum 的 rawValue，别再写字面量；
+            // "claude" 只作旧账本的向后兼容留着。
+            case LocalCodingAgentKind.claudeCode.rawValue, "claude":
                 guard !liveSessionIds.contains(record.sessionId) else {
                     // 还活着 → 它正在写这份日志，现在搬会搬到半截。留待清扫。
                     plan.skips.append(.sessionStillLive(

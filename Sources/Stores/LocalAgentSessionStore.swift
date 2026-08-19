@@ -11,8 +11,10 @@ import Foundation
 /// 与 `LocalWakeupStore` 等同一套写法与硬化策略。单文件跨 crew 共用（行内带 crewId）。
 /// **自包含 Foundation**（编进 PendingCrewTests bundle 单测）。
 final class LocalAgentSessionStore: @unchecked Sendable {
-    /// 一条会话号记录。`kind` 是 runner 名（"claude" / "codex"），只作留痕/排查用，
-    /// 判定不依赖它。`updatedAt` = ISO8601 最近一次写入时刻。
+    /// 一条会话号记录。`kind` 是 runner 名 —— 写进来的是
+    /// `LocalCodingAgentKind.rawValue`（`claude_code` / `codex`），不是 `claude` ——
+    /// `WorkdirMigrationPlan` 按它决定「这条会话要不要搬」，所以它**不只是留痕**，
+    /// 写入方别改成别的字面量。`updatedAt` = ISO8601 最近一次写入时刻。
     struct Record: Codable, Equatable {
         let crewId: String
         let sessionId: String
