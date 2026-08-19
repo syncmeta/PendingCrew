@@ -89,7 +89,11 @@
 
 最后一条是最麻烦的：编排逻辑本身长在 SwiftUI 的 `.onChange` 里。**这是 P0 阶段的主要工作量**。
 
-完整清单见 `docs/2026-08-19-backend-split-inventory.md`。
+完整清单见 `docs/2026-08-19-backend-split-inventory.md`（23 条界面持有的后台职责、30 条定时器/轮询、逐条带文件行号）。清单又补出三条 P0 必须一并处理的：
+
+- **每 session 的两个后台服务是从视图接线的**：`CrewMailboxWaker`（信箱唤醒）与 `SessionPermissionRelay`（审批中继）由 `CrewSessionWindowView` 在展示 session 时创建、交给 runner 持有。**右栏没打开过那个 session，它们就没被接上** —— 这既是「关掉 app 就全停」的另一半，也是今天就存在的一个隐患。
+- `MacRootView` 还直接写了一次控制通道回应（`change_workdir` 的回执）—— 视图在写共享账本，P0 要一并收走。
+- `CrewSessionWindowView` 里有一条 4s 的 edge queued-session 轮询，被一个恒 `false` 的开关关着（死代码）。P0 顺手删掉，别把它搬进 daemon。
 
 ---
 
@@ -233,7 +237,11 @@ app 侧的 `RemoteSessionBackend` 实现 `SessionBackend`：收到 delta → 更
 | 写字节（`send` / `interrupt`） | 已在 `SessionBackend` 里 | daemon |
 | 读几何（行列数、滚动位置，外置滚动条用） | `TerminalGeometry` | app 侧（本地视图自己就有） |
 
-顺带修一个 bug：今天 `inspect_session` 读的是**用户当前视口**（用户手动上滚时机长读到的是滚动处的画面）。搬到 daemon 后读的是权威屏幕，与用户滚到哪无关 —— 严格变好。
+**顺带定死一个今天含糊的语义**：`inspect_session` 现在读的是 SwiftTerm 的**当前可见区**（按 `yDisp`）—— 也就是说**人把那个终端往上滚，机长看到的文本就跟着变**。后台进程没有「用户滚到哪」这个概念，所以搬家时必须选一个：
+
+> **选「权威屏幕」**：daemon 那份 `Terminal` 当前的屏幕内容（相当于永远贴底），与任何窗口的滚动位置无关。
+
+理由：机长要的是「它现在卡在哪一屏」，不是「人正在看哪一屏」。今天那个行为是实现细节漏出来的，不是设计。改完之后同一个 `sessionId` 在任何时刻问到的都是同一份画面 —— 严格变好，且可复现。
 
 ### 5.2 劈开后的两半
 
@@ -316,6 +324,17 @@ daemon 是 PTY 属主，所以 `TIOCSWINSZ` 只能由它发。
 | 界面状态（选中了哪个 crew、草稿、滚动位置） | app |
 
 app 对共享账本**只读**，用于显示。
+
+**共享文件不是一套模型，别当成一次「JSON store 迁移」**（调研清单 D 的结论）：
+
+| 模型 | 谁 | 搬家时怎么处理 |
+|---|---|---|
+| flock + read-modify-write | 白板 / Todo / 审批 / agent-sessions / wakeups | 天生多进程安全，**不用动** |
+| 无锁、一文件一命令、drain 后删 | crew-control（`.crewcmd.json` / `.crewresp.json`） | 不用动；但**排空方**要从 app 搬到 daemon（否则 helper 的命令没人接） |
+| 单 writer + 原子整写 | `crew-sessions.json` / `quota.json` / `models.json` / `local-crews.json` | **必须换 writer**：从 app 换成 daemon。这四个是「单 writer」假设，两个进程同时写就是无声的互相覆盖 —— 双头在这里最致命 |
+| UserDefaults（**不是**跨进程 store） | `SessionUnreadStore`（上次看到哪儿） | **留在 app**。它记的是「用户看到哪儿了」，本来就是界面状态，不该搬 |
+
+另有一条顺序约束：「清除本机所有数据」会删掉整个 Application Support 目录（`LocalDataReset`）。**分家后必须先停 daemon 再删**，否则 daemon 会立刻把刚删掉的快照重新写回来。这条要在 P4 落地时一并处理。
 
 ### 6.2 三道闸门（不靠自觉）
 
