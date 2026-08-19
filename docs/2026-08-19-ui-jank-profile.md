@@ -169,16 +169,89 @@ Foundation 的 `String.contains` 走 `BidirectionalCollection._range(of:anchored
 - 指纹门依赖的性质本来就有单测（`DirectoryWatchCoalescingTests`：白板 append 必
   yield、别人写状态文件不 yield、别的 crew 变了不 yield、文件从无到有算变化）。
 
-## 还欠一次现场复采（**Todo #59 因此不能算完**）
+## 现场复采（2026-08-19 13:15–13:21，装上新版之后）
 
-上面全是函数级数字，**不是对线上进程的 `sample` 复采** —— 复采得先装一次新版
-app（要人按 ⌘Q，所有 session 会断），不在这条分支能做的范围内。
+**结论：四条全部在真进程上兑现，没有一条被推翻。** 复采条件按上一节写死的两条判据核，
+两条都过；另外抓到一条修前被 `squeeze` 完全淹没、现在浮上来当第一名的新项目（见文末）。
 
-装上之后要重跑的两个场景，以及"算过"的标准：
+### 复采环境
 
-1. **开着不动 + 刚起一个 session** —— 采样里应当**看不到** `squeeze` /
-   `_opaqueComplexCharacterStride` 那一族叶子；进程 CPU 不再接近 100%。
-2. **2 个以上 session 在跑时打字/滚动** —— `dataReceived` 子树占主线程应当
-   远低于现在的 7.9%/session。这也是本报告唯一没实测到的场景（见上面「已知边界」）。
+- 采样对象：`/Applications/PendingCrew.app`，0.1.13 (**20684.16770**)，pid 1343，macOS 26.6.1 / arm64。
+- **包里刻的提交 = `main` HEAD**：`Info.plist` 的 `BuildStampCommit = a4f8f5dfd8c4…`，
+  与采样时的 `git rev-parse HEAD` 一致，工作区干净 —— 跑着的确实是带这四条修复的版本。
+- 符号化：线上二进制仍是 strip 的（`nm -U` 只剩 579 个定义符号，自己的帧一律 `???`）。
+  用**同一 commit 本地重编的 Release** 二进制 + `atos -offset` 符号化。
+  等价性核过：两者 arm64 `__TEXT` 的 `vmaddr 0x100000000` / `vmsize 0x960000` 完全相同。
+  934 个待符号化偏移解出 931 个。
+- 工具：`sample(1)` + `top(1)`。**没有驱动任何图形界面、没有模拟输入**；负载由机长在群里派活制造。
+- 原始采样件不入库，留在会话 scratchpad（`s0-current` / `s1-steady8` / `s2-launchA` / `s3-steadyB`）。
 
-复采结果贴回本文件之后，#59 才能翻 completed。已记进 `docs/tech-debt.md`。
+### 四份采样
+
+| 编号 | 时刻 | 时长 | 现场 |
+|---|---|---|---|
+| S0 | 13:15:52 | 10 s | 7 个 session 在跑，**其中 3 个正处在拉起后的 45 秒窗口内** |
+| S1 | 13:17:33 | 12 s | 9 个 session，1 个仍在窗口内 |
+| **S2**（场景 A） | 13:18:17 | 90 s | 10 个 session；机长于 13:18:47 起了 1 个新 session，**它的 45 秒窗口整段落在采样内** |
+| **S3**（场景 B） | 13:20:34 | 30 s | 10 个 session、其中 6 个在忙；**没有任何 session 处在窗口内**（启动参数扫描器采样点为 0，反证窗口确实只有 45 秒） |
+
+### 主线程占用：修前 vs 修后
+
+百分比 = 该子树采样点 / 该次采样主线程总采样点（S0 8463、S1 10197、S2 76126、S3 24554）。
+
+| 项 | **修前**（2026-08-19 上午，同机同工具） | S0 | S1 | **S2 场景 A** | **S3 场景 B** |
+|---|---|---|---|---|---|
+| run loop **在干活**（`__CFRUNLOOP_IS_SERVICING_THE_MAIN_DISPATCH_QUEUE__`） | **97.7%**（*1 个* session 的窗口内） | 4.62% | 2.91% | **2.82%** | **2.16%** |
+| run loop **空闲**（`mach_msg2_trap`） | ≈ 0 | 84.4% | 94.3% | **92.2%** | **93.3%** |
+| `ActivityTerminalView.dataReceived` 整个子树 | **7.9%**（*1 个*忙碌 session） | 4.08% | 2.50% | **2.25%**（10 个） | **1.51%**（10 个 / 6 个在忙） |
+| ↳ `SessionLaunchParameterScanner.feed`（那段平方级的宿主） | 97.7% 的主体 | 2.28% | 1.15% | **0.67%** | **0**（无窗口） |
+| ↳↳ `SessionProfileEchoVerdict.squeeze` 本身 | **94%**（叶子合计 7923/8413） | 1.42% | 0.90% | **0.49%** | 0 |
+| ↳ `SessionHealthScanner.feed` + `RateLimitMenuScanner.feed` | **≈2.0%**（*1 个* session） | 0.82% | 0.72% | 0.78% | **0.67%**（10 个） |
+| ↳ `TypingActivityTracker`（「正在输入」指纹） | **5.7%**（*1 个* session） | 0.06% | 0.02% | 0.05% | **0.04%** |
+| `CrewLocalMentionWaker.scan`（白板重读） | **1.5%** | 0.07% | 0.02% | 0.07% | **0.05%** |
+| `MultiProcessJSONStore.withFileLock` | **1.7%** | 0.27% | 0.01% | 0.13% | **0.09%** |
+| `MultiProcessJSONStore.decodeRows` | 含在上面 | 0.35% | 0.07% | 0.20% | **0.14%** |
+
+### 进程 CPU
+
+`top -pid 1343 -s 2`，每格 2 秒（丢掉 top 恒为 0 的第一格）：
+
+| | 修前 | S2（45 格 / 90 s） | S3（15 格 / 30 s） |
+|---|---|---|---|
+| 场景 | *1 个* session 刚拉起、无人操作界面 | 10 个 session、期间起了 1 个新的 | 10 个 session、6 个在忙 |
+| CPU | **69–100%**（烧满一个核） | 中位 **8.2%**，5–10% 占 39/45 格 | 中位 **7.4%**，6–9% 占 12/15 格 |
+| 尖峰 | 持续 45 秒不下来 | 偶发 21/25/33/33/38/60%，都是单格（≤2 s）、不连续 | 12/23/63%，同样是单格 |
+
+尖峰是瞬时的、且主线程在整段采样里 92–93% 都空闲，所以它们不构成「打字不跟手」那种
+持续卡顿。没有进一步坐实尖峰的来源，**不当成结论写**。
+
+### 对两条判据的裁决
+
+1. **场景 A（刚起一个 session 的头 45 秒）—— 过，但判据的措辞要修正。**
+   原判据写的是「采样里应当**看不到** `squeeze` / `_opaqueComplexCharacterStride` 那一族叶子」。
+   实测**仍然看得到**，因为这段代码本来就还在跑（`--model` / `--effort` 回显该验还得验）——
+   它不是被删掉，是单价掉了两个数量级。诚实的说法是：`squeeze` 从主线程的 **94% 掉到 0.49%**，
+   `SessionLaunchParameterScanner` 整个子树从**主导项**掉到 **0.67%**，
+   run loop 从 **97.7% 在干活**变成 **92.2% 空闲**，CPU 从 **69–100%** 变成中位 **8.2%**。
+   S0 更狠：**3 个 session 的 45 秒窗口叠在一起**，`dataReceived` 子树也只有 4.08%。
+2. **场景 B（多 session 稳态）—— 过，而且是本次唯一一次真正实测到多 session。**
+   上一轮的 7.9% 是 **1 个**忙碌 session 的价钱，多 session 只是按线性叠加**推断**的。
+   S3 实测：**10 个 session（6 个在忙）合计 1.51%** —— 按在忙的算 **≈0.25%/session**，
+   比修前的 7.9%/session 低 **约 32 倍**；按全部 10 个算 0.15%/session。
+   换句话说，修前 5 个忙碌 session ≈ 主线程 40%，修后 10 个 session ≈ 主线程 1.5%。
+
+**没有任何一条函数级结论被复采推翻。**
+
+### 复采顺带抓到的两件事（都没修，只登记）
+
+1. **主线程上现在最大的单项不再是 PTY 扫描，而是一次目录枚举。**
+   `CrewStore.applyPendingRenames()` → `LocalCrewControlStore.drainRenames()`
+   → `-[NSFileManager contentsOfDirectoryAtURL:…]` → `getattrlistbulk`，**在主线程**，
+   四份采样里稳定占 **0.44%–0.72%**（S2 里连外层闭包算是 1.34%）。
+   它和已修的第 4 条（唤醒器全量重读）是同一族病：**主线程上的目录/文件轮询**。
+   量级比修前的任何一项都小两个数量级，但既然它现在是第一名，登记进 `docs/tech-debt.md`。
+2. **健康扫描的残余不在匹配上，在喂尾窗上。**
+   `SessionHealthScanner.feed` 的 0.47% 里有 0.4 个百分点落在 `AnsiPlainTextTail.feed`
+   的 `String.distance(from:to:)`（尾窗裁剪的 grapheme 走查）——
+   也就是说改成字节匹配之后，**匹配本身在采样里已经看不见了**，剩下的是维护尾窗那一步。
+   量级极小（全场 0.55%/10 个 session），一并登记，不在本次动。
