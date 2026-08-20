@@ -1,4 +1,9 @@
-// PendingCrew 的签名配置 —— 这份是**仓库默认值**，任何人 clone 下来都能直接编。
+// PendingCrew 的签名配置
+//
+// **这份文件必须待在子目录里，不能挪回仓库根目录。** XcodeGen 给「位于项目
+// 根目录的 config file」生成的是 `TEMP_<随机 UUID>` 引用 —— 每跑一次
+// `xcodegen` 那几个 id 就变一次，pbxproj 于是永远是脏的，CI 的漂移检查会
+// 天天红。放进子目录它才走正常的确定性 id 生成。2026-08-20 实测。 —— 这份是**仓库默认值**，任何人 clone 下来都能直接编。
 //
 // 默认走 ad-hoc（「Sign to Run Locally」）：不需要 Apple 开发者账号、不需要
 // 任何证书，`xcodebuild` 和 Xcode 都能把 app 编出来跑起来。开源贡献者不用改
@@ -12,7 +17,7 @@
 // 只跑本机 crew（起 claude / codex 子进程那条主路径）完全不受影响；要调云端
 // 登录相关的东西，就得用一个**稳定**的签名身份。
 //
-// 用稳定身份的做法：把 Local.xcconfig.example 复制成 Local.xcconfig
+// 用稳定身份的做法：把 Config/Local.xcconfig.example 复制成 Config/Local.xcconfig
 // （已在 .gitignore 里，不会被提交），填你自己的 Apple Team ID。下面这行
 // 可选 include 会把它的值盖上来。
 //
@@ -31,9 +36,9 @@ CODE_SIGN_IDENTITY[sdk=macosx*] = -
 // `$(AppIdentifierPrefix)com.pendingname.pendingcrew` —— 那个变量**只能由
 // provisioning profile 展开**。没 team 就没 profile，Xcode 会直接报
 // 「requires a provisioning profile」**编译失败**（不是警告）。所以仓库默认
-// 构建不带 entitlements；要它的人在 Local.xcconfig 里连同 team 一起打开。
+// 构建不带 entitlements；要它的人在 Config/Local.xcconfig 里连同 team 一起打开。
 // 少这个 entitlement 只影响云端登录用的钥匙串（device-grant token / 家族
 // 共享凭据）——本机 crew 那条主路径一次都不碰钥匙串。
 CODE_SIGN_ENTITLEMENTS =
 
-#include? "Local.xcconfig"
+#include? "Config/Local.xcconfig"

@@ -1,10 +1,10 @@
-// 复制成 `Local.xcconfig`（gitignored）就会被 Signing.xcconfig 末尾的
+// 复制成 `Config/Local.xcconfig`（gitignored）就会被 Config/Signing.xcconfig 末尾的
 // `#include?` 自动读进来，用来覆盖仓库默认的 ad-hoc 签名。
 //
-//     cp Local.xcconfig.example Local.xcconfig
+//     cp Config/Local.xcconfig.example Config/Local.xcconfig
 //
 // 什么时候需要它：你要动云端 crew 的登录 / 钥匙串相关代码，需要一个跨构建
-// **稳定**的签名身份（理由见 Signing.xcconfig 顶部的注释）。只跑本机 crew
+// **稳定**的签名身份（理由见 Config/Signing.xcconfig 顶部的注释）。只跑本机 crew
 // 的话不需要，仓库默认值就够。
 
 CODE_SIGN_STYLE = Automatic

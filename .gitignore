@@ -24,8 +24,8 @@ dist/
 # 生成：scripts/make-chat-fixtures.sh <crew-id>
 Tests/PendingCrewTests/Fixtures/
 
-# 本地签名覆盖（个人 Apple Team ID）—— 见 Local.xcconfig.example
-Local.xcconfig
+# 本地签名覆盖（个人 Apple Team ID）—— 见 Config/Local.xcconfig.example
+Config/Local.xcconfig
 
 # 环境 / 密钥
 .env

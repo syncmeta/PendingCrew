@@ -3,7 +3,7 @@
 # 签名证书和 Apple 公证凭据**一律不进 GitHub secrets** —— 那把 Developer ID
 # 证书能签任何冒充身份的 app，放进 CI 等于把它交给每一个能触发 workflow 的人。
 # 出包继续走本地那条路（scripts/release/build-macos-update.sh）。所以下面每一步
-# 都是**不需要任何凭据**的：仓库默认走 ad-hoc 签名（Signing.xcconfig），headless
+# 都是**不需要任何凭据**的：仓库默认走 ad-hoc 签名（Config/Signing.xcconfig），headless
 # 无证书环境能编能测。
 name: CI
 

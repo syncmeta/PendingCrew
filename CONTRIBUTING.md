@@ -77,7 +77,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 
 ```
 project.yml             XcodeGen 工程定义（唯一真值）
-Signing.xcconfig        签名默认值（ad-hoc）；本机覆盖写 Local.xcconfig
+Config/Signing.xcconfig        签名默认值（ad-hoc）；本机覆盖写 Config/Local.xcconfig
 Sources/
   Mac/                  macOS 专有：LocalRunner（agent 子进程）、Mac 界面
   Mcp/                  crew-comms MCP server —— agent 通过它读写白板、@ 人、请示

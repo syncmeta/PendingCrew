@@ -104,9 +104,9 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
   -destination 'platform=macOS' build
 ```
 
-**不需要 Apple 开发者账号。** 仓库默认走 ad-hoc 签名（`Signing.xcconfig`），
+**不需要 Apple 开发者账号。** 仓库默认走 ad-hoc 签名（`Config/Signing.xcconfig`），
 没有证书也能编能跑。只有要动云端登录 / 钥匙串那条路径时才需要一个稳定的签名
-身份 —— 那时把 `Local.xcconfig.example` 复制成 `Local.xcconfig`（已 gitignore）
+身份 —— 那时把 `Config/Local.xcconfig.example` 复制成 `Config/Local.xcconfig`（已 gitignore）
 填上你自己的 Team ID。
 
 跑测试（单测 bundle 只挂 macOS）：
@@ -133,7 +133,7 @@ AppKit 调用把 iOS 端静默打红。
 
 ```
 project.yml             XcodeGen 工程定义（唯一真值，别手改 .xcodeproj）
-Signing.xcconfig        签名默认值（ad-hoc）；本机覆盖写 Local.xcconfig
+Config/Signing.xcconfig        签名默认值（ad-hoc）；本机覆盖写 Config/Local.xcconfig
 Info.plist
 Sources/
   Mac/                  macOS 专有：LocalRunner（agent 子进程）、Mac 界面

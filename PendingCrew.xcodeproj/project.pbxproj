@@ -869,6 +869,7 @@
 		DA75E1A3179F360397B5D004 /* CrewLocalMentionDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalMentionDelivery.swift; sourceTree = "<group>"; };
 		DAA3C19B41EF18AA3378B768 /* PlainTerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlainTerminalSession.swift; sourceTree = "<group>"; };
 		DACB2F84E942D5B55DF6F7E0 /* CrewPasteboardReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPasteboardReader.swift; sourceTree = "<group>"; };
+		DB20C6F3D1CA40298B44A2FF /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		DB97F9F0E2E939FEA9FEFE63 /* CrewDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewDetail.swift; sourceTree = "<group>"; };
 		DBCB19133BA6F5A3A5BA7397 /* CockpitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitView.swift; sourceTree = "<group>"; };
 		DBD6F9E63BA640A9384FAFEF /* SyncEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngineTests.swift; sourceTree = "<group>"; };
@@ -929,7 +930,6 @@
 		FE0CACBC82045E85464C0CB1 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
 		FE733889935BCE71D20449F1 /* WorkdirMigrationPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationPlanTests.swift; sourceTree = "<group>"; };
 		FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminationTests.swift; sourceTree = "<group>"; };
-		"TEMP_DF833F0F-96EE-4CD5-B8EF-EA1C58EDF3DF" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1012,6 +1012,7 @@
 		06B799E6079BEBE594387E1D = {
 			isa = PBXGroup;
 			children = (
+				59981AC6D7E6FF40DC0F1A72 /* Config */,
 				4AD1CC10B8B6DC828B1B6894 /* Resources */,
 				AE335FA5A6491F889C43A671 /* Shared */,
 				9C62D8BCFC543E54564D379B /* Sources */,
@@ -1212,6 +1213,14 @@
 				4582D3CE1CE5FD5283FD5319 /* Prompts */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		59981AC6D7E6FF40DC0F1A72 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				DB20C6F3D1CA40298B44A2FF /* Signing.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		5E4BBC3286F9E0957A1D0A0B /* Fixtures */ = {
@@ -1593,14 +1602,6 @@
 				C1137590DE68DB2DA419FD41 /* WorkspaceSyncStore.swift */,
 			);
 			path = Stores;
-			sourceTree = "<group>";
-		};
-		"TEMP_26D5954C-204A-4CF6-BBF8-00BB56E9E89E" /* PendingCrew */ = {
-			isa = PBXGroup;
-			children = (
-				"TEMP_DF833F0F-96EE-4CD5-B8EF-EA1C58EDF3DF" /* Signing.xcconfig */,
-			);
-			path = PendingCrew;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -2337,7 +2338,7 @@
 		};
 		A86D65172FD75D0C60F216A6 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_DF833F0F-96EE-4CD5-B8EF-EA1C58EDF3DF" /* Signing.xcconfig */;
+			baseConfigurationReference = DB20C6F3D1CA40298B44A2FF /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -2446,7 +2447,7 @@
 		};
 		F6427DD3B86962FA7125BF09 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_DF833F0F-96EE-4CD5-B8EF-EA1C58EDF3DF" /* Signing.xcconfig */;
+			baseConfigurationReference = DB20C6F3D1CA40298B44A2FF /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

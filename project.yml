@@ -32,17 +32,17 @@ packages:
     url: https://github.com/LebJe/TOMLKit
     minVersion: 0.5.0
     maxVersion: 1.0.0
-# 签名策略**不写在这里** —— 在 `Signing.xcconfig`（仓库默认值：ad-hoc，任何人
+# 签名策略**不写在这里** —— 在 `Config/Signing.xcconfig`（仓库默认值：ad-hoc，任何人
 # clone 下来不改被跟踪的文件就能编）里，个人身份写进它 `#include?` 的
-# `Local.xcconfig`（gitignored，见 Local.xcconfig.example）。
+# `Config/Local.xcconfig`（gitignored，见 Config/Local.xcconfig.example）。
 #
 # 为什么要用 xcconfig 而不是写在下面的 settings.base 里：Xcode 的优先级是
 # 「target 设置 > target xcconfig > project 设置 > project xcconfig」——
 # 只要 DEVELOPMENT_TEAM 还留在 settings.base，它就会盖掉 xcconfig，本地覆盖
 # 永远不生效。所以这几个键必须从 settings 里**彻底移走**。
 configFiles:
-  Debug: Signing.xcconfig
-  Release: Signing.xcconfig
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -103,7 +103,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew
         PRODUCT_NAME: PendingCrew
         # CODE_SIGN_ENTITLEMENTS **故意不写在这里** —— 它跟签名身份是一套，
-        # 一起放在 Signing.xcconfig / Local.xcconfig（理由见 Signing.xcconfig）。
+        # 一起放在 Config/Signing.xcconfig / Config/Local.xcconfig（理由见 Config/Signing.xcconfig）。
         # 写在 target settings 里会盖掉 project 级 xcconfig，让本地覆盖失效。
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Info.plist

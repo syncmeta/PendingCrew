@@ -61,9 +61,9 @@
 - **量级**: 10 个 session 合计 0.55%，可忽略。登记只是为了留个坐标：下次谁再来压这条回调，第一刀应该切在尾窗裁剪（按 UTF-8 字节裁）而不是匹配上。
 
 
-### 🟡 仓库默认签名改成 ad-hoc —— 本机开发者不装 `Local.xcconfig` 会静默丢登录态
+### 🟡 仓库默认签名改成 ad-hoc —— 本机开发者不装 `Config/Local.xcconfig` 会静默丢登录态
 - **发现**: 2026-08-20 · 开源准备（签名解耦）
-- **位置**: `Signing.xcconfig`（仓库默认值）、`Local.xcconfig.example`、`project.yml` 的 `configFiles`。
+- **位置**: `Config/Signing.xcconfig`（仓库默认值）、`Config/Local.xcconfig.example`、`project.yml` 的 `configFiles`。
 - **为什么这么改**: 原来 `DEVELOPMENT_TEAM: M42BKJN82S` 硬编码在 `project.yml` 里，外部贡献者 clone 下来签不了名、编不过 —— 开源的第一道硬门槛。改成默认 ad-hoc 之后任何人都能编能跑。
 - **代价转嫁到哪**: `KeychainStore`（云端 crew 的 device-grant token）的 ACL 绑当前签名身份，ad-hoc 每次重建身份就变 → 反复弹「存取钥匙串」授权框或 `-34018` 存不住 → **登录态静默丢失**。这个坑 2026-06 已经踩过一次并用「稳定的 Apple Development 身份」根治过，现在把根治手段挪到了一个 **gitignored 的文件**里。
 - **谁受影响**: 只有要动云端登录/钥匙串那条路径的人。只跑本机 crew（起 claude / codex 子进程的主路径）完全不受影响 —— 那条路径不碰钥匙串。
