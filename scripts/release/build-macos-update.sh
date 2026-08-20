@@ -121,6 +121,15 @@ team_id="${PENDING_TEAM_ID:-M42BKJN82S}"
 cd "$snap/src"
 xcodegen generate
 
+# 为什么这里要显式传 CODE_SIGN_STYLE / DEVELOPMENT_TEAM / CODE_SIGN_ENTITLEMENTS：
+# 仓库里被跟踪的默认值（`Signing.xcconfig`）是 **ad-hoc、不带 entitlements**，
+# 好让外部贡献者 clone 下来就能编。开发机上那份 Developer ID 身份写在
+# `Local.xcconfig` 里，而它是 **gitignored** —— 上面那个干净快照
+# （`git worktree add`）里**根本没有这个文件**。所以发版必须在命令行上把三个
+# 键都补齐（命令行优先级最高），不能指望 xcconfig。
+# 漏掉 CODE_SIGN_ENTITLEMENTS 的话下面第 ④ 道断言会拦住（产物里没有
+# `$team_id.com.pendingname.shared`），但那要等到构建完才炸，不如在这儿说清。
+
 # 签名**全权交给 Xcode**（archive + exportArchive，Apple 官方的 Developer ID 分发路径）。
 #
 # 2026-08-06 的教训，两次出血同源：此前是 `CODE_SIGNING_ALLOWED=NO` 构建再手工
@@ -138,6 +147,7 @@ xcodebuild -project "$app_name.xcodeproj" -scheme "$app_name" -configuration Rel
   -destination 'generic/platform=macOS' -derivedDataPath "$derived" \
   -archivePath "$xcarchive" -allowProvisioningUpdates \
   CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$team_id" \
+  CODE_SIGN_ENTITLEMENTS="Resources/$app_name.entitlements" \
   ENABLE_HARDENED_RUNTIME=YES \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" archive
 # 注意：archive 阶段**不要**指定 CODE_SIGN_IDENTITY。自动签名 + 手工指定发布身份

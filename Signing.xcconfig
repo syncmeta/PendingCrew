@@ -26,4 +26,14 @@ DEVELOPMENT_TEAM =
 CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -
 CODE_SIGN_IDENTITY[sdk=macosx*] = -
 
+// entitlements 也必须跟着走，不能只换签名身份。
+// `Resources/PendingCrew.entitlements` 里的 keychain 组写成
+// `$(AppIdentifierPrefix)com.pendingname.pendingcrew` —— 那个变量**只能由
+// provisioning profile 展开**。没 team 就没 profile，Xcode 会直接报
+// 「requires a provisioning profile」**编译失败**（不是警告）。所以仓库默认
+// 构建不带 entitlements；要它的人在 Local.xcconfig 里连同 team 一起打开。
+// 少这个 entitlement 只影响云端登录用的钥匙串（device-grant token / 家族
+// 共享凭据）——本机 crew 那条主路径一次都不碰钥匙串。
+CODE_SIGN_ENTITLEMENTS =
+
 #include? "Local.xcconfig"

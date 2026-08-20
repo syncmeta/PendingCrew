@@ -926,7 +926,7 @@
 		FE0CACBC82045E85464C0CB1 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
 		FE733889935BCE71D20449F1 /* WorkdirMigrationPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationPlanTests.swift; sourceTree = "<group>"; };
 		FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminationTests.swift; sourceTree = "<group>"; };
-		"TEMP_434D1AED-C5D1-400A-8B91-69D9A5C938A0" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_8FC4B496-382A-4A9E-BD8B-2BC31A7D4419" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1591,10 +1591,10 @@
 			path = Stores;
 			sourceTree = "<group>";
 		};
-		"TEMP_743F55A6-21C4-40EC-BCAA-57068EB9C55C" /* PendingCrew */ = {
+		"TEMP_E9915A36-3177-4D47-9BC2-B5FD3C5EB677" /* PendingCrew */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_434D1AED-C5D1-400A-8B91-69D9A5C938A0" /* Signing.xcconfig */,
+				"TEMP_8FC4B496-382A-4A9E-BD8B-2BC31A7D4419" /* Signing.xcconfig */,
 			);
 			path = PendingCrew;
 			sourceTree = "<group>";
@@ -2287,7 +2287,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Resources/PendingCrew.entitlements;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -2311,7 +2310,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Resources/PendingCrew.entitlements;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -2333,7 +2331,7 @@
 		};
 		A86D65172FD75D0C60F216A6 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_434D1AED-C5D1-400A-8B91-69D9A5C938A0" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_8FC4B496-382A-4A9E-BD8B-2BC31A7D4419" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -2442,7 +2440,7 @@
 		};
 		F6427DD3B86962FA7125BF09 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_434D1AED-C5D1-400A-8B91-69D9A5C938A0" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_8FC4B496-382A-4A9E-BD8B-2BC31A7D4419" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

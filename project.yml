@@ -102,10 +102,9 @@ targets:
         "LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]": "$(inherited) @executable_path/../Frameworks"
         PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew
         PRODUCT_NAME: PendingCrew
-        # keychain-access-groups entitlement —— 让 KeychainStore 的
-        # data-protection 钥匙串项落进 app 自己的 access group(entitlement-gated)，
-        # macOS 上不再反复弹"存取钥匙串"授权框。对齐 PendingBot。
-        CODE_SIGN_ENTITLEMENTS: Resources/PendingCrew.entitlements
+        # CODE_SIGN_ENTITLEMENTS **故意不写在这里** —— 它跟签名身份是一套，
+        # 一起放在 Signing.xcconfig / Local.xcconfig（理由见 Signing.xcconfig）。
+        # 写在 target settings 里会盖掉 project 级 xcconfig，让本地覆盖失效。
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
