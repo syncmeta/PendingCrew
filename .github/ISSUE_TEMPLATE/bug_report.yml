@@ -1,0 +1,64 @@
+name: Bug 报告
+description: 有什么东西不按它该有的样子工作
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        动手之前先对一下这两条，能省掉双方的时间：
+
+        - **点了登录没反应 / 登不上**：这份开源仓库只带占位后端坐标，云端登录
+          开箱不可用，这是设计如此（见 README「状态」）。本地 crew 不需要登录。
+        - **iPad / iPhone 上看不到 Mac 上的 crew**：跨设备遥控不属于开源这一半，
+          也从未分发过 iOS 包。同样见 README「状态」。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 出了什么事
+      description: 你做了什么、期望看到什么、实际看到什么。
+      placeholder: |
+        1. 建了一个 crew，工作目录指向 ~/code/foo
+        2. 让机长起一个 codex session
+        3. 期望：session 出现在列表里并开始跑
+           实际：列表里出现了，但一直是「启动中」，终端一片空白
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: PendingCrew 版本
+      description: 关于 → 版本号；或者自己构建的话给个 commit。
+      placeholder: "0.1.13 (20684.16770)"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS 版本与机型
+      placeholder: "macOS 15.2 / M2 MacBook Air"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: 涉及哪个 agent CLI
+      multiple: true
+      options:
+        - Claude Code
+        - Codex CLI
+        - 都不涉及 / 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: |
+        `Console.app` 里按 PendingCrew 过滤，或者直接贴截图。
+        **贴之前请自己看一眼有没有把你的代码、路径、群聊内容带出来。**
+      render: shell

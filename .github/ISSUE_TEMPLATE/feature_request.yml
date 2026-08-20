@@ -1,0 +1,24 @@
+name: 想要个什么
+description: 一个想法、一个改进
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先说清楚期望：这是个人作品，还在快速变形期。想法欢迎，但不一定会做，
+        也不一定会很快回。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你实际卡在哪
+      description: |
+        **说问题，别只说方案。** 你当时想干什么、现在只能怎么绕过去 ——
+        这比「加个按钮」有用得多，因为解法往往不是你想的那个。
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你设想的样子（可选）
