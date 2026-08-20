@@ -69,11 +69,15 @@ final class CrewChatOpenCostTests: XCTestCase {
     /// fixture 是人类真实的群聊内容 + 5 张真实截图，**故意不入 git**（见 .gitignore），
     /// 所以在一台干净机器上它是缺的。
     ///
-    /// 缺了就**红**，不 `XCTSkip` —— 一个静默跳过的性能回归测试等于没有测试，
-    /// 而 #443 已经被「单测全绿、人类装上还是卡」坑过两次了。
-    private struct MissingFixtures: LocalizedError {
-        var errorDescription: String? { CrewChatOpenCostTests.fixtureHint }
-    }
+    /// **2026-08-20 从「缺了就红」改成「缺了就 skip」**（开源准备时干净 clone 实测
+    /// 撞上的）。原来的理由是「静默跳过的性能回归测试等于没有测试」—— 那个理由成立，
+    /// 但 `XCTSkip` **不是静默的**：报告里是独立的 skipped 状态，并原样打出下面那段
+    /// 带修复命令的 hint，绝不会被误读成「测过了、没问题」。
+    ///
+    /// 改的原因是它的代价落错了人：README 教所有人跑 `xcodebuild … test`，而任何一个
+    /// 刚 clone 下来的贡献者手上都不可能有这份 fixture —— 他做的第一件事就会得到一片
+    /// 红，然后去查一个根本不存在的故障。**「本机开发者忘了取数据」和「外部人第一次
+    /// clone」需要不同的对待，而红/绿这一个比特分不出这两者，skip 能。**
 
     private static let fixtureHint = """
 
@@ -89,17 +93,16 @@ final class CrewChatOpenCostTests: XCTestCase {
 
             ls "$HOME/Library/Application Support/PendingCrew/whiteboards"
 
-          本测试不静默跳过 —— 没有真数据的「打开成本」测量等于没测（造的数据量不出
-          真问题：本 crew 338 条比 LED 那 70 条还快）。
+          没有真数据就不测，而不是拿造的数据凑一个绿 —— 造的数据量不出真问题
+          （本 crew 338 条比 LED 那 70 条还快）。所以这里是 skip，不是 pass。
 
         """
 
-    /// 每个用例开头调一次：缺数据就带着修复办法直接红。
+    /// 每个用例开头调一次：缺数据就带着修复办法跳过（不是静默跳过，见上）。
     private func requireFixtures() throws {
         let json = Self.fixtureDir.appendingPathComponent("whiteboard.json")
         guard FileManager.default.fileExists(atPath: json.path) else {
-            XCTFail(Self.fixtureHint)
-            throw MissingFixtures()
+            throw XCTSkip(Self.fixtureHint)
         }
     }
 

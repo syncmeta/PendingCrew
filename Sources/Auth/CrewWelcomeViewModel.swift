@@ -131,10 +131,25 @@ final class CrewWelcomeViewModel: ObservableObject {
         stage = .enteringEmail
     }
 
+    /// 云端后端没配（仓库只带占位坐标）时，在**用户按下去那一刻**说清楚，
+    /// 而不是让他走到 Turnstile / 发码那一步撞一堵沉默的墙。
+    ///
+    /// 只拦用户主动发起的三条登录入口（邮箱 / Apple / Google），**不在启动
+    /// 路径上做任何事** —— 只想跑本地 crew 的人从头到尾不该被这件事打扰。
+    /// 判据是 `CrewHostedConfig.isConfigured`，唯一真值，填上真坐标那天这里
+    /// 自动不再拦。
+    private func hostedBackendUnavailable() -> Bool {
+        if CrewHostedConfig.isConfigured { return false }
+        errorText = CrewHostedConfig.unconfiguredNotice
+        Haptics.error()
+        return true
+    }
+
     /// Returns true if it actually advanced (email was valid).
     @discardableResult
     func advanceToHumanCheck() -> Bool {
         guard emailLooksValid else { return false }
+        if hostedBackendUnavailable() { return false }
         errorText = nil
         humanChoice = .undecided
         turnstileToken = nil
@@ -262,6 +277,7 @@ final class CrewWelcomeViewModel: ObservableObject {
 
     func beginApple() async {
         errorText = nil
+        if hostedBackendUnavailable() { return }
         isVerifying = true
         defer { isVerifying = false }
         do {
@@ -278,6 +294,7 @@ final class CrewWelcomeViewModel: ObservableObject {
 
     func beginGoogle() async {
         errorText = nil
+        if hostedBackendUnavailable() { return }
         isVerifying = true
         defer { isVerifying = false }
         do {

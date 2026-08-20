@@ -141,6 +141,9 @@ targets:
       # LocalRunner）引用 SessionProxyClient，所以两个都要带上。纯 Foundation。
       - path: Sources/Remote/SessionProxyProtocol.swift
       - path: Sources/Remote/SessionProxyClient.swift
+      # 云端后端坐标 + `isConfigured` 判据（纯 Foundation）。单测钉住「仓库里
+      # 必须还是占位值」—— 兼作泄密闸：谁提交了自己真实的项目坐标这里会红。
+      - path: Sources/Services/CrewHostedConfig.swift
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift
