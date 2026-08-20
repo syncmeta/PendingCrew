@@ -145,44 +145,63 @@ echo "note: build $build_number = $build_human（ASC 当前最高: $asc_highest�
 # 都按 cwd / SRCROOT 解析），和 macOS 那条一样。
 cd "$snap/src"
 
-# --- 5. archive --------------------------------------------------------------
-derived="$snap/derived"
-xcarchive="$snap/$app_name.xcarchive"
-
-# 为什么这里要显式传 CODE_SIGN_STYLE / DEVELOPMENT_TEAM / CODE_SIGN_ENTITLEMENTS：
+# --- 5. 签名参数：写进快照里现生成的 Config/Local.xcconfig ---------------------
 # 仓库里被跟踪的默认值（`Config/Signing.xcconfig`）是 **ad-hoc、不带 entitlements**，
 # 好让外部贡献者 clone 下来就能编。开发机上那份身份写在 `Config/Local.xcconfig`
 # 里，而它是 **gitignored** —— 上面那个干净快照里**根本没有这个文件**。所以发版
-# 必须在命令行上把三个键都补齐（命令行优先级最高），不能指望 xcconfig。
+# 必须自己把签名参数补齐，不能指望开发机上碰巧有一份。
 #
-# 签名**全权交给 Xcode**（archive + exportArchive，Apple 官方的 App Store 分发路径）。
-# 这里不出现任何一行手写的 codesign —— 手工复刻 Xcode 的签名行为在 macOS 那条上
-# 出过两次血（漏 $(AppIdentifierPrefix) 展开、漏 provisioning profile），教训见
-# build-macos-update.sh。
+# **为什么不像 macOS 那条一样写在 xcodebuild 命令行上**（这段别删，删了一定有人
+# 改回去，然后收到一屏看不懂的 SPM 报错）：命令行上的构建设置是**全局**的，连每个
+# SPM 依赖的 target 都吃。`CODE_SIGN_ENTITLEMENTS` 是相对 SRCROOT 的路径，于是
+# GoogleSignIn / SwiftTerm / swift-crypto…… 每个包都会拿
+# `Resources/PendingCrew.entitlements` 去自己的 checkout 目录里找，然后齐刷刷报
+# 「could not be opened」。2026-08-20 实测，十几个包一个不落。
+# macOS 那条没炸只是因为它的 identity 停在 ad-hoc（`-`），Xcode 根本没走到给这些
+# 包 target 签名那一步 —— 换成真身份就会炸，**不是 iOS 特有的坑**。
 #
+# 而 project 级 config file 只作用于**本工程的** target，SPM 包完全不受影响。
+# `Config/Signing.xcconfig` 末尾那行 `#include? "Config/Local.xcconfig"` 是按
+# SRCROOT 解析的（2026-08-20 用 -showBuildSettings 实测），所以这里写一份进快照就行。
+#
+# CODE_SIGN_IDENTITY 必须给一个真身份：iOS 上带 entitlements 的 app 不能 ad-hoc 签，
+# Xcode 会直接拒（"has entitlements that require signing with a development
+# certificate"）。archive 用**开发身份**，发布身份由下面 exportArchive 按
+# `method: app-store-connect` 重新签 —— 这是 Apple 官方的分发路径，签名全权交给
+# Xcode，脚本里不出现任何一行手写的 codesign（手工复刻 Xcode 的签名行为在 macOS
+# 那条上出过两次血，见 build-macos-update.sh）。
+cat > "$snap/src/Config/Local.xcconfig" <<XCCONFIG
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = $team_id
+CODE_SIGN_IDENTITY = Apple Development
+CODE_SIGN_ENTITLEMENTS = Resources/$app_name.entitlements
+XCCONFIG
+
+# --- 6. archive --------------------------------------------------------------
+derived="$snap/derived"
+xcarchive="$snap/$app_name.xcarchive"
+
 # `-allowProvisioningUpdates` + 三个 -authenticationKey* 让 xcodebuild 拿 ASC API key
-# 自己去开发者网站建/更新 App ID、profile 和云端管理的分发证书 —— 这台机器的钥匙串
-# 里只有 Apple Development 和 Developer ID，**没有 Apple Distribution**，全靠这条。
-#
-# archive 阶段**不要**指定 CODE_SIGN_IDENTITY：自动签名 + 手工指定发布身份会被
-# Xcode 判成 "conflicting provisioning settings" 直接失败（含每个 SPM 依赖）。
-# 发布身份由下面 exportArchive 按 `method: app-store-connect` 重新签。
+# 自己去开发者网站建/更新 App ID、profile 和证书 —— 这台机器的钥匙串里只有
+# Apple Development 和 Developer ID，**没有 Apple Distribution**，全靠这条。
 #
 # `-destination 'generic/platform=iOS'` 不能省、也不能只写 `-sdk iphoneos`：
 # PendingCrew 是**单 target 两平台**（supportedDestinations: [iOS, macOS]），
 # 不指明 destination 会打出 macOS 产物 —— .ipa 的外壳看不出这个错，所以下面
-# 第 ③ 道断言专门盯它。
+# 那道 ③ 断言专门盯它。
+#
+# 版本号两个键留在命令行上：它们全局生效也无害（SPM 包的 target 拿到也不会怎样），
+# 而且**必须**这样传 —— Info.plist 里写的是 $(MARKETING_VERSION) /
+# $(CURRENT_PROJECT_VERSION) 变量替换，不传值就会原样留下 project.yml 里的占位符。
 xcodebuild -project "$app_name.xcodeproj" -scheme "$app_name" -configuration Release \
   -destination 'generic/platform=iOS' -derivedDataPath "$derived" \
   -archivePath "$xcarchive" -allowProvisioningUpdates \
   -authenticationKeyPath "$asc_key_path" \
   -authenticationKeyID "$asc_key_id" \
   -authenticationKeyIssuerID "$asc_issuer_id" \
-  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$team_id" \
-  CODE_SIGN_ENTITLEMENTS="Resources/$app_name.entitlements" \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" archive
 
-# --- 6. exportArchive 出 .ipa ------------------------------------------------
+# --- 7. exportArchive 出 .ipa ------------------------------------------------
 # method 用 `app-store-connect`：Xcode 15.3 起 `app-store` 已经是 deprecated 别名
 # （`xcodebuild -help` 里写着 "app-store (deprecated: use app-store-connect)"）。
 #
@@ -214,7 +233,7 @@ xcodebuild -exportArchive -archivePath "$xcarchive" \
   -authenticationKeyID "$asc_key_id" \
   -authenticationKeyIssuerID "$asc_issuer_id"
 
-# --- 7. 八道断言 -------------------------------------------------------------
+# --- 8. 八道断言 -------------------------------------------------------------
 # 每一道都对应一种「包能出、能上传，然后在别处安静地坏掉」的失败。
 
 # ① 产物在不在。
@@ -301,18 +320,32 @@ if [ -f "$src_ent" ]; then
       done || exit 2
 fi
 
-# ⑧ get-task-allow 必须**不在**产物里。它是调试用（让 debugger attach），
-#    Development 签名会带；带着它的包上传 App Store 会被 ITMS-90xxx 拒。
-#    这条是 iOS 特有的，Developer ID 那边没有对应项 —— 别照抄 macOS 的清单就以为齐了。
-if printf '%s' "$built_ent" | grep -q 'get-task-allow'; then
-  echo "产物 entitlements 里有 get-task-allow —— 这是 development 签名，App Store 会拒收" >&2
+# ⑧ 这份 entitlements 必须真的是**发布**用的，不是开发用的。两条一起看：
+#    - `get-task-allow` 不能是 true。它是调试用的（让 debugger attach），
+#      development 签名会带 true；带着 true 上传会被 ITMS 拒。
+#      注意**不能只判「有没有这个键」** —— App Store 的正常产物里它是存在的、
+#      值为 `<false/>`（2026-08-20 实测），按「存在即失败」写会把好包判死。
+#    - `beta-reports-active` 必须是 true。这个键只有 **App Store 分发 profile**
+#      才会给，是「这一步真的按 app-store-connect 重签过、不是拿 archive 里那份
+#      开发签名蒙混过关」的正面证据。
+#    这两条都是 iOS 特有的，Developer ID 那边没有对应项 —— 别照抄 macOS 的清单
+#    就以为齐了。
+ent_plist="$work/entitlements.plist"
+printf '%s' "$built_ent" > "$ent_plist"
+if [ "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$ent_plist" 2>/dev/null)" = "true" ]; then
+  echo "产物 entitlements 里 get-task-allow = true —— 这是 development 签名，App Store 会拒收" >&2
+  exit 2
+fi
+if [ "$(/usr/libexec/PlistBuddy -c 'Print :beta-reports-active' "$ent_plist" 2>/dev/null)" != "true" ]; then
+  echo "产物 entitlements 里没有 beta-reports-active —— 这不是 App Store 分发 profile 签的，TestFlight 收不了" >&2
+  printf '%s\n' "$built_ent" >&2
   exit 2
 fi
 
 echo "note: 八道断言全过"
 ls -lh "$ipa"
 
-# --- 8. 上传 TestFlight ------------------------------------------------------
+# --- 9. 上传 TestFlight ------------------------------------------------------
 # 为什么必须显式传 `--apple-id $asc_app_id`：Xcode 26 的 altool 从 bundle id 反查
 # app 时会挑到**相似**的那个（fastlane#29698 / #29743：日志照样打
 # "Successfully uploaded"，实际传去了别的 app）。这个团队下正好有
