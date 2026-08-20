@@ -1,0 +1,4 @@
+# XcodeGen 官方 release 里 `xcodegen.zip` 的 SHA-256。
+# 每行：<版本> <sha256>。换版本时在 .xcodegen-version 改数字，并在这里补一行 ——
+# 同一笔提交里，连同重新生成的 pbxproj 一起。
+2.46.0  4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806

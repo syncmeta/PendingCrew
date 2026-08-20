@@ -41,22 +41,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - name: 装 xcodegen
-        run: |
-          brew install xcodegen
-          # 版本**故意不钉死**：钉死会让 brew 每次例行升级都制造一次假红。
-          # 但版本要打进日志，并写进下面的失败提示 —— 生成器版本变了导致的
-          # pbxproj 差异，症状和「你忘了 regen」一模一样，没有这一行，
-          # 下一个人会先花半天怀疑自己。
-          echo "XCODEGEN_VERSION=$(xcodegen --version | tr -d '\n')" >> "$GITHUB_ENV"
-      - run: xcodegen generate
+      # **不是 `brew install xcodegen`。** 装的是 `.xcodegen-version` 声明的那一版
+      # （脚本自己按 scripts/xcodegen-checksums.txt 校验下载产物），这样 CI 和
+      # 开发机对齐的是仓库里的一个数字，而不是各自 brew 的当日状态 —— 否则上游
+      # 一升级，所有人的 PR 同时变红，包括每一个什么都没做错的人。
+      - name: 按仓库声明的版本生成工程
+        run: scripts/gen-project.sh --fetch
       - name: 检查生成物有没有漂移
         run: |
           if ! git diff --exit-code; then
             echo "::error::project.yml 和提交进来的 .pbxproj 对不上。"
-            echo "::error::在本地跑 \`xcodegen\` 然后把 PendingCrew.xcodeproj/project.pbxproj 一起提交。"
+            echo "::error::在本地跑 \`scripts/gen-project.sh\` 然后把 PendingCrew.xcodeproj/project.pbxproj 一起提交。"
             echo "::error::新增 Swift 文件也算改了工程定义 —— 你本机能编，别人 clone 下来编不过。"
-            echo "::error::差异只有几个 id / 分组时，先对一下版本：CI 这台跑的是 ${XCODEGEN_VERSION}。"
+            echo "::error::（生成器版本已由 .xcodegen-version 钉死，所以这个差异不会是版本引起的。）"
             exit 1
           fi
 
@@ -84,8 +81,6 @@ jobs:
           sudo xcode-select -s "$XCODE"
           xcodebuild -version
 
-      - run: brew install xcodegen
-
       # SPM 解析结果按 Package.resolved 的哈希缓存 —— 23 个依赖，冷机每次重解
       # 是这条流水线里最没意义的一段等待。key 里带 Xcode 版本：换编译器要重解。
       - uses: actions/cache@v4
@@ -94,7 +89,7 @@ jobs:
           key: spm-${{ env.XCODE }}-${{ hashFiles('PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ env.XCODE }}-
 
-      - run: xcodegen generate
+      - run: scripts/gen-project.sh --fetch
 
       - name: macOS 编译 + 单测
         run: |

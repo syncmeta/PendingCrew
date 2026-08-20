@@ -19,11 +19,22 @@
 
 这三条是被踩出来的，不是审美偏好。
 
-### 1. `project.yml` 是工程定义的唯一真值，改完必须 `xcodegen` 并提交 `.pbxproj`
+### 1. `project.yml` 是工程定义的唯一真值，改完必须重新生成并提交 `.pbxproj`
 
 ```sh
-xcodegen        # 改了 project.yml 之后
+scripts/gen-project.sh          # 改了 project.yml 之后
+scripts/gen-project.sh --fetch  # 本机没装 / 版本不对时，取仓库声明的那一版来用
 ```
+
+**别直接跑 `xcodegen`。** `.xcodeproj` 是生成物却被提交进仓库，所以**生成它的
+那个生成器的版本也是仓库的一部分** —— 版本写在 `.xcodegen-version` 里，CI 装的
+就是它。脚本会在生成任何东西**之前**比对版本并停下，免得你先看到一坨看不懂的
+pbxproj diff、再花时间怀疑自己是不是忘了 regen（那是同一种症状）。
+
+要升 XcodeGen 版本，就让它是一次**显式提交**：改 `.xcodegen-version` 的数字 +
+在 `scripts/xcodegen-checksums.txt` 补一行 + 同一笔里重新生成 pbxproj。这样历史上
+「这次 pbxproj 大改是因为换了生成器」是自解释的，而不是某天某人 brew 升级顺手
+带进来的。
 
 `PendingCrew.xcodeproj/project.pbxproj` 虽然被 git 跟踪，但它是**生成物**，不要
 手改。跟踪它是为了让 clone 下来的人不装 XcodeGen 也能直接开工程。
@@ -85,7 +96,8 @@ iOS 端红了，你已经等了十几分钟。
 
 ```
 project.yml             XcodeGen 工程定义（唯一真值）
-Config/Signing.xcconfig        签名默认值（ad-hoc）；本机覆盖写 Config/Local.xcconfig
+Config/Config/Signing.xcconfig 签名默认值（ad-hoc）；本机覆盖写 Config/Local.xcconfig
+.xcodegen-version       生成 .xcodeproj 用哪一版 XcodeGen（唯一真值）
 Sources/
   Mac/                  macOS 专有：LocalRunner（agent 子进程）、Mac 界面
   Mcp/                  crew-comms MCP server —— agent 通过它读写白板、@ 人、请示

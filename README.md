@@ -92,14 +92,15 @@ session。
 **构建依赖**
 
 - macOS 14+ / Xcode 16+
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）
+- 不需要装 XcodeGen —— 下面那个脚本会按 `.xcodegen-version` 把对的版本
+  取到 `.tools/`（gitignored），不动你系统里已装的任何东西
 
-工程文件由 `project.yml` 生成，改完 `project.yml` 要重跑 `xcodegen`。
+工程文件由 `project.yml` 生成，改完 `project.yml` 要重跑生成脚本。
 
 ```bash
 git clone https://github.com/syncmeta/PendingCrew.git
 cd PendingCrew
-xcodegen
+scripts/gen-project.sh --fetch
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
   -destination 'platform=macOS' build
 ```
@@ -133,6 +134,7 @@ AppKit 调用把 iOS 端静默打红。
 
 ```
 project.yml             XcodeGen 工程定义（唯一真值，别手改 .xcodeproj）
+.xcodegen-version       生成 .xcodeproj 用哪一版 XcodeGen —— 由仓库说了算，不由各机器的 brew
 Config/Signing.xcconfig        签名默认值（ad-hoc）；本机覆盖写 Config/Local.xcconfig
 Info.plist
 Sources/

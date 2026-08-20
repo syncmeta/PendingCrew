@@ -9,6 +9,8 @@ DerivedData/
 # CI（和照着 .github/workflows/ci.yml 在本地跑的人）用的输出目录
 DD/
 SourcePackages/
+# scripts/gen-project.sh --fetch 取回来的 XcodeGen（版本由 .xcodegen-version 定）
+.tools/
 .build/
 *.xcarchive
 
