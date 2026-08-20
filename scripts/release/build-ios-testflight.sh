@@ -138,7 +138,7 @@ echo "note: build $build_number = $build_human（ASC 当前最高: $asc_highest�
 # `.xcodegen-version`，不能由这台机器的 brew 状态决定。--fetch 会在版本对不上时
 # 把仓库声明的那一版下到 .tools/ 里用，不动系统里已装的那个。
 # 快照是全新目录，把 $root 已经下好的那份接过去，省一次下载。
-[ -d "$root/.tools" ] && ln -s "$root/.tools" "$snap/src/.tools"
+if [ -d "$root/.tools" ]; then ln -s "$root/.tools" "$snap/src/.tools"; fi
 "$snap/src/scripts/gen-project.sh" --fetch
 
 # 之后所有 xcodebuild 都在快照里跑（相对路径的 -project / CODE_SIGN_ENTITLEMENTS
@@ -268,7 +268,9 @@ platform=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$pl
 # ④ 签的必须是团队身份，不是 ad-hoc。仓库默认 xcconfig 就是 ad-hoc（`-`），
 #    命令行那几个键一旦漏传，构建照样成功、产物照样是 .ipa，但 ASC 会拒收，
 #    而且从文件名上完全看不出来。
-signing=$(codesign -dv "$app" 2>&1)
+# 用 -dvv 而不是 -dv：多打一段 Authority 证书链（"Apple Distribution: … (TEAMID)"），
+# 那是这次签名到底用了哪张证书的直接证据，下面 --dry-run 的小结会把它打出来给人看。
+signing=$(codesign -dvv "$app" 2>&1)
 printf '%s\n' "$signing" | grep -q "TeamIdentifier=$team_id" \
   || { echo "产物不是 $team_id 签的：" >&2; printf '%s\n' "$signing" >&2; exit 2; }
 if printf '%s\n' "$signing" | grep -q 'Signature=adhoc'; then
@@ -374,7 +376,7 @@ if [ "$dry_run" = "1" ]; then
   版本            : $version (CFBundleShortVersionString)
   build           : $build_number (CFBundleVersion) = $build_human
   ASC 当前最高    : $asc_highest
-  签名            : $(printf '%s\n' "$signing" | grep -E 'TeamIdentifier|Authority' | head -n 2 | tr '\n' ' ')
+  签名            : $(printf '%s\n' "$signing" | grep -E '^Authority=Apple (Distribution|Development)|^TeamIdentifier' | head -n 2 | tr '\n' ' ')
 
 真要上传就去掉 --dry-run 重跑（会重新算 build 号、重新构建）。等价的手工命令：
 
