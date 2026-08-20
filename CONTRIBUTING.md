@@ -32,6 +32,11 @@ xcodegen        # 改了 project.yml 之后
 你本机能编（Xcode 会自己发现），但别人 clone 下来那份 `.pbxproj` 里没有它，
 **在别的机器上编不过**。这条真的踩过。
 
+**CI 会替你查这一条**（`.github/workflows/ci.yml` 的「pbxproj 与 project.yml 同步」，
+约 12 秒）。它是唯一一条**你本机永远看不到红**的规矩，所以必须由机器守：
+Xcode 会自己发现你新加的文件，于是你能编、能跑、能提交，只有别人 clone 下来
+才炸。
+
 ### 2. 三端都要编一遍
 
 三端共用一套源码。只编 Mac 会让漏了 `#if os(macOS)` 的 AppKit 调用把 iOS 端
@@ -47,6 +52,9 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 ```
 
 单测 bundle 只挂 macOS —— 被测代码基本都在 `#if os(macOS)` 后面。
+
+这三条 CI 在 PR 上会跑一遍（冷机约 13 分钟），但**本机先跑更快**：等 CI 告诉你
+iOS 端红了，你已经等了十几分钟。
 
 ### 3. 绕过约束的临时方案要留痕
 

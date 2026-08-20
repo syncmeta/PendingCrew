@@ -8,6 +8,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
@@ -40,7 +41,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - run: brew install xcodegen
+      - name: 装 xcodegen
+        run: |
+          brew install xcodegen
+          # 版本**故意不钉死**：钉死会让 brew 每次例行升级都制造一次假红。
+          # 但版本要打进日志，并写进下面的失败提示 —— 生成器版本变了导致的
+          # pbxproj 差异，症状和「你忘了 regen」一模一样，没有这一行，
+          # 下一个人会先花半天怀疑自己。
+          echo "XCODEGEN_VERSION=$(xcodegen --version | tr -d '\n')" >> "$GITHUB_ENV"
       - run: xcodegen generate
       - name: 检查生成物有没有漂移
         run: |
@@ -48,11 +56,19 @@ jobs:
             echo "::error::project.yml 和提交进来的 .pbxproj 对不上。"
             echo "::error::在本地跑 \`xcodegen\` 然后把 PendingCrew.xcodeproj/project.pbxproj 一起提交。"
             echo "::error::新增 Swift 文件也算改了工程定义 —— 你本机能编，别人 clone 下来编不过。"
+            echo "::error::差异只有几个 id / 分组时，先对一下版本：CI 这台跑的是 ${XCODEGEN_VERSION}。"
             exit 1
           fi
 
+  # **只在 PR 和手动触发时跑，不跟着每次 push main。**
+  # 实测冷机一次 13 分 26 秒（macOS 编译+单测 9'45"、iOS 端编译 3'12"）。
+  # private 仓库的 macOS runner 按 10 倍计费 —— 一次就是约 140 分钟额度，
+  # Free 档一个月的量只够跑十几次。而 push main 这条路上的人本来就在本地
+  # 编过测过；真正只有机器抓得住的是上面那个漂移检查，它 12 秒、便宜到可以
+  # 每次都跑。仓库转 public 之后 macOS runner 免费，那时可以把这条 if 去掉。
   build-test:
     name: 三端编译 + 单测
+    if: github.event_name != 'push'
     runs-on: macos-26
     timeout-minutes: 60
     steps:
