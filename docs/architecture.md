@@ -126,6 +126,33 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 
 ---
 
+### 1.6 这个仓库的 git 历史只回溯到 2026-08-15
+
+第一个提交是 `a61e7a5 2026-08-15 initial import from monorepo snapshot 61d876a7`
+—— PendingCrew 是那天从 PendingBot monorepo 的一份快照**压平重建**出来的独立仓库，
+不是从 monorepo 里 filter-branch 切出来的。
+
+**后果，查历史之前先知道这一条：**
+
+- **2026-08-15 之前的任何 commit sha 在这里一律解析不出来**，`git cat-file -e` 会
+  `fatal: Not a valid object name`。PendingBot 那边同期也重建过，所以那些 sha 在
+  **两个仓库里都不存在**。这是设计使然，不是仓库损坏，也不是有人 force-push 掉了。
+- **代码本身没丢** —— 快照带着当时的工作树进来了。8-15 之前的改动，**文件在树上、
+  mtime 保留着原时间**，只是没有对应的提交记录。想知道某段代码什么时候写的，看
+  `stat -f %Sm`，别看 `git log`。
+- 只存在于「某次提交的 diff」里而没落在工作树上的东西（被删掉的文件、提交信息里的
+  设计说明）**是真的没了**。
+
+**这个坑的典型踩法**（2026-08-20 实际发生过一次，所以写在这儿）：拿一批旧 sha 去
+`git cat-file`，全部解析失败，于是下结论「那批工作丢了」。**解析不出来只证明历史被
+重建过，不证明工作不存在。** 判断一件事做没做，去树上找那件事的产物——文件、测试、
+`project.yml` 里的挂载——别只查提交。
+
+build 号也是因为这条才不再从 `git rev-list --count HEAD` 算的，理由见
+`scripts/release/build-macos-update.sh` 顶部那段注释：历史是这个仓库里最脆的东西。
+
+---
+
 ## 2. 七个 SPM 依赖
 
 直接依赖 7 个（`project.yml` 的 `packages:`），解析出来一共 **23 个 pin**
