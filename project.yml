@@ -32,20 +32,20 @@ packages:
     url: https://github.com/LebJe/TOMLKit
     minVersion: 0.5.0
     maxVersion: 1.0.0
+# 签名策略**不写在这里** —— 在 `Signing.xcconfig`（仓库默认值：ad-hoc，任何人
+# clone 下来不改被跟踪的文件就能编）里，个人身份写进它 `#include?` 的
+# `Local.xcconfig`（gitignored，见 Local.xcconfig.example）。
+#
+# 为什么要用 xcconfig 而不是写在下面的 settings.base 里：Xcode 的优先级是
+# 「target 设置 > target xcconfig > project 设置 > project xcconfig」——
+# 只要 DEVELOPMENT_TEAM 还留在 settings.base，它就会盖掉 xcconfig，本地覆盖
+# 永远不生效。所以这几个键必须从 settings 里**彻底移走**。
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    # 签名策略(与 apps/pendingbot 对齐 —— 同源的 keychain 坑)：
-    # macOS + iOS Simulator 都用 **Apple Development** 身份(不是 ad-hoc /
-    # "Sign to Run Locally")。`KeychainStore`(device-grant token，默认钥匙串、
-    # kSecAttrService=com.pendingname.pendingcrew)的 ACL 绑当前签名身份；ad-hoc
-    # 每次重构身份就变 → 系统认不出重建的 app → **反复弹"存取钥匙串"授权框 /
-    # -34018 存不住** → 登录态丢失。用 Apple Development(稳定身份)根治。
-    # headless 无证书构建会回落 ad-hoc(仅编译校验用，不影响 GUI/有证书环境正常签名)。
-    CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: M42BKJN82S
-    "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "Apple Development"
-    "CODE_SIGN_IDENTITY[sdk=macosx*]": "Apple Development"
     # 发布工具链读这两个键（scripts/release/build-macos-update.sh 用
     # sed 从 project.yml 取 MARKETING_VERSION）；Info.plist 用
     # $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) 变量替换，
