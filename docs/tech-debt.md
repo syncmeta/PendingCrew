@@ -70,3 +70,40 @@
 - **失败长什么样**: 不报错。app 编得出、装得上、跑得动，只是登录态存不住。所以**症状和病因隔着十万八千里**，别再从后端/Supabase 那头查。
 - **该怎么还**: 构建期没有可靠判据区分「贡献者本来就该 ad-hoc」和「本机开发者忘了装覆盖」，所以没加编译告警（那会给每个贡献者的每次构建都挂一条黄色噪音，反而训练人无视告警）。真要还，正确的地方是**运行时**：走云端登录路径时若检测到 ad-hoc 签名（`csops` / `SecCodeCopySigningInformation` 读不到 team identifier），直接在界面上说清「这个构建签名不稳定，登录态存不住」，而不是让它静默失败。
 - **发版不受影响**: `scripts/release/build-macos-update.sh` 在 xcodebuild 命令行上显式传 `CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=…`，命令行优先级最高，Developer ID 分发路径与这里的默认值无关。
+
+### 🟡 没有 CI —— `CONTRIBUTING.md` 的三条硬规矩全靠人手跑
+- **发现**: 2026-08-20 · 技术栈梳理（只读盘点）
+- **位置**: `.github/` 下只有 `ISSUE_TEMPLATE/` 与 `pull_request_template.md`，**没有 `workflows/`**；仓库根也没有 Makefile / justfile / pre-commit。
+- **问题**: `CONTRIBUTING.md:22-49` 把三件事定成硬规矩 ——「改了 `project.yml`（含新增 Swift 文件）必须 `xcodegen` 并提交 `.pbxproj`」「三端都要编一遍」「跑测试」—— 但没有任何自动化在 PR 上核这三条。其中第一条**已经踩过并且症状是「只有别人的机器编不过」**（`CONTRIBUTING.md:31-33` 自己写着「这条真的踩过」）：提交者本机 Xcode 会自动发现新文件，所以他永远看不到红。
+- **为什么现在要记**: 之前仓库只有作者一个人、一台机器，靠纪律够用。开源之后进来的每个 PR 都是「另一台机器」，而这正是这条规矩失效时唯一会暴露的场景。
+- **代价转嫁到哪**: 维护者的人工 review。pbxproj 漂移与 iOS 端静默打红这两类问题都不会在 PR 页面上显形，只能靠维护者自己 checkout 下来跑三条命令。
+- **该怎么还**: 一个 macOS runner 上的 workflow，三步即可覆盖：`xcodegen && git diff --exit-code PendingCrew.xcodeproj/project.pbxproj`（抓漏 regen）、macOS build + test、iOS Simulator build。测试跑满约 3 分钟（2026-08-20 本机实测 184s / 1443 tests）。**注意**：`CrewChatOpenCostTests` 在 CI 上会 skip（fixture 不入 git），这是预期的，别为了让它绿而把 fixture 提交进去。
+
+### 🟢 `Sources/Mac/` 名不副实，而且没有任何编译期的「层」
+- **发现**: 2026-08-20 · 技术栈梳理（只读盘点）
+- **位置**: `project.yml` 的 `PendingCrew` target 只有一条 `- path: Sources`；`Sources/Mac/` 下 110 个 swift 文件里 **11 个不含 `#if os(macOS)`**。
+- **问题（两条，互相放大）**:
+  1. **一个 target = 一个 module**，`Sources/` 下的目录只是目录，没有 `import` 边界。所谓「分层」全靠约定，编译器一条都不管。
+  2. **`Sources/Mac/` 里混着跨平台文件**，于是别的目录必须反向引用它才能拿到那些类型：
+     - `Sources/Mcp/McpServer.swift:640` 用 `AgentQuotaFile`、`:1043-1083` 用 `AgentModelCatalog` 一族（都在 `Sources/Mac/LocalRunner/`）
+     - `Sources/Support/QuotaRingLayout.swift:62,84` 用 `AgentQuotaSnapshot` / `AgentQuotaWindow`（同上）
+     - `Sources/Chat/Adapter/CrewComposerMentions.swift:358` 用 `CrewSenderResolver`（在 `Sources/Mac/Views/Chat/`）
+     - `Sources/Views/IPadShell.swift:47` 直接构造 `CrewChatView`（`Sources/Mac/Views/CrewChatView.swift`，1437 行，**两端都编**，它就是 iPad/iPhone 的群聊页）
+- **为什么不是 🟡**: 那几个文件的头注释都明写了「纯 Foundation、不带平台门 —— McpServer（跨平台编译）要用」，是**有意为之、只是放错了目录**，不是把 macOS 代码偷渡进跨平台路径。所以它腐蚀的是可读性，不是正确性。
+- **失败长什么样**: 新人（含三个月后的作者）按目录名判断「这是 macOS 专有的、我随手 import 个 AppKit」→ iOS 端静默打红，而且只在别人跑 iOS 构建时才发现。
+- **该怎么还**: 把那 11 个文件挪到 `Sources/Support/` 或新建的 `Sources/Agent/`；`CrewChatView` 归到 `Sources/Chat/` 或 `Sources/Views/`。纯搬家、无行为变化，但会动一批 import-free 的引用点和 `project.yml` 的测试文件清单，属于**大改一批文件**的动作，不要顺手夹在功能分支里。真正的分层保证（拆 target / SPM local package）代价大得多，不在这条的范围内。
+
+### 🟢 `whiteboards/` 目录只增不减 —— per-session 文件从不回收
+- **发现**: 2026-08-20 · 技术栈梳理（只读盘点，复核了 2026-08-18 那份调查）
+- **位置**: `~/Library/Application Support/PendingCrew/whiteboards/`；产生方 `Sources/Mcp/WhiteboardCursor.swift`（`.cursor` / `.cursor.lock`）与 `Sources/Mcp/SessionTurnTrace.swift`（`.turn`）。
+- **问题**: 每起一个 session 就多三个小文件，**session 退出后没有任何清理**。已有一份逐项盘点与清理方案：`docs/internal/2026-08-18-whiteboards-directory-cleanup-plan.md`（当时 1051 个文件，其中约 341 个属于早已不存在的成员）—— 但那份文档写明「本轮只调查、只出方案，一个文件都没删、没移、没改」，所以**账上一直没有一条活的登记**。
+- **证据（本次实测）**: 同一目录今天 **1346 个文件 / 36 个 crew**。两天涨了约 295 个。
+- **为什么值钱的不是磁盘**: 主线程仍在列这个目录 —— 见上面那条 🟢「`drainRenames` 每 tick 全量列目录」（`getattrlistbulk` 的开销直接乘以文件数）。文件数是那条的乘数。
+- **没做**: 本次是只读梳理，一个文件都没动。真要做的话方案已经在上面那份 internal 文档里写好了，包括「`.corrupt-*` 是 8-12 事故的现场证据、该先移进归档目录由人拍板再删」这条纪律。
+
+### 🟢 驾驶舱有一半的数据契约只存在于另一个仓库
+- **发现**: 2026-08-20 · 技术栈梳理（只读盘点）
+- **位置**: `Sources/Models/CockpitModel.swift:362-383` 的 `CockpitLoader.load`；空态文案在 `Sources/Mac/Views/CockpitView.swift:112`。
+- **问题**: 驾驶舱从 **crew 的工作目录**读四样东西：`docs/roadmap.md`、`docs/handbook/`、`docs/state/`、`docs/tasks/`。其中 `docs/roadmap.md` 缺失时有一份**自带格式模板的空态引导**（`CockpitRoadmapView.swift:369-393`），照着建就能用；但 `docs/handbook/` 与 `docs/state/` 的格式**这个仓库里没有任何地方写过**，而 `CockpitView.swift:112` 的空态直接告诉用户「让某个 crew 的工作目录指向带这些账的仓库（比如大绿豆自己）」—— 那是另一个**未开源**的仓库，外部贡献者拿不到，也无从照着造一份。
+- **牵连**: `README.md:69` 把「驾驶舱」列在「真跑过、天天在用的」里，没有任何限定语。对一个把工作目录指向自己 clone 的人来说，驾驶舱的任务段能用（人类 Todo + `~/.claude/tasks` 都在 app 数据目录），路线段照引导建一份 `docs/roadmap.md` 也能用，**但期望/现状那两栏永远是空的，而他不知道为什么**。
+- **该怎么还**（三选一，都不大）: ① 给 `docs/handbook/` 与 `docs/state/` 也补上同款自带模板的空态引导；② 在 README 的能力清单里给「驾驶舱」加半句限定；③ 把这两本账的格式写进 `docs/`。**别改代码去删功能** —— 它对作者本人是天天在用的。
