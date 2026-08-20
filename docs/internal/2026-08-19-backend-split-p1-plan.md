@@ -8,9 +8,9 @@
 
 **Tech Stack:** Swift / SwiftTerm 1.18 / AppKit / Combine / XCTest
 
-**Spec:** `docs/2026-08-19-backend-split-design.md`（实现其 §5.1、§5.2 与 §9 的 P1 行）
+**Spec:** `docs/internal/2026-08-19-backend-split-design.md`（实现其 §5.1、§5.2 与 §9 的 P1 行）
 
-**前一阶段:** `docs/2026-08-19-backend-split-p0-plan.md`（已完成，main 上）
+**前一阶段:** `docs/internal/2026-08-19-backend-split-p0-plan.md`（已完成，main 上）
 
 ## Global Constraints
 
@@ -174,7 +174,7 @@ import Foundation
 import Combine
 import SwiftTerm
 
-/// **无画面的终端内核**（spec `docs/2026-08-19-backend-split-design.md` §5.2）。
+/// **无画面的终端内核**（spec `docs/internal/2026-08-19-backend-split-design.md` §5.2）。
 ///
 /// 在这个类型出现之前，PTY、屏幕缓冲区、渲染、以及「它在忙 / 撞额度了 / 卡在
 /// 选择菜单等人按」那套从画面上认状态的逻辑，全长在**同一个 AppKit 视图对象**上、
@@ -739,7 +739,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 1. 测试「Executed N tests, with 0 failures」原文 + 三端全绿。
 2. Step 3 的三条 grep 证据。
 3. **一致性测试的具体断言**（同一批字节逐格相等、reflow 到 60/160/80 列后仍相等、**alt-screen 内及其 resize 后仍相等**）。
-4. **给人类的三条手工清单** —— 写进 `docs/2026-08-19-backend-split-manual-checks.md`（新建），**不要催人现在就点**（见下）。
+4. **给人类的三条手工清单** —— 写进 `docs/internal/2026-08-19-backend-split-manual-checks.md`（新建），**不要催人现在就点**（见下）。
 
 **⚠️ 节奏要求（父机长定的，别自作主张提前）**：这三下必须装新版才能验，而装新版要 ⌘Q、所有 session 一起死 —— **那正是本项目要消灭的痛点，为验证它而制造它是本末倒置**。所以清单**攒着**，等下一次本来就要装包的时候（P3 完成、或期间有别的原因要发版）一起点。P1 在单进程内、可单 commit revert，自动化已经覆盖了缓冲区语义 / reflow / 回滚长度 / 选中文本这些**数据层**一致性；人手这三下验的是**交互层手感**，晚几天验、真出问题也 revert 得掉。
 

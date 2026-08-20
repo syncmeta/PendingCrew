@@ -8,9 +8,9 @@
 
 **Tech Stack:** Swift / SwiftUI / Combine / XcodeGen / XCTest
 
-**Spec:** `docs/2026-08-19-backend-split-design.md`（本计划实现其 §9 的 P0 行；§6.2 闸门 1 在本阶段落地）
+**Spec:** `docs/internal/2026-08-19-backend-split-design.md`（本计划实现其 §9 的 P0 行；§6.2 闸门 1 在本阶段落地）
 
-**调研清单（必读）:** `docs/2026-08-19-backend-split-inventory.md` —— 23 条界面持有的后台职责、30 条定时器、逐条带文件行号。**开工前整份读一遍**，本计划的任务边界是照它划的。
+**调研清单（必读）:** `docs/internal/2026-08-19-backend-split-inventory.md` —— 23 条界面持有的后台职责、30 条定时器、逐条带文件行号。**开工前整份读一遍**，本计划的任务边界是照它划的。
 
 ## Global Constraints
 
@@ -148,7 +148,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 #if os(macOS)
 import Foundation
 
-/// 本进程在「前后端分离」里扮演的角色（spec `docs/2026-08-19-backend-split-design.md` §6.2）。
+/// 本进程在「前后端分离」里扮演的角色（spec `docs/internal/2026-08-19-backend-split-design.md` §6.2）。
 ///
 /// 存在的理由只有一个：**防双头**。同一批共享账本（白板/Todo/账本）和同一批长期
 /// 定时器（唤醒器/中继/额度轮询）必须只有一个所有者。这个枚举把「我有没有资格
@@ -244,7 +244,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 import Foundation
 import Combine
 
-/// **长期职责的唯一所有者**（spec `docs/2026-08-19-backend-split-design.md` §6）。
+/// **长期职责的唯一所有者**（spec `docs/internal/2026-08-19-backend-split-design.md` §6）。
 ///
 /// 在这个类型出现之前，编排器 / 云端中继 / 三个唤醒器 / 用量监视 / 两个轮询中心
 /// 是随 `MacThreePaneView` 和 `CrewSidebarView` 两个**视图**一起生出来的 ——
@@ -562,7 +562,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ### Task 3b: 把从视图接线的三处后台职责收走
 
-调研清单（`docs/2026-08-19-backend-split-inventory.md` 清单 A19/A20、D4、A16/B12）查出来的，Task 3 那 11 条之外还漏在视图里的三处。
+调研清单（`docs/internal/2026-08-19-backend-split-inventory.md` 清单 A19/A20、D4、A16/B12）查出来的，Task 3 那 11 条之外还漏在视图里的三处。
 
 **Files:**
 - Modify: `Sources/Mac/Views/CrewSessionWindowView.swift`
@@ -714,7 +714,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'plat
 grep -n "@StateObject" Sources/Mac/Views/*.swift
 ```
 
-预期：结果里**不含** `CrewSessionRunner` / `CrewRelayAgent` / `LocalAgentUsageMonitor`。若还有别的长期对象（调研清单 `docs/2026-08-19-backend-split-inventory.md` 的清单 A 会列全），在汇报里点名 —— 那是 P0 漏掉的，要补。
+预期：结果里**不含** `CrewSessionRunner` / `CrewRelayAgent` / `LocalAgentUsageMonitor`。若还有别的长期对象（调研清单 `docs/internal/2026-08-19-backend-split-inventory.md` 的清单 A 会列全），在汇报里点名 —— 那是 P0 漏掉的，要补。
 
 ```bash
 grep -rn "QuotaCenter.shared.start\|ModelCatalogCenter.shared.start\|\.start(appModel" Sources/Mac/Views/

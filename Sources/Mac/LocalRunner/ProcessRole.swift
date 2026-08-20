@@ -1,7 +1,7 @@
 #if os(macOS)
 import Foundation
 
-/// 本进程在「前后端分离」里扮演的角色（spec `docs/2026-08-19-backend-split-design.md` §6.2）。
+/// 本进程在「前后端分离」里扮演的角色（spec `docs/internal/2026-08-19-backend-split-design.md` §6.2）。
 ///
 /// 存在的理由只有一个：**防双头**。同一批共享账本（白板/Todo/账本）和同一批长期
 /// 定时器（唤醒器/中继/额度轮询）必须只有一个所有者。这个枚举把「我有没有资格

@@ -87,7 +87,7 @@ enum SessionProfileEchoVerdict {
     /// 于是整个函数是 O(n²)。它被 `SessionLaunchParameterScanner` 挂在 `dataReceived`
     /// 上、对 8~16K 的尾窗**每笔 PTY 输出跑一次**：实测 8192 字符 63.6 ms、16384 字符
     /// 253.7 ms，一个 session 刚拉起的 45 秒里足够把主线程占死（采样见
-    /// `docs/2026-08-19-ui-jank-profile.md`）。
+    /// `docs/internal/2026-08-19-ui-jank-profile.md`）。
     ///
     /// 语义与老实现**逐字符等价**（有单测钉）：
     /// - 第一趟按 unicode scalar 记来源（小写化可能 1→n 个 scalar，全部指回同一原位）；

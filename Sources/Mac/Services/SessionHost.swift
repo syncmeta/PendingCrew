@@ -2,7 +2,7 @@
 import Foundation
 import Combine
 
-/// **长期职责的唯一所有者**（spec `docs/2026-08-19-backend-split-design.md` §6）。
+/// **长期职责的唯一所有者**（spec `docs/internal/2026-08-19-backend-split-design.md` §6）。
 ///
 /// 在这个类型出现之前，编排器 / 云端中继 / 三个唤醒器 / 用量监视 / 两个轮询中心
 /// 是随 `MacThreePaneView` 和 `CrewSidebarView` 两个**视图**一起生出来的 ——

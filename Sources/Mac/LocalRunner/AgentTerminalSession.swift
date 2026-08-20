@@ -7,7 +7,7 @@ import SwiftTerm
 /// 一个内嵌真终端的 coding-agent 会话：在 PTY 里跑交互式 claude/codex(自动审批)。
 /// 读=终端原样显示，控=键盘(SwiftTerm 原生) + 程序化 send()/interrupt() 字节注入。
 ///
-/// **P1 之后它只是一层薄门面**（spec `docs/2026-08-19-backend-split-design.md` §5.2）：
+/// **P1 之后它只是一层薄门面**（spec `docs/internal/2026-08-19-backend-split-design.md` §5.2）：
 /// 进程、权威缓冲区、六个状态扫描器与拉起自检都在无画面的 `AgentSessionCore` 里，
 /// 画面在 `TerminalMirrorView` 里，这里只把 `SessionBackend` 逐条转发给内核，
 /// 外加一件仍属于窗口的事 —— 外置滚动条的几何。上层编排一行没改。

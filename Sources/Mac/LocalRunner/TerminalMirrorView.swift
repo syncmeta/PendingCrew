@@ -3,7 +3,7 @@ import AppKit
 import Foundation
 import SwiftTerm
 
-/// **只负责画的那半**（spec `docs/2026-08-19-backend-split-design.md` §5.2）。
+/// **只负责画的那半**（spec `docs/internal/2026-08-19-backend-split-design.md` §5.2）。
 ///
 /// 它是 `TerminalView` 的子类，**不是**那个会自己开进程的 SwiftTerm 基类 ——
 /// 这半边不碰子进程。进程与权威

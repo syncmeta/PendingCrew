@@ -3,7 +3,7 @@
 - 日期：2026-08-19
 - 对应人类 Todo：**#58**（父 crew「PendingCrew」的 Todo 面板）
 - 状态：**待评审**（父机长 + 人类过目后才动代码）
-- 配套调研清单：`docs/2026-08-19-backend-split-inventory.md`
+- 配套调研清单：`docs/internal/2026-08-19-backend-split-inventory.md`
 
 ---
 
@@ -89,7 +89,7 @@
 
 最后一条是最麻烦的：编排逻辑本身长在 SwiftUI 的 `.onChange` 里。**这是 P0 阶段的主要工作量**。
 
-完整清单见 `docs/2026-08-19-backend-split-inventory.md`（23 条界面持有的后台职责、30 条定时器/轮询、逐条带文件行号）。清单又补出三条 P0 必须一并处理的：
+完整清单见 `docs/internal/2026-08-19-backend-split-inventory.md`（23 条界面持有的后台职责、30 条定时器/轮询、逐条带文件行号）。清单又补出三条 P0 必须一并处理的：
 
 - **每 session 的两个后台服务是从视图接线的**：`CrewMailboxWaker`（信箱唤醒）与 `SessionPermissionRelay`（审批中继）由 `CrewSessionWindowView` 在展示 session 时创建、交给 runner 持有。**右栏没打开过那个 session，它们就没被接上** —— 这既是「关掉 app 就全停」的另一半，也是今天就存在的一个隐患。
 - `MacRootView` 还直接写了一次控制通道回应（`change_workdir` 的回执）—— 视图在写共享账本，P0 要一并收走。
@@ -492,6 +492,6 @@ app 退化成 viewer 之后，后台出问题**没有画面可看**。所以 dae
 
 ## 12. 参考
 
-- `docs/2026-08-19-backend-split-inventory.md` —— 逐条带文件行号的现状清单
+- `docs/internal/2026-08-19-backend-split-inventory.md` —— 逐条带文件行号的现状清单
 - `docs/tech-debt.md` —— PTY 输出过主线程那条结构债
-- `docs/2026-08-19-ui-jank-profile.md` —— #59 的性能基线（P5 复跑它做对照）
+- `docs/internal/2026-08-19-ui-jank-profile.md` —— #59 的性能基线（P5 复跑它做对照）

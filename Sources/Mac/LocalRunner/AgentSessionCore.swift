@@ -3,7 +3,7 @@ import Foundation
 import Combine
 import SwiftTerm
 
-/// **无画面的终端内核**（spec `docs/2026-08-19-backend-split-design.md` §5.2）。
+/// **无画面的终端内核**（spec `docs/internal/2026-08-19-backend-split-design.md` §5.2）。
 ///
 /// 在这个类型出现之前，PTY、屏幕缓冲区、渲染、以及「它在忙 / 撞额度了 / 卡在
 /// 选择菜单等人按」那套从画面上认状态的逻辑，全长在**同一个 AppKit 视图对象**上、

@@ -98,7 +98,7 @@ struct TypingActivityTracker {
     /// `split(whereSeparator:)` → `[Substring]` → `joined` → `count` → `prefix`：
     /// 整段输入都要付钱（三次遍历 + 两次分配），而结果只用前 512 个字符。
     /// 它挂在 `dataReceived` 的主线程回调里，采样实测占单个忙碌 session 主线程的
-    /// **5.7%**（见 `docs/2026-08-19-ui-jank-profile.md`），且按 session 线性叠加。
+    /// **5.7%**（见 `docs/internal/2026-08-19-ui-jank-profile.md`），且按 session 线性叠加。
     ///
     /// 输出与老实现**逐字符相同**（有单测钉）：同样丢掉首尾空白、同样把空白串
     /// 折成单个空格，只是不再把 `limit` 之后的部分也折一遍。
