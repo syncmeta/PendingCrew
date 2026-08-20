@@ -1223,13 +1223,6 @@
 			path = Config;
 			sourceTree = "<group>";
 		};
-		5E4BBC3286F9E0957A1D0A0B /* Fixtures */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Fixtures;
-			sourceTree = "<group>";
-		};
 		6783BFF7A796E79A75BEB76A /* Support */ = {
 			isa = PBXGroup;
 			children = (
@@ -1482,7 +1475,6 @@
 				E785F722D418A95C0988384E /* WorkspaceRepoLayoutTests.swift */,
 				16896B310BE02FA39332BAAC /* WorkspaceRepoServiceTests.swift */,
 				1D2D7E9257F84AADDF8BD909 /* WorkspaceSetupTests.swift */,
-				5E4BBC3286F9E0957A1D0A0B /* Fixtures */,
 			);
 			path = PendingCrewTests;
 			sourceTree = "<group>";

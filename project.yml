@@ -127,8 +127,14 @@ targets:
         # 存在的那几个文件名逐个写进 pbxproj，干净机器上一 regen 就 diff、
         # 而且 pbxproj 里会引用根本不存在的文件。测试是用 `#filePath` 从磁盘读的，
         # 本来就不需要它们进 bundle 资源。
+        # 排掉整个 Fixtures/ 而不只是里面那一份数据：只排里面的文件，xcodegen
+        # 仍会为**目录本身**写一个空 PBXGroup 进 pbxproj —— 而这个目录只在
+        # 取过 fixture 的机器上存在。于是提交进来的 pbxproj 带不带这个空组，
+        # 取决于生成它的那台机器上有没有那份不入 git 的数据，干净机器一 regen
+        # 就 diff。2026-08-20 由 CI 的漂移检查在第一次跑时抓到。
         excludes:
-          - "Fixtures/LEDDriverCrew/**"
+          - "Fixtures"
+          - "Fixtures/**"
       # 直接把 LocalRunner 源码编进 test bundle 而不是从 app 链接 ——
       # scaffold 阶段 app 不签名，无法做完整 macOS host-app injection；
       # bundle_loader + 无 test host 又会触发 dlopen 时 swift symbol 找不到。
