@@ -60,3 +60,13 @@
 - **问题**: 短语匹配改成 ASCII 字节搜索之后，**匹配本身在采样里已经看不见了**；`SessionHealthScanner.feed` 剩下的 0.47% 里约 0.4 个百分点落在 `AnsiPlainTextTail.feed` 内部的 `String.distance(from:to:)` —— 尾窗裁剪时按 grapheme 走查长度。
 - **量级**: 10 个 session 合计 0.55%，可忽略。登记只是为了留个坐标：下次谁再来压这条回调，第一刀应该切在尾窗裁剪（按 UTF-8 字节裁）而不是匹配上。
 
+
+### 🟡 仓库默认签名改成 ad-hoc —— 本机开发者不装 `Local.xcconfig` 会静默丢登录态
+- **发现**: 2026-08-20 · 开源准备（签名解耦）
+- **位置**: `Signing.xcconfig`（仓库默认值）、`Local.xcconfig.example`、`project.yml` 的 `configFiles`。
+- **为什么这么改**: 原来 `DEVELOPMENT_TEAM: M42BKJN82S` 硬编码在 `project.yml` 里，外部贡献者 clone 下来签不了名、编不过 —— 开源的第一道硬门槛。改成默认 ad-hoc 之后任何人都能编能跑。
+- **代价转嫁到哪**: `KeychainStore`（云端 crew 的 device-grant token）的 ACL 绑当前签名身份，ad-hoc 每次重建身份就变 → 反复弹「存取钥匙串」授权框或 `-34018` 存不住 → **登录态静默丢失**。这个坑 2026-06 已经踩过一次并用「稳定的 Apple Development 身份」根治过，现在把根治手段挪到了一个 **gitignored 的文件**里。
+- **谁受影响**: 只有要动云端登录/钥匙串那条路径的人。只跑本机 crew（起 claude / codex 子进程的主路径）完全不受影响 —— 那条路径不碰钥匙串。
+- **失败长什么样**: 不报错。app 编得出、装得上、跑得动，只是登录态存不住。所以**症状和病因隔着十万八千里**，别再从后端/Supabase 那头查。
+- **该怎么还**: 构建期没有可靠判据区分「贡献者本来就该 ad-hoc」和「本机开发者忘了装覆盖」，所以没加编译告警（那会给每个贡献者的每次构建都挂一条黄色噪音，反而训练人无视告警）。真要还，正确的地方是**运行时**：走云端登录路径时若检测到 ad-hoc 签名（`csops` / `SecCodeCopySigningInformation` 读不到 team identifier），直接在界面上说清「这个构建签名不稳定，登录态存不住」，而不是让它静默失败。
+- **发版不受影响**: `scripts/release/build-macos-update.sh` 在 xcodebuild 命令行上显式传 `CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=…`，命令行优先级最高，Developer ID 分发路径与这里的默认值无关。
