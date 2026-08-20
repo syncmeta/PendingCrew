@@ -1,0 +1,98 @@
+# 这条流水线只守 CONTRIBUTING 里那三条硬规矩，**不出包**。
+#
+# 签名证书和 Apple 公证凭据**一律不进 GitHub secrets** —— 那把 Developer ID
+# 证书能签任何冒充身份的 app，放进 CI 等于把它交给每一个能触发 workflow 的人。
+# 出包继续走本地那条路（scripts/release/build-macos-update.sh）。所以下面每一步
+# 都是**不需要任何凭据**的：仓库默认走 ad-hoc 签名（Signing.xcconfig），headless
+# 无证书环境能编能测。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
+
+# 同一个分支上新的推送把旧的跑掉 —— macOS runner 很贵，别让排队的旧 commit
+# 白烧分钟数。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # **钉死 Xcode 版本，不用 runner 镜像的默认值。** 镜像升级会静默换掉编译器，
+  # 表现成「昨天绿的今天红了、代码一个字没动」——最难查的一类 CI 故障。
+  # 26.5 (17F42) = 开发机上的那一版，两边编译器一致。
+  XCODE: /Applications/Xcode_26.5.app
+
+jobs:
+  # 单独一个 job，不跟全量编译排一起：它最快，而且抓的是**唯一一种本机永远
+  # 看不到红**的错 —— 加了 Swift 文件没 regen，提交者自己能编（Xcode 会自己
+  # 发现文件），别人 clone 下来那份 pbxproj 里没有它，只在别人机器上炸。
+  project-drift:
+    name: pbxproj 与 project.yml 同步
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - name: 检查生成物有没有漂移
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::project.yml 和提交进来的 .pbxproj 对不上。"
+            echo "::error::在本地跑 \`xcodegen\` 然后把 PendingCrew.xcodeproj/project.pbxproj 一起提交。"
+            echo "::error::新增 Swift 文件也算改了工程定义 —— 你本机能编，别人 clone 下来编不过。"
+            exit 1
+          fi
+
+  build-test:
+    name: 三端编译 + 单测
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 钉住 Xcode
+        run: |
+          test -d "$XCODE" || {
+            echo "::error::$XCODE 不在这台 runner 上。镜像里现有的："
+            ls -d /Applications/Xcode*.app
+            exit 1
+          }
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - run: brew install xcodegen
+
+      # SPM 解析结果按 Package.resolved 的哈希缓存 —— 23 个依赖，冷机每次重解
+      # 是这条流水线里最没意义的一段等待。key 里带 Xcode 版本：换编译器要重解。
+      - uses: actions/cache@v4
+        with:
+          path: SourcePackages
+          key: spm-${{ env.XCODE }}-${{ hashFiles('PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ env.XCODE }}-
+
+      - run: xcodegen generate
+
+      - name: macOS 编译 + 单测
+        run: |
+          xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
+            -destination 'platform=macOS' \
+            -derivedDataPath DD -clonedSourcePackagesDirPath SourcePackages \
+            build test
+
+      # 三端共用一套源码：只编 Mac 会让漏了 `#if os(macOS)` 的 AppKit 调用
+      # 把 iOS 端静默打红。`generic/platform=iOS Simulator` 只要 SDK，不需要
+      # 装模拟器运行时。
+      - name: iOS 端编译
+        run: |
+          xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath DD -clonedSourcePackagesDirPath SourcePackages \
+            build

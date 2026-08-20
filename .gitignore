@@ -6,6 +6,9 @@
 *.xcuserstate
 build/
 DerivedData/
+# CI（和照着 .github/workflows/ci.yml 在本地跑的人）用的输出目录
+DD/
+SourcePackages/
 .build/
 *.xcarchive
 
