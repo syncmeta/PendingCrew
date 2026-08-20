@@ -33,6 +33,8 @@ PendingCrew 是一个 **macOS app（同时能编出 iOS/iPad 产物）**，它�
 
 **没有服务器、没有账号、没有数据库。** 云端那半（Supabase 登录、跨设备遥控）代码在
 仓库里，但后端坐标是占位值（`Sources/Services/CrewHostedConfig.swift`），开箱不通。
+代价比听上去大：**实际编译出来的 33 个第三方模块里有 25 个（76%）只服务那条关掉的路径**——
+见第 3 节。
 
 规模：`Sources/` + `Shared/` 共 **249 个 Swift 文件 / 48,038 行**（`find … | wc -l`，
 含 `#if` 屏蔽掉的行）；`Tests/PendingCrewTests/` **123 个文件 / 21,532 行 / 1,443 个
@@ -64,7 +66,7 @@ PendingCrew 是一个 **macOS app（同时能编出 iOS/iPad 产物）**，它�
 ### 1.2 一个 target = 一个 Swift 模块（重要）
 
 `Sources/` 下那十几个目录**只是目录**。它们全部编进同一个 module，没有 `import`
-边界、没有编译器强制的依赖方向。第 4 节讲的「分层」全靠约定和 code review 维持，
+边界、没有编译器强制的依赖方向。第 5 节讲的「分层」全靠约定和 code review 维持，
 不靠工具。
 
 ### 1.3 测试 target 为什么要逐文件挑源码
@@ -120,7 +122,7 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 
 「app 二进制兼当 MCP server」这个选择是有意的：比 embed 一个独立 executable 更自包含
 （`Bundle.main.executablePath` 铁定可寻），也避开 macOS app bundle 嵌可执行文件的
-签名/拷贝坑。**第三副身份 `--daemon` 已经在设计里**，见第 9 节。
+签名/拷贝坑。**第三副身份 `--daemon` 已经在设计里**，见第 10 节。
 
 ---
 
@@ -128,7 +130,9 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 
 直接依赖 7 个（`project.yml` 的 `packages:`），解析出来一共 **23 个 pin**
 （`PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`）。
-换句话说 **16 个是传递依赖**，而其中 13 个只为云端登录那条路服务（见下表）。
+换句话说 **16 个是传递依赖**，其中 13 个只为云端登录那条路服务。
+把两个直接依赖（GoogleSignIn、Supabase）也算进去就是 **15 / 23**——**这条单独立在第 3 节**，
+它是整份梳理里最有决策价值的一条。
 
 | 包 | 版本约束 | 实际解析 | 用在哪（唯一入口） | 换掉的代价 |
 |---|---|---|---|---|
@@ -150,8 +154,9 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 - **SwiftTerm → 1 个**：swift-argument-parser 1.8.2
 - Sparkle / SwiftMath / TOMLKit：0 个
 
-> 一句可操作的话：**这个 app 有 23 个 SPM pin，其中 13 个（Google 7 + Supabase 6）
-> 只服务于一条在开源仓库里被占位值关掉的路径。** 谁要给依赖瘦身，第一刀在这儿。
+> 上面这四行按「谁把它拖进来的」数，得到 **13 个传递依赖**只服务云端登录；
+> 连两个直接依赖一起数是 **15 / 23**，按实际编译出来的模块数则是 **25 / 33**。
+> 三种数法与限定条件见 **第 3 节**。
 
 ### 2.1 SwiftTerm 为什么换不掉
 
@@ -162,7 +167,7 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 2. `Terminal` / `Buffer` —— **无画面**的终端状态机与权威缓冲区（纯 Foundation，零 AppKit）
 3. `MacTerminalView` —— 原生渲染 + 选中复制 + 回滚 + 改宽度 reflow
 
-而且第 2 与第 3 的分离正是「常驻后台」那条地基路线能走通的前提（第 9 节）：后台进程
+而且第 2 与第 3 的分离正是「常驻后台」那条地基路线能走通的前提（第 10 节）：后台进程
 养 1+2，窗口里的 view 只吃字节流。`TerminalView.feed(byteArray:)` 是 public 的，这是
 库设计上就支持的用法。换库 = 同时重写 PTY 层、状态机、渲染层，并重新验证那**六个从终端
 画面上认状态的扫描器 + 拉起自检看门狗**（`AgentTerminalSession.swift:12` 的原话）——
@@ -196,7 +201,59 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 
 ---
 
-## 3. 三端共用一套源码
+## 3. 三分之二的依赖树，服务的是一条被关掉的路径
+
+这条单独立一节，因为它是整份梳理里**最有决策价值的一条**，埋在上面的清单里会被漏掉。
+
+**三种数法，同一个结论。**
+
+| 数什么 | 云端登录那两族（Google + Supabase） | 全部 | 占比 |
+|---|---|---|---|
+| `Package.resolved` 的 pin | **15**（Google 家族 8 + Supabase 家族 7） | 23 | **65%** |
+| 实际编译出来的模块 | **25**（Google 族 11 + Supabase 族 14） | 33 | **76%** |
+| 编译产物体积（Debug `.o`） | 19.7 MB（Google 2.9 + Supabase 16.8） | 36.6 MB | 54% |
+
+模块与体积是**实测**的：一次完整 macOS Debug 构建后数 `DerivedData/Build/Products/Debug/*.o`，
+每个模块归到哪个包由各包 `Package.swift` 核对。逐个列出来：
+
+- **Google / OAuth 族（11 个模块）**：`GoogleSignIn`、`AppCheckCore`、`AppAuth`、`AppAuthCore`、
+  `GTMAppAuth`、`GTMSessionFetcherCore`、`GoogleUtilities-{Environment,Logger,UserDefaults}`、
+  `third-party-IsAppEncrypted`、`FBLPromises`
+- **Supabase 族（14 个模块）**：`Supabase`、`Auth`、`PostgREST`、`Realtime`、`RealtimeV2`、
+  `Storage`、`Functions`、`Helpers`、`Crypto`、`HTTPTypes`、`Clocks`、`ConcurrencyExtras`、
+  `IssueReporting`、`XCTestDynamicOverlay`
+- **本机 crew 主路径实际用到的只有 8 个模块**：`SwiftTerm`、`MarkdownUI` + `NetworkImage` +
+  `cmark-gfm` + `cmark-gfm-extensions`、`SwiftMath`、`TOMLKit` + `CTOML`
+  （外加嵌入式的 `Sparkle.framework`）
+
+**为什么这条要紧**：README 的「状态」一节把云端登录归进「代码在，但这份开源仓库里开箱
+不可用」——判据是 `Sources/Services/CrewHostedConfig.swift` 的四个占位常量。
+
+而这两族的**入口窄得可以数清**。全仓 `import` 普查（`find Sources Shared -name '*.swift'
+-exec grep -hoE "^ *import +[A-Za-z0-9_]+" {} +`）：`import Supabase` **4 处**（`Sources/Auth/`
+的三个登录方式 + `Sources/Services/CrewSupabaseStack.swift`），`import GoogleSignIn` **1 处**
+（`Sources/Auth/CrewGoogleSignIn.swift`）。**其余 23 个模块没有任何一处被源码直接 import**——
+它们全部是这两个入口的传递依赖。
+
+所以：**任何人 clone 下来编出的这个 app，四分之三的第三方模块的代码路径一次都不会被走到**
+（链接期开销与 ObjC 运行时的加载开销仍在，那是另一回事）。一个「装上就能用、不需要登录、
+不需要后端」的本机工具，它的依赖树主体是给一条默认关闭的云端路径准备的。
+
+**别把它读成「砍掉就瘦一半」——三个必须一起说的限定**：
+
+1. **数量 76%、体积只有 54%**。SwiftTerm 一个模块就 7.4 MB（Debug `.o`，全仓最大），
+   MarkdownUI 3.9 MB、SwiftMath 2.2 MB。真正贵的那几个恰恰在主路径上。
+2. **Debug `.o` 不等于发布产物的体积**。Release 会 strip、会做死代码消除，静态链接下没被
+   引用的符号很大一部分根本不会进最终二进制。**上表的体积列只能当量级信号，不是分发体积。**
+   要真数得先量一次 Release 产物，本次没量。
+3. **这不是「有人乱加依赖」**。这条线是有意的产品边界（README：「本地必须自洽，登录只是
+   叠加」），只是边界画在了源码里、没有画在依赖图里。
+
+**真要动的话，代价从低到高**：把 `Sources/Auth/` 那几个登录方式做成可选（`GoogleSignIn`
+带 7 个传递包，去掉它一族就少 8 个 pin / 11 个模块）＞ 把云端那半整体拆成 SPM 可选
+product ＞ 拆 target。前两条都动 `project.yml` 的依赖声明，**属于结构改动，不要顺手做**。
+
+## 4. 三端共用一套源码
 
 同一个 target 同时编 macOS 和 iOS。**平台门是逐文件的 `#if os(macOS)`，不是逐目录的。**
 
@@ -240,7 +297,7 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 
 ---
 
-## 4. 目录分层与真实依赖方向
+## 5. 目录分层与真实依赖方向
 
 ### 4.1 各目录的职责
 
@@ -322,7 +379,7 @@ PendingCrew 自己的实现上（比如 `ServerImage` 的 `serverURL` 参数收�
 
 ---
 
-## 5. 进程模型：app ↔ 子进程 ↔ MCP
+## 6. 进程模型：app ↔ 子进程 ↔ MCP
 
 这是整个产品的核心机制，也是最值得先读懂的一节。
 
@@ -466,7 +523,7 @@ bundle 单测。工具集（`tools/list` 在 `McpServer.swift:74-387`）：
 
 ---
 
-## 6. 数据与持久化
+## 7. 数据与持久化
 
 **全部在本机，没有数据库，没有上传。** 根目录 `~/Library/Application Support/PendingCrew/`。
 
@@ -529,7 +586,7 @@ PendingCrew/
 
 ---
 
-## 7. 构建与发版
+## 8. 构建与发版
 
 ### 7.1 日常
 
@@ -614,11 +671,11 @@ gh release create v<版本> --draft … <.dmg> <.zip>
 等待窗口 90 分钟、**超时原样放弃一个文件都不动**。顺序是冷备份数据目录 → 旧 app 移到
 回滚位 → 装新的 → 自动重开。细节与回滚命令见 `docs/release-macos.md:95-106`。
 
-> 「更新 app 就得等所有 session 跑完」正是第 9 节那条地基路线要解掉的问题。
+> 「更新 app 就得等所有 session 跑完」正是第 10 节那条地基路线要解掉的问题。
 
 ---
 
-## 8. 测试
+## 9. 测试
 
 `Tests/PendingCrewTests/`：123 个文件、21,532 行、**1,443 个 `func test`**
 （`grep -rh "func test" Tests/PendingCrewTests/*.swift | wc -l`）。
@@ -691,7 +748,7 @@ ls "$HOME/Library/Application Support/PendingCrew/whiteboards"   # 挑一个 cre
 
 ---
 
-## 9. 正在演进中：`Sources/Mac/` 的前后端分离
+## 10. 正在演进中：`Sources/Mac/` 的前后端分离
 
 ⚠️ **这一节描述的是一个中间态，不是终态。目标形态见
 `docs/internal/2026-08-19-backend-split-design.md`。**
@@ -734,7 +791,7 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 
 ---
 
-## 10. 「我想改 X，去哪个文件」
+## 11. 「我想改 X，去哪个文件」
 
 | 我想改… | 去 |
 |---|---|
@@ -763,14 +820,14 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 
 ---
 
-## 11. 已知的债
+## 12. 已知的债
 
 结构性问题登记在 `docs/tech-debt.md`（按 🔴 根基级 / 🟡 拆东墙补西墙 / 🟢 不规范 分档）。
 本次梳理新登记了四条，都在那个文件里：
 
 - 🟡 **没有 CI** —— `CONTRIBUTING.md` 的三条硬规矩全靠人手跑，而其中「新增文件要 regen
   pbxproj」那条的失败症状恰好是「只有别人的机器编不过」
-- 🟢 **`Sources/Mac/` 名不副实 + 单模块没有编译期的层**（第 3、4 节的两处发现）
+- 🟢 **`Sources/Mac/` 名不副实 + 单模块没有编译期的层**（第 4、5 节的两处发现）
 - 🟢 **`whiteboards/` 目录只增不减** —— per-session 的 `.cursor` / `.turn` / `.lock` 从不回收；
   本机实测两天从 1051 涨到 1346 个文件，而主线程仍在列这个目录
 - 🟢 **驾驶舱有一半的数据契约只存在于另一个仓库** —— `docs/handbook/` 与 `docs/state/`
