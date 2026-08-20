@@ -146,7 +146,8 @@ Resources/              Assets、entitlements、Prompts
 Tests/PendingCrewTests/ XCTest（macOS）
 Shared/AppUpdate/       Sparkle 自动更新 + 构建版本戳
 scripts/                本地小工具 + release/（Developer ID 签名、公证、发 feed）
-docs/                   release-macos.md（发版）、tech-debt.md（已知的债）
+docs/                   architecture.md（架构导览：想改 X 去哪个文件）
+                        release-macos.md（发版）、tech-debt.md（已知的债）
 docs/internal/          开发过程记录，写完即冻结，不随代码更新
 ```
 
