@@ -6,7 +6,7 @@
 > 核不动的地方写「未核实」，不用「一般来说」填空。
 > 与 `docs/internal/` 不同，**这份是活的**，改了结构请顺手改它。
 >
-> 核对基准：`main` @ `ce95bf6`（2026-08-20）。
+> 核对基准：`main` @ `4dc855a`（2026-08-21）。
 
 ---
 
@@ -83,16 +83,20 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 
 ### 1.4 签名：仓库默认 ad-hoc
 
-签名策略**不在 `project.yml` 的 `settings` 里**，在 `Signing.xcconfig`（project 级
+签名策略**不在 `project.yml` 的 `settings` 里**，在 `Config/Signing.xcconfig`（project 级
 `configFiles`，Debug/Release 都指它）。原因写在 `project.yml` 的注释里：Xcode 的优先级是
 「target 设置 > target xcconfig > project 设置 > project xcconfig」，只要
 `DEVELOPMENT_TEAM` 还留在 `settings.base`，本地覆盖就永远不生效。
 
-- **仓库默认**（`Signing.xcconfig:23-37`）：`CODE_SIGN_STYLE = Manual`、
+**为什么在 `Config/` 而不是仓库根**（2026-08-21，`4dc855a`）：根目录的 xcconfig 会让
+`xcodegen` 的输出不确定 —— `project.pbxproj` 里那条文件引用的 uuid 每次 regen 都变，
+于是 CI 那道「regen 之后 `git diff --exit-code`」永远是红的。挪进 `Config/` 之后就稳定了。
+
+- **仓库默认**（`Config/Signing.xcconfig:28-42`）：`CODE_SIGN_STYLE = Manual`、
   `CODE_SIGN_IDENTITY = -`（ad-hoc）、`DEVELOPMENT_TEAM` 空、`CODE_SIGN_ENTITLEMENTS` 空。
   任何人 clone 下来不改被跟踪的文件就能编能跑。
-- **本机覆盖**：`Signing.xcconfig` 末尾 `#include? "Local.xcconfig"`（gitignored，
-  模板见 `Local.xcconfig.example`），填自己的 Team ID 并打开 entitlements。
+- **本机覆盖**：`Config/Signing.xcconfig` 末尾 `#include? "Config/Local.xcconfig"`（gitignored，
+  模板见 `Config/Local.xcconfig.example`），填自己的 Team ID 并打开 entitlements。
 - **entitlements 必须跟着签名身份一起走**：`Resources/PendingCrew.entitlements` 里的
   keychain 组写成 `$(AppIdentifierPrefix)com.pendingname.pendingcrew`，这个变量**只能由
   provisioning profile 展开**，没 team 就直接编译失败（不是警告）。所以默认构建不带
@@ -631,7 +635,10 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 从哪个 commit 出的」写进产物 `Info.plist`（`basedOnDependencyAnalysis: false` —— 没有输入/
 输出文件可声明，必须每次都跑，否则增量构建沿用上次的戳，戳就成了谎报）。
 
-**没有 CI。** 仓库里没有 `.github/workflows/`，上面这三条命令全靠人手跑。已登记为 🟡。
+**CI 在 `.github/workflows/ci.yml`**（2026-08-21 落地）。两个 job：①「pbxproj 与
+`project.yml` 同步」—— 重跑 `xcodegen` 后比 diff，抓「加了文件忘了 regen」那条；
+② 三端编译 + 单测。在这之前上面三条命令全靠人手跑，而第一条的失败症状恰好是
+**只有别人的机器编不过**，提交者本机永远看不到红。
 
 ### 7.2 发版：一条命令，六道断言
 
@@ -652,7 +659,7 @@ build 号 = 纪元日时间戳「天.秒」（如 20684.16770），从时钟派�
   ↓
 xcodebuild archive（自动签名）→ exportArchive（method: developer-id，重新签发布身份）
   命令行显式传 CODE_SIGN_STYLE / DEVELOPMENT_TEAM / CODE_SIGN_ENTITLEMENTS
-  （干净快照里没有 gitignored 的 Local.xcconfig）
+  （干净快照里没有 gitignored 的 Config/Local.xcconfig）
   ↓
 六道断言，每道对应一次真踩过的坑：
   ① Info.plist 必须有 SUPublicEDKey（缺了 = 永远收不到更新的死包，两端都静默）
@@ -852,8 +859,7 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 结构性问题登记在 `docs/tech-debt.md`（按 🔴 根基级 / 🟡 拆东墙补西墙 / 🟢 不规范 分档）。
 本次梳理新登记了四条，都在那个文件里：
 
-- 🟡 **没有 CI** —— `CONTRIBUTING.md` 的三条硬规矩全靠人手跑，而其中「新增文件要 regen
-  pbxproj」那条的失败症状恰好是「只有别人的机器编不过」
+- ~~🟡 **没有 CI**~~ —— **已还（2026-08-21，`.github/workflows/ci.yml`）**
 - 🟢 **`Sources/Mac/` 名不副实 + 单模块没有编译期的层**（第 4、5 节的两处发现）
 - 🟢 **`whiteboards/` 目录只增不减** —— per-session 的 `.cursor` / `.turn` / `.lock` 从不回收；
   本机实测两天从 1051 涨到 1346 个文件，而主线程仍在列这个目录
