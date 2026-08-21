@@ -1,10 +1,12 @@
 # 安全问题
 
-**不要开公开 issue。** 发邮件到 **security@pendingname.com**，或者用 GitHub 的
-[私密漏洞报告](https://github.com/syncmeta/PendingCrew/security/advisories/new)。
+**不要开公开 issue。** 走 GitHub 的
+[私密漏洞报告](https://github.com/syncmeta/PendingCrew/security/advisories/new)
+（Security → Report a vulnerability）—— 那是这个项目唯一的报告渠道。
 
-这是个人项目，没有安全团队，也没有赏金。我会尽力在几天内回你一句，但请别按
-企业 SLA 期待。
+先把期望说清楚，免得浪费你的时间：**这是一个个人实验项目，没有经过任何安全
+审计，没有安全团队，也没有赏金。** 我会尽力在几天内回你一句，但别按企业 SLA
+期待。它也不适合放在你不完全掌控的机器上跑（原因见下面第一条）。
 
 ## 先看这里 —— 有些「问题」是设计如此
 
