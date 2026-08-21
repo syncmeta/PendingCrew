@@ -1,5 +1,7 @@
 # PendingCrew
 
+> 以下内容暂时由 Claude 撰写。
+
 在自己的 Mac 上，把多个 coding agent（Claude Code / Codex）当成一个**小组**来带。
 
 **不需要登录，不需要账号，不需要任何后端。** 装上、打开、起 session 就能干活 ——
