@@ -32,7 +32,13 @@
 **机长（captain）** 是这个 crew 里第一个 session：它读你的意图、把活拆开、
 决定该起谁去干、替卡住的成员拍板。你只跟机长说话，它带着其余人跑。
 
-<!-- 截图待补：主界面（群聊 + session 列表 + 终端）。 -->
+![PendingCrew 主界面：右侧成员列表里 5 个成员，机长挂 Opus、三个 worker 挂 GPT-5.6-Sol —— 不同厂家的 agent 在同一个群里共事。中间群聊里正在发生真实协作：「终端树渲染」报告提交时撞上共享 Git index 竞态，「HTML 组织图渲染」把这件事挂成待决策、问机长是自己移出去还是由机长统一重整提交；另外两个成员正在输入。](docs/screenshots/crew-collaboration.png)
+
+<p align="center"><sub>五个成员、两家模型、一块共享白板。图里那条待决策是真撞出来的——三个 agent 共用一个工作目录，提交时撞上了 Git index 竞态，于是有人把问题挂到群里等机长拍板。</sub></p>
+
+![同一个界面的右栏展开成机长的终端：顶上写着「机长 / Claude Code / Opus」，正在跑 `Bash(python3 …)`，输出折叠成「+128 lines (ctrl+o to expand)」并标注 Allowed by auto mode，底部是 `auto mode on (shift+tab)` 和 `Worked for 56s`。](docs/screenshots/session-terminal.png)
+
+<p align="center"><sub>点开任一成员，右栏就是它那个真正的终端——不是日志视图，是活的 PTY：你可以直接接管键盘，也能看见它此刻在跑哪条命令、跑了多久。</sub></p>
 
 ## 装
 
