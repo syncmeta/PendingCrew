@@ -272,15 +272,36 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         return win
     }
 
-    /// 转几拍主线程，让 SwiftUI 的更新 + 我们排的那一次 hop 都落地。
-    private func settle(_ win: NSWindow, _ seconds: TimeInterval = 0.4) {
-        let deadline = Date().addingTimeInterval(seconds)
+    /// 转主线程直到**滚动几何连续 25 拍不再变**（约 0.25s 静止），最多等 4s。
+    ///
+    /// 不写成「固定转 0.4 秒」：那样的等待时长与机器负载耦合，整套 1400+ 用例一起跑时
+    /// 这一拍可能没转够，用例就成了看运气的红。等「不再动」是它自己的收敛条件，跑得快
+    /// 的机器上还更省时间。
+    private func settle(_ win: NSWindow, timeout: TimeInterval = 4.0) {
+        let rig = self.currentRig
+        var last = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+        var stable = 0
+        let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
             win.layoutIfNeeded()
             win.contentView?.displayIfNeeded()
+            let now = CGPoint(x: rig?.offsetY ?? CGFloat.nan,
+                              y: rig?.distanceFromBottom ?? CGFloat.nan)
+            if now.x.isNaN || now.y.isNaN {
+                stable = 0
+            } else if now == last {
+                stable += 1
+                if stable >= 25 { return }
+            } else {
+                stable = 0
+            }
+            last = now
         }
     }
+
+    /// `settle` 要读的那个 rig（每个 `run(...)` 开头挂上）。
+    private var currentRig: Rig?
 
     private struct Measure {
         var beforeDistance: CGFloat, afterDistance: CGFloat
@@ -299,6 +320,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         let anchorID = CrewChatWindow.anchorOnExpand(
             CrewChatWindow.window(rig.ids, limit: startLimit),
             limit: startLimit, isFollowing: false)!
+        currentRig = rig
         let win = hostInWindow(Harness(rig: rig))
         settle(win)
         // 人自己滑到顶（看得见「加载更早」那条）。
