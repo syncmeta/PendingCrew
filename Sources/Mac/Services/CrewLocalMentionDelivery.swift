@@ -26,7 +26,8 @@ enum CrewLocalMentionDelivery {
 
         // 项8/#490/#543：近期群聊上下文（仅前置给 claude 目标）从每个目标 session
         // 自己的未读游标现取，且只放对该 session 可见的（@ 别人的定向不当「近期
-        // 群聊」灌进来）。
+        // 群聊」灌进来）。要的是「**看得见吗**」：唤醒名单由下面的 `plannedInjections`
+        // 从 `effectiveMentions` 里解（只认 session/captain），跟这一段无关。
         let store = LocalWhiteboardStore.shared
         let cursorDir = LocalWhiteboardStore.defaultDirectory
         var unreadBySession: [String: [LocalWhiteboardMessage]] = [:]

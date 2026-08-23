@@ -111,6 +111,8 @@ final class CrewMailboxWaker {
             ? cursor.unread(in: store)
             : []
         // #543：上下文只放对该 session 可见的条目（@ 别人的定向不当「近期群聊」灌进来）。
+        // 要的是「**看得见吗**」：这一拍是否唤醒早由 mailbox 有没有项决定
+        // （`CrewMailboxWakeLogic.decide`），这里只挑附带的近期上下文。
         let recent = Array(CrewWhiteboardVisibility
             .visible(unread, to: run.sessionId, isCaptain: run.role == .captain)
             .suffix(15))

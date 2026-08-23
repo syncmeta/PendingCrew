@@ -143,6 +143,9 @@ struct HookEmitter {
     private func pendingContext() -> (context: String?, last: LocalWhiteboardMessage)? {
         let unread = cursor.unread(in: store)
         guard let last = unread.last else { return nil }
+        // 要的是「**看得见吗**」，不是「该叫醒吗」—— 这条路每轮都跑，本身就不唤醒
+        // 任何人，只决定渲染什么进上下文。只 @ 了人类的消息在这里必须可见（2026-08-23
+        // 修的正主：过去它对所有 agent 隐身）。
         let mine = CrewWhiteboardVisibility.visible(unread, to: sessionId, isCaptain: isCaptain)
         return (mine.isEmpty ? nil : render(mine), last)
     }

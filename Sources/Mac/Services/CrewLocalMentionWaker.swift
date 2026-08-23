@@ -155,6 +155,8 @@ final class CrewLocalMentionWaker {
         // 近期上下文（仅 claude 目标）：按目标自己的未读游标现取（#490 语义），
         // 剔掉本条 @ 消息自身 —— 它已是注入正文，重复出现会读两遍。
         // #543：上下文同样只放对该 session 可见的（@ 别人的定向不当「近期群聊」灌进来）。
+        // 这里要的是「**看得见吗**」：谁被唤醒由下面的 `plannedInjections` 定（只认
+        // session/captain），这一段只决定那次唤醒**附带什么上下文**。
         var unreadBySession: [String: [LocalWhiteboardMessage]] = [:]
         for r in candidates where r.kind == .claudeCode {
             let unread = WhiteboardCursor(

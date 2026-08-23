@@ -83,7 +83,7 @@ final class McpServer {
                             "category": ["type": "string", "enum": ["progress", "question", "milestone"]],
                             "mentions": [
                                 "type": "array",
-                                "description": "可选定向 @ 列表 —— 要某个具体对象接手/回应时带上；不填=广播给全 crew。@session 会把这条投进那个 session 的定向信箱（它优先看到）。",
+                                "description": "可选定向 @ 列表 —— 要某个具体对象接手/回应时带上；不填=广播给全 crew。@session / @captain 会**收窄可见范围**：只有被点到的 agent 看得到，并把这条投进它的定向信箱（它优先看到）。@human 不收窄 —— 它只是「这条是讲给人听的、别为它叫醒 agent」的标记，消息对全 crew 照常可见。",
                                 "items": [
                                     "type": "object",
                                     "properties": [

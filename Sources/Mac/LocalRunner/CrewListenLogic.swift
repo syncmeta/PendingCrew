@@ -15,8 +15,10 @@ import Foundation
 ///
 /// 语义要点（对齐 mention 直投）：
 ///   * **busy 不打断** —— 调用方保留完整计划，交给 runner 在 idle 后自动补投。
-///   * **只送广播 + @我** —— 定向 @ 了别人的消息不进收听者视野（同白板注入的
-///     过滤规则）；@ 我的消息本就该唤醒我，收听期间一并送达。
+///   * **只送广播** —— 带任何非 broadcast mention 的都不送：`@session` / `@captain`
+///     已有直投链（去重），`@human` 是刻意降噪（详见 `deliverable`）。注意这比
+///     `CrewWhiteboardVisibility` 的可见面**更窄**：human-only 的消息对 agent 可见，
+///     但不为它叫醒收听者。
 ///   * **不送自己/系统** —— 自己发的与「系统」回执（sessionId 哨兵 "system"）
 ///     不注入（系统回执靠白板注入即可，不值得为它唤醒）。
 ///   * **到期即失效** —— `until <= now` 的登记按不存在处理（清理归调用方）。
@@ -29,8 +31,8 @@ enum CrewListenLogic {
         /// 只听这些发送者："human" / "captain" / session id（或其前缀）/ 显示名。
         /// nil = 全部。
         let senders: [String]?
-        /// 该 session 是不是本 crew 机长 —— 吃 `@captain` 的定向（#543：可见性判定
-        /// 与 hook 注入路共用 `CrewWhiteboardVisibility`，机长身份是它的入参）。
+        /// 该 session 是不是本 crew 机长。机长身份在 `deliverable` 里只用于一件事：
+        /// 人类无目标消息默认路由机长，机长即使开着 listen 也不能再吃第二份。
         /// 默认 false 兼容旧调用方 / 单测。
         var isCaptain: Bool = false
     }
@@ -81,8 +83,16 @@ enum CrewListenLogic {
         // 自己发的 / 系统回执不送。
         if m.senderSessionId == l.sessionId { return false }
         if m.senderSessionId == "system" { return false }
-        // 定向消息已有 mention 直投/补投链；listen 再送会把同一条 @ 注入两次。
-        // 显式 broadcast mention 仍是广播，不应被这个去重边界误伤。
+        // 这里**不**调 `CrewWhiteboardVisibility` —— 收听面比可见面更窄，两条判据故意分开。
+        //   * `@session` / `@captain`：已有 mention 直投/补投链，listen 再送会把同一条
+        //     @ 注入两次 —— 这一支是**去重**。
+        //   * `@human`：人类根本没有直投链，去重的理由对它不成立。它不投给收听者是一个
+        //     **刻意的降噪选择** —— `@人 汇报…` 是讲给人听的，不值得为它把全 crew 正在
+        //     listen 的 session 全叫醒一遍。2026-08-23 放宽了 `CrewWhiteboardVisibility`
+        //     里 human 的**可见性**（只 @ 人类的消息不再对 agent 隐身），但**这里一个字
+        //     没动**：看得见 ≠ 该被它叫醒。下一个人别本着「human 不再是定向」的精神把这
+        //     一支顺手删了 —— 那会换来一个更吵的 bug。
+        //   * 显式 broadcast mention 仍是广播，不应被这条边界误伤。
         let hasDirectedMention = (m.mentions ?? []).contains { $0.kind != "broadcast" }
         if hasDirectedMention { return false }
         // 人类无目标消息默认路由机长；机长即使开着 listen 也不能再吃第二份。
