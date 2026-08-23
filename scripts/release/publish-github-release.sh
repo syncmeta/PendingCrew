@@ -34,12 +34,18 @@ xcrun stapler validate "$dmg" >/dev/null 2>&1 \
   || { echo "$dmg 没 staple 上公证票 —— 用户离线首次打开会被拦。拒绝发布。" >&2; exit 2; }
 
 if gh release view "v$version" --repo "$repo" >/dev/null 2>&1; then
-  echo "note: v$version 已存在，补传产物"
+  # 正文不动：这一版可能已经被人手工编辑过，补传产物不该顺手覆盖掉它。
+  echo "note: v$version 已存在，补传产物（正文保持原样）"
   gh release upload "v$version" "$dmg" "$zip" --repo "$repo" --clobber
 else
+  # Release 正文取自 CHANGELOG.md，不用 --generate-notes —— 那个会把提交标题
+  # 列成一串倒给用户看。取不到就在这儿挂掉，此时还什么都没传上去。
+  notes=$(mktemp)
+  trap 'rm -f "$notes"' EXIT INT TERM
+  "$root/scripts/release/changelog-section.sh" "$version" > "$notes"
   # shellcheck disable=SC2086
   gh release create "v$version" "$dmg" "$zip" --repo "$repo" \
-    --title "PendingCrew $version" --generate-notes $draft
+    --title "PendingCrew $version" --notes-file "$notes" $draft
 fi
 
 # 发布之后才更新 tap —— cask 的 sha256 取自 Release 上那个资产自己公布的摘要，
