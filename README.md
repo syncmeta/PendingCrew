@@ -1,12 +1,23 @@
-# PendingCrew
+<p align="center">
+  <img src="docs/app-icon.png" width="128" alt="PendingCrew 应用图标" />
+</p>
+<h1 align="center">PendingCrew</h1>
 
-**The Harness of Harness.**
+<p align="center">
+  The Harness of Harness.
+  <br />
+  <em>在自己的 Mac 上，把多个 coding agent 当成一个小组来带</em>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+  <img alt="Swift" src="https://img.shields.io/badge/lang-Swift%205-F05138?logo=swift&logoColor=white" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" />
+  <a href="https://github.com/syncmeta/PendingCrew/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.1.13-informational" /></a>
+</p>
 
 Claude Code、Codex 这些 coding agent 各自带着自己的 harness 跑。PendingCrew 是**罩在它们外面的那一层**：
 在你自己的 Mac 上，把多个 agent 当成一个**小组**来带。
-
-> 本 README 的结构与项目定位由作者拟定；技术章节由 Claude 补写，每条结论都从当前
-> `main` 的文件与实测输出里核过。
 
 ![PendingCrew 主界面：右侧成员列表里 5 个成员，机长挂 Opus、三个 worker 挂 GPT-5.6-Sol —— 不同厂家的 agent 在同一个群里共事。中间群聊里正在发生真实协作：「终端树渲染」报告提交时撞上共享 Git index 竞态，「HTML 组织图渲染」把这件事挂成待决策、问机长是自己移出去还是由机长统一重整提交；另外两个成员正在输入。](docs/screenshots/crew-collaboration.png)
 
@@ -196,3 +207,10 @@ docs/                   architecture.md（架构导览）、release-macos.md（�
 docs/internal/          开发过程记录，写完即冻结，不随代码更新
 .github/workflows/      CI（三个不需要凭据的门）
 ```
+
+---
+
+<sub>本 README 的结构与项目定位由作者拟定，技术章节由 Claude 补写。其中 1,443 个测试
+0 失败来自 2026-08-22 在本机实跑 `xcodebuild … test` 的输出，依赖许可证构成来自逐个
+读 23 个 SPM checkout 的 LICENSE 正文，版本号取自 GitHub Releases，
+不是从旧文档转抄。</sub>
