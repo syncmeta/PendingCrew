@@ -732,6 +732,7 @@ gh release create v<版本> --draft … <.dmg> <.zip>
 | 终端劈半的等价性 | `TerminalMirrorParityTests`、`TerminalScrollbackTests`、`TerminatedScrollbackTests` | P1 劈开后画面与内核不漂 |
 | 界面自激回归 | `LayoutLoopRegressionTests`、`NoSwiftUIRepeatForeverTests` | 「布局自激闪退」不许回来 |
 | 性能预算 | `CrewChatOpenCostTests`（8 个用例，真数据 + 离屏 `NSHostingView` 实测毫秒） | 打开群聊一次重排 ≤ 100ms |
+| 群聊滚到哪 | `CrewChatBottomFollowTests`、`CrewChatWindowTests`、`CrewChatExpandAnchorProbeTests`（离屏窗口实测 `contentOffset`） | 开屏落最新、跟随只许自己开；**点「加载更早」不许挪走阅读位置** |
 | 组织与通讯录 | `CrewDirectoryTests`、`LocalCrewStoreOrgMoveTests`、`CaptainOrgToolsTests`、`CrewDragDropLogicTests` | 禁环、号码不回收、拖拽语义 |
 | 泄密闸 | `CrewHostedConfigTests` | 钉住仓库里必须还是占位后端坐标 |
 | 视图接线 | `ViewWiringTests`、`ProcessRoleTests` | 视图不许 new 长期对象；进程角色判定 |
@@ -739,7 +740,11 @@ gh release create v<版本> --draft … <.dmg> <.zip>
 ### 8.2 没覆盖什么（结构性的，不是遗漏）
 
 - **UI 本身**：没有 XCUITest，没有快照测试。SwiftUI 视图只以「离屏 `NSHostingView` 量
-  布局成本」和「静态接线检查」的形式被间接触到。
+  布局成本」「离屏窗口量滚动几何」（`CrewChatExpandAnchorProbeTests`：挂一个从不
+  `orderFront` 的 borderless 窗口，读 `onScrollGeometryChange` 的 `contentOffset`，
+  每个用例配一次不补偿的对照证明探针真测到了东西）和「静态接线检查」的形式被间接触到。
+  量得到锚点机制（尺寸锚方向、容器身份翻面、`scrollTo` 的时机）；量不到真气泡的观感 ——
+  那仍然只能靠人在真窗口里看。
 - **真子进程**：没有任何测试真的拉起一次 `claude` / `codex`。argv、协议、解析器全被单测，
   但「拼出来的这条命令行在真 CLI 上跑不跑得通」只能靠人。
 - **端到端回路**：「app 写 → helper 读 → agent 调工具 → 写回 → app 醒」这条链没有集成测试，
@@ -843,6 +848,7 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 | 群聊气泡长什么样 | `Sources/Chat/Vendored/BubbleView.swift`（**vendored，先读文件头**）；映射在 `Sources/Chat/Adapter/CrewChatAdapter.swift` |
 | Markdown / 公式渲染 | `Sources/Chat/Vendored/MarkdownText.swift` / `MathRendering.swift`（同样 vendored） |
 | 三栏主界面 | `Sources/Mac/Views/MacRootView.swift` → `CrewSidebarView` / `CrewChatView` / `CrewSessionWindowView` |
+| 群聊滚到哪 / 「加载更早」 | 渲染窗口与锚点判定 `Sources/Chat/Adapter/CrewChatWindow.swift`；跟随/未读 `Sources/Chat/Adapter/CrewChatBottomFollow.swift`；接线在 `CrewChatView` 的 `ChatScrollAnchor` / `expandEarlier` |
 | iPad / iPhone 形态 | `Sources/Views/IPadShell.swift`（detail 直接复用 `CrewChatView`） |
 | 侧栏状态点的颜色语义 | crew 级 `Sources/Support/CrewStatusAggregation.swift`；session 级 `Sources/Support/SessionStatusDot.swift`（**两套，别混**） |
 | 额度环 | 判定 `Sources/Support/QuotaRingLayout.swift`；取数 `Sources/Mac/Services/QuotaCenter.swift` |
