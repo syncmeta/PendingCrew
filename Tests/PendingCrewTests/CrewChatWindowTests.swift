@@ -98,4 +98,79 @@ final class CrewChatWindowTests: XCTestCase {
                 "total=\(total)")
         }
     }
+
+    // MARK: - Todo #60：加载更早要保持位置，不许甩到新那一页的开头
+
+    func test_展开前的锚点是当前窗口最顶那条() throws {
+        let all = msgs(70)
+        let anchor = try XCTUnwrap(CrewChatWindow.anchorOnExpand(
+            CrewChatWindow.window(all, limit: CrewChatWindow.pageSize),
+            limit: CrewChatWindow.pageSize,
+            isFollowing: false))
+        XCTAssertEqual(anchor, 70 - CrewChatWindow.pageSize,
+                       "锚的是人眼前那条 —— 展开前窗口的第一条")
+    }
+
+    func test_展开后锚点仍在窗口里_而且上面正好多了一页() throws {
+        let all = msgs(70)
+        let limit = CrewChatWindow.pageSize
+        let before = CrewChatWindow.window(all, limit: limit)
+        let anchor = try XCTUnwrap(
+            CrewChatWindow.anchorOnExpand(before, limit: limit, isFollowing: false))
+
+        let after = CrewChatWindow.window(all, limit: CrewChatWindow.expanded(limit, total: all.count))
+        let idx = try XCTUnwrap(after.firstIndex(of: anchor))
+        XCTAssertEqual(idx, CrewChatWindow.insertedAbove(total: all.count, limit: limit),
+                       "锚点上面新插进来的正好是这一页 —— 把它钉回顶部，眼前的内容就不动")
+        XCTAssertEqual(Array(after.suffix(from: idx)), before,
+                       "锚点往下那一段一字不变 —— 展开只在上面加东西")
+    }
+
+    func test_最后一页不足一整页时锚点照样对齐() throws {
+        // 70 条、已经放出 65 条：只剩 5 条可放，位移就是 5 不是 pageSize。
+        let all = msgs(70)
+        let limit = 65
+        XCTAssertEqual(CrewChatWindow.insertedAbove(total: 70, limit: limit), 5)
+        let before = CrewChatWindow.window(all, limit: limit)
+        let anchor = try XCTUnwrap(
+            CrewChatWindow.anchorOnExpand(before, limit: limit, isFollowing: false))
+        let after = CrewChatWindow.window(all, limit: CrewChatWindow.expanded(limit, total: 70))
+        XCTAssertEqual(after.firstIndex(of: anchor), 5)
+        XCTAssertEqual(after, all, "这一下翻到底，占位随之消失")
+    }
+
+    func test_还跟着底部时不锚_别把人从底部拽到顶部() {
+        // 历史短到「加载更早」和最新一条同屏时会走到这里：那时尺寸变化锚的是底部，
+        // 视口本来就纹丝不动，再补一记 scrollTo 就是平白把人拽走，还要跟 landAtBottom
+        // 抢同一拍。
+        XCTAssertNil(CrewChatWindow.anchorOnExpand(
+            CrewChatWindow.window(msgs(20), limit: CrewChatWindow.pageSize),
+            limit: CrewChatWindow.pageSize,
+            isFollowing: true))
+    }
+
+    func test_没东西可锚时返回nil_不崩() {
+        XCTAssertNil(CrewChatWindow.anchorOnExpand([Int](), limit: CrewChatWindow.pageSize, isFollowing: false))
+        XCTAssertNil(CrewChatWindow.anchorOnExpand(msgs(5), limit: 0, isFollowing: false))
+        XCTAssertEqual(CrewChatWindow.insertedAbove(total: 0, limit: CrewChatWindow.pageSize), 0)
+        XCTAssertEqual(CrewChatWindow.insertedAbove(total: 70, limit: 70), 0,
+                       "已经到底，再点也没得插 —— 占位这时已经不在了")
+    }
+
+    func test_连点多次每一次的锚点都还在新窗口里() throws {
+        // 第一次点击（12→24）与之后的点击是两种不同现场（容器身份翻面 vs 纯 lazy），
+        // 但「锚哪条、锚点在新窗口的第几位」这条纯逻辑对两者一模一样。
+        let all = msgs(70)
+        var limit = CrewChatWindow.pageSize
+        for step in 0 ..< 4 {
+            let before = CrewChatWindow.window(all, limit: limit)
+            let anchor = try XCTUnwrap(
+                CrewChatWindow.anchorOnExpand(before, limit: limit, isFollowing: false),
+                "第 \(step + 1) 次点击应当有锚点")
+            let shift = CrewChatWindow.insertedAbove(total: all.count, limit: limit)
+            limit = CrewChatWindow.expanded(limit, total: all.count)
+            let after = CrewChatWindow.window(all, limit: limit)
+            XCTAssertEqual(after.firstIndex(of: anchor), shift, "第 \(step + 1) 次点击")
+        }
+    }
 }

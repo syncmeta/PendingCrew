@@ -70,6 +70,29 @@ enum CrewChatWindow {
         clampedLimit(clampedLimit(limit, total: total) + pageSize, total: total)
     }
 
+    /// 「加载更早」按下去的那一刻，该把哪一条钉回视口顶部（Todo #60）。
+    ///
+    /// 返回**展开前**窗口最顶那条。人能点到那个按钮说明视口已经在内容顶端附近、那一条
+    /// 就在他眼前；展开后把它钉回顶部，新放出来的一页落在它上面，眼前的内容基本不动
+    /// （误差只有按钮那一行、以及那条原本因为「窗口第一条」而带的时间分隔展开后可能
+    /// 消失）。不补这一记的话视口会停在**新那一页的开头** —— 因为 `ChatScrollAnchor`
+    /// 在不跟随时把尺寸变化锚在**内容顶端**（Todo #47 行为 3 要的是「新消息在下面长、
+    /// 视口不许动」），而这里内容是在**上面**长，同一个锚点方向正好相反。
+    ///
+    /// `isFollowing` 还挂着时返回 nil：那时尺寸变化锚的是底部，视口本来就纹丝不动
+    /// （历史短到按钮和底部同屏才会发生），再补一记 `scrollTo` 只会把人从底部拽到顶部，
+    /// 还要和 `landAtBottom` / `BottomOnContentGrowth` 抢同一拍。
+    static func anchorOnExpand<T>(_ all: [T], limit: Int, isFollowing: Bool) -> T? {
+        guard !isFollowing else { return nil }
+        return window(all, limit: limit).first
+    }
+
+    /// 展开之后，锚点那条上面新插进来了几条 —— 也就是「不补偿的话视口会被推走多远」
+    /// （按行数算）。为 0 时说明这一下什么都没多出来，锚不锚都一样。
+    static func insertedAbove(total: Int, limit: Int, pageSize: Int = CrewChatWindow.pageSize) -> Int {
+        expanded(limit, total: total, pageSize: pageSize) - clampedLimit(limit, total: total)
+    }
+
     /// 还没渲染的条数 —— 占位上写「上面还有 N 条」，让人知道翻上去有东西。
     static func remaining(total: Int, limit: Int) -> Int {
         max(0, total - clampedLimit(limit, total: total))

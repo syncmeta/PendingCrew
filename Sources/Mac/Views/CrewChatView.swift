@@ -786,7 +786,7 @@ struct CrewChatView: View {
         // 只认「点一下」这个离散事件，**不做滚到顶自动加载** —— 滚动位置驱动内容增长、
         // 内容增长又改滚动位置，正是布局自激的配方（2026-07-26 / 08-10 两次事故）。
         if CrewChatWindow.hasMore(total: timelineEntries.count, limit: renderLimit) {
-            loadEarlierRow
+            loadEarlierRow(proxy)
         }
         ForEach(timelineRows) { row in
             if let sep = row.separator {
@@ -894,14 +894,13 @@ struct CrewChatView: View {
     }
 
     /// 渲染窗口顶部的「加载更早的消息」（#443）。一条都没丢，点一下往前放一页。
-    private var loadEarlierRow: some View {
+    private func loadEarlierRow(_ proxy: ScrollViewProxy) -> some View {
         let remaining = CrewChatWindow.remaining(
             total: timelineEntries.count, limit: renderLimit)
         return HStack {
             Spacer(minLength: 0)
             Button {
-                renderLimit = CrewChatWindow.expanded(
-                    renderLimit, total: timelineEntries.count)
+                expandEarlier(proxy)
             } label: {
                 Text("加载更早的 \(min(remaining, CrewChatWindow.pageSize)) 条（上面还有 \(remaining) 条）")
                     .font(Theme.Fonts.caption)
@@ -916,6 +915,51 @@ struct CrewChatView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 8)
+    }
+
+    /// 点「加载更早」：往前放一页，**并把展开前视口顶上那条钉回顶部**（Todo #60）。
+    ///
+    /// ## 为什么非补这一记不可
+    ///
+    /// 人往上翻看历史时 `isFollowing` 已经松开，`ChatScrollAnchor` 把尺寸变化锚在
+    /// **内容顶端**（Todo #47 行为 3：新消息在**下面**长时视口一动不动）。而「加载更早」
+    /// 是内容在**上面**长 —— 同一个锚点对这两个方向要求正好相反：锚顶端 = 他正在读的
+    /// 那段整体下移一页的高度，视口没跟，于是看到的是新那一页的开头。这不是「忘了补偿」，
+    /// 是那个 anchor 策略对这个方向本来就是错的。
+    ///
+    /// 另外第一次点击（12→24）还额外撞一次容器身份翻面：`usesEagerInitialLayout` 的判据
+    /// 是 `limit <= pageSize`，那一下 `if VStack / else LazyVStack` 分支翻面，SwiftUI 视图
+    /// 身份变了、整棵内容树重建，滚动位置被彻底重置。**任何靠 anchor 保位置的做法都救不了
+    /// 这一下**（锚点属于同一棵树的连续性），所以这里必须是程序化 `scrollTo`。
+    ///
+    /// ## 为什么不改成「这一拍把尺寸锚临时翻成 .bottom」
+    ///
+    /// 那条路对**第二次起**的点击更漂亮（原生机制、不用 scrollTo、对懒容器估算高度回填
+    /// 天然免疫），但有两处硬伤：① 救不了上面那次容器身份翻面，第一次点击照跳，等于还得
+    /// 再养一条 scrollTo 路径，两套并存；② 「什么时候翻回来」没有确定性的时机 —— 翻回来
+    /// 得等这次尺寸变化被布局吃掉，而这中间要是正好来一条新消息，内容在下面长、锚还停在
+    /// `.bottom`，视口会被顶上去，正是 Todo #47 行为 3 明令禁止的。用一个会在错误时机
+    /// 泄漏的临时状态去换一点精度，不划算。
+    ///
+    /// ## 为什么这不是一根新柴火
+    ///
+    /// 触发源是**用户点一下**这个离散事件，不是滚动位置 —— 没有「滚到顶→加载→改滚动
+    /// 位置→再触发加载」那条自激边（`CrewChatWindow` 顶部讲的配方）。这里只排一次主线程
+    /// hop、只滚一次、滚完就完，不留定时器 / 不反复重排（`CrewChatView` 时间线那段的
+    /// 「不许加定时器 / asyncAfter / 每帧反复滚」说的是**兜底**柴火，这一记不是兜底，是
+    /// 点击的直接后果）。hop 是必需的：`renderLimit` 写下去那一刻新的一页还没进视图树，
+    /// 第一次点击那棵树甚至还没重建完，同一拍里 `scrollTo` 抓不到重建后的目标。
+    ///
+    /// 不加动画 —— 动画期间锚点会被后续 body 更新打断，而这一记要的是「位置本来就没变」，
+    /// 不是「看着它移过去」（同 `landAtBottom` 里 `animated: false` 那一路的理由）。
+    private func expandEarlier(_ proxy: ScrollViewProxy) {
+        // 判断收口在 CrewChatWindow（可测）：还跟着底部时返回 nil —— 那时尺寸变化锚的是
+        // 底部，视口本来就不动，再滚一记反而把人从底部拽走，还要和 landAtBottom 抢同一拍。
+        let anchorID = CrewChatWindow.anchorOnExpand(
+            windowedEntries, limit: renderLimit, isFollowing: bottomPin.isFollowing)?.id
+        renderLimit = CrewChatWindow.expanded(renderLimit, total: timelineEntries.count)
+        guard let anchorID else { return }
+        DispatchQueue.main.async { proxy.scrollTo(anchorID, anchor: .top) }
     }
 
     private var emptyState: some View {
