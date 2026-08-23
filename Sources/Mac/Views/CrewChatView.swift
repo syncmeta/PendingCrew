@@ -23,6 +23,11 @@ struct CrewChatView: View {
     var onOpenSession: ((UUID) -> Void)? = nil
     /// macOS:成员区「+」起新 session(进新建态 + 弹 inspector)。iOS 传 nil。
     var onNewSession: (() -> Void)? = nil
+    /// 「只看 @ 我的消息」筛选开关（Todo #61）。开关**钮**在窗口 toolbar 上（归
+    /// `CrewCenterView` 持有），这里只吃它的状态 —— 所以是 `Binding?` 而不是
+    /// `@State`：iOS 侧不传（nil = 恒关、不渲染任何筛选相关 UI），Mac 侧由
+    /// toolbar 那一份 `@State` 驱动。判定逻辑全在 `CrewMentionFilter`。
+    var showOnlyHumanMentions: Binding<Bool>? = nil
 
     @EnvironmentObject private var appModel: AppModel
     #if os(macOS)
@@ -591,13 +596,36 @@ struct CrewChatView: View {
         #endif
     }
 
+    /// 筛选开关当前是不是开着（没传 binding = 恒关）。
+    private var onlyMentions: Bool { showOnlyHumanMentions?.wrappedValue ?? false }
+
+    /// 判定用的花名册快照（Todo #61）。显示名取 `CrewSenderNaming.groupSender`
+    /// 那一份 —— 与气泡、成员列表、@-菜单同一套名字，正文里的 `@小绿` 才对得上。
+    private var mentionRoster: CrewMentionFilter.Roster {
+        CrewMentionFilter.Roster.from(members: members, captainBotId: captainBotId)
+    }
+
     /// 时间线渲染的消息。macOS 把交互卡滤掉(挪去右上待审批区);iOS 保留 inline。
+    ///
+    /// **筛选开关开着时再筛一道**（Todo #61）：只留「@ 了人类」的 + 人类自己发的。
+    /// 筛在这里而不是筛在 `windowedEntries` 上，是因为渲染窗口那一整套
+    /// （`renderLimit` / `hasMore` / 「上面还有 N 条」/ `anchorOnExpand` /
+    /// `insertedAbove` / `afterInsert`）全都读 `timelineEntries` —— 从源头筛，
+    /// 它们自动按**筛选后**的列表算。筛在下游的话会出现「显示还有 300 条、点开
+    /// 什么都没有」。
+    ///
+    /// 关着的时候一条判定都不跑（`guard onlyMentions`），成本与改动前逐字相同；
+    /// 开着时每条的常见路径是「正文里找一个 `@`，找不到就走人」（#443 的口径：
+    /// 这个属性每次访问都重算，所以判定必须廉价）。
     private var timelineEntries: [CrewWhiteboardEntry] {
         #if os(macOS)
-        return entries.filter { !$0.isInteraction }
+        let base = entries.filter { !$0.isInteraction }
         #else
-        return entries
+        let base = entries
         #endif
+        guard onlyMentions else { return base }
+        return CrewMentionFilter.onlyHumanMentions(
+            base, roster: mentionRoster, includingFrom: localUserId)
     }
 
     /// 时间线的一行：消息本体 + 「它上面要不要插一条时间分隔」。
@@ -733,6 +761,22 @@ struct CrewChatView: View {
                 // 在底部 → 跟着走（行为 2）；不在底部 → 位置一动不动，只把未读加上去
                 // （行为 3）。判定收口在 `Pin.received`。
                 if bottomPin.received(added) { landAtBottom(proxy, animated: true) }
+            }
+            // 切换筛选（Todo #61）：列表整个换了一批内容，不是「来了新消息」。
+            // 窗口深度归位到一页 + 跟随/未读归位 + 落到最新一条 —— 与切 crew 同一
+            // 套动作（`subscribe()` 里那两行）。
+            //
+            // 与上面那记 `onChange(of: timelineEntries.count)` **两种执行顺序都收敛**：
+            // 开筛选时条数变少，`Pin.received` 的 `added > 0` 直接挡掉；关筛选时条数
+            // 暴涨，若它先跑，这里随后把 pin 和 renderLimit 双双归位；若它后跑，面对的
+            // 已是一个 `isFollowing == true` 的新 pin（不记未读、只落底）和
+            // `renderLimit == pageSize`（`afterInsert` 的 `limit > pageSize` 挡掉增长）。
+            // 两条路的终点都是「一页 + 贴在最新一条」，所以不依赖 SwiftUI 的 onChange
+            // 触发次序。
+            .onChange(of: onlyMentions) { _, _ in
+                renderLimit = CrewChatWindow.pageSize
+                bottomPin = CrewChatBottomFollow.Pin()
+                landAtBottom(proxy, animated: false, force: true)
             }
             .onChange(of: bubbleLayoutToken) { _, _ in
                 // 第二波数据落地这一记不做动画：它不是「来了新消息」，只是把偏移量补正到
@@ -970,11 +1014,21 @@ struct CrewChatView: View {
         DispatchQueue.main.async { proxy.scrollTo(anchorID, anchor: .top) }
     }
 
+    /// 空态。默认只有一个聊天图标（人类明确要过：空白态别堆文案）。
+    /// **但筛选开着时必须说清楚**（Todo #61）——否则「筛掉了所有消息」和「这个群
+    /// 一条消息都没有」长得一模一样，人会以为聊天记录没了。
     private var emptyState: some View {
-        Image(systemName: "bubble.left.and.bubble.right")
-            .font(.system(size: 40))
-            .foregroundStyle(.tertiary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 8) {
+            Image(systemName: onlyMentions ? "at.circle" : "bubble.left.and.bubble.right")
+                .font(.system(size: 40))
+                .foregroundStyle(.tertiary)
+            if onlyMentions {
+                Text("这个群里没有 @ 你的消息")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - data

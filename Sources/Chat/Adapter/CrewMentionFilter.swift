@@ -113,12 +113,24 @@ enum CrewMentionFilter {
             text: entry.displayText, roster: roster)
     }
 
+    /// 这条是不是 `localUserId` 本人发的。
+    static func isFromSelf(_ entry: CrewWhiteboardEntry, localUserId: String?) -> Bool {
+        guard let me = localUserId, !me.isEmpty else { return false }
+        return entry.senderUserId == me
+    }
+
     /// 「给我一个数组、还我筛过的数组」—— 筛选开关直接喂 `timelineEntries`。
     /// 保持输入序。`roster.humanNames` 为空时正文那一半自动失效，结构化那一半照常。
+    ///
+    /// **自己发的消息一并留下**（`localUserId` 非 nil 时）：只留「@ 我」的话，人会
+    /// 看到一串回应却看不到自己说了什么，读起来是断的 —— 一问一答里只剩答。传 nil
+    /// 可关掉这一条（纯粹只看被 @ 的）。
     static func onlyHumanMentions(
-        _ entries: [CrewWhiteboardEntry], roster: Roster
+        _ entries: [CrewWhiteboardEntry], roster: Roster, includingFrom localUserId: String? = nil
     ) -> [CrewWhiteboardEntry] {
-        entries.filter { isHumanMention($0, roster: roster) }
+        entries.filter {
+            isHumanMention($0, roster: roster) || isFromSelf($0, localUserId: localUserId)
+        }
     }
 
     // MARK: - 正文匹配

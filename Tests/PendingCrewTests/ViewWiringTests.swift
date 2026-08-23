@@ -37,6 +37,10 @@ final class ViewWiringTests: XCTestCase {
          "未捕获异常不留痕，下次闪退又只剩一份没有异常名的 .ips"),
         ("UpdateSettingsSection(", "UpdateSettingsSection.swift",
          "设置里没有「更新」区，检查更新点不到（Sparkle 接入失效）"),
+        ("CrewMentionFilter.onlyHumanMentions", "CrewMentionFilter.swift",
+         "群聊时间线没人筛，「只看 @ 我的消息」判定造好了但列表照旧全显（Todo #61 失效）"),
+        ("showOnlyHumanMentions:", "CrewChatView.swift",
+         "没有任何地方把筛选开关喂给群聊，toolbar 上那个钮点了不动（Todo #61 失效）"),
     ]
 
     func testEveryUserFacingPieceIsActuallyWiredUp() throws {
@@ -75,6 +79,35 @@ final class ViewWiringTests: XCTestCase {
                       "驾驶舱任务段的 Todo 没走同一套排序")
         XCTAssertTrue(cockpit.contains("CrewTodoStatusCircle("),
                       "驾驶舱任务段的 Todo 没用同一套状态圆圈")
+    }
+
+    /// Todo #61：筛选钮必须**在中栏 toolbar 上**、且开关状态真的被喂进时间线。
+    /// 「有调用点」不够 —— 判定函数被某个测试或别处引用一下也算有调用点，
+    /// 但人在窗口里点不到就等于没有。
+    func testMentionFilterIsReachableFromTheChatToolbar() throws {
+        let center = try Self.text(of: "CrewCenterView.swift")
+        XCTAssertTrue(center.contains("showOnlyHumanMentions:"),
+                      "中栏没把筛选开关喂给 CrewChatView")
+        XCTAssertTrue(center.contains("ToolbarItem"),
+                      "中栏 toolbar 没了，筛选钮无处可挂")
+        XCTAssertTrue(center.contains("onlyMentions.toggle()"),
+                      "toolbar 上没有能翻这个开关的钮，人点不到")
+
+        let chat = try Self.text(of: "CrewChatView.swift")
+        XCTAssertTrue(chat.contains("CrewMentionFilter.onlyHumanMentions"),
+                      "群聊时间线没走筛选判定")
+        // 必须筛在 timelineEntries 这个源头 —— 渲染窗口那一整套（renderLimit /
+        // hasMore /「上面还有 N 条」/ anchorOnExpand）全读它，筛在下游会出现
+        // 「显示还有 300 条、点开什么都没有」。
+        let source = chat.range(of: "private var timelineEntries")
+        let filtered = chat.range(of: "CrewMentionFilter.onlyHumanMentions")
+        let windowed = chat.range(of: "private var windowedEntries")
+        XCTAssertNotNil(source); XCTAssertNotNil(filtered); XCTAssertNotNil(windowed)
+        if let source, let filtered, let windowed {
+            XCTAssertTrue(source.lowerBound < filtered.lowerBound
+                          && filtered.lowerBound < windowed.lowerBound,
+                          "筛选没落在 timelineEntries 里 —— 渲染窗口会按未筛选的条数算")
+        }
     }
 
     /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。

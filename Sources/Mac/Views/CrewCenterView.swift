@@ -15,6 +15,11 @@ struct CrewCenterView: View {
     /// 防止重复注入同一条。**放在常驻中栏**（而非按需 inspector），captain 编排
     /// 不能依赖 session 终端面板是否打开。
     @State private var notifiedDecisionIds: Set<String> = []
+    /// 「只看 @ 我的消息」（Todo #61）。开关钮在 toolbar 上，状态喂给 `CrewChatView`
+    /// 的时间线。**放在这里而不是 chat 里面**：`CrewChatView` 带 `.id(crewId)`，
+    /// 切 crew 会整个重建 —— 状态放里面就没法从 toolbar 驱动它。切 crew 时下面
+    /// 显式归位（换个群还挂着筛选，人会以为新群是空的）。
+    @State private var onlyMentions = false
 
     var body: some View {
         Group {
@@ -30,7 +35,8 @@ struct CrewCenterView: View {
                     onNewSession: {
                         sessionRunner.composeNew()
                         sessionRunner.viewingTerminal = true
-                    }
+                    },
+                    showOnlyHumanMentions: $onlyMentions
                 )
                 // 切 crew 强制重建（对齐 iPad 的 `IPadShell`）。少了它，detail 已缓存时
                 // 视图实例被复用，会先用「新 crewId + 上一个 crew 的 entries」渲染一帧，
@@ -86,6 +92,18 @@ struct CrewCenterView: View {
                     .disabled(crewStore.selectedDetail == nil)
                 }
                 ToolbarItem {
+                    // Todo #61「只看 @ 我的消息」。开着时图标填实 + 染成强调色 ——
+                    // 一个正在筛的列表必须一眼看得出在筛，否则人会把「筛掉的」当成
+                    // 「没有的」。判定见 `CrewMentionFilter`（结构化 mentions 与正文
+                    // `@<我的名字>` 取并集，外加我自己发的那些）。
+                    Button { onlyMentions.toggle() } label: {
+                        Label("只看 @ 我的消息", systemImage: "at.circle")
+                            .symbolVariant(onlyMentions ? .fill : .none)
+                    }
+                    .disabled(crewStore.selectedDetail == nil)
+                    .help(onlyMentions ? "显示全部消息" : "只看 @ 我的消息")
+                }
+                ToolbarItem {
                     Button { Task { await crewStore.refreshDetail(crewId) } } label: {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
@@ -112,6 +130,9 @@ struct CrewCenterView: View {
         // 轮询）：app 侧答复 + helper 跨进程 raise(目录监听)都推一个 tick,有新的(非
         // captain 自己 raise 的)就把提示注入在跑的 captain PTY。不依赖 inspector 是否打开。
         // `.task(id:)` 随选中 crew 切换重建订阅;无选中 crew 时 crewId=nil,不订阅。
+        // 切 crew：筛选归位（Todo #61）。换个群还挂着「只看 @ 我」，新群大概率筛成
+        // 空的 —— 人看到的是一个空聊天页，会以为这个群没消息 / 加载失败。
+        .onChange(of: crewStore.selectedCrewId) { _, _ in onlyMentions = false }
         .task(id: crewStore.selectedCrewId) {
             guard let crewId = crewStore.selectedCrewId else { return }
             notifyCaptainOfNewDecisions()

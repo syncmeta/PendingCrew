@@ -139,6 +139,72 @@ final class CrewMentionFilterTests: XCTestCase {
             CrewMentionFilter.isHumanMention(entry(text: "无名", mentionKinds: ["human"]), roster: r))
     }
 
+    // MARK: - 自己发的消息一并留下（默认行为）
+
+    func testKeepsOwnMessagesWhenLocalUserIdGiven() {
+        let mine = CrewWhiteboardEntry(
+            id: "mine", senderKind: "user", senderSessionId: nil, senderUserId: "u1",
+            senderBotId: nil, messageKind: "instruction", summary: "我说的一句话",
+            createdAt: "2026-01-01T00:00:00Z",
+            payload: nil, attachments: nil, relay: nil, senderDisplayName: nil,
+            senderMemberId: nil, inReplyTo: nil, mentions: nil)
+        // 没 @ 任何人、也不是 @ 我 —— 但它是我自己发的。
+        XCTAssertFalse(CrewMentionFilter.isHumanMention(mine, roster: roster))
+        XCTAssertEqual(
+            CrewMentionFilter.onlyHumanMentions(
+                [mine, entry(text: "别人的闲聊")], roster: roster, includingFrom: "u1").map(\.id),
+            ["mine"])
+        // 不传 localUserId → 纯粹只看被 @ 的，自己发的也不留。
+        XCTAssertTrue(
+            CrewMentionFilter.onlyHumanMentions([mine], roster: roster).isEmpty)
+        // 别人的 user 消息不算「我自己发的」。
+        XCTAssertTrue(
+            CrewMentionFilter.onlyHumanMentions([mine], roster: roster, includingFrom: "u2").isEmpty)
+    }
+
+    // MARK: - 渲染窗口按**筛选后**的列表算（下一轮的雷：显示还有 N 条、点开什么都没有）
+
+    func testWindowCountsFollowFilteredList() {
+        // 40 条里只有 3 条与人类有关。
+        var all: [CrewWhiteboardEntry] = []
+        for i in 0..<40 {
+            all.append(entry(id: "n\(i)", text: i % 13 == 0 ? "@人 第 \(i) 条" : "第 \(i) 条闲聊"))
+        }
+        let filtered = CrewMentionFilter.onlyHumanMentions(all, roster: roster)
+        XCTAssertEqual(filtered.count, 4)   // i = 0/13/26/39
+
+        // 未筛选时：一页 12 条，上面还有 28 条。
+        XCTAssertTrue(CrewChatWindow.hasMore(total: all.count, limit: CrewChatWindow.pageSize))
+        XCTAssertEqual(
+            CrewChatWindow.remaining(total: all.count, limit: CrewChatWindow.pageSize), 28)
+
+        // 筛选后：4 条不足一页 —— 「加载更早」必须消失、剩余数必须是 0。
+        // 若窗口仍按未筛选的 40 条算，这里会写着「上面还有 28 条」而点开空空如也。
+        XCTAssertFalse(
+            CrewChatWindow.hasMore(total: filtered.count, limit: CrewChatWindow.pageSize))
+        XCTAssertEqual(
+            CrewChatWindow.remaining(total: filtered.count, limit: CrewChatWindow.pageSize), 0)
+        XCTAssertEqual(
+            CrewChatWindow.window(filtered, limit: CrewChatWindow.pageSize).count, 4)
+        XCTAssertEqual(
+            CrewChatWindow.insertedAbove(total: filtered.count, limit: CrewChatWindow.pageSize), 0)
+    }
+
+    /// 筛选后仍然长过一页时，`anchorOnExpand` 钉的是**筛选后**窗口的首条。
+    func testExpandAnchorFollowsFilteredList() {
+        var all: [CrewWhiteboardEntry] = []
+        for i in 0..<60 { all.append(entry(id: "n\(i)", text: i % 2 == 0 ? "@人 \(i)" : "闲聊 \(i)")) }
+        let filtered = CrewMentionFilter.onlyHumanMentions(all, roster: roster)
+        XCTAssertEqual(filtered.count, 30)
+        let anchor = CrewChatWindow.anchorOnExpand(
+            CrewChatWindow.window(filtered, limit: CrewChatWindow.pageSize),
+            limit: CrewChatWindow.pageSize, isFollowing: false)
+        // 筛后 30 条的最后 12 条，首条是 filtered[18] —— 即原列表的 n36。
+        XCTAssertEqual(anchor?.id, "n36")
+        XCTAssertEqual(
+            CrewChatWindow.insertedAbove(total: filtered.count, limit: CrewChatWindow.pageSize), 12)
+    }
+
     // MARK: - Roster 归一化 / 从成员列表构造
 
     func testRosterStripsLeadingAtAndDedupes() {
