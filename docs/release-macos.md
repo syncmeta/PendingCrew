@@ -12,6 +12,32 @@ PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh
 生成更新说明 → `generate_appcast` 签 feed → 打 tag →（可选）发 R2，中间有六道
 断言，每一道都对应一次真实踩过的坑（见脚本里的注释）。
 
+## 更新日志 —— `CHANGELOG.md` 是唯一出处
+
+GitHub Release 的正文和 app 内 Sparkle 更新弹窗里那页说明，**都从
+`CHANGELOG.md` 里 `## <版本号>` 那一段取**，由 `scripts/release/changelog-section.sh`
+统一取段，两边共用同一个实现（各写一份 awk 必然漂移）。
+
+发新版之前，先在 `CHANGELOG.md` 顶上补一段：
+
+```markdown
+## 0.1.14
+
+- 一条一句话，说清这版对用的人有什么不同
+```
+
+**没写就发不出去**，而且是提前停的：`build-macos-update.sh` 在读到版本号之后
+立刻预检这一段，缺了当场退出，不会等公证跑完才发现。`publish-github-release.sh`
+同样在传任何产物之前取段，取不到就非零退出。
+
+**故意不做兜底。** 以前这两处一个用 `gh --generate-notes`、一个把
+`git log --format=%s` 直接倒进 `<li>`，结果是用户在更新弹窗里读到
+「docs: README 按作者手改的版本重写」这种提交标题。回落到自动生成
+等于没改，所以取不到就报错，不猜。
+
+手写的例外还留着：`dist/updates/pendingcrew/PendingCrew-<版本>.html` 已经存在时
+`generate-release-notes.sh` 原样保留，不覆盖。
+
 ## 挂 GitHub Release —— 和「发版」是两件事
 
 **挂 Release 用手边那份已经公证好的产物，不为了发 Release 而构建新版本。**
@@ -31,11 +57,8 @@ PENDING_NOTARY_PROFILE=pendingcrew-notary \
 # 2. 把 tag 推上去（发版脚本已经在本地打过 tag 了）
 git push origin v<版本>
 
-# 3. 建 draft，两个产物都挂上
-gh release create v<版本> --draft --title "PendingCrew <版本>" \
-  --notes-file <发布说明.md> \
-  dist/updates/pendingcrew/PendingCrew-<版本>.dmg \
-  dist/updates/pendingcrew/PendingCrew-<版本>.zip
+# 3. 建 draft，两个产物都挂上（正文自动取自 CHANGELOG.md，并顺手更新 Homebrew tap）
+scripts/release/publish-github-release.sh <版本> --draft
 ```
 
 **`--draft` 不是可选的**：Release 一旦发布就会给自动更新之外的人一个下载入口，

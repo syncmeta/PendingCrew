@@ -671,7 +671,7 @@ xcodebuild archive（自动签名）→ exportArchive（method: developer-id，�
   ↓
 ditto → notarytool submit --wait → stapler staple → 重新 ditto
   ↓
-generate-release-notes.sh → Sparkle 的 generate_appcast 签 feed
+generate-release-notes.sh（文案取自 CHANGELOG.md，缺段即停）→ Sparkle 的 generate_appcast 签 feed
   ↓
 codesign --verify / spctl -t install / stapler validate → git tag v<版本>
   ↓

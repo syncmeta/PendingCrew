@@ -56,6 +56,12 @@ build_number=$(printf '%d.%05d' "$((_epoch / 86400))" "$((_epoch % 86400))")
 version=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*//p' "$snap/src/project.yml" | head -n 1 | tr -d '"')
 test -n "$version"
 
+# 更新说明在第 ⑦ 步才真正生成，但那时公证已经走完了 —— CHANGELOG 里少一段就得
+# 从头再来一遍（含一次 Apple 公证往返）。这里提前把同一个取段脚本跑一次，缺了
+# 立刻停，别让人白等。
+echo "note: 预检 CHANGELOG.md 里 $version 那一段"
+"$root/scripts/release/changelog-section.sh" "$version" >/dev/null
+
 # 逐段比较两个 1~3 段版本号。退出码 0 = $1 严格大于 $2。
 #
 # 不用 `[ -le ]`：那是 shell **整数**比较，喂带句点的版本号会直接
