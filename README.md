@@ -30,6 +30,10 @@
 
 或用 Homebrew 安装：
 
+```bash
+brew install --cask syncmeta/tap/pendingcrew
+```
+
 作为与 Claude Code / Codex 协作的平台，你电脑上得先有它们。暂时不能接入其它 Harness。
 
 要做什么事就拉一个群（这里的一个个群，叫机组/Crew）然后在群里说你想做什么。
