@@ -314,6 +314,10 @@ targets:
       # CrewChatWindow.swift（#443 第三道闸）：群聊时间线的渲染窗口（只把最近一页
       # 交给 ForEach）。纯 Foundation，自包含。
       - path: Sources/Chat/Adapter/CrewChatWindow.swift
+      # CrewMentionFilter.swift（Todo #61）：「只看 @ 我的消息」的判定核心 ——
+      # 结构化 mentions 与正文 `@<人类名>` 取并集，并用花名册做最长匹配防前缀误伤。
+      # 纯 Foundation，依赖 CrewModels + CrewSenderNaming（两者均已在 bundle）。
+      - path: Sources/Chat/Adapter/CrewMentionFilter.swift
       # ── #443 主线程渲染成本的可量化基座 ────────────────────────────────────
       # `CrewChatOpenCostTests` 要拿**线上这版** MarkdownText 在离屏 NSHostingView
       # 里量真实的 70 条消息，所以整条 markdown 渲染链要编进 test bundle。这一组
