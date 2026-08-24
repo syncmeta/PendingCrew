@@ -127,12 +127,42 @@ team_id="${PENDING_TEAM_ID:-M42BKJN82S}"
 cd "$snap/src"
 xcodegen generate
 
-# 为什么这里要显式传 CODE_SIGN_STYLE / DEVELOPMENT_TEAM / CODE_SIGN_ENTITLEMENTS：
-# 仓库里被跟踪的默认值（`Signing.xcconfig`）是 **ad-hoc、不带 entitlements**，
-# 好让外部贡献者 clone 下来就能编。开发机上那份 Developer ID 身份写在
-# `Local.xcconfig` 里，而它是 **gitignored** —— 上面那个干净快照
-# （`git worktree add`）里**根本没有这个文件**。所以发版必须在命令行上把三个
-# 键都补齐（命令行优先级最高），不能指望 xcconfig。
+# 签名四件套（style / team / identity / entitlements）**必须走 Local.xcconfig，
+# 不能写在 xcodebuild 命令行上。** 这是 2026-08-24 出 0.1.14 时连炸两次换来的：
+#
+#   仓库里被跟踪的默认值（Config/Signing.xcconfig）是 **ad-hoc、不带
+#   entitlements**，好让外部贡献者 clone 下来就能编；开发机上那份真身份写在
+#   **gitignored** 的 Config/Local.xcconfig 里，而上面那个干净快照
+#   （git worktree add）里没有这个文件。所以发版必须自己把它补回去。
+#
+#   补在命令行上不行 —— **命令行的 build setting 是全局的，会套到构建里的每
+#   一个 target，包括十几个 SPM 依赖**。它们各自的 CODE_SIGN_ENTITLEMENTS 会
+#   按各自的包目录去解析 `Resources/PendingCrew.entitlements` 这个相对路径，
+#   于是十几个 target 一起报
+#     "The file .../checkouts/SwiftTerm/Resources/PendingCrew.entitlements
+#      could not be opened"
+#   （第一次炸是漏了 identity → ad-hoc + entitlements 被拒；补上 identity 之后
+#    SPM 依赖开始真签名，就露出了这第二个。两次都是 ARCHIVE FAILED / exit 65。）
+#
+#   写进快照的 Config/Local.xcconfig 就没这个问题：它只被 PendingCrew 这个
+#   project 的 configFiles 引进来（Signing.xcconfig 末尾 `#include?`），
+#   SPM 依赖是另外的 project，根本读不到它。这也正是仓库文档里教人本地覆盖
+#   签名的那个口子，发版只是用同一个口子。
+cat > "$snap/src/Config/Local.xcconfig" <<XCCONFIG
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = $team_id
+CODE_SIGN_IDENTITY = Apple Development
+CODE_SIGN_IDENTITY[sdk=macosx*] = Apple Development
+CODE_SIGN_ENTITLEMENTS = Resources/$app_name.entitlements
+XCCONFIG
+echo "note: 已把发版签名四件套写进快照的 Config/Local.xcconfig"
+
+# 这里为什么是 **Apple Development**（开发身份）而不是发布身份：
+# 传发布身份（Developer ID Application）会被 Xcode 判为
+# "conflicting provisioning settings" 直接失败。分工是 archive 用自动签名 +
+# 开发身份，发布身份由下面 exportArchive 按 `method: developer-id` 重新签，
+# 并在那一步嵌入 Developer ID profile。
+#
 # 漏掉 CODE_SIGN_ENTITLEMENTS 的话下面第 ④ 道断言会拦住（产物里没有
 # `$team_id.com.pendingname.shared`），但那要等到构建完才炸，不如在这儿说清。
 
@@ -152,26 +182,8 @@ xcarchive="$snap/$app_name.xcarchive"
 xcodebuild -project "$app_name.xcodeproj" -scheme "$app_name" -configuration Release \
   -destination 'generic/platform=macOS' -derivedDataPath "$derived" \
   -archivePath "$xcarchive" -allowProvisioningUpdates \
-  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$team_id" \
-  CODE_SIGN_IDENTITY="Apple Development" \
-  CODE_SIGN_ENTITLEMENTS="Resources/$app_name.entitlements" \
   ENABLE_HARDENED_RUNTIME=YES \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" archive
-# 这里的 CODE_SIGN_IDENTITY 传的是**开发身份**，不是发布身份 —— 两者的区别就是
-# 这条注释存在的理由：
-#   - 传发布身份（Developer ID Application）会被 Xcode 判为
-#     "conflicting provisioning settings" 直接失败（含每个 SPM 依赖）。别传。
-#   - 但也**不能不传**。仓库默认的 Config/Signing.xcconfig 为了让外部贡献者
-#     clone 下来就能编，把 CODE_SIGN_IDENTITY 钉成了 ad-hoc（`-`）；上面那份
-#     干净快照里没有 gitignored 的 Local.xcconfig 来盖它。ad-hoc 身份 + 带
-#     entitlements，Xcode 当场拒：
-#       "has entitlements that require signing with a development certificate"
-#     2026-08-24 出 0.1.14 时真炸过一次（ARCHIVE FAILED / exit 65）。
-#     `xcodebuild -showBuildSettings` 实测：不传这一行时 CODE_SIGN_IDENTITY 解析
-#     成 `-`；传了就是 `Apple Development`（命令行确实盖得住 xcconfig 里那条
-#     `[sdk=macosx*]` 条件赋值）。
-# 分工不变：archive 用自动签名 + 开发身份，发布身份由下面 exportArchive 按
-# `method: developer-id` 重新签，并在那一步嵌入 Developer ID profile。
 
 # 签名风格：PendingCrew 只声明 keychain-access-groups —— provisioning profile
 # 自动允许 TEAMID.* 下所有组，不需要在 portal 上配任何东西，automatic 一路畅通。
