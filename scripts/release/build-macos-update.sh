@@ -153,12 +153,24 @@ xcodebuild -project "$app_name.xcodeproj" -scheme "$app_name" -configuration Rel
   -destination 'generic/platform=macOS' -derivedDataPath "$derived" \
   -archivePath "$xcarchive" -allowProvisioningUpdates \
   CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$team_id" \
+  CODE_SIGN_IDENTITY="Apple Development" \
   CODE_SIGN_ENTITLEMENTS="Resources/$app_name.entitlements" \
   ENABLE_HARDENED_RUNTIME=YES \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" archive
-# 注意：archive 阶段**不要**指定 CODE_SIGN_IDENTITY。自动签名 + 手工指定发布身份
-# 会被 Xcode 判为 "conflicting provisioning settings" 直接失败（含每个 SPM 依赖）。
-# 正确分工是：archive 用自动签名（开发身份），发布身份由下面 exportArchive 按
+# 这里的 CODE_SIGN_IDENTITY 传的是**开发身份**，不是发布身份 —— 两者的区别就是
+# 这条注释存在的理由：
+#   - 传发布身份（Developer ID Application）会被 Xcode 判为
+#     "conflicting provisioning settings" 直接失败（含每个 SPM 依赖）。别传。
+#   - 但也**不能不传**。仓库默认的 Config/Signing.xcconfig 为了让外部贡献者
+#     clone 下来就能编，把 CODE_SIGN_IDENTITY 钉成了 ad-hoc（`-`）；上面那份
+#     干净快照里没有 gitignored 的 Local.xcconfig 来盖它。ad-hoc 身份 + 带
+#     entitlements，Xcode 当场拒：
+#       "has entitlements that require signing with a development certificate"
+#     2026-08-24 出 0.1.14 时真炸过一次（ARCHIVE FAILED / exit 65）。
+#     `xcodebuild -showBuildSettings` 实测：不传这一行时 CODE_SIGN_IDENTITY 解析
+#     成 `-`；传了就是 `Apple Development`（命令行确实盖得住 xcconfig 里那条
+#     `[sdk=macosx*]` 条件赋值）。
+# 分工不变：archive 用自动签名 + 开发身份，发布身份由下面 exportArchive 按
 # `method: developer-id` 重新签，并在那一步嵌入 Developer ID profile。
 
 # 签名风格：PendingCrew 只声明 keychain-access-groups —— provisioning profile

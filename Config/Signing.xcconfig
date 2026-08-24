@@ -21,9 +21,17 @@
 // （已在 .gitignore 里，不会被提交），填你自己的 Apple Team ID。下面这行
 // 可选 include 会把它的值盖上来。
 //
-// 发版不读这份文件：scripts/release/build-macos-update.sh 在 xcodebuild
-// 命令行上显式传 CODE_SIGN_STYLE=Automatic / DEVELOPMENT_TEAM=...，命令行
-// 优先级最高，所以 Developer ID 分发路径不会被这里的默认值影响。
+// 发版**会**读这份文件（那份干净快照里没有 Local.xcconfig 来盖它），所以
+// scripts/release/build-macos-update.sh 必须在 xcodebuild 命令行上把
+// CODE_SIGN_STYLE / DEVELOPMENT_TEAM / CODE_SIGN_IDENTITY / CODE_SIGN_ENTITLEMENTS
+// 四个键**全部**补齐 —— 命令行优先级最高，盖得住下面这些默认值（含
+// `[sdk=macosx*]` 条件赋值，实测过）。
+//
+// 这里原来写的是「发版不读这份文件……不会被这里的默认值影响」，那句是错的：
+// 当时补了三个键、漏了 CODE_SIGN_IDENTITY，于是下面的 ad-hoc `-` 直接落到发版
+// 构建上，2026-08-24 出 0.1.14 时 ARCHIVE 当场失败
+// （"entitlements that require signing with a development certificate"）。
+// 往这里加新键的话，记得同步看一眼发版脚本有没有把它盖住。
 
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = -
