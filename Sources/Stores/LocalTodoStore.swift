@@ -1,12 +1,105 @@
 import Foundation
 import Combine
 
-/// 每 crew 一个人类 Todo 列表（task #478；#487 后列表在驾驶舱 CrewTodoPanel，
-/// 新增入口在群聊 composer 的 Todo 模式）。
+/// 两本 Todo 账（Todo #62）—— 同一套存储基座，**方向相反**。
 ///
-/// 每 crew 一个 JSON：`<dir>/<crewId>.todos.json` = `[LocalTodoItem]`。
+/// 人类原话：「弄一个给人类的 todo。需要人类拍板、决策、需要人才能做的事放进这里面，
+/// 不要一股脑塞进群聊了，不然很容易漏。」所以新的这本是现有那本的**镜像**：
+/// 谁加、谁回应、群里那行怎么写，全都反过来。
+///
+/// 命名按**谁来办**（不是谁来提）：`.agent` = 派给 agent 干的（原有的唯一一本），
+/// `.human` = 要人类拍板的（新增）。驾驶舱两个药丸「Agent 的 / 人类的」照此对应。
+///
+/// 🚫 **不许 fork 出第二个 store**：两本账共用 `LocalTodoStore` 这一套
+/// flock / 逐条 lenient 解码 / corrupt 归档基座。复制粘贴出第二份必然漏掉其中一件，
+/// 而这两本都是人手输/人要看的数据，最不能静默清空。
+enum TodoLedger: String, Codable, Sendable, CaseIterable {
+    /// 人类派给 agent 的那本（task #478 起就有的唯一一本）。落 `<crewId>.todos.json`。
+    case agent
+    /// agent 请人类拍板的那本（Todo #62 新增）。落 `<crewId>.human-todos.json`。
+    case human
+
+    /// 列表文件后缀。`.agent` 保持原名不动 —— 已有机器上的账都在那个文件里。
+    var fileSuffix: String {
+        switch self {
+        case .agent: return ".todos.json"
+        case .human: return ".human-todos.json"
+        }
+    }
+
+    /// flock 文件后缀。两本各一把锁 —— 一本忙不该挡住另一本。
+    var lockSuffix: String {
+        switch self {
+        case .agent: return ".todos.lock"
+        case .human: return ".human-todos.lock"
+        }
+    }
+
+    /// 驾驶舱药丸上的名字（人类原话「弄两个药丸选择：Agent 的、人类的」）。
+    var pillTitle: String {
+        switch self {
+        case .agent: return "Agent 的"
+        case .human: return "人类的"
+        }
+    }
+
+    /// 事故警示的主语 —— 两本各说各的，否则白板上一条「Todo 列表读不出来」
+    /// 没人知道是哪本坏了。
+    var incidentSubject: String {
+        switch self {
+        case .agent: return "Todo 列表（Agent 的）"
+        case .human: return "Todo 列表（人类的）"
+        }
+    }
+
+    /// 谁能**新增**条目。方向反过来的那一半就在这儿。
+    var author: TodoParty {
+        switch self {
+        case .agent: return .human     // 人类派活
+        case .human: return .agent     // agent 请人拍板
+        }
+    }
+
+    /// 谁来**回应**条目。
+    var responder: TodoParty {
+        switch self {
+        case .agent: return .agent
+        case .human: return .human
+        }
+    }
+
+    /// 新建条目时群里那行。**两本各自从 #1 编号，会打架** —— 所以人类那本带
+    /// 「人类」二字，一眼分得清是哪本账的 #N。
+    func newItemAnnouncement(number: Int, text: String) -> String {
+        switch self {
+        case .agent: return "To do +1: #\(number) \(text)"
+        case .human: return "人类 To do +1: #\(number) \(text)"
+        }
+    }
+
+    /// 回应条目时群里那行（目前只有人类那本会往群里发回应 —— agent 回应留在面板里）。
+    func responseAnnouncement(number: Int, text: String) -> String {
+        switch self {
+        case .agent: return "回应 To Do #\(number)：\(text)"
+        case .human: return "回应 人类 To Do #\(number)：\(text)"
+        }
+    }
+}
+
+/// 一本账里的两个角色。`TodoLedger.author` / `.responder` 用它把方向说明白。
+enum TodoParty: String, Codable, Sendable {
+    case human
+    case agent
+}
+
+/// 每 crew 一本 Todo 列表（task #478；#487 后列表在驾驶舱 CrewTodoPanel。
+/// Todo #62 起同一套基座跑**两本账**，见 `TodoLedger`）。
+///
+/// 每 crew 一个 JSON：`<dir>/<crewId><ledger.fileSuffix>` = `[LocalTodoItem]`。
+///
+/// **`.agent` 那本（人类派给 agent）**：
 /// - **只有人类能加条目**：唯一的新增入口是 `add`（CrewChatView 的 Todo 模式发送调用）；
-///   MCP 侧不暴露任何新增工具，机器人加不了。
+///   MCP 侧不暴露新增工具，机器人加不了。
 /// - **机器人只能回应**：helper 的 `respond_todo` 走 `respond` —— **追加式**回应
 ///   （每次追加一条，绝不覆盖旧回应），可顺带推进状态：
 ///   待办 pending → 进行中 in_progress → 完成 completed。
@@ -15,18 +108,36 @@ import Combine
 ///   「todo 要随时能修改、删除、追问（如已经被回复）」）。追问与重开是同一条通道：
 ///   completed 被追问就翻回 pending（`reopen` = `followUp` 的 completed-only 守卫版，
 ///   Todo #12）。这三条只给人类（详细窗口 UI），MCP 侧不暴露。
-/// - 条目编号 `number`（群消息「To do +1: #N …」里的 #N）从 1 自增，crew 内唯一。
+///
+/// **`.human` 那本（agent 请人类拍板，Todo #62）**：方向整个反过来 ——
+/// **只有 agent 能加**（MCP 新工具），**人类回应**（详细窗口，走同一个 `respond`），
+/// 人类同样能改/删/重开。条目额外记 `createdBySessionId`：人类回应时得知道叫醒谁。
+///
+/// 两边共通：条目编号 `number` 从 1 自增、**crew 内 + 账本内**唯一 ——
+/// 两本账各自从 #1 起，同一个 #1 在两本里指两件事，所以群里那行必须带账本前缀
+/// （见 `TodoLedger.newItemAnnouncement`）。
 ///
 /// **自包含 Foundation**（编进 `pendingcrew-mcp` re-exec helper + PendingCrewTests
 /// bundle）。`@unchecked Sendable`：实例状态全 `let`，共享可变资源是磁盘文件 ——
-/// app↔helper 并发经 `MultiProcessJSONStore` 基座三件套（`<crewId>.todos.lock` 上的
-/// flock 互斥 + 逐条 lenient 解码 + corrupt 归档 fail-loud，#528；人类手输的 Todo
+/// app↔helper 并发经 `MultiProcessJSONStore` 基座三件套（`<crewId>` 那把 lock 上的
+/// flock 互斥 + 逐条 lenient 解码 + corrupt 归档 fail-loud，#528；人手输的 Todo
 /// 是最不能「文件损坏 → 静默清空」的一类数据）。
 final class LocalTodoStore: @unchecked Sendable {
+    /// 人类派给 agent 的那本（原有唯一一本，调用方一个字不用改）。
     static let shared = LocalTodoStore()
+    /// agent 请人类拍板的那本（Todo #62）。
+    static let humanShared = LocalTodoStore(ledger: .human)
+
+    /// 按账本取共享实例 —— UI 药丸切换直接拿这个，别自己 new。
+    static func shared(_ ledger: TodoLedger) -> LocalTodoStore {
+        ledger == .human ? humanShared : shared
+    }
 
     /// 合法状态集（待办 → 进行中 → 完成）。
     static let validStatuses: Set<String> = ["pending", "in_progress", "completed"]
+
+    /// 这个实例管哪本账。文件名、锁名、事故警示主语全从它来。
+    let ledger: TodoLedger
 
     private let directory: URL
 
@@ -36,8 +147,9 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 已被 `LocalWhiteboardStore.startWatching()` 的 DispatchSource 一并监听。
     let changes = PassthroughSubject<String, Never>()
 
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, ledger: TodoLedger = .agent) {
         self.directory = directory ?? LocalWhiteboardStore.defaultDirectory
+        self.ledger = ledger
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
@@ -78,15 +190,23 @@ final class LocalTodoStore: @unchecked Sendable {
 
     // MARK: - Write
 
-    /// 人类新增一条 Todo（唯一新增入口；面板 UI 调用）。返回新条目（含分到的 #N）。
+    /// 新增一条 Todo。返回新条目（含分到的 #N）。**谁能调由账本方向定**
+    /// （`.agent` 那本只有人类调 —— 面板 UI；`.human` 那本只有 agent 调 ——
+    /// MCP `add_human_todo`）。
     /// **nil = 没写进去**（列表文件读不出来 / 读到空但磁盘非空，已归档 + 白板警示）——
     /// 此前这里照样返回条目，调用方会拿着一个根本不存在的 #N 去群里宣布（#577）。
     ///
     /// `attachments`（Todo #52）：人类建 Todo 时附的图/文件，已由
     /// `CrewChatAttachmentStore` 落进与群聊**同一个**附件目录，这里只记条目。
+    ///
+    /// `bySessionId` / `bySenderName`（Todo #62）：**谁提的**。`.human` 那本
+    /// 缺了它整个功能落不了地 —— 人类回应时根本不知道该叫醒谁（回落规则见
+    /// `HumanTodoWakePlan`）。`.agent` 那本由人类新增，两个都留 nil。
     @discardableResult
     func add(crewId: String, text: String,
-             attachments: [LocalWhiteboardAttachment]? = nil) -> LocalTodoItem? {
+             attachments: [LocalWhiteboardAttachment]? = nil,
+             bySessionId: String? = nil,
+             bySenderName: String? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
             let item = LocalTodoItem(
@@ -95,7 +215,9 @@ final class LocalTodoStore: @unchecked Sendable {
                 text: text,
                 status: "pending",
                 createdAt: ISO8601DateFormatter().string(from: Date()),
-                attachments: (attachments?.isEmpty ?? true) ? nil : attachments)
+                attachments: (attachments?.isEmpty ?? true) ? nil : attachments,
+                createdBySessionId: bySessionId,
+                createdBySenderName: bySenderName)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
             rows.append(item)
             saveLocked(crewId: crewId, rows: rows)
@@ -162,6 +284,24 @@ final class LocalTodoStore: @unchecked Sendable {
         }
     }
 
+    /// 人类「看过了，不打算回应」（Todo #62）：只打 `dismissedAt` 标记，**不加回应、
+    /// 不动状态**。用途是把黄点按灭 —— 有些事人类看过就决定不办，没有这个开关，
+    /// 那一条会把黄点永久钉死（黄点判据是「有没有未回应条目」，见 `isUnanswered`）。
+    /// `dismissed: false` = 反悔，重新算作未回应。找不到 #N（或已删）→ false。
+    @discardableResult
+    func setDismissed(crewId: String, number: Int, dismissed: Bool = true) -> Bool {
+        withFileLock(crewId) {
+            var rows = loadLocked(crewId)
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return false }
+            guard let idx = liveIndexLocked(rows, number) else { return false }
+            rows[idx].dismissedAt = dismissed
+                ? ISO8601DateFormatter().string(from: Date())
+                : nil
+            saveLocked(crewId: crewId, rows: rows)
+            return true
+        }
+    }
+
     /// 人类追问（Todo #21，Todo #12 `reopen` 的一般化）：**任何状态都能追问** ——
     /// 已经被机器人回复过、已经完成的条目照样接着问。追问作为一条
     /// `LocalTodoResponse` 落在条目时间线上（sessionId 固定 `"human"`、senderName
@@ -219,15 +359,16 @@ final class LocalTodoStore: @unchecked Sendable {
     // MARK: - Persistence（基座三件套：flock / 逐条 lenient / corrupt 归档，#528）
 
     private func fileURL(_ crewId: String) -> URL {
-        directory.appendingPathComponent("\(crewId).todos.json")
+        directory.appendingPathComponent("\(crewId)\(ledger.fileSuffix)")
     }
 
-    /// 跨进程互斥：app（面板 add/reopen）与 helper（respond_todo）的
-    /// read-modify-write 都在 `<crewId>.todos.lock` 内做。只在 public 入口拿一次，
-    /// 锁内一律走 `*Locked` 变体。
+    /// 跨进程互斥：app（面板 add/回应/重开）与 helper（`respond_todo` /
+    /// `add_human_todo`）的 read-modify-write 都在 `<crewId><ledger.lockSuffix>`
+    /// 内做。**两本账各一把锁** —— 一本正在被写不该挡住另一本。只在 public 入口
+    /// 拿一次，锁内一律走 `*Locked` 变体。
     private func withFileLock<T>(_ crewId: String, _ body: () -> T) -> T {
         MultiProcessJSONStore.withFileLock(
-            directory.appendingPathComponent("\(crewId).todos.lock"), body)
+            directory.appendingPathComponent("\(crewId)\(ledger.lockSuffix)"), body)
     }
 
     /// 锁内读。坏一条丢一条；出事就 fail-loud 到白板（人类手输的 Todo 蒸发必须有人
@@ -240,11 +381,12 @@ final class LocalTodoStore: @unchecked Sendable {
             onIncident: { self.reportIncident(crewId: crewId, $0) })
     }
 
-    /// 往白板落一条如实的系统警示。主语是「人类 Todo 列表」，其余措辞由事故类型定。
+    /// 往白板落一条如实的系统警示。主语点名**是哪本账**（Todo #62 起有两本，
+    /// 只说「Todo 列表」没人知道坏的是哪一本），其余措辞由事故类型定。
     private func reportIncident(crewId: String, _ incident: MultiProcessJSONStore.LedgerIncident) {
         LocalWhiteboardStore(directory: directory).appendSessionMessage(
             crewId: crewId, sessionId: "system",
-            text: "人类 Todo 列表：" + incident.summary,
+            text: ledger.incidentSubject + "：" + incident.summary,
             senderName: "系统")
     }
 
@@ -285,8 +427,26 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     /// 本机绝对路径，渲染（`file://`）与「请 Read 查看」的措辞都与群聊一致。
     /// 老文件没这字段 → nil。
     var attachments: [LocalWhiteboardAttachment]? = nil
+    /// **谁提的这条**（Todo #62）。`.human` 那本必带 —— 人类回应时要按它决定叫醒谁
+    /// （回落规则见 `HumanTodoWakePlan`：已退出 / 没记 / 机长自己提的 → 回落机长）。
+    /// `.agent` 那本由人类新增 → nil；老文件没这字段 → nil。
+    var createdBySessionId: String? = nil
+    /// 提问者的显示名（session label，如「机长」）。只用于渲染，唤醒不看它。
+    var createdBySenderName: String? = nil
 
     var isDeleted: Bool { deletedAt != nil }
+
+    /// **还没被回应过** —— 黄点亮灭的判据（Todo #62）：`.human` 那本只要还有一条
+    /// 没人回应就亮，全部有回应就灭。用「有没有回应」而不是「有没有条目」：
+    /// 一本长期待办列表会让黄点永远亮着，等于没有。
+    ///
+    /// 已删的墓碑行不算（`list` 本来就不返回它们）；`dismissedAt` 非 nil = 人类
+    /// 看过、决定不办、直接按灭，同样不再算未回应。
+    var isUnanswered: Bool { responses.isEmpty && dismissedAt == nil }
+
+    /// 人类「看过了，不打算回应」的标记（Todo #62）。没有它，一条人类不打算处理的
+    /// 条目会把黄点永久钉死。不动 `status`、不加回应 —— 只是不再算未回应。
+    var dismissedAt: String? = nil
 
     /// 讲给 agent 听的条目正文：正文 + 每个附件一行绝对路径提示（与群聊同一措辞）。
     var agentText: String {
