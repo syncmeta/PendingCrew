@@ -8,23 +8,13 @@ import SwiftUI
 /// peer / fly。
 struct CrewSidebarView: View {
     @EnvironmentObject private var crewStore: CrewStore
-    @EnvironmentObject private var model: AppModel
     @State private var showingCreateSheet = false
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
     /// sheet 挂在侧栏顶层而不是行上：List 行会被回收，挂行上的表单可能被顶掉。
     @State private var childCrewTarget: CrewChildCreationTarget?
     @State private var showingWorkspaceSync = false
-    @State private var confirmingSignOut = false
-    /// 本机模式下侧栏的可选登录入口（登录 SSO C2）—— 弹直接登录 sheet（CrewLoginSheet）。
-    @State private var showingLogin = false
     /// 折叠起来的机器分组 id 集合（默认全展开）。
     @State private var collapsedMachineIds: Set<String> = []
-    /// 登录账号身份（头像 seed + 显示名兜底）—— 在 footer `.task` 里从家族凭据
-    /// (共享 keychain)解析一次,不在 render 路径上碰 keychain。见 `identityFooter`。
-    @State private var identityAvatarSeed: String?
-    /// 家族凭据里的真实显示名 —— subjects 还没拉回来(或拉取失败)时的标题兜底,
-    /// 避免 footer 显示"已登录"占位。generic 凭据(无 displayName)不算。
-    @State private var credentialDisplayName: String?
     /// 长期职责的唯一所有者（spec §6）—— 用量监视归它持有，这里只观察。
     @EnvironmentObject private var sessionHost: SessionHost
     @ObservedObject private var quota = QuotaCenter.shared
@@ -56,10 +46,7 @@ struct CrewSidebarView: View {
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             quotaFooterLine
-            // 当前身份 + 切换/登出。device grant 是 subject-scoped(spec v2 §4.4),
-            // 想换 subject 必须撤掉这台机器的 grant 重新登录 —— 所以"切换身份"
-            // 路径就是签出后再去直接登录页登一遍。这里集中放在 sidebar 底部,
-            // 让 user 始终能看见"我现在以谁的身份在花钱"。
+            // 本机身份 + 今日用量。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
         }
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
@@ -102,27 +89,6 @@ struct CrewSidebarView: View {
         }
         .sheet(isPresented: $showingWorkspaceSync) {
             WorkspaceSyncView()
-        }
-        // 只有已登录的 footer 菜单能触发(未登录 footer 是登录入口)——
-        // 接合 v2 后没有"退出本机模式"概念,本地 crew 永远在。
-        .confirmationDialog(
-            "签出当前身份",
-            isPresented: $confirmingSignOut,
-            titleVisibility: .visible
-        ) {
-            Button("签出", role: .destructive) {
-                signOut()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("签出后本机 device grant 立即失效;若需切换到别的身份(本人 / 群账号),签出后重新扫码即可。本机 crew 不受影响。")
-        }
-        // 本机模式可选登录（登录 SSO C2）：先展示确认卡（有本机凭据时）
-        // 或直接登录页（无凭据时）。登录成功后 CrewLoginSheet 自动 dismiss。
-        .sheet(isPresented: $showingLogin) {
-            CrewLoginSheet()
-                .environmentObject(model)
-                .frame(minWidth: 420, minHeight: 480)
         }
     }
 
@@ -251,100 +217,29 @@ struct CrewSidebarView: View {
         .padding(.horizontal, 10)
     }
 
-    /// Sidebar 底部固定条。
-    /// - 已登录:显示代表的 subject + ⋯ 菜单(签出/切换身份)。
-    /// - 未登录:显示「人」+ 随机头像 —— 与成员列表里那个「人」**同一张脸**
-    ///   (同一 seed `LocalWhiteboardStore.localUserId` 喂同一套 `BotAvatar`)。
-    ///   不再写「登录」二字;登录入口收进这一行的点击 —— 点「人」照样开登录
-    ///   面板(面板里再展示 PendingBot 直登或扫码登录),登录后本行变成账号。
-    @ViewBuilder
+    /// Sidebar 底部固定条：「人」+ 随机头像 —— 与成员列表里那个「人」**同一张脸**
+    /// (同一 seed `LocalWhiteboardStore.localUserId` 喂同一套 `BotAvatar`)，
+    /// 底下跟今日 CC / Codex 用量小字行。
+    ///
+    /// #63:PendingCrew 不登录到任何地方,原来那条「点「人」开登录面板」的入口
+    /// 和已登录态的 subject/签出菜单一并删掉 —— 这一行现在纯展示,不可点。
+    /// 用量小字行原先嵌在已登录分支里,它跟登录无关(本机 runner 的 token 用量),
+    /// 所以挪出来保住,不随登录层一起陪葬。
     private var identityFooter: some View {
-        Group {
-            if model.isAuthenticated {
-                HStack(spacing: 10) {
-                    // 登录账号头像:用家族凭据里的 avatar_seed(与登录确认卡 BotAvatar
-                    // 同字形,跨 app 一致);缺凭据(如未签名构建)回落 subject id —— 仍每
-                    // 账号稳定。原先这里是写死的 SF Symbol 占位,不随身份变(`identityIcon`
-                    // 已退役)。
-                    BotAvatar(
-                        seed: identityAvatarSeed ?? crewStore.subjects.first?.id ?? "?",
-                        size: 26
-                    )
-                    .frame(width: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Todo #55:账号类型跟在名字**后面同一行**(原来占 VStack 第二行),
-                        // 让页脚从三行收到两行。侧栏很窄,所以挤不下时先截名字不截标识
-                        // —— 标识 `.fixedSize()` 钉住自己的理想宽,名字 lineLimit(1)
-                        // 吃剩下的空间并优先分配(layoutPriority)。
-                        HStack(spacing: 5) {
-                            Text(identityTitle)
-                                .font(.callout.weight(.medium))
-                                .lineLimit(1)
-                                .layoutPriority(1)
-                            // 账号类型只在 subject 解析出来后显示 —— 未解析时不渲染,
-                            // 避免标题/副标题双双回落成"已登录"的重复占位。
-                            if let subtitle = identitySubtitle {
-                                Text(subtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                            }
-                        }
-                        agentUsageLine
-                    }
-                    Spacer(minLength: 4)
-                    Menu {
-                        Button {
-                            confirmingSignOut = true
-                        } label: {
-                            Label("签出 / 切换身份", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .imageScale(.medium)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                }
-                // 身份解析放 `.task`(不在 render 路径碰 keychain);subject 解析
-                // 出来后 id 变 → 重跑一次拿到稳定回落。家族凭据里的 avatar_seed 与登录
-                // 确认卡同字形,缺则回落 subject id;displayName 兜标题(generic 不算)。
-                // subjects 还空着(首拉失败/未跑)就补拉一次 —— 拉成功后 id 变会
-                // 自然重跑本 task,不会循环。
-                .task(id: crewStore.subjects.first?.id) {
-                    let cred = CrewLoginIdentity.current()
-                    credentialDisplayName = (cred?.isGeneric == false) ? cred?.title : nil
-                    identityAvatarSeed = cred?.avatarSeed ?? crewStore.subjects.first?.id
-                    if crewStore.subjects.isEmpty {
-                        await crewStore.refreshSubjects()
-                    }
-                }
-            } else {
-                Button {
-                    showingLogin = true
-                } label: {
-                    HStack(spacing: 10) {
-                        // 与成员列表里的「人」同源:seed 都是 localUserId,走同一个
-                        // BotAvatar → 两处必然同一张脸。
-                        BotAvatar(seed: LocalWhiteboardStore.localUserId, size: 26)
-                            .frame(width: 26)
-                        Text("人")
-                            .font(.callout.weight(.medium))
-                        Spacer(minLength: 4)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("点一下登录 PendingBot 账号")
+        HStack(spacing: 10) {
+            BotAvatar(seed: LocalWhiteboardStore.localUserId, size: 26)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("人")
+                    .font(.callout.weight(.medium))
+                agentUsageLine
             }
+            Spacer(minLength: 4)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
     }
-
     /// 订阅额度显示（两家都拿不到时整块隐藏）。Todo #8/#10 把原来的文字表格
     /// 换成了圆环 —— 视图实现在 `QuotaRingsFooter`，判定在 `QuotaRingLayout`。
     private var quotaFooterLine: some View {
@@ -368,27 +263,6 @@ struct CrewSidebarView: View {
         AgentUsageLine(monitor: sessionHost.usage)
     }
 
-    // identity 三件套只在已登录 footer 渲染(未登录 footer 是登录菜单,
-    // 自带文案)—— 接合 v2 后不再按 mode 分叉。头像走 `BotAvatar(seed:)`
-    // (见 footer),不再用 SF Symbol。
-    // 标题优先级:edge 真实 subject → 家族凭据 displayName → "已登录"最终兜底。
-    private var identityTitle: String {
-        crewStore.subjects.first?.displayName ?? credentialDisplayName ?? "已登录"
-    }
-
-    /// 账号类型副标题;subject 未解析时返回 nil(footer 隐藏该行,不再重复"已登录")。
-    private var identitySubtitle: String? {
-        guard let kind = crewStore.subjects.first?.kindEnum else { return nil }
-        return kind == .groupAccount ? "群账号" : "本人账号"
-    }
-
-    private func signOut() {
-        // 接合 v2:签出只是撤掉登录能力叠加,本机 crew / 本机模式不受影响。
-        guard model.isAuthenticated else { return }
-        model.clearAuth()
-        // crewStore.reset() 由 RootView 监听登录态变化自动调,
-        // 不在这里重复 wire 以避免双触发顺序歧义。
-    }
 }
 
 /// 今日 CC / Codex token 用量小字行（两项都 nil 时隐藏）。

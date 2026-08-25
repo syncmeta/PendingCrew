@@ -53,7 +53,8 @@ final class AppModel: ObservableObject {
     /// 当前生效的 backend(接合 v2:**不再按 mode 路由**)。
     /// - macOS:恒为 `LocalBackend` —— 本地 crew 是常驻 home,登录只叠加能力。
     /// - iOS:暂无本地后端(LocalRunner 是 macOS-only),登录态走 EdgeBackend,
-    ///   未登录返回 nil(WelcomeView 时态)。等本地后端跨平台后统一成恒本地。
+    ///   未登录返回 nil。#63 删掉登录入口后 iOS 上这里恒 nil(空壳),
+    ///   等本地后端跨平台后统一成恒本地。
     var backend: PendingCrewBackend? {
         #if os(macOS)
         return localBackend
@@ -62,9 +63,9 @@ final class AppModel: ObservableObject {
         #endif
     }
 
-    /// `RootView` 用它决定显 WelcomeView 还是直接进主界面。
-    /// **Mac 恒 true**:本地为家(本地 backend 常驻),不开屏让人选模式 ——
-    /// 登录是可选能力叠加(侧栏入口)。iOS 仍需先登录(无本机后端)。
+    /// **#63 之后已无消费者** —— `RootView` 不再按它分叉,登录入口整块删了。
+    /// 跟凭据层一起留到第二期随 `Sources/Remote/` 一刀端掉,见 docs/tech-debt.md。
+    /// **Mac 恒 true**:本地为家(本地 backend 常驻)。iOS 恒 false(无本机后端)。
     var isConfigured: Bool {
         #if os(macOS)
         return true
@@ -100,7 +101,8 @@ final class AppModel: ObservableObject {
     // MARK: - 家族 SSO（登录 SSO B4）
 
     /// QR 登录 consume 时随 grant 下发的家族凭据（`pfa_*`）落到共享 keychain
-    /// 组，供家族 app（含本 app 重装后）静默 mint。CrewQRLoginView poll 成功分支调。
+    /// 组，供家族 app（含本 app 重装后）静默 mint。
+    /// **#63 之后无调用方** —— 唯一的调用点（扫码登录页）已删。
     func saveFamilyCredential(token: String, subjectId: String, displayName: String? = nil, avatarSeed: String? = nil) {
         FamilyCredentialStore.set(FamilyCredential(
             token: token,
@@ -110,20 +112,20 @@ final class AppModel: ObservableObject {
         ))
     }
 
-    /// 共享 keychain 组里是否有家族凭据 —— 侧栏据此决定显不显示
-    /// 「用本机 PendingBot 身份登录」入口。
+    /// 共享 keychain 组里是否有家族凭据。
+    /// **#63 之后无调用方** —— 侧栏那个登录入口已删。
     var familySSOAvailable: Bool { FamilyCredentialStore.get() != nil }
 
     /// 家族 SSO 登录：用共享 keychain 组里的家族凭据调 `POST /v1/device-grant/mint`
     /// 换本 app 自己的 scoped device grant，免扫码。**不在启动时自动跑** ——
-    /// 登录必须是用户显式动作（侧栏菜单点一下）。返回是否成功，失败留在本机模式。
+    /// 登录必须是用户显式动作。**#63 之后无调用方** —— 侧栏那个入口已删。
     @discardableResult
     func tryFamilySSO() async -> Bool {
         guard credential == nil else { return true }
         guard let cred = FamilyCredentialStore.get() else { return false }
         guard let url = URL(string: apiBaseURL) else { return false }
         // mint 不需要本 app 的 grant —— 鉴权是家族凭据本身作 bearer，
-        // 所以跟 device-login（CrewQRLoginView）一样用无 token 的 client。
+        // 所以跟 device-login 一样用无 token 的 client。
         let api = PendingCrewAPI(baseURL: url)
         do {
             let resp = try await api.mintGrant(

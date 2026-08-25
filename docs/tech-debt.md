@@ -24,6 +24,38 @@
   派到几十个 session 时它会重新变成主导项。见 `docs/internal/2026-08-19-ui-jank-profile.md`「现场复采」。
 - **中间态的可选缓解**（如果地基活拖久了）: 后台 session 的旁路扫描改成攒批 / 挪出主线程；或把 scrollback 与扫描窗按「是否前台」分档。都属于治标，记在这里免得被当成已解决。
 
+### 🔴 #63 第一期删完之后，远端 / 登录整层变成「编得过、永不执行」的安静死代码
+- **发现**: 2026-08-25 · Todo #63（删登录与远端客户端）第一期落地时
+- **怎么来的**: #63 删掉了**取得凭据的所有入口**（Auth 三件套 / Supabase 栈 / 两个登录页 / 扫码页 / 侧栏登录入口 / RootView 的登录分支）。凭据层本身（`AppModel.credential`）没删 —— 它被 `Sources/Remote/`、`CrewRelayAgent` 这批「一个字不许动」的文件顶着，删不动，留给第二期。
+- **于是变成什么**: `AppModel.isAuthenticated` **恒 false**，`loggedAPIClient()` 恒抛 `notAuthenticated`，`imageAuth` 恒 nil。所有调用点都是 `guard ... else { return }` / `try?` 早退 —— **编译器不报、测试不红、看代码也看不出来**。这正是本仓库反复栽的那一类：一种安静的死。
+- **第二期一刀端掉，触发条件已满足。** 下面是逐个文件的现成名单，**别再重新考古**（行数/处数为 2026-08-25 在 `main` 上实测）：
+
+  | 文件 | 死在哪 |
+  |---|---|
+  | `Sources/Remote/CrewSessionServerLink.swift` | 整个 struct（`let api: PendingCrewAPI`，唯一构造点在 `CrewSessionWindowView.prepareServerSession`） |
+  | `Sources/Remote/SessionProxyClient.swift` | 整个 actor（viewer / runner 两侧都只在登录态起） |
+  | `Sources/Remote/SessionProxyProtocol.swift` | 只服务上面那个（codec 单测 `SessionProxyProtocolTests` 还绿，测的是纯 codec） |
+  | `Sources/Views/Remote/RemoteSessionsView.swift` | 3 处 `loggedAPIClient()`；`CrewCenterView:126` 是唯一挂载点 |
+  | `Sources/Mac/Services/CrewRelayAgent.swift` | 2 处 `loggedAPIClient()` + 3 处 `PendingCrewAPI` 形参（`pull` / `push` / hub 订阅）；`imageAuth` 作绑定判据 |
+  | `Sources/Mac/LocalRunner/SessionPermissionRelay.swift` | 它持有的 `SessionProxyClient`（`CrewSessionRunner:245` 那条 `ensurePermissionRelay`） |
+  | `Sources/Mac/Services/CrewMailboxWaker.swift` | 整个类（`private let api: PendingCrewAPI` + `CrewRealtimeClient`） |
+  | `Sources/Mac/Services/CrewSessionRunner.swift` | 2 处 `PendingCrewAPI` 形参（`ensurePermissionRelay:242` / `ensureMailboxWaker:981`） |
+  | `Sources/Services/PendingCrewAPI.swift` | 整个 751 行远端 HTTP 客户端 |
+  | `Sources/Services/PendingCrewBackend.swift` | `EdgeBackend`（109–240 行）。**`PendingCrewBackend` 协议本身和 `LocalBackend` 是活的，别连坐** |
+  | `Sources/Services/CrewRealtimeClient.swift` | 整个 actor（唯二消费者 `EdgeBackend.whiteboardChanges` / `CrewMailboxWaker` 都在本表上） |
+  | `Sources/Stores/AppModel.swift` | 凭据层整片：`credential` / `currentUserId` / `isAuthenticated` / `isConfigured`（**已无消费者**）/ `saveDeviceGrantToken` / `clearAuth` / `saveFamilyCredential` / `familySSOAvailable` / `tryFamilySSO`（**已无调用方**）/ `imageAuth` / `loggedAPIClient()` / `ensureRunnerHost` / `edgeBackend` / `apiBaseURL` |
+  | `Sources/Stores/CrewStore.swift` | 3 处 `loggedAPIClient()`（169 / 203 / 222） |
+  | `Sources/Mac/Views/CrewDetailInspector.swift` | 5 处 `loggedAPIClient()` |
+  | `Sources/Mac/Views/CrewSessionWindowView.swift` | 2 处 `loggedAPIClient()` + `ensureRunnerHost` + `prepareServerSession` |
+  | `Sources/Mac/Views/CrewChatView.swift` | 2 处 `loggedAPIClient()`（edge 附件上传那条路） |
+  | `Sources/Support/KeychainStore.swift` / `FamilyCredentialStore.swift` | 只服务上面的凭据层（`LocalDataReset` 里的清理调用要跟着一起看） |
+  | `Sources/Chat/Shims/ServerImage.swift`、`Chat/Vendored/BubbleView.swift`、`Mac/Support/CrewImageLoader.swift` | **文件是活的，只有 `imageAuth` 那条远端分支死了** —— 本地附件路径还在用它们，第二期只切分支不删文件 |
+
+- **另外两件跟着这一刀走的**:
+  - **iOS 是空壳**：`isConfigured` 在 iOS 上是 `credential != nil`，登录入口删完后恒 false，`AppModel.backend` 恒 nil。iPhone/iPad 直进 `IPadShell` 但拿不到任何数据。**这是 #63 时上级明确接受的已知代价**（iOS 端至今 0 构建、0 分发），不是删漏。第二期或本地后端跨平台时一起收。
+  - **上面那条 🔴「`serverLink` 写死 nil」**（信箱唤醒 / 审批中继从未接通）现在是本条的子集 —— 它描述的两个服务整个在本表上。第二期端掉这层时那条一并结掉。
+- **别做的**: 不要用 `#if false` / 注释掉 / 留空 stub 来「先关掉」这层。那会把一种安静的死换成另一种。要么整块删，要么原样留着等第二期。
+
 ### 🔴 登录态 session 的信箱唤醒与审批中继**从未接通** —— `serverLink` 写死 nil
 - **发现**: 2026-08-19 · 前后端分离 P0（所有权归拢）
 - **位置**: `Sources/Mac/Views/CrewSessionWindowView.swift` 手动起 session 那条路里的 `let serverLink: CrewSessionServerLink? = nil`；实现在 `Sources/Mac/Services/CrewSessionRunner.swift` 的 `ensureMailboxWaker` / `ensurePermissionRelay`。
@@ -61,7 +93,7 @@
 - **量级**: 10 个 session 合计 0.55%，可忽略。登记只是为了留个坐标：下次谁再来压这条回调，第一刀应该切在尾窗裁剪（按 UTF-8 字节裁）而不是匹配上。
 
 
-### 🟡 仓库默认签名改成 ad-hoc —— 本机开发者不装 `Config/Local.xcconfig` 会静默丢登录态
+### ✅ 仓库默认签名改成 ad-hoc 会静默丢登录态（**随 #63 删除，2026-08-25**）
 - **发现**: 2026-08-20 · 开源准备（签名解耦）
 - **位置**: `Config/Signing.xcconfig`（仓库默认值）、`Config/Local.xcconfig.example`、`project.yml` 的 `configFiles`。
 - **为什么这么改**: 原来 `DEVELOPMENT_TEAM: M42BKJN82S` 硬编码在 `project.yml` 里，外部贡献者 clone 下来签不了名、编不过 —— 开源的第一道硬门槛。改成默认 ad-hoc 之后任何人都能编能跑。
@@ -69,6 +101,8 @@
 - **谁受影响**: 只有要动云端登录/钥匙串那条路径的人。只跑本机 crew（起 claude / codex 子进程的主路径）完全不受影响 —— 那条路径不碰钥匙串。
 - **失败长什么样**: 不报错。app 编得出、装得上、跑得动，只是登录态存不住。所以**症状和病因隔着十万八千里**，别再从后端/Supabase 那头查。
 - **该怎么还**: 构建期没有可靠判据区分「贡献者本来就该 ad-hoc」和「本机开发者忘了装覆盖」，所以没加编译告警（那会给每个贡献者的每次构建都挂一条黄色噪音，反而训练人无视告警）。真要还，正确的地方是**运行时**：走云端登录路径时若检测到 ad-hoc 签名（`csops` / `SecCodeCopySigningInformation` 读不到 team identifier），直接在界面上说清「这个构建签名不稳定，登录态存不住」，而不是让它静默失败。
+- **为什么结掉（2026-08-25 · Todo #63）**: PendingCrew 不再登录到任何地方，登录入口整块删了 —— **没有任何路径会再往钥匙串写登录态**，这条债咬不到人了。`KeychainStore` / `FamilyCredentialStore` 代码还在（跟凭据层一起等第二期），但已无调用方，见上面那条「安静的死」名单。签名默认值本身（ad-hoc）不变，也不需要改。
+- **什么情况下要复活这条**: 哪天 PendingCrew 又要存跨启动的凭据，这条原样有效，别重新踩一遍。
 - **发版不受影响**: `scripts/release/build-macos-update.sh` 在 xcodebuild 命令行上显式传 `CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=…`，命令行优先级最高，Developer ID 分发路径与这里的默认值无关。
 
 ### ✅ 没有 CI（**已还，2026-08-21**）
@@ -80,6 +114,12 @@
 - **该怎么还**: 一个 macOS runner 上的 workflow，三步即可覆盖：`xcodegen && git diff --exit-code PendingCrew.xcodeproj/project.pbxproj`（抓漏 regen）、macOS build + test、iOS Simulator build。测试跑满约 3 分钟（2026-08-20 本机实测 184s / 1443 tests）。**注意**：`CrewChatOpenCostTests` 在 CI 上会 skip（fixture 不入 git），这是预期的，别为了让它绿而把 fixture 提交进去。
 - **已完成（`.github/workflows/ci.yml`）**: 两个 job —— ①「pbxproj 与 `project.yml` 同步」重跑 xcodegen 后比 diff；② 三端编译 + 单测。落地过程中还顺带查出并根治了一个真问题：**仓库根目录的 xcconfig 会让 `xcodegen` 输出不确定**（`project.pbxproj` 里那条文件引用的 uuid 每次 regen 都变），那道 diff 检查因此永远红 —— 修法是把 xcconfig 挪进 `Config/`（`4dc855a`）。
 - **一处措辞更正**: 上面「测试跑满约 3 分钟」是**本机热构建的测试执行时间**，不是 CI 的墙钟。CI 是冷机，要连 SPM 解析和两轮全量编译一起算。别拿本机数字当 CI 预算。
+
+### 🟢 `docs/architecture.md` 的依赖章节被 #63 打成过时，本次**没改**
+- **发现**: 2026-08-25 · Todo #63
+- **问题**: #63 删掉了 `GoogleSignIn` 和 `Supabase` 两个直接依赖（`Package.resolved` 少了 16 个包），但 `docs/architecture.md` 里整节「依赖构成」还在按旧事实写：第 165 / 172–173 / 180–182 / 241–245 / 250–266 / 283 行讲「两个直接依赖」「GoogleSignIn 独自拖进 7 个传递包」「云端登录那两族占 65% 的 pin / 76% 的模块」——**这些数字现在全部为 0**。另有 35 / 261 / 737 / 859 行引用已删的 `CrewHostedConfig.swift` 与 `CrewHostedConfigTests`，341 行的 `Sources/Services/` 说明还写着「Supabase 栈」。
+- **为什么没改**: #63 的边界由上级机长划死，要动的文档只点了 `README.md` 和本文件。`architecture.md` 是作者手写的长文，逐节重写属于扩范围 —— 但留着不说就成了「文档谎报」，所以登记在这里。
+- **该怎么还**: 重跑一遍那节的实测（`Package.resolved` 的 pin 数、编译出的模块数、`.o` 体积），把「云端登录那两族」整节删掉或改写成「已随 #63 移除」，并清掉 `CrewHostedConfig` 的四处引用。**别照抄旧数字改个百分比** —— 那节的价值就在于它是实测出来的。
 
 ### 🟢 `Sources/Mac/` 名不副实，而且没有任何编译期的「层」
 - **发现**: 2026-08-20 · 技术栈梳理（只读盘点）
