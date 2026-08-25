@@ -24,6 +24,19 @@ template="$root/packaging/homebrew/Casks/pendingcrew.rb"
 test -f "$template" || { echo "找不到 $template" >&2; exit 2; }
 
 asset="PendingCrew-$version.dmg"
+
+# 草稿 Release 上的资产**外人下不到**（URL 要登录，公开访问 404）。
+# 这里如果照常更新 cask，`brew install --cask syncmeta/tap/pendingcrew`
+# 会对**所有用户**立刻坏掉，而且没有任何地方会报错 —— 我们自己用 gh
+# （带 token）去看那个 draft 是好的，看不出问题。所以在这儿拦死。
+# 发布之后（`gh release edit v<版本> --draft=false`）再跑一次本脚本即可。
+if [ "$(gh release view "v$version" --repo "$repo" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+  echo "v$version 还是**草稿**，不更新 tap —— 草稿资产外人下不到，cask 指过去等于把" >&2
+  echo "brew 安装路径给所有人弄坏。发布之后再跑：" >&2
+  echo "  scripts/release/update-homebrew-tap.sh $version" >&2
+  exit 3
+fi
+
 echo "note: 问 GitHub 要 $repo v$version 上 $asset 的摘要"
 digest=$(gh release view "v$version" --repo "$repo" \
   --json assets --jq ".assets[] | select(.name==\"$asset\") | .digest" 2>/dev/null || true)

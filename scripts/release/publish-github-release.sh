@@ -50,4 +50,13 @@ fi
 
 # 发布之后才更新 tap —— cask 的 sha256 取自 Release 上那个资产自己公布的摘要，
 # 产物没传上去就没有可信的基准。
-"$root/scripts/release/update-homebrew-tap.sh" "$version" "$dmg"
+#
+# 草稿则不更新：草稿资产外人下不到，cask 指过去会把 brew 安装路径给所有人弄坏。
+# （update-homebrew-tap.sh 自己也拦这一道，这里先说清楚，免得看着像忘了做。）
+if [ "$draft" = "--draft" ]; then
+  echo "note: v$version 是草稿，暂不更新 Homebrew tap。"
+  echo "      人类点了发布（gh release edit v$version --draft=false）之后，跑："
+  echo "        scripts/release/update-homebrew-tap.sh $version $dmg"
+else
+  "$root/scripts/release/update-homebrew-tap.sh" "$version" "$dmg"
+fi
