@@ -74,7 +74,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 ```
 
 > 干净 clone 上 `CrewChatOpenCostTests` 会 skip 并打出取数据的命令 —— 那是预期的，
-> 不是失败。要动钥匙串那条路径才需要稳定签名身份：把
+> 不是失败。要动云端登录 / 钥匙串那条路径才需要稳定签名身份：把
 > `Config/Local.xcconfig.example` 复制成 `Config/Local.xcconfig`（已 gitignore）
 > 填你自己的 Team ID。
 
