@@ -205,6 +205,10 @@ targets:
       # 「这个 session 正在等人回复」的判定（Todo #25 层 2：待回复要标红）。
       # 纯 Foundation，自包含。
       - path: Sources/Support/SessionAwaitingReply.swift
+      # 人类回应「人类 Todo」后该叫醒谁（Todo #62 ②：提问 session 在跑 → 它；
+      # 已退出 / 没记 / 机长自己提的 → 回落机长转达）。纯 Foundation，只依赖
+      # CrewMention（Sources/Services/CrewModels.swift 已在 bundle）。
+      - path: Sources/Support/HumanTodoWakePlan.swift
       # 侧栏拖拽改父子关系的判定层（Todo #27：禁环/移动语义/摘到顶层/负载编解码）。
       # 纯 Foundation，只依赖 CrewSummary（Sources/Models 已在 bundle）。
       - path: Sources/Support/CrewDragDropLogic.swift
