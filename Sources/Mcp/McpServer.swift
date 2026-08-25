@@ -88,11 +88,11 @@ final class McpServer {
                             "category": ["type": "string", "enum": ["progress", "question", "milestone"]],
                             "mentions": [
                                 "type": "array",
-                                "description": "可选定向 @ 列表 —— 要某个具体对象接手/回应时带上；不填=广播给全 crew。@session / @captain 会**收窄可见范围**：只有被点到的 agent 看得到，并把这条投进它的定向信箱（它优先看到）。@human 不收窄 —— 它只是「这条是讲给人听的、别为它叫醒 agent」的标记，消息对全 crew 照常可见。",
+                                "description": "可选定向 @ 列表 —— 要某个具体对象接手/回应时带上；不填=广播给全 crew。@session / @captain 会**收窄可见范围**：只有被点到的 agent 看得到，并把这条投进它的定向信箱（它优先看到）。@human 不收窄 —— 它只是「这条是讲给人听的、别为它叫醒 agent」的标记，消息对全 crew 照常可见。@broadcast 是**显式放宽器**：和 @session/@captain 一起给（如 `[{kind:\"broadcast\"},{kind:\"session\",target_id:\"…\"}]`）= **全组都看得见、但只叫醒被点到的那个**；别人的注入面上那条会标「（发给 XX 的）」，看得见也看得出不是给自己的活。单独给 @broadcast 等于不填。",
                                 "items": [
                                     "type": "object",
                                     "properties": [
-                                        "kind": ["type": "string", "enum": ["session", "captain", "human"]],
+                                        "kind": ["type": "string", "enum": ["session", "captain", "human", "broadcast"]],
                                         "target_id": ["type": "string", "description": "kind=session 时必填：目标 session 的 id。"],
                                     ],
                                     "required": ["kind"],
