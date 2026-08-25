@@ -34,6 +34,29 @@ spctl -a -t open --context context:primary-signature "$dmg" >/dev/null 2>&1 \
 xcrun stapler validate "$dmg" >/dev/null 2>&1 \
   || { echo "$dmg 没 staple 上公证票 —— 用户离线首次打开会被拦。拒绝发布。" >&2; exit 2; }
 
+# tag 必须先在远端，而且必须指向**产物真正的来源**。
+#
+# 不先推的话，`gh release create` 会替你在远端凭空造一个 tag —— 造在
+# **origin 默认分支当前的 HEAD** 上。本地 main 领先 origin 时（这台机器上是常态，
+# 十几个 session 各自往 main 落东西、谁也没推），那个 tag 就指向一堆根本不在这个
+# 包里的代码，而且**一声不吭**。2026-08-25 发 0.1.15 时就这么错过一次：产物构建自
+# a0e5d5e，GitHub 上的 v0.1.15 却指着 7ad1669，事后才发现。
+build_commit=$(git -C "$root" rev-parse "v$version^{commit}" 2>/dev/null) || {
+  echo "本地没有 v$version 这个 tag —— 发版脚本会打它，先把构建跑完。" >&2
+  exit 2
+}
+git -C "$root" merge-base --is-ancestor "$build_commit" origin/main 2>/dev/null || {
+  echo "v$version 指向的 $build_commit 还没推到 origin/main。" >&2
+  echo "先 git push origin main，再重跑 —— 别发一个源码不在 GitHub 上的 Release。" >&2
+  exit 2
+}
+git -C "$root" push origin "refs/tags/v$version" 2>/dev/null || true
+remote_tag=$(git -C "$root" ls-remote --tags origin "v$version" | cut -f1)
+[ "$remote_tag" = "$build_commit" ] || {
+  echo "远端 tag v$version 指向 $remote_tag，产物却构建自 $build_commit —— 对不上，拒绝发布。" >&2
+  exit 2
+}
+
 if gh release view "v$version" --repo "$repo" >/dev/null 2>&1; then
   # 正文不动：这一版可能已经被人手工编辑过，补传产物不该顺手覆盖掉它。
   echo "note: v$version 已存在，补传产物（正文保持原样）"
