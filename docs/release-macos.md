@@ -51,6 +51,7 @@ GitHub Release 的正文和 app 内 Sparkle 更新弹窗里那页说明，**都�
 
 ```sh
 # 1. 造 dmg（输入是已公证的 .zip 或 .app；dmg 自己也会签名+公证+staple）
+#    输出落在 dist/releases/pendingcrew/ —— 不是 zip 旁边，理由见下面「产物放哪」
 PENDING_NOTARY_PROFILE=pendingcrew-notary \
   scripts/release/make-dmg.sh dist/updates/pendingcrew/PendingCrew-<版本>.zip
 
@@ -60,6 +61,24 @@ git push origin v<版本>
 # 3. 建 draft，两个产物都挂上（正文自动取自 CHANGELOG.md，并顺手更新 Homebrew tap）
 scripts/release/publish-github-release.sh <版本> --draft
 ```
+
+## 产物放哪 —— dmg 不能待在 Sparkle 的 feed 目录里
+
+```
+dist/updates/pendingcrew/     ← Sparkle feed：只放 .zip + appcast.xml + .html，会整目录同步到 R2
+dist/releases/pendingcrew/    ← 只给 GitHub Release 用的 .dmg
+```
+
+**这不是洁癖，是一道真的闸。** `generate_appcast` 扫描 feed 目录时，看见同一个
+bundle version 出现在两个归档里（`X.zip` 和 `X.dmg`）会直接拒：
+
+```
+Duplicate updates are not supported. Found archives 'PendingCrew-0.1.13.zip'
+and 'PendingCrew-0.1.13.dmg' which contain the same bundle version.
+```
+
+2026-08-24 出 0.1.14 时就断在这儿 —— 公证都过了，卡在最后一步。0.1.13 那次没炸
+只是因为 dmg 是在 appcast 生成**之后**才造的，顺序碰巧躲过去了。
 
 **`--draft` 不是可选的**：Release 一旦发布就会给自动更新之外的人一个下载入口，
 发布这一下是人的决定，不是脚本的。确认好了再 `gh release edit v<版本> --draft=false`。

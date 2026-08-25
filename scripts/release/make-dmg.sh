@@ -25,7 +25,15 @@ src=${1:?usage: make-dmg.sh <app-or-zip> [outdir]}
 [ -e "$src" ] || { echo "找不到 $src" >&2; exit 2; }
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-outdir=${2:-$(dirname -- "$src")}
+
+# 默认**不**输出到输入文件旁边（那是 dist/updates/pendingcrew/ —— Sparkle
+# generate_appcast 的扫描目录）。dmg 只给 GitHub Release 用，Sparkle 只吃 zip；
+# 两者挤在同一个目录里，Sparkle 会看见同一个 bundle version 出现两次，直接拒：
+#   "Duplicate updates are not supported. Found archives 'X.zip' and 'X.dmg'"
+# 2026-08-24 出 0.1.14 时就是这么断在最后一步的（0.1.13 那次只是因为 dmg 是在
+# appcast 之后才造的，顺序碰巧躲过去了）。
+# 所以：feed 目录只装 feed 该有的东西（zip + appcast.xml + .html），dmg 单独放。
+outdir=${2:-$root/dist/releases/pendingcrew}
 mkdir -p "$outdir"
 outdir=$(CDPATH= cd -- "$outdir" && pwd)
 

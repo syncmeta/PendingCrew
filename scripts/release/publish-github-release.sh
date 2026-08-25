@@ -17,9 +17,10 @@ version=${1:?usage: publish-github-release.sh <version> [--draft]}
 draft=${2:-}
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-dir="$root/dist/updates/pendingcrew"
-dmg="$dir/PendingCrew-$version.dmg"
-zip="$dir/PendingCrew-$version.zip"
+# zip 在 Sparkle 的 feed 目录里（自动更新吃它）；dmg 单独一个目录 —— 它不能待在
+# feed 目录，否则 generate_appcast 会因为「同一 bundle version 两个归档」而拒。
+zip="$root/dist/updates/pendingcrew/PendingCrew-$version.zip"
+dmg="$root/dist/releases/pendingcrew/PendingCrew-$version.dmg"
 
 for f in "$dmg" "$zip"; do
   test -f "$f" || { echo "缺 $f —— 先跑 build-macos-update.sh 和 make-dmg.sh。" >&2; exit 2; }
