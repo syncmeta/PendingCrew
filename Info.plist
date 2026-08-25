@@ -30,27 +30,7 @@
 				<string>pendingcrew</string>
 			</array>
 		</dict>
-		<!-- Google Sign-In reversed-client-ID URL scheme (placeholder until
-		     the real iOS OAuth client ID is created in Google Cloud Console
-		     and filled in here + in GIDClientID below). GoogleSignIn will
-		     throw a clear error on the "YOUR_" prefix at runtime — Apple/
-		     email paths are unaffected. -->
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.googleusercontent.apps.YOUR_PENDINGCREW_IOS_CLIENT_ID</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.YOUR_PENDINGCREW_IOS_CLIENT_ID</string>
-			</array>
-		</dict>
 	</array>
-	<!-- Google Sign-In client ID (placeholder — replace with the real iOS
-	     client ID from Google Cloud Console once the PendingCrew OAuth app
-	     is created). GoogleSignIn checks this at sign-in time and will throw
-	     "GIDSignIn requires GIDClientID" on the "YOUR_" prefix, giving a
-	     clear error without silently misconfiguring the auth flow. -->
-	<key>GIDClientID</key>
-	<string>YOUR_PENDINGCREW_IOS_CLIENT_ID.apps.googleusercontent.com</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>
