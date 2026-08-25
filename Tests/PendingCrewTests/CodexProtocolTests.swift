@@ -217,9 +217,16 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(item.kind, "permission")
         XCTAssertEqual(item.sessionId, "codex-session")
         XCTAssertEqual(item.summary, "git switch -c fix/x")
-        XCTAssertTrue(
-            board.list(crewId: "crew").contains { $0.text.contains("待审批：git switch") },
-            "a notice is valid only after the pending card exists")
+        // 卡片先落、群里那条通知后落 —— 两次写之间有真实的时间窗。**这里必须等，
+        // 不能读一次就断言**：读一次在满载的全量跑里会撞进那个窗口（实测约一半
+        // 概率红），而这一族的语义是「通知只有在卡片之后出现才算数」，不是「通知
+        // 与卡片同一瞬间出现」。等到它出现即满足语义；等不到才是真红。
+        var noticed = false
+        for _ in 0..<100 where !noticed {
+            noticed = board.list(crewId: "crew").contains { $0.text.contains("待审批：git switch") }
+            if !noticed { try await Task.sleep(nanoseconds: 1_000_000) }
+        }
+        XCTAssertTrue(noticed, "a notice is valid only after the pending card exists")
 
         approvals.decide(crewId: "crew", id: item.id, decision: "allow")
         let decision = await response.value
