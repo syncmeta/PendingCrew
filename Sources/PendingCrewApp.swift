@@ -85,59 +85,15 @@ private struct FirstLaunchDisclosureGate: ViewModifier {
 }
 #endif
 
-/// 启动路由(T5.1 + T5.2)。两种顶层态:
-/// 1. **WelcomeView** — 没凭据时的 iOS 登录入口。WelcomeView 内部管理
-///    确认卡 ↔ 直接登录页（CrewWelcomeView/CrewMacWelcomeView）的切换；完成登录的那一刻 `AppModel.credential` 变化
-///    让 `isConfigured` 翻 true,RootView 自动切到 #2。
-///    **macOS 上 `isConfigured` 恒 true → 这条永不渲染**
-///    (本地为家,本地 backend 常驻;登录是侧栏可选能力叠加)。
-/// 2. **主界面** — Mac 走 `MacThreePaneView`,iPad/iOS 走 `IPadShell`
+/// 启动路由。只有一种顶层态:**直接进主界面** —— Mac 走 `MacThreePaneView`,
+/// iPad/iOS 走 `IPadShell`。
+///
+/// #63:PendingCrew 不再登录到任何地方,登录页整块删掉,原来那条
+/// `isConfigured ? 主界面 : WelcomeView` 的分支一并去掉。
 struct RootView: View {
-    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
 
     var body: some View {
-        Group {
-            if model.isConfigured {
-                authenticatedRoot
-            } else {
-                WelcomeView()
-            }
-        }
-        // 家族 SSO 不在启动时静默登录（用户定调：登录必须是用户显式动作）——
-        // 入口在侧栏身份菜单「用本机 PendingBot 身份登录」，点一下才 mint。
-        // 凭据消失(签出)时清 crew 缓存。
-        .onChange(of: model.isConfigured) { _, configured in
-            if !configured {
-                crewStore.reset()
-            }
-        }
-        // 登录/登出时清缓存重拉 —— 接合 v2 后 macOS backend 恒为本地,
-        // 这里的 reset+refresh 只是重载本地列表 + subject(能力叠加态变了,
-        // subject 展示要跟上),**不会**让本地 crew 消失。
-        // `isConfigured` 在 macOS 上恒 true,上面那个 onChange 不触发 ——
-        // 用 isAuthenticated 作为登录态翻转的触发线。
-        //
-        // 重置后让 MacThreePaneView 的 `.task` 自然在下一帧重跑 list /
-        // subjects —— 但 `.task` 只在 view 出现时跑,登录态切换不重建视图,
-        // 所以这里显式拉一次。
-        .onChange(of: model.isAuthenticated) { _, _ in
-            crewStore.reset()
-            if model.isConfigured {
-                Task {
-                    await crewStore.refreshList()
-                    await crewStore.refreshSubjects()
-                    // 登录后把本机 upsert 进 machine 表，再拉机器列表（幂等，
-                    // 重复登录安全）。CreateCrewSheet 据 machines.count 决定显选择。
-                    _ = await crewStore.registerSelfMachine()
-                    await crewStore.refreshMachines()
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var authenticatedRoot: some View {
         Group {
             #if os(iOS)
             IPadShell()
@@ -145,8 +101,7 @@ struct RootView: View {
             MacThreePaneView()
             #endif
         }
-        // 进入主界面时确保机器列表已就绪。macOS backend 恒本地（至少一台本机）；
-        // 登录态会在 onChange 里再 register+refresh 一次拿到全量多机。
+        // 进入主界面时确保机器列表已就绪。macOS backend 恒本地（至少一台本机）。
         .task {
             _ = await crewStore.registerSelfMachine()
             await crewStore.refreshMachines()
