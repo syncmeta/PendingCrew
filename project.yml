@@ -220,6 +220,9 @@ targets:
       # 侧栏时间流视图的排序 / 血缘次要行 / 视图模式持久化（Todo #50）。
       # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。
       - path: Sources/Support/CrewTimelineOrdering.swift
+      # 侧栏层级视图按最新活动排序（Todo #67：父的键 = max(自己, 全部后代)）。
+      # 同上，纯 Foundation。
+      - path: Sources/Support/CrewHierarchyOrdering.swift
       # create_child_crew brief 的启动 payload + fail-loud 回执纯逻辑（Todo #41）。
       - path: Sources/Support/CaptainBriefDelivery.swift
       # 「正在输入」圆点（CoreAnimation 驱动）—— 布局自激回归测试要直接跑线上这版。
