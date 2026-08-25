@@ -57,16 +57,29 @@ if [ -n "$local_dmg" ]; then
 fi
 
 # tap 的工作副本：优先用本机已 tap 的那份，否则临时 clone。
-tapdir=$(brew --repository 2>/dev/null)/Library/Taps/${tap_repo%%/*}/homebrew-${tap_repo##*/}
+#
+# 目录名必须长成 `<owner>/homebrew-<name>` —— 两个地方都靠它：
+#   ① 本机那份的实际路径就是 Library/Taps/syncmeta/homebrew-tap；仓库名
+#      `syncmeta/homebrew-tap` 里**已经带了** homebrew- 前缀，无脑再拼一次会得到
+#      `homebrew-homebrew-tap`，找不到，于是白白走 clone 那条路。
+#   ② `brew style` 只认「待在 tap 里」的 cask，clone 到 `$tmp/tap` 会被它拒：
+#      "Homebrew requires casks to be in a tap, rejecting: …/tap/Casks/pendingcrew.rb"
+# 2026-08-25 发 0.1.15 时两条一起撞上：Release 已经发出去了，tap 却没更新。
+tap_owner=${tap_repo%%/*}
+tap_name=${tap_repo##*/}
+case "$tap_name" in homebrew-*) ;; *) tap_name="homebrew-$tap_name" ;; esac
+
+tapdir=$(brew --repository 2>/dev/null)/Library/Taps/$tap_owner/$tap_name
 if [ ! -d "$tapdir/.git" ]; then
   tmp=$(mktemp -d /tmp/pendingcrew-tap.XXXXXX)
   trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-  git clone --quiet "https://github.com/$tap_repo.git" "$tmp/tap" || {
+  mkdir -p "$tmp/$tap_owner"
+  git clone --quiet "https://github.com/$tap_repo.git" "$tmp/$tap_owner/$tap_name" || {
     echo "clone 不到 tap 仓库 https://github.com/$tap_repo —— 它还没建。" >&2
     echo "建仓库这一下要人点头，不代劳。建好之后重跑这条命令即可。" >&2
     exit 3
   }
-  tapdir="$tmp/tap"
+  tapdir="$tmp/$tap_owner/$tap_name"
 fi
 
 mkdir -p "$tapdir/Casks"
