@@ -12,6 +12,9 @@ import SwiftUI
 /// - **防无限递归**:渲染带一条「祖先路径」`Set<String>`,某节点已在路径上则
 ///   不再下钻(attachParent 已禁环,渲染仍自保,防脏数据)。
 ///
+/// **顺序**(Todo #67):同级按**最新活动时间**从新到旧,父的键 = max(自己, 全部后代)。
+/// 推导在 `CrewHierarchyOrdering`(纯函数、有单测),这里只负责把时间喂进去。
+///
 /// 点击节点设 `crewStore.selectedCrewId`(沿用现有选中逻辑)。展开态每个节点
 /// 自持(`@State isExpanded`),互不影响。
 struct CrewDAGTreeView: View {
@@ -30,15 +33,31 @@ struct CrewDAGTreeView: View {
     @EnvironmentObject private var crewStore: CrewStore
 
     var body: some View {
-        // childMap: parentId → 该父下直接子 crew。限定在子集内算。
-        let childMap = Self.buildChildMap(crews)
+        // 排序键（Todo #67）：**最新活动时间**，父取 max(自己, 全部后代) —— 一个安静
+        // 的父部门底下有子部门在刷屏时，父不能沉到底，否则那个正在动的子部门就找不到了。
+        // 时间来自 store 那份**后台算好的**快照（`lastWhiteboardMessages`），**body 里
+        // 一个字节的白板都不读** —— 那正是 2026-08-17「开久了卡」的病根（见
+        // `CrewSidebarCrewRow` 里那段注释）。没有消息的回落 `createdAt`，不是 1970。
+        let lastMessages = crewStore.lastWhiteboardMessages
+        let orderKeys = CrewHierarchyOrdering.activityKeys(crews: crews) { crew in
+            CrewActivityTime.resolve(
+                lastMessageCreatedAt: lastMessages[crew.id]?.createdAt,
+                // 兜底用 createdAt 而不是 updatedAt：后者被改名/绑定碰一下就跳，
+                // 「改个名就窜到顶」不是人心里「这个群有没有动静」的意思。
+                crewUpdatedAt: crew.createdAt)
+        }
+        // childMap: parentId → 该父下直接子 crew（**每个父下各自排好序** —— 多父 crew
+        // 在每个父下各出现一次，只对第一处生效是这类结构最容易漏的地方）。限定在子集内算。
+        let childMap = CrewHierarchyOrdering.sortedChildMap(crews: crews, keys: orderKeys)
         // 名字后面那行黄字标注（`@根 crew`）—— 整组一次算完再分发给行。
         let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
         let ids = Set(crews.map(\.id))
         // 组内根 = 无父，或父不在本组（跨机器父边 → 在本组当根）。
-        let roots = crews.filter { crew in
-            crew.parentCrewIds.isEmpty || !crew.parentCrewIds.contains(where: ids.contains)
-        }
+        let roots = CrewHierarchyOrdering.sortedSiblings(
+            crews.filter { crew in
+                crew.parentCrewIds.isEmpty || !crew.parentCrewIds.contains(where: ids.contains)
+            },
+            keys: orderKeys)
 
         ForEach(roots) { crew in
             CrewDAGNode(
@@ -59,17 +78,6 @@ struct CrewDAGTreeView: View {
     }
 
     // MARK: - 推导
-
-    /// parentId → [子 crew]。child = 其 parentCrewIds 含某 crew 的那些 crew。
-    static func buildChildMap(_ crews: [CrewSummary]) -> [String: [CrewSummary]] {
-        var map: [String: [CrewSummary]] = [:]
-        for crew in crews {
-            for parentId in crew.parentCrewIds {
-                map[parentId, default: []].append(crew)
-            }
-        }
-        return map
-    }
 
     static func byId(_ crews: [CrewSummary]) -> [String: CrewSummary] {
         Dictionary(crews.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
