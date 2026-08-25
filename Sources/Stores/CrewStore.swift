@@ -178,7 +178,7 @@ final class CrewStore: ObservableObject {
         }
         // 未登录(Mac 本地态):LocalBackend 合成的「本机 (BYOK)」假主体,供
         // CreateCrewSheet 拿 `subjects.first?.id` 当本地 crew 的 responsibleSubjectId。
-        // iOS 未登录无 backend → 留空(WelcomeView 时态)。
+        // iOS 无 backend（#63 后恒无）→ 留空。
         guard let backend = appModel.backend else { subjects = []; return }
         do {
             subjects = try await backend.listMySubjects()

@@ -88,8 +88,8 @@ private struct FirstLaunchDisclosureGate: ViewModifier {
 /// 启动路由。只有一种顶层态:**直接进主界面** —— Mac 走 `MacThreePaneView`,
 /// iPad/iOS 走 `IPadShell`。
 ///
-/// #63:PendingCrew 不再登录到任何地方,登录页整块删掉,原来那条
-/// `isConfigured ? 主界面 : WelcomeView` 的分支一并去掉。
+/// #63:PendingCrew 不再登录到任何地方,登录页整块删掉,原来那条按
+/// `isConfigured` 在主界面 / 登录页之间分叉的路由一并去掉。
 struct RootView: View {
     @EnvironmentObject private var crewStore: CrewStore
 

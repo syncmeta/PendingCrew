@@ -85,7 +85,7 @@ final class CaptainTemplateStore: ObservableObject {
         persistToDisk()
     }
 
-    /// 全清(切回 WelcomeView / 调试)。
+    /// 全清(调试 / 本地数据重置用)。
     func clearAll() {
         templates.removeAll()
         persistToDisk()
