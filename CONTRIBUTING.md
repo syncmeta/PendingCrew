@@ -39,6 +39,13 @@ pbxproj diff、再花时间怀疑自己是不是忘了 regen（那是同一种�
 `PendingCrew.xcodeproj/project.pbxproj` 虽然被 git 跟踪，但它是**生成物**，不要
 手改。跟踪它是为了让 clone 下来的人不装 XcodeGen 也能直接开工程。
 
+**合并冲突也一样 —— 生成物的冲突不许手解，重新生成。** 合并/rebase 时 `.pbxproj`
+撞了，不要去挑 `<<<<<<<` 两边的行：手解会解出一个**谁都没生成过的中间态**，而它
+多半还编得过，于是没人发现它已经和 `project.yml` 对不上 —— 直到某个新 worktree
+编不过、或者某个新加的文件莫名其妙不进 target。正确做法是先把 `project.yml` 那边
+的冲突解干净（真值在那儿），再 `scripts/gen-project.sh` 重新生成，然后 `git add`
+生成结果。这是「`project.yml` 是唯一真值」的直接推论，对任何被跟踪的生成物都成立。
+
 **新增 Swift 文件属于「改了工程定义」** —— 源文件是按目录收的，加了文件不 regen，
 你本机能编（Xcode 会自己发现），但别人 clone 下来那份 `.pbxproj` 里没有它，
 **在别的机器上编不过**。这条真的踩过。
