@@ -29,6 +29,9 @@ final class McpServer {
     /// 人类 Todo 列表（task #478）。机器人经 `respond_todo` 追加回应 + 推进状态；
     /// 新增条目只有人类能做（app 面板），MCP 不暴露新增。与 store 同 `--dir`。
     let todos: LocalTodoStore
+    /// 机长作战板（人类 Todo #66）。**只有机长写得动** —— `plan_add` / `plan_update`
+    /// 前面站着 `guard isCaptain`，worker 连工具列表里都看不到它们。与 store 同 `--dir`。
+    let plans: CockpitPlanStore
     /// 本 session 跑在哪家 runner 上（helper `--agent claude|codex`）。
     /// `set_session_profile` 拿它挑对照哪张模型表；nil（旧调用/没传）→ 两家都对照，
     /// 任一家认得就不吭声（宁可少说，也别对着错的表瞎报）。
@@ -38,6 +41,7 @@ final class McpServer {
          crewId: String, sessionId: String,
          isCaptain: Bool = false, sessionLabel: String? = nil,
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
+         plans: CockpitPlanStore? = nil,
          agentKey: String? = nil) {
         self.store = store
         self.approvals = approvals
@@ -48,6 +52,7 @@ final class McpServer {
         self.sessionLabel = sessionLabel
         self.quotaDirectory = quotaDirectory ?? LocalWhiteboardStore.defaultDirectory
         self.todos = todos ?? LocalTodoStore()
+        self.plans = plans ?? CockpitPlanStore()
         self.agentKey = agentKey
     }
 
@@ -207,6 +212,42 @@ final class McpServer {
                         ],
                         "required": ["reqId", "reply"],
                     ],
+                ])
+                // 机长作战板（人类 Todo #66）—— 与两本 Todo 的关系：Todo 是**别人给的**
+                // （`.agent` 人类派活 / `.human` 请人拍板），这一本是**机长自己排的**。
+                // 派活 / 收活 / 翻牌这三个动作发生时顺手更一条，是这块板唯一的活法。
+                tools.append([
+                    "name": "plan_add",
+                    "description": "（机长专用）往**你自己的任务列表**上排一条活。这本账只有你写得动，人类只读——它是你整理出来的作战板，不是 Todo（Todo 是别人给你的）。新条目从「没做」起。派活给 worker、接下一件事、拆出一个阶段时顺手排一条；一条一句话说清做什么，别把整段 brief 塞进来。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "title": ["type": "string", "description": "一句话说清这条活是什么。"],
+                        ],
+                        "required": ["title"],
+                    ],
+                ])
+                tools.append([
+                    "name": "plan_update",
+                    "description": "（机长专用）推进任务列表上的一条：追加进度描述 / 翻进度档 / 改标题 / 撤下，一次可以做完几样。\n**四档**：not_started（没做）· in_progress（进行中）· blocked（卡住）· done（完成）——注意跟 Todo 的三档不是一回事。\n**翻成 blocked 必须指明卡在哪条人类 Todo**（blocked_by_number，默认指 human 那本，也就是你请人类拍板的那本）：「卡住」的意思就是**卡在人身上**，不指出是哪一条，人看到板也不知道该推什么。翻成 blocked 时（且仅此一档）会往群里发一条——其余的进度更新**不进群**，这块板存在的意义就是让进度不必靠刷屏传达。\n**什么时候更**：派活、收活、给 Todo 翻牌，这三个动作发生时顺手更一条。板上每条都记着最后更新时间并显示在界面上（「进行中 · 最后更新 3 天前」），久没碰的条目人一眼就看得见——这是你自己装的照妖镜，别让它照出一板子 6 天前。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "number": ["type": "integer", "description": "这条计划的 #N（plan_list 里看得到）。"],
+                            "progress": ["type": "string", "description": "进度描述，**追加式**（不覆盖旧的）。"],
+                            "status": ["type": "string", "description": "not_started / in_progress / blocked / done。不填=不动状态。"],
+                            "blocked_by_number": ["type": "integer", "description": "卡在哪条人类 Todo 的 #N。status=blocked 时必给（除非这条已经卡着且卡点没变）。"],
+                            "blocked_by_ledger": ["type": "string", "description": "哪一本 Todo 账：human（你请人类拍板那本，默认）/ agent（人类派给你那本）。两本各自从 #1 起，裸 #N 有歧义，所以要说清是哪本。"],
+                            "title": ["type": "string", "description": "改标题（排错了、说法不准时）。"],
+                            "drop": ["type": "boolean", "description": "撤下这条（软删，号码保留不复用）。整理板面用。"],
+                        ],
+                        "required": ["number"],
+                    ],
+                ])
+                tools.append([
+                    "name": "plan_list",
+                    "description": "（机长专用）读你自己的任务列表：每条的 #N、进度档、卡在哪、以及**多久没更新过**。开工前先看一眼，别把已经排过的活再排一遍。",
+                    "inputSchema": ["type": "object", "properties": [:]],
                 ])
                 tools.append([
                     "name": "rename_crew",
@@ -711,6 +752,85 @@ final class McpServer {
                                   senders: (senders?.isEmpty ?? true) ? nil : senders, off: false)
             let who = (senders?.isEmpty ?? true) ? "全部成员" : senders!.joined(separator: "、")
             return toolResult(id: id, text: "已开启群聊收听至 \(until)（听：\(who)）。期间无定向 @ 的新消息和 @ 你的消息会注入唤醒你；到期自动停。现在正常结束你的回合等消息即可，不要空转轮询。")
+        case "plan_add":
+            // 机长作战板（人类 Todo #66）。门禁与其余机长工具同一道 `guard`。
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let planTitle = ((args["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !planTitle.isEmpty else {
+                return toolResult(id: id, text: "ERROR: title 不能为空 —— 一句话说清这条活是什么。")
+            }
+            guard let planned = plans.add(crewId: crewId, title: planTitle,
+                                          bySessionId: sessionId, byName: sessionLabel) else {
+                // nil ≠「没排」这么轻描淡写：账读不出来时本次写已拒，白板上有一条如实警示。
+                return toolResult(id: id, text: "ERROR: 没排进去 —— 任务列表这次读不出来，本次写已拒（群聊白板上有一条系统警示说明是哪种事故）。")
+            }
+            return toolResult(id: id, text: "已排上 计划 #\(planned.number)：\(planned.title)（没做）。")
+        case "plan_update":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let planNumber = (args["number"] as? Int) ?? (args["number"] as? Double).map(Int.init)
+            guard let planNumber, planNumber >= 1 else {
+                return toolResult(id: id, text: "ERROR: number 需为正整数（plan_list 里的 #N）。")
+            }
+            if (args["drop"] as? Bool) == true {
+                guard plans.drop(crewId: crewId, number: planNumber) else {
+                    return toolResult(id: id, text: "ERROR: 撤不下 计划 #\(planNumber)（找不到这条，或任务列表读不出来 —— 后者白板上有警示）。\n" + planRows())
+                }
+                return toolResult(id: id, text: "已撤下 计划 #\(planNumber)（号码保留、不复用）。")
+            }
+            let planProgress = (args["progress"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            let planStatusRaw = (args["status"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            let planNewTitle = (args["title"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            // 引用**连账本一起收**：两本 Todo 各自从 #1 起，裸 #N 有歧义（群里那行
+            // 都被迫加「人类」二字才分得清）。默认 human —— 机长的活卡住，绝大多数
+            // 情况就是卡在「请人类拍板」那本上。
+            let blockerLedger = ((args["blocked_by_ledger"] as? String) ?? "human")
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard ["human", "agent"].contains(blockerLedger) else {
+                return toolResult(id: id, text: "ERROR: blocked_by_ledger 只能是 human（你请人类拍板那本）或 agent（人类派给你那本）。")
+            }
+            let blockerNumber = (args["blocked_by_number"] as? Int) ?? (args["blocked_by_number"] as? Double).map(Int.init)
+            let blocker = blockerNumber.map { CockpitPlanBlocker(ledger: blockerLedger, number: $0) }
+            let wasBlocked = plans.item(crewId: crewId, number: planNumber)
+                .flatMap { CockpitPlan.status($0.status) } == .blocked
+            switch plans.update(crewId: crewId, number: planNumber,
+                                progress: planProgress, statusRaw: planStatusRaw,
+                                blocker: blocker, title: planNewTitle,
+                                bySessionId: sessionId, byName: sessionLabel) {
+            case let .failure(failure):
+                let tail = failure == .notFound ? "\n" + planRows() : ""
+                return toolResult(id: id, text: "ERROR: " + failure.summary + tail)
+            case let .success(item):
+                let now = Date()
+                var lines = ["计划 #\(item.number)：\(item.title) → "
+                             + CockpitPlan.statusLine(statusRaw: item.status,
+                                                      updated: Self.iso.date(from: item.updatedAt), now: now)]
+                if let b = item.blockedBy {
+                    lines.append(CockpitPlan.blockerLine(b, state: blockerState(b)))
+                }
+                // **只有翻成「卡住」才进群**（而且只在这一次翻的时候）：卡住 = 卡在人
+                // 身上，那是群里唯一该出现的一档。其余进度更新一律不进群 —— 这块板
+                // 存在的意义就是让进度不必靠刷屏传达，每推一步发一条等于原地退回去。
+                if CockpitPlan.status(item.status) == .blocked, !wasBlocked {
+                    let where_ = item.blockedBy.map { "，" + CockpitPlan.blockerLine($0, state: blockerState($0)) } ?? ""
+                    store.appendSessionMessage(
+                        crewId: crewId, sessionId: sessionId,
+                        text: "计划 #\(item.number)「\(item.title)」卡住了\(where_)。",
+                        senderName: sessionLabel,
+                        mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
+                        senderKind: isCaptain ? "captain" : "session")
+                    lines.append("（已往群里发了一条 —— 卡住是唯一进群的那一档。）")
+                }
+                return toolResult(id: id, text: lines.joined(separator: "\n"))
+            }
+        case "plan_list":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            return toolResult(id: id, text: planRows())
         case "respond_todo":
             // 人类 Todo 的机器人回应（task #478）：追加式回应 + 可选状态推进。
             // number 收 Int/Double 两种形状（JSON 数字经 JSONSerialization 可能是
@@ -1126,6 +1246,41 @@ final class McpServer {
     }
 
     // MARK: - JSON-RPC envelope helpers
+
+    /// 作战板的一行行文本（工具回执 / plan_list 共用）。**带上「多久没更新」** ——
+    /// 机长自己读这块板时也该被那面照妖镜照到，不能只在 UI 上显示。
+    private func planRows() -> String {
+        let now = Date()
+        let rows = CockpitPlan.newestFirst(plans.list(crewId: crewId)).map { item -> String in
+            var line = "#\(item.number) [" 
+                + CockpitPlan.statusLine(statusRaw: item.status,
+                                         updated: Self.iso.date(from: item.updatedAt), now: now)
+                + "] \(item.title)"
+            if let b = item.blockedBy {
+                line += "\n    " + CockpitPlan.blockerLine(b, state: blockerState(b))
+            }
+            if let last = item.updates.last {
+                line += "\n    最近进度：\(last.text)"
+            }
+            return line
+        }
+        return rows.isEmpty ? "任务列表是空的 —— 用 plan_add 排第一条。" : rows.joined(separator: "\n")
+    }
+
+    /// 「卡住」指的那条 Todo 还在不在。**本层如实回答，不猜**：
+    /// - `.agent` 那本（人类派给 agent）现在就查得了；
+    /// - `.human` 那本是 Todo #62 的产物，**还没合进 main** —— 那就明说没核实，
+    ///   不假装查过。#62 落地后这里换成对那本 store 的一次 `item(...)` 即可。
+    private func blockerState(_ blocker: CockpitPlanBlocker) -> CockpitPlanBlockerState {
+        CockpitPlan.blockerState(
+            blocker,
+            agentTodoExists: { todos.item(crewId: crewId, number: $0) != nil },
+            // Todo #62 合 main 后，这里换成对 `.human` 那本 store 的一次查询即可。
+            // 在那之前**如实说没核实**，不假装查过。
+            humanTodoExists: nil)
+    }
+
+    private static let iso = ISO8601DateFormatter()
 
     private func result(id: Any?, _ result: [String: Any]) -> String? {
         envelope(["jsonrpc": "2.0", "id": id ?? NSNull(), "result": result])

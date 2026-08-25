@@ -87,15 +87,22 @@ enum CockpitTaskLedger {
     /// status → 段。人类要的是「做了什么 / 在做什么 / 接下来做什么」，所以状态**只分三档**，
     /// 不再按 5 个原始状态铺成看板列。`dropped`(作废)返 nil —— 不占版面。
     ///
-    /// 两本账的状态词都吃：活跃账 `pending / in_progress / completed`；
+    /// 各本账的状态词都吃：活跃账 `pending / in_progress / completed`；
     /// 仓库账 `todo / doing / pending-qa / done / dropped`(可能是 `partial, pending-qa` 这种复合值)；
-    /// 人类 Todo `pending / in_progress / completed`。
+    /// 人类 Todo `pending / in_progress / completed`；机长作战板
+    /// `not_started / in_progress / blocked / done`（Todo #66）。
     static func band(_ statusRaw: String) -> CockpitBand? {
         let s = statusRaw.lowercased().trimmingCharacters(in: .whitespaces)
         if s.isEmpty { return .next }
         if s == "dropped" { return nil }
         if s == "completed" || s.hasPrefix("done") { return .done }
-        if s == "pending" || s == "todo" || s == "blocked" || s.hasPrefix("planned") { return .next }
+        if s == "pending" || s == "todo" || s == "not_started" || s.hasPrefix("planned") { return .next }
+        // 「卡住」归**在做**那一段，不归「接下来」：它是开了工却推不动的活，摆进「接下来
+        // 做什么」等于把一件正卡着人的事描述成还没开始。唯一产出这个词的是机长作战板
+        // （`CockpitPlanStatus.blocked`）—— 另外几本账的状态词里没有 blocked（活跃账
+        // pending/in_progress/completed；仓库账 todo/doing/pending-qa/done/dropped；
+        // 人类 Todo pending/in_progress/completed），所以这条改动不影响它们。
+        if s == "blocked" { return .doing }
         // 其余都算「在做」：in_progress / doing / partial / pending-qa / partial, pending-qa …
         return .doing
     }
@@ -207,9 +214,14 @@ struct CockpitBandGroup: Equatable, Identifiable {
 /// 这样三段式里能把「人给的活」和「机器账上的活」摆在同一段里，不再各占一个 tab。
 struct CockpitTaskItem: Identifiable, Equatable {
     enum Origin: Equatable {
-        case live        // coding agent 活跃 task 账
-        case repoLedger  // 仓库 docs/tasks/*.md
-        case humanTodo   // 人类 Todo 列表（每 crew 一份）
+        case live         // coding agent 活跃 task 账
+        case repoLedger   // 仓库 docs/tasks/*.md
+        case humanTodo    // 人类 Todo 列表（每 crew 一份）
+        /// 机长自己排的作战板（`CockpitPlanStore`，人类 Todo #66）。**它是这里唯一
+        /// 由机长第一手写下的来源** —— 另外三种都是从别人的账上读来的。加进来是为了
+        /// 让 glance 不漏掉机长的计划；不加它就会变成一座孤岛（自己有视图、却不进
+        /// 「在做什么 / 接下来 / 做了什么」这个总摘要）。
+        case captainPlan
     }
 
     let id: String

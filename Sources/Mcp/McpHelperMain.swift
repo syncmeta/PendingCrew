@@ -39,6 +39,7 @@ enum McpHelperMain {
                                    sessionLabel: label,
                                    quotaDirectory: dir,
                                    todos: LocalTodoStore(directory: dir),
+                                   plans: CockpitPlanStore(directory: dir),
                                    agentKey: agent)
             while let line = readLine(strippingNewline: true) {
                 if let out = server.handleLine(line) {
