@@ -566,7 +566,9 @@ struct LocalWhiteboardAttachment: Codable, Equatable {
 /// 一条定向 @（Phase 7）。形状对齐 edge `MentionItem`（`{kind, target_id?}`），
 /// 便于将来 block 3 relay 直接透传给 edge `post_to_crew`/`POST /messages`。
 struct LocalWhiteboardMention: Codable, Equatable {
-    /// 'session' | 'captain' | 'human'
+    /// 'session' | 'captain' | 'human' | 'broadcast'
+    /// —— 前两种收窄可见范围，`human` 是「讲给人听、别叫醒 agent」的附加标记，
+    /// `broadcast` 是**显式放宽器**（#62，见 `CrewWhiteboardVisibility`）。
     let kind: String
     /// kind == "session" 时是目标 session 的 id；其余 kind 可空。
     let targetId: String?

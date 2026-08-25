@@ -369,15 +369,22 @@ final class CrewRelayAgent: ObservableObject {
     // MARK: - mentions 映射（Task 10 规则 1/2）
 
     /// edge `CrewMention` → 本地 `LocalWhiteboardMention`（拉取侧）。edge kind
-    /// ∈ human/session/captain/broadcast/bot；本地 `LocalWhiteboardMention` /
-    /// `CrewLocalMentionWakeLogic` 只认 session/captain/human —— bot/broadcast
-    /// 本地不消费，直接滤掉（不是丢数据，是本地没有对应的唤醒/高亮语义）。
+    /// ∈ human/session/captain/broadcast/bot；本地只认 session/captain/human/broadcast，
+    /// `bot` 滤掉（本地没有对应语义）。
+    ///
+    /// **#62：`broadcast` 不再滤。** 它过去被当成「本地不消费」丢掉，那时确实如此；
+    /// 现在它是 `CrewWhiteboardVisibility` 的**显式放宽器**（`[broadcast, session(X)]`
+    /// = 全组可见 + 只叫醒 X），滤掉就等于把作者明写的「全组都该看见」在落地这一步
+    /// 静默降级回排他。唤醒面不受影响 —— `CrewLocalMentionWakeLogic` /
+    /// `CrewLocalMentionInjectLogic` 照旧只认 session/captain。
+    ///
     /// 空 / nil → nil（与 `LocalWhiteboardMessage.mentions` 的「无 @」语义对齐，
     /// 不用空数组占位）。
     static func localMentions(_ mentions: [CrewMention]?) -> [LocalWhiteboardMention]? {
         guard let mentions else { return nil }
         let mapped = mentions.compactMap { m -> LocalWhiteboardMention? in
-            guard m.kind == "session" || m.kind == "captain" || m.kind == "human" else { return nil }
+            guard m.kind == "session" || m.kind == "captain"
+                    || m.kind == "human" || m.kind == "broadcast" else { return nil }
             return LocalWhiteboardMention(kind: m.kind, targetId: m.targetId)
         }
         return mapped.isEmpty ? nil : mapped

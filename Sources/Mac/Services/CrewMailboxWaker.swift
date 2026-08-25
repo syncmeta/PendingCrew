@@ -116,8 +116,14 @@ final class CrewMailboxWaker {
         let recent = Array(CrewWhiteboardVisibility
             .visible(unread, to: run.sessionId, isCaptain: run.role == .captain)
             .suffix(15))
+        // 注入面消歧（#62）：附带的「近期群聊」里，@ 了别人却对我可见的条目要带
+        // 「（发给 XX 的）」。花名册从快照现读（本路径没有 runner 全量 runs 在手）。
+        let roster = CrewSessionsSnapshot.displayNames(
+            ofCrew: crewId, directory: LocalWhiteboardStore.defaultDirectory)
         switch CrewMailboxWakeLogic.decide(
-            mailbox: inbox.mailbox, isBusy: run.backend.isBusy, recent: recent) {
+            mailbox: inbox.mailbox, isBusy: run.backend.isBusy, recent: recent,
+            viewer: run.sessionId, viewerIsCaptain: run.role == .captain,
+            displayName: { roster[$0] }) {
         case .noop:
             return
         case let .inject(text, deliveredIds):

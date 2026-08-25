@@ -33,6 +33,26 @@ struct CrewSessionsSnapshot: Codable, Equatable {
 
     static let fileName = "crew-sessions.json"
 
+    /// 花名册：`sessionId → 显示名`。给注入面消歧标注
+    /// （`CrewWhiteboardVisibility.directedNote`）解名字用 —— 「（发给 小王 的）」
+    /// 比「（发给 session:9f2a1c 的）」有用得多。
+    ///
+    /// 跨进程从快照文件现读（helper 子进程也读得到），且**故意不做新鲜度门禁**：
+    /// 名字过期一点无所谓，解不出名字才是真损失。读不到 → 空表，调用方自然退回
+    /// 短 id 兜底。（对比 `HookEmitter.activeSessionCount`：那里的 15 秒门禁是因为
+    /// 陈旧 roster 会制造「当前并行 N 个」的假信号，名字没有这个问题。）
+    static func displayNames(ofCrew crewId: String, directory: URL) -> [String: String] {
+        let url = directory.appendingPathComponent(fileName)
+        guard let data = try? Data(contentsOf: url),
+              let snapshot = try? JSONDecoder().decode(CrewSessionsSnapshot.self, from: data)
+        else { return [:] }
+        var out: [String: String] = [:]
+        for e in snapshot.crews[crewId] ?? [] where !e.name.isEmpty {
+            out[e.sessionId] = e.name
+        }
+        return out
+    }
+
     /// 机长 `list_sessions` 的渲染：一行一个成员,直接可读。
     func renderRoster(crewId: String) -> String {
         guard let entries = crews[crewId], !entries.isEmpty else {

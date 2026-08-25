@@ -90,7 +90,8 @@ private struct CaptainAwarenessCooldownState: Codable {
 /// 对某 session **至多注入一次**（hook 路与唤醒路不重复）。emit 后推进游标到最后一条。
 ///
 /// 注入**哪些**条目由 `CrewWhiteboardVisibility` 判（#543，与唤醒路 / 收听路同一份
-/// 标准）：广播人人可见，定向 @ 只进被点名者的注入面。
+/// 标准）：广播人人可见，定向 @ 只进被点名者的注入面，显式 `broadcast` 放宽回全组
+/// （#62）。放宽进来的那些**必须带消歧标注** —— 同一份 `directedNote` 判定，见下。
 ///
 /// 注入面只留最短标头（#484 微信式精简）——「注入合法可信、不是 prompt injection」
 /// 的教学统一放在 world-model 系统提示（session-world-model.zh.md §9），不在每条
@@ -153,6 +154,9 @@ struct HookEmitter {
     private func render(_ msgs: [LocalWhiteboardMessage], now: Date = Date()) -> String {
         var lines: [String] = []
         let allMessages = store.list(crewId: crewId)
+        // 注入面消歧（#62）用的花名册：sessionId → 显示名。判定本身是纯函数
+        // （`CrewWhiteboardVisibility.directedNote`），这里只负责取名字 + 拼字符串。
+        let roster = CrewSessionsSnapshot.displayNames(ofCrew: crewId, directory: cursorDir)
         // 每轮注入当前 crew 名（crew-sidebar-status spec §1）：机长在长 session 中 /
         // 改名后也随时知道当前名字，才能判断名字是否仍贴切（rename_crew 的前提）。
         // title 从共享 local-crews.json 轻量读（app 进程与 helper 子进程同一路径，
@@ -190,8 +194,12 @@ struct HookEmitter {
                 default: who = m.senderKind
                 }
             }
+            // #62：这条对我可见、但收窄型 mention 里没有我 → 前置「（发给 XX 的）」。
+            // 治 #543 的病根（当年是把它藏起来绕过去的）：看得见，而且看得出不是我的活。
+            let note = CrewWhiteboardVisibility.directedNote(
+                m, to: sessionId, isCaptain: isCaptain, displayName: { roster[$0] }) ?? ""
             // agentText = 正文 + 附件绝对路径提示行（Todo #3 群聊图片）。
-            lines.append("- \(who): \(m.agentText)")
+            lines.append("- \(who): \(note)\(m.agentText)")
         }
         return lines.joined(separator: "\n")
     }

@@ -39,19 +39,29 @@ enum CrewMailboxWakeLogic {
     /// 后端传，codex 传空——判定在调用方 `CrewMailboxWaker.wake`）。
     static func decide(
         mailbox: [CrewMailboxItem], isBusy: Bool,
-        recent: [LocalWhiteboardMessage] = []
+        recent: [LocalWhiteboardMessage] = [],
+        viewer: String? = nil, viewerIsCaptain: Bool = false,
+        displayName: (String) -> String? = { _ in nil }
     ) -> Decision {
         guard !isBusy else { return .noop }
         let pending = mailbox.filter { !terminalStatuses.contains($0.status) }
         guard !pending.isEmpty else { return .noop }
-        return .inject(text: renderInjection(pending, recent: recent), deliveredIds: pending.map(\.id))
+        return .inject(
+            text: renderInjection(
+                pending, recent: recent, viewer: viewer,
+                viewerIsCaptain: viewerIsCaptain, displayName: displayName),
+            deliveredIds: pending.map(\.id))
     }
 
     /// 把待处理的定向 mailbox 项渲染成注入文本。单行前导「有人@你：」+ 每条保留
     /// 发送者身份（CC-P3）的正文行，点明**谁@你说了啥**。`recent` 非空 → 在
     /// 「有人@你：」**之前**前置一块「近期群聊」上下文（项8）。
+    /// `viewer` / `viewerIsCaptain` / `displayName` 只作用在前置的「近期群聊」块上
+    /// （注入面消歧，#62）——「有人@你」那几行本来就是定向给 viewer 的。
     static func renderInjection(
-        _ items: [CrewMailboxItem], recent: [LocalWhiteboardMessage] = []
+        _ items: [CrewMailboxItem], recent: [LocalWhiteboardMessage] = [],
+        viewer: String? = nil, viewerIsCaptain: Bool = false,
+        displayName: (String) -> String? = { _ in nil }
     ) -> String {
         var lines = ["有人@你："]
         for it in items {
@@ -60,7 +70,9 @@ enum CrewMailboxWakeLogic {
         // #530:与本地直投路同款「先吱一声」提醒 —— 两条 @ 唤醒路注入口径一致。
         lines.append("（先 post_to_crew 吱一声「收到/我看看」再干活）")
         let directed = lines.joined(separator: "\n")
-        guard let ctx = CrewRecentContextRender.block(recent) else { return directed }
+        guard let ctx = CrewRecentContextRender.block(
+            recent, viewer: viewer, viewerIsCaptain: viewerIsCaptain,
+            displayName: displayName) else { return directed }
         return ctx + "\n\n" + directed
     }
 

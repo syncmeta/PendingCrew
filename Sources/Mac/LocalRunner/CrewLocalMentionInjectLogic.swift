@@ -34,6 +34,10 @@ enum CrewLocalMentionInjectLogic {
         let sessionId: String
         let isBusy: Bool
         var isClaude: Bool = false
+        /// 该 run 是本 crew 机长 —— 只用于**注入面消歧**（#62）：机长自己看
+        /// `@captain` 的条目不该被标成「（发给 机长 的）」。唤醒面不读它
+        /// （`@captain` 走 `captainSessionId` 解析），默认 false 兼容旧调用方 / 单测。
+        var isCaptain: Bool = false
     }
 
     /// 一条注入指令:给 `sessionId` 对应的 run `send(text)`。
@@ -67,14 +71,15 @@ enum CrewLocalMentionInjectLogic {
         senderName: String,
         captainSessionId: String? = nil,
         recent: (String) -> [LocalWhiteboardMessage] = { _ in [] },
-        imStyle: Bool = false
+        imStyle: Bool = false,
+        displayName: (String) -> String? = { _ in nil }
     ) -> [Injection] {
         let busyBySession = Dictionary(
             runs.map { ($0.sessionId, $0.isBusy) }, uniquingKeysWith: { a, _ in a })
         return plannedInjections(
             mentions: mentions, runs: runs, messageText: messageText,
             senderName: senderName, captainSessionId: captainSessionId,
-            recent: recent, imStyle: imStyle
+            recent: recent, imStyle: imStyle, displayName: displayName
         ).filter { busyBySession[$0.sessionId] == false }
     }
 
@@ -88,7 +93,8 @@ enum CrewLocalMentionInjectLogic {
         senderName: String,
         captainSessionId: String? = nil,
         recent: (String) -> [LocalWhiteboardMessage] = { _ in [] },
-        imStyle: Bool = false
+        imStyle: Bool = false,
+        displayName: (String) -> String? = { _ in nil }
     ) -> [Injection] {
         // 目标 session id 集合(保序去重)。@session → 目标 sessionId;
         // @captain → captain 本地 run 的 sessionId(调用方解析后传入)。
@@ -114,7 +120,8 @@ enum CrewLocalMentionInjectLogic {
             // 现取该目标自己的未读上下文。
             let text = renderInjection(
                 messageText: messageText, senderName: senderName,
-                recent: run.isClaude ? recent(sid) : [], imStyle: imStyle)
+                recent: run.isClaude ? recent(sid) : [], imStyle: imStyle,
+                viewer: sid, viewerIsCaptain: run.isCaptain, displayName: displayName)
             out.append(Injection(sessionId: sid, text: text))
         }
         return out
@@ -154,15 +161,21 @@ enum CrewLocalMentionInjectLogic {
     ///     尾随一句「先吱一声」提醒(#530:被 @ 先 post_to_crew 简短确认再干活)。
     ///   * `imStyle`(项10 无 @ 默认给机长):IM 式「发送者：正文」,不套「有人@你」壳。
     /// `recent` 非空 → 在定向/IM 文本**之前**前置一块「近期群聊」上下文(项8)。
+    /// `viewer` / `viewerIsCaptain` / `displayName` 只作用在前置的「近期群聊」块上
+    /// （注入面消歧，#62）——「有人@你」那一行本来就是定向给 viewer 的，不需要标注。
     static func renderInjection(
         messageText: String, senderName: String,
-        recent: [LocalWhiteboardMessage] = [], imStyle: Bool = false
+        recent: [LocalWhiteboardMessage] = [], imStyle: Bool = false,
+        viewer: String? = nil, viewerIsCaptain: Bool = false,
+        displayName: (String) -> String? = { _ in nil }
     ) -> String {
         let body = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         let directed = imStyle
             ? "\(senderName)：\(body)"
             : "有人@你：\n- \(senderName): \(body)\n（先 post_to_crew 吱一声「收到/我看看」再干活）"
-        guard let ctx = CrewRecentContextRender.block(recent) else { return directed }
+        guard let ctx = CrewRecentContextRender.block(
+            recent, viewer: viewer, viewerIsCaptain: viewerIsCaptain,
+            displayName: displayName) else { return directed }
         return ctx + "\n\n" + directed
     }
 }

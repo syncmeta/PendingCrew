@@ -20,7 +20,17 @@ enum CrewRecentContextRender {
 
     /// 把最近若干条白板消息渲染成一块「近期群聊」上下文。空 → nil（调用方据此
     /// 决定是否前置）。调用方已 `.suffix(n)` 截断，这里按传入的原序渲染。
-    static func block(_ recent: [LocalWhiteboardMessage]) -> String? {
+    ///
+    /// `viewer` / `viewerIsCaptain` / `displayName` = **注入面消歧**（#62）：这块也是
+    /// 一张注入面，`[broadcast, session(X)]` 放宽进来的条目对非目标必须一眼看出
+    /// 「不是派给我的」。判定走纯函数 `CrewWhiteboardVisibility.directedNote`，
+    /// 这里只拼字符串。`viewer == nil` → 不标注（老调用方 / 单测的默认）。
+    static func block(
+        _ recent: [LocalWhiteboardMessage],
+        viewer: String? = nil,
+        viewerIsCaptain: Bool = false,
+        displayName: (String) -> String? = { _ in nil }
+    ) -> String? {
         guard !recent.isEmpty else { return nil }
         var lines = ["近期群聊："]
         for m in recent {
@@ -32,7 +42,11 @@ enum CrewRecentContextRender {
                 body = body.isEmpty ? hints : body + "\n  " + hints
             }
             guard !body.isEmpty else { continue }
-            lines.append("- \(label(m)): \(body)")
+            let note = viewer.flatMap {
+                CrewWhiteboardVisibility.directedNote(
+                    m, to: $0, isCaptain: viewerIsCaptain, displayName: displayName)
+            } ?? ""
+            lines.append("- \(label(m)): \(note)\(body)")
         }
         // 全是空正文（理论上少见）→ 只剩标题头，无意义，返回 nil。
         guard lines.count > 1 else { return nil }

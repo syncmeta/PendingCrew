@@ -40,7 +40,13 @@ enum CrewLocalMentionDelivery {
         let runStates: [CrewLocalMentionInjectLogic.RunState] = sessionRunner.runs
             .filter { $0.status == .running }
             .map { .init(sessionId: $0.sessionId, isBusy: $0.backend.isBusy,
-                         isClaude: $0.kind == .claudeCode) }
+                         isClaude: $0.kind == .claudeCode,
+                         isCaptain: $0.role == .captain) }
+        // 注入面消歧（#62）的花名册：这里直接从在跑的 run 取显示名（比读快照更准，
+        // 也不依赖 2 秒一次的落盘节奏）。
+        let roster = Dictionary(
+            sessionRunner.runs.map { ($0.sessionId, $0.displayName) },
+            uniquingKeysWith: { a, _ in a })
         // @机长 → captain 是本地 run（role==.captain），解析出它的 sessionId 让
         // 决策核心一视同仁按 session 唤醒。限本 crew —— 多 crew 各自跑机长时别把
         // 别群的机长当目标。
@@ -51,7 +57,8 @@ enum CrewLocalMentionDelivery {
             mentions: effectiveMentions, runs: runStates, messageText: text, senderName: senderName,
             captainSessionId: captainSessionId,
             recent: { sid in Array((unreadBySession[sid] ?? []).dropLast().suffix(15)) },
-            imStyle: defaultToCaptain)
+            imStyle: defaultToCaptain,
+            displayName: { roster[$0] })
         for inj in injections {
             guard let run = sessionRunner.runs
                 .first(where: { $0.sessionId == inj.sessionId && $0.status == .running })
