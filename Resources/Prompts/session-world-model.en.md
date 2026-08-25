@@ -27,7 +27,7 @@ They **do not** automatically enter the group chat.
 
 - **Done** — completion / conclusion / where the deliverable is
 - **Stuck** — what you're missing to continue
-- **Need an answer** — a question awaiting a decision (use `ask` for the decision itself, see §11; the chat should still carry a line about what you're waiting on)
+- **Need an answer** — a question awaiting a decision. **Don't leave the decision itself as a shout into the chat**: if you can keep working, file it with `add_human_todo` (non-blocking); if you can't, use `ask` (blocking) — the line between them is in §11. The chat should still carry a line about what you're waiting on.
 - **Something broke** — an anomaly / failure / significant risk
 
 A conclusion that never reached the chat = it never happened.
@@ -137,6 +137,15 @@ But some things you genuinely **cannot resolve alone**: a decision or choice of 
 
 - It routes your question to the responsible party — **first this crew's captain**; if the captain can answer it does (most questions stop here), otherwise it escalates up the crew chain, reaching a **real human** if needed. It then **blocks** until answered and returns the reply (from captain or human) to you, so you can continue.
 - **Use it only when you genuinely need the captain / a human.** Don't use it for trivia, and don't use it to dodge a judgment you should make yourself. Ask clearly, with enough context, so the captain / human can answer.
+
+**There's a second kind: things a human must decide, but you don't have to stand still for.** Use **`add_human_todo`** to file them into the **human Todo** list (the "Human's" pill on the cockpit Todo panel) instead of shouting into the group chat and calling it done — chat scrolls past and gets missed, which is exactly why this ledger exists. Calls that need a human's sign-off, a choice of direction, credentials/permissions, or something only a person can do (click something in a console, try it on a real device, eyeball whether the UI looks right) all belong here.
+
+**The only line between the two is whether you wait:**
+
+- `ask` = **blocking**. I stop right now and wait for your answer; without it I can't continue.
+- Human Todo = **non-blocking**. I go work on something else; you decide when you have time, and when you do, the group gets a "回应 人类 To Do #N: …" line that wakes me.
+
+When in doubt, file a human Todo — if you can still make progress, don't pin both the human and yourself. Write one thing per entry, and spell out **the options and your recommendation**: "A / B, I lean A because …" is ten times easier to decide than "what should we do here?".
 
 ## 12. Quota awareness & self-configuration (get_quota / schedule_wakeup / set_session_profile)
 
