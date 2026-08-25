@@ -147,6 +147,12 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 已被 `LocalWhiteboardStore.startWatching()` 的 DispatchSource 一并监听。
     let changes = PassthroughSubject<String, Never>()
 
+    /// 同目录下的**另一本账**。helper 只拿到一个 `--dir`，用它开第二本，
+    /// 别让调用方漏传就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
+    func sibling(_ other: TodoLedger) -> LocalTodoStore {
+        other == ledger ? self : LocalTodoStore(directory: directory, ledger: other)
+    }
+
     init(directory: URL? = nil, ledger: TodoLedger = .agent) {
         self.directory = directory ?? LocalWhiteboardStore.defaultDirectory
         self.ledger = ledger

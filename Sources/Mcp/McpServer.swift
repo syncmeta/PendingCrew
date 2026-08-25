@@ -26,12 +26,16 @@ final class McpServer {
     /// quota.json 所在目录（app 的 `QuotaCenter` 定时写、`get_quota` 工具读）。
     /// 与 store/approvals/control 同 `--dir`。
     let quotaDirectory: URL
-    /// 人类 Todo 列表（task #478）。机器人经 `respond_todo` 追加回应 + 推进状态；
-    /// 新增条目只有人类能做（app 面板），MCP 不暴露新增。与 store 同 `--dir`。
+    /// **Agent 的**那本 Todo（`TodoLedger.agent`，task #478）：人类派活，机器人经
+    /// `respond_todo` 追加回应 + 推进状态；新增条目只有人类能做（app 面板），
+    /// MCP 不暴露新增。与 store 同 `--dir`。
     let todos: LocalTodoStore
     /// 机长作战板（人类 Todo #66）。**只有机长写得动** —— `plan_add` / `plan_update`
     /// 前面站着 `guard isCaptain`，worker 连工具列表里都看不到它们。与 store 同 `--dir`。
     let plans: CockpitPlanStore
+    /// **人类的**那本 Todo（`TodoLedger.human`，Todo #62）：方向反过来 —— agent 经
+    /// `add_human_todo` 提条目请人拍板，人类在 app 里回应。与 store 同 `--dir`。
+    let humanTodos: LocalTodoStore
     /// 本 session 跑在哪家 runner 上（helper `--agent claude|codex`）。
     /// `set_session_profile` 拿它挑对照哪张模型表；nil（旧调用/没传）→ 两家都对照，
     /// 任一家认得就不吭声（宁可少说，也别对着错的表瞎报）。
@@ -42,6 +46,7 @@ final class McpServer {
          isCaptain: Bool = false, sessionLabel: String? = nil,
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
          plans: CockpitPlanStore? = nil,
+         humanTodos: LocalTodoStore? = nil,
          agentKey: String? = nil) {
         self.store = store
         self.approvals = approvals
@@ -53,6 +58,10 @@ final class McpServer {
         self.quotaDirectory = quotaDirectory ?? LocalWhiteboardStore.defaultDirectory
         self.todos = todos ?? LocalTodoStore()
         self.plans = plans ?? CockpitPlanStore()
+        // 两本账落在同一个 `--dir` 下，只是文件名不同（见 `TodoLedger.fileSuffix`）。
+        // 没显式传就照着 agent 那本的目录开一份 human 的 —— 别让调用方漏传一个
+        // 就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
+        self.humanTodos = humanTodos ?? self.todos.sibling(.human)
         self.agentKey = agentKey
     }
 
@@ -175,7 +184,7 @@ final class McpServer {
                 ],
                 [
                     "name": "respond_todo",
-                    "description": "回应本 crew 人类 Todo 列表的某个条目（右栏 Todo 面板）。**追加式**：每次调用追加一条回应，不覆盖旧回应；可同时用 status 推进条目状态（待办 pending → 进行中 in_progress → 完成 completed）。人类加条目时群里会出现「To do +1: #N …」——看到后用这个工具认领/回应，number 填那个 N。每个条目都该尽快有机器人回应；status 只在真有进展时才给（开始做→in_progress，做完验证过→completed）。领了 Todo 对应的活，落 main 时顺手翻牌——人类 Todo 面板和 task 账是两本账，别只更 task 漏翻 Todo。",
+                    "description": "回应本 crew **Agent 那本** Todo 的某个条目（Todo 面板「Agent 的」药丸；就是人类派给你们的活）。⚠️ 两本账别搞混：要**提一件请人类拍板的事**用 add_human_todo，那是「人类的」那本，这个工具动不了它。**追加式**：每次调用追加一条回应，不覆盖旧回应；可同时用 status 推进条目状态（待办 pending → 进行中 in_progress → 完成 completed）。人类加条目时群里会出现「To do +1: #N …」——看到后用这个工具认领/回应，number 填那个 N。每个条目都该尽快有机器人回应；status 只在真有进展时才给（开始做→in_progress，做完验证过→completed）。领了 Todo 对应的活，落 main 时顺手翻牌——人类 Todo 面板和 task 账是两本账，别只更 task 漏翻 Todo。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -185,6 +194,17 @@ final class McpServer {
                                        "description": "可选：把条目状态推进到这个值。不填=只回应不动状态。"],
                         ],
                         "required": ["number", "response"],
+                    ],
+                ],
+                [
+                    "name": "add_human_todo",
+                    "description": "往**人类 Todo**（Todo 面板「人类的」那本）加一条。这本账装的是**要人办的事**：需要人拍板、做方向选择、给权限/密码/账号，或只有人才能做的（去某个后台点一下、真机上试一下、看一眼界面对不对）。**别一股脑喊进群聊**——群消息刷过去就漏了；这本账翻得到，没回应不会消失。\n\n**和 ask 的唯一分界是「你等不等」，别用混**：ask 是**阻塞**的，你当场停下来等答复，只用在「不知道答案就没法往下干」的事上；这个是**非阻塞**的，你写完接着干别的活，人类有空再拍。**默认走这条**，只有真干不下去了才 ask。\n\n写法：一条一件事，把**选项和你的建议**写出来——「A / B，我倾向 A，因为 …」比「这个怎么办？」好拍十倍。加完群里会出「人类 To do +1: #N …」。人类回应时群里出「回应 人类 To Do #N：…」并**直接叫醒你**（那时你已经退出了就转给机长转达），所以不用轮询、也不用守着等。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "text": ["type": "string", "description": "要人拍板/要人做的那件事。一条一件，带上选项和你的建议。"],
+                        ],
+                        "required": ["text"],
                     ],
                 ],
                 [
@@ -862,6 +882,48 @@ final class McpServer {
                                   + (rows.isEmpty ? "（空）" : rows.joined(separator: "\n")))
             }
             return toolResult(id: id, text: "已回应 Todo #\(number)（状态：\(LocalTodoItem.statusLabel(updated.status))）。")
+        case "add_human_todo":
+            // 人类 Todo 的新增（Todo #62 ④）：**这本账只有 agent 能加**，方向与
+            // respond_todo 那本正好相反。三步一条都不能少：
+            //   1. 落账（记下 `createdBySessionId` —— 人类回应时靠它知道叫醒谁）
+            //   2. 群里发一行「人类 To do +1: #N …」（人类原话「跟新建 todo 一样」）
+            //   3. 回执如实
+            // 没落盘就别去群里宣布（#577 的教训）—— 顺序是先落账再宣布。
+            let todoText = ((args["text"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !todoText.isEmpty else {
+                return toolResult(id: id, text: "ERROR: text 不能为空 —— 写清要人拍板/要人做的那件事。")
+            }
+            guard let added = humanTodos.add(crewId: crewId, text: todoText,
+                                             bySessionId: sessionId,
+                                             bySenderName: sessionLabel) else {
+                return toolResult(
+                    id: id,
+                    text: "ERROR: 没能记进人类 Todo —— 列表文件这次读不出来或漏读，原有内容没被动过"
+                        + "（群聊白板上有一条系统警示）。**这条没有记下**，请重试；"
+                        + "急事改用 ask（阻塞等人答）。")
+            }
+            // 群里那行带 `@human` 标记：这条是讲给人听的，别为它叫醒 agent
+            // （human mention 不收窄可见范围，队友照样看得见 —— 2026-08-23 修过）。
+            let announce = TodoLedger.human.newItemAnnouncement(
+                number: added.number, text: todoText)
+            var receipt = "已记入人类 Todo #\(added.number)。人类回应时群里会出「回应 人类 To Do #\(added.number)：…」并叫醒你——现在接着干别的活，别守着等。"
+            do {
+                let incident = try store.appendSessionMessageReportingFailure(
+                    crewId: crewId, sessionId: sessionId,
+                    text: announce, category: "question",
+                    senderName: sessionLabel,
+                    mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
+                    inReplyTo: nil,
+                    senderKind: isCaptain ? "captain" : "session")
+                if let incident {
+                    receipt += "\n⚠️ 条目已记下，但群里那行没发成：\(incident)"
+                }
+            } catch {
+                // 账已经落了，只是没宣布 —— 如实说，别让 agent 以为整件事没成。
+                receipt += "\n⚠️ 条目已记下（#\(added.number)），但群里那行没发出去：\(Self.writeFailureReceipt(error))"
+            }
+            return toolResult(id: id, text: receipt)
         case "set_session_profile":
             let model = (args["model"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
