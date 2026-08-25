@@ -11,6 +11,11 @@ import SwiftUI
 /// 人视角，配对」）。Todo 行带「人」标，点开看回应时间线；改 Todo 状态 / 重开仍在右栏
 /// 那块常驻 Todo 面板做（同一份 store，不在这儿复制一套编排）。
 ///
+/// **机长作战板也并进来**（Todo #66，`CockpitPlanStore`）：它是这里唯一由机长第一手
+/// 写下的来源，其余几种都是从别人的账上读来的。它自己另有一块可写的面板（第三个药丸），
+/// 但**不并进这个 glance 就会变成孤岛** —— 「在做什么 / 接下来 / 做了什么」这个总摘要
+/// 少了机长自己的计划就不成其为总摘要。行尾如实带上「最后更新 N 天前」。
+///
 /// task 账读哪本由 `CockpitTaskLedger` 判定 —— 活跃账优先，回落仓库 markdown 账时
 /// **顶部如实说明**，不把停更的数据画得好看点糊弄人。
 struct CockpitTasksGlance: View {
@@ -18,6 +23,7 @@ struct CockpitTasksGlance: View {
     let crewId: String?
 
     @State private var todos: [LocalTodoItem] = []
+    @State private var plans: [CockpitPlanItem] = []
     @State private var expanded: Set<String> = []      // 展开看回应时间线的 Todo 行 id
 
     var body: some View {
@@ -43,6 +49,15 @@ struct CockpitTasksGlance: View {
                 todos = LocalTodoStore.shared.list(crewId: crewId)
             }
         }
+        // 作战板单开一条订阅：上面那条 `for await` 永不返回，跟它挤在同一个 task 里
+        // 第二条流一辈子跑不起来。
+        .task(id: crewId ?? "") {
+            guard let crewId else { plans = []; return }
+            plans = CockpitPlanStore.shared.list(crewId: crewId)
+            for await _ in CockpitPlanStore.shared.planChanges(crewId: crewId) {
+                plans = CockpitPlanStore.shared.list(crewId: crewId)
+            }
+        }
     }
 
     // MARK: - 合流
@@ -62,9 +77,37 @@ struct CockpitTasksGlance: View {
                 badge: "#\(t.number)",
                 note: t.responses.last.map { "\($0.senderName ?? "session")：\($0.text)" } ?? "")
         }
-        return todoItems + data.taskItems
+        return planItems + todoItems + data.taskItems
     }
 
+    /// 机长作战板 → 统一条目。`note` 那一行按重要性挑：**卡住的卡点压过最近进度**
+    /// （卡住是唯一需要有人动一下的一档），都没有时退回「进行中 · 最后更新 3 天前」。
+    private var planItems: [CockpitTaskItem] {
+        let now = Date()
+        return CockpitPlan.newestFirst(plans).map { p in
+            let updated = Self.iso.date(from: p.updatedAt)
+            let blockerLine = p.blockedBy.map {
+                CockpitPlan.blockerLine($0, state: CockpitPlan.blockerState(
+                    $0,
+                    agentTodoExists: { n in todos.contains { $0.number == n } },
+                    // `.human` 那本是 Todo #62 的产物，合 main 后在这里接线。
+                    humanTodoExists: nil))
+            } ?? ""
+            let statusLine = CockpitPlan.statusLine(statusRaw: p.status, updated: updated, now: now)
+            let recent = p.updates.last.map { "最近：\($0.text)" } ?? ""
+            let note = [blockerLine, recent].first { !$0.isEmpty } ?? statusLine
+            return CockpitTaskItem(
+                id: Self.planPrefix + String(p.number),
+                title: p.title,
+                statusRaw: p.status,
+                origin: .captainPlan,
+                updated: updated,
+                badge: "#\(p.number)",
+                note: note)
+        }
+    }
+
+    private static let planPrefix = "plan:"
     private static let todoPrefix = "todo:"
     private static let iso = ISO8601DateFormatter()
 
@@ -122,6 +165,13 @@ struct CockpitTasksGlance: View {
                     .lineLimit(2)
                     .textSelection(.enabled)
                 Spacer(minLength: 8)
+                if item.origin == .captainPlan {
+                    Text("机长")
+                        .font(Theme.Fonts.caption2)
+                        .foregroundStyle(Theme.Palette.accent)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Theme.Palette.accent.opacity(0.12), in: Capsule())
+                }
                 if item.origin == .humanTodo {
                     Text("人")
                         .font(Theme.Fonts.caption2)
