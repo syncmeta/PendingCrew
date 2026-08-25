@@ -139,7 +139,7 @@ final class ViewWiringTests: XCTestCase {
 
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
     func testCloseButtonStyleIsDefinedOnlyOnce() throws {
-        for file in ["CockpitView.swift", "CrewLoginSheet.swift"] {
+        for file in ["CockpitView.swift"] {
             let text = try Self.text(of: file)
             XCTAssertTrue(text.contains("GlassCloseButton("),
                           "\(file) 的关闭按钮没用共用的玻璃白件")
