@@ -112,3 +112,96 @@ final class HumanTodoWakePlanTests: XCTestCase {
         }
     }
 }
+
+/// **实测**：`HumanTodoWakePlan` 组出来的 mentions，喂进 A 线那套真判定
+/// （`CrewWhiteboardVisibility` / `CrewLocalMentionInjectLogic`），是不是真的
+/// 「全组可见 + 只叫醒提问者 + 别人看得出不是自己的活」。
+///
+/// 这一族不测我自己的枚举，测的是**两条线接上以后成不成立** —— brief 明写
+/// 「rebase 之后要实测这条真的成立，不成立就报，别自己另造机制」。
+final class HumanTodoWakePlanAgainstRealMentionLogicTests: XCTestCase {
+
+    /// 把计划里的 mentions 装成一条真白板消息（人类发的那条回应）。
+    private func message(_ mentions: [CrewMention]) -> LocalWhiteboardMessage {
+        LocalWhiteboardMessage(
+            id: "m1", senderKind: "user", senderUserId: "local-byok-user",
+            senderSessionId: nil, category: nil,
+            text: "回应 人类 To Do #3：选 A",
+            createdAt: "2026-08-25T00:00:00Z",
+            senderName: "人",
+            mentions: mentions.map { LocalWhiteboardMention(kind: $0.kind, targetId: $0.targetId) })
+    }
+
+    func testAskerRunningPlanIsVisibleToEveryoneButWakesOnlyTheAsker() {
+        let plan = HumanTodoWakePlan.plan(createdBySessionId: "w-1",
+                                          runningSessionIds: ["w-1", "w-2"],
+                                          captainSessionId: "cap-1")
+        let msg = message(plan.mentions)
+
+        // 全组可见 —— 提问者、旁观 worker、机长，一个都不被挡。
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(msg, to: "w-1"))
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(msg, to: "w-2"))
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(msg, to: "cap-1", isCaptain: true))
+
+        // 只叫醒提问者 —— 旁观 worker 和机长都不在唤醒名单里。
+        let injections = CrewLocalMentionInjectLogic.plannedInjections(
+            mentions: plan.mentions,
+            runs: [.init(sessionId: "w-1", isBusy: false),
+                   .init(sessionId: "w-2", isBusy: false),
+                   .init(sessionId: "cap-1", isBusy: false)],
+            messageText: msg.text, senderName: "人", captainSessionId: "cap-1")
+        XCTAssertEqual(injections.map(\.sessionId), ["w-1"])
+    }
+
+    /// 旁观者看得见，但注入面上标着「不是给你的」—— #543 的病根靠标注治，
+    /// 不是靠藏起来。
+    func testBystanderSeesItButIsToldItIsNotTheirs() {
+        let plan = HumanTodoWakePlan.plan(createdBySessionId: "w-1",
+                                          runningSessionIds: ["w-1"],
+                                          captainSessionId: "cap-1")
+        let msg = message(plan.mentions)
+        XCTAssertEqual(
+            CrewWhiteboardVisibility.directedNote(msg, to: "w-2",
+                                                  displayName: { $0 == "w-1" ? "小王" : nil }),
+            "（发给 小王 的）")
+        // 提问者本人不带标注 —— 这条本来就是冲他来的。
+        XCTAssertNil(CrewWhiteboardVisibility.directedNote(msg, to: "w-1"))
+    }
+
+    /// 回落到机长的那版同样成立：全组可见、只叫醒机长。
+    func testCaptainFallbackPlanIsVisibleToEveryoneButWakesOnlyCaptain() {
+        let plan = HumanTodoWakePlan.plan(createdBySessionId: "w-1",
+                                          runningSessionIds: [],   // 提问者已退出
+                                          captainSessionId: "cap-1")
+        let msg = message(plan.mentions)
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(msg, to: "w-2"))
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(msg, to: "cap-1", isCaptain: true))
+
+        let injections = CrewLocalMentionInjectLogic.plannedInjections(
+            mentions: plan.mentions,
+            runs: [.init(sessionId: "w-2", isBusy: false),
+                   .init(sessionId: "cap-1", isBusy: false)],
+            messageText: msg.text, senderName: "人", captainSessionId: "cap-1")
+        XCTAssertEqual(injections.map(\.sessionId), ["cap-1"])
+    }
+
+    /// 反证：**不写 broadcast** 的话这条就是排他的 —— 说明「全组可见」是
+    /// `.broadcast` 挣来的，不是碰巧。漏写它，旁观者就看不见了。
+    func testWithoutBroadcastTheSameMessageWouldBeExclusive() {
+        let msg = message([.session("w-1")])
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(msg, to: "w-1"))
+        XCTAssertFalse(CrewWhiteboardVisibility.isVisible(msg, to: "w-2"))
+    }
+
+    /// 提问者不在跑时不产生注入 —— 由调用方按 `wakeTargets` 把它拉起来。
+    /// 回落到机长的计划里，机长没在跑同样进 `needCaptain`，不会静默丢。
+    func testCaptainFallbackStillAsksToLaunchCaptainWhenNotRunning() {
+        let plan = HumanTodoWakePlan.plan(createdBySessionId: nil,
+                                          runningSessionIds: [],
+                                          captainSessionId: nil)
+        let targets = CrewLocalMentionInjectLogic.wakeTargets(
+            mentions: plan.mentions, runningSessionIds: [], captainRunning: false)
+        XCTAssertTrue(targets.needCaptain)
+        XCTAssertTrue(targets.sessionIds.isEmpty)
+    }
+}
