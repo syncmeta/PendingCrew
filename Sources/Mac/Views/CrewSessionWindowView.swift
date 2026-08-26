@@ -902,8 +902,8 @@ struct CrewSessionWindowView: View {
     /// best-effort：任一步失败返 nil，session 仍照常启动（只是没世界观）。
     /// `appendPersona` 非 nil 时（captain session）把 persona 拼到世界观后面 ——
     /// captain 与 worker 的差异只是「追加 persona + --captain 工具门禁」（chunk2 §2）。
-    /// 渲染 + comms 接线的实现提取到 `LocalSessionLaunch`（#242：CrewRelayAgent
-    /// 自动起 session 与这里走同一份工序）。这俩 wrapper 只补 view 持有的依赖
+    /// 渲染 + comms 接线的实现提取到 `LocalSessionLaunch`（#242）—— 机长排队起
+    /// session 与这里走同一份工序。这俩 wrapper 只补 view 持有的依赖
     /// （backend 拉 members、selectedKind）。
     private func renderWorldModelFile(detail: CrewDetail, taskBrief: String, workdir: URL, sessionId: String,
                                       appendPersona: String? = nil) async -> String? {

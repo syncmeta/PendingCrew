@@ -428,8 +428,7 @@ final class LocalBackend: PendingCrewBackend {
     }
 
     /// 本地白板变更流（去 3s 轮询）。两个上游合流成 `Void` tick：
-    /// 1. `whiteboard.changes` 按 crewId 过滤 —— **本进程** append（人类发送 /
-    ///    CrewRelayAgent 搬入）即推。
+    /// 1. `whiteboard.changes` 按 crewId 过滤 —— **本进程** append（人类发送）即推。
     /// 2. `whiteboard.directoryChanged` —— **跨进程**目录监听（helper 子进程经
     ///    `post_to_crew` 写 agent 进展也覆盖）。目录事件不带 crewId，所以这条要
     ///    自己做相关性判定：比 `<crewId>.json` 的 mtime+size，真变了才 yield。
