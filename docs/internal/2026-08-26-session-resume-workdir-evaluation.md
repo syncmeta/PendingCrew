@@ -149,10 +149,17 @@ crew #22「文档站」搬过**两次**家（`…/Pendingname/website` → `…/
 在一个 `~/.claude.json` 里**没有条目的新顶层路径**下起 claude，进程停在
 
 ```
-Do you trust the files in this folder?
+Quick safety check: Is this a project you created or one you trust? (Like your
+own known open source project, or work from your team). If not, take a moment
+to review what's in this folder first.
+
+Claude Code'll be able to read, edit, and execute files here.
+
 ❯ 1. Yes, I trust this folder
   2. No, exit
 ```
+
+（以上是从那次跑的终端输出里逐字抄的，不是复述。）
 
 **并且不动了** —— 不是打印一句提示继续跑，是**挂起**，等一个没人会去按的回车。是我手动
 杀掉的。这一条比「会弹个框」严重得多：一个挂起的 session 在我们这套里表现成「起来了、
