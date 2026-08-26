@@ -77,8 +77,16 @@ final class CrewStore: ObservableObject {
     ///   侧栏（乃至所有观察 `CrewStore` 的视图）重渲染。
     @Published private(set) var lastWhiteboardMessages: [String: LocalWhiteboardMessage] = [:]
 
+    /// 「每个 crew 的**人类 Todo** 还有几条没回应」（Todo #62 ④）。侧栏黄点的
+    /// 第二个源 —— 与 `attentionReason` **并联**，两个源互不干扰（后者是单槽
+    /// last-write-wins，混进去会互相冲掉）。与上面那份末条快照同样是后台算好、
+    /// 只在真变了时发布，body 里零磁盘 IO。
+    @Published private(set) var humanTodoUnanswered: [String: Int] = [:]
+
     /// 上面那份快照的算法（指纹门控，只有指纹变了的 crew 才重新解码）。
     private let lastMessageCache = CrewLastMessageCache(store: .shared)
+    /// 人类 Todo 未回应数的同款指纹门控缓存（同一套 `FileFingerprintCache`）。
+    private let humanTodoCache = CrewHumanTodoAttentionCache()
     /// 刷新在这条队列上做 —— stat + 解码都是磁盘 IO，不许上主线程；串行也顺带
     /// 保证目录 tick 密集时不会并发重入同一个 cache。
     private let lastMessageQueue = DispatchQueue(
@@ -298,6 +306,8 @@ final class CrewStore: ObservableObject {
         crews = []
         lastWhiteboardMessages = [:]
         lastMessageCache.clear()
+        humanTodoUnanswered = [:]
+        humanTodoCache.clear()
         details = [:]
         subjects = []
         machines = []
@@ -360,10 +370,25 @@ final class CrewStore: ObservableObject {
     private func refreshLastWhiteboardMessages() {
         let crewIds = crews.map(\.id)
         let cache = lastMessageCache
+        let todoCache = humanTodoCache
         lastMessageQueue.async { [weak self] in
             let snapshot = cache.refresh(crewIds: crewIds)
-            Task { @MainActor in self?.publishLastWhiteboardMessages(snapshot) }
+            // 人类 Todo 那本也搭同一趟车（Todo #62 ④）：两本账都落在同一个目录里，
+            // 触发源是同一个 `directoryChanged` tick，各自指纹门控、各自只在真变了
+            // 时发布。多的只是每个 crew 一次 stat。
+            let todos = todoCache.refresh(crewIds: crewIds)
+            Task { @MainActor in
+                self?.publishLastWhiteboardMessages(snapshot)
+                self?.publishHumanTodoUnanswered(todos)
+            }
         }
+    }
+
+    /// 发布人类 Todo 未回应快照 —— 同样**相等就不赋值**（理由同上面那条：
+    /// `CrewStore` 是整个侧栏的 `EnvironmentObject`）。
+    private func publishHumanTodoUnanswered(_ snapshot: [String: Int]) {
+        guard humanTodoUnanswered != snapshot else { return }
+        humanTodoUnanswered = snapshot
     }
 
     /// 发布快照 —— **相等就不赋值**。`@Published` 一赋值就发 `objectWillChange`，

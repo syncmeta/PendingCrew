@@ -150,6 +150,9 @@ targets:
       - path: Sources/Stores/CrewLastMessageCache.swift
       # 指纹门控缓存底座（2026-08-18 抽出，上面那个和下面那个共用同一套）。
       - path: Sources/Stores/FileFingerprintCache.swift
+      # 侧栏黄点第二个源（Todo #62 ④）：人类 Todo 那本还有几条没回应。与末条快照
+      # 同一套指纹门控 —— 「有没有未回应」不许在 body 里现读（2026-08-17 的形状）。
+      - path: Sources/Stores/CrewHumanTodoAttentionCache.swift
       # 点名快照那 2 秒一拍要的两样磁盘输入（审批账本 + 回合 marker）的指纹门控
       # 缓存（「开久了卡」第三条）。依赖 LocalApprovalStore / SessionTurnTrace，
       # 两个都已在 bundle —— 所以「一拍到底真读了几次」能脱离 app 直接单测。

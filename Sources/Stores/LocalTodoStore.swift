@@ -364,6 +364,14 @@ final class LocalTodoStore: @unchecked Sendable {
 
     // MARK: - Persistence（基座三件套：flock / 逐条 lenient / corrupt 归档，#528）
 
+    /// 这本账的列表文件指纹（mtime+size，**只 stat 不读内容**）。给侧栏黄点那条
+    /// 指纹门控快照用（Todo #62 ④）—— 「有没有未回应条目」不能在 SwiftUI body 里
+    /// 现读：那就是 2026-08-17「开久了卡」的同一个形状（flock + 整份 JSON 解码 ×
+    /// 每个 crew × 每帧）。不上 flock：只读元数据，判定本身允许保守。
+    func fingerprint(crewId: String) -> FileChangeGate.Fingerprint? {
+        FileChangeGate.fingerprint(of: fileURL(crewId))
+    }
+
     private func fileURL(_ crewId: String) -> URL {
         directory.appendingPathComponent("\(crewId)\(ledger.fileSuffix)")
     }

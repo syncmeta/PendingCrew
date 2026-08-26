@@ -71,6 +71,10 @@ struct CrewSidebarCrewRow: View {
                 .overlay(alignment: .topTrailing) {
                     CrewStatusDotView(
                         attentionReason: crew.attentionReason,
+                        // 黄点第二个源（Todo #62 ④）：人类 Todo 那本还有几条没回应。
+                        // 读的是 `CrewStore` 后台指纹门控算好的快照，一次字典查表 ——
+                        // **不在这里现读 Todo 文件**（那就是 2026-08-17 的形状）。
+                        humanTodoUnanswered: crewStore.humanTodoUnanswered[crew.id] ?? 0,
                         runs: sessionRunner.runs.filter { $0.crewId == crew.id }
                     )
                     .offset(x: 6, y: -5)
@@ -201,6 +205,8 @@ struct CrewSidebarCrewRow: View {
 /// 渲染重新聚合。runs 列表本身增删由父视图（观察 runner.runs）驱动重建。
 struct CrewStatusDotView: View {
     let attentionReason: String?
+    /// 人类 Todo 那本的未回应条数（Todo #62 ④）。0 = 这个源不亮。
+    var humanTodoUnanswered: Int = 0
     let runs: [CrewSessionRun]
 
     @State private var revision = 0
@@ -236,7 +242,8 @@ struct CrewStatusDotView: View {
                     // 侧栏折起来时人只看得到这一级 —— 群里有人卡着等回复要冒得上来（#25 层 2）。
                     isAwaitingReply: $0.awaitingReply != nil)
             },
-            attentionReason: attentionReason)
+            attentionReason: attentionReason,
+            humanTodoUnanswered: humanTodoUnanswered)
     }
 
     /// 配色对齐右栏切换条状态点（`SessionBarItemView`）：系统语义色。
@@ -249,11 +256,18 @@ struct CrewStatusDotView: View {
         }
     }
 
-    /// 悬浮提示：黄 = 机长的 attention reason；红 = 首个异常 session 的 health
-    /// detail（实现顺手，spec 允许）。绿/灰不带。
+    /// 悬浮提示：黄 = 机长的 attention reason **和/或** 人类 Todo 那本的待办条数
+    /// （两个源并联，各说各的 —— 只说一个会让人以为另一个不存在）；
+    /// 红 = 首个异常 session 的 health detail（实现顺手，spec 允许）。绿/灰不带。
     private func helpText(_ color: CrewStatusDotColor) -> String? {
         switch color {
-        case .yellow: return attentionReason
+        case .yellow:
+            var parts: [String] = []
+            if let attentionReason, !attentionReason.isEmpty { parts.append(attentionReason) }
+            if humanTodoUnanswered > 0 {
+                parts.append("人类 Todo 有 \(humanTodoUnanswered) 条等你拍板")
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
         case .red: return runs.first(where: { $0.health != nil && $0.status == .running })?.health?.detail
         case .green, .gray: return nil
         }
