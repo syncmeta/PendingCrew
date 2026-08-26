@@ -41,7 +41,7 @@ enum CrewLocalTodoLanding {
         let message = "To do +1: #\(item.number) \(text)"
         try await backend.postCrewMessage(
             crewId: crewId, text: message, mentions: [],
-            attachmentIds: [], replyToId: nil, localAttachments: attachments)
+            replyToId: nil, localAttachments: attachments)
         CrewLocalMentionDelivery.injectAndWake(
             crewId: crewId,
             mentions: [],

@@ -61,13 +61,4 @@ struct PendingComposerAttachment: Identifiable, Equatable, Sendable {
         if case .staged(let u) = source { return u }
         return nil
     }
-
-    /// 需要**整份字节**时才调（iOS 走 edge 上传这一条路）。macOS 本地落盘不调它 ——
-    /// 那边走 `CrewChatAttachmentStore.save(fileAt:)` 直接搬文件。
-    func loadDataForUpload() -> Data? {
-        switch source {
-        case .data(let d): return d
-        case .staged(let url): return try? Data(contentsOf: url)
-        }
-    }
 }

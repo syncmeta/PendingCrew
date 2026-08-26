@@ -57,14 +57,12 @@ protocol PendingCrewBackend: AnyObject {
     /// (captain + 本机人类)。
     func listCrewMembers(crewId: String) async throws -> CrewRoster
 
-    /// 发一条群聊消息(默认广播)。`attachmentIds` 只 edge 支持;BYOK 非空即抛
-    /// `notSupportedInByok`。`replyToId` 非 nil = 回复某条消息(edge 端点据此自动
-    /// @ 原发送者并记 `reply_to`;LocalBackend 记本地白板 `in_reply_to` 引用)。
-    /// `localAttachments` 只本地支持(Todo #3:已由 `CrewChatAttachmentStore` 落盘
-    /// 的附件条目,LocalBackend 挂到白板消息上;EdgeBackend 非空即抛)。
+    /// 发一条群聊消息(默认广播)。`replyToId` 非 nil = 回复某条消息
+    /// (LocalBackend 记本地白板 `in_reply_to` 引用)。`localAttachments` = 已由
+    /// `CrewLocalAttachmentPersist` 落盘的附件条目,挂到白板消息上(Todo #3)。
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
-        attachmentIds: [String], replyToId: String?,
+        replyToId: String?,
         localAttachments: [LocalWhiteboardAttachment]) async throws
 
     /// crew 白板/花名册的**事件驱动变更流**（Phase 5：去 3s 轮询）。
@@ -93,10 +91,10 @@ extension PendingCrewBackend {
     /// 无本地附件的便捷重载 —— 既有调用点不用逐个补 `localAttachments: []`。
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
-        attachmentIds: [String], replyToId: String?) async throws {
+        replyToId: String?) async throws {
         try await postCrewMessage(
             crewId: crewId, text: text, mentions: mentions,
-            attachmentIds: attachmentIds, replyToId: replyToId, localAttachments: [])
+            replyToId: replyToId, localAttachments: [])
     }
 }
 
@@ -166,15 +164,14 @@ final class EdgeBackend: PendingCrewBackend {
 
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
-        attachmentIds: [String], replyToId: String?,
+        replyToId: String?,
         localAttachments: [LocalWhiteboardAttachment]) async throws {
         // 本地落盘附件是 LocalBackend 专属通道 —— edge 有自己的 upload → id 流。
         guard localAttachments.isEmpty else {
             throw PendingCrewBackendError.notSupportedInByok("云端群聊不支持本地附件通道")
         }
         try await client().postCrewMessage(
-            crewId: crewId, text: text, mentions: mentions,
-            attachmentIds: attachmentIds, replyToId: replyToId)
+            crewId: crewId, text: text, mentions: mentions, replyToId: replyToId)
     }
 
     /// 登录态白板变更流 = crew 级 hub WS（`CrewRealtimeClient`）的白板相关 `.changed`。
@@ -399,11 +396,8 @@ final class LocalBackend: PendingCrewBackend {
 
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
-        attachmentIds: [String], replyToId: String?,
+        replyToId: String?,
         localAttachments: [LocalWhiteboardAttachment]) async throws {
-        guard attachmentIds.isEmpty else {
-            throw PendingCrewBackendError.notSupportedInByok("未登录时暂不支持群聊附件")
-        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // 附件-only（无正文只发图）也放行（Todo #3）。
         guard !trimmed.isEmpty || !localAttachments.isEmpty else { return }

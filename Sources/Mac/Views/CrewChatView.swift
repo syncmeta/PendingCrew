@@ -1131,7 +1131,6 @@ struct CrewChatView: View {
         sending = true
         defer { sending = false }
         do {
-            var attachmentIds: [String] = []
             var localAttachments: [LocalWhiteboardAttachment] = []
             #if os(macOS)
             // Todo #3：macOS 恒 LocalBackend —— 附件落盘 app 数据目录
@@ -1147,33 +1146,19 @@ struct CrewChatView: View {
                 return
             }
             #else
-            // 附件上传是登录后的能力叠加(走 edge 上传)：未登录 → 软报错、不发。
-            // 上传走 loggedAPIClient(edge 专属),拿到 ids 再交给 backend 发文。
+            // iOS 侧的附件通道是 edge 上传（拿 id 再随消息发），随 #63 第二期一起
+            // 删掉了 —— iOS 自第一期起已是空壳（`AppModel.backend` 恒 nil）。
+            // 这里不再上传，选中的文件在下面 discardStaging 时清掉。
             if !toUpload.isEmpty {
-                guard appModel.isAuthenticated, let api = try? appModel.loggedAPIClient() else {
-                    loadError = "群聊附件需登录 PendingBot"
-                    return
-                }
-                for att in toUpload {
-                    // 拖入的文件到这一步才读字节（edge 上传要整份 body）。
-                    // intake 的本地上限在 iOS 上就等于 edge 的 25 MiB，所以这里
-                    // 不会读进一份注定 413 的大文件。
-                    guard let data = att.loadDataForUpload() else {
-                        loadError = "附件读取失败：\(att.filename)"
-                        return
-                    }
-                    let id = try await api.uploadAttachment(
-                        data: data, filename: att.filename, mime: att.mime)
-                    attachmentIds.append(id)
-                }
+                loadError = "这个平台暂不支持群聊附件"
+                return
             }
             #endif
             let mentions = mentionsForSend()
             let replyToId = replyTarget?.replyToId
             try await backend.postCrewMessage(
                 crewId: crewId, text: text, mentions: mentions,
-                attachmentIds: attachmentIds, replyToId: replyToId,
-                localAttachments: localAttachments)
+                replyToId: replyToId, localAttachments: localAttachments)
             // Local-first @ wake: after the message lands on the (local)
             // whiteboard, directly inject it into any idle local run that was
             // @-mentioned — idle runs have no next turn to pull it in (Phase 6
