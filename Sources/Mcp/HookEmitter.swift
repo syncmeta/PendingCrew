@@ -86,7 +86,7 @@ private struct CaptainAwarenessCooldownState: Codable {
 ///
 /// 读未读用 per-session 游标 `<cursorDir>/<crewId>.<sessionId>.cursor`（存 last
 /// delivered message id），游标 IO 抽在 `WhiteboardCursor` —— 与**唤醒/提及注入**路
-/// （`CrewMailboxWaker` 登录态、`CrewChatView` 本地直投）共用同一份真值，一条消息
+/// （`CrewLocalMentionWaker` / `CrewChatView` 本地直投）共用同一份真值，一条消息
 /// 对某 session **至多注入一次**（hook 路与唤醒路不重复）。emit 后推进游标到最后一条。
 ///
 /// 注入**哪些**条目由 `CrewWhiteboardVisibility` 判（#543，与唤醒路 / 收听路同一份

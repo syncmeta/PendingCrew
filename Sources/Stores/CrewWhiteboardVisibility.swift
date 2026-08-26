@@ -13,12 +13,11 @@ import Foundation
 /// ## 这里判的是「看得见吗」，不是「该叫醒吗」
 ///
 /// 两件事，全项目分开实现，别混：
-///   * **可见**（本类型）—— 这条要不要渲染进该 session 的上下文。四个调用点全是这个
+///   * **可见**（本类型）—— 这条要不要渲染进该 session 的上下文。三个调用点全是这个
 ///     语义：`HookEmitter`（每轮未读注入）、`CrewLocalMentionWaker` /
-///     `CrewLocalMentionDelivery` / `CrewMailboxWaker`（一次已决定要发生的唤醒，附带的
-///     「近期群聊上下文」）。
+///     `CrewLocalMentionDelivery`（一次已决定要发生的唤醒，附带的「近期群聊上下文」）。
 ///   * **该叫醒** —— 由 `CrewLocalMentionInjectLogic.plannedInjections` / `.wakeTargets`
-///     和 `CrewMailboxWakeLogic` 决定，它们只认 `kind == "session"` / `"captain"`。
+///     决定，它们只认 `kind == "session"` / `"captain"`。
 ///     放宽本类型的可见性**不会**让任何人被多叫醒一次。
 ///
 /// ## 规则
@@ -98,8 +97,8 @@ enum CrewWhiteboardVisibility {
     ///
     /// 本方法是那条判定的**纯函数**（输入：一条消息 + 观察者 + 花名册；输出：要不要
     /// 标注、标注写谁），渲染端只负责把返回值拼在正文前面，别把判定埋进渲染代码里。
-    /// 三条注入面共用这一份：`HookEmitter`（每轮未读注入）、
-    /// `CrewLocalMentionInjectLogic` / `CrewMailboxWakeLogic`（唤醒附带的「近期群聊」）。
+    /// 两条注入面共用这一份：`HookEmitter`（每轮未读注入）与
+    /// `CrewLocalMentionInjectLogic`（唤醒附带的「近期群聊」）。
     ///
     /// 返回 nil = 不用标注（真广播；或这条本来就点了我）。非 nil = 该前置的标注，
     /// 形如 `（发给 小王 的）`。

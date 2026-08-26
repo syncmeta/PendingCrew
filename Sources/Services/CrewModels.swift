@@ -1,8 +1,7 @@
-// Crew wire-model types extracted from PendingCrewAPI.swift so they can be
-// compiled into Foundation-only contexts (test bundles, etc.) without dragging
-// in the full `PendingCrewAPI` class and its `URLSession` / Auth dependencies.
-//
-// PendingCrewAPI.swift imports this file implicitly (same module).
+// Crew 群聊 / 白板的模型层（纯 Foundation，能编进只有 Foundation 的上下文，
+// 比如 test bundle）。形状沿用当初线上读模型的 snake_case wire 形状 ——
+// #63 第二期删掉云端整层之后唯一的构造点是 `LocalBackend`，保留形状是为了
+// 中栏渲染 / 唤醒判定不必跟着改一遍。
 import Foundation
 
 // MARK: - Crew whiteboard / group chat models (spec §9)
