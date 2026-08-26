@@ -316,12 +316,17 @@ final class HookEmitterTests: XCTestCase {
         for i in 1...CaptainAwarenessLogic.densityMessageThreshold {
             store.appendUserMessage(crewId: id, text: "密集 \(i)")
         }
+        // 同一道缝：两次 emit 用**同一个**「现在」。密度窗（15 分钟）和冷却
+        // （30 分钟）都是拿 now 减去消息/上次提示的时刻，走墙上时钟就等于把机器
+        // 快慢、乃至跑测期间的休眠放进判定；固定下来后，12 条消息的年龄恒为 ~0、
+        // 两次 emit 的间隔恒为 0，两条断言都不再有时间这个变量。
+        let now = Date()
         let first = HookEmitter(store: store, crewId: id, sessionId: "cap",
-                                cursorDir: wbDir, isCaptain: true).emitAndAdvance()!
+                                cursorDir: wbDir, isCaptain: true).emitAndAdvance(now: now)!
         XCTAssertTrue(first.contains("最近 15 分钟白板 12 条"))
         store.appendUserMessage(crewId: id, text: "冷却内的新消息")
         let second = HookEmitter(store: store, crewId: id, sessionId: "cap",
-                                 cursorDir: wbDir, isCaptain: true).emitAndAdvance()!
+                                 cursorDir: wbDir, isCaptain: true).emitAndAdvance(now: now)!
         XCTAssertFalse(second.contains("拆组信号"))
     }
 
