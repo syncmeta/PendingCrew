@@ -59,16 +59,15 @@ struct CrewChatMessage: Identifiable, Hashable {
     // ── Mine-detection ────────────────────────────────────────────────────────
 
     /// Single source of truth for mine-ness, set at construction time by
-    /// `CrewChatAdapter` via `CrewSenderResolver`. Stored so relay messages
-    /// (whose `senderDisplayName != nil`) are never incorrectly treated as
-    /// "mine" even when the uid matches the local user.
+    /// `CrewChatAdapter` via `CrewSenderResolver` — which decides it from the
+    /// author uid, not from the display name.
     let mine: Bool
 
     /// BubbleView calls `message.isMine(currentUserId: currentUserId)`.
     /// Delegates entirely to the stored `mine` flag — `CrewSenderResolver`
-    /// is the single source of truth (handles relay messages correctly).
-    /// The `currentUserId` parameter is accepted for API compatibility with
-    /// the vendored BubbleView call-site but is not used here.
+    /// is the single source of truth. The `currentUserId` parameter is accepted
+    /// for API compatibility with the vendored BubbleView call-site but is not
+    /// used here.
     func isMine(currentUserId: String?) -> Bool { mine }
 
     // ── Memberwise init ───────────────────────────────────────────────────────

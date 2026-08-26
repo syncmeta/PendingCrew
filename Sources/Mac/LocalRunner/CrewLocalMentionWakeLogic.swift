@@ -15,11 +15,10 @@ import Foundation
 /// 过滤语义：
 ///   * 收 session / captain 作者的条目 —— 人类（user）在 composer 发送时
 ///     `CrewChatView.send()` 已直投，这里再投会重复注入。
-///   * **#554 断链修复（规则 3）**：`relayRemoteId != nil` 的 **user** 条目
-///     （远端人类经 relay 落进本地白板的 @）也收——composer 直投只覆盖本机
-///     人类发送路径，远端 iOS 用户 @session 落到 Mac 本地白板后原本没有任何
-///     投递者转成注入，session 断链收不到。本地 composer 直发的 user 条目
-///     （`relayRemoteId == nil`）仍排除，防跟 composer 直投重复。
+///     （#554 断链修复的规则 3 —— 「远端人类经 relay 落进本地白板的 @ 也收」——
+///     随 #63 第二期删除跨端遥控整层一起移除：它的判据是 `relayRemoteId != nil`，
+///     relay 一走这个条件恒 false。**前后端解耦重建 relay 时要一起重建**，
+///     否则远端人类的 @ 会重新变成没有投递者的断链。）
 ///   * 只收带 `@session` / `@captain` 的条目（broadcast / human 不唤醒具体
 ///     run，与 decide 一致）。
 ///   * **通讯录 `contact` 的跨 crew 来电例外（2026-08-11）**：`externalContactFrom`
@@ -58,9 +57,7 @@ enum CrewLocalMentionWakeLogic {
     static func pending(entries: [LocalWhiteboardMessage], now: Date = Date()) -> [PendingDelivery] {
         entries.compactMap { e in
             guard !isStale(e, now: now) else { return nil }
-            let isAgentSender = e.senderKind == "session" || e.senderKind == "captain"
-            let isRelayHuman = e.senderKind == "user" && e.relayRemoteId != nil
-            guard isAgentSender || isRelayHuman else { return nil }
+            guard e.senderKind == "session" || e.senderKind == "captain" else { return nil }
             var wakeMentions: [CrewMention] = (e.mentions ?? []).compactMap { m in
                 switch m.kind {
                 case "session":
@@ -118,7 +115,7 @@ enum CrewLocalMentionWakeLogic {
     /// 发送者标注（与 `HookEmitter.render` 的取名次序一致）：显示名优先，
     /// 机长兜底「机长」，再兜 `session:<前6>`，最后退回原 kind。
     static func senderLabel(_ e: LocalWhiteboardMessage) -> String {
-        if let n = e.senderName ?? e.senderDisplayName, !n.isEmpty { return n }
+        if let n = e.senderName, !n.isEmpty { return n }
         if e.senderKind == "captain" { return "机长" }
         if let sid = e.senderSessionId, !sid.isEmpty { return "session:\(sid.prefix(6))" }
         return e.senderKind

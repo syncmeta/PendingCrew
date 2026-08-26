@@ -1210,7 +1210,7 @@ final class McpServer {
     private func renderRow(_ m: LocalWhiteboardMessage) -> String {
         // 与 HookEmitter.render 同款：有显示名优先用名，无名退回旧格式。
         let who: String
-        if let name = m.senderName ?? m.senderDisplayName, !name.isEmpty {
+        if let name = m.senderName, !name.isEmpty {
             who = name
         } else {
             switch m.senderKind {

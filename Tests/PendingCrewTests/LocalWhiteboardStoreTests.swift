@@ -104,9 +104,7 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         defer { c.cancel() }
         s.appendUserMessage(crewId: "c", text: "u")
         s.appendSessionMessage(crewId: "c", sessionId: "sess", text: "s")
-        s.appendRelayMessage(crewId: "c", remoteId: "r1", senderKind: "user",
-                             senderDisplayName: "Bob", text: "r", createdAt: "2026-06-15T00:00:00Z")
-        XCTAssertEqual(count, 3)
+        XCTAssertEqual(count, 2)
     }
 
     func testReportingFailureAppendThrowsWhenWhiteboardCannotBeWritten() throws {
@@ -375,18 +373,5 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         XCTAssertEqual(m.map(\.text), ["old"])
         XCTAssertNil(m[0].attachments)
         XCTAssertEqual(m[0].agentText, "old")
-    }
-
-    func testRelayDuplicateDoesNotEmit() {
-        // 幂等去重命中（同 remoteId 已存在）→ no-op，不该发 tick。
-        let s = LocalWhiteboardStore(directory: tempDir())
-        s.appendRelayMessage(crewId: "c", remoteId: "dup", senderKind: "user",
-                             senderDisplayName: nil, text: "first", createdAt: "2026-06-15T00:00:00Z")
-        var count = 0
-        let c = s.changes.sink { _ in count += 1 }
-        defer { c.cancel() }
-        s.appendRelayMessage(crewId: "c", remoteId: "dup", senderKind: "user",
-                             senderDisplayName: nil, text: "second", createdAt: "2026-06-15T00:00:01Z")
-        XCTAssertEqual(count, 0)
     }
 }

@@ -358,7 +358,7 @@ final class LocalBackend: PendingCrewBackend {
                 // 但本机人类自己发的消息(senderKind=="user")不折本地 senderName("人"),
                 // 否则中栏 resolver 的 relay 守卫会把自己误判成 relay → 左对齐(#3)。
                 senderDisplayName: CrewSenderNaming.localWireDisplayName(
-                    senderKind: m.senderKind, relayName: m.senderDisplayName, localName: m.senderName),
+                    senderKind: m.senderKind, localName: m.senderName),
                 // 本地白板消息没有 edge 成员 id —— 恒 nil。
                 senderMemberId: nil,
                 // #377 — 本地白板消息的回复引用(Phase 6 已加 LocalWhiteboardMessage.inReplyTo)。

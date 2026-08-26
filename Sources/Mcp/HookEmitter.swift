@@ -182,10 +182,10 @@ struct HookEmitter {
         }
         lines.append("群聊白板·未读：")
         for m in msgs {
-            // 有显示名（本地 senderName 或 relay senderDisplayName）→ 直接用名字，
-            // 让 agent 看得见是谁发的；无名才退回旧格式（session:<id> / 人类），保持兼容。
+            // 有显示名（senderName）→ 直接用名字，让 agent 看得见是谁发的；
+            // 无名才退回旧格式（session:<id> / 人类），保持兼容。
             let who: String
-            if let name = m.senderName ?? m.senderDisplayName, !name.isEmpty {
+            if let name = m.senderName, !name.isEmpty {
                 who = name
             } else {
                 switch m.senderKind {

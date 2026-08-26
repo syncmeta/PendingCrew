@@ -53,11 +53,10 @@ enum CrewRecentContextRender {
         return lines.joined(separator: "\n")
     }
 
-    /// 发送者标注。优先本地显示名（`senderName`）/ relay 远端名（`senderDisplayName`），
-    /// 再按 kind 兜底（user/human → 人类，captain → 机长，session → `session:<前6>`）。
+    /// 发送者标注。优先显示名（`senderName`），再按 kind 兜底
+    /// （user/human → 人类，captain → 机长，session → `session:<前6>`）。
     private static func label(_ m: LocalWhiteboardMessage) -> String {
         if let n = m.senderName, !n.isEmpty { return n }
-        if let n = m.senderDisplayName, !n.isEmpty { return n }
         switch m.senderKind {
         case "user", "human": return "人类"
         case "captain": return "机长"
