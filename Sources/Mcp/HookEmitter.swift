@@ -116,8 +116,13 @@ struct HookEmitter {
     /// 定向消息在注入面上与广播不可区分，是「机长点名派给一个 worker、全 crew 都
     /// 当成自己的活」扩散事故的病根。滤掉的条目游标照常推进（对本 session 就是已阅，
     /// 别攒着下轮再来），全被滤掉时不注入。
-    func emitAndAdvance() -> String? {
-        guard let pending = pendingContext() else { return nil }
+    ///
+    /// `now` 只为**注入渲染里的时间判定**（拆组信号的新鲜度 / 密度窗 / 冷却）提供
+    /// 一个可注入的「现在」。生产两处调用点（`McpHelperMain` / `CrewSessionRunner`）
+    /// 都走默认值 `Date()`，行为不变；单测传入自己造的固定时刻，才能让判定与机器
+    /// 负载无关（否则用例从写快照到 emit 之间的墙上时间会参与判定，跑全量时飘红）。
+    func emitAndAdvance(now: Date = Date()) -> String? {
+        guard let pending = pendingContext(now: now) else { return nil }
         guard let context = pending.context else {
             cursor.advance(to: pending.last, in: store)
             return nil
@@ -135,23 +140,23 @@ struct HookEmitter {
     /// 与 hook 同一套未读 / 可见性 / 游标语义，但直接返回纯上下文。
     /// Claude 新 session 的第一轮没有 PostToolUse 事件，启动 prompt 走这条；Codex 的
     /// `turn/start.additionalContext` 也可直接复用，不必先包 JSON 再拆 JSON。
-    func emitContextAndAdvance() -> String? {
-        guard let pending = pendingContext() else { return nil }
+    func emitContextAndAdvance(now: Date = Date()) -> String? {
+        guard let pending = pendingContext(now: now) else { return nil }
         cursor.advance(to: pending.last, in: store)
         return pending.context
     }
 
-    private func pendingContext() -> (context: String?, last: LocalWhiteboardMessage)? {
+    private func pendingContext(now: Date) -> (context: String?, last: LocalWhiteboardMessage)? {
         let unread = cursor.unread(in: store)
         guard let last = unread.last else { return nil }
         // 要的是「**看得见吗**」，不是「该叫醒吗」—— 这条路每轮都跑，本身就不唤醒
         // 任何人，只决定渲染什么进上下文。只 @ 了人类的消息在这里必须可见（2026-08-23
         // 修的正主：过去它对所有 agent 隐身）。
         let mine = CrewWhiteboardVisibility.visible(unread, to: sessionId, isCaptain: isCaptain)
-        return (mine.isEmpty ? nil : render(mine), last)
+        return (mine.isEmpty ? nil : render(mine, now: now), last)
     }
 
-    private func render(_ msgs: [LocalWhiteboardMessage], now: Date = Date()) -> String {
+    private func render(_ msgs: [LocalWhiteboardMessage], now: Date) -> String {
         var lines: [String] = []
         let allMessages = store.list(crewId: crewId)
         // 注入面消歧（#62）用的花名册：sessionId → 显示名。判定本身是纯函数
