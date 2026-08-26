@@ -34,8 +34,16 @@ final class McpServerWorkdirToolTests: XCTestCase {
         XCTAssertTrue(cap.contains("change_workdir"))
         // 工具描述必须把这几件事说在明处，否则机长会用错。
         XCTAssertTrue(cap.contains("预览"))
-        XCTAssertTrue(cap.contains("留待清扫"))
-        XCTAssertTrue(cap.contains("幂等"))
+        // 会话日志不搬了 → 这个工具**一次做完、没有尾巴**。描述里必须把这句说明白，
+        // 并给出依据（claude `--resume` 按会话号找全盘、不按目录），否则机长看到
+        // 「改目录居然不用管在跑的 session」会本能怀疑，还得再问一遍。
+        XCTAssertTrue(cap.contains("一次做完"), "描述要讲明没有第二趟")
+        XCTAssertTrue(cap.contains("--resume"), "要给出「不用搬会话」的依据")
+        // 反面：清扫模式删掉之后，这些词会变成**指向虚空的指令** —— 机长照着再调一次，
+        // 什么也不会发生，而它以为自己补上了什么。过期的工具描述比死代码更能骗人。
+        for stale in ["留待清扫", "幂等", "再调一次"] {
+            XCTAssertFalse(cap.contains(stale), "工具描述里不该再出现「\(stale)」")
+        }
         let worker = server(tempDir(), isCaptain: false)
             .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)!
         XCTAssertFalse(worker.contains("change_workdir"))
