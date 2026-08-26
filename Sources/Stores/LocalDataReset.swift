@@ -28,10 +28,7 @@ enum LocalDataReset {
             UserDefaults.standard.removePersistentDomain(forName: bundleId)
         }
         // 2. 本地 crew 数据目录(local-crews / captain-templates / whiteboards / approvals 全包)
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        if let dir = support?.appendingPathComponent("PendingCrew", isDirectory: true) {
-            try? FileManager.default.removeItem(at: dir)
-        }
+        try? FileManager.default.removeItem(at: PendingCrewDataRoot.url)
         // 3. macOS 重启 app（绕开内存单例/@State/disclosure 缓存）。
         //    iOS 不能自重启，清完 defaults 后交给现有 app 状态流。
         #if os(macOS)

@@ -132,6 +132,10 @@ targets:
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift
+      # 本机数据根的唯一真值（前后端分离 P4）。白板 / crew 账 / 附件 / 崩溃日志 /
+      # daemon 的锁与 registry 全部从它拿路径 —— 所以它必须先在 bundle 里，
+      # 下面那批 store 才编得过。
+      - path: Sources/Stores/PendingCrewDataRoot.swift
       # LocalWhiteboardStore 同理：自包含 Foundation 代码（本地白板持久化，
       # 不引 CrewWhiteboardEntry / app module），单独编进 bundle 单测。
       - path: Sources/Stores/LocalWhiteboardStore.swift

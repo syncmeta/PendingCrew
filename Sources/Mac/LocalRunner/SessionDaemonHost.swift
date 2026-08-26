@@ -14,16 +14,21 @@ struct PendingCrewDaemonPaths {
     /// 非空 = socket 用了退路，理由在这里。调用方应当把它写进日志。
     var socketFallbackReason: String?
 
+    /// **锁、socket、registry 一律落在数据根下**（不是「Application Support 下」）。
+    /// 这条不是审美：`PENDINGCREW_DATA_DIR` 挪走数据根之后，如果锁还钉在真目录上，
+    /// 临时根里的 daemon 会和真 app 抢同一把锁 —— 那就白挪了，而且症状是「隔离
+    /// 明明设了却还是打架」，比不隔离更难查。
+    ///
+    /// 日志刻意留在 `~/Library/Logs/PendingCrew/`（跟着数据根走的话，临时根那次
+    /// 跑完连日志一起被删，而日志正是那种跑法唯一的观察窗）。
     static func standard(
-        support: URL = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory,
+        dataRoot: URL = PendingCrewDataRoot.url,
         logs: URL = FileManager.default.urls(
             for: .libraryDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Logs", isDirectory: true)
             ?? FileManager.default.temporaryDirectory
     ) -> PendingCrewDaemonPaths {
-        let dir = support.appendingPathComponent("PendingCrew", isDirectory: true)
+        let dir = dataRoot
         let logDir = logs.appendingPathComponent("PendingCrew", isDirectory: true)
         let preferred = dir.appendingPathComponent("daemon.sock").path
         var socket = preferred
@@ -203,6 +208,9 @@ final class SessionDaemonHost {
 
         log.write("=== daemon 启动 pid=\(ProcessInfo.processInfo.processIdentifier) "
             + "build=\(Self.currentBuild) protocol=\(SessionProtocolVersion.current) ===")
+        // 六条约束里的第 6 条：**启动时把数据根打出来**。这套隔离机制自己的失败形态
+        // 是「悄悄跑在临时目录上」——人以为在动真数据、其实在动空壳，而所有操作都会成功。
+        log.write(PendingCrewDataRoot.startupLine())
         if let reason = paths.socketFallbackReason { log.write("⚠️ socket 路径退路：\(reason)") }
 
         reapOrphansFromPreviousRun()

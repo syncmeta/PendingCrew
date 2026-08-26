@@ -45,12 +45,7 @@ enum UncaughtExceptionLog {
 
     /// `Application Support/PendingCrew/crashes/`；建不出来就返回 nil（崩溃路径上不再抛）。
     private static func crashDirectory() -> URL? {
-        guard let support = try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true) else { return nil }
-        let dir = support
-            .appendingPathComponent("PendingCrew", isDirectory: true)
-            .appendingPathComponent("crashes", isDirectory: true)
+        let dir = PendingCrewDataRoot.subdirectory("crashes")
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch {

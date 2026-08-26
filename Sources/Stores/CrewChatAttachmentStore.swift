@@ -13,15 +13,7 @@ import Foundation
 enum CrewChatAttachmentStore {
 
     /// 附件根目录（`Application Support/PendingCrew/attachments/`）。
-    static let defaultDirectory: URL = {
-        let base = (try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true))
-            ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("PendingCrew", isDirectory: true)
-            .appendingPathComponent("attachments", isDirectory: true)
-    }()
+    static let defaultDirectory: URL = PendingCrewDataRoot.subdirectory("attachments")
 
     /// composer 暂存区（`<tmp>/PendingCrew/composer-staging/<uuid>/<原名>`）。
     ///

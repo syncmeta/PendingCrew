@@ -39,10 +39,7 @@ final class CaptainTemplateStore: ObservableObject {
         if let baseDirectory {
             base = baseDirectory
         } else {
-            let support = FileManager.default
-                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-                .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
-            base = support.appendingPathComponent("PendingCrew", isDirectory: true)
+            base = PendingCrewDataRoot.url
         }
         do {
             try FileManager.default.createDirectory(
