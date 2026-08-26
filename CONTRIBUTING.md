@@ -114,17 +114,28 @@ body 求值路径上**。要时间/末条，取 `CrewStore.lastWhiteboardMessage
    `.task` 里，**任何文本正则都看不见这个区别**。上面那 8 个假阳性，每一个
    都跟违规写法长得一模一样。
 3. **依赖以隐式成员传参 → 连类型名都不出现。** `badgeCount(for:)` 里是
-   `SessionUnreadStore.shared.unreadCount(..., whiteboard: .shared)`，而
-   `SessionUnreadStore` 内部就是 `whiteboard.list(crewId:)` —— 同样的 flock +
-   全量解码，同样在 body 路径上（切换条那个 `ForEach`，每 run 每帧一次）。
-   参数写的是 **`.shared`**，类型由 Swift 的隐式成员查找补出来，所以调用点
-   **连 `LocalWhiteboardStore` 这个词的任何片段都不存在** —— 不是被换行拆开、
-   不是被别名挡住，是**根本没写**。
+   `SessionUnreadStore.shared.unreadCount(..., approvals: .shared, whiteboard: .shared)`，
+   而 `SessionUnreadStore` 内部就是 `whiteboard.list(crewId:)` —— 同样的
+   flock + 全量解码，同样在 body 路径上（切换条那个 `ForEach`，每 run 每帧
+   一次；而且是**两个**账本，白板一次、审批一次）。**两个参数都写成 `.shared`**，
+   类型由 Swift 的隐式成员查找补出来，所以调用点**连 `LocalWhiteboardStore`
+   这个词的一个字母都不出现** —— 不是被换行拆开、不是被别名挡住，是**根本
+   没写**。以类型名为锚去扫，在这里**不是容易漏，是没有可锚的东西。**
 
-第 3 条钉死了结论。举个现成的例子：`CrewSessionWindowView.swift` 修完之后，
-`grep LocalWhiteboardStore` 在这个文件里**只剩两处注释、零处代码**，
-看上去彻底干净 —— **而那条每 run 每帧的全量解码还在里面跑着。**
-要抓它得做跨函数的类型解析，那已经不是守卫，那是编译器。
+**第 3 条才是堵死这条路的那条**，前两条只是让它变难。举个跑过的例子：
+`CrewSessionWindowView.swift` 修完第一处之后，在这个文件上扫 `LocalWhiteboardStore`——
+
+| 扫描方式 | 命中 |
+| --- | --- |
+| 朴素（不跳注释） | 2（`:497` / `:504`，**都是病史注释**） |
+| 跳注释的「聪明」版 | **0** |
+
+而 `:635` 那行 `approvals: .shared, whiteboard: .shared` 原样跑着。
+**扫描器越聪明，这个文件看起来越干净** —— 不是工具不够好，是工具每改进一步，
+谎报得越彻底。要真抓它得做跨函数的类型解析，那已经不是守卫，那是编译器。
+
+**这类守卫最坏的形态不是响假警报，是给出零命中。** 假阳性至少还说明有人在看，
+零命中是直接发一张免检证、把人劝走。
 
 **所以以名字为锚的一切扫描（正则、grep、乃至简单的 AST 名字匹配）对这条红线
 都不成立**，而不是「还没调好」。
