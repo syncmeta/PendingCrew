@@ -217,6 +217,13 @@ targets:
       # @MainActor 的 async hop 会挂死，实测过）。依赖 TodoLedger（LocalTodoStore.swift）
       # 与 CrewMention（CrewModels.swift），两者都已在 bundle。
       - path: Sources/Support/TodoLandingFlow.swift
+      # 侧栏「手动藏起来一个 crew」的判定层：可见性（藏了父，子跟着消失而不是被
+      # 提到顶层）/ 已隐藏列表列谁 / 带活跃子 crew 的父能不能藏 / 未读。
+      # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。
+      - path: Sources/Support/CrewHiding.swift
+      # crew 级「最后看过」时间（UserDefaults，不进 crew 的磁盘 JSON）——
+      # 上面那套算未读要的第二个参照点。纯 Foundation，自包含。
+      - path: Sources/Stores/CrewViewedStore.swift
       # 侧栏拖拽改父子关系的判定层（Todo #27：禁环/移动语义/摘到顶层/负载编解码）。
       # 纯 Foundation，只依赖 CrewSummary（Sources/Models 已在 bundle）。
       - path: Sources/Support/CrewDragDropLogic.swift
