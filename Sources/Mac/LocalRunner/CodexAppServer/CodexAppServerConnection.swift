@@ -104,5 +104,9 @@ actor CodexAppServerConnection {
     }
 
     var isRunning: Bool { process.isRunning }
+
+    /// daemon 的 registry 要记「谁是我的子进程」（前后端分离 §8.2）。
+    /// 未拉起时 Foundation 给 0。
+    var processIdentifier: Int32 { process.processIdentifier }
 }
 #endif

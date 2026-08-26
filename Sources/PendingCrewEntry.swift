@@ -11,6 +11,8 @@ import AppKit
 ///   的 hook 拉起）→ 当 **crew-comms helper** 跑（stdio MCP server / 注入未读白板），
 ///   不起 GUI。比 embed 独立 executable 更自包含（就一个二进制、`Bundle.main.
 ///   executablePath` 铁定可寻），也避开 macOS app bundle 嵌可执行文件的签名/拷贝坑。
+/// - 带 `--daemon` argv → 当**常驻后台进程**跑（前后端分离 P4，`SessionDaemonMain`）：
+///   养 session、跑编排、在 Unix socket 上服务 viewer，不起 GUI、不碰 NSApplication。
 /// - 否则 → 起正常 SwiftUI GUI（`PendingCrewApp.main()`）。
 @main
 struct PendingCrewEntry {
@@ -24,6 +26,8 @@ struct PendingCrewEntry {
         FileDescriptorLimit.raiseSoftLimitToHardLimit()
         if McpHelperMain.runIfHelper(CommandLine.arguments) { return }
         #if os(macOS)
+        // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
+        if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
         #endif
         PendingCrewApp.main()

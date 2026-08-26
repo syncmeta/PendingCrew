@@ -400,8 +400,25 @@ final class CrewStore: ObservableObject {
         lastWhiteboardMessages = snapshot
     }
 
+    /// **共享控制通道只有编排者能排空**（前后端分离 §6.1）。
+    ///
+    /// `LocalCrewControlStore` 那三条通道（改名 / attention / 机长命令）是「一文件一命令、
+    /// 排空后删」的无锁模型 —— 谁先读到谁拿走。分家之后 daemon 和 app 都活着，两边都排
+    /// 的话，机长的 `start_session` 会被随机一方吞掉：**落在 app 手里的那条没人执行，
+    /// 而且不报错、不重试、命令文件已经删了**。派工就此蒸发，事后完全查不出来。
+    ///
+    /// `inproc` 模式下 GUI 进程本来就是 `.orchestrator`，这道闸永远开着，行为不变。
+    private var ownsSharedControlChannel: Bool {
+        #if os(macOS)
+        return ProcessRole.current == .orchestrator
+        #else
+        return true
+        #endif
+    }
+
     /// 排空 `LocalCrewControlStore` 的待改名，逐条落到 `LocalCrewStore`；有变更才刷新列表。
     private func applyPendingRenames() async {
+        guard ownsSharedControlChannel else { return }
         let renames = LocalCrewControlStore.shared.drainRenames()
         guard !renames.isEmpty else { return }
         for r in renames {
@@ -414,6 +431,7 @@ final class CrewStore: ObservableObject {
     /// spec §3），逐条落到 `LocalCrewStore.setAttention`（nil = 熄灭）；有变更才刷新列表
     /// （`crews` 重发布 → 侧栏头像黄点亮/灭）。
     private func applyPendingAttentions() async {
+        guard ownsSharedControlChannel else { return }
         let changes = LocalCrewControlStore.shared.drainAttentions()
         guard !changes.isEmpty else { return }
         for ch in changes { LocalCrewStore.shared.setAttention(ch.crewId, reason: ch.reason) }
@@ -429,6 +447,7 @@ final class CrewStore: ObservableObject {
     /// 父白板回执一行。与 `applyPendingRenames` 同一 tick 触发
     /// （`directoryChanged` 跨进程目录监听）。
     func drainPendingCommands() async {
+        guard ownsSharedControlChannel else { return }
         let cmds = LocalCrewControlStore.shared.drainCommands()
         guard !cmds.isEmpty else { return }
         for cmd in cmds {

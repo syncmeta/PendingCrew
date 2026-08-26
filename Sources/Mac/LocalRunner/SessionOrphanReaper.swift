@@ -121,6 +121,18 @@ enum SessionOrphanReaper {
     }
 }
 
+/// 「这个 session 的子进程是谁」。daemon 的 registry 靠它填（§8.2）。
+///
+/// 它**不进 `SessionBackend`**：那个协议是控制面 + 状态面，是给编排和 UI 看的；
+/// pid 只有常驻后台进程的善后逻辑要用，扩大生命周期协议只会让每个实现都被迫回答
+/// 一个跟自己无关的问题。
+@MainActor
+protocol SessionProcessIdentifying: AnyObject {
+    /// 直接子进程的 pid（PTY 的会话首 / codex app-server）。**0 = 还没起来**，
+    /// 不是错误 —— 拉起是异步的，registry 会在下一次重建时补上。
+    var agentProcessIdentifier: Int32 { get }
+}
+
 /// daemon 持续维护的「谁在跑」账本（§8.2）。它**不是** session 的业务状态，
 /// 只回答一个问题：如果我下一秒崩了，回来之后该去看哪些 pid。
 struct SessionProcessRegistry: Codable, Equatable {

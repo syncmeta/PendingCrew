@@ -15,7 +15,10 @@ import SwiftUI
 final class CrewSessionRunner: ObservableObject {
     @Published private(set) var runs: [CrewSessionRun] = []
     @Published var selectedRunId: UUID?
-    private let sessionProtocolBridge = InProcessSessionProtocolBridge()
+    /// session 往哪儿发布（前后端分离 §10 的那一个接缝）。
+    /// inproc = 同进程桥（app 自己就是 viewer）；`--daemon` = socket 服务端。
+    /// **这个类在两种模式下是同一份**，差别全收在这个协议后面。
+    private let sessionPublisher: any SessionProtocolPublishing
 
     /// 「新建 session」态：inspector 显示零配置 composer 而非某个 run。由 roster /
     /// 切换条的「+」置 true，启动成功或切到某个 run 时复位。UI 选择态（与
@@ -114,7 +117,12 @@ final class CrewSessionRunner: ObservableObject {
     /// 这里补的是 await 窗口内的互斥；`runs` 那道守卫照旧留着（管已经起好的）。
     private var launchesInFlight: Set<String> = []
 
-    init() {}
+    /// `sessionPublisher` 收 `nil` 默认值而不是默认实参：默认实参在 **nonisolated**
+    /// 上下文求值，而 `InProcessSessionProtocolBridge` 是 `@MainActor`（同
+    /// `SessionHost` 那两个依赖）。
+    init(sessionPublisher: (any SessionProtocolPublishing)? = nil) {
+        self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
+    }
 
     /// 切换前台 run（退出「新建」态）。
     func select(_ runId: UUID) {
@@ -142,6 +150,10 @@ final class CrewSessionRunner: ObservableObject {
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
         if run.status == .running { run.stop() }
+        // 服务端也该忘掉它。daemon 一跑就是几周，不忘等于无界增长（record +
+        // Combine 订阅一直挂着）。inproc 侧这一条同样成立，只是那边进程短命、
+        // 症状不明显——被移除的 run 没有任何读者，退订它不改变任何可观察行为。
+        sessionPublisher.retire(sessionId: run.sessionId)
         runs.remove(at: idx)
         if selectedRunId == runId {
             // 回退只在同 crew 内找（#481）—— 别把前台切到另一个 crew 的 run。
@@ -1009,14 +1021,23 @@ final class CrewSessionRunner: ObservableObject {
                     kind: config.kind.rawValue, agentSessionId: agentId,
                     workingDirectory: workingDirectory.path)
             }
-            directBackend = AgentTerminalSession(
-                config: config,
-                executable: executable.path,
-                workdir: workingDirectory.path,
-                env: env,
-                protocolOutputSink: SessionBackendRouting.usesProtocolTransport
-                    ? sessionProtocolBridge.terminalOutputSink(sessionId: sessionId) : nil
-            )
+            let sink = SessionBackendRouting.usesProtocolTransport
+                ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
+            // daemon 里没有窗口：造门面就等于造一个 `TerminalMirrorView`（AppKit），
+            // 那是窗口的东西。两条路共用同一个 `AgentSessionCore`，扫描器、拉起自检、
+            // 权威缓冲区一个字不差 —— 差的只是有没有那半画面。
+            directBackend = sessionPublisher.isHeadless
+                ? HeadlessSessionBackend(
+                    config: config, mode: .agent,
+                    executable: executable.path, workdir: workingDirectory.path,
+                    env: env, protocolOutputSink: sink)
+                : AgentTerminalSession(
+                    config: config,
+                    executable: executable.path,
+                    workdir: workingDirectory.path,
+                    env: env,
+                    protocolOutputSink: sink
+                )
         case .codex:
             // codex 没有 claude 的 hook/settings 通道：session 配置、世界观与 MCP
             // 全走 app-server thread/start（或 thread/resume），白板逐轮走 turn/start。
@@ -1064,20 +1085,28 @@ final class CrewSessionRunner: ObservableObject {
                         category: "progress", senderName: "系统")
                 },
                 protocolNotificationSink: SessionBackendRouting.usesProtocolTransport
-                    ? sessionProtocolBridge.codexNotificationSink(sessionId: sessionId) : nil)
+                    ? sessionPublisher.codexNotificationSink(sessionId: sessionId) : nil)
             cb.boot(initialPrompt: config.initialPrompt)
             directBackend = cb
         case .terminal:
             // 人的工具：没有 initial prompt、世界观、MCP、白板 provider 或 agent 状态扫描。
-            directBackend = PlainTerminalSession(
-                shell: executable.path,
-                workdir: workingDirectory.path,
-                environment: env,
-                protocolOutputSink: SessionBackendRouting.usesProtocolTransport
-                    ? sessionProtocolBridge.terminalOutputSink(sessionId: sessionId) : nil)
+            let shellSink = SessionBackendRouting.usesProtocolTransport
+                ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
+            directBackend = sessionPublisher.isHeadless
+                ? HeadlessSessionBackend(
+                    config: SessionConfig(kind: .terminal), mode: .plainShell,
+                    executable: executable.path, workdir: workingDirectory.path,
+                    env: env, protocolOutputSink: shellSink)
+                : PlainTerminalSession(
+                    shell: executable.path,
+                    workdir: workingDirectory.path,
+                    environment: env,
+                    protocolOutputSink: shellSink)
         }
+        // daemon 里 `expose` 回 nil —— 那个进程没有 viewer，run 直接持有 direct backend。
         let backend: any SessionBackend = SessionBackendRouting.usesProtocolTransport
-            ? sessionProtocolBridge.expose(sessionId: sessionId, backend: directBackend)
+            ? (sessionPublisher.expose(sessionId: sessionId, backend: directBackend)
+                ?? directBackend)
             : directBackend
         // 4. 包成 view model
         let run = CrewSessionRun(

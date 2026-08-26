@@ -678,6 +678,62 @@ final class SessionProtocolClient {
     }
 }
 
+/// 「session 往哪儿发布」这一个接缝。
+///
+/// 它存在的理由只有一条：**编排代码（`CrewSessionRunner`）在 inproc 和 daemon 两种
+/// 模式下必须是同一份**（§10）。两种模式的差别只有两点，都收在这个协议后面：
+///
+/// 1. 这个进程里有没有窗口 —— 有窗口才造 `TerminalMirrorView`（AppKit）；
+///    daemon 里一个 NSView 都不该有。
+/// 2. 这个进程里有没有 viewer —— inproc 时 app 自己就是 viewer，`expose` 回一个
+///    `RemoteSessionBackend` 给 run 用；daemon 里 viewer 在另一个进程，回 nil，
+///    run 直接持有 direct backend。
+@MainActor
+protocol SessionProtocolPublishing: AnyObject {
+    /// true = 本进程没有窗口（daemon）。后端据此选无画面内核而不是门面。
+    var isHeadless: Bool { get }
+    func terminalOutputSink(sessionId: String) -> ([UInt8]) -> Void
+    func codexNotificationSink(sessionId: String) -> (String, [String: Any]) -> Void
+    /// 把 session 交给协议服务端。返回值是「本进程里的 viewer 该拿的那个后端」——
+    /// daemon 里没有 viewer，所以是 nil。
+    func expose(sessionId: String, backend: any SessionBackend) -> RemoteSessionBackend?
+    /// run 被移除 → 服务端也该忘掉它。daemon 一跑就是几周，不忘等于无界增长。
+    func retire(sessionId: String)
+}
+
+/// daemon 侧的发布口：直接落在 socket 服务端上。
+@MainActor
+final class DaemonSessionPublisher: SessionProtocolPublishing {
+    let isHeadless = true
+    private let server: SessionProtocolServer
+
+    init(server: SessionProtocolServer) { self.server = server }
+
+    func terminalOutputSink(sessionId: String) -> ([UInt8]) -> Void {
+        { [weak server] bytes in
+            MainActor.assumeIsolated {
+                server?.acceptTerminalBytes(sessionId: sessionId, bytes: bytes)
+            }
+        }
+    }
+
+    func codexNotificationSink(sessionId: String) -> (String, [String: Any]) -> Void {
+        { [weak server] method, params in
+            MainActor.assumeIsolated {
+                server?.acceptCodexNotification(
+                    sessionId: sessionId, method: method, params: params)
+            }
+        }
+    }
+
+    func expose(sessionId: String, backend: any SessionBackend) -> RemoteSessionBackend? {
+        server.register(sessionId: sessionId, backend: backend)
+        return nil          // 这个进程里没有窗口，没人要 viewer 侧的后端
+    }
+
+    func retire(sessionId: String) { server.unregister(sessionId: sessionId) }
+}
+
 /// 协议版本。**改它需要在 PR 里写明为什么不可避免**（§4.4）——「新增消息」「新增
 /// 字段」「新增能力」三种都不许 +1，只有「改帧头布局 / 改字段语义 / 删字段」才算。
 enum SessionProtocolVersion {

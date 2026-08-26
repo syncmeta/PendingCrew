@@ -113,6 +113,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                             self.isWorking = false
                         }
                     })
+                cachedAgentProcessIdentifier = await connection.processIdentifier
                 var result: [String: Any]?
                 if let resumeThreadId, !resumeThreadId.isEmpty {
                     // Todo #28：续跑原 thread。接不回来（thread 没了 / server 报错）
@@ -184,6 +185,9 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// 必然在 `Process.run()` 之前问到，答案恒为 false。没有这个累积量，探针会把
     /// 「还没 fork 完」读成「起来后立刻退出」，每个 codex session 一拉起就被误报。
     private var everSawProcessAlive = false
+    /// daemon 的 registry 要记的那个 pid（前后端分离 §8.2）。握手成功那一拍缓存下来 ——
+    /// `connection` 是 actor，同步读不到，而 registry 的重建是同步的。
+    private(set) var cachedAgentProcessIdentifier: Int32 = 0
 
     private func startLaunchWatchdog() {
         bootStartedAt = Date()

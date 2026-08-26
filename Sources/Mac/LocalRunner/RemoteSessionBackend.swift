@@ -64,6 +64,14 @@ extension AgentTerminalSession: SessionProtocolTerminalControlling {
 }
 
 
+extension AgentTerminalSession: SessionProcessIdentifying {
+    var agentProcessIdentifier: Int32 { core.process?.shellPid ?? 0 }
+}
+
+extension PlainTerminalSession: SessionProcessIdentifying {
+    var agentProcessIdentifier: Int32 { core.process?.shellPid ?? 0 }
+}
+
 extension AgentTerminalSession: SessionProtocolScreenTextProviding {
     func screenText(maxLines: Int) -> String { core.screenText(maxLines: maxLines) }
 }
@@ -93,6 +101,10 @@ extension PlainTerminalSession: SessionProtocolScreenTextProviding {
 
 extension PlainTerminalSession: SessionProtocolTerminalSnapshotProviding {
     func protocolTerminalSnapshot() -> TerminalSnapshotEncoder.Snapshot? { core.snapshot() }
+}
+
+extension CodexAppServerBackend: SessionProcessIdentifying {
+    var agentProcessIdentifier: Int32 { cachedAgentProcessIdentifier }
 }
 
 extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
@@ -380,7 +392,10 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
 }
 
 @MainActor
-final class InProcessSessionProtocolBridge {
+final class InProcessSessionProtocolBridge: SessionProtocolPublishing {
+    /// 同进程：有窗口，照旧造门面 + mirror。
+    let isHeadless = false
+
     private let transport: InProcessTransport
     private let appLink: InProcessSessionLink
     private let daemonLink: InProcessSessionLink
@@ -400,10 +415,19 @@ final class InProcessSessionProtocolBridge {
         client.connect()
     }
 
-    func expose(sessionId: String, backend: any SessionBackend) -> RemoteSessionBackend {
+    func expose(sessionId: String, backend: any SessionBackend) -> RemoteSessionBackend? {
+        exposeAttached(sessionId: sessionId, backend: backend)
+    }
+
+    /// 同进程一定拿得到 viewer 侧后端 —— 协议里那个签名是 optional，只是为了让
+    /// daemon（没有 viewer）也能实现同一个接缝。调用方明知自己在同进程时用这个。
+    @discardableResult
+    func exposeAttached(sessionId: String, backend: any SessionBackend) -> RemoteSessionBackend {
         server.register(sessionId: sessionId, backend: backend)
         return client.attach(sessionId: sessionId, kind: backend.kind)
     }
+
+    func retire(sessionId: String) { server.unregister(sessionId: sessionId) }
 
     func publishTerminalBytes(sessionId: String, bytes: [UInt8]) {
         server.publishTerminalBytes(sessionId: sessionId, bytes: bytes)

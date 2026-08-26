@@ -23,11 +23,18 @@ final class SessionHost: ObservableObject {
 
     /// 两个依赖都收 `nil` 默认值而不是 `= CrewSessionRunner()` 这类默认实参：
     /// 默认实参在 **nonisolated** 上下文求值，而这两个类型都是 `@MainActor`。
+    /// `ownsAppUpdater` = 本进程是不是那个「更新 app」的进程。**daemon 传 false**：
+    /// 更新是窗口那一侧的事，而且碰 `AppUpdater.shared` 会把 Sparkle 拉起来 ——
+    /// 一个没有 `NSApplication` 的进程里不该有它。
     init(runner: CrewSessionRunner? = nil,
-         usage: LocalAgentUsageMonitor? = nil) {
+         usage: LocalAgentUsageMonitor? = nil,
+         ownsAppUpdater: Bool = true) {
         self.runner = runner ?? CrewSessionRunner()
         self.usage = usage ?? LocalAgentUsageMonitor()
+        self.ownsAppUpdater = ownsAppUpdater
     }
+
+    private let ownsAppUpdater: Bool
 
     /// 启动全部长期职责。**幂等** —— 重复调用是 no-op（SwiftUI 的 `.task` 会因
     /// 视图重挂而重跑，这在切 crew 时是常态）。
@@ -61,8 +68,10 @@ final class SessionHost: ObservableObject {
         usage.start()
         // 有 session 在跑就别自动更新（P4 之后这条会随 A1 一起去掉 —— 那时更新
         // app 本就不打断后台的 session）。
-        AppUpdater.shared.isBusy = { [weak runner] in
-            runner?.runs.contains { $0.status == .running } ?? false
+        if ownsAppUpdater {
+            AppUpdater.shared.isBusy = { [weak runner] in
+                runner?.runs.contains { $0.status == .running } ?? false
+            }
         }
 
         wire(crewStore: crewStore, model: model)
