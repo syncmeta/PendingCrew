@@ -554,3 +554,13 @@ extension LocalWhiteboardMention {
         self.init(kind: mention.kind, targetId: mention.targetId)
     }
 }
+
+/// 反方向的同一座桥（Todo #14 ①）：落盘的 mention → 纯逻辑层吃的 `CrewMention`。
+/// `McpServer` 的 `post_to_crew(reply_to:)` 要把调用方给的 mentions 喂进
+/// `CrewComposerMentionParser.mentionsToSend(staged:replyTo:)`，就得过这道桥。
+/// 同样别在调用点手写 —— 两个字段，漏一个就是静默降级。
+extension CrewMention {
+    init(_ mention: LocalWhiteboardMention) {
+        self.init(kind: mention.kind, targetId: mention.targetId)
+    }
+}
