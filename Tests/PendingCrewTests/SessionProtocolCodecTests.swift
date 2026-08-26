@@ -155,10 +155,17 @@ final class SessionProtocolCodecTests: XCTestCase {
             .snapshot(handle: 9, seq: 3, isLast: false, bytes: [0xde, 0xad]))
         // [u32 length][u8 kind][u32 handle][u32 seq][u8 flags][bytes]
         encoded[encoded.startIndex + 13] = 0x80
+        let transport = InProcessTransport()
+        var decoded: [SessionWireFrame] = []
+        transport.receiveFromDaemon = { data in
+            decoded = (try? SessionFrameDecoder.decodeAll(data)) ?? []
+        }
+        transport.sendFromDaemon(encoded)
 
-        XCTAssertEqual(try SessionFrameDecoder.decodeAll(encoded), [
+        XCTAssertEqual(decoded, [
             .snapshot(handle: 9, seq: 3, isLast: false, bytes: [0xde, 0xad]),
         ])
+        XCTAssertTrue(transport.isConnected, "未知保留位不得让连接断开")
     }
 
     // MARK: - hello 能力协商（不拿版本号当功能开关）
