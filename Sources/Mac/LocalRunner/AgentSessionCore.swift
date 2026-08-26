@@ -259,7 +259,81 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 拦掉了（见 `TerminalMirrorView.send(source:data:)` 上的注释），否则同一个
     /// 设备查询会被答两次。
     nonisolated func send(source: Terminal, data: ArraySlice<UInt8>) {
-        MainActor.assumeIsolated { self.process.send(data: data) }
+        MainActor.assumeIsolated { self.routeTerminalResponse(data) }
+    }
+
+    /// 终端往「主机」写字节时的分流。
+    ///
+    /// **默认原样送进子进程，拦截必须窄到只认自己问的那一条。** 这条路上跑的**不只是**
+    /// 我们拍快照时问出来的答复 —— agent 自己问的光标位置报告、设备属性、括号粘贴
+    /// 回应全从这儿走。多吞一条，agent 就会去等一个永远不来的回答，而那种坏法几乎
+    /// 查不出来（它不报错，只是不动了）。
+    ///
+    /// 所以判据是**精确匹配**：正在问 `?N` 的时候，只吞 `\u{1b}[?N;<d>$y` 这一种形状，
+    /// **连模式号不同的同类答复都放行**。宁可漏拿一个模式（快照少一个模式没人会死），
+    /// 也不许错吞一个字节。
+    ///
+    /// **这两个条件的顺序不许调换。** 这是热路径 —— 每一次按键、每一条程序化写入都
+    /// 过这里。`snapshotProbe` 是标志位，为 nil 时 Swift 直接短路，`isDecrpmAnswer`
+    /// 一次都不会被调用，**正常情况下这道分流的成本是零**。反过来写（每次都先扫一遍
+    /// 字节找 DECRQM 形状）就是往回走：#59 刚把这条路的单价从 253ms 打到 0.94ms，
+    /// 而前后端分离的一个顺带目标正是解掉那条结构债。
+    ///
+    /// 顺带一个结构上的好处：没有查询挂着的时候，那段判断根本不执行 —— 误吞在结构上
+    /// 就更不可能了，不是靠判据写得准。
+    private func routeTerminalResponse(_ data: ArraySlice<UInt8>) {
+        if let probe = snapshotProbe, Self.isDecrpmAnswer(data, forMode: probe.mode) {
+            snapshotProbe?.sink.append(contentsOf: data)
+            return
+        }
+        process.send(data: data)
+    }
+
+    /// `\u{1b}[?<mode>;<value>$y` —— DECRQM 的答复形状，**且模式号必须是问的那一个**。
+    static func isDecrpmAnswer(_ data: ArraySlice<UInt8>, forMode mode: Int) -> Bool {
+        let prefix = Array("\u{1b}[?\(mode);".utf8)
+        let suffix = Array("$y".utf8)
+        guard data.count >= prefix.count + suffix.count else { return false }
+        return data.starts(with: prefix) && data.suffix(suffix.count).elementsEqual(suffix)
+    }
+
+    // MARK: - 缓冲区快照（前后端分离 P3）
+
+    /// 正在问的那个模式，以及收到的答复。非 nil = 正在拍快照。
+    private var snapshotProbe: (mode: Int, sink: [UInt8])?
+
+    /// 「问一句、收一句」，一次只问一个模式。
+    ///
+    /// **不会挂住**：`Terminal.feed` 是同步的，答复在这一行之内就已经回来了或者没有 ——
+    /// 所以这里没有等待、也不需要超时。没答上来就返回空，调用方回落到默认值。
+    /// 快照发生在 attach 那一刻，窗口宁可少一个模式也不能连不上。
+    func probeTerminal(mode: Int, query: [UInt8]) -> [UInt8] {
+        snapshotProbe = (mode: mode, sink: [])
+        defer { snapshotProbe = nil }
+        // 直接喂 terminal，不走 handleDataReceived —— 这不是子进程的输出，
+        // 六个扫描器一个都不该看见它。
+        terminal.feed(byteArray: query)
+        return snapshotProbe?.sink ?? []
+    }
+
+    /// 把当前权威缓冲区拍成一段「能把干净终端喂成同一副样子」的字节。
+    ///
+    /// P4 之后这是 attach 的第一件事：窗口连上来先吃这一份，才轮到实时字节。
+    ///
+    /// 这里额外做的一件事是**把模式查询的问答闭环接上**。SwiftTerm 里 `cursorHidden`
+    /// 是 internal、`mouseProtocol` 是 private，`?25` 与 `?1006` 都没有公开读口 ——
+    /// 唯一的公开问法是 DECRQM，而答复从 delegate 的 `send` 出来、也就是从我们手里过。
+    /// **只有在这儿才拦得住它**，不然 agent 的输入框里会凭空多出一串 `\u{1b}[?25;2$y`。
+    ///
+    /// 鼠标上报的 `?1000/?1002/?1003` **不用问** —— `Terminal.mouseMode` 是公开的。
+    /// 查询面越小，错吞的风险越小。
+    func snapshot() -> TerminalSnapshotEncoder.Snapshot {
+        TerminalSnapshotEncoder.encode(terminal) { [weak self] query in
+            guard let self, let mode = TerminalSnapshotEncoder.decrqmMode(of: query) else {
+                return []
+            }
+            return self.probeTerminal(mode: mode, query: query)
+        }
     }
 
     // MARK: - PTY 输出旁路（六个扫描器）
