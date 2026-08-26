@@ -74,8 +74,8 @@ struct MacThreePaneView: View {
             await crewStore.refreshList()
             await crewStore.refreshSubjects()
             // 机器清单（侧栏按机器分组的数据源）由 `RootView.task` 的
-            // registerSelfMachine + refreshMachines 负责（它包着 MacThreePaneView，
-            // 首屏即跑）—— 这里不重复。
+            // refreshMachines 负责（它包着 MacThreePaneView，首屏即跑）——
+            // 这里不重复。
         }
     }
 }

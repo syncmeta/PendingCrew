@@ -103,7 +103,6 @@ struct RootView: View {
         }
         // 进入主界面时确保机器列表已就绪。macOS backend 恒本地（至少一台本机）。
         .task {
-            _ = await crewStore.registerSelfMachine()
             await crewStore.refreshMachines()
         }
     }

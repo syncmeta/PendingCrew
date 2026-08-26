@@ -361,10 +361,6 @@ targets:
       # Foundation 模型（CrewWhiteboardEntry / CrewMember / CrewAttachment 等），
       # 不含 PendingCrewAPI 类或 URLSession 依赖。
       - path: Sources/Services/CrewModels.swift
-      # CrewRealtimeClient.swift：crew 级 hub WS 客户端 + codec（纯 Foundation，
-      # 跨平台）。原在 Sources/Mac/LocalRunner（随整目录编进 bundle），移到
-      # Sources/Services 后需显式列出 —— CrewRealtimeClientTests 单测 codec。
-      - path: Sources/Services/CrewRealtimeClient.swift
       # Sources/Models/（CrewDetail / CrewSummary / UserSubject / DeviceLogin /
       # ModelCatalogEntry）：LocalRunner 传递引用了这些类型。
       - path: Sources/Models

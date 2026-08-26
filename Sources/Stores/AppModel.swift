@@ -15,10 +15,7 @@ import SwiftUI
 ///
 /// **接合 v2(spec 2026-06-10):双轨 backend 作废,本地为家**:
 /// - macOS 上 `backend` **恒为 `LocalBackend`** —— 本地 crew 永远在、永远显示。
-/// - 登录(`credential.kind == .deviceGrant`)只是账号级**能力叠加**
-///   (遥控 / 未来信箱 + 邀请),不再切换 crew 数据来源。能力判定用
-///   `isAuthenticated`,不要再用 `mode` 路由数据。
-/// - iOS 暂无本地后端(LocalRunner 是 macOS-only),仍走 EdgeBackend,
+/// - iOS 暂无本地后端(LocalRunner 是 macOS-only)→ `backend` 恒 nil,
 ///   等本地后端跨平台后统一。
 @MainActor
 final class AppModel: ObservableObject {
@@ -34,10 +31,7 @@ final class AppModel: ObservableObject {
 
     private let defaults: UserDefaults
 
-    /// 两条 backend 实例,启动时一次性构造。
-    /// 不在 each-call 时 new (避免 EdgeBackend 内每次重新解析 credential
-    /// 但 instance 不复用的浪费;LocalBackend.store 是 shared singleton)。
-    private lazy var edgeBackend: EdgeBackend = EdgeBackend(appModel: self)
+    /// 启动时一次性构造,不在 each-call 时 new(LocalBackend.store 是 shared singleton)。
     private lazy var localBackend: LocalBackend = LocalBackend(store: .shared, whiteboard: .shared)
 
     init(defaults: UserDefaults = .standard) {
@@ -50,16 +44,15 @@ final class AppModel: ObservableObject {
         self.credential = cred
     }
 
-    /// 当前生效的 backend(接合 v2:**不再按 mode 路由**)。
-    /// - macOS:恒为 `LocalBackend` —— 本地 crew 是常驻 home,登录只叠加能力。
-    /// - iOS:暂无本地后端(LocalRunner 是 macOS-only),登录态走 EdgeBackend,
-    ///   未登录返回 nil。#63 删掉登录入口后 iOS 上这里恒 nil(空壳),
-    ///   等本地后端跨平台后统一成恒本地。
+    /// 当前生效的 backend。
+    /// - macOS:恒为 `LocalBackend` —— 本地 crew 是常驻 home。
+    /// - iOS:**恒 nil**(空壳)。LocalRunner 是 macOS-only,而云端那条路随 #63
+    ///   第二期整层删除；等本地后端跨平台后统一成恒本地。
     var backend: PendingCrewBackend? {
         #if os(macOS)
         return localBackend
         #else
-        return credential != nil ? edgeBackend : nil
+        return nil
         #endif
     }
 
