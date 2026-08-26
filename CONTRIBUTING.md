@@ -15,9 +15,9 @@
 
 小修（打字错误、明显的空指针、文档笔误）直接发 PR，不用先问。
 
-## 三条硬规矩
+## 五条硬规矩
 
-这三条是被踩出来的，不是审美偏好。
+这五条是被踩出来的，不是审美偏好。
 
 ### 1. `project.yml` 是工程定义的唯一真值，改完必须重新生成并提交 `.pbxproj`
 
@@ -149,7 +149,39 @@ body 求值路径上**。要时间/末条，取 `CrewStore.lastWhiteboardMessage
 `LocalWhiteboardStore.shared` 的读不暴露给 View 层，守门的是类型系统）。
 在那之前，这条靠 review 看。
 
-### 4. 绕过约束的临时方案要留痕
+### 4. 目录参数化的 store，别在拿得到实例的地方去够 `.shared`
+
+`LocalWhiteboardStore` / `LocalTodoStore` / `LocalApprovalStore` /
+`LocalCrewControlStore` 都是**同一个形状**：既有 `init(directory:)`，又有一个
+`static let shared`（吃 `LocalWhiteboardStore.defaultDirectory`）。凡是**自己带着
+目录**的调用方 —— MCP helper（靠 `--dir` 定目录）、以及任何注入了 store 的单测 ——
+一律用手上那个实例，**不许去够 `.shared`**。
+
+踩了不会报错，只会读错账本。而且它的失败方式比「飘」更坏：
+
+- 生产上 `--dir` 恰好等于 `defaultDirectory`（`LocalSessionLaunch` 传的就是它），
+  所以**写错了生产上看不出来**；
+- 单测注入 temp 目录，`.shared` 会绕过 temp 去读**开发者本机真实的那本账**；
+- CI 是干净机器、那个文件根本不存在 → 恒定读出「没有」。所以**只要断言写的是
+  「没有」，CI 绿、大多数开发机也绿**：一个从来没读过 temp 目录的用例，会以一条
+  稳定的绿一直活着。**一个说得通的结果替代了一次真读**，这跟第 3 条治的是同一个病根。
+
+最耐久的防线不是记住哪个 store 吃哪个目录，是**让同一处的几行共用同一个来源**。
+`McpServer.blockerState` 就是范例：
+
+```swift
+agentTodoExists: { todos.item(crewId: crewId, number: $0) != nil },
+humanTodoExists: { humanTodos.item(crewId: crewId, number: $0) != nil })
+```
+
+两行视觉对称，谁也没法只改一行而不显眼。顺带：**正确的写法通常也是更短的写法**
+（`humanTodos` 已由 `sibling(.human)` 默认好，用它不需要任何额外构造）。
+
+例外只有一种：`startWatching()` / `directoryChanged` 这类**变更信号**（不是数据读）
+今天确实走 `.shared`，见 `LocalTodoStore.todoChanges` / `LocalApprovalStore`。
+最坏情况是收不到 tick、什么都不刷新 —— 看得见的失败，不是悄悄读错人。
+
+### 5. 绕过约束的临时方案要留痕
 
 如果你为了让 A 跑通而把代价转嫁给了 B（关掉某个校验、塞个 placeholder、双写、
 用 `#if` 整块屏蔽、只验最容易过的那条路径），**在 `docs/tech-debt.md` 里记一条**，
