@@ -347,3 +347,31 @@
 
 - **另有一条同类（别合并成一条）**: 上面那条 `CrewChatOpenCostTests` 的性能预算断言也在飘，
   但那是绝对毫秒预算对机器负载敏感，机制与还法都跟这条不同。
+
+### 🟢 `WorkdirMigrationPlan` 搬 transcript 那半已失去存在理由 —— 删除单独排期
+
+- **在哪**: `Sources/Mac/LocalRunner/WorkdirMigrationPlan.swift` 与 `WorkdirMigrationExecutor`
+  里所有与 claude 会话日志搬运相关的分支：`Action.moveClaudeTranscript` /
+  `moveClaudeTranscriptSidecar`、`Skip.transcriptSourceMissing` / `transcriptTargetExists` /
+  `sessionStillLive` / `codexSessionNeedsNoMove` / `unknownAgentKind`、
+  `Plan.claudeTranscriptMoveCount` / `affectedMembers` / `pendingSweepMembers` / `isSweep`，
+  以及**整个清扫模式**（`isSweep` + `sourceDirectory` 走 `previousWorkingDirectory` 那条分支）。
+- **为什么失去理由**: **不是因为我们后来记了工作目录**，而是因为 **claude 压根不按目录找会话**。
+  2026-08-26 实测（claude 2.1.246，Todo #68）：把 jsonl 挪到一个跟任何真实路径都对不上的
+  目录，再换第三个目录 `--resume <同一个 id>` **照样接上**；挪到 `~/.claude/projects` 树外
+  才报 `No conversation found with session ID: <id>`。官方 `--help` 划的是同一条界：
+  `--continue` 写明 *in the current directory*，`--resume` 一个字都没提目录。
+  **搬它零功能收益。** 完整查实见 `docs/internal/2026-08-26-session-resume-workdir-evaluation.md`。
+- **必须留，别一起删**: `copyClaudeProjectSettings`（`~/.claude.json` 的
+  `projects["<绝对路径>"]` 信任条目）、`copyCodexTrust`（`~/.codex/config.toml` 的
+  `trust_level`）、`copyClaudeMemoryFile`、`setCrewWorkingDirectory`。**这四样跟记不记
+  工作目录完全无关** —— 少了第一条，新目录下第一个 session 会**挂在**信任提示上
+  （不是弹个框就过去，是停住不动，而点名显示为「空闲」，见 `CrewSessionsSnapshot.state` 注释）。
+- **删了会漏掉什么（诚实的那一栏）**: 旧 slug 下会永久留一堆不再对应任何真实目录的文件夹
+  —— **整洁问题，不是正确性问题**，而且今天本来就有 62 个 worktree 的日志是这个状态
+  （其中 52 个 worktree 已被删除）。万一将来 claude 改成按目录找，这套又需要；但风险可观测：
+  新的降级路径会当场把 claude 的原话报进群里，不会静默失忆。
+  `sessionsBusy` 建议保留，但注释要改 —— 它从「保护正在写的文件」降级成一条常识判断。
+- **为什么没顺手删**: 这一版（Todo #68）改的是「续不上」的**病根**，属修复；删搬运是**清理**，
+  风险面不同。删要连带改两个测试文件约 31 处断言和执行层的回执渲染，**diff 会盖过修复本身**，
+  而且留着它不产生任何危害 —— 它只是白搬文件。**已在机长作战板 #12 单独排期。**
