@@ -20,6 +20,9 @@ protocol SessionMessageLink: AnyObject {
     /// socket 不支持）。同步 `screenText` 那条路只在 true 时成立，false 时调用方
     /// 必须降级 —— 见 `RemoteSessionBackend.screenText`。
     var isSynchronous: Bool { get }
+    /// 已经交给传输层、但还没真正写出去的字节数。daemon 侧据此判断这条链路是不是
+    /// 跟不上了（§5.4 的背压闸门读的就是它）。同进程直调恒为 0。
+    var pendingWriteBytes: Int { get }
     /// 发一条完整的 framed message。
     func send(_ framed: Data)
     /// 本端主动关闭。**不触发 `onClose`** —— 那是留给「对端走了 / 链路断了」的，
@@ -87,6 +90,8 @@ final class InProcessSessionLink: SessionMessageLink {
     var isOpen: Bool { transport.isConnected }
     /// 同进程直调 —— `screenText` 那条同步问答就是靠它成立的。
     let isSynchronous = true
+    /// 直调没有「交出去还没写完」这种状态。
+    let pendingWriteBytes = 0
 
     private let transport: InProcessTransport
     private let side: Side

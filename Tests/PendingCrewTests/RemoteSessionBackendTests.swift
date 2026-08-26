@@ -215,8 +215,10 @@ final class RemoteSessionBackendTests: XCTestCase {
     }
 }
 
+/// 协议两端共用的后端替身。`SessionProtocolOverSocketTests` 也用它 ——
+/// 所以它是 internal，不是 private。
 @MainActor
-private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
+final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
     SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling,
     SessionProtocolLaunchProblemProviding, SessionProtocolTerminalSnapshotProviding,
     SessionProtocolCodexHistoryProviding {
