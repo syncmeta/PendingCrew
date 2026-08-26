@@ -128,12 +128,16 @@ final class ViewWiringTests: XCTestCase {
     }
 
     /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。
+    ///
+    /// Todo #62 起改 / 删走 `LocalTodoStore.shared(ledger)` —— 详细窗口现在有两个
+    /// 药丸、看的是哪本账由 `ledger` 说了算。**必须带上 `(ledger)`**：写死
+    /// `.shared` 就是对着 `.agent` 那本改人类那本的条目（#N 在两本账里指两件事）。
     func testTodoDetailWindowHasEditDeleteFollowUp() throws {
         let detail = try Self.text(of: "CrewTodoDetailWindow.swift")
-        XCTAssertTrue(detail.contains("LocalTodoStore.shared.edit("),
-                      "Todo 详细窗口改不了条目正文")
-        XCTAssertTrue(detail.contains("LocalTodoStore.shared.delete("),
-                      "Todo 详细窗口删不掉条目")
+        XCTAssertTrue(detail.contains("LocalTodoStore.shared(ledger).edit("),
+                      "Todo 详细窗口改不了条目正文（或没跟着药丸走那本账）")
+        XCTAssertTrue(detail.contains("LocalTodoStore.shared(ledger).delete("),
+                      "Todo 详细窗口删不掉条目（或没跟着药丸走那本账）")
         XCTAssertTrue(detail.contains("CrewTodoFollowUp.perform"),
                       "Todo 详细窗口的追问没接发群+唤醒机长那条编排")
         // 「在详细的列表里面回复」= 就地输入，不弹新窗/新 sheet。

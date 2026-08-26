@@ -403,6 +403,10 @@ struct CrewTodoDetailView: View {
     /// 推动事情，所以走的是和重开同一条编排（`CrewTodoFollowUp`）。
     private func performFollowUp(_ item: LocalTodoItem) async {
         guard !busy else { return }
+        // 追问只对 `.agent` 那本成立（`CrewTodoFollowUp` 写死走那本账）。按钮本来
+        // 就只在那本上出现，这里再挡一道 —— 两本账的 #N 指两件事，走错本子会
+        // 张冠李戴地改另一条。
+        guard ledger == .agent else { return }
         busy = true
         defer { busy = false }
         let note = draft.trimmingCharacters(in: .whitespacesAndNewlines)
