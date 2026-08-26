@@ -142,14 +142,13 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
 
     // MARK: - 整体执行
 
-    /// 一条完整的成功路径：备份先落地 → 记忆复制（旧的还在）→ 会话移动（旧的没了）→
+    /// 一条完整的成功路径：备份先落地 → 信任/权限 → 记忆复制（旧的还在）→
     /// crew 字段最后改。
-    func testExecuteBacksUpThenCopiesMemoryAndMovesTranscripts() throws {
+    func testExecuteBacksUpThenCopiesMemoryAndTrust() throws {
         try write(claudeJSON, to: ".claude.json")
         try write(codexTOML, to: ".codex/config.toml")
         let oldProj = home.appendingPathComponent(".claude/projects/-old").path
         let newProj = home.appendingPathComponent(".claude/projects/-new").path
-        try write("session", to: ".claude/projects/-old/aaa.jsonl")
         try write("mem", to: ".claude/projects/-old/memory/MEMORY.md")
 
         var plan = WorkdirMigrationPlan.Plan()
@@ -160,8 +159,6 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
             .copyClaudeMemoryFile(relativePath: "MEMORY.md",
                                   from: oldProj + "/memory/MEMORY.md",
                                   to: newProj + "/memory/MEMORY.md"),
-            .moveClaudeTranscript(agentSessionId: "aaa", memberName: "小明",
-                                  from: oldProj + "/aaa.jsonl", to: newProj + "/aaa.jsonl"),
             .setCrewWorkingDirectory(crewId: "c1", title: "本群", from: "/old", to: "/new"),
         ]
         let backup = home.appendingPathComponent("backup", isDirectory: true)
@@ -178,10 +175,7 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: newProj + "/memory/MEMORY.md"))
         XCTAssertTrue(fm.fileExists(atPath: oldProj + "/memory/MEMORY.md"),
                       "记忆是共享的，只准复制")
-        XCTAssertTrue(fm.fileExists(atPath: newProj + "/aaa.jsonl"))
-        XCTAssertFalse(fm.fileExists(atPath: oldProj + "/aaa.jsonl"), "会话是移动")
         XCTAssertEqual(applied.map(\.0), ["c1"])
-        XCTAssertEqual(receipt.movedTranscripts, ["aaa"])
         XCTAssertEqual(receipt.copiedMemoryFiles, ["MEMORY.md"])
         XCTAssertTrue(receipt.codexTrustCopied)
     }
@@ -191,15 +185,15 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         try write(claudeJSON, to: ".claude.json")
         let oldProj = home.appendingPathComponent(".claude/projects/-old").path
         let newProj = home.appendingPathComponent(".claude/projects/-new").path
-        try write("session", to: ".claude/projects/-old/aaa.jsonl")
+        try write("mem", to: ".claude/projects/-old/memory/a.md")
 
         var plan = WorkdirMigrationPlan.Plan()
         plan.actions = [
-            .moveClaudeTranscript(agentSessionId: "aaa", memberName: "小明",
-                                  from: oldProj + "/aaa.jsonl", to: newProj + "/aaa.jsonl"),
-            // 源不存在 → moveItem 抛
-            .moveClaudeTranscript(agentSessionId: "bbb", memberName: "小红",
-                                  from: oldProj + "/bbb.jsonl", to: newProj + "/bbb.jsonl"),
+            .copyClaudeMemoryFile(relativePath: "a.md",
+                                  from: oldProj + "/memory/a.md", to: newProj + "/memory/a.md"),
+            // 源不存在 → copyItem 抛
+            .copyClaudeMemoryFile(relativePath: "b.md",
+                                  from: oldProj + "/memory/b.md", to: newProj + "/memory/b.md"),
             .setCrewWorkingDirectory(crewId: "c1", title: "本群", from: "/old", to: "/new"),
         ]
         var applied: [(String, String)] = []
@@ -207,8 +201,8 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
             plan: plan, home: home, backupDirectory: home.appendingPathComponent("backup"),
             applyCrewWorkingDirectory: { applied.append(($0, $1)) })
 
-        XCTAssertEqual(receipt.movedTranscripts, ["aaa"])
-        XCTAssertEqual(receipt.failure?.step, "搬「小红」的会话 bbb")
+        XCTAssertEqual(receipt.copiedMemoryFiles, ["a.md"])
+        XCTAssertEqual(receipt.failure?.step, "复制记忆文件 b.md")
         XCTAssertTrue(applied.isEmpty, "炸了就不许再改 crew 字段（crew 得还指着旧目录）")
         XCTAssertTrue(WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
             .contains("中途停了"))
@@ -279,6 +273,7 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         XCTAssertTrue(text.contains("还没动手"))
         XCTAssertTrue(text.contains("confirm"))
         XCTAssertTrue(text.contains("生效边界"))
+        XCTAssertFalse(text.contains("清扫"), "清扫模式已经删了，预览不该还提它：\(text)")
     }
 
     /// 有人在干活 → 预览要点名，并说明现在不能执行。
@@ -291,16 +286,6 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         XCTAssertTrue(text.contains("现在不能执行"))
     }
 
-    /// 清扫模式的预览要自报家门，别让人以为又要整迁一遍。
-    func testPreviewTextAnnouncesSweepMode() {
-        var plan = WorkdirMigrationPlan.Plan()
-        plan.isSweep = true
-        plan.actions = [.moveClaudeTranscript(agentSessionId: "aaa", memberName: "小明",
-                                              from: "/a", to: "/b")]
-        let text = WorkdirMigrationExecutor.previewText(plan, newWorkdir: "/new")
-        XCTAssertTrue(text.contains("清扫模式"))
-    }
-
     /// 无事可做时不能显示成「可以执行」。
     func testPreviewTextSaysNothingToDo() {
         let text = WorkdirMigrationExecutor.previewText(
@@ -310,41 +295,29 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
 
     // MARK: - 回执
 
-    /// 撞名跳过的必须出现在回执里 —— 不然人以为全搬过去了。
+    /// 撞名跳过的必须出现在回执里 —— 不然人以为记忆全复制过去了。
     func testReceiptTextSurfacesSkippedItems() {
         var receipt = WorkdirMigrationExecutor.Receipt(backupDirectory: "/b")
-        receipt.movedTranscripts = ["aaa"]
+        receipt.copiedMemoryFiles = ["b.md"]
         receipt.skips = [
-            .transcriptTargetExists(agentSessionId: "bbb", memberName: "小红", path: "/x"),
             .memoryTargetExists(relativePath: "a.md", path: "/y"),
-            .codexSessionNeedsNoMove(agentSessionId: "th", memberName: "codex 的"),
+            .crewAlreadyAtNewWorkdir(crewId: "c9", title: "已经在新目录的"),
         ]
         let text = WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
-        XCTAssertTrue(text.contains("小红"))
         XCTAssertTrue(text.contains("a.md"))
-        XCTAssertFalse(text.contains("codex 的"), "本来就不用搬的不进回执，别刷屏")
+        XCTAssertFalse(text.contains("已经在新目录的"), "本来就不用做的不进回执，别刷屏")
         XCTAssertTrue(text.contains("/b"), "备份位置要写清楚")
         XCTAssertTrue(text.contains("生效边界"), "别让人以为点完当场全员换了目录")
     }
 
-    /// 「留待清扫」的成员要点名，并告诉人怎么收尾（再调一次）。
-    func testReceiptTextExplainsPendingSweep() {
+    /// 回执里**不许再出现「留待清扫 / 再调一次」这类话** —— 会话日志不搬了，
+    /// 没有尾巴可补；留着那句话等于给机长一条指向虚空的指令（它照做，什么也不会发生）。
+    func testReceiptTextNeverPromisesASweep() {
         var receipt = WorkdirMigrationExecutor.Receipt(backupDirectory: "/b")
-        receipt.skips = [
-            .sessionStillLive(agentSessionId: "aaa", memberName: "机长"),
-            .sessionStillLive(agentSessionId: "bbb", memberName: "打杂的"),
-        ]
+        receipt.crewsUpdated = [.init(id: "c1", title: "本群")]
         let text = WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
-        XCTAssertTrue(text.contains("留待清扫"))
-        XCTAssertTrue(text.contains("机长"))
-        XCTAssertTrue(text.contains("打杂的"))
-        XCTAssertTrue(text.contains("再调一次"))
-    }
-
-    func testReceiptTextMarksSweepRun() {
-        var receipt = WorkdirMigrationExecutor.Receipt(backupDirectory: "/b")
-        receipt.isSweep = true
-        XCTAssertTrue(WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
-            .contains("清扫完成"))
+        for word in ["留待清扫", "再调一次", "清扫完成", "会话"] {
+            XCTAssertFalse(text.contains(word), "回执里不该再出现「\(word)」：\(text)")
+        }
     }
 }

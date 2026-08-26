@@ -13,8 +13,11 @@ import Foundation
 final class LocalAgentSessionStore: @unchecked Sendable {
     /// 一条会话号记录。`kind` 是 runner 名 —— 写进来的是
     /// `LocalCodingAgentKind.rawValue`（`claude_code` / `codex`），不是 `claude` ——
-    /// `WorkdirMigrationPlan` 按它决定「这条会话要不要搬」，所以它**不只是留痕**，
+    /// `latestCaptainRecord(crewId:kind:)` 按它**严格过滤**（crew 换过 runner 时，拿
+    /// codex 的 threadId 去喂 claude 的 `--resume` 是纯粹的错），所以它**不只是留痕**，
     /// 写入方别改成别的字面量。
+    /// （它原本还有第二个消费者 `WorkdirMigrationPlan`「这条会话要不要搬」——
+    /// 会话搬运于 2026-08-26 整段删除，那个消费者没了，这条约束仍然承重。）
     ///
     /// `updatedAt` = ISO8601 最近一次写入时刻。**Todo #68 之后它是承重数据**：机长
     /// 续跑要靠它在同 crew 的多条 `captain-*` 记录里挑最新的一条。所以比大小一律走

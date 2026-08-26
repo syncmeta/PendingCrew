@@ -7,24 +7,21 @@ import TOMLKit
 /// 三条纪律：
 /// 1. **先备份**：动 `~/.claude.json` / `~/.codex/config.toml` / `local-crews.json` 之前，
 ///    整份拷进一个带时间戳的备份目录。备份失败就一步都不走。
-/// 2. **顺序**：信任/权限 → 记忆（复制）→ 会话（移动）→ 最后才改 crew 字段。中途炸了
-///    crew 还指着旧目录，成员照旧接得回上下文。
+/// 2. **顺序**：信任/权限 → 记忆（复制）→ 最后才改 crew 字段。中途炸了
+///    crew 还指着旧目录，信任与记忆照旧在旧路径上齐着。
 /// 3. **不吞错**：任一步失败立刻停，回执里说清停在哪一步、之前已经做了什么。
 enum WorkdirMigrationExecutor {
 
     // MARK: - 回执
 
     struct Failure: Equatable {
-        /// 停在哪一步（人能看懂的短语，如「搬 claude 会话 <id>」）。
+        /// 停在哪一步（人能看懂的短语，如「复制记忆文件 MEMORY.md」）。
         var step: String
         var message: String
     }
 
     struct Receipt: Equatable {
         var backupDirectory: String = ""
-        /// 搬成功的 claude 会话号。
-        var movedTranscripts: [String] = []
-        var movedSidecars: [String] = []
         var copiedMemoryFiles: [String] = []
         var claudeSettingsKeysCopied: [String] = []
         var codexTrustCopied: Bool = false
@@ -33,8 +30,6 @@ enum WorkdirMigrationExecutor {
         /// 做了、但**没能确认落住**的事（如 claude.json 被别的进程覆盖）。
         /// 绝不当成功report —— 人得知道第一次进新目录可能还要手点一次信任框。
         var warnings: [String] = []
-        /// 这次是清扫（补搬上次留下的尾巴）而非首迁。
-        var isSweep: Bool = false
         /// 非 nil = 中途停了，上面那些是「已经做了的」。
         var failure: Failure?
 
@@ -136,8 +131,7 @@ enum WorkdirMigrationExecutor {
         fileManager fm: FileManager = .default,
         applyCrewWorkingDirectory: (String, String) throws -> Void
     ) -> Receipt {
-        var receipt = Receipt(backupDirectory: backupDirectory.path, skips: plan.skips,
-                              isSweep: plan.isSweep)
+        var receipt = Receipt(backupDirectory: backupDirectory.path, skips: plan.skips)
 
         guard plan.blockers.isEmpty else {
             receipt.failure = Failure(step: "预检",
@@ -184,18 +178,6 @@ enum WorkdirMigrationExecutor {
                     try fm.copyItem(atPath: from, toPath: to)
                     receipt.copiedMemoryFiles.append(rel)
 
-                case .moveClaudeTranscript(let id, _, let from, let to):
-                    try ensureParentDirectory(of: to, fileManager: fm)
-                    guard !fm.fileExists(atPath: to) else { break }
-                    try fm.moveItem(atPath: from, toPath: to)
-                    receipt.movedTranscripts.append(id)
-
-                case .moveClaudeTranscriptSidecar(let id, _, let from, let to):
-                    try ensureParentDirectory(of: to, fileManager: fm)
-                    guard !fm.fileExists(atPath: to) else { break }
-                    try fm.moveItem(atPath: from, toPath: to)
-                    receipt.movedSidecars.append(id)
-
                 case .setCrewWorkingDirectory(let crewId, let title, _, let to):
                     try applyCrewWorkingDirectory(crewId, to)
                     receipt.crewsUpdated.append(
@@ -215,9 +197,6 @@ enum WorkdirMigrationExecutor {
         case .copyClaudeProjectSettings: return "复制 claude 的目录信任/权限记录"
         case .copyCodexTrust: return "补 codex 的目录信任记录"
         case .copyClaudeMemoryFile(let rel, _, _): return "复制记忆文件 \(rel)"
-        case .moveClaudeTranscript(let id, let name, _, _): return "搬「\(name)」的会话 \(id)"
-        case .moveClaudeTranscriptSidecar(let id, let name, _, _):
-            return "搬「\(name)」会话 \(id) 的附属目录"
         case .setCrewWorkingDirectory(_, let title, _, _): return "改「\(title)」的工作目录"
         }
     }
@@ -351,15 +330,11 @@ enum WorkdirMigrationExecutor {
         var lines: [String] = []
         if let failure = r.failure {
             lines.append("**迁移工作目录：中途停了。** 停在「\(failure.step)」：\(failure.message)")
-        } else if r.isSweep {
-            lines.append("**清扫完成**（补搬上一轮留下的尾巴）。目录 `\(newWorkdir)`")
         } else {
             lines.append("**迁移工作目录：完成。** 新目录 `\(newWorkdir)`")
         }
         let crews = r.crewsUpdated.map { "「\($0.title)」" }.joined(separator: "、")
         lines.append("- 改了工作目录的 crew：\(r.crewsUpdated.isEmpty ? "无" : crews)")
-        lines.append("- claude 会话搬过去 \(r.movedTranscripts.count) 个"
-            + (r.movedSidecars.isEmpty ? "" : "（含 \(r.movedSidecars.count) 个附属目录）"))
         lines.append("- claude 项目记忆复制 \(r.copiedMemoryFiles.count) 个文件（旧目录原样留着，别的 crew 还在用）")
         lines.append("- claude 目录信任/权限："
             + (r.claudeSettingsKeysCopied.isEmpty
@@ -375,12 +350,6 @@ enum WorkdirMigrationExecutor {
         for w in r.warnings { lines.append("- ⚠️ " + w) }
         lines.append("- 备份在 `\(r.backupDirectory)`")
 
-        let sweep = pendingSweepMembers(r.skips)
-        if !sweep.isEmpty {
-            lines.append("- **留待清扫**：\(sweep.joined(separator: "、"))"
-                + " —— 它们此刻还活着、正在写自己的会话日志，现在搬会搬到半截。"
-                + "等它们停了**再调一次** `change_workdir`（同一个路径即可）就会把这批补搬过去。")
-        }
         if r.failure != nil {
             lines.append("上面列的是**已经做完**的部分。剩下的没做，crew 字段没改完的仍指着旧目录。")
         } else {
@@ -394,23 +363,12 @@ enum WorkdirMigrationExecutor {
         "**生效边界**：新目录只对**之后新起 / 重启**的 session 生效；此刻还在跑的（包括发起这次"
         + "迁移的机长自己）仍然工作在旧目录里，直到它重启为止。"
 
-    /// 「留待清扫」的成员名（去重，按出现顺序）。
-    static func pendingSweepMembers(_ skips: [WorkdirMigrationPlan.Skip]) -> [String] {
-        var seen = Set<String>()
-        return skips.compactMap { skip in
-            guard case .sessionStillLive(_, let name) = skip else { return nil }
-            return seen.insert(name).inserted ? name : nil
-        }
-    }
-
     // MARK: - 预览文案（dry-run，机长 `change_workdir` 不带 confirm 时返回这个）
 
     /// 把一份计划渲染成人/机长都能一眼看懂的预览。纯函数，可单测。
     static func previewText(_ plan: WorkdirMigrationPlan.Plan, newWorkdir: String) -> String {
         var lines: [String] = []
-        lines.append(plan.isSweep
-            ? "**预览（清扫模式）**：目录已经是 `\(newWorkdir)`，这次只补搬上一轮留下的尾巴。"
-            : "**预览（还没动手）**：把工作目录改成 `\(newWorkdir)`。")
+        lines.append("**预览（还没动手）**：把工作目录改成 `\(newWorkdir)`。")
 
         if !plan.blockers.isEmpty {
             lines.append("")
@@ -423,12 +381,8 @@ enum WorkdirMigrationExecutor {
         lines.append("- 改工作目录的 crew：" + (plan.crews.isEmpty
             ? "无（都已经在新目录上了）"
             : plan.crews.map { "「\($0.title)」" }.joined(separator: "、")))
-        lines.append("- 搬 claude 会话：\(plan.claudeTranscriptMoveCount) 个")
         lines.append("- 复制 claude 项目记忆：\(plan.memoryCopyCount) 个文件（旧目录原样留着，别的 crew 还在用）")
         lines.append("- 目录信任 / 工具权限：" + trustSummary(plan))
-        if !plan.affectedMembers.isEmpty {
-            lines.append("- 涉及的成员：" + plan.affectedMembers.joined(separator: "、"))
-        }
 
         let notable = plan.skips.compactMap(skipLine)
         if !notable.isEmpty {
@@ -440,7 +394,7 @@ enum WorkdirMigrationExecutor {
         lines.append("")
         if !plan.isExecutable {
             lines.append(plan.blockers.isEmpty
-                ? "**没有要做的动作** —— 已经是这个目录、也没有剩下要搬的东西了。"
+                ? "**没有要做的动作** —— 已经是这个目录，信任/权限/记忆也都齐了。"
                 : "**现在不能执行**，先把上面拦路的解决掉。")
         } else {
             lines.append("确认无误就再调一次，带上 `confirm: true`。")
@@ -482,27 +436,18 @@ enum WorkdirMigrationExecutor {
     /// 只把「人需要知道」的跳过项渲染出来；纯粹「本来就不用搬」的不进回执，免得刷屏。
     static func skipLine(_ skip: WorkdirMigrationPlan.Skip) -> String? {
         switch skip {
-        case .transcriptTargetExists(let id, let name, _):
-            return "「\(name)」的会话 \(id)：新目录下已有同名文件，跳过没覆盖"
-        case .transcriptSourceMissing(let id, let name, _):
-            return "「\(name)」的会话 \(id)：旧目录里已经找不到了（它重启会是新脑子）"
         case .memoryTargetExists(let rel, _):
             return "记忆 `\(rel)`：新目录下已有同名文件，跳过没覆盖，要合请自己合"
-        case .sessionStillLive(_, let name):
-            return "「\(name)」此刻还活着（正在写自己的会话日志），会话记录留待清扫"
         case .memoryDirectoryMissing:
             return "旧目录下没有项目记忆，没什么可复制的"
         case .claudeProjectSettingsSourceEmpty:
             return "claude 那边旧路径没有可搬的信任/权限记录 —— 新目录第一次开 session 可能要按一次信任框"
         case .codexTrustSourceMissing:
             return "codex 那边旧路径没有信任记录 —— 新目录第一次开 codex 可能要按一次信任框"
-        case .unknownAgentKind(let kind, let name):
-            return "「\(name)」记的是 \(kind) 会话，不认识这种 runner，没动"
         case .crewHasNoWorkingDirectory(_, let title):
             return "「\(title)」原本就没有工作目录，只是把新目录填上"
         case .claudeProjectSettingsAlreadyComplete,
              .codexTrustTargetExists,
-             .codexSessionNeedsNoMove,
              .crewAlreadyAtNewWorkdir:
             return nil
         }

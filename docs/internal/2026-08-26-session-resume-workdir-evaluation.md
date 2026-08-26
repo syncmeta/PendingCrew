@@ -216,6 +216,12 @@ Claude Code'll be able to read, edit, and execute files here.
 
 **评估完等人发话，本版一行存量代码没删。**
 
+> **后续（2026-08-26 · 机长作战板 #12）**：§3.2 那一栏已经照单删净，§3.1 那四样一个字
+> 没动。执行时发现本文漏点了一处：机长 `change_workdir` 的**工具描述**（以及钉它的第三个
+> 测试文件 `McpServerWorkdirToolTests`）也写着「留待清扫 / 幂等」——**漏的原因是这份评估
+> 按实现词 `transcript` 去 grep，而那几句里一个 `transcript` 都没有。这一刀的对外文案面
+> 比代码面散。** 已一并改口。账见 `docs/tech-debt.md` 里那条 ✅。
+
 ---
 
 ## 4. 本版实际改了什么

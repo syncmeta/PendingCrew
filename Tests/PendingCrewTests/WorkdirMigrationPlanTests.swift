@@ -17,20 +17,8 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     // MARK: - 造输入
 
     private func crew(_ id: String, _ title: String, dir: String? = nil,
-                      previous: String? = nil,
                       parents: [String] = []) -> WorkdirMigrationPlan.CrewInput {
-        .init(id: id, title: title, workingDirectory: dir,
-              previousWorkingDirectory: previous, parentCrewIds: parents)
-    }
-
-    /// `kind` 的默认值**故意写死字面量 `"claude_code"`** —— 账本里存的就是
-    /// `LocalCodingAgentKind.rawValue`。这里原本默认 `"claude"`，于是整套测试全绿、
-    /// 真迁移时一条会话都没搬（2026-08-19）。不要改成从 enum 取值：测试要钉的正是
-    /// 「磁盘上那个字符串」，从同一个 enum 取值会让 rawValue 被改名时测试跟着漂。
-    private func session(_ crewId: String, _ agentId: String, kind: String = "claude_code",
-                         name: String = "成员") -> WorkdirMigrationPlan.AgentSessionInput {
-        .init(crewId: crewId, sessionId: "local-" + agentId, kind: kind,
-              agentSessionId: agentId, memberName: name)
+        .init(id: id, title: title, workingDirectory: dir, parentCrewIds: parents)
     }
 
     /// 默认探针：新目录存在可写，其余一律「不存在」。用 `existing` 补上要有的路径。
@@ -63,14 +51,13 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     private func inputs(crews: [WorkdirMigrationPlan.CrewInput],
                         root: String = "c1",
                         selected: Set<String>? = nil,
-                        sessions: [WorkdirMigrationPlan.AgentSessionInput] = [],
                         running: [WorkdirMigrationPlan.RunningSessionInput] = [],
                         caller: String? = nil,
                         newWorkdir: String? = nil) -> WorkdirMigrationPlan.Inputs {
         .init(crews: crews, rootCrewId: root,
               selectedCrewIds: selected ?? Set(crews.map(\.id)),
               newWorkdir: newWorkdir ?? newDir,
-              agentSessions: sessions, runningSessions: running,
+              runningSessions: running,
               callerSessionId: caller, home: home)
     }
 
@@ -109,15 +96,14 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     }
 
     /// 尾部斜杠 / `~` 不该变成「另一个目录」—— slug 是从路径字面量算的，
-    /// 归一化没做对就会把上下文搬进一个谁也找不到的 slug。归一化后与当前目录相同 →
-    /// 不是拦路条件（那正是清扫模式），而是「这个 crew 已经在新目录上了」。
+    /// 归一化没做对就会把记忆/信任补进一个谁也找不到的 slug。归一化后与当前目录相同 →
+    /// 不是拦路条件，而是「这个 crew 已经在新目录上了」，安静地什么都不做。
     func testTrailingSlashNormalizesToSameDirectory() {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)], newWorkdir: oldDir + "/"),
             probe: .init(pathExists: { _ in true }, isDirectory: { _ in true },
                          isWritable: { _ in true }))
         XCTAssertTrue(p.blockers.isEmpty)
-        XCTAssertTrue(p.isSweep)
         XCTAssertTrue(p.skips.contains(.crewAlreadyAtNewWorkdir(crewId: "c1", title: "本群")))
         XCTAssertFalse(p.actions.contains {
             if case .setCrewWorkingDirectory = $0 { return true }
@@ -169,77 +155,19 @@ final class WorkdirMigrationPlanTests: XCTestCase {
         XCTAssertTrue(p.blockers.isEmpty)
     }
 
-    // MARK: - 活着的成员：会话留待清扫
+    // MARK: - 已经在新目录上
 
-    /// 成员还活着 → 它正往那份 `.jsonl` 里写，现在搬会搬到半截。不搬，记进「留待清扫」。
-    func testLiveMemberTranscriptIsHeldBackForSweep() {
+    /// 目录已经是目标 → 没有源目录可取，安静地什么都不做（**不再有清扫模式**：
+    /// 会话日志不搬了，也就没有「上一轮留下的尾巴」这回事；`previousWorkingDirectory`
+    /// 从此不参与规划）。别让人点一个什么都不干的按钮。
+    func testCrewAlreadyAtTargetYieldsNothing() {
         let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa", name: "还活着的")],
-                   running: [run("c1", "local-aaa", "还活着的", working: false)],
-                   caller: "captain"),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
-        XCTAssertTrue(p.skips.contains(.sessionStillLive(
-            agentSessionId: "aaa", memberName: "还活着的")))
-        XCTAssertEqual(p.pendingSweepMembers, ["还活着的"])
-        // 字段照改 —— 迁移本身不该被「有人活着」挡住。
-        XCTAssertTrue(p.actions.contains(.setCrewWorkingDirectory(
-            crewId: "c1", title: "本群", from: oldDir, to: newDir)))
-    }
-
-    /// **调用者自己的**会话同样不搬（机长正写着自己那份日志）。
-    func testCallerOwnTranscriptIsHeldBackToo() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "cap", name: "机长")],
-                   running: [run("c1", "local-cap", "机长", working: true)],
-                   caller: "local-cap"),
-            probe: probe(existing: [oldProjectDir + "/cap.jsonl"]))
-        XCTAssertTrue(p.blockers.isEmpty)
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
-        XCTAssertEqual(p.pendingSweepMembers, ["机长"])
-    }
-
-    // MARK: - 清扫模式（幂等：同一个路径再调一次）
-
-    /// 迁过之后再调一次：目录已经是新的，靠 `previousWorkingDirectory` 回旧目录
-    /// 把此时已经停下的成员的会话补搬过去 —— 而不是报「已经迁过了」什么都不做。
-    func testSweepModeMovesRemainingTranscriptsAfterMembersStopped() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: newDir, previous: oldDir)],
-                   sessions: [session("c1", "aaa", name: "已经停了的")]),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
-        XCTAssertTrue(p.isSweep)
-        XCTAssertTrue(p.blockers.isEmpty)
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
-        XCTAssertTrue(p.isExecutable)
-        // 字段已经是新的 → 不重复改。
-        XCTAssertTrue(p.skips.contains(.crewAlreadyAtNewWorkdir(crewId: "c1", title: "本群")))
-    }
-
-    /// 清扫模式下成员还活着 → 还是不搬，也不该编出动作来（可以一直重复调）。
-    func testSweepModeWithNothingLeftIsNotExecutable() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: newDir, previous: oldDir)],
-                   sessions: [session("c1", "aaa", name: "还活着的")],
-                   running: [run("c1", "local-aaa", "还活着的", working: false)],
-                   caller: "captain"),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"],
-                         claudeSourceExists: false, codexOld: nil))
-        XCTAssertTrue(p.isSweep)
-        XCTAssertFalse(p.isExecutable, "没有可做的动作时不该让人点执行")
-        XCTAssertEqual(p.pendingSweepMembers, ["还活着的"])
-    }
-
-    /// 没记过旧路径（从没迁过）+ 目录已经相同 → 找不到源，安静地什么都不做。
-    func testSameDirectoryWithoutPreviousYieldsNothing() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: newDir)],
-                   sessions: [session("c1", "aaa")]),
+            inputs(crews: [crew("c1", "本群", dir: newDir)]),
             probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
         XCTAssertTrue(p.blockers.isEmpty)
+        XCTAssertTrue(p.actions.isEmpty)
         XCTAssertFalse(p.isExecutable)
+        XCTAssertTrue(p.skips.contains(.crewAlreadyAtNewWorkdir(crewId: "c1", title: "本群")))
     }
 
     // MARK: - 目标解析（机长 `crew` 参数）
@@ -272,29 +200,10 @@ final class WorkdirMigrationPlanTests: XCTestCase {
         XCTAssertNil(WorkdirMigrationPlan.resolveTarget(hint: "同名", rootId: "c1", crews: crews))
     }
 
-    // MARK: - 共用目录：只搬自己那份
-    // MARK: - 共用目录：只搬自己那份
+    // MARK: - 共用目录：只复制不搬走
 
-    /// 旧目录是多个 crew 共用的。只有**被迁 crew 的成员**的会话号才准搬走 ——
-    /// 留守 crew 的会话必须原地不动，否则它们下次重启全变新脑子。
-    func testSharedProjectDirectoryOnlyMovesOwnTranscripts() {
-        let crews = [crew("c1", "要搬的", dir: oldDir), crew("c9", "留守的", dir: oldDir)]
-        let sessions = [
-            session("c1", "aaa", name: "我的成员"),
-            session("c9", "zzz", name: "别人的成员"),
-        ]
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: crews, selected: ["c1"], sessions: sessions),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl", oldProjectDir + "/zzz.jsonl"]))
-        let moves = p.actions.compactMap { action -> String? in
-            if case .moveClaudeTranscript(let id, _, _, _) = action { return id }
-            return nil
-        }
-        XCTAssertEqual(moves, ["aaa"])
-        XCTAssertEqual(p.affectedMembers, ["我的成员"])
-    }
-
-    /// 记忆是整个项目共享的 → 只能**复制**，旧的原样留着给留守 crew 用。
+    /// 记忆是整个项目共享的（旧目录是多个 crew 共用的）→ 只能**复制**，
+    /// 旧的原样留着给留守 crew 用。**规划层不许再产生任何「移动」类动作**。
     func testMemoryIsCopiedNotMoved() {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)]),
@@ -305,23 +214,9 @@ final class WorkdirMigrationPlanTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(copies, ["MEMORY.md", "a.md"])
-        XCTAssertFalse(p.actions.contains {
-            if case .moveClaudeTranscript = $0 { return true }
-            return false
-        })
     }
 
     // MARK: - 目标已存在：跳过不覆盖
-
-    func testExistingTargetTranscriptIsSkippedNotOverwritten() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa", name: "小明")]),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl", newProjectDir + "/aaa.jsonl"]))
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
-        XCTAssertTrue(p.skips.contains(.transcriptTargetExists(
-            agentSessionId: "aaa", memberName: "小明", path: newProjectDir + "/aaa.jsonl")))
-    }
 
     func testExistingTargetMemoryFileIsSkippedNotOverwritten() {
         let p = WorkdirMigrationPlan.make(
@@ -334,42 +229,17 @@ final class WorkdirMigrationPlanTests: XCTestCase {
             relativePath: "a.md", path: newProjectDir + "/memory/a.md")))
     }
 
-    /// 源没了（日志被清 / 更早搬过一次）→ 记账说清楚，别假装搬成功了。
-    func testMissingSourceTranscriptIsReported() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa", name: "小明")]),
-            probe: probe())
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
-        XCTAssertTrue(p.skips.contains(.transcriptSourceMissing(
-            agentSessionId: "aaa", memberName: "小明", path: oldProjectDir + "/aaa.jsonl")))
-    }
-
-    /// 旧目录不存在（整个项目目录都没了）→ 不该炸，也不该编出动作来。
+    /// 旧目录不存在（整个项目目录都没了）→ 不该炸，也不该编出文件动作来。
     func testMissingOldProjectDirectoryYieldsNoFileActions() {
         let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa")]),
+            inputs(crews: [crew("c1", "本群", dir: oldDir)]),
             probe: probe())
         XCTAssertTrue(p.blockers.isEmpty)
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
         XCTAssertEqual(p.memoryCopyCount, 0)
         XCTAssertTrue(p.skips.contains(.memoryDirectoryMissing(path: oldProjectDir + "/memory")))
         // 字段还是要改的 —— 目录没了不等于不搬家。
         XCTAssertTrue(p.actions.contains(.setCrewWorkingDirectory(
             crewId: "c1", title: "本群", from: oldDir, to: newDir)))
-    }
-
-    /// 会话日志旁边的同名子目录跟着一起走。
-    func testSidecarDirectoryMovesWithTranscript() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa", name: "小明")]),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"],
-                         directories: [oldProjectDir + "/aaa"]))
-        XCTAssertTrue(p.actions.contains(.moveClaudeTranscriptSidecar(
-            agentSessionId: "aaa", memberName: "小明",
-            from: oldProjectDir + "/aaa", to: newProjectDir + "/aaa")))
     }
 
     // MARK: - 子 crew 连带
@@ -392,14 +262,11 @@ final class WorkdirMigrationPlanTests: XCTestCase {
                        ["c1", "c2"])
     }
 
-    /// 勾上子 crew → 它们各自的字段一起改，各自的会话一起搬。
+    /// 勾上子 crew → 它们各自的字段一起改。
     func testSelectedChildCrewsMigrateToo() {
         let crews = [crew("c1", "根", dir: oldDir), crew("c2", "子", dir: oldDir, parents: ["c1"])]
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: crews, sessions: [session("c2", "bbb", name: "子群成员")]),
-            probe: probe(existing: [oldProjectDir + "/bbb.jsonl"]))
+        let p = WorkdirMigrationPlan.make(inputs(crews: crews), probe: probe())
         XCTAssertEqual(p.crews.map(\.id), ["c1", "c2"])
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
     }
 
     /// 没勾的子 crew 一个字段都不许动。
@@ -414,10 +281,8 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     /// crew 字段**最后**改：前面炸了 crew 还指着旧目录，成员照旧接得回上下文。
     func testCrewFieldUpdateComesLast() {
         let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa")]),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"],
-                         directories: [oldProjectDir + "/memory"],
+            inputs(crews: [crew("c1", "本群", dir: oldDir)]),
+            probe: probe(directories: [oldProjectDir + "/memory"],
                          memory: ["m.md"], claudeSource: ["hasTrustDialogAccepted"]))
         guard case .setCrewWorkingDirectory = p.actions.last else {
             return XCTFail("最后一个动作应该是改 crew 字段，实际是 \(String(describing: p.actions.last))")
@@ -466,42 +331,6 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     }
 
     // MARK: - codex
-
-    // MARK: - runner 名（2026-08-19 真迁移暴露的漏判）
-
-    /// 账本里 claude 那条腿存的是 `claude_code`。判定必须认它，否则整批会话被
-    /// 当成「不认识的 runner」跳过 —— 首次真迁移就是这样搬了 0 条。
-    func testClaudeCodeRunnerNameIsRecognized() {
-        XCTAssertEqual(LocalCodingAgentKind.claudeCode.rawValue, "claude_code",
-                       "账本写的是 rawValue；改了它就要同步 WorkdirMigrationPlan 的判定")
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa", kind: "claude_code", name: "成员")]),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
-        XCTAssertFalse(p.skips.contains(.unknownAgentKind(kind: "claude_code", memberName: "成员")),
-                       "claude_code 不该被当成不认识的 runner")
-    }
-
-    /// 旧账本里可能还留着 `claude`（写入方换成 rawValue 之前的行）——一并认，别漏搬。
-    func testLegacyClaudeRunnerNameStillRecognized() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "aaa", kind: "claude", name: "成员")]),
-            probe: probe(existing: [oldProjectDir + "/aaa.jsonl"]))
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 1)
-    }
-
-    /// codex 的会话按日期+threadId 存、resume 显式带新 cwd → 不用搬，但要在预览里说出来。
-    func testCodexSessionsAreNotMovedButReported() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)],
-                   sessions: [session("c1", "th_1", kind: "codex", name: "codex 成员")]),
-            probe: probe())
-        XCTAssertEqual(p.claudeTranscriptMoveCount, 0)
-        XCTAssertTrue(p.skips.contains(.codexSessionNeedsNoMove(
-            agentSessionId: "th_1", memberName: "codex 成员")))
-    }
 
     func testCodexTrustIsAddedForNewPath() {
         let p = WorkdirMigrationPlan.make(

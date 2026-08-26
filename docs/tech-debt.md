@@ -412,7 +412,7 @@
 - **另有一条同类（别合并成一条）**: 上面那条 `CrewChatOpenCostTests` 的性能预算断言也在飘，
   但那是绝对毫秒预算对机器负载敏感，机制与还法都跟这条不同。
 
-### 🟢 `WorkdirMigrationPlan` 搬 transcript 那半已失去存在理由 —— 删除单独排期
+### ✅ `WorkdirMigrationPlan` 搬 transcript 那半已失去存在理由（**已还，2026-08-26 · 机长作战板 #12**）
 
 - **在哪**: `Sources/Mac/LocalRunner/WorkdirMigrationPlan.swift` 与 `WorkdirMigrationExecutor`
   里所有与 claude 会话日志搬运相关的分支：`Action.moveClaudeTranscript` /
@@ -436,6 +436,24 @@
   （其中 52 个 worktree 已被删除）。万一将来 claude 改成按目录找，这套又需要；但风险可观测：
   新的降级路径会当场把 claude 的原话报进群里，不会静默失忆。
   `sessionsBusy` 建议保留，但注释要改 —— 它从「保护正在写的文件」降级成一条常识判断。
-- **为什么没顺手删**: 这一版（Todo #68）改的是「续不上」的**病根**，属修复；删搬运是**清理**，
-  风险面不同。删要连带改两个测试文件约 31 处断言和执行层的回执渲染，**diff 会盖过修复本身**，
-  而且留着它不产生任何危害 —— 它只是白搬文件。**已在机长作战板 #12 单独排期。**
+- **为什么当时没顺手删**: 那一版（Todo #68）改的是「续不上」的**病根**，属修复；删搬运是
+  **清理**，风险面不同，diff 会盖过修复本身。**所以单独排了机长作战板 #12。**
+- **已完成（2026-08-26）**: 照 §3.2 逐条删净 —— 两条 `Action`、五条 `Skip`、
+  `Plan` 的四个输出面、整个清扫模式（`sourceDirectory` 回落 `previousWorkingDirectory`
+  那支），连带 `Inputs.agentSessions` / `AgentSessionInput` 及其上游
+  （`WorkdirChangeCommand` 里那次 `LocalAgentSessionStore.list()` 与 `memberName`、
+  `LocalCrewStore` 的 `previousWorkingDirectory` 透传）、执行层两条动作与回执/预览渲染、
+  界面预览两行。**§3.1 那四样一个字没动。**
+- **两处只改语义不改行为**: `sessionsBusy` 保留、注释改了（它不再保护任何文件，
+  从硬约束降级成常识判断）；`LocalCrewStore.previousWorkingDirectory` **字段保留**
+  （持久化留痕，删它会把已写进 `local-crews.json` 的历史一次丢掉），注释写明
+  **当前无消费者**。
+- **评估漏了一处，删的时候才发现**: 机长 `change_workdir` 的**工具描述**里写着
+  「留待清扫 / 幂等 / 再调一次」，还有第三个测试文件 `McpServerWorkdirToolTests`
+  钉着那两个词。**漏的原因是评估按实现词（`transcript`）grep，而那几句里一个
+  `transcript` 都没有** —— 这一刀的**对外文案面比代码面散**。已改口为「一次做完、
+  没有第二趟」并把依据（`--resume` 按会话号找全盘）写进描述：**留旧文案比留死代码糟，
+  死代码不骗人，过期的工具描述会让机长照着再调一次、以为自己补上了什么。**
+  收尾时按语义（清扫/幂等/留待/再调一次）又扫了一遍，没有第四处。
+- **删了会漏掉什么，仍然照上面那栏算数** —— 旧 slug 下会留着一堆不再对应任何真实
+  目录的文件夹，是整洁问题不是正确性问题。

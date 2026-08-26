@@ -7,8 +7,8 @@ import AppKit
 ///
 /// 为什么要有它：crew 的工作目录此前只在建 crew 那一刻定下，仓库一搬家就只能去手改
 /// `local-crews.json` —— 而那份账 app 启动时读一次、之后整份覆写，运行中手改会被吞掉。
-/// 更要命的是 agent 侧上下文按路径分家（见 `WorkdirMigrationPlan` 的文件头），
-/// 光改字段等于把所有成员的记忆和会话丢在旧路径上。
+/// 更要命的是 agent 侧的目录信任/权限与项目记忆按路径分家（见 `WorkdirMigrationPlan`
+/// 的文件头），光改字段等于把它们丢在旧路径上 —— 新目录下第一个 session 会挂在信任提示上。
 ///
 /// 判定全在 `WorkdirMigrationPlan`（纯逻辑、可单测），落地在 `WorkdirMigrationExecutor`
 /// （先备份、fail-loud）。这一层只负责编排和展示。
@@ -140,12 +140,8 @@ struct ChangeWorkingDirectorySheet: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 4) {
                     row("要改工作目录的 crew", "\(plan.crews.count) 个")
-                    row("claude 会话搬过去", "\(plan.claudeTranscriptMoveCount) 个")
                     row("claude 项目记忆复制", "\(plan.memoryCopyCount) 个文件（旧目录原样留着）")
                     row("目录信任 / 工具权限", WorkdirMigrationExecutor.trustSummary(plan))
-                    if !plan.affectedMembers.isEmpty {
-                        row("影响的成员", plan.affectedMembers.joined(separator: "、"))
-                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             } label: { Text("会做这些").font(.headline) }
 

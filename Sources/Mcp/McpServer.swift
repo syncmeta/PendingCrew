@@ -298,7 +298,7 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "change_workdir",
-                    "description": "（机长专用）改这个 crew 的工作目录，并把 agent 侧的上下文一起迁过去（claude 的会话记录与项目记忆、两家 agent 的「这个目录信任过 / 这些工具允许过」）。仓库搬家、目录改名时用它，别去手改文件。\n\n**不带 confirm 就是预览**：返回要搬什么、影响哪些成员、有什么拦路的，什么都不动。看过没问题再带 confirm:true 调一次才真执行。\n\n几件必须知道的事：\n· 新目录必须**已经存在**，不会替你创建。\n· 有**别的成员正在干活**会拒绝执行并点名；你自己（发起的机长）和空闲的成员都不拦路。\n· **还活着的成员，会话记录不会搬**（它正写着那份日志，搬会搬到半截）——这些成员会列在「留待清扫」里。等它们停了，**用同一个路径再调一次**，就会把剩下的补搬过去。这个工具可以反复调，幂等。\n· 新目录只对**之后新起/重启**的 session 生效；此刻在跑的（包括你自己）还在旧目录里，直到重启。\n· 动手前会把 ~/.claude.json、~/.codex/config.toml、crew 账本各备份一份。",
+                    "description": "（机长专用）改这个 crew 的工作目录，并把 agent 侧按路径分家的东西一起带过去（claude 的项目记忆、两家 agent 的「这个目录信任过 / 这些工具允许过」）。仓库搬家、目录改名时用它，别去手改文件。\n\n**不带 confirm 就是预览**：返回会做什么、有什么拦路的，什么都不动。看过没问题再带 confirm:true 调一次才真执行。\n\n几件必须知道的事：\n· **一次做完，没有第二趟** —— 不存在「等谁停了再补一趟」这回事。\n· **不用管 session 的会话记录**：`claude --resume <会话号>` 扫整个 ~/.claude/projects 树、只认会话号，**不按目录找**（`--continue` 才是按当前目录）。所以日志留在旧 slug 下照样续得上，我们不搬它。\n· 新目录必须**已经存在**，不会替你创建。\n· 有**别的成员正在干活**会拒绝执行并点名；你自己（发起的机长）和空闲的成员都不拦路。这条现在只是常识（别把目录从干活的人脚下抽走），不再保护任何文件。\n· 新目录只对**之后新起/重启**的 session 生效；此刻在跑的（包括你自己）还在旧目录里，直到重启。\n· 动手前会把 ~/.claude.json、~/.codex/config.toml、crew 账本各备份一份。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -690,8 +690,9 @@ final class McpServer {
             let cmdId = control.enqueueChangeWorkdir(
                 crewId: crewId, sessionId: sessionId, targetHint: targetHint,
                 path: newPath, includeChildren: includeChildren, confirm: confirm)
-            // 迁移可能要搬上百个文件 + 重试写 ~/.claude.json，默认 10 秒不够 —— 放宽 12 倍
-            // （按 `commandResponseMaxWaits` 成比例，单测把基数调小后不会被这条拖慢）。
+            // 迁移要复制整个项目记忆 + 重试写 ~/.claude.json（读—改—写，撞上别的 claude
+            // 进程会重试几轮），默认 10 秒不够 —— 放宽 12 倍（按 `commandResponseMaxWaits`
+            // 成比例，单测把基数调小后不会被这条拖慢）。
             return toolResult(id: id, text: awaitCommandResponse(
                 commandId: cmdId, maxWaits: commandResponseMaxWaits * 12,
                 timeoutHint: "注意：它**可能仍在执行**——迁移回执会照常发进群聊，去群里看那条，别当成没跑过。"))
@@ -1165,7 +1166,7 @@ final class McpServer {
     /// 超时 → 提示 app 可能没在跑（helper 是离线子进程，只有 app 活着才有人执行命令）。
     /// long-poll 一条命令的应答。`maxWaits` 默认 `commandResponseMaxWaits`（10 秒够
     /// inspect/nudge/stop 这类瞬时操作）；**真会干活一阵子的命令要显式放宽**
-    /// —— 比如 `change_workdir` 要搬上百个会话文件、复制记忆、还可能重试写
+    /// —— 比如 `change_workdir` 要复制整个项目记忆、还可能重试写
     /// `~/.claude.json`。超时那句必须留活口：命令**可能已经在执行**，别让机长以为没跑。
     func awaitCommandResponse(commandId: String, maxWaits: Int? = nil,
                               timeoutHint: String? = nil) -> String {

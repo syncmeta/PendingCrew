@@ -5,31 +5,34 @@ import Foundation
 ///
 /// 背景：crew 的 `workingDirectory` 此前只在建 crew 那一刻写死，仓库一搬家（本项目
 /// 2026-08-17 把 PendingCrew 从 PendingBot 的 monorepo 里拆出去）就没有任何入口能改。
-/// 更麻烦的是 agent 侧的上下文**按工作目录路径分家**：
+/// 而 agent 侧有三样东西**按工作目录路径分家**，光改字段等于把它们丢在旧路径上：
 ///
-/// - claude 的会话日志与项目记忆都在 `~/.claude/projects/<workdir slug>/`
-///   （见 `AgentSessionResume.projectSlug(forWorkdir:)`）。路径一改，
-///   `transcriptAvailable` 立刻为假 → 每个成员重启都是新脑子。
 /// - `~/.claude.json` 的 `projects["<绝对路径>"]` 记着「这个目录信任过 / 这些工具允许过」。
-///   新路径没有条目 → 新目录下第一个 session 撞信任弹框卡死。
+///   新路径没有条目 → 新目录下第一个 session **挂在**信任提示上（不是弹个框就过去，是
+///   进程起来了、不吐第一个字、也不报错，而点名显示为「空闲」，见
+///   `CrewSessionsSnapshot.state` 的注释）。这是这整套东西今天存在的头号理由。
 /// - `~/.codex/config.toml` 的 `[projects."<绝对路径>"] trust_level` 同理。
-/// - codex 的 rollout 文件按日期+threadId 存，**不**按路径分目录，且我们 `thread/resume`
-///   显式带新 `cwd` → 换路径不影响接回原 thread（2026-08-18 实测：A 目录起 thread、
-///   杀进程、B 目录 resume 同一 threadId，暗号照样答得出）。
+/// - claude 的项目记忆在 `~/.claude/projects/<workdir slug>/memory/`。旧工作目录是
+///   **多个 crew 共用**的（本机 16 个 crew 都指着同一个 dev 目录），所以只能**复制**
+///   不能搬 —— 搬走等于把留守 crew 的记忆偷走。
 ///
-/// 而旧工作目录是**多个 crew 共用**的（本机 16 个 crew 都指着同一个 dev 目录），所以
-/// 绝不能整目录 rename/move —— 只能按 `LocalAgentSessionStore` 里记着的、属于被迁 crew
-/// 的会话号精确挑文件搬；共享的 `memory/` 只能复制不能搬。
+/// **会话日志（`<会话号>.jsonl`）不在上面这张单子里，而且刻意不搬**：2026-08-26 实测
+/// （claude 2.1.246）`claude --resume <id>` **不按目录找会话**，它扫整个
+/// `~/.claude/projects` 树、只认文件名；把 jsonl 挪到一个跟任何真实路径都对不上的目录，
+/// 再换第三个目录 resume 照样接上。官方 `--help` 划的是同一条界：`--continue` 写明
+/// *in the current directory*，`--resume` 一个字都没提目录。**所以搬它零功能收益** ——
+/// 曾经那套搬运（含「活着的成员留待清扫、停了再调一次补搬」的整个幂等清扫模式）
+/// 已于 2026-08-26 整段删除。查实见
+/// `docs/internal/2026-08-26-session-resume-workdir-evaluation.md`。
+/// 代价只有一条、且是整洁问题不是正确性问题：旧 slug 下会留着一堆不再对应任何真实
+/// 目录的文件夹。
 ///
-/// **两条为「机长自己调」而立的规矩**（人面走界面时不成立，机长走 MCP 工具时必成立）：
+/// **一条为「机长自己调」而立的规矩**（人面走界面时不成立，机长走 MCP 工具时必成立）：
+/// **调用者自己不算拦路**。机长本身就是本 crew 里一个在跑的 session，若沿用
+/// 「有 session 在跑就拒绝」，它永远调不动这个工具。所以拦的只是**别人家还在
+/// 干活的 worker**；空闲的 worker 和调用者自己都不拦。
 ///
-/// 1. **调用者自己不算拦路**。机长本身就是本 crew 里一个在跑的 session，若沿用
-///    「有 session 在跑就拒绝」，它永远调不动这个工具。所以拦的只是**别人家还在
-///    干活的 worker**；空闲的 worker 和调用者自己都不拦。
-/// 2. **活着的成员，会话记录一律不搬**。claude 正往那个 `.jsonl` 里写，这时候搬走
-///    要么搬到半截、要么它接着写旧文件。这些成员标成「留待清扫」，等它们停了**再调
-///    一次**这个工具补搬 —— 所以规划必须**幂等/可重复**：路径已经是新的时候再调，
-///    要能靠 `previousWorkingDirectory` 找回旧目录、把剩下的尾巴收干净。
+/// 也因此这个工具**一次做完，没有第二趟** —— 不再有「等谁停了再调一次」这回事。
 ///
 /// 这一层**只算「要做哪些动作」**，不碰文件系统（存在性判定由调用方以闭包喂进来），
 /// 照 `AgentSessionResume` 的路子写，供单测直接跑。真正落地在
@@ -43,34 +46,15 @@ enum WorkdirMigrationPlan {
         let id: String
         let title: String
         let workingDirectory: String?
-        /// 上一次改工作目录之前的那个路径。**清扫模式的唯一线索** —— 迁完之后
-        /// `workingDirectory` 已经是新的，再调一次要靠它才知道剩下的会话该去哪儿找。
-        let previousWorkingDirectory: String?
         let parentCrewIds: [String]
 
         init(id: String, title: String, workingDirectory: String?,
-             previousWorkingDirectory: String? = nil, parentCrewIds: [String] = []) {
+             parentCrewIds: [String] = []) {
             self.id = id
             self.title = title
             self.workingDirectory = workingDirectory
-            self.previousWorkingDirectory = previousWorkingDirectory
             self.parentCrewIds = parentCrewIds
         }
-    }
-
-    /// 一条 agent 侧会话号（`LocalAgentSessionStore.Record` + 成员显示名）。
-    struct AgentSessionInput: Equatable {
-        let crewId: String
-        /// 本机 session id（成员身份）—— 也用来对上「这个成员此刻是不是还活着」。
-        let sessionId: String
-        /// runner 名 —— 账本里存的是 `LocalCodingAgentKind.rawValue`，即
-        /// **`claude_code`** / `codex`（旧账本可能是 `claude`，一并认）。
-        /// 别的当「不认识 → 不搬」。
-        let kind: String
-        /// agent 那侧的会话号：claude 的 session uuid / codex 的 threadId。
-        let agentSessionId: String
-        /// 成员显示名（预览里「会影响哪些成员」那一栏）。
-        let memberName: String
     }
 
     /// 一个还活着的 session。`isWorking` = 正在跑回合（区别于「存活但空闲」）。
@@ -78,7 +62,7 @@ enum WorkdirMigrationPlan {
         let crewId: String
         let sessionId: String
         let displayName: String
-        /// 正在干活 → 拦路（除非它就是调用者）。空闲 → 不拦，但会话记录仍不搬。
+        /// 正在干活 → 拦路（除非它就是调用者）。空闲 → 不拦。
         let isWorking: Bool
 
         init(crewId: String, sessionId: String, displayName: String, isWorking: Bool = false) {
@@ -105,21 +89,19 @@ enum WorkdirMigrationPlan {
         var selectedCrewIds: Set<String>
         /// 目标工作目录（用户选的 / 机长填的）。
         var newWorkdir: String
-        var agentSessions: [AgentSessionInput]
         var runningSessions: [RunningSessionInput]
         /// 谁在调（机长自己的 localSessionId）。它不算拦路；nil = 人面走界面。
         var callerSessionId: String?
         var home: URL
 
         init(crews: [CrewInput], rootCrewId: String, selectedCrewIds: Set<String>,
-             newWorkdir: String, agentSessions: [AgentSessionInput] = [],
+             newWorkdir: String,
              runningSessions: [RunningSessionInput] = [],
              callerSessionId: String? = nil, home: URL) {
             self.crews = crews
             self.rootCrewId = rootCrewId
             self.selectedCrewIds = selectedCrewIds
             self.newWorkdir = newWorkdir
-            self.agentSessions = agentSessions
             self.runningSessions = runningSessions
             self.callerSessionId = callerSessionId
             self.home = home
@@ -211,11 +193,16 @@ enum WorkdirMigrationPlan {
         case noCrewSelected
         /// 被迁 crew 里还有**别人**正在干活的 session —— 先停了再迁。
         /// 调用者自己不进这个列表（否则机长永远调不动），空闲的 worker 也不进。
+        ///
+        /// **这条以前有两层意思，现在只剩一层。** 原来它还兼着数据完整性
+        /// （别搬一份 claude 正在写的 `.jsonl`）；会话搬运删掉之后那半没有了，
+        /// 剩下的纯粹是常识：别把目录从正在干活的人脚下抽走。**它不再保护任何文件** ——
+        /// 从硬约束降级成一条判断，别照着以为绕过它会损坏什么。
         case sessionsBusy([RunningSessionInput])
     }
 
     /// 要做的动作，**按这个顺序执行**：先补新路径的信任/权限（补错了不损坏旧路径），
-    /// 再复制共享记忆，再搬会话文件，最后才改 crew 自己的字段 —— 这样中途炸了，
+    /// 再复制共享记忆，最后才改 crew 自己的字段 —— 这样中途炸了，
     /// crew 还指着旧目录，成员照旧能接回上下文。
     enum Action: Equatable {
         /// `~/.claude.json`：把旧路径 `projects` 条目里的**这几个键**补给新路径（旧的留着，
@@ -225,26 +212,12 @@ enum WorkdirMigrationPlan {
         case copyCodexTrust(fromPath: String, toPath: String, trustLevel: String)
         /// claude 项目记忆：整个项目共享，**复制不移动**（旧路径还有别的 crew 在用）。
         case copyClaudeMemoryFile(relativePath: String, from: String, to: String)
-        /// claude 会话日志 `<会话号>.jsonl` —— 精确挑，移动。
-        case moveClaudeTranscript(agentSessionId: String, memberName: String,
-                                 from: String, to: String)
-        /// 会话日志旁边的同名子目录（claude 放这个会话的附属文件）—— 一起移动。
-        case moveClaudeTranscriptSidecar(agentSessionId: String, memberName: String,
-                                        from: String, to: String)
         /// 改 crew 自己的 `workingDirectory`（内存 + 落盘，不要求重启 app）。
         case setCrewWorkingDirectory(crewId: String, title: String, from: String?, to: String)
     }
 
-    /// 没做的事 —— 每一条都要能对人说清楚（撞名跳过 / 源不存在 / 天生不用搬 / 留待清扫）。
+    /// 没做的事 —— 每一条都要能对人说清楚（撞名跳过 / 源不存在 / 本来就不用做）。
     enum Skip: Equatable {
-        case transcriptSourceMissing(agentSessionId: String, memberName: String, path: String)
-        case transcriptTargetExists(agentSessionId: String, memberName: String, path: String)
-        /// 这个成员**此刻还活着**，claude 正往它那份日志里写 —— 现在搬会搬到半截。
-        /// 等它停了再调一次这个工具补搬（本层幂等，专为这一步设计）。
-        case sessionStillLive(agentSessionId: String, memberName: String)
-        /// codex 的会话按日期+threadId 存，不按路径分家，且 resume 显式带新 cwd → 不用搬。
-        case codexSessionNeedsNoMove(agentSessionId: String, memberName: String)
-        case unknownAgentKind(kind: String, memberName: String)
         case memoryDirectoryMissing(path: String)
         case memoryTargetExists(relativePath: String, path: String)
         /// 旧路径压根没有条目、或那几个键都没实质值 → 没什么可搬的。
@@ -262,29 +235,14 @@ enum WorkdirMigrationPlan {
         var blockers: [Blocker] = []
         var actions: [Action] = []
         var skips: [Skip] = []
-        /// 会被影响的成员显示名（去重，按出现顺序）。
-        var affectedMembers: [String] = []
         /// 真正会改字段的 crew。
         var crews: [CrewRef] = []
-        /// 这次是**清扫**（目标路径已经生效，只补搬上次没搬完的尾巴），不是首迁。
-        var isSweep: Bool = false
 
         /// 能不能按「确认执行」。没有动作也算不能 —— 别让人点一个什么都不干的按钮。
         var isExecutable: Bool { blockers.isEmpty && !actions.isEmpty }
 
-        var claudeTranscriptMoveCount: Int {
-            actions.filter { if case .moveClaudeTranscript = $0 { return true }; return false }.count
-        }
         var memoryCopyCount: Int {
             actions.filter { if case .copyClaudeMemoryFile = $0 { return true }; return false }.count
-        }
-        /// 「留待清扫」的成员名（活着所以没搬）。
-        var pendingSweepMembers: [String] {
-            var seen = Set<String>()
-            return skips.compactMap { skip in
-                guard case .sessionStillLive(_, let name) = skip else { return nil }
-                return seen.insert(name).inserted ? name : nil
-            }
         }
     }
 
@@ -311,10 +269,6 @@ enum WorkdirMigrationPlan {
             plan.blockers.append(.rootCrewNotFound(inputs.rootCrewId))
             return plan
         }
-        // 「已经在新目录上了」不再是拦路条件 —— 那正是**清扫模式**：上一轮因为成员
-        // 还活着而留下的会话，等它们停了再调一次补搬。
-        plan.isSweep = root.workingDirectory.map(normalize) == newDir && !newDir.isEmpty
-
         // ── 2. 选中的 crew（root 恒在内，即使调用方没勾）。
         let selected = inputs.crews
             .filter { inputs.selectedCrewIds.contains($0.id) || $0.id == inputs.rootCrewId }
@@ -325,13 +279,13 @@ enum WorkdirMigrationPlan {
         let selectedIds = Set(selected.map(\.id))
 
         // ── 3. 拦路的只有「**别人**正在干活」。调用者自己（机长）不拦，空闲 worker 不拦。
-        let live = inputs.runningSessions.filter { selectedIds.contains($0.crewId) }
-        let busy = live.filter { $0.isWorking && $0.sessionId != inputs.callerSessionId }
+        let busy = inputs.runningSessions.filter {
+            selectedIds.contains($0.crewId) && $0.isWorking
+                && $0.sessionId != inputs.callerSessionId
+        }
         if !busy.isEmpty {
             plan.blockers.append(.sessionsBusy(busy))
         }
-        // 活着的（含调用者、含空闲 worker）都不搬会话 —— 它们正握着那份日志。
-        let liveSessionIds = Set(live.map(\.sessionId))
 
         let projects = inputs.home.appendingPathComponent(".claude/projects", isDirectory: true).path
         let rootSource = sourceDirectory(for: root, newDir: newDir)
@@ -380,63 +334,7 @@ enum WorkdirMigrationPlan {
             }
         }
 
-        // ── 7. claude 会话日志：只挑属于被迁 crew 的那些会话号，且成员此刻**不在跑**。
-        var seenMembers = Set<String>()
-        for record in inputs.agentSessions where selectedIds.contains(record.crewId) {
-            guard let crew = byId[record.crewId],
-                  let old = sourceDirectory(for: crew, newDir: newDir),
-                  !newDir.isEmpty else { continue }
-            if seenMembers.insert(record.memberName).inserted {
-                plan.affectedMembers.append(record.memberName)
-            }
-            switch record.kind.lowercased() {
-            case LocalCodingAgentKind.codex.rawValue:
-                plan.skips.append(.codexSessionNeedsNoMove(
-                    agentSessionId: record.agentSessionId, memberName: record.memberName))
-            // 账本里存的是 `LocalCodingAgentKind.rawValue`，claude 那条腿是
-            // **`claude_code`** —— 这里原本只认字面量 "claude"，于是每一条 claude
-            // 会话都掉进 default 被当成「不认识的 runner」跳过（2026-08-19 首次真迁移
-            // 时暴露：88 个成员、搬 0 条）。改成认 enum 的 rawValue，别再写字面量；
-            // "claude" 只作旧账本的向后兼容留着。
-            case LocalCodingAgentKind.claudeCode.rawValue, "claude":
-                guard !liveSessionIds.contains(record.sessionId) else {
-                    // 还活着 → 它正在写这份日志，现在搬会搬到半截。留待清扫。
-                    plan.skips.append(.sessionStillLive(
-                        agentSessionId: record.agentSessionId, memberName: record.memberName))
-                    continue
-                }
-                let fromDir = projects + "/" + projectSlug(forWorkdir: old)
-                let toDir = projects + "/" + projectSlug(forWorkdir: newDir)
-                let src = fromDir + "/" + record.agentSessionId + ".jsonl"
-                let dst = toDir + "/" + record.agentSessionId + ".jsonl"
-                if !probe.pathExists(src) {
-                    plan.skips.append(.transcriptSourceMissing(
-                        agentSessionId: record.agentSessionId,
-                        memberName: record.memberName, path: src))
-                } else if probe.pathExists(dst) {
-                    plan.skips.append(.transcriptTargetExists(
-                        agentSessionId: record.agentSessionId,
-                        memberName: record.memberName, path: dst))
-                } else {
-                    plan.actions.append(.moveClaudeTranscript(
-                        agentSessionId: record.agentSessionId,
-                        memberName: record.memberName, from: src, to: dst))
-                }
-                // 同名子目录（会话的附属文件）跟着走，判定与上面各自独立。
-                let sideSrc = fromDir + "/" + record.agentSessionId
-                let sideDst = toDir + "/" + record.agentSessionId
-                if probe.isDirectory(sideSrc), !probe.pathExists(sideDst) {
-                    plan.actions.append(.moveClaudeTranscriptSidecar(
-                        agentSessionId: record.agentSessionId,
-                        memberName: record.memberName, from: sideSrc, to: sideDst))
-                }
-            default:
-                plan.skips.append(.unknownAgentKind(
-                    kind: record.kind, memberName: record.memberName))
-            }
-        }
-
-        // ── 8. 最后才改 crew 自己的字段（前面炸了就还指着旧目录，上下文不丢）。
+        // ── 7. 最后才改 crew 自己的字段（前面炸了就还指着旧目录，信任/记忆不丢）。
         for crew in selected.sorted(by: { $0.id < $1.id }) {
             let old = crew.workingDirectory.map(normalize)
             if old == nil || old?.isEmpty == true {
@@ -455,17 +353,16 @@ enum WorkdirMigrationPlan {
         return plan
     }
 
-    /// 一个 crew 的会话该去**哪个目录**里找。
+    /// 信任 / 权限 / 记忆该从**哪个目录**取。就是这个 crew 当前的工作目录；
+    /// 已经在目标上（或压根没有目录）→ nil，没什么可取的，只改字段。
     ///
-    /// - 还没迁（当前目录 ≠ 目标）→ 当前目录。
-    /// - 已经迁过（当前目录 == 目标）→ 上一次的目录，也就是**清扫模式**。
-    /// - 两个都对不上 → nil（没什么可搬的，只改字段）。
+    /// **这里原本还有第二支**：当前目录 == 目标时回落 `previousWorkingDirectory`，
+    /// 那是为「补搬上一轮留下的会话」立的清扫模式。会话不搬了，那支一起删了 ——
+    /// 而它本来也够不着更早那次搬家（`previousWorkingDirectory` 只记一层）。
     static func sourceDirectory(for crew: CrewInput, newDir: String) -> String? {
-        if let current = crew.workingDirectory.map(normalize),
-           !current.isEmpty, current != newDir { return current }
-        if let prev = crew.previousWorkingDirectory.map(normalize),
-           !prev.isEmpty, prev != newDir { return prev }
-        return nil
+        guard let current = crew.workingDirectory.map(normalize),
+              !current.isEmpty, current != newDir else { return nil }
+        return current
     }
 
     // MARK: - 子树（勾选框 / 机长指定目标的数据源）
