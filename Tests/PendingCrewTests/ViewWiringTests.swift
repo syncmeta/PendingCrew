@@ -41,6 +41,8 @@ final class ViewWiringTests: XCTestCase {
          "群聊时间线没人筛，「只看 @ 我的消息」判定造好了但列表照旧全显（Todo #61 失效）"),
         ("showOnlyHumanMentions:", "CrewChatView.swift",
          "没有任何地方把筛选开关喂给群聊，toolbar 上那个钮点了不动（Todo #61 失效）"),
+        ("CrewMentionPickerLayout.maxHeight", "CrewMentionPickerLayout.swift",
+         "@ 候选浮层的限高算好了却没人扣上去，列表照旧顶穿窗口（Todo #69 失效）"),
     ]
 
     func testEveryUserFacingPieceIsActuallyWiredUp() throws {
@@ -90,8 +92,23 @@ final class ViewWiringTests: XCTestCase {
                       "中栏没把筛选开关喂给 CrewChatView")
         XCTAssertTrue(center.contains("ToolbarItem"),
                       "中栏 toolbar 没了，筛选钮无处可挂")
-        XCTAssertTrue(center.contains("onlyMentions.toggle()"),
+        XCTAssertTrue(center.contains("Toggle(isOn: $onlyMentions)"),
                       "toolbar 上没有能翻这个开关的钮，人点不到")
+        // Todo #69：人类指定的四个字，一个都不许润色。这条测试就是那四个字的守卫 ——
+        // 谁哪天觉得「只看@我」更顺口就改，这里当场红。
+        XCTAssertTrue(center.contains("Text(\"仅@你\")"),
+                      "筛选钮不是人类指定的文字药丸「仅@你」（Todo #69）")
+        XCTAssertFalse(center.contains("systemImage: \"at.circle\""),
+                      "筛选钮还是那个没有文字的图标 —— 人看不出它是干什么的（Todo #69）")
+        // 药丸要贴着群名（人类：「群聊页面的右上方（群名的右侧）」）。群名走
+        // navigationTitle、在标题栏前端，所以这一组里越靠前越贴着它 —— 钉死它是第一个。
+        if let pill = center.range(of: "Toggle(isOn: $onlyMentions)"),
+           let firstOther = center.range(of: "showingDetail = true") {
+            XCTAssertTrue(pill.lowerBound < firstOther.lowerBound,
+                          "「仅@你」药丸不是这组 toolbar 的第一个，没贴着群名（Todo #69）")
+        } else {
+            XCTFail("找不到药丸或第一个图标钮，测试本身失效了")
+        }
 
         let chat = try Self.text(of: "CrewChatView.swift")
         XCTAssertTrue(chat.contains("CrewMentionFilter.onlyHumanMentions"),
