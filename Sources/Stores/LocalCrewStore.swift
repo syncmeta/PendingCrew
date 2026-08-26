@@ -160,6 +160,27 @@ final class LocalCrewStore {
         persistToDisk()
     }
 
+    /// 人手动把 crew 从侧栏藏起来 / 取回来（侧栏行右键与「已隐藏的群」列表两个入口）。
+    ///
+    /// `hidden == true` 时盖上**当下**的时间戳（重复藏一个已经藏着的不刷新时间戳 ——
+    /// 那个时刻是未读的参照点之一，刷新它等于把已有的未读抹掉）；`false` 清空。
+    /// crew 不存在 / 值未变 → 忽略（幂等，同 `setAttention`）。
+    ///
+    /// **只改人类界面的可见性**：不动父子边、不停 session、不碰白板。藏了的 crew
+    /// 里的 session 照常干活。
+    func setManuallyHidden(_ id: String, hidden: Bool) {
+        guard var crew = crews[id] else { return }
+        if hidden {
+            guard crew.manuallyHiddenAt == nil else { return }
+            crew.manuallyHiddenAt = ISO8601DateFormatter().string(from: Date())
+        } else {
+            guard crew.manuallyHiddenAt != nil else { return }
+            crew.manuallyHiddenAt = nil
+        }
+        crews[id] = crew
+        persistToDisk()
+    }
+
     /// 新建本地 crew。返回包含自生成的 crewId + captainBotId(本地都用 UUID)。
     ///
     /// captain 当前只接 `systemGenerated(templateName:)` —— reuseBot 走的是
@@ -736,6 +757,21 @@ struct LocalCrew: Codable, Equatable {
     /// `7-3` 永远解析得出当初是谁。optional 同上（旧 JSON 回填）。
     var nextExtension: Int? = nil
 
+    /// **人手动**把这个 crew 从侧栏藏起来的时刻（ISO8601）。nil = 没藏。
+    ///
+    /// 字段名写死了「人手动藏的」而不是笼统的 `hidden`：将来若真加了「自动判定该藏
+    /// 谁」，两种语义挤在同一个布尔值里就再也分不开了 —— 而那时已经有存量数据，
+    /// 分不开就永远分不开。自动那条路当前**没做**（判据与实测见
+    /// `docs/internal/2026-08-26-crew-hide-manual.md`），这个名字是给它留的位置。
+    ///
+    /// 时间戳本身也有用：它是「藏了之后这个群有没有新动静」的参照点之一
+    /// （另一个是 crew 级 lastViewed，见 `CrewViewedStore`）。
+    ///
+    /// **只是人类界面的概念**，不是组织结构的改变 —— 藏了的 crew 里 session 照常
+    /// 干活、照常收发消息，`directory` / `contact` / 组织树一律不受影响。
+    /// optional → 旧 JSON 缺键向后兼容。
+    var manuallyHiddenAt: String? = nil
+
     /// memberwise init —— `createCrew` 等内部构造点用。父边默认空(新建 = 根)。
     init(
         id: String,
@@ -806,6 +842,7 @@ struct LocalCrew: Codable, Equatable {
         attentionReason = try c.decodeIfPresent(String.self, forKey: .attentionReason)
         crewNumber = try c.decodeIfPresent(Int.self, forKey: .crewNumber)
         nextExtension = try c.decodeIfPresent(Int.self, forKey: .nextExtension)
+        manuallyHiddenAt = try c.decodeIfPresent(String.self, forKey: .manuallyHiddenAt)
     }
 
     var summary: CrewSummary {
@@ -821,7 +858,8 @@ struct LocalCrew: Codable, Equatable {
             parentCrewIds: parentCrewIds,
             captainAgentKind: captainAgentKind,
             machineId: machineId,
-            attentionReason: attentionReason
+            attentionReason: attentionReason,
+            manuallyHiddenAt: manuallyHiddenAt
         )
     }
 

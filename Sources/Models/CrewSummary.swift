@@ -50,6 +50,13 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
     /// 提示）。**纯本地概念** —— `LocalCrewStore` 透传;edge 不下发 → 缺键兜 nil。
     let attentionReason: String?
 
+    /// **人手动**把这个 crew 从侧栏藏起来的时刻（ISO8601；nil = 没藏）。**纯本地
+    /// 概念** —— `LocalCrewStore` 透传;edge 不下发 → 缺键兜 nil。
+    ///
+    /// 名字里的「manually」不是修辞：它把「人自己藏的」和将来可能有的「自动判定该
+    /// 藏的」从第一天起就分成两件事（判定与消费全在 `CrewHiding`）。
+    let manuallyHiddenAt: String?
+
     /// memberwise init —— `LocalCrewStore.summary` 等本地构造点用。
     init(
         id: String,
@@ -64,7 +71,8 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
         rootCrewTitles: [String] = [],
         captainAgentKind: String? = nil,
         machineId: String? = nil,
-        attentionReason: String? = nil
+        attentionReason: String? = nil,
+        manuallyHiddenAt: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -79,6 +87,7 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
         self.captainAgentKind = captainAgentKind
         self.machineId = machineId
         self.attentionReason = attentionReason
+        self.manuallyHiddenAt = manuallyHiddenAt
     }
 
     /// 显式 decoder —— edge `GET /v1/crews` 不下发 `parentCrewIds` / `captainAgentKind`,缺键兜底。
@@ -99,6 +108,7 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
         captainAgentKind = try c.decodeIfPresent(String.self, forKey: .captainAgentKind)
         machineId = try c.decodeIfPresent(String.self, forKey: .machineId)
         attentionReason = try c.decodeIfPresent(String.self, forKey: .attentionReason)
+        manuallyHiddenAt = try c.decodeIfPresent(String.self, forKey: .manuallyHiddenAt)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -106,6 +116,7 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
         case captainBotId, status, createdAt, updatedAt, parentCrewIds
         case rootCrews
         case captainAgentKind, machineId, attentionReason
+        case manuallyHiddenAt
     }
 
     enum RuntimeLocation: String {
