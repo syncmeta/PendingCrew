@@ -307,32 +307,46 @@ enum CrewReplyTargetBuilder {
     /// - `senderName`: the display name (from `CrewSenderResolver`) — drives the
     ///   banner and the staged token label.
     ///
-    /// Mention routing by the entry's `senderKind`:
-    ///   * session → `.session(senderSessionId)` (route back to that run).
-    ///   * user/human → `{kind:"human", target_id: senderUserId}` (if known).
-    ///   * bot/captain/other → no auto-@ (bots aren't @-routable as a reply
-    ///     target in this path; reply still records `reply_to`).
+    /// Mention routing lives in `mention(senderKind:senderSessionId:senderUserId:)`
+    /// below — shared verbatim with the MCP `post_to_crew(reply_to:)` path.
     static func make(entry: CrewWhiteboardEntry, senderName: String) -> CrewReplyTarget {
-        let mention: CrewMention?
-        switch entry.senderKind {
-        case "session":
-            mention = entry.senderSessionId.map { CrewMention.session($0) }
-        case "captain":
-            // 机长 run 的发言（本地 senderKind "captain"）：回复即 @机长 —— 走
-            // .captain 让唤醒端解析到当前 captain run，比钉死发消息时的 sessionId
-            // 更稳（机长重启后 id 会换）。
-            mention = .captain
-        case "user", "human":
-            mention = entry.senderUserId.map { CrewMention(kind: "human", targetId: $0) }
-        default:
-            mention = nil
-        }
         return CrewReplyTarget(
-            mention: mention,
+            mention: mention(senderKind: entry.senderKind,
+                             senderSessionId: entry.senderSessionId,
+                             senderUserId: entry.senderUserId),
             replyToId: entry.id,
             quotedSender: senderName,
             quotedSnippet: snippet(entry.displayText)
         )
+    }
+
+    /// 「被回复的这条，@ 回去该点谁」的**唯一**一份判定 —— 上面 composer 那条路
+    /// 和 `McpServer` 的 `post_to_crew(reply_to:)`（Todo #14 ①）共用它。
+    ///
+    /// 分开成一个吃裸字段的函数，是因为两条路手上的类型不同：composer 拿的是
+    /// `CrewWhiteboardEntry`，helper 拿的是 `LocalWhiteboardMessage`。为了复用
+    /// 去造一个假的 entry，或者在 helper 里照抄一遍这个 switch，都会变成第二份
+    /// 判定 —— 而这三行 case 正是「回复谁会 @ 到谁」的全部语义，抄一份就是等着
+    /// 两边慢慢分叉。
+    ///
+    /// - Returns: nil = 这个发送者转不成 @ 目标（bot / 未知 kind / 缺 id）。
+    ///   回复仍然记 `reply_to`，只是不自动 @ —— **宁可不 @，也不 @ 错人**。
+    static func mention(
+        senderKind: String, senderSessionId: String?, senderUserId: String?
+    ) -> CrewMention? {
+        switch senderKind {
+        case "session":
+            return senderSessionId.map { CrewMention.session($0) }
+        case "captain":
+            // 机长 run 的发言（本地 senderKind "captain"）：回复即 @机长 —— 走
+            // .captain 让唤醒端解析到当前 captain run，比钉死发消息时的 sessionId
+            // 更稳（机长重启后 id 会换）。
+            return .captain
+        case "user", "human":
+            return senderUserId.map { CrewMention(kind: "human", targetId: $0) }
+        default:
+            return nil
+        }
     }
 
     /// Single-line, length-capped snippet for the reply banner.

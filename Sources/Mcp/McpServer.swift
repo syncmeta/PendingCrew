@@ -89,7 +89,7 @@ final class McpServer {
             var tools: [[String: Any]] = [
                 [
                     "name": "post_to_crew",
-                    "description": "把关键节点发到 crew 群聊白板（只发要紧的：开始/完成/卡住/交接/重要发现，别倒 IO 日志）。可带 mentions 定向 @ 某个 session/captain/人类，或 reply_to 回复某条（自动 @ 原发送者）。",
+                    "description": "把关键节点发到 crew 群聊白板（只发要紧的：开始/完成/卡住/交接/重要发现，别倒 IO 日志）。可带 mentions 定向 @ 某个 session/captain/人类，或 reply_to 回复某条（自动 @ 原发送者 —— 是「广播 + 叫醒他」，不是私信他）。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -109,7 +109,7 @@ final class McpServer {
                             ],
                             "reply_to": [
                                 "type": "string",
-                                "description": "可选：你在回复哪条群聊消息的 id —— 给了会自动 @ 那条的原发送者。",
+                                "description": "可选：你在回复哪条群聊消息的 id —— 给了会自动 @ 那条的原发送者。**这个自动 @ 不收窄可见范围**：落盘的形状是 `[{kind:\"broadcast\"},{被回复者}]` —— 全组照样看得见全文，只是把被回复的那个现在叫醒。你自己在 mentions 里手打了定向 @（session/captain）时按你选的排他来，不替你放宽。",
                             ],
                         ],
                         "required": ["message"],
@@ -467,8 +467,13 @@ final class McpServer {
             // Phase 7：解析定向 @ + reply_to,记进本地白板（不静默吞）。本地这步只
             // 负责把信息留住；按 mention 唤醒目标 session 由 app 侧的本地直投
             // （CrewLocalMentionWaker / CrewLocalMentionDelivery）接。
-            let mentions = parseMentions(args["mentions"])
+            let given = parseMentions(args["mentions"])
             let replyTo = (args["reply_to"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // Todo #14 ①：`reply_to` 此前**只**进了下面的 `inReplyTo:` —— 而工具
+            // 描述和世界观模板都写着「给了会自动 @ 原发送者」。危害是静默的：
+            // agent 以为自己点名了，一个 mention 都没长出来，回执照样回「已发到」，
+            // 然后它安心等一个永远不会醒的人。
+            let mentions = mentionsWithReplyAutoMention(given, replyTo: replyTo)
             // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
             // 当头像种子（成员列表与气泡同一张脸），并点亮星标。
             //
@@ -1206,6 +1211,40 @@ final class McpServer {
             return LocalWhiteboardMention(kind: kind, targetId: target)
         }
         return parsed.isEmpty ? nil : parsed
+    }
+
+    /// `post_to_crew(reply_to:)` 的自动 @（Todo #14 ①）：把「被回复那条的发送者」
+    /// 并进要落盘的 mentions。`replyTo` 为 nil / 指向一条找不到的消息 / 发送者转不成
+    /// @ 目标 → 原样返回，**不编一个 @ 出来**。
+    ///
+    /// 两件事都**不在这里判**，一个字都没抄：
+    ///   * 「回复谁 @ 谁」→ `CrewReplyTargetBuilder.mention(senderKind:…)`；
+    ///   * 「合出来是什么形状」→ `CrewComposerMentionParser.mentionsToSend(staged:replyTo:)`，
+    ///     人类 composer 走的是同一个函数。它带着两道守卫（调用方已手打定向 @ 时
+    ///     不放宽 / 已显式给了 `broadcast` 时不再叠），在这条路上照样要成立 ——
+    ///     所以只能复用，不能在这儿另写一份判定。
+    ///
+    /// 结果形状是 **`[broadcast, 被回复者]`**，不是裸 `session(X)`：裸 session 会
+    /// **收窄可见范围**，让每一条回复悄悄变私信（理由见那个纯函数上的注释）。
+    /// 全组照样看得见，只是把被回复的那个叫醒。
+    ///
+    /// 这里现读一次白板全量。`list` 是 flock + 整份解码，但这是 helper 子进程、
+    /// 不是 SwiftUI 的 body 路径（第 3 条红线判的是后者），而且只在真给了
+    /// `reply_to` 时才读。
+    private func mentionsWithReplyAutoMention(
+        _ given: [LocalWhiteboardMention]?, replyTo: String?
+    ) -> [LocalWhiteboardMention]? {
+        guard let replyTo,
+              let target = store.list(crewId: crewId).first(where: { $0.id == replyTo }),
+              let replied = CrewReplyTargetBuilder.mention(
+                senderKind: target.senderKind,
+                senderSessionId: target.senderSessionId,
+                senderUserId: target.senderUserId)
+        else { return given }
+
+        let staged = (given ?? []).map { CrewStagedMention(token: "", mention: CrewMention($0)) }
+        let sent = CrewComposerMentionParser.mentionsToSend(staged: staged, replyTo: replied)
+        return sent.isEmpty ? nil : sent.map(LocalWhiteboardMention.init)
     }
 
     private func renderRow(_ m: LocalWhiteboardMessage) -> String {

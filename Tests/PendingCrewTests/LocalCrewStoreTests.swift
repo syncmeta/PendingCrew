@@ -61,6 +61,62 @@ final class LocalCrewStoreTests: XCTestCase {
         XCTAssertNil(s.getCrew("local-does-not-exist"))
     }
 
+    func testSetCaptainAgentKindPersistsAcrossInstances() {
+        let dir = tempDir()
+        let s = LocalCrewStore(baseDirectory: dir)
+        let id = s.createCrew(req(title: "交接测试")).crewId
+        s.setCaptainAgentKind(id, LocalCodingAgentKind.claudeCode.rawValue)
+        XCTAssertEqual(
+            LocalCrewStore(baseDirectory: dir).getCrew(id)?.crew.captainAgentKind,
+            LocalCodingAgentKind.claudeCode.rawValue)
+    }
+
+    func testSetCaptainAgentKindRejectsTerminalAndUnknownValues() {
+        let s = LocalCrewStore(baseDirectory: tempDir())
+        let id = s.createCrew(req(title: "交接测试")).crewId
+        s.setCaptainAgentKind(id, LocalCodingAgentKind.terminal.rawValue)
+        s.setCaptainAgentKind(id, "not-an-agent")
+        XCTAssertEqual(s.getCrew(id)?.crew.captainAgentKind, LocalCodingAgentKind.codex.rawValue)
+    }
+
+    func testCaptainReassignmentRequestReplacesPerCrewAndCompletesById() throws {
+        let dir = tempDir()
+        let store = LocalCaptainReassignmentStore(directory: dir)
+        let first = try store.request(
+            crewId: "crew-a", sourceSessionId: "s1", sourceDisplayName: "旧候选",
+            agentKind: "claude_code", now: Date(timeIntervalSince1970: 1))
+        let second = try store.request(
+            crewId: "crew-a", sourceSessionId: "s2", sourceDisplayName: "新候选",
+            agentKind: "codex", now: Date(timeIntervalSince1970: 2))
+        let other = try store.request(
+            crewId: "crew-b", sourceSessionId: "s3", sourceDisplayName: "别组候选",
+            agentKind: "codex", now: Date(timeIntervalSince1970: 3))
+
+        XCTAssertEqual(Set(store.pending().map(\.id)), Set([second.id, other.id]))
+        store.complete(first.id)
+        XCTAssertEqual(store.pending().count, 2, "旧 request id 不能误删覆盖它的新选择")
+        store.complete(second.id)
+        XCTAssertEqual(store.pending(), [other])
+        XCTAssertEqual(LocalCaptainReassignmentStore(directory: dir).pending(), [other],
+                       "交接意图必须跨 app/store 重建保留")
+    }
+
+    func testCaptainReassignmentRefusesToStopSessionWhenIntentCannotPersist() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("captain-reassignments.json"),
+            withIntermediateDirectories: true)
+        let store = LocalCaptainReassignmentStore(directory: dir)
+
+        XCTAssertThrowsError(try store.request(
+            crewId: "crew-a", sourceSessionId: "s1", sourceDisplayName: "候选",
+            agentKind: "codex")) { error in
+                XCTAssertEqual(
+                    error.localizedDescription,
+                    LocalCaptainReassignmentStoreError.persistenceFailed.localizedDescription)
+            }
+    }
+
     func testTitleSourceInferenceIsPureAndExact() {
         let pool: Set<String> = ["Lisbon", "Tokyo"]
         XCTAssertEqual(LocalCrewTitleSource.inferLegacy(title: "Lisbon", placeNames: pool), .placeholder)

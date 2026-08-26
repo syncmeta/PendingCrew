@@ -27,6 +27,9 @@ struct CrewSessionWindowView: View {
     @State private var draft = ""
     @State private var starting = false
     @State private var localError: String?
+    /// 成员行右键「设为机长」的待确认目标。确认后不是原地翻角色，而是续接同一
+    /// agent conversation 以 captain 世界观/工具权限重新挂起。
+    @State private var pendingCaptainRun: CrewSessionRun?
     /// composer 里给「新 worker session」选的 agent kind。初值从 crew 的
     /// `captainAgentKind` 派生（见 `.onAppear` / `.onChange`），crew 没记 → `.codex`。
     @State private var selectedKind: LocalCodingAgentKind = .codex
@@ -73,6 +76,22 @@ struct CrewSessionWindowView: View {
         .onAppear { selectedKind = Self.resolveAgentKind(crewStore.selectedDetail) }
         .onChange(of: crewStore.selectedDetail?.crew.id) { _, _ in
             selectedKind = Self.resolveAgentKind(crewStore.selectedDetail)
+        }
+        .confirmationDialog(
+            pendingCaptainRun.map { "把「\($0.displayName)」设为机长？" } ?? "重新指定机长？",
+            isPresented: Binding(
+                get: { pendingCaptainRun != nil },
+                set: { if !$0 { pendingCaptainRun = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingCaptainRun
+        ) { run in
+            Button("重新指定机长", role: .destructive) {
+                pendingCaptainRun = nil
+                Task { await reassignCaptain(to: run) }
+            }
+            Button("取消", role: .cancel) { pendingCaptainRun = nil }
+        } message: { run in
+            Text("当前机长会停止；这个 \(run.kind.displayName) session 会续接原 conversation，并以机长权限重新启动。")
         }
     }
 
@@ -357,6 +376,11 @@ struct CrewSessionWindowView: View {
             }
             .buttonStyle(.plain)
             .help("打开这个 session 的终端")
+            .contextMenu {
+                if run.role == .worker && run.kind.isAgent {
+                    Button("设为机长") { pendingCaptainRun = run }
+                }
+            }
         } else if item.sender.isCaptain {
             // captain 没在跑:点头像即进入它的 session —— 没在跑就当场起一个再进。
             // 用户定调:不要常驻/自动起,只要「点头像就进 session」;这条是纯点击触发,
@@ -849,6 +873,23 @@ struct CrewSessionWindowView: View {
         } catch {
             sessionRunner.reportStartFailure(
                 crewId: detail.crew.id, brief: nil, error: error, mentionCaptain: false)
+        }
+    }
+
+    /// 人从 crew 成员行明确选择的新机长。runner 负责持久化意图、审计、停止旧角色
+    /// 与续接 conversation；view 只提供忙态/错误反馈并刷新 detail 里的默认 runner。
+    private func reassignCaptain(to run: CrewSessionRun) async {
+        guard let detail = crewStore.selectedDetail else { return }
+        starting = true
+        defer { starting = false }
+        sessionRunner.lastStartError = nil
+        do {
+            try await sessionRunner.reassignCaptain(
+                to: run, detail: detail, backend: appModel.backend)
+            await crewStore.refreshDetail(detail.crew.id)
+            sessionRunner.viewingTerminal = true
+        } catch {
+            sessionRunner.lastStartError = "重新指定机长失败：\(error.localizedDescription)"
         }
     }
 

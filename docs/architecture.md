@@ -51,7 +51,8 @@ PendingCrew 是一个 **macOS app（同时能编出 iOS/iPad 产物）**，它�
 工程用 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 生成。
 `PendingCrew.xcodeproj/project.pbxproj` 被 git 跟踪，但**它是生成物**——跟踪它只是为了
 让没装 XcodeGen 的人也能直接开工程。改了 `project.yml`（**包括新增 Swift 文件**）要重跑
-`xcodegen` 并提交 `.pbxproj`，否则别人 clone 下来编不过（`CONTRIBUTING.md:22-33`）。
+`xcodegen` 并提交 `.pbxproj`，否则别人 clone 下来编不过
+（`CONTRIBUTING.md` 的「### 1. `project.yml` 是工程定义的唯一真值」那条）。
 
 两个 target：
 
@@ -337,7 +338,7 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 `#if os(macOS)` 分叉。已登记为 🟢（`docs/tech-debt.md`）。
 
 **改动纪律**：三端都编一遍。只编 Mac 会让漏了 `#if os(macOS)` 的 AppKit 调用把 iOS 端
-静默打红（`CONTRIBUTING.md:35-49`）。
+静默打红（`CONTRIBUTING.md` 的「### 2. 三端都要编一遍」那条）。
 
 ---
 
@@ -381,8 +382,10 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 
 1. **`Sources/Mcp` → `Sources/Mac`（真反向，但是有意的）**
    `Sources/Mcp/McpServer.swift` 的 `get_quota` / `start_session` / `set_session_profile`
-   用了 `AgentQuotaFile`（`Sources/Mac/LocalRunner/AgentQuota.swift:640` 引用处）与
-   `AgentModelCatalog` 一族（`McpServer.swift:1043-1083`）。这两个文件是**纯 Foundation、
+   用了 `AgentQuotaFile`（类型定义在 `Sources/Mac/LocalRunner/AgentQuota.swift`，引用点是
+   `McpServer.swift` 里那句 `JSONDecoder().decode(AgentQuotaFile.self, from: data)`）与
+   `AgentModelCatalog` 一族（`McpServer.swift` 的 `modelCatalogFile` /
+   `AgentModelCatalogFile.resolveTable` / `AgentModelCatalog.summaryLine`）。这两个文件是**纯 Foundation、
    不带平台门**的，文件头注释明说了「McpServer（跨平台编译）要用」。所以这是**放错了
    目录**，不是真的跨层依赖。
 

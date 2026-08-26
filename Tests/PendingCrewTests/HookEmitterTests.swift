@@ -301,6 +301,24 @@ final class HookEmitterTests: XCTestCase {
         XCTAssertFalse(out.contains("总部〔占位名"))
     }
 
+    /// 这条与上面 `testParallelSessionSplitHintReadsLiveSnapshotAndRendersActualCount`
+    /// 同源：判定里的「现在」原本都来自墙上时钟。**两条一起改了，理由写在这儿 ——
+    /// 别让下一个打开这个文件的人以为其中一条是漏的。**
+    ///
+    /// - **敞口差 60 倍**：这条要「写完 12 条 → 首次 emit」之间停顿超过 **15 分钟**
+    ///   才翻；那条只要 **15 秒**。所以那条在野外真红过（2026-08-26，共享目录 main
+    ///   `c1aac81`），而这条在本机留存的 **34 份全量日志里 34 趟全绿** —— 其中 7 趟
+    ///   本身是红的，红的是别人（ViewWiring / ImageCache / CodexProtocol / ChatOpenCost）。
+    /// - **第二条断言（冷却）机制上翻不了**：要靠冷却失效来翻，需要两次 emit 间隔
+    ///   ≥ 30 分钟；可那时那 12 条早已掉出 15 分钟窗口，signal 变 nil，断言照样成立。
+    ///   它自己护住了自己，真正有敞口的只有第一条断言。
+    /// - **仍然一起改**：成本 3 行、生产代码零改动，而「跑测期间机器休眠 15 分钟」
+    ///   不是不可能事件。
+    ///
+    /// **改完量过尺子还在**（否则就是把飘的红换成静默的绿）：把 `now` 推后 16 分钟
+    /// 张开那道缝 → 密度那条 `XCTAssertTrue` 红，且冷却那条不红；两次 emit 之间抹掉
+    /// `<crewId>.captain-awareness.json`（= 冷却失效这个真回归）→ 冷却那条
+    /// `XCTAssertFalse` 红。原样 → 绿。两条断言都仍然会红。
     @MainActor
     func testDensitySplitHintRendersOnceThenCoolsDown() {
         let base = tempDir()
@@ -316,12 +334,17 @@ final class HookEmitterTests: XCTestCase {
         for i in 1...CaptainAwarenessLogic.densityMessageThreshold {
             store.appendUserMessage(crewId: id, text: "密集 \(i)")
         }
+        // 同一道缝：两次 emit 用**同一个**「现在」。密度窗（15 分钟）和冷却
+        // （30 分钟）都是拿 now 减去消息/上次提示的时刻，走墙上时钟就等于把机器
+        // 快慢、乃至跑测期间的休眠放进判定；固定下来后，12 条消息的年龄恒为 ~0、
+        // 两次 emit 的间隔恒为 0，两条断言都不再有时间这个变量。
+        let now = Date()
         let first = HookEmitter(store: store, crewId: id, sessionId: "cap",
-                                cursorDir: wbDir, isCaptain: true).emitAndAdvance()!
+                                cursorDir: wbDir, isCaptain: true).emitAndAdvance(now: now)!
         XCTAssertTrue(first.contains("最近 15 分钟白板 12 条"))
         store.appendUserMessage(crewId: id, text: "冷却内的新消息")
         let second = HookEmitter(store: store, crewId: id, sessionId: "cap",
-                                 cursorDir: wbDir, isCaptain: true).emitAndAdvance()!
+                                 cursorDir: wbDir, isCaptain: true).emitAndAdvance(now: now)!
         XCTAssertFalse(second.contains("拆组信号"))
     }
 
@@ -338,8 +361,15 @@ final class HookEmitterTests: XCTestCase {
         let wbDir = base.appendingPathComponent("whiteboards", isDirectory: true)
         let store = LocalWhiteboardStore(directory: wbDir)
         store.appendUserMessage(crewId: id, text: "触发")
+        // 时间只从这一处进：写进快照的 `updatedAt` 与传给 emit 的 `now` 是**同一个
+        // 时刻**（先格式化再解回来，消掉秒以下截断），所以 `activeSessionCount` 里那道
+        // 15 秒新鲜度闸算出的差恒为 0，与本机跑多少用例、跑多慢完全无关。
+        // 曾经这里取 `Date()` 后还要经历编码/写盘/构造/emit，一旦这段墙上时间超过
+        // 15 秒（跑全量时真的发生过）count 就归 0，提示整句消失 → 飘红。
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: stamp))
         var snapshot = CrewSessionsSnapshot()
-        snapshot.updatedAt = ISO8601DateFormatter().string(from: Date())
+        snapshot.updatedAt = stamp
         snapshot.crews[id] = [
             .init(sessionId: "cap", name: "机长", role: "captain", brief: "", state: "idle"),
             .init(sessionId: "w1", name: "一号", role: "worker", brief: "A", state: "working"),
@@ -349,8 +379,9 @@ final class HookEmitterTests: XCTestCase {
         ]
         try JSONEncoder().encode(snapshot)
             .write(to: wbDir.appendingPathComponent(CrewSessionsSnapshot.fileName))
-        let out = HookEmitter(store: store, crewId: id, sessionId: "cap",
-                              cursorDir: wbDir, isCaptain: true).emitAndAdvance()!
+        let out = try XCTUnwrap(HookEmitter(store: store, crewId: id, sessionId: "cap",
+                                            cursorDir: wbDir, isCaptain: true)
+            .emitAndAdvance(now: now))
         XCTAssertTrue(out.contains("当前活跃 session 4 个"))
         XCTAssertFalse(out.contains("5 个"), "已退出 session 不算当前并行")
     }

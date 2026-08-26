@@ -55,6 +55,7 @@
 		1A8DD7316C583E4A775A5A13 /* CrewTimelineOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC117CCF335B9AF5CB2BD848 /* CrewTimelineOrdering.swift */; };
 		1A928FAA7ECCD916641180DE /* LocalAgentSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9720FEFDC8F509BFC0230E /* LocalAgentSessionStore.swift */; };
 		1AAB1B34C5492E9C39349B3D /* CrewChildCreationTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 437EC206ED3E345A7C0E304B /* CrewChildCreationTargetTests.swift */; };
+		1CA7C078D765C106528A8066 /* LocalCaptainReassignmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08983F71FFC034A8EDE72D0E /* LocalCaptainReassignmentStore.swift */; };
 		1D2CE060F773DE8A1ECE4B41 /* CrewBubbleTextSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75FA08DEBE2224571234836 /* CrewBubbleTextSelection.swift */; };
 		1D670E7D1541934DB5321DFD /* CrewFileAttachmentIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48CA6AFD52A872A4490EF9F5 /* CrewFileAttachmentIntake.swift */; };
 		1D80B96FD2B2E8D8DB1A1369 /* WorkspaceRepoLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DEC1FFAB099A9B73B3FA770 /* WorkspaceRepoLayout.swift */; };
@@ -294,6 +295,7 @@
 		827AE4A12634BCEFAD3456FB /* CaptainTemplateEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CE071C18780F51F195B101C /* CaptainTemplateEditorSheet.swift */; };
 		827E29771C7B21071FEA946A /* CrewLocalImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65E2DBDAFE0BF55EF25A4B84 /* CrewLocalImageCache.swift */; };
 		82EDD2C32FDFE990D83C46F8 /* GitWorktreeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A4D1C7DBA64FB676E8F61FF /* GitWorktreeServiceTests.swift */; };
+		832345A0480EF49A95D30DB1 /* LocalCaptainReassignmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08983F71FFC034A8EDE72D0E /* LocalCaptainReassignmentStore.swift */; };
 		834B234135212E39A97BE706 /* CrewHierarchyOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730A0270A35D81D3544660EA /* CrewHierarchyOrdering.swift */; };
 		83BA6E6AAA3FE158B253A37E /* LocalTodoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAED97C1D654597B1DAC2C6 /* LocalTodoStore.swift */; };
 		8471DAC97A7F6913A3BBA106 /* TypingDotsLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CD9F009A7D0B4895CDEC79 /* TypingDotsLayerView.swift */; };
@@ -412,6 +414,7 @@
 		B6B9A37DAD1876D809A488B6 /* CrewSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D1BA79194E7AC4E6DAA2491 /* CrewSettingsView.swift */; };
 		B6C99608600E5A2864CFD0B1 /* SessionPendingDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A566060F9F9D7695B1CC06 /* SessionPendingDecisionTests.swift */; };
 		B6E49D27689F9EC6E7F6BCE8 /* AgentModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCB5DF57E240E6FB7DD946A7 /* AgentModelCatalog.swift */; };
+		B7938ADA84EDD2610F37872B /* McpReplyAutoMentionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0A8BE5A9AAE6545A25DE79 /* McpReplyAutoMentionTests.swift */; };
 		B8265C60E3CD28DBF430804A /* CrewFileAttachmentIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48CA6AFD52A872A4490EF9F5 /* CrewFileAttachmentIntake.swift */; };
 		B851DCDB895B9FE247B94D21 /* AppThemeAlias.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19238A59905552A4248BCEE /* AppThemeAlias.swift */; };
 		B8841857E03B1F557DDAE651 /* LayoutLoopRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DDED10023139BDCC71AD956 /* LayoutLoopRegressionTests.swift */; };
@@ -591,6 +594,7 @@
 		0576DE8369E9943B320315BD /* SessionStatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStatusDot.swift; sourceTree = "<group>"; };
 		0595EC3C2AF4F6D1B66C805F /* SessionRosterReconciliation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRosterReconciliation.swift; sourceTree = "<group>"; };
 		07B9E918E0B797CF2286F0A4 /* CodexRPCDispatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexRPCDispatcherTests.swift; sourceTree = "<group>"; };
+		08983F71FFC034A8EDE72D0E /* LocalCaptainReassignmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCaptainReassignmentStore.swift; sourceTree = "<group>"; };
 		08C9AC5381653074150AFC8F /* CrewSessionsSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSessionsSnapshot.swift; sourceTree = "<group>"; };
 		0982A94B0AC44A73A416608A /* CockpitPlanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitPlanStore.swift; sourceTree = "<group>"; };
 		09830F2EDE90F7CE4C75A0DB /* CrewComposerDraftStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewComposerDraftStoreTests.swift; sourceTree = "<group>"; };
@@ -651,6 +655,7 @@
 		269AFDA6030BA0078188CAF2 /* CrewAvatarBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewAvatarBadges.swift; sourceTree = "<group>"; };
 		27C888C79487E44BF42708B7 /* CrewHumanTodoRespond.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHumanTodoRespond.swift; sourceTree = "<group>"; };
 		295F4E13C2CFA5C6FC2FBE02 /* LocalAgentSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentSessionStoreTests.swift; sourceTree = "<group>"; };
+		2B0A8BE5A9AAE6545A25DE79 /* McpReplyAutoMentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpReplyAutoMentionTests.swift; sourceTree = "<group>"; };
 		2B1D24F77E0C6CE0602FB7B4 /* CrewTypingIndicatorRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewTypingIndicatorRow.swift; sourceTree = "<group>"; };
 		2BB2FDABEF05224B243CE704 /* SessionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHealth.swift; sourceTree = "<group>"; };
 		2C78204BFE04404235068547 /* ModelCatalogEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalogEntry.swift; sourceTree = "<group>"; };
@@ -1450,6 +1455,7 @@
 				0289B7CA9949BA817F748B6A /* McpAddHumanTodoTests.swift */,
 				9DD2C6E726F767AAFDB1B8F4 /* McpBroadcastMentionTests.swift */,
 				D36E53A3EEA55369A75ADB82 /* McpPermissionHookTests.swift */,
+				2B0A8BE5A9AAE6545A25DE79 /* McpReplyAutoMentionTests.swift */,
 				1F16A819715D78A73D291706 /* McpServerCaptainSpawnTests.swift */,
 				66582D8B5956E7197698364F /* McpServerDirectoryToolsTests.swift */,
 				610CDA1CC88CAACAC3B3B8BA /* McpServerModelCatalogTests.swift */,
@@ -1616,6 +1622,7 @@
 				39C82A3CCDE95321F76BB53E /* FileFingerprintCache.swift */,
 				2C9720FEFDC8F509BFC0230E /* LocalAgentSessionStore.swift */,
 				266E200D180EDF283E63D525 /* LocalApprovalStore.swift */,
+				08983F71FFC034A8EDE72D0E /* LocalCaptainReassignmentStore.swift */,
 				7B8FABAFB70A3A36CAF8C52D /* LocalCrewControlStore.swift */,
 				EBB438AE76CF441D4A9A071F /* LocalCrewStore.swift */,
 				250E9F715D6468C774F3F176 /* LocalDataReset.swift */,
@@ -1920,6 +1927,7 @@
 				1A928FAA7ECCD916641180DE /* LocalAgentSessionStore.swift in Sources */,
 				A6C206B20B537A256C9C42A2 /* LocalAgentUsageMonitor.swift in Sources */,
 				0C31AC70A7AF296381A05716 /* LocalApprovalStore.swift in Sources */,
+				1CA7C078D765C106528A8066 /* LocalCaptainReassignmentStore.swift in Sources */,
 				A4E099C910B5400D8A645F0C /* LocalCodingAgentExecutable.swift in Sources */,
 				99B5BB04A0E197AE03535A86 /* LocalCodingAgentKind.swift in Sources */,
 				5BBFB39FEFADFBC3E3A905C8 /* LocalCodingAgentSpec.swift in Sources */,
@@ -2185,6 +2193,7 @@
 				52B74FA2919986145C55A136 /* LocalAgentSessionStoreTests.swift in Sources */,
 				28638B475B51F2DE5474C515 /* LocalApprovalStore.swift in Sources */,
 				A6CFC4E8A3B7D3BCA0A4BA25 /* LocalApprovalStoreTests.swift in Sources */,
+				832345A0480EF49A95D30DB1 /* LocalCaptainReassignmentStore.swift in Sources */,
 				22A27AC631B26380BC3108D2 /* LocalCodingAgentExecutable.swift in Sources */,
 				BDC267627A50BEE0256332D4 /* LocalCodingAgentKind.swift in Sources */,
 				BA64F31E29C3BE38DA3BEEB0 /* LocalCodingAgentSpec.swift in Sources */,
@@ -2219,6 +2228,7 @@
 				310DDCE7ED06B5AD73E36FD7 /* McpBroadcastMentionTests.swift in Sources */,
 				67F1A713B214BE38547CFBA4 /* McpPermissionHook.swift in Sources */,
 				9784D71E9DBD98F8CEA30145 /* McpPermissionHookTests.swift in Sources */,
+				B7938ADA84EDD2610F37872B /* McpReplyAutoMentionTests.swift in Sources */,
 				A67C0B2B38BE0BFB0B06E905 /* McpServer.swift in Sources */,
 				663D4D3BC9CFB7E63602CA27 /* McpServerCaptainSpawnTests.swift in Sources */,
 				70B42847B336BA603ACABB6F /* McpServerDirectoryToolsTests.swift in Sources */,
@@ -2451,7 +2461,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1.16;
+				MARKETING_VERSION = 0.1.17;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -2554,7 +2564,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1.16;
+				MARKETING_VERSION = 0.1.17;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

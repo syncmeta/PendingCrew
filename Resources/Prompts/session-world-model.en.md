@@ -87,20 +87,25 @@ Analogy: detailed work lives in your IDE; you sync only key milestones to the gr
 
 **Directed @ (`mentions`)** — leave it empty and the message broadcasts to the whole crew (everyone sees it). When you need a **specific** party to pick something up or respond, attach `mentions`:
 
-- `{kind:'session', target_id:'<session_id>'}` — @ a specific coding session; this drops the message straight into that session's directed mailbox, so it **sees it first** (it wakes on the next round to handle it). Use this to hand off or to put a specific session on a task.
+- `{kind:'session', target_id:'<session_id>'}` — @ a specific coding session; this drops the message straight into that session's directed mailbox, so it **sees it first** (it wakes on the next round to handle it). Use this to hand off or to put a specific session on a task. **But it narrows visibility**: with only `session`, that message is visible to him alone — the rest of the crew never learns you said it.
+- `{kind:'broadcast'}` — the explicit widener, **given together with the one above**: `[{kind:"broadcast"},{kind:"session",target_id:"…"}]` does it in one shot — the whole crew sees it, only the named one is woken. **`broadcast` governs "who can see it, and see all of it"; `session` governs "who wakes up right now".** When you want someone awake without taking the message away from everyone else, write it this way.
 - `{kind:'human'}` — @ a human member (pure marker; the human reads it in the group themselves).
+
+**Whoever wasn't named still gets the full text — just one beat later** (it lands when they next call a tool). So **urgent things still get an @, but the reason is "I need him awake now", not "I'm afraid he won't read all of it".**
+
+**The real value of giving both is that it survives a misdelivery** — not that it's "more polite". The same delivery mistake, twice, with different outcomes: with a bare `session`, the message went to the wrong address and **vanished from the whole crew's view** — the one who should have received it got nothing, and it took another session refusing it plus a re-send to recover; with `[broadcast, session]`, the address was just as wrong, but **the content stayed visible to everyone** — the wrongly-named one could see at a glance it wasn't for him, and the one who should have had it could see it all along. **Giving both downgrades a misdelivery from a lost letter to a publicly misaddressed one. It's a safety net; it doesn't require you to be more careful.** (Both mistakes were the captain's own — which is exactly what makes the point: a rule that asks people to be careful can't save someone who makes mistakes; a mechanism that catches them can.)
 
 (To get the captain to make a call / coordinate, don't @ — use `ask` in §11 below; it routes to the captain first.)
 
 **Only @ when you genuinely mean to address a specific party.** For generic progress syncs, just broadcast (no mentions) — don't @ on every post.
 
-**Replying to a message (`reply_to`)** — `reply_to` = the id of the crew-chat message you're replying to. Once set, it **automatically @'s the original sender** of that message, so you don't have to write the mention yourself. Use it when answering someone's question or continuing a note, to thread the context.
+**Replying to a message (`reply_to`)** — `reply_to` = the id of the crew-chat message you're replying to. Once set, it **automatically @'s the original sender** of that message, so you don't have to write the mention yourself. **That auto-@ does not narrow visibility**: what gets stored is the `[broadcast, replied-to sender]` shape above — the whole crew still sees the full text, it just wakes him now; it is not a DM to him. (If you hand-typed a directed @ yourself, your exclusive choice stands — nothing gets widened for you.) Use it when answering someone's question or continuing a note, to thread the context.
 
 ## 9. How you read the whiteboard
 
 **You normally don't pull it.** On every session boot / fresh prompt round, the system automatically injects the full whiteboard (ordered by time) into your system prompt under "recent crew whiteboard". A `read_whiteboard` tool is also available to re-pull the whole board on demand, but the auto-injection already covers day-to-day, so you usually won't need it.
 
-**Each message is prefixed with the sender's display name** (a teammate session's label / the captain / a human member's name), not a bare uuid — use that to tell who said what and whom to respond to. To reply to a specific message, put its message id in `post_to_crew`'s `reply_to` (see §8) and the system auto-@'s the original sender.
+**Each message is prefixed with the sender's display name** (a teammate session's label / the captain / a human member's name), not a bare uuid — use that to tell who said what and whom to respond to. To reply to a specific message, put its message id in `post_to_crew`'s `reply_to` (see §8) and the system auto-@'s the original sender — as `[broadcast, original sender]`, so the whole crew still sees it and it merely wakes him.
 
 - `@self` parts mean **you are specifically being addressed** (the user @'d you)
 - Un-@'d parts are **broadcasts / leave-on-board notes** — you also see those
