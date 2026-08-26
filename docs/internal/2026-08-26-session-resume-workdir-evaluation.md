@@ -136,12 +136,44 @@ crew #22「文档站」搬过**两次**家（`…/Pendingname/website` → `…/
 
 | 分支 | 为什么留 |
 |---|---|
-| `copyClaudeProjectSettings` | `~/.claude.json` 的 `projects["<绝对路径>"]` 信任/权限条目。新目录没条目 → **第一个 session 撞信任弹框卡死**。本文档写作过程中在 `/private/tmp` 起 claude 时**当场复现**了这个弹框，不是理论风险。 |
+| `copyClaudeProjectSettings` | `~/.claude.json` 的 `projects["<绝对路径>"]` 信任/权限条目。新目录没条目 → **第一个 session 撞信任弹框挂起**。见下面 §3.1.1 —— 那一条把「实测到的」和「推出来的」分开写了。 |
 | `copyCodexTrust` | `~/.codex/config.toml` 的 `[projects."<路径>"] trust_level`，同理。 |
 | `copyClaudeMemoryFile` | 项目记忆 `memory/` 按路径分家，只能复制不能搬（旧路径还有别的 crew 在用）。 |
 | `setCrewWorkingDirectory` | 这是改目录这件事本身。 |
 | `claudeProjectSettings*` / `codexTrust*` / `memory*` 的 Skip | 上面三条的说明面。 |
 | `crewHasNoWorkingDirectory` / `crewAlreadyAtNewWorkdir` | 与 transcript 无关。 |
+
+#### 3.1.1 信任那条：实测到的是什么，推出来的是什么
+
+**实测到的**（2026-08-26，跑交互式 `--resume` 那组时撞上的，不是设计出来的场景）：
+在一个 `~/.claude.json` 里**没有条目的新顶层路径**下起 claude，进程停在
+
+```
+Quick safety check: Is this a project you created or one you trust? (Like your
+own known open source project, or work from your team). If not, take a moment
+to review what's in this folder first.
+
+Claude Code'll be able to read, edit, and execute files here.
+
+❯ 1. Yes, I trust this folder
+  2. No, exit
+```
+
+（以上是从那次跑的终端输出里逐字抄的，不是复述。）
+
+**并且不动了** —— 不是打印一句提示继续跑，是**挂起**，等一个没人会去按的回车。是我手动
+杀掉的。这一条比「会弹个框」严重得多：一个挂起的 session 在我们这套里表现成「起来了、
+不干活、也不报错」，机长点名看到的是「空闲」。
+
+**推出来的**：搬完家的新 crew 目录属于这一类（同样是 `~/.claude.json` 里没有条目的
+新顶层路径）。**机制同一个，但我没有在一个真搬完家的 crew 目录上复现过** —— 这条线
+画在这儿，别把它读成「搬家撞过弹框」。
+
+**顺带一条更容易救人的事实**：`~/.claude.json` 里 `.pendingcrew/worktrees/*` 的条目是
+**0 条**，而本机每天几十个 worker 就跑在那里面、从没撞过弹框。所以 **claude 的信任不是
+逐目录判的，已信任目录下的子目录继承**。这不推翻上面那条（搬家换的是全新的顶层路径，
+不在任何已信任目录之下），但它解释了为什么 worktree 这条路一直没人撞到 ——
+**别让下一个人以为「worktree 也没条目也没事，那信任条目大概也不重要」。**
 
 ### 3.2 可以整段删（transcript 那半）
 
