@@ -49,6 +49,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// `thread/resume` 失败、已降级成新起一条 thread 时回调（Todo #28 fail-loud）——
     /// runner 据此往群里如实说「原会话接不回来了，这是新开的」，不静默假装恢复。
     private let notifyResumeFallback: (_ failedThreadId: String, _ reason: String) -> Void
+    /// P2 app-side transcript 只吃协议 event；构造时注入以覆盖 boot 的第一条通知。
+    private let protocolNotificationSink: ((_ method: String, _ params: [String: Any]) -> Void)?
 
     private var threadId: String?
     private var activeTurnId: String?
@@ -66,10 +68,12 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
          notifyUnanswerable: @escaping (_ summary: String) -> Void = { _ in },
          notifyTurnEnded: @escaping (_ lastAgentText: String) -> Void = { _ in },
          notifyThreadId: @escaping (_ threadId: String) -> Void = { _ in },
-         notifyResumeFallback: @escaping (_ failedThreadId: String, _ reason: String) -> Void = { _, _ in }) {
+         notifyResumeFallback: @escaping (_ failedThreadId: String, _ reason: String) -> Void = { _, _ in },
+         protocolNotificationSink: ((_ method: String, _ params: [String: Any]) -> Void)? = nil) {
         self.notifyTurnEnded = notifyTurnEnded
         self.notifyThreadId = notifyThreadId
         self.notifyResumeFallback = notifyResumeFallback
+        self.protocolNotificationSink = protocolNotificationSink
         self.connection = CodexAppServerConnection(executable: executable, argv: argv, cwd: cwd, env: env)
         self.cwd = cwd
         self.model = model
@@ -97,6 +101,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                     },
                     onNotification: { [weak self] method, params in
                         Task { @MainActor in
+                            self?.protocolNotificationSink?(method, params)
                             self?.transcript.apply(method: method, params: params)
                             self?.trackTurn(method: method, params: params)
                         }

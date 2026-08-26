@@ -979,12 +979,19 @@ private struct SessionRunContentView: View {
                     .overlay(alignment: .trailing) {
                         if let term = run.agentTerminalSession {
                             TerminalScrollbarOverlay(session: term)
+                        } else if let remote = run.remoteSessionBackend,
+                                  remote.kind == .claudeCode {
+                            TerminalScrollbarOverlay(session: remote)
                         }
                     }
                     .padding(.horizontal, 12)
                     .background(Theme.Palette.canvas)
             } else if let codex = run.backend as? CodexAppServerBackend {
                 CodexTranscriptView(transcript: codex.transcript)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let remote = run.remoteSessionBackend,
+                      let transcript = remote.transcript {
+                CodexTranscriptView(transcript: transcript)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

@@ -43,7 +43,7 @@ final class InProcessTransportTests: XCTestCase {
         var applied: [(UInt64, String)] = []
         let reconciler = SessionStateReconciler(
             requestFullList: { fullListRequests += 1 },
-            apply: { seq, state in applied.append((seq, state.kind)) })
+            apply: { _, seq, state in applied.append((seq, state.kind)) })
 
         reconciler.receiveDelta(sessionId: "s", stateSeq: 1, state: state(kind: "codex"))
         reconciler.receiveDelta(sessionId: "s", stateSeq: 3, state: state(kind: "claude_code"))
@@ -60,10 +60,21 @@ final class InProcessTransportTests: XCTestCase {
 
     func testFirstDeltaMayStartAboveOneAfterReconnectButSubsequentGapStillResyncs() {
         var requests = 0
-        let reconciler = SessionStateReconciler(requestFullList: { requests += 1 }, apply: { _, _ in })
+        let reconciler = SessionStateReconciler(
+            requestFullList: { requests += 1 }, apply: { _, _, _ in })
         reconciler.receiveDelta(sessionId: "s", stateSeq: 41, state: state(kind: "codex"))
         reconciler.receiveDelta(sessionId: "s", stateSeq: 43, state: state(kind: "codex"))
         XCTAssertEqual(requests, 1)
+    }
+
+    func testReconnectBackoffStartsAtPointTwoAndCapsAtFiveSeconds() {
+        XCTAssertEqual(SessionReconnectPolicy.delay(forAttempt: 0), 0.2)
+        XCTAssertEqual(SessionReconnectPolicy.delay(forAttempt: 1), 0.4)
+        XCTAssertEqual(SessionReconnectPolicy.delay(forAttempt: 5), 5.0)
+        XCTAssertEqual(SessionReconnectPolicy.delay(forAttempt: 50), 5.0)
+        XCTAssertEqual(SessionReconnectPolicy.pingInterval, 10)
+        XCTAssertEqual(SessionReconnectPolicy.pongTimeout, 30)
+        XCTAssertEqual(SessionReconnectPolicy.daemonIdleTimeout, 60)
     }
 
     private func state(kind: String) -> SessionProtocolState {

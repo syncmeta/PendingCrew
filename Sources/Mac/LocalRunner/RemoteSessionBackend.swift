@@ -4,7 +4,7 @@ import Combine
 import Foundation
 
 private let inProcessProtocolCapabilities = [
-    "approval-mode", "inspect-output", "launch-parameter-problem", "profile-switch",
+    "approval-mode", "launch-parameter-problem", "profile-switch", "screen-text",
     "terminal-bytes", "transcript-events",
 ]
 
@@ -22,10 +22,36 @@ protocol SessionProtocolTerminalControlling: AnyObject {
     func resizeTerminal(cols: Int, rows: Int)
 }
 
+@MainActor
+protocol SessionProtocolScreenTextProviding: AnyObject {
+    func screenText(maxLines: Int) -> String
+}
+
+@MainActor
+protocol SessionProtocolApprovalControlling: AnyObject {
+    func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws
+}
+
+@MainActor
+protocol SessionProtocolLaunchProblemProviding: AnyObject {
+    var protocolLaunchParameterProblems: AnyPublisher<SessionLaunchParameterProblem, Never> { get }
+}
+
 extension AgentTerminalSession: SessionProtocolTerminalControlling {
     func resizeTerminal(cols: Int, rows: Int) {
         core.resize(cols: cols, rows: rows)
         core.noteViewportChange()
+    }
+}
+
+
+extension AgentTerminalSession: SessionProtocolScreenTextProviding {
+    func screenText(maxLines: Int) -> String { core.screenText(maxLines: maxLines) }
+}
+
+extension AgentTerminalSession: SessionProtocolLaunchProblemProviding {
+    var protocolLaunchParameterProblems: AnyPublisher<SessionLaunchParameterProblem, Never> {
+        launchParameterProblems
     }
 }
 
@@ -34,6 +60,49 @@ extension PlainTerminalSession: SessionProtocolTerminalControlling {
     func resizeTerminal(cols: Int, rows: Int) {
         core.resize(cols: cols, rows: rows)
         core.noteViewportChange()
+    }
+}
+
+
+extension PlainTerminalSession: SessionProtocolScreenTextProviding {
+    func screenText(maxLines: Int) -> String { core.screenText(maxLines: maxLines) }
+}
+
+extension CodexAppServerBackend: SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling {
+    func screenText(maxLines: Int) -> String {
+        let items = transcript.items.suffix(max(0, maxLines))
+        guard !items.isEmpty else { return "（transcript 为空）" }
+        return items.map { item in
+            switch item.kind {
+            case let .userMessage(text): return "[输入] \(text.prefix(200))"
+            case let .agentMessage(text, _): return "[回复] \(text.prefix(300))"
+            case let .reasoning(summary, content):
+                return "[思考] \((summary ?? content ?? "…").prefix(200))"
+            case let .plan(text): return "[计划] \(text.prefix(200))"
+            case let .commandExecution(command):
+                return "[命令] \(command.command.prefix(160))"
+                    + (command.exitCode.map { " → exit \($0)" } ?? "")
+            case let .fileChange(change): return "[改文件] \(change.summary ?? change.status ?? "?")"
+            case let .toolCall(name, status): return "[工具] \(name) \(status ?? "")"
+            case let .webSearch(query): return "[搜索] \(query ?? "")"
+            case let .unknown(type): return "[\(type)]"
+            }
+        }.joined(separator: "\n")
+    }
+
+    func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
+        try await updateApprovalsReviewer(reviewer)
+    }
+}
+
+enum SessionProtocolControlError: LocalizedError {
+    case unsupported(String)
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupported(message), let .failed(message): return message
+        }
     }
 }
 
@@ -62,6 +131,11 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
     var pendingDecisionUpdates: AnyPublisher<PendingTerminalDecision?, Never> {
         $pendingDecision.eraseToAnyPublisher()
     }
+    @Published private(set) var launchParameterProblem: SessionLaunchParameterProblem?
+    var launchParameterProblems: AnyPublisher<SessionLaunchParameterProblem, Never> {
+        $launchParameterProblem.compactMap { $0 }.eraseToAnyPublisher()
+    }
+    @Published private(set) var scrollState = AgentTerminalSession.ScrollState()
 
     private(set) var isProtocolConnected = false
     private(set) var negotiatedCapabilities: [String] = []
@@ -84,6 +158,9 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
             if kind == .terminal { mirror.useNativeScroller() }
             mirror.onSendBytes = { [weak self] bytes in self?.sendRaw(bytes) }
             mirror.onResize = { [weak self] cols, rows in self?.resizeTerminal(cols: cols, rows: rows) }
+            mirror.onScroll = { [weak self] userInitiated in
+                self?.refreshScrollState(userInitiated: userInitiated)
+            }
         }
     }
 
@@ -92,16 +169,36 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
     }
 
     func send(_ text: String) {
-        client.sendControl(sessionId: sessionId, op: "sendText",
-                           arguments: ["text": .string(text)])
+        sendRaw(Array(text.utf8))
+        // Preserve AgentSessionCore.send's paste-vs-key timing at the app side:
+        // body and Enter are two input frames, never one JSON/control message.
+        if kind == .claudeCode {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard self?.status == .running else { return }
+                self?.sendRaw([0x0d])
+            }
+        }
     }
 
-    func interrupt() { client.sendControl(sessionId: sessionId, op: "interrupt") }
+    func interrupt() { sendRaw(kind == .terminal ? [0x03] : [0x1b]) }
     func stop() { client.sendControl(sessionId: sessionId, op: "stop") }
     func clearQuotaHealth() { client.sendControl(sessionId: sessionId, op: "clearQuotaHealth") }
 
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
         await client.applyProfileSwitch(sessionId: sessionId, command: cmd)
+    }
+
+    func updateApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
+        guard supportsCapability("approval-mode") else {
+            throw SessionProtocolControlError.unsupported("daemon 不支持运行态审批模式切换")
+        }
+        try await client.updateApprovalsReviewer(sessionId: sessionId, reviewer: reviewer)
+    }
+
+    func screenText(maxLines: Int) -> String {
+        guard supportsCapability("screen-text") else { return "（daemon 不支持读取输出）" }
+        return client.screenText(sessionId: sessionId, maxLines: maxLines) ?? "（输出为空）"
     }
 
     func sendRaw(_ bytes: [UInt8]) {
@@ -112,6 +209,12 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
     func resizeTerminal(cols: Int, rows: Int) {
         guard let handle else { return }
         client.resize(handle: handle, cols: cols, rows: rows)
+        refreshScrollState(userInitiated: false)
+    }
+
+    func scrollTerminal(toPosition position: Double) {
+        terminalView?.scroll(toPosition: max(0, min(1, position)))
+        refreshScrollState(userInitiated: true)
     }
 
     fileprivate func attach(handle: UInt32) { self.handle = handle }
@@ -119,6 +222,12 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
     fileprivate func updateConnection(capabilities: [String]) {
         negotiatedCapabilities = capabilities
         isProtocolConnected = true
+    }
+
+    fileprivate func transportDisconnected() {
+        handle = nil
+        negotiatedCapabilities = []
+        isProtocolConnected = false
     }
 
     fileprivate func apply(state: SessionProtocolState) {
@@ -129,19 +238,33 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
         pendingDecision = state.pendingDecision.map {
             PendingTerminalDecision(prompt: $0.prompt, options: $0.options)
         }
+        launchParameterProblem = state.launchParameterProblem?.problem
     }
 
     fileprivate func receiveTerminal(_ bytes: [UInt8]) {
         lastTerminalFrameBytes = bytes
         terminalView?.remoteLastOutputAt = Date()
         terminalView?.feedFromCore(bytes[...])
+        refreshScrollState(userInitiated: false)
     }
 
     fileprivate func receiveEvent(_ event: SessionEvent) {
         guard event.kind == "codexNotification",
+              case let .string(eventSessionId)? = event.fields["sessionId"],
+              eventSessionId == sessionId,
               case let .string(method)? = event.fields["method"],
               case let .object(params)? = event.fields["params"] else { return }
         transcript?.apply(method: method, params: params.mapValues(\.foundationObject))
+    }
+
+    private func refreshScrollState(userInitiated: Bool) {
+        guard let terminalView else { return }
+        let next = AgentTerminalSession.ScrollState(
+            canScroll: terminalView.canScroll,
+            position: terminalView.scrollPosition,
+            thumbSize: Double(terminalView.scrollThumbsize),
+            userScrollTick: scrollState.userScrollTick + (userInitiated ? 1 : 0))
+        if next != scrollState { scrollState = next }
     }
 }
 
@@ -170,6 +293,34 @@ final class InProcessSessionProtocolBridge {
     func publishTerminalBytes(sessionId: String, bytes: [UInt8]) {
         server.publishTerminalBytes(sessionId: sessionId, bytes: bytes)
     }
+
+    func terminalOutputSink(sessionId: String) -> ([UInt8]) -> Void {
+        { [weak server] bytes in
+            MainActor.assumeIsolated {
+                server?.acceptTerminalBytes(sessionId: sessionId, bytes: bytes)
+            }
+        }
+    }
+
+    func codexNotificationSink(sessionId: String) -> (String, [String: Any]) -> Void {
+        { [weak server] method, params in
+            MainActor.assumeIsolated {
+                server?.acceptCodexNotification(
+                    sessionId: sessionId, method: method, params: params)
+            }
+        }
+    }
+
+    func disconnectViewer() {
+        transport.disconnect()
+        server.viewerDisconnected()
+        client.transportDisconnected()
+    }
+
+    func reconnectViewer() {
+        transport.reconnect()
+        client.reconnect()
+    }
 }
 
 @MainActor
@@ -179,6 +330,7 @@ private final class InProcessSessionProtocolServer {
         var stateSeq: UInt64 = 0
         var handles: Set<UInt32> = []
         var observations: Set<AnyCancellable> = []
+        var launchParameterProblem: SessionLaunchParameterProblem?
         init(backend: any SessionBackend) { self.backend = backend }
     }
 
@@ -188,6 +340,8 @@ private final class InProcessSessionProtocolServer {
     private var records: [String: Record] = [:]
     private var sessionByHandle: [UInt32: String] = [:]
     private var nextHandle: UInt32 = 1
+    private var pendingTerminalBytes: [String: [[UInt8]]] = [:]
+    private var pendingEvents: [String: [SessionEvent]] = [:]
 
     init(transport: InProcessTransport, capabilities: [String]) {
         self.transport = transport
@@ -205,9 +359,38 @@ private final class InProcessSessionProtocolServer {
 
     func publishTerminalBytes(sessionId: String, bytes: [UInt8]) {
         guard let record = records[sessionId] else { return }
+        // 已注册但无人 attach 时按 §4.5 丢实时流；重连靠快照恢复，不重放增量。
+        guard !record.handles.isEmpty else { return }
         for handle in record.handles.sorted() {
             send(.data(.init(handle: handle, bytes: bytes)))
         }
+    }
+
+    func acceptTerminalBytes(sessionId: String, bytes: [UInt8]) {
+        guard records[sessionId] != nil else {
+            pendingTerminalBytes[sessionId, default: []].append(bytes)
+            return
+        }
+        publishTerminalBytes(sessionId: sessionId, bytes: bytes)
+    }
+
+    func acceptCodexNotification(sessionId: String, method: String, params: [String: Any]) {
+        guard let paramsValue = SessionWireJSONValue(params) else { return }
+        let event = SessionEvent(kind: "codexNotification", requestId: nil, fields: [
+            "sessionId": .string(sessionId), "method": .string(method), "params": paramsValue,
+        ])
+        guard let record = records[sessionId] else {
+            pendingEvents[sessionId, default: []].append(event)
+            return
+        }
+        // 与 PTY data 相同：断线期间不积压增量，重连后由快照/全量状态恢复。
+        guard !record.handles.isEmpty else { return }
+        send(.event(event))
+    }
+
+    func viewerDisconnected() {
+        sessionByHandle.removeAll()
+        records.values.forEach { $0.handles.removeAll() }
     }
 
     private func observe(sessionId: String, record: Record) {
@@ -235,6 +418,17 @@ private final class InProcessSessionProtocolServer {
                 state.pendingDecision = value.map { .init(prompt: $0.prompt, options: $0.options) }
             }
         }.store(in: &record.observations)
+        if let source = record.backend as? SessionProtocolLaunchProblemProviding {
+            source.protocolLaunchParameterProblems.sink { [weak self, weak record] value in
+                guard let self, let record else { return }
+                MainActor.assumeIsolated {
+                    record.launchParameterProblem = value
+                    self.publishState(sessionId: sessionId) {
+                        $0.launchParameterProblem = .init(value)
+                    }
+                }
+            }.store(in: &record.observations)
+        }
     }
 
     private func receive(_ data: Data) {
@@ -254,6 +448,12 @@ private final class InProcessSessionProtocolServer {
             sessionByHandle[handle] = value.sessionId
             send(.attached(.init(sessionId: value.sessionId, handle: handle, snapshotFrames: 0)))
             sendFullList()
+            for bytes in pendingTerminalBytes.removeValue(forKey: value.sessionId) ?? [] {
+                publishTerminalBytes(sessionId: value.sessionId, bytes: bytes)
+            }
+            for event in pendingEvents.removeValue(forKey: value.sessionId) ?? [] {
+                send(.event(event))
+            }
             if let terminal = record.backend as? SessionProtocolTerminalControlling {
                 terminal.resizeTerminal(cols: value.cols, rows: value.rows)
             }
@@ -264,7 +464,14 @@ private final class InProcessSessionProtocolServer {
         case let .resize(value):
             terminal(for: value.handle)?.resizeTerminal(cols: value.cols, rows: value.rows)
         case let .input(value):
-            terminal(for: value.handle)?.sendRaw(value.bytes)
+            guard let sessionId = sessionByHandle[value.handle],
+                  let backend = records[sessionId]?.backend else { return }
+            if backend.kind == .codex {
+                if value.bytes == [0x1b] { backend.interrupt() }
+                else if let text = String(bytes: value.bytes, encoding: .utf8) { backend.send(text) }
+            } else {
+                (backend as? SessionProtocolTerminalControlling)?.sendRaw(value.bytes)
+            }
         case let .control(value):
             handleControl(value)
         case let .ping(value):
@@ -281,9 +488,6 @@ private final class InProcessSessionProtocolServer {
         guard case let .string(sessionId)? = control.arguments["sessionId"],
               let backend = records[sessionId]?.backend else { return }
         switch control.op {
-        case "sendText":
-            if case let .string(text)? = control.arguments["text"] { backend.send(text) }
-        case "interrupt": backend.interrupt()
         case "stop": backend.stop()
         case "clearQuotaHealth": backend.clearQuotaHealth()
         case "applyProfileSwitch":
@@ -295,6 +499,37 @@ private final class InProcessSessionProtocolServer {
                 let result = await backend.applyProfileSwitch(.init(knob: knob, value: value))
                 self?.send(.event(result.protocolEvent(requestId: requestId)))
             }
+        case "screenText":
+            guard let requestId = control.requestId,
+                  case let .number(rawMaxLines)? = control.arguments["maxLines"] else { return }
+            let maxLines = max(0, Int(rawMaxLines))
+            let text = (backend as? SessionProtocolScreenTextProviding)?
+                .screenText(maxLines: maxLines) ?? ""
+            send(.event(.init(kind: "screenTextResult", requestId: requestId, fields: [
+                "sessionId": .string(sessionId), "text": .string(text),
+            ])))
+        case "updateApprovalsReviewer":
+            guard let requestId = control.requestId,
+                  case let .string(raw)? = control.arguments["reviewer"],
+                  let reviewer = CodexProtocol.ApprovalsReviewer(rawValue: raw) else { return }
+            guard let approval = backend as? SessionProtocolApprovalControlling else {
+                send(.event(.controlResult(
+                    kind: "approvalModeResult", requestId: requestId,
+                    sessionId: sessionId, error: "backend 不支持审批模式切换")))
+                return
+            }
+            Task { @MainActor [weak self] in
+                do {
+                    try await approval.updateProtocolApprovalsReviewer(reviewer)
+                    self?.send(.event(.controlResult(
+                        kind: "approvalModeResult", requestId: requestId,
+                        sessionId: sessionId, error: nil)))
+                } catch {
+                    self?.send(.event(.controlResult(
+                        kind: "approvalModeResult", requestId: requestId,
+                        sessionId: sessionId, error: error.localizedDescription)))
+                }
+            }
         default:
             break // §4.4: unknown op is an additive capability, ignore without disconnecting.
         }
@@ -305,7 +540,7 @@ private final class InProcessSessionProtocolServer {
     ) {
         guard let record = records[sessionId] else { return }
         record.stateSeq &+= 1
-        var state = makeState(record.backend)
+        var state = makeState(record.backend, launchParameterProblem: record.launchParameterProblem)
         mutate(&state)
         send(.state(.init(sessionId: sessionId, stateSeq: record.stateSeq,
                           delta: state)))
@@ -315,18 +550,24 @@ private final class InProcessSessionProtocolServer {
         let summaries = records.keys.sorted().compactMap { sessionId -> SessionSummary? in
             guard let record = records[sessionId] else { return nil }
             return .init(sessionId: sessionId, stateSeq: record.stateSeq,
-                         state: makeState(record.backend))
+                         state: makeState(record.backend,
+                                          launchParameterProblem: record.launchParameterProblem))
         }
         send(.sessions(.init(sessions: summaries)))
     }
 
-    private func makeState(_ backend: any SessionBackend) -> SessionProtocolState {
+    private func makeState(
+        _ backend: any SessionBackend,
+        launchParameterProblem: SessionLaunchParameterProblem? = nil
+    ) -> SessionProtocolState {
         .init(status: .init(backend.status), isWorking: backend.isWorking,
               displayIsTyping: backend.displayIsTyping,
               health: backend.health.map(SessionHealthWire.init),
               pendingDecision: backend.pendingDecision.map {
                   .init(prompt: $0.prompt, options: $0.options)
-              }, kind: backend.kind.rawValue, launchParameterProblem: nil, scrollState: nil)
+              }, kind: backend.kind.rawValue,
+              launchParameterProblem: launchParameterProblem.map(SessionLaunchParameterProblemWire.init),
+              scrollState: nil)
     }
 
     private func send(_ message: SessionDaemonMessage) {
@@ -344,15 +585,13 @@ final class InProcessSessionProtocolClient {
     private var remoteByHandle: [UInt32: RemoteSessionBackend] = [:]
     private var negotiated: [String] = []
     private var pendingProfile: [String: CheckedContinuation<SessionProfileSwitchOutcome, Never>] = [:]
+    private var synchronousResponses: [String: SessionEvent] = [:]
+    private var pendingControls: [String: (Result<Void, Error>) -> Void] = [:]
     private lazy var stateReconciler = SessionStateReconciler(
         requestFullList: { [weak self] in self?.send(.listSessions) },
-        apply: { [weak self] _, state in
-            guard let self else { return }
-            // The reconciler's public callback lacks sessionId by design; routing is
-            // installed immediately around each receive below.
-            self.stateReceiver?(state)
+        apply: { [weak self] sessionId, _, state in
+            self?.remotes[sessionId]?.apply(state: state)
         })
-    private var stateReceiver: ((SessionProtocolState) -> Void)?
 
     init(transport: InProcessTransport, capabilities: [String]) {
         self.transport = transport
@@ -366,11 +605,26 @@ final class InProcessSessionProtocolClient {
         send(.hello(.init(protocolVersion: 1, appBuild: "in-process", capabilities: capabilities)))
     }
 
+    func transportDisconnected() {
+        stateReconciler.resetForReconnect()
+        remoteByHandle.removeAll()
+        negotiated = []
+        remotes.values.forEach { $0.transportDisconnected() }
+    }
+
+    func reconnect() {
+        connect()
+        send(.listSessions)
+        for sessionId in remotes.keys.sorted() {
+            send(.attach(.init(sessionId: sessionId, cols: 80, rows: 25)))
+        }
+    }
+
     func attach(sessionId: String, kind: LocalCodingAgentKind) -> RemoteSessionBackend {
         let remote = RemoteSessionBackend(sessionId: sessionId, kind: kind, client: self)
         remotes[sessionId] = remote
         remote.updateConnection(capabilities: negotiated)
-        send(.attach(.init(sessionId: sessionId, cols: 80, rows: 24)))
+        send(.attach(.init(sessionId: sessionId, cols: 80, rows: 25)))
         return remote
     }
 
@@ -402,6 +656,28 @@ final class InProcessSessionProtocolClient {
         }
     }
 
+    func screenText(sessionId: String, maxLines: Int) -> String? {
+        let requestId = UUID().uuidString
+        send(.control(.init(requestId: requestId, op: "screenText", arguments: [
+            "sessionId": .string(sessionId), "maxLines": .number(Double(maxLines)),
+        ])))
+        guard let event = synchronousResponses.removeValue(forKey: requestId),
+              case let .string(text)? = event.fields["text"] else { return nil }
+        return text
+    }
+
+    func updateApprovalsReviewer(
+        sessionId: String, reviewer: CodexProtocol.ApprovalsReviewer
+    ) async throws {
+        let requestId = UUID().uuidString
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            pendingControls[requestId] = { continuation.resume(with: $0) }
+            send(.control(.init(requestId: requestId, op: "updateApprovalsReviewer", arguments: [
+                "sessionId": .string(sessionId), "reviewer": .string(reviewer.rawValue),
+            ])))
+        }
+    }
+
     private func receive(_ data: Data) {
         guard let message = try? codec.decodeDaemon(data) else { return }
         switch message {
@@ -413,28 +689,35 @@ final class InProcessSessionProtocolClient {
             remotes.values.forEach { $0.updateConnection(capabilities: caps) }
         case let .sessions(value):
             for summary in value.sessions {
-                guard let remote = remotes[summary.sessionId] else { continue }
-                stateReceiver = { [weak remote] state in remote?.apply(state: state) }
+                guard remotes[summary.sessionId] != nil else { continue }
                 stateReconciler.receiveFull(summary)
-                stateReceiver = nil
             }
         case let .attached(value):
             guard let remote = remotes[value.sessionId] else { return }
             remote.attach(handle: value.handle)
             remoteByHandle[value.handle] = remote
         case let .state(value):
-            guard let remote = remotes[value.sessionId] else { return }
-            stateReceiver = { [weak remote] state in remote?.apply(state: state) }
+            guard remotes[value.sessionId] != nil else { return }
             stateReconciler.receiveDelta(
                 sessionId: value.sessionId, stateSeq: value.stateSeq, state: value.delta)
-            stateReceiver = nil
         case let .data(value): remoteByHandle[value.handle]?.receiveTerminal(value.bytes)
         case let .event(value):
             if value.kind == "profileSwitchResult", let requestId = value.requestId,
                let continuation = pendingProfile.removeValue(forKey: requestId) {
                 continuation.resume(returning: .init(protocolEvent: value))
+            } else if value.kind == "approvalModeResult", let requestId = value.requestId,
+                      let completion = pendingControls.removeValue(forKey: requestId) {
+                if case let .string(error)? = value.fields["error"] {
+                    completion(.failure(SessionProtocolControlError.failed(error)))
+                } else {
+                    completion(.success(()))
+                }
+            } else if value.kind == "screenTextResult", let requestId = value.requestId {
+                synchronousResponses[requestId] = value
             } else {
-                remotes.values.forEach { $0.receiveEvent(value) }
+                if case let .string(sessionId)? = value.fields["sessionId"] {
+                    remotes[sessionId]?.receiveEvent(value)
+                }
             }
         case .resync:
             send(.listSessions)
@@ -463,6 +746,35 @@ private extension SessionHealthWire {
     var health: CrewSessionHealth? {
         guard let kind = CrewSessionHealth.Kind(rawValue: kind) else { return nil }
         return .init(kind: kind, detail: detail)
+    }
+}
+
+private extension SessionLaunchParameterProblemWire {
+    init(_ problem: SessionLaunchParameterProblem) {
+        switch problem {
+        case let .modelUnrecognized(value, quote):
+            self.init(kind: "modelUnrecognized", value: value, quote: quote)
+        case let .effortIgnored(value, quote):
+            self.init(kind: "effortIgnored", value: value, quote: quote)
+        }
+    }
+
+    var problem: SessionLaunchParameterProblem? {
+        switch kind {
+        case "modelUnrecognized": return .modelUnrecognized(value: value, quote: quote)
+        case "effortIgnored": return .effortIgnored(value: value, quote: quote)
+        default: return nil
+        }
+    }
+}
+
+private extension SessionEvent {
+    static func controlResult(
+        kind: String, requestId: String, sessionId: String, error: String?
+    ) -> SessionEvent {
+        var fields: [String: SessionWireJSONValue] = ["sessionId": .string(sessionId)]
+        if let error { fields["error"] = .string(error) }
+        return .init(kind: kind, requestId: requestId, fields: fields)
     }
 }
 
@@ -496,6 +808,30 @@ private extension SessionProfileSwitchOutcome {
 }
 
 private extension SessionWireJSONValue {
+    init?(_ value: Any) {
+        switch value {
+        case let value as String: self = .string(value)
+        case let value as Bool: self = .bool(value)
+        case let value as NSNumber: self = .number(value.doubleValue)
+        case let value as [String: Any]:
+            var object: [String: SessionWireJSONValue] = [:]
+            for (key, child) in value {
+                guard let converted = SessionWireJSONValue(child) else { return nil }
+                object[key] = converted
+            }
+            self = .object(object)
+        case let value as [Any]:
+            var array: [SessionWireJSONValue] = []
+            for child in value {
+                guard let converted = SessionWireJSONValue(child) else { return nil }
+                array.append(converted)
+            }
+            self = .array(array)
+        case _ as NSNull: self = .null
+        default: return nil
+        }
+    }
+
     var foundationObject: Any {
         switch self {
         case let .string(value): return value

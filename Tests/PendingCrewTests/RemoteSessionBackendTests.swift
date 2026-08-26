@@ -27,10 +27,19 @@ final class RemoteSessionBackendTests: XCTestCase {
 
         direct.health = CrewSessionHealth(kind: .usageLimit, detail: "limit")
         direct.isWorking = true
+        direct.launchParameterProblem = .effortIgnored(value: "auto", quote: "ignored")
         direct.status = .exited(23)
         XCTAssertEqual(remote.health, CrewSessionHealth(kind: .usageLimit, detail: "limit"))
         XCTAssertTrue(remote.isWorking)
+        XCTAssertEqual(remote.launchParameterProblem,
+                       .effortIgnored(value: "auto", quote: "ignored"))
         XCTAssertEqual(remote.status, .exited(23))
+
+        direct.inspectionText = "authoritative tail"
+        XCTAssertEqual(remote.screenText(maxLines: 17), "authoritative tail")
+        XCTAssertEqual(direct.requestedScreenTextLineLimits, [17])
+        try? await remote.updateApprovalsReviewer(.user)
+        XCTAssertEqual(direct.approvalsReviewers, [.user])
 
         remote.stop()
         XCTAssertEqual(direct.stopCount, 1)
@@ -48,9 +57,19 @@ final class RemoteSessionBackendTests: XCTestCase {
         remote.resizeTerminal(cols: 132, rows: 43)
         XCTAssertEqual(direct.rawInputs, [[0x1b, 0x0d]])
         XCTAssertEqual(direct.resizes, [
-            .init(cols: 80, rows: 24), // attach carries the initial viewport
+            .init(cols: 80, rows: 25), // attach preserves AgentSessionCore's default viewport
             .init(cols: 132, rows: 43),
         ])
+    }
+
+    func testPlainTerminalInterruptKeepsCtrlCBehaviorAcrossInputMessage() {
+        let direct = ProtocolTestBackend(kind: .terminal)
+        let bridge = InProcessSessionProtocolBridge()
+        let remote = bridge.expose(sessionId: "plain-terminal", backend: direct)
+
+        remote.interrupt()
+
+        XCTAssertEqual(direct.rawInputs, [[0x03]])
     }
 
     func testMissingCapabilityDegradesWithoutRejectingConnection() {
@@ -63,11 +82,67 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertTrue(remote.isProtocolConnected)
         XCTAssertEqual(remote.negotiatedCapabilities, ["transcript-events"])
         XCTAssertFalse(remote.supportsCapability("approval-mode"))
+        XCTAssertFalse(remote.supportsCapability("screen-text"))
+        direct.inspectionText = "must not be read"
+        XCTAssertEqual(remote.screenText(maxLines: 20), "（daemon 不支持读取输出）")
+        XCTAssertEqual(direct.requestedScreenTextLineLimits, [])
+    }
+
+    func testOutputProducedBeforeRegistrationAndAttachIsFlushedThroughProtocol() {
+        let bridge = InProcessSessionProtocolBridge()
+        let output = bridge.terminalOutputSink(sessionId: "early-terminal")
+        output([0x65, 0x61, 0x72, 0x6c, 0x79])
+
+        let remote = bridge.expose(
+            sessionId: "early-terminal", backend: ProtocolTestBackend(kind: .claudeCode))
+
+        XCTAssertEqual(remote.lastTerminalFrameBytes, Array("early".utf8))
+    }
+
+    func testCodexNotificationsBeforeAndAfterAttachReachRemoteTranscriptAsEvents() {
+        let bridge = InProcessSessionProtocolBridge()
+        let notification = bridge.codexNotificationSink(sessionId: "codex-events")
+        notification("item/completed", [
+            "item": ["id": "before", "type": "agentMessage", "text": "one"],
+        ])
+        let remote = bridge.expose(
+            sessionId: "codex-events", backend: ProtocolTestBackend(kind: .codex))
+        notification("item/completed", [
+            "item": ["id": "after", "type": "agentMessage", "text": "two"],
+        ])
+
+        XCTAssertEqual(remote.transcript?.items.count, 2)
+    }
+
+    func testReconnectInvalidatesOldHandleThenHelloListsAndReattaches() {
+        let direct = ProtocolTestBackend(kind: .claudeCode)
+        let bridge = InProcessSessionProtocolBridge()
+        let remote = bridge.expose(sessionId: "reconnect", backend: direct)
+
+        bridge.disconnectViewer()
+        XCTAssertFalse(remote.isProtocolConnected)
+        remote.sendRaw([1])
+        XCTAssertEqual(direct.rawInputs, [], "断线后的旧 handle 必须失效")
+
+        direct.isWorking = true
+        XCTAssertFalse(remote.isWorking, "断线期间的增量不能假装已送达")
+
+        bridge.reconnectViewer()
+        XCTAssertTrue(remote.isProtocolConnected)
+        XCTAssertTrue(remote.isWorking, "重连后的 listSessions 必须全量覆盖")
+        remote.sendRaw([2])
+        XCTAssertEqual(direct.rawInputs, [[2]], "重新 attach 分配的新 handle 可继续输入")
+        XCTAssertEqual(direct.resizes, [
+            .init(cols: 80, rows: 25),
+            .init(cols: 80, rows: 25),
+        ])
     }
 }
 
 @MainActor
-private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling {
+private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
+    SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling,
+    SessionProtocolLaunchProblemProviding {
     let kind: LocalCodingAgentKind
     @Published var status: SessionStatus = .running
     var statusPublisher: Published<SessionStatus>.Publisher { $status }
@@ -85,6 +160,13 @@ private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminal
     var clearQuotaCount = 0
     var profileCommands: [SessionProfileSwitchCommand] = []
     var profileOutcome: SessionProfileSwitchOutcome = .unsupported
+    @Published var launchParameterProblem: SessionLaunchParameterProblem?
+    var protocolLaunchParameterProblems: AnyPublisher<SessionLaunchParameterProblem, Never> {
+        $launchParameterProblem.compactMap { $0 }.eraseToAnyPublisher()
+    }
+    var inspectionText = ""
+    var requestedScreenTextLineLimits: [Int] = []
+    var approvalsReviewers: [CodexProtocol.ApprovalsReviewer] = []
 
     init(kind: LocalCodingAgentKind) { self.kind = kind }
 
@@ -98,5 +180,12 @@ private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminal
     }
     func sendRaw(_ bytes: [UInt8]) { rawInputs.append(bytes) }
     func resizeTerminal(cols: Int, rows: Int) { resizes.append(.init(cols: cols, rows: rows)) }
+    func screenText(maxLines: Int) -> String {
+        requestedScreenTextLineLimits.append(maxLines)
+        return inspectionText
+    }
+    func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
+        approvalsReviewers.append(reviewer)
+    }
 }
 #endif

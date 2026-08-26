@@ -31,8 +31,22 @@ final class InProcessTransport: SessionTransport {
     /// P4 的 viewer 断线语义在此提前钉住：只断 viewer 链路，不碰任何 session。
     func disconnect() {
         isConnected = false
-        receiveFromApp = nil
-        receiveFromDaemon = nil
+    }
+
+    /// P2 直接复用同一对函数端点；P4 socket transport 会在这里换成新连接。
+    func reconnect() { isConnected = true }
+}
+
+/// §4.5 的定时常量。P2 没有 socket，因此不启动计时器；P4 transport 直接复用这些值。
+enum SessionReconnectPolicy {
+    static let pingInterval: TimeInterval = 10
+    static let pongTimeout: TimeInterval = 30
+    static let daemonIdleTimeout: TimeInterval = 60
+
+    static func delay(forAttempt attempt: Int) -> TimeInterval {
+        guard attempt > 0 else { return 0.2 }
+        guard attempt < 5 else { return 5 }
+        return min(0.2 * pow(2, Double(attempt)), 5)
     }
 }
 
@@ -42,10 +56,12 @@ final class SessionStateReconciler {
     private var lastSequence: [String: UInt64] = [:]
     private var waitingForFullState: Set<String> = []
     private let requestFullList: () -> Void
-    private let apply: (_ stateSeq: UInt64, _ state: SessionProtocolState) -> Void
+    private let apply: (_ sessionId: String, _ stateSeq: UInt64,
+                        _ state: SessionProtocolState) -> Void
 
     init(requestFullList: @escaping () -> Void,
-         apply: @escaping (_ stateSeq: UInt64, _ state: SessionProtocolState) -> Void) {
+         apply: @escaping (_ sessionId: String, _ stateSeq: UInt64,
+                           _ state: SessionProtocolState) -> Void) {
         self.requestFullList = requestFullList
         self.apply = apply
     }
@@ -58,13 +74,13 @@ final class SessionStateReconciler {
             return
         }
         lastSequence[sessionId] = stateSeq
-        apply(stateSeq, state)
+        apply(sessionId, stateSeq, state)
     }
 
     func receiveFull(_ summary: SessionSummary) {
         waitingForFullState.remove(summary.sessionId)
         lastSequence[summary.sessionId] = summary.stateSeq
-        apply(summary.stateSeq, summary.state)
+        apply(summary.sessionId, summary.stateSeq, summary.state)
     }
 
     func resetForReconnect() {

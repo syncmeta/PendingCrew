@@ -46,14 +46,16 @@ final class PlainTerminalSession: ObservableObject, SessionBackend {
         parent.filter { !LocalCodingAgentEnv.isForbidden(key: $0.key) }
     }
 
-    init(shell: String, workdir: String, environment: [String: String]) {
+    init(shell: String, workdir: String, environment: [String: String],
+         protocolOutputSink: (([UInt8]) -> Void)? = nil) {
         // argv 走 `SessionConfig(kind: .terminal).argv()` = `["-l"]`（登录 shell）。
         core = AgentSessionCore(
             config: SessionConfig(kind: .terminal),
             mode: .plainShell,
             executable: shell,
             workdir: workdir,
-            env: environment)
+            env: environment,
+            protocolOutputSink: protocolOutputSink)
         mirror = TerminalMirrorView(frame: .zero)
         mirror.core = core
         mirror.terminalDelegate = mirror

@@ -43,6 +43,9 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// mirror 挂这里拿字节。**core 自己不知道有没有人在看** —— 没人挂就没人收，
     /// 那正是 P4 之后「没人看的 session 不占主线程」的形状。
     var onOutput: ((ArraySlice<UInt8>) -> Void)?
+    /// P2 协议热路径：与 app-side mirror 旁路分开，原始 PTY 字节进入 kind=1 帧。
+    /// 构造时注入，保证子进程第一批输出也不会抢在 transport 注册前丢失。
+    private let protocolOutputSink: (([UInt8]) -> Void)?
 
     /// `status` 翻成 `.exited` 的那一拍（门面据此收窄两份回滚缓冲）。
     var onExited: (() -> Void)?
@@ -132,9 +135,11 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
          mode: Mode = .agent,
          executable: String,
          workdir: String,
-         env: [String: String]) {
+         env: [String: String],
+         protocolOutputSink: (([UInt8]) -> Void)? = nil) {
         self.kind = config.kind
         self.mode = mode
+        self.protocolOutputSink = protocolOutputSink
         super.init()
 
         var opts = TerminalOptions.default
@@ -238,6 +243,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         lastOutputAt = Date()
         if mode == .agent { scanOutput(slice) }
         onOutput?(slice)
+        protocolOutputSink?(Array(slice))
     }
 
     /// 报给 PTY 的窗口尺寸。像素维度报 16×16 的常量（SwiftTerm 自带的
