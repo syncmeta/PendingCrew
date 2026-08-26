@@ -236,6 +236,41 @@ enum CrewComposerMentionParser {
         }
         return seen
     }
+
+    /// 发出去的那份 mentions（Todo #62 ③）。两种来源**语义不同**，这里是唯一分界处。
+    ///
+    ///   * **手打的 `@小王`**（token-backed，`staged`）→ **排他**，#543 一个字不松。
+    ///     人是从 picker / 头像主动选的，他知道自己在定向。
+    ///   * **「回复」按钮的自动 @**（`replyTo`）→ `[broadcast, 被回复者]`。
+    ///     人点「回复」时压根没选过「定向」，他只是在接一句话；照直挂
+    ///     `session(X)` 会让**每一条回复悄悄变私信**。这个后果此前一直没暴露，
+    ///     只因为人类发的 mentions 根本不落盘（见
+    ///     `LocalBackend.postCrewMessage`）—— ③ 一落盘就会暴露，所以两件事必须
+    ///     同一笔做完。广播 + 叫醒正是 #62 新加的那一档：全组看得见、只叫醒被
+    ///     回复的那个，不用造新东西。
+    ///
+    /// **手打的定向 @ 在场时不放宽**：人已经明确选了排他，不能让一个他没点过的
+    /// 自动 @ 把范围悄悄拉开。想两者兼得，composer 上点一下「全体」（那就是一条
+    /// 手打的 `broadcast`，走上面第一条规则）。
+    static func mentionsToSend(
+        staged: [CrewStagedMention], replyTo: CrewMention?
+    ) -> [CrewMention] {
+        var all = staged
+        if let replyTo { all.append(CrewStagedMention(token: "", mention: replyTo)) }
+        let collapsed = mentionsToSend(all)
+        // 没在回复 → 老行为，一个字不动。
+        guard replyTo != nil else { return collapsed }
+        // 人自己打了定向 @ → 他选的排他说了算。
+        guard !staged.contains(where: { isNarrowing($0.mention.kind) }) else { return collapsed }
+        guard !collapsed.contains(.broadcast) else { return collapsed }
+        return [.broadcast] + collapsed
+    }
+
+    /// 收窄可见范围的 mention 种类 —— 与 `CrewWhiteboardVisibility.isNarrowing`
+    /// 同一份判据（那边判「看得见吗」，这边判「要不要放宽」）。
+    private static func isNarrowing(_ kind: String) -> Bool {
+        kind == "session" || kind == "captain"
+    }
 }
 
 // MARK: - Reply-target derivation

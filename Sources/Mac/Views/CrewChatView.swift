@@ -545,14 +545,13 @@ struct CrewChatView: View {
         replyTarget = nil
     }
 
-    /// The full mention set to send: token-backed staged mentions + the reply
-    /// auto-@ (if any), de-duplicated.
+    /// The full mention set to send. Pure logic (incl. the reply auto-@ →
+    /// `[broadcast, 被回复者]` widening, Todo #62 ③) lives in
+    /// `CrewComposerMentionParser.mentionsToSend(staged:replyTo:)` — here we only
+    /// hand it the two inputs.
     private func mentionsForSend() -> [CrewMention] {
-        var all = stagedMentions
-        if let replyMention = replyTarget?.mention {
-            all.append(CrewStagedMention(token: "", mention: replyMention))
-        }
-        return CrewComposerMentionParser.mentionsToSend(all)
+        CrewComposerMentionParser.mentionsToSend(
+            staged: stagedMentions, replyTo: replyTarget?.mention)
     }
 
     // MARK: - in-bubble reply reference (#377)

@@ -411,11 +411,20 @@ final class LocalBackend: PendingCrewBackend {
         // 附件-only（无正文只发图）也放行（Todo #3）。
         guard !trimmed.isEmpty || !localAttachments.isEmpty else { return }
         // 本机人类显示名「人」—— agent 看的白板渲染成「- 人: …」而非裸「人类」。
-        // `replyToId` 记成本地白板的 `in_reply_to` 引用（mentions 的本地直投唤醒
-        // 由 CrewChatView.send() 在 append 后单独编排，这里不消费）。
+        // `replyToId` 记成本地白板的 `in_reply_to` 引用。
+        //
+        // **mentions 落盘**（Todo #62 ③）：在此之前这个形参收了就扔 —— @ 只喂给了
+        // 旁边那条直投唤醒链（`CrewChatView.send()` 单独编排），消息本身一个字不带。
+        // 于是人类 @ 谁都是全组可见（`CrewWhiteboardVisibility` 看的是消息上的
+        // mentions），composer 的「全体」（`broadcast`）在这条路上从来没落过盘。
+        // 现在真存下来：人类的 @ 第一次有了和 `post_to_crew` 一样的语义 —— 手打
+        // `@小王` 排他（#543），「回复」的自动 @ 是 `[broadcast, 被回复者]`
+        // （全组可见 + 只叫醒他，组装在 `CrewComposerMentionParser.mentionsToSend`）。
+        // 唤醒面一行没改：谁被叫醒仍由 `CrewLocalMentionInjectLogic` 决定。
         whiteboard.appendUserMessage(
             crewId: crewId, text: trimmed, senderName: "人", inReplyTo: replyToId,
-            attachments: localAttachments)
+            attachments: localAttachments,
+            mentions: mentions.map(LocalWhiteboardMention.init))
     }
 
     /// 本地白板变更流（去 3s 轮询）。两个上游合流成 `Void` tick：

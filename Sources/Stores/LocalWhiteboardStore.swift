@@ -171,9 +171,18 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     /// 追加一条本机人类消息。`senderName` = 人类显示名（如已知；nil → 渲染退回「我/人类」）。
     /// `inReplyTo` = 被回复消息的白板 id（Phase 6 回复；nil = 非回复）。
     /// `attachments` = 本地落盘附件（Todo #3 群聊图片；nil/空 = 纯文本）。
+    ///
+    /// `mentions` = 人类 composer 的定向 @（Todo #62 ③）。**在此之前这个形参根本
+    /// 不存在** —— `LocalBackend.postCrewMessage` 收了 mentions 却一个字不落盘，@
+    /// 只喂给了旁边那条直投唤醒链。后果是人类 @ 谁都是全组可见（`isVisible` 看的是
+    /// 消息上的 mentions，消息上压根没有），而 `broadcast`（composer 的「全体」）在
+    /// 这条路上从来没落过盘 —— 全库 114 条真白板里 user 发的 mentions 全是空的。
+    /// 于是 A 线刚做好的可见性 + 注入面消歧对人类发的消息**一概不生效**。这里补上，
+    /// 两条路（人类 composer / MCP `post_to_crew`）才用同一套语义。
     func appendUserMessage(
         crewId: String, text: String, senderName: String? = nil, inReplyTo: String? = nil,
-        attachments: [LocalWhiteboardAttachment]? = nil) {
+        attachments: [LocalWhiteboardAttachment]? = nil,
+        mentions: [LocalWhiteboardMention]? = nil) {
         append(crewId: crewId, LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
             senderKind: "user",
@@ -184,6 +193,7 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             createdAt: ISO8601DateFormatter().string(from: Date()),
             senderName: senderName,
             inReplyTo: inReplyTo,
+            mentions: (mentions?.isEmpty == true) ? nil : mentions,
             attachments: (attachments?.isEmpty == true) ? nil : attachments))
     }
 
@@ -578,5 +588,17 @@ struct LocalWhiteboardMention: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case kind
         case targetId = "target_id"
+    }
+}
+
+/// 从 wire 层的 `CrewMention` 转过来（Todo #62 ③）。两个类型字段完全同形 ——
+/// 差别只是一个走 edge/composer、一个落本地白板 JSON。人类 composer 的 @ 要落盘
+/// 就得过这道桥；桥只有这一座，别在调用点手写
+/// `LocalWhiteboardMention(kind: m.kind, targetId: m.targetId)`（漏一个字段就是
+/// 静默降级）。写在 extension 里是为了**不吃掉逐字段的 memberwise init** ——
+/// 那个 init 有一堆现存调用方。
+extension LocalWhiteboardMention {
+    init(_ mention: CrewMention) {
+        self.init(kind: mention.kind, targetId: mention.targetId)
     }
 }
