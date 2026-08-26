@@ -301,6 +301,24 @@ final class HookEmitterTests: XCTestCase {
         XCTAssertFalse(out.contains("总部〔占位名"))
     }
 
+    /// 这条与上面 `testParallelSessionSplitHintReadsLiveSnapshotAndRendersActualCount`
+    /// 同源：判定里的「现在」原本都来自墙上时钟。**两条一起改了，理由写在这儿 ——
+    /// 别让下一个打开这个文件的人以为其中一条是漏的。**
+    ///
+    /// - **敞口差 60 倍**：这条要「写完 12 条 → 首次 emit」之间停顿超过 **15 分钟**
+    ///   才翻；那条只要 **15 秒**。所以那条在野外真红过（2026-08-26，共享目录 main
+    ///   `c1aac81`），而这条在本机留存的 **34 份全量日志里 34 趟全绿** —— 其中 7 趟
+    ///   本身是红的，红的是别人（ViewWiring / ImageCache / CodexProtocol / ChatOpenCost）。
+    /// - **第二条断言（冷却）机制上翻不了**：要靠冷却失效来翻，需要两次 emit 间隔
+    ///   ≥ 30 分钟；可那时那 12 条早已掉出 15 分钟窗口，signal 变 nil，断言照样成立。
+    ///   它自己护住了自己，真正有敞口的只有第一条断言。
+    /// - **仍然一起改**：成本 3 行、生产代码零改动，而「跑测期间机器休眠 15 分钟」
+    ///   不是不可能事件。
+    ///
+    /// **改完量过尺子还在**（否则就是把飘的红换成静默的绿）：把 `now` 推后 16 分钟
+    /// 张开那道缝 → 密度那条 `XCTAssertTrue` 红，且冷却那条不红；两次 emit 之间抹掉
+    /// `<crewId>.captain-awareness.json`（= 冷却失效这个真回归）→ 冷却那条
+    /// `XCTAssertFalse` 红。原样 → 绿。两条断言都仍然会红。
     @MainActor
     func testDensitySplitHintRendersOnceThenCoolsDown() {
         let base = tempDir()
