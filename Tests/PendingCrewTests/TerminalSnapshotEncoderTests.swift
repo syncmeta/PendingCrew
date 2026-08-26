@@ -135,6 +135,73 @@ final class TerminalSnapshotEncoderTests: XCTestCase {
                       "前置条件：这段语料本来就该产生折行")
     }
 
+    /// **折行的续行正好落在屏幕最后一行。**（机长 2026-08-26 点出来的边界。）
+    ///
+    /// 还原折行的手法是「垫满右边界 → 写一个字符把折触发掉 → `\e[A` 上去把垫的
+    /// 擦回 code 0 → 回来」。这套的前提是**那两行此刻都还寻址得到**。而续行落在
+    /// 最后一行时，触发那一折会让整屏**向上滚一格**：要擦的那一行不在原来的行号上了。
+    ///
+    /// 它到底还对不对，不是想出来的 —— `\e[A` 是**相对光标**的，滚动把光标和那一行
+    /// 一起带走了，所以相对关系不变。这条测试就是把这句话钉住：错了也看不出来，
+    /// 只会让历史悄悄少一行。
+    private func lastRowWrapCorpus(prefixLines: Int, cols: Int = 80) -> String {
+        var corpus = ""
+        for i in 0..<prefixLines { corpus += "pre\(i)\r\n" }
+        // 一条比一行还长的行 —— 在最后一行上折下去，屏幕跟着滚一格。
+        corpus += String(repeating: "W", count: cols + cols / 2)
+        // 折下去之后光标在**续行**上。要制造的状态是「**前半行**没写满、而下一行
+        // 是它的折行续行」，所以必须先 `\e[A` 上到前半行再擦 —— 直接擦会擦到续行，
+        // 那条路根本走不到需要垫空格的分支。
+        //
+        // 这个坑是红证抓出来的：第一版就是直接擦，两条测试照样绿，而同一时刻真
+        // claude 语料是红的 —— 也就是说它们当时什么都没测到。
+        corpus += "\u{1b}[A\u{1b}[\(50)G\u{1b}[K"
+        return corpus
+    }
+
+    /// 前置条件里最要紧的一条：**那一对折行的前半行必须真的没写满**。写满了就不需要
+    /// 垫空格、也就走不到「上去把垫的擦回来」那条路 —— 测试会绿，但什么也没测到。
+    private func assertPairNeedsPadding(_ flat: FlatTerminal, _ what: String,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        guard flat.activeLines.count >= 2 else {
+            return XCTFail("\(what)：连两行都没有", file: file, line: line)
+        }
+        let first = flat.activeLines[flat.activeLines.count - 2]
+        let trailingBlank = first.cells.reversed().prefix { $0.char == "\0" }.count
+        XCTAssertGreaterThan(trailingBlank, 0,
+                             "\(what)：前半行必须留着没写过的尾巴，否则垫空格那条路走不到",
+                             file: file, line: line)
+    }
+
+    func testWrappedContinuationLandingOnLastRow() {
+        let rows = 25
+        let corpus = lastRowWrapCorpus(prefixLines: rows - 1)
+        let (t1, t2) = roundTrip(corpus, rows: rows)
+        let flat = TerminalFlattener.flatten(t1.terminal)
+        XCTAssertTrue(flat.activeLines.suffix(2).first?.isWrapped == false
+                      && flat.activeLines.last?.isWrapped == true,
+                      "前置条件：最后两行该正好是一对折行")
+        XCTAssertGreaterThan(flat.activeLines.count, rows,
+                             "前置条件：那一折该真的把屏幕滚过一格（有历史了）")
+        assertPairNeedsPadding(flat, "落在最后一行")
+        assertEquivalent(t1, t2, "折行续行落在最后一行")
+    }
+
+    /// 同一个边界，叠上回滚缓冲区溢出 —— 那一折造成的滚动此刻正把一行挤出上限。
+    func testWrappedContinuationOnLastRowWhileScrollbackOverflows() {
+        let cap = AgentSessionCore.scrollbackLines
+        let corpus = lastRowWrapCorpus(prefixLines: cap + 500)
+        let (t1, t2) = roundTrip(corpus)
+        let a = TerminalFlattener.flatten(t1.terminal)
+        XCTAssertGreaterThan(a.activeLines.count, cap,
+                             "前置条件：这一趟该真的把回滚上限撑满")
+        assertPairNeedsPadding(a, "落在最后一行 + 回滚溢出")
+        assertEquivalent(t1, t2, "落在最后一行 + 回滚溢出")
+        XCTAssertEqual(a.activeLines.count,
+                       TerminalFlattener.flatten(t2.terminal).activeLines.count,
+                       "回滚长度不许因为那一折少一行")
+    }
+
     func testModesArePreserved() {
         let corpus = "\u{1b}[?1h\u{1b}[?2004h\u{1b}[?1002h\u{1b}[?1006hmodes on"
         let (t1, t2) = roundTrip(corpus)
@@ -233,13 +300,20 @@ final class TerminalSnapshotEncoderTests: XCTestCase {
     // MARK: - §7.3 回滚缓冲区长度
 
     func testScrollbackOverflowKeepsLastTenThousandLines() {
+        // 上限用产品里的那个常量，不另写一个数 —— 那个数改了，这条测试要跟着改，
+        // 而不是继续绿着测一个已经不存在的上限。
+        let cap = AgentSessionCore.scrollbackLines
         var corpus = ""
-        for i in 0..<12_000 { corpus += "line-\(i)\r\n" }
-        let (t1, t2) = roundTrip(corpus)
-        assertEquivalent(t1, t2, "12000 行溢出")
+        for i in 0..<(cap + 2_000) { corpus += "line-\(i)\r\n" }
+        let (t1, t2) = roundTrip(corpus, scrollback: cap)
+        assertEquivalent(t1, t2, "\(cap + 2000) 行溢出")
 
         let a = TerminalFlattener.flatten(t1.terminal)
         let b = TerminalFlattener.flatten(t2.terminal)
+        XCTAssertGreaterThan(a.activeLines.count, cap,
+                             "前置条件：得真的撑满过上限，否则这条什么也没测")
+        XCTAssertLessThan(a.activeLines.count, cap + 2_000,
+                          "前置条件：也得真的**溢出**过 —— 没裁掉任何行就不叫溢出")
         XCTAssertEqual(a.activeLines.count, b.activeLines.count, "还原后的总行数")
         // Todo #34 踩过的坑：首行不许是断在半截的碎片。
         let firstText = b.activeLines.first?.text.trimmingCharacters(in: .whitespaces) ?? ""
