@@ -894,36 +894,42 @@ final class McpServer {
             guard !todoText.isEmpty else {
                 return toolResult(id: id, text: "ERROR: text 不能为空 —— 写清要人拍板/要人做的那件事。")
             }
+            // 顺序、措辞、失败回执全部走共享剧本 `TodoLandingFlow` —— 四个调用点
+            // 只有这一份，别在这儿自己拼字符串（#577 那一族靠的就是「文案和顺序
+            // 只有一份」）。这条路上没有第三步：agent 加完不用叫醒谁，人类在
+            // app 里看得到，所以 `.announced` 就是它的终点。
             guard let added = humanTodos.add(crewId: crewId, text: todoText,
                                              bySessionId: sessionId,
                                              bySenderName: sessionLabel) else {
-                return toolResult(
-                    id: id,
-                    text: "ERROR: 没能记进人类 Todo —— 列表文件这次读不出来或漏读，原有内容没被动过"
-                        + "（群聊白板上有一条系统警示）。**这条没有记下**，请重试；"
-                        + "急事改用 ask（阻塞等人答）。")
+                return toolResult(id: id, text: TodoLandingFlow.notPersistedReceipt(
+                    ledger: .human, action: .added))
             }
-            // 群里那行带 `@human` 标记：这条是讲给人听的，别为它叫醒 agent
-            // （human mention 不收窄可见范围，队友照样看得见 —— 2026-08-23 修过）。
             let announce = TodoLedger.human.newItemAnnouncement(
                 number: added.number, text: todoText)
-            var receipt = "已记入人类 Todo #\(added.number)。人类回应时群里会出「回应 人类 To Do #\(added.number)：…」并叫醒你——现在接着干别的活，别守着等。"
+            var reached = TodoLandingFlow.Step.persisted
+            var detail: String?
             do {
+                // 群里那行带 `@human` 标记：这条是讲给人听的，别为它叫醒 agent
+                // （human 不收窄可见范围，队友照样看得见 —— 2026-08-23 修过）。
                 let incident = try store.appendSessionMessageReportingFailure(
                     crewId: crewId, sessionId: sessionId,
                     text: announce, category: "question",
                     senderName: sessionLabel,
-                    mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
+                    mentions: TodoLandingFlow.mentions(.added).map(LocalWhiteboardMention.init),
                     inReplyTo: nil,
                     senderKind: isCaptain ? "captain" : "session")
                 if let incident {
-                    receipt += "\n⚠️ 条目已记下，但群里那行没发成：\(incident)"
+                    detail = incident
+                } else {
+                    reached = TodoLandingFlow.terminal(.added)
                 }
             } catch {
                 // 账已经落了，只是没宣布 —— 如实说，别让 agent 以为整件事没成。
-                receipt += "\n⚠️ 条目已记下（#\(added.number)），但群里那行没发出去：\(Self.writeFailureReceipt(error))"
+                detail = Self.writeFailureReceipt(error)
             }
-            return toolResult(id: id, text: receipt)
+            return toolResult(id: id, text: TodoLandingFlow.receipt(
+                ledger: .human, action: .added, number: added.number,
+                reached: reached, detail: detail))
         case "set_session_profile":
             let model = (args["model"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
