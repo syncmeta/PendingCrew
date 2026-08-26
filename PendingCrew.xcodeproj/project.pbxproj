@@ -65,7 +65,9 @@
 		2222CD346AE6B98B6FA421DD /* GitWorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8FE15162B5E527F4765346 /* GitWorktreeService.swift */; };
 		229AB9E4ED3AA7757C607159 /* LocalWhiteboardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E09E12D071816B5362AD7626 /* LocalWhiteboardStore.swift */; };
 		22A27AC631B26380BC3108D2 /* LocalCodingAgentExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */; };
+		2310E7C895A8AD8D3A5DC2A3 /* InProcessTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D43C760D0A83E792F6BA54 /* InProcessTransportTests.swift */; };
 		244E9BE5225D0776F9FA160E /* TerminalScrollbarOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 721790C0E5E7715BB3ABE620 /* TerminalScrollbarOverlay.swift */; };
+		2459B87031F58261436ADE39 /* InProcessTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C14EF1704CE7384C5CCCDE /* InProcessTransport.swift */; };
 		24CDCE5F04BE62E9B9D73194 /* CrewRecentContextRender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 386CB624A9BF3A3EEE171092 /* CrewRecentContextRender.swift */; };
 		25AC7BA931D930FCF15DE33C /* CodexAppServerBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48B9D9CAD7BB70350DE579B3 /* CodexAppServerBackend.swift */; };
 		2616F98BBCE262F8ACBA9D1F /* session-world-model.en.md in Resources */ = {isa = PBXBuildFile; fileRef = 38F5E570088DE41977747A62 /* session-world-model.en.md */; };
@@ -478,6 +480,7 @@
 		E1FEE4113B4234EA1E96F238 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F64F6B1C6E9879C1F323E372 /* SwiftTerm */; };
 		E3697357DDDE8602BB37A642 /* QuotaRingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D271DB3CF14DAC4F915C249 /* QuotaRingLayoutTests.swift */; };
 		E38B95D34D4C99634C57978C /* McpServerQuotaToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CE00F64EA0D0F2F5B970396 /* McpServerQuotaToolsTests.swift */; };
+		E3B0ECB788708CD081C63466 /* InProcessTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C14EF1704CE7384C5CCCDE /* InProcessTransport.swift */; };
 		E3B57B0AF2B50AB0FC654335 /* CrewSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0BCE95B8A380020947CB207 /* CrewSidebarView.swift */; };
 		E49BB788A724D8177393CFE1 /* CrewHumanTodoRespond.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C888C79487E44BF42708B7 /* CrewHumanTodoRespond.swift */; };
 		E4A7619D671924635AA43F92 /* CrewMailboxWakeLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3FBED08E2034A2109B0D37 /* CrewMailboxWakeLogicTests.swift */; };
@@ -751,6 +754,7 @@
 		902E2DCD59F65F11777B1D83 /* CodexRPCDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexRPCDispatcher.swift; sourceTree = "<group>"; };
 		904E7226BC285C21F3C1652F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		905409EB0256AC7BFA9B9018 /* SessionForegroundClaim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionForegroundClaim.swift; sourceTree = "<group>"; };
+		90D43C760D0A83E792F6BA54 /* InProcessTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InProcessTransportTests.swift; sourceTree = "<group>"; };
 		929BC3329566D029E1403A56 /* AgentQuota.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentQuota.swift; sourceTree = "<group>"; };
 		92B4FFD76B026D94E642C541 /* HookEmitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookEmitter.swift; sourceTree = "<group>"; };
 		933A5868B64D471EDCBE2896 /* CrewSessionTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSessionTitle.swift; sourceTree = "<group>"; };
@@ -776,6 +780,7 @@
 		A4E6A0DAA702E21E6FB3928A /* CrewComposerMentionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewComposerMentionsTests.swift; sourceTree = "<group>"; };
 		A5ED121602F6C57458CB290B /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		A6A56B215C1A906E69116190 /* LocalPromptLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPromptLoaderTests.swift; sourceTree = "<group>"; };
+		A6C14EF1704CE7384C5CCCDE /* InProcessTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InProcessTransport.swift; sourceTree = "<group>"; };
 		A7E641CF1ECE14DE31F17CA7 /* SessionHealthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHealthTests.swift; sourceTree = "<group>"; };
 		A991AA4CE1E1DB8EF6FE4808 /* UserAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserAvatar.swift; sourceTree = "<group>"; };
 		A9949782862E206B0AFA3170 /* TerminalSnapshotEncoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSnapshotEncoderTests.swift; sourceTree = "<group>"; };
@@ -962,6 +967,7 @@
 				386CB624A9BF3A3EEE171092 /* CrewRecentContextRender.swift */,
 				60202465DF374BE31614C151 /* GitInspector.swift */,
 				DF8FE15162B5E527F4765346 /* GitWorktreeService.swift */,
+				A6C14EF1704CE7384C5CCCDE /* InProcessTransport.swift */,
 				8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */,
 				ECFF7155D04A3862EC79E34B /* LocalCodingAgentKind.swift */,
 				DF8E8FC64275B7932540FB17 /* LocalCodingAgentSpec.swift */,
@@ -1355,6 +1361,7 @@
 				1A4D1C7DBA64FB676E8F61FF /* GitWorktreeServiceTests.swift */,
 				C90E34205163859EFCB0446F /* HookEmitterTests.swift */,
 				2DF673153533EC2D317264B0 /* HumanTodoWakePlanTests.swift */,
+				90D43C760D0A83E792F6BA54 /* InProcessTransportTests.swift */,
 				5DDED10023139BDCC71AD956 /* LayoutLoopRegressionTests.swift */,
 				295F4E13C2CFA5C6FC2FBE02 /* LocalAgentSessionStoreTests.swift */,
 				37325956B9504E5FFA86D188 /* LocalApprovalStoreTests.swift */,
@@ -1828,6 +1835,7 @@
 				6761DDF0C26513763523681F /* HumanTodoWakePlan.swift in Sources */,
 				8094B3158013057F7624AA35 /* IPadShell.swift in Sources */,
 				CFFCCE0BBDE3D119D2140C41 /* ImageViewer.swift in Sources */,
+				E3B0ECB788708CD081C63466 /* InProcessTransport.swift in Sources */,
 				1A928FAA7ECCD916641180DE /* LocalAgentSessionStore.swift in Sources */,
 				A6C206B20B537A256C9C42A2 /* LocalAgentUsageMonitor.swift in Sources */,
 				0C31AC70A7AF296381A05716 /* LocalApprovalStore.swift in Sources */,
@@ -2075,6 +2083,8 @@
 				FD3A65C3F88F90ECF6D5BD86 /* HookEmitterTests.swift in Sources */,
 				6C51ACD81C2B79549C96DB3B /* HumanTodoWakePlan.swift in Sources */,
 				65E0F561A106BDAAEF140D6E /* HumanTodoWakePlanTests.swift in Sources */,
+				2459B87031F58261436ADE39 /* InProcessTransport.swift in Sources */,
+				2310E7C895A8AD8D3A5DC2A3 /* InProcessTransportTests.swift in Sources */,
 				B8841857E03B1F557DDAE651 /* LayoutLoopRegressionTests.swift in Sources */,
 				4060B26EB2F61E0D064CA35F /* LocalAgentSessionStore.swift in Sources */,
 				52B74FA2919986145C55A136 /* LocalAgentSessionStoreTests.swift in Sources */,
