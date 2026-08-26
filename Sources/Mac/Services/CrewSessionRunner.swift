@@ -1106,9 +1106,13 @@ final class CrewSessionRunner: ObservableObject {
                 config.newSessionId = AgentSessionResume.newClaudeSessionId()
             }
             if let agentId = config.resumeSessionId ?? config.newSessionId {
+                // Todo #68：把**真实 cwd** 一并记下（isolation worktree 的成员记的就是
+                // worktree 路径）。它只回答「当初在哪儿跑」——「日志在哪儿」跟目录无关
+                // （claude `--resume` 按会话号找全盘，见 `AgentSessionResume` 的实测）。
                 LocalAgentSessionStore.shared.record(
                     crewId: crewId, sessionId: sessionId,
-                    kind: config.kind.rawValue, agentSessionId: agentId)
+                    kind: config.kind.rawValue, agentSessionId: agentId,
+                    workingDirectory: workingDirectory.path)
             }
             backend = AgentTerminalSession(
                 config: config,
@@ -1147,9 +1151,11 @@ final class CrewSessionRunner: ObservableObject {
                     isCaptain: role == .captain),
                 // Todo #28：握手拿到 threadId 就记账，重启这个成员时 thread/resume 回来。
                 notifyThreadId: { tid in
+                    // Todo #68：同 claude 那处 —— 真实 cwd 一并记下（唤醒时定进程目录用）。
                     LocalAgentSessionStore.shared.record(
                         crewId: crewId, sessionId: sessionId,
-                        kind: LocalCodingAgentKind.codex.rawValue, agentSessionId: tid)
+                        kind: LocalCodingAgentKind.codex.rawValue, agentSessionId: tid,
+                        workingDirectory: workingDirectory.path)
                 },
                 // 续不回来 → 已降级新起一条 thread，如实进群说明（不静默假装恢复）。
                 notifyResumeFallback: { failedId, reason in
@@ -1231,8 +1237,16 @@ final class CrewSessionRunner: ObservableObject {
             run.onBecameIdle = { [weak self] r in
                 self?.runBecameIdle(r)
             }
+            let launchedAt = Date()
+            let launchedConfig = config
             run.onEnded = { [weak self] r in
                 self?.discardDeferredWakes(sessionId: r.sessionId)
+                // Todo #68：claude 自己拒了这个会话号 → 不带 --resume 重起一次。
+                self?.retryWithoutResumeIfClaudeRefused(
+                    run: r, config: launchedConfig, launchedAt: launchedAt,
+                    crewId: crewId, sessionId: sessionId,
+                    workingDirectory: workingDirectory, taskBrief: taskBrief,
+                    title: title, additionalEnv: additionalEnv, role: role)
             }
         // 本地 mention 唤醒器钉该 crew 的白板游标（在 CLI 子进程能发首条
         // post_to_crew 之前）—— 该 crew 后续定向 @ 保证被扫到。
@@ -1423,7 +1437,34 @@ final class CrewSessionRunner: ObservableObject {
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
         // 机长用建 crew 时选定的 coding agent（crew 没记 → 默认 Codex）。
         let captainKind = LocalCodingAgentKind.captainDefault(detail.crew.captainAgentKind)
-        var cfg = SessionConfig(kind: captainKind, initialPrompt: initialPrompt)
+        // Todo #68 第 2 件：**机长也要能续跑**。此前它是全机唯一没有续跑路的角色 ——
+        // 每次新造 `captain-<uuid8>`、从不查账本，盘上一百多条历史机长对话一条都没被
+        // 接回来过。
+        //
+        // 账本的键是 `crewId + sessionId`，而机长的 sessionId 每次都新造，所以按键查
+        // 是查不到上一任的。但**每个 crew 同时只允许一个机长**（上面那道 guard +
+        // `runs.removeAll { role == .captain }`），于是「本 crew 最近一条 `captain-*`
+        // 记录」无歧义 —— 用它，就**不必**去动 id 的生成方式。
+        //
+        // 不动 id 还顺手躲开一个硬伤：复用旧 localSessionId = 复用旧的白板读游标
+        // （`<crewId>.<sessionId>.cursor`），机长隔几天醒来会被一次性灌进几百条未读
+        // （实测父群白板 993 条、每天 60~80 条）。新 id → 游标 `.absent` → 只投最近
+        // 一批。世界观那边也不用担心：`--append-system-prompt-file` 是**每次调用现给、
+        // 不进会话**的（2026-08-26 实测：resume 时不带就完全丢、带上只有一份），
+        // 所以续跑不会叠加两份世界观。
+        //
+        // `kind` 必须过滤：crew 换过 runner 时，拿 codex 的 threadId 去喂 claude 的
+        // `--resume` 是纯粹的错。续不上由 agent 自己说了算（claude 走
+        // `retryWithoutResumeIfClaudeRefused`，codex 走 backend 的 resume→start 降级）。
+        let previousCaptain = LocalAgentSessionStore.shared.latestCaptainRecord(
+            crewId: crewId, kind: captainKind.rawValue)
+        var resumeCaptainId: String? = nil
+        if case .resume(let id) = AgentSessionResume.decide(
+            recordedId: previousCaptain?.agentSessionId) {
+            resumeCaptainId = id
+        }
+        var cfg = SessionConfig(kind: captainKind, initialPrompt: initialPrompt,
+                                resumeSessionId: resumeCaptainId)
         // 世界观 + crew 工具按 kind 分流：claude 走文件 flag（appendSystemPromptFile +
         // settings/mcp-config），codex 走 app-server 通道（developerInstructions 字符串 +
         // mcpServers dict）。captain 两边都带（persona 追加 + helper `--captain` 解锁
@@ -1497,11 +1538,19 @@ final class CrewSessionRunner: ObservableObject {
     /// 不断片）。**agent 自己的对话上下文也接**（Todo #28）：起 session 时记下的
     /// agent 侧会话号（claude `--session-id` 指定的 uuid / codex 的 threadId）灌进
     /// `resumeSessionId`，claude 走 `--resume`、codex 走 `thread/resume`。接不回来
-    /// （没记过 / 日志被清 / thread 没了）就如实新起一轮，并在首轮 brief 和群里
-    /// 明说是新开的，不装死。kind 从成员
-    /// 显示名反推（登记时没单存 kind），推不出落回 crew 默认；在 crew 共享目录跑
-    /// （当初若开过 isolation worktree 没持久化，不恢复）。已在跑 → no-op
-    /// （在跑的归注入路径管）。
+    /// （没记过）就如实新起一轮，并在首轮 brief 和群里明说是新开的，不装死。
+    /// kind 从成员显示名反推（登记时没单存 kind），推不出落回 crew 默认。
+    ///
+    /// **Todo #68 两处变化：**
+    /// 1. **回它当初那个目录跑**。账本现在记着起 session 时的真实 cwd（isolation
+    ///    worktree 的就是 worktree 路径）——目录还在就用它，不在了才回落 crew 共享
+    ///    目录。旧行为是一律拉回共享目录（上面这段注释自己写着「不恢复」），worker
+    ///    醒来会在别人的目录里干活。**「不在了」是常态不是例外**：本机 62 个记过的
+    ///    worktree 有 52 个已经被删，所以必须回落，不能硬用。
+    /// 2. **不再预判 claude 能不能续**。记了会话号就直接带 `--resume` 去起，claude
+    ///    自己拒了再由 `retryWithoutResumeIfClaudeRefused` 降级重起 + 如实进群。
+    ///
+    /// 已在跑 → no-op（在跑的归注入路径管）。
     func restartMember(detail: CrewDetail, backend: PendingCrewBackend?,
                        member: LocalSessionMember, wakeText: String) async throws {
         guard !runs.contains(where: {
@@ -1518,26 +1567,19 @@ final class CrewSessionRunner: ObservableObject {
         guard let wd = detail.crew.workingDirectory, !wd.isEmpty else {
             throw RunnerError.captainNoWorkingDirectory
         }
-        let workdir = URL(fileURLWithPath: (wd as NSString).expandingTildeInPath)
+        let crewWorkdir = URL(fileURLWithPath: (wd as NSString).expandingTildeInPath)
         let kind = LocalCodingAgentKind.inferred(fromDisplayName: member.displayName)
             ?? LocalCodingAgentKind.captainDefault(detail.crew.captainAgentKind)
-        // Todo #28：查账本决定能不能续上 agent 侧的会话。claude 能直接看日志文件在不在；
-        // codex 的 thread 存在与否只有发过去才知道 → 乐观续跑，真接不上由 backend 的
-        // resume→start 降级 + 白板通知兜住（同样 fail-loud）。
-        let recorded = LocalAgentSessionStore.shared.agentSessionId(
+        // Todo #28/#68：查账本拿会话号 + 当初跑在哪儿。**记了就带着 `--resume` 去起**，
+        // 不再事先猜「日志在不在我们以为的目录里」——那道门今天在本机把 69/339 条
+        // （20%）本来续得回来的会话挡在了门外（见 `AgentSessionResume` 的实测）。
+        // 真续不上由 claude 自己说了算：`retryWithoutResumeIfClaudeRefused`（claude）
+        // / backend 的 resume→start 降级（codex），两边都 fail-loud。
+        let recorded = LocalAgentSessionStore.shared.record(
             crewId: detail.crew.id, sessionId: member.sessionId)
-        let decision = AgentSessionResume.decide(recordedId: recorded) { id in
-            switch kind {
-            case .claudeCode:
-                return FileManager.default.fileExists(atPath: AgentSessionResume.claudeTranscriptURL(
-                    sessionId: id, workdir: workdir.path,
-                    home: FileManager.default.homeDirectoryForCurrentUser).path)
-            case .codex:
-                return true
-            case .terminal:
-                return false
-            }
-        }
+        let workdir = AgentSessionResume.restartDirectory(
+            recorded: recorded?.workingDirectory, crewDirectory: crewWorkdir)
+        let decision = AgentSessionResume.decide(recordedId: recorded?.agentSessionId)
         var brief = "有人在群里 @ 你：「\(wakeText)」。你是本 crew 的既有成员"
             + "「\(member.displayName)」,此前群里的上下文在白板里(每轮自动注入),接着处理这条。"
         if let notice = AgentSessionResume.briefNotice(for: decision) {
@@ -1611,6 +1653,80 @@ final class CrewSessionRunner: ObservableObject {
             userInitiated: userInitiated
         )
     }
+
+    /// Todo #68：带着 `--resume` 起的 claude，**claude 自己**拒了这个会话号时，
+    /// 不带 `--resume` 重起一次，并把它的原话如实带进白板与首轮 brief。
+    ///
+    /// 这是「不预判、真去试」的后半段。前半段是 `AgentSessionResume.decide` —— 它现在
+    /// 只看账本记没记，不再去猜「日志在不在我们以为的目录里」。那道旧门在本机把
+    /// 69/339 条（20%）claude 本来续得回来的会话挡在了门外。形状与 codex 那侧
+    /// `thread/resume` 失败 → 降级 `thread/start` + `notifyResumeFallback` 完全相同。
+    ///
+    /// **判据的顺序不能反：**
+    /// 1. 这次起本来就带了 `--resume`，且 kind 是 claude；
+    /// 2. 人主动停的不算（`exitReason == .userStopped`）；
+    /// 3. **屏上有 claude 的那句原话**（`No conversation found with session ID: <id>`）
+    ///    —— 这是**唯一**的决策依据。话不在就绝不降级：CLI 没装 / 参数写错 / 额度用尽
+    ///    同样是秒退，把它们吞成「会话没了」会把真故障藏起来，而且长得跟 Todo #68 的
+    ///    病一模一样（悄悄换一个新脑子，谁也不知道）；
+    /// 4. 5 秒窗口只是**廉价护栏**：resume 失败是瞬时的（起来就死、exit 1，实测）。
+    ///    窗口开宽了，一个跑到第 55 秒才因别的原因死掉的 session 会被判成 resume 失败
+    ///    → 悄悄重起 → 那才是真把记忆弄丢。
+    /// 5. 只重试一次 —— 重起那次 `resumeSessionId` 已经是 nil，进不来这条路。
+    ///
+    /// 读画面走 `AgentSessionCore.screenText` —— **这是第三个直接够进 `core` 的调用点**
+    /// （另两个在 `inspect(run:)`，本文件 864 / 869），`screenText` 尚未收进
+    /// `SessionBackend` 协议。#58 P2 收口协议时这三处要一起搬，别把这个漏了。
+    private func retryWithoutResumeIfClaudeRefused(
+        run: CrewSessionRun, config: SessionConfig, launchedAt: Date,
+        crewId: String, sessionId: String, workingDirectory: URL, taskBrief: String,
+        title: String?, additionalEnv: [String: String], role: CrewSessionRun.Role
+    ) {
+        guard config.kind == .claudeCode,
+              let resumedId = config.resumeSessionId, !resumedId.isEmpty,
+              run.exitReason != .userStopped,
+              Date().timeIntervalSince(launchedAt)
+                  <= AgentSessionResume.claudeResumeRefusalWindow,
+              let term = run.backend as? AgentTerminalSession,
+              let said = AgentSessionResume.claudeResumeRejection(
+                inScreenText: term.core.screenText(maxLines: 40), resumedId: resumedId)
+        else { return }
+
+        let decision = AgentSessionResume.Decision.fresh(reason: .agentRejectedResume(
+            id: resumedId, agentSaid: said,
+            diagnosis: AgentSessionResume.resumeRejectionDiagnosis(
+                sessionId: resumedId,
+                lookup: AgentSessionResume.diskLookup(
+                    home: FileManager.default.homeDirectoryForCurrentUser))))
+        if let notice = AgentSessionResume.whiteboardNotice(
+            memberName: run.displayName, decision: decision) {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: notice, category: "progress", senderName: "系统")
+        }
+        var retry = config
+        retry.resumeSessionId = nil
+        retry.newSessionId = nil          // start() 会现造一个并记账（覆盖旧值，这是对的）
+        var brief = taskBrief
+        if let notice = AgentSessionResume.briefNotice(for: decision) {
+            brief = notice + "\n\n" + taskBrief
+        }
+        retry.initialPrompt = brief
+        // 刚退出的那条 run 留在列表里只会变重影 —— 同 id 的旧 run 清掉再起。
+        runs.removeAll { $0.runID == run.runID }
+        // 不带 `serverLink` 重起：那条 link 属于刚退出的那个 run，finalize 已经把
+        // server row 关掉了，复用等于往一条已关的记录上写。登录态要接的话是另一件事。
+        // `developerInstructions` / `codexMcpServers` 同样不带 —— 这条路只服务 claude
+        // （上面 guard 了 kind），那两样是 codex 的通道。
+        Task { [weak self] in
+            try? await self?.start(
+                crewId: crewId, sessionId: sessionId, config: retry,
+                workingDirectory: workingDirectory, taskBrief: brief, title: title,
+                additionalEnv: additionalEnv, role: role)
+        }
+    }
+
+
 }
 
 /// 单次 session 的 UI 视图模型。
