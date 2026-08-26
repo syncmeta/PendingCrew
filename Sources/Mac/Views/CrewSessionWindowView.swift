@@ -810,10 +810,8 @@ struct CrewSessionWindowView: View {
     }
 
     /// Zero-config start: crew default dir + runner kind + permission mode, with
-    /// `firstPrompt` as the initial turn. No title, no task brief. Replicates the
-    /// logged server-link prep (register host → create → claim) so cross-device
-    /// viewers can follow it; BYOK stays local. The first prompt is injected into
-    /// the terminal once the agent's REPL is up.
+    /// `firstPrompt` as the initial turn. No title, no task brief. The first
+    /// prompt is injected into the terminal once the agent's REPL is up.
     private func startSession(firstPrompt: String) async {
         guard let detail = crewStore.selectedDetail else { return }
         guard let wd = detail.crew.workingDirectory, !wd.isEmpty else {
@@ -825,10 +823,6 @@ struct CrewSessionWindowView: View {
         defer { starting = false }
         localError = nil
 
-        // 接合 v2：本地 crew id 不再对应 edge 的 crew 行，server link（跨设备
-        // 遥控可跟看）在 block 3（信箱）重建本地↔edge 绑定后再启用 ——
-        // 此前恒为 nil，prepareServerSession 保留不删，届时复用。
-        let serverLink: CrewSessionServerLink? = nil
         do {
             var cfg = SessionConfig(
                 kind: selectedKind,
@@ -837,7 +831,7 @@ struct CrewSessionWindowView: View {
             let workdir = try SessionWorkspace.resolve(
                 crewDirectory: dir, isolation: cfg.isolation, hint: firstPrompt)
             // 本地 session 的合成 id —— 世界观 / mcp-config / hook settings 三处一致。
-            let localSessionId = serverLink?.sessionId ?? UUID().uuidString.lowercased()
+            let localSessionId = UUID().uuidString.lowercased()
             // 世界观 + comms 接线按 kind 分叉：claude 走文件标志（--append-system-prompt-file
             // / --settings / --mcp-config）；codex 没这些通道 —— 世界观经
             // developerInstructions（字符串）、MCP 经 mcpServers dict 走协议传入。
@@ -873,17 +867,12 @@ struct CrewSessionWindowView: View {
                 workingDirectory: workdir,
                 taskBrief: firstPrompt,
                 title: workerTitle,
-                serverLink: serverLink,
                 developerInstructions: codexDevInstructions,
                 codexMcpServers: codexMcp,
                 // 人在新建面板里填完按下的这一下 —— 这条是唯一该跳过去的路（#42）。
                 userInitiated: true
             )
             // 指令已在 argv 里(positional prompt)—— 不再等 REPL 就绪 sleep + 事后注入。
-            // 登录态 run 的信箱唤醒 / 审批中继接线在这里删掉了（前后端分离 P0）：
-            // `serverLink` 恒 nil，这条接线从来没被走到过。实现仍在
-            // `CrewSessionRunner.ensureMailboxWaker` / `ensurePermissionRelay`，
-            // 等 edge session 通道真开时由那边接，别再从视图接。见 docs/tech-debt.md。
             draft = ""
         } catch {
             localError = error.localizedDescription
@@ -943,34 +932,6 @@ struct CrewSessionWindowView: View {
             crewId: crewId, sessionId: sessionId, captain: captain, label: label)
     }
 
-    /// `taskBrief` is the session's first instruction — the edge requires a
-    /// non-empty brief, and the first message is the natural one (no separate
-    /// title/brief form, like Desktop naming a chat by its opening message).
-    private func prepareServerSession(detail: CrewDetail, taskBrief: String) async throws -> CrewSessionServerLink {
-        guard let runnerKind = selectedKind.serverRunnerKind else {
-            throw PendingCrewBackendError.invalidConfig("纯终端只在本机运行，不创建 agent server session")
-        }
-        let api = try appModel.loggedAPIClient()
-        let subjects = try await api.listMySubjects()
-        guard let subjectId = subjects.first?.id else {
-            throw PendingCrewBackendError.invalidConfig("没有可用的 subject（device grant 未解析出主体）")
-        }
-        let hostId = try await appModel.ensureRunnerHost(
-            api: api,
-            subjectId: subjectId,
-            allowedRunnerKinds: [
-                LocalCodingAgentKind.claudeCode.serverRunnerKind,
-                LocalCodingAgentKind.codex.serverRunnerKind,
-            ].compactMap { $0 }
-        )
-        let sessionId = try await api.createSession(
-            crewId: detail.crew.id,
-            runnerKind: runnerKind,
-            taskBrief: taskBrief
-        )
-        _ = try await api.claimSession(runnerHostId: hostId, sessionId: sessionId)
-        return CrewSessionServerLink(api: api, runnerHostId: hostId, sessionId: sessionId)
-    }
 }
 
 /// 切换条上的单个 session 项。`@ObservedObject` 订阅 run 的 `@Published status`

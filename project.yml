@@ -129,12 +129,6 @@ targets:
       # LocalRunner 模块是纯 Foundation 代码（不依赖 SwiftUI / NSApplicationMain），
       # 重复编译进 test bundle 完全没问题。
       - path: Sources/Mac/LocalRunner
-      # SessionProxy codec + WS transport（遥控 Step 0：从 Sources/Mac/LocalRunner
-      # 搬进三端共用的 Sources/Remote 后，不再随 LocalRunner 整目录进 bundle）。
-      # SessionProxyProtocolTests 单测 codec；SessionPermissionRelay.swift（仍在
-      # LocalRunner）引用 SessionProxyClient，所以两个都要带上。纯 Foundation。
-      - path: Sources/Remote/SessionProxyProtocol.swift
-      - path: Sources/Remote/SessionProxyClient.swift
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift
