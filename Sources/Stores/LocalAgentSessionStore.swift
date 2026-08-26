@@ -96,6 +96,41 @@ final class LocalAgentSessionStore: @unchecked Sendable {
         }
     }
 
+    /// 某个 crew **最近一条机长记录**（Todo #68 第 2 件：机长也要能续跑）。
+    ///
+    /// 机长的 localSessionId 每次启动都新造（`CrewSessionRunner.startCaptain` 里
+    /// `"captain-" + uuid8`，全仓只有那一处铸这种 id），所以按 `crewId + sessionId`
+    /// 是查不到上一任机长的。但**每个 crew 同时只允许一个机长**（`startCaptain` 开头
+    /// 那道 guard + `runs.removeAll { role == .captain }`），于是「本 crew 最近一条
+    /// `captain-*` 记录」是无歧义的 —— 不必去动 id 的生成方式。
+    ///
+    /// **不动 id 还顺手躲开一个硬伤**：复用旧 localSessionId 就等于复用旧的白板读游标
+    /// （`<crewId>.<sessionId>.cursor`），机长隔几天醒来会被一次性灌进几百条未读
+    /// （实测父群白板 993 条、每天 60~80 条）。新 id → 游标是 `.absent` → 只投最近
+    /// 一批，问题自己就没了。
+    ///
+    /// `kind` 必须传并且严格过滤：crew 换过 runner（claude ↔ codex）时，拿 codex 的
+    /// threadId 去喂 claude 的 `--resume` 是纯粹的错。
+    ///
+    /// **这本账按 crew 只增不减**（每起一次机长追加一行，本机已 139 条）。今天无害，
+    /// 但从 Todo #68 起它是承重数据 —— 别以为它是有界的；真要清理是另一件事。
+    func latestCaptainRecord(crewId: String, kind: String,
+                             onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> Record? {
+        withFileLock {
+            loadLocked(onIncident: onIncident)
+                .filter { $0.crewId == crewId && $0.kind == kind
+                    && $0.sessionId.hasPrefix(Self.captainSessionIdPrefix) }
+                .max { lhs, rhs in
+                    (CrewTimestamp.parse(lhs.updatedAt) ?? .distantPast)
+                        < (CrewTimestamp.parse(rhs.updatedAt) ?? .distantPast)
+                }
+        }
+    }
+
+    /// 机长 localSessionId 的前缀 —— 与 `CrewSessionRunner.startCaptain` 那一处
+    /// （全仓唯一的铸造点）同一个字面量。改那边就得改这边。
+    static let captainSessionIdPrefix = "captain-"
+
     /// 全部记录（排查/测试用）。
     func list(onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> [Record] {
         withFileLock { loadLocked(onIncident: onIncident) }

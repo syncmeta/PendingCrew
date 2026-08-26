@@ -1437,7 +1437,34 @@ final class CrewSessionRunner: ObservableObject {
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
         // 机长用建 crew 时选定的 coding agent（crew 没记 → 默认 Codex）。
         let captainKind = LocalCodingAgentKind.captainDefault(detail.crew.captainAgentKind)
-        var cfg = SessionConfig(kind: captainKind, initialPrompt: initialPrompt)
+        // Todo #68 第 2 件：**机长也要能续跑**。此前它是全机唯一没有续跑路的角色 ——
+        // 每次新造 `captain-<uuid8>`、从不查账本，盘上一百多条历史机长对话一条都没被
+        // 接回来过。
+        //
+        // 账本的键是 `crewId + sessionId`，而机长的 sessionId 每次都新造，所以按键查
+        // 是查不到上一任的。但**每个 crew 同时只允许一个机长**（上面那道 guard +
+        // `runs.removeAll { role == .captain }`），于是「本 crew 最近一条 `captain-*`
+        // 记录」无歧义 —— 用它，就**不必**去动 id 的生成方式。
+        //
+        // 不动 id 还顺手躲开一个硬伤：复用旧 localSessionId = 复用旧的白板读游标
+        // （`<crewId>.<sessionId>.cursor`），机长隔几天醒来会被一次性灌进几百条未读
+        // （实测父群白板 993 条、每天 60~80 条）。新 id → 游标 `.absent` → 只投最近
+        // 一批。世界观那边也不用担心：`--append-system-prompt-file` 是**每次调用现给、
+        // 不进会话**的（2026-08-26 实测：resume 时不带就完全丢、带上只有一份），
+        // 所以续跑不会叠加两份世界观。
+        //
+        // `kind` 必须过滤：crew 换过 runner 时，拿 codex 的 threadId 去喂 claude 的
+        // `--resume` 是纯粹的错。续不上由 agent 自己说了算（claude 走
+        // `retryWithoutResumeIfClaudeRefused`，codex 走 backend 的 resume→start 降级）。
+        let previousCaptain = LocalAgentSessionStore.shared.latestCaptainRecord(
+            crewId: crewId, kind: captainKind.rawValue)
+        var resumeCaptainId: String? = nil
+        if case .resume(let id) = AgentSessionResume.decide(
+            recordedId: previousCaptain?.agentSessionId) {
+            resumeCaptainId = id
+        }
+        var cfg = SessionConfig(kind: captainKind, initialPrompt: initialPrompt,
+                                resumeSessionId: resumeCaptainId)
         // 世界观 + crew 工具按 kind 分流：claude 走文件 flag（appendSystemPromptFile +
         // settings/mcp-config），codex 走 app-server 通道（developerInstructions 字符串 +
         // mcpServers dict）。captain 两边都带（persona 追加 + helper `--captain` 解锁

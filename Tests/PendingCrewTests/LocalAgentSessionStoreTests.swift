@@ -98,4 +98,52 @@ final class LocalAgentSessionStoreTests: XCTestCase {
         XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.workingDirectory, "/wt/a")
         XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.agentSessionId, "uuid-2")
     }
+
+    // MARK: - Todo #68 第 2 件：机长最近一条记录
+
+    private func stamp(_ iso: String) -> Date { CrewTimestamp.parse(iso)! }
+
+    func testLatestCaptainRecordPicksTheNewestByParsedDate() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "captain-aaa", kind: "claude_code",
+                 agentSessionId: "old", now: stamp("2026-08-20T10:00:00Z"))
+        s.record(crewId: "c", sessionId: "captain-bbb", kind: "claude_code",
+                 agentSessionId: "new", now: stamp("2026-08-24T09:00:00Z"))
+        s.record(crewId: "c", sessionId: "captain-ccc", kind: "claude_code",
+                 agentSessionId: "mid", now: stamp("2026-08-22T23:00:00Z"))
+        XCTAssertEqual(
+            s.latestCaptainRecord(crewId: "c", kind: "claude_code")?.agentSessionId, "new")
+    }
+
+    /// worker 的记录不算机长的 —— 判据是 `captain-` 前缀（全仓只有 `startCaptain` 铸这种 id）。
+    func testLatestCaptainRecordIgnoresWorkers() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "captain-aaa", kind: "claude_code",
+                 agentSessionId: "cap", now: stamp("2026-08-20T10:00:00Z"))
+        s.record(crewId: "c", sessionId: "worker-zzz", kind: "claude_code",
+                 agentSessionId: "wrk", now: stamp("2026-08-25T10:00:00Z"))
+        XCTAssertEqual(
+            s.latestCaptainRecord(crewId: "c", kind: "claude_code")?.agentSessionId, "cap")
+    }
+
+    /// **换过 runner 的 crew 不许串**：拿 codex 的 threadId 去喂 claude 的 `--resume`
+    /// 是纯粹的错，所以 kind 严格过滤。
+    func testLatestCaptainRecordFiltersByKind() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "captain-aaa", kind: "claude_code",
+                 agentSessionId: "claude-uuid", now: stamp("2026-08-20T10:00:00Z"))
+        s.record(crewId: "c", sessionId: "captain-bbb", kind: "codex",
+                 agentSessionId: "codex-thread", now: stamp("2026-08-25T10:00:00Z"))
+        XCTAssertEqual(
+            s.latestCaptainRecord(crewId: "c", kind: "claude_code")?.agentSessionId, "claude-uuid")
+        XCTAssertEqual(
+            s.latestCaptainRecord(crewId: "c", kind: "codex")?.agentSessionId, "codex-thread")
+    }
+
+    func testLatestCaptainRecordDoesNotCrossCrews() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "other", sessionId: "captain-aaa", kind: "claude_code",
+                 agentSessionId: "theirs", now: stamp("2026-08-25T10:00:00Z"))
+        XCTAssertNil(s.latestCaptainRecord(crewId: "c", kind: "claude_code"))
+    }
 }
