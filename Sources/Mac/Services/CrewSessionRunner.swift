@@ -671,7 +671,7 @@ final class CrewSessionRunner: ObservableObject {
             scheduleWakeup(SessionWakeupRequest(
                 id: "autoq-\(run.sessionId)-\(Int(plan.fireAt.timeIntervalSince1970))",
                 crewId: run.crewId, sessionId: run.sessionId, fireAt: iso,
-                note: "[auto] 额度已重置，继续之前被打断的工作：你上次撞到额度上限被迫停下。先 get_quota 核实额度已恢复,再回顾白板与工作区接着干;若仍受限,自己 schedule_wakeup 顺延。"))
+                note: "[auto] 额度已重置。你上次撞到额度上限被迫停下 —— **醒来第一件事不是回消息，是核现状**：get_quota 看额度、git log 看 main 到哪了、看自己的分支还在不在队列上。积压里 @ 你的消息**可能**在你睡着时已经被处理掉了，先核现状，再决定哪几条还需要回、手上那件事还要不要接着做。若仍受限,自己 schedule_wakeup 顺延。"))
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: run.crewId, sessionId: "system",
                 text: plan.isFallback
