@@ -227,6 +227,23 @@ struct SessionControl: Codable, Equatable {
     var requestId: String?
     var op: String
     var arguments: [String: SessionWireJSONValue] = [:]
+
+    private enum CodingKeys: String, CodingKey { case requestId, op, arguments }
+
+    init(requestId: String?, op: String,
+         arguments: [String: SessionWireJSONValue] = [:]) {
+        self.requestId = requestId
+        self.op = op
+        self.arguments = arguments
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try c.decodeIfPresent(String.self, forKey: .requestId)
+        op = try c.decode(String.self, forKey: .op)
+        arguments = try c.decodeIfPresent(
+            [String: SessionWireJSONValue].self, forKey: .arguments) ?? [:]
+    }
 }
 
 struct SessionPing: Codable, Equatable {
@@ -375,6 +392,22 @@ struct SessionEvent: Codable, Equatable {
     var kind: String
     var requestId: String?
     var fields: [String: SessionWireJSONValue] = [:]
+
+    private enum CodingKeys: String, CodingKey { case kind, requestId, fields }
+
+    init(kind: String, requestId: String?, fields: [String: SessionWireJSONValue] = [:]) {
+        self.kind = kind
+        self.requestId = requestId
+        self.fields = fields
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        requestId = try c.decodeIfPresent(String.self, forKey: .requestId)
+        fields = try c.decodeIfPresent(
+            [String: SessionWireJSONValue].self, forKey: .fields) ?? [:]
+    }
 }
 
 struct SessionPong: Codable, Equatable { var nonce: UInt64? = nil }

@@ -194,6 +194,21 @@ final class SessionProtocolCodecTests: XCTestCase {
         XCTAssertEqual(try codec.decodeDaemon(oldDaemonHello),
                        .hello(.init(protocolVersion: 1, daemonBuild: "old",
                                     capabilities: [], sessionCount: 1, pid: 42)))
+
+        let oldAppHello = try controlFrame(json: [
+            "type": "hello", "protocolVersion": 1, "appBuild": "old-app",
+        ])
+        XCTAssertEqual(try codec.decodeApp(oldAppHello),
+                       .hello(.init(protocolVersion: 1, appBuild: "old-app", capabilities: [])))
+    }
+
+    func testExtensibleControlAndEventMapsDefaultWhenMissing() throws {
+        XCTAssertEqual(try codec.decodeApp(controlFrame(json: [
+            "type": "control", "op": "oldOp",
+        ])), .control(.init(requestId: nil, op: "oldOp", arguments: [:])))
+        XCTAssertEqual(try codec.decodeDaemon(controlFrame(json: [
+            "type": "event", "kind": "oldEvent",
+        ])), .event(.init(kind: "oldEvent", requestId: nil, fields: [:])))
     }
 
     // MARK: - helpers
