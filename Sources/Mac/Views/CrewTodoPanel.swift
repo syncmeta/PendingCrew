@@ -28,6 +28,8 @@ struct CrewTodoPanel: View {
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
 
     @State private var todos: [LocalTodoItem] = []
+    /// 当前看的是哪本账（Todo #62）。两个药丸「Agent 的 / 人类的」切它。
+    @State private var ledger: TodoLedger = .agent
 
     /// 从新到旧 —— 人类明确要求新建的在最上面（纯逻辑有单测钉住）。
     private var rows: [LocalTodoItem] { TodoListPresentation.newestFirst(todos) }
@@ -38,6 +40,7 @@ struct CrewTodoPanel: View {
                 Text("Todo \(todos.count)")
                     .font(Theme.Fonts.caption.weight(.semibold))
                     .foregroundStyle(Theme.Palette.inkMuted)
+                CrewTodoLedgerPills(ledger: $ledger)
                 Spacer(minLength: 8)
                 Button("详细") { openDetail() }
                     .buttonStyle(.borderless)
@@ -48,7 +51,7 @@ struct CrewTodoPanel: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             if rows.isEmpty {
-                Text("还没有条目 —— 在群聊输入框点亮 Todo 按钮，发送即记一条。")
+                Text(TodoListPresentation.emptyHint(ledger))
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.inkMuted)
                     .padding(.horizontal, 14)
@@ -63,10 +66,13 @@ struct CrewTodoPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // 首拉 + 订阅变更（人类新增本进程即推；机器人回应经目录监听跨进程补齐）。
-        .task(id: crewId) {
-            todos = LocalTodoStore.shared.list(crewId: crewId)
-            for await _ in LocalTodoStore.shared.todoChanges(crewId: crewId) {
-                todos = LocalTodoStore.shared.list(crewId: crewId)
+        // `id` 带上 ledger —— 换药丸就换一本账重订（两本各自一个文件、一把锁）。
+        // 读全量只在这条 task 里做，**不在 body 求值路径上**（那条红线）。
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
+            let store = LocalTodoStore.shared(ledger)
+            todos = store.list(crewId: crewId)
+            for await _ in store.todoChanges(crewId: crewId) {
+                todos = store.list(crewId: crewId)
             }
         }
     }
@@ -74,7 +80,7 @@ struct CrewTodoPanel: View {
     /// 详细窗口入口（顶部按钮 + 点行都走这儿）。每 crew 最多一个窗口，重复调用只前置。
     private func openDetail() {
         CrewTodoDetailWindowPresenter.shared.open(
-            crewId: crewId, crewName: crewName,
+            crewId: crewId, crewName: crewName, ledger: ledger,
             runner: runner, appModel: appModel,
             colorScheme: (AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
     }
@@ -127,5 +133,37 @@ struct CrewTodoPanel: View {
         .contentShape(Rectangle())
         .onTapGesture { openDetail() }
     }
+}
+
+/// 「Agent 的 / 人类的」两个药丸（Todo #62）—— 概览面板与详细窗口共用一份，
+/// 免得两处各长一个样子。人类原话「弄两个药丸选择」。
+struct CrewTodoLedgerPills: View {
+    @Binding var ledger: TodoLedger
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(TodoLedger.allCases, id: \.self) { l in
+                Button(l.pillTitle) { ledger = l }
+                    .buttonStyle(.plain)
+                    .font(Theme.Fonts.caption2.weight(ledger == l ? .semibold : .regular))
+                    .foregroundStyle(ledger == l ? Theme.Palette.accent : Theme.Palette.inkMuted)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(ledger == l
+                            ? Theme.Palette.accent.opacity(0.14)
+                            : Theme.Palette.surfaceMuted.opacity(0.6)))
+                    .help(l == .agent
+                          ? "人类派给 agent 的活 —— 机器人经 respond_todo 回应"
+                          : "agent 请人类拍板的事 —— 你回应后会叫醒当初提它的那个 session")
+            }
+        }
+    }
+}
+
+/// `.task(id:)` 的复合键：crew 换了、或药丸换了本账，都得重订。
+struct TodoFeedKey: Equatable {
+    let crewId: String
+    let ledger: TodoLedger
 }
 #endif

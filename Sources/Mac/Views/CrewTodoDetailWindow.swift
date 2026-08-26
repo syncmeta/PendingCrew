@@ -18,14 +18,16 @@ final class CrewTodoDetailWindowPresenter: NSObject, NSWindowDelegate {
 
     private var windows: [String: NSWindow] = [:]
 
-    func open(crewId: String, crewName: String?,
+    /// `ledger` 只作**首次打开**时停在哪个药丸上（Todo #62）—— 每 crew 一个窗口，
+    /// 已经开着的那个由它自己的药丸说了算，不被概览面板隔空拨走。
+    func open(crewId: String, crewName: String?, ledger: TodoLedger = .agent,
               runner: CrewSessionRunner, appModel: AppModel,
               colorScheme: ColorScheme?) {
         if let existing = windows[crewId] {
             existing.makeKeyAndOrderFront(nil)
             return
         }
-        let root = CrewTodoDetailView(crewId: crewId, runner: runner)
+        let root = CrewTodoDetailView(crewId: crewId, ledger: ledger, runner: runner)
             .environmentObject(appModel)
             .preferredColorScheme(colorScheme)
         let window = NSWindow(
@@ -73,7 +75,15 @@ struct CrewTodoDetailView: View {
 
     @EnvironmentObject private var appModel: AppModel
 
+    /// 当前看的是哪本账（Todo #62）。初值由打开它的那个面板给。
+    @State private var ledger: TodoLedger
     @State private var todos: [LocalTodoItem] = []
+    init(crewId: String, ledger: TodoLedger = .agent, runner: CrewSessionRunner) {
+        self.crewId = crewId
+        self.runner = runner
+        _ledger = State(initialValue: ledger)
+    }
+
     /// 同一时刻只有一行摊开一个编辑器 —— 换行/换动作自动收掉上一个。
     @State private var editor: RowEditor?
     @State private var draft = ""
@@ -89,30 +99,48 @@ struct CrewTodoDetailView: View {
         case followUp(Int)      // 追问 / 重开（同一条通道）
         case edit(Int)          // 改正文
         case confirmDelete(Int) // 删除二次确认
+        case respond(Int)       // 人类回应（Todo #62：只在「人类的」那本上）
     }
 
     private var rows: [LocalTodoItem] { TodoListPresentation.newestFirst(todos) }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if rows.isEmpty {
-                    Text("还没有条目 —— 在群聊输入框点亮 Todo 按钮，发送即记一条。")
-                        .font(Theme.Fonts.footnote)
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                        .padding(.top, 8)
-                } else {
-                    ForEach(rows) { row($0) }
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                CrewTodoLedgerPills(ledger: $ledger)
+                Spacer(minLength: 8)
+                Text(ledger == .agent ? "你派给 agent 的活" : "agent 请你拍板的事")
+                    .font(Theme.Fonts.caption2)
+                    .foregroundStyle(Theme.Palette.inkMuted)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if rows.isEmpty {
+                        Text(TodoListPresentation.emptyHint(ledger))
+                            .font(Theme.Fonts.footnote)
+                            .foregroundStyle(Theme.Palette.inkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 8)
+                    } else {
+                        ForEach(rows) { row($0) }
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .background(Theme.Palette.canvas)
-        .task(id: crewId) {
-            todos = LocalTodoStore.shared.list(crewId: crewId)
-            for await _ in LocalTodoStore.shared.todoChanges(crewId: crewId) {
-                todos = LocalTodoStore.shared.list(crewId: crewId)
+        // 换药丸 = 换一本账重订（两本各自一个文件、一把锁）。换的同时收掉编辑器 ——
+        // 编辑器挂在 #N 上，两本账的 #N 指两件事，留着会张冠李戴。
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
+            closeEditor()
+            let store = LocalTodoStore.shared(ledger)
+            todos = store.list(crewId: crewId)
+            for await _ in store.todoChanges(crewId: crewId) {
+                todos = store.list(crewId: crewId)
             }
         }
     }
@@ -139,7 +167,9 @@ struct CrewTodoDetailView: View {
             CrewTodoAttachmentStrip(attachments: item.attachments ?? [])
                 .padding(.leading, 22)
             // 三种行内编辑器共用同一块位置：一次只摊开一个。
-            if editor == .followUp(item.number) {
+            if editor == .respond(item.number) {
+                respondEditor(item)
+            } else if editor == .followUp(item.number) {
                 followUpEditor(item)
             } else if editor == .edit(item.number) {
                 editEditor(item)
@@ -169,15 +199,32 @@ struct CrewTodoDetailView: View {
                     in: RoundedRectangle(cornerRadius: 8))
     }
 
-    /// 每行的三颗动作：改 / 追问 / 删。**不分状态** —— 已完成、已被回复过的条目
-    /// 照样三件都能做（Todo #21 的整条诉求就是「随时」）。
+    /// 每行的动作。**不分状态** —— 已完成、已被回复过的条目照样动得了
+    /// （Todo #21 的整条诉求就是「随时」）。
+    ///
+    /// 两本账的动作不同（Todo #62）：`.agent` 那本是人类派活，所以是改 / 追问 / 删；
+    /// `.human` 那本是 agent 请人拍板，人类要做的是**回应**（回应会叫醒当初提它的
+    /// 那个 session），外加一颗「不办」把黄点按灭 —— 有些事人看过就决定不办，
+    /// 没有这个开关，那一条会把黄点永久钉死。
     @ViewBuilder
     private func rowActions(_ item: LocalTodoItem) -> some View {
         HStack(spacing: 10) {
             actionButton("pencil", "修改这条 Todo 的正文") { open(.edit(item.number), draft: item.text) }
-            actionButton("arrowshape.turn.up.left",
-                         item.status == "completed" ? "追问（会把这条翻回待办）" : "追问这条") {
-                open(.followUp(item.number), draft: "")
+            if ledger == .human {
+                actionButton("arrowshape.turn.up.left", "回应这条 —— 发进群里并叫醒当初提它的那个 session") {
+                    open(.respond(item.number), draft: "")
+                }
+                actionButton(item.dismissedAt == nil ? "bell.slash" : "bell",
+                             item.dismissedAt == nil
+                             ? "不打算回应 —— 只把提醒按灭，不加回应、不动状态"
+                             : "重新算作未回应（提醒会再亮起来）") {
+                    toggleDismissed(item)
+                }
+            } else {
+                actionButton("arrowshape.turn.up.left",
+                             item.status == "completed" ? "追问（会把这条翻回待办）" : "追问这条") {
+                    open(.followUp(item.number), draft: "")
+                }
             }
             actionButton("trash", "删除这条 Todo") { open(.confirmDelete(item.number), draft: "") }
         }
@@ -287,6 +334,17 @@ struct CrewTodoDetailView: View {
         }
     }
 
+    /// 人类回应「人类 Todo」（Todo #62）。发出去要做三件：落账 → 群里出一行
+    /// 「回应 人类 To Do #N：…」→ 叫醒当初提它的那个 session（退出了就回落机长
+    /// 转达）。编排在 `CrewHumanTodoRespond`，这里只收一行字。
+    @ViewBuilder
+    private func respondEditor(_ item: LocalTodoItem) -> some View {
+        inlineEditor(placeholder: "你的答复 —— 会发进群里并叫醒提这件事的那个 session",
+                     confirmTitle: "回应") {
+            await performRespond(item)
+        }
+    }
+
     /// 追问 / 改正文共用的一行输入 + 确认 + 收起。
     @ViewBuilder
     private func inlineEditor(placeholder: String, confirmTitle: String,
@@ -366,11 +424,43 @@ struct CrewTodoDetailView: View {
         closeEditor()
     }
 
+    /// 回应：编排全在 `CrewHumanTodoRespond`（顺序、失败措辞出自共享剧本
+    /// `TodoLandingFlow`）。这里只做两件：不许发空回应；把它返回的那句话原样亮出来。
+    private func performRespond(_ item: LocalTodoItem) async {
+        guard !busy else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            errorText = "写一句再发 —— 空回应对提问的那个 session 没有意义。"
+            return
+        }
+        busy = true
+        defer { busy = false }
+        if let problem = await CrewHumanTodoRespond.perform(
+            crewId: crewId, item: item, text: text, runner: runner, appModel: appModel) {
+            // 没走完三步就如实说，别关编辑器（人还要重试 / 复制那段话）。
+            errorText = problem
+            return
+        }
+        closeEditor()
+    }
+
+    /// 「不办」开关（Todo #62）：只打 `dismissedAt` 标记 —— 不加回应、不动状态，
+    /// 单纯让黄点算得出「这条不再算未回应」。再点一次反悔。
+    private func toggleDismissed(_ item: LocalTodoItem) {
+        guard !busy else { return }
+        guard LocalTodoStore.shared(ledger).setDismissed(
+            crewId: crewId, number: item.number, dismissed: item.dismissedAt == nil) else {
+            errorText = "改不动：这条已经不在了。"
+            return
+        }
+        errorText = nil
+    }
+
     private func performEdit(_ item: LocalTodoItem) async {
         guard !busy else { return }
         busy = true
         defer { busy = false }
-        guard LocalTodoStore.shared.edit(
+        guard LocalTodoStore.shared(ledger).edit(
             crewId: crewId, number: item.number, text: draft) != nil
         else {
             errorText = "改不动：正文不能为空，或这条已经不在了。"
@@ -381,7 +471,7 @@ struct CrewTodoDetailView: View {
 
     private func performDelete(_ item: LocalTodoItem) {
         guard !busy else { return }
-        guard LocalTodoStore.shared.delete(crewId: crewId, number: item.number) else {
+        guard LocalTodoStore.shared(ledger).delete(crewId: crewId, number: item.number) else {
             errorText = "删不掉：这条已经不在了。"
             return
         }

@@ -486,6 +486,7 @@
 		E3697357DDDE8602BB37A642 /* QuotaRingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D271DB3CF14DAC4F915C249 /* QuotaRingLayoutTests.swift */; };
 		E38B95D34D4C99634C57978C /* McpServerQuotaToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CE00F64EA0D0F2F5B970396 /* McpServerQuotaToolsTests.swift */; };
 		E3B57B0AF2B50AB0FC654335 /* CrewSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0BCE95B8A380020947CB207 /* CrewSidebarView.swift */; };
+		E49BB788A724D8177393CFE1 /* CrewHumanTodoRespond.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C888C79487E44BF42708B7 /* CrewHumanTodoRespond.swift */; };
 		E4A7619D671924635AA43F92 /* CrewMailboxWakeLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3FBED08E2034A2109B0D37 /* CrewMailboxWakeLogicTests.swift */; };
 		E516AADDB9ED8727F67B7D3E /* CrewRelayAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64939E9C459FD69C7E2993FA /* CrewRelayAgent.swift */; };
 		E5301F604D14E43FA0A8C61D /* SessionProxyProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 019D307CB37D1BEF56AD332A /* SessionProxyProtocol.swift */; };
@@ -614,6 +615,7 @@
 		25C60304AA7A9C4591A0B591 /* SessionProxyProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionProxyProtocolTests.swift; sourceTree = "<group>"; };
 		266E200D180EDF283E63D525 /* LocalApprovalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalApprovalStore.swift; sourceTree = "<group>"; };
 		269AFDA6030BA0078188CAF2 /* CrewAvatarBadges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewAvatarBadges.swift; sourceTree = "<group>"; };
+		27C888C79487E44BF42708B7 /* CrewHumanTodoRespond.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHumanTodoRespond.swift; sourceTree = "<group>"; };
 		295F4E13C2CFA5C6FC2FBE02 /* LocalAgentSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentSessionStoreTests.swift; sourceTree = "<group>"; };
 		2AC3B47AEAC559E6246A6BC1 /* CrewRealtimeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRealtimeClient.swift; sourceTree = "<group>"; };
 		2B1D24F77E0C6CE0602FB7B4 /* CrewTypingIndicatorRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewTypingIndicatorRow.swift; sourceTree = "<group>"; };
@@ -1083,6 +1085,7 @@
 		1257D295E906E25E1E39DA26 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				27C888C79487E44BF42708B7 /* CrewHumanTodoRespond.swift */,
 				DA75E1A3179F360397B5D004 /* CrewLocalMentionDelivery.swift */,
 				0182AFDD43BF3BACB78AC8DA /* CrewLocalMentionWaker.swift */,
 				80B1D98B47459ECA53FA1B5A /* CrewLocalTodoLanding.swift */,
@@ -1800,6 +1803,7 @@
 				93CF27F46F386E7FB7DFEEBE /* CrewDragDropLogic.swift in Sources */,
 				1D670E7D1541934DB5321DFD /* CrewFileAttachmentIntake.swift in Sources */,
 				FDE2BF3D07C6AB391D3EAC25 /* CrewHierarchyOrdering.swift in Sources */,
+				E49BB788A724D8177393CFE1 /* CrewHumanTodoRespond.swift in Sources */,
 				4A6CD3FE34267E982D109A47 /* CrewImageLoader.swift in Sources */,
 				C96A57C6587DC58D7BFE6BBF /* CrewInteractionCard.swift in Sources */,
 				0D47D2E2E9FBAA1FC359A272 /* CrewLastMessageCache.swift in Sources */,

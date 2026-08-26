@@ -67,4 +67,16 @@ enum TodoListPresentation {
         guard attachmentCount > 0 else { return nil }
         return allImages ? "（见附图）" : "（见附件）"
     }
+
+    /// 空列表时那句话（Todo #62）。两本账的入口完全不同 —— 一本在群聊 composer
+    /// 的 Todo 按钮上，另一本只有 agent 加得了，说错了人会到处找不存在的按钮。
+    static func emptyHint(_ ledger: TodoLedger) -> String {
+        switch ledger {
+        case .agent:
+            return "还没有条目 —— 在群聊输入框点亮 Todo 按钮，发送即记一条。"
+        case .human:
+            return "还没有条目 —— 这本账由 agent 加：它遇到要你拍板、又不想停下来干等的事，"
+                + "就往这儿记一条（工具 add_human_todo），你有空回应即可。"
+        }
+    }
 }
