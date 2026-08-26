@@ -37,6 +37,13 @@ mkdir -p "$LOG"
 # 幂等：worktree 已在就复用（我们不删 worktree），否则同一 commit 跑第二趟会因为
 # `add` 报错 + set -e 当场早退，而那个报错跟测试毫无关系
 [ -d "$WT" ] || git -C "$REPO" worktree add --detach "$WT" "$COMMIT"
+# 本脚本**不收尾**：每跑一次留下 /tmp/pcw-<commit>/ 和 /tmp/pcw-<commit>-log/，
+# 并在共享仓库里注册一条 worktree。跑 N 次就有 N 份，**不会自己回收**。
+# 清理是仓库主人的事，脚本不代劳（跑完的现场是可复查的资产，删了就查不了）；
+# 也别顺手 remove 掉别人那条 —— 你不知道谁还在读它的日志。
+# 当前有多少、占多少，**自己查**（这里不写死数字：写死的那一刻起它就在过期）：
+#   git worktree list | grep /tmp/pcw
+#   du -sh /tmp/pcw-* 2>/dev/null      # 要 -h：macOS 的 `du -s` 默认是 512 字节块，当 KB 读会翻一倍
 # fixture 在哪、叫什么，**这里一个字都不写死** —— 仓库里唯一知道它的是
 # scripts/make-chat-fixtures.sh 那行 `DEST=`，从那儿接，路径知识就只有一份。
 # 写死第二份的代价不是「重复」，是**两份会各自漂，而漂掉的那天没有任何读数会报警**：
