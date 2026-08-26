@@ -76,6 +76,34 @@ final class SessionProtocolOverSocketTests: XCTestCase {
         XCTAssertEqual(backend.stopCount, 0, "viewer 断开绝不能碰 session")
     }
 
+    /// §5.5：**viewer 还不知道自己多大时不许动 daemon 的尺寸。**
+    ///
+    /// 真分家之后 viewer 是在窗口布局出来**之前**就连上并拉 roster 的。那时报一个
+    /// 默认 80×25，等于每次重开 app 都把正在跑的 TUI 先按 80 列重排一次、给 agent
+    /// 发一次 SIGWINCH，然后窗口布局出来再排回去 —— 而「重开 app 不打断在跑的
+    /// session」正是这一期的全部意义。
+    func test_attach报零尺寸时不动权威终端的宽高() throws {
+        let pair = try UnixSocketTransport.makePair()
+        defer { pair.app.close(); pair.daemon.close() }
+        let server = SessionProtocolServer(capabilities: capabilities)
+        let client = SessionProtocolClient(link: pair.app, capabilities: capabilities)
+        server.accept(link: pair.daemon)
+        client.connect()
+
+        let backend = ProtocolTestBackend(kind: .claudeCode)
+        backend.terminalSnapshot = .init(cols: 200, rows: 50, bytes: [])
+        server.register(sessionId: "s", backend: backend)
+        try pump(until: { client.isConnected })
+
+        let remote = client.attach(sessionId: "s", kind: .claudeCode, announceViewport: false)
+        try pump(until: { remote.completedSnapshotCount == 1 })
+        XCTAssertEqual(backend.resizes, [], "零尺寸 attach 一次 resize 都不该发")
+
+        // 窗口布局出来之后照常下传真尺寸。
+        remote.resizeTerminal(cols: 200, rows: 50)
+        try pump(until: { backend.resizes == [.init(cols: 200, rows: 50)] })
+    }
+
     // MARK: - §5.4 背压
 
     /// **这条是这一组里最重要的一条**，而且它第一版是错的，值得把错法留在注释里：

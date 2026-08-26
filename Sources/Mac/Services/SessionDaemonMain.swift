@@ -25,6 +25,13 @@ enum SessionDaemonMain {
 
     @MainActor
     private static func run() {
+        // 脱离拉起我们的那个进程的会话/进程组。
+        //
+        // **A1 就靠这一行**：app 是用 `Process` 把我们拉起来的，不脱离的话我们和它
+        // 同组 —— 从终端里 ⌃C 那个 app、或者 app 被整组信号带走时，daemon 跟着一起
+        // 没，而「更新 app 不打断在跑的 session」当场不成立。已经是会话首时
+        // `setsid()` 返回 -1（EPERM），那是正常的，不是错误。
+        _ = setsid()
         let host = SessionDaemonHost()
         do {
             try host.start()
@@ -49,9 +56,124 @@ enum SessionDaemonMain {
         // `start_session` 等命令永远没人接（§6.1：排空方从 app 搬到 daemon）。
         Task { await crewStore.refreshList() }
 
+        wireOrchestrationRequests(host: host, runner: runner,
+                                  crewStore: crewStore, model: model)
         installGracefulShutdown(host: host, runner: runner)
         host.log.write("编排已就位，进入 runloop")
         RunLoop.main.run()
+    }
+
+    /// viewer 那侧问「roster 长什么样」「帮我起一个 / 停一个」时的应答（P4）。
+    ///
+    /// **编排请求一律落在同一批 runner 方法上** —— 与 GUI 自己点的时候走的是同一条路，
+    /// 不另开一套。另开一套的下场看 §2.5 那条：接线接在视图上，两条路悄悄分叉，
+    /// 其中一条一次都没被调用过，而且没有任何报错。
+    @MainActor
+    private static func wireOrchestrationRequests(
+        host: SessionDaemonHost, runner: CrewSessionRunner,
+        crewStore: CrewStore, model: AppModel
+    ) {
+        host.server.runSummaryProvider = { [weak runner] sessionId in
+            runner?.runs.first { $0.sessionId == sessionId }?.protocolSummary
+        }
+        host.server.onOrchestrationRequest = { control in
+            MainActor.assumeIsolated {
+                handle(control, runner: runner, crewStore: crewStore,
+                       model: model, log: host.log)
+            }
+        }
+        // roster 变了就把全量推给所有 viewer —— 起了新 session、某个退出了、
+        // 档位切了，右栏都要立刻跟上。不推的话 viewer 要等下一次自己发 listSessions。
+        runner.$runs
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                MainActor.assumeIsolated { host.server.broadcastSessionList() }
+            }
+            .store(in: &rosterBag)
+    }
+
+    @MainActor
+    private static func handle(
+        _ control: SessionControl, runner: CrewSessionRunner,
+        crewStore: CrewStore, model: AppModel, log: SessionDaemonLog
+    ) {
+        func string(_ key: String) -> String? {
+            guard case let .string(value)? = control.arguments[key], !value.isEmpty else {
+                return nil
+            }
+            return value
+        }
+        func bool(_ key: String) -> Bool {
+            if case let .bool(value)? = control.arguments[key] { return value }
+            return false
+        }
+        func run(_ key: String = "sessionId") -> CrewSessionRun? {
+            guard let sessionId = string(key) else { return nil }
+            return runner.runs.first { $0.sessionId == sessionId }
+        }
+
+        switch control.op {
+        case SessionOrchestrationOp.startSession:
+            guard let crewId = string("crewId") else { return }
+            let isCaptain = string("role") == "captain"
+            Task { @MainActor in
+                // detail 缓存只在 UI 打开过该 crew 后才有；daemon 里根本没有 UI，
+                // 所以这里**总是**现拉（对齐 `SessionHost.wire` 里那两处缓存 miss 兜底）。
+                if crewStore.details[crewId] == nil { await crewStore.refreshDetail(crewId) }
+                guard let detail = crewStore.details[crewId] else {
+                    crewStore.postSystemNotice(
+                        crewId: crewId, text: "起 session 失败：拉不到 crew 详情。")
+                    return
+                }
+                do {
+                    if isCaptain {
+                        try await runner.startCaptain(
+                            detail: detail, backend: model.backend,
+                            wakeText: string("wakeText"), openingBrief: string("brief"))
+                    } else {
+                        try await runner.startForBrief(
+                            detail: detail, backend: model.backend,
+                            brief: string("brief") ?? "",
+                            runnerOverride: string("runner")
+                                .flatMap(LocalCodingAgentKind.init(rawValue:)),
+                            isolation: bool("isolation"),
+                            model: string("model"), effort: string("effort"),
+                            title: string("title"),
+                            userInitiated: bool("userInitiated"))
+                    }
+                } catch {
+                    runner.reportStartFailure(
+                        crewId: crewId, brief: string("brief"), error: error,
+                        mentionCaptain: !isCaptain)
+                }
+            }
+        case SessionOrchestrationOp.stopRun:
+            guard let target = run() else { return }
+            runner.stop(target.runID)
+        case SessionOrchestrationOp.removeRun:
+            guard let target = run() else { return }
+            runner.remove(target.runID)
+        case SessionOrchestrationOp.sendText:
+            guard let target = run(), let text = string("text") else { return }
+            target.send(text)
+        case SessionOrchestrationOp.interrupt:
+            run()?.interrupt()
+        case SessionOrchestrationOp.profileChange:
+            guard let sessionId = string("sessionId"), let crewId = string("crewId") else { return }
+            Task { @MainActor in
+                await runner.applyProfileChange(.init(
+                    crewId: crewId, sessionId: sessionId,
+                    model: string("model"), effort: string("effort")))
+            }
+        case SessionOrchestrationOp.approvalMode:
+            guard let target = run(), let raw = string("reviewer"),
+                  let reviewer = CodexProtocol.ApprovalsReviewer(rawValue: raw) else { return }
+            Task { @MainActor in
+                await runner.applyCodexApprovalMode(to: target, reviewer: reviewer)
+            }
+        default:
+            log.write("未知编排请求 \(control.op)，忽略（§4.4：新增能力不断连）")
+        }
     }
 
     /// roster → registry（§8.2）。`SessionDaemonHost` 不认识 `CrewSessionRunner`

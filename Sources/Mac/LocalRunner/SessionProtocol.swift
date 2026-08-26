@@ -358,10 +358,62 @@ struct SessionProtocolState: Codable, Equatable {
     var scrollState: SessionScrollStateWire?
 }
 
+/// 一个 session 在 crew 里的**编排身份**（属于哪个 crew、是机长还是 worker、
+/// 叫什么、在哪个目录跑、当前档位）。
+///
+/// 它与 `SessionProtocolState` 分开是有理由的：那个是后端每拍都可能变的派生状态，
+/// 这个大部分是起 session 时就定死的元数据。分家之后 app 退化成 viewer，
+/// **右栏那份 roster 的唯一真值在 daemon 里** —— 这就是它过江的形状。
+///
+/// 全部字段可选/带默认值（§4.4）：旧 app 连新 daemon 时整块忽略即可，不升版本。
+struct SessionRunSummary: Codable, Equatable {
+    var crewId: String
+    /// "captain" / "worker"。
+    var role: String
+    var title: String
+    var taskBrief: String
+    var workingDirectory: String
+    var model: String?
+    var effort: String?
+    var pendingProfile: String?
+    var approvalsReviewer: String?
+    var permissionModeOverride: String?
+    var startedAt: Double
+    /// "running" / "completed" / "cancelled" / "failed" —— **run 的生命周期，
+    /// 不是后端进程的**。两者会不一样：用户主动停时后端是 `.exited`，run 是
+    /// `.cancelled`，而「是不是用户停的」只有 daemon 那边知道。
+    var runStatus: String
+    var exitCode: Int32?
+    /// "userStopped" / "completed" / "failed" / "hitLimit"。
+    var exitReason: String?
+    /// "approval" / "menu" / "question"（`SessionAwaitingReply.Reason`）。
+    var awaitingReply: String?
+}
+
 struct SessionSummary: Codable, Equatable {
     var sessionId: String
     var stateSeq: UInt64
     var state: SessionProtocolState
+    /// 编排身份。P2/P3 的同进程桥不带它（app 自己就有 run），daemon 必带。
+    var run: SessionRunSummary?
+
+    private enum CodingKeys: String, CodingKey { case sessionId, stateSeq, state, run }
+
+    init(sessionId: String, stateSeq: UInt64, state: SessionProtocolState,
+         run: SessionRunSummary? = nil) {
+        self.sessionId = sessionId
+        self.stateSeq = stateSeq
+        self.state = state
+        self.run = run
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        stateSeq = try c.decode(UInt64.self, forKey: .stateSeq)
+        state = try c.decode(SessionProtocolState.self, forKey: .state)
+        run = try c.decodeIfPresent(SessionRunSummary.self, forKey: .run)
+    }
 }
 
 struct SessionList: Codable, Equatable { var sessions: [SessionSummary] }

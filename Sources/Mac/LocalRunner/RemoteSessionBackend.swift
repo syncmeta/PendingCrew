@@ -539,6 +539,21 @@ extension SessionProfileSwitchOutcome {
 }
 
 extension SessionWireJSONValue {
+    /// Codable ↔ 线上 JSON 值。控制帧的 `arguments` 是 `[String: SessionWireJSONValue]`，
+    /// 而我们要送的东西（`SessionConfig` 之类）本来就是 Codable —— 中间不再手抄字段。
+    static func encoding<T: Encodable>(_ value: T) -> SessionWireJSONValue? {
+        guard let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        return SessionWireJSONValue(object)
+    }
+
+    func decoding<T: Decodable>(_ type: T.Type) -> T? {
+        guard let data = try? JSONSerialization.data(withJSONObject: foundationObject) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
     init?(_ value: Any) {
         switch value {
         case let value as String: self = .string(value)

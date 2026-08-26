@@ -68,7 +68,7 @@ struct MacThreePaneView: View {
         .task {
             // 长期职责（编排器/中继/唤醒器/两个轮询中心/用量监视 + 那一串编排
             // 订阅）全在 SessionHost 里起，这里只招呼一声。幂等。
-            sessionHost.start(model: model, crewStore: crewStore)
+            sessionHost.begin(model: model, crewStore: crewStore)
             // 首次进入时把列表 + subjects 都拉一遍 —— subjects 用于创建
             // crew sheet 的 picker，提前 prefetch 避免 sheet 打开时空。
             await crewStore.refreshList()

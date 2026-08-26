@@ -36,6 +36,24 @@ final class LocalAgentUsageMonitor: ObservableObject {
         }
     }
 
+    /// viewer 也可以起它（前后端分离 §6.1）。
+    ///
+    /// 上面那条 precondition 防的是「两个长期存活的进程各自往账上写」。这个监视器
+    /// **只读**：扫 `~/.claude/projects/**/*.jsonl` 与 `~/.codex/state_5.sqlite` 算个和，
+    /// 一个字节都不写、不持有任何共享资源。所以它不构成第二个编排者，viewer 里照跑 ——
+    /// 否则侧栏 footer 那行会在 daemon 模式下无缘无故消失。
+    func startReadOnly() {
+        guard pollTask == nil else { return }
+        doRefresh()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                if Task.isCancelled { return }
+                self?.doRefresh()
+            }
+        }
+    }
+
     func refresh() { doRefresh() }
 
     private func doRefresh() {

@@ -5,7 +5,7 @@ import Foundation
 ///
 /// 注：spec v2 §8.1 砍掉了 Kilo Code / opencode（不熟、降低复杂度），
 /// 留到 v1.x 视需要再加。**不要**在这里塞回旧 enum case。
-public enum LocalCodingAgentKind: String, CaseIterable, Sendable, Hashable {
+public enum LocalCodingAgentKind: String, CaseIterable, Sendable, Hashable, Codable {
     /// Anthropic Claude Code CLI（`claude`）
     case claudeCode = "claude_code"
     /// OpenAI Codex app-server（由 `codex app-server` 托管）

@@ -53,6 +53,12 @@ final class SessionProtocolServer {
 
     /// 让 daemon 侧把 attach/detach/重同步记进滚动日志（§8.5）。
     var onDiagnostic: ((String) -> Void)?
+    /// 这个 session 的编排身份（属于哪个 crew、机长还是 worker、当前档位…）。
+    /// daemon 由编排层填；同进程桥不填 —— 那边 app 自己就持有 run。
+    var runSummaryProvider: ((String) -> SessionRunSummary?)?
+    /// viewer 发来的编排请求（起 session / 停 / 移除 / 切档位）。daemon 接上编排层；
+    /// 同进程桥不接（那边 UI 直接调 runner）。
+    var onOrchestrationRequest: ((SessionControl) -> Void)?
 
     var connectionCount: Int { connections.count }
     var sessionCount: Int { records.count }
@@ -236,7 +242,11 @@ final class SessionProtocolServer {
                 (backend as? SessionProtocolTerminalControlling)?.sendRaw(value.bytes)
             }
         case let .control(value):
-            handleControl(value, on: connection)
+            if SessionOrchestrationOp.isOrchestration(value.op) {
+                handleOrchestration(value)
+            } else {
+                handleControl(value, on: connection)
+            }
         case let .ping(value):
             send(.pong(.init(nonce: value.nonce)), on: connection)
         }
@@ -252,7 +262,13 @@ final class SessionProtocolServer {
         connectionByHandle[handle] = ObjectIdentifier(connection.link)
         // kind=2 不重复带尺寸；attach 自己的 cols/rows 就是这份快照的尺寸上下文。
         // 必须先 resize 权威终端再拍，否则首屏会按旧宽度序列化。
-        if let terminal = record.backend as? SessionProtocolTerminalControlling {
+        //
+        // **0 = 「我还不知道自己多大，别动你的尺寸」**（§5.5）。真分家之后 viewer
+        // 是在窗口布局出来**之前**就要连上并拉 roster 的；那时报一个默认 80×25，
+        // 等于每次重开 app 都把正在跑的 TUI 先按 80 列重排一次、给 agent 发一次
+        // SIGWINCH，然后再排回去。没有窗口在看时保持最后一次的尺寸才是对的。
+        if value.cols > 0, value.rows > 0,
+           let terminal = record.backend as? SessionProtocolTerminalControlling {
             terminal.resizeTerminal(cols: value.cols, rows: value.rows)
         }
         let wantsSnapshot = record.backend.kind != .codex
@@ -376,6 +392,12 @@ final class SessionProtocolServer {
         }
     }
 
+    /// 不带 sessionId 的编排请求（起一个**还不存在**的 session、刷 roster）。
+    /// `handleControl` 那条要求先找得到 backend，这类请求按定义找不到。
+    private func handleOrchestration(_ control: SessionControl) {
+        onOrchestrationRequest?(control)
+    }
+
     // MARK: - 背压泵
 
     private func schedulePump(_ connection: Connection) {
@@ -437,12 +459,18 @@ final class SessionProtocolServer {
         for connection in connections.values { send(message, on: connection) }
     }
 
+    /// roster 变了 → 全量推给每一条链路。
+    func broadcastSessionList() {
+        for connection in connections.values { sendFullList(on: connection) }
+    }
+
     private func sendFullList(on connection: Connection) {
         let summaries = records.keys.sorted().compactMap { sessionId -> SessionSummary? in
             guard let record = records[sessionId] else { return nil }
             return .init(sessionId: sessionId, stateSeq: record.stateSeq,
                          state: makeState(record.backend,
-                                          launchParameterProblem: record.launchParameterProblem))
+                                          launchParameterProblem: record.launchParameterProblem),
+                         run: runSummaryProvider?(sessionId))
         }
         send(.sessions(.init(sessions: summaries)), on: connection)
     }
@@ -546,14 +574,29 @@ final class SessionProtocolClient {
 
     func requestSessionList() { send(.listSessions) }
 
-    func attach(sessionId: String, kind: LocalCodingAgentKind) -> RemoteSessionBackend {
+    /// viewer → daemon 的编排请求（起 / 停 / 移除 / 发文本 / 切档位）。
+    func sendOrchestration(op: String, arguments: [String: SessionWireJSONValue]) {
+        send(.control(.init(requestId: nil, op: op, arguments: arguments)))
+    }
+
+    /// §4.5 的心跳。`onLinkClosed` 只在**对端真的关了 socket** 时才响；半开连接
+    /// （对端机器挂了、链路默默断了）没有 FIN，socket 会一直「open」着而一个字节
+    /// 都不来。所以还要有这一层：10 秒一 ping，30 秒收不到 pong 就当断了。
+    func noteHeartbeat() { lastPongAt = Date() }
+    private(set) var lastPongAt = Date()
+    func ping() { send(.ping(.init(nonce: nil))) }
+
+    /// `announceViewport: false` = 「我还不知道自己多大」（见服务端 `attach` 那段）。
+    /// 同进程桥照旧报默认视口 —— 那边 attach 时 core 本来就停在同一个默认值上。
+    func attach(sessionId: String, kind: LocalCodingAgentKind,
+                announceViewport: Bool = true) -> RemoteSessionBackend {
         let remote = RemoteSessionBackend(sessionId: sessionId, kind: kind, client: self)
         remotes[sessionId] = remote
         remote.updateConnection(capabilities: negotiated)
         send(.attach(.init(
             sessionId: sessionId,
-            cols: remote.requestedTerminalSize.cols,
-            rows: remote.requestedTerminalSize.rows)))
+            cols: announceViewport ? remote.requestedTerminalSize.cols : 0,
+            rows: announceViewport ? remote.requestedTerminalSize.rows : 0)))
         return remote
     }
 
@@ -668,7 +711,7 @@ final class SessionProtocolClient {
             remoteByHandle[value.handle]?.beginResync()
             send(.listSessions)
         case .pong:
-            break
+            lastPongAt = Date()
         }
     }
 
@@ -732,6 +775,26 @@ final class DaemonSessionPublisher: SessionProtocolPublishing {
     }
 
     func retire(sessionId: String) { server.unregister(sessionId: sessionId) }
+}
+
+/// viewer 能请求 daemon 做的编排动作。
+///
+/// 它们与 `handleControl` 里那批**刻意分开**：那批都是「对某个已经存在的 backend
+/// 做点什么」，而这批是「让编排层做点什么」—— 起一个还不存在的 session 按定义
+/// 找不到 backend，走那条路会被那句 `guard let backend` 静默丢掉。
+enum SessionOrchestrationOp {
+    static let startSession = "orchestration.startSession"
+    static let stopRun = "orchestration.stopRun"
+    static let removeRun = "orchestration.removeRun"
+    static let sendText = "orchestration.sendText"
+    static let interrupt = "orchestration.interrupt"
+    static let profileChange = "orchestration.profileChange"
+    static let approvalMode = "orchestration.approvalMode"
+
+    static let all = [startSession, stopRun, removeRun, sendText, interrupt,
+                      profileChange, approvalMode]
+
+    static func isOrchestration(_ op: String) -> Bool { op.hasPrefix("orchestration.") }
 }
 
 /// 协议版本。**改它需要在 PR 里写明为什么不可避免**（§4.4）——「新增消息」「新增

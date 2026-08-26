@@ -36,6 +36,33 @@ final class SessionHost: ObservableObject {
 
     private let ownsAppUpdater: Bool
 
+    /// viewer 模式下那条腿（`PENDINGCREW_BACKEND=daemon`）。inproc 时恒 nil。
+    private(set) var viewer: ViewerSessionClient?
+
+    /// **唯一的入口。** 按进程角色分岔，别让视图去判断自己该走哪条 ——
+    /// 判断散在视图里，就会有第 N 个视图哪天忘了判断，然后在 viewer 里起一套编排。
+    ///
+    /// - `.orchestrator`（inproc 的 GUI，或 `--daemon`）→ 起全部长期职责。
+    /// - `.viewer`（总闸=daemon 的 GUI）→ 只连后台，**一个长期定时器都不起**。
+    func begin(model: AppModel, crewStore: CrewStore) {
+        switch ProcessRole.current {
+        case .orchestrator:
+            start(model: model, crewStore: crewStore)
+        case .viewer:
+            guard viewer == nil else { return }
+            let viewer = ViewerSessionClient(runner: runner)
+            self.viewer = viewer
+            viewer.start()
+            // 这两个在 viewer 里照跑，理由各自写在方法上：一个只跟着 daemon 写好的
+            // 文件走（不写），一个只读磁盘算个和（不写）。**闸门 1 防的是第二个
+            // writer，不是第二个 reader。**
+            QuotaCenter.shared.startFollowingFile()
+            usage.startReadOnly()
+        case .helper:
+            assertionFailure("helper 进程不该起 GUI")
+        }
+    }
+
     /// 启动全部长期职责。**幂等** —— 重复调用是 no-op（SwiftUI 的 `.task` 会因
     /// 视图重挂而重跑，这在切 crew 时是常态）。
     ///
