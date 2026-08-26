@@ -1,6 +1,15 @@
 #if os(macOS)
 import SwiftUI
 
+@MainActor
+protocol TerminalScrollbarSession: ObservableObject {
+    var scrollState: AgentTerminalSession.ScrollState { get }
+    func scrollTerminal(toPosition position: Double)
+}
+
+extension AgentTerminalSession: TerminalScrollbarSession {}
+extension RemoteSessionBackend: TerminalScrollbarSession {}
+
 /// 外置 overlay 竖向滚动条：叠在终端右侧那条 SwiftTerm 预留的空当里（~15pt，网格宽度已在
 /// `getEffectiveWidth` 扣掉，所以不压最右列字符）。macOS overlay 语义 —— 用户滚轮/拖动时淡入，
 /// 悬停时保持，停手约 1.5s 后淡出。
@@ -9,8 +18,8 @@ import SwiftUI
 /// canScroll/scrollPosition/scrollThumbsize）；拖动/点击回调走 `session.scrollTerminal(toPosition:)`
 /// 驱动 SwiftTerm `scroll(toPosition:)`。SwiftTerm 内部那条焊死的 NSScroller 已被
 /// `TerminalMirrorView` 藏掉，这里是它的替身。
-struct TerminalScrollbarOverlay: View {
-    @ObservedObject var session: AgentTerminalSession
+struct TerminalScrollbarOverlay<Session: TerminalScrollbarSession>: View {
+    @ObservedObject var session: Session
 
     /// 轨道宽度对齐 SwiftTerm 预留的 scrollerWidth(~15pt)；knob 更窄、居中，不顶边。
     private let trackWidth: CGFloat = 15

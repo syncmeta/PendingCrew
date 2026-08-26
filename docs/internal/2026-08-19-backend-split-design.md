@@ -156,10 +156,12 @@
 
 kind = 0  控制帧    payload = UTF-8 JSON
 kind = 1  终端字节  payload = [u32 handle][原始 PTY 字节]
-kind = 2  快照片段  payload = [u32 handle][u32 seq][序列化字节]
+kind = 2  快照片段  payload = [u32 handle][u32 seq][u8 flags][序列化字节]
 ```
 
 控制帧走 JSON（好改、好读、字段少）；终端字节走定长头（每秒几千帧，不能有 JSON/base64 开销）。`handle` 是 attach 时分配的 u32，避免热路径上带字符串 session id。
+
+kind=2 的 `flags` bit0 = `isLast`，它是快照结束的唯一依据；因此 64 KiB 整数倍长度的末片仍可携带非空 payload，空快照则是一帧 `isLast=1` 的空 payload。其余位保留，收到未知位必须忽略、不得断连。`attached.snapshotFrames` 只作进度提示（advisory），解析方不得拿它判断结束。
 
 ### 4.2 消息集
 
@@ -167,20 +169,20 @@ kind = 2  快照片段  payload = [u32 handle][u32 seq][序列化字节]
 
 | 消息 | 作用 |
 |---|---|
-| `hello{protocolVersion, appBuild}` | 握手，见 §8.3 |
+| `hello{protocolVersion, appBuild, capabilities}` | 握手，见 §8.3 |
 | `listSessions{}` | 拿全量 session 摘要（重连后的第一件事） |
-| `attach{sessionId, cols, rows}` | 开始看某个 session；daemon 回 handle + 快照 + 后续实时字节 |
+| `attach{sessionId, cols, rows}` | 开始看某个 session；daemon 回 handle，并按 backend 类型回终端快照或 Codex 结构化历史，再接后续实时流 |
 | `detach{handle}` | 不看了；daemon 停止推字节（session 照跑） |
 | `resize{handle, cols, rows}` | 窗口宽度变了 |
 | `input{handle, bytes}` | 键盘/程序化写入（`send` / `interrupt` 都走它） |
-| `control{op, …}` | 非终端控制：`stop` / `startSession` / `applyProfileSwitch` / `clearQuotaHealth` / … |
+| `control{op, …}` | 非终端控制：`stop` / `startSession` / `applyProfileSwitch` / `clearQuotaHealth` / `screenText(maxLines)` / … |
 | `ping{}` | 心跳 |
 
 **daemon → app**
 
 | 消息 | 作用 |
 |---|---|
-| `hello{protocolVersion, daemonBuild, sessionCount, pid}` | 握手回应 |
+| `hello{protocolVersion, daemonBuild, capabilities, sessionCount, pid}` | 握手回应 |
 | `sessions{[SessionSummary]}` | 全量摘要 |
 | `attached{sessionId, handle, snapshotFrames}` | attach 回应 |
 | `state{sessionId, delta}` | 状态变更（见 §4.3） |
@@ -188,6 +190,10 @@ kind = 2  快照片段  payload = [u32 handle][u32 seq][序列化字节]
 | `resync{handle}` + 快照帧 | 背压溢出后的重同步（见 §5.4） |
 | `event{kind, …}` | 需要 app 弹 UI 的事件（审批卡片等） |
 | `pong{}` | 心跳回应 |
+
+`screenText(maxLines)` 读取 §5.1 定义的 daemon 权威画面，不读取 app 当前可见区；它是新增的 `control.op` 能力，必须通过 `hello.capabilities` 协商。旧 daemon 没有该能力时 app 降级，不拒连、不升级协议版本。
+
+`attach` 的内容恢复必须按 backend 分流：终端型 session 发送 kind=2 快照片段，Codex session 没有 PTY，改用 `event{kind:"codexNotification", …}` 发送 daemon 内存中 `CodexTranscript` 的完整结构化 item 历史，再继续同形状的实时事件。`transcript-events` 通过 `hello.capabilities` 协商；缺能力时降级为空历史，不拒连。该历史随 session/backend 活在 daemon 内存里，因此跨 app/viewer 重启存活；它不落盘，也不承诺跨 daemon 重启恢复（边界见 §8.6）。
 
 ### 4.3 状态如何两端同步
 

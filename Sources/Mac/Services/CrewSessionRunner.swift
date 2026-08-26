@@ -15,6 +15,7 @@ import SwiftUI
 final class CrewSessionRunner: ObservableObject {
     @Published private(set) var runs: [CrewSessionRun] = []
     @Published var selectedRunId: UUID?
+    private let sessionProtocolBridge = InProcessSessionProtocolBridge()
 
     /// 「新建 session」态：inspector 显示零配置 composer 而非某个 run。由 roster /
     /// 切换条的「+」置 true，启动成功或切到某个 run 时复位。UI 选择态（与
@@ -200,10 +201,15 @@ final class CrewSessionRunner: ObservableObject {
     func applyCodexApprovalMode(
         to run: CrewSessionRun, reviewer: CodexProtocol.ApprovalsReviewer
     ) async {
-        guard run.kind == .codex, run.status == .running,
-              let backend = run.backend as? CodexAppServerBackend else { return }
+        guard run.kind == .codex, run.status == .running else { return }
         do {
-            try await backend.updateApprovalsReviewer(reviewer)
+            if let backend = run.backend as? CodexAppServerBackend {
+                try await backend.updateApprovalsReviewer(reviewer)
+            } else if let backend = run.backend as? RemoteSessionBackend {
+                try await backend.updateApprovalsReviewer(reviewer)
+            } else {
+                return
+            }
             run.approvalsReviewer = reviewer
             let scope: CodexApprovalModeStore.Scope = run.role == .captain
                 ? .captain : .session(run.sessionId)
@@ -792,43 +798,21 @@ final class CrewSessionRunner: ObservableObject {
         // 改完之后同一个 sessionId 在任何时刻问到的都是同一份画面（spec §5.1）。
         // `getLine` / `translateToString` 在无画面的 `Terminal` 上一模一样，所以
         // P4 之后这段由 daemon 侧执行，app 连不连着都问得到同一份画面。
-        switch run.backend {
-        case let term as AgentTerminalSession:
-            let tail = term.core.screenText(maxLines: 40)
-            lines.append(tail.isEmpty
-                ? "（终端画面为空）"
-                : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
-        case let term as PlainTerminalSession:
-            let tail = term.core.screenText(maxLines: 40)
-            lines.append(tail.isEmpty
-                ? "（终端画面为空）"
-                : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
-        case let codex as CodexAppServerBackend:
-            lines.append("transcript 尾部：\n\(Self.codexTail(codex))")
-        default:
+        let maxLines = run.kind == .codex ? 10 : 40
+        if let tail = SessionAuthoritativeScreenText.read(
+            from: run.backend, maxLines: maxLines
+        ) {
+            if run.kind == .codex {
+                lines.append("transcript 尾部：\n\(tail)")
+            } else {
+                lines.append(tail.isEmpty
+                    ? "（终端画面为空）"
+                    : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
+            }
+        } else {
             lines.append("（该后端类型无可读输出）")
         }
         return lines.joined(separator: "\n")
-    }
-
-    /// codex：无 PTY，回 transcript 尾部条目的紧凑渲染。
-    private static func codexTail(_ backend: CodexAppServerBackend, maxItems: Int = 10) -> String {
-        let items = backend.transcript.items.suffix(maxItems)
-        guard !items.isEmpty else { return "（transcript 为空）" }
-        return items.map { item in
-            switch item.kind {
-            case let .userMessage(text): return "[输入] \(text.prefix(200))"
-            case let .agentMessage(text, _): return "[回复] \(text.prefix(300))"
-            case let .reasoning(summary, content): return "[思考] \((summary ?? content ?? "…").prefix(200))"
-            case let .plan(text): return "[计划] \(text.prefix(200))"
-            case let .commandExecution(c):
-                return "[命令] \(c.command.prefix(160))" + (c.exitCode.map { " → exit \($0)" } ?? "")
-            case let .fileChange(f): return "[改文件] \(f.summary ?? f.status ?? "?")"
-            case let .toolCall(name, status): return "[工具] \(name) \(status ?? "")"
-            case let .webSearch(query): return "[搜索] \(query ?? "")"
-            case let .unknown(type): return "[\(type)]"
-            }
-        }.joined(separator: "\n")
     }
 
     /// 向目标发文本/按键。"Enter"/"Esc" 是按键（解模态菜单）；其余文本走 send
@@ -851,6 +835,19 @@ final class CrewSessionRunner: ObservableObject {
                 return "已向「\(run.displayName)」发送 Esc。稍后 inspect_session 复查画面。"
             default:
                 term.send(input)
+                return "已把文本发给「\(run.displayName)」（自动回车提交）。"
+            }
+        }
+        if let remote = run.backend as? RemoteSessionBackend, run.kind == .claudeCode {
+            switch key {
+            case "enter", "回车":
+                remote.sendRaw([0x0d])
+                return "已向「\(run.displayName)」发送 Enter。稍后 inspect_session 复查画面。"
+            case "esc":
+                remote.sendRaw([0x1b])
+                return "已向「\(run.displayName)」发送 Esc。稍后 inspect_session 复查画面。"
+            default:
+                remote.send(input)
                 return "已把文本发给「\(run.displayName)」（自动回车提交）。"
             }
         }
@@ -987,7 +984,7 @@ final class CrewSessionRunner: ObservableObject {
             env = LocalCodingAgentEnv.build(additionalEnv: additionalEnv, kind: config.kind)
         }
         // 3. 按 kind 选后端：claude = agent PTY；codex = app-server；terminal = plain PTY。
-        let backend: any SessionBackend
+        let directBackend: any SessionBackend
         switch config.kind {
         case .claudeCode:
             // Claude 的 PostToolUse 白板 hook 要等第一次工具调用后才会触发；首轮 brief
@@ -1012,11 +1009,13 @@ final class CrewSessionRunner: ObservableObject {
                     kind: config.kind.rawValue, agentSessionId: agentId,
                     workingDirectory: workingDirectory.path)
             }
-            backend = AgentTerminalSession(
+            directBackend = AgentTerminalSession(
                 config: config,
                 executable: executable.path,
                 workdir: workingDirectory.path,
-                env: env
+                env: env,
+                protocolOutputSink: SessionBackendRouting.usesProtocolTransport
+                    ? sessionProtocolBridge.terminalOutputSink(sessionId: sessionId) : nil
             )
         case .codex:
             // codex 没有 claude 的 hook/settings 通道：session 配置、世界观与 MCP
@@ -1063,16 +1062,23 @@ final class CrewSessionRunner: ObservableObject {
                             + "的原对话接不回来了（会话 \(failedId)：\(reason)），这一轮是**新开的**"
                             + "——群里的上下文它还在，终端里聊过的细节要重讲。",
                         category: "progress", senderName: "系统")
-                })
+                },
+                protocolNotificationSink: SessionBackendRouting.usesProtocolTransport
+                    ? sessionProtocolBridge.codexNotificationSink(sessionId: sessionId) : nil)
             cb.boot(initialPrompt: config.initialPrompt)
-            backend = cb
+            directBackend = cb
         case .terminal:
             // 人的工具：没有 initial prompt、世界观、MCP、白板 provider 或 agent 状态扫描。
-            backend = PlainTerminalSession(
+            directBackend = PlainTerminalSession(
                 shell: executable.path,
                 workdir: workingDirectory.path,
-                environment: env)
+                environment: env,
+                protocolOutputSink: SessionBackendRouting.usesProtocolTransport
+                    ? sessionProtocolBridge.terminalOutputSink(sessionId: sessionId) : nil)
         }
+        let backend: any SessionBackend = SessionBackendRouting.usesProtocolTransport
+            ? sessionProtocolBridge.expose(sessionId: sessionId, backend: directBackend)
+            : directBackend
         // 4. 包成 view model
         let run = CrewSessionRun(
             crewId: crewId,
@@ -1571,9 +1577,8 @@ final class CrewSessionRunner: ObservableObject {
     ///    → 悄悄重起 → 那才是真把记忆弄丢。
     /// 5. 只重试一次 —— 重起那次 `resumeSessionId` 已经是 nil，进不来这条路。
     ///
-    /// 读画面走 `AgentSessionCore.screenText` —— **这是第三个直接够进 `core` 的调用点**
-    /// （另两个在 `inspect(run:)`，本文件 864 / 869），`screenText` 尚未收进
-    /// `SessionBackend` 协议。#58 P2 收口协议时这三处要一起搬，别把这个漏了。
+    /// 读画面走 P2 的可选 `screen-text` 能力：协议模式发 `control.screenText` 到
+    /// daemon 读权威画面；一行回退到 P1 时仍由同一个 capability 读本地 core。
     private func retryWithoutResumeIfClaudeRefused(
         run: CrewSessionRun, config: SessionConfig, launchedAt: Date,
         crewId: String, sessionId: String, workingDirectory: URL, taskBrief: String,
@@ -1584,9 +1589,10 @@ final class CrewSessionRunner: ObservableObject {
               run.exitReason != .userStopped,
               Date().timeIntervalSince(launchedAt)
                   <= AgentSessionResume.claudeResumeRefusalWindow,
-              let term = run.backend as? AgentTerminalSession,
+              let screenText = SessionAuthoritativeScreenText.read(
+                  from: run.backend, maxLines: 40),
               let said = AgentSessionResume.claudeResumeRejection(
-                inScreenText: term.core.screenText(maxLines: 40), resumedId: resumedId)
+                inScreenText: screenText, resumedId: resumedId)
         else { return }
 
         let decision = AgentSessionResume.Decision.fresh(reason: .agentRejectedResume(
@@ -1691,10 +1697,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
 
     /// 类型转换访问：仅当后端是终端（claude）时非 nil，供 `AgentTerminalView` 使用。
     var agentTerminalSession: AgentTerminalSession? { backend as? AgentTerminalSession }
+    var remoteSessionBackend: RemoteSessionBackend? { backend as? RemoteSessionBackend }
     /// claude 与纯终端都提供 PTY 视图；codex 没有。
     var terminalView: TerminalMirrorView? {
         if let agent = backend as? AgentTerminalSession { return agent.terminalView }
         if let plain = backend as? PlainTerminalSession { return plain.terminalView }
+        if let remote = backend as? RemoteSessionBackend { return remote.terminalView }
         return nil
     }
 
@@ -1877,9 +1885,16 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 异常会让机长以为得改派，反而是新的谎报。定向 @ 机长：起这个 session 的是它，
     /// 只有它能决定「将就用」还是「用对的参数重起」。
     private func observeLaunchParameterProblems() {
-        guard let terminal = backend as? AgentTerminalSession else { return }
+        let problems: AnyPublisher<SessionLaunchParameterProblem, Never>
+        if let terminal = backend as? AgentTerminalSession {
+            problems = terminal.launchParameterProblems
+        } else if let remote = backend as? RemoteSessionBackend, kind == .claudeCode {
+            problems = remote.launchParameterProblems
+        } else {
+            return
+        }
         launchParameterObservation = Task { [weak self] in
-            for await problem in terminal.launchParameterProblems.values {
+            for await problem in problems.values {
                 guard let self, !Task.isCancelled else { return }
                 LocalWhiteboardStore.shared.appendSessionMessage(
                     crewId: self.crewId, sessionId: "system",
