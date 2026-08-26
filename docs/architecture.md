@@ -806,15 +806,26 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 身份 `--daemon`）养；app 退化成「连上去看的那个窗口」。顺带从结构上解掉 `docs/tech-debt.md`
 第一条（PTY 每批输出都过主线程、代价随 session 数线性涨）。
 
-六个阶段，**当前 main 上 P0 与 P1 已落地，P2 及以后未开工**（核对方式：全仓 grep 不到
-`RemoteSessionBackend` / `InProcessTransport` / `SessionTransport`）：
+六个阶段，**当前 main 上 P0–P3 已落地，P4/P5 未开工**
+（核对方式：`grep -r 'UnixSocketTransport\|SessionDaemonHost' Sources/` 零命中）：
+
+> **这个「核对方式」是这张表里唯一不会烂的部分，别删它。** 它上一版写的是
+> 「grep 不到 `RemoteSessionBackend` / `InProcessTransport` / `SessionTransport`」——
+> 2026-08-26 P2/P3 落地后那三个符号全部命中，**于是它自己把这张表的过时抓了出来**。
+> 一个会过期的结论配一把会红的尺子，尺子红了就该改结论。
+>
+> 翻新阶段时**把符号换成「下一批还不存在的」，别换成已经存在的**（那样它永远红，
+> 等于没有）。**两条踩过的边**：① 别用 `--daemon` —— 那个 flag P0 就进
+> `ProcessRole.swift` 了，**它今天就命中**；② **范围必须限定 `Sources/`** ——
+> 不限定的话，**这段文字里写着的符号名本身就会让 grep 命中**，尺子会永远红在自己
+> 身上。（这两条都是 2026-08-26 翻这张表时当场踩到的，写下来免得下一个人再踩。）
 
 | 阶段 | 做什么 | 现状 |
 |---|---|---|
 | **P0** 所有权归拢 | 长期职责从视图摘下来交给 app 级 `SessionHost` | ✅ `Sources/Mac/Services/SessionHost.swift`、`Sources/Mac/LocalRunner/ProcessRole.swift` 已在 |
 | **P1** 终端劈半 | `AgentTerminalSession` → 无画面 `AgentSessionCore` + 只负责画的 `TerminalMirrorView` | ✅ 三个文件都在，`AgentTerminalSession` 已退化成 162 行的薄门面 |
-| **P2** 协议 + 进程内传输 | 定义全部消息、`RemoteSessionBackend` 走传输层 | ⬜ 未开工 |
-| **P3** 快照 + 背压 | 终端缓冲区快照序列化（全项目风险最高的一块） | ⬜ 未开工 |
+| **P2** 协议 + 进程内传输 | 定义全部消息、`RemoteSessionBackend` 走传输层 | ✅ `SessionProtocol.swift` / `InProcessTransport.swift` / `RemoteSessionBackend.swift`（`c57e24d`）。`attach` 按 backend 种类分流：终端型发 kind=2 快照帧，codex 型发 daemon 内存里的结构化历史 |
+| **P3** 快照 + 背压 | 终端缓冲区快照序列化（全项目风险最高的一块） | ✅ `TerminalSnapshotEncoder.swift` / `SessionAttachQueue.swift`（`c2e6909`）。真 TUI 语料在 `Tests/Fixtures/`，它逮到了合成语料测不出的「延迟折行 + 整行空白续行凭空消失」 |
 | **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ⬜ 未开工 |
 | **P5** 常驻与善后 | `SMAppService.agent` 登录项、菜单栏项、孤儿回收 | ⬜ 未开工 |
 
