@@ -310,6 +310,10 @@ targets:
       # 结构化 mentions 与正文 `@<人类名>` 取并集，并用花名册做最长匹配防前缀误伤。
       # 纯 Foundation，依赖 CrewModels + CrewSenderNaming（两者均已在 bundle）。
       - path: Sources/Chat/Adapter/CrewMentionFilter.swift
+      # CrewMentionPickerLayout.swift（Todo #69）：@-候选浮层的限高判定（可用高度 +
+      # 行数 + 行高 → maxHeight）。纯 CoreGraphics 几何，不碰 SwiftUI —— GUI 验不了，
+      # 能被测试钉住的那部分必须钉住。
+      - path: Sources/Chat/Adapter/CrewMentionPickerLayout.swift
       # ── #443 主线程渲染成本的可量化基座 ────────────────────────────────────
       # `CrewChatOpenCostTests` 要拿**线上这版** MarkdownText 在离屏 NSHostingView
       # 里量真实的 70 条消息，所以整条 markdown 渲染链要编进 test bundle。这一组

@@ -61,6 +61,16 @@ struct CrewChatView: View {
     /// 渲染窗口上限（#443）：只把最近这么多条交给 `ForEach`。切 crew 时归位到一页。
     @State private var renderLimit = CrewChatWindow.pageSize
 
+    /// @-候选浮层限高用的两把尺（Todo #69）：群聊那一栏的总高、以及 composer 那
+    /// 一截（回复横幅 + 输入胶囊 + 错误行）的高。两者相减 = composer 上方真正
+    /// 剩下的空间，喂给纯函数 `CrewMentionPickerLayout` 算上限。
+    ///
+    /// **量的是 composer 里「不含浮层」的那部分**，故意的：把浮层自己也量进去会
+    /// 形成回路（浮层长高 → 可用空间变小 → 浮层变矮 → 又变高），在窗口边界上会
+    /// 抖个不停。
+    @State private var chatColumnHeight: CGFloat = 0
+    @State private var composerCoreHeight: CGFloat = 0
+
     /// 文本选中的归属（#443）：同一时刻只有一条气泡挂 `SelectionOverlay`。
     /// 存在 `@State` 里只为拿一个跨 body 稳定的实例 —— 它不是 `ObservableObject`，
     /// 从头到尾没人往这个 `@State` 赋值，所以**不会**让 body 失效。
@@ -156,6 +166,11 @@ struct CrewChatView: View {
         .overlay { dropHighlight }
         .animation(.easeOut(duration: 0.12), value: isDropTargeted)
         .task(id: crewId) { await subscribe() }
+        // Todo #69：@-候选浮层的限高要跟着窗口走，所以这两把尺在这里收口。
+        // 只在窗口改尺寸 / composer 行数变化时各写一次 @State —— 浮层自己不在被
+        // 量的子树里，所以不会「越算越矮」地自激（见 composerCoreHeight）。
+        .onPreferenceChange(CrewChatColumnHeightKey.self) { chatColumnHeight = $0 }
+        .onPreferenceChange(CrewComposerCoreHeightKey.self) { composerCoreHeight = $0 }
         // 切 crew 视图整个重建（macOS/iPad 都带 `.id(crewId)`），所以未发出的草稿不能只
         // 活在 @State 里 —— 进屏取回、变动存回，切走再切回来原样在。
         .onAppear { restoreDraft() }
@@ -275,6 +290,7 @@ struct CrewChatView: View {
                 }
                 .background(Theme.Palette.canvas)
             }
+            .measuringChatColumnHeight()
         #else
         VStack(spacing: 0) {
             if !members.isEmpty {
@@ -286,6 +302,7 @@ struct CrewChatView: View {
             Divider()
             composer
         }
+        .measuringChatColumnHeight()
         #endif
     }
 
@@ -314,20 +331,38 @@ struct CrewChatView: View {
 
     private var composer: some View {
         VStack(spacing: 0) {
-            // Inline @-mention autocomplete, rendered as a sibling directly
-            // above the composer (so it floats just over the input, Slack-style)
-            // rather than mutating the vendored `ComposerView`. Driven entirely
-            // from `$draft` via `onDraftChange` below.
-            if let query = activeMentionQuery {
-                let cands = mentionCandidates(for: query.prefix)
-                if !cands.isEmpty {
-                    CrewMentionPicker(candidates: cands) { pickMention($0) }
-                        .padding(.horizontal, Theme.Metrics.gutter)
-                        .padding(.bottom, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.opacity)
-                }
+            mentionPickerBar
+            composerCore
+        }
+    }
+
+    /// Inline @-mention autocomplete, rendered as a sibling directly
+    /// above the composer (so it floats just over the input, Slack-style)
+    /// rather than mutating the vendored `ComposerView`. Driven entirely
+    /// from `$draft` via `onDraftChange` below.
+    ///
+    /// **不在 `composerCore` 里面**（Todo #69）：那一截要被 GeometryReader 量高，
+    /// 把浮层自己量进去就成了回路（见 `composerCoreHeight`）。
+    @ViewBuilder
+    private var mentionPickerBar: some View {
+        if let query = activeMentionQuery {
+            let cands = mentionCandidates(for: query.prefix)
+            if !cands.isEmpty {
+                CrewMentionPicker(
+                    candidates: cands,
+                    availableHeight: mentionPickerAvailableHeight
+                ) { pickMention($0) }
+                    .padding(.horizontal, Theme.Metrics.gutter)
+                    .padding(.bottom, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
             }
+        }
+    }
+
+    /// 回复横幅 + 输入胶囊本体 —— 也就是「composer 那一截」的真实高度来源。
+    private var composerCore: some View {
+        VStack(spacing: 0) {
             if let replyTarget {
                 replyBanner(replyTarget)
             }
@@ -350,6 +385,7 @@ struct CrewChatView: View {
         }
         .onChange(of: draft) { _, newValue in onDraftChange(newValue) }
         .animation(.easeOut(duration: 0.12), value: activeMentionQuery)
+        .measuringComposerCoreHeight()
     }
 
     // MARK: - @-mention picker plumbing (Phase 6)
@@ -598,6 +634,12 @@ struct CrewChatView: View {
 
     /// 筛选开关当前是不是开着（没传 binding = 恒关）。
     private var onlyMentions: Bool { showOnlyHumanMentions?.wrappedValue ?? false }
+
+    /// composer 上方剩下多少空间（Todo #69）。没量到时是 0 —— `CrewMentionPickerLayout`
+    /// 认这个值走兜底上限，仍然有界。
+    private var mentionPickerAvailableHeight: CGFloat {
+        max(0, chatColumnHeight - composerCoreHeight)
+    }
 
     /// 判定用的花名册快照（Todo #61）。显示名取 `CrewSenderNaming.groupSender`
     /// 那一份 —— 与气泡、成员列表、@-菜单同一套名字，正文里的 `@小绿` 才对得上。
@@ -1539,5 +1581,42 @@ private enum CrewMessageClipboard {
         #else
         UIPasteboard.general.string = text
         #endif
+    }
+}
+
+// MARK: - Todo #69：@-候选浮层限高用的两把尺
+
+/// 群聊那一栏的总高（窗口给这一栏多少就是多少）。
+private struct CrewChatColumnHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// composer 那一截（回复横幅 + 输入胶囊）的高 —— **不含** @-候选浮层本身。
+private struct CrewComposerCoreHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private extension View {
+    /// 量「群聊这一栏有多高」。用 `.background` 而不是包一层 GeometryReader ——
+    /// GeometryReader 会把子视图按左上对齐并吃掉它的理想尺寸，包在外面等于改布局。
+    func measuringChatColumnHeight() -> some View {
+        background(
+            GeometryReader { geo in
+                Color.clear.preference(key: CrewChatColumnHeightKey.self, value: geo.size.height)
+            })
+    }
+
+    /// 量「composer 那一截有多高」。同上。
+    func measuringComposerCoreHeight() -> some View {
+        background(
+            GeometryReader { geo in
+                Color.clear.preference(key: CrewComposerCoreHeightKey.self, value: geo.size.height)
+            })
     }
 }

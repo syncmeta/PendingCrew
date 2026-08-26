@@ -10,11 +10,51 @@ import SwiftUI
 /// 形态对齐本仓 Theme:surface 底 + hairline 描边 + 轻阴影的浮层,每行一个
 /// kind 图标 + 名字。键盘导航(↑↓/回车)在 v1 不做 —— 鼠标/触摸点选即可,
 /// 已记 tech-debt 候选(非阻塞)。
+///
+/// **限高 + 内部滚动**(Todo #69):候选条数 = 成员数,本机 crew 动辄四十几个人,
+/// 原来这里一条上限都没有,列表直接顶穿窗口。高度不写死 —— 由 `availableHeight`
+/// (宿主量出的 composer 上方剩余空间)喂给纯函数 `CrewMentionPickerLayout` 算,
+/// 政策与三道边全在那边、有单测钉着。这里只负责「把算出来的数扣上去」。
 struct CrewMentionPicker: View {
     let candidates: [CrewMentionCandidate]
+    /// 宿主量出的「composer 上方可用高度」。`<= 0` = 还没量到,走兜底上限
+    /// (仍然有界 —— 量不到也不许回到顶穿)。
+    var availableHeight: CGFloat = 0
     let onPick: (CrewMentionCandidate) -> Void
 
+    /// 这次的高度上限。恒 ≤ 内容高度,所以候选少时与改动前逐字相同。
+    private var maxHeight: CGFloat {
+        CrewMentionPickerLayout.maxHeight(
+            availableHeight: availableHeight, rowCount: candidates.count)
+    }
+
     var body: some View {
+        // ScrollView 只在超上限时才真的能滚(`.basedOnSize` 让没超时不橡皮筋),
+        // 超了则由 `CrewMentionPickerLayout` 保证底下露半行 —— macOS 滚动条默认
+        // 隐藏,不露那半行人根本看不出还有更多。
+        ScrollView(.vertical) {
+            rows
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        // 宽度与改动前逐字相同（行里的 `Spacer(minLength: 0)` 本来就让每行占满
+        // 260）；高度这一维才是本条改的东西。
+        .frame(maxWidth: 260, maxHeight: maxHeight, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.Palette.surface)
+        )
+        // 裁在圆角上 —— 滚动内容不许从圆角外面漏出来。
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Theme.Palette.hairline, lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+    }
+
+    /// 候选行本体（ScrollView 的内容）。
+    @ViewBuilder
+    private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(candidates) { cand in
                 Button {
@@ -57,16 +97,6 @@ struct CrewMentionPicker: View {
             }
         }
         .padding(.vertical, 2)
-        .frame(maxWidth: 260, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Theme.Palette.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.Palette.hairline, lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
     }
 
     private func glyph(_ k: CrewMentionCandidate.Kind) -> String {
