@@ -83,4 +83,17 @@ grep -A1 "Test Suite 'CrewChatOpenCostTests' started" "$LOG"/t-mac.log | head -2
 # 差别就在这两行输出的字面上，不需要谁事先记住一个期望值再回来比对。
 echo "# 看到 Test Case ... started = 真跑了；看不到/整套 skipped = cp -R 没生效，那 8 条会变成 skip"
 echo "--- 两端 build ---"; grep -E "BUILD SUCCEEDED|BUILD FAILED" "$LOG"/b-mac.log "$LOG"/b-ios.log
+echo "--- 闸门自己留下的（不自动回收）---"
+echo "本趟：$WT 和 $LOG"
+# 清单和计数出自同一次 `ls` —— 数是从名单里数出来的，两者结构上不可能对不上。
+# （报「N 份」却另起一路去数，正是把名单和计数分家；分了家，错的通常是名单。）
+ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | sed 's|^|  |'
+printf '共 %s 趟，合计 %s（含各自的 -log 目录）\n' \
+  "$(ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | wc -l | tr -d ' ')" \
+  "$(du -shc /tmp/pcw-* 2>/dev/null | tail -1 | awk '{print $1}')"
+echo "  只报不删：清不清、什么时候清是仓库主人的事。"
+echo "  也只说闸门自己这一堆 —— 本机别处还有 worktree，不在此列。"
+echo "  另有一类更该管的：注册比目录活得久 —— worktree 建在会被回收的临时目录里"
+echo "  （比如某个 session 的 scratchpad），目录没了、git worktree list 里那条还挂着。"
+echo "  那不是占地方，是一条会骗人的登记。清它：git worktree prune（本脚本不替你跑）"
 true  # 末行 grep 若两个词都没命中会返回 1，让脚本退出码非零、误导看 $? 的人
