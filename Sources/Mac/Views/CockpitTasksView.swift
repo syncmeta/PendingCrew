@@ -23,6 +23,12 @@ struct CockpitTasksGlance: View {
     let crewId: String?
 
     @State private var todos: [LocalTodoItem] = []
+    /// `.human` 那本（Todo #62）—— 只为判断「卡在 #N」那条引用还在不在。
+    /// **和 `todos` 一样是 `@State`，不是现读**：判定发生在 `planItems` 的 body
+    /// 求值路径上，在那儿调 `LocalTodoStore.item()` 就是 flock + 整份 JSON 解码。
+    /// 这里不另造指纹门控缓存 —— 那套是给侧栏「N 个 crew × 每次目录 tick」准备的；
+    /// 本页只认一个 crew，跟旁边两条订阅同形即可。
+    @State private var humanTodos: [LocalTodoItem] = []
     @State private var plans: [CockpitPlanItem] = []
     @State private var expanded: Set<String> = []      // 展开看回应时间线的 Todo 行 id
 
@@ -58,6 +64,17 @@ struct CockpitTasksGlance: View {
                 plans = CockpitPlanStore.shared.list(crewId: crewId)
             }
         }
+        // `.human` 那本单开一条 —— 同上，`for await` 永不返回，不能跟别的挤一个 task。
+        // 走 `shared(_:)` 而不是 `humanShared`：这一侧是 app 进程，共享实例吃的就是
+        // 默认目录，是对的（helper 侧相反，见 `McpServer.blockerState`）。
+        .task(id: crewId ?? "") {
+            guard let crewId else { humanTodos = []; return }
+            let store = LocalTodoStore.shared(.human)
+            humanTodos = store.list(crewId: crewId)
+            for await _ in store.todoChanges(crewId: crewId) {
+                humanTodos = store.list(crewId: crewId)
+            }
+        }
     }
 
     // MARK: - 合流
@@ -90,8 +107,7 @@ struct CockpitTasksGlance: View {
                 CockpitPlan.blockerLine($0, state: CockpitPlan.blockerState(
                     $0,
                     agentTodoExists: { n in todos.contains { $0.number == n } },
-                    // `.human` 那本是 Todo #62 的产物，合 main 后在这里接线。
-                    humanTodoExists: nil))
+                    humanTodoExists: { n in humanTodos.contains { $0.number == n } }))
             } ?? ""
             let statusLine = CockpitPlan.statusLine(statusRaw: p.status, updated: updated, now: now)
             let recent = p.updates.last.map { "最近：\($0.text)" } ?? ""

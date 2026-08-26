@@ -102,12 +102,32 @@ final class McpServerPlanTests: XCTestCase {
         XCTAssertEqual(whiteboardTexts(dir).count, 1)
     }
 
-    /// `.human` 那本账（Todo #62）还没接线 —— 回执要**如实说没核实**，不假装查过。
-    func testHumanLedgerReferenceIsReportedUnverified() {
+    /// `.human` 那本账已接线（Todo #62）—— 那本里没有 #7 就**如实说找不到了**，
+    /// 不再回「未核实」（那句现在会是假话），也不静默当成「在」。
+    func testDanglingHumanReferenceIsSaidOutLoud() {
         let s = server(tempDir())
         _ = call(s, "plan_add", #"{"title":"等人拍板"}"#)
         let r = call(s, "plan_update", #"{"number":1,"status":"blocked","blocked_by_number":7}"#)
-        XCTAssertTrue(r.contains("未核实"))
+        XCTAssertTrue(r.contains("人类 Todo #7"))
+        XCTAssertTrue(r.contains("找不到了"))
+        XCTAssertFalse(r.contains("未核实"), "已经接线了，不许再说没核实")
+    }
+
+    /// 接线接的是**注入的那本**（跟着 `--dir` 走），不是 `LocalTodoStore.shared(.human)`。
+    /// 这条就是那个陷阱的守卫：写成共享实例的话，它会跳过 temp 目录去读开发机上真实
+    /// 的账 —— 那时这条会红在「找不到 / 找得到」上，而不是悄悄绿着。
+    func testHumanReferenceReadsTheInjectedLedger() {
+        let dir = tempDir()
+        let s = server(dir)
+        guard let added = s.humanTodos.add(crewId: "c", text: "请人类拍板") else {
+            return XCTFail("写不进注入的那本人类 Todo")
+        }
+        _ = call(s, "plan_add", #"{"title":"等人拍板"}"#)
+        let r = call(s, "plan_update",
+                     "{\"number\":1,\"status\":\"blocked\",\"blocked_by_number\":\(added.number)}")
+        XCTAssertTrue(r.contains("人类 Todo #\(added.number)"))
+        XCTAssertFalse(r.contains("找不到了"), "这条明明写进了注入的那本，却没被读到 —— 多半读错了目录")
+        XCTAssertFalse(r.contains("未核实"))
     }
 
     /// 指向 `.agent` 那本（现在就查得了）：人类把那条删了，作战板要说出来，

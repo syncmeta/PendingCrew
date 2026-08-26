@@ -246,7 +246,7 @@ enum CockpitPlan {
             return agentTodoExists(blocker.number) ? .present : .missing
         case "human":
             guard let humanTodoExists else {
-                return .unverified(reason: "人类 Todo 那本账（Todo #62）还没接线，这里暂时查不了")
+                return .unverified(reason: "这个调用点没接人类 Todo 那本账，查不了")
             }
             return humanTodoExists(blocker.number) ? .present : .missing
         default:

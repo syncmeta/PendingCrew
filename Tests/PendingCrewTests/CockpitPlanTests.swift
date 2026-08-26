@@ -65,11 +65,37 @@ final class CockpitPlanTests: XCTestCase {
         XCTAssertEqual(CockpitPlanBlocker(ledger: "agent", number: 1).label, "Todo #1")
     }
 
-    func testBlockerStateUnverifiedWhenHumanLedgerNotWired() {
-        // Todo #62 未合 main 时**如实承认没查**，绝不默认「在」。
+    func testBlockerStateUnverifiedWhenCallerCannotCheckHumanLedger() {
+        // 调用点接不上那本账时**如实承认没查**，绝不默认「在」。
+        // （Todo #62 已合 main，两个生产调用点都接上了；这条守的是「接不上时说实话」
+        // 这个语义本身，不是某一条线的进度。）
         let state = CockpitPlan.blockerState(humanRef, agentTodoExists: { _ in true }, humanTodoExists: nil)
         guard case let .unverified(reason) = state else { return XCTFail("应当是未核实") }
-        XCTAssertTrue(reason.contains("Todo #62"))
+        XCTAssertTrue(reason.contains("查不了"))
+        // 反向钉死：这句不许再提某条 Todo 的进度 —— 接完之后那种措辞就成了假话。
+        XCTAssertFalse(reason.contains("#62"))
+    }
+
+    func testBlockerStateForHumanLedgerOnceWired() {
+        // 接上之后：查得到 → present；人类把它删了（软删，`list` 不返回）→ missing。
+        // **不许因为查不到就退回 present 或偷偷改状态。**
+        XCTAssertEqual(
+            CockpitPlan.blockerState(humanRef, agentTodoExists: { _ in false },
+                                     humanTodoExists: { $0 == 7 }), .present)
+        XCTAssertEqual(
+            CockpitPlan.blockerState(humanRef, agentTodoExists: { _ in true },
+                                     humanTodoExists: { _ in false }), .missing)
+    }
+
+    func testTwoLedgersAreLookedUpSeparately() {
+        // 两本各自从 #1 起：同一个 #1 必须查各自那本，串本就是静默读错账。
+        let human1 = CockpitPlanBlocker(ledger: "human", number: 1)
+        let agent1 = CockpitPlanBlocker(ledger: "agent", number: 1)
+        // 只有 agent 那本有 #1
+        XCTAssertEqual(CockpitPlan.blockerState(agent1, agentTodoExists: { $0 == 1 },
+                                                humanTodoExists: { _ in false }), .present)
+        XCTAssertEqual(CockpitPlan.blockerState(human1, agentTodoExists: { $0 == 1 },
+                                                humanTodoExists: { _ in false }), .missing)
     }
 
     func testBlockerStateForAgentLedger() {

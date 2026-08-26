@@ -1342,10 +1342,16 @@ final class McpServer {
     private func blockerState(_ blocker: CockpitPlanBlocker) -> CockpitPlanBlockerState {
         CockpitPlan.blockerState(
             blocker,
+            // 两行必须同一个来源：都用**注入的** store，不许写 `LocalTodoStore.shared(_:)`。
+            // 那个共享实例吃的是 `LocalWhiteboardStore.defaultDirectory`，而 helper 靠
+            // `--dir` 定目录；生产上两者恰好相等所以看不出来，**单测里会当场读错人** ——
+            // 用例摆在 temp 目录里的那本压根不会被读到，读的是开发机上真实的账，
+            // 而 CI 干净机器上恒 `.missing`，于是一条从没读过 temp 目录的用例会以
+            // 稳定的绿一直活着。两行保持视觉对称，谁也别想只改一行。
             agentTodoExists: { todos.item(crewId: crewId, number: $0) != nil },
-            // Todo #62 合 main 后，这里换成对 `.human` 那本 store 的一次查询即可。
-            // 在那之前**如实说没核实**，不假装查过。
-            humanTodoExists: nil)
+            // `self.` 是必须的、不是风格：`humanTodoExists` 是**可选**闭包参数，
+            // 而可选函数类型没法 non-escaping，所以编译器要求显式捕获语义。
+            humanTodoExists: { self.humanTodos.item(crewId: self.crewId, number: $0) != nil })
     }
 
     private static let iso = ISO8601DateFormatter()
