@@ -612,18 +612,18 @@ struct CrewChatView: View {
         .padding(.top, 6)
     }
 
-    // macOS：登录后用真实 user id（`AppModel.currentUserId`，由
-    // `CrewStore.refreshSubjects()` 回填）—— 这样 relay 从其它设备（如 iOS）
-    // 回流的、同一账号发的消息也能被 `CrewSenderResolver` 认成"我"(右对齐)。
-    // 未登录 BYOK 沿用哨兵常量 `LocalWhiteboardStore.localUserId`。
-    // （composer 本地行永远标哨兵常量，不随登录态变；`CrewSenderResolver`
-    // 对两者都判"我"，登录态切换不会让自己刚发的话变成"别人"。）
-    // iOS: 暂无本地后端 — 使用 AppModel.currentUserId。
+    // 「自己的气泡」判据（右对齐、无头像）。composer 本地行恒标哨兵常量
+    // `LocalWhiteboardStore.localUserId`，所以 macOS 上就用它。
+    //
+    // #63 第二期之前这里还先取 `AppModel.currentUserId`（edge 回填的真实账号
+    // id），为的是让 relay 从其它设备回流的、同一账号发的消息也认成"我"。
+    // 云端整层删掉后本机没有账号概念了，那一层跟着去掉。
+    // iOS: 暂无本地后端（`backend` 恒 nil）→ 没有作者身份可言。
     private var localUserId: String? {
         #if os(macOS)
-        return appModel.currentUserId ?? LocalWhiteboardStore.localUserId
+        return LocalWhiteboardStore.localUserId
         #else
-        return appModel.currentUserId
+        return nil
         #endif
     }
 
@@ -911,10 +911,10 @@ struct CrewChatView: View {
             conversationID: crewId,
             currentUserId: localUserId,
             groupSender: sender,
-            // BubbleView 的附件区被 `serverURL != nil` 门禁挡着；本地模式
-            // （无 imageAuth）附件 url 是 file:// 绝对 URL、渲染端不用
-            // serverURL —— 给个占位兜底让本地附件也能渲染（Todo #3）。
-            serverURL: appModel.imageAuth?.baseURL ?? URL(string: "file:///")!,
+            // BubbleView 的附件区被 `serverURL != nil` 门禁挡着；附件 url 是
+            // file:// 绝对 URL、渲染端不用 serverURL —— 给个占位兜底让本地
+            // 附件也能渲染（Todo #3）。
+            serverURL: URL(string: "file:///")!,
             onRetry: nil,
             onMentionSender: mentionStaged.map { staged in { _ in appendMentionFromAvatar(staged) } },
             // MarkdownUI 内部是一段一个 Text/selection overlay，跨 block 的拖选会在

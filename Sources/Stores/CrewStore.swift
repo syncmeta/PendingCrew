@@ -302,7 +302,7 @@ final class CrewStore: ObservableObject {
 
     // MARK: - Auth lifecycle
 
-    /// 用户退出登录时调，清掉所有内存态。`AppModel.clearAuth` 时一并调。
+    /// 清掉所有内存态（`LocalDataReset` 之类的整体重置路径用）。
     func reset() {
         crews = []
         lastWhiteboardMessages = [:]

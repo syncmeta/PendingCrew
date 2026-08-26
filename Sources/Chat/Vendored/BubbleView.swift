@@ -276,20 +276,6 @@ struct AttachmentGrid: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .contentShape(Rectangle())
                             .onTapGesture { zoomed = ZoomTarget(path: att.url) }
-                            // The image's own context menu — long-pressing a
-                            // thumbnail offers "save to album", not the text
-                            // bubble's copy/recall menu. Save-to-album is an
-                            // iOS-only affordance (system photo library);
-                            // macOS users save via the image viewer / Finder.
-                            #if os(iOS)
-                            .contextMenu {
-                                Button {
-                                    saveToAlbum(att)
-                                } label: {
-                                    Label("保存到相册", systemImage: "square.and.arrow.down")
-                                }
-                            }
-                            #endif
                     }
                 }
             }
@@ -302,32 +288,10 @@ struct AttachmentGrid: View {
         }
     }
 
-    // PENDINGCREW SHIM: inject AppModel so saveToAlbum can resolve imageAuth
-    // (PendingBot calls APIClient() which self-resolves auth via SupabaseStack;
-    // PendingCrew has no APIClient and uses device-grant bearer via AppModel).
-    @EnvironmentObject private var appModel: AppModel
-
-    /// Download the full image through the auth-gated endpoint and write
-    /// it to the system photo library. NSPhotoLibraryAddUsageDescription
-    /// is already declared; iOS prompts on first use. iOS-only — the
-    /// save-to-album affordance isn't surfaced on macOS.
-    #if os(iOS)
-    private func saveToAlbum(_ att: Attachment) {
-        Task {
-            // PENDINGCREW SHIM: replaced APIClient().download with CrewAttachmentDownload
-            guard let auth = appModel.imageAuth,
-                  let data = try? await CrewAttachmentDownload.data(path: "v1/uploads/\(att.id)", auth: auth),
-                  let image = UIImage(data: data) else {
-                await MainActor.run { Haptics.error() }
-                return
-            }
-            await MainActor.run {
-                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                Haptics.tap()
-            }
-        }
-    }
-    #endif
+    // PENDINGCREW SHIM: iOS 的「保存到相册」原本经 auth-gated `/v1/uploads/:id`
+    // 把整图下下来再写相册。那条通道随 #63 第二期删除跨端遥控整层一起没了
+    // （附件此后只有本地落盘的 `file://` 一种来源，而 iOS 上根本没有本地后端），
+    // 所以这个长按菜单一并去掉，而不是留一个必然失败的按钮。
 }
 
 /// Identifiable wrapper so a tapped image path can drive `.fullScreenCover`.
@@ -336,17 +300,14 @@ private struct ZoomTarget: Identifiable {
     var id: String { path }
 }
 
-/// A non-image attachment rendered as an icon + filename chip. Tapping it
-/// downloads the bytes through the auth-gated /v1/uploads/:id endpoint
-/// and hands them to the system share sheet (open-in / preview / save).
+/// A non-image attachment rendered as an icon + filename chip. Tapping it hands
+/// the local file to the system (Finder on macOS / share sheet on iOS).
 struct FileAttachmentChip: View {
     let attachment: Attachment
 
-    @State private var downloading = false
     @State private var shareURL: IdentifiedURL?
     @State private var loadError = false
 
-    @EnvironmentObject private var appModel: AppModel // PENDINGCREW SHIM: inject AppModel for auth (PendingBot uses APIClient() which self-resolves auth)
 
     private var displayName: String { attachment.filename ?? "文件" }
 
@@ -377,13 +338,9 @@ struct FileAttachmentChip: View {
                     }
                 }
                 Spacer(minLength: 4)
-                if downloading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: loadError ? "exclamationmark.triangle" : "square.and.arrow.up")
-                        .font(Theme.Fonts.glyph(size: 13))
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                }
+                Image(systemName: loadError ? "exclamationmark.triangle" : "square.and.arrow.up")
+                    .font(Theme.Fonts.glyph(size: 13))
+                    .foregroundStyle(Theme.Palette.inkMuted)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -398,7 +355,6 @@ struct FileAttachmentChip: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(downloading)
         // System share sheet (UIActivityViewController) is iOS-only; on
         // macOS the file is still downloaded to a temp dir but the share
         // presentation is skipped until a macOS share path lands.
@@ -423,33 +379,21 @@ struct FileAttachmentChip: View {
     }
 
     private func openFile() async {
-        // PENDINGCREW SHIM (Todo #3): 本地落盘附件（file:// url）直接交系统打开，
-        // 不走 edge 鉴权下载（本地模式没有 imageAuth）。
-        #if os(macOS)
-        if attachment.url.hasPrefix("file://"), let url = URL(string: attachment.url) {
-            NSWorkspace.shared.open(url)
-            return
-        }
-        #endif
-        downloading = true
+        // PENDINGCREW SHIM (Todo #3)：附件只有本地落盘（`file://` 绝对 URL）一种
+        // 来源 —— edge 的 auth-gated `/v1/uploads/:id` 下载随 #63 第二期删掉了。
+        // 拿不到 file:// 就如实报错，不再留一条必然 401 的网络路径。
         loadError = false
-        defer { downloading = false }
-        do {
-            guard let auth = appModel.imageAuth else { throw CrewAttachmentDownloadError.notAuthenticated } // PENDINGCREW SHIM: guard on imageAuth instead of implicit APIClient auth
-            let data = try await CrewAttachmentDownload.data(path: "v1/uploads/\(attachment.id)", auth: auth) // PENDINGCREW SHIM: CrewAttachmentDownload replaces APIClient().download(...)
-            // Write to a temp file under the real filename so the share
-            // sheet shows a sensible name and downstream apps see the
-            // right extension.
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("attachments", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let fileURL = dir.appendingPathComponent(displayName)
-            try data.write(to: fileURL, options: .atomic)
-            shareURL = IdentifiedURL(url: fileURL)
-        } catch {
+        guard attachment.url.hasPrefix("file://"),
+              let url = URL(string: attachment.url) else {
             loadError = true
             Haptics.error()
+            return
         }
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
+        shareURL = IdentifiedURL(url: url)
+        #endif
     }
 }
 

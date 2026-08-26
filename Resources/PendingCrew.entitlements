@@ -2,16 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- data-protection 钥匙串的默认 access group = app 自己的 application-identifier
-       ($(AppIdentifierPrefix)com.pendingname.pendingcrew = M42BKJN82S.com.pendingname.pendingcrew)。
-       这是 app 隐式拥有的组(非受限能力,无需额外 provisioning),entitlement-gated →
-       KeychainStore 走 kSecUseDataProtectionKeychain 后静默、跨重构不弹。对齐 PendingBot。 -->
+  <!-- ⚠️ #63 第二期（2026-08-26）删掉 KeychainStore / FamilyCredentialStore 之后，
+       本 app 已无任何 Keychain 使用者，下面这两个组当前**没有消费者**。
+       留着不删是为了不触碰签名配置（entitlements 只在 gitignored 的
+       Config/Local.xcconfig 里才打开），不是因为有人在用。
+
+       第一条是 app 自己的 application-identifier
+       ($(AppIdentifierPrefix)com.pendingname.pendingcrew = M42BKJN82S.com.pendingname.pendingcrew)
+       —— app 隐式拥有的组(非受限能力,无需额外 provisioning)。 -->
   <key>keychain-access-groups</key>
   <array>
     <string>$(AppIdentifierPrefix)com.pendingname.pendingcrew</string>
-    <!-- 家族 SSO 共享组：同 team 的 PendingBot 也声明它，双方经 kSecAttrAccessGroup
-         显式读写家族凭据(pfa_)。keychain group 无需 Apple Developer portal 配置 ——
-         profile 自动允许 TEAMID.* 下所有组(与 App Groups 不同)。 -->
+    <!-- 家族 SSO 共享组：同 team 的 PendingBot 也声明它。本 app 这侧的读写方
+         (FamilyCredentialStore) 已随 #63 第二期删除；这条留着是因为单方面撤掉
+         只会让两边的声明对不齐，没有好处。 -->
     <string>$(AppIdentifierPrefix)com.pendingname.shared</string>
   </array>
 </dict>

@@ -1,12 +1,15 @@
 import Foundation
 
-/// 一行 `GET /v1/models` 返回。对应 edge `OpenRouterModelOut`
-/// (apps/edge/src/routes/models.ts) —— 只挑 CreateSessionSheet 真正用到的
-/// 字段(slug / display_name / provider / source),其余等到右栏 session 详情
-/// 真要展示价格 / context 时再补。
+/// 一行可用模型目录条目。只挑 CreateSessionSheet 真正用到的字段
+/// (slug / display_name / provider / source)。
 ///
-/// 解码用 snake_case key — PendingCrewAPI.perform() 不开 keyDecodingStrategy
-/// (会破坏 crews 端已经 camelCase 的返回),所以这里显式 CodingKeys。
+/// ⚠️ **这个类型当前没有任何消费者**：唯一引用它的是
+/// `PendingCrewBackend.listModels()`，而那个方法**在 #63 第二期之前就已经
+/// 没有调用方了** —— 新建 session 页早已改读本机实探的 `ModelCatalogCenter`
+/// （`AgentModelCatalog` 那套 models.json，形状不同）。
+///
+/// 它不在 #63 第二期的删除范围里（不是遥控/登录层的东西，是那一刀之前就落下的
+/// 死代码），所以这一期只登记不动手。见 docs/tech-debt.md。
 struct ModelCatalogEntry: Decodable, Equatable, Hashable, Identifiable {
     let slug: String
     let displayName: String

@@ -181,8 +181,6 @@ targets:
       # 依赖 LocalCrewStore.swift 的 LocalCrew / LocalCrewFile 与上面的快照类型
       # （都已编进 bundle），所以整套编号/寻址逻辑能脱离 app 单测。
       - path: Sources/Stores/CrewDirectory.swift
-      # 家族 SSO 凭据共享组存储（纯 Foundation+Security，自包含）。
-      - path: Sources/Support/FamilyCredentialStore.swift
       # fd 软上限抬升（2026-08-12 P0 的触发闸）。纯 Darwin syscall + 一个可单测的
       # 纯判定函数，自包含。
       - path: Sources/Support/FileDescriptorLimit.swift
@@ -357,11 +355,10 @@ targets:
       # CrewComposerDrafts.swift（Todo #45 配套）：每 crew 未发出草稿的内存态。
       # 只依赖 CrewStagedMention / CrewReplyTarget（均已在 bundle）。
       - path: Sources/Chat/Adapter/CrewComposerDrafts.swift
-      # CrewModels.swift：从 PendingCrewAPI.swift 提取的 whiteboard/crew 纯
-      # Foundation 模型（CrewWhiteboardEntry / CrewMember / CrewAttachment 等），
-      # 不含 PendingCrewAPI 类或 URLSession 依赖。
+      # CrewModels.swift：whiteboard / crew 的纯 Foundation 模型
+      # （CrewWhiteboardEntry / CrewMember / CrewAttachment 等）。
       - path: Sources/Services/CrewModels.swift
-      # Sources/Models/（CrewDetail / CrewSummary / UserSubject / DeviceLogin /
+      # Sources/Models/（CrewDetail / CrewSummary / UserSubject /
       # ModelCatalogEntry）：LocalRunner 传递引用了这些类型。
       - path: Sources/Models
       # Shared/AppUpdate（版本戳 + 更新检查闸门）：纯 Foundation，直接编进 bundle 单测。

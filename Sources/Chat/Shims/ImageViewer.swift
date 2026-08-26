@@ -2,7 +2,7 @@
 //
 // PendingBot's `ImageViewer` lives in Components/ServerImage.swift and uses
 // PendingBot's `ServerImage` (Supabase-JWT-gated). In PendingCrew, `ServerImage`
-// is already shimmed to CrewRemoteImage (AttachmentDownload + AppModel.imageAuth).
+// is already shimmed to CrewRemoteImage (本地 `file://` 附件，见 CrewImageLoader)。
 //
 // This shim provides an `ImageViewer` with the EXACT init signature BubbleView
 // calls:

@@ -5,64 +5,6 @@
 // PendingCrewAPI.swift imports this file implicitly (same module).
 import Foundation
 
-// MARK: - Crew session models (T4.5)
-
-/// Result of `claimSession`. The claimed crew_session row is free-form on the
-/// wire and not modeled yet (the runner already holds the sessionId it
-/// claimed); only the lease id is decoded. `leaseId` nil = nothing claimable.
-struct SessionClaim: Decodable {
-    let leaseId: String?
-}
-
-/// One server crew session row (from `listCrewSessions`). Mirrors the
-/// `crew_sessions` columns the list endpoint returns.
-struct CrewSessionSummary: Decodable, Identifiable, Equatable {
-    let id: String
-    let runnerKind: String
-    let status: String
-    let taskBrief: String
-    let progressSummary: String?
-    let createdAt: String
-    let startedAt: String?
-    let finishedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case runnerKind = "runner_kind"
-        case status
-        case taskBrief = "task_brief"
-        case progressSummary = "progress_summary"
-        case createdAt = "created_at"
-        case startedAt = "started_at"
-        case finishedAt = "finished_at"
-    }
-}
-
-/// One transcript event from a session's durable log (`getSessionEvents`).
-struct CrewSessionEvent: Decodable, Identifiable, Equatable {
-    let id: String
-    let eventType: String
-    let visibility: String
-    let summary: String?
-    let createdAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case eventType = "event_type"
-        case visibility
-        case summary
-        case createdAt = "created_at"
-    }
-}
-
-/// One pending `ask_human` interaction (T4.5). The agent is blocked waiting on
-/// `question`; the operator answers with free text.
-struct CrewInteraction: Decodable, Identifiable, Equatable {
-    let id: String
-    let question: String
-    let requestedAt: String?
-}
-
 // MARK: - Crew whiteboard / group chat models (spec §9)
 
 /// A mention target for a crew message. `@session <id>` routes to that
@@ -164,51 +106,6 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     var displayText: String { payload?.text ?? summary ?? "" }
 }
 
-/// `listCrewWhiteboardPage` 的响应：白板条目 + 续传游标（接合 v2 block 3）。
-/// `lastCursor` = 本批最大 created_at；空批为 nil（游标原地不动）。
-struct CrewWhiteboardPage: Decodable {
-    let whiteboard: [CrewWhiteboardEntry]
-    let lastCursor: String?
-}
-
-/// One invitable bot (`listMyBots`, `GET /v1/me/bots`)：自己的 bot + 加过
-/// 联系人的非 private bot，供「邀 bot 进 relay crew」picker 用。响应是
-/// snake_case row，显式 CodingKeys。
-struct InvitableBot: Decodable, Identifiable, Equatable, Hashable {
-    let id: String
-    let slug: String?
-    let displayName: String
-    let modelId: String?
-    let visibility: String
-    let isMine: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case slug
-        case visibility
-        case displayName = "display_name"
-        case modelId = "model_id"
-        case isMine = "is_mine"
-    }
-}
-
-/// One invitable friend (`listContacts`, `GET /v1/contacts`)：当前用户的好友
-/// 列表，供「邀人进 relay crew」picker 用。edge 返回本来就是 camelCase，
-/// 不需要显式 CodingKeys（与 crews 系端点一致，PendingCrewAPI.perform() 用
-/// 裸 JSONDecoder）。`addedAt` 是 epoch 秒，暂无展示需求，先不解。
-struct CrewContact: Decodable, Identifiable, Equatable, Hashable {
-    let userId: String
-    let alias: String?
-    let displayName: String?
-    let avatarPath: String?
-    let avatarSeed: String?
-
-    var id: String { userId }
-    /// 备注优先，其次昵称，都没有兜底「好友」——与 PendingBot 侧「备注优先」
-    /// 的展示口径保持一致。
-    var rowName: String { alias ?? displayName ?? "好友" }
-}
-
 /// The crew roster (`listCrewMembers`). `captainBotId` lets the UI tag which
 /// bot member is the captain.
 struct CrewRoster: Decodable {
@@ -271,40 +168,6 @@ struct CrewMember: Decodable, Identifiable, Equatable {
         case representsCrewId = "represents_crew_id"
         case sessionStatus
         case createdAt = "created_at"
-    }
-}
-
-/// The per-turn context bundle (`getSessionInbox`): crew whiteboard + this
-/// session's unread mailbox. Only the two fields the runner injects are
-/// decoded; `session` / `crew` in the response are ignored.
-struct CrewSessionInbox: Decodable {
-    let whiteboard: [CrewWhiteboardEntry]
-    let mailbox: [CrewMailboxItem]
-}
-
-/// One unread mailbox item targeted at this session (a `@session` / broadcast
-/// message someone dropped on the crew, fanned out to this session's mailbox).
-struct CrewMailboxItem: Decodable, Identifiable, Equatable {
-    let id: String
-    let senderKind: String
-    let senderSessionId: String?
-    let messageKind: String
-    let summary: String?
-    let status: String
-    let createdAt: String
-    let payload: CrewWhiteboardEntry.Payload?
-
-    var displayText: String { payload?.text ?? summary ?? "" }
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case senderKind = "sender_kind"
-        case senderSessionId = "sender_session_id"
-        case messageKind = "message_kind"
-        case summary
-        case status
-        case createdAt = "created_at"
-        case payload
     }
 }
 
@@ -394,34 +257,4 @@ struct CreateCrewRequest: Encodable {
 struct CreateCrewResponse: Decodable {
     let crewId: String
     let captainBotId: String?
-}
-
-/// `POST /v1/device-grant/mint` 的响应（家族凭据静默换 grant）。形状对齐
-/// device-login consume：grant token + 元数据。字段全 optional 解耦 edge 端
-/// 演进，调用方只硬依赖 `deviceGrantToken`。
-struct MintGrantResponse: Decodable {
-    let deviceGrantToken: String?
-    let grantId: String?
-    let subjectId: String?
-    let grantKind: String?
-    let scopes: [String]?
-}
-
-// MARK: - Error type
-
-enum PendingCrewAPIError: LocalizedError {
-    case invalidResponse
-    case http(status: Int, code: String?, message: String?)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidResponse:
-            return "服务器返回了非 HTTP 响应"
-        case let .http(status, code, message):
-            let prefix = "HTTP \(status)"
-            if let message, !message.isEmpty { return "\(prefix): \(message)" }
-            if let code { return "\(prefix) (\(code))" }
-            return prefix
-        }
-    }
 }
