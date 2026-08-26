@@ -10,7 +10,7 @@ import Combine
 ///
 /// 现在它们都归这里。视图退化成观察者：只读 `@Published`，不创建、不启动。
 ///
-/// P0 阶段这个类还活在 GUI 进程里（`ProcessRole.current == .orchestrator`）；
+/// P0 阶段这个类还活在 GUI 进程里（`ProcessRole.requested == .orchestrator`）；
 /// P4 之后同一个类原样跑在 `--daemon` 进程里，GUI 侧变成 `.viewer` 不再持有它。
 /// **所以这里不许出现任何 SwiftUI / AppKit 依赖** —— 它将来要在没有画面的进程里跑。
 @MainActor
@@ -43,14 +43,13 @@ final class SessionHost: ObservableObject {
     /// （连不上时那条横幅就挂在它上面）。
     @Published private(set) var viewer: ViewerSessionClient?
 
-    // 下面两个是「本进程为什么没在编排」，`nil` = 正在编排 / 本来就是 viewer 身份。
-    // **它们是给界面看的，不是可选的装饰**：这道闸门自己的失败形态就是「窗口在、
-    // 什么都不动、不报错」，而那正是这一整期在修的那种静默。见 `OrchestrationGate`。
-
-    /// 锁被一个 **daemon** 占着 —— 已退化成 viewer，这是「谁占着」。
-    @Published private(set) var followingDaemon: String?
-    /// 锁被一个**不听 socket** 的东西占着 —— 既没编排也没退化，必须摆到用户面前。
-    @Published private(set) var orchestrationConflict: String?
+    /// 编排闸门的裁决，**原样发布给界面**（`nil` = 闸门没装：`--daemon` 进程 / 单测）。
+    ///
+    /// 发布的是裁决本身而不是两个预先格式化好的字符串：屏幕上显示什么由
+    /// `OrchestrationNotice.resolve(decision:viewer:)` 这个**纯判定**算，
+    /// 于是「锁被别人占着 → 界面必须是错误态」是一条跑得出来的测试，
+    /// 而不是又一个没人读的 `@Published`。见 `OrchestrationNotice`。
+    @Published private(set) var orchestrationDecision: OrchestrationGate.Decision?
 
     /// **唯一的入口。** 按进程角色分岔，别让视图去判断自己该走哪条 ——
     /// 判断散在视图里，就会有第 N 个视图哪天忘了判断，然后在 viewer 里起一套编排。
@@ -58,7 +57,7 @@ final class SessionHost: ObservableObject {
     /// - `.orchestrator`（inproc 的 GUI，或 `--daemon`）→ 起全部长期职责。
     /// - `.viewer`（总闸=daemon 的 GUI）→ 只连后台，**一个长期定时器都不起**。
     func begin(model: AppModel, crewStore: CrewStore) {
-        switch ProcessRole.current {
+        switch ProcessRole.requested {
         case .orchestrator:
             // 闸门在**进程入口**取好了（`OrchestrationGate.installForGUIProcess`）。
             // 这里只读它的裁决 —— **视图这条路不许自己再去问一遍锁**，再问一遍就等于
@@ -71,20 +70,19 @@ final class SessionHost: ObservableObject {
                 start(model: model, crewStore: crewStore)
                 return
             }
+            orchestrationDecision = gate.decision
             switch gate.decision {
             case .takeOver, .notOrchestrator:
                 start(model: model, crewStore: crewStore)
             case let .followDaemon(detail):
                 // 锁被一个 daemon 占着：那边真的在 socket 上听，连上去就是了。
                 NSLog("[SessionHost] 本进程不接管编排，退化成 viewer：%@", detail)
-                followingDaemon = detail
                 beginViewer()
             case let .conflict(detail):
                 // 锁被一个不听 socket 的东西占着：**既不编排也不退化。**
                 // 退化过去只会得到一个连不上的 viewer —— 界面在、什么都不动、
-                // 不报错，比不做还难查。理由交给界面显示。
+                // 不报错，比不做还难查。理由交给界面显示（`OrchestrationNotice`）。
                 NSLog("[SessionHost] 编排冲突，本进程既不编排也不退化：%@", detail)
-                orchestrationConflict = detail
             }
         case .viewer:
             beginViewer()
@@ -115,7 +113,7 @@ final class SessionHost: ObservableObject {
     func start(model: AppModel, crewStore: CrewStore) {
         precondition(
             ProcessRole.effective == .orchestrator,
-            "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard !started else { return }
         started = true
 

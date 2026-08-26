@@ -35,6 +35,11 @@ struct MacThreePaneView: View {
             // 整片换成另一个 NavigationSplitView，群聊那栏被卸载重建 —— 回来时 composer
             // 草稿和滚动位置全被冲掉。驾驶舱改成叠在上面的临时窗口后，群聊视图常驻，
             // 关掉驾驶舱看到的就是离开前那一屏。
+            VStack(spacing: 0) {
+            // 「这个窗口现在管不管事」—— 正常编排时渲染成空，不占一个像素。
+            // 挂在三栏**之上**而不是某一栏里：它讲的是整个进程的状态，
+            // 塞进任何一栏都会变成「那一栏的事」。见 `OrchestrationNoticeBar`。
+            OrchestrationNoticeBar()
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
                     .environmentObject(sessionRunner) // 侧栏头像状态点要看 runs
@@ -47,6 +52,7 @@ struct MacThreePaneView: View {
                 CrewSessionWindowView()
                     .environmentObject(sessionRunner)
                     .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 560)
+            }
             }
             if sessionRunner.showingCockpit {
                 CockpitOverlay(runner: sessionRunner)

@@ -117,6 +117,7 @@
 		391597900B4700C40F468394 /* CrewTimelineListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4746BDF24E4DDA8FCCE894 /* CrewTimelineListView.swift */; };
 		391BFD370A11E502EF5A25F6 /* SessionTurnTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F957E0F4F780C56364650EF /* SessionTurnTrace.swift */; };
 		3986D83C00FD239A7ED7A208 /* CrewViewedStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 154A70A6CF58F04EB4D7CECF /* CrewViewedStore.swift */; };
+		3A39336EBD021D209E9C8995 /* OrchestrationNoticeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ADC8A7DB8B03BA0C61EAA18 /* OrchestrationNoticeTests.swift */; };
 		3AAD3F56EB6F05218DA91EF4 /* CrewTimelineOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC117CCF335B9AF5CB2BD848 /* CrewTimelineOrdering.swift */; };
 		3AEC467A9E85A456ACAE754E /* AgentQuota.swift in Sources */ = {isa = PBXBuildFile; fileRef = 929BC3329566D029E1403A56 /* AgentQuota.swift */; };
 		3AEFFB934F16A3A772F40792 /* CrewTimelineOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACBC95D4D951EC5505A60A5 /* CrewTimelineOrderingTests.swift */; };
@@ -171,6 +172,7 @@
 		50E92F718E5EC71E96ECD0F8 /* CrewCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 845C8C15B805012BF7FD6165 /* CrewCenterView.swift */; };
 		517C76E5590FE32680D1D99B /* SessionAttachQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B6F1FF899BC360DF671DCE /* SessionAttachQueueTests.swift */; };
 		51904CEEAF5BC4C561C8807B /* CockpitRoadmapParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E54EBB06E47F440F0DD05D1D /* CockpitRoadmapParserTests.swift */; };
+		51B4CD5460658D4276AA30C9 /* OrchestrationNoticeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B27606647FEDF280EB476FC /* OrchestrationNoticeBar.swift */; };
 		5209334AC5A77F04D3C0984C /* QuotaWarningPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE174F684386551180E6B50C /* QuotaWarningPlan.swift */; };
 		52B74FA2919986145C55A136 /* LocalAgentSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295F4E13C2CFA5C6FC2FBE02 /* LocalAgentSessionStoreTests.swift */; };
 		52B8FB6AB701D58747813432 /* SessionDaemonHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 336F25E170E424F0FA04DC86 /* SessionDaemonHost.swift */; };
@@ -500,6 +502,7 @@
 		DE2D546CDC41AF2190ED48EE /* session-world-model.zh.md in Resources */ = {isa = PBXBuildFile; fileRef = 87F000A18A5E886FA706EC9B /* session-world-model.zh.md */; };
 		DE7E6AD7E1FBFD63657A6BF6 /* Subject.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB0A9A2B511BAA8446CF9A4 /* Subject.swift */; };
 		DE9CFEB5F36B566128A66CE9 /* TerminalScrollbarGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1FBAD677A6F46B7721D984 /* TerminalScrollbarGeometryTests.swift */; };
+		DEDD8D8BE4D9D3AED413CEA3 /* OrchestrationNotice.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDD7288E08E441FF975C864 /* OrchestrationNotice.swift */; };
 		DEFB49BB11DC799D2544D97B /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1507798CBA5E3C31D801C08A /* DeviceIdentity.swift */; };
 		E09846DCFF441453C48BC005 /* McpTurnHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1953FE154BAF675E9B6ABED0 /* McpTurnHook.swift */; };
 		E0B4B222C8754F3CDBF4CEBE /* TypingActivityTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF21DCB72340BF3D124E93D7 /* TypingActivityTrackerTests.swift */; };
@@ -549,6 +552,7 @@
 		F3FE93BE64E53CE32FA8CA42 /* CrewLocalMentionWakeLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A3F32F8E8CF679E9828A4C /* CrewLocalMentionWakeLogic.swift */; };
 		F406C388A44A3EBBA538E929 /* LocalRunnerPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CC4D38A8ADADF050411F604 /* LocalRunnerPlaceholder.swift */; };
 		F43C89BB52209762B9A07489 /* LocalTodoStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24169ABE6E0F33196E22C001 /* LocalTodoStoreTests.swift */; };
+		F4819C12D6FEA2F94A97AE2C /* OrchestrationNotice.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDD7288E08E441FF975C864 /* OrchestrationNotice.swift */; };
 		F496F3E986C7E13E28C6928A /* AppThemeAlias.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19238A59905552A4248BCEE /* AppThemeAlias.swift */; };
 		F59E6499F8F9A918EA384F5B /* ColorHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46681CA2C4390D6C45E3101C /* ColorHash.swift */; };
 		F5FB1B5F727AF7F8838D05F6 /* PendingCrewDeepLinkRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B1A2BBA684270B0A2BE996 /* PendingCrewDeepLinkRoute.swift */; };
@@ -621,6 +625,8 @@
 		19AE2D821D04AE0298F19D4E /* CaptainBriefDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptainBriefDelivery.swift; sourceTree = "<group>"; };
 		19B1A2BBA684270B0A2BE996 /* PendingCrewDeepLinkRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCrewDeepLinkRoute.swift; sourceTree = "<group>"; };
 		1A4D1C7DBA64FB676E8F61FF /* GitWorktreeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitWorktreeServiceTests.swift; sourceTree = "<group>"; };
+		1ADC8A7DB8B03BA0C61EAA18 /* OrchestrationNoticeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestrationNoticeTests.swift; sourceTree = "<group>"; };
+		1B27606647FEDF280EB476FC /* OrchestrationNoticeBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestrationNoticeBar.swift; sourceTree = "<group>"; };
 		1C61867BADBA223E54AB9716 /* CrewStatusAggregation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewStatusAggregation.swift; sourceTree = "<group>"; };
 		1C9B215B057BE66CE2BBC284 /* CrewChatAttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatAttachmentStore.swift; sourceTree = "<group>"; };
 		1CE00F64EA0D0F2F5B970396 /* McpServerQuotaToolsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServerQuotaToolsTests.swift; sourceTree = "<group>"; };
@@ -922,6 +928,7 @@
 		DF848E30878BD9A462B2ABD4 /* SessionConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfigTests.swift; sourceTree = "<group>"; };
 		DF8E8FC64275B7932540FB17 /* LocalCodingAgentSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCodingAgentSpec.swift; sourceTree = "<group>"; };
 		DF8FE15162B5E527F4765346 /* GitWorktreeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitWorktreeService.swift; sourceTree = "<group>"; };
+		DFDD7288E08E441FF975C864 /* OrchestrationNotice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestrationNotice.swift; sourceTree = "<group>"; };
 		E001BE060851385E2952F0E6 /* MachineRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineRegistration.swift; sourceTree = "<group>"; };
 		E00EAEF5A5DE73241EC1E215 /* CrewLastMessageCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLastMessageCacheTests.swift; sourceTree = "<group>"; };
 		E042008387A9E1B1B2C97A52 /* GroupBubbleSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupBubbleSender.swift; sourceTree = "<group>"; };
@@ -1206,6 +1213,7 @@
 				23CBE414E3726AB27DCA90AA /* FirstLaunchDisclosureView.swift */,
 				0CBD88053854BD4C3B71270A /* GlassCloseButton.swift */,
 				D1A9FCA930C6487C96B9A211 /* MacRootView.swift */,
+				1B27606647FEDF280EB476FC /* OrchestrationNoticeBar.swift */,
 				93CD26BD9526E89ECB13D98F /* QuotaRingsFooter.swift */,
 				721790C0E5E7715BB3ABE620 /* TerminalScrollbarOverlay.swift */,
 				6351AE73217B3D61B520670F /* WorkspaceSetupSheet.swift */,
@@ -1259,6 +1267,7 @@
 				FD787F4E767228796A3D51DE /* FileDescriptorLimit.swift */,
 				B71D09553E4AAB7122A466B3 /* HumanTodoWakePlan.swift */,
 				D61EF9C80E279F17B39492B4 /* MachineGrouping.swift */,
+				DFDD7288E08E441FF975C864 /* OrchestrationNotice.swift */,
 				19B1A2BBA684270B0A2BE996 /* PendingCrewDeepLinkRoute.swift */,
 				EC47F84B3A1CB404ADDA14E9 /* QuotaRingLayout.swift */,
 				1D9796510A2DADE77ABA9726 /* SessionAwaitingReply.swift */,
@@ -1453,6 +1462,7 @@
 				04D483AE4AA363994E5FEE6F /* MultiProcessJSONStoreReadFailureTests.swift */,
 				3F6A7589E05154A7718F7B10 /* NoSwiftUIRepeatForeverTests.swift */,
 				9099355F5FE7941E4A0CA36E /* OrchestrationGateTests.swift */,
+				1ADC8A7DB8B03BA0C61EAA18 /* OrchestrationNoticeTests.swift */,
 				3C33AA481F8A3F9F932B3B03 /* PendingCrewDataRootTests.swift */,
 				D32A75D450B97F384C440342 /* ProcessRoleTests.swift */,
 				1D7BE1F16FD824A5099B2D08 /* ProjectSyncServiceTests.swift */,
@@ -1938,6 +1948,8 @@
 				7A15BB191DFBA58595C58D60 /* ModelCatalogEntry.swift in Sources */,
 				5AA46ED8754EEB536911D24B /* MultiProcessJSONStore.swift in Sources */,
 				2191D606DDCCBB49E45DF340 /* OrchestrationGate.swift in Sources */,
+				DEDD8D8BE4D9D3AED413CEA3 /* OrchestrationNotice.swift in Sources */,
+				51B4CD5460658D4276AA30C9 /* OrchestrationNoticeBar.swift in Sources */,
 				155A969673BC235EEFD4341A /* PendingAttachment.swift in Sources */,
 				95CD81185B683FA0FD1E74C4 /* PendingComposerAttachment.swift in Sources */,
 				6942FF0B2E3D04AF1005374B /* PendingCrewApp.swift in Sources */,
@@ -2224,6 +2236,8 @@
 				BB5A33E9072D1B56EE76B7EC /* NoSwiftUIRepeatForeverTests.swift in Sources */,
 				04180E5C148F072E0DB3176A /* OrchestrationGate.swift in Sources */,
 				267A895D7E65F68DFADE3C35 /* OrchestrationGateTests.swift in Sources */,
+				F4819C12D6FEA2F94A97AE2C /* OrchestrationNotice.swift in Sources */,
+				3A39336EBD021D209E9C8995 /* OrchestrationNoticeTests.swift in Sources */,
 				B13EB1811C1B5D822F492E41 /* PendingComposerAttachment.swift in Sources */,
 				A955E1A2D13E89EAE095EFB2 /* PendingCrewDataRoot.swift in Sources */,
 				E7143CEEEED13B7502E38E5D /* PendingCrewDataRootTests.swift in Sources */,

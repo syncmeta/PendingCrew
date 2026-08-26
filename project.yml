@@ -188,6 +188,10 @@ targets:
       # fd 软上限抬升（2026-08-12 P0 的触发闸）。纯 Darwin syscall + 一个可单测的
       # 纯判定函数，自包含。
       - path: Sources/Support/FileDescriptorLimit.swift
+      # 「这个窗口现在管不管事」的界面态纯判定（前后端分离 §6.2 闸门 2）。
+      # 编进 bundle 是为了让「锁被别人占着 → 界面必须是错误态」这条串得起来 ——
+      # GUI 本身验不了（不许为验证开窗口），能验的就是状态到没到界面层。
+      - path: Sources/Support/OrchestrationNotice.swift
       # 机器分组纯函数（依赖 Models 里的 Machine / CrewSummary，已编进 bundle）。
       - path: Sources/Support/MachineGrouping.swift
       # 子 crew 深度 cap 纯判定（create_child_crew 机长命令）。CrewStore 依赖

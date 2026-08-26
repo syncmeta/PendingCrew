@@ -29,7 +29,7 @@ enum PendingCrewDataRoot {
     /// 覆盖数据根的环境变量。**不设 = 完全现状。**
     static let overrideEnvKey = "PENDINGCREW_DATA_DIR"
 
-    /// 本进程的数据根。第一次取用时算一次，之后固定（同 `ProcessRole.current`）。
+    /// 本进程的数据根。第一次取用时算一次，之后固定（同 `ProcessRole.requested`）。
     static let url: URL = resolve(
         environment: ProcessInfo.processInfo.environment,
         applicationSupport: FileManager.default.urls(

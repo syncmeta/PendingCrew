@@ -174,26 +174,26 @@ final class OrchestrationGateTests: XCTestCase {
 
     // MARK: - 闸门之后的角色（这一条挡的是「修一个双头顺手造出另一个」）
 
-    /// 拿不到锁的 app 进程，`ProcessRole.current` 仍是 `.orchestrator`，
+    /// 拿不到锁的 app 进程，`ProcessRole.requested` 仍是 `.orchestrator`，
     /// 但 **`effective` 必须是 `.viewer`**。
     ///
     /// 不分开的话 `CrewStore.ownsSharedControlChannel` 会放这个进程去排空共享控制
     /// 通道 —— 那三条通道是「一文件一命令、排空后删」的无锁模型，两边都排会让机长的
     /// `start_session` 被随机一方吞掉：不报错、不重试、命令文件已经删了。
     func test_拿不到锁的进程在effective上不再是编排者() throws {
-        try XCTSkipUnless(ProcessRole.current == .orchestrator,
+        try XCTSkipUnless(ProcessRole.requested == .orchestrator,
                           "测试进程本身不是 orchestrator 身份，这条无从谈起")
         XCTAssertEqual(ProcessRole.effective, .orchestrator, "闸门没装时应当退回 current")
 
         try occupy(kind: "daemon")
         OrchestrationGate.installForGUIProcess(
             role: .orchestrator, dataRoot: dataRoot, log: { _ in })
-        XCTAssertEqual(ProcessRole.current, .orchestrator, "身份不该被改写")
+        XCTAssertEqual(ProcessRole.requested, .orchestrator, "身份不该被改写")
         XCTAssertEqual(ProcessRole.effective, .viewer)
     }
 
     func test_拿到锁的进程在effective上仍是编排者() throws {
-        try XCTSkipUnless(ProcessRole.current == .orchestrator,
+        try XCTSkipUnless(ProcessRole.requested == .orchestrator,
                           "测试进程本身不是 orchestrator 身份，这条无从谈起")
         OrchestrationGate.installForGUIProcess(
             role: .orchestrator, dataRoot: dataRoot, log: { _ in })

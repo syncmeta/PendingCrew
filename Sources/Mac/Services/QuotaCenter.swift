@@ -57,7 +57,7 @@ final class QuotaCenter: ObservableObject {
     func start() {
         precondition(
             ProcessRole.effective == .orchestrator,
-            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard timer == nil else { return }
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in

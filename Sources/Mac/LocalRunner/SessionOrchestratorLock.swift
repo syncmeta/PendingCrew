@@ -15,7 +15,7 @@ import Foundation
 /// 不排除 daemon-vs-app**。而 §6.2 那道闸门要守的不变量是「**只有一个长期编排者**」，
 /// 它跟你是哪副身份无关。
 ///
-/// 所以现在：**凡是 `ProcessRole.current == .orchestrator` 的进程都要来取这把锁**，
+/// 所以现在：**凡是 `ProcessRole.requested == .orchestrator` 的进程都要来取这把锁**，
 /// 取不到就当场拒绝接管编排，并且说清是**谁**占着。
 ///
 /// ## 「谁占着」必须回答三样

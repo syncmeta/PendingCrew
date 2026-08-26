@@ -24,7 +24,7 @@ final class LocalAgentUsageMonitor: ObservableObject {
     func start() {
         precondition(
             ProcessRole.effective == .orchestrator,
-            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard pollTask == nil else { return }
         doRefresh()
         pollTask = Task { [weak self] in

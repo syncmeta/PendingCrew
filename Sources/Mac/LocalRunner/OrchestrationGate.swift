@@ -19,7 +19,7 @@ import Foundation
 ///    都没问。
 ///
 /// 所以闸门搬到 `PendingCrewEntry.main()`（`installForGUIProcess`），跟
-/// `ProcessRole.current` 同一拍解析。副产品正是第 1 条的解药：它现在可以在单测里
+/// `ProcessRole.requested` 同一拍解析。副产品正是第 1 条的解药：它现在可以在单测里
 /// 真跑一遍，见 `OrchestrationGateTests`。
 ///
 /// ## 拿不到锁：daemon 和 app 的正确反应**不是同一个**
@@ -129,7 +129,7 @@ final class OrchestrationGate {
     /// 生产上永远是默认值，调用点只有 `PendingCrewEntry` 一处。
     @discardableResult
     static func installForGUIProcess(
-        role: ProcessRole = ProcessRole.current,
+        role: ProcessRole = ProcessRole.requested,
         dataRoot: URL = PendingCrewDataRoot.url,
         log: (String) -> Void = { NSLog("[PendingCrew] %@", $0) }
     ) -> OrchestrationGate {
