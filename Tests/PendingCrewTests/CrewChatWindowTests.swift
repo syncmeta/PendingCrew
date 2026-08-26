@@ -216,6 +216,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         @Published var attachSizeChangesAnchor = true
 
         var scroll: ((String) -> Void)?
+        /// 落底那一记（`landAtBottom` 在生产里做的事）。
+        var scrollToBottom: ((String) -> Void)?
         /// 视口顶 → 内容底 的距离。
         var distanceFromBottom: CGFloat = .nan
         var offsetY: CGFloat = .nan
@@ -407,7 +409,10 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                     rig.geoCallbacks += 1
                     rig.record()
                 }
-                .onAppear { rig.scroll = { id in proxy.scrollTo(id, anchor: .top) } }
+                .onAppear {
+                    rig.scroll = { id in proxy.scrollTo(id, anchor: .top) }
+                    rig.scrollToBottom = { id in proxy.scrollTo(id, anchor: .bottom) }
+                }
             }
             .frame(width: 420, height: 500)
         }
@@ -479,27 +484,31 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
     }
 
     /// 跑一次「点加载更早」。
-    /// - compensate: 走不走那一记 scrollTo（false = 修之前的行为，对照组）。
+    /// - fix: `.none` = 什么都不做（对照组）；`.scrollPositionPin` = 现在这条机制。
     /// - insertDuring: 点下去的同一拍有没有来一条新消息（末尾追加，走 afterInsert）。
-    private func run(total: Int, startLimit: Int, compensate: Bool,
-                     insertDuring: Bool = false, label: String) -> Measure {
+    private func run(total: Int, startLimit: Int, fix: Fix,
+                     insertDuring: Bool = false,
+                     pinBefore: Bool? = nil, extraSettle: Bool = false,
+                     label: String) -> Measure {
         let rig = Rig()
         rig.ids = ids(total)
         rig.limit = startLimit
-        let anchorID = CrewChatWindow.anchorOnExpand(
-            CrewChatWindow.window(rig.ids, limit: startLimit),
-            limit: startLimit, isFollowing: false)!
+        rig.usesScrollPosition = (fix == .scrollPositionPin)
+        let anchorID = CrewChatWindow.window(rig.ids, limit: startLimit).first!
         currentRig = rig
         let win = hostInWindow(Harness(rig: rig))
         settle(win)
         // 人自己滑到顶（看得见「加载更早」那条）。
         rig.scroll?(anchorID)
         settle(win)
+        // 默认跟生产代码一条路：`.scrollPositionPin` 那一档点之前会写一笔 id。
+        if pinBefore ?? (fix == .scrollPositionPin) { rig.pinnedID = anchorID }
+        if extraSettle { settle(win) }
         let m0 = (rig.distanceFromBottom, rig.offsetY)
 
-        // 点一下：先改上限，再（视 compensate）排一次主线程 hop 把锚点钉回顶部。
+        // 点一下：只改上限。位置由 `.scrollPosition(id:anchor:)` 自己按住 —— 没有 hop、
+        // 没有程序化 scrollTo，那正是这条修法的全部内容。
         rig.limit = CrewChatWindow.expanded(rig.limit, total: rig.ids.count)
-        if compensate { DispatchQueue.main.async { rig.scroll?(anchorID) } }
         if insertDuring {
             // 同一拍来一条新消息，走 CrewChatView.onChange(count) 里那两句。
             rig.ids.append("new")
@@ -514,43 +523,59 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         return m
     }
 
+    /// **哪一步是承重的**：`.scrollPosition` 在紧凑序列里没按住（偏 680pt），而路径探针
+    /// 那条按住了。两者只差两步：点之前有没有**把 id 写进那个盒子**、有没有**多静置一拍**。
+    /// 这条把它们拆开单量 —— 承重的那一步必须进生产代码，另一步不许被当成必需。
+    func test_诊断_按住位置靠的是哪一步() {
+        let plain = run(total: 70, startLimit: CrewChatWindow.pageSize, fix: .scrollPositionPin,
+                        pinBefore: false, label: "诊断·只挂绑定")
+        let settleOnly = run(total: 70, startLimit: CrewChatWindow.pageSize, fix: .scrollPositionPin,
+                             pinBefore: false, extraSettle: true, label: "诊断·只多静置一拍")
+        let pinOnly = run(total: 70, startLimit: CrewChatWindow.pageSize, fix: .scrollPositionPin,
+                          pinBefore: true, label: "诊断·只写 id 进盒子")
+        let both = run(total: 70, startLimit: CrewChatWindow.pageSize, fix: .scrollPositionPin,
+                       pinBefore: true, extraSettle: true, label: "诊断·两步都做")
+        print(String(format: "[#60 诊断] 只挂绑定 %.0f；只多静置 %.0f；只写 id %.0f；两步都做 %.0f",
+                     plain.shift, settleOnly.shift, pinOnly.shift, both.shift))
+    }
+
     /// 12 → 24：`usesEagerInitialLayout` 判据翻面，`if VStack / else LazyVStack` 换容器、
     /// 整棵内容树重建 —— 任何靠 anchor 保位置的做法都救不了这一下。
     func test_第一次点击_容器身份翻面那一下也按得住() {
         let ctrl = run(total: 70, startLimit: CrewChatWindow.pageSize,
-                       compensate: false, label: "第一次点击·对照（不补偿）")
+                       fix: .none, label: "第一次点击·对照（什么都不做）")
         XCTAssertLessThan(ctrl.beforeOffset, 120,
                           "起点必须是「人滑到顶」，实际 contentOffset=\(ctrl.beforeOffset)")
         XCTAssertGreaterThan(ctrl.shift, 200,
                              "对照组必须跳 —— 不跳说明探针没测到东西")
 
         let fixed = run(total: 70, startLimit: CrewChatWindow.pageSize,
-                        compensate: true, label: "第一次点击·补偿后")
-        XCTAssertLessThan(fixed.shift, 80, "补偿过的必须基本不动")
+                        fix: .scrollPositionPin, label: "第一次点击·现在这条机制")
+        XCTAssertLessThan(fixed.shift, 80, "现在这条机制必须基本不动")
     }
 
     /// 24 → 36：一直在 `LazyVStack` 里，没有身份翻面，但上面那些行是懒的。
     func test_第二次点击_纯LazyVStack里也按得住() {
         let start = CrewChatWindow.expanded(CrewChatWindow.pageSize, total: 70)   // 24
         let ctrl = run(total: 70, startLimit: start,
-                       compensate: false, label: "第二次点击·对照（不补偿）")
+                       fix: .none, label: "第二次点击·对照（什么都不做）")
         XCTAssertLessThan(ctrl.beforeOffset, 120,
                           "起点必须是「人滑到顶」，实际 contentOffset=\(ctrl.beforeOffset)")
         XCTAssertGreaterThan(ctrl.shift, 200, "对照组必须跳")
 
-        let fixed = run(total: 70, startLimit: start, compensate: true,
-                        label: "第二次点击·补偿后")
-        XCTAssertLessThan(fixed.shift, 80, "补偿过的必须基本不动")
+        let fixed = run(total: 70, startLimit: start, fix: .scrollPositionPin,
+                        label: "第二次点击·现在这条机制")
+        XCTAssertLessThan(fixed.shift, 80, "现在这条机制必须基本不动")
     }
 
     /// 展开的同一拍正好来一条新消息 —— 两件事必须同时成立：锚点还按得住，且新消息
     /// （在**下面**长）不许把视口顶上去（Todo #47 行为 3）。
     func test_展开的同一拍来新消息_锚点仍按得住且视口不被新消息顶走() {
-        let quiet = run(total: 70, startLimit: CrewChatWindow.pageSize, compensate: true,
+        let quiet = run(total: 70, startLimit: CrewChatWindow.pageSize, fix: .scrollPositionPin,
                         label: "展开·没来新消息（基线）")
         XCTAssertLessThan(quiet.shift, 80, "基线这一趟本身要先站得住")
 
-        let busy = run(total: 70, startLimit: CrewChatWindow.pageSize, compensate: true,
+        let busy = run(total: 70, startLimit: CrewChatWindow.pageSize, fix: .scrollPositionPin,
                        insertDuring: true, label: "展开的同一拍来新消息")
         XCTAssertLessThan(
             abs(busy.afterOffset - quiet.afterOffset), 20,
@@ -580,9 +605,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         rig.usesScrollPosition = (fix == .scrollPositionPin)
         rig.attachSizeChangesAnchor = attachAnchor
         if fix == .bottomAnchorStatic { rig.expanding = true }
-        let anchorID = CrewChatWindow.anchorOnExpand(
-            CrewChatWindow.window(rig.ids, limit: startLimit),
-            limit: startLimit, isFollowing: false)!
+        let anchorID = CrewChatWindow.window(rig.ids, limit: startLimit).first!
         currentRig = rig
         let win = hostInWindow(Harness(rig: rig))
         settle(win)
@@ -789,6 +812,24 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         XCTAssertGreaterThan(abs(a), 200, "两档都得是错的位置，否则这条用例没意义")
     }
 
+    /// **只为留一条记录，不为它改任何代码**（机长指定）：`isFollowing ? .bottom : .top`
+    /// 里的 `.top` 那一臂，在「人已经滑上去、内容在下面长」时到底有没有在做事？
+    ///
+    /// 判据用「不挂任何锚」当基准 —— 不需要先知道 SwiftUI 的默认行为是什么：
+    /// 挂 `.top` 和不挂锚读数不同 ⇒ 那一臂在做事；相同 ⇒ 读数分不出它做没做事。
+    ///
+    /// ⚠️ 相同**不等于**「它是死代码」。删掉它再量才谈得上证伪，本条没做那一步。
+    func test_记录_松开跟随时top那一臂是否在做事() {
+        let withTop = tracePath(total: 40, startLimit: 24, fix: .none, container: .alwaysLazy,
+                                growth: .below, label: "滑上去·内容往下长·挂 .top")
+        let without = tracePath(total: 40, startLimit: 24, fix: .none, container: .alwaysLazy,
+                                growth: .below, attachAnchor: false,
+                                label: "滑上去·内容往下长·不挂锚（基准）")
+        let a = withTop.last!.distance - withTop.first!.distance
+        let b = without.last!.distance - without.first!.distance
+        print(String(format: "[#60 记录] 挂 .top 位移 %+.0f；不挂锚 位移 %+.0f；差 %.0f", a, b, abs(a - b)))
+    }
+
     // MARK: - `.scrollPosition(id:)` 的代价
 
     /// **回写一次要付多少钱。**
@@ -841,6 +882,56 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             + "那它给出的任何「0 次」都不构成证据")
         // ② 再拿本次接法去绿。
         XCTAssertEqual(good, 0, "本次接法的回写把 body 打到了重算（\(good) 次）")
+    }
+
+    /// **回归：`.scrollPosition(id:)` 不许把「来新消息」那两条行为打坏。**
+    ///
+    /// 这是这条修法唯一真正的风险，必须在改生产代码之前钉住：绑定是**一直挂着**的
+    /// （条件挂载会改视图身份，那正是我们在消灭的东西），所以来新消息时它也在维持
+    /// 「顶上那条别动」。而跟随态要的正好相反 —— 视口得跟着底部走。两者要是打架，
+    /// 我们就是拿 Todo #47 去换 #60。
+    ///
+    /// 两个现场一起量，它们互为对方的有效性对照（两个数必须**不同**，否则这把尺子
+    /// 分不出「跟上了」和「没跟上」，那它给出的任何「相等」都不算数）：
+    /// - **贴着底部**来新消息 → 视口跟着走（行为 1）：距离保持一屏。
+    /// - **人滑上去了**来新消息 → 视口一动不动（行为 3）：距离随新内容变大。
+    ///
+    /// 判据不写死「一屏 = 500」—— 第一版就写死了，量出来 559，红在自己那个常数上，
+    /// 而被测的两档其实一模一样。改成**逐档和不挂绑定那一趟比**。
+    func test_scrollPosition不许把来新消息那两条行为打坏() {
+        func afterNewMessage(usesScrollPosition: Bool, atBottom: Bool, _ label: String) -> CGFloat {
+            let rig = Rig()
+            rig.ids = ids(40); rig.limit = 24; rig.container = .alwaysLazy
+            rig.usesScrollPosition = usesScrollPosition
+            currentRig = rig
+            let win = hostInWindow(Harness(rig: rig))
+            settle(win)                       // `.initialOffset` 把人放在底部
+            if !atBottom {                    // 人自己滑上去看历史
+                rig.scroll?(CrewChatWindow.window(rig.ids, limit: 24).first!)
+                settle(win)
+            }
+            rig.ids.append("new")
+            rig.limit = CrewChatWindow.afterInsert(limit: rig.limit, added: 1)
+            settle(win)
+            let d = rig.distanceFromBottom
+            win.contentView = nil
+            print(String(format: "[#60 新消息回归] %@：视口顶→内容底 = %.0f", label, d))
+            return d
+        }
+        let bottomBase = afterNewMessage(usesScrollPosition: false, atBottom: true, "贴底·不挂绑定")
+        let bottomMine = afterNewMessage(usesScrollPosition: true, atBottom: true, "贴底·挂绑定")
+        let upBase = afterNewMessage(usesScrollPosition: false, atBottom: false, "滑上去·不挂绑定")
+        let upMine = afterNewMessage(usesScrollPosition: true, atBottom: false, "滑上去·挂绑定")
+
+        // ① 有效性：两个现场必须给出不同的数，否则这把尺子什么都分不出。
+        XCTAssertGreaterThan(
+            abs(upBase - bottomBase), 100,
+            "尺子分不出「跟上了」和「没跟上」（贴底 \(bottomBase)、滑上去 \(upBase)）")
+        // ② 挂上绑定之后，两个现场都不许变。
+        XCTAssertLessThan(abs(bottomMine - bottomBase), 20,
+                          "贴底跟随被打坏了（不挂 \(bottomBase)、挂 \(bottomMine)）")
+        XCTAssertLessThan(abs(upMine - upBase), 20,
+                          "滑上去之后视口被新消息推走了（不挂 \(upBase)、挂 \(upMine)）")
     }
 
     // MARK: - 比选表（只打印，不断言：把选型从论证变成一张表）
