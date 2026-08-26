@@ -21,6 +21,14 @@ struct CrewSessionsSnapshot: Codable, Equatable {
         /// （#541 事故：进程从未跑起来却报空闲，机长照常派活，活石沉大海）。
         /// 同理「卡在菜单上等人选」「问完一句停住」也不能落进 idle：它们都不吐输出，
         /// 天然长得像空闲。
+        /// 第三种、也是最隐蔽的一种（2026-08-26 Todo #68 实测撞到）：**claude 在一个
+        /// `~/.claude.json` 里没有信任条目的新顶层路径下起来时，会停在
+        /// `Quick safety check: Is this a project you created or one you trust?…` 等人选**
+        /// —— 进程真的起来了、没死、没报错，**只是永远不吐第一个字**。它是**挂起**不是提示。
+        /// 与前两种的差别在于：那两种系统会替机长在群里喊人（`⌛ 等人拍板`），
+        /// **这一种没人喊** —— 它安静地停在那儿，而点名会告诉机长一切正常，
+        /// 于是机长照常派活 —— #541 那场事故的完整复现，只是触发原因换了一个。
+        /// （那段提示的逐字原文在 `Tests/Fixtures/` 的真 TUI 录制里，别凭印象复述。）
         let state: String
         /// state=="error"/"rateLimited"/"launchFailed" 时的人话说明；
         /// state=="awaitingDecision"/"awaitingReply" 时是「在等什么」。
