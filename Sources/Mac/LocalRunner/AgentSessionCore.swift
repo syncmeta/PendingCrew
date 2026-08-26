@@ -272,6 +272,15 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 所以判据是**精确匹配**：正在问 `?N` 的时候，只吞 `\u{1b}[?N;<d>$y` 这一种形状，
     /// **连模式号不同的同类答复都放行**。宁可漏拿一个模式（快照少一个模式没人会死），
     /// 也不许错吞一个字节。
+    ///
+    /// **这两个条件的顺序不许调换。** 这是热路径 —— 每一次按键、每一条程序化写入都
+    /// 过这里。`snapshotProbe` 是标志位，为 nil 时 Swift 直接短路，`isDecrpmAnswer`
+    /// 一次都不会被调用，**正常情况下这道分流的成本是零**。反过来写（每次都先扫一遍
+    /// 字节找 DECRQM 形状）就是往回走：#59 刚把这条路的单价从 253ms 打到 0.94ms，
+    /// 而前后端分离的一个顺带目标正是解掉那条结构债。
+    ///
+    /// 顺带一个结构上的好处：没有查询挂着的时候，那段判断根本不执行 —— 误吞在结构上
+    /// 就更不可能了，不是靠判据写得准。
     private func routeTerminalResponse(_ data: ArraySlice<UInt8>) {
         if let probe = snapshotProbe, Self.isDecrpmAnswer(data, forMode: probe.mode) {
             snapshotProbe?.sink.append(contentsOf: data)
