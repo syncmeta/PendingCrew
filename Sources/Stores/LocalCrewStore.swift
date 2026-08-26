@@ -126,6 +126,20 @@ final class LocalCrewStore {
         persistToDisk()
     }
 
+    /// 改这个 crew 以后由哪一种本机 coding agent 承担机长。
+    ///
+    /// 重新指定机长时必须先把这个事实落盘，再停旧机长、拉新机长：这样即使 app
+    /// 恰好在两步之间退出，下一次自动唤醒也不会又按旧 runner 起回来。只接受真
+    /// agent（`claude_code` / `codex`）；空值、未知值、纯终端与幂等写入都忽略。
+    func setCaptainAgentKind(_ id: String, _ rawKind: String) {
+        guard rawKind == "claude_code" || rawKind == "codex",
+              var crew = crews[id], crew.captainAgentKind != rawKind else { return }
+        crew.captainAgentKind = rawKind
+        crew.updatedAt = ISO8601DateFormatter().string(from: Date())
+        crews[id] = crew
+        persistToDisk()
+    }
+
     /// 迁移规划层要的全部 crew 字段（id / 名 / 工作目录 / 父边）。返回元组而非专用类型 ——
     /// store 不必反过来依赖 `WorkdirMigrationPlan`。
     func workdirRows() -> [(id: String, title: String, workingDirectory: String?,

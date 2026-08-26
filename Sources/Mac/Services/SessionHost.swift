@@ -66,6 +66,13 @@ final class SessionHost: ObservableObject {
         }
 
         wire(crewStore: crewStore, model: model)
+
+        // 安装/重启跨过去的机长交接：请求在旧 app 停 session 之前已单独落盘，
+        // 新版编排器起来后第一时间续接被指定的 agent conversation。失败会在白板
+        // fail-loud 且保留请求，下次启动继续，不会悄悄回退旧机长。
+        Task { [weak runner, weak model] in
+            await runner?.resumePendingCaptainReassignments(backend: model?.backend)
+        }
     }
 
     /// 承接 `CrewStore` 排空共享控制文件后发布的请求数组。
