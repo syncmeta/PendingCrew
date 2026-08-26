@@ -314,6 +314,16 @@ enum TerminalSnapshotEncoder {
         decrqmIsSet(t, mode: 25, probe: probe) == false
     }
 
+    /// 一条 DECRQM 查询问的是哪个模式 —— `\u{1b}[?<mode>$p` 里的那个数。
+    ///
+    /// 拿出来是给 `ModeProbe` 的实现方用的：它得知道该拦哪一条答复才拦得窄
+    /// （见 `AgentSessionCore.routeTerminalResponse`）。
+    static func decrqmMode(of query: [UInt8]) -> Int? {
+        let text = String(decoding: query, as: UTF8.self)
+        guard text.hasPrefix("\u{1b}[?"), text.hasSuffix("$p") else { return nil }
+        return Int(text.dropFirst(3).dropLast(2))
+    }
+
     /// DECRQM：喂 `\e[?N$p`，答复形如 `\e[?N;<state>$y`。
     /// state 1 = 已设置，2 = 已复位；其余（0 不认识 / 3、4 永久）当拿不到。
     private static func decrqmIsSet(_ t: Terminal, mode: Int, probe: ModeProbe?) -> Bool? {
