@@ -200,4 +200,44 @@
   - **2026-08-26**（`main` @ `3dade35`，全量两趟）：**绿**，整套 1643 tests / 0 failures。
 - **问题**: 于是它**既不是稳定红也不是稳定绿**。危害不在这条用例本身，在它会**污染别人的对账**：2026-08-25 之后「这条在 main 上本来就红」被当成既有结论沿用，下一个人拿它当前提时前提已经不成立了；反过来，谁哪天撞见它红，也很容易以为是自己改出来的。
 - **别把它跟 fixture 那两条混成一件事**（本仓库现有两处讲的都是 fixture，与本条无关）：`CONTRIBUTING.md:271`「真实群聊数据不入版本历史」、本文件「没有 CI」那条里的「`CrewChatOpenCostTests` 在 CI 上会 skip（fixture 不入 git），别为了让它绿而把 fixture 提交进去」。**那两条说的是「在 CI 上跑不了」，这一条说的是「在本机跑得了、但结果在飘」。**
+- **另有一条同类（别合并成一条）**: 下面那条 `CrewLocalImageCacheTests` 也是「在飘」，但**机制不同、还法也不同** —— 那条是 `NSCache` 的可回收语义，这条是绝对毫秒预算。读到任一条的人应该知道还有一条。
 - **该怎么还**: 要么把这条断言从「绝对毫秒预算」改成对机器负载不敏感的形状（相对基准 / 多次取中位数 / 只在专门的性能 job 里跑），要么显式标成 `XCTSkipUnless` 门控的性能用例，别让它混在功能全量里给出一个会飘的红绿。**在改成不飘之前，任何人拿「这条在 main 上是红/绿的」当前提，都要当场重跑一趟核实。**
+
+### 🟡 `CrewLocalImageCacheTests` 两条**在飘** —— 断言把 `NSCache` 当成了「存了就一定在」
+- **发现**: 2026-08-26 · 侧栏「手动藏起来一个 crew」落地时，在共享目录取合前基线撞上
+
+**实测到的**（同一台机器、同一天，两趟全量之间隔约 20 分钟）:
+
+- `main @ 6b3db2f` 一趟：**两条红**，`Executed 1643 tests, with 3 tests skipped and 2 failures`。
+  ```
+  Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:33: error: -[PendingCrewTests.CrewLocalImageCacheTests testStoreThenPeekHits] : XCTAssertTrue failed - 同一 key 必须命中同一张，不该重解
+  Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:59: error: -[PendingCrewTests.CrewLocalImageCacheTests testDifferentMaxPixelIsDifferentEntry] : XCTAssertNotNil failed
+  ```
+  断言原文（`CrewLocalImageCacheTests.swift`，逐字）：
+  ```swift
+  XCTAssertTrue(cache.peek(key) === image, "同一 key 必须命中同一张，不该重解")   // :33
+  XCTAssertNotNil(cache.peek(thumbKey))                                          // :59
+  ```
+- `main @ aa05a2a` 一趟：**两条绿**，`Executed 1670 tests, with 3 tests skipped and 0 failures`。
+- 两趟之间落地的是侧栏可见性那六笔，**没有一笔碰 `Sources/Mac/Support/CrewLocalImageCache.swift` 或它的测试**。
+
+**读代码读到的**（打开文件看过的那两行，不是推的）:
+`Sources/Mac/Support/CrewLocalImageCache.swift:52-53` —— 底座是 `NSCache<NSString, NSImage>`，
+文件自己的注释写着「`NSCache` 自带线程安全 + **内存压力下自动清空**，按像素字节数计成本」。
+也就是说 `store` 之后 `peek` 返回 nil 是 `NSCache` 的**合法行为**，不是 bug。
+
+**推出来的（标明是推的，没验证过）**:
+- 「那两趟的红是全量满载下 `NSCache` 真被回收了」—— 机制说得通、也与 `peek` 返回 nil 的症状一致，
+  **但我没有在回收发生的那一刻抓到证据**（没加计数器、没复现）。只跑到「实现允许这件事发生」为止。
+- 「本次侧栏改动与图片解码缓存无交集」—— 依据是两条路没有共同调用点（侧栏可见性 vs 图片解码），
+  **是从文件与职责推的，没有跟到调用链级别去证**。
+
+- **为什么记**: 危害不在这两条用例本身，在**它们会污染别人的对账**。任何人拿全量差分判断
+  「我这一改打红了什么」时，一条会自己红自己绿的用例就是一个假信号 —— 而它红的时候看起来
+  非常像真 bug（"同一 key 必须命中同一张"）。
+- **该怎么还**: 别在断言里把 `NSCache` 当强引用表。要么测的时候换成一个不可回收的 backing
+  （测试注入一个 `[Key: NSImage]` 字典实现），要么把断言改成「命中就必须是同一张」而不是
+  「一定命中」（`if let hit = cache.peek(key) { XCTAssertTrue(hit === image) }`）——
+  后者仍然钉住真正要防的那件事（同一 key 不许重解出第二张），且对回收免疫。
+- **另有一条同类（别合并成一条）**: 上面那条 `CrewChatOpenCostTests` 的性能预算断言也在飘，
+  但那是绝对毫秒预算对机器负载敏感，机制与还法都跟这条不同。
