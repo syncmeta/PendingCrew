@@ -488,19 +488,32 @@ struct CrewSessionWindowView: View {
         .contentShape(Rectangle())
     }
 
-    /// session 行的「最新一步动作」：取本地白板里该 session 最近一条消息的文本；
-    /// 没有就退回 run 状态（running / 已退出）。
+    /// session 行的「最新一步动作」：取该 session 在本 crew 白板上最近一条消息的
+    /// 文本；没有就退回 run 状态（running / 已退出）。
     /// **尾巴**：只有走 `post_to_crew` 写进白板的进展才拿得到 —— 纯终端 stdout
     /// （没 post_to_crew）这里看不到，退回状态展示。
+    ///
+    /// **取数走 `entries`，body 里不碰磁盘**（2026-08-26）。这里以前是
+    /// `LocalWhiteboardStore.shared.list(crewId:)`：那是 **flock + 整份白板 JSON
+    /// 全量解码**，而这个方法在 `sessionRowContent` 的 body 里、**每个 session 行
+    /// 各来一次、每次重绘各来一次** —— 跟 2026-08-17「开久了卡」是同一个形状，
+    /// 当年那次修只扫到了侧栏，漏了这个窗口。
+    ///
+    /// `entries` 是同一份数据：`subscribeRoster` 在 `.task` 里订
+    /// `whiteboardChanges` 拉 `listCrewWhiteboard`，本地实现就是把
+    /// `LocalWhiteboardStore.list` 逐条映射成 entry（`summary` = 消息原文、
+    /// 不截断、不分页），所以显示内容与改前一致，只是读的时机从「每帧」挪到了
+    /// 「白板真变了」。行只覆盖当前选中的 crew（`memberSessionRuns` 就按
+    /// `selectedDetail` 过滤），与 `entries` 的范围一致。
     private func latestStep(for run: CrewSessionRun) -> String {
         // 健康异常优先于最新动作 —— 挂了就该一眼看到怎么修,别被普通进展盖住。
         if let health = run.health, run.status == .running {
             return "⚠️ \(health.detail)"
         }
-        if let last = LocalWhiteboardStore.shared
-            .list(crewId: run.crewId)
-            .last(where: { $0.senderSessionId == run.sessionId }) {
-            return last.text
+        // 首帧 `entries` 还是空的（订阅尚未拉回）→ 落到下面的 taskBrief 兜底，
+        // 白板一拉回就自动补上。不为这一帧去主线程读盘。
+        if let last = entries.last(where: { $0.senderSessionId == run.sessionId }) {
+            return last.summary ?? last.payload?.text ?? ""
         }
         // 还没有白板动作 → 退回完整 taskBrief（主名现在是精简 title,brief 挪到这作
         // 「在干嘛」的详情,别丢）。captain 的 brief 是开场报到 prompt,不拿来当详情。
