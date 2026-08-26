@@ -338,9 +338,7 @@ final class LocalBackend: PendingCrewBackend {
                 messageKind: "instruction",
                 summary: m.text,
                 createdAt: m.createdAt,
-                payload: CrewWhiteboardEntry.Payload(
-                    text: m.text, kind: nil, question: nil, status: nil, permissionRequestId: nil,
-                    action: nil, taskBrief: nil, runnerKind: nil),
+                payload: CrewWhiteboardEntry.Payload(text: m.text),
                 // 本地落盘附件 → edge 同形 CrewAttachment。`url` 用 file:// 绝对
                 // URL —— 渲染端（CrewRemoteImage / FileAttachmentChip）据前缀分流
                 // 本地读取，与登录态 `/v1/uploads/<id>` 相对路径天然区分。
@@ -353,7 +351,6 @@ final class LocalBackend: PendingCrewBackend {
                             filename: a.filename)
                     }
                 },
-                relay: nil,
                 // 发送者名收口在 CrewSenderNaming.localWireDisplayName:relay 远端名要显示,
                 // 但本机人类自己发的消息(senderKind=="user")不折本地 senderName("人"),
                 // 否则中栏 resolver 的 relay 守卫会把自己误判成 relay → 左对齐(#3)。

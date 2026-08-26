@@ -102,9 +102,10 @@ struct CrewAttachment: Decodable, Identifiable, Equatable, Hashable {
     var isImage: Bool { mime.lowercased().hasPrefix("image/") }
 }
 
-/// One whiteboard entry (a crew_announcements row) rendered in the middle-pane
-/// group chat. `summary` is the display line; `payload.kind == "interaction"`
-/// marks an ask_human card (T4.5) so the timeline can render it specially.
+/// One whiteboard entry rendered in the middle-pane group chat. `summary` is the
+/// display line. 形状对齐 edge 的 `crew_announcements` 读模型 —— #63 第二期删掉
+/// edge 那一层之后，唯一的构造点是 `LocalBackend.listCrewWhiteboard`（本地白板
+/// 消息 → 同形 entry），保留这个形状是为了中栏渲染层不必跟着改一遍。
 struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     let id: String
     let senderKind: String          // 'session' | 'user' | 'bot' | ...
@@ -121,14 +122,9 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// `url` is the auth-gated `/v1/uploads/<id>` path `CrewRemoteImage`
     /// fetches with the device-grant bearer token.
     let attachments: [CrewAttachment]?
-    /// Mac relay 上行的来源标注（接合 v2 block 3）。非 nil 且 `origin ==
-    /// "mac_relay"` = 这条是 Mac 自己推上去的 —— 拉取侧据此过滤防回环。
-    /// edge 老消息 / 非 relay 消息为 nil。
-    let relay: Relay?
-    /// 发送者显示名。**edge 现在会下发这个字段**（Phase 3：白板读模型经 roster
-    /// 解析人类 user_id / session log_payload.session_id → member.display_name）；
-    /// 解析不出 / relay 老消息为 nil。`LocalBackend` 把 relay 搬进本地白板的消息
-    /// 映射成 entry 时也回填 edge 侧名字。`CrewSenderResolver` 优先用它。
+    /// 发送者显示名。`LocalBackend` 用本地白板消息的 `senderName` 合成
+    /// （见 `CrewSenderNaming.localWireDisplayName`）；`CrewSenderResolver` 优先
+    /// 用它 —— 本地 session 不进 roster，没有它就只能落兜底「会话」。
     let senderDisplayName: String?
     /// 发送者对应的 crew 成员 id（`temporary_group_members.id`）。edge Phase 3 随
     /// `sender_display_name` 一起下发（解析不出为 nil）。客户端可据此关联 roster
@@ -140,36 +136,11 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// 发送者 + 内容摘要,渲染成引用条(IM 式「回复 小绿:…」)。解析不出 / 老消息为 nil。
     let inReplyTo: String?
     /// 结构化 @ mentions（Task 3：发送时有 @ 才落；无 → nil）。`kind` ∈
-    /// 'human'/'session'/'captain'/'broadcast'/'bot' —— relay 落地侧（Task 10）
-    /// 把 session/captain/human 三种映射进本地 `LocalWhiteboardMention`，其余
-    /// （bot/broadcast，本地唤醒决策不消费）滤掉。
+    /// 'human'/'session'/'captain'/'broadcast'/'bot'。
     let mentions: [CrewMention]?
-
-    struct Relay: Decodable, Equatable {
-        let origin: String
-        let senderLabel: String?
-        let localSessionId: String?
-    }
 
     struct Payload: Decodable, Equatable {
         let text: String?
-        let kind: String?                // 'interaction' for ask_human cards
-        let question: String?
-        let status: String?
-        let permissionRequestId: String?
-        // #242 遥控 v1 — messageKind == "task_request" 的结构化指令体
-        // ({ action:'run_session', runner_kind?, task_brief })。全 optional →
-        // 老消息 / 非指令消息照常解码。
-        let action: String?
-        let taskBrief: String?
-        let runnerKind: String?
-
-        enum CodingKeys: String, CodingKey {
-            case text, kind, question, status, action
-            case permissionRequestId = "permission_request_id"
-            case taskBrief = "task_brief"
-            case runnerKind = "runner_kind"
-        }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -183,7 +154,6 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
         case createdAt = "created_at"
         case payload
         case attachments
-        case relay
         case senderDisplayName = "sender_display_name"
         case senderMemberId = "sender_member_id"
         case inReplyTo = "in_reply_to"
@@ -192,8 +162,6 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
 
     /// Best display text: explicit payload text → summary → empty.
     var displayText: String { payload?.text ?? summary ?? "" }
-    /// True if this row is an ask_human interaction card.
-    var isInteraction: Bool { payload?.kind == "interaction" }
 }
 
 /// `listCrewWhiteboardPage` 的响应：白板条目 + 续传游标（接合 v2 block 3）。

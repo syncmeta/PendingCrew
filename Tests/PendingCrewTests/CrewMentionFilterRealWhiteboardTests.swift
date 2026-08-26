@@ -73,10 +73,8 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
             id: m.id, senderKind: m.senderKind, senderSessionId: m.senderSessionId,
             senderUserId: m.senderUserId, senderBotId: nil, messageKind: "instruction",
             summary: m.text, createdAt: m.createdAt,
-            payload: CrewWhiteboardEntry.Payload(
-                text: m.text, kind: nil, question: nil, status: nil, permissionRequestId: nil,
-                action: nil, taskBrief: nil, runnerKind: nil),
-            attachments: nil, relay: nil, senderDisplayName: nil, senderMemberId: nil,
+            payload: CrewWhiteboardEntry.Payload(text: m.text),
+            attachments: nil, senderDisplayName: nil, senderMemberId: nil,
             inReplyTo: nil,
             mentions: m.mentions?.map { CrewMention(kind: $0.kind, targetId: $0.targetId) })
     }

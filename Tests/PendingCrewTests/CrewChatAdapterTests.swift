@@ -17,8 +17,7 @@ private func makeEntry(
     senderBotId: String? = nil,
     senderSessionId: String? = nil,
     senderDisplayName: String? = nil,
-    summary: String = "hello",
-    payloadKind: String? = nil
+    summary: String = "hello"
 ) throws -> CrewWhiteboardEntry {
     var d: [String: Any] = [
         "id": id,
@@ -31,9 +30,6 @@ private func makeEntry(
     if let v = senderBotId  { d["sender_bot_id"]  = v }
     if let v = senderSessionId { d["sender_session_id"] = v }
     if let v = senderDisplayName { d["sender_display_name"] = v }
-    if let pk = payloadKind {
-        d["payload"] = ["kind": pk]
-    }
     let data = try JSONSerialization.data(withJSONObject: d)
     return try JSONDecoder().decode(CrewWhiteboardEntry.self, from: data)
 }
@@ -114,20 +110,6 @@ final class CrewChatAdapterTests: XCTestCase {
         XCTAssertEqual(s.displayName, "Captain Bot", "displayName from roster")
         XCTAssertTrue(s.isCaptain, "isCaptain shim must be true for captain")
         XCTAssertFalse(s.isSession, "isSession must be false for a bot")
-    }
-
-    // ── 4. Interaction entry → isInteraction true ─────────────────────────────
-
-    func testInteractionEntry_isInteractionTrue() throws {
-        let entry = try makeEntry(
-            id: "e-interaction",
-            senderKind: "bot",
-            senderBotId: "bot-1",
-            summary: "Need approval",
-            payloadKind: "interaction"
-        )
-        XCTAssertTrue(CrewChatAdapter.isInteraction(entry),
-                      "isInteraction must be true for payload.kind == 'interaction'")
     }
 
     // ── 5. Session sender → isSession shim set, isMine false ─────────────────

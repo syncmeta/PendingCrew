@@ -33,13 +33,11 @@ struct CrewSessionWindowView: View {
 
     // MARK: - 成员列表模式 state（自轮询白板 + roster，与中栏各拉各的）
 
-    /// 本 crew 白板条目（滤出 isInteraction 当待审批，其余拿来取「最新一步动作」）。
+    /// 本 crew 白板条目（拿来取「最新一步动作」）。
     @State private var entries: [CrewWhiteboardEntry] = []
     /// 本 crew server 成员名册。
     @State private var members: [CrewMember] = []
     @State private var captainBotId: String?
-    /// 待审批卡的回复草稿，按 permission_request_id 存。
-    @State private var replyDrafts: [String: String] = [:]
     /// 未读角标的轻量刷新计数（chunk2 T6）—— 每次白板变更事件自增，逼 badgeCount
     /// 重算（store 数据在文件里，无 ObservableObject 推送）。Phase 5 把驱动从 2s
     /// 墙钟 timer 换成 `whiteboardChanges` 订阅：agent 经 `post_to_crew` 写白板
@@ -237,10 +235,6 @@ struct CrewSessionWindowView: View {
                     .frame(minHeight: 100, idealHeight: 240, maxHeight: .infinity)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            if !pendingInteractions.isEmpty {
-                                approvalsSection
-                                Divider()
-                            }
                             memberSection
                         }
                     }
@@ -255,33 +249,6 @@ struct CrewSessionWindowView: View {
             if crewStore.selectedDetail == nil {
                 Text("先在左侧选一个 crew").foregroundStyle(.secondary)
             }
-        }
-    }
-
-    /// 时间线里需要人答的交互卡 —— 滤出来挂待审批区（从中栏搬来）。
-    private var pendingInteractions: [CrewWhiteboardEntry] {
-        entries.filter { $0.isInteraction }
-    }
-
-    private var approvalsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("待审批 \(pendingInteractions.count)")
-                .font(Theme.Fonts.caption.weight(.semibold))
-                .foregroundStyle(Theme.Palette.amber)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-            VStack(spacing: 8) {
-                ForEach(pendingInteractions) { entry in
-                    let reqId = entry.payload?.permissionRequestId ?? entry.id
-                    CrewInteractionCard(
-                        entry: entry,
-                        reply: Binding(get: { replyDrafts[reqId] ?? "" },
-                                       set: { replyDrafts[reqId] = $0 })
-                    ) { Task { await answer(reqId) } }
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
         }
     }
 
@@ -593,18 +560,6 @@ struct CrewSessionWindowView: View {
             captainBotId = roster.captainBotId
             members = CrewMemberOrdering.sortedMembers(
                 roster.members, captainBotId: roster.captainBotId)
-        }
-    }
-
-    private func answer(_ reqId: String) async {
-        let reply = (replyDrafts[reqId] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reply.isEmpty, let api = try? appModel.loggedAPIClient() else { return }
-        do {
-            try await api.answerInteraction(reqId: reqId, reply: reply)
-            replyDrafts[reqId] = nil
-            await refreshRoster()
-        } catch {
-            localError = error.localizedDescription
         }
     }
 
