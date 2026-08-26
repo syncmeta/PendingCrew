@@ -237,6 +237,47 @@ final class CrewStore: ObservableObject {
 
     /// 人类在本地 UI 手动改名。来源必须落成 human，避免机长把人类定好的名字
     /// 误当系统占位名反复提醒/覆盖。
+    /// 侧栏「藏起来」被**拦住**时的那句说明（人手动藏一个还挂着活跃子 crew 的父）。
+    /// 非 nil = 侧栏弹一句解释。纯 UI 瞬态，不落盘。
+    @Published var hideBlockedNotice: String?
+
+    /// 「藏它会连底下几个闲着的子 crew 一起藏」——落地前要人确认这一下。
+    /// 非 nil = 侧栏弹确认。同样是 UI 瞬态。
+    @Published var pendingSubtreeHide: PendingSubtreeHide?
+
+    struct PendingSubtreeHide: Identifiable, Equatable {
+        let crewId: String
+        let crewTitle: String
+        /// 会跟着一起从侧栏消失的子 crew 数（>0 才需要确认）。
+        let alsoHiddenCount: Int
+
+        var id: String { crewId }
+    }
+
+    /// 人手动把 crew 从侧栏藏起来。
+    ///
+    /// **只改人类界面的可见性** —— 不动父子边、不停 session、不碰白板；藏了的 crew
+    /// 里的 session 照常干活、照常收发消息，`directory` / `contact` / 组织树一律
+    /// 不受影响。
+    ///
+    /// 藏的正好是当前选中的那个（或它连带消失的子）时把选中清掉：人说的是「我不想
+    /// 再看见它」，侧栏没了、中栏还开着它，那句话就只兑现了一半。
+    func hideCrewFromUI(_ crewId: String) async {
+        LocalCrewStore.shared.setManuallyHidden(crewId, hidden: true)
+        await refreshList()
+        if let selected = selectedCrewId,
+           !CrewHiding.visible(crews).contains(where: { $0.id == selected }) {
+            selectedCrewId = nil
+        }
+    }
+
+    /// 从「已隐藏的群」列表把它取回侧栏。取回是**显式动作** —— 点进去看一眼不算
+    /// （看和取回是两件事，见 `CrewHiding` / `CrewViewedStore`）。
+    func unhideCrewFromUI(_ crewId: String) async {
+        LocalCrewStore.shared.setManuallyHidden(crewId, hidden: false)
+        await refreshList()
+    }
+
     func renameCrewFromUI(_ crewId: String, title: String) async {
         LocalCrewStore.shared.setTitle(crewId, title, source: .human)
         await refreshList()

@@ -160,6 +160,15 @@ struct CrewSidebarCrewRow: View {
             } label: {
                 Label("在这下面建子 crew", systemImage: "plus")
             }
+            Divider()
+            // 「藏起来」= 从侧栏消失，**聊天记录留着、不真删**，crew 里的 session
+            // 照常干活。取回的路在侧栏底部那行「已隐藏的群」。
+            // 目标同样恒为本行这个 crew，不看选中态。
+            Button {
+                requestHide()
+            } label: {
+                Label("藏起来", systemImage: "eye.slash")
+            }
         }
         // 拖起：负载带上「哪个 crew + 当前这条父边」，落地时才知道该摘哪条边。
         .draggable(CrewDragDropLogic.encode(crewId: crew.id, parentId: parentId)) {
@@ -176,6 +185,33 @@ struct CrewSidebarCrewRow: View {
         // 所以是 crew 之间的留白,不是把 pill 撑高;根 crew(独立 list row)与展开的
         // 子 crew(同 VStack 内堆叠)都吃这道下边距,间距统一。
         .padding(.bottom, 6)
+    }
+
+    /// 右键「藏起来」。判定全在 `CrewHiding.decide`（纯函数、单测钉死），这里只
+    /// 负责取信号 + 把结果交给侧栏那层去弹。
+    ///
+    /// **数据面取全量 `crewStore.crews` 而不是 `groupCrews`**：子 crew 的父边可以
+    /// 跨机器，只喂本机器分组会把「底下还有个正在跑的子」判丢 —— 与黄字标注
+    /// （`rootTitles`）同一个理由。
+    ///
+    /// 判定当场算、不进 `body`：菜单一次点击一次，摊到每行每帧就是几十次可达性
+    /// 计算，侧栏这条路不该背这个。
+    private func requestHide() {
+        let active = Set(sessionRunner.runs.filter { $0.status == .running }.map(\.crewId))
+        switch CrewHiding.decide(hiding: crew.id, in: crewStore.crews, activeSessionCrewIds: active) {
+        case .blocked(let titles):
+            crewStore.hideBlockedNotice = """
+                「\(crew.title)」底下还有子 crew 有 session 正在跑：\(titles.joined(separator: "、"))。
+
+                藏了它，这些子 crew 也会跟着从侧栏消失 —— 它们还在干活，却没有入口进得去了。\
+                先停掉它们，或者先把它们各自藏起来，再来藏这一个。
+                """
+        case .allowed(let alsoHidden) where alsoHidden > 0:
+            crewStore.pendingSubtreeHide = CrewStore.PendingSubtreeHide(
+                crewId: crew.id, crewTitle: crew.title, alsoHiddenCount: alsoHidden)
+        case .allowed:
+            Task { await crewStore.hideCrewFromUI(crew.id) }
+        }
     }
 
     /// 本行的末条白板消息。**只读 store 的现成快照，不碰磁盘**（`CrewStore`

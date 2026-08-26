@@ -39,7 +39,7 @@ struct CrewSidebarView: View {
                     }
                 case .timeline:
                     CrewTimelineListView(
-                        crews: crewStore.crews, childCrewTarget: $childCrewTarget)
+                        crews: visibleCrews, childCrewTarget: $childCrewTarget)
                 }
             }
             .listStyle(.sidebar)
@@ -90,6 +90,32 @@ struct CrewSidebarView: View {
         .sheet(isPresented: $showingWorkspaceSync) {
             WorkspaceSyncView()
         }
+        // ④ 拦住：底下还有活跃子 crew 的父不许藏（理由当场说清）。挂在侧栏顶层
+        // 而不是行上 —— 同 childCrewTarget 那个 sheet，行会被 List 回收。
+        .alert("先顾一下底下那几个", isPresented: Binding(
+            get: { crewStore.hideBlockedNotice != nil },
+            set: { if !$0 { crewStore.hideBlockedNotice = nil } }
+        )) {
+            Button("好", role: .cancel) { crewStore.hideBlockedNotice = nil }
+        } message: {
+            Text(crewStore.hideBlockedNotice ?? "")
+        }
+        // 子 crew 全闲着 → 放行，但落地前说清楚会连着谁一起藏。
+        .alert("连子 crew 一起藏起来", isPresented: Binding(
+            get: { crewStore.pendingSubtreeHide != nil },
+            set: { if !$0 { crewStore.pendingSubtreeHide = nil } }
+        ), presenting: crewStore.pendingSubtreeHide) { pending in
+            Button("藏起来") {
+                crewStore.pendingSubtreeHide = nil
+                Task { await crewStore.hideCrewFromUI(pending.crewId) }
+            }
+            Button("取消", role: .cancel) { crewStore.pendingSubtreeHide = nil }
+        } message: { pending in
+            Text("「\(pending.crewTitle)」底下挂着 \(pending.alsoHiddenCount) 个子 crew，"
+                 + "它们会跟着一起从侧栏消失（都闲着，没有 session 在跑）。\n\n"
+                 + "子 crew 不会被提到顶层显示 —— 那会让侧栏的组织架构和实际汇报线对不上。"
+                 + "取回这个群时，它们一起回来。")
+        }
     }
 
     // MARK: - 视图切换（层级 / 时间流）
@@ -120,11 +146,17 @@ struct CrewSidebarView: View {
 
     private var machineGroups: [MachineGrouping.Group] {
         MachineGrouping.group(
-            crews: crewStore.crews,
+            crews: visibleCrews,
             machines: crewStore.machines,
             localDeviceId: DeviceIdentity.current
         )
     }
+
+    /// 侧栏该画出来的 crew（人手动藏起来的那些，连同跟着它们消失的子树，不在其中）。
+    ///
+    /// **层级视图和时间流视图喂的是同一份** —— 只改一种视图、另一种漏掉，是这类
+    /// 改动最容易翻的车（时间流视图是 Todo #50 后加的）。判定在 `CrewHiding`。
+    private var visibleCrews: [CrewSummary] { CrewHiding.visible(crewStore.crews) }
 
     @ViewBuilder
     private func sectionBody(_ group: MachineGrouping.Group) -> some View {
