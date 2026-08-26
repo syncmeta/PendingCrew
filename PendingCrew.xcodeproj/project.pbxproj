@@ -64,6 +64,7 @@
 		20B26570388858A9C8511698 /* CrewDeferredWakeQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7887BADD79DF80BC6B2D3DA /* CrewDeferredWakeQueueTests.swift */; };
 		2128BFC02DACFAD2A1B3E9B6 /* CrewManuallyHiddenStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AEA2B8862EE2A35E664DB6 /* CrewManuallyHiddenStorageTests.swift */; };
 		2222CD346AE6B98B6FA421DD /* GitWorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8FE15162B5E527F4765346 /* GitWorktreeService.swift */; };
+		229392876CB7CEA9696F426B /* SessionOrphanReaper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */; };
 		229AB9E4ED3AA7757C607159 /* LocalWhiteboardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E09E12D071816B5362AD7626 /* LocalWhiteboardStore.swift */; };
 		22A27AC631B26380BC3108D2 /* LocalCodingAgentExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */; };
 		2310E7C895A8AD8D3A5DC2A3 /* InProcessTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D43C760D0A83E792F6BA54 /* InProcessTransportTests.swift */; };
@@ -421,6 +422,7 @@
 		C6CEB0E747818E354712A490 /* QuotaWarningPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51B756CCFFA5254E53F29F98 /* QuotaWarningPlanTests.swift */; };
 		C72E087C921BBCC88C90A1A3 /* AgentTuiFixtureRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C99570207FA989386B3336D2 /* AgentTuiFixtureRecorder.swift */; };
 		C73FC0681BA3222872E85B93 /* CrewStatusAggregation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C61867BADBA223E54AB9716 /* CrewStatusAggregation.swift */; };
+		C7C5DDD1E7BA552153DF1FF7 /* SessionOrphanReaperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E86BC9D3E6E3F7B1E091225D /* SessionOrphanReaperTests.swift */; };
 		C840C0429F05DDD6327BBE41 /* CodexAppServerBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48B9D9CAD7BB70350DE579B3 /* CodexAppServerBackend.swift */; };
 		C91C1C33B1AF632EB207BD8A /* AgentSessionCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95BCDD655270A44BBE673775 /* AgentSessionCore.swift */; };
 		C921DA937193C9AFC822A47E /* crewground_places.txt in Resources */ = {isa = PBXBuildFile; fileRef = E81F99F03EC8539085EE0FB3 /* crewground_places.txt */; };
@@ -495,6 +497,7 @@
 		E532EC788C623C8B7A3448ED /* SessionConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF848E30878BD9A462B2ABD4 /* SessionConfigTests.swift */; };
 		E691E224FD6B6799F7CED6BD /* MathMarkupFenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D5631A54103D4214FADDC82 /* MathMarkupFenceTests.swift */; };
 		E78F604D88C1BEAB7FB96C0C /* LocalPromptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6AF2AE2C93EB875D8DBFF8 /* LocalPromptLoader.swift */; };
+		E7B9AF2A40AC7503D058E206 /* SessionOrphanReaper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */; };
 		E83140251BA9BAD4055BB8ED /* ColorHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46681CA2C4390D6C45E3101C /* ColorHash.swift */; };
 		E83ED263489E417F3CD48192 /* CrewListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D60CE404DBA41800A4216C77 /* CrewListView.swift */; };
 		E8A4CD9994C8276834D659F3 /* LocalSessionLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE16EE932E2CBB87B2A7D691 /* LocalSessionLaunch.swift */; };
@@ -706,6 +709,7 @@
 		62034E32CA0F14CE5ACAC93F /* CodexTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexTranscriptView.swift; sourceTree = "<group>"; };
 		6351AE73217B3D61B520670F /* WorkspaceSetupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSetupSheet.swift; sourceTree = "<group>"; };
 		63DC7AE1CC8372DFBCFE1D2A /* CrewDirectoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewDirectoryTests.swift; sourceTree = "<group>"; };
+		645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrphanReaper.swift; sourceTree = "<group>"; };
 		64E91CB08ACAB98E0616E633 /* TypingActivityTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingActivityTracker.swift; sourceTree = "<group>"; };
 		653E5262E263AED9996AF100 /* CrewTimeSeparator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewTimeSeparator.swift; sourceTree = "<group>"; };
 		65E2DBDAFE0BF55EF25A4B84 /* CrewLocalImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalImageCache.swift; sourceTree = "<group>"; };
@@ -906,6 +910,7 @@
 		E785F722D418A95C0988384E /* WorkspaceRepoLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRepoLayoutTests.swift; sourceTree = "<group>"; };
 		E81F99F03EC8539085EE0FB3 /* crewground_places.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = crewground_places.txt; sourceTree = "<group>"; };
 		E8437534E4C20DD9E9686EDC /* SessionAwaitingReplyInputsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAwaitingReplyInputsCache.swift; sourceTree = "<group>"; };
+		E86BC9D3E6E3F7B1E091225D /* SessionOrphanReaperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrphanReaperTests.swift; sourceTree = "<group>"; };
 		EBB438AE76CF441D4A9A071F /* LocalCrewStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCrewStore.swift; sourceTree = "<group>"; };
 		EC47F84B3A1CB404ADDA14E9 /* QuotaRingLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRingLayout.swift; sourceTree = "<group>"; };
 		ECEF3B3ED1B95EB5D78259C8 /* WorkspaceRepoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRepoService.swift; sourceTree = "<group>"; };
@@ -999,6 +1004,7 @@
 				3C561F8B7ABA97CAEFEE8475 /* SessionLaunchOptions.swift */,
 				8C9DB2E7111262BB322183E0 /* SessionLaunchParameterEcho.swift */,
 				2D18F5419A67058E80821A03 /* SessionLaunchProbe.swift */,
+				645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */,
 				F317D91E5A6FD8B678BE9B3E /* SessionPendingDecision.swift */,
 				7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */,
 				C111CB0560600DEF47A7B9C1 /* SessionProtocol.swift */,
@@ -1424,6 +1430,7 @@
 				A7E641CF1ECE14DE31F17CA7 /* SessionHealthTests.swift */,
 				CC1E9483A867D0029BFC9339 /* SessionLaunchParameterEchoTests.swift */,
 				F7608A27FF1961D83AFE515F /* SessionLaunchProbeTests.swift */,
+				E86BC9D3E6E3F7B1E091225D /* SessionOrphanReaperTests.swift */,
 				C4A566060F9F9D7695B1CC06 /* SessionPendingDecisionTests.swift */,
 				C404A4077C3F02AE04307781 /* SessionProfileSwitchTests.swift */,
 				367AE1EAA0682F37C7960B5B /* SessionProtocolCodecTests.swift */,
@@ -1921,6 +1928,7 @@
 				2A98D9201F9EBB912AA7A70C /* SessionLaunchOptions.swift in Sources */,
 				63E2BAB5C22A7CE4D7071C4B /* SessionLaunchParameterEcho.swift in Sources */,
 				6503FF564F0B6C814B5A6AFC /* SessionLaunchProbe.swift in Sources */,
+				229392876CB7CEA9696F426B /* SessionOrphanReaper.swift in Sources */,
 				4FF7409811948D140C31E9E2 /* SessionPendingDecision.swift in Sources */,
 				A5BE8F0CD8972F4E3561FB7A /* SessionProfileSwitch.swift in Sources */,
 				2CBFE472B9C2247847847AD8 /* SessionProtocol.swift in Sources */,
@@ -2200,6 +2208,8 @@
 				5F9F2FC1B76328AE76C4E62F /* SessionLaunchParameterEchoTests.swift in Sources */,
 				64C7D1C48B73BD16C85FAF52 /* SessionLaunchProbe.swift in Sources */,
 				FA2F81016356F5D9D0CEB384 /* SessionLaunchProbeTests.swift in Sources */,
+				E7B9AF2A40AC7503D058E206 /* SessionOrphanReaper.swift in Sources */,
+				C7C5DDD1E7BA552153DF1FF7 /* SessionOrphanReaperTests.swift in Sources */,
 				755844573D7ED6EA7DC6A8EE /* SessionPendingDecision.swift in Sources */,
 				B6C99608600E5A2864CFD0B1 /* SessionPendingDecisionTests.swift in Sources */,
 				3B078A08CD1DC86598DB3750 /* SessionProfileSwitch.swift in Sources */,
