@@ -127,6 +127,7 @@
 		3F3953CEB9CF8C3356763E19 /* TodoListPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4FBE88C4EE22D059C9E4D0 /* TodoListPresentation.swift */; };
 		4060B26EB2F61E0D064CA35F /* LocalAgentSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9720FEFDC8F509BFC0230E /* LocalAgentSessionStore.swift */; };
 		40649BA4D6DC43A89405B527 /* CrewSessionsSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08C9AC5381653074150AFC8F /* CrewSessionsSnapshot.swift */; };
+		40D984F2A78E47320EF71EBC /* SessionOrchestratorLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CD2DC4A72FF9083505A7D8C /* SessionOrchestratorLock.swift */; };
 		40E2977EF88E7144A6CC4E0C /* ProjectSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E37F2CBED6AB4D98B6B7425 /* ProjectSyncService.swift */; };
 		40EA830C0F03A0ACB85DFAC0 /* ColorHex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85701E0A44CE34A85B831771 /* ColorHex.swift */; };
 		41773DF5BECD5A77434018FA /* CrewSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 051E45F99057FB8295F991DA /* CrewSummary.swift */; };
@@ -300,6 +301,7 @@
 		87807F14E4B74589AA9C45BA /* CodexRPCDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 902E2DCD59F65F11777B1D83 /* CodexRPCDispatcher.swift */; };
 		87F811B695032A83C4AA5DE4 /* CrewMemberOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6089F335E4EFE19D488D3FE3 /* CrewMemberOrderingTests.swift */; };
 		885BE6EA257C79ED1F06A02B /* RecentWorkingDirectories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 350EF8F1F3E052F654F6BEE1 /* RecentWorkingDirectories.swift */; };
+		8906B86761BA0995F507C754 /* SessionOrchestratorLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CD2DC4A72FF9083505A7D8C /* SessionOrchestratorLock.swift */; };
 		89807FB95510F3F9C61B59FC /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5ED121602F6C57458CB290B /* MarkdownText.swift */; };
 		89E78145E07ABCF97B70E5C9 /* CrewModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50E2059733A66707D66E27E /* CrewModels.swift */; };
 		8A23157D010EB9F45781BDE6 /* LocalPromptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6AF2AE2C93EB875D8DBFF8 /* LocalPromptLoader.swift */; };
@@ -784,6 +786,7 @@
 		898C59DF68CE3C7C8872DF67 /* PlatformModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformModifiers.swift; sourceTree = "<group>"; };
 		8AC47DF3752DBA4E2F07C9CD /* AgentSessionResume.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionResume.swift; sourceTree = "<group>"; };
 		8C9DB2E7111262BB322183E0 /* SessionLaunchParameterEcho.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLaunchParameterEcho.swift; sourceTree = "<group>"; };
+		8CD2DC4A72FF9083505A7D8C /* SessionOrchestratorLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrchestratorLock.swift; sourceTree = "<group>"; };
 		8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCodingAgentExecutable.swift; sourceTree = "<group>"; };
 		8E1FBAD677A6F46B7721D984 /* TerminalScrollbarGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScrollbarGeometryTests.swift; sourceTree = "<group>"; };
 		8F1C7822F4F8AFCC1F3AC147 /* LocalSessionWorldModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionWorldModel.swift; sourceTree = "<group>"; };
@@ -1028,6 +1031,7 @@
 				3C561F8B7ABA97CAEFEE8475 /* SessionLaunchOptions.swift */,
 				8C9DB2E7111262BB322183E0 /* SessionLaunchParameterEcho.swift */,
 				2D18F5419A67058E80821A03 /* SessionLaunchProbe.swift */,
+				8CD2DC4A72FF9083505A7D8C /* SessionOrchestratorLock.swift */,
 				645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */,
 				F317D91E5A6FD8B678BE9B3E /* SessionPendingDecision.swift */,
 				7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */,
@@ -1963,6 +1967,7 @@
 				2A98D9201F9EBB912AA7A70C /* SessionLaunchOptions.swift in Sources */,
 				63E2BAB5C22A7CE4D7071C4B /* SessionLaunchParameterEcho.swift in Sources */,
 				6503FF564F0B6C814B5A6AFC /* SessionLaunchProbe.swift in Sources */,
+				40D984F2A78E47320EF71EBC /* SessionOrchestratorLock.swift in Sources */,
 				229392876CB7CEA9696F426B /* SessionOrphanReaper.swift in Sources */,
 				4FF7409811948D140C31E9E2 /* SessionPendingDecision.swift in Sources */,
 				A5BE8F0CD8972F4E3561FB7A /* SessionProfileSwitch.swift in Sources */,
@@ -2250,6 +2255,7 @@
 				5F9F2FC1B76328AE76C4E62F /* SessionLaunchParameterEchoTests.swift in Sources */,
 				64C7D1C48B73BD16C85FAF52 /* SessionLaunchProbe.swift in Sources */,
 				FA2F81016356F5D9D0CEB384 /* SessionLaunchProbeTests.swift in Sources */,
+				8906B86761BA0995F507C754 /* SessionOrchestratorLock.swift in Sources */,
 				E7B9AF2A40AC7503D058E206 /* SessionOrphanReaper.swift in Sources */,
 				C7C5DDD1E7BA552153DF1FF7 /* SessionOrphanReaperTests.swift in Sources */,
 				755844573D7ED6EA7DC6A8EE /* SessionPendingDecision.swift in Sources */,

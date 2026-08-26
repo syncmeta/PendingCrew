@@ -806,8 +806,8 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 身份 `--daemon`）养；app 退化成「连上去看的那个窗口」。顺带从结构上解掉 `docs/tech-debt.md`
 第一条（PTY 每批输出都过主线程、代价随 session 数线性涨）。
 
-六个阶段，**当前 main 上 P0–P3 已落地，P4/P5 未开工**
-（核对方式：`grep -r 'UnixSocketTransport\|SessionDaemonHost' Sources/` 零命中）：
+六个阶段，**当前 P0–P4 已落地（P4 在分支上、未落 main），P5 未开工**
+（核对方式：`grep -r 'import ServiceManagement\|MenuBarExtra' Sources/` 零命中）：
 
 > **这个「核对方式」是这张表里唯一不会烂的部分，别删它。** 它上一版写的是
 > 「grep 不到 `RemoteSessionBackend` / `InProcessTransport` / `SessionTransport`」——
@@ -815,10 +815,14 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 > 一个会过期的结论配一把会红的尺子，尺子红了就该改结论。
 >
 > 翻新阶段时**把符号换成「下一批还不存在的」，别换成已经存在的**（那样它永远红，
-> 等于没有）。**两条踩过的边**：① 别用 `--daemon` —— 那个 flag P0 就进
+> 等于没有）。**三条踩过的边**：① 别用 `--daemon` —— 那个 flag P0 就进
 > `ProcessRole.swift` 了，**它今天就命中**；② **范围必须限定 `Sources/`** ——
 > 不限定的话，**这段文字里写着的符号名本身就会让 grep 命中**，尺子会永远红在自己
-> 身上。（这两条都是 2026-08-26 翻这张表时当场踩到的，写下来免得下一个人再踩。）
+> 身上；③ **别用会出现在注释里的名字** —— P4 落地时第一版尺子选的是 `SMAppService`，
+> 而 `ViewerSessionClient` 的注释里正写着「P5 会换成 `SMAppService.agent`」，
+> 当场自命中。所以现在选的是 `import ServiceManagement`（import 语句不会出现在
+> 散文里）与 `MenuBarExtra`。（前两条是 2026-08-26 翻这张表时踩的，第三条是同一天
+> 翻 P4 那一行时踩的。）
 
 | 阶段 | 做什么 | 现状 |
 |---|---|---|
@@ -826,8 +830,29 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 | **P1** 终端劈半 | `AgentTerminalSession` → 无画面 `AgentSessionCore` + 只负责画的 `TerminalMirrorView` | ✅ 三个文件都在，`AgentTerminalSession` 已退化成 162 行的薄门面 |
 | **P2** 协议 + 进程内传输 | 定义全部消息、`RemoteSessionBackend` 走传输层 | ✅ `SessionProtocol.swift` / `InProcessTransport.swift` / `RemoteSessionBackend.swift`（`c57e24d`）。`attach` 按 backend 种类分流：终端型发 kind=2 快照帧，codex 型发 daemon 内存里的结构化历史 |
 | **P3** 快照 + 背压 | 终端缓冲区快照序列化（全项目风险最高的一块） | ✅ `TerminalSnapshotEncoder.swift` / `SessionAttachQueue.swift`（`c2e6909`）。真 TUI 语料在 `Tests/Fixtures/`，它逮到了合成语料测不出的「延迟折行 + 整行空白续行凭空消失」 |
-| **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ⬜ 未开工 |
-| **P5** 常驻与善后 | `SMAppService.agent` 登录项、菜单栏项、孤儿回收 | ⬜ 未开工 |
+| **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ✅ `UnixSocketTransport.swift` / `SessionProtocolEndpoints.swift` / `SessionDaemonHost.swift` / `SessionDaemonMain.swift` / `HeadlessSessionBackend.swift` / `SessionOrphanReaper.swift` / `ViewerSessionClient.swift`。**总闸 `PENDINGCREW_BACKEND` 默认仍是 `inproc`**，daemon 是显式开关 |
+| **P5** 常驻与善后 | `SMAppService.agent` 登录项、菜单栏项、`--daemon-status` | ⬜ 未开工（孤儿回收的双重核对已随 P4 落地，见下） |
+
+**P4 已经改变了什么，读代码时要知道**（`inproc` 默认路径上一条都不生效）：
+
+- **编排只有一份代码**。`SessionHost` + `CrewSessionRunner` 在 GUI 与 `--daemon` 两个
+  进程里跑的是同一个类；两种模式的差别全收在 `SessionProtocolPublishing` 这一个接缝
+  后面（有没有窗口 → 造不造 `TerminalMirrorView`；有没有 viewer → `expose` 回不回
+  `RemoteSessionBackend`）。**看到「daemon 那边是怎么做的」这种问题时，答案是「一样」。**
+- **`ProcessRole` 现在真的分岔了**。`SessionHost.begin` 按角色走：`.orchestrator` 起
+  全部长期职责，`.viewer` 只连后台。**判断收在这一处** —— 散到视图里就会有第 N 个
+  视图哪天忘了判断，然后在 viewer 里起一套编排。
+- **`CrewSessionRun.isMirror`**：viewer 里那些 run 是 daemon 里真身的镜像，只负责显示。
+  四处编排性副作用（白板 fail-loud / 待决策升级计时 / 额度续跑挂钩 / 回合 marker）
+  一件都不做。`inproc` 恒 false。
+- **共享控制通道只有 `.orchestrator` 排空**（`CrewStore.ownsSharedControlChannel`）。
+  那三条通道是「一文件一命令、排空后删」的无锁模型，两边都排会让机长的
+  `start_session` 被随机一方吞掉——不报错、不重试、命令文件已经删了。
+- **孤儿回收必须双重核对**（`SessionOrphanReaper`）：`kinfo_proc` 的 `p_starttime`
+  与 registry 记的一致才 kill。这台机器上 pid 会复用，只凭 pid 下手迟早误杀，
+  而且是事后查不出来的那种。**宁可留一个孤儿，也不能误杀。**
+- **「清除本机所有数据」先停 daemon 再删**（`LocalDataReset`）。不先停，刚删掉的
+  目录会被它立刻写回来。
 
 **P0/P1 已经改变了什么，读代码时要知道**：
 

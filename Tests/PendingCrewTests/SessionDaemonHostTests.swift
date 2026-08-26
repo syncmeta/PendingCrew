@@ -22,7 +22,7 @@ final class SessionDaemonHostTests: XCTestCase {
 
     private func paths() -> PendingCrewDaemonPaths {
         .init(socket: directory.appendingPathComponent("d.sock").path,
-              lock: directory.appendingPathComponent("d.lock"),
+              lock: directory.appendingPathComponent(SessionOrchestratorLock.fileName),
               registry: directory.appendingPathComponent("d.registry.json"),
               log: directory.appendingPathComponent("d.log"),
               socketFallbackReason: nil)
@@ -40,10 +40,13 @@ final class SessionDaemonHostTests: XCTestCase {
         let second = SessionDaemonHost(paths: paths)
         second.onCrewNotice = { _, _ in }
         XCTAssertThrowsError(try second.start()) { error in
-            guard case let .alreadyRunning(pid)? = error as? SessionDaemonHost.StartError else {
-                return XCTFail("第二个 daemon 必须报 alreadyRunning，实际 \(error)")
+            guard case let .alreadyOrchestrated(detail)? = error as? SessionDaemonHost.StartError else {
+                return XCTFail("第二个 daemon 必须报 alreadyOrchestrated，实际 \(error)")
             }
-            XCTAssertEqual(pid, Int32(ProcessInfo.processInfo.processIdentifier))
+            // 「谁占着」必须回答三样，缺一样人就得再查一轮。
+            XCTAssertTrue(detail.contains("pid \(ProcessInfo.processInfo.processIdentifier)"), detail)
+            XCTAssertTrue(detail.contains("启动于："), detail)
+            XCTAssertTrue(detail.contains(directory.path), detail)
         }
         XCTAssertEqual(SessionDaemonControl.runningDaemonPid(paths: paths),
                        Int32(ProcessInfo.processInfo.processIdentifier))

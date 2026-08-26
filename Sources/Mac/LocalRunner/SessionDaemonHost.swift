@@ -39,45 +39,11 @@ struct PendingCrewDaemonPaths {
                 + "\(UnixSocketTransport.maximumPathLength) —— 已退到 \(socket)"
         }
         return .init(socket: socket,
-                     lock: dir.appendingPathComponent("daemon.lock"),
+                     lock: dir.appendingPathComponent(SessionOrchestratorLock.fileName),
                      registry: dir.appendingPathComponent("daemon.registry.json"),
                      log: logDir.appendingPathComponent("daemon.log"),
                      socketFallbackReason: reason)
     }
-}
-
-/// 单实例锁（§6.2 闸门 2）。
-///
-/// **拿锁必须在 unlink socket 文件之前**：反过来的话，第二个 daemon 会在发现自己
-/// 抢不到锁**之前**就把第一个 daemon 正在听的那个 socket 文件删掉 —— 老 daemon
-/// 还活着、还在 accept，但谁也连不上它了，而且没有任何报错。
-/// `SessionDaemonHost.start()` 里的顺序是有意的，别调换。
-final class SessionDaemonLock {
-    private let fd: Int32
-
-    private init(fd: Int32) { self.fd = fd }
-
-    /// 拿到 = 本进程是唯一的 daemon；nil = 已经有一个在跑（附带它写下的 pid）。
-    static func acquire(at url: URL) -> (lock: SessionDaemonLock?, holderPid: Int32?) {
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let fd = open(url.path, O_CREAT | O_RDWR, 0o600)
-        guard fd >= 0 else { return (nil, nil) }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            let holder = (try? String(contentsOf: url, encoding: .utf8))
-                .flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            close(fd)
-            return (nil, holder)
-        }
-        ftruncate(fd, 0)
-        let pid = "\(ProcessInfo.processInfo.processIdentifier)\n"
-        _ = pid.withCString { write(fd, $0, strlen($0)) }
-        return (SessionDaemonLock(fd: fd), nil)
-    }
-
-    /// flock 随 fd 关闭而释放；进程被 SIGKILL 时由内核释放 —— 所以崩溃不会留下
-    /// 一把没人持有的锁（这正是不用「写 pid 文件再判进程在不在」的理由）。
-    deinit { flock(fd, LOCK_UN); close(fd) }
 }
 
 /// daemon 的滚动日志（§8.5）。
@@ -138,19 +104,15 @@ final class SessionDaemonLog {
 @MainActor
 final class SessionDaemonHost {
     enum StartError: Error, CustomStringConvertible {
-        case alreadyRunning(pid: Int32?)
-        case lockUnavailable
+        /// 这个数据根已经有一个编排者了（**可能是另一个 daemon，也可能是 app 窗口** ——
+        /// 2026-08-26 那次事故就是后者，见 `SessionOrchestratorLock`）。
+        case alreadyOrchestrated(String)
         case listen(Error)
 
         var description: String {
             switch self {
-            case let .alreadyRunning(pid):
-                return "已经有一个 PendingCrew daemon 在跑"
-                    + (pid.map { "（pid \($0)）" } ?? "") + "；本进程退出。"
-            case .lockUnavailable:
-                return "拿不到 daemon.lock（目录不可写？）；本进程退出。"
-            case let .listen(error):
-                return "socket 监听失败：\(error)"
+            case let .alreadyOrchestrated(detail): return detail + "\n本进程退出。"
+            case let .listen(error): return "socket 监听失败：\(error)"
             }
         }
     }
@@ -167,7 +129,7 @@ final class SessionDaemonHost {
             category: "progress", senderName: "系统")
     }
 
-    private var lock: SessionDaemonLock?
+    private var lock: SessionOrchestratorLock.Handle?
     private var listener: UnixSocketListener?
     private var registry = SessionProcessRegistry()
     private let startedAt = Date()
@@ -195,16 +157,17 @@ final class SessionDaemonHost {
         return "\(short)(\(build))"
     }
 
-    /// 顺序是有意的，见 `SessionDaemonLock` 的注释：**先锁，后 unlink socket**。
+    /// **顺序是有意的：先锁，后 unlink socket。** 反过来的话，第二个 daemon 会在发现
+    /// 自己抢不到锁**之前**就把第一个 daemon 正在听的那个 socket 文件删掉 —— 老 daemon
+    /// 还活着、还在 accept，但谁也连不上它了，而且没有任何报错。别调换。
     func start() throws {
-        let acquired = SessionDaemonLock.acquire(at: paths.lock)
-        guard let lock = acquired.lock else {
-            if acquired.holderPid != nil || FileManager.default.fileExists(atPath: paths.lock.path) {
-                throw StartError.alreadyRunning(pid: acquired.holderPid)
-            }
-            throw StartError.lockUnavailable
+        let dataRoot = paths.lock.deletingLastPathComponent()
+        let outcome = SessionOrchestratorLock.acquire(dataRoot: dataRoot, kind: "daemon")
+        guard case let .acquired(handle) = outcome else {
+            throw StartError.alreadyOrchestrated(
+                SessionOrchestratorLock.describe(outcome, dataRoot: dataRoot))
         }
-        self.lock = lock
+        self.lock = handle
 
         log.write("=== daemon 启动 pid=\(ProcessInfo.processInfo.processIdentifier) "
             + "build=\(Self.currentBuild) protocol=\(SessionProtocolVersion.current) ===")
@@ -316,12 +279,17 @@ final class SessionDaemonHost {
 enum SessionDaemonControl {
     /// 有 daemon 在跑吗？在的话它的 pid 是多少。
     ///
-    /// 判据是 **`daemon.lock` 上的 flock 拿不拿得到**，不是「pid 文件里那个进程在不在」
-    /// —— flock 随进程消失由内核释放，所以崩溃不会留下一把假锁；而 pid 文件会。
+    /// 判据是 **编排锁上的 flock 拿不拿得到 + 持有者自称是不是 daemon**，
+    /// 不是「pid 文件里那个进程在不在」—— flock 随进程消失由内核释放，
+    /// 所以崩溃不会留下一把假锁；而 pid 文件会。
     static func runningDaemonPid(paths: PendingCrewDaemonPaths = .standard()) -> Int32? {
-        let probe = SessionDaemonLock.acquire(at: paths.lock)
-        guard probe.lock == nil else { return nil }   // 抢到了 = 没人在跑
-        return probe.holderPid
+        let dataRoot = paths.lock.deletingLastPathComponent()
+        // **只认 daemon 那一种持有者。** 同一把锁现在也可能被 inproc 的 app 窗口
+        // 拿着（那正是 2026-08-26 补上的那道闸），而「有没有 daemon 在跑」问的是
+        // 另一件事 —— 分不清的话，`LocalDataReset` 会去 SIGTERM 一个 GUI 进程。
+        guard let holder = SessionOrchestratorLock.currentHolder(dataRoot: dataRoot),
+              holder.kind == "daemon" else { return nil }
+        return holder.pid
     }
 
     /// 停掉正在跑的 daemon，等它真的放锁。
