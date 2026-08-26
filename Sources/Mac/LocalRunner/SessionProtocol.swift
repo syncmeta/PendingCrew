@@ -9,8 +9,9 @@ enum SessionWireFrame: Equatable {
     case control(Data)
     case terminal(handle: UInt32, bytes: [UInt8])
     /// P2 只定义分片格式；快照内容的序列化属于 P3。
-    /// `seq` 从 0 单调递增，片数由先行的 `attached/resync.snapshotFrames` 给出。
-    case snapshot(handle: UInt32, seq: UInt32, bytes: [UInt8])
+    /// `seq` 从 0 单调递增；bit0 `isLast` 是唯一的结束依据。其余 flags 位保留，
+    /// 解码方必须忽略，不能因未知位断连。
+    case snapshot(handle: UInt32, seq: UInt32, isLast: Bool, bytes: [UInt8])
 }
 
 enum SessionFrameError: Error, Equatable {
@@ -33,10 +34,11 @@ enum SessionFrameEncoder {
             kind = 1
             append(handle, to: &payload)
             payload.append(contentsOf: bytes)
-        case let .snapshot(handle, seq, bytes):
+        case let .snapshot(handle, seq, isLast, bytes):
             kind = 2
             append(handle, to: &payload)
             append(seq, to: &payload)
+            payload.append(isLast ? 0x01 : 0x00)
             payload.append(contentsOf: bytes)
         }
         let length = 1 + payload.count
@@ -46,6 +48,26 @@ enum SessionFrameEncoder {
         out.append(kind)
         out.append(payload)
         return out
+    }
+
+    /// 对已经序列化的快照做 wire 分片；不参与 §5.3 的快照序列化。
+    /// 显式 `isLast` 避免整除 64 KiB 时生成伪空终止片；空快照则恰好一片。
+    static func snapshotFrames(
+        handle: UInt32, serializedBytes: [UInt8], maximumPayloadSize: Int = 64 * 1024
+    ) -> [SessionWireFrame] {
+        precondition(maximumPayloadSize > 0)
+        guard !serializedBytes.isEmpty else {
+            return [.snapshot(handle: handle, seq: 0, isLast: true, bytes: [])]
+        }
+
+        let count = (serializedBytes.count + maximumPayloadSize - 1) / maximumPayloadSize
+        precondition(count <= Int(UInt32.max))
+        return (0..<count).map { index in
+            let start = index * maximumPayloadSize
+            let end = min(start + maximumPayloadSize, serializedBytes.count)
+            return .snapshot(handle: handle, seq: UInt32(index), isLast: index == count - 1,
+                             bytes: Array(serializedBytes[start..<end]))
+        }
     }
 
     fileprivate static func append(_ value: UInt32, to data: inout Data) {
@@ -104,13 +126,14 @@ struct SessionFrameDecoder {
             return .terminal(handle: readUInt32(data, at: 0),
                              bytes: Array(data.dropFirst(4)))
         case 2:
-            guard body.count >= 8 else {
-                throw SessionFrameError.malformedPayload(kind: kind, minimum: 8, actual: body.count)
+            guard body.count >= 9 else {
+                throw SessionFrameError.malformedPayload(kind: kind, minimum: 9, actual: body.count)
             }
             let data = Data(body)
             return .snapshot(handle: readUInt32(data, at: 0),
                              seq: readUInt32(data, at: 4),
-                             bytes: Array(data.dropFirst(8)))
+                             isLast: data[data.startIndex + 8] & 0x01 != 0,
+                             bytes: Array(data.dropFirst(9)))
         default:
             throw SessionFrameError.unknownKind(kind)
         }
@@ -164,6 +187,21 @@ struct SessionAppHello: Codable, Equatable {
     var protocolVersion: Int
     var appBuild: String
     var capabilities: [String] = []
+
+    private enum CodingKeys: String, CodingKey { case protocolVersion, appBuild, capabilities }
+
+    init(protocolVersion: Int, appBuild: String, capabilities: [String] = []) {
+        self.protocolVersion = protocolVersion
+        self.appBuild = appBuild
+        self.capabilities = capabilities
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try c.decode(Int.self, forKey: .protocolVersion)
+        appBuild = try c.decode(String.self, forKey: .appBuild)
+        capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities) ?? []
+    }
 }
 
 struct SessionAttach: Codable, Equatable {
@@ -214,6 +252,28 @@ struct SessionDaemonHello: Codable, Equatable {
     var capabilities: [String] = []
     var sessionCount: Int
     var pid: Int32
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, daemonBuild, capabilities, sessionCount, pid
+    }
+
+    init(protocolVersion: Int, daemonBuild: String, capabilities: [String] = [],
+         sessionCount: Int, pid: Int32) {
+        self.protocolVersion = protocolVersion
+        self.daemonBuild = daemonBuild
+        self.capabilities = capabilities
+        self.sessionCount = sessionCount
+        self.pid = pid
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try c.decode(Int.self, forKey: .protocolVersion)
+        daemonBuild = try c.decode(String.self, forKey: .daemonBuild)
+        capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities) ?? []
+        sessionCount = try c.decode(Int.self, forKey: .sessionCount)
+        pid = try c.decode(Int32.self, forKey: .pid)
+    }
 }
 
 enum SessionWireStatus: Equatable, Codable {
@@ -292,6 +352,7 @@ struct SessionList: Codable, Equatable { var sessions: [SessionSummary] }
 struct SessionAttached: Codable, Equatable {
     var sessionId: String
     var handle: UInt32
+    /// 仅供进度展示；kind=2 的 bit0 `isLast` 才是结束依据，接收方不得依赖此值。
     var snapshotFrames: UInt32
 }
 
@@ -308,7 +369,6 @@ struct SessionTerminalData: Equatable {
 
 struct SessionResync: Codable, Equatable {
     var handle: UInt32
-    var snapshotFrames: UInt32
 }
 
 struct SessionEvent: Codable, Equatable {

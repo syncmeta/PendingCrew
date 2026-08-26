@@ -64,7 +64,7 @@ final class SessionProtocolCodecTests: XCTestCase {
             .sessions(.init(sessions: [summary])),
             .attached(.init(sessionId: "s-1", handle: 7, snapshotFrames: 0)),
             .state(.init(sessionId: "s-1", stateSeq: 13, delta: state)),
-            .resync(.init(handle: 7, snapshotFrames: 4)),
+            .resync(.init(handle: 7)),
             .event(.init(kind: "profileSwitchResult", requestId: "req-1",
                          fields: ["outcome": .string("unsupported")])),
             .pong(.init(nonce: 99)),
@@ -106,7 +106,7 @@ final class SessionProtocolCodecTests: XCTestCase {
         let frames: [SessionWireFrame] = [
             .control(Data(#"{"type":"ping","nonce":1}"#.utf8)),
             .terminal(handle: 0x0102_0304, bytes: [0x41, 0x00, 0xff]),
-            .snapshot(handle: 9, seq: 17, bytes: [0xde, 0xad]),
+            .snapshot(handle: 9, seq: 17, isLast: true, bytes: [0xde, 0xad]),
         ]
         let stream = try frames.reduce(into: Data()) { out, frame in
             out.append(try SessionFrameEncoder.encode(frame))
@@ -124,11 +124,40 @@ final class SessionProtocolCodecTests: XCTestCase {
     }
 
     func testSnapshotChunksCarryHandleAndMonotonicSequenceWithoutSerializingSnapshotContent() throws {
-        let first = try SessionFrameEncoder.encode(.snapshot(handle: 5, seq: 0, bytes: [0, 1]))
-        let second = try SessionFrameEncoder.encode(.snapshot(handle: 5, seq: 1, bytes: [2, 3]))
+        let first = try SessionFrameEncoder.encode(
+            .snapshot(handle: 5, seq: 0, isLast: false, bytes: [0, 1]))
+        let second = try SessionFrameEncoder.encode(
+            .snapshot(handle: 5, seq: 1, isLast: true, bytes: [2, 3]))
         XCTAssertEqual(try SessionFrameDecoder.decodeAll(first + second), [
-            .snapshot(handle: 5, seq: 0, bytes: [0, 1]),
-            .snapshot(handle: 5, seq: 1, bytes: [2, 3]),
+            .snapshot(handle: 5, seq: 0, isLast: false, bytes: [0, 1]),
+            .snapshot(handle: 5, seq: 1, isLast: true, bytes: [2, 3]),
+        ])
+    }
+
+    func testSnapshotExactlyMultipleOf64KiBEndsOnANonEmptyLastFrame() {
+        let bytes = [UInt8](repeating: 0xa5, count: 2 * 64 * 1024)
+        let frames = SessionFrameEncoder.snapshotFrames(handle: 5, serializedBytes: bytes)
+
+        XCTAssertEqual(frames.count, 2)
+        XCTAssertEqual(frames.last,
+                       .snapshot(handle: 5, seq: 1, isLast: true,
+                                 bytes: [UInt8](repeating: 0xa5, count: 64 * 1024)))
+    }
+
+    func testEmptySnapshotIsOneEmptyLastFrame() {
+        XCTAssertEqual(SessionFrameEncoder.snapshotFrames(handle: 8, serializedBytes: []), [
+            .snapshot(handle: 8, seq: 0, isLast: true, bytes: []),
+        ])
+    }
+
+    func testSnapshotUnknownHighFlagBitsAreIgnored() throws {
+        var encoded = try SessionFrameEncoder.encode(
+            .snapshot(handle: 9, seq: 3, isLast: false, bytes: [0xde, 0xad]))
+        // [u32 length][u8 kind][u32 handle][u32 seq][u8 flags][bytes]
+        encoded[encoded.startIndex + 13] = 0x80
+
+        XCTAssertEqual(try SessionFrameDecoder.decodeAll(encoded), [
+            .snapshot(handle: 9, seq: 3, isLast: false, bytes: [0xde, 0xad]),
         ])
     }
 
@@ -148,6 +177,16 @@ final class SessionProtocolCodecTests: XCTestCase {
                 appProtocolVersion: 1, daemonProtocolVersion: 1,
                 appCapabilities: ["new-ui"], daemonCapabilities: []),
             .compatible(capabilities: []))
+    }
+
+    func testHelloMissingCapabilitiesDecodesAsEmptyAndDegrades() throws {
+        let oldDaemonHello = try controlFrame(json: [
+            "type": "hello", "protocolVersion": 1, "daemonBuild": "old",
+            "sessionCount": 1, "pid": 42,
+        ])
+        XCTAssertEqual(try codec.decodeDaemon(oldDaemonHello),
+                       .hello(.init(protocolVersion: 1, daemonBuild: "old",
+                                    capabilities: [], sessionCount: 1, pid: 42)))
     }
 
     // MARK: - helpers
