@@ -45,12 +45,18 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
     /// 内核 —— mirror 只画它、把人的输入回传给它，自己不碰进程。
     weak var core: AgentSessionCore?
 
+    /// P2 remote 路径：mirror 仍在 app 侧，但键盘与尺寸不再直碰 core，改走协议。
+    /// nil 时保留 P1 直连行为；这两个闭包也是传输层一行回退所需的兼容缝。
+    var onSendBytes: (([UInt8]) -> Void)?
+    var onResize: ((_ cols: Int, _ rows: Int) -> Void)?
+
     /// 视口行列数变化的旁路（门面接到内核的 `noteViewportChange()`）。
     var onViewportChange: (() -> Void)?
 
     /// 「用户主动滚」的判定要看最近有没有 PTY 输出；那个时刻归内核记。
     /// mirror 自己不再有 `lastOutputAt`。
-    private var lastOutputAt: Date { core?.lastOutputAt ?? .distantPast }
+    var remoteLastOutputAt: Date = .distantPast
+    private var lastOutputAt: Date { core?.lastOutputAt ?? remoteLastOutputAt }
 
     /// 正在把内核的字节喂进自己那份 `Terminal`（见 `send(source:data:)`）。
     private var isReplayingCoreOutput = false
@@ -186,7 +192,8 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
 
     /// 人敲键盘 / 粘贴 / 鼠标上报 → 回传给内核写进 PTY。
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        core?.write(Array(data))
+        let bytes = Array(data)
+        if let onSendBytes { onSendBytes(bytes) } else { core?.write(bytes) }
     }
 
     /// 视口行列数变了 → 告诉内核，由它 resize 自己那份缓冲区并推 winsize。
@@ -196,8 +203,12 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
     /// 必经 frame .zero → 真实尺寸 → 两次行列数变化 → 两次 SIGWINCH。子进程随后
     /// 吐的整屏重绘**不是它在干活**，是我们要求它重画的（Todo #32）。
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        core?.resize(cols: newCols, rows: newRows)
-        core?.noteViewportChange()
+        if let onResize {
+            onResize(newCols, newRows)
+        } else {
+            core?.resize(cols: newCols, rows: newRows)
+            core?.noteViewportChange()
+        }
         onViewportChange?()
     }
 
