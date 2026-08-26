@@ -480,7 +480,6 @@
 		DB5E8EF842BE046EF73A04B6 /* FamilyCredentialCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2149FC638592E569F9CAE10E /* FamilyCredentialCodecTests.swift */; };
 		DC0700E309E649DF9B023E3F /* QuotaWarningPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE174F684386551180E6B50C /* QuotaWarningPlan.swift */; };
 		DD26C49162F8B4638CFE0C5A /* CrewSessionTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933A5868B64D471EDCBE2896 /* CrewSessionTitle.swift */; };
-		DE29EF57D605560E95DB2FDF /* RemoteSessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D988CA1F938E8D52C2A9801 /* RemoteSessionsView.swift */; };
 		DE2D546CDC41AF2190ED48EE /* session-world-model.zh.md in Resources */ = {isa = PBXBuildFile; fileRef = 87F000A18A5E886FA706EC9B /* session-world-model.zh.md */; };
 		DE7E6AD7E1FBFD63657A6BF6 /* Subject.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB0A9A2B511BAA8446CF9A4 /* Subject.swift */; };
 		DE9CFEB5F36B566128A66CE9 /* TerminalScrollbarGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1FBAD677A6F46B7721D984 /* TerminalScrollbarGeometryTests.swift */; };
@@ -772,7 +771,6 @@
 		898C59DF68CE3C7C8872DF67 /* PlatformModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformModifiers.swift; sourceTree = "<group>"; };
 		8AC47DF3752DBA4E2F07C9CD /* AgentSessionResume.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionResume.swift; sourceTree = "<group>"; };
 		8C9DB2E7111262BB322183E0 /* SessionLaunchParameterEcho.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLaunchParameterEcho.swift; sourceTree = "<group>"; };
-		8D988CA1F938E8D52C2A9801 /* RemoteSessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionsView.swift; sourceTree = "<group>"; };
 		8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCodingAgentExecutable.swift; sourceTree = "<group>"; };
 		8E1FBAD677A6F46B7721D984 /* TerminalScrollbarGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScrollbarGeometryTests.swift; sourceTree = "<group>"; };
 		8F1C7822F4F8AFCC1F3AC147 /* LocalSessionWorldModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionWorldModel.swift; sourceTree = "<group>"; };
@@ -1035,14 +1033,6 @@
 			);
 			sourceTree = "<group>";
 		};
-		06FC2C517D6136B1FD1EF219 /* Remote */ = {
-			isa = PBXGroup;
-			children = (
-				8D988CA1F938E8D52C2A9801 /* RemoteSessionsView.swift */,
-			);
-			path = Remote;
-			sourceTree = "<group>";
-		};
 		0856CB3EFC9A568EC592C50C /* Adapter */ = {
 			isa = PBXGroup;
 			children = (
@@ -1300,7 +1290,6 @@
 				1798347262420DBF93C0935D /* CrewRootBadge.swift */,
 				2CD2E19FFE0BDAC1918FA06E /* IPadShell.swift */,
 				A48848C6D823FBAAA912491A /* PendingCrewPlaceholderIcon.swift */,
-				06FC2C517D6136B1FD1EF219 /* Remote */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -1950,7 +1939,6 @@
 				77630015074853443A2E4F45 /* QuotaRingsFooter.swift in Sources */,
 				5209334AC5A77F04D3C0984C /* QuotaWarningPlan.swift in Sources */,
 				4F43E660427C08A99A303621 /* RecentWorkingDirectories.swift in Sources */,
-				DE29EF57D605560E95DB2FDF /* RemoteSessionsView.swift in Sources */,
 				8B9B3E46762C048F69D333A7 /* ServerImage.swift in Sources */,
 				7F30DC5AFADBFDCEFE4398DE /* SessionApprovalCardsView.swift in Sources */,
 				9E72A9948E5C602E7BD831FB /* SessionAwaitingReply.swift in Sources */,
