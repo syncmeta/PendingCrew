@@ -2350,7 +2350,11 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         }
     }
 }
-#endif
+// ⚠️ `#endif` 不在这里 —— 下面那批 `wireName` 扩展**必须留在 `#if os(macOS)`
+// 里面**：它们扩展的 `CrewSessionRun.Status` / `SessionExitReason` /
+// `SessionAwaitingReply.Reason` 都是 macOS 门里的类型。放到门外面 macOS
+// 照编，**只有 iOS 端会红** —— 而三端里最容易漏编的就是它
+// （CONTRIBUTING 第 2 条讲的正是这件事，2026-08-26 真踩了一次）。
 
 // MARK: - P4：run 状态在 socket 上的字面（viewer 镜像用）
 
@@ -2410,3 +2414,4 @@ extension SessionAwaitingReply.Reason {
         }
     }
 }
+#endif
