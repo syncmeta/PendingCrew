@@ -110,7 +110,9 @@ if feed=$(curl -fsS --max-time 20 "$feed_url"); then
       echo "build 号 $build_number 不大于线上已发布的 $live_max —— 已装机的用户收不到这次更新" >&2
       exit 2
     fi
-    echo "note: build 号 $build_number > 线上最大 $live_max，不倒退"
+    # 花括号不是装饰：macOS /bin/sh 的多字节变量名解析会把紧邻的中文标点吞进
+    # `$live_max，`，在 `set -u` 下变成一个不存在的变量，公证流程尚未构建就退出。
+    echo "note: build 号 $build_number > 线上最大 ${live_max}，不倒退"
   fi
 else
   echo "拉不到线上 feed（$feed_url）—— 无法确认这次不会版本倒退，拒绝构建。" >&2
