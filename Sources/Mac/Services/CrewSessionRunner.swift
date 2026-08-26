@@ -1714,6 +1714,10 @@ final class CrewSessionRunner: ObservableObject {
         retry.initialPrompt = brief
         // 刚退出的那条 run 留在列表里只会变重影 —— 同 id 的旧 run 清掉再起。
         runs.removeAll { $0.runID == run.runID }
+        // 不带 `serverLink` 重起：那条 link 属于刚退出的那个 run，finalize 已经把
+        // server row 关掉了，复用等于往一条已关的记录上写。登录态要接的话是另一件事。
+        // `developerInstructions` / `codexMcpServers` 同样不带 —— 这条路只服务 claude
+        // （上面 guard 了 kind），那两样是 codex 的通道。
         Task { [weak self] in
             try? await self?.start(
                 crewId: crewId, sessionId: sessionId, config: retry,
