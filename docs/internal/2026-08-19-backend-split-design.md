@@ -171,7 +171,7 @@ kind=2 的 `flags` bit0 = `isLast`，它是快照结束的唯一依据；因此 
 |---|---|
 | `hello{protocolVersion, appBuild, capabilities}` | 握手，见 §8.3 |
 | `listSessions{}` | 拿全量 session 摘要（重连后的第一件事） |
-| `attach{sessionId, cols, rows}` | 开始看某个 session；daemon 回 handle + 快照 + 后续实时字节 |
+| `attach{sessionId, cols, rows}` | 开始看某个 session；daemon 回 handle，并按 backend 类型回终端快照或 Codex 结构化历史，再接后续实时流 |
 | `detach{handle}` | 不看了；daemon 停止推字节（session 照跑） |
 | `resize{handle, cols, rows}` | 窗口宽度变了 |
 | `input{handle, bytes}` | 键盘/程序化写入（`send` / `interrupt` 都走它） |
@@ -192,6 +192,8 @@ kind=2 的 `flags` bit0 = `isLast`，它是快照结束的唯一依据；因此 
 | `pong{}` | 心跳回应 |
 
 `screenText(maxLines)` 读取 §5.1 定义的 daemon 权威画面，不读取 app 当前可见区；它是新增的 `control.op` 能力，必须通过 `hello.capabilities` 协商。旧 daemon 没有该能力时 app 降级，不拒连、不升级协议版本。
+
+`attach` 的内容恢复必须按 backend 分流：终端型 session 发送 kind=2 快照片段，Codex session 没有 PTY，改用 `event{kind:"codexNotification", …}` 发送 daemon 内存中 `CodexTranscript` 的完整结构化 item 历史，再继续同形状的实时事件。`transcript-events` 通过 `hello.capabilities` 协商；缺能力时降级为空历史，不拒连。该历史随 session/backend 活在 daemon 内存里，因此跨 app/viewer 重启存活；它不落盘，也不承诺跨 daemon 重启恢复（边界见 §8.6）。
 
 ### 4.3 状态如何两端同步
 

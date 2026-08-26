@@ -86,6 +86,33 @@ final class RemoteSessionBackendTests: XCTestCase {
         direct.inspectionText = "must not be read"
         XCTAssertEqual(remote.screenText(maxLines: 20), "（daemon 不支持读取输出）")
         XCTAssertEqual(direct.requestedScreenTextLineLimits, [])
+
+        let historyOnlyOnApp = ProtocolTestBackend(kind: .codex)
+        historyOnlyOnApp.codexHistory = [
+            .init(id: "old", kind: .agentMessage(text: "unsupported", phase: nil)),
+        ]
+        let oldDaemonBridge = InProcessSessionProtocolBridge(
+            appCapabilities: ["transcript-events"], daemonCapabilities: [])
+        let degraded = oldDaemonBridge.expose(
+            sessionId: "old-daemon-history", backend: historyOnlyOnApp)
+        XCTAssertTrue(degraded.isProtocolConnected)
+        XCTAssertEqual(degraded.transcript?.items, [],
+                       "旧 daemon 缺 transcript-events 时少历史功能，但不拒连")
+    }
+
+    func testAuthoritativeScreenTextLookupCoversDirectAndRemoteBackends() {
+        let direct = ProtocolTestBackend(kind: .claudeCode)
+        direct.inspectionText = "resume rejection"
+        XCTAssertEqual(
+            SessionAuthoritativeScreenText.read(from: direct, maxLines: 40),
+            "resume rejection")
+
+        let bridge = InProcessSessionProtocolBridge()
+        let remote = bridge.expose(sessionId: "remote-screen", backend: direct)
+        XCTAssertEqual(
+            SessionAuthoritativeScreenText.read(from: remote, maxLines: 20),
+            "resume rejection")
+        XCTAssertEqual(direct.requestedScreenTextLineLimits, [40, 20])
     }
 
     func testOutputProducedBeforeRegistrationAndAttachIsFlushedThroughProtocol() {
@@ -112,6 +139,55 @@ final class RemoteSessionBackendTests: XCTestCase {
         ])
 
         XCTAssertEqual(remote.transcript?.items.count, 2)
+    }
+
+    func testAttachBranchesTerminalSnapshotFromCodexStructuredHistory() {
+        let terminal = ProtocolTestBackend(kind: .claudeCode)
+        terminal.terminalSnapshot = .init(cols: 80, rows: 25, bytes: Array("screen".utf8))
+        let terminalBridge = InProcessSessionProtocolBridge()
+        let terminalRemote = terminalBridge.expose(sessionId: "terminal-history", backend: terminal)
+
+        XCTAssertEqual(terminalRemote.lastCompletedSnapshotBytes, Array("screen".utf8))
+        XCTAssertEqual(terminalRemote.completedSnapshotCount, 1)
+
+        let codex = ProtocolTestBackend(kind: .codex)
+        codex.codexHistory = [
+            .init(id: "u1", kind: .userMessage(text: "question")),
+            .init(id: "a1", kind: .agentMessage(text: "answer", phase: nil)),
+            .init(id: "r1", kind: .reasoning(summary: "summary", content: "detail")),
+            .init(id: "p1", kind: .plan(text: "plan")),
+            .init(id: "c1", kind: .commandExecution(.init(
+                command: "swift test", cwd: "/tmp/work", status: "completed",
+                aggregatedOutput: "ok", exitCode: 0))),
+            .init(id: "f1", kind: .fileChange(.init(status: "completed", summary: "a.swift"))),
+            .init(id: "t1", kind: .toolCall(name: "crew.post", status: "completed")),
+            .init(id: "w1", kind: .webSearch(query: "protocol")),
+            .init(id: "x1", kind: .unknown(type: "futureItem")),
+        ]
+        let codexBridge = InProcessSessionProtocolBridge()
+        let codexRemote = codexBridge.expose(sessionId: "codex-history", backend: codex)
+
+        XCTAssertEqual(codexRemote.transcript?.items, codex.codexHistory)
+        XCTAssertEqual(codexRemote.completedSnapshotCount, 0,
+                       "Codex 没有 PTY；attach 必须走结构化历史，不造 kind=2 快照")
+    }
+
+    func testCodexAttachReplaysDaemonMemoryAfterViewerReconnectWithoutDuplicates() {
+        let direct = ProtocolTestBackend(kind: .codex)
+        direct.codexHistory = [
+            .init(id: "before", kind: .agentMessage(text: "still in daemon", phase: nil)),
+        ]
+        let bridge = InProcessSessionProtocolBridge()
+        let remote = bridge.expose(sessionId: "codex-reopen", backend: direct)
+        XCTAssertEqual(remote.transcript?.items, direct.codexHistory)
+
+        bridge.disconnectViewer()
+        direct.codexHistory.append(
+            .init(id: "offline", kind: .agentMessage(text: "while app was closed", phase: nil)))
+        bridge.reconnectViewer()
+
+        XCTAssertEqual(remote.transcript?.items, direct.codexHistory,
+                       "重开 app 的 attach 必须从 daemon 内存拿全量历史，并按 item id 幂等覆盖")
     }
 
     func testReconnectInvalidatesOldHandleThenHelloListsAndReattaches() {
@@ -142,7 +218,8 @@ final class RemoteSessionBackendTests: XCTestCase {
 @MainActor
 private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
     SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling,
-    SessionProtocolLaunchProblemProviding {
+    SessionProtocolLaunchProblemProviding, SessionProtocolTerminalSnapshotProviding,
+    SessionProtocolCodexHistoryProviding {
     let kind: LocalCodingAgentKind
     @Published var status: SessionStatus = .running
     var statusPublisher: Published<SessionStatus>.Publisher { $status }
@@ -167,6 +244,8 @@ private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminal
     var inspectionText = ""
     var requestedScreenTextLineLimits: [Int] = []
     var approvalsReviewers: [CodexProtocol.ApprovalsReviewer] = []
+    var terminalSnapshot: TerminalSnapshotEncoder.Snapshot?
+    var codexHistory: [CodexThreadItem] = []
 
     init(kind: LocalCodingAgentKind) { self.kind = kind }
 
@@ -187,5 +266,7 @@ private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminal
     func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
         approvalsReviewers.append(reviewer)
     }
+    func protocolTerminalSnapshot() -> TerminalSnapshotEncoder.Snapshot? { terminalSnapshot }
+    var protocolCodexHistory: [CodexThreadItem] { codexHistory }
 }
 #endif

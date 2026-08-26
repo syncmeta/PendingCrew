@@ -27,6 +27,25 @@ protocol SessionProtocolScreenTextProviding: AnyObject {
     func screenText(maxLines: Int) -> String
 }
 
+/// `SessionBackend` 外的可选读能力。P2 不扩大生命周期协议；调用方通过它同时覆盖
+/// P1 直连回退和 `RemoteSessionBackend`，远端实现仍会发 `control.screenText`。
+@MainActor
+enum SessionAuthoritativeScreenText {
+    static func read(from backend: any SessionBackend, maxLines: Int) -> String? {
+        (backend as? SessionProtocolScreenTextProviding)?.screenText(maxLines: maxLines)
+    }
+}
+
+@MainActor
+protocol SessionProtocolTerminalSnapshotProviding: AnyObject {
+    func protocolTerminalSnapshot() -> TerminalSnapshotEncoder.Snapshot?
+}
+
+@MainActor
+protocol SessionProtocolCodexHistoryProviding: AnyObject {
+    var protocolCodexHistory: [CodexThreadItem] { get }
+}
+
 @MainActor
 protocol SessionProtocolApprovalControlling: AnyObject {
     func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws
@@ -49,6 +68,10 @@ extension AgentTerminalSession: SessionProtocolScreenTextProviding {
     func screenText(maxLines: Int) -> String { core.screenText(maxLines: maxLines) }
 }
 
+extension AgentTerminalSession: SessionProtocolTerminalSnapshotProviding {
+    func protocolTerminalSnapshot() -> TerminalSnapshotEncoder.Snapshot? { core.snapshot() }
+}
+
 extension AgentTerminalSession: SessionProtocolLaunchProblemProviding {
     var protocolLaunchParameterProblems: AnyPublisher<SessionLaunchParameterProblem, Never> {
         launchParameterProblems
@@ -68,7 +91,14 @@ extension PlainTerminalSession: SessionProtocolScreenTextProviding {
     func screenText(maxLines: Int) -> String { core.screenText(maxLines: maxLines) }
 }
 
-extension CodexAppServerBackend: SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling {
+extension PlainTerminalSession: SessionProtocolTerminalSnapshotProviding {
+    func protocolTerminalSnapshot() -> TerminalSnapshotEncoder.Snapshot? { core.snapshot() }
+}
+
+extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
+    SessionProtocolApprovalControlling, SessionProtocolCodexHistoryProviding {
+    var protocolCodexHistory: [CodexThreadItem] { transcript.items }
+
     func screenText(maxLines: Int) -> String {
         let items = transcript.items.suffix(max(0, maxLines))
         guard !items.isEmpty else { return "（transcript 为空）" }
@@ -95,6 +125,46 @@ extension CodexAppServerBackend: SessionProtocolScreenTextProviding, SessionProt
     }
 }
 
+private extension CodexThreadItem {
+    /// 把 daemon 内存里的 reduced transcript 还原成 app 已经会消费的
+    /// `item/completed` 形状。它只跨 app/viewer 重启；daemon 重启仍按 §8.6 不保证。
+    var protocolWireItem: [String: SessionWireJSONValue] {
+        var item: [String: SessionWireJSONValue] = ["id": .string(id)]
+        func put(_ key: String, _ value: String?) {
+            if let value { item[key] = .string(value) }
+        }
+        switch kind {
+        case let .userMessage(text):
+            item["type"] = .string("userMessage"); item["text"] = .string(text)
+        case let .agentMessage(text, phase):
+            item["type"] = .string("agentMessage"); item["text"] = .string(text)
+            put("phase", phase)
+        case let .reasoning(summary, content):
+            item["type"] = .string("reasoning")
+            put("summary", summary); put("content", content)
+        case let .plan(text):
+            item["type"] = .string("plan"); item["text"] = .string(text)
+        case let .commandExecution(command):
+            item["type"] = .string("commandExecution")
+            item["command"] = .string(command.command)
+            put("cwd", command.cwd); put("status", command.status)
+            put("aggregatedOutput", command.aggregatedOutput)
+            if let exitCode = command.exitCode { item["exitCode"] = .number(Double(exitCode)) }
+        case let .fileChange(change):
+            item["type"] = .string("fileChange")
+            put("status", change.status); put("summary", change.summary)
+        case let .toolCall(name, status):
+            item["type"] = .string("dynamicToolCall"); item["name"] = .string(name)
+            put("status", status)
+        case let .webSearch(query):
+            item["type"] = .string("webSearch"); put("query", query)
+        case let .unknown(type):
+            item["type"] = .string(type)
+        }
+        return item
+    }
+}
+
 enum SessionProtocolControlError: LocalizedError {
     case unsupported(String)
     case failed(String)
@@ -112,7 +182,8 @@ enum SessionBackendRouting {
 }
 
 @MainActor
-final class RemoteSessionBackend: ObservableObject, SessionBackend {
+final class RemoteSessionBackend: ObservableObject, SessionBackend,
+    SessionProtocolScreenTextProviding {
     let sessionId: String
     let kind: LocalCodingAgentKind
     let terminalView: TerminalMirrorView?
@@ -140,7 +211,12 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
     private(set) var isProtocolConnected = false
     private(set) var negotiatedCapabilities: [String] = []
     private(set) var lastTerminalFrameBytes: [UInt8] = []
+    private(set) var lastCompletedSnapshotBytes: [UInt8] = []
+    private(set) var completedSnapshotCount = 0
+    private(set) var requestedTerminalSize = TerminalSize(cols: 80, rows: 25)
     private var handle: UInt32?
+    private var snapshotBytes: [UInt8] = []
+    private var nextSnapshotSequence: UInt32 = 0
     private unowned let client: InProcessSessionProtocolClient
 
     init(sessionId: String, kind: LocalCodingAgentKind, client: InProcessSessionProtocolClient) {
@@ -154,6 +230,8 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
             let mirror = TerminalMirrorView(frame: .zero)
             terminalView = mirror
             transcript = nil
+            mirror.getTerminal().resize(
+                cols: requestedTerminalSize.cols, rows: requestedTerminalSize.rows)
             mirror.terminalDelegate = mirror
             if kind == .terminal { mirror.useNativeScroller() }
             mirror.onSendBytes = { [weak self] bytes in self?.sendRaw(bytes) }
@@ -207,6 +285,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
     }
 
     func resizeTerminal(cols: Int, rows: Int) {
+        requestedTerminalSize = .init(cols: cols, rows: rows)
         guard let handle else { return }
         client.resize(handle: handle, cols: cols, rows: rows)
         refreshScrollState(userInitiated: false)
@@ -245,6 +324,30 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend {
         lastTerminalFrameBytes = bytes
         terminalView?.remoteLastOutputAt = Date()
         terminalView?.feedFromCore(bytes[...])
+        refreshScrollState(userInitiated: false)
+    }
+
+    fileprivate func receiveSnapshot(seq: UInt32, isLast: Bool, bytes: [UInt8]) {
+        if seq == 0 {
+            snapshotBytes = []
+            nextSnapshotSequence = 0
+            terminalView?.getTerminal().resize(
+                cols: requestedTerminalSize.cols, rows: requestedTerminalSize.rows)
+        }
+        guard seq == nextSnapshotSequence else {
+            snapshotBytes = []
+            nextSnapshotSequence = 0
+            return
+        }
+        snapshotBytes.append(contentsOf: bytes)
+        nextSnapshotSequence &+= 1
+        guard isLast else { return }
+
+        lastCompletedSnapshotBytes = snapshotBytes
+        completedSnapshotCount += 1
+        terminalView?.feedFromCore(snapshotBytes[...])
+        snapshotBytes = []
+        nextSnapshotSequence = 0
         refreshScrollState(userInitiated: false)
     }
 
@@ -337,6 +440,7 @@ private final class InProcessSessionProtocolServer {
     private let transport: InProcessTransport
     private let codec = SessionProtocolCodec()
     private let capabilities: [String]
+    private var negotiatedCapabilities: [String] = []
     private var records: [String: Record] = [:]
     private var sessionByHandle: [UInt32: String] = [:]
     private var nextHandle: UInt32 = 1
@@ -434,7 +538,9 @@ private final class InProcessSessionProtocolServer {
     private func receive(_ data: Data) {
         guard let message = try? codec.decodeApp(data) else { return }
         switch message {
-        case .hello:
+        case let .hello(value):
+            negotiatedCapabilities = SessionCapabilities.negotiate(
+                app: value.capabilities, daemon: capabilities)
             send(.hello(.init(protocolVersion: 1, daemonBuild: "in-process",
                               capabilities: capabilities, sessionCount: records.count,
                               pid: Int32(ProcessInfo.processInfo.processIdentifier))))
@@ -446,16 +552,43 @@ private final class InProcessSessionProtocolServer {
             nextHandle &+= 1
             record.handles.insert(handle)
             sessionByHandle[handle] = value.sessionId
-            send(.attached(.init(sessionId: value.sessionId, handle: handle, snapshotFrames: 0)))
+            // kind=2 不重复带尺寸；attach 自己的 cols/rows 就是这份快照的尺寸上下文。
+            // 必须先 resize 权威终端再拍，否则首屏会按旧宽度序列化。
+            if let terminal = record.backend as? SessionProtocolTerminalControlling {
+                terminal.resizeTerminal(cols: value.cols, rows: value.rows)
+            }
+            let snapshotFrames: [SessionWireFrame]
+            if record.backend.kind != .codex,
+               negotiatedCapabilities.contains("terminal-bytes"),
+               let snapshot = (record.backend as? SessionProtocolTerminalSnapshotProviding)?
+                   .protocolTerminalSnapshot() {
+                snapshotFrames = SessionFrameEncoder.snapshotFrames(
+                    handle: handle, serializedBytes: snapshot.bytes)
+            } else {
+                snapshotFrames = []
+            }
+            // advisory only：终止一律看每个 kind=2 帧自己的 isLast。
+            send(.attached(.init(sessionId: value.sessionId, handle: handle,
+                                 snapshotFrames: UInt32(snapshotFrames.count))))
+            for frame in snapshotFrames { send(frame) }
+
+            if record.backend.kind == .codex,
+               negotiatedCapabilities.contains("transcript-events"),
+               let history = record.backend as? SessionProtocolCodexHistoryProviding {
+                for item in history.protocolCodexHistory {
+                    send(.event(.init(kind: "codexNotification", requestId: nil, fields: [
+                        "sessionId": .string(value.sessionId),
+                        "method": .string("item/completed"),
+                        "params": .object(["item": .object(item.protocolWireItem)]),
+                    ])))
+                }
+            }
             sendFullList()
             for bytes in pendingTerminalBytes.removeValue(forKey: value.sessionId) ?? [] {
                 publishTerminalBytes(sessionId: value.sessionId, bytes: bytes)
             }
             for event in pendingEvents.removeValue(forKey: value.sessionId) ?? [] {
                 send(.event(event))
-            }
-            if let terminal = record.backend as? SessionProtocolTerminalControlling {
-                terminal.resizeTerminal(cols: value.cols, rows: value.rows)
             }
         case let .detach(value):
             if let sessionId = sessionByHandle.removeValue(forKey: value.handle) {
@@ -574,6 +707,11 @@ private final class InProcessSessionProtocolServer {
         guard let data = try? codec.encode(message) else { return }
         transport.sendFromDaemon(data)
     }
+
+    private func send(_ frame: SessionWireFrame) {
+        guard let data = try? SessionFrameEncoder.encode(frame) else { return }
+        transport.sendFromDaemon(data)
+    }
 }
 
 @MainActor
@@ -616,7 +754,11 @@ final class InProcessSessionProtocolClient {
         connect()
         send(.listSessions)
         for sessionId in remotes.keys.sorted() {
-            send(.attach(.init(sessionId: sessionId, cols: 80, rows: 25)))
+            guard let remote = remotes[sessionId] else { continue }
+            send(.attach(.init(
+                sessionId: sessionId,
+                cols: remote.requestedTerminalSize.cols,
+                rows: remote.requestedTerminalSize.rows)))
         }
     }
 
@@ -624,7 +766,10 @@ final class InProcessSessionProtocolClient {
         let remote = RemoteSessionBackend(sessionId: sessionId, kind: kind, client: self)
         remotes[sessionId] = remote
         remote.updateConnection(capabilities: negotiated)
-        send(.attach(.init(sessionId: sessionId, cols: 80, rows: 25)))
+        send(.attach(.init(
+            sessionId: sessionId,
+            cols: remote.requestedTerminalSize.cols,
+            rows: remote.requestedTerminalSize.rows)))
         return remote
     }
 
@@ -679,6 +824,11 @@ final class InProcessSessionProtocolClient {
     }
 
     private func receive(_ data: Data) {
+        if let frames = try? SessionFrameDecoder.decodeAll(data), frames.count == 1,
+           case let .snapshot(handle, seq, isLast, bytes) = frames[0] {
+            remoteByHandle[handle]?.receiveSnapshot(seq: seq, isLast: isLast, bytes: bytes)
+            return
+        }
         guard let message = try? codec.decodeDaemon(data) else { return }
         switch message {
         case let .hello(value):

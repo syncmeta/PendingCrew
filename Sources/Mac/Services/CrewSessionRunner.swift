@@ -798,9 +798,10 @@ final class CrewSessionRunner: ObservableObject {
         // 改完之后同一个 sessionId 在任何时刻问到的都是同一份画面（spec §5.1）。
         // `getLine` / `translateToString` 在无画面的 `Terminal` 上一模一样，所以
         // P4 之后这段由 daemon 侧执行，app 连不连着都问得到同一份画面。
-        switch run.backend {
-        case let remote as RemoteSessionBackend:
-            let tail = remote.screenText(maxLines: 40)
+        let maxLines = run.kind == .codex ? 10 : 40
+        if let tail = SessionAuthoritativeScreenText.read(
+            from: run.backend, maxLines: maxLines
+        ) {
             if run.kind == .codex {
                 lines.append("transcript 尾部：\n\(tail)")
             } else {
@@ -808,42 +809,10 @@ final class CrewSessionRunner: ObservableObject {
                     ? "（终端画面为空）"
                     : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
             }
-        case let term as AgentTerminalSession:
-            let tail = term.core.screenText(maxLines: 40)
-            lines.append(tail.isEmpty
-                ? "（终端画面为空）"
-                : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
-        case let term as PlainTerminalSession:
-            let tail = term.core.screenText(maxLines: 40)
-            lines.append(tail.isEmpty
-                ? "（终端画面为空）"
-                : "终端画面（权威画面，尾部空行已去）：\n\(tail)")
-        case let codex as CodexAppServerBackend:
-            lines.append("transcript 尾部：\n\(Self.codexTail(codex))")
-        default:
+        } else {
             lines.append("（该后端类型无可读输出）")
         }
         return lines.joined(separator: "\n")
-    }
-
-    /// codex：无 PTY，回 transcript 尾部条目的紧凑渲染。
-    private static func codexTail(_ backend: CodexAppServerBackend, maxItems: Int = 10) -> String {
-        let items = backend.transcript.items.suffix(maxItems)
-        guard !items.isEmpty else { return "（transcript 为空）" }
-        return items.map { item in
-            switch item.kind {
-            case let .userMessage(text): return "[输入] \(text.prefix(200))"
-            case let .agentMessage(text, _): return "[回复] \(text.prefix(300))"
-            case let .reasoning(summary, content): return "[思考] \((summary ?? content ?? "…").prefix(200))"
-            case let .plan(text): return "[计划] \(text.prefix(200))"
-            case let .commandExecution(c):
-                return "[命令] \(c.command.prefix(160))" + (c.exitCode.map { " → exit \($0)" } ?? "")
-            case let .fileChange(f): return "[改文件] \(f.summary ?? f.status ?? "?")"
-            case let .toolCall(name, status): return "[工具] \(name) \(status ?? "")"
-            case let .webSearch(query): return "[搜索] \(query ?? "")"
-            case let .unknown(type): return "[\(type)]"
-            }
-        }.joined(separator: "\n")
     }
 
     /// 向目标发文本/按键。"Enter"/"Esc" 是按键（解模态菜单）；其余文本走 send
@@ -1608,9 +1577,8 @@ final class CrewSessionRunner: ObservableObject {
     ///    → 悄悄重起 → 那才是真把记忆弄丢。
     /// 5. 只重试一次 —— 重起那次 `resumeSessionId` 已经是 nil，进不来这条路。
     ///
-    /// 读画面走 `AgentSessionCore.screenText` —— **这是第三个直接够进 `core` 的调用点**
-    /// （另两个在 `inspect(run:)`，本文件 864 / 869），`screenText` 尚未收进
-    /// `SessionBackend` 协议。#58 P2 收口协议时这三处要一起搬，别把这个漏了。
+    /// 读画面走 P2 的可选 `screen-text` 能力：协议模式发 `control.screenText` 到
+    /// daemon 读权威画面；一行回退到 P1 时仍由同一个 capability 读本地 core。
     private func retryWithoutResumeIfClaudeRefused(
         run: CrewSessionRun, config: SessionConfig, launchedAt: Date,
         crewId: String, sessionId: String, workingDirectory: URL, taskBrief: String,
@@ -1621,9 +1589,10 @@ final class CrewSessionRunner: ObservableObject {
               run.exitReason != .userStopped,
               Date().timeIntervalSince(launchedAt)
                   <= AgentSessionResume.claudeResumeRefusalWindow,
-              let term = run.backend as? AgentTerminalSession,
+              let screenText = SessionAuthoritativeScreenText.read(
+                  from: run.backend, maxLines: 40),
               let said = AgentSessionResume.claudeResumeRejection(
-                inScreenText: term.core.screenText(maxLines: 40), resumedId: resumedId)
+                inScreenText: screenText, resumedId: resumedId)
         else { return }
 
         let decision = AgentSessionResume.Decision.fresh(reason: .agentRejectedResume(
