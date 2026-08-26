@@ -1,22 +1,17 @@
 // SHIM for PendingBot Components/ServerImage.swift — internals route through
-// CrewRemoteImage (macOS) or CrewCrossRemoteImage (iOS).
-//
-// PendingBot's ServerImage fetches auth-gated images via SupabaseStack JWT.
-// PendingCrew has no Supabase — it talks only to the edge with a device-grant
-// bearer. CrewRemoteImage (Sources/Mac/Support/CrewImageLoader.swift) already
-// handles the auth-gated fetch via AppModel.imageAuth on macOS.
+// CrewRemoteImage on macOS.
 //
 // Public init signature is IDENTICAL to PendingBot's ServerImage so that
 // AttachmentGrid in the vendored BubbleView constructs it unchanged:
 //
 //   ServerImage(path: att.url, serverURL: serverURL, contentMode: .fill)
 //
-// The `serverURL` parameter is accepted but ignored — the loader uses
-// AppModel.imageAuth.baseURL which is set from AppModel.apiBaseURL, and the
-// path is the relative wire URL (e.g. `/v1/uploads/<id>`).
+// The `serverURL` parameter is accepted but ignored — `path` 是本地落盘附件的
+// `file://` 绝对 URL（Todo #3），加载器直接从磁盘读。
 //
 // macOS: delegates to CrewRemoteImage (NSImage-backed, actor-cached).
-// iOS:   CrewCrossRemoteImage — same auth-gated fetch using PlatformImage (UIImage).
+// iOS:   本地后端是 macOS-only，iOS 上没有任何附件来源（#63 第二期删掉 edge
+//        上传通道之后更是如此）—— 画一块占位，别假装在加载。
 
 import SwiftUI
 
@@ -33,7 +28,11 @@ struct ServerImage: View {
         #if os(macOS)
         CrewRemoteImage(path: path, contentMode: contentMode, maxPixelSize: maxPixelSize)
         #else
-        CrewCrossRemoteImage(path: path, contentMode: contentMode)
+        ZStack {
+            Theme.Palette.surfaceMuted
+            Image(systemName: "photo")
+                .foregroundStyle(Theme.Palette.inkMuted)
+        }
         #endif
     }
 }
@@ -48,96 +47,3 @@ struct ServerImage: View {
 /// anchor in case anything references it outside BubbleView; it causes no
 /// conflict because the BubbleView copy is `private`.
 // (No struct definition needed here — BubbleView defines ZoomTarget privately.)
-
-#if os(iOS)
-// MARK: - iOS cross-platform image loader
-
-/// Actor-isolated image cache using PlatformImage (UIImage on iOS).
-/// Mirrors the structure of CrewImageCache but works cross-platform.
-actor CrewCrossImageCache {
-    static let shared = CrewCrossImageCache()
-
-    private var cache: [String: PlatformImage] = [:]
-    private var inFlight: [String: Task<PlatformImage?, Never>] = [:]
-
-    func image(relativePath: String, baseURL: URL, token: String) async -> PlatformImage? {
-        if let hit = cache[relativePath] { return hit }
-        if let task = inFlight[relativePath] { return await task.value }
-
-        let task = Task<PlatformImage?, Never> { [relativePath, baseURL, token] in
-            await Self.fetch(relativePath: relativePath, baseURL: baseURL, token: token)
-        }
-        inFlight[relativePath] = task
-        let result = await task.value
-        inFlight[relativePath] = nil
-        if let result { cache[relativePath] = result }
-        return result
-    }
-
-    private static func fetch(relativePath: String, baseURL: URL, token: String) async -> PlatformImage? {
-        let trimmed = relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath
-        let absolute = baseURL.appendingPathComponent(trimmed)
-        var req = URLRequest(url: absolute)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode) else { return nil }
-            return PlatformImage.decode(data)
-        } catch {
-            return nil
-        }
-    }
-}
-
-/// A UIImage-backed SwiftUI view that loads an auth-gated crew attachment
-/// image on iOS, showing a placeholder while loading and an error glyph on
-/// failure. Mirrors CrewRemoteImage but uses PlatformImage (UIImage) instead
-/// of NSImage so it works cross-platform.
-struct CrewCrossRemoteImage: View {
-    let path: String
-    var contentMode: ContentMode = .fill
-
-    @EnvironmentObject private var appModel: AppModel
-    @State private var image: PlatformImage?
-    @State private var failed = false
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(platformImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
-            } else if failed {
-                ZStack {
-                    Theme.Palette.surfaceMuted
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                }
-            } else {
-                ZStack {
-                    Theme.Palette.surfaceMuted
-                    ProgressView()
-                }
-            }
-        }
-        .task(id: path) { await load() }
-    }
-
-    private func load() async {
-        image = nil
-        failed = false
-        guard let auth = appModel.imageAuth else {
-            failed = true
-            return
-        }
-        let loaded = await CrewCrossImageCache.shared.image(
-            relativePath: path, baseURL: auth.baseURL, token: auth.token)
-        if let loaded {
-            image = loaded
-        } else {
-            failed = true
-        }
-    }
-}
-#endif

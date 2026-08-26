@@ -9,7 +9,7 @@ import Combine
 /// —— 一个 crewId 对应一个结构化 `CrewDetail`。新加字段时改 `CrewDetail`
 /// struct，不要在这里 / view 里到处摊。
 ///
-/// **T5.2 重构**:Store 不再直接拼 `PendingCrewAPI`,改成调
+/// **T5.2 重构**:Store 不再直接拼 HTTP 客户端,改成调
 /// `appModel.backend`(`PendingCrewBackend` protocol)。这样登录态 / BYOK
 /// 两条路用同一份 store 逻辑;backend 实例换了,数据来源自动切。
 /// `client()` 老函数没了 —— 用 `currentBackend()` 替代,失败时设
@@ -166,26 +166,8 @@ final class CrewStore: ObservableObject {
     func refreshSubjects() async {
         loadingSubjects = true
         defer { loadingSubjects = false }
-        // 身份是**账号级**概念 —— 登录态一律走 edge `/v1/me/subjects` 拿真实主体
-        // (display_name / kind / userId)。**不能**经 `appModel.backend`:macOS 上
-        // 它恒为 `LocalBackend`(本地为家),其 `listMySubjects` 返回写死的假主体
-        // 「本机 (BYOK)」—— 于是登录后侧栏身份一直显示这个假名而非真实账号
-        // (本 fix 的病根)。与 `refreshMachines()` 同构:authed → edge,否则本地兜底。
-        if appModel.isAuthenticated {
-            // 登录态只认 edge 真实主体,**绝不**回落本地假主体(否则又显示
-            // 「本机 (BYOK)」)。拉取失败保留上次 subjects、只记 error,不挡 UI。
-            guard let api = try? appModel.loggedAPIClient() else { return }
-            do {
-                subjects = try await api.listMySubjects()
-                // 回填登录用户 id(群聊区分"自己的气泡")—— 真实主体带 userId。
-                appModel.setCurrentUserIdIfResolved(subjects.first?.userId)
-            } catch {
-                self.error = "加载身份失败：\(error.localizedDescription)"
-            }
-            return
-        }
-        // 未登录(Mac 本地态):LocalBackend 合成的「本机 (BYOK)」假主体,供
-        // CreateCrewSheet 拿 `subjects.first?.id` 当本地 crew 的 responsibleSubjectId。
+        // Mac 本地态:LocalBackend 合成的「本机 (BYOK)」主体,供 CreateCrewSheet 拿
+        // `subjects.first?.id` 当本地 crew 的 responsibleSubjectId。
         // iOS 无 backend（#63 后恒无）→ 留空。
         guard let backend = appModel.backend else { subjects = []; return }
         do {
@@ -195,11 +177,12 @@ final class CrewStore: ObservableObject {
         }
     }
 
-    /// 拉机器清单：本机始终在；登录态额外并入账号其它机器（edge `GET /v1/machines`）。
-    /// 机器是账号概念 → 走 edge，**不**经 crew backend（crew 仍本地优先）。
-    /// 失败静默回落「仅本机」—— 机器清单只是侧栏分组数据源，拉不到不挡用。
+    /// 机器清单 —— #63 第二期删掉跨端遥控整层之后**恒只有本机一台**。
+    /// 侧栏按机器分组的数据源；`CreateCrewSheet` 据 `count > 1` 决定要不要显示
+    /// machine 选择（本地态恒不显示）。这个属性留着不是为了「以后可能有别的机器」，
+    /// 是因为侧栏分组和建 crew 页现在真读它。
     func refreshMachines() async {
-        let localMachine = Machine(
+        machines = [Machine(
             id: DeviceIdentity.current,
             kind: Machine.Kind.computer.rawValue,
             deviceId: DeviceIdentity.current,
@@ -207,30 +190,7 @@ final class CrewStore: ObservableObject {
             flyMachineId: nil,
             status: "online",
             lastSeenAt: nil
-        )
-        guard appModel.isAuthenticated, let api = try? appModel.loggedAPIClient() else {
-            machines = [localMachine]
-            return
-        }
-        do {
-            let remote = try await api.listMachines()
-            // edge 已含本机行（deviceId == 本机）则用 edge 行，否则把合成本机置顶补上。
-            machines = remote.contains { $0.deviceId == DeviceIdentity.current }
-                ? remote
-                : [localMachine] + remote
-        } catch {
-            machines = [localMachine]
-        }
-    }
-
-    /// 把本机真注册进账号 machine 表（edge，幂等 upsert by device_id）。登录后调。
-    /// 失败静默 —— best-effort，不挡用户用 app。未登录直接跳过（返回 nil）。
-    @discardableResult
-    func registerSelfMachine() async -> String? {
-        guard appModel.isAuthenticated, let api = try? appModel.loggedAPIClient() else {
-            return nil
-        }
-        return try? await api.registerSelfMachine()
+        )]
     }
 
     // MARK: - Mutations
@@ -342,7 +302,7 @@ final class CrewStore: ObservableObject {
 
     // MARK: - Auth lifecycle
 
-    /// 用户退出登录时调，清掉所有内存态。`AppModel.clearAuth` 时一并调。
+    /// 清掉所有内存态（`LocalDataReset` 之类的整体重置路径用）。
     func reset() {
         crews = []
         lastWhiteboardMessages = [:]
@@ -359,7 +319,7 @@ final class CrewStore: ObservableObject {
     // MARK: - Internals
 
     /// 拿当前生效的 backend;nil 时设 error 给 UI 显示。
-    /// 唯一的"两态共用"入口 —— EdgeBackend / LocalBackend 切换在这里自动发生。
+    /// macOS 恒 `LocalBackend`;iOS 恒 nil（空壳）。
     private func currentBackend() -> PendingCrewBackend? {
         guard let backend = appModel.backend else {
             self.error = "未配置 backend(凭据缺失)"

@@ -17,7 +17,7 @@
 //   UserAvatar(seed: s.seed, attachmentId: s.attachmentId, size: 30)
 //
 // When PendingCrew adds uploaded-photo support, replace this shim with a real
-// implementation that calls CrewRemoteImage for non-nil attachmentIds.
+// implementation that renders the referenced attachment.
 
 import SwiftUI
 

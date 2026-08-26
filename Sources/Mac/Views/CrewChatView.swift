@@ -11,8 +11,6 @@ import UIKit
 ///
 /// - 时间线渲染 crew 白板（`crew_announcements`，经 `listCrewWhiteboard`）。
 /// - 底部 composer 发消息（`postCrewMessage`，默认 broadcast = 全 session）。
-/// - ask_human 交互卡（`payload.kind == "interaction"`，spec §10.6）就地渲染
-///   问题 + 回答框，操作者直接在群聊里答（`answerInteraction`），不必跳别处。
 ///
 /// 详细 IO（stdout/stderr/工具日志）不在这——那在右栏 session 窗口（§9.3）。
 struct CrewChatView: View {
@@ -42,8 +40,6 @@ struct CrewChatView: View {
     @State private var pendingAttachments: [PendingComposerAttachment] = []
     @State private var loadError: String?
     @State private var sending = false
-    /// Per-interaction reply drafts, keyed by permission_request_id.
-    @State private var replyDrafts: [String: String] = [:]
     /// Crew roster (spec §9 — everyone is a member): rendered as a participant strip.
     @State private var members: [CrewMember] = []
     @State private var captainBotId: String?
@@ -616,18 +612,18 @@ struct CrewChatView: View {
         .padding(.top, 6)
     }
 
-    // macOS：登录后用真实 user id（`AppModel.currentUserId`，由
-    // `CrewStore.refreshSubjects()` 回填）—— 这样 relay 从其它设备（如 iOS）
-    // 回流的、同一账号发的消息也能被 `CrewSenderResolver` 认成"我"(右对齐)。
-    // 未登录 BYOK 沿用哨兵常量 `LocalWhiteboardStore.localUserId`。
-    // （composer 本地行永远标哨兵常量，不随登录态变；`CrewSenderResolver`
-    // 对两者都判"我"，登录态切换不会让自己刚发的话变成"别人"。）
-    // iOS: 暂无本地后端 — 使用 AppModel.currentUserId。
+    // 「自己的气泡」判据（右对齐、无头像）。composer 本地行恒标哨兵常量
+    // `LocalWhiteboardStore.localUserId`，所以 macOS 上就用它。
+    //
+    // #63 第二期之前这里还先取 `AppModel.currentUserId`（edge 回填的真实账号
+    // id），为的是让 relay 从其它设备回流的、同一账号发的消息也认成"我"。
+    // 云端整层删掉后本机没有账号概念了，那一层跟着去掉。
+    // iOS: 暂无本地后端（`backend` 恒 nil）→ 没有作者身份可言。
     private var localUserId: String? {
         #if os(macOS)
-        return appModel.currentUserId ?? LocalWhiteboardStore.localUserId
+        return LocalWhiteboardStore.localUserId
         #else
-        return appModel.currentUserId
+        return nil
         #endif
     }
 
@@ -659,11 +655,7 @@ struct CrewChatView: View {
     /// 开着时每条的常见路径是「正文里找一个 `@`，找不到就走人」（#443 的口径：
     /// 这个属性每次访问都重算，所以判定必须廉价）。
     private var timelineEntries: [CrewWhiteboardEntry] {
-        #if os(macOS)
-        let base = entries.filter { !$0.isInteraction }
-        #else
         let base = entries
-        #endif
         guard onlyMentions else { return base }
         return CrewMentionFilter.onlyHumanMentions(
             base, roster: mentionRoster, includingFrom: localUserId)
@@ -895,87 +887,79 @@ struct CrewChatView: View {
 
     @ViewBuilder
     private func rowView(_ entry: CrewWhiteboardEntry) -> some View {
-        if entry.isInteraction {
-            let reqId = entry.payload?.permissionRequestId ?? entry.id
-            CrewInteractionCard(
-                entry: entry,
-                reply: Binding(get: { replyDrafts[reqId] ?? "" }, set: { replyDrafts[reqId] = $0 })
-            ) { Task { await answer(reqId) } }
-        } else {
-            let (msg, adaptedSender) = CrewChatAdapter.adapt(
-                entry,
-                members: members,
-                captainBotId: captainBotId,
-                localUserId: localUserId
-            )
-            // #2 群聊气泡状态圆点：adapt 出来的 sender.sessionStatus 走 roster 静态成员
-            // （无 live status）→ 本地 session 恒 nil → 圆点隐藏。按 entry.senderSessionId
-            // 查本 crew 的活 run，用与成员列表同一套映射（CrewSessionWindowView.senderForRun）
-            // 覆写进去。只读 runs。
-            let sender = liveStatusSender(adaptedSender, senderSessionId: entry.senderSessionId)
-            // #377 — 被回复引用条:在已加载 entries 里本地查 entry.inReplyTo 指向的
-            // 那条,取发送者名 + 摘要渲染成「回复 X:…」。找不到 → 退化占位,不崩。
-            // mine(右对齐)时引用条也右对齐贴齐气泡。
-            let replyRef = replyReference(for: entry)
-            // 右键(macOS)/长按(iOS)头像 → @ 该发送者。仅他人消息(sender != nil)且
-            // 能解析出 mention 目标(captain/session/human)时给闭包;泛 bot 无 @ 目标 → nil。
-            let mentionStaged = sender.flatMap(avatarMention)
-            let bubbleBody = BubbleView(
-                message: msg,
-                botName: sender?.displayName ?? "机组",
-                conversationID: crewId,
-                currentUserId: localUserId,
-                groupSender: sender,
-                // BubbleView 的附件区被 `serverURL != nil` 门禁挡着；本地模式
-                // （无 imageAuth）附件 url 是 file:// 绝对 URL、渲染端不用
-                // serverURL —— 给个占位兜底让本地附件也能渲染（Todo #3）。
-                serverURL: appModel.imageAuth?.baseURL ?? URL(string: "file:///")!,
-                onRetry: nil,
-                onMentionSender: mentionStaged.map { staged in { _ in appendMentionFromAvatar(staged) } },
-                // MarkdownUI 内部是一段一个 Text/selection overlay，跨 block 的拖选会在
-                // sibling 边界截断。整条复制因此必须是气泡菜单的一等入口；而且要接在
-                // BubbleView 自己的内层 contextMenu，外层菜单会被它优先命中。
-                menu: { CrewMessageContextMenuContent(
-                    text: msg.content,
-                    onReply: { beginReply(to: entry) }
-                ) }
-            )
-            // #443 病根 3：文本选中只给指针底下那一条 —— 常开会让窗口内每段文字都挂
-            // 一个真 NSTextField（`SelectionOverlay`），0.1.7 那份 68.68s hang 的头号
-            // 热点就是它们的 updateNSView。见 CrewBubbleTextSelection.swift。
-            let bubble = Group {
-                if let replyRef {
-                    VStack(alignment: msg.mine ? .trailing : .leading, spacing: 2) {
-                        replyQuoteStrip(replyRef)
-                        bubbleBody
-                    }
-                    .frame(maxWidth: .infinity, alignment: msg.mine ? .trailing : .leading)
-                } else {
+        let (msg, adaptedSender) = CrewChatAdapter.adapt(
+            entry,
+            members: members,
+            captainBotId: captainBotId,
+            localUserId: localUserId
+        )
+        // #2 群聊气泡状态圆点：adapt 出来的 sender.sessionStatus 走 roster 静态成员
+        // （无 live status）→ 本地 session 恒 nil → 圆点隐藏。按 entry.senderSessionId
+        // 查本 crew 的活 run，用与成员列表同一套映射（CrewSessionWindowView.senderForRun）
+        // 覆写进去。只读 runs。
+        let sender = liveStatusSender(adaptedSender, senderSessionId: entry.senderSessionId)
+        // #377 — 被回复引用条:在已加载 entries 里本地查 entry.inReplyTo 指向的
+        // 那条,取发送者名 + 摘要渲染成「回复 X:…」。找不到 → 退化占位,不崩。
+        // mine(右对齐)时引用条也右对齐贴齐气泡。
+        let replyRef = replyReference(for: entry)
+        // 右键(macOS)/长按(iOS)头像 → @ 该发送者。仅他人消息(sender != nil)且
+        // 能解析出 mention 目标(captain/session/human)时给闭包;泛 bot 无 @ 目标 → nil。
+        let mentionStaged = sender.flatMap(avatarMention)
+        let bubbleBody = BubbleView(
+            message: msg,
+            botName: sender?.displayName ?? "机组",
+            conversationID: crewId,
+            currentUserId: localUserId,
+            groupSender: sender,
+            // BubbleView 的附件区被 `serverURL != nil` 门禁挡着；附件 url 是
+            // file:// 绝对 URL、渲染端不用 serverURL —— 给个占位兜底让本地
+            // 附件也能渲染（Todo #3）。
+            serverURL: URL(string: "file:///")!,
+            onRetry: nil,
+            onMentionSender: mentionStaged.map { staged in { _ in appendMentionFromAvatar(staged) } },
+            // MarkdownUI 内部是一段一个 Text/selection overlay，跨 block 的拖选会在
+            // sibling 边界截断。整条复制因此必须是气泡菜单的一等入口；而且要接在
+            // BubbleView 自己的内层 contextMenu，外层菜单会被它优先命中。
+            menu: { CrewMessageContextMenuContent(
+                text: msg.content,
+                onReply: { beginReply(to: entry) }
+            ) }
+        )
+        // #443 病根 3：文本选中只给指针底下那一条 —— 常开会让窗口内每段文字都挂
+        // 一个真 NSTextField（`SelectionOverlay`），0.1.7 那份 68.68s hang 的头号
+        // 热点就是它们的 updateNSView。见 CrewBubbleTextSelection.swift。
+        let bubble = Group {
+            if let replyRef {
+                VStack(alignment: msg.mine ? .trailing : .leading, spacing: 2) {
+                    replyQuoteStrip(replyRef)
                     bubbleBody
                 }
-            }
-            .modifier(BubbleTextSelection(owner: selectionOwner, id: entry.id))
-            #if os(macOS)
-            // session 发的消息可点 → 右栏切到对应 session（chunk2 T6 中栏跳转）。
-            // 找不到对应 run（已移除/别的 crew）则点击无事发生。
-            if let senderSessionId = entry.senderSessionId {
-                bubble
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if let run = sessionRunner.runs.first(where: { $0.sessionId == senderSessionId }) {
-                            onOpenSession?(run.runID)
-                        }
-                    }
-                    .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+                .frame(maxWidth: .infinity, alignment: msg.mine ? .trailing : .leading)
             } else {
-                bubble
-                    .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+                bubbleBody
             }
-            #else
+        }
+        .modifier(BubbleTextSelection(owner: selectionOwner, id: entry.id))
+        #if os(macOS)
+        // session 发的消息可点 → 右栏切到对应 session（chunk2 T6 中栏跳转）。
+        // 找不到对应 run（已移除/别的 crew）则点击无事发生。
+        if let senderSessionId = entry.senderSessionId {
+            bubble
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if let run = sessionRunner.runs.first(where: { $0.sessionId == senderSessionId }) {
+                        onOpenSession?(run.runID)
+                    }
+                }
+                .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+        } else {
             bubble
                 .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
-            #endif
         }
+        #else
+        bubble
+            .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+        #endif
     }
 
     /// 渲染窗口顶部的「加载更早的消息」（#443）。一条都没丢，点一下往前放一页。
@@ -1147,7 +1131,6 @@ struct CrewChatView: View {
         sending = true
         defer { sending = false }
         do {
-            var attachmentIds: [String] = []
             var localAttachments: [LocalWhiteboardAttachment] = []
             #if os(macOS)
             // Todo #3：macOS 恒 LocalBackend —— 附件落盘 app 数据目录
@@ -1163,33 +1146,19 @@ struct CrewChatView: View {
                 return
             }
             #else
-            // 附件上传是登录后的能力叠加(走 edge 上传)：未登录 → 软报错、不发。
-            // 上传走 loggedAPIClient(edge 专属),拿到 ids 再交给 backend 发文。
+            // iOS 侧的附件通道是 edge 上传（拿 id 再随消息发），随 #63 第二期一起
+            // 删掉了 —— iOS 自第一期起已是空壳（`AppModel.backend` 恒 nil）。
+            // 这里不再上传，选中的文件在下面 discardStaging 时清掉。
             if !toUpload.isEmpty {
-                guard appModel.isAuthenticated, let api = try? appModel.loggedAPIClient() else {
-                    loadError = "群聊附件需登录 PendingBot"
-                    return
-                }
-                for att in toUpload {
-                    // 拖入的文件到这一步才读字节（edge 上传要整份 body）。
-                    // intake 的本地上限在 iOS 上就等于 edge 的 25 MiB，所以这里
-                    // 不会读进一份注定 413 的大文件。
-                    guard let data = att.loadDataForUpload() else {
-                        loadError = "附件读取失败：\(att.filename)"
-                        return
-                    }
-                    let id = try await api.uploadAttachment(
-                        data: data, filename: att.filename, mime: att.mime)
-                    attachmentIds.append(id)
-                }
+                loadError = "这个平台暂不支持群聊附件"
+                return
             }
             #endif
             let mentions = mentionsForSend()
             let replyToId = replyTarget?.replyToId
             try await backend.postCrewMessage(
                 crewId: crewId, text: text, mentions: mentions,
-                attachmentIds: attachmentIds, replyToId: replyToId,
-                localAttachments: localAttachments)
+                replyToId: replyToId, localAttachments: localAttachments)
             // Local-first @ wake: after the message lands on the (local)
             // whiteboard, directly inject it into any idle local run that was
             // @-mentioned — idle runs have no next turn to pull it in (Phase 6
@@ -1277,18 +1246,6 @@ struct CrewChatView: View {
             sessionRunner: sessionRunner, backend: appModel.backend,
             onError: { loadError = $0 })
         #endif
-    }
-
-    private func answer(_ reqId: String) async {
-        let reply = (replyDrafts[reqId] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reply.isEmpty, let api = try? appModel.loggedAPIClient() else { return }
-        do {
-            try await api.answerInteraction(reqId: reqId, reply: reply)
-            replyDrafts[reqId] = nil
-            await refresh()
-        } catch {
-            loadError = error.localizedDescription
-        }
     }
 
     // MARK: - File import (cross-platform via .fileImporter)

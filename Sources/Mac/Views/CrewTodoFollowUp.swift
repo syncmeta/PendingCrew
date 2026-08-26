@@ -35,7 +35,7 @@ enum CrewTodoFollowUp {
             do {
                 try await backend.postCrewMessage(
                     crewId: crewId, text: message, mentions: [],
-                    attachmentIds: [], replyToId: nil, localAttachments: attachments)
+                    replyToId: nil, localAttachments: attachments)
             } catch {
                 // 数据已翻回,只是群里没吱声 —— 落一条系统注记兜底,机长下轮白板注入能看到。
                 LocalWhiteboardStore.shared.appendSessionMessage(

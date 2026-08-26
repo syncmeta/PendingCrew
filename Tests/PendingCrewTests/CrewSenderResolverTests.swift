@@ -3,23 +3,9 @@ import XCTest
 // Sources compiled directly into the test bundle (see project.yml) — no module import needed.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Task 11 — multi-human sender identity (real user id + strict mine check).
+// Task 11 — sender identity resolves by user id, never by display name.
 //
-// Task 10 landed relay pull carrying the real remote `senderUserId` +
-// `senderDisplayName` into local whiteboard entries. Before this fix,
-// `CrewSenderResolver` treated ANY entry with a non-nil-but-mismatched-only-
-// via-nil-guard `senderUserId` loosely — the old rule was:
-//
-//   mine = senderDisplayName == nil && (uid != nil ? uid == localUserId : true)
-//
-// which meant a relayed message whose `senderUserId` happened to equal
-// `localUserId` (e.g. this same logged-in human posting from iOS, later
-// relayed down to Mac) was *never* mine, because `senderDisplayName` was
-// always non-nil on relay rows. That's wrong for multi-device use of the
-// same account: it should render as "me" (right-aligned) no matter which
-// device it was typed on.
-//
-// The fix: when `senderUserId != nil`, ignore `senderDisplayName` entirely
+// The rule: when `senderUserId != nil`, ignore `senderDisplayName` entirely
 // and go strictly by id equality — but "id equality" must recognize BOTH:
 //   - the real logged-in id (`localUserId` param, from `AppModel.currentUserId`)
 //   - the macOS BYOK local sentinel (`LocalWhiteboardStore.localUserId`),
@@ -30,6 +16,10 @@ import XCTest
 //     start rendering as NOT mine the moment `CrewChatView.localUserId`
 //     switches from the sentinel to the real id (#lookalike regression this
 //     test guards against).
+//
+// #63 第二期删掉跨端遥控整层时，本文件里两条只有 relay 才能触发的用例
+// （「不同远端人类靠 displayName 区分」「同账号从另一台设备 relay 回来仍是我」）
+// 一并删除 —— 本地 `appendUserMessage` 恒写 BYOK 哨兵，产不出那两种行。
 // ─────────────────────────────────────────────────────────────────────────────
 
 private func ts() -> String { "2026-01-01T00:00:00Z" }
@@ -83,35 +73,6 @@ final class CrewSenderResolverTests: XCTestCase {
             entry, members: [], captainBotId: nil, localUserId: "auth-real-id")  // 已登录
         XCTAssertTrue(sender.isMine,
             "sentinel-tagged composer row must resolve as mine even when localUserId is the real logged-in id")
-    }
-
-    // ── 2. 远端他人（senderUserId ≠ localUserId）→ not mine，显示其 displayName ──
-
-    func testRemoteOtherHuman_differentUid_notMine() throws {
-        let entry = try makeEntry(
-            senderKind: "user",
-            senderUserId: "uid-someone-else",
-            senderDisplayName: "小明")
-        let sender = CrewSenderResolver.resolve(
-            entry, members: [], captainBotId: nil, localUserId: "auth-real-id")
-        XCTAssertFalse(sender.isMine, "a different human's relayed message must not be mine")
-        XCTAssertEqual(sender.displayName, "小明",
-            "different remote humans are distinguished by senderDisplayName")
-    }
-
-    // ── 3. 远端的我自己（同一账号从 iOS 发言，relay 回流到 Mac）→ mine ──────────
-    //     旧规则：senderDisplayName != nil 就永不是我 —— 这条测试锁住新规则:
-    //     uid == localUserId 时严格判我，不再被 displayName 兜底否决。
-
-    func testOwnMessageRelayedBackFromAnotherDevice_isMine() throws {
-        let entry = try makeEntry(
-            senderKind: "user",
-            senderUserId: "auth-real-id",         // 同一登录账号
-            senderDisplayName: "我 (iOS)")         // relay 落地时带的真实显示名
-        let sender = CrewSenderResolver.resolve(
-            entry, members: [], captainBotId: nil, localUserId: "auth-real-id")
-        XCTAssertTrue(sender.isMine,
-            "same account's message relayed back from another device must be mine, regardless of senderDisplayName")
     }
 
     // ── 4. senderUserId != nil 且不等于任何"我" id，displayName 缺省 → 兜底"人" ──

@@ -22,9 +22,9 @@ enum CrewSenderResolver {
         switch entry.senderKind {
         case "user", "human":
             let uid = entry.senderUserId
-            // 多人身份修复（Task 11）：relay 行现在恒带真实 senderUserId（Task 10
-            // 已落地），不再需要 senderDisplayName 兜底守卫 —— 严格按 uid 判"我"。
-            // uid == localUserId：同一账号（含从 iOS 等其它设备 relay 回流的自己）。
+            // 多人身份修复（Task 11）：严格按 uid 判"我"，不用 senderDisplayName
+            // 兜底守卫。
+            // uid == localUserId：同一账号。
             // uid == LocalWhiteboardStore.localUserId：macOS composer 本地行恒标
             // 的 BYOK 哨兵常量，不随登录态变（`appendUserMessage` 不知道登录 id）——
             // 登录后 `localUserId` 换成真实 id，composer 行仍是哨兵，两者都得算我，

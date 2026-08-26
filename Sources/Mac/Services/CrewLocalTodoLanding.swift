@@ -1,16 +1,15 @@
 #if os(macOS)
 import Foundation
 
-/// Todo 落账编排（Task 10：从 `CrewChatView.sendTodo` 抽出的自由函数，供 composer
-/// Todo 模式发送**和** `CrewRelayAgent` 落地远端（iOS）`crew_todo_add` 共用）：
-/// `LocalTodoStore.add` 拿 #N → 群里发「To do +1: #N …」回执（走 `backend`——
-/// `LocalBackend` 落本地白板，`CrewRelayAgent.push` 再自然把它带到 edge，composer
-/// 直发与 relay 落地都经这条同一路径）→ 唤醒机长（`CrewLocalMentionDelivery`，
-/// 无定向 @ 默认给机长，与 sendTodo 原行为一致）。
+/// Todo 落账编排（Task 10：从 `CrewChatView.sendTodo` 抽出的自由函数）：
+/// `LocalTodoStore.add` 拿 #N → 群里发「To do +1: #N …」回执（走 `backend`，
+/// macOS 上恒为 `LocalBackend`，落本地白板）→ 唤醒机长
+/// （`CrewLocalMentionDelivery`，无定向 @ 默认给机长，与 sendTodo 原行为一致）。
 ///
-/// 幂等由调用方负责：composer 每次点发送都是新增一条；relay 落地挂在「本轮
-/// importable（首次落地）判定」之后（见 `CrewRelayAgent.pull`），已处理过的
-/// remoteId 不会重复触发。
+/// 抽出来时它有两条来路（composer 直发 + relay 落地远端 iOS 的 `crew_todo_add`）；
+/// 后者随 #63 第二期删除跨端遥控整层一起去掉了，现在只剩 composer 这一条。
+///
+/// 幂等由调用方负责：composer 每次点发送都是新增一条。
 @MainActor
 enum CrewLocalTodoLanding {
     /// `onError` surfaces failures from the (async, fire-and-forget) absent-target
@@ -42,7 +41,7 @@ enum CrewLocalTodoLanding {
         let message = "To do +1: #\(item.number) \(text)"
         try await backend.postCrewMessage(
             crewId: crewId, text: message, mentions: [],
-            attachmentIds: [], replyToId: nil, localAttachments: attachments)
+            replyToId: nil, localAttachments: attachments)
         CrewLocalMentionDelivery.injectAndWake(
             crewId: crewId,
             mentions: [],

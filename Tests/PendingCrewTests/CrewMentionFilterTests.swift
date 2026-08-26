@@ -25,10 +25,8 @@ final class CrewMentionFilterTests: XCTestCase {
             id: id, senderKind: "session", senderSessionId: "s1", senderUserId: nil,
             senderBotId: nil, messageKind: "instruction", summary: text,
             createdAt: "2026-01-01T00:00:00Z",
-            payload: CrewWhiteboardEntry.Payload(
-                text: text, kind: nil, question: nil, status: nil, permissionRequestId: nil,
-                action: nil, taskBrief: nil, runnerKind: nil),
-            attachments: nil, relay: nil, senderDisplayName: nil, senderMemberId: nil,
+            payload: CrewWhiteboardEntry.Payload(text: text),
+            attachments: nil, senderDisplayName: nil, senderMemberId: nil,
             inReplyTo: nil,
             mentions: mentionKinds.isEmpty
                 ? nil : mentionKinds.map { CrewMention(kind: $0, targetId: nil) })
@@ -146,7 +144,7 @@ final class CrewMentionFilterTests: XCTestCase {
             id: "mine", senderKind: "user", senderSessionId: nil, senderUserId: "u1",
             senderBotId: nil, messageKind: "instruction", summary: "我说的一句话",
             createdAt: "2026-01-01T00:00:00Z",
-            payload: nil, attachments: nil, relay: nil, senderDisplayName: nil,
+            payload: nil, attachments: nil, senderDisplayName: nil,
             senderMemberId: nil, inReplyTo: nil, mentions: nil)
         // 没 @ 任何人、也不是 @ 我 —— 但它是我自己发的。
         XCTAssertFalse(CrewMentionFilter.isHumanMention(mine, roster: roster))

@@ -3,23 +3,6 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// `CrewSessionServerLink` itself lives in `Sources/Remote/` (three-platform —
-/// it only touches `PendingCrewAPI`). Only this mapping stays behind the fence,
-/// because `CrewSessionRun.Status` belongs to the PTY run below.
-extension CrewSessionServerLink {
-    /// Close out the server session row. `localStatus` is the run's terminal
-    /// state mapped to the server's completed/failed/cancelled enum.
-    func finish(localStatus: CrewSessionRun.Status, summary: String?) async {
-        let status: String
-        switch localStatus {
-        case .completed: status = "completed"
-        case .cancelled: status = "cancelled"
-        default: status = "failed"
-        }
-        await finish(status: status, summary: summary)
-    }
-}
-
 /// local coding agent 跑动的 view-side 视图模型（chunk2 T1：多 run 并存）。
 ///
 /// 每次 `start(...)` 起一个新 `CrewSessionRun` 追加进 `runs` 并选中——旧 run
@@ -109,11 +92,6 @@ final class CrewSessionRunner: ObservableObject {
         isComposingNew = st.isComposingNew
     }
 
-    /// 事件驱动唤醒（Phase 4b）：**一个 crew 一个 waker**，该 crew 上的多个登录态
-    /// run 共用一条 hub 连接。登录态 run 启动时 `ensureMailboxWaker` 懒建，最后一个
-    /// 该 crew 的登录态 run 移除时收掉。BYOK/local-only 不建（无服务端 hub）。
-    private var mailboxWakers: [String: CrewMailboxWaker] = [:]
-
     /// 本地 mention 唤醒器（wake-resilience 根因修复）：session/机长 post_to_crew
     /// 的定向 @ → 注入/拉起目标。由 MacRootView.task 创建并 start（需要 backend
     /// provider 拉 crew detail），runner 只持有 + 在 run 启动时通知钉游标。
@@ -154,8 +132,6 @@ final class CrewSessionRunner: ObservableObject {
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
         run.stop()
-        teardownMailboxWakerIfIdle(crewId: crewId)
-        teardownPermissionRelay(sessionId: run.sessionId)
     }
 
     /// 移除指定 run（仍在跑则先停）。被移除的是选中项时，回退选最后一个。
@@ -170,8 +146,6 @@ final class CrewSessionRunner: ObservableObject {
             // 回退只在同 crew 内找（#481）—— 别把前台切到另一个 crew 的 run。
             selectedRunId = runs.last(where: { $0.crewId == crewId })?.runID
         }
-        teardownMailboxWakerIfIdle(crewId: crewId)
-        teardownPermissionRelay(sessionId: run.sessionId)
     }
 
     /// 本地唤醒投递的唯一 busy 门禁。目标 idle 时立即 send；Codex 正在跑 turn 时
@@ -200,8 +174,7 @@ final class CrewSessionRunner: ObservableObject {
     }
 
     /// 后端发布 busy -> idle 时补一条。再读一次 `backend.isBusy`，挡住 idle 事件排队
-    /// 到主线程期间目标已经开始另一 turn 的窄竞态。mailbox 不把网络对象塞进本地
-    /// 队列：服务端 item 仍未 delivered，idle 时主动重拉即可。
+    /// 到主线程期间目标已经开始另一 turn 的窄竞态。
     private func runBecameIdle(_ run: CrewSessionRun) {
         guard run.status == .running, !run.backend.isBusy else { return }
         if let delivery = deferredWakes.popWhenIdle(sessionId: run.sessionId) {
@@ -212,51 +185,11 @@ final class CrewSessionRunner: ObservableObject {
             // mailbox 的异步重拉抢同一空闲窗口。下一次 idle 再处理服务端 inbox。
             return
         }
-        if run.hasServerSession, let waker = mailboxWakers[run.crewId] {
-            Task { await waker.drain() }
-        }
     }
 
     private func discardDeferredWakes(sessionId: String) {
         let deliveries = deferredWakes.remove(sessionId: sessionId)
         for delivery in deliveries { deferredWakeCallbacks.removeValue(forKey: delivery.key) }
-    }
-
-    // MARK: - permission over WS（#204）
-
-    /// 每个登录态 run 一条 permission relay：本地待审批 → SessionProxyDO
-    /// permission.request 实时推给远端 viewer；viewer 的 allow/deny 经 WS
-    /// 回来 → 解本地 hook 阻塞；本地先答的 → mirror 到服务端 decide。
-    /// BYOK / local-only run（无 server session 行）不建。
-    private var permissionRelays: [String: SessionPermissionRelay] = [:]
-
-    /// 登录态 run 起好后由 call site 调（同 `ensureMailboxWaker` 的时机与
-    /// 依赖：device-grant token + baseURL）。幂等 —— 已有 relay 则 no-op。
-    ///
-    /// ⚠️ **当前没有任何调用点**（前后端分离 P0 查出）。原来的调用点在
-    /// `CrewSessionWindowView` 里，被 `let serverLink: CrewSessionServerLink? = nil`
-    /// 这条写死的 nil 挡着，从来没走到过 —— P0 已把那段死接线删掉，实现留在这里。
-    /// 等 edge session 通道（接合 v2 block 3）真开时由**这一侧**接上，别再从视图接。
-    /// 见 `docs/tech-debt.md`「登录态信箱唤醒与审批中继从未接通」。
-    func ensurePermissionRelay(
-        crewId: String, sessionId: String, api: PendingCrewAPI, baseURL: URL, token: String
-    ) {
-        guard permissionRelays[sessionId] == nil else { return }
-        let client = SessionProxyClient(
-            baseURL: baseURL, sessionId: sessionId, role: .runner, token: token)
-        let relay = SessionPermissionRelay(
-            crewId: crewId, sessionId: sessionId, client: client,
-            mirrorDecide: { serverRequestId, decision in
-                // best-effort 一次性 mirror：失败只影响远端卡片的即时清除，
-                // 远端仍可自行决定（服务端 RPC 幂等冲突回 409，不炸）。
-                try? await api.decidePermissionRequest(id: serverRequestId, decision: decision)
-            })
-        permissionRelays[sessionId] = relay
-        relay.start()
-    }
-
-    private func teardownPermissionRelay(sessionId: String) {
-        permissionRelays.removeValue(forKey: sessionId)?.stop()
     }
 
     // MARK: - session 自我配置（set_session_profile；#455）
@@ -968,37 +901,6 @@ final class CrewSessionRunner: ObservableObject {
 
     // MARK: - 事件驱动唤醒（Phase 4b）
 
-    /// 为一个 crew 确保有一条 hub waker 在跑（一个 crew 一个，多 run 共用）。
-    /// 登录态 run 启动后由 call site 调（传入已鉴权的 `api` + device-grant `token`
-    /// + `baseURL`）。已存在则只补拉一次 inbox（刚起的 run 可能已有@我的待处理项，
-    /// 不等下一个 hub 事件）。
-    ///
-    /// ⚠️ **当前没有任何调用点**（前后端分离 P0 查出）。原来的调用点在
-    /// `CrewSessionWindowView` 里，被 `let serverLink: CrewSessionServerLink? = nil`
-    /// 这条写死的 nil 挡着，从来没走到过 —— P0 已把那段死接线删掉，实现留在这里。
-    /// 等 edge session 通道（接合 v2 block 3）真开时由**这一侧**接上，别再从视图接。
-    /// 见 `docs/tech-debt.md`「登录态信箱唤醒与审批中继从未接通」。
-    func ensureMailboxWaker(crewId: String, api: PendingCrewAPI, baseURL: URL, token: String) {
-        if let existing = mailboxWakers[crewId] {
-            Task { await existing.drain() }   // 新 run 加入，补一次
-            return
-        }
-        let client = CrewRealtimeClient(baseURL: baseURL, crewId: crewId, token: token)
-        let waker = CrewMailboxWaker(crewId: crewId, api: api, client: client, runner: self)
-        mailboxWakers[crewId] = waker
-        waker.start()
-        Task { await waker.drain() }          // 起手补一次，不等首个 hub 事件
-    }
-
-    /// 该 crew 已无登录态 running run → 收掉 waker（断 hub）。
-    func teardownMailboxWakerIfIdle(crewId: String) {
-        let stillActive = runs.contains {
-            $0.crewId == crewId && $0.status == .running && $0.hasServerSession
-        }
-        guard !stillActive, let waker = mailboxWakers.removeValue(forKey: crewId) else { return }
-        waker.stop()
-    }
-
     /// 起 session **没起成**的统一 fail-loud（#541）：`start*` 抛错的那几条来路
     /// （机长 start_session 排队、驾驶舱派活、手动起机长）都走这里，别各自吞。
     /// ① `lastStartError` → UI 横幅（沿用「人类发言自动拉起机长失败」那条留痕通道）；
@@ -1039,10 +941,6 @@ final class CrewSessionRunner: ObservableObject {
         /// 上的 title 与 helper 白板署名逐字一致。
         title: String? = nil,
         additionalEnv: [String: String] = [:],
-        /// 当登录时，caller 备好 server-side session（register host → create →
-        /// claim）并把 link 传进来，run 在结束时关掉 server row（让跨端列表能看到
-        /// session 已结束）。`nil` = BYOK / local-only。
-        serverLink: CrewSessionServerLink? = nil,
         /// codex 世界观（字符串）→ `thread/start.developerInstructions`。caller 在
         /// 拿得到 detail/members 处用 `LocalSessionLaunch.renderWorldModelString` 算好传入。
         /// claude 不用这个 —— claude 走 `config.appendSystemPromptFile`（文件路径）。
@@ -1192,7 +1090,6 @@ final class CrewSessionRunner: ObservableObject {
                 : nil,
             permissionModeOverride: config.kind.isAgent ? config.permissionMode : nil,
             backend: backend,
-            serverLink: serverLink,
             role: role
         )
         // 多 run 并存：追加进列表，不动旧 run（每个 run 在切换条上都有自己的
@@ -1714,10 +1611,11 @@ final class CrewSessionRunner: ObservableObject {
         retry.initialPrompt = brief
         // 刚退出的那条 run 留在列表里只会变重影 —— 同 id 的旧 run 清掉再起。
         runs.removeAll { $0.runID == run.runID }
-        // 不带 `serverLink` 重起：那条 link 属于刚退出的那个 run，finalize 已经把
-        // server row 关掉了，复用等于往一条已关的记录上写。登录态要接的话是另一件事。
-        // `developerInstructions` / `codexMcpServers` 同样不带 —— 这条路只服务 claude
+        // `developerInstructions` / `codexMcpServers` 不带 —— 这条路只服务 claude
         // （上面 guard 了 kind），那两样是 codex 的通道。
+        //
+        // （原来这里还写着「不带 `serverLink` 重起」的理由。`serverLink` 是跨端遥控
+        // 里「本机 run ↔ 服务端 session 行」的绑定，随 #63 第二期整层删除了。）
         Task { [weak self] in
             try? await self?.start(
                 crewId: crewId, sessionId: sessionId, config: retry,
@@ -1800,10 +1698,6 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         return nil
     }
 
-    /// 是否有服务端 session 行（登录态）。事件驱动唤醒（Phase 4b）只对这类 run
-    /// 拉 inbox —— BYOK/local-only run（serverLink == nil）没有服务端 mailbox。
-    var hasServerSession: Bool { serverLink != nil }
-
     @Published private(set) var status: Status = .running
     @Published private(set) var exitCode: Int32?
     /// 终止原因（Todo #10 ①）：finalize 时由 `SessionExitReason.classify` 算出。
@@ -1852,8 +1746,6 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     private var finalized = false
     /// 已经往白板 fail-loud 过的健康异常 Kind（每 Kind 只喊一次，TUI 重绘不刷屏）。
     private var announcedHealthKinds: Set<CrewSessionHealth.Kind> = []
-    /// Server row lifecycle close (logged mode only; nil for BYOK/local-only).
-    private let serverLink: CrewSessionServerLink?
     private var statusObservation: Task<Void, Never>?
     private var workingObservation: Task<Void, Never>?
     private var typingObservation: Task<Void, Never>?
@@ -1878,7 +1770,6 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         approvalsReviewer: CodexProtocol.ApprovalsReviewer? = nil,
         permissionModeOverride: String? = nil,
         backend: any SessionBackend,
-        serverLink: CrewSessionServerLink? = nil,
         role: Role = .worker
     ) {
         self.crewId = crewId
@@ -1893,7 +1784,6 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         self.approvalsReviewer = kind == .codex ? (approvalsReviewer ?? .autoReview) : nil
         self.permissionModeOverride = permissionModeOverride
         self.backend = backend
-        self.serverLink = serverLink
         self.role = role
         self.status = Self.map(backend.status, cancelled: false)
         self.isWorking = backend.isWorking
@@ -2177,10 +2067,6 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         decisionEscalation?.cancel()
         decisionEscalation = nil
         pendingDecision = nil
-        if let link = serverLink {
-            let finalStatus = status
-            Task { await link.finish(localStatus: finalStatus, summary: nil) }
-        }
     }
 
     /// Map the terminal's running/exited state to the run lifecycle.

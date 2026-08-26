@@ -13,11 +13,10 @@ import Foundation
 ///   - `LocalCodingAgentExecutable.swift` —— `which` + Homebrew 路径解析
 ///   - `LocalCodingAgentSpec.swift`       —— env 白名单构造（`LocalCodingAgentEnv`）
 ///   - `AgentTerminalSession.swift`       —— 内嵌 PTY 终端 + argv + send/interrupt/stop
-///   - `SessionProxyProtocol.swift` / `SessionProxyClient.swift` —— 跨端 WS 协议（viewer 侧）
 ///
 /// **安全模型**（spec v2 §8.4）：
 ///   - 完全信任 + 最小 env 卫生（白名单 + 用户自配 API key）
-///   - **不**继承 PendingCrew 父进程的全部 env（device grant / Keychain 不会泄）
+///   - **不**继承 PendingCrew 父进程的全部 env
 enum LocalRunnerModule {
     /// 留一个 marker 让 `import` 文件外面好查找。无运行时意义。
     static let moduleLoaded: Bool = true

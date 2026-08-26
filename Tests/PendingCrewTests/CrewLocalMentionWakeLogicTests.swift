@@ -10,8 +10,7 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
 
     private func entry(
         _ senderKind: String, sessionId: String? = nil, text: String = "正文",
-        name: String? = nil, mentions: [LocalWhiteboardMention]? = nil,
-        relayRemoteId: String? = nil
+        name: String? = nil, mentions: [LocalWhiteboardMention]? = nil
     ) -> LocalWhiteboardMessage {
         LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(), senderKind: senderKind,
@@ -20,7 +19,6 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
             // 固定的历史日期会随时间推移变成陈旧条目而全组失灵。那道闸本身的边界
             // 单测在 `CrewLocalMentionWakeStalenessTests`。
             text: text, createdAt: ISO8601DateFormatter().string(from: Date()),
-            relayRemoteId: relayRemoteId,
             senderName: name, mentions: mentions)
     }
 
@@ -45,29 +43,13 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
     }
 
     func testHumanEntrySkipped() {
-        // 本地 composer 直发的 user 条目（relayRemoteId == nil）：CrewChatView
-        // 已直投 —— 后台唤醒器不重复。
+        // 人类经 composer 直发的条目：CrewChatView 已直投 —— 后台唤醒器不重复。
+        //
+        // #63 第二期之前这里还有一条例外（#554 规则 3：`relayRemoteId != nil` 的
+        // user 条目 = 远端人类经 relay 落进本地白板的 @，没有 composer 直投过，
+        // 唤醒器要补投）。relay 整层删掉后那个判据恒 false，规则与它的两个用例
+        // 一起移除。**重建 relay 时要一起重建**，否则远端人类的 @ 会重新断链。
         let e = entry("user", mentions: [LocalWhiteboardMention(kind: "session", targetId: "sess-a")])
-        XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [e]).isEmpty)
-    }
-
-    func testRelayHumanEntryWithDirectedMentionProducesDelivery() {
-        // #554 断链修复：远端 iOS 用户 @session 落到 Mac 本地白板
-        // （relayRemoteId != nil）—— 没有 composer 直投过，唤醒器要补上这条投递。
-        let e = entry("user", name: "PendingBot 用户",
-                      mentions: [LocalWhiteboardMention(kind: "session", targetId: "sess-a")],
-                      relayRemoteId: "edge-msg-1")
-        let out = CrewLocalMentionWakeLogic.pending(entries: [e])
-        XCTAssertEqual(out.count, 1)
-        XCTAssertEqual(out.first?.entryId, e.id)
-        XCTAssertEqual(out.first?.mentions, [.session("sess-a")])
-        XCTAssertEqual(out.first?.senderName, "PendingBot 用户")
-        XCTAssertTrue(out.first!.trackReceipt)
-    }
-
-    func testRelayHumanEntryWithoutMentionsSkipped() {
-        // relay 落地的 user 条目但无定向 @（广播/纯文本）—— 不该唤醒具体 run。
-        let e = entry("user", relayRemoteId: "edge-msg-2")
         XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [e]).isEmpty)
     }
 

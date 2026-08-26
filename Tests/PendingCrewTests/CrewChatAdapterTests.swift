@@ -17,8 +17,7 @@ private func makeEntry(
     senderBotId: String? = nil,
     senderSessionId: String? = nil,
     senderDisplayName: String? = nil,
-    summary: String = "hello",
-    payloadKind: String? = nil
+    summary: String = "hello"
 ) throws -> CrewWhiteboardEntry {
     var d: [String: Any] = [
         "id": id,
@@ -31,9 +30,6 @@ private func makeEntry(
     if let v = senderBotId  { d["sender_bot_id"]  = v }
     if let v = senderSessionId { d["sender_session_id"] = v }
     if let v = senderDisplayName { d["sender_display_name"] = v }
-    if let pk = payloadKind {
-        d["payload"] = ["kind": pk]
-    }
     let data = try JSONSerialization.data(withJSONObject: d)
     return try JSONDecoder().decode(CrewWhiteboardEntry.self, from: data)
 }
@@ -116,67 +112,6 @@ final class CrewChatAdapterTests: XCTestCase {
         XCTAssertFalse(s.isSession, "isSession must be false for a bot")
     }
 
-    // ── 3. Relay message: senderDisplayName non-nil + uid matches local ───────
-    //    Task 11 flips this: relay rows now carry a real senderUserId (Task 10),
-    //    so a message relayed back that was posted by THIS SAME account from
-    //    another device (e.g. iOS) must render as mine — the old "displayName
-    //    non-nil ⇒ never mine" guard mis-classified multi-device self-messages
-    //    as someone else's.
-
-    func testOwnMessageRelayedFromAnotherDevice_isMineDespiteDisplayName() throws {
-        // A relay row for THIS account, posted from iOS: edge back-fills
-        // senderDisplayName with the real name, uid equals localUserId because
-        // it really is the same logged-in human.
-        let entry = try makeEntry(
-            id: "e-relay",
-            senderKind: "user",
-            senderUserId: "uid-me",         // same as localUserId — genuinely me
-            senderDisplayName: "Me (iOS)",  // relay always back-fills a name
-            summary: "relayed message"
-        )
-        let (msg, sender) = CrewChatAdapter.adapt(
-            entry, members: [], captainBotId: nil, localUserId: "uid-me")
-
-        XCTAssertTrue(msg.mine,
-                       "same-account message relayed back from another device must be mine")
-        XCTAssertTrue(msg.isMine(currentUserId: "uid-me"))
-        XCTAssertNil(sender,
-                     "own message must have no groupSender (right-aligned, no avatar)")
-    }
-
-    // ── 3b. Different remote human (uid differs) → NOT mine, distinguished by name ──
-
-    func testRelayMessageFromDifferentHuman_notMine() throws {
-        let entry = try makeEntry(
-            id: "e-relay-other",
-            senderKind: "user",
-            senderUserId: "uid-someone-else",
-            senderDisplayName: "小明",
-            summary: "relayed message"
-        )
-        let (msg, sender) = CrewChatAdapter.adapt(
-            entry, members: [], captainBotId: nil, localUserId: "uid-me")
-
-        XCTAssertFalse(msg.mine, "a different human's relayed message must not be mine")
-        XCTAssertFalse(msg.isMine(currentUserId: "uid-me"))
-        XCTAssertNotNil(sender, "different human's message must produce a non-nil groupSender")
-        XCTAssertEqual(sender?.displayName, "小明")
-    }
-
-    // ── 4. Interaction entry → isInteraction true ─────────────────────────────
-
-    func testInteractionEntry_isInteractionTrue() throws {
-        let entry = try makeEntry(
-            id: "e-interaction",
-            senderKind: "bot",
-            senderBotId: "bot-1",
-            summary: "Need approval",
-            payloadKind: "interaction"
-        )
-        XCTAssertTrue(CrewChatAdapter.isInteraction(entry),
-                      "isInteraction must be true for payload.kind == 'interaction'")
-    }
-
     // ── 5. Session sender → isSession shim set, isMine false ─────────────────
 
     func testSessionMessage_isSessionShimAndNotMine() throws {
@@ -231,8 +166,8 @@ final class CrewChatAdapterTests: XCTestCase {
 // #3 — local own messages must render mine (right-aligned).
 //
 // The bug: LocalBackend.listCrewWhiteboard folded the local senderName ("我") into
-// the wire `senderDisplayName`, which trips CrewSenderResolver's relay guard
-// (senderDisplayName != nil ⇒ 远端他人) → own message rendered not-mine (left).
+// the wire `senderDisplayName`, which trips CrewSenderResolver's "远端他人" guard
+// (senderDisplayName != nil) → own message rendered not-mine (left).
 // The fix lives in CrewSenderNaming.localWireDisplayName (the mapping decision);
 // these lock both that decision and the end-to-end mine flag through the resolver.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,20 +176,12 @@ final class CrewSenderNamingWireTests: XCTestCase {
     func testOwnUserMessageDropsLocalName() {
         // 本机人类自己发的消息不折 senderName("我") → senderDisplayName=nil（→ mine）。
         XCTAssertNil(CrewSenderNaming.localWireDisplayName(
-            senderKind: "user", relayName: nil, localName: "我"))
-    }
-
-    func testRelayUserMessageKeepsRelayName() {
-        XCTAssertEqual(CrewSenderNaming.localWireDisplayName(
-            senderKind: "user", relayName: "Alice", localName: nil), "Alice")
+            senderKind: "user", localName: "我"))
     }
 
     func testSessionMessageFoldsLocalNameAsFallback() {
         XCTAssertEqual(CrewSenderNaming.localWireDisplayName(
-            senderKind: "session", relayName: nil, localName: "机长"), "机长")
-        // relay 名优先于本地兜底名。
-        XCTAssertEqual(CrewSenderNaming.localWireDisplayName(
-            senderKind: "session", relayName: "远端会话", localName: "机长"), "远端会话")
+            senderKind: "session", localName: "机长"), "机长")
     }
 
     func testLocalOwnMessageResolvesMineEndToEnd() throws {

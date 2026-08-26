@@ -15,7 +15,7 @@ struct WhiteboardCursorPosition: Equatable {
 }
 
 /// Per-session 白板**未读游标**的单一真值 —— PostToolUse hook（`HookEmitter`）与
-/// **唤醒/提及注入**（`CrewMailboxWaker` 登录态、`CrewChatView` 本地直投）共用同一份。
+/// **唤醒/提及注入**（`CrewLocalMentionWaker` / `CrewChatView` 本地直投）共用同一份。
 ///
 /// 文件 `<directory>/<crewId>.<sessionId>.cursor` 存 last-delivered 位置，行格式
 /// `<id>\t<createdAt>`（旧文件只有 `<id>`，见 `read()` 的迁移分支）。

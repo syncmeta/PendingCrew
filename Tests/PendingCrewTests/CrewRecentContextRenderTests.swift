@@ -11,14 +11,12 @@ final class CrewRecentContextRenderTests: XCTestCase {
         kind: String,
         text: String,
         sessionId: String? = nil,
-        senderName: String? = nil,
-        displayName: String? = nil
+        senderName: String? = nil
     ) -> LocalWhiteboardMessage {
         LocalWhiteboardMessage(
             id: UUID().uuidString, senderKind: kind, senderUserId: nil,
             senderSessionId: sessionId, category: nil, text: text,
-            createdAt: "2026-07-13T00:00:00Z",
-            senderDisplayName: displayName, senderName: senderName)
+            createdAt: "2026-07-13T00:00:00Z", senderName: senderName)
     }
 
     func testEmptyReturnsNil() {
@@ -47,13 +45,11 @@ final class CrewRecentContextRenderTests: XCTestCase {
         let out = CrewRecentContextRender.block([
             msg(kind: "user", text: "a"),                                   // 人类
             msg(kind: "session", text: "b", sessionId: "sess-abc123"),      // session:sess-a
-            msg(kind: "session", text: "c", displayName: "远端名"),          // relay 显示名优先
-            msg(kind: "session", text: "d", senderName: "本地名"),           // 本地名最优先
+            msg(kind: "session", text: "d", senderName: "本地名"),           // 显示名优先
             msg(kind: "bot", text: "e"),                                    // 未知 kind 原样
         ])!
         XCTAssertTrue(out.contains("人类: a"), out)
         XCTAssertTrue(out.contains("session:sess-a: b"), out)
-        XCTAssertTrue(out.contains("远端名: c"), out)
         XCTAssertTrue(out.contains("本地名: d"), out)
         XCTAssertTrue(out.contains("bot: e"), out)
     }

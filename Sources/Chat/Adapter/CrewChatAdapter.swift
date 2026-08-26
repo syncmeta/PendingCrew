@@ -7,10 +7,6 @@ import Foundation
 /// no avatar, no display name.
 enum CrewChatAdapter {
 
-    /// True when the entry is an ask_human interaction card — callers can
-    /// suppress normal bubble rendering and show a structured card instead.
-    static func isInteraction(_ e: CrewWhiteboardEntry) -> Bool { e.isInteraction }
-
     /// Adapt one whiteboard entry into a BubbleView-compatible pair.
     ///
     /// - Parameters:

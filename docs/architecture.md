@@ -31,12 +31,14 @@ PendingCrew 是一个 **macOS app（同时能编出 iOS/iPad 产物）**，它�
                         └────────── 读写白板 ─────────┘
 ```
 
-**没有服务器、没有账号、没有数据库。** 云端那半（Supabase 登录、跨设备遥控）代码在
-仓库里，但后端坐标是占位值（`Sources/Services/CrewHostedConfig.swift`），开箱不通。
-代价比听上去大：**实际编译出来的 33 个第三方模块里有 25 个（76%）只服务那条关掉的路径**——
-见第 3 节。
+**没有服务器、没有账号、没有数据库。** 云端那半（Supabase 登录、跨设备遥控）**代码
+已经不在仓库里了** —— #63 第一期（2026-08-25）删掉登录整层、第二期（2026-08-26）删掉
+跨端遥控与远端客户端整层。人类原话是「跨端遥控，端掉。以后前后端解耦时重新做」。
+下面第 2、3 节里那份「33 个模块有 25 个只服务那条关掉的路径」的成本分析写在删除之前，
+**保留是有意的：它正是那次删除的依据**，见第 3 节节首的横幅。
 
-规模：`Sources/` + `Shared/` 共 **249 个 Swift 文件 / 48,038 行**（`find … | wc -l`，
+规模（**2026-08-20 实测，#63 两期删掉约 20 个文件之后未重测**，见 `docs/tech-debt.md`）：
+`Sources/` + `Shared/` 共 **249 个 Swift 文件 / 48,038 行**（`find … | wc -l`，
 含 `#if` 屏蔽掉的行）；`Tests/PendingCrewTests/` **123 个文件 / 21,532 行 / 1,443 个
 `func test`**。
 
@@ -159,6 +161,9 @@ build 号也是因为这条才不再从 `git rev-list --count HEAD` 算的，理
 
 ## 2. 七个 SPM 依赖
 
+> ⚠️ 本节的依赖表同样是 2026-08-25 之前的实况。**刻意保留，不要更新它的数字，也不要删**
+> —— 理由见第 3 节节首的横幅。
+
 直接依赖 7 个（`project.yml` 的 `packages:`），解析出来一共 **23 个 pin**
 （`PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`）。
 换句话说 **16 个是传递依赖**，其中 13 个只为云端登录那条路服务。
@@ -234,6 +239,14 @@ build 号也是因为这条才不再从 `git rev-list --count HEAD` 算的，理
 
 ## 3. 三分之二的依赖树，服务的是一条被关掉的路径
 
+> ⚠️ **本节（连同第 2 节的依赖表）的数字是 2026-08-25 之前的实况。** `#63` 已把
+> GoogleSignIn / Supabase 两族整体删除，这里的每个百分比现在都是 0，`Sources/Auth/` /
+> `CrewHostedConfig` 也不存在了。
+>
+> **这一节保留是刻意的，不要更新它的数字，也不要删。** 它不是「过时的描述」，是那次
+> 删除的**依据**。把它改成「现在的真实占比」等于把证据擦掉 —— 而且擦完看起来更整洁，
+> 擦的人不会知道自己擦了什么。要写现在的依赖构成，**另起一节**，别覆盖这一节。
+
 这条单独立一节，因为它是整份梳理里**最有决策价值的一条**，埋在上面的清单里会被漏掉。
 
 **三种数法，同一个结论。**
@@ -288,6 +301,9 @@ product ＞ 拆 target。前两条都动 `project.yml` 的依赖声明，**属�
 
 同一个 target 同时编 macOS 和 iOS。**平台门是逐文件的 `#if os(macOS)`，不是逐目录的。**
 
+下表与 5.1 的行数表都是 **2026-08-20 实测**，`#63` 两期之后只删了已不存在的目录行、
+**其余数字未重测**（见 `docs/tech-debt.md`）。
+
 | 目录 | 文件数 | 含 `#if os(macOS)` 的文件数 |
 |---|---|---|
 | `Sources/Mac/` | 110 | 99 |
@@ -298,11 +314,9 @@ product ＞ 拆 target。前两条都动 `project.yml` 的依赖声明，**属�
 | `Sources/Services/` | 10 | 2 |
 | `Sources/Models/` | 8 | 1 |
 | `Sources/Mcp/` | 7 | 0 |
-| `Sources/Auth/` | 5 | 0 |
-| `Sources/Remote/` | 3 | 0 |
 | `Shared/AppUpdate/` | 4 | 2 |
 
-⚠️ **`Sources/Mac/` 里有 11 个文件根本不是 macOS 专有的**，其中几个还是三端主路径上的
+⚠️ **`Sources/Mac/` 里有 10 个文件根本不是 macOS 专有的**（原为 11 个，`CrewInteractionCard.swift` 随 #63 第二期删除），其中几个还是三端主路径上的
 关键文件：
 
 ```
@@ -314,7 +328,6 @@ Sources/Mac/LocalRunner/SessionStopCoordinator.swift
 Sources/Mac/LocalRunner/QuotaWarningPlan.swift
 Sources/Mac/Views/Chat/CrewSenderResolver.swift     ← Chat/Adapter 要用
 Sources/Mac/Views/Chat/CrewTimeSeparator.swift
-Sources/Mac/Views/Chat/CrewInteractionCard.swift
 Sources/Mac/Views/Chat/CrewMentionPicker.swift
 Sources/Mac/Views/Chat/CrewRosterBar.swift
 ```
@@ -338,12 +351,10 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 | `Sources/Chat/` | 6,136 | 群聊 UI。`Vendored/`（从 PendingBot 逐字拷来的气泡/Markdown/composer）、`Adapter/`（白板 → 气泡的映射与纯逻辑）、`Shims/`（替掉 vendored 代码里 PendingCrew 没有的后端） |
 | `Sources/Stores/` | 6,003 | 本地持久化 + app 级状态（`AppModel` / `CrewStore`） |
 | `Sources/Mcp/` | 2,166 | crew-comms MCP server、三个 claude hook、未读游标、回合留痕 |
-| `Sources/Services/` | 2,178 | 后端抽象（`PendingCrewBackend` 协议 + Local/Edge 两个实现）、edge REST 客户端、Supabase 栈 |
+| `Sources/Services/` | 2,178 | 后端抽象（`PendingCrewBackend` 协议 + `LocalBackend`）、白板/crew 模型层 |
 | `Sources/Views/` | 1,847 | 跨端 / iOS 侧界面（欢迎页、crew 列表、iPad shell） |
 | `Sources/Support/` | 1,499 | 纯判定逻辑与小工具（几乎全部可单测、几乎全部零平台门） |
 | `Sources/Models/` | 1,070 | 值类型（`CrewSummary` / `CrewDetail` / 驾驶舱模型） |
-| `Sources/Auth/` | 877 | 云端登录（邮箱验证码 / Apple / Google / Turnstile） |
-| `Sources/Remote/` | 634 | 跨设备遥控的 WS 协议编解码 + 客户端（**未接通**，见 README「状态」） |
 | `Shared/AppUpdate/` | 121 | Sparkle 封装 + 构建版本戳（与 PendingBot 共用同一份设计） |
 
 ### 4.2 真实的依赖方向
@@ -392,8 +403,8 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 ### 4.3 有 22 个文件是从 PendingBot 拷来的，不是抽象出来的
 
 `grep -rln "^// VENDORED" Sources/` → **22 个文件**，分布在两处：
-`Sources/Chat/Vendored/`（18 个文件里的 17 个）与 **`Sources/Auth/`（全部 5 个文件）**。
-另有 3 个 `// SHIM` 头在 `Sources/Chat/Shims/`。规矩写在文件第一行：
+`Sources/Chat/Vendored/`（18 个文件里的 17 个）与 `Sources/Auth/`（全部 5 个文件；
+该目录随 #63 第一期删除）。另有 `// SHIM` 头在 `Sources/Chat/Shims/`。规矩写在文件第一行：
 
 ```
 // VENDORED from PendingBot apps/pendingbot/Sources/Features/Message/BubbleView.swift @ 43c8ea2e
@@ -401,12 +412,10 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 ```
 
 改这些文件之前先看那行注释 —— 上游是另一个（未开源的）仓库，随手改会让下次对齐变成
-手工三方合并。`Shims/` 里的 `ServerImage` / `UserAvatar` / `AttachmentDownload`
-存在的唯一目的，是让 vendored 代码里对 PendingBot 后端的调用**签名不变地**接到
-PendingCrew 自己的实现上（比如 `ServerImage` 的 `serverURL` 参数收下但忽略）。
-
-`Sources/Auth/` 整个目录都是这类拷贝（Turnstile / 验证码状态机 / SIWA / Google），
-偏离处逐条写在各文件头注释里。这也解释了为什么它是全仓最"不像本项目"的一块。
+手工三方合并。`Shims/` 里的 `ServerImage` / `UserAvatar` 存在的唯一目的，是让 vendored
+代码里对 PendingBot 后端的调用**签名不变地**接到 PendingCrew 自己的实现上（比如
+`ServerImage` 的 `serverURL` 参数收下但忽略）。同目录的 `AttachmentDownload` 随
+#63 第二期删除 —— 它接的那条 auth-gated 下载已经没有了。
 
 ---
 
@@ -734,7 +743,6 @@ gh release create v<版本> --draft … <.dmg> <.zip>
 | 性能预算 | `CrewChatOpenCostTests`（8 个用例，真数据 + 离屏 `NSHostingView` 实测毫秒） | 打开群聊一次重排 ≤ 100ms |
 | 群聊滚到哪 | `CrewChatBottomFollowTests`、`CrewChatWindowTests`、`CrewChatExpandAnchorProbeTests`（离屏窗口实测 `contentOffset`） | 开屏落最新、跟随只许自己开；**点「加载更早」不许挪走阅读位置** |
 | 组织与通讯录 | `CrewDirectoryTests`、`LocalCrewStoreOrgMoveTests`、`CaptainOrgToolsTests`、`CrewDragDropLogicTests` | 禁环、号码不回收、拖拽语义 |
-| 泄密闸 | `CrewHostedConfigTests` | 钉住仓库里必须还是占位后端坐标 |
 | 视图接线 | `ViewWiringTests`、`ProcessRoleTests` | 视图不许 new 长期对象；进程角色判定 |
 
 ### 8.2 没覆盖什么（结构性的，不是遗漏）
@@ -755,13 +763,12 @@ gh release create v<版本> --draft … <.dmg> <.zip>
 
 ### 8.3 那 11 个 skip 是怎么回事
 
-**干净 clone 上会 skip 11 条**，来自三个不同的原因，别混成一件事：
+**干净 clone 上会 skip 10 条**，来自两个不同的原因，别混成一件事：
 
 | 数量 | 哪些 | 为什么 |
 |---|---|---|
 | **8** | `CrewChatOpenCostTests` 全部 8 个用例 | **缺不入 git 的 fixture** |
 | 2 | `CrewLastMessageCacheTests.test_基准_现场白板目录`、`SessionAwaitingReplyInputsCacheTests.test_基准_现场目录` | 要用环境变量指一份现场白板目录才跑（`TEST_RUNNER_PENDINGCREW_BENCH_WHITEBOARD_DIR=…`） |
-| 1 | `FamilyCredentialStoreTests.testSetGetClearRoundtrip` | ad-hoc / headless 构建下 keychain entitlement 不生效，SecItem 全部 `errSecMissingEntitlement` |
 
 **那 8 条的 fixture 是什么**：`Tests/PendingCrewTests/Fixtures/LEDDriverCrew/` ——
 一份**人类真实的群聊内容 + 真实聊天截图**（约 1MB），故意不进版本历史（`.gitignore:20-22`）。
@@ -813,7 +820,7 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 
 **P0/P1 已经改变了什么，读代码时要知道**：
 
-- 长期服务（`CrewSessionRunner` / `CrewRelayAgent` / `LocalAgentUsageMonitor` /
+- 长期服务（`CrewSessionRunner` / `LocalAgentUsageMonitor` /
   `CrewLocalMentionWaker` / `QuotaCenter` / `ModelCatalogCenter`）由
   `PendingCrewApp` 上的 `@StateObject sessionHost` 单一持有。**视图只观察，不创建。**
   `SessionHost.start()` 第一行是一条 `precondition(ProcessRole.current == .orchestrator)`
@@ -823,10 +830,12 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 - `ProcessRole.resolve` 兜底选 `.orchestrator` 而不是 `.viewer`：总闸拼错时
   「没人管账」比「两个人管账」更难发现。
 
-**一处 P0 顺带查出的实况**（已登记 🔴）：`CrewMailboxWaker` 与 `SessionPermissionRelay`
-这两个服务原本由视图接线，两个调用点都在死路上，**一次都没被调用过**。登录态下 edge
-信箱的定向投递与远端审批镜像因此从未生效——静默不工作，没有任何报错。P0 只删掉了视图侧
-那段永不执行的接线，实现原样留在 runner 上。归属 P4 或云端那条轴。
+**一处 P0 顺带查出的实况**（当时登记为 🔴，已随 #63 第二期结掉）：`CrewMailboxWaker` 与
+`SessionPermissionRelay` 这两个服务原本由视图接线，两个调用点都在死路上，**一次都没被
+调用过**。登录态下 edge 信箱的定向投递与远端审批镜像因此从未生效——静默不工作，没有任何
+报错。P0 只删掉了视图侧那段永不执行的接线；#63 第二期（2026-08-26）连服务本身一起删了。
+**重建时记住当年的病根不是服务有问题，是接线接在视图上** —— 按 P0 的结论从 runner /
+常驻编排侧接。
 
 ---
 
@@ -856,7 +865,6 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 | 改 crew 工作目录（含 agent 上下文迁移） | `Sources/Mac/LocalRunner/WorkdirMigrationPlan.swift`（规划）/ `WorkdirMigrationExecutor.swift`（执行） |
 | 自动更新行为 | `Shared/AppUpdate/AppUpdater.swift` + `UpdateCheckGate.swift` |
 | 发版流程 | `scripts/release/build-macos-update.sh` + `docs/release-macos.md` |
-| 云端后端坐标 | `Sources/Services/CrewHostedConfig.swift`（四个常量；`isConfigured` 是唯一真值，**别动 `Placeholder`**） |
 
 ---
 

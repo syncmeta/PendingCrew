@@ -33,12 +33,9 @@ struct CrewListView: View {
     /// 空态文案要诚实。旧文案是「还没有 crew / 新建一个来开始」——在 iPhone
     /// 上这两句都不成立：iPhone/iPad 上根本没有「新建」入口（`CreateCrewSheet`
     /// 是 macOS-only），而列表空的真实原因通常不是「没有 crew」，是
-    /// **Mac 上那些 crew 存在本机、没接进云端**（`AppModel.backend` 在 macOS
-    /// 上是 LocalBackend、iOS 上是 EdgeBackend，本机 crew 从不上云）。
-    /// 照旧文案念，人会一直在手机上找那个不存在的「+」。
-    ///
-    /// 这里只改文案。手机上「把 Mac 的 crew 接进来」的入口是下一批的事
-    /// （当前唯一入口 `Mac/Views/CrewDetailInspector.swift` 是 macOS-only）。
+    /// **crew 存在 Mac 本机**（`AppModel.backend` 在 macOS 上是 LocalBackend，
+    /// 在 iOS 上 **恒 nil** —— 本地后端是 macOS-only，云端那条路已随 #63 第二期
+    /// 整层删除）。照旧文案念，人会一直在手机上找那个不存在的「+」。
     @ViewBuilder
     private var emptyOverlay: some View {
         if crewStore.loadingList {

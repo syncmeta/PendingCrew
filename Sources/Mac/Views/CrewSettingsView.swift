@@ -68,24 +68,15 @@ struct CrewSettingsView: View {
             } header: {
                 Text("危险区")
             } footer: {
-                Text("清除本机缓存的登录状态、设置和所有本地 crew 数据，清除后 app 将重启。")
+                Text("清除本机的设置和所有本地 crew 数据，清除后 app 将重启。")
             }
             .confirmationDialog(
                 "清除本机所有数据?此操作不可恢复,仅清除本机数据。",
                 isPresented: $showResetConfirm,
                 titleVisibility: .visible
             ) {
-                if LocalDataReset.sharedLoginPresent {
-                    Button("清除(保留与 PendingBot 共享的登录状态)", role: .destructive) {
-                        LocalDataReset.performReset(clearSharedLogin: false)
-                    }
-                    Button("清除,并清除与 PendingBot 共享的登录状态", role: .destructive) {
-                        LocalDataReset.performReset(clearSharedLogin: true)
-                    }
-                } else {
-                    Button("清除本机所有数据", role: .destructive) {
-                        LocalDataReset.performReset(clearSharedLogin: false)
-                    }
+                Button("清除本机所有数据", role: .destructive) {
+                    LocalDataReset.performReset()
                 }
                 Button("取消", role: .cancel) {}
             }

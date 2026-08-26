@@ -102,7 +102,7 @@ enum CrewListenLogic {
 
     /// 发送者过滤。nil = 全部；否则任一条目命中即可：
     /// "human"（人类）/ "captain"（机长）按 kind 匹配；其余按 senderSessionId
-    /// 前缀或显示名（senderName/senderDisplayName）精确匹配。
+    /// 前缀或显示名（senderName）精确匹配。
     static func senderMatches(_ m: LocalWhiteboardMessage, filter: [String]?) -> Bool {
         guard let filter, !filter.isEmpty else { return true }
         for f in filter {
@@ -113,7 +113,7 @@ enum CrewListenLogic {
                 if m.senderKind == "captain" { return true }
             default:
                 if let sid = m.senderSessionId, sid.hasPrefix(f) { return true }
-                if m.senderName == f || m.senderDisplayName == f { return true }
+                if m.senderName == f { return true }
             }
         }
         return false
@@ -132,7 +132,7 @@ enum CrewListenLogic {
 
     /// 发送者标注：显示名优先（与 HookEmitter.render 同款），无名按 kind 兜底。
     private static func senderLabel(_ m: LocalWhiteboardMessage) -> String {
-        if let name = m.senderName ?? m.senderDisplayName, !name.isEmpty { return name }
+        if let name = m.senderName, !name.isEmpty { return name }
         switch m.senderKind {
         case "user", "human": return "人类"
         case "captain": return "机长"

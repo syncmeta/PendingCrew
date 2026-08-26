@@ -24,46 +24,105 @@
   派到几十个 session 时它会重新变成主导项。见 `docs/internal/2026-08-19-ui-jank-profile.md`「现场复采」。
 - **中间态的可选缓解**（如果地基活拖久了）: 后台 session 的旁路扫描改成攒批 / 挪出主线程；或把 scrollback 与扫描窗按「是否前台」分档。都属于治标，记在这里免得被当成已解决。
 
-### 🔴 #63 第一期删完之后，远端 / 登录整层变成「编得过、永不执行」的安静死代码
-- **发现**: 2026-08-25 · Todo #63（删登录与远端客户端）第一期落地时
-- **怎么来的**: #63 删掉了**取得凭据的所有入口**（Auth 三件套 / Supabase 栈 / 两个登录页 / 扫码页 / 侧栏登录入口 / RootView 的登录分支）。凭据层本身（`AppModel.credential`）没删 —— 它被 `Sources/Remote/`、`CrewRelayAgent` 这批「一个字不许动」的文件顶着，删不动，留给第二期。
-- **于是变成什么**: `AppModel.isAuthenticated` **恒 false**，`loggedAPIClient()` 恒抛 `notAuthenticated`，`imageAuth` 恒 nil。所有调用点都是 `guard ... else { return }` / `try?` 早退 —— **编译器不报、测试不红、看代码也看不出来**。这正是本仓库反复栽的那一类：一种安静的死。
-- **第二期一刀端掉，触发条件已满足。** 下面是逐个文件的现成名单，**别再重新考古**（行数/处数为 2026-08-25 在 `main` 上实测）：
+### ✅ 远端 / 登录整层的「安静死代码」（**随 #63 第二期删除，2026-08-26**）
 
-  | 文件 | 死在哪 |
-  |---|---|
-  | `Sources/Remote/CrewSessionServerLink.swift` | 整个 struct（`let api: PendingCrewAPI`，唯一构造点在 `CrewSessionWindowView.prepareServerSession`） |
-  | `Sources/Remote/SessionProxyClient.swift` | 整个 actor（viewer / runner 两侧都只在登录态起） |
-  | `Sources/Remote/SessionProxyProtocol.swift` | 只服务上面那个（codec 单测 `SessionProxyProtocolTests` 还绿，测的是纯 codec） |
-  | `Sources/Views/Remote/RemoteSessionsView.swift` | 3 处 `loggedAPIClient()`；`CrewCenterView:126` 是唯一挂载点 |
-  | `Sources/Mac/Services/CrewRelayAgent.swift` | 2 处 `loggedAPIClient()` + 3 处 `PendingCrewAPI` 形参（`pull` / `push` / hub 订阅）；`imageAuth` 作绑定判据 |
-  | `Sources/Mac/LocalRunner/SessionPermissionRelay.swift` | 它持有的 `SessionProxyClient`（`CrewSessionRunner:245` 那条 `ensurePermissionRelay`） |
-  | `Sources/Mac/Services/CrewMailboxWaker.swift` | 整个类（`private let api: PendingCrewAPI` + `CrewRealtimeClient`） |
-  | `Sources/Mac/Services/CrewSessionRunner.swift` | 2 处 `PendingCrewAPI` 形参（`ensurePermissionRelay:242` / `ensureMailboxWaker:981`） |
-  | `Sources/Services/PendingCrewAPI.swift` | 整个 751 行远端 HTTP 客户端 |
-  | `Sources/Services/PendingCrewBackend.swift` | `EdgeBackend`（109–240 行）。**`PendingCrewBackend` 协议本身和 `LocalBackend` 是活的，别连坐** |
-  | `Sources/Services/CrewRealtimeClient.swift` | 整个 actor（唯二消费者 `EdgeBackend.whiteboardChanges` / `CrewMailboxWaker` 都在本表上） |
-  | `Sources/Stores/AppModel.swift` | 凭据层整片：`credential` / `currentUserId` / `isAuthenticated` / `isConfigured`（**已无消费者**）/ `saveDeviceGrantToken` / `clearAuth` / `saveFamilyCredential` / `familySSOAvailable` / `tryFamilySSO`（**已无调用方**）/ `imageAuth` / `loggedAPIClient()` / `ensureRunnerHost` / `edgeBackend` / `apiBaseURL` |
-  | `Sources/Stores/CrewStore.swift` | 3 处 `loggedAPIClient()`（169 / 203 / 222） |
-  | `Sources/Mac/Views/CrewDetailInspector.swift` | 5 处 `loggedAPIClient()` |
-  | `Sources/Mac/Views/CrewSessionWindowView.swift` | 2 处 `loggedAPIClient()` + `ensureRunnerHost` + `prepareServerSession` |
-  | `Sources/Mac/Views/CrewChatView.swift` | 2 处 `loggedAPIClient()`（edge 附件上传那条路） |
-  | `Sources/Support/KeychainStore.swift` / `FamilyCredentialStore.swift` | 只服务上面的凭据层（`LocalDataReset` 里的清理调用要跟着一起看） |
-  | `Sources/Chat/Shims/ServerImage.swift`、`Chat/Vendored/BubbleView.swift`、`Mac/Support/CrewImageLoader.swift` | **文件是活的，只有 `imageAuth` 那条远端分支死了** —— 本地附件路径还在用它们，第二期只切分支不删文件 |
+> 跨端遥控，端掉。以后前后端解耦时重新做
 
-- **另外两件跟着这一刀走的**:
-  - **iOS 是空壳**：`isConfigured` 在 iOS 上是 `credential != nil`，登录入口删完后恒 false，`AppModel.backend` 恒 nil。iPhone/iPad 直进 `IPadShell` 但拿不到任何数据。**这是 #63 时上级明确接受的已知代价**（iOS 端至今 0 构建、0 分发），不是删漏。第二期或本地后端跨平台时一起收。
-  - **上面那条 🔴「`serverLink` 写死 nil」**（信箱唤醒 / 审批中继从未接通）现在是本条的子集 —— 它描述的两个服务整个在本表上。第二期端掉这层时那条一并结掉。
-- **别做的**: 不要用 `#if false` / 注释掉 / 留空 stub 来「先关掉」这层。那会把一种安静的死换成另一种。要么整块删，要么原样留着等第二期。
+上面这句是人类原话，一个字没改。**这不是清理垃圾，是有意移除、将来在新架构下
+重建**——写在这里是为了将来有人翻到这段历史时，不会以为这块是被谁偷偷删掉的。
 
-### 🔴 登录态 session 的信箱唤醒与审批中继**从未接通** —— `serverLink` 写死 nil
+- **原问题（2026-08-25 · #63 第一期落地时记）**: 第一期删掉了**取得凭据的所有入口**
+  （Auth 三件套 / Supabase 栈 / 两个登录页 / 扫码页 / 侧栏登录入口 / RootView 的登录
+  分支），凭据层本身却删不动（被 `Sources/Remote/`、`CrewRelayAgent` 那批文件顶着）。
+  于是 `AppModel.isAuthenticated` **恒 false**、`loggedAPIClient()` 恒抛、`imageAuth`
+  恒 nil，所有调用点都是 `guard … else { return }` / `try?` 早退 —— 编译器不报、测试
+  不红、看代码也看不出来。
+- **第二期做了什么**: 从调用点往被调用方走，分九笔删干净：「服务端 session」面板 →
+  crew 详情页的「接入 PendingBot」节 → serverLink 那条链（`Sources/Remote/` 三个文件
+  + `SessionPermissionRelay` + `CrewMailboxWaker`）→ `CrewRelayAgent` 与两个纯逻辑
+  → 本地两个 store 上的 relay 残留 → edge 交互卡 → `attachmentIds` 通道 →
+  `EdgeBackend` + `CrewRealtimeClient` → `AppModel` 凭据层 + `PendingCrewAPI` +
+  Keychain / 家族凭据。**没有用 `#if false` / 注释掉 / 空 stub**，全仓 `#if false` 零命中。
+
+- **名单的修正**（比删除本身更值钱的那部分，逐条列）:
+  - **`CrewRelayAgent` 不是「部分死」，是整个死。** 上面那张表把它记成「被
+    `LocalWhiteboardStore` / `LocalCrewStore` / `SessionHost` / `CrewLocalTodoLanding` /
+    `CrewRelaySyncLogic` 五个本地活路径引用着」——实测**只有 `SessionHost` 那一处是真
+    代码引用**（`let relay: CrewRelayAgent`），其余四处全是注释里提到它的名字。
+  - **`CrewMailboxWakeLogic` 不该跟着 waker 走。** 它一半是 edge mailbox 决策
+    （`decide` / `renderInjection`，跟着删），另一半是**唤醒投递回执**
+    （`receiptVerdict` / `wakeFailureAlert`）—— 跟 edge 无关，本地 @ 直投在用，留下。
+  - **`senderDisplayName` 有两个，同名不同物。** 存储层
+    `LocalWhiteboardMessage.senderDisplayName` 唯一写入方是 `appendRelayMessage`，
+    死了；线上模型 `CrewWhiteboardEntry.senderDisplayName` **是活的** ——
+    `LocalBackend` 用本地 `senderName` 主动合成它，中栏靠它把本地 session 的消息显示
+    成「机长」而不是兜底「会话」，`CrewChatAdapterTests` 第 6 例专门钉着。只删了前者。
+  - **`relayRemoteId` 不是孤儿。** 它有活读者 `CrewLocalMentionWakeLogic:62`
+    （#554 断链修复的规则 3）。删是删了，但那是**一条真修过的 bug 的防线**，见下面
+    单独一条。
+  - **`CrewChatView.swift` 的 `loggedAPIClient()` 是 3 处不是 2 处**（表上写 2）。
+  - **表上完全没列、但引用了这批符号的**：`CrewModels.swift`、`ModelCatalogEntry.swift`、
+    `LocalRunnerPlaceholder.swift`、`CrewRelayHubLogic.swift`、`CrewMailboxWakeLogic.swift`、
+    `CrewRelaySyncLogic.swift`、`LocalDataReset.swift`、`CrewSettingsView.swift`、
+    `CrewRealtimeClientTests.swift`、`CrewSummary.swift` / `CrewRootLineage.swift` /
+    `CrewListView.swift`（EdgeBackend 注释）、`LocalCrewStore` 上的四个 relay 持久化字段。
+  - **交互卡整套在本地路径上一次都没渲染过**：`LocalBackend.listCrewWhiteboard` 把
+    `payload.kind` 写死 nil，而 `isInteraction` 就是 `payload?.kind == "interaction"`。
+    （**注意本仓有两套「待审批」**：`LocalApprovalStore` 那套是本地权限审批，活的，
+    此刻磁盘上就有真实数据，一个字没碰。）
+
+### 🟡 #554「远端人类的 @ 也唤醒」那条防线随 relay 一起没了 —— 重建时要一起重建
+- **发现**: 2026-08-26 · Todo #63 第二期
+- **原来是什么**: `CrewLocalMentionWakeLogic.pending` 的**规则 3**：`relayRemoteId != nil`
+  的 **user** 条目（远端人类经 relay 落进本地白板的 @）也收。理由是 composer 直投只
+  覆盖本机人类，远端 iOS 用户 `@session` 落到 Mac 白板后**没有任何投递者**把它转成注入，
+  session 就此断链收不到 —— 那是 #554 真修过的一个 bug。
+- **现在为什么没了**: 判据 `relayRemoteId` 随 relay 整层删除，条件恒 false。规则、它的
+  两个用例、以及 `LocalWhiteboardMessage.relayRemoteId` 字段一起去掉。
+- **该怎么还**: **前后端解耦重建 relay 那一刀，必须把这条一起重建。** 判据换成新架构里
+  「这条是从远端搬进来的」的等价标记；不重建的话，远端人类的 @ 会重新变成断链，而且
+  症状和 #554 当年一模一样（没有任何报错，就是收不到）。
+
+### 🟢 `Sources/Models/ModelCatalogEntry.swift` + `PendingCrewBackend.listModels()` 已无消费者 —— 但**不是 #63 造成的**
+- **发现**: 2026-08-26 · Todo #63 第二期（零残留自查时撞见）
+- **问题**: `listModels()` 全仓没有任何调用方；`ModelCatalogEntry` 只被 `listModels()`
+  的签名引用。新建 session 页早就改读本机实探的 `ModelCatalogCenter` /
+  `AgentModelCatalog`（models.json，形状不同）。
+- **为什么这一期没动**: 它**在 #63 之前就已经是死的**，不是这一刀造成的孤儿，也不属于
+  遥控 / 登录层。按「清单外的不自己扩」留着，只在类型注释里写清楚。
+- **该怎么还**: 确认 `ModelCatalogCenter` 那条路是唯一供数方之后，把 protocol 上的
+  `listModels()`、`LocalBackend` 的空实现、以及 `ModelCatalogEntry.swift` 一起删。
+
+### 🟢 两个名字在这一刀之后名不副实 —— `CrewMailboxWakeLogic` / `CrewRemoteImage`
+- **发现**: 2026-08-26 · Todo #63 第二期
+- **问题**: `CrewMailboxWakeLogic` 现在只剩「唤醒投递回执」那半（edge mailbox 决策已删），
+  名字里的 mailbox 不再指任何东西；`CrewRemoteImage` 现在只从 `file://` 读本地图，
+  Remote 也不再指任何东西。
+- **为什么没改名**: 两个都是别处的构造点（前者被 `CrewSessionRunner` 调、后者被
+  `ServerImage` / `BubbleView` 构造），改名会把这一刀的 diff 摊进不相干的文件。
+  两处都在类型注释里写了「名字是历史」。
+- **该怎么还**: 顺手改名的时候一起改（`CrewMailboxWakeLogic` → 回执判定；
+  `CrewRemoteImage` → 本地附件图），不值得单开一笔。
+
+### 🟢 `CrewSummary.rootCrewTitles` 与 `CrewRootLineage` 的服务端回退分支现在恒空
+- **发现**: 2026-08-26 · Todo #63 第二期
+- **问题**: `rootCrewTitles` 原本是服务端算好下发的根 crew 血缘，给看不到本地 DAG 的
+  iPad/iPhone 用。云端整层删掉后它恒空，`CrewRootLineage.rootTitles` 里「本地算不出
+  才用服务端这份」的回退分支因此不再会被走到。
+- **为什么留着**: 判定本身是对的，重建前后端时第二个来源会重新出现在这个位置；
+  而且删字段要动 `CrewSummary` 的 Codable 与它的一批测试，收益为零。已在注释里写明。
+
+
+### ✅ 登录态 session 的信箱唤醒与审批中继从未接通（**随 #63 第二期删除，2026-08-26**）
 - **发现**: 2026-08-19 · 前后端分离 P0（所有权归拢）
 - **位置**: `Sources/Mac/Views/CrewSessionWindowView.swift` 手动起 session 那条路里的 `let serverLink: CrewSessionServerLink? = nil`；实现在 `Sources/Mac/Services/CrewSessionRunner.swift` 的 `ensureMailboxWaker` / `ensurePermissionRelay`。
 - **问题**: 这两个服务原本由视图在 run 起好后接线，两个调用点**都在死路上** —— 一条被上面那个写死的 `nil` 挡着，另一条在被 `edgeQueueBindingReady == false` 关着的 auto-claim 死循环里。也就是说它们**一次都没被调用过**。调研清单（`docs/internal/2026-08-19-backend-split-inventory.md` A19/A20）当时的判断是「右栏没打开过的 session 才没接」，实际比这更糟：**所有 session 都没接**。
 - **症状**: 登录态下 edge 信箱的定向投递不会唤醒本机 session；远端 viewer 的审批镜像（#204 permission over WS）不生效 —— 都是静默不工作，没有任何报错。
 - **根因**: edge session 通道（接合 v2 block 3，本地 crew ↔ edge 行的绑定）没开，所以 `serverLink` 一直是 nil。不是这两个服务本身有问题。
 - **P0 做了什么**: 只删掉视图侧那段永不执行的接线（连同 auto-claim 死循环），**实现原样留在 runner 上并加了注释说明当前无调用点**。P0 的约束是行为零变化，真接上属于行为变化，不在本阶段做。
-- **解法归属**: P4（编排整体搬进 daemon，届时由 runner 侧统一接线，别再从视图接）或云端那条轴（先把 edge session 通道打开）。
+- **解法归属（历史）**: P4（编排整体搬进 daemon，届时由 runner 侧统一接线，别再从视图接）或云端那条轴（先把 edge session 通道打开）。
+- **为什么结掉（2026-08-26 · Todo #63 第二期）**: 这两个服务本身删掉了 —— `CrewMailboxWaker` / `SessionPermissionRelay` / `SessionProxyClient` / `CrewSessionServerLink` 连同 `ensureMailboxWaker` / `ensurePermissionRelay` 两个无调用点的入口一起走。人类原话「跨端遥控，端掉。以后前后端解耦时重新做」——**这条不是修好了，是连同它描述的东西一起没了**。
+- **重建时要注意的**: 当年的病根不是这两个服务有问题，是**接线接在视图上**（`CrewSessionWindowView` 起 run 时接）。重建时按 P0 的结论从 runner / 常驻编排侧接，别再从视图接。
 
 ### 🟡 点名唤醒器把「读增量」当成廉价操作 —— 每个目录 tick 全量重解白板
 - **发现**: 2026-08-19 · `fix/ui-jank-pty-scan`（同上）
@@ -101,7 +160,7 @@
 - **谁受影响**: 只有要动云端登录/钥匙串那条路径的人。只跑本机 crew（起 claude / codex 子进程的主路径）完全不受影响 —— 那条路径不碰钥匙串。
 - **失败长什么样**: 不报错。app 编得出、装得上、跑得动，只是登录态存不住。所以**症状和病因隔着十万八千里**，别再从后端/Supabase 那头查。
 - **该怎么还**: 构建期没有可靠判据区分「贡献者本来就该 ad-hoc」和「本机开发者忘了装覆盖」，所以没加编译告警（那会给每个贡献者的每次构建都挂一条黄色噪音，反而训练人无视告警）。真要还，正确的地方是**运行时**：走云端登录路径时若检测到 ad-hoc 签名（`csops` / `SecCodeCopySigningInformation` 读不到 team identifier），直接在界面上说清「这个构建签名不稳定，登录态存不住」，而不是让它静默失败。
-- **为什么结掉（2026-08-25 · Todo #63）**: PendingCrew 不再登录到任何地方，登录入口整块删了 —— **没有任何路径会再往钥匙串写登录态**，这条债咬不到人了。`KeychainStore` / `FamilyCredentialStore` 代码还在（跟凭据层一起等第二期），但已无调用方，见上面那条「安静的死」名单。签名默认值本身（ad-hoc）不变，也不需要改。
+- **为什么结掉（2026-08-25 · Todo #63）**: PendingCrew 不再登录到任何地方，登录入口整块删了 —— **没有任何路径会再往钥匙串写登录态**，这条债咬不到人了。`KeychainStore` / `FamilyCredentialStore` 当时还在（跟凭据层一起等第二期），**2026-08-26 第二期已连文件一起删掉** —— 全仓再无任何 Keychain 调用。签名默认值本身（ad-hoc）不变，也不需要改。`Resources/PendingCrew.entitlements` 里那两个 keychain 组留着没删（动它可能影响本机签名，收益为零），注释里已如实写明「当前没有消费者」。
 - **什么情况下要复活这条**: 哪天 PendingCrew 又要存跨启动的凭据，这条原样有效，别重新踩一遍。
 - **发版不受影响**: `scripts/release/build-macos-update.sh` 在 xcodebuild 命令行上显式传 `CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=…`，命令行优先级最高，Developer ID 分发路径与这里的默认值无关。
 
@@ -115,11 +174,29 @@
 - **已完成（`.github/workflows/ci.yml`）**: 两个 job —— ①「pbxproj 与 `project.yml` 同步」重跑 xcodegen 后比 diff；② 三端编译 + 单测。落地过程中还顺带查出并根治了一个真问题：**仓库根目录的 xcconfig 会让 `xcodegen` 输出不确定**（`project.pbxproj` 里那条文件引用的 uuid 每次 regen 都变），那道 diff 检查因此永远红 —— 修法是把 xcconfig 挪进 `Config/`（`4dc855a`）。
 - **一处措辞更正**: 上面「测试跑满约 3 分钟」是**本机热构建的测试执行时间**，不是 CI 的墙钟。CI 是冷机，要连 SPM 解析和两轮全量编译一起算。别拿本机数字当 CI 预算。
 
-### 🟢 `docs/architecture.md` 的依赖章节被 #63 打成过时，本次**没改**
-- **发现**: 2026-08-25 · Todo #63
-- **问题**: #63 删掉了 `GoogleSignIn` 和 `Supabase` 两个直接依赖（`Package.resolved` 少了 16 个包），但 `docs/architecture.md` 里整节「依赖构成」还在按旧事实写：第 165 / 172–173 / 180–182 / 241–245 / 250–266 / 283 行讲「两个直接依赖」「GoogleSignIn 独自拖进 7 个传递包」「云端登录那两族占 65% 的 pin / 76% 的模块」——**这些数字现在全部为 0**。另有 35 / 261 / 737 / 859 行引用已删的 `CrewHostedConfig.swift` 与 `CrewHostedConfigTests`，341 行的 `Sources/Services/` 说明还写着「Supabase 栈」。
-- **为什么没改**: #63 的边界由上级机长划死，要动的文档只点了 `README.md` 和本文件。`architecture.md` 是作者手写的长文，逐节重写属于扩范围 —— 但留着不说就成了「文档谎报」，所以登记在这里。
-- **该怎么还**: 重跑一遍那节的实测（`Package.resolved` 的 pin 数、编译出的模块数、`.o` 体积），把「云端登录那两族」整节删掉或改写成「已随 #63 移除」，并清掉 `CrewHostedConfig` 的四处引用。**别照抄旧数字改个百分比** —— 那节的价值就在于它是实测出来的。
+### 🟢 `docs/architecture.md` 还差这几处 —— 逐处名单，别重新考古
+- **发现**: 2026-08-25 · Todo #63 第一期；2026-08-26 第二期扩大一次并**改掉了其中的事实性错误**
+- **已经改掉的（2026-08-26，一笔独立提交）**: 34–37 行的正文口径、目录表里两条已不存在的
+  目录（`Sources/Auth/` / `Sources/Remote/`）、`Sources/Services/` 的职责描述、
+  「11 个非 macOS 专有文件」里那条已删的 `CrewInteractionCard.swift`、vendored 一节里的
+  `Sources/Auth/` 与 `AttachmentDownload`、测试地图里的 `CrewHostedConfigTests` 行、
+  8.3 的 skip 表（11 → 10）、长期服务列表里的 `CrewRelayAgent`、P0 那段
+  `CrewMailboxWaker` / `SessionPermissionRelay` 的时态、速查表里的 `CrewHostedConfig` 行。
+- **故意没动、要留着的**: **第 2 节的依赖表与第 3 节整节**（约 164–290 行）。那不是「过时的
+  描述」，是**删除决策的证据** —— 删了或按新数字重写，将来的人只看得到「这里曾经有过依赖」，
+  看不到「为什么删」。两节节首各加了一条带日期的横幅说明数字是 2026-08-25 之前的实况。
+  第 269 行那句「判据是 `CrewHostedConfig` 的四个占位常量」落在这个范围里，同理不动 ——
+  单独挖掉它会把证据链弄断。
+- **还差什么（逐条，下一个人照着做即可）**:
+  1. **重测规模数字**：第 39–41 行的「249 个 Swift 文件 / 48,038 行 / 1,443 个 `func test`」
+     是 2026-08-20 实测，#63 两期删掉约 20 个文件之后没重跑。已在原地标了日期，但没改数。
+  2. **重测两张目录表**：第 4 节的「文件数 / 含 `#if os(macOS)` 的文件数」与 5.1 的行数表，
+     同样是 2026-08-20 的数，只删了已不存在的目录行。同样已标日期。
+  3. **写一节「现在的架构长什么样」**：第 2、3 节讲的是删除前的成本结构，删除后**没有任何
+     一节讲现在的依赖构成**（5 个直接依赖、还剩几个 pin、体积多少）。这是唯一需要**新写**
+     的一块，所以第二期没动 —— 边界是「只改事实、不动作者行文」。
+  4. **README「状态」一节**：第 346 行原来指着它说 `Sources/Remote/` 未接通，那条已删；
+     README 本身在作者手里有未提交改动，两期都没碰，落地后要看一眼口径还对不对。
 
 ### 🟢 `Sources/Mac/` 名不副实，而且没有任何编译期的「层」
 - **发现**: 2026-08-20 · 技术栈梳理（只读盘点）

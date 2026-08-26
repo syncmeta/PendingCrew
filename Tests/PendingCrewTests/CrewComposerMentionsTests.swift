@@ -33,7 +33,7 @@ final class CrewComposerMentionsTests: XCTestCase {
             id: id, senderKind: senderKind, senderSessionId: sessionId,
             senderUserId: userId, senderBotId: nil, messageKind: "instruction",
             summary: text, createdAt: "2026-06-15T00:00:00Z",
-            payload: nil, attachments: nil, relay: nil,
+            payload: nil, attachments: nil,
             senderDisplayName: displayName, senderMemberId: nil, inReplyTo: inReplyTo,
             mentions: nil)
     }

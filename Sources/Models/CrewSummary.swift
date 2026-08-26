@@ -18,17 +18,14 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
     let createdAt: String
     let updatedAt: String
     /// 本地 crew DAG 的父边(本 crew 挂在哪些父 crew 之下)。**纯本地概念** ——
-    /// `LocalCrewStore` 填实值;edge 端不下发这个字段,`EdgeBackend` 路径恒空。
-    /// decode 时缺键 → 空数组(根 crew),不破坏现有 edge 响应解析。
+    /// `LocalCrewStore` 填实值。decode 时缺键 → 空数组(根 crew)。
     let parentCrewIds: [String]
-    /// 这个 crew 挂在哪些**根 crew** 之下（名字后面那行黄字标注）。**服务端算好的** ——
-    /// `GET /v1/crews` 的 `rootCrews` 字段（edge `lib/crew-root-lineage.ts`）。
+    /// 这个 crew 挂在哪些**根 crew** 之下（名字后面那行黄字标注）。
     ///
-    /// 为什么本地有 `parentCrewIds` 还要这个：iPad/iPhone 走 `EdgeBackend`，本地
-    /// 那张 DAG 它根本看不到（`parentCrewIds` 恒空），标注只能由服务端下发。Mac 走
-    /// `LocalBackend`，则相反 —— 这里恒空、由本地父边算。取用一律走
-    /// `CrewRootLineage.rootTitlesByCrew`，那里定死了「本地血缘优先、算不出才用
-    /// 服务端这份」的口径，别在视图里各判各的。
+    /// 它原本是**服务端算好下发的**那一份（`GET /v1/crews` 的 `rootCrews`），给
+    /// 看不到本地 DAG 的 iPad/iPhone 用；#63 第二期删掉云端整层后**恒空**，标注
+    /// 一律由本地父边算。取用仍走 `CrewRootLineage.rootTitlesByCrew`（口径是
+    /// 「本地血缘优先、算不出才用这份」），别在视图里各判各的。
     let rootCrewTitles: [String]
 
     /// `rootCrews` 的 wire 形状（id + 名字）。只取名字用，id 留着将来点标注跳转。

@@ -89,7 +89,7 @@ private struct FirstLaunchDisclosureGate: ViewModifier {
 /// iPad/iOS 走 `IPadShell`。
 ///
 /// #63:PendingCrew 不再登录到任何地方,登录页整块删掉,原来那条按
-/// `isConfigured` 在主界面 / 登录页之间分叉的路由一并去掉。
+/// 「是否已配置」在主界面 / 登录页之间分叉的路由一并去掉。
 struct RootView: View {
     @EnvironmentObject private var crewStore: CrewStore
 
@@ -103,7 +103,6 @@ struct RootView: View {
         }
         // 进入主界面时确保机器列表已就绪。macOS backend 恒本地（至少一台本机）。
         .task {
-            _ = await crewStore.registerSelfMachine()
             await crewStore.refreshMachines()
         }
     }

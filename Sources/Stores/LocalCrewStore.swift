@@ -442,74 +442,6 @@ final class LocalCrewStore {
         return out
     }
 
-    // MARK: - Relay 绑定（接合 v2 block 3：edge 信箱）
-
-    /// 把本地 crew 绑到 edge 侧 relay crew conversation（「接入 PendingBot」
-    /// 成功后调）。同时把推送水位初始化为 nil —— CrewRelayAgent 首 tick 会
-    /// 以"绑定时白板末尾"为基线，只上行之后的新消息。
-    func bindRemoteConversation(crewId: String, remoteConversationId: String) {
-        guard var crew = crews[crewId] else { return }
-        crew.remoteConversationId = remoteConversationId
-        crew.relayCursor = nil
-        crew.relayPushedThroughId = nil
-        crews[crewId] = crew
-        persistToDisk()
-    }
-
-    /// 更新拉取游标（edge `lastCursor`，ISO8601）。
-    func setRelayCursor(crewId: String, cursor: String?) {
-        guard var crew = crews[crewId], crew.relayCursor != cursor else { return }
-        crew.relayCursor = cursor
-        crews[crewId] = crew
-        persistToDisk()
-    }
-
-    /// 更新上行推送水位（最后一条已推送的本地白板消息 id）。
-    func setRelayPushedThrough(crewId: String, messageId: String?) {
-        guard var crew = crews[crewId], crew.relayPushedThroughId != messageId else { return }
-        crew.relayPushedThroughId = messageId
-        crews[crewId] = crew
-        persistToDisk()
-    }
-
-    /// 已处理过的 task_request 远端消息 id（#242 遥控 v1）。持久化 →
-    /// 重启 / 游标回拉后不会重复起 session。
-    func processedTaskRequestIds(crewId: String) -> Set<String> {
-        Set(crews[crewId]?.processedTaskRequestIds ?? [])
-    }
-
-    /// 标记一条 task_request 已处理。FIFO 裁剪只留最近 200 条 ——
-    /// edge `?since=` 游标本来只会重放边界附近的条目，200 绰绰有余。
-    func markTaskRequestProcessed(crewId: String, remoteId: String) {
-        guard var crew = crews[crewId] else { return }
-        var ids = crew.processedTaskRequestIds ?? []
-        guard !ids.contains(remoteId) else { return }
-        ids.append(remoteId)
-        if ids.count > 200 { ids.removeFirst(ids.count - 200) }
-        crew.processedTaskRequestIds = ids
-        crews[crewId] = crew
-        persistToDisk()
-    }
-
-    /// 单条 crew 的 relay 绑定快照（UI / 同步代理读）。crew 不存在或未绑定
-    /// remote conversation → nil。
-    func relayBinding(for crewId: String) -> LocalCrewRelayBinding? {
-        guard let crew = crews[crewId], let remoteId = crew.remoteConversationId else { return nil }
-        return LocalCrewRelayBinding(
-            crewId: crew.id,
-            remoteConversationId: remoteId,
-            relayCursor: crew.relayCursor,
-            relayPushedThroughId: crew.relayPushedThroughId,
-            captainName: crew.captainName,
-            workingDirectory: crew.workingDirectory
-        )
-    }
-
-    /// 所有已绑定 relay 的 crew（CrewRelayAgent 每 tick 遍历）。
-    func listRelayBindings() -> [LocalCrewRelayBinding] {
-        crews.keys.compactMap { relayBinding(for: $0) }
-    }
-
     // MARK: - Session 成员（chunk 4 补口）
 
     /// 把一个 session 登记成 crew 的持久成员。session 一经拉起就算入伙,
@@ -736,15 +668,6 @@ struct LocalCrew: Codable, Equatable {
     /// 时从「谁的 parentCrewIds 含本 crew」反推。旧 JSON 缺此键 → 默认空数组
     /// (= 根 crew),不破坏 decode。
     var parentCrewIds: [String] = []
-    // 接合 v2 block 3：edge relay 信箱绑定（optional → 旧 JSON 缺键向后兼容）。
-    /// 绑定的 edge crew conversation id（「接入 PendingBot」后写入）。
-    var remoteConversationId: String? = nil
-    /// 拉取游标 —— edge `lastCursor`（ISO8601），断线重连续传。
-    var relayCursor: String? = nil
-    /// 上行推送水位 —— 最后一条已推送到 edge 的本地白板消息 id。
-    var relayPushedThroughId: String? = nil
-    /// 已处理过的 task_request 远端消息 id（#242 遥控 v1，FIFO 裁剪留 200）。
-    var processedTaskRequestIds: [String]? = nil
     /// 持久 session 成员（chunk 4 补口）。optional → 旧 JSON 缺键向后兼容。
     var sessionMembers: [LocalSessionMember]? = nil
     /// 机长点亮的 attention 黄点文案（crew-sidebar-status spec §3）。非 nil = 点亮，
@@ -787,10 +710,6 @@ struct LocalCrew: Codable, Equatable {
         createdAt: String,
         updatedAt: String,
         parentCrewIds: [String] = [],
-        remoteConversationId: String? = nil,
-        relayCursor: String? = nil,
-        relayPushedThroughId: String? = nil,
-        processedTaskRequestIds: [String]? = nil,
         crewNumber: Int? = nil,
         nextExtension: Int? = nil
     ) {
@@ -807,10 +726,6 @@ struct LocalCrew: Codable, Equatable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.parentCrewIds = parentCrewIds
-        self.remoteConversationId = remoteConversationId
-        self.relayCursor = relayCursor
-        self.relayPushedThroughId = relayPushedThroughId
-        self.processedTaskRequestIds = processedTaskRequestIds
         self.crewNumber = crewNumber
         self.nextExtension = nextExtension
     }
@@ -834,10 +749,6 @@ struct LocalCrew: Codable, Equatable {
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decode(String.self, forKey: .updatedAt)
         parentCrewIds = try c.decodeIfPresent([String].self, forKey: .parentCrewIds) ?? []
-        remoteConversationId = try c.decodeIfPresent(String.self, forKey: .remoteConversationId)
-        relayCursor = try c.decodeIfPresent(String.self, forKey: .relayCursor)
-        relayPushedThroughId = try c.decodeIfPresent(String.self, forKey: .relayPushedThroughId)
-        processedTaskRequestIds = try c.decodeIfPresent([String].self, forKey: .processedTaskRequestIds)
         sessionMembers = try c.decodeIfPresent([LocalSessionMember].self, forKey: .sessionMembers)
         attentionReason = try c.decodeIfPresent(String.self, forKey: .attentionReason)
         crewNumber = try c.decodeIfPresent(Int.self, forKey: .crewNumber)
@@ -914,19 +825,6 @@ struct LocalSessionMember: Codable, Equatable {
     /// 通讯录分机号（`7-3` 里的 3）。登记时发一次，终身绑这个 sessionId ——
     /// `restartMember` 复用原 sessionId 重启时不重发。optional 只为解码旧 JSON。
     var extensionNumber: Int? = nil
-}
-
-/// relay 绑定快照 —— `LocalCrew` 私有,把同步代理需要的字段抠出来给
-/// CrewRelayAgent / inspector UI 用。
-struct LocalCrewRelayBinding: Equatable {
-    let crewId: String
-    let remoteConversationId: String
-    let relayCursor: String?
-    let relayPushedThroughId: String?
-    /// 本地 captain 名字 —— relay 上行 captain 话语时作 senderLabel。
-    let captainName: String?
-    /// crew 的工作目录 —— relay task_request 自动起 session 时用（#242）。
-    let workingDirectory: String?
 }
 
 /// `local-crews.json` 的文件形状。**internal**：`CrewDirectory` 在 helper 子进程

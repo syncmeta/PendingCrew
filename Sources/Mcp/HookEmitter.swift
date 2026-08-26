@@ -86,7 +86,7 @@ private struct CaptainAwarenessCooldownState: Codable {
 ///
 /// 读未读用 per-session 游标 `<cursorDir>/<crewId>.<sessionId>.cursor`（存 last
 /// delivered message id），游标 IO 抽在 `WhiteboardCursor` —— 与**唤醒/提及注入**路
-/// （`CrewMailboxWaker` 登录态、`CrewChatView` 本地直投）共用同一份真值，一条消息
+/// （`CrewLocalMentionWaker` / `CrewChatView` 本地直投）共用同一份真值，一条消息
 /// 对某 session **至多注入一次**（hook 路与唤醒路不重复）。emit 后推进游标到最后一条。
 ///
 /// 注入**哪些**条目由 `CrewWhiteboardVisibility` 判（#543，与唤醒路 / 收听路同一份
@@ -182,10 +182,10 @@ struct HookEmitter {
         }
         lines.append("群聊白板·未读：")
         for m in msgs {
-            // 有显示名（本地 senderName 或 relay senderDisplayName）→ 直接用名字，
-            // 让 agent 看得见是谁发的；无名才退回旧格式（session:<id> / 人类），保持兼容。
+            // 有显示名（senderName）→ 直接用名字，让 agent 看得见是谁发的；
+            // 无名才退回旧格式（session:<id> / 人类），保持兼容。
             let who: String
-            if let name = m.senderName ?? m.senderDisplayName, !name.isEmpty {
+            if let name = m.senderName, !name.isEmpty {
                 who = name
             } else {
                 switch m.senderKind {

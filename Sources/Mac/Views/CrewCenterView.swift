@@ -10,7 +10,6 @@ struct CrewCenterView: View {
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
     @State private var showingDetail = false
-    @State private var showingRemoteSessions = false
     /// chunk2 T5（captain 唤醒=app 注入）：已通知过 captain 的 decision id ——
     /// 防止重复注入同一条。**放在常驻中栏**（而非按需 inspector），captain 编排
     /// 不能依赖 session 终端面板是否打开。
@@ -115,12 +114,6 @@ struct CrewCenterView: View {
                     .disabled(crewStore.selectedDetail == nil)
                 }
                 ToolbarItem {
-                    Button { showingRemoteSessions = true } label: {
-                        Label("服务端 session", systemImage: "rectangle.on.rectangle.angled")
-                    }
-                    .disabled(crewStore.selectedDetail == nil)
-                }
-                ToolbarItem {
                     Button { Task { await crewStore.refreshDetail(crewId) } } label: {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
@@ -136,11 +129,6 @@ struct CrewCenterView: View {
                     // 「更改工作目录」要读在跑的 session（在跑就拒绝迁）。sheet 不继承
                     // 父视图的 environmentObject，得显式再喂一次。
                     .environmentObject(sessionRunner)
-            }
-        }
-        .sheet(isPresented: $showingRemoteSessions) {
-            if let detail = crewStore.selectedDetail {
-                RemoteSessionsView(crewId: detail.crew.id, crewTitle: detail.crew.title)
             }
         }
         // chunk2 T5：captain 唤醒 = app 注入。常驻中栏**事件驱动**订阅待决策（去 2s

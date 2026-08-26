@@ -153,10 +153,14 @@ final class CrewRootLineageTests: XCTestCase {
         XCTAssertEqual(CrewRootLineage.rootTitles(of: "a", in: []), [])
     }
 
-    // MARK: - 服务端下发的标注（iPad/iPhone 走 EdgeBackend，本地父边恒空）
+    // MARK: - `CrewSummary.rootCrewTitles` 那条回退分支（本地父边算不出时才用）
+    //
+    // 它原本装的是服务端下发的根 crew 血缘，给看不到本地 DAG 的 iPad/iPhone 用；
+    // #63 第二期删掉云端整层之后**恒空**，这条分支在真实数据上不再会被走到。
+    // 判定本身留着（重建前后端时第二个来源会回到这个位置），下面两条钉的是判定。
 
     func testWireRootTitlesUsedWhenNoLocalParents() {
-        // EdgeBackend 路径：parentCrewIds 恒空，标注只能来自服务端 rootCrews。
+        // 本地 parentCrewIds 为空时，标注只能来自 rootCrewTitles 那份。
         let crews = [summary("c", "Crew出iOS", wireRoots: ["PendingCrew", "PendingBot发版"])]
         XCTAssertEqual(
             CrewRootLineage.rootTitles(of: "c", in: crews),

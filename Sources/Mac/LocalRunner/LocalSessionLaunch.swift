@@ -1,9 +1,11 @@
 #if os(macOS)
 import Foundation
 
-/// 本地起 session 的共享准备工序（#242 提取自 CrewSessionWindowView）：
-/// 手动起（CrewSessionWindowView）与 relay task_request 自动起（CrewRelayAgent）
-/// 用同一份 —— comms 接线 / 世界观渲染不分叉。
+/// 本地起 session 的共享准备工序（#242 提取自 CrewSessionWindowView）。
+/// 手动起（`CrewSessionWindowView`）与机长 `start_session` 排队起
+/// （`CrewSessionRunner.startForBrief`）用同一份 —— comms 接线 / 世界观渲染不分叉。
+/// （原来的第三条来路「relay task_request 远程自动起」随 #63 第二期删除跨端遥控
+/// 整层一起去掉了。）
 enum LocalSessionLaunch {
     /// Claude 的首次白板注入。后续轮次仍由 PostToolUse hook 续上；这里只补 hook 尚未
     /// 有机会触发的第一轮。读未读、首次 30 条上限、定向可见性与 fail-closed 都复用

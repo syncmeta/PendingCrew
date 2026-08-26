@@ -4,7 +4,7 @@ import Combine
 
 /// **长期职责的唯一所有者**（spec `docs/internal/2026-08-19-backend-split-design.md` §6）。
 ///
-/// 在这个类型出现之前，编排器 / 云端中继 / 三个唤醒器 / 用量监视 / 两个轮询中心
+/// 在这个类型出现之前，编排器 / 三个唤醒器 / 用量监视 / 两个轮询中心
 /// 是随 `MacThreePaneView` 和 `CrewSidebarView` 两个**视图**一起生出来的 ——
 /// 这就是「关掉 app 就全停」的根，也是把 session 搬进常驻后台进程时最先撞上的墙。
 ///
@@ -16,19 +16,16 @@ import Combine
 @MainActor
 final class SessionHost: ObservableObject {
     let runner: CrewSessionRunner
-    let relay: CrewRelayAgent
     let usage: LocalAgentUsageMonitor
 
     private var bag = Set<AnyCancellable>()
     private var started = false
 
-    /// 三个依赖都收 `nil` 默认值而不是 `= CrewSessionRunner()` 这类默认实参：
-    /// 默认实参在 **nonisolated** 上下文求值，而这三个类型都是 `@MainActor`。
+    /// 两个依赖都收 `nil` 默认值而不是 `= CrewSessionRunner()` 这类默认实参：
+    /// 默认实参在 **nonisolated** 上下文求值，而这两个类型都是 `@MainActor`。
     init(runner: CrewSessionRunner? = nil,
-         relay: CrewRelayAgent? = nil,
          usage: LocalAgentUsageMonitor? = nil) {
         self.runner = runner ?? CrewSessionRunner()
-        self.relay = relay ?? CrewRelayAgent()
         self.usage = usage ?? LocalAgentUsageMonitor()
     }
 
@@ -62,10 +59,6 @@ final class SessionHost: ObservableObject {
         ModelCatalogCenter.shared.start()
         // 本机 Claude / Codex 今日 token 用量（侧栏 footer 那行小字的数据源）。
         usage.start()
-        // relay 同步代理常开（幂等启动）；未登录时 tick 是 no-op。
-        // sessionRunner 一并注入 —— relay 拉到 task_request 时在本机自动
-        // 起 session（#242 遥控 v1），与 inspector 手动起的 run 同一个切换条。
-        relay.start(appModel: model, sessionRunner: runner)
         // 有 session 在跑就别自动更新（P4 之后这条会随 A1 一起去掉 —— 那时更新
         // app 本就不打断后台的 session）。
         AppUpdater.shared.isBusy = { [weak runner] in

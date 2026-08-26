@@ -1,67 +1,8 @@
-// Crew wire-model types extracted from PendingCrewAPI.swift so they can be
-// compiled into Foundation-only contexts (test bundles, etc.) without dragging
-// in the full `PendingCrewAPI` class and its `URLSession` / Auth dependencies.
-//
-// PendingCrewAPI.swift imports this file implicitly (same module).
+// Crew 群聊 / 白板的模型层（纯 Foundation，能编进只有 Foundation 的上下文，
+// 比如 test bundle）。形状沿用当初线上读模型的 snake_case wire 形状 ——
+// #63 第二期删掉云端整层之后唯一的构造点是 `LocalBackend`，保留形状是为了
+// 中栏渲染 / 唤醒判定不必跟着改一遍。
 import Foundation
-
-// MARK: - Crew session models (T4.5)
-
-/// Result of `claimSession`. The claimed crew_session row is free-form on the
-/// wire and not modeled yet (the runner already holds the sessionId it
-/// claimed); only the lease id is decoded. `leaseId` nil = nothing claimable.
-struct SessionClaim: Decodable {
-    let leaseId: String?
-}
-
-/// One server crew session row (from `listCrewSessions`). Mirrors the
-/// `crew_sessions` columns the list endpoint returns.
-struct CrewSessionSummary: Decodable, Identifiable, Equatable {
-    let id: String
-    let runnerKind: String
-    let status: String
-    let taskBrief: String
-    let progressSummary: String?
-    let createdAt: String
-    let startedAt: String?
-    let finishedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case runnerKind = "runner_kind"
-        case status
-        case taskBrief = "task_brief"
-        case progressSummary = "progress_summary"
-        case createdAt = "created_at"
-        case startedAt = "started_at"
-        case finishedAt = "finished_at"
-    }
-}
-
-/// One transcript event from a session's durable log (`getSessionEvents`).
-struct CrewSessionEvent: Decodable, Identifiable, Equatable {
-    let id: String
-    let eventType: String
-    let visibility: String
-    let summary: String?
-    let createdAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case eventType = "event_type"
-        case visibility
-        case summary
-        case createdAt = "created_at"
-    }
-}
-
-/// One pending `ask_human` interaction (T4.5). The agent is blocked waiting on
-/// `question`; the operator answers with free text.
-struct CrewInteraction: Decodable, Identifiable, Equatable {
-    let id: String
-    let question: String
-    let requestedAt: String?
-}
 
 // MARK: - Crew whiteboard / group chat models (spec §9)
 
@@ -102,9 +43,10 @@ struct CrewAttachment: Decodable, Identifiable, Equatable, Hashable {
     var isImage: Bool { mime.lowercased().hasPrefix("image/") }
 }
 
-/// One whiteboard entry (a crew_announcements row) rendered in the middle-pane
-/// group chat. `summary` is the display line; `payload.kind == "interaction"`
-/// marks an ask_human card (T4.5) so the timeline can render it specially.
+/// One whiteboard entry rendered in the middle-pane group chat. `summary` is the
+/// display line. 形状对齐 edge 的 `crew_announcements` 读模型 —— #63 第二期删掉
+/// edge 那一层之后，唯一的构造点是 `LocalBackend.listCrewWhiteboard`（本地白板
+/// 消息 → 同形 entry），保留这个形状是为了中栏渲染层不必跟着改一遍。
 struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     let id: String
     let senderKind: String          // 'session' | 'user' | 'bot' | ...
@@ -121,14 +63,9 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// `url` is the auth-gated `/v1/uploads/<id>` path `CrewRemoteImage`
     /// fetches with the device-grant bearer token.
     let attachments: [CrewAttachment]?
-    /// Mac relay 上行的来源标注（接合 v2 block 3）。非 nil 且 `origin ==
-    /// "mac_relay"` = 这条是 Mac 自己推上去的 —— 拉取侧据此过滤防回环。
-    /// edge 老消息 / 非 relay 消息为 nil。
-    let relay: Relay?
-    /// 发送者显示名。**edge 现在会下发这个字段**（Phase 3：白板读模型经 roster
-    /// 解析人类 user_id / session log_payload.session_id → member.display_name）；
-    /// 解析不出 / relay 老消息为 nil。`LocalBackend` 把 relay 搬进本地白板的消息
-    /// 映射成 entry 时也回填 edge 侧名字。`CrewSenderResolver` 优先用它。
+    /// 发送者显示名。`LocalBackend` 用本地白板消息的 `senderName` 合成
+    /// （见 `CrewSenderNaming.localWireDisplayName`）；`CrewSenderResolver` 优先
+    /// 用它 —— 本地 session 不进 roster，没有它就只能落兜底「会话」。
     let senderDisplayName: String?
     /// 发送者对应的 crew 成员 id（`temporary_group_members.id`）。edge Phase 3 随
     /// `sender_display_name` 一起下发（解析不出为 nil）。客户端可据此关联 roster
@@ -140,36 +77,11 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// 发送者 + 内容摘要,渲染成引用条(IM 式「回复 小绿:…」)。解析不出 / 老消息为 nil。
     let inReplyTo: String?
     /// 结构化 @ mentions（Task 3：发送时有 @ 才落；无 → nil）。`kind` ∈
-    /// 'human'/'session'/'captain'/'broadcast'/'bot' —— relay 落地侧（Task 10）
-    /// 把 session/captain/human 三种映射进本地 `LocalWhiteboardMention`，其余
-    /// （bot/broadcast，本地唤醒决策不消费）滤掉。
+    /// 'human'/'session'/'captain'/'broadcast'/'bot'。
     let mentions: [CrewMention]?
-
-    struct Relay: Decodable, Equatable {
-        let origin: String
-        let senderLabel: String?
-        let localSessionId: String?
-    }
 
     struct Payload: Decodable, Equatable {
         let text: String?
-        let kind: String?                // 'interaction' for ask_human cards
-        let question: String?
-        let status: String?
-        let permissionRequestId: String?
-        // #242 遥控 v1 — messageKind == "task_request" 的结构化指令体
-        // ({ action:'run_session', runner_kind?, task_brief })。全 optional →
-        // 老消息 / 非指令消息照常解码。
-        let action: String?
-        let taskBrief: String?
-        let runnerKind: String?
-
-        enum CodingKeys: String, CodingKey {
-            case text, kind, question, status, action
-            case permissionRequestId = "permission_request_id"
-            case taskBrief = "task_brief"
-            case runnerKind = "runner_kind"
-        }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -183,7 +95,6 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
         case createdAt = "created_at"
         case payload
         case attachments
-        case relay
         case senderDisplayName = "sender_display_name"
         case senderMemberId = "sender_member_id"
         case inReplyTo = "in_reply_to"
@@ -192,53 +103,6 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
 
     /// Best display text: explicit payload text → summary → empty.
     var displayText: String { payload?.text ?? summary ?? "" }
-    /// True if this row is an ask_human interaction card.
-    var isInteraction: Bool { payload?.kind == "interaction" }
-}
-
-/// `listCrewWhiteboardPage` 的响应：白板条目 + 续传游标（接合 v2 block 3）。
-/// `lastCursor` = 本批最大 created_at；空批为 nil（游标原地不动）。
-struct CrewWhiteboardPage: Decodable {
-    let whiteboard: [CrewWhiteboardEntry]
-    let lastCursor: String?
-}
-
-/// One invitable bot (`listMyBots`, `GET /v1/me/bots`)：自己的 bot + 加过
-/// 联系人的非 private bot，供「邀 bot 进 relay crew」picker 用。响应是
-/// snake_case row，显式 CodingKeys。
-struct InvitableBot: Decodable, Identifiable, Equatable, Hashable {
-    let id: String
-    let slug: String?
-    let displayName: String
-    let modelId: String?
-    let visibility: String
-    let isMine: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case slug
-        case visibility
-        case displayName = "display_name"
-        case modelId = "model_id"
-        case isMine = "is_mine"
-    }
-}
-
-/// One invitable friend (`listContacts`, `GET /v1/contacts`)：当前用户的好友
-/// 列表，供「邀人进 relay crew」picker 用。edge 返回本来就是 camelCase，
-/// 不需要显式 CodingKeys（与 crews 系端点一致，PendingCrewAPI.perform() 用
-/// 裸 JSONDecoder）。`addedAt` 是 epoch 秒，暂无展示需求，先不解。
-struct CrewContact: Decodable, Identifiable, Equatable, Hashable {
-    let userId: String
-    let alias: String?
-    let displayName: String?
-    let avatarPath: String?
-    let avatarSeed: String?
-
-    var id: String { userId }
-    /// 备注优先，其次昵称，都没有兜底「好友」——与 PendingBot 侧「备注优先」
-    /// 的展示口径保持一致。
-    var rowName: String { alias ?? displayName ?? "好友" }
 }
 
 /// The crew roster (`listCrewMembers`). `captainBotId` lets the UI tag which
@@ -303,40 +167,6 @@ struct CrewMember: Decodable, Identifiable, Equatable {
         case representsCrewId = "represents_crew_id"
         case sessionStatus
         case createdAt = "created_at"
-    }
-}
-
-/// The per-turn context bundle (`getSessionInbox`): crew whiteboard + this
-/// session's unread mailbox. Only the two fields the runner injects are
-/// decoded; `session` / `crew` in the response are ignored.
-struct CrewSessionInbox: Decodable {
-    let whiteboard: [CrewWhiteboardEntry]
-    let mailbox: [CrewMailboxItem]
-}
-
-/// One unread mailbox item targeted at this session (a `@session` / broadcast
-/// message someone dropped on the crew, fanned out to this session's mailbox).
-struct CrewMailboxItem: Decodable, Identifiable, Equatable {
-    let id: String
-    let senderKind: String
-    let senderSessionId: String?
-    let messageKind: String
-    let summary: String?
-    let status: String
-    let createdAt: String
-    let payload: CrewWhiteboardEntry.Payload?
-
-    var displayText: String { payload?.text ?? summary ?? "" }
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case senderKind = "sender_kind"
-        case senderSessionId = "sender_session_id"
-        case messageKind = "message_kind"
-        case summary
-        case status
-        case createdAt = "created_at"
-        case payload
     }
 }
 
@@ -426,34 +256,4 @@ struct CreateCrewRequest: Encodable {
 struct CreateCrewResponse: Decodable {
     let crewId: String
     let captainBotId: String?
-}
-
-/// `POST /v1/device-grant/mint` 的响应（家族凭据静默换 grant）。形状对齐
-/// device-login consume：grant token + 元数据。字段全 optional 解耦 edge 端
-/// 演进，调用方只硬依赖 `deviceGrantToken`。
-struct MintGrantResponse: Decodable {
-    let deviceGrantToken: String?
-    let grantId: String?
-    let subjectId: String?
-    let grantKind: String?
-    let scopes: [String]?
-}
-
-// MARK: - Error type
-
-enum PendingCrewAPIError: LocalizedError {
-    case invalidResponse
-    case http(status: Int, code: String?, message: String?)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidResponse:
-            return "服务器返回了非 HTTP 响应"
-        case let .http(status, code, message):
-            let prefix = "HTTP \(status)"
-            if let message, !message.isEmpty { return "\(prefix): \(message)" }
-            if let code { return "\(prefix) (\(code))" }
-            return prefix
-        }
-    }
 }

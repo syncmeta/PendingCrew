@@ -464,9 +464,9 @@ final class McpServer {
             guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return toolResult(id: id, text: "ERROR: message 不能为空")
             }
-            // Phase 7：解析定向 @ + reply_to,记进本地白板（不静默吞）。把它们按
-            // mention 投递到 edge 信箱 / 唤醒目标 session 还需 block 3 relay 同步链
-            // （见 CrewRelayAgent.push）—— 本地这步只负责把信息留住。
+            // Phase 7：解析定向 @ + reply_to,记进本地白板（不静默吞）。本地这步只
+            // 负责把信息留住；按 mention 唤醒目标 session 由 app 侧的本地直投
+            // （CrewLocalMentionWaker / CrewLocalMentionDelivery）接。
             let mentions = parseMentions(args["mentions"])
             let replyTo = (args["reply_to"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
@@ -1210,7 +1210,7 @@ final class McpServer {
     private func renderRow(_ m: LocalWhiteboardMessage) -> String {
         // 与 HookEmitter.render 同款：有显示名优先用名，无名退回旧格式。
         let who: String
-        if let name = m.senderName ?? m.senderDisplayName, !name.isEmpty {
+        if let name = m.senderName, !name.isEmpty {
             who = name
         } else {
             switch m.senderKind {

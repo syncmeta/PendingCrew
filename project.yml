@@ -129,12 +129,6 @@ targets:
       # LocalRunner 模块是纯 Foundation 代码（不依赖 SwiftUI / NSApplicationMain），
       # 重复编译进 test bundle 完全没问题。
       - path: Sources/Mac/LocalRunner
-      # SessionProxy codec + WS transport（遥控 Step 0：从 Sources/Mac/LocalRunner
-      # 搬进三端共用的 Sources/Remote 后，不再随 LocalRunner 整目录进 bundle）。
-      # SessionProxyProtocolTests 单测 codec；SessionPermissionRelay.swift（仍在
-      # LocalRunner）引用 SessionProxyClient，所以两个都要带上。纯 Foundation。
-      - path: Sources/Remote/SessionProxyProtocol.swift
-      - path: Sources/Remote/SessionProxyClient.swift
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift
@@ -187,8 +181,6 @@ targets:
       # 依赖 LocalCrewStore.swift 的 LocalCrew / LocalCrewFile 与上面的快照类型
       # （都已编进 bundle），所以整套编号/寻址逻辑能脱离 app 单测。
       - path: Sources/Stores/CrewDirectory.swift
-      # 家族 SSO 凭据共享组存储（纯 Foundation+Security，自包含）。
-      - path: Sources/Support/FamilyCredentialStore.swift
       # fd 软上限抬升（2026-08-12 P0 的触发闸）。纯 Darwin syscall + 一个可单测的
       # 纯判定函数，自包含。
       - path: Sources/Support/FileDescriptorLimit.swift
@@ -363,15 +355,10 @@ targets:
       # CrewComposerDrafts.swift（Todo #45 配套）：每 crew 未发出草稿的内存态。
       # 只依赖 CrewStagedMention / CrewReplyTarget（均已在 bundle）。
       - path: Sources/Chat/Adapter/CrewComposerDrafts.swift
-      # CrewModels.swift：从 PendingCrewAPI.swift 提取的 whiteboard/crew 纯
-      # Foundation 模型（CrewWhiteboardEntry / CrewMember / CrewAttachment 等），
-      # 不含 PendingCrewAPI 类或 URLSession 依赖。
+      # CrewModels.swift：whiteboard / crew 的纯 Foundation 模型
+      # （CrewWhiteboardEntry / CrewMember / CrewAttachment 等）。
       - path: Sources/Services/CrewModels.swift
-      # CrewRealtimeClient.swift：crew 级 hub WS 客户端 + codec（纯 Foundation，
-      # 跨平台）。原在 Sources/Mac/LocalRunner（随整目录编进 bundle），移到
-      # Sources/Services 后需显式列出 —— CrewRealtimeClientTests 单测 codec。
-      - path: Sources/Services/CrewRealtimeClient.swift
-      # Sources/Models/（CrewDetail / CrewSummary / UserSubject / DeviceLogin /
+      # Sources/Models/（CrewDetail / CrewSummary / UserSubject /
       # ModelCatalogEntry）：LocalRunner 传递引用了这些类型。
       - path: Sources/Models
       # Shared/AppUpdate（版本戳 + 更新检查闸门）：纯 Foundation，直接编进 bundle 单测。

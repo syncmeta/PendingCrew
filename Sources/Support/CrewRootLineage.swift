@@ -51,10 +51,10 @@ enum CrewRootLineage {
     /// `rootIds` 的展示版：直接给标题。喂 `CrewStore.crews`（全量 crew 行）即可；
     /// 列表里查不到标题的 id 会被丢掉（宁可少标一个，也不显示裸 uuid）。
     ///
-    /// **本地血缘优先，算不出才用服务端下发的那份**（`CrewSummary.rootCrewTitles`）——
-    /// Mac 走 `LocalBackend`，父边在本地 DAG 里、服务端那份恒空；iPad/iPhone 走
-    /// `EdgeBackend`，本地 `parentCrewIds` 恒空、只有服务端那份。两端因此共用这一个
-    /// 入口，视图不需要知道自己跑在哪端。
+    /// **本地血缘优先，算不出才用 `CrewSummary.rootCrewTitles` 那份**。后者原是
+    /// 服务端下发的，给看不到本地 DAG 的 iPad/iPhone 用；#63 第二期删掉云端整层
+    /// 之后恒空，这条回退分支因此不再会被走到 —— 但判定本身留着，重建前后端时
+    /// 第二个来源会重新出现在这个位置。
     static func rootTitles(of crewId: String, in crews: [CrewSummary]) -> [String] {
         guard !crews.isEmpty else { return [] }
         var parents: [String: [String]] = [:]
