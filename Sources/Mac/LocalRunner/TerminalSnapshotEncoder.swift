@@ -113,28 +113,62 @@ enum TerminalSnapshotEncoder {
 
     /// 逐行输出。
     ///
-    /// 两处不显然但要命的细节：
-    /// - **换行只在「下一行不是折行续行」时才发。** `BufferLine.isWrapped` 记的是
-    ///   「这一行是上一行自动折过来的」。硬塞一个 `\r\n` 会把折行拆成两行独立的行，
-    ///   于是改窗口宽度时它们再也不会重新合并 —— §7.2 的 reflow 会当场红。
-    /// - **行内没写过的格子用 CUF 跳过去，不用空格填。** 空格是 code 32，没写过的
-    ///   格子是 code 0，两者不是一回事（`getTrimmedLength` 只裁 code 0）。填空格
-    ///   会把「这块屏没画过」变成「这块屏画了一片空白」。
+    /// **难点全在折行上，而且是真 TUI 语料逼出来的**（合成语料一次都没测到）。
+    ///
+    /// `BufferLine.isWrapped` 记的是「这一行是上一行自动折过来的」。它不是可有可无
+    /// 的装饰：改窗口宽度时 `Buffer.resize` 就靠它把一条逻辑长行重新拆合。硬给每行
+    /// 塞一个 `\r\n`，折行就变成了两行独立的行，再也不会合并回去。
+    ///
+    /// 而想造出这个标记，**只有一条路：真的让终端在右边界上自动折一次**。没有任何
+    /// 转义序列能直接说「把这一行标成折行」。于是：
+    ///
+    /// 1. 上一行要**顶到右边界**才折得下去。它尾部若是没写过的格子，得拿空格垫满。
+    /// 2. 光顶到边界还不够 —— SwiftTerm 是「延迟折行」：写满最后一格只是挂起，
+    ///    **下一个字符写下去才真的换行**。所以续行即使整行空白，也得先写一个字符
+    ///    把这一折触发掉。**第一版漏了这条，于是整行空白的折行续行凭空消失，
+    ///    后面所有内容整体上移一行** —— 真 claude 语料里这种行成串出现（它的清屏
+    ///    是一串 `\e[2K\e[1A`），26 行的缓冲区还原成了 25 行。
+    /// 3. 垫的空格和触发用的那个字符都是**假的**（原本是 code 0），必须擦掉。
+    ///    擦得掉，是因为此刻那两行都还在视口里、寻址得到，而且 `\e[K` 填的正是
+    ///    code 0 + 默认属性、**且不会动 `isWrapped` 标记**（SwiftTerm 的
+    ///    `cmdEraseInLine` 走 `eraseInBufferLine(clearWrap:)` 的默认值 false）。
+    ///
+    /// 所以一组折行的输出形状是：垫满 → 写一个触发字符（折下去了）→ 上去把垫的擦掉
+    /// → 回来把触发字符擦掉 → 正常写这一行。多出来的字节只发生在真有折行的地方。
     private static func emitLines(_ lines: [BufferLine], terminal: Terminal, cols: Int,
                                   into out: inout [UInt8], attr: inout Attribute?) {
-        for (i, line) in lines.enumerated() {
-            if i > 0 && !line.isWrapped {
-                emit(&out, "\r\n")
+        var i = 0
+        while i < lines.count {
+            // 这一组 = 一条逻辑行：lines[i] 加上紧跟着的所有折行续行。
+            var last = i
+            while last + 1 < lines.count && lines[last + 1].isWrapped { last += 1 }
+
+            if i > 0 { emit(&out, "\r\n") }
+            var paddedFrom: Int? = nil
+            for k in i...last {
+                if k > i {
+                    // 触发那一折（见上面第 2 条）。
+                    emit(&out, " ")
+                    if let from = paddedFrom {
+                        // 上去把垫的空格擦回 code 0（见第 3 条）。
+                        emit(&out, "\u{1b}[A\u{1b}[\(from + 1)G\u{1b}[m\u{1b}[K\u{1b}[B")
+                    }
+                    // 回到本行行首，把触发用的那个字符也擦掉。
+                    emit(&out, "\r\u{1b}[m\u{1b}[K")
+                    attr = nil
+                }
+                paddedFrom = emitLine(lines[k], terminal: terminal, cols: cols,
+                                      fillToRightMargin: k < last, into: &out, attr: &attr)
             }
-            let continuesOnNextLine = (i + 1 < lines.count) && lines[i + 1].isWrapped
-            emitLine(line, terminal: terminal, cols: cols,
-                     fillToRightMargin: continuesOnNextLine, into: &out, attr: &attr)
+            i = last + 1
         }
     }
 
+    /// 返回「从第几列起是垫出来的空格」，没垫就是 nil —— 调用方要靠它把垫的擦回去。
+    @discardableResult
     private static func emitLine(_ line: BufferLine, terminal: Terminal, cols: Int,
                                  fillToRightMargin: Bool,
-                                 into out: inout [UInt8], attr: inout Attribute?) {
+                                 into out: inout [UInt8], attr: inout Attribute?) -> Int? {
         let limit = min(cols, line.count)
         let contentEnd = fillToRightMargin ? limit : meaningfulEnd(line, terminal: terminal, limit: limit)
         var skipped = 0
@@ -162,10 +196,25 @@ enum TerminalSnapshotEncoder {
                     i += 1
                     continue
                 }
-                // **擦过、而且擦的时候带着背景色**的格子。`\e[K` / `\e[X` 填的是
-                // code 0 + `eraseAttr()`（前景默认、背景取当时的 curAttr.bg、无样式），
-                // 所以它既不是「写过的空格」也不是「从没碰过」—— 用空格填会把 code 32
-                // 写进去，跳过去又会丢掉那片背景色。只有 ECH 能原样还原。
+                // **擦过、而且擦的时候带着背景色**的格子。
+                //
+                // 这一格是这个文件里最容易被「无害地简化」掉的地方，所以把三种写法
+                // 各错在哪写全（都是往返测试逐格比对才看得出来的 —— 三种写法的
+                // **文本完全一样**，只看文本的比较会一律判绿）：
+                //
+                // | 写法 | 错在哪 |
+                // |---|---|
+                // | 填空格 | `\e[K` 填的是 **code 0**，空格是 code 32。填空格等于把
+                //   「这块屏没画过字」改写成「这块屏画了一片空白」——`getTrimmedLength`
+                //   从此裁不掉它，改窗口宽度时这一行的有效长度就变了 |
+                // | 用 CUF 跳过去 | 光标是过去了，但那片**背景色**一点没还原。TUI 的
+                //   状态栏、选中高亮、进度条底色全是这么来的，跳过去就等于整条状态栏
+                //   变透明 |
+                // | 什么都不做（靠 `getTrimmedLength` 裁掉） | 整行都被带色地擦过时
+                //   它返回 0，于是**整片背景色一格都不还原** |
+                //
+                // 只有 ECH（`\e[nX`）填的东西与 `\e[K` 完全同源 —— 都走 `eraseAttr()`
+                // （前景默认、背景取当时的 curAttr.bg、无样式）—— 所以只有它能原样还原。
                 var run = 1
                 while i + run < contentEnd {
                     let next = line[i + run]
@@ -194,14 +243,15 @@ enum TerminalSnapshotEncoder {
             i += max(1, Int(cell.width))
         }
 
-        // 折行的前一行必须真的把光标顶到右边界，否则续行的第一个字符会落在本行、
-        // 而不是自动折到下一行。行尾恰好是没写过的格子时补一个空格是唯一的办法
-        // （CUF 到边界不会触发自动折行）。
+        // 折行的前一行必须真的把光标顶到右边界（CUF 到边界不触发自动折行），
+        // 尾部是没写过的格子时只能拿空格垫 —— 垫完由调用方擦回去。
         if fillToRightMargin && skipped > 0 {
-            emit(&out, "\u{1b}[0m")
+            emit(&out, "\u{1b}[m")
             attr = nil
             emit(&out, String(repeating: " ", count: skipped))
+            return cols - skipped
         }
+        return nil
     }
 
     /// 这一行最后一个「值得还原」的格子之后的位置。

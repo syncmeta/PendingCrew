@@ -101,6 +101,51 @@ final class SessionAttachQueueTests: XCTestCase {
         XCTAssertEqual(assembled, expected, "拼回来必须与快照原样一致")
     }
 
+    /// **末片必须靠 `isLast` 认，不许靠「末片比较短」认。**（机长 2026-08-26 定的
+    /// `kind=2` 帧格式：`[u32 handle][u32 seq][u8 flags][bytes]`，flags bit0 = isLast。）
+    ///
+    /// 快照长度恰好是片长整数倍时，末片是**满片** —— 拿「变短了」当终止信号的实现
+    /// 会在这里永远等不到结束。
+    func testExactMultipleOfChunkSizeStillMarksLastChunk() {
+        // 造一份长度**恰好**是片长 4 倍的快照 —— 于是四片全是满片，「末片比较短」
+        // 这个信号根本不出现。
+        let chunkBytes = 64
+        let payload = [UInt8](repeating: 0x41, count: chunkBytes * 4)
+        let queue = SessionAttachQueue(capacityBytes: 1024 * 1024, chunkBytes: chunkBytes) {
+            TerminalSnapshotEncoder.Snapshot(cols: 80, rows: 25, bytes: payload)
+        }
+        queue.begin()
+
+        var seqs: [Int] = []
+        var lastFlags: [Bool] = []
+        var assembled: [UInt8] = []
+        while let f = queue.next() {
+            guard case .snapshot(let seq, let isLast, _, _, let bytes) = f else {
+                return XCTFail("该只有快照片")
+            }
+            XCTAssertEqual(bytes.count, chunkBytes, "整除时每一片都是满片")
+            seqs.append(seq)
+            lastFlags.append(isLast)
+            assembled.append(contentsOf: bytes)
+        }
+        XCTAssertEqual(seqs, [0, 1, 2, 3])
+        XCTAssertEqual(lastFlags, [false, false, false, true],
+                       "末片是满片时 isLast 仍必须为真 —— 不许靠「变短」认结束")
+        XCTAssertEqual(assembled, payload, "拼回来要与原样一致")
+    }
+
+    /// 空快照：一片、isLast、payload 为空。也是「不许靠变短认结束」的边角。
+    func testEmptySnapshotStillProducesOneLastChunk() {
+        let queue = SessionAttachQueue(capacityBytes: 1024, chunkBytes: 64) {
+            TerminalSnapshotEncoder.Snapshot(cols: 80, rows: 25, bytes: [])
+        }
+        queue.begin()
+        var frames: [SessionAttachQueue.Frame] = []
+        while let f = queue.next() { frames.append(f) }
+        XCTAssertEqual(frames, [.snapshot(seq: 0, isLast: true, cols: 80, rows: 25, bytes: [])],
+                       "空快照也要有一片、并且自称末片")
+    }
+
     // MARK: - §7.5 背压
 
     func testSlowViewerGetsResyncAndEndsUpIdentical() {
