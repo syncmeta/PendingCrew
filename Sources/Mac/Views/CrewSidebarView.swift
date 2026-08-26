@@ -15,6 +15,11 @@ struct CrewSidebarView: View {
     @State private var showingWorkspaceSync = false
     /// 折叠起来的机器分组 id 集合（默认全展开）。
     @State private var collapsedMachineIds: Set<String> = []
+    /// 底部「已隐藏的群」那行展开着没有（不持久化：默认收起，每次开 app 都是收起的
+    /// —— 藏起来的群本来就不该占视线）。
+    @State private var hiddenExpanded = false
+    /// crew 级「最后看过」时间（UserDefaults）—— 已隐藏那行算未读的第二个参照点。
+    @ObservedObject private var viewed = CrewViewedStore.shared
     /// 长期职责的唯一所有者（spec §6）—— 用量监视归它持有，这里只观察。
     @EnvironmentObject private var sessionHost: SessionHost
     @ObservedObject private var quota = QuotaCenter.shared
@@ -43,6 +48,9 @@ struct CrewSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            // 回头路（③）：藏起来的群从这儿找得回来。位置在列表**正下方**、额度行
+            // 和身份行之上 —— 它是「这份列表的另一半」，不是页脚信息。
+            hiddenCrewsFooter
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             quotaFooterLine
@@ -247,6 +255,129 @@ struct CrewSidebarView: View {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 10)
+    }
+
+    // MARK: - 已隐藏的群（③ 回头路 + ⑤ 未读）
+
+    /// 「已隐藏的群 (N)」——**侧栏底部常驻的计数行**，点开就地展开。
+    ///
+    /// 为什么必须是这个形态（上级原样收下的三条）：
+    /// - **不许退化成设置里的开关** —— 藏在设置里等于没有。
+    /// - **不许只靠搜索** —— 记不住名字就搜不到，搜不到就是删；而「完事了的群」
+    ///   恰恰是最不容易记住名字的一类。
+    /// - 只要有藏起来的群，**计数就常驻可见**：「藏了多少」一眼看得见，"藏"才是可逆的。
+    ///
+    /// N=0 时整行不画（不是灰着占位）：一个都没藏的时候它没有任何信息量，而底下还
+    /// 挤着额度行和身份行 —— 那两行是每天都要看的，不该被一行常年空着的东西挤。
+    @ViewBuilder
+    private var hiddenCrewsFooter: some View {
+        let entries = hiddenEntries
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Divider()
+                Button {
+                    hiddenExpanded.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .rotationEffect(.degrees(hiddenExpanded ? 90 : 0))
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "eye.slash")
+                            .foregroundStyle(.secondary)
+                        Text("已隐藏的群 (\(entries.count))")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        // ⑤ 藏起来的群来消息了，人得知道 —— 一个藏起来就再也听不到
+                        // 动静的群，跟删掉的区别只剩磁盘占用。**但只提示，不自动取回**：
+                        // 因为来条消息就冒回侧栏 = 把人「我不想再看见它」的决定推翻。
+                        if entries.contains(where: \.hasUnread) {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 6, height: 6)
+                                .help("藏起来之后有新消息")
+                        }
+                        Spacer(minLength: 4)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                if hiddenExpanded {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(entries) { entry in hiddenRow(entry) }
+                        }
+                    }
+                    // 藏了很多时不许把额度行和身份行挤没了。
+                    .frame(maxHeight: 168)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hiddenRow(_ entry: CrewHiding.HiddenEntry) -> some View {
+        HStack(spacing: 6) {
+            // 点名字 = **进去看**（顺手记一笔「看过」，未读提示消失），群**不取回**。
+            // 取回是右边那个单独的按钮。分成两个动作是刻意的：想瞄一眼有没有动静就
+            // 把群塞回侧栏，等于又替人推翻一次「我不想再看见它」——同 ⑤ 的道理。
+            Button {
+                viewed.markViewed(entry.crew.id)
+                crewStore.selectCrew(entry.crew.id)
+            } label: {
+                HStack(spacing: 6) {
+                    if entry.hasUnread {
+                        Circle().fill(Color.accentColor).frame(width: 5, height: 5)
+                    } else {
+                        Color.clear.frame(width: 5, height: 5)
+                    }
+                    Text(entry.crew.title)
+                        .font(Theme.Fonts.caption)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if entry.alsoHiddenCount > 0 {
+                        Text("含 \(entry.alsoHiddenCount) 个子 crew")
+                            .font(Theme.Fonts.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("点开看看（看过不会把它放回侧栏）")
+
+            Button {
+                Task { await crewStore.unhideCrewFromUI(entry.crew.id) }
+            } label: {
+                Image(systemName: "eye")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("取回侧栏")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+    }
+
+    /// 已隐藏列表的内容 + 未读。判定全在 `CrewHiding.hiddenEntries`（纯函数、单测）。
+    ///
+    /// **末条消息只取 `crewStore.lastWhiteboardMessages` 那份后台按指纹门控算好的
+    /// 快照**，在这里现读 `LocalWhiteboardStore.list(crewId:)` 解整板 JSON 就是
+    /// 2026-08-17「开久了卡」的完整复现（CONTRIBUTING 第 3 条）。
+    ///
+    /// 兜底**不取** `crew.updatedAt`：那个字段改个名就跳，会让一个从没来过消息的群
+    /// 一直显示"有未读"。没有消息就是没有动静。
+    private var hiddenEntries: [CrewHiding.HiddenEntry] {
+        let lastMessages = crewStore.lastWhiteboardMessages
+        return CrewHiding.hiddenEntries(
+            in: crewStore.crews,
+            lastActivity: { lastMessages[$0].flatMap { CrewTimestamp.parse($0.createdAt) } },
+            lastViewed: viewed.snapshot)
     }
 
     /// Sidebar 底部固定条：「人」+ 随机头像 —— 与成员列表里那个「人」**同一张脸**

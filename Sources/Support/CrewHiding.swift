@@ -168,6 +168,8 @@ enum CrewHiding {
     static func hiddenEntries(in crews: [CrewSummary],
                               lastActivity: (String) -> Date?,
                               lastViewed: [String: Date]) -> [HiddenEntry] {
+        // 一个都没藏是绝大多数时候的情形 —— 侧栏每次重绘都会问一次，先挡掉。
+        guard crews.contains(where: { $0.manuallyHiddenAt != nil }) else { return [] }
         let exposed = resolve(crews).exposedHidden
         guard !exposed.isEmpty else { return [] }
         return crews
