@@ -408,9 +408,13 @@ final class CrewStore: ObservableObject {
     /// 而且不报错、不重试、命令文件已经删了**。派工就此蒸发，事后完全查不出来。
     ///
     /// `inproc` 模式下 GUI 进程本来就是 `.orchestrator`，这道闸永远开着，行为不变。
+    ///
+    /// **问的是 `effective` 不是 `current`**：2026-08-26 补上 app 侧编排闸门之后
+    /// 多出一种状态 —— 身份写着 `.orchestrator`、但锁被别人占着所以没在编排。
+    /// 那个进程一样不许排这三条通道，否则修一个双头顺手造出另一个。
     private var ownsSharedControlChannel: Bool {
         #if os(macOS)
-        return ProcessRole.current == .orchestrator
+        return ProcessRole.effective == .orchestrator
         #else
         return true
         #endif

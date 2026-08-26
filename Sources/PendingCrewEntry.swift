@@ -29,6 +29,12 @@ struct PendingCrewEntry {
         // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
         if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
+        // 身份四（默认）：GUI。**编排闸门在这里取，不在任何视图里。**
+        // 「谁是编排者」是进程身份的属性，不是某个视图的属性 —— 挂在视图上就会有
+        // 第 N 个入口哪天忘了问（在这行出现之前，GUI 那条路上一次都没问过）。
+        // 这一行同时负责六条约束里的第 6 条在 app 侧的那一半：把数据根打进日志。
+        // 详见 `OrchestrationGate`。
+        OrchestrationGate.installForGUIProcess()
         #endif
         PendingCrewApp.main()
     }

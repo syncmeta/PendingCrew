@@ -68,10 +68,13 @@ enum PendingCrewDataRoot {
     /// 而这套隔离机制自己的失败形态是**方向相反的同一种静默**——「它悄悄跑在了
     /// 临时目录上」：人以为在动真数据，其实在动一个空壳，**而所有操作都会成功**。
     /// 两种都只有一个便宜的检测器，就是启动时把路径打出来。
-    static func startupLine() -> String {
+    /// - `root` 只为单测：让「跑一遍启动那条路」不必碰真目录。生产上两个调用点
+    ///   （daemon 的 `SessionDaemonHost.start`、GUI 的
+    ///   `OrchestrationGate.installForGUIProcess`）都走默认值。
+    static func startupLine(root: URL = url) -> String {
         let overridden = !(ProcessInfo.processInfo.environment[overrideEnvKey] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return "数据根 = \(url.path)"
+        return "数据根 = \(root.path)"
             + (overridden ? "（来自 \(overrideEnvKey)，**不是**默认目录）" : "（默认）")
     }
 }
