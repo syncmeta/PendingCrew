@@ -8,9 +8,9 @@ import Foundation
 /// `LocalCrewControlStore.writeCommandResponse` 回给机长（它在 long-poll）。
 ///
 /// 判定全在 `WorkdirMigrationPlan`（纯逻辑、可单测），落地在 `WorkdirMigrationExecutor`
-/// （先备份、fail-loud）。这一层只负责：把 crew 账本 / 会话账本 / 在跑的 run 三份现实
-/// 装进 `Inputs`，以及决定「预览」还是「执行」。界面那条路（`ChangeWorkingDirectorySheet`）
-/// 与这条路**共用同一个 `makeInputs`**，免得两边对「谁算活着」各有一套说法。
+/// （先备份、fail-loud）。这一层只负责：把 crew 账本与在跑的 run 两份现实装进 `Inputs`，
+/// 以及决定「预览」还是「执行」。界面那条路（`ChangeWorkingDirectorySheet`）与这条路
+/// **共用同一个 `makeInputs`**，免得两边对「谁算拦路」各有一套说法。
 @MainActor
 enum WorkdirChangeCommand {
 
@@ -60,7 +60,7 @@ enum WorkdirChangeCommand {
         return text
     }
 
-    /// 真正落地（备份 → 信任 → 记忆 → 会话 → crew 字段）。界面与机长工具共用。
+    /// 真正落地（备份 → 信任 → 记忆 → crew 字段）。界面与机长工具共用。
     static func execute(plan: WorkdirMigrationPlan.Plan,
                         newWorkdir: String) -> WorkdirMigrationExecutor.Receipt {
         let stamp = ISO8601DateFormatter().string(from: Date())
@@ -76,11 +76,16 @@ enum WorkdirChangeCommand {
             })
     }
 
-    /// 把三份现实（crew 账本 / agent 会话号账本 / 在跑的 run）装进规划输入。
+    /// 把两份现实（crew 账本 / 在跑的 run）装进规划输入。
     ///
     /// `runs` 里**所有还活着的**都进 `runningSessions`（含空闲的、含调用者自己）——
-    /// 拦不拦路由 `isWorking` + `callerSessionId` 在规划层判，会话搬不搬则一律看
-    /// 「活着没有」。两件事分开，别在这层提前过滤掉信息。
+    /// 拦不拦路由 `isWorking` + `callerSessionId` 在规划层判，别在这层提前过滤掉信息。
+    ///
+    /// **这里原本还读一遍 `LocalAgentSessionStore`**，为的是按会话号挑 claude 的
+    /// `.jsonl` 搬走。会话不搬了（`--resume` 不按目录找），那次读取一起删了 ——
+    /// 它传的是默认 `onIncident`（事故回调本来就被吞掉），账本损坏检测走的是
+    /// `loadRowsLocked` 的归档，与这次读取无关，而且每起一个 session 就走一遍，
+    /// 频率高几个数量级。**删掉它，损坏检测一点不少。**
     static func makeInputs(crews: [WorkdirMigrationPlan.CrewInput],
                            rootCrewId: String,
                            selected: Set<String>,
@@ -88,33 +93,14 @@ enum WorkdirChangeCommand {
                            runs: [CrewSessionRun],
                            callerSessionId: String?) -> WorkdirMigrationPlan.Inputs {
         let scope = Set(WorkdirMigrationPlan.subtree(rootId: rootCrewId, crews: crews).map(\.id))
-        let sessions = LocalAgentSessionStore.shared.list()
-            .filter { scope.contains($0.crewId) }
-            .map { record in
-                WorkdirMigrationPlan.AgentSessionInput(
-                    crewId: record.crewId, sessionId: record.sessionId, kind: record.kind,
-                    agentSessionId: record.agentSessionId,
-                    memberName: memberName(crewId: record.crewId, sessionId: record.sessionId,
-                                           runs: runs))
-            }
         let live = runs
             .filter { $0.status == .running && scope.contains($0.crewId) }
             .map { WorkdirMigrationPlan.RunningSessionInput(
                 crewId: $0.crewId, sessionId: $0.sessionId,
                 displayName: $0.displayName, isWorking: $0.isWorking) }
         return .init(crews: crews, rootCrewId: rootCrewId, selectedCrewIds: selected,
-                     newWorkdir: newPath, agentSessions: sessions, runningSessions: live,
+                     newWorkdir: newPath, runningSessions: live,
                      callerSessionId: callerSessionId, home: homeURL)
-    }
-
-    /// 成员显示名：优先 crew 账本里登记的持久成员名，再看在跑的 run，最后退回会话号前缀。
-    static func memberName(crewId: String, sessionId: String, runs: [CrewSessionRun]) -> String {
-        if let m = LocalCrewStore.shared.sessionMembers(crewId: crewId)
-            .first(where: { $0.sessionId == sessionId }), !m.displayName.isEmpty {
-            return m.displayName
-        }
-        if let run = runs.first(where: { $0.sessionId == sessionId }) { return run.displayName }
-        return "session " + String(sessionId.prefix(6))
     }
 
     static var homeURL: URL { URL(fileURLWithPath: NSHomeDirectory()) }
