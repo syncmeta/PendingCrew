@@ -59,4 +59,43 @@ final class LocalAgentSessionStoreTests: XCTestCase {
             .filter { $0.hasPrefix("agent-sessions.json.corrupt-") }
         XCTAssertEqual(names.count, 1)
     }
+
+    // MARK: - Todo #68：账本还要记「当初在哪儿跑」
+
+    func testRecordsWorkingDirectory() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "w1", kind: "claude_code", agentSessionId: "uuid-1",
+                 workingDirectory: "/wt/a")
+        XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.workingDirectory, "/wt/a")
+    }
+
+    /// **旧记录（没有 `workingDirectory` 字段）必须照常读出来**，不许炸、不许把整份
+    /// 账本判成 corrupt —— 这条正是本机盘上那 383 条记录今天的样子。喂的是真实格式的
+    /// JSON，不是构造出来的对象。
+    func testLegacyRowsWithoutWorkingDirectoryStillLoad() throws {
+        let dir = tempDir()
+        let legacy = """
+        [{"crewId":"local-abc","sessionId":"captain-61949935","kind":"claude_code",        "updatedAt":"2026-08-08T13:57:25Z","agentSessionId":"d2641172-e1ce-4ca1-92fb-6117f6580ab0"}]
+        """
+        try legacy.data(using: .utf8)!.write(to: rawFileURL(dir))
+        var incidents: [MultiProcessJSONStore.LedgerIncident] = []
+        let s = LocalAgentSessionStore(directory: dir)
+        let rows = s.list(onIncident: { incidents.append($0) })
+        XCTAssertTrue(incidents.isEmpty, "旧格式不是事故")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertNil(rows[0].workingDirectory)
+        // 行为与今天一致：会话号照样查得到。
+        XCTAssertEqual(s.agentSessionId(crewId: "local-abc", sessionId: "captain-61949935"),
+                       "d2641172-e1ce-4ca1-92fb-6117f6580ab0")
+    }
+
+    /// 「这次不知道」不等于「没有」——传 nil 不许把已知的工作目录抹掉。
+    func testUpdateWithoutWorkingDirectoryKeepsTheOldOne() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "w1", kind: "claude_code", agentSessionId: "uuid-1",
+                 workingDirectory: "/wt/a")
+        s.record(crewId: "c", sessionId: "w1", kind: "claude_code", agentSessionId: "uuid-2")
+        XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.workingDirectory, "/wt/a")
+        XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.agentSessionId, "uuid-2")
+    }
 }
