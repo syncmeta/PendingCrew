@@ -88,7 +88,41 @@ xcodebuild ... test > /tmp/test.log 2>&1; grep -E "' failed \(|Executed .* tests
 「我跑过了，绿的」和「这块是干净的」是两句话，改动越靠近并发/时序，两句话之间的
 距离越大。真怀疑某条在飘，就**连着跑几趟全量**，别拿一趟绿去放行发布。
 
-### 3. 绕过约束的临时方案要留痕
+### 3. 有些红线文本守卫看不住 —— 别加一条会被调松的
+
+**先看这条红线本身**：白板的读（`LocalWhiteboardStore.list(crewId:)` /
+`entries(crewId:)` —— **flock + 整份 JSON 全量解码**）**不许出现在 SwiftUI 的
+body 求值路径上**。要时间/末条，取 `CrewStore.lastWhiteboardMessages` 那份后台
+按指纹门控算好的快照；本 crew 的完整消息，用视图自己在 `.task` 里订阅的那份。
+这条是 2026-08-17「开久了卡」的病根（主线程每秒解析约 11 MB JSON）。
+
+**它在 2026-08-26 又被抓到一次漏网**（`CrewSessionWindowView.latestStep`：
+每个 session 行、每次重绘各来一次 flock + 全量解码）。直觉反应是「加条 grep
+守卫」。**别加。我们把那条 grep 真跑了一遍，数据否掉了这个方向：**
+
+> `grep "shared\.list(crewId" Sources/Mac/Views/` → **9 行命中，真阳性 0**。
+> 8 行是 `LocalTodoStore` / `CockpitPlanStore` 在 `.task(id:)` 里的**合法**读；
+> 第 9 行是 `CrewSidebarCrewRow` 里那段记录病根的**注释本身**。
+> 而唯一真的那条**一次都没抓到**（它写成了跨行：`LocalWhiteboardStore.shared`
+> 换行再 `.list(crewId:)`；跨行调用在本仓是常见写法，不是孤例）。
+> —— 数字由「机组群聊体验」那条线实测得出。
+
+**根因不是正则写得不够好，换个更聪明的正则也不行**：合法读和违规读**文本上
+完全相同**，区别只在这行代码出现在 `body` 里还是在 `.task` 里 —— 任何正则都
+看不见这个区别。更糟的是同一处违规还能以**参数形式**藏起来
+（`SessionUnreadStore.unreadCount(..., whiteboard: .shared)`：调用点一个字都不
+提那个 store）。
+
+所以，给一条红线加守卫之前，先问：**这条红线的违规特征，是文本能表达的吗？**
+不能的话，**宁可老实承认它现在只能靠人看**，也别加一条会响一堆假警报、还把
+「这里已经修好了」的注释报成违规的守卫 —— 那种守卫必然被下一个人调松或删掉，
+而它留下的「已经有守卫看着了」的假记录，比没有守卫更糟。
+
+真正的出路是结构性的：让违规写不出来（读一律走 `CrewStore`，
+`LocalWhiteboardStore.shared` 的读不暴露给 View 层，守门的是类型系统）。
+在那之前，这条靠 review 看。
+
+### 4. 绕过约束的临时方案要留痕
 
 如果你为了让 A 跑通而把代价转嫁给了 B（关掉某个校验、塞个 placeholder、双写、
 用 `#if` 整块屏蔽、只验最容易过的那条路径），**在 `docs/tech-debt.md` 里记一条**，
