@@ -655,14 +655,16 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 ### 7.2 发版：一条命令，六道断言
 
 ```sh
-PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh
+PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh [release-ref]
 # 要顺带发到线上自动更新 feed 才加 PENDING_PUBLISH_R2=1
 ```
 
 `scripts/release/build-macos-update.sh` 的流程：
 
 ```
-git worktree 钉 main HEAD 建干净快照   ← 工作区脏不脏都不影响所见即所装
+release ref（默认 main）只解析一次并回执完整 SHA
+  ↓
+git worktree 钉该 SHA 建干净快照   ← 工作区脏不脏都不影响所见即所装
   ↓
 build 号 = 纪元日时间戳「天.秒」（如 20684.16770），从时钟派生不从 git 历史算
   ↓
@@ -685,7 +687,7 @@ ditto → notarytool submit --wait → stapler staple → 重新 ditto
   ↓
 generate-release-notes.sh（文案取自 CHANGELOG.md，缺段即停）→ Sparkle 的 generate_appcast 签 feed
   ↓
-codesign --verify / spctl -t install / stapler validate → git tag v<版本>
+codesign --verify / spctl -t install / stapler validate → git tag v<版本> 指向同一快照 SHA
   ↓
 （可选）publish-macos-update-r2.sh → wrangler 传 R2（updates.pendingname.com）
 ```

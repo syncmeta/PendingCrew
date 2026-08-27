@@ -1,6 +1,6 @@
 #!/bin/sh
 # 用法: PENDING_NOTARY_PROFILE=pendingcrew-notary [PENDING_PUBLISH_R2=1] \
-#       scripts/release/build-macos-update.sh
+#       scripts/release/build-macos-update.sh [release-ref]
 #
 # 公证 profile 叫 `pendingcrew-notary`，在登录钥匙串里，用本机那把 App Store
 # Connect API key 建的（团队 M42BKJN82S，与 PendingBot 传 TestFlight 同一把）。
@@ -8,7 +8,7 @@
 # **别在这儿翻半天然后把公证关掉**：2026-08-19 查出线上装着的包正是这么来的，
 # 签名对、hardened runtime 对，就是没公证票，换台机器直接被 Gatekeeper 拦。
 #
-# 干净快照（钉 main HEAD）里构建 Release → Developer ID 签名（含 Sparkle
+# 干净快照（钉传入 ref；默认 main）里构建 Release → Developer ID 签名（含 Sparkle
 # 内嵌件）→ 公证 → staple → 生成更新说明 → generate_appcast 签 feed
 # → 打 tag → （可选）发 R2。工作区脏不脏都不影响所见即所装。
 set -eu
@@ -19,15 +19,33 @@ app_name=PendingCrew
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 
-# 干净快照：钉 main HEAD（#556 的教训 —— 这台机器工作区常年是脏的）
+# release ref 只解析一次，后面的 worktree、产物版本戳和 tag 都钉同一个完整 commit。
+# 默认仍发 main，保住原来的零参数调用；需要从已审核的 commit/tag 发时显式传 ref。
+[ "$#" -le 1 ] || {
+  echo "用法: PENDING_NOTARY_PROFILE=<profile> $0 [release-ref]" >&2
+  exit 2
+}
+release_ref=${1:-main}
+release_commit=$(git -C "$root" rev-parse --verify "$release_ref^{commit}" 2>/dev/null) || {
+  echo "release ref '$release_ref' 不能解析成 commit，拒绝构建" >&2
+  exit 2
+}
+
+# 干净快照：钉上面解析出的 commit（#556 的教训 —— 这台机器工作区常年是脏的）
 snap=$(mktemp -d "/tmp/$product-release.XXXXXX")
-git -C "$root" worktree add --detach "$snap/src" main
 cleanup() {
   git -C "$root" worktree remove --force "$snap/src" 2>/dev/null || true
   git -C "$root" worktree prune
   rm -rf "$snap"
 }
 trap cleanup EXIT HUP INT TERM
+git -C "$root" worktree add --detach "$snap/src" "$release_commit"
+snapshot_commit=$(git -C "$snap/src" rev-parse HEAD)
+[ "$snapshot_commit" = "$release_commit" ] || {
+  echo "快照 HEAD $snapshot_commit 与 release ref 解析结果 $release_commit 不一致，拒绝构建" >&2
+  exit 2
+}
+echo "note: release ref $release_ref -> snapshot HEAD $snapshot_commit"
 # build 号 = 纪元日时间戳「天.秒」（例 20683.07783）。
 #
 # 为什么**不**再从 git 历史算（原来是 `rev-list --count HEAD`）：2026-08 仓库重建，
@@ -60,7 +78,7 @@ test -n "$version"
 # 从头再来一遍（含一次 Apple 公证往返）。这里提前把同一个取段脚本跑一次，缺了
 # 立刻停，别让人白等。
 echo "note: 预检 CHANGELOG.md 里 $version 那一段"
-"$root/scripts/release/changelog-section.sh" "$version" >/dev/null
+"$root/scripts/release/changelog-section.sh" "$version" "$snap/src/CHANGELOG.md" >/dev/null
 
 # 逐段比较两个 1~3 段版本号。退出码 0 = $1 严格大于 $2。
 #
@@ -282,7 +300,8 @@ xcrun stapler staple "$app"
 /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 
 # 更新说明要在 generate_appcast 之前生成（同名 .html 会被嵌进 feed item）
-"$root/scripts/release/generate-release-notes.sh" "$version"
+PENDING_CHANGELOG="$snap/src/CHANGELOG.md" \
+  "$root/scripts/release/generate-release-notes.sh" "$version"
 
 gen="$derived/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
 test -x "$gen"
@@ -293,8 +312,17 @@ test -x "$gen"
 codesign --verify --deep --strict --verbose=2 "$app"
 spctl -a -vvv -t install "$app"
 xcrun stapler validate "$app"
-git -C "$root" tag "v$version" main 2>/dev/null \
-  || echo "tag v$version 已存在，沿用"
+tag_name="v$version"
+if tagged_commit=$(git -C "$root" rev-parse --verify "$tag_name^{commit}" 2>/dev/null); then
+  if [ "$tagged_commit" != "$snapshot_commit" ]; then
+    echo "tag $tag_name 已指向 $tagged_commit，但本次产物来自 $snapshot_commit，拒绝沿用" >&2
+    exit 2
+  fi
+  echo "note: tag $tag_name 已存在，且与 snapshot HEAD $snapshot_commit 一致"
+else
+  git -C "$root" tag "$tag_name" "$snapshot_commit"
+  echo "note: tag $tag_name -> $snapshot_commit"
+fi
 echo "Update ready: $archive"
 
 if [ "${PENDING_PUBLISH_R2:-0}" = "1" ]; then
