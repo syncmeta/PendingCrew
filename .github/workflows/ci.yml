@@ -57,15 +57,20 @@ jobs:
             exit 1
           fi
 
-  # **只在 PR 和手动触发时跑，不跟着每次 push main。**
-  # 实测冷机一次 13 分 26 秒（macOS 编译+单测 9'45"、iOS 端编译 3'12"）。
-  # private 仓库的 macOS runner 按 10 倍计费 —— 一次就是约 140 分钟额度，
-  # Free 档一个月的量只够跑十几次。而 push main 这条路上的人本来就在本地
-  # 编过测过；真正只有机器抓得住的是上面那个漂移检查，它 12 秒、便宜到可以
-  # 每次都跑。仓库转 public 之后 macOS runner 免费，那时可以把这条 if 去掉。
+  # **push / PR / 手动触发都跑。** 实测冷机一次 13 分 26 秒（macOS 编译+单测
+  # 9'45"、iOS 端编译 3'12"）。
+  #
+  # 这里原本挂着 `if: github.event_name != 'push'`，理由是 private 仓库的 macOS
+  # runner 按 10 倍计费、Free 档一个月只够跑十几次，而那句注释自己写了「仓库转
+  # public 之后 macOS runner 免费，那时可以把这条 if 去掉」。**仓库已经是 public
+  # 了，所以去掉。**
+  #
+  # 拖到现在才去掉的代价是真实的，记在这儿别再犯：2026-08-26 发 0.1.17 时一次
+  # 推了 28 笔到 main，这个 job 被这条 if 全部跳过，而流水线整体判定是
+  # **success** —— 页面上一片绿，底下压着 28 笔从没被编译过的改动。**一个会
+  # 跳过主检查、却仍然报绿的流水线，比一个红的更糟：红的会叫，绿的不会。**
   build-test:
     name: 三端编译 + 单测
-    if: github.event_name != 'push'
     runs-on: macos-26
     timeout-minutes: 60
     steps:
