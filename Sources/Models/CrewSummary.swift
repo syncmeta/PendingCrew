@@ -43,8 +43,9 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
     /// 侧栏「按机器分组」的分组键。
     let machineId: String?
 
-    /// 机长点亮的 attention 黄点文案（非 nil = 侧栏头像右上角显黄点，值为悬浮
-    /// 提示）。**纯本地概念** —— `LocalCrewStore` 透传;edge 不下发 → 缺键兜 nil。
+    /// 机长持久化的 attention 文案。Todo #71 起它不再控制 crew 状态点（黄色只表示
+    /// 人类 Todo）；字段继续保留给提醒账和旧数据兼容。**纯本地概念** ——
+    /// `LocalCrewStore` 透传;edge 不下发 → 缺键兜 nil。
     let attentionReason: String?
 
     /// **人手动**把这个 crew 从侧栏藏起来的时刻（ISO8601；nil = 没藏）。**纯本地

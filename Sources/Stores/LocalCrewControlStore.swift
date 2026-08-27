@@ -64,13 +64,13 @@ final class LocalCrewControlStore: @unchecked Sendable {
         return out
     }
 
-    // MARK: - Attention（机长 raise_attention / clear_attention → 侧栏黄点）
+    // MARK: - Attention（旧会话兼容文案，不再控制侧栏状态点）
     //
     // 与 rename 同款 last-write-wins 单文件：`<crewId>.crewattention.json` =
-    // `CrewAttentionChange`（reason 非 nil = 点亮，nil = 熄灭）。同 tick 先 raise
+    // `CrewAttentionChange`（reason 非 nil = 记录，nil = 清除）。同 tick 先 raise
     // 后 clear 只落最后一次 —— app 侧 drain 时直接应用最终态即可。
 
-    /// 点亮 attention（helper 侧：`raise_attention` 工具）。reason 一句话说明为什么
+    /// 记录 attention（helper 侧：`raise_attention` 工具）。reason 一句话说明为什么
     /// 需要人类注意；空（trim 后）忽略，不落盘。
     func requestAttention(crewId: String, reason: String) {
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,7 +78,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
         writeAttention(crewId: crewId, reason: trimmed)
     }
 
-    /// 熄灭 attention（helper 侧：`clear_attention` 工具）。
+    /// 清除 attention（helper 侧：`clear_attention` 工具）。
     func requestClearAttention(crewId: String) {
         writeAttention(crewId: crewId, reason: nil)
     }
@@ -409,8 +409,7 @@ struct CrewMetaChange: Codable, Equatable {
     let ts: String
 }
 
-/// 一条待落地的 attention 变更（机长黄点）。`reason` 非 nil = 点亮（悬浮提示文案），
-/// nil = 熄灭。`ts` = 写入时间（ISO8601），调试用。
+/// 一条待落地的旧 attention 文案变更。`reason` 非 nil = 记录，nil = 清除。
 struct CrewAttentionChange: Codable, Equatable {
     let reason: String?
     let ts: String

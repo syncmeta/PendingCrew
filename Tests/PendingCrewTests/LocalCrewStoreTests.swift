@@ -173,7 +173,7 @@ final class LocalCrewStoreTests: XCTestCase {
         XCTAssertEqual(object["title"] as? String, "Lisbon")
     }
 
-    // MARK: - Attention（机长黄点持久化）
+    // MARK: - Attention（旧兼容文案持久化）
 
     func testSetAttentionUpdatesSummary() {
         let s = LocalCrewStore(baseDirectory: tempDir())

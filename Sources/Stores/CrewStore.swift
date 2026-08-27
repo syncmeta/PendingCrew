@@ -77,10 +77,9 @@ final class CrewStore: ObservableObject {
     ///   侧栏（乃至所有观察 `CrewStore` 的视图）重渲染。
     @Published private(set) var lastWhiteboardMessages: [String: LocalWhiteboardMessage] = [:]
 
-    /// 「每个 crew 的**人类 Todo** 还有几条没回应」（Todo #62 ④）。侧栏黄点的
-    /// 第二个源 —— 与 `attentionReason` **并联**，两个源互不干扰（后者是单槽
-    /// last-write-wins，混进去会互相冲掉）。与上面那份末条快照同样是后台算好、
-    /// 只在真变了时发布，body 里零磁盘 IO。
+    /// 「每个 crew 的**人类 Todo** 还有几条没回应」—— Todo #71 起是侧栏黄点的
+    /// 唯一数据源。与上面那份末条快照同样是后台算好、只在真变了时发布，body
+    /// 里零磁盘 IO。
     @Published private(set) var humanTodoUnanswered: [String: Int] = [:]
 
     /// 上面那份快照的算法（指纹门控，只有指纹变了的 crew 才重新解码）。
@@ -410,9 +409,8 @@ final class CrewStore: ObservableObject {
         await refreshList()
     }
 
-    /// 排空 attention 变更（机长 `raise_attention` / `clear_attention`，crew-sidebar-status
-    /// spec §3），逐条落到 `LocalCrewStore.setAttention`（nil = 熄灭）；有变更才刷新列表
-    /// （`crews` 重发布 → 侧栏头像黄点亮/灭）。
+    /// 排空旧 attention 文案变更，逐条落到 `LocalCrewStore.setAttention`（nil = 清除）；
+    /// Todo #71 起它不再控制状态点，保留这条路只为旧会话和旧数据兼容。
     private func applyPendingAttentions() async {
         let changes = LocalCrewControlStore.shared.drainAttentions()
         guard !changes.isEmpty else { return }

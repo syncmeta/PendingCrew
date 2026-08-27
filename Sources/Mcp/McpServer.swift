@@ -282,7 +282,7 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "raise_attention",
-                    "description": "（机长专用）点亮侧栏本 crew 头像上的黄色提醒点，提示人类来看。用于：有事需要人类决策、或遇到你自己解决不了的问题。reason 一句话说清为什么需要人类注意——会作为黄点的悬浮提示展示给人类。何时点亮由你自主判断；黄点是打扰人类的信号，别滥用。事情解决或人类已回复不再需要时，记得用 clear_attention 熄灭。",
+                    "description": "（机长专用，旧会话兼容）记录一条 attention 文案，但 Todo #71 起不再控制侧栏状态指示。需要人类处理、并点亮黄色呼吸指示时，请改用 add_human_todo；那本账可追踪、可回应。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -293,7 +293,7 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "clear_attention",
-                    "description": "（机长专用）熄灭侧栏本 crew 头像上的黄色提醒点。事情解决、或人类已回复不再需要关注时调用。",
+                    "description": "（机长专用，旧会话兼容）清除旧 attention 文案；不影响由人类 Todo 控制的黄色呼吸指示。",
                     "inputSchema": ["type": "object", "properties": [String: Any]()],
                 ])
                 tools.append([
@@ -588,8 +588,7 @@ final class McpServer {
             control.requestRename(crewId: crewId, name: name)
             return toolResult(id: id, text: "已把 crew 改名为「\(name)」。")
         case "raise_attention":
-            // 机长专用（crew-sidebar-status §3）：写 attention 变更进控制通道；app 侧
-            // CrewStore 排空落地到 LocalCrewStore.setAttention → 侧栏头像黄点点亮。
+            // 旧会话兼容：attention 文案仍落盘，但 Todo #71 起不再控制状态点。
             guard isCaptain else {
                 return toolResult(id: id, text: "ERROR: 仅机长可用")
             }
@@ -598,13 +597,13 @@ final class McpServer {
                 return toolResult(id: id, text: "ERROR: reason 不能为空 —— 一句话说明为什么需要人类注意。")
             }
             control.requestAttention(crewId: crewId, reason: reason)
-            return toolResult(id: id, text: "已点亮本 crew 的黄色提醒点：\(reason)。事了记得 clear_attention 熄灭。")
+            return toolResult(id: id, text: "已记录兼容 attention 文案：\(reason)。它不点亮状态指示；需要黄色呼吸指示请用 add_human_todo。")
         case "clear_attention":
             guard isCaptain else {
                 return toolResult(id: id, text: "ERROR: 仅机长可用")
             }
             control.requestClearAttention(crewId: crewId)
-            return toolResult(id: id, text: "已熄灭本 crew 的黄色提醒点。")
+            return toolResult(id: id, text: "已清除兼容 attention 文案；人类 Todo 的黄色呼吸指示不受影响。")
         case "start_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let brief = ((args["brief"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

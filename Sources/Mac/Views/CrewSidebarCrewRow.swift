@@ -66,12 +66,11 @@ struct CrewSidebarCrewRow: View {
             }
 
             CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
-                // 状态点浮在色条右上角（spec §3）：红=异常、黄=机长 attention、
-                // 绿=干活中、灰=全闲/退；无 session 且无 attention 不画。
+                // 状态点浮在色条右上角（Todo #71）：红=错误、黄=有给人类的 Todo
+                // （呼吸）、绿=干活中；静止/退出不画。
                 .overlay(alignment: .topTrailing) {
                     CrewStatusDotView(
-                        attentionReason: crew.attentionReason,
-                        // 黄点第二个源（Todo #62 ④）：人类 Todo 那本还有几条没回应。
+                        // 黄点唯一来源：人类 Todo 那本还有几条没回应。
                         // 读的是 `CrewStore` 后台指纹门控算好的快照，一次字典查表 ——
                         // **不在这里现读 Todo 文件**（那就是 2026-08-17 的形状）。
                         humanTodoUnanswered: crewStore.humanTodoUnanswered[crew.id] ?? 0,
@@ -240,8 +239,7 @@ struct CrewSidebarCrewRow: View {
 /// `objectWillChange` 撞一下本视图的 `@State revision`，任一 run 状态变化即重
 /// 渲染重新聚合。runs 列表本身增删由父视图（观察 runner.runs）驱动重建。
 struct CrewStatusDotView: View {
-    let attentionReason: String?
-    /// 人类 Todo 那本的未回应条数（Todo #62 ④）。0 = 这个源不亮。
+    /// 人类 Todo 那本的未回应条数。0 = 不亮黄。
     var humanTodoUnanswered: Int = 0
     let runs: [CrewSessionRun]
 
@@ -255,9 +253,13 @@ struct CrewStatusDotView: View {
                     Circle()
                         .fill(Theme.Palette.canvas)
                         .frame(width: 14, height: 14)
-                    Circle()
-                        .fill(fill(color))
-                        .frame(width: 10, height: 10)
+                    if color.breathes {
+                        BreathingDot(size: 10, color: fill(color))
+                    } else {
+                        Circle()
+                            .fill(fill(color))
+                            .frame(width: 10, height: 10)
+                    }
                 }
                 .help(helpText(color) ?? "")
             }
@@ -275,10 +277,11 @@ struct CrewStatusDotView: View {
                     isAlive: $0.status == .running,
                     isWorking: $0.isWorking,
                     hasHealthIssue: $0.health != nil,
-                    // 侧栏折起来时人只看得到这一级 —— 群里有人卡着等回复要冒得上来（#25 层 2）。
+                    // `awaitingReply` 仍留在信号快照供其它状态消费，但 Todo #71 起不再
+                    // 把“等回复”当错误染红；要人处理的事由人类 Todo 黄点表达。
                     isAwaitingReply: $0.awaitingReply != nil)
             },
-            attentionReason: attentionReason,
+            attentionReason: nil,
             humanTodoUnanswered: humanTodoUnanswered)
     }
 
@@ -288,24 +291,17 @@ struct CrewStatusDotView: View {
         case .red: return .red
         case .yellow: return .yellow
         case .green: return .green
-        case .gray: return .gray
         }
     }
 
-    /// 悬浮提示：黄 = 机长的 attention reason **和/或** 人类 Todo 那本的待办条数
-    /// （两个源并联，各说各的 —— 只说一个会让人以为另一个不存在）；
-    /// 红 = 首个异常 session 的 health detail（实现顺手，spec 允许）。绿/灰不带。
+    /// 悬浮提示：黄 = 人类 Todo 待办条数；红 = 首个异常 session 的 health detail。
     private func helpText(_ color: CrewStatusDotColor) -> String? {
         switch color {
         case .yellow:
-            var parts: [String] = []
-            if let attentionReason, !attentionReason.isEmpty { parts.append(attentionReason) }
-            if humanTodoUnanswered > 0 {
-                parts.append("人类 Todo 有 \(humanTodoUnanswered) 条等你拍板")
-            }
-            return parts.isEmpty ? nil : parts.joined(separator: "\n")
-        case .red: return runs.first(where: { $0.health != nil && $0.status == .running })?.health?.detail
-        case .green, .gray: return nil
+            return humanTodoUnanswered > 0
+                ? "人类 Todo 有 \(humanTodoUnanswered) 条等你拍板" : nil
+        case .red: return runs.first(where: { $0.health != nil })?.health?.detail
+        case .green: return nil
         }
     }
 }

@@ -246,6 +246,16 @@ final class ViewWiringTests: XCTestCase {
                       "新建机长没有真正绕开历史 conversation 查询")
     }
 
+    /// Todo #71：纯逻辑说「黄色呼吸」还不够，侧栏实际那颗 crew 点必须真的用上
+    /// CoreAnimation 版 BreathingDot，不能只留一颗静态 Circle。
+    func testCrewTodoYellowIndicatorIsWiredToBreathingDot() throws {
+        let row = try Self.text(of: "CrewSidebarCrewRow.swift")
+        XCTAssertTrue(row.contains("if color.breathes"),
+                      "crew 状态点没有读取黄色呼吸语义")
+        XCTAssertTrue(row.contains("BreathingDot(size: 10, color: fill(color))"),
+                      "黄色 Todo 指示仍是静态点，没有接 CoreAnimation 呼吸点")
+    }
+
     // MARK: - 源码扫描
 
     /// 按文件名取源码原文（找不到 → 失败，不静默放过）。

@@ -94,7 +94,7 @@ final class LocalCrewControlStoreTests: XCTestCase {
         XCTAssertTrue(s.drainCommands().isEmpty)
     }
 
-    // MARK: - Attention（raise_attention / clear_attention → 侧栏黄点）
+    // MARK: - Attention（旧会话兼容文案）
 
     func testRequestAttentionThenPeek() {
         let s = LocalCrewControlStore(directory: tempDir())

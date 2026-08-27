@@ -269,7 +269,7 @@ final class McpServerTests: XCTestCase {
         XCTAssertEqual(s.control.pendingRename(crewId: "c"), "鉴权 重构")
     }
 
-    // MARK: - raise_attention / clear_attention（机长专用，crew-sidebar-status）
+    // MARK: - raise_attention / clear_attention（机长专用，旧会话兼容）
 
     private func callTool(_ s: McpServer, name: String, argsJSON: String = "{}") -> String {
         s.handleLine("""
@@ -304,7 +304,8 @@ final class McpServerTests: XCTestCase {
     func testCaptainRaiseAttentionWritesControl() {
         let s = server(tempDir(), isCaptain: true)
         let r = callTool(s, name: "raise_attention", argsJSON: #"{"reason":"需要人类拍板部署时机"}"#)
-        XCTAssertTrue(r.contains("已点亮"))
+        XCTAssertTrue(r.contains("不点亮状态指示"))
+        XCTAssertTrue(r.contains("add_human_todo"))
         XCTAssertEqual(s.control.pendingAttention(crewId: "c")?.reason, "需要人类拍板部署时机")
     }
 
@@ -318,8 +319,8 @@ final class McpServerTests: XCTestCase {
         let s = server(tempDir(), isCaptain: true)
         _ = callTool(s, name: "raise_attention", argsJSON: #"{"reason":"有问题"}"#)
         let r = callTool(s, name: "clear_attention")
-        XCTAssertTrue(r.contains("已熄灭"))
-        // last-write-wins：留下的是熄灭态（reason nil）。
+        XCTAssertTrue(r.contains("已清除兼容 attention 文案"))
+        // last-write-wins：留下的是清除态（reason nil）。
         let pending = s.control.pendingAttention(crewId: "c")
         XCTAssertNotNil(pending)
         XCTAssertNil(pending?.reason)

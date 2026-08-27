@@ -162,8 +162,8 @@ final class LocalCrewStore {
     }
     #endif
 
-    /// 点亮/熄灭机长 attention 黄点（`raise_attention` / `clear_attention` 经控制
-    /// 通道落地，由 `CrewStore` 调）。`reason == nil`（或 trim 后空）= 熄灭。
+    /// 记录/清除旧 attention 文案（`raise_attention` / `clear_attention` 经控制
+    /// 通道落地，由 `CrewStore` 调）。Todo #71 起不再控制状态点。
     /// crew 不存在 / 值未变 → 忽略（幂等，避免无谓重写 + 变更信号）。
     func setAttention(_ id: String, reason: String?) {
         let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -684,8 +684,7 @@ struct LocalCrew: Codable, Equatable {
     var parentCrewIds: [String] = []
     /// 持久 session 成员（chunk 4 补口）。optional → 旧 JSON 缺键向后兼容。
     var sessionMembers: [LocalSessionMember]? = nil
-    /// 机长点亮的 attention 黄点文案（crew-sidebar-status spec §3）。非 nil = 点亮，
-    /// 侧栏头像右上角显黄点 + 悬浮提示。optional → 旧 JSON 缺键向后兼容。
+    /// 旧 attention 文案。Todo #71 起不再控制状态点；optional → 旧 JSON 缺键向后兼容。
     var attentionReason: String? = nil
     /// 通讯录 crew 号（`7`）。全机唯一、终身不变 —— 被 adopt/release/换爹都不重发，
     /// **层级完全不参与编号**。optional 只为解码旧 JSON；首次加载一次性回填。

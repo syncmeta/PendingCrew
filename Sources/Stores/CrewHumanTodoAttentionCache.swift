@@ -2,13 +2,8 @@ import Foundation
 
 /// 「每个 crew 的**人类 Todo** 还有几条没回应」的指纹门控快照（Todo #62 ④）。
 ///
-/// ## 为什么黄点要读两个源
-/// 侧栏那颗黄点原来只看 `attentionReason`。把人类 Todo 也塞进那个字段是错的：
-/// 它是**单槽 last-write-wins**（`LocalCrewStore.setAttention`）—— 人类 Todo 往里写
-/// 会把机长 `raise_attention` 的理由冲掉，机长 `clear_attention` 又会顺手把
-/// 「还有 3 条没人拍板」熄了。两个源互不干扰地并起来（`attentionReason != nil`
-/// **或** 这本账里有未回应条目），才谈得上「不回应也能按灭」——
-/// `dismissedAt` 一打，算出来就是灭（判据见 `LocalTodoItem.isUnanswered`）。
+/// Todo #71 起侧栏黄点只表示「这本账里有未回应条目」；`attentionReason` 不再参与
+/// 颜色。`dismissedAt` 一打，算出来就是灭（判据见 `LocalTodoItem.isUnanswered`）。
 ///
 /// ## 为什么不在 body 里现算
 /// `LocalTodoStore.list(crewId:)` 是 flock + 整份 JSON 解码。侧栏每个 crew 一行、

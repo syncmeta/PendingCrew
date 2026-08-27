@@ -1,23 +1,18 @@
 import XCTest
 
-/// 侧栏黄点读**两个源**（Todo #62 ④）：机长 `raise_attention` 的理由，**或**
-/// 人类 Todo 那本里还有没回应的条目。
-///
-/// 为什么不合成一个源：`attentionReason` 是单槽 last-write-wins —— 混进去会互相
-/// 冲掉（人类 Todo 覆盖机长的理由；机长 `clear_attention` 顺手把待拍板熄了）。
-/// 并联之后两边互不干扰，「人类不回应也能按灭」也自然成立。
+/// Todo #71：侧栏黄点只表示「人类 Todo 那本里还有没回应的条目」。
+/// `attentionReason` 继续持久化供其它提醒渠道使用，但不再控制这颗状态点。
 final class CrewHumanTodoAttentionTests: XCTestCase {
 
     private let idle = [CrewSessionStatusSignal(isAlive: true, isWorking: false,
                                                 hasHealthIssue: false)]
 
-    // ── 两个源各自能点亮，互不干扰 ─────────────────────────────────────────
+    // ── 黄点只有一个来源：给人类的 Todo ───────────────────────────────────
 
-    /// 只有机长的 attention → 黄（老行为，一个字没变）。
-    func testAttentionAloneStillLightsYellow() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(sessions: idle, attentionReason: "看一眼这个"),
-            .yellow)
+    /// 只有机长 attention、没有人类 Todo → 静止时不画点。
+    func testAttentionAloneDoesNotLightYellow() {
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: idle, attentionReason: "看一眼这个"))
     }
 
     /// 只有未回应的人类 Todo → 也黄。机长那边一个字没写。
@@ -28,7 +23,7 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
             .yellow)
     }
 
-    /// 机长熄了自己的灯，人类 Todo 那盏**不受影响** —— 这正是不合并成一个源的理由。
+    /// 机长 attention 是否存在都不影响 Todo 黄点。
     func testClearingCaptainAttentionDoesNotKillTodoDot() {
         XCTAssertEqual(
             CrewStatusAggregation.dot(sessions: idle, attentionReason: nil,
@@ -36,20 +31,18 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
             .yellow, "clear_attention 不该把「还有 1 条没人拍板」一起熄掉")
     }
 
-    /// 反过来也一样：人类把 Todo 全回应完了，机长那盏还亮着。
-    func testAnsweringAllTodosDoesNotKillCaptainAttention() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(sessions: idle, attentionReason: "还有别的事",
-                                      humanTodoUnanswered: 0),
-            .yellow)
+    /// 人类把 Todo 全回应完后，即使还留着 attentionReason，静止 crew 也不画点。
+    func testAnsweringAllTodosClearsYellowEvenWithAttentionReason() {
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: idle, attentionReason: "还有别的事",
+            humanTodoUnanswered: 0))
     }
 
-    /// 两个源都空 → 不黄（有 session 记录 → 灰）。
-    func testNeitherSourceMeansNoYellow() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(sessions: idle, attentionReason: nil,
-                                      humanTodoUnanswered: 0),
-            .gray)
+    /// 没有 Todo 且静止 → 完全不画指示。
+    func testNoTodoAndIdleMeansNoIndicator() {
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: idle, attentionReason: nil,
+            humanTodoUnanswered: 0))
     }
 
     /// 红压过黄 —— 优先级没被这一笔动到。
@@ -62,9 +55,9 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
             .red)
     }
 
-    /// 老调用方不传新形参 → 一个字不变。
-    func testLegacyCallSitesUnchanged() {
-        XCTAssertEqual(CrewStatusAggregation.dot(sessions: idle, attentionReason: nil), .gray)
+    /// 老调用方不传 Todo 数 → 视为没有 Todo，静止不画。
+    func testDefaultTodoCountMeansNoIndicator() {
+        XCTAssertNil(CrewStatusAggregation.dot(sessions: idle, attentionReason: nil))
     }
 
     // ── 「不回应也能按灭」：判据在条目上 ───────────────────────────────────
