@@ -1438,6 +1438,56 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
+    /// 从「新建 session」页面直接创建一个全新的机长 conversation。与右键把现有
+    /// worker 无损续接成机长不同，这条路没有可续的 conversation：先停止当前机长，
+    /// 再用人在页面上选的 kind 新开 captain session。默认 kind 先落盘，保证停止旧
+    /// 机长后即使启动失败/应用退出，下一次普通唤醒也会沿着这次选择恢复。
+    func startFreshCaptain(
+        detail: CrewDetail,
+        backend: PendingCrewBackend?,
+        openingBrief: String,
+        kind: LocalCodingAgentKind,
+        userInitiated: Bool = false
+    ) async throws {
+        guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
+        let crewId = detail.crew.id
+        guard captainReassignmentsInFlight.insert(crewId).inserted else {
+            throw RunnerError.captainLaunchContended
+        }
+        defer { captainReassignmentsInFlight.remove(crewId) }
+
+        LocalWhiteboardStore.shared.appendSessionMessage(
+            crewId: crewId, sessionId: "system",
+            text: "人从新建 session 页面指定了一位新的 \(kind.displayName) 机长；当前机长会先停止，再以全新 conversation 启动。",
+            category: "progress", senderName: "系统")
+        LocalCrewStore.shared.setCaptainAgentKind(crewId, kind.rawValue)
+
+        var started = false
+        for attempt in 0..<30 where !started {
+            let replaced = runs.filter { $0.crewId == crewId && $0.role == .captain }
+            let hadRunningProcess = replaced.contains { $0.status == .running }
+            for run in replaced { remove(run.runID) }
+            if hadRunningProcess {
+                try await Task.sleep(nanoseconds: 2_200_000_000)
+            }
+            started = try await startCaptain(
+                detail: detail,
+                backend: backend,
+                openingBrief: openingBrief,
+                captainKindOverride: kind,
+                resumePreviousConversation: false,
+                userInitiated: userInitiated)
+            if !started, attempt < 29 {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+        guard started else { throw RunnerError.captainLaunchContended }
+        LocalWhiteboardStore.shared.appendSessionMessage(
+            crewId: crewId, sessionId: "system",
+            text: "新机长已启动：\(kind.displayName)，使用全新 conversation。",
+            category: "milestone", senderName: "系统")
+    }
+
     /// 启动机长 session —— 手动按钮、建 crew 自动起共用这一份（单一事实源）。
     /// 已有在跑的 captain 直接返回（每 crew 同时只允许一个，防重）。无工作目录抛错。
     ///
@@ -1459,10 +1509,15 @@ final class CrewSessionRunner: ObservableObject {
         openingBrief: String? = nil,
         captainKindOverride: LocalCodingAgentKind? = nil,
         resumeSessionIdOverride: String? = nil,
+        /// `false` 只用于「新建 session → 设为机长」：明确新开 conversation，
+        /// 不把用户刚填的第一条指令挂到历史机长 conversation 上。
+        resumePreviousConversation: Bool = true,
         userInitiated: Bool = false
     ) async throws -> Bool {
         let crewId = detail.crew.id
-        if captainReassignmentsInFlight.contains(crewId), resumeSessionIdOverride == nil {
+        if captainReassignmentsInFlight.contains(crewId),
+           resumeSessionIdOverride == nil,
+           resumePreviousConversation {
             return false
         }
         guard !runs.contains(where: {
@@ -1509,7 +1564,7 @@ final class CrewSessionRunner: ObservableObject {
         // `--resume` 是纯粹的错。续不上由 agent 自己说了算（claude 走
         // `retryWithoutResumeIfClaudeRefused`，codex 走 backend 的 resume→start 降级）。
         var resumeCaptainId = resumeSessionIdOverride
-        if resumeCaptainId == nil {
+        if resumeCaptainId == nil && resumePreviousConversation {
             let previousCaptain = LocalAgentSessionStore.shared.latestCaptainRecord(
                 crewId: crewId, kind: captainKind.rawValue)
             if case .resume(let id) = AgentSessionResume.decide(

@@ -190,10 +190,16 @@ final class ViewWiringTests: XCTestCase {
         let view = try Self.text(of: "CrewSessionWindowView.swift")
         XCTAssertTrue(view.contains("Image(systemName: \"apple.terminal\")"),
                       "新建 session 页没有统一的终端图标")
-        XCTAssertTrue(view.contains(".pickerStyle(.segmented)"),
-                      "Claude Code / Codex / 终端没有做成分段药丸")
-        XCTAssertTrue(view.contains("Text(\"终端\").tag(LocalCodingAgentKind.terminal)"),
+        XCTAssertTrue(view.contains("private var sessionKindControls"),
+                      "Claude Code / Codex / 终端没有共用纵向药丸选择器")
+        XCTAssertTrue(view.contains("VStack(spacing: 8)"),
+                      "session 类型没有从上到下纵向排列")
+        XCTAssertTrue(view.contains("sessionKindPill(.terminal, title: \"终端\")"),
                       "新建 session 页没有纯终端选项")
+        XCTAssertTrue(view.contains("Capsule().fill("),
+                      "session 类型的每一行没有画成完整药丸")
+        XCTAssertFalse(view.contains(".pickerStyle(.segmented)"),
+                       "session 类型仍是横向分段选择，不是从上到下一行一个药丸")
         XCTAssertTrue(view.contains("case .terminal:\n                break"),
                       "纯终端启动分支没有与世界观/MCP 注入明确断开")
         XCTAssertTrue(view.contains("$0.crewId == crewStore.selectedDetail?.crew.id && $0.kind.isAgent"),
@@ -210,6 +216,34 @@ final class ViewWiringTests: XCTestCase {
         let launch = try Self.text(of: "LocalSessionLaunch.swift")
         XCTAssertTrue(launch.contains("guard runnerKind.isAgent else { return nil }"),
                       "世界观渲染入口没有拒绝纯终端")
+    }
+
+    /// Todo #70：「设为机长」必须真的走 captain 启动语义，而且新建页明确新开
+    /// conversation；只画一枚勾选框、最后仍以 worker role 启动不算完成。
+    func testNewSessionCanStartAsAFreshCaptain() throws {
+        let view = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(view.contains("Toggle(\"设为机长\", isOn: $startsAsCaptain)"),
+                      "新建 session 页面没有「设为机长」勾选项")
+        XCTAssertTrue(view.contains("if startsAsCaptain {"),
+                      "勾选状态没有接到发送/启动分支")
+        XCTAssertTrue(view.contains("sessionRunner.startFreshCaptain("),
+                      "勾选后没有走新机长的交接编排入口")
+        XCTAssertTrue(view.contains("kind: selectedKind"),
+                      "机长启动没有使用人在页面上选的 session 类型")
+        XCTAssertTrue(view.contains("启动后会停止当前机长，由这个新 session 接任。"),
+                      "已有运行中机长时，页面没有向人说明会发生交接")
+
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("func startFreshCaptain("),
+                      "runner 没有新建机长的单一编排入口")
+        XCTAssertTrue(runner.contains("LocalCrewStore.shared.setCaptainAgentKind(crewId, kind.rawValue)"),
+                      "新机长类型没有先落盘，失败后普通唤醒会拉回旧 runner")
+        XCTAssertTrue(runner.contains("resumePreviousConversation: false"),
+                      "新建机长错误地续接了旧机长 conversation")
+        XCTAssertTrue(runner.contains("resumePreviousConversation: Bool = true"),
+                      "普通机长重启的历史续跑默认语义被破坏")
+        XCTAssertTrue(runner.contains("if resumeCaptainId == nil && resumePreviousConversation"),
+                      "新建机长没有真正绕开历史 conversation 查询")
     }
 
     // MARK: - 源码扫描

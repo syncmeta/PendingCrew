@@ -33,6 +33,9 @@ struct CrewSessionWindowView: View {
     /// composer 里给「新 worker session」选的 agent kind。初值从 crew 的
     /// `captainAgentKind` 派生（见 `.onAppear` / `.onChange`），crew 没记 → `.codex`。
     @State private var selectedKind: LocalCodingAgentKind = .codex
+    /// 新建 agent session 时是否直接以机长身份启动。纯终端不能成为 crew 成员，
+    /// 当前已有运行中机长时也不能再占一个 captain slot。
+    @State private var startsAsCaptain = false
 
     // MARK: - 成员列表模式 state（自轮询白板 + roster，与中栏各拉各的）
 
@@ -73,9 +76,16 @@ struct CrewSessionWindowView: View {
         }
         // composer 的 agent kind 默认跟随 crew 建好时选的 captainAgentKind ——
         // 初次出现 + 切 crew 都重算（crew 没记 → `.codex`）。
-        .onAppear { selectedKind = Self.resolveAgentKind(crewStore.selectedDetail) }
+        .onAppear {
+            selectedKind = Self.resolveAgentKind(crewStore.selectedDetail)
+            startsAsCaptain = false
+        }
         .onChange(of: crewStore.selectedDetail?.crew.id) { _, _ in
             selectedKind = Self.resolveAgentKind(crewStore.selectedDetail)
+            startsAsCaptain = false
+        }
+        .onChange(of: selectedKind) { _, kind in
+            if kind == .terminal { startsAsCaptain = false }
         }
         .confirmationDialog(
             pendingCaptainRun.map { "把「\($0.displayName)」设为机长？" } ?? "重新指定机长？",
@@ -673,15 +683,7 @@ struct CrewSessionWindowView: View {
             if crewStore.selectedDetail == nil {
                 Text("先在左侧选一个 crew").foregroundStyle(.secondary)
             } else {
-                Picker("Session 类型", selection: $selectedKind) {
-                    Text("Claude Code").tag(LocalCodingAgentKind.claudeCode)
-                    Text("Codex").tag(LocalCodingAgentKind.codex)
-                    Text("终端").tag(LocalCodingAgentKind.terminal)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 300)
-                .disabled(starting)
+                sessionKindControls
             }
         }
         .padding(.horizontal, 24)
@@ -723,15 +725,7 @@ struct CrewSessionWindowView: View {
             // 点回一个已退出的 run 时仍保留它的终端现场；在现场下方另起 session
             // 也必须能改 kind。常用的「+」新建页仍只在终端图标下显示这组药丸。
             if !sessionRunner.isComposingNew, sessionRunner.current?.status != .running {
-                Picker("Session 类型", selection: $selectedKind) {
-                    Text("Claude Code").tag(LocalCodingAgentKind.claudeCode)
-                    Text("Codex").tag(LocalCodingAgentKind.codex)
-                    Text("终端").tag(LocalCodingAgentKind.terminal)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 300)
-                .disabled(starting)
+                sessionKindControls
                 .padding(.top, 8)
             }
             if let localError {
@@ -772,6 +766,65 @@ struct CrewSessionWindowView: View {
         .padding(.top, 6)
     }
 
+    /// 新建 session 的类型选择：按人的阅读顺序从上到下，一行一个完整药丸。
+    /// 同一组控件也承载「设为机长」；这不是显示标签，发送时会走 captain 的
+    /// persona / MCP / role 启动入口。
+    private var sessionKindControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Session 类型")
+                .font(.caption)
+                .foregroundStyle(Theme.Palette.inkMuted)
+            VStack(spacing: 8) {
+                sessionKindPill(.claudeCode, title: "Claude Code")
+                sessionKindPill(.codex, title: "Codex")
+                sessionKindPill(.terminal, title: "终端")
+            }
+            Toggle("设为机长", isOn: $startsAsCaptain)
+                .toggleStyle(.checkbox)
+                .disabled(starting || selectedKind == .terminal)
+                .help("以机长世界观和工具权限启动这个新 session")
+            if startsAsCaptain && hasRunningCaptain {
+                Text("启动后会停止当前机长，由这个新 session 接任。")
+                    .font(.caption)
+                    .foregroundStyle(Theme.Palette.inkMuted)
+            }
+        }
+        .frame(maxWidth: 300, alignment: .leading)
+        .disabled(starting)
+    }
+
+    private func sessionKindPill(_ kind: LocalCodingAgentKind, title: String) -> some View {
+        Button {
+            selectedKind = kind
+        } label: {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 8)
+                if selectedKind == kind {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                }
+            }
+            .foregroundStyle(selectedKind == kind
+                             ? Theme.Palette.accent : Theme.Palette.ink)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 34)
+            .background(
+                Capsule().fill(selectedKind == kind
+                               ? Theme.Palette.accentBg : Theme.Palette.canvas))
+            .overlay(
+                Capsule().strokeBorder(
+                    selectedKind == kind
+                        ? Theme.Palette.accent.opacity(0.65)
+                        : Theme.Palette.inkMuted.opacity(0.28),
+                    lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selectedKind == kind ? .isSelected : [])
+    }
+
     // MARK: - actions
 
     private func send() async {
@@ -803,6 +856,17 @@ struct CrewSessionWindowView: View {
         localError = nil
 
         do {
+            if startsAsCaptain {
+                try await sessionRunner.startFreshCaptain(
+                    detail: detail,
+                    backend: appModel.backend,
+                    openingBrief: firstPrompt,
+                    kind: selectedKind,
+                    userInitiated: true)
+                draft = ""
+                startsAsCaptain = false
+                return
+            }
             var cfg = SessionConfig(
                 kind: selectedKind,
                 initialPrompt: selectedKind == .terminal ? nil : firstPrompt)
