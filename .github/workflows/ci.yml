@@ -9,9 +9,16 @@ name: CI
 
 on:
   workflow_dispatch:
+  # **push 上故意不设 paths-ignore。** 它在 push 事件上按「这一推的 head 提交
+  # 动了哪些文件」来判，不是按整推的合计 —— 而发版流程的最后一笔惯例是
+  # 只改 CHANGELOG.md。2026-08-26 发 0.1.17 时一次推了 28 笔，head 正好是那笔
+  # 纯 .md，**整条流水线一次都没被触发**（`?head_sha=` 查回 total_count 0），
+  # 28 笔代码就这么进了公开 main 且从没被 CI 看过一眼。
+  # 省下的是几分钟机器时间（public 仓库的 macOS runner 免费），赔进去的是
+  # 「main 被验过」这个前提本身。不划算，所以不设。
   push:
     branches: [main]
-    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
+  # PR 上保留：这里的过滤按整个 PR 的 diff 判，不会被最后一笔提交带偏。
   pull_request:
     branches: [main]
     paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
