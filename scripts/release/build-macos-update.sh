@@ -80,7 +80,7 @@ test -n "$version"
 echo "note: 预检 CHANGELOG.md 里 $version 那一段"
 "$root/scripts/release/changelog-section.sh" "$version" "$snap/src/CHANGELOG.md" >/dev/null
 
-# 逐段比较两个 1~3 段版本号。退出码 0 = $1 严格大于 $2。
+# 逐段比较两个 1~3 段版本号。退出码 0 = $1 严格大于 ${2}。
 #
 # 不用 `[ -le ]`：那是 shell **整数**比较，喂带句点的版本号会直接
 # `integer expression expected` 报错。也不用 `sort -V`：BSD/GNU 行为不完全一致。
@@ -129,11 +129,11 @@ if feed=$(curl -fsS --max-time 20 "$feed_url"); then
       exit 2
     fi
     # 花括号不是装饰：macOS /bin/sh 的多字节变量名解析会把紧邻的中文标点吞进
-    # `$live_max，`，在 `set -u` 下变成一个不存在的变量，公证流程尚未构建就退出。
+    # `${live_max}，`，在 `set -u` 下变成一个不存在的变量，公证流程尚未构建就退出。
     echo "note: build 号 $build_number > 线上最大 ${live_max}，不倒退"
   fi
 else
-  echo "拉不到线上 feed（$feed_url）—— 无法确认这次不会版本倒退，拒绝构建。" >&2
+  echo "拉不到线上 feed（${feed_url}）—— 无法确认这次不会版本倒退，拒绝构建。" >&2
   echo "这是 fail-closed：网络失败绝不能和「首发」共用一条放行路径。" >&2
   exit 2
 fi
@@ -315,7 +315,7 @@ xcrun stapler validate "$app"
 tag_name="v$version"
 if tagged_commit=$(git -C "$root" rev-parse --verify "$tag_name^{commit}" 2>/dev/null); then
   if [ "$tagged_commit" != "$snapshot_commit" ]; then
-    echo "tag $tag_name 已指向 $tagged_commit，但本次产物来自 $snapshot_commit，拒绝沿用" >&2
+    echo "tag $tag_name 已指向 ${tagged_commit}，但本次产物来自 ${snapshot_commit}，拒绝沿用" >&2
     exit 2
   fi
   echo "note: tag $tag_name 已存在，且与 snapshot HEAD $snapshot_commit 一致"

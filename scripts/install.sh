@@ -26,7 +26,7 @@ die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] || die "这是 macOS 专用的 app。"
 os=$(sw_vers -productVersion)
 major=${os%%.*}
-[ "$major" -ge 14 ] 2>/dev/null || die "需要 macOS 14 (Sonoma) 或更新，你这台是 $os。"
+[ "$major" -ge 14 ] 2>/dev/null || die "需要 macOS 14 (Sonoma) 或更新，你这台是 ${os}。"
 
 # 正在跑的话就停手让人自己退 —— **不替用户杀进程**：那些 session 是活的子进程，
 # 替他 kill 等于替他中断正在干的活。
@@ -41,7 +41,7 @@ command -v curl >/dev/null || die "找不到 curl。"
 say "→ 查最新版本…"
 api="https://api.github.com/repos/$repo/releases/latest"
 meta=$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api") \
-  || die "拉不到 Release 信息（$api）。网络不通，或者仓库还没有已发布的版本。"
+  || die "拉不到 Release 信息（${api}）。网络不通，或者仓库还没有已发布的版本。"
 
 # 只认 .dmg 那一个资产。Release 上还有一个给 Sparkle 自更新用的 .zip，不是给这儿的。
 url=$(printf '%s' "$meta" | /usr/bin/awk -F'"' '/"browser_download_url"/ && /\.dmg"/ {print $4; exit}')

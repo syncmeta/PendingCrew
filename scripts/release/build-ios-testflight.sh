@@ -29,7 +29,7 @@ for arg in "$@"; do
       awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
       exit 0
       ;;
-    *) echo "未知参数: $arg（只认 --dry-run）" >&2; exit 2 ;;
+    *) echo "未知参数: ${arg}（只认 --dry-run）" >&2; exit 2 ;;
   esac
 done
 
@@ -54,14 +54,14 @@ asc_key_path="${ASC_KEY_PATH:-$(env_value ASC_KEY_PATH)}"
 
 for pair in "ASC_KEY_ID=$asc_key_id" "ASC_ISSUER_ID=$asc_issuer_id" "ASC_KEY_PATH=$asc_key_path"; do
   case "$pair" in
-    *=) echo "缺少 ${pair%=*} —— 设成环境变量，或写进 $asc_env。见 docs/release-ios.md。" >&2; exit 2 ;;
+    *=) echo "缺少 ${pair%=*} —— 设成环境变量，或写进 ${asc_env}。见 docs/release-ios.md。" >&2; exit 2 ;;
   esac
 done
 [ -f "$asc_key_path" ] || { echo "ASC_KEY_PATH 指向的 .p8 不存在: $asc_key_path" >&2; exit 2; }
 
 # altool 的 `--api-key <ID>` **不吃路径**：它去几个固定目录里找名叫
 # `AuthKey_<ID>.p8` 的文件（./private_keys、~/private_keys、~/.private_keys、
-# ~/.appstoreconnect/private_keys，或 $API_PRIVATE_KEYS_DIR）。所以这里
+# ~/.appstoreconnect/private_keys，或 ${API_PRIVATE_KEYS_DIR}）。所以这里
 # ① 把 key 所在目录喂给 API_PRIVATE_KEYS_DIR，② 提前断言文件名对得上 ——
 # 否则要等 archive+export 十几分钟跑完，才在最后一步收到一句「找不到 key」。
 asc_key_dir=$(CDPATH= cd -- "$(dirname -- "$asc_key_path")" && pwd)
@@ -129,7 +129,7 @@ build 号没有严格递增，拒绝发版。
 EOF
   exit 2
 fi
-echo "note: build $build_number = $build_human（ASC 当前最高: $asc_highest）"
+echo "note: build $build_number = ${build_human}（ASC 当前最高: ${asc_highest}）"
 # 纪元日不可读是有意的，但「不可读」不等于「查不到」：上面这行抄进 TestFlight 的
 # What to Test。事后反查任意一个 <天>.<秒>：date -u -r $(( 天 * 86400 + 秒 ))
 
@@ -257,13 +257,13 @@ plist="$app/Info.plist"
 #    ASC 会拒收，但那要等上传往返才知道。
 got_short=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
 got_build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
-[ "$got_short" = "$version" ] || { echo "产物 CFBundleShortVersionString=$got_short，期望 $version" >&2; exit 2; }
-[ "$got_build" = "$build_number" ] || { echo "产物 CFBundleVersion=$got_build，期望 $build_number" >&2; exit 2; }
+[ "$got_short" = "$version" ] || { echo "产物 CFBundleShortVersionString=${got_short}，期望 $version" >&2; exit 2; }
+[ "$got_build" = "$build_number" ] || { echo "产物 CFBundleVersion=${got_build}，期望 $build_number" >&2; exit 2; }
 
 # ③ 平台必须是 iPhoneOS。单 target 两平台，destination 写错就会打出 macOS 产物，
 #    .ipa 外壳一模一样看不出来。
 platform=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$plist")
-[ "$platform" = "iPhoneOS" ] || { echo "产物平台是 $platform，不是 iPhoneOS —— archive 的 -destination 写错了" >&2; exit 2; }
+[ "$platform" = "iPhoneOS" ] || { echo "产物平台是 ${platform}，不是 iPhoneOS —— archive 的 -destination 写错了" >&2; exit 2; }
 
 # ④ 签的必须是团队身份，不是 ad-hoc。仓库默认 xcconfig 就是 ad-hoc（`-`），
 #    命令行那几个键一旦漏传，构建照样成功、产物照样是 .ipa，但 ASC 会拒收，
@@ -388,7 +388,7 @@ EOF
   exit 0
 fi
 
-echo "note: 开始上传 $ipa → App Store Connect（app id $asc_app_id）"
+echo "note: 开始上传 $ipa → App Store Connect（app id ${asc_app_id}）"
 API_PRIVATE_KEYS_DIR="$asc_key_dir" xcrun altool --upload-package "$ipa" \
   --platform ios --apple-id "$asc_app_id" --bundle-id "$bundle_id" \
   --bundle-version "$build_number" --bundle-short-version-string "$version" \

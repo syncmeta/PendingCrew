@@ -45,7 +45,7 @@ case "$src" in
   *.zip) /usr/bin/ditto -x -k "$src" "$work/unzip"; app="$work/unzip/$app_name.app" ;;
   *)     app=$(CDPATH= cd -- "$src" && pwd) ;;
 esac
-test -d "$app" || { echo "解不出 $app_name.app（$src）" >&2; exit 2; }
+test -d "$app" || { echo "解不出 $app_name.app（${src}）" >&2; exit 2; }
 
 # —— 进 dmg 之前先确认这份 app 本身是合格的 ——
 # 这三道都是**输入检查**，不是我们自己造出来的性质。dmg 只是个容器：装进去一个
