@@ -186,6 +186,35 @@ final class SessionHost: ObservableObject {
             }
             .store(in: &bag)
 
+        // captain 自己发起的交接：helper 只把明确二选一请求放进共享队列；真正停旧、
+        // 起新、持久化和失败回滚都在持有 live runs 的 runner 上执行。旧 captain 的
+        // MCP 进程会在交接中被停掉，所以不 long-poll 工具调用；最终结果统一进群聊。
+        crewStore.$captainHandoffRequests
+            .receive(on: DispatchQueue.main)
+            .sink { [weak crewStore, weak model] reqs in
+                MainActor.assumeIsolated {
+                    guard !reqs.isEmpty, let crewStore, let model else { return }
+                    crewStore.captainHandoffRequests = []
+                    Task {
+                        for req in reqs {
+                            if crewStore.details[req.crewId] == nil {
+                                await crewStore.refreshDetail(req.crewId)
+                            }
+                            guard let detail = crewStore.details[req.crewId] else {
+                                crewStore.postSystemNotice(
+                                    crewId: req.crewId,
+                                    text: "机长交接失败：拉不到 crew 详情。旧机长保持不变。")
+                                continue
+                            }
+                            await sessionRunner.performCaptainHandoff(
+                                req, detail: detail, backend: model.backend)
+                            await crewStore.refreshDetail(req.crewId)
+                        }
+                    }
+                }
+            }
+            .store(in: &bag)
+
         // session 自切模型/effort（set_session_profile）：claude 注入 /model /effort,
         // codex 白板说明。数组语义同 sessionSpawnRequests（防同 tick 丢命令）。
         crewStore.$profileChangeRequests

@@ -328,6 +328,32 @@ final class McpServer {
                     ],
                 ])
                 tools.append([
+                    "name": "handoff_captain_to_session",
+                    "description": "（机长专用）把机长位置交给本 crew 一个**现有 session 成员**。session_id 必须是 list_sessions 给出的稳定 id；app 会按 crew 成员表 + agent-sessions 账本核对归属、真实 runner 和可续接会话号，绝不从显示名猜。工具只表示请求已受理；停旧、续接新机长、持久化与失败回滚由真实 runner 服务完成，最终成功/失败以群聊系统回执为准。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "session_id": ["type": "string", "description": "本 crew 现有 agent session 的稳定 id。"],
+                        ],
+                        "required": ["session_id"],
+                    ],
+                ])
+                tools.append([
+                    "name": "create_and_handoff_captain",
+                    "description": "（机长专用）新建一个 agent session 并把机长位置交给它。runner 必填且只接受 claude/codex；model/effort 不填时走所选 runner 的正常默认解析；title 不填为「机长」；opening_brief 不填时只注入交接说明与白板续接要求。工具只表示请求已受理，最终成功/失败以群聊系统回执为准。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "runner": ["type": "string", "enum": ["claude", "codex"], "description": "新机长 runner，必须显式选择。"],
+                            "model": ["type": "string", "description": "可选模型别名/slug；不填=所选 runner 默认。"],
+                            "effort": ["type": "string", "description": "可选 thinking effort；不填=所选 runner 默认。"],
+                            "title": ["type": "string", "description": "可选 session 标题；不填=「机长」。"],
+                            "opening_brief": ["type": "string", "description": "可选首轮交接任务；不填=仅确认接管并续接白板。"],
+                        ],
+                        "required": ["runner"],
+                    ],
+                ])
+                tools.append([
                     "name": "inspect_session",
                     "description": "（机长专用）查看某个 session 的终端现场：返回其当前状态（干活中/空闲/异常/已退出）+ 终端最近若干行输出（codex 为 transcript 尾部）。用于 @ 不应时自己诊断：先 list_sessions 拿 session_id，再 inspect 看它卡在哪（模态菜单/等输入/报错）。看完通常接 nudge_session 解卡。",
                     "inputSchema": [
@@ -645,6 +671,41 @@ final class McpServer {
             }
             if let announceIncident { text += "\n⚠️ \(announceIncident)" }
             return toolResult(id: id, text: text)
+        case "handoff_captain_to_session":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let target = ((args["session_id"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty else {
+                return toolResult(id: id, text: "ERROR: session_id 不能为空")
+            }
+            control.enqueueCaptainHandoff(
+                crewId: crewId, requesterSessionId: sessionId,
+                targetSessionId: target, runner: nil, model: nil, effort: nil,
+                title: nil, openingBrief: nil)
+            return toolResult(
+                id: id,
+                text: "机长交接请求已受理；app 会核对成员与真实会话账本并执行停旧/起新/回滚。请以群聊最终回执为准，这里不代表最终成功。")
+        case "create_and_handoff_captain":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            guard let runner = args["runner"] as? String,
+                  runner == "claude" || runner == "codex" else {
+                return toolResult(id: id, text: "ERROR: runner 必填，只接受 claude/codex")
+            }
+            let model = sanitizedProfileToken(args["model"] as? String, lowercased: false)
+            let effort = sanitizedProfileToken(args["effort"] as? String, lowercased: true)
+            let title = (args["title"] as? String)
+                .map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "机长"
+            let openingBrief = (args["opening_brief"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            control.enqueueCaptainHandoff(
+                crewId: crewId, requesterSessionId: sessionId,
+                targetSessionId: nil, runner: runner, model: model, effort: effort,
+                title: title, openingBrief: openingBrief)
+            return toolResult(
+                id: id,
+                text: "新机长交接请求已受理（\(runner)，title=\(title)）；app 会执行真实停旧/起新/持久化与失败回滚。请以群聊最终回执为准，这里不代表最终成功。")
         case "inspect_session":
             // 机长自愈（wake-resilience 层4）：@ 不应时自己看终端现场。命令经
             // 控制通道给 app 执行（helper 碰不到 run/PTY），long-poll 应答文件。
@@ -1274,6 +1335,13 @@ final class McpServer {
     /// 工具描述尾巴：每家一行「可用模型 + effort + 不选时跑什么 + 新鲜度警示」。
     /// `AgentModelCatalog.summaryLine` 把警示串在同一行里 —— 别在这里拆开，
     /// 拆开就会有调用方只取清单不取警示，那就等于把过时的表当事实呈现了。
+    private func sanitizedProfileToken(_ raw: String?, lowercased: Bool) -> String? {
+        guard var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty, !value.contains(where: \.isWhitespace) else { return nil }
+        if lowercased { value = value.lowercased() }
+        return value
+    }
+
     private func catalogHint(agents: [String]) -> String {
         let file = modelCatalogFile
         let lines = agents.map { agent -> String in

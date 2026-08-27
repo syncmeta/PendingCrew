@@ -102,4 +102,29 @@ final class CaptainHandoffTests: XCTestCase {
         XCTAssertEqual(state.persistedKind, "codex")
         XCTAssertEqual(state.maximumActive, 1)
     }
+
+    func testRollbackDoesNotRestoreOldWhenNewCaptainCannotStop() async {
+        enum Expected: Error { case persistenceFailed, stopFailed }
+        let state = CaptainState()
+        do {
+            try await CaptainHandoffTransaction.perform(
+                stopOld: { state.replace([], event: "stop-old") },
+                startNew: { state.replace(["new"], event: "start-new") },
+                persistNew: { throw Expected.persistenceFailed },
+                stopNew: {
+                    state.events.append("stop-new-failed")
+                    throw Expected.stopFailed
+                },
+                restoreOld: { state.replace(["old", "new"], event: "restore-old") })
+            XCTFail("expected rollback failure")
+        } catch {
+            guard case CaptainHandoffTransactionError.rollbackFailed = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(state.events, ["stop-old", "start-new", "stop-new-failed"])
+        XCTAssertEqual(state.active, ["new"], "新机长停不掉时绝不能再拉起旧机长")
+        XCTAssertEqual(state.maximumActive, 1)
+    }
 }

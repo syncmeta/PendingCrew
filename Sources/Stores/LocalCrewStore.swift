@@ -132,12 +132,31 @@ final class LocalCrewStore {
     /// 恰好在两步之间退出，下一次自动唤醒也不会又按旧 runner 起回来。只接受真
     /// agent（`claude_code` / `codex`）；空值、未知值、纯终端与幂等写入都忽略。
     func setCaptainAgentKind(_ id: String, _ rawKind: String) {
-        guard rawKind == "claude_code" || rawKind == "codex",
-              var crew = crews[id], crew.captainAgentKind != rawKind else { return }
+        do {
+            try setCaptainAgentKindReportingFailure(id, rawKind)
+        } catch {
+            NSLog("[LocalCrewStore] persist captain kind failed: \(error)")
+        }
+    }
+
+    /// 交接事务使用的 fail-closed 版本：只有 atomic write 成功才保留内存新值；编码/
+    /// 落盘失败会把内存恢复成旧 crew 并抛错，让 runner 停新机长、续回旧机长。
+    func setCaptainAgentKindReportingFailure(_ id: String, _ rawKind: String) throws {
+        guard rawKind == "claude_code" || rawKind == "codex" else {
+            throw LocalCrewStoreError.invalidCaptainAgentKind(rawKind)
+        }
+        guard var crew = crews[id] else { throw LocalCrewStoreError.crewNotFound(id) }
+        guard crew.captainAgentKind != rawKind else { return }
+        let previous = crew
         crew.captainAgentKind = rawKind
         crew.updatedAt = ISO8601DateFormatter().string(from: Date())
         crews[id] = crew
-        persistToDisk()
+        do {
+            try persistToDiskReportingFailure()
+        } catch {
+            crews[id] = previous
+            throw error
+        }
     }
 
     /// 迁移规划层要的全部 crew 字段（id / 名 / 工作目录 / 父边）。返回元组而非专用类型 ——
@@ -626,16 +645,20 @@ final class LocalCrewStore {
     }
 
     private func persistToDisk() {
+        do {
+            try persistToDiskReportingFailure()
+        } catch {
+            NSLog("[LocalCrewStore] persist failed: %@", error.localizedDescription)
+        }
+    }
+
+    private func persistToDiskReportingFailure() throws {
         let payload = LocalCrewFile(
             version: 1, crews: Array(crews.values), nextCrewNumber: nextCrewNumber)
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(payload)
-            try data.write(to: fileURL, options: [.atomic])
-        } catch {
-            NSLog("[LocalCrewStore] persist failed: \(error)")
-        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(payload)
+        try data.write(to: fileURL, options: [.atomic])
     }
 }
 
@@ -859,6 +882,8 @@ enum LocalCrewStoreError: LocalizedError {
     case crewNotFound(String)
     /// release 的操作对象不是发起 crew 的直系子（上级只能动直系子）。
     case notDirectChild(String)
+    /// 机长只能由真实 agent runner 承担。
+    case invalidCaptainAgentKind(String)
 
     var errorDescription: String? {
         switch self {
@@ -868,6 +893,8 @@ enum LocalCrewStoreError: LocalizedError {
             return "本地 crew \(id) 不存在"
         case .notDirectChild(let id):
             return "crew \(id) 不是本 crew 的直系子,不能操作"
+        case .invalidCaptainAgentKind(let kind):
+            return "\(kind) 不是可用的机长 runner（只支持 claude_code/codex）"
         }
     }
 }

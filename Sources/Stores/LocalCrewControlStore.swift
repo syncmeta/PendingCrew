@@ -132,6 +132,26 @@ final class LocalCrewControlStore: @unchecked Sendable {
             ts: ISO8601DateFormatter().string(from: Date())))
     }
 
+    /// 机长主动交接。两种模式严格互斥：
+    /// - existing：`targetSessionId` 非 nil、`runner` nil；
+    /// - create-new：`targetSessionId` nil、`runner` 必为 claude/codex。
+    /// helper 只负责可靠入队，live runner 的停旧/起新/回滚由 app 侧同一服务执行。
+    func enqueueCaptainHandoff(
+        crewId: String, requesterSessionId: String,
+        targetSessionId: String?, runner: String?, model: String?, effort: String?,
+        title: String?, openingBrief: String?
+    ) {
+        let existing = targetSessionId?.isEmpty == false && runner == nil
+        let fresh = targetSessionId == nil && (runner == "claude" || runner == "codex")
+        guard existing || fresh else { return }
+        enqueue(CrewCommand(
+            id: UUID().uuidString.lowercased(), crewId: crewId, kind: "handoff_captain",
+            brief: "-", runner: runner, isolation: nil, title: title,
+            model: model, effort: effort, sessionId: targetSessionId,
+            note: openingBrief, requesterSessionId: requesterSessionId,
+            ts: ISO8601DateFormatter().string(from: Date())))
+    }
+
     /// 机长以当前 crew 为父建子 crew：brief 必填；title 可选（不给 → app 侧地名占位）。
     func enqueueCreateChildCrew(crewId: String, sessionId: String,
                                 brief: String, title: String?) {
@@ -426,7 +446,7 @@ struct CrewCommandResponse: Codable, Equatable {
 struct CrewCommand: Codable, Equatable {
     let id: String
     let crewId: String
-    /// "start_session" | "create_child_crew" | "set_profile" | "schedule_wakeup" |
+    /// "start_session" | "handoff_captain" | "create_child_crew" | "set_profile" | "schedule_wakeup" |
     /// "listen" | "crew_message" | "inspect_session" | "nudge_session" | "stop_session" |
     /// "adopt_crew" | "release_crew" | "create_parent_crew" | "adopt_parent" | "change_workdir"
     let kind: String

@@ -53,6 +53,9 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private let protocolNotificationSink: ((_ method: String, _ params: [String: Any]) -> Void)?
 
     private var threadId: String?
+    /// 交接事务的提交门：只有 app-server 已握手并拿到真实 thread id，才算新机长
+    /// 真正可接活。不能拿构造时默认的 `.running` 冒充启动成功。
+    var isLaunchReady: Bool { threadId?.isEmpty == false }
     private var activeTurnId: String?
     private var approvalsReviewer: CodexProtocol.ApprovalsReviewer
     /// 已通知过的 server-request method —— 同一种一轮只喊一次，别让某个每回合都来的

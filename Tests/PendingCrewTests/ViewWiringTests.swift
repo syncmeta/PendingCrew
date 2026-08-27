@@ -236,8 +236,10 @@ final class ViewWiringTests: XCTestCase {
         let runner = try Self.text(of: "CrewSessionRunner.swift")
         XCTAssertTrue(runner.contains("func startFreshCaptain("),
                       "runner 没有新建机长的单一编排入口")
-        XCTAssertTrue(runner.contains("LocalCrewStore.shared.setCaptainAgentKind(crewId, kind.rawValue)"),
-                      "新机长类型没有先落盘，失败后普通唤醒会拉回旧 runner")
+        XCTAssertTrue(runner.contains("CaptainHandoffTransaction.perform("),
+                      "新机长没有走可回滚的统一交接事务")
+        XCTAssertTrue(runner.contains("setCaptainAgentKindReportingFailure"),
+                      "新机长类型没有以可报告失败的方式落盘")
         XCTAssertTrue(runner.contains("resumePreviousConversation: false"),
                       "新建机长错误地续接了旧机长 conversation")
         XCTAssertTrue(runner.contains("resumePreviousConversation: Bool = true"),

@@ -79,6 +79,22 @@ final class LocalCrewStoreTests: XCTestCase {
         XCTAssertEqual(s.getCrew(id)?.crew.captainAgentKind, LocalCodingAgentKind.codex.rawValue)
     }
 
+    func testCaptainKindPersistenceFailureRestoresPreviousInMemoryKind() throws {
+        let dir = tempDir()
+        let s = LocalCrewStore(baseDirectory: dir)
+        let id = s.createCrew(req(title: "交接落盘失败")).crewId
+        let file = dir.appendingPathComponent("local-crews.json")
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try s.setCaptainAgentKindReportingFailure(
+            id, LocalCodingAgentKind.claudeCode.rawValue))
+        XCTAssertEqual(
+            s.getCrew(id)?.crew.captainAgentKind,
+            LocalCodingAgentKind.codex.rawValue,
+            "落盘失败时内存角色也必须回到旧机长，不能制造持久态/运行态分叉")
+    }
+
     func testCaptainReassignmentRequestReplacesPerCrewAndCompletesById() throws {
         let dir = tempDir()
         let store = LocalCaptainReassignmentStore(directory: dir)
