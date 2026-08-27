@@ -1,7 +1,8 @@
 import Foundation
 
-/// crew 级状态点颜色（侧栏色条右上角；Todo #71）。
-/// 优先级 红（错误）> 黄（有给人类的 Todo）> 绿（正在工作）；静止时不画。
+/// crew 级状态点颜色（侧栏色条右上角；Todo #71/#73）。
+/// 优先级 红（错误）> 黄（本 crew 或后代有给人类的 Todo）> 绿（正在工作）；
+/// 静止时不画。
 ///
 /// ⚠️ 与 session 级状态点（`SessionStatusDot`，头像右下角那颗）是**两套语义**，
 /// 尤其**黄色含义完全不同**：这边黄 = 人类 Todo 未回应，那边黄 = session 空闲。
@@ -31,8 +32,19 @@ struct CrewSessionStatusSignal: Equatable {
 }
 
 /// crew 状态点聚合纯函数。sessions 来自 `CrewSessionRunner.runs` 里本 crew 的 run；
-/// Todo 数来自 `CrewHumanTodoAttentionCache` 的后台快照。
+/// Todo 范围来自 `CrewHumanTodoAttentionCache` 的后台快照。
 enum CrewStatusAggregation {
+    /// Todo #73 的主入口：自身或后代任一有未回应条目都黄，且都压过工作绿。
+    static func dot(
+        sessions: [CrewSessionStatusSignal],
+        attention: CrewHumanTodoAttention
+    ) -> CrewStatusDotColor? {
+        if sessions.contains(where: { $0.hasHealthIssue }) { return .red }
+        if attention.hasUnanswered { return .yellow }
+        if sessions.contains(where: { $0.isWorking }) { return .green }
+        return nil
+    }
+
     /// 取最高优先级：红（健康异常）> 黄（给人类的 Todo）> 绿（干活中）> nil（静止）。
     /// `attentionReason` 形参为旧调用兼容保留，但 Todo #71 起不再控制这颗状态点；
     /// 需要人处理的事项应落人类 Todo，由可追踪、可回应的账本点亮黄色。
@@ -45,10 +57,11 @@ enum CrewStatusAggregation {
         attentionReason _: String?,
         humanTodoUnanswered: Int = 0
     ) -> CrewStatusDotColor? {
-        if sessions.contains(where: { $0.hasHealthIssue }) { return .red }
-        if humanTodoUnanswered > 0 { return .yellow }
-        if sessions.contains(where: { $0.isWorking }) { return .green }
-        return nil
+        dot(
+            sessions: sessions,
+            attention: CrewHumanTodoAttention(
+                ownUnanswered: humanTodoUnanswered,
+                descendantUnanswered: 0))
     }
 }
 // `sessionAttention`（头像右上角未读红点）已删（人类定调 2026-08-08：两个点合成一个）。

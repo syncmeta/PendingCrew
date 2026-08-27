@@ -91,6 +91,96 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
         XCTAssertEqual(store.list(crewId: "c").filter(\.isUnanswered).count, 0)
     }
 
+    /// 完成态是终态；即使旧数据没有回应行，也不能继续点灯。
+    func testCompletedItemIsNotUnansweredEvenWithoutResponse() {
+        let item = LocalTodoItem(
+            id: "done", number: 1, text: "已经办完", status: "completed",
+            createdAt: "2026-08-27T00:00:00Z")
+        XCTAssertFalse(item.isUnanswered)
+    }
+
+    /// 软删墓碑不触发；判据自身也要 fail-safe，不能只依赖 list 过滤。
+    func testSoftDeletedItemIsNotUnanswered() {
+        let item = LocalTodoItem(
+            id: "deleted", number: 2, text: "已删除", status: "pending",
+            createdAt: "2026-08-27T00:00:00Z", deletedAt: "2026-08-27T00:01:00Z")
+        XCTAssertFalse(item.isUnanswered)
+    }
+
+    // ── Todo #73：后代 Todo 向祖先传播 ────────────────────────────────────
+
+    func testMultiLevelDescendantTodoPropagatesToEveryAncestor() {
+        let result = CrewHumanTodoAttentionCache.aggregate(
+            directCounts: ["root": 1, "leaf": 2],
+            parentsByCrew: ["root": [], "middle": ["root"], "leaf": ["middle"]])
+
+        XCTAssertEqual(result["leaf"], .init(ownUnanswered: 2, descendantUnanswered: 0))
+        XCTAssertEqual(result["middle"], .init(ownUnanswered: 0, descendantUnanswered: 2))
+        XCTAssertEqual(result["root"], .init(ownUnanswered: 1, descendantUnanswered: 2))
+    }
+
+    /// DAG 有两条路径抵达同一祖先时，同一后代的条目只算一次。
+    func testDiamondHierarchyDoesNotDoubleCountDescendantTodo() {
+        let result = CrewHumanTodoAttentionCache.aggregate(
+            directCounts: ["leaf": 1],
+            parentsByCrew: [
+                "root": [], "left": ["root"], "right": ["root"],
+                "leaf": ["left", "right"],
+            ])
+
+        XCTAssertEqual(result["root"]?.descendantUnanswered, 1)
+        XCTAssertEqual(result["left"]?.descendantUnanswered, 1)
+        XCTAssertEqual(result["right"]?.descendantUnanswered, 1)
+    }
+
+    /// 脏数据成环时有限返回，且不能把来源 crew 自己再算成自己的后代。
+    func testCycleFailsSafeWithoutSelfCounting() {
+        let result = CrewHumanTodoAttentionCache.aggregate(
+            directCounts: ["b": 1],
+            parentsByCrew: ["a": ["c"], "b": ["a"], "c": ["b"]])
+
+        XCTAssertEqual(result["b"], .init(ownUnanswered: 1, descendantUnanswered: 0))
+        XCTAssertEqual(result["a"]?.descendantUnanswered, 1)
+        XCTAssertEqual(result["c"]?.descendantUnanswered, 1)
+    }
+
+    /// 父 id 不在本次 crew 列表时停在边界，不造幽灵祖先、不丢本 crew 自身语义。
+    func testMissingParentFailsSafeAtKnownCrewBoundary() {
+        let result = CrewHumanTodoAttentionCache.aggregate(
+            directCounts: ["child": 1],
+            parentsByCrew: ["child": ["missing"]])
+
+        XCTAssertEqual(result, [
+            "child": .init(ownUnanswered: 1, descendantUnanswered: 0),
+        ])
+    }
+
+    func testOwnAndDescendantAttentionHaveDistinctAccessibleSemantics() {
+        let own = CrewHumanTodoAttention(ownUnanswered: 2, descendantUnanswered: 0)
+        let descendant = CrewHumanTodoAttention(ownUnanswered: 0, descendantUnanswered: 3)
+
+        XCTAssertEqual(own.scope, .own)
+        XCTAssertEqual(own.accessibilityLabel, "本 crew 有 2 条人类 Todo 等你拍板")
+        XCTAssertEqual(descendant.scope, .descendant)
+        XCTAssertEqual(descendant.accessibilityLabel, "下属 crew 有 3 条人类 Todo 等你拍板")
+
+        let both = CrewHumanTodoAttention(ownUnanswered: 1, descendantUnanswered: 4)
+        XCTAssertEqual(both.scope, .ownAndDescendant)
+        XCTAssertEqual(
+            both.accessibilityLabel,
+            "本 crew 有 1 条人类 Todo 等你拍板；下属 crew 有 4 条人类 Todo 等你拍板")
+    }
+
+    /// 父 crew 自己在工作时，后代 Todo 黄仍压过绿，不能伪装成“正在工作”。
+    func testDescendantTodoYellowOutranksWorkingGreen() {
+        XCTAssertEqual(
+            CrewStatusAggregation.dot(
+                sessions: [CrewSessionStatusSignal(
+                    isAlive: true, isWorking: true, hasHealthIssue: false)],
+                attention: .init(ownUnanswered: 0, descendantUnanswered: 1)),
+            .yellow)
+    }
+
     // ── 快照：不许把 2026-08-17 那个形状再造一遍 ───────────────────────────
 
     /// 指纹没变 → **一次解码都不做**。这是「没在 body 路径上现读整份 Todo」的
@@ -121,5 +211,30 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
             loadUnansweredCount: { _ in XCTFail("文件不存在还去读"); return nil })
         XCTAssertEqual(cache.refresh(crewIds: ["a"]), [:])
         XCTAssertEqual(cache.decodeCount, 0)
+    }
+
+    /// 只改父边、不改 Todo 文件时要立刻重算祖先，但不能重新解码账本。
+    func testHierarchyChangeReaggregatesWithoutTodoDecode() {
+        let cache = CrewHumanTodoAttentionCache(
+            fingerprintOf: { _ in FileChangeGate.Fingerprint(modified: 1, size: 10) },
+            loadUnansweredCount: { $0 == "child" ? 1 : 0 })
+
+        let first = cache.refresh(
+            crewIds: ["old-parent", "new-parent", "child"],
+            parentsByCrew: [
+                "old-parent": [], "new-parent": [], "child": ["old-parent"],
+            ])
+        XCTAssertEqual(first["old-parent"]?.descendantUnanswered, 1)
+        XCTAssertEqual(first["new-parent"]?.descendantUnanswered, 0)
+        XCTAssertEqual(cache.decodeCount, 3)
+
+        let moved = cache.refresh(
+            crewIds: ["old-parent", "new-parent", "child"],
+            parentsByCrew: [
+                "old-parent": [], "new-parent": [], "child": ["new-parent"],
+            ])
+        XCTAssertEqual(moved["old-parent"]?.descendantUnanswered, 0)
+        XCTAssertEqual(moved["new-parent"]?.descendantUnanswered, 1)
+        XCTAssertEqual(cache.decodeCount, 3, "只改父边不该重读 Todo 文件")
     }
 }

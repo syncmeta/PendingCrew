@@ -66,14 +66,15 @@ struct CrewSidebarCrewRow: View {
             }
 
             CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
-                // 状态点浮在色条右上角（Todo #71）：红=错误、黄=有给人类的 Todo
-                // （呼吸）、绿=干活中；静止/退出不画。
+                // 状态点浮在色条右上角（Todo #71/#73）：红=错误、黄=本 crew 或
+                // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
                 .overlay(alignment: .topTrailing) {
                     CrewStatusDotView(
-                        // 黄点唯一来源：人类 Todo 那本还有几条没回应。
+                        // 黄点唯一来源：人类 Todo 那本还有几条没回应；后台快照已把
+                        // 后代条数沿父边递归聚合，并保留 own/descendant 语义。
                         // 读的是 `CrewStore` 后台指纹门控算好的快照，一次字典查表 ——
                         // **不在这里现读 Todo 文件**（那就是 2026-08-17 的形状）。
-                        humanTodoUnanswered: crewStore.humanTodoUnanswered[crew.id] ?? 0,
+                        attention: crewStore.humanTodoAttention[crew.id] ?? .none,
                         runs: sessionRunner.runs.filter { $0.crewId == crew.id }
                     )
                     .offset(x: 6, y: -5)
@@ -239,8 +240,8 @@ struct CrewSidebarCrewRow: View {
 /// `objectWillChange` 撞一下本视图的 `@State revision`，任一 run 状态变化即重
 /// 渲染重新聚合。runs 列表本身增删由父视图（观察 runner.runs）驱动重建。
 struct CrewStatusDotView: View {
-    /// 人类 Todo 那本的未回应条数。0 = 不亮黄。
-    var humanTodoUnanswered: Int = 0
+    /// 人类 Todo 的后台聚合快照；自身/后代分开，供可访问文案明确指路。
+    var attention: CrewHumanTodoAttention = .none
     let runs: [CrewSessionRun]
 
     @State private var revision = 0
@@ -262,6 +263,8 @@ struct CrewStatusDotView: View {
                     }
                 }
                 .help(helpText(color) ?? "")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel(color))
             }
         }
         .onReceive(Publishers.MergeMany(runs.map(\.objectWillChange))) { _ in
@@ -281,8 +284,7 @@ struct CrewStatusDotView: View {
                     // 把“等回复”当错误染红；要人处理的事由人类 Todo 黄点表达。
                     isAwaitingReply: $0.awaitingReply != nil)
             },
-            attentionReason: nil,
-            humanTodoUnanswered: humanTodoUnanswered)
+            attention: attention)
     }
 
     /// 配色对齐右栏切换条状态点（`SessionBarItemView`）：系统语义色。
@@ -294,14 +296,20 @@ struct CrewStatusDotView: View {
         }
     }
 
-    /// 悬浮提示：黄 = 人类 Todo 待办条数；红 = 首个异常 session 的 health detail。
+    /// 悬浮提示：黄明确区分「本 crew」与「下属 crew」；红 = 首个异常 detail。
     private func helpText(_ color: CrewStatusDotColor) -> String? {
         switch color {
-        case .yellow:
-            return humanTodoUnanswered > 0
-                ? "人类 Todo 有 \(humanTodoUnanswered) 条等你拍板" : nil
+        case .yellow: return attention.accessibilityLabel
         case .red: return runs.first(where: { $0.health != nil })?.health?.detail
         case .green: return nil
+        }
+    }
+
+    private func accessibilityLabel(_ color: CrewStatusDotColor) -> String {
+        switch color {
+        case .yellow: return attention.accessibilityLabel ?? "有人类 Todo 等你拍板"
+        case .red: return helpText(color) ?? "crew 有运行错误"
+        case .green: return "crew 正在工作"
         }
     }
 }

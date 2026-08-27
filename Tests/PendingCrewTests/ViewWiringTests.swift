@@ -254,6 +254,8 @@ final class ViewWiringTests: XCTestCase {
                       "crew 状态点没有读取黄色呼吸语义")
         XCTAssertTrue(row.contains("BreathingDot(size: 10, color: fill(color))"),
                       "黄色 Todo 指示仍是静态点，没有接 CoreAnimation 呼吸点")
+        XCTAssertTrue(row.contains(".accessibilityLabel(accessibilityLabel(color))"),
+                      "状态点没有把本 crew / 下属 crew 的区别接到辅助功能文案")
     }
 
     // MARK: - 源码扫描
