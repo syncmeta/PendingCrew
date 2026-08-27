@@ -1,11 +1,11 @@
 #if os(macOS)
 import Foundation
 
-/// Local 直投唤醒 + 缺席目标拉起的 IO 编排（Task 10：从 `CrewChatView`
-/// `injectMentionedLocalRuns` / `wakeAbsentMentionTargets` 抽出，供 composer 直发
-/// 和 relay 落地的远端 `crew_todo_add`（`CrewLocalTodoLanding`）共用 —— 两条来源
-/// 走同一套「点名本地 run → 空闲直投 / busy 不打断 / 缺席拉起」，不重复两份手工
-/// 编排代码）。决策核心仍是纯函数 `CrewLocalMentionInjectLogic`（已有单测）；
+/// 旧的 composer 直投唤醒 + 缺席目标拉起原语。它原先从 `CrewChatView` 抽出，
+/// 供人类 composer 与 Todo 共用。人类群消息现已统一由 `CrewLocalMentionWaker` 读取白板
+/// message id 后投递，产品入口不得再调用本类型，否则会绕过去重产生双重唤醒。
+/// 暂留源码只为兼容仍引用其纯拼装接口的历史分支；新代码不要接入。
+/// 决策核心仍是纯函数 `CrewLocalMentionInjectLogic`（已有单测）；
 /// 这里只做「拿 run 快照 → 决策 → IO」。
 @MainActor
 enum CrewLocalMentionDelivery {

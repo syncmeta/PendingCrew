@@ -127,6 +127,21 @@ final class ViewWiringTests: XCTestCase {
         }
     }
 
+    /// 人类消息只能由白板观察器按 message id 投递。composer / Todo 再直投一次会用
+    /// 随机 source key 绕过去重，表现成一条群消息唤醒两轮。
+    func testHumanWhiteboardWakeHasOneDeliverySource() throws {
+        for file in [
+            "CrewChatView.swift",
+            "CrewLocalTodoLanding.swift",
+            "CrewHumanTodoRespond.swift",
+            "CrewTodoFollowUp.swift",
+        ] {
+            let source = try Self.text(of: file)
+            XCTAssertFalse(source.contains("CrewLocalMentionDelivery.injectAndWake"),
+                           "\(file) 又绕过白板 message id 直投，人类消息会重复唤醒")
+        }
+    }
+
     /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。
     ///
     /// Todo #62 起改 / 删走 `LocalTodoStore.shared(ledger)` —— 详细窗口现在有两个

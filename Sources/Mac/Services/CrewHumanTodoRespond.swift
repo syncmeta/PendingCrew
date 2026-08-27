@@ -10,7 +10,7 @@ import SwiftUI
 ///   1. 回应落进 `.human` 那本账（`LocalTodoStore.respond`）；
 ///   2. 群里发一行「回应 人类 To Do #N：…」，挂 `[broadcast, 提问者]` ——
 ///      全组看得见（群聊是白板不是私信），只叫醒当初提这件事的那个 session；
-///   3. 叫醒它。提问者已经退出 / 条目没记下是谁提的 / 机长自己提的 → 按
+///   3. 白板唯一唤醒器叫醒它。提问者已经退出 / 条目没记下是谁提的 / 机长自己提的 → 按
 ///      `HumanTodoWakePlan` 回落机长转达，**绝不静默丢**。
 ///
 /// 走的是 ③ 那条共用的路，**没有为它另开特殊通道**：mentions 经
@@ -39,6 +39,11 @@ enum CrewHumanTodoRespond {
             }?.sessionId)
         let mentions = TodoLandingFlow.mentions(.responded, wake: plan)
         let announce = TodoLedger.human.responseAnnouncement(number: item.number, text: trimmed)
+        // 回落原因必须跟着同一条白板消息进 agentText；过去它只塞进 composer 的
+        // 第二条直投通道，白板唤醒一旦接管就会丢。现在白板既是真相也是唯一投递源。
+        let delivered = [announce, plan.fallbackNote]
+            .compactMap { $0 }
+            .joined(separator: "\n")
 
         // 步骤 2：发群。失败**不回滚**已落的账（本地已落是事实），但回执必须如实。
         guard let backend = appModel.backend else {
@@ -48,7 +53,7 @@ enum CrewHumanTodoRespond {
         }
         do {
             try await backend.postCrewMessage(
-                crewId: crewId, text: announce, mentions: mentions,
+                crewId: crewId, text: delivered, mentions: mentions,
                 replyToId: nil, localAttachments: [])
         } catch {
             return TodoLandingFlow.receipt(
@@ -56,21 +61,8 @@ enum CrewHumanTodoRespond {
                 reached: .persisted, detail: error.localizedDescription)
         }
 
-        // 步骤 3：叫醒。回落到机长时把「为什么落到你手上」一起带上 —— 不然机长收到
-        // 一条「人类回应了 #3」不知道该自己办还是该转达。
-        var injected = announce
-        if let note = plan.fallbackNote { injected += "\n" + note }
-        CrewLocalMentionDelivery.injectAndWake(
-            crewId: crewId, mentions: mentions, text: injected, senderName: "人",
-            sessionRunner: runner, backend: backend,
-            onError: { detail in
-                // 唤醒是 fire-and-forget 的那一步 —— 它静默失败正是这一族的病根，
-                // 所以失败要在群里留痕，别只烂在回执里（人这时可能已经关掉窗口了）。
-                LocalWhiteboardStore.shared.appendSessionMessage(
-                    crewId: crewId, sessionId: "system",
-                    text: "人类回应了人类 Todo #\(item.number)，但没能叫醒该醒的那个：\(detail)。",
-                    senderName: "系统")
-            })
+        // 步骤 3 由 `CrewLocalMentionWaker` 消费上面这条白板 message id：同进程
+        // changes 与目录事件即使都到，也只会进入一次 deferred-wake 队列。
         return nil
     }
 

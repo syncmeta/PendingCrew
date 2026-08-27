@@ -1208,15 +1208,9 @@ struct CrewChatView: View {
             try await backend.postCrewMessage(
                 crewId: crewId, text: text, mentions: mentions,
                 replyToId: replyToId, localAttachments: localAttachments)
-            // Local-first @ wake: after the message lands on the (local)
-            // whiteboard, directly inject it into any idle local run that was
-            // @-mentioned — idle runs have no next turn to pull it in (Phase 6
-            // 单元 3). No-op for the edge backend (那走 Phase 4b hub→inbox→waker).
-            // Todo #3：注入文本追加每个附件的绝对路径提示行（claude Read 即可看图）。
-            let injectText = ([text] + localAttachments.map(\.agentHint))
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-            injectMentionedLocalRuns(mentions: mentions, text: injectText)
+            // 唤醒只认刚落盘的白板条目：`CrewLocalMentionWaker` 用 message id 去重，
+            // 普通人类消息默认给当前机长，定向 @ 按目标走。不要在 composer 再造一条
+            // 随机 sourceKey 直投，否则同一条消息会被注入两次。
             // 自己说话就把视线带回最新一条，且不给自己发的话记未读（Todo #47 边界口径，
             // 与 iMessage / Slack / 微信一致）。哪怕人刚才正在往回翻，主动发言也是
             // 「我要回到现场」的明确意图。
@@ -1258,8 +1252,7 @@ struct CrewChatView: View {
             // 与 relay 落地远端 crew_todo_add 共用）。
             _ = try await CrewLocalTodoLanding.land(
                 crewId: crewId, text: text, attachments: saved,
-                backend: backend, sessionRunner: sessionRunner,
-                onError: { loadError = $0 })
+                backend: backend)
             // 建 Todo 也会往群里发一条「To do +1: #N」—— 同样是自己说话（Todo #47）。
             bottomPin.didSendOwnMessage()
             draft = ""
@@ -1277,25 +1270,6 @@ struct CrewChatView: View {
         }
     }
     #endif
-
-    /// Local直投唤醒（Phase 6 单元 3）：对每个 `@session` 目标，找到对应的本地
-    /// 活跃 run，空闲就直接 `send(...)` 唤醒；busy 不打断。决策 + IO 编排都在
-    /// `CrewLocalMentionDelivery`（Task 10 抽出，供 relay 落地远端 todo_add 共用）；
-    /// 这里只是把本视图的 environment（sessionRunner / backend / loadError）接进去。
-    /// 仅 macOS（本地 run 在 macOS）。
-    private func injectMentionedLocalRuns(mentions: [CrewMention], text: String) {
-        #if os(macOS)
-        // 项10:人发的、无具体 @ 的群消息 → 默认当 @机长 处理,且注入文本用 IM 式
-        // 「名：正文」(不套「有人@你」壳,因为不是定向 @)。只兜底真广播(mentions
-        // 为空);带 reply 会自动 @ 原发送者故非空,不落此路径。这里的 send() 只在
-        // 人类经 composer 发送时触发 → 天然满足「人发的」边界(session 广播 / 系统
-        // 消息不走此路径,不会误唤醒机长)。
-        CrewLocalMentionDelivery.injectAndWake(
-            crewId: crewId, mentions: mentions, text: text, senderName: "人",
-            sessionRunner: sessionRunner, backend: appModel.backend,
-            onError: { loadError = $0 })
-        #endif
-    }
 
     // MARK: - File import (cross-platform via .fileImporter)
 
