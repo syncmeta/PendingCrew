@@ -46,6 +46,8 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(resume["approvalsReviewer"] as? String, "auto_review")
         XCTAssertEqual(resume["approvalPolicy"] as? String, "on-request")
         XCTAssertEqual(resume["sandbox"] as? String, "workspace-write")
+        XCTAssertEqual(resume["excludeTurns"] as? Bool, true,
+                       "resume must not return an unbounded historical turns payload")
         XCTAssertEqual(
             (resume["config"] as? [String: Any])?["model_reasoning_effort"] as? String,
             "xhigh")

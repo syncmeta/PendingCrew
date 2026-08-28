@@ -77,6 +77,15 @@ enum CodexProtocol {
             mcpServers: mcpServers,
             approvalsReviewer: approvalsReviewer)
         p["threadId"] = threadId
+        // Codex 0.149 added `excludeTurns` for clients that only need to rejoin the
+        // live thread. Without it, `thread/resume` serializes the complete persisted
+        // turn history into one JSON line. A long-lived captain produced a 6 MB
+        // rollout whose resume response did not finish before our 25 s launch probe;
+        // the app-server and crew MCP were already alive, but PendingCrew could not
+        // observe the thread id until the entire line arrived and falsely reported a
+        // stalled launch. The transcript is protocol-event driven and does not use
+        // historical turns, so omitting them is both sufficient and bounded.
+        p["excludeTurns"] = true
         return p
     }
 
