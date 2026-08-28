@@ -68,6 +68,21 @@ final class CrewChatBottomFollowTests: XCTestCase {
             insetBottom: insetBottom))
     }
 
+    /// Todo #89：顶部 inset 只改变最小偏移（顶部是负值），不改变底部最大偏移。
+    /// 把它重复加到最大偏移，会让人真实滑到底后仍永远差一个 top inset。
+    func testTopInsetDoesNotMoveTheBottomThreshold() {
+        let insetTop: CGFloat = 72
+        let insetBottom: CGFloat = 90
+        let trueBottom = 2000 + insetBottom - 600
+        XCTAssertTrue(CrewChatBottomFollow.isAtBottom(
+            contentOffsetY: trueBottom,
+            containerHeight: 600,
+            contentHeight: 2000,
+            insetTop: insetTop,
+            insetBottom: insetBottom),
+            "真实底部不能因 top inset 被误判成还差一截")
+    }
+
     // MARK: - 行高输入令牌（第二波异步数据）
 
     /// 这几样一到位，`CrewChatAdapter` 判「是不是我发的」就翻面，头像列与名字行跟着
@@ -150,6 +165,15 @@ final class CrewChatBottomFollowTests: XCTestCase {
         var pin = CrewChatBottomFollow.Pin()
         pin.settled(atBottom: false, byUser: true)
         XCTAssertFalse(pin.isFollowing)
+    }
+
+    /// Todo #89：新消息可能在滚动手势中途到达，不能等 idle 才松开跟随。
+    func testLeavingBottomByUserStopsFollowingBeforeTheGestureSettles() {
+        var pin = CrewChatBottomFollow.Pin()
+        pin.leftBottomByUser()
+        XCTAssertFalse(pin.isFollowing)
+        XCTAssertFalse(pin.received(1), "手势中途来的新消息只能记未读，不能把视口拽到底")
+        XCTAssertEqual(pin.unread, 1)
     }
 
     /// 滑回底部 → 重新挂上并清未读（IM 惯例：回到底部 = 都看过了）。
@@ -363,7 +387,7 @@ final class CrewChatBottomFollowTests: XCTestCase {
     func testUnreadStateTracksTheRealBottomPosition() throws {
         let text = try Self.source("Mac/Views/CrewChatView.swift")
         XCTAssertTrue(
-            Self.containsCode("BottomReachedTracker(pin: $bottomPin)", in: text),
+            Self.containsCode("BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox)", in: text),
             "群聊必须挂真实到底追踪器；否则滑到底后未读按钮会一直留着。")
         XCTAssertTrue(
             Self.containsCode("onScrollGeometryChange(for: Bool.self)", in: text),
@@ -371,6 +395,9 @@ final class CrewChatBottomFollowTests: XCTestCase {
         XCTAssertTrue(
             Self.containsCode("pin.reachedBottom()", in: text),
             "真实位置到达底部时必须立即清未读并恢复跟随。")
+        XCTAssertTrue(
+            Self.containsCode("pin.leftBottomByUser()", in: text),
+            "用户滚动一离开底部就要立即松开跟随，不能等手势结束后才处理。")
     }
 
     /// 人类明确要「只标数字」：不要「N 条新消息」这类文案，也不要别的修饰。

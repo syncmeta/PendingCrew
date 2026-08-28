@@ -69,7 +69,7 @@ enum CrewLocalMentionDelivery {
                 sourceKey: "local:" + UUID().uuidString,
                 to: run,
                 text: inj.text
-            ) {
+            ) { _ in
                 // #490：claude 目标真注入后才推进游标到刚 append 的这条（该 session
                 // 未读尾）；排队阶段不消费。codex 走自己的 turn provider 游标，不推。
                 if run.kind == .claudeCode, let last = unreadBySession[inj.sessionId]?.last {

@@ -29,6 +29,31 @@ final class CrewMailboxWakeLogicTests: XCTestCase {
         XCTAssertEqual(CrewMailboxWakeLogic.receiptVerdict(workingSamples: []), .failed)
     }
 
+    func testReceiptConfirmedWhenCodexShortTurnFinishesBeforeFirstWorkingSample() {
+        let baseline = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 40, latestPostId: "before")
+        let afterFastTurn = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 44, latestPostId: "before")
+        XCTAssertEqual(CrewMailboxWakeLogic.receiptVerdict(
+            baseline: baseline, samples: [afterFastTurn]), .confirmed)
+    }
+
+    func testReceiptConfirmedWhenTargetAlreadyPostedToCrewBeforeFirstSample() {
+        let baseline = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 7, latestPostId: nil)
+        let afterPost = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 7, latestPostId: "posted-by-target")
+        XCTAssertEqual(CrewMailboxWakeLogic.receiptVerdict(
+            baseline: baseline, samples: [afterPost]), .confirmed)
+    }
+
+    func testReceiptStillFailsWhenNoConsumptionEvidenceChanges() {
+        let quiet = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 12, latestPostId: "same-post")
+        XCTAssertEqual(CrewMailboxWakeLogic.receiptVerdict(
+            baseline: quiet, samples: [quiet, quiet]), .failed)
+    }
+
     func testWakeFailureAlertMentionsTargetAndSelfHealTools() {
         let text = CrewMailboxWakeLogic.wakeFailureAlert(targetLabel: "限额自愈")
         XCTAssertTrue(text.contains("限额自愈"), text)

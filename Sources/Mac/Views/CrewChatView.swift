@@ -800,7 +800,7 @@ struct CrewChatView: View {
             .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
             // 不会逐帧改 @State，也不改变内容高度，因此没有布局自激的反馈边。
-            .modifier(BottomReachedTracker(pin: $bottomPin))
+            .modifier(BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             .modifier(BottomOnContentGrowth(
                 isFollowing: bottomPin.isFollowing,
                 phaseBox: scrollPhaseBox
@@ -1381,16 +1381,23 @@ private struct BottomPinTracker: ViewModifier {
             content.onScrollPhaseChange { oldPhase, phase, context in
                 // 先记「手在不在滚动上」—— `BottomOnContentGrowth` 靠它避开
                 // 「人正往上翻、内容一长高就被拽回底部」（Todo #54）。
-                phaseBox.phaseChanged(to: Self.kind(phase))
-                guard phase == .idle else { return }
+                let phaseKind = Self.kind(phase)
+                phaseBox.phaseChanged(to: phaseKind)
                 let geo = context.geometry
+                let atBottom = CrewChatBottomFollow.isAtBottom(
+                    contentOffsetY: geo.contentOffset.y,
+                    containerHeight: geo.containerSize.height,
+                    contentHeight: geo.contentSize.height,
+                    insetTop: geo.contentInsets.top,
+                    insetBottom: geo.contentInsets.bottom)
+                // 新消息可能在手势尚未停稳时到达。只在 idle 才关跟随会留出一段竞态：
+                // 人已经离底，Pin 仍说 following，新消息把视口拽回去（Todo #89）。
+                if CrewChatBottomFollow.isUserActive(phaseKind), !atBottom {
+                    pin.leftBottomByUser()
+                }
+                guard phase == .idle else { return }
                 pin.settled(
-                    atBottom: CrewChatBottomFollow.isAtBottom(
-                        contentOffsetY: geo.contentOffset.y,
-                        containerHeight: geo.containerSize.height,
-                        contentHeight: geo.contentSize.height,
-                        insetTop: geo.contentInsets.top,
-                        insetBottom: geo.contentInsets.bottom),
+                    atBottom: atBottom,
                     byUser: CrewChatBottomFollow.settleIsUserDriven(
                         previous: Self.kind(oldPhase)))
             }
@@ -1419,10 +1426,11 @@ private struct BottomPinTracker: ViewModifier {
 ///
 /// 原实现只在 `phase → idle` 时读一次几何；人已经滑到底但那次相位回调没覆盖到最终位置，
 /// `Pin` 仍停在「不跟随 + 有未读」，按钮就一直不消失。这里直接观察 at-bottom 这个 Bool：
-/// 滚动期间不逐帧写状态，只在 false/true 跨阈值时收到回调；且 false 什么都不做，离开底部
-/// 仍只由明确的用户滚动相位关闭跟随，守住 Todo #47 的程序化滚动不许关保险丝不变式。
+/// 滚动期间不逐帧写状态，只在 false/true 跨阈值时收到回调；false 也只有在明确的用户
+/// 滚动相位里才松开跟随，守住 Todo #47 的程序化滚动不许关保险丝不变式。
 private struct BottomReachedTracker: ViewModifier {
     @Binding var pin: CrewChatBottomFollow.Pin
+    let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
@@ -1434,8 +1442,13 @@ private struct BottomReachedTracker: ViewModifier {
                     insetTop: geo.contentInsets.top,
                     insetBottom: geo.contentInsets.bottom)
             } action: { _, atBottom in
-                guard atBottom else { return }
-                pin.reachedBottom()
+                if atBottom {
+                    pin.reachedBottom()
+                } else if phaseBox.isUserScrolling {
+                    // 位置一离开底部就松开，不等 phase→idle；否则手势中途到一条新消息
+                    // 仍会走 following 分支，把正在读历史的人拽回底部（Todo #89）。
+                    pin.leftBottomByUser()
+                }
             }
         } else {
             content

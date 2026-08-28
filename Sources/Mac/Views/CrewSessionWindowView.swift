@@ -318,6 +318,9 @@ struct CrewSessionWindowView: View {
         let sender: GroupBubbleSender
         /// 非 nil = 本地 session run，可点进终端 + 显简介/最新动作。
         let run: CrewSessionRun?
+        /// 已登记但当前没有 live run 的本地 agent 成员。非 nil 时点击即续接原
+        /// session，而不是落到「新 session」composer（Todo #80）。
+        let persistedMember: LocalSessionMember?
         /// 机长 / 人类 —— 固定置顶，不参与创建时刻倒序（#15）。
         let isPinned: Bool
         /// 创建时刻（session 成员登记时刻；本地 run 没登记则退回进程启动时刻）。
@@ -330,6 +333,10 @@ struct CrewSessionWindowView: View {
 
     private var memberRowItems: [MemberRowItem] {
         let runSessionIds = Set(memberSessionRuns.map { $0.sessionId })
+        let crewId = crewStore.selectedDetail?.crew.id ?? ""
+        let persistedBySessionId = Dictionary(
+            uniqueKeysWithValues: LocalCrewStore.shared.sessionMembers(crewId: crewId)
+                .map { ($0.sessionId, $0) })
         // 有在跑的 captain run 时，server 的 captain 成员收敛成那条可点的 run 行 ——
         // 否则会重复出现「机长」(不可点) + 「Captain」(可点) 两条（用户要"点头像进
         // session"，留一条带星标可点的即可）。
@@ -351,6 +358,7 @@ struct CrewSessionWindowView: View {
                     id: m.id,
                     sender: CrewSenderNaming.groupSender(for: m, captainBotId: captainBotId),
                     run: nil,
+                    persistedMember: m.codeSessionId.flatMap { persistedBySessionId[$0] },
                     isPinned: m.memberKind == "human" || m.memberKind == "captain"
                         || (m.botId != nil && m.botId == captainBotId),
                     createdAt: CrewMemberOrdering.parseDate(m.createdAt))
@@ -366,6 +374,7 @@ struct CrewSessionWindowView: View {
         let runRows = memberSessionRuns.map { run in
             MemberRowItem(
                 id: "run-\(run.sessionId)", sender: senderForRun(run), run: run,
+                persistedMember: nil,
                 isPinned: run.role == .captain,
                 createdAt: createdBySessionId[run.sessionId] ?? run.startedAt)
         }
@@ -391,6 +400,17 @@ struct CrewSessionWindowView: View {
                     Button("设为机长") { pendingCaptainRun = run }
                 }
             }
+        } else if let member = item.persistedMember {
+            // 持久成员没有 live run：点它就带原 sessionId + agent conversation id
+            // 续接，并在成功后直接打开这一个 session（Todo #80）。
+            Button {
+                Task { await openPersistedSession(member) }
+            } label: {
+                memberPlainRow(item.sender).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(starting)
+            .help("恢复并打开这个 session")
         } else if item.sender.isCaptain {
             // captain 没在跑:点头像即进入它的 session —— 没在跑就当场起一个再进。
             // 用户定调:不要常驻/自动起,只要「点头像就进 session」;这条是纯点击触发,
@@ -411,6 +431,34 @@ struct CrewSessionWindowView: View {
             // human 行：只头像 + 名(无 session 可进)。
             memberPlainRow(item.sender)
         }
+    }
+
+    private func openPersistedSession(_ member: LocalSessionMember) async {
+        guard let detail = crewStore.selectedDetail else { return }
+        starting = true
+        defer { starting = false }
+        sessionRunner.lastStartError = nil
+        do {
+            try await sessionRunner.restartMember(
+                detail: detail,
+                backend: appModel.backend,
+                member: member,
+                wakeText: "人类点击了这个未运行的 session，请恢复原 conversation 并继续待命。")
+            guard let run = sessionRunner.runs.first(where: {
+                $0.sessionId == member.sessionId && $0.status == .running
+            }) else {
+                throw SessionOpenError.restartedRunMissing
+            }
+            sessionRunner.select(run.runID)
+            sessionRunner.viewingTerminal = true
+        } catch {
+            sessionRunner.lastStartError = "恢复 \(member.displayName) 失败：\(error.localizedDescription)"
+        }
+    }
+
+    private enum SessionOpenError: LocalizedError {
+        case restartedRunMissing
+        var errorDescription: String? { "恢复请求返回后没有找到运行中的 session" }
     }
 
     /// 成员列表第一行：起新 session。排版对齐成员行（圆形「+」当头像位）。
@@ -1104,48 +1152,45 @@ private struct SessionRunContentView: View {
 
     @ViewBuilder
     private var header: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                // captain 的标题就是「机长」(与群聊/成员列表统一);副标题给 agent
-                // 类型(看得出底层是 codex/claude)。worker:标题 agent 类型,副标题
-                // 首条指令(taskBrief)。
-                Text(run.role == .captain ? "机长" : run.kind.displayName)
+        // 三排各自占满可用宽度（Todo #82）。旧版把名称、配置、审批和停止全塞进
+        // 一个 HStack；右栏一窄，「机长」会被压成逐字竖排，模型只剩一个字母。
+        VStack(alignment: .leading, spacing: 7) {
+            // 第一排：名字 + 退出状态/停止。
+            HStack(spacing: 10) {
+                Text(run.displayName)
                     .font(.callout.weight(.semibold))
-                let subtitle = run.role == .captain ? run.kind.displayName : run.taskBrief
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                if run.status != .running {
+                    statusBadge(run.status, exitCode: run.exitCode)
+                } else {
+                    Button { run.stop() } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(.red))
+                    }
+                    .buttonStyle(.plain)
+                    .help("停止这个 session")
                 }
             }
-            Spacer()
-            // model/effort 查看 + 切换（#485：切换入口在这，成员列表只读）。
-            // claude 点开即切（走 applyProfileChange，与 MCP 自切同路径）；
-            // codex 只读置灰 + help 提示另起 session。
+
+            // 第二排：模型与 effort 分开选，不再藏在一个含混的小药丸里。
             if run.kind.isAgent {
                 SessionProfileControl(run: run, onSwitch: onSwitchProfile)
             }
+
+            // 第三排：Codex 原生审批模式。
             if run.kind == .codex {
-                SessionApprovalModeControl(run: run, onSwitch: onSwitchApproval)
-            }
-            // running 不挂 badge（在跑是常态,头像状态点已表达）；退出态才显结果。
-            if run.status != .running {
-                statusBadge(run.status, exitCode: run.exitCode)
-            }
-            if run.status == .running {
-                // 停止 = 圆形纯符号按钮,无文字。
-                Button {
-                    run.stop()
-                } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(.red))
+                HStack(spacing: 8) {
+                    Text("审批模式")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.inkMuted)
+                    SessionApprovalModeControl(run: run, onSwitch: onSwitchApproval)
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
-                .help("停止这个 session")
             }
         }
         .padding(.horizontal, 12)
@@ -1257,14 +1302,9 @@ private struct SessionProfileReadonlyPill: View {
     }
 }
 
-/// 终端页头部的运行态 model/effort 查看 + 切换控件。
-///
-/// - **claude**：一个 `Menu`（模型段 + 思考强度段），一两下点到即切；选中经
-///   `onSwitch` 走 `applyProfileChange`（与 MCP 自切同一路径，切完回写 run →
-///   本控件即时更新）。菜单显示友好名，`onSwitch` 传出的仍是裸别名。
-/// - **codex**：中途不支持切换（model/effort 绑 app-server thread 配置）——只读
-///   展示 + 置灰，`help` 说明改配置该走 `start_session` 另起，与
-///   `applyProfileChange` 的 codex 分支一致。
+/// 终端页头部的运行态 model / effort 两个独立菜单（Todo #82）。Claude 经空闲时
+/// 斜杠命令切；Codex 经 app-server `thread/settings/update` 切。两边都只在底层确认
+/// 成功后回写 run，UI 不抢先显示假配置。
 private struct SessionProfileControl: View {
     @ObservedObject var run: CrewSessionRun
     /// 可用模型表（Todo #37）：菜单候选来自现探的 models.json，探不到才回落手工
@@ -1280,50 +1320,68 @@ private struct SessionProfileControl: View {
 
     var body: some View {
         switch run.kind {
-        case .claudeCode:
-            Menu {
-                Section("模型") {
-                    ForEach(SessionLaunchOptions.models(for: .claudeCode, catalog: catalog.file),
-                            id: \.self) { m in
-                        Button {
-                            if m != run.model { onSwitch(m, nil) }
-                        } label: {
-                            let name = SessionLaunchOptions.displayName(for: m, catalog: catalog.file)
-                            if m == run.model { Label(name, systemImage: "checkmark") }
-                            else { Text(name) }
-                        }
-                    }
+        case .claudeCode, .codex:
+            HStack(spacing: 8) {
+                modelMenu
+                effortMenu
+                if run.pendingProfile != nil {
+                    ProgressView().controlSize(.small)
                 }
-                Section("思考强度") {
-                    ForEach(SessionLaunchOptions.efforts(for: .claudeCode, catalog: catalog.file),
-                            id: \.self) { e in
-                        Button {
-                            if e != run.effort { onSwitch(nil, e) }
-                        } label: {
-                            if e == run.effort { Label(e, systemImage: "checkmark") }
-                            else { Text(e) }
-                        }
-                    }
-                }
-            } label: {
-                // 在途切换只加「→目标…」后缀，**不动前半段** —— 切换核实生效前
-                // 药丸仍显示真正在跑的配置，别抢先谎报（#544）。
-                SessionProfilePillLabel(
-                    text: profileLabel(model: run.model, effort: run.effort)
-                        + (run.pendingProfile.map { " →\($0)…" } ?? ""),
-                    active: true)
+                Spacer(minLength: 0)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(run.status != .running)
-            .help("切换本 session 的模型 / 思考强度（终端空闲时立刻生效；正在跑活则等这一轮结束后落地，结果回执到群聊）")
-        case .codex:
-            SessionProfilePillLabel(
-                text: profileLabel(model: run.model, effort: run.effort), active: false)
-                .help("codex 不支持中途切换 model/effort（两者都绑定 app-server thread 配置）——换配置请让机长 start_session 另起一个 session")
         case .terminal:
             EmptyView()
         }
+    }
+
+    private var availableModels: [String] {
+        SessionLaunchOptions.models(for: run.kind, catalog: catalog.file)
+    }
+
+    private var availableEfforts: [String] {
+        SessionLaunchOptions.efforts(for: run.kind, catalog: catalog.file)
+    }
+
+    private var modelMenu: some View {
+        Menu {
+            ForEach(availableModels, id: \.self) { model in
+                Button {
+                    if model != run.model { onSwitch(model, nil) }
+                } label: {
+                    let name = SessionLaunchOptions.displayName(for: model, catalog: catalog.file)
+                    if model == run.model { Label(name, systemImage: "checkmark") }
+                    else { Text(name) }
+                }
+            }
+        } label: {
+            let name = run.model.map {
+                SessionLaunchOptions.displayName(for: $0, catalog: catalog.file)
+            } ?? "默认"
+            SessionProfilePillLabel(text: "模型  \(name)", active: true)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(run.status != .running)
+        .help("手动选择这个 session 的模型")
+    }
+
+    private var effortMenu: some View {
+        Menu {
+            ForEach(availableEfforts, id: \.self) { effort in
+                Button {
+                    if effort != run.effort { onSwitch(nil, effort) }
+                } label: {
+                    if effort == run.effort { Label(effort, systemImage: "checkmark") }
+                    else { Text(effort) }
+                }
+            }
+        } label: {
+            SessionProfilePillLabel(text: "Effort  \(run.effort ?? "默认")", active: true)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(run.status != .running)
+        .help("手动选择这个 session 的思考强度")
     }
 }
 #endif

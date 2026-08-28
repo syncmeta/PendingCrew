@@ -76,11 +76,28 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(panel.contains(".strikethrough("),
                        "已完成的 Todo 不该划删除线（人类明确要求，只变灰）")
 
-        let cockpit = try Self.text(of: "CockpitTasksView.swift")
-        XCTAssertTrue(cockpit.contains("TodoListPresentation.newestFirst"),
-                      "驾驶舱任务段的 Todo 没走同一套排序")
-        XCTAssertTrue(cockpit.contains("CrewTodoStatusCircle("),
-                      "驾驶舱任务段的 Todo 没用同一套状态圆圈")
+    }
+
+    /// Todo #81：驾驶舱只展示 Agent 自己写下的计划与想法，不能再因仓库没有
+    /// `docs/roadmap.md` 而空白，也不能把 Todo / task 账混进来冒充 Agent 的判断。
+    func testCockpitOnlyShowsAgentPlansAndThoughts() throws {
+        let root = try Self.text(of: "CockpitView.swift")
+        XCTAssertTrue(root.contains("CockpitAgentMindView(crewId:"),
+                      "驾驶舱没有接到 Agent 计划与想法视图")
+        XCTAssertFalse(root.contains("CockpitRoadmapSegment("),
+                       "旧仓库 roadmap 仍占据驾驶舱")
+        XCTAssertFalse(root.contains("CockpitLoader.load("),
+                       "驾驶舱仍依赖 crew 工作目录里的手工账本")
+
+        let mind = try Self.text(of: "CockpitTasksView.swift")
+        XCTAssertTrue(mind.contains("CockpitPlanStore.shared.list"),
+                      "Agent 作战板没有成为驾驶舱的数据源")
+        XCTAssertTrue(mind.contains("plan.updates.reversed()"),
+                      "点开计划看不到 Agent 的判断与更新")
+        XCTAssertFalse(mind.contains("LocalTodoStore.shared"),
+                       "人类 Todo 仍被混进驾驶舱")
+        XCTAssertFalse(mind.contains("data.taskItems"),
+                       "coding-agent task 账仍被混进驾驶舱")
     }
 
     /// Todo #61：筛选钮必须**在中栏 toolbar 上**、且开关状态真的被喂进时间线。
@@ -100,15 +117,16 @@ final class ViewWiringTests: XCTestCase {
                       "筛选钮不是人类指定的文字药丸「仅@你」（Todo #69）")
         XCTAssertFalse(center.contains("systemImage: \"at.circle\""),
                       "筛选钮还是那个没有文字的图标 —— 人看不出它是干什么的（Todo #69）")
-        // 药丸要贴着群名（人类：「群聊页面的右上方（群名的右侧）」）。群名走
-        // navigationTitle、在标题栏前端，所以这一组里越靠前越贴着它 —— 钉死它是第一个。
-        if let pill = center.range(of: "Toggle(isOn: $onlyMentions)"),
-           let firstOther = center.range(of: "showingDetail = true") {
-            XCTAssertTrue(pill.lowerBound < firstOther.lowerBound,
-                          "「仅@你」药丸不是这组 toolbar 的第一个，没贴着群名（Todo #69）")
-        } else {
-            XCTFail("找不到药丸或第一个图标钮，测试本身失效了")
-        }
+        // Todo #79 覆盖旧位置：现在明确固定在群聊栏最右上角，并与发送键同色。
+        XCTAssertTrue(center.contains("ToolbarItem(placement: .primaryAction)"),
+                      "「仅@你」没有固定到群聊栏最右上角（Todo #79）")
+        XCTAssertTrue(center.contains(".tint(Theme.Palette.accent)"),
+                      "「仅@你」点亮态没有复用发送键的主题绿色（Todo #79）")
+
+        let sidebar = try Self.text(of: "CrewSidebarView.swift")
+        XCTAssertTrue(sidebar.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(sidebar.contains(".tint(Theme.Palette.accent)"),
+                      "层级/时间流仍继承系统蓝色，没有改成主题绿色（Todo #79）")
 
         let chat = try Self.text(of: "CrewChatView.swift")
         XCTAssertTrue(chat.contains("CrewMentionFilter.onlyHumanMentions"),
@@ -200,6 +218,53 @@ final class ViewWiringTests: XCTestCase {
                       "auto_review 没走禁止建卡/通知的门禁")
     }
 
+    /// Todo #82/#83：窄右栏不能再把四种控件挤成一排；Codex 的技术流也不能把
+    /// shell 原文当成人类活动描述。
+    func testSessionHeaderAndCodexActivityUseHumanFacingPresentation() throws {
+        let view = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(view.contains("// 第一排：名字"))
+        XCTAssertTrue(view.contains("// 第二排：模型与 effort"))
+        XCTAssertTrue(view.contains("// 第三排：Codex 原生审批模式"))
+        XCTAssertTrue(view.contains("private var modelMenu"), "模型没有独立手动菜单")
+        XCTAssertTrue(view.contains("private var effortMenu"), "effort 没有独立手动菜单")
+
+        let codex = try Self.text(of: "CodexTranscriptView.swift")
+        XCTAssertTrue(codex.contains("已读取档案"))
+        XCTAssertTrue(codex.contains("已执行指令"))
+        XCTAssertTrue(codex.contains("已修改档案"))
+        XCTAssertFalse(codex.contains("Text(command).font(Theme.Fonts.monoSmall)"),
+                       "Codex 活动流仍直接铺 shell 原文")
+    }
+
+    /// Todo #80：退出后的成员行必须恢复那一个持久 session，不能把点击退化成
+    /// 「新 session」入口；runner 类型也必须以持久账本为准，不能靠可改的显示名猜。
+    func testExitedMemberRowResumesItsPersistedSession() throws {
+        let view = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(view.contains("persistedMember:"),
+                      "成员行没有携带持久 session 记录，退出后无法区分该恢复哪一个")
+        XCTAssertTrue(view.contains("openPersistedSession(member)"),
+                      "点击退出成员没有接到恢复原 session 的动作")
+        XCTAssertTrue(view.contains("sessionRunner.restartMember("),
+                      "恢复动作没有复用原 sessionId / agent conversation id")
+        XCTAssertTrue(view.contains("$0.sessionId == member.sessionId"),
+                      "恢复后没有精确选择并打开被点击的那个 session")
+
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("LocalCodingAgentKind(rawValue: $0.kind)"),
+                      "恢复 runner 仍靠显示名猜；改过标题的 Codex session 会被拉错类型")
+    }
+
+    /// Todo #88：系统帮助菜单必须落到公开文档站，不能依赖未配置的 Help Book。
+    func testHelpMenuOpensPendingCrewDocumentation() throws {
+        let app = try Self.text(of: "PendingCrewApp.swift")
+        XCTAssertTrue(app.contains("CommandGroup(replacing: .help)"),
+                      "帮助菜单没有被 PendingCrew 的公开文档入口接管")
+        XCTAssertTrue(app.contains("https://docs.pendingname.com/pendingcrew/"),
+                      "帮助菜单没有指向人类指定的 PendingCrew 文档地址")
+        XCTAssertTrue(app.contains("NSWorkspace.shared.open(PendingCrewLinks.helpDocumentation)"),
+                      "帮助菜单只定义了地址但没有真正打开它")
+    }
+
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")
@@ -273,6 +338,27 @@ final class ViewWiringTests: XCTestCase {
                       "黄色 Todo 指示仍是静态点，没有接 CoreAnimation 呼吸点")
         XCTAssertTrue(row.contains(".accessibilityLabel(accessibilityLabel(color))"),
                       "状态点没有把本 crew / 下属 crew 的区别接到辅助功能文案")
+    }
+
+    /// Todo #78：删除的是跨机 Workspace 同步整层，不只是藏掉侧栏入口。
+    /// 工作目录迁移与 session git worktree 属于本地执行基础，仍由各自测试覆盖。
+    func testWorkspaceSyncLayerIsAbsent() throws {
+        let sources = try Self.sourceFiles()
+        let removedFiles: Set<String> = [
+            "WorkspaceSyncView.swift", "WorkspaceSetupSheet.swift", "WorkspaceSyncStore.swift",
+            "SyncEngine.swift", "WorkspaceRepoService.swift", "WorkspaceRepoLayout.swift",
+            "WorkspaceManifest.swift", "MachineRegistration.swift", "ProjectSyncService.swift",
+            "WorkspaceGit.swift", "SyncReceipt.swift",
+        ]
+        XCTAssertTrue(
+            sources.allSatisfy { !removedFiles.contains($0.0.lastPathComponent) },
+            "Workspace 同步实现文件又被编回产品；#78 要求整层删除")
+
+        let sidebar = try Self.text(of: "CrewSidebarView.swift")
+        XCTAssertFalse(sidebar.contains("Workspace 同步"),
+                       "侧栏仍暴露已删除的 Workspace 同步入口")
+        XCTAssertFalse(sidebar.contains("showingWorkspaceSync"),
+                       "侧栏仍保留 Workspace 同步 sheet 状态/接线")
     }
 
     // MARK: - 源码扫描

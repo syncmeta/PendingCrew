@@ -42,7 +42,7 @@ settings:
     # sed 从 project.yml 取 MARKETING_VERSION）；Info.plist 用
     # $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) 变量替换，
     # 构建期 -MARKETING_VERSION=... 才能真正落进产物。对齐 apps/pendingbot。
-    MARKETING_VERSION: "0.1.19"
+    MARKETING_VERSION: "0.1.20"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   PendingCrew:
@@ -368,8 +368,8 @@ targets:
       - path: Shared/AppUpdate/AppBuildStamp.swift
     # AgentTerminalSession.swift（在 LocalRunner 里）import SwiftTerm，所以
     # test bundle 也要链 SwiftTerm，否则编不过。
-    # WorkspaceSync/WorkspaceManifest.swift import TOMLKit，同理 test bundle 直编
-    # 源码需要直接链 TOMLKit。
+    # WorkdirMigrationExecutor.swift import TOMLKit，同理 test bundle 直编源码
+    # 需要直接链 TOMLKit。
     dependencies:
       - package: SwiftTerm
       - package: TOMLKit

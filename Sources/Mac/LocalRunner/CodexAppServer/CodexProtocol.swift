@@ -91,9 +91,15 @@ enum CodexProtocol {
 
     static func threadSettingsUpdateParams(
         threadId: String,
-        approvalsReviewer: ApprovalsReviewer
+        model: String? = nil,
+        effort: String? = nil,
+        approvalsReviewer: ApprovalsReviewer? = nil
     ) -> [String: Any] {
-        ["threadId": threadId, "approvalsReviewer": approvalsReviewer.rawValue]
+        var params: [String: Any] = ["threadId": threadId]
+        if let model, !model.isEmpty { params["model"] = model }
+        if let effort, !effort.isEmpty { params["effort"] = effort }
+        if let approvalsReviewer { params["approvalsReviewer"] = approvalsReviewer.rawValue }
+        return params
     }
     /// The unread crew whiteboard rides in via **`turn/start.additionalContext`** —
     /// codex's native per-turn context channel. The field IS in the v2 schema, gated

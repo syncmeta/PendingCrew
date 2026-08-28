@@ -25,6 +25,21 @@ final class CodexTranscriptTests: XCTestCase {
         t.apply(method: "turn/completed", params: ["turn": ["id": "t1"], "status": "completed"])
         XCTAssertFalse(t.turnActive); XCTAssertNil(t.activeTurnId)
     }
+    func testActivityRevisionSurvivesFastTurnReturningToIdle() {
+        let t = CodexTranscript()
+        let baseline = t.activityRevision
+        t.apply(method: "turn/started", params: ["turn": ["id": "t1"]])
+        t.apply(method: "item/started", params: ["item": ["id": "tool-1"]])
+        t.apply(method: "item/completed", params: [
+            "item": ["id": "tool-1", "type": "dynamicToolCall",
+                     "name": "crew.post_to_crew", "status": "completed"],
+        ])
+        t.apply(method: "turn/completed", params: ["turn": ["id": "t1"]])
+
+        XCTAssertFalse(t.turnActive, "首拍时瞬时状态已回空闲")
+        XCTAssertEqual(t.activityRevision, baseline + 4,
+                       "turn/tool transcript 活动必须留下单调证据")
+    }
     func testIgnoredMethodsAreNoops() {
         let t = CodexTranscript()
         t.apply(method: "item/started", params: ["item": ["id": "x", "type": "agentMessage"]])

@@ -30,6 +30,17 @@ final class CodexThreadItemTests: XCTestCase {
         XCTAssertEqual(c.exitCode, 0)
         XCTAssertEqual(c.status, "completed")
         XCTAssertEqual(c.aggregatedOutput, "a\nb")
+        XCTAssertEqual(c.actions, [])
+    }
+
+    func testDecodeOfficialCommandActionsForNaturalLanguageActivity() throws {
+        let item = try decode(#"{"id":"item_actions","type":"commandExecution","command":"rg foo Sources && sed -n '1,20p' Sources/a.swift","cwd":"/repo","status":"completed","commandActions":[{"type":"search","command":"rg foo Sources","query":"foo","path":"Sources"},{"type":"read","command":"sed -n '1,20p' Sources/a.swift","name":"a.swift","path":"Sources/a.swift"}],"aggregatedOutput":null,"exitCode":0}"#)
+        guard case let .commandExecution(command) = item.kind else {
+            return XCTFail("expected commandExecution")
+        }
+        XCTAssertEqual(command.actions.map(\.kind), [.search, .read])
+        XCTAssertEqual(command.actions[0].query, "foo")
+        XCTAssertEqual(command.actions[1].name, "a.swift")
     }
 
     func testDecodeReasoningArrays() throws {

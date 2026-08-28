@@ -33,7 +33,7 @@ enum SessionProfileSwitchOutcome: Equatable {
     case noConfirmation
     /// 等不到可注入的空闲窗口（session 一直忙，或已退出）。
     case neverIdle
-    /// 该 runner 没有中途切换通道（codex：model/effort 绑定 app-server thread 配置）。
+    /// 该 runner 没有中途切换通道（例如普通 terminal）。
     case unsupported
 
     var isApplied: Bool { if case .applied = self { return true }; return false }

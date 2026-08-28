@@ -26,8 +26,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
 
     private let connection: CodexAppServerConnection
     private let cwd: String
-    private let model: String?
-    private let effort: String?
+    private var model: String?
+    private var effort: String?
     private let resumeThreadId: String?
     private let developerInstructions: String?
     private let mcpServers: [String: Any]?
@@ -175,6 +175,32 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
             params: CodexProtocol.threadSettingsUpdateParams(
                 threadId: threadId, approvalsReviewer: reviewer))
         approvalsReviewer = reviewer
+    }
+
+    /// Codex app-server exposes model and effort as live thread settings. The
+    /// generated v2 schema describes both as overrides for subsequent turns, so
+    /// the session can switch in place without manufacturing a new thread.
+    func applyProfileSwitch(_ command: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
+        guard let threadId else { return .neverIdle }
+        do {
+            let params: [String: Any]
+            switch command.knob {
+            case .model:
+                params = CodexProtocol.threadSettingsUpdateParams(
+                    threadId: threadId, model: command.value)
+            case .effort:
+                params = CodexProtocol.threadSettingsUpdateParams(
+                    threadId: threadId, effort: command.value)
+            }
+            _ = try await connection.request(method: "thread/settings/update", params: params)
+            switch command.knob {
+            case .model: model = command.value
+            case .effort: effort = command.value
+            }
+            return .applied("thread/settings/update acknowledged")
+        } catch {
+            return .rejected(error.localizedDescription)
+        }
     }
 
     // MARK: - 拉起自检（#541）

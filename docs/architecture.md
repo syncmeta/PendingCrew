@@ -179,7 +179,7 @@ build 号也是因为这条才不再从 `git rev-list --count HEAD` 算的，理
 | **GoogleSignIn** | 8.0.0 ≤ v < 9.0.0 | 8.0.0 | `Sources/Auth/CrewGoogleSignIn.swift`（**唯一** import，137 行） | 低——一个登录按钮。但它是全仓最贵的依赖：**独自拖进 7 个传递包** |
 | **MarkdownUI** | 2.4.0 ≤ v < 3.0.0 | 2.4.1 | `Sources/Chat/Vendored/MarkdownText.swift` / `MathRendering.swift` | 中——群聊气泡的正文渲染全靠它；换等于重写 `MarkdownText`。带 2 个传递依赖 |
 | **SwiftMath** | 1.0.0 ≤ v < 2.0.0 | 1.7.3 | `Sources/Chat/Vendored/MathRendering.swift`（**唯一** import） | 低——只渲染消息里的 LaTeX 公式，去掉等于降级成纯文本 |
-| **TOMLKit** | 0.5.0 ≤ v < 1.0.0 | 0.6.0 | `Sources/Mac/LocalRunner/WorkspaceSync/WorkspaceManifest.swift`、`WorkdirMigrationExecutor.swift` | 低——读写 workspace manifest 与 `.codex/config.toml` |
+| **TOMLKit** | 0.5.0 ≤ v < 1.0.0 | 0.6.0 | `Sources/Mac/LocalRunner/WorkdirMigrationExecutor.swift`（**唯一** import） | 低——迁移工作目录时安全改写 `.codex/config.toml` |
 
 传递依赖归属（各包 `Package.swift` + 解析图核对）：
 
@@ -348,9 +348,9 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
 
 | 目录 | 行数 | 职责 |
 |---|---|---|
-| `Sources/Mac/` | 25,263 | macOS 主体。`LocalRunner/`（agent 子进程 + 终端内核 + workspace 同步）、`Services/`（长期服务）、`Views/`（三栏界面）、`Support/`、`Design/` |
+| `Sources/Mac/` | 24,487 | macOS 主体。`LocalRunner/`（agent 子进程 + 终端内核）、`Services/`（长期服务）、`Views/`（三栏界面）、`Support/`、`Design/` |
 | `Sources/Chat/` | 6,136 | 群聊 UI。`Vendored/`（从 PendingBot 逐字拷来的气泡/Markdown/composer）、`Adapter/`（白板 → 气泡的映射与纯逻辑）、`Shims/`（替掉 vendored 代码里 PendingCrew 没有的后端） |
-| `Sources/Stores/` | 6,003 | 本地持久化 + app 级状态（`AppModel` / `CrewStore`） |
+| `Sources/Stores/` | 6,533 | 本地持久化 + app 级状态（`AppModel` / `CrewStore`） |
 | `Sources/Mcp/` | 2,166 | crew-comms MCP server、三个 claude hook、未读游标、回合留痕 |
 | `Sources/Services/` | 2,178 | 后端抽象（`PendingCrewBackend` 协议 + `LocalBackend`）、白板/crew 模型层 |
 | `Sources/Views/` | 1,847 | 跨端 / iOS 侧界面（欢迎页、crew 列表、iPad shell） |
@@ -393,10 +393,8 @@ iPad/iPhone 上的群聊页（`Sources/Views/IPadShell.swift:47` 直接构造它
    `Sources/Support/QuotaRingLayout.swift` 用 `AgentQuotaSnapshot` / `AgentQuotaWindow`。
 
 3. **`Sources/Stores` → `Sources/Mac`（真跨层）**
-   `Sources/Stores/WorkspaceSyncStore.swift` 直接调 `SyncEngine` / `WorkspaceRepoService` /
-   `WorkspaceRepoLayout` / `MachineRegistration`（都在 `Sources/Mac/LocalRunner/WorkspaceSync/`，
-   且都带 `#if os(macOS)`）；`Sources/Stores/LocalCrewStore.swift:141` 用
-   `WorkdirMigrationPlan`。这一条是 store 层反过来驱动 macOS 服务层，是三处里最实的。
+   `Sources/Stores/LocalCrewStore.swift` 使用 `WorkdirMigrationPlan`。这是工作目录迁移链，
+   不再包含已删除的跨机 Workspace 同步服务。
 
 `Sources/Chat` → `Sources/Mac` 只有两处（`CrewSenderResolver` / `CrewRemoteImage`），
 其中前者也是「放错目录的跨平台文件」。
@@ -725,13 +723,13 @@ gh release create v<版本> --draft … <.dmg> <.zip>
 
 ## 9. 测试
 
-`Tests/PendingCrewTests/`：123 个文件、21,532 行、**1,443 个 `func test`**
+`Tests/PendingCrewTests/`：132 个 Swift 文件、**1,672 个 `func test`**
 （`grep -rh "func test" Tests/PendingCrewTests/*.swift | wc -l`）。
 
 **本次实测**（`xcodebuild … -destination 'platform=macOS' test`，本机 2026-08-20）：
 **Executed 1443 tests, with 3 tests skipped and 0 failures，184.5 秒，`** TEST SUCCEEDED **`**。
-（跑得慢的是 `SyncEngine*Tests` / `ProjectSyncServiceTests` —— 它们真的建临时 git 仓库
-做双机推拉，单个用例 6–10 秒。）
+（这组数字是 2026-08-20 的历史实测；Todo #78 后跨机 Workspace 同步及其 git fixture
+测试已整层删除，当前测试数以下次全量实测为准。）
 
 ### 8.1 覆盖了什么
 

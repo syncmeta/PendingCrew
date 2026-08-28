@@ -68,35 +68,6 @@ struct CrewCenterView: View {
         .toolbar {
             if let crewId = crewStore.selectedCrewId {
                 ToolbarItem {
-                    // Todo #69：人类原话「@按钮 …… 应该搞在群聊页面的右上方（群名的
-                    // 右侧）用文字药丸："仅@你"」。
-                    //
-                    // 三件事按原话逐条落：
-                    // ① **标签就是「仅@你」四个字**，人类指定，不许润色（别改成
-                    //    「只看@我」之类 —— 那是把人的话又翻译了一遍）。
-                    // ② **文字药丸而不是图标**：原来是个没有文字的 `at.circle`，
-                    //    夹在另外四个图标钮中间，谁也看不出点了会发生什么 —— 那正是
-                    //    这条返工的病根（人类根本没点开过它，所以也从没看见「自己发
-                    //    的消息被保留」这件早就实现了的事）。
-                    // ③ **排在这一组的第一个**：群名走 `.navigationTitle`、在同一条
-                    //    标题栏的前端，所以这一组里越靠前就越贴着群名，也就是人类说
-                    //    的「群名的右侧」。
-                    //
-                    // 用 `Toggle` + `.toggleStyle(.button)` 而不是自绘 Capsule：药丸
-                    // 形、选中态的填充、以及 macOS 26 的液态玻璃岛全是系统给的，
-                    // 自绘一份只会和标题栏材质打架（「能不自绘就不自绘」）。
-                    Toggle(isOn: $onlyMentions) {
-                        Text("仅@你")
-                    }
-                    .toggleStyle(.button)
-                    .disabled(crewStore.selectedDetail == nil)
-                    // 药丸上的四个字是人类钉的，一个不动；这里的悬停说明补上它真正
-                    // 的口径（还留着自己发的），免得人以为自己的话被筛没了。
-                    .help(onlyMentions
-                          ? "正在只显示 @ 你的消息 + 你自己发的；点一下显示全部"
-                          : "只显示 @ 你的消息 + 你自己发的")
-                }
-                ToolbarItem {
                     Button { showingDetail = true } label: {
                         Label("crew 详情", systemImage: "info.circle")
                     }
@@ -117,6 +88,18 @@ struct CrewCenterView: View {
                     Button { Task { await crewStore.refreshDetail(crewId) } } label: {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    // Todo #79：筛选药丸固定在群聊栏最右上角；点亮色与发送键共用
+                    // Theme.Palette.accent，不再继承系统蓝色。文字仍保持人类钉死的
+                    // 「仅@你」四字。
+                    Toggle(isOn: $onlyMentions) { Text("仅@你") }
+                        .toggleStyle(.button)
+                        .tint(Theme.Palette.accent)
+                        .disabled(crewStore.selectedDetail == nil)
+                        .help(onlyMentions
+                              ? "正在只显示 @ 你的消息 + 你自己发的；点一下显示全部"
+                              : "只显示 @ 你的消息 + 你自己发的")
                 }
                 // 「Session 终端」开关已去掉 —— 右栏(成员/终端)在原生三栏里常驻;
                 // 成员列表 ↔ 终端 的切换由右栏内部(viewingTerminal / 点 session)管。

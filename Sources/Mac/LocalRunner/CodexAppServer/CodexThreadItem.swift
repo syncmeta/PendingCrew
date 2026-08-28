@@ -43,6 +43,17 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
         let status: String?
         let aggregatedOutput: String?
         let exitCode: Int?
+        /// app-server 已经做好的 best-effort 语义解析。UI 用它说「读取档案 / 搜索
+        /// 档案 / 执行指令」，不再把 shell 原文当成人类活动描述（Todo #83）。
+        var actions: [CommandAction] = []
+    }
+
+    struct CommandAction: Equatable {
+        enum Kind: String, Hashable { case read, listFiles, search, unknown }
+        let kind: Kind
+        let name: String?
+        let path: String?
+        let query: String?
     }
 
     struct FileChange: Equatable {
@@ -52,7 +63,7 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
 
     private enum Keys: String, CodingKey {
         case id, type, text, phase, summary, content, command, cwd, status
-        case aggregatedOutput, exitCode, name, query
+        case aggregatedOutput, exitCode, name, query, commandActions
         case server, tool, namespace, changes
     }
 
@@ -61,6 +72,12 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
     private struct UserInputLite: Decodable { let type: String?; let text: String? }
     /// One `changes` entry of a `fileChange` (`FileUpdateChange`); path is what we render.
     private struct FileChangeLite: Decodable { let path: String? }
+    private struct CommandActionLite: Decodable {
+        let type: String
+        let name: String?
+        let path: String?
+        let query: String?
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -93,12 +110,19 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
         case "plan":
             kind = .plan(text: s(.text) ?? "")
         case "commandExecution":
+            let actionRows = (try? c.decode([CommandActionLite].self, forKey: .commandActions)) ?? []
+            let actions = actionRows.map {
+                CommandAction(
+                    kind: CommandAction.Kind(rawValue: $0.type) ?? .unknown,
+                    name: $0.name, path: $0.path, query: $0.query)
+            }
             kind = .commandExecution(.init(
                 command: s(.command) ?? "",
                 cwd: s(.cwd),
                 status: s(.status),
                 aggregatedOutput: s(.aggregatedOutput),
-                exitCode: try? c.decode(Int.self, forKey: .exitCode)
+                exitCode: try? c.decode(Int.self, forKey: .exitCode),
+                actions: actions
             ))
         case "fileChange":
             let changes = (try? c.decode([FileChangeLite].self, forKey: .changes)) ?? []

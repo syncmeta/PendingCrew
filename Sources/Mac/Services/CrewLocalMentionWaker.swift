@@ -195,9 +195,11 @@ final class CrewLocalMentionWaker {
                 sourceKey: "whiteboard:" + d.entryId,
                 to: run,
                 text: inj.text
-            ) {
+            ) { baseline in
                 if d.trackReceipt {
-                    runner.confirmWake(run: run, crewId: crewId, onConfirmed: consume)
+                    runner.confirmWake(
+                        run: run, crewId: crewId, baseline: baseline,
+                        onConfirmed: consume)
                 } else {
                     consume()   // system 条目免回执（告警自身不再告警，防环）
                 }

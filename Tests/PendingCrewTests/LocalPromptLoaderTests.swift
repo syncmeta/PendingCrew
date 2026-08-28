@@ -102,3 +102,19 @@ final class HumanTodoBehaviourRulesTests: XCTestCase {
         XCTAssertTrue(zh.contains("**先到本 crew 的 captain**"))
     }
 }
+
+final class CockpitPlanBehaviourRulesTests: XCTestCase {
+    private var loader: LocalPromptLoader {
+        LocalPromptLoader(bundle: Bundle(for: Self.self))
+    }
+
+    func testCaptainPromptMakesAgentPlanMaintenancePartOfTheWorkflow() throws {
+        let captain = try loader.rawTemplate(name: "crew-captain", locale: "zh")
+        XCTAssertTrue(captain.contains("驾驶舱只写 Agent 当前的计划和想法"))
+        XCTAssertTrue(captain.contains("`plan_add`"))
+        XCTAssertTrue(captain.contains("`plan_update`"))
+        XCTAssertTrue(captain.contains("派活、收活、给 Todo 翻牌时都顺手更新"))
+        XCTAssertTrue(captain.contains("宣布完成前必须再读一眼"))
+        XCTAssertTrue(captain.contains("不要让驾驶舱靠不存在的 `docs/roadmap.md` 才有内容"))
+    }
+}

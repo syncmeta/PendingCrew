@@ -8,6 +8,9 @@ final class CodexTranscript: ObservableObject {
     @Published private(set) var items: [CodexThreadItem] = []
     @Published private(set) var turnActive = false
     @Published private(set) var activeTurnId: String?
+    /// 唤醒回执用的单调活动序号。`isWorking` 是瞬时态，短 turn 可在首拍前从
+    /// true 回 false；turn/item 事件一旦到达，这个序号就不会倒退。
+    private(set) var activityRevision: UInt64 = 0
 
     /// Reasoning streams as deltas keyed by `itemId`. Under ChatGPT auth the final
     /// `item/completed` reasoning item carries an EMPTY `summary` (the real
@@ -18,6 +21,12 @@ final class CodexTranscript: ObservableObject {
     private var reasoningContent: [String: String] = [:]
 
     func apply(method: String, params: [String: Any]) {
+        // item/started、工具调用与流式 delta 即使尚未形成可渲染行，也已经是
+        // “消息被消费并开始处理”的硬证据；malformed item 同理算协议活动。
+        if method == "turn/started" || method == "turn/completed"
+            || method.hasPrefix("item/") {
+            activityRevision &+= 1
+        }
         switch method {
         case "turn/started":
             activeTurnId = (params["turn"] as? [String: Any])?["id"] as? String

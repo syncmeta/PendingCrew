@@ -1,4 +1,11 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
+
+enum PendingCrewLinks {
+    static let helpDocumentation = URL(string: "https://docs.pendingname.com/pendingcrew/")!
+}
 
 /// GUI 入口。`@main` 挪到 `PendingCrewEntry` —— 它先看 argv：带 `--mcp-serve` /
 /// `--mcp-hook` 时本进程当 crew-comms helper 跑（re-exec self，spec local-first
@@ -56,6 +63,14 @@ struct PendingCrewApp: App {
         Settings {
             CrewSettingsView()
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
+        }
+        .commands {
+            CommandGroup(replacing: .help) {
+                Button("PendingCrew 帮助") {
+                    NSWorkspace.shared.open(PendingCrewLinks.helpDocumentation)
+                }
+                .keyboardShortcut("?", modifiers: .command)
+            }
         }
         #endif
     }

@@ -46,6 +46,13 @@ protocol SessionProtocolCodexHistoryProviding: AnyObject {
     var protocolCodexHistory: [CodexThreadItem] { get }
 }
 
+/// 唤醒回执可选读能力：只给有结构化 Codex transcript 的后端实现，避免把
+/// 生命周期协议扩大成所有 PTY 后端都要伪造活动序号。
+@MainActor
+protocol SessionWakeActivityProviding: AnyObject {
+    var wakeActivityRevision: UInt64 { get }
+}
+
 @MainActor
 protocol SessionProtocolApprovalControlling: AnyObject {
     func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws
@@ -96,8 +103,10 @@ extension PlainTerminalSession: SessionProtocolTerminalSnapshotProviding {
 }
 
 extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
-    SessionProtocolApprovalControlling, SessionProtocolCodexHistoryProviding {
+    SessionProtocolApprovalControlling, SessionProtocolCodexHistoryProviding,
+    SessionWakeActivityProviding {
     var protocolCodexHistory: [CodexThreadItem] { transcript.items }
+    var wakeActivityRevision: UInt64 { transcript.activityRevision }
 
     func screenText(maxLines: Int) -> String {
         let items = transcript.items.suffix(max(0, maxLines))
@@ -183,7 +192,7 @@ enum SessionBackendRouting {
 
 @MainActor
 final class RemoteSessionBackend: ObservableObject, SessionBackend,
-    SessionProtocolScreenTextProviding {
+    SessionProtocolScreenTextProviding, SessionWakeActivityProviding {
     let sessionId: String
     let kind: LocalCodingAgentKind
     let terminalView: TerminalMirrorView?
@@ -213,6 +222,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     private(set) var lastTerminalFrameBytes: [UInt8] = []
     private(set) var lastCompletedSnapshotBytes: [UInt8] = []
     private(set) var completedSnapshotCount = 0
+    var wakeActivityRevision: UInt64 { transcript?.activityRevision ?? 0 }
     private(set) var requestedTerminalSize = TerminalSize(cols: 80, rows: 25)
     private var handle: UInt32?
     private var snapshotBytes: [UInt8] = []
@@ -358,6 +368,15 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
               case let .string(method)? = event.fields["method"],
               case let .object(params)? = event.fields["params"] else { return }
         transcript?.apply(method: method, params: params.mapValues(\.foundationObject))
+        // codex notification 比下一份 state snapshot 更早到 app。立刻镜像 turn
+        // 生命周期，避免这段窗口里 inspect_session / 状态点谎报“空闲”。
+        if method == "turn/started" {
+            isWorking = true
+            displayIsTyping = true
+        } else if method == "turn/completed" {
+            isWorking = false
+            displayIsTyping = false
+        }
     }
 
     private func refreshScrollState(userInitiated: Bool) {

@@ -141,6 +141,21 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(remote.transcript?.items.count, 2)
     }
 
+    func testCodexTurnEventImmediatelyCorrectsRemoteWorkingState() {
+        let bridge = InProcessSessionProtocolBridge()
+        let notification = bridge.codexNotificationSink(sessionId: "codex-turn-state")
+        let remote = bridge.expose(
+            sessionId: "codex-turn-state", backend: ProtocolTestBackend(kind: .codex))
+
+        XCTAssertFalse(remote.isWorking)
+        notification("turn/started", ["turn": ["id": "turn-1"]])
+        XCTAssertTrue(remote.isWorking)
+        XCTAssertTrue(remote.isBusy)
+        notification("turn/completed", ["turn": ["id": "turn-1"]])
+        XCTAssertFalse(remote.isWorking)
+        XCTAssertFalse(remote.isBusy)
+    }
+
     func testAttachBranchesTerminalSnapshotFromCodexStructuredHistory() {
         let terminal = ProtocolTestBackend(kind: .claudeCode)
         terminal.terminalSnapshot = .init(cols: 80, rows: 25, bytes: Array("screen".utf8))
