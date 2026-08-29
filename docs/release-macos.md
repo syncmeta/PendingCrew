@@ -163,6 +163,7 @@ PendingCrew 不同进程组，用户按 ⌘Q 不会连带杀掉它；等待窗�
 
 | 版本 | 闸门 | 结果 |
 | --- | --- | --- |
+| 0.1.21 | 跑了，钉在 `bfdef8b` | **1688 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，两端 build 都过。四条判读逐条核过：3 条 skip 就是登记在案的那三条；`CrewChatOpenCostTests` 8 条全 Executed 且 passed；具名失败为空；HEAD 前后逐字相同。**真全绿。** |
 | 0.1.20 | 跑了，钉在 `bf07de8` | **1682 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。3 条 skip 逐项是 `AgentTuiFixtureRecorder.testRecord`、`CrewLastMessageCacheTests.test_基准_现场白板目录`、`SessionAwaitingReplyInputsCacheTests.test_基准_现场目录`；`CrewChatOpenCostTests` 8 条真执行；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
 | 0.1.19 | 跑了，钉在 `bef3095` | **1722 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。3 条 skip 逐项是 `AgentTuiFixtureRecorder.testRecord` 和两条现场目录基准，与登记构成一致；`CrewChatOpenCostTests` 8 条全部真执行且 passed；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
 | 0.1.18 | 跑了，钉在 `a565032` | **1717 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，两端 build 都过。四条判读逐条核过：3 条 skip 就是登记在案的那三条（构成对上，不是只对数字）；`CrewChatOpenCostTests` 8 条全 Executed 且 passed —— 其中 `test_打开LED驱动板一次重排在预算内`、`test_整表一次布局_窗口化前后` 正是 0.1.16 飘红的那两条，这次真跑真过；具名失败为空；HEAD/TREE 前后逐字相同。**真全绿。** |
