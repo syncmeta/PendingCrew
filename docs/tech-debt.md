@@ -12,6 +12,26 @@
 
 ---
 
+### 🔴 session 协议的收包路径假设「一次投递 == 正好一整帧」—— 换成真 socket 会静默丢帧
+- **发现**: 2026-08-29 · 父 crew Todo #44（Fly 远程主机接入复核，`docs/internal/2026-08-29-fly-remote-host-review.md` §2 A-2/A-3）
+- **位置**: `Sources/Mac/LocalRunner/RemoteSessionBackend.swift:567-568`（server 侧 `receive`）、
+  `:855-859`（client 侧 `receive`）、`Sources/Mac/LocalRunner/SessionProtocol.swift:469` / `:486` →
+  `:503-509` `exactlyOneFrame(_:)`。
+- **问题**: 两个 endpoint 收到 `Data` 后都直接 `codec.decodeApp/decodeDaemon`，而它们经 `exactlyOneFrame`
+  要求这一次投递**恰好解出一帧**；不满足就 `throw`，调用点是 `guard let … = try? … else { return }`。
+  于是**半帧到达 → 丢；两帧粘在一起 → 两帧都丢**。不断连、不报错、不落日志。
+  正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧，`SessionProtocol.swift:81-107`）已经写好了，
+  **只是没接到 endpoint 的收包路径上**。
+- **为什么今天照不出来**: `InProcessTransport.sendFromApp/sendFromDaemon` 把整个 `Data` 原样交给对端回调
+  （`InProcessTransport.swift:22-30`），投递边界恒等于帧边界。**现有测试全部跑在这条传输上，所以这条永远是绿的。**
+  UDS 上偶尔踩；WAN + TLS（Fly 远程主机、手机遥控）上必然拆包粘包。
+- **连带一条**: 两个 endpoint 的 init 签名是 `init(transport: InProcessTransport, …)`（`:479` / `:763`），
+  不是同文件里已经定义好的 `SessionTransport` 协议（`InProcessTransport.swift:6`）—— 换传输必须改这两个 init。
+- **该怎么还**: 归 P4（真进程分家）的验收，**不要平行改**（那是设计 §6 警告的双头）。两步：
+  ① 每条连接各持一个 `SessionFrameDecoder`，`receive` 改成「喂字节 → 拿 0..n 帧 → 逐帧处理」；
+  ② endpoint 面向 `SessionTransport` 而非具体类。
+  验收要求**先证明尺子会红**：写一个按任意字节边界切分/合并投递的传输替身，跑当前代码必须红，接上增量解码后转绿。
+
 ### 🔴 所有在跑 session 的 PTY 输出都要过主线程 —— 界面代价随派活数线性增长
 - **发现**: 2026-08-19 · `fix/ui-jank-pty-scan`（Todo #59 界面卡顿排查）
 - **位置**: `Sources/Mac/LocalRunner/AgentTerminalSession.swift` 的 `dataReceived` 回调（`ActivityTerminalView.dataReceived(slice:)` → `MainActor.assumeIsolated { … }`）。

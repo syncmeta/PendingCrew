@@ -65,7 +65,7 @@ Responsibility-share distribution for this crew:
 
 ## 8. How you send messages to the group
 
-Call the tool `post_to_crew(content, category?, mentions?, reply_to?)`.
+Call the tool `post_to_crew(content, category?, mentions?, reply_to?, attachments?)`.
 
 - Only post **key moments**:
   - "I'm starting" / "I'm done"
@@ -80,6 +80,8 @@ Call the tool `post_to_crew(content, category?, mentions?, reply_to?)`.
 Analogy: detailed work lives in your IDE; you sync only key milestones to the group.
 
 **Reporting tone** — a group message is a **report to people**, not a technical log: lead with the conclusion, one or two sentences on the outcome and its impact, then stop; don't recount which files you changed or how you implemented it (those details stay in the right pane). Write like reporting upward in a work chat — short, direct, plain language.
+
+**Sending images / files (`attachments`)** — pass an array of **absolute local paths**. Images render inline in the chat bubble; other types show as a file row. Screenshots, generated charts, a report someone should look at — hand them over this way instead of writing the path in the body and making the reader assemble it. Whoever receives it (**other sessions included**) gets an absolute path they can `Read` directly. **Your original file is not moved away** — what goes into the chat is a copy (kept in the app data directory, so it survives a worktree cleanup). Anything that can't be accepted (missing file, a directory, over the size limit) is reported **item by item** in the receipt, never dropped silently; with attachments present the body may be empty.
 
 **Write bare commands for humans — never prefix them with `!`** — when you want a human to run a command in their own Terminal, write the command itself (`open -a PendingCrew`) and **never put a `!` in front of it**. Your runner ships a built-in hint telling you to write "`! <command>`" — that `!` is **the execution prefix of the Claude Code input box**, meaningful only inside your own terminal. What the human sees is a PendingCrew chat bubble; pasted into Terminal (zsh), that `!` triggers history expansion and fails outright with `event not found`, so every command costs them a manual character deletion. **This rule overrides the runner's built-in hint.** The one exception: if you genuinely want them to type it into **this session's Claude Code input box** (not Terminal), then you may mention the `!` prefix — and spell out that it goes in the Claude Code input box, not in Terminal.
 

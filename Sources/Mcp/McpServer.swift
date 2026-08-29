@@ -40,6 +40,12 @@ final class McpServer {
     /// `set_session_profile` 拿它挑对照哪张模型表；nil（旧调用/没传）→ 两家都对照，
     /// 任一家认得就不吭声（宁可少说，也别对着错的表瞎报）。
     let agentKey: String?
+    /// 群聊附件落盘根目录（`post_to_crew(attachments:)`，Todo #48）。默认真实数据
+    /// 目录 `Application Support/PendingCrew/attachments/` —— 与人类 composer 发的图
+    /// **同一个目录、同一套命名**，所以两边发的图在气泡里长得一样、清理时也是一处。
+    /// 不放 crew 工作目录：worktree 被清掉会把图带走，历史气泡就渲染不出来了。
+    /// 单测传临时目录（走同一条生产代码路径）。
+    let attachmentRoot: URL
 
     init(store: LocalWhiteboardStore, approvals: LocalApprovalStore, control: LocalCrewControlStore,
          crewId: String, sessionId: String,
@@ -47,7 +53,8 @@ final class McpServer {
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
          plans: CockpitPlanStore? = nil,
          humanTodos: LocalTodoStore? = nil,
-         agentKey: String? = nil) {
+         agentKey: String? = nil,
+         attachmentRoot: URL? = nil) {
         self.store = store
         self.approvals = approvals
         self.control = control
@@ -63,6 +70,7 @@ final class McpServer {
         // 就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
         self.humanTodos = humanTodos ?? self.todos.sibling(.human)
         self.agentKey = agentKey
+        self.attachmentRoot = attachmentRoot ?? CrewChatAttachmentStore.defaultDirectory
     }
 
     /// 处理一行 JSON-RPC。返回应答 JSON 字符串；通知（无 id / `notifications/*`）→ nil。
@@ -106,6 +114,11 @@ final class McpServer {
                                     ],
                                     "required": ["kind"],
                                 ],
+                            ],
+                            "attachments": [
+                                "type": "array",
+                                "description": "可选：随这条消息一起发到群里的图片/文件，填**本机绝对路径**（`~` 可用）。图片在群聊气泡里直接显示，其它类型显示成文件条。收到的人（包括别的 session）拿到的是可以直接 Read 的绝对路径 —— 所以截图、生成的图表、报告文件都可以这样递过去，不用把路径写在正文里让人自己拼。\n\n**你的原文件不会被搬走**，收进群聊的是一份副本（存在 app 数据目录，随聊天记录长期保留，worktree 清掉也还在）。\n\n收不下的会**逐条**在回执里说明原因（文件不存在 / 是文件夹 / 超过大小上限），不会静默丢；带了附件时正文可以为空（只发图）。",
+                                "items": ["type": "string"],
                             ],
                             "reply_to": [
                                 "type": "string",
@@ -487,8 +500,25 @@ final class McpServer {
         switch name {
         case "post_to_crew":
             let message = (args["message"] as? String) ?? ""
-            guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return toolResult(id: id, text: "ERROR: message 不能为空")
+            // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与
+            // 软报错文案跟人类拖入共用 `CrewFileAttachmentIntake`，不另立一套口径。
+            let givenPaths = (args["attachments"] as? [Any])?.compactMap { $0 as? String } ?? []
+            let intake = givenPaths.isEmpty
+                ? (accepted: [LocalWhiteboardAttachment](), errors: [String]())
+                : CrewFileAttachmentIntake.intake(
+                    paths: givenPaths, crewId: crewId, root: attachmentRoot)
+            let hasBody = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // 只发图（正文为空）放行 —— 与人类 composer 同规则。但**一张都没收下**
+            // 时不能当成空消息发出去：那会变成一条空气泡 + 一句「已发到」，
+            // 而图其实一张都没进去。
+            guard hasBody || !intake.accepted.isEmpty else {
+                let why = intake.errors.isEmpty
+                    ? "" : "\n" + intake.errors.joined(separator: "\n")
+                return toolResult(
+                    id: id,
+                    text: givenPaths.isEmpty
+                        ? "ERROR: message 不能为空"
+                        : "ERROR: 正文为空，且附件一个都没收下，这条没有发出去。\(why)")
             }
             // Phase 7：解析定向 @ + reply_to,记进本地白板（不静默吞）。本地这步只
             // 负责把信息留住；按 mention 唤醒目标 session 由 app 侧的本地直投
@@ -511,8 +541,17 @@ final class McpServer {
                     text: message, category: args["category"] as? String,
                     senderName: sessionLabel,
                     mentions: mentions, inReplyTo: replyTo,
-                    senderKind: isCaptain ? "captain" : "session")
-                return toolResult(id: id, text: Self.postReceipt(incident: incident))
+                    senderKind: isCaptain ? "captain" : "session",
+                    attachments: intake.accepted)
+                // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
+                // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
+                // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
+                return toolResult(
+                    id: id,
+                    text: Self.postReceipt(
+                        incident: incident,
+                        attachmentCount: intake.accepted.count,
+                        attachmentErrors: intake.errors))
             } catch {
                 return toolResult(id: id, text: Self.writeFailureReceipt(error))
             }
@@ -1419,9 +1458,18 @@ final class McpServer {
 
     /// 白板写成功时的回执。`incident` 非 nil = 写进去了，但白板此前出过事 ——
     /// 一并报出来，别让「已发到」把归档 + 重建这件事盖过去。
-    private static func postReceipt(incident: String?) -> String {
-        guard let incident else { return "已发到 crew 群聊白板。" }
-        return "已发到 crew 群聊白板。⚠️ 但请注意：\(incident)"
+    private static func postReceipt(
+        incident: String?, attachmentCount: Int = 0, attachmentErrors: [String] = []
+    ) -> String {
+        var line = "已发到 crew 群聊白板。"
+        if attachmentCount > 0 { line += "（带 \(attachmentCount) 个附件）" }
+        if let incident { line += "⚠️ 但请注意：\(incident)" }
+        // 收不下的逐条附在后面 —— 这几句是这条回执里唯一会说「有东西没发出去」的
+        // 地方，前半句的「已发到」只管正文。
+        if !attachmentErrors.isEmpty {
+            line += "\n⚠️ 以下附件没有发出去：\n" + attachmentErrors.joined(separator: "\n")
+        }
+        return line
     }
 
     /// 白板写失败时的回执。措辞按「当没送达处理」写死 —— 调用方（编码 agent）看到
