@@ -13,12 +13,10 @@ import Foundation
 /// 目标缺席拉起的语义原样复用，与人类 composer 路同一套核心）。
 ///
 /// 过滤语义：
-///   * 收 session / captain 作者的条目 —— 人类（user）在 composer 发送时
-///     `CrewChatView.send()` 已直投，这里再投会重复注入。
-///     （#554 断链修复的规则 3 —— 「远端人类经 relay 落进本地白板的 @ 也收」——
-///     随 #63 第二期删除跨端遥控整层一起移除：它的判据是 `relayRemoteId != nil`，
-///     relay 一走这个条件恒 false。**前后端解耦重建 relay 时要一起重建**，
-///     否则远端人类的 @ 会重新变成没有投递者的断链。）
+///   * 收 session / captain / user 作者的条目。人类普通消息（mentions == nil）
+///     默认当 `@captain`；人类显式定向 @ 按目标走；显式 broadcast / human 不会
+///     被误解成默认 @机长。人类 composer 不再另走一条 UUID 直投链，白板 message id
+///     是唯一 source key —— 同进程 append 与目录事件重扫也只投一次。
 ///   * 只收带 `@session` / `@captain` 的条目（broadcast / human 不唤醒具体
 ///     run，与 decide 一致）。
 ///   * **通讯录 `contact` 的跨 crew 来电例外（2026-08-11）**：`externalContactFrom`
@@ -40,7 +38,8 @@ enum CrewLocalMentionWakeLogic {
         let senderName: String
         /// 作者 session id —— 唤醒器据此排除「自己 @ 自己」的注入；system/relay 为 nil。
         let senderSessionId: String?
-        /// false = 系统条目，注入后不做回执判定（防告警环）。
+        /// false = 系统或人类条目，注入后不做延迟回执判定。系统免判防告警环；
+        /// 人类短消息可能在采样前已经处理完，免判防误报。
         let trackReceipt: Bool
     }
 
@@ -57,7 +56,10 @@ enum CrewLocalMentionWakeLogic {
     static func pending(entries: [LocalWhiteboardMessage], now: Date = Date()) -> [PendingDelivery] {
         entries.compactMap { e in
             guard !isStale(e, now: now) else { return nil }
-            guard e.senderKind == "session" || e.senderKind == "captain" else { return nil }
+            let isHuman = e.senderKind == "user" || e.senderKind == "human"
+            guard e.senderKind == "session" || e.senderKind == "captain" || isHuman else {
+                return nil
+            }
             var wakeMentions: [CrewMention] = (e.mentions ?? []).compactMap { m in
                 switch m.kind {
                 case "session":
@@ -69,8 +71,13 @@ enum CrewLocalMentionWakeLogic {
                     return nil   // broadcast / human：不唤醒具体 run
                 }
             }
-            // 跨 crew 来电的广播 → 当 @机长（外线打进来不能只躺在白板上）。
-            if wakeMentions.isEmpty, e.externalContactFrom != nil { wakeMentions = [.captain] }
+            // 人类真正的无 mention 消息、跨 crew 来电广播 → 当 @机长。这里必须看
+            // mentions == nil，不能只看过滤结果：显式 broadcast/human 过滤后也是空，
+            // 但它们不是默认发给机长。
+            if wakeMentions.isEmpty,
+               (e.externalContactFrom != nil || (isHuman && e.mentions == nil)) {
+                wakeMentions = [.captain]
+            }
             guard !wakeMentions.isEmpty else { return nil }
             let isSystem = e.senderSessionId == "system"
             return PendingDelivery(
@@ -79,7 +86,7 @@ enum CrewLocalMentionWakeLogic {
                 messageText: e.agentText,
                 senderName: senderLabel(e),
                 senderSessionId: isSystem ? nil : e.senderSessionId,
-                trackReceipt: !isSystem)
+                trackReceipt: !isSystem && !isHuman)
         }
     }
 

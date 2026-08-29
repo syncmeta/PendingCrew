@@ -131,10 +131,15 @@ final class McpServerTests: XCTestCase {
         XCTAssertEqual(s.awaitReply(reqId: id, pollInterval: 0.01), "选 A")
     }
 
-    func testAwaitReplyTimeoutText() throws {
+    func testAwaitReplyTimeoutClosesUnreachableDecision() throws {
         let s = server(tempDir())
         let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "sess-1", summary: "q"))
-        XCTAssertTrue(s.awaitReply(reqId: id, pollInterval: 0.01, maxWaits: 2).contains("自行判断"))
+        let reply = s.awaitReply(reqId: id, pollInterval: 0.01, maxWaits: 2)
+        XCTAssertTrue(reply.contains("自行判断"))
+        XCTAssertEqual(s.approvals.item(crewId: "c", id: id)?.status, "answered",
+                       "ask 已超时返回，晚到答复无法再送达 agent，卡片不得永久 pending")
+        XCTAssertTrue(s.approvals.pending(crewId: "c").isEmpty,
+                      "不得让已继续工作的 session 仍被标成等答复")
     }
 
     // ask 在 raise 后把问题贴到本地白板（spec §6 通知半边），答复仍走待办列表。
@@ -269,7 +274,7 @@ final class McpServerTests: XCTestCase {
         XCTAssertEqual(s.control.pendingRename(crewId: "c"), "鉴权 重构")
     }
 
-    // MARK: - raise_attention / clear_attention（机长专用，crew-sidebar-status）
+    // MARK: - raise_attention / clear_attention（机长专用，旧会话兼容）
 
     private func callTool(_ s: McpServer, name: String, argsJSON: String = "{}") -> String {
         s.handleLine("""
@@ -304,7 +309,8 @@ final class McpServerTests: XCTestCase {
     func testCaptainRaiseAttentionWritesControl() {
         let s = server(tempDir(), isCaptain: true)
         let r = callTool(s, name: "raise_attention", argsJSON: #"{"reason":"需要人类拍板部署时机"}"#)
-        XCTAssertTrue(r.contains("已点亮"))
+        XCTAssertTrue(r.contains("不点亮状态指示"))
+        XCTAssertTrue(r.contains("add_human_todo"))
         XCTAssertEqual(s.control.pendingAttention(crewId: "c")?.reason, "需要人类拍板部署时机")
     }
 
@@ -318,8 +324,8 @@ final class McpServerTests: XCTestCase {
         let s = server(tempDir(), isCaptain: true)
         _ = callTool(s, name: "raise_attention", argsJSON: #"{"reason":"有问题"}"#)
         let r = callTool(s, name: "clear_attention")
-        XCTAssertTrue(r.contains("已熄灭"))
-        // last-write-wins：留下的是熄灭态（reason nil）。
+        XCTAssertTrue(r.contains("已清除兼容 attention 文案"))
+        // last-write-wins：留下的是清除态（reason nil）。
         let pending = s.control.pendingAttention(crewId: "c")
         XCTAssertNotNil(pending)
         XCTAssertNil(pending?.reason)

@@ -77,14 +77,29 @@ enum CodexProtocol {
             mcpServers: mcpServers,
             approvalsReviewer: approvalsReviewer)
         p["threadId"] = threadId
+        // Codex 0.149 added `excludeTurns` for clients that only need to rejoin the
+        // live thread. Without it, `thread/resume` serializes the complete persisted
+        // turn history into one JSON line. A long-lived captain produced a 6 MB
+        // rollout whose resume response did not finish before our 25 s launch probe;
+        // the app-server and crew MCP were already alive, but PendingCrew could not
+        // observe the thread id until the entire line arrived and falsely reported a
+        // stalled launch. The transcript is protocol-event driven and does not use
+        // historical turns, so omitting them is both sufficient and bounded.
+        p["excludeTurns"] = true
         return p
     }
 
     static func threadSettingsUpdateParams(
         threadId: String,
-        approvalsReviewer: ApprovalsReviewer
+        model: String? = nil,
+        effort: String? = nil,
+        approvalsReviewer: ApprovalsReviewer? = nil
     ) -> [String: Any] {
-        ["threadId": threadId, "approvalsReviewer": approvalsReviewer.rawValue]
+        var params: [String: Any] = ["threadId": threadId]
+        if let model, !model.isEmpty { params["model"] = model }
+        if let effort, !effort.isEmpty { params["effort"] = effort }
+        if let approvalsReviewer { params["approvalsReviewer"] = approvalsReviewer.rawValue }
+        return params
     }
     /// The unread crew whiteboard rides in via **`turn/start.additionalContext`** —
     /// codex's native per-turn context channel. The field IS in the v2 schema, gated

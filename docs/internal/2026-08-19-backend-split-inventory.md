@@ -30,7 +30,7 @@
 | A22 | iOS Welcome 重发倒计时 | `Sources/Views/CrewWelcomeView.swift:26,87-89` | OTP 重发冷却每秒 tick。 | `Timer.publish` 1 s，视图存在即 autoconnect。 |
 | A23 | macOS Welcome 重发倒计时 | `Sources/Mac/Views/CrewMacWelcomeView.swift:30,84-86` | OTP 重发冷却每秒 tick。 | `Timer.publish` 1 s，视图存在即 autoconnect。 |
 
-其余 `@StateObject` 已逐一排除：`AppModel`/`CaptainTemplateStore`（`Sources/PendingCrewApp.swift:7,11`）只有状态/持久化，没有自主循环；两个 `CrewWelcomeViewModel`（`Sources/Views/CrewWelcomeView.swift:20`、`Sources/Mac/Views/CrewMacWelcomeView.swift:24`）只有用户动作触发的有限请求；`WorkspaceSyncStore`（`Sources/Mac/Views/WorkspaceSyncView.swift:19`）只有按钮触发的有限 git 任务；两个 `CrewDragState`（`Sources/Mac/Views/CrewDAGTreeView.swift:26`、`Sources/Mac/Views/CrewTimelineListView.swift:23`）只有拖拽期间的短轮询（已列 B28），不属于常驻后台职责。其余 `.task`/`.onAppear` 只是一次 refresh/load/render，也没有列成后台所有者。
+其余 `@StateObject` 已逐一排除：`AppModel`/`CaptainTemplateStore`（`Sources/PendingCrewApp.swift:7,11`）只有状态/持久化，没有自主循环；两个 `CrewWelcomeViewModel`（`Sources/Views/CrewWelcomeView.swift:20`、`Sources/Mac/Views/CrewMacWelcomeView.swift:24`）只有用户动作触发的有限请求；两个 `CrewDragState`（`Sources/Mac/Views/CrewDAGTreeView.swift:26`、`Sources/Mac/Views/CrewTimelineListView.swift:23`）只有拖拽期间的短轮询（已列 B28），不属于常驻后台职责。其余 `.task`/`.onAppear` 只是一次 refresh/load/render，也没有列成后台所有者。本文盘点时存在的 `WorkspaceSyncStore` 已在 Todo #78 中随跨机 Workspace 同步整层删除。
 
 ## 清单 B — 所有定时器与轮询
 

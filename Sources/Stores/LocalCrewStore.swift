@@ -129,12 +129,31 @@ final class LocalCrewStore {
     /// 恰好在两步之间退出，下一次自动唤醒也不会又按旧 runner 起回来。只接受真
     /// agent（`claude_code` / `codex`）；空值、未知值、纯终端与幂等写入都忽略。
     func setCaptainAgentKind(_ id: String, _ rawKind: String) {
-        guard rawKind == "claude_code" || rawKind == "codex",
-              var crew = crews[id], crew.captainAgentKind != rawKind else { return }
+        do {
+            try setCaptainAgentKindReportingFailure(id, rawKind)
+        } catch {
+            NSLog("[LocalCrewStore] persist captain kind failed: \(error)")
+        }
+    }
+
+    /// 交接事务使用的 fail-closed 版本：只有 atomic write 成功才保留内存新值；编码/
+    /// 落盘失败会把内存恢复成旧 crew 并抛错，让 runner 停新机长、续回旧机长。
+    func setCaptainAgentKindReportingFailure(_ id: String, _ rawKind: String) throws {
+        guard rawKind == "claude_code" || rawKind == "codex" else {
+            throw LocalCrewStoreError.invalidCaptainAgentKind(rawKind)
+        }
+        guard var crew = crews[id] else { throw LocalCrewStoreError.crewNotFound(id) }
+        guard crew.captainAgentKind != rawKind else { return }
+        let previous = crew
         crew.captainAgentKind = rawKind
         crew.updatedAt = ISO8601DateFormatter().string(from: Date())
         crews[id] = crew
-        persistToDisk()
+        do {
+            try persistToDiskReportingFailure()
+        } catch {
+            crews[id] = previous
+            throw error
+        }
     }
 
     /// 迁移规划层要的全部 crew 字段（id / 名 / 工作目录 / 父边）。返回元组而非专用类型 ——
@@ -159,8 +178,8 @@ final class LocalCrewStore {
     }
     #endif
 
-    /// 点亮/熄灭机长 attention 黄点（`raise_attention` / `clear_attention` 经控制
-    /// 通道落地，由 `CrewStore` 调）。`reason == nil`（或 trim 后空）= 熄灭。
+    /// 记录/清除旧 attention 文案（`raise_attention` / `clear_attention` 经控制
+    /// 通道落地，由 `CrewStore` 调）。Todo #71 起不再控制状态点。
     /// crew 不存在 / 值未变 → 忽略（幂等，避免无谓重写 + 变更信号）。
     func setAttention(_ id: String, reason: String?) {
         let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -623,16 +642,20 @@ final class LocalCrewStore {
     }
 
     private func persistToDisk() {
+        do {
+            try persistToDiskReportingFailure()
+        } catch {
+            NSLog("[LocalCrewStore] persist failed: %@", error.localizedDescription)
+        }
+    }
+
+    private func persistToDiskReportingFailure() throws {
         let payload = LocalCrewFile(
             version: 1, crews: Array(crews.values), nextCrewNumber: nextCrewNumber)
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(payload)
-            try data.write(to: fileURL, options: [.atomic])
-        } catch {
-            NSLog("[LocalCrewStore] persist failed: \(error)")
-        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(payload)
+        try data.write(to: fileURL, options: [.atomic])
     }
 }
 
@@ -681,8 +704,7 @@ struct LocalCrew: Codable, Equatable {
     var parentCrewIds: [String] = []
     /// 持久 session 成员（chunk 4 补口）。optional → 旧 JSON 缺键向后兼容。
     var sessionMembers: [LocalSessionMember]? = nil
-    /// 机长点亮的 attention 黄点文案（crew-sidebar-status spec §3）。非 nil = 点亮，
-    /// 侧栏头像右上角显黄点 + 悬浮提示。optional → 旧 JSON 缺键向后兼容。
+    /// 旧 attention 文案。Todo #71 起不再控制状态点；optional → 旧 JSON 缺键向后兼容。
     var attentionReason: String? = nil
     /// 通讯录 crew 号（`7`）。全机唯一、终身不变 —— 被 adopt/release/换爹都不重发，
     /// **层级完全不参与编号**。optional 只为解码旧 JSON；首次加载一次性回填。
@@ -857,6 +879,8 @@ enum LocalCrewStoreError: LocalizedError {
     case crewNotFound(String)
     /// release 的操作对象不是发起 crew 的直系子（上级只能动直系子）。
     case notDirectChild(String)
+    /// 机长只能由真实 agent runner 承担。
+    case invalidCaptainAgentKind(String)
 
     var errorDescription: String? {
         switch self {
@@ -866,6 +890,8 @@ enum LocalCrewStoreError: LocalizedError {
             return "本地 crew \(id) 不存在"
         case .notDirectChild(let id):
             return "crew \(id) 不是本 crew 的直系子,不能操作"
+        case .invalidCaptainAgentKind(let kind):
+            return "\(kind) 不是可用的机长 runner（只支持 claude_code/codex）"
         }
     }
 }

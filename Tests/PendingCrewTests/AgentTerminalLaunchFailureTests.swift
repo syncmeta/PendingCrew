@@ -10,6 +10,45 @@ import XCTest
 @MainActor
 final class AgentTerminalLaunchFailureTests: XCTestCase {
 
+    /// Root-cause regression for the 2026-08-28 cross-crew false routing report. The
+    /// opening task must arrive on stdin after child readiness, while the spawned process
+    /// arguments contain configuration only. A fake TUI records both surfaces independently.
+    func testClaudeOpeningPromptUsesPTYAndNeverArgv() async throws {
+        let nonce = UUID().uuidString
+        let argsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pendingcrew-argv-\(nonce).txt")
+        let stdinURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pendingcrew-stdin-\(nonce).txt")
+        let prompt = "<external_crew_whiteboard>foreign crew task \(nonce)</external_crew_whiteboard>"
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: argsURL)
+            try? FileManager.default.removeItem(at: stdinURL)
+        }
+        let script = try makeExecutableScript("""
+        #!/bin/sh
+        printf '%s\\n' "$@" > '\(argsURL.path)'
+        printf 'fake-claude-ready\\n'
+        IFS= read -r opening
+        printf '%s' "$opening" > '\(stdinURL.path)'
+        sleep 30
+        """)
+        let session = AgentTerminalSession(
+            config: SessionConfig(kind: .claudeCode, initialPrompt: prompt),
+            executable: script,
+            workdir: NSTemporaryDirectory(),
+            env: [:])
+        defer { session.stop() }
+
+        try await waitUntil(timeout: 8) {
+            FileManager.default.fileExists(atPath: stdinURL.path)
+        }
+
+        let args = try String(contentsOf: argsURL, encoding: .utf8)
+        let delivered = try String(contentsOf: stdinURL, encoding: .utf8)
+        XCTAssertFalse(args.contains(prompt), "opening prompt leaked into process argv")
+        XCTAssertEqual(delivered, prompt, "opening prompt must still reach the Claude TUI")
+    }
+
     /// 可执行文件不存在 → forkpty 起得来但 execve 失败，子进程立刻 _exit(127)。
     /// 这正是「起来即死」：从头到尾一个字节没吐。必须报 launchFailed，不许留在 running。
     func testNonexistentExecutableIsReportedAsLaunchFailure() async throws {

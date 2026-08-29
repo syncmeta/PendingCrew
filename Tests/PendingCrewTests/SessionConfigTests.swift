@@ -2,32 +2,38 @@ import XCTest
 
 
 final class SessionConfigTests: XCTestCase {
+    /// 2026-08-28 现场事故：另一个 session 为排查发布进程执行 `ps`，直接从
+    /// Claude 的 argv 读到了本 session 的完整白板与开场任务，随后误当成自己的任务。
+    /// 开场正文必须经 PTY stdin 送入，绝不能留在任何本机进程都能看到的命令行里。
+    func testClaudeInitialPromptDoesNotLeakIntoProcessArguments() {
+        let secret = "<external_crew_whiteboard>foreign crew private task</external_crew_whiteboard>"
+        let cfg = SessionConfig(kind: .claudeCode, initialPrompt: secret)
+
+        XCTAssertFalse(cfg.argv().contains(secret),
+                       "Claude opening prompt must not be observable through ps argv")
+    }
+
     func testClaudeArgvUsesAutoModeNotBypass() {
         let cfg = SessionConfig(kind: .claudeCode, initialPrompt: "do the thing")
         let argv = cfg.argv()
         XCTAssertFalse(argv.contains("--dangerously-skip-permissions"),
                        "claude must NOT bypass permissions (spec §9 auto mode)")
-        XCTAssertEqual(argv, ["--permission-mode", "auto", "--", "do the thing"])
+        XCTAssertEqual(argv, ["--permission-mode", "auto"])
     }
 
-    func testClaudeArgvPositionalPromptIsLast() {
+    func testClaudeArgvKeepsModelAndEffortButExcludesPrompt() {
         let cfg = SessionConfig(kind: .claudeCode, model: "opus", effort: "high",
                                 initialPrompt: "fix bug")
         XCTAssertEqual(cfg.argv(),
-                       ["--permission-mode", "auto", "--model", "opus", "--effort", "high", "--", "fix bug"])
+                       ["--permission-mode", "auto", "--model", "opus", "--effort", "high"])
     }
 
-    func testClaudeArgvSeparatesPromptFromVariadicMcpConfig() {
-        // Regression: --mcp-config is variadic; as the LAST flag (captain has no --model)
-        // it swallows the positional prompt as a second config path unless `--` terminates
-        // option parsing first. This was the "MCP config file not found: <cwd>/<prompt>" crash.
+    func testClaudeArgvKeepsMcpConfigButExcludesPrompt() {
         let cfg = SessionConfig(kind: .claudeCode, initialPrompt: "你是机长",
                                 mcpConfigFile: "/tmp/m.json")
         let argv = cfg.argv()
-        XCTAssertEqual(argv.last, "你是机长")
-        let dash = argv.firstIndex(of: "--")!
-        XCTAssertEqual(argv[dash + 1], "你是机长", "prompt must come right after the -- terminator")
-        XCTAssertLessThan(argv.firstIndex(of: "--mcp-config")!, dash, "-- must come AFTER --mcp-config")
+        XCTAssertEqual(argv, ["--permission-mode", "auto", "--mcp-config", "/tmp/m.json"])
+        XCTAssertFalse(argv.contains("你是机长"))
     }
 
     func testClaudeArgvOmitsEmptyOptionalsAndEmptyPrompt() {
@@ -38,14 +44,14 @@ final class SessionConfigTests: XCTestCase {
     func testClaudeArgvResumePrependsResumeFlag() {
         let cfg = SessionConfig(kind: .claudeCode, initialPrompt: "go", resumeSessionId: "abc123")
         XCTAssertEqual(cfg.argv(),
-                       ["--resume", "abc123", "--permission-mode", "auto", "--", "go"])
+                       ["--resume", "abc123", "--permission-mode", "auto"])
     }
 
     func testIsolationDoesNotLeakIntoArgv() {
         let isolated = SessionConfig(kind: .claudeCode, initialPrompt: "go", isolation: true)
         let shared = SessionConfig(kind: .claudeCode, initialPrompt: "go", isolation: false)
         XCTAssertEqual(isolated.argv(), shared.argv(), "isolation 是编排参数,不是 CLI flag")
-        XCTAssertEqual(isolated.argv(), ["--permission-mode", "auto", "--", "go"])
+        XCTAssertEqual(isolated.argv(), ["--permission-mode", "auto"])
     }
 
     func testCodexArgvKeepsPerSessionEffortOutOfProcessArguments() {
@@ -117,12 +123,12 @@ final class SessionConfigTests: XCTestCase {
                                 appendSystemPromptFile: "/tmp/world.md")
         XCTAssertEqual(cfg.argv(),
                        ["--permission-mode", "auto",
-                        "--append-system-prompt-file", "/tmp/world.md", "--", "go"])
+                        "--append-system-prompt-file", "/tmp/world.md"])
     }
 
     func testClaudeArgvOmitsEmptyAppendFile() {
         let cfg = SessionConfig(kind: .claudeCode, initialPrompt: "go", appendSystemPromptFile: "")
-        XCTAssertEqual(cfg.argv(), ["--permission-mode", "auto", "--", "go"])
+        XCTAssertEqual(cfg.argv(), ["--permission-mode", "auto"])
     }
 
     func testCodexArgvIgnoresClaudeOnlyFlags() {
@@ -138,7 +144,7 @@ final class SessionConfigTests: XCTestCase {
                                 settingsFile: "/t/s.json", mcpConfigFile: "/t/m.json")
         XCTAssertEqual(cfg.argv(),
                        ["--permission-mode", "auto",
-                        "--settings", "/t/s.json", "--mcp-config", "/t/m.json", "--", "go"])
+                        "--settings", "/t/s.json", "--mcp-config", "/t/m.json"])
     }
 
     func testClaudeArgvAllLocalCommsFlagsOrder() {
@@ -148,7 +154,7 @@ final class SessionConfigTests: XCTestCase {
         XCTAssertEqual(cfg.argv(),
                        ["--permission-mode", "auto",
                         "--append-system-prompt-file", "/t/w.md",
-                        "--settings", "/t/s.json", "--mcp-config", "/t/m.json", "--", "go"])
+                        "--settings", "/t/s.json", "--mcp-config", "/t/m.json"])
     }
 
     func testSharedWorkspaceReturnsCrewDirectoryWithoutGit() throws {

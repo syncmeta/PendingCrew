@@ -3,11 +3,14 @@
 **一句话**：只跑 `scripts/release/build-macos-update.sh`，别手搓。
 
 ```sh
-PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh
+PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh [release-ref]
 # 要顺带发到 R2（线上自动更新 feed）才加 PENDING_PUBLISH_R2=1
 ```
 
-脚本自己钉 `main` HEAD 建干净快照 —— **工作区脏不脏都不影响所见即所装**。
+`release-ref` 省略时默认 `main`；也可以显式传 commit、tag 或分支。脚本在开工时只解析
+一次，打印 `release ref … -> snapshot HEAD <完整 SHA>` 回执，并让干净快照、产物里的
+commit 版本戳和 `v<版本>` tag 全部指向这一个 SHA。已有同名 tag 若指向别处会直接拒绝，
+不会静默沿用。**工作区脏不脏都不影响所见即所装。**
 它包办：构建 Release → Developer ID 签名（含 Sparkle 内嵌件）→ 公证 → staple →
 生成更新说明 → `generate_appcast` 签 feed → 打 tag →（可选）发 R2，中间有六道
 断言，每一道都对应一次真实踩过的坑（见脚本里的注释）。
@@ -146,3 +149,38 @@ PendingCrew 不同进程组，用户按 ⌘Q 不会连带杀掉它；等待窗�
   （**不放桌面** —— `~/Desktop` 受 TCC 保护，非交互进程读写会被拒）
 - 数据备份：`~/Library/Application Support/PendingCrew-databackup-<时间>`
 - 回滚命令：`rm -rf /Applications/PendingCrew.app && cp -R <回滚位的那份> /Applications/PendingCrew.app`
+
+## 发版闸门记录 —— 每一版说清「测过没有」
+
+发版全量（钉死 worktree 那一趟）的结果**逐版记在这里**，包括「没跑」。
+
+理由只有一条：**下一个人会拿上一版的状态当基线。** 一版真跑过、绿的，跟一版
+根本没跑过，在「可以照着发」这件事上完全不同；而这两者在白板上都长得像
+「发出去了」。白板会被刷走，这张表不会。
+
+**写「没跑」比写「大概没问题」有用。** 同理，有飘红就照实写飘红 —— 把红说成
+绿，下一个人拿到的是一个假基线，比没有基线更坏。
+
+| 版本 | 闸门 | 结果 |
+| --- | --- | --- |
+| 0.1.21 | 跑了，钉在 `bfdef8b` | **1688 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，两端 build 都过。四条判读逐条核过：3 条 skip 就是登记在案的那三条；`CrewChatOpenCostTests` 8 条全 Executed 且 passed；具名失败为空；HEAD 前后逐字相同。**真全绿。** |
+| 0.1.20 | 跑了，钉在 `bf07de8` | **1682 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。3 条 skip 逐项是 `AgentTuiFixtureRecorder.testRecord`、`CrewLastMessageCacheTests.test_基准_现场白板目录`、`SessionAwaitingReplyInputsCacheTests.test_基准_现场目录`；`CrewChatOpenCostTests` 8 条真执行；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
+| 0.1.19 | 跑了，钉在 `bef3095` | **1722 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。3 条 skip 逐项是 `AgentTuiFixtureRecorder.testRecord` 和两条现场目录基准，与登记构成一致；`CrewChatOpenCostTests` 8 条全部真执行且 passed；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
+| 0.1.18 | 跑了，钉在 `a565032` | **1717 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，两端 build 都过。四条判读逐条核过：3 条 skip 就是登记在案的那三条（构成对上，不是只对数字）；`CrewChatOpenCostTests` 8 条全 Executed 且 passed —— 其中 `test_打开LED驱动板一次重排在预算内`、`test_整表一次布局_窗口化前后` 正是 0.1.16 飘红的那两条，这次真跑真过；具名失败为空；HEAD/TREE 前后逐字相同。**真全绿。** |
+| 0.1.16 | 跑了，钉在 `b8bd679` | 1692 例 / 3 skip / **4 条飘红**（性能预算断言 · NSCache 回收）。取证确认与本次改动无关：单独跑全绿、同批用例在别的提交上红绿交替、被测类型这一版零提交。**不是全绿。** |
+| 0.1.17 | **没跑** | 白板上没有这一版的任何测试记录，事后也没有补跑。**不得当作基线。** 包本身的签名 / 公证 / tag 对账都过（tag `v0.1.17` = 产物 Info.plist 里的 `BuildStampCommit` = `fedb697`），但那验的是「包是不是它自称的那个」，不是「代码对不对」。 |
+
+从 2026-08-27 起 CI 在**每次 push main** 上跑三端编译 + 单测（见
+`.github/workflows/ci.yml`）。这让 main 有了一条持续的证据线，但**不取代发版
+闸门**，有两条边界：
+
+1. **量的不是同一个 commit。** 闸门跑的是钉死 worktree 的那一趟，量「这个包的
+   来源提交」；CI 量「main 当时那一点」。main 活跃时这两点常常不同。
+2. **CI 的绿盖不住性能预算那一族。** `CrewChatOpenCostTests` 整个文件靠真实
+   白板 fixture 驱动，fixture 不进仓库，所以在 runner 上**全部 XCTSkip**
+   （首趟实测：本地闸门 skip 3、CI skip 14，差的 11 条就是它）。而那一族正是
+   最常飘红的那一族 —— **CI 永远不会因为它红，也就永远不会替你抓到它的真回归。**
+   要量它只能走本地闸门（`cp -R` 把 fixture 拷进钉死的 worktree）。
+
+首趟全量（`4909b72`）：**1694 例 / 14 skip / 0 失败**，`** TEST SUCCEEDED **`，
+iOS 端 `** BUILD SUCCEEDED **`。这是 0.1.17 那批代码第一次真正被 CI 编译和测试。

@@ -141,6 +141,21 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(remote.transcript?.items.count, 2)
     }
 
+    func testCodexTurnEventImmediatelyCorrectsRemoteWorkingState() {
+        let bridge = InProcessSessionProtocolBridge()
+        let notification = bridge.codexNotificationSink(sessionId: "codex-turn-state")
+        let remote = bridge.exposeAttached(
+            sessionId: "codex-turn-state", backend: ProtocolTestBackend(kind: .codex))
+
+        XCTAssertFalse(remote.isWorking)
+        notification("turn/started", ["turn": ["id": "turn-1"]])
+        XCTAssertTrue(remote.isWorking)
+        XCTAssertTrue(remote.isBusy)
+        notification("turn/completed", ["turn": ["id": "turn-1"]])
+        XCTAssertFalse(remote.isWorking)
+        XCTAssertFalse(remote.isBusy)
+    }
+
     func testAttachBranchesTerminalSnapshotFromCodexStructuredHistory() {
         let terminal = ProtocolTestBackend(kind: .claudeCode)
         terminal.terminalSnapshot = .init(cols: 80, rows: 25, bytes: Array("screen".utf8))
@@ -158,7 +173,9 @@ final class RemoteSessionBackendTests: XCTestCase {
             .init(id: "p1", kind: .plan(text: "plan")),
             .init(id: "c1", kind: .commandExecution(.init(
                 command: "swift test", cwd: "/tmp/work", status: "completed",
-                aggregatedOutput: "ok", exitCode: 0))),
+                aggregatedOutput: "ok", exitCode: 0,
+                actions: [.init(kind: .read, command: "sed -n '1p' Package.swift",
+                                name: "Package.swift", path: "Package.swift", query: nil)]))),
             .init(id: "f1", kind: .fileChange(.init(status: "completed", summary: "a.swift"))),
             .init(id: "t1", kind: .toolCall(name: "crew.post", status: "completed")),
             .init(id: "w1", kind: .webSearch(query: "protocol")),

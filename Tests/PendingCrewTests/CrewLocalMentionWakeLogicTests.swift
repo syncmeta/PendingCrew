@@ -3,9 +3,9 @@ import XCTest
 // CrewLocalMentionWakeLogic + CrewModels 直接编进 PendingCrewTests target，无需 import。
 
 /// 后台 mention 唤醒器纯扫描核心（`CrewLocalMentionWakeLogic.pending`）的单测
-/// （wake-resilience 根因修复）：「session/机长发的定向 @ → 待唤醒」「人类条目
-/// 跳过（composer 路已直投）」「broadcast/human mention 不唤醒」「system 条目
-/// 唤醒但免回执」。
+/// （wake-resilience 根因修复）：「session/机长发的定向 @ → 待唤醒」「人类普通
+/// 消息默认给当前机长、定向 @ 按目标走」「broadcast/human mention 不唤醒」
+/// 「system 条目唤醒但免回执」。
 final class CrewLocalMentionWakeLogicTests: XCTestCase {
 
     private func entry(
@@ -42,15 +42,64 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
         XCTAssertEqual(out.first?.mentions, [.captain])
     }
 
-    func testHumanEntrySkipped() {
-        // 人类经 composer 直发的条目：CrewChatView 已直投 —— 后台唤醒器不重复。
-        //
-        // #63 第二期之前这里还有一条例外（#554 规则 3：`relayRemoteId != nil` 的
-        // user 条目 = 远端人类经 relay 落进本地白板的 @，没有 composer 直投过，
-        // 唤醒器要补投）。relay 整层删掉后那个判据恒 false，规则与它的两个用例
-        // 一起移除。**重建 relay 时要一起重建**，否则远端人类的 @ 会重新断链。
+    func testPlainHumanEntryDefaultsToCaptain() {
+        let e = entry("user", text: "修复啊", name: "人")
+        let out = CrewLocalMentionWakeLogic.pending(entries: [e])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.entryId, e.id)
+        XCTAssertEqual(out.first?.mentions, [.captain])
+        XCTAssertEqual(out.first?.messageText, "修复啊")
+        XCTAssertEqual(out.first?.senderName, "人")
+        XCTAssertNil(out.first?.senderSessionId)
+        XCTAssertFalse(out.first!.trackReceipt,
+                       "人类短消息可能很快处理完，不能用延迟采样误报唤醒失败")
+    }
+
+    func testHumanDirectedMentionKeepsTarget() {
         let e = entry("user", mentions: [LocalWhiteboardMention(kind: "session", targetId: "sess-a")])
-        XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [e]).isEmpty)
+        let out = CrewLocalMentionWakeLogic.pending(entries: [e])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.mentions, [.session("sess-a")])
+        XCTAssertFalse(out.first!.trackReceipt)
+    }
+
+    func testHumanExplicitBroadcastDoesNotDefaultToCaptain() {
+        let e = entry("user", mentions: [LocalWhiteboardMention(kind: "broadcast", targetId: nil)])
+        XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [e]).isEmpty,
+                      "显式 broadcast 不能被误解成无 mention 的默认 @机长")
+    }
+
+    func testHumanMessageRoutesToReassignedCaptainExactlyOnceForBothRunners() {
+        let e = entry("user", text: "所以接下来呢？", name: "人")
+        guard let delivery = CrewLocalMentionWakeLogic.pending(entries: [e]).first else {
+            return XCTFail("人类普通消息没有进入唤醒链")
+        }
+
+        for newCaptainIsClaude in [false, true] {
+            let runs: [CrewLocalMentionInjectLogic.RunState] = [
+                .init(sessionId: "former-captain", isBusy: false, isClaude: false),
+                .init(sessionId: "current-captain", isBusy: false,
+                      isClaude: newCaptainIsClaude),
+            ]
+            let planned = CrewLocalMentionInjectLogic.plannedInjections(
+                mentions: delivery.mentions,
+                runs: runs,
+                messageText: delivery.messageText,
+                senderName: delivery.senderName,
+                captainSessionId: "current-captain")
+            XCTAssertEqual(planned.map(\.sessionId), ["current-captain"],
+                           "默认消息必须按当前 role 找机长，不能粘住旧机长 session id")
+            guard let injection = planned.first else { continue }
+
+            var queue = CrewDeferredWakeQueue()
+            let queued = CrewDeferredWakeQueue.Delivery(
+                key: "whiteboard:\(delivery.entryId)|target:current-captain",
+                targetSessionId: "current-captain",
+                text: injection.text)
+            XCTAssertEqual(queue.submit(queued, isBusy: false), .deliver(queued))
+            XCTAssertEqual(queue.submit(queued, isBusy: false), .duplicate,
+                           "同进程 change 与目录事件重扫同一 message id 只能投递一次")
+        }
     }
 
     func testNoMentionsOrNonWakeKindsSkipped() {

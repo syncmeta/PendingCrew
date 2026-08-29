@@ -42,7 +42,7 @@ digest=$(gh release view "v$version" --repo "$repo" \
   --json assets --jq ".assets[] | select(.name==\"$asset\") | .digest" 2>/dev/null || true)
 digest=${digest#sha256:}
 [ -n "$digest" ] || {
-  echo "v$version 的 Release 上没有 $asset（或者还没发布）—— 先把产物传上去再更新 tap。" >&2
+  echo "v$version 的 Release 上没有 ${asset}（或者还没发布）—— 先把产物传上去再更新 tap。" >&2
   exit 2
 }
 
@@ -100,7 +100,7 @@ if command -v brew >/dev/null 2>&1; then
 fi
 
 if git -C "$tapdir" diff --quiet -- Casks/pendingcrew.rb; then
-  echo "note: tap 上已经是 $version，无需改动"
+  echo "note: tap 上已经是 ${version}，无需改动"
   exit 0
 fi
 
@@ -110,4 +110,4 @@ git -C "$tapdir" push -q origin HEAD || {
   echo "推 tap 失败 —— cask 已在本地改好（$tapdir/Casks/pendingcrew.rb），手工推一下。" >&2
   exit 2
 }
-echo "✓ tap 已更新到 $version（$tap_repo）"
+echo "✓ tap 已更新到 ${version}（${tap_repo}）"

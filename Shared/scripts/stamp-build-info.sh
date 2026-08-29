@@ -7,7 +7,7 @@ set -eu
 
 PLIST="${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}"
 if [ ! -f "$PLIST" ]; then
-	echo "warning: stamp-build-info: 找不到产物 Info.plist（$PLIST），跳过打戳"
+	echo "warning: stamp-build-info: 找不到产物 Info.plist（${PLIST}），跳过打戳"
 	exit 0
 fi
 

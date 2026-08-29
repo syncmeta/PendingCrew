@@ -1,5 +1,91 @@
 import Foundation
 
+/// 现有成员接任时，runner 与 agent 会话号只能来自持久账本，不能从显示名猜。
+/// 调用方把本 crew 的成员表与目标账本行交进来；这里把四道门集中成纯函数，供
+/// human 右键、captain MCP 和单测共用同一口径。
+struct CaptainHandoffCandidate: Equatable {
+    let sessionId: String
+    let displayName: String
+    let kind: String
+    let agentSessionId: String
+
+    static func resolve(
+        crewId: String,
+        sessionId: String,
+        members: [LocalSessionMember],
+        record: LocalAgentSessionStore.Record?
+    ) throws -> Self {
+        guard let member = members.first(where: { $0.sessionId == sessionId }) else {
+            throw CaptainHandoffValidationError.notCrewMember
+        }
+        guard let record,
+              record.crewId == crewId,
+              record.sessionId == sessionId,
+              record.kind == "claude_code" || record.kind == "codex",
+              !record.agentSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { throw CaptainHandoffValidationError.notAgentSession }
+        return Self(sessionId: sessionId, displayName: member.displayName,
+                    kind: record.kind, agentSessionId: record.agentSessionId)
+    }
+}
+
+enum CaptainHandoffValidationError: LocalizedError {
+    case notCrewMember
+    case notAgentSession
+
+    var errorDescription: String? {
+        switch self {
+        case .notCrewMember:
+            return "目标不是本 crew 的现有 session 成员。"
+        case .notAgentSession:
+            return "目标没有可接管的 Claude/Codex 会话账本，不能从显示名猜 runner。"
+        }
+    }
+}
+
+/// 机长交接的最小事务骨架。先停旧、再起新、最后持久化；任何后半段失败都先停掉
+/// 可能已起的新机长，再恢复旧机长。`restoreOld` 同时负责把持久 kind 恢复成旧值。
+/// 这样所有生产入口共享同一个 fail-closed 顺序，测试也能直接钉住“最多一个 live captain”。
+struct CaptainHandoffTransaction {
+    static func perform(
+        stopOld: () async throws -> Void,
+        startNew: () async throws -> Void,
+        persistNew: () async throws -> Void,
+        stopNew: () async throws -> Void,
+        restoreOld: () async throws -> Void
+    ) async throws {
+        try await stopOld()
+        var newStarted = false
+        do {
+            try await startNew()
+            newStarted = true
+            try await persistNew()
+        } catch {
+            do {
+                // 新机长若停不掉，绝不能再拉起旧机长制造双 captain。把这也视作
+                // rollbackFailed，保留当前唯一 live captain 并交给人处理。
+                if newStarted { try await stopNew() }
+                try await restoreOld()
+            } catch let rollbackError {
+                throw CaptainHandoffTransactionError.rollbackFailed(
+                    original: error, rollback: rollbackError)
+            }
+            throw error
+        }
+    }
+}
+
+enum CaptainHandoffTransactionError: LocalizedError {
+    case rollbackFailed(original: Error, rollback: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case let .rollbackFailed(original, rollback):
+            return "机长交接失败（\(original.localizedDescription)），回滚也失败（\(rollback.localizedDescription)）。"
+        }
+    }
+}
+
 /// 一次「把现有 session 重新指定为机长」的可恢复意图。
 ///
 /// 这不能只放在 `CrewSessionRunner.runs` 内存里：安装新版 PendingCrew 必然要重启

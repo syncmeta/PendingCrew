@@ -1,12 +1,10 @@
 #if os(macOS)
 import SwiftUI
 
-/// Structured transcript for a codex app-server session — modeled on codex's own TUI:
-/// the assistant's prose is the sole full-strength voice; every process signal
-/// (reasoning / command / tool call / file edit / search) recedes into a dim,
-/// bullet-prefixed one-liner. Long command output collapses to a head + "… +N 行"
-/// (click to expand). Unknown item kinds are dropped — codex's UI filters the
-/// protocol stream, it doesn't echo every item 1:1.
+/// Structured Codex session, close to Codex Desktop's information hierarchy:
+/// assistant prose stays full strength; process details become short natural-language
+/// activity rows. Exact commands and paths stay collapsed until the user asks for them
+/// by opening the row; stdout/diffs remain out of the conversation surface (Todo #90).
 struct CodexTranscriptView: View {
     @ObservedObject var transcript: CodexTranscript
     fileprivate static let bottomAnchorID = "__codex_bottom__"
@@ -67,18 +65,19 @@ struct CodexTranscriptRows: View {
         case let .agentMessage(text, _):
             agentRow(text)
         case let .reasoning(summary, content):
-            CodexReasoningRow(text: pick(summary, content))
+            if !pick(summary, content).isEmpty {
+                activityRow(icon: "brain.head.profile", text: "进行了分析")
+            }
         case let .plan(text):
             signalRow(.accent, "计划", text)
         case let .commandExecution(c):
-            CodexCommandRow(command: c.command, output: c.aggregatedOutput,
-                            exitCode: c.exitCode, status: c.status)
-        case let .fileChange(f):
-            signalRow(.muted, "改动", f.summary ?? f.status ?? "")
+            expandableActivityRow(CodexActivityPresentation.command(c))
+        case let .fileChange(change):
+            expandableActivityRow(CodexActivityPresentation.fileChange(change))
         case let .toolCall(name, status):
-            signalRow(status == "failed" ? .bad : .muted, "调用", name)
+            expandableActivityRow(CodexActivityPresentation.tool(name: name, status: status))
         case let .webSearch(query):
-            signalRow(.muted, "搜索", query ?? "")
+            expandableActivityRow(CodexActivityPresentation.webSearch(query: query))
         case .unknown:
             EmptyView()   // codex drops internal/unknown signals; we don't echo them
         }
@@ -155,6 +154,62 @@ struct CodexTranscriptRows: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func activityRow(icon: String, text: String, bad: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .frame(width: 16)
+            Text(text)
+        }
+        .font(Theme.Fonts.footnote)
+        .foregroundStyle(bad ? Theme.Palette.danger : Theme.Palette.inkMuted)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func expandableActivityRow(_ presentation: CodexActivityPresentation) -> some View {
+        if presentation.details.isEmpty {
+            activityRow(
+                icon: presentation.icon,
+                text: presentation.headline,
+                bad: presentation.bad)
+        } else {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(presentation.details) { detail in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(detail.label)
+                                .font(Theme.Fonts.caption2.weight(.semibold))
+                                .foregroundStyle(Theme.Palette.inkMuted)
+                            Text(detail.value)
+                                .font(Theme.Fonts.monoSmall)
+                                .foregroundStyle(Theme.Palette.ink)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(.leading, 24)
+                .padding(.top, 5)
+                .padding(.bottom, 3)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: presentation.icon).frame(width: 16)
+                    Text(presentation.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(Theme.Fonts.footnote)
+                .foregroundStyle(
+                    presentation.bad ? Theme.Palette.danger : Theme.Palette.inkMuted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .tint(presentation.bad ? Theme.Palette.danger : Theme.Palette.inkMuted)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     @ViewBuilder
     private var workingRow: some View {
         HStack(spacing: 7) {
@@ -167,83 +222,4 @@ struct CodexTranscriptRows: View {
     }
 }
 
-// MARK: - Reasoning (dim + italic, codex's quietest cell; collapses past ~6 lines)
-
-private struct CodexReasoningRow: View {
-    let text: String
-    @State private var expanded = false
-
-    var body: some View {
-        if text.isEmpty {
-            EmptyView()
-        } else {
-            HStack(alignment: .top, spacing: 7) {
-                Circle().fill(Theme.Palette.inkMuted.opacity(0.5)).frame(width: 5, height: 5)
-                    .padding(.top, 5)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(text)
-                        .font(Theme.Fonts.footnote.italic())
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                        .lineLimit(expanded ? nil : 6)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                    if !expanded && text.count > 280 {
-                        Button("展开思考") { expanded = true }
-                            .buttonStyle(.plain)
-                            .font(Theme.Fonts.caption2)
-                            .foregroundStyle(Theme.Palette.accent)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-// MARK: - Command execution (codex's `• 运行 <cmd>` with collapsed output)
-
-private struct CodexCommandRow: View {
-    let command: String
-    let output: String?
-    let exitCode: Int?
-    let status: String?
-    @State private var expanded = false
-    private let headLines = 6
-
-    private var dotColor: Color {
-        if let exitCode { return exitCode == 0 ? Theme.Palette.success : Theme.Palette.danger }
-        return Theme.Palette.inkMuted
-    }
-    private var verb: String {
-        if exitCode == nil && (status == nil || status == "inProgress") { return "运行中" }
-        return "运行"
-    }
-    private var lines: [Substring] { (output ?? "").split(separator: "\n", omittingEmptySubsequences: false) }
-    private var hiddenCount: Int { max(0, lines.count - headLines) }
-    private var hasOutput: Bool { !(output ?? "").isEmpty }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 7) {
-            Circle().fill(dotColor).frame(width: 5, height: 5).padding(.top, 5)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verb + "  ").font(Theme.Fonts.caption.weight(.semibold)).foregroundColor(Theme.Palette.inkMuted) +
-                    Text(command).font(Theme.Fonts.monoSmall).foregroundColor(Theme.Palette.ink)
-                if hasOutput {
-                    Text((expanded ? lines : Array(lines.prefix(headLines))).joined(separator: "\n"))
-                        .font(Theme.Fonts.monoSmall)
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                    if !expanded && hiddenCount > 0 {
-                        Button("… +\(hiddenCount) 行") { expanded = true }
-                            .buttonStyle(.plain)
-                            .font(Theme.Fonts.caption2)
-                            .foregroundStyle(Theme.Palette.accent)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
 #endif

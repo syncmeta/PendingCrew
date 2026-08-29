@@ -12,7 +12,6 @@ struct CrewSidebarView: View {
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
     /// sheet 挂在侧栏顶层而不是行上：List 行会被回收，挂行上的表单可能被顶掉。
     @State private var childCrewTarget: CrewChildCreationTarget?
-    @State private var showingWorkspaceSync = false
     /// 折叠起来的机器分组 id 集合（默认全展开）。
     @State private var collapsedMachineIds: Set<String> = []
     /// 底部「已隐藏的群」那行展开着没有（不持久化：默认收起，每次开 app 都是收起的
@@ -79,12 +78,6 @@ struct CrewSidebarView: View {
                 }
                 .help("刷新 crew 列表")
                 .disabled(crewStore.loadingList)
-                Button {
-                    showingWorkspaceSync = true
-                } label: {
-                    Label("Workspace 同步", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .help("Workspace 同步")
             }
         }
         .sheet(isPresented: $showingCreateSheet) {
@@ -94,9 +87,6 @@ struct CrewSidebarView: View {
         // 做法：传 parentCrewId，建完 CreateCrewSheet 自己 attachParent 挂到父之下。
         .sheet(item: $childCrewTarget) { target in
             CreateCrewSheet(parentCrewId: target.parentCrewId)
-        }
-        .sheet(isPresented: $showingWorkspaceSync) {
-            WorkspaceSyncView()
         }
         // ④ 拦住：底下还有活跃子 crew 的父不许藏（理由当场说清）。挂在侧栏顶层
         // 而不是行上 —— 同 childCrewTarget 那个 sheet，行会被 List 回收。
@@ -142,6 +132,8 @@ struct CrewSidebarView: View {
             }
         }
         .pickerStyle(.segmented)
+        // 与群聊发送键、仅@你点亮态同一个品牌绿（Todo #79），不继承系统蓝色。
+        .tint(Theme.Palette.accent)
         .labelsHidden()
         .controlSize(.small)
         .padding(.horizontal, 10)

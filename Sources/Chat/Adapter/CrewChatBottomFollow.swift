@@ -83,7 +83,9 @@ enum CrewChatBottomFollow {
     /// 滚动视图是否停在底部（含容差）。
     ///
     /// 取 UIScrollView/NSScrollView 的通用几何：偏移量的取值范围是
-    /// `-insetTop ... contentHeight + insetTop + insetBottom - containerHeight`。
+    /// `-insetTop ... contentHeight + insetBottom - containerHeight`。顶部 inset 已经体现在
+    /// 最小偏移的负值里，**不能再加进最大偏移**；加了会让真实到底仍差一个 top inset，
+    /// 正是 Todo #89「已经滑到底，未读按钮仍不消失」的根因。
     /// 内容比容器短时上界会小于下界，此时恒为「在底部」——短内容本来就整屏可见。
     static func isAtBottom(
         contentOffsetY: CGFloat,
@@ -93,7 +95,7 @@ enum CrewChatBottomFollow {
         insetBottom: CGFloat = 0,
         slack: CGFloat = bottomSlack
     ) -> Bool {
-        let maxOffsetY = contentHeight + insetTop + insetBottom - containerHeight
+        let maxOffsetY = contentHeight + insetBottom - containerHeight
         return contentOffsetY >= maxOffsetY - slack
     }
 
@@ -244,6 +246,16 @@ enum CrewChatBottomFollow {
             guard !isFollowing || unread != 0 else { return }
             isFollowing = true
             unread = 0
+        }
+
+        /// 用户的滚动已经把视口带离底部 —— **立即**松开跟随，不等手势停稳。
+        ///
+        /// 成熟 IM 的锚定边界看的是位置事实，不是「滚动结束」事件：新消息可能恰好在
+        /// tracking / decelerating 中途到达。如果等 idle 才关，`received` 仍会认为人在底部，
+        /// 当场把视口拽回去，表现就是 Todo #89 的「看历史时来消息会跳一下」。
+        mutating func leftBottomByUser() {
+            guard isFollowing else { return }
+            isFollowing = false
         }
 
         /// 来了 `added` 条新消息。返回 **true = 该落底**（行为 2）；

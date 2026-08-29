@@ -420,7 +420,7 @@ struct CrewTodoDetailView: View {
         }
         guard await CrewTodoFollowUp.perform(
             crewId: crewId, number: item.number, note: note, attachments: saved,
-            runner: runner, appModel: appModel) != nil
+            appModel: appModel) != nil
         else {
             errorText = "追问失败：这条已经不在了。"
             return

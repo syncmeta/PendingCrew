@@ -82,12 +82,12 @@ cat > "$DEST/README.txt" <<EOF
 
 来源 crew: $CREW_ID
 口径: $SLICE
-条数: $COUNT（$BYTES 字节）
+条数: ${COUNT}（$BYTES 字节）
 图片: $IMGS 张
 
 要重新生成（仓库根目录）：scripts/make-chat-fixtures.sh $CREW_ID
 EOF
 
 echo "✓ fixture 就绪：$DEST"
-echo "  whiteboard.json — $COUNT 条 / $BYTES 字节（$SLICE）"
+echo "  whiteboard.json — $COUNT 条 / $BYTES 字节（${SLICE}）"
 echo "  图片 — $IMGS 张"

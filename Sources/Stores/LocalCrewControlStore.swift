@@ -64,13 +64,13 @@ final class LocalCrewControlStore: @unchecked Sendable {
         return out
     }
 
-    // MARK: - Attention（机长 raise_attention / clear_attention → 侧栏黄点）
+    // MARK: - Attention（旧会话兼容文案，不再控制侧栏状态点）
     //
     // 与 rename 同款 last-write-wins 单文件：`<crewId>.crewattention.json` =
-    // `CrewAttentionChange`（reason 非 nil = 点亮，nil = 熄灭）。同 tick 先 raise
+    // `CrewAttentionChange`（reason 非 nil = 记录，nil = 清除）。同 tick 先 raise
     // 后 clear 只落最后一次 —— app 侧 drain 时直接应用最终态即可。
 
-    /// 点亮 attention（helper 侧：`raise_attention` 工具）。reason 一句话说明为什么
+    /// 记录 attention（helper 侧：`raise_attention` 工具）。reason 一句话说明为什么
     /// 需要人类注意；空（trim 后）忽略，不落盘。
     func requestAttention(crewId: String, reason: String) {
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,7 +78,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
         writeAttention(crewId: crewId, reason: trimmed)
     }
 
-    /// 熄灭 attention（helper 侧：`clear_attention` 工具）。
+    /// 清除 attention（helper 侧：`clear_attention` 工具）。
     func requestClearAttention(crewId: String) {
         writeAttention(crewId: crewId, reason: nil)
     }
@@ -129,6 +129,26 @@ final class LocalCrewControlStore: @unchecked Sendable {
             id: UUID().uuidString.lowercased(), crewId: crewId, kind: "start_session",
             brief: brief, runner: runner, isolation: isolation, title: title,
             model: model, effort: effort,
+            ts: ISO8601DateFormatter().string(from: Date())))
+    }
+
+    /// 机长主动交接。两种模式严格互斥：
+    /// - existing：`targetSessionId` 非 nil、`runner` nil；
+    /// - create-new：`targetSessionId` nil、`runner` 必为 claude/codex。
+    /// helper 只负责可靠入队，live runner 的停旧/起新/回滚由 app 侧同一服务执行。
+    func enqueueCaptainHandoff(
+        crewId: String, requesterSessionId: String,
+        targetSessionId: String?, runner: String?, model: String?, effort: String?,
+        title: String?, openingBrief: String?
+    ) {
+        let existing = targetSessionId?.isEmpty == false && runner == nil
+        let fresh = targetSessionId == nil && (runner == "claude" || runner == "codex")
+        guard existing || fresh else { return }
+        enqueue(CrewCommand(
+            id: UUID().uuidString.lowercased(), crewId: crewId, kind: "handoff_captain",
+            brief: "-", runner: runner, isolation: nil, title: title,
+            model: model, effort: effort, sessionId: targetSessionId,
+            note: openingBrief, requesterSessionId: requesterSessionId,
             ts: ISO8601DateFormatter().string(from: Date())))
     }
 
@@ -409,8 +429,7 @@ struct CrewMetaChange: Codable, Equatable {
     let ts: String
 }
 
-/// 一条待落地的 attention 变更（机长黄点）。`reason` 非 nil = 点亮（悬浮提示文案），
-/// nil = 熄灭。`ts` = 写入时间（ISO8601），调试用。
+/// 一条待落地的旧 attention 文案变更。`reason` 非 nil = 记录，nil = 清除。
 struct CrewAttentionChange: Codable, Equatable {
     let reason: String?
     let ts: String
@@ -427,7 +446,7 @@ struct CrewCommandResponse: Codable, Equatable {
 struct CrewCommand: Codable, Equatable {
     let id: String
     let crewId: String
-    /// "start_session" | "create_child_crew" | "set_profile" | "schedule_wakeup" |
+    /// "start_session" | "handoff_captain" | "create_child_crew" | "set_profile" | "schedule_wakeup" |
     /// "listen" | "crew_message" | "inspect_session" | "nudge_session" | "stop_session" |
     /// "adopt_crew" | "release_crew" | "create_parent_crew" | "adopt_parent" | "change_workdir"
     let kind: String

@@ -27,6 +27,16 @@ final class LocalApprovalStoreTests: XCTestCase {
         XCTAssertTrue(s.pending(crewId: "c").isEmpty)
     }
 
+    func testAnswerIfPendingDoesNotOverwriteRealAnswer() throws {
+        let s = LocalApprovalStore(directory: tempDir())
+        let id = try XCTUnwrap(s.raise(
+            crewId: "c", kind: "decision", sessionId: "sess", summary: "q"))
+        s.answer(crewId: "c", id: id, reply: "人类已答复")
+
+        XCTAssertFalse(s.answerIfPending(crewId: "c", id: id, reply: "超时"))
+        XCTAssertEqual(s.item(crewId: "c", id: id)?.reply, "人类已答复")
+    }
+
     func testDecideSetsAllowDeny() throws {
         let s = LocalApprovalStore(directory: tempDir())
         let id = try XCTUnwrap(s.raise(crewId: "c", kind: "permission", sessionId: "sess", summary: "允许 computer-use?"))

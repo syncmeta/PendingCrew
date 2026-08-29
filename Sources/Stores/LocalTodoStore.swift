@@ -454,9 +454,11 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     /// 没人回应就亮，全部有回应就灭。用「有没有回应」而不是「有没有条目」：
     /// 一本长期待办列表会让黄点永远亮着，等于没有。
     ///
-    /// 已删的墓碑行不算（`list` 本来就不返回它们）；`dismissedAt` 非 nil = 人类
-    /// 看过、决定不办、直接按灭，同样不再算未回应。
-    var isUnanswered: Bool { responses.isEmpty && dismissedAt == nil }
+    /// 已完成、已删墓碑都不算（即使坏数据/旧调用绕过了 `list`）；`dismissedAt`
+    /// 非 nil = 人类看过、决定不办、直接按灭，同样不再算未回应。
+    var isUnanswered: Bool {
+        !isDeleted && status != "completed" && responses.isEmpty && dismissedAt == nil
+    }
 
     /// 人类「看过了，不打算回应」的标记（Todo #62）。没有它，一条人类不打算处理的
     /// 条目会把黄点永久钉死。不动 `status`、不加回应 —— 只是不再算未回应。

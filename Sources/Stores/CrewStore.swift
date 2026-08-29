@@ -42,6 +42,9 @@ final class CrewStore: ObservableObject {
     /// 赋值做合并,`.onChange` 只看得到最后一次赋值。数组 append 不丢、
     /// 消费方读完整体后清空；`captainAutostartRequests` 也使用同样的队列语义。
     @Published var sessionSpawnRequests: [SessionSpawnRequest] = []
+    /// captain MCP 交接命令待执行队列。helper 只入队；SessionHost 把它交给持有
+    /// live runs 的 `CrewSessionRunner`，与 human UI 复用同一真实交接服务。
+    @Published var captainHandoffRequests: [CaptainHandoffControlRequest] = []
     /// `set_profile` 命令排空后的待切换队列（同 sessionSpawnRequests 的数组语义,
     /// 防同 tick coalescing 丢命令）。`MacRootView` 观察执行。
     @Published var profileChangeRequests: [SessionProfileChangeRequest] = []
@@ -77,11 +80,10 @@ final class CrewStore: ObservableObject {
     ///   侧栏（乃至所有观察 `CrewStore` 的视图）重渲染。
     @Published private(set) var lastWhiteboardMessages: [String: LocalWhiteboardMessage] = [:]
 
-    /// 「每个 crew 的**人类 Todo** 还有几条没回应」（Todo #62 ④）。侧栏黄点的
-    /// 第二个源 —— 与 `attentionReason` **并联**，两个源互不干扰（后者是单槽
-    /// last-write-wins，混进去会互相冲掉）。与上面那份末条快照同样是后台算好、
-    /// 只在真变了时发布，body 里零磁盘 IO。
-    @Published private(set) var humanTodoUnanswered: [String: Int] = [:]
+    /// 每个 crew 的**本 crew / 后代 crew**人类 Todo 未回应快照 —— Todo #71 起是
+    /// 侧栏黄点的唯一数据源，Todo #73 再沿父边递归冒泡。与上面那份末条快照同样
+    /// 是后台算好、只在真变了时发布，body 里零磁盘 IO。
+    @Published private(set) var humanTodoAttention: [String: CrewHumanTodoAttention] = [:]
 
     /// 上面那份快照的算法（指纹门控，只有指纹变了的 crew 才重新解码）。
     private let lastMessageCache = CrewLastMessageCache(store: .shared)
@@ -307,7 +309,7 @@ final class CrewStore: ObservableObject {
         crews = []
         lastWhiteboardMessages = [:]
         lastMessageCache.clear()
-        humanTodoUnanswered = [:]
+        humanTodoAttention = [:]
         humanTodoCache.clear()
         details = [:]
         subjects = []
@@ -370,6 +372,8 @@ final class CrewStore: ObservableObject {
     /// 字典比较 + 可能的一次赋值。
     private func refreshLastWhiteboardMessages() {
         let crewIds = crews.map(\.id)
+        let parentsByCrew = Dictionary(
+            uniqueKeysWithValues: crews.map { ($0.id, $0.parentCrewIds) })
         let cache = lastMessageCache
         let todoCache = humanTodoCache
         lastMessageQueue.async { [weak self] in
@@ -377,19 +381,22 @@ final class CrewStore: ObservableObject {
             // 人类 Todo 那本也搭同一趟车（Todo #62 ④）：两本账都落在同一个目录里，
             // 触发源是同一个 `directoryChanged` tick，各自指纹门控、各自只在真变了
             // 时发布。多的只是每个 crew 一次 stat。
-            let todos = todoCache.refresh(crewIds: crewIds)
+            let todos = todoCache.refresh(
+                crewIds: crewIds, parentsByCrew: parentsByCrew)
             Task { @MainActor in
                 self?.publishLastWhiteboardMessages(snapshot)
-                self?.publishHumanTodoUnanswered(todos)
+                self?.publishHumanTodoAttention(todos)
             }
         }
     }
 
     /// 发布人类 Todo 未回应快照 —— 同样**相等就不赋值**（理由同上面那条：
     /// `CrewStore` 是整个侧栏的 `EnvironmentObject`）。
-    private func publishHumanTodoUnanswered(_ snapshot: [String: Int]) {
-        guard humanTodoUnanswered != snapshot else { return }
-        humanTodoUnanswered = snapshot
+    private func publishHumanTodoAttention(
+        _ snapshot: [String: CrewHumanTodoAttention]
+    ) {
+        guard humanTodoAttention != snapshot else { return }
+        humanTodoAttention = snapshot
     }
 
     /// 发布快照 —— **相等就不赋值**。`@Published` 一赋值就发 `objectWillChange`，
@@ -431,9 +438,8 @@ final class CrewStore: ObservableObject {
         await refreshList()
     }
 
-    /// 排空 attention 变更（机长 `raise_attention` / `clear_attention`，crew-sidebar-status
-    /// spec §3），逐条落到 `LocalCrewStore.setAttention`（nil = 熄灭）；有变更才刷新列表
-    /// （`crews` 重发布 → 侧栏头像黄点亮/灭）。
+    /// 排空旧 attention 文案变更，逐条落到 `LocalCrewStore.setAttention`（nil = 清除）；
+    /// Todo #71 起它不再控制状态点，保留这条路只为旧会话和旧数据兼容。
     private func applyPendingAttentions() async {
         guard ownsSharedControlChannel else { return }
         let changes = LocalCrewControlStore.shared.drainAttentions()
@@ -467,6 +473,21 @@ final class CrewStore: ObservableObject {
                     crewId: cmd.crewId, brief: cmd.brief,
                     runner: cmd.runner, isolation: isolation,
                     model: cmd.model, effort: cmd.effort, title: cmd.title))
+            case "handoff_captain":
+                let existing = cmd.sessionId?.isEmpty == false && cmd.runner == nil
+                let fresh = cmd.sessionId == nil && (cmd.runner == "claude" || cmd.runner == "codex")
+                guard existing || fresh else {
+                    postSystemNotice(
+                        crewId: cmd.crewId,
+                        text: "机长交接被拒：控制命令模式含糊（必须二选一：现有 session 或显式 runner 新建）。旧机长保持不变。")
+                    continue
+                }
+                captainHandoffRequests.append(CaptainHandoffControlRequest(
+                    commandId: cmd.id, crewId: cmd.crewId,
+                    requesterSessionId: cmd.requesterSessionId,
+                    targetSessionId: cmd.sessionId, runner: cmd.runner,
+                    model: cmd.model, effort: cmd.effort,
+                    title: cmd.title, openingBrief: cmd.note))
             case "set_profile":
                 guard let sid = cmd.sessionId else { break }
                 profileChangeRequests.append(SessionProfileChangeRequest(
@@ -926,4 +947,19 @@ struct SessionSpawnRequest: Equatable {
     var effort: String? = nil
     /// 机长传的精简 title（≤18 字概括，作 session 显示名）；nil = 从 brief 兜底。
     var title: String? = nil
+}
+
+/// captain MCP 入队后交给 live runner 的明确二选一请求。
+struct CaptainHandoffControlRequest: Equatable {
+    let commandId: String
+    let crewId: String
+    let requesterSessionId: String?
+    /// 非 nil = 现有成员模式；此时 runner 必须 nil，真实 kind 从会话账本读取。
+    let targetSessionId: String?
+    /// 非 nil = 新建模式；值只能为 claude/codex，targetSessionId 必须 nil。
+    let runner: String?
+    let model: String?
+    let effort: String?
+    let title: String?
+    let openingBrief: String?
 }

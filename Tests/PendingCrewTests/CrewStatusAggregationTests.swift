@@ -1,7 +1,7 @@
 import XCTest
 
-/// crew 状态点聚合优先级（crew-sidebar-status spec §3）：红 > 黄 > 绿 > 灰；
-/// 无 session 记录且无 attention → nil（不画）。
+/// crew 状态点聚合优先级（Todo #71）：红（运行错误）> 黄（有给人类的 Todo）>
+/// 绿（正在工作）> nil（静止/退出/无 session，均不画）。
 final class CrewStatusAggregationTests: XCTestCase {
     private func signal(alive: Bool = true, working: Bool = false, health: Bool = false,
                         awaiting: Bool = false) -> CrewSessionStatusSignal {
@@ -11,16 +11,14 @@ final class CrewStatusAggregationTests: XCTestCase {
 
     // MARK: - 各色的基础条件
 
-    func testNoSessionsNoAttentionIsNil() {
+    func testNoSessionsIsNil() {
         XCTAssertNil(CrewStatusAggregation.dot(sessions: [], attentionReason: nil))
     }
 
-    func testAllIdleOrExitedIsGray() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(
-                sessions: [signal(alive: true), signal(alive: false)],
-                attentionReason: nil),
-            .gray)
+    func testAllIdleOrExitedHasNoIndicator() {
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: [signal(alive: true), signal(alive: false)],
+            attentionReason: nil))
     }
 
     func testAnyWorkingIsGreen() {
@@ -31,10 +29,9 @@ final class CrewStatusAggregationTests: XCTestCase {
             .green)
     }
 
-    func testAttentionIsYellowEvenWithoutSessions() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(sessions: [], attentionReason: "需要人类拍板"),
-            .yellow)
+    func testAttentionWithoutHumanTodoDoesNotLightIndicator() {
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: [], attentionReason: "需要人类拍板"))
     }
 
     func testHealthIssueOnAliveSessionIsRed() {
@@ -45,62 +42,57 @@ final class CrewStatusAggregationTests: XCTestCase {
             .red)
     }
 
-    // 已退出 session 的残留 health 不算红（红要求进程存活）——全退 → 灰。
-    func testHealthIssueOnExitedSessionIsNotRed() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(
-                sessions: [signal(alive: false, health: true)],
-                attentionReason: nil),
-            .gray)
+    // 拉起失败时进程已经退出，但它仍是错误，不能因为不 alive 就静默。
+    func testHealthIssueOnExitedSessionIsStillRed() {
+        XCTAssertEqual(CrewStatusAggregation.dot(
+            sessions: [signal(alive: false, health: true)],
+            attentionReason: nil), .red)
     }
 
-    /// 群里有人卡着等回复 → crew 这一级也要红（Todo #25 层 2）。侧栏折起来时人只看得到
-    /// 这一级，冒不上来就得逐个展开才发现有人在等。
-    func testAwaitingReplyOnAliveSessionIsRed() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(
-                sessions: [signal(), signal(awaiting: true)],
-                attentionReason: nil),
-            .red)
+    /// 等回复不是运行错误；需要人类处理的事应落人类 Todo，再由黄点表达。
+    func testAwaitingReplyAloneHasNoIndicator() {
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: [signal(), signal(awaiting: true)],
+            attentionReason: nil))
     }
 
-    /// 已退出 session 的残留待回复不算红（同 health 那条）——它不再需要人过来。
+    /// 已退出 session 的残留待回复同样不画。
     func testAwaitingReplyOnExitedSessionIsNotRed() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(
-                sessions: [signal(alive: false, awaiting: true)],
-                attentionReason: nil),
-            .gray)
+        XCTAssertNil(CrewStatusAggregation.dot(
+            sessions: [signal(alive: false, awaiting: true)],
+            attentionReason: nil))
     }
 
-    /// 有人在等回复时，别被「另一个 session 在干活」的绿盖过去 —— 红是最高优先级。
-    func testAwaitingReplyBeatsWorkingGreen() {
+    /// 等回复本身不染红；同 crew 另有 session 工作时照常显示绿。
+    func testWorkingGreenIsNotOverriddenByAwaitingReplyOrAttention() {
         XCTAssertEqual(
             CrewStatusAggregation.dot(
                 sessions: [signal(working: true), signal(awaiting: true)],
                 attentionReason: "机长点的黄"),
-            .red)
+            .green)
     }
 
-    // MARK: - 优先级 红 > 黄 > 绿 > 灰
+    // MARK: - 优先级 红 > 黄 > 绿 > nil
 
-    func testRedBeatsYellowGreenGray() {
+    func testRedBeatsTodoAndWorking() {
         XCTAssertEqual(
             CrewStatusAggregation.dot(
                 sessions: [signal(working: true), signal(alive: true, health: true), signal(alive: false)],
-                attentionReason: "也有 attention"),
+                attentionReason: "也有 attention",
+                humanTodoUnanswered: 2),
             .red)
     }
 
-    func testYellowBeatsGreenAndGray() {
+    func testTodoYellowBeatsWorking() {
         XCTAssertEqual(
             CrewStatusAggregation.dot(
                 sessions: [signal(working: true), signal()],
-                attentionReason: "要人看"),
+                attentionReason: nil,
+                humanTodoUnanswered: 1),
             .yellow)
     }
 
-    func testGreenBeatsGray() {
+    func testGreenBeatsInactiveSessions() {
         XCTAssertEqual(
             CrewStatusAggregation.dot(
                 sessions: [signal(alive: false), signal(working: true)],
@@ -108,12 +100,16 @@ final class CrewStatusAggregationTests: XCTestCase {
             .green)
     }
 
-    // 空串 attention 不算点亮（防御：正常路径 raise 已拒空）。
-    func testEmptyAttentionReasonNotYellow() {
-        XCTAssertEqual(
-            CrewStatusAggregation.dot(sessions: [signal()], attentionReason: ""),
-            .gray)
+    // attentionReason 不再参与颜色；空串/非空都不能让静止 crew 亮点。
+    func testAttentionReasonDoesNotControlIndicator() {
+        XCTAssertNil(CrewStatusAggregation.dot(sessions: [signal()], attentionReason: "提醒"))
         XCTAssertNil(CrewStatusAggregation.dot(sessions: [], attentionReason: ""))
+    }
+
+    func testOnlyTodoYellowBreathes() {
+        XCTAssertTrue(CrewStatusDotColor.yellow.breathes)
+        XCTAssertFalse(CrewStatusDotColor.red.breathes)
+        XCTAssertFalse(CrewStatusDotColor.green.breathes)
     }
 
     // session 级头像右上红点（旧 `sessionAttention`）已随「两点合一」删除，

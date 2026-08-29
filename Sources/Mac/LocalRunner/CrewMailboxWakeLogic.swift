@@ -26,6 +26,14 @@ enum CrewMailboxWakeLogic {
         case failed
     }
 
+    /// 注入回执的一拍证据。`activityRevision` 是 Codex transcript/turn/tool 事件的
+    /// 单调序号；`latestPostId` 是目标 session 最近一次发群消息的 id。
+    struct ReceiptEvidence: Equatable {
+        let isWorking: Bool
+        let activityRevision: UInt64
+        let latestPostId: String?
+    }
+
     /// 判定一次唤醒注入是否真正到达。`workingSamples` = 注入后观察窗内周期采样的
     /// 目标工作态（`isBusy || isWorking` —— claude 的 `isBusy` 恒 false（PTY 无
     /// turn-state），真信号是输出活跃度 `isWorking`：注入被吃进去后 agent 起一轮
@@ -34,6 +42,18 @@ enum CrewMailboxWakeLogic {
     /// 如 run 已退出）→ failed。
     static func receiptVerdict(workingSamples: [Bool]) -> ReceiptVerdict {
         workingSamples.contains(true) ? .confirmed : .failed
+    }
+
+    /// 带跨采样间隙证据的回执判定。瞬时 working 只覆盖“采样恰好撞见 turn”；
+    /// revision / post id 是单调硬证据，覆盖 Codex 短 turn 在首拍之前已经结束的竞态。
+    static func receiptVerdict(
+        baseline: ReceiptEvidence, samples: [ReceiptEvidence]
+    ) -> ReceiptVerdict {
+        samples.contains { sample in
+            sample.isWorking
+                || sample.activityRevision != baseline.activityRevision
+                || sample.latestPostId != baseline.latestPostId
+        } ? .confirmed : .failed
     }
 
     /// 唤醒失败的白板告警正文（调用方以 system 身份贴白板并 @captain —— system

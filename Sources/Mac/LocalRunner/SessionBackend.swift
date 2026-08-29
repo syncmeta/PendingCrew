@@ -109,8 +109,7 @@ protocol SessionBackend: AnyObject {
     ///
     /// - claude（PTY）：等终端空闲 → 注入斜杠命令 → 核对回显。忙时注入会被 claude
     ///   收进消息队列、斜杠命令永不执行，所以「等空闲」不是优化而是正确性前提。
-    /// - codex（app-server）：协议无中途切换通道（model 绑 thread、effort 绑启动
-    ///   参数）→ 默认实现回 `.unsupported`。
+    /// - codex（app-server）：走 `thread/settings/update`，从下一轮起生效。
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome
 }
 

@@ -10,11 +10,13 @@ import Combine
 ///
 ///   白板变更（进程内 `changes` + 跨进程 `directoryChanged`）
 ///     → 按 per-crew 扫描游标取**新增**条目
-///     → `CrewLocalMentionWakeLogic.pending` 滤出 session/机长发的定向 @
-///     → 复用人类 composer 路的同一套决策核心 `CrewLocalMentionInjectLogic.decide`
+///     → `CrewLocalMentionWakeLogic.pending` 滤出 session/机长定向 @，并把人类普通
+///       消息默认路由给当前机长
+///     → 复用同一套决策核心 `CrewLocalMentionInjectLogic.decide`
 ///       （busy 不打断 / 空闲注入 / 近期上下文按目标游标现取）
 ///     → 命中注入 + 回执确认（`CrewSessionRunner.confirmWake`）后才推进目标游标；
-///       失败不消费 + 白板告警 @captain。
+///       失败不消费 + 白板告警 @captain。人类消息免延迟回执采样，避免短 turn 已完成
+///       后被误报；投递本身仍走同一队列。
 ///     → 目标完全没在跑 → 拉起（captain=startCaptain，持久成员=restartMember），
 ///       与 `CrewChatView.wakeAbsentMentionTargets` 同语义。
 ///
@@ -193,9 +195,11 @@ final class CrewLocalMentionWaker {
                 sourceKey: "whiteboard:" + d.entryId,
                 to: run,
                 text: inj.text
-            ) {
+            ) { baseline in
                 if d.trackReceipt {
-                    runner.confirmWake(run: run, crewId: crewId, onConfirmed: consume)
+                    runner.confirmWake(
+                        run: run, crewId: crewId, baseline: baseline,
+                        onConfirmed: consume)
                 } else {
                     consume()   // system 条目免回执（告警自身不再告警，防环）
                 }

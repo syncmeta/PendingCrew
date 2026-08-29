@@ -800,7 +800,7 @@ struct CrewChatView: View {
             .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
             // 不会逐帧改 @State，也不改变内容高度，因此没有布局自激的反馈边。
-            .modifier(BottomReachedTracker(pin: $bottomPin))
+            .modifier(BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             .modifier(BottomOnContentGrowth(
                 isFollowing: bottomPin.isFollowing,
                 phaseBox: scrollPhaseBox
@@ -1208,15 +1208,9 @@ struct CrewChatView: View {
             try await backend.postCrewMessage(
                 crewId: crewId, text: text, mentions: mentions,
                 replyToId: replyToId, localAttachments: localAttachments)
-            // Local-first @ wake: after the message lands on the (local)
-            // whiteboard, directly inject it into any idle local run that was
-            // @-mentioned — idle runs have no next turn to pull it in (Phase 6
-            // 单元 3). No-op for the edge backend (那走 Phase 4b hub→inbox→waker).
-            // Todo #3：注入文本追加每个附件的绝对路径提示行（claude Read 即可看图）。
-            let injectText = ([text] + localAttachments.map(\.agentHint))
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-            injectMentionedLocalRuns(mentions: mentions, text: injectText)
+            // 唤醒只认刚落盘的白板条目：`CrewLocalMentionWaker` 用 message id 去重，
+            // 普通人类消息默认给当前机长，定向 @ 按目标走。不要在 composer 再造一条
+            // 随机 sourceKey 直投，否则同一条消息会被注入两次。
             // 自己说话就把视线带回最新一条，且不给自己发的话记未读（Todo #47 边界口径，
             // 与 iMessage / Slack / 微信一致）。哪怕人刚才正在往回翻，主动发言也是
             // 「我要回到现场」的明确意图。
@@ -1258,8 +1252,7 @@ struct CrewChatView: View {
             // 与 relay 落地远端 crew_todo_add 共用）。
             _ = try await CrewLocalTodoLanding.land(
                 crewId: crewId, text: text, attachments: saved,
-                backend: backend, sessionRunner: sessionRunner,
-                onError: { loadError = $0 })
+                backend: backend)
             // 建 Todo 也会往群里发一条「To do +1: #N」—— 同样是自己说话（Todo #47）。
             bottomPin.didSendOwnMessage()
             draft = ""
@@ -1277,25 +1270,6 @@ struct CrewChatView: View {
         }
     }
     #endif
-
-    /// Local直投唤醒（Phase 6 单元 3）：对每个 `@session` 目标，找到对应的本地
-    /// 活跃 run，空闲就直接 `send(...)` 唤醒；busy 不打断。决策 + IO 编排都在
-    /// `CrewLocalMentionDelivery`（Task 10 抽出，供 relay 落地远端 todo_add 共用）；
-    /// 这里只是把本视图的 environment（sessionRunner / backend / loadError）接进去。
-    /// 仅 macOS（本地 run 在 macOS）。
-    private func injectMentionedLocalRuns(mentions: [CrewMention], text: String) {
-        #if os(macOS)
-        // 项10:人发的、无具体 @ 的群消息 → 默认当 @机长 处理,且注入文本用 IM 式
-        // 「名：正文」(不套「有人@你」壳,因为不是定向 @)。只兜底真广播(mentions
-        // 为空);带 reply 会自动 @ 原发送者故非空,不落此路径。这里的 send() 只在
-        // 人类经 composer 发送时触发 → 天然满足「人发的」边界(session 广播 / 系统
-        // 消息不走此路径,不会误唤醒机长)。
-        CrewLocalMentionDelivery.injectAndWake(
-            crewId: crewId, mentions: mentions, text: text, senderName: "人",
-            sessionRunner: sessionRunner, backend: appModel.backend,
-            onError: { loadError = $0 })
-        #endif
-    }
 
     // MARK: - File import (cross-platform via .fileImporter)
 
@@ -1407,16 +1381,23 @@ private struct BottomPinTracker: ViewModifier {
             content.onScrollPhaseChange { oldPhase, phase, context in
                 // 先记「手在不在滚动上」—— `BottomOnContentGrowth` 靠它避开
                 // 「人正往上翻、内容一长高就被拽回底部」（Todo #54）。
-                phaseBox.phaseChanged(to: Self.kind(phase))
-                guard phase == .idle else { return }
+                let phaseKind = Self.kind(phase)
+                phaseBox.phaseChanged(to: phaseKind)
                 let geo = context.geometry
+                let atBottom = CrewChatBottomFollow.isAtBottom(
+                    contentOffsetY: geo.contentOffset.y,
+                    containerHeight: geo.containerSize.height,
+                    contentHeight: geo.contentSize.height,
+                    insetTop: geo.contentInsets.top,
+                    insetBottom: geo.contentInsets.bottom)
+                // 新消息可能在手势尚未停稳时到达。只在 idle 才关跟随会留出一段竞态：
+                // 人已经离底，Pin 仍说 following，新消息把视口拽回去（Todo #89）。
+                if CrewChatBottomFollow.isUserActive(phaseKind), !atBottom {
+                    pin.leftBottomByUser()
+                }
+                guard phase == .idle else { return }
                 pin.settled(
-                    atBottom: CrewChatBottomFollow.isAtBottom(
-                        contentOffsetY: geo.contentOffset.y,
-                        containerHeight: geo.containerSize.height,
-                        contentHeight: geo.contentSize.height,
-                        insetTop: geo.contentInsets.top,
-                        insetBottom: geo.contentInsets.bottom),
+                    atBottom: atBottom,
                     byUser: CrewChatBottomFollow.settleIsUserDriven(
                         previous: Self.kind(oldPhase)))
             }
@@ -1445,10 +1426,11 @@ private struct BottomPinTracker: ViewModifier {
 ///
 /// 原实现只在 `phase → idle` 时读一次几何；人已经滑到底但那次相位回调没覆盖到最终位置，
 /// `Pin` 仍停在「不跟随 + 有未读」，按钮就一直不消失。这里直接观察 at-bottom 这个 Bool：
-/// 滚动期间不逐帧写状态，只在 false/true 跨阈值时收到回调；且 false 什么都不做，离开底部
-/// 仍只由明确的用户滚动相位关闭跟随，守住 Todo #47 的程序化滚动不许关保险丝不变式。
+/// 滚动期间不逐帧写状态，只在 false/true 跨阈值时收到回调；false 也只有在明确的用户
+/// 滚动相位里才松开跟随，守住 Todo #47 的程序化滚动不许关保险丝不变式。
 private struct BottomReachedTracker: ViewModifier {
     @Binding var pin: CrewChatBottomFollow.Pin
+    let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
@@ -1460,8 +1442,13 @@ private struct BottomReachedTracker: ViewModifier {
                     insetTop: geo.contentInsets.top,
                     insetBottom: geo.contentInsets.bottom)
             } action: { _, atBottom in
-                guard atBottom else { return }
-                pin.reachedBottom()
+                if atBottom {
+                    pin.reachedBottom()
+                } else if phaseBox.isUserScrolling {
+                    // 位置一离开底部就松开，不等 phase→idle；否则手势中途到一条新消息
+                    // 仍会走 following 分支，把正在读历史的人拽回底部（Todo #89）。
+                    pin.leftBottomByUser()
+                }
             }
         } else {
             content

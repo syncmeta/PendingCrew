@@ -53,7 +53,7 @@ git -C "$root" merge-base --is-ancestor "$build_commit" origin/main 2>/dev/null 
 git -C "$root" push origin "refs/tags/v$version" 2>/dev/null || true
 remote_tag=$(git -C "$root" ls-remote --tags origin "v$version" | cut -f1)
 [ "$remote_tag" = "$build_commit" ] || {
-  echo "远端 tag v$version 指向 $remote_tag，产物却构建自 $build_commit —— 对不上，拒绝发布。" >&2
+  echo "远端 tag v$version 指向 ${remote_tag}，产物却构建自 $build_commit —— 对不上，拒绝发布。" >&2
   exit 2
 }
 

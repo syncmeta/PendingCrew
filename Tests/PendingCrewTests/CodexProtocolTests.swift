@@ -46,6 +46,8 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(resume["approvalsReviewer"] as? String, "auto_review")
         XCTAssertEqual(resume["approvalPolicy"] as? String, "on-request")
         XCTAssertEqual(resume["sandbox"] as? String, "workspace-write")
+        XCTAssertEqual(resume["excludeTurns"] as? Bool, true,
+                       "resume must not return an unbounded historical turns payload")
         XCTAssertEqual(
             (resume["config"] as? [String: Any])?["model_reasoning_effort"] as? String,
             "xhigh")
@@ -67,6 +69,14 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(start["approvalsReviewer"] as? String, "user")
         XCTAssertEqual(resume["approvalsReviewer"] as? String, "user")
         XCTAssertEqual(update["approvalsReviewer"] as? String, "user")
+    }
+    func testLiveSettingsCanSwitchModelAndEffortWithoutChangingReviewer() {
+        let update = CodexProtocol.threadSettingsUpdateParams(
+            threadId: "thr_old", model: "gpt-5.6-sol", effort: "xhigh")
+        XCTAssertEqual(update["threadId"] as? String, "thr_old")
+        XCTAssertEqual(update["model"] as? String, "gpt-5.6-sol")
+        XCTAssertEqual(update["effort"] as? String, "xhigh")
+        XCTAssertNil(update["approvalsReviewer"])
     }
     func testTurnStartPutsWhiteboardInAdditionalContext() {
         // codex's native per-turn context channel is `turn/start.additionalContext`
