@@ -963,7 +963,8 @@ struct CrewSessionWindowView: View {
                 // 人在新建面板里填完按下的这一下 —— 这条是唯一该跳过去的路（#42）。
                 userInitiated: true
             )
-            // 指令已在 argv 里(positional prompt)—— 不再等 REPL 就绪 sleep + 事后注入。
+            // 开场正文由 AgentSessionCore 以首次 PTY 输出为 readiness receipt 后送入，
+            // 不落 argv；调用方无需再做固定 sleep 或二次注入。
             draft = ""
         } catch {
             localError = error.localizedDescription

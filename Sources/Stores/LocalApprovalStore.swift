@@ -113,6 +113,24 @@ final class LocalApprovalStore: @unchecked Sendable {
         update(crewId: crewId, id: id) { $0.status = "answered"; $0.reply = reply }
     }
 
+    /// 只在决策仍为 pending 时原子地结束它。`ask` long-poll 超时后用：
+    /// agent 已经继续工作，再保留可操作卡片只会造成永久“等答复”误报。
+    /// 返回 false 表示它已被同时到达的真实答复结束，不覆盖那份答复。
+    @discardableResult
+    func answerIfPending(crewId: String, id: String, reply: String) -> Bool {
+        withFileLock(crewId) {
+            var rows = loadLocked(crewId)
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return false }
+            guard let idx = rows.firstIndex(where: { $0.id == id }),
+                  rows[idx].kind == "decision", rows[idx].status == "pending"
+            else { return false }
+            rows[idx].status = "answered"
+            rows[idx].reply = reply
+            saveLocked(crewId: crewId, rows: rows)
+            return true
+        }
+    }
+
     /// 权限类决定（allow / deny）。
     func decide(crewId: String, id: String, decision: String) {
         update(crewId: crewId, id: id) { $0.status = "answered"; $0.decision = decision }

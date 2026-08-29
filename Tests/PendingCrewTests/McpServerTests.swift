@@ -131,10 +131,15 @@ final class McpServerTests: XCTestCase {
         XCTAssertEqual(s.awaitReply(reqId: id, pollInterval: 0.01), "选 A")
     }
 
-    func testAwaitReplyTimeoutText() throws {
+    func testAwaitReplyTimeoutClosesUnreachableDecision() throws {
         let s = server(tempDir())
         let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "sess-1", summary: "q"))
-        XCTAssertTrue(s.awaitReply(reqId: id, pollInterval: 0.01, maxWaits: 2).contains("自行判断"))
+        let reply = s.awaitReply(reqId: id, pollInterval: 0.01, maxWaits: 2)
+        XCTAssertTrue(reply.contains("自行判断"))
+        XCTAssertEqual(s.approvals.item(crewId: "c", id: id)?.status, "answered",
+                       "ask 已超时返回，晚到答复无法再送达 agent，卡片不得永久 pending")
+        XCTAssertTrue(s.approvals.pending(crewId: "c").isEmpty,
+                      "不得让已继续工作的 session 仍被标成等答复")
     }
 
     // ask 在 raise 后把问题贴到本地白板（spec §6 通知半边），答复仍走待办列表。

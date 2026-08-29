@@ -1257,7 +1257,18 @@ final class McpServer {
             waits += 1
             Thread.sleep(forTimeInterval: pollInterval)
         }
-        return "（暂无人响应 —— 请自行判断后继续）"
+        let timeoutReply = "（暂无人响应 —— 请自行判断后继续）"
+        // 这个 MCP 调用已经要返回；之后点卡片的答复不可能再送达 agent。
+        // 和 Codex manual approval bridge 的超时路径一样，必须把持久卡片同步结束，
+        // 否则 session 虽已开始后续回合，仍会永久显示“等答复”。原子条件更新避免
+        // 覆盖最后一拍同时到达的真实答复。
+        if approvals.answerIfPending(crewId: crewId, id: reqId, reply: timeoutReply) {
+            return timeoutReply
+        }
+        if let item = approvals.item(crewId: crewId, id: reqId), item.status == "answered" {
+            return item.reply ?? "（已答复，无文本）"
+        }
+        return timeoutReply
     }
 
     /// 把 `post_to_crew` 的 `mentions` 参数（JSON 数组）解析成本地 mention 模型。

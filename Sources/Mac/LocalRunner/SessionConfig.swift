@@ -61,8 +61,9 @@ public struct SessionConfig: Sendable, Equatable {
     /// `thread/start.config.model_reasoning_effort`.
     /// Passthrough string — valid levels are runner-owned (UI validates; see spec probe §11).
     public var effort: String?
-    /// The session's first instruction, passed as the positional prompt at launch
-    /// (spec §1 — kills the post-spawn 0.6s sleep+inject).
+    /// The session's first instruction. Claude receives it over the PTY only after the
+    /// TUI produces output; it must never be a process argument because `ps` exposes argv
+    /// to every local session. Codex sends it over app-server after the handshake.
     public var initialPrompt: String?
     /// Resume an existing agent session by id.
     public var resumeSessionId: String?
@@ -113,8 +114,8 @@ public struct SessionConfig: Sendable, Equatable {
 
     /// Build the spawn argv for this session's agent CLI.
     ///
-    /// **claude** (`claudeCode`): interactive TUI — positional prompt is the trailing
-    /// argv; only `-p`/`exec` go headless, which we never use.
+    /// **claude** (`claudeCode`): interactive TUI. The opening prompt is deliberately
+    /// absent here and is delivered over the PTY by `AgentSessionCore` after startup.
     ///
     /// **codex**: runs as `codex app-server` (stdio JSON-RPC). The subcommand is the
     /// only token. All per-session values — effort, model, cwd, instructions, resume id,
@@ -141,13 +142,9 @@ public struct SessionConfig: Sendable, Equatable {
             if let mc = mcpConfigFile, !mc.isEmpty { a += ["--mcp-config", mc] }
             if let m = model, !m.isEmpty { a += ["--model", m] }
             if let e = effort, !e.isEmpty { a += ["--effort", e] }
-            // `--` terminates option parsing so the positional prompt is never swallowed by a
-            // preceding variadic flag. `--mcp-config <configs...>` is variadic (claude --help);
-            // when it's the last flag (captain launch has no `--model` to separate them) it
-            // otherwise eats the prompt as a second config path → "MCP config file not found:
-            // <cwd>/<prompt>". Verified against claude 2.1.170. Also makes a prompt starting
-            // with `-` safe. positional prompt LAST.
-            if let p = initialPrompt, !p.isEmpty { a += ["--", p] }
+            // Never append `initialPrompt`: process argv is readable through `ps`. A 2026-08-28
+            // incident exposed another crew's full whiteboard this way and the observing agent
+            // mistook that tool output for a task. `AgentSessionCore` owns PTY delivery instead.
             return a
         case .codex:
             return ["app-server"]

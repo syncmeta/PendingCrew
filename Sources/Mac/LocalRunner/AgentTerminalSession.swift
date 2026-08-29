@@ -77,7 +77,8 @@ final class AgentTerminalSession: ObservableObject, SessionBackend {
     @Published private(set) var scrollState = ScrollState()
 
     /// `executable` = 已 resolve 的 claude/codex 绝对路径；`workdir` = 工作目录。
-    /// argv（含首条指令的 positional prompt、auto mode、effort）由 `config.argv()` 构建。
+    /// argv（auto mode / model / effort）由 `config.argv()` 构建；Claude 开场正文由
+    /// 内核等 TUI 首次吐字后经 PTY 发送，不进入 argv。
     init(config: SessionConfig, executable: String, workdir: String, env: [String: String],
          protocolOutputSink: (([UInt8]) -> Void)? = nil) {
         self.kind = config.kind

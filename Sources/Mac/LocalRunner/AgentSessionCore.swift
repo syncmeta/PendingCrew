@@ -126,11 +126,15 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 启动参数没被 CLI 接受的首屏扫描器（Todo #36）。只在拉起窗口内活着，
     /// 过期/报完两类就置 nil 停扫。没显式传 model/effort 时压根不建。
     private var launchParameterScanner: SessionLaunchParameterScanner?
+    /// Claude opening task held in app memory until the TUI emits its first bytes. Keeping it
+    /// out of `config.argv()` prevents any other local session from reading the task via `ps`.
+    private var pendingStartupPrompt: String?
+    private var startupPromptTask: Task<Void, Never>?
     private var busyTimer: Timer?
 
     /// `executable` = 已 resolve 的 claude/codex 绝对路径（`.plainShell` 时是用户的
-    /// 登录 shell）；`workdir` = 工作目录。argv（含首条指令的 positional prompt、
-    /// auto mode、effort）由 `config.argv()` 构建。
+    /// 登录 shell）；`workdir` = 工作目录。argv（auto mode / model / effort）由
+    /// `config.argv()` 构建；Claude 开场正文走 PTY。
     init(config: SessionConfig,
          mode: Mode = .agent,
          executable: String,
@@ -141,6 +145,11 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         self.mode = mode
         self.protocolOutputSink = protocolOutputSink
         super.init()
+
+        if mode == .agent, config.kind == .claudeCode,
+           let prompt = config.initialPrompt, !prompt.isEmpty {
+            pendingStartupPrompt = prompt
+        }
 
         var opts = TerminalOptions.default
         opts.scrollback = Self.scrollbackLines
@@ -195,6 +204,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     deinit {
         busyTimer?.invalidate()
         launchWatchdog?.cancel()
+        startupPromptTask?.cancel()
     }
 
     // MARK: - LocalProcessDelegate
@@ -208,6 +218,9 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     }
 
     private func handleProcessTerminated(exitCode: Int32?) {
+        startupPromptTask?.cancel()
+        startupPromptTask = nil
+        pendingStartupPrompt = nil
         switch mode {
         case .plainShell:
             Task { @MainActor [weak self] in
@@ -244,6 +257,24 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         if mode == .agent { scanOutput(slice) }
         onOutput?(slice)
         protocolOutputSink?(Array(slice))
+        deliverStartupPromptAfterTUIReady()
+    }
+
+    /// First PTY output is the readiness receipt: the child has exec'd Claude and started
+    /// drawing its TUI. Bytes written after that are queued by the PTY even if the input field
+    /// is still finishing its first render. We retain the existing split-write submission
+    /// semantics (`send`: body, then Enter 200 ms later) so long prompts are not left unsubmitted.
+    private func deliverStartupPromptAfterTUIReady() {
+        guard startupPromptTask == nil, let prompt = pendingStartupPrompt else { return }
+        pendingStartupPrompt = nil
+        startupPromptTask = Task { @MainActor [weak self] in
+            // Yield one render beat. Unlike the old spawn-relative sleep, this countdown starts
+            // only after positive child output, so slow CLI startup cannot race it.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled, let self, self.status == .running else { return }
+            self.send(prompt)
+            self.startupPromptTask = nil
+        }
     }
 
     /// 报给 PTY 的窗口尺寸。像素维度报 16×16 的常量（SwiftTerm 自带的
@@ -636,6 +667,9 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     func stop() {
         guard status == .running else { return }
         userStopped = true
+        startupPromptTask?.cancel()
+        startupPromptTask = nil
+        pendingStartupPrompt = nil
         let pid = process.shellPid
         process.terminate()                 // SIGTERM + close PTY（但不回调 processTerminated）
         status = .exited(nil)               // ← 自己翻状态，否则 UI 永远 running
