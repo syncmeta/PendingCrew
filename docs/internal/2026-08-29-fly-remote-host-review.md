@@ -6,6 +6,27 @@
 > 按 `docs/internal/README.md` 的约定：这份写完就冻结，不随代码更新。读的时候请按
 > 「2026 年 8 月 29 日，基于 main@d7ce988 是这么看的」来读。
 
+> **2026-08-29 当日修订**（31 号 crew「常驻后台·前后端分离」回执后逐条核过；**结论未变，仍是「Fly = 第三种传输」**）：
+>
+> - **§2 A-2 已修，不再是待办。** P4 分支 `f34d7c9`：server 每条连接 + client 各持一个
+>   `SessionFrameDecoder`，收到字节先增量切帧再逐帧处理；字节流损坏改为**明确断连 + 落诊断**
+>   （比我原本只要求的"能重组"更严）。新增 `ByteStreamLink` 替身把第一帧切成半包、余半再与
+>   第二帧粘在同一次投递里，两个方向各一条用例。他们报的红绿：旧代码 6 tests / 4 failures，
+>   修后专项 32 / 0，合最新 main 后全量 1766 tests / 3 登记 skip / 0 failures，iOS Simulator build 通过。
+>   **我的核实边界**：我读了 `f34d7c9` 的完整 diff 与新测试、确认它确实按半包+粘包构造；
+>   **我没有在他们的分支上跑那 1766 条**，红绿数字是他们的实测，不是我复现的。
+> - **§2 A-3 我写错了一半，就地更正。** 「endpoint 绑死具体传输类型」在 `main@d7ce988` 上成立，
+>   但 P4 分支上早已换成单侧接口 `SessionMessageLink`（`UnixSocketTransport.swift:15`），
+>   没有 UDS 类型泄漏。真正残留的不是类型耦合，而是**那份 link 契约当时仍默认 `onReceive` 是整帧**
+>   —— 也就是 A-2。现在契约里写死了：「`onReceive` 是可靠有序字节流，回调边界没有协议含义……
+>   TLS/TCP 实现因此可以原样上交任意 read chunk。」
+> - **§1.5 更新**：P4 分支 `pendingcrew/session-49b1c7` 已有 `UnixSocketTransport`、
+>   `SessionMessageLink`、`SessionFrameSplitter`，且已合入当时最新 main。**仍未落 main**，
+>   两道闸没过：A2 的「跨行选中复制」红项，以及真实 daemon 验收。
+> - **§4 的 F1 因此有了确定的接缝**：TLS 长连接实现 `SessionMessageLink` 即可，
+>   codec / endpoint / `RemoteSessionBackend` 一行不用改。这正是 §1.4 引的那句
+>   「同一套分帧换个传输就能跑在网络上」第一次被兑现。
+
 ---
 
 ## 0. 一句话结论
