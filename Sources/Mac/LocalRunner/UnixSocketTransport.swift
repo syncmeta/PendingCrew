@@ -8,9 +8,9 @@ import Foundation
 /// 真分家之后每个进程只握得住自己这一端，所以协议服务端/客户端认的是这个单侧接口，
 /// `InProcessTransport` 与 `UnixSocketTransport` 各自往上贴一层适配。
 ///
-/// **`onReceive` 收到的永远是一条完整的 framed message**（codec 产出的那种，含 4 字节
-/// 长度前缀）。socket 上收到的是任意切法的字节，重组由 `SessionFrameSplitter` 在链路
-/// 内部做完 —— 上层一行都不用知道自己跑在哪种传输上。
+/// `onReceive` 是**可靠有序字节流**，回调边界没有协议含义：可能半帧、整帧或多帧粘在
+/// 一起。当前 UDS 实现为了 IO 效率会尽量按整帧交付，但 endpoint 自己持有增量 decoder，
+/// 绝不能依赖这件事。TLS/TCP 实现因此可以原样上交任意 read chunk。
 @MainActor
 protocol SessionMessageLink: AnyObject {
     var onReceive: ((Data) -> Void)? { get set }
@@ -23,7 +23,7 @@ protocol SessionMessageLink: AnyObject {
     /// 已经交给传输层、但还没真正写出去的字节数。daemon 侧据此判断这条链路是不是
     /// 跟不上了（§5.4 的背压闸门读的就是它）。同进程直调恒为 0。
     var pendingWriteBytes: Int { get }
-    /// 发一条完整的 framed message。
+    /// 写入一段字节。调用方目前按完整 framed message 写，但对端不得假设 write 边界保留。
     func send(_ framed: Data)
     /// 本端主动关闭。**不触发 `onClose`** —— 那是留给「对端走了 / 链路断了」的，
     /// 谁主动关的谁自己知道，重连策略不该被自己的 detach 触发。

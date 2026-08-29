@@ -11,6 +11,54 @@ import XCTest
 final class SessionProtocolOverSocketTests: XCTestCase {
     private let capabilities = ["screen-text", "terminal-bytes", "transcript-events"]
 
+    /// endpoint 的传输契约是可靠双向**字节流**，不能偷认「一次回调就是一帧」。
+    /// 第一块只有 2 字节；第二块既补完第一帧，又紧跟完整第二帧，同时覆盖半包与粘包。
+    func test_server接受任意切分与粘包的可靠字节流() throws {
+        let link = ByteStreamLink()
+        let server = SessionProtocolServer(capabilities: capabilities, daemonBuild: "daemon")
+        server.accept(link: link)
+
+        let codec = SessionProtocolCodec()
+        var stream = Data()
+        stream.append(try codec.encode(.hello(.init(
+            protocolVersion: SessionProtocolVersion.current,
+            appBuild: "app",
+            capabilities: capabilities))))
+        stream.append(try codec.encode(.listSessions))
+
+        link.deliver(Array(stream.prefix(2)))
+        link.deliver(Array(stream.dropFirst(2)))
+
+        let replies = link.sent.compactMap { try? codec.decodeDaemon($0) }
+        XCTAssertEqual(replies.count, 2, "半帧不能丢；两帧粘在一次投递里也必须逐帧处理")
+        guard case .hello? = replies.first else { return XCTFail("第一条应为 daemon hello") }
+        guard case let .sessions(list)? = replies.last else { return XCTFail("第二条应为 sessions") }
+        XCTAssertEqual(list.sessions, [])
+    }
+
+    func test_client接受任意切分与粘包的可靠字节流() throws {
+        let link = ByteStreamLink()
+        let client = SessionProtocolClient(link: link, capabilities: capabilities, appBuild: "app")
+        var receivedList: SessionList?
+        client.onSessionList = { receivedList = $0 }
+
+        let codec = SessionProtocolCodec()
+        var stream = Data()
+        stream.append(try codec.encode(.hello(.init(
+            protocolVersion: SessionProtocolVersion.current,
+            daemonBuild: "daemon",
+            capabilities: capabilities,
+            sessionCount: 0,
+            pid: 42))))
+        stream.append(try codec.encode(.sessions(.init(sessions: []))))
+
+        link.deliver(Array(stream.prefix(3)))
+        link.deliver(Array(stream.dropFirst(3)))
+
+        XCTAssertTrue(client.isConnected, "client 不得静默丢掉被切开的 hello")
+        XCTAssertEqual(receivedList?.sessions, [], "粘在 hello 后的 sessions 也必须交付")
+    }
+
     func test_真socket上attach拿到快照后续实时字节接得上() throws {
         let pair = try UnixSocketTransport.makePair()
         defer { pair.app.close(); pair.daemon.close() }
@@ -173,6 +221,21 @@ final class SessionProtocolOverSocketTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.001))
         }
     }
+}
+
+/// 模拟 TCP/TLS/UDS 都可能出现的任意字节交付边界；它刻意不替 endpoint 重组帧。
+@MainActor
+private final class ByteStreamLink: SessionMessageLink {
+    var onReceive: ((Data) -> Void)?
+    var onClose: (() -> Void)?
+    var isOpen = true
+    let isSynchronous = false
+    let pendingWriteBytes = 0
+    private(set) var sent: [Data] = []
+
+    func send(_ bytes: Data) { sent.append(bytes) }
+    func close() { isOpen = false }
+    func deliver(_ bytes: [UInt8]) { onReceive?(Data(bytes)) }
 }
 
 /// 一条**写不动**的链路：`pendingWriteBytes` 由测试直接摆布，用来把服务端逼进

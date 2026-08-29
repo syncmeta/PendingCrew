@@ -519,7 +519,12 @@ struct SessionProtocolCodec {
 
     /// 未知 `type` 返回 nil：调用方继续读下一帧，不报错、不断连。
     func decodeApp(_ framed: Data) throws -> SessionAppMessage? {
-        guard case let .control(json) = try exactlyOneFrame(framed) else { return nil }
+        try decodeApp(exactlyOneFrame(framed))
+    }
+
+    /// 字节流 endpoint 已经增量切出的单帧入口。transport 不需要懂 JSON 或消息种类。
+    func decodeApp(_ frame: SessionWireFrame) throws -> SessionAppMessage? {
+        guard case let .control(json) = frame else { return nil }
         switch try type(of: json) {
         case "hello": return .hello(try decoder.decode(SessionAppHello.self, from: json))
         case "listSessions": return .listSessions
@@ -535,7 +540,12 @@ struct SessionProtocolCodec {
 
     /// 未知控制消息与 app 侧相同地忽略；kind=1 直接还原原始 PTY 字节。
     func decodeDaemon(_ framed: Data) throws -> SessionDaemonMessage? {
-        switch try exactlyOneFrame(framed) {
+        try decodeDaemon(exactlyOneFrame(framed))
+    }
+
+    /// 字节流 endpoint 已经增量切出的单帧入口；snapshot 仍由 client 的 P3 路径消费。
+    func decodeDaemon(_ frame: SessionWireFrame) throws -> SessionDaemonMessage? {
+        switch frame {
         case let .terminal(handle, bytes): return .data(.init(handle: handle, bytes: bytes))
         case .snapshot: return nil // P3 消费；P2 只冻结帧格式。
         case let .control(json):

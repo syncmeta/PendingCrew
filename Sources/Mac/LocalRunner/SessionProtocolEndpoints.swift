@@ -17,6 +17,8 @@ final class SessionProtocolServer {
     /// 所以不同 viewer 之间的 handle 天然不撞。
     private final class Connection {
         let link: any SessionMessageLink
+        /// 每条连接各自推进：TCP/TLS/UDS 的 read 边界都不是消息边界。
+        var frameDecoder = SessionFrameDecoder()
         var negotiatedCapabilities: [String] = []
         var handles: Set<UInt32> = []
         /// 只有**跟得上跟不上是个问题**的链路才需要背压队列（§5.4）。同进程直调
@@ -210,8 +212,20 @@ final class SessionProtocolServer {
     // MARK: - 入站
 
     private func receive(_ data: Data, from key: ObjectIdentifier) {
-        guard let connection = connections[key],
-              let message = try? codec.decodeApp(data) else { return }
+        guard let connection = connections[key] else { return }
+        do {
+            for frame in try connection.frameDecoder.append(data) {
+                guard let message = try codec.decodeApp(frame) else { continue }
+                receive(message, on: connection)
+            }
+        } catch {
+            onDiagnostic?("协议字节流损坏，断开 viewer：\(error)")
+            connection.link.close()
+            dropConnection(key)
+        }
+    }
+
+    private func receive(_ message: SessionAppMessage, on connection: Connection) {
         switch message {
         case let .hello(value):
             connection.negotiatedCapabilities = SessionCapabilities.negotiate(
@@ -505,6 +519,8 @@ final class SessionProtocolServer {
 final class SessionProtocolClient {
     private let link: any SessionMessageLink
     private let codec = SessionProtocolCodec()
+    /// 连接级增量状态；read/write 回调边界不是帧边界。
+    private var frameDecoder = SessionFrameDecoder()
     private let capabilities: [String]
     private let appBuild: String
     private var remotes: [String: RemoteSessionBackend] = [:]
@@ -553,6 +569,7 @@ final class SessionProtocolClient {
     }
 
     func transportDisconnected() {
+        frameDecoder = SessionFrameDecoder()
         stateReconciler.resetForReconnect()
         remoteByHandle.removeAll()
         negotiated = []
@@ -656,12 +673,21 @@ final class SessionProtocolClient {
     }
 
     private func receive(_ data: Data) {
-        if let frames = try? SessionFrameDecoder.decodeAll(data), frames.count == 1,
-           case let .snapshot(handle, seq, isLast, bytes) = frames[0] {
+        do {
+            for frame in try frameDecoder.append(data) { receive(frame) }
+        } catch {
+            link.close()
+            transportDisconnected()
+            onLinkClosed?()
+        }
+    }
+
+    private func receive(_ frame: SessionWireFrame) {
+        if case let .snapshot(handle, seq, isLast, bytes) = frame {
             remoteByHandle[handle]?.receiveSnapshot(seq: seq, isLast: isLast, bytes: bytes)
             return
         }
-        guard let message = try? codec.decodeDaemon(data) else { return }
+        guard let message = try? codec.decodeDaemon(frame) else { return }
         switch message {
         case let .hello(value):
             guard case let .compatible(caps) = SessionCompatibility.evaluate(
