@@ -214,11 +214,13 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                               mentions: [LocalWhiteboardMention]? = nil,
                               inReplyTo: String? = nil,
                               senderKind: String = "session",
-                              externalContactFrom: String? = nil) {
+                              externalContactFrom: String? = nil,
+                              attachments: [LocalWhiteboardAttachment]? = nil) {
         _ = try? appendSessionMessageReportingFailure(
             crewId: crewId, sessionId: sessionId, text: text, category: category,
             senderName: senderName, mentions: mentions, inReplyTo: inReplyTo,
-            senderKind: senderKind, externalContactFrom: externalContactFrom)
+            senderKind: senderKind, externalContactFrom: externalContactFrom,
+            attachments: attachments)
     }
 
     /// 与 `appendSessionMessage` 相同，但把编码/落盘错误抛给调用者 —— 用于回执
@@ -234,7 +236,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         mentions: [LocalWhiteboardMention]? = nil,
         inReplyTo: String? = nil,
         senderKind: String = "session",
-        externalContactFrom: String? = nil
+        externalContactFrom: String? = nil,
+        attachments: [LocalWhiteboardAttachment]? = nil
     ) throws -> String? {
         try appendReportingFailure(crewId: crewId, LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
@@ -247,6 +250,7 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             senderName: senderName,
             inReplyTo: inReplyTo,
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
+            attachments: (attachments?.isEmpty == true) ? nil : attachments,
             externalContactFrom: externalContactFrom))
     }
 
@@ -480,16 +484,24 @@ struct LocalWhiteboardMessage: Codable, Equatable {
     /// 新增可选字段向后兼容（旧 JSON 缺键 → nil）。
     var externalContactFrom: String? = nil
 
+    /// 这条消息的附件该署谁的名（Todo #48）。人类发的照旧是「用户」；session /
+    /// 机长发的用它的显示名，没有 label 时退回「队友」—— 宁可说得笼统，也不许
+    /// 说成是人发的。
+    var attachmentSenderNoun: String {
+        senderKind == "user" ? "用户" : (senderName ?? "队友")
+    }
+
     /// 每个附件一行「绝对路径提示」（claude 用 Read 即可看图）。空 = 无附件。
     var attachmentAgentHints: [String] {
-        (attachments ?? []).map(\.agentHint)
+        (attachments ?? []).map { $0.agentHint(senderNoun: attachmentSenderNoun) }
     }
 
     /// 给 agent 看的渲染文本：正文 + 附件路径提示行。所有白板→agent 的渲染口
     /// （HookEmitter / read_whiteboard / 近期群聊上下文）统一走这里，晚醒的
     /// session 也能拿到图片路径。
     var agentText: String {
-        LocalWhiteboardAttachment.appendingAgentHints(to: text, attachments)
+        LocalWhiteboardAttachment.appendingAgentHints(
+            to: text, attachments, senderNoun: attachmentSenderNoun)
     }
 }
 
@@ -506,19 +518,25 @@ struct LocalWhiteboardAttachment: Codable, Equatable {
     var isImage: Bool { mime.lowercased().hasPrefix("image/") }
 
     /// 给 agent 的路径提示行（PTY 注入 / 白板渲染共用同一文案）。
-    var agentHint: String {
+    ///
+    /// `senderNoun` = 这张图是**谁**发的（Todo #48）。默认 "用户" —— 人类 composer
+    /// 与两本 Todo 的附件都是人上传的，那条路一个字没变。session 经 `post_to_crew`
+    /// 发图时由 `LocalWhiteboardMessage` 换成发送者显示名：**别把队友发的图说成是人
+    /// 发的**，接收方会照着这句话把作者认错，而正文里通常没有第二处能纠正它。
+    func agentHint(senderNoun: String = "用户") -> String {
         isImage
-            ? "用户发来图片：\(path)（请 Read 查看）"
-            : "用户发来文件：\(path)（请 Read 查看）"
+            ? "\(senderNoun)发来图片：\(path)（请 Read 查看）"
+            : "\(senderNoun)发来文件：\(path)（请 Read 查看）"
     }
 
     /// 正文 + 每个附件一行路径提示。**所有**「带附件的东西讲给 agent 听」都走这里
     /// —— 白板消息（`LocalWhiteboardMessage.agentText`）、人类 Todo 条目与追问
     /// （Todo #52）共用同一套措辞，session 在哪条通道上看到图都认得出「去 Read」。
     static func appendingAgentHints(
-        to body: String, _ attachments: [LocalWhiteboardAttachment]?
+        to body: String, _ attachments: [LocalWhiteboardAttachment]?,
+        senderNoun: String = "用户"
     ) -> String {
-        let hints = (attachments ?? []).map(\.agentHint)
+        let hints = (attachments ?? []).map { $0.agentHint(senderNoun: senderNoun) }
         guard !hints.isEmpty else { return body }
         let tail = hints.joined(separator: "\n")
         return body.isEmpty ? tail : body + "\n" + tail

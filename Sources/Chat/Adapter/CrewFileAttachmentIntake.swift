@@ -115,6 +115,58 @@ enum CrewFileAttachmentIntake {
         return out
     }
 
+    /// agent 经 `post_to_crew(attachments:)` 递来的一批**绝对路径** → 收进
+    /// `<root>/<crewId>/`（Agent Todo #48：session 往群聊发图）。
+    ///
+    /// 与人类拖入走**同一套判定**（`verdict`：目录/超限/读不到）和**同一套软报错
+    /// 文案**（`rejectionMessage`）—— 两条入口不许各长一套口径，否则同一个文件在
+    /// composer 里收得下、在工具里收不下，没人说得清哪个才算数。
+    ///
+    /// **原文件留在原地。** `CrewChatAttachmentStore.save(fileAt:)` 是 move 语义
+    /// （同卷零拷贝，暂存区那份本来就该被搬走）；直接拿它收 agent 给的路径会把人家
+    /// 工作目录里的产物偷走 —— 发完图，自己的截图就没了。所以先 `stage`（复制）
+    /// 再 move 那份副本：agent 的原文件一个字节不动。
+    ///
+    /// 收不下的**逐条**回一句人看得懂的话，绝不静默丢：调用方要把这些话原样放进
+    /// 工具回执（#577 回执如实 —— 「已发到」和「图没发出去」不能同时只说前半句）。
+    static func intake(
+        paths: [String], crewId: String,
+        limit: Int = maxBytes,
+        root: URL = CrewChatAttachmentStore.defaultDirectory,
+        staging: URL = CrewChatAttachmentStore.stagingDirectory
+    ) -> (accepted: [LocalWhiteboardAttachment], errors: [String]) {
+        var accepted: [LocalWhiteboardAttachment] = []
+        var errors: [String] = []
+        for raw in paths {
+            let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty else { continue }
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            let candidate = describe(fileAt: url)
+            let call = verdict(for: candidate, limit: limit)
+            guard call == .accept else {
+                if let msg = rejectionMessage(call, filename: candidate.filename) {
+                    errors.append(msg)
+                }
+                continue
+            }
+            // stage = 复制一份到暂存区；save(fileAt:) 把**那一份**搬进附件目录。
+            // 原文件全程没被碰过。
+            guard let staged = try? CrewChatAttachmentStore.stage(fileAt: url, into: staging) else {
+                errors.append("「\(candidate.filename)」复制失败，没有发出去。")
+                continue
+            }
+            guard let saved = CrewChatAttachmentStore.save(
+                fileAt: staged, mime: candidate.mime,
+                filename: candidate.filename, crewId: crewId, root: root) else {
+                CrewChatAttachmentStore.discardStaged(staged, staging: staging)
+                errors.append("「\(candidate.filename)」落盘失败，没有发出去。")
+                continue
+            }
+            accepted.append(saved)
+        }
+        return (accepted, errors)
+    }
+
     /// URL → 候选描述（文件名 / 大小 / 是不是目录 / mime）。
     static func describe(fileAt url: URL) -> CrewFileCandidate {
         let values = try? url.resourceValues(

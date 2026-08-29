@@ -289,6 +289,7 @@
 		8BAE00F15D98D768928BCF42 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13CB4287864AEB5C5A8FECC /* Platform.swift */; };
 		8C463DCAD53729C43CFFC249 /* CrewRecentContextRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 574DF310289F087CF7744953 /* CrewRecentContextRenderTests.swift */; };
 		8D803558CAF88EE35D9F7F27 /* TerminalMirrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D463833D0E583C11903CE62C /* TerminalMirrorView.swift */; };
+		8D9F00CE8BE3579D7D087838 /* McpPostAttachmentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D66C18293A147DBEC648912F /* McpPostAttachmentsTests.swift */; };
 		8DC0646C274174874759C802 /* WorkdirMigrationPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE733889935BCE71D20449F1 /* WorkdirMigrationPlanTests.swift */; };
 		8E58D6A9589C0F604CD276D9 /* CodexAppServerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6EBD108E8EF2047AA56F4ED /* CodexAppServerConnection.swift */; };
 		8E6A94DA55553F65247040AE /* McpServerTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99073B6D81C549F7D1EE9A35 /* McpServerTodoTests.swift */; };
@@ -824,6 +825,7 @@
 		D463833D0E583C11903CE62C /* TerminalMirrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMirrorView.swift; sourceTree = "<group>"; };
 		D60CE404DBA41800A4216C77 /* CrewListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewListView.swift; sourceTree = "<group>"; };
 		D61EF9C80E279F17B39492B4 /* MachineGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineGrouping.swift; sourceTree = "<group>"; };
+		D66C18293A147DBEC648912F /* McpPostAttachmentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpPostAttachmentsTests.swift; sourceTree = "<group>"; };
 		D6F39A5FF531F20F719F31F7 /* CrewDAGTreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewDAGTreeView.swift; sourceTree = "<group>"; };
 		D74F34B76291247636390B19 /* CrewRootLineageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRootLineageTests.swift; sourceTree = "<group>"; };
 		D75149E56C43DE393B0F774D /* ServerImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerImage.swift; sourceTree = "<group>"; };
@@ -1332,6 +1334,7 @@
 				0289B7CA9949BA817F748B6A /* McpAddHumanTodoTests.swift */,
 				9DD2C6E726F767AAFDB1B8F4 /* McpBroadcastMentionTests.swift */,
 				D36E53A3EEA55369A75ADB82 /* McpPermissionHookTests.swift */,
+				D66C18293A147DBEC648912F /* McpPostAttachmentsTests.swift */,
 				2B0A8BE5A9AAE6545A25DE79 /* McpReplyAutoMentionTests.swift */,
 				1F16A819715D78A73D291706 /* McpServerCaptainSpawnTests.swift */,
 				66582D8B5956E7197698364F /* McpServerDirectoryToolsTests.swift */,
@@ -2063,6 +2066,7 @@
 				310DDCE7ED06B5AD73E36FD7 /* McpBroadcastMentionTests.swift in Sources */,
 				67F1A713B214BE38547CFBA4 /* McpPermissionHook.swift in Sources */,
 				9784D71E9DBD98F8CEA30145 /* McpPermissionHookTests.swift in Sources */,
+				8D9F00CE8BE3579D7D087838 /* McpPostAttachmentsTests.swift in Sources */,
 				B7938ADA84EDD2610F37872B /* McpReplyAutoMentionTests.swift in Sources */,
 				A67C0B2B38BE0BFB0B06E905 /* McpServer.swift in Sources */,
 				663D4D3BC9CFB7E63602CA27 /* McpServerCaptainSpawnTests.swift in Sources */,
