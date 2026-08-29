@@ -3,12 +3,18 @@ import Foundation
 import UIKit
 #endif
 
-/// 稳定的安装级设备身份。pendingcrew 的 device-grant 登录没有自带稳定
-/// device_id（每次 challenge 都可以是新的），所以这里自存一个安装级 UUID
-/// 到 UserDefaults —— 同一安装恒定，重装后换一个（机器在表里就当新机）。
+/// 稳定的安装级设备身份：自存一个安装级 UUID 到 UserDefaults —— 同一安装恒定，
+/// 重装后换一个（就当新机）。
 ///
-/// machine 注册（`POST /v1/machines/register-self`）用它做 upsert key，
-/// crew 列表展示用它判断某台 machine 是否「本机」。
+/// **它原本还是云端 machine 注册（`POST /v1/machines/register-self`）的 upsert
+/// key；那条注册路随 #63 第二期（2026-08-26）删除，现在不存在了。** 今天唯一的
+/// 活读者是 `CrewStore.refreshMachines()` / `MachineGrouping`：判断某台 machine
+/// 是否「本机」。
+///
+/// **它不是机器身份凭证。** 这是一个可被任何人读写的 UserDefaults UUID，不能拿来
+/// 向远程主机证明「我是这台设备」。接 Fly 远程主机时需要的是设备密钥对（私钥进
+/// Keychain，`synchronizable=false`），见
+/// `docs/internal/2026-08-29-fly-remote-host-review.md` §3。
 enum DeviceIdentity {
     private static let key = "pendingcrew.deviceId"
 
