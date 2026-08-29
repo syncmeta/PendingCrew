@@ -218,8 +218,8 @@ final class ViewWiringTests: XCTestCase {
                       "auto_review 没走禁止建卡/通知的门禁")
     }
 
-    /// Todo #82/#83：窄右栏不能再把四种控件挤成一排；Codex 的技术流也不能把
-    /// shell 原文当成人类活动描述。
+    /// Todo #82/#83/#90：窄右栏不能再把四种控件挤成一排；Codex 技术流折叠态
+    /// 只说具体程序/档名，完整命令与路径放进可展开详情。
     func testSessionHeaderAndCodexActivityUseHumanFacingPresentation() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")
         XCTAssertTrue(view.contains("// 第一排：名字"))
@@ -229,11 +229,16 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(view.contains("private var effortMenu"), "effort 没有独立手动菜单")
 
         let codex = try Self.text(of: "CodexTranscriptView.swift")
-        XCTAssertTrue(codex.contains("已读取档案"))
-        XCTAssertTrue(codex.contains("已执行指令"))
-        XCTAssertTrue(codex.contains("已修改档案"))
+        let presentation = try Self.text(of: "CodexThreadItem.swift")
+        XCTAssertTrue(presentation.contains("已读取档案"))
+        XCTAssertTrue(presentation.contains("已执行指令"))
+        XCTAssertTrue(presentation.contains("已修改档案"))
+        XCTAssertTrue(codex.contains("DisclosureGroup"), "活动行不能点击展开详情")
+        XCTAssertTrue(presentation.contains("完整指令"), "展开态没有完整命令")
+        XCTAssertTrue(presentation.contains("涉及档案"), "展开态没有完整文件路径")
+        XCTAssertTrue(codex.contains("presentation.headline"), "折叠态没有具体活动摘要")
         XCTAssertFalse(codex.contains("Text(command).font(Theme.Fonts.monoSmall)"),
-                       "Codex 活动流仍直接铺 shell 原文")
+                       "Codex 活动流仍在折叠态直接铺 shell 原文")
     }
 
     /// Todo #80：退出后的成员行必须恢复那一个持久 session，不能把点击退化成

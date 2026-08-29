@@ -39,8 +39,50 @@ final class CodexThreadItemTests: XCTestCase {
             return XCTFail("expected commandExecution")
         }
         XCTAssertEqual(command.actions.map(\.kind), [.search, .read])
+        XCTAssertEqual(command.actions.map(\.command),
+                       ["rg foo Sources", "sed -n '1,20p' Sources/a.swift"])
         XCTAssertEqual(command.actions[0].query, "foo")
         XCTAssertEqual(command.actions[1].name, "a.swift")
+    }
+
+    func testCodexActivityNamesConcreteFileAndKeepsExpandableDetails() throws {
+        let item = try decode(#"{"id":"read","type":"commandExecution","command":"sed -n '1,20p' Sources/a.swift","cwd":"/repo","status":"completed","commandActions":[{"type":"read","command":"sed -n '1,20p' Sources/a.swift","name":"a.swift","path":"Sources/a.swift"}],"exitCode":0}"#)
+        guard case let .commandExecution(command) = item.kind else {
+            return XCTFail("expected commandExecution")
+        }
+
+        let presentation = CodexActivityPresentation.command(command)
+        XCTAssertEqual(presentation.headline, "已读取档案 · a.swift")
+        XCTAssertEqual(presentation.details.first,
+                       .init(label: "完整指令", value: "sed -n '1,20p' Sources/a.swift"))
+        XCTAssertTrue(presentation.details.contains(
+            .init(label: "涉及档案", value: "Sources/a.swift")))
+    }
+
+    func testCodexActivityNamesOnlyTheExecutedProgramInCollapsedRow() {
+        let command = CodexThreadItem.CommandExec(
+            command: "cd /repo && /usr/bin/env MODE=test xcodebuild -scheme PendingCrew test",
+            cwd: "/repo", status: "completed", aggregatedOutput: nil, exitCode: 0)
+
+        let presentation = CodexActivityPresentation.command(command)
+        XCTAssertEqual(presentation.headline, "已执行指令 · xcodebuild")
+        XCTAssertEqual(presentation.details.first?.value,
+                       "cd /repo && /usr/bin/env MODE=test xcodebuild -scheme PendingCrew test")
+        XCTAssertFalse(presentation.headline.contains("-scheme"),
+                       "折叠态只列程序，完整参数留在展开详情")
+    }
+
+    func testCodexOtherActivitiesNameTheirConcreteSubject() {
+        XCTAssertEqual(
+            CodexActivityPresentation.fileChange(.init(
+                status: "completed", summary: "README.md, Sources/a.swift")).headline,
+            "已修改档案 · README.md（另 1 项）")
+        XCTAssertEqual(
+            CodexActivityPresentation.tool(name: "crew.post_to_crew", status: "completed").headline,
+            "已调用工具 · crew.post_to_crew")
+        XCTAssertEqual(
+            CodexActivityPresentation.webSearch(query: "Swift DisclosureGroup").headline,
+            "已搜索网页 · Swift DisclosureGroup")
     }
 
     func testDecodeReasoningArrays() throws {

@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Structured Codex session, close to Codex Desktop's information hierarchy:
 /// assistant prose stays full strength; process details become short natural-language
-/// activity rows. Raw commands, paths, diffs and stdout are intentionally not rendered
-/// in the default conversation surface (Todo #83).
+/// activity rows. Exact commands and paths stay collapsed until the user asks for them
+/// by opening the row; stdout/diffs remain out of the conversation surface (Todo #90).
 struct CodexTranscriptView: View {
     @ObservedObject var transcript: CodexTranscript
     fileprivate static let bottomAnchorID = "__codex_bottom__"
@@ -71,19 +71,13 @@ struct CodexTranscriptRows: View {
         case let .plan(text):
             signalRow(.accent, "计划", text)
         case let .commandExecution(c):
-            commandActivity(c)
+            expandableActivityRow(CodexActivityPresentation.command(c))
         case let .fileChange(change):
-            activityRow(
-                icon: change.status == "failed" ? "exclamationmark.triangle" : "doc.badge.ellipsis",
-                text: change.status == "failed" ? "修改档案失败" : "已修改档案",
-                bad: change.status == "failed")
-        case let .toolCall(_, status):
-            activityRow(
-                icon: "wrench.and.screwdriver",
-                text: status == "failed" ? "调用工具失败" : "已调用工具",
-                bad: status == "failed")
-        case .webSearch:
-            activityRow(icon: "globe", text: "已搜索网页")
+            expandableActivityRow(CodexActivityPresentation.fileChange(change))
+        case let .toolCall(name, status):
+            expandableActivityRow(CodexActivityPresentation.tool(name: name, status: status))
+        case let .webSearch(query):
+            expandableActivityRow(CodexActivityPresentation.webSearch(query: query))
         case .unknown:
             EmptyView()   // codex drops internal/unknown signals; we don't echo them
         }
@@ -160,26 +154,6 @@ struct CodexTranscriptRows: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// app-server 的 `commandActions` 已经把 shell 拆成 read/list/search/unknown。
-    /// 这是官方协议提供的语义层，直接复用，不在客户端靠命令字符串猜。
-    @ViewBuilder
-    private func commandActivity(_ command: CodexThreadItem.CommandExec) -> some View {
-        let kinds: Set<CodexThreadItem.CommandAction.Kind> = Set(
-            command.actions.map { action in action.kind })
-        let failed = command.exitCode.map { code in code != 0 } ?? (command.status == "failed")
-        if failed {
-            activityRow(icon: "exclamationmark.triangle", text: "执行指令失败", bad: true)
-        } else if kinds.contains(.search) {
-            activityRow(icon: "magnifyingglass", text: "已搜索档案")
-        } else if kinds.contains(.read) || kinds.contains(.listFiles) {
-            activityRow(icon: "book", text: "已读取档案")
-        } else {
-            activityRow(
-                icon: "terminal",
-                text: command.status == "inProgress" ? "正在执行指令" : "已执行指令")
-        }
-    }
-
     private func activityRow(icon: String, text: String, bad: Bool = false) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
@@ -190,6 +164,50 @@ struct CodexTranscriptRows: View {
         .foregroundStyle(bad ? Theme.Palette.danger : Theme.Palette.inkMuted)
         .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func expandableActivityRow(_ presentation: CodexActivityPresentation) -> some View {
+        if presentation.details.isEmpty {
+            activityRow(
+                icon: presentation.icon,
+                text: presentation.headline,
+                bad: presentation.bad)
+        } else {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(presentation.details) { detail in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(detail.label)
+                                .font(Theme.Fonts.caption2.weight(.semibold))
+                                .foregroundStyle(Theme.Palette.inkMuted)
+                            Text(detail.value)
+                                .font(Theme.Fonts.monoSmall)
+                                .foregroundStyle(Theme.Palette.ink)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(.leading, 24)
+                .padding(.top, 5)
+                .padding(.bottom, 3)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: presentation.icon).frame(width: 16)
+                    Text(presentation.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(Theme.Fonts.footnote)
+                .foregroundStyle(
+                    presentation.bad ? Theme.Palette.danger : Theme.Palette.inkMuted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .tint(presentation.bad ? Theme.Palette.danger : Theme.Palette.inkMuted)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder

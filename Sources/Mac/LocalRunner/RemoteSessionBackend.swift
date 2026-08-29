@@ -159,6 +159,16 @@ private extension CodexThreadItem {
             put("cwd", command.cwd); put("status", command.status)
             put("aggregatedOutput", command.aggregatedOutput)
             if let exitCode = command.exitCode { item["exitCode"] = .number(Double(exitCode)) }
+            item["commandActions"] = .array(command.actions.map { action in
+                var fields: [String: SessionWireJSONValue] = [
+                    "type": .string(action.kind.rawValue),
+                ]
+                if let value = action.command { fields["command"] = .string(value) }
+                if let value = action.name { fields["name"] = .string(value) }
+                if let value = action.path { fields["path"] = .string(value) }
+                if let value = action.query { fields["query"] = .string(value) }
+                return .object(fields)
+            })
         case let .fileChange(change):
             item["type"] = .string("fileChange")
             put("status", change.status); put("summary", change.summary)

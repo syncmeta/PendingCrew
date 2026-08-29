@@ -173,7 +173,9 @@ final class RemoteSessionBackendTests: XCTestCase {
             .init(id: "p1", kind: .plan(text: "plan")),
             .init(id: "c1", kind: .commandExecution(.init(
                 command: "swift test", cwd: "/tmp/work", status: "completed",
-                aggregatedOutput: "ok", exitCode: 0))),
+                aggregatedOutput: "ok", exitCode: 0,
+                actions: [.init(kind: .read, command: "sed -n '1p' Package.swift",
+                                name: "Package.swift", path: "Package.swift", query: nil)]))),
             .init(id: "f1", kind: .fileChange(.init(status: "completed", summary: "a.swift"))),
             .init(id: "t1", kind: .toolCall(name: "crew.post", status: "completed")),
             .init(id: "w1", kind: .webSearch(query: "protocol")),
