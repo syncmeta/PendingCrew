@@ -21,6 +21,9 @@ struct CrewDeferredWakeQueue {
 
     private var pending: [String: [Delivery]] = [:]
     private var pendingKeys: Set<String> = []
+    /// 已从队列取出、正在等后端受理回执的条目。不能提前进 delivered：RPC
+    /// 拒绝时原 source id 必须还能回队列重试。
+    private var inFlight: [String: Delivery] = [:]
     private var deliveredKeys: Set<String> = []
     private var deliveredOrder: [String] = []
     private let deliveredCapacity: Int
@@ -30,10 +33,11 @@ struct CrewDeferredWakeQueue {
     }
 
     mutating func submit(_ delivery: Delivery, isBusy: Bool) -> Submission {
-        guard !pendingKeys.contains(delivery.key), !deliveredKeys.contains(delivery.key)
+        guard !pendingKeys.contains(delivery.key), inFlight[delivery.key] == nil,
+              !deliveredKeys.contains(delivery.key)
         else { return .duplicate }
         guard isBusy else {
-            rememberDelivered(delivery.key)
+            inFlight[delivery.key] = delivery
             return .deliver(delivery)
         }
         pending[delivery.targetSessionId, default: []].append(delivery)
@@ -52,14 +56,32 @@ struct CrewDeferredWakeQueue {
             pending[sessionId] = deliveries
         }
         pendingKeys.remove(delivery.key)
-        rememberDelivered(delivery.key)
+        inFlight[delivery.key] = delivery
         return delivery
+    }
+
+    /// 后端的受理结果才是 delivery 的提交点。拒绝/未就绪时把同一条放回队首；
+    /// accepted 后才进入最近已投递去重窗。
+    mutating func resolve(_ delivery: Delivery, as result: SessionWakeSubmission) {
+        guard inFlight.removeValue(forKey: delivery.key) != nil else { return }
+        switch result {
+        case .accepted:
+            rememberDelivered(delivery.key)
+        case .retry:
+            guard !pendingKeys.contains(delivery.key), !deliveredKeys.contains(delivery.key)
+            else { return }
+            pending[delivery.targetSessionId, default: []].insert(delivery, at: 0)
+            pendingKeys.insert(delivery.key)
+        }
     }
 
     @discardableResult
     mutating func remove(sessionId: String) -> [Delivery] {
-        let deliveries = pending.removeValue(forKey: sessionId) ?? []
+        var deliveries = pending.removeValue(forKey: sessionId) ?? []
         for delivery in deliveries { pendingKeys.remove(delivery.key) }
+        let active = inFlight.values.filter { $0.targetSessionId == sessionId }
+        for delivery in active { inFlight.removeValue(forKey: delivery.key) }
+        deliveries.append(contentsOf: active)
         return deliveries
     }
 

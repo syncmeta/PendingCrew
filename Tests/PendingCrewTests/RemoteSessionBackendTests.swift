@@ -21,6 +21,13 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(direct.interruptCount, 1)
         XCTAssertEqual(direct.clearQuotaCount, 1)
 
+        direct.wakeResults = [.retry, .accepted]
+        let firstWake = await remote.submitWake("wake-1")
+        let secondWake = await remote.submitWake("wake-2")
+        XCTAssertEqual(firstWake, .retry)
+        XCTAssertEqual(secondWake, .accepted)
+        XCTAssertEqual(direct.submittedWakes, ["wake-1", "wake-2"])
+
         let outcome = await remote.applyProfileSwitch(.init(knob: .model, value: "gpt-5"))
         XCTAssertEqual(outcome, .applied("Set model to gpt-5"))
         XCTAssertEqual(direct.profileCommands, [.init(knob: .model, value: "gpt-5")])
@@ -279,10 +286,16 @@ private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminal
     var approvalsReviewers: [CodexProtocol.ApprovalsReviewer] = []
     var terminalSnapshot: TerminalSnapshotEncoder.Snapshot?
     var codexHistory: [CodexThreadItem] = []
+    var wakeResults: [SessionWakeSubmission] = []
+    var submittedWakes: [String] = []
 
     init(kind: LocalCodingAgentKind) { self.kind = kind }
 
     func send(_ text: String) { sent.append(text) }
+    func submitWake(_ text: String) async -> SessionWakeSubmission {
+        submittedWakes.append(text)
+        return wakeResults.isEmpty ? .accepted : wakeResults.removeFirst()
+    }
     func interrupt() { interruptCount += 1 }
     func stop() { stopCount += 1 }
     func clearQuotaHealth() { clearQuotaCount += 1 }

@@ -25,6 +25,11 @@ final class CodexNotificationSequencer: @unchecked Sendable {
     }
 }
 
+struct CodexPreparedWhiteboardContext {
+    let text: String?
+    let commit: () -> Void
+}
+
 /// codex session over app-server. Conforms to SessionBackend so CrewSessionRun
 /// treats it like the terminal backend. Output goes to `transcript` (rendered by
 /// CodexTranscriptView). `send` runs a turn; `interrupt` cancels the active turn;
@@ -55,7 +60,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private let developerInstructions: String?
     private let mcpServers: [String: Any]?
     /// Pulls the unread-whiteboard string to inject as a leading text input each turn.
-    private let whiteboardProvider: () -> String?
+    private let whiteboardProvider: () -> CodexPreparedWhiteboardContext?
     /// Routes a codex approval request into the existing approval UI; returns the
     /// decision string ("accept"/"decline"/…) once the human answers.
     private let approvalProvider: (_ summary: String, _ decisions: [String]) async -> String
@@ -91,7 +96,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
          model: String?, effort: String?, resumeThreadId: String?,
          approvalsReviewer: CodexProtocol.ApprovalsReviewer = .autoReview,
          developerInstructions: String?, mcpServers: [String: Any]?,
-         whiteboardProvider: @escaping () -> String?,
+         whiteboardProvider: @escaping () -> CodexPreparedWhiteboardContext?,
          approvalProvider: @escaping (_ summary: String, _ decisions: [String]) async -> String,
          notifyUnanswerable: @escaping (_ summary: String) -> Void = { _ in },
          notifyTurnEnded: @escaping (_ lastAgentText: String) -> Void = { _ in },
@@ -280,12 +285,21 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     }
 
     func send(_ text: String) {
-        guard let threadId else { return }
+        Task { _ = await submitWake(text) }
+    }
+
+    func submitWake(_ text: String) async -> SessionWakeSubmission {
+        guard let threadId else { return .retry }
         let wb = whiteboardProvider()
-        Task {
-            _ = try? await connection.request(
+        do {
+            _ = try await connection.request(
                 method: "turn/start",
-                params: CodexProtocol.turnStartParams(threadId: threadId, text: text, whiteboard: wb))
+                params: CodexProtocol.turnStartParams(
+                    threadId: threadId, text: text, whiteboard: wb?.text))
+            wb?.commit()
+            return .accepted
+        } catch {
+            return .retry
         }
     }
 

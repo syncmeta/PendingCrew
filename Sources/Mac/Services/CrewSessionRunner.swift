@@ -104,6 +104,7 @@ final class CrewSessionRunner: ObservableObject {
     private var deferredWakes = CrewDeferredWakeQueue()
     private var deferredWakeCallbacks: [String: (CrewMailboxWakeLogic.ReceiptEvidence) -> Void] = [:]
     private let continuationStore = SessionContinuationStore()
+    private var deferredWakeRetryTasks: [String: Task<Void, Never>] = [:]
 
     /// 正在拉起中的目标（`captain:<crewId>` / `member:<sessionId>`）。
     ///
@@ -154,10 +155,9 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    /// 本地唤醒投递的唯一 busy 门禁。目标 idle 时立即 send；Codex 正在跑 turn 时
-    /// 留账，不打断当前 turn。`onDelivered` 只在真正调用 `run.send` 后执行，并带回
-    /// send 前取好的回执 baseline，供游标推进 / 投递回执接线使用；排队阶段绝不
-    /// 提前把消息标成已消费。
+    /// 本地唤醒投递的唯一 busy 门禁。目标 idle 时尝试提交；Codex 正在跑 turn 时
+    /// 留账，不打断当前 turn。`onDelivered` 只在后端确认请求受理后执行，不能把
+    /// 「调用了 send」当成「turn/start 成功」而提前推进游标。
     func deliverOrDeferWake(
         sourceKey: String,
         to run: CrewSessionRun,
@@ -169,13 +169,13 @@ final class CrewSessionRunner: ObservableObject {
             key: sourceKey + "|target:" + run.sessionId,
             targetSessionId: run.sessionId,
             text: text)
-        switch deferredWakes.submit(delivery, isBusy: run.backend.isBusy) {
+        switch deferredWakes.submit(delivery, isBusy: run.activityIsWorking) {
         case let .deliver(ready):
-            let baseline = wakeReceiptEvidence(for: run)
-            run.send(ready.text)
-            onDelivered?(baseline)
+            if let onDelivered { deferredWakeCallbacks[delivery.key] = onDelivered }
+            attemptWakeDelivery(ready, to: run)
         case .deferred:
             if let onDelivered { deferredWakeCallbacks[delivery.key] = onDelivered }
+            scheduleDeferredWakeRetry(for: run)
         case .duplicate:
             break
         }
@@ -186,11 +186,8 @@ final class CrewSessionRunner: ObservableObject {
     private func runBecameIdle(_ run: CrewSessionRun) {
         guard run.status == .running, !run.backend.isBusy, !run.activityIsWorking else { return }
         if let delivery = deferredWakes.popWhenIdle(sessionId: run.sessionId) {
-            let callback = deferredWakeCallbacks.removeValue(forKey: delivery.key)
-            let baseline = wakeReceiptEvidence(for: run)
-            run.send(delivery.text)
-            callback?(baseline)
-            // 这次 idle 已经被本地补投占用；`send` 正在起下一 turn，别同时让
+            attemptWakeDelivery(delivery, to: run)
+            // 这次 idle 已经被本地补投占用；`turn/start` 正在受理下一 turn，别同时让
             // mailbox 的异步重拉抢同一空闲窗口。下一次 idle 再处理服务端 inbox。
             return
         }
@@ -203,12 +200,55 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
+    private func attemptWakeDelivery(
+        _ delivery: CrewDeferredWakeQueue.Delivery, to run: CrewSessionRun
+    ) {
+        let baseline = wakeReceiptEvidence(for: run)
+        Task { @MainActor [weak self, weak run] in
+            guard let self, let run, run.status == .running else { return }
+            let result = await run.backend.submitWake(delivery.text)
+            guard run.status == .running else {
+                self.discardDeferredWakes(sessionId: delivery.targetSessionId)
+                return
+            }
+            self.deferredWakes.resolve(delivery, as: result)
+            switch result {
+            case .accepted:
+                self.deferredWakeCallbacks.removeValue(forKey: delivery.key)?(baseline)
+                if self.deferredWakes.pendingCount(sessionId: run.sessionId) > 0 {
+                    self.scheduleDeferredWakeRetry(for: run)
+                } else {
+                    self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
+                }
+            case .retry:
+                self.scheduleDeferredWakeRetry(for: run)
+            }
+        }
+    }
+
+    /// 状态快照可能仍显示 idle，而真实 app-server 正在收尾上一 turn。拒绝后的原
+    /// delivery 已回队列；短延迟后主动再试，不依赖第二条白板消息或新的 idle 边沿。
+    private func scheduleDeferredWakeRetry(for run: CrewSessionRun) {
+        deferredWakeRetryTasks[run.sessionId]?.cancel()
+        deferredWakeRetryTasks[run.sessionId] = Task { @MainActor [weak self, weak run] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, let self, let run, run.status == .running else { return }
+            self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)
+            if run.activityIsWorking {
+                self.scheduleDeferredWakeRetry(for: run)
+            } else {
+                self.runBecameIdle(run)
+            }
+        }
+    }
+
     private func discardDeferredWakes(sessionId: String) {
+        deferredWakeRetryTasks.removeValue(forKey: sessionId)?.cancel()
         let deliveries = deferredWakes.remove(sessionId: sessionId)
         for delivery in deliveries { deferredWakeCallbacks.removeValue(forKey: delivery.key) }
     }
 
-    /// 必须在 `run.send` **之前**取 baseline：Codex 的短 turn 可能快到 send 返回后、
+    /// 必须在提交 `turn/start` **之前**取 baseline：Codex 的短 turn 可能快到 RPC 返回后、
     /// confirmWake 建 Task 前就产生第一笔活动。白板 id 同样比时间戳可靠（本地 ISO
     /// 时间戳无小数，同一秒内比较 Date 会漏掉刚发的消息）。
     private func wakeReceiptEvidence(for run: CrewSessionRun) -> CrewMailboxWakeLogic.ReceiptEvidence {
@@ -1190,14 +1230,12 @@ final class CrewSessionRunner: ObservableObject {
 
     // MARK: - codex backend providers
 
-    /// codex 每轮 turn 前注入未读白板的 provider —— 复用 claude PostToolUse hook 的
-    /// 同一份 `HookEmitter`（per-session 游标读未读 + 渲染 + 推进游标），区别只是
-    /// 这里在 app 进程内直接调，不经 helper 子进程。返回的字符串作为 `turn/start`
-    /// 的首条 text input 前置注入。无未读 → nil（不注入）。best-effort：
-    /// 任何失败（store 读不出 / 渲染失败）→ nil，turn 照常跑（只是这轮没白板）。
+    /// codex 每轮 turn 前准备未读白板上下文 —— 复用 claude PostToolUse hook 的
+    /// 同一份 `HookEmitter`，但拆成 prepare / commit：只有 `turn/start` RPC 确认
+    /// 受理后才推进 per-session 游标。无未读 → nil（不注入）。
     nonisolated static func makeWhiteboardProvider(
         crewId: String, sessionId: String, captain: Bool = false
-    ) -> () -> String? {
+    ) -> () -> CodexPreparedWhiteboardContext? {
         let dir = LocalWhiteboardStore.defaultDirectory
         return {
             // captain → 注入多带全机 crew 组织树概览（#24 机长视野,与 claude 的
@@ -1205,15 +1243,10 @@ final class CrewSessionRunner: ObservableObject {
             let emitter = HookEmitter(
                 store: LocalWhiteboardStore(directory: dir),
                 crewId: crewId, sessionId: sessionId, cursorDir: dir, isCaptain: captain)
-            // HookEmitter 吐的是 claude hook 信封 JSON；codex 这边只要里头的纯文本
-            // additionalContext，剥一层拿渲染好的未读串。
-            guard let json = emitter.emitAndAdvance(),
-                  let data = json.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let hook = obj["hookSpecificOutput"] as? [String: Any],
-                  let ctx = hook["additionalContext"] as? String, !ctx.isEmpty
-            else { return nil }
-            return ctx
+            guard let prepared = emitter.prepareContext() else { return nil }
+            return CodexPreparedWhiteboardContext(
+                text: prepared.context,
+                commit: { emitter.commit(prepared) })
         }
     }
 

@@ -97,6 +97,11 @@ private struct CaptainAwarenessCooldownState: Codable {
 /// 的教学统一放在 world-model 系统提示（session-world-model.zh.md §9），不在每条
 /// 注入里重复（Spike 2 的警惕问题由 world-model 兜住）。
 struct HookEmitter {
+    struct PreparedContext {
+        let context: String?
+        fileprivate let last: LocalWhiteboardMessage
+    }
+
     let store: LocalWhiteboardStore
     let crewId: String
     let sessionId: String
@@ -122,9 +127,9 @@ struct HookEmitter {
     /// 都走默认值 `Date()`，行为不变；单测传入自己造的固定时刻，才能让判定与机器
     /// 负载无关（否则用例从写快照到 emit 之间的墙上时间会参与判定，跑全量时飘红）。
     func emitAndAdvance(now: Date = Date()) -> String? {
-        guard let pending = pendingContext(now: now) else { return nil }
+        guard let pending = prepareContext(now: now) else { return nil }
         guard let context = pending.context else {
-            cursor.advance(to: pending.last, in: store)
+            commit(pending)
             return nil
         }
         let json: [String: Any] = ["hookSpecificOutput": [
@@ -133,7 +138,7 @@ struct HookEmitter {
         ]]
         guard let data = try? JSONSerialization.data(withJSONObject: json),
               let s = String(data: data, encoding: .utf8) else { return nil }
-        cursor.advance(to: pending.last, in: store)
+        commit(pending)
         return s
     }
 
@@ -141,19 +146,25 @@ struct HookEmitter {
     /// Claude 新 session 的第一轮没有 PostToolUse 事件，启动 prompt 走这条；Codex 的
     /// `turn/start.additionalContext` 也可直接复用，不必先包 JSON 再拆 JSON。
     func emitContextAndAdvance(now: Date = Date()) -> String? {
-        guard let pending = pendingContext(now: now) else { return nil }
-        cursor.advance(to: pending.last, in: store)
+        guard let pending = prepareContext(now: now) else { return nil }
+        commit(pending)
         return pending.context
     }
 
-    private func pendingContext(now: Date) -> (context: String?, last: LocalWhiteboardMessage)? {
+    /// Codex `turn/start` 的两阶段读取：准备只读，不推进游标；RPC 确认受理后调用
+    /// `commit`。拒绝/断线时保留未读，下一次提交仍能带上原消息。
+    func prepareContext(now: Date = Date()) -> PreparedContext? {
         let unread = cursor.unread(in: store)
         guard let last = unread.last else { return nil }
         // 要的是「**看得见吗**」，不是「该叫醒吗」—— 这条路每轮都跑，本身就不唤醒
         // 任何人，只决定渲染什么进上下文。只 @ 了人类的消息在这里必须可见（2026-08-23
         // 修的正主：过去它对所有 agent 隐身）。
         let mine = CrewWhiteboardVisibility.visible(unread, to: sessionId, isCaptain: isCaptain)
-        return (mine.isEmpty ? nil : render(mine, now: now), last)
+        return PreparedContext(context: mine.isEmpty ? nil : render(mine, now: now), last: last)
+    }
+
+    func commit(_ prepared: PreparedContext) {
+        cursor.advance(to: prepared.last, in: store)
     }
 
     private func render(_ msgs: [LocalWhiteboardMessage], now: Date) -> String {

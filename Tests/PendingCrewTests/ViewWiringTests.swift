@@ -162,6 +162,31 @@ final class ViewWiringTests: XCTestCase {
             XCTAssertFalse(source.contains("CrewLocalMentionDelivery.injectAndWake"),
                            "\(file) 又绕过白板 message id 直投，人类消息会重复唤醒")
         }
+        let roster = try Self.text(of: "CrewSessionWindowView.swift")
+        guard let subscribe = roster.range(of: "private func subscribeRoster() async"),
+              let refresh = roster.range(of: "private func refreshRoster() async") else {
+            return XCTFail("找不到 roster 白板订阅边界")
+        }
+        let body = String(roster[subscribe.lowerBound..<refresh.lowerBound])
+        XCTAssertFalse(body.contains("sessionRunner.startCaptain"),
+                       "右栏观察器仍会与白板唯一 waker 抢拉 captain，赢家可能不带原消息")
+
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("await run.backend.submitWake"),
+                      "runner 仍把无回执 send 当作 wake 已投递")
+        XCTAssertFalse(runner.contains("run.send(ready.text)"),
+                       "瞬时 idle 后仍直接 fire-and-forget，拒绝会被误消费")
+        XCTAssertTrue(runner.contains("deferredWakes.resolve(delivery, as: result)"))
+        XCTAssertTrue(runner.contains("scheduleDeferredWakeRetry(for: run)"),
+                      "拒绝后仍要等第二条消息/新 idle 边沿，不能自行补投")
+        let codex = try Self.text(of: "CodexAppServerBackend.swift")
+        XCTAssertTrue(codex.contains("func submitWake(_ text: String) async"),
+                      "Codex wake 没有以 turn/start RPC 受理为边界")
+        XCTAssertTrue(codex.contains("wb?.commit()"),
+                      "Codex 仍可能在 turn/start 受理前推进白板消费游标")
+        let remote = try Self.text(of: "RemoteSessionBackend.swift")
+        XCTAssertTrue(remote.contains("op: \"submitWake\""),
+                      "协议传输层没有转发 wake 受理回执")
     }
 
     /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。

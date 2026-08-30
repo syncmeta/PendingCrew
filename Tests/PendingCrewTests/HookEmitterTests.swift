@@ -34,6 +34,21 @@ final class HookEmitterTests: XCTestCase {
         XCTAssertNil(emitter(store, dir).emitAndAdvance())
     }
 
+    func testPreparedContextDoesNotConsumeUntilTurnStartIsAccepted() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        store.appendUserMessage(crewId: "c", text: "现场原消息")
+        let source = emitter(store, dir)
+
+        let rejectedAttempt = source.prepareContext()
+        XCTAssertNotNil(rejectedAttempt?.context)
+        XCTAssertNotNil(source.prepareContext()?.context,
+                        "只准备/请求被拒绝时游标不能推进，原消息仍须未读")
+
+        source.commit(rejectedAttempt!)
+        XCTAssertNil(source.prepareContext(), "确认受理后才消费，而且只消费一次")
+    }
+
     func testOnlyNewMessagesAfterCursor() {
         let dir = tempDir()
         let store = LocalWhiteboardStore(directory: dir)
