@@ -161,6 +161,8 @@ targets:
       - path: Sources/Stores/LocalApprovalStore.swift
       # 定时唤醒账本（schedule_wakeup 持久化，#528 从 runner 抽出），同自包含。
       - path: Sources/Stores/LocalWakeupStore.swift
+      # 本轮显式续跑租约：helper 登记、turn completion 封存、runner 一次性消费。
+      - path: Sources/Stores/SessionContinuationStore.swift
       # agent 侧会话号账本（Todo #28：重启成员时 --resume / thread/resume 回原对话），同自包含。
       - path: Sources/Stores/LocalAgentSessionStore.swift
       # 现有 session → 机长的可恢复交接意图。安装/重启跨进程续接，纯 Foundation。

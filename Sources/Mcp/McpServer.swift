@@ -36,6 +36,9 @@ final class McpServer {
     /// **人类的**那本 Todo（`TodoLedger.human`，Todo #62）：方向反过来 —— agent 经
     /// `add_human_todo` 提条目请人拍板，人类在 app 里回应。与 store 同 `--dir`。
     let humanTodos: LocalTodoStore
+    /// Current-turn one-shot continuation promises. Unlike Todo/plan ledgers this
+    /// is executable control state and is scoped to this exact session turn.
+    let continuations: SessionContinuationStore
     /// 本 session 跑在哪家 runner 上（helper `--agent claude|codex`）。
     /// `set_session_profile` 拿它挑对照哪张模型表；nil（旧调用/没传）→ 两家都对照，
     /// 任一家认得就不吭声（宁可少说，也别对着错的表瞎报）。
@@ -53,6 +56,7 @@ final class McpServer {
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
          plans: CockpitPlanStore? = nil,
          humanTodos: LocalTodoStore? = nil,
+         continuations: SessionContinuationStore? = nil,
          agentKey: String? = nil,
          attachmentRoot: URL? = nil) {
         self.store = store
@@ -69,6 +73,8 @@ final class McpServer {
         // 没显式传就照着 agent 那本的目录开一份 human 的 —— 别让调用方漏传一个
         // 就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
         self.humanTodos = humanTodos ?? self.todos.sibling(.human)
+        self.continuations = continuations ?? SessionContinuationStore(
+            directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         self.agentKey = agentKey
         self.attachmentRoot = attachmentRoot ?? CrewChatAttachmentStore.defaultDirectory
     }
@@ -198,6 +204,17 @@ final class McpServer {
                             "after_minutes": ["type": "number", "description": "多少分钟后唤醒（1–1440）。"],
                             "at": ["type": "string", "description": "ISO8601 时刻（如 2026-07-05T04:45:00+08:00）。与 after_minutes 二选一。"],
                             "note": ["type": "string", "description": "唤醒时带回给你的备注：醒来该继续什么、上下文在哪。"],
+                        ],
+                        "required": ["note"],
+                    ],
+                ],
+                [
+                    "name": "continue_work",
+                    "description": "为**当前这一轮**登记一次持久、一次性的续跑承诺。只在你准备结束本轮、但仍有明确且无需外部输入就能继续的安全工作时调用；note 写下一轮第一件事。必须作为本轮最后一个工具调用。已完成、明确阻塞、正在等人/外部系统，或只是历史 Todo/plan 仍是 in_progress 时都不要调用。turn 真正 completed 后才会起下一轮；同一承诺最多消费一次，app 重启也不丢。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "note": ["type": "string", "description": "下一轮第一件事与必要上下文，简短且可独立执行。"],
                         ],
                         "required": ["note"],
                     ],
@@ -518,6 +535,16 @@ final class McpServer {
 
     private func handleToolCall(id: Any?, name: String?, args: [String: Any]) -> String? {
         switch name {
+        case "continue_work":
+            let note = ((args["note"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !note.isEmpty else {
+                return toolResult(id: id, text: "ERROR: note 不能为空；写清下一轮第一件事。")
+            }
+            guard continuations.arm(crewId: crewId, sessionId: sessionId, note: note) else {
+                return toolResult(id: id, text: "本 session 已有一条未消费的续跑承诺；没有重复登记。")
+            }
+            return toolResult(id: id, text: "已登记本轮一次性续跑；当前 turn 真正结束后执行，最多一次。")
         case "post_to_crew":
             let message = (args["message"] as? String) ?? ""
             // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与

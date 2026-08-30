@@ -2,6 +2,29 @@
 import Foundation
 import Combine
 
+/// `CodexAppServerConnection` reports notifications in arrival order, but spawning
+/// one independent MainActor Task for each event discarded that ordering. A single
+/// AsyncStream consumer preserves the connection order across the actor hop.
+final class CodexNotificationSequencer: @unchecked Sendable {
+    struct Event: @unchecked Sendable {
+        let method: String
+        let params: [String: Any]
+    }
+
+    let stream: AsyncStream<Event>
+    private let continuation: AsyncStream<Event>.Continuation
+
+    init() {
+        var captured: AsyncStream<Event>.Continuation!
+        stream = AsyncStream { captured = $0 }
+        continuation = captured
+    }
+
+    func yield(method: String, params: [String: Any]) {
+        continuation.yield(.init(method: method, params: params))
+    }
+}
+
 /// codex session over app-server. Conforms to SessionBackend so CrewSessionRun
 /// treats it like the terminal backend. Output goes to `transcript` (rendered by
 /// CodexTranscriptView). `send` runs a turn; `interrupt` cancels the active turn;
@@ -57,6 +80,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// 真正可接活。不能拿构造时默认的 `.running` 冒充启动成功。
     var isLaunchReady: Bool { threadId?.isEmpty == false }
     private var activeTurnId: String?
+    private let notificationSequencer = CodexNotificationSequencer()
+    private var notificationTask: Task<Void, Never>?
     private var approvalsReviewer: CodexProtocol.ApprovalsReviewer
     /// 已通知过的 server-request method —— 同一种一轮只喊一次，别让某个每回合都来的
     /// 请求把群刷爆（同 health 的「每 Kind 一次」纪律）。
@@ -96,18 +121,21 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         // status 就一直停在 `.running` + isWorking 恒假 → 点名报「空闲」,机长照常
         // 派活。看门狗盯「进程没了」「到点还没握上手」，两种都翻 launchFailed。
         startLaunchWatchdog()
+        let eventStream = notificationSequencer.stream
+        notificationTask = Task { @MainActor [weak self] in
+            for await event in eventStream {
+                guard let self, self.status == .running else { return }
+                self.handleNotification(method: event.method, params: event.params)
+            }
+        }
         Task {
             do {
                 try await connection.start(
                     onServerRequest: { [weak self] id, method, params in
                         Task { await self?.handleServerRequest(id: id, method: method, params: params) }
                     },
-                    onNotification: { [weak self] method, params in
-                        Task { @MainActor in
-                            self?.protocolNotificationSink?(method, params)
-                            self?.transcript.apply(method: method, params: params)
-                            self?.trackTurn(method: method, params: params)
-                        }
+                    onNotification: { [notificationSequencer] method, params in
+                        notificationSequencer.yield(method: method, params: params)
                     },
                     onTerminate: { [weak self] code in
                         Task { @MainActor in
@@ -275,15 +303,37 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         status = .exited(nil)
         isWorking = false
         launchWatchdog?.cancel()   // 主动停的别被自检倒打一耙报成「拉起失败」
+        notificationTask?.cancel()
         Task { await connection.terminate() }
+    }
+
+    private func handleNotification(method: String, params: [String: Any]) {
+        transcript.apply(method: method, params: params)
+        // Update/seal local lifecycle before relaying the event. The remote facade
+        // may publish idle synchronously, and its idle callback must already see a
+        // ready continuation lease.
+        trackTurn(method: method, params: params)
+        protocolNotificationSink?(method, params)
     }
 
     private func trackTurn(method: String, params: [String: Any]) {
         if let detected = CodexProtocol.sessionHealth(method: method, params: params) {
             health = detected
         }
-        if method == "turn/started" { activeTurnId = (params["turn"] as? [String: Any])?["id"] as? String; isWorking = true }
+        if method == "turn/started" {
+            activeTurnId = (params["turn"] as? [String: Any])?["id"] as? String
+            isWorking = true
+        } else if method.hasPrefix("item/") {
+            // First-hand transcript activity repairs a missing/delayed start edge.
+            isWorking = true
+        }
         if method == "turn/completed" {
+            let completedId = (params["turn"] as? [String: Any])?["id"] as? String
+            if let activeTurnId, let completedId, activeTurnId != completedId {
+                return
+            }
+            // Seal the exact turn's continuation before publishing idle.
+            notifyTurnEnded(lastAgentText())
             activeTurnId = nil
             isWorking = false
             // A later successful turn is first-hand proof that a sticky quota
@@ -294,10 +344,6 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                health?.isQuotaRelated == true {
                 health = nil
             }
-            // #25：一轮结束就把收尾正文喂出去（发不发由 SessionTurnTrace 判）。
-            // 取本轮最后一条 agent 正文 —— 与 claude Stop hook 的 `last_assistant_message`
-            // 等价物；transcript 的 item/completed 是权威终稿，不会拿到半截流式内容。
-            notifyTurnEnded(lastAgentText())
         }
     }
 

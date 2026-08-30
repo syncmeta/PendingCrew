@@ -156,6 +156,22 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertFalse(remote.isBusy)
     }
 
+    func testLateOldCompletionCannotMakeNewRemoteTurnIdle() {
+        let bridge = InProcessSessionProtocolBridge()
+        let notification = bridge.codexNotificationSink(sessionId: "codex-overlap")
+        let remote = bridge.expose(
+            sessionId: "codex-overlap", backend: ProtocolTestBackend(kind: .codex))
+
+        notification("turn/started", ["turn": ["id": "turn-a"]])
+        notification("turn/started", ["turn": ["id": "turn-b"]])
+        notification("turn/completed", ["turn": ["id": "turn-a"]])
+
+        XCTAssertTrue(remote.isWorking)
+        XCTAssertTrue(remote.isBusy)
+        XCTAssertTrue(remote.transcript?.turnActive == true)
+        XCTAssertEqual(remote.transcript?.activeTurnId, "turn-b")
+    }
+
     func testAttachBranchesTerminalSnapshotFromCodexStructuredHistory() {
         let terminal = ProtocolTestBackend(kind: .claudeCode)
         terminal.terminalSnapshot = .init(cols: 80, rows: 25, bytes: Array("screen".utf8))

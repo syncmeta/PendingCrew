@@ -63,6 +63,11 @@ struct McpTurnHook {
                            lastTurnId: turnId ?? prev.lastTurnId,
                            lastAssistantMessage: lastAgentText,
                            awaitingQuestion: SessionTurnTrace.trailingQuestion(from: lastAgentText)))
+        // The tool only arms. Stop is the authoritative boundary that makes the
+        // promise runnable, so directory activity during tool execution cannot
+        // start a second prompt inside the current turn.
+        SessionContinuationStore(directory: markerDirectory).finishTurn(
+            crewId: crewId, sessionId: sessionId, outcome: .continuing)
         return post != nil
     }
 }

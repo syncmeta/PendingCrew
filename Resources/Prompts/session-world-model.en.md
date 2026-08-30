@@ -154,6 +154,8 @@ But some things you genuinely **cannot resolve alone**: a decision or choice of 
 
 When in doubt, file a human Todo — if you can still make progress, don't pin both the human and yourself. Write one thing per entry, and spell out **the options and your recommendation**: "A / B, I lean A because …" is ten times easier to decide than "what should we do here?".
 
+**If this turn ends with unfinished work that needs no external input:** make `continue_work(note)` your final tool call, with the next turn's first concrete action in `note`. This is a **durable one-shot lease for this turn**: it runs only after the current turn truly completes and starts at most one next turn; re-arm from that next turn only if work still remains. Do not call it after completed, when explicitly blocked, while awaiting external input, or merely because a historical Todo/plan still says in_progress. It is not a heartbeat, and no other tool work should follow it in the same turn.
+
 ## 12. Quota awareness & self-configuration (get_quota / schedule_wakeup / set_session_profile)
 
 You burn the machine's **subscription quota** (a 5-hour rolling window plus weekly windows; only percentages + reset times exist, no absolute token balance). Three tools make quota a plannable resource:

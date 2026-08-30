@@ -51,6 +51,7 @@ protocol SessionProtocolCodexHistoryProviding: AnyObject {
 @MainActor
 protocol SessionWakeActivityProviding: AnyObject {
     var wakeActivityRevision: UInt64 { get }
+    var hasActiveStructuredTurn: Bool { get }
 }
 
 @MainActor
@@ -107,6 +108,7 @@ extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
     SessionWakeActivityProviding {
     var protocolCodexHistory: [CodexThreadItem] { transcript.items }
     var wakeActivityRevision: UInt64 { transcript.activityRevision }
+    var hasActiveStructuredTurn: Bool { transcript.turnActive }
 
     func screenText(maxLines: Int) -> String {
         let items = transcript.items.suffix(max(0, maxLines))
@@ -233,6 +235,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     private(set) var lastCompletedSnapshotBytes: [UInt8] = []
     private(set) var completedSnapshotCount = 0
     var wakeActivityRevision: UInt64 { transcript?.activityRevision ?? 0 }
+    var hasActiveStructuredTurn: Bool { transcript?.turnActive ?? false }
     private(set) var requestedTerminalSize = TerminalSize(cols: 80, rows: 25)
     private var handle: UInt32?
     private var snapshotBytes: [UInt8] = []
@@ -331,7 +334,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
 
     fileprivate func apply(state: SessionProtocolState) {
         status = state.status.sessionStatus
-        isWorking = state.isWorking
+        isWorking = state.isWorking || transcript?.turnActive == true
         displayIsTyping = state.displayIsTyping
         health = state.health?.health
         pendingDecision = state.pendingDecision.map {
@@ -380,12 +383,14 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
         transcript?.apply(method: method, params: params.mapValues(\.foundationObject))
         // codex notification 比下一份 state snapshot 更早到 app。立刻镜像 turn
         // 生命周期，避免这段窗口里 inspect_session / 状态点谎报“空闲”。
-        if method == "turn/started" {
-            isWorking = true
-            displayIsTyping = true
+        if method == "turn/started" || method.hasPrefix("item/") {
+            isWorking = transcript?.turnActive == true
+            displayIsTyping = isWorking
         } else if method == "turn/completed" {
-            isWorking = false
-            displayIsTyping = false
+            // Transcript applies the turn-id ownership guard. A late completion
+            // for turn A therefore leaves turn B active here as well.
+            isWorking = transcript?.turnActive == true
+            displayIsTyping = isWorking
         }
     }
 

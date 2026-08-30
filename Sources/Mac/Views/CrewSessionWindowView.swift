@@ -588,7 +588,7 @@ struct CrewSessionWindowView: View {
             // rateLimited，卡在待决策上的 session 会被画成「空闲」。颜色见 SessionStatusDot。
             sessionStatus: CrewSessionStateDerivation.state(
                 isRunning: run.status == .running, health: run.health,
-                isWorking: run.isWorking, awaitingDecision: run.pendingDecision != nil,
+                isWorking: run.activityIsWorking, awaitingDecision: run.pendingDecision != nil,
                 awaitingReply: run.awaitingReply != nil),
             isSession: true)
     }
@@ -1096,7 +1096,7 @@ private struct SessionBarItemView: View {
     @ViewBuilder private var statusDot: some View {
         let state = CrewSessionStateDerivation.state(
             isRunning: run.status == .running, health: run.health,
-            isWorking: run.isWorking, awaitingDecision: run.pendingDecision != nil,
+            isWorking: run.activityIsWorking, awaitingDecision: run.pendingDecision != nil,
             awaitingReply: run.awaitingReply != nil)
         if let dot = SessionStatusDotDerivation.dot(state: state) {
             if dot.breathes {

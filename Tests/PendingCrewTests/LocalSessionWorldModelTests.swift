@@ -34,6 +34,7 @@ final class LocalSessionWorldModelTests: XCTestCase {
         XCTAssertTrue(out.contains("Max 5x"), "Claude subscription tier reaches world model")
         XCTAssertTrue(out.contains("Plus"), "Codex subscription tier reaches world model")
         XCTAssertTrue(out.contains("禁止据此编造绝对额度"), "absolute quota must stay unknown")
+        XCTAssertTrue(out.contains("continue_work(note)"), "explicit one-shot continuation lease reaches agents")
     }
 
     func testGUIAutomationBanReachesRenderedPrompt() throws {

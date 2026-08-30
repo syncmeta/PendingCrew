@@ -32,7 +32,25 @@ final class CodexTranscript: ObservableObject {
             activeTurnId = (params["turn"] as? [String: Any])?["id"] as? String
             turnActive = true
         case "turn/completed":
+            let completedId = (params["turn"] as? [String: Any])?["id"] as? String
+            // A completion belongs to one turn. An independently scheduled old
+            // notification must never clear a newer active turn.
+            if let activeTurnId, let completedId, activeTurnId != completedId { break }
             turnActive = false; activeTurnId = nil
+        case _ where method.hasPrefix("item/"):
+            // Item/reasoning/tool activity is first-hand proof of a live turn even
+            // if turn/started was delayed or lost by the app-side relay.
+            turnActive = true
+            applyItem(method: method, params: params)
+            return
+        default:
+            break
+        }
+        applyItem(method: method, params: params)
+    }
+
+    private func applyItem(method: String, params: [String: Any]) {
+        switch method {
         case "item/reasoning/summaryTextDelta":
             guard let id = params["itemId"] as? String,
                   let delta = params["delta"] as? String else { return }

@@ -103,6 +103,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 运行期间只登记，`turn/completed` 发布 idle 后自动起下一 turn。
     private var deferredWakes = CrewDeferredWakeQueue()
     private var deferredWakeCallbacks: [String: (CrewMailboxWakeLogic.ReceiptEvidence) -> Void] = [:]
+    private let continuationStore = SessionContinuationStore()
 
     /// 正在拉起中的目标（`captain:<crewId>` / `member:<sessionId>`）。
     ///
@@ -183,7 +184,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 后端发布 busy -> idle 时补一条。再读一次 `backend.isBusy`，挡住 idle 事件排队
     /// 到主线程期间目标已经开始另一 turn 的窄竞态。
     private func runBecameIdle(_ run: CrewSessionRun) {
-        guard run.status == .running, !run.backend.isBusy else { return }
+        guard run.status == .running, !run.backend.isBusy, !run.activityIsWorking else { return }
         if let delivery = deferredWakes.popWhenIdle(sessionId: run.sessionId) {
             let callback = deferredWakeCallbacks.removeValue(forKey: delivery.key)
             let baseline = wakeReceiptEvidence(for: run)
@@ -192,6 +193,13 @@ final class CrewSessionRunner: ObservableObject {
             // 这次 idle 已经被本地补投占用；`send` 正在起下一 turn，别同时让
             // mailbox 的异步重拉抢同一空闲窗口。下一次 idle 再处理服务端 inbox。
             return
+        }
+        if let lease = continuationStore.takeReady(sessionId: run.sessionId) {
+            run.send("""
+            继续工作（你上一轮用 continue_work 留下的一次性承诺）：
+            \(lease.note)
+            先核对当前状态再继续；若这一轮结束时仍有可立即推进的工作，需重新调用 continue_work。已完成、阻塞或等外部输入则不要续约。
+            """)
         }
     }
 
@@ -208,7 +216,7 @@ final class CrewSessionRunner: ObservableObject {
         let latestPostId = LocalWhiteboardStore.shared.list(crewId: run.crewId)
             .last { $0.senderSessionId == run.sessionId }?.id
         return .init(
-            isWorking: run.backend.isBusy || run.backend.isWorking,
+            isWorking: run.activityIsWorking,
             activityRevision: revision,
             latestPostId: latestPostId)
     }
@@ -634,7 +642,7 @@ final class CrewSessionRunner: ObservableObject {
             // "rateLimited"（Todo #10 层2）、拉起失败单列 "launchFailed"（#541）：
             // 机长点名一眼分得清「等额度重置中」「从来没起来」「真空闲」，不误派活。
             let state = CrewSessionStateDerivation.state(
-                isRunning: run.status == .running, health: run.health, isWorking: run.isWorking,
+                isRunning: run.status == .running, health: run.health, isWorking: run.activityIsWorking,
                 awaitingDecision: run.pendingDecision != nil,
                 awaitingReply: run.awaitingReply != nil)
             let healthDetail: String?
@@ -788,7 +796,7 @@ final class CrewSessionRunner: ObservableObject {
         // 与点名快照同一套推导（`CrewSessionStateDerivation`），只是换成中文标签。
         let state: String
         switch CrewSessionStateDerivation.state(
-            isRunning: run.status == .running, health: run.health, isWorking: run.isWorking,
+            isRunning: run.status == .running, health: run.health, isWorking: run.activityIsWorking,
             awaitingDecision: run.pendingDecision != nil,
             awaitingReply: run.awaitingReply != nil) {
         case CrewSessionStateDerivation.launchFailed:
@@ -1294,6 +1302,8 @@ final class CrewSessionRunner: ObservableObject {
                                lastTurnId: prev.lastTurnId,
                                lastAssistantMessage: text,
                                awaitingQuestion: SessionTurnTrace.trailingQuestion(from: text)))
+            SessionContinuationStore(directory: dir).finishTurn(
+                crewId: crewId, sessionId: sessionId, outcome: .continuing)
         }
     }
 
@@ -2125,6 +2135,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 干活中(跑回合) vs 空闲(存活等指令) —— 镜像后端 `isWorking`，驱动头像/切换条状态点。
     /// (与 backend.isBusy 区分:那个是唤醒注入门禁;这个是 UI 活跃信号,见 SessionBackend。)
     @Published private(set) var isWorking = false
+    /// Structured Codex activity is authoritative over a stale state frame. Item
+    /// revisions mark the turn active and only a matching turn/completed clears it.
+    var activityIsWorking: Bool {
+        backend.isBusy || backend.isWorking
+            || (backend as? SessionWakeActivityProviding)?.hasActiveStructuredTurn == true
+    }
     /// 群聊「正在输入」气泡用的显示态 —— 镜像后端 `displayIsTyping`（Todo #24）。
     /// 与 `isWorking` 分家的理由见 `SessionBackend.displayIsTyping`：那条是原始
     /// 活跃信号（回执/上报/状态点/限额恢复都吃），这条只驱动一个气泡，做了

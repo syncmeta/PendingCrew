@@ -465,7 +465,7 @@ struct CrewChatView: View {
                     id: run.sessionId, memberKind: "code_session", userId: nil, botId: nil,
                     codeSessionId: run.sessionId, displayName: run.displayName, role: nil,
                     status: "active", representsCrewId: nil,
-                    sessionStatus: run.isWorking ? "running" : nil)
+                    sessionStatus: run.activityIsWorking ? "running" : nil)
             }
         return members + runMembers
         #else
@@ -507,7 +507,7 @@ struct CrewChatView: View {
               let run = sessionRunner.runs.first(where: { $0.sessionId == sid }) else { return sender }
         s.sessionStatus = CrewSessionStateDerivation.state(
             isRunning: run.status == .running, health: run.health,
-            isWorking: run.isWorking, awaitingDecision: run.pendingDecision != nil,
+            isWorking: run.activityIsWorking, awaitingDecision: run.pendingDecision != nil,
             awaitingReply: run.awaitingReply != nil)
         return s
         #else
