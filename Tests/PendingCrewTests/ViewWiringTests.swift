@@ -35,8 +35,6 @@ final class ViewWiringTests: XCTestCase {
          "成员列表不按创建时间倒序（Todo #15 失效）"),
         ("UncaughtExceptionLog.install", "UncaughtExceptionLog.swift",
          "未捕获异常不留痕，下次闪退又只剩一份没有异常名的 .ips"),
-        ("UpdateSettingsSection(", "UpdateSettingsSection.swift",
-         "设置里没有「更新」区，检查更新点不到（Sparkle 接入失效）"),
         ("CrewMentionFilter.onlyHumanMentions", "CrewMentionFilter.swift",
          "群聊时间线没人筛，「只看 @ 我的消息」判定造好了但列表照旧全显（Todo #61 失效）"),
         ("showOnlyHumanMentions:", "CrewChatView.swift",
@@ -276,6 +274,74 @@ final class ViewWiringTests: XCTestCase {
                       "帮助菜单只定义了地址但没有真正打开它")
     }
 
+    /// Todo #43：系统通知不再冒充普通 session 的随机 emoji 头像；旧白板与新写入
+    /// 都由 resolver 认成 PendingCrew，并在气泡位使用 App 品牌图标。
+    func testPendingCrewSystemIdentityUsesAppIcon() throws {
+        let resolver = try Self.text(of: "CrewSenderResolver.swift")
+        let sender = try Self.text(of: "GroupBubbleSender.swift")
+        let avatar = try Self.text(of: "CrewAvatarBadges.swift")
+        XCTAssertTrue(resolver.contains("PendingCrewSystemMessage.isSystem"),
+                      "历史 system 行没有进入统一 PendingCrew 身份判定")
+        XCTAssertTrue(sender.contains("isPendingCrewApp"),
+                      "气泡 sender 没携带 PendingCrew App 身份")
+        XCTAssertTrue(avatar.contains("if sender.isPendingCrewApp"),
+                      "头像渲染没有为 PendingCrew App 分流")
+        XCTAssertTrue(avatar.contains("Image(\"BrandMark\")"),
+                      "PendingCrew 系统通知仍用随机 emoji，不是 App 品牌图标")
+    }
+
+    /// Todo #43：只有进程自己退出才发这句；文案必须走统一语义函数，不能由各个
+    /// lifecycle 分支自行拼出不同口径。
+    func testSessionSelfEndNoticeUsesOneLiteralTemplate() throws {
+        let store = try Self.text(of: "LocalWhiteboardStore.swift")
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(store.contains("Session「\\(sessionName)」自己结束了。它最后一句话：\\(closing)"),
+                      "session 自己结束文案不是人类指定的统一模板")
+        XCTAssertTrue(runner.contains("PendingCrewSystemMessage.sessionEnded"),
+                      "session lifecycle 没有调用统一结束语义")
+        XCTAssertTrue(runner.contains("reason != .userStopped"),
+                      "人/机长主动停止也会被误报成 session 自己结束")
+    }
+
+    /// Todo #87：订阅档位只能自动检测；设置页不留人工覆盖、更新入口移到 App 菜单
+    /// 「关于 PendingCrew」下面，外观区不再堆说明文字。
+    func testSettingsAndMenusMatchTodo87() throws {
+        let settings = try Self.text(of: "CrewSettingsView.swift")
+        let app = try Self.text(of: "PendingCrewApp.swift")
+        let quota = try Self.text(of: "AgentQuota.swift")
+        let center = try Self.text(of: "QuotaCenter.swift")
+        let launch = try Self.text(of: "LocalSessionLaunch.swift")
+        let worldModel = try Self.text(of: "LocalSessionWorldModel.swift")
+        let project = try Self.projectText(of: "project.yml")
+
+        XCTAssertFalse(settings.contains("「跟随系统」随设备的浅色/深色自动切换"),
+                       "外观区域说明仍在")
+        XCTAssertFalse(settings.contains("AgentSubscriptionPlanPreference"),
+                       "设置页仍能人工覆盖订阅档位")
+        XCTAssertFalse(settings.contains("UpdateSettingsSection("),
+                       "更新入口仍在设置页")
+        XCTAssertTrue(app.contains("CommandGroup(after: .appInfo)"),
+                      "检查更新没有放到「关于 PendingCrew」下方")
+        XCTAssertTrue(app.contains("Button(\"检查更新…\")"),
+                      "App 菜单缺少中文检查更新入口")
+        XCTAssertTrue(project.contains("developmentLanguage: zh-Hans"),
+                      "macOS 自动生成菜单仍以英文作为开发语言")
+
+        for (name, source) in [
+            ("AgentQuota.swift", quota),
+            ("QuotaCenter.swift", center),
+            ("LocalSessionLaunch.swift", launch),
+            ("LocalSessionWorldModel.swift", worldModel),
+        ] {
+            XCTAssertFalse(source.contains("subscriptionPlanOverride"),
+                           "\(name) 仍保留人工覆盖字段/注入")
+            XCTAssertFalse(source.contains("AgentSubscriptionPlanPreference"),
+                           "\(name) 仍保留人工覆盖持久化入口")
+            XCTAssertFalse(source.contains("手动设置"),
+                           "\(name) 仍可能向 session 注入手动档位")
+        }
+    }
+
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")
@@ -379,6 +445,15 @@ final class ViewWiringTests: XCTestCase {
         guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
         else { throw XCTSkip("找不到源码文件 \(fileName)") }
         return hit.1
+    }
+
+    private static func projectText(of relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)
     }
 
     /// 仓库里 `apps/pendingcrew/Sources` 下的全部 .swift（路径由本文件位置推出）。

@@ -1577,11 +1577,11 @@
 				};
 			};
 			buildConfigurationList = 10AB45F6E98A64A048D5EA27 /* Build configuration list for PBXProject "PendingCrew" */;
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
-				en,
+				"zh-Hans",
 			);
 			mainGroup = 06B799E6079BEBE594387E1D;
 			minimizedProjectReferenceProxies = 1;

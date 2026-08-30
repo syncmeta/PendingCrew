@@ -1292,6 +1292,7 @@ final class CrewSessionRunner: ObservableObject {
             // `awaitingQuestion` 每轮重写（层 2）——不是停在问句上就写 nil，红点自然熄。
             marker.write(.init(lastMessageId: board.list(crewId: crewId).last?.id ?? prev.lastMessageId,
                                lastTurnId: prev.lastTurnId,
+                               lastAssistantMessage: text,
                                awaitingQuestion: SessionTurnTrace.trailingQuestion(from: text)))
         }
     }
@@ -2476,6 +2477,15 @@ final class CrewSessionRun: ObservableObject, Identifiable {
             lastHealthKind: health?.kind, healthAt: healthAt)
         exitReason = reason
         if reason == .hitLimit { onUsageLimit?(self) }
+        if kind.isAgent, reason != .userStopped {
+            let closing = turnMarker.read().lastAssistantMessage
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId,
+                sessionId: PendingCrewSystemMessage.sessionId,
+                text: PendingCrewSystemMessage.sessionEnded(
+                    sessionName: displayName, lastAgentText: closing),
+                category: "progress")
+        }
         status = Self.map(.exited(exitCode), cancelled: cancelled)
         isWorking = false
         displayIsTyping = false

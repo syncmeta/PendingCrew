@@ -325,7 +325,7 @@ final class AgentQuotaTests: XCTestCase {
             agent: "claude",
             windows: [AgentQuotaWindow(label: "session", usedPercent: 80, resetsAt: "soon")],
             fetchedAt: "2026-07-05T01:00:00Z", subscriptionPlan: "Max 5x",
-            subscriptionPlanSource: "claude_config", subscriptionPlanOverride: "Max 20x",
+            subscriptionPlanSource: "claude_config",
             activities: [AgentQuotaActivity(
                 periodLabel: "Last 24h", requests: 758, sessions: 4)])
         let data = try JSONEncoder().encode(snap)
@@ -333,28 +333,13 @@ final class AgentQuotaTests: XCTestCase {
         XCTAssertEqual(back, snap)
     }
 
-    func testManualPlanOverrideWinsButCanReturnToDetectedValue() {
+    func testSubscriptionPlanDescriptionOnlyUsesDetectedValue() {
         let detected = AgentQuotaSnapshot(
             agent: "claude", windows: [], fetchedAt: "now", subscriptionPlan: "Max 5x",
             subscriptionPlanSource: "claude_config")
-        let manual = detected.applyingSubscriptionPlanOverride("Max 20x")
-        XCTAssertEqual(manual.effectiveSubscriptionPlan, "Max 20x")
-        XCTAssertTrue(manual.subscriptionPlanDescription.contains("手动设置"))
-        let automatic = manual.applyingSubscriptionPlanOverride(nil)
-        XCTAssertEqual(automatic.effectiveSubscriptionPlan, "Max 5x")
-        XCTAssertTrue(automatic.subscriptionPlanDescription.contains("自动"))
-    }
-
-    func testPlanPreferencePersistsLocallyAndBlankMeansAutomatic() throws {
-        let name = "AgentQuotaTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
-        XCTAssertNil(AgentSubscriptionPlanPreference.override(agent: "claude", defaults: defaults))
-        defaults.set("Max 20x", forKey: AgentSubscriptionPlanPreference.claudeKey)
-        XCTAssertEqual(AgentSubscriptionPlanPreference.override(agent: "claude", defaults: defaults),
-                       "Max 20x")
-        defaults.set("", forKey: AgentSubscriptionPlanPreference.claudeKey)
-        XCTAssertNil(AgentSubscriptionPlanPreference.override(agent: "claude", defaults: defaults))
+        XCTAssertEqual(detected.subscriptionPlan, "Max 5x")
+        XCTAssertTrue(detected.subscriptionPlanDescription.contains("自动"))
+        XCTAssertFalse(detected.subscriptionPlanDescription.contains("手动"))
     }
 
     // MARK: - 陈旧数据不许冒充现状

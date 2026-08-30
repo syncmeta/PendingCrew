@@ -61,6 +61,7 @@ struct McpTurnHook {
         // `awaitingQuestion` 每轮重写（层 2）——这轮不是停在问句上就写 nil，红点自然熄。
         marker.write(.init(lastMessageId: board.list(crewId: crewId).last?.id ?? prev.lastMessageId,
                            lastTurnId: turnId ?? prev.lastTurnId,
+                           lastAssistantMessage: lastAgentText,
                            awaitingQuestion: SessionTurnTrace.trailingQuestion(from: lastAgentText)))
         return post != nil
     }

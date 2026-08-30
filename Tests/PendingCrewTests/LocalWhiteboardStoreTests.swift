@@ -62,6 +62,32 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         XCTAssertEqual(m[0].text, "started")
     }
 
+    /// Todo #43：历史上的系统写入口全都复用 `appendSessionMessage`，调用方可以传
+    /// `senderName: "系统"`，所以只修某几个调用点必然继续漏。旧入口本身必须在
+    /// 单一语义层把 system 哨兵正规化成 PendingCrew 身份。
+    func testLegacySystemSessionAppendNormalizesToPendingCrewIdentity() {
+        let s = LocalWhiteboardStore(directory: tempDir())
+        s.appendSessionMessage(
+            crewId: "c", sessionId: "system", text: "后台生成的通知",
+            category: "progress", senderName: "系统")
+
+        let row = s.list(crewId: "c").first
+        XCTAssertEqual(row?.senderKind, "pendingcrew")
+        XCTAssertEqual(row?.senderSessionId, "system")
+        XCTAssertEqual(row?.senderName, "PendingCrew")
+    }
+
+    func testSessionSelfEndMessageUsesTheExactTemplateAndFallback() {
+        XCTAssertEqual(
+            PendingCrewSystemMessage.sessionEnded(
+                sessionName: "整理设置", lastAgentText: "已完成。"),
+            "Session「整理设置」自己结束了。它最后一句话：已完成。")
+        XCTAssertEqual(
+            PendingCrewSystemMessage.sessionEnded(
+                sessionName: "整理设置", lastAgentText: "  \n "),
+            "Session「整理设置」自己结束了。它最后一句话：（没有留下最后一句话）")
+    }
+
     func testEntriesAfterCursor() {
         let s = LocalWhiteboardStore(directory: tempDir())
         s.appendUserMessage(crewId: "c", text: "1")
@@ -135,9 +161,9 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         let rows = store.list(crewId: "c")
         // fail-loud：白板上留一条系统警示（复用 postSystemNotice 形态），不再静默当空
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].senderKind, "session")
+        XCTAssertEqual(rows[0].senderKind, "pendingcrew")
         XCTAssertEqual(rows[0].senderSessionId, "system")
-        XCTAssertEqual(rows[0].senderName, "系统")
+        XCTAssertEqual(rows[0].senderName, "PendingCrew")
         XCTAssertTrue(rows[0].text.contains("损坏"))
         // 原始损坏字节归档为 .corrupt-<ts>，可人工找回
         let archived = try corruptArchives(dir, "c")

@@ -65,6 +65,7 @@ struct PendingCrewApp: App {
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         }
         .commands {
+            PendingCrewUpdateCommands()
             CommandGroup(replacing: .help) {
                 Button("PendingCrew 帮助") {
                     NSWorkspace.shared.open(PendingCrewLinks.helpDocumentation)
@@ -77,6 +78,19 @@ struct PendingCrewApp: App {
 }
 
 #if os(macOS)
+/// 放在 App 菜单「关于 PendingCrew」下方；观察 updater 才能在 Sparkle 启动完成后
+/// 把初始禁用的菜单项实时变为可点。
+private struct PendingCrewUpdateCommands: Commands {
+    @ObservedObject private var updater = AppUpdater.shared
+
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("检查更新…") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
+        }
+    }
+}
+
 /// Spec v2 §8.4 — 把 "本机 agent = 完整用户权限" 的 disclosure modal 挂在
 /// RootView 之上。仅每台机第一次启动 PendingCrew 时显示一次,接受后写
 /// `UserDefaults` 不再弹。RootView 始终渲染在背后(用户接受前看不到也点不

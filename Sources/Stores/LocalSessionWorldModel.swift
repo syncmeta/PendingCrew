@@ -78,7 +78,7 @@ struct LocalSessionWorldModel {
         if locale.lowercased().hasPrefix("en") {
             return "Detected/configured subscription tiers: Claude Code: \(claude ?? "unknown"); Codex: \(codex ?? "unknown"). A tier label gives scale context, but neither provider exposes an absolute remaining token/request balance here; do not invent one."
         }
-        return "当前自动探到/手动设置的订阅档位：Claude Code：\(claude ?? "未知")；Codex：\(codex ?? "未知")。档位只能提供量级背景；两家在这里都不给剩余 token/request 绝对量，禁止据此编造绝对额度。"
+        return "当前自动探到的订阅档位：Claude Code：\(claude ?? "未知")；Codex：\(codex ?? "未知")。档位只能提供量级背景；两家在这里都不给剩余 token/request 绝对量，禁止据此编造绝对额度。"
     }
 
     /// 组织位置：上级部门（父 crew）/ 下辖部门（子 crew）。汇报线仍是组织纪律的

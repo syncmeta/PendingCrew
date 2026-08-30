@@ -187,12 +187,8 @@ enum LocalSessionLaunch {
         let quota = (try? Data(contentsOf: quotaFile)).flatMap {
             try? JSONDecoder().decode(AgentQuotaFile.self, from: $0)
         }
-        func planDescription(snapshot: AgentQuotaSnapshot?, agent: String) -> String? {
-            if let snapshot { return snapshot.subscriptionPlanDescription }
-            return AgentSubscriptionPlanPreference.override(agent: agent).map { "\($0)（手动设置）" }
-        }
-        let plans = (planDescription(snapshot: quota?.claude, agent: "claude"),
-                     planDescription(snapshot: quota?.codex, agent: "codex"))
+        let plans = (quota?.claude?.subscriptionPlanDescription,
+                     quota?.codex?.subscriptionPlanDescription)
         let ctx = LocalSessionWorldModel.Context(
             sessionTaskBrief: taskBrief,
             runnerKind: {

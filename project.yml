@@ -1,5 +1,8 @@
 name: PendingCrew
 options:
+  # PendingCrew 的产品语言是中文；让 SwiftUI/AppKit 自动生成的 App/文件/窗口菜单
+  # 采用中文本地化（「关于」「设置」「隐藏」「退出」等）。
+  developmentLanguage: zh-Hans
   bundleIdPrefix: com.pendingname
   deploymentTarget:
     iOS: "17.0"

@@ -19,6 +19,15 @@ enum CrewSenderResolver {
         captainBotId: String?,
         localUserId: String?
     ) -> CrewSender {
+        if PendingCrewSystemMessage.isSystem(
+            senderKind: entry.senderKind, senderSessionId: entry.senderSessionId
+        ) {
+            return CrewSender(
+                kind: .bot,
+                displayName: PendingCrewSystemMessage.senderName,
+                avatarSeed: PendingCrewSystemMessage.avatarSeed,
+                isCaptain: false, sessionStatus: nil, isMine: false)
+        }
         switch entry.senderKind {
         case "user", "human":
             let uid = entry.senderUserId

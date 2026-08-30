@@ -83,6 +83,8 @@ enum CrewChatAdapter {
         sender.isCaptain     = s.isCaptain
         sender.sessionStatus = s.sessionStatus
         sender.isSession     = (s.kind == .session)
+        sender.isPendingCrewApp = PendingCrewSystemMessage.isSystem(
+            senderKind: e.senderKind, senderSessionId: e.senderSessionId)
 
         return (msg, sender)
     }

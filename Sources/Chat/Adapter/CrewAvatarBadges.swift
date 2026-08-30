@@ -41,7 +41,19 @@ struct CrewAvatarBadges: View {
         // BotAvatar:emoji 种子 = participant id(稳定身份)、色种子 = avatarSeed
         // (按群着色)。session 不再用专门的 terminal 图标,改由下面的运行状态点
         // (bot 没有)区分。
-        BotAvatar(emojiSeed: sender.id, colorSeed: sender.avatarSeed, size: size)
+        if sender.isPendingCrewApp {
+            // AppIcon.appiconset 不能作为普通命名图片读取；BrandMark 是同一套 App
+            // 图形的可渲染 imageset，白底圆形裁切后用于群聊头像。
+            Image("BrandMark")
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .background(Color.white, in: Circle())
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
+        } else {
+            BotAvatar(emojiSeed: sender.id, colorSeed: sender.avatarSeed, size: size)
+        }
     }
 
     // MARK: - Captain star badge (top-leading)

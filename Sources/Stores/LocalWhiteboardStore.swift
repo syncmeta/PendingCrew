@@ -1,6 +1,26 @@
 import Foundation
 import Combine
 
+/// PendingCrew 自己生成的群消息语义。所有历史/当前写入口最终都以 `system` 作为
+/// session 哨兵；身份、署名和固定文案只在这里定义，调用点不再各自拼。
+enum PendingCrewSystemMessage {
+    static let sessionId = "system"
+    static let senderKind = "pendingcrew"
+    static let senderName = "PendingCrew"
+    static let avatarSeed = "pendingcrew-app"
+
+    static func isSystem(senderKind: String, senderSessionId: String?) -> Bool {
+        senderKind == Self.senderKind || senderSessionId == sessionId
+    }
+
+    static func sessionEnded(sessionName: String, lastAgentText: String?) -> String {
+        let trimmed = lastAgentText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let closing = trimmed?.isEmpty == false ? trimmed! : "（没有留下最后一句话）"
+        return "Session「\(sessionName)」自己结束了。它最后一句话：\(closing)"
+    }
+}
+
 /// BYOK 本地白板持久化（spec 2026-06-05-pendingcrew-local-first-crew-design §2
 /// 本地 crew-comms）。
 ///
@@ -133,7 +153,7 @@ final class LocalWhiteboardStore: @unchecked Sendable {
 
     /// 列出某 crew 的全部白板消息（按写入顺序）。文件缺失 → 空。
     func list(crewId: String) -> [LocalWhiteboardMessage] {
-        withFileLock(crewId) { loadLocked(crewId) }
+        withFileLock(crewId) { loadLocked(crewId).map(Self.normalizingSystemIdentity) }
     }
 
     /// 该游标位置**之后**的消息（读未读用）。语义见下面的纯函数。
@@ -239,19 +259,44 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         externalContactFrom: String? = nil,
         attachments: [LocalWhiteboardAttachment]? = nil
     ) throws -> String? {
-        try appendReportingFailure(crewId: crewId, LocalWhiteboardMessage(
+        let isSystem = PendingCrewSystemMessage.isSystem(
+            senderKind: senderKind, senderSessionId: sessionId)
+        return try appendReportingFailure(crewId: crewId, LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
-            senderKind: senderKind,
+            senderKind: isSystem ? PendingCrewSystemMessage.senderKind : senderKind,
             senderUserId: nil,
             senderSessionId: sessionId,
             category: category,
             text: text,
             createdAt: ISO8601DateFormatter().string(from: Date()),
-            senderName: senderName,
+            senderName: isSystem ? PendingCrewSystemMessage.senderName : senderName,
             inReplyTo: inReplyTo,
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
             externalContactFrom: externalContactFrom))
+    }
+
+    /// 旧白板已经落过 `senderKind=session / senderName=系统`，只正规化新写入会让
+    /// 历史继续显示旧身份。所有 `list` 消费方统一经过这里，磁盘原记录不重写。
+    private static func normalizingSystemIdentity(
+        _ message: LocalWhiteboardMessage
+    ) -> LocalWhiteboardMessage {
+        guard PendingCrewSystemMessage.isSystem(
+            senderKind: message.senderKind, senderSessionId: message.senderSessionId)
+        else { return message }
+        return LocalWhiteboardMessage(
+            id: message.id,
+            senderKind: PendingCrewSystemMessage.senderKind,
+            senderUserId: message.senderUserId,
+            senderSessionId: PendingCrewSystemMessage.sessionId,
+            category: message.category,
+            text: message.text,
+            createdAt: message.createdAt,
+            senderName: PendingCrewSystemMessage.senderName,
+            inReplyTo: message.inReplyTo,
+            mentions: message.mentions,
+            attachments: message.attachments,
+            externalContactFrom: message.externalContactFrom)
     }
 
     // MARK: - Persistence
@@ -318,14 +363,14 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     private func readFailureWarning(_ error: Error) -> LocalWhiteboardMessage {
         LocalWhiteboardMessage(
             id: Self.readFailureRowId,
-            senderKind: "session",
+            senderKind: PendingCrewSystemMessage.senderKind,
             senderUserId: nil,
-            senderSessionId: "system",
+            senderSessionId: PendingCrewSystemMessage.sessionId,
             category: nil,
             text: "白板文件存在但暂时无法读取，原始记录未被改动。"
                 + "错误：\(error.localizedDescription)",
             createdAt: ISO8601DateFormatter().string(from: Date()),
-            senderName: "系统")
+            senderName: PendingCrewSystemMessage.senderName)
     }
 
     /// 白板出事、且**确认是内容坏了**的唯一形态。
@@ -349,20 +394,19 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     /// 白板已不可用的 fail-loud 收尾：损坏/读不出来的原字节已归档为
     /// `<crewId>.json.corrupt-<unix毫秒>`，这里再写入「一条系统警示」重建白板 ——
     /// 群里看得见这个 crew 的白板出过事，后续 append 合并的是警示而不是空数组。
-    /// 警示消息复用 `CrewStore.postSystemNotice` 的形态（senderKind "session" +
-    /// sessionId "system" + senderName "系统"），渲染端零改动。
+    /// 警示消息复用 PendingCrew 的统一系统身份。
     private func rebuildWithWarningLocked(url: URL, archive: URL,
                                           reason: WhiteboardIncident) -> [LocalWhiteboardMessage] {
         let warning = LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
-            senderKind: "session",
+            senderKind: PendingCrewSystemMessage.senderKind,
             senderUserId: nil,
-            senderSessionId: "system",
+            senderSessionId: PendingCrewSystemMessage.sessionId,
             category: nil,
             text: "\(reason.cause)，已归档为 \(archive.lastPathComponent)"
                 + "（whiteboards 目录），本板从这条警示重新开始。",
             createdAt: ISO8601DateFormatter().string(from: Date()),
-            senderName: "系统")
+            senderName: PendingCrewSystemMessage.senderName)
         MultiProcessJSONStore.saveRowsLocked([warning], to: url)
         return [warning]
     }

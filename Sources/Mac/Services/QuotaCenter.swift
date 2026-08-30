@@ -77,29 +77,17 @@ final class QuotaCenter: ObservableObject {
         // 取不到就**留着旧值继续画**（整行消失更难懂），但同时把原因记下来，
         // 由 UI / get_quota 明说「读不到、下面是旧值」—— 不许静默（Todo #33）。
         if let snap = await c {
-            claude = snap.applyingSubscriptionPlanOverride(
-                AgentSubscriptionPlanPreference.override(agent: "claude"))
+            claude = snap
             claudeError = nil
         } else {
             claudeError = "读不到（claude -p /usage 没跑起来或输出解析不出）"
         }
         if let snap = await x {
-            codex = snap.applyingSubscriptionPlanOverride(
-                AgentSubscriptionPlanPreference.override(agent: "codex"))
+            codex = snap
             codexError = nil
         } else {
             codexError = "读不到（codex app-server 没答上，rollout 记录也没有）"
         }
-        persistSnapshotFile()
-    }
-
-    /// 设置页改人工档位后立即重写有效快照；自动探测值保留，切回「自动检测」无需
-    /// 再等下一轮网络/CLI 刷新。还没首刷时没有快照可改，下一轮 refresh 会带上设置。
-    func subscriptionPlanPreferencesDidChange() {
-        claude = claude?.applyingSubscriptionPlanOverride(
-            AgentSubscriptionPlanPreference.override(agent: "claude"))
-        codex = codex?.applyingSubscriptionPlanOverride(
-            AgentSubscriptionPlanPreference.override(agent: "codex"))
         persistSnapshotFile()
     }
 
@@ -136,7 +124,7 @@ final class QuotaCenter: ObservableObject {
         }.value
         guard let text else { return nil }
         // `/usage` 自己不写档位；本机实测 ~/.claude.json 的 oauthAccount
-        // organizationRateLimitTier 会给到 Max 5x/20x。读不到就留 nil，设置可人工覆盖。
+        // organizationRateLimitTier 会给到 Max 5x/20x。读不到就留 nil，不做人工覆盖。
         let detectedPlan = (try? Data(contentsOf: configURL)).flatMap(ClaudeAccountPlanParser.parse)
         return ClaudeUsageTextParser.parse(text, subscriptionPlan: detectedPlan)
     }
