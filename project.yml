@@ -283,6 +283,9 @@ targets:
       # 的 SwiftUI 文件，整目录会把它们拖进 test bundle 而 Vendored 不在 bundle 里 → 编不过。
       - path: Sources/Chat/Adapter/CrewChatAdapter.swift
       - path: Sources/Chat/Adapter/CrewChatMessage.swift
+      # 当前群 / 跨群 / session MCP 共用的群聊搜索核心（纯 Foundation）。
+      - path: Sources/Chat/Adapter/CrewMessageSearch.swift
+      - path: Sources/Chat/Adapter/CrewMessageSearchAdapters.swift
       - path: Sources/Chat/Adapter/GroupBubbleSender.swift
       # CrewComposerMentions.swift：composer @ 候选构建/过滤 + @token 解析 +
       # staged 撤销对账 + reply 自动@推导(Phase 6)。纯 Foundation，自包含。

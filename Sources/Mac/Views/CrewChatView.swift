@@ -26,6 +26,11 @@ struct CrewChatView: View {
     /// `@State`：iOS 侧不传（nil = 恒关、不渲染任何筛选相关 UI），Mac 侧由
     /// toolbar 那一份 `@State` 驱动。判定逻辑全在 `CrewMentionFilter`。
     var showOnlyHumanMentions: Binding<Bool>? = nil
+    /// 当前群搜索框由 `CrewCenterView` 放在原生 toolbar；这里仅消费查询并用共享
+    /// `CrewMessageSearch` 筛时间线。iOS 不传时恒为空。
+    var searchQuery: Binding<String>? = nil
+    /// 跨群结果点进来时的消息 id。定位成功后置 nil，避免白板刷新时反复抢滚动位置。
+    var searchTargetMessageId: Binding<String?>? = nil
 
     @EnvironmentObject private var appModel: AppModel
     #if os(macOS)
@@ -642,6 +647,10 @@ struct CrewChatView: View {
 
     /// 筛选开关当前是不是开着（没传 binding = 恒关）。
     private var onlyMentions: Bool { showOnlyHumanMentions?.wrappedValue ?? false }
+    private var searchText: String {
+        (searchQuery?.wrappedValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var isSearching: Bool { !searchText.isEmpty }
 
     /// composer 上方剩下多少空间（Todo #69）。没量到时是 0 —— `CrewMentionPickerLayout`
     /// 认这个值走兜底上限，仍然有界。
@@ -669,9 +678,22 @@ struct CrewChatView: View {
     /// 这个属性每次访问都重算，所以判定必须廉价）。
     private var timelineEntries: [CrewWhiteboardEntry] {
         let base = entries
-        guard onlyMentions else { return base }
-        return CrewMentionFilter.onlyHumanMentions(
-            base, roster: mentionRoster, includingFrom: localUserId)
+        let mentionFiltered = onlyMentions
+            ? CrewMentionFilter.onlyHumanMentions(
+                base, roster: mentionRoster, includingFrom: localUserId)
+            : base
+        guard isSearching else { return mentionFiltered }
+
+        // 核心统一按「最新优先、最多 200」选出结果；聊天时间线仍按原来的时间正序
+        // 展示，所以最后用 id 集合回滤 source order。这样全局结果点进来时一定能在
+        // 当前群这一页找到同一条，又不把聊天顺序翻转。
+        let documents = mentionFiltered.map {
+            CrewMessageSearchAdapters.entry($0, crewId: crewId, crewTitle: crewTitle)
+        }
+        let ids = Set(CrewMessageSearch.search(
+            documents, query: searchText, limit: CrewMessageSearch.maximumLimit,
+            order: .newestFirst).map(\.document.messageId))
+        return mentionFiltered.filter { ids.contains($0.id) }
     }
 
     /// 时间线的一行：消息本体 + 「它上面要不要插一条时间分隔」。
@@ -819,6 +841,7 @@ struct CrewChatView: View {
                 // 在底部 → 跟着走（行为 2）；不在底部 → 位置一动不动，只把未读加上去
                 // （行为 3）。判定收口在 `Pin.received`。
                 if bottomPin.received(added) { landAtBottom(proxy, animated: true) }
+                locateSearchTarget(proxy)
             }
             // 切换筛选（Todo #61）：列表整个换了一批内容，不是「来了新消息」。
             // 窗口深度归位到一页 + 跟随/未读归位 + 落到最新一条 —— 与切 crew 同一
@@ -835,6 +858,15 @@ struct CrewChatView: View {
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
                 landAtBottom(proxy, animated: false, force: true)
+            }
+            .onChange(of: searchText) { _, _ in
+                renderLimit = CrewChatWindow.pageSize
+                bottomPin = CrewChatBottomFollow.Pin()
+                landAtBottom(proxy, animated: false, force: true)
+                locateSearchTarget(proxy)
+            }
+            .onChange(of: searchTargetMessageId?.wrappedValue) { _, _ in
+                locateSearchTarget(proxy)
             }
             .onChange(of: bubbleLayoutToken) { _, _ in
                 // 第二波数据落地这一记不做动画：它不是「来了新消息」，只是把偏移量补正到
@@ -1093,16 +1125,34 @@ struct CrewChatView: View {
     /// 一条消息都没有」长得一模一样，人会以为聊天记录没了。
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: onlyMentions ? "at.circle" : "bubble.left.and.bubble.right")
+            Image(systemName: isSearching
+                  ? "magnifyingglass"
+                  : (onlyMentions ? "at.circle" : "bubble.left.and.bubble.right"))
                 .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
-            if onlyMentions {
+            if isSearching {
+                Text("当前群没有找到匹配消息")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(.tertiary)
+            } else if onlyMentions {
                 Text("这个群里没有 @ 你的消息")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func locateSearchTarget(_ proxy: ScrollViewProxy) {
+        guard let target = searchTargetMessageId?.wrappedValue,
+              timelineEntries.contains(where: { $0.id == target })
+        else { return }
+        renderLimit = max(renderLimit, timelineEntries.count)
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(target, anchor: .center)
+            searchTargetMessageId?.wrappedValue = nil
+        }
     }
 
     // MARK: - data

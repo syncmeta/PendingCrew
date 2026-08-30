@@ -152,8 +152,28 @@ final class McpServer {
                 ],
                 [
                     "name": "read_whiteboard",
-                    "description": "读取 crew 群聊白板的当前全部消息（按时间序）。",
-                    "inputSchema": ["type": "object", "properties": [String: Any]()],
+                    "description": "分页读取当前 crew 群聊白板（按时间正序）。默认只返回最近 50 条，不会把长白板全量塞进上下文；有更早内容时，回执会给出下一页 before 游标。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "limit": ["type": "integer", "description": "每页条数，1–200，默认 50。"],
+                            "before": ["type": "string", "description": "可选消息 id 游标：返回该消息之前的一页，不重复游标消息。"],
+                        ],
+                    ],
+                ],
+                [
+                    "name": "search_whiteboard",
+                    "description": "搜索当前 crew 的完整群聊白板。与 app 当前群/跨群搜索共用同一匹配核心：空白分隔的词全部命中（可跨正文、发送者、附件元数据、时间字段），中文按 Unicode 归一化后的子串匹配；附件只搜 filename/MIME，不读文件内容；after/before 为含边界 ISO8601；结果默认最新优先、最多 200 条，并返回 crew_id/message_id 供定位。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "query": ["type": "string", "description": "必填；空白分词全部 AND。"],
+                            "after": ["type": "string", "description": "可选 ISO8601 下界，包含该时刻。"],
+                            "before": ["type": "string", "description": "可选 ISO8601 上界，包含该时刻。"],
+                            "limit": ["type": "integer", "description": "结果上限，1–200，默认 50。"],
+                        ],
+                        "required": ["query"],
+                    ],
                 ],
                 [
                     "name": "ask",
@@ -569,8 +589,77 @@ final class McpServer {
         case "contact":
             return handleContact(id: id, args: args)
         case "read_whiteboard":
-            let rows = store.list(crewId: crewId).map(renderRow)
-            return toolResult(id: id, text: rows.isEmpty ? "（白板为空）" : rows.joined(separator: "\n"))
+            let all = store.list(crewId: crewId)
+            guard !all.isEmpty else { return toolResult(id: id, text: "（白板为空）") }
+            let requested = integerArgument(args["limit"]) ?? CrewMessageSearch.defaultLimit
+            let limit = min(CrewMessageSearch.maximumLimit, max(1, requested))
+            let end: Int
+            if let before = (args["before"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines), !before.isEmpty {
+                guard let cursorIndex = all.firstIndex(where: { $0.id == before }) else {
+                    return toolResult(id: id, text: "ERROR: before 消息游标不存在或已失效")
+                }
+                end = cursorIndex
+            } else {
+                end = all.count
+            }
+            let start = max(0, end - limit)
+            let page = Array(all[start..<end])
+            guard !page.isEmpty else { return toolResult(id: id, text: "（没有更早消息）") }
+            var text = page.map(renderRow).joined(separator: "\n")
+            if start > 0, let first = page.first {
+                text += "\n\n（显示 \(page.count) 条；还有 \(start) 条更早消息，下一页：read_whiteboard(before=\"\(first.id)\", limit=\(limit))）"
+            } else {
+                text += "\n\n（显示 \(page.count) 条；已到白板开头）"
+            }
+            return toolResult(id: id, text: text)
+        case "search_whiteboard":
+            let query = (args["query"] as? String) ?? ""
+            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return toolResult(id: id, text: "ERROR: query 不能为空")
+            }
+            let afterValue = (args["after"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            let beforeValue = (args["before"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            let after = afterValue.flatMap(CrewMessageSearch.parseISO)
+            let before = beforeValue.flatMap(CrewMessageSearch.parseISO)
+            if let afterValue, !afterValue.isEmpty, after == nil {
+                return toolResult(id: id, text: "ERROR: after 必须是 ISO8601 时刻")
+            }
+            if let beforeValue, !beforeValue.isEmpty, before == nil {
+                return toolResult(id: id, text: "ERROR: before 必须是 ISO8601 时刻")
+            }
+            if let after, let before, after > before {
+                return toolResult(id: id, text: "ERROR: after 不能晚于 before")
+            }
+            let requested = integerArgument(args["limit"]) ?? CrewMessageSearch.defaultLimit
+            let rows = store.list(crewId: crewId)
+            let crewTitle = LocalCrewStore.title(
+                ofCrew: crewId, whiteboardDirectory: sharedDirectory) ?? ""
+            let documents = rows.map {
+                CrewMessageSearchAdapters.local(
+                    $0, crewId: crewId, crewTitle: crewTitle)
+            }
+            let matches = CrewMessageSearch.search(
+                documents, query: query, after: after, before: before,
+                limit: requested, order: .newestFirst)
+            guard !matches.isEmpty else {
+                return toolResult(id: id, text: "（当前 crew 没有找到匹配消息）")
+            }
+            let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+            let rendered = matches.compactMap { match -> String? in
+                guard let row = byID[match.document.messageId] else { return nil }
+                let fields = match.matchedFields.map(\.rawValue).sorted().joined(separator: ",")
+                let location = crewTitle.isEmpty
+                    ? "crew_id=\(crewId)"
+                    : "crew_id=\(crewId) crew_title=\(crewTitle)"
+                return "\(location) message_id=\(row.id) matched_fields=\(fields)\n\(renderRow(row))"
+            }
+            return toolResult(
+                id: id,
+                text: "找到 \(rendered.count) 条（最新优先；时间边界包含；附件仅 filename/MIME）：\n\n"
+                    + rendered.joined(separator: "\n\n"))
         case "ask":
             let question = (args["question"] as? String) ?? ""
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -1357,18 +1446,24 @@ final class McpServer {
         return sent.isEmpty ? nil : sent.map(LocalWhiteboardMention.init)
     }
 
-    private func renderRow(_ m: LocalWhiteboardMessage) -> String {
+    private func senderLabel(_ m: LocalWhiteboardMessage) -> String {
         // 与 HookEmitter.render 同款：有显示名优先用名，无名退回旧格式。
-        let who: String
         if let name = m.senderName, !name.isEmpty {
-            who = name
-        } else {
-            switch m.senderKind {
-            case "session": who = "session:\(m.senderSessionId ?? "?")"
-            case "user": who = "人类"
-            default: who = m.senderKind
-            }
+            return name
         }
+        switch m.senderKind {
+        case "session": return "session:\(m.senderSessionId ?? "?")"
+        case "user": return "人类"
+        default: return m.senderKind
+        }
+    }
+
+    private func integerArgument(_ raw: Any?) -> Int? {
+        (raw as? Int) ?? (raw as? Double).map(Int.init)
+    }
+
+    private func renderRow(_ m: LocalWhiteboardMessage) -> String {
+        let who = senderLabel(m)
         // agentText = 正文 + 附件绝对路径提示行（Todo #3 群聊图片）。
         return "[\(m.createdAt)] \(who): \(m.agentText)"
     }

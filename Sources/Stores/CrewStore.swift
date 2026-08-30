@@ -2,6 +2,13 @@ import Foundation
 import SwiftUI
 import Combine
 
+struct CrewChatSearchRequest: Identifiable, Equatable {
+    let id = UUID()
+    let crewId: String
+    let query: String
+    let messageId: String
+}
+
 /// Crew 列表 + detail 缓存。
 ///
 /// 设计原则（AppModel 顶端注释 + spec v2 §11）：**不**回到 "10+ 散装
@@ -23,6 +30,8 @@ final class CrewStore: ObservableObject {
     /// 本地态恒单元素 [本机]；登录态走 `GET /v1/machines`。
     @Published private(set) var machines: [Machine] = []
     @Published var selectedCrewId: String?
+    /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
+    @Published var chatSearchRequest: CrewChatSearchRequest?
     @Published private(set) var loadingList: Bool = false
     @Published private(set) var loadingDetailIds: Set<String> = []
     @Published private(set) var loadingSubjects: Bool = false
@@ -129,6 +138,14 @@ final class CrewStore: ObservableObject {
         // detail 进 cache 之前，先发起 fetch（不 await）。view 会按
         // `details[id]` 的 nil / 非 nil 状态切空态 / 内容态。
         Task { await refreshDetail(id) }
+    }
+
+    func openChatSearchResult(_ result: CrewMessageSearchResult, query: String) {
+        selectCrew(result.document.crewId)
+        chatSearchRequest = CrewChatSearchRequest(
+            crewId: result.document.crewId,
+            query: query,
+            messageId: result.document.messageId)
     }
 
     // MARK: - Refresh
