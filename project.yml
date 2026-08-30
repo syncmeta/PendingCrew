@@ -45,7 +45,7 @@ settings:
     # sed 从 project.yml 取 MARKETING_VERSION）；Info.plist 用
     # $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) 变量替换，
     # 构建期 -MARKETING_VERSION=... 才能真正落进产物。对齐 apps/pendingbot。
-    MARKETING_VERSION: "0.1.21"
+    MARKETING_VERSION: "0.1.22"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   PendingCrew:
