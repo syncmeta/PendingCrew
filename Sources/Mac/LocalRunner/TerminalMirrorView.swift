@@ -85,6 +85,11 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // Agent TUI 会开启 DEC 鼠标跟踪；SwiftTerm 默认因此把普通拖拽发给 TUI，
+        // 完全绕过 SelectionService，表现就是 A2 的“拖选后 ⌘C 没反应”。
+        // PendingCrew 的终端交互以原生滚动/选中复制为准，鼠标跟踪模式仍保留在
+        // 缓冲区与快照中，但 mirror 不把本地鼠标手势上报给远端进程。
+        allowMouseReporting = false
         // macOS 的 `TerminalView` 没有收 options 的构造器（`setupOptions` 自己 new 了一份
         // 默认 `TerminalOptions`），所以只能构造完再改。`changeScrollback` 会同时更新
         // `terminal.options.scrollback`，后续若走到 `Terminal.setup()` 重建 buffer 也保得住。
@@ -93,6 +98,7 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        allowMouseReporting = false
         getTerminal().changeScrollback(Self.scrollbackLines)
     }
 
