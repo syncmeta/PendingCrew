@@ -84,6 +84,46 @@ final class TodoListPresentationTests: XCTestCase {
         XCTAssertEqual(TodoListPresentation.statusAccessibilityLabel("pending"), "待办")
     }
 
+    // MARK: - #86 概览卡片契约
+
+    func testOverviewLayoutPinsThreeLineBodyOneLineResponseAndHeaderAboveCard() {
+        let layout = TodoListPresentation.overviewLayout
+        XCTAssertEqual(layout.bodyLineLimit, 3)
+        XCTAssertEqual(layout.responseLineLimit, 1)
+        XCTAssertEqual(layout.statusNumberPlacement, .aboveCard)
+        XCTAssertEqual(layout.responsePlacement, .insideCard)
+        XCTAssertEqual(layout.detailButtonTitle, "放大看")
+    }
+
+    func testOverviewCardKeepsOnlyTopLeadingCornerSquare() {
+        XCTAssertEqual(
+            TodoListPresentation.overviewLayout.cardCorners,
+            .init(topLeading: 0, bottomLeading: 8, bottomTrailing: 8, topTrailing: 8))
+    }
+
+    func testOverviewResponseUsesOnlyLatestResponseAsCompactSingleLineSummary() {
+        var todo = item(84)
+        todo.responses = [
+            response(id: "old", sessionId: "worker-old", senderName: "成员", text: "先前回应"),
+            response(id: "new", sessionId: "worker-new", senderName: " 机长 ",
+                     text: " 已完成，\n 这是机长答复的示例。 "),
+        ]
+
+        XCTAssertEqual(TodoListPresentation.overviewResponse(for: todo),
+                       "机长：已完成， 这是机长答复的示例。")
+    }
+
+    func testOverviewResponseFallsBackToShortSessionIdAndNilWhenUnanswered() {
+        var todo = item(84)
+        XCTAssertNil(TodoListPresentation.overviewResponse(for: todo))
+
+        todo.responses = [
+            response(id: "r", sessionId: "worker-123456789", senderName: nil, text: "收到"),
+        ]
+        XCTAssertEqual(TodoListPresentation.overviewResponse(for: todo),
+                       "session:worker：收到")
+    }
+
     // MARK: - #52 建 Todo 的正文口径（能附图之后「只贴图不打字」是合法输入）
 
     func testNewTodoTextUsesTypedTextTrimmed() {
@@ -109,5 +149,11 @@ final class TodoListPresentationTests: XCTestCase {
     func testNewTodoTextNilWhenNothingToRecord() {
         XCTAssertNil(TodoListPresentation.newTodoText(draft: "   ", attachmentCount: 0,
                                                       allImages: true))
+    }
+
+    private func response(id: String, sessionId: String, senderName: String?,
+                          text: String) -> LocalTodoResponse {
+        LocalTodoResponse(id: id, sessionId: sessionId, senderName: senderName, text: text,
+                          createdAt: "2026-08-28T00:00:00Z")
     }
 }

@@ -33,19 +33,21 @@ struct CrewTodoPanel: View {
 
     /// 从新到旧 —— 人类明确要求新建的在最上面（纯逻辑有单测钉住）。
     private var rows: [LocalTodoItem] { TodoListPresentation.newestFirst(todos) }
+    private let layout = TodoListPresentation.overviewLayout
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("Todo \(todos.count)")
-                    .font(Theme.Fonts.caption.weight(.semibold))
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                Text("待做")
+                    .font(Theme.Fonts.headline.weight(.semibold))
+                    .foregroundStyle(Theme.Palette.ink)
                 CrewTodoLedgerPills(ledger: $ledger)
                 Spacer(minLength: 8)
-                Button("详细") { openDetail() }
-                    .buttonStyle(.borderless)
+                Button(layout.detailButtonTitle) { openDetail() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                     .font(Theme.Fonts.caption)
-                    .foregroundStyle(Theme.Palette.accent)
+                    .tint(Theme.Palette.accent)
                     .help("打开 Todo 详细窗口：全量回应 + 重开")
             }
             .padding(.horizontal, 14)
@@ -90,46 +92,53 @@ struct CrewTodoPanel: View {
     @ViewBuilder
     private func todoRow(_ item: LocalTodoItem) -> some View {
         let icon = TodoListPresentation.statusIcon(item.status)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                CrewTodoStatusCircle(status: item.status)
-                Text("#\(item.number)")
-                    .font(Theme.Fonts.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(Theme.Palette.inkMuted)
+        let corners = layout.cardCorners
+        let cardShape = UnevenRoundedRectangle(
+            cornerRadii: .init(
+                topLeading: CGFloat(corners.topLeading),
+                bottomLeading: CGFloat(corners.bottomLeading),
+                bottomTrailing: CGFloat(corners.bottomTrailing),
+                topTrailing: CGFloat(corners.topTrailing)),
+            style: .continuous)
+        VStack(alignment: .leading, spacing: 7) {
+            // 附图的层级：状态圆点 + 序号先单独成行，正文另进下面的卡片。
+            HStack(alignment: .center, spacing: 6) {
+                CrewTodoStatusCircle(status: item.status, size: 15)
+                Text("\(item.number)")
+                    .font(Theme.Fonts.footnote.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(Theme.Palette.accent)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 // 已完成只变灰，**不加删除线**（人类明确要求）。
                 Text(item.text)
                     .font(Theme.Fonts.footnote)
                     .foregroundStyle(icon.dimsText ? Theme.Palette.inkMuted : Theme.Palette.ink)
+                    .lineLimit(layout.bodyLineLimit)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-            }
-            // 条目带的图（Todo #52）：概览给小格子、最多 3 张，点开看大图。
-            CrewTodoAttachmentStrip(attachments: item.attachments ?? [],
-                                    cell: 36, maxVisible: 3)
-                .padding(.leading, 4)
-            // 概览只带最近一条回应；全量在详细窗口读。
-            if let resp = item.responses.last {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.system(size: 9))
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                    Text("\(resp.senderName ?? "session:\(resp.sessionId.prefix(6))")：\(resp.text)")
+
+                // 条目带的图（Todo #52）：概览给小格子、最多 3 张，点开看大图。
+                CrewTodoAttachmentStrip(attachments: item.attachments ?? [],
+                                        cell: 36, maxVisible: 3)
+
+                // 已回复项只露最近一条精简回应；历史与全文在「放大看」里读。
+                if let response = TodoListPresentation.overviewResponse(for: item) {
+                    Text(response)
                         .font(Theme.Fonts.caption)
                         .foregroundStyle(Theme.Palette.inkMuted)
-                        .lineLimit(2)
-                    if item.responses.count > 1 {
-                        Text("还有 \(item.responses.count - 1) 条")
-                            .font(Theme.Fonts.caption2)
-                            .foregroundStyle(Theme.Palette.inkMuted)
-                    }
+                        .lineLimit(layout.responseLineLimit)
+                        .truncationMode(.tail)
                 }
-                .padding(.leading, 4)
             }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.Palette.surfaceMuted.opacity(0.5), in: cardShape)
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.Palette.surfaceMuted.opacity(0.5),
-                    in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .onTapGesture { openDetail() }
     }

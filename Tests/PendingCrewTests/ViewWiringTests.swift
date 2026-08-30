@@ -73,6 +73,12 @@ final class ViewWiringTests: XCTestCase {
                       "右栏 Todo 概览面板还在用旧的状态标签，没换成状态圆圈")
         XCTAssertTrue(panel.contains("CrewTodoDetailWindowPresenter.shared"),
                       "右栏 Todo 概览面板没有开详细窗口的入口")
+        XCTAssertTrue(panel.contains(".lineLimit(layout.bodyLineLimit)"),
+                      "右栏 Todo 概览正文没有接三行截断契约")
+        XCTAssertTrue(panel.contains("TodoListPresentation.overviewResponse(for: item)"),
+                      "右栏 Todo 概览没有接精简的末条回应")
+        XCTAssertTrue(panel.contains("UnevenRoundedRectangle("),
+                      "右栏 Todo 概览卡片没有接左上方角、其余圆角的形状")
         XCTAssertFalse(panel.contains(".strikethrough("),
                        "已完成的 Todo 不该划删除线（人类明确要求，只变灰）")
 

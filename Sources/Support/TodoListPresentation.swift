@@ -8,6 +8,36 @@ import Foundation
 ///
 /// 跨平台（Support/）：inspector 概览面板与 Todo 详细窗口共用同一套。
 enum TodoListPresentation {
+    /// 概览卡片里可以跨平台钉住的视觉契约（Todo #86）。SwiftUI 只读取这组值，
+    /// 不在视图里另写一份魔数，避免正文又悄悄展开成全文或卡片退回四角圆角。
+    struct OverviewLayout: Equatable {
+        enum StatusNumberPlacement: Equatable { case aboveCard }
+        enum ResponsePlacement: Equatable { case insideCard }
+
+        struct CardCorners: Equatable {
+            let topLeading: Int
+            let bottomLeading: Int
+            let bottomTrailing: Int
+            let topTrailing: Int
+        }
+
+        let bodyLineLimit: Int
+        let responseLineLimit: Int
+        let statusNumberPlacement: StatusNumberPlacement
+        let responsePlacement: ResponsePlacement
+        let detailButtonTitle: String
+        let cardCorners: CardCorners
+    }
+
+    static let overviewLayout = OverviewLayout(
+        bodyLineLimit: 3,
+        responseLineLimit: 1,
+        statusNumberPlacement: .aboveCard,
+        responsePlacement: .insideCard,
+        detailButtonTitle: "放大看",
+        cardCorners: .init(topLeading: 0, bottomLeading: 8,
+                           bottomTrailing: 8, topTrailing: 8))
+
     /// 列表顺序：**从新到旧** —— 新建的在最上面。
     ///
     /// 按 `number` 倒序（#N 由 `LocalTodoStore.add` 自增分配，等价于创建顺序，
@@ -52,6 +82,20 @@ enum TodoListPresentation {
     /// 无障碍/tooltip 文案（复用数据层的中文状态名）。
     static func statusAccessibilityLabel(_ status: String) -> String {
         LocalTodoItem.statusLabel(status)
+    }
+
+    /// 概览只露最近一条回应，并折成一行；完整回应仍留给「放大看」。
+    static func overviewResponse(for item: LocalTodoItem) -> String? {
+        guard let response = item.responses.last else { return nil }
+        let namedSender = compactSingleLine(response.senderName ?? "")
+        let sender = namedSender.isEmpty
+            ? "session:\(response.sessionId.prefix(6))"
+            : namedSender
+        return "\(sender)：\(compactSingleLine(response.text))"
+    }
+
+    private static func compactSingleLine(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     /// 建 Todo 时的正文口径（Todo #52：能附图之后，「只贴一张图不打字」成了合法输入）。
