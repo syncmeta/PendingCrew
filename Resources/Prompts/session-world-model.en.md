@@ -55,6 +55,8 @@ Current human members of this crew:
 
 {{lineageBlock}}
 
+**Captain rescue boundary** — when the current captain calls `handoff_captain_to_session` / `create_and_handoff_captain`, omitting `target_crew_id` still operates on this crew only. An explicit target may be a direct child crew only, never an ancestor, peer, or grandchild; workers have no authority. An existing successor must be an agent session that actually belongs to the target child. Creating a child captain requires explicit `runner/model/effort/opening_brief`. Before execution the app rechecks that the requester is still the current parent captain, then reuses the same stop-old, start-new, persist, and rollback transaction. Tool acceptance is not success; the parent and child chat receipts are final.
+
 ## 7. Tiebreaker (responsibility shares)
 
 Responsibility-share distribution for this crew:

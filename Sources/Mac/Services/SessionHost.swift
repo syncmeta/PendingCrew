@@ -197,18 +197,18 @@ final class SessionHost: ObservableObject {
                     crewStore.captainHandoffRequests = []
                     Task {
                         for req in reqs {
-                            if crewStore.details[req.crewId] == nil {
-                                await crewStore.refreshDetail(req.crewId)
+                            if crewStore.details[req.targetCrewId] == nil {
+                                await crewStore.refreshDetail(req.targetCrewId)
                             }
-                            guard let detail = crewStore.details[req.crewId] else {
+                            guard let detail = crewStore.details[req.targetCrewId] else {
                                 crewStore.postSystemNotice(
-                                    crewId: req.crewId,
+                                    crewId: req.sourceCrewId,
                                     text: "机长交接失败：拉不到 crew 详情。旧机长保持不变。")
                                 continue
                             }
                             await sessionRunner.performCaptainHandoff(
                                 req, detail: detail, backend: model.backend)
-                            await crewStore.refreshDetail(req.crewId)
+                            await crewStore.refreshDetail(req.targetCrewId)
                         }
                     }
                 }

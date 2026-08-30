@@ -138,6 +138,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
     /// helper 只负责可靠入队，live runner 的停旧/起新/回滚由 app 侧同一服务执行。
     func enqueueCaptainHandoff(
         crewId: String, requesterSessionId: String,
+        targetCrewId: String? = nil,
         targetSessionId: String?, runner: String?, model: String?, effort: String?,
         title: String?, openingBrief: String?
     ) {
@@ -149,6 +150,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
             brief: "-", runner: runner, isolation: nil, title: title,
             model: model, effort: effort, sessionId: targetSessionId,
             note: openingBrief, requesterSessionId: requesterSessionId,
+            targetCrewId: targetCrewId,
             ts: ISO8601DateFormatter().string(from: Date())))
     }
 
@@ -480,5 +482,7 @@ struct CrewCommand: Codable, Equatable {
     var includeChildren: Bool? = nil
     /// change_workdir：true=真执行；nil/false=只出预览（dry-run）。
     var confirm: Bool? = nil
+    /// handoff_captain：显式目标 crew；nil = 保持历史语义，只操作 `crewId` 本身。
+    var targetCrewId: String? = nil
     let ts: String
 }

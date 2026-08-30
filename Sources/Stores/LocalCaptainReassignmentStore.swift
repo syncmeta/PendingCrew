@@ -1,5 +1,52 @@
 import Foundation
 
+/// captain handoff 的授权边界。省略目标保持历史的“只操作本 crew”；显式目标只接受
+/// 发起 crew 的直系子。live runner 还会复核发起 session 仍是父 crew 当前机长，避免
+/// 排队期间已经失权的旧机长继续改动子 crew。
+struct CaptainHandoffAuthorization {
+    static func resolveTargetCrewId(
+        sourceCrewId: String,
+        requestedTargetCrewId: String?,
+        targetParentIds: [String]
+    ) throws -> String {
+        guard let requestedTargetCrewId else { return sourceCrewId }
+        let target = requestedTargetCrewId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { throw CaptainHandoffAuthorizationError.notDirectChild }
+        if target == sourceCrewId { return sourceCrewId }
+        guard targetParentIds.contains(sourceCrewId) else {
+            throw CaptainHandoffAuthorizationError.notDirectChild
+        }
+        return target
+    }
+
+    static func validateLiveRequester(
+        sourceCrewId: String,
+        targetCrewId: String,
+        requesterSessionId: String?,
+        currentCaptainSessionId: String?
+    ) throws {
+        // MCP 门禁是入队时快照；真正切换前仍须复核 live 权限，防止排队期间已经
+        // 失权的旧机长（包括刚被父 crew 救援替换的旧子机长）继续执行陈旧命令。
+        guard let requesterSessionId, requesterSessionId == currentCaptainSessionId else {
+            throw CaptainHandoffAuthorizationError.notCurrentCaptain
+        }
+    }
+}
+
+enum CaptainHandoffAuthorizationError: LocalizedError, Equatable {
+    case notDirectChild
+    case notCurrentCaptain
+
+    var errorDescription: String? {
+        switch self {
+        case .notDirectChild:
+            return "目标 crew 不是本 crew 的直系子；不能操作上级、平级或孙 crew。"
+        case .notCurrentCaptain:
+            return "发起 session 已不是父 crew 当前运行中的机长，无权救援子 crew。"
+        }
+    }
+}
+
 /// 现有成员接任时，runner 与 agent 会话号只能来自持久账本，不能从显示名猜。
 /// 调用方把本 crew 的成员表与目标账本行交进来；这里把四道门集中成纯函数，供
 /// human 右键、captain MCP 和单测共用同一口径。
@@ -29,7 +76,7 @@ struct CaptainHandoffCandidate: Equatable {
     }
 }
 
-enum CaptainHandoffValidationError: LocalizedError {
+enum CaptainHandoffValidationError: LocalizedError, Equatable {
     case notCrewMember
     case notAgentSession
 

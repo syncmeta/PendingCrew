@@ -15,6 +15,107 @@ final class CaptainHandoffTests: XCTestCase {
         }
     }
 
+    func testRescueScopeAllowsSelfByDefaultAndOnlyDirectChildren() throws {
+        XCTAssertEqual(try CaptainHandoffAuthorization.resolveTargetCrewId(
+            sourceCrewId: "parent", requestedTargetCrewId: nil,
+            targetParentIds: []), "parent")
+        XCTAssertEqual(try CaptainHandoffAuthorization.resolveTargetCrewId(
+            sourceCrewId: "parent", requestedTargetCrewId: "child",
+            targetParentIds: ["parent"]), "child")
+
+        for (target, parents) in [
+            ("ancestor", ["root"]),
+            ("peer", ["root"]),
+            ("grandchild", ["child"]),
+            ("missing", [String]()),
+        ] {
+            XCTAssertThrowsError(try CaptainHandoffAuthorization.resolveTargetCrewId(
+                sourceCrewId: "parent", requestedTargetCrewId: target,
+                targetParentIds: parents)) { error in
+                    XCTAssertEqual(error as? CaptainHandoffAuthorizationError, .notDirectChild)
+                }
+        }
+    }
+
+    func testDirectChildRescueRequiresTheCurrentParentCaptain() throws {
+        XCTAssertNoThrow(try CaptainHandoffAuthorization.validateLiveRequester(
+            sourceCrewId: "parent", targetCrewId: "child",
+            requesterSessionId: "parent-captain", currentCaptainSessionId: "parent-captain"))
+
+        for requester in [nil, "parent-worker", "former-parent-captain"] as [String?] {
+            XCTAssertThrowsError(try CaptainHandoffAuthorization.validateLiveRequester(
+                sourceCrewId: "parent", targetCrewId: "child",
+                requesterSessionId: requester, currentCaptainSessionId: "parent-captain")) { error in
+                    XCTAssertEqual(error as? CaptainHandoffAuthorizationError, .notCurrentCaptain)
+                }
+        }
+
+        XCTAssertThrowsError(try CaptainHandoffAuthorization.validateLiveRequester(
+            sourceCrewId: "child", targetCrewId: "child",
+            requesterSessionId: "former-child-captain",
+            currentCaptainSessionId: "new-child-captain")) { error in
+                XCTAssertEqual(error as? CaptainHandoffAuthorizationError, .notCurrentCaptain)
+            }
+    }
+
+    func testDirectChildExistingSuccessorMustBelongToThatChild() throws {
+        let member = LocalSessionMember(
+            sessionId: "child-worker", displayName: "接任者",
+            createdAt: "2026-08-30T00:00:00Z")
+        let peerRecord = LocalAgentSessionStore.Record(
+            crewId: "peer", sessionId: "child-worker", kind: "codex",
+            agentSessionId: "thread-1", updatedAt: "2026-08-30T00:00:00Z")
+
+        XCTAssertThrowsError(try CaptainHandoffCandidate.resolve(
+            crewId: "child", sessionId: "child-worker",
+            members: [member], record: peerRecord)) { error in
+                XCTAssertEqual(error as? CaptainHandoffValidationError, .notAgentSession)
+            }
+    }
+
+    func testDirectChildRescueUsesTheSharedSingleCaptainTransaction() async throws {
+        _ = try CaptainHandoffAuthorization.resolveTargetCrewId(
+            sourceCrewId: "parent", requestedTargetCrewId: "child",
+            targetParentIds: ["parent"])
+        let state = CaptainState()
+
+        try await CaptainHandoffTransaction.perform(
+            stopOld: { state.replace([], event: "stop-old-child-captain") },
+            startNew: { state.replace(["new-child-captain"], event: "start-new-child-captain") },
+            persistNew: {
+                state.persistedKind = "claude_code"
+                state.events.append("persist-child-captain")
+            },
+            stopNew: { state.replace([], event: "stop-new-child-captain") },
+            restoreOld: { state.replace(["old"], event: "restore-old-child-captain") })
+
+        XCTAssertEqual(state.active, ["new-child-captain"])
+        XCTAssertEqual(state.persistedKind, "claude_code")
+        XCTAssertEqual(state.maximumActive, 1)
+    }
+
+    func testDirectChildRescueLaunchFailureRestoresOldChildCaptain() async throws {
+        enum Expected: Error { case launchFailed }
+        _ = try CaptainHandoffAuthorization.resolveTargetCrewId(
+            sourceCrewId: "parent", requestedTargetCrewId: "child",
+            targetParentIds: ["parent"])
+        let state = CaptainState()
+
+        do {
+            try await CaptainHandoffTransaction.perform(
+                stopOld: { state.replace([], event: "stop-old-child-captain") },
+                startNew: { throw Expected.launchFailed },
+                persistNew: { state.persistedKind = "claude_code" },
+                stopNew: { state.replace([], event: "stop-new-child-captain") },
+                restoreOld: { state.replace(["old"], event: "restore-old-child-captain") })
+            XCTFail("expected failure")
+        } catch {}
+
+        XCTAssertEqual(state.active, ["old"])
+        XCTAssertEqual(state.persistedKind, "codex")
+        XCTAssertEqual(state.maximumActive, 1)
+    }
+
     func testExistingCandidateRequiresCrewMembershipAndUsesLedgerKindNotDisplayName() throws {
         let member = LocalSessionMember(
             sessionId: "worker-1", displayName: "完全猜不出 runner 的标题",

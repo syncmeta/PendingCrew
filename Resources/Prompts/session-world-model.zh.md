@@ -57,6 +57,8 @@ crew 群聊是这个 crew 的 **白板 + 沟通渠道**,**不是你的 IO log**�
 
 {{lineageBlock}}
 
+**机长救援边界** —— 当前机长调用 `handoff_captain_to_session` / `create_and_handoff_captain` 时，省略 `target_crew_id` 仍只操作本 crew；显式目标只允许自己的直系子 crew，不得操作上级、平级或孙 crew，worker 无权。指定现有接任者时，其 agent session 必须真实归属目标子 crew；为子 crew 新建机长时必须明确 `runner/model/effort/opening_brief`。app 会在执行前再次确认发起者仍是父 crew 当前机长，并复用同一套停旧、起新、持久化与失败回滚事务；工具受理不等于已经成功，最终看父子群聊回执。
+
 ## 7. 拍板方(责任比例)
 
 本 crew 的责任比例分布:

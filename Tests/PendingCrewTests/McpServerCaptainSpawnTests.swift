@@ -129,9 +129,12 @@ final class McpServerCaptainSpawnTests: XCTestCase {
 
         let existingSchema = existing?["inputSchema"] as? [String: Any]
         XCTAssertEqual(existingSchema?["required"] as? [String], ["session_id"])
+        let existingProperties = existingSchema?["properties"] as? [String: Any]
+        XCTAssertNotNil(existingProperties?["target_crew_id"])
         let createSchema = create?["inputSchema"] as? [String: Any]
         XCTAssertEqual(createSchema?["required"] as? [String], ["runner"])
         let createProperties = createSchema?["properties"] as? [String: Any]
+        XCTAssertNotNil(createProperties?["target_crew_id"])
         XCTAssertNotNil(createProperties?["model"])
         XCTAssertNotNil(createProperties?["effort"])
         XCTAssertNotNil(createProperties?["title"])
@@ -145,11 +148,27 @@ final class McpServerCaptainSpawnTests: XCTestCase {
         let commands = LocalCrewControlStore(directory: dir).drainCommands()
         XCTAssertEqual(commands.count, 1)
         XCTAssertEqual(commands[0].kind, "handoff_captain")
+        XCTAssertNil(commands[0].targetCrewId, "省略目标必须继续操作本 crew")
         XCTAssertEqual(commands[0].sessionId, "worker-123")
         XCTAssertNil(commands[0].runner)
         XCTAssertTrue((out ?? "").contains("已受理"))
         XCTAssertTrue((out ?? "").contains("群聊最终回执"))
         XCTAssertFalse((out ?? "").contains("交接完成"), "helper 不能只写命令文件就宣称成功")
+    }
+
+    func testDirectChildExistingMemberHandoffCarriesExplicitTargetCrew() {
+        let dir = tmp()
+        _ = call(makeServer(isCaptain: true, dir: dir),
+                 "handoff_captain_to_session", [
+                    "target_crew_id": "child-crew", "session_id": "child-worker-123",
+                 ])
+
+        let commands = LocalCrewControlStore(directory: dir).drainCommands()
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands[0].crewId, "local-x", "发起 crew 不能被目标覆盖")
+        XCTAssertEqual(commands[0].targetCrewId, "child-crew")
+        XCTAssertEqual(commands[0].requesterSessionId, "cap")
+        XCTAssertEqual(commands[0].sessionId, "child-worker-123")
     }
 
     func testCreateCaptainHandoffCarriesExplicitLaunchOptionsAndDefaults() {
@@ -177,6 +196,33 @@ final class McpServerCaptainSpawnTests: XCTestCase {
         XCTAssertNil(commands[0].note)
     }
 
+    func testDirectChildCreateRequiresAndCarriesExplicitLaunchProfileAndBrief() {
+        let dir = tmp()
+        let captain = makeServer(isCaptain: true, dir: dir)
+
+        for args: [String: Any] in [
+            ["target_crew_id": "child", "runner": "codex", "effort": "high", "opening_brief": "救援"],
+            ["target_crew_id": "child", "runner": "codex", "model": "gpt-5.6-sol", "opening_brief": "救援"],
+            ["target_crew_id": "child", "runner": "codex", "model": "gpt-5.6-sol", "effort": "high"],
+        ] {
+            XCTAssertTrue((call(captain, "create_and_handoff_captain", args) ?? "").contains("ERROR"))
+        }
+        XCTAssertTrue(LocalCrewControlStore(directory: dir).drainCommands().isEmpty)
+
+        _ = call(captain, "create_and_handoff_captain", [
+            "target_crew_id": "child", "runner": "codex", "model": "gpt-5.6-sol",
+            "effort": "HIGH", "opening_brief": "从子 crew 白板接管",
+        ])
+        let commands = LocalCrewControlStore(directory: dir).drainCommands()
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands[0].crewId, "local-x")
+        XCTAssertEqual(commands[0].targetCrewId, "child")
+        XCTAssertEqual(commands[0].runner, "codex")
+        XCTAssertEqual(commands[0].model, "gpt-5.6-sol")
+        XCTAssertEqual(commands[0].effort, "high")
+        XCTAssertEqual(commands[0].note, "从子 crew 白板接管")
+    }
+
     func testCaptainHandoffRejectsWorkerCallsAndInvalidModeArguments() {
         let dir = tmp()
         let worker = makeServer(isCaptain: false, dir: dir)
@@ -184,6 +230,9 @@ final class McpServerCaptainSpawnTests: XCTestCase {
             .contains("仅机长可用"))
         XCTAssertTrue((call(worker, "create_and_handoff_captain", ["runner": "codex"]) ?? "")
             .contains("仅机长可用"))
+        XCTAssertTrue((call(worker, "handoff_captain_to_session", [
+            "target_crew_id": "child", "session_id": "s",
+        ]) ?? "").contains("仅机长可用"))
 
         let captain = makeServer(isCaptain: true, dir: dir)
         XCTAssertTrue((call(captain, "handoff_captain_to_session", [:]) ?? "").contains("ERROR"))

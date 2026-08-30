@@ -420,6 +420,10 @@ final class ViewWiringTests: XCTestCase {
                       "runner 没有新建机长的单一编排入口")
         XCTAssertTrue(runner.contains("CaptainHandoffTransaction.perform("),
                       "新机长没有走可回滚的统一交接事务")
+        XCTAssertTrue(runner.contains("CaptainHandoffAuthorization.validateLiveRequester("),
+                      "直系子机长救援没有在 live runner 复核父 crew 当前机长")
+        XCTAssertTrue(runner.contains("request.sourceCrewId"))
+        XCTAssertTrue(runner.contains("request.targetCrewId"))
         XCTAssertTrue(runner.contains("setCaptainAgentKindReportingFailure"),
                       "新机长类型没有以可报告失败的方式落盘")
         XCTAssertTrue(runner.contains("resumePreviousConversation: false"),

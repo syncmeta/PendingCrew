@@ -379,21 +379,23 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "handoff_captain_to_session",
-                    "description": "（机长专用）把机长位置交给本 crew 一个**现有 session 成员**。session_id 必须是 list_sessions 给出的稳定 id；app 会按 crew 成员表 + agent-sessions 账本核对归属、真实 runner 和可续接会话号，绝不从显示名猜。工具只表示请求已受理；停旧、续接新机长、持久化与失败回滚由真实 runner 服务完成，最终成功/失败以群聊系统回执为准。",
+                    "description": "（机长专用）把机长位置交给一个**现有 session 成员**。target_crew_id 省略时仍只操作本 crew；显式填写时只允许自己的直系子 crew，不允许上级、平级、孙 crew，且发起者在执行时仍须是父 crew 当前机长。session_id 必须属于目标 crew 且是稳定 id；app 会按成员表 + agent-sessions 账本核对真实 runner 和可续接会话号，绝不从显示名猜。停旧、续接新机长、持久化与失败回滚复用同一事务，最终成功/失败以群聊系统回执为准。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
-                            "session_id": ["type": "string", "description": "本 crew 现有 agent session 的稳定 id。"],
+                            "target_crew_id": ["type": "string", "description": "可选：要救援的直系子 crew 精确 id；省略=本 crew。"],
+                            "session_id": ["type": "string", "description": "目标 crew 现有 agent session 的稳定 id。"],
                         ],
                         "required": ["session_id"],
                     ],
                 ])
                 tools.append([
                     "name": "create_and_handoff_captain",
-                    "description": "（机长专用）新建一个 agent session 并把机长位置交给它。runner 必填且只接受 claude/codex；model/effort 不填时走所选 runner 的正常默认解析；title 不填为「机长」；opening_brief 不填时只注入交接说明与白板续接要求。工具只表示请求已受理，最终成功/失败以群聊系统回执为准。",
+                    "description": "（机长专用）新建一个 agent session 并把机长位置交给它。target_crew_id 省略时仍只操作本 crew；显式填写时只允许自己的直系子 crew，不允许上级、平级、孙 crew，且必须明确 runner/model/effort/opening_brief。runner 只接受 claude/codex；本 crew 模式继续允许 model/effort/opening_brief 走原有默认。停旧、起新、持久化与失败回滚复用同一事务，最终成功/失败以群聊系统回执为准。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
+                            "target_crew_id": ["type": "string", "description": "可选：要救援的直系子 crew 精确 id；省略=本 crew。"],
                             "runner": ["type": "string", "enum": ["claude", "codex"], "description": "新机长 runner，必须显式选择。"],
                             "model": ["type": "string", "description": "可选模型别名/slug；不填=所选 runner 默认。"],
                             "effort": ["type": "string", "description": "可选 thinking effort；不填=所选 runner 默认。"],
@@ -828,6 +830,11 @@ final class McpServer {
             return toolResult(id: id, text: text)
         case "handoff_captain_to_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let targetCrewId = (args["target_crew_id"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if targetCrewId?.isEmpty == true {
+                return toolResult(id: id, text: "ERROR: target_crew_id 不能为空；省略才表示本 crew")
+            }
             let target = ((args["session_id"] as? String) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !target.isEmpty else {
@@ -835,6 +842,7 @@ final class McpServer {
             }
             control.enqueueCaptainHandoff(
                 crewId: crewId, requesterSessionId: sessionId,
+                targetCrewId: targetCrewId,
                 targetSessionId: target, runner: nil, model: nil, effort: nil,
                 title: nil, openingBrief: nil)
             return toolResult(
@@ -842,6 +850,11 @@ final class McpServer {
                 text: "机长交接请求已受理；app 会核对成员与真实会话账本并执行停旧/起新/回滚。请以群聊最终回执为准，这里不代表最终成功。")
         case "create_and_handoff_captain":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let targetCrewId = (args["target_crew_id"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if targetCrewId?.isEmpty == true {
+                return toolResult(id: id, text: "ERROR: target_crew_id 不能为空；省略才表示本 crew")
+            }
             guard let runner = args["runner"] as? String,
                   runner == "claude" || runner == "codex" else {
                 return toolResult(id: id, text: "ERROR: runner 必填，只接受 claude/codex")
@@ -854,8 +867,15 @@ final class McpServer {
             let openingBrief = (args["opening_brief"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .flatMap { $0.isEmpty ? nil : $0 }
+            if targetCrewId != nil,
+               (model == nil || effort == nil || openingBrief == nil) {
+                return toolResult(
+                    id: id,
+                    text: "ERROR: 为直系子 crew 新建机长时，runner/model/effort/opening_brief 都必须明确填写")
+            }
             control.enqueueCaptainHandoff(
                 crewId: crewId, requesterSessionId: sessionId,
+                targetCrewId: targetCrewId,
                 targetSessionId: nil, runner: runner, model: model, effort: effort,
                 title: title, openingBrief: openingBrief)
             return toolResult(

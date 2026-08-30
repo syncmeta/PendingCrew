@@ -468,6 +468,20 @@ final class CrewStore: ObservableObject {
                     runner: cmd.runner, isolation: isolation,
                     model: cmd.model, effort: cmd.effort, title: cmd.title))
             case "handoff_captain":
+                let requestedTarget = cmd.targetCrewId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let targetParents = requestedTarget.map { LocalCrewStore.shared.parentIds(of: $0) } ?? []
+                let targetCrewId: String
+                do {
+                    targetCrewId = try CaptainHandoffAuthorization.resolveTargetCrewId(
+                        sourceCrewId: cmd.crewId,
+                        requestedTargetCrewId: requestedTarget,
+                        targetParentIds: targetParents)
+                } catch {
+                    postSystemNotice(
+                        crewId: cmd.crewId,
+                        text: "机长交接被拒：\(error.localizedDescription)旧机长保持不变。")
+                    continue
+                }
                 let existing = cmd.sessionId?.isEmpty == false && cmd.runner == nil
                 let fresh = cmd.sessionId == nil && (cmd.runner == "claude" || cmd.runner == "codex")
                 guard existing || fresh else {
@@ -476,8 +490,16 @@ final class CrewStore: ObservableObject {
                         text: "机长交接被拒：控制命令模式含糊（必须二选一：现有 session 或显式 runner 新建）。旧机长保持不变。")
                     continue
                 }
+                if targetCrewId != cmd.crewId, fresh,
+                   (cmd.model == nil || cmd.effort == nil || cmd.note?.isEmpty != false) {
+                    postSystemNotice(
+                        crewId: cmd.crewId,
+                        text: "机长交接被拒：为直系子 crew 新建机长必须明确 runner/model/effort/opening brief。旧机长保持不变。")
+                    continue
+                }
                 captainHandoffRequests.append(CaptainHandoffControlRequest(
-                    commandId: cmd.id, crewId: cmd.crewId,
+                    commandId: cmd.id, sourceCrewId: cmd.crewId,
+                    targetCrewId: targetCrewId,
                     requesterSessionId: cmd.requesterSessionId,
                     targetSessionId: cmd.sessionId, runner: cmd.runner,
                     model: cmd.model, effort: cmd.effort,
@@ -946,7 +968,10 @@ struct SessionSpawnRequest: Equatable {
 /// captain MCP 入队后交给 live runner 的明确二选一请求。
 struct CaptainHandoffControlRequest: Equatable {
     let commandId: String
-    let crewId: String
+    /// 发起命令并提供授权的 crew；默认自交接时与 targetCrewId 相同。
+    let sourceCrewId: String
+    /// 真正执行持久 captain 与 live runner 切换的 crew。
+    let targetCrewId: String
     let requesterSessionId: String?
     /// 非 nil = 现有成员模式；此时 runner 必须 nil，真实 kind 从会话账本读取。
     let targetSessionId: String?

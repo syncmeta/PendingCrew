@@ -1514,20 +1514,57 @@ final class CrewSessionRunner: ObservableObject {
         backend: PendingCrewBackend?
     ) async {
         do {
+            guard detail.crew.id == request.targetCrewId else {
+                throw CaptainHandoffAuthorizationError.notDirectChild
+            }
+            let checkedTarget = try CaptainHandoffAuthorization.resolveTargetCrewId(
+                sourceCrewId: request.sourceCrewId,
+                requestedTargetCrewId: request.targetCrewId,
+                targetParentIds: LocalCrewStore.shared.parentIds(of: request.targetCrewId))
+            guard checkedTarget == request.targetCrewId else {
+                throw CaptainHandoffAuthorizationError.notDirectChild
+            }
+            let liveParentCaptain = runs.first {
+                $0.crewId == request.sourceCrewId
+                    && $0.role == .captain && $0.status == .running
+            }?.sessionId
+            try CaptainHandoffAuthorization.validateLiveRequester(
+                sourceCrewId: request.sourceCrewId,
+                targetCrewId: request.targetCrewId,
+                requesterSessionId: request.requesterSessionId,
+                currentCaptainSessionId: liveParentCaptain)
+            if request.sourceCrewId != request.targetCrewId {
+                try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+                    crewId: request.sourceCrewId, sessionId: "system",
+                    text: "开始救援直系子 crew「\(detail.crew.title)」的机长；最终结果会回执到父子两边群聊。",
+                    category: "progress", senderName: "系统")
+            }
             if let target = request.targetSessionId, request.runner == nil {
                 try await reassignCaptain(
                     toSessionId: target, detail: detail, backend: backend)
-                return
+            } else {
+                guard request.targetSessionId == nil,
+                      let runner = request.runner,
+                      let kind = LocalCodingAgentKind(rawValue: runner == "claude" ? "claude_code" : runner),
+                      kind.isAgent else { throw RunnerError.captainCandidateInvalid }
+                try await startFreshCaptain(
+                    detail: detail, backend: backend,
+                    openingBrief: request.openingBrief ?? "",
+                    kind: kind, model: request.model, effort: request.effort,
+                    title: request.title ?? "机长", userInitiated: false)
             }
-            guard request.targetSessionId == nil,
-                  let runner = request.runner,
-                  let kind = LocalCodingAgentKind(rawValue: runner == "claude" ? "claude_code" : runner),
-                  kind.isAgent else { throw RunnerError.captainCandidateInvalid }
-            try await startFreshCaptain(
-                detail: detail, backend: backend,
-                openingBrief: request.openingBrief ?? "",
-                kind: kind, model: request.model, effort: request.effort,
-                title: request.title ?? "机长", userInitiated: false)
+            if request.sourceCrewId != request.targetCrewId {
+                do {
+                    try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+                        crewId: request.sourceCrewId, sessionId: "system",
+                        text: "直系子 crew「\(detail.crew.title)」机长救援完成；其持久机长与 live runner 已切换。",
+                        category: "milestone", senderName: "系统")
+                } catch {
+                    // 子 crew 的事务已提交且已有成功回执；父群回执失败不能倒打一耙
+                    // 宣称交接失败，更不能尝试恢复旧机长制造双 captain。
+                    lastStartError = "子 crew 机长已切换，但父群成功回执写入失败：\(error.localizedDescription)"
+                }
+            }
         } catch {
             lastStartError = "机长交接失败：\(error.localizedDescription)"
             let preserved: String
@@ -1538,7 +1575,7 @@ final class CrewSessionRunner: ObservableObject {
             }
             do {
                 try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
-                    crewId: request.crewId, sessionId: "system",
+                    crewId: request.sourceCrewId, sessionId: "system",
                     text: "机长交接失败：\(error.localizedDescription)\n\(preserved)",
                     category: "error", senderName: "系统")
             } catch {
