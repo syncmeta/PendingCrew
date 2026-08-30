@@ -269,18 +269,23 @@ struct SessionDaemonHello: Codable, Equatable {
     var capabilities: [String] = []
     var sessionCount: Int
     var pid: Int32
+    /// P5 自检字段。可选以保持旧 daemon / 新 app 双向兼容。
+    var viewerCount: Int?
+    var startedAt: Double?
 
     private enum CodingKeys: String, CodingKey {
-        case protocolVersion, daemonBuild, capabilities, sessionCount, pid
+        case protocolVersion, daemonBuild, capabilities, sessionCount, pid, viewerCount, startedAt
     }
 
     init(protocolVersion: Int, daemonBuild: String, capabilities: [String] = [],
-         sessionCount: Int, pid: Int32) {
+         sessionCount: Int, pid: Int32, viewerCount: Int? = nil, startedAt: Double? = nil) {
         self.protocolVersion = protocolVersion
         self.daemonBuild = daemonBuild
         self.capabilities = capabilities
         self.sessionCount = sessionCount
         self.pid = pid
+        self.viewerCount = viewerCount
+        self.startedAt = startedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -290,6 +295,8 @@ struct SessionDaemonHello: Codable, Equatable {
         capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities) ?? []
         sessionCount = try c.decode(Int.self, forKey: .sessionCount)
         pid = try c.decode(Int32.self, forKey: .pid)
+        viewerCount = try c.decodeIfPresent(Int.self, forKey: .viewerCount)
+        startedAt = try c.decodeIfPresent(Double.self, forKey: .startedAt)
     }
 }
 

@@ -26,6 +26,8 @@ struct PendingCrewEntry {
         FileDescriptorLimit.raiseSoftLimitToHardLimit()
         if McpHelperMain.runIfHelper(CommandLine.arguments) { return }
         #if os(macOS)
+        // P5 无界面自检：必须在 daemon / GUI 身份之前截住，绝不为查状态开窗口。
+        if SessionDaemonStatusMain.runIfRequested(CommandLine.arguments) { return }
         // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
         if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }

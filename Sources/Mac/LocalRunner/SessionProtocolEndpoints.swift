@@ -45,6 +45,7 @@ final class SessionProtocolServer {
     private let codec = SessionProtocolCodec()
     private let capabilities: [String]
     private let daemonBuild: String
+    private let startedAt: Double
     private var records: [String: Record] = [:]
     private var connections: [ObjectIdentifier: Connection] = [:]
     private var sessionByHandle: [UInt32: String] = [:]
@@ -65,9 +66,11 @@ final class SessionProtocolServer {
     var connectionCount: Int { connections.count }
     var sessionCount: Int { records.count }
 
-    init(capabilities: [String], daemonBuild: String = "in-process") {
+    init(capabilities: [String], daemonBuild: String = "in-process",
+         startedAt: Double = Date().timeIntervalSince1970) {
         self.capabilities = capabilities
         self.daemonBuild = daemonBuild
+        self.startedAt = startedAt
     }
 
     // MARK: - 链路
@@ -233,7 +236,9 @@ final class SessionProtocolServer {
             send(.hello(.init(protocolVersion: SessionProtocolVersion.current,
                               daemonBuild: daemonBuild,
                               capabilities: capabilities, sessionCount: records.count,
-                              pid: Int32(ProcessInfo.processInfo.processIdentifier))),
+                              pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                              viewerCount: connections.count,
+                              startedAt: startedAt)),
                  on: connection)
             onDiagnostic?("握手：app build=\(value.appBuild) protocol=\(value.protocolVersion)"
                 + " 协商能力=\(connection.negotiatedCapabilities.joined(separator: ","))")
@@ -539,6 +544,8 @@ final class SessionProtocolClient {
     var onLinkClosed: (() -> Void)?
     /// 全量列表到达。viewer 侧的 roster 镜像消费它。
     var onSessionList: ((SessionList) -> Void)?
+    /// P5 `--daemon-status` 与版本横幅消费完整握手事实，不从本地 build 猜。
+    var onDaemonHello: ((SessionDaemonHello) -> Void)?
     /// 没有对应 `RemoteSessionBackend` 的事件（viewer 侧 roster 之类）。
     var onUnroutedEvent: ((SessionEvent) -> Void)?
 
@@ -696,6 +703,7 @@ final class SessionProtocolClient {
                 appCapabilities: capabilities, daemonCapabilities: value.capabilities) else { return }
             negotiated = caps
             isConnected = true
+            onDaemonHello?(value)
             remotes.values.forEach { $0.updateConnection(capabilities: caps) }
         case let .sessions(value):
             for summary in value.sessions {

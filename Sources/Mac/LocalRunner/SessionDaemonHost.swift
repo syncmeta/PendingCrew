@@ -141,7 +141,9 @@ final class SessionDaemonHost {
         let build = build ?? SessionDaemonHost.currentBuild
         self.paths = paths
         log = SessionDaemonLog(url: paths.log)
-        server = SessionProtocolServer(capabilities: capabilities, daemonBuild: build)
+        server = SessionProtocolServer(
+            capabilities: capabilities, daemonBuild: build,
+            startedAt: startedAt.timeIntervalSince1970)
         server.onDiagnostic = { [log] line in log.write(line) }
     }
 

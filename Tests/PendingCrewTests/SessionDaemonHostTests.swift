@@ -89,6 +89,26 @@ final class SessionDaemonHostTests: XCTestCase {
         XCTAssertEqual(host.server.connectionCount, 1)
     }
 
+    func test_daemonStatus通过真实socket拿到握手与roster实况() throws {
+        let paths = paths()
+        let host = SessionDaemonHost(paths: paths, build: "status-build")
+        host.onCrewNotice = { _, _ in }
+        try host.start()
+        defer { host.stop() }
+
+        let status = try SessionDaemonStatusProbe.query(paths: paths)
+
+        XCTAssertEqual(status.hello.daemonBuild, "status-build")
+        XCTAssertEqual(status.hello.protocolVersion, SessionProtocolVersion.current)
+        XCTAssertEqual(status.hello.pid, Int32(ProcessInfo.processInfo.processIdentifier))
+        XCTAssertEqual(status.hello.viewerCount, 1,
+                       "握手报告必须包含 status 自己这条真实连接")
+        XCTAssertNotNil(status.hello.startedAt)
+        XCTAssertEqual(status.sessions, [])
+        XCTAssertTrue(status.text.contains("已连接前端：0"), status.text)
+        XCTAssertTrue(status.text.contains("运行中 session：0"), status.text)
+    }
+
     // MARK: - §8.2 崩溃善后（这一组是整条线上唯一「判错就杀掉无辜进程」的地方）
 
     /// 记录对得上 → 真的回收。
