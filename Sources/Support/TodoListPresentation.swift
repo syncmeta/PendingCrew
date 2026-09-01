@@ -94,6 +94,26 @@ enum TodoListPresentation {
         return "\(sender)：\(compactSingleLine(response.text))"
     }
 
+    /// 每条 Todo 共用的本地化时间元信息（概览与详细窗口同一口径）。旧条目的
+    /// 更新时间由 `effectiveUpdatedAt` 从既有回应/创建时间回落，不会显示成空白。
+    static func metadataText(
+        for item: LocalTodoItem,
+        locale: Locale = .autoupdatingCurrent,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        func localized(_ stamp: String) -> String {
+            guard let date = CrewTimestamp.parse(stamp) else { return stamp }
+            return formatter.string(from: date)
+        }
+        return "创建 \(localized(item.createdAt)) · 更新 \(localized(item.effectiveUpdatedAt))"
+    }
+
     private static func compactSingleLine(_ text: String) -> String {
         text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }

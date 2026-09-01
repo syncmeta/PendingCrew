@@ -140,6 +140,8 @@ final class LocalTodoStore: @unchecked Sendable {
     let ledger: TodoLedger
 
     private let directory: URL
+    /// 注入时钟只用于把所有真实写路径钉到同一口径；产品默认取当前时间。
+    private let now: @Sendable () -> Date
 
     /// 进程内变更信号：本进程每次 save 后发一个 `crewId`（app 侧人类 add 即推）。
     /// 跨进程写（helper `respond_todo`）由 `todoChanges` 合流的目录监听补齐 ——
@@ -150,12 +152,14 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 同目录下的**另一本账**。helper 只拿到一个 `--dir`，用它开第二本，
     /// 别让调用方漏传就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
     func sibling(_ other: TodoLedger) -> LocalTodoStore {
-        other == ledger ? self : LocalTodoStore(directory: directory, ledger: other)
+        other == ledger ? self : LocalTodoStore(directory: directory, ledger: other, now: now)
     }
 
-    init(directory: URL? = nil, ledger: TodoLedger = .agent) {
+    init(directory: URL? = nil, ledger: TodoLedger = .agent,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.directory = directory ?? LocalWhiteboardStore.defaultDirectory
         self.ledger = ledger
+        self.now = now
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
@@ -215,16 +219,18 @@ final class LocalTodoStore: @unchecked Sendable {
              bySenderName: String? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
+            let stamp = timestamp()
             let item = LocalTodoItem(
                 id: UUID().uuidString.lowercased(),
                 number: (rows.map(\.number).max() ?? 0) + 1,
                 text: text,
                 status: "pending",
-                createdAt: ISO8601DateFormatter().string(from: Date()),
+                createdAt: stamp,
+                updatedAt: stamp,
                 attachments: (attachments?.isEmpty ?? true) ? nil : attachments,
                 createdBySessionId: bySessionId,
                 createdBySenderName: bySenderName)
-            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
             rows.append(item)
             saveLocked(crewId: crewId, rows: rows)
             return item
@@ -242,16 +248,18 @@ final class LocalTodoStore: @unchecked Sendable {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
             guard let idx = liveIndexLocked(rows, number) else { return nil }
+            let stamp = timestamp()
             rows[idx].responses.append(LocalTodoResponse(
                 id: UUID().uuidString.lowercased(),
                 sessionId: sessionId,
                 senderName: senderName,
                 text: text,
                 status: newStatus,
-                createdAt: ISO8601DateFormatter().string(from: Date())))
+                createdAt: stamp))
             if let s = newStatus, Self.validStatuses.contains(s) {
                 rows[idx].status = s
             }
+            rows[idx].updatedAt = stamp
             saveLocked(crewId: crewId, rows: rows)
             return rows[idx]
         }
@@ -268,7 +276,9 @@ final class LocalTodoStore: @unchecked Sendable {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
             guard let idx = liveIndexLocked(rows, number) else { return nil }
+            guard rows[idx].text != trimmed else { return rows[idx] }
             rows[idx].text = trimmed
+            rows[idx].updatedAt = timestamp()
             saveLocked(crewId: crewId, rows: rows)
             return rows[idx]
         }
@@ -284,7 +294,9 @@ final class LocalTodoStore: @unchecked Sendable {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return false }
             guard let idx = liveIndexLocked(rows, number) else { return false }
-            rows[idx].deletedAt = ISO8601DateFormatter().string(from: Date())
+            let stamp = timestamp()
+            rows[idx].deletedAt = stamp
+            rows[idx].updatedAt = stamp
             saveLocked(crewId: crewId, rows: rows)
             return true
         }
@@ -300,9 +312,10 @@ final class LocalTodoStore: @unchecked Sendable {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return false }
             guard let idx = liveIndexLocked(rows, number) else { return false }
-            rows[idx].dismissedAt = dismissed
-                ? ISO8601DateFormatter().string(from: Date())
-                : nil
+            guard (rows[idx].dismissedAt != nil) != dismissed else { return true }
+            let stamp = timestamp()
+            rows[idx].dismissedAt = dismissed ? stamp : nil
+            rows[idx].updatedAt = stamp
             saveLocked(crewId: crewId, rows: rows)
             return true
         }
@@ -347,6 +360,7 @@ final class LocalTodoStore: @unchecked Sendable {
             let wasCompleted = rows[idx].status == "completed"
             guard !requireCompleted || wasCompleted else { return nil }
             let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+            let stamp = timestamp()
             rows[idx].responses.append(LocalTodoResponse(
                 id: UUID().uuidString.lowercased(),
                 sessionId: "human",
@@ -354,12 +368,20 @@ final class LocalTodoStore: @unchecked Sendable {
                 text: text.isEmpty ? (wasCompleted ? "重开了这条 Todo" : "追问了这条 Todo") : text,
                 // status 记这条追问把条目推到了哪 —— 只有重开那次真动了状态。
                 status: wasCompleted ? "pending" : nil,
-                createdAt: ISO8601DateFormatter().string(from: Date()),
+                createdAt: stamp,
                 attachments: (attachments?.isEmpty ?? true) ? nil : attachments))
             if wasCompleted { rows[idx].status = "pending" }
+            rows[idx].updatedAt = stamp
             saveLocked(crewId: crewId, rows: rows)
             return rows[idx]
         }
+    }
+
+    /// 新写入统一保留小数秒，避免同一秒内回应/编辑后 `updatedAt` 看起来没推进。
+    private func timestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: now())
     }
 
     // MARK: - Persistence（基座三件套：flock / 逐条 lenient / corrupt 归档，#528）
@@ -431,6 +453,9 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     /// "pending"（待办）| "in_progress"（进行中）| "completed"（完成）。
     var status: String
     let createdAt: String
+    /// 最近一次真实变更。#95 之前的旧 JSON 没这个字段，保持 nil 并由
+    /// `effectiveUpdatedAt` 回落到已有时间线，不因升级而丢整条。
+    var updatedAt: String? = nil
     /// 机器人回应（追加式，按时间序）。新条目从空开始。
     var responses: [LocalTodoResponse] = []
     /// 软删墓碑（Todo #21）：非 nil = 人类删掉了这条。留着行只为把 #N 占住，
@@ -463,6 +488,19 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     /// 人类「看过了，不打算回应」的标记（Todo #62）。没有它，一条人类不打算处理的
     /// 条目会把黄点永久钉死。不动 `status`、不加回应 —— 只是不再算未回应。
     var dismissedAt: String? = nil
+
+    /// 展示用更新时间：新数据优先看 `updatedAt`；旧数据从回应、dismiss/软删墓碑与
+    /// 创建时间里取真正最晚的一刻。时间戳解析失败时仍给出一个可见的原始兜底。
+    var effectiveUpdatedAt: String {
+        let stamps = [createdAt, updatedAt, deletedAt, dismissedAt].compactMap { $0 }
+            + responses.map(\.createdAt)
+        if let latest = stamps.compactMap({ stamp in
+            CrewTimestamp.parse(stamp).map { (stamp: stamp, date: $0) }
+        }).max(by: { $0.date < $1.date }) {
+            return latest.stamp
+        }
+        return updatedAt ?? responses.last?.createdAt ?? dismissedAt ?? deletedAt ?? createdAt
+    }
 
     /// 讲给 agent 听的条目正文：正文 + 每个附件一行绝对路径提示（与群聊同一措辞）。
     var agentText: String {

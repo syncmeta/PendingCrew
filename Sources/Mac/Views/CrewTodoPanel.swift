@@ -119,6 +119,10 @@ struct CrewTodoPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
+                Text(TodoListPresentation.metadataText(for: item))
+                    .font(Theme.Fonts.caption2)
+                    .foregroundStyle(Theme.Palette.inkMuted)
+
                 // 条目带的图（Todo #52）：概览给小格子、最多 3 张，点开看大图。
                 CrewTodoAttachmentStrip(attachments: item.attachments ?? [],
                                         cell: 36, maxVisible: 3)

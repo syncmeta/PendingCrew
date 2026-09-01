@@ -124,6 +124,26 @@ final class TodoListPresentationTests: XCTestCase {
                        "session:worker：收到")
     }
 
+    // MARK: - #95 条目时间元信息
+
+    func testMetadataTextLabelsLocalizedCreationAndUpdateTimes() {
+        var todo = item(95, createdAt: "2026-09-01T02:03:04Z")
+        todo.updatedAt = "2026-09-02T05:06:07Z"
+        let text = TodoListPresentation.metadataText(
+            for: todo,
+            locale: Locale(identifier: "zh_CN"),
+            timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+
+        XCTAssertTrue(text.hasPrefix("创建 "), text)
+        XCTAssertTrue(text.contains(" · 更新 "), text)
+        XCTAssertFalse(text.contains("T02:03:04Z"), "时间应本地化，不该直接铺 ISO 原文：\(text)")
+        let values = String(text.dropFirst("创建 ".count))
+            .components(separatedBy: " · 更新 ")
+        XCTAssertEqual(values.count, 2, text)
+        XCTAssertNotEqual(values[0], values[1],
+                          "创建与更新时间不同，展示不应把两者误写成同一个值")
+    }
+
     // MARK: - #52 建 Todo 的正文口径（能附图之后「只贴图不打字」是合法输入）
 
     func testNewTodoTextUsesTypedTextTrimmed() {

@@ -102,6 +102,16 @@ final class ViewWiringTests: XCTestCase {
                        "Todo 概览仍在使用旧的灰色填充")
     }
 
+    /// Todo #95：两本账共用的概览行和详细行都必须显示同一份创建/更新时间文案。
+    func testTodoRowsShowSharedCreationAndUpdateMetadata() throws {
+        let panel = try Self.text(of: "CrewTodoPanel.swift")
+        let detail = try Self.text(of: "CrewTodoDetailWindow.swift")
+        let wiring = "TodoListPresentation.metadataText(for: item)"
+
+        XCTAssertTrue(panel.contains(wiring), "Todo 概览卡片没有显示创建/更新时间")
+        XCTAssertTrue(detail.contains(wiring), "Todo 详细行没有复用同一份创建/更新时间口径")
+    }
+
     /// Todo #81：驾驶舱只展示 Agent 自己写下的计划与想法，不能再因仓库没有
     /// `docs/roadmap.md` 而空白，也不能把 Todo / task 账混进来冒充 Agent 的判断。
     func testCockpitOnlyShowsAgentPlansAndThoughts() throws {
