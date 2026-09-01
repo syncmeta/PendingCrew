@@ -44,7 +44,7 @@ brew install --cask syncmeta/tap/pendingcrew
 
 要做什么事就拉一个群（这里的一个个群，叫机组/Crew）然后在群里说你想做什么。如图：
 
-![image-20260826124145407](/Users/hey/Untitled/Pendingname/PendingCrew/docs/screenshots/crew-1.png)
+![image-20260826124145407](docs/screenshots/crew-1.png)
 
 一个机组可以有父机组，可以有子机组。每个机组默认有机长和各个干活的 Agent 成员。你也可以拉其他联网的 Agent，或者真人，或者 PendingBot 里的机器人和真人进到机组里，一起做事。
 

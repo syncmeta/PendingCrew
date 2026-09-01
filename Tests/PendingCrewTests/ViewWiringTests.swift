@@ -319,6 +319,54 @@ final class ViewWiringTests: XCTestCase {
                       "帮助菜单只定义了地址但没有真正打开它")
     }
 
+    /// Todo #93：README 图片只能使用可移植的仓库相对路径或公网 URL；相对路径
+    /// 必须真实存在且大小写完全一致，避免开发机绝对路径在 GitHub 上静默变成 404。
+    func testReadmeImagesUsePortableExistingRepositoryPaths() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let expression = try NSRegularExpression(
+            pattern: #"(?:!\[[^\]]*\]\(([^)]+)\)|<img\b[^>]*\bsrc="([^"]+)")"#,
+            options: [.caseInsensitive]
+        )
+
+        for readmeName in ["README.md", "README_EN.md"] {
+            let readme = try Self.projectText(of: readmeName)
+            let matches = expression.matches(
+                in: readme, range: NSRange(readme.startIndex..., in: readme))
+            let references = matches.compactMap { match -> String? in
+                for group in 1...2 where match.range(at: group).location != NSNotFound {
+                    guard let range = Range(match.range(at: group), in: readme) else { continue }
+                    return String(readme[range])
+                }
+                return nil
+            }
+            XCTAssertFalse(references.isEmpty, "\(readmeName) 没扫到任何图片，校验本身失效")
+
+            for reference in references {
+                if reference.hasPrefix("https://") || reference.hasPrefix("http://") {
+                    continue
+                }
+                XCTAssertFalse(
+                    reference.hasPrefix("/") || reference.hasPrefix("file://"),
+                    "\(readmeName) 使用了不可移植的本机绝对图片路径：\(reference)")
+
+                let decoded = reference.removingPercentEncoding ?? reference
+                let candidate = root.appendingPathComponent(decoded).standardizedFileURL
+                XCTAssertTrue(
+                    candidate.path.hasPrefix(root.path + "/"),
+                    "\(readmeName) 图片路径逃出了仓库：\(reference)")
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: candidate.path),
+                    "\(readmeName) 图片不存在：\(reference)")
+                XCTAssertTrue(
+                    Self.repositoryPathExistsWithExactCase(decoded, under: root),
+                    "\(readmeName) 图片路径大小写与仓库不一致：\(reference)")
+            }
+        }
+    }
+
     /// Todo #43：系统通知不再冒充普通 session 的随机 emoji 头像；旧白板与新写入
     /// 都由 resolver 认成 PendingCrew，并在气泡位使用 App 品牌图标。
     func testPendingCrewSystemIdentityUsesAppIcon() throws {
@@ -523,6 +571,20 @@ final class ViewWiringTests: XCTestCase {
             .deletingLastPathComponent()
         return try String(
             contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    private static func repositoryPathExistsWithExactCase(
+        _ relativePath: String,
+        under root: URL
+    ) -> Bool {
+        var directory = root
+        for component in relativePath.split(separator: "/").map(String.init) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path),
+                  entries.contains(component)
+            else { return false }
+            directory.appendPathComponent(component)
+        }
+        return true
     }
 
     /// 仓库里 `apps/pendingcrew/Sources` 下的全部 .swift（路径由本文件位置推出）。
