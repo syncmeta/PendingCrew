@@ -23,6 +23,11 @@ struct MacThreePaneView: View {
     private var sessionRunner: CrewSessionRunner { sessionHost.runner }
     /// 左 sidebar 可见性 —— 由原生 sidebar 折叠开关控制（默认 `.all`：三栏全开）。
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// 驾驶舱开关位（人类 Todo #96）。**用 `@State` 持有，不是 `@StateObject`** ——
+    /// `@State` 只替我们保管这个引用，**不订阅**它的 `objectWillChange`。于是开关
+    /// 驾驶舱不会把本视图（连着整棵三栏）作废；只有下面那层 `CockpitLayer` 观察它。
+    /// 换成 `@StateObject` 会静默地把整棵树重新拉回失效范围，编译器一句话都不会说。
+    @State private var cockpit = CockpitPresentation()
 
     var body: some View {
         ZStack {
@@ -48,15 +53,21 @@ struct MacThreePaneView: View {
                     .environmentObject(sessionRunner)
                     .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 560)
             }
-            if sessionRunner.showingCockpit {
-                CockpitOverlay(runner: sessionRunner)
-                    .environmentObject(crewStore)
-                    .environmentObject(model)
-                    .transition(.opacity)
-                    .zIndex(1)
-            }
+            // 入口（中栏 toolbar 那颗按钮）只需要**写**这个开关位。给的是普通
+            // environment 值而不是 `.environmentObject` —— 后者会让整条中栏订阅它，
+            // 等于把 #96 刚拆掉的广播接回来一半。
+            .environment(\.cockpitPresentation, cockpit)
+
+            CockpitLayer(presentation: cockpit)
+                .environmentObject(crewStore)
+                .environmentObject(model)
+                .zIndex(1)
         }
-        .animation(.easeOut(duration: 0.16), value: sessionRunner.showingCockpit)
+        // ⚠️ **这里不许再挂 `.animation(_:value:)`**（人类 Todo #96）。
+        // 它的作用域是整个子树，包括整棵 NavigationSplitView；开关驾驶舱那一下的
+        // 失效会被裹进一个 0.16s 的动画事务里逐帧重算，而不是一次算完。
+        // 淡入淡出已挪进 `CockpitLayer`，只包驾驶舱自己。
+        //
         // 每个 crew 记住自己右栏打开的 session（#481）：切 crew 时把选中态存回旧
         // crew、恢复新 crew 记住的那份 —— 切回来还是原来打开的 session，不串。
         .onChange(of: crewStore.selectedCrewId) { old, new in
@@ -89,15 +100,15 @@ struct MacThreePaneView: View {
 /// 面板，而不是又一个主界面。关闭是卡片自己左上角那颗圆形叉（在 `CockpitView` 的头部）——
 /// 位置对齐 Mac 红点的心智；点背景或按 Esc 同样关掉。
 private struct CockpitOverlay: View {
-    @ObservedObject var runner: CrewSessionRunner
+    @ObservedObject var presentation: CockpitPresentation
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.22)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
-                .onTapGesture { runner.showingCockpit = false }
-            CockpitView(runner: runner)
+                .onTapGesture { presentation.close() }
+            CockpitView(onClose: { presentation.close() })
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius)
@@ -108,7 +119,31 @@ private struct CockpitOverlay: View {
                 .padding(.bottom, 28)
         }
         // Esc 关掉（临时窗口该有的手感）。
-        .onExitCommand { runner.showingCockpit = false }
+        .onExitCommand { presentation.close() }
+    }
+}
+
+/// 驾驶舱**这一层**，也是这个开关唯一惊动到的地方（人类 Todo #96）。
+///
+/// 三件事都收在这里，一件都不许再往上挂：
+/// 1. **观察开关位** —— 只有本视图订阅 `CockpitPresentation`。开/关驾驶舱时，
+///    侧栏、群聊、终端一个都不重算（以前它们全都要，因为开关位挂在 runner 上）。
+/// 2. **动画只包这一层** —— `.animation(_:value:)` 的作用域是整个子树。挂在外面那个
+///    ZStack 上时，它包住的是整棵 `NavigationSplitView`，于是那次全树失效被摊成
+///    0.16s 里的逐帧重算。挂在这儿，它只作用于驾驶舱自己的淡入淡出。
+/// 3. **关着的时候是空的** —— 空 ZStack 不占尺寸、不吃点击，外层那个 ZStack 照旧只有
+///    三栏在参与布局。
+private struct CockpitLayer: View {
+    @ObservedObject var presentation: CockpitPresentation
+
+    var body: some View {
+        ZStack {
+            if presentation.isOpen {
+                CockpitOverlay(presentation: presentation)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: presentation.isOpen)
     }
 }
 

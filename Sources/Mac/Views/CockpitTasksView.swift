@@ -13,8 +13,12 @@ import SwiftUI
 struct CockpitAgentMindView: View {
     let crewId: String
 
-    @State private var plans: [CockpitPlanItem] = []
+    /// 读回来的账 —— **按 crew 认领**（见 `CockpitPlanFeed`）。读改成异步之后，
+    /// 迟到的结果不认、别的 crew 的行不显示。
+    @State private var feed = CockpitPlanFeed()
     @State private var expanded: Set<Int> = []
+
+    private var plans: [CockpitPlanItem] { feed.plans(for: crewId) }
 
     var body: some View {
         ScrollView {
@@ -33,12 +37,29 @@ struct CockpitAgentMindView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Theme.Palette.canvas)
+        // `.task` 继承 MainActor —— 所以这里**一次磁盘 IO 都不能直接做**（人类 Todo #96）。
+        // `CockpitPlanStore.list` 里是阻塞式 `flock(LOCK_EX)` + 整份 JSON 解码：
+        // 只要有 helper 正在写这个 crew 的 .plan.lock，主线程就停在那儿等，
+        // 而打开驾驶舱第一件事就是走这条路。改走 `listOffMain`，主线程只剩赋值。
         .task(id: crewId) {
-            plans = CockpitPlanStore.shared.list(crewId: crewId)
-            for await _ in CockpitPlanStore.shared.planChanges(crewId: crewId) {
-                plans = CockpitPlanStore.shared.list(crewId: crewId)
+            let requested = crewId
+            await reload(requested)
+            for await _ in CockpitPlanStore.shared.planChanges(crewId: requested) {
+                if Task.isCancelled { return }
+                await reload(requested)
             }
         }
+    }
+
+    /// 后台读一版，回主线程再决定认不认。
+    ///
+    /// 两道都要过：`Task.isCancelled`（切 crew 时 `.task(id:)` 会取消旧的那次）
+    /// 和 `CockpitPlanFeed` 的 crew 认领（旧的那次**已经在路上**、取消标志还没来得及
+    /// 生效时，结果照样会回来）。少一道，人就会在新 crew 的标题下看到上一个 crew 的作战板。
+    private func reload(_ requested: String) async {
+        let fresh = await CockpitPlanStore.shared.listOffMain(crewId: requested)
+        guard !Task.isCancelled else { return }
+        feed.apply(rows: fresh, requested: requested, current: crewId)
     }
 
     private var planItems: [CockpitTaskItem] {

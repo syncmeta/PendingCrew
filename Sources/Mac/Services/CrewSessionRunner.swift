@@ -29,17 +29,23 @@ final class CrewSessionRunner: ObservableObject {
     /// 开关只翻 inspector 呈现态，不强制 true —— 让用户先落在成员列表。
     @Published var viewingTerminal = false
 
-    /// 驾驶舱模式（cockpit.md）：`true` 时主窗口从「三栏群聊」整片切到「侧栏 | 驾驶舱」
-    /// 两栏——驾驶舱铺满 content+detail（不是临时小窗口/info 面板）。侧栏仍在,作为
-    /// **沿 DAG 选 crew 的范围选择器**。中栏 toolbar「驾驶舱」按钮翻 true,驾驶舱头部
-    /// 「退出」翻 false。放 runner 上让 MacThreePaneView（决定布局）与中栏（入口）共享。
-    @Published var showingCockpit = false
-
-    /// 驾驶舱段深链请求（Todo #12：工具栏 Todo 独立按钮直达 Todo 段）。值为
-    /// `CockpitView.Segment` 的 rawValue；CockpitView 出现/变更时消费并清 nil。
-    /// 放 runner 上与 `showingCockpit` 同层——入口（中栏 toolbar）与呈现（CockpitView）
-    /// 分属两棵子树，只有 runner 两边都够得着。
-    @Published var cockpitSegmentRequest: String?
+    // 驾驶舱的开关位**曾经在这里**（`showingCockpit`），2026-09-01 按人类 Todo #96 搬走了。
+    //
+    // 搬走的理由：`ObservableObject` 没有属性粒度。翻这一个 bool 会给每一个观察本对象的
+    // 视图发 `objectWillChange` —— 群聊、终端、侧栏 42 行、中栏、详情面板全部作废重算，
+    // 开一次发一次、关一次再发一次。**这就是「驾驶舱打开和关闭都要很久」的主因**，
+    // 而且它天然对称，所以两个方向一样慢。
+    //
+    // 现在它住在 `CockpitPresentation` 里（`Sources/Mac/Views/CockpitPresentation.swift`），
+    // 由 `MacThreePaneView` 用 `@State` 保管、只被 `CockpitLayer` 观察。
+    // **别搬回来** —— 「放 runner 上让两边都够得着」正是当初把它放这儿的理由，
+    // 而那个便利的真实代价是每次开关都广播一遍全树。要跨子树够得着有别的办法
+    // （现在用的是不订阅的 `@Environment(\.cockpitPresentation)`）。
+    //
+    // 同一拍删掉的还有 `cockpitSegmentRequest`：那是 Todo #12 的段深链请求，
+    // 但那个 Todo 按钮早已并进任务段删掉了，全仓库**没有任何地方读它**，
+    // 只剩 `CockpitView.onAppear` 给它赋一次 nil —— 而 `@Published` 不判等值，
+    // 于是打开驾驶舱要白付一整轮全树广播。
 
     /// 最近一次「启动 Captain」失败的人类可读原因（手动按钮 + 建 crew 自动起共用）。
     /// 错误从前台终端模式（composer 里渲染 `localError`）和成员列表模式（按钮所在

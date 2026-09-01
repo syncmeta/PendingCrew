@@ -9,6 +9,10 @@ import SwiftUI
 struct CrewCenterView: View {
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
+    /// 驾驶舱开关位的**写句柄**（人类 Todo #96）。`@Environment` 取一个 class 值
+    /// **不订阅**它的 `objectWillChange` —— 中栏只按按钮，不需要知道驾驶舱开着没有。
+    /// 换成 `@EnvironmentObject` 会让开关驾驶舱重新把整条中栏（连着群聊）作废。
+    @Environment(\.cockpitPresentation) private var cockpitPresentation
     @State private var showingDetail = false
     /// chunk2 T5（captain 唤醒=app 注入）：已通知过 captain 的 decision id ——
     /// 防止重复注入同一条。**放在常驻中栏**（而非按需 inspector），captain 编排
@@ -84,7 +88,7 @@ struct CrewCenterView: View {
                     //
                     // 原来旁边还有个「Todo」按钮直达 Todo 段（Todo #12）——Todo 已并进
                     // 任务段、右栏又常驻 Todo 面板，两个按钮开同一扇门，删掉一个。
-                    Button { sessionRunner.showingCockpit = true } label: {
+                    Button { cockpitPresentation.open() } label: {
                         Label("驾驶舱", systemImage: "speedometer")
                     }
                     .disabled(crewStore.selectedDetail == nil)
