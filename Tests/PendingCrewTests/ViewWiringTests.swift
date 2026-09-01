@@ -82,6 +82,26 @@ final class ViewWiringTests: XCTestCase {
 
     }
 
+    /// Todo #92：概览卡片与群聊对方气泡必须共用同一组主题 token，不能再另写
+    /// `surfaceMuted` 或颜色字面量，免得主题调整后两处悄悄漂开。
+    func testTodoOverviewCardsReuseIncomingChatBubbleSurfaceAndHairline() throws {
+        let panel = try Self.text(of: "CrewTodoPanel.swift")
+        let bubble = try Self.text(of: "BubbleView.swift")
+        let sharedStyle = [
+            ".fill(Theme.Palette.surface)",
+            ".strokeBorder(Theme.Palette.hairline, lineWidth: 0.5)",
+        ]
+
+        for token in sharedStyle {
+            XCTAssertTrue(bubble.contains(token),
+                          "群聊对方气泡的样式真值已变化，请同步更新 Todo 契约")
+            XCTAssertTrue(panel.contains(token),
+                          "Todo 概览卡片没有复用群聊气泡样式：\(token)")
+        }
+        XCTAssertFalse(panel.contains("Theme.Palette.surfaceMuted.opacity(0.5)"),
+                       "Todo 概览仍在使用旧的灰色填充")
+    }
+
     /// Todo #81：驾驶舱只展示 Agent 自己写下的计划与想法，不能再因仓库没有
     /// `docs/roadmap.md` 而空白，也不能把 Todo / task 账混进来冒充 Agent 的判断。
     func testCockpitOnlyShowsAgentPlansAndThoughts() throws {

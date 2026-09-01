@@ -135,7 +135,8 @@ struct CrewTodoPanel: View {
             .padding(.vertical, 10)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.Palette.surfaceMuted.opacity(0.5), in: cardShape)
+            .background(cardShape.fill(Theme.Palette.surface))
+            .overlay(cardShape.strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
