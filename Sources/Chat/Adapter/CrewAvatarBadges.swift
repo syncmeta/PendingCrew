@@ -22,8 +22,15 @@ import SwiftUI
 /// 已删 —— 它三种点亮情形里有两种右下角本来就已经变红，重复且互相打架；未读
 /// 也不该再点亮任何点（只留切换条上的数字角标）。
 struct CrewAvatarBadges: View {
+    private static let pendingCrewAppImageReduction: CGFloat = 4
+
     let sender: GroupBubbleSender
     var size: CGFloat = 30
+
+    /// PendingCrew 的系统消息保留与普通头像相同的槽位，只缩小内部 App 图标。
+    private var baseImageSize: CGFloat {
+        sender.isPendingCrewApp ? size - Self.pendingCrewAppImageReduction : size
+    }
 
     var body: some View {
         ZStack {
@@ -47,7 +54,7 @@ struct CrewAvatarBadges: View {
             Image("BrandMark")
                 .resizable()
                 .scaledToFill()
-                .frame(width: size, height: size)
+                .frame(width: baseImageSize, height: baseImageSize)
                 .background(Color.white, in: Circle())
                 .clipShape(Circle())
                 .overlay(Circle().strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))

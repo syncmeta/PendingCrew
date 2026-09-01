@@ -335,6 +335,26 @@ final class ViewWiringTests: XCTestCase {
                       "PendingCrew 系统通知仍用随机 emoji，不是 App 品牌图标")
     }
 
+    /// PendingCrew 系统通知仍占用群聊统一的 30pt 头像槽，只把 App 图标本体缩小
+    /// 一个小档位（4pt → 26pt）。这样普通人类/session 头像与消息行布局均不变。
+    func testPendingCrewSystemAvatarIsSmallerInsideStandardMessageSlot() throws {
+        let bubble = try Self.text(of: "BubbleView.swift")
+        let avatar = try Self.text(of: "CrewAvatarBadges.swift")
+
+        XCTAssertTrue(bubble.contains("CrewAvatarBadges(sender: g, size: 30)"),
+                      "群聊头像槽不再是统一的 30pt，系统头像调整不应改消息行布局")
+        XCTAssertTrue(
+            avatar.contains("private static let pendingCrewAppImageReduction: CGFloat = 4"),
+            "PendingCrew App 图标没有固定缩小一个 4pt 小档位（30pt → 26pt）")
+        XCTAssertTrue(
+            avatar.contains("sender.isPendingCrewApp ? size - Self.pendingCrewAppImageReduction : size"),
+            "缩小尺寸没有只接到 PendingCrew App 身份分支")
+        XCTAssertTrue(avatar.contains(".frame(width: baseImageSize, height: baseImageSize)"),
+                      "PendingCrew App 图标没有使用缩小后的本体尺寸")
+        XCTAssertTrue(avatar.contains(".frame(width: size, height: size)"),
+                      "头像组件外层槽位被缩小，消息行对齐会随之改变")
+    }
+
     /// Todo #43：只有进程自己退出才发这句；文案必须走统一语义函数，不能由各个
     /// lifecycle 分支自行拼出不同口径。
     func testSessionSelfEndNoticeUsesOneLiteralTemplate() throws {
