@@ -2,6 +2,18 @@ import XCTest
 
 /// LocalTodoStore（task #478）：人类 Todo 列表数据层。
 final class LocalTodoStoreTests: XCTestCase {
+    private final class StepClock: @unchecked Sendable {
+        private let dates: [Date]
+        private(set) var calls = 0
+
+        init(_ dates: [Date]) { self.dates = dates }
+
+        func next() -> Date {
+            defer { calls += 1 }
+            return dates[calls]
+        }
+    }
+
     private func tempDir() -> URL {
         let d = FileManager.default.temporaryDirectory.appendingPathComponent("todo-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
@@ -48,6 +60,77 @@ final class LocalTodoStoreTests: XCTestCase {
         let r = s.respond(crewId: "c", number: 1, sessionId: "sess-1", text: "看了一圈，明天给结论")
         XCTAssertEqual(r?.status, "pending")
         XCTAssertNil(r?.responses[0].status)
+    }
+
+    // MARK: - #95 创建 / 更新时间
+
+    func testEveryRealWriteAdvancesUpdatedAtIncludingSoftDelete() throws {
+        let dir = tempDir()
+        let dates = (0..<8).map { Date(timeIntervalSince1970: 1_800_000_000 + Double($0)) }
+        let clock = StepClock(dates)
+        let s = LocalTodoStore(directory: dir, now: { clock.next() })
+
+        let added = try XCTUnwrap(s.add(crewId: "c", text: "原文"))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(added.updatedAt)), dates[0])
+        XCTAssertEqual(added.createdAt, added.updatedAt)
+
+        let responded = try XCTUnwrap(s.respond(
+            crewId: "c", number: 1, sessionId: "s", text: "收到", newStatus: "in_progress"))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(responded.updatedAt)), dates[1])
+
+        let edited = try XCTUnwrap(s.edit(crewId: "c", number: 1, text: "新正文"))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(edited.updatedAt)), dates[2])
+
+        let followedUp = try XCTUnwrap(s.followUp(crewId: "c", number: 1, note: "再看看"))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(followedUp.updatedAt)), dates[3])
+
+        let completed = try XCTUnwrap(s.respond(
+            crewId: "c", number: 1, sessionId: "s", text: "完成", newStatus: "completed"))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(completed.updatedAt)), dates[4])
+
+        let reopened = try XCTUnwrap(s.reopen(crewId: "c", number: 1, note: "重开"))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(reopened.updatedAt)), dates[5])
+
+        XCTAssertTrue(s.setDismissed(crewId: "c", number: 1))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(
+            s.item(crewId: "c", number: 1)?.updatedAt)), dates[6])
+
+        XCTAssertTrue(s.delete(crewId: "c", number: 1))
+        let stored = try JSONDecoder().decode(
+            [LocalTodoItem].self, from: Data(contentsOf: rawFileURL(dir, "c")))
+        XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(stored[0].updatedAt)), dates[7])
+        XCTAssertEqual(stored[0].deletedAt, stored[0].updatedAt,
+                       "软删虽不再可见，墓碑与更新时间仍应是同一次写入")
+    }
+
+    func testBothLedgersPersistUpdatedAt() throws {
+        for ledger in TodoLedger.allCases {
+            let date = Date(timeIntervalSince1970: 1_800_000_100)
+            let store = LocalTodoStore(directory: tempDir(), ledger: ledger, now: { date })
+            let item = try XCTUnwrap(store.add(crewId: "c", text: ledger.pillTitle))
+            XCTAssertEqual(CrewTimestamp.parse(try XCTUnwrap(item.updatedAt)), date)
+            XCTAssertEqual(
+                CrewTimestamp.parse(try XCTUnwrap(store.respond(
+                    crewId: "c", number: 1, sessionId: "s", text: "回应")?.updatedAt)),
+                date)
+        }
+    }
+
+    func testReadsAndNoOpWritesDoNotAdvanceUpdatedAt() throws {
+        let dates = (0..<2).map { Date(timeIntervalSince1970: 1_800_000_200 + Double($0)) }
+        let clock = StepClock(dates)
+        let s = LocalTodoStore(directory: tempDir(), now: { clock.next() })
+        let added = try XCTUnwrap(s.add(crewId: "c", text: "不变"))
+        let original = added.updatedAt
+
+        _ = s.list(crewId: "c")
+        _ = s.item(crewId: "c", number: 1)
+        _ = s.edit(crewId: "c", number: 1, text: "  不变  ")
+        XCTAssertTrue(s.setDismissed(crewId: "c", number: 1, dismissed: false))
+        XCTAssertNil(s.reopen(crewId: "c", number: 1, note: "状态不是完成"))
+
+        XCTAssertEqual(s.item(crewId: "c", number: 1)?.updatedAt, original)
+        XCTAssertEqual(clock.calls, 1, "纯读取和没有真实变化的写请求不应读取新时间")
     }
 
     func testRespondUnknownNumberReturnsNil() {

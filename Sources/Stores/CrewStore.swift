@@ -2,6 +2,13 @@ import Foundation
 import SwiftUI
 import Combine
 
+struct CrewChatSearchRequest: Identifiable, Equatable {
+    let id = UUID()
+    let crewId: String
+    let query: String
+    let messageId: String
+}
+
 /// Crew 列表 + detail 缓存。
 ///
 /// 设计原则（AppModel 顶端注释 + spec v2 §11）：**不**回到 "10+ 散装
@@ -23,6 +30,8 @@ final class CrewStore: ObservableObject {
     /// 本地态恒单元素 [本机]；登录态走 `GET /v1/machines`。
     @Published private(set) var machines: [Machine] = []
     @Published var selectedCrewId: String?
+    /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
+    @Published var chatSearchRequest: CrewChatSearchRequest?
     @Published private(set) var loadingList: Bool = false
     @Published private(set) var loadingDetailIds: Set<String> = []
     @Published private(set) var loadingSubjects: Bool = false
@@ -129,6 +138,14 @@ final class CrewStore: ObservableObject {
         // detail 进 cache 之前，先发起 fetch（不 await）。view 会按
         // `details[id]` 的 nil / 非 nil 状态切空态 / 内容态。
         Task { await refreshDetail(id) }
+    }
+
+    func openChatSearchResult(_ result: CrewMessageSearchResult, query: String) {
+        selectCrew(result.document.crewId)
+        chatSearchRequest = CrewChatSearchRequest(
+            crewId: result.document.crewId,
+            query: query,
+            messageId: result.document.messageId)
     }
 
     // MARK: - Refresh
@@ -474,6 +491,20 @@ final class CrewStore: ObservableObject {
                     runner: cmd.runner, isolation: isolation,
                     model: cmd.model, effort: cmd.effort, title: cmd.title))
             case "handoff_captain":
+                let requestedTarget = cmd.targetCrewId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let targetParents = requestedTarget.map { LocalCrewStore.shared.parentIds(of: $0) } ?? []
+                let targetCrewId: String
+                do {
+                    targetCrewId = try CaptainHandoffAuthorization.resolveTargetCrewId(
+                        sourceCrewId: cmd.crewId,
+                        requestedTargetCrewId: requestedTarget,
+                        targetParentIds: targetParents)
+                } catch {
+                    postSystemNotice(
+                        crewId: cmd.crewId,
+                        text: "机长交接被拒：\(error.localizedDescription)旧机长保持不变。")
+                    continue
+                }
                 let existing = cmd.sessionId?.isEmpty == false && cmd.runner == nil
                 let fresh = cmd.sessionId == nil && (cmd.runner == "claude" || cmd.runner == "codex")
                 guard existing || fresh else {
@@ -482,8 +513,16 @@ final class CrewStore: ObservableObject {
                         text: "机长交接被拒：控制命令模式含糊（必须二选一：现有 session 或显式 runner 新建）。旧机长保持不变。")
                     continue
                 }
+                if targetCrewId != cmd.crewId, fresh,
+                   (cmd.model == nil || cmd.effort == nil || cmd.note?.isEmpty != false) {
+                    postSystemNotice(
+                        crewId: cmd.crewId,
+                        text: "机长交接被拒：为直系子 crew 新建机长必须明确 runner/model/effort/opening brief。旧机长保持不变。")
+                    continue
+                }
                 captainHandoffRequests.append(CaptainHandoffControlRequest(
-                    commandId: cmd.id, crewId: cmd.crewId,
+                    commandId: cmd.id, sourceCrewId: cmd.crewId,
+                    targetCrewId: targetCrewId,
                     requesterSessionId: cmd.requesterSessionId,
                     targetSessionId: cmd.sessionId, runner: cmd.runner,
                     model: cmd.model, effort: cmd.effort,
@@ -952,7 +991,10 @@ struct SessionSpawnRequest: Equatable {
 /// captain MCP 入队后交给 live runner 的明确二选一请求。
 struct CaptainHandoffControlRequest: Equatable {
     let commandId: String
-    let crewId: String
+    /// 发起命令并提供授权的 crew；默认自交接时与 targetCrewId 相同。
+    let sourceCrewId: String
+    /// 真正执行持久 captain 与 live runner 切换的 crew。
+    let targetCrewId: String
     let requesterSessionId: String?
     /// 非 nil = 现有成员模式；此时 runner 必须 nil，真实 kind 从会话账本读取。
     let targetSessionId: String?

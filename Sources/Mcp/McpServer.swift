@@ -36,6 +36,9 @@ final class McpServer {
     /// **人类的**那本 Todo（`TodoLedger.human`，Todo #62）：方向反过来 —— agent 经
     /// `add_human_todo` 提条目请人拍板，人类在 app 里回应。与 store 同 `--dir`。
     let humanTodos: LocalTodoStore
+    /// Current-turn one-shot continuation promises. Unlike Todo/plan ledgers this
+    /// is executable control state and is scoped to this exact session turn.
+    let continuations: SessionContinuationStore
     /// 本 session 跑在哪家 runner 上（helper `--agent claude|codex`）。
     /// `set_session_profile` 拿它挑对照哪张模型表；nil（旧调用/没传）→ 两家都对照，
     /// 任一家认得就不吭声（宁可少说，也别对着错的表瞎报）。
@@ -53,6 +56,7 @@ final class McpServer {
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
          plans: CockpitPlanStore? = nil,
          humanTodos: LocalTodoStore? = nil,
+         continuations: SessionContinuationStore? = nil,
          agentKey: String? = nil,
          attachmentRoot: URL? = nil) {
         self.store = store
@@ -69,6 +73,8 @@ final class McpServer {
         // 没显式传就照着 agent 那本的目录开一份 human 的 —— 别让调用方漏传一个
         // 就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
         self.humanTodos = humanTodos ?? self.todos.sibling(.human)
+        self.continuations = continuations ?? SessionContinuationStore(
+            directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         self.agentKey = agentKey
         self.attachmentRoot = attachmentRoot ?? CrewChatAttachmentStore.defaultDirectory
     }
@@ -152,8 +158,28 @@ final class McpServer {
                 ],
                 [
                     "name": "read_whiteboard",
-                    "description": "读取 crew 群聊白板的当前全部消息（按时间序）。",
-                    "inputSchema": ["type": "object", "properties": [String: Any]()],
+                    "description": "分页读取当前 crew 群聊白板（按时间正序）。默认只返回最近 50 条，不会把长白板全量塞进上下文；有更早内容时，回执会给出下一页 before 游标。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "limit": ["type": "integer", "description": "每页条数，1–200，默认 50。"],
+                            "before": ["type": "string", "description": "可选消息 id 游标：返回该消息之前的一页，不重复游标消息。"],
+                        ],
+                    ],
+                ],
+                [
+                    "name": "search_whiteboard",
+                    "description": "搜索当前 crew 的完整群聊白板。与 app 当前群/跨群搜索共用同一匹配核心：空白分隔的词全部命中（可跨正文、发送者、附件元数据、时间字段），中文按 Unicode 归一化后的子串匹配；附件只搜 filename/MIME，不读文件内容；after/before 为含边界 ISO8601；结果默认最新优先、最多 200 条，并返回 crew_id/message_id 供定位。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "query": ["type": "string", "description": "必填；空白分词全部 AND。"],
+                            "after": ["type": "string", "description": "可选 ISO8601 下界，包含该时刻。"],
+                            "before": ["type": "string", "description": "可选 ISO8601 上界，包含该时刻。"],
+                            "limit": ["type": "integer", "description": "结果上限，1–200，默认 50。"],
+                        ],
+                        "required": ["query"],
+                    ],
                 ],
                 [
                     "name": "ask",
@@ -178,6 +204,17 @@ final class McpServer {
                             "after_minutes": ["type": "number", "description": "多少分钟后唤醒（1–1440）。"],
                             "at": ["type": "string", "description": "ISO8601 时刻（如 2026-07-05T04:45:00+08:00）。与 after_minutes 二选一。"],
                             "note": ["type": "string", "description": "唤醒时带回给你的备注：醒来该继续什么、上下文在哪。"],
+                        ],
+                        "required": ["note"],
+                    ],
+                ],
+                [
+                    "name": "continue_work",
+                    "description": "为**当前这一轮**登记一次持久、一次性的续跑承诺。只在你准备结束本轮、但仍有明确且无需外部输入就能继续的安全工作时调用；note 写下一轮第一件事。必须作为本轮最后一个工具调用。已完成、明确阻塞、正在等人/外部系统，或只是历史 Todo/plan 仍是 in_progress 时都不要调用。turn 真正 completed 后才会起下一轮；同一承诺最多消费一次，app 重启也不丢。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "note": ["type": "string", "description": "下一轮第一件事与必要上下文，简短且可独立执行。"],
                         ],
                         "required": ["note"],
                     ],
@@ -342,21 +379,23 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "handoff_captain_to_session",
-                    "description": "（机长专用）把机长位置交给本 crew 一个**现有 session 成员**。session_id 必须是 list_sessions 给出的稳定 id；app 会按 crew 成员表 + agent-sessions 账本核对归属、真实 runner 和可续接会话号，绝不从显示名猜。工具只表示请求已受理；停旧、续接新机长、持久化与失败回滚由真实 runner 服务完成，最终成功/失败以群聊系统回执为准。",
+                    "description": "（机长专用）把机长位置交给一个**现有 session 成员**。target_crew_id 省略时仍只操作本 crew；显式填写时只允许自己的直系子 crew，不允许上级、平级、孙 crew，且发起者在执行时仍须是父 crew 当前机长。session_id 必须属于目标 crew 且是稳定 id；app 会按成员表 + agent-sessions 账本核对真实 runner 和可续接会话号，绝不从显示名猜。停旧、续接新机长、持久化与失败回滚复用同一事务，最终成功/失败以群聊系统回执为准。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
-                            "session_id": ["type": "string", "description": "本 crew 现有 agent session 的稳定 id。"],
+                            "target_crew_id": ["type": "string", "description": "可选：要救援的直系子 crew 精确 id；省略=本 crew。"],
+                            "session_id": ["type": "string", "description": "目标 crew 现有 agent session 的稳定 id。"],
                         ],
                         "required": ["session_id"],
                     ],
                 ])
                 tools.append([
                     "name": "create_and_handoff_captain",
-                    "description": "（机长专用）新建一个 agent session 并把机长位置交给它。runner 必填且只接受 claude/codex；model/effort 不填时走所选 runner 的正常默认解析；title 不填为「机长」；opening_brief 不填时只注入交接说明与白板续接要求。工具只表示请求已受理，最终成功/失败以群聊系统回执为准。",
+                    "description": "（机长专用）新建一个 agent session 并把机长位置交给它。target_crew_id 省略时仍只操作本 crew；显式填写时只允许自己的直系子 crew，不允许上级、平级、孙 crew，且必须明确 runner/model/effort/opening_brief。runner 只接受 claude/codex；本 crew 模式继续允许 model/effort/opening_brief 走原有默认。停旧、起新、持久化与失败回滚复用同一事务，最终成功/失败以群聊系统回执为准。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
+                            "target_crew_id": ["type": "string", "description": "可选：要救援的直系子 crew 精确 id；省略=本 crew。"],
                             "runner": ["type": "string", "enum": ["claude", "codex"], "description": "新机长 runner，必须显式选择。"],
                             "model": ["type": "string", "description": "可选模型别名/slug；不填=所选 runner 默认。"],
                             "effort": ["type": "string", "description": "可选 thinking effort；不填=所选 runner 默认。"],
@@ -498,6 +537,16 @@ final class McpServer {
 
     private func handleToolCall(id: Any?, name: String?, args: [String: Any]) -> String? {
         switch name {
+        case "continue_work":
+            let note = ((args["note"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !note.isEmpty else {
+                return toolResult(id: id, text: "ERROR: note 不能为空；写清下一轮第一件事。")
+            }
+            guard continuations.arm(crewId: crewId, sessionId: sessionId, note: note) else {
+                return toolResult(id: id, text: "本 session 已有一条未消费的续跑承诺；没有重复登记。")
+            }
+            return toolResult(id: id, text: "已登记本轮一次性续跑；当前 turn 真正结束后执行，最多一次。")
         case "post_to_crew":
             let message = (args["message"] as? String) ?? ""
             // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与
@@ -569,8 +618,77 @@ final class McpServer {
         case "contact":
             return handleContact(id: id, args: args)
         case "read_whiteboard":
-            let rows = store.list(crewId: crewId).map(renderRow)
-            return toolResult(id: id, text: rows.isEmpty ? "（白板为空）" : rows.joined(separator: "\n"))
+            let all = store.list(crewId: crewId)
+            guard !all.isEmpty else { return toolResult(id: id, text: "（白板为空）") }
+            let requested = integerArgument(args["limit"]) ?? CrewMessageSearch.defaultLimit
+            let limit = min(CrewMessageSearch.maximumLimit, max(1, requested))
+            let end: Int
+            if let before = (args["before"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines), !before.isEmpty {
+                guard let cursorIndex = all.firstIndex(where: { $0.id == before }) else {
+                    return toolResult(id: id, text: "ERROR: before 消息游标不存在或已失效")
+                }
+                end = cursorIndex
+            } else {
+                end = all.count
+            }
+            let start = max(0, end - limit)
+            let page = Array(all[start..<end])
+            guard !page.isEmpty else { return toolResult(id: id, text: "（没有更早消息）") }
+            var text = page.map(renderRow).joined(separator: "\n")
+            if start > 0, let first = page.first {
+                text += "\n\n（显示 \(page.count) 条；还有 \(start) 条更早消息，下一页：read_whiteboard(before=\"\(first.id)\", limit=\(limit))）"
+            } else {
+                text += "\n\n（显示 \(page.count) 条；已到白板开头）"
+            }
+            return toolResult(id: id, text: text)
+        case "search_whiteboard":
+            let query = (args["query"] as? String) ?? ""
+            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return toolResult(id: id, text: "ERROR: query 不能为空")
+            }
+            let afterValue = (args["after"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            let beforeValue = (args["before"] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            let after = afterValue.flatMap(CrewMessageSearch.parseISO)
+            let before = beforeValue.flatMap(CrewMessageSearch.parseISO)
+            if let afterValue, !afterValue.isEmpty, after == nil {
+                return toolResult(id: id, text: "ERROR: after 必须是 ISO8601 时刻")
+            }
+            if let beforeValue, !beforeValue.isEmpty, before == nil {
+                return toolResult(id: id, text: "ERROR: before 必须是 ISO8601 时刻")
+            }
+            if let after, let before, after > before {
+                return toolResult(id: id, text: "ERROR: after 不能晚于 before")
+            }
+            let requested = integerArgument(args["limit"]) ?? CrewMessageSearch.defaultLimit
+            let rows = store.list(crewId: crewId)
+            let crewTitle = LocalCrewStore.title(
+                ofCrew: crewId, whiteboardDirectory: sharedDirectory) ?? ""
+            let documents = rows.map {
+                CrewMessageSearchAdapters.local(
+                    $0, crewId: crewId, crewTitle: crewTitle)
+            }
+            let matches = CrewMessageSearch.search(
+                documents, query: query, after: after, before: before,
+                limit: requested, order: .newestFirst)
+            guard !matches.isEmpty else {
+                return toolResult(id: id, text: "（当前 crew 没有找到匹配消息）")
+            }
+            let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+            let rendered = matches.compactMap { match -> String? in
+                guard let row = byID[match.document.messageId] else { return nil }
+                let fields = match.matchedFields.map(\.rawValue).sorted().joined(separator: ",")
+                let location = crewTitle.isEmpty
+                    ? "crew_id=\(crewId)"
+                    : "crew_id=\(crewId) crew_title=\(crewTitle)"
+                return "\(location) message_id=\(row.id) matched_fields=\(fields)\n\(renderRow(row))"
+            }
+            return toolResult(
+                id: id,
+                text: "找到 \(rendered.count) 条（最新优先；时间边界包含；附件仅 filename/MIME）：\n\n"
+                    + rendered.joined(separator: "\n\n"))
         case "ask":
             let question = (args["question"] as? String) ?? ""
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -712,6 +830,11 @@ final class McpServer {
             return toolResult(id: id, text: text)
         case "handoff_captain_to_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let targetCrewId = (args["target_crew_id"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if targetCrewId?.isEmpty == true {
+                return toolResult(id: id, text: "ERROR: target_crew_id 不能为空；省略才表示本 crew")
+            }
             let target = ((args["session_id"] as? String) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !target.isEmpty else {
@@ -719,6 +842,7 @@ final class McpServer {
             }
             control.enqueueCaptainHandoff(
                 crewId: crewId, requesterSessionId: sessionId,
+                targetCrewId: targetCrewId,
                 targetSessionId: target, runner: nil, model: nil, effort: nil,
                 title: nil, openingBrief: nil)
             return toolResult(
@@ -726,6 +850,11 @@ final class McpServer {
                 text: "机长交接请求已受理；app 会核对成员与真实会话账本并执行停旧/起新/回滚。请以群聊最终回执为准，这里不代表最终成功。")
         case "create_and_handoff_captain":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let targetCrewId = (args["target_crew_id"] as? String)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if targetCrewId?.isEmpty == true {
+                return toolResult(id: id, text: "ERROR: target_crew_id 不能为空；省略才表示本 crew")
+            }
             guard let runner = args["runner"] as? String,
                   runner == "claude" || runner == "codex" else {
                 return toolResult(id: id, text: "ERROR: runner 必填，只接受 claude/codex")
@@ -738,8 +867,15 @@ final class McpServer {
             let openingBrief = (args["opening_brief"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .flatMap { $0.isEmpty ? nil : $0 }
+            if targetCrewId != nil,
+               (model == nil || effort == nil || openingBrief == nil) {
+                return toolResult(
+                    id: id,
+                    text: "ERROR: 为直系子 crew 新建机长时，runner/model/effort/opening_brief 都必须明确填写")
+            }
             control.enqueueCaptainHandoff(
                 crewId: crewId, requesterSessionId: sessionId,
+                targetCrewId: targetCrewId,
                 targetSessionId: nil, runner: runner, model: model, effort: effort,
                 title: title, openingBrief: openingBrief)
             return toolResult(
@@ -1357,18 +1493,24 @@ final class McpServer {
         return sent.isEmpty ? nil : sent.map(LocalWhiteboardMention.init)
     }
 
-    private func renderRow(_ m: LocalWhiteboardMessage) -> String {
+    private func senderLabel(_ m: LocalWhiteboardMessage) -> String {
         // 与 HookEmitter.render 同款：有显示名优先用名，无名退回旧格式。
-        let who: String
         if let name = m.senderName, !name.isEmpty {
-            who = name
-        } else {
-            switch m.senderKind {
-            case "session": who = "session:\(m.senderSessionId ?? "?")"
-            case "user": who = "人类"
-            default: who = m.senderKind
-            }
+            return name
         }
+        switch m.senderKind {
+        case "session": return "session:\(m.senderSessionId ?? "?")"
+        case "user": return "人类"
+        default: return m.senderKind
+        }
+    }
+
+    private func integerArgument(_ raw: Any?) -> Int? {
+        (raw as? Int) ?? (raw as? Double).map(Int.init)
+    }
+
+    private func renderRow(_ m: LocalWhiteboardMessage) -> String {
+        let who = senderLabel(m)
         // agentText = 正文 + 附件绝对路径提示行（Todo #3 群聊图片）。
         return "[\(m.createdAt)] \(who): \(m.agentText)"
     }

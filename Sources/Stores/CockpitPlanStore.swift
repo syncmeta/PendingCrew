@@ -32,13 +32,46 @@ final class CockpitPlanStore: @unchecked Sendable {
 
     // MARK: - 变更流
 
+    /// 本 crew 计划文件的变更指纹（mtime+size）。文件不存在 → nil，也是一种状态。
+    /// **别在主线程调**：一次 stat 比整份解码便宜几个数量级，但它仍是磁盘 IO。
+    func fingerprint(crewId: String) -> FileChangeGate.Fingerprint? {
+        FileChangeGate.fingerprint(of: fileURL(crewId))
+    }
+
+    /// 计划变更流。两个上游合流成 `Void` tick：
+    /// 1. `changes` 按 crewId 过滤 —— **本进程**写（app 内）即推。
+    /// 2. `directoryChanged` —— **跨进程**目录监听（写入口在 helper 子进程的 MCP 工具）。
+    ///
+    /// 第 2 条要自己做相关性判定，这是人类 Todo #96 的一半：目录事件**不带文件名**，
+    /// 它的语义只是「白板目录里有东西动过」。而那个目录是全机共用的 —— 本机 42 个
+    /// crew 的群聊 json、两本 Todo、审批、唤醒、回合 marker 全在里面（实测 2000+ 个
+    /// 文件）。此前这里不加过滤直接 yield，于是**别的 crew 发一条群消息，驾驶舱就在
+    /// 主线程上重读一遍自己的计划文件**。指纹门控只放行「这个 crew 的 `.plan.json`
+    /// 真的变了」那一次。
+    ///
+    /// 判定只做在**这条流**上：`directoryChanged` 本身语义不变，todo / approvals /
+    /// 改名通道各自关心别的文件，不能一刀切。这套闸不是这里发明的 —— 群聊中栏那条流
+    /// （`PendingCrewBackend.whiteboardChanges`）早就用同一个 `FileChangeGateBox`
+    /// 治过同一个病，**照着接，别写第三套**。
     func planChanges(crewId: String) -> AsyncStream<Void> {
         LocalWhiteboardStore.shared.startWatching()
         let inProcess = changes
         let crossProcess = LocalWhiteboardStore.shared.directoryChanged
         return AsyncStream { continuation in
-            let c1 = inProcess.filter { $0 == crewId }.sink { _ in continuation.yield(()) }
-            let c2 = crossProcess.sink { _ in continuation.yield(()) }
+            // 种子取建流那一刻的指纹 —— 调用方建流前已经先全量读过一次，从当下起步，
+            // 不会因为第一个无关事件白刷一遍。
+            let gate = FileChangeGateBox(seed: fingerprint(crewId: crewId))
+            let c1 = inProcess.filter { $0 == crewId }.sink { [weak self] _ in
+                // 本进程自己的写：无条件推，同时把指纹记下 —— 同一次写盘随后还会
+                // 触发一个目录事件，不吞掉就成了双份刷新。
+                gate.sync(self?.fingerprint(crewId: crewId))
+                continuation.yield(())
+            }
+            let c2 = crossProcess.sink { [weak self] _ in
+                guard let self else { return }
+                guard gate.shouldYield(self.fingerprint(crewId: crewId)) else { return }
+                continuation.yield(())
+            }
             continuation.onTermination = { _ in c1.cancel(); c2.cancel() }
         }
     }
@@ -46,8 +79,26 @@ final class CockpitPlanStore: @unchecked Sendable {
     // MARK: - 读
 
     /// 活着的条目（墓碑行不出现在任何视图 / 写入路径里）。
+    ///
+    /// ⚠️ **这是阻塞调用**：里面是 `flock(LOCK_EX)`（阻塞式跨进程锁）+ 整份 JSON 解码。
+    /// 只要有 helper 正在写这个 crew 的 `.plan.lock`，调用方就停在这儿等。
+    /// UI 路径一律走 `listOffMain`（人类 Todo #96：驾驶舱打开时卡的就是这一下）。
     func list(crewId: String) -> [CockpitPlanItem] {
         withFileLock(crewId) { loadLocked(crewId).filter { !$0.isDeleted } }
+    }
+
+    /// `list` 的后台版 —— **UI 唯一该用的那条**（人类 Todo #96）。
+    ///
+    /// 驾驶舱正文的 `.task` 继承 MainActor，此前直接调同步的 `list`，把那把阻塞锁和
+    /// 整份解码压在主线程上；而 `planChanges` 每来一个 tick 还要再来一遍。挪到
+    /// detached 任务里之后，主线程只剩最后那一次赋值。
+    ///
+    /// 调用方仍要自己处理**取消与迟到**（切 crew 时旧的那次读会后回来）——
+    /// 见 `CockpitPlanFeed`。
+    func listOffMain(crewId: String) async -> [CockpitPlanItem] {
+        await Task.detached(priority: .userInitiated) { [self] in
+            list(crewId: crewId)
+        }.value
     }
 
     func item(crewId: String, number: Int) -> CockpitPlanItem? {

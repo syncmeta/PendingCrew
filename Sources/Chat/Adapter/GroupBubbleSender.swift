@@ -31,4 +31,6 @@ struct GroupBubbleSender: Equatable {
     /// —— 本机 run 来自 `CrewSessionStateDerivation.state`，远端成员来自 server 下发。
     var sessionStatus: String? = nil
     var isSession: Bool = false        // PENDINGCREW SHIM: render terminal-icon avatar
+    /// PendingCrew 自己生成的通知使用 App 品牌图标，不走 bot/session 随机 emoji。
+    var isPendingCrewApp: Bool = false
 }

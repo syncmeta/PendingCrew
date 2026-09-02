@@ -51,22 +51,8 @@ struct AgentQuotaActivity: Codable, Equatable {
     let sessions: Int?
 }
 
-/// 人可以在设置里覆盖自动探到的档位。空字符串 = 自动检测；非空值只作为档位标签，
-/// 不附会任何 token / request 绝对量。
-enum AgentSubscriptionPlanPreference {
-    static let claudeKey = "pendingcrew.quota.claude.subscription-plan"
-    static let codexKey = "pendingcrew.quota.codex.subscription-plan"
-
-    static let claudeChoices = ["", "Pro", "Max 5x", "Max 20x", "Team", "Enterprise"]
-    static let codexChoices = ["", "Free", "Plus", "Pro", "Business", "Enterprise"]
-
-    static func override(agent: String, defaults: UserDefaults = .standard) -> String? {
-        let key = agent == "claude" ? claudeKey : codexKey
-        guard let raw = defaults.string(forKey: key)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
-        return raw
-    }
-
+/// 自动探测通道给出的原始档位名正规化。这里只做显示名映射，不接受人工覆盖。
+enum AgentSubscriptionPlan {
     static func displayName(_ raw: String) -> String {
         switch raw.lowercased() {
         case "free": return "Free"
@@ -97,8 +83,6 @@ struct AgentQuotaSnapshot: Codable, Equatable {
     let subscriptionPlan: String?
     /// `claude_config` / `codex_account` / `codex_rate_limits` / `codex_rollout`。
     let subscriptionPlanSource: String?
-    /// 设置里的人工覆盖；存在时展示和注入以它为准，但自动探测值仍保留以便切回自动。
-    let subscriptionPlanOverride: String?
     /// Claude `/usage` 给出的各周期 requests / sessions 画像（当前实测有 Last 24h、
     /// Last 7d）；codex 当前 RPC 不给则 nil。用 optional 保持旧 quota.json 可解码。
     let activities: [AgentQuotaActivity]?
@@ -114,7 +98,7 @@ struct AgentQuotaSnapshot: Codable, Equatable {
 
     init(agent: String, windows: [AgentQuotaWindow], fetchedAt: String,
          producedAt: String? = nil, subscriptionPlan: String? = nil,
-         subscriptionPlanSource: String? = nil, subscriptionPlanOverride: String? = nil,
+         subscriptionPlanSource: String? = nil,
          activities: [AgentQuotaActivity]? = nil) {
         self.agent = agent
         self.windows = windows
@@ -122,17 +106,11 @@ struct AgentQuotaSnapshot: Codable, Equatable {
         self.producedAt = producedAt
         self.subscriptionPlan = subscriptionPlan
         self.subscriptionPlanSource = subscriptionPlanSource
-        self.subscriptionPlanOverride = subscriptionPlanOverride
         self.activities = activities
     }
 
-    var effectiveSubscriptionPlan: String? {
-        subscriptionPlanOverride ?? subscriptionPlan
-    }
-
     var subscriptionPlanDescription: String {
-        guard let plan = effectiveSubscriptionPlan else { return "档位未知（自动通道未提供，设置中也未填写）" }
-        if subscriptionPlanOverride != nil { return "\(plan)（手动设置）" }
+        guard let plan = subscriptionPlan else { return "档位未知（自动通道未提供）" }
         switch subscriptionPlanSource {
         case "claude_config": return "\(plan)（自动：Claude 本地账户配置）"
         case "codex_account": return "\(plan)（自动：Codex account/read）"
@@ -140,13 +118,6 @@ struct AgentQuotaSnapshot: Codable, Equatable {
         case "codex_rollout": return "\(plan)（自动：Codex rollout）"
         default: return "\(plan)（自动检测）"
         }
-    }
-
-    func applyingSubscriptionPlanOverride(_ value: String?) -> AgentQuotaSnapshot {
-        AgentQuotaSnapshot(
-            agent: agent, windows: windows, fetchedAt: fetchedAt, producedAt: producedAt,
-            subscriptionPlan: subscriptionPlan, subscriptionPlanSource: subscriptionPlanSource,
-            subscriptionPlanOverride: value, activities: activities)
     }
 
     /// 数据有多旧（秒）。`producedAt` 缺失或解不出 → nil。
@@ -313,7 +284,7 @@ enum ClaudeAccountPlanParser {
                     "subscriptionType", "organizationType"] {
             if let raw = account[key] as? String,
                !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return AgentSubscriptionPlanPreference.displayName(raw)
+                return AgentSubscriptionPlan.displayName(raw)
             }
         }
         return nil
@@ -417,7 +388,7 @@ enum CodexRolloutQuotaParser {
                 agent: "codex", windows: windows,
                 fetchedAt: ISO8601DateFormatter().string(from: now),
                 producedAt: producedAt.map { ISO8601DateFormatter().string(from: $0) },
-                subscriptionPlan: plan.map(AgentSubscriptionPlanPreference.displayName),
+                subscriptionPlan: plan.map(AgentSubscriptionPlan.displayName),
                 subscriptionPlanSource: plan == nil ? nil : "codex_rollout")
         }
         return nil
@@ -508,7 +479,7 @@ enum CodexAppServerQuotaParser {
         let stamp = ISO8601DateFormatter().string(from: now)
         return AgentQuotaSnapshot(
             agent: "codex", windows: windows, fetchedAt: stamp, producedAt: stamp,
-            subscriptionPlan: plan.map(AgentSubscriptionPlanPreference.displayName),
+            subscriptionPlan: plan.map(AgentSubscriptionPlan.displayName),
             subscriptionPlanSource: plan == nil ? nil : "codex_rate_limits")
     }
 }

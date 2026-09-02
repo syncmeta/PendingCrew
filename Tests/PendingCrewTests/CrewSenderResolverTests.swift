@@ -31,6 +31,7 @@ private func makeEntry(
     id: String = "e1",
     senderKind: String = "user",
     senderUserId: String? = nil,
+    senderSessionId: String? = nil,
     senderDisplayName: String? = nil,
     summary: String = "hello"
 ) throws -> CrewWhiteboardEntry {
@@ -42,12 +43,28 @@ private func makeEntry(
         "created_at": ts()
     ]
     if let v = senderUserId { d["sender_user_id"] = v }
+    if let v = senderSessionId { d["sender_session_id"] = v }
     if let v = senderDisplayName { d["sender_display_name"] = v }
     let data = try JSONSerialization.data(withJSONObject: d)
     return try JSONDecoder().decode(CrewWhiteboardEntry.self, from: data)
 }
 
 final class CrewSenderResolverTests: XCTestCase {
+
+    /// 已落盘的旧白板行不能因为当年写的是「系统」就永远显示旧身份；渲染入口也
+    /// 必须认 system 哨兵并统一成 PendingCrew（Todo #43）。
+    func testLegacySystemRowRendersAsPendingCrewApp() throws {
+        let entry = try makeEntry(
+            senderKind: "session", senderSessionId: "system",
+            senderDisplayName: "系统")
+        let sender = CrewSenderResolver.resolve(
+            entry, members: [], captainBotId: nil, localUserId: "human")
+
+        XCTAssertEqual(sender.kind, .bot)
+        XCTAssertEqual(sender.displayName, "PendingCrew")
+        XCTAssertEqual(sender.avatarSeed, "pendingcrew-app")
+        XCTAssertFalse(sender.isMine)
+    }
 
     // ── 1. 本地我（legacy 消息，senderUserId 字段引入前落盘，解码为 nil）→ mine ──
 

@@ -278,7 +278,7 @@ struct CrewStatusDotView: View {
             sessions: runs.map {
                 CrewSessionStatusSignal(
                     isAlive: $0.status == .running,
-                    isWorking: $0.isWorking,
+                    isWorking: $0.activityIsWorking,
                     hasHealthIssue: $0.health != nil,
                     // `awaitingReply` 仍留在信号快照供其它状态消费，但 Todo #71 起不再
                     // 把“等回复”当错误染红；要人处理的事由人类 Todo 黄点表达。

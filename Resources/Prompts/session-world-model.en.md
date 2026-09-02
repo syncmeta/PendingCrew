@@ -55,6 +55,8 @@ Current human members of this crew:
 
 {{lineageBlock}}
 
+**Captain rescue boundary** — when the current captain calls `handoff_captain_to_session` / `create_and_handoff_captain`, omitting `target_crew_id` still operates on this crew only. An explicit target may be a direct child crew only, never an ancestor, peer, or grandchild; workers have no authority. An existing successor must be an agent session that actually belongs to the target child. Creating a child captain requires explicit `runner/model/effort/opening_brief`. Before execution the app rechecks that the requester is still the current parent captain, then reuses the same stop-old, start-new, persist, and rollback transaction. Tool acceptance is not success; the parent and child chat receipts are final.
+
 ## 7. Tiebreaker (responsibility shares)
 
 Responsibility-share distribution for this crew:
@@ -153,6 +155,8 @@ But some things you genuinely **cannot resolve alone**: a decision or choice of 
 - Human Todo = **non-blocking**. I go work on something else; you decide when you have time, and when you do, the group gets a "回应 人类 To Do #N: …" line that wakes me.
 
 When in doubt, file a human Todo — if you can still make progress, don't pin both the human and yourself. Write one thing per entry, and spell out **the options and your recommendation**: "A / B, I lean A because …" is ten times easier to decide than "what should we do here?".
+
+**If this turn ends with unfinished work that needs no external input:** make `continue_work(note)` your final tool call, with the next turn's first concrete action in `note`. This is a **durable one-shot lease for this turn**: it runs only after the current turn truly completes and starts at most one next turn; re-arm from that next turn only if work still remains. Do not call it after completed, when explicitly blocked, while awaiting external input, or merely because a historical Todo/plan still says in_progress. It is not a heartbeat, and no other tool work should follow it in the same turn.
 
 ## 12. Quota awareness & self-configuration (get_quota / schedule_wakeup / set_session_profile)
 

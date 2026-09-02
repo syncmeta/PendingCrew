@@ -3,6 +3,18 @@ import XCTest
 
 @MainActor
 final class CodexTranscriptTests: XCTestCase {
+    func testNotificationSequencerPreservesArrivalOrderAcrossActorHop() async {
+        let sequencer = CodexNotificationSequencer()
+        sequencer.yield(method: "turn/started", params: ["turn": ["id": "a"]])
+        sequencer.yield(method: "turn/completed", params: ["turn": ["id": "a"]])
+        sequencer.yield(method: "turn/started", params: ["turn": ["id": "b"]])
+
+        var iterator = sequencer.stream.makeAsyncIterator()
+        var methods: [String] = []
+        for _ in 0..<3 { methods.append(await iterator.next()!.method) }
+        XCTAssertEqual(methods, ["turn/started", "turn/completed", "turn/started"])
+    }
+
     func testItemCompletedAppendsThenUpsertsById() {
         let t = CodexTranscript()
         t.apply(method: "item/completed", params: ["item": ["id": "i1", "type": "agentMessage", "text": "hi"]])
@@ -25,6 +37,32 @@ final class CodexTranscriptTests: XCTestCase {
         t.apply(method: "turn/completed", params: ["turn": ["id": "t1"], "status": "completed"])
         XCTAssertFalse(t.turnActive); XCTAssertNil(t.activeTurnId)
     }
+
+    func testLateCompletionFromPreviousTurnCannotClearNewActiveTurn() {
+        let t = CodexTranscript()
+        t.apply(method: "turn/started", params: ["turn": ["id": "turn-a"]])
+        t.apply(method: "turn/started", params: ["turn": ["id": "turn-b"]])
+
+        // onNotification used to spawn one independent Task per event. If the old
+        // completion reached MainActor after the new start, it unconditionally
+        // cleared the new turn and the whole live turn was reported as idle.
+        t.apply(method: "turn/completed", params: ["turn": ["id": "turn-a"]])
+
+        XCTAssertTrue(t.turnActive)
+        XCTAssertEqual(t.activeTurnId, "turn-b")
+    }
+
+    func testItemActivityRestoresActiveTruthUntilMatchingCompletion() {
+        let t = CodexTranscript()
+
+        // A transcript item is first-hand activity evidence even if a turn/started
+        // notification was delayed or lost on the app-side relay.
+        t.apply(method: "item/started", params: ["item": ["id": "tool-1"]])
+        XCTAssertTrue(t.turnActive)
+
+        t.apply(method: "turn/completed", params: ["turn": ["id": "turn-1"]])
+        XCTAssertFalse(t.turnActive)
+    }
     func testActivityRevisionSurvivesFastTurnReturningToIdle() {
         let t = CodexTranscript()
         let baseline = t.activityRevision
@@ -40,13 +78,13 @@ final class CodexTranscriptTests: XCTestCase {
         XCTAssertEqual(t.activityRevision, baseline + 4,
                        "turn/tool transcript 活动必须留下单调证据")
     }
-    func testIgnoredMethodsAreNoops() {
+    func testNonRenderableActivityChangesTruthButNotItems() {
         let t = CodexTranscript()
         t.apply(method: "item/started", params: ["item": ["id": "x", "type": "agentMessage"]])
         t.apply(method: "item/agentMessage/delta", params: [:])
         t.apply(method: "thread/tokenUsage/updated", params: [:])
         XCTAssertEqual(t.items.count, 0)
-        XCTAssertFalse(t.turnActive)
+        XCTAssertTrue(t.turnActive, "item/started is activity truth even before it renders a row")
     }
     func testMalformedItemIsSkippedNotCrash() {
         let t = CodexTranscript()

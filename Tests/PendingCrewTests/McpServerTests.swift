@@ -36,6 +36,7 @@ final class McpServerTests: XCTestCase {
         let r = server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)!
         XCTAssertTrue(r.contains("post_to_crew"))
         XCTAssertTrue(r.contains("read_whiteboard"))
+        XCTAssertTrue(r.contains("search_whiteboard"))
         XCTAssertTrue(r.contains("\"ask\""))
     }
 
@@ -96,6 +97,68 @@ final class McpServerTests: XCTestCase {
         s.store.appendUserMessage(crewId: "c", text: "人类说嗨")
         let r = s.handleLine(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_whiteboard","arguments":{}}}"#)!
         XCTAssertTrue(r.contains("人类说嗨"))
+    }
+
+    func testReadWhiteboardDefaultsToLatestFiftyAndSupportsBeforeCursor() throws {
+        let s = server(tempDir())
+        for index in 0..<55 {
+            s.store.appendSessionMessage(
+                crewId: "c", sessionId: "writer", text: "bounded-row-\(index)")
+        }
+        let all = s.store.list(crewId: "c")
+
+        let latest = try XCTUnwrap(s.handleLine(
+            #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_whiteboard","arguments":{}}}"#))
+        XCTAssertFalse(latest.contains("bounded-row-0"), "默认读取不能再全量返回长白板")
+        XCTAssertTrue(latest.contains("bounded-row-5"))
+        XCTAssertTrue(latest.contains("bounded-row-54"))
+        XCTAssertTrue(latest.contains("before"), "有更早内容时必须告诉 session 如何翻页")
+
+        let cursor = all[5].id
+        let earlier = try XCTUnwrap(s.handleLine(
+            #"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_whiteboard","arguments":{"limit":5,"before":"\#(cursor)"}}}"#))
+        XCTAssertTrue(earlier.contains("bounded-row-0"))
+        XCTAssertTrue(earlier.contains("bounded-row-4"))
+        XCTAssertFalse(earlier.contains("bounded-row-5"), "before 游标本身不应重复返回")
+    }
+
+    func testSearchWhiteboardUsesSharedChineseSenderAttachmentAndLocationContract() throws {
+        let s = server(tempDir())
+        s.store.appendSessionMessage(
+            crewId: "c", sessionId: "captain-1", text: "通信方案已落地",
+            senderName: "机长", attachments: [
+                LocalWhiteboardAttachment(
+                    id: "a1", mime: "image/png", size: 42,
+                    path: "/tmp/秘密文件内容不应被索引.png", filename: "架构图.png")
+            ])
+        let messageId = try XCTUnwrap(s.store.list(crewId: "c").last?.id)
+
+        let chinese = try XCTUnwrap(s.handleLine(
+            #"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_whiteboard","arguments":{"query":"通信方案"}}}"#))
+        XCTAssertTrue(chinese.contains(messageId))
+        XCTAssertTrue(chinese.contains("crew_id=c"))
+        XCTAssertTrue(chinese.contains("matched_fields=text"))
+
+        let crossField = try XCTUnwrap(s.handleLine(
+            #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_whiteboard","arguments":{"query":"机长 架构图"}}}"#))
+        XCTAssertTrue(crossField.contains(messageId))
+        XCTAssertTrue(crossField.contains("sender"))
+        XCTAssertTrue(crossField.contains("attachment"))
+
+        let pathOnly = try XCTUnwrap(s.handleLine(
+            #"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_whiteboard","arguments":{"query":"秘密文件内容"}}}"#))
+        XCTAssertTrue(pathOnly.contains("没有找到"), "附件只索引 filename/MIME，不索引路径或文件内容")
+    }
+
+    func testSearchWhiteboardRejectsBlankQueryAndInvalidTime() {
+        let s = server(tempDir())
+        let blank = s.handleLine(
+            #"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"search_whiteboard","arguments":{"query":"  "}}}"#)!
+        XCTAssertTrue(blank.contains("ERROR"))
+        let invalidTime = s.handleLine(
+            #"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"search_whiteboard","arguments":{"query":"x","after":"昨天"}}}"#)!
+        XCTAssertTrue(invalidTime.contains("ERROR"))
+        XCTAssertTrue(invalidTime.contains("after"))
     }
 
     func testUnknownToolReturnsError() {

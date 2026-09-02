@@ -363,6 +363,19 @@ final class SessionProtocolServer {
         switch control.op {
         case "stop": backend.stop()
         case "clearQuotaHealth": backend.clearQuotaHealth()
+        case "submitWake":
+            guard let requestId = control.requestId,
+                  case let .string(text)? = control.arguments["text"] else { return }
+            Task { @MainActor [weak self, weak connection] in
+                let result = await backend.submitWake(text)
+                guard let self, let connection else { return }
+                self.send(.event(.init(
+                    kind: "wakeSubmitResult", requestId: requestId,
+                    fields: [
+                        "sessionId": .string(sessionId),
+                        "result": .string(result == .accepted ? "accepted" : "retry"),
+                    ])), on: connection)
+            }
         case "applyProfileSwitch":
             guard let requestId = control.requestId,
                   case let .string(knobRaw)? = control.arguments["knob"],
@@ -532,6 +545,7 @@ final class SessionProtocolClient {
     private var remoteByHandle: [UInt32: RemoteSessionBackend] = [:]
     private var negotiated: [String] = []
     private var pendingProfile: [String: CheckedContinuation<SessionProfileSwitchOutcome, Never>] = [:]
+    private var pendingWakes: [String: CheckedContinuation<SessionWakeSubmission, Never>] = [:]
     private var synchronousResponses: [String: SessionEvent] = [:]
     private var pendingControls: [String: (Result<Void, Error>) -> Void] = [:]
     private lazy var stateReconciler = SessionStateReconciler(
@@ -641,6 +655,20 @@ final class SessionProtocolClient {
         send(.control(.init(requestId: nil, op: op, arguments: arguments)))
     }
 
+    func submitWake(sessionId: String, text: String) async -> SessionWakeSubmission {
+        let requestId = UUID().uuidString
+        return await withCheckedContinuation { continuation in
+            pendingWakes[requestId] = continuation
+            send(.control(.init(requestId: requestId, op: "submitWake", arguments: [
+                "sessionId": .string(sessionId), "text": .string(text),
+            ])))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                self?.pendingWakes.removeValue(forKey: requestId)?.resume(returning: .retry)
+            }
+        }
+    }
+
     func applyProfileSwitch(
         sessionId: String, command: SessionProfileSwitchCommand
     ) async -> SessionProfileSwitchOutcome {
@@ -721,7 +749,16 @@ final class SessionProtocolClient {
                 sessionId: value.sessionId, stateSeq: value.stateSeq, state: value.delta)
         case let .data(value): remoteByHandle[value.handle]?.receiveTerminal(value.bytes)
         case let .event(value):
-            if value.kind == "profileSwitchResult", let requestId = value.requestId,
+            if value.kind == "wakeSubmitResult", let requestId = value.requestId,
+               let continuation = pendingWakes.removeValue(forKey: requestId) {
+                let result: SessionWakeSubmission
+                if case .string("accepted")? = value.fields["result"] {
+                    result = .accepted
+                } else {
+                    result = .retry
+                }
+                continuation.resume(returning: result)
+            } else if value.kind == "profileSwitchResult", let requestId = value.requestId,
                let continuation = pendingProfile.removeValue(forKey: requestId) {
                 continuation.resume(returning: .init(protocolEvent: value))
             } else if value.kind == "approvalModeResult", let requestId = value.requestId,

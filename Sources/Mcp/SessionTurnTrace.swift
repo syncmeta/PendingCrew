@@ -243,6 +243,9 @@ struct SessionTurnMarker {
     struct State: Codable, Equatable {
         var lastMessageId: String?
         var lastTurnId: String?
+        /// 最近一轮最后一条 assistant 正文。session 进程自行退出时，生命周期层用它
+        /// 生成统一的「它最后一句话」通知；旧 marker 缺键自动解成 nil。
+        var lastAssistantMessage: String? = nil
         /// 上一轮收尾那句问句（层 2）—— 非 nil = 它说完停在一个问题上。app 侧每拍读它
         /// 判「待回复」并点红点（`SessionAwaitingReply`）。**每轮结束都重写**（不是问句
         /// 就写 nil），所以答完下一轮一结束它自己就没了，不会进得去出不来。

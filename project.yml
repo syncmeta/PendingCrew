@@ -1,5 +1,8 @@
 name: PendingCrew
 options:
+  # PendingCrew 的产品语言是中文；让 SwiftUI/AppKit 自动生成的 App/文件/窗口菜单
+  # 采用中文本地化（「关于」「设置」「隐藏」「退出」等）。
+  developmentLanguage: zh-Hans
   bundleIdPrefix: com.pendingname
   deploymentTarget:
     iOS: "17.0"
@@ -42,7 +45,7 @@ settings:
     # sed 从 project.yml 取 MARKETING_VERSION）；Info.plist 用
     # $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) 变量替换，
     # 构建期 -MARKETING_VERSION=... 才能真正落进产物。对齐 apps/pendingbot。
-    MARKETING_VERSION: "0.1.21"
+    MARKETING_VERSION: "0.1.23"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   PendingCrew:
@@ -162,6 +165,8 @@ targets:
       - path: Sources/Stores/LocalApprovalStore.swift
       # 定时唤醒账本（schedule_wakeup 持久化，#528 从 runner 抽出），同自包含。
       - path: Sources/Stores/LocalWakeupStore.swift
+      # 本轮显式续跑租约：helper 登记、turn completion 封存、runner 一次性消费。
+      - path: Sources/Stores/SessionContinuationStore.swift
       # agent 侧会话号账本（Todo #28：重启成员时 --resume / thread/resume 回原对话），同自包含。
       - path: Sources/Stores/LocalAgentSessionStore.swift
       # 现有 session → 机长的可恢复交接意图。安装/重启跨进程续接，纯 Foundation。
@@ -288,6 +293,9 @@ targets:
       # 的 SwiftUI 文件，整目录会把它们拖进 test bundle 而 Vendored 不在 bundle 里 → 编不过。
       - path: Sources/Chat/Adapter/CrewChatAdapter.swift
       - path: Sources/Chat/Adapter/CrewChatMessage.swift
+      # 当前群 / 跨群 / session MCP 共用的群聊搜索核心（纯 Foundation）。
+      - path: Sources/Chat/Adapter/CrewMessageSearch.swift
+      - path: Sources/Chat/Adapter/CrewMessageSearchAdapters.swift
       - path: Sources/Chat/Adapter/GroupBubbleSender.swift
       # CrewComposerMentions.swift：composer @ 候选构建/过滤 + @token 解析 +
       # staged 撤销对账 + reply 自动@推导(Phase 6)。纯 Foundation，自包含。

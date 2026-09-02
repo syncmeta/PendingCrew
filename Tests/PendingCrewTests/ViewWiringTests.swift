@@ -35,8 +35,6 @@ final class ViewWiringTests: XCTestCase {
          "成员列表不按创建时间倒序（Todo #15 失效）"),
         ("UncaughtExceptionLog.install", "UncaughtExceptionLog.swift",
          "未捕获异常不留痕，下次闪退又只剩一份没有异常名的 .ips"),
-        ("UpdateSettingsSection(", "UpdateSettingsSection.swift",
-         "设置里没有「更新」区，检查更新点不到（Sparkle 接入失效）"),
         ("CrewMentionFilter.onlyHumanMentions", "CrewMentionFilter.swift",
          "群聊时间线没人筛，「只看 @ 我的消息」判定造好了但列表照旧全显（Todo #61 失效）"),
         ("showOnlyHumanMentions:", "CrewChatView.swift",
@@ -73,9 +71,45 @@ final class ViewWiringTests: XCTestCase {
                       "右栏 Todo 概览面板还在用旧的状态标签，没换成状态圆圈")
         XCTAssertTrue(panel.contains("CrewTodoDetailWindowPresenter.shared"),
                       "右栏 Todo 概览面板没有开详细窗口的入口")
+        XCTAssertTrue(panel.contains(".lineLimit(layout.bodyLineLimit)"),
+                      "右栏 Todo 概览正文没有接三行截断契约")
+        XCTAssertTrue(panel.contains("TodoListPresentation.overviewResponse(for: item)"),
+                      "右栏 Todo 概览没有接精简的末条回应")
+        XCTAssertTrue(panel.contains("UnevenRoundedRectangle("),
+                      "右栏 Todo 概览卡片没有接左上方角、其余圆角的形状")
         XCTAssertFalse(panel.contains(".strikethrough("),
                        "已完成的 Todo 不该划删除线（人类明确要求，只变灰）")
 
+    }
+
+    /// Todo #92：概览卡片与群聊对方气泡必须共用同一组主题 token，不能再另写
+    /// `surfaceMuted` 或颜色字面量，免得主题调整后两处悄悄漂开。
+    func testTodoOverviewCardsReuseIncomingChatBubbleSurfaceAndHairline() throws {
+        let panel = try Self.text(of: "CrewTodoPanel.swift")
+        let bubble = try Self.text(of: "BubbleView.swift")
+        let sharedStyle = [
+            ".fill(Theme.Palette.surface)",
+            ".strokeBorder(Theme.Palette.hairline, lineWidth: 0.5)",
+        ]
+
+        for token in sharedStyle {
+            XCTAssertTrue(bubble.contains(token),
+                          "群聊对方气泡的样式真值已变化，请同步更新 Todo 契约")
+            XCTAssertTrue(panel.contains(token),
+                          "Todo 概览卡片没有复用群聊气泡样式：\(token)")
+        }
+        XCTAssertFalse(panel.contains("Theme.Palette.surfaceMuted.opacity(0.5)"),
+                       "Todo 概览仍在使用旧的灰色填充")
+    }
+
+    /// Todo #95：两本账共用的概览行和详细行都必须显示同一份创建/更新时间文案。
+    func testTodoRowsShowSharedCreationAndUpdateMetadata() throws {
+        let panel = try Self.text(of: "CrewTodoPanel.swift")
+        let detail = try Self.text(of: "CrewTodoDetailWindow.swift")
+        let wiring = "TodoListPresentation.metadataText(for: item)"
+
+        XCTAssertTrue(panel.contains(wiring), "Todo 概览卡片没有显示创建/更新时间")
+        XCTAssertTrue(detail.contains(wiring), "Todo 详细行没有复用同一份创建/更新时间口径")
     }
 
     /// Todo #81：驾驶舱只展示 Agent 自己写下的计划与想法，不能再因仓库没有
@@ -158,6 +192,34 @@ final class ViewWiringTests: XCTestCase {
             XCTAssertFalse(source.contains("CrewLocalMentionDelivery.injectAndWake"),
                            "\(file) 又绕过白板 message id 直投，人类消息会重复唤醒")
         }
+        let roster = try Self.text(of: "CrewSessionWindowView.swift")
+        guard let subscribe = roster.range(of: "private func subscribeRoster() async"),
+              let refresh = roster.range(of: "private func refreshRoster() async") else {
+            return XCTFail("找不到 roster 白板订阅边界")
+        }
+        let body = String(roster[subscribe.lowerBound..<refresh.lowerBound])
+        XCTAssertFalse(body.contains("sessionRunner.startCaptain"),
+                       "右栏观察器仍会与白板唯一 waker 抢拉 captain，赢家可能不带原消息")
+
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("await run.backend.submitWake"),
+                      "runner 仍把无回执 send 当作 wake 已投递")
+        XCTAssertFalse(runner.contains("run.send(ready.text)"),
+                       "瞬时 idle 后仍直接 fire-and-forget，拒绝会被误消费")
+        XCTAssertTrue(runner.contains("deferredWakes.resolve(delivery, as: result)"))
+        XCTAssertTrue(runner.contains("scheduleDeferredWakeRetry(for: run)"),
+                      "拒绝后仍要等第二条消息/新 idle 边沿，不能自行补投")
+        let codex = try Self.text(of: "CodexAppServerBackend.swift")
+        XCTAssertTrue(codex.contains("func submitWake(_ text: String) async"),
+                      "Codex wake 没有以 turn/start RPC 受理为边界")
+        XCTAssertTrue(codex.contains("wb?.commit()"),
+                      "Codex 仍可能在 turn/start 受理前推进白板消费游标")
+        let remote = try Self.text(of: "RemoteSessionBackend.swift")
+        let endpoints = try Self.text(of: "SessionProtocolEndpoints.swift")
+        XCTAssertTrue(remote.contains("func submitWake(_ text: String) async"),
+                      "远端 backend 没有把 wake 受理结果暴露给 runner")
+        XCTAssertTrue(endpoints.contains("op: \"submitWake\""),
+                      "协议端点没有把 wake 受理回执转发到统一字节流")
     }
 
     /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。
@@ -270,6 +332,142 @@ final class ViewWiringTests: XCTestCase {
                       "帮助菜单只定义了地址但没有真正打开它")
     }
 
+    /// Todo #93：README 图片只能使用可移植的仓库相对路径或公网 URL；相对路径
+    /// 必须真实存在且大小写完全一致，避免开发机绝对路径在 GitHub 上静默变成 404。
+    func testReadmeImagesUsePortableExistingRepositoryPaths() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let expression = try NSRegularExpression(
+            pattern: #"(?:!\[[^\]]*\]\(([^)]+)\)|<img\b[^>]*\bsrc="([^"]+)")"#,
+            options: [.caseInsensitive]
+        )
+
+        for readmeName in ["README.md", "README_EN.md"] {
+            let readme = try Self.projectText(of: readmeName)
+            let matches = expression.matches(
+                in: readme, range: NSRange(readme.startIndex..., in: readme))
+            let references = matches.compactMap { match -> String? in
+                for group in 1...2 where match.range(at: group).location != NSNotFound {
+                    guard let range = Range(match.range(at: group), in: readme) else { continue }
+                    return String(readme[range])
+                }
+                return nil
+            }
+            XCTAssertFalse(references.isEmpty, "\(readmeName) 没扫到任何图片，校验本身失效")
+
+            for reference in references {
+                if reference.hasPrefix("https://") || reference.hasPrefix("http://") {
+                    continue
+                }
+                XCTAssertFalse(
+                    reference.hasPrefix("/") || reference.hasPrefix("file://"),
+                    "\(readmeName) 使用了不可移植的本机绝对图片路径：\(reference)")
+
+                let decoded = reference.removingPercentEncoding ?? reference
+                let candidate = root.appendingPathComponent(decoded).standardizedFileURL
+                XCTAssertTrue(
+                    candidate.path.hasPrefix(root.path + "/"),
+                    "\(readmeName) 图片路径逃出了仓库：\(reference)")
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: candidate.path),
+                    "\(readmeName) 图片不存在：\(reference)")
+                XCTAssertTrue(
+                    Self.repositoryPathExistsWithExactCase(decoded, under: root),
+                    "\(readmeName) 图片路径大小写与仓库不一致：\(reference)")
+            }
+        }
+    }
+
+    /// Todo #43：系统通知不再冒充普通 session 的随机 emoji 头像；旧白板与新写入
+    /// 都由 resolver 认成 PendingCrew，并在气泡位使用 App 品牌图标。
+    func testPendingCrewSystemIdentityUsesAppIcon() throws {
+        let resolver = try Self.text(of: "CrewSenderResolver.swift")
+        let sender = try Self.text(of: "GroupBubbleSender.swift")
+        let avatar = try Self.text(of: "CrewAvatarBadges.swift")
+        XCTAssertTrue(resolver.contains("PendingCrewSystemMessage.isSystem"),
+                      "历史 system 行没有进入统一 PendingCrew 身份判定")
+        XCTAssertTrue(sender.contains("isPendingCrewApp"),
+                      "气泡 sender 没携带 PendingCrew App 身份")
+        XCTAssertTrue(avatar.contains("if sender.isPendingCrewApp"),
+                      "头像渲染没有为 PendingCrew App 分流")
+        XCTAssertTrue(avatar.contains("Image(\"BrandMark\")"),
+                      "PendingCrew 系统通知仍用随机 emoji，不是 App 品牌图标")
+    }
+
+    /// PendingCrew 系统通知仍占用群聊统一的 30pt 头像槽，只把 App 图标本体缩小
+    /// 一个小档位（4pt → 26pt）。这样普通人类/session 头像与消息行布局均不变。
+    func testPendingCrewSystemAvatarIsSmallerInsideStandardMessageSlot() throws {
+        let bubble = try Self.text(of: "BubbleView.swift")
+        let avatar = try Self.text(of: "CrewAvatarBadges.swift")
+
+        XCTAssertTrue(bubble.contains("CrewAvatarBadges(sender: g, size: 30)"),
+                      "群聊头像槽不再是统一的 30pt，系统头像调整不应改消息行布局")
+        XCTAssertTrue(
+            avatar.contains("private static let pendingCrewAppImageReduction: CGFloat = 4"),
+            "PendingCrew App 图标没有固定缩小一个 4pt 小档位（30pt → 26pt）")
+        XCTAssertTrue(
+            avatar.contains("sender.isPendingCrewApp ? size - Self.pendingCrewAppImageReduction : size"),
+            "缩小尺寸没有只接到 PendingCrew App 身份分支")
+        XCTAssertTrue(avatar.contains(".frame(width: baseImageSize, height: baseImageSize)"),
+                      "PendingCrew App 图标没有使用缩小后的本体尺寸")
+        XCTAssertTrue(avatar.contains(".frame(width: size, height: size)"),
+                      "头像组件外层槽位被缩小，消息行对齐会随之改变")
+    }
+
+    /// Todo #43：只有进程自己退出才发这句；文案必须走统一语义函数，不能由各个
+    /// lifecycle 分支自行拼出不同口径。
+    func testSessionSelfEndNoticeUsesOneLiteralTemplate() throws {
+        let store = try Self.text(of: "LocalWhiteboardStore.swift")
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(store.contains("Session「\\(sessionName)」自己结束了。它最后一句话：\\(closing)"),
+                      "session 自己结束文案不是人类指定的统一模板")
+        XCTAssertTrue(runner.contains("PendingCrewSystemMessage.sessionEnded"),
+                      "session lifecycle 没有调用统一结束语义")
+        XCTAssertTrue(runner.contains("reason != .userStopped"),
+                      "人/机长主动停止也会被误报成 session 自己结束")
+    }
+
+    /// Todo #87：订阅档位只能自动检测；设置页不留人工覆盖、更新入口移到 App 菜单
+    /// 「关于 PendingCrew」下面，外观区不再堆说明文字。
+    func testSettingsAndMenusMatchTodo87() throws {
+        let settings = try Self.text(of: "CrewSettingsView.swift")
+        let app = try Self.text(of: "PendingCrewApp.swift")
+        let quota = try Self.text(of: "AgentQuota.swift")
+        let center = try Self.text(of: "QuotaCenter.swift")
+        let launch = try Self.text(of: "LocalSessionLaunch.swift")
+        let worldModel = try Self.text(of: "LocalSessionWorldModel.swift")
+        let project = try Self.projectText(of: "project.yml")
+
+        XCTAssertFalse(settings.contains("「跟随系统」随设备的浅色/深色自动切换"),
+                       "外观区域说明仍在")
+        XCTAssertFalse(settings.contains("AgentSubscriptionPlanPreference"),
+                       "设置页仍能人工覆盖订阅档位")
+        XCTAssertFalse(settings.contains("UpdateSettingsSection("),
+                       "更新入口仍在设置页")
+        XCTAssertTrue(app.contains("CommandGroup(after: .appInfo)"),
+                      "检查更新没有放到「关于 PendingCrew」下方")
+        XCTAssertTrue(app.contains("Button(\"检查更新…\")"),
+                      "App 菜单缺少中文检查更新入口")
+        XCTAssertTrue(project.contains("developmentLanguage: zh-Hans"),
+                      "macOS 自动生成菜单仍以英文作为开发语言")
+
+        for (name, source) in [
+            ("AgentQuota.swift", quota),
+            ("QuotaCenter.swift", center),
+            ("LocalSessionLaunch.swift", launch),
+            ("LocalSessionWorldModel.swift", worldModel),
+        ] {
+            XCTAssertFalse(source.contains("subscriptionPlanOverride"),
+                           "\(name) 仍保留人工覆盖字段/注入")
+            XCTAssertFalse(source.contains("AgentSubscriptionPlanPreference"),
+                           "\(name) 仍保留人工覆盖持久化入口")
+            XCTAssertFalse(source.contains("手动设置"),
+                           "\(name) 仍可能向 session 注入手动档位")
+        }
+    }
+
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")
@@ -323,6 +521,10 @@ final class ViewWiringTests: XCTestCase {
                       "runner 没有新建机长的单一编排入口")
         XCTAssertTrue(runner.contains("CaptainHandoffTransaction.perform("),
                       "新机长没有走可回滚的统一交接事务")
+        XCTAssertTrue(runner.contains("CaptainHandoffAuthorization.validateLiveRequester("),
+                      "直系子机长救援没有在 live runner 复核父 crew 当前机长")
+        XCTAssertTrue(runner.contains("request.sourceCrewId"))
+        XCTAssertTrue(runner.contains("request.targetCrewId"))
         XCTAssertTrue(runner.contains("setCaptainAgentKindReportingFailure"),
                       "新机长类型没有以可报告失败的方式落盘")
         XCTAssertTrue(runner.contains("resumePreviousConversation: false"),
@@ -373,6 +575,29 @@ final class ViewWiringTests: XCTestCase {
         guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
         else { throw XCTSkip("找不到源码文件 \(fileName)") }
         return hit.1
+    }
+
+    private static func projectText(of relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    private static func repositoryPathExistsWithExactCase(
+        _ relativePath: String,
+        under root: URL
+    ) -> Bool {
+        var directory = root
+        for component in relativePath.split(separator: "/").map(String.init) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path),
+                  entries.contains(component)
+            else { return false }
+            directory.appendPathComponent(component)
+        }
+        return true
     }
 
     /// 仓库里 `apps/pendingcrew/Sources` 下的全部 .swift（路径由本文件位置推出）。

@@ -34,6 +34,7 @@ final class LocalSessionWorldModelTests: XCTestCase {
         XCTAssertTrue(out.contains("Max 5x"), "Claude subscription tier reaches world model")
         XCTAssertTrue(out.contains("Plus"), "Codex subscription tier reaches world model")
         XCTAssertTrue(out.contains("禁止据此编造绝对额度"), "absolute quota must stay unknown")
+        XCTAssertTrue(out.contains("continue_work(note)"), "explicit one-shot continuation lease reaches agents")
     }
 
     func testGUIAutomationBanReachesRenderedPrompt() throws {
@@ -43,6 +44,20 @@ final class LocalSessionWorldModelTests: XCTestCase {
         XCTAssertTrue(out.contains("AXUIElement"), "GUI automation ban must list the offending APIs")
         XCTAssertTrue(out.contains("screencapture"), "screencapture must be named")
         XCTAssertTrue(out.contains("等人点头再动手"), "must require human sign-off before running it")
+    }
+
+    func testDirectChildCaptainRescueBoundaryReachesBothWorldModels() throws {
+        let zh = try renderer.render(sampleContext())
+        XCTAssertTrue(zh.contains("target_crew_id"))
+        XCTAssertTrue(zh.contains("只允许自己的直系子 crew"))
+        XCTAssertTrue(zh.contains("runner/model/effort/opening_brief"))
+
+        var enContext = sampleContext()
+        enContext.locale = "en"
+        let en = try renderer.render(enContext)
+        XCTAssertTrue(en.contains("target_crew_id"))
+        XCTAssertTrue(en.contains("direct child crew only"))
+        XCTAssertTrue(en.contains("runner/model/effort/opening_brief"))
     }
 
     func testNoTemplateSyntaxLeaks() throws {

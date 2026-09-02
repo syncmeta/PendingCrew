@@ -588,7 +588,7 @@ struct CrewSessionWindowView: View {
             // rateLimited，卡在待决策上的 session 会被画成「空闲」。颜色见 SessionStatusDot。
             sessionStatus: CrewSessionStateDerivation.state(
                 isRunning: run.status == .running, health: run.health,
-                isWorking: run.isWorking, awaitingDecision: run.pendingDecision != nil,
+                isWorking: run.activityIsWorking, awaitingDecision: run.pendingDecision != nil,
                 awaitingReply: run.awaitingReply != nil),
             isSession: true)
     }
@@ -610,24 +610,6 @@ struct CrewSessionWindowView: View {
             if Task.isCancelled { return }
             await refreshRoster()
             badgeTick &+= 1
-            // Auto-wake captain: human sent a message and no captain is running → start one.
-            if let senderId = entries.last?.senderMemberId,
-               members.contains(where: { $0.id == senderId && $0.memberKind == "human" }),
-               !hasRunningCaptain,
-               let detail = crewStore.selectedDetail {
-                Task {
-                    do {
-                        try await sessionRunner.startCaptain(detail: detail, backend: appModel.backend)
-                    } catch {
-                        // 机长起不来必须有提示 —— 与手动启动路同落 lastStartError
-                        // 横幅,不静默吞（人发了话却没人应,还查不到原因）。#541 起
-                        // 再补一条白板（不 @机长 —— 挂的就是它,@ 会成环）。
-                        sessionRunner.reportStartFailure(
-                            crewId: detail.crew.id, brief: nil, error: error,
-                            mentionCaptain: false)
-                    }
-                }
-            }
         }
     }
 
@@ -1096,7 +1078,7 @@ private struct SessionBarItemView: View {
     @ViewBuilder private var statusDot: some View {
         let state = CrewSessionStateDerivation.state(
             isRunning: run.status == .running, health: run.health,
-            isWorking: run.isWorking, awaitingDecision: run.pendingDecision != nil,
+            isWorking: run.activityIsWorking, awaitingDecision: run.pendingDecision != nil,
             awaitingReply: run.awaitingReply != nil)
         if let dot = SessionStatusDotDerivation.dot(state: state) {
             if dot.breathes {

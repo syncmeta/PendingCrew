@@ -9,7 +9,11 @@ import SwiftUI
 /// 范围 = 侧栏选中的 crew。仓库 roadmap/handbook/state、Todo 与 task 账仍各自存在，
 /// 但不再占据驾驶舱；这里仅呈现 `CockpitPlanStore` 里 Agent 自己写下的计划与更新。
 struct CockpitView: View {
-    @ObservedObject var runner: CrewSessionRunner
+    /// 关掉自己。**刻意只收一个闭包，不收 `CrewSessionRunner`**（人类 Todo #96）：
+    /// 驾驶舱除了「关掉我」以外不需要 runner 的任何东西，而 `@ObservedObject` 一挂上，
+    /// runner 每一次 `objectWillChange`（session 状态、输出、心跳，一秒好几次）
+    /// 都会让整个驾驶舱重算一遍。
+    let onClose: () -> Void
     @EnvironmentObject private var crewStore: CrewStore
 
     var body: some View {
@@ -19,7 +23,6 @@ struct CockpitView: View {
             content
         }
         .background(Theme.Palette.canvas)
-        .onAppear { runner.cockpitSegmentRequest = nil }
     }
 
     // MARK: header
@@ -28,8 +31,7 @@ struct CockpitView: View {
         HStack(spacing: 14) {
             // 左上角圆形叉 —— 临时窗口的关闭件,位置对齐 Mac 红绿灯红点的心智。
             // 样式走共用的玻璃白件(Todo #22),与各子窗口的关闭按钮同一颗。
-            GlassCloseButton(action: { runner.showingCockpit = false },
-                             help: "关闭驾驶舱（Esc）")
+            GlassCloseButton(action: onClose, help: "关闭驾驶舱（Esc）")
             VStack(alignment: .leading, spacing: 1) {
                 Text("驾驶舱").font(Theme.Fonts.footnote.weight(.semibold))
                 Text("\(crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? "—") · Agent 的计划与想法")

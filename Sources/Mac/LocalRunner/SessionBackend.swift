@@ -46,6 +46,13 @@ enum SessionExitReason: Equatable {
     }
 }
 
+/// 唤醒正文交给后端后的受理结果。普通 composer 的 `send` 仍是 fire-and-forget；
+/// 白板唤醒必须拿到这个回执，不能把「调用了 send」当作「turn 已受理」。
+enum SessionWakeSubmission: Equatable {
+    case accepted
+    case retry
+}
+
 /// `CrewSessionRun` 所需的控制 + 生命周期接口，由终端后端（claude）
 /// 与未来的 app-server 后端（codex）共同实现。
 /// 视图层（`AgentTerminalView` 等）由具体类型/kind 决定；
@@ -100,6 +107,9 @@ protocol SessionBackend: AnyObject {
     var pendingDecision: PendingTerminalDecision? { get }
     var kind: LocalCodingAgentKind { get }
     func send(_ text: String)
+    /// 唤醒专用的有回执提交。默认后端（Claude PTY）把写入自身输入队列视为受理；
+    /// Codex app-server 覆盖为真实 `turn/start` RPC 回执。
+    func submitWake(_ text: String) async -> SessionWakeSubmission
     func interrupt()
     func stop()
     /// 清除额度类健康异常并重新武装检测（额度重置唤醒到点后 runner 调）——
@@ -111,6 +121,13 @@ protocol SessionBackend: AnyObject {
     ///   收进消息队列、斜杠命令永不执行，所以「等空闲」不是优化而是正确性前提。
     /// - codex（app-server）：走 `thread/settings/update`，从下一轮起生效。
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome
+}
+
+extension SessionBackend {
+    func submitWake(_ text: String) async -> SessionWakeSubmission {
+        send(text)
+        return .accepted
+    }
 }
 
 extension SessionBackend {

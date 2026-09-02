@@ -84,6 +84,66 @@ final class TodoListPresentationTests: XCTestCase {
         XCTAssertEqual(TodoListPresentation.statusAccessibilityLabel("pending"), "待办")
     }
 
+    // MARK: - #86 概览卡片契约
+
+    func testOverviewLayoutPinsThreeLineBodyOneLineResponseAndHeaderAboveCard() {
+        let layout = TodoListPresentation.overviewLayout
+        XCTAssertEqual(layout.bodyLineLimit, 3)
+        XCTAssertEqual(layout.responseLineLimit, 1)
+        XCTAssertEqual(layout.statusNumberPlacement, .aboveCard)
+        XCTAssertEqual(layout.responsePlacement, .insideCard)
+        XCTAssertEqual(layout.detailButtonTitle, "放大看")
+    }
+
+    func testOverviewCardKeepsOnlyTopLeadingCornerSquare() {
+        XCTAssertEqual(
+            TodoListPresentation.overviewLayout.cardCorners,
+            .init(topLeading: 0, bottomLeading: 8, bottomTrailing: 8, topTrailing: 8))
+    }
+
+    func testOverviewResponseUsesOnlyLatestResponseAsCompactSingleLineSummary() {
+        var todo = item(84)
+        todo.responses = [
+            response(id: "old", sessionId: "worker-old", senderName: "成员", text: "先前回应"),
+            response(id: "new", sessionId: "worker-new", senderName: " 机长 ",
+                     text: " 已完成，\n 这是机长答复的示例。 "),
+        ]
+
+        XCTAssertEqual(TodoListPresentation.overviewResponse(for: todo),
+                       "机长：已完成， 这是机长答复的示例。")
+    }
+
+    func testOverviewResponseFallsBackToShortSessionIdAndNilWhenUnanswered() {
+        var todo = item(84)
+        XCTAssertNil(TodoListPresentation.overviewResponse(for: todo))
+
+        todo.responses = [
+            response(id: "r", sessionId: "worker-123456789", senderName: nil, text: "收到"),
+        ]
+        XCTAssertEqual(TodoListPresentation.overviewResponse(for: todo),
+                       "session:worker：收到")
+    }
+
+    // MARK: - #95 条目时间元信息
+
+    func testMetadataTextLabelsLocalizedCreationAndUpdateTimes() {
+        var todo = item(95, createdAt: "2026-09-01T02:03:04Z")
+        todo.updatedAt = "2026-09-02T05:06:07Z"
+        let text = TodoListPresentation.metadataText(
+            for: todo,
+            locale: Locale(identifier: "zh_CN"),
+            timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+
+        XCTAssertTrue(text.hasPrefix("创建 "), text)
+        XCTAssertTrue(text.contains(" · 更新 "), text)
+        XCTAssertFalse(text.contains("T02:03:04Z"), "时间应本地化，不该直接铺 ISO 原文：\(text)")
+        let values = String(text.dropFirst("创建 ".count))
+            .components(separatedBy: " · 更新 ")
+        XCTAssertEqual(values.count, 2, text)
+        XCTAssertNotEqual(values[0], values[1],
+                          "创建与更新时间不同，展示不应把两者误写成同一个值")
+    }
+
     // MARK: - #52 建 Todo 的正文口径（能附图之后「只贴图不打字」是合法输入）
 
     func testNewTodoTextUsesTypedTextTrimmed() {
@@ -109,5 +169,11 @@ final class TodoListPresentationTests: XCTestCase {
     func testNewTodoTextNilWhenNothingToRecord() {
         XCTAssertNil(TodoListPresentation.newTodoText(draft: "   ", attachmentCount: 0,
                                                       allImages: true))
+    }
+
+    private func response(id: String, sessionId: String, senderName: String?,
+                          text: String) -> LocalTodoResponse {
+        LocalTodoResponse(id: id, sessionId: sessionId, senderName: senderName, text: text,
+                          createdAt: "2026-08-28T00:00:00Z")
     }
 }

@@ -21,6 +21,13 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(direct.interruptCount, 1)
         XCTAssertEqual(direct.clearQuotaCount, 1)
 
+        direct.wakeResults = [.retry, .accepted]
+        let firstWake = await remote.submitWake("wake-1")
+        let secondWake = await remote.submitWake("wake-2")
+        XCTAssertEqual(firstWake, .retry)
+        XCTAssertEqual(secondWake, .accepted)
+        XCTAssertEqual(direct.submittedWakes, ["wake-1", "wake-2"])
+
         let outcome = await remote.applyProfileSwitch(.init(knob: .model, value: "gpt-5"))
         XCTAssertEqual(outcome, .applied("Set model to gpt-5"))
         XCTAssertEqual(direct.profileCommands, [.init(knob: .model, value: "gpt-5")])
@@ -156,6 +163,22 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertFalse(remote.isBusy)
     }
 
+    func testLateOldCompletionCannotMakeNewRemoteTurnIdle() {
+        let bridge = InProcessSessionProtocolBridge()
+        let notification = bridge.codexNotificationSink(sessionId: "codex-overlap")
+        let remote = bridge.exposeAttached(
+            sessionId: "codex-overlap", backend: ProtocolTestBackend(kind: .codex))
+
+        notification("turn/started", ["turn": ["id": "turn-a"]])
+        notification("turn/started", ["turn": ["id": "turn-b"]])
+        notification("turn/completed", ["turn": ["id": "turn-a"]])
+
+        XCTAssertTrue(remote.isWorking)
+        XCTAssertTrue(remote.isBusy)
+        XCTAssertTrue(remote.transcript?.turnActive == true)
+        XCTAssertEqual(remote.transcript?.activeTurnId, "turn-b")
+    }
+
     func testAttachBranchesTerminalSnapshotFromCodexStructuredHistory() {
         let terminal = ProtocolTestBackend(kind: .claudeCode)
         terminal.terminalSnapshot = .init(cols: 80, rows: 25, bytes: Array("screen".utf8))
@@ -265,10 +288,16 @@ final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControll
     var approvalsReviewers: [CodexProtocol.ApprovalsReviewer] = []
     var terminalSnapshot: TerminalSnapshotEncoder.Snapshot?
     var codexHistory: [CodexThreadItem] = []
+    var wakeResults: [SessionWakeSubmission] = []
+    var submittedWakes: [String] = []
 
     init(kind: LocalCodingAgentKind) { self.kind = kind }
 
     func send(_ text: String) { sent.append(text) }
+    func submitWake(_ text: String) async -> SessionWakeSubmission {
+        submittedWakes.append(text)
+        return wakeResults.isEmpty ? .accepted : wakeResults.removeFirst()
+    }
     func interrupt() { interruptCount += 1 }
     func stop() { stopCount += 1 }
     func clearQuotaHealth() { clearQuotaCount += 1 }

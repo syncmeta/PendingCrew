@@ -9,6 +9,10 @@ import SwiftUI
 struct CrewCenterView: View {
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
+    /// 驾驶舱开关位的**写句柄**（人类 Todo #96）。`@Environment` 取一个 class 值
+    /// **不订阅**它的 `objectWillChange` —— 中栏只按按钮，不需要知道驾驶舱开着没有。
+    /// 换成 `@EnvironmentObject` 会让开关驾驶舱重新把整条中栏（连着群聊）作废。
+    @Environment(\.cockpitPresentation) private var cockpitPresentation
     @State private var showingDetail = false
     /// chunk2 T5（captain 唤醒=app 注入）：已通知过 captain 的 decision id ——
     /// 防止重复注入同一条。**放在常驻中栏**（而非按需 inspector），captain 编排
@@ -19,6 +23,8 @@ struct CrewCenterView: View {
     /// 切 crew 会整个重建 —— 状态放里面就没法从 toolbar 驱动它。切 crew 时下面
     /// 显式归位（换个群还挂着筛选，人会以为新群是空的）。
     @State private var onlyMentions = false
+    @State private var searchQuery = ""
+    @State private var searchTargetMessageId: String?
 
     var body: some View {
         Group {
@@ -35,7 +41,9 @@ struct CrewCenterView: View {
                         sessionRunner.composeNew()
                         sessionRunner.viewingTerminal = true
                     },
-                    showOnlyHumanMentions: $onlyMentions
+                    showOnlyHumanMentions: $onlyMentions,
+                    searchQuery: $searchQuery,
+                    searchTargetMessageId: $searchTargetMessageId
                 )
                 // 切 crew 强制重建（对齐 iPad 的 `IPadShell`）。少了它，detail 已缓存时
                 // 视图实例被复用，会先用「新 crewId + 上一个 crew 的 entries」渲染一帧，
@@ -61,6 +69,7 @@ struct CrewCenterView: View {
         // 表现为"切换后 toolbar 闪一下"。用 selectedCrewId（切换瞬间即非 nil）+ 列表里的
         // title 兜底，整条就稳定不抖。
         .navigationTitle(crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? "")
+        .searchable(text: $searchQuery, placement: .toolbar, prompt: "搜索当前群")
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
         // **不能**在这里 .toolbarBackground 刷色：那是窗口级的，会连 sidebar 那半截 toolbar
         // 一起刷白，把侧栏顶部的半透明材质盖住（"toolbar 挡住 sidebar"）。透明标题栏让
@@ -79,7 +88,7 @@ struct CrewCenterView: View {
                     //
                     // 原来旁边还有个「Todo」按钮直达 Todo 段（Todo #12）——Todo 已并进
                     // 任务段、右栏又常驻 Todo 面板，两个按钮开同一扇门，删掉一个。
-                    Button { sessionRunner.showingCockpit = true } label: {
+                    Button { cockpitPresentation.open() } label: {
                         Label("驾驶舱", systemImage: "speedometer")
                     }
                     .disabled(crewStore.selectedDetail == nil)
@@ -120,7 +129,32 @@ struct CrewCenterView: View {
         // `.task(id:)` 随选中 crew 切换重建订阅;无选中 crew 时 crewId=nil,不订阅。
         // 切 crew：筛选归位（Todo #61）。换个群还挂着「只看 @ 我」，新群大概率筛成
         // 空的 —— 人看到的是一个空聊天页，会以为这个群没消息 / 加载失败。
-        .onChange(of: crewStore.selectedCrewId) { _, _ in onlyMentions = false }
+        .onChange(of: crewStore.selectedCrewId) { _, _ in
+            onlyMentions = false
+            // 跨群结果的 request 会在下面紧接着重新填回查询/定位；普通切群则归零。
+            if crewStore.chatSearchRequest == nil {
+                searchQuery = ""
+                searchTargetMessageId = nil
+            }
+        }
+        .onChange(of: searchQuery) { _, newValue in
+            if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                onlyMentions = false
+            }
+        }
+        .onChange(of: crewStore.chatSearchRequest) { _, request in
+            guard let request else { return }
+            searchQuery = request.query
+            searchTargetMessageId = request.messageId
+            // 下一拍再清 request：同一笔点击还会改变 selectedCrewId，先让上面的切群
+            // handler 看见「这是搜索跳转」而不是普通切群，避免它把 query/target 清掉。
+            Task { @MainActor in
+                await Task.yield()
+                if crewStore.chatSearchRequest?.id == request.id {
+                    crewStore.chatSearchRequest = nil
+                }
+            }
+        }
         .task(id: crewStore.selectedCrewId) {
             guard let crewId = crewStore.selectedCrewId else { return }
             notifyCaptainOfNewDecisions()

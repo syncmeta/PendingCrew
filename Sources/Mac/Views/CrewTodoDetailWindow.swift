@@ -163,6 +163,10 @@ struct CrewTodoDetailView: View {
                 Spacer(minLength: 8)
                 rowActions(item)
             }
+            Text(TodoListPresentation.metadataText(for: item))
+                .font(Theme.Fonts.caption2)
+                .foregroundStyle(Theme.Palette.inkMuted)
+                .padding(.leading, 22)
             // 条目自带的图（Todo #52）—— 点开看大图，与群聊气泡同一个查看器。
             CrewTodoAttachmentStrip(attachments: item.attachments ?? [])
                 .padding(.leading, 22)

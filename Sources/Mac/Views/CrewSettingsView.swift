@@ -3,16 +3,11 @@ import SwiftUI
 
 /// PendingCrew macOS 设置窗口（⌘,）。
 ///
-/// 外观 Picker 对齐 PendingBot SettingsView —— 三态(跟随系统/浅色/深色)，
-/// `@AppStorage(AppearanceMode.storageKey)` 写盘，`PendingCrewApp.body` 的
-/// `.preferredColorScheme` 实时响应。
+/// 外观 Picker 三态（跟随系统/浅色/深色）；其余只保留本机数据管理。
 ///
 /// iPad shell 暂为占位页(task B2)，外观 Picker 届时在 iPad 设置入口再暴露。
 struct CrewSettingsView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
-    @AppStorage(AgentSubscriptionPlanPreference.claudeKey) private var claudePlanRaw = ""
-    @AppStorage(AgentSubscriptionPlanPreference.codexKey) private var codexPlanRaw = ""
-    @ObservedObject private var quota = QuotaCenter.shared
     @State private var showResetConfirm = false
 
     private var appearance: AppearanceMode {
@@ -33,30 +28,7 @@ struct CrewSettingsView: View {
                 .pickerStyle(.segmented)
             } header: {
                 Text("外观")
-            } footer: {
-                Text("「跟随系统」随设备的浅色/深色自动切换；也可固定为浅色或深色。")
             }
-
-            Section {
-                subscriptionPicker(
-                    "Claude Code", selection: $claudePlanRaw,
-                    choices: AgentSubscriptionPlanPreference.claudeChoices)
-                subscriptionPicker(
-                    "Codex", selection: $codexPlanRaw,
-                    choices: AgentSubscriptionPlanPreference.codexChoices)
-            } header: {
-                Text("我的订阅档位")
-            } footer: {
-                Text("自动检测：Claude \(quota.claude?.subscriptionPlan ?? "未探到")；Codex \(quota.codex?.subscriptionPlan ?? "未探到")。人工选择只补档位标签，不推算或编造 token / requests 绝对额度。")
-            }
-            .onChange(of: claudePlanRaw) { _, _ in
-                quota.subscriptionPlanPreferencesDidChange()
-            }
-            .onChange(of: codexPlanRaw) { _, _ in
-                quota.subscriptionPlanPreferencesDidChange()
-            }
-
-            UpdateSettingsSection()
 
             Section {
                 Button(role: .destructive) {
@@ -82,21 +54,8 @@ struct CrewSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        // 比原来的 420 宽 —— 更新区要列提交标题(本仓库的标题动辄几十字),
-        // 420 下每条都折成三四行,读不了。
-        .frame(width: 560)
+        .frame(width: 420)
         .padding()
-    }
-
-    @ViewBuilder
-    private func subscriptionPicker(
-        _ title: String, selection: Binding<String>, choices: [String]
-    ) -> some View {
-        Picker(title, selection: selection) {
-            ForEach(choices, id: \.self) { choice in
-                Text(choice.isEmpty ? "自动检测" : choice).tag(choice)
-            }
-        }
     }
 }
 #endif

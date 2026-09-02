@@ -199,6 +199,24 @@ final class TodoLedgerIsolationTests: XCTestCase {
         XCTAssertTrue(item.isUnanswered)
     }
 
+    func testOldJSONWithoutUpdatedAtFallsBackToCreationOrLatestResponse() throws {
+        let dir = tempDir()
+        let file = dir.appendingPathComponent("c.human-todos.json")
+        let json = """
+            [{"id":"1","number":1,"text":"未回应","status":"pending","createdAt":"2026-08-25T00:00:00Z","responses":[]},
+             {"id":"2","number":2,"text":"有旧回应","status":"pending","createdAt":"2026-08-25T00:00:00Z",
+              "responses":[{"id":"r","sessionId":"s","text":"旧回应","createdAt":"2026-08-26T03:04:05Z"}]}]
+            """
+        try json.write(to: file, atomically: true, encoding: .utf8)
+        let rows = LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c")
+
+        XCTAssertEqual(rows.count, 2, "缺 updatedAt 的旧条目不能解码失败")
+        XCTAssertNil(rows[0].updatedAt)
+        XCTAssertEqual(rows[0].effectiveUpdatedAt, rows[0].createdAt)
+        XCTAssertNil(rows[1].updatedAt)
+        XCTAssertEqual(rows[1].effectiveUpdatedAt, "2026-08-26T03:04:05Z")
+    }
+
     // MARK: - 黄点判据（Todo #62 ⑥）：未回应就亮，全部有回应就灭
 
     func testUnansweredFlipsOnResponse() {

@@ -32,17 +32,23 @@ final class CrewSessionRunner: ObservableObject {
     /// 开关只翻 inspector 呈现态，不强制 true —— 让用户先落在成员列表。
     @Published var viewingTerminal = false
 
-    /// 驾驶舱模式（cockpit.md）：`true` 时主窗口从「三栏群聊」整片切到「侧栏 | 驾驶舱」
-    /// 两栏——驾驶舱铺满 content+detail（不是临时小窗口/info 面板）。侧栏仍在,作为
-    /// **沿 DAG 选 crew 的范围选择器**。中栏 toolbar「驾驶舱」按钮翻 true,驾驶舱头部
-    /// 「退出」翻 false。放 runner 上让 MacThreePaneView（决定布局）与中栏（入口）共享。
-    @Published var showingCockpit = false
-
-    /// 驾驶舱段深链请求（Todo #12：工具栏 Todo 独立按钮直达 Todo 段）。值为
-    /// `CockpitView.Segment` 的 rawValue；CockpitView 出现/变更时消费并清 nil。
-    /// 放 runner 上与 `showingCockpit` 同层——入口（中栏 toolbar）与呈现（CockpitView）
-    /// 分属两棵子树，只有 runner 两边都够得着。
-    @Published var cockpitSegmentRequest: String?
+    // 驾驶舱的开关位**曾经在这里**（`showingCockpit`），2026-09-01 按人类 Todo #96 搬走了。
+    //
+    // 搬走的理由：`ObservableObject` 没有属性粒度。翻这一个 bool 会给每一个观察本对象的
+    // 视图发 `objectWillChange` —— 群聊、终端、侧栏 42 行、中栏、详情面板全部作废重算，
+    // 开一次发一次、关一次再发一次。**这就是「驾驶舱打开和关闭都要很久」的主因**，
+    // 而且它天然对称，所以两个方向一样慢。
+    //
+    // 现在它住在 `CockpitPresentation` 里（`Sources/Mac/Views/CockpitPresentation.swift`），
+    // 由 `MacThreePaneView` 用 `@State` 保管、只被 `CockpitLayer` 观察。
+    // **别搬回来** —— 「放 runner 上让两边都够得着」正是当初把它放这儿的理由，
+    // 而那个便利的真实代价是每次开关都广播一遍全树。要跨子树够得着有别的办法
+    // （现在用的是不订阅的 `@Environment(\.cockpitPresentation)`）。
+    //
+    // 同一拍删掉的还有 `cockpitSegmentRequest`：那是 Todo #12 的段深链请求，
+    // 但那个 Todo 按钮早已并进任务段删掉了，全仓库**没有任何地方读它**，
+    // 只剩 `CockpitView.onAppear` 给它赋一次 nil —— 而 `@Published` 不判等值，
+    // 于是打开驾驶舱要白付一整轮全树广播。
 
     /// 最近一次「启动 Captain」失败的人类可读原因（手动按钮 + 建 crew 自动起共用）。
     /// 错误从前台终端模式（composer 里渲染 `localError`）和成员列表模式（按钮所在
@@ -106,6 +112,8 @@ final class CrewSessionRunner: ObservableObject {
     /// 运行期间只登记，`turn/completed` 发布 idle 后自动起下一 turn。
     private var deferredWakes = CrewDeferredWakeQueue()
     private var deferredWakeCallbacks: [String: (CrewMailboxWakeLogic.ReceiptEvidence) -> Void] = [:]
+    private let continuationStore = SessionContinuationStore()
+    private var deferredWakeRetryTasks: [String: Task<Void, Never>] = [:]
 
     /// 正在拉起中的目标（`captain:<crewId>` / `member:<sessionId>`）。
     ///
@@ -264,10 +272,9 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    /// 本地唤醒投递的唯一 busy 门禁。目标 idle 时立即 send；Codex 正在跑 turn 时
-    /// 留账，不打断当前 turn。`onDelivered` 只在真正调用 `run.send` 后执行，并带回
-    /// send 前取好的回执 baseline，供游标推进 / 投递回执接线使用；排队阶段绝不
-    /// 提前把消息标成已消费。
+    /// 本地唤醒投递的唯一 busy 门禁。目标 idle 时尝试提交；Codex 正在跑 turn 时
+    /// 留账，不打断当前 turn。`onDelivered` 只在后端确认请求受理后执行，不能把
+    /// 「调用了 send」当成「turn/start 成功」而提前推进游标。
     func deliverOrDeferWake(
         sourceKey: String,
         to run: CrewSessionRun,
@@ -279,13 +286,13 @@ final class CrewSessionRunner: ObservableObject {
             key: sourceKey + "|target:" + run.sessionId,
             targetSessionId: run.sessionId,
             text: text)
-        switch deferredWakes.submit(delivery, isBusy: run.backend.isBusy) {
+        switch deferredWakes.submit(delivery, isBusy: run.activityIsWorking) {
         case let .deliver(ready):
-            let baseline = wakeReceiptEvidence(for: run)
-            run.send(ready.text)
-            onDelivered?(baseline)
+            if let onDelivered { deferredWakeCallbacks[delivery.key] = onDelivered }
+            attemptWakeDelivery(ready, to: run)
         case .deferred:
             if let onDelivered { deferredWakeCallbacks[delivery.key] = onDelivered }
+            scheduleDeferredWakeRetry(for: run)
         case .duplicate:
             break
         }
@@ -294,24 +301,71 @@ final class CrewSessionRunner: ObservableObject {
     /// 后端发布 busy -> idle 时补一条。再读一次 `backend.isBusy`，挡住 idle 事件排队
     /// 到主线程期间目标已经开始另一 turn 的窄竞态。
     private func runBecameIdle(_ run: CrewSessionRun) {
-        guard run.status == .running, !run.backend.isBusy else { return }
+        guard run.status == .running, !run.backend.isBusy, !run.activityIsWorking else { return }
         if let delivery = deferredWakes.popWhenIdle(sessionId: run.sessionId) {
-            let callback = deferredWakeCallbacks.removeValue(forKey: delivery.key)
-            let baseline = wakeReceiptEvidence(for: run)
-            run.send(delivery.text)
-            callback?(baseline)
-            // 这次 idle 已经被本地补投占用；`send` 正在起下一 turn，别同时让
+            attemptWakeDelivery(delivery, to: run)
+            // 这次 idle 已经被本地补投占用；`turn/start` 正在受理下一 turn，别同时让
             // mailbox 的异步重拉抢同一空闲窗口。下一次 idle 再处理服务端 inbox。
             return
+        }
+        if let lease = continuationStore.takeReady(sessionId: run.sessionId) {
+            run.send("""
+            继续工作（你上一轮用 continue_work 留下的一次性承诺）：
+            \(lease.note)
+            先核对当前状态再继续；若这一轮结束时仍有可立即推进的工作，需重新调用 continue_work。已完成、阻塞或等外部输入则不要续约。
+            """)
+        }
+    }
+
+    private func attemptWakeDelivery(
+        _ delivery: CrewDeferredWakeQueue.Delivery, to run: CrewSessionRun
+    ) {
+        let baseline = wakeReceiptEvidence(for: run)
+        Task { @MainActor [weak self, weak run] in
+            guard let self, let run, run.status == .running else { return }
+            let result = await run.backend.submitWake(delivery.text)
+            guard run.status == .running else {
+                self.discardDeferredWakes(sessionId: delivery.targetSessionId)
+                return
+            }
+            self.deferredWakes.resolve(delivery, as: result)
+            switch result {
+            case .accepted:
+                self.deferredWakeCallbacks.removeValue(forKey: delivery.key)?(baseline)
+                if self.deferredWakes.pendingCount(sessionId: run.sessionId) > 0 {
+                    self.scheduleDeferredWakeRetry(for: run)
+                } else {
+                    self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
+                }
+            case .retry:
+                self.scheduleDeferredWakeRetry(for: run)
+            }
+        }
+    }
+
+    /// 状态快照可能仍显示 idle，而真实 app-server 正在收尾上一 turn。拒绝后的原
+    /// delivery 已回队列；短延迟后主动再试，不依赖第二条白板消息或新的 idle 边沿。
+    private func scheduleDeferredWakeRetry(for run: CrewSessionRun) {
+        deferredWakeRetryTasks[run.sessionId]?.cancel()
+        deferredWakeRetryTasks[run.sessionId] = Task { @MainActor [weak self, weak run] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, let self, let run, run.status == .running else { return }
+            self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)
+            if run.activityIsWorking {
+                self.scheduleDeferredWakeRetry(for: run)
+            } else {
+                self.runBecameIdle(run)
+            }
         }
     }
 
     private func discardDeferredWakes(sessionId: String) {
+        deferredWakeRetryTasks.removeValue(forKey: sessionId)?.cancel()
         let deliveries = deferredWakes.remove(sessionId: sessionId)
         for delivery in deliveries { deferredWakeCallbacks.removeValue(forKey: delivery.key) }
     }
 
-    /// 必须在 `run.send` **之前**取 baseline：Codex 的短 turn 可能快到 send 返回后、
+    /// 必须在提交 `turn/start` **之前**取 baseline：Codex 的短 turn 可能快到 RPC 返回后、
     /// confirmWake 建 Task 前就产生第一笔活动。白板 id 同样比时间戳可靠（本地 ISO
     /// 时间戳无小数，同一秒内比较 Date 会漏掉刚发的消息）。
     private func wakeReceiptEvidence(for run: CrewSessionRun) -> CrewMailboxWakeLogic.ReceiptEvidence {
@@ -319,7 +373,7 @@ final class CrewSessionRunner: ObservableObject {
         let latestPostId = LocalWhiteboardStore.shared.list(crewId: run.crewId)
             .last { $0.senderSessionId == run.sessionId }?.id
         return .init(
-            isWorking: run.backend.isBusy || run.backend.isWorking,
+            isWorking: run.activityIsWorking,
             activityRevision: revision,
             latestPostId: latestPostId)
     }
@@ -760,7 +814,7 @@ final class CrewSessionRunner: ObservableObject {
             // "rateLimited"（Todo #10 层2）、拉起失败单列 "launchFailed"（#541）：
             // 机长点名一眼分得清「等额度重置中」「从来没起来」「真空闲」，不误派活。
             let state = CrewSessionStateDerivation.state(
-                isRunning: run.status == .running, health: run.health, isWorking: run.isWorking,
+                isRunning: run.status == .running, health: run.health, isWorking: run.activityIsWorking,
                 awaitingDecision: run.pendingDecision != nil,
                 awaitingReply: run.awaitingReply != nil)
             let healthDetail: String?
@@ -914,7 +968,7 @@ final class CrewSessionRunner: ObservableObject {
         // 与点名快照同一套推导（`CrewSessionStateDerivation`），只是换成中文标签。
         let state: String
         switch CrewSessionStateDerivation.state(
-            isRunning: run.status == .running, health: run.health, isWorking: run.isWorking,
+            isRunning: run.status == .running, health: run.health, isWorking: run.activityIsWorking,
             awaitingDecision: run.pendingDecision != nil,
             awaitingReply: run.awaitingReply != nil) {
         case CrewSessionStateDerivation.launchFailed:
@@ -1325,14 +1379,12 @@ final class CrewSessionRunner: ObservableObject {
 
     // MARK: - codex backend providers
 
-    /// codex 每轮 turn 前注入未读白板的 provider —— 复用 claude PostToolUse hook 的
-    /// 同一份 `HookEmitter`（per-session 游标读未读 + 渲染 + 推进游标），区别只是
-    /// 这里在 app 进程内直接调，不经 helper 子进程。返回的字符串作为 `turn/start`
-    /// 的首条 text input 前置注入。无未读 → nil（不注入）。best-effort：
-    /// 任何失败（store 读不出 / 渲染失败）→ nil，turn 照常跑（只是这轮没白板）。
+    /// codex 每轮 turn 前准备未读白板上下文 —— 复用 claude PostToolUse hook 的
+    /// 同一份 `HookEmitter`，但拆成 prepare / commit：只有 `turn/start` RPC 确认
+    /// 受理后才推进 per-session 游标。无未读 → nil（不注入）。
     nonisolated static func makeWhiteboardProvider(
         crewId: String, sessionId: String, captain: Bool = false
-    ) -> () -> String? {
+    ) -> () -> CodexPreparedWhiteboardContext? {
         let dir = LocalWhiteboardStore.defaultDirectory
         return {
             // captain → 注入多带全机 crew 组织树概览（#24 机长视野,与 claude 的
@@ -1340,15 +1392,10 @@ final class CrewSessionRunner: ObservableObject {
             let emitter = HookEmitter(
                 store: LocalWhiteboardStore(directory: dir),
                 crewId: crewId, sessionId: sessionId, cursorDir: dir, isCaptain: captain)
-            // HookEmitter 吐的是 claude hook 信封 JSON；codex 这边只要里头的纯文本
-            // additionalContext，剥一层拿渲染好的未读串。
-            guard let json = emitter.emitAndAdvance(),
-                  let data = json.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let hook = obj["hookSpecificOutput"] as? [String: Any],
-                  let ctx = hook["additionalContext"] as? String, !ctx.isEmpty
-            else { return nil }
-            return ctx
+            guard let prepared = emitter.prepareContext() else { return nil }
+            return CodexPreparedWhiteboardContext(
+                text: prepared.context,
+                commit: { emitter.commit(prepared) })
         }
     }
 
@@ -1435,7 +1482,10 @@ final class CrewSessionRunner: ObservableObject {
             // `awaitingQuestion` 每轮重写（层 2）——不是停在问句上就写 nil，红点自然熄。
             marker.write(.init(lastMessageId: board.list(crewId: crewId).last?.id ?? prev.lastMessageId,
                                lastTurnId: prev.lastTurnId,
+                               lastAssistantMessage: text,
                                awaitingQuestion: SessionTurnTrace.trailingQuestion(from: text)))
+            SessionContinuationStore(directory: dir).finishTurn(
+                crewId: crewId, sessionId: sessionId, outcome: .continuing)
         }
     }
 
@@ -1613,20 +1663,57 @@ final class CrewSessionRunner: ObservableObject {
         backend: PendingCrewBackend?
     ) async {
         do {
+            guard detail.crew.id == request.targetCrewId else {
+                throw CaptainHandoffAuthorizationError.notDirectChild
+            }
+            let checkedTarget = try CaptainHandoffAuthorization.resolveTargetCrewId(
+                sourceCrewId: request.sourceCrewId,
+                requestedTargetCrewId: request.targetCrewId,
+                targetParentIds: LocalCrewStore.shared.parentIds(of: request.targetCrewId))
+            guard checkedTarget == request.targetCrewId else {
+                throw CaptainHandoffAuthorizationError.notDirectChild
+            }
+            let liveParentCaptain = runs.first {
+                $0.crewId == request.sourceCrewId
+                    && $0.role == .captain && $0.status == .running
+            }?.sessionId
+            try CaptainHandoffAuthorization.validateLiveRequester(
+                sourceCrewId: request.sourceCrewId,
+                targetCrewId: request.targetCrewId,
+                requesterSessionId: request.requesterSessionId,
+                currentCaptainSessionId: liveParentCaptain)
+            if request.sourceCrewId != request.targetCrewId {
+                try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+                    crewId: request.sourceCrewId, sessionId: "system",
+                    text: "开始救援直系子 crew「\(detail.crew.title)」的机长；最终结果会回执到父子两边群聊。",
+                    category: "progress", senderName: "系统")
+            }
             if let target = request.targetSessionId, request.runner == nil {
                 try await reassignCaptain(
                     toSessionId: target, detail: detail, backend: backend)
-                return
+            } else {
+                guard request.targetSessionId == nil,
+                      let runner = request.runner,
+                      let kind = LocalCodingAgentKind(rawValue: runner == "claude" ? "claude_code" : runner),
+                      kind.isAgent else { throw RunnerError.captainCandidateInvalid }
+                try await startFreshCaptain(
+                    detail: detail, backend: backend,
+                    openingBrief: request.openingBrief ?? "",
+                    kind: kind, model: request.model, effort: request.effort,
+                    title: request.title ?? "机长", userInitiated: false)
             }
-            guard request.targetSessionId == nil,
-                  let runner = request.runner,
-                  let kind = LocalCodingAgentKind(rawValue: runner == "claude" ? "claude_code" : runner),
-                  kind.isAgent else { throw RunnerError.captainCandidateInvalid }
-            try await startFreshCaptain(
-                detail: detail, backend: backend,
-                openingBrief: request.openingBrief ?? "",
-                kind: kind, model: request.model, effort: request.effort,
-                title: request.title ?? "机长", userInitiated: false)
+            if request.sourceCrewId != request.targetCrewId {
+                do {
+                    try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+                        crewId: request.sourceCrewId, sessionId: "system",
+                        text: "直系子 crew「\(detail.crew.title)」机长救援完成；其持久机长与 live runner 已切换。",
+                        category: "milestone", senderName: "系统")
+                } catch {
+                    // 子 crew 的事务已提交且已有成功回执；父群回执失败不能倒打一耙
+                    // 宣称交接失败，更不能尝试恢复旧机长制造双 captain。
+                    lastStartError = "子 crew 机长已切换，但父群成功回执写入失败：\(error.localizedDescription)"
+                }
+            }
         } catch {
             lastStartError = "机长交接失败：\(error.localizedDescription)"
             let preserved: String
@@ -1637,7 +1724,7 @@ final class CrewSessionRunner: ObservableObject {
             }
             do {
                 try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
-                    crewId: request.crewId, sessionId: "system",
+                    crewId: request.sourceCrewId, sessionId: "system",
                     text: "机长交接失败：\(error.localizedDescription)\n\(preserved)",
                     category: "error", senderName: "系统")
             } catch {
@@ -2318,6 +2405,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 干活中(跑回合) vs 空闲(存活等指令) —— 镜像后端 `isWorking`，驱动头像/切换条状态点。
     /// (与 backend.isBusy 区分:那个是唤醒注入门禁;这个是 UI 活跃信号,见 SessionBackend。)
     @Published private(set) var isWorking = false
+    /// Structured Codex activity is authoritative over a stale state frame. Item
+    /// revisions mark the turn active and only a matching turn/completed clears it.
+    var activityIsWorking: Bool {
+        backend.isBusy || backend.isWorking
+            || (backend as? SessionWakeActivityProviding)?.hasActiveStructuredTurn == true
+    }
     /// 群聊「正在输入」气泡用的显示态 —— 镜像后端 `displayIsTyping`（Todo #24）。
     /// 与 `isWorking` 分家的理由见 `SessionBackend.displayIsTyping`：那条是原始
     /// 活跃信号（回执/上报/状态点/限额恢复都吃），这条只驱动一个气泡，做了
@@ -2735,6 +2828,15 @@ final class CrewSessionRun: ObservableObject, Identifiable {
             lastHealthKind: health?.kind, healthAt: healthAt)
         exitReason = reason
         if reason == .hitLimit, !isMirror { onUsageLimit?(self) }
+        if kind.isAgent, reason != .userStopped, !isMirror {
+            let closing = turnMarker.read().lastAssistantMessage
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId,
+                sessionId: PendingCrewSystemMessage.sessionId,
+                text: PendingCrewSystemMessage.sessionEnded(
+                    sessionName: displayName, lastAgentText: closing),
+                category: "progress")
+        }
         status = Self.map(.exited(exitCode), cancelled: cancelled)
         isWorking = false
         displayIsTyping = false

@@ -173,6 +173,23 @@ final class CrewListenLogicTests: XCTestCase {
         XCTAssertFalse(out[0].text.contains("同事进展"))
     }
 
+    /// listen 的 sender 过滤只控制主动收听，不能反过来挡住人类无定向消息的
+    /// 默认 captain wake。现场 captain 即使只听 session，也仍由 mention waker 接。
+    func testListenSenderFilterCannotBlockDefaultHumanCaptainWake() {
+        let human = msg(kind: "user", text: "刚刚那个列表是什么？")
+        var captain = listener("s-cap", senders: ["some-worker"])
+        captain.isCaptain = true
+
+        XCTAssertTrue(CrewListenLogic.plannedInjections(
+            entries: [human], listeners: [captain], runs: [idleRun("s-cap")], now: now
+        ).isEmpty, "sender filter 可以不命中主动 listen")
+        let justAfterMessage = ISO8601DateFormatter().date(from: "2027-01-15T00:00:01Z")!
+        XCTAssertEqual(
+            CrewLocalMentionWakeLogic.pending(entries: [human], now: justAfterMessage).first?.mentions,
+            [.captain],
+            "默认 captain wake 是独立链，不能被 listen sender filter 吃掉")
+    }
+
     func testSenderFilterCaptain() {
         let capMsg = msg(kind: "captain", sessionId: "s-cap", text: "机长安排", name: "机长")
         XCTAssertTrue(CrewListenLogic.senderMatches(capMsg, filter: ["captain"]))

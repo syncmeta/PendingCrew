@@ -9,6 +9,7 @@ import SwiftUI
 struct CrewSidebarView: View {
     @EnvironmentObject private var crewStore: CrewStore
     @State private var showingCreateSheet = false
+    @State private var showingGlobalSearch = false
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
     /// sheet 挂在侧栏顶层而不是行上：List 行会被回收，挂行上的表单可能被顶掉。
     @State private var childCrewTarget: CrewChildCreationTarget?
@@ -63,6 +64,12 @@ struct CrewSidebarView: View {
         .toolbar {
             ToolbarItemGroup {
                 Button {
+                    showingGlobalSearch = true
+                } label: {
+                    Label("搜索所有群", systemImage: "magnifyingglass")
+                }
+                .help("搜索所有群")
+                Button {
                     showingCreateSheet = true
                 } label: {
                     Label("新建 crew", systemImage: "plus")
@@ -82,6 +89,10 @@ struct CrewSidebarView: View {
         }
         .sheet(isPresented: $showingCreateSheet) {
             CreateCrewSheet()
+        }
+        .sheet(isPresented: $showingGlobalSearch) {
+            CrewGlobalSearchSheet()
+                .environmentObject(crewStore)
         }
         // 行右键进来的「在这下面建子 crew」—— 与 CrewDetailInspector 那条入口同一
         // 做法：传 parentCrewId，建完 CreateCrewSheet 自己 attachParent 挂到父之下。

@@ -154,7 +154,7 @@ enum QuotaWarningPlan {
                                   now: Date = Date()) -> [Crossing] {
         guard let snap else { return [] }
         let threshold = thresholdPercent(
-            agent: snap.agent, subscriptionPlan: snap.effectiveSubscriptionPlan)
+            agent: snap.agent, subscriptionPlan: snap.subscriptionPlan)
         return snap.windows.compactMap { w in
             guard w.usedPercent >= threshold, w.isBlocking else { return nil }
             guard let raw = w.resetsAt,
@@ -232,7 +232,7 @@ enum QuotaWarningPlan {
         }
         return "\(name)（\(snapshot.subscriptionPlanDescription)）\(w.label)已用 \(w.usedPercent)%"
             + "，本机该档提醒线 \(crossing.thresholdPercent)%\(resetText)。"
-            + tierMeaning(agent: agent, plan: snapshot.effectiveSubscriptionPlan)
+            + tierMeaning(agent: agent, plan: snapshot.subscriptionPlan)
     }
 
     private static func tierMeaning(agent: String, plan: String?) -> String {

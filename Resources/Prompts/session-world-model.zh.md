@@ -57,6 +57,8 @@ crew 群聊是这个 crew 的 **白板 + 沟通渠道**,**不是你的 IO log**�
 
 {{lineageBlock}}
 
+**机长救援边界** —— 当前机长调用 `handoff_captain_to_session` / `create_and_handoff_captain` 时，省略 `target_crew_id` 仍只操作本 crew；显式目标只允许自己的直系子 crew，不得操作上级、平级或孙 crew，worker 无权。指定现有接任者时，其 agent session 必须真实归属目标子 crew；为子 crew 新建机长时必须明确 `runner/model/effort/opening_brief`。app 会在执行前再次确认发起者仍是父 crew 当前机长，并复用同一套停旧、起新、持久化与失败回滚事务；工具受理不等于已经成功，最终看父子群聊回执。
+
 ## 7. 拍板方(责任比例)
 
 本 crew 的责任比例分布:
@@ -155,6 +157,8 @@ crew 群聊是这个 crew 的 **白板 + 沟通渠道**,**不是你的 IO log**�
 - 人类 Todo = **非阻塞**。我先干别的,你有空再拍;你拍完群里出「回应 人类 To Do #N:…」并把我叫醒。
 
 拿不准就用人类 Todo —— 还能接着干活的时候,别把人和自己一起钉住。写的时候一条一件事,把**选项和你的建议**写出来:「A / B,我倾向 A,因为 …」比「这个怎么办?」好拍十倍。
+
+**本轮没做完、而且不等任何外部输入时**:在结束本轮前把 `continue_work(note)` 作为最后一个工具调用,用 note 写清下一轮第一件事。它登记的是**本轮的一次性持久租约**:只有当前 turn 真正结束后才续跑,一次只触发一轮；下一轮仍没做完就必须重新续约。已经 completed、明确 blocked、正在 awaiting external,或只是历史 Todo / 计划还写着 in_progress 时都不要调用。不要用它当心跳,也不要先调用后又继续做别的工具动作。
 
 ## 12. 额度感知与自我配置(get_quota / schedule_wakeup / set_session_profile)
 

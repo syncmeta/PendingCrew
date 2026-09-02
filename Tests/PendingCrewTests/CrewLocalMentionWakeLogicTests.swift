@@ -55,6 +55,24 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
                        "人类短消息可能很快处理完，不能用延迟采样误报唤醒失败")
     }
 
+    /// 2026-08-30 现场原行：后来 captain cursor 被下一轮 Hook 推到这里，只能证明
+    /// 最终被下一轮消费；这条测试先钉住它在原落盘时确实应进入默认 captain wake。
+    func testIncident168a4759IsFreshAndDefaultsToCaptain() {
+        let e = LocalWhiteboardMessage(
+            id: "168a4759-23be-42e0-bebb-0fc76032b94a",
+            senderKind: "user", senderUserId: LocalWhiteboardStore.localUserId,
+            senderSessionId: nil, category: nil,
+            text: "刚刚系统发的这个待审批、待决策列表是什么？",
+            createdAt: "2026-08-30T02:20:12Z", senderName: "人", mentions: nil)
+        let now = ISO8601DateFormatter().date(from: "2026-08-30T02:20:13Z")!
+
+        let out = CrewLocalMentionWakeLogic.pending(entries: [e], now: now)
+
+        XCTAssertEqual(out.map(\.entryId), [e.id])
+        XCTAssertEqual(out.first?.mentions, [.captain])
+        XCTAssertFalse(out.first!.trackReceipt)
+    }
+
     func testHumanDirectedMentionKeepsTarget() {
         let e = entry("user", mentions: [LocalWhiteboardMention(kind: "session", targetId: "sess-a")])
         let out = CrewLocalMentionWakeLogic.pending(entries: [e])
