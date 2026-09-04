@@ -24,10 +24,15 @@ final class AgentTerminalLaunchFailureTests: XCTestCase {
             try? FileManager.default.removeItem(at: argsURL)
             try? FileManager.default.removeItem(at: stdinURL)
         }
+        // 假 TUI **必须真的把输入框画出来**（`\342\235\257` = ❯）：P5a 之后「就绪」
+        // 的判据是画面上真有一行输入行，不再是「吐出了第一批字节」。只 echo 一行
+        // 就等输入的旧写法正是那条 bug 的形状 —— 首屏还没画好，投进去的字会被吞掉。
         let script = try makeExecutableScript("""
         #!/bin/sh
         printf '%s\\n' "$@" > '\(argsURL.path)'
-        printf 'fake-claude-ready\\n'
+        printf 'fake-claude-ready\\r\\n'
+        printf '\\r\\n'
+        printf '\\342\\235\\257 '
         IFS= read -r opening
         printf '%s' "$opening" > '\(stdinURL.path)'
         sleep 30

@@ -26,6 +26,18 @@ struct CrewSessionHealth: Equatable {
         /// 派给它的活等于没派出去，机长必须立刻改派。由 `SessionLaunchProbe`
         /// 的终局裁决翻，不走 PTY 短语扫描。
         case launchFailed
+        /// 派给它的**开场 brief 没送进输入框**（P5a）。与 `launchFailed` 的区别：
+        /// 进程活得好好的、TUI 也画出来了，只是那条开场任务从来没到达 —— 从外面看
+        /// 它「在跑」，其实一个字都没收到，点名会把它推成「🟡 空闲」，机长照常派活。
+        ///
+        /// 这一类**必须与 `launchFailed` 分开**：`scanOutput` 里有一条自我纠正
+        /// 「有输出就撤掉 launchFailed 红点」——开场没送到的 session 恰恰**一直在
+        /// 吐输出**（TUI 在正常重绘），复用 `launchFailed` 会被那条当场擦掉，
+        /// 于是又变回静默。这条 bug 的全部代价就是它不报错，不能再让它无声。
+        ///
+        /// 由 `StartupPromptDelivery` 的终局裁决翻（投递反复不落地 / 首屏是需要人
+        /// 回答的对话框）。后续真的送达了会自己清掉。
+        case briefUndelivered
     }
     let kind: Kind
     /// 人话说明 + 下一步动作（白板 fail-loud 消息与成员列表副行直接展示）。

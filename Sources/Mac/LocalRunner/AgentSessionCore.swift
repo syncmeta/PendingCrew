@@ -126,10 +126,12 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 启动参数没被 CLI 接受的首屏扫描器（Todo #36）。只在拉起窗口内活着，
     /// 过期/报完两类就置 nil 停扫。没显式传 model/effort 时压根不建。
     private var launchParameterScanner: SessionLaunchParameterScanner?
-    /// Claude opening task held in app memory until the TUI emits its first bytes. Keeping it
-    /// out of `config.argv()` prevents any other local session from reading the task via `ps`.
-    private var pendingStartupPrompt: String?
-    private var startupPromptTask: Task<Void, Never>?
+    /// 开场 brief 的正文。**只在内存里**，绝不进 `config.argv()` —— argv 对本机
+    /// 任何一个 session 的 `ps` 都是公开的。
+    private var startupPrompt: String?
+    /// 开场 brief 的投递编排（P5a）。判据、重试、上限、翻 health 全在它里面；
+    /// 这里只负责喂观测量、执行动作。终局之后置 nil。
+    private var startupDelivery: StartupPromptDelivery?
     private var busyTimer: Timer?
 
     /// `executable` = 已 resolve 的 claude/codex 绝对路径（`.plainShell` 时是用户的
@@ -148,7 +150,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
 
         if mode == .agent, config.kind == .claudeCode,
            let prompt = config.initialPrompt, !prompt.isEmpty {
-            pendingStartupPrompt = prompt
+            startupPrompt = prompt
+            startupDelivery = StartupPromptDelivery()
         }
 
         var opts = TerminalOptions.default
@@ -192,6 +195,10 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
                 MainActor.assumeIsolated {
                     self?.recomputeWorking()
                     self?.pollPendingDecision()
+                    // 开场 brief 的投递也挂在这一拍上：判据要回读画面，而画面在
+                    // 「TUI 画完就安静下来」之后不再产生 PTY 字节 —— 只挂在
+                    // dataReceived 上会永远停在最后一批字节那一刻。
+                    self?.stepStartupPromptDelivery()
                     // canScroll/thumbSize 会因输出增长而变，但只在 yDisp 变化时才有 scrolled
                     // 回调；顶到底持续吐字时 yDisp 每行都动能覆盖，静止但 buffer 变化的边角用
                     // 轮询兜一层（非用户主动，只同步几何不点亮）。
@@ -204,7 +211,6 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     deinit {
         busyTimer?.invalidate()
         launchWatchdog?.cancel()
-        startupPromptTask?.cancel()
     }
 
     // MARK: - LocalProcessDelegate
@@ -218,9 +224,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     }
 
     private func handleProcessTerminated(exitCode: Int32?) {
-        startupPromptTask?.cancel()
-        startupPromptTask = nil
-        pendingStartupPrompt = nil
+        startupDelivery = nil
+        startupPrompt = nil
         switch mode {
         case .plainShell:
             Task { @MainActor [weak self] in
@@ -257,23 +262,47 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         if mode == .agent { scanOutput(slice) }
         onOutput?(slice)
         protocolOutputSink?(Array(slice))
-        deliverStartupPromptAfterTUIReady()
+        stepStartupPromptDelivery()
     }
 
-    /// First PTY output is the readiness receipt: the child has exec'd Claude and started
-    /// drawing its TUI. Bytes written after that are queued by the PTY even if the input field
-    /// is still finishing its first render. We retain the existing split-write submission
-    /// semantics (`send`: body, then Enter 200 ms later) so long prompts are not left unsubmitted.
-    private func deliverStartupPromptAfterTUIReady() {
-        guard startupPromptTask == nil, let prompt = pendingStartupPrompt else { return }
-        pendingStartupPrompt = nil
-        startupPromptTask = Task { @MainActor [weak self] in
-            // Yield one render beat. Unlike the old spawn-relative sleep, this countdown starts
-            // only after positive child output, so slow CLI startup cannot race it.
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            guard !Task.isCancelled, let self, self.status == .running else { return }
-            self.send(prompt)
-            self.startupPromptTask = nil
+    /// 开场 brief 投递的一拍（P5a）。判据全在 `StartupPromptDelivery` 里，这里只
+    /// 负责**喂它权威缓冲区当前长什么样**、把它裁决的动作执行掉。
+    ///
+    /// 这个函数是幂等的、可以被高频调用：每笔 PTY 输出一次 + 0.6s 轮询一次。没事做
+    /// 的时候它返回 `.idle`，成本只有一次画面渲染 —— 而且只在开场那一小段有 delivery
+    /// 挂着的时候才走到这里（`startupDelivery` 为 nil 时第一行就短路）。
+    private func stepStartupPromptDelivery() {
+        guard var delivery = startupDelivery, let prompt = startupPrompt,
+              status == .running else { return }
+        let rows = screenRows()
+        let action = delivery.step(StartupPromptDelivery.Observation(
+            inputRow: ClaudeInputBox.inputRow(rows),
+            // 对话框判定**不复用** `pendingDecision`：那台跟踪器吃的是去 ANSI 的
+            // 字节尾窗，而 claude 的信任对话框是靠光标定位摆列的 —— 在字节流上它
+            // 是瞎的（理由与实测证据见 `ClaudeInputBox.blockingDialog`）。
+            dialogPresent: ClaudeInputBox.blockingDialog(rows) != nil,
+            now: Date()))
+        startupDelivery = delivery.isFinished ? nil : delivery
+
+        switch action {
+        case .idle:
+            break
+        case let .writeBody(attempt):
+            // 重投之前先清干净输入行（Ctrl-U）：上一笔万一其实落了一半，
+            // 两笔叠在一起就是一段谁也看不懂的东西。
+            if attempt > 1 { inject([0x15]) }
+            inject(Array(prompt.utf8))
+        case .submit:
+            inject([0x0d])
+        case let .blockedByDialog(detail):
+            health = CrewSessionHealth(kind: .briefUndelivered, detail: detail)
+        case let .notReady(detail), let .undelivered(detail), let .unsubmitted(detail):
+            health = CrewSessionHealth(kind: .briefUndelivered, detail: detail)
+        case .delivered:
+            startupPrompt = nil
+            // 之前报过的「没送到」是过期消息了（典型路径：先卡在信任对话框上、
+            // 有人代答之后 brief 自己补投成功）。留着它会让点名一直谎报异常。
+            if health?.kind == .briefUndelivered { health = nil }
         }
     }
 
@@ -647,6 +676,13 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
 
     /// **权威画面**（`inspect_session` 用）：当前屏幕内容，与任何窗口滚到哪无关。
     func screenText(maxLines: Int) -> String {
+        screenRows().suffix(maxLines).joined(separator: "\n")
+    }
+
+    /// 权威画面的逐行读法。开场 brief 的投递判据吃的就是它 —— 「输入框画好没有」
+    /// 「正文进去没有」只有在**渲染完的**画面上才问得出来（首屏那一串光标定位 /
+    /// 清行 / 重绘，在原始字节流上等于要自己再写一个终端模拟器）。
+    func screenRows() -> [String] {
         var lines: [String] = []
         for row in 0..<terminal.rows {
             guard let line = terminal.getLine(row: row) else { continue }
@@ -655,7 +691,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
             lines.removeLast()
         }
-        return lines.suffix(maxLines).joined(separator: "\n")
+        return lines
     }
 
     /// 终止子进程。"停不掉"的真因：SwiftTerm `terminate()` 调 `childStopped()`，
@@ -667,9 +703,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     func stop() {
         guard status == .running else { return }
         userStopped = true
-        startupPromptTask?.cancel()
-        startupPromptTask = nil
-        pendingStartupPrompt = nil
+        startupDelivery = nil
+        startupPrompt = nil
         let pid = process.shellPid
         process.terminate()                 // SIGTERM + close PTY（但不回调 processTerminated）
         status = .exited(nil)               // ← 自己翻状态，否则 UI 永远 running
