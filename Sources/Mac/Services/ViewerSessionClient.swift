@@ -115,29 +115,23 @@ final class ViewerSessionClient: ObservableObject {
     /// 后路堵死，症状是「永远连不上，而且看不出为什么」。
     private func applyFallback(spawn: OrchestrationFallback.Spawn,
                                linkFailure: OrchestrationFallback.LinkFailure?) {
-        let lock: SessionOrchestratorLock.Outcome?
-        if case .failed = spawn, linkFailure == nil {
-            lock = SessionOrchestratorLock.acquire(dataRoot: dataRoot, kind: "app")
-        } else {
-            lock = nil
-        }
-        let decision = OrchestrationFallback.decide(
-            lock: lock, spawn: spawn, linkFailure: linkFailure, dataRoot: dataRoot)
-        fallback = decision
-
-        guard case let .takeOverLocally(reason) = decision,
-              case let .acquired(handle)? = lock else {
-            // 没接管 —— `lock` 在这里出作用域，`Handle.deinit` 当场解锁。
-            // **绝不能占着不放**：占着会让真正的 daemon 起不来，那是我们自己造的死结。
-            scheduleReconnect()
-            return
-        }
-        LocalOrchestrationFallback.shared.takeOver(handle: handle, reason: reason)
-        // **把这条腿整个停掉。** 接管之后再重连一次就可能出现「本地编排 + 连上的
-        // daemon」两个 host（§9.2 附加约束 2）。而且锁在我们手上，任何 daemon 都
-        // 起不来 —— 于是「第二个 host」在结构上不可能出现，不靠谁记得去检查。
-        stop()
-        onTakeOverLocally?()
+        // **顺序那一段不写在这里** —— 它住在 `OrchestrationFallbackCoordinator`，
+        // 因为本文件在 `Sources/Mac/Services`、进不了 test bundle，而「什么时候才许
+        // 取锁 / 接管后有没有真的停腿 / 没接管有没有真的放锁」这三件事做错都是**安静
+        // 地坏**，必须有测试盯着。这里只提供动作。
+        let coordinator = OrchestrationFallbackCoordinator(
+            dataRoot: dataRoot,
+            hooks: .init(
+                acquireLock: { SessionOrchestratorLock.acquire(dataRoot: $0, kind: "app") },
+                takeOver: { handle, reason in
+                    LocalOrchestrationFallback.shared.takeOver(handle: handle, reason: reason)
+                },
+                stopViewerLeg: { [weak self] in
+                    self?.stop()
+                    self?.onTakeOverLocally?()
+                },
+                scheduleReconnect: { [weak self] in self?.scheduleReconnect() }))
+        fallback = coordinator.handle(spawn: spawn, linkFailure: linkFailure)
     }
 
     private func linkClosed() {
