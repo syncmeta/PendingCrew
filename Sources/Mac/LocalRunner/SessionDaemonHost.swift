@@ -132,12 +132,24 @@ final class SessionDaemonHost {
     enum StartError: Error, CustomStringConvertible {
         /// 这个数据根已经有一个编排者了（**可能是另一个 daemon，也可能是 app 窗口** ——
         /// 2026-08-26 那次事故就是后者，见 `SessionOrchestratorLock`）。
-        case alreadyOrchestrated(String)
+        ///
+        /// `holderIsDaemon` 把这两种分开，**因为它们的「期望状态成立了没有」不一样**：
+        /// 占着的是另一个 daemon → 「有一个 daemon 在跑」这件事已经成立，本进程安静
+        /// 退出是正确结局；占着的是 app 窗口 / 读不出是谁 → **一个 daemon 都没有**，
+        /// 拉起方要的东西没拿到。退出码据此分岔（见 `DaemonExitCode`）。
+        case alreadyOrchestrated(String, holderIsDaemon: Bool)
+        /// 锁文件**根本打不开**（数据根不可写、目录建不出来之类）。
+        ///
+        /// **和上面那条不是一回事**：上面是「已经有人在编排」，这条是「我们连问都问
+        /// 不出来」—— 期望状态没达成，而且多半要人去修目录权限。2026-09-04 真机上
+        /// `chmod 500` 数据根复现到的就是这一条。
+        case lockUnavailable(String)
         case listen(Error)
 
         var description: String {
             switch self {
-            case let .alreadyOrchestrated(detail): return detail + "\n本进程退出。"
+            case let .alreadyOrchestrated(detail, _): return detail + "\n本进程退出。"
+            case let .lockUnavailable(detail): return detail + "\n本进程退出。"
             case let .listen(error): return "socket 监听失败：\(error)"
             }
         }
@@ -192,8 +204,12 @@ final class SessionDaemonHost {
         let dataRoot = paths.lock.deletingLastPathComponent()
         let outcome = SessionOrchestratorLock.acquire(dataRoot: dataRoot, kind: "daemon")
         guard case let .acquired(handle) = outcome else {
-            throw StartError.alreadyOrchestrated(
-                SessionOrchestratorLock.describe(outcome, dataRoot: dataRoot))
+            let detail = SessionOrchestratorLock.describe(outcome, dataRoot: dataRoot)
+            if case let .heldBy(holder) = outcome {
+                throw StartError.alreadyOrchestrated(
+                    detail, holderIsDaemon: holder?.kind == "daemon")
+            }
+            throw StartError.lockUnavailable(detail)
         }
         self.lock = handle
 
@@ -338,5 +354,45 @@ enum SessionDaemonControl {
         }
         return false
     }
+}
+
+/// **CLI 的退出码：0 = 期望状态成立，非 0 = 没成立。**
+///
+/// ## ⚠️ 这些码是给**人和脚本**看的，**判据一律不许读它们**
+///
+/// 别顺手把 `ViewerSessionClient` 那条腿的判定改成解析退出码 —— 那正是这一期
+/// 绕开的坑，而「退出码现在变准了」看起来像个足够好的理由。**它不是。**
+///
+/// 因果写全：daemon 对「锁被另一个 daemon 占着」和「锁文件打不开」**本来就可能
+/// 同码**（2026-09-04 之前两者都是 exit 0，真机实测过），而且今后也不保证一定分得
+/// 开——退出码是**约定**，不是**观测**。所以 app 侧「后台起没起成」必须由
+/// **锁的观测**去分辨（见 `OrchestrationFallback.decide` 那张表），不是由退出码。
+/// 这两件事的可靠性根本不在一个量级：锁是内核维护的、崩溃自动释放；退出码是
+/// 一行 `exit(n)`，谁改一下都没人发现。
+///
+/// 换句话说：**退出码变准了，只是让人少猜一次，不构成任何契约。**
+enum DaemonExitCode {
+    static let ok: Int32 = 0
+    static let failed: Int32 = 1
+    /// 参数不对（对齐 `--daemon-attach` 已有的约定）。
+    static let badUsage: Int32 = 2
+
+    /// `PendingCrew --daemon` 启动失败 → 退出码。
+    static func forDaemonStart(_ error: SessionDaemonHost.StartError) -> Int32 {
+        switch error {
+        case let .alreadyOrchestrated(_, holderIsDaemon):
+            // 占着的是另一个 daemon → 「有一个 daemon 在跑」已经成立，本进程安静退出
+            // 是正确结局。占着的是 app 窗口 / 读不出是谁 → **一个 daemon 都没有**，
+            // 拉起方要的东西没拿到，报 0 就是骗它。
+            return holderIsDaemon ? ok : failed
+        case .lockUnavailable, .listen:
+            return failed
+        }
+    }
+
+    /// `PendingCrew --daemon-status` 探测失败 → 退出码。
+    /// **说了「不可连接」就不许报成功** —— 否则 `if PendingCrew --daemon-status; then …`
+    /// 会一路走进 then。
+    static let statusProbeFailed: Int32 = failed
 }
 #endif

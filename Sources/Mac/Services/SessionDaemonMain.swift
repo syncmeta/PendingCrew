@@ -36,10 +36,16 @@ enum SessionDaemonMain {
         do {
             try host.start()
         } catch {
-            // 拿不到单实例锁是**正常结局**，不是错误：说明已经有一个 daemon 在跑，
-            // 本进程安静退出即可（第二个 daemon 就是双头本身，§6.2）。
+            // 退出码按「期望状态成立了没有」给，判定在 `DaemonExitCode`（那一层进得了
+            // test bundle）：锁被**另一个 daemon** 占着 = 已经有一个在跑，安静退出是
+            // 正确结局（0）；锁被 app 窗口占着 / 锁文件打不开 / 监听失败 = 一个 daemon
+            // 都没有（非 0）。**这些码是给人和脚本看的，判据不许读它们**（见
+            // `DaemonExitCode` 的类型注释）。
             FileHandle.standardError.write(Data(("PendingCrew daemon：\(error)\n").utf8))
-            exit(error is SessionDaemonHost.StartError ? 0 : 1)
+            guard let start = error as? SessionDaemonHost.StartError else {
+                exit(DaemonExitCode.failed)
+            }
+            exit(DaemonExitCode.forDaemonStart(start))
         }
 
         // 编排本体。**与 GUI 那条路同一份代码**，只是发布口换成了 socket 服务端。

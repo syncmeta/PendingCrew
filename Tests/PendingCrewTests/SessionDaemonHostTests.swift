@@ -40,7 +40,8 @@ final class SessionDaemonHostTests: XCTestCase {
         let second = SessionDaemonHost(paths: paths)
         second.onCrewNotice = { _, _ in }
         XCTAssertThrowsError(try second.start()) { error in
-            guard case let .alreadyOrchestrated(detail)? = error as? SessionDaemonHost.StartError else {
+            guard case let .alreadyOrchestrated(detail, holderIsDaemon)? =
+                    error as? SessionDaemonHost.StartError else {
                 return XCTFail("第二个 daemon 必须报 alreadyOrchestrated，实际 \(error)")
             }
             // 「谁占着」必须回答三样，缺一样人就得再查一轮。
