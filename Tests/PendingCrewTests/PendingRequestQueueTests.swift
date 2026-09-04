@@ -98,6 +98,20 @@ final class PendingRequestQueueTests: XCTestCase {
                        "处理途中来的那条要么被一起清掉（丢命令），要么被处理两遍")
     }
 
+    /// **③ 多余 / 空通知不得重放。**
+    ///
+    /// 脉冲可能比批次多（生产方逐条入队就会发多次），也可能在队列已经空了之后
+    /// 还来一下（滞后投递）。这些多余的通知**只能取到空**，绝不许把上一批再交一遍。
+    func test_多余的空通知不得重放上一批() {
+        let queue = PendingRequestQueue<String>()
+        queue.enqueue("只此一条")
+
+        var processed: [String] = []
+        for _ in 0..<5 { processed += queue.take() }   // 被叫醒五次，只有第一次有货
+
+        XCTAssertEqual(processed, ["只此一条"], "多余的通知把上一批重放了")
+    }
+
     /// 顺序就是入队顺序 —— 机长连派两个活，起来的顺序不该反。
     func test_保持入队顺序() {
         let queue = PendingRequestQueue<String>()
@@ -106,6 +120,112 @@ final class PendingRequestQueueTests: XCTestCase {
     }
 }
 
+
+/// **① 走真发布器复刻一遍**：`@Published` 脉冲 + `.receive(on: DispatchQueue.main)`，
+/// 生产方**逐条**入队（于是脉冲发两次、都排队投递到主线程），断言**恰好执行两条、
+/// 各一次**。
+///
+/// 上面那组是在队列这一层验的（`take()` 调两次）。这一条把 Combine 那一段也走一遍 ——
+/// 因为原来的 bug 恰恰**出在发布器那一段**：逐条 append 发出的两份快照都排队投递，
+/// 第二份带着已经处理过的那条。只在队列层验，等于绕开了案发现场。
+///
+/// 这里刻意**不用** `CrewStore` —— 它在 `Sources/Services`，进不了 test bundle。
+/// 复刻的是**形状**：一个 `@Published` 脉冲 + 一条取走语义的队列 + 一个 sink。
+@MainActor
+final class PendingRequestQueuePublisherTests: XCTestCase {
+
+    /// 复刻 `CrewStore` + `SessionHost` 那对接线的形状。
+    private final class Harness: ObservableObject {
+        @Published private(set) var revision: UInt64 = 0
+        let queue = PendingRequestQueue<String>()
+        func enqueue(_ item: String) {
+            queue.enqueue(item)
+            revision &+= 1
+        }
+    }
+
+    /// 把主队列放空几拍 —— 让任何滞后的投递都跑完，好断言「没有多出来的」。
+    private func drainMainQueue(_ rounds: Int = 3) {
+        for _ in 0..<rounds {
+            let tick = expectation(description: "main queue 放空一拍")
+            DispatchQueue.main.async { tick.fulfill() }
+            wait(for: [tick], timeout: 2)
+        }
+    }
+
+    func test_主队列尚未消费时投两条最终恰好各执行一次() {
+        let harness = Harness()
+        var processed: [String] = []
+        let gotBoth = expectation(description: "两条都处理到了")
+        var alreadyFulfilled = false
+
+        let bag = harness.$revision
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                MainActor.assumeIsolated {
+                    processed += harness.queue.take()
+                    if processed.count >= 2, !alreadyFulfilled {
+                        alreadyFulfilled = true
+                        gotBoth.fulfill()
+                    }
+                }
+            }
+
+        // **同步连着入队两条** —— 主队列这时还没来得及跑任何一次 sink，
+        // 这正是真机上「同一次排空里两条 start_session」的时序。
+        harness.enqueue("cmd1")
+        harness.enqueue("cmd2")
+
+        wait(for: [gotBoth], timeout: 5)
+        drainMainQueue()               // 把滞后的那几次投递也跑完
+        withExtendedLifetime(bag) {}
+
+        XCTAssertEqual(
+            processed, ["cmd1", "cmd2"],
+            """
+            投两条却执行了 \(processed.count) 条 —— 真机上就是这样：
+            2 条 start_session 起了 3 个 session，重复的是排在前面那条。
+            """)
+    }
+
+    /// **④ 先入队、后接订阅 —— 在真发布器上也成立。**
+    ///
+    /// 这条原来我只敢说「机制上成立」（`@Published` 会把当前值发给新订阅者），
+    /// 现在有读数了：入队发生在 `sink` 之前，订阅接上之后那一批照样被处理，
+    /// **恰好一次**。
+    ///
+    /// 顺带一个跑出来才知道的事实：因为有这条「订阅即发当前值」，逐条入队两条时
+    /// sink 实际被调用的是**三次**（首次 + 两次脉冲），不是两次。所以判据只能是
+    /// 「**处理到的东西**恰好各一次」，**不能是「sink 被调了几次」** —— 后者是
+    /// 实现细节，写死它等于把测试钉在 Combine 的行为上。
+    func test_先入队后接订阅在真发布器上也恰好处理一次() {
+        let harness = Harness()
+        harness.enqueue("在订阅接上之前就到的那条")
+
+        var processed: [String] = []
+        let got = expectation(description: "接上订阅之后拿到了")
+        var alreadyFulfilled = false
+        let bag = harness.$revision
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                MainActor.assumeIsolated {
+                    processed += harness.queue.take()
+                    if !processed.isEmpty, !alreadyFulfilled {
+                        alreadyFulfilled = true
+                        got.fulfill()
+                    }
+                }
+            }
+
+        wait(for: [got], timeout: 5)
+        drainMainQueue()
+        withExtendedLifetime(bag) {}
+
+        XCTAssertEqual(
+            processed, ["在订阅接上之前就到的那条"],
+            "只等脉冲的话这条会永远躺在队列里 —— 派了活、什么都没发生")
+    }
+}
 
 /// **形状本身的护栏**：别退回「订阅 `@Published` 数组、处理快照、再清空」那种写法。
 ///
