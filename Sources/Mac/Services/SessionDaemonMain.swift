@@ -57,6 +57,12 @@ enum SessionDaemonMain {
         trackRoster(of: runner, into: host)
         sessionHost.start(model: model, crewStore: crewStore)
 
+        // 排空那一行日志接到 daemon 自己那份日志文件上 —— **默认的 `NSLog` 进系统
+        // 日志，落在那儿等于写了没人看**：人真会去翻的观察窗是
+        // `~/Library/Logs/PendingCrew/daemon-*.log`。这行日志的用处见
+        // `CrewCommandDrainLog`（划「通道 / 消费」的界）。
+        CrewCommandDrainLog.sink = { [weak log = host.log] line in log?.write(line) }
+
         // 排空共享控制文件的那条监听挂在首刷上（`CrewStore.refreshList`）。
         // GUI 里由界面触发，daemon 里没有界面 —— 不主动刷一次的话，机长的
         // `start_session` 等命令永远没人接（§6.1：排空方从 app 搬到 daemon）。

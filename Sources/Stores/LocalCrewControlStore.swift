@@ -360,6 +360,9 @@ final class LocalCrewControlStore: @unchecked Sendable {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil) else { return [] }
         var out: [CrewCommand] = []
+        // 排空即删 —— 所以「这一批到底是哪几个文件」只有此刻拿得到。见
+        // `CrewCommandDrainLog`：它是用来划「通道 / 消费」的界的。
+        var drained: [CrewCommandDrainLog.Entry] = []
         for url in files where url.lastPathComponent.hasSuffix(Self.cmdSuffix) {
             // 读不出来（fd 打满 / 权限抖动 / IO）→ 原地留着，下个 tick 再来 ——
             // **绝不**当成损坏去归档（2026-08-12 P0 的不变式，见 MultiProcessJSONStore ④）。
@@ -374,12 +377,17 @@ final class LocalCrewControlStore: @unchecked Sendable {
                     continue
                 }
                 out.append(cmd)
+                drained.append(.init(url: url, command: cmd))
                 try? FileManager.default.removeItem(at: url)
                 continue
             }
             out.append(cmd)
+            drained.append(.init(url: url, command: cmd))
             try? FileManager.default.removeItem(at: url)
         }
+        // **空排空不写** —— 目录监听每个 tick 都会调一次，每次都写会把日志淹掉，
+        // 而淹掉的日志和没有日志是同一个东西。
+        if !drained.isEmpty { CrewCommandDrainLog.sink(CrewCommandDrainLog.line(entries: drained)) }
         return out.sorted { $0.ts < $1.ts }
     }
 
@@ -485,4 +493,59 @@ struct CrewCommand: Codable, Equatable {
     /// handoff_captain：显式目标 crew；nil = 保持历史语义，只操作 `crewId` 本身。
     var targetCrewId: String? = nil
     let ts: String
+}
+
+/// **一次排空一行日志** —— 用来把「命令通道」和「消费方」这两段分开。
+///
+/// ## 它不是用来抓某个 bug 的
+///
+/// 2026-09-04 有一次「投 2 条命令、见到 3 个 session」的异常，判定它花了**三趟受控
+/// 实验**：命令文件**排空即删**、daemon 日志只记启动 / 连接 / 退出、**不记排空** ——
+/// 等人发现异常时，能判定它的东西已经不存在了。当时唯一站得住的结论是「查不了」。
+///
+/// 真相后来查明是**消费方**把第一条处理了两遍（`@Published` 数组当队列用）。
+/// **有这行日志的话，它会显示「一次排空、两个不同文件名」——当场把嫌疑从通道摘
+/// 出去、直接指向消费方**，第一趟实验就能收尾。
+///
+/// ## 为什么必须带文件名（少了它这行就白记）
+///
+/// 两个候选解释在日志里长得不一样：**「多写了一个文件」是两个不同文件名，
+/// 「同一个文件被排空两次」是同一个文件名出现两次**。只记命令 id 的话，重复写入
+/// 若恰好用了不同 uuid，两种解释**仍然分不开**。
+enum CrewCommandDrainLog {
+
+    /// 这一批里的一条。
+    struct Entry {
+        let fileName: String
+        let id: String
+        let kind: String
+        let crewId: String
+
+        init(fileName: String, id: String, kind: String, crewId: String) {
+            self.fileName = fileName
+            self.id = id
+            self.kind = kind
+            self.crewId = crewId
+        }
+
+        init(url: URL, command: CrewCommand) {
+            self.init(fileName: url.lastPathComponent, id: command.id,
+                      kind: command.kind, crewId: command.crewId)
+        }
+    }
+
+    /// 一次排空一行的文案。纯函数。
+    static func line(entries: [Entry]) -> String {
+        let detail = entries
+            .map { "[\($0.kind) \($0.crewId) \($0.fileName)]" }
+            .joined(separator: " ")
+        return "排空机长命令 \(entries.count) 条：\(detail)"
+    }
+
+    /// 日志去处。**daemon 在启动时把它接到自己那份日志文件上**（`~/Library/Logs/
+    /// PendingCrew/daemon-*.log` 才是人真的会去翻的观察窗；`NSLog` 进系统日志，
+    /// 落在那儿等于写了没人看）。默认值给 GUI / 单测用。
+    nonisolated(unsafe) static var sink: (String) -> Void = defaultSink
+
+    static let defaultSink: (String) -> Void = { NSLog("[PendingCrew] %@", $0) }
 }
