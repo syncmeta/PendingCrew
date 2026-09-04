@@ -646,16 +646,13 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     }
 
     /// **权威画面**（`inspect_session` 用）：当前屏幕内容，与任何窗口滚到哪无关。
+    ///
+    /// 取法在 `TerminalScreenText` —— 与无画面探针（`--daemon-attach`）**共用同一个
+    /// 函数**。这里曾经是 `translateToString(trimRight:)` 直出，于是 TUI 用绝对定位
+    /// 跳过去没写的格原样带着 NUL 出来（`Claude\0Code\0v2.1.260`）：终端上不显示，
+    /// 当文本用就是脏的。详见那个类型的注释。
     func screenText(maxLines: Int) -> String {
-        var lines: [String] = []
-        for row in 0..<terminal.rows {
-            guard let line = terminal.getLine(row: row) else { continue }
-            lines.append(line.translateToString(trimRight: true))
-        }
-        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeLast()
-        }
-        return lines.suffix(maxLines).joined(separator: "\n")
+        TerminalScreenText.screen(of: terminal, maxLines: maxLines)
     }
 
     /// 终止子进程。"停不掉"的真因：SwiftTerm `terminate()` 调 `childStopped()`，
