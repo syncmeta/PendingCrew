@@ -215,12 +215,16 @@ final class SessionHost: ObservableObject {
         // 建 crew 后自动起机长（用户要的零摩擦：新建即启动 + 群里报到，无需手动点
         // 「启动 Captain」）。store 在 createCrew 完成后 append payload；这里持有
         // sessionRunner，捕获整批并立即清空，再逐条拉起。
-        crewStore.$captainAutostartRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore, weak model] reqs in
+            .sink { [weak crewStore, weak model] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore, let model else { return }
-                    crewStore.captainAutostartRequests = []
+                    guard let crewStore, let model else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.captainAutostartRequests.take()
+                    guard !reqs.isEmpty else { return }
                     Task {
                         for req in reqs {
                             if crewStore.details[req.crewId] == nil {
@@ -253,15 +257,21 @@ final class SessionHost: ObservableObject {
             .store(in: &bag)
 
         // 机长 `start_session` 命令排空后的待起 worker session 队列（chunk2 §2）。
-        // **数组**：同一 tick 里连续多条命令落地时,单值 `@Published` 在 SwiftUI 合并
-        // 同步赋值会丢掉中间几条 —— 见 `CrewStore.sessionSpawnRequests` 注释。这里立刻
-        // 捕获 + 清空,避免同一批命令被 `.onChange` 重复触发处理。
-        crewStore.$sessionSpawnRequests
+        //
+        // ⚠️ **别退回「订阅数组、处理收到的那份快照、再清空」那种写法**（2026-09-04
+        // 真机实测：投 2 条命令起了 3 个 session）。那是发布「变化」、消费当「队列」：
+        // 逐条 append 会发出两份快照，第二次 sink 拿到的仍是它被发出时的那份。
+        // 现在脉冲只是「去看一眼」的信号，**整批从队列原子取走**。
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore, weak model] reqs in
+            .sink { [weak crewStore, weak model] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore, let model else { return }
-                    crewStore.sessionSpawnRequests = []
+                    guard let crewStore, let model else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.sessionSpawnRequests.take()
+                    guard !reqs.isEmpty else { return }
                     Task {
                         for req in reqs {
                             // detail 缓存只在 UI 打开过该 crew 后才有 —— app 刚启动时为空，
@@ -300,12 +310,16 @@ final class SessionHost: ObservableObject {
         // captain 自己发起的交接：helper 只把明确二选一请求放进共享队列；真正停旧、
         // 起新、持久化和失败回滚都在持有 live runs 的 runner 上执行。旧 captain 的
         // MCP 进程会在交接中被停掉，所以不 long-poll 工具调用；最终结果统一进群聊。
-        crewStore.$captainHandoffRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore, weak model] reqs in
+            .sink { [weak crewStore, weak model] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore, let model else { return }
-                    crewStore.captainHandoffRequests = []
+                    guard let crewStore, let model else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.captainHandoffRequests.take()
+                    guard !reqs.isEmpty else { return }
                     Task {
                         for req in reqs {
                             if crewStore.details[req.targetCrewId] == nil {
@@ -328,36 +342,48 @@ final class SessionHost: ObservableObject {
 
         // session 自切模型/effort（set_session_profile）：claude 注入 /model /effort,
         // codex 白板说明。数组语义同 sessionSpawnRequests（防同 tick 丢命令）。
-        crewStore.$profileChangeRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore] reqs in
+            .sink { [weak crewStore] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore else { return }
-                    crewStore.profileChangeRequests = []
+                    guard let crewStore else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.profileChangeRequests.take()
+                    guard !reqs.isEmpty else { return }
                     Task { for req in reqs { await sessionRunner.applyProfileChange(req) } }
                 }
             }
             .store(in: &bag)
 
         // 定时唤醒登记（schedule_wakeup）→ runner 持久化 + 挂定时器。
-        crewStore.$wakeupRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore] reqs in
+            .sink { [weak crewStore] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore else { return }
-                    crewStore.wakeupRequests = []
+                    guard let crewStore else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.wakeupRequests.take()
+                    guard !reqs.isEmpty else { return }
                     for req in reqs { sessionRunner.scheduleWakeup(req) }
                 }
             }
             .store(in: &bag)
 
         // 机长 session 操作（inspect / nudge / stop）→ runner 执行 + 写应答文件。
-        crewStore.$sessionOpsRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore] reqs in
+            .sink { [weak crewStore] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore else { return }
-                    crewStore.sessionOpsRequests = []
+                    guard let crewStore else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.sessionOpsRequests.take()
+                    guard !reqs.isEmpty else { return }
                     for req in reqs { sessionRunner.applySessionOp(req) }
                 }
             }
@@ -366,12 +392,16 @@ final class SessionHost: ObservableObject {
         // 机长 change_workdir（改工作目录 + 迁 agent 上下文）。规划要看在跑的 run，
         // 那份状态只有 runner 有 —— 所以和 sessionOps 一样在这儿接线：算完/干完把
         // 文本写回应答文件，机长那侧的 long-poll 就拿到预览或回执了。
-        crewStore.$workdirChangeRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore] reqs in
+            .sink { [weak crewStore] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore else { return }
-                    crewStore.workdirChangeRequests = []
+                    guard let crewStore else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.workdirChangeRequests.take()
+                    guard !reqs.isEmpty else { return }
                     for req in reqs {
                         let text = WorkdirChangeCommand.run(req, runs: sessionRunner.runs)
                         LocalCrewControlStore.shared.writeCommandResponse(
@@ -383,12 +413,16 @@ final class SessionHost: ObservableObject {
             .store(in: &bag)
 
         // 群聊收听登记（listen；#465）→ runner 登记 + 白板观察 + 广播直投。
-        crewStore.$listenRequests
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore] reqs in
+            .sink { [weak crewStore] _ in
                 MainActor.assumeIsolated {
-                    guard !reqs.isEmpty, let crewStore else { return }
-                    crewStore.listenRequests = []
+                    guard let crewStore else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let reqs = crewStore.listenRequests.take()
+                    guard !reqs.isEmpty else { return }
                     for req in reqs { sessionRunner.applyListen(req) }
                 }
             }
@@ -397,12 +431,16 @@ final class SessionHost: ObservableObject {
         // 跨 crew 汇报线消息 → 唤醒目标 crew 机长（#463）。idle 才直投注入（busy
         // 的机长下轮白板注入自然看到）；机长没在跑 → **直接拉起**（@ 唤醒语义：
         // 不在跑不能只留白板），开场 prompt 带上这条消息;拉起失败才落白板注记。
-        crewStore.$crewMessageWakes
+        crewStore.$pendingRequestsRevision
             .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore, weak model] wakes in
+            .sink { [weak crewStore, weak model] _ in
                 MainActor.assumeIsolated {
-                    guard !wakes.isEmpty, let crewStore, let model else { return }
-                    crewStore.crewMessageWakes = []
+                    guard let crewStore, let model else { return }
+                    // **取走语义**：不看脉冲的值，直接原子取走整批。
+                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
+                    // 因此在结构上不可能，不是靠这里小心。
+                    let wakes = crewStore.crewMessageWakes.take()
+                    guard !wakes.isEmpty else { return }
                     for wake in wakes {
                         let captainRun = sessionRunner.runs.first {
                             $0.crewId == wake.targetCrewId && $0.role == .captain && $0.status == .running

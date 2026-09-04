@@ -132,6 +132,9 @@ targets:
       # LocalRunner 模块是纯 Foundation 代码（不依赖 SwiftUI / NSApplicationMain），
       # 重复编译进 test bundle 完全没问题。
       - path: Sources/Mac/LocalRunner
+      # 待办队列的取走语义（2026-09-04：@Published 数组当队列 → 同一条命令被执行
+      # 两遍）。纯 Foundation 泛型，CrewStore/SessionHost 共用。
+      - path: Sources/Stores/PendingRequestQueue.swift
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift
