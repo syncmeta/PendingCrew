@@ -90,18 +90,19 @@ final class ViewerSessionClient: ObservableObject {
     private func connect() {
         guard !stopped else { return }
         if stalledSince == nil { stalledSince = Date() }
-        // 锁上写着有 daemon 在跑 → 不拉，直接连。
-        guard SessionDaemonControl.runningDaemonPid(paths: paths) == nil else {
-            if !openLink() { applyFallback(spawn: .notAttempted, linkFailure: nil) }
-            return
+        // **该不该拉一个新的，不在这里判** —— 判断在 `DaemonLaunchPlan`（那一层进得了
+        // test bundle）。这里只执行。P4 的教训：判断留在接线上就只有「编译过」。
+        switch DaemonLaunchPlan.next(
+            daemonHoldsLock: SessionDaemonControl.runningDaemonPid(paths: paths) != nil,
+            lastSpawnedChild: lastSpawnedChild?()) {
+        case let .connectOnly(reason):
+            if !openLink() {
+                NSLog("[ViewerSessionClient] 不拉后台进程：%@", reason)
+                applyFallback(spawn: .notAttempted, linkFailure: nil)
+            }
+        case .launch:
+            launchAndRace()
         }
-        // 上一次拉起来的那个还活着 → **别再拉一个**。否则每次「说不准」都会
-        // 再造一个不回话的 daemon 出来，越攒越多。
-        if let child = lastSpawnedChild, child() == .alive {
-            if !openLink() { applyFallback(spawn: .notAttempted, linkFailure: nil) }
-            return
-        }
-        launchAndRace()
     }
 
     /// 拉起 daemon，然后**并行等两件事**：首次协议握手 / 子进程终止，谁先到算谁
