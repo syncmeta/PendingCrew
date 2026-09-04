@@ -42,7 +42,8 @@ private struct LinkedNoticeBar: View {
         NoticeBar.render(
             OrchestrationNotice.resolve(
                 decision: decision,
-                viewer: .init(isConnected: client.isConnected, lastError: client.lastError)))
+                viewer: .init(isConnected: client.isConnected, lastError: client.lastError,
+                              fallback: client.fallback)))
     }
 }
 
@@ -70,6 +71,19 @@ private struct NoticeBar: View {
                       tint: Theme.Palette.amber,
                       background: Theme.Palette.amberBg,
                       title: "正在连接后台进程…",
+                      detail: detail)
+        case let .localFallback(detail):
+            // **一直挂着**，不是弹一下就没 —— 临时模式必须随时看得出来。
+            NoticeBar(symbol: "arrow.triangle.2.circlepath.circle.fill",
+                      tint: Theme.Palette.amber,
+                      background: Theme.Palette.amberBg,
+                      title: "后台起不来，已临时由本窗口接管",
+                      detail: detail)
+        case let .refused(detail):
+            NoticeBar(symbol: "exclamationmark.triangle.fill",
+                      tint: Theme.Palette.danger,
+                      background: Theme.Palette.dangerBg,
+                      title: "后台连不上，本窗口不接管编排",
                       detail: detail)
         }
     }

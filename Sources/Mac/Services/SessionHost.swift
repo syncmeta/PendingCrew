@@ -56,7 +56,12 @@ final class SessionHost: ObservableObject {
     ///
     /// - `.orchestrator`（inproc 的 GUI，或 `--daemon`）→ 起全部长期职责。
     /// - `.viewer`（总闸=daemon 的 GUI）→ 只连后台，**一个长期定时器都不起**。
+    /// `begin` 收到的那两样，留着给 §9.2 的临时接管用 —— 接管发生在连不上之后，
+    /// 那时早已不在 `begin` 的调用栈里了。
+    private var orchestrationContext: (model: AppModel, crewStore: CrewStore)?
+
     func begin(model: AppModel, crewStore: CrewStore) {
+        orchestrationContext = (model, crewStore)
         switch ProcessRole.requested {
         case .orchestrator:
             // 闸门在**进程入口**取好了（`OrchestrationGate.installForGUIProcess`）。
@@ -96,12 +101,41 @@ final class SessionHost: ObservableObject {
         guard viewer == nil else { return }
         let viewer = ViewerSessionClient(runner: runner)
         self.viewer = viewer
+        // §9.2 唯一允许的那一支：拿到独占编排锁、且后台确实起不来 → 本窗口临时接管。
+        // **判断不在这里**（在 `OrchestrationFallback` 那个纯函数里），这里只执行。
+        viewer.onTakeOverLocally = { [weak self] in
+            MainActor.assumeIsolated { self?.takeOverLocally() }
+        }
         viewer.start()
         // 这两个在 viewer 里照跑，理由各自写在方法上：一个只跟着 daemon 写好的
         // 文件走（不写），一个只读磁盘算个和（不写）。**闸门 1 防的是第二个
         // writer，不是第二个 reader。**
         QuotaCenter.shared.startFollowingFile()
         usage.startReadOnly()
+    }
+
+    /// **后台起不来时的临时本地接管**（设计 §9.2 表里唯一允许的那一支）。
+    ///
+    /// 走到这里时三件事都已经成立，缺一不可：本进程**确实拿到了**独占编排锁
+    /// （= 确定没有别人在编排）、拉 daemon **确实失败**、viewer 那条腿**已经停了**
+    /// （不会再重连出第二个 host）。判据全在 `OrchestrationFallback.decide`。
+    ///
+    /// **接管之后不许再交还。** 本进程从这一刻起会养真的 agent 子进程 —— 它们是
+    /// 这个进程的孩子，交不给 daemon；半路把编排交还就是 §9.2 附加约束 2 点名的
+    /// 「半停一半留 = 双头的另一种形状」。回到后台模式的唯一走法是重开 app，
+    /// 界面上那条常驻横幅就是这么写的（`OrchestrationNotice.localFallback`）。
+    private func takeOverLocally() {
+        guard let context = orchestrationContext else {
+            assertionFailure("临时接管时没有 begin 传下来的上下文")
+            return
+        }
+        NSLog("[SessionHost] 后台起不来且编排锁在手，本窗口临时接管编排")
+        // viewer 期间起的是**只读**那一版额度轮询（跟着 daemon 写的文件走）。
+        // 现在我们自己是编排者了，得换成真的探针那一版 —— 不换的话
+        // `QuotaCenter.start()` 会被它自己的 `guard timer == nil` 挡掉，
+        // 于是额度那本账在整个回退期间**没有人写**，而且没有任何人会发现。
+        QuotaCenter.shared.stop()
+        start(model: context.model, crewStore: context.crewStore)
     }
 
     /// 启动全部长期职责。**幂等** —— 重复调用是 no-op（SwiftUI 的 `.task` 会因

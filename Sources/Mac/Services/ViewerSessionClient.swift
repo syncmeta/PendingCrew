@@ -18,9 +18,18 @@ final class ViewerSessionClient: ObservableObject {
     @Published private(set) var isConnected = false
     /// 连不上时给人看的原因。**不静默重试到天荒地老** —— 那是「点了没反应」的经典形状。
     @Published private(set) var lastError: String?
+    /// §9.2 的降级裁决（`nil` = 还没做过判定）。连不上只是现象，这一条是
+    /// 「连不上之后我们决定怎么办」——而那正是不许静默的地方。
+    @Published private(set) var fallback: OrchestrationFallback.Decision?
+
+    /// 拿到独占编排锁、后台确实起不来时回调一次（§9.2 唯一允许的那一支）。
+    /// 由 `SessionHost` 挂上去起本地编排 —— **这条腿自己不编排任何东西**。
+    var onTakeOverLocally: (() -> Void)?
 
     private let runner: CrewSessionRunner
     private let paths: PendingCrewDaemonPaths
+    /// 编排锁所在的数据根（锁文件就落在它下面，同 `SessionDaemonControl`）。
+    private var dataRoot: URL { paths.lock.deletingLastPathComponent() }
     private let spawnDaemon: () -> Bool
     private var link: UnixSocketTransport?
     private var client: SessionProtocolClient?
@@ -56,10 +65,17 @@ final class ViewerSessionClient: ObservableObject {
 
     private func connect() {
         guard !stopped else { return }
+        // 「后台在不在」「拉起来了没有」是**两个**观测量，而且必须分开记：
+        // §9.2 唯一允许接管的那一支要求「拉 daemon **确实失败**」，
+        // 把「起来了但还没连上」混进去就等于把赌注挪了个地方。
+        var spawn = OrchestrationFallback.Spawn.notAttempted
         if SessionDaemonControl.runningDaemonPid(paths: paths) == nil {
-            guard spawnDaemon() else {
+            if spawnDaemon() {
+                spawn = .launched
+            } else {
+                spawn = .failed("拉不起后台进程（PendingCrew --daemon）")
                 lastError = "拉不起后台进程（PendingCrew --daemon）。"
-                scheduleReconnect()
+                applyFallback(spawn: spawn, linkFailure: nil)
                 return
             }
         }
@@ -81,12 +97,47 @@ final class ViewerSessionClient: ObservableObject {
             client.requestSessionList()
             isConnected = true
             lastError = nil
+            // 连上了 = 上一轮那条降级裁决过期了，别在屏幕上留一条过期横幅。
+            fallback = nil
             reconnectAttempt = 0
             startHeartbeat()
         } catch {
             lastError = "连不上后台进程：\(error)"
-            scheduleReconnect()
+            applyFallback(spawn: spawn, linkFailure: nil)
         }
+    }
+
+    /// **连不上之后决定怎么办**（设计 §9.2）。判据本身是纯函数
+    /// （`OrchestrationFallback.decide`），这里只负责取观测量、执行裁决。
+    ///
+    /// 取锁的时机是要紧的：**只在拉 daemon 明确失败之后才取**。抢在前面取，
+    /// 会让我们自己刚拉起来的那个 daemon 因为锁被占而当场退出 —— 自己把自己的
+    /// 后路堵死，症状是「永远连不上，而且看不出为什么」。
+    private func applyFallback(spawn: OrchestrationFallback.Spawn,
+                               linkFailure: OrchestrationFallback.LinkFailure?) {
+        let lock: SessionOrchestratorLock.Outcome?
+        if case .failed = spawn, linkFailure == nil {
+            lock = SessionOrchestratorLock.acquire(dataRoot: dataRoot, kind: "app")
+        } else {
+            lock = nil
+        }
+        let decision = OrchestrationFallback.decide(
+            lock: lock, spawn: spawn, linkFailure: linkFailure, dataRoot: dataRoot)
+        fallback = decision
+
+        guard case let .takeOverLocally(reason) = decision,
+              case let .acquired(handle)? = lock else {
+            // 没接管 —— `lock` 在这里出作用域，`Handle.deinit` 当场解锁。
+            // **绝不能占着不放**：占着会让真正的 daemon 起不来，那是我们自己造的死结。
+            scheduleReconnect()
+            return
+        }
+        LocalOrchestrationFallback.shared.takeOver(handle: handle, reason: reason)
+        // **把这条腿整个停掉。** 接管之后再重连一次就可能出现「本地编排 + 连上的
+        // daemon」两个 host（§9.2 附加约束 2）。而且锁在我们手上，任何 daemon 都
+        // 起不来 —— 于是「第二个 host」在结构上不可能出现，不靠谁记得去检查。
+        stop()
+        onTakeOverLocally?()
     }
 
     private func linkClosed() {
