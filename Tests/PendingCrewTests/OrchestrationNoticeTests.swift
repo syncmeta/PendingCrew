@@ -31,6 +31,53 @@ final class OrchestrationNoticeTests: XCTestCase {
         try? FileManager.default.removeItem(at: dataRoot)
     }
 
+    // MARK: - §9.2 的三种降级态必须都到得了界面
+
+    /// 临时本地接管**必须一直挂在屏幕上**。这是 §9.2 附加约束 1：
+    /// 「回退期间界面持续显示当前模式与原因，不是弹一下就没」——
+    /// 否则「临时」会不知不觉变成常态，而用户以为自己跑在后台模式上。
+    func test_临时本地接管时界面必须持续显示临时模式() {
+        let notice = OrchestrationNotice.resolve(
+            decision: nil,
+            viewer: .init(isConnected: false, lastError: "拉不起后台进程。",
+                          fallback: .takeOverLocally("后台起不来（拉不起后台进程。），已临时由本窗口接管。")))
+        guard case let .localFallback(detail) = notice else {
+            return XCTFail("临时接管必须在界面上说出来，实际：\(notice)")
+        }
+        XCTAssertTrue(detail.contains("接管"), detail)
+    }
+
+    /// 一律禁止接管的那几种必须是**可操作的错误**，不是「正在连接…」那种
+    /// 看起来自己会好的提示 —— 归属不明是不会自己好的。
+    func test_禁止接管时界面是可操作错误而不是正在连接() {
+        let notice = OrchestrationNotice.resolve(
+            decision: nil,
+            viewer: .init(isConnected: false, lastError: "连不上后台进程",
+                          fallback: .refuse("锁被占着但读不出是谁 —— 本进程不接管编排。")))
+        guard case let .refused(detail) = notice else {
+            return XCTFail("禁止接管必须给可操作错误，实际：\(notice)")
+        }
+        XCTAssertTrue(detail.contains("读不出"), detail)
+    }
+
+    /// 还在退避重连时仍是琥珀的「正在连接」——它确实可能自己会好。
+    func test_还在重连时仍是正在连接() {
+        let notice = OrchestrationNotice.resolve(
+            decision: nil,
+            viewer: .init(isConnected: false, lastError: "连不上后台进程",
+                          fallback: .keepConnecting("正在连接后台进程…")))
+        guard case .connecting = notice else {
+            return XCTFail("实际：\(notice)")
+        }
+    }
+
+    /// 连上了就不占屏 —— 降级裁决清掉之后不许留一条过期横幅。
+    func test_连上之后不占屏() {
+        let notice = OrchestrationNotice.resolve(
+            decision: nil, viewer: .init(isConnected: true, lastError: nil, fallback: nil))
+        XCTAssertEqual(notice, OrchestrationNotice.none)
+    }
+
     // MARK: - 从锁串到界面态
 
     /// **这一组的主条。** 锁被一个不听 socket 的东西占着时，界面必须是错误态。

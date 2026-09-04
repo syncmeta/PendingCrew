@@ -5,6 +5,10 @@ import Foundation
 struct ViewerLinkState: Equatable {
     var isConnected: Bool
     var lastError: String?
+    /// §9.2 的降级裁决（`nil` = 还没做过判定 —— 正常连着的时候就是 nil）。
+    /// 它**不是**「连上了没有」的另一种说法：连不上只是现象，这一条是「连不上之后
+    /// 我们决定怎么办」，而那正是不许静默的地方。
+    var fallback: OrchestrationFallback.Decision?
 }
 
 /// **「这个窗口现在管不管事」在界面上是什么态** —— 从闸门裁决直接算出来的**纯判定**。
@@ -32,6 +36,13 @@ enum OrchestrationNotice: Equatable {
     /// 琥珀：已退化成 viewer 但还没接上。可能自己会好（退避重连中），所以是提示不是
     /// 错误 —— 但**不许静默**：「正在连接」和「连不上」在屏幕上必须分得出来。
     case connecting(detail: String)
+    /// 琥珀·常驻：后台起不来，本窗口**临时接管**了编排（§9.2 表里唯一允许的那一支）。
+    /// **这一条必须一直挂着**，不是弹一下就没 —— 用户必须随时看得出「我现在跑在
+    /// 临时模式上」，否则临时会不知不觉变成常态。
+    case localFallback(detail: String)
+    /// 红：按 §9.2 一律禁止接管的那几种（归属不明 / 冲突 / 锁打不开 / 协议不兼容 /
+    /// attach 失败）。**既不接管也不假装正常**，给可操作的错误。
+    case refused(detail: String)
 
     /// - Parameters:
     ///   - decision: 编排闸门的裁决。`nil` = 闸门没装（`--daemon` 进程 / 单测）。
@@ -40,7 +51,16 @@ enum OrchestrationNotice: Equatable {
                         viewer: ViewerLinkState?) -> OrchestrationNotice {
         // 冲突压过一切：这个窗口什么都不管，连不连得上后台已经不是重点。
         if case let .conflict(detail) = decision { return .conflict(detail: detail) }
-        guard let viewer, !viewer.isConnected else { return .none }
+        guard let viewer else { return .none }
+        // **§9.2 的裁决压过「连没连上」。**「连不上」只是现象，裁决才是结论 ——
+        // 而且这两条都不许随重连消失：临时接管要一直挂着（否则临时会不知不觉变成
+        // 常态），禁止接管那几种也不会自己好（归属不明不会自己变清楚）。
+        switch viewer.fallback {
+        case let .takeOverLocally(reason): return .localFallback(detail: reason)
+        case let .refuse(reason): return .refused(detail: reason)
+        case .keepConnecting, .none: break
+        }
+        guard !viewer.isConnected else { return .none }
         // 只说「连不上」而不说「本来该连谁」，人还得再查一轮 —— 所以把退化的理由
         // （里面带着 pid / 启动时刻 / 数据根）一并给出来。
         var lines: [String] = []

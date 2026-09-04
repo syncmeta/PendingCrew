@@ -180,24 +180,47 @@ final class OrchestrationGateTests: XCTestCase {
     /// 不分开的话 `CrewStore.ownsSharedControlChannel` 会放这个进程去排空共享控制
     /// 通道 —— 那三条通道是「一文件一命令、排空后删」的无锁模型，两边都排会让机长的
     /// `start_session` 被随机一方吞掉：不报错、不重试、命令文件已经删了。
+    /// **不许依赖测试进程自己的身份。** 翻默认（2026-09-04）之后测试进程的
+    /// `ProcessRole.requested` 就是 `.viewer` 了 —— 原来那句
+    /// `XCTSkipUnless(requested == .orchestrator)` 会让这两条从此静默 skip，
+    /// 而它们守的正是「修一个双头顺手造出另一个」。所以喂纯判定版，把 `requested`
+    /// 当参数给进去。
     func test_拿不到锁的进程在effective上不再是编排者() throws {
-        try XCTSkipUnless(ProcessRole.requested == .orchestrator,
-                          "测试进程本身不是 orchestrator 身份，这条无从谈起")
-        XCTAssertEqual(ProcessRole.effective, .orchestrator, "闸门没装时应当退回 current")
+        XCTAssertEqual(
+            ProcessRole.effective(requested: .orchestrator, decision: nil,
+                                  localFallbackActive: false),
+            .orchestrator, "闸门没装时应当退回 requested")
 
         try occupy(kind: "daemon")
-        OrchestrationGate.installForGUIProcess(
+        let gate = OrchestrationGate.installForGUIProcess(
             role: .orchestrator, dataRoot: dataRoot, log: { _ in })
-        XCTAssertEqual(ProcessRole.requested, .orchestrator, "身份不该被改写")
-        XCTAssertEqual(ProcessRole.effective, .viewer)
+        XCTAssertEqual(
+            ProcessRole.effective(requested: .orchestrator, decision: gate.decision,
+                                  localFallbackActive: false),
+            .viewer)
     }
 
     func test_拿到锁的进程在effective上仍是编排者() throws {
-        try XCTSkipUnless(ProcessRole.requested == .orchestrator,
-                          "测试进程本身不是 orchestrator 身份，这条无从谈起")
-        OrchestrationGate.installForGUIProcess(
+        let gate = OrchestrationGate.installForGUIProcess(
             role: .orchestrator, dataRoot: dataRoot, log: { _ in })
-        XCTAssertEqual(ProcessRole.effective, .orchestrator)
+        XCTAssertEqual(
+            ProcessRole.effective(requested: .orchestrator, decision: gate.decision,
+                                  localFallbackActive: false),
+            .orchestrator)
+    }
+
+    /// §9.2 的临时接管：`requested` 仍是 `.viewer`（身份不被改写），但
+    /// **`effective` 必须变成编排者** —— 否则本地接管起来的那套长期定时器会被
+    /// 各个 `start` 里的 precondition 当场打死，回退等于没有。
+    func test_临时本地接管时effective是编排者() {
+        XCTAssertEqual(
+            ProcessRole.effective(requested: .viewer, decision: nil,
+                                  localFallbackActive: true),
+            .orchestrator)
+        XCTAssertEqual(
+            ProcessRole.effective(requested: .viewer, decision: nil,
+                                  localFallbackActive: false),
+            .viewer, "没接管的 viewer 仍然只是 viewer")
     }
 }
 #endif
