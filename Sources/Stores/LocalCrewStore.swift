@@ -37,6 +37,9 @@ final class LocalCrewStore {
     static let shared = LocalCrewStore()
 
     private let fileURL: URL
+    /// flock sidecar。**跨进程互斥的那把锁** —— 翻默认之后 daemon 与 GUI 同时写
+    /// 这份账，没有它就是「谁后写谁赢」。见 `mutatingCrews`。
+    private let lockURL: URL
     private var crews: [String: LocalCrew] = [:]
     /// 全机「下一个可发的 crew 号」（通讯录，2026-08-11）。**单调只增** —— 删了
     /// crew 也不回收它的号，旧记录里的号码永远解析得出当初是谁。所以绝不能改成
@@ -66,6 +69,7 @@ final class LocalCrewStore {
             NSLog("[LocalCrewStore] mkdir failed: \(error)")
         }
         self.fileURL = base.appendingPathComponent("local-crews.json")
+        self.lockURL = base.appendingPathComponent("local-crews.lock")
         loadFromDisk()
     }
 
@@ -88,14 +92,16 @@ final class LocalCrewStore {
     /// 空标题 / crew 不存在 / 同名且同来源 → 忽略（幂等，避免无谓重写）。
     /// 同名但来源变了仍要落盘：机长显式确认占位名后也不该继续收到提醒。
     func setTitle(_ id: String, _ title: String, source: LocalCrewTitleSource) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, var crew = crews[id],
-              crew.title != trimmed || crew.titleSource != source else { return }
-        crew.title = trimmed
-        crew.titleSource = source
-        crew.updatedAt = ISO8601DateFormatter().string(from: Date())
-        crews[id] = crew
-        persistToDisk()
+        mutatingCrews {
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, var crew = crews[id],
+                  crew.title != trimmed || crew.titleSource != source else { return false }
+            crew.title = trimmed
+            crew.titleSource = source
+            crew.updatedAt = ISO8601DateFormatter().string(from: Date())
+            crews[id] = crew
+            return true
+        }
     }
 
     /// 改 crew 的工作目录（仓库搬家 / 目录改名）。**内存里立刻生效**，不要求重启 app ——
@@ -108,8 +114,9 @@ final class LocalCrewStore {
     ///
     /// 空路径 / crew 不存在 / 值没变 → 忽略（幂等，避免无谓重写）。
     func setWorkingDirectory(_ id: String, _ path: String) {
+        mutatingCrews {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, var crew = crews[id], crew.workingDirectory != trimmed else { return }
+        guard !trimmed.isEmpty, var crew = crews[id], crew.workingDirectory != trimmed else { return false }
         // 记下旧路径。**当前没有任何消费者** —— 它原本是迁移那侧「清扫模式」的唯一
         // 线索（回旧目录补搬会话），会话不搬了之后那条线整段删了（2026-08-26）。
         // 字段留着是纯留痕：删它会把已经写在 `local-crews.json` 里的历史一次性丢掉，
@@ -120,7 +127,8 @@ final class LocalCrewStore {
         crew.workingDirectory = trimmed
         crew.updatedAt = ISO8601DateFormatter().string(from: Date())
         crews[id] = crew
-        persistToDisk()
+        return true
+        }
     }
 
     /// 改这个 crew 以后由哪一种本机 coding agent 承担机长。
@@ -142,16 +150,25 @@ final class LocalCrewStore {
         guard rawKind == "claude_code" || rawKind == "codex" else {
             throw LocalCrewStoreError.invalidCaptainAgentKind(rawKind)
         }
-        guard var crew = crews[id] else { throw LocalCrewStoreError.crewNotFound(id) }
-        guard crew.captainAgentKind != rawKind else { return }
-        let previous = crew
-        crew.captainAgentKind = rawKind
-        crew.updatedAt = ISO8601DateFormatter().string(from: Date())
-        crews[id] = crew
+        // 落盘失败时内存必须回到旧机长，**不能制造持久态/运行态分叉**。
+        // 旧值在收口的闭包**里面**取（那时才是刚从盘上读进来的那一份）——
+        // 在外面取会取到过期快照，恢复出来的就是个更旧的东西。
+        //
+        // 这里不用「失败后重读盘」来恢复：盘写不进去的那些情形（目录不可写、
+        // 文件被换成了目录）**往往也读不出来**，重读只会原地不动。
+        var previous: LocalCrew?
         do {
-            try persistToDiskReportingFailure()
+            try mutatingCrews {
+                guard var crew = crews[id] else { throw LocalCrewStoreError.crewNotFound(id) }
+                guard crew.captainAgentKind != rawKind else { return false }
+                previous = crew
+                crew.captainAgentKind = rawKind
+                crew.updatedAt = ISO8601DateFormatter().string(from: Date())
+                crews[id] = crew
+                return true
+            }
         } catch {
-            crews[id] = previous
+            if let previous { crews[previous.id] = previous }
             throw error
         }
     }
@@ -182,12 +199,14 @@ final class LocalCrewStore {
     /// 通道落地，由 `CrewStore` 调）。Todo #71 起不再控制状态点。
     /// crew 不存在 / 值未变 → 忽略（幂等，避免无谓重写 + 变更信号）。
     func setAttention(_ id: String, reason: String?) {
-        let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = (trimmed?.isEmpty == false) ? trimmed : nil
-        guard var crew = crews[id], crew.attentionReason != normalized else { return }
-        crew.attentionReason = normalized
-        crews[id] = crew
-        persistToDisk()
+        mutatingCrews {
+            let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = (trimmed?.isEmpty == false) ? trimmed : nil
+            guard var crew = crews[id], crew.attentionReason != normalized else { return false }
+            crew.attentionReason = normalized
+            crews[id] = crew
+            return true
+        }
     }
 
     /// 人手动把 crew 从侧栏藏起来 / 取回来（侧栏行右键与「已隐藏的群」列表两个入口）。
@@ -199,16 +218,18 @@ final class LocalCrewStore {
     /// **只改人类界面的可见性**：不动父子边、不停 session、不碰白板。藏了的 crew
     /// 里的 session 照常干活。
     func setManuallyHidden(_ id: String, hidden: Bool) {
-        guard var crew = crews[id] else { return }
-        if hidden {
-            guard crew.manuallyHiddenAt == nil else { return }
-            crew.manuallyHiddenAt = ISO8601DateFormatter().string(from: Date())
-        } else {
-            guard crew.manuallyHiddenAt != nil else { return }
-            crew.manuallyHiddenAt = nil
+        mutatingCrews {
+            guard var crew = crews[id] else { return false }
+            if hidden {
+                guard crew.manuallyHiddenAt == nil else { return false }
+                crew.manuallyHiddenAt = ISO8601DateFormatter().string(from: Date())
+            } else {
+                guard crew.manuallyHiddenAt != nil else { return false }
+                crew.manuallyHiddenAt = nil
+            }
+            crews[id] = crew
+            return true
         }
-        crews[id] = crew
-        persistToDisk()
     }
 
     /// 新建本地 crew。返回包含自生成的 crewId + captainBotId(本地都用 UUID)。
@@ -217,6 +238,8 @@ final class LocalCrewStore {
     /// edge 端 `/v1/me/bots` 列表;BYOK 本地暂不实现 reuse(留下次)。
     @discardableResult
     func createCrew(_ request: CreateCrewRequest) -> CreateCrewResponse {
+        var response: CreateCrewResponse?
+        mutatingCrews {
         let now = ISO8601DateFormatter().string(from: Date())
         let id = "local-" + UUID().uuidString.lowercased()
         // captain bot id 也本地生成。后续 Phase 接真 captain template 时,
@@ -263,8 +286,11 @@ final class LocalCrewStore {
             nextExtension: LocalCrew.firstWorkerExtension
         )
         crews[id] = crew
-        persistToDisk()
-        return CreateCrewResponse(crewId: id, captainBotId: captainBotId)
+        response = CreateCrewResponse(crewId: id, captainBotId: captainBotId)
+        return true
+        }
+        // `mutatingCrews` 的闭包是同步跑完的，所以这里必然有值。
+        return response ?? CreateCrewResponse(crewId: "", captainBotId: nil)
     }
 
     // MARK: - 本地 DAG 父边
@@ -276,6 +302,7 @@ final class LocalCrewStore {
     /// children 由「谁的 parentCrewIds 含本 crew」反推,所以"后代"判定走
     /// `descendants(of:)`。自挂自(crewId == parentCrewId)也算环,拒绝。
     func attachParent(crewId: String, parentCrewId: String) throws {
+        try mutatingCrews {
         guard crewId != parentCrewId else {
             throw LocalCrewStoreError.wouldCreateCycle
         }
@@ -289,20 +316,23 @@ final class LocalCrewStore {
         if descendants(of: crewId).contains(parentCrewId) {
             throw LocalCrewStoreError.wouldCreateCycle
         }
-        guard var crew = crews[crewId] else { return }
-        guard !crew.parentCrewIds.contains(parentCrewId) else { return } // 已挂,幂等
+        guard var crew = crews[crewId] else { return false }
+        guard !crew.parentCrewIds.contains(parentCrewId) else { return false } // 已挂,幂等
         crew.parentCrewIds.append(parentCrewId)
         crews[crewId] = crew
-        persistToDisk()
+        return true
+        }
     }
 
     /// 移除一条父边。父边不存在则无操作。
     func detachParent(crewId: String, parentCrewId: String) {
-        guard var crew = crews[crewId],
-              let idx = crew.parentCrewIds.firstIndex(of: parentCrewId) else { return }
-        crew.parentCrewIds.remove(at: idx)
-        crews[crewId] = crew
-        persistToDisk()
+        mutatingCrews {
+            guard var crew = crews[crewId],
+                  let idx = crew.parentCrewIds.firstIndex(of: parentCrewId) else { return false }
+            crew.parentCrewIds.remove(at: idx)
+            crews[crewId] = crew
+            return true
+        }
     }
 
     /// `crewId` 的全部后代 id(沿 children 向下 BFS)。child = 其
@@ -482,9 +512,10 @@ final class LocalCrewStore {
     /// **已登记的 sessionId 原样返回（幂等）** —— `restartMember` 复用原 sessionId
     /// 重启时会再走一遍这里，绝不能重新发分机号（号码终身绑 session）。
     func recordSessionMember(crewId: String, sessionId: String, displayName: String) {
-        guard var crew = crews[crewId] else { return }
+        mutatingCrews {
+        guard var crew = crews[crewId] else { return false }
         var sessions = crew.sessionMembers ?? []
-        guard !sessions.contains(where: { $0.sessionId == sessionId }) else { return }
+        guard !sessions.contains(where: { $0.sessionId == sessionId }) else { return false }
         // 分机号：从 crew 自己的计数器发，只增不减（退出的成员不腾号）。
         let ext = crew.nextExtension ?? LocalCrew.firstWorkerExtension
         crew.nextExtension = ext + 1
@@ -495,7 +526,8 @@ final class LocalCrewStore {
             extensionNumber: ext))
         crew.sessionMembers = sessions
         crews[crewId] = crew
-        persistToDisk()
+        return true
+        }
     }
 
     /// crew 的持久 session 成员列表（按登记顺序）。
@@ -525,14 +557,15 @@ final class LocalCrewStore {
 
     /// 删除一条 crew。
     func deleteCrew(_ id: String) {
-        guard crews.removeValue(forKey: id) != nil else { return }
-        persistToDisk()
+        mutatingCrews { crews.removeValue(forKey: id) != nil }
     }
 
     /// 全清(调试 / 本地数据重置用)。
     func clearAll() {
-        crews.removeAll()
-        persistToDisk()
+        mutatingCrews {
+            crews.removeAll()
+            return true
+        }
     }
 
     // MARK: - 轻量跨进程只读
@@ -574,25 +607,33 @@ final class LocalCrewStore {
             // 计数器同样落在这个文件里（不另开号码注册表）。缺键 = 通讯录之前的旧
             // 文件，下面回填时算出来。
             nextCrewNumber = max(1, payload.nextCrewNumber ?? 1)
-            // 旧记录没有 titleSource：只在首次成功加载时按地名池启发式回填，随后立即
-            // 持久化；以后启动直接读字段，不会因地名池变化反复重算。
-            let placeNames = Set(PlaceNames.all)
-            var didBackfill = false
-            for id in crews.keys {
-                guard var crew = crews[id], crew.titleSource == nil else { continue }
-                crew.titleSource = .inferLegacy(title: crew.title, placeNames: placeNames)
-                crews[id] = crew
-                didBackfill = true
-            }
-            if backfillNumbers() { didBackfill = true }
-            if didBackfill { persistToDisk() }
         } catch {
             // JSON 损坏 → 不直接清掉,留备份让用户 / 调试时手动救;内存里
             // 留空 store 当从 0 开始。
             let backup = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
             try? FileManager.default.moveItem(at: fileURL, to: backup)
             NSLog("[LocalCrewStore] decode failed (\(error)), backed up to \(backup.lastPathComponent)")
+            return
         }
+        // **回填也是一次写**，所以它也必须走那个收口。
+        // 不走的话就是「一个刚启动、什么都还没做的进程，仅仅因为加载就把别人刚写的
+        // 东西覆盖掉」—— 而那种丢法比谁都难查：受害者什么都没做。
+        mutatingCrews { applyLegacyBackfill() }
+    }
+
+    /// 旧记录的一次性回填（`titleSource` + 通讯录号码）。**调用方保证已在锁内、
+    /// 且 `crews` 是刚从盘上读进来的**。返回「有没有改动」。
+    private func applyLegacyBackfill() -> Bool {
+        let placeNames = Set(PlaceNames.all)
+        var didBackfill = false
+        for id in crews.keys {
+            guard var crew = crews[id], crew.titleSource == nil else { continue }
+            crew.titleSource = .inferLegacy(title: crew.title, placeNames: placeNames)
+            crews[id] = crew
+            didBackfill = true
+        }
+        if backfillNumbers() { didBackfill = true }
+        return didBackfill
     }
 
     /// 存量回填（通讯录上线的一次性迁移）：没号的 crew 按 createdAt 升序补号、
@@ -641,12 +682,60 @@ final class LocalCrewStore {
         return changed
     }
 
-    private func persistToDisk() {
-        do {
-            try persistToDiskReportingFailure()
-        } catch {
-            NSLog("[LocalCrewStore] persist failed: %@", error.localizedDescription)
+    /// **所有落盘的唯一收口：锁内「重读 → 改 → 写」。**
+    ///
+    /// ## 为什么三步都要在锁内，只锁「写」不够
+    ///
+    /// 病根不是「两个进程同时写」，是**长期持有的过期快照**：每个进程 `init` 时
+    /// `loadFromDisk` 一次，之后内存里那份就再也不刷新，而 `persistToDisk` 是
+    /// **整份覆写**。于是后写的那个把先写的整个抹掉，**一声不吭**。
+    ///
+    /// 翻默认（2026-09-04）把第二个写入方带了进来：编排搬进 daemon 之后
+    /// `recordSessionMember` 每次 session 生命周期变动都写，而人在界面上建 crew、
+    /// 挂/摘父边、隐藏、改名走的是 GUI 进程 —— 两者在正常使用中天天重叠。
+    /// 真 daemon 上复现过：外部改了标题和隐藏，daemon 写一次盘，**两处全没了**。
+    ///
+    /// **只把 `write` 包进锁是半截修法**：那样锁内只有「写」，读的那一拍还停在启动
+    /// 时刻，改的那一拍在锁外。症状会从「经常丢」变成「偶尔丢」——**比现在更难查**。
+    ///
+    /// ## ⚠️ 别在这个收口外面落盘
+    ///
+    /// 有一条测试盯着「落盘只许有一个收口」。理由不是洁癖：排查这条 bug 时，
+    /// 按方法名 grep 出来的写入方名单当场漏了一大半（说 2 个、真实 12 个），
+    /// 是靠反推落盘点才补齐的。**名单会过期，收口不会** —— 加第 13 个方法的人
+    /// 不需要知道这段历史，也不会漏。
+    ///
+    /// - Parameter change: 在**刚从盘上读进来的**状态上做改动；返回 `false` =
+    ///   什么都没改 → 不落盘（各方法原有的幂等语义原样保留）。抛出 → 不落盘。
+    private func mutatingCrews(_ change: () throws -> Bool) rethrows {
+        try MultiProcessJSONStore.withFileLock(lockURL) {
+            reloadUnderLock()
+            guard try change() else { return }
+            do {
+                try persistToDiskReportingFailure()
+            } catch {
+                NSLog("[LocalCrewStore] persist failed: %@", error.localizedDescription)
+                throw error
+            }
         }
+    }
+
+    /// 拿着锁把盘上最新的那份读进内存 —— **丢掉过期快照，病根就是它**。
+    ///
+    /// 读不出来 / 解不开时**保留内存那份继续落盘**（不比这条修复之前更坏），
+    /// 但要喊出来。**绝不在这里归档、清空或搬走原件** —— 「读失败 ≠ 内容损坏」，
+    /// 那是 `MultiProcessJSONStore` 第 ④ 条用一次真事故换来的不变式。
+    private func reloadUnderLock() {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        guard let data = try? Data(contentsOf: fileURL),
+              let payload = try? JSONDecoder().decode(LocalCrewFile.self, from: data) else {
+            NSLog("[LocalCrewStore] 落盘前重读失败，本次写用的是可能过期的快照：%@",
+                  fileURL.path)
+            return
+        }
+        crews = Dictionary(uniqueKeysWithValues: payload.crews.map { ($0.id, $0) })
+        // 号码只增不减：盘上和内存里取大的那个，别让重读把本进程刚发出去的号退回去。
+        nextCrewNumber = max(nextCrewNumber, max(1, payload.nextCrewNumber ?? 1))
     }
 
     private func persistToDiskReportingFailure() throws {
