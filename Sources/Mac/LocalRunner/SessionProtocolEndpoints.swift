@@ -626,9 +626,13 @@ final class SessionProtocolClient {
 
     /// `announceViewport: false` = 「我还不知道自己多大」（见服务端 `attach` 那段）。
     /// 同进程桥照旧报默认视口 —— 那边 attach 时 core 本来就停在同一个默认值上。
+    /// `rendersLocally: false` = 「我不画，只收字节」（无界面探针）。见
+    /// `RemoteSessionBackend.init`。
     func attach(sessionId: String, kind: LocalCodingAgentKind,
-                announceViewport: Bool = true) -> RemoteSessionBackend {
-        let remote = RemoteSessionBackend(sessionId: sessionId, kind: kind, client: self)
+                announceViewport: Bool = true,
+                rendersLocally: Bool = true) -> RemoteSessionBackend {
+        let remote = RemoteSessionBackend(sessionId: sessionId, kind: kind, client: self,
+                                          rendersLocally: rendersLocally)
         remotes[sessionId] = remote
         remote.updateConnection(capabilities: negotiated)
         send(.attach(.init(

@@ -35,6 +35,16 @@
   ① 每条连接各持一个 `SessionFrameDecoder`，`receive` 改成「喂字节 → 拿 0..n 帧 → 逐帧处理」；
   ② endpoint 面向 `SessionTransport` 而非具体类。
   验收要求**先证明尺子会红**：写一个按任意字节边界切分/合并投递的传输替身，跑当前代码必须红，接上增量解码后转绿。
+- **已还（2026-09-04 核实，随 P4 合入 main `a8f4597`）**：两个 endpoint 各自持一个
+  `SessionFrameDecoder`（server 侧在 `Connection` 上，`SessionProtocolEndpoints.swift:21`；
+  client 侧 `:541`，重连时 `:593` 重置），收包路径改成「喂字节 → 拿 0..n 帧 → 逐帧处理」。
+  传输面向 `SessionMessageLink`（`UnixSocketTransport.swift:15`）而非具体类，
+  今天有四个实现：`InProcessSessionLink` / `UnixSocketTransport` / 测试替身
+  `ByteStreamLink`（**按任意字节边界切分与粘包**）/ `BackpressureLink`。
+  尺子也照要求写了：`SessionProtocolOverSocketTests.test_server接受任意切分与粘包的可靠字节流`
+  与 `test_client接受任意切分与粘包的可靠字节流`。
+  **没验到的**：真 WAN + TLS 上没跑过（异机传输是 P6，见
+  `docs/internal/2026-09-04-cross-machine-transport-scope.md`，尚未实现）。
 
 ### 🔴 所有在跑 session 的 PTY 输出都要过主线程 —— 界面代价随派活数线性增长
 - **发现**: 2026-08-19 · `fix/ui-jank-pty-scan`（Todo #59 界面卡顿排查）
@@ -564,3 +574,31 @@
   `Terminal`/选区 API 做单测：跨三行构造一段中英文混排的缓冲区、取选区文本、
   断言换行与宽字符。**先证明这把尺子会红**（用人类描述的那种形状），再修。
   只有确实非 GUI 不可的那一小段（真鼠标拖拽）才请人点一下。
+
+### 🔴 「把文本从终端格子里弄出来」有三条各走各的路，各错各的
+- **发现**: 2026-09-04 · P5a 真 daemon 冒烟。三条路是在同一天被三件不相干的事分别照出来的，
+  这本身就是判据：**它们已经分叉到不会一起对、也不会一起错。**
+- **三条路**:
+  1. **AppKit 选中 / 剪贴板** —— `TerminalMirrorView`。人类实测跨行拖选 ⌘C 复制出来不对
+     （2026-09-02，本文件另有一条独立记账；已从前后端分离主线摘出，别顺手一起改）。
+  2. **无画面 `screenText`** —— `AgentSessionCore.screenText`（`inspect_session` 走它、
+     写进白板的「它最后一句话」走它、`--daemon-attach` 探针也走它）。实测**本该是空格的
+     位置输出 NUL**，而且不只在全角字后面：
+     `'Claude\x00Code'`、`'auto\x00mode'` 全是纯 ASCII。病根是
+     `line.translateToString(trimRight: true)` —— SwiftTerm 里没被写过的格 char 就是 `\0`，
+     没人映射成空格。终端里 NUL 不显示，所以**肉眼一直看着是对的**，只有把它当文本用才露馅。
+     修的时候要分清两种 NUL：没写过的格（`width == 1`）该变空格，全角字的后半格
+     （`width == 0`）必须丢掉 —— 一视同仁会把「我在」变成「我 在」。
+  3. **去 ANSI 的字节尾窗** —— `PendingDecisionTracker`（判「终端在等人选」）。
+     claude 的「是否信任此文件夹」对话框在这条路上**认不出来**：序号后面没有空格、
+     行尾 `\r\r\n` 又把连续的选项块切断。
+- **为什么这是 🔴 而不是三条 🟡**: 三条路读的是同一份缓冲区、回答的是同一个问题
+  （「屏幕上现在是什么字」），却各有各的解析。任何一条修对了都**不会**带动另外两条，
+  而它们的错法互不相似（丢空格 / 认不出对话框 / 复制出错），所以没有一条测试能同时钉住。
+  真正的债不是这三个 bug，是**没有一个「屏幕 → 文本」的单一实现**。
+- **已经在做的**: 第 2 条正在修（映射成 U+0020，抽成共享纯函数 `TerminalScreenText`，
+  让 `screenText` 与探针都调它）。**第 3 条与第 1 条明确不在那一期里**，各自独立。
+- **该怎么还**: 等第 2 条那个共享纯函数落地后，把第 3 条改成读渲染后的画面
+  （而不是自己去 ANSI 扫字节）—— 它要判的本来就是「屏幕上有没有一个选择菜单」，
+  读画面比读字节流更接近问题本身。第 1 条走 AppKit，能不能并进来要单独评估，
+  **不要假设它一定能**。

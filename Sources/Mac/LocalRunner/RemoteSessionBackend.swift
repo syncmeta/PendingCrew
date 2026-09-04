@@ -254,13 +254,21 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     private var nextSnapshotSequence: UInt32 = 0
     private unowned let client: SessionProtocolClient
 
-    init(sessionId: String, kind: LocalCodingAgentKind, client: SessionProtocolClient) {
+    /// - Parameter rendersLocally: 这一份 viewer 要不要**在本地画出来**。
+    ///   false = 只收字节、不建 mirror（`TerminalMirrorView` 是 AppKit 视图）。
+    ///   无界面探针（`--daemon-attach`）走的就是 false：那个进程里一个 NSView
+    ///   都不该有，快照仍然照收 —— `lastCompletedSnapshotBytes` 那条账不经过 mirror。
+    init(sessionId: String, kind: LocalCodingAgentKind, client: SessionProtocolClient,
+         rendersLocally: Bool = true) {
         self.sessionId = sessionId
         self.kind = kind
         self.client = client
         if kind == .codex {
             terminalView = nil
             transcript = CodexTranscript()
+        } else if !rendersLocally {
+            terminalView = nil
+            transcript = nil
         } else {
             let mirror = TerminalMirrorView(frame: .zero)
             terminalView = mirror
