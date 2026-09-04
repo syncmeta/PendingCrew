@@ -55,6 +55,10 @@ final class ViewerSessionClient: ObservableObject {
     /// 「说不准」都会再造一个不回话的 daemon 出来。
     private var lastSpawnedChild: (() -> DaemonLaunchRace.ChildState)?
     private var raceStartedAt: Date?
+    /// 这条链路走到哪了。**`socketOpen` 不等于连上** —— 只有收到 `daemonHello`
+    /// 且协商兼容（`SessionProtocolClient.isConnected` 翻 true）才算握上手。
+    /// 这两者差着一整个握手，而把前者当后者正是 2026-09-04 读代码逮到的那条偏离。
+    private var linkState: DaemonLaunchRace.LinkState = .none
     private var link: UnixSocketTransport?
     private var client: SessionProtocolClient?
     private var heartbeat: Timer?
@@ -82,6 +86,8 @@ final class ViewerSessionClient: ObservableObject {
         link?.close()
         link = nil
         client = nil
+        linkState = .none
+        raceStartedAt = nil
         isConnected = false
     }
 
@@ -90,16 +96,15 @@ final class ViewerSessionClient: ObservableObject {
     private func connect() {
         guard !stopped else { return }
         if stalledSince == nil { stalledSince = Date() }
+        raceStartedAt = Date()
         // **该不该拉一个新的，不在这里判** —— 判断在 `DaemonLaunchPlan`（那一层进得了
         // test bundle）。这里只执行。P4 的教训：判断留在接线上就只有「编译过」。
         switch DaemonLaunchPlan.next(
             daemonHoldsLock: SessionDaemonControl.runningDaemonPid(paths: paths) != nil,
             lastSpawnedChild: lastSpawnedChild?()) {
         case let .connectOnly(reason):
-            if !openLink() {
-                NSLog("[ViewerSessionClient] 不拉后台进程：%@", reason)
-                applyFallback(spawn: .notAttempted, linkFailure: nil)
-            }
+            NSLog("[ViewerSessionClient] 不拉后台进程：%@", reason)
+            pollRace(child: nil)
         case .launch:
             launchAndRace()
         }
@@ -109,8 +114,7 @@ final class ViewerSessionClient: ObservableObject {
     /// （判据第 1–4 条，判定本身在 `DaemonLaunchRace`）。
     ///
     /// **这不是「睡一个宽限窗再看它还在不在」** —— 那是在赌时序：窗给短了会把
-    /// 「正要退的」判成起成了，给长了每次启动都白等。这里每一拍都真去连一次，
-    /// 连上就立刻收工，进程没了就立刻判失败。
+    /// 「正要退的」判成起成了，给长了每次启动都白等。这里每一拍都问一次真实观测。
     private func launchAndRace() {
         switch spawnDaemon() {
         case let .threw(reason):
@@ -121,21 +125,19 @@ final class ViewerSessionClient: ObservableObject {
                 linkFailure: nil)
         case let .started(child):
             lastSpawnedChild = child
-            raceStartedAt = Date()
             pollRace(child: child)
         }
     }
 
-    private func pollRace(child: @escaping () -> DaemonLaunchRace.ChildState) {
+    /// 赛跑的一拍。`child` 为 nil = 这一轮我们没拉过任何进程。
+    private func pollRace(child: (() -> DaemonLaunchRace.ChildState)?) {
         guard !stopped, let startedAt = raceStartedAt else { return }
-        // 「握上手了没有」只能靠真去连一次 —— 连上并握上手就是它先到。
-        if openLink() {
-            raceStartedAt = nil
-            return
-        }
+        openSocketIfNeeded()
         let outcome = DaemonLaunchRace.step(
-            handshakeSucceeded: false, child: child(),
-            elapsed: Date().timeIntervalSince(startedAt), limit: Self.launchRaceLimit)
+            link: linkState,
+            child: child?() ?? .notSpawned,
+            elapsed: Date().timeIntervalSince(startedAt),
+            limit: Self.launchRaceLimit)
         switch outcome {
         case .pending:
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.racePollInterval) {
@@ -143,10 +145,15 @@ final class ViewerSessionClient: ObservableObject {
                 MainActor.assumeIsolated { self?.pollRace(child: child) }
             }
         case .handshake:
-            raceStartedAt = nil        // openLink 已经处理，走不到
-        case .exitedBeforeHandshake, .timedOutStillAlive:
             raceStartedAt = nil
-            if case .exitedBeforeHandshake = outcome { lastSpawnedChild = nil }
+            finishConnected()
+        case .exitedBeforeHandshake, .timedOutStillAlive, .timedOutWithoutSpawn:
+            raceStartedAt = nil
+            if case .exitedBeforeHandshake = outcome {
+                // 它没了，那条 socket 也就没意义了 —— 下一轮重开。
+                lastSpawnedChild = nil
+                closeLink()
+            }
             applyFallback(
                 spawn: OrchestrationFallback.spawn(
                     launchThrew: nil, race: outcome, limit: Self.launchRaceLimit),
@@ -154,9 +161,13 @@ final class ViewerSessionClient: ObservableObject {
         }
     }
 
-    /// 连一次 + 握手。成功返回 true（这一趟就算连上了）。
-    @discardableResult
-    private func openLink() -> Bool {
+    /// 开一条 socket 并把 hello 发出去（幂等：已经开着就什么都不做）。
+    ///
+    /// **它不宣布「连上了」** —— 那一拍归 `onDaemonHello`。`connect()` 成功与
+    /// 「hello 发出去了」都是**本端单方面就能达成**的事，不能拿来当「对端回过话」
+    /// 的证据；判准只有一条：**这个信号必须只有对端真的回过话才可能出现**。
+    private func openSocketIfNeeded() {
+        guard link == nil else { return }
         do {
             let link = try UnixSocketTransport.connect(toPath: paths.socket)
             let client = SessionProtocolClient(
@@ -168,24 +179,40 @@ final class ViewerSessionClient: ObservableObject {
             client.onSessionList = { [weak self] list in
                 MainActor.assumeIsolated { self?.runner.applyRemoteRoster(list) }
             }
+            // **握上手的那一拍**：daemon 回了 hello 且协议/能力协商兼容
+            // （`SessionProtocolClient` 只在这两条都成立时才调它）。
+            client.onDaemonHello = { [weak self] _ in
+                MainActor.assumeIsolated { self?.linkState = .handshaken }
+            }
             self.link = link
             self.client = client
             runner.attachViewer(client: client)
             client.connect()
             client.requestSessionList()
-            isConnected = true
-            lastError = nil
-            // 连上了 = 上一轮那条降级裁决过期了，别在屏幕上留一条过期横幅。
-            fallback = nil
-            stalledSince = nil
-            lastSpawnedChild = nil
-            reconnectAttempt = 0
-            startHeartbeat()
-            return true
+            linkState = .socketOpen
         } catch {
             lastError = "连不上后台进程：\(error)"
-            return false
+            linkState = .none
         }
+    }
+
+    private func closeLink() {
+        link?.close()
+        link = nil
+        client = nil
+        linkState = .none
+    }
+
+    /// 真握上手之后才做的那些事。
+    private func finishConnected() {
+        isConnected = true
+        lastError = nil
+        // 连上了 = 上一轮那条降级裁决过期了，别在屏幕上留一条过期横幅。
+        fallback = nil
+        stalledSince = nil
+        lastSpawnedChild = nil
+        reconnectAttempt = 0
+        startHeartbeat()
     }
 
     /// **连不上之后决定怎么办**（设计 §9.2）。顺序那一段在
@@ -218,6 +245,7 @@ final class ViewerSessionClient: ObservableObject {
         heartbeat = nil
         link = nil
         client = nil
+        linkState = .none
         runner.viewerLinkClosed()
         scheduleReconnect()
     }

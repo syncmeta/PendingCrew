@@ -24,12 +24,11 @@ import XCTest
 /// 假进程**（`ChildState` + 握手布尔值就是那个假进程）覆盖四种赛果。
 final class DaemonSpawnJudgeTests: XCTestCase {
 
-    private func step(handshake: Bool = false,
+    private func step(link: DaemonLaunchRace.LinkState = .none,
                       child: DaemonLaunchRace.ChildState = .alive,
                       elapsed: TimeInterval = 0,
                       limit: TimeInterval = 10) -> DaemonLaunchRace.Outcome {
-        DaemonLaunchRace.step(handshakeSucceeded: handshake, child: child,
-                              elapsed: elapsed, limit: limit)
+        DaemonLaunchRace.step(link: link, child: child, elapsed: elapsed, limit: limit)
     }
 
     // MARK: - 四种赛果
@@ -37,9 +36,9 @@ final class DaemonSpawnJudgeTests: XCTestCase {
     /// ① **握手先到** = 真起成了。这是唯一一种「起成了」的证据 ——
     /// 「进程还在」只证明它没死，不证明它在服务。
     func test_握手先到就是起成了() {
-        XCTAssertEqual(step(handshake: true), .handshake)
+        XCTAssertEqual(step(link: .handshaken), .handshake)
         // 就算同一拍里进程也退了，握手赢 —— 它已经服务过我们了。
-        XCTAssertEqual(step(handshake: true, child: .exited(0)), .handshake)
+        XCTAssertEqual(step(link: .handshaken, child: .exited(0)), .handshake)
     }
 
     /// ② **握手之前退出、退出码 0** —— 真机上那一条。**exit 0 也是失败。**
@@ -194,6 +193,61 @@ final class DaemonSpawnJudgeTests: XCTestCase {
     func test_握手成功不产生任何降级输入() {
         XCTAssertNil(OrchestrationFallback.spawnIfNotConnected(
             launchThrew: nil, race: .handshake, limit: 10))
+    }
+}
+
+
+/// **「socket 连上了」不是「握上手了」**（2026-09-04 读代码逮到的第四种穿法）。
+///
+/// 判据第 1 条要的是等**首次协议握手**。而实现里拿的是
+/// `UnixSocketTransport.connect` 成功 —— 这两件事差着一整个握手：
+/// `SessionProtocolClient.isConnected` 只在真收到 `daemonHello`、
+/// 且协议/能力协商**兼容**时才翻。
+///
+/// 差这一截的后果：一个**接受连接但不回话**的 daemon（卡死在 listen 之后、
+/// 或半开链路）会被判成「起成了」——赛跑当场收工、横幅被清，之后一直在
+/// 「连上 → 心跳超时 → 重连 → 又连上」之间打转，降级判定一次都不会被调用，
+/// 「超限升级成可操作错误」**永远不触发**。界面上确实有字在变、也确实说了
+/// 「没有回应」，**只是永远不会升级成一件人能做的事**。
+final class ViewerHandshakeTests: XCTestCase {
+
+    private func step(_ link: DaemonLaunchRace.LinkState,
+                      child: DaemonLaunchRace.ChildState = .alive,
+                      elapsed: TimeInterval = 0,
+                      limit: TimeInterval = 15) -> DaemonLaunchRace.Outcome {
+        DaemonLaunchRace.step(link: link, child: child, elapsed: elapsed, limit: limit)
+    }
+
+    /// **socket 开着、hello 没回来 —— 不算赢，接着等。**
+    func test_socket连上但没收到hello不算握手() {
+        XCTAssertEqual(step(.socketOpen), .pending,
+                       "「socket 连上了」被当成「握上手了」——那是最会骗人的那种静默")
+    }
+
+    /// 一个**接受连接但不回话**的 daemon：socket 一直开着、hello 一直不来。
+    /// 到上限之后必须落进 fail-closed 的不确定态，**不许一直转下去**。
+    func test_一直不回hello的daemon到上限落进不确定态() {
+        XCTAssertEqual(step(.socketOpen, elapsed: 15, limit: 15), .timedOutStillAlive)
+        let spawn = OrchestrationFallback.spawn(
+            launchThrew: nil, race: .timedOutStillAlive, limit: 15)
+        guard case .uncertain = spawn else {
+            return XCTFail("接受连接但不回话 = 说不准，必须 fail-closed，实际：\(spawn)")
+        }
+    }
+
+    /// 收到 hello 才算握上手。
+    func test_收到hello才算握上手() {
+        XCTAssertEqual(step(.handshaken), .handshake)
+    }
+
+    /// **这一轮没拉过**（锁上写着有 daemon 在跑）而 hello 迟迟不来：到上限之后
+    /// 结论不是「说不准」，而是**去问锁** —— 那边确实有人占着，该由 §9.2 那张表
+    /// 决定继续重连还是升级文案，不该被「说不准」抢先短路掉。
+    func test_没拉过的那条路等够了要去问锁而不是下说不准的结论() {
+        XCTAssertEqual(step(.socketOpen, child: .notSpawned, elapsed: 15, limit: 15),
+                       .timedOutWithoutSpawn)
+        XCTAssertEqual(OrchestrationFallback.spawn(
+            launchThrew: nil, race: .timedOutWithoutSpawn, limit: 15), .notAttempted)
     }
 }
 #endif
