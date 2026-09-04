@@ -384,6 +384,7 @@
 		A4E099C910B5400D8A645F0C /* LocalCodingAgentExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCD41EF4DF79F9A7C1794CD /* LocalCodingAgentExecutable.swift */; };
 		A4E148969B130D4DA1A5646E /* ColorHex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85701E0A44CE34A85B831771 /* ColorHex.swift */; };
 		A5BE8F0CD8972F4E3561FB7A /* SessionProfileSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */; };
+		A66251FFB598B28A93BEA79A /* LocalCrewStoreLostUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D55C6380F9590674FCED861A /* LocalCrewStoreLostUpdateTests.swift */; };
 		A6677422FC601411B9506BA0 /* DirectoryWatchCoalescing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B967CD9AE305FA04A004885 /* DirectoryWatchCoalescing.swift */; };
 		A67C0B2B38BE0BFB0B06E905 /* McpServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5A7C63B37740B3B978DBBA /* McpServer.swift */; };
 		A6C206B20B537A256C9C42A2 /* LocalAgentUsageMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 483CACFDBC40DE9D8B588BF3 /* LocalAgentUsageMonitor.swift */; };
@@ -943,6 +944,7 @@
 		D44095AB668456416C8960C2 /* LocalWakeupStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalWakeupStoreTests.swift; sourceTree = "<group>"; };
 		D444497957C2DC933C72B2C8 /* BreathingSymbolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreathingSymbolView.swift; sourceTree = "<group>"; };
 		D463833D0E583C11903CE62C /* TerminalMirrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMirrorView.swift; sourceTree = "<group>"; };
+		D55C6380F9590674FCED861A /* LocalCrewStoreLostUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCrewStoreLostUpdateTests.swift; sourceTree = "<group>"; };
 		D60CE404DBA41800A4216C77 /* CrewListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewListView.swift; sourceTree = "<group>"; };
 		D61EF9C80E279F17B39492B4 /* MachineGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineGrouping.swift; sourceTree = "<group>"; };
 		D66C18293A147DBEC648912F /* McpPostAttachmentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpPostAttachmentsTests.swift; sourceTree = "<group>"; };
@@ -1485,6 +1487,7 @@
 				68DED4864DF441E88BAC0A24 /* LocalCodingAgentTests.swift */,
 				323CE7A962695737A30AE3F2 /* LocalCrewControlStoreTests.swift */,
 				F136799DC570913058A41967 /* LocalCrewStoreDepthTests.swift */,
+				D55C6380F9590674FCED861A /* LocalCrewStoreLostUpdateTests.swift */,
 				D2432C5B09BB0FC752307F79 /* LocalCrewStoreOrgMoveTests.swift */,
 				B0DCD7467B62C8EC270C60A8 /* LocalCrewStoreTests.swift */,
 				A6A56B215C1A906E69116190 /* LocalPromptLoaderTests.swift */,
@@ -2267,6 +2270,7 @@
 				9C48B30904E702F58F406799 /* LocalCrewControlStoreTests.swift in Sources */,
 				7D490E14D74357DE36C76493 /* LocalCrewStore.swift in Sources */,
 				727EBBCB4974138AA0B572DD /* LocalCrewStoreDepthTests.swift in Sources */,
+				A66251FFB598B28A93BEA79A /* LocalCrewStoreLostUpdateTests.swift in Sources */,
 				2A8BC084A6ADD9A883045A11 /* LocalCrewStoreOrgMoveTests.swift in Sources */,
 				A12CC2EA4FB2A4816E69AF3A /* LocalCrewStoreTests.swift in Sources */,
 				E78F604D88C1BEAB7FB96C0C /* LocalPromptLoader.swift in Sources */,
