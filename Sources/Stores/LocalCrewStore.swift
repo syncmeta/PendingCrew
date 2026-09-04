@@ -53,10 +53,7 @@ final class LocalCrewStore {
         } else {
             // 缺省 Application Support/PendingCrew/。Application Support
             // 目录在 Mac 上没有 sandbox 限制,直接 mkdir。
-            let support = FileManager.default
-                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-                .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
-            base = support.appendingPathComponent("PendingCrew", isDirectory: true)
+            base = PendingCrewDataRoot.url
         }
         do {
             try FileManager.default.createDirectory(

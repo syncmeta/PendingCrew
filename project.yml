@@ -135,6 +135,10 @@ targets:
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift
+      # 本机数据根的唯一真值（前后端分离 P4）。白板 / crew 账 / 附件 / 崩溃日志 /
+      # daemon 的锁与 registry 全部从它拿路径 —— 所以它必须先在 bundle 里，
+      # 下面那批 store 才编得过。
+      - path: Sources/Stores/PendingCrewDataRoot.swift
       # LocalWhiteboardStore 同理：自包含 Foundation 代码（本地白板持久化，
       # 不引 CrewWhiteboardEntry / app module），单独编进 bundle 单测。
       - path: Sources/Stores/LocalWhiteboardStore.swift
@@ -191,6 +195,10 @@ targets:
       # fd 软上限抬升（2026-08-12 P0 的触发闸）。纯 Darwin syscall + 一个可单测的
       # 纯判定函数，自包含。
       - path: Sources/Support/FileDescriptorLimit.swift
+      # 「这个窗口现在管不管事」的界面态纯判定（前后端分离 §6.2 闸门 2）。
+      # 编进 bundle 是为了让「锁被别人占着 → 界面必须是错误态」这条串得起来 ——
+      # GUI 本身验不了（不许为验证开窗口），能验的就是状态到没到界面层。
+      - path: Sources/Support/OrchestrationNotice.swift
       # 机器分组纯函数（依赖 Models 里的 Machine / CrewSummary，已编进 bundle）。
       - path: Sources/Support/MachineGrouping.swift
       # 子 crew 深度 cap 纯判定（create_child_crew 机长命令）。CrewStore 依赖

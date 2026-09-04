@@ -10,7 +10,7 @@ import Combine
 ///
 /// 现在它们都归这里。视图退化成观察者：只读 `@Published`，不创建、不启动。
 ///
-/// P0 阶段这个类还活在 GUI 进程里（`ProcessRole.current == .orchestrator`）；
+/// P0 阶段这个类还活在 GUI 进程里（`ProcessRole.requested == .orchestrator`）；
 /// P4 之后同一个类原样跑在 `--daemon` 进程里，GUI 侧变成 `.viewer` 不再持有它。
 /// **所以这里不许出现任何 SwiftUI / AppKit 依赖** —— 它将来要在没有画面的进程里跑。
 @MainActor
@@ -23,10 +23,85 @@ final class SessionHost: ObservableObject {
 
     /// 两个依赖都收 `nil` 默认值而不是 `= CrewSessionRunner()` 这类默认实参：
     /// 默认实参在 **nonisolated** 上下文求值，而这两个类型都是 `@MainActor`。
+    /// `ownsAppUpdater` = 本进程是不是那个「更新 app」的进程。**daemon 传 false**：
+    /// 更新是窗口那一侧的事，而且碰 `AppUpdater.shared` 会把 Sparkle 拉起来 ——
+    /// 一个没有 `NSApplication` 的进程里不该有它。
     init(runner: CrewSessionRunner? = nil,
-         usage: LocalAgentUsageMonitor? = nil) {
+         usage: LocalAgentUsageMonitor? = nil,
+         ownsAppUpdater: Bool = true) {
         self.runner = runner ?? CrewSessionRunner()
         self.usage = usage ?? LocalAgentUsageMonitor()
+        self.ownsAppUpdater = ownsAppUpdater
+    }
+
+    private let ownsAppUpdater: Bool
+
+    /// viewer 模式下那条腿（`PENDINGCREW_BACKEND=daemon`，或 inproc 但锁被一个 daemon
+    /// 占着而退化过来）。真 inproc 编排时恒 nil。
+    ///
+    /// `@Published` 是有意的：退化那条路在 `.task` 里才决定，视图得跟着重画
+    /// （连不上时那条横幅就挂在它上面）。
+    @Published private(set) var viewer: ViewerSessionClient?
+
+    /// 编排闸门的裁决，**原样发布给界面**（`nil` = 闸门没装：`--daemon` 进程 / 单测）。
+    ///
+    /// 发布的是裁决本身而不是两个预先格式化好的字符串：屏幕上显示什么由
+    /// `OrchestrationNotice.resolve(decision:viewer:)` 这个**纯判定**算，
+    /// 于是「锁被别人占着 → 界面必须是错误态」是一条跑得出来的测试，
+    /// 而不是又一个没人读的 `@Published`。见 `OrchestrationNotice`。
+    @Published private(set) var orchestrationDecision: OrchestrationGate.Decision?
+
+    /// **唯一的入口。** 按进程角色分岔，别让视图去判断自己该走哪条 ——
+    /// 判断散在视图里，就会有第 N 个视图哪天忘了判断，然后在 viewer 里起一套编排。
+    ///
+    /// - `.orchestrator`（inproc 的 GUI，或 `--daemon`）→ 起全部长期职责。
+    /// - `.viewer`（总闸=daemon 的 GUI）→ 只连后台，**一个长期定时器都不起**。
+    func begin(model: AppModel, crewStore: CrewStore) {
+        switch ProcessRole.requested {
+        case .orchestrator:
+            // 闸门在**进程入口**取好了（`OrchestrationGate.installForGUIProcess`）。
+            // 这里只读它的裁决 —— **视图这条路不许自己再去问一遍锁**，再问一遍就等于
+            // 把闸门挂回视图上，那正是 2026-08-26 量出来的病根。
+            guard let gate = OrchestrationGate.shared else {
+                // 走到这儿 = 进程入口那一步被删了或被绕过了。dev 当场响；release 保持
+                // 从前的行为（照常编排），而不是让 app 变成一个什么都不做的窗口。
+                assertionFailure(
+                    "GUI 进程没有装编排闸门，见 PendingCrewEntry.main / OrchestrationGate")
+                start(model: model, crewStore: crewStore)
+                return
+            }
+            orchestrationDecision = gate.decision
+            switch gate.decision {
+            case .takeOver, .notOrchestrator:
+                start(model: model, crewStore: crewStore)
+            case let .followDaemon(detail):
+                // 锁被一个 daemon 占着：那边真的在 socket 上听，连上去就是了。
+                NSLog("[SessionHost] 本进程不接管编排，退化成 viewer：%@", detail)
+                beginViewer()
+            case let .conflict(detail):
+                // 锁被一个不听 socket 的东西占着：**既不编排也不退化。**
+                // 退化过去只会得到一个连不上的 viewer —— 界面在、什么都不动、
+                // 不报错，比不做还难查。理由交给界面显示（`OrchestrationNotice`）。
+                NSLog("[SessionHost] 编排冲突，本进程既不编排也不退化：%@", detail)
+            }
+        case .viewer:
+            beginViewer()
+        case .helper:
+            assertionFailure("helper 进程不该起 GUI")
+        }
+    }
+
+    /// 连上后台那条腿。**一个长期定时器都不起**（下面那两个的理由各自写在方法上）。
+    private func beginViewer() {
+        guard viewer == nil else { return }
+        let viewer = ViewerSessionClient(runner: runner)
+        self.viewer = viewer
+        viewer.start()
+        // 这两个在 viewer 里照跑，理由各自写在方法上：一个只跟着 daemon 写好的
+        // 文件走（不写），一个只读磁盘算个和（不写）。**闸门 1 防的是第二个
+        // writer，不是第二个 reader。**
+        QuotaCenter.shared.startFollowingFile()
+        usage.startReadOnly()
     }
 
     /// 启动全部长期职责。**幂等** —— 重复调用是 no-op（SwiftUI 的 `.task` 会因
@@ -37,8 +112,8 @@ final class SessionHost: ObservableObject {
     /// 事后极难定位，所以宁可在这里响。
     func start(model: AppModel, crewStore: CrewStore) {
         precondition(
-            ProcessRole.current == .orchestrator,
-            "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            ProcessRole.effective == .orchestrator,
+            "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard !started else { return }
         started = true
 
@@ -61,8 +136,10 @@ final class SessionHost: ObservableObject {
         usage.start()
         // 有 session 在跑就别自动更新（P4 之后这条会随 A1 一起去掉 —— 那时更新
         // app 本就不打断后台的 session）。
-        AppUpdater.shared.isBusy = { [weak runner] in
-            runner?.runs.contains { $0.status == .running } ?? false
+        if ownsAppUpdater {
+            AppUpdater.shared.isBusy = { [weak runner] in
+                runner?.runs.contains { $0.status == .running } ?? false
+            }
         }
 
         wire(crewStore: crewStore, model: model)

@@ -56,13 +56,38 @@ final class QuotaCenter: ObservableObject {
     /// 而那种症状事后基本查不出来。
     func start() {
         precondition(
-            ProcessRole.current == .orchestrator,
-            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            ProcessRole.effective == .orchestrator,
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard timer == nil else { return }
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
+    }
+
+    /// **viewer 里只跟着文件走，不跑探针**（前后端分离 §6.1）。
+    ///
+    /// `quota.json` 是「单 writer + 原子整写」那一类 —— 两个进程都写就是无声的互相
+    /// 覆盖。所以分家之后 daemon 写、app 读。app 这边照样能画那两个环，只是数字来自
+    /// 后台刚跑完的那一轮，而不是自己再跑一遍 `claude -p "/usage"`。
+    ///
+    /// 它没有 §6.2 闸门 1 的那条 precondition，因为它**一个字节都不写**：
+    /// 闸门 1 防的是「两个长期存活的进程各自按自己的世界观往账上写」，只读不构成。
+    func startFollowingFile() {
+        guard timer == nil else { return }
+        readSnapshotFile()
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readSnapshotFile() }
+        }
+    }
+
+    private func readSnapshotFile() {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(Self.quotaFileName)),
+              let file = try? JSONDecoder().decode(AgentQuotaFile.self, from: data) else { return }
+        claude = file.claude
+        codex = file.codex
+        claudeError = file.claudeError
+        codexError = file.codexError
     }
 
     func stop() { timer?.invalidate(); timer = nil }

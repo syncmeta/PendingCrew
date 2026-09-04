@@ -12,8 +12,12 @@
 
 ---
 
-### 🔴 session 协议的收包路径假设「一次投递 == 正好一整帧」—— 换成真 socket 会静默丢帧
+### ✅ session 协议的收包路径假设「一次投递 == 正好一整帧」（**P4 `f34d7c9` 已还，2026-08-29**）
 - **发现**: 2026-08-29 · 父 crew Todo #44（Fly 远程主机接入复核，`docs/internal/2026-08-29-fly-remote-host-review.md` §2 A-2/A-3）
+- **已还**: server 每条连接与 client 各持一个 `SessionFrameDecoder`，endpoint 面向
+  `SessionMessageLink` 的可靠有序字节流语义；新增 transport 替身把第一帧切成半包、再与第二帧
+  粘在同一次投递里。旧代码实跑 6 tests / 4 failures，修后专项 32 / 0；合最新 main 后全量
+  1766 tests / 3 个登记 skip / 0 failures，iOS Simulator build 通过。
 - **位置**: `Sources/Mac/LocalRunner/RemoteSessionBackend.swift:567-568`（server 侧 `receive`）、
   `:855-859`（client 侧 `receive`）、`Sources/Mac/LocalRunner/SessionProtocol.swift:469` / `:486` →
   `:503-509` `exactlyOneFrame(_:)`。

@@ -809,8 +809,8 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 身份 `--daemon`）养；app 退化成「连上去看的那个窗口」。顺带从结构上解掉 `docs/tech-debt.md`
 第一条（PTY 每批输出都过主线程、代价随 session 数线性涨）。
 
-六个阶段，**当前 main 上 P0–P3 已落地，P4/P5 未开工**
-（核对方式：`grep -r 'UnixSocketTransport\|SessionDaemonHost' Sources/` 零命中）：
+六个阶段，**当前 P0–P4 已落地（P4 在分支上、未落 main），P5 未开工**
+（核对方式：`grep -r 'import ServiceManagement\|MenuBarExtra' Sources/` 零命中）：
 
 > **这个「核对方式」是这张表里唯一不会烂的部分，别删它。** 它上一版写的是
 > 「grep 不到 `RemoteSessionBackend` / `InProcessTransport` / `SessionTransport`」——
@@ -818,10 +818,14 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 > 一个会过期的结论配一把会红的尺子，尺子红了就该改结论。
 >
 > 翻新阶段时**把符号换成「下一批还不存在的」，别换成已经存在的**（那样它永远红，
-> 等于没有）。**两条踩过的边**：① 别用 `--daemon` —— 那个 flag P0 就进
+> 等于没有）。**三条踩过的边**：① 别用 `--daemon` —— 那个 flag P0 就进
 > `ProcessRole.swift` 了，**它今天就命中**；② **范围必须限定 `Sources/`** ——
 > 不限定的话，**这段文字里写着的符号名本身就会让 grep 命中**，尺子会永远红在自己
-> 身上。（这两条都是 2026-08-26 翻这张表时当场踩到的，写下来免得下一个人再踩。）
+> 身上；③ **别用会出现在注释里的名字** —— P4 落地时第一版尺子选的是 `SMAppService`，
+> 而 `ViewerSessionClient` 的注释里正写着「P5 会换成 `SMAppService.agent`」，
+> 当场自命中。所以现在选的是 `import ServiceManagement`（import 语句不会出现在
+> 散文里）与 `MenuBarExtra`。（前两条是 2026-08-26 翻这张表时踩的，第三条是同一天
+> 翻 P4 那一行时踩的。）
 
 | 阶段 | 做什么 | 现状 |
 |---|---|---|
@@ -829,8 +833,135 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 | **P1** 终端劈半 | `AgentTerminalSession` → 无画面 `AgentSessionCore` + 只负责画的 `TerminalMirrorView` | ✅ 三个文件都在，`AgentTerminalSession` 已退化成 162 行的薄门面 |
 | **P2** 协议 + 进程内传输 | 定义全部消息、`RemoteSessionBackend` 走传输层 | ✅ `SessionProtocol.swift` / `InProcessTransport.swift` / `RemoteSessionBackend.swift`（`c57e24d`）。`attach` 按 backend 种类分流：终端型发 kind=2 快照帧，codex 型发 daemon 内存里的结构化历史 |
 | **P3** 快照 + 背压 | 终端缓冲区快照序列化（全项目风险最高的一块） | ✅ `TerminalSnapshotEncoder.swift` / `SessionAttachQueue.swift`（`c2e6909`）。真 TUI 语料在 `Tests/Fixtures/`，它逮到了合成语料测不出的「延迟折行 + 整行空白续行凭空消失」 |
-| **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ⬜ 未开工 |
-| **P5** 常驻与善后 | `SMAppService.agent` 登录项、菜单栏项、孤儿回收 | ⬜ 未开工 |
+| **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ✅ `UnixSocketTransport.swift` / `SessionProtocolEndpoints.swift` / `SessionDaemonHost.swift` / `SessionDaemonMain.swift` / `HeadlessSessionBackend.swift` / `SessionOrphanReaper.swift` / `ViewerSessionClient.swift`。**总闸 `PENDINGCREW_BACKEND` 默认仍是 `inproc`**，daemon 是显式开关 |
+| **P5** 常驻与善后 | `SMAppService.agent` 登录项、菜单栏项、`--daemon-status` | ⬜ 未开工（孤儿回收的双重核对已随 P4 落地，见下） |
+
+**P4 已经改变了什么，读代码时要知道**（`inproc` 默认路径上一条都不生效）：
+
+- **编排只有一份代码**。`SessionHost` + `CrewSessionRunner` 在 GUI 与 `--daemon` 两个
+  进程里跑的是同一个类；两种模式的差别全收在 `SessionProtocolPublishing` 这一个接缝
+  后面（有没有窗口 → 造不造 `TerminalMirrorView`；有没有 viewer → `expose` 回不回
+  `RemoteSessionBackend`）。**看到「daemon 那边是怎么做的」这种问题时，答案是「一样」。**
+- **`ProcessRole` 现在真的分岔了，而且是两个字段**。`requested` = 我这副身份**想**当
+  什么（argv / 总闸算出来的意图）；`effective` = 我最后**当上**了什么（过了编排闸门）。
+  `SessionHost.begin` 按 `requested` 分岔，凡是问「我该不该动共享账 / 起长期定时器」
+  的地方一律问 `effective`。**判断收在这两处** —— 散到视图里就会有第 N 个视图哪天忘了
+  判断，然后在 viewer 里起一套编排。
+  （它以前叫 `current`。改名不是审美：叫 `current` 时它读起来像「当前实际角色」，
+  而补上 app 侧闸门之后「想当」和「当上了」第一次可以不相等。改名那一拍是**故意让
+  编译器把每个调用点顶出来逐个定**的 —— 比一份手工维护的名单硬。）
+- **同一个数据根只能有一个长期编排者**（`OrchestrationGate`，§6.2 闸门 2）。闸门在
+  **进程入口**取（`PendingCrewEntry.main`），不在任何视图里。拿不到锁时 daemon 和 app
+  的正确反应**不是同一个**：daemon 拒绝启动；app 看**是谁**占着 —— `kind == "daemon"`
+  就退化成 viewer 连上去，别的（另一个 inproc 窗口 / 崩到一半 / 打不开锁文件）
+  **既不编排也不退化**，把冲突摆到用户面前。详见那个文件的注释与下面「那次 27 秒」。
+- **`CrewSessionRun.isMirror`**：viewer 里那些 run 是 daemon 里真身的镜像，只负责显示。
+  四处编排性副作用（白板 fail-loud / 待决策升级计时 / 额度续跑挂钩 / 回合 marker）
+  一件都不做。`inproc` 恒 false。
+- **共享控制通道只有 `effective == .orchestrator` 排空**
+  （`CrewStore.ownsSharedControlChannel`）。那三条通道是「一文件一命令、排空后删」的
+  无锁模型，两边都排会让机长的 `start_session` 被随机一方吞掉——不报错、不重试、
+  命令文件已经删了。**问 `effective` 不是 `requested`**：拿不到锁的 app 身份仍写着
+  `.orchestrator`，放它去排就是「修一个双头顺手造出另一个」。
+- **孤儿回收必须双重核对**（`SessionOrphanReaper`）：`kinfo_proc` 的 `p_starttime`
+  与 registry 记的一致才 kill。这台机器上 pid 会复用，只凭 pid 下手迟早误杀，
+  而且是事后查不出来的那种。**宁可留一个孤儿，也不能误杀。**
+- **「清除本机所有数据」先停 daemon 再删**（`LocalDataReset`）。不先停，刚删掉的
+  目录会被它立刻写回来。
+
+#### 那次 27 秒，以及它逼出来的两件事
+
+2026-08-26 P4 收尾时真发生过一次：**app 正常跑着，同时起了一个 `--daemon`，它照样
+起来了**，两个编排者同时写 `whiteboards/quota.json` / `models.json` /
+`crew-sessions.json` 二十七秒 —— 正是 §6.1 点名「单 writer + 原子整写，两个进程同时
+写就是无声的互相覆盖」的那三个。没出事只是因为 app 每两秒覆盖一次。**没有任何报错。**
+
+原因不是「忘了加锁」——锁一直在，但它只在 `--daemon` 那条路上取，**只排除
+daemon-vs-daemon，不排除 daemon-vs-app**。而闸门 2 要守的不变量是「只有一个长期
+编排者」，它跟你是哪副身份无关。
+
+##### 一、`PENDINGCREW_DATA_DIR`：能不能验的前提，不是配置项
+
+这台机器上**没有安全的办法冒烟测 `--daemon`**（起一个就是上面那件事），而 daemon
+恰恰只有在真机上才测得出来。`PendingCrewDataRoot` 把数据根收成一道缝，
+`PENDINGCREW_DATA_DIR` 让它连同下面全部账本一起挪到临时目录。
+
+**别把它当用户可调的东西写文档。** 六条约束（`PendingCrewDataRoot` /
+`OrchestrationGate` 的注释里逐条对得上）：① 一道缝，不许第二个 `getenv`；
+② 启动解析一次，之后只读；③ 不设时默认路径**逐字**不变，`PendingCrewDataRootTests`
+第一条断言写的是**字面路径**而不是自证；④ 锁和 registry 跟着数据根走；
+⑤ 独立提交、可单独 revert；⑥ 启动时把解析出的数据根打进日志一行，**daemon 和 app
+两条路都打**。
+
+⚠️ 一条实地事实：**运行时状态就住在 `whiteboards/` 里面**，不在数据根下
+（`quota.json` / `models.json` / `crew-sessions.json` / 控制通道 / todo / 审批 /
+唤醒账全在那一层）。所以隔离不能做成一半 —— 白板挪走了、状态还留在老地方那种，
+比不隔离更难查。
+
+前任在这里翻过一次车：`HOME=<临时目录>` **改不动 `Application Support`**
+（macOS 按用户记录解析，不看 `$HOME`），于是 daemon 真跑在了人的真数据目录上。
+
+##### 二、闸门为什么必须挂在进程身份上 —— 那份逐跳链
+
+补 app 侧闸门之前先量了一次「app 到底取没取锁」。**以下为源码级读数（当时未运行，
+因为当时没有不开窗口的入口能跑到）**，逐跳、每跳 file:line：
+
+1. `Sources/PendingCrewEntry.swift:19` `PendingCrewEntry.main()`
+2. `Sources/PendingCrewEntry.swift:30` `if SessionDaemonMain.runIfDaemon(...) { return }`
+   → `Sources/Mac/Services/SessionDaemonMain.swift:21`
+   `guard argv.contains("--daemon") else { return false }`（GUI 走 false 那支）
+3. `Sources/PendingCrewEntry.swift:33` `PendingCrewApp.main()`
+4. `Sources/PendingCrewApp.swift:12` `@StateObject private var sessionHost = SessionHost()`
+   —— `SessionHost` 的 init（`Sources/Mac/Services/SessionHost.swift:29–33`）**不取锁**
+5. `Sources/PendingCrewApp.swift:37–38` `WindowGroup { RootView() }`
+   → `Sources/PendingCrewApp.swift:101` `MacThreePaneView()`
+6. `Sources/Mac/Views/MacRootView.swift:68` `.task {` → `:71` `sessionHost.begin(...)`
+7. `Sources/Mac/Services/SessionHost.swift:47` `begin(...)`
+   → `:49–50` `case .orchestrator: start(...)`
+8. `Sources/Mac/Services/SessionHost.swift:72–105` `start(...)` 函数体全文 ——
+   **没有任何取锁**
+
+（行号是那一刻的 `0a592a5`；这一节讲的是**当时**的形状，别拿今天的行号去对。）
+
+**四条封边**，都是主动去找了没找到、不是没想到：
+
+- `SessionOrchestratorLock.acquire` 全仓唯一调用点：`SessionDaemonHost.swift:163`。
+- `SessionOrchestratorLock` 这个名字全仓只出现在 3 个文件：它自己、
+  `SessionDaemonHost.swift`、`SessionDaemonHostTests.swift`。**GUI 那条链上一个都没有。**
+- `SessionDaemonHost(` 的生产构造点唯一：`SessionDaemonMain.swift:35`，在 `--daemon`
+  分支里（其余 7 处全在测试里）。
+- **没有第二套单实例机制兜底**：全仓 `flock(` 只有 `MultiProcessJSONStore.swift:37/38`、
+  `WhiteboardCursor.swift:182/183` 和锁自己；`LSMultipleInstancesProhibited` /
+  `NSRunningApplication` 在 `Info.plist`、`project.yml`、全部 Swift 源码里**零命中**。
+
+结论是「app 确实没取锁」，但**更值钱的是第 6 跳本身**：那时通往编排的唯一入口是一个
+SwiftUI 视图钩子。两个后果，第二个才是要命的 —— ① 单测进不去，于是这道闸门在 app 侧
+无法被证明；② **闸门挂错了对象**：「谁是编排者」是进程身份的属性，不是某个视图的属性，
+挂在视图上就意味着换一个入口（第二个窗口、菜单栏 extra、将来的 headless）都得各自
+记得再问一遍。
+
+所以修法不是「往 `begin` 里补一句取锁」（那还是挂在视图上），而是把闸门搬到
+`PendingCrewEntry.main()`。**副产品正是①的解药**：搬完之后
+`OrchestrationGateTests.test_没人占着时app接管并且锁文件里真的是本进程` 第一次能跑 ——
+它断言的不是函数返回了什么，是**锁文件里真的躺着本进程**。
+
+##### 三、这套机制自己的失败形态，和它的两个检测器
+
+这一整期修的是「悄悄跑在真目录上」；而修复自己的失败形态是**方向反过来的同一种静默**：
+
+- 「它悄悄跑在了临时目录上」——人以为在动真数据，其实在动一个空壳，**而所有操作都会
+  成功**。检测器：约束 6 那行启动日志。
+- 「闸门拒绝了，但没人说」——窗口在、什么都不动、不报错。检测器：`OrchestrationNotice`
+  （纯判定 + 有测试盯着的界面态）。**一个没人读的 `@Published` 和一句没写的日志是
+  同一个东西**，所以这一条不算可选。
+- 「退化成一个连不上的 viewer」——锁被一个不听 socket 的东西占着时若也退化，
+  `ViewerSessionClient` 会去拉 daemon → 那个 daemon 因锁被占当场 exit 0 → 连不上 →
+  退避重连 → 永远循环。所以那一态**不退化**，直接报冲突。
+
+**验法是「把拒绝关掉，测试必须红」**，而且这一趟真跑过（2026-08-26）：
+`OrchestrationGate.refuse` 改成恒返回 `.takeOver` → 五条具名红（四条闸门 + 一条界面
+层）→ 还原后 18 条全绿。**别把这条验法当仪式** —— 没有它，闸门落完手上又只有一句
+「应该挡住了」，而「应该挡住了」和「挡住了」之间已经量到过一次，是 27 秒。
 
 **P0/P1 已经改变了什么，读代码时要知道**：
 

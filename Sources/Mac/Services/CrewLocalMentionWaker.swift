@@ -64,8 +64,8 @@ final class CrewLocalMentionWaker {
     /// 而那种症状事后基本查不出来。
     func start() {
         precondition(
-            ProcessRole.current == .orchestrator,
-            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            ProcessRole.effective == .orchestrator,
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard watchers.isEmpty else { return }
         for crewId in Set(runner?.runs.map(\.crewId) ?? []) { pin(crewId) }
         // 通讯录 `contact`（2026-08-11）：来电可以打给一个此刻一个 run 都没有的 crew

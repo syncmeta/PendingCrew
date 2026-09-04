@@ -40,6 +40,11 @@ struct MacThreePaneView: View {
             // 整片换成另一个 NavigationSplitView，群聊那栏被卸载重建 —— 回来时 composer
             // 草稿和滚动位置全被冲掉。驾驶舱改成叠在上面的临时窗口后，群聊视图常驻，
             // 关掉驾驶舱看到的就是离开前那一屏。
+            VStack(spacing: 0) {
+            // 「这个窗口现在管不管事」—— 正常编排时渲染成空，不占一个像素。
+            // 挂在三栏**之上**而不是某一栏里：它讲的是整个进程的状态，
+            // 塞进任何一栏都会变成「那一栏的事」。见 `OrchestrationNoticeBar`。
+            OrchestrationNoticeBar()
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
                     .environmentObject(sessionRunner) // 侧栏头像状态点要看 runs
@@ -57,6 +62,7 @@ struct MacThreePaneView: View {
             // environment 值而不是 `.environmentObject` —— 后者会让整条中栏订阅它，
             // 等于把 #96 刚拆掉的广播接回来一半。
             .environment(\.cockpitPresentation, cockpit)
+            }
 
             CockpitLayer(presentation: cockpit)
                 .environmentObject(crewStore)
@@ -79,7 +85,7 @@ struct MacThreePaneView: View {
         .task {
             // 长期职责（编排器/中继/唤醒器/两个轮询中心/用量监视 + 那一串编排
             // 订阅）全在 SessionHost 里起，这里只招呼一声。幂等。
-            sessionHost.start(model: model, crewStore: crewStore)
+            sessionHost.begin(model: model, crewStore: crewStore)
             // 首次进入时把列表 + subjects 都拉一遍 —— subjects 用于创建
             // crew sheet 的 picker，提前 prefetch 避免 sheet 打开时空。
             await crewStore.refreshList()

@@ -113,6 +113,44 @@ final class TerminalMirrorParityTests: XCTestCase {
         assertScrollbackEqual(core, mirror.getTerminal(), "退出 alt-screen 后的回滚历史")
     }
 
+    /// A2 的人工红项发生在 agent TUI 开启鼠标上报之后：普通拖拽被 SwiftTerm
+    /// 当成发给 TUI 的鼠标事件，选区根本没有开始。这里直接调用 AppKit responder
+    /// 路径（不建窗口、不发系统事件），稳定复现“跨三行拖选后仍无选区”。
+    func testPlainDragSelectsAcrossLinesEvenWhenTUIRequestsMouseReporting() throws {
+        let mirror = Self.makeMirror(cols: 80, rows: 24)
+        mirror.feed(byteArray: Array("first line\r\n第二行 mixed\r\nthird line\r\nfourth line\r\n\u{1b}[?1002h".utf8)[...])
+
+        let down = try XCTUnwrap(Self.mouseEvent(
+            type: .leftMouseDown,
+            location: NSPoint(x: 24, y: 590)
+        ))
+        let dragStart = try XCTUnwrap(Self.mouseEvent(
+            type: .leftMouseDragged,
+            location: NSPoint(x: 28, y: 585)
+        ))
+        let dragEnd = try XCTUnwrap(Self.mouseEvent(
+            type: .leftMouseDragged,
+            location: NSPoint(x: 180, y: 540)
+        ))
+        let up = try XCTUnwrap(Self.mouseEvent(
+            type: .leftMouseUp,
+            location: NSPoint(x: 180, y: 540)
+        ))
+
+        mirror.mouseDown(with: down)
+        mirror.mouseDragged(with: dragStart)
+        mirror.mouseDragged(with: dragEnd)
+        mirror.mouseUp(with: up)
+
+        XCTAssertTrue(mirror.selectionActive,
+                      "普通拖拽必须优先产生选区，不能被 TUI 鼠标上报吞掉")
+        let selected = mirror.getSelection() ?? ""
+        XCTAssertGreaterThanOrEqual(selected.filter { $0 == "\n" }.count, 2,
+                                    "夹具必须真的跨越至少三行：\(mirror.selection.start)→\(mirror.selection.end), \(selected.debugDescription)")
+        XCTAssertTrue(selected.contains("第二行"),
+                      "选区必须完整保留中文：\(mirror.selection.start)→\(mirror.selection.end), \(selected.debugDescription)")
+    }
+
     /// 逐行比较回滚缓冲区（`getScrollInvariantLine` 用从没被裁掉过的绝对行号）。
     private func assertScrollbackEqual(
         _ a: Terminal, _ b: Terminal, _ what: String,
@@ -135,6 +173,20 @@ final class TerminalMirrorParityTests: XCTestCase {
         let mirror = TerminalMirrorView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         mirror.getTerminal().resize(cols: cols, rows: rows)
         return mirror
+    }
+
+    private static func mouseEvent(type: NSEvent.EventType, location: NSPoint) -> NSEvent? {
+        NSEvent.mouseEvent(
+            with: type,
+            location: location,
+            modifierFlags: [],
+            timestamp: 1,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        )
     }
 
     private static func options(cols: Int, rows: Int) -> TerminalOptions {

@@ -269,18 +269,23 @@ struct SessionDaemonHello: Codable, Equatable {
     var capabilities: [String] = []
     var sessionCount: Int
     var pid: Int32
+    /// P5 自检字段。可选以保持旧 daemon / 新 app 双向兼容。
+    var viewerCount: Int?
+    var startedAt: Double?
 
     private enum CodingKeys: String, CodingKey {
-        case protocolVersion, daemonBuild, capabilities, sessionCount, pid
+        case protocolVersion, daemonBuild, capabilities, sessionCount, pid, viewerCount, startedAt
     }
 
     init(protocolVersion: Int, daemonBuild: String, capabilities: [String] = [],
-         sessionCount: Int, pid: Int32) {
+         sessionCount: Int, pid: Int32, viewerCount: Int? = nil, startedAt: Double? = nil) {
         self.protocolVersion = protocolVersion
         self.daemonBuild = daemonBuild
         self.capabilities = capabilities
         self.sessionCount = sessionCount
         self.pid = pid
+        self.viewerCount = viewerCount
+        self.startedAt = startedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -290,6 +295,8 @@ struct SessionDaemonHello: Codable, Equatable {
         capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities) ?? []
         sessionCount = try c.decode(Int.self, forKey: .sessionCount)
         pid = try c.decode(Int32.self, forKey: .pid)
+        viewerCount = try c.decodeIfPresent(Int.self, forKey: .viewerCount)
+        startedAt = try c.decodeIfPresent(Double.self, forKey: .startedAt)
     }
 }
 
@@ -358,10 +365,62 @@ struct SessionProtocolState: Codable, Equatable {
     var scrollState: SessionScrollStateWire?
 }
 
+/// 一个 session 在 crew 里的**编排身份**（属于哪个 crew、是机长还是 worker、
+/// 叫什么、在哪个目录跑、当前档位）。
+///
+/// 它与 `SessionProtocolState` 分开是有理由的：那个是后端每拍都可能变的派生状态，
+/// 这个大部分是起 session 时就定死的元数据。分家之后 app 退化成 viewer，
+/// **右栏那份 roster 的唯一真值在 daemon 里** —— 这就是它过江的形状。
+///
+/// 全部字段可选/带默认值（§4.4）：旧 app 连新 daemon 时整块忽略即可，不升版本。
+struct SessionRunSummary: Codable, Equatable {
+    var crewId: String
+    /// "captain" / "worker"。
+    var role: String
+    var title: String
+    var taskBrief: String
+    var workingDirectory: String
+    var model: String?
+    var effort: String?
+    var pendingProfile: String?
+    var approvalsReviewer: String?
+    var permissionModeOverride: String?
+    var startedAt: Double
+    /// "running" / "completed" / "cancelled" / "failed" —— **run 的生命周期，
+    /// 不是后端进程的**。两者会不一样：用户主动停时后端是 `.exited`，run 是
+    /// `.cancelled`，而「是不是用户停的」只有 daemon 那边知道。
+    var runStatus: String
+    var exitCode: Int32?
+    /// "userStopped" / "completed" / "failed" / "hitLimit"。
+    var exitReason: String?
+    /// "approval" / "menu" / "question"（`SessionAwaitingReply.Reason`）。
+    var awaitingReply: String?
+}
+
 struct SessionSummary: Codable, Equatable {
     var sessionId: String
     var stateSeq: UInt64
     var state: SessionProtocolState
+    /// 编排身份。P2/P3 的同进程桥不带它（app 自己就有 run），daemon 必带。
+    var run: SessionRunSummary?
+
+    private enum CodingKeys: String, CodingKey { case sessionId, stateSeq, state, run }
+
+    init(sessionId: String, stateSeq: UInt64, state: SessionProtocolState,
+         run: SessionRunSummary? = nil) {
+        self.sessionId = sessionId
+        self.stateSeq = stateSeq
+        self.state = state
+        self.run = run
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        stateSeq = try c.decode(UInt64.self, forKey: .stateSeq)
+        state = try c.decode(SessionProtocolState.self, forKey: .state)
+        run = try c.decodeIfPresent(SessionRunSummary.self, forKey: .run)
+    }
 }
 
 struct SessionList: Codable, Equatable { var sessions: [SessionSummary] }
@@ -467,7 +526,12 @@ struct SessionProtocolCodec {
 
     /// 未知 `type` 返回 nil：调用方继续读下一帧，不报错、不断连。
     func decodeApp(_ framed: Data) throws -> SessionAppMessage? {
-        guard case let .control(json) = try exactlyOneFrame(framed) else { return nil }
+        try decodeApp(exactlyOneFrame(framed))
+    }
+
+    /// 字节流 endpoint 已经增量切出的单帧入口。transport 不需要懂 JSON 或消息种类。
+    func decodeApp(_ frame: SessionWireFrame) throws -> SessionAppMessage? {
+        guard case let .control(json) = frame else { return nil }
         switch try type(of: json) {
         case "hello": return .hello(try decoder.decode(SessionAppHello.self, from: json))
         case "listSessions": return .listSessions
@@ -483,7 +547,12 @@ struct SessionProtocolCodec {
 
     /// 未知控制消息与 app 侧相同地忽略；kind=1 直接还原原始 PTY 字节。
     func decodeDaemon(_ framed: Data) throws -> SessionDaemonMessage? {
-        switch try exactlyOneFrame(framed) {
+        try decodeDaemon(exactlyOneFrame(framed))
+    }
+
+    /// 字节流 endpoint 已经增量切出的单帧入口；snapshot 仍由 client 的 P3 路径消费。
+    func decodeDaemon(_ frame: SessionWireFrame) throws -> SessionDaemonMessage? {
+        switch frame {
         case let .terminal(handle, bytes): return .data(.init(handle: handle, bytes: bytes))
         case .snapshot: return nil // P3 消费；P2 只冻结帧格式。
         case let .control(json):

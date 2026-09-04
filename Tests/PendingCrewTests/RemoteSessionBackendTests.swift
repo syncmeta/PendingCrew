@@ -8,7 +8,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         let direct = ProtocolTestBackend(kind: .codex)
         direct.profileOutcome = .applied("Set model to gpt-5")
         let bridge = InProcessSessionProtocolBridge()
-        let remote = bridge.expose(sessionId: "session-1", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "session-1", backend: direct)
 
         XCTAssertEqual(remote.status, .running)
         XCTAssertEqual(remote.kind, .codex)
@@ -55,7 +55,7 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testTerminalBytesUseKindOneAndKeyboardResizeUseInputMessages() {
         let direct = ProtocolTestBackend(kind: .claudeCode)
         let bridge = InProcessSessionProtocolBridge()
-        let remote = bridge.expose(sessionId: "session-terminal", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "session-terminal", backend: direct)
 
         bridge.publishTerminalBytes(sessionId: "session-terminal", bytes: [0xff, 0x00, 0x41])
         XCTAssertEqual(remote.lastTerminalFrameBytes, [0xff, 0x00, 0x41])
@@ -72,7 +72,7 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testPlainTerminalInterruptKeepsCtrlCBehaviorAcrossInputMessage() {
         let direct = ProtocolTestBackend(kind: .terminal)
         let bridge = InProcessSessionProtocolBridge()
-        let remote = bridge.expose(sessionId: "plain-terminal", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "plain-terminal", backend: direct)
 
         remote.interrupt()
 
@@ -84,7 +84,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         let bridge = InProcessSessionProtocolBridge(
             appCapabilities: ["transcript-events", "approval-mode"],
             daemonCapabilities: ["transcript-events"])
-        let remote = bridge.expose(sessionId: "session-old-daemon", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "session-old-daemon", backend: direct)
 
         XCTAssertTrue(remote.isProtocolConnected)
         XCTAssertEqual(remote.negotiatedCapabilities, ["transcript-events"])
@@ -100,7 +100,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         ]
         let oldDaemonBridge = InProcessSessionProtocolBridge(
             appCapabilities: ["transcript-events"], daemonCapabilities: [])
-        let degraded = oldDaemonBridge.expose(
+        let degraded = oldDaemonBridge.exposeAttached(
             sessionId: "old-daemon-history", backend: historyOnlyOnApp)
         XCTAssertTrue(degraded.isProtocolConnected)
         XCTAssertEqual(degraded.transcript?.items, [],
@@ -115,7 +115,7 @@ final class RemoteSessionBackendTests: XCTestCase {
             "resume rejection")
 
         let bridge = InProcessSessionProtocolBridge()
-        let remote = bridge.expose(sessionId: "remote-screen", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "remote-screen", backend: direct)
         XCTAssertEqual(
             SessionAuthoritativeScreenText.read(from: remote, maxLines: 20),
             "resume rejection")
@@ -127,7 +127,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         let output = bridge.terminalOutputSink(sessionId: "early-terminal")
         output([0x65, 0x61, 0x72, 0x6c, 0x79])
 
-        let remote = bridge.expose(
+        let remote = bridge.exposeAttached(
             sessionId: "early-terminal", backend: ProtocolTestBackend(kind: .claudeCode))
 
         XCTAssertEqual(remote.lastTerminalFrameBytes, Array("early".utf8))
@@ -139,7 +139,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         notification("item/completed", [
             "item": ["id": "before", "type": "agentMessage", "text": "one"],
         ])
-        let remote = bridge.expose(
+        let remote = bridge.exposeAttached(
             sessionId: "codex-events", backend: ProtocolTestBackend(kind: .codex))
         notification("item/completed", [
             "item": ["id": "after", "type": "agentMessage", "text": "two"],
@@ -151,7 +151,7 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testCodexTurnEventImmediatelyCorrectsRemoteWorkingState() {
         let bridge = InProcessSessionProtocolBridge()
         let notification = bridge.codexNotificationSink(sessionId: "codex-turn-state")
-        let remote = bridge.expose(
+        let remote = bridge.exposeAttached(
             sessionId: "codex-turn-state", backend: ProtocolTestBackend(kind: .codex))
 
         XCTAssertFalse(remote.isWorking)
@@ -166,7 +166,7 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testLateOldCompletionCannotMakeNewRemoteTurnIdle() {
         let bridge = InProcessSessionProtocolBridge()
         let notification = bridge.codexNotificationSink(sessionId: "codex-overlap")
-        let remote = bridge.expose(
+        let remote = bridge.exposeAttached(
             sessionId: "codex-overlap", backend: ProtocolTestBackend(kind: .codex))
 
         notification("turn/started", ["turn": ["id": "turn-a"]])
@@ -183,7 +183,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         let terminal = ProtocolTestBackend(kind: .claudeCode)
         terminal.terminalSnapshot = .init(cols: 80, rows: 25, bytes: Array("screen".utf8))
         let terminalBridge = InProcessSessionProtocolBridge()
-        let terminalRemote = terminalBridge.expose(sessionId: "terminal-history", backend: terminal)
+        let terminalRemote = terminalBridge.exposeAttached(sessionId: "terminal-history", backend: terminal)
 
         XCTAssertEqual(terminalRemote.lastCompletedSnapshotBytes, Array("screen".utf8))
         XCTAssertEqual(terminalRemote.completedSnapshotCount, 1)
@@ -205,7 +205,7 @@ final class RemoteSessionBackendTests: XCTestCase {
             .init(id: "x1", kind: .unknown(type: "futureItem")),
         ]
         let codexBridge = InProcessSessionProtocolBridge()
-        let codexRemote = codexBridge.expose(sessionId: "codex-history", backend: codex)
+        let codexRemote = codexBridge.exposeAttached(sessionId: "codex-history", backend: codex)
 
         XCTAssertEqual(codexRemote.transcript?.items, codex.codexHistory)
         XCTAssertEqual(codexRemote.completedSnapshotCount, 0,
@@ -218,7 +218,7 @@ final class RemoteSessionBackendTests: XCTestCase {
             .init(id: "before", kind: .agentMessage(text: "still in daemon", phase: nil)),
         ]
         let bridge = InProcessSessionProtocolBridge()
-        let remote = bridge.expose(sessionId: "codex-reopen", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "codex-reopen", backend: direct)
         XCTAssertEqual(remote.transcript?.items, direct.codexHistory)
 
         bridge.disconnectViewer()
@@ -233,7 +233,7 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testReconnectInvalidatesOldHandleThenHelloListsAndReattaches() {
         let direct = ProtocolTestBackend(kind: .claudeCode)
         let bridge = InProcessSessionProtocolBridge()
-        let remote = bridge.expose(sessionId: "reconnect", backend: direct)
+        let remote = bridge.exposeAttached(sessionId: "reconnect", backend: direct)
 
         bridge.disconnectViewer()
         XCTAssertFalse(remote.isProtocolConnected)
@@ -255,8 +255,10 @@ final class RemoteSessionBackendTests: XCTestCase {
     }
 }
 
+/// 协议两端共用的后端替身。`SessionProtocolOverSocketTests` 也用它 ——
+/// 所以它是 internal，不是 private。
 @MainActor
-private final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
+final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
     SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling,
     SessionProtocolLaunchProblemProviding, SessionProtocolTerminalSnapshotProviding,
     SessionProtocolCodexHistoryProviding {

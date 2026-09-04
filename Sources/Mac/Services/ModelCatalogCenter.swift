@@ -40,8 +40,8 @@ final class ModelCatalogCenter: ObservableObject {
     /// 而那种症状事后基本查不出来。
     func start() {
         precondition(
-            ProcessRole.current == .orchestrator,
-            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.current.rawValue)")
+            ProcessRole.effective == .orchestrator,
+            "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard timer == nil else { return }
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in

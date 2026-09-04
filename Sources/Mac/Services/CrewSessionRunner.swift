@@ -15,7 +15,10 @@ import SwiftUI
 final class CrewSessionRunner: ObservableObject {
     @Published private(set) var runs: [CrewSessionRun] = []
     @Published var selectedRunId: UUID?
-    private let sessionProtocolBridge = InProcessSessionProtocolBridge()
+    /// session 往哪儿发布（前后端分离 §10 的那一个接缝）。
+    /// inproc = 同进程桥（app 自己就是 viewer）；`--daemon` = socket 服务端。
+    /// **这个类在两种模式下是同一份**，差别全收在这个协议后面。
+    private let sessionPublisher: any SessionProtocolPublishing
 
     /// 「新建 session」态：inspector 显示零配置 composer 而非某个 run。由 roster /
     /// 切换条的「+」置 true，启动成功或切到某个 run 时复位。UI 选择态（与
@@ -122,11 +125,108 @@ final class CrewSessionRunner: ObservableObject {
     /// 这里补的是 await 窗口内的互斥；`runs` 那道守卫照旧留着（管已经起好的）。
     private var launchesInFlight: Set<String> = []
 
+    // MARK: - viewer 模式（前后端分离 P4）
+
+    /// **本进程是不是只在看**（`PENDINGCREW_BACKEND=daemon` 时的 GUI）。
+    ///
+    /// true 时这个 runner 不养任何进程：`runs` 是 daemon 那份 roster 的镜像，
+    /// 起 / 停 / 移除 / 切档位一律送回 daemon 去做。**它不是「另一套编排」**——
+    /// 恰恰相反，它保证这个进程里一套都没有（§6 唯一所有权）。
+    private(set) var isViewer = false
+    private var viewerClient: SessionProtocolClient?
+
+    /// 接上 viewer 链路。之后 `runs` 由 `applyRemoteRoster` 驱动。
+    func attachViewer(client: SessionProtocolClient) {
+        isViewer = true
+        viewerClient = client
+    }
+
+    /// 链路断了：镜像 run 全部标成「连不上」，但**不删** —— 删了右栏会闪一下变空，
+    /// 而 session 其实好好地在 daemon 里跑着。重连后 `applyRemoteRoster` 会对齐。
+    func viewerLinkClosed() {
+        guard isViewer else { return }
+        viewerClient = nil
+    }
+
+    /// 把 daemon 的全量 roster 对齐到本地镜像。
+    ///
+    /// **只增删改，不重建**：`runs` 每次整份换新的话，右栏正开着的那个 session 会
+    /// 因为 `runID` 变了而被切走 —— 每 2 秒一次的点名快照就会让人根本没法用。
+    func applyRemoteRoster(_ list: SessionList) {
+        guard isViewer, let client = viewerClient else { return }
+        let plan = SessionRosterReconciliation.plan(
+            incoming: list.sessions, localSessionIds: runs.map(\.sessionId))
+        for summary in plan.update {
+            guard let meta = summary.run else { continue }
+            runs.first { $0.sessionId == summary.sessionId }?.applyMirrorState(meta)
+        }
+        for summary in plan.create {
+            guard let meta = summary.run,
+                  let kind = LocalCodingAgentKind(rawValue: summary.state.kind) else { continue }
+            // `announceViewport: false`：roster 到达时窗口还没布局出来，报一个
+            // 默认 80×25 会把 daemon 里正在跑的 TUI 按 80 列重排一次（§5.5）。
+            let backend = client.remote(for: summary.sessionId)
+                ?? client.attach(sessionId: summary.sessionId, kind: kind,
+                                 announceViewport: false)
+            let run = CrewSessionRun(
+                crewId: meta.crewId, sessionId: summary.sessionId, kind: kind,
+                taskBrief: meta.taskBrief, title: meta.title,
+                workingDirectory: URL(fileURLWithPath: meta.workingDirectory),
+                model: meta.model, effort: meta.effort,
+                approvalsReviewer: meta.approvalsReviewer
+                    .flatMap(CodexProtocol.ApprovalsReviewer.init(rawValue:)),
+                permissionModeOverride: meta.permissionModeOverride,
+                backend: backend,
+                role: meta.role == "captain" ? .captain : .worker,
+                startedAt: Date(timeIntervalSince1970: meta.startedAt),
+                isMirror: true)
+            run.remoteOrchestration = { [weak self] action in
+                self?.forwardMirrorAction(action, sessionId: summary.sessionId)
+            }
+            run.applyMirrorState(meta)
+            runs.append(run)
+        }
+        guard !plan.remove.isEmpty else { return }
+        let gone = Set(plan.remove)
+        runs.removeAll { gone.contains($0.sessionId) }
+        if let selected = selectedRunId, !runs.contains(where: { $0.runID == selected }) {
+            selectedRunId = runs.last(where: { $0.crewId == activeCrewId })?.runID
+        }
+    }
+
+    private func forwardMirrorAction(_ action: CrewSessionRun.RemoteAction, sessionId: String) {
+        switch action {
+        case let .send(text):
+            sendOrchestration(SessionOrchestrationOp.sendText, [
+                "sessionId": .string(sessionId), "text": .string(text),
+            ])
+        case .stop:
+            sendOrchestration(SessionOrchestrationOp.stopRun, ["sessionId": .string(sessionId)])
+        case .interrupt:
+            sendOrchestration(SessionOrchestrationOp.interrupt, ["sessionId": .string(sessionId)])
+        }
+    }
+
+    /// 送一条编排请求给 daemon。**没连上时不排队** —— 排队会让「点了没反应」变成
+    /// 「点了半分钟后突然起了两个」，而重连后 roster 全量对齐本来就会把真相摆出来。
+    private func sendOrchestration(_ op: String, _ arguments: [String: SessionWireJSONValue]) {
+        guard let viewerClient else {
+            lastStartError = "还没连上后台进程，请稍后重试。"
+            return
+        }
+        viewerClient.sendOrchestration(op: op, arguments: arguments)
+    }
+
     /// 重新指定机长比普通 @唤醒优先。交接已开始后，普通 `startCaptain` 暂不抢槽；
     /// 若它在交接登记前已起跑，fulfill 的有界重试会等它落成后停掉再接管。
     private var captainReassignmentsInFlight: Set<String> = []
 
-    init() {}
+    /// `sessionPublisher` 收 `nil` 默认值而不是默认实参：默认实参在 **nonisolated**
+    /// 上下文求值，而 `InProcessSessionProtocolBridge` 是 `@MainActor`（同
+    /// `SessionHost` 那两个依赖）。
+    init(sessionPublisher: (any SessionProtocolPublishing)? = nil) {
+        self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
+    }
 
     /// 切换前台 run（退出「新建」态）。
     func select(_ runId: UUID) {
@@ -154,6 +254,17 @@ final class CrewSessionRunner: ObservableObject {
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
         if run.status == .running { run.stop() }
+        if isViewer {
+            // roster 的真值在 daemon 里。本地先不动 —— 等它的 `sessions` 回来
+            // 再删，否则一旦 daemon 拒绝（比如那个 run 已经不在了）两边就对不上了。
+            sendOrchestration(SessionOrchestrationOp.removeRun,
+                              ["sessionId": .string(run.sessionId)])
+            return
+        }
+        // 服务端也该忘掉它。daemon 一跑就是几周，不忘等于无界增长（record +
+        // Combine 订阅一直挂着）。inproc 侧这一条同样成立，只是那边进程短命、
+        // 症状不明显——被移除的 run 没有任何读者，退订它不改变任何可观察行为。
+        sessionPublisher.retire(sessionId: run.sessionId)
         runs.remove(at: idx)
         if selectedRunId == runId {
             // 回退只在同 crew 内找（#481）—— 别把前台切到另一个 crew 的 run。
@@ -276,6 +387,14 @@ final class CrewSessionRunner: ObservableObject {
         to run: CrewSessionRun, reviewer: CodexProtocol.ApprovalsReviewer
     ) async {
         guard run.kind == .codex, run.status == .running else { return }
+        if isViewer {
+            // 切档位本身能走 backend（协议里有），但**落账那一步是编排性写入**
+            // （§6.1）—— 两个进程都写 `CodexApprovalModeStore` 就是双 writer。
+            sendOrchestration(SessionOrchestrationOp.approvalMode, [
+                "sessionId": .string(run.sessionId), "reviewer": .string(reviewer.rawValue),
+            ])
+            return
+        }
         do {
             if let backend = run.backend as? CodexAppServerBackend {
                 try await backend.updateApprovalsReviewer(reviewer)
@@ -307,6 +426,13 @@ final class CrewSessionRunner: ObservableObject {
     /// - codex：走 app-server `thread/settings/update`，从下一轮起生效。
     /// - 目标 run 不在跑：白板落说明（fail-loud，不静默吞）。
     func applyProfileChange(_ req: SessionProfileChangeRequest) async {
+        if isViewer {
+            sendOrchestration(SessionOrchestrationOp.profileChange, [
+                "sessionId": .string(req.sessionId), "crewId": .string(req.crewId),
+                "model": .string(req.model ?? ""), "effort": .string(req.effort ?? ""),
+            ])
+            return
+        }
         guard let run = runs.first(where: { $0.sessionId == req.sessionId && $0.status == .running }) else {
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: req.crewId, sessionId: "system",
@@ -1078,14 +1204,23 @@ final class CrewSessionRunner: ObservableObject {
                     kind: config.kind.rawValue, agentSessionId: agentId,
                     workingDirectory: workingDirectory.path)
             }
-            directBackend = AgentTerminalSession(
-                config: config,
-                executable: executable.path,
-                workdir: workingDirectory.path,
-                env: env,
-                protocolOutputSink: SessionBackendRouting.usesProtocolTransport
-                    ? sessionProtocolBridge.terminalOutputSink(sessionId: sessionId) : nil
-            )
+            let sink = SessionBackendRouting.usesProtocolTransport
+                ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
+            // daemon 里没有窗口：造门面就等于造一个 `TerminalMirrorView`（AppKit），
+            // 那是窗口的东西。两条路共用同一个 `AgentSessionCore`，扫描器、拉起自检、
+            // 权威缓冲区一个字不差 —— 差的只是有没有那半画面。
+            directBackend = sessionPublisher.isHeadless
+                ? HeadlessSessionBackend(
+                    config: config, mode: .agent,
+                    executable: executable.path, workdir: workingDirectory.path,
+                    env: env, protocolOutputSink: sink)
+                : AgentTerminalSession(
+                    config: config,
+                    executable: executable.path,
+                    workdir: workingDirectory.path,
+                    env: env,
+                    protocolOutputSink: sink
+                )
         case .codex:
             // codex 没有 claude 的 hook/settings 通道：session 配置、世界观与 MCP
             // 全走 app-server thread/start（或 thread/resume），白板逐轮走 turn/start。
@@ -1133,20 +1268,28 @@ final class CrewSessionRunner: ObservableObject {
                         category: "progress", senderName: "系统")
                 },
                 protocolNotificationSink: SessionBackendRouting.usesProtocolTransport
-                    ? sessionProtocolBridge.codexNotificationSink(sessionId: sessionId) : nil)
+                    ? sessionPublisher.codexNotificationSink(sessionId: sessionId) : nil)
             cb.boot(initialPrompt: config.initialPrompt)
             directBackend = cb
         case .terminal:
             // 人的工具：没有 initial prompt、世界观、MCP、白板 provider 或 agent 状态扫描。
-            directBackend = PlainTerminalSession(
-                shell: executable.path,
-                workdir: workingDirectory.path,
-                environment: env,
-                protocolOutputSink: SessionBackendRouting.usesProtocolTransport
-                    ? sessionProtocolBridge.terminalOutputSink(sessionId: sessionId) : nil)
+            let shellSink = SessionBackendRouting.usesProtocolTransport
+                ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
+            directBackend = sessionPublisher.isHeadless
+                ? HeadlessSessionBackend(
+                    config: SessionConfig(kind: .terminal), mode: .plainShell,
+                    executable: executable.path, workdir: workingDirectory.path,
+                    env: env, protocolOutputSink: shellSink)
+                : PlainTerminalSession(
+                    shell: executable.path,
+                    workdir: workingDirectory.path,
+                    environment: env,
+                    protocolOutputSink: shellSink)
         }
+        // daemon 里 `expose` 回 nil —— 那个进程没有 viewer，run 直接持有 direct backend。
         let backend: any SessionBackend = SessionBackendRouting.usesProtocolTransport
-            ? sessionProtocolBridge.expose(sessionId: sessionId, backend: directBackend)
+            ? (sessionPublisher.expose(sessionId: sessionId, backend: directBackend)
+                ?? directBackend)
             : directBackend
         // 4. 包成 view model
         let run = CrewSessionRun(
@@ -1797,6 +1940,21 @@ final class CrewSessionRunner: ObservableObject {
         title: String = "机长",
         userInitiated: Bool = false
     ) async throws -> Bool {
+        if isViewer {
+            // viewer 里没有编排：把请求送回 daemon，那边用它自己的 CrewStore
+            // 重新拉 detail 再起。**crewId 就够了** —— detail 是 daemon 那边的事实。
+            //
+            // 返回 `true` = 「请求已受理」。这个返回值在 main 那边的语义是「有没有
+            // 让机长跑起来」，而 viewer 答不出那个问题（跑不跑起来是 daemon 的事）——
+            // 报 false 会被上层当成「抢槽失败」去重试，那是错的。
+            sendOrchestration(SessionOrchestrationOp.startSession, [
+                "role": .string("captain"),
+                "crewId": .string(detail.crew.id),
+                "brief": .string(openingBrief ?? ""),
+                "wakeText": .string(wakeText ?? ""),
+            ])
+            return true
+        }
         let crewId = detail.crew.id
         if captainReassignmentsInFlight.contains(crewId),
            resumeSessionIdOverride == nil,
@@ -1914,6 +2072,20 @@ final class CrewSessionRunner: ObservableObject {
         /// `start_session` 排队，背后起的不该抢前台（#42）。
         userInitiated: Bool = false
     ) async throws {
+        if isViewer {
+            sendOrchestration(SessionOrchestrationOp.startSession, [
+                "role": .string("worker"),
+                "crewId": .string(detail.crew.id),
+                "brief": .string(brief),
+                "runner": .string(runnerOverride?.rawValue ?? ""),
+                "isolation": .bool(isolation),
+                "model": .string(model ?? ""),
+                "effort": .string(effort ?? ""),
+                "title": .string(title ?? ""),
+                "userInitiated": .bool(userInitiated),
+            ])
+            return
+        }
         guard let wd = detail.crew.workingDirectory, !wd.isEmpty else {
             throw RunnerError.captainNoWorkingDirectory
         }
@@ -2180,7 +2352,29 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     let permissionModeOverride: String?
     /// captain / worker 角色（切换条展示 + captain 置顶）。
     let role: Role
-    let startedAt = Date()
+    let startedAt: Date
+
+    /// **这个 run 是不是「另一个进程里那个 run 的镜像」**（前后端分离 P4）。
+    ///
+    /// `PENDINGCREW_BACKEND=daemon` 时 app 退化成 viewer：右栏看到的每个 run 在
+    /// daemon 里都有一个真身，真身才是所有者。镜像只负责显示 ——
+    /// **编排性副作用一件都不做**：白板 fail-loud、待决策升级计时、额度续跑挂钩、
+    /// 回合 marker，全部归真身。两边都做就是同一条消息发两遍、同一个唤醒挂两次，
+    /// 而那正是 §6 要防的双头本身。
+    ///
+    /// `inproc`（默认）恒 false，下面每一处 `guard !isMirror` 都是恒真的直通。
+    let isMirror: Bool
+
+    /// 镜像的编排动作要回到真身那边去做。`send` 顺手清回合 marker、`stop` 要落
+    /// `.cancelled`（「是不是用户停的」只有真身那边算得对）—— 这些都不是往 PTY
+    /// 写几个字节就完事的，所以不能走 backend 直通。inproc 时为 nil。
+    var remoteOrchestration: ((RemoteAction) -> Void)?
+
+    enum RemoteAction: Equatable {
+        case send(String)
+        case stop
+        case interrupt
+    }
 
     /// 切换条 / 群聊 / 成员列表统一的显示名：captain 直接叫「机长」；worker 优先用
     /// 精简 `title`（单一真值），没 title 才退回 agent 名 + session id 前缀。
@@ -2281,8 +2475,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         approvalsReviewer: CodexProtocol.ApprovalsReviewer? = nil,
         permissionModeOverride: String? = nil,
         backend: any SessionBackend,
-        role: Role = .worker
+        role: Role = .worker,
+        startedAt: Date = Date(),
+        isMirror: Bool = false
     ) {
+        self.startedAt = startedAt
+        self.isMirror = isMirror
         self.crewId = crewId
         self.sessionId = sessionId
         self.kind = kind
@@ -2337,6 +2535,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     private func announceDecision(
         _ d: PendingTerminalDecision, stage: SessionDecisionNotice.Stage, waitedMinutes: Int = 0
     ) {
+        guard !isMirror else { return }      // 真身已经发过了
         let post = SessionDecisionNotice.post(
             stage: stage, sessionName: displayName, sessionId: sessionId,
             isCaptain: role == .captain, question: d.prompt, options: d.options,
@@ -2350,6 +2549,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 首报若干分钟后仍是同一个菜单 → 升级 @人（机长拍不了 / 没在跑时的兜底）。
     /// 只升级一次：再没人管就该人自己去看了，继续刷群只会让通知更不值钱。
     private func armDecisionEscalation(for d: PendingTerminalDecision) {
+        guard !isMirror else { return }      // 升级计时归真身，两边各挂一个会 @ 两遍
         decisionEscalation?.cancel()
         let wait = SessionDecisionNotice.escalateAfter
         decisionEscalation = Task { @MainActor [weak self] in
@@ -2388,6 +2588,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 异常会让机长以为得改派，反而是新的谎报。定向 @ 机长：起这个 session 的是它，
     /// 只有它能决定「将就用」还是「用对的参数重起」。
     private func observeLaunchParameterProblems() {
+        guard !isMirror else { return }      // 同上：这条也是白板 fail-loud
         let problems: AnyPublisher<SessionLaunchParameterProblem, Never>
         if let terminal = backend as? AgentTerminalSession {
             problems = terminal.launchParameterProblems
@@ -2415,6 +2616,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 健康异常 → 白板 fail-loud（每 Kind 一次，TUI 重绘不刷屏）+ 相应挂钩。
     /// 观察循环与 `finalize` 兜底都调这里，`announcedHealthKinds` 保证只喊一次。
     private func announce(_ h: CrewSessionHealth) {
+        guard !isMirror else { return }      // 白板 fail-loud + 续跑挂钩都归真身
         guard !announcedHealthKinds.contains(h.kind) else { return }
         announcedHealthKinds.insert(h.kind)
         if h.kind == .launchFailed {
@@ -2483,6 +2685,13 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 发文本给 agent（首条指令 / 续聊 / steer）。终端原样接收。
     /// 顺手熄掉「在等回复」——有人回话了就不该继续红着（下一轮结束时 marker 会重写）。
     func send(_ text: String) {
+        if isMirror {
+            // 回真身那边发：那里 `send` 会清回合 marker、并走 core 原生的
+            // 「正文 + 隔拍回车」时序。镜像直接写 backend 的话 marker 不会清，
+            // 「在等回复」的红点就永远熄不掉。
+            remoteOrchestration?(.send(text))
+            return
+        }
         clearAwaitingQuestionMarker()
         backend.send(text)
     }
@@ -2524,13 +2733,63 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     }
 
     /// 打断进行中的回合（Esc）。
-    func interrupt() { backend.interrupt() }
+    func interrupt() {
+        if isMirror { remoteOrchestration?(.interrupt); return }
+        backend.interrupt()
+    }
 
     /// 主动停掉 session（终止子进程）。后端退出后落 `.cancelled`。
     func stop() {
         guard status == .running else { return }
+        if isMirror {
+            // **必须回真身那边停。** 直接 `backend.stop()` 只是终止进程，真身那边
+            // 的 `cancelled` 不会翻 —— 于是 `SessionExitReason.classify` 会把
+            // 「用户主动停」误判成 `.completed`/`.failed`，撞额度时还会白挂一次续跑。
+            remoteOrchestration?(.stop)
+            return
+        }
         cancelled = true
         backend.stop()
+    }
+
+    /// 把 daemon 那边的**权威** run 状态盖到镜像上（P4 viewer）。
+    ///
+    /// 为什么不能靠 backend 的 `.exited` 自己推：`status` 里「用户主动停」与
+    /// 「跑完了」的区别来自 `cancelled`，而那是真身那边的事实。
+    func applyMirrorState(_ summary: SessionRunSummary) {
+        guard isMirror else { return }
+        model = summary.model
+        effort = summary.effort
+        pendingProfile = summary.pendingProfile
+        if let raw = summary.approvalsReviewer {
+            approvalsReviewer = CodexProtocol.ApprovalsReviewer(rawValue: raw)
+        }
+        let next: Status
+        switch summary.runStatus {
+        case "completed": next = .completed
+        case "cancelled": next = .cancelled
+        case "failed": next = .failed
+        default: next = .running
+        }
+        if status != next { status = next }
+        if exitCode != summary.exitCode { exitCode = summary.exitCode }
+        let reason = summary.exitReason.flatMap(SessionExitReason.init(wireName:))
+        if exitReason != reason { exitReason = reason }
+        let awaiting = SessionAwaitingReply.Reason(wire: summary.awaitingReply)
+        if awaitingReply != awaiting { awaitingReply = awaiting }
+    }
+
+    /// 这个 run 的编排身份，发给 viewer（P4）。
+    var protocolSummary: SessionRunSummary {
+        .init(crewId: crewId, role: role == .captain ? "captain" : "worker",
+              title: title, taskBrief: taskBrief,
+              workingDirectory: workingDirectory.path,
+              model: model, effort: effort, pendingProfile: pendingProfile,
+              approvalsReviewer: approvalsReviewer?.rawValue,
+              permissionModeOverride: permissionModeOverride,
+              startedAt: startedAt.timeIntervalSince1970,
+              runStatus: status.wireName, exitCode: exitCode,
+              exitReason: exitReason?.wireName, awaitingReply: awaitingReply?.wire)
     }
 
     deinit {
@@ -2568,8 +2827,8 @@ final class CrewSessionRun: ObservableObject, Identifiable {
             cancelled: cancelled, exitCode: exitCode,
             lastHealthKind: health?.kind, healthAt: healthAt)
         exitReason = reason
-        if reason == .hitLimit { onUsageLimit?(self) }
-        if kind.isAgent, reason != .userStopped {
+        if reason == .hitLimit, !isMirror { onUsageLimit?(self) }
+        if kind.isAgent, reason != .userStopped, !isMirror {
             let closing = turnMarker.read().lastAssistantMessage
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId,
@@ -2604,6 +2863,70 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         case let .exited(code):
             if cancelled { return .cancelled }
             return (code ?? 0) == 0 ? .completed : .failed
+        }
+    }
+}
+// ⚠️ `#endif` 不在这里 —— 下面那批 `wireName` 扩展**必须留在 `#if os(macOS)`
+// 里面**：它们扩展的 `CrewSessionRun.Status` / `SessionExitReason` /
+// `SessionAwaitingReply.Reason` 都是 macOS 门里的类型。放到门外面 macOS
+// 照编，**只有 iOS 端会红** —— 而三端里最容易漏编的就是它
+// （CONTRIBUTING 第 2 条讲的正是这件事，2026-08-26 真踩了一次）。
+
+// MARK: - P4：run 状态在 socket 上的字面（viewer 镜像用）
+
+/// 这些 `wireName` 是**协议字面**，不是给人看的文案。改它们等于改协议字段语义
+/// （§4.4 那张表里唯一要 +1 的那一类），别顺手跟着 UI 文案一起改。
+extension CrewSessionRun.Status {
+    var wireName: String {
+        switch self {
+        case .running: return "running"
+        case .completed: return "completed"
+        case .cancelled: return "cancelled"
+        case .failed: return "failed"
+        }
+    }
+}
+
+extension SessionExitReason {
+    var wireName: String {
+        switch self {
+        case .userStopped: return "userStopped"
+        case .completed: return "completed"
+        case .failed: return "failed"
+        case .hitLimit: return "hitLimit"
+        }
+    }
+
+    init?(wireName: String) {
+        switch wireName {
+        case "userStopped": self = .userStopped
+        case "completed": self = .completed
+        case "failed": self = .failed
+        case "hitLimit": self = .hitLimit
+        default: return nil
+        }
+    }
+}
+
+extension SessionAwaitingReply.Reason {
+    /// 带负载的枚举，所以字面是「种类 + 摘要」。用 `\u{1}` 分隔——摘要是终端上抓下来
+    /// 的自由文本，冒号/竖线之类在里面是家常便饭，拿它们当分隔符迟早切错。
+    var wire: String {
+        switch self {
+        case let .approval(text): return "approval\u{1}" + text
+        case let .menu(text): return "menu\u{1}" + text
+        case let .question(text): return "question\u{1}" + text
+        }
+    }
+
+    init?(wire: String?) {
+        guard let wire, let index = wire.firstIndex(of: "\u{1}") else { return nil }
+        let text = String(wire[wire.index(after: index)...])
+        switch wire[wire.startIndex..<index] {
+        case "approval": self = .approval(text)
+        case "menu": self = .menu(text)
+        case "question": self = .question(text)
+        default: return nil
         }
     }
 }

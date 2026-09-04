@@ -215,8 +215,11 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(codex.contains("wb?.commit()"),
                       "Codex 仍可能在 turn/start 受理前推进白板消费游标")
         let remote = try Self.text(of: "RemoteSessionBackend.swift")
-        XCTAssertTrue(remote.contains("op: \"submitWake\""),
-                      "协议传输层没有转发 wake 受理回执")
+        let endpoints = try Self.text(of: "SessionProtocolEndpoints.swift")
+        XCTAssertTrue(remote.contains("func submitWake(_ text: String) async"),
+                      "远端 backend 没有把 wake 受理结果暴露给 runner")
+        XCTAssertTrue(endpoints.contains("op: \"submitWake\""),
+                      "协议端点没有把 wake 受理回执转发到统一字节流")
     }
 
     /// Todo #21：详细窗口得真有「改 / 删 / 追问」三件，且都在窗口里做完。

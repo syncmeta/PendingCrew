@@ -52,7 +52,10 @@ final class CodexApprovalModeStore: @unchecked Sendable {
 
 /// Per-session launch configuration (spec §1 启动带指令 / §11 per-session 配置).
 /// Pure value type so `argv()` is unit-testable without spawning a process.
-public struct SessionConfig: Sendable, Equatable {
+/// `Codable` 是 P4 加的：viewer 起 session 时把**已经解析好的**这一份原样送到
+/// daemon（世界观文件 / MCP 配置都是本机路径，两个进程读的是同一个盘）——
+/// 比在两边各推导一遍安全，推导两遍迟早推出两个不一样的东西。
+public struct SessionConfig: Sendable, Equatable, Codable {
     public var kind: LocalCodingAgentKind
     /// Claude uses `--model`; Codex sends `model` in thread/start or thread/resume.
     /// `nil` lets the corresponding runner use its default.

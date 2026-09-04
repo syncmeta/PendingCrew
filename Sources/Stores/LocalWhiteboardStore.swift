@@ -53,15 +53,7 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     static let shared = LocalWhiteboardStore()
 
     /// 默认白板目录（app 与 helper 共用同一路径）。
-    static let defaultDirectory: URL = {
-        let base = (try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true))
-            ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("PendingCrew", isDirectory: true)
-            .appendingPathComponent("whiteboards", isDirectory: true)
-    }()
+    static let defaultDirectory: URL = PendingCrewDataRoot.subdirectory("whiteboards")
 
     private let directory: URL
 

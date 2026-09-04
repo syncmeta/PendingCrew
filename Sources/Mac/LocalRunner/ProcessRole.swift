@@ -34,9 +34,41 @@ enum ProcessRole: String {
         return flag == "daemon" ? .viewer : .orchestrator
     }
 
-    /// 本进程的角色。第一次取用时算一次，之后固定。
-    static let current: ProcessRole = resolve(
+    /// 本进程**想**当的角色 —— argv / 总闸算出来的意图。第一次取用时算一次，之后固定。
+    ///
+    /// ⚠️ **它不叫 `current` 是有原因的。** 叫 `current` 时它读起来像「当前实际角色」，
+    /// 而那正是 2026-08-26 差点出事的那个误读：补上 app 侧编排闸门之后，
+    /// 「想当编排者」和「当上了编排者」第一次可以不相等。问「我该不该动共享账、
+    /// 该不该起长期定时器」时要问的是 `effective`，见下。
+    ///
+    /// 改名那一拍是**故意让编译器把每个调用点顶出来逐个定**的 —— 这比一份手工维护
+    /// 的「哪些地方该改」名单硬：名单和它要防的东西不在同一个地方，方案一变就成了假的。
+    static let requested: ProcessRole = resolve(
         argv: CommandLine.arguments,
         backendFlag: ProcessInfo.processInfo.environment[backendEnvKey])
+
+    /// **过了编排闸门之后**的角色（`OrchestrationGate`）。
+    ///
+    /// 为什么要分成两个：`requested` 是 argv/总闸算出来的**意图**，而 2026-08-26 补上
+    /// app 侧闸门之后多出了一种新状态 —— **`requested == .orchestrator` 但没拿到锁**
+    /// （已经有一个 daemon 或另一个窗口在编排）。那个进程不是编排者，可它的
+    /// `requested` 还写着 `.orchestrator`。
+    ///
+    /// **不分开的话会当场造出一个双头**：`CrewStore.ownsSharedControlChannel` 只看
+    /// `requested`，于是这个「没拿到锁的 app」照样去排空共享控制通道 —— 那三条通道是
+    /// 「一文件一命令、排空后删」的无锁模型，两边都排会让机长的 `start_session`
+    /// 被随机一方吞掉，不报错、不重试、命令文件已经删了。**修一个双头的改动顺手
+    /// 造出另一个双头**，正是这一期最该避免的形状。
+    ///
+    /// 闸门没装时（`--daemon` 进程、单测）退回 `requested`，行为与从前一致。
+    static var effective: ProcessRole {
+        guard requested == .orchestrator else { return requested }
+        switch OrchestrationGate.shared?.decision {
+        case .none, .some(.takeOver), .some(.notOrchestrator):
+            return .orchestrator
+        case .some(.followDaemon), .some(.conflict):
+            return .viewer
+        }
+    }
 }
 #endif
