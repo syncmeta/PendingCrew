@@ -299,6 +299,7 @@
 		7F30DC5AFADBFDCEFE4398DE /* SessionApprovalCardsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26A6286BB7DC93C7B7EA009 /* SessionApprovalCardsView.swift */; };
 		7FB782522C3456CF4C652805 /* CodexProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F37C7707F86C6D63EB487B /* CodexProtocol.swift */; };
 		8063D44AA0C52A5B4F6C314D /* HeadlessSessionBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB13D23B611C3D20B756F587 /* HeadlessSessionBackend.swift */; };
+		8083071F6752D1351DC01A84 /* LocalCrewStoreReadMissTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF7A0153AA4AD7DB1175F8F /* LocalCrewStoreReadMissTests.swift */; };
 		8094B3158013057F7624AA35 /* IPadShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CD2E19FFE0BDAC1918FA06E /* IPadShell.swift */; };
 		80D0B4E405D2CECF95B11737 /* CodexAppServerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6EBD108E8EF2047AA56F4ED /* CodexAppServerConnection.swift */; };
 		81265797B89B31AC21E3DB4A /* CrewSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 051E45F99057FB8295F991DA /* CrewSummary.swift */; };
@@ -756,6 +757,7 @@
 		5AC9B7332324C1B1FA26525C /* SessionDaemonMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDaemonMain.swift; sourceTree = "<group>"; };
 		5C2809602DDEF4A750138A88 /* SessionUnreadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionUnreadStore.swift; sourceTree = "<group>"; };
 		5C3E61DB13BCB83DEFAEABD7 /* CrewChatBottomFollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatBottomFollowTests.swift; sourceTree = "<group>"; };
+		5CF7A0153AA4AD7DB1175F8F /* LocalCrewStoreReadMissTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCrewStoreReadMissTests.swift; sourceTree = "<group>"; };
 		5D1BA79194E7AC4E6DAA2491 /* CrewSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSettingsView.swift; sourceTree = "<group>"; };
 		5D4475F4F6F662461F71C1B9 /* CrewRosterBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRosterBar.swift; sourceTree = "<group>"; };
 		5D74B1C537C235EFB0E69DCB /* PromptTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTemplate.swift; sourceTree = "<group>"; };
@@ -1489,6 +1491,7 @@
 				F136799DC570913058A41967 /* LocalCrewStoreDepthTests.swift */,
 				D55C6380F9590674FCED861A /* LocalCrewStoreLostUpdateTests.swift */,
 				D2432C5B09BB0FC752307F79 /* LocalCrewStoreOrgMoveTests.swift */,
+				5CF7A0153AA4AD7DB1175F8F /* LocalCrewStoreReadMissTests.swift */,
 				B0DCD7467B62C8EC270C60A8 /* LocalCrewStoreTests.swift */,
 				A6A56B215C1A906E69116190 /* LocalPromptLoaderTests.swift */,
 				9CE2E310981313F38FE79D46 /* LocalSessionWorldModelTests.swift */,
@@ -2272,6 +2275,7 @@
 				727EBBCB4974138AA0B572DD /* LocalCrewStoreDepthTests.swift in Sources */,
 				A66251FFB598B28A93BEA79A /* LocalCrewStoreLostUpdateTests.swift in Sources */,
 				2A8BC084A6ADD9A883045A11 /* LocalCrewStoreOrgMoveTests.swift in Sources */,
+				8083071F6752D1351DC01A84 /* LocalCrewStoreReadMissTests.swift in Sources */,
 				A12CC2EA4FB2A4816E69AF3A /* LocalCrewStoreTests.swift in Sources */,
 				E78F604D88C1BEAB7FB96C0C /* LocalPromptLoader.swift in Sources */,
 				D8DBE57ED52A2F8086158FC6 /* LocalPromptLoaderTests.swift in Sources */,

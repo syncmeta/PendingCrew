@@ -83,9 +83,26 @@ final class LocalCrewStore {
     }
 
     /// 单条 crew detail。本地 crew 没有 parents/children/shares,空数组兜底。
+    /// 单个 crew 的详情。
+    ///
+    /// **内存 miss 时会重读一次盘再判**（2026-09-04）。理由：`loadFromDisk` 只在 `init`
+    /// 跑一次，而翻默认之后**人在界面上新建 crew 走的是 GUI 进程**，daemon 在自己
+    /// 下一次写盘之前根本不知道它存在 —— `start_session` 排空之后 `refreshDetail`
+    /// 走到这里拿到 nil，**给这个新 crew 派活直接失败、brief 被丢弃**。
+    ///
+    /// 范围是**刻意窄**的（机长 2026-09-04 钉的）：
+    /// - **只有 miss 才读盘**，命中一个字节都不碰磁盘；
+    /// - `listCrews` 与其余读路径**一律不动** —— 不改成轮询、不每次读盘。
+    ///   真量到这条热了再拿读数说话，别先改判据。
+    ///
+    /// 重读复用写那侧的收口（同一把跨进程锁 + `reloadUnderLock`），所以
+    /// 「读失败 ≠ 内容损坏」那条不变式在这条路上照样成立：**读不出来时保留内存
+    /// 那份，绝不清空、绝不归档** —— 否则一次读失败会把一屋子已知的 crew 全变成
+    /// 「不存在」，而调用方分不出「没了」和「没读着」。
     func getCrew(_ id: String) -> CrewDetail? {
-        guard let crew = crews[id] else { return nil }
-        return crew.detail
+        if let crew = crews[id] { return crew.detail }
+        MultiProcessJSONStore.withFileLock(lockURL) { reloadUnderLock() }
+        return crews[id]?.detail
     }
 
     /// 改 crew 标题（captain `rename_crew` 经控制通道落地，由 `CrewStore` 调）。
