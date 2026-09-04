@@ -277,6 +277,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         let rows = screenRows()
         let action = delivery.step(StartupPromptDelivery.Observation(
             inputRow: ClaudeInputBox.inputRow(rows),
+            bodyVisible: ClaudeInputBox.bodyTailVisible(prompt: prompt, rows: rows),
             // 对话框判定**不复用** `pendingDecision`：那台跟踪器吃的是去 ANSI 的
             // 字节尾窗，而 claude 的信任对话框是靠光标定位摆列的 —— 在字节流上它
             // 是瞎的（理由与实测证据见 `ClaudeInputBox.blockingDialog`）。
@@ -293,7 +294,19 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
             if attempt > 1 { inject([0x15]) }
             inject(Array(prompt.utf8))
         case .submit:
-            inject([0x0d])
+            // Claude 会把一次性灌入的超长正文当成 paste。仅发 Enter 即使隔了几秒，
+            // 仍可能只结束 paste 而不提交；真实 daemon 现场连续三次 Enter 都被吃掉，
+            // 再补一个普通字符后才恢复按键语义。这里先发一个空格再删掉（输入行判据
+            // 会 trim，因此不会误判提交；最终正文也逐字不变），隔一拍再发 Enter。
+            inject([0x20])
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self, self.status == .running else { return }
+                self.inject([0x7f])
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard self.status == .running else { return }
+                self.inject([0x0d])
+            }
         case let .blockedByDialog(detail):
             health = CrewSessionHealth(kind: .briefUndelivered, detail: detail)
         case let .notReady(detail), let .undelivered(detail), let .unsubmitted(detail):

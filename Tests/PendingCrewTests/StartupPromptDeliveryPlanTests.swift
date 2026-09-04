@@ -20,9 +20,11 @@ final class StartupPromptDeliveryPlanTests: XCTestCase {
         return t
     }
 
-    private func obs(_ row: String?, dialog: Bool = false, at offset: TimeInterval)
+    private func obs(_ row: String?, bodyVisible: Bool = false,
+                     dialog: Bool = false, at offset: TimeInterval)
         -> StartupPromptDelivery.Observation {
-        .init(inputRow: row, dialogPresent: dialog, now: t0.addingTimeInterval(offset))
+        .init(inputRow: row, bodyVisible: bodyVisible, dialogPresent: dialog,
+              now: t0.addingTimeInterval(offset))
     }
 
     // MARK: - 就绪之前
@@ -140,6 +142,14 @@ final class StartupPromptDeliveryPlanTests: XCTestCase {
         XCTAssertEqual(d.step(obs("", at: 0)), .writeBody(attempt: 1))
         XCTAssertEqual(d.step(obs(nil, at: 3.0)), .idle, "输入行不在就等，别当成没投进去")
         XCTAssertEqual(d.step(obs("", at: 3.1)), .writeBody(attempt: 2))
+    }
+
+    func test_超长正文把提示符顶出屏幕后仍按可见正文提交() {
+        var d = StartupPromptDelivery(timing: timing, startedAt: t0)
+        XCTAssertEqual(d.step(obs("", at: 0)), .writeBody(attempt: 1))
+        XCTAssertEqual(d.step(obs(nil, bodyVisible: false, at: 0.5)), .idle,
+                       "没有正文证据时仍按重绘处理")
+        XCTAssertEqual(d.step(obs(nil, bodyVisible: true, at: 0.6)), .submit(attempt: 1))
     }
 
     // MARK: - 首屏是需要人回答的对话框

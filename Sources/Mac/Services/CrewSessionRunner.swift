@@ -1020,7 +1020,8 @@ final class CrewSessionRunner: ObservableObject {
         // 有人来答了 —— 先熄掉「在等回复」，别让机长代答完界面还红着（Todo #25 层 2）。
         run.clearAwaitingQuestionMarker()
         let key = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let term = run.backend as? AgentTerminalSession {
+        if let term = run.backend as? SessionProtocolTerminalControlling,
+           run.kind != .codex {
             switch key {
             case "enter", "回车":
                 term.sendRaw([0x0d])
@@ -1029,20 +1030,7 @@ final class CrewSessionRunner: ObservableObject {
                 term.sendRaw([0x1b])
                 return "已向「\(run.displayName)」发送 Esc。稍后 inspect_session 复查画面。"
             default:
-                term.send(input)
-                return "已把文本发给「\(run.displayName)」（自动回车提交）。"
-            }
-        }
-        if let remote = run.backend as? RemoteSessionBackend, run.kind == .claudeCode {
-            switch key {
-            case "enter", "回车":
-                remote.sendRaw([0x0d])
-                return "已向「\(run.displayName)」发送 Enter。稍后 inspect_session 复查画面。"
-            case "esc":
-                remote.sendRaw([0x1b])
-                return "已向「\(run.displayName)」发送 Esc。稍后 inspect_session 复查画面。"
-            default:
-                remote.send(input)
+                run.backend.send(input)
                 return "已把文本发给「\(run.displayName)」（自动回车提交）。"
             }
         }

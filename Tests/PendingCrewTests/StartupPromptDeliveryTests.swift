@@ -96,6 +96,28 @@ final class StartupPromptDeliveryTests: XCTestCase {
         XCTAssertNil(core.health, "正常送达的 session 不该翻 health")
     }
 
+    /// crew 的真实开场正文包含整块 world model 与白板，可能长到终端把 `❯` 提示符
+    /// 顶出当前屏幕。正文已经落进 PTY 时不能因为找不到提示符就永远不发回车。
+    func testSubmitsWhenLongBriefScrollsTheInputMarkerOffScreen() async throws {
+        let script = try makeFakeTui(mode: "normal", readyDelay: 1)
+        // 小于 PTY canonical input 上限，但在 40×8 的屏幕里足以把提示符顶走。
+        let longPrompt = Array(repeating: marker, count: 30).joined(separator: " ")
+        let core = makeCore(script: script, prompt: longPrompt)
+        core.resize(cols: 40, rows: 8)
+        defer { core.stop() }
+
+        let landed = await waitUntil(20) {
+            core.screenText(maxLines: 60).contains("GOT:\(self.marker)")
+        }
+        XCTAssertTrue(
+            landed,
+            """
+            长开场正文把输入提示符顶出屏幕后没有被提交。当前画面：
+            \(core.screenText(maxLines: 60))
+            """)
+        XCTAssertNil(core.health, "长正文正常送达后不该翻 health")
+    }
+
     // MARK: - ③ 反复投不进去 → 到上限 → 翻 health，不许静默
 
     /// 假 TUI 画好了输入框，但**关掉回显、永不读取** —— 从我们这边看就是「投了，
@@ -158,9 +180,9 @@ final class StartupPromptDeliveryTests: XCTestCase {
 
     // MARK: - 器材
 
-    private func makeCore(script: String) -> AgentSessionCore {
+    private func makeCore(script: String, prompt: String? = nil) -> AgentSessionCore {
         AgentSessionCore(
-            config: SessionConfig(kind: .claudeCode, initialPrompt: marker),
+            config: SessionConfig(kind: .claudeCode, initialPrompt: prompt ?? marker),
             mode: .agent,
             executable: script,
             workdir: NSTemporaryDirectory(),
@@ -278,7 +300,8 @@ final class StartupPromptDeliveryTests: XCTestCase {
         fi
         box
         while IFS= read -r reply; do
-          LAST="GOT:$reply"
+          # 只回显首个词，避免长输入自己的回显再次把确认行顶出测试屏幕。
+          LAST="GOT:${reply%% *}"
           box
         done
         ;;

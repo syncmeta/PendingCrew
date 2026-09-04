@@ -65,6 +65,9 @@ struct StartupPromptDelivery {
     struct Observation {
         /// 输入行提示符后面的内容；`nil` = 屏幕上根本没有输入行（还没就绪）。
         let inputRow: String?
+        /// 正文尾部是否已出现在当前屏幕。超长正文会把 `❯` 顶出屏幕，届时它是
+        /// 「正文确实落地」的第二条证据；由调用方拿原始 prompt 与权威画面比对。
+        let bodyVisible: Bool
         /// 屏幕上有一个需要人回答的对话框（信任提示 / 命令审批这种）。
         let dialogPresent: Bool
         let now: Date
@@ -97,7 +100,9 @@ struct StartupPromptDelivery {
         case awaitingReady
         /// `notBefore` = 这一笔写入之后最早可以下结论的时刻（见 `Timing.submitGap`）。
         case writing(attempt: Int, notBefore: Date, deadline: Date, baseline: String)
-        case submitting(attempt: Int, deadline: Date, submittedContent: String)
+        /// `submittedContent == nil` = 正文太长，提示符已滚出屏幕；提交成功的判据是
+        /// 输入框重新出现。非 nil 时仍按输入行内容变化判定。
+        case submitting(attempt: Int, deadline: Date, submittedContent: String?)
         case finished
     }
 
@@ -155,7 +160,16 @@ struct StartupPromptDelivery {
 
         case let .writing(attempt, notBefore, deadline, baseline):
             // 画面正重绘到一半、输入行暂时不在 —— 等下一拍，别当成失败。
-            guard let row = obs.inputRow else { return .idle }
+            guard let row = obs.inputRow else {
+                // crew 开场正文可能长到把提示符顶出当前屏幕。正文尾部仍清楚可见时，
+                // 这不是「输入框没画好」，而是落地成功；继续走独立回车提交。
+                guard obs.now >= notBefore, obs.bodyVisible else { return .idle }
+                phase = .submitting(
+                    attempt: 1,
+                    deadline: obs.now.addingTimeInterval(timing.verifyWindow),
+                    submittedContent: nil)
+                return .submit(attempt: 1)
+            }
             if obs.now >= notBefore, Self.landed(row: row, baseline: baseline) {
                 phase = .submitting(
                     attempt: 1,
@@ -180,7 +194,7 @@ struct StartupPromptDelivery {
 
         case let .submitting(attempt, deadline, submitted):
             guard let row = obs.inputRow else { return .idle }
-            if row != submitted {
+            if submitted == nil || row != submitted {
                 // 输入行变了（通常是被清空）= 那一笔回车被接受了。
                 phase = .finished
                 return .delivered
@@ -239,6 +253,16 @@ enum ClaudeInputBox {
             return String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
         }
         return nil
+    }
+
+    /// 超长正文会把 `❯` 提示符滚出当前屏幕。去掉换行/空白后比对正文尾部，既不受
+    /// 终端自动折行影响，也不会把普通 banner 重绘误当成正文已落地。
+    static func bodyTailVisible(prompt: String, rows: [String]) -> Bool {
+        let compactPrompt = prompt.filter { !$0.isWhitespace }
+        guard !compactPrompt.isEmpty else { return false }
+        let needle = String(compactPrompt.suffix(64))
+        let screen = normalize(rows).joined().filter { !$0.isWhitespace }
+        return screen.contains(needle)
     }
 
     /// 这一屏上是不是摆着一个**需要人回答**的对话框（信任此文件夹 / 命令审批 / 选
