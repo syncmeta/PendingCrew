@@ -1,6 +1,6 @@
 cask "pendingcrew" do
-  version "0.1.23"
-  sha256 "74247253c28a4d2e35beca9e69a39d8e1eb71891fbead563ef4a1cb498540cbc"
+  version "0.1.24"
+  sha256 "cc7dff4af8dd66056ea44885353676a94a0d7652396d79bf6e08c046aaf5267c"
 
   url "https://github.com/syncmeta/PendingCrew/releases/download/v#{version}/PendingCrew-#{version}.dmg"
   name "PendingCrew"
