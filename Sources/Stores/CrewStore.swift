@@ -37,45 +37,69 @@ final class CrewStore: ObservableObject {
     @Published private(set) var loadingSubjects: Bool = false
     @Published var error: String?
 
+    // MARK: - 待办队列（取走语义，2026-09-04）
+
+    /// **「有新的待办」脉冲** —— 队列本身**不是** `@Published`。
+    ///
+    /// 原来九条队列都是 `@Published` 数组：生产方在循环里逐条 append，消费方
+    /// `.receive(on:)` 之后处理收到的那份快照、再清空。那是**发布「变化」、消费当
+    /// 「待办队列」**：`append cmd1` 发 `[cmd1]`、`append cmd2` 发 `[cmd1, cmd2]`，
+    /// 两份都排队投递 —— 第二次 sink 拿到的仍是它被发出时的那份，**cmd1 被处理第二遍**。
+    /// 真机实测：投 2 条 `start_session` 起了 **3 个** session，重复的正是排在前面
+    /// 那条，而且是两个不同的 agent 会话号（真起了两个，不是显示重复）。
+    ///
+    /// 现在队列自己持有待办、`take()` 取走即清空，消费方**只把这条脉冲当「去看一眼」
+    /// 的信号，不看它的值**。重复/滞后的脉冲只能取到空。
+    @Published private(set) var pendingRequestsRevision: UInt64 = 0
+
+    /// 入队 + 发脉冲。**两件事绑在一起，是为了让「忘了发脉冲」写不出来** ——
+    /// 忘了的症状是「派了活、什么都没发生」，正是这一整期在消灭的静默。
+    private func enqueue<T>(_ item: T, into queue: PendingRequestQueue<T>) {
+        queue.enqueue(item)
+        pendingRequestsRevision &+= 1
+    }
+
     /// 建带 captain 的 crew 后，请求自动起机长（用户要的零摩擦：新建即启动 + 群里报到）。
     /// `MacThreePaneView` 观察这个队列（它持有 `CrewSessionRunner`），捕获后清空。
     /// 放 store 而非建 crew 的 sheet：sheet 建完即 dismiss，且拿不到 window 级的
     /// sessionRunner —— 信号经 store 冒泡给常驻的 three-pane 才能可靠落地。
-    @Published var captainAutostartRequests: [CaptainAutostartRequest] = []
+    let captainAutostartRequests = PendingRequestQueue<CaptainAutostartRequest>()
 
-    /// `start_session` 命令排空后的待起会话队列 —— `MacRootView`（持
-    /// `CrewSessionRunner`）观察它,逐条调 `runner.startForBrief`,起完清空。
+    /// `start_session` 命令排空后的待起会话队列 —— `SessionHost` 收到脉冲后
+    /// `take()` 整批，逐条调 `runner.startForBrief`。
     ///
-    /// **数组而非单值**:单个 `@Published` 槽位在同一次目录监听 tick 里连续
-    /// 两条 `start_session` 落地时会丢命令 —— SwiftUI 对同步的 `@Published`
-    /// 赋值做合并,`.onChange` 只看得到最后一次赋值。数组 append 不丢、
-    /// 消费方读完整体后清空；`captainAutostartRequests` 也使用同样的队列语义。
-    @Published var sessionSpawnRequests: [SessionSpawnRequest] = []
+    /// **为什么不是单值**：同一次目录监听 tick 里连续两条 `start_session` 落地时，
+    /// 单个 `@Published` 槽位会丢命令（同步赋值被合并，只看得到最后一次）。
+    ///
+    /// **为什么也不是 `@Published` 数组**（2026-09-04 真机实测出的 bug）：那样是
+    /// 「发布变化、消费当队列」，逐条 append 会发出 `[cmd1]` 和 `[cmd1, cmd2]` 两份
+    /// 快照，第二次 sink 拿到的仍是它被发出时的那份 → **cmd1 被处理第二遍**。
+    /// 投 2 条命令起了 3 个 session，而 `start_session` 是要花订阅额度的动作。
+    /// 现在改成取走语义，见 `PendingRequestQueue`。
+    let sessionSpawnRequests = PendingRequestQueue<SessionSpawnRequest>()
     /// captain MCP 交接命令待执行队列。helper 只入队；SessionHost 把它交给持有
     /// live runs 的 `CrewSessionRunner`，与 human UI 复用同一真实交接服务。
-    @Published var captainHandoffRequests: [CaptainHandoffControlRequest] = []
-    /// `set_profile` 命令排空后的待切换队列（同 sessionSpawnRequests 的数组语义,
-    /// 防同 tick coalescing 丢命令）。`MacRootView` 观察执行。
-    @Published var profileChangeRequests: [SessionProfileChangeRequest] = []
+    let captainHandoffRequests = PendingRequestQueue<CaptainHandoffControlRequest>()
+    /// `set_profile` 命令排空后的待切换队列（取走语义同 `sessionSpawnRequests`）。
+    let profileChangeRequests = PendingRequestQueue<SessionProfileChangeRequest>()
     /// `schedule_wakeup` 命令排空后的待登记队列。`MacRootView` 交给
     /// `CrewSessionRunner.scheduleWakeup`（持久化 + 定时器）。
-    @Published var wakeupRequests: [SessionWakeupRequest] = []
+    let wakeupRequests = PendingRequestQueue<SessionWakeupRequest>()
     /// `crew_message` 投递后的待唤醒队列（目标 crew 机长）。`MacRootView` 找
     /// 目标机长 run 直投注入（idle 才注,busy 靠下轮白板注入）。
-    @Published var crewMessageWakes: [CrewMessageWake] = []
+    let crewMessageWakes = PendingRequestQueue<CrewMessageWake>()
     /// `listen` 命令排空后的待登记队列（群聊收听;#465）。`MacRootView` 交给
     /// `CrewSessionRunner.applyListen`（登记 + 白板观察 + 到期自动停）。
-    @Published var listenRequests: [SessionListenRequest] = []
+    let listenRequests = PendingRequestQueue<SessionListenRequest>()
 
     /// 机长 session 操作（inspect_session / nudge_session / stop_session）待执行
-    /// 队列。数组语义同 `sessionSpawnRequests`（防同 tick 丢命令）。执行 + 写应答
-    /// 文件归 runner（`MacRootView` 观察接线）。
-    @Published var sessionOpsRequests: [SessionOpsRequest] = []
+    /// 队列。取走语义同 `sessionSpawnRequests`。执行 + 写应答文件归 runner。
+    let sessionOpsRequests = PendingRequestQueue<SessionOpsRequest>()
 
     /// 机长 `change_workdir`（改工作目录 + 迁 agent 上下文）待执行队列。规划要看
     /// **在跑的 run**（谁还活着 / 谁在干活），那份状态只有 runner 有 —— 所以同
     /// `sessionOpsRequests`：这里只排队，执行 + 写应答归 `MacRootView` 接线。
-    @Published var workdirChangeRequests: [WorkdirChangeRequest] = []
+    let workdirChangeRequests = PendingRequestQueue<WorkdirChangeRequest>()
 
     /// 每个 crew 白板的**末条消息**（键缺失 = 该 crew 白板是空的）。侧栏两种视图
     /// 共用的单一数据源：时间流的排序键、行里的预览文案与行尾相对时间都读它。
@@ -288,9 +312,9 @@ final class CrewStore: ObservableObject {
         // 当前建 crew 必带 systemGenerated captain；用 detail.captain 兜底判断，
         // 防将来出现无 captain 的 crew 也误触发。
         if autostartCaptain, details[response.crewId]?.captain != nil {
-            captainAutostartRequests.append(CaptainAutostartRequest(
+            enqueue(CaptainAutostartRequest(
                 crewId: response.crewId,
-                childTitle: details[response.crewId]?.crew.title ?? response.crewId))
+                childTitle: details[response.crewId]?.crew.title ?? response.crewId), into: captainAutostartRequests)
         }
         return response
     }
@@ -486,10 +510,10 @@ final class CrewStore: ObservableObject {
                         text: "起 session 失败：缺少工作区选择。请让机长重新调用 start_session，并明确 isolation=true/false。")
                     continue
                 }
-                sessionSpawnRequests.append(SessionSpawnRequest(
+                enqueue(SessionSpawnRequest(
                     crewId: cmd.crewId, brief: cmd.brief,
                     runner: cmd.runner, isolation: isolation,
-                    model: cmd.model, effort: cmd.effort, title: cmd.title))
+                    model: cmd.model, effort: cmd.effort, title: cmd.title), into: sessionSpawnRequests)
             case "handoff_captain":
                 let requestedTarget = cmd.targetCrewId?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let targetParents = requestedTarget.map { LocalCrewStore.shared.parentIds(of: $0) } ?? []
@@ -520,51 +544,51 @@ final class CrewStore: ObservableObject {
                         text: "机长交接被拒：为直系子 crew 新建机长必须明确 runner/model/effort/opening brief。旧机长保持不变。")
                     continue
                 }
-                captainHandoffRequests.append(CaptainHandoffControlRequest(
+                enqueue(CaptainHandoffControlRequest(
                     commandId: cmd.id, sourceCrewId: cmd.crewId,
                     targetCrewId: targetCrewId,
                     requesterSessionId: cmd.requesterSessionId,
                     targetSessionId: cmd.sessionId, runner: cmd.runner,
                     model: cmd.model, effort: cmd.effort,
-                    title: cmd.title, openingBrief: cmd.note))
+                    title: cmd.title, openingBrief: cmd.note), into: captainHandoffRequests)
             case "set_profile":
                 guard let sid = cmd.sessionId else { break }
-                profileChangeRequests.append(SessionProfileChangeRequest(
-                    crewId: cmd.crewId, sessionId: sid, model: cmd.model, effort: cmd.effort))
+                enqueue(SessionProfileChangeRequest(
+                    crewId: cmd.crewId, sessionId: sid, model: cmd.model, effort: cmd.effort), into: profileChangeRequests)
             case "schedule_wakeup":
                 guard let sid = cmd.sessionId, let fireAt = cmd.fireAt else { break }
-                wakeupRequests.append(SessionWakeupRequest(
+                enqueue(SessionWakeupRequest(
                     id: cmd.id, crewId: cmd.crewId, sessionId: sid,
-                    fireAt: fireAt, note: cmd.note ?? ""))
+                    fireAt: fireAt, note: cmd.note ?? ""), into: wakeupRequests)
             case "listen":
                 guard let sid = cmd.sessionId else { break }
-                listenRequests.append(SessionListenRequest(
+                enqueue(SessionListenRequest(
                     crewId: cmd.crewId, sessionId: sid,
-                    until: cmd.fireAt, senders: cmd.senders, off: cmd.off ?? false))
+                    until: cmd.fireAt, senders: cmd.senders, off: cmd.off ?? false), into: listenRequests)
             case "inspect_session":
                 guard let sid = cmd.sessionId else { break }
-                sessionOpsRequests.append(SessionOpsRequest(
+                enqueue(SessionOpsRequest(
                     commandId: cmd.id, crewId: cmd.crewId, requesterSessionId: nil,
-                    targetSessionId: sid, input: nil, stopReason: nil))
+                    targetSessionId: sid, input: nil, stopReason: nil), into: sessionOpsRequests)
             case "nudge_session":
                 guard let sid = cmd.sessionId else { break }
-                sessionOpsRequests.append(SessionOpsRequest(
+                enqueue(SessionOpsRequest(
                     commandId: cmd.id, crewId: cmd.crewId, requesterSessionId: nil,
-                    targetSessionId: sid, input: cmd.note ?? "", stopReason: nil))
+                    targetSessionId: sid, input: cmd.note ?? "", stopReason: nil), into: sessionOpsRequests)
             case "stop_session":
                 guard let sid = cmd.sessionId,
                       let requester = cmd.requesterSessionId,
                       let reason = cmd.note else { break }
-                sessionOpsRequests.append(SessionOpsRequest(
+                enqueue(SessionOpsRequest(
                     commandId: cmd.id, crewId: cmd.crewId, requesterSessionId: requester,
-                    targetSessionId: sid, input: nil, stopReason: reason))
+                    targetSessionId: sid, input: nil, stopReason: reason), into: sessionOpsRequests)
             case "change_workdir":
-                workdirChangeRequests.append(WorkdirChangeRequest(
+                enqueue(WorkdirChangeRequest(
                     commandId: cmd.id, crewId: cmd.crewId,
                     callerSessionId: cmd.sessionId, targetHint: cmd.title,
                     newPath: cmd.path ?? "",
                     includeChildren: cmd.includeChildren ?? true,
-                    confirm: cmd.confirm ?? false))
+                    confirm: cmd.confirm ?? false), into: workdirChangeRequests)
             case "crew_message":
                 executeCrewMessage(cmd)
             case "create_child_crew":
@@ -651,7 +675,7 @@ final class CrewStore: ObservableObject {
                 }
                 return
             }
-            captainAutostartRequests.append(autostart)
+            enqueue(autostart, into: captainAutostartRequests)
 
             if let attachFailure {
                 postSystemNotice(
@@ -893,8 +917,8 @@ final class CrewStore: ObservableObject {
                 crewId: target, sessionId: cmd.sessionId ?? "captain-\(cmd.crewId)",
                 text: cmd.brief, category: "report", senderName: label,
                 mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
-            crewMessageWakes.append(CrewMessageWake(
-                targetCrewId: target, text: cmd.brief, senderLabel: label))
+            enqueue(CrewMessageWake(
+                targetCrewId: target, text: cmd.brief, senderLabel: label), into: crewMessageWakes)
             postSystemNotice(
                 crewId: cmd.crewId,
                 text: "已送达「\(store.title(of: target) ?? target)」群聊。")
