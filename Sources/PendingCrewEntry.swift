@@ -28,6 +28,9 @@ struct PendingCrewEntry {
         #if os(macOS)
         // P5 无界面自检：必须在 daemon / GUI 身份之前截住，绝不为查状态开窗口。
         if SessionDaemonStatusMain.runIfRequested(CommandLine.arguments) { return }
+        // 同一拍的第二支：无界面 viewer 探针（P5a 证据工具）。同样绝不开窗口 ——
+        // 「不开界面也能看到 session 的画面」正是它要证的那件事。
+        if SessionDaemonAttachMain.runIfRequested(CommandLine.arguments) { return }
         // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
         if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
