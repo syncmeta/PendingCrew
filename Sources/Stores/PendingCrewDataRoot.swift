@@ -51,6 +51,11 @@ enum PendingCrewDataRoot {
         return base.appendingPathComponent("PendingCrew", isDirectory: true)
     }
 
+    /// 数据根**是不是被环境变量挪走了**。`startupLine` 与 daemon 日志命名共用这一条
+    /// 判定 —— 两处各算一遍就会有一天只改了其中一处。
+    static let isOverridden: Bool = !(ProcessInfo.processInfo.environment[overrideEnvKey] ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
     /// 数据根下的一个子目录（`whiteboards` / `attachments` / `crashes` …）。
     ///
     /// ⚠️ **运行时状态就住在 `whiteboards/` 里面**，不在数据根下：`quota.json` /
@@ -72,9 +77,7 @@ enum PendingCrewDataRoot {
     ///   （daemon 的 `SessionDaemonHost.start`、GUI 的
     ///   `OrchestrationGate.installForGUIProcess`）都走默认值。
     static func startupLine(root: URL = url) -> String {
-        let overridden = !(ProcessInfo.processInfo.environment[overrideEnvKey] ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return "数据根 = \(root.path)"
-            + (overridden ? "（来自 \(overrideEnvKey)，**不是**默认目录）" : "（默认）")
+            + (isOverridden ? "（来自 \(overrideEnvKey)，**不是**默认目录）" : "（默认）")
     }
 }
