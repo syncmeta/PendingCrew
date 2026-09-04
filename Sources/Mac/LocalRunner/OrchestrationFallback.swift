@@ -108,6 +108,11 @@ enum OrchestrationFallback {
                 "拉起后台进程之后等了 \(Int(limit)) 秒仍然没握上手，而它还在运行 —— "
                 + "起没起成说不准。用 `PendingCrew --daemon-status` 问一下它的实况；"
                 + "或者把它停掉再重试。**本窗口不会自己接管编排**：那边可能真的有人在管账。")
+        case .timedOutWithoutSpawn:
+            // 这一轮我们根本没拉过（锁上写着有 daemon 在跑 / 上次那个还活着）。
+            // 等够了不等于「说不准」—— 该去问锁：是谁占着、能不能取到，
+            // 由 §9.2 那张表决定继续重连还是把文案升级成可操作的。
+            return .notAttempted
         case .handshake, .pending:
             return .launched
         }
