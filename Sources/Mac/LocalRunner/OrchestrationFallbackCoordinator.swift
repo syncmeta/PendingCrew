@@ -65,7 +65,8 @@ final class OrchestrationFallbackCoordinator {
     /// 连不上之后走一遍：取观测量 → 问判据 → 执行。返回裁决供界面显示。
     @discardableResult
     func handle(spawn: OrchestrationFallback.Spawn,
-                linkFailure: OrchestrationFallback.LinkFailure?)
+                linkFailure: OrchestrationFallback.LinkFailure?,
+                stalledFor: TimeInterval? = nil)
         -> OrchestrationFallback.Decision {
         // **只在拉 daemon 明确失败、且对端一个字都没回过的时候才去取锁。**
         // 其余任何情形取锁都是在给自己下绊子（理由见类型注释第一条）。
@@ -76,7 +77,8 @@ final class OrchestrationFallbackCoordinator {
             lock = nil
         }
         let decision = OrchestrationFallback.decide(
-            lock: lock, spawn: spawn, linkFailure: linkFailure, dataRoot: dataRoot)
+            lock: lock, spawn: spawn, linkFailure: linkFailure, dataRoot: dataRoot,
+            stalledFor: stalledFor)
 
         guard case let .takeOverLocally(reason) = decision,
               case let .acquired(handle)? = lock else {
