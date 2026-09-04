@@ -73,20 +73,76 @@ final class SessionDaemonAttachTests: XCTestCase {
         }
     }
 
-    /// codex session 走的是 transcript 事件，服务端**根本不发终端快照**
-    /// （`SessionProtocolServer.attach` 里 `wantsSnapshot` 那一行）。
-    /// 所以这条要在 attach 之前就说清楚，而不是让人对着一个永远不来的快照等超时。
-    func test_codex_session直接说没有终端快照而不是干等() {
+    /// codex session **不再被拒绝**。它没有终端画面，但它有可验的落点：
+    /// 服务端在 attach 一个 codex session 时会把整份 reduced transcript 当
+    /// `codexNotification` 事件重放给这条连接（`SessionProtocolServer.attach` 里
+    /// `transcript-events` 那一段），而探针握手用的就是含该能力的默认能力集。
+    /// 于是「断开→重连→内容连续」在 codex 上照样证得出来 —— 只是证据是**对话记录**，
+    /// 不是画面。
+    func test_codex_session也解析得出kind而不再被拒绝() throws {
         let sessions = [Self.summary(id: "worker-codex01", kind: .codex)]
-
-        XCTAssertThrowsError(
+        XCTAssertEqual(
             try SessionDaemonAttachProbe.resolveTarget(sessionId: "worker-codex01",
-                                                       in: sessions)
-        ) { error in
-            let message = String(describing: error)
-            XCTAssertTrue(message.contains("codex"),
-                          "错误里要说清是 codex session 没有终端快照：\(message)")
-        }
+                                                       in: sessions),
+            .codex)
+    }
+
+    func test_codex_session打印transcript并说明这不是画面() throws {
+        let harness = try ProbeHarness(capabilities: capabilities)
+        harness.registerCodexSession(id: "worker-codex01",
+                                     userText: "帮我确认白板注入走对了通道",
+                                     agentText: "走的是 additionalContext，不塞进 input。")
+
+        let report = try SessionDaemonAttachProbe.run(
+            options: .init(sessionId: "worker-codex01", reconnect: false,
+                           cols: 80, rows: 25, maxLines: 200),
+            timeout: 5,
+            connect: harness.connect)
+
+        XCTAssertEqual(report.screens.count, 1)
+        XCTAssertEqual(report.screens.first?.isTranscript, true)
+        XCTAssertGreaterThan(report.screens.first?.itemCount ?? 0, 0,
+                             "transcript 条数得如实报出来")
+        let text = report.screens.first?.text ?? ""
+        XCTAssertTrue(text.contains("帮我确认白板注入走对了通道"), text)
+        XCTAssertTrue(text.contains("走的是 additionalContext"), text)
+        XCTAssertTrue(report.text.contains("对话记录"),
+                      "输出里必须明说这份不是终端画面：\(report.text)")
+    }
+
+    /// codex 上「断开 → 重连 → 内容连续」的那条证据。
+    func test_codex_断开重连后两份transcript一致() throws {
+        let harness = try ProbeHarness(capabilities: capabilities)
+        harness.registerCodexSession(id: "worker-codex01",
+                                     userText: "第一句", agentText: "第二句")
+
+        let report = try SessionDaemonAttachProbe.run(
+            options: .init(sessionId: "worker-codex01", reconnect: true,
+                           cols: 80, rows: 25, maxLines: 200),
+            timeout: 5,
+            connect: harness.connect)
+
+        XCTAssertEqual(report.screens.count, 2)
+        XCTAssertEqual(report.screens.last?.text, report.screens.first?.text,
+                       "重连后 transcript 必须与断开前一致")
+        XCTAssertEqual(harness.connectCount, 2, "必须是真的新连接")
+        XCTAssertTrue(report.text.contains("两份 transcript 文本一致：是"), report.text)
+    }
+
+    /// transcript 为空时**不许假装有内容**（那就成了「弱证据」）。
+    func test_codex_transcript为空时明说为空() throws {
+        let harness = try ProbeHarness(capabilities: capabilities)
+        harness.registerCodexSession(id: "worker-codex01", userText: nil, agentText: nil)
+
+        let report = try SessionDaemonAttachProbe.run(
+            options: .init(sessionId: "worker-codex01", reconnect: false,
+                           cols: 80, rows: 25, maxLines: 200),
+            timeout: 5,
+            connect: harness.connect)
+
+        XCTAssertEqual(report.screens.first?.itemCount, 0)
+        XCTAssertTrue(report.screens.first?.text.contains("为空") == true,
+                      report.screens.first?.text ?? "")
     }
 
     func test_有这个session时解析出它的kind() throws {
@@ -254,6 +310,26 @@ private final class ProbeHarness {
         let backend = ProtocolTestBackend(kind: .claudeCode)
         backend.terminalSnapshot = TerminalSnapshotEncoder.encode(terminal.terminal,
                                                                   probe: terminal.probe)
+        backends.append(backend)
+        server.register(sessionId: id, backend: backend)
+    }
+
+    /// codex 没有终端 —— 它过江的是 reduced transcript。用真的 `CodexTranscript`
+    /// 消化真的 `item/completed` 通知来造，不手搓 `CodexThreadItem`。
+    func registerCodexSession(id: String, userText: String?, agentText: String?) {
+        let transcript = CodexTranscript()
+        if let userText {
+            transcript.apply(method: "item/completed", params: ["item": [
+                "id": "u1", "type": "userMessage",
+                "content": [["type": "text", "text": userText]]]])
+        }
+        if let agentText {
+            transcript.apply(method: "item/completed", params: ["item": [
+                "id": "a1", "type": "agentMessage", "phase": "final_answer",
+                "text": agentText]])
+        }
+        let backend = ProtocolTestBackend(kind: .codex)
+        backend.codexHistory = transcript.items
         backends.append(backend)
         server.register(sessionId: id, backend: backend)
     }
