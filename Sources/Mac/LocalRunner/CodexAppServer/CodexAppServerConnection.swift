@@ -1,6 +1,22 @@
 #if os(macOS)
 import Foundation
 
+/// `FileHandle.readabilityHandler` stays readable at EOF on macOS. If the handler merely
+/// returns after `availableData` yields an empty buffer, Foundation immediately invokes it
+/// again and one dead pipe consumes a CPU core forever. The daemon owns many long-lived
+/// connections, so those cores accumulate until fresh PTY reads are starved and Claude blocks
+/// during terminal setup. EOF therefore has to disarm the handler in the same callback.
+enum CodexPipeReadability {
+    static func drain(_ handle: FileHandle, consume: (Data) -> Void) {
+        let data = handle.availableData
+        guard !data.isEmpty else {
+            handle.readabilityHandler = nil
+            return
+        }
+        consume(data)
+    }
+}
+
 /// Owns the `codex app-server` child process and its stdio pipes. Encodes our
 /// requests via CodexRPCMessage, routes incoming lines through CodexRPCDispatcher.
 /// The hard logic (framing, two-id routing, early-response buffering) is unit-tested
@@ -34,16 +50,18 @@ actor CodexAppServerConnection {
         await dispatcher.setServerRequestHandler(onServerRequest)
         await dispatcher.setNotificationHandler(onNotification)
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] h in
-            let data = h.availableData
-            guard !data.isEmpty else { return }
-            Task { await self?.ingest(data) }
+            CodexPipeReadability.drain(h) { data in
+                Task { await self?.ingest(data) }
+            }
         }
         // Drain stderr too. codex writes tracing/diagnostics there; if nobody reads it,
         // the ~64KB kernel pipe buffer fills, codex blocks on the write, and the whole
         // app-server stalls — a "turn never completes" deadlock that only surfaces after
         // sustained output (a short turn stays under 64KB, which is why unit/one-turn
         // checks pass). Discarded in v1; we just need to keep the pipe empty.
-        stderrPipe.fileHandleForReading.readabilityHandler = { h in _ = h.availableData }
+        stderrPipe.fileHandleForReading.readabilityHandler = { h in
+            CodexPipeReadability.drain(h) { _ in }
+        }
         process.terminationHandler = { [weak self] _ in
             Task { await self?.handleTermination() }
         }
@@ -98,6 +116,8 @@ actor CodexAppServerConnection {
     }
 
     func terminate() {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
         if process.isRunning { process.terminate() }
         let pid = process.processIdentifier
         Task { await terminateTree(pid: pid, graceSeconds: 2.0) }

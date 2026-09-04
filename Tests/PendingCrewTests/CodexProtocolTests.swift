@@ -294,3 +294,33 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(r["action"] as? String, "decline")
     }
 }
+
+final class CodexPipeReadabilityTests: XCTestCase {
+    func testEOFDisarmsReadabilityHandlerInsteadOfSpinningForever() {
+        let pipe = Pipe()
+        let reader = pipe.fileHandleForReading
+        reader.readabilityHandler = { _ in }
+        pipe.fileHandleForWriting.closeFile()
+
+        var received: Data?
+        CodexPipeReadability.drain(reader) { received = $0 }
+
+        XCTAssertNil(received)
+        XCTAssertNil(reader.readabilityHandler,
+                     "EOF must disarm the handler; otherwise Foundation repeatedly calls availableData")
+    }
+
+    func testPayloadStaysArmedAndIsDelivered() {
+        let pipe = Pipe()
+        let reader = pipe.fileHandleForReading
+        reader.readabilityHandler = { _ in }
+        pipe.fileHandleForWriting.write(Data("hello".utf8))
+
+        var received: Data?
+        CodexPipeReadability.drain(reader) { received = $0 }
+
+        XCTAssertEqual(received, Data("hello".utf8))
+        XCTAssertNotNil(reader.readabilityHandler)
+        pipe.fileHandleForWriting.closeFile()
+    }
+}
