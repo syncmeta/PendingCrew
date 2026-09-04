@@ -207,3 +207,53 @@ transcript 逐行核过（`…/c100b408-….jsonl`）：
 9. **翻默认之后没有走过一次「双击图标」的真实启动**：本轮所有证据都来自 CLI 身份
    （`--daemon` / `--daemon-status` / `--daemon-attach`），viewer 自动拉起 daemon 那条路
    （`ViewerSessionClient.connect`）在真 GUI 里没跑过。它属于安装态验收那一档。
+
+
+---
+
+## 九、P5a 收尾：翻默认之后又逮到的四条，以及最终交付状态
+
+> 这一节是**在上面那份闭环之后**发生的事。上面记的是「默认还没翻」时的证据；
+> 这一节记「翻默认」本身，以及翻完之后**在真机上逐条逮出来的四个洞**。
+
+### 已打包那份（基线 `9823c44`，这一栏之后不再变动）
+
+- 包 = 该 commit 的 **Release** 构建，**已签名**（`codesign --verify --deep --strict`
+  通过 + `satisfies its Designated Requirement`，zip 完整性通过），**未公证**
+  —— 它不走任何发布渠道，只在本机跑。
+- 全量：`Executed 1940 tests, with 3 tests skipped and 0 failures`；macOS + iOS
+  Simulator 两端 `** BUILD SUCCEEDED **`。
+- 真机：**精确 2 个命令文件 → 恰好 2 个不同 session**，两个 brief 各执行一次。
+- claude / codex **两条 CLI 闭环，均零 nudge**；断开 → **新开连接**重连 → 画面 /
+  transcript 一致。
+- **未 push、未写 Sparkle feed、未发 GitHub Release、未动 Homebrew、未打 tag。**
+
+### 翻默认之后逮到的四个洞（按发现顺序，全部已修）
+
+| # | 洞 | 怎么被逮到的 |
+|---|---|---|
+| 1 | daemon **起来即退、退出码 0**，而拉起方只看 `process.run()` 没抛错 → 记成「起来了」→ 无限「正在连接」，**契约里唯一允许接管的那一支在最常见的失败原因下根本到不了** | 真机：数据根 `chmod 500` |
+| 2 | `openLink` 把「**socket 连上**」当成「**握上手**」（`isConnected` 紧跟 `connect()`，从不等 `daemonHello`）→ 接受连接但不回话的 daemon 会让降级判定永不被调用 | 读代码；修法是把 `Bool` 换成三态，**让填错的写法表达不出来** |
+| 3 | daemon 与 GUI **各自捧着启动时的快照整份覆写** `local-crews.json` → 后写的抹掉先写的、无声 | 真机：外部改名 + 隐藏，daemon 写一次盘**两处全没** |
+| 4 | 派活命令**逐条 append 一个 `@Published` 数组**，消费方拿到的是每次 append 各发一次的快照 → **第一条被处理两遍**（花订阅额度） | 真机：**输入数过**，2 个命令文件 → 3 个 session |
+
+**四个洞的共同形状**：都不是「算错了」，是**把一个更弱的信号当成了想要的那个事实**
+（进程起来了≠连得上；socket 连上≠握上手；我内存里那份≠盘上那份；发布的变化≠待办队列）。
+
+### 修法上反复出现的那一手
+
+三次都不是「改对那一行」，而是**让错的那种写法表达不出来**：
+`Bool` → 三态 `LinkState`；12 个落盘点 → 一个 `mutatingCrews` 收口；
+入队与发脉冲 → 绑进同一个 `enqueue`。**接线里不许留判断只是下限，上限是这个。**
+
+### 仍未验（独立记账，不算 P5a 完成）
+
+1. 安装态的「更新 app 不断线」（A1 三条路径）。
+2. `SMAppService` 开机自启 + 崩溃自拉；菜单栏常驻。
+3. `SessionReconnectPolicy.daemonIdleTimeout` 的半开连接回收（仍无第二处引用）。
+4. 「消费期间新到的进下一批」只在队列层与复刻 harness 上验过，**没在真 daemon 上
+   造出排空与消费交叠**。
+5. 九条同形队列里**只有 `start_session` 有真机读数**，其余八条共用同一收口但各自没有。
+6. `ViewerSessionClient` 那条腿只在 GUI 里活，所以「socketOpen 但等不到 hello →
+   到上限 → fail-closed」**只有单测覆盖**。
+7. **人类的真人验收尚未进行**（人类 Todo #3）：关掉 app / 重开之后 session 还在不在。
