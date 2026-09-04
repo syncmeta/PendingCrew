@@ -2619,20 +2619,25 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         guard !isMirror else { return }      // 白板 fail-loud + 续跑挂钩都归真身
         guard !announcedHealthKinds.contains(h.kind) else { return }
         announcedHealthKinds.insert(h.kind)
-        if h.kind == .launchFailed {
-            // 拉起失败 = 派出去的活没人干（#541）。**定向 @ 机长**：机长看到才能
-            // 立刻改派，广播一条谁都不认领等于白喊。走与「唤醒没回执」告警同一套
-            // 机制（system 身份 + captain mention + question 类别），不另起炉灶。
+        if h.kind == .launchFailed || h.kind == .briefUndelivered {
+            // 拉起失败 = 派出去的活没人干（#541）；开场任务没送到（P5a）在机长这边
+            // 是**同一件事** —— 进程活得好好的，但它一个字都没收到，活等于没派出去。
+            // 两者都**定向 @ 机长**：机长看到才能立刻改派/代答，广播一条谁都不认领
+            // 等于白喊。走与「唤醒没回执」告警同一套机制（system 身份 + captain
+            // mention + question 类别），不另起炉灶。
             // 例外：**挂掉的就是机长自己**时不 @ —— @机长会触发「目标缺席拉起」，
             // 起不来又发一条，就此成环；那条广播给人看。
+            let headline = h.kind == .launchFailed ? "拉起失败" : "开场任务没送到"
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system",
-                text: "\(displayName)（\(sessionId)）拉起失败：\(h.detail)"
+                text: "\(displayName)（\(sessionId)）\(headline)：\(h.detail)"
                     + "\n派给它的活无人接手，请改派或重起。任务：\(taskBrief.prefix(80))",
                 category: "question", senderName: "系统",
                 mentions: role == .captain
                     ? nil : [LocalWhiteboardMention(kind: "captain", targetId: nil)])
-            onLaunchFailure?(self, h)
+            // `onLaunchFailure` 挂着机长交接事务的回滚 —— 那条只认「从来没跑起来」，
+            // 开场没送到的 session 进程还在，不该走它。
+            if h.kind == .launchFailed { onLaunchFailure?(self, h) }
             return
         }
         LocalWhiteboardStore.shared.appendSessionMessage(
