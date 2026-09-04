@@ -26,11 +26,35 @@ final class ViewerSessionClient: ObservableObject {
     /// 由 `SessionHost` 挂上去起本地编排 —— **这条腿自己不编排任何东西**。
     var onTakeOverLocally: (() -> Void)?
 
+    /// 拉起 daemon 的结果。
+    ///
+    /// **不是 `Bool`**（2026-09-04 真机逮到的洞）：`Process.run()` 没抛错只说明
+    /// exec 成了，而 daemon 在拿不到编排锁 / 打不开锁文件时会打一行原因然后
+    /// **当场 `exit(0)`** —— 只看 run() 会把这两种都记成「起来了」，于是契约里
+    /// 唯一允许接管的那一支在「后台起不来」最常见的原因下根本到不了。
+    /// 所以这里交出的是一个**能一直问「它还活着吗」的探针**。
+    enum DaemonLaunch {
+        case threw(String)
+        case started(child: () -> DaemonLaunchRace.ChildState)
+    }
+
+    /// 拉起之后最多等多久还没握上手就下「说不准」的结论（判据第 4 条）。
+    static let launchRaceLimit: TimeInterval = 15
+    private static let racePollInterval: TimeInterval = 0.25
+    /// 「后台在跑，我继续重连」这句话的寿命（`decide` 的 `stallLimit`）。
+    static let stallLimit: TimeInterval = 60
+
     private let runner: CrewSessionRunner
     private let paths: PendingCrewDaemonPaths
     /// 编排锁所在的数据根（锁文件就落在它下面，同 `SessionDaemonControl`）。
     private var dataRoot: URL { paths.lock.deletingLastPathComponent() }
-    private let spawnDaemon: () -> Bool
+    private let spawnDaemon: () -> DaemonLaunch
+    /// 这一串连不上是从什么时候开始的（连上就清）。喂给 `decide` 的 `stalledFor`。
+    private var stalledSince: Date?
+    /// 上一次我们拉起来的那个子进程。**还活着就别再拉一个** —— 否则每次
+    /// 「说不准」都会再造一个不回话的 daemon 出来。
+    private var lastSpawnedChild: (() -> DaemonLaunchRace.ChildState)?
+    private var raceStartedAt: Date?
     private var link: UnixSocketTransport?
     private var client: SessionProtocolClient?
     private var heartbeat: Timer?
@@ -39,7 +63,7 @@ final class ViewerSessionClient: ObservableObject {
 
     init(runner: CrewSessionRunner,
          paths: PendingCrewDaemonPaths? = nil,
-         spawnDaemon: (() -> Bool)? = nil) {
+         spawnDaemon: (() -> DaemonLaunch)? = nil) {
         self.runner = runner
         let resolved = paths ?? .standard()
         self.paths = resolved
@@ -65,20 +89,73 @@ final class ViewerSessionClient: ObservableObject {
 
     private func connect() {
         guard !stopped else { return }
-        // 「后台在不在」「拉起来了没有」是**两个**观测量，而且必须分开记：
-        // §9.2 唯一允许接管的那一支要求「拉 daemon **确实失败**」，
-        // 把「起来了但还没连上」混进去就等于把赌注挪了个地方。
-        var spawn = OrchestrationFallback.Spawn.notAttempted
-        if SessionDaemonControl.runningDaemonPid(paths: paths) == nil {
-            if spawnDaemon() {
-                spawn = .launched
-            } else {
-                spawn = .failed("拉不起后台进程（PendingCrew --daemon）")
-                lastError = "拉不起后台进程（PendingCrew --daemon）。"
-                applyFallback(spawn: spawn, linkFailure: nil)
-                return
-            }
+        if stalledSince == nil { stalledSince = Date() }
+        // 锁上写着有 daemon 在跑 → 不拉，直接连。
+        guard SessionDaemonControl.runningDaemonPid(paths: paths) == nil else {
+            if !openLink() { applyFallback(spawn: .notAttempted, linkFailure: nil) }
+            return
         }
+        // 上一次拉起来的那个还活着 → **别再拉一个**。否则每次「说不准」都会
+        // 再造一个不回话的 daemon 出来，越攒越多。
+        if let child = lastSpawnedChild, child() == .alive {
+            if !openLink() { applyFallback(spawn: .notAttempted, linkFailure: nil) }
+            return
+        }
+        launchAndRace()
+    }
+
+    /// 拉起 daemon，然后**并行等两件事**：首次协议握手 / 子进程终止，谁先到算谁
+    /// （判据第 1–4 条，判定本身在 `DaemonLaunchRace`）。
+    ///
+    /// **这不是「睡一个宽限窗再看它还在不在」** —— 那是在赌时序：窗给短了会把
+    /// 「正要退的」判成起成了，给长了每次启动都白等。这里每一拍都真去连一次，
+    /// 连上就立刻收工，进程没了就立刻判失败。
+    private func launchAndRace() {
+        switch spawnDaemon() {
+        case let .threw(reason):
+            lastError = "拉不起后台进程：\(reason)"
+            applyFallback(
+                spawn: OrchestrationFallback.spawn(
+                    launchThrew: reason, race: .pending, limit: Self.launchRaceLimit),
+                linkFailure: nil)
+        case let .started(child):
+            lastSpawnedChild = child
+            raceStartedAt = Date()
+            pollRace(child: child)
+        }
+    }
+
+    private func pollRace(child: @escaping () -> DaemonLaunchRace.ChildState) {
+        guard !stopped, let startedAt = raceStartedAt else { return }
+        // 「握上手了没有」只能靠真去连一次 —— 连上并握上手就是它先到。
+        if openLink() {
+            raceStartedAt = nil
+            return
+        }
+        let outcome = DaemonLaunchRace.step(
+            handshakeSucceeded: false, child: child(),
+            elapsed: Date().timeIntervalSince(startedAt), limit: Self.launchRaceLimit)
+        switch outcome {
+        case .pending:
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.racePollInterval) {
+                [weak self] in
+                MainActor.assumeIsolated { self?.pollRace(child: child) }
+            }
+        case .handshake:
+            raceStartedAt = nil        // openLink 已经处理，走不到
+        case .exitedBeforeHandshake, .timedOutStillAlive:
+            raceStartedAt = nil
+            if case .exitedBeforeHandshake = outcome { lastSpawnedChild = nil }
+            applyFallback(
+                spawn: OrchestrationFallback.spawn(
+                    launchThrew: nil, race: outcome, limit: Self.launchRaceLimit),
+                linkFailure: nil)
+        }
+    }
+
+    /// 连一次 + 握手。成功返回 true（这一趟就算连上了）。
+    @discardableResult
+    private func openLink() -> Bool {
         do {
             let link = try UnixSocketTransport.connect(toPath: paths.socket)
             let client = SessionProtocolClient(
@@ -99,26 +176,23 @@ final class ViewerSessionClient: ObservableObject {
             lastError = nil
             // 连上了 = 上一轮那条降级裁决过期了，别在屏幕上留一条过期横幅。
             fallback = nil
+            stalledSince = nil
+            lastSpawnedChild = nil
             reconnectAttempt = 0
             startHeartbeat()
+            return true
         } catch {
             lastError = "连不上后台进程：\(error)"
-            applyFallback(spawn: spawn, linkFailure: nil)
+            return false
         }
     }
 
-    /// **连不上之后决定怎么办**（设计 §9.2）。判据本身是纯函数
-    /// （`OrchestrationFallback.decide`），这里只负责取观测量、执行裁决。
-    ///
-    /// 取锁的时机是要紧的：**只在拉 daemon 明确失败之后才取**。抢在前面取，
-    /// 会让我们自己刚拉起来的那个 daemon 因为锁被占而当场退出 —— 自己把自己的
-    /// 后路堵死，症状是「永远连不上，而且看不出为什么」。
+    /// **连不上之后决定怎么办**（设计 §9.2）。顺序那一段在
+    /// `OrchestrationFallbackCoordinator`（本文件在 `Sources/Mac/Services`、
+    /// 进不了 test bundle，而「什么时候才许取锁 / 接管后有没有真的停腿 / 没接管
+    /// 有没有真的放锁」三件事做错都是**安静地坏**，必须有测试盯着）。
     private func applyFallback(spawn: OrchestrationFallback.Spawn,
                                linkFailure: OrchestrationFallback.LinkFailure?) {
-        // **顺序那一段不写在这里** —— 它住在 `OrchestrationFallbackCoordinator`，
-        // 因为本文件在 `Sources/Mac/Services`、进不了 test bundle，而「什么时候才许
-        // 取锁 / 接管后有没有真的停腿 / 没接管有没有真的放锁」这三件事做错都是**安静
-        // 地坏**，必须有测试盯着。这里只提供动作。
         let coordinator = OrchestrationFallbackCoordinator(
             dataRoot: dataRoot,
             hooks: .init(
@@ -131,7 +205,9 @@ final class ViewerSessionClient: ObservableObject {
                     self?.onTakeOverLocally?()
                 },
                 scheduleReconnect: { [weak self] in self?.scheduleReconnect() }))
-        fallback = coordinator.handle(spawn: spawn, linkFailure: linkFailure)
+        fallback = coordinator.handle(
+            spawn: spawn, linkFailure: linkFailure,
+            stalledFor: stalledSince.map { Date().timeIntervalSince($0) })
     }
 
     private func linkClosed() {
@@ -185,18 +261,25 @@ final class ViewerSessionClient: ObservableObject {
     /// 那正是 A1（更新 app 不打断在跑的 session）的前提。
     ///
     /// P5 会换成 `SMAppService.agent`（开机自启 + 崩溃自拉）；这里是 P4 的手动通道。
-    private static func launchBundledDaemon() -> Bool {
-        guard let executable = Bundle.main.executableURL else { return false }
+    private static func launchBundledDaemon() -> DaemonLaunch {
+        guard let executable = Bundle.main.executableURL else {
+            return .threw("找不到本 app 的可执行文件路径")
+        }
         let process = Process()
         process.executableURL = executable
         process.arguments = [SessionDaemonMain.flag]
         do {
             try process.run()
-            return true
         } catch {
             NSLog("[ViewerSessionClient] 拉起 daemon 失败：\(error)")
-            return false
+            return .threw(error.localizedDescription)
         }
+        // **交出探针，不交出「成了」。** daemon 不做 double-fork（只 setsid），
+        // 所以这个进程就是 daemon 本身，「它还在不在」是直接观测得到的事实。
+        // `terminationStatus` 在进程还活着时会 trap，所以必须先问 `isRunning`。
+        return .started(child: {
+            process.isRunning ? .alive : .exited(process.terminationStatus)
+        })
     }
 }
 #endif

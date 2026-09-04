@@ -61,8 +61,64 @@ enum OrchestrationFallback {
         case notAttempted
         /// 进程起来了。**起来了 ≠ 连得上** —— 那是下一步的事，不构成接管的理由。
         case launched
-        /// **明确失败**：连进程都没起来。这是允许接管那一支的必要条件之一。
+        /// **明确失败**：exec 没成，或者它在**完成握手之前**就自己退掉了。
+        /// 这是允许接管那一支的必要条件之一。
         case failed(String)
+        /// **不确定**：等到上限了，握手没来，而进程还活着。
+        ///
+        /// 这一态必须 **fail-closed**：既不许回退本地（我们并不知道那边有没有人在
+        /// 编排），也不许继续无限「正在连接」——「无限的正在连接」是这一期要消灭的
+        /// 那种静默的温和版本。所以它走可操作错误那条路。
+        case uncertain(String)
+    }
+
+    /// 拉起这一步的**赛果** → `Spawn`。
+    ///
+    /// ## 为什么不能只看 `Process.run()` 抛没抛错（2026-09-04 真机逮到）
+    ///
+    /// daemon 在**拿不到编排锁**、或者**打不开锁文件**（数据目录不可写）时会
+    /// `host.start()` 抛错、打一行原因、然后**当场自己退掉，而且两种都 exit 0**。
+    /// 拉起方只看 `run()` 没抛错的话，这两种都会被记成「起来了」——于是
+    /// `decide` 拿到 `.launched`、不去取锁、返回 `keepConnecting`，
+    /// app 就永远挂在「正在连接后台进程…」上。
+    ///
+    /// **后果是契约有一半在空跑**：唯一允许接管的那一支要求 `spawn == .failed`，
+    /// 而 `.failed` 那时只在 exec 本身失败（二进制没了 / 不可执行）时才成立 ——
+    /// 那是罕见分支，「后台起不来」最常见的原因反而一条都到不了。症状恰恰是
+    /// 这一期在消灭的那种「界面在、什么都不动」。
+    ///
+    /// ## 判据不是「睡够了没有」，是**哪件事先发生**
+    ///
+    /// 见 `DaemonLaunchRace`：并行等**首次协议握手**与**子进程终止**。
+    /// 这里只把赛果翻译成契约的输入，**一个字都不去解析退出码** —— daemon 对
+    /// 「别人占着锁」（正确结局）和「目录坏了」（真失败）都 exit 0，从退出码上本来
+    /// 就分不出，那正是该由**锁的观测**去分辨的事（`decide` 那张表已经准备好了）。
+    static func spawn(launchThrew: String?,
+                      race: DaemonLaunchRace.Outcome,
+                      limit: TimeInterval) -> Spawn {
+        if let launchThrew { return .failed("拉不起后台进程：\(launchThrew)") }
+        switch race {
+        case let .exitedBeforeHandshake(code):
+            let tail = code.map { "（退出码 \($0)）" } ?? ""
+            return .failed(
+                "后台进程起来了，但在握上手之前就自己退掉了\(tail) —— 它没起成。"
+                + "常见原因是数据目录不可写、或者已经有别的进程占着编排锁。")
+        case .timedOutStillAlive:
+            return .uncertain(
+                "拉起后台进程之后等了 \(Int(limit)) 秒仍然没握上手，而它还在运行 —— "
+                + "起没起成说不准。用 `PendingCrew --daemon-status` 问一下它的实况；"
+                + "或者把它停掉再重试。**本窗口不会自己接管编排**：那边可能真的有人在管账。")
+        case .handshake, .pending:
+            return .launched
+        }
+    }
+
+    /// 同上，但握手成功时返回 `nil` —— 那一趟压根不该走降级判定，它已经连上了。
+    static func spawnIfNotConnected(launchThrew: String?,
+                                    race: DaemonLaunchRace.Outcome,
+                                    limit: TimeInterval) -> Spawn? {
+        if launchThrew == nil, case .handshake = race { return nil }
+        return spawn(launchThrew: launchThrew, race: race, limit: limit)
     }
 
     /// 连上之后才可能出现的失败。它们**一律不构成接管的理由** ——
@@ -92,10 +148,18 @@ enum OrchestrationFallback {
     ///     取锁** —— 抢在前面取会让我们自己拉起的那个 daemon 因为锁被占而退出。
     ///   - spawn: 拉起 daemon 的结果。
     ///   - linkFailure: 链路层已经发生的失败（nil = 没有）。
+    /// - Parameters:
+    ///   - stalledFor: 这一串重连已经连不上多久了（nil = 没在计）。
+    ///   - stallLimit: 「有人在编排、我继续重连」这句话的**寿命**。见下面
+    ///     `heldBy(daemon)` 那一支的注释。
     static func decide(lock: SessionOrchestratorLock.Outcome?,
                        spawn: Spawn,
                        linkFailure: LinkFailure?,
-                       dataRoot: URL) -> Decision {
+                       dataRoot: URL,
+                       stalledFor: TimeInterval? = nil,
+                       stallLimit: TimeInterval = 60) -> Decision {
+        // 0) 不确定态 fail-closed：既不接管（可能真有人在管账），也不继续无限等。
+        if case let .uncertain(reason) = spawn { return .refuse(reason) }
         // 1) **链路层的失败压过一切。** 对端刚才回过话 = 那边有东西在，
         //    不管这一刻锁在谁手上都不许接管。顺序不能挪到锁后面：锁**可能**恰好
         //    到手（daemon 崩在握手之后、锁刚被内核释放），那一瞬接管就是双头。
@@ -119,8 +183,25 @@ enum OrchestrationFallback {
                 + "要回到后台模式：重开 PendingCrew。")
 
         case let .heldBy(holder?) where holder.kind == "daemon":
-            // 那边真的在编排（它自称 daemon、而且真的在 socket 上听）。
-            // 这次没连上是链路的事，继续退避重连 —— 接管就是当场双头。
+            // 那边确实有人在编排（它自称 daemon、锁也真在它手上）。接管 = 当场双头，
+            // 所以**一律不接管**。但——
+            //
+            // **观测到有人在编排，只够否决「接管」，不够支撑「无限期沉默地等」。**
+            //
+            // 反例是现成的：**一个卡住的 daemon 照样持着锁**。锁在手、kind 写着
+            // daemon，观测到的确实是「有人在编排」；但它不回握手。于是这句
+            // 「后台进程正在运行，本窗口继续重连」会**永远转下去** —— 那是第 4 条
+            // 要消灭的那种静默的另一种穿法，而且措辞更让人安心，所以更难被发现。
+            //
+            // 所以这句话有**寿命**：超过 `stallLimit` 之后状态不变（仍然不接管），
+            // 变的只是「用户看不看得出这事不对劲」。
+            if let stalledFor, stalledFor >= stallLimit {
+                return .refuse(
+                    "后台进程 pid \(holder.pid) 一直没有回应（已经 \(Int(stalledFor)) 秒）。"
+                    + "本窗口**不会**接管编排 —— 那边锁在手，接管就是两个进程同时管账。\n"
+                    + "用 `PendingCrew --daemon-status` 问一下它的实况；"
+                    + "确认它卡住了就把它停掉，然后重试。")
+            }
             return .keepConnecting(
                 "后台进程正在运行（pid \(holder.pid)），本窗口继续重连。")
 
