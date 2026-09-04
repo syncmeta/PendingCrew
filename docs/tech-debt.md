@@ -35,6 +35,16 @@
   ① 每条连接各持一个 `SessionFrameDecoder`，`receive` 改成「喂字节 → 拿 0..n 帧 → 逐帧处理」；
   ② endpoint 面向 `SessionTransport` 而非具体类。
   验收要求**先证明尺子会红**：写一个按任意字节边界切分/合并投递的传输替身，跑当前代码必须红，接上增量解码后转绿。
+- **已还（2026-09-04 核实，随 P4 合入 main `a8f4597`）**：两个 endpoint 各自持一个
+  `SessionFrameDecoder`（server 侧在 `Connection` 上，`SessionProtocolEndpoints.swift:21`；
+  client 侧 `:541`，重连时 `:593` 重置），收包路径改成「喂字节 → 拿 0..n 帧 → 逐帧处理」。
+  传输面向 `SessionMessageLink`（`UnixSocketTransport.swift:15`）而非具体类，
+  今天有四个实现：`InProcessSessionLink` / `UnixSocketTransport` / 测试替身
+  `ByteStreamLink`（**按任意字节边界切分与粘包**）/ `BackpressureLink`。
+  尺子也照要求写了：`SessionProtocolOverSocketTests.test_server接受任意切分与粘包的可靠字节流`
+  与 `test_client接受任意切分与粘包的可靠字节流`。
+  **没验到的**：真 WAN + TLS 上没跑过（异机传输是 P6，见
+  `docs/internal/2026-09-04-cross-machine-transport-scope.md`，尚未实现）。
 
 ### 🔴 所有在跑 session 的 PTY 输出都要过主线程 —— 界面代价随派活数线性增长
 - **发现**: 2026-08-19 · `fix/ui-jank-pty-scan`（Todo #59 界面卡顿排查）

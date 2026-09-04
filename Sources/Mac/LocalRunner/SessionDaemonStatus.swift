@@ -11,21 +11,37 @@ struct SessionDaemonStatusSnapshot: Equatable {
             ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: $0))
         } ?? "旧版后台未提供"
         let frontends = hello.viewerCount.map { max(0, $0 - 1) }
+        // **daemon 的 records 在 session 退出后照旧留着**（右栏镜像还要看那份终端画面），
+        // 所以 `listSessions` 回来的名单天然混着已退出的条目。按状态分开数、分开列 ——
+        // 2026-09-04 的真 daemon 冒烟里这一栏把两个 `exited` 报成「运行中 2」，
+        // 而共享账本里它们已经是 exited。**两本账打架时人信的是命令行那本**，
+        // 而这一栏正是关 app / 装更新之前最不该看错的东西。
+        let ordered = sessions.sorted { $0.sessionId < $1.sessionId }
+        let running = ordered.filter { $0.state.status == .running }
+        let finished = ordered.filter { $0.state.status != .running }
         var lines = [
             "PendingCrew 后台正在运行",
             "PID：\(hello.pid)",
             "版本：\(hello.daemonBuild)（协议 \(hello.protocolVersion)）",
             "启动于：\(started)",
             "已连接前端：\(frontends.map(String.init) ?? "旧版后台未提供")",
-            "运行中 session：\(sessions.count)",
+            "运行中 session：\(running.count)",
         ]
-        for session in sessions.sorted(by: { $0.sessionId < $1.sessionId }) {
-            let title = session.run?.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let label = title.flatMap { $0.isEmpty ? nil : $0 } ?? session.sessionId
-            let crew = session.run?.crewId ?? "未知 crew"
-            lines.append("- \(label) · \(crew) · \(session.sessionId)")
+        lines.append(contentsOf: running.map(Self.line))
+        if !finished.isEmpty {
+            // 已退出的**不省略**：它们还占着 daemon 里的记录（画面留着给人看），
+            // 直接不显示会让「后台里到底还有什么」这个问题永远差一块。
+            lines.append("已退出但画面还留着：\(finished.count)")
+            lines.append(contentsOf: finished.map(Self.line))
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func line(_ session: SessionSummary) -> String {
+        let title = session.run?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = title.flatMap { $0.isEmpty ? nil : $0 } ?? session.sessionId
+        let crew = session.run?.crewId ?? "未知 crew"
+        return "- \(label) · \(crew) · \(session.sessionId)"
     }
 }
 

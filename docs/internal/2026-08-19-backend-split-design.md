@@ -512,6 +512,51 @@ app 退化成 viewer 之后，后台出问题**没有画面可看**。所以 dae
 
 **排期**：P0 与 P1 各是一个 worker 的活（会大改同一批文件，**必须串行**）。P2/P3 可并行（不同文件）。P4/P5 串行。
 
+### 9.1 2026-09-04 的分期调整与实况（这一节写的是**发生过的事**，上面那张表是原计划）
+
+**实况**：P0–P3 早已合进 main；**P4 于 2026-09-04 合入 main（`a8f4597`）**，对齐 0.1.24。
+判据在 P4 worktree 实跑：全量 macOS 1828 passed / 3 skipped / 0 failed；macOS + iOS Simulator
+两端 BUILD SUCCEEDED；负向保护实跑（`OrchestrationGate.refuse` 恒 `.takeOver` → 恰好 5 条具名红，
+还原转绿）。**总闸 `PENDINGCREW_BACKEND` 默认仍是 `inproc`，用户可见行为不变。**
+
+**P5 劈成两半**，理由是：原表把「翻默认」和「开机自启 / 菜单栏」捆在同一阶段，
+但**只有翻默认这一步交付人类可感知的价值**（关掉 / 更新 app 而 session 不断），
+而常驻打磨不做也不挡核心行为 —— app 连不上时 `ViewerSessionClient` 会自己把 daemon 拉起来。
+
+| 阶段 | 做什么 | 完成判据 |
+|---|---|---|
+| **P5a**<br>把默认翻过去 | 真 daemon 冒烟（起 daemon → 真跑一个 session → 前端断开后仍活 → 重连 attach 恢复同一 session）；§8.4 订阅登录态实测；修掉冒烟暴露出来的阻塞项；最后才翻默认 | 上述闭环全部有原始输出；**证据先于翻默认，不许倒过来** |
+| **P5b**<br>常驻打磨 | `SMAppService.agent`（开机自启 + 崩溃自拉）；菜单栏常驻项；安装态更新不断线；`SessionReconnectPolicy.daemonIdleTimeout` 的半开连接回收（当前**声明了但全仓无第二处引用**） | A1 三条路径；#59 性能采样复跑 |
+
+**P6（新立，本轮不实现，只立范围）**：异机一次配对后加密直连与恢复。
+它**不在原 P0–P5 里** —— 原设计 §1.3 明说「不做手机远程遥控，但协议设计要为它留门」。
+范围与判据见 `docs/internal/2026-09-04-cross-machine-transport-scope.md`。
+
+#### P5a 冒烟实测到的事（2026-09-04，隔离数据根 `PENDINGCREW_DATA_DIR`，未碰真数据目录）
+
+**通过的**：`--daemon` 起得来且 `setsid` 生效（父进程变 pid 1，A1 前提成立）；锁 / socket /
+registry 全部落在数据根下；启动日志打出数据根那一行；`--daemon-status` 经 socket 问出实况；
+daemon 排空共享控制通道、吃下 `start_session` 并**真的 fork 出 claude 子进程**（`ps` 实测
+PPID = daemon pid）；**§8.4 订阅登录态通过** —— 画面 banner 为
+`Opus 5 (1M context) with high effort · Claude Max`，且 transcript 里留下真实一问一答；
+前端连入→断开后 `inspect_session` 取回的画面完整保留此前对话；重启 daemon 时孤儿核对
+真的跑了（逐条核上一轮留下的记录）。
+
+**冒烟暴露出来的三件**：
+
+1. **开场 brief 未送达**（P5a 的硬前置）。TUI 起来了、输入框空的、transcript 零条，
+   靠 `nudge_session` 才动。病根在 `AgentSessionCore.deliverStartupPromptAfterTUIReady`：
+   就绪判据是「首批 PTY 字节 + 100ms」，首屏重绘会吞掉这次写入，**而且吞掉之后没有任何人知道**。
+   **这条对 GUI 老路同样成立** —— 同一天在正常界面模式下起的一个 worker 就是这个形状。
+2. **`--daemon-status` 把已退出的 session 报成运行中**。已修（`036e3db`）。
+3. **未信任的新目录**下起 session 会撞 claude 的信任对话框，开场 brief 的回车被对话框吃掉
+   选中 `No, exit`，session 秒退且零输出。既有行为（`CrewSessionsSnapshot` 注释早已记载），
+   不是 daemon 造成的；但与第 1 条叠加就是「派了活，什么都没发生」。
+
+**另外两条边界**：daemon 日志原本不随 `PENDINGCREW_DATA_DIR` 走，隔离跑会污染真人日志 ——
+已改成换文件名、目录仍留在 `~/Library/Logs/PendingCrew/`（`c2246c9`）；
+`daemonIdleTimeout` 的半开连接回收未接线，留 P5b。
+
 ---
 
 ## 10. 迁移期新旧两套怎么共存

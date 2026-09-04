@@ -21,12 +21,15 @@ struct PendingCrewDaemonPaths {
     ///
     /// 日志刻意留在 `~/Library/Logs/PendingCrew/`（跟着数据根走的话，临时根那次
     /// 跑完连日志一起被删，而日志正是那种跑法唯一的观察窗）。
+    /// **但覆盖数据根时换文件名**，见 `logFileName` —— 目录留在 Logs 下，
+    /// 写的却不再是真人那份 `daemon.log`。
     static func standard(
         dataRoot: URL = PendingCrewDataRoot.url,
         logs: URL = FileManager.default.urls(
             for: .libraryDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Logs", isDirectory: true)
-            ?? FileManager.default.temporaryDirectory
+            ?? FileManager.default.temporaryDirectory,
+        dataRootIsOverridden: Bool = PendingCrewDataRoot.isOverridden
     ) -> PendingCrewDaemonPaths {
         let dir = dataRoot
         let logDir = logs.appendingPathComponent("PendingCrew", isDirectory: true)
@@ -41,8 +44,31 @@ struct PendingCrewDaemonPaths {
         return .init(socket: socket,
                      lock: dir.appendingPathComponent(SessionOrchestratorLock.fileName),
                      registry: dir.appendingPathComponent("daemon.registry.json"),
-                     log: logDir.appendingPathComponent("daemon.log"),
+                     log: logDir.appendingPathComponent(
+                         logFileName(dataRoot: dataRoot,
+                                     dataRootIsOverridden: dataRootIsOverridden)),
                      socketFallbackReason: reason)
+    }
+
+    /// 日志文件名。**默认根照旧 `daemon.log`；覆盖根换一个由根路径决定的名字。**
+    ///
+    /// 两条相反的约束都要满足（各自都出过事）：
+    /// - 日志**不跟着数据根走** —— 临时根跑完就删，连唯一的观察窗一起没了。
+    /// - 日志**不写真人那份** —— 2026-09-04 的隔离冒烟把启动/连接/退出几十行混进了
+    ///   用户的真 `daemon.log`。隔离做一半比不做更难查：人以为看的是自家后台，
+    ///   其实混着一次实验。
+    ///
+    /// 名字由根路径原样折出来（不哈希）：两个不同的根一定得到两个不同的文件，
+    /// 而且人一眼看得出这份日志是哪次跑的。
+    static func logFileName(dataRoot: URL, dataRootIsOverridden: Bool) -> String {
+        guard dataRootIsOverridden else { return "daemon.log" }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let folded = String(dataRoot.standardizedFileURL.path.unicodeScalars.map {
+            allowed.contains($0) ? Character($0) : "-"
+        })
+        // 留尾不留头：区分两个根的信息在末尾（`/tmp/rootA` vs `/tmp/rootB`）。
+        let tail = String(folded.suffix(120))
+        return "daemon-\(tail).log"
     }
 }
 
