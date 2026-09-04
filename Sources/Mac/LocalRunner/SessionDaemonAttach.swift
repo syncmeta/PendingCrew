@@ -24,14 +24,9 @@ import SwiftTerm
 
 /// 快照字节流 → 文本。**纯函数**：不要 daemon、不要窗口、不碰 AppKit。
 ///
-/// 与 `AgentSessionCore.screenText` 是同一套取法（逐行 `translateToString`、
-/// 砍掉尾部空行）—— 两边不一样的话，探针打出来的画面就不是权威那份画面。
-///
-/// **只有一处刻意不一样**：全角字符（中日韩）在 SwiftTerm 里占两格，第二格是
-/// 宽度 0 的填充格，`translateToString` 会把它翻成一个 **NUL**。权威那份
-/// `screenText` 就这么带着 NUL 走（`inspect_session` 看到的也是），
-/// 屏幕上看不出来；但这里是要打到 stdout / 贴进回报的文本 —— NUL 在那儿是乱码。
-/// 所以填充格在这里被去掉。**去掉的只是填充格，一个真字符都不少。**
+/// 取文本用的是 `TerminalScreenText` —— **与权威那份 `AgentSessionCore.screenText`
+/// 同一个函数**。两边不是「同一套写法」而是同一段代码：不然探针打出来的画面就不是
+/// daemon 里那份画面（2026-09-04 真机上就是这么翻的车，见那个类型的注释）。
 enum SessionSnapshotTextRenderer {
 
     /// - Parameters:
@@ -49,19 +44,7 @@ enum SessionSnapshotTextRenderer {
         let terminal = Terminal(delegate: sink, options: options)
         terminal.feed(byteArray: snapshotBytes)
 
-        var lines: [String] = []
-        for row in 0..<terminal.rows {
-            guard let line = terminal.getLine(row: row) else { continue }
-            var text = line.translateToString(trimRight: true)
-                .replacingOccurrences(of: "\0", with: "")
-            // 填充格摘掉之后才轮得到右侧留白：\0 不是空白，trimRight 挡不住它。
-            while text.hasSuffix(" ") { text.removeLast() }
-            lines.append(text)
-        }
-        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeLast()
-        }
-        return lines.suffix(max(1, maxLines)).joined(separator: "\n")
+        return TerminalScreenText.screen(of: terminal, maxLines: max(1, maxLines))
     }
 }
 
@@ -138,6 +121,10 @@ struct SessionDaemonAttachReport {
         var rows: Int
         /// 这一份快照的原始字节数。**0 字节等于没证据**，所以如实打出来。
         var byteCount: Int
+        /// 这一份是**对话记录**（codex）还是**终端画面**（claude / 纯终端）。
+        var isTranscript = false
+        /// transcript 的条数（终端那份恒为 0）。
+        var itemCount = 0
         var text: String
     }
 
@@ -146,10 +133,16 @@ struct SessionDaemonAttachReport {
     var hello: SessionDaemonHello?
     var screens: [Screen]
 
-    /// 两份快照的文本是否一致 —— 只有开了重连开关时才有意义。
+    /// 两份的文本是否一致 —— 只有开了重连开关时才有意义。
     var screensMatch: Bool? {
         guard screens.count == 2 else { return nil }
         return screens[0].text == screens[1].text
+    }
+
+    /// codex 那份是**对话记录**，不是画面。措辞上一个字都不能含糊 —— 不然读的人会
+    /// 以为 codex 也有终端快照，而它根本没有终端。
+    private var matchPhrase: String {
+        screens.first?.isTranscript == true ? "两份 transcript 文本一致" : "两份快照文本一致"
     }
 
     var text: String {
@@ -159,14 +152,17 @@ struct SessionDaemonAttachReport {
                 + "（协议 \(hello.protocolVersion)）")
         }
         for (index, screen) in screens.enumerated() {
+            let measure = screen.isTranscript
+                ? "\(screen.itemCount) 条 · 这是**对话记录**，不是终端画面（codex 没有终端）"
+                : "\(screen.byteCount) 字节 · 本地渲染 \(screen.cols)×\(screen.rows)"
             lines.append("")
-            lines.append("── 第 \(index + 1) 份快照（\(screen.label)）"
-                + "· \(screen.byteCount) 字节 · 本地渲染 \(screen.cols)×\(screen.rows) ──")
+            lines.append("── 第 \(index + 1) 份\(screen.isTranscript ? "transcript" : "快照")"
+                + "（\(screen.label)）· \(measure) ──")
             lines.append(screen.text)
         }
         if let screensMatch {
             lines.append("")
-            lines.append("两份快照文本一致：\(screensMatch ? "是" : "否")")
+            lines.append("\(matchPhrase)：\(screensMatch ? "是" : "否")")
         }
         return lines.joined(separator: "\n")
     }
@@ -184,8 +180,9 @@ enum SessionDaemonAttachProbe {
         case handshakeTimeout(TimeInterval)
         case missingTerminalBytes([String])
         case unknownSession(requested: String, available: [String])
-        case codexSession(String)
+        case missingTranscriptEvents([String])
         case snapshotTimeout(sessionId: String, seconds: TimeInterval)
+        case transcriptTimeout(sessionId: String, seconds: TimeInterval)
 
         var description: String {
             switch self {
@@ -206,13 +203,16 @@ enum SessionDaemonAttachProbe {
                     : available.joined(separator: "\n  - ")
                 return "后台里没有这个 session：\(requested)\n"
                     + "后台当前有：\n  - \(list)"
-            case let .codexSession(sessionId):
-                return "\(sessionId) 是 codex session —— 它走 transcript 事件，"
-                    + "后台**根本不发终端快照**（见 SessionProtocolServer.attach）。"
-                    + "这条路只对 claude / 纯终端 session 成立。"
+            case let .missingTranscriptEvents(negotiated):
+                return "后台不支持 transcript-events 能力，拿不到 codex 的对话记录。"
+                    + "协商到的能力：\(negotiated.isEmpty ? "（空）" : negotiated.joined(separator: "、"))"
             case let .snapshotTimeout(sessionId, seconds):
                 return "attach 上了 \(sessionId)，但 \(Int(seconds)) 秒内没收到完整快照。"
                     + "后台可能正在背压重同步，也可能这个 session 的权威终端还没建起来。"
+            case let .transcriptTimeout(sessionId, seconds):
+                return "attach 上了 \(sessionId)（codex），但 \(Int(seconds)) 秒内"
+                    + "没等到后台把这条连接的 session 名单发回来 —— transcript 重放就排在它前面，"
+                    + "所以这时候手上那份对话记录**可能是不全的**，不能当证据用。"
             }
         }
     }
@@ -228,9 +228,7 @@ enum SessionDaemonAttachProbe {
             throw AttachError.unknownSession(requested: sessionId,
                                              available: sessions.map(\.sessionId).sorted())
         }
-        let kind = LocalCodingAgentKind(rawValue: summary.state.kind) ?? .claudeCode
-        guard kind != .codex else { throw AttachError.codexSession(sessionId) }
-        return kind
+        return LocalCodingAgentKind(rawValue: summary.state.kind) ?? .claudeCode
     }
 
     /// 走真 socket 的那条便利入口（CLI 用）。**不拉起 daemon。**
@@ -271,36 +269,60 @@ enum SessionDaemonAttachProbe {
                 link: link, capabilities: SessionDaemonHost.defaultCapabilities,
                 appBuild: appBuild)
             var list: SessionList?
+            var listCount = 0
             client.onDaemonHello = { hello = $0 }
-            client.onSessionList = { list = $0 }
+            client.onSessionList = { list = $0; listCount += 1 }
             client.connect()
             client.requestSessionList()
             guard wait(timeout, until: { client.isConnected && list != nil }) else {
                 throw AttachError.handshakeTimeout(timeout)
             }
-            guard client.negotiatedCapabilities.contains("terminal-bytes") else {
-                throw AttachError.missingTerminalBytes(client.negotiatedCapabilities)
-            }
             kind = try resolveTarget(sessionId: options.sessionId,
                                      in: list?.sessions ?? [])
+            let needed = kind == .codex ? "transcript-events" : "terminal-bytes"
+            guard client.negotiatedCapabilities.contains(needed) else {
+                throw kind == .codex
+                    ? AttachError.missingTranscriptEvents(client.negotiatedCapabilities)
+                    : AttachError.missingTerminalBytes(client.negotiatedCapabilities)
+            }
 
             // announceViewport: false —— 见类型注释第 1 条。rendersLocally: false ——
             // 这个进程里一个 NSView 都不该有（mirror 是 AppKit 视图）。
+            let listsBeforeAttach = listCount
             let remote = client.attach(sessionId: options.sessionId, kind: kind,
                                        announceViewport: false, rendersLocally: false)
-            guard wait(timeout, until: { remote.completedSnapshotCount > 0 }) else {
-                throw AttachError.snapshotTimeout(sessionId: options.sessionId,
-                                                  seconds: timeout)
+            let screen: SessionDaemonAttachReport.Screen
+            if kind == .codex {
+                // codex 没有终端 —— 服务端在 attach 里把整份 reduced transcript 当
+                // `codexNotification` 重放过来，**然后**才发这条连接的 session 名单
+                // （`SessionProtocolServer.attach` 的末尾）。同一条有序字节流上，
+                // 「名单到了」就等于「重放发完了」—— 这是个顺序判据，不是等一会儿
+                // 看看够不够的时序赌。
+                guard wait(timeout, until: { listCount > listsBeforeAttach }) else {
+                    throw AttachError.transcriptTimeout(sessionId: options.sessionId,
+                                                        seconds: timeout)
+                }
+                let items = remote.transcript?.items ?? []
+                screen = .init(label: label, cols: options.cols, rows: options.rows,
+                               byteCount: 0, isTranscript: true, itemCount: items.count,
+                               text: CodexTranscriptText.render(items: items,
+                                                                maxLines: options.maxLines))
+            } else {
+                guard wait(timeout, until: { remote.completedSnapshotCount > 0 }) else {
+                    throw AttachError.snapshotTimeout(sessionId: options.sessionId,
+                                                      seconds: timeout)
+                }
+                let bytes = remote.lastCompletedSnapshotBytes
+                screen = .init(label: label, cols: options.cols, rows: options.rows,
+                               byteCount: bytes.count,
+                               text: SessionSnapshotTextRenderer.render(
+                                snapshotBytes: bytes, cols: options.cols, rows: options.rows,
+                                maxLines: options.maxLines))
             }
-            let bytes = remote.lastCompletedSnapshotBytes
             // detach = 本端把链路关掉：服务端 `dropConnection` 会把这条连接上的
             // handle 全作废，并在日志里记「viewer 断开；session 不受影响」。
             link.close()
-            return .init(label: label, cols: options.cols, rows: options.rows,
-                         byteCount: bytes.count,
-                         text: SessionSnapshotTextRenderer.render(
-                            snapshotBytes: bytes, cols: options.cols, rows: options.rows,
-                            maxLines: options.maxLines))
+            return screen
         }
 
         var screens = [try capture(label: "首次 attach")]

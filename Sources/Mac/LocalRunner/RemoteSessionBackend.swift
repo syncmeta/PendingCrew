@@ -122,25 +122,10 @@ extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
     var wakeActivityRevision: UInt64 { transcript.activityRevision }
     var hasActiveStructuredTurn: Bool { transcript.turnActive }
 
+    /// 口径在 `CodexTranscriptText` —— 与无画面探针（`--daemon-attach` 打 codex
+    /// session 时打的就是这份对话记录）**共用同一个函数**。
     func screenText(maxLines: Int) -> String {
-        let items = transcript.items.suffix(max(0, maxLines))
-        guard !items.isEmpty else { return "（transcript 为空）" }
-        return items.map { item in
-            switch item.kind {
-            case let .userMessage(text): return "[输入] \(text.prefix(200))"
-            case let .agentMessage(text, _): return "[回复] \(text.prefix(300))"
-            case let .reasoning(summary, content):
-                return "[思考] \((summary ?? content ?? "…").prefix(200))"
-            case let .plan(text): return "[计划] \(text.prefix(200))"
-            case let .commandExecution(command):
-                return "[命令] \(command.command.prefix(160))"
-                    + (command.exitCode.map { " → exit \($0)" } ?? "")
-            case let .fileChange(change): return "[改文件] \(change.summary ?? change.status ?? "?")"
-            case let .toolCall(name, status): return "[工具] \(name) \(status ?? "")"
-            case let .webSearch(query): return "[搜索] \(query ?? "")"
-            case let .unknown(type): return "[\(type)]"
-            }
-        }.joined(separator: "\n")
+        CodexTranscriptText.render(items: transcript.items, maxLines: maxLines)
     }
 
     func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {

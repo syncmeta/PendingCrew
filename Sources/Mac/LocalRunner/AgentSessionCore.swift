@@ -682,16 +682,13 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 权威画面的逐行读法。开场 brief 的投递判据吃的就是它 —— 「输入框画好没有」
     /// 「正文进去没有」只有在**渲染完的**画面上才问得出来（首屏那一串光标定位 /
     /// 清行 / 重绘，在原始字节流上等于要自己再写一个终端模拟器）。
+    ///
+    /// 取法在 `TerminalScreenText` —— 与无画面探针（`--daemon-attach`）**共用同一个
+    /// 函数**。这里曾经是 `translateToString(trimRight:)` 直出，于是 TUI 用绝对定位
+    /// 跳过去没写的格原样带着 NUL 出来（`Claude\0Code\0v2.1.260`）：终端上不显示，
+    /// 当文本用就是脏的。详见那个类型的注释。
     func screenRows() -> [String] {
-        var lines: [String] = []
-        for row in 0..<terminal.rows {
-            guard let line = terminal.getLine(row: row) else { continue }
-            lines.append(line.translateToString(trimRight: true))
-        }
-        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeLast()
-        }
-        return lines
+        TerminalScreenText.rows(of: terminal)
     }
 
     /// 终止子进程。"停不掉"的真因：SwiftTerm `terminate()` 调 `childStopped()`，
