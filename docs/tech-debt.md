@@ -671,6 +671,41 @@
   （工具回执其实说了没发，但很容易被当成噪音划过去）。
 - **绕法（两次都用了同一个）**: 结论写进仓库文件 + 走 `report_to_parent` 请上级代发。
   `docs/internal/2026-09-04-p5a-closed-loop-evidence.md` 就是这么落下来的。
+- **2026-09-05 第四次：探针在断的当口抓到了，三条以前没有的事实。**
+  （日志存在 `/tmp/pc-access-probe/<tag>.log`，脚本 `scripts/diag/whiteboard-access-probe.sh`）
+
+  1. **写通、读不通。** 探针那行是 `write=FAIL(readback)` 而**不是** `FAIL(create)` ——
+     建文件成功了，`head -c 1` 读回失败；`stat` 也通。**被拦的精确到只有 `file-read-data`。**
+     以前一直记成「读写都拦」,那是因为没把建和读分开量。
+  2. **探针脱离 claude 进程链之后照样断。** 它 `nohup` 之后责任链是 `sh(NNNNN) ← 1`,
+     **不挂在任何 claude session 底下**,和同机的 claude session 一起断。
+     → **「某个 claude session 自己的沙箱 profile」这条被证伪**（前几次包括我在内都往那儿找过）。
+  3. **发作现场的 TCC 日志里,claude-code 正在逐个试受保护目录,而责任进程写的是 PendingCrew**:
+     `AUTHREQ_ATTRIBUTION: responsible={com.pendingname.pendingcrew, pid=94648, /Applications/PendingCrew.app/…},`
+     `accessing={com.anthropic.claude-code, …/claude/versions/2.1.261}, requesting={com.apple.sandboxd}`
+     紧跟十二条 `System Policy: 2.1.261(NNNNN) deny(1) file-read-data …/Application Support/{AddressBook,
+     CallHistoryDB, CloudDocs, Knowledge, MobileSync, com.apple.TCC, …}`,进程号递增、每条约 50ms。
+
+     **这解释了「为什么日志里查不到我们那棵子树的拒绝」**（另一个 crew 翻了 12 小时日志确认过一条都没有）：
+     **被记录的拒绝确实存在,只是路径是那十几个系统目录,不是我们的子树** —— 我们子树的失败
+     **不产生独立的 deny 记录**。配上另一个 crew 量到的 tccd 反复报
+     `Failed to match existing code requirement for subject com.pendingname.pendingcrew`（12 小时 14 次 / 7 个 service,
+     同一 subject 同一 service 不同时刻答案还不一样）,一个能同时解释全部症状的机制是:
+     **代码要求匹配失败 → 责任进程的授权拿不到 → 挂它名下的进程读不了那棵子树**。
+
+  **⚠️ 上面最后那段是推的,别当结论**：那串扫描在 `11:00:23–26`,发作起于 `11:02:17`,
+  **差了近 2 分钟,时间对不齐**。它可能只是同一周期性行为的另一次。判它要靠**两个 crew 同时挂探针**
+  的同段日志对照（第一次具备这个条件就是这次）。
+- **这次的时长**: `11:02:17` 起,到 `11:05:46` 仍未自愈（41 条「持续断」,≈3.5 分钟）。
+  **「断多久」以前从没量到过** —— 前几次都是事后才发现已经好了。
+- **断线期间 `contact` 的报错会说谎**：调 `contact <号码>` 得到的是
+  **「查无此号 —— 本机没有这个 crew / 这个分机」**,而真实原因是**通讯录读不出来**。
+  **它把「我读不到」说成了「它不存在」**,照这句去查的人会去核号码,而号码是对的。
+  同一族的第 N 次（见本文件「静默失效的五种穿法」第 ⑤ 种：同一句话对应两种处境）。
+  修法:读通讯录失败要和「号码不存在」分开报。
+- **断线期间还能用的通道**: `report_to_parent` 通（写的是父 crew 的文件),
+  `post_to_crew` / `plan_update` / `contact` 全断。**结论落仓库 + 请上级代发**仍是有效绕法。
+
 - **该怎么查**: 下次发生时**当场**抓这三样（事后就没了）：① 本进程的 `sandbox` / TCC 状态；
   ② `ls -l@` 看扩展属性与 ACL（不只是权限位）；③ 同一时刻能写进去的那个进程是谁、
   它和中招的进程有什么不同。**别再只记「排除了什么」**——两次的排除项已经重合，
