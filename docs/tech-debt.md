@@ -61,6 +61,38 @@
 - **代价**: 目前只有「投得早了一点」，没有可观测的坏结果。真要动的时候记得：
   **先看这两处是不是还共读一个信号**，别只改看得见的那一处。
 
+### 🔴 数据根有**三个**来源，而纪律只承认一个 —— 附件那处直接绕过整套隔离
+
+- **发现**: 2026-09-05 · P5a 发包前的冒烟审计（父机长起头，我与 worker 逐条钉死）
+- **纪律写的是什么**: `Sources/Stores/PendingCrewDataRoot.swift:23-27` 三条纪律，第一条
+  是「**所有人从这里拿路径，不许再有第二个 `getenv`**」。文件头 `:14-21` 还写着它
+  「不是配置项，是**能不能验**的前提」—— 因为这台机器上起 daemon 冒烟只有靠它才不双头
+  （27 秒那次事故改坏了 `quota.json` / `models.json` / `crew-sessions.json`）。
+- **实际有三个来源**:
+  1. **env `PENDINGCREW_DATA_DIR`** —— daemon 走这条（`ps eww` 量到）。
+  2. **argv `--dir`** —— helper 走这条。`Sources/Mcp/McpHelperMain.swift:24` 取参数，
+     六个 store 全部 `directory: dir`。**注意 env 到不了 helper**：
+     `LocalCodingAgentSpec.swift:67-77` 的透传白名单只有 8 个键，`:83-86` 专门封死
+     `PENDINGCREW_` 前缀（secret 卫生，本身是对的）。所以隔离能成立**全靠这第二条通道**，
+     而纪律里没有它。
+  3. **静态默认** —— `Sources/Mcp/McpServer.swift:79`
+     `attachmentRoot ?? CrewChatAttachmentStore.defaultDirectory`，而
+     `CrewChatAttachmentStore.swift:16` 的 `defaultDirectory` = `PendingCrewDataRoot.subdirectory("attachments")`
+     = **真数据根**。`McpHelperMain` 从头到尾**没传过 `attachmentRoot`**（grep 零命中）。
+     → **隔离环境里的 agent 只要 `post_to_crew(attachments:)`，附件就写进真数据根。**
+- **为什么它今天没咬人**: 纯属运气 —— 冒烟的 brief 都是纯文本，没有一次带附件。
+  发包那趟我们把「不许带 attachments」**写进了任务书正文**（不是靠「判据里没有它」兜）。
+- **同族、今天没触发的第四处**: `McpHelperMain.swift:70` / `:77` 的 hook 分支写的是
+  `dir ?? LocalWhiteboardStore.defaultDirectory` —— **`--dir` 一旦没传就静默落回真数据根**。
+  现在每条 `ps` 都带着 `--dir`，所以不是问题;但它跟 `:79` 是同一种「兜底指向真目录」的写法。
+- **修**: helper 补传 `attachmentRoot`（连同 `:70`/`:77` 那两处兜底一起收口）。**更值得做的是
+  让错的写法表达不出来**：三处 `?? …defaultDirectory` 都是「忘了传就悄悄用真目录」，
+  而这正是隔离最不能容忍的默认方向 —— 隔离场景下应当**没有默认值，不传就编不过或直接失败**。
+- **方法论（这条比缺陷本身值钱）**: 审这件事时我先报了「六个 store 全部注入 `dir`，一个都没走
+  默认根」—— **错的**。我列的是**注入清单**，而风险在**使用面**，`attachmentRoot` 恰恰是
+  「没被注入」的那个，所以它不在我的清单里。**清单是「给进去的」，风险在「用到的」，
+  两者的差集就是漏洞住的地方。**
+
 ### 🔴 所有在跑 session 的 PTY 输出都要过主线程 —— 界面代价随派活数线性增长
 - **发现**: 2026-08-19 · `fix/ui-jank-pty-scan`（Todo #59 界面卡顿排查）
 - **位置**: `Sources/Mac/LocalRunner/AgentTerminalSession.swift` 的 `dataReceived` 回调（`ActivityTerminalView.dataReceived(slice:)` → `MainActor.assumeIsolated { … }`）。
