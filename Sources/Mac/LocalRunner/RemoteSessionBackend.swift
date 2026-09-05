@@ -54,6 +54,17 @@ protocol SessionWakeActivityProviding: AnyObject {
     var hasActiveStructuredTurn: Bool { get }
 }
 
+/// 唤醒回执的**单调**输出证据：最近一次收到子进程输出的时刻。
+///
+/// 跟 `SessionBackend.isWorking`（「最近 1s 内有输出」）是同一个源头，但那个是
+/// **瞬时布尔**，跨不过采样间隙；回执每 1s 采一次、判据窗口也是 1s、claude 状态
+/// 行还是 1s 一跳 —— 三个 1 撞在一起相位就固定了，明明在吐字也可能整窗读到 false。
+/// 单调时刻没有这个毛病，所以回执采样要它，不要那个布尔。
+@MainActor
+protocol SessionOutputActivityProviding: AnyObject {
+    var lastOutputAt: Date { get }
+}
+
 @MainActor
 protocol SessionProtocolApprovalControlling: AnyObject {
     func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws
@@ -82,6 +93,18 @@ extension PlainTerminalSession: SessionProcessIdentifying {
 
 extension AgentTerminalSession: SessionProtocolScreenTextProviding {
     func screenText(maxLines: Int) -> String { core.screenText(maxLines: maxLines) }
+}
+
+extension AgentTerminalSession: SessionOutputActivityProviding {
+    var lastOutputAt: Date { core.lastOutputAt }
+}
+
+extension PlainTerminalSession: SessionOutputActivityProviding {
+    var lastOutputAt: Date { core.lastOutputAt }
+}
+
+extension HeadlessSessionBackend: SessionOutputActivityProviding {
+    var lastOutputAt: Date { core.lastOutputAt }
 }
 
 extension AgentTerminalSession: SessionProtocolTerminalSnapshotProviding {

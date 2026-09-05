@@ -369,13 +369,30 @@ final class CrewSessionRunner: ObservableObject {
     /// confirmWake 建 Task 前就产生第一笔活动。白板 id 同样比时间戳可靠（本地 ISO
     /// 时间戳无小数，同一秒内比较 Date 会漏掉刚发的消息）。
     private func wakeReceiptEvidence(for run: CrewSessionRun) -> CrewMailboxWakeLogic.ReceiptEvidence {
-        let revision = (run.backend as? SessionWakeActivityProviding)?.wakeActivityRevision ?? 0
+        let wakeActivity = run.backend as? SessionWakeActivityProviding
         let latestPostId = LocalWhiteboardStore.shared.list(crewId: run.crewId)
             .last { $0.senderSessionId == run.sessionId }?.id
         return .init(
             isWorking: run.activityIsWorking,
-            activityRevision: revision,
-            latestPostId: latestPostId)
+            activityRevision: wakeActivity?.wakeActivityRevision ?? 0,
+            latestPostId: latestPostId,
+            lastOutputAt: (run.backend as? SessionOutputActivityProviding)?.lastOutputAt
+                ?? .distantPast,
+            isBusyNow: wakeTargetLooksBusy(run, wakeActivity: wakeActivity))
+    }
+
+    /// 目标此刻还挂着「我在干活」的指示吗 —— 只用来分辨「整窗安静」的两种处境
+    /// （真卡死 / 在做一件长的不吐字的事），不作为到达证据。codex 有结构化 turn
+    /// 直接问；claude 没有，只能看终端状态行的末几行。
+    private func wakeTargetLooksBusy(
+        _ run: CrewSessionRun, wakeActivity: SessionWakeActivityProviding?
+    ) -> Bool {
+        guard run.kind == .claudeCode else { return wakeActivity?.hasActiveStructuredTurn ?? false }
+        // 只读**本进程里**那份终端（`SessionOutputActivityProviding` 就是本地内核的
+        // 凭证）：远端后端的 screenText 是一次同步往返，不能每秒打一发。
+        guard run.backend is SessionOutputActivityProviding,
+              let screen = run.backend as? SessionProtocolScreenTextProviding else { return false }
+        return CrewMailboxWakeLogic.claudeIsBusy(screenTail: screen.screenText(maxLines: 8))
     }
 
     // MARK: - session 自我配置（set_session_profile；#455）
@@ -893,22 +910,36 @@ final class CrewSessionRunner: ObservableObject {
             // 避免把回显误判成「转入工作态」。
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             var samples: [CrewMailboxWakeLogic.ReceiptEvidence] = []
-            let deadline = Date().addingTimeInterval(CrewMailboxWakeLogic.receiptWindow)
-            while Date() < deadline, run.status == .running {
-                samples.append(self.wakeReceiptEvidence(for: run))
+            var latest: CrewMailboxWakeLogic.ReceiptEvidence?
+            let startedAt = Date()
+            var confirmed = false
+            // 观察窗的寿命**有条件**：目标还挂着忙碌指示就续着等（`shouldKeepWaiting`
+            // 有上限）。定长 10s 会把「压缩上下文/长思考」这种长静默一律读成卡死 ——
+            // 既喊错了，又因为不消费而让那条消息被重投一遍。
+            while run.status == .running {
+                let sample = self.wakeReceiptEvidence(for: run)
+                samples.append(sample)
+                latest = sample
                 if CrewMailboxWakeLogic.receiptVerdict(
-                    baseline: baseline, samples: samples) == .confirmed { break }
+                    baseline: baseline, samples: samples) == .confirmed { confirmed = true; break }
+                guard CrewMailboxWakeLogic.shouldKeepWaiting(
+                    latest: sample, elapsed: Date().timeIntervalSince(startedAt)) else { break }
                 try? await Task.sleep(nanoseconds:
                     UInt64(CrewMailboxWakeLogic.receiptSampleInterval * 1_000_000_000))
             }
-            switch CrewMailboxWakeLogic.receiptVerdict(baseline: baseline, samples: samples) {
-            case .confirmed:
+            if confirmed {
                 onConfirmed()
-            case .failed:
+            } else {
                 onFailed?()
+                // 两种处境两句话：一直挂着忙碌指示的那条要说清依据、并承认可能是误报，
+                // 别让人拿着「疑似卡死」去 nudge 一个正在跑的 session。
+                let waited = Date().timeIntervalSince(startedAt)
+                let text = latest?.isBusyNow == true
+                    ? CrewMailboxWakeLogic.wakeBusyStallAlert(
+                        targetLabel: targetLabel, waited: waited)
+                    : CrewMailboxWakeLogic.wakeFailureAlert(targetLabel: targetLabel)
                 LocalWhiteboardStore.shared.appendSessionMessage(
-                    crewId: crewId, sessionId: "system",
-                    text: CrewMailboxWakeLogic.wakeFailureAlert(targetLabel: targetLabel),
+                    crewId: crewId, sessionId: "system", text: text,
                     category: "question", senderName: "系统",
                     mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
             }
@@ -2720,7 +2751,15 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         if next != awaitingReply { awaitingReply = next }
     }
 
-    /// 切一个配置档位并等真实结果（claude=等空闲注入斜杠命令+核对回显；codex=不支持）。
+    /// 切一个配置档位并等真实结果。
+    ///
+    /// - claude：等空闲注入斜杠命令 + 核对回显。
+    /// - codex：`thread/settings/update`（`CodexAppServerBackend.applyProfileSwitch`）。
+    ///   **两家都支持** —— 这条注释一度写着「codex=不支持」，而下游早就实现了；
+    ///   照那句话走的人会为了换个 effort 去另起一个 session，白丢一份上下文。
+    ///   协议依据：codex-cli 0.149.1 的 app-server schema 里
+    ///   `ThreadSettingsUpdateParams.model` / `.effort` 的描述都是
+    ///   "Override … for subsequent turns"。
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
         await backend.applyProfileSwitch(cmd)
     }
