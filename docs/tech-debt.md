@@ -46,6 +46,21 @@
   **没验到的**：真 WAN + TLS 上没跑过（异机传输是 P6，见
   `docs/internal/2026-09-04-cross-machine-transport-scope.md`，尚未实现）。
 
+### 🟡 唤醒投递闸和它的重试路共读同一个瞬时布尔 —— 只改一边会打架
+
+- **发现**: 2026-09-05 · 修「压缩上下文被误判卡死」（`63f39ac`）时顺手看到，**没修**
+- **现状**: `CrewSessionRunner.deliverOrDeferWake` 用 `run.activityIsWorking`
+  （「最近 1s 内有 PTY 输出」）判目标闲不闲、决定立刻投还是排队；
+  `scheduleDeferredWakeRetry` 0.5s 后**再读同一个布尔**决定要不要补投。
+  claude 压缩上下文/长思考时这个布尔读到 false，于是照投不误。
+- **为什么这一笔没顺手改**: 注入进一个忙碌的 claude 是安全的（TUI 自带输入排队，
+  2026-09-05 人类那条消息就是这么送到的），所以它不是**故障**，只是不精确。而闸
+  和重试路读的是同一个信号，只给闸换上更准的判据（`63f39ac` 新加的忙碌指示）、
+  重试路还读老布尔，两者就会打架：闸判「忙，排队」，0.5s 后重试路判「闲，投」——
+  排队等于白排。要改就得两处一起换，那是另一笔。
+- **代价**: 目前只有「投得早了一点」，没有可观测的坏结果。真要动的时候记得：
+  **先看这两处是不是还共读一个信号**，别只改看得见的那一处。
+
 ### 🔴 所有在跑 session 的 PTY 输出都要过主线程 —— 界面代价随派活数线性增长
 - **发现**: 2026-08-19 · `fix/ui-jank-pty-scan`（Todo #59 界面卡顿排查）
 - **位置**: `Sources/Mac/LocalRunner/AgentTerminalSession.swift` 的 `dataReceived` 回调（`ActivityTerminalView.dataReceived(slice:)` → `MainActor.assumeIsolated { … }`）。
