@@ -1,5 +1,10 @@
 #!/bin/sh
-# 群聊「单向断开」现场探针 —— 只读诊断，不改任何产品行为。
+# 群聊「单向断开」现场探针 —— 诊断用，不改任何产品行为。
+#
+# ⚠️ 它**不是纯只读**：写路也要量，所以每轮会在 $SUP/.probe/ 下建一个临时文件、
+# 读回、删掉。放在自建的 .probe/ 子目录而不是数据根，是为了不给根目录上的目录
+# 监听加 tick —— 点名唤醒器每个目录 tick 会全量重解白板（docs/tech-debt.md），
+# 探针每 5 秒戳一次真数据根，等于在给正被诊断的系统持续加噪。
 #
 # 病象：某个 session 突然读不了 ~/Library/Application Support/PendingCrew/ 下的
 # 内容（`head -c 1` → Operation not permitted），而 ls / stat 照常，别的 session
@@ -50,7 +55,9 @@ try_stat() {
 }
 # 在子树里建一个文件、读回、删掉 —— 写路和读路要分开量，别只量读。
 try_write() {
-  f="$SUP/.probe-$TAG.tmp"
+  d="$SUP/.probe"
+  mkdir -p "$d" 2>/dev/null
+  f="$d/$TAG.tmp"
   err=$( { echo probe > "$f"; } 2>&1 )
   [ -n "$err" ] && { echo "FAIL(create):$err"; return; }
   err=$(head -c 1 "$f" 2>&1 >/dev/null)
