@@ -927,3 +927,45 @@ append cmd1 发 `[cmd1]`、append cmd2 发 `[cmd1, cmd2]`。两次投递都到�
   它能把「后台没了」和「socket 连不上」分开。
 - **第 5 种为什么当天没修**: 那行输出是**验收路径上的诊断工具**，
   在验收进行中改它等于**把人正在照着用的尺子换掉**。记账，等验收有结论再动。
+
+### 🔴 白板「单向断开」：范围从来不是我们那棵子树 —— 是整个 `Application Support`
+- **发现**: 2026-09-05 · 第四次发作，**第一次抓在现场**（机长 4-1 自己中招，
+  03:02–03:06Z 持续 4 分钟以上）。
+- **前三次为什么查不出来**: 结论一直是「只拦 `~/Library/Application Support/PendingCrew/`
+  这一棵子树」。**那是探针清单造成的假象** —— 对照组试的是 `~/.claude.json`、
+  `~/.codex/config.toml`、仓库文件，**全都在 `Application Support` 之外**。
+  范围被划在了刚看过的东西上，于是它看起来就像主因。
+  **一测别人的目录就露馅**：
+  ```
+  Application Support/Code/Backups     → EPERM
+  Application Support/Claude/Cache     → EPERM
+  Application Support/PendingCrew/**   → EPERM（含当场 touch 出来的新文件）
+  ```
+- **精确形状（现场实测，不是推的）**:
+  ```
+  ls 目录 → OK          stat 元数据 → OK          touch 建文件 → OK
+  读任何文件内容 → EPERM(1)
+  python3 open().read(1) → OSError errno=1        head / dd → 同样一句
+  ACL → 无     flags → -     log show 近 3 分钟 deny/Sandbox → 一条都没有
+  责任链 → zsh ← claude ← PendingCrew(daemon) ← PendingCrew
+  在跑的二进制 → 只有 /Applications 那一份（9 进程），/tmp 测试包 0 个
+  ```
+- **被这次现场打掉的两条假说**（都曾是当时的主方向）:
+  1. **「是 agent 权限层在假冒内核的措辞」** —— `python3` 原始 syscall 就是
+     `errno=1`，三条读法一致。**不是工具层。**
+  2. **「同 bundle id 两份不同签名同时在跑」** —— 这次发作时 `/tmp` 那份**一个进程都没有**。
+     它当不了**现场原因**（但仍可能是**历史原因**，见下）。
+- **当前最像的一条（推的，未验）**: 读 `~/Library/Application Support/**` 属于要
+  「完全磁盘访问 / App 数据」授权那一类，授权挂在**责任进程**上 —— 我们的责任进程是
+  PendingCrew。它的**代码签名对不上 TCC 里那条记录**的那一刻，授权失效，其全部后代
+  （claude → bash）读整个 `Application Support` 变 EPERM；对上了就恢复 = 自愈。
+- **⚠️ 尺子拿错了三次，这条比结论更值钱**: 一直在 grep `deny file-read-data`，
+  **这一类拒绝不长那样**。真正的痕迹是 `tccd: Failed to match existing code requirement
+  for subject com.pendingname.pendingcrew and service …` —— 12 小时 14 条、横跨 7 个
+  service，**同一 subject 同一 service 不同时刻答案还不一样**。
+  「发作窗内没有拒绝日志」这个让人困惑了三次的事实，**是因为在拿错的尺子上找**。
+- **探针必须改的三处**:
+  1. 对照组**必须包含别的 app 的 `Application Support` 子目录**，否则永远得出「只拦我们这棵」。
+  2. 抓 `tccd` 的 `Failed to match existing code requirement`，别只抓 `deny`。
+  3. 每次记下那一刻 `/Applications` 与 `/tmp` 两份二进制**各有几个进程**。
+- **不要自己修**: `tccutil reset` 会清掉人类真实授予过的权限，属人类授权，不是 agent 能拍的。
