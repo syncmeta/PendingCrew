@@ -104,6 +104,15 @@ final class SessionProtocolServer {
     ///
     /// 判据只看「最近一次**收到**对端字节」：viewer 每 `pingInterval`（10s）发一次 ping，
     /// 正常连接不可能安静到 `daemonIdleTimeout`（60s）。
+    ///
+    /// **谁会来扫、谁不会（2026-09-05 逐个枚举过）**：这一支只由 `SessionDaemonHost`
+    /// 起定时器调，也就是**只作用于 socket 那台 server**。`InProcessSessionProtocolBridge`
+    /// 自己 new 了另一台 server，**不接这个节拍，也不该接** —— 同进程桥两端同生共死，
+    /// 不存在「对端没了但 FIN 不来」这回事，而它的 app 侧本来就不发 ping，接上就会被误杀。
+    ///
+    /// ⚠️ **别想着用 `link.isSynchronous` 来自动豁免同进程桥。** 本文件开头写着那个标志
+    /// 问的是「这条链路会不会跟不上」，**不是「你是谁」**；拿它当身份判据是又一次把一个
+    /// 信号当两件事用。要豁免就靠「哪台 server 起了定时器」这个显式选择。
     @discardableResult
     func reclaimIdleConnections(now: Date = Date(),
                                 timeout: TimeInterval = SessionReconnectPolicy.daemonIdleTimeout)
