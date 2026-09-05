@@ -138,6 +138,12 @@ echo "    子树: $SUP" >> "$LOG"
 proc_chain >> "$LOG"
 binary_census >> "$LOG"
 
+# 预期格数：9 个测量 + 1 个红样本；py 那边按启动时实际回的项数定（白板文件在不在
+# 会差一项）。两个数都写进日志头 —— 判据本身要看得见，不能只活在脚本里。
+EXPECT_CELLS=10
+EXPECT_PY=$(printf '%s' "$(python3 "$PY" "$SUP" 2>/dev/null | tr '\n' ' ')" | tr -cd '=' | wc -c | tr -d ' ')
+echo "    自检判据：每轮应量 $EXPECT_CELLS 格、py 应回 $EXPECT_PY 项；对不上即判 BAD" >> "$LOG"
+
 LAST=""
 while :; do
   WB=$(ls -1 "$SUP/whiteboards"/*.json 2>/dev/null | head -1)
@@ -159,14 +165,30 @@ while :; do
   RED=$(try_read "$HOME/Library/Application Support/com.apple.TCC/TCC.db")
   P=$(python3 "$PY" "$SUP" 2>&1 | tr '\n' ' ')
   case "$RED" in OK) RED="⚠尺子坏了(红样本变绿)";; *) RED="红样本正常";; esac
-  STATE="stat=$S head=$R cat=$K write=$W board=$B ctrl_claude=$C1 ctrl_repo=$C2 otherapp1=$C3 otherapp2=$C4 [$RED] | py[ $P]"
 
-  # 判 BAD 时把红样本那一格摘掉 —— 它本来就该是红的。
+  # 第二层自检：**这一轮到底量了几格**。红样本管「样本对不对」，格数管「整把尺子
+  # 有没有接上」—— 少一格不会变红，只会安静地不出现，而一片绿看着跟量过一模一样。
+  # （同族真实事故：新测试文件没进 .xcodeproj，`-only-testing` 指了个不存在的套件，
+  # xcodebuild 报 passed 而 `Executed 0 tests`；只钉 failures 和 skip 的判据罩不住它。）
+  CELLS=0
+  for v in "$S" "$R" "$K" "$W" "$B" "$C1" "$C2" "$C3" "$C4" "$RED"; do
+    [ -n "$v" ] && CELLS=$((CELLS+1))
+  done
+  PYC=$(printf '%s' "$P" | tr -cd '=' | wc -c | tr -d ' ')
+  SELF=""
+  [ "$CELLS" != "$EXPECT_CELLS" ] && SELF="⚠只量了 $CELLS 格(应 $EXPECT_CELLS)"
+  [ "$PYC" != "$EXPECT_PY" ] && SELF="$SELF ⚠py 只回了 $PYC 项(应 $EXPECT_PY)"
+
+  STATE="stat=$S head=$R cat=$K write=$W board=$B ctrl_claude=$C1 ctrl_repo=$C2 otherapp1=$C3 otherapp2=$C4 [$RED$SELF] | py[ $P]"
+
+  # 判 BAD 时把红样本那一格摘掉 —— 它本来就该是红的；但自检异常（格数不对、
+  # 红样本变绿）必须判 BAD，那时候「全绿」这三个字本身才是要报的事。
   JUDGE=$(echo "$STATE" | sed 's/ \[[^]]*\]//')
   case "$JUDGE" in
     *FAIL*|*errno*) BAD=1 ;;
     *)              BAD=0 ;;
   esac
+  case "$RED$SELF" in *⚠*) BAD=1 ;; esac
 
   if [ "$STATE" != "$LAST" ]; then
     echo "$(ts) 翻转 | $STATE" >> "$LOG"
