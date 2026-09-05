@@ -113,21 +113,69 @@ struct CrewDirectory {
         self.sessions = sessions
     }
 
+    /// 通讯录**读不出来**（区别于「本机还没建过 crew」）。
+    ///
+    /// 立这个类型是因为老实现把三种结局压成了两种：拿到了 / 文件不在 / 读不动·解不开，
+    /// 后两种都变成 `[]`。**于是「我读不到」和「它不存在」在那一行之后就再也分不开。**
+    /// 2026-09-05 那次断线里 `contact` 因此回了「查无此号 1-1」—— 人去查号码，
+    /// 而号码是对的；同一个 `load()` 还喂着 `directory`，整张表显示成
+    /// 「本机还没有登记在案的 crew」，那句更像真话、也更危险。
+    struct Unavailable: Error {
+        /// 哪份文件读不出来（人要据此去查是权限还是别的）。
+        let file: String
+        /// 系统给的原文，别加工。
+        let reason: String
+
+        /// 给工具回执用的一句话。**必须同时说清三件事**：读不出来、哪一份、
+        /// 以及「所以我现在答不了」—— 最后那半是防止读的人把它当成业务结论。
+        var message: String {
+            "通讯录读不出来（\(file)）：\(reason.trimmedTrailingPeriods)。"
+                + "所以我现在答不了这个号码存不存在 —— 不是那个号没登记过，是我读不到那份名单。"
+        }
+    }
+
     /// 从共享文件层加载。`whiteboardDirectory` = helper 的 `--dir`（白板目录）——
     /// `local-crews.json` 在其父目录，`crew-sessions.json` 与白板同级。
-    /// 缺文件 / 解不开 → 当作空（工具自己会说「没查到」，不假装有数据）。
-    nonisolated static func load(whiteboardDirectory: URL) -> CrewDirectory {
+    ///
+    /// **文件不在 = 真的空**（全新机器还没建过 crew）；**读不动 / 解不开 = 抛**。
+    /// 这里刻意做成 `throws` 而不是「失败时回空 + 另给一个查询失败的方法」——
+    /// 后者调用方仍然**可以**忽略失败拿到空表，而这正是要根除的那种写法。
+    nonisolated static func load(whiteboardDirectory: URL) throws -> CrewDirectory {
         let crewFile = whiteboardDirectory.deletingLastPathComponent()
             .appendingPathComponent("local-crews.json")
-        let crews = (try? Data(contentsOf: crewFile))
-            .flatMap { try? JSONDecoder().decode(LocalCrewFile.self, from: $0) }?
-            .crews ?? []
         let snapshotFile = whiteboardDirectory
             .appendingPathComponent(CrewSessionsSnapshot.fileName)
-        let sessions = (try? Data(contentsOf: snapshotFile))
-            .flatMap { try? JSONDecoder().decode(CrewSessionsSnapshot.self, from: $0) }
-            ?? CrewSessionsSnapshot()
-        return CrewDirectory(crews: crews, sessions: sessions)
+        // 快照也得算：分机号（`7-3`）要靠 crew-sessions.json 才解得开，
+        // 只管 local-crews.json 会漏掉一半。
+        return CrewDirectory(
+            crews: try decodeIfPresent(LocalCrewFile.self, at: crewFile)?.crews ?? [],
+            sessions: try decodeIfPresent(CrewSessionsSnapshot.self, at: snapshotFile)
+                ?? CrewSessionsSnapshot())
+    }
+
+    /// 读一份可选的 JSON。**只有「文件不在」才回 nil**，其余一律抛。
+    /// 不先 `fileExists` 再读 —— 那中间有一道 TOCTOU，而且对权限为 0 的文件
+    /// `fileExists` 照样为真，判据会含糊。直接读，按错误码分流。
+    private nonisolated static func decodeIfPresent<T: Decodable>(
+        _ type: T.Type, at url: URL
+    ) throws -> T? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as NSError {
+            let missing = error.domain == NSCocoaErrorDomain
+                && error.code == NSFileReadNoSuchFileError
+            let missingPosix = error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
+            if missing || missingPosix { return nil }
+            throw Unavailable(file: url.lastPathComponent, reason: error.localizedDescription)
+        }
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            // 解不开 ≠ 空：那是「这份数据我信不过」，同样不许答成业务结论。
+            throw Unavailable(file: url.lastPathComponent,
+                              reason: "内容解不开（\(error.localizedDescription)）")
+        }
     }
 
     // MARK: - 表
@@ -293,5 +341,14 @@ struct CrewDirectory {
         case "exited": return "⚪ 已退出"
         default: return entry.state
         }
+    }
+}
+
+/// 系统报错原文常自带句尾句号；拼进我们自己的句子里会出现「。。」。
+private extension String {
+    var trimmedTrailingPeriods: String {
+        var s = self
+        while s.hasSuffix("。") || s.hasSuffix(".") { s.removeLast() }
+        return s
     }
 }

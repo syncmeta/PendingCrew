@@ -20,18 +20,18 @@ final class CrewDirectoryTests: XCTestCase {
     }
 
     /// `local-crews.json` 落在白板目录的**父**目录 —— 复刻线上布局给 CrewDirectory 读。
-    private func directory(from base: URL, sessions: CrewSessionsSnapshot? = nil) -> CrewDirectory {
+    private func directory(from base: URL, sessions: CrewSessionsSnapshot? = nil) throws -> CrewDirectory {
         let whiteboards = base.appendingPathComponent("whiteboards", isDirectory: true)
         try? FileManager.default.createDirectory(at: whiteboards, withIntermediateDirectories: true)
         if let sessions, let data = try? JSONEncoder().encode(sessions) {
             try? data.write(to: whiteboards.appendingPathComponent(CrewSessionsSnapshot.fileName))
         }
-        return CrewDirectory.load(whiteboardDirectory: whiteboards)
+        return try CrewDirectory.load(whiteboardDirectory: whiteboards)
     }
 
     // MARK: - 号码解析
 
-    func testParseCrewAndExtension() {
+    func testParseCrewAndExtension() throws {
         XCTAssertEqual(CrewPhoneNumber.parse("7"), CrewPhoneNumber(crew: 7, ext: nil))
         XCTAssertEqual(CrewPhoneNumber.parse("7-3"), CrewPhoneNumber(crew: 7, ext: 3))
         XCTAssertEqual(CrewPhoneNumber.parse(" 12-1 "), CrewPhoneNumber(crew: 12, ext: 1))
@@ -39,13 +39,13 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(CrewPhoneNumber.parse("7－3"), CrewPhoneNumber(crew: 7, ext: 3))
     }
 
-    func testParseRejectsGarbage() {
+    func testParseRejectsGarbage() throws {
         for bad in ["", "  ", "a", "7-", "-3", "7-0", "0", "7-3-2", "7.3", "٧", "-", "7 3"] {
             XCTAssertNil(CrewPhoneNumber.parse(bad), "「\(bad)」不该被当成有效号码")
         }
     }
 
-    func testNumberText() {
+    func testNumberText() throws {
         XCTAssertEqual(CrewPhoneNumber(crew: 7, ext: nil).text, "7")
         XCTAssertEqual(CrewPhoneNumber(crew: 7, ext: 1).text, "7-1")
         XCTAssertTrue(CrewPhoneNumber(crew: 7, ext: 1).isCaptain)
@@ -54,7 +54,7 @@ final class CrewDirectoryTests: XCTestCase {
 
     // MARK: - 发号
 
-    func testCrewNumbersStartAtOneAndIncrement() {
+    func testCrewNumbersStartAtOneAndIncrement() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         let a = store.createCrew(req("甲")).crewId
@@ -63,7 +63,7 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(store.crewNumber(of: b), 2)
     }
 
-    func testExtensionsStartAtTwoBecauseOneIsTheCaptain() {
+    func testExtensionsStartAtTwoBecauseOneIsTheCaptain() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         let crew = store.createCrew(req("甲")).crewId
@@ -76,7 +76,7 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(store.phoneNumber(crewId: crew, sessionId: "w2", isCaptain: false)?.text, "1-3")
     }
 
-    func testRecordingSameSessionAgainKeepsItsExtension() {
+    func testRecordingSameSessionAgainKeepsItsExtension() throws {
         // restartMember 复用原 sessionId 重启 → 会再走一遍登记，绝不能重新发号。
         let store = LocalCrewStore(baseDirectory: tempDir())
         let crew = store.createCrew(req("甲")).crewId
@@ -86,7 +86,7 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(store.extensionNumber(crewId: crew, sessionId: "w1"), 2)
     }
 
-    func testNumbersSurviveReopenAndAreNeverReused() {
+    func testNumbersSurviveReopenAndAreNeverReused() throws {
         // 删掉 1 号 crew 后重开：下一个仍是 3，1 号永不回收。
         let base = tempDir()
         do {
@@ -100,7 +100,7 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(reopened.crewNumber(of: c), 3)
     }
 
-    func testExtensionsNeverReusedAcrossReopen() {
+    func testExtensionsNeverReusedAcrossReopen() throws {
         let base = tempDir()
         do {
             let store = LocalCrewStore(baseDirectory: base)
@@ -114,7 +114,7 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(reopened.extensionNumber(crewId: crew, sessionId: "w3"), 4)
     }
 
-    func testNumberIsStableAcrossReparenting() {
+    func testNumberIsStableAcrossReparenting() throws {
         // 号码终身不变：换爹不重发（层级完全不参与编号）。
         let store = LocalCrewStore(baseDirectory: tempDir())
         let parent = store.createCrew(req("父")).crewId
@@ -161,7 +161,7 @@ final class CrewDirectoryTests: XCTestCase {
 
     // MARK: - directory
 
-    func testDirectoryListsCrewsWithOrgPathAndMembers() {
+    func testDirectoryListsCrewsWithOrgPathAndMembers() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         let parent = store.createCrew(req("PendingCrew")).crewId
@@ -175,7 +175,7 @@ final class CrewDirectoryTests: XCTestCase {
             .init(sessionId: "w1", name: "Sparkle 接入", role: "worker",
                   brief: "接 Sparkle 更新框架", state: "working"),
         ]
-        let dir = directory(from: base, sessions: snap)
+        let dir = try directory(from: base, sessions: snap)
         let rows = dir.entries()
         XCTAssertEqual(rows.map(\.number.text), ["1", "1-1", "2", "2-1", "2-2"])
         let childCrewRow = rows.first { $0.number.text == "2" }
@@ -191,13 +191,13 @@ final class CrewDirectoryTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.number.text == "1-1" }?.status, "不在线")
     }
 
-    func testDirectoryQueryFiltersByNumberPrefixNameAndKeyword() {
+    func testDirectoryQueryFiltersByNumberPrefixNameAndKeyword() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         _ = store.createCrew(req("PendingCrew"))
         let b = store.createCrew(req("应用自动更新")).crewId
         store.recordSessionMember(crewId: b, sessionId: "w1", displayName: "Sparkle 接入")
-        let dir = directory(from: base)
+        let dir = try directory(from: base)
 
         // 号码前缀：2 命中 2 / 2-1 / 2-2，不带出 1 号。
         XCTAssertEqual(dir.entries(query: "2").map(\.number.text), ["2", "2-1", "2-2"])
@@ -212,13 +212,13 @@ final class CrewDirectoryTests: XCTestCase {
 
     // MARK: - contact 寻址
 
-    func testResolveBroadcastCaptainAndSession() {
+    func testResolveBroadcastCaptainAndSession() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         _ = store.createCrew(req("PendingCrew"))
         let b = store.createCrew(req("应用自动更新")).crewId
         store.recordSessionMember(crewId: b, sessionId: "worker-abc", displayName: "Sparkle 接入")
-        let dir = directory(from: base)
+        let dir = try directory(from: base)
 
         XCTAssertEqual(dir.resolve("2"), .broadcast(crewId: b, crewTitle: "应用自动更新"))
         XCTAssertEqual(dir.resolve("2-1"),
@@ -228,29 +228,29 @@ final class CrewDirectoryTests: XCTestCase {
                                 sessionId: "worker-abc", name: "Sparkle 接入"))
     }
 
-    func testResolveUnknownNumbersReturnNil() {
+    func testResolveUnknownNumbersReturnNil() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         _ = store.createCrew(req("甲"))
-        let dir = directory(from: base)
+        let dir = try directory(from: base)
         XCTAssertNil(dir.resolve("9"))       // 没有 9 号 crew
         XCTAssertNil(dir.resolve("1-2"))     // 该 crew 还没发过 2 号分机
         XCTAssertNil(dir.resolve("abc"))     // 压根不是号码
         XCTAssertNil(dir.resolve("1-0"))
     }
 
-    func testSelfPhoneNumber() {
+    func testSelfPhoneNumber() throws {
         let base = tempDir()
         let store = LocalCrewStore(baseDirectory: base)
         let a = store.createCrew(req("甲")).crewId
         store.recordSessionMember(crewId: a, sessionId: "w1", displayName: "W1")
-        let dir = directory(from: base)
+        let dir = try directory(from: base)
         XCTAssertEqual(dir.phoneNumber(crewId: a, sessionId: "cap", isCaptain: true)?.text, "1-1")
         XCTAssertEqual(dir.phoneNumber(crewId: a, sessionId: "w1", isCaptain: false)?.text, "1-2")
         XCTAssertNil(dir.phoneNumber(crewId: a, sessionId: "不认识的", isCaptain: false))
     }
 
-    func testEmptyDirectoryRendersHonestly() {
+    func testEmptyDirectoryRendersHonestly() throws {
         XCTAssertTrue(CrewDirectory(crews: []).render().contains("通讯录是空的"))
     }
 }

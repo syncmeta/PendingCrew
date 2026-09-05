@@ -625,7 +625,17 @@ final class McpServer {
             // 通讯录（2026-08-11）：纯文件层汇总 —— local-crews.json（号码 + 组织边 +
             // 持久成员）× crew-sessions.json（实时状态）。helper 碰不到 app 内存态，
             // 这两份共享文件就是全部数据源。
-            let directory = CrewDirectory.load(whiteboardDirectory: sharedDirectory)
+            let directory: CrewDirectory
+            do {
+                directory = try CrewDirectory.load(whiteboardDirectory: sharedDirectory)
+            } catch let failure as CrewDirectory.Unavailable {
+                // 读不出来时**不许**渲染成空表：「本机还没有登记在案的 crew」
+                // 比「查无此号」更像真话，也更危险。
+                return toolResult(id: id, text: "ERROR: " + failure.message)
+            } catch {
+                return toolResult(
+                    id: id, text: "ERROR: 通讯录读不出来：\(error.localizedDescription)")
+            }
             var text = directory.render(query: args["query"] as? String)
             if let mine = directory.phoneNumber(
                 crewId: crewId, sessionId: sessionId, isCaptain: isCaptain) {
@@ -1323,7 +1333,16 @@ final class McpServer {
                 text: "ERROR: 「\(toRaw)」不是有效号码。号码形如 7（整个 crew）或 7-3（某个成员，"
                     + "-1 恒是机长）。用 directory 查号。")
         }
-        let directory = CrewDirectory.load(whiteboardDirectory: sharedDirectory)
+        let directory: CrewDirectory
+        do {
+            directory = try CrewDirectory.load(whiteboardDirectory: sharedDirectory)
+        } catch let failure as CrewDirectory.Unavailable {
+            // 「读不到名单」不是「这个号不存在」。说错了人会去查号码，而号码是对的。
+            return toolResult(id: id, text: "ERROR: " + failure.message)
+        } catch {
+            return toolResult(
+                id: id, text: "ERROR: 通讯录读不出来：\(error.localizedDescription)")
+        }
         guard let target = directory.resolve(number) else {
             return toolResult(
                 id: id,
