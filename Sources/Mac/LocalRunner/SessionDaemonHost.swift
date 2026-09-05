@@ -183,7 +183,9 @@ final class SessionDaemonHost {
         log = SessionDaemonLog(url: paths.log)
         server = SessionProtocolServer(
             capabilities: capabilities, daemonBuild: build,
-            startedAt: startedAt.timeIntervalSince1970)
+            startedAt: startedAt.timeIntervalSince1970,
+            // socket 那台才回收半开连接；同进程桥那台必须保持 false。
+            reclaimsIdleConnections: true)
         server.onDiagnostic = { [log] line in log.write(line) }
     }
 

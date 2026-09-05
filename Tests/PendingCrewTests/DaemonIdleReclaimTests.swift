@@ -30,7 +30,7 @@ final class DaemonIdleReclaimTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_000_000)
 
     func test_对端不发FIN就消失_超过idleTimeout后连接必须被回收() {
-        let server = SessionProtocolServer(capabilities: [])
+        let server = SessionProtocolServer(capabilities: [], reclaimsIdleConnections: true)
         let link = SilentLink()
         server.accept(link: link, now: t0)
         XCTAssertEqual(server.connectionCount, 1)
@@ -45,7 +45,7 @@ final class DaemonIdleReclaimTests: XCTestCase {
     }
 
     func test_没到时限不许回收() {
-        let server = SessionProtocolServer(capabilities: [])
+        let server = SessionProtocolServer(capabilities: [], reclaimsIdleConnections: true)
         server.accept(link: SilentLink(), now: t0)
         let reclaimed = server.reclaimIdleConnections(
             now: t0.addingTimeInterval(SessionReconnectPolicy.daemonIdleTimeout - 1))
@@ -56,7 +56,7 @@ final class DaemonIdleReclaimTests: XCTestCase {
     /// 正常连接每 `pingInterval`（10s）就有一次 ping 进来，安静不到 60s。
     /// 这条钉的是「**收到字节**要把计时重置」——不重置的话活连接也会被误杀。
     func test_收到对端字节要重置计时() throws {
-        let server = SessionProtocolServer(capabilities: [])
+        let server = SessionProtocolServer(capabilities: [], reclaimsIdleConnections: true)
         let link = SilentLink()
         server.accept(link: link, now: t0)
 
@@ -70,9 +70,26 @@ final class DaemonIdleReclaimTests: XCTestCase {
         XCTAssertEqual(server.connectionCount, 1, "把还在说话的连接回收了")
     }
 
+    /// **守卫**：没打开开关的 server 一个都不许回收。
+    ///
+    /// `InProcessSessionProtocolBridge` 那台就是这种 —— 同进程桥两端同生共死、
+    /// app 侧不发 ping，接上回收就是 60 秒后误杀。**原来这条只写在注释里**，
+    /// 而注释拦不住顺手改代码的人（父机长用我自己的标准指出的）。
+    func test_没打开开关的server一个都不回收() {
+        let server = SessionProtocolServer(capabilities: [])   // 默认 false
+        let link = SilentLink()
+        server.accept(link: link, now: t0)
+
+        let reclaimed = server.reclaimIdleConnections(now: t0.addingTimeInterval(10_000))
+
+        XCTAssertEqual(reclaimed, 0)
+        XCTAssertEqual(server.connectionCount, 1, "没打开开关却回收了 —— 同进程桥会被这样打死")
+        XCTAssertEqual(link.closeCount, 0)
+    }
+
     /// 多条连接时只回收该回收的那条，别误伤旁边的。
     func test_只回收安静的那条() {
-        let server = SessionProtocolServer(capabilities: [])
+        let server = SessionProtocolServer(capabilities: [], reclaimsIdleConnections: true)
         let stale = SilentLink()
         let fresh = SilentLink()
         server.accept(link: stale, now: t0)

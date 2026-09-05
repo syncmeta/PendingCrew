@@ -73,11 +73,24 @@ final class SessionProtocolServer {
     var connectionCount: Int { connections.count }
     var sessionCount: Int { records.count }
 
+    /// 这台 server 要不要回收半开连接。**默认 false，危险的那一边要显式打出来。**
+    ///
+    /// 为什么不做成必填：忘了填的话，安全的方向应该是「不回收」——那是一个**看得见的
+    /// 缺功能**（半开连接堆着，`--daemon-status` 里数得出来）；反过来默认回收，忘了
+    /// 关的那一方会**在 60 秒后被静默打死**。让遗漏落在能看见的那一侧。
+    ///
+    /// 谁该是 true：只有 socket 那台（`SessionDaemonHost`）。
+    /// 谁必须是 false：`InProcessSessionProtocolBridge` —— 同进程桥两端同生共死，
+    /// 不存在「对端没了但 FIN 不来」，而且它的 app 侧根本不发 ping，回收=误杀。
+    private let reclaimsIdle: Bool
+
     init(capabilities: [String], daemonBuild: String = "in-process",
-         startedAt: Double = Date().timeIntervalSince1970) {
+         startedAt: Double = Date().timeIntervalSince1970,
+         reclaimsIdleConnections: Bool = false) {
         self.capabilities = capabilities
         self.daemonBuild = daemonBuild
         self.startedAt = startedAt
+        self.reclaimsIdle = reclaimsIdleConnections
     }
 
     // MARK: - 链路
@@ -112,11 +125,15 @@ final class SessionProtocolServer {
     ///
     /// ⚠️ **别想着用 `link.isSynchronous` 来自动豁免同进程桥。** 本文件开头写着那个标志
     /// 问的是「这条链路会不会跟不上」，**不是「你是谁」**；拿它当身份判据是又一次把一个
-    /// 信号当两件事用。要豁免就靠「哪台 server 起了定时器」这个显式选择。
+    /// 信号当两件事用。豁免走 `reclaimsIdleConnections:` 这个构造时的显式选择。
     @discardableResult
     func reclaimIdleConnections(now: Date = Date(),
                                 timeout: TimeInterval = SessionReconnectPolicy.daemonIdleTimeout)
         -> Int {
+        // 没打开这个开关的 server 一律不回收 —— 见 `reclaimsIdle` 的说明。
+        // **这一句才是防线**：原来只有一段注释写着「别把节拍接到桥那台上」，
+        // 而顺手改代码的人恰恰不读注释。
+        guard reclaimsIdle else { return 0 }
         let stale = connections.filter { now.timeIntervalSince($0.value.lastActivityAt) >= timeout }
         for (key, connection) in stale {
             onDiagnostic?("回收半开连接：已经 \(Int(now.timeIntervalSince(connection.lastActivityAt)))s "
