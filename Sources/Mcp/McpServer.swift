@@ -76,7 +76,24 @@ final class McpServer {
         self.continuations = continuations ?? SessionContinuationStore(
             directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         self.agentKey = agentKey
-        self.attachmentRoot = attachmentRoot ?? CrewChatAttachmentStore.defaultDirectory
+        self.attachmentRoot = attachmentRoot
+            ?? Self.defaultAttachmentRoot(whiteboardDirectory: quotaDirectory)
+    }
+
+    /// 没显式传附件根时用哪儿。
+    ///
+    /// **注入了白板目录就跟着它走** —— helper 的 `--dir` 是 `<数据根>/whiteboards`，
+    /// 附件就该落在同一个数据根的 `attachments/` 下。老实现无条件取
+    /// `CrewChatAttachmentStore.defaultDirectory`（= 真实数据根），于是
+    /// `PENDINGCREW_DATA_DIR` 把整个数据根挪走之后，**附件仍然写回真实数据根** ——
+    /// 数据根三条来源里唯一一条谁都不走的暗线（2026-09-05 发包前审计逮到）。
+    ///
+    /// 没注入（app 进程自己用）才回到真实数据目录：那时附件要和人类 composer 发的图
+    /// 同目录同命名，见 `attachmentRoot` 的声明。**别把这半也「修」掉。**
+    private static func defaultAttachmentRoot(whiteboardDirectory: URL?) -> URL {
+        guard let whiteboardDirectory else { return CrewChatAttachmentStore.defaultDirectory }
+        return whiteboardDirectory.deletingLastPathComponent()
+            .appendingPathComponent("attachments")
     }
 
     /// 处理一行 JSON-RPC。返回应答 JSON 字符串；通知（无 id / `notifications/*`）→ nil。

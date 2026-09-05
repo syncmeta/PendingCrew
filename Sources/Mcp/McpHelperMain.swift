@@ -67,14 +67,14 @@ enum McpHelperMain {
             let turn = McpTurnHook(board: store, crewId: crewId, sessionId: sessionId,
                                    sessionLabel: value("--label", args),
                                    isCaptain: args.contains("--captain"),
-                                   markerDirectory: dir ?? LocalWhiteboardStore.defaultDirectory)
+                                   markerDirectory: store.resolvedDirectory)
             let data = FileHandle.standardInput.readDataToEndOfFile()
             turn.handle(String(data: data, encoding: .utf8) ?? "")
         } else {
             // PostToolUse hook：吐本 session 未读白板（带"可信"提示）。无未读 → 不输出。
             // `--captain` → 注入多带全机 crew 组织树概览（#24 机长视野）。
             let emitter = HookEmitter(store: store, crewId: crewId, sessionId: sessionId,
-                                      cursorDir: dir ?? LocalWhiteboardStore.defaultDirectory,
+                                      cursorDir: store.resolvedDirectory,
                                       isCaptain: args.contains("--captain"))
             if let out = emitter.emitAndAdvance() {
                 print(out)

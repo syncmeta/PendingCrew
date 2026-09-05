@@ -57,6 +57,12 @@ final class LocalWhiteboardStore: @unchecked Sendable {
 
     private let directory: URL
 
+    /// 本 store 实际用的目录（构造时注入的那个，或默认目录）。**给调用方对齐用**：
+    /// helper 的 hook 分支曾各自写 `dir ?? LocalWhiteboardStore.defaultDirectory`
+    /// 再算一遍，于是「store 用哪儿」和「游标/marker 用哪儿」是两处独立推导，
+    /// `--dir` 一旦没传就一起静默落回真数据根。让它们读同一个值。
+    var resolvedDirectory: URL { directory }
+
     /// 进程内变更信号（Phase 5：去轮询）。本进程每次 append 后发一个 `crewId` ——
     /// `LocalBackend.whiteboardChanges` 订阅它、按 crewId 过滤，把中栏/右栏的
     /// 「3s 轮询」换成「append 即刷新」。app 侧人类发送走 app 进程内的 `.shared`
