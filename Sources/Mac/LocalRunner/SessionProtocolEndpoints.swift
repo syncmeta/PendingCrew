@@ -25,7 +25,14 @@ final class SessionProtocolServer {
         /// 那条链路永远不会落后一拍——给它排队等于凭空造一个不存在的中间态。
         var queues: [UInt32: SessionAttachQueue] = [:]
         var pumpScheduled = false
-        init(link: any SessionMessageLink) { self.link = link }
+        /// 最近一次**收到**对端字节的时刻。半开链路回收的唯一判据（§4.5
+        /// `daemonIdleTimeout`）—— 只认「收到」，不认「我们发出去了」：往一条
+        /// 死 socket 里写是不会报错的，写成功证明不了对端还在。
+        var lastActivityAt: Date
+        init(link: any SessionMessageLink, now: Date) {
+            self.link = link
+            self.lastActivityAt = now
+        }
     }
 
     private final class Record {
@@ -75,8 +82,8 @@ final class SessionProtocolServer {
 
     // MARK: - 链路
 
-    func accept(link: any SessionMessageLink) {
-        let connection = Connection(link: link)
+    func accept(link: any SessionMessageLink, now: Date = Date()) {
+        let connection = Connection(link: link, now: now)
         let key = ObjectIdentifier(link)
         connections[key] = connection
         link.onReceive = { [weak self] data in
@@ -86,6 +93,29 @@ final class SessionProtocolServer {
             MainActor.assumeIsolated { self?.dropConnection(key) }
         }
         onDiagnostic?("viewer 连入（当前 \(connections.count) 条）")
+    }
+
+    /// 半开链路回收（§4.5）。**`dropConnection` 只由 `link.onClose` 触发，而对端
+    /// 睡死 / 崩溃 / 网络断掉时 FIN 根本不来** —— 那条连接会永远留在 `connections` 里：
+    /// `connectionCount` 虚高、还照旧往死 socket 灌字节、它 attach 的 handle 也一直
+    /// 挂在 `records` 上不放。viewer 那半早就做了（`pongTimeout` 收不到 pong 就重连），
+    /// daemon 这半的常量 `daemonIdleTimeout` 声明了却**从来没有被接上**（2026-09-05
+    /// 查证：全库唯一另一处引用是一句断言它等于 60 的单测）。
+    ///
+    /// 判据只看「最近一次**收到**对端字节」：viewer 每 `pingInterval`（10s）发一次 ping，
+    /// 正常连接不可能安静到 `daemonIdleTimeout`（60s）。
+    @discardableResult
+    func reclaimIdleConnections(now: Date = Date(),
+                                timeout: TimeInterval = SessionReconnectPolicy.daemonIdleTimeout)
+        -> Int {
+        let stale = connections.filter { now.timeIntervalSince($0.value.lastActivityAt) >= timeout }
+        for (key, connection) in stale {
+            onDiagnostic?("回收半开连接：已经 \(Int(now.timeIntervalSince(connection.lastActivityAt)))s "
+                + "没收到对端任何字节（阈值 \(Int(timeout))s）")
+            connection.link.close()
+            dropConnection(key)
+        }
+        return stale.count
     }
 
     /// 对端消失 → 该 viewer 的 handle 全作废、停止推字节。**session 照常跑。**
@@ -214,8 +244,9 @@ final class SessionProtocolServer {
 
     // MARK: - 入站
 
-    private func receive(_ data: Data, from key: ObjectIdentifier) {
+    private func receive(_ data: Data, from key: ObjectIdentifier, now: Date = Date()) {
         guard let connection = connections[key] else { return }
+        connection.lastActivityAt = now
         do {
             for frame in try connection.frameDecoder.append(data) {
                 guard let message = try codec.decodeApp(frame) else { continue }

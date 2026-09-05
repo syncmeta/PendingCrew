@@ -158,6 +158,8 @@ final class SessionDaemonHost {
     let paths: PendingCrewDaemonPaths
     let log: SessionDaemonLog
     let server: SessionProtocolServer
+    /// 见 `startIdleReclaimTimer()`。
+    private var idleReclaimTimer: Timer?
 
     /// 往受影响 crew 的白板发一条（crewId, text）。默认落真白板；
     /// 测试注入它，免得单测往人的白板上写字。
@@ -229,9 +231,25 @@ final class SessionDaemonHost {
             }
             listener.start()
             self.listener = listener
+            startIdleReclaimTimer()
             log.write("监听 \(paths.socket)")
         } catch {
             throw StartError.listen(error)
+        }
+    }
+
+    /// 半开链路回收的节拍。**这一拍是 `daemonIdleTimeout` 唯一的消费者** —— 在它之前
+    /// 那个常量声明了却没人读，于是「后台会回收半开连接」这件事从来没发生过。
+    ///
+    /// 周期取 `pingInterval`（10s）：viewer 本来就每 10s 发一次 ping，用同一个节拍扫，
+    /// 最坏也就多留一个 ping 周期。**别取成 `daemonIdleTimeout`** —— 那样一条刚好在
+    /// 扫描后一秒变哑的连接要等将近两倍时长才被回收。
+    private func startIdleReclaimTimer() {
+        idleReclaimTimer?.invalidate()
+        idleReclaimTimer = Timer.scheduledTimer(
+            withTimeInterval: SessionReconnectPolicy.pingInterval, repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.server.reclaimIdleConnections() }
         }
     }
 

@@ -89,6 +89,9 @@ final class McpDirectoryIOFailureTests: XCTestCase {
         let f = fixture()
         try makeUnreadable(f)
         let r = call(server(f), "contact", #"{"to":"2-1","message":"喂"}"#)
+        // ⚠️ 这条禁的是**字面串**，不是那个论断 —— 一句本来有用的
+        // 「这不是『查无此号』」也会被它判红。**撞上时先想「该改文案还是该改这条断言」**，
+        // 别默认是文案的错。（本次实现确实改了文案：话说全了又绕开这四个字。）
         XCTAssertFalse(r.contains("查无此号"),
                        "把「我读不到」说成「它不存在」——人会去查号码，而号码是对的：\(r)")
         XCTAssertTrue(r.contains("通讯录读不出来"), r)
