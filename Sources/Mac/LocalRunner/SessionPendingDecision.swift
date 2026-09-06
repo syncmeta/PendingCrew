@@ -162,13 +162,22 @@ final class PendingDecisionTracker {
     /// 当前正在等的那个（nil = 没在等）——上层据此翻状态。
     var pending: PendingTerminalDecision? { reported }
 
-    /// - Parameter stable: 菜单在屏幕上稳住多久才算「真在等人」。3s 足够躲开
-    ///   渲染中途的半成品画面，又不会让人多等。
-    init(stable: TimeInterval = 3) { self.stable = stable }
+    /// 菜单在屏幕上稳住多久才算「真在等人」。3s 足够躲开渲染中途的半成品画面，
+    /// 又不会让人多等。
+    ///
+    /// **这是全仓唯一的那个阈值** —— `StartupPromptDelivery.Timing.dialogStable`
+    /// 直接引它，别在别处再写一个数字：两条路对「什么时候算真在等人」给出不同答案，
+    /// 就会出现「开场投递认为还没定、待决策已经报出去了」这种自相矛盾的现场。
+    static let stableWindow: TimeInterval = 3
+
+    /// - Parameter stable: 见 `stableWindow`。
+    init(stable: TimeInterval = PendingDecisionTracker.stableWindow) { self.stable = stable }
 
     func feed(_ bytes: ArraySlice<UInt8>) { stripper.feed(bytes) }
 
-    func poll(now: Date = Date()) -> Event? {
+    /// - Parameter screen: 渲染完的那一屏（`AgentSessionCore.screenRows()`）。
+    ///   `nil` = 调用方拿不到画面，退回只看字节尾窗。
+    func poll(now: Date = Date(), screen: [String]? = nil) -> Event? {
         guard let d = TerminalMenuParser.parse(stripper.tail) else {
             candidate = nil
             candidateSince = nil

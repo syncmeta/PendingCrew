@@ -70,12 +70,14 @@ final class AgentTuiFixtureRecorder: XCTestCase {
             录制器默认不跑（要花订阅额度、要联网、每次结果都不同）。要录：
               TEST_RUNNER_PENDINGCREW_RECORD_TUI=claude  …只录 claude 的 TUI
               TEST_RUNNER_PENDINGCREW_RECORD_TUI=shell   …只录人直接用的那个终端 session
-              TEST_RUNNER_PENDINGCREW_RECORD_TUI=all     …两段都录
+              TEST_RUNNER_PENDINGCREW_RECORD_TUI=trust   …只录「是否信任这个文件夹」那一屏
+              TEST_RUNNER_PENDINGCREW_RECORD_TUI=all     …三段都录
             产物落在 \(Self.fixtureDirectory.path)
             """)
         }
         if what == "shell" || what == "all" { try await recordShell() }
         if what == "claude" || what == "all" { try await recordClaude() }
+        if what == "trust" || what == "all" { try await recordTrustDialog() }
     }
 
     // MARK: - 人直接用的那个终端（`.terminal`）
@@ -153,6 +155,41 @@ final class AgentTuiFixtureRecorder: XCTestCase {
         try await settle(sink, quietFor: 2.0, upTo: 90)
 
         try write(sink.bytes, to: "tui-claude.bin")
+    }
+
+    // MARK: - 「是否信任这个文件夹」那一屏
+
+    /// **必须是一个全新的、claude 从没信任过的目录** —— 这是这段语料唯一的价值所在。
+    /// 跑在已信任目录里的探针根本走不到这一屏，录出来的是 banner + 输入框，看着有
+    /// 东西、其实测不到现场（2026-09-06 机长把这条写成了 B 的验收条件）。所以目录名
+    /// 带 UUID，每次都新；录完不删，留给人自己看现场。
+    ///
+    /// **不投任何 prompt、不按任何键** —— 只让它把那一屏画出来就收工：
+    /// 零订阅额度、零 token，也绝不会替人选「Yes, I trust this folder」（那是人的
+    /// 授权，不是我们的）。
+    private func recordTrustDialog() async throws {
+        guard let executable = LocalCodingAgentExecutable.resolve(.claudeCode) else {
+            throw XCTSkip("本机找不到 claude 可执行文件")
+        }
+        let workdir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pendingcrew-trust-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+
+        // initialPrompt 为 nil = 不挂开场投递，一个字节都不往里写。
+        let core = AgentSessionCore(
+            config: SessionConfig(kind: .claudeCode),
+            mode: .agent,
+            executable: executable.path,
+            workdir: workdir.path,
+            env: ProcessInfo.processInfo.environment)
+        defer { core.stop() }
+
+        let sink = ByteSink(cap: Self.byteCap)
+        core.onOutput = { sink.append($0) }
+        try await settle(sink, quietFor: 1.5, upTo: 30)
+
+        try write(sink.bytes, to: "tui-claude-trust.bin")
+        print("[recorder] 未信任目录：\(workdir.path)")
     }
 
     // MARK: -
