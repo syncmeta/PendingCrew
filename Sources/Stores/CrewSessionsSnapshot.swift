@@ -62,7 +62,16 @@ struct CrewSessionsSnapshot: Codable, Equatable {
     }
 
     /// 机长 `list_sessions` 的渲染：一行一个成员,直接可读。
-    func renderRoster(crewId: String) -> String {
+    ///
+    /// `evidence` 是**产出证据**取数口（人类 Todo #107 第三件：判活不判状态）——
+    /// 状态会骗人（2026-09-06 实例：卡住 90/110 分钟的两个 session 状态全显示
+    /// 「空闲」），所以每一行还要回答「它最近真的写出过什么、什么时候」。
+    ///
+    /// 它是**闭包不是字典**：字典查不到就得 `?? 某个默认值`，而那个默认值就是
+    /// 「看不出来」被静默算成「没产出」的入口。闭包是全函数 —— 每一行都必须有人
+    /// 明确回答，没有洞可漏。
+    func renderRoster(crewId: String, now: Date = Date(),
+                      evidence: (Entry) -> SessionOutputEvidence) -> String {
         guard let entries = crews[crewId], !entries.isEmpty else {
             return "本 crew 当前没有登记在案的 session（还没起过,或都已被移除）。"
         }
@@ -85,7 +94,8 @@ struct CrewSessionsSnapshot: Codable, Equatable {
             default:        stateLabel = "⚪ 已退出"
             }
             let briefPart = e.brief.isEmpty ? "" : " — \(e.brief)"
-            return "- \(e.name) [\(e.role == "captain" ? "机长" : "worker")] \(stateLabel)\(briefPart) (session_id: \(e.sessionId))"
+            let evidencePart = " | " + evidence(e).rosterColumn(now: now)
+            return "- \(e.name) [\(e.role == "captain" ? "机长" : "worker")] \(stateLabel)\(briefPart)\(evidencePart) (session_id: \(e.sessionId))"
         }
         return lines.joined(separator: "\n") + "\n（快照时间 \(updatedAt)）"
     }

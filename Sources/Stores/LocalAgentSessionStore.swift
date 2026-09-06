@@ -80,6 +80,21 @@ final class LocalAgentSessionStore: @unchecked Sendable {
         }
     }
 
+    /// 某个 crew 的全部记录，按 sessionId 索引。**一次取完**：机长点名要给每一行
+    /// 附产出证据（Todo #107），逐行现查等于逐行上一次文件锁。
+    /// 查不到的 sessionId 在这张表里就是**不存在**，调用方必须自己决定那叫什么 ——
+    /// 别在这里替它编一个默认值。
+    func records(crewId: String,
+                 onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> [String: Record] {
+        withFileLock {
+            var out: [String: Record] = [:]
+            for r in loadLocked(onIncident: onIncident) where r.crewId == crewId {
+                out[r.sessionId] = r
+            }
+            return out
+        }
+    }
+
     /// 查某个 session 记着的 agent 侧会话号（没有 → nil，调用方按「新开一轮」处理）。
     func agentSessionId(crewId: String, sessionId: String,
                         onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> String? {
