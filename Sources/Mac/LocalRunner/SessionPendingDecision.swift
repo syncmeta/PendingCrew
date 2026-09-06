@@ -88,11 +88,113 @@ enum TerminalMenuParser {
         return (n, text, selected)
     }
 
+    /// claude 选择框底下那句确认脚注（`Enter to confirm · Esc to cancel`）。
+    ///
+    /// **它是「没有编号的选项块」唯一靠得住的判别式。** 没有它，一个人正打着两行字
+    /// 的输入框（光标行 + 续行）跟这种菜单在文本上一模一样，收进来等于把每个正在
+    /// 打字的 session 都点亮成「⌛ 等人拍板」。
+    ///
+    /// 比对前先把空白全去掉：屏幕上是 `Enter to confirm · Esc to cancel`，而去 ANSI 的
+    /// 字节尾窗里同一句是 `Entertoconfirm·Esctocancel`（claude 用光标定位摆词，
+    /// 词之间那些空格在字节流里根本不存在）。两条来源要用同一把尺子。
+    static func isConfirmFooter(_ stripped: String) -> Bool {
+        let compact = stripped.filter { !$0.isWhitespace }.lowercased()
+        return compact.contains("toconfirm") && compact.contains("tocancel")
+    }
+
+    /// 问句往上找多少行。信任框的真问句离选项块有 6～7 行（中间隔着说明段落与
+    /// 「Security guide」），只看紧邻那一行会把「Security guide」当成问句发进群 ——
+    /// 人看到它完全不知道在等什么。
+    static let promptScanDepth = 12
+
+    /// 选项块上方那句问句：**优先带问号的那一行**，找不到就退回最近的一行正文。
+    private static func promptAbove(_ lines: [String], blockStart: Int) -> String {
+        var nearest = ""
+        var scanned = 0
+        var k = blockStart - 1
+        while k >= 0, scanned < promptScanDepth {
+            defer { k -= 1; scanned += 1 }
+            let line = lines[k]
+            if line.isEmpty { continue }
+            if nearest.isEmpty { nearest = line }
+            if line.contains("?") || line.contains("？") { return line }
+        }
+        return nearest
+    }
+
     static func parse(_ plain: String) -> PendingTerminalDecision? {
         let lines = plain
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { strip(String($0)) }
+        guard let decision = parseNumbered(lines) ?? parseCursorList(lines) else { return nil }
 
+        // rate-limit 菜单归 `RateLimitMenuScanner` 自动应答，不走找人这条路
+        // —— 否则每次撞额度都白喊一次人。两条解析路都要过这道闸。
+        let hay = ([decision.prompt] + decision.options).joined(separator: " ").lowercased()
+        if RateLimitMenuScanner.menuPhrases.contains(where: { hay.contains($0) }) { return nil }
+        return decision
+    }
+
+    /// **没有编号的选择框**（2026-09 的 claude 信任框就是这个形状）：
+    /// ```
+    ///  ❯  No, exit
+    ///     Yes, I trust this folder
+    ///
+    ///  Enter to confirm · Esc to cancel
+    /// ```
+    /// 判据（同样是缺一不可，理由同上：误报比漏报更伤）：
+    /// 1. 末尾附近有那句**确认脚注**（见 `isConfirmFooter`）—— 这条是把它跟「人正在
+    ///    输入框里打第二行字」分开的唯一硬证据。
+    /// 2. 脚注上方是一段**连续**非空行，至少两行。
+    /// 3. 其中**恰好一行**带选择光标（`❯`）—— 两行都带说明这不是单选。
+    private static func parseCursorList(_ lines: [String]) -> PendingTerminalDecision? {
+        // 1) 脚注：从尾部往上找，正文超过 trailingSlack 行就判它已经滚过去了。
+        var footer: Int?
+        var trailing = 0
+        var i = lines.count - 1
+        while i >= 0 {
+            let line = lines[i]
+            if line.isEmpty { i -= 1; continue }
+            if isConfirmFooter(line) { footer = i; break }
+            trailing += 1
+            if trailing > trailingSlack { return nil }
+            i -= 1
+        }
+        guard let footerIndex = footer else { return nil }
+
+        // 2) 脚注上方那一段连续非空行。
+        var end = footerIndex - 1
+        while end >= 0, lines[end].isEmpty { end -= 1 }
+        guard end >= 0 else { return nil }
+        var start = end
+        while start - 1 >= 0, !lines[start - 1].isEmpty { start -= 1 }
+
+        let block = Array(lines[start...end])
+        guard block.count >= 2 else { return nil }
+        // 带编号的走上面那条路；这里只认没编号的，免得同一屏被两条路解析出两份
+        // 措辞不同的结果，在上层来回抢。
+        guard !block.contains(where: { option($0) != nil }) else { return nil }
+
+        var options: [String] = []
+        var cursors = 0
+        for line in block {
+            guard let first = line.first else { return nil }
+            if markers.contains(first) {
+                cursors += 1
+                let text = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { return nil }
+                options.append(text)
+            } else {
+                options.append(line)
+            }
+        }
+        guard cursors == 1 else { return nil }
+
+        return PendingTerminalDecision(
+            prompt: promptAbove(lines, blockStart: start), options: options)
+    }
+
+    private static func parseNumbered(_ lines: [String]) -> PendingTerminalDecision? {
         // 1) 从尾部往上找最后一个选项行；正文超过 trailingSlack 行就判菜单已过期。
         var lastOption: Int?
         var trailing = 0
@@ -121,22 +223,9 @@ enum TerminalMenuParser {
               parsed.contains(where: { $0.selected })
         else { return nil }
 
-        // 3) 问句 = 选项块上方最近的一行正文（跳过空行/框线）。
-        var prompt = ""
-        var k = j
-        while k >= 0 {
-            if lines[k].isEmpty { k -= 1; continue }
-            prompt = lines[k]
-            break
-        }
-
-        let decision = PendingTerminalDecision(prompt: prompt, options: parsed.map(\.text))
-
-        // 4) rate-limit 菜单归 `RateLimitMenuScanner` 自动应答，不走找人这条路。
-        let hay = ([prompt] + decision.options).joined(separator: " ").lowercased()
-        if RateLimitMenuScanner.menuPhrases.contains(where: { hay.contains($0) }) { return nil }
-
-        return decision
+        // 3) 问句 = 选项块上方那句话（优先带问号的那一行，见 `promptAbove`）。
+        return PendingTerminalDecision(
+            prompt: promptAbove(lines, blockStart: j + 1), options: parsed.map(\.text))
     }
 }
 
@@ -162,14 +251,47 @@ final class PendingDecisionTracker {
     /// 当前正在等的那个（nil = 没在等）——上层据此翻状态。
     var pending: PendingTerminalDecision? { reported }
 
-    /// - Parameter stable: 菜单在屏幕上稳住多久才算「真在等人」。3s 足够躲开
-    ///   渲染中途的半成品画面，又不会让人多等。
-    init(stable: TimeInterval = 3) { self.stable = stable }
+    /// 菜单在屏幕上稳住多久才算「真在等人」。3s 足够躲开渲染中途的半成品画面，
+    /// 又不会让人多等。
+    ///
+    /// **这是全仓唯一的那个阈值** —— `StartupPromptDelivery.Timing.dialogStable`
+    /// 直接引它，别在别处再写一个数字：两条路对「什么时候算真在等人」给出不同答案，
+    /// 就会出现「开场投递认为还没定、待决策已经报出去了」这种自相矛盾的现场。
+    static let stableWindow: TimeInterval = 3
+
+    /// - Parameter stable: 见 `stableWindow`。
+    init(stable: TimeInterval = PendingDecisionTracker.stableWindow) { self.stable = stable }
 
     func feed(_ bytes: ArraySlice<UInt8>) { stripper.feed(bytes) }
 
-    func poll(now: Date = Date()) -> Event? {
-        guard let d = TerminalMenuParser.parse(stripper.tail) else {
+    /// **两条来源，一个出口。**
+    ///
+    /// - 字节尾窗（`stripper.tail`）：命令审批 / 计划确认这类，claude 是顺着流吐出来的。
+    /// - 渲染完的那一屏（`screen`）：claude 的信任框靠**光标定位**摆列，在字节流上
+    ///   它是瞎的 —— 序号后面没有空格、行尾是 `\r\r\n`，去 ANSI 之后整个形状就散了
+    ///   （实测证据见 `ClaudeInputBox.blockingDialog`）。只有喂进 `Terminal` 让它把列
+    ///   位置解出来，那一屏才重新长成人看到的样子。
+    ///
+    /// 同时命中时怎么办（**别互相抢、别抖**）：
+    /// 1. 谁都行的时候认**屏幕**那条 —— 它是权威渲染，措辞跟人看到的一致。
+    /// 2. 但**已经在跟踪/已经报出去的那一个优先粘住**：两条来源对同一个菜单会给出
+    ///    措辞略有出入的文本（字节流里词间空格是没有的），指纹一变就会重新计时、
+    ///    重新报一次 —— 群里刷两条、状态灯闪。粘住之后重绘无害。
+    /// 3. **两条都认不出来才算「答完了」。** 屏幕重绘到一半那一拍解析不出来，
+    ///    不该把状态清掉。
+    ///
+    /// - Parameter screen: 渲染完的那一屏（`AgentSessionCore.screenRows()`）。
+    ///   `nil` = 调用方拿不到画面，退回只看字节尾窗。
+    func poll(now: Date = Date(), screen: [String]? = nil) -> Event? {
+        // 屏幕在前 = 谁都行的时候认它。
+        let seen = [
+            screen.flatMap { ClaudeInputBox.blockingDialog($0) },
+            TerminalMenuParser.parse(stripper.tail),
+        ].compactMap { $0 }
+        let sticky = reported?.fingerprint ?? candidate?.fingerprint
+        let chosen = seen.first { $0.fingerprint == sticky } ?? seen.first
+
+        guard let d = chosen else {
             candidate = nil
             candidateSince = nil
             guard reported != nil else { return nil }

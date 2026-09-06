@@ -75,6 +75,63 @@ final class SessionPendingDecisionTests: XCTestCase {
         XCTAssertEqual(TerminalMenuParser.parse(menu)?.options, ["Yes", "No"])
     }
 
+    // MARK: - 没有编号的选择框（2026-09 的 claude 信任框就长这样）
+
+    /// 2026-09-06 在一个全新的、claude 从没信任过的目录里现录到的那一屏
+    /// （原始字节入库在 `Tests/Fixtures/tui-claude-trust.bin`，`ClaudeInputBoxFixtureTests`
+    /// 拿它跑端到端）。**选项没有编号**，默认高亮停在 `No, exit`。
+    private let unnumberedTrustDialog = """
+        Quick safety check: Is this a project you created or one you trust? (Like your
+        own code, a well-known open source project, or work from your team). If not,
+        take a moment to review what's in this folder first.
+
+        Claude Code'll be able to read, edit, and execute files here.
+
+        Security guide
+
+        ❯  No, exit
+           Yes, I trust this folder
+
+        Enter to confirm · Esc to cancel
+        """
+
+    func testParsesUnnumberedTrustDialog() {
+        let d = TerminalMenuParser.parse(unnumberedTrustDialog)
+        XCTAssertEqual(d?.options, ["No, exit", "Yes, I trust this folder"])
+    }
+
+    /// 通知里那句问句得说清在问什么。**「Security guide」不算** —— 它只是选项块
+    /// 正上方那一行，人在群里看到它完全不知道在等什么。
+    func testUnnumberedDialogPromptIsTheActualQuestion() {
+        let prompt = TerminalMenuParser.parse(unnumberedTrustDialog)?.prompt ?? ""
+        XCTAssertTrue(prompt.contains("trust?") || prompt.contains("safety check"), prompt)
+    }
+
+    /// **不认错**：正常就绪的输入框也是「`❯` 开头的一行」，后面还跟着框线与提示条。
+    /// 把它判成待决策 = 每个正常干活的 session 都被点亮成「⌛ 等人拍板」。
+    func testReadyInputBoxIsNotADialog() {
+        let ready = """
+            ╭──────────────────────────────────────────────╮
+            │ ❯ Try "how do I log an error?"               │
+            ╰──────────────────────────────────────────────╯
+              auto mode on · ? for shortcuts
+            """
+        XCTAssertNil(TerminalMenuParser.parse(ready))
+    }
+
+    /// 人打了两行字的输入框：光标行 + 紧跟一行续行，形状跟没编号的菜单一模一样。
+    /// 唯一的区别是**底下没有那句确认脚注** —— 判据必须落在那上面。
+    func testMultiLineInputBoxIsNotADialog() {
+        let typing = """
+            ╭──────────────────────────────────────────────╮
+            │ ❯ 先看一下现状                                │
+            │   再决定怎么改                                │
+            ╰──────────────────────────────────────────────╯
+              auto mode on · ? for shortcuts
+            """
+        XCTAssertNil(TerminalMenuParser.parse(typing))
+    }
+
     // MARK: - 认不错（误报比漏报更伤：群里刷噪音，人就不再看通知了）
 
     /// **最要紧的一条**：agent 正文里的编号列表满地都是（计划、清单、总结），
@@ -210,6 +267,60 @@ final class SessionPendingDecisionTests: XCTestCase {
             now += 1
             XCTAssertNil(t.poll(now: now))
         }
+    }
+
+    // MARK: - 两条来源：字节尾窗的菜单 / 屏幕上的阻塞框
+
+    /// claude 的信任框靠**光标定位**摆列，在去 ANSI 的字节尾窗上它是瞎的
+    /// （理由与实测证据见 `ClaudeInputBox.blockingDialog`）。所以字节那条认不出来的
+    /// 时候，屏幕那条必须能把它报出来 —— 否则就是今天这条 P0：起着、不报错、
+    /// 群里一个字都没有。
+    func testScreenSourceFiresWhenByteTailIsBlind() {
+        let t = tracker()
+        let t0 = Date()
+        // 字节尾窗里什么菜单都没有（模拟被光标定位打散的那种输出）。
+        feed(t, "\u{1b}[2GQuick\u{1b}[8Gsafety\u{1b}[15Gcheck")
+        let screen = unnumberedTrustDialog.components(separatedBy: "\n")
+        XCTAssertNil(t.poll(now: t0, screen: screen))
+        guard case let .appeared(d)? = t.poll(
+            now: t0.addingTimeInterval(PendingDecisionTracker.stableWindow + 0.1), screen: screen)
+        else { return XCTFail("屏幕上稳稳挂着一个信任框，却没报出待决策") }
+        XCTAssertEqual(d.options, ["No, exit", "Yes, I trust this folder"])
+    }
+
+    /// 框没了就得清 —— 不管它是从哪条来源报出来的（#545：进得去出不来最伤）。
+    func testScreenSourceClearsWhenDialogLeavesTheScreen() {
+        let t = tracker()
+        var now = Date()
+        let screen = unnumberedTrustDialog.components(separatedBy: "\n")
+        _ = t.poll(now: now, screen: screen)
+        now += PendingDecisionTracker.stableWindow + 0.1
+        XCTAssertNotNil(t.poll(now: now, screen: screen))
+        now += 1
+        XCTAssertEqual(
+            t.poll(now: now, screen: ["⏺ 好的，开始干活了。", "正在读文件…"]), .cleared)
+    }
+
+    /// 两条来源同时命中时**别互相抢**：屏幕那条是权威渲染，认它；而且报过之后不许
+    /// 因为另一条来源的措辞不同就来回翻（一翻一回就是群里刷两条、状态灯闪）。
+    func testTwoSourcesDoNotFightOrFlicker() {
+        let t = tracker()
+        var now = Date()
+        feed(t, permissionMenu)
+        let screen = permissionMenu.components(separatedBy: "\n")
+        _ = t.poll(now: now, screen: screen)
+        now += PendingDecisionTracker.stableWindow + 0.1
+        guard case .appeared? = t.poll(now: now, screen: screen) else {
+            return XCTFail("两条来源都看得见的菜单反而没报出来")
+        }
+        // 之后每一拍：两条来源都还在 → 一条新事件都不该有。
+        for _ in 0..<10 {
+            now += 1
+            XCTAssertNil(t.poll(now: now, screen: screen), "同一个菜单不许反复报")
+        }
+        // 屏幕重绘到一半、这一拍解析不出来，但字节那条还看得见 —— 不是「答完了」。
+        now += 1
+        XCTAssertNil(t.poll(now: now, screen: ["…重绘中…"]), "半成品画面不该把状态清掉")
     }
 
     // MARK: - 通知选靶：@ 对的人
