@@ -134,5 +134,136 @@ final class ClaudeInputBoxFixtureTests: XCTestCase {
         XCTAssertTrue(decision.options[0].contains("trust"), "选项 1：\(decision.options[0])")
         XCTAssertTrue(decision.options[1].contains("exit"), "选项 2：\(decision.options[1])")
     }
+
+    // MARK: - 今天的现场：**没有编号**的信任框（`tui-claude-trust.bin`）
+
+    /// 上面两条吃的 `tui-claude.bin` 是更早版本的 claude 录的，那时候选项还带编号
+    /// （`1. Yes, I trust this folder` / `2. No, exit`）。**现在的 claude 不带了**：
+    ///
+    /// ```
+    /// ❯  No, exit
+    ///    Yes, I trust this folder
+    ///  Enter to confirm · Esc to cancel
+    /// ```
+    ///
+    /// 这段语料是 2026-09-06 在一个**全新的、claude 从没信任过的**临时目录里现录的
+    /// （`AgentTuiFixtureRecorder` 的 `trust` 档；跑在已信任目录里的探针走不到这一屏，
+    /// 录出来是 banner + 输入框，看着有东西其实测不到现场）。
+    ///
+    /// 两条判据在这一屏上都翻车，而且**翻得静悄悄**：
+    /// - `blockingDialog` 判「没有对话框」（解析器要求 `1.` `2.` 开头）；
+    /// - 同一屏被 `inputRow` 判成「输入框已就绪」（那行以 `❯` 开头、又不像编号选项），
+    ///   于是开场 brief 会被当按键打进这个框、再回车 —— 而默认高亮停在 `No, exit`。
+    private func trustDialogScreen() throws -> [String] {
+        let fixture = try loadFixture("tui-claude-trust.bin")
+        let harness = HeadlessTerminalHarness(cols: 80, rows: 25)
+        harness.feed(fixture)
+        // **用生产那条读法**（`AgentSessionCore.screenRows()` → `TerminalScreenText`），
+        // 不用本文件上面那个 `translateToString` 私有读法 —— 后者把没写过的格原样留成
+        // NUL，跟生产里喂给判据的文本不是同一份东西。
+        return TerminalScreenText.rows(of: harness.terminal)
+    }
+
+    func testRecognisesTodaysUnnumberedTrustDialog() throws {
+        let rows = try trustDialogScreen()
+        let decision = try XCTUnwrap(
+            ClaudeInputBox.blockingDialog(rows),
+            """
+            屏幕上明明摆着「是否信任这个文件夹」，判据却说没有对话框。画面：
+            \(rows.joined(separator: "\n"))
+            """)
+        XCTAssertEqual(decision.options.count, 2, "选项：\(decision.options)")
+        XCTAssertTrue(decision.options.contains { $0.contains("trust") }, "\(decision.options)")
+        XCTAssertTrue(decision.options.contains { $0.contains("exit") }, "\(decision.options)")
+        XCTAssertTrue(
+            decision.prompt.contains("trust") || decision.prompt.contains("safety"),
+            "问句得说清在问什么，否则群里那条通知等于没说：\(decision.prompt)")
+    }
+
+    /// 在等人回答的那一屏**绝不是**「输入框就绪」。这条挂了 = brief 被打进框里、
+    /// 回车落在默认高亮的 `No, exit` 上。
+    func testUnnumberedTrustDialogIsNotMistakenForAReadyInputBox() throws {
+        let rows = try trustDialogScreen()
+        XCTAssertNil(
+            ClaudeInputBox.inputRow(rows),
+            """
+            信任框那一屏被判成了「输入框就绪」。画面：
+            \(rows.joined(separator: "\n"))
+            """)
+    }
+
+    /// **反面那把尺子**（`tui-claude-ready.bin`，同一天在一个 claude **已经信任过**
+    /// 的目录里现录）：正常起来的 session 从头到尾一拍都不许被判成「在等人拍板」。
+    ///
+    /// 认「没有编号的选择框」那条判据一旦放松过头，代价不是漏报而是**全员误报** ——
+    /// 每个正常干活的 session 都点亮成「⌛ 等人拍板」，机长按谎报的状态改派。
+    /// 一把只会说「有」的尺子等于没有尺子，所以「已知没事」这一面也要有真语料钉着。
+    func testRealReadySessionNeverLooksLikeAPendingDecision() throws {
+        let fixture = try loadFixture("tui-claude-ready.bin")
+        let harness = HeadlessTerminalHarness(cols: 80, rows: 25)
+
+        var sawReady = false
+        var offset = 0
+        while offset < fixture.count {
+            let size = min(64, fixture.count - offset)
+            harness.feed(Array(fixture[offset..<(offset + size)]))
+            offset += size
+
+            let rows = TerminalScreenText.rows(of: harness.terminal)
+            XCTAssertNil(
+                ClaudeInputBox.blockingDialog(rows),
+                """
+                正常就绪的画面被判成了「在等人拍板」。喂到第 \(offset) 字节，画面：
+                \(rows.joined(separator: "\n"))
+                """)
+            if ClaudeInputBox.inputRow(rows) != nil { sawReady = true }
+        }
+        XCTAssertTrue(sawReady, "这段语料里本来就有一个画好的空输入框，判据必须认得出来")
+    }
+
+    /// **这条就是今天那个 P0 本身**：屏幕上有信任框 → 待决策那条出口必须出一条，
+    /// 而不是「起来了、一直空闲」。
+    ///
+    /// 喂法照生产：字节喂 `feed`（`AgentSessionCore.scanOutput` 就这么喂），
+    /// 每拍带着**渲染完的画面**去 `poll`（`pollPendingDecision` 挂在 0.6s busyTimer 上）。
+    func testTrustDialogOnScreenRaisesAPendingDecision() throws {
+        let fixture = try loadFixture("tui-claude-trust.bin")
+        let harness = HeadlessTerminalHarness(cols: 80, rows: 25)
+        let tracker = PendingDecisionTracker()
+        let t0 = Date()
+
+        var offset = 0
+        while offset < fixture.count {
+            let size = min(64, fixture.count - offset)
+            let chunk = Array(fixture[offset..<(offset + size)])
+            harness.feed(chunk)
+            tracker.feed(chunk[...])
+            offset += size
+            _ = tracker.poll(now: t0, screen: TerminalScreenText.rows(of: harness.terminal))
+        }
+
+        let rows = TerminalScreenText.rows(of: harness.terminal)
+        // 稳定窗过了才认（同 `PendingDecisionTracker.stableWindow`）——半成品画面不算。
+        let event = tracker.poll(
+            now: t0.addingTimeInterval(PendingDecisionTracker.stableWindow + 0.1), screen: rows)
+        guard case let .appeared(decision)? = event else {
+            return XCTFail("""
+            信任框在屏幕上稳稳挂着，待决策出口却一个字都没有 —— 这正是「session 起来了、
+            群里一片安静、看着一直空闲」的那条路。实际事件：\(String(describing: event))
+            画面：
+            \(rows.joined(separator: "\n"))
+            """)
+        }
+        XCTAssertTrue(decision.options.contains { $0.contains("trust") }, "\(decision.options)")
+
+        // 进得去也要出得来（#545）：框答掉/滚过去之后必须清，否则又是一个谎报状态。
+        tracker.feed(Array("\n⏺ 好的，开始干活了。\n正在读文件…\n还在读…\n".utf8)[...])
+        harness.feed(Array("\u{1b}[2J\u{1b}[H⏺ 好的，开始干活了。\r\n正在读文件…\r\n".utf8))
+        XCTAssertEqual(
+            tracker.poll(now: t0.addingTimeInterval(PendingDecisionTracker.stableWindow + 1),
+                         screen: TerminalScreenText.rows(of: harness.terminal)),
+            .cleared,
+            "框没了就必须清掉待决策")
+    }
 }
 #endif

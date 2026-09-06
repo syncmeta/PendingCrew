@@ -54,9 +54,11 @@ struct StartupPromptDelivery {
         var submitGap: TimeInterval = 0.5
         /// 写正文 / 发回车各自的最大次数。
         var maxAttempts = 3
-        /// 需要人回答的对话框要稳定多久才认。与 `PendingDecisionTracker` 同一个
-        /// 数量级，理由也一样：TUI 半成品画面会短暂长得像菜单，判早了是误报。
-        var dialogStable: TimeInterval = 3
+        /// 需要人回答的对话框要稳定多久才认。**直接引 `PendingDecisionTracker` 那个
+        /// 常量，不在这里另写一个数字** —— 两条路对「什么时候算真在等人」给出不同
+        /// 答案，就会出现「开场投递还认为没定、待决策已经报进群了」这种自相矛盾的
+        /// 现场。理由也一样：TUI 半成品画面会短暂长得像菜单，判早了是误报。
+        var dialogStable: TimeInterval = PendingDecisionTracker.stableWindow
 
         static let `default` = Timing()
     }
@@ -245,7 +247,18 @@ enum ClaudeInputBox {
     ///
     /// 选择菜单的选项行（`❯ 1. Yes, I trust this folder`）**不是**输入行 ——
     /// 撞上就直接判「没就绪」：那一屏在等人回答，谁都不该往里投东西。
+    ///
+    /// ⚠️ **逐行判断挡不住没有编号的那种框。** 2026-09-06 现录的真信任框长这样：
+    /// ```
+    ///  ❯  No, exit
+    ///     Yes, I trust this folder
+    /// ```
+    /// 单看 `❯  No, exit` 这一行，它跟「人在输入框里打了字」一模一样 —— 实测
+    /// （`ClaudeInputBoxFixtureTests`）这里当场返回了 `"No, exit"`，也就是把 brief
+    /// 当按键投进那个框、再回车，而默认高亮正停在 `No, exit` 上。所以判据只能落在
+    /// **整屏**这一层：这一屏要是在等人回答，它就不是输入行，一行都不是。
     static func inputRow(_ rows: [String]) -> String? {
+        guard blockingDialog(rows) == nil else { return nil }
         for line in normalize(rows).suffix(scanDepth).reversed() {
             let stripped = TerminalMenuParser.strip(line)
             guard let first = stripped.first, markers.contains(first) else { continue }
