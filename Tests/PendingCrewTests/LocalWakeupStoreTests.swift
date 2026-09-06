@@ -158,4 +158,31 @@ final class LocalWakeupStoreTests: XCTestCase {
         XCTAssertEqual(s.list().map(\.id), ["b"])
         XCTAssertTrue(try corruptArchives(dir).isEmpty)
     }
+
+    // MARK: - 督办租约字段（人类 Todo #107）
+
+    func testSupervisionLeaseFieldsRoundtrip() {
+        let dir = tempDir()
+        let w = LocalWakeupStore.PendingWakeup(
+            id: "lease:c:7", crewId: "c", sessionId: "cap",
+            fireAt: "2026-09-07T10:00:00Z", note: "-", planNumber: 7,
+            leaseSince: "2026-09-07T09:00:00Z", leaseBaseSeconds: 2400, leaseStep: 2)
+        XCTAssertTrue(LocalWakeupStore(directory: dir).register(w))
+        XCTAssertEqual(LocalWakeupStore(directory: dir).list().first, w)
+    }
+
+    /// 督办字段是**后加的**，磁盘上还躺着一批只有五个字段的老约定。它们必须照常
+    /// 解得开 —— 否则这次加字段会把全部在途的普通定时唤醒一次抹掉（#528 修的
+    /// 正是这一族事故）。
+    func testPreExistingRowsWithoutLeaseFieldsStillDecode() throws {
+        let dir = tempDir()
+        let legacy = """
+        [{"id":"old","crewId":"c","sessionId":"s","fireAt":"2026-07-25T12:00:00Z","note":"额度重置后继续"}]
+        """
+        try Data(legacy.utf8).write(to: rawFileURL(dir))
+        let rows = LocalWakeupStore(directory: dir).list()
+        XCTAssertEqual(rows.map(\.id), ["old"])
+        XCTAssertNil(rows.first?.planNumber, "老约定不是督办，不该被认成督办")
+        XCTAssertTrue(try corruptArchives(dir).isEmpty, "老形状不是损坏，不许归档")
+    }
 }

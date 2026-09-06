@@ -559,7 +559,9 @@ final class CrewStore: ObservableObject {
                 guard let sid = cmd.sessionId, let fireAt = cmd.fireAt else { break }
                 enqueue(SessionWakeupRequest(
                     id: cmd.id, crewId: cmd.crewId, sessionId: sid,
-                    fireAt: fireAt, note: cmd.note ?? ""), into: wakeupRequests)
+                    fireAt: fireAt, note: cmd.note ?? "",
+                    planNumber: cmd.planNumber,
+                    leaseBaseSeconds: cmd.leaseBaseSeconds), into: wakeupRequests)
             case "listen":
                 guard let sid = cmd.sessionId else { break }
                 enqueue(SessionListenRequest(
@@ -995,6 +997,12 @@ struct SessionWakeupRequest: Equatable {
     let sessionId: String
     let fireAt: String   // ISO8601
     let note: String
+    /// **督办租约**（人类 Todo #107，见 `SupervisionLease`）：这条唤醒替哪条计划
+    /// 盯着。nil = 普通 `schedule_wakeup`。非 nil 时 runner 会换成确定性 id
+    /// （同一笔委托最多一个在途唤醒）并走督办分支。
+    var planNumber: Int? = nil
+    /// 督办的基础间隔（秒），退避在它上面翻倍。
+    var leaseBaseSeconds: Double? = nil
 }
 
 struct SessionSpawnRequest: Equatable {

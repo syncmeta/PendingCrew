@@ -48,13 +48,88 @@ enum CaptainAwarenessLogic {
         previousDate: Date?,
         now: Date
     ) -> Bool {
+        shouldEmitHint(signature: signal.signature,
+                       previousSignature: previousSignature,
+                       previousDate: previousDate, now: now)
+    }
+
+    /// 机长注入面上**每一条**软提示共用的冷却判定：至少隔 `splitCooldown` 才可能
+    /// 再说；完全相同的快照要隔 `identicalSplitReminderInterval` 才允许重提。
+    ///
+    /// 这个函数是从拆组信号那条**原地抽出来的同一份实现**，不是照着又写了一份 ——
+    /// 陈旧度提示（Todo #108）要的就是同一套去重/冷却姿态，仓库里已有正确的孪生，
+    /// 共用它；再发明第二种冷却，两条提示迟早会有一条被人改跑偏。
+    static func shouldEmitHint(
+        signature: String,
+        previousSignature: String?,
+        previousDate: Date?,
+        now: Date
+    ) -> Bool {
         guard let previousDate else { return true }
         let elapsed = now.timeIntervalSince(previousDate)
         guard elapsed >= splitCooldown else { return false }
-        if previousSignature == signal.signature {
+        if previousSignature == signature {
             return elapsed >= identicalSplitReminderInterval
         }
         return true
+    }
+
+    // MARK: - 板子陈旧度（人类 Todo #108：我自己的账停了我不知道）
+
+    /// 一条「进行中」的计划多久没动就算陈旧。**依据写在这里，不是随手取的数**：
+    ///
+    /// - **下界由噪音定**：机长更板的三个时刻是派活 / 收活 / 翻牌。一条刚派出去的
+    ///   活半小时、一小时没动是正常的（#107 讲的「半小时没人管」说的是没人过问，
+    ///   不是板没更新），阈值必须明显高于「派出去到第一份回报」那个间隔，否则这行
+    ///   字每轮都在，等于没有。
+    /// - **上界由伤害定**：#108 的现场是一条「等人类点头发版」在**版已经发出 4 小时
+    ///   之后**仍挂在板上误导人。阈值必须小于 4 小时，这个信号才来得及在造成误导
+    ///   *之前*出现。
+    /// - **取 2 小时**：落在两者之间；放回 #108 那次事故里，它会在那条变成谎话之前
+    ///   先响两次。
+    ///
+    /// 它**只陈述事实**（几条、最旧的是哪条、多久没动），不下命令 —— 一条计划该不该
+    /// 动、值不值得现在动，只有机长知道。真正带强制力的是 ① 督办租约那条路。
+    static let staleThreshold: TimeInterval = 2 * 60 * 60
+
+    struct StaleSignal: Equatable {
+        let count: Int
+        let oldestNumber: Int
+        let oldestTitle: String
+        let oldestIdle: TimeInterval
+
+        /// **签名里故意不含时长**：含了的话每多过一小时签名就变一次，冷却会退化成
+        /// 「每 30 分钟必提一次」。与拆组信号同一套口径 —— 签名认的是「哪几条陈旧」，
+        /// 时长只进文案。
+        var signature: String { "stale:\(count)|oldest:\(oldestNumber)" }
+    }
+
+    /// 只看「进行中」那一档。
+    /// - 「完成」不是陈旧，是做完了；
+    /// - 「卡住」已经明说在等人，板上那行本身就是最新的现状；
+    /// - 「没做」压根还没开始，久没动是它的正常形态。
+    ///
+    /// 也就是说：这条信号只对**声称自己正在推进、却久无动静**的条目发声，那正是
+    /// #108 里会变成谎话的那一类。
+    static func staleSignal(plans: [CockpitPlanItem], now: Date) -> StaleSignal? {
+        let stale = plans.compactMap { item -> (CockpitPlanItem, TimeInterval)? in
+            guard CockpitPlan.status(item.status) == .inProgress else { return nil }
+            guard let updated = HookEmitter.parseISO8601(item.updatedAt) else { return nil }
+            let idle = now.timeIntervalSince(updated)
+            guard idle >= staleThreshold else { return nil }
+            return (item, idle)
+        }
+        guard let oldest = stale.max(by: { $0.1 < $1.1 }) else { return nil }
+        return StaleSignal(count: stale.count, oldestNumber: oldest.0.number,
+                           oldestTitle: oldest.0.title, oldestIdle: oldest.1)
+    }
+
+    static func renderStaleHint(_ s: StaleSignal) -> String {
+        "📋 板子陈旧：你有 \(s.count) 条「进行中」的计划超过 "
+            + CockpitPlan.elapsedLabel(staleThreshold)
+            + "没动，最旧的是 #\(s.oldestNumber)「\(s.oldestTitle)」——已 "
+            + CockpitPlan.elapsedLabel(s.oldestIdle)
+            + "没动。板上那几行是给人看的现状，久没动的那条现在多半已经不是真的了。"
     }
 
     static func recentMessageCount(timestamps: [Date], now: Date) -> Int {
@@ -75,9 +150,16 @@ enum CaptainAwarenessLogic {
     }
 }
 
+/// 机长注入面软提示的冷却状态（`<crewId>.captain-awareness.json`）。
+///
+/// **两条提示共用一个文件**，各占一半字段，而且**全部可选** —— 只写自己那一半时
+/// 必须把另一半原样带回去（读-改-写），否则拆组一发就把陈旧度的冷却清零、反之亦然。
+/// 可选也让 Todo #108 之前落在磁盘上的老文件照常解得开。
 private struct CaptainAwarenessCooldownState: Codable {
-    let splitSignature: String
-    let splitEmittedAt: Date
+    var splitSignature: String? = nil
+    var splitEmittedAt: Date? = nil
+    var staleSignature: String? = nil
+    var staleEmittedAt: Date? = nil
 }
 
 /// PostToolUse hook 的注入器（spec local-first chunk 4；机制见 spike findings §2）。
@@ -188,8 +270,20 @@ struct HookEmitter {
                 lines.append("⚠️ 命名待办：当前名是系统占位名，白板已有 \(allMessages.count) 条消息，主题应已明朗。现在请调用 rename_crew 改成贴切的短标签。")
             }
         }
-        if isCaptain, let splitHint = splitHint(allMessages: allMessages, now: now) {
-            lines.append(splitHint)
+        if isCaptain {
+            // 两条软提示共读共写同一份冷却状态 —— 读一次、各自判、最后写一次，
+            // 免得后写的那条把先写的那条的冷却抹掉。
+            var state = loadAwarenessState()
+            var stateChanged = false
+            if let hint = splitHint(allMessages: allMessages, state: &state, now: now) {
+                lines.append(hint)
+                stateChanged = true
+            }
+            if let hint = staleHint(state: &state, now: now) {
+                lines.append(hint)
+                stateChanged = true
+            }
+            if stateChanged { saveAwarenessState(state) }
         }
         // 机长视野（#24）：全机 crew 组织树 + 各 crew 最近一句动静。轻量跨进程读
         // local-crews.json + 各 crew 白板尾行;本机只有本 crew 一个时省略（无全局可看）。
@@ -240,7 +334,8 @@ struct HookEmitter {
         return lines
     }
 
-    private func splitHint(allMessages: [LocalWhiteboardMessage], now: Date) -> String? {
+    private func splitHint(allMessages: [LocalWhiteboardMessage],
+                           state: inout CaptainAwarenessCooldownState, now: Date) -> String? {
         let recentCount = CaptainAwarenessLogic.recentMessageCount(
             timestamps: allMessages.compactMap { Self.parseISO8601($0.createdAt) },
             now: now)
@@ -248,23 +343,52 @@ struct HookEmitter {
         guard let signal = CaptainAwarenessLogic.splitSignal(
             activeSessionCount: activeCount, recentMessageCount: recentCount)
         else { return nil }
-
-        let stateURL = cursorDir.appendingPathComponent("\(crewId).captain-awareness.json")
-        let previous = (try? Data(contentsOf: stateURL))
-            .flatMap { try? JSONDecoder().decode(CaptainAwarenessCooldownState.self, from: $0) }
         guard CaptainAwarenessLogic.shouldEmitSplitHint(
             signal: signal,
-            previousSignature: previous?.splitSignature,
-            previousDate: previous?.splitEmittedAt,
+            previousSignature: state.splitSignature,
+            previousDate: state.splitEmittedAt,
             now: now)
         else { return nil }
-
-        let next = CaptainAwarenessCooldownState(
-            splitSignature: signal.signature, splitEmittedAt: now)
-        if let data = try? JSONEncoder().encode(next) {
-            try? data.write(to: stateURL, options: .atomic)
-        }
+        state.splitSignature = signal.signature
+        state.splitEmittedAt = now
         return CaptainAwarenessLogic.renderSplitHint(signal)
+    }
+
+    /// 板子陈旧度（人类 Todo #108）。数据现成 —— 计划条目本来就记着最后更新时间，
+    /// 界面上也一直显示「进行中 · 最后更新 3 天前」；缺的只是把它送进注入面，
+    /// 让机长不必点开驾驶舱也知道自己那块板停在哪儿。
+    ///
+    /// ⚠️ **这条只治得了 #108，治不了 #107**：整个注入面挂在 `prepareContext` 的
+    /// 「有未读白板消息」那道 guard 后面，群里安静时它一个字也送不出去。#107 那种
+    /// 「交出去的活没人管、群里又没人说话」只有主动唤醒（① 督办租约）能救。这句话
+    /// 有一条测试钉着：`testStaleBoardCannotReachACaptainWhoHasNoUnreadMessages`。
+    private func staleHint(state: inout CaptainAwarenessCooldownState, now: Date) -> String? {
+        let plans = CockpitPlanStore(directory: cursorDir).list(crewId: crewId)
+        guard let signal = CaptainAwarenessLogic.staleSignal(plans: plans, now: now) else { return nil }
+        guard CaptainAwarenessLogic.shouldEmitHint(
+            signature: signal.signature,
+            previousSignature: state.staleSignature,
+            previousDate: state.staleEmittedAt,
+            now: now)
+        else { return nil }
+        state.staleSignature = signal.signature
+        state.staleEmittedAt = now
+        return CaptainAwarenessLogic.renderStaleHint(signal)
+    }
+
+    private var awarenessStateURL: URL {
+        cursorDir.appendingPathComponent("\(crewId).captain-awareness.json")
+    }
+
+    private func loadAwarenessState() -> CaptainAwarenessCooldownState {
+        (try? Data(contentsOf: awarenessStateURL))
+            .flatMap { try? JSONDecoder().decode(CaptainAwarenessCooldownState.self, from: $0) }
+            ?? CaptainAwarenessCooldownState()
+    }
+
+    private func saveAwarenessState(_ state: CaptainAwarenessCooldownState) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: awarenessStateURL, options: .atomic)
     }
 
     /// 快照每 2 秒刷新；超过 15 秒说明 app 已停或数据链异常，不拿陈旧 roster 制造
@@ -282,7 +406,9 @@ struct HookEmitter {
         }.count
     }
 
-    private static func parseISO8601(_ value: String) -> Date? {
+    /// 非 private：`CaptainAwarenessLogic.staleSignal` 解计划条目的 `updatedAt`
+    /// 也走这一个解析器（带/不带小数秒两种形状），别在同一个文件里养第二份。
+    static func parseISO8601(_ value: String) -> Date? {
         if let date = ISO8601DateFormatter().date(from: value) { return date }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
