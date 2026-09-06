@@ -56,6 +56,17 @@ targets:
       # app 二进制带 --mcp-serve/--mcp-hook argv 时当 crew-comms helper 跑（PendingCrewEntry）。
       - path: Sources
       - path: Resources
+        # LaunchAgents/ 那份不能当普通资源进 Contents/Resources —— `SMAppService.
+        # agent(plistName:)` 只认 `Contents/Library/LaunchAgents/`（SDK 头文件原话）。
+        # 放错地方的症状是注册时报 kSMErrorJobNotFound，而文件明明在包里。
+        excludes:
+          - "LaunchAgents/**"
+      # 开机自启那份 LaunchAgent（P5b·A）。拷到 app 包里 SMAppService 唯一认的位置。
+      - path: Resources/LaunchAgents/com.pendingname.pendingcrew.daemon.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
       - path: Shared/AppUpdate
     scheme:
       testTargets:

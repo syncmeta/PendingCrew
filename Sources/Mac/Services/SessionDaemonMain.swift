@@ -11,7 +11,10 @@ import Foundation
 /// `RunLoop.main`。编排本体（`SessionHost` + `CrewSessionRunner`）与 GUI 那条路
 /// 是同一份代码，差别全在 `SessionProtocolPublishing` 那一个接缝后面（§10）。
 enum SessionDaemonMain {
-    static let flag = "--daemon"
+    /// 字面值在 `SessionDaemonMainFlag`（LocalRunner 那层）—— LaunchAgent 的 plist
+    /// 要带同一个 flag，而它进得了 test bundle、这里进不去。两边各写一份字面量的话，
+    /// 改了一边另一边不会有任何反应。
+    static let flag = SessionDaemonMainFlag.daemon
 
     /// 不是 daemon 就返回 false，调用方照常起 GUI。
     ///
@@ -19,12 +22,12 @@ enum SessionDaemonMain {
     /// 一直到进程退出。
     static func runIfDaemon(_ argv: [String]) -> Bool {
         guard argv.contains(flag) else { return false }
-        MainActor.assumeIsolated { run() }
+        MainActor.assumeIsolated { run(argv) }
         return true
     }
 
     @MainActor
-    private static func run() {
+    private static func run(_ argv: [String]) {
         // 脱离拉起我们的那个进程的会话/进程组。
         //
         // **A1 就靠这一行**：app 是用 `Process` 把我们拉起来的，不脱离的话我们和它
@@ -45,7 +48,8 @@ enum SessionDaemonMain {
             guard let start = error as? SessionDaemonHost.StartError else {
                 exit(DaemonExitCode.failed)
             }
-            exit(DaemonExitCode.forDaemonStart(start))
+            exit(DaemonExitCode.forDaemonStart(
+                start, launchedByLaunchd: PendingCrewLaunchAgent.launchedByLaunchd(argv)))
         }
 
         // 编排本体。**与 GUI 那条路同一份代码**，只是发布口换成了 socket 服务端。

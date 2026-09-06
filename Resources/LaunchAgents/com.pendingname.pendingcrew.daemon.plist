@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  开机自启 + 异常退出自拉（P5b·A）。由 SMAppService.agent(plistName:) 注册，
+  拷进 app 包的 Contents/Library/LaunchAgents/。
+
+  **别手改这个文件。** 它的事实源是 Swift 里的 `PendingCrewLaunchAgent.plist`，
+  `PendingCrewLaunchAgentTests` 逐键对着它核 —— 手改这里会让测试红，改那边才对。
+  （一份"描述会变的事实"的静态文件，唯一不会过期的办法就是让它被现算的值盯着。）
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.pendingname.pendingcrew.daemon</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/PendingCrew</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>Contents/MacOS/PendingCrew</string>
+		<string>--daemon</string>
+		<string>--from-launchd</string>
+	</array>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+</dict>
+</plist>
