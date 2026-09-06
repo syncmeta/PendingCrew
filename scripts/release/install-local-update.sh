@@ -78,18 +78,42 @@ say "等 PendingCrew 界面退出（请按 ⌘Q）…最多等 90 分钟"
 #   · MCP 帮手  MacOS/PendingCrew --mcp-serve …   ← 每个 session 一个，界面退了它们还在
 # 2026-09-06 自测时第一版判据漏了 --mcp-serve，会把帮手当成「界面还在」，
 # 死等 90 分钟然后放弃 —— 失败方向是安全的，但那 90 分钟纯白等。
-gui_alive() {
-  pgrep -fl "MacOS/PendingCrew" 2>/dev/null \
-    | grep -v -- "--daemon" | grep -v -- "--mcp-serve" \
-    | grep -q "MacOS/PendingCrew"
+# ⚠️ 别用 `pgrep -fl "MacOS/PendingCrew" | grep ...`：**那条管道里的 grep 自己**
+# 命令行就含这个模式，pgrep -f 会把它一起匹配出来，于是判据永远非空、循环永远出不来。
+# 2026-09-06 就是这么栽的：人真退了 11.8 秒，循环一次都没看见空窗，白等 90 分钟。
+# 更坏的是它**时灵时不灵** —— pgrep 能不能看见那个 grep 取决于两个进程的抢跑，
+# 我事先用「独立脚本」验过一次、当时只回了一行，那个绿是运气。
+# 现在改成按**进程名**取 pid（`pgrep -x`，grep 的进程名是 grep，撞不上），
+# 再逐个读它的完整命令行来分身份。
+gui_lines() {
+  for pid in $(pgrep -x PendingCrew 2>/dev/null); do
+    cmd=$(ps -o command= -p "$pid" 2>/dev/null) || continue
+    [ -n "$cmd" ] || continue
+    case "$cmd" in
+      *--daemon*|*--mcp-serve*) ;;
+      *) printf '%s %s\n' "$pid" "$cmd" ;;
+    esac
+  done
 }
+# 2026-09-06 第一次真跑就没抓到：人确实退了 11.8 秒（daemon.log 里 viewer 断开
+# 14:10:11.352Z → 连入 14:10:23.137Z），而 5 秒一轮的循环一次都没看见空窗。
+# 病根没查清之前，这里改成**每秒一轮 + 每一轮都留痕**：轮询次数、当下看见了什么、
+# 每 60 秒一条心跳。下次再漏，日志能直接说出它当时看见了什么 ——
+# 「没抓到」和「没在跑」在旧写法里长得一模一样，那正是最贵的那种沉默。
 waited=0
-while gui_alive; do
-  waited=$((waited + 5))
+polls=0
+while :; do
+  lines=$(gui_lines)
+  [ -n "$lines" ] || break
+  polls=$((polls + 1))
+  waited=$((waited + 1))
+  if [ $((waited % 60)) -eq 0 ]; then
+    say "…还在等（${waited}s，第 ${polls} 轮）当下看见：$(echo "$lines" | tr '\n' ';')"
+  fi
   [ "$waited" -lt 5400 ] || die "等了 90 分钟界面还在，原样放弃，一个文件都没动"
-  sleep 5
+  sleep 1
 done
-say "界面已退出（等了 ${waited}s）"
+say "界面已退出（等了 ${waited}s，共 ${polls} 轮轮询）"
 
 # —— 3. 停 daemon（SIGTERM，它会先停光 session 再 exit 0）——
 dpid=$(pgrep -f "MacOS/PendingCrew --daemon" || true)
