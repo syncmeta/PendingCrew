@@ -197,6 +197,24 @@ final class LocalCrewControlStore: @unchecked Sendable {
             ts: ISO8601DateFormatter().string(from: Date())))
     }
 
+    /// 挂一笔**督办租约**（`plan_add` / `plan_update` 的 `supervise_after_minutes`，
+    /// 人类 Todo #107）。走的就是上面那条 `schedule_wakeup` 命令通道 —— 多带的只有
+    /// 「替哪条计划盯着」和「基础间隔」，app 侧据此换成确定性 id 并走督办分支。
+    ///
+    /// **解除条件不在这里**：唯一能让它消音的是把那条计划翻到 done / blocked
+    /// （见 `SupervisionLease`）。这里**故意没有**「取消督办」这个方法。
+    func enqueueSupervisionLease(crewId: String, sessionId: String, planNumber: Int,
+                                 fireAt: String, baseSeconds: Double) {
+        guard !fireAt.isEmpty, planNumber >= 1 else { return }
+        enqueue(CrewCommand(
+            id: UUID().uuidString.lowercased(), crewId: crewId, kind: "schedule_wakeup",
+            brief: "-", runner: nil, isolation: nil, title: nil,
+            sessionId: sessionId, fireAt: fireAt,
+            note: "督办：计划 #\(planNumber)",
+            planNumber: planNumber, leaseBaseSeconds: baseSeconds,
+            ts: ISO8601DateFormatter().string(from: Date())))
+    }
+
     /// session 开/关群聊收听（`listen` 工具;#465）。开 = `until`（ISO8601）必给，
     /// `senders` 可选（nil = 听全部）；关 = `off: true`（until/senders 忽略）。
     /// 同一 session 重复开 = 覆盖（app 侧 last-write-wins）。
@@ -476,6 +494,11 @@ struct CrewCommand: Codable, Equatable {
     var senders: [String]? = nil
     /// listen：true=停止收听（此时 fireAt/senders 忽略）。
     var off: Bool? = nil
+    /// schedule_wakeup 的**督办租约**变体（#107）：这条唤醒替哪条计划盯着。
+    /// nil = 普通定时唤醒。两者共用 `kind: "schedule_wakeup"` 这一条命令通道。
+    var planNumber: Int? = nil
+    /// 督办的基础间隔（秒），退避在它上面翻倍。
+    var leaseBaseSeconds: Double? = nil
     /// change_workdir：目标工作目录的绝对路径。
     var path: String? = nil
     /// change_workdir：连同子 crew 一起迁（nil = true）。

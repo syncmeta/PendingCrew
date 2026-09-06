@@ -574,12 +574,27 @@ final class CrewSessionRunner: ObservableObject {
     }
 
     /// 登记一条定时唤醒：持久化 + 挂定时器。同 id 重复登记忽略（drain 重放安全）。
+    ///
+    /// 带 `planNumber` 的是**督办租约**（人类 Todo #107，见 `SupervisionLease`）：
+    /// id 换成**按计划算出来的确定性 id** —— 「同一笔委托同一时刻最多一个在途唤醒」
+    /// 这条硬约束就是靠它 + 账本的同 id no-op 落地的，不靠调用方先删再加。
     func scheduleWakeup(_ req: SessionWakeupRequest) {
         guard runs.contains(where: {
             $0.sessionId == req.sessionId && $0.status == .running && $0.kind.isAgent
         }) else { return }
-        let w = PendingWakeup(id: req.id, crewId: req.crewId, sessionId: req.sessionId,
+        let w: PendingWakeup
+        if let planNumber = req.planNumber {
+            w = PendingWakeup(
+                id: SupervisionLease.id(crewId: req.crewId, planNumber: planNumber),
+                crewId: req.crewId, sessionId: req.sessionId,
+                fireAt: req.fireAt, note: req.note, planNumber: planNumber,
+                leaseSince: ISO8601DateFormatter().string(from: Date()),
+                leaseBaseSeconds: req.leaseBaseSeconds ?? SupervisionLease.fallbackBaseSeconds,
+                leaseStep: 0)
+        } else {
+            w = PendingWakeup(id: req.id, crewId: req.crewId, sessionId: req.sessionId,
                               fireAt: req.fireAt, note: req.note)
+        }
         guard wakeupStore.register(w, onIncident: { self.reportWakeupIncident($0) }) else { return }
         arm(w)
     }
@@ -602,6 +617,7 @@ final class CrewSessionRunner: ObservableObject {
         wakeupTimers[w.id]?.invalidate()
         wakeupTimers[w.id] = nil
         wakeupStore.remove(id: w.id, onIncident: { self.reportWakeupIncident($0) })
+        if w.planNumber != nil { fireSupervisionLease(w); return }
         let now = ISO8601DateFormatter().string(from: Date())
         if let run = runs.first(where: {
             $0.sessionId == w.sessionId && $0.status == .running && $0.kind.isAgent
@@ -625,6 +641,41 @@ final class CrewSessionRunner: ObservableObject {
                 senderName: "系统",
                 mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
         }
+    }
+
+    /// 督办到期（人类 Todo #107）。四条硬约束里的三条落在这个函数里：
+    ///
+    /// 1. **只叫醒持有那笔委托的那一个 session**，绝不广播。原 session 不在了就退到
+    ///    本 crew 当前在跑的机长 —— 作战板归机长这个**角色**，委托跟着角色走，目标
+    ///    仍然只有一个。（#107 的现场正是「重启带走了机长」，只认原 session id 的话
+    ///    这条督办从此永远送不到任何人。）
+    /// 2. **一个字都不写白板**。白板是给人看的，不是闹钟 —— 连「叫不到人」时也不写，
+    ///    因为那只会把噪音搬进人类唯一在看的那块板。叫不到人时租约原样留着，它持久
+    ///    化在 wakeups.json，app 重启后 `rearmWakeups()` 会重挂。
+    /// 3. **退避**（1×→2×→4×→8× 封顶），而且**只有真叫到人才推进档位**。
+    ///
+    /// 第 4 条（worker 默认不挂）在挂单那一侧：参数可选，而且 plan 工具只有机长调得动。
+    ///
+    /// **解除只有一条路**：那条计划翻到 done / blocked（或已不在板上）。这里
+    /// 故意没有任何「已读/顺延」入口 —— 见 `SupervisionLease` 的说明。
+    private func fireSupervisionLease(_ w: PendingWakeup) {
+        guard let planNumber = w.planNumber else { return }
+        let item = CockpitPlanStore.shared.item(crewId: w.crewId, number: planNumber)
+        let now = Date()
+        guard case let .remind(text) = SupervisionLease.decide(
+            planNumber: planNumber, planTitle: item?.title, planStatusRaw: item?.status,
+            leaseSince: w.leaseSince.flatMap(McpServer.parseISO), now: now)
+        else { return }   // 解除：不叫醒、不重排、不写白板。
+        let target = runs.first {
+            $0.sessionId == w.sessionId && $0.status == .running && $0.kind.isAgent
+        } ?? runs.first {
+            $0.crewId == w.crewId && $0.role == .captain
+                && $0.status == .running && $0.kind.isAgent
+        }
+        target?.send(text)
+        let next = SupervisionLease.next(w, delivered: target != nil, now: now)
+        guard wakeupStore.register(next, onIncident: { self.reportWakeupIncident($0) }) else { return }
+        arm(next)
     }
 
     // MARK: - 群聊收听（listen；#465）
