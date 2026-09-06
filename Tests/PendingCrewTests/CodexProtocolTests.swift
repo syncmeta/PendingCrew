@@ -324,3 +324,67 @@ final class CodexPipeReadabilityTests: XCTestCase {
         pipe.fileHandleForWriting.closeFile()
     }
 }
+
+/// 写侧的 EPIPE（2026-09-05 那次「5 个 crew 同时掉 session」的病根）。
+///
+/// 读侧的孪生在上面：`CodexPipeReadabilityTests`。同一个文件、同一类病 —— 上一笔
+/// `0399845` 只修了读侧的 EOF 空转，写侧的 EPIPE 留在了原地。
+///
+/// **这一条为什么必须是「抛」而不是「崩」**：`writeLine` 的签名一直写着 `throws`，
+/// 6 个调用点也都老老实实写了 `try` —— 但函数体调的是 ObjC 的 `writeData:`，
+/// EPIPE 时抛的是 `NSFileHandleOperationException`，Swift 的 `catch` 接不住。
+/// 于是那 6 个 `try` 全是摆设，唯一真会发生的错误恰恰是它们捕不到的那个。
+final class CodexPipeWriteTests: XCTestCase {
+    /// 对端没了 → 必须拿到一个**能 catch 的 Swift 错误**。
+    ///
+    /// 这条测试同时是一次**测量**，测的不是我们自己的代码：如果这个进程里 SIGPIPE
+    /// 没被忽略，`write(2)` 会直接用信号打死进程 —— 那样换 API 也没用，而且死得比
+    /// NSException 更安静。**它跑出绿（而不是把 test runner 带走）本身就是那个读数。**
+    func testBrokenPipeSurfacesAsCatchableSwiftErrorRatherThanKillingTheProcess() {
+        let pipe = Pipe()
+        pipe.fileHandleForReading.closeFile()   // 对端先走，正是 codex 子进程死掉时的形状
+
+        var caught: NSError?
+        do {
+            try CodexPipeWrite.line("{}", to: pipe.fileHandleForWriting)
+            XCTFail("对端已关，这次写必须失败；悄悄成功说明这条测试根本没量到 EPIPE")
+        } catch {
+            caught = error as NSError
+        }
+
+        // 钉死量到的确实是 EPIPE(32)，不是别的失败 —— 否则这条测试会在别的原因下假绿。
+        let posix = (caught?.userInfo[NSUnderlyingErrorKey] as? NSError) ?? caught
+        XCTAssertEqual(posix?.domain, NSPOSIXErrorDomain, "实际拿到：\(String(describing: caught))")
+        XCTAssertEqual(posix?.code, Int(EPIPE), "实际拿到：\(String(describing: caught))")
+    }
+
+    /// 上面那条依赖「SIGPIPE 已被忽略」，而这个保证必须是 `CodexPipeWrite` 自己给的，
+    /// 不能是进程里碰巧有别人关过。把 arming 拿掉，上面那条会从 failure 变成 crash ——
+    /// 这一条则会直接红，且红得看得懂。
+    func testWritingArmsTheProcessAgainstSIGPIPEItself() throws {
+        let pipe = Pipe()
+        try CodexPipeWrite.line("warm", to: pipe.fileHandleForWriting)
+        pipe.fileHandleForWriting.closeFile()
+        _ = pipe.fileHandleForReading.readDataToEndOfFile()
+
+        var current = sigaction()
+        XCTAssertEqual(sigaction(SIGPIPE, nil, &current), 0)
+        // C 函数指针不是 Equatable，按位比。
+        let handler = unsafeBitCast(current.__sigaction_u.__sa_handler, to: UInt.self)
+        XCTAssertEqual(handler, unsafeBitCast(SIG_IGN, to: UInt.self),
+                       "SIGPIPE 仍是默认动作 —— 对端一走，写侧会被信号无声打死，连异常日志都不留")
+    }
+
+    /// 正常那半：补上换行、原样送达。别只测失败路径把编码写坏了。
+    func testWritesTheLineWithATrailingNewline() throws {
+        let pipe = Pipe()
+        try CodexPipeWrite.line("{\"id\":1}", to: pipe.fileHandleForWriting)
+        pipe.fileHandleForWriting.closeFile()
+
+        let received = pipe.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertEqual(String(data: received, encoding: .utf8), "{\"id\":1}\n")
+    }
+}
+// 红证的复现方式（变异）：把 `CodexPipeWrite.line` 的函数体换回
+//     handle.write(Data((line + "\n").utf8))
+// 上面第一条测试就不是 failure，而是把整个 test runner 崩掉 —— 这正是它要挡的事。
