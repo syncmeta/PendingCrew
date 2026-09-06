@@ -80,6 +80,52 @@ final class AgentTuiFixtureRecorder: XCTestCase {
         if what == "claude" || what == "all" { try await recordClaude() }
         if what == "trust" || what == "all" { try await recordTrustDialog() }
         if what == "ready" || what == "all" { try await recordReadyInputBox() }
+        if what == "verify-trust" { try await verifyTrustDialogRaisesPendingDecision() }
+    }
+
+    // MARK: - 现场核验：真起一个 claude，看待决策到底亮不亮
+
+    /// fixture 证明的是「判据认不认得那一屏」，**不是**「整条路真的通了」。这一条
+    /// 走的是活的那条：在一个全新的、claude 从没信任过的目录里真拉起一个
+    /// `AgentSessionCore`，等它把信任框画出来，然后看 `pendingDecision` 亮没亮
+    /// （run 侧就是观察这个 `@Published` 去发群 + 翻「⌛ 等人拍板」的）。
+    ///
+    /// 跟录制器同一档待遇：默认不跑（要联网、要本机装着 claude、结果依赖真实版本），
+    /// 是**工具**不是 CI 里的一条测试：
+    /// ```sh
+    /// TEST_RUNNER_PENDINGCREW_RECORD_TUI=verify-trust xcodebuild … \
+    ///   -only-testing:PendingCrewTests/AgentTuiFixtureRecorder test
+    /// ```
+    /// 全程不往 PTY 写一个字节 —— 「Yes, I trust this folder」仍然只有人能按。
+    private func verifyTrustDialogRaisesPendingDecision() async throws {
+        guard let executable = LocalCodingAgentExecutable.resolve(.claudeCode) else {
+            throw XCTSkip("本机找不到 claude 可执行文件")
+        }
+        let workdir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pendingcrew-verify-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+
+        let core = AgentSessionCore(
+            config: SessionConfig(kind: .claudeCode),
+            mode: .agent,
+            executable: executable.path,
+            workdir: workdir.path,
+            env: ProcessInfo.processInfo.environment)
+        defer { core.stop() }
+
+        // 稳定窗 3s + 0.6s 轮询 + claude 启动，给到 30s 够宽。
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline, core.pendingDecision == nil {
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }
+        let decision = try XCTUnwrap(core.pendingDecision, """
+        在一个全新的未信任目录里起了 claude，屏幕上应当摆着信任框，但 pendingDecision
+        一直是 nil —— 这就是「起来了、群里一个字都没有、看着一直空闲」。当前画面：
+        \(core.screenRows().joined(separator: "\n"))
+        """)
+        print("[verify] 待决策已亮：\(decision.prompt) / \(decision.options)")
+        XCTAssertTrue(decision.options.contains { $0.contains("trust") }, "\(decision.options)")
+        print("[verify] 未信任目录：\(workdir.path)")
     }
 
     // MARK: - 人直接用的那个终端（`.terminal`）
