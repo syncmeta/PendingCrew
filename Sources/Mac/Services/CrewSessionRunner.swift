@@ -1081,17 +1081,23 @@ final class CrewSessionRunner: ObservableObject {
                 + "它要是正卡在一个选择框上，那个回车已经确认了**当时高亮的那一项**——"
                 + "现在就 inspect_session 复查画面。"
         }
-        // codex（app-server）：无 PTY 按键语义。
-        switch key {
-        case "esc":
-            run.backend.interrupt()
-            return "已打断「\(run.displayName)」的当前 turn（codex interrupt）。"
-        case "enter", "回车":
-            return "「\(run.displayName)」是 codex session，无终端按键；发文本会作为新 turn 输入。"
-        default:
-            run.backend.send(input)
-            return "已把文本作为新 turn 输入发给「\(run.displayName)」。"
+        // codex（app-server）：无 PTY，按键语义跟终端那条不同。
+        //
+        // **但「哪些输入算按键名、哪些算正文」仍然查同一张表。** 这一段原本手写着
+        // `esc` / `enter` / `回车` —— 跟表里那份是两份名单，往表里加一个键之后，
+        // codex 这边会把那个键名当**正文**发出去，变成一次真的提问。跟今天这条 P0
+        // 同族，只是后果换成「多问了一句」而不是「关掉一个 session」。
+        if let bytes = SessionNudgeKeys.byAlias[key] {
+            // Esc 在 codex 上的对应动作是打断当前 turn（不是发字节）。
+            if bytes == [0x1b] {
+                run.backend.interrupt()
+                return "已打断「\(run.displayName)」的当前 turn（codex interrupt）。"
+            }
+            return "「\(run.displayName)」是 codex session，没有终端按键，`\(key)` 在这里"
+                + "没有对应动作；要说话就直接发文本，它会作为新 turn 输入。"
         }
+        run.backend.send(input)
+        return "已把文本作为新 turn 输入发给「\(run.displayName)」。"
     }
 
     /// 已广播过的警戒键（agent|窗|重置时刻）——一个重置周期只喊一次,不刷屏。
