@@ -48,6 +48,19 @@ struct CreateCrewSheet: View {
     @State private var creating = false
     @State private var localError: String?
 
+    /// 建 crew 时**要不要由 app 直接给新目录写 claude 的信任记录**
+    /// （`~/.claude.json` 的 `hasTrustDialogAccepted`，Agent Todo #103）。
+    ///
+    /// **今天恒 `.notGranted` —— app 一个字都不写。** 人类 Todo #3（A 勾选项即授权 /
+    /// B 另开真 claude 点一次 / C 不做）还没拍板，在那之前替人写这个位就是替人做了
+    /// 他没授权的事。机制（写入器 + 写前备份 + 回读校验 + 回执）已经齐了，
+    /// 拍板后改的只有这一行。
+    ///
+    /// A 落地时这里换成跟界面勾选项绑定的 `@State`：**那一勾就是授权本身** ——
+    /// 因为它是人在自己 app 里的动作，性质跟 agent 代人写信任位完全不同。
+    /// 群里的点头和 runner 的放行是两层，而且故意是两层。
+    private var claudeTrustAuthorization: ClaudeTrustSeedPlan.Authorization { .notGranted }
+
     private static let lastCaptainKindKey = "pendingcrew.lastCaptainAgentKind"
 
     var body: some View {
@@ -440,6 +453,13 @@ struct CreateCrewSheet: View {
         do {
             let subjectId = try await resolveResponsibleSubjectId()
             let resolvedDir = try resolveWorkingDirectory()
+            // CrewGround 这一档**新造**的目录在 `~/.claude.json` 里没有信任记录，
+            // 于是它下面起的第一个 claude 停在「是否信任这个文件夹」上：进程活着、
+            // 不吐字、也不报错，外面看着像「一直空闲」（Agent Todo #103）。
+            // 补种要赶在机长自动启动之前，所以放在建 crew 之前这一步。
+            // 没授权时这一步只读不写（见 `claudeTrustAuthorization`）。
+            let trustReceipt = ClaudeTrustSeeder.seedForNewCrew(
+                workdir: resolvedDir.path, authorization: claudeTrustAuthorization)
             // 自动模式：用已挑好的随机地名做初始名（就是框里显示、CrewGround 目录
             // 同名的那个）；captain 之后用 rename_crew 改成短标签。手动模式：用户填的。
             let titleValue: String? = (titleMode == .manual)
@@ -458,6 +478,12 @@ struct CreateCrewSheet: View {
                 captain: .systemGenerated(templateName: nil)
             )
             let resp = try await crewStore.createCrew(request)
+            // 补种的结果进新 crew 的群聊 —— 只在真做了点什么（补上了 / 没落住 / 失败）
+            // 时才有话说。人只看群聊，写了没落住却不说出去等于没说。
+            if let line = ClaudeTrustSeeder.receiptText(trustReceipt) {
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: resp.crewId, sessionId: "system", text: line, senderName: "系统")
+            }
             // 从某个 crew 里建的子 crew → 自动挂到父 crew 之下。
             if let parentCrewId {
                 try await crewStore.attachParent(crewId: resp.crewId, parentCrewId: parentCrewId)
