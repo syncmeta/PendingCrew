@@ -22,6 +22,7 @@
 		0711F2B0ED2025CA510CD476 /* CrewSidebarCrewRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEE169163543A61262C2F91A /* CrewSidebarCrewRow.swift */; };
 		071A1591EA9F805DD44D46AC /* CrewTodoDetailWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3FBEE2F52F15DF776BD62F8 /* CrewTodoDetailWindow.swift */; };
 		074CE30D6A687574FD5F4C74 /* ReleaseScriptSourceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5854B0F1D0C5BFE1CC85B9F /* ReleaseScriptSourceContractTests.swift */; };
+		07C19E9A91C5B9E92739B610 /* CrewReplayDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 629509CEBA42FDBDEF1C132B /* CrewReplayDeliveryTests.swift */; };
 		092A82A123D30DFE80145B50 /* PromptTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D74B1C537C235EFB0E69DCB /* PromptTemplate.swift */; };
 		09B59D5C37D3953440612A34 /* CrewMailboxWakeLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F40D59113575AA4C63F7C17 /* CrewMailboxWakeLogic.swift */; };
 		09E91282CE2D598455F41DAA /* McpServerSelfHealToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2488F0C68EA62227EF2682 /* McpServerSelfHealToolsTests.swift */; };
@@ -793,6 +794,7 @@
 		6126BD1E6490C4574D6F62DC /* DirectoryWatchCoalescingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatchCoalescingTests.swift; sourceTree = "<group>"; };
 		62010BFA308D94B5E1C8519B /* FirstLaunchDisclosureRemovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstLaunchDisclosureRemovalTests.swift; sourceTree = "<group>"; };
 		62034E32CA0F14CE5ACAC93F /* CodexTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexTranscriptView.swift; sourceTree = "<group>"; };
+		629509CEBA42FDBDEF1C132B /* CrewReplayDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewReplayDeliveryTests.swift; sourceTree = "<group>"; };
 		62AD9CBFA871A2852066D3C2 /* DaemonLaunchPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonLaunchPlan.swift; sourceTree = "<group>"; };
 		63DC7AE1CC8372DFBCFE1D2A /* CrewDirectoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewDirectoryTests.swift; sourceTree = "<group>"; };
 		645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrphanReaper.swift; sourceTree = "<group>"; };
@@ -1507,6 +1509,7 @@
 				BFFA547961BE3DE4CAA9E9F1 /* CrewMessageSearchTests.swift */,
 				D4368B745709AF4685183778 /* CrewPasteAttachmentsTests.swift */,
 				574DF310289F087CF7744953 /* CrewRecentContextRenderTests.swift */,
+				629509CEBA42FDBDEF1C132B /* CrewReplayDeliveryTests.swift */,
 				D74F34B76291247636390B19 /* CrewRootLineageTests.swift */,
 				A256EE91689195597389D43F /* CrewSenderResolverTests.swift */,
 				E0DC6F1A1D280B23B63BA84A /* CrewSessionStateDerivationTests.swift */,
@@ -2278,6 +2281,7 @@
 				D4F75E208B119D616D861BD8 /* CrewPasteAttachmentsTests.swift in Sources */,
 				671D45A9D765AF34281D3993 /* CrewRecentContextRender.swift in Sources */,
 				8C463DCAD53729C43CFFC249 /* CrewRecentContextRenderTests.swift in Sources */,
+				07C19E9A91C5B9E92739B610 /* CrewReplayDeliveryTests.swift in Sources */,
 				D123AD219C068283209E01C1 /* CrewRootLineage.swift in Sources */,
 				31A4414C66F61EDF24A66E66 /* CrewRootLineageTests.swift in Sources */,
 				D5179853AF9BB5D1B45A9DB2 /* CrewSenderNaming.swift in Sources */,
