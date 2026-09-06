@@ -1009,14 +1009,18 @@ final class CrewSessionRunner: ObservableObject {
         case CrewSessionStateDerivation.launchFailed:
             state = "拉起失败（\(run.health?.detail ?? "")）"
         case CrewSessionStateDerivation.awaitingDecision:
-            // ⚠️ 这句话曾经写着「发选项数字或 Enter」。**「发选项数字」是错的，而且危险**
-            // ——2026-09-06 拿真 claude 实测：现在的信任框选项**没有编号**
-            // （`❯ No, exit` / `Yes, I trust this folder`），按 `1` `2` 屏幕纹丝不动；
-            // 而 nudge_session 除 enter/esc 外一律走「发文本 + 自动回车」，那个回车会
-            // **确认当前高亮项**，而信任框的默认高亮正是 `No, exit`。照着旧文案答一次，
-            // 等于把 session 关掉。所以这里改成：先看清高亮在哪一项再决定。
-            state = "等人拍板（\(run.pendingDecision?.prompt ?? "")）—— 下面的画面里就是那个菜单，"
-                + "\(run.pendingDecision.map(Self.decisionHowToAnswer) ?? "")"
+            // ⚠️ 这里**故意不写任何具体按键**。它曾经写着「发选项数字或 Enter」——
+            // 那句话当初是真的（2026-08-26 那份 fixture 里这个框有编号、默认高亮在
+            // `Yes, I trust`），11 天后上游把编号去掉、顺序反转、默认高亮翻成
+            // `No, exit`，它就从「对」变成了「照着做会把 session 关掉」。
+            //
+            // 病根不是措辞，是**用一句静态文本去描述一件会变的事实**。所以按法只留一个
+            // 真相源：群里那条待决策消息（`SessionDecisionNotice.renderOptions` 按当时
+            // 那一屏 + 当时的 `SessionNudgeKeys` 现算）。这里只负责把现场端到人面前。
+            state = "等人拍板（\(run.pendingDecision?.prompt ?? "")）—— 下面的画面里就是那个菜单。"
+                + "**怎么答以群里那条待决策消息给的按法为准**（它是按当时那一屏算出来的，"
+                + "不同形状的框按法不同）；那条给的按法要是做不到，就发群 @人，"
+                + "别自己试别的键——试错的代价是替它选了你不想要的那一项。"
         case CrewSessionStateDerivation.awaitingReply:
             state = "\(run.awaitingReply?.label ?? "待回复")（\(run.awaitingReply?.summary ?? "")）"
                 + " —— 它在等人回话，你答得了就 nudge_session 回它一句，答不了就发群 @人"
@@ -1053,27 +1057,6 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 向目标发文本/按键。"Enter"/"Esc" 是按键（解模态菜单）；其余文本走 send
     /// （claude=正文+隔拍回车提交；codex=起新 turn）。
-    /// 「这个框该怎么答」——按**这一个框**的实际形状给话，不给一句放之四海的口诀。
-    ///
-    /// 2026-09-06 拿真 claude 实测到的三件事，缺一条这句话就会把人带沟里：
-    /// 1. 现在的信任框**选项没有编号**，按 `1` `2` 屏幕纹丝不动（否定结果，实测）。
-    /// 2. `nudge_session` 除 `enter` / `esc` 外一律走「发文本 + 自动回车」——那个回车
-    ///    **确认当前高亮项**。信任框的默认高亮是 `No, exit`，所以照「发个数字」办
-    ///    一次，等于把 session 关掉。
-    /// 3. 今天**没有**给 PTY 发方向键的通道，所以高亮不在你要的那一项上时，机长
-    ///    搬不动它 —— 那种情况只能 @人。说清楚这条，比让它试到把 session 试没了强。
-    static func decisionHowToAnswer(_ d: PendingTerminalDecision) -> String {
-        [
-            "先在下面的画面上看清 `❯` 停在哪一项 —— 这一步不能跳。",
-            "nudge_session 只认 `enter` / `esc` 两个按键，别的一律当**文本**发出去、"
-            + "并自动补一个回车，那个回车会**确认当前高亮的那一项**。"
-            + "选项没有编号时（claude 的信任框如今就没有）发数字更是白发：实测按 `1` `2` 画面纹丝不动，"
-            + "真正生效的是后面那个自动回车。",
-            "高亮已经在你要选的那一项上 → 发 `enter`；不在 → 今天**没有**给 PTY 发方向键的通道，"
-            + "别拿别的键去试（试错的代价是替它选了你不想要的那一项），直接发群 @人。",
-        ].joined(separator: "\n")
-    }
-
     private func nudge(run: CrewSessionRun, input: String) -> String {
         guard run.status == .running else { return "「\(run.displayName)」已退出，无法注入。" }
         guard run.kind.isAgent else {
@@ -1084,17 +1067,19 @@ final class CrewSessionRunner: ObservableObject {
         let key = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let term = run.backend as? SessionProtocolTerminalControlling,
            run.kind != .codex {
-            switch key {
-            case "enter", "回车":
-                term.sendRaw([0x0d])
-                return "已向「\(run.displayName)」发送 Enter。稍后 inspect_session 复查画面。"
-            case "esc":
-                term.sendRaw([0x1b])
-                return "已向「\(run.displayName)」发送 Esc。稍后 inspect_session 复查画面。"
-            default:
-                run.backend.send(input)
-                return "已把文本发给「\(run.displayName)」（自动回车提交）。"
+            // 认得的裸按键查 `SessionNudgeKeys` —— **待决策消息里那句「能发什么、能不能
+            // 搬动高亮」就是按同一张表算的**。在这里手写一个 switch、再在文案里手写一遍
+            // 键名，就是给「加了新键之后文案安静过期」留门（今天这条 P0 的同款病）。
+            if let bytes = SessionNudgeKeys.byAlias[key] {
+                term.sendRaw(bytes)
+                return "已向「\(run.displayName)」发送 \(key)。稍后 inspect_session 复查画面。"
             }
+            // 其余一律当文本 + 自动补回车。**那个回车会确认菜单当前高亮的那一项** ——
+            // 所以在待决策现场随手发点什么，等于替它做了一个你没看过的选择。
+            run.backend.send(input)
+            return "已把文本发给「\(run.displayName)」（自动回车提交）。"
+                + "它要是正卡在一个选择框上，那个回车已经确认了**当时高亮的那一项**——"
+                + "现在就 inspect_session 复查画面。"
         }
         // codex（app-server）：无 PTY 按键语义。
         switch key {

@@ -109,23 +109,76 @@ final class SessionPendingDecisionTests: XCTestCase {
         XCTAssertEqual(TerminalMenuParser.parse(trustMenu)?.numbered, true)
     }
 
-    /// **没编号的框不许在群消息里长出编号。**
+    /// **没编号那条路渲染出来的消息里，不许有任何一句诱导发数字的话。**
     ///
-    /// 2026-09-06 实测：这种框按 `1` `2` 屏幕纹丝不动，真正生效的是 nudge_session
-    /// 自动补的那个回车 —— 它确认的是**当前高亮项**，而信任框默认高亮 `No, exit`。
-    /// 所以渲染出编号 = 制造一个假的可操作性：机长照着发数字，session 就没了。
-    func testUnnumberedOptionsAreNotRenderedWithFakeNumbers() {
+    /// 这条测试要钉住的不是措辞，是**文案和事实之间那条会漂的缝** —— 把它变成会红的
+    /// 东西。2026-09-06 实测：这种框按 `1` `2` 屏幕纹丝不动，真正生效的是 nudge_session
+    /// 自动补的那个回车，它确认**当前高亮项**，而信任框的默认高亮是 `No, exit`。
+    /// 所以只要消息里出现编号、或出现「发数字」这类话，机长照着做就是把 session 关掉 ——
+    /// **一个机长不需要读过任何守则，光看见数字就会去发数字。**
+    func testUnnumberedRenderingSaysNothingThatInvitesSendingADigit() {
         let p = SessionDecisionNotice.post(
             stage: .first, sessionName: "小明", sessionId: "worker-abc", isCaptain: false,
             question: "Quick safety check: …trust?",
             options: ["No, exit", "Yes, I trust this folder"], numbered: false, waitedMinutes: 0)
-        XCTAssertFalse(p.text.contains("1. No, exit"), p.text)
-        XCTAssertFalse(p.text.contains("2. Yes"), p.text)
+
+        // ① 一个凭空编出来的序号都不许有。
+        for line in p.text.split(separator: "\n") {
+            XCTAssertNil(
+                line.range(of: "^\\s*\\d+[.、)]\\s", options: .regularExpression),
+                "没编号的框在消息里长出了序号：\(line)\n全文：\n\(p.text)")
+        }
+        // ② 也不许用别的说法把人往数字上引。
+        for lure in ["发对应数字", "发选项数字", "发个数字", "发数字即可", "输入数字"] {
+            XCTAssertFalse(p.text.contains(lure), "诱导发数字：「\(lure)」\n全文：\n\(p.text)")
+        }
+        // ③ 选项原文得在，而且要明说数字无效 —— 光不诱导还不够，那只是把假指路
+        //    换成不指路，机长照样会自己猜一个。
         XCTAssertTrue(p.text.contains("No, exit"), p.text)
         XCTAssertTrue(p.text.contains("Yes, I trust this folder"), p.text)
-        // 光不编号还不够 —— 得说清「那怎么答」，否则只是把假指路换成不指路。
         XCTAssertTrue(p.text.contains("没有编号"), p.text)
-        XCTAssertTrue(p.text.contains("inspect_session"), p.text)
+        XCTAssertTrue(p.text.contains("发数字无效"), p.text)
+    }
+
+    /// **「代码能做什么」和「我们告诉机长能做什么」之间那条缝，必须是会红的。**
+    ///
+    /// 判据是双向的，两边都要 —— 只查一边会留下一半的缝：
+    /// - 表里有的键，按法里必须提到（**删掉一个表项 → 这条红**）；
+    /// - 按法里提到的键，表里必须真有（**文字里手写一个表里没有的键 → 这条红**）。
+    ///
+    /// 为什么非要绑死：`nudge` 接受哪些键是我们自己的代码，而那段指导文字是手写的，
+    /// 两者之间原本没有任何东西把它们连起来 —— 跟今天这条 P0 是同一个形状
+    /// （`parseNumbered` 的 1..N 断言 ↔ `post` 的重新编号），只是这次两端都在自己家里。
+    /// 方向键加不加正等着人拍板，那一天到来时**不能靠谁记得改这三句话**。
+    func testHowToAnswerMatchesTheNudgeKeyTableInBothDirections() {
+        let text = SessionDecisionNotice.post(
+            stage: .first, sessionName: "小明", sessionId: "worker-abc", isCaptain: false,
+            question: "Quick safety check: …trust?",
+            options: ["No, exit", "Yes, I trust this folder"], numbered: false,
+            waitedMinutes: 0).text
+
+        // 「按法」那一段里被反引号括起来的键名，就是我们对机长做出的承诺。
+        let promised = Set(
+            text.split(separator: "`").enumerated()
+                .filter { $0.offset % 2 == 1 }.map { String($0.element) })
+        let table = Set(SessionNudgeKeys.byAlias.keys)
+
+        for key in SessionNudgeKeys.displayNames {
+            XCTAssertTrue(
+                promised.contains(key),
+                "表里有 `\(key)`，按法里却没提 —— 删/加表项时这段文字没跟上：\n\(text)")
+        }
+        for key in promised where !table.contains(key) {
+            XCTFail("按法里承诺了一个表里没有的键 `\(key)`：机长照着发会落进「文本 + 自动回车」，"
+                    + "那个回车会确认当前高亮项。\n\(text)")
+        }
+        // 「搬不搬得动高亮」也归这张表管，不许手写。
+        XCTAssertEqual(
+            text.contains("交给人"), SessionNudgeKeys.selectionMoveKeys.isEmpty,
+            "「高亮不对怎么办」跟 SessionNudgeKeys 对不上了：\n\(text)")
+        for key in SessionNudgeKeys.selectionMoveKeys {
+            XCTAssertTrue(promised.contains(key), "能搬动高亮的 `\(key)` 没写进按法：\n\(text)")
+        }
     }
 
     /// 带编号那条路不在怀疑范围内：屏幕上真有 `1.` `2.`，照旧编号照旧发数字。
