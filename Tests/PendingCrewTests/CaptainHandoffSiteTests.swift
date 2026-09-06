@@ -103,6 +103,18 @@ final class CaptainHandoffSiteTests: XCTestCase {
         XCTAssertEqual(world.selfKills, 0)
     }
 
+    // MARK: - 归属票
+
+    /// 「记得先问一句归属」这条规矩不能靠人记住 —— 同一个文件里五处编排动作记住了、
+    /// 交接的两个 GUI 入口没记住，这就是 Todo #101。票是把那句问话搬进
+    /// `executeCaptainHandoff` 的参数表：拿不到就调不动，少一个参数编不过。
+    func testOwnershipTicketIsOnlyIssuedWhereTheRunsActuallyLive() {
+        XCTAssertNil(CaptainHandoffOwnership.claim(isViewer: true),
+                     "viewer 只看得到镜像，不该拿到就地执行交接的票")
+        XCTAssertNotNil(CaptainHandoffOwnership.claim(isViewer: false),
+                        "持有 run 的进程必须拿得到票，否则交接谁也做不了")
+    }
+
     /// 机制本身的反例，与路由无关：只要让这个循环跑在一份滞后的镜像上，它就必然
     /// 饿死，而且每一轮都杀掉自己上一轮的成果。**修法只能是别让它跑在镜像上**——
     /// 把 30 调大只是让饿死变慢，这条测试会一直在这里证明这一点。

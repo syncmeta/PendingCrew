@@ -527,6 +527,25 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(runner.contains("request.targetCrewId"))
         XCTAssertTrue(runner.contains("setCaptainAgentKindReportingFailure"),
                       "新机长类型没有以可报告失败的方式落盘")
+        // Todo #101：GUI 的两个交接入口在 viewer 里必须**整笔**转交后台。
+        // 只转发「起新」那一步、把「确认在跑」留在只有镜像的本地，正是那个 bug 本身。
+        XCTAssertTrue(runner.contains("private func forwardCaptainHandoffToOwner("),
+                      "runner 没有把整笔交接转交持有者的单一出口")
+        XCTAssertEqual(
+            runner.components(separatedBy: "if forwardCaptainHandoffToOwner(").count - 1, 2,
+            "GUI 的两个交接入口（现有成员 / 新建机长）必须都先问归属")
+        XCTAssertTrue(runner.contains("CaptainHandoffOwnership.claim(isViewer: isViewer)"),
+                      "归属判定没有走可单测的那一处，又散成了就地的 if isViewer")
+        XCTAssertTrue(runner.contains("ownership: CaptainHandoffOwnership,"),
+                      "归属票没有落在 executeCaptainHandoff 的参数表里 —— 只写注释拦不住下一个人")
+        XCTAssertTrue(runner.contains("throw RunnerError.captainHandoffNotOwner"),
+                      "viewer 里跑交接没有硬失败，第三条路仍然能悄悄长出来")
+        XCTAssertTrue(runner.contains("func performForwardedCaptainHandoff("),
+                      "daemon 侧没有承接转交过来的交接")
+        let daemon = try Self.text(of: "SessionDaemonMain.swift")
+        XCTAssertTrue(daemon.contains("SessionOrchestrationOp.captainHandoff"),
+                      "daemon 没有接线机长交接的编排请求，转发过去会被 default 分支丢掉")
+
         XCTAssertTrue(runner.contains("resumePreviousConversation: false"),
                       "新建机长错误地续接了旧机长 conversation")
         XCTAssertTrue(runner.contains("resumePreviousConversation: Bool = true"),

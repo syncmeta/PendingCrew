@@ -1515,7 +1515,9 @@ final class CrewSessionRunner: ObservableObject {
         case captainNoWorkingDirectory
         case captainCandidateInvalid
         case captainConversationUnavailable
-        case captainLaunchContended
+        case captainHandoffAlreadyInFlight
+        case captainLaunchContended(attempts: Int)
+        case captainHandoffNotOwner
         case captainLaunchFailed(String)
         case captainStopTimedOut
 
@@ -1533,8 +1535,12 @@ final class CrewSessionRunner: ObservableObject {
                 return "只能把同一 crew 里的普通 agent session 重新指定为机长。"
             case .captainConversationUnavailable:
                 return "这个 session 的 agent 会话号还没落盘，暂时不能无损接成机长；等它完成启动后再试。"
-            case .captainLaunchContended:
-                return "机长启动槽持续被其它唤醒占用，交接请求已保留；重启 PendingCrew 会自动重试。"
+            case .captainHandoffAlreadyInFlight:
+                return "这个 crew 已经有一次机长交接在进行中；等它出结果再试 —— 这次没有停旧机长，不会有第二次切换。"
+            case .captainLaunchContended(let attempts):
+                return "机长启动槽连续 \(attempts) 次被普通 @唤醒抢走，交接请求已保留；重启 PendingCrew 会自动重试。"
+            case .captainHandoffNotOwner:
+                return "这个窗口只看得到后台进程里的 session，机长交接必须由持有它们的后台进程执行。"
             case .captainLaunchFailed(let detail):
                 return "新机长没有通过启动自检：\(detail)"
             case .captainStopTimedOut:
@@ -1559,8 +1565,31 @@ final class CrewSessionRunner: ObservableObject {
               candidate.kind.isAgent else {
             throw RunnerError.captainCandidateInvalid
         }
+        if forwardCaptainHandoffToOwner(
+            crewId: detail.crew.id, sessionId: candidate.sessionId,
+            runner: nil, brief: "") { return }
         try await reassignCaptain(
             toSessionId: candidate.sessionId, detail: detail, backend: backend)
+    }
+
+    /// 本进程只看得到镜像时，把**整笔**交接转交给持有 run 的进程；返回 true = 已转交。
+    ///
+    /// 这是同一个文件里 `stop`(:257) / `applyCodexApprovalMode`(:407) /
+    /// `applyProfileChange`(:446) / `startCaptain` / `startForBrief` 都在做的那件事 ——
+    /// 交接的另外两条腿也早就做了（MCP 那条被 `CrewStore.ownsSharedControlChannel`
+    /// 拦着，重启续接那条被 `SessionHost.start` 的 precondition 拦着）。
+    /// **只有这两个 GUI 入口没做**，于是 daemon 模式下人点「切换机长」必然失败。
+    private func forwardCaptainHandoffToOwner(
+        crewId: String, sessionId: String?, runner: LocalCodingAgentKind?, brief: String
+    ) -> Bool {
+        guard CaptainHandoffOwnership.claim(isViewer: isViewer) == nil else { return false }
+        sendOrchestration(SessionOrchestrationOp.captainHandoff, [
+            "crewId": .string(crewId),
+            "sessionId": .string(sessionId ?? ""),
+            "runner": .string(runner?.rawValue ?? ""),
+            "brief": .string(brief),
+        ])
+        return true
     }
 
     /// 现有成员模式的共享入口。human 右键与 captain MCP 都只给稳定 sessionId；
@@ -1625,7 +1654,11 @@ final class CrewSessionRunner: ObservableObject {
               let kind = LocalCodingAgentKind(rawValue: target.kind), kind.isAgent else {
             throw RunnerError.captainCandidateInvalid
         }
+        guard let ownership = CaptainHandoffOwnership.claim(isViewer: isViewer) else {
+            throw RunnerError.captainHandoffNotOwner
+        }
         try await executeCaptainHandoff(
+            ownership: ownership,
             detail: detail, backend: backend, kind: kind,
             resumeSessionId: target.agentSessionId,
             candidateSessionId: target.sessionId,
@@ -1648,10 +1681,44 @@ final class CrewSessionRunner: ObservableObject {
         kind: LocalCodingAgentKind,
         userInitiated: Bool = false
     ) async throws {
+        if forwardCaptainHandoffToOwner(
+            crewId: detail.crew.id, sessionId: nil,
+            runner: kind, brief: openingBrief) { return }
         try await startFreshCaptain(
             detail: detail, backend: backend, openingBrief: openingBrief,
             kind: kind, model: nil, effort: nil, title: "机长",
             userInitiated: userInitiated)
+    }
+
+    /// daemon 侧承接 viewer 转交过来的整笔交接。**不信 viewer 给的任何东西**，
+    /// 只按 crewId + sessionId/runner 在本进程重新解析（与 MCP 那条同策略）；
+    /// 失败照常由共享事务恢复旧机长，回执写群聊，不静默。
+    func performForwardedCaptainHandoff(
+        crewId: String, sessionId: String?, runnerRaw: String?, brief: String,
+        detail: CrewDetail, backend: PendingCrewBackend?
+    ) async {
+        do {
+            guard detail.crew.id == crewId else { throw RunnerError.captainCandidateInvalid }
+            if let sessionId, !sessionId.isEmpty {
+                try await reassignCaptain(
+                    toSessionId: sessionId, detail: detail, backend: backend)
+            } else {
+                guard let raw = runnerRaw, let kind = LocalCodingAgentKind(rawValue: raw),
+                      kind.isAgent else { throw RunnerError.captainCandidateInvalid }
+                try await startFreshCaptain(
+                    detail: detail, backend: backend, openingBrief: brief,
+                    kind: kind, userInitiated: true)
+            }
+        } catch {
+            lastStartError = "机长交接失败：\(error.localizedDescription)"
+            // `executeCaptainHandoff` 只在**已经开始动 live run 之后**才写失败回执；
+            // 预检就挡下来的（候选人不合法、拉不到 detail）到这里还没有任何痕迹，
+            // 而请求是从另一个进程转发来的 —— 不补这一条，人在界面上点完就什么都看不到。
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "机长交接失败：\(error.localizedDescription)旧机长保持不变。",
+                category: "error", senderName: "系统")
+        }
     }
 
     private func startFreshCaptain(
@@ -1660,10 +1727,14 @@ final class CrewSessionRunner: ObservableObject {
         userInitiated: Bool
     ) async throws {
         guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
+        guard let ownership = CaptainHandoffOwnership.claim(isViewer: isViewer) else {
+            throw RunnerError.captainHandoffNotOwner
+        }
         let handoffBrief = "你刚被新建为本 crew 机长；先在群里确认接管，再从白板续接旧机长上下文。"
             + (openingBrief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                ? "" : "\n\n接手任务：\(openingBrief)")
         try await executeCaptainHandoff(
+            ownership: ownership,
             detail: detail, backend: backend, kind: kind,
             resumeSessionId: nil, candidateSessionId: nil,
             model: model, effort: effort, title: title,
@@ -1756,6 +1827,7 @@ final class CrewSessionRunner: ObservableObject {
     /// live 切换按 `CaptainHandoffTransaction` 串行执行，成功回执也算提交的一部分：若
     /// kind 落盘或群聊成功回执失败，会停掉新机长、恢复旧 kind 并续回旧 conversation。
     private func executeCaptainHandoff(
+        ownership: CaptainHandoffOwnership,
         detail: CrewDetail, backend: PendingCrewBackend?, kind: LocalCodingAgentKind,
         resumeSessionId: String?, candidateSessionId: String?,
         model: String?, effort: String?, title: String,
@@ -1770,8 +1842,12 @@ final class CrewSessionRunner: ObservableObject {
         guard LocalCodingAgentExecutable.resolve(kind) != nil else {
             throw RunnerError.toolNotInstalled(kind: kind)
         }
+        // `ownership` 不在这里检查 —— 它是**参数**：造不出票就调不动这个函数。
+        // 见 `CaptainHandoffOwnership`：这条规矩原来靠人记得写 `if isViewer`，
+        // 而同一个文件里五处编排动作记住了、交接的两个 GUI 入口没记住。
+        _ = ownership
         guard captainReassignmentsInFlight.insert(crewId).inserted else {
-            throw RunnerError.captainLaunchContended
+            throw RunnerError.captainHandoffAlreadyInFlight
         }
         defer { captainReassignmentsInFlight.remove(crewId) }
 
@@ -1854,7 +1930,7 @@ final class CrewSessionRunner: ObservableObject {
         kind: LocalCodingAgentKind, resumeSessionId: String?,
         model: String?, effort: String?, title: String, userInitiated: Bool
     ) async throws {
-        for attempt in 0..<30 {
+        for attempt in 0..<CaptainHandoffSite.launchAttempts {
             let collisions = runs.filter { $0.crewId == detail.crew.id && $0.role == .captain }
             try await stopAndRemoveForCaptainHandoff(collisions)
             let started = try await startCaptain(
@@ -1863,17 +1939,19 @@ final class CrewSessionRunner: ObservableObject {
                 resumePreviousConversation: false,
                 model: model, effort: effort, title: title,
                 userInitiated: userInitiated)
-            if started,
-               let run = runs.first(where: {
-                   $0.crewId == detail.crew.id && $0.role == .captain
-                       && $0.status == .running
-               }) {
-                try await awaitCaptainLaunchReady(run)
+            let live = runs.first {
+                $0.crewId == detail.crew.id && $0.role == .captain && $0.status == .running
+            }
+            let step = CaptainHandoffSite.step(
+                attempt: attempt, maxAttempts: CaptainHandoffSite.launchAttempts,
+                rosterShowsRunningCaptain: started && live != nil)
+            if case .confirmed = step, let live {
+                try await awaitCaptainLaunchReady(live)
                 return
             }
-            if attempt < 29 { try await Task.sleep(nanoseconds: 200_000_000) }
+            if case .retry = step { try await Task.sleep(nanoseconds: 200_000_000) }
         }
-        throw RunnerError.captainLaunchContended
+        throw RunnerError.captainLaunchContended(attempts: CaptainHandoffSite.launchAttempts)
     }
 
     /// 交接停机不能靠固定 sleep 猜。run 留在列表里等 backend 真正翻出 running，

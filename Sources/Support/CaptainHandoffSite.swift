@@ -28,9 +28,7 @@ enum CaptainHandoffSite {
     }
 
     static func decide(isViewer: Bool) -> Decision {
-        // TODO(Todo #101): 今天的实现就是这样——两个 GUI 入口谁都没问过归属，
-        // 于是 viewer 里也就地执行。红测试钉的正是这一行。
-        return .executeHere
+        isViewer ? .forwardToOwner : .executeHere
     }
 
     /// 有界启动循环的一次尝试该走哪一步。
@@ -56,5 +54,29 @@ enum CaptainHandoffSite {
 
     /// 有界启动循环的轮数上限（与 `launchCaptainForHandoff` 共用同一个常量）。
     static let launchAttempts = 30
+}
+
+/// 「本进程持有真的 run，可以就地跑一笔机长交接」的凭据。
+///
+/// 它存在的理由不是类型洁癖，是这个 bug 的形状：**「记得先问一句归属」是一条靠人
+/// 记住的规矩**，而同一个文件里五处编排动作记住了、交接的两个 GUI 入口没记住。
+/// 靠人记住的规矩挡不住下一个人 —— 所以把那句问话搬进 `executeCaptainHandoff` 的
+/// **参数表**：拿不到这张票就调不动它，少一个参数编不过。新加一条交接入口的人
+/// 不需要读到任何注释，编译器会把这个问题顶到他脸上。
+///
+/// **它盖不住什么，说清楚**：这张票挡的是「忘了问」，不是「问了但答错」——
+/// 谁硬写一个 `claim(isViewer: false)` 照样拿得到票。想连那个也堵上就得让
+/// `isViewer` 不可伪造（比如只能由 runner 自己提供），代价是把 runner 的类型拖进
+/// 这个纯文件、这条判定就再也进不了 test bundle。这里选了能被单测的那一侧。
+struct CaptainHandoffOwnership {
+    private init() {}
+
+    /// 造票的**唯一**入口。`nil` = 本进程只看得到镜像，这笔交接必须转交持有者。
+    static func claim(isViewer: Bool) -> CaptainHandoffOwnership? {
+        switch CaptainHandoffSite.decide(isViewer: isViewer) {
+        case .executeHere: return CaptainHandoffOwnership()
+        case .forwardToOwner: return nil
+        }
+    }
 }
 #endif

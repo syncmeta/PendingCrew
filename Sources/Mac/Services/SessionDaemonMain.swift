@@ -171,6 +171,23 @@ enum SessionDaemonMain {
                     crewId: crewId, sessionId: sessionId,
                     model: string("model"), effort: string("effort")))
             }
+        case SessionOrchestrationOp.captainHandoff:
+            // 整笔交接（Todo #101）。detail 同 startSession 那条：daemon 里没有 UI，
+            // 缓存永远是 miss，所以总是现拉。
+            guard let crewId = string("crewId") else { return }
+            Task { @MainActor in
+                if crewStore.details[crewId] == nil { await crewStore.refreshDetail(crewId) }
+                guard let detail = crewStore.details[crewId] else {
+                    crewStore.postSystemNotice(
+                        crewId: crewId, text: "机长交接失败：拉不到 crew 详情。旧机长保持不变。")
+                    return
+                }
+                await runner.performForwardedCaptainHandoff(
+                    crewId: crewId, sessionId: string("sessionId"),
+                    runnerRaw: string("runner"), brief: string("brief") ?? "",
+                    detail: detail, backend: model.backend)
+                await crewStore.refreshDetail(crewId)
+            }
         case SessionOrchestrationOp.approvalMode:
             guard let target = run(), let raw = string("reviewer"),
                   let reviewer = CodexProtocol.ApprovalsReviewer(rawValue: raw) else { return }
