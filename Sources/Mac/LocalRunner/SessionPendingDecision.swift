@@ -327,6 +327,44 @@ final class PendingDecisionTracker {
     }
 }
 
+// MARK: - nudge_session 认得的裸按键
+
+/// **`nudge_session` 能发哪些裸按键 —— 唯一事实源。**
+///
+/// 待决策消息里「发什么、能不能搬动高亮」那几句是**按这张表算出来的**，不是照抄的。
+/// 今天这条 P0 的病根是「一句静态文本去描述一件会变的事实」——上游那一屏会变，
+/// 我们已经改成现算了；**而 `nudge` 支持哪些键同样会变**（方向键加不加正等着人拍板）。
+/// 要是文案里另写一遍「不认方向键」，加上方向键的那天它就安静地过期，
+/// 一模一样的病、换个地方再犯一次。
+enum SessionNudgeKeys {
+    /// 别名 → 发给 PTY 的字节。**不在这张表里的输入一律当文本发出去、并自动补一个
+    /// 回车** —— 那个回车会确认菜单当前高亮的那一项，这正是「发个数字」会把 session
+    /// 关掉的原因。
+    static let byAlias: [String: [UInt8]] = [
+        "enter": [0x0d], "回车": [0x0d], "esc": [0x1b],
+    ]
+
+    /// 给人看的键名：**从表里算出来**，不是另写一份名单。
+    ///
+    /// 这条差点又踩同一个坑 —— 第一版把它写成 `["enter", "esc"].filter { … }`，
+    /// 于是往表里加一个键，它不会出现在这份名单里：**一张表、两份名单，缝还在，
+    /// 只是挪了个位置。** 变异实测抓到的（往表里加 `down`，消息一边说「只认
+    /// enter / esc」一边说「先发 down」）。
+    ///
+    /// 同一个键有多个别名（`enter` / `回车`）时只露一个：按字节分组，组内取字典序
+    /// 最小的那个别名，结果稳定、可测。
+    static var displayNames: [String] {
+        var seen = Set<[UInt8]>()
+        return byAlias.keys.sorted().filter { seen.insert(byAlias[$0]!).inserted }
+    }
+
+    /// 表里那些能**搬动菜单高亮**的键（按稳定顺序）。空 = 高亮不在你要的那一项上时
+    /// 谁也救不了，只能交给人 —— 消息里那句话就是按这个算的，**不是手写的**。
+    static var selectionMoveKeys: [String] {
+        ["up", "down", "上", "下"].filter { byAlias[$0] != nil }
+    }
+}
+
 // MARK: - 通知稿：说什么、@ 谁
 
 /// 一个 session 卡在待决策上时，往群里发的那条消息。
@@ -356,26 +394,49 @@ enum SessionDecisionNotice {
         now.timeIntervalSince(raisedAt) > after
     }
 
-    /// **选项怎么渲染**：屏幕上有编号就编号，没有就不编。
+    /// **按法由这条消息自己算出来，不由任何一句守则去承诺。**
     ///
-    /// 这不是排版偏好。此前这里恒定按 `1. 2. 3.` 编号，于是没编号的框（2026-09 的
-    /// claude 信任框）在群里长成了一个**可以发数字的样子** —— 而实测按数字屏幕纹丝
-    /// 不动。收到这条消息的机长不需要读过任何守则，光看见数字就会去发数字；真正生效
-    /// 的是 nudge 自动补的那个回车，它确认的是**当前高亮项**，信任框的默认高亮正是
-    /// `No, exit`。**我们把一个不存在的编号画给他看，然后指望他不去用它。**
+    /// 今天这个 bug 的成因不是「类型少了个字段」，是**一句静态的指导语去描述一件会变
+    /// 的事实**：守则里写着「`nudge_session` 发选项数字」，而上游 11 天里把这个框改了
+    /// 三处（编号没了、顺序反了、默认高亮从 `Yes, I trust` 翻成 `No, exit`；两份真字节
+    /// fixture 都在库里）。守则停在旧世界，而它是**指导性**的 —— 机长会照着做，
+    /// 结果是把一个正在等人救的 session 直接关掉。
     ///
-    /// 没编号时**不替他说 Enter 安不安全** —— 高亮停在哪一项只有当下的画面知道，
-    /// 写进一条会留在白板上的消息里就成了会过期的断言。所以只说「去看画面」。
+    /// **只要那句话还是静态文本，它就会再次过期。** 所以按法写在这里、按 `numbered`
+    /// 现算：这条消息是当时那一屏的产物，跟着屏幕一起变，没有第二个真相源。
+    ///
+    /// 两条路各自的实测依据（2026-09-06，全新未信任目录 + 真 claude）：
+    /// - **有编号**：屏幕上真有 `1.` `2.`，发数字有效。`parseNumbered` 还断言过序号
+    ///   必须连续从 1 起，所以这里重新编出来的号跟屏幕上那个对得上。
+    /// - **没编号**：按 `1` `2` **屏幕纹丝不动**；而 `nudge_session` 除 `enter`/`esc`
+    ///   外一律「发文本 + 自动补一个回车」，真正生效的是那个回车 —— 它确认**当前
+    ///   高亮项**。今天信任框的默认高亮是 `No, exit`，所以「发个数字」的净效果是
+    ///   把 session 关掉。`esc` 也不是「取消这个框」——实测它让 claude 直接退出。
+    ///
+    /// **消息里只说该做什么，不断言「有没有某个通道」。** 「今天没有方向键」本身也是
+    /// 一句会过期的断言（加不加正等着人拍板）；这里改成按 `SessionNudgeKeys` 算出
+    /// **动作**：搬得动就说怎么搬，搬不动就说交给人。表里加一项，这句话自己就变了。
     static func renderOptions(_ options: [String], numbered: Bool) -> [String] {
         guard !options.isEmpty else { return [] }
         guard numbered else {
             return options.map { "  \($0)" } + [
-                "（屏幕上这几项**没有编号**，发数字没用 —— 得先 inspect_session 看清 `❯` "
-                + "停在哪一项：正好是你要的那项就 nudge_session 发 `enter`，不是的话今天没有"
-                + "发方向键的通道，直接 @人。）",
+                "怎么答：**这一屏的选项没有编号**。发数字无效（实测画面纹丝不动），"
+                + "而 nudge_session 只认这几个裸按键："
+                + SessionNudgeKeys.displayNames.map { "`\($0)`" }.joined(separator: " / ")
+                + "，其余一律当文本发出去并**自动补一个回车**——那个回车落在**当前高亮的"
+                + "那一项**上，未必是你想选的。"
+                + "（`esc` 也不是「取消这个框」，实测它让 claude 直接退出。）"
+                + "所以**别发数字**。高亮当下就停在你要的那一项上 → 发 `enter`；"
+                + (SessionNudgeKeys.selectionMoveKeys.isEmpty
+                   ? "不在那一项上 → **交给人**。"
+                   : "不在 → 先发 "
+                     + SessionNudgeKeys.selectionMoveKeys.map { "`\($0)`" }.joined(separator: " / ")
+                     + " 把它移到位，再发 `enter`。"),
             ]
         }
-        return options.enumerated().map { "  \($0.offset + 1). \($0.element)" }
+        return options.enumerated().map { "  \($0.offset + 1). \($0.element)" } + [
+            "怎么答：这一屏的选项**带编号**，nudge_session 发对应数字即可。",
+        ]
     }
 
     /// - Parameters:
@@ -403,9 +464,12 @@ enum SessionDecisionNotice {
         switch stage {
         case .first:
             mentions = isCaptain ? ["human"] : ["captain"]
+            // 这里**故意不再复述按法** —— 上面那一行是按当时那一屏算出来的，
+            // 是唯一的真相源。在它旁边再写一句静态的「发数字就行」，就是把刚拆掉的
+            // 那条会过期的承诺又装回来一份。
             lines.append(isCaptain
                 ? "需要人打开这个 session 的终端选一下。"
-                : "机长可 inspect_session 看现场、nudge_session 代答；拍不了板就 @人。")
+                : "机长可 inspect_session 看现场；按法照上面那一行（它是按当时那一屏算出来的）。拍不了板就 @人。")
         case .escalate:
             mentions = ["human"]
             lines.append("需要人来定：打开这个 session 的终端直接选，或让机长 nudge_session 代按。")
