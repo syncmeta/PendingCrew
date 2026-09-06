@@ -256,6 +256,10 @@ final class SessionOutputEvidenceTests: XCTestCase {
         XCTAssertTrue(desc.contains("看不出来"), desc)
         // 「看不出来 ≠ 没干活」这句必须在描述里，否则机长会照着表象再判一次。
         XCTAssertTrue(desc.contains("不等于"), desc)
+        // 这一列自己也不许变成第二个「显示空闲」：它证明的是「一个字没产出」，
+        // **不是**「卡住了」。描述必须明说这一点，并要求跟状态、跟距今多久一起读。
+        XCTAssertTrue(desc.contains("不是「卡住了」"), desc)
+        XCTAssertTrue(desc.contains("一起读"), desc)
     }
 }
 
