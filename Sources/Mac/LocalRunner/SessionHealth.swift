@@ -59,7 +59,9 @@ struct CrewSessionHealth: Equatable {
 /// 卡在终端菜单上、或问完一句停住的 session 都不吐输出 → `isWorking` 为假 → 会被推成
 /// 「🟡 空闲」，机长照常派活，活石沉大海。这正是「session 事实上死掉」在点名里的样子。
 ///
-/// 两者的分工：`awaitingDecision` 是**画面上明摆着的菜单**（机长 nudge 发个数字就能代答）；
+/// 两者的分工：`awaitingDecision` 是**画面上明摆着的菜单**（按法见那条待决策消息，
+/// 由 `SessionDecisionNotice.renderOptions` 按当时那一屏现算 —— 这里**故意不写具体
+/// 按键**，它曾经写着「nudge 发个数字就能代答」，而没编号的框上那是错的）；
 /// `awaitingReply` 是「它在等人回话」的一般情形（`ask` 挂着 / 大白话问了一句），判定见
 /// `SessionAwaitingReply`。菜单更具体、更可代办，所以排前面。
 enum CrewSessionStateDerivation {
