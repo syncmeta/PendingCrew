@@ -30,7 +30,12 @@
     `SessionDaemonAttachMain.swift:22`、`SessionDaemonAttachMain.swift:29`、
     `SessionDaemonMain.swift:44`。**5 处 4 个文件** —— 派活的 brief 里写的是 3 处，
     实测是 5 处（报数时把名字列全再数一遍，撞上过一次就知道值）。
-    stderr 的读端在 CLI 场景是终端，不会断，暂不动。
+    stderr 的读端在 CLI 场景**通常**是终端，不会断 —— 但「通常」不等于「一定」：
+    `PendingCrew --daemon-status 2>&1 | head` 那根管子的读端一走就断。
+    **2026-09-07 P5b 补了正确的那一种**：`StandardErrorText.write`（`DaemonStop.swift`），
+    用 `fputs` —— 写失败只返回 EOF，不会把进程带走。新写的 `--daemon-stop` 走它。
+    **这 5 处该迁过去，但迁移不在那一笔里做**，登记在这里。
+    （别再新增第 6 处 `FileHandle.standardError.write`：正确的那一种已经有了。）
 - **顺带一条必须写明的边界**: `CodexPipeWrite` 里那次 `signal(SIGPIPE, SIG_IGN)` 是**进程级**的。
   它只在 `CodexPipeWrite.line` 被调用过之后生效，而上面那 5 个 stderr 点所在的 CLI 入口
   （`--daemon-status` / `--daemon-attach`）从不调它 —— 所以**对它们没有任何影响**。

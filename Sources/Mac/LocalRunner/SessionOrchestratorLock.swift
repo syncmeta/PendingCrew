@@ -77,7 +77,7 @@ enum SessionOrchestratorLock {
             return .unavailable("打不开 \(url.path)：\(String(cString: strerror(errno)))")
         }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            let holder = readHolder(at: url)
+            let holder = readHolder(fd: fd)
             close(fd)
             return .heldBy(holder)
         }
@@ -122,23 +122,71 @@ enum SessionOrchestratorLock {
         }
     }
 
-    /// **只看，不写。** `acquire` 成功时会把自己的身份写进锁文件；探测不该有那个副作用
-    /// （否则「问一句谁占着」会把锁文件改成自己的名字，下一个进程读到的就是假的）。
-    static func currentHolder(dataRoot: URL) -> Holder? {
+    /// 这个数据根上**现在有没有编排者、是谁** —— 三态，不是可选值。
+    ///
+    /// `currentHolder` 返回 `Holder?`，于是「没人占着」「占着但读不出是谁」「连锁文件
+    /// 都问不出来」三件事被压成同一个 `nil`。对老调用点无所谓（它们只想知道「有没有
+    /// daemon 在」），但对**停用命令**是致命的：把「我读不到」答成「没人在跑」，
+    /// `--daemon-stop` 会报成功退 0，而后台还活着 —— 紧跟着的「清除本机所有数据」
+    /// 就删在一个正在写的目录上。这跟 `CrewDirectory` 把「读不动」说成「查无此号」
+    /// 是同一族 bug；仓库里已有的正确范式是 `WhiteboardCursor.read` 的三态，照它写。
+    ///
+    /// **不用 `FileManager.fileExists` 判「有没有锁文件」**：数据根本身不可读时
+    /// （真机上 `chmod 500` 复现过）它同样返回 false，于是「我进不去这个目录」会被
+    /// 说成「这里没有编排者」—— 元数据尺子恰好在你要诊断的那种故障下说谎。
+    /// 这里只认 `open` 的 errno：`ENOENT` 才是「没有」。
+    enum Presence: Equatable {
+        /// 锁没人占着。
+        case none
+        case held(Holder)
+        /// 有人占着（flock 拿不到），但读不出是谁。
+        case heldByUnknown(String)
+        /// 连问都问不出来。**不是「没人在」。**
+        case undecidable(String)
+    }
+
+    static func presence(dataRoot: URL) -> Presence {
         let url = dataRoot.appendingPathComponent(fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let fd = open(url.path, O_RDWR)
-        guard fd >= 0 else { return nil }
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else {
+            let code = errno
+            if code == ENOENT { return .none }
+            return .undecidable("打不开 \(url.path)：\(String(cString: strerror(code)))")
+        }
         defer { close(fd) }
         if flock(fd, LOCK_EX | LOCK_NB) == 0 {
             flock(fd, LOCK_UN)          // 没人占着
-            return nil
+            return .none
         }
-        return readHolder(at: url)
+        guard let holder = readHolder(fd: fd) else {
+            return .heldByUnknown("锁被占着，但 \(url.path) 里读不出持有者；"
+                + "`lsof \(url.path)` 能查出占着的 pid")
+        }
+        return .held(holder)
     }
 
-    private static func readHolder(at url: URL) -> Holder? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+    /// **只看，不写。** `acquire` 成功时会把自己的身份写进锁文件；探测不该有那个副作用
+    /// （否则「问一句谁占着」会把锁文件改成自己的名字，下一个进程读到的就是假的）。
+    ///
+    /// 保留可选值形状是给老调用点用的（它们只问「有没有 daemon」，三态对它们是噪音）。
+    /// **要区分「没人在」和「我读不到」的地方一律用 `presence`。**
+    static func currentHolder(dataRoot: URL) -> Holder? {
+        if case let .held(holder) = presence(dataRoot: dataRoot) { return holder }
+        return nil
+    }
+
+    /// 从已经打开的 fd 读 —— 不走 `Data(contentsOf:)`，免得为了读一份已经在手上的
+    /// 文件再开一次（那一次可能失败于完全不同的原因，而我们会把它记在同一笔账上）。
+    private static func readHolder(fd: Int32) -> Holder? {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = read(fd, &buffer, buffer.count)
+            if n > 0 { data.append(contentsOf: buffer[0..<n]); continue }
+            if n == 0 { break }
+            if errno == EINTR { continue }
+            return nil
+        }
         return try? JSONDecoder().decode(Holder.self, from: data)
     }
 }

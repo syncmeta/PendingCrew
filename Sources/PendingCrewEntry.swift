@@ -13,6 +13,8 @@ import AppKit
 ///   executablePath` 铁定可寻），也避开 macOS app bundle 嵌可执行文件的签名/拷贝坑。
 /// - 带 `--daemon` argv → 当**常驻后台进程**跑（前后端分离 P4，`SessionDaemonMain`）：
 ///   养 session、跑编排、在 Unix socket 上服务 viewer，不起 GUI、不碰 NSApplication。
+/// - 带 `--daemon-status` / `--daemon-attach` / `--daemon-stop` argv → 后台的三个
+///   无界面外部入口：问状态 / 看画面 / **停掉它**（P5b）。一律不开窗口。
 /// - 否则 → 起正常 SwiftUI GUI（`PendingCrewApp.main()`）。
 @main
 struct PendingCrewEntry {
@@ -31,6 +33,10 @@ struct PendingCrewEntry {
         // 同一拍的第二支：无界面 viewer 探针（P5a 证据工具）。同样绝不开窗口 ——
         // 「不开界面也能看到 session 的画面」正是它要证的那件事。
         if SessionDaemonAttachMain.runIfRequested(CommandLine.arguments) { return }
+        // 第三支：停用入口（P5b）。**在 `--daemon` 之前截住** —— 它要做的事跟"当后台"
+        // 正相反，落到下面那一支就成了「起一个新的后台来停旧的」。
+        // 装上开机自启之后，「我想关掉它」必须有一个正式入口，否则就是装上撤不掉。
+        if SessionDaemonStopMain.runIfRequested(CommandLine.arguments) { return }
         // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
         if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
