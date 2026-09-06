@@ -440,4 +440,165 @@ final class HookEmitterTests: XCTestCase {
         XCTAssertNotNil(out)
         XCTAssertTrue(out!.contains("人类"), "无 senderName 退回旧格式「人类」")
     }
+
+    // MARK: - 板子陈旧度（人类 Todo #108：我自己的账停了我不知道）
+
+    /// 往磁盘上直接摆几条计划 —— `CockpitPlanStore.add/update` 会把 `updatedAt`
+    /// 写成「现在」，而这一族测的正是「久没动」，必须能自己造过去的时间戳。
+    private func writePlans(_ dir: URL, _ rows: [CockpitPlanItem]) {
+        let url = dir.appendingPathComponent("c.plan.json")
+        try? JSONEncoder().encode(rows).write(to: url)
+    }
+
+    private func plan(_ number: Int, _ title: String, _ status: CockpitPlanStatus,
+                      updatedAgo: TimeInterval, now: Date) -> CockpitPlanItem {
+        let iso = ISO8601DateFormatter()
+        return CockpitPlanItem(
+            id: "p\(number)", number: number, title: title, status: status.rawValue,
+            createdAt: iso.string(from: now.addingTimeInterval(-updatedAgo)),
+            updatedAt: iso.string(from: now.addingTimeInterval(-updatedAgo)))
+    }
+
+    /// **这条是 #107 / #108 的分工依据，不是普通回归。**
+    ///
+    /// `prepareContext` 开头 `guard let last = unread.last else { return nil }` ——
+    /// 白板没有未读就整段不注入。所以「陈旧度进注入面」这个机制**只送得到已经
+    /// 因为别的事被叫醒的机长**；而 #107 的现场恰恰是群里安静、没人 @ 任何人。
+    /// 也就是说 ② 修得了 #108，修不了 #107 —— 能修 #107 的只有主动唤醒（① 督办租约）。
+    ///
+    /// 删掉那道 guard，这条立刻红：那时它会拿到一段只有陈旧度提示的注入。
+    func testStaleBoardCannotReachACaptainWhoHasNoUnreadMessages() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [plan(1, "等 codex 修建子 crew 丢 brief", .inProgress,
+                              updatedAgo: 6 * 3600, now: now)])
+        let e = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                            cursorDir: dir, isCaptain: true)
+        XCTAssertNil(e.prepareContext(now: now),
+                     "白板没有未读 → 一个字都注入不进去，陈旧度提示搭不上车")
+        XCTAssertNil(e.emitAndAdvance(now: now))
+
+        // **对照组** —— 这一半才让上面那两条断言有意义：数据一个字没改，只是群里
+        // 多了一句无关的话，同一条陈旧度提示立刻就送到了。也就是说决定它能不能
+        // 送达的**不是板子有多陈旧，而是有没有人在群里说话**。
+        store.appendUserMessage(crewId: "c", text: "跟这条计划毫无关系的一句话")
+        let withUnread = e.emitAndAdvance(now: now)
+        XCTAssertNotNil(withUnread)
+        XCTAssertTrue(withUnread!.contains("等 codex 修建子 crew 丢 brief"),
+                      "同一份陈旧数据，只要有未读就送得出去：\(withUnread!)")
+    }
+
+    func testStaleHintNamesCountAndOldestPlan() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [
+            plan(1, "接 Polar 钱包", .inProgress, updatedAgo: 3 * 86400, now: now),
+            plan(2, "拆群语音容器", .inProgress, updatedAgo: 5 * 3600, now: now),
+            plan(3, "刚派出去的活", .inProgress, updatedAgo: 10 * 60, now: now),
+        ])
+        store.appendUserMessage(crewId: "c", text: "随便说一句")
+        let out = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                              cursorDir: dir, isCaptain: true).emitAndAdvance(now: now)!
+        XCTAssertTrue(out.contains("2 条"), "只数超过阈值那些，10 分钟前动过的不算：\(out)")
+        XCTAssertTrue(out.contains("#1"), "点名最旧那条")
+        XCTAssertTrue(out.contains("接 Polar 钱包"))
+        XCTAssertTrue(out.contains("3 天"), "说清最旧那条多久没动")
+        XCTAssertFalse(out.contains("刚派出去的活"), "没超阈值的不该出现在提示里")
+    }
+
+    /// 阈值那一环：全部在阈值内 → 一个字都不提。删掉阈值判定（改成「有 in_progress
+    /// 就提」）这条立刻红。
+    func testFreshBoardProducesNoStaleHint() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [plan(1, "在做的活", .inProgress, updatedAgo: 30 * 60, now: now)])
+        store.appendUserMessage(crewId: "c", text: "随便说一句")
+        let out = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                              cursorDir: dir, isCaptain: true).emitAndAdvance(now: now)!
+        XCTAssertFalse(out.contains("久没动"))
+    }
+
+    /// 状态筛那一环：只照「进行中」。一条三天没碰的「完成」不是陈旧，是做完了。
+    /// 去掉状态筛，这条立刻红。
+    func testDoneAndNotStartedPlansAreNotStale() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [
+            plan(1, "早就做完的活", .done, updatedAgo: 3 * 86400, now: now),
+            plan(2, "还没开始的活", .notStarted, updatedAgo: 3 * 86400, now: now),
+            plan(3, "卡在人身上的活", .blocked, updatedAgo: 3 * 86400, now: now),
+        ])
+        store.appendUserMessage(crewId: "c", text: "随便说一句")
+        let out = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                              cursorDir: dir, isCaptain: true).emitAndAdvance(now: now)!
+        XCTAssertFalse(out.contains("久没动"), "非「进行中」的档不进陈旧度：\(out)")
+    }
+
+    /// 只对机长。删掉 `isCaptain` 那道门，这条立刻红。
+    func testWorkerNeverGetsStaleHint() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [plan(1, "接 Polar 钱包", .inProgress, updatedAgo: 3 * 86400, now: now)])
+        store.appendUserMessage(crewId: "c", text: "随便说一句")
+        let out = emitter(store, dir).emitAndAdvance(now: now)!
+        XCTAssertFalse(out.contains("久没动"))
+    }
+
+    /// 冷却那一环：照 `CaptainAwarenessLogic` 里拆组信号那套现成做法（同一个
+    /// `shouldEmitHint`），不发明第二种。快照没变 → 30 分钟内不重提。
+    /// 删掉冷却状态的读写，这条立刻红。
+    func testStaleHintCoolsDownWithinTheSameSnapshot() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [plan(1, "接 Polar 钱包", .inProgress, updatedAgo: 3 * 86400, now: now)])
+        store.appendUserMessage(crewId: "c", text: "第一句")
+        let first = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                                cursorDir: dir, isCaptain: true).emitAndAdvance(now: now)!
+        XCTAssertTrue(first.contains("久没动"))
+        store.appendUserMessage(crewId: "c", text: "第二句")
+        let second = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                                 cursorDir: dir, isCaptain: true)
+            .emitAndAdvance(now: now.addingTimeInterval(10 * 60))!
+        XCTAssertFalse(second.contains("久没动"), "10 分钟后同一份快照不重提：\(second)")
+    }
+
+    /// 冷却不是禁言：换了一份快照（又一条变陈旧）过了冷却就该再说一次。
+    func testStaleHintReturnsAfterCooldownWhenSnapshotChanges() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [plan(1, "接 Polar 钱包", .inProgress, updatedAgo: 3 * 86400, now: now)])
+        store.appendUserMessage(crewId: "c", text: "第一句")
+        _ = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                        cursorDir: dir, isCaptain: true).emitAndAdvance(now: now)
+        writePlans(dir, [
+            plan(1, "接 Polar 钱包", .inProgress, updatedAgo: 3 * 86400, now: now),
+            plan(2, "又一条停住了", .inProgress, updatedAgo: 3 * 3600, now: now),
+        ])
+        store.appendUserMessage(crewId: "c", text: "第二句")
+        let later = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                                cursorDir: dir, isCaptain: true)
+            .emitAndAdvance(now: now.addingTimeInterval(31 * 60))!
+        XCTAssertTrue(later.contains("2 条"), "快照变了且过了冷却 → 再说一次：\(later)")
+    }
+
+    /// 措辞：陈述事实，不下命令（人类点名的分寸）。
+    func testStaleHintStatesFactsWithoutOrdering() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let now = Date()
+        writePlans(dir, [plan(1, "接 Polar 钱包", .inProgress, updatedAgo: 3 * 86400, now: now)])
+        store.appendUserMessage(crewId: "c", text: "随便说一句")
+        let out = HookEmitter(store: store, crewId: "c", sessionId: "cap",
+                              cursorDir: dir, isCaptain: true).emitAndAdvance(now: now)!
+        for imperative in ["请你", "必须", "马上去", "现在就去更新"] {
+            XCTAssertFalse(out.contains(imperative), "陈旧度只陈述事实，判断留给机长：\(out)")
+        }
+    }
 }
