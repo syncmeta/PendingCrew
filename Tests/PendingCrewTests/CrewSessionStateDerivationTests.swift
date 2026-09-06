@@ -77,7 +77,7 @@ final class CrewSessionStateDerivationTests: XCTestCase {
             CrewSessionStateDerivation.awaitingReply)
     }
 
-    /// 菜单更具体、机长 nudge 发个数字就能代答 —— 同时成立时报菜单那条。
+    /// 菜单更具体、更可代办（按法归那条待决策消息现算）—— 同时成立时报菜单那条。
     func testAwaitingDecisionBeatsAwaitingReply() {
         XCTAssertEqual(
             CrewSessionStateDerivation.state(
