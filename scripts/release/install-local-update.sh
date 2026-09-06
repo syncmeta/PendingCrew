@@ -94,7 +94,7 @@ say "界面已退出（等了 ${waited}s）"
 # —— 3. 停 daemon（SIGTERM，它会先停光 session 再 exit 0）——
 dpid=$(pgrep -f "MacOS/PendingCrew --daemon" || true)
 if [ -n "$dpid" ]; then
-  say "停后台进程 pid=$dpid（SIGTERM，优雅退出）"
+  say "停后台进程 pid=${dpid}（SIGTERM，优雅退出）"
   kill -TERM $dpid || true
   n=0
   while kill -0 $dpid 2>/dev/null; do
@@ -137,7 +137,7 @@ fi
 xattr -dr com.apple.quarantine "$old" 2>/dev/null || true
 spctl -a -t install -vvv "$old" || die "装完校验没过 —— 旧版在 ${rollback:-回滚位}，手动放回去"
 newstamp=$(/usr/libexec/PlistBuddy -c "Print :BuildStampCommit" "$old/Contents/Info.plist" 2>/dev/null || echo "")
-[ "$newstamp" = "$stamp" ] || die "装完的戳跟源对不上（$newstamp vs $stamp）"
+[ "$newstamp" = "$stamp" ] || die "装完的戳跟源对不上（$newstamp vs ${stamp}）"
 say "装完校验：通过，戳对得上 $newstamp"
 
 # —— 7. 重新打开 ——
