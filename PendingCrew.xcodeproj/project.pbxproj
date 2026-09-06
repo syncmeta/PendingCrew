@@ -437,6 +437,7 @@
 		B16F96960FAB050857F07F8F /* SessionProtocolCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367AE1EAA0682F37C7960B5B /* SessionProtocolCodecTests.swift */; };
 		B18FDA6222492107773A78B4 /* session-world-model.zh.md in Resources */ = {isa = PBXBuildFile; fileRef = 87F000A18A5E886FA706EC9B /* session-world-model.zh.md */; };
 		B21D4B14D16F2E5EFE150599 /* AppBuildStamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24E82C5101B4CADE4221958 /* AppBuildStamp.swift */; };
+		B41CAE8FF1D9506974AEB5D1 /* DaemonShutdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */; };
 		B4A500C63F56A660FBC9D415 /* session-world-model.en.md in Resources */ = {isa = PBXBuildFile; fileRef = 38F5E570088DE41977747A62 /* session-world-model.en.md */; };
 		B4FBE94B9E0DB131BE3327C0 /* PendingCrewEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219AD4E22DF4542909B2067A /* PendingCrewEntry.swift */; };
 		B5588EFE93ACB994195E47BF /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13CB4287864AEB5C5A8FECC /* Platform.swift */; };
@@ -540,6 +541,7 @@
 		D9D094DE3C39F9662B62B800 /* SessionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B4AFC537A8402CC846122F /* SessionConfig.swift */; };
 		DA3CE896EF189D908601BC97 /* McpHelperMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAB87EC5A9ACD37C7A2B09A0 /* McpHelperMain.swift */; };
 		DC0700E309E649DF9B023E3F /* QuotaWarningPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE174F684386551180E6B50C /* QuotaWarningPlan.swift */; };
+		DCE3C612AEB4634902282FA0 /* DaemonGracefulShutdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CF4E274F9F2FC4DE4F38D4 /* DaemonGracefulShutdownTests.swift */; };
 		DD26C49162F8B4638CFE0C5A /* CrewSessionTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933A5868B64D471EDCBE2896 /* CrewSessionTitle.swift */; };
 		DE2D546CDC41AF2190ED48EE /* session-world-model.zh.md in Resources */ = {isa = PBXBuildFile; fileRef = 87F000A18A5E886FA706EC9B /* session-world-model.zh.md */; };
 		DE7E6AD7E1FBFD63657A6BF6 /* Subject.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB0A9A2B511BAA8446CF9A4 /* Subject.swift */; };
@@ -606,6 +608,7 @@
 		F5FB1B5F727AF7F8838D05F6 /* PendingCrewDeepLinkRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B1A2BBA684270B0A2BE996 /* PendingCrewDeepLinkRoute.swift */; };
 		F6A41191A41F1320507B05CB /* CrewMessageFold.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CBAA23E5B76FE69D0EFC63 /* CrewMessageFold.swift */; };
 		F6C0D03878BA7542C3959F34 /* CrewLocalAttachmentPersist.swift in Sources */ = {isa = PBXBuildFile; fileRef = C967851468E17B61886D8E53 /* CrewLocalAttachmentPersist.swift */; };
+		F781790D544499998B43976E /* DaemonShutdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */; };
 		F790C6E1DA0ADD2E8D8B71B0 /* CrewColorBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF601A5AC69E1BA6FB748E60 /* CrewColorBar.swift */; };
 		F9CA1E459F346741BBC14AB5 /* QuotaCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1726EF91AEA2E677DC7BB02 /* QuotaCenter.swift */; };
 		F9F834E54330ABB3A6BC684E /* UnixSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A252ADCF93897267B35BC46 /* UnixSocketTransport.swift */; };
@@ -757,6 +760,7 @@
 		45ABD06213BDA13CBF1C79EC /* BlinkingCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlinkingCursor.swift; sourceTree = "<group>"; };
 		46681CA2C4390D6C45E3101C /* ColorHash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorHash.swift; sourceTree = "<group>"; };
 		476A276CBDA4640936A8B817 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		47CF4E274F9F2FC4DE4F38D4 /* DaemonGracefulShutdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonGracefulShutdownTests.swift; sourceTree = "<group>"; };
 		483CACFDBC40DE9D8B588BF3 /* LocalAgentUsageMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentUsageMonitor.swift; sourceTree = "<group>"; };
 		486ABCF7EEB8DF24CA6EDF11 /* CrewStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewStore.swift; sourceTree = "<group>"; };
 		48B9D9CAD7BB70350DE579B3 /* CodexAppServerBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAppServerBackend.swift; sourceTree = "<group>"; };
@@ -1045,6 +1049,7 @@
 		F120113417554A5AFE182C8F /* AgentSessionResumeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionResumeTests.swift; sourceTree = "<group>"; };
 		F136799DC570913058A41967 /* LocalCrewStoreDepthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCrewStoreDepthTests.swift; sourceTree = "<group>"; };
 		F271252C46BEA6D06D53C893 /* TerminatedScrollbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminatedScrollbackTests.swift; sourceTree = "<group>"; };
+		F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonShutdown.swift; sourceTree = "<group>"; };
 		F2C22C2425851962C0C794F9 /* DaemonLaunchRace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonLaunchRace.swift; sourceTree = "<group>"; };
 		F317D91E5A6FD8B678BE9B3E /* SessionPendingDecision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPendingDecision.swift; sourceTree = "<group>"; };
 		F333727E03BD374D7D3E54C7 /* SessionAwaitingReplyInputsCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAwaitingReplyInputsCacheTests.swift; sourceTree = "<group>"; };
@@ -1114,6 +1119,7 @@
 				386CB624A9BF3A3EEE171092 /* CrewRecentContextRender.swift */,
 				62AD9CBFA871A2852066D3C2 /* DaemonLaunchPlan.swift */,
 				F2C22C2425851962C0C794F9 /* DaemonLaunchRace.swift */,
+				F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */,
 				60202465DF374BE31614C151 /* GitInspector.swift */,
 				DF8FE15162B5E527F4765346 /* GitWorktreeService.swift */,
 				EB13D23B611C3D20B756F587 /* HeadlessSessionBackend.swift */,
@@ -1524,6 +1530,7 @@
 				9ACBC95D4D951EC5505A60A5 /* CrewTimelineOrderingTests.swift */,
 				373E64A85EDA4D661F1D2AE0 /* CrewWhiteboardVisibilityTests.swift */,
 				A9FAFBA56F61EC8DCC2519A0 /* DaemonExitCodeTests.swift */,
+				47CF4E274F9F2FC4DE4F38D4 /* DaemonGracefulShutdownTests.swift */,
 				377227BEDC448777DE0B6308 /* DaemonIdleReclaimTests.swift */,
 				37397B5B6E09BE36503AD60D /* DaemonLaunchPlanTests.swift */,
 				B924F0557AA55B71CA7E58D1 /* DaemonLogIsolationTests.swift */,
@@ -2029,6 +2036,7 @@
 				2824EE1F2326A49770BE6558 /* CrewWhiteboardVisibility.swift in Sources */,
 				F02FA92F6EFAA82909C2E4E5 /* DaemonLaunchPlan.swift in Sources */,
 				775479DE376FC7E120BBD12D /* DaemonLaunchRace.swift in Sources */,
+				B41CAE8FF1D9506974AEB5D1 /* DaemonShutdown.swift in Sources */,
 				DEFB49BB11DC799D2544D97B /* DeviceIdentity.swift in Sources */,
 				79EDC6F4C2D16B1D70366898 /* DirectoryWatchCoalescing.swift in Sources */,
 				BA0EE708E7A3B68E33F834CC /* FileDescriptorLimit.swift in Sources */,
@@ -2311,11 +2319,13 @@
 				C31F49BD86C66CCF1008DAD5 /* CrewWhiteboardVisibility.swift in Sources */,
 				4BBD947643CE1EEDFA953B4A /* CrewWhiteboardVisibilityTests.swift in Sources */,
 				AF60EA5801132CE363FB2D77 /* DaemonExitCodeTests.swift in Sources */,
+				DCE3C612AEB4634902282FA0 /* DaemonGracefulShutdownTests.swift in Sources */,
 				15655CB3B0840C4A141B692C /* DaemonIdleReclaimTests.swift in Sources */,
 				86A6CE31267A89AA87CCD3AA /* DaemonLaunchPlan.swift in Sources */,
 				CDBE9A5DFA6409024FE78E91 /* DaemonLaunchPlanTests.swift in Sources */,
 				D93D29F8B8D0D67C06163E6F /* DaemonLaunchRace.swift in Sources */,
 				79A34BDBA322C675874F3789 /* DaemonLogIsolationTests.swift in Sources */,
+				F781790D544499998B43976E /* DaemonShutdown.swift in Sources */,
 				5694B9D50550A11C5E624EC6 /* DaemonSpawnJudgeTests.swift in Sources */,
 				A6677422FC601411B9506BA0 /* DirectoryWatchCoalescing.swift in Sources */,
 				EF4F37C8B76D147AA780CE9D /* DirectoryWatchCoalescingTests.swift in Sources */,
