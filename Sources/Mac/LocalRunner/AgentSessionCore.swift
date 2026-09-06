@@ -142,10 +142,12 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
          executable: String,
          workdir: String,
          env: [String: String],
-         protocolOutputSink: (([UInt8]) -> Void)? = nil) {
+         protocolOutputSink: (([UInt8]) -> Void)? = nil,
+         launchDeadline: TimeInterval = SessionLaunchProbe.firstOutputDeadline) {
         self.kind = config.kind
         self.mode = mode
         self.protocolOutputSink = protocolOutputSink
+        self.launchDeadline = launchDeadline
         super.init()
 
         if mode == .agent, config.kind == .claudeCode,
@@ -471,6 +473,12 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     private var launchStartedAt = Date()
     private var launchSpawned = false
     private var launchExecutable = ""
+    /// 拉起观察窗（秒）。默认 = `SessionLaunchProbe.firstOutputDeadline`；
+    /// **构造时可覆盖，只为让「零字节半死」这一档能被单测真实复现** ——
+    /// 它此前一条测试都没有（spawn 失败、健康常驻、主动停都有），而 2026-09-06
+    /// 那次误杀正好发生在这一档附近。等 25 秒的测试没人愿意写，于是它一直没写。
+    /// 生产路径一律用默认值。
+    private let launchDeadline: TimeInterval
     /// 用户/机长主动停 —— 停掉的别被自检倒打一耙报成「拉起失败」。
     private var userStopped = false
 
@@ -485,7 +493,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
             // 所以「spawn 成功」本身就等于「观测到活过」——不像 codex 要逐轮累积。
             everAlive: launchSpawned,
             sawOutput: lastOutputAt != .distantPast,
-            elapsed: Date().timeIntervalSince(launchStartedAt))
+            elapsed: Date().timeIntervalSince(launchStartedAt),
+            deadline: launchDeadline)
         guard SessionLaunchProbe.isTerminal(verdict) else { return false }
         reportLaunchFailure(verdict, executable: launchExecutable, exitCode: exitCode)
         return true
@@ -509,7 +518,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
                     everAlive: spawned,   // fork 后现场量过 running，见上
                     // 收到过任何一个 PTY 字节 = 确定活着（TUI 已经在画了）。
                     sawOutput: self.lastOutputAt != .distantPast,
-                    elapsed: Date().timeIntervalSince(startedAt))
+                    elapsed: Date().timeIntervalSince(startedAt),
+                    deadline: self.launchDeadline)
                 if SessionLaunchProbe.isTerminal(verdict) {
                     self.reportLaunchFailure(
                         verdict, executable: executable, exitCode: reap.exitCode)
@@ -535,7 +545,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         default: underlying = nil
         }
         guard let detail = SessionLaunchProbe.failureDetail(
-            verdict, kind: kind, underlying: underlying) else { return }
+            verdict, kind: kind, deadline: launchDeadline,
+            underlying: underlying) else { return }
         health = CrewSessionHealth(kind: .launchFailed, detail: detail)
         isWorking = false
         displayIsTyping = false

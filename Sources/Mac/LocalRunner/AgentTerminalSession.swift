@@ -82,12 +82,14 @@ final class AgentTerminalSession: ObservableObject, SessionBackend {
     /// argv（auto mode / model / effort）由 `config.argv()` 构建；Claude 开场正文由
     /// 内核等 TUI 首次吐字后经 PTY 发送，不进入 argv。
     init(config: SessionConfig, executable: String, workdir: String, env: [String: String],
-         protocolOutputSink: (([UInt8]) -> Void)? = nil) {
+         protocolOutputSink: (([UInt8]) -> Void)? = nil,
+         launchDeadline: TimeInterval = SessionLaunchProbe.firstOutputDeadline) {
         self.kind = config.kind
         self.core = AgentSessionCore(
             config: config, mode: .agent,
             executable: executable, workdir: workdir, env: env,
-            protocolOutputSink: protocolOutputSink)
+            protocolOutputSink: protocolOutputSink,
+            launchDeadline: launchDeadline)
         self.mirror = TerminalMirrorView(frame: .zero)
         mirror.core = core
         mirror.terminalDelegate = mirror     // 自己当自己的 delegate（弱引用，不成环）

@@ -137,6 +137,7 @@
 		3CA77DFFAB59D4AAB71CB807 /* PendingRequestQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847C19FA2408D1E82949B72B /* PendingRequestQueue.swift */; };
 		3CD877B94EF6574C22D60CBD /* CaptainBriefDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19AE2D821D04AE0298F19D4E /* CaptainBriefDelivery.swift */; };
 		3E11EF9A73838FA5D2CEECA7 /* TypingActivityTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E91CB08ACAB98E0616E633 /* TypingActivityTracker.swift */; };
+		3EFA2A6C11BB03BB0A0178A5 /* HeadlessLaunchFailLoudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7200B25FFB6D4273F45370F2 /* HeadlessLaunchFailLoudTests.swift */; };
 		3F3953CEB9CF8C3356763E19 /* TodoListPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4FBE88C4EE22D059C9E4D0 /* TodoListPresentation.swift */; };
 		4060B26EB2F61E0D064CA35F /* LocalAgentSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9720FEFDC8F509BFC0230E /* LocalAgentSessionStore.swift */; };
 		40649BA4D6DC43A89405B527 /* CrewSessionsSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08C9AC5381653074150AFC8F /* CrewSessionsSnapshot.swift */; };
@@ -817,6 +818,7 @@
 		70209890FBBD1D7CBC3C7B4B /* TerminalScrollbarGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScrollbarGeometry.swift; sourceTree = "<group>"; };
 		7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionProfileSwitch.swift; sourceTree = "<group>"; };
 		70B6F1FF899BC360DF671DCE /* SessionAttachQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAttachQueueTests.swift; sourceTree = "<group>"; };
+		7200B25FFB6D4273F45370F2 /* HeadlessLaunchFailLoudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadlessLaunchFailLoudTests.swift; sourceTree = "<group>"; };
 		721790C0E5E7715BB3ABE620 /* TerminalScrollbarOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScrollbarOverlay.swift; sourceTree = "<group>"; };
 		730A0270A35D81D3544660EA /* CrewHierarchyOrdering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHierarchyOrdering.swift; sourceTree = "<group>"; };
 		7328186C8B9131242BB8C719 /* LocalWhiteboardStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalWhiteboardStoreTests.swift; sourceTree = "<group>"; };
@@ -1506,6 +1508,7 @@
 				6126BD1E6490C4574D6F62DC /* DirectoryWatchCoalescingTests.swift */,
 				62010BFA308D94B5E1C8519B /* FirstLaunchDisclosureRemovalTests.swift */,
 				1A4D1C7DBA64FB676E8F61FF /* GitWorktreeServiceTests.swift */,
+				7200B25FFB6D4273F45370F2 /* HeadlessLaunchFailLoudTests.swift */,
 				C90E34205163859EFCB0446F /* HookEmitterTests.swift */,
 				2DF673153533EC2D317264B0 /* HumanTodoWakePlanTests.swift */,
 				90D43C760D0A83E792F6BA54 /* InProcessTransportTests.swift */,
@@ -2290,6 +2293,7 @@
 				82EDD2C32FDFE990D83C46F8 /* GitWorktreeServiceTests.swift in Sources */,
 				F0CFFFDBDB374596576AF507 /* GroupBubbleSender.swift in Sources */,
 				849D17668EE5CD968273FECD /* Haptics.swift in Sources */,
+				3EFA2A6C11BB03BB0A0178A5 /* HeadlessLaunchFailLoudTests.swift in Sources */,
 				B6B81728A4662DA64925EBF9 /* HeadlessSessionBackend.swift in Sources */,
 				52F1C0BB14E36C13F1D5047F /* HookEmitter.swift in Sources */,
 				FD3A65C3F88F90ECF6D5BD86 /* HookEmitterTests.swift in Sources */,

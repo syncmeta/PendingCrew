@@ -42,15 +42,19 @@ final class HeadlessSessionBackend: ObservableObject, SessionBackend {
         core.$pendingDecision.eraseToAnyPublisher()
     }
 
+    /// `launchDeadline` 只为让「零字节半死」那一档能被单测复现（见 `AgentSessionCore`
+    /// 上同名参数）；生产路径不传，用默认的 25 秒观察窗。
     init(config: SessionConfig, mode: AgentSessionCore.Mode,
          executable: String, workdir: String, env: [String: String],
-         protocolOutputSink: (([UInt8]) -> Void)? = nil) {
+         protocolOutputSink: (([UInt8]) -> Void)? = nil,
+         launchDeadline: TimeInterval = SessionLaunchProbe.firstOutputDeadline) {
         kind = config.kind
         isPlainShell = mode == .plainShell
         core = AgentSessionCore(
             config: config, mode: mode,
             executable: executable, workdir: workdir, env: env,
-            protocolOutputSink: protocolOutputSink)
+            protocolOutputSink: protocolOutputSink,
+            launchDeadline: launchDeadline)
         core.onExited = { [weak self] in
             MainActor.assumeIsolated { self?.collapseScrollback() }
         }
