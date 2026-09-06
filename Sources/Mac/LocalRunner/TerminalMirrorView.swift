@@ -53,6 +53,15 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
     /// 视口行列数变化的旁路（门面接到内核的 `noteViewportChange()`）。
     var onViewportChange: (() -> Void)?
 
+    /// 响铃痕迹（BEL 0x07）—— 见下面 `bell(source:)` 与 `TerminalBellTrace`。
+    private(set) var bellTrace = TerminalBellTrace()
+
+    /// 每响一次回调一次；session 层挂上它，把痕迹带到切换条上那一行。
+    var onBell: (() -> Void)?
+
+    /// 人看过这个 session 了 —— 消掉提示，痕迹留着。
+    func acknowledgeBells() { bellTrace.acknowledge() }
+
     /// 「用户主动滚」的判定要看最近有没有 PTY 输出；那个时刻归内核记。
     /// mirror 自己不再有 `lastOutputAt`。
     var remoteLastOutputAt: Date = .distantPast
@@ -216,6 +225,26 @@ final class TerminalMirrorView: TerminalView, TerminalViewDelegate {
             core?.noteViewportChange()
         }
         onViewportChange?()
+    }
+
+    /// **agent 敲了一下响铃（BEL 0x07）→ 不发声，留痕迹**（人类 Todo #110）。
+    ///
+    /// 这一条是 `TerminalViewDelegate` 的**协议要求**，SwiftTerm 在
+    /// `extension TerminalViewDelegate` 里给了默认实现，函数体只有一行
+    /// `NSSound.beep()`（`Mac/MacTerminalView.swift`）。这个文件此前实现了其余七条
+    /// 回调、**唯独漏了这条**，于是 agent 每敲一下 BEL，macOS 就放一声系统提示音 ——
+    /// 就是人报的那个「弹框弹出、点框外面」的声音，且人完全不知道是哪个 session 在响。
+    ///
+    /// **修法不是静音。**BEL 在 agent 手里的语义是「我要叫人」（claude 一轮干完或
+    /// 需要输入时会敲），空实现能立刻不响，但会把这句话一起吞掉 —— 那是另一种
+    /// 安静的失败。所以这里换的是**输出通道**：不发声，改成记一条痕迹，由 session
+    /// 行显示（`TerminalBellTrace`）。
+    ///
+    /// 删掉这个方法，派发就退回上面那份会响的默认实现 —— `TerminalBellTests` 的
+    /// 第一条会立刻红（跑测试时还能**听见**那一声）。
+    func bell(source: TerminalView) {
+        bellTrace.record()
+        onBell?()
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
