@@ -81,6 +81,8 @@ final class AgentTerminalSession: ObservableObject, SessionBackend {
     /// `executable` = 已 resolve 的 claude/codex 绝对路径；`workdir` = 工作目录。
     /// argv（auto mode / model / effort）由 `config.argv()` 构建；Claude 开场正文由
     /// 内核等 TUI 首次吐字后经 PTY 发送，不进入 argv。
+    /// `launchDeadline` 只服务测试（让「零字节半死」那一档能被复现），生产路径不传；
+    /// 它存在的理由与「为什么它不是调松报警的口子」写在 `AgentSessionCore` 上同名属性。
     init(config: SessionConfig, executable: String, workdir: String, env: [String: String],
          protocolOutputSink: (([UInt8]) -> Void)? = nil,
          launchDeadline: TimeInterval = SessionLaunchProbe.firstOutputDeadline) {
