@@ -214,4 +214,78 @@ final class ClaudeTrustSeederTests: XCTestCase {
         XCTAssertFalse(receipt.warnings.isEmpty, "没落住必须出警告")
         XCTAssertNil(try projects()["/Users/x/CrewGround/Lisbon"])
     }
+
+    // MARK: - 回执文案（警告得有地方说出去）
+
+    /// 补上了 → 说清补的是哪个目录。
+    func testReceiptTextSaysWhatLanded() throws {
+        try writeClaudeJSON(existing)
+        let text = ClaudeTrustSeeder.receiptText(seed("/Users/x/CrewGround/Lisbon"))
+        XCTAssertNotNil(text)
+        XCTAssertTrue(text?.contains("/Users/x/CrewGround/Lisbon") == true, text ?? "")
+        XCTAssertTrue(text?.contains("信任") == true, text ?? "")
+    }
+
+    /// **没落住的时候，回执不许读起来像成功。** 静默当成功正是今天这条 P0 最贵的部分。
+    func testReceiptTextCarriesWarningInsteadOfClaimingSuccess() throws {
+        try writeClaudeJSON(existing)
+        let original = try Data(contentsOf: claudeJSONURL)
+        let clobbering = ClaudeTrustSeeder.IO(
+            read: { try Data(contentsOf: self.claudeJSONURL) },
+            write: { _ in try original.write(to: self.claudeJSONURL, options: .atomic) })
+        let text = ClaudeTrustSeeder.receiptText(
+            seed("/Users/x/CrewGround/Lisbon", .granted, io: clobbering))
+
+        XCTAssertTrue(text?.contains("没落住") == true, text ?? "")
+        XCTAssertFalse(text?.contains("已补上") == true, "没落住不许说「已补上」：\(text ?? "")")
+    }
+
+    /// 失败要说出来。
+    func testReceiptTextSaysFailure() {
+        let text = ClaudeTrustSeeder.receiptText(seed("/Users/x/CrewGround/Lisbon"))
+        XCTAssertTrue(text?.contains("读不到") == true, text ?? "")
+    }
+
+    /// 什么都没做（本来就信任过 / 没授权）→ 没什么可说的，别往群里刷屏。
+    func testReceiptTextIsNilWhenNothingWorthSaying() throws {
+        try writeClaudeJSON(existing)
+        XCTAssertNil(ClaudeTrustSeeder.receiptText(seed("/Users/x/dev")))
+        XCTAssertNil(ClaudeTrustSeeder.receiptText(
+            seed("/Users/x/CrewGround/Lisbon", .notGranted)))
+    }
+
+    // MARK: - 建 crew 那条路的一次调用
+
+    /// 备份落在数据根下、按时间戳命名（跟迁移那条路同一个口径）。
+    func testSeedForNewCrewBacksUpUnderDataRoot() throws {
+        try writeClaudeJSON(existing)
+        let dataRoot = home.deletingLastPathComponent()
+            .appendingPathComponent("data", isDirectory: true)
+        let receipt = ClaudeTrustSeeder.seedForNewCrew(
+            workdir: "/Users/x/CrewGround/Lisbon", authorization: .granted,
+            home: home, dataRoot: dataRoot)
+
+        XCTAssertEqual(receipt.seededKeys, ["hasTrustDialogAccepted"])
+        let backupRoot = dataRoot.appendingPathComponent("backups")
+        let made = try FileManager.default.contentsOfDirectory(atPath: backupRoot.path)
+        XCTAssertEqual(made.count, 1, "应当只建一个带时间戳的备份目录：\(made)")
+        XCTAssertTrue(made[0].hasPrefix("claude-trust-seed-"), made[0])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: backupRoot.appendingPathComponent(made[0] + "/.claude.json").path))
+    }
+
+    /// 没授权时这条路也是一个字不写、连备份目录都不建。
+    func testSeedForNewCrewWritesNothingWithoutAuthorization() throws {
+        try writeClaudeJSON(existing)
+        let before = try Data(contentsOf: claudeJSONURL)
+        let dataRoot = home.deletingLastPathComponent()
+            .appendingPathComponent("data", isDirectory: true)
+        let receipt = ClaudeTrustSeeder.seedForNewCrew(
+            workdir: "/Users/x/CrewGround/Lisbon", authorization: .notGranted,
+            home: home, dataRoot: dataRoot)
+
+        XCTAssertEqual(receipt.skip, .notAuthorized(path: "/Users/x/CrewGround/Lisbon"))
+        XCTAssertEqual(try Data(contentsOf: claudeJSONURL), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dataRoot.path))
+    }
 }

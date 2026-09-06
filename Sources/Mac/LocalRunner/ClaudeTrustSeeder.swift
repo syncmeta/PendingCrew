@@ -192,6 +192,42 @@ enum ClaudeTrustSeeder {
         try io.write(out)
     }
 
+    // MARK: - 建 crew 那条路的一次调用
+
+    /// 建 crew 时给新工作目录补种一次。备份目录按数据根 + 时间戳自己算
+    /// （跟迁移那条路同一个口径），调用方只需给「目录 + 有没有授权」。
+    ///
+    /// **`authorization` 由界面给**：人在自己 app 里勾的那一下才算授权 ——
+    /// 那跟 agent 代人写信任位性质完全不同。群里的点头和 runner 的放行是两层，
+    /// 而且故意是两层。
+    @discardableResult
+    static func seedForNewCrew(workdir: String,
+                               authorization: ClaudeTrustSeedPlan.Authorization,
+                               home: URL = URL(fileURLWithPath: NSHomeDirectory()),
+                               dataRoot: URL = PendingCrewDataRoot.url,
+                               now: Date = Date()) -> Receipt {
+        seed(workdir: workdir, authorization: authorization, home: home,
+             backupDirectory: backupDirectory(base: dataRoot, now: now))
+    }
+
+    /// 回执里**值得对人说**的那一句（nil = 什么都没做，别往群里刷屏）。
+    ///
+    /// 没落住时这句话必须读起来就是「没落住」—— 静默当成功正是这条 P0 最贵的部分。
+    static func receiptText(_ r: Receipt) -> String? {
+        if let failure = r.failure {
+            return "**没能给新目录补上 claude 的信任记录**（`\(r.path)`）：\(failure)"
+                + "\n第一次进这个目录时，claude 会停在「是否信任这个文件夹」上等人点一次。"
+        }
+        if !r.warnings.isEmpty {
+            return "**给新目录补 claude 信任记录：没落住**（`\(r.path)`）。\n"
+                + r.warnings.map { "- ⚠️ " + $0 }.joined(separator: "\n")
+        }
+        guard r.seeded else { return nil }
+        return "已补上 claude 的目录信任记录：`\(r.path)`"
+            + "（这个目录下新起的 claude 不会再停在「是否信任这个文件夹」上）。"
+            + (r.backupPath.map { "\n改动前的 `~/.claude.json` 备份在 `\($0)`。" } ?? "")
+    }
+
     // MARK: - 小工具
 
     /// 这次补种的备份目录（照 `WorkdirChangeCommand` 的时间戳口径，别造第二种命名）。
