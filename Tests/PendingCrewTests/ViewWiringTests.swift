@@ -41,6 +41,8 @@ final class ViewWiringTests: XCTestCase {
          "没有任何地方把筛选开关喂给群聊，toolbar 上那个钮点了不动（Todo #61 失效）"),
         ("CrewMentionPickerLayout.maxHeight", "CrewMentionPickerLayout.swift",
          "@ 候选浮层的限高算好了却没人扣上去，列表照旧顶穿窗口（Todo #69 失效）"),
+        ("TerminalBellTrace.summary(", "TerminalBellTrace.swift",
+         "响铃变成了纯静音：BEL 不再发声，但也没人显示是哪个 session 响的（Todo #110 只剩一半）"),
     ]
 
     func testEveryUserFacingPieceIsActuallyWiredUp() throws {
@@ -58,6 +60,27 @@ final class ViewWiringTests: XCTestCase {
                 零件造好了没装到车上：\(wiring.impact)。
                 """)
         }
+    }
+
+    /// **响铃的痕迹要真的接到人看得见的那一行上**（人类 Todo #110）。
+    ///
+    /// 上面那条 wirings 只保证「`summary` 有人调」。这条钉住另外两个接头 —— 少任何
+    /// 一个，声音是没了，但「哪个 session 响过」也跟着没了，那就只是换了个方式吞掉它：
+    /// - `onBell` 没接：run 不知道响过，切换条那行不会重绘（提示要等下一次别的变更才蹭出来）；
+    /// - `acknowledgeBells` 没接：铃铛点进去也不消，长亮的角标会被人训练成看不见。
+    func testSessionRowIsWiredToTheBellTrace() throws {
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("terminalView?.onBell"),
+                      "响铃事件没接到 run 上：切换条不会因为它重绘")
+        // 找的是**调用点**（`?.acknowledgeBells()`）不是方法名 —— 光搜
+        // `acknowledgeBells()` 会撞上同一个文件里的 `func acknowledgeBells()` 定义，
+        // 那把尺子在接线被拆掉时照样绿。（这条是拆线跑一趟当场抓到的。）
+        XCTAssertTrue(runner.contains("?.acknowledgeBells()"),
+                      "没人在选中 session 时清掉响铃提示：铃铛会长亮")
+
+        let window = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(window.contains("bellHint"),
+                      "切换条上的 session 行没有显示响铃提示")
     }
 
     /// 上面那条只保证「有人用」；这条钉死**用户实际看的那个面板**在用。

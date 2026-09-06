@@ -236,6 +236,8 @@ final class CrewSessionRunner: ObservableObject {
     func select(_ runId: UUID) {
         selectedRunId = runId
         isComposingNew = false
+        // 看过了 —— 响铃提示消掉（次数与时刻留着，见 `TerminalBellTrace`）。
+        runs.first(where: { $0.runID == runId })?.acknowledgeBells()
     }
 
     /// 进入「新建 session」态（composer 显零配置启动面）。
@@ -2550,6 +2552,23 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         return nil
     }
 
+    /// 响铃痕迹变了一次就 +1 —— 只为让 SwiftUI 重绘（人类 Todo #110）。
+    ///
+    /// **痕迹本身不在这里**：它记在 `TerminalMirrorView.bellTrace` 上，那半边才是
+    /// 收到 BEL 的人。这里只发一个变更信号、读的时候回去问它，免得同一件事记两份账
+    /// 然后慢慢对不上。
+    @Published private(set) var bellRevision = 0
+
+    /// 这个 session 的响铃痕迹（没有终端视图的后端 —— 如 codex —— 恒为空账）。
+    var bellTrace: TerminalBellTrace { terminalView?.bellTrace ?? TerminalBellTrace() }
+
+    /// 人看过这个 session 了 —— 提示消掉，痕迹留着。
+    func acknowledgeBells() {
+        guard let mirror = terminalView, mirror.bellTrace.showsHint else { return }
+        mirror.acknowledgeBells()
+        bellRevision += 1
+    }
+
     @Published private(set) var status: Status = .running
     @Published private(set) var exitCode: Int32?
     /// 终止原因（Todo #10 ①）：finalize 时由 `SessionExitReason.classify` 算出。
@@ -2651,6 +2670,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         self.isWorking = backend.isWorking
         self.displayIsTyping = backend.displayIsTyping
         observeBackendStatus()
+        // 响铃（BEL）→ 切换条那一行上留个提示（人类 Todo #110）。声音已经在
+        // `TerminalMirrorView.bell(source:)` 那里换掉了，这里只是把「谁响的」带到
+        // 人看得见的地方 —— 三种带 PTY 视图的后端（claude / 纯终端 / remote）同一条路。
+        terminalView?.onBell = { [weak self] in
+            MainActor.assumeIsolated { self?.bellRevision += 1 }
+        }
         // 纯终端只接进程生命周期与 PTY 视图；健康、typing、额度、待决策等观察链
         // 都是 agent 编排的一部分，不能为了复用 run 容器而给人的 shell 假装接上。
         if kind.isAgent {

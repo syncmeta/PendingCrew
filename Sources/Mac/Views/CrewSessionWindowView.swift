@@ -1043,6 +1043,7 @@ private struct SessionBarItemView: View {
             Text(run.displayName)
                 .font(.caption.weight(isSelected ? .semibold : .regular))
                 .lineLimit(1)
+            bellHint
             if badgeCount > 0 {
                 Text("\(badgeCount)")
                     .font(.caption2.weight(.semibold))
@@ -1073,6 +1074,23 @@ private struct SessionBarItemView: View {
         )
         .contentShape(Capsule())
         .onTapGesture(perform: select)
+    }
+
+    /// **响铃留下的那道痕迹**（人类 Todo #110）。agent 敲 BEL 时不再放系统提示音，
+    /// 改成这里亮一下：铃铛只在「你上次看过之后又响过」时出现，点进这个 session 就消；
+    /// 悬停能看到它一共响过几次、最后一次什么时候 —— 提示会消，痕迹不会。
+    @ViewBuilder private var bellHint: some View {
+        let trace = run.bellTrace
+        if trace.showsHint {
+            Image(systemName: "bell.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .help(TerminalBellTrace.summary(
+                    count: trace.count,
+                    timeText: trace.lastAt.map {
+                        $0.formatted(date: .omitted, time: .standard)
+                    } ?? "—") ?? "")
+        }
     }
 
     @ViewBuilder private var statusDot: some View {
