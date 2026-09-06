@@ -115,6 +115,30 @@ final class CaptainHandoffSiteTests: XCTestCase {
                         "持有 run 的进程必须拿得到票，否则交接谁也做不了")
     }
 
+    // MARK: - 被挡下的唤醒
+
+    /// 门禁挡住普通唤醒是对的（不挡它会抢走机长槽），但**原来那句 `return false`
+    /// 把唤醒文本一起丢了** —— 两个调用方都不看这个 Bool，那条 @ 就此没有终点。
+    func testHeldWakesSurviveTheHandoffAndAreNotSilentlyDropped() {
+        var held = CaptainHandoffHeldWakes()
+        XCTAssertTrue(held.hold(crewId: "c1", text: "人：机长看一下 #101"))
+        XCTAssertTrue(held.hold(crewId: "c1", text: "人：还有 #102"))
+        XCTAssertEqual(held.count(crewId: "c1"), 2)
+
+        // 同一条白板消息有两个投递者是常态（唤醒器 + mention 投递），不能补投两遍。
+        XCTAssertFalse(held.hold(crewId: "c1", text: "人：机长看一下 #101"))
+        XCTAssertFalse(held.hold(crewId: "c1", text: "   "))
+        XCTAssertEqual(held.count(crewId: "c1"), 2)
+
+        // 别的 crew 不受影响。
+        XCTAssertTrue(held.hold(crewId: "c2", text: "人：另一个群的事"))
+
+        XCTAssertEqual(held.release(crewId: "c1"), ["人：机长看一下 #101", "人：还有 #102"])
+        XCTAssertEqual(held.count(crewId: "c1"), 0, "取走之后必须清空，否则下次交接会重投一遍")
+        XCTAssertEqual(held.release(crewId: "c1"), [], "重复取走只能是空")
+        XCTAssertEqual(held.count(crewId: "c2"), 1)
+    }
+
     /// 机制本身的反例，与路由无关：只要让这个循环跑在一份滞后的镜像上，它就必然
     /// 饿死，而且每一轮都杀掉自己上一轮的成果。**修法只能是别让它跑在镜像上**——
     /// 把 30 调大只是让饿死变慢，这条测试会一直在这里证明这一点。

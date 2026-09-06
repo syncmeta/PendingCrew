@@ -33,11 +33,9 @@ enum CaptainHandoffSite {
 
     /// 有界启动循环的一次尝试该走哪一步。
     ///
-    /// 这是 `launchCaptainForHandoff` 那个 `for attempt in 0..<30` 的纯模型：
-    /// 每一轮先停掉本进程**看得到**的 captain run，再请求起新，然后回头看本进程
-    /// **看得到**的 roster 里有没有一个在跑的机长。
-    /// 每一轮的固定动作是「先停掉看得到的占槽者，再请求起新」；这个判定回答的是
-    /// **起完之后**该收工、该再来一轮，还是该放弃。
+    /// 这是 `launchCaptainForHandoff` 那个 `for attempt in 0..<30` 的纯模型：每一轮
+    /// 先停掉本进程**看得到**的 captain run，再请求起新；这个判定回答的是**起完之后**
+    /// 该收工、该再来一轮，还是该放弃。「看得到」读的是本进程那份 roster。
     enum Step: Equatable {
         /// 看到在跑的机长了，收工。
         case confirmed
@@ -78,5 +76,41 @@ struct CaptainHandoffOwnership {
         case .forwardToOwner: return nil
         }
     }
+}
+
+/// 交接进行中被门禁挡下来的普通机长 @唤醒。
+///
+/// 交接一登记，本 crew 的普通 `startCaptain` 就被 in-flight 门禁挡住 —— 挡住是对的
+/// （不挡它会抢走机长槽），但原来那句 `return false` **把唤醒文本一起丢了**：调用方
+/// （`CrewLocalMentionDelivery` / `CrewLocalMentionWaker`）只拿到一个 Bool，两边都
+/// 不看它，于是那条 @ 没有任何地方留下痕迹。
+///
+/// 范围说清楚：这道门禁**只在跑交接的那个进程里**有效。GUI 发起的交接原来跑在
+/// viewer 里，门禁装在 viewer 的内存里，daemon 那边的唤醒从来没被它挡过 —— 那半边
+/// 的丢包今天不发作。MCP 发起的交接一直跑在 daemon 里，那半边**一直在丢**。
+/// 上一单把 GUI 那条也挪回 daemon，两半就都会拦人了；所以这一单必须同时做，
+/// 否则等于**把一个只发作一半的静默丢包扩成全发作**。
+struct CaptainHandoffHeldWakes {
+    private var byCrew: [String: [String]] = [:]
+
+    /// 挡下一条。返回 false = 没留（空文本，或同一条已经在队里）。
+    /// 去重是必须的：同一条白板消息有两个投递者是这套的常态（唤醒器 + mention 投递）。
+    @discardableResult
+    mutating func hold(crewId: String, text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        var queue = byCrew[crewId] ?? []
+        guard !queue.contains(trimmed) else { return false }
+        queue.append(trimmed)
+        byCrew[crewId] = queue
+        return true
+    }
+
+    /// 取走并清空。交接不管成没成都要调用 —— 补投不成也得留痕，不许吞。
+    mutating func release(crewId: String) -> [String] {
+        byCrew.removeValue(forKey: crewId) ?? []
+    }
+
+    func count(crewId: String) -> Int { byCrew[crewId]?.count ?? 0 }
 }
 #endif

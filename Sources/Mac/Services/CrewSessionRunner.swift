@@ -221,6 +221,10 @@ final class CrewSessionRunner: ObservableObject {
     /// 若它在交接登记前已起跑，fulfill 的有界重试会等它落成后停掉再接管。
     private var captainReassignmentsInFlight: Set<String> = []
 
+    /// 交接期间被上面那道门禁挡下来的普通 @唤醒。挡住是对的，丢掉不是 ——
+    /// 交接一结束就补投给新机长；补投不成（谁都没起来）就落白板留痕。
+    private var captainHandoffHeldWakes = CaptainHandoffHeldWakes()
+
     /// `sessionPublisher` 收 `nil` 默认值而不是默认实参：默认实参在 **nonisolated**
     /// 上下文求值，而 `InProcessSessionProtocolBridge` 是 `@MainActor`（同
     /// `SessionHost` 那两个依赖）。
@@ -1849,6 +1853,9 @@ final class CrewSessionRunner: ObservableObject {
         guard captainReassignmentsInFlight.insert(crewId).inserted else {
             throw RunnerError.captainHandoffAlreadyInFlight
         }
+        // 两个 defer 的**顺序有意义**（LIFO：后登记的先跑）。补投必须发生在门禁
+        // 撤掉之后 —— 不然补投触发的任何一次启动又会被这道门禁挡回去。
+        defer { releaseCaptainHandoffHeldWakes(crewId: crewId) }
         defer { captainReassignmentsInFlight.remove(crewId) }
 
         let oldRun = runs.first {
@@ -1954,6 +1961,31 @@ final class CrewSessionRunner: ObservableObject {
         throw RunnerError.captainLaunchContended(attempts: CaptainHandoffSite.launchAttempts)
     }
 
+    /// 交接结束（成功或失败都算）后处理被挡下的普通 @唤醒。
+    ///
+    /// 补投给现在在跑的那位机长 —— 成功交接后是新机长，回滚后是被恢复的旧机长，
+    /// 走的是普通唤醒同一条 `deliverOrDeferWake`（它自己处理对方正忙的情况）。
+    /// **一个都没起来时不许当没发生过**：落一条白板，把原文列出来，人和下一任
+    /// 机长看得见。今天这条线上刚栽过一串静默失败，这里不再添一个。
+    private func releaseCaptainHandoffHeldWakes(crewId: String) {
+        let held = captainHandoffHeldWakes.release(crewId: crewId)
+        guard !held.isEmpty else { return }
+        guard let captain = runs.first(where: {
+            $0.crewId == crewId && $0.role == .captain && $0.status == .running
+        }) else {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "机长交接期间有 \(held.count) 条 @唤醒被挡下，交接结束时没有机长在跑，没能补投：\n"
+                    + held.map { "· \($0)" }.joined(separator: "\n"),
+                category: "error", senderName: "系统")
+            return
+        }
+        for (index, text) in held.enumerated() {
+            deliverOrDeferWake(
+                sourceKey: "captain-handoff-held:\(crewId):\(index)", to: captain, text: text)
+        }
+    }
+
     /// 交接停机不能靠固定 sleep 猜。run 留在列表里等 backend 真正翻出 running，
     /// 确认退出后才移除；超时则保留它且拒绝起接任者，旧 captain 权限不会与新进程并存。
     private func stopAndRemoveForCaptainHandoff(_ targets: [CrewSessionRun]) async throws {
@@ -2056,6 +2088,10 @@ final class CrewSessionRunner: ObservableObject {
         if captainReassignmentsInFlight.contains(crewId),
            resumeSessionIdOverride == nil,
            resumePreviousConversation {
+            // 挡住它别抢机长槽 —— 但**别把它的话一起吞了**。调用方
+            // （`CrewLocalMentionDelivery` / `CrewLocalMentionWaker`）都不看这个
+            // Bool，所以从这里 return false 就是那条 @ 的终点。留着，交接完补投。
+            if let wakeText { captainHandoffHeldWakes.hold(crewId: crewId, text: wakeText) }
             return false
         }
         guard !runs.contains(where: {

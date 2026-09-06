@@ -542,6 +542,12 @@ final class ViewWiringTests: XCTestCase {
                       "viewer 里跑交接没有硬失败，第三条路仍然能悄悄长出来")
         XCTAssertTrue(runner.contains("func performForwardedCaptainHandoff("),
                       "daemon 侧没有承接转交过来的交接")
+        // 交接期间挡下的普通 @唤醒必须留下来补投；`return false` 是它的终点，
+        // 两个调用方都不看这个 Bool。
+        XCTAssertTrue(runner.contains("captainHandoffHeldWakes.hold(crewId: crewId, text: wakeText)"),
+                      "交接门禁又在静默丢唤醒了")
+        XCTAssertTrue(runner.contains("defer { releaseCaptainHandoffHeldWakes(crewId: crewId) }"),
+                      "被挡下的唤醒没有在交接收尾时补投/留痕")
         let daemon = try Self.text(of: "SessionDaemonMain.swift")
         XCTAssertTrue(daemon.contains("SessionOrchestrationOp.captainHandoff"),
                       "daemon 没有接线机长交接的编排请求，转发过去会被 default 分支丢掉")
