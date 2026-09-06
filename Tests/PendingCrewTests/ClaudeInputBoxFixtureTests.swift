@@ -196,6 +196,38 @@ final class ClaudeInputBoxFixtureTests: XCTestCase {
             """)
     }
 
+    /// **真屏幕 → 群消息，一整条链，不许在中间任何一环凭空长出编号。**
+    ///
+    /// 这条补的是一个真缝：`SessionPendingDecisionTests` 里那几条渲染用例是**自己把
+    /// `numbered` 传进去**的，所以它们证明「渲染按字段走」，却证明不了「字段是照着
+    /// 真屏幕填的」。两头各自绿、中间那道接缝没人量 —— 变异实测确认过：把
+    /// `parseCursorList` 的事实填错，那几条渲染用例**一条都不会红**。
+    ///
+    /// 所以这里从真字节走到底：fixture → 渲染成屏 → `blockingDialog` 解析 →
+    /// `SessionDecisionNotice.post` 渲染 → 断言机长最终看到的那段文字里，
+    /// 一个凭空的序号都没有。
+    func testRealTrustDialogAllTheWayToTheGroupMessageHasNoInventedNumbers() throws {
+        let decision = try XCTUnwrap(ClaudeInputBox.blockingDialog(try trustDialogScreen()))
+        let text = SessionDecisionNotice.post(
+            stage: .first, sessionName: "小明", sessionId: "worker-abc", isCaptain: false,
+            question: decision.prompt, options: decision.options,
+            numbered: decision.numbered, waitedMinutes: 0).text
+
+        for line in text.split(separator: "\n") {
+            XCTAssertNil(
+                line.range(of: "^\\s*\\d+[.、)]\\s", options: .regularExpression),
+                """
+                真屏幕上没有编号，机长看到的消息里却长出来了：\(line)
+                —— 他不需要读过任何守则，光看见数字就会去发数字，而实测发数字的净效果
+                是那个自动补的回车确认了当前高亮项（今天是 `No, exit`）。
+                全文：
+                \(text)
+                """)
+        }
+        XCTAssertTrue(text.contains("发数字无效"), text)
+        XCTAssertTrue(text.contains("No, exit"), text)
+    }
+
     /// **同一个信任框，11 天里变了三处。** 两份 fixture 都是真字节，摆在一起看：
     ///
     /// |              | `tui-claude.bin`（2026-08-26） | `tui-claude-trust.bin`（2026-09-06） |
