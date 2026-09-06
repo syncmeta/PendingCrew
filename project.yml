@@ -254,6 +254,10 @@ targets:
       - path: Sources/Support/CrewHierarchyOrdering.swift
       # create_child_crew brief 的启动 payload + fail-loud 回执纯逻辑（Todo #41）。
       - path: Sources/Support/CaptainBriefDelivery.swift
+      # 机长交接该在哪个进程里执行 + 有界启动循环的一次尝试怎么走（Todo #101）。
+      # 纯 Foundation，自包含 —— 它存在的理由就是让「交接跑在只有镜像的 viewer 里」
+      # 这件事有一处能单测的判定，而不是散在各处的 `if isViewer`。
+      - path: Sources/Support/CaptainHandoffSite.swift
       # 「正在输入」圆点（CoreAnimation 驱动）—— 布局自激回归测试要直接跑线上这版。
       # 自包含 SwiftUI+AppKit，不引 Theme/CrewSessionRun。
       - path: Sources/Mac/Views/Chat/TypingDotsLayerView.swift
