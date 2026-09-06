@@ -12,6 +12,33 @@
 
 ---
 
+### 🟡 `try?` / 非抛版 `write` —— 写侧的三种穿法，只堵住了会崩的那一种
+
+- **发现**: 2026-09-06 · 父 crew 派的 P0（9/5 15:50 daemon 被未捕获 NSException 打死，5 个 crew 同时掉 session）
+- **已修的那一处**: `CodexAppServerConnection.swift` 的 `writeLine` —— 签名写着 `throws`、6 个调用点全写了 `try`，
+  函数体却调 ObjC 的 `writeData:`。**唯一真会发生的错误（EPIPE）恰恰是那些 `try` 捕不到的那个。**
+  换成 `CodexPipeWrite.line`（会抛的 `write(contentsOf:)` + 自带 SIGPIPE arming），3 条测试自证。
+- **留着没改的（本条登记的就是这些）**:
+  - `SessionDaemonHost.swift:111`（`SessionDaemonLog.write`）— `try? handle.write(contentsOf: data)`
+  - `GitWorktreeService.swift:185` — 同样形状
+  两处都写**普通文件**，不会 EPIPE，所以不会崩；但 `try?` 会把真实写失败（盘满、权限、
+  卷被卸载）**静默吃掉**。daemon 日志写不进去这件事本身是无声的 —— 而那份日志正是下次
+  出事时唯一的现场。**记账不改：这是另一件事，改它要先想清楚「日志写不进去时往哪报」，
+  而那个去向本身就是个设计问题（往日志报日志写不进去，是个环）。**
+  - 5 处 `FileHandle.standardError.write`（非抛版，往 stderr 写）：
+    `SessionLaunchOptions.swift:128`、`SessionDaemonStatusMain.swift:17`、
+    `SessionDaemonAttachMain.swift:22`、`SessionDaemonAttachMain.swift:29`、
+    `SessionDaemonMain.swift:44`。**5 处 4 个文件** —— 派活的 brief 里写的是 3 处，
+    实测是 5 处（报数时把名字列全再数一遍，撞上过一次就知道值）。
+    stderr 的读端在 CLI 场景是终端，不会断，暂不动。
+- **顺带一条必须写明的边界**: `CodexPipeWrite` 里那次 `signal(SIGPIPE, SIG_IGN)` 是**进程级**的。
+  它只在 `CodexPipeWrite.line` 被调用过之后生效，而上面那 5 个 stderr 点所在的 CLI 入口
+  （`--daemon-status` / `--daemon-attach`）从不调它 —— 所以**对它们没有任何影响**。
+  app / daemon 进程里 AppKit 本来就忽略 SIGPIPE，也没变化。
+  写下来是因为「进程级副作用」这种东西必须有人说清它够到哪、够不到哪，否则下一个人
+  只能靠猜。
+
+
 ### ✅ session 协议的收包路径假设「一次投递 == 正好一整帧」（**P4 `f34d7c9` 已还，2026-08-29**）
 - **发现**: 2026-08-29 · 父 crew Todo #44（Fly 远程主机接入复核，`docs/internal/2026-08-29-fly-remote-host-review.md` §2 A-2/A-3）
 - **已还**: server 每条连接与 client 各持一个 `SessionFrameDecoder`，endpoint 面向
