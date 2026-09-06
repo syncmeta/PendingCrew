@@ -49,6 +49,25 @@ final class McpServer {
     /// 不放 crew 工作目录：worktree 被清掉会把图带走，历史气泡就渲染不出来了。
     /// 单测传临时目录（走同一条生产代码路径）。
     let attachmentRoot: URL
+    /// agent 侧会话号账本（`LocalAgentSessionStore`）。`list_sessions` 靠它把
+    /// 我们自己的 sessionId 翻成 runner 的会话号 —— 有会话号才知道该去哪儿找
+    /// 那份成绩单。与 store 同 `--dir`。
+    let agentSessions: LocalAgentSessionStore
+    /// 产出证据取证面（人类 Todo #107 第三件）。默认真实的 `~/.claude/projects`
+    /// 与 `~/.codex/sessions`；单测喂假目录走同一条生产代码路径。
+    let outputProbe: SessionOutputProbe
+
+    /// `list_sessions` 的工具描述。抽成常量是为了让单测直接盯住它 ——
+    /// 「产出证据这一列在什么情况下说不出话」必须写在这里，机长读到
+    /// 「看不出来」时才不会把它当成「没干活」再犯一次同样的病。
+    static let listSessionsToolDescription = """
+        （机长专用）点名：列出本 crew 全部 session 成员的实时状态（干活中/空闲/异常/已退出 + 各自任务），        并给每一行附一列**产出证据**。派活前先点名——有空闲的合适成员就 @ 它接手,别急着 start_session         起新人;有异常的（未登录/额度）先处置或上报。
+        产出证据这一列回答的不是「它显示什么」，而是「它最近真的写出过东西吗、什么时候」——读的是 runner         自己留下的会话成绩单（claude 的 ~/.claude/projects/**/<会话号>.jsonl、codex 的         ~/.codex/sessions/**/rollout-*-<threadId>.jsonl）最近一次写入的时刻。状态是会骗人的：显示「空闲」        而任务书压根没提交过的 session，状态那一列看不出来，产出那一列会明说。
+        三种口径，别混：
+        · 「最近产出 X 前」= 真写过东西，X 是最后一次写距今多久。显示空闲、产出却停在一小时前 → 多半卡住了，        用 inspect_session 看现场。
+        · 「确实没有产出」= 会话号我们记着、该找的地方找过了，一个字都没写过。
+        · 「产出看不出来」= **取证面自己不在场**（还没记下会话号 / runner 不是 claude 或 codex / 那两个目录        读不出来）。它**不等于**「没干活」，只是这条路问不出答案；把它当成「卡住了」去判断，就是把表象当        状态的老毛病换个地方再犯一次。codex 要握手成功才有 threadId，所以 codex 成员刚起来的头几秒本来        就是「看不出来」。
+        """
 
     init(store: LocalWhiteboardStore, approvals: LocalApprovalStore, control: LocalCrewControlStore,
          crewId: String, sessionId: String,
@@ -58,7 +77,9 @@ final class McpServer {
          humanTodos: LocalTodoStore? = nil,
          continuations: SessionContinuationStore? = nil,
          agentKey: String? = nil,
-         attachmentRoot: URL? = nil) {
+         attachmentRoot: URL? = nil,
+         agentSessions: LocalAgentSessionStore? = nil,
+         outputProbe: SessionOutputProbe? = nil) {
         self.store = store
         self.approvals = approvals
         self.control = control
@@ -78,6 +99,9 @@ final class McpServer {
         self.agentKey = agentKey
         self.attachmentRoot = attachmentRoot
             ?? Self.defaultAttachmentRoot(whiteboardDirectory: quotaDirectory)
+        self.agentSessions = agentSessions
+            ?? LocalAgentSessionStore(directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
+        self.outputProbe = outputProbe ?? SessionOutputProbe.onThisMachine()
     }
 
     /// 没显式传附件根时用哪儿。
@@ -459,7 +483,7 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "list_sessions",
-                    "description": "（机长专用）点名：列出本 crew 全部 session 成员的实时状态（干活中/空闲/异常/已退出 + 各自任务）。派活前先点名——有空闲的合适成员就 @ 它接手,别急着 start_session 起新人;有异常的（未登录/额度）先处置或上报。",
+                    "description": Self.listSessionsToolDescription,
                     "inputSchema": ["type": "object", "properties": [String: Any]()],
                 ])
                 tools.append([
@@ -1242,7 +1266,19 @@ final class McpServer {
                   let snap = try? JSONDecoder().decode(CrewSessionsSnapshot.self, from: data) else {
                 return toolResult(id: id, text: "暂无成员状态快照（app 未在跑或刚启动）。")
             }
-            return toolResult(id: id, text: snap.renderRoster(crewId: crewId))
+            // 产出证据（Todo #107 第三件：判活不判状态）。会话号账本一次读完
+            // （每行现查会各上一次文件锁），取证面本身由 `SessionOutputProbe` 扫。
+            let ledger = agentSessions.records(crewId: crewId)
+            let probe = outputProbe
+            let text = snap.renderRoster(crewId: crewId) { entry in
+                guard let row = ledger[entry.sessionId] else {
+                    // 没这条 = **还没记下会话号**，不是「没干活」：claude 的会话号是
+                    // 起进程前指定的，codex 的要等握手回来才有。
+                    return .unknown("还没记下它的 agent 会话号")
+                }
+                return probe.evidence(runnerKind: row.kind, agentSessionId: row.agentSessionId)
+            }
+            return toolResult(id: id, text: text)
         case "report_to_parent":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let msg = ((args["message"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -111,7 +111,7 @@ final class CrewSessionStateDerivationTests: XCTestCase {
             sessionId: "worker-dead", name: "没起来的活", role: "worker", brief: "修个 bug",
             state: CrewSessionStateDerivation.launchFailed,
             healthDetail: "Claude Code 子进程没能启动")]
-        let line = snap.renderRoster(crewId: "c1")
+        let line = snap.renderRoster(crewId: "c1") { _ in .unknown("本例不测产出证据") }
         XCTAssertTrue(line.contains("拉起失败"))
         XCTAssertTrue(line.contains("Claude Code 子进程没能启动"), "原因要留痕可读")
         XCTAssertTrue(line.contains("改派"), "要告诉机长下一步")
