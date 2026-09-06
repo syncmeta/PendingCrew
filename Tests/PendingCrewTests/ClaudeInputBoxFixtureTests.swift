@@ -192,6 +192,35 @@ final class ClaudeInputBoxFixtureTests: XCTestCase {
             """)
     }
 
+    /// **反面那把尺子**（`tui-claude-ready.bin`，同一天在一个 claude **已经信任过**
+    /// 的目录里现录）：正常起来的 session 从头到尾一拍都不许被判成「在等人拍板」。
+    ///
+    /// 认「没有编号的选择框」那条判据一旦放松过头，代价不是漏报而是**全员误报** ——
+    /// 每个正常干活的 session 都点亮成「⌛ 等人拍板」，机长按谎报的状态改派。
+    /// 一把只会说「有」的尺子等于没有尺子，所以「已知没事」这一面也要有真语料钉着。
+    func testRealReadySessionNeverLooksLikeAPendingDecision() throws {
+        let fixture = try loadFixture("tui-claude-ready.bin")
+        let harness = HeadlessTerminalHarness(cols: 80, rows: 25)
+
+        var sawReady = false
+        var offset = 0
+        while offset < fixture.count {
+            let size = min(64, fixture.count - offset)
+            harness.feed(Array(fixture[offset..<(offset + size)]))
+            offset += size
+
+            let rows = TerminalScreenText.rows(of: harness.terminal)
+            XCTAssertNil(
+                ClaudeInputBox.blockingDialog(rows),
+                """
+                正常就绪的画面被判成了「在等人拍板」。喂到第 \(offset) 字节，画面：
+                \(rows.joined(separator: "\n"))
+                """)
+            if ClaudeInputBox.inputRow(rows) != nil { sawReady = true }
+        }
+        XCTAssertTrue(sawReady, "这段语料里本来就有一个画好的空输入框，判据必须认得出来")
+    }
+
     /// **这条就是今天那个 P0 本身**：屏幕上有信任框 → 待决策那条出口必须出一条，
     /// 而不是「起来了、一直空闲」。
     ///

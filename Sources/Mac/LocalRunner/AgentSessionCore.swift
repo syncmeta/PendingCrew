@@ -628,7 +628,14 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
             if pendingDecision != nil { pendingDecision = nil }
             return
         }
-        switch decisionTracker.poll() {
+        // **两条来源都喂**：字节尾窗（`scanOutput` 里 feed 的）认命令审批 / 计划确认，
+        // 渲染完的那一屏认 claude 靠光标定位摆出来的信任框 —— 后者在字节流上是瞎的，
+        // 于是此前它只会安静地卡着（今天这条 P0）。合并规则在 `poll` 的注释里。
+        //
+        // 画面这一份**必须挂在这里**（0.6s busyTimer），不能挂进
+        // `stepStartupPromptDelivery` —— 那个在 `startupDelivery == nil` 时第一行就
+        // 短路，开场那一段过去之后就没有任何人再看屏幕上有没有框了。
+        switch decisionTracker.poll(screen: screenRows()) {
         case let .appeared(d): pendingDecision = d
         case .cleared:         pendingDecision = nil
         case nil:              break

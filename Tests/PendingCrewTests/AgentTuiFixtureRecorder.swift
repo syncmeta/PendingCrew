@@ -71,13 +71,15 @@ final class AgentTuiFixtureRecorder: XCTestCase {
               TEST_RUNNER_PENDINGCREW_RECORD_TUI=claude  …只录 claude 的 TUI
               TEST_RUNNER_PENDINGCREW_RECORD_TUI=shell   …只录人直接用的那个终端 session
               TEST_RUNNER_PENDINGCREW_RECORD_TUI=trust   …只录「是否信任这个文件夹」那一屏
-              TEST_RUNNER_PENDINGCREW_RECORD_TUI=all     …三段都录
+              TEST_RUNNER_PENDINGCREW_RECORD_TUI=ready   …只录已信任目录里那个空输入框
+              TEST_RUNNER_PENDINGCREW_RECORD_TUI=all     …四段都录
             产物落在 \(Self.fixtureDirectory.path)
             """)
         }
         if what == "shell" || what == "all" { try await recordShell() }
         if what == "claude" || what == "all" { try await recordClaude() }
         if what == "trust" || what == "all" { try await recordTrustDialog() }
+        if what == "ready" || what == "all" { try await recordReadyInputBox() }
     }
 
     // MARK: - 人直接用的那个终端（`.terminal`）
@@ -190,6 +192,51 @@ final class AgentTuiFixtureRecorder: XCTestCase {
 
         try write(sink.bytes, to: "tui-claude-trust.bin")
         print("[recorder] 未信任目录：\(workdir.path)")
+    }
+
+    /// 上面那段的**反面**：一个 claude **已经信任过**的目录，起来之后就是 banner +
+    /// 空输入框，屏幕上没有任何在等人的东西。
+    ///
+    /// 为什么要单独录一段：认「没有编号的选择框」那条判据一旦放松过头，正常干活的
+    /// session 会被点亮成「⌛ 等人拍板」——**那比没有状态更糟**（机长按谎报的状态
+    /// 改派）。一把只会说「有」的尺子等于没有尺子，所以「已知没事」的那一面也要有
+    /// 真语料钉着。跑在哪个目录都行，只要 claude 信任过它（`--cwd` 用仓库自己）。
+    private func recordReadyInputBox() async throws {
+        guard let executable = LocalCodingAgentExecutable.resolve(.claudeCode) else {
+            throw XCTSkip("本机找不到 claude 可执行文件")
+        }
+        let workdir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().path
+
+        let core = AgentSessionCore(
+            config: SessionConfig(kind: .claudeCode),
+            mode: .agent,
+            executable: executable.path,
+            workdir: workdir,
+            env: ProcessInfo.processInfo.environment)
+        defer { core.stop() }
+
+        let sink = ByteSink(cap: Self.byteCap)
+        core.onOutput = { sink.append($0) }
+        try await settle(sink, quietFor: 2.0, upTo: 60)
+
+        // **再往框里打一行长到会折行的字，并且不按回车。**
+        //
+        // 空输入框其实测不到那条判据：框里没东西时，光标行上下都是框线，剥完就是
+        // 空行，「连续两行非空」压根凑不齐 —— 实测过，把确认脚注那条判据整个拿掉，
+        // 空框这段语料照样是绿的。**一条永远不会红的守卫等于没有守卫。**
+        //
+        // 折行之后的形状（光标行 + 一行续行）跟没有编号的选择框在文本上一模一样，
+        // 唯一的区别就是底下没有那句 `Enter to confirm · Esc to cancel`。这才是真的
+        // 在考那条判据。不按回车 = 一个 token 都不花，也没有任何一次真的提问。
+        core.write(Array("""
+            这是一行故意打得很长很长的字，长到在 80 列的输入框里一定会折成两行显示，\
+            用来钉住「折行的输入框不是选择菜单」这条判据。
+            """.utf8))
+        try await settle(sink, quietFor: 1.5, upTo: 20)
+
+        try write(sink.bytes, to: "tui-claude-ready.bin")
     }
 
     // MARK: -
