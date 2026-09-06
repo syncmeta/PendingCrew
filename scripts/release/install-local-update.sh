@@ -5,6 +5,11 @@
 #     launchctl submit -l pendingcrew-local-install -- \
 #       /bin/sh <仓库>/scripts/release/install-local-update.sh <PendingCrew.app 或 .zip>
 #
+#   ⚠️ **装完必须自己摘掉这个 job**：`launchctl remove pendingcrew-local-install`
+#      launchd 默认会在任务退出后把它拉起来，于是装完立刻又冒出一个安装器在等下一次
+#      ⌘Q —— 人只要再退一次界面，它就再装一遍，无限循环。2026-09-06 真实发生过一次。
+#      脚本收尾会自己 remove（见文件末尾），这行留给手动中断的场合。
+#
 # 为什么要 `launchctl submit` 而不是直接跑：装这一步要等 PendingCrew 退出，而它一退，
 # 它底下所有 agent session 跟着结束 —— 包括那个正在替你跑安装脚本的 session。直接跑
 # 等于让安装器自己被自己等的那件事杀掉。挂到 launchd 底下它就不在那棵进程树里了。
@@ -171,3 +176,9 @@ open -a "$old" || say "⚠️ open 失败，手动打开一下"
 rm -rf "$work"
 say "=== 完成：$version ($build) ==="
 say "回滚：rm -rf $old && cp -R ${rollback:-<回滚位>} $old"
+
+# 自己把 launchd 上的登记摘掉。不摘的话 launchd 会在本进程退出后重新拉起它，
+# 于是装完又有一个安装器在等下一次 ⌘Q，人再退一次界面就再装一遍。
+# 放在最后、`|| true`：摘不掉也不该让一次成功的安装看起来像失败。
+say "摘掉 launchd 上的登记（否则它会把我拉起来重装一遍）"
+launchctl remove pendingcrew-local-install 2>/dev/null || true
