@@ -337,6 +337,13 @@ struct SessionHealthWire: Codable, Equatable {
 struct SessionPendingDecisionWire: Codable, Equatable {
     var prompt: String
     var options: [String]
+    /// 屏幕上那几项本来有没有编号（见 `PendingTerminalDecision.numbered`）。
+    ///
+    /// **必须过线，而且不给默认值。** 无画面探针那条路上，接收端手里再没有别的东西
+    /// 能推出这件事；而一个默认值会在上游下次改这个框的时候变成一条安静的谎 ——
+    /// 上次改只隔了 11 天（2026-08-26 有编号 / 2026-09-06 没编号，两份 fixture 都在库里）。
+    /// daemon 与 app 是同一个二进制、同时发布，所以这里不存在「旧包少个字段」的问题。
+    var numbered: Bool
 }
 
 struct SessionLaunchParameterProblemWire: Codable, Equatable {

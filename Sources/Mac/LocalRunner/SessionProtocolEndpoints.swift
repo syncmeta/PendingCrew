@@ -252,7 +252,9 @@ final class SessionProtocolServer {
         }.store(in: &record.observations)
         record.backend.pendingDecisionUpdates.sink { value in
             changed { state in
-                state.pendingDecision = value.map { .init(prompt: $0.prompt, options: $0.options) }
+                state.pendingDecision = value.map {
+                    .init(prompt: $0.prompt, options: $0.options, numbered: $0.numbered)
+                }
             }
         }.store(in: &record.observations)
         if let source = record.backend as? SessionProtocolLaunchProblemProviding {
@@ -572,7 +574,7 @@ final class SessionProtocolServer {
               displayIsTyping: backend.displayIsTyping,
               health: backend.health.map(SessionHealthWire.init),
               pendingDecision: backend.pendingDecision.map {
-                  .init(prompt: $0.prompt, options: $0.options)
+                  .init(prompt: $0.prompt, options: $0.options, numbered: $0.numbered)
               }, kind: backend.kind.rawValue,
               launchParameterProblem: launchParameterProblem.map(SessionLaunchParameterProblemWire.init),
               scrollState: nil)

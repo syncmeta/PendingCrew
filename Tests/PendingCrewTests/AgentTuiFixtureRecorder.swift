@@ -81,6 +81,104 @@ final class AgentTuiFixtureRecorder: XCTestCase {
         if what == "trust" || what == "all" { try await recordTrustDialog() }
         if what == "ready" || what == "all" { try await recordReadyInputBox() }
         if what == "verify-trust" { try await verifyTrustDialogRaisesPendingDecision() }
+        if what == "verify-answer" { try await verifyHowTheTrustDialogCanBeAnswered() }
+    }
+
+    // MARK: - 现场核验：亮起来之后，机长到底答不答得掉
+
+    /// **看得见但答不掉，只是把静默换成了另一种卡住。** 所以「亮起来」之后还得量一次
+    /// 「答得掉吗」。四格，每格一个全新的未信任目录、一个真 claude，截的是
+    /// `screenRows()`（生产里 `inspect_session` 看的就是这一份，不是我自己糊的渲染器）：
+    ///
+    /// 1. `sendRaw("1")` —— 裸按数字键。旧文案让机长做的就是这件事。
+    /// 2. `send("1")` —— **nudge_session 实际会做的事**：除 enter/esc 外一律「发文本 +
+    ///    自动补回车」。这一格才是真实后果。
+    /// 3. `sendRaw(↓)` —— 方向键搬得动高亮吗。
+    /// 4. `sendRaw(↓)` 之后 `sendRaw(Esc)` —— 搬走了还退得回来吗。
+    ///
+    /// **安全线**：第 2 格下手前先核实 `❯` 停在含 `exit` 的那一行，不是就当场中止 ——
+    /// 绝不让这段代码替人按下「Yes, I trust this folder」。第 3、4 格移到 Yes 之后
+    /// **只按 Esc，永远不按 Enter**。跑完这四格，`~/.claude.json` 里不该多出任何一条
+    /// 信任记录（跑完自己核一遍）。
+    private func verifyHowTheTrustDialogCanBeAnswered() async throws {
+        guard let executable = LocalCodingAgentExecutable.resolve(.claudeCode) else {
+            throw XCTSkip("本机找不到 claude 可执行文件")
+        }
+
+        func cursorLine(_ rows: [String]) -> String {
+            rows.first { TerminalMenuParser.strip($0).first.map(
+                TerminalMenuParser.markers.contains) ?? false } ?? "(画面上没有 ❯)"
+        }
+        func dialogRows(_ rows: [String]) -> String {
+            rows.filter { $0.contains("exit") || $0.contains("trust this folder")
+                || $0.contains("to confirm") }.joined(separator: "\n")
+        }
+
+        /// 起一个全新未信任目录的 claude，等框稳住，跑 `act`，再截一次屏。
+        func probe(_ label: String,
+                   _ act: (AgentSessionCore, [String]) throws -> Void) async throws {
+            let workdir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pendingcrew-answer-\(UUID().uuidString)",
+                                        isDirectory: true)
+            try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+            let core = AgentSessionCore(
+                config: SessionConfig(kind: .claudeCode), mode: .agent,
+                executable: executable.path, workdir: workdir.path,
+                env: ProcessInfo.processInfo.environment)
+            defer { core.stop() }
+
+            let deadline = Date().addingTimeInterval(30)
+            while Date() < deadline, core.pendingDecision == nil {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            }
+            let before = core.screenRows()
+            guard core.pendingDecision != nil else {
+                return XCTFail("[\(label)] 框都没等到，谈不上答：\n\(before.joined(separator: "\n"))")
+            }
+            try act(core, before)
+            try await Task.sleep(nanoseconds: 2_500_000_000)
+            let after = core.screenRows()
+
+            print("""
+            ================================================================
+            【\(label)】
+              按之前 ❯ 停在：\(cursorLine(before))
+              按之后 ❯ 停在：\(cursorLine(after))
+              按之后进程还在跑：\(core.status == .running)
+              按之后框还在不在：\(core.pendingDecision != nil)
+              ── 按之前 ──
+            \(dialogRows(before))
+              ── 按之后 ──
+            \(dialogRows(after).isEmpty ? "（框不在屏幕上了）" : dialogRows(after))
+              屏幕有没有变：\(before == after ? "★ 一模一样，纹丝不动 ★" : "变了")
+            ================================================================
+            """)
+
+            // 进得去也要出得来（#545）：它要是在框上退出了，待决策必须当场清掉。
+            // 2026-09-06 这条第一次跑就抓到了真的 —— `busyTimer` 在退出路径上先被
+            // invalidate，`pollPendingDecision` 里那道闸从此再也执行不到。
+            if core.status != .running {
+                XCTAssertNil(
+                    core.pendingDecision,
+                    "[\(label)] 进程已经没了，待决策却还挂着 —— 又是一个谎报状态（#545）")
+            }
+        }
+
+        try await probe("① 裸按数字键 `1`（旧文案让机长做的事）") { core, _ in
+            core.sendRaw([0x31])
+        }
+        try await probe("② nudge_session 发 `1` 的真实语义（文本 + 自动回车）") { core, before in
+            // **安全闸**：只有当高亮确实停在含 exit 的那一项上时才敢按下去。
+            guard cursorLine(before).contains("exit") else {
+                throw XCTSkip("高亮不在 `No, exit` 上，中止 —— 绝不替人按 Yes")
+            }
+            core.send("1")
+        }
+        try await probe("③ 方向键（下）") { core, _ in core.sendRaw([0x1b, 0x5b, 0x42]) }
+        try await probe("④ 方向键（下）之后按 Esc —— 永远不按 Enter") { core, _ in
+            core.sendRaw([0x1b, 0x5b, 0x42])
+            core.sendRaw([0x1b])
+        }
     }
 
     // MARK: - 现场核验：真起一个 claude，看待决策到底亮不亮

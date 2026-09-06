@@ -374,7 +374,8 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
         displayIsTyping = state.displayIsTyping
         health = state.health?.health
         pendingDecision = state.pendingDecision.map {
-            PendingTerminalDecision(prompt: $0.prompt, options: $0.options)
+            PendingTerminalDecision(
+                prompt: $0.prompt, options: $0.options, numbered: $0.numbered)
         }
         launchParameterProblem = state.launchParameterProblem?.problem
     }

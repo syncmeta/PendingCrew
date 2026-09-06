@@ -100,6 +100,45 @@ final class SessionPendingDecisionTests: XCTestCase {
         XCTAssertEqual(d?.options, ["No, exit", "Yes, I trust this folder"])
     }
 
+    /// **「屏幕上本来有没有编号」必须跟着值走。** 解析器把序号 `strip` 掉了，渲染器
+    /// 又按 `1. 2. 3.` 重新编一遍 —— 带编号那条路之所以恰好没错，是因为它断言过序号
+    /// 必须连续从 1 起；没编号那条路上没有这条断言，重造的编号就是凭空的。
+    func testDecisionCarriesWhetherTheScreenHadNumbers() {
+        XCTAssertEqual(TerminalMenuParser.parse(unnumberedTrustDialog)?.numbered, false)
+        XCTAssertEqual(TerminalMenuParser.parse(permissionMenu)?.numbered, true)
+        XCTAssertEqual(TerminalMenuParser.parse(trustMenu)?.numbered, true)
+    }
+
+    /// **没编号的框不许在群消息里长出编号。**
+    ///
+    /// 2026-09-06 实测：这种框按 `1` `2` 屏幕纹丝不动，真正生效的是 nudge_session
+    /// 自动补的那个回车 —— 它确认的是**当前高亮项**，而信任框默认高亮 `No, exit`。
+    /// 所以渲染出编号 = 制造一个假的可操作性：机长照着发数字，session 就没了。
+    func testUnnumberedOptionsAreNotRenderedWithFakeNumbers() {
+        let p = SessionDecisionNotice.post(
+            stage: .first, sessionName: "小明", sessionId: "worker-abc", isCaptain: false,
+            question: "Quick safety check: …trust?",
+            options: ["No, exit", "Yes, I trust this folder"], numbered: false, waitedMinutes: 0)
+        XCTAssertFalse(p.text.contains("1. No, exit"), p.text)
+        XCTAssertFalse(p.text.contains("2. Yes"), p.text)
+        XCTAssertTrue(p.text.contains("No, exit"), p.text)
+        XCTAssertTrue(p.text.contains("Yes, I trust this folder"), p.text)
+        // 光不编号还不够 —— 得说清「那怎么答」，否则只是把假指路换成不指路。
+        XCTAssertTrue(p.text.contains("没有编号"), p.text)
+        XCTAssertTrue(p.text.contains("inspect_session"), p.text)
+    }
+
+    /// 带编号那条路不在怀疑范围内：屏幕上真有 `1.` `2.`，照旧编号照旧发数字。
+    func testNumberedOptionsKeepTheirNumbers() {
+        let p = SessionDecisionNotice.post(
+            stage: .first, sessionName: "小明", sessionId: "worker-abc", isCaptain: false,
+            question: "Do you want to proceed?", options: ["Yes", "No"],
+            numbered: true, waitedMinutes: 0)
+        XCTAssertTrue(p.text.contains("1. Yes"), p.text)
+        XCTAssertTrue(p.text.contains("2. No"), p.text)
+        XCTAssertFalse(p.text.contains("没有编号"), p.text)
+    }
+
     /// 通知里那句问句得说清在问什么。**「Security guide」不算** —— 它只是选项块
     /// 正上方那一行，人在群里看到它完全不知道在等什么。
     func testUnnumberedDialogPromptIsTheActualQuestion() {
@@ -329,7 +368,7 @@ final class SessionPendingDecisionTests: XCTestCase {
         SessionDecisionNotice.post(
             stage: stage, sessionName: "小明", sessionId: "worker-abc",
             isCaptain: isCaptain, question: "Do you want to proceed?",
-            options: ["Yes", "No"], waitedMinutes: stage == .escalate ? 7 : 0)
+            options: ["Yes", "No"], numbered: true, waitedMinutes: stage == .escalate ? 7 : 0)
     }
 
     /// worker 卡住 → 先找机长（机长手上有 inspect_session/nudge_session，能直接代答）。
@@ -408,7 +447,7 @@ final class SessionPendingDecisionTests: XCTestCase {
     func testCodexElicitationNoticeUsesSameTargeting() {
         let p = SessionDecisionNotice.post(
             stage: .first, sessionName: "codex-1", sessionId: "s1", isCaptain: false,
-            question: "工具要求填一个表单", options: [], waitedMinutes: 0)
+            question: "工具要求填一个表单", options: [], numbered: false, waitedMinutes: 0)
         XCTAssertEqual(p.mentionKinds, ["captain"])
         XCTAssertTrue(p.text.contains("工具要求填一个表单"))
     }

@@ -28,8 +28,24 @@ struct PendingTerminalDecision: Equatable {
     let prompt: String
     /// 选项正文（已剥掉序号与光标标记），按屏幕顺序。
     let options: [String]
-
+    /// **屏幕上本来有没有编号。**
+    ///
+    /// 这个字段是补一处「解析器剥掉、渲染器重造」的断层：`options` 里的序号是被
+    /// `strip` 掉的，而 `SessionDecisionNotice.post` 渲染时又按 `1. 2. 3.` 重新编了
+    /// 一遍。带编号那条路（`parseNumbered`）之所以恰好没错，是因为它**断言过**序号
+    /// 必须是连续的 1..N —— 那条断言是那行渲染的正确性前提，可它们隔着这个类型，
+    /// 中间没有任何东西说得出这层依赖。
+    ///
+    /// 于是 2026-09 claude 换成没编号的信任框之后，渲染器凭空造出的
+    /// `1. No, exit / 2. Yes, I trust this folder` 就成了**假的可操作性**：机长照着
+    /// 发数字，实测屏幕纹丝不动（真正生效的是 nudge 自动补的那个回车，它确认的是
+    /// 当前高亮项 —— 默认正是 `No, exit`，一发就把 session 关了）。
+    ///
+    /// 所以事实必须跟着值走：**每个生产者如实填，渲染按它分叉。**
+    let numbered: Bool
     /// 去重指纹：同一个菜单反复重绘 → 同一指纹 → 只报一次。
+    ///
+    /// 故意**不含** `numbered`：它是同一个框的属性，不是「换了一个框」。
     var fingerprint: String { ([prompt] + options).joined(separator: "|") }
 }
 
@@ -191,7 +207,7 @@ enum TerminalMenuParser {
         guard cursors == 1 else { return nil }
 
         return PendingTerminalDecision(
-            prompt: promptAbove(lines, blockStart: start), options: options)
+            prompt: promptAbove(lines, blockStart: start), options: options, numbered: false)
     }
 
     private static func parseNumbered(_ lines: [String]) -> PendingTerminalDecision? {
@@ -225,7 +241,8 @@ enum TerminalMenuParser {
 
         // 3) 问句 = 选项块上方那句话（优先带问号的那一行，见 `promptAbove`）。
         return PendingTerminalDecision(
-            prompt: promptAbove(lines, blockStart: j + 1), options: parsed.map(\.text))
+            prompt: promptAbove(lines, blockStart: j + 1), options: parsed.map(\.text),
+            numbered: true)
     }
 }
 
@@ -339,13 +356,36 @@ enum SessionDecisionNotice {
         now.timeIntervalSince(raisedAt) > after
     }
 
+    /// **选项怎么渲染**：屏幕上有编号就编号，没有就不编。
+    ///
+    /// 这不是排版偏好。此前这里恒定按 `1. 2. 3.` 编号，于是没编号的框（2026-09 的
+    /// claude 信任框）在群里长成了一个**可以发数字的样子** —— 而实测按数字屏幕纹丝
+    /// 不动。收到这条消息的机长不需要读过任何守则，光看见数字就会去发数字；真正生效
+    /// 的是 nudge 自动补的那个回车，它确认的是**当前高亮项**，信任框的默认高亮正是
+    /// `No, exit`。**我们把一个不存在的编号画给他看，然后指望他不去用它。**
+    ///
+    /// 没编号时**不替他说 Enter 安不安全** —— 高亮停在哪一项只有当下的画面知道，
+    /// 写进一条会留在白板上的消息里就成了会过期的断言。所以只说「去看画面」。
+    static func renderOptions(_ options: [String], numbered: Bool) -> [String] {
+        guard !options.isEmpty else { return [] }
+        guard numbered else {
+            return options.map { "  \($0)" } + [
+                "（屏幕上这几项**没有编号**，发数字没用 —— 得先 inspect_session 看清 `❯` "
+                + "停在哪一项：正好是你要的那项就 nudge_session 发 `enter`，不是的话今天没有"
+                + "发方向键的通道，直接 @人。）",
+            ]
+        }
+        return options.enumerated().map { "  \($0.offset + 1). \($0.element)" }
+    }
+
     /// - Parameters:
     ///   - question: 在等什么（终端菜单的问句 / codex 的请求描述）。
     ///   - options: 可选项；空 = 不是选择题（如 codex 要求填表单）。
+    ///   - numbered: 屏幕上那几项本来有没有编号（见 `renderOptions`）。
     ///   - waitedMinutes: 已等分钟数（升级稿用）。
     static func post(
         stage: Stage, sessionName: String, sessionId: String, isCaptain: Bool,
-        question: String, options: [String], waitedMinutes: Int
+        question: String, options: [String], numbered: Bool, waitedMinutes: Int
     ) -> Post {
         var lines: [String] = []
         switch stage {
@@ -357,7 +397,7 @@ enum SessionDecisionNotice {
             lines.append("\(sessionName) 仍卡着，已等 \(waitedMinutes) 分钟没人处理：")
         }
         if !question.isEmpty { lines.append(question) }
-        for (i, o) in options.enumerated() { lines.append("  \(i + 1). \(o)") }
+        lines.append(contentsOf: renderOptions(options, numbered: numbered))
 
         let mentions: [String]
         switch stage {
