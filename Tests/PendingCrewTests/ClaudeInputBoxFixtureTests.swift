@@ -178,6 +178,10 @@ final class ClaudeInputBoxFixtureTests: XCTestCase {
         XCTAssertTrue(
             decision.prompt.contains("trust") || decision.prompt.contains("safety"),
             "问句得说清在问什么，否则群里那条通知等于没说：\(decision.prompt)")
+        // 真屏幕上没有编号，这个事实要跟着值走到群消息那一步 —— 否则渲染器会凭空
+        // 编出 `1. No, exit`，机长照着发数字，实测屏幕纹丝不动、而 nudge 补的那个
+        // 回车会确认默认高亮的 `No, exit`，session 就没了。
+        XCTAssertFalse(decision.numbered, "真屏幕上这两项没有编号")
     }
 
     /// 在等人回答的那一屏**绝不是**「输入框就绪」。这条挂了 = brief 被打进框里、
@@ -190,6 +194,58 @@ final class ClaudeInputBoxFixtureTests: XCTestCase {
             信任框那一屏被判成了「输入框就绪」。画面：
             \(rows.joined(separator: "\n"))
             """)
+    }
+
+    /// **同一个信任框，11 天里变了三处。** 两份 fixture 都是真字节，摆在一起看：
+    ///
+    /// |              | `tui-claude.bin`（2026-08-26） | `tui-claude-trust.bin`（2026-09-06） |
+    /// |--------------|--------------------------------|--------------------------------------|
+    /// | 编号         | 有（`1.` / `2.`）              | **没有**                             |
+    /// | 顺序         | Yes 在前                       | **No 在前**                          |
+    /// | 默认高亮 `❯` | 落在 **Yes, I trust**          | 落在 **No, exit**                    |
+    ///
+    /// 后两处比「没有编号」危险得多：**同一个盲按 Enter，8-26 是同意，今天是退出。**
+    /// 假如哪天编号被加回来（它加过也去过），一个记着「1 = 信任」的机长发 `1`，
+    /// 在今天这一屏上选中的是 `No, exit` —— 同一个按键，语义反了，还反成了「退出」。
+    ///
+    /// 所以这条测试钉的不是「信任框长什么样」，而是**「它会变，别把任何一版写死」**：
+    /// 框的形状不是仓库的属性、也不是「claude 的属性」，是**这个版本、这一刻**的属性。
+    /// 判据只能每一屏现解、现填、现渲染 —— 这也是 `PendingTerminalDecision.numbered`
+    /// 必须是个如实填写的事实字段、且不给默认值的理由。
+    func testTheTrustDialogChangedShapeBetweenTheTwoRecordings() throws {
+        func screen(_ name: String) throws -> [String] {
+            let harness = HeadlessTerminalHarness(cols: 80, rows: 25)
+            harness.feed(try loadFixture(name))
+            return TerminalScreenText.rows(of: harness.terminal)
+        }
+        func cursorLine(_ rows: [String]) -> String {
+            rows.first {
+                TerminalMenuParser.strip($0).first.map(TerminalMenuParser.markers.contains) ?? false
+            } ?? ""
+        }
+        // 旧那份要一路喂到信任框那一屏为止（它后面还接着 banner + 输入框）。
+        let oldHarness = HeadlessTerminalHarness(cols: 80, rows: 25)
+        let oldBytes = try loadFixture("tui-claude.bin")
+        var offset = 0
+        var oldDialog: PendingTerminalDecision?
+        var oldCursor = ""
+        while offset < oldBytes.count, oldDialog == nil {
+            let size = min(64, oldBytes.count - offset)
+            oldHarness.feed(Array(oldBytes[offset..<(offset + size)]))
+            offset += size
+            let rows = TerminalScreenText.rows(of: oldHarness.terminal)
+            if let d = ClaudeInputBox.blockingDialog(rows) { oldDialog = d; oldCursor = cursorLine(rows) }
+        }
+        let old = try XCTUnwrap(oldDialog, "8-26 那份里的信任框没认出来")
+        let new = try XCTUnwrap(ClaudeInputBox.blockingDialog(try screen("tui-claude-trust.bin")))
+        let newCursor = cursorLine(try screen("tui-claude-trust.bin"))
+
+        XCTAssertTrue(old.numbered, "8-26 那份是**有**编号的：\(old.options)")
+        XCTAssertFalse(new.numbered, "今天这份是**没有**编号的：\(new.options)")
+        XCTAssertTrue(old.options[0].contains("trust"), "8-26 第一项是同意：\(old.options)")
+        XCTAssertTrue(new.options[0].contains("exit"), "今天第一项是退出：\(new.options)")
+        XCTAssertTrue(oldCursor.contains("trust"), "8-26 默认高亮在「同意」：\(oldCursor)")
+        XCTAssertTrue(newCursor.contains("exit"), "今天默认高亮在「退出」：\(newCursor)")
     }
 
     /// **反面那把尺子**（`tui-claude-ready.bin`，同一天在一个 claude **已经信任过**

@@ -52,7 +52,9 @@ final class SessionProtocolCodecTests: XCTestCase {
             isWorking: true,
             displayIsTyping: false,
             health: .init(kind: "rateLimited", detail: "wait"),
-            pendingDecision: .init(prompt: "Continue?", options: ["Yes", "No"]),
+            // `numbered` 必须过线：无画面探针那头再没有别的东西能推出「屏幕上有没有
+            // 编号」，而这条决定了群消息里编不编号（编错就是假的可操作性）。
+            pendingDecision: .init(prompt: "Continue?", options: ["Yes", "No"], numbered: false),
             kind: "claude_code",
             launchParameterProblem: .init(kind: "effortIgnored", value: "auto", quote: "ignored"),
             scrollState: .init(canScroll: true, position: 0.5, thumbSize: 0.2,

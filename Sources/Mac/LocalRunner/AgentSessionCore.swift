@@ -245,6 +245,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
                 self.busyTimer?.invalidate()
                 self.isWorking = false
                 self.displayIsTyping = false
+                self.clearPendingDecisionOnExit()
                 if self.reportLaunchFailureIfStillborn(
                     exitCode: exitCode.map { Self.decodeWaitStatus($0) }) { return }
                 self.status = .exited(exitCode)
@@ -634,6 +635,19 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     ///
     /// 退出的 session 不留待决策：进程都没了，「在等人选」是假的，必须清掉 ——
     /// 否则又是一个「进得去出不来」的谎报状态（#545）。
+    /// 进程没了 → 「在等人选」是假的，必须当场清掉。
+    ///
+    /// **不能指望 `pollPendingDecision` 里那道 `status != .running` 的闸** —— 退出路径
+    /// 上 `busyTimer` 是先被 invalidate 掉的，那道闸从此再也不会被执行到，状态就永远
+    /// 停在「⌛ 等人拍板」上。2026-09-06 拿真 claude 量到的：让它在信任框上退出，
+    /// `status` 已经是 `.exited`、`pendingDecision` 却还挂着。**这正是 #545 那个坑
+    /// 本身：进得去出不来比没有状态更糟**（机长按谎报的状态派活/找人）。
+    ///
+    /// 所以两条退出路径（子进程自己退 / 我们主动 stop）各自显式清一次。
+    private func clearPendingDecisionOnExit() {
+        if pendingDecision != nil { pendingDecision = nil }
+    }
+
     private func pollPendingDecision() {
         guard status == .running else {
             if pendingDecision != nil { pendingDecision = nil }
@@ -748,6 +762,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         process.terminate()                 // SIGTERM + close PTY（但不回调 processTerminated）
         status = .exited(nil)               // ← 自己翻状态，否则 UI 永远 running
         launchWatchdog?.cancel()            // 主动停的别被自检倒打一耙报成「拉起失败」
+        clearPendingDecisionOnExit()
         Task { await terminateTree(pid: pid, graceSeconds: 2.0) }
     }
 
