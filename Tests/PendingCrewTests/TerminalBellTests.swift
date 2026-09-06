@@ -73,6 +73,41 @@ final class TerminalBellTests: XCTestCase {
         XCTAssertEqual(trace.unseen, 1)
     }
 
+    /// **拿真录制的 claude 输出验**，别只用手编的字节流（这个仓库编尺子踩过的坑：
+    /// 凭印象编的语料复现不了真病）。`Tests/Fixtures/tui-claude.bin` 是
+    /// `AgentTuiFixtureRecorder` 在真 PTY 里把 claude 拉起来录的原始字节（入库）。
+    ///
+    /// 断的是「≥1 次」而不是某个具体数字 —— 数字归录制那一版 claude，会随重录变；
+    /// 「真实输出里确实有会响的 BEL」才是这条要钉的事实（也就是说 #110 不是理论问题：
+    /// 修之前，光这一段录制回放一遍就会响出来）。
+    func testRealClaudeRecordingContainsBellsThatUsedToBeep() throws {
+        let bytes = try loadFixture("tui-claude.bin")
+        let rawBelBytes = bytes.filter { $0 == 0x07 }.count
+        let mirror = makeMirror()
+
+        mirror.feed(byteArray: bytes[...])
+
+        XCTAssertGreaterThan(
+            mirror.bellTrace.count, 0,
+            "真录制里一个响铃都没解析出来（原始 0x07 有 \(rawBelBytes) 个）—— 要么录制变了，要么解析路径断了")
+        XCTAssertLessThanOrEqual(
+            mirror.bellTrace.count, rawBelBytes,
+            "响铃次数不可能超过原始 BEL 字节数")
+    }
+
+    private func loadFixture(_ name: String) throws -> [UInt8] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent(name)
+        guard let data = try? Data(contentsOf: url) else {
+            XCTFail("缺 fixture：\(url.path)（它是入库的，不该缺 —— 这里故意 fail 而不是静默 skip）")
+            throw XCTSkip("missing fixture")
+        }
+        return [UInt8](data)
+    }
+
     /// **边界，只钉现状、不改行为**：OSC 串里的 0x07 是**字符串终止符**，不是响铃
     /// （SwiftTerm 的状态机在 `.oscString` 态把 0x07 当 oscEnd，压根走不到那条
     /// `case 7: tdel?.bell(...)`）。所以 `ESC]0;title BEL` 这种设标题的序列**不留痕迹**。
