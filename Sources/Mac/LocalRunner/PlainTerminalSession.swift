@@ -25,6 +25,9 @@ final class PlainTerminalSession: ObservableObject, SessionBackend {
 
     let isBusy = false
     var isWorking: Bool { core.isWorking }
+    /// 人操作的 shell 不走机长拉起自检，但协议要它答 —— 答的仍是同一个信号
+    /// （内核收到过 PTY 首字节），不许糊一个 `true` 冒充。
+    var hasObservedLaunchSignal: Bool { core.lastOutputAt != .distantPast }
     var isWorkingPublisher: Published<Bool>.Publisher { core.$isWorking }
 
     var health: CrewSessionHealth? { core.health }

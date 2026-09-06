@@ -27,6 +27,9 @@ final class HeadlessSessionBackend: ObservableObject, SessionBackend {
     /// 与 `AgentTerminalSession` 一致：PTY 终端没有可编程 turn-state，注入随时安全。
     let isBusy = false
     var isWorking: Bool { core.isWorking }
+    /// 与门面**同一个内核、同一个信号**——差的只是有没有那半画面。
+    /// 这一行就是 2026-09-06 那笔「活着的 claude 被判死」缺的东西。
+    var hasObservedLaunchSignal: Bool { core.lastOutputAt != .distantPast }
     var isWorkingPublisher: Published<Bool>.Publisher { core.$isWorking }
     var displayIsTyping: Bool { core.displayIsTyping }
     var displayIsTypingUpdates: AnyPublisher<Bool, Never> {

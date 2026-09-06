@@ -32,17 +32,13 @@ enum CaptainLaunchReadiness {
 
     /// 从一个后端读出「它观测到子进程真的活过来了没有」。
     ///
-    /// ⚠️ **这里按具体类认后端，daemon 的 `HeadlessSessionBackend` 认不出来。**
-    /// 这是 2026-09-06 那个 bug 的原样搬运，先钉成红，再换成协议必答项。
+    /// **问的是协议，不是类名。** 这行代码此前是三个 `as?`，认识门面和 viewer 侧
+    /// 两种后端、认不出 daemon 里的无画面内核 —— 于是 daemon 侧的机长交接 100%
+    /// 超时。判据本身一个字没放宽（读的仍是同一个 `AgentSessionCore.lastOutputAt` /
+    /// 同一个 app-server 握手），换的只是「够不够得着」。
     @MainActor
     static func observedLaunchSignal(_ backend: any SessionBackend) -> Bool {
-        if let backend = backend as? AgentTerminalSession,
-           backend.core.lastOutputAt != .distantPast { return true }
-        if let backend = backend as? RemoteSessionBackend,
-           !backend.lastTerminalFrameBytes.isEmpty { return true }
-        if let backend = backend as? CodexAppServerBackend,
-           backend.isLaunchReady { return true }
-        return false
+        backend.hasObservedLaunchSignal
     }
 
     /// 一拍判定。

@@ -84,6 +84,9 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// 交接事务的提交门：只有 app-server 已握手并拿到真实 thread id，才算新机长
     /// 真正可接活。不能拿构造时默认的 `.running` 冒充启动成功。
     var isLaunchReady: Bool { threadId?.isEmpty == false }
+    /// `SessionBackend` 的必答项。codex 的真实活迹就是握手拿到 thread id ——
+    /// 与 `isLaunchReady` 同一件事，这里只是把它接到协议上。
+    var hasObservedLaunchSignal: Bool { isLaunchReady }
     private var activeTurnId: String?
     private let notificationSequencer = CodexNotificationSequencer()
     private var notificationTask: Task<Void, Never>?

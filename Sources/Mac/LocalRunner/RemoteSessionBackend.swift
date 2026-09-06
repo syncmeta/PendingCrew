@@ -252,6 +252,9 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     private(set) var isProtocolConnected = false
     private(set) var negotiatedCapabilities: [String] = []
     private(set) var lastTerminalFrameBytes: [UInt8] = []
+    /// `SessionBackend` 的必答项：viewer 侧看得到的真实活迹 = 收到过第一帧终端字节。
+    /// （daemon 那侧的内核信号过不来协议边界，这是它在本进程里的等价物。）
+    var hasObservedLaunchSignal: Bool { !lastTerminalFrameBytes.isEmpty }
     private(set) var lastCompletedSnapshotBytes: [UInt8] = []
     private(set) var completedSnapshotCount = 0
     var wakeActivityRevision: UInt64 { transcript?.activityRevision ?? 0 }

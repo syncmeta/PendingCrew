@@ -2003,41 +2003,42 @@ final class CrewSessionRunner: ObservableObject {
     /// `start()` 构造 backend 后就返回，而两家真实启动都在异步完成。复用 #541 的
     /// 25 秒启动观察窗：Codex 以握手拿到 thread id 为准，Claude 以 PTY 收到首字节
     /// 为准；health/status 先报坏消息就立刻抛错，让外层事务停新并恢复旧机长。
+    ///
+    /// 判定本身在 `CaptainLaunchReadiness` 里（可单测、不用真起进程）；这里只负责
+    /// 每拍喂观测量、把裁决执行掉。**别把「读哪个后端」写回这里** —— 它按具体类
+    /// `as?` 认后端的那一版，在 daemon 里认不出无画面内核，把一个渲染了 32 帧、
+    /// 跑满 27.19 秒的 claude 判成「没起来」并回滚杀掉（2026-09-06 现场）。
     private func awaitCaptainLaunchReady(_ run: CrewSessionRun) async throws {
-        let deadline = Date().addingTimeInterval(SessionLaunchProbe.firstOutputDeadline + 1)
-        while Date() < deadline {
-            if let health = run.health, health.kind == .launchFailed {
-                throw RunnerError.captainLaunchFailed(health.detail)
+        // 纯终端压根不该走到这里（起机长时就该被挡）；保留原有的专用错误。
+        guard run.kind != .terminal else { throw RunnerError.terminalCannotBeAgent }
+        let startedAt = Date()
+        while true {
+            // 账本兜底**只查 codex**：codex 只有握手拿到 thread id 后才写这条账，
+            // 所以它是跨协议边界的真实 ready 信号。claude 那条会话号是我们自己
+            // 指定的（`--session-id`），写它只证明我们传了参数，不证明 claude 起来了。
+            let ledgerId: String? = run.kind == .codex
+                ? LocalAgentSessionStore.shared
+                    .record(crewId: run.crewId, sessionId: run.sessionId)
+                    .flatMap { $0.kind == LocalCodingAgentKind.codex.rawValue
+                        ? $0.agentSessionId : nil }
+                : nil
+            switch CaptainLaunchReadiness.step(
+                kind: run.kind,
+                isRunning: run.status == .running,
+                health: run.health,
+                observedSignal: CaptainLaunchReadiness.observedLaunchSignal(run.backend),
+                ledgerAgentSessionId: ledgerId,
+                elapsed: Date().timeIntervalSince(startedAt)
+            ) {
+            case .ready:
+                return
+            case .failed(let detail):
+                throw RunnerError.captainLaunchFailed(detail)
+            case .keepWaiting:
+                try await Task.sleep(
+                    nanoseconds: UInt64(SessionLaunchProbe.pollInterval * 1_000_000_000))
             }
-            guard run.status == .running else {
-                throw RunnerError.captainLaunchFailed("runner 在启动观察窗内退出。")
-            }
-            switch run.kind {
-            case .codex:
-                if let backend = run.backend as? CodexAppServerBackend,
-                   backend.isLaunchReady { return }
-                // P4 默认把 direct backend 包进 RemoteSessionBackend；Codex 只有握手
-                // 拿到 thread id 后才写这条账，因此它也是跨协议边界的真实 ready 信号。
-                if let record = LocalAgentSessionStore.shared.record(
-                    crewId: run.crewId, sessionId: run.sessionId),
-                   record.kind == LocalCodingAgentKind.codex.rawValue,
-                   !record.agentSessionId.isEmpty { return }
-            case .claudeCode:
-                if let backend = run.agentTerminalSession,
-                   backend.core.lastOutputAt != .distantPast { return }
-                if let backend = run.remoteSessionBackend,
-                   !backend.lastTerminalFrameBytes.isEmpty { return }
-            case .terminal:
-                throw RunnerError.terminalCannotBeAgent
-            }
-            try await Task.sleep(
-                nanoseconds: UInt64(SessionLaunchProbe.pollInterval * 1_000_000_000))
         }
-        if let health = run.health, health.kind == .launchFailed {
-            throw RunnerError.captainLaunchFailed(health.detail)
-        }
-        throw RunnerError.captainLaunchFailed(
-            "runner 在 \(Int(SessionLaunchProbe.firstOutputDeadline)) 秒内没有给出真实就绪信号。")
     }
 
     /// 启动机长 session —— 手动按钮、建 crew 自动起共用这一份（单一事实源）。

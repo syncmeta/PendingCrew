@@ -88,6 +88,7 @@ private final class ControlledWakeBackend: SessionBackend {
     var isBusy = false
     @Published var isWorking = false
     var isWorkingPublisher: Published<Bool>.Publisher { $isWorking }
+    var hasObservedLaunchSignal = false
     @Published var health: CrewSessionHealth?
     var healthPublisher: Published<CrewSessionHealth?>.Publisher { $health }
 

@@ -30,6 +30,8 @@ final class AgentTerminalSession: ObservableObject, SessionBackend {
     /// 注入随时安全 → 恒 false（main 语义保留，别让 @我的定向消息因 busy 漏注入）。
     var isBusy: Bool { false }
     var isWorking: Bool { core.isWorking }
+    /// 拉起自检的真实就绪信号 = 权威内核收到过第一批 PTY 字节（见 `SessionBackend`）。
+    var hasObservedLaunchSignal: Bool { core.lastOutputAt != .distantPast }
     var isWorkingPublisher: Published<Bool>.Publisher { core.$isWorking }
     var displayIsTyping: Bool { core.displayIsTyping }
     var displayIsTypingUpdates: AnyPublisher<Bool, Never> { core.$displayIsTyping.eraseToAnyPublisher() }

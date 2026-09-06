@@ -268,6 +268,8 @@ final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControll
     var isBusy = false
     @Published var isWorking = false
     var isWorkingPublisher: Published<Bool>.Publisher { $isWorking }
+    /// `SessionBackend` 的必答项：替身自己说了算，测试要什么就摆什么。
+    var hasObservedLaunchSignal = false
     @Published var health: CrewSessionHealth?
     var healthPublisher: Published<CrewSessionHealth?>.Publisher { $health }
 

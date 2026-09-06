@@ -106,6 +106,23 @@ protocol SessionBackend: AnyObject {
     var pendingDecisionUpdates: AnyPublisher<PendingTerminalDecision?, Never> { get }
     var pendingDecision: PendingTerminalDecision? { get }
     var kind: LocalCodingAgentKind { get }
+    /// **拉起自检的那个真实就绪信号**：这个后端有没有观测到子进程真的活过来了。
+    ///
+    /// - claude / 纯终端（PTY）：终端内核收到过第一批 PTY 字节。
+    /// - codex（app-server）：握手拿到过 thread id。
+    /// - viewer 侧的 `RemoteSessionBackend`：收到过第一帧终端字节。
+    ///
+    /// **故意不给默认实现。** 这条判据此前散在 `CrewSessionRunner` 的机长交接
+    /// 自检里、按具体类 `as?` 认后端，认识 `AgentTerminalSession` 和
+    /// `RemoteSessionBackend` 两种；daemon 里造的是第三种（`HeadlessSessionBackend`），
+    /// 两个 cast 都是 nil，于是一个活得好好的 claude 每次都被判「没就绪」、
+    /// 回滚杀掉（2026-09-06 现场：它渲染了 32 帧、跑满 27.19 秒）。
+    /// 把名单从 2 改成 3 挡不住第四种形态 —— 所以它是协议的**必答项**：
+    /// 下一种后端不回答「我起来没有」就编不过。
+    ///
+    /// ⚠️ 它答的是「观测到真实活迹」，**不是**「进程还在」。给它一个更松的实现
+    /// （比如 `status == .running`）等于把死机长判成活的，比现在更坏。
+    var hasObservedLaunchSignal: Bool { get }
     func send(_ text: String)
     /// 唤醒专用的有回执提交。默认后端（Claude PTY）把写入自身输入队列视为受理；
     /// Codex app-server 覆盖为真实 `turn/start` RPC 回执。
