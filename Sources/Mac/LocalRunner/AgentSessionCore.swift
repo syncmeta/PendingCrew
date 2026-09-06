@@ -473,11 +473,22 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     private var launchStartedAt = Date()
     private var launchSpawned = false
     private var launchExecutable = ""
-    /// 拉起观察窗（秒）。默认 = `SessionLaunchProbe.firstOutputDeadline`；
-    /// **构造时可覆盖，只为让「零字节半死」这一档能被单测真实复现** ——
-    /// 它此前一条测试都没有（spawn 失败、健康常驻、主动停都有），而 2026-09-06
-    /// 那次误杀正好发生在这一档附近。等 25 秒的测试没人愿意写，于是它一直没写。
-    /// 生产路径一律用默认值。
+    /// 拉起观察窗（秒）。默认 = `SessionLaunchProbe.firstOutputDeadline`（25 秒），
+    /// **生产路径一律不传、一律用默认值**。
+    ///
+    /// 它为什么存在，只有一个理由：**让「零字节半死」这一档能被单测真实复现。**
+    /// 这一档此前一条端到端测试都没有 —— spawn 失败、健康常驻、主动停三档都有，
+    /// 独独它没有。原因不难猜：生产观察窗是 25 秒，没人愿意写一条要等 25 秒的
+    /// 测试。于是这条「进程活着但一个字都不吐」的报警可以被悄悄掐断而无人发现
+    /// （实测过：只让内核忽略 `stalled` 裁决，纯判定 11 条 + 门面 e2e 4 条**一条
+    /// 都不红**）。观察窗变成构造参数之后它才被钉住。
+    ///
+    /// ⚠️ **它不是给谁把窗口调松/调紧的口子。** 谁想在生产路径上传值，先回答
+    /// 「你是要放宽一条报警吗」——放宽它等于把半死的 session 重新伪装成「空闲」，
+    /// 那正是 #541 和 2026-09-06 两次事故的形状。
+    ///
+    /// 它也不会说谎：看门狗、退出回调的「起来即死」判定、以及给人看的失败文案里
+    /// 那个秒数，读的都是这一个值 —— 不会出现「等了 1 秒却说 25 秒内没输出」。
     private let launchDeadline: TimeInterval
     /// 用户/机长主动停 —— 停掉的别被自检倒打一耙报成「拉起失败」。
     private var userStopped = false

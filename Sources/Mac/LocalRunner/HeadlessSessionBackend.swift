@@ -42,8 +42,9 @@ final class HeadlessSessionBackend: ObservableObject, SessionBackend {
         core.$pendingDecision.eraseToAnyPublisher()
     }
 
-    /// `launchDeadline` 只为让「零字节半死」那一档能被单测复现（见 `AgentSessionCore`
-    /// 上同名参数）；生产路径不传，用默认的 25 秒观察窗。
+    /// `launchDeadline` 只服务测试（让「零字节半死」那一档能被复现），生产路径不传，
+    /// 用默认的 25 秒观察窗；它存在的理由与「为什么它不是调松报警的口子」写在
+    /// `AgentSessionCore` 上同名属性。
     init(config: SessionConfig, mode: AgentSessionCore.Mode,
          executable: String, workdir: String, env: [String: String],
          protocolOutputSink: (([UInt8]) -> Void)? = nil,
