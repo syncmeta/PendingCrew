@@ -30,19 +30,14 @@ enum ClaudeTrustSeeder {
             self.write = write
         }
 
-        /// 真家伙：原子写 + **按原样恢复权限**。`~/.claude.json` 是 600（里面有账号），
-        /// 原子替换会带默认权限，不恢复等于把凭证类文件放宽。
+        /// 真家伙。落盘走迁移那边同一个出口（原子写 + 按原样恢复 600 权限），
+        /// 不另写一份 —— 那几行一分家，早晚只改得动其中一处。
         static func real(home: URL, fileManager fm: FileManager = .default) -> IO {
             let url = WorkdirMigrationExecutor.claudeJSONURL(home: home)
             return IO(
                 read: { try Data(contentsOf: url) },
-                write: { data in
-                    let perms = (try? fm.attributesOfItem(atPath: url.path))?[.posixPermissions]
-                    try data.write(to: url, options: .atomic)
-                    if let perms {
-                        try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
-                    }
-                })
+                write: { try WorkdirMigrationExecutor.writeClaudeJSON($0, home: home,
+                                                                      fileManager: fm) })
         }
     }
 
