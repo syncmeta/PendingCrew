@@ -238,11 +238,21 @@ enum WorkdirMigrationExecutor {
         root["projects"] = projects
         let out = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        let perms = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions]
-        try out.write(to: url, options: .atomic)
-        // 原文件是 600；atomic 替换会带默认权限，把它按原样恢复（别把凭证类文件放宽）。
+        try writeClaudeJSON(out, home: home)
+    }
+
+    /// 原子写 `~/.claude.json` + **按原样恢复权限**。原文件是 600（里面有 oauth 账号），
+    /// 原子替换会带默认权限 —— 不恢复等于把凭证类文件放宽。
+    ///
+    /// 迁移（这里）和补种（`ClaudeTrustSeeder.IO.real`）都从这一个出口落盘，
+    /// 别各写各的：这几行一旦分家，早晚有一天只改了其中一处。
+    static func writeClaudeJSON(_ data: Data, home: URL,
+                                fileManager fm: FileManager = .default) throws {
+        let url = claudeJSONURL(home: home)
+        let perms = (try? fm.attributesOfItem(atPath: url.path))?[.posixPermissions]
+        try data.write(to: url, options: .atomic)
         if let perms {
-            try? FileManager.default.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
+            try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
         }
     }
 
