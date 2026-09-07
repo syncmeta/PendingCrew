@@ -78,9 +78,12 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(runner.contains("?.acknowledgeBells()"),
                       "没人在选中 session 时清掉响铃提示：铃铛会长亮")
 
+        // **两处都要挂**：切换条那一行只在终端模式看得到，而右栏平时停在成员列表 ——
+        // 只挂一处的话，人大部分时间根本看不见铃铛，等于响铃被静静吞了。
         let window = try Self.text(of: "CrewSessionWindowView.swift")
-        XCTAssertTrue(window.contains("bellHint"),
-                      "切换条上的 session 行没有显示响铃提示")
+        XCTAssertEqual(
+            window.components(separatedBy: "SessionBellHintView(run: run)").count - 1, 2,
+            "响铃提示没有同时挂在切换条那一行和成员列表那一行上")
     }
 
     /// 上面那条只保证「有人用」；这条钉死**用户实际看的那个面板**在用。

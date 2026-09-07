@@ -511,10 +511,13 @@ struct CrewSessionWindowView: View {
                 // 主名 = displayName（worker=精简 title、captain=机长）—— 与群聊气泡名
                 // 单一真值,一致且 ≤18 字。次要行仍展示「在干嘛」(latestStep 兜到 taskBrief),
                 // 用户明确要「还能知道在干嘛」,brief 不丢。
-                Text(run.displayName)
-                    .font(Theme.Fonts.callout)
-                    .foregroundStyle(Theme.Palette.ink)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(run.displayName)
+                        .font(Theme.Fonts.callout)
+                        .foregroundStyle(Theme.Palette.ink)
+                        .lineLimit(1)
+                    SessionBellHintView(run: run)
+                }
                 // 最新一步动作 + 只读 model/effort pill 同一行：pill 靠右端，
                 // 和「在干嘛」共处选中框内（#489）。
                 HStack(spacing: 6) {
@@ -1025,6 +1028,31 @@ struct CrewSessionWindowView: View {
 
 }
 
+/// **响铃留下的那道痕迹**（人类 Todo #110）。agent 敲 BEL 时不再放系统提示音，
+/// 改成这里亮一下：铃铛只在「你上次看过之后又响过」时出现，点进这个 session 就消；
+/// 悬停能看到它一共响过几次、最后一次什么时候 —— 提示会消，痕迹不会。
+///
+/// **它自己带 `@ObservedObject`**，不是父视图里的一段。理由写在本文件开头那条
+/// 「必须分两层」：`CrewSessionRun` 是嵌套的 ObservableObject，成员列表那一行的
+/// 父视图并不订阅它 —— 嵌在那里的话，铃铛亮不亮要看别的东西碰巧触发了重绘。
+private struct SessionBellHintView: View {
+    @ObservedObject var run: CrewSessionRun
+
+    var body: some View {
+        let trace = run.bellTrace
+        if trace.showsHint {
+            Image(systemName: "bell.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .help(TerminalBellTrace.summary(
+                    count: trace.count,
+                    timeText: trace.lastAt.map {
+                        $0.formatted(date: .omitted, time: .standard)
+                    } ?? "—") ?? "")
+        }
+    }
+}
+
 /// 切换条上的单个 session 项。`@ObservedObject` 订阅 run 的 `@Published status`
 /// 驱动状态点/✕（嵌套 ObservableObject —— 父 view 观察不到 run 自己的变更）。
 private struct SessionBarItemView: View {
@@ -1043,7 +1071,7 @@ private struct SessionBarItemView: View {
             Text(run.displayName)
                 .font(.caption.weight(isSelected ? .semibold : .regular))
                 .lineLimit(1)
-            bellHint
+            SessionBellHintView(run: run)
             if badgeCount > 0 {
                 Text("\(badgeCount)")
                     .font(.caption2.weight(.semibold))
@@ -1074,23 +1102,6 @@ private struct SessionBarItemView: View {
         )
         .contentShape(Capsule())
         .onTapGesture(perform: select)
-    }
-
-    /// **响铃留下的那道痕迹**（人类 Todo #110）。agent 敲 BEL 时不再放系统提示音，
-    /// 改成这里亮一下：铃铛只在「你上次看过之后又响过」时出现，点进这个 session 就消；
-    /// 悬停能看到它一共响过几次、最后一次什么时候 —— 提示会消，痕迹不会。
-    @ViewBuilder private var bellHint: some View {
-        let trace = run.bellTrace
-        if trace.showsHint {
-            Image(systemName: "bell.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .help(TerminalBellTrace.summary(
-                    count: trace.count,
-                    timeText: trace.lastAt.map {
-                        $0.formatted(date: .omitted, time: .standard)
-                    } ?? "—") ?? "")
-        }
     }
 
     @ViewBuilder private var statusDot: some View {
