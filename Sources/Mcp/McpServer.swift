@@ -33,6 +33,10 @@ final class McpServer {
     /// 机长作战板（人类 Todo #66）。**只有机长写得动** —— `plan_add` / `plan_update`
     /// 前面站着 `guard isCaptain`，worker 连工具列表里都看不到它们。与 store 同 `--dir`。
     let plans: CockpitPlanStore
+    /// 定时唤醒账本（`LocalWakeupStore`）。helper 这边**只读它一次** —— 判断
+    /// 「这条计划是不是已经挂着督办」，好把「顺延」当场拒掉。真正的登记/触发/
+    /// 清账仍在 app 侧 runner，这里不写。与 store 同 `--dir`。
+    let wakeups: LocalWakeupStore
     /// **人类的**那本 Todo（`TodoLedger.human`，Todo #62）：方向反过来 —— agent 经
     /// `add_human_todo` 提条目请人拍板，人类在 app 里回应。与 store 同 `--dir`。
     let humanTodos: LocalTodoStore
@@ -49,16 +53,39 @@ final class McpServer {
     /// 不放 crew 工作目录：worktree 被清掉会把图带走，历史气泡就渲染不出来了。
     /// 单测传临时目录（走同一条生产代码路径）。
     let attachmentRoot: URL
+    /// agent 侧会话号账本（`LocalAgentSessionStore`）。`list_sessions` 靠它把
+    /// 我们自己的 sessionId 翻成 runner 的会话号 —— 有会话号才知道该去哪儿找
+    /// 那份成绩单。与 store 同 `--dir`。
+    let agentSessions: LocalAgentSessionStore
+    /// 产出证据取证面（人类 Todo #107 第三件）。默认真实的 `~/.claude/projects`
+    /// 与 `~/.codex/sessions`；单测喂假目录走同一条生产代码路径。
+    let outputProbe: SessionOutputProbe
+
+    /// `list_sessions` 的工具描述。抽成常量是为了让单测直接盯住它 ——
+    /// 「产出证据这一列在什么情况下说不出话」必须写在这里，机长读到
+    /// 「看不出来」时才不会把它当成「没干活」再犯一次同样的病。
+    static let listSessionsToolDescription = """
+        （机长专用）点名：列出本 crew 全部 session 成员的实时状态（干活中/空闲/异常/已退出 + 各自任务），        并给每一行附一列**产出证据**。派活前先点名——有空闲的合适成员就 @ 它接手,别急着 start_session         起新人;有异常的（未登录/额度）先处置或上报。
+        产出证据这一列回答的不是「它显示什么」，而是「它最近真的写出过东西吗、什么时候」——读的是 runner         自己留下的会话成绩单（claude 的 ~/.claude/projects/**/<会话号>.jsonl、codex 的         ~/.codex/sessions/**/rollout-*-<threadId>.jsonl）最近一次写入的时刻。状态是会骗人的：显示「空闲」        而任务书压根没提交过的 session，状态那一列看不出来，产出那一列会明说。
+        三种口径，别混：
+        · 「最近产出 X 前」= 真写过东西，X 是最后一次写距今多久。显示空闲、产出却停在一小时前 → 多半卡住了，        用 inspect_session 看现场。
+        · 「确实没有产出」= 会话号我们记着、该找的地方找过了，一个字都没写过。
+        · 「产出看不出来」= **取证面自己不在场**（还没记下会话号 / runner 不是 claude 或 codex / 那两个目录        读不出来）。它**不等于**「没干活」，只是这条路问不出答案；把它当成「卡住了」去判断，就是把表象当        状态的老毛病换个地方再犯一次。codex 要握手成功才有 threadId，所以 codex 成员刚起来的头几秒本来        就是「看不出来」。
+        **这一列本身也只是一个证据，不是结论**：它证明的是「一个字没产出」，**不是「卡住了」**。        要跟状态、跟「距今多久」一起读才下得了判断 —— 空闲 + 刚刚产出 = 正常待命；空闲 + 产出停在一小时前         = 值得去看现场；干活中 + 确实没有产出 = 它连第一句话都没提交上去。**把这一列单独拎出来当状态用，        就是把表象当状态的老毛病换了个地方犯。**
+        """
 
     init(store: LocalWhiteboardStore, approvals: LocalApprovalStore, control: LocalCrewControlStore,
          crewId: String, sessionId: String,
          isCaptain: Bool = false, sessionLabel: String? = nil,
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
          plans: CockpitPlanStore? = nil,
+         wakeups: LocalWakeupStore? = nil,
          humanTodos: LocalTodoStore? = nil,
          continuations: SessionContinuationStore? = nil,
          agentKey: String? = nil,
-         attachmentRoot: URL? = nil) {
+         attachmentRoot: URL? = nil,
+         agentSessions: LocalAgentSessionStore? = nil,
+         outputProbe: SessionOutputProbe? = nil) {
         self.store = store
         self.approvals = approvals
         self.control = control
@@ -69,6 +96,8 @@ final class McpServer {
         self.quotaDirectory = quotaDirectory ?? LocalWhiteboardStore.defaultDirectory
         self.todos = todos ?? LocalTodoStore()
         self.plans = plans ?? CockpitPlanStore()
+        self.wakeups = wakeups ?? LocalWakeupStore(
+            directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         // 两本账落在同一个 `--dir` 下，只是文件名不同（见 `TodoLedger.fileSuffix`）。
         // 没显式传就照着 agent 那本的目录开一份 human 的 —— 别让调用方漏传一个
         // 就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
@@ -78,6 +107,9 @@ final class McpServer {
         self.agentKey = agentKey
         self.attachmentRoot = attachmentRoot
             ?? Self.defaultAttachmentRoot(whiteboardDirectory: quotaDirectory)
+        self.agentSessions = agentSessions
+            ?? LocalAgentSessionStore(directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
+        self.outputProbe = outputProbe ?? SessionOutputProbe.onThisMachine()
     }
 
     /// 没显式传附件根时用哪儿。
@@ -305,18 +337,19 @@ final class McpServer {
                 // 派活 / 收活 / 翻牌这三个动作发生时顺手更一条，是这块板唯一的活法。
                 tools.append([
                     "name": "plan_add",
-                    "description": "（机长专用）往**你自己的任务列表**上排一条活。这本账只有你写得动，人类只读——它是你整理出来的作战板，不是 Todo（Todo 是别人给你的）。新条目从「没做」起。派活给 worker、接下一件事、拆出一个阶段时顺手排一条；一条一句话说清做什么，别把整段 brief 塞进来。",
+                    "description": "（机长专用）往**你自己的任务列表**上排一条活。这本账只有你写得动，人类只读——它是你整理出来的作战板，不是 Todo（Todo 是别人给你的）。新条目从「没做」起。派活给 worker、接下一件事、拆出一个阶段时顺手排一条；一条一句话说清做什么，别把整段 brief 塞进来。\n**把活交出去时顺手挂上 supervise_after_minutes**（督办）：到点这条还没有结果，系统会把**你**叫醒（只叫你一个，不进群、不打扰别人）。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
                             "title": ["type": "string", "description": "一句话说清这条活是什么。"],
+                            "supervise_after_minutes": ["type": "number", "description": Self.superviseParamDescription],
                         ],
                         "required": ["title"],
                     ],
                 ])
                 tools.append([
                     "name": "plan_update",
-                    "description": "（机长专用）推进任务列表上的一条：追加进度描述 / 翻进度档 / 改标题 / 撤下，一次可以做完几样。\n**四档**：not_started（没做）· in_progress（进行中）· blocked（卡住）· done（完成）——注意跟 Todo 的三档不是一回事。\n**翻成 blocked 必须指明卡在哪条人类 Todo**（blocked_by_number，默认指 human 那本，也就是你请人类拍板的那本）：「卡住」的意思就是**卡在人身上**，不指出是哪一条，人看到板也不知道该推什么。翻成 blocked 时（且仅此一档）会往群里发一条——其余的进度更新**不进群**，这块板存在的意义就是让进度不必靠刷屏传达。\n**什么时候更**：派活、收活、给 Todo 翻牌，这三个动作发生时顺手更一条。板上每条都记着最后更新时间并显示在界面上（「进行中 · 最后更新 3 天前」），久没碰的条目人一眼就看得见——这是你自己装的照妖镜，别让它照出一板子 6 天前。",
+                    "description": "（机长专用）推进任务列表上的一条：追加进度描述 / 翻进度档 / 改标题 / 撤下，一次可以做完几样。\n**四档**：not_started（没做）· in_progress（进行中）· blocked（卡住）· done（完成）——注意跟 Todo 的三档不是一回事。\n**翻成 blocked 必须指明卡在哪条人类 Todo**（blocked_by_number，默认指 human 那本，也就是你请人类拍板的那本）：「卡住」的意思就是**卡在人身上**，不指出是哪一条，人看到板也不知道该推什么。翻成 blocked 时（且仅此一档）会往群里发一条——其余的进度更新**不进群**，这块板存在的意义就是让进度不必靠刷屏传达。\n**把活交出去时顺手挂 supervise_after_minutes**（督办）：到点这条还没有结果，系统只叫醒你一个，不进群。解除督办**只有**把这条翻到 done 或 blocked 一条路——没有「我知道了」这种动作，所以想让它停就得把板更到有结果。\n**什么时候更**：派活、收活、给 Todo 翻牌，这三个动作发生时顺手更一条。板上每条都记着最后更新时间并显示在界面上（「进行中 · 最后更新 3 天前」），久没碰的条目人一眼就看得见——这是你自己装的照妖镜，别让它照出一板子 6 天前。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -327,6 +360,7 @@ final class McpServer {
                             "blocked_by_ledger": ["type": "string", "description": "哪一本 Todo 账：human（你请人类拍板那本，默认）/ agent（人类派给你那本）。两本各自从 #1 起，裸 #N 有歧义，所以要说清是哪本。"],
                             "title": ["type": "string", "description": "改标题（排错了、说法不准时）。"],
                             "drop": ["type": "boolean", "description": "撤下这条（软删，号码保留不复用）。整理板面用。"],
+                            "supervise_after_minutes": ["type": "number", "description": Self.superviseParamDescription],
                         ],
                         "required": ["number"],
                     ],
@@ -459,7 +493,7 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "list_sessions",
-                    "description": "（机长专用）点名：列出本 crew 全部 session 成员的实时状态（干活中/空闲/异常/已退出 + 各自任务）。派活前先点名——有空闲的合适成员就 @ 它接手,别急着 start_session 起新人;有异常的（未登录/额度）先处置或上报。",
+                    "description": Self.listSessionsToolDescription,
                     "inputSchema": ["type": "object", "properties": [String: Any]()],
                 ])
                 tools.append([
@@ -1047,17 +1081,47 @@ final class McpServer {
             guard !planTitle.isEmpty else {
                 return toolResult(id: id, text: "ERROR: title 不能为空 —— 一句话说清这条活是什么。")
             }
+            // 督办参数**先验后写**：不合法就在动账本之前拒掉，绝不留下一条
+            // 「排上了但督办没挂上」的半截状态 —— 那正是机长会以为自己盯着、
+            // 其实没人盯的形态。
+            let addLease: Double?
+            switch SupervisionLease.parseMinutes(args["supervise_after_minutes"]) {
+            case .none: addLease = nil
+            case let .minutes(m): addLease = m
+            case let .refused(why): return toolResult(id: id, text: "ERROR: " + why)
+            }
             guard let planned = plans.add(crewId: crewId, title: planTitle,
                                           bySessionId: sessionId, byName: sessionLabel) else {
                 // nil ≠「没排」这么轻描淡写：账读不出来时本次写已拒，白板上有一条如实警示。
                 return toolResult(id: id, text: "ERROR: 没排进去 —— 任务列表这次读不出来，本次写已拒（群聊白板上有一条系统警示说明是哪种事故）。")
             }
-            return toolResult(id: id, text: "已排上 计划 #\(planned.number)：\(planned.title)（没做）。")
+            var addLines = ["已排上 计划 #\(planned.number)：\(planned.title)（没做）。"]
+            if let addLease {
+                addLines.append(attachSupervisionLease(planNumber: planned.number, minutes: addLease))
+            }
+            return toolResult(id: id, text: addLines.joined(separator: "\n"))
         case "plan_update":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let planNumber = (args["number"] as? Int) ?? (args["number"] as? Double).map(Int.init)
             guard let planNumber, planNumber >= 1 else {
                 return toolResult(id: id, text: "ERROR: number 需为正整数（plan_list 里的 #N）。")
+            }
+            // 同 plan_add：督办参数先验后写。而且**已经挂着督办的计划不许再挂**
+            // —— 重挂就是「顺延」，那正是这套机制不给的动作（见 SupervisionLease）。
+            let updateLease: Double?
+            switch SupervisionLease.parseMinutes(args["supervise_after_minutes"]) {
+            case .none: updateLease = nil
+            case let .minutes(m): updateLease = m
+            case let .refused(why): return toolResult(id: id, text: "ERROR: " + why)
+            }
+            if updateLease != nil,
+               let existing = wakeups.list().first(where: {
+                   $0.id == SupervisionLease.id(crewId: crewId, planNumber: planNumber)
+               }) {
+                return toolResult(id: id, text: """
+                ERROR: 计划 #\(planNumber) 已经挂着督办（下次 \(existing.fireAt)）。督办不能顺延、也不能重挂 —— 这里没有「我知道了 / 已查看 / 顺延」这种动作，因为看一眼不算有结果。
+                解除只有一条路：把 #\(planNumber) 翻到 done（完成）或 blocked（卡住）。
+                """)
             }
             if (args["drop"] as? Bool) == true {
                 guard plans.drop(crewId: crewId, number: planNumber) else {
@@ -1104,6 +1168,9 @@ final class McpServer {
                 // **只有翻成「卡住」才进群**（而且只在这一次翻的时候）：卡住 = 卡在人
                 // 身上，那是群里唯一该出现的一档。其余进度更新一律不进群 —— 这块板
                 // 存在的意义就是让进度不必靠刷屏传达，每推一步发一条等于原地退回去。
+                if let updateLease {
+                    lines.append(attachSupervisionLease(planNumber: item.number, minutes: updateLease))
+                }
                 if CockpitPlan.status(item.status) == .blocked, !wasBlocked {
                     let where_ = item.blockedBy.map { "，" + CockpitPlan.blockerLine($0, state: blockerState($0)) } ?? ""
                     store.appendSessionMessage(
@@ -1242,7 +1309,19 @@ final class McpServer {
                   let snap = try? JSONDecoder().decode(CrewSessionsSnapshot.self, from: data) else {
                 return toolResult(id: id, text: "暂无成员状态快照（app 未在跑或刚启动）。")
             }
-            return toolResult(id: id, text: snap.renderRoster(crewId: crewId))
+            // 产出证据（Todo #107 第三件：判活不判状态）。会话号账本一次读完
+            // （每行现查会各上一次文件锁），取证面本身由 `SessionOutputProbe` 扫。
+            let ledger = agentSessions.records(crewId: crewId)
+            let probe = outputProbe
+            let text = snap.renderRoster(crewId: crewId) { entry in
+                guard let row = ledger[entry.sessionId] else {
+                    // 没这条 = **还没记下会话号**，不是「没干活」：claude 的会话号是
+                    // 起进程前指定的，codex 的要等握手回来才有。
+                    return .unknown("还没记下它的 agent 会话号")
+                }
+                return probe.evidence(runnerKind: row.kind, agentSessionId: row.agentSessionId)
+            }
+            return toolResult(id: id, text: text)
         case "report_to_parent":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let msg = ((args["message"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1661,6 +1740,24 @@ final class McpServer {
 
     /// 作战板的一行行文本（工具回执 / plan_list 共用）。**带上「多久没更新」** ——
     /// 机长自己读这块板时也该被那面照妖镜照到，不能只在 UI 上显示。
+    /// `plan_add` / `plan_update` 上那个督办参数的说明（两处一字不差，所以只写一份）。
+    ///
+    /// 措辞刻意把**解除条件**写死在参数说明里：这是整套机制唯一的出口，写在别处
+    /// 都可能被略过。
+    static let superviseParamDescription = "督办：过这么多分钟（\(Int(SupervisionLease.minMinutes))–\(Int(SupervisionLease.maxMinutes))）这条还没有结果，就把**你**叫醒去过问（只叫你一个，不进群、不打扰别人）。把活交出去/交接时挂上。\n**解除只有一条路：把这条翻到 done 或 blocked。** 没有「我知道了 / 已查看 / 顺延」这种动作 —— 看一眼不算有结果，所以想让它停就得把板更到有结果。仍无结果时它按 1×→2×→4×→8× 退避再叫你。已经挂着督办的计划不能重挂。"
+
+    /// 把一笔督办挂上（写进控制通道，app 侧登记 + 起定时器），返回给机长看的那一行。
+    ///
+    /// **不写白板** —— 白板是给人看的，不是闹钟；挂上的那一刻群里不该多出任何东西。
+    private func attachSupervisionLease(planNumber: Int, minutes: Double) -> String {
+        let fireAt = Date().addingTimeInterval(minutes * 60)
+        control.enqueueSupervisionLease(
+            crewId: crewId, sessionId: sessionId, planNumber: planNumber,
+            fireAt: ISO8601DateFormatter().string(from: fireAt),
+            baseSeconds: minutes * 60)
+        return "已挂督办：\(Int(minutes)) 分钟后（\(Self.iso.string(from: fireAt))）这条若仍没有结果，会把你叫醒。解除只有把 #\(planNumber) 翻到 done 或 blocked 一条路。"
+    }
+
     private func planRows() -> String {
         let now = Date()
         let rows = CockpitPlan.newestFirst(plans.list(crewId: crewId)).map { item -> String in

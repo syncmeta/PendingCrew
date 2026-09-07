@@ -132,10 +132,14 @@ struct BubbleView<Menu: View>: View {
                 }
 
                 if hasText || isStreaming {
-                    MarkdownText(text: message.content,
-                                 allowCodeRun: true,
-                                 citations: citations)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // PENDINGCREW SHIM: 正文过长时默认收起成一行摘要（人类 Todo #104
+                    // 「消息太多太乱了」）。判定在纯逻辑 `CrewMessageFold`，折不起来
+                    // （太短 / 作者没写结论）时这层原样退回 MarkdownText，气泡外观不变。
+                    CrewFoldableMessageText(text: message.content,
+                                            allowCodeRun: true,
+                                            citations: citations,
+                                            isStreaming: isStreaming)
+                        .id(message.id)   // 行复用时按消息身份重置展开态，别把上一条的展开带过来
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(

@@ -365,14 +365,14 @@ enum SessionDaemonControl {
         paths: PendingCrewDaemonPaths = .standard(),
         timeout: TimeInterval = 8
     ) -> Bool {
-        guard let pid = runningDaemonPid(paths: paths) else { return true }
-        guard kill(pid, SIGTERM) == 0 else { return false }
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if runningDaemonPid(paths: paths) == nil { return true }
-            usleep(100_000)
-        }
-        return false
+        // **走 `DaemonStopper`，不再自己写一遍等待循环。**
+        // 原来这里的判据是「锁空了就算停住了」—— 2026-09-07 端到端实测证明那会**早报
+        // 2.4 秒**：`stop()` 第一件事就是放锁，而 `exit(0)` 排在 2.5 秒的收尾预算之后。
+        // 而这个函数的唯一调用场景是「清除本机所有数据」：早报的后果就是**在 daemon
+        // 还活着的时候开始删目录**，正是它自己那条注释要防的「清了个寂寞」。
+        var stopper = DaemonStopper(dataRoot: paths.lock.deletingLastPathComponent())
+        stopper.timeout = timeout
+        return stopper.stop().isSuccess
     }
 }
 
@@ -398,14 +398,27 @@ enum DaemonExitCode {
     static let badUsage: Int32 = 2
 
     /// `PendingCrew --daemon` 启动失败 → 退出码。
-    static func forDaemonStart(_ error: SessionDaemonHost.StartError) -> Int32 {
+    ///
+    /// **同一件事，两个提问人，答案不同** —— `launchedByLaunchd` 就是在问「谁在问」：
+    /// - app 里的 `ViewerSessionClient` 问的是「我要的那个 daemon 起来了吗」。
+    ///   锁被 app 窗口占着时它**没**拿到 daemon，报 0 就是骗它。
+    /// - launchd 问的是「这次运行算不算正常收场」。锁被谁占着都一样：编排者已经有了，
+    ///   这个进程该退，**退得对**。答非 0 的后果是 `KeepAlive={SuccessfulExit=false}`
+    ///   立刻把它拉回来 —— 于是「人开着 GUI」这个正常状态变成一个 10 秒一轮、
+    ///   只在日志里无声滚动的重启循环。
+    ///
+    /// 一个信号当两件事用是常见病根（`try?` 既当「缺席」又当「读不动」是同族）。
+    /// 这里不改原来那个答案，只让第二个提问人自报身份。
+    static func forDaemonStart(_ error: SessionDaemonHost.StartError,
+                               launchedByLaunchd: Bool = false) -> Int32 {
         switch error {
-        case let .alreadyOrchestrated(_, holderIsDaemon):
-            // 占着的是另一个 daemon → 「有一个 daemon 在跑」已经成立，本进程安静退出
-            // 是正确结局。占着的是 app 窗口 / 读不出是谁 → **一个 daemon 都没有**，
-            // 拉起方要的东西没拿到，报 0 就是骗它。
+        case .alreadyOrchestrated(_, let holderIsDaemon):
+            // 已经有编排者 —— 对 launchd 而言期望状态成立，别重启我。
+            if launchedByLaunchd { return ok }
             return holderIsDaemon ? ok : failed
         case .lockUnavailable, .listen:
+            // 这两条对谁都是失败：一个编排者都没有。launchd 该重试（限流 10 秒一次），
+            // 数据根权限修好之后它自己就起来了。
             return failed
         }
     }

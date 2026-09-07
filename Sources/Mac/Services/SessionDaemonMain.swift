@@ -11,7 +11,10 @@ import Foundation
 /// `RunLoop.main`。编排本体（`SessionHost` + `CrewSessionRunner`）与 GUI 那条路
 /// 是同一份代码，差别全在 `SessionProtocolPublishing` 那一个接缝后面（§10）。
 enum SessionDaemonMain {
-    static let flag = "--daemon"
+    /// 字面值在 `SessionDaemonMainFlag`（LocalRunner 那层）—— LaunchAgent 的 plist
+    /// 要带同一个 flag，而它进得了 test bundle、这里进不去。两边各写一份字面量的话，
+    /// 改了一边另一边不会有任何反应。
+    static let flag = SessionDaemonMainFlag.daemon
 
     /// 不是 daemon 就返回 false，调用方照常起 GUI。
     ///
@@ -19,12 +22,12 @@ enum SessionDaemonMain {
     /// 一直到进程退出。
     static func runIfDaemon(_ argv: [String]) -> Bool {
         guard argv.contains(flag) else { return false }
-        MainActor.assumeIsolated { run() }
+        MainActor.assumeIsolated { run(argv) }
         return true
     }
 
     @MainActor
-    private static func run() {
+    private static func run(_ argv: [String]) {
         // 脱离拉起我们的那个进程的会话/进程组。
         //
         // **A1 就靠这一行**：app 是用 `Process` 把我们拉起来的，不脱离的话我们和它
@@ -45,7 +48,8 @@ enum SessionDaemonMain {
             guard let start = error as? SessionDaemonHost.StartError else {
                 exit(DaemonExitCode.failed)
             }
-            exit(DaemonExitCode.forDaemonStart(start))
+            exit(DaemonExitCode.forDaemonStart(
+                start, launchedByLaunchd: PendingCrewLaunchAgent.launchedByLaunchd(argv)))
         }
 
         // 编排本体。**与 GUI 那条路同一份代码**，只是发布口换成了 socket 服务端。
@@ -221,27 +225,36 @@ enum SessionDaemonMain {
 
     @MainActor private static var rosterBag = Set<AnyCancellable>()
 
-    /// SIGTERM → 先停掉所有 session，再放锁退出。
+    /// SIGTERM → 先停掉所有 session，再放锁退出。**这也是唯一的停用通路**
+    /// （`--daemon-stop` 就是替人找到 pid 再发这个信号）。
     ///
-    /// 不这么做的话，「清除本机所有数据」（先停 daemon 再删，§6.1）会留下一地
-    /// 没人管的 agent 子进程 —— 而且 registry 刚好也被那次删除清掉了，**连回收
+    /// 不停 session 就退的话，「清除本机所有数据」（先停 daemon 再删，§6.1）会留下
+    /// 一地没人管的 agent 子进程 —— 而且 registry 刚好也被那次删除清掉了，**连回收
     /// 它们的依据都没了**。
+    ///
+    /// 收尾的三条约束（退出码、预算、**计时器不许挂在主队列上**）连同它们的理由都在
+    /// `DaemonShutdown.swift`，并且有测试钉着 —— P5b 之后「正常退出」是人能不能关掉
+    /// 这个后台的唯一依据，一句注释拦不住改它的人。
     @MainActor
     private static func installGracefulShutdown(
         host: SessionDaemonHost, runner: CrewSessionRunner
     ) {
+        let shutdown = DaemonGracefulShutdown(
+            stopSessions: {
+                MainActor.assumeIsolated {
+                    host.log.write("收尾：停掉 \(runner.runs.count) 个 session")
+                    for run in runner.runs where run.status == .running { run.stop() }
+                }
+            },
+            releaseHost: { MainActor.assumeIsolated { host.stop() } })
         signal(SIGTERM, SIG_IGN)      // 交给 DispatchSource，别让默认动作抢先
         signal(SIGINT, SIG_IGN)
         for sig in [SIGTERM, SIGINT] {
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler {
                 MainActor.assumeIsolated {
-                    host.log.write("收到信号 \(sig)，停掉 \(runner.runs.count) 个 session 后退出")
-                    for run in runner.runs where run.status == .running { run.stop() }
-                    host.stop()
-                    // 给 SIGTERM → SIGKILL 的升级留一点时间（`terminateTree` 是
-                    // 异步的），再退。停不掉的那些由下一轮的孤儿核对兜底。
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { exit(0) }
+                    host.log.write("收到信号 \(sig)")
+                    shutdown.begin()
                 }
             }
             source.resume()

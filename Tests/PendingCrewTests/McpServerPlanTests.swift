@@ -16,8 +16,10 @@ final class McpServerPlanTests: XCTestCase {
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
-                  sessionLabel: "机长", todos: LocalTodoStore(directory: dir),
-                  plans: CockpitPlanStore(directory: dir))
+                  sessionLabel: "机长", quotaDirectory: dir,
+                  todos: LocalTodoStore(directory: dir),
+                  plans: CockpitPlanStore(directory: dir),
+                  wakeups: LocalWakeupStore(directory: dir))
     }
 
     private func call(_ s: McpServer, _ name: String, _ args: String = "{}") -> String {
@@ -163,5 +165,93 @@ final class McpServerPlanTests: XCTestCase {
         XCTAssertTrue(call(s, "plan_update", #"{"number":1,"drop":true}"#).contains("已撤下"))
         XCTAssertTrue(call(s, "plan_list").contains("空的"))
         XCTAssertTrue(call(s, "plan_add", #"{"title":"重排"}"#).contains("#2"))
+    }
+
+    // MARK: - 督办租约（人类 Todo #107：别人停了我不知道）
+
+    private func leaseCommands(_ dir: URL) -> [CrewCommand] {
+        LocalCrewControlStore(directory: dir).drainCommands()
+            .filter { $0.planNumber != nil }
+    }
+
+    func testPlanAddCanAttachASupervisionLease() {
+        let dir = tempDir()
+        let s = server(dir)
+        let out = call(s, "plan_add", #"{"title":"派 codex 修丢 brief","supervise_after_minutes":40}"#)
+        XCTAssertTrue(out.contains("#1"))
+        XCTAssertTrue(out.contains("督办"), "回执要说清挂上了：\(out)")
+        let cmds = leaseCommands(dir)
+        XCTAssertEqual(cmds.count, 1)
+        XCTAssertEqual(cmds.first?.planNumber, 1)
+        XCTAssertEqual(cmds.first?.sessionId, "sess-1", "只叫醒持有这笔委托的那一个 session")
+        XCTAssertEqual(cmds.first?.leaseBaseSeconds ?? 0, 40 * 60, accuracy: 1)
+    }
+
+    /// 默认不挂 —— 不给参数就是普通排一条活，一个唤醒都不该产生。
+    func testPlanAddWithoutTheParameterAttachesNoLease() {
+        let dir = tempDir()
+        _ = call(server(dir), "plan_add", #"{"title":"随手排一条"}"#)
+        XCTAssertTrue(leaseCommands(dir).isEmpty)
+    }
+
+    func testPlanUpdateCanAttachALeaseWhenHandingWorkOff() {
+        let dir = tempDir()
+        let s = server(dir)
+        _ = call(s, "plan_add", #"{"title":"某条活"}"#)
+        _ = leaseCommands(dir)  // 清掉 plan_add 那一批（这里应为空）
+        let out = call(s, "plan_update",
+                       #"{"number":1,"status":"in_progress","progress":"交给 worker 了","supervise_after_minutes":40}"#)
+        XCTAssertTrue(out.contains("督办"), out)
+        XCTAssertEqual(leaseCommands(dir).first?.planNumber, 1)
+    }
+
+    /// **命门**：不许有「我知道了 / 已查看 / 顺延」任何一种动作。
+    /// 已经挂着督办的计划再挂一次 = 顺延，必须拒；解除只有翻状态一条路。
+    func testAnExistingLeaseCannotBeRenewedOrSnoozed() {
+        let dir = tempDir()
+        let s = server(dir)
+        _ = call(s, "plan_add", #"{"title":"某条活","supervise_after_minutes":40}"#)
+        // app 侧登记后账本上就有这一条了（这里直接摆上，等价于命令已被排空执行）。
+        LocalWakeupStore(directory: dir).register(LocalWakeupStore.PendingWakeup(
+            id: SupervisionLease.id(crewId: "c", planNumber: 1), crewId: "c", sessionId: "sess-1",
+            fireAt: "2099-01-01T00:00:00Z", note: "-", planNumber: 1,
+            leaseSince: "2026-09-07T00:00:00Z", leaseBaseSeconds: 2400, leaseStep: 0))
+        let out = call(s, "plan_update", #"{"number":1,"progress":"还在看","supervise_after_minutes":90}"#)
+        XCTAssertTrue(out.contains("ERROR"), out)
+        XCTAssertTrue(out.contains("顺延"), "要明说这条路不存在：\(out)")
+        XCTAssertTrue(out.contains("done") || out.contains("完成"), "要指出唯一的解除路径：\(out)")
+    }
+
+    /// 工具面上根本不该出现「消音 / 已读 / 顺延」这类**参数或工具** —— 一旦有，
+    /// 督办必然退化成「看一眼就算办完」的仪式。
+    ///
+    /// ⚠️ 量的是**工具面上的动作**（参数名 / 工具名），不是文案里的词：说明文字
+    /// 里恰恰要写「没有『我知道了』这种动作」，按词禁会把这句话也禁掉。
+    func testPlanToolsExposeNoAcknowledgeOrSnoozeAction() {
+        let r = server(tempDir(), isCaptain: true)
+            .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)!
+        for forbidden in ["supervise_ack", "acknowledge", "snooze",
+                          "dismiss_supervision", "supervise_cancel", "supervise_extend"] {
+            XCTAssertFalse(r.contains(forbidden), "不许给「我知道了」这个动作：\(forbidden)")
+        }
+        XCTAssertTrue(r.contains("supervise_after_minutes"), "挂得上")
+        XCTAssertTrue(r.contains("解除只有一条路"), "而且解除条件要写在参数说明里")
+    }
+
+    /// 参数不合法 → 在**动账本之前**就拒，不许留下一条排好了却没挂上督办的计划。
+    func testInvalidLeaseParameterIsRefusedBeforeTheBoardIsTouched() {
+        let dir = tempDir()
+        let s = server(dir)
+        let out = call(s, "plan_add", #"{"title":"这条不该被排上","supervise_after_minutes":1}"#)
+        XCTAssertTrue(out.contains("ERROR"), out)
+        XCTAssertTrue(s.plans.list(crewId: "c").isEmpty, "拒了就不该留下半截状态")
+        XCTAssertTrue(leaseCommands(dir).isEmpty)
+    }
+
+    /// 督办**不写白板** —— 白板是给人看的，不是闹钟。挂上的那一刻群里也不该多一条。
+    func testAttachingALeaseWritesNothingToTheWhiteboard() {
+        let dir = tempDir()
+        _ = call(server(dir), "plan_add", #"{"title":"某条活","supervise_after_minutes":40}"#)
+        XCTAssertTrue(whiteboardTexts(dir).isEmpty, "\(whiteboardTexts(dir))")
     }
 }

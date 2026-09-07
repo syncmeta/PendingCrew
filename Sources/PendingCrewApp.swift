@@ -17,6 +17,9 @@ struct PendingCrewApp: App {
     /// 长期职责的唯一所有者（spec §6）。**必须挂在 App 上而不是任何视图上** ——
     /// 挂视图上就会随视图生灭，那正是我们要修的病。
     @StateObject private var sessionHost = SessionHost()
+    /// 菜单栏那个数字（P5b·B）。挂在 App 上而不是任何视图上 —— 它要在主窗口
+    /// 关着的时候仍然在数，那正是这个功能存在的理由。
+    @StateObject private var menuBarAttention = MenuBarAttentionModel()
     #endif
     /// Captain 模板池(BYOK 模式的"本机 captain 池",spec v2 §5.2)。
     /// 登录态下也注入但 UI 不消费 —— 登录态走真 bot 库(后续 task)。
@@ -71,6 +74,29 @@ struct PendingCrewApp: App {
                 }
                 .keyboardShortcut("?", modifiers: .command)
             }
+        }
+        // 菜单栏常驻入口（P5b·B）：不开主窗口也看得到有几件事在等人拍板。
+        // **图标常在、数字只在有事时出现** —— 图标是「点一下进去」的入口，
+        // 消失了人就没地方点；而常年挂一个 0 会训练人忽略它。
+        MenuBarExtra {
+            MenuBarPanel(attention: menuBarAttention)
+                .environmentObject(model)
+                .environmentObject(crewStore)
+                .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
+        } label: {
+            // SF Symbol + 可选数字。有事时用实心图标，安静时用空心 ——
+            // 一眼扫过去不用读数字就知道要不要停下来。
+            Label {
+                if let badge = menuBarAttention.count.badge { Text(badge) }
+            } icon: {
+                Image(systemName: menuBarAttention.count.isQuiet
+                      ? "person.2" : "person.2.badge.gearshape.fill")
+            }
+            .accessibilityLabel(menuBarAttention.count.summary)
+        }
+        .menuBarExtraStyle(.window)
+        .onChange(of: crewStore.crews.count, initial: true) { _, _ in
+            menuBarAttention.start(crewStore: crewStore)
         }
         #endif
     }

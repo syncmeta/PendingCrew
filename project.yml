@@ -56,6 +56,17 @@ targets:
       # app 二进制带 --mcp-serve/--mcp-hook argv 时当 crew-comms helper 跑（PendingCrewEntry）。
       - path: Sources
       - path: Resources
+        # LaunchAgents/ 那份不能当普通资源进 Contents/Resources —— `SMAppService.
+        # agent(plistName:)` 只认 `Contents/Library/LaunchAgents/`（SDK 头文件原话）。
+        # 放错地方的症状是注册时报 kSMErrorJobNotFound，而文件明明在包里。
+        excludes:
+          - "LaunchAgents/**"
+      # 开机自启那份 LaunchAgent（P5b·A）。拷到 app 包里 SMAppService 唯一认的位置。
+      - path: Resources/LaunchAgents/com.pendingname.pendingcrew.daemon.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
       - path: Shared/AppUpdate
     scheme:
       testTargets:
@@ -191,6 +202,10 @@ targets:
       - path: Sources/Stores/RecentWorkingDirectories.swift
       # 成员状态快照（机长 list_sessions 数据源，纯 Foundation Codable）。
       - path: Sources/Stores/CrewSessionsSnapshot.swift
+      # 点名的产出证据三态（Todo #107：判活不判状态）。纯 Foundation + 一层
+      # 文件系统取证 —— 单测喂假的 ~/.claude / ~/.codex 目录跑同一条生产代码路径，
+      # 所以它必须是独立类型而不是 handler 里的一段。
+      - path: Sources/Support/SessionOutputEvidence.swift
       # 通讯录（2026-08-11）：号码解析 + 全机汇总 + contact 寻址。纯 Foundation，
       # 依赖 LocalCrewStore.swift 的 LocalCrew / LocalCrewFile 与上面的快照类型
       # （都已编进 bundle），所以整套编号/寻址逻辑能脱离 app 单测。

@@ -217,9 +217,20 @@ enum CockpitPlan {
         guard let updated else { return "" }
         let seconds = now.timeIntervalSince(updated)
         if seconds < 60 { return "最后更新 刚刚" }
-        if seconds < 3600 { return "最后更新 \(Int(seconds / 60)) 分钟前" }
-        if seconds < 86400 { return "最后更新 \(Int(seconds / 3600)) 小时前" }
-        return "最后更新 \(Int(seconds / 86400)) 天前"
+        return "最后更新 \(elapsedLabel(seconds))前"
+    }
+
+    /// 「3 分钟」/「5 小时」/「2 天」—— 只有量，不带「最后更新」也不带「前」。
+    ///
+    /// 抽出来是因为**第二个调用方出现了**：督办租约到期时要说「已 3 小时没有结果」，
+    /// 那是同一种「过了多久」的说法，只是主语不同。仓库里已经有正确的孪生就照着用，
+    /// 别在另一个文件里再写一遍粒度规则（见 `SupervisionLease.remindText`）。
+    /// 粒度同样故意粗（分钟级以下并入「刚刚」由调用方处理）。
+    static func elapsedLabel(_ seconds: TimeInterval) -> String {
+        if seconds < 60 { return "刚刚" }
+        if seconds < 3600 { return "\(Int(seconds / 60)) 分钟" }
+        if seconds < 86400 { return "\(Int(seconds / 3600)) 小时" }
+        return "\(Int(seconds / 86400)) 天"
     }
 
     /// 行尾那一整句：「进行中 · 最后更新 3 天前」。

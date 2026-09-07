@@ -15,8 +15,23 @@ final class LocalWakeupStore: @unchecked Sendable {
         let id: String
         let crewId: String
         let sessionId: String
-        let fireAt: String
+        var fireAt: String
         let note: String
+        /// **督办租约**（人类 Todo #107，见 `SupervisionLease`）：这条唤醒是替哪条
+        /// 计划盯着的。nil = 普通 `schedule_wakeup` 定时唤醒，两者走同一条账本 /
+        /// 定时器 / 重挂路径 —— 那是仓库里已有的正确孪生，别为督办另起一套。
+        ///
+        /// 以下四个字段全部可选，磁盘上还躺着一批只有前五个字段的老约定，
+        /// 它们必须照常解得开（否则这次加字段会把全部在途约定一次抹掉，
+        /// 正是 #528 修的那一族事故）。
+        var planNumber: Int? = nil
+        /// 挂上督办的那一刻（ISO8601）。到期文案里「已 X 没有结果」从它算起 ——
+        /// **不是**从上一次响铃算，所以退避重排时它不动。
+        var leaseSince: String? = nil
+        /// 基础间隔（秒）。退避在它上面翻倍。
+        var leaseBaseSeconds: Double? = nil
+        /// 退避档位。0 = 还没叫过；**每真的叫到人一次** +1（没叫到不推进）。
+        var leaseStep: Int? = nil
     }
 
     private let directory: URL
