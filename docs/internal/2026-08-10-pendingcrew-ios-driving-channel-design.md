@@ -1,3 +1,48 @@
+## 已失效（2026-09-07 核实）：这份设计的前提没有了，路线 B 的资产也已从 main 上删除
+
+**这份文档不是活的计划。** 它设计的是「手机端驾驶 Mac 上的 crew」，而支撑它的两条前提在
+2026-08-23 / 08-24 被人类先后推翻，路线 B 的实现又在 08-26 被整层删除。读它请当史料，
+不要当待办。下面每条都指得到 commit 或行号（核实基准 `main` = `1c6e349`）：
+
+1. **iOS 这条线整个搁置（2026-08-23，人类原话「当没有 iOS」）。** 发版流水线、真机验证、
+   构建期注入真坐标、端到端连通、「手机端连谁的后端」那个待拍板，全部封存。已做完的东西
+   留在仓库里不删不回滚 —— 但**这只保护既有产物，不构成继续推进的授权**。
+
+2. **PendingCrew 不登录到任何地方（2026-08-24，人类定）。** 这条比上一条更根本，而且它
+   **落进了代码**：`#63` 删掉取得凭据的全部入口，`EdgeBackend` 整层移除。今天
+   `Sources/Services/PendingCrewBackend.swift:6-9` 写着「只剩一个实现 `LocalBackend`」，
+   `Sources/Stores/AppModel.swift:8` 写着 **iOS 上 `backend` 恒 nil**。
+
+3. **路线 B 的资产已经不在树上了 —— 08-20 恢复说明里「1025 行在树上」那段已过期。**
+   - `b79b32a`（2026-08-26）删 viewer 侧：`Sources/Views/Remote/RemoteSessionsView.swift`
+     与 `CrewCenterView` 里的入口。
+   - `df2beda`（2026-08-26）删 runner 侧：`Sources/Remote/`（`SessionProxyProtocol` /
+     `SessionProxyClient` / `CrewSessionServerLink`）、`SessionPermissionRelay`、
+     `CrewMailboxWaker`。
+   - 删除理由写在那两笔的提交信息里：#63 之后它们恒抛 `notAuthenticated` / 恒 nil，是死代码。
+   - 所以 §4.1 定的「路线 B 资产保留不删、标注休眠」**已不再是当前状态**；`Sources/Remote/`
+     今天在 main 上是 0 行（只在两个未合并的 worktree 里还有副本）。
+
+4. **iOS 端此刻编得过，但没有数据源。** 2026-09-07 `a7d3db6` 修好 main 上的两处 iOS 红
+   （`homeDirectoryForCurrentUser` + LaunchAgent 的 `copyFiles` 撞签名），并加了
+   `CrossPlatformSourceTests` 挡第一类复发。但 `docs/architecture.md:763-764` 那句仍然成立：
+   **iOS 只有「编得过」这一层保证**，测试 bundle 只挂 macOS。`Sources/Views/IPadShell.swift`
+   在（crew 列表 → 群聊两屏），配上恒 nil 的 backend，跑起来就是空壳 ——
+   正是本文 §2 自己警告过的那件事（「把 Mac 的视图编译进 iOS，得到四个恒空的漂亮界面」）。
+
+**对「宿主是 PendingCrew iOS 还是 PendingBot crew tab」这个问题的处置**：本文
+§3.5 记的是人类 2026-08-11 定的「宿主 = PendingCrew iOS，PendingBot 只留轻量消息 tab」。
+那条**没有被推翻，但已经没有对象可选** —— A 和 B 都假设手机能从云端拿到 crew 数据，而
+登录入口、edge backend、遥控通道三样今天都不在 main 上。**所以这不是一个待拍板的选择题，
+是一个前提已经消失的问题。** 要重开它，前提是先推翻 08-24 那条「不登录」，那是人类的板，
+不是这份文档的板。
+
+以下内容（含 2026-08-20 的恢复说明和原文）原样保留，供将来重估时参考。**注意恢复说明里
+「正文与当前代码的对照」那一节的基准是 `main` = `ca1011f`（2026-08-20），第 25–26 两条
+已被上面第 3 条推翻。**
+
+---
+
 > ## 恢复说明（2026-08-20 补，非原文）
 >
 > **这一整块是恢复时补的元信息，`---` 分隔线以下是 2026-08-12 最终版原文，一字未改。**
