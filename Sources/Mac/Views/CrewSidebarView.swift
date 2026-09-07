@@ -45,6 +45,9 @@ struct CrewSidebarView: View {
                 case .timeline:
                     CrewTimelineListView(
                         crews: visibleCrews, childCrewTarget: $childCrewTarget)
+                case .chief:
+                    CrewChiefListView(
+                        crews: visibleCrews, childCrewTarget: $childCrewTarget)
                 }
             }
             .listStyle(.sidebar)
@@ -150,7 +153,7 @@ struct CrewSidebarView: View {
         .padding(.horizontal, 10)
         .padding(.top, 6)
         .padding(.bottom, 4)
-        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上")
+        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机长：只列现在该管的，分「在等你回应 / 还在跑 / 安静」三段")
     }
 
     // MARK: - 机器分组

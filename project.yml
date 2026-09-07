@@ -264,6 +264,9 @@ targets:
       # 侧栏时间流视图的排序 / 血缘次要行 / 视图模式持久化（Todo #50）。
       # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。
       - path: Sources/Support/CrewTimelineOrdering.swift
+      # 侧栏总机长视图的三段收敛（Todo #102：在等你回应 / 还在跑 / 安静）。
+      # 同上，纯 Foundation，依赖 CrewSummary。
+      - path: Sources/Support/CrewChiefOverview.swift
       # 侧栏层级视图按最新活动排序（Todo #67：父的键 = max(自己, 全部后代)）。
       # 同上，纯 Foundation。
       - path: Sources/Support/CrewHierarchyOrdering.swift

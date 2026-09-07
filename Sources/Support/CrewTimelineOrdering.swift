@@ -67,6 +67,9 @@ enum CrewSidebarViewMode: String, CaseIterable, Identifiable {
     case hierarchy
     /// 扁平列表，按最新活动倒序。
     case timeline
+    /// 总机长视图（Todo #102）：不列全部 crew，按「现在该管什么」收敛成三段
+    /// （在等你回应 / 还在跑 / 安静）。推导在 `CrewChiefOverview`。
+    case chief
 
     var id: String { rawValue }
 
@@ -86,6 +89,7 @@ enum CrewSidebarViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .hierarchy: return "层级"
         case .timeline: return "时间流"
+        case .chief: return "总机长"
         }
     }
 
@@ -93,6 +97,7 @@ enum CrewSidebarViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .hierarchy: return "list.bullet.indent"
         case .timeline: return "clock"
+        case .chief: return "flag"
         }
     }
 }
