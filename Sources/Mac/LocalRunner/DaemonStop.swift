@@ -26,6 +26,22 @@ import Foundation
 /// 2. **「我读不到」绝不说成「没在跑」**。见 `SessionOrchestratorLock.Presence`。
 /// 3. **不升级到 SIGKILL**。停不下来就大声说停不下来 —— SIGKILL 会跳过收尾，
 ///    留下一地没人管的 agent 子进程，而那正是优雅退出存在的全部理由。
+///
+/// ## 「锁放了」不等于「进程没了」—— 这条是端到端实测踩出来的，单测没抓到
+///
+/// 2026-09-07：隔离数据根里起一个真 daemon 再停，`--daemon-stop` **0.1 秒**就报了
+/// 「已停止」，而那个进程又活了 **2.4 秒**才真正消失。
+///
+/// 原因在收尾顺序里：`SessionDaemonHost.stop()` 第一件事就是 `lock = nil`
+/// （flock 随句柄释放），而 `exit(0)` 排在 `DaemonShutdownPolicy.drainBudget`
+/// 之后。**中间这两秒多，锁是空的、进程还在。**
+///
+/// 拿「锁空了」当「停住了」，又是**一个信号回答两个问题**：flock 回答的是「还有没有
+/// 人在编排」，调用方问的是「它退出了没有」。后果不抽象 ——
+/// `--daemon-stop && rm -rf 数据根` 会在它还活着的时候开删，正是这个退出码本来要防
+/// 的那件事。
+///
+/// 所以判据是**两条都成立**：锁放了 **且** 那个 pid（连启动时刻一起比，防复用）没了。
 enum DaemonStopOutcome: Equatable {
     /// 发了 SIGTERM，并且确认它真的走了。
     case stopped(pid: Int32)
@@ -63,6 +79,9 @@ struct DaemonStopper {
     var presence: () -> SessionOrchestratorLock.Presence
     /// 发 SIGTERM。返回 0 成功，否则是 errno。
     var sendTerm: (Int32) -> Int32
+    /// 那个持有者的进程**真的没了吗**（连启动时刻一起比，防 pid 复用）。
+    /// 见类型注释：只看锁会早报 2.4 秒。
+    var processIsGone: (SessionOrchestratorLock.Holder) -> Bool
     /// 等一小会儿再看。
     var tick: () -> Void
     var now: () -> Date
@@ -74,20 +93,31 @@ struct DaemonStopper {
     init(dataRoot: URL) {
         presence = { SessionOrchestratorLock.presence(dataRoot: dataRoot) }
         sendTerm = { pid in kill(pid, SIGTERM) == 0 ? 0 : errno }
+        processIsGone = DaemonStopper.probeIsGone
         tick = { usleep(100_000) }
         now = Date.init
     }
 
     init(presence: @escaping () -> SessionOrchestratorLock.Presence,
          sendTerm: @escaping (Int32) -> Int32,
+         processIsGone: @escaping (SessionOrchestratorLock.Holder) -> Bool,
          tick: @escaping () -> Void,
          now: @escaping () -> Date,
          timeout: TimeInterval = 8) {
         self.presence = presence
         self.sendTerm = sendTerm
+        self.processIsGone = processIsGone
         self.tick = tick
         self.now = now
         self.timeout = timeout
+    }
+
+    /// 那个 pid 现在还是不是当初那个进程。**光比 pid 不够** —— pid 会复用，
+    /// 而复用的那个跟我们要停的那个毫无关系（判据同 `SessionOrphanReaper`）。
+    static func probeIsGone(_ holder: SessionOrchestratorLock.Holder) -> Bool {
+        guard let live = SessionOrphanReaper.probe(pid: holder.pid) else { return true }
+        return live.startTimeSeconds != holder.startTimeSeconds
+            || live.startTimeMicroseconds != holder.startTimeMicroseconds
     }
 
     func stop() -> DaemonStopOutcome {
@@ -106,11 +136,12 @@ struct DaemonStopper {
                 "没有后台进程在运行，但 PendingCrew 界面（pid \(holder.pid)）正在管理这个数据根。"
                 + "\n要停的话请退出 PendingCrew 界面（⌘Q）。")
         case let .held(holder):
-            return terminate(pid: holder.pid)
+            return terminate(holder)
         }
     }
 
-    private func terminate(pid: Int32) -> DaemonStopOutcome {
+    private func terminate(_ holder: SessionOrchestratorLock.Holder) -> DaemonStopOutcome {
+        let pid = holder.pid
         let code = sendTerm(pid)
         if code != 0 {
             if code == ESRCH {
@@ -121,22 +152,25 @@ struct DaemonStopper {
         }
         let deadline = now().addingTimeInterval(timeout)
         while now() < deadline {
+            var lockIsFree = false
             switch presence() {
             case .none:
-                return .stopped(pid: pid)
-            case let .held(holder) where holder.pid != pid:
-                return .stopped(pid: pid)      // 锁已经换人，那个 daemon 走了
+                lockIsFree = true
+            case let .held(other) where other.pid != pid:
+                lockIsFree = true              // 锁已经换人，那个 daemon 放手了
             case .held, .heldByUnknown:
                 break                          // 还在收尾，继续等
             case let .undecidable(detail):
                 return .refused("发过 SIGTERM 了，但确认不了它有没有停："
                     + "\(detail)（pid \(pid)）")
             }
+            // **两条都要成立。** 只看锁会早报 —— 见类型注释里那 2.4 秒。
+            if lockIsFree, processIsGone(holder) { return .stopped(pid: pid) }
             tick()
         }
         // **不升级到 SIGKILL** —— 见类型注释第 3 条。
         return .refused(
-            "已经发过 SIGTERM，但 pid \(pid) 在 \(Int(timeout)) 秒内没有退出。"
+            "已经发过 SIGTERM，但 pid \(pid) 在 \(Int(timeout)) 秒内没有退出（或没有放锁）。"
             + "\n没有继续升级到 SIGKILL：那会跳过收尾，把它底下的 agent 子进程全变成孤儿。"
             + "\n它多半卡在停某个 session 上；确要强杀请自己执行 `kill -9 \(pid)`，"
             + "然后用 `--daemon-status` 确认没有残留。")

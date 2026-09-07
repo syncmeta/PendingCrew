@@ -27,6 +27,22 @@ import Foundation
 ///
 /// flock 随进程消失由内核释放 —— **崩溃不会留下一把没人持有的锁**。pid 文件会，
 /// 而且那种残留会把「谁也起不来」变成一个要人手删文件才能解的死结。
+///
+/// ## ⚠️ 上面那句保证要成立，`O_CLOEXEC` 是必要条件（2026-09-07 在真机上实测到）
+///
+/// flock 挂在**打开文件描述**上，而 fd 默认**跨 `exec` 继承**。daemon 拿着这把锁去
+/// spawn agent 子进程，那把锁就同时被每一个子进程拿着 —— 实测当时：
+/// ```
+/// lsof orchestrator.lock → daemon 77461 + 它的 11 个 claude 子进程，全都 fd 3u
+/// ```
+/// 于是「进程一死锁就没了」**只对 daemon 自己成立**：daemon 崩了而 session 还活着时，
+/// 锁被那些孤儿子进程继续held 着。下一个 daemon 来取锁会读到一个**已死 pid 的持有者**，
+/// 判成「已经有一个 daemon 在跑」→ 安静退出 0 → **谁也起不来，而且没有任何报错**，
+/// 直到最后一个子进程死掉为止。**这正是上面那段说 pid 文件才会有的死结。**
+///
+/// 换句话说：这个类型选 flock 的**全部理由**，是靠「没人给这些 fd 加 `O_CLOEXEC`」
+/// 这件事在背后无声地否定的。所以两处 `open` 都带 `O_CLOEXEC`，并有测试钉着
+/// （`testTheLockIsNotInheritedByChildProcesses`）。
 enum SessionOrchestratorLock {
     /// 锁文件名。**它落在数据根下**（不是 Application Support 下）——
     /// `PENDINGCREW_DATA_DIR` 挪走数据根之后锁必须跟着挪，否则临时根里的进程会和
@@ -56,14 +72,42 @@ enum SessionOrchestratorLock {
 
     /// 持有句柄。**必须一直被持有** —— 释放（deinit）即解锁。
     final class Handle {
-        private let fd: Int32
+        private var fd: Int32
         let holder: Holder
         init(fd: Int32, holder: Holder) {
             self.fd = fd
             self.holder = holder
         }
-        deinit { flock(fd, LOCK_UN); close(fd) }
+        /// 幂等。正常路径靠 `deinit`；测试要**确定性地**在某一行放锁时用
+        /// `releaseForTesting`（ARC 什么时候回收对象不是判据）。
+        fileprivate func release() {
+            guard fd >= 0 else { return }
+            flock(fd, LOCK_UN)
+            close(fd)
+            fd = -1
+        }
+        deinit { release() }
+
+        var isCloseOnExec: Bool {
+            guard fd >= 0 else { return true }
+            let flags = fcntl(fd, F_GETFD)
+            return flags >= 0 && (flags & FD_CLOEXEC) != 0
+        }
     }
+
+    /// 显式放锁。**只给测试用** —— 生产代码一律靠持有 `Handle`、让它随作用域结束
+    /// 自己放，那样「谁持有编排权」和「对象活着」是同一件事，少一处能忘的地方。
+    static func releaseForTesting(_ handle: Handle) { handle.release() }
+
+    /// 这把锁的 fd 会不会跨 `exec` 传给子进程。**测试用**（见类型注释里
+    /// `O_CLOEXEC` 那一段）。
+    ///
+    /// 为什么钉的是这个标志位、而不是"起个子进程看它拿没拿到锁"：agent session
+    /// 走的是 **SwiftTerm 的 `forkpty`**（裸 fork+exec，不关 fd），而
+    /// Foundation 的 `Process` 在 Darwin 上默认就 CLOEXEC-all —— **拿 `Process`
+    /// 起子进程去验，无论有没有 `O_CLOEXEC` 都是绿的**（2026-09-07 实测，我第一版
+    /// 测试就是这么写的，变异之后照样绿）。判据要对着真正会继承的那条路。
+    static func isCloseOnExecForTesting(_ handle: Handle) -> Bool { handle.isCloseOnExec }
 
     static func acquire(dataRoot: URL, kind: String) -> Outcome {
         let url = dataRoot.appendingPathComponent(fileName)
@@ -72,7 +116,9 @@ enum SessionOrchestratorLock {
         } catch {
             return .unavailable("建不出数据根 \(dataRoot.path)：\(error.localizedDescription)")
         }
-        let fd = open(url.path, O_CREAT | O_RDWR, 0o600)
+        // O_CLOEXEC 见类型注释：不带它，这把锁会被每个 agent 子进程一起拿着，
+        // 而「崩溃不留残锁」正是选 flock 的全部理由。
+        let fd = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard fd >= 0 else {
             return .unavailable("打不开 \(url.path)：\(String(cString: strerror(errno)))")
         }
@@ -147,7 +193,7 @@ enum SessionOrchestratorLock {
 
     static func presence(dataRoot: URL) -> Presence {
         let url = dataRoot.appendingPathComponent(fileName)
-        let fd = open(url.path, O_RDONLY)
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else {
             let code = errno
             if code == ENOENT { return .none }

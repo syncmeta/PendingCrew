@@ -365,14 +365,14 @@ enum SessionDaemonControl {
         paths: PendingCrewDaemonPaths = .standard(),
         timeout: TimeInterval = 8
     ) -> Bool {
-        guard let pid = runningDaemonPid(paths: paths) else { return true }
-        guard kill(pid, SIGTERM) == 0 else { return false }
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if runningDaemonPid(paths: paths) == nil { return true }
-            usleep(100_000)
-        }
-        return false
+        // **走 `DaemonStopper`，不再自己写一遍等待循环。**
+        // 原来这里的判据是「锁空了就算停住了」—— 2026-09-07 端到端实测证明那会**早报
+        // 2.4 秒**：`stop()` 第一件事就是放锁，而 `exit(0)` 排在 2.5 秒的收尾预算之后。
+        // 而这个函数的唯一调用场景是「清除本机所有数据」：早报的后果就是**在 daemon
+        // 还活着的时候开始删目录**，正是它自己那条注释要防的「清了个寂寞」。
+        var stopper = DaemonStopper(dataRoot: paths.lock.deletingLastPathComponent())
+        stopper.timeout = timeout
+        return stopper.stop().isSuccess
     }
 }
 
