@@ -767,8 +767,25 @@ final class CrewSessionRunner: ObservableObject {
         listenCursors[crewId] = WhiteboardCursorPosition(id: last.id, createdAt: last.createdAt)
         let runStates = runs.filter { $0.status == .running && $0.kind.isAgent }
             .map { CrewLocalMentionInjectLogic.RunState(sessionId: $0.sessionId, isBusy: $0.backend.isBusy) }
-        let injections = CrewListenLogic.plannedInjections(
-            entries: entries, listeners: active, runs: runStates, now: Date())
+        // #105 ④ 的第四本账：`listenCursors` 只决定「扫到哪儿」，**不再单独充当
+        // 「已投递」判据**。逐个收听者按**盘上那一本**滤掉它已经收到过的，
+        // 免得 hook 路刚投过、收听路又叫醒一次。
+        //
+        // ⚠️ **只查不推**：收听按 `senders` 过滤，只投一个子集；而盘上那本是**位置**
+        // 游标，推进到某条就等于把它之前的全都标成已投 —— 会把被过滤掉的那些一起
+        // 吞掉。丢消息比重复贵得多，所以这里只读不写。**代价是「收听路投过、hook
+        // 路仍可能再渲染一遍」这一种重复留着**，它进「还挡不住哪些」那份清单。
+        let store = LocalWhiteboardStore.shared
+        let cursorDir = LocalWhiteboardStore.defaultDirectory
+        var injections: [CrewListenLogic.Injection] = []
+        for l in active {
+            let fresh = entries.filter {
+                !WhiteboardCursor(directory: cursorDir, crewId: crewId, sessionId: l.sessionId)
+                    .hasDelivered($0, in: store)
+            }
+            injections += CrewListenLogic.plannedInjections(
+                entries: fresh, listeners: [l], runs: runStates, now: Date())
+        }
         for inj in injections {
             guard let run = runs.first(where: {
                 $0.sessionId == inj.sessionId && $0.status == .running

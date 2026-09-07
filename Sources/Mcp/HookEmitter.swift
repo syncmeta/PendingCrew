@@ -237,19 +237,22 @@ struct HookEmitter {
     /// `commit`。拒绝/断线时保留未读，下一次提交仍能带上原消息。
     func prepareContext(now: Date = Date()) -> PreparedContext? {
         let unread = cursor.unread(in: store)
-        guard let last = unread.last else { return nil }
+        guard let last = unread.messages.last else { return nil }
         // 要的是「**看得见吗**」，不是「该叫醒吗」—— 这条路每轮都跑，本身就不唤醒
         // 任何人，只决定渲染什么进上下文。只 @ 了人类的消息在这里必须可见（2026-08-23
         // 修的正主：过去它对所有 agent 隐身）。
-        let mine = CrewWhiteboardVisibility.visible(unread, to: sessionId, isCaptain: isCaptain)
-        return PreparedContext(context: mine.isEmpty ? nil : render(mine, now: now), last: last)
+        let mine = CrewWhiteboardVisibility.visible(
+            unread.messages, to: sessionId, isCaptain: isCaptain)
+        return PreparedContext(
+            context: mine.isEmpty ? nil : render(mine, omitted: unread.omitted, now: now),
+            last: last)
     }
 
     func commit(_ prepared: PreparedContext) {
         cursor.advance(to: prepared.last, in: store)
     }
 
-    private func render(_ msgs: [LocalWhiteboardMessage], now: Date) -> String {
+    private func render(_ msgs: [LocalWhiteboardMessage], omitted: Int, now: Date) -> String {
         var lines: [String] = []
         let allMessages = store.list(crewId: crewId)
         // 注入面消歧（#62）用的花名册：sessionId → 显示名。判定本身是纯函数
@@ -290,7 +293,13 @@ struct HookEmitter {
         if isCaptain {
             lines.append(contentsOf: renderOrgTree())
         }
-        lines.append("群聊白板·未读：")
+        // #105 ①：有上限就必须自报。**静默截断是我们要防的第三道** ——
+        // 收的人看不到这一行，就会把手里这 30 条当成全部。
+        if omitted > 0 {
+            lines.append("群聊白板·未读（较早的 \(omitted) 条已省略，只给最近 \(msgs.count) 条；要看全的用 read_whiteboard）：")
+        } else {
+            lines.append("群聊白板·未读：")
+        }
         for m in msgs {
             // 有显示名（senderName）→ 直接用名字，让 agent 看得见是谁发的；
             // 无名才退回旧格式（session:<id> / 人类），保持兼容。

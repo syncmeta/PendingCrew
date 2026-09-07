@@ -164,7 +164,7 @@ final class CrewLocalMentionWaker {
             let unread = WhiteboardCursor(
                 directory: cursorDir, crewId: crewId, sessionId: r.sessionId).unread(in: store)
             unreadBySession[r.sessionId] = CrewWhiteboardVisibility.visible(
-                unread, to: r.sessionId, isCaptain: r.role == .captain)
+                unread.messages, to: r.sessionId, isCaptain: r.role == .captain)
         }
         let runStates: [CrewLocalMentionInjectLogic.RunState] = candidates.map {
             .init(sessionId: $0.sessionId, isBusy: $0.backend.isBusy,
@@ -180,8 +180,15 @@ final class CrewLocalMentionWaker {
             recent: { sid in
                 Array((unreadBySession[sid] ?? []).filter { $0.id != d.entryId }.suffix(15))
             })
+        // #105 ④：**盘上那本是唯一判据。** 这条要是已经被 hook 路（或开场注入、
+        // 或 codex 的 turn/start）投给过这个 session，就不该再唤醒一次 —— 从前唤醒路
+        // 只问自己内存里那本，问不到别人投过什么。
+        let entry = store.list(crewId: crewId).first { $0.id == d.entryId }
         for inj in injections {
             guard let run = candidates.first(where: { $0.sessionId == inj.sessionId }) else { continue }
+            if let entry, WhiteboardCursor(
+                directory: cursorDir, crewId: crewId, sessionId: inj.sessionId
+            ).hasDelivered(entry, in: store) { continue }
             // 目标游标推进 = 本地链路的「已消费」标记：回执确认到达才推进（失败
             // 留着未读，目标解卡后 hook 路 / 下次唤醒还能带到，消息不丢）。
             let consume: () -> Void = { [weak self] in
