@@ -12,6 +12,26 @@
 
 ---
 
+### 🟡 iOS 的 LaunchAgent 拷贝没有尺子挡着，而且它躲在编译错误后面
+
+- **发现**: 2026-09-07 · 修 #110 顺手修 main 上的 iOS 红时撞出来的。
+- **形状**：`project.yml` 把开机自启那份 plist 用 `copyFiles` 拷到
+  `Contents/Library/LaunchAgents`（`SMAppService` 只认这个位置）。
+  **iOS 的 app 包是平的**，于是包根下多出一个 `Contents/` 目录，
+  签名阶段报 `unsealed contents present in the bundle root`，整个 iOS 构建挂在 CodeSign 上 ——
+  **报的是签名错，字面上跟 LaunchAgent 一点关系都看不出来**。
+  已加 `destinationFilters: [macOS]` 修掉。
+- **债在哪**：这一处**没有测试挡着**。同批的另一处（跨平台文件用 macOS 独占 API）
+  已经被 `CrossPlatformSourceTests` 钉住了，这一处只有**真跑一趟 iOS build** 才看得见 ——
+  资源/构建阶段的平台归属出错，源码扫描扫不出来。
+- **比这条更该记住的一句**：**「编译错误修完」不等于「iOS 绿了」。**
+  这两处是**串着**的：第一处（编译）不修好，构建根本走不到签名阶段，第二处**根本不会显形**。
+  当天的判据只写了「先跑 iOS build 拿到红的原文，再修，再绿」——
+  **如果修完第一处就宣布绿，会漏掉第二处，而且漏得理直气壮**（编译器不报错了）。
+  所以平台修复的收工条件是**跑完整一趟看到 `** BUILD SUCCEEDED **`**，不是「那行 error 没了」。
+
+---
+
 ### 🔴 替卡住的成员解围：**能用的那个动作不安全，安全的那个动作没有**
 
 - **发现**: 2026-09-07 · 44-1 想替两个停在输入行上的 worker 解围时撞出来的。
