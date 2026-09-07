@@ -276,10 +276,20 @@ struct CrewStatusDotView: View {
             if let color = dotColor {
                 ZStack {
                     // 2pt 背景色描边 —— 让点从头像盘上浮出（点 10pt + 描边圈 14pt）。
-                    Circle()
+                    // 带数字时描边跟着长，胶囊照样是「从盘上浮出来」那个视觉。
+                    Capsule()
                         .fill(Theme.Palette.canvas)
-                        .frame(width: 14, height: 14)
-                    if color.breathes {
+                        .frame(width: badgeWidth + 4, height: 14)
+                    if let badge = yellowBadge(color) {
+                        // 黄色 = 有事等人拍板，**只有它带数字**：红是错误、绿是在干活，
+                        // 都没有「几件」可数。数字口径见 `CrewHumanTodoAttention.badge`。
+                        Capsule()
+                            .fill(fill(color))
+                            .frame(width: badgeWidth, height: 10)
+                        Text(badge)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .foregroundStyle(.black.opacity(0.75))
+                    } else if color.breathes {
                         BreathingDot(size: 10, color: fill(color))
                     } else {
                         Circle()
@@ -310,6 +320,18 @@ struct CrewStatusDotView: View {
                     isAwaitingReply: $0.awaitingReply != nil)
             },
             attention: attention)
+    }
+
+    /// 黄点上要显示的数字；没有数字（或不是黄色）时为 nil。
+    /// **0 不显示**由 `CrewHumanTodoAttention.badge` 保证，这里不重复判。
+    private func yellowBadge(_ color: CrewStatusDotColor) -> String? {
+        color == .yellow ? attention.badge : nil
+    }
+
+    /// 数字越长胶囊越宽；没数字就是原来那个 10pt 圆点的宽度（画圆时也用它）。
+    private var badgeWidth: CGFloat {
+        guard let badge = attention.badge, dotColor == .yellow else { return 10 }
+        return max(10, 6 + CGFloat(badge.count) * 5)
     }
 
     /// 配色对齐右栏切换条状态点（`SessionBarItemView`）：系统语义色。
