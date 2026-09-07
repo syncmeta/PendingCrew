@@ -136,6 +136,53 @@ final class SessionOutputEvidenceTests: XCTestCase {
         XCTAssertNotNil(probe.evidence(runnerKind: "codex", agentSessionId: "aaaa-bbbb").producedAt)
     }
 
+    // MARK: - ②b 这个平台上压根没有取证面（iOS）
+
+    /// **iOS 上没有「这台机器的 claude/codex 会话目录」这回事** —— agent 跑在 Mac 上，
+    /// 那两棵目录树不在这台设备里。所以那边的答案必须是「看不出来」，
+    /// **绝不能是「确实没有产出」**：后者按本文件的定义是**断言**，一旦说出口就是
+    /// 一句言之凿凿的假话。
+    ///
+    /// 为什么不照抄 `CockpitTaskLedger.currentHome`（「iOS 退回沙盒 home」）：
+    /// 那个孪生要的是「找个 home 兜底读账」，读不到就回落；**这里要的是「说清楚
+    /// 我看不看得见」**。两者只是长得像。
+    ///
+    /// 测试跑在 macOS 上（单测 bundle 只挂 macOS），所以这里直接钉那个 iOS 分支
+    /// **会返回的那个值**；`onThisMachine` 的 iOS 分支就返回它，见下一条。
+    func test_本平台没有取证面时是看不出来_而不是确实没有产出() {
+        let probe = SessionOutputProbe.noForensicSurfaceOnThisPlatform
+
+        for kind in ["claude_code", "codex"] {
+            guard case let .unknown(reason) = probe.evidence(
+                runnerKind: kind, agentSessionId: "01a067a9-620d-7a90-9c37-276d9166363c") else {
+                return XCTFail("\(kind)：取证面不在这个平台上时必须是「看不出来」")
+            }
+            XCTAssertFalse(reason.contains("没有产出"),
+                           "「看不出来」那句里不许出现「没有产出」：\(reason)")
+        }
+        let text = SessionOutputEvidence.unknown("x").rosterColumn(now: now)
+        XCTAssertTrue(text.contains("这不等于它没干活"), "渲染那半也要照旧说清楚")
+    }
+
+    /// mac 侧一个字节都不许变：`onThisMachine()` 仍然指向真家目录下那两棵树，
+    /// 且**不带**「本平台没有取证面」那面旗（带了的话 mac 上会集体变成「看不出来」）。
+    func test_mac上onThisMachine仍指向真家目录且没有平台旗() {
+        #if os(macOS)
+        let probe = SessionOutputProbe.onThisMachine()
+        XCTAssertNil(probe.platformHasNoForensicSurface,
+                     "mac 上不许带这面旗 —— 带了就等于把整台机器的产出证据关掉")
+        XCTAssertTrue(probe.claudeProjectsDirectory.path.hasSuffix(".claude/projects"),
+                      "claude 取证面路径变了：\(probe.claudeProjectsDirectory.path)")
+        XCTAssertTrue(probe.codexSessionsDirectory.path.hasSuffix(".codex/sessions"),
+                      "codex 取证面路径变了：\(probe.codexSessionsDirectory.path)")
+        XCTAssertEqual(probe.claudeProjectsDirectory.path,
+                       FileManager.default.homeDirectoryForCurrentUser
+                           .appendingPathComponent(".claude/projects").path)
+        #else
+        XCTAssertNotNil(SessionOutputProbe.onThisMachine().platformHasNoForensicSurface)
+        #endif
+    }
+
     // MARK: - ③ 取证面自己不在场 → 看不出来（不是「没产出」）
 
     func test_取证面目录不存在时是看不出来而不是没有产出() throws {

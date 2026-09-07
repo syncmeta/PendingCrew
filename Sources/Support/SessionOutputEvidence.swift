@@ -104,16 +104,56 @@ struct SessionOutputProbe {
     let claudeProjectsDirectory: URL
     let codexSessionsDirectory: URL
 
-    static func onThisMachine(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> SessionOutputProbe {
-        SessionOutputProbe(
+    /// **这个平台上压根没有取证面**时的人话原因；macOS 上恒 nil。
+    /// 非 nil 时 `evidence` 第一句就返回 `.unknown(它)` —— 见 `onThisMachine`。
+    let platformHasNoForensicSurface: String?
+
+    init(claudeProjectsDirectory: URL, codexSessionsDirectory: URL,
+         platformHasNoForensicSurface: String? = nil) {
+        self.claudeProjectsDirectory = claudeProjectsDirectory
+        self.codexSessionsDirectory = codexSessionsDirectory
+        self.platformHasNoForensicSurface = platformHasNoForensicSurface
+    }
+
+    /// **iOS 上没有「这台机器的 claude/codex 会话目录」这回事** —— agent 跑在 Mac 上，
+    /// 那两棵目录树不在这台设备里。所以那边的答案必须是「看不出来（这个平台上看不出来）」。
+    ///
+    /// 这个文件此前没有任何 `#if`，而 `Sources/` 整个目录被同一个 target 一起编进
+    /// iOS（`project.yml`: `supportedDestinations: [iOS, macOS]` + `sources: Sources`），
+    /// 所以 `homeDirectoryForCurrentUser` 让 iOS 端**必然**编不过。
+    ///
+    /// **但「让它编过」不是判据。**仓库里有个长得很像的孪生
+    /// （`CockpitTaskLedger.currentHome`：iOS 退回 `NSHomeDirectory()`），照抄它
+    /// 能编过，语义却不对 —— 那个孪生要的是「找个 home 兜底读账，读不到就回落」，
+    /// **这里要的是「说清楚我看不看得见」**。沙盒 home 底下当然没有 `.claude/projects`，
+    /// 于是探针会去报「取证面读不出来」这种**像是本机读失败**的原因，而不是
+    /// 「这个平台上根本没有这回事」；本文件开头那段规矩正是为这种「言之凿凿的假话」写的。
+    /// 所以这里分平台给出**不同的探针**，而不是分平台给出不同的 home。
+    static func onThisMachine() -> SessionOutputProbe {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return SessionOutputProbe(
             claudeProjectsDirectory: home.appendingPathComponent(".claude/projects"),
             codexSessionsDirectory: home.appendingPathComponent(".codex/sessions"))
+        #else
+        return .noForensicSurfaceOnThisPlatform
+        #endif
     }
+
+    /// 取证面在这个平台上根本不存在。两个目录只是占位（永远走不到），
+    /// 真正起作用的是那面旗。
+    static let noForensicSurfaceOnThisPlatform = SessionOutputProbe(
+        claudeProjectsDirectory: URL(fileURLWithPath: "/dev/null"),
+        codexSessionsDirectory: URL(fileURLWithPath: "/dev/null"),
+        platformHasNoForensicSurface: "这台设备上没有 claude/codex 的会话目录（agent 跑在 Mac 上）")
 
     /// `runnerKind` 传 `LocalCodingAgentKind.rawValue`（`claude_code` / `codex`）。
     /// 任何一个入参「不知道」都必须落进 `.unknown` —— 这个函数里没有一处
     /// `?? .noOutput`，也不许有。
     func evidence(runnerKind: String?, agentSessionId: String?) -> SessionOutputEvidence {
+        // 取证面根本不在这个平台上 → 只能是「看不出来」。放在最前面：连会话号都
+        // 不必问，问了也答不出，而任何一句更具体的话在这里都会是编的。
+        if let reason = platformHasNoForensicSurface { return .unknown(reason) }
         let sessionId = (agentSessionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sessionId.isEmpty else { return .unknown("还没记下它的 agent 会话号") }
         switch runnerKind {
