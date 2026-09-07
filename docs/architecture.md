@@ -826,6 +826,13 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 > 当场自命中。所以现在选的是 `import ServiceManagement`（import 语句不会出现在
 > 散文里）与 `MenuBarExtra`。（前两条是 2026-08-26 翻这张表时踩的，第三条是同一天
 > 翻 P4 那一行时踩的。）
+>
+> **2026-09-07 这把尺子失效了，别再用它判 P5**：`MenuBarExtra` 已经命中（菜单栏项
+> 落地了），而 `import ServiceManagement` **回到了零命中** —— 因为登录项先做出来、
+> 又被人类否掉整个删了。**「零命中」现在同时意味着「还没做」和「做了又删了」，
+> 这把尺子分不出来。** 它不是过期，是**语义被劈成了两半**：一个只有一档的读数，
+> 被拿去回答一个有三档的问题（没做 / 做了 / 做了又撤）。
+> P5 的现状以上面那一行的文字为准，不要再 grep 这两个符号。
 
 | 阶段 | 做什么 | 现状 |
 |---|---|---|
@@ -834,7 +841,7 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 | **P2** 协议 + 进程内传输 | 定义全部消息、`RemoteSessionBackend` 走传输层 | ✅ `SessionProtocol.swift` / `InProcessTransport.swift` / `RemoteSessionBackend.swift`（`c57e24d`）。`attach` 按 backend 种类分流：终端型发 kind=2 快照帧，codex 型发 daemon 内存里的结构化历史 |
 | **P3** 快照 + 背压 | 终端缓冲区快照序列化（全项目风险最高的一块） | ✅ `TerminalSnapshotEncoder.swift` / `SessionAttachQueue.swift`（`c2e6909`）。真 TUI 语料在 `Tests/Fixtures/`，它逮到了合成语料测不出的「延迟折行 + 整行空白续行凭空消失」 |
 | **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ✅ `UnixSocketTransport.swift` / `SessionProtocolEndpoints.swift` / `SessionDaemonHost.swift` / `SessionDaemonMain.swift` / `HeadlessSessionBackend.swift` / `SessionOrphanReaper.swift` / `ViewerSessionClient.swift`。**总闸 `PENDINGCREW_BACKEND` 默认仍是 `inproc`**，daemon 是显式开关 |
-| **P5** 常驻与善后 | `SMAppService.agent` 登录项、菜单栏项、`--daemon-status` | ⬜ 未开工（孤儿回收的双重核对已随 P4 落地，见下） |
+| **P5** 常驻与善后 | ~~`SMAppService.agent` 登录项~~、菜单栏项、`--daemon-status`、`--daemon-stop` | 🟡 **登录项已作废**（2026-09-07 人类原话：「不要开机自启。我不是要常驻后台。我意思是 session 能恢复就可以了」）；菜单栏项 ✅ `MenuBarPanel.swift`；`--daemon-status` / `--daemon-stop` ✅；孤儿回收的双重核对已随 P4 落地 |
 
 **P4 已经改变了什么，读代码时要知道**（`inproc` 默认路径上一条都不生效）：
 

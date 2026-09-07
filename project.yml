@@ -56,22 +56,6 @@ targets:
       # app 二进制带 --mcp-serve/--mcp-hook argv 时当 crew-comms helper 跑（PendingCrewEntry）。
       - path: Sources
       - path: Resources
-        # LaunchAgents/ 那份不能当普通资源进 Contents/Resources —— `SMAppService.
-        # agent(plistName:)` 只认 `Contents/Library/LaunchAgents/`（SDK 头文件原话）。
-        # 放错地方的症状是注册时报 kSMErrorJobNotFound，而文件明明在包里。
-        excludes:
-          - "LaunchAgents/**"
-      # 开机自启那份 LaunchAgent（P5b·A）。拷到 app 包里 SMAppService 唯一认的位置。
-      # **只给 macOS**：iOS 的 app 包是平的，没有 `Contents/`，这份拷贝会在包根下
-      # 造出一个 `Contents/` 目录 → 签名时 `unsealed contents present in the bundle
-      # root`，整个 iOS 构建挂在 CodeSign 上（而且报的是签名错，看不出跟它有关）。
-      # 开机自启本来也只有 Mac 侧有。
-      - path: Resources/LaunchAgents/com.pendingname.pendingcrew.daemon.plist
-        destinationFilters: [macOS]
-        buildPhase:
-          copyFiles:
-            destination: wrapper
-            subpath: Contents/Library/LaunchAgents
       - path: Shared/AppUpdate
     scheme:
       testTargets:

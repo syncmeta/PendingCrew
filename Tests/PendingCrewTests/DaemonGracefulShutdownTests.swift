@@ -1,47 +1,13 @@
 #if os(macOS)
 import XCTest
 
-/// 「人按了停 → daemon 真的停住 → launchd **不**把它拉回来」这条链（P5b）。
+/// 「人按了停 → daemon 真的停住」这条链。
 ///
-/// 这条链断掉的症状不是崩溃，是**人再也停不掉这个后台**：停用命令报成功、进程也确实
-/// 退了，然后 launchd 立刻把它拉回来，看起来像"停不掉"，查不出所以然。所以它必须有
-/// 测试，不能只有注释 —— 抽走它的那次改动通常跟这个功能毫不相干。
+/// 断掉的症状不是崩溃，是**停用命令一直等到超时、报「停不掉」**，而人得自己去
+/// `kill -9`。它必须有测试、不能只有注释 —— 抽走它的那次改动通常跟这个功能毫不相干。
+///
+/// （原来这里还有 4 条是给 launchd 的，开机自启被人类否掉之后一起删了。）
 final class DaemonGracefulShutdownTests: XCTestCase {
-
-    // MARK: - launchd 那半：什么样的收场会被拉回来
-
-    /// 链条本身：**我们真正 exit 的那个码**，喂给**我们真正要配的那条策略**，结论必须是
-    /// 「不重启」。两边都不许换成字面量 —— 换了这条测试就不再检查任何东西了。
-    func testGracefulExitCodeIsOneLaunchdWillNotRestart() {
-        let policy = LaunchAgentRestartPolicy.onlyWhenExitWasUnsuccessful
-        XCTAssertFalse(
-            policy.wouldRestart(after: .exited(DaemonShutdownPolicy.gracefulExitCode)),
-            "优雅退出被 launchd 当成异常 —— 人按了停，几秒后它自己回来了")
-    }
-
-    /// 「崩了能自己恢复」那半仍然要成立，否则这条策略就退化成"不重启"。
-    func testAbnormalEndingsStillGetRestarted() {
-        let policy = LaunchAgentRestartPolicy.onlyWhenExitWasUnsuccessful
-        XCTAssertTrue(policy.wouldRestart(after: .exited(1)))
-        XCTAssertTrue(policy.wouldRestart(after: .killedBySignal(SIGKILL)),
-                      "被信号打死（含崩溃）必须算不成功，否则 daemon 崩了就没人拉了")
-    }
-
-    /// 为什么不能图省事写 `KeepAlive = true`：那一档会把**正常停用**也拉回来。
-    /// 这条测试是那个选项的反例，留着免得有人"简化"。
-    func testKeepAliveAlwaysWouldTakeAwayTheAbilityToStop() {
-        XCTAssertTrue(
-            LaunchAgentRestartPolicy.always
-                .wouldRestart(after: .exited(DaemonShutdownPolicy.gracefulExitCode)),
-            "KeepAlive=true 下正常退出也会被拉回来 —— 这正是我们不选它的原因")
-    }
-
-    /// plist 里落的字面值就是这条策略，不是另写一份。
-    func testKeepAlivePlistValueMatchesThePolicy() {
-        let value = LaunchAgentRestartPolicy.onlyWhenExitWasUnsuccessful.keepAlivePlistValue
-        XCTAssertEqual(value as? [String: Bool], ["SuccessfulExit": false])
-        XCTAssertEqual(LaunchAgentRestartPolicy.always.keepAlivePlistValue as? Bool, true)
-    }
 
     // MARK: - 进程那半：收尾真的走得到 exit
 
@@ -87,9 +53,9 @@ final class DaemonGracefulShutdownTests: XCTestCase {
     /// **这条是这个文件里最重要的一条。**
     ///
     /// 收尾计时器原来挂在 `DispatchQueue.main.asyncAfter` 上 —— 主队列被卡住时它
-    /// 永远走不到 `exit(0)`，进程只能被 SIGKILL 收尾，launchd 一看是异常退出，
-    /// **把它拉回来**。这里用「测试线程（= 主线程）停在信号量上」把主队列**真的**堵死，
-    /// 再看退出走不走得到。
+    /// 永远走不到 `exit(0)`，于是 `--daemon-stop` 会一直等到超时、报「停不掉」，
+    /// 人得自己去 `kill -9`（而 `kill -9` 跳过收尾，会把 agent 子进程全变成孤儿）。
+    /// 这里用「测试线程（= 主线程）停在信号量上」把主队列**真的**堵死，再看退出走不走得到。
     ///
     /// 变异自证：把 `DaemonGracefulShutdown.offMainQueue` 换回
     /// `DispatchQueue.main.asyncAfter`，这条会在 2 秒后超时变红。
@@ -108,7 +74,7 @@ final class DaemonGracefulShutdownTests: XCTestCase {
         // 从这一行起主线程停住 —— 主队列一个 block 都跑不了，正是 `run.stop()`
         // 卡住主队列时的形状。
         XCTAssertEqual(exited.wait(timeout: .now() + 2), .success,
-                       "主队列被占住时退出就走不到了 —— 那正是「人按了停、launchd 又把它拉回来」的形状")
+                       "主队列被占住时退出就走不到了 —— 那正是「人按了停、它却停不掉」的形状")
         XCTAssertEqual(code.value, DaemonShutdownPolicy.gracefulExitCode)
     }
 }

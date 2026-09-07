@@ -5,12 +5,12 @@ import SwiftUI
 /// 菜单栏点开之后的那一小块（P5b·B，人类 Todo #7）。
 ///
 /// 人类给的用途很窄，照着做别扩：**不开主窗口也能看到有没有事在等他拍板，点一下进去。**
-/// 所以这里只有三样东西：等你的是哪几件、一个「打开 PendingCrew」、一个开机自启开关。
+/// 所以这里只有两样东西：等你的是哪几件、一个「打开 PendingCrew」。
 /// 不放列表、不放操作 —— 真要处理，进主窗口。
+///
+/// （曾经还有一个「开机自启」开关，2026-09-07 人类明确否掉常驻方向后一并删了。）
 struct MenuBarPanel: View {
     @ObservedObject var attention: MenuBarAttentionModel
-    @State private var autostart = DaemonAutostartState.off
-    @State private var autostartNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -46,21 +46,11 @@ struct MenuBarPanel: View {
                 }
             }
 
-            Toggle("开机自启（后台异常退出时自动拉起）", isOn: Binding(
-                get: { autostart.isRunningAtLogin },
-                set: { toggleAutostart(on: $0) }))
-                .toggleStyle(.checkbox)
-            Text(autostartNote ?? autostart.text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
             Divider()
             Button("退出 PendingCrew") { NSApp.terminate(nil) }
         }
         .padding(12)
         .frame(width: 300, alignment: .leading)
-        .onAppear { autostart = DaemonAutostart.state }
     }
 
     private func staleAgeText() -> String {
@@ -69,12 +59,5 @@ struct MenuBarPanel: View {
         return "读不到账了，下面这个数是 \(seconds) 秒前的。"
     }
 
-    /// **回执直接显示在面板上。** 打开可能落在「还要去系统设置里点头」那一档，
-    /// 关闭会把正在跑的后台一并停掉 —— 这两件事不说，人只能靠猜。
-    private func toggleAutostart(on: Bool) {
-        let receipt = on ? DaemonAutostart.enable() : DaemonAutostart.disable()
-        autostart = receipt.state
-        autostartNote = receipt.text
-    }
 }
 #endif

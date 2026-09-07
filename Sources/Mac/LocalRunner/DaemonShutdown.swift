@@ -1,76 +1,32 @@
 #if os(macOS)
 import Foundation
 
-/// 「人按了停 → daemon 真的停住 → launchd **不**把它拉回来」这条链（P5b）。
+/// 「人按了停 → daemon 真的停住」这条链。
 ///
-/// ## 为什么这条链要单独有个文件、还要有测试
+/// ## 收尾的两条约束，以及为什么它们值得有测试
 ///
-/// P5b 给 daemon 装上 launchd 的 `KeepAlive = { SuccessfulExit = false }`：**只在
-/// 异常退出时重启**。于是「正常停用」这个能力，整个挂在一件事上 —— 优雅退出必须
-/// 以**成功退出码**收场。它今天是对的，但**这条正确性是借来的**：
+/// SIGTERM 之后的收尾是：停光 session → 放锁 → 到点 `exit`。
+/// 它原本借了一样东西：`exit` 挂在 `DispatchQueue.main.asyncAfter(deadline: .now() + 2.5)`
+/// 上，**要走到它，主队列得在这 2.5 秒里活着**。任何一个 `run.stop()` 把主队列卡住，
+/// 收尾就走不到 `exit`，进程只能被 SIGKILL 收尾 —— 而 `--daemon-stop` 会一直等到
+/// 超时、报「停不掉」，人得自己去 `kill -9`。
 ///
-/// - 借的第一样：`installGracefulShutdown` 那一行恰好写着 `exit(0)`。谁哪天改成
-///   `exit(1)`（"顺手把失败也报出来"），或者让它被 SIGKILL 收尾，launchd 眼里
-///   就是异常退出 → 立刻拉回来 → **人再也停不掉这个后台**。
-/// - 借的第二样（更容易发生，2026-09-07 核 `SessionDaemonMain:243` 时量到的）：
-///   那个 `exit(0)` 原本挂在 `DispatchQueue.main.asyncAfter(deadline: .now() + 2.5)`
-///   上。**它要走到，得主队列在这 2.5 秒里活着。** 任何一个 `run.stop()` 把主队列
-///   卡住、或 launchd 的耐心先到，收尾就走不到 `exit(0)` —— 进程被 SIGKILL 收尾，
-///   launchd 看到非正常退出，**于是把它拉回来。人按了停，结果是重启。**
+/// **这一样直接还掉**：收尾计时器搬到 global 队列，不再问主队列借命
+/// （`DaemonGracefulShutdownTests` 用「测试线程停在信号量上」把主队列真的堵死来钉它）。
 ///
-/// 第二样这里**直接改掉**（收尾计时器搬离主队列），不是钉住它 —— 借来的前提能还掉
-/// 就别只写注释。第一样还不掉（总得有人写 `exit`），所以把那个码收进
-/// `DaemonShutdownPolicy.gracefulExitCode`，**同一个值同时喂给真正 exit 的那一行和
-/// 判定 launchd 会不会重启的那条策略**：拆成两个字面量的那一刻链就断了，而且断得
-/// 没有声音。`DaemonGracefulShutdownTests` 逐条变异自证过。
+/// > 2026-09-07 记：这个文件原来还有一半是给 launchd 的 —— 开机自启那版要靠
+/// > 「优雅退出必须是成功退出码」才不会被 `KeepAlive` 拉回来。人类否掉常驻方向之后
+/// > 没有 launchd 了，那半（`LaunchAgentRestartPolicy`）连同它的测试一起删了。
+/// > **退出码本身留着**：`--daemon-stop` 和安装脚本仍然读它。
 enum DaemonShutdownPolicy {
-    /// 优雅退出的退出码。**别把它换成字面量** —— 见类型注释。
+    /// 优雅退出的退出码。`--daemon-stop` 与安装脚本都按它判「停干净了没有」。
     static let gracefulExitCode: Int32 = DaemonExitCode.ok
 
     /// 停 session 的预算：到点无论停没停干净都退。
     ///
-    /// 停不掉的那些由下一轮的孤儿核对兜底 —— **赖在这里不退才是最坏的结局**，
-    /// 因为 launchd 那边等不到成功退出。
+    /// 停不掉的那些由下一轮的孤儿核对兜底 —— **赖在这里不退才是最坏的结局**：
+    /// 停用命令会一直等到超时，然后告诉人「停不掉，自己 kill -9」。
     static let drainBudget: TimeInterval = 2.5
-}
-
-/// launchd `KeepAlive` 的语义，写成**可判定**的形状。
-///
-/// 之所以要把它变成代码而不是一句注释：这条策略的正确性只有在「拿真实的收场喂给
-/// 它」时才检查得了，而真实的收场就是 `DaemonShutdownPolicy.gracefulExitCode`。
-enum LaunchAgentRestartPolicy: Equatable {
-    /// `KeepAlive = true`：**永远拉回来**。正常退出也拉。
-    /// 这一档就是「装上撤不掉」的那个后台，我们要的不是它。
-    case always
-    /// `KeepAlive = { SuccessfulExit = false }`：只在**上一次退出不成功**时拉回来。
-    case onlyWhenExitWasUnsuccessful
-
-    /// 进程是怎么收场的。
-    enum Termination: Equatable {
-        case exited(Int32)
-        /// 被信号打死（SIGKILL / 崩溃）。launchd 一律算不成功。
-        case killedBySignal(Int32)
-    }
-
-    func wouldRestart(after termination: Termination) -> Bool {
-        switch self {
-        case .always:
-            return true
-        case .onlyWhenExitWasUnsuccessful:
-            switch termination {
-            case let .exited(code): return code != 0
-            case .killedBySignal: return true
-            }
-        }
-    }
-
-    /// 写进 LaunchAgent plist 的 `KeepAlive` 值。
-    var keepAlivePlistValue: Any {
-        switch self {
-        case .always: return true
-        case .onlyWhenExitWasUnsuccessful: return ["SuccessfulExit": false]
-        }
-    }
 }
 
 /// 收到 SIGTERM/SIGINT 之后的收尾：停光 session → 放锁 → 到点退出。

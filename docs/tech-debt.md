@@ -21,6 +21,11 @@
   签名阶段报 `unsealed contents present in the bundle root`，整个 iOS 构建挂在 CodeSign 上 ——
   **报的是签名错，字面上跟 LaunchAgent 一点关系都看不出来**。
   已加 `destinationFilters: [macOS]` 修掉。
+  **2026-09-07 晚更新：这一处的实例没有了** —— 人类否掉常驻方向，开机自启整个删掉，
+  那条 `copyFiles` 相位连同 plist 一起从 `project.yml` 移除。**但这条债不销**：
+  债从来不是那份 plist，是**「往 app 包里拷文件」这类改动没有任何尺子挡着，
+  而它在 iOS 上表现为一个字面上毫不相干的 CodeSign 错误**。下一个加 `copyFiles`
+  的人会原样再踩一次。
 - **债在哪**：这一处**没有测试挡着**。同批的另一处（跨平台文件用 macOS 独占 API）
   已经被 `CrossPlatformSourceTests` 钉住了，这一处只有**真跑一趟 iOS build** 才看得见 ——
   资源/构建阶段的平台归属出错，源码扫描扫不出来。

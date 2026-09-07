@@ -399,26 +399,20 @@ enum DaemonExitCode {
 
     /// `PendingCrew --daemon` 启动失败 → 退出码。
     ///
-    /// **同一件事，两个提问人，答案不同** —— `launchedByLaunchd` 就是在问「谁在问」：
-    /// - app 里的 `ViewerSessionClient` 问的是「我要的那个 daemon 起来了吗」。
-    ///   锁被 app 窗口占着时它**没**拿到 daemon，报 0 就是骗它。
-    /// - launchd 问的是「这次运行算不算正常收场」。锁被谁占着都一样：编排者已经有了，
-    ///   这个进程该退，**退得对**。答非 0 的后果是 `KeepAlive={SuccessfulExit=false}`
-    ///   立刻把它拉回来 —— 于是「人开着 GUI」这个正常状态变成一个 10 秒一轮、
-    ///   只在日志里无声滚动的重启循环。
+    /// 判据是「**拉起方要的东西拿到没有**」：拉起 daemon 的是 app 里的
+    /// `ViewerSessionClient`，它要的是「有一个 daemon 在跑」。
     ///
-    /// 一个信号当两件事用是常见病根（`try?` 既当「缺席」又当「读不动」是同族）。
-    /// 这里不改原来那个答案，只让第二个提问人自报身份。
-    static func forDaemonStart(_ error: SessionDaemonHost.StartError,
-                               launchedByLaunchd: Bool = false) -> Int32 {
+    /// 2026-09-07 这里一度多一个 `launchedByLaunchd:` 分支 —— 因为开机自启那版会让
+    /// launchd 把「锁被 app 窗口占着」的非 0 退出当成异常、10 秒拉一次。人类否掉了
+    /// 常驻方向之后没有 launchd 了，那条分岔连同它要防的问题一起删掉。
+    static func forDaemonStart(_ error: SessionDaemonHost.StartError) -> Int32 {
         switch error {
-        case .alreadyOrchestrated(_, let holderIsDaemon):
-            // 已经有编排者 —— 对 launchd 而言期望状态成立，别重启我。
-            if launchedByLaunchd { return ok }
+        case let .alreadyOrchestrated(_, holderIsDaemon):
+            // 占着的是另一个 daemon → 「有一个 daemon 在跑」已经成立，本进程安静退出
+            // 是正确结局。占着的是 app 窗口 / 读不出是谁 → **一个 daemon 都没有**，
+            // 拉起方要的东西没拿到，报 0 就是骗它。
             return holderIsDaemon ? ok : failed
         case .lockUnavailable, .listen:
-            // 这两条对谁都是失败：一个编排者都没有。launchd 该重试（限流 10 秒一次），
-            // 数据根权限修好之后它自己就起来了。
             return failed
         }
     }
