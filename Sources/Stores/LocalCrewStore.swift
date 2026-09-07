@@ -489,6 +489,29 @@ final class LocalCrewStore {
     /// `local-crews.json`（claude 路走 helper 子进程,拿不到 MainActor 单例）。
     /// 根/子都按 createdAt 升序;多父 crew 在每个父下各出现一次;环自保（路径上
     /// 已出现的不再下钻）。缺文件/解码失败 → 空数组（注入端省略概览块）。
+    /// 这个 crew **登记在册**的工作目录（跨进程读，helper 用）。
+    ///
+    /// 它是事实源。销号验凭据（Todo #102）必须拿这个去解析 commit，**不许从 helper
+    /// 的 cwd 往上找 git 仓库根** —— 往上找会找到「一个」仓库，但不保证是「那个」：
+    /// worktree、`/private/tmp` 下的发包树、别的项目仓都可能在祖先链上。那条路的
+    /// 失败形态不是「找不到」，是**在错的仓库里解析成功**，于是一条假账带着一句
+    /// 「凭据解析成功」挂上去。**验不了会逼人换条路；假绿不会。**
+    ///
+    /// 读不到（文件坏了 / 这个 crew 没登记 workdir / 值是空串）→ `nil`。
+    /// 调用方必须把 `nil` 当成「**我验不了**」，不许退回去猜一个。
+    nonisolated static func workingDirectory(
+        crewId: String, whiteboardDirectory: URL
+    ) -> String? {
+        let file = whiteboardDirectory.deletingLastPathComponent()
+            .appendingPathComponent("local-crews.json")
+        guard let data = try? Data(contentsOf: file),
+              let payload = try? JSONDecoder().decode(LocalCrewFile.self, from: data)
+        else { return nil }
+        let raw = payload.crews.first { $0.id == crewId }?.workingDirectory
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     nonisolated static func orgTreeLines(
         whiteboardDirectory: URL
     ) -> [(id: String, title: String, depth: Int, titleSource: LocalCrewTitleSource?)] {
