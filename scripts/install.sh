@@ -80,7 +80,7 @@ else
 fi
 
 # —— 4. 装 ——
-say "→ 挂载并安装到 $dest…"
+say "→ 挂载并安装到 ${dest}…"
 mnt=$(/usr/bin/hdiutil attach "$dmg" -nobrowse -readonly | /usr/bin/awk -F'\t' '/\/Volumes\// {print $NF}' | tail -1)
 [ -d "${mnt:-}" ] || die "挂载失败。"
 [ -d "$mnt/$app_name.app" ] || die "镜像里没有 $app_name.app。"
