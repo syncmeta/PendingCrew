@@ -302,6 +302,7 @@ final class McpServer {
                         "type": "object",
                         "properties": [
                             "text": ["type": "string", "description": "要人拍板/要人做的那件事。一条一件，带上选项和你的建议。"],
+                            "supersedes": ["type": "integer", "description": "可选：这条**取代**你之前提的哪一条（填那条的 #N）。填了就等于同时撤回旧的那条，人只会看到新的这条在等他。**只能取代自己提的、还没被撤回的那条**；N 验不过就整件事都不做（新条目也不会加），你改对了再来。别在正文里写「本条取代 #N」——写在正文里没有任何东西会去执行它。"],
                         ],
                         "required": ["text"],
                     ],
@@ -1241,6 +1242,33 @@ final class McpServer {
             guard !todoText.isEmpty else {
                 return toolResult(id: id, text: "ERROR: text 不能为空 —— 写清要人拍板/要人做的那件事。")
             }
+            // supersede（Todo #102 第二刀）：**先验目标，再落任何账**。
+            //
+            // 做成显式参数而不是去正文里认「本条取代 #N」：那是一把措辞一变就静默
+            // 失效的尺子，而且失效的样子跟正常一模一样。做成参数就有一个确定的 N，
+            // **有了 N 就必须解引用** —— 验不过宁可整件事不做，也不留下「新的加了、
+            // 旧的还挂着」这种半截状态（人会同时看到两条问同一件事）。
+            let supersedes = (args["supersedes"] as? Int) ?? (args["supersedes"] as? NSNumber)?.intValue
+            if let target = supersedes {
+                let obstacle = LocalTodoStore.withdrawObstacle(
+                    item: humanTodos.item(crewId: crewId, number: target), sessionId: sessionId)
+                switch obstacle {
+                case .none:
+                    break
+                case .notFound:
+                    return toolResult(id: id, text: "ERROR: supersedes 指的人类 Todo #\(target) 不在这本账上（号写错了、或人类已经删掉了）。"
+                                      + "**新条目也没有加** —— 号改对了再来，或者去掉 supersedes 单纯新增。")
+                case .notYours(let owner):
+                    let who = owner.map { "「\($0)」" } ?? "（账上没记提出者，老条目）"
+                    return toolResult(id: id, text: "ERROR: 人类 Todo #\(target) 不是你提的，提出者是 \(who) —— **只能取代自己提的**。"
+                                      + "**新条目也没有加。**要么去掉 supersedes 单纯新增，要么让提出者自己撤。")
+                case .alreadyWithdrawn:
+                    return toolResult(id: id, text: "ERROR: 人类 Todo #\(target) 已经撤回过了，不用再取代它。"
+                                      + "**新条目也没有加** —— 去掉 supersedes 再来。")
+                case .some(let other):
+                    return toolResult(id: id, text: "ERROR: 人类 Todo #\(target) 现在动不了（\(other)）。**新条目也没有加。**")
+                }
+            }
             // 顺序、措辞、失败回执全部走共享剧本 `TodoLandingFlow` —— 四个调用点
             // 只有这一份，别在这儿自己拼字符串（#577 那一族靠的就是「文案和顺序
             // 只有一份」）。这条路上没有第三步：agent 加完不用叫醒谁，人类在
@@ -1274,9 +1302,15 @@ final class McpServer {
                 // 账已经落了，只是没宣布 —— 如实说，别让 agent 以为整件事没成。
                 detail = Self.writeFailureReceipt(error)
             }
-            return toolResult(id: id, text: TodoLandingFlow.receipt(
+            var addReceipt = TodoLandingFlow.receipt(
                 ledger: .human, action: .added, number: added.number,
-                reached: reached, detail: detail))
+                reached: reached, detail: detail)
+            // 新的落好了才去撤旧的：反过来的话，撤成功但新增失败 = 那件事从人的
+            // 账上整个消失了。宁可两条并存一瞬，不可一条都不剩。
+            if let target = supersedes {
+                addReceipt += "\n" + supersedeOldOne(target: target, replacedBy: added.number)
+            }
+            return toolResult(id: id, text: addReceipt)
         case "withdraw_human_todo":
             // 撤回（Todo #102）。顺序与 add_human_todo 一样：先落账再宣布，回执走
             // 同一个 `TodoLandingFlow` 出口。**这里多一件事**：撤不动的几种原因要
@@ -1315,29 +1349,10 @@ final class McpServer {
                 return toolResult(id: id, text: TodoLandingFlow.notPersistedReceipt(
                     ledger: .human, action: .withdrawn))
             }
-            let withdrawAnnounce = TodoLedger.human.withdrawAnnouncement(
-                number: withdrawn.number, reason: reason)
-            var withdrawReached = TodoLandingFlow.Step.persisted
-            var withdrawDetail: String?
-            do {
-                let incident = try store.appendSessionMessageReportingFailure(
-                    crewId: crewId, sessionId: sessionId,
-                    text: withdrawAnnounce, category: "progress",
-                    senderName: sessionLabel,
-                    mentions: TodoLandingFlow.mentions(.withdrawn).map(LocalWhiteboardMention.init),
-                    inReplyTo: nil,
-                    senderKind: isCaptain ? "captain" : "session")
-                if let incident {
-                    withdrawDetail = incident
-                } else {
-                    withdrawReached = TodoLandingFlow.terminal(.withdrawn)
-                }
-            } catch {
-                withdrawDetail = Self.writeFailureReceipt(error)
-            }
+            let announced = announceWithdrawal(number: withdrawn.number, reason: reason)
             return toolResult(id: id, text: TodoLandingFlow.receipt(
                 ledger: .human, action: .withdrawn, number: withdrawn.number,
-                reached: withdrawReached, detail: withdrawDetail))
+                reached: announced.reached, detail: announced.detail))
         case "set_session_profile":
             let model = (args["model"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1804,6 +1819,53 @@ final class McpServer {
 
     /// 白板写失败时的回执。措辞按「当没送达处理」写死 —— 调用方（编码 agent）看到
     /// 这句要知道刚才那段话群里没人看得见。
+    /// 把「撤回 人类 To Do #N：原因」那一行发进群，返回走到了哪一步。
+    ///
+    /// 撤回的两个入口（`withdraw_human_todo` 和 `add_human_todo(supersedes:)`）共用
+    /// 这一份 —— 群里那行的措辞和失败处理只有一处，不会各写一套慢慢分叉。
+    private func announceWithdrawal(number: Int, reason: String)
+        -> (reached: TodoLandingFlow.Step, detail: String?) {
+        do {
+            let incident = try store.appendSessionMessageReportingFailure(
+                crewId: crewId, sessionId: sessionId,
+                text: TodoLedger.human.withdrawAnnouncement(number: number, reason: reason),
+                category: "progress",
+                senderName: sessionLabel,
+                mentions: TodoLandingFlow.mentions(.withdrawn).map(LocalWhiteboardMention.init),
+                inReplyTo: nil,
+                senderKind: isCaptain ? "captain" : "session")
+            if let incident { return (.persisted, incident) }
+            return (TodoLandingFlow.terminal(.withdrawn), nil)
+        } catch {
+            return (.persisted, Self.writeFailureReceipt(error))
+        }
+    }
+
+    /// `add_human_todo(supersedes:)` 的后半段：新的已经落好了，把旧的撤掉。
+    ///
+    /// 目标在**落新条目之前**就验过了（见 `add_human_todo` 里那段），所以这里理论上
+    /// 不会撞上「不是你提的 / 没这条」。**但仍然把每种结果都说出来** —— 两次检查
+    /// 之间隔着一次落盘，中间真被人删了/别人撤了就是会发生；那时候账上是「新的加了、
+    /// 旧的还挂着」，人会同时看到两条问同一件事。**这种时候必须让 agent 知道，
+    /// 它才有机会自己去补一刀。**
+    private func supersedeOldOne(target: Int, replacedBy: Int) -> String {
+        let reason = "被 #\(replacedBy) 取代"
+        switch humanTodos.withdraw(crewId: crewId, number: target, sessionId: sessionId,
+                                   senderName: sessionLabel, reason: reason) {
+        case .withdrawn:
+            let announced = announceWithdrawal(number: target, reason: reason)
+            if let detail = announced.detail {
+                return "旧的 #\(target) 已撤回，但**群里那行没发出去**：\(detail)。"
+                    + "账是对的，群里没人看得见 —— 需要的话自己去补一句。"
+            }
+            return "同时撤回了旧的 #\(target)（原因：\(reason)）—— 人现在只会看到 #\(replacedBy) 在等他。"
+        case .notFound, .notYours, .alreadyWithdrawn, .reasonRequired, .ledgerUnavailable:
+            return "⚠️ **但旧的 #\(target) 没撤成**（刚才验的时候还好好的，这一下之间它被删/被撤/账读不出来了）。"
+                + "现在 #\(target) 和 #\(replacedBy) **两条都挂在人的账上问同一件事** —— "
+                + "请单独调 withdraw_human_todo 把 #\(target) 撤掉。"
+        }
+    }
+
     private static func writeFailureReceipt(_ error: Error) -> String {
         "ERROR: 没能写进 crew 群聊白板 —— \(error.localizedDescription)。"
             + "这条消息没有发出去，请当作未送达处理（别把它当已说过的话）。"

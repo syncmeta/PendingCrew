@@ -342,6 +342,21 @@ final class LocalTodoStore: @unchecked Sendable {
         case ledgerUnavailable
     }
 
+    /// 撤回资格的**唯一判据**（纯函数）。`nil` = 撤得动；非 nil = 撤不动的那个原因。
+    ///
+    /// 抽出来是因为它有第二个调用点：`add_human_todo(supersedes: N)` 里的 N **必须
+    /// 在落任何账之前先验一遍** —— 给了一个指针就要解引用，不能只记下来。
+    /// （今晚全机那笔假账带着一个根本不存在的 commit hash，挂了 191 小时，
+    /// 因为没有任何人去解析它。）两条路各写一套判据，迟早会分叉。
+    static func withdrawObstacle(item: LocalTodoItem?, sessionId: String) -> WithdrawOutcome? {
+        guard let item, !item.isDeleted else { return .notFound }
+        guard let owner = item.createdBySessionId, owner == sessionId else {
+            return .notYours(owner: item.createdBySenderName)
+        }
+        if item.withdrawnAt != nil { return .alreadyWithdrawn(item) }
+        return nil
+    }
+
     func withdraw(crewId: String, number: Int, sessionId: String,
                   senderName: String? = nil, reason: String) -> WithdrawOutcome {
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -352,10 +367,9 @@ final class LocalTodoStore: @unchecked Sendable {
                 return .ledgerUnavailable
             }
             guard let idx = liveIndexLocked(rows, number) else { return .notFound }
-            guard let owner = rows[idx].createdBySessionId, owner == sessionId else {
-                return .notYours(owner: rows[idx].createdBySenderName)
+            if let obstacle = Self.withdrawObstacle(item: rows[idx], sessionId: sessionId) {
+                return obstacle
             }
-            if rows[idx].withdrawnAt != nil { return .alreadyWithdrawn(rows[idx]) }
             let stamp = timestamp()
             // 原因落成一条回应 —— 详细窗口的时间线本来就画回应，撤回的理由跟着
             // 条目走，不用人去翻群聊记录。
