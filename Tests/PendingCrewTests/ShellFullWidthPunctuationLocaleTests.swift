@@ -39,6 +39,12 @@ import XCTest
 /// 拷进 `/Applications`；能想到的早退路径**全都在第 83 行之前**，跑得过但根本碰不到
 /// 出事的那一行。**静态那条禁令是它唯一的防线。** 谁想放宽字符集或口径，
 /// 得先知道自己在拆的是什么。
+///
+/// 判据（两句，别只记前一句）：
+/// **别让「我们跑得过」成为「用户跑得过」的证据。** 我们的 shell 常常不是 UTF-8，
+/// 真人的终端几乎必然是；`install.sh` 是 curl | sh 给真人跑的。
+/// **而当执行态确实盖不住时，要在同一处写明「这里只有静态防线」** ——
+/// 否则下一个人会以为有两道，然后放心地拆掉一道。
 final class ShellFullWidthPunctuationLocaleTests: XCTestCase {
     /// 跑一条 `sh -uc`，返回退出码。`locale` 为 nil 表示把 LC_ALL / LANG / LC_CTYPE 全清掉。
     private func runSh(_ script: String, locale: String?) throws -> Int32 {
