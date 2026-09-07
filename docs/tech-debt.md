@@ -12,6 +12,47 @@
 
 ---
 
+### 🔴 「合 main 后回共享目录重跑、skip 掉回 3」这条对账基准是假的
+
+- **发现**: 2026-09-07 · Todo #107/#108 合 main 后按这条规矩对账时逐条查出来的。
+- **它错在哪**: skip 数**根本不是「哪棵树」的属性**，而是
+  **「此刻这台机器上哪些现场数据读得到」**的属性。跟共享目录干不干净无关。
+- **实测：那一趟 14 条跳过，逐条是**（看名单，不是看汇总行）
+  ```
+  CrewChatOpenCostTests                     8 条
+  CrewMentionFilterRealWhiteboardTests      3 条
+  CrewLastMessageCacheTests.现场基准        1 条
+  SessionAwaitingReplyInputsCacheTests.现场基准  1 条
+  AgentTuiFixtureRecorder.testRecord        1 条
+  ```
+- **① 那 8 条在共享目录也一样跳** —— 门是 `requireFixtures()` 要的
+  `Tests/Fixtures/whiteboard.json`，而**两棵树都没有这份**（逐个 `test -f` 查过；
+  两边 `Tests/Fixtures/` 里只有 4 个 `.bin`，那是另一套 TUI fixture）。
+  要它跑，得先 `scripts/make-chat-fixtures.sh <crew-id>` 现录一份。
+  **所以谁去共享目录跑都拿不到 skip=3。**
+- **② 最该记住的一条：账上那条「既有飘红」实际上从未运行。**
+  本文件里登记的 `CrewChatOpenCostTests.test_打开LED驱动板一次重排在预算内`，
+  就在这 8 条跳过里。整整一天，三个人反复说「那两处既有飘红这一趟没撞上」——
+  那句话听起来是「它跑了、没红」，**实情是它一次都没跑**。
+  这正是本仓库反复吃亏的那一族（`Executed 0` 报 passed、筛掉的红样本不进名单）
+  —— 只不过这次骗的是**我们自己写的账**：一条被登记为「已知会飘红」的测试，
+  沉默地退化成了「根本不跑」，而汇总行上两者长得一模一样。
+- **③ skip 数会自己变（实测 11 ↔ 14）**：那 3 条
+  `CrewMentionFilterRealWhiteboardTests` 读的是**现场白板目录**。白板 EPERM
+  期间它们跳过；白板恢复后同一棵树重跑，18 项里只跳 2 条，那 3 条全跑起来了，
+  差值正好是 3。（"那一趟 14 就是 EPERM 那次"是推的，机制是实测的。）
+- **④ 同族第四张脸（机长 15-1 实测，2026-09-07）**：共享目录**不可编译**时，
+  这条基准连数都产不出来 —— 那次是 31-1 改到一半的 WIP
+  （`DaemonStopTests.swift` 已调 `SessionOrchestratorLock.releaseForTesting`，
+  被测类型上还没有这个成员），`** TEST FAILED **` 是 **build 阶段**挂的、
+  **`Executed` 一行都没有**。红得没量，和绿得没量一样不构成证据。
+- **能用的替代做法**:
+  - 对账盯**逐条名单**，不是那两个数字：`Executed N` + **跳过了哪几条**。
+    数字相等而名单不同，是这条基准最常见的骗法。
+  - 报「既有飘红没撞上」之前，先确认它**这一趟真的跑了**（在跳过名单里就不算跑）。
+  - 跨环境比数之前先问：这两趟的**现场数据可读性**一样吗（白板读得动吗、
+    fixture 录了吗）。不一样就不可比，标注清楚，别混用。
+
 ### 🟡 `LayoutLoopRegressionTests.testSwiftUIRepeatForeverInAnchoredScrollViewSelfExcites` 会被机器负载判红
 
 - **发现**: 2026-09-07 · Todo #107/#108 合 main 后在干净 worktree 上全量重跑时撞到。
