@@ -34,3 +34,6 @@ Config/Local.xcconfig
 .env.local
 *.p8
 *.pem
+
+# scripts/test-mac.sh 的测试归档（xcresult + 全量日志），只在本机留最近几趟
+.test-archive/
