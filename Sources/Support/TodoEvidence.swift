@@ -95,12 +95,40 @@ struct GitObjectProbe {
     /// 等多久算超时（秒）。
     let timeout: TimeInterval
 
-    init(directory: String, timeout: TimeInterval = 5) {
+    /// 这个平台**能不能**跑 git 去解引用。
+    ///
+    /// iOS 上「验凭据」这件事本来就不成立：没有 git、没有工作副本、也不会有人在
+    /// 手机上销号。所以那儿的正确形状**不是想办法让它跑起来**，是让它落进已经
+    /// 存在的那一态 —— `.unavailable`「我验不了，问题在环境不在你给的东西」。
+    /// **不新造第三条路，也不把整个类型 `#if` 藏掉**（藏掉就要连调用点一起包）。
+    enum PlatformSupport: Equatable {
+        case canRunGit
+        /// 带上「为什么这个平台验不了」。
+        case unsupported(String)
+    }
+
+    /// 当前平台的判定。**这是唯一一处平台分支** —— `resolve` 拿它当普通值用，
+    /// 于是「验不了」这条路在 Mac 上也测得到（把 `support` 传成 `.unsupported`）。
+    static var current: PlatformSupport {
+        #if os(macOS)
+        return .canRunGit
+        #else
+        return .unsupported("这个平台上跑不了 git（凭据解析只在 Mac 上成立）")
+        #endif
+    }
+
+    /// 平台能力。默认取当前平台；测试注入另一半，好让 iOS 那条路在 Mac 上也可测。
+    let support: PlatformSupport
+
+    init(directory: String, timeout: TimeInterval = 5,
+         support: PlatformSupport = GitObjectProbe.current) {
         self.directory = directory
         self.timeout = timeout
+        self.support = support
     }
 
     func resolve(_ hash: String) -> TodoEvidence.Resolution {
+        if case .unsupported(let why) = support { return .unavailable(why) }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDir),
               isDir.boolValue else {
@@ -109,6 +137,11 @@ struct GitObjectProbe {
         guard FileManager.default.fileExists(atPath: "/usr/bin/git") else {
             return .unavailable("这台机器上找不到 /usr/bin/git")
         }
+        // 只包住真正 macOS-only 的那一段（`Process` 在 iOS 上不存在）。
+        // 上面那条 `support` 判断已经让非 Mac 走不到这里；这个 `#if` 是给**编译器**
+        // 看的，不是第二条业务分支 —— 两者少了任何一个都不行：只有 `#if` 的话
+        // 「iOS 上会怎样」测不到，只有 `support` 的话 iOS 根本编不过。
+        #if os(macOS)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", directory, "cat-file", "-e", "\(hash)^{object}"]
@@ -138,5 +171,10 @@ struct GitObjectProbe {
             return .unavailable("\(directory) 不是 git 仓库，这里没法解析 commit")
         }
         return .notFound
+        #else
+        // 走不到（上面 `support` 已经挡住），但编译器要它。**说的话跟那条一致**，
+        // 别在这里发明第二套措辞。
+        return .unavailable("这个平台上跑不了 git（凭据解析只在 Mac 上成立）")
+        #endif
     }
 }

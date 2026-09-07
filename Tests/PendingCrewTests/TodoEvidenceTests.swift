@@ -114,6 +114,27 @@ final class TodoEvidenceTests: XCTestCase {
         }
     }
 
+    func testUnsupportedPlatformGetsCannotVerifyNotResolvedNorNotFound() {
+        // iOS 上没有 git、没有工作副本，「验凭据」这件事本来就不成立。它必须落进
+        // **已有的**「我验不了」那一态 —— 不许是「解析成功」（那是假绿），
+        // 也不许是「不存在」（那会让人去改一个没错的凭据）。
+        //
+        // 这条用例**只靠平台这一项决定结果**：目录是真的、hash 形状是对的、
+        // 本仓库确实是 git 仓库 —— 链上其它项全部成立，只把 support 换掉。
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let probe = GitObjectProbe(directory: repoRoot.path,
+                                   support: .unsupported("这个平台上跑不了 git（凭据解析只在 Mac 上成立）"))
+        XCTAssertEqual(probe.resolve(String(repeating: "a", count: 40)),
+                       .unavailable("这个平台上跑不了 git（凭据解析只在 Mac 上成立）"))
+    }
+
+    func testMacCanRunGitSoTheGateIsRealHere() {
+        // 反面：Mac 上必须是 `.canRunGit`，否则上一条证明不了什么 ——
+        // 一把永远返回「验不了」的尺子当然永远不会放行假账，但它也永远没在工作。
+        XCTAssertEqual(GitObjectProbe.current, .canRunGit)
+    }
+
     func testProbeSaysCannotVerifyWhenTheDirectoryIsGone() {
         let gone = "/tmp/definitely-not-here-\(UUID().uuidString)"
         guard case .unavailable = GitObjectProbe(directory: gone)

@@ -22,6 +22,11 @@ final class CrossPlatformSourceTests: XCTestCase {
     /// 的那些 —— 凭想象往里加只会让这把尺子噪音变大、然后被人忽略。
     private static let macOnlyAPIs = [
         "homeDirectoryForCurrentUser",
+        // 2026-09-07：`TodoEvidence.swift` 用它跑 `git cat-file -e`，iOS 端
+        // `cannot find 'Process' in scope`，**挡住了一次发版**。
+        // 这条也是这把尺子自己的教训：**名单式的尺子，漏的永远是名单外的那个。**
+        // 红样本取它真漏过的那次 —— 见 `testRulerCatchesTheProcessRegression`。
+        "Process(",
     ]
 
     func testNoMacOnlyAPIInFilesThatAlsoCompileForIOS() throws {
