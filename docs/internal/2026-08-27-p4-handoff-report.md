@@ -52,13 +52,13 @@ grep 到 `acquire` 单一调用点，从那儿到「app 不取锁」中间那段
 
 ### 四条封边（也是源码级）
 
-- `SessionOrchestratorLock.acquire` 全仓唯一调用点：`SessionDaemonHost.swift:163`。
+- `SessionOrchestratorLock.acquire` 全仓唯一调用点：`Sources/Mac/LocalRunner/SessionDaemonHost.swift:163`。
 - `SessionOrchestratorLock` 这个名字全仓只出现在 3 个文件：它自己、
   `SessionDaemonHost.swift`、`SessionDaemonHostTests.swift`。**GUI 那条链上一个都没有。**
-- `SessionDaemonHost(` 生产构造点唯一：`SessionDaemonMain.swift:35`，在 `--daemon`
+- `SessionDaemonHost(` 生产构造点唯一：`Sources/Mac/Services/SessionDaemonMain.swift:35`，在 `--daemon`
   分支里（其余 7 处全在测试里）。
-- **没有第二套单实例机制兜底**：全仓 `flock(` 只有 `MultiProcessJSONStore.swift:37/38`、
-  `WhiteboardCursor.swift:182/183` 和锁自己；`LSMultipleInstancesProhibited` /
+- **没有第二套单实例机制兜底**：全仓 `flock(` 只有 `Sources/Stores/MultiProcessJSONStore.swift:37/38`、
+  `Sources/Mcp/WhiteboardCursor.swift:182/183` 和锁自己；`LSMultipleInstancesProhibited` /
   `NSRunningApplication` 在 `Info.plist`、`project.yml`、全部 Swift 源码里**零命中**。
 
 ### 机长提的第三条路（「让 app 那条编排入口在单测里跑一趟」）走不通，而那就是答案

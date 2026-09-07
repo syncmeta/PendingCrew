@@ -188,7 +188,7 @@ Mac 侧 `CrewRelayAgent`（`Mac/Services/CrewRelayAgent.swift`）对每个绑定
 
 08-08 spec §3 的路径：只对 relay 绑定的 crew 打开 `edgeQueueBindingReady` 门 → iOS 落 `crew_sessions` 行 → realtime 通知绑定的 Mac → `claim_crew_session_for_subject` 认领启动 → 状态回写。
 
-代码资产是真的：`SessionProxyDO` + viewer client + `SessionPermissionRelay`（`Mac/LocalRunner/SessionPermissionRelay.swift`，含 raise/ack 关联、offline queue、本地先决时的反向 mirror）三段都在。**死在起点**：`CrewSessionWindowView.swift:794` `serverLink = nil` 写死、`:914` `edgeQueueBindingReady { false }` 写死。
+代码资产是真的：`SessionProxyDO` + viewer client + `SessionPermissionRelay`（`Mac/LocalRunner/SessionPermissionRelay.swift`，含 raise/ack 关联、offline queue、本地先决时的反向 mirror）三段都在。**死在起点**：`Sources/Mac/Views/CrewSessionWindowView.swift:794` `serverLink = nil` 写死、`:914` `edgeQueueBindingReady { false }` 写死。
 
 ### 3.3 逐项对比
 
@@ -502,7 +502,7 @@ LocalApprovalStore.shared.decide(crewId:, id:, decision:)
   > 7-26 勘察 §4 与 `docs/tech-debt.md` 2026-08-10 都把它记成**现存的洞**。本次逐段核读源码，三段链路**都已接通**（修复提交 `48f3e34e`，Phase 1 Task 10）：
   > 1. `CrewRelayAgent.swift:162` —— 调用方**真的传了** `mentions: Self.localMentions(entry.mentions)`（关键一处：光有形参不传等于没修）
   > 2. `LocalWhiteboardStore.appendRelayMessage:192` —— 有 `mentions:` 形参，且落进 `LocalWhiteboardMessage` 行
-  > 3. `CrewLocalMentionWakeLogic.swift:48-49` —— guard 显式放行 `isRelayHuman`（`senderKind == "user" && relayRemoteId != nil`），由 `CrewLocalMentionWaker.swift:84` 驱动
+  > 3. `Sources/Mac/LocalRunner/CrewLocalMentionWakeLogic.swift:48-49` —— guard 显式放行 `isRelayHuman`（`senderKind == "user" && relayRemoteId != nil`），由 `Sources/Mac/Services/CrewLocalMentionWaker.swift:84` 驱动
   >
   > **诚实标注**：这是**静态核读，未真机验**。所以本 spec 不把它当已闭合，而是列为 §10 第 0 步的 QA 项之一 —— 点完接入按钮之后，**「手机 @ 普通 session，那个 session 真被唤醒」必须实点一次**。（同一批要验的还有 @机长，但机长有自己的唤醒通道，@机长通不代表 @普通 session 通，两项要分开验。）
   >
@@ -633,7 +633,7 @@ LocalApprovalStore.shared.decide(crewId:, id:, decision:)
 
 按前提段：线上 `conversations` 里 `crew` 类型 0 条。所以动工前先做一次人工操作 + 一次实点验证：
 
-- 在 Mac 上对某个 crew 点一次「接入 PendingBot」（`CrewDetailInspector.swift:221`）
+- 在 Mac 上对某个 crew 点一次「接入 PendingBot」（`Sources/Mac/Views/CrewDetailInspector.swift:221`）
 - 核 `conversations` 里出现该 crew 的行、本地 crew JSON 里有 `remoteConversationId`
 - **实点三项**（都是"通道通没通"的直接证据，不是"代码写了"）：
   1. Mac 发一条群聊 → 手机上看得到

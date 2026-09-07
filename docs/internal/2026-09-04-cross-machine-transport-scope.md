@@ -28,8 +28,8 @@
 
 | 实现 | 位置 | 是什么 |
 |---|---|---|
-| `InProcessSessionLink` | `UnixSocketTransport.swift:85` | 同进程直调（P2 那条路） |
-| `UnixSocketTransport` | `UnixSocketTransport.swift:139` | 本机 UDS（P4 那条路） |
+| `InProcessSessionLink` | `Sources/Mac/LocalRunner/UnixSocketTransport.swift:85` | 同进程直调（P2 那条路） |
+| `UnixSocketTransport` | `Sources/Mac/LocalRunner/UnixSocketTransport.swift:139` | 本机 UDS（P4 那条路） |
 | `ByteStreamLink` | `Tests/.../SessionProtocolOverSocketTests.swift:228` | 测试替身：**按任意字节边界切分/粘包** |
 | `BackpressureLink` | 同上 `:244` | 测试替身：写不动的链路 |
 

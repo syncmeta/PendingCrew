@@ -99,8 +99,8 @@ ProcessRoleTests:           XCTAssertEqual failed: ("orchestrator") is not equal
 起来的 daemon 因锁被占而退出的那个 bug）：
 
 ```
-OrchestrationFallbackCoordinatorTests.swift:58: 这一步根本不该去碰锁 —— 抢了它，我们刚拉起来的 daemon 就起不来了
-OrchestrationFallbackCoordinatorTests.swift:72: XCTAssertEqual failed: ("1") is not equal to ("0")
+Tests/PendingCrewTests/OrchestrationFallbackCoordinatorTests.swift:58: 这一步根本不该去碰锁 —— 抢了它，我们刚拉起来的 daemon 就起不来了
+Tests/PendingCrewTests/OrchestrationFallbackCoordinatorTests.swift:72: XCTAssertEqual failed: ("1") is not equal to ("0")
 	 Executed 4 tests, with 2 failures (0 unexpected)
 ```
 

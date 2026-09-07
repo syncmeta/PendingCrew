@@ -130,7 +130,7 @@ attach 靠快照恢复而**不重放中断期字节**（§4.5）、能力靠 `he
 ### 1.5 但 P4 还没合 main（读代码）
 
 全仓 grep 无 `UnixSocketTransport` / `socketpair` / `SMAppService`；`PENDINGCREW_BACKEND` 只在
-`ProcessRole.swift:22` 出现一次（判定用），没有任何一处真的启动 daemon。
+`Sources/Mac/LocalRunner/ProcessRole.swift:22` 出现一次（判定用），没有任何一处真的启动 daemon。
 31 号 crew「常驻后台·前后端分离」挂着 P4 的四个 session（`31-9`~`31-12`），在飞行中。
 
 ---
@@ -144,12 +144,12 @@ attach 靠快照恢复而**不重放中断期字节**（§4.5）、能力靠 `he
 **A-2 · 协议今天扛不住真实字节流（读代码，白纸黑字，非推断）。**
 两个 endpoint 的收包路径都假设「**一次投递 == 正好一整帧**」：
 
-- `RemoteSessionBackend.swift:567-568`（server 侧）：`guard let message = try? codec.decodeApp(data) else { return }`
+- `Sources/Mac/LocalRunner/RemoteSessionBackend.swift:567-568`（server 侧）：`guard let message = try? codec.decodeApp(data) else { return }`
 - `RemoteSessionBackend.swift:855-859`（client 侧）：`SessionFrameDecoder.decodeAll(data)` 且要求 `frames.count == 1`，随后同样 `try? codec.decodeDaemon(data) else { return }`
-- `SessionProtocol.swift:469` / `:486` → `:503-509` `exactlyOneFrame()`：帧数不等于 1 就 `throw`
+- `Sources/Mac/LocalRunner/SessionProtocol.swift:469` / `:486` → `:503-509` `exactlyOneFrame()`：帧数不等于 1 就 `throw`
 
 也就是说：**半帧到达 → 丢；两帧粘在一起 → 两帧都丢。不断连、不报错、不落日志。**
-而正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧）就在 `SessionProtocol.swift:81-107`，
+而正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧）就在 `Sources/Mac/LocalRunner/SessionProtocol.swift:81-107`，
 **只是没接到 endpoint 的收包路径上**。
 
 `InProcessTransport` 每次投递恰好是一整帧（`sendFromApp` 直接把整个 `Data` 交给对端回调），
@@ -158,7 +158,7 @@ attach 靠快照恢复而**不重放中断期字节**（§4.5）、能力靠 `he
 
 **A-3 · endpoint 绑死具体传输类型。** 两个 endpoint 的 init 签名是
 `init(transport: InProcessTransport, ...)`（`:479` / `:763`），不是 `SessionTransport` 协议——
-`SessionTransport` 协议定义在 `InProcessTransport.swift:6` 但 endpoint 没用它。换传输必须改这两个 init。
+`SessionTransport` 协议定义在 `Sources/Mac/LocalRunner/InProcessTransport.swift:6` 但 endpoint 没用它。换传输必须改这两个 init。
 
 > A-2 / A-3 都落在 31 号 crew 正在飞行的 P4 文件里。**它们应当成为 P4 的验收条件，而不是由本 crew
 > 平行改一遍**——那正好是设计文档 §6 反复警告的「双头」。已用 `contact` 提给 `31-1`。
@@ -188,7 +188,7 @@ Fly machine 是 Linux 容器：**没有 macOS 钥匙串、没有用户 TCC、没
 
 ### C 类 —— 手机专有
 
-**C-1 · iOS 上今天没有任何数据源。** `PendingCrewBackend.swift:8`：iOS 上 `AppModel.backend` 恒 nil。
+**C-1 · iOS 上今天没有任何数据源。** `Sources/Services/PendingCrewBackend.swift:8`：iOS 上 `AppModel.backend` 恒 nil。
 把 Mac 的视图编译进 iOS target，得到的是恒空的漂亮界面——那正是「第三次空管子」。
 
 **C-2 · 手机连 Fly 比手机连本机简单一个量级。** Fly machine 有公网地址；本机 Mac 在 NAT 后面。

@@ -73,7 +73,7 @@
 
 为了「只提交自己的东西」，我把 `PendingCrew.xcodeproj/project.pbxproj`
 `git checkout` 回了 HEAD —— **当场把另一条线（常驻后台）的编译打断了**：
-`SessionDaemonMain.swift:238: cannot find 'DaemonGracefulShutdown'`。
+`Sources/Mac/Services/SessionDaemonMain.swift:238: cannot find 'DaemonGracefulShutdown'`。
 他们的新文件条目是我 `xcodegen generate` 时顺手带进去的，还原就等于把桥拆了。
 
 规矩：**共用工作区时，还原/提交 pbxproj 之前先看一眼里面有没有别人的名字。**

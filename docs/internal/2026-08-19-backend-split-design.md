@@ -81,11 +81,11 @@
 
 | 长期职责 | 挂在哪 |
 |---|---|
-| `CrewSessionRunner`（编排本体） | `MacRootView.swift:21` `@StateObject`（**view-local，一个窗口一份**） |
-| `CrewRelayAgent`（云端中继，5s 循环） | `MacRootView.swift:26` `@StateObject` |
+| `CrewSessionRunner`（编排本体） | `Sources/Mac/Views/MacRootView.swift:21` `@StateObject`（**view-local，一个窗口一份**） |
+| `CrewRelayAgent`（云端中继，5s 循环） | `Sources/Mac/Views/MacRootView.swift:26` `@StateObject` |
 | `CrewLocalMentionWaker`（点名唤醒器） | `MacRootView.swift:232` 在 view 里 new |
-| `LocalAgentUsageMonitor` | `CrewSidebarView.swift:28` `@StateObject` |
-| `QuotaCenter` / `ModelCatalogCenter` 轮询 | `CrewSidebarView.swift:65` `.task { quota.start(); … }` |
+| `LocalAgentUsageMonitor` | `Sources/Mac/Views/CrewSidebarView.swift:28` `@StateObject` |
+| `QuotaCenter` / `ModelCatalogCenter` 轮询 | `Sources/Mac/Views/CrewSidebarView.swift:65` `.task { quota.start(); … }` |
 | 机长派工 / 建 crew / 自动起机长的**编排 glue** | `MacRootView.swift` 的一串 `.onChange` 修饰符里 |
 
 最后一条是最麻烦的：编排逻辑本身长在 SwiftUI 的 `.onChange` 里。**这是 P0 阶段的主要工作量**。

@@ -21,7 +21,7 @@
 | S3 | codex `turn/start` 两阶段 | `Sources/Mac/Services/CrewSessionRunner.swift:1415` → `prepareContext`/`commit` | C1 | ✅（受理后） |
 | S4 | 定向 @ 唤醒注入 | `Sources/Mac/Services/CrewLocalMentionWaker.swift:143-207` | C2 决定投什么；C1 只在回执确认后被推 | 部分 |
 | S5 | 缺席目标拉起时的 `wakeText` | `CrewSessionRunner.startCaptain(wakeText:)` `:2055`／`restartMember` `:2289` | **不碰任何游标** | ❌ |
-| S6 | `listen` 收听 | `CrewSessionRunner.swift:714-726` | C3 | ✅（仅 C3） |
+| S6 | `listen` 收听 | `Sources/Mac/Services/CrewSessionRunner.swift:714-726` | C3 | ✅（仅 C3） |
 
 游标（= 「已投递」账）共 **3 本**：
 
@@ -43,13 +43,13 @@
 
 ### 读代码读到的
 
-- 机长的 sessionId **每次启动都新造**：`CrewSessionRunner.swift:2113`
+- 机长的 sessionId **每次启动都新造**：`Sources/Mac/Services/CrewSessionRunner.swift:2113`
   `let localSessionId = "captain-" + String(UUID().uuidString.lowercased().prefix(8))`
 - 而**对话是接回来的**：`:2141-2150` 查 `LocalAgentSessionStore.latestCaptainRecord`
   拿 agent 会话号，带 `--resume` 起。
 - C1 的文件名是 `<crewId>.<sessionId>.cursor` → 新 sessionId ⇒ 文件不存在 ⇒
   `WhiteboardCursor.read() == .absent` ⇒ `unread()` 返回 `all.suffix(30)`
-  （`WhiteboardCursor.swift:56,104`，`firstDeliveryLimit = 30`）。
+  （`Sources/Mcp/WhiteboardCursor.swift:56,104`，`firstDeliveryLimit = 30`）。
 
 **⇒ 对话记得，游标不记得。** 续跑回来的机长被重新灌进它上一世已经读过、已经回过的最近 30 条。
 
@@ -117,7 +117,7 @@ crew 4（PendingCrew）一个群就有 50 个
 - `CrewLocalMentionWaker.deliver` 在**扫描那一刻**把正文 + 最近 15 条上下文
   渲染成 `inj.text`（`:176-182`）。
 - 交给 `deliverOrDeferWake` → `CrewDeferredWakeQueue.Delivery(key:targetSessionId:text:)`
-  —— **存的是 `text`，一个字符串**（`CrewDeferredWakeQueue.swift:10-14`）。
+  —— **存的是 `text`，一个字符串**（`Sources/Mac/LocalRunner/CrewDeferredWakeQueue.swift:10-14`）。
 - 目标忙 → `.deferred`，压在内存队列里，等 `runBecameIdle` 再 `popWhenIdle` 发出去。
   **中间从不重读白板。**
 - 同一段时间里，S1（hook）在目标的每次工具调用后触发，把同一条渲染进「未读」块

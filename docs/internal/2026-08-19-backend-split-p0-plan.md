@@ -571,7 +571,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [x] **Step 1: 每 session 的两个后台服务改由 runner 自己接线**
 
-`CrewSessionWindowView.swift:882,1013,1027-1031`（`CrewMailboxWaker`）与 `:883,1016,1035-1039`（`SessionPermissionRelay`）现在是**视图在展示某个 session 时**才去 `ensureMailboxWaker` / `ensurePermissionRelay`。
+`Sources/Mac/Views/CrewSessionWindowView.swift:882,1013,1027-1031`（`CrewMailboxWaker`）与 `:883,1016,1035-1039`（`SessionPermissionRelay`）现在是**视图在展示某个 session 时**才去 `ensureMailboxWaker` / `ensurePermissionRelay`。
 
 后果：**右栏没打开过那个 session，它的信箱唤醒和审批中继就没被接上**。这不只是搬家问题，是今天就存在的隐患。
 
@@ -581,7 +581,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [x] **Step 2: 视图不许再写共享账本**
 
-`MacRootView.swift:168` 里视图直接调了 `LocalCrewControlStore.shared.writeCommandResponse(...)`（`change_workdir` 的回执）。这一整段随 Task 3 的 `workdirChangeRequests` 订阅一起搬进 `SessionHost` 后，视图里就不该再有这一行。
+`Sources/Mac/Views/MacRootView.swift:168` 里视图直接调了 `LocalCrewControlStore.shared.writeCommandResponse(...)`（`change_workdir` 的回执）。这一整段随 Task 3 的 `workdirChangeRequests` 订阅一起搬进 `SessionHost` 后，视图里就不该再有这一行。
 
 验证：
 
@@ -593,7 +593,7 @@ grep -rn "LocalCrewControlStore.shared.write\|LocalWhiteboardStore.shared.append
 
 - [x] **Step 3: 删掉那条被关着的死循环**
 
-`CrewSessionWindowView.swift:949-968` 有一条 4s 的 edge queued-session auto-claim 轮询，被 `:952` 的 `edgeQueueBindingReady` 恒 `false` 关着 —— 死代码。**删掉整段**，别把它搬进后台。
+`Sources/Mac/Views/CrewSessionWindowView.swift:949-968` 有一条 4s 的 edge queued-session auto-claim 轮询，被 `:952` 的 `edgeQueueBindingReady` 恒 `false` 关着 —— 死代码。**删掉整段**，别把它搬进后台。
 
 删之前确认它真的恒假：
 

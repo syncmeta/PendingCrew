@@ -121,7 +121,7 @@ Supabase 编出来。** 这条约束反过来塑造了代码结构 —— 仓库
 | `--render-snapshot <dir>` | dev 工具 | headless 用 `ImageRenderer` 出 codex transcript 的 light/dark PNG |
 | 其余 | **GUI** | `PendingCrewApp.main()` |
 
-在 helper 分支**之前**先做两件事（`PendingCrewEntry.swift:20-24`）：装未捕获 NSException
+在 helper 分支**之前**先做两件事（`Sources/PendingCrewEntry.swift:20-24`）：装未捕获 NSException
 留痕（`UncaughtExceptionLog`）、把 fd 软上限抬到硬上限（`FileDescriptorLimit`）。
 后者不是优化 —— launchd 给 GUI app 的默认软上限只有 256，而白板目录有上千个文件，
 顶穿之后 `open()` 返回 EMFILE、被 Foundation 包成「你没有权限查看此文件」，2026-08-12
@@ -207,7 +207,7 @@ build 号也是因为这条才不再从 `git rev-list --count HEAD` 算的，理
 而且第 2 与第 3 的分离正是「常驻后台」那条地基路线能走通的前提（第 10 节）：后台进程
 养 1+2，窗口里的 view 只吃字节流。`TerminalView.feed(byteArray:)` 是 public 的，这是
 库设计上就支持的用法。换库 = 同时重写 PTY 层、状态机、渲染层，并重新验证那**六个从终端
-画面上认状态的扫描器 + 拉起自检看门狗**（`AgentTerminalSession.swift:12` 的原话）——
+画面上认状态的扫描器 + 拉起自检看门狗**（`Sources/Mac/LocalRunner/AgentTerminalSession.swift:12` 的原话）——
 健康（未登录/撞额度）、待决策菜单、打字指纹、启动参数回显、切档回显都是从字节流里认的。
 
 顺带一条踩过的坑：Sparkle 是本 app **第一个嵌入式二进制框架**（其余 SPM 依赖都编进
@@ -494,7 +494,7 @@ codex 不跑交互式 TUI，跑 `codex app-server`（stdio JSON-RPC），
 同一套 crew 能力经协议注入：MCP server 走 `thread/start` 的 `mcp_servers`（`LocalSessionLaunch.codexMcpServers`），
 世界观走 `developerInstructions`，每轮的未读白板走 codex 原生的
 `turn/start.additionalContext`（`{"crew_whiteboard": {"value": …, "kind": "untrusted"}}`，
-`CodexProtocol.swift:113`），**不塞进 `input` 冒充用户输入**。
+`Sources/Mac/LocalRunner/CodexAppServer/CodexProtocol.swift:113`），**不塞进 `input` 冒充用户输入**。
 
 两条腿的统一契约是 `Sources/Mac/LocalRunner/SessionBackend.swift`（132 行，值得完整读一遍）。
 它把差异逐条写进注释，其中两条最关键：
@@ -509,7 +509,7 @@ codex 不跑交互式 TUI，跑 `codex app-server`（stdio JSON-RPC），
 
 `Sources/Mcp/McpServer.swift`（1,147 行）。newline-delimited JSON-RPC over stdio，
 `handleLine` 是纯函数式 dispatch（一行进、一行出，不碰进程/stdio）——所以它能编进测试
-bundle 单测。工具集（`tools/list` 在 `McpServer.swift:74-387`）：
+bundle 单测。工具集（`tools/list` 在 `Sources/Mcp/McpServer.swift:74-387`）：
 
 - **通信**：`post_to_crew`（可带 `mentions` / `reply_to`）、`read_whiteboard`、`listen`
 - **求助**：`ask`（raise 一条待决策 → 阻塞 long-poll → captain 或人类答复）
@@ -530,7 +530,7 @@ bundle 单测。工具集（`tools/list` 在 `McpServer.swift:74-387`）：
 - 一次性元数据：`<crewId>.crewmeta.json`（改名，last-write-wins）、
   `<crewId>.crewattention.json`（黄点）
 - 命令队列：每条一个独立文件 `<crewId>.<cmdId>.crewcmd.json`，app 侧 `CrewStore` 排空
-  后写 `<crewId>.<cmdId>.crewresp.json` 回执。命令种类见 `LocalCrewControlStore.swift:129-321`：
+  后写 `<crewId>.<cmdId>.crewresp.json` 回执。命令种类见 `Sources/Stores/LocalCrewControlStore.swift:129-321`：
   `start_session` / `create_child_crew` / `set_profile` / `crew_message` / `schedule_wakeup` /
   `listen` / `inspect_session` / `nudge_session` / `stop_session` / `change_workdir` /
   `adopt_crew` / `release_crew` / `create_parent_crew` / `adopt_parent`
@@ -539,9 +539,9 @@ bundle 单测。工具集（`tools/list` 在 `McpServer.swift:74-387`）：
 
 | 文件 | 谁写 | 节奏 | 谁读 |
 |---|---|---|---|
-| `crew-sessions.json` | `CrewSessionRunner.startSessionsSnapshotTimer`（`CrewSessionRunner.swift:616`） | **2 秒** | 机长的 `list_sessions` |
-| `quota.json` | `QuotaCenter`（`QuotaCenter.swift:63`） | **600 秒** | `get_quota`、世界观渲染 |
-| `models.json` | `ModelCatalogCenter`（`ModelCatalogCenter.swift:47`） | **6 小时** | `start_session` / `set_session_profile` 的模型表校验 |
+| `crew-sessions.json` | `CrewSessionRunner.startSessionsSnapshotTimer`（`Sources/Mac/Services/CrewSessionRunner.swift:616`） | **2 秒** | 机长的 `list_sessions` |
+| `quota.json` | `QuotaCenter`（`Sources/Mac/Services/QuotaCenter.swift:63`） | **600 秒** | `get_quota`、世界观渲染 |
+| `models.json` | `ModelCatalogCenter`（`Sources/Mac/Services/ModelCatalogCenter.swift:47`） | **6 小时** | `start_session` / `set_session_profile` 的模型表校验 |
 
 ### 5.5 app 怎么知道 helper 写了东西
 
@@ -925,13 +925,13 @@ daemon-vs-daemon，不排除 daemon-vs-app**。而闸门 2 要守的不变量是
 
 **四条封边**，都是主动去找了没找到、不是没想到：
 
-- `SessionOrchestratorLock.acquire` 全仓唯一调用点：`SessionDaemonHost.swift:163`。
+- `SessionOrchestratorLock.acquire` 全仓唯一调用点：`Sources/Mac/LocalRunner/SessionDaemonHost.swift:163`。
 - `SessionOrchestratorLock` 这个名字全仓只出现在 3 个文件：它自己、
   `SessionDaemonHost.swift`、`SessionDaemonHostTests.swift`。**GUI 那条链上一个都没有。**
-- `SessionDaemonHost(` 的生产构造点唯一：`SessionDaemonMain.swift:35`，在 `--daemon`
+- `SessionDaemonHost(` 的生产构造点唯一：`Sources/Mac/Services/SessionDaemonMain.swift:35`，在 `--daemon`
   分支里（其余 7 处全在测试里）。
-- **没有第二套单实例机制兜底**：全仓 `flock(` 只有 `MultiProcessJSONStore.swift:37/38`、
-  `WhiteboardCursor.swift:182/183` 和锁自己；`LSMultipleInstancesProhibited` /
+- **没有第二套单实例机制兜底**：全仓 `flock(` 只有 `Sources/Stores/MultiProcessJSONStore.swift:37/38`、
+  `Sources/Mcp/WhiteboardCursor.swift:182/183` 和锁自己；`LSMultipleInstancesProhibited` /
   `NSRunningApplication` 在 `Info.plist`、`project.yml`、全部 Swift 源码里**零命中**。
 
 结论是「app 确实没取锁」，但**更值钱的是第 6 跳本身**：那时通往编排的唯一入口是一个
@@ -1029,4 +1029,4 @@ SwiftUI 视图钩子。两个后果，第二个才是要命的 —— ① 单测
 最早一条是 2026-08-15** —— 2026-08 仓库重建过一次，之前三千多个提交不在这里。所以
 `git log` / `git blame` 查不到某段代码的来历是正常的，**注释里的日期和现象才是这个仓库的
 真历史**。这也是发版脚本的 build 号从「git 提交数」改成「时钟派生」的原因
-（`build-macos-update.sh:31-50`）。
+（`scripts/release/build-macos-update.sh:31-50`）。

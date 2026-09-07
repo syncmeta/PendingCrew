@@ -22,50 +22,50 @@
 
 | # | 人类议题 | 映射既有 Todo | current main 现状 | 判定 |
 |---|---|---|---|---|
-| A | 跨实例/跨机器 session 与人协作（自部署、不依赖 PendingBot 账号） | #20 #44 #91 #84 #76 | P0–P3 早已合 main；P4 `a8f4597` 真进程分家；**P5a 今天刚把默认翻到 daemon**（`bdf92f3`/`f5749cc`，闸门 `ProcessRole.swift:38-43`）。异机直连（P6）**一行代码都没写**，只有范围页 `2026-09-04-cross-machine-transport-scope.md` | **部分**：同机常驻的**代码与 CLI 闭环**已完成（用户行为未验），异机未做 |
-| B | 机长主动编排、上下级同步、防跑偏、定期反思、总机长监督 | 无既有 Todo（#16 #74 #91 只覆盖组织调整与救援） | 编排工具齐（`McpServer.swift` 34 个工具，19 个机长专用）；上下级同步只有**组织树 + 每 crew 最后一句 30 字预览**（`HookEmitter.swift:194-241`）；**防跑偏/定期反思/上级抽查：代码里零命中** | **未做**（核心缺口） |
-| C | Todo 完成监督与自动收账 | #75 #94 #64 | **不存在任何停滞检测**。`CockpitPlan.swift:124-129` 明文写死「不做成提醒、不弹、不变红」，靠人眼看板 | **未做**（核心缺口） |
-| D | 按上下文/专长/负载分配，而非只看空闲 | 无既有 Todo | `CrewSessionsSnapshot.Entry`（`:9-32`）只有 name/role/brief/state；state 仅 working/idle/awaiting*/rateLimited/error。分配依据是提示词散文（`crew-captain.zh.md:27`），代码无判据 | **未做** |
+| A | 跨实例/跨机器 session 与人协作（自部署、不依赖 PendingBot 账号） | #20 #44 #91 #84 #76 | P0–P3 早已合 main；P4 `a8f4597` 真进程分家；**P5a 今天刚把默认翻到 daemon**（`bdf92f3`/`f5749cc`，闸门 `Sources/Mac/LocalRunner/ProcessRole.swift:38-43`）。异机直连（P6）**一行代码都没写**，只有范围页 `2026-09-04-cross-machine-transport-scope.md` | **部分**：同机常驻的**代码与 CLI 闭环**已完成（用户行为未验），异机未做 |
+| B | 机长主动编排、上下级同步、防跑偏、定期反思、总机长监督 | 无既有 Todo（#16 #74 #91 只覆盖组织调整与救援） | 编排工具齐（`McpServer.swift` 34 个工具，19 个机长专用）；上下级同步只有**组织树 + 每 crew 最后一句 30 字预览**（`Sources/Mcp/HookEmitter.swift:194-241`）；**防跑偏/定期反思/上级抽查：代码里零命中** | **未做**（核心缺口） |
+| C | Todo 完成监督与自动收账 | #75 #94 #64 | **不存在任何停滞检测**。`Sources/Models/CockpitPlan.swift:124-129` 明文写死「不做成提醒、不弹、不变红」，靠人眼看板 | **未做**（核心缺口） |
+| D | 按上下文/专长/负载分配，而非只看空闲 | 无既有 Todo | `CrewSessionsSnapshot.Entry`（`:9-32`）只有 name/role/brief/state；state 仅 working/idle/awaiting*/rateLimited/error。分配依据是提示词散文（`Resources/Prompts/crew-captain.zh.md:27`），代码无判据 | **未做** |
 | E | 跨 harness / 跨 session 交叉验证 | 无既有 Todo | 提示词与工具面搜「复核/交叉验证」零命中 | **未做** |
-| F | Agent 自有计划 / Todo | #66 #46 | 计划板已落地：四档 + `blocked` 必须指向人类 Todo #N（`CockpitPlan.swift:42-61,77-87,177-197`）+「最后更新 N 天前」展示 | **已解决** |
-| G | 回复消息与 Todo 联动 | #64 #62 | 人类那本**已实现**（`CrewHumanTodoRespond.swift` 三步落账→发群→唤醒，`HumanTodoWakePlan.swift:71-109` 提问者退出则回落机长）；**agent 那本完全静默** —— `respond_todo`（`McpServer.swift:1095-1125`）不进群、不 @ 派活者，`LocalTodoStore.swift:104` 注释自认此事 | **部分** |
+| F | Agent 自有计划 / Todo | #66 #46 | 计划板已落地：四档 + `blocked` 必须指向人类 Todo #N（`Sources/Models/CockpitPlan.swift:42-61,77-87,177-197`）+「最后更新 N 天前」展示 | **已解决** |
+| G | 回复消息与 Todo 联动 | #64 #62 | 人类那本**已实现**（`CrewHumanTodoRespond.swift` 三步落账→发群→唤醒，`Sources/Support/HumanTodoWakePlan.swift:71-109` 提问者退出则回落机长）；**agent 那本完全静默** —— `respond_todo`（`Sources/Mcp/McpServer.swift:1095-1125`）不进群、不 @ 派活者，`Sources/Stores/LocalTodoStore.swift:104` 注释自认此事 | **部分** |
 | H | 人类可见消息 vs agent 协调消息分层 | #61 #69 #79 | 已实现且是全项目唯一判定点：`CrewWhiteboardVisibility.swift`（session/captain 收窄、human 不收窄、broadcast 显式放宽），与「该不该叫醒」正交 | **已解决** |
-| I | 群聊复制 / 历史连续加载 / 滚动稳定 / 到底箭头 | #45 #47 #54 #56 #60 #89 #28 | 全部已实现：复制 `CrewChatView.swift:1592-1608`；分页保位 `CrewChatWindow.swift` + `:1022-1121`；默认底部 `.defaultScrollAnchor`（`:1580-1586`）；跟随/未读/自动消失 `CrewChatBottomFollow.swift` | **已解决** |
-| J | 群聊搜索聊天记录 | #49（账本仍 in_progress） | PendingCrew 侧**已闭环**：群内 `.searchable` 过滤 + 跳转（`CrewCenterView.swift:72`、`CrewChatView.swift:650-694`），跨群 `CrewGlobalSearchSheet.swift`。**PendingBot 群聊那半在另一仓库，本次未核** | **部分**（本仓已完成，账本没翻牌） |
-| K | Sidebar 层级按更新时间排序、状态准确 | #67 #2 #50 #27 #71 #73 | 排序取白板最后消息时间而非 `updatedAt`（`CrewSidebarView.swift:376-382`）；时间流视图 `:26-48`；拖拽改父子已落地；状态灯优先级红>黄(呼吸)>绿>无（`CrewStatusAggregation.swift:1-64`）且父 crew 沿 DAG 聚合子 crew 黄点（`CrewHumanTodoAttentionCache.aggregate()`） | **已解决** |
+| I | 群聊复制 / 历史连续加载 / 滚动稳定 / 到底箭头 | #45 #47 #54 #56 #60 #89 #28 | 全部已实现：复制 `Sources/Mac/Views/CrewChatView.swift:1592-1608`；分页保位 `CrewChatWindow.swift` + `:1022-1121`；默认底部 `.defaultScrollAnchor`（`:1580-1586`）；跟随/未读/自动消失 `CrewChatBottomFollow.swift` | **已解决** |
+| J | 群聊搜索聊天记录 | #49（账本仍 in_progress） | PendingCrew 侧**已闭环**：群内 `.searchable` 过滤 + 跳转（`Sources/Mac/Views/CrewCenterView.swift:72`、`Sources/Mac/Views/CrewChatView.swift:650-694`），跨群 `CrewGlobalSearchSheet.swift`。**PendingBot 群聊那半在另一仓库，本次未核** | **部分**（本仓已完成，账本没翻牌） |
+| K | Sidebar 层级按更新时间排序、状态准确 | #67 #2 #50 #27 #71 #73 | 排序取白板最后消息时间而非 `updatedAt`（`Sources/Mac/Views/CrewSidebarView.swift:376-382`）；时间流视图 `:26-48`；拖拽改父子已落地；状态灯优先级红>黄(呼吸)>绿>无（`Sources/Support/CrewStatusAggregation.swift:1-64`）且父 crew 沿 DAG 聚合子 crew 黄点（`CrewHumanTodoAttentionCache.aggregate()`） | **已解决** |
 | L | Cockpit 回归正确定位 | #3 #31 #46 #81 #96 | 已从多 tab 重构为单一「Agent 计划与想法」（`CockpitAgentMindView`），数据源是机长自己写的 `CockpitPlanStore`。旧 `CockpitRoadmapView.swift`/`CockpitPageView.swift` 成**孤儿代码**（仍在编译目标里）。开关慢有针对性修复 `5e758c8`，**commit 自述未做 GUI 手测** | **已解决 + 尾巴** |
-| M | 账号 / 旧云代码清理 | #63 #85 #78 | 全仓无 Supabase / Keychain / 登录态实代码。`LocalCodingAgentSpec.swift:81-91` 的 `SUPABASE_` 前缀是**禁止透传给子进程的防御清单**（该留，不是残留）；`DeviceIdentity.swift` 用的是 UserDefaults 不是 Keychain | **已解决**（曾被误报为未清理，已复核否定） |
+| M | 账号 / 旧云代码清理 | #63 #85 #78 | 全仓无 Supabase / Keychain / 登录态实代码。`Sources/Mac/LocalRunner/LocalCodingAgentSpec.swift:81-91` 的 `SUPABASE_` 前缀是**禁止透传给子进程的防御清单**（该留，不是残留）；`DeviceIdentity.swift` 用的是 UserDefaults 不是 Keychain | **已解决**（曾被误报为未清理，已复核否定） |
 | N | Harness / effort / 首次选择 / 内置终端 UI | #36 #82 #70 #56 #83 #90 #37 | 见 §1.1（harness 分线专项） | 见 §1.1 |
 | O | 上下文注入与 Codex 五小时额度 / 适配 | #65 #39 #26 #33 #12 #72 | 见 §1.1 | 见 §1.1 |
 | P | session 初始历史 / worktree 纪律 / 任务类型扩展 | #56 #34 #68 #77 #58 #80 | 常驻的**代码路径**已就位（daemon 持锁、app 退化 viewer 重连），attach 断线重连有 CLI 实测输出（`p5a-closed-loop-evidence.md`）。**证据全部来自 CLI 身份 —— 真实的双击启动 / 关闭 / 更新 / 重开一条都没验过，不能声称用户行为已通过** | **部分** |
 | Q | 人 / 人类称呼统一与整体 UI 完成度 | #19 #55 #85 #92 #95 #87 | 「人（本机）」零命中，称呼已统一 | **已解决** |
-| R | session 卡在待回复 / 待决策不发声 | #6 #25 #98 | 判据 `SessionAwaitingReply.reason` 三态（approval/menu/question）；**只有 menu 场景**有 5 分钟自动升级 @human（`SessionPendingDecision.swift:202,212` + `CrewSessionRunner.swift:2549-2559`）；question/approval 无自动升级 | **部分** |
-| S | 父机长救援不响应的子机长 | #91 #74 | 工具已落地且是 MCP 级：`create_and_handoff_captain(target_crew_id=直系子)`，`LocalCaptainReassignmentStore.swift:16-33` 限直系子 + fail-closed 回滚；人类另有右键 UI 路径 | **已解决（触发式）** —— 缺的是「谁发现它不响应」 |
+| R | session 卡在待回复 / 待决策不发声 | #6 #25 #98 | 判据 `SessionAwaitingReply.reason` 三态（approval/menu/question）；**只有 menu 场景**有 5 分钟自动升级 @human（`Sources/Mac/LocalRunner/SessionPendingDecision.swift:202,212` + `Sources/Mac/Services/CrewSessionRunner.swift:2549-2559`）；question/approval 无自动升级 | **部分** |
+| S | 父机长救援不响应的子机长 | #91 #74 | 工具已落地且是 MCP 级：`create_and_handoff_captain(target_crew_id=直系子)`，`Sources/Stores/LocalCaptainReassignmentStore.swift:16-33` 限直系子 + fail-closed 回滚；人类另有右键 UI 路径 | **已解决（触发式）** —— 缺的是「谁发现它不响应」 |
 
 ### 1.1 harness / 额度 / 注入分线（矩阵 N / O）
 
 | 条目 | 现状 | 判定 |
 |---|---|---|
-| 三种 runner | `LocalCodingAgentKind.swift:8-14` 定义 claude_code / codex / terminal；claude 走 PTY（`AgentSessionCore`），codex 走 app-server JSON-RPC（`CodexAppServerBackend.swift:38-46`），terminal 是纯 PTY 不接编排 | 已解决 |
-| 新建 session UI | 三药丸 + 「设为机长」勾选（`CrewSessionWindowView.swift:799-824`）；model/effort **故意不在建前选**，建好后在终端页头部切（`:752` 注释） | 已解决 |
+| 三种 runner | `Sources/Mac/LocalRunner/LocalCodingAgentKind.swift:8-14` 定义 claude_code / codex / terminal；claude 走 PTY（`AgentSessionCore`），codex 走 app-server JSON-RPC（`Sources/Mac/LocalRunner/CodexAppServer/CodexAppServerBackend.swift:38-46`），terminal 是纯 PTY 不接编排 | 已解决 |
+| 新建 session UI | 三药丸 + 「设为机长」勾选（`Sources/Mac/Views/CrewSessionWindowView.swift:799-824`）；model/effort **故意不在建前选**，建好后在终端页头部切（`:752` 注释） | 已解决 |
 | 详情页三排 | 名字/停止(1142-1161) → model+effort(1164-1166) → 审批模式(**仅 codex**，1168-1177) | 已解决 |
 | session 自切 model/effort | claude：等空闲注入斜杠命令 + 核对回显。**codex 也已实现**（`CodexAppServerBackend.applyProfileSwitch` → `thread/settings/update`，`:217-238`，成功返回 `.applied`） | 已解决 —— 但**说明书没跟上**，见 §2.3 |
-| 模型表 | `AgentModelCatalog` probe/manual 两态；`ModelCatalogCenter.swift:41-50` 只在编排者进程起、6 小时探一轮，探不到保留旧值并记 error 不静默 | 已解决 |
-| 额度采集 | `QuotaCenter.swift:57-65` 编排者 10 分钟一轮（claude `/usage`；codex `account/rateLimits/read`，问不到才回落 rollout jsonl）；viewer 60s 只读文件 | 已解决 |
+| 模型表 | `AgentModelCatalog` probe/manual 两态；`Sources/Mac/Services/ModelCatalogCenter.swift:41-50` 只在编排者进程起、6 小时探一轮，探不到保留旧值并记 error 不静默 | 已解决 |
+| 额度采集 | `Sources/Mac/Services/QuotaCenter.swift:57-65` 编排者 10 分钟一轮（claude `/usage`；codex `account/rateLimits/read`，问不到才回落 rollout jsonl）；viewer 60s 只读文件 | 已解决 |
 | 额度将尽的收活/广播 | `QuotaWarningPlan`（按档位门槛 + 临近重置抑制，只提醒不代 session 收尾），对应 #26/#39 | 已解决 |
-| 撞额度自动唤醒 | `autoScheduleQuotaWakeup`（`CrewSessionRunner.swift:846-874`）+ `QuotaWakeupPlan`：重置+1 分钟，解析不到退避 45 分钟并 fail-loud | **claude 已解决 / codex 有缺陷**，见 §2.4 |
-| 上下文注入 | 白板**自动注入**不必显式查：claude 首轮 `initialPromptWithWhiteboard`（`LocalSessionLaunch.swift:13-35`）+ 后续 PostToolUse hook；codex 每轮 `whiteboardProvider`（`CrewSessionRunner.swift:1244-1245`）。新 session 注入最近 30 条历史全文（`WhiteboardCursor.swift:56-66`，Todo #56③） | 已解决 |
-| 注入面截断 | 白板 hook 路**不截字数**只截条数(30)；唤醒预览/群聊摘要另一条通道单行截 200 字（`CrewRecentContextRender.swift:19-73`） | 已解决（两条通道不同口径，属已知性质） |
-| codex UI 自然语言化 | `CodexActivityPresentation.command`（`CodexThreadItem.swift:167-224`）归纳成「已读取档案/已执行指令…」，细节收进 DisclosureGroup（`CodexTranscriptView.swift:170-225`） | 已解决（#83/#90） |
-| worktree 纪律 | `SessionWorkspace.swift:5-30`：isolation=on 且非 git repo / detached HEAD 直接 throw，未见静默落回共享目录的分支 | 已解决 |
+| 撞额度自动唤醒 | `autoScheduleQuotaWakeup`（`Sources/Mac/Services/CrewSessionRunner.swift:846-874`）+ `QuotaWakeupPlan`：重置+1 分钟，解析不到退避 45 分钟并 fail-loud | **claude 已解决 / codex 有缺陷**，见 §2.4 |
+| 上下文注入 | 白板**自动注入**不必显式查：claude 首轮 `initialPromptWithWhiteboard`（`Sources/Mac/LocalRunner/LocalSessionLaunch.swift:13-35`）+ 后续 PostToolUse hook；codex 每轮 `whiteboardProvider`（`Sources/Mac/Services/CrewSessionRunner.swift:1244-1245`）。新 session 注入最近 30 条历史全文（`Sources/Mcp/WhiteboardCursor.swift:56-66`，Todo #56③） | 已解决 |
+| 注入面截断 | 白板 hook 路**不截字数**只截条数(30)；唤醒预览/群聊摘要另一条通道单行截 200 字（`Sources/Mac/LocalRunner/CrewRecentContextRender.swift:19-73`） | 已解决（两条通道不同口径，属已知性质） |
+| codex UI 自然语言化 | `CodexActivityPresentation.command`（`Sources/Mac/LocalRunner/CodexAppServer/CodexThreadItem.swift:167-224`）归纳成「已读取档案/已执行指令…」，细节收进 DisclosureGroup（`Sources/Mac/Views/CodexTranscriptView.swift:170-225`） | 已解决（#83/#90） |
+| worktree 纪律 | `Sources/Mac/LocalRunner/SessionWorkspace.swift:5-30`：isolation=on 且非 git repo / detached HEAD 直接 throw，未见静默落回共享目录的分支 | 已解决 |
 
 ## 2. 新发现：不在人类清单上、但值得单列的风险
 
 ### 2.1 `local-crews.json` 在翻默认到 daemon 之后成了双进程写者
 
 - **读代码读到的**：`LocalCrewStore.persistToDiskReportingFailure()`（`:652-658`）每次改动**整份 atomic 覆写**，没有跨进程锁，也没有版本号；它**不走** `MultiProcessJSONStore`。
-- **读代码读到的**：daemon 进程会建 `CrewStore`（`SessionDaemonMain.swift:47`），排空控制通道时经 `setTitle` / `setAttention` 写它（`CrewStore.swift:453,464`）——这条有 `ownsSharedControlChannel` 门管着，写者是编排者。
-- **读代码读到的**：app(viewer) 侧的人类操作**没有那道门**——隐藏 crew（`CrewStore.swift:245,256`）与人类改名（`:261`）直接写。
+- **读代码读到的**：daemon 进程会建 `CrewStore`（`Sources/Mac/Services/SessionDaemonMain.swift:47`），排空控制通道时经 `setTitle` / `setAttention` 写它（`Sources/Stores/CrewStore.swift:453,464`）——这条有 `ownsSharedControlChannel` 门管着，写者是编排者。
+- **读代码读到的**：app(viewer) 侧的人类操作**没有那道门**——隐藏 crew（`Sources/Stores/CrewStore.swift:245,256`）与人类改名（`:261`）直接写。
 - **推出来的（未实测）**：P5a 翻默认之后 daemon 与 app 常态同时活着，两个进程各持内存副本再整份覆写 → **后写方整份抹掉先写方的改动，不报错、不留痕**。
 - 同批被怀疑的另外两个「漏网单 writer」经复核**不成立**：`CrewChatAttachmentStore` 每份附件写独立 UUID 文件，无共享索引；`CaptainTemplateStore` 只有 GUI 侧 View 在用，daemon 不碰。
 
@@ -83,9 +83,9 @@ Todo #49 的代码在本仓已闭环（§1 J），账本仍是 in_progress。这
 
 ### 2.4 codex 撞额度的自动唤醒读错了窗
 
-- `autoScheduleQuotaWakeup`（`CrewSessionRunner.swift:861`）对两家一律取 `snap?.fiveHourWindow?.resetsAt`。
-- `fiveHourWindow` 认的是 label `session` / `5小时窗`（`AgentQuota.swift:181-184`）。
-- 而 codex 的**主路径** app-server `account/rateLimits/read` 实测样例（`AgentQuota.swift` 注释）是 `primary.windowDurationMins = 10080`（周窗）、`secondary: null`；UI 侧也已写明「Codex 一个环：周（codex 侧已无 5 小时分档）」（`QuotaRingsFooter.swift:9`）。
+- `autoScheduleQuotaWakeup`（`Sources/Mac/Services/CrewSessionRunner.swift:861`）对两家一律取 `snap?.fiveHourWindow?.resetsAt`。
+- `fiveHourWindow` 认的是 label `session` / `5小时窗`（`Sources/Mac/LocalRunner/AgentQuota.swift:181-184`）。
+- 而 codex 的**主路径** app-server `account/rateLimits/read` 实测样例（`AgentQuota.swift` 注释）是 `primary.windowDurationMins = 10080`（周窗）、`secondary: null`；UI 侧也已写明「Codex 一个环：周（codex 侧已无 5 小时分档）」（`Sources/Mac/Views/QuotaRingsFooter.swift:9`）。
 - **后果（推论，未实测）**：codex session 撞额度后 `resetsAt` 恒 nil → 永远走 45 分钟盲目退避，而不是按真实重置时刻醒。claude 不受影响。
 - 正确形状应是「按这一家真实存在的那个窗取重置时刻」，而不是硬取 5 小时窗。
 
@@ -100,7 +100,7 @@ Todo #49 的代码在本仓已闭环（§1 J），账本仍是 in_progress。这
 
 - **吃掉**：矩阵 B（防跑偏/反思/监督）、C（Todo 监督与收账）、R（question/approval 卡住不升级）、S（子机长不响应没人发现）、§2.2
 - **为什么是一条而不是四条**：这四件事缺的是同一个东西 —— 系统提供了工具和提示词，却**没有任何东西会在「该动而没动」时发出声音**。逐条打补丁会造出四个互不知情的提醒器。
-- **最小闭环**：把已经存在的**单场景**升级器（`SessionPendingDecision.escalateAfter = 300` → 5 分钟后 @human，`CrewSessionRunner.swift:2549-2559`）抽成一个通用的「停滞判定 + 出口」，首批接三个源：① agent Todo 长期 in_progress；② 计划板条目久未更新；③ session `awaitingReply` 的 question / approval 态超时。出口三档：进群 @ 机长 → 升级成人类 Todo → 翻侧栏黄点（三档已经全部存在，只是没人触发它们）。
+- **最小闭环**：把已经存在的**单场景**升级器（`SessionPendingDecision.escalateAfter = 300` → 5 分钟后 @human，`Sources/Mac/Services/CrewSessionRunner.swift:2549-2559`）抽成一个通用的「停滞判定 + 出口」，首批接三个源：① agent Todo 长期 in_progress；② 计划板条目久未更新；③ session `awaitingReply` 的 question / approval 态超时。出口三档：进群 @ 机长 → 升级成人类 Todo → 翻侧栏黄点（三档已经全部存在，只是没人触发它们）。
 - **依赖**：无新架构。全部数据已在 `LocalTodoStore` / `CockpitPlanStore` / `CrewSessionsSnapshot` 里。
 - **风险与失败保护**：吵。① 只在**状态发生变化**时发一次，绝不周期性重播（一条永远在报「已知没事」的提醒会训练所有人忽略它）；② 每条有抑制窗；③ 判定必须**先证明它会红** —— 造一条超期条目跑当前代码必须触发，再看它在正常数据上不触发。
 - **验收**：造一条超期 Todo → 群里出现一条提醒，且**只出现一条**；把它翻牌 → 不再出现。
@@ -124,7 +124,7 @@ Todo #49 的代码在本仓已闭环（§1 J），账本仍是 in_progress。这
 ### L4 · 常驻后台收尾与账本一致性（P0）
 
 - **吃掉**：矩阵 A 的同机部分、P、§2.1
-- **现状**：默认已经翻到 daemon（`ProcessRole.swift:38-43`），断线重连有实测输出 —— **但全部证据来自 CLI 身份，双击图标那条真实启动路径一次都没走过**（`p5a-flip-default-report.md` 自己写着）。P5b（开机自启 / 崩溃自拉 / 半开连接回收）未开始。叠加 §2.1 的 `local-crews.json` 双进程写。
+- **现状**：默认已经翻到 daemon（`Sources/Mac/LocalRunner/ProcessRole.swift:38-43`），断线重连有实测输出 —— **但全部证据来自 CLI 身份，双击图标那条真实启动路径一次都没走过**（`p5a-flip-default-report.md` 自己写着）。P5b（开机自启 / 崩溃自拉 / 半开连接回收）未开始。叠加 §2.1 的 `local-crews.json` 双进程写。
 - **最小闭环**：① 一次 GUI 真实路径的人工验收（双击起 → 关 app → session 不断 → 重开恢复同一 session）；② `local-crews.json` 收进多进程保护，或把 viewer 侧的写路统一改走控制通道；③ P5b。
 - **依赖**：① 需要人类点一下（GUI 不许自动驱动），**且必须等候选构建做出来之后再请人做** —— P5a 当前仍被 spawn 观测缺口阻断，现在催人验只会验到一个还在动的靶子。本 crew 的人类 Todo #1 按此推迟，不催。
 - **风险**：默认已经翻过去了，这三件是在**已上线的默认**下补验证 —— 顺序上 ①② 优先于 ③。
@@ -134,7 +134,7 @@ Todo #49 的代码在本仓已闭环（§1 J），账本仍是 in_progress。这
 
 - **吃掉**：矩阵 A 的异机部分、Todo #18 / #44 / #91
 - **现状**：P6 范围页已立、**一行代码没写**，接缝（`SessionMessageLink`）确实留好了，加第五个实现即可，不用重做。
-- **需要人类拍板的一件事**：Todo #18 的原话是「PendingCrew 的 iOS 端弄到 PendingBot 的 crew tab」，而 `2026-08-10-pendingcrew-ios-driving-channel-design.md:199-200` 写死的方向**相反** —— 驾驶面宿主是 PendingCrew iOS，PendingBot 只留轻量消息 tab。两者不能同时成立。
+- **需要人类拍板的一件事**：Todo #18 的原话是「PendingCrew 的 iOS 端弄到 PendingBot 的 crew tab」，而 `docs/internal/2026-08-10-pendingcrew-ios-driving-channel-design.md:199-200` 写死的方向**相反** —— 驾驶面宿主是 PendingCrew iOS，PendingBot 只留轻量消息 tab。两者不能同时成立。
 - **依赖**：L4 稳。
 - **验收**：两台机器一次配对后直连、断了能恢复、全程无账号无中继。
 

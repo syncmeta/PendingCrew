@@ -209,7 +209,7 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
   丢的那个文件只是不进 target，测试照跑，`Executed N` 少几条没人会注意）。
 - **另半边：也不能「还原」**（来源：机组群聊体验 1-1，2026-09-07，自己踩出来的）。
   它为了「只提交自己的东西」，把共享树里的 `project.pbxproj` `git checkout` 回 HEAD，
-  **当场打断了别人的编译**（`SessionDaemonMain.swift:238: cannot find 'DaemonGracefulShutdown'`）。
+  **当场打断了别人的编译**（`Sources/Mac/Services/SessionDaemonMain.swift:238: cannot find 'DaemonGracefulShutdown'`）。
   pbxproj **不是任何人的私有文件，是全员共用的桥** —— 还原它等于替别人做决定。
 - **处置（已定为规矩）**: 合并冲突时先定顺序，**后合的人不解冲突**，合完直接重跑
   `xcodegen generate`，把重生成的 pbxproj 一并提交。合起来的完整规矩是：
@@ -311,16 +311,16 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
   函数体却调 ObjC 的 `writeData:`。**唯一真会发生的错误（EPIPE）恰恰是那些 `try` 捕不到的那个。**
   换成 `CodexPipeWrite.line`（会抛的 `write(contentsOf:)` + 自带 SIGPIPE arming），3 条测试自证。
 - **留着没改的（本条登记的就是这些）**:
-  - `SessionDaemonHost.swift:111`（`SessionDaemonLog.write`）— `try? handle.write(contentsOf: data)`
-  - `GitWorktreeService.swift:185` — 同样形状
+  - `Sources/Mac/LocalRunner/SessionDaemonHost.swift:111`（`SessionDaemonLog.write`）— `try? handle.write(contentsOf: data)`
+  - `Sources/Mac/LocalRunner/GitWorktreeService.swift:185` — 同样形状
   两处都写**普通文件**，不会 EPIPE，所以不会崩；但 `try?` 会把真实写失败（盘满、权限、
   卷被卸载）**静默吃掉**。daemon 日志写不进去这件事本身是无声的 —— 而那份日志正是下次
   出事时唯一的现场。**记账不改：这是另一件事，改它要先想清楚「日志写不进去时往哪报」，
   而那个去向本身就是个设计问题（往日志报日志写不进去，是个环）。**
   - 5 处 `FileHandle.standardError.write`（非抛版，往 stderr 写）：
-    `SessionLaunchOptions.swift:128`、`SessionDaemonStatusMain.swift:17`、
-    `SessionDaemonAttachMain.swift:22`、`SessionDaemonAttachMain.swift:29`、
-    `SessionDaemonMain.swift:44`。**5 处 4 个文件** —— 派活的 brief 里写的是 3 处，
+    `Sources/Mac/LocalRunner/SessionLaunchOptions.swift:128`、`Sources/Mac/Services/SessionDaemonStatusMain.swift:17`、
+    `Sources/Mac/Services/SessionDaemonAttachMain.swift:22`、`Sources/Mac/Services/SessionDaemonAttachMain.swift:29`、
+    `Sources/Mac/Services/SessionDaemonMain.swift:44`。**5 处 4 个文件** —— 派活的 brief 里写的是 3 处，
     实测是 5 处（报数时把名字列全再数一遍，撞上过一次就知道值）。
     stderr 的读端在 CLI 场景**通常**是终端，不会断 —— 但「通常」不等于「一定」：
     `PendingCrew --daemon-status 2>&1 | head` 那根管子的读端一走就断。
@@ -348,21 +348,21 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
 - **问题**: 两个 endpoint 收到 `Data` 后都直接 `codec.decodeApp/decodeDaemon`，而它们经 `exactlyOneFrame`
   要求这一次投递**恰好解出一帧**；不满足就 `throw`，调用点是 `guard let … = try? … else { return }`。
   于是**半帧到达 → 丢；两帧粘在一起 → 两帧都丢**。不断连、不报错、不落日志。
-  正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧，`SessionProtocol.swift:81-107`）已经写好了，
+  正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧，`Sources/Mac/LocalRunner/SessionProtocol.swift:81-107`）已经写好了，
   **只是没接到 endpoint 的收包路径上**。
 - **为什么今天照不出来**: `InProcessTransport.sendFromApp/sendFromDaemon` 把整个 `Data` 原样交给对端回调
-  （`InProcessTransport.swift:22-30`），投递边界恒等于帧边界。**现有测试全部跑在这条传输上，所以这条永远是绿的。**
+  （`Sources/Mac/LocalRunner/InProcessTransport.swift:22-30`），投递边界恒等于帧边界。**现有测试全部跑在这条传输上，所以这条永远是绿的。**
   UDS 上偶尔踩；WAN + TLS（Fly 远程主机、手机遥控）上必然拆包粘包。
 - **连带一条**: 两个 endpoint 的 init 签名是 `init(transport: InProcessTransport, …)`（`:479` / `:763`），
-  不是同文件里已经定义好的 `SessionTransport` 协议（`InProcessTransport.swift:6`）—— 换传输必须改这两个 init。
+  不是同文件里已经定义好的 `SessionTransport` 协议（`Sources/Mac/LocalRunner/InProcessTransport.swift:6`）—— 换传输必须改这两个 init。
 - **该怎么还**: 归 P4（真进程分家）的验收，**不要平行改**（那是设计 §6 警告的双头）。两步：
   ① 每条连接各持一个 `SessionFrameDecoder`，`receive` 改成「喂字节 → 拿 0..n 帧 → 逐帧处理」；
   ② endpoint 面向 `SessionTransport` 而非具体类。
   验收要求**先证明尺子会红**：写一个按任意字节边界切分/合并投递的传输替身，跑当前代码必须红，接上增量解码后转绿。
 - **已还（2026-09-04 核实，随 P4 合入 main `a8f4597`）**：两个 endpoint 各自持一个
-  `SessionFrameDecoder`（server 侧在 `Connection` 上，`SessionProtocolEndpoints.swift:21`；
+  `SessionFrameDecoder`（server 侧在 `Connection` 上，`Sources/Mac/LocalRunner/SessionProtocolEndpoints.swift:21`；
   client 侧 `:541`，重连时 `:593` 重置），收包路径改成「喂字节 → 拿 0..n 帧 → 逐帧处理」。
-  传输面向 `SessionMessageLink`（`UnixSocketTransport.swift:15`）而非具体类，
+  传输面向 `SessionMessageLink`（`Sources/Mac/LocalRunner/UnixSocketTransport.swift:15`）而非具体类，
   今天有四个实现：`InProcessSessionLink` / `UnixSocketTransport` / 测试替身
   `ByteStreamLink`（**按任意字节边界切分与粘包**）/ `BackpressureLink`。
   尺子也照要求写了：`SessionProtocolOverSocketTests.test_server接受任意切分与粘包的可靠字节流`
@@ -396,17 +396,17 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
   1. **env `PENDINGCREW_DATA_DIR`** —— daemon 走这条（`ps eww` 量到）。
   2. **argv `--dir`** —— helper 走这条。`Sources/Mcp/McpHelperMain.swift:24` 取参数，
      六个 store 全部 `directory: dir`。**注意 env 到不了 helper**：
-     `LocalCodingAgentSpec.swift:67-77` 的透传白名单只有 8 个键，`:83-86` 专门封死
+     `Sources/Mac/LocalRunner/LocalCodingAgentSpec.swift:67-77` 的透传白名单只有 8 个键，`:83-86` 专门封死
      `PENDINGCREW_` 前缀（secret 卫生，本身是对的）。所以隔离能成立**全靠这第二条通道**，
      而纪律里没有它。
   3. **静态默认** —— `Sources/Mcp/McpServer.swift:79`
      `attachmentRoot ?? CrewChatAttachmentStore.defaultDirectory`，而
-     `CrewChatAttachmentStore.swift:16` 的 `defaultDirectory` = `PendingCrewDataRoot.subdirectory("attachments")`
+     `Sources/Stores/CrewChatAttachmentStore.swift:16` 的 `defaultDirectory` = `PendingCrewDataRoot.subdirectory("attachments")`
      = **真数据根**。`McpHelperMain` 从头到尾**没传过 `attachmentRoot`**（grep 零命中）。
      → **隔离环境里的 agent 只要 `post_to_crew(attachments:)`，附件就写进真数据根。**
 - **为什么它今天没咬人**: 纯属运气 —— 冒烟的 brief 都是纯文本，没有一次带附件。
   发包那趟我们把「不许带 attachments」**写进了任务书正文**（不是靠「判据里没有它」兜）。
-- **同族、今天没触发的第四处**: `McpHelperMain.swift:70` / `:77` 的 hook 分支写的是
+- **同族、今天没触发的第四处**: `Sources/Mcp/McpHelperMain.swift:70` / `:77` 的 hook 分支写的是
   `dir ?? LocalWhiteboardStore.defaultDirectory` —— **`--dir` 一旦没传就静默落回真数据根**。
   现在每条 `ps` 都带着 `--dir`，所以不是问题;但它跟 `:79` 是同一种「兜底指向真目录」的写法。
 - **修**: helper 补传 `attachmentRoot`（连同 `:70`/`:77` 那两处兜底一起收口）。**更值得做的是
@@ -545,7 +545,7 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
 
 ### 🟢 主线程上还剩一次目录枚举 —— `drainRenames` 每 tick 全量列目录
 - **发现**: 2026-08-19 · Todo #59 现场复采
-- **位置**: `Sources/Stores/LocalCrewControlStore.swift:49` `drainRenames()`，经 `CrewStore.applyPendingRenames()`（`CrewStore.swift:379`）挂在 `startRenameWatchIfNeeded` 的监视回调上。
+- **位置**: `Sources/Stores/LocalCrewControlStore.swift:49` `drainRenames()`，经 `CrewStore.applyPendingRenames()`（`Sources/Stores/CrewStore.swift:379`）挂在 `startRenameWatchIfNeeded` 的监视回调上。
 - **问题**: 每个 tick 都 `-[NSFileManager contentsOfDirectoryAtURL:…]` 全量列一遍目录（`getattrlistbulk`），**在主线程**。与已修的第 4 条（唤醒器全量重读白板）是同一族病：主线程上的目录/文件轮询。
 - **量级**: 四份采样里稳定占主线程 **0.44%–0.72%**（连外层闭包 1.34%）。比修前任何一项都小两个数量级，但**修完那四条之后，它是主线程上最大的单项**。
 - **没做**: 本次只登记，没动 —— 复采那条分支的职责是验数字，不是顺手改。可仿照唤醒器补一道文件指纹门。
@@ -628,7 +628,7 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
 ### 🟢 驾驶舱有一半的数据契约只存在于另一个仓库
 - **发现**: 2026-08-20 · 技术栈梳理（只读盘点）
 - **位置**: `Sources/Models/CockpitModel.swift:362-383` 的 `CockpitLoader.load`；空态文案在 `Sources/Mac/Views/CockpitView.swift:112`。
-- **问题**: 驾驶舱从 **crew 的工作目录**读四样东西：`docs/roadmap.md`、`docs/handbook/`、`docs/state/`、`docs/tasks/`。其中 `docs/roadmap.md` 缺失时有一份**自带格式模板的空态引导**（`CockpitRoadmapView.swift:369-393`），照着建就能用；但 `docs/handbook/` 与 `docs/state/` 的格式**这个仓库里没有任何地方写过**，而 `CockpitView.swift:112` 的空态直接告诉用户「让某个 crew 的工作目录指向带这些账的仓库（比如大绿豆自己）」—— 那是另一个**未开源**的仓库，外部贡献者拿不到，也无从照着造一份。
+- **问题**: 驾驶舱从 **crew 的工作目录**读四样东西：`docs/roadmap.md`、`docs/handbook/`、`docs/state/`、`docs/tasks/`。其中 `docs/roadmap.md` 缺失时有一份**自带格式模板的空态引导**（`Sources/Mac/Views/CockpitRoadmapView.swift:369-393`），照着建就能用；但 `docs/handbook/` 与 `docs/state/` 的格式**这个仓库里没有任何地方写过**，而 `Sources/Mac/Views/CockpitView.swift:112` 的空态直接告诉用户「让某个 crew 的工作目录指向带这些账的仓库（比如大绿豆自己）」—— 那是另一个**未开源**的仓库，外部贡献者拿不到，也无从照着造一份。
 - **牵连**: `README.md:69` 把「驾驶舱」列在「真跑过、天天在用的」里，没有任何限定语。对一个把工作目录指向自己 clone 的人来说，驾驶舱的任务段能用（人类 Todo + `~/.claude/tasks` 都在 app 数据目录），路线段照引导建一份 `docs/roadmap.md` 也能用，**但期望/现状那两栏永远是空的，而他不知道为什么**。
 - **该怎么还**（三选一，都不大）: ① 给 `docs/handbook/` 与 `docs/state/` 也补上同款自带模板的空态引导；② 在 README 的能力清单里给「驾驶舱」加半句限定；③ 把这两本账的格式写进 `docs/`。**别改代码去删功能** —— 它对作者本人是天天在用的。
 

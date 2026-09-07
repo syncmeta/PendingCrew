@@ -52,9 +52,9 @@ Unicode._GraphemeBreakProperty.init(from:)                861
 ```
 ActivityTerminalView.dataReceived(slice:)                 ← 主线程，每批 PTY 输出
   └ closure #1 in AgentTerminalSession.init  (AgentTerminalSession.swift:300)
-     └ SessionLaunchParameterScanner.feed(_:now:)         (SessionLaunchParameterEcho.swift:184)
+     └ SessionLaunchParameterScanner.feed(_:now:)         (Sources/Mac/LocalRunner/SessionLaunchParameterEcho.swift:184)
         └ SessionLaunchParameterVerdict.classify(_:model:effort:)  (:89)
-           ├ SessionProfileEchoVerdict.squeeze(_:)        (SessionProfileSwitch.swift:92)  ← 94%
+           ├ SessionProfileEchoVerdict.squeeze(_:)        (Sources/Mac/LocalRunner/SessionProfileSwitch.swift:92)  ← 94%
            └ SessionLaunchParameterVerdict.excerpt(...)   (:112)
 ```
 
@@ -94,7 +94,7 @@ claude 的 TUI 每秒重绘若干次 → 每秒若干笔 PTY 输出 → 单个 s
 |---|---|
 | 816 / 10287 = **7.9%** | `ActivityTerminalView.dataReceived` 整个子树（**1 个** session） |
 | ↳ 590 = 5.7% | `AgentTerminalSession.swift:280` → `TypingActivityTracker.signature` |
-| ↳ ~200 = 2.0% | `AgentTerminalSession.swift:281` → `SessionHealthScanner.feed`（`SessionHealth.swift:206/213`） |
+| ↳ ~200 = 2.0% | `AgentTerminalSession.swift:281` → `SessionHealthScanner.feed`（`Sources/Mac/LocalRunner/SessionHealth.swift:206/213`） |
 | 173 / 10287 = **1.7%** | `MultiProcessJSONStore.withFileLock` ← `LocalWhiteboardStore.loadLockedReportingFailure` |
 | 157 / 10287 = **1.5%** | `CrewLocalMentionWaker.scan(crewId:)` → `decodeRows` → `LocalWhiteboardMessage.init(from:)` |
 
