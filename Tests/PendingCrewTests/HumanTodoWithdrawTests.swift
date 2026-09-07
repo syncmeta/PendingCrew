@@ -264,6 +264,101 @@ final class HumanTodoWithdrawTests: XCTestCase {
         XCTAssertTrue(receipt.contains("要不要发布？"), receipt)
     }
 
+    // MARK: - supersede（Todo #102 第二刀）
+
+    private func add(_ s: McpServer, _ args: [String: Any]) -> String {
+        let json = String(data: try! JSONSerialization.data(withJSONObject: args),
+                          encoding: .utf8)!
+        return s.handleLine("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_human_todo","arguments":\(json)}}
+            """) ?? ""
+    }
+
+    func testSupersedeAddsTheNewOneAndWithdrawsTheOld() {
+        let dir = tempDir()
+        let s = server(dir)
+        let old = seed(store(dir), text: "0.1.24 要不要发？")
+        let receipt = add(s, ["text": "0.1.25 要不要发？", "supersedes": old.number])
+        XCTAssertTrue(receipt.contains("同时撤回了旧的 #\(old.number)"), receipt)
+
+        let ledger = LocalTodoStore(directory: dir, ledger: .human)
+        let open = ledger.list(crewId: "c").filter(\.isUnanswered)
+        XCTAssertEqual(open.count, 1, "人只该看到一条在等他")
+        XCTAssertEqual(open.first?.text, "0.1.25 要不要发？")
+        XCTAssertNotNil(ledger.item(crewId: "c", number: old.number)?.withdrawnAt)
+    }
+
+    func testSupersedeReasonNamesTheReplacement() {
+        // 「被 #M 取代」必须写出 M —— 人回头看群聊/时间线要能顺着号找到新的那条。
+        let dir = tempDir()
+        let s = server(dir)
+        let old = seed(store(dir))
+        _ = add(s, ["text": "新的问法", "supersedes": old.number])
+        let posted = LocalWhiteboardStore(directory: dir).list(crewId: "c")
+        XCTAssertTrue(posted.contains { $0.text.hasPrefix("撤回 人类 To Do #\(old.number)：被 #") },
+                      posted.map(\.text).joined(separator: " | "))
+    }
+
+    func testSupersedeIsRefusedWholesaleWhenTargetIsUnknown() {
+        // 验不过就**整件事都不做** —— 不留「新的加了、旧的还挂着」这种半截状态。
+        let dir = tempDir()
+        let s = server(dir)
+        let receipt = add(s, ["text": "新的问法", "supersedes": 42])
+        XCTAssertTrue(receipt.contains("新条目也没有加"), receipt)
+        XCTAssertTrue(LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c").isEmpty)
+    }
+
+    func testSupersedeIsRefusedWhenTargetIsSomeoneElses() {
+        let dir = tempDir()
+        let old = seed(store(dir), by: "sess-other", name: "别人")
+        let receipt = add(server(dir, sessionId: "sess-1"),
+                          ["text": "我来重提", "supersedes": old.number])
+        XCTAssertTrue(receipt.contains("只能取代自己提的"), receipt)
+        let ledger = LocalTodoStore(directory: dir, ledger: .human)
+        XCTAssertEqual(ledger.list(crewId: "c").count, 1, "新条目不许落下")
+        XCTAssertTrue(ledger.item(crewId: "c", number: old.number)!.isUnanswered)
+    }
+
+    func testSupersedeIsRefusedWhenTargetAlreadyWithdrawn() {
+        let dir = tempDir()
+        let ledger = store(dir)
+        let old = seed(ledger)
+        _ = ledger.withdraw(crewId: "c", number: old.number, sessionId: "sess-1", reason: "过期")
+        let receipt = add(server(dir), ["text": "再提一次", "supersedes": old.number])
+        XCTAssertTrue(receipt.contains("已经撤回过了"), receipt)
+        XCTAssertEqual(LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c").count, 1)
+    }
+
+    func testPlainAddStillWorksWithoutSupersedes() {
+        // supersede 是可选的，别把普通新增带坏。
+        let dir = tempDir()
+        let receipt = add(server(dir), ["text": "一件新事"])
+        XCTAssertTrue(receipt.contains("已记入人类 Todo #1"), receipt)
+        XCTAssertFalse(receipt.contains("撤回"), receipt)
+    }
+
+    func testWithdrawObstacleIsTheSingleJudgeForBothDoors() {
+        // 撤回和 supersede 的目标校验共用这一份纯判据 —— 各写一套迟早分叉。
+        let item = LocalTodoItem(id: "i", number: 1, text: "t", status: "pending",
+                                 createdAt: "2026-09-07T00:00:00Z",
+                                 createdBySessionId: "sess-1")
+        XCTAssertNil(LocalTodoStore.withdrawObstacle(item: item, sessionId: "sess-1"))
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: item, sessionId: "sess-2"),
+                       .notYours(owner: nil))
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: nil, sessionId: "sess-1"), .notFound)
+
+        var gone = item
+        gone.deletedAt = "2026-09-07T01:00:00Z"
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: gone, sessionId: "sess-1"), .notFound)
+    }
+
+    func testSupersedesDescriptionTellsAgentsNotToWriteItInProse() {
+        // 这句是这把刀的全部意义：写在正文里没有任何东西会去执行它。
+        let r = (try? XCTUnwrap(server(tempDir())
+            .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))) ?? ""
+        XCTAssertTrue(r.contains("别在正文里写"))
+    }
+
     func testMcpDescriptionSaysItIsNotDeletionAndOwnerOnly() {
         // 这两句是这扇门的安全带：一句挡住「拿它清理我不想答的事」，
         // 一句挡住「以为撤了就没人看得见了」。
