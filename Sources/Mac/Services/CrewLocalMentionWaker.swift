@@ -262,12 +262,15 @@ final class CrewLocalMentionWaker {
             do {
                 let detail = try await backend.getCrew(crewId)
                 if wake.needCaptain {
-                    try await runner.startCaptain(detail: detail, backend: backend, wakeText: wakeText)
+                    try await runner.startCaptain(
+                        detail: detail, backend: backend,
+                        wakeText: wakeText, wakeEntryId: d.entryId)
                 }
                 for sid in wake.sessionIds {
                     guard let m = members.first(where: { $0.sessionId == sid }) else { continue }
                     try await runner.restartMember(
-                        detail: detail, backend: backend, member: m, wakeText: wakeText)
+                        detail: detail, backend: backend, member: m,
+                        wakeText: wakeText, wakeEntryId: d.entryId)
                 }
             } catch {
                 // fail-loud：拉起失败落白板（system，不再 @ 防环），机长/人看得见。

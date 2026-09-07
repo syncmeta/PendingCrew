@@ -56,15 +56,29 @@ final class CrewReplayDeliveryTests: XCTestCase {
 
         // 生产里的形状：wakeText =「发送者：正文」，被拼进开场 brief。
         let brief = "有人在群里 @ 你：「机长：\(body)」。接着处理这条。"
+        // 拉起缺席目标那条路现在会把这条 @ 的白板 id 一起带下来（#105 ②）。
+        let entryId = LocalWhiteboardStore(directory: dir).list(crewId: "c").last!.id
         let prompt = LocalSessionLaunch.initialPromptWithWhiteboard(
-            brief, crewId: "c", sessionId: "captain-new", captain: true, directory: dir)
+            brief, crewId: "c", sessionId: "captain-new", captain: true,
+            excludingEntryId: entryId, directory: dir)
 
-        XCTExpectFailure("R2 未修：wakeText 与白板未读注入各出一份，见档案 §3") {
-            XCTAssertEqual(
-                occurrences(of: body, in: prompt), 1,
-                "同一条消息在一份开场 prompt 里出现了两遍：一遍是烤进 brief 的 wakeText，"
-                    + "一遍是白板未读注入。收的人无从判断这是一条还是两条。")
-        }
+        // ✅ 2026-09-07 修好了（#105 ②），包装已拆。
+        XCTAssertEqual(
+            occurrences(of: body, in: prompt), 1,
+            "同一条消息在一份开场 prompt 里出现了两遍：一遍是烤进 brief 的 wakeText，"
+                + "一遍是白板未读注入。收的人无从判断这是一条还是两条。")
+    }
+
+    /// 反面：**不是被 @ 醒**的普通启动（没有 `excludingEntryId`）不许因为这条改动
+    /// 少掉任何一条未读 —— 排除是「这条已经由别的通道送到了」，不是「少送一条」。
+    func test_不是被叫醒的普通启动一条未读都不许少() {
+        let dir = tempDir()
+        let store = LocalWhiteboardStore(directory: dir)
+        let body = "这条必须出现在未读块里"
+        store.appendUserMessage(crewId: "c", text: body)
+        let prompt = LocalSessionLaunch.initialPromptWithWhiteboard(
+            "开工吧", crewId: "c", sessionId: "captain-plain", captain: true, directory: dir)
+        XCTAssertEqual(occurrences(of: body, in: prompt), 1)
     }
 
     // MARK: - R1：换了 sessionId 就等于「从没投递过」

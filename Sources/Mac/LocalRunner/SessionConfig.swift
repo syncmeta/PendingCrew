@@ -68,6 +68,12 @@ public struct SessionConfig: Sendable, Equatable, Codable {
     /// TUI produces output; it must never be a process argument because `ps` exposes argv
     /// to every local session. Codex sends it over app-server after the handshake.
     public var initialPrompt: String?
+    /// #105 ②：这次拉起是「有人 @ 了一个没在跑的目标」时，那条 @ 的白板 id。
+    ///
+    /// 它的正文已经被烤进 `initialPrompt`（`有人在群里 @ 你：「…」`），而这条在白板上
+    /// **仍然是未读**，首轮注入会把同一段话再渲染一遍 —— 每次必现的双份，不是竞态。
+    /// 记下 id，首轮渲染时把它排除掉；游标照常推进（它确实已经送到了）。
+    public var wakeEntryId: String?
     /// Resume an existing agent session by id.
     public var resumeSessionId: String?
     /// 新起 session 时**由我们指定**的 agent 侧会话号 → claude `--session-id <uuid>`

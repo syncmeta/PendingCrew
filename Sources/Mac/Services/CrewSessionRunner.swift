@@ -1365,7 +1365,8 @@ final class CrewSessionRunner: ObservableObject {
             if let prompt = config.initialPrompt, !prompt.isEmpty {
                 config.initialPrompt = LocalSessionLaunch.initialPromptWithWhiteboard(
                     prompt, crewId: crewId, sessionId: sessionId,
-                    captain: role == .captain)
+                    captain: role == .captain,
+                    excludingEntryId: config.wakeEntryId)
             }
             // Todo #28：claude 的会话号由我们指定（`--session-id`）并立刻记账，
             // 这样这个 session 关掉再点恢复时能 `--resume` 回同一条对话。续跑
@@ -2215,6 +2216,9 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail,
         backend: PendingCrewBackend?,
         wakeText: String? = nil,
+        /// #105 ②：`wakeText` 那条 @ 在白板上的 id —— 首轮注入要排除它，否则同一段话
+        /// 在同一份开场 prompt 里出现两遍。
+        wakeEntryId: String? = nil,
         openingBrief: String? = nil,
         captainKindOverride: LocalCodingAgentKind? = nil,
         resumeSessionIdOverride: String? = nil,
@@ -2306,6 +2310,7 @@ final class CrewSessionRunner: ObservableObject {
         var cfg = SessionConfig(kind: captainKind, model: model, effort: effort,
                                 initialPrompt: initialPrompt,
                                 resumeSessionId: resumeCaptainId)
+        cfg.wakeEntryId = wakeEntryId
         // 世界观 + crew 工具按 kind 分流：claude 走文件 flag（appendSystemPromptFile +
         // settings/mcp-config），codex 走 app-server 通道（developerInstructions 字符串 +
         // mcpServers dict）。captain 两边都带（persona 追加 + helper `--captain` 解锁
@@ -2410,7 +2415,8 @@ final class CrewSessionRunner: ObservableObject {
     ///
     /// 已在跑 → no-op（在跑的归注入路径管）。
     func restartMember(detail: CrewDetail, backend: PendingCrewBackend?,
-                       member: LocalSessionMember, wakeText: String) async throws {
+                       member: LocalSessionMember, wakeText: String,
+                       wakeEntryId: String? = nil) async throws {
         guard !runs.contains(where: {
             $0.sessionId == member.sessionId && $0.status == .running
         }) else { return }
@@ -2458,7 +2464,8 @@ final class CrewSessionRunner: ObservableObject {
         try await launchWorker(detail: detail, backend: backend, sessionId: member.sessionId,
                                brief: brief, kind: kind, workdir: workdir,
                                model: nil, effort: nil, title: member.displayName,
-                               resumeAgentSessionId: resumeId)
+                               resumeAgentSessionId: resumeId,
+                               wakeEntryId: wakeEntryId)
     }
 
     /// worker 启动共用体（startForBrief 新起 / restartMember 复用原 id 两条来路）。
@@ -2473,7 +2480,10 @@ final class CrewSessionRunner: ObservableObject {
         /// codex `thread/resume`）。nil = 新起一轮。
         resumeAgentSessionId: String? = nil,
         /// 见 `start(userInitiated:)`。`restartMember`（@ 唤醒拉起）恒 false。
-        userInitiated: Bool = false
+        userInitiated: Bool = false,
+        /// #105 ②：被 @ 醒时那条 @ 的白板 id —— 正文已经在 `brief` 里，
+        /// 首轮未读注入要排除它，否则同一段话在同一份开场里出现两遍。
+        wakeEntryId: String? = nil
     ) async throws {
         let crewId = detail.crew.id
         // 精简标题单一真值：显式 title 优先，否则从 brief 兜底。既当 --label 也当 run.title。
@@ -2482,6 +2492,7 @@ final class CrewSessionRunner: ObservableObject {
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
         var cfg = SessionConfig(kind: kind, model: model, effort: effort, initialPrompt: brief,
                                 resumeSessionId: resumeAgentSessionId)
+        cfg.wakeEntryId = wakeEntryId
         var developerInstructions: String? = nil
         var codexMcpServers: [String: Any]? = nil
         switch kind {

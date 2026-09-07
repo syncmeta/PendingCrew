@@ -227,22 +227,27 @@ struct HookEmitter {
     /// 与 hook 同一套未读 / 可见性 / 游标语义，但直接返回纯上下文。
     /// Claude 新 session 的第一轮没有 PostToolUse 事件，启动 prompt 走这条；Codex 的
     /// `turn/start.additionalContext` 也可直接复用，不必先包 JSON 再拆 JSON。
-    func emitContextAndAdvance(now: Date = Date()) -> String? {
-        guard let pending = prepareContext(now: now) else { return nil }
+    func emitContextAndAdvance(excluding excludedId: String? = nil,
+                               now: Date = Date()) -> String? {
+        guard let pending = prepareContext(excluding: excludedId, now: now) else { return nil }
         commit(pending)
         return pending.context
     }
 
     /// Codex `turn/start` 的两阶段读取：准备只读，不推进游标；RPC 确认受理后调用
     /// `commit`。拒绝/断线时保留未读，下一次提交仍能带上原消息。
-    func prepareContext(now: Date = Date()) -> PreparedContext? {
+    /// `excluding`：这一条的正文已经由别的通道送到了（#105 ②：`wakeText` 被烤进
+    /// 开场 prompt），别再渲染一遍。游标照常推进到未读末尾 —— 它确实已经送到了。
+    func prepareContext(excluding excludedId: String? = nil,
+                        now: Date = Date()) -> PreparedContext? {
         let unread = cursor.unread(in: store)
         guard let last = unread.messages.last else { return nil }
         // 要的是「**看得见吗**」，不是「该叫醒吗」—— 这条路每轮都跑，本身就不唤醒
         // 任何人，只决定渲染什么进上下文。只 @ 了人类的消息在这里必须可见（2026-08-23
         // 修的正主：过去它对所有 agent 隐身）。
-        let mine = CrewWhiteboardVisibility.visible(
+        var mine = CrewWhiteboardVisibility.visible(
             unread.messages, to: sessionId, isCaptain: isCaptain)
+        if let excludedId { mine.removeAll { $0.id == excludedId } }
         return PreparedContext(
             context: mine.isEmpty ? nil : render(mine, omitted: unread.omitted, now: now),
             last: last)
