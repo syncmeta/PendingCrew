@@ -84,6 +84,18 @@ enum TodoLedger: String, Codable, Sendable, CaseIterable {
         case .human: return "回应 人类 To Do #\(number)：\(text)"
         }
     }
+
+    /// 提出者撤回自己那条时群里那行（Todo #102）。
+    ///
+    /// **这一行是撤回这件事的全部意义所在**：一条从人眼前消失的账，绝不许静默消失。
+    /// 所以原因是必填的，而且必须出现在这里 —— 人回头看群聊，要能看出「那条我本来
+    /// 在等的事，为什么不用我管了」。
+    func withdrawAnnouncement(number: Int, reason: String) -> String {
+        switch self {
+        case .agent: return "撤回 To Do #\(number)：\(reason)"
+        case .human: return "撤回 人类 To Do #\(number)：\(reason)"
+        }
+    }
 }
 
 /// 一本账里的两个角色。`TodoLedger.author` / `.responder` 用它把方向说明白。
@@ -302,6 +314,66 @@ final class LocalTodoStore: @unchecked Sendable {
         }
     }
 
+    /// 提出者撤回自己提的那条（Todo #102）。**不是删除** —— 见 `LocalTodoItem.withdrawnAt`。
+    ///
+    /// 三条约束，一条都不能松：
+    /// - **只能撤自己提的**。判据是条目上记着的 `createdBySessionId`，不是显示名 ——
+    ///   名字会重、会改。**记不到提出者的老条目一律不许撤**：撤不掉只是不方便，
+    ///   撤错了是把人正在等的一件事从他眼前拿走。
+    /// - **原因必填**。撤回是让一条事从人的待办里消失，没有原因它就是静默消失。
+    /// - **调用方必须在群里把原因说出来**（`TodoLedger.withdrawAnnouncement`）。
+    ///   这一步在 MCP 那层做，但它是这个动作的一部分，不是可选装饰。
+    ///
+    /// 返回**具名结果**而不是 `Bool`：撤不动的几种原因（不是你提的 / 找不到 / 已经
+    /// 撤过 / 账读不出来）在调用方那里要说成不同的话，压成一个 false 就等于把
+    /// 「为什么」丢在这一层，agent 只能猜。
+    enum WithdrawOutcome: Equatable {
+        /// 撤成了，带上撤完之后的条目。
+        case withdrawn(LocalTodoItem)
+        /// 这本账上没有这个 #N（或者已经被人类删了）。
+        case notFound
+        /// 这条不是你提的 —— 带上账上记着的提出者显示名（记不到就是 nil，同样不许撤）。
+        case notYours(owner: String?)
+        /// 已经撤过了，不重复动账。
+        case alreadyWithdrawn(LocalTodoItem)
+        /// 原因是空的。
+        case reasonRequired
+        /// 列表文件这次读不出来 / 读到空但磁盘非空 —— 什么都没改。
+        case ledgerUnavailable
+    }
+
+    func withdraw(crewId: String, number: Int, sessionId: String,
+                  senderName: String? = nil, reason: String) -> WithdrawOutcome {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .reasonRequired }
+        return withFileLock(crewId) {
+            var rows = loadLocked(crewId)
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
+                return .ledgerUnavailable
+            }
+            guard let idx = liveIndexLocked(rows, number) else { return .notFound }
+            guard let owner = rows[idx].createdBySessionId, owner == sessionId else {
+                return .notYours(owner: rows[idx].createdBySenderName)
+            }
+            if rows[idx].withdrawnAt != nil { return .alreadyWithdrawn(rows[idx]) }
+            let stamp = timestamp()
+            // 原因落成一条回应 —— 详细窗口的时间线本来就画回应，撤回的理由跟着
+            // 条目走，不用人去翻群聊记录。
+            rows[idx].responses.append(LocalTodoResponse(
+                id: UUID().uuidString.lowercased(),
+                sessionId: sessionId,
+                senderName: senderName,
+                text: "撤回：\(trimmed)",
+                status: nil,
+                createdAt: stamp))
+            rows[idx].withdrawnAt = stamp
+            rows[idx].withdrawnBySessionId = sessionId
+            rows[idx].updatedAt = stamp
+            saveLocked(crewId: crewId, rows: rows)
+            return .withdrawn(rows[idx])
+        }
+    }
+
     /// 人类「看过了，不打算回应」（Todo #62）：只打 `dismissedAt` 标记，**不加回应、
     /// 不动状态**。用途是把黄点按灭 —— 有些事人类看过就决定不办，没有这个开关，
     /// 那一条会把黄点永久钉死（黄点判据是「有没有未回应条目」，见 `isUnanswered`）。
@@ -482,8 +554,29 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     /// 已完成、已删墓碑都不算（即使坏数据/旧调用绕过了 `list`）；`dismissedAt`
     /// 非 nil = 人类看过、决定不办、直接按灭，同样不再算未回应。
     var isUnanswered: Bool {
-        !isDeleted && status != "completed" && responses.isEmpty && dismissedAt == nil
+        !isDeleted && status != "completed" && responses.isEmpty
+            && dismissedAt == nil && withdrawnAt == nil
     }
+
+    /// 提出者自己撤回了这条（Todo #102）。**不是删除**：条目留在列表里、原因写在
+    /// 时间线上，只是不再算「等人回应」。
+    ///
+    /// ## 为什么必须有这扇门
+    /// 一条人类 Todo 会死，最常见的原因不是人不想答，是**世界变了**（版本发出去了、
+    /// 站上线了、那条线被别的决定取代了）。能判断「世界变了」的只有提这条的那一方 ——
+    /// 人类判断不了（他不知道下游走到哪一版了），别人要读完全部条目才判断得出来。
+    /// 在这扇门开出来之前，提出者**明知道**自己那条已经作废，也只能眼看着它挂在
+    /// 人的账上继续亮灯。
+    ///
+    /// ## 为什么不复用 `deletedAt`
+    /// `deletedAt` 是人类删的墓碑，`list` 一律不返回 —— 那条会**凭空消失**。撤回是
+    /// 另一方做的动作，人有权知道发生了什么、也有权不同意（他可以追问，把它问回来）。
+    /// 所以撤回**留在列表里**，配一条写着原因的回应，外加群里一行。
+    var withdrawnAt: String? = nil
+
+    /// 撤回它的那个 session（`createdBySessionId` 的对照面）。只用于展示/追责，
+    /// 判定谁撤得动在 `LocalTodoStore.withdraw` 里。
+    var withdrawnBySessionId: String? = nil
 
     /// 人类「看过了，不打算回应」的标记（Todo #62）。没有它，一条人类不打算处理的
     /// 条目会把黄点永久钉死。不动 `status`、不加回应 —— 只是不再算未回应。

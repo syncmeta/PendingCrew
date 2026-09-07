@@ -28,6 +28,8 @@ enum TodoLandingFlow {
         case added
         /// 人类回应一条 Todo（`.human` 那本的详细窗口）。
         case responded
+        /// 提出者撤回自己提的那条（`withdraw_human_todo`，Todo #102）。
+        case withdrawn
     }
 
     /// 走到了哪一步。**顺序写死，一步都不许跳**：落账 → 发群 → 唤醒。
@@ -55,8 +57,10 @@ enum TodoLandingFlow {
     /// `.added` 只有两步 —— agent 加完一条人类 Todo，不用叫醒谁（人类在 app 里
     /// 看得到，那条群消息本来就标着 `@human`「别为它叫醒 agent」）。`.responded`
     /// 三步齐全：人类拍完板，得把当初提问的那个 session 叫回来。
+    /// `.withdrawn` 同 `.added` 只有两步：撤回不叫醒任何人 —— 它是**减少**一件
+    /// 待办，把人从群里叫过来看一条「你不用管了」，本身就是新的打扰。
     static func terminal(_ action: Action) -> Step {
-        action == .added ? .announced : .woke
+        action == .responded ? .woke : .announced
     }
 
     /// 群里那行该挂什么 mention。
@@ -68,7 +72,7 @@ enum TodoLandingFlow {
     ///   拿不到计划（不该发生）→ 退回纯广播，宁可多让人看见，也不静默变私信。
     static func mentions(_ action: Action, wake: HumanTodoWakePlan.Plan? = nil) -> [CrewMention] {
         switch action {
-        case .added:
+        case .added, .withdrawn:
             return [CrewMention(kind: "human", targetId: nil)]
         case .responded:
             return wake?.mentions ?? [.broadcast]
@@ -92,6 +96,8 @@ enum TodoLandingFlow {
             head = "已记入\(noun) #\(number)。人类回应时群里会出「\(ledger.responseAnnouncement(number: number, text: "…"))」并叫醒你——现在接着干别的活，别守着等。"
         case .responded:
             head = "已回应\(noun) #\(number)。"
+        case .withdrawn:
+            head = "已撤回\(noun) #\(number)。它不再算等人回应，但**留在列表里**、原因也写在条目上 —— 人看得见你撤了什么、为什么。"
         }
         // 走到终点才说得出「成了」这一句 —— 没走到就必须带上那一步的警示。
         guard reached < terminal(action) else { return head }
@@ -119,6 +125,8 @@ enum TodoLandingFlow {
                 + "急事改用 ask（阻塞等人答）。"
         case .responded:
             return "回应没能落上 —— \(why)。**这条回应没有记下**，群里也不会出现它，请重试。"
+        case .withdrawn:
+            return "撤回没能落上 —— \(why)。**那条仍然挂在人的账上等他回应**，请重试。"
         }
     }
 }
