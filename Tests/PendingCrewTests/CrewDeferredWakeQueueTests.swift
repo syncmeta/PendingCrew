@@ -2,10 +2,19 @@
 import XCTest
 
 final class CrewDeferredWakeQueueTests: XCTestCase {
+    /// #105 ③ 之后队列里存的是 `Payload` 而不是渲染好的串；这几条用例只测状态机，
+    /// 从 `.literal` 里取回文本即可（真实路径的「出队现取」由
+    /// `CrewWakeDispatchTests` 覆盖）。
+    private static func text(of d: CrewDeferredWakeQueue.Delivery) -> String {
+        if case .literal(let s) = d.payload { return s }
+        return ""
+    }
+
     private func delivery(
         _ source: String = "whiteboard:m1", target: String = "captain", text: String = "人：在吗"
     ) -> CrewDeferredWakeQueue.Delivery {
-        .init(key: "\(source)|target:\(target)", targetSessionId: target, text: text)
+        .init(key: "\(source)|target:\(target)", targetSessionId: target,
+              payload: .literal(text))
     }
 
     /// 事故回归：busy 时只到一条消息，随后无第二条白板事件；仅 busy→idle
@@ -55,7 +64,7 @@ final class CrewDeferredWakeQueueTests: XCTestCase {
         guard case let .deliver(first) = queue.submit(wake, isBusy: false) else {
             return XCTFail("状态快照 idle 时应先尝试一次")
         }
-        let firstResult = await backend.submitWake(first.text)
+        let firstResult = await backend.submitWake(Self.text(of: first))
         if firstResult == .accepted { consumed += 1 }
         queue.resolve(first, as: firstResult)
         XCTAssertEqual(firstResult, .retry, "可控后端第一次应模拟 turn/start 拒绝")
@@ -66,7 +75,7 @@ final class CrewDeferredWakeQueueTests: XCTestCase {
         guard let retry = queue.popWhenIdle(sessionId: "captain") else {
             return XCTFail("无需第二条白板消息，idle 后必须取回原 wake")
         }
-        let retryResult = await backend.submitWake(retry.text)
+        let retryResult = await backend.submitWake(Self.text(of: retry))
         if retryResult == .accepted { consumed += 1 }
         queue.resolve(retry, as: retryResult)
 

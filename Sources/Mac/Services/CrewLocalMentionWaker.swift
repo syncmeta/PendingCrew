@@ -198,10 +198,36 @@ final class CrewLocalMentionWaker {
                         .advance(to: lastUnread, in: store)
                 }
             }
+            // #105 ③：进队列的是**消息身份**，不是这一刻渲染出来的串。
+            // `renderNow` 只在**真要发的那一刻**被调用 —— 压队期间目标可能已经
+            // 从 hook 路看过这条了（那时 `hasDelivered` 会让它整条被丢掉），
+            // 也可能上下文变了（那就按当下重渲染，而不是把旧快照发出去）。
+            let renderNow: (String, String) -> String? = { [weak runner] crewId, entryId in
+                guard let runner,
+                      let target = runner.runs.first(where: {
+                          $0.sessionId == inj.sessionId && $0.status == .running })
+                else { return nil }
+                let freshUnread = CrewWhiteboardVisibility.visible(
+                    WhiteboardCursor(directory: cursorDir, crewId: crewId,
+                                     sessionId: inj.sessionId).unread(in: store).messages,
+                    to: inj.sessionId, isCaptain: target.role == .captain)
+                let plans = CrewLocalMentionInjectLogic.plannedInjections(
+                    mentions: d.mentions,
+                    runs: [.init(sessionId: inj.sessionId,
+                                 isBusy: false,          // 已经轮到它了，这里只管渲染
+                                 isClaude: target.kind == .claudeCode)],
+                    messageText: d.messageText, senderName: d.senderName,
+                    captainSessionId: captainSessionId,
+                    recent: { _ in
+                        Array(freshUnread.filter { $0.id != entryId }.suffix(15))
+                    })
+                return plans.first(where: { $0.sessionId == inj.sessionId })?.text
+            }
             runner.deliverOrDeferWake(
                 sourceKey: "whiteboard:" + d.entryId,
                 to: run,
-                text: inj.text
+                payload: .whiteboardEntry(crewId: crewId, entryId: d.entryId),
+                renderNow: renderNow
             ) { baseline in
                 if d.trackReceipt {
                     runner.confirmWake(

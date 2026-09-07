@@ -54,7 +54,8 @@ final class CrewLocalMentionInjectLogicTests: XCTestCase {
         let delivery = CrewDeferredWakeQueue.Delivery(
             key: "whiteboard:msg-1|target:captain-abc",
             targetSessionId: "captain-abc",
-            text: planned[0].text)
+            // #105 ③：队列里存消息身份，渲染结果（`planned[0].text`）留到出队那一刻现取。
+            payload: .whiteboardEntry(crewId: "c", entryId: "msg-1"))
         XCTAssertEqual(queue.submit(delivery, isBusy: true), .deferred)
         XCTAssertEqual(queue.pendingCount(sessionId: "captain-abc"), 1)
 
@@ -71,9 +72,9 @@ final class CrewLocalMentionInjectLogicTests: XCTestCase {
     func testDeferredQueuePopsOneMessagePerIdleTransition() {
         var queue = CrewDeferredWakeQueue()
         let first = CrewDeferredWakeQueue.Delivery(
-            key: "m1|target:s", targetSessionId: "s", text: "first")
+            key: "m1|target:s", targetSessionId: "s", payload: .literal("first"))
         let second = CrewDeferredWakeQueue.Delivery(
-            key: "m2|target:s", targetSessionId: "s", text: "second")
+            key: "m2|target:s", targetSessionId: "s", payload: .literal("second"))
         XCTAssertEqual(queue.submit(first, isBusy: true), .deferred)
         XCTAssertEqual(queue.submit(second, isBusy: true), .deferred)
         XCTAssertEqual(queue.popWhenIdle(sessionId: "s"), first)
