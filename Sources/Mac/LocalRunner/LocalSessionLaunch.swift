@@ -15,6 +15,8 @@ enum LocalSessionLaunch {
         crewId: String,
         sessionId: String,
         captain: Bool,
+        /// #105 ②：正文已经烤进 `prompt` 的那条 @ 的白板 id —— 别在未读块里再来一遍。
+        excludingEntryId: String? = nil,
         directory: URL = LocalWhiteboardStore.defaultDirectory
     ) -> String {
         let context = HookEmitter(
@@ -23,7 +25,7 @@ enum LocalSessionLaunch {
             sessionId: sessionId,
             cursorDir: directory,
             isCaptain: captain
-        ).emitContextAndAdvance()
+        ).emitContextAndAdvance(excluding: excludingEntryId)
         guard let context, !context.isEmpty else { return prompt }
         return """
         <external_crew_whiteboard>

@@ -164,7 +164,7 @@ final class CrewLocalMentionWaker {
             let unread = WhiteboardCursor(
                 directory: cursorDir, crewId: crewId, sessionId: r.sessionId).unread(in: store)
             unreadBySession[r.sessionId] = CrewWhiteboardVisibility.visible(
-                unread, to: r.sessionId, isCaptain: r.role == .captain)
+                unread.messages, to: r.sessionId, isCaptain: r.role == .captain)
         }
         let runStates: [CrewLocalMentionInjectLogic.RunState] = candidates.map {
             .init(sessionId: $0.sessionId, isBusy: $0.backend.isBusy,
@@ -180,8 +180,15 @@ final class CrewLocalMentionWaker {
             recent: { sid in
                 Array((unreadBySession[sid] ?? []).filter { $0.id != d.entryId }.suffix(15))
             })
+        // #105 ④：**盘上那本是唯一判据。** 这条要是已经被 hook 路（或开场注入、
+        // 或 codex 的 turn/start）投给过这个 session，就不该再唤醒一次 —— 从前唤醒路
+        // 只问自己内存里那本，问不到别人投过什么。
+        let entry = store.list(crewId: crewId).first { $0.id == d.entryId }
         for inj in injections {
             guard let run = candidates.first(where: { $0.sessionId == inj.sessionId }) else { continue }
+            if let entry, WhiteboardCursor(
+                directory: cursorDir, crewId: crewId, sessionId: inj.sessionId
+            ).hasDelivered(entry, in: store) { continue }
             // 目标游标推进 = 本地链路的「已消费」标记：回执确认到达才推进（失败
             // 留着未读，目标解卡后 hook 路 / 下次唤醒还能带到，消息不丢）。
             let consume: () -> Void = { [weak self] in
@@ -191,10 +198,36 @@ final class CrewLocalMentionWaker {
                         .advance(to: lastUnread, in: store)
                 }
             }
+            // #105 ③：进队列的是**消息身份**，不是这一刻渲染出来的串。
+            // `renderNow` 只在**真要发的那一刻**被调用 —— 压队期间目标可能已经
+            // 从 hook 路看过这条了（那时 `hasDelivered` 会让它整条被丢掉），
+            // 也可能上下文变了（那就按当下重渲染，而不是把旧快照发出去）。
+            let renderNow: (String, String) -> String? = { [weak runner] crewId, entryId in
+                guard let runner,
+                      let target = runner.runs.first(where: {
+                          $0.sessionId == inj.sessionId && $0.status == .running })
+                else { return nil }
+                let freshUnread = CrewWhiteboardVisibility.visible(
+                    WhiteboardCursor(directory: cursorDir, crewId: crewId,
+                                     sessionId: inj.sessionId).unread(in: store).messages,
+                    to: inj.sessionId, isCaptain: target.role == .captain)
+                let plans = CrewLocalMentionInjectLogic.plannedInjections(
+                    mentions: d.mentions,
+                    runs: [.init(sessionId: inj.sessionId,
+                                 isBusy: false,          // 已经轮到它了，这里只管渲染
+                                 isClaude: target.kind == .claudeCode)],
+                    messageText: d.messageText, senderName: d.senderName,
+                    captainSessionId: captainSessionId,
+                    recent: { _ in
+                        Array(freshUnread.filter { $0.id != entryId }.suffix(15))
+                    })
+                return plans.first(where: { $0.sessionId == inj.sessionId })?.text
+            }
             runner.deliverOrDeferWake(
                 sourceKey: "whiteboard:" + d.entryId,
                 to: run,
-                text: inj.text
+                payload: .whiteboardEntry(crewId: crewId, entryId: d.entryId),
+                renderNow: renderNow
             ) { baseline in
                 if d.trackReceipt {
                     runner.confirmWake(
@@ -229,12 +262,15 @@ final class CrewLocalMentionWaker {
             do {
                 let detail = try await backend.getCrew(crewId)
                 if wake.needCaptain {
-                    try await runner.startCaptain(detail: detail, backend: backend, wakeText: wakeText)
+                    try await runner.startCaptain(
+                        detail: detail, backend: backend,
+                        wakeText: wakeText, wakeEntryId: d.entryId)
                 }
                 for sid in wake.sessionIds {
                     guard let m = members.first(where: { $0.sessionId == sid }) else { continue }
                     try await runner.restartMember(
-                        detail: detail, backend: backend, member: m, wakeText: wakeText)
+                        detail: detail, backend: backend, member: m,
+                        wakeText: wakeText, wakeEntryId: d.entryId)
                 }
             } catch {
                 // fail-loud：拉起失败落白板（system，不再 @ 防环），机长/人看得见。

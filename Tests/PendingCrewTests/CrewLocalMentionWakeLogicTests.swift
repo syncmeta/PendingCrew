@@ -113,7 +113,9 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
             let queued = CrewDeferredWakeQueue.Delivery(
                 key: "whiteboard:\(delivery.entryId)|target:current-captain",
                 targetSessionId: "current-captain",
-                text: injection.text)
+                // #105 ③：白板来的唤醒进队列时存的是**消息身份**，不是这一刻
+                // 渲染出来的 `injection.text` —— 存串就没法在出队时重新决定。
+                payload: .whiteboardEntry(crewId: "c", entryId: delivery.entryId))
             XCTAssertEqual(queue.submit(queued, isBusy: false), .deliver(queued))
             XCTAssertEqual(queue.submit(queued, isBusy: false), .duplicate,
                            "同进程 change 与目录事件重扫同一 message id 只能投递一次")

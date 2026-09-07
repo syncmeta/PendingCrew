@@ -10,7 +10,9 @@ struct CrewDeferredWakeQueue {
     struct Delivery: Equatable {
         let key: String
         let targetSessionId: String
-        let text: String
+        /// #105 ③：**存消息身份，不存渲染好的串**。存串就意味着出队时没有任何
+        /// 东西可以重新决定 —— 那正是「重放送的是最初形态」的病根。
+        let payload: CrewWakeDispatch.Payload
     }
 
     enum Submission: Equatable {

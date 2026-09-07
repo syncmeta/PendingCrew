@@ -287,21 +287,51 @@ final class CrewSessionRunner: ObservableObject {
         text: String,
         onDelivered: ((CrewMailboxWakeLogic.ReceiptEvidence) -> Void)? = nil
     ) {
+        deliverOrDeferWake(sourceKey: sourceKey, to: run, payload: .literal(text),
+                           renderNow: nil, onDelivered: onDelivered)
+    }
+
+    /// #105 ③：白板来的唤醒走这条 —— 队列里存**消息身份**，`renderNow` 在
+    /// **真要发的那一刻**才被调用。压队期间目标可能已经从别的投递面看过这条了
+    /// （hook 路每次工具调用都在推进同一本游标），那时就不该再发。
+    func deliverOrDeferWake(
+        sourceKey: String,
+        to run: CrewSessionRun,
+        payload: CrewWakeDispatch.Payload,
+        renderNow: ((String, String) -> String?)? = nil,
+        onDelivered: ((CrewMailboxWakeLogic.ReceiptEvidence) -> Void)? = nil
+    ) {
         guard run.status == .running, run.kind.isAgent else { return }
         let delivery = CrewDeferredWakeQueue.Delivery(
             key: sourceKey + "|target:" + run.sessionId,
             targetSessionId: run.sessionId,
-            text: text)
+            payload: payload)
         switch deferredWakes.submit(delivery, isBusy: run.activityIsWorking) {
         case let .deliver(ready):
             if let onDelivered { deferredWakeCallbacks[delivery.key] = onDelivered }
+            if let renderNow { deferredWakeRenderers[delivery.key] = renderNow }
             attemptWakeDelivery(ready, to: run)
         case .deferred:
             if let onDelivered { deferredWakeCallbacks[delivery.key] = onDelivered }
+            if let renderNow { deferredWakeRenderers[delivery.key] = renderNow }
             scheduleDeferredWakeRetry(for: run)
         case .duplicate:
             break
         }
+    }
+
+    /// 出队时用的「现取」渲染器，按 delivery key 存。闭包不能进纯状态机（不可比较），
+    /// 所以跟 `deferredWakeCallbacks` 一样放在旁边。
+    private var deferredWakeRenderers: [String: (String, String) -> String?] = [:]
+
+    /// 这条对目标而言是不是已经被别的投递面投过了 —— 问的是**盘上那本**（#105 ④）。
+    private func wakeAlreadyDelivered(crewId: String, entryId: String, to sessionId: String) -> Bool {
+        let store = LocalWhiteboardStore.shared
+        guard let entry = store.list(crewId: crewId).first(where: { $0.id == entryId })
+        else { return false }
+        return WhiteboardCursor(directory: LocalWhiteboardStore.defaultDirectory,
+                                crewId: crewId, sessionId: sessionId)
+            .hasDelivered(entry, in: store)
     }
 
     /// 后端发布 busy -> idle 时补一条。再读一次 `backend.isBusy`，挡住 idle 事件排队
@@ -326,10 +356,29 @@ final class CrewSessionRunner: ObservableObject {
     private func attemptWakeDelivery(
         _ delivery: CrewDeferredWakeQueue.Delivery, to run: CrewSessionRun
     ) {
+        // #105 ③：**发之前重新决定**——这条还该发吗、该发什么。压队期间目标可能
+        // 已经从 hook 路看过它了；那时候把入队那一刻的旧快照发出去就是重放。
+        guard let text = CrewWakeDispatch.resolve(
+            delivery.payload,
+            hasDelivered: { [weak self] crewId, entryId in
+                self?.wakeAlreadyDelivered(
+                    crewId: crewId, entryId: entryId, to: delivery.targetSessionId) ?? false
+            },
+            renderNow: { [weak self] crewId, entryId in
+                self?.deferredWakeRenderers[delivery.key]?(crewId, entryId)
+            })
+        else {
+            // 别发了。按「这条已经了结」处理：从在途里摘掉、进已投窗口不再重试，
+            // 但**不调 onDelivered** —— 游标该由真正投出去的那条路推进。
+            deferredWakes.resolve(delivery, as: .accepted)
+            deferredWakeCallbacks.removeValue(forKey: delivery.key)
+            deferredWakeRenderers.removeValue(forKey: delivery.key)
+            return
+        }
         let baseline = wakeReceiptEvidence(for: run)
         Task { @MainActor [weak self, weak run] in
             guard let self, let run, run.status == .running else { return }
-            let result = await run.backend.submitWake(delivery.text)
+            let result = await run.backend.submitWake(text)
             guard run.status == .running else {
                 self.discardDeferredWakes(sessionId: delivery.targetSessionId)
                 return
@@ -337,6 +386,7 @@ final class CrewSessionRunner: ObservableObject {
             self.deferredWakes.resolve(delivery, as: result)
             switch result {
             case .accepted:
+                self.deferredWakeRenderers.removeValue(forKey: delivery.key)
                 self.deferredWakeCallbacks.removeValue(forKey: delivery.key)?(baseline)
                 if self.deferredWakes.pendingCount(sessionId: run.sessionId) > 0 {
                     self.scheduleDeferredWakeRetry(for: run)
@@ -368,7 +418,10 @@ final class CrewSessionRunner: ObservableObject {
     private func discardDeferredWakes(sessionId: String) {
         deferredWakeRetryTasks.removeValue(forKey: sessionId)?.cancel()
         let deliveries = deferredWakes.remove(sessionId: sessionId)
-        for delivery in deliveries { deferredWakeCallbacks.removeValue(forKey: delivery.key) }
+        for delivery in deliveries {
+            deferredWakeCallbacks.removeValue(forKey: delivery.key)
+            deferredWakeRenderers.removeValue(forKey: delivery.key)
+        }
     }
 
     /// 必须在提交 `turn/start` **之前**取 baseline：Codex 的短 turn 可能快到 RPC 返回后、
@@ -769,8 +822,25 @@ final class CrewSessionRunner: ObservableObject {
         listenCursors[crewId] = WhiteboardCursorPosition(id: last.id, createdAt: last.createdAt)
         let runStates = runs.filter { $0.status == .running && $0.kind.isAgent }
             .map { CrewLocalMentionInjectLogic.RunState(sessionId: $0.sessionId, isBusy: $0.backend.isBusy) }
-        let injections = CrewListenLogic.plannedInjections(
-            entries: entries, listeners: active, runs: runStates, now: Date())
+        // #105 ④ 的第四本账：`listenCursors` 只决定「扫到哪儿」，**不再单独充当
+        // 「已投递」判据**。逐个收听者按**盘上那一本**滤掉它已经收到过的，
+        // 免得 hook 路刚投过、收听路又叫醒一次。
+        //
+        // ⚠️ **只查不推**：收听按 `senders` 过滤，只投一个子集；而盘上那本是**位置**
+        // 游标，推进到某条就等于把它之前的全都标成已投 —— 会把被过滤掉的那些一起
+        // 吞掉。丢消息比重复贵得多，所以这里只读不写。**代价是「收听路投过、hook
+        // 路仍可能再渲染一遍」这一种重复留着**，它进「还挡不住哪些」那份清单。
+        let store = LocalWhiteboardStore.shared
+        let cursorDir = LocalWhiteboardStore.defaultDirectory
+        var injections: [CrewListenLogic.Injection] = []
+        for l in active {
+            let fresh = entries.filter {
+                !WhiteboardCursor(directory: cursorDir, crewId: crewId, sessionId: l.sessionId)
+                    .hasDelivered($0, in: store)
+            }
+            injections += CrewListenLogic.plannedInjections(
+                entries: fresh, listeners: [l], runs: runStates, now: Date())
+        }
         for inj in injections {
             guard let run = runs.first(where: {
                 $0.sessionId == inj.sessionId && $0.status == .running
@@ -955,6 +1025,22 @@ final class CrewSessionRunner: ObservableObject {
     /// confirmed → `onConfirmed`（消费：mark-delivered / 推游标）；
     /// failed → `onFailed` + 白板告警 @captain（system 身份 —— system 条目免
     /// 回执追踪，机长也唤不醒时不会告警成环）。
+    ///
+    /// ## 判失败 ⇒ 不消费 ⇒ 下一拍 hook 再渲染一遍 = **恰好 1 次真重复。这是刻意的。**
+    ///
+    /// 2026-09-07（#105 ④ 完工时）复核过，结论是**不改**，依据留在这里省得下一个
+    /// 人重推一遍：
+    ///
+    /// - **量**：全机 47 个白板全部历史里 `wakeFailureAlert` 共 **112 次**
+    ///   （最近 7 天 8 次，且全挤在 09-04 一天）。这不是持续流血的口子。
+    /// - **要改就得把推游标从「回执确认后」挪到「submitWake 受理后」**，那是把取向
+    ///   从「宁可重投不丢」换成「宁可少投也不重」。换过去之后目标真没处理那条时
+    ///   它就**没了**，而这个代价**量不出来**（盘上没有「它到底处理没处理」的痕迹）。
+    /// - **拿一个量到的 112 去换一个量不出来的数，方向就是错的** —— 不管那个未知数
+    ///   最后是大是小。代价还不对称：重复是**吵**（看得见、可诊断），丢消息是**静**
+    ///   （没人知道发生过），而这个仓库反复被咬的一直是后者。
+    /// - 伤害已经被 #105 ③ 降过一级：唤醒发的是**现取**的内容，所以这一次重投至少
+    ///   送的是当下版本，不再是一份被后续对话推翻了的旧快照。
     func confirmWake(
         run: CrewSessionRun, crewId: String,
         baseline: CrewMailboxWakeLogic.ReceiptEvidence,
@@ -1281,7 +1367,8 @@ final class CrewSessionRunner: ObservableObject {
             if let prompt = config.initialPrompt, !prompt.isEmpty {
                 config.initialPrompt = LocalSessionLaunch.initialPromptWithWhiteboard(
                     prompt, crewId: crewId, sessionId: sessionId,
-                    captain: role == .captain)
+                    captain: role == .captain,
+                    excludingEntryId: config.wakeEntryId)
             }
             // Todo #28：claude 的会话号由我们指定（`--session-id`）并立刻记账，
             // 这样这个 session 关掉再点恢复时能 `--resume` 回同一条对话。续跑
@@ -2131,6 +2218,9 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail,
         backend: PendingCrewBackend?,
         wakeText: String? = nil,
+        /// #105 ②：`wakeText` 那条 @ 在白板上的 id —— 首轮注入要排除它，否则同一段话
+        /// 在同一份开场 prompt 里出现两遍。
+        wakeEntryId: String? = nil,
         openingBrief: String? = nil,
         captainKindOverride: LocalCodingAgentKind? = nil,
         resumeSessionIdOverride: String? = nil,
@@ -2222,6 +2312,7 @@ final class CrewSessionRunner: ObservableObject {
         var cfg = SessionConfig(kind: captainKind, model: model, effort: effort,
                                 initialPrompt: initialPrompt,
                                 resumeSessionId: resumeCaptainId)
+        cfg.wakeEntryId = wakeEntryId
         // 世界观 + crew 工具按 kind 分流：claude 走文件 flag（appendSystemPromptFile +
         // settings/mcp-config），codex 走 app-server 通道（developerInstructions 字符串 +
         // mcpServers dict）。captain 两边都带（persona 追加 + helper `--captain` 解锁
@@ -2326,7 +2417,8 @@ final class CrewSessionRunner: ObservableObject {
     ///
     /// 已在跑 → no-op（在跑的归注入路径管）。
     func restartMember(detail: CrewDetail, backend: PendingCrewBackend?,
-                       member: LocalSessionMember, wakeText: String) async throws {
+                       member: LocalSessionMember, wakeText: String,
+                       wakeEntryId: String? = nil) async throws {
         guard !runs.contains(where: {
             $0.sessionId == member.sessionId && $0.status == .running
         }) else { return }
@@ -2374,7 +2466,8 @@ final class CrewSessionRunner: ObservableObject {
         try await launchWorker(detail: detail, backend: backend, sessionId: member.sessionId,
                                brief: brief, kind: kind, workdir: workdir,
                                model: nil, effort: nil, title: member.displayName,
-                               resumeAgentSessionId: resumeId)
+                               resumeAgentSessionId: resumeId,
+                               wakeEntryId: wakeEntryId)
     }
 
     /// worker 启动共用体（startForBrief 新起 / restartMember 复用原 id 两条来路）。
@@ -2389,7 +2482,10 @@ final class CrewSessionRunner: ObservableObject {
         /// codex `thread/resume`）。nil = 新起一轮。
         resumeAgentSessionId: String? = nil,
         /// 见 `start(userInitiated:)`。`restartMember`（@ 唤醒拉起）恒 false。
-        userInitiated: Bool = false
+        userInitiated: Bool = false,
+        /// #105 ②：被 @ 醒时那条 @ 的白板 id —— 正文已经在 `brief` 里，
+        /// 首轮未读注入要排除它，否则同一段话在同一份开场里出现两遍。
+        wakeEntryId: String? = nil
     ) async throws {
         let crewId = detail.crew.id
         // 精简标题单一真值：显式 title 优先，否则从 brief 兜底。既当 --label 也当 run.title。
@@ -2398,6 +2494,7 @@ final class CrewSessionRunner: ObservableObject {
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
         var cfg = SessionConfig(kind: kind, model: model, effort: effort, initialPrompt: brief,
                                 resumeSessionId: resumeAgentSessionId)
+        cfg.wakeEntryId = wakeEntryId
         var developerInstructions: String? = nil
         var codexMcpServers: [String: Any]? = nil
         switch kind {
