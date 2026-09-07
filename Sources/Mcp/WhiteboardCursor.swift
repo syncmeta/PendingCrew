@@ -142,16 +142,6 @@ struct WhiteboardCursor {
         return .anchored(WhiteboardCursorPosition(id: id, createdAt: stamp.isEmpty ? nil : stamp))
     }
 
-    /// 该 session 的**未读**（游标之后的白板消息，按写入序）。
-    ///
-    /// 三态各走各的（#595）：
-    /// - `.absent`：真首次 —— 在场历史当未读，但只给最近 `firstDeliveryLimit` 条。
-    /// - `.unreadable`：文件在、读不出来 —— **不当首次**。一条都不给，游标 resync 到
-    ///   当前尾，免得它永远认不出、此后新消息也送不出去。
-    /// - `.anchored`：锚点在表里就取它之后那批（原语义分毫不动）；悬空则由
-    ///   `entries(in:after:)` 按时间戳 fail-closed 地切。悬空且是旧格式（无时间戳）
-    ///   游标时同样 resync 到当前尾 —— **修复上线那一刻磁盘上全是旧格式游标，
-    ///   把它们当首次就是再触发一次全机重放，比 bug 本身还难看。**
     /// 一次投递能给出的最多条数 —— **有锚点的那条路也要有上限**（#105 ①）。
     ///
     /// 在 ① 之前，「新 sessionId ⇒ 游标 absent ⇒ 只投 30 条」这个行为**同时也在挡
@@ -166,6 +156,19 @@ struct WhiteboardCursor {
         static let none = Unread(messages: [], omitted: 0)
     }
 
+    /// 该 session 的**未读**（游标之后的白板消息，按写入序）。
+    ///
+    /// 三态各走各的（#595）：
+    /// - `.absent`：真首次 —— 在场历史当未读，但只给最近 `firstDeliveryLimit` 条。
+    /// - `.unreadable`：文件在、读不出来 —— **不当首次**。一条都不给，游标 resync 到
+    ///   当前尾，免得它永远认不出、此后新消息也送不出去。
+    /// - `.anchored`：锚点在表里就取它之后那批（原语义分毫不动）；悬空则由
+    ///   `entries(in:after:)` 按时间戳 fail-closed 地切。悬空且是旧格式（无时间戳）
+    ///   游标时同样 resync 到当前尾 —— **修复上线那一刻磁盘上全是旧格式游标，
+    ///   把它们当首次就是再触发一次全机重放，比 bug 本身还难看。**
+    ///
+    /// 三态**都**过一遍 `capped`（#105 ①）：接回对话身份之后，锚点那条路也会
+    /// 攒出几百条，上限不能只有首次那一份。
     func unread(in store: LocalWhiteboardStore) -> Unread {
         let all = store.list(crewId: crewId)
         switch read() {
