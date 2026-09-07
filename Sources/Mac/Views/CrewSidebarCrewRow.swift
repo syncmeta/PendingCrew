@@ -34,6 +34,13 @@ struct CrewSidebarCrewRow: View {
     let parentId: String?
     /// 合法性判定的数据面（层级视图 = 本机器分组；时间流视图 = 全量）。
     let groupCrews: [CrewSummary]
+    /// 这一行**能不能靠拖拽改隶属关系**。默认能（层级/时间流两个老视图不受影响）。
+    ///
+    /// 总机长视图（Todo #102）传 `false`：那个视图是**整理用的**，人在里面看到的
+    /// 分段是「现在该管什么」，不是组织结构。如果在那儿一拖就改了汇报线，人会以为
+    /// 自己只是在归置列表，结果动了真的组织树 —— 所以这两件事在界面上是**结构性
+    /// 分开**的，不是靠一句提示文案区分：改组织树只有层级视图那一条路。
+    var allowsReparentDrag: Bool = true
     @ObservedObject var dragState: CrewDragState
     /// 右键「在这下面建子 crew」的目标（侧栏持有，表单也在那层弹）。
     @Binding var childCrewTarget: CrewChildCreationTarget?
@@ -48,6 +55,34 @@ struct CrewSidebarCrewRow: View {
     private var isSelected: Bool { crewStore.selectedCrewId == crew.id }
 
     var body: some View {
+        Group {
+            if allowsReparentDrag {
+                rowCore
+                    .contextMenu { menuItems }
+                    // 拖起：负载带上「哪个 crew + 当前这条父边」，落地时才知道该摘哪条边。
+                    .draggable(CrewDragDropLogic.encode(crewId: crew.id, parentId: parentId)) {
+                        Text(crew.title)
+                            .font(Theme.Fonts.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .onAppear { dragState.begin(crewId: crew.id, parentId: parentId) }
+                    }
+                    .dropDestination(for: String.self) { items, _ in
+                        dragState.handleDrop(items, targetId: crew.id, crews: groupCrews, store: crewStore)
+                    } isTargeted: { isDropTargeted = $0 }
+            } else {
+                // 整理用的视图：右键菜单照旧（建子 crew / 藏起来都不改隶属关系），
+                // 但**没有** draggable / dropDestination —— 改汇报线在这里根本没有入口。
+                rowCore.contextMenu { menuItems }
+            }
+        }
+        // 每个 crew 之间留一道竖向呼吸间距 —— 加在高亮 pill 之外(背景/点击区已闭合),
+        // 所以是 crew 之间的留白,不是把 pill 撑高;根 crew(独立 list row)与展开的
+        // 子 crew(同 VStack 内堆叠)都吃这道下边距,间距统一。
+        .padding(.bottom, 6)
+    }
+
+    private var rowCore: some View {
         HStack(alignment: .top, spacing: 6) {
             // 三角槽**恒占位**（无三角时画透明占位）—— 同层级的色条/标题左缘必须
             // 对齐，不能因为某行有子带三角就被推出去。
@@ -151,40 +186,30 @@ struct CrewSidebarCrewRow: View {
         .opacity(dragState.draggingCrewId == crew.id && dragState.draggingParentId == parentId ? 0.4 : 1)
         .contentShape(Rectangle())
         .onTapGesture { crewStore.selectCrew(crew.id) }
-        // 行右键菜单（Todo #35）。目标恒为**本行这个 crew**（`crew` 是本行自己的
-        // 数据），不看 `crewStore.selectedCrewId` —— 右键不改变选中，看选中就会建到
-        // 别的 crew 下面。解析走 `CrewChildCreationTarget.forRow`（单测钉死）。
-        .contextMenu {
-            Button {
-                childCrewTarget = .forRow(crew)
-            } label: {
-                Label("在这下面建子 crew", systemImage: "plus")
-            }
-            Divider()
-            // 「藏起来」= 从侧栏消失，**聊天记录留着、不真删**，crew 里的 session
-            // 照常干活。取回的路在侧栏底部那行「已隐藏的群」。
-            // 目标同样恒为本行这个 crew，不看选中态。
-            Button {
-                requestHide()
-            } label: {
-                Label("藏起来", systemImage: "eye.slash")
-            }
+    }
+
+    /// 行右键菜单（Todo #35）。目标恒为**本行这个 crew**（`crew` 是本行自己的
+    /// 数据），不看 `crewStore.selectedCrewId` —— 右键不改变选中，看选中就会建到
+    /// 别的 crew 下面。解析走 `CrewChildCreationTarget.forRow`（单测钉死）。
+    ///
+    /// 两项都**不改隶属关系**（建子是新增、藏起来只动可见性），所以总机长视图那种
+    /// 只整理不改结构的地方照样挂得上。
+    @ViewBuilder
+    private var menuItems: some View {
+        Button {
+            childCrewTarget = .forRow(crew)
+        } label: {
+            Label("在这下面建子 crew", systemImage: "plus")
         }
-        // 拖起：负载带上「哪个 crew + 当前这条父边」，落地时才知道该摘哪条边。
-        .draggable(CrewDragDropLogic.encode(crewId: crew.id, parentId: parentId)) {
-            Text(crew.title)
-                .font(Theme.Fonts.system(size: 13, weight: .semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .onAppear { dragState.begin(crewId: crew.id, parentId: parentId) }
+        Divider()
+        // 「藏起来」= 从侧栏消失，**聊天记录留着、不真删**，crew 里的 session
+        // 照常干活。取回的路在侧栏底部那行「已隐藏的群」。
+        // 目标同样恒为本行这个 crew，不看选中态。
+        Button {
+            requestHide()
+        } label: {
+            Label("藏起来", systemImage: "eye.slash")
         }
-        .dropDestination(for: String.self) { items, _ in
-            dragState.handleDrop(items, targetId: crew.id, crews: groupCrews, store: crewStore)
-        } isTargeted: { isDropTargeted = $0 }
-        // 每个 crew 之间留一道竖向呼吸间距 —— 加在高亮 pill 之外(背景/点击区已闭合),
-        // 所以是 crew 之间的留白,不是把 pill 撑高;根 crew(独立 list row)与展开的
-        // 子 crew(同 VStack 内堆叠)都吃这道下边距,间距统一。
-        .padding(.bottom, 6)
     }
 
     /// 右键「藏起来」。判定全在 `CrewHiding.decide`（纯函数、单测钉死），这里只
