@@ -35,7 +35,7 @@ enum CrewLocalMentionDelivery {
             let unread = WhiteboardCursor(
                 directory: cursorDir, crewId: crewId, sessionId: r.sessionId).unread(in: store)
             unreadBySession[r.sessionId] = CrewWhiteboardVisibility.visible(
-                unread, to: r.sessionId, isCaptain: r.role == .captain)
+                unread.messages, to: r.sessionId, isCaptain: r.role == .captain)
         }
         let runStates: [CrewLocalMentionInjectLogic.RunState] = sessionRunner.runs
             .filter { $0.status == .running }

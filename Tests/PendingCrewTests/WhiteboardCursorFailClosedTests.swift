@@ -146,7 +146,7 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
              crewId: crewId, in: dir)
         let store = LocalWhiteboardStore(directory: dir)
         let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
-        XCTAssertEqual(cursor.unread(in: store).map(\.text), ["1", "2"])
+        XCTAssertEqual(cursor.unread(in: store).messages.map(\.text), ["1", "2"])
     }
 
     func testFirstDeliveryIsCappedToRecentEntries() {
@@ -160,8 +160,9 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
         let store = LocalWhiteboardStore(directory: dir)
         let unread = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
             .unread(in: store)
-        XCTAssertEqual(unread.count, WhiteboardCursor.firstDeliveryLimit)
-        XCTAssertEqual(unread.last?.text, rows.last?.text, "留的是最近这批，不是最早那批")
+        XCTAssertEqual(unread.messages.count, WhiteboardCursor.firstDeliveryLimit)
+        XCTAssertEqual(unread.messages.last?.text, rows.last?.text, "留的是最近这批，不是最早那批")
+        XCTAssertEqual(unread.omitted, 20, "截掉的条数要自报（#105 ①：不许静默截断）")
     }
 
     func testFreshClaudeSessionFirstPromptIncludesRecentWhiteboardHistory() {
@@ -218,7 +219,7 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
         try! "".write(to: cursorFile(dir, crewId, "sess-1"), atomically: true, encoding: .utf8)
         let store = LocalWhiteboardStore(directory: dir)
         XCTAssertTrue(WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
-            .unread(in: store).isEmpty)
+            .unread(in: store).messages.isEmpty)
     }
 
     // MARK: - ③ 迁移：旧格式（纯 id）游标绝不能当首次
@@ -235,7 +236,7 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
 
         let store = LocalWhiteboardStore(directory: dir)
         let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
-        XCTAssertTrue(cursor.unread(in: store).isEmpty, "旧格式悬空游标一条都不许重放")
+        XCTAssertTrue(cursor.unread(in: store).messages.isEmpty, "旧格式悬空游标一条都不许重放")
     }
 
     func testLegacyDanglingCursorResyncsToTailSoLaterMessagesStillArrive() {
@@ -249,10 +250,10 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
 
         let store = LocalWhiteboardStore(directory: dir)
         let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
-        XCTAssertTrue(cursor.unread(in: store).isEmpty)
+        XCTAssertTrue(cursor.unread(in: store).messages.isEmpty)
 
         store.appendSessionMessage(crewId: crewId, sessionId: "s2", text: "新消息")
-        XCTAssertEqual(cursor.unread(in: store).map(\.text), ["新消息"])
+        XCTAssertEqual(cursor.unread(in: store).messages.map(\.text), ["新消息"])
     }
 
     func testLegacyCursorWithLiveAnchorKeepsWorkingAndUpgradesToComposite() {
@@ -268,7 +269,7 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
 
         let store = LocalWhiteboardStore(directory: dir)
         let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
-        XCTAssertEqual(cursor.unread(in: store).map(\.text), ["2"])
+        XCTAssertEqual(cursor.unread(in: store).messages.map(\.text), ["2"])
 
         let raw = cursorContents(dir, crewId, "sess-1") ?? ""
         XCTAssertTrue(raw.contains("a"), "锚点 id 不变")
@@ -335,7 +336,7 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
         let store = LocalWhiteboardStore(directory: dir)
         let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-1")
         cursor.advance(to: rows[1], in: store)
-        XCTAssertTrue(cursor.unread(in: store).isEmpty)
+        XCTAssertTrue(cursor.unread(in: store).messages.isEmpty)
     }
 
     // MARK: - 游标文件编解码

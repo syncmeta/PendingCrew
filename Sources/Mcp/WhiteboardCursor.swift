@@ -14,6 +14,33 @@ struct WhiteboardCursorPosition: Equatable {
     let createdAt: String?
 }
 
+/// 白板投递账本的**键** —— 跟着「对话」走，不跟着进程走（人类 Todo #105 ①）。
+///
+/// 病根：机长每次启动都新造 `captain-<uuid8>`（`CrewSessionRunner.startCaptain`），
+/// 而**对话是 `--resume` 接回来的**。游标文件名带 sessionId ⇒ 新 id ⇒ 文件不存在
+/// ⇒ 判「真首次」⇒ 把最近 `firstDeliveryLimit` 条重投给一个已经读过、已经回过它们
+/// 的对话。**对话记得，游标不记得。** 本机实测：408 个机长游标 / 47 个 crew =
+/// 361 次「非首任」，每次上限 30 条。
+///
+/// 归并的依据是代码里本来就成立的不变量：**每个 crew 同时只允许一个机长**
+/// （`startCaptain` 那道 guard + `runs.removeAll { role == .captain }`），所以
+/// 「本 crew 的机长」是一个无歧义的对话身份。worker 走 `restartMember` **复用原
+/// sessionId**，本来就没有这个问题，因此**不归并** —— 归并了反而会让同 crew 的
+/// 不同 worker 互相吃掉未读。
+enum CrewConversationKey {
+    /// 机长家族的前缀。`CrewSessionRunner` 造 id 的那一处是唯一产地。
+    static let captainPrefix = "captain-"
+    /// 归并后机长共用的键。
+    static let captain = "captain"
+
+    static func forSession(_ sessionId: String) -> String {
+        sessionId.hasPrefix(captainPrefix) ? captain : sessionId
+    }
+
+    /// 这个键是归并出来的吗（= 需要去认领旧的按 sessionId 命名的游标）。
+    static func isMerged(_ key: String) -> Bool { key == captain }
+}
+
 /// Per-session 白板**未读游标**的单一真值 —— PostToolUse hook（`HookEmitter`）与
 /// **唤醒/提及注入**（`CrewLocalMentionWaker` / `CrewChatView` 本地直投）共用同一份。
 ///
@@ -66,15 +93,43 @@ struct WhiteboardCursor {
         case unreadable
     }
 
+    /// 落盘用的**会话键**（#105 ①）：机长归并成一本，worker 仍按自己的 sessionId。
+    private var conversationKey: String { CrewConversationKey.forSession(sessionId) }
+
     private var cursorURL: URL {
-        directory.appendingPathComponent("\(crewId).\(sessionId).cursor")
+        directory.appendingPathComponent("\(crewId).\(conversationKey).cursor")
     }
     private var lockURL: URL {
-        directory.appendingPathComponent("\(crewId).\(sessionId).cursor.lock")
+        directory.appendingPathComponent("\(crewId).\(conversationKey).cursor.lock")
+    }
+
+    /// 改键当天，磁盘上全是旧格式 `<crewId>.captain-<uuid8>.cursor`。**不认领 =
+    /// 全机每个 crew 再各重放一次**，等于这次修复自己先触发一遍它要修的 bug。
+    ///
+    /// 只在归并键上做，且只做一次：认领最近写过的那一份（同一 crew 同时只有一个
+    /// 机长，"最近写过的"就是上一任），写到新位置之后这条路再也不会被走到。
+    private func adoptLegacyCursorIfNeeded() {
+        guard CrewConversationKey.isMerged(conversationKey),
+              !FileManager.default.fileExists(atPath: cursorURL.path) else { return }
+        let prefix = "\(crewId).\(CrewConversationKey.captainPrefix)"
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]))?
+            .filter { $0.lastPathComponent.hasPrefix(prefix)
+                      && $0.pathExtension == "cursor" } ?? []
+        let newest = files.max { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            return da < db
+        }
+        guard let newest, let raw = try? String(contentsOf: newest, encoding: .utf8) else { return }
+        try? raw.write(to: cursorURL, atomically: true, encoding: .utf8)
     }
 
     /// 当前游标位置（三态，见 `State`）。
     func read() -> State {
+        adoptLegacyCursorIfNeeded()
         guard FileManager.default.fileExists(atPath: cursorURL.path) else { return .absent }
         guard let raw = try? String(contentsOf: cursorURL, encoding: .utf8) else { return .unreadable }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -97,14 +152,28 @@ struct WhiteboardCursor {
     ///   `entries(in:after:)` 按时间戳 fail-closed 地切。悬空且是旧格式（无时间戳）
     ///   游标时同样 resync 到当前尾 —— **修复上线那一刻磁盘上全是旧格式游标，
     ///   把它们当首次就是再触发一次全机重放，比 bug 本身还难看。**
-    func unread(in store: LocalWhiteboardStore) -> [LocalWhiteboardMessage] {
+    /// 一次投递能给出的最多条数 —— **有锚点的那条路也要有上限**（#105 ①）。
+    ///
+    /// 在 ① 之前，「新 sessionId ⇒ 游标 absent ⇒ 只投 30 条」这个行为**同时也在挡
+    /// 另一件事**：机长隔几天醒来被灌几百条。① 把游标接回对话身份之后那道挡板就没了，
+    /// 所以这里补回来。**但截掉的部分必须自报**（`Unread.omitted`）——
+    /// 我们已经有两道方向相反的截断了，再加一道静默的，收的人会以为看到的就是全部。
+    struct Unread: Equatable {
+        let messages: [LocalWhiteboardMessage]
+        /// 因为上限被截掉的条数。>0 时渲染层必须明说。
+        let omitted: Int
+
+        static let none = Unread(messages: [], omitted: 0)
+    }
+
+    func unread(in store: LocalWhiteboardStore) -> Unread {
         let all = store.list(crewId: crewId)
         switch read() {
         case .absent:
-            return Array(all.suffix(Self.firstDeliveryLimit))
+            return capped(Array(all))
         case .unreadable:
             resync(toTailOf: all)
-            return []
+            return .none
         case .anchored(let position):
             let fresh = LocalWhiteboardStore.entries(in: all, after: position)
             if let anchor = all.first(where: { $0.id == position.id }) {
@@ -117,8 +186,37 @@ struct WhiteboardCursor {
                 // 游标接回当前尾，否则它永远认不出，之后的新消息也一并送不出去。
                 resync(toTailOf: all)
             }
-            return fresh
+            return capped(fresh)
         }
+    }
+
+    private func capped(_ msgs: [LocalWhiteboardMessage]) -> Unread {
+        guard msgs.count > Self.firstDeliveryLimit else {
+            return Unread(messages: msgs, omitted: 0)
+        }
+        return Unread(messages: Array(msgs.suffix(Self.firstDeliveryLimit)),
+                      omitted: msgs.count - Self.firstDeliveryLimit)
+    }
+
+    /// **这条对这个对话来说已经投过了吗** —— 四本账合一之后（#105 ④），这是唯一判据。
+    ///
+    /// 在此之前「已投递」有四本账：这一本（盘上、per 对话）、唤醒队列的
+    /// `deliveredKeys`（内存、512 上限）、唤醒器的 per-crew 扫描游标（内存）、
+    /// 以及 `listenCursors`（内存）。后三本互相看不见，一条消息可以同时在这一本里
+    /// 「已投」、在另一本里「未投」——那正是重复投递的形状。
+    ///
+    /// **拿不准时一律答 false**：把没投过的判成已投 = 丢消息，比重复贵得多。
+    func hasDelivered(_ entry: LocalWhiteboardMessage, in store: LocalWhiteboardStore) -> Bool {
+        guard case .anchored(let position) = read() else { return false }
+        let all = store.list(crewId: crewId)
+        if let cur = all.firstIndex(where: { $0.id == position.id }),
+           let tgt = all.firstIndex(where: { $0.id == entry.id }) {
+            return tgt <= cur
+        }
+        // 锚点悬空 → 退到时间戳；两边都得有，缺一律答 false。
+        guard let curAt = position.createdAt.flatMap(CrewTimestamp.parse),
+              let tgtAt = CrewTimestamp.parse(entry.createdAt) else { return false }
+        return tgtAt <= curAt
     }
 
     /// 推进游标到 `entry`（forward-only + flock）。
