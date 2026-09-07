@@ -30,7 +30,13 @@ major=${os%%.*}
 
 # 正在跑的话就停手让人自己退 —— **不替用户杀进程**：那些 session 是活的子进程，
 # 替他 kill 等于替他中断正在干的活。
-if pgrep -x "$app_name" >/dev/null 2>&1; then
+#
+# ⚠️ 判据必须只认界面那个进程，不能用 `pgrep -x PendingCrew`：MCP helper 是**同一个
+# 二进制再跑一遍**（`… /MacOS/PendingCrew --mcp-serve --crew …`），进程名一模一样。
+# session 由后台托管之后，人退出界面 helper 照样活着 —— 用 -x 的话这里会永远说
+# 「PendingCrew 正在运行」，装不进去，而且怪到用户头上说他没退出。
+# 界面那个进程是唯一不带参数的，所以用 -f 加行首行尾锚点把它单独钉出来。
+if pgrep -f "^${dest}/${app_name}.app/Contents/MacOS/${app_name}\$" >/dev/null 2>&1; then
   die "PendingCrew 正在运行。请先退出它（⌘Q）再跑这个脚本 —— 我不会替你结束它，
   那会中断正在跑的 session。"
 fi
