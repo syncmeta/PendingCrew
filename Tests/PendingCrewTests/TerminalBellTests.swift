@@ -73,26 +73,36 @@ final class TerminalBellTests: XCTestCase {
         XCTAssertEqual(trace.unseen, 1)
     }
 
-    /// **拿真录制的 claude 输出验**，别只用手编的字节流（这个仓库编尺子踩过的坑：
-    /// 凭印象编的语料复现不了真病）。`Tests/Fixtures/tui-claude.bin` 是
-    /// `AgentTuiFixtureRecorder` 在真 PTY 里把 claude 拉起来录的原始字节（入库）。
+    /// **拿真录制的 PTY 字节验，别只用手编的字节流**（这个仓库编尺子踩过的坑：
+    /// 凭印象编的语料复现不了真病）。语料是 `AgentTuiFixtureRecorder` 在真 PTY 里
+    /// 录的原始字节（入库）。
     ///
-    /// 断的是「≥1 次」而不是某个具体数字 —— 数字归录制那一版 claude，会随重录变；
-    /// 「真实输出里确实有会响的 BEL」才是这条要钉的事实（也就是说 #110 不是理论问题：
-    /// 修之前，光这一段录制回放一遍就会响出来）。
-    func testRealClaudeRecordingContainsBellsThatUsedToBeep() throws {
-        let bytes = try loadFixture("tui-claude.bin")
-        let rawBelBytes = bytes.filter { $0 == 0x07 }.count
-        let mirror = makeMirror()
-
-        mirror.feed(byteArray: bytes[...])
-
+    /// 这条同时钉住两件**量出来的**事实（写这条测试时才发现，之前是猜的）：
+    /// - `tui-shell.bin`：13 个 ground 态 BEL（录制里 `printf` 敲出来的）→ **会响**。
+    ///   修之前，回放这段就会放出那么多声系统提示音。
+    /// - `tui-claude*.bin`：这三段录制里的 BEL **全部**是 OSC 终止符
+    ///   （`ESC]0;标题 BEL` 设窗口标题、`ESC]11;? BEL` 查背景色）→ **一次都不响**。
+    ///   也就是说「agent 吐 BEL 就响」这句话对**这几段 claude 录制**并不成立；
+    ///   会响的那种 BEL 在这套语料里只出现在 shell 那段。
+    ///
+    /// 断的是「>0 / ==0」而不是具体数字 —— 数字归录制那一版，会随重录变。
+    func testRecordedShellOutputRingsWhileRecordedClaudeTuiOnlyUsesOscTerminators() throws {
+        let shell = try loadFixture("tui-shell.bin")
+        let shellMirror = makeMirror()
+        shellMirror.feed(byteArray: shell[...])
         XCTAssertGreaterThan(
-            mirror.bellTrace.count, 0,
-            "真录制里一个响铃都没解析出来（原始 0x07 有 \(rawBelBytes) 个）—— 要么录制变了，要么解析路径断了")
-        XCTAssertLessThanOrEqual(
-            mirror.bellTrace.count, rawBelBytes,
-            "响铃次数不可能超过原始 BEL 字节数")
+            shellMirror.bellTrace.count, 0,
+            "shell 录制里一个响铃都没解析出来（原始 0x07 有 \(shell.filter { $0 == 0x07 }.count) 个）—— 要么录制变了，要么解析路径断了")
+
+        for name in ["tui-claude.bin", "tui-claude-ready.bin", "tui-claude-trust.bin"] {
+            let bytes = try loadFixture(name)
+            let raw = bytes.filter { $0 == 0x07 }.count
+            let mirror = makeMirror()
+            mirror.feed(byteArray: bytes[...])
+            XCTAssertEqual(
+                mirror.bellTrace.count, 0,
+                "\(name)：这段录制里的 \(raw) 个 BEL 本该全是 OSC 终止符（不响）—— 变了就说明 claude 的输出或 SwiftTerm 的状态机变了，值得回头看一眼")
+        }
     }
 
     private func loadFixture(_ name: String) throws -> [UInt8] {
