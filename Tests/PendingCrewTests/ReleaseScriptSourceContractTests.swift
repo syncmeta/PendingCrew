@@ -24,8 +24,29 @@ final class ReleaseScriptSourceContractTests: XCTestCase {
         XCTAssertFalse(script.contains("tag \"v$version\" main"))
     }
 
-    /// `$var` 后面直接跟全角标点时，`/bin/sh`（macOS 上是 bash 3.2）会把那个多字节
-    /// 字符的头一个字节算进变量名，于是 `set -u` 下当场 `unbound variable`。
+    /// `$var` 后面直接跟**非 ASCII 字符**时，`/bin/sh`（macOS 上是 bash 3.2）会把那个
+    /// 多字节字符的头一个字节算进变量名，于是 `set -u` 下当场 `unbound variable`。
+    ///
+    /// ## 触发条件是 locale，不是机器（2026-09-07 补）
+    /// **只有 `LC_CTYPE` 是 UTF-8 时才咬。**同一台机器、同一个 `/bin/sh`
+    /// （bash 3.2.57）实测三行：
+    /// ```
+    /// （LANG 未设，agent shell 的默认）  sh -uc 'v=1; echo "$v（x）"'  →  1（x）   exit 0
+    /// LC_ALL=C                          同上                          →  1（x）   exit 0
+    /// LC_ALL=en_US.UTF-8                同上                          →  sh: v?: unbound variable   exit 127
+    /// ```
+    /// 这一条**必须写在这儿**：agent 的 shell 通常没有 UTF-8 locale，于是**谁去复现都是绿的**，
+    /// 很容易得出「这把尺子在防一件没发生过的事」而把它拆掉。2026-09-07 就差点发生
+    /// （复现命令原本一直躺在 `d5a5f6e` 的 commit message 里，只是没人回去找）。
+    /// 它也解释了为什么偏偏咬发版脚本：那种环境几乎必然是 UTF-8。
+    ///
+    /// ## 判据是「非 ASCII」，不是一张全角标点表（2026-09-07 改）
+    /// 原本枚举的是 `（）「」，。：；、`，于是 `scripts/install.sh:83` 的 `$dest…` 从来
+    /// 没被看见过 —— `…` 不在表里，而它在 UTF-8 下照样红。那是 `curl | sh` 给真人跑的
+    /// 安装脚本、脚本头就是 `set -eu`，真人的终端几乎必然是 UTF-8：**那一行会让安装在
+    /// 「挂载并安装到…」当场以 127 死掉，而我们这边永远复现不出来。**
+    /// 名单会短，字节不会 —— 所以判据改成「裸 `$var` 后紧跟任意非 ASCII」。
+    /// **不扩到 `${var}` 那一侧**：那是修法本身，扩过去就是过报，而过报的尺子会被人关掉。
     ///
     /// 这不是理论问题，是 2026-08-27 发 0.1.18 时**在发布途中**咬了一口：
     /// `update-homebrew-tap.sh` 最后那句成功回执写的是 `"...已更新到 $version（$tap_repo）"`，
@@ -34,7 +55,7 @@ final class ReleaseScriptSourceContractTests: XCTestCase {
     ///
     /// 而且它**已经复发过一次**：`fedb697` 只修了 feed 那一处，仓库里当时还剩 24 处。
     /// 所以这里不是修一处，是把整类钉住。修法：`${var}` 显式括起来。
-    func testShellScriptsBraceVariablesBeforeFullWidthPunctuation() throws {
+    func testShellScriptsBraceVariablesBeforeNonASCII() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -65,14 +86,16 @@ final class ReleaseScriptSourceContractTests: XCTestCase {
 
         XCTAssertEqual(
             offenders, [],
-            "这些 $var 紧跟全角标点，sh 会把标点的首字节读进变量名 —— 改成 ${var}："
+            "这些 $var 紧跟非 ASCII 字符，sh 会把那个字符的首字节读进变量名（UTF-8 locale 下 set -u 当场 unbound variable）—— 改成 ${var}："
                 + offenders.joined(separator: " | ")
         )
     }
 
-    /// 找 `$name` / `$1` / `$@` 之类后面紧跟全角标点的写法。
+    /// 找 `$name` / `$1` / `$@` 之类后面紧跟**任意非 ASCII 字符**的写法。
+    ///
+    /// 判的是字节而不是一张字符表：会咬人的是「多字节字符的头一个字节被算进变量名」，
+    /// 跟那个字符具体是什么无关。列表会短（`…` 就漏过去了），字节不会。
     private static func badVariableUses(in line: String) -> [String] {
-        let fullWidth = Set("（）「」，。：；、")
         var found: [String] = []
         let chars = Array(line)
         var i = 0
@@ -80,15 +103,20 @@ final class ReleaseScriptSourceContractTests: XCTestCase {
             guard chars[i] == "$" else { i += 1; continue }
             var j = i + 1
             guard j < chars.count else { break }
-            if chars[j].isLetter || chars[j] == "_" {
-                while j < chars.count, chars[j].isLetter || chars[j].isNumber || chars[j] == "_" { j += 1 }
-            } else if chars[j].isNumber || "?@*#!$".contains(chars[j]) {
+            // 变量名只认 ASCII。`Character.isLetter` / `.isNumber` 是 **Unicode 感知**的：
+            // 不钉住的话 `$dest目录` 里的「目录」会被当成变量名的一部分吃掉，扫到结尾
+            // 也就没有「后面紧跟非 ASCII」可判了 —— 一条真会咬人的写法就这么静默漏过。
+            // shell 的变量名本来就只有 [A-Za-z0-9_]，这里跟着它。
+            if chars[j].isASCII, chars[j].isLetter || chars[j] == "_" {
+                while j < chars.count, chars[j].isASCII,
+                      chars[j].isLetter || chars[j].isNumber || chars[j] == "_" { j += 1 }
+            } else if chars[j].isASCII, chars[j].isNumber || "?@*#!$".contains(chars[j]) {
                 j += 1
             } else {
                 i += 1
                 continue
             }
-            if j < chars.count, fullWidth.contains(chars[j]) {
+            if j < chars.count, !chars[j].isASCII {
                 found.append(String(chars[i..<min(j + 1, chars.count)]))
             }
             i = j
