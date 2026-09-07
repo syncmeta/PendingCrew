@@ -6,12 +6,12 @@
 #
 # 判据只有两条，都不需要读懂那一行写了什么：
 #   ① 行号越界： 引用 path:N，而 path 只有 M 行、N > M
-#   ② 文件不存在：引用 path:N，而 path 不在树里
+#   ② 文件不存在：引用 path:N，而 path 不在那棵树里
 # **刻意不做**「这一行是不是真的讲那件事」——那要语义，尺子一有语义就开始误报，
 # 然后被人关掉。零误报是这把尺子唯一的卖点，宁可漏也不许错。
 #
 # 什么才算「一条引用」（这条界定就是零误报的全部所在）：
-#   形如 `<路径>:<数字>`，且**路径的第一段是仓库根下真实存在的条目**。
+#   形如 `<路径>:<数字>`，且**路径的第一段是那棵树根下真实存在的条目**。
 #   这一条同时把下面这些挡在门外，不需要为它们各写一条特例：
 #     · 裸文件名 `AgentTerminalSession.swift:12`  —— 第一段不在根下 ⇒ 不是引用（那批的清理另有其事，不归这把尺子）
 #     · 别的仓库  `apps/edge/src/routes/crew.ts:88` —— 本仓库根下没有 apps/ ⇒ 无从判断，不碰
@@ -19,6 +19,22 @@
 #     · URL / 绝对路径 `http://127.0.0.1:10858`、`/tmp/pcw-x/a.log:3` —— 第一段为空或不在根下
 #   代价说清楚：**某个根下目录整个被删掉的那天，指向它的引用会从「越界」静默降级成「不检查」**。
 #   这是刻意换来的——宁可这里漏一次，也不要让它开始对别的仓库、对半截路径喊。
+#
+# ── 「哪棵树」：文档可以声明自己的基准提交 ────────────────────────────────
+# 快照式文档（一次性清点、事后报告）描述的是**过去某一刻**的树。把它的行号改成
+# 今天的树，等于把它改成假的——它就不再描述那一刻了。所以这类文档在头部声明：
+#
+#     <!-- doc-ref-base: 24a7893 -->
+#
+# 声明了就对 `git show <base>:<path>` 数行、`git cat-file -e <base>:<path>` 判在不在；
+# 没声明就照旧对当前树。**判据一个字没变**（仍是越界 / 不存在），换的只是那棵树。
+#
+# base 本身必须被验证，不能只被记录——否则它就退化成一行注释写的白名单，
+# 任何人写个假 sha 就能豁免整份文档，而尺子一声不吭。两道，各自都会红：
+#     · sha 解析不出提交              ⇒ 红
+#     · 该提交不是 main 的祖先        ⇒ 红（包括 main 这个 ref 根本解析不出来的情况）
+# 注意 base 说的是「**被引用的那棵树**」，不是「这份文档自己的历史」——
+# 文档后来被移动过、被补过一行，都不改 base。
 #
 # 扫描范围（可读可改，别塞特例）：docs/ 下的 *.md + 仓库根的 *.md。
 set -e
@@ -32,12 +48,42 @@ SCAN_ROOT_GLOB="*.md"     # 外加仓库根的 *.md（不递归）
 # 名单先落到文件，计数再从这份名单里数出来 —— 数和名单结构上不可能对不上。
 # （报「N 条」却另起一路去数，就是把名单和计数分家；分了家，错的通常是名单。）
 OUT=$(mktemp)
-trap 'rm -f "$OUT"' EXIT
+# 第二本：声明了 base 的文档各一行「落后 main 多少」。**它是读数，不是判据** ——
+# 不设阈值、不因此返回非零。判「这份文档该不该是快照」要语义，尺子一有语义就开始误报。
+# 摆出来是因为护栏只挡得住**假的** base，挡不住「声明一个老 base 躲开尺子」：
+# 快照文档落后是正常的、应该的；一份新文档声明了很旧的 base，这个数自己会刺眼。
+BASEOUT=$(mktemp)
+trap 'rm -f "$OUT" "$BASEOUT"' EXIT
+
+# 行数一律用 awk 的 NR，不用 `wc -l`：末行没有换行符时 `wc -l` 会少数一行，
+# 而那正好是「引用文件最后一行」时会误报的那一格。
+count_lines_worktree() { awk 'END{print NR+0}' "$1"; }
+count_lines_base()     { git show "$2:$1" | awk 'END{print NR+0}'; }
 
 # shellcheck disable=SC2086
 FILES=$(find $SCAN_DIRS -type f -name '*.md' 2>/dev/null; ls $SCAN_ROOT_GLOB 2>/dev/null)
 
 for doc in $FILES; do
+  # ① 这份文档声明基准提交了吗
+  base=$(sed -n 's/.*<!-- *doc-ref-base: *\([0-9a-fA-F]\{7,40\}\) *-->.*/\1/p' "$doc" | head -1)
+  base_ln=$(grep -n 'doc-ref-base:' "$doc" | head -1 | cut -d: -f1)
+  if [ -n "$base" ]; then
+    # ② base 自己先过两道，过不了就整份文档判红并跳过——红在 base 那一行，
+    #    而不是把它的引用拿去跟错的树比、报出一堆看不懂的红。
+    full=$(git rev-parse --verify --quiet "$base^{commit}" 2>/dev/null || true)
+    if [ -z "$full" ]; then
+      printf '%s:%s → doc-ref-base %s（解析不出这个提交）\n' "$doc" "$base_ln" "$base" >> "$OUT"
+      continue
+    fi
+    if ! git merge-base --is-ancestor "$full" main 2>/dev/null; then
+      printf '%s:%s → doc-ref-base %s（不是 main 的祖先，或这里根本没有 main）\n' "$doc" "$base_ln" "$base" >> "$OUT"
+      continue
+    fi
+    printf '%s  base %s  落后 main %s 个提交 / %s 天\n' "$doc" "$(git rev-parse --short "$full")" \
+      "$(git rev-list --count "$full..main" 2>/dev/null || echo '?')" \
+      "$(( ( $(date +%s) - $(git log -1 --format=%ct "$full") ) / 86400 ))" >> "$BASEOUT"
+  fi
+
   # 每个候选带上它在文档里的行号：grep -n 出行号，grep -o 出候选，用 awk 拼回一起。
   grep -nE '[A-Za-z0-9_./+-]+:[0-9]+' "$doc" 2>/dev/null | \
   awk -F: '{ ln=$1; sub(/^[0-9]+:/, "", $0); print ln "\t" $0 }' | \
@@ -47,28 +93,45 @@ for doc in $FILES; do
       path=${ref%:*}
       nums=${ref##*:}
       first=${path%%/*}
-      # 门：第一段必须是仓库根下真实存在的条目（见顶部「什么才算一条引用」）
+      # 门：第一段必须是那棵树根下真实存在的条目（见顶部「什么才算一条引用」）
       [ -n "$first" ] || continue
-      [ -e "./$first" ] || continue
       case "$path" in */.../*|.../*|*/...) continue;; esac   # `Tests/.../X.swift` 这种省略号写法不是路径
-      if [ ! -f "$path" ]; then
-        printf '%s:%s → %s（文件不存在）\n' "$doc" "$ln" "$ref" >> "$OUT"
-        continue
+      if [ -n "$base" ]; then
+        git cat-file -e "$base:$first" 2>/dev/null || continue
+        if ! git cat-file -e "$base:$path" 2>/dev/null; then
+          printf '%s:%s → %s（基准 %s 上文件不存在）\n' "$doc" "$ln" "$ref" "$base" >> "$OUT"
+          continue
+        fi
+        actual=$(count_lines_base "$path" "$base")
+        label="基准 $base 上实际 $actual 行"
+      else
+        [ -e "./$first" ] || continue
+        if [ ! -f "$path" ]; then
+          printf '%s:%s → %s（文件不存在）\n' "$doc" "$ln" "$ref" >> "$OUT"
+          continue
+        fi
+        actual=$(count_lines_worktree "$path")
+        label="实际 $actual 行"
       fi
-      actual=$(wc -l < "$path" | tr -d ' ')
       # `12-30` 取区间上界；单个数就是它自己。上界不越界 ⇒ 下界也不会越界。
       hi=${nums##*-}
       if [ "$hi" -gt "$actual" ]; then
-        printf '%s:%s → %s（实际 %s 行）\n' "$doc" "$ln" "$ref" "$actual" >> "$OUT"
+        printf '%s:%s → %s（%s）\n' "$doc" "$ln" "$ref" "$label" >> "$OUT"
       fi
     done
   done
 done
 
+if [ -s "$BASEOUT" ]; then
+  echo "--- 声明了基准提交的文档（读数，不是判据；不设阈值、不影响退出码）---"
+  sort "$BASEOUT"
+  echo "  快照文档落后是正常的、应该的；一份新文档声明了很旧的 base，那个数自己会刺眼。"
+fi
+
 if [ -s "$OUT" ]; then
   echo "--- 腐烂的文档引用（逐条）---"
   sort "$OUT"
-  printf '共 %s 条\n' "$(wc -l < "$OUT" | tr -d ' ')"
+  printf '共 %s 条\n' "$(awk 'END{print NR+0}' "$OUT")"
   exit 1
 fi
 echo "--- 腐烂的文档引用：0 条 ---"
