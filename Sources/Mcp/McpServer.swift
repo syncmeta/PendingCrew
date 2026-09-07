@@ -307,6 +307,18 @@ final class McpServer {
                     ],
                 ],
                 [
+                    "name": "withdraw_human_todo",
+                    "description": "撤回**你自己提的**那条人类 Todo（Todo 面板「人类的」那本）。用在**你提的那件事已经不成立了**：版本发出去了、站上线了、你自己在群里改了主意、那条线被别的决定取代了。\n\n**这是这本账里最该常用的一个动作，因为只有你判断得了。**一条人类 Todo 最常见的死法不是人不想答，是**世界变了**——而人类判断不了世界变没变（他不知道下游走到哪一版了），能判断的只有当初提的那一方，也就是你。你不撤，它就一直挂在他账上亮着灯催他，而那件事其实早就没了。\n\n**只能撤自己提的**（按落账时记下的 session 判定，不看显示名），**只能撤本 crew 的**，**reason 必填**。撤回**不是删除**：条目留在列表里、原因写在它的时间线上、群里也会出一行「撤回 人类 To Do #N：…」——人有权知道你撤了什么、为什么，也有权追问把它问回来。别拿它清理你不想答的事，那是人的账不是你的。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "number": ["type": "integer", "description": "要撤回的那条的 #N（人类那本的编号，就是当初回执里给你的那个）。"],
+                            "reason": ["type": "string", "description": "为什么它不成立了。一句话说清**变了什么**（「0.1.25 已发，这条问的是要不要发」），别写「已处理」。"],
+                        ],
+                        "required": ["number", "reason"],
+                    ],
+                ],
+                [
                     "name": "set_session_profile",
                     "description": "切换你自己这个 session 的模型/thinking effort（至少给一个）。用于按任务阶段调配：机械收尾活降到轻模型/低 effort 省额度，难题升 effort。claude session 在**你本回合结束后**生效（等价终端里打 /model、/effort —— 斜杠命令只能在终端空闲时执行，所以不是当场切换；生效/失败都会回执到白板，成功还会在终端通知你）。撞额度上限时用它正合适：回合被打断后切换落地，你会被叫醒在新模型上接着跑，不用等重置。codex 没有中途切换通道——会在白板收到说明，新任务请让机长用 start_session 带 model/effort 另起。\n"
                         + catalogHint(agents: agentKey.map { [$0] } ?? ["claude", "codex"]),
@@ -1265,6 +1277,67 @@ final class McpServer {
             return toolResult(id: id, text: TodoLandingFlow.receipt(
                 ledger: .human, action: .added, number: added.number,
                 reached: reached, detail: detail))
+        case "withdraw_human_todo":
+            // 撤回（Todo #102）。顺序与 add_human_todo 一样：先落账再宣布，回执走
+            // 同一个 `TodoLandingFlow` 出口。**这里多一件事**：撤不动的几种原因要
+            // 分别说清楚 —— 「不是你提的」和「没这条」在 agent 那边该做完全不同的
+            // 反应，压成一句「失败」它只会瞎重试。
+            guard let number = (args["number"] as? Int)
+                    ?? (args["number"] as? NSNumber)?.intValue else {
+                return toolResult(id: id, text: "ERROR: number 必填 —— 填要撤回的那条人类 Todo 的 #N。")
+            }
+            let reason = ((args["reason"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let outcome = humanTodos.withdraw(crewId: crewId, number: number,
+                                              sessionId: sessionId,
+                                              senderName: sessionLabel, reason: reason)
+            let withdrawn: LocalTodoItem
+            switch outcome {
+            case .withdrawn(let item):
+                withdrawn = item
+            case .reasonRequired:
+                return toolResult(id: id, text: "ERROR: reason 不能为空 —— 撤回是把一件事从人的待办里拿走，"
+                                  + "没有原因就是让它静默消失。一句话说清**变了什么**。")
+            case .notFound:
+                let live = humanTodos.list(crewId: crewId)
+                    .filter { $0.withdrawnAt == nil }
+                    .map { "#\($0.number) \($0.text.prefix(40))" }
+                return toolResult(id: id, text: "ERROR: 人类 Todo #\(number) 不在这本账上（号写错了、或人类已经删掉了）。"
+                                  + "**什么都没改。**当前还没撤的条目：\n"
+                                  + (live.isEmpty ? "（空）" : live.joined(separator: "\n")))
+            case .notYours(let owner):
+                let who = owner.map { "「\($0)」" } ?? "（账上没记提出者，老条目）"
+                return toolResult(id: id, text: "ERROR: 人类 Todo #\(number) 不是你提的，提出者是 \(who) —— **只能撤自己提的**。"
+                                  + "什么都没改。真该撤的话，让提出者自己撤；提出者已经不在了就在群里说明，让人类自己决定删不删。")
+            case .alreadyWithdrawn:
+                return toolResult(id: id, text: "人类 Todo #\(number) 早就撤过了，这次没有重复动账，群里也不再发第二行。")
+            case .ledgerUnavailable:
+                return toolResult(id: id, text: TodoLandingFlow.notPersistedReceipt(
+                    ledger: .human, action: .withdrawn))
+            }
+            let withdrawAnnounce = TodoLedger.human.withdrawAnnouncement(
+                number: withdrawn.number, reason: reason)
+            var withdrawReached = TodoLandingFlow.Step.persisted
+            var withdrawDetail: String?
+            do {
+                let incident = try store.appendSessionMessageReportingFailure(
+                    crewId: crewId, sessionId: sessionId,
+                    text: withdrawAnnounce, category: "progress",
+                    senderName: sessionLabel,
+                    mentions: TodoLandingFlow.mentions(.withdrawn).map(LocalWhiteboardMention.init),
+                    inReplyTo: nil,
+                    senderKind: isCaptain ? "captain" : "session")
+                if let incident {
+                    withdrawDetail = incident
+                } else {
+                    withdrawReached = TodoLandingFlow.terminal(.withdrawn)
+                }
+            } catch {
+                withdrawDetail = Self.writeFailureReceipt(error)
+            }
+            return toolResult(id: id, text: TodoLandingFlow.receipt(
+                ledger: .human, action: .withdrawn, number: withdrawn.number,
+                reached: withdrawReached, detail: withdrawDetail))
         case "set_session_profile":
             let model = (args["model"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
