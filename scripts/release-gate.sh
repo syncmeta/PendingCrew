@@ -7,7 +7,7 @@
 #   · 发版闸门：     sh scripts/release-gate.sh <要发的 commit>
 #   · 日常合前基线： sh scripts/release-gate.sh $(git -C <仓库> rev-parse HEAD)
 #
-# 判读（跑完读这四样，不需要任何事前判据）：
+# 判读（跑完读这五样，不需要任何事前判据）：
 #   ① skip **不比数字，比构成** —— 逐条看这三条各自还在不在、成立条件还成不成立：
 #        · CrewLastMessageCacheTests.test_基准_现场白板目录         —— 未指定现场白板目录 → skip
 #        · SessionAwaitingReplyInputsCacheTests.test_基准_现场目录  —— 同上
@@ -22,6 +22,9 @@
 #   ② CrewChatOpenCostTests 那 8 条应为 Executed —— 若整套 skipped 说明 fixture 没拷进去
 #   ③ 具名失败必须为空 —— 汇总行只说红了几条，不说是哪一条
 #   ④ HEAD / TREE 前后逐字相同 —— 否则你测的不是你以为的那棵树
+#   ⑤ 文档引用腐烂名单应为空 —— 逐条列「文档:行 → 被引用的 path:N」，
+#      判据只有「行号越界」和「文件不存在」两条，都不需要读懂那一行写了什么。
+#      **红了看名单，不是看那个数**：数只说明红了几条，说不出是哪一条烂的。
 set -e
 REPO=/Users/hey/Untitled/Pendingname/PendingCrew
 COMMIT="$1"; [ -n "$COMMIT" ] || { echo "用法: sh release-gate.sh <commit>"; exit 2; }
@@ -83,6 +86,11 @@ grep -A1 "Test Suite 'CrewChatOpenCostTests' started" "$LOG"/t-mac.log | head -2
 # 差别就在这两行输出的字面上，不需要谁事先记住一个期望值再回来比对。
 echo "# 看到 Test Case ... started = 真跑了；看不到/整套 skipped = cp -R 没生效，那 8 条会变成 skip"
 echo "--- 两端 build ---"; grep -E "BUILD SUCCEEDED|BUILD FAILED" "$LOG"/b-mac.log "$LOG"/b-ios.log
+# 文档引用腐烂：对**这棵钉死的树**跑（"$WT"），不是对共享目录跑 ——
+# 共享目录随时在动，在那儿量出来的读数说不清是哪个 commit 的。
+# `|| true`：闸门只报读数、不代人做判断（它自己也从不因为任何一条红而早退）。
+echo "--- 文档引用腐烂（名单即计数；空=零条）---"
+sh "$WT/scripts/doc-ref-check.sh" "$WT" || true
 echo "--- 闸门自己留下的（不自动回收）---"
 echo "本趟：$WT 和 $LOG"
 # 清单和计数出自同一次 `ls` —— 数是从名单里数出来的，两者结构上不可能对不上。
