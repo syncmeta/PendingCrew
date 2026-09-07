@@ -39,7 +39,7 @@
 # 扫描范围（可读可改，别塞特例）：docs/ 下的 *.md + 仓库根的 *.md。
 set -e
 ROOT=${1:-$(cd "$(dirname "$0")/.." && pwd)}
-[ -d "$ROOT" ] || { echo "用法: sh doc-ref-check.sh [仓库根]（给的路径不是目录：$ROOT）"; exit 2; }
+[ -d "$ROOT" ] || { echo "用法: sh doc-ref-check.sh [仓库根]（给的路径不是目录：${ROOT}）"; exit 2; }
 cd "$ROOT"
 
 SCAN_DIRS="docs"          # 递归扫这些目录下的 *.md
