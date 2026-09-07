@@ -33,6 +33,28 @@ struct CrewHumanTodoAttention: Equatable, Sendable {
 
     var hasUnanswered: Bool { scope != .none }
 
+    /// 侧栏黄点上的**数字**（人类原话：「sidebar 的那个黄色指示，也弄成带未读数字
+    /// 一样的，也是黄色」）。
+    ///
+    /// **自身 + 后代相加**：跟微信父级会话的角标同一个读法 —— 这条线下面一共有几件
+    /// 事在等你。要分清在本 crew 还是要往下找，看悬浮提示（`accessibilityLabel`
+    /// 一直是分开写的，这一点没变）。
+    var badgeTotal: Int { ownUnanswered + descendantUnanswered }
+
+    /// **0 不显示。** 常年亮着的角标会被训练成背景，人就学会忽略它。
+    ///
+    /// 规矩和上限都照 `HumanAttentionCount.badge`（菜单栏那个）来 —— 仓库里已经有
+    /// 这个孪生，照它写，不发明第二种。
+    ///
+    /// ⚠️ **这个数和菜单栏那个数不是同一个口径，它们本来就不该相等。**
+    /// 侧栏这个 = **单个 crew** × 只数**人类那本 Todo** × 自身+后代；
+    /// 菜单栏那个 = **全机** × 三类（待审批 + 卡在屏幕框上的 session + 人类 Todo）。
+    /// 看到两个数不一样是正常的，**不是 bug，别去「修」成一致**。
+    var badge: String? {
+        guard badgeTotal > 0 else { return nil }
+        return badgeTotal > 99 ? "99+" : String(badgeTotal)
+    }
+
     /// 状态点的悬浮提示和辅助功能共用同一份可测试语义。
     var accessibilityLabel: String? {
         var parts: [String] = []

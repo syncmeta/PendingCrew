@@ -237,4 +237,45 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
         XCTAssertEqual(moved["new-parent"]?.descendantUnanswered, 1)
         XCTAssertEqual(cache.decodeCount, 3, "只改父边不该重读 Todo 文件")
     }
+
+    // MARK: - 侧栏黄点上的数字（人类原话：「也弄成带未读数字一样的，也是黄色」）
+
+    /// **0 不显示。** 常年亮着的角标会被训练成背景，人就学会忽略它 ——
+    /// 那时它跟没有是一样的，只是还占着地方。
+    ///
+    /// 这条**先红过**：把 `badge` 里那道 `badgeTotal > 0` 的门拆掉，它当场变成
+    /// `Optional("0")`，用例红。尺子会红才算尺子。
+    func test_零条时不显示数字() {
+        XCTAssertNil(CrewHumanTodoAttention.none.badge)
+        XCTAssertNil(CrewHumanTodoAttention(ownUnanswered: 0, descendantUnanswered: 0).badge)
+    }
+
+    /// 自身 + 后代相加 —— 跟微信父级会话角标同一个读法：这条线下面一共几件事等你。
+    /// 分清在本 crew 还是要往下找，看悬浮提示（那句一直是分开写的）。
+    func test_自身与后代相加() {
+        XCTAssertEqual(CrewHumanTodoAttention(ownUnanswered: 2, descendantUnanswered: 3).badge, "5")
+        XCTAssertEqual(CrewHumanTodoAttention(ownUnanswered: 0, descendantUnanswered: 4).badge, "4")
+        XCTAssertEqual(CrewHumanTodoAttention(ownUnanswered: 1, descendantUnanswered: 0).badge, "1")
+    }
+
+    /// 侧栏那一行就那么宽，数字不能无限长。上限和写法照菜单栏那个孪生
+    /// （`HumanAttentionCount.badge`）来，不发明第二种。
+    func test_超过九十九显示99加() {
+        XCTAssertEqual(CrewHumanTodoAttention(ownUnanswered: 99, descendantUnanswered: 0).badge, "99")
+        XCTAssertEqual(CrewHumanTodoAttention(ownUnanswered: 99, descendantUnanswered: 1).badge, "99+")
+    }
+
+    /// **两个数不是同一个口径，本来就不该相等。** 这条不是在测相等，是把这件事
+    /// 钉在用例里 —— 下一个人看到两个数不一样时，先看见这条，别当 bug 去「修」。
+    func test_侧栏这个数与菜单栏那个数口径不同() {
+        // 侧栏：单个 crew × 只数人类那本 Todo × 自身+后代。
+        let sidebar = CrewHumanTodoAttention(ownUnanswered: 2, descendantUnanswered: 0)
+        // 菜单栏：全机 × 三类（待审批 + 卡在屏幕框上的 session + 人类 Todo）。
+        let menuBar = HumanAttentionCount(approvals: 5, screenMenus: 1, todos: 2)
+        XCTAssertEqual(sidebar.badge, "2")
+        XCTAssertEqual(menuBar.badge, "8")
+        XCTAssertNotEqual(sidebar.badge, menuBar.badge,
+                          "同一批 Todo 下两个角标显示不同的数，是设计，不是 bug")
+    }
+
 }

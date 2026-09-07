@@ -39,6 +39,11 @@ struct HumanAttentionCount: Equatable {
     var isQuiet: Bool { total == 0 }
 
     /// 菜单栏图标旁边那个数字。安静时为 nil。
+    ///
+    /// ⚠️ **这个数和侧栏黄点上的数不是同一个口径，它们本来就不该相等。**
+    /// 这个 = **全机** × 三类（待审批 + 卡在屏幕框上的 session + 人类 Todo）；
+    /// 侧栏那个（`CrewHumanTodoAttention.badge`）= **单个 crew** × 只数人类那本
+    /// Todo × 自身+后代。看到两个数不一样是正常的，**不是 bug，别去「修」成一致**。
     var badge: String? { isQuiet ? nil : String(total) }
 
     /// 展开后的分项。**只列非零的那几项** —— 常年显示「待审批 0」会训练人忽略它。
