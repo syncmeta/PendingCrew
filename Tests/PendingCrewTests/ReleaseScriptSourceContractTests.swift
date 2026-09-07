@@ -95,6 +95,15 @@ final class ReleaseScriptSourceContractTests: XCTestCase {
     ///
     /// 判的是字节而不是一张字符表：会咬人的是「多字节字符的头一个字节被算进变量名」，
     /// 跟那个字符具体是什么无关。列表会短（`…` 就漏过去了），字节不会。
+    ///
+    /// ## 一条给以后改这个扫描器的人
+    /// **扫描器对某个概念的定义，必须去对齐被扫对象的定义，而不是自己发明一个更聪明的。**
+    /// 这里的「变量名」跟着 shell 走（只有 `[A-Za-z0-9_]`），不跟着 Swift 的
+    /// `Character.isLetter` 走 —— 后者是 Unicode 感知的，比 shell 宽，于是它认得出
+    /// `$dest`、却会被 `目录` 带着一路吃到行尾。同一晚上这个形状撞了三次
+    /// （字符集短一个 `…`、文档行号对着一棵没写下来的树、这里的变量名），
+    /// **三次都不是逻辑错，是对象错，而且三次都通过了自己的测试** —— 因为测试用的
+    /// 是同一个定义。
     private static func badVariableUses(in line: String) -> [String] {
         var found: [String] = []
         let chars = Array(line)
