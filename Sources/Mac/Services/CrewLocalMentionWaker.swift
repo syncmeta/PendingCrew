@@ -74,6 +74,13 @@ final class CrewLocalMentionWaker {
         // 游标就在尾巴上，历史一条不回放；此后写进来的每条都扫得到。app 起来之后
         // 新建的 crew 由 `notifyRunStarted` 兜住（建 crew 必起机长）。
         for crewId in LocalCrewStore.shared.allCrewTitles().map(\.id) { pin(crewId) }
+        // B3：**钉到尾巴不等于「之前那些都办完了」。** 重启前没被成功处理掉的定向 @
+        // 会落在游标后面，而缺席目标的拉起只能从扫描发起 —— 于是每次重启都把当时
+        // 所有「留待重投」的 @ 永久作废（实测：三次重启各有 14/12/13 个 crew 的白板
+        // 最后一条是没人回过的定向 @；⚠️ 那是**暴露面不是受害者名单**）。
+        // 所以钉完之后按**每个成员自己的未读**对一次账，判定在
+        // `CrewStartupRescueLogic`（纯函数，含陈旧闸，有变异自证）。
+        for crewId in LocalCrewStore.shared.allCrewTitles().map(\.id) { rescueBacklog(crewId) }
         let store = LocalWhiteboardStore.shared
         store.startWatching()
         // 进程内 append（codex in-process post / relay 搬运 / 系统消息）带 crewId 直扫。
@@ -93,6 +100,38 @@ final class CrewLocalMentionWaker {
                 }
             }
             .store(in: &watchers)
+    }
+
+    /// 启动积压对账（B3）：按每个**本地登记成员**（含机长那本合并账）的盘上未读，
+    /// 找出「该唤醒它、却从没送到」的 @，走**同一条** `deliver` 补上 ——
+    /// busy 处理、回执、缺席拉起全部复用活体路，不另开一条语义。
+    ///
+    /// 只捞 `maxWakeAge`（6 小时）以内的：更老的积压捞回来就是再演一次
+    /// 2026-08-12 的全机重放。**代价明说：超过 6 小时的欠账救不回来，
+    /// 这条防的是往后，不是往回。**
+    private func rescueBacklog(_ crewId: String) {
+        let store = LocalWhiteboardStore.shared
+        let cursorDir = LocalWhiteboardStore.defaultDirectory
+        // 机长那本是归并键（#105 ①）：用键本身当伪 sessionId 去读同一份游标。
+        let captainKey = CrewConversationKey.captain
+        var ids = LocalCrewStore.shared.sessionMembers(crewId: crewId).map(\.sessionId)
+        ids.append(captainKey)
+        var unreadBySession: [String: [LocalWhiteboardMessage]] = [:]
+        for sid in ids {
+            unreadBySession[sid] = WhiteboardCursor(
+                directory: cursorDir, crewId: crewId, sessionId: sid).unread(in: store).messages
+        }
+        let owed = CrewStartupRescueLogic.pending(
+            unreadBySession: unreadBySession, captainSessionId: captainKey)
+        guard !owed.isEmpty else { return }
+        let all = store.list(crewId: crewId)
+        var handled = Set<String>()
+        for p in owed where handled.insert(p.entryId).inserted {
+            guard let entry = all.first(where: { $0.id == p.entryId }) else { continue }
+            for d in CrewLocalMentionWakeLogic.pending(entries: [entry]) {
+                deliver(d, crewId: crewId)
+            }
+        }
     }
 
     /// run 启动时钉它所在 crew 的游标（幂等）。runner.start() 在 CLI 子进程能发出
