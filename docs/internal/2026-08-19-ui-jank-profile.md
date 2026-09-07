@@ -1,4 +1,5 @@
 # PendingCrew 界面卡顿采样报告（Todo #59）
+<!-- doc-ref-base: 0300ddf -->
 
 采样对象：`/Applications/PendingCrew.app`，版本 0.1.13 (20684.08542)，pid 9214，
 macOS 26.6.1 / arm64。工具：`sample`（本机已有进程，无权限弹框；**没有驱动任何
