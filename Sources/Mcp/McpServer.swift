@@ -283,14 +283,16 @@ final class McpServer {
                 ],
                 [
                     "name": "respond_todo",
-                    "description": "回应本 crew **Agent 那本** Todo 的某个条目（Todo 面板「Agent 的」药丸；就是人类派给你们的活）。⚠️ 两本账别搞混：要**提一件请人类拍板的事**用 add_human_todo，那是「人类的」那本，这个工具动不了它。**追加式**：每次调用追加一条回应，不覆盖旧回应；可同时用 status 推进条目状态（待办 pending → 进行中 in_progress → 完成 completed）。人类加条目时群里会出现「To do +1: #N …」——看到后用这个工具认领/回应，number 填那个 N。每个条目都该尽快有机器人回应；status 只在真有进展时才给（开始做→in_progress，做完验证过→completed）。领了 Todo 对应的活，落 main 时顺手翻牌——人类 Todo 面板和 task 账是两本账，别只更 task 漏翻 Todo。",
+                    "description": "回应本 crew **Agent 那本** Todo 的某个条目（Todo 面板「Agent 的」药丸；就是人类派给你们的活）。⚠️ 两本账别搞混：要**提一件请人类拍板的事**用 add_human_todo，那是「人类的」那本，这个工具动不了它。**追加式**：每次调用追加一条回应，不覆盖旧回应；可同时用 status 推进条目状态（待办 pending → 进行中 in_progress → 完成 completed）。人类加条目时群里会出现「To do +1: #N …」——看到后用这个工具认领/回应，number 填那个 N。每个条目都该尽快有机器人回应；status 只在真有进展时才给（开始做→in_progress，做完验证过→completed）。**翻成 completed 必须带凭据**：`evidence_commit`（会当场解析，解不出来拒绝销号）或 `evidence`（产出不是 commit 时，一句话写清是什么），两个都不给不能销号 —— 这道闸是让「宣布完成」贵一点点，因为一条记成「已完成」而其实没做的账，没有任何人会回来看。领了 Todo 对应的活，落 main 时顺手翻牌——人类 Todo 面板和 task 账是两本账，别只更 task 漏翻 Todo。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
                             "number": ["type": "integer", "description": "条目编号（群消息「To do +1: #N」里的 N）。"],
                             "response": ["type": "string", "description": "回应内容（认领/进展/结果，一两句说清）。"],
                             "status": ["type": "string", "enum": ["pending", "in_progress", "completed"],
-                                       "description": "可选：把条目状态推进到这个值。不填=只回应不动状态。"],
+                                       "description": "可选：把条目状态推进到这个值。不填=只回应不动状态。**翻成 completed 时必须带凭据**（evidence_commit 或 evidence，见下）。"],
+                            "evidence_commit": ["type": "string", "description": "销号凭据之一：产出所在的 commit（7–40 位十六进制）。**会当场在本 crew 登记的工作目录里解析**，解析不出来就拒绝销号并告诉你原因，不会「先记下来以后再核」。注意它只证明这个对象存在，不证明它做了这件事。"],
+                            "evidence": ["type": "string", "description": "销号凭据之一：产出不是 commit 时用它（一次核对 / 一个结论 / 在哪台真机上验的 / 哪份归档日志）。一句话写清**是什么**，别写「已处理」。"],
                         ],
                         "required": ["number", "response"],
                     ],
@@ -1218,8 +1220,41 @@ final class McpServer {
             if let status, !LocalTodoStore.validStatuses.contains(status) {
                 return toolResult(id: id, text: "ERROR: status 只能是 pending / in_progress / completed。")
             }
+            // 销号凭据（Todo #102 第四刀）：**只在翻成 completed 时要求，且先验后动账。**
+            // 2026-09-07 挖出的那笔假账带着一个根本不存在的 hash 挂了 191 小时 ——
+            // 病根不是「没带凭据」，是**那个凭据从来没有被解析过**。
+            var evidenceLine: String?
+            if status == "completed" {
+                switch judgeCompletionEvidence(args: args) {
+                case .commitResolved(let sha):
+                    // 只说指针解析成功，**绝不说「已验证该修复」** —— 我们能验的只有
+                    // 指针，不是内容。这道闸拦的是凭空捏造的 hash，不是指错的 hash。
+                    evidenceLine = "凭据 `\(sha)` 解析成功（只证明这个对象存在，不证明它做了这件事）"
+                case .prose(let text):
+                    evidenceLine = "凭据：\(text)"
+                case .malformedCommit(let raw):
+                    return toolResult(id: id, text: "ERROR: `evidence_commit` 给的 \(raw) 不像一个 commit（要 7–40 位十六进制）。"
+                                      + "**这条没有销号。**写错了就改对；产出本来不是 commit 的，用 evidence 写清是什么。")
+                case .commitNotFound(let sha):
+                    return toolResult(id: id, text: "ERROR: 凭据 `\(sha)` **在该 crew 的仓库里不存在** —— 问题在凭据本身。"
+                                      + "**这条没有销号。**核对一下你要引的是哪个 commit；"
+                                      + "如果这件事的产出本来就不是 commit（一次核对 / 一个结论 / 一次真机验收），用 evidence 写清是什么。")
+                case .cannotVerify(let sha, let why):
+                    return toolResult(id: id, text: "ERROR: 我**验不了**凭据 `\(sha)`：\(why) —— 问题在环境，不在你给的东西。"
+                                      + "**这条没有销号，也没有把它记下来等以后再核**（「先记下来」正是那笔假账的形状）。"
+                                      + "请改用 evidence 写清凭据是什么（可以把这个 sha 写在里面）。")
+                case .missing:
+                    return toolResult(id: id, text: "ERROR: 翻成「完成」要带凭据 —— `evidence_commit`（会当场解析）"
+                                      + "或 `evidence`（一句话说清产出是什么：哪次核对、什么结论、在哪台真机上验的）。"
+                                      + "**两个都不给不能销号。**这道闸是让「宣布完成」这个动作贵一点点："
+                                      + "今晚有一条账记着「已修好」外加一个 hash，那个 hash 不存在，账挂了 191 小时。")
+                }
+            }
+            // 凭据跟着回应落在条目时间线上 —— 不落进去，人翻这条 Todo 时仍然只看到
+            // 一句「做完了」，那正是要治的东西。
+            let responseText = evidenceLine.map { "\(response)\n\n\($0)" } ?? response
             guard let updated = todos.respond(crewId: crewId, number: number, sessionId: sessionId,
-                                              senderName: sessionLabel, text: response,
+                                              senderName: sessionLabel, text: responseText,
                                               newStatus: status) else {
                 let rows = todos.list(crewId: crewId).map {
                     "#\($0.number) [\(LocalTodoItem.statusLabel($0.status))] \($0.text)"
@@ -1819,6 +1854,26 @@ final class McpServer {
 
     /// 白板写失败时的回执。措辞按「当没送达处理」写死 —— 调用方（编码 agent）看到
     /// 这句要知道刚才那段话群里没人看得见。
+    /// 判销号凭据。**解析用的仓库是那条 crew 登记在册的工作目录，不是我的 cwd。**
+    ///
+    /// 拿不到登记的 workdir 就报 `.unavailable` —— 绝不退回去从 cwd 往上找 git 根：
+    /// 往上找会找到「一个」仓库，但不保证是「那个」（worktree、`/private/tmp` 下的
+    /// 发包树、别的项目仓都可能在祖先链上）。那条路的失败形态是**在错的仓库里解析
+    /// 成功**，于是一条假账带着一句「凭据解析成功」挂上去。**验不了会逼人换条路；
+    /// 假绿不会。**
+    private func judgeCompletionEvidence(args: [String: Any]) -> TodoEvidence.Verdict {
+        let commit = args["evidence_commit"] as? String
+        let prose = args["evidence"] as? String
+        let workdir = LocalCrewStore.workingDirectory(
+            crewId: crewId, whiteboardDirectory: store.resolvedDirectory)
+        return TodoEvidence.judge(commit: commit, prose: prose) { sha in
+            guard let workdir else {
+                return .unavailable("这台机器上查不到本 crew 登记的工作目录，所以没有一个「确定是那个」的仓库可查")
+            }
+            return GitObjectProbe(directory: workdir).resolve(sha)
+        }
+    }
+
     /// 把「撤回 人类 To Do #N：原因」那一行发进群，返回走到了哪一步。
     ///
     /// 撤回的两个入口（`withdraw_human_todo` 和 `add_human_todo(supersedes:)`）共用

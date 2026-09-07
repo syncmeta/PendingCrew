@@ -269,6 +269,9 @@ targets:
       # 侧栏时间流视图的排序 / 血缘次要行 / 视图模式持久化（Todo #50）。
       # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。
       - path: Sources/Support/CrewTimelineOrdering.swift
+      # 销号凭据的判定 + git 对象解引用（Todo #102：给了指针就必须解引用）。
+      # 纯 Foundation；判定与 Process 分开，判定那半可注入可单测。
+      - path: Sources/Support/TodoEvidence.swift
       # 侧栏总机长视图的三段收敛（Todo #102：在等你回应 / 还在跑 / 安静）。
       # 同上，纯 Foundation，依赖 CrewSummary。
       - path: Sources/Support/CrewChiefOverview.swift
