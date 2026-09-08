@@ -43,7 +43,7 @@ struct CrewTodoPanel: View {
                     .foregroundStyle(Theme.Palette.ink)
                 CrewTodoLedgerPills(ledger: $ledger)
                 Spacer(minLength: 8)
-                Button(layout.detailButtonTitle) { openDetail() }
+                Button(layout.detailButtonTitle) { openDetail(focus: nil) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .font(Theme.Fonts.caption)
@@ -79,10 +79,13 @@ struct CrewTodoPanel: View {
         }
     }
 
-    /// 详细窗口入口（顶部按钮 + 点行都走这儿）。每 crew 最多一个窗口，重复调用只前置。
-    private func openDetail() {
+    /// 详细窗口入口。每 crew 最多一个窗口，重复调用只前置 —— 但 `focus` 每次都会送进去。
+    ///
+    /// `focus` = 这次要人看的那一条的 #N（人类 Todo #122）。点某一行传它的号，
+    /// 顶部「放大看」按钮传 nil（那是**列表**入口，不是某一条）。
+    private func openDetail(focus: Int?) {
         CrewTodoDetailWindowPresenter.shared.open(
-            crewId: crewId, crewName: crewName, ledger: ledger,
+            crewId: crewId, crewName: crewName, ledger: ledger, focus: focus,
             runner: runner, appModel: appModel,
             colorScheme: (AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
     }
@@ -111,12 +114,17 @@ struct CrewTodoPanel: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 // 已完成只变灰，**不加删除线**（人类明确要求）。
-                Text(item.text)
-                    .font(Theme.Fonts.footnote)
-                    .foregroundStyle(icon.dimsText ? Theme.Palette.inkMuted : Theme.Palette.ink)
+                //
+                // 正文渲染 markdown（人类 Todo #119），字号仍是 footnote(13pt) ——
+                // 「ui 格式要和外面的没点放大看进去之前一样」。截断在**源文本层**做
+                // （`cardMarkdown`）：`.lineLimit` 对 markdown 是逐 block 生效的，
+                // 单靠它一条长 Todo 就能把卡片撑到 12.5 倍高。lineLimit 仍留着当兜底。
+                MarkdownText(
+                    text: TodoListPresentation.cardMarkdown(
+                        item.text, lineBudget: layout.bodyLineLimit),
+                    variant: .todo,
+                    dimmed: icon.dimsText)
                     .lineLimit(layout.bodyLineLimit)
-                    .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
                 Text(TodoListPresentation.metadataText(for: item))
@@ -129,11 +137,14 @@ struct CrewTodoPanel: View {
 
                 // 已回复项只露最近一条精简回应；历史与全文在「放大看」里读。
                 if let response = TodoListPresentation.overviewResponse(for: item) {
-                    Text(response)
-                        .font(Theme.Fonts.caption)
-                        .foregroundStyle(Theme.Palette.inkMuted)
+                    // 回应也在「todo 页面」里，同一套样式（Todo #119）。`overviewResponse`
+                    // 已经把它折成一行，所以这里只需再按 1 行预算兜一次。
+                    MarkdownText(
+                        text: TodoListPresentation.cardMarkdown(
+                            response, lineBudget: layout.responseLineLimit),
+                        variant: .todoNote,
+                        dimmed: true)
                         .lineLimit(layout.responseLineLimit)
-                        .truncationMode(.tail)
                 }
             }
             .padding(.vertical, 10)
@@ -145,7 +156,7 @@ struct CrewTodoPanel: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { openDetail() }
+        .onTapGesture { openDetail(focus: item.number) }
     }
 }
 

@@ -17,17 +17,33 @@ final class CrewTodoDetailWindowPresenter: NSObject, NSWindowDelegate {
     static let shared = CrewTodoDetailWindowPresenter()
 
     private var windows: [String: NSWindow] = [:]
+    /// 每 crew 一个「这次要看哪条」的信箱（人类 Todo #122）。
+    ///
+    /// 为什么要有它：窗口是每 crew 复用的，第二次点另一条只会把老窗口前置。
+    /// 光靠 `init` 参数，人在外面点第二条时窗口里还停在第一条上 —— 那正是他抱怨的
+    /// 「还得自己找」。信箱让已经开着的窗口也能收到新的落点。
+    private var focuses: [String: CrewTodoFocus] = [:]
 
     /// `ledger` 只作**首次打开**时停在哪个药丸上（Todo #62）—— 每 crew 一个窗口，
     /// 已经开着的那个由它自己的药丸说了算，不被概览面板隔空拨走。
+    ///
+    /// `focus` 与 `ledger` 不同，**每次都送进去**：它是「人这一下点的是哪条」，
+    /// 是这次动作本身的意思，不是窗口的历史状态。
     func open(crewId: String, crewName: String?, ledger: TodoLedger = .agent,
+              focus: Int? = nil,
               runner: CrewSessionRunner, appModel: AppModel,
               colorScheme: ColorScheme?) {
+        let mailbox = focuses[crewId] ?? {
+            let box = CrewTodoFocus()
+            focuses[crewId] = box
+            return box
+        }()
+        mailbox.request(number: focus, ledger: ledger)
         if let existing = windows[crewId] {
             existing.makeKeyAndOrderFront(nil)
             return
         }
-        let root = CrewTodoDetailView(crewId: crewId, ledger: ledger, runner: runner)
+        let root = CrewTodoDetailView(crewId: crewId, ledger: ledger, focus: mailbox, runner: runner)
             .environmentObject(appModel)
             .preferredColorScheme(colorScheme)
         let window = NSWindow(
@@ -60,7 +76,29 @@ final class CrewTodoDetailWindowPresenter: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow else { return }
+        for (crewId, window) in windows where window === closing { focuses[crewId] = nil }
         windows = windows.filter { $0.value !== closing }
+    }
+}
+
+/// 「这次点开的是哪一条」的信箱（人类 Todo #122）。
+///
+/// `token` 每次递增：人在外面**连点同一条**时 `number` 没变，但他显然是想再回到那一条
+/// （可能在窗口里已经点了「‹ 全部」）。只看 `number` 的话第二次点什么也不会发生。
+@MainActor
+final class CrewTodoFocus: ObservableObject {
+    struct Request: Equatable {
+        let number: Int?
+        let ledger: TodoLedger
+        let token: Int
+    }
+
+    @Published private(set) var latest: Request?
+    private var token = 0
+
+    func request(number: Int?, ledger: TodoLedger) {
+        token += 1
+        latest = Request(number: number, ledger: ledger, token: token)
     }
 }
 
@@ -78,10 +116,18 @@ struct CrewTodoDetailView: View {
     /// 当前看的是哪本账（Todo #62）。初值由打开它的那个面板给。
     @State private var ledger: TodoLedger
     @State private var todos: [LocalTodoItem] = []
-    init(crewId: String, ledger: TodoLedger = .agent, runner: CrewSessionRunner) {
+    /// 只看这一条（人类 Todo #122）。nil = 全列表。
+    @State private var focus: Int?
+    /// 外面又点了一条时把新落点收进来（窗口是复用的，见 `CrewTodoFocus`）。
+    @ObservedObject private var focusMailbox: CrewTodoFocus
+
+    init(crewId: String, ledger: TodoLedger = .agent,
+         focus mailbox: CrewTodoFocus, runner: CrewSessionRunner) {
         self.crewId = crewId
         self.runner = runner
+        self.focusMailbox = mailbox
         _ledger = State(initialValue: ledger)
+        _focus = State(initialValue: mailbox.latest?.number)
     }
 
     /// 同一时刻只有一行摊开一个编辑器 —— 换行/换动作自动收掉上一个。
@@ -102,14 +148,39 @@ struct CrewTodoDetailView: View {
         case respond(Int)       // 人类回应（Todo #62：只在「人类的」那本上）
     }
 
-    private var rows: [LocalTodoItem] { TodoListPresentation.newestFirst(todos) }
+    private var allRows: [LocalTodoItem] { TodoListPresentation.newestFirst(todos) }
+    /// 这次要显示的行。指到不存在的 #N 时回落全列表（见 `focusedRows`）。
+    private var rows: [LocalTodoItem] { TodoListPresentation.focusedRows(allRows, focus: focus) }
+    /// 真的落在单条上了吗 —— 「‹ 全部」只在这时出现，回落成全列表时不该出现。
+    private var isFocused: Bool { focus != nil && rows.count == 1 && allRows.count > 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                CrewTodoLedgerPills(ledger: $ledger)
+                if isFocused {
+                    // 人类要的是「点进去直接显示这个 Todo 的详情」（#122），但**列表能力
+                    // 一点没砍** —— 这颗按钮把它原样还回来。
+                    Button {
+                        focus = nil
+                    } label: {
+                        Label("全部", systemImage: "chevron.left")
+                            .font(Theme.Fonts.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.accent)
+                    .help("回到这本账的完整列表")
+                } else {
+                    // **人自己**拨药丸时收掉聚焦：两本账的 #N 指的是两件事，留着会让
+                    // 换完账突然只剩一条。用自定义 binding 而不是 `.onChange(of: ledger)`
+                    // —— 后者分不清「人拨的」和「信箱带来的」，会把刚落的点抹掉。
+                    CrewTodoLedgerPills(ledger: Binding(
+                        get: { ledger },
+                        set: { ledger = $0; focus = nil }))
+                }
                 Spacer(minLength: 8)
-                Text(ledger == .agent ? "你派给 agent 的活" : "agent 请你拍板的事")
+                Text(isFocused
+                     ? "只看这一条"
+                     : (ledger == .agent ? "你派给 agent 的活" : "agent 请你拍板的事"))
                     .font(Theme.Fonts.caption2)
                     .foregroundStyle(Theme.Palette.inkMuted)
             }
@@ -135,6 +206,14 @@ struct CrewTodoDetailView: View {
         .background(Theme.Palette.canvas)
         // 换药丸 = 换一本账重订（两本各自一个文件、一把锁）。换的同时收掉编辑器 ——
         // 编辑器挂在 #N 上，两本账的 #N 指两件事，留着会张冠李戴。
+        // 外面又点了一条 —— 窗口是复用的，所以新落点从信箱来（人类 Todo #122）。
+        // 换本账时一并跟着换：两本账的 #N 指的是两件事。
+        .onChange(of: focusMailbox.latest) { _, request in
+            guard let request else { return }
+            if request.ledger != ledger { ledger = request.ledger }
+            focus = request.number
+            closeEditor()
+        }
         .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
             closeEditor()
             let store = LocalTodoStore.shared(ledger)
@@ -149,20 +228,22 @@ struct CrewTodoDetailView: View {
     private func row(_ item: LocalTodoItem) -> some View {
         let icon = TodoListPresentation.statusIcon(item.status)
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // 状态点 + #N + 动作单独一行，正文另起一行 —— 与外面那张概览卡片同一个
+            // 层级（人类 Todo #119：「ui 格式要和外面的没点放大看进去之前一样」）。
+            // 正文从前是挤在这个 HStack 里、夹在 #N 和按钮中间的：纯文本时看不出来，
+            // 一旦渲染 markdown（标题/列表各自成块）就会被挤成另一副样子。
+            HStack(alignment: .center, spacing: 8) {
                 CrewTodoStatusCircle(status: item.status, size: 14)
                 Text("#\(item.number)")
                     .font(Theme.Fonts.footnote.weight(.semibold).monospacedDigit())
                     .foregroundStyle(Theme.Palette.inkMuted)
-                // 已完成只变灰，**不加删除线**。
-                Text(item.text)
-                    .font(Theme.Fonts.footnote)
-                    .foregroundStyle(icon.dimsText ? Theme.Palette.inkMuted : Theme.Palette.ink)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 rowActions(item)
             }
+            // 已完成只变灰，**不加删除线**。详情不截断 —— 这一层就是「读得进去」的那层。
+            MarkdownText(text: item.text, variant: .todo, dimmed: icon.dimsText)
+                .textSelection(.enabled)
+                .padding(.leading, 22)
             Text(TodoListPresentation.metadataText(for: item))
                 .font(Theme.Fonts.caption2)
                 .foregroundStyle(Theme.Palette.inkMuted)
@@ -186,11 +267,9 @@ struct CrewTodoDetailView: View {
                     Text(resp.senderName ?? "session:\(resp.sessionId.prefix(6))")
                         .font(Theme.Fonts.caption2.weight(.semibold))
                         .foregroundStyle(Theme.Palette.inkMuted)
-                    Text(resp.text)
-                        .font(Theme.Fonts.caption)
-                        .foregroundStyle(Theme.Palette.ink)
+                    // 回应也在「todo 页面」里，同一套样式（Todo #119）。
+                    MarkdownText(text: resp.text, variant: .todoNote)
                         .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
                     // 追问带的图（Todo #52）挂在那条追问下面，不与条目本身的图混。
                     CrewTodoAttachmentStrip(attachments: resp.attachments ?? [], cell: 60)
                 }
