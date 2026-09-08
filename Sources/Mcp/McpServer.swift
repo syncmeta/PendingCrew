@@ -156,8 +156,26 @@ final class McpServer {
                     "inputSchema": [
                         "type": "object",
                         "properties": [
-                            "message": ["type": "string"],
-                            "category": ["type": "string", "enum": ["progress", "question", "milestone"]],
+                            "message": ["type": "string", "description": "发一条时用它。要一次发几条用 `messages`，两个别同时给。"],
+                            "messages": [
+                                "type": "array",
+                                "description": "**一次发多条**，每条一个气泡、各带自己的分类。一次汇报别揉成一条 —— 拆成「进度 / 要你拍板的 / 要问的」几条，各落各的账。\n最多 6 条（不是性能限制：一次十几个气泡只是把一堵墙拆成一排墙）。\n**校验是全有或全无**：任何一条不合法，整批都不发，错误信息会指名是第几条。\n例：`[{\"text\":\"闸门全绿\",\"category\":\"progress\",\"plan\":3},{\"text\":\"这条要你拍板\",\"category\":\"human_todo\"}]`",
+                                "items": [
+                                    "type": "object",
+                                    "properties": [
+                                        "text": ["type": "string"],
+                                        "category": ["type": "string"],
+                                        "plan": ["type": "integer"],
+                                        "todo": ["type": "integer"],
+                                        "todo_status": ["type": "string"],
+                                    ],
+                                    "required": ["text"],
+                                ],
+                            ],
+                            "category": ["type": "string", "description": "这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。不给 = 不落账。"],
+                            "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
+                            "todo_status": ["type": "string", "enum": ["pending", "in_progress", "completed"], "description": "配合 `todo` 用。翻 `completed` 必须带 `evidence_commit`（会当场解析）或 `evidence`。"],
+                            "plan": ["type": "integer", "description": "配合 `progress` / `blocked` / `done` 用：驾驶舱里那条计划的 #N（plan_list 看得到）。"],
                             "mentions": [
                                 "type": "array",
                                 "description": "可选定向 @ 列表 —— 要某个具体对象接手/回应时带上；不填=广播给全 crew。@session / @captain 会**收窄可见范围**：只有被点到的 agent 看得到，并把这条投进它的定向信箱（它优先看到）。@human 不收窄 —— 它只是「这条是讲给人听的、别为它叫醒 agent」的标记，消息对全 crew 照常可见。@broadcast 是**显式放宽器**：和 @session/@captain 一起给（如 `[{kind:\"broadcast\"},{kind:\"session\",target_id:\"…\"}]`）= **全组都看得见、但只叫醒被点到的那个**；别人的注入面上那条会标「（发给 XX 的）」，看得见也看得出不是给自己的活。单独给 @broadcast 等于不填。",
@@ -652,126 +670,37 @@ final class McpServer {
             }
             return toolResult(id: id, text: "已登记本轮一次性续跑；当前 turn 真正结束后执行，最多一次。")
         case "post_to_crew":
-            let message = (args["message"] as? String) ?? ""
-            // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与
-            // 软报错文案跟人类拖入共用 `CrewFileAttachmentIntake`，不另立一套口径。
-            let givenPaths = (args["attachments"] as? [Any])?.compactMap { $0 as? String } ?? []
-            let intake = givenPaths.isEmpty
-                ? (accepted: [LocalWhiteboardAttachment](), errors: [String]())
-                : CrewFileAttachmentIntake.intake(
-                    paths: givenPaths, crewId: crewId, root: attachmentRoot)
-            let hasBody = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            // 只发图（正文为空）放行 —— 与人类 composer 同规则。但**一张都没收下**
-            // 时不能当成空消息发出去：那会变成一条空气泡 + 一句「已发到」，
-            // 而图其实一张都没进去。
-            guard hasBody || !intake.accepted.isEmpty else {
-                let why = intake.errors.isEmpty
-                    ? "" : "\n" + intake.errors.joined(separator: "\n")
-                return toolResult(
-                    id: id,
-                    text: givenPaths.isEmpty
-                        ? "ERROR: message 不能为空"
-                        : "ERROR: 正文为空，且附件一个都没收下，这条没有发出去。\(why)")
-            }
-            // Phase 7：解析定向 @ + reply_to,记进本地白板（不静默吞）。本地这步只
-            // 负责把信息留住；按 mention 唤醒目标 session 由 app 侧的本地直投
-            // （CrewLocalMentionWaker / CrewLocalMentionDelivery）接。
-            let given = parseMentions(args["mentions"])
-            let replyTo = (args["reply_to"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            // Todo #14 ①：`reply_to` 此前**只**进了下面的 `inReplyTo:` —— 而工具
-            // 描述和世界观模板都写着「给了会自动 @ 原发送者」。危害是静默的：
-            // agent 以为自己点名了，一个 mention 都没长出来，回执照样回「已发到」，
-            // 然后它安心等一个永远不会醒的人。
-            let mentions = mentionsWithReplyAutoMention(given, replyTo: replyTo)
-            // ── #115/#120：分类**真的驱动落账** ────────────────────────────────
-            //
-            // 人类原话的根：「不然第一 todo、cockpit等等不能及时更新」。做成一个
-            // 标签颜色 = 白做，所以这里必须真的去写那本账。
-            //
-            // **顺序照 `TodoLandingFlow` 写死的那条：落账 → 发群，一步都不许跳。**
-            // 这一单最坏的结果不是「落账失败」，是**消息发出去了、账没落上** ——
-            // 那比现在还糟，因为人会**以为**账更新了。所以下面每一处失败都是
-            // `return`，消息一个字都不发。
-            //
-            // 驾驶舱那四类（plan/progress/blocked/done）**这一笔还没接** ——
-            // `plan_add`/`plan_update` 现在是 `guard isCaptain`，worker 标了会被直接
-            // 拒；权限拆分（报进度的人 ≠ 决定条目存不存在的人）是下一笔。
-            var ledgerReceipts: [String] = []
-            switch CrewCategoryRouting.decide(category: args["category"] as? String, args: args) {
+            switch CrewMessageBatch.parse(args: args) {
             case let .refuse(why):
                 return toolResult(id: id, text: "ERROR: " + why)
-            case .land(.humanTodo):
-                guard let added = humanTodos.add(crewId: crewId, text: message,
-                                                 bySessionId: sessionId,
-                                                 bySenderName: sessionLabel) else {
-                    return toolResult(id: id, text: "ERROR: 人类 Todo 那本账这次写不进去，"
-                        + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
-                        + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
-                }
-                ledgerReceipts.append("已建 人类 Todo #\(added.number)（人在面板里点得进去、撤得掉）")
-            case let .skipped(hint):
-                // 不落账，但**回执里说清楚它没落**——静默跳过就是这一单要治的病本身。
-                ledgerReceipts.append("⚠️ " + hint)
-            case .land, .noLedger:
-                break
-            }
-            // #120：Todo 号是**独立参数**，跟 category 正交 —— 一条消息可能既是进度、
-            // 又对应一条 Todo，绑在某个分类上只会让写的人纠结「这算哪一类」。
-            switch CrewMessageTodoLink.decide(args: args) {
-            case let .refuse(why):
-                return toolResult(id: id, text: "ERROR: " + why)
-            case .none:
-                break
-            case let .update(number, status):
-                // ⚠️ 凭据闸走**原来那一份**（`judgeCompletionEvidence` 会当场解析
-                // commit）。`CrewMessageTodoLink` 只查了「有没有给」——
-                // 拿它的绿当凭据验过了，那道用 191 小时假账换来的闸就被放宽了。
-                if status == "completed" {
-                    switch judgeCompletionEvidence(args: args) {
-                    case .commitResolved, .prose:
-                        break
-                    case .malformedCommit, .commitNotFound, .cannotVerify, .missing:
-                        return toolResult(id: id, text: "ERROR: 要把 Todo #\(number) 挂成"
-                            + "「完成」，凭据这一关没过（`evidence_commit` 会被当场解析）。"
-                            + "**这条消息也没有发出去。** 还没做完就先挂 `in_progress`，"
-                            + "做完拿到凭据再来。")
+            case let .batch(entries):
+                // **先全部校验，再逐条执行**：分条之后「一半成功」是新的失败形态，
+                // 而它最容易被读成「全成了」。任何一条不合法就整批拒、一条不发。
+                for e in entries {
+                    if case let .refuse(why) = CrewCategoryRouting.decide(
+                        category: e.args["category"] as? String, args: e.args) {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
+                    }
+                    if case let .refuse(why) = CrewMessageTodoLink.decide(args: e.args) {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
                     }
                 }
-                guard let updated = todos.respond(
-                    crewId: crewId, number: number, sessionId: sessionId,
-                    senderName: sessionLabel, text: message, newStatus: status) else {
-                    return toolResult(id: id, text: "ERROR: Todo #\(number) 没更新成"
-                        + "（这本账上没有这条，或者这次读不出来）。**这条消息也没有发出去。**")
+                var sent: [Int] = []
+                var failed: [(index: Int, why: String)] = []
+                for e in entries {
+                    var one = e.args
+                    one["message"] = e.text
+                    one.removeValue(forKey: "messages")
+                    let r = postToCrewOnce(args: one)
+                    if r.ok { sent.append(e.index) } else { failed.append((e.index, r.text)) }
                 }
-                ledgerReceipts.append("已把 Todo #\(updated.number) 翻成 \(status)")
-            }
-            // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
-            // 当头像种子（成员列表与气泡同一张脸），并点亮星标。
-            //
-            // 回执如实（#577）：走 ReportingFailure 变体，落盘失败就说没发出去 ——
-            // 此前无论写没写成都回一句「已发到」，白板读不出来时消息全丢还报成功。
-            do {
-                let incident = try store.appendSessionMessageReportingFailure(
-                    crewId: crewId, sessionId: sessionId,
-                    text: message, category: args["category"] as? String,
-                    senderName: sessionLabel,
-                    mentions: mentions, inReplyTo: replyTo,
-                    senderKind: isCaptain ? "captain" : "session",
-                    attachments: intake.accepted)
-                // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
-                // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
-                // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
-                let base = Self.postReceipt(
-                    incident: incident,
-                    attachmentCount: intake.accepted.count,
-                    attachmentErrors: intake.errors)
-                // 落账结果必须进回执：**「落账可撤」的前提是先让人知道它落了哪一条。**
                 return toolResult(
-                    id: id,
-                    text: ([base] + ledgerReceipts).joined(separator: "\n"))
-            } catch {
-                return toolResult(id: id, text: Self.writeFailureReceipt(error))
+                    id: id, text: CrewMessageBatch.batchReceipt(sent: sent, failed: failed))
+            case .single:
+                break
             }
+            let once = postToCrewOnce(args: args)
+            return toolResult(id: id, text: once.text)
         case "directory":
             // 通讯录（2026-08-11）：纯文件层汇总 —— local-crews.json（号码 + 组织边 +
             // 持久成员）× crew-sessions.json（实时状态）。helper 碰不到 app 内存态，
@@ -1713,6 +1642,130 @@ final class McpServer {
 
     /// 共享文件层目录（helper 的 `--dir`）—— 白板 / quota / 点名快照 / 通讯录
     /// （`local-crews.json` 在其父目录）都在这一份下面。
+
+    /// 发一条群消息（`post_to_crew` 的单条本体）。分条发送把它当零件循环调用，
+    /// 所以它返回**结果**而不是直接返回 JSON —— 一次批量里每条的成败要分别记账。
+    ///
+    /// `ok == false` = **这一条没有发出去**（参数不合法 / 落账失败 / 白板写失败）。
+    private func postToCrewOnce(args: [String: Any]) -> (ok: Bool, text: String) {
+            let message = (args["message"] as? String) ?? ""
+            // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与
+            // 软报错文案跟人类拖入共用 `CrewFileAttachmentIntake`，不另立一套口径。
+            let givenPaths = (args["attachments"] as? [Any])?.compactMap { $0 as? String } ?? []
+            let intake = givenPaths.isEmpty
+                ? (accepted: [LocalWhiteboardAttachment](), errors: [String]())
+                : CrewFileAttachmentIntake.intake(
+                    paths: givenPaths, crewId: crewId, root: attachmentRoot)
+            let hasBody = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // 只发图（正文为空）放行 —— 与人类 composer 同规则。但**一张都没收下**
+            // 时不能当成空消息发出去：那会变成一条空气泡 + 一句「已发到」，
+            // 而图其实一张都没进去。
+            guard hasBody || !intake.accepted.isEmpty else {
+                let why = intake.errors.isEmpty
+                    ? "" : "\n" + intake.errors.joined(separator: "\n")
+                return (false, givenPaths.isEmpty
+                        ? "ERROR: message 不能为空"
+                        : "ERROR: 正文为空，且附件一个都没收下，这条没有发出去。\(why)")
+            }
+            // Phase 7：解析定向 @ + reply_to,记进本地白板（不静默吞）。本地这步只
+            // 负责把信息留住；按 mention 唤醒目标 session 由 app 侧的本地直投
+            // （CrewLocalMentionWaker / CrewLocalMentionDelivery）接。
+            let given = parseMentions(args["mentions"])
+            let replyTo = (args["reply_to"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // Todo #14 ①：`reply_to` 此前**只**进了下面的 `inReplyTo:` —— 而工具
+            // 描述和世界观模板都写着「给了会自动 @ 原发送者」。危害是静默的：
+            // agent 以为自己点名了，一个 mention 都没长出来，回执照样回「已发到」，
+            // 然后它安心等一个永远不会醒的人。
+            let mentions = mentionsWithReplyAutoMention(given, replyTo: replyTo)
+            // ── #115/#120：分类**真的驱动落账** ────────────────────────────────
+            //
+            // 人类原话的根：「不然第一 todo、cockpit等等不能及时更新」。做成一个
+            // 标签颜色 = 白做，所以这里必须真的去写那本账。
+            //
+            // **顺序照 `TodoLandingFlow` 写死的那条：落账 → 发群，一步都不许跳。**
+            // 这一单最坏的结果不是「落账失败」，是**消息发出去了、账没落上** ——
+            // 那比现在还糟，因为人会**以为**账更新了。所以下面每一处失败都是
+            // `return`，消息一个字都不发。
+            //
+            // 驾驶舱那四类（plan/progress/blocked/done）**这一笔还没接** ——
+            // `plan_add`/`plan_update` 现在是 `guard isCaptain`，worker 标了会被直接
+            // 拒；权限拆分（报进度的人 ≠ 决定条目存不存在的人）是下一笔。
+            var ledgerReceipts: [String] = []
+            switch CrewCategoryRouting.decide(category: args["category"] as? String, args: args) {
+            case let .refuse(why):
+                return (false, "ERROR: " + why)
+            case .land(.humanTodo):
+                guard let added = humanTodos.add(crewId: crewId, text: message,
+                                                 bySessionId: sessionId,
+                                                 bySenderName: sessionLabel) else {
+                    return (false, "ERROR: 人类 Todo 那本账这次写不进去，"
+                        + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
+                        + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
+                }
+                ledgerReceipts.append("已建 人类 Todo #\(added.number)（人在面板里点得进去、撤得掉）")
+            case let .skipped(hint):
+                // 不落账，但**回执里说清楚它没落**——静默跳过就是这一单要治的病本身。
+                ledgerReceipts.append("⚠️ " + hint)
+            case .land, .noLedger:
+                break
+            }
+            // #120：Todo 号是**独立参数**，跟 category 正交 —— 一条消息可能既是进度、
+            // 又对应一条 Todo，绑在某个分类上只会让写的人纠结「这算哪一类」。
+            switch CrewMessageTodoLink.decide(args: args) {
+            case let .refuse(why):
+                return (false, "ERROR: " + why)
+            case .none:
+                break
+            case let .update(number, status):
+                // ⚠️ 凭据闸走**原来那一份**（`judgeCompletionEvidence` 会当场解析
+                // commit）。`CrewMessageTodoLink` 只查了「有没有给」——
+                // 拿它的绿当凭据验过了，那道用 191 小时假账换来的闸就被放宽了。
+                if status == "completed" {
+                    switch judgeCompletionEvidence(args: args) {
+                    case .commitResolved, .prose:
+                        break
+                    case .malformedCommit, .commitNotFound, .cannotVerify, .missing:
+                        return (false, "ERROR: 要把 Todo #\(number) 挂成"
+                            + "「完成」，凭据这一关没过（`evidence_commit` 会被当场解析）。"
+                            + "**这条消息也没有发出去。** 还没做完就先挂 `in_progress`，"
+                            + "做完拿到凭据再来。")
+                    }
+                }
+                guard let updated = todos.respond(
+                    crewId: crewId, number: number, sessionId: sessionId,
+                    senderName: sessionLabel, text: message, newStatus: status) else {
+                    return (false, "ERROR: Todo #\(number) 没更新成"
+                        + "（这本账上没有这条，或者这次读不出来）。**这条消息也没有发出去。**")
+                }
+                ledgerReceipts.append("已把 Todo #\(updated.number) 翻成 \(status)")
+            }
+            // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
+            // 当头像种子（成员列表与气泡同一张脸），并点亮星标。
+            //
+            // 回执如实（#577）：走 ReportingFailure 变体，落盘失败就说没发出去 ——
+            // 此前无论写没写成都回一句「已发到」，白板读不出来时消息全丢还报成功。
+            do {
+                let incident = try store.appendSessionMessageReportingFailure(
+                    crewId: crewId, sessionId: sessionId,
+                    text: message, category: args["category"] as? String,
+                    senderName: sessionLabel,
+                    mentions: mentions, inReplyTo: replyTo,
+                    senderKind: isCaptain ? "captain" : "session",
+                    attachments: intake.accepted)
+                // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
+                // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
+                // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
+                let base = Self.postReceipt(
+                    incident: incident,
+                    attachmentCount: intake.accepted.count,
+                    attachmentErrors: intake.errors)
+                // 落账结果必须进回执：**「落账可撤」的前提是先让人知道它落了哪一条。**
+                return (true, ([base] + ledgerReceipts).joined(separator: "\n"))
+            } catch {
+                return (false, Self.writeFailureReceipt(error))
+            }
+    }
+
     private var sharedDirectory: URL { quotaDirectory }
 
     /// `contact(to, message)`：按号码往目标 crew 的群里发一条消息。
