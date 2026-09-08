@@ -85,10 +85,12 @@ final class ReleaseScriptSourceContractTests: XCTestCase {
                     of: repoRoot.path + "/", with: ""
                 )
                 for (index, line) in text.components(separatedBy: "\n").enumerated() {
-                    // **注释行跳过**。2026-09-08：main 上 `scripts/shell-var-brace-check.sh`
-                    // 是**讲这同一条规则**的脚本，它的注释里必须写出 `$dpid，` / `$dest…`
-                    // 这种坏例子才讲得清楚 —— 于是这把尺子把「规则的说明书」判成了违规，
-                    // 全量当场红，而那两行根本不会被执行。
+                    // **注释行跳过**。2026-09-08：有人另写了一个讲**同一条规则**的
+                    // shell 脚本，它的注释里必须写出 `$dpid，` / `$dest…` 这种坏例子才
+                    // 讲得清楚 —— 于是这把尺子把「规则的说明书」判成了违规，全量当场红，
+                    // 而那两行根本不会被执行。（那个脚本当天就撤了：量下来它跟这里扫的
+                    // 是**同一批 20 个文件**、同一条规则，只是不跳注释因而过报 ——
+                    // 同一条规则养两把尺子，两份必然各自漂。这里是唯一的那把。）
                     // 判据零判断：**整行第一个非空字符是 `#`** 就是注释。不做「行内 #
                     // 之后算注释」那种事 —— 字符串里的 `#` 不是注释，那会开始漏报。
                     guard !line.trimmingCharacters(in: .whitespaces).hasPrefix("#") else { continue }

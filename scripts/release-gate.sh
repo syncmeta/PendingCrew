@@ -94,10 +94,6 @@ echo "--- 两端 build ---"; grep -E "BUILD SUCCEEDED|BUILD FAILED" "$LOG"/b-mac
 # `|| true`：闸门只报读数、不代人做判断（它自己也从不因为任何一条红而早退）。
 echo "--- 文档引用腐烂（名单即计数；空=零条）---"
 sh "$WT/scripts/doc-ref-check.sh" "$WT" || true
-# `$名字` 紧跟中文标点：只在 UTF-8 环境下炸，本地随手一跑看不见，专挑用户的终端发作。
-# 跟上面同样的规矩：对钉死的那棵树跑，`|| true` —— 闸门只报读数不代人判断。
-echo "--- shell 变量后紧跟非 ASCII（会在用户机器上炸成 unbound variable）---"
-sh "$WT/scripts/shell-var-brace-check.sh" "$WT" || true
 echo "--- 闸门自己留下的（不自动回收）---"
 echo "本趟：$WT 和 $LOG"
 # 清单和计数出自同一次 `ls` —— 数是从名单里数出来的，两者结构上不可能对不上。
