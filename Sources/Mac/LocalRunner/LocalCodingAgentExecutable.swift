@@ -189,34 +189,19 @@ public enum LocalCodingAgentExecutable {
     private static let sentinelClose = ":PCREW_PATH>>>"
 
     private static func loginShellPath() -> String? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shell)
-        // `-l` 登录（source .zprofile / .profile）+ `-i` 交互（source .zshrc）——
-        // PATH 扩展两处都可能在。`-c` 传命令后 shell 跑完即退，不会阻塞等 tty 输入。
-        // 用哨兵包住 $PATH，再从 stdout 里摘 —— 交互式 rc 偶尔往 stdout 吐东西。
-        // `printf` 用绝对路径，避免依赖刚要解析的那个 PATH。
-        process.arguments = [
-            "-lic",
-            "/usr/bin/printf '\(sentinelOpen)%s\(sentinelClose)' \"$PATH\"",
-        ]
-        let stdoutPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = Pipe()  // 丢弃 rc 噪声
-        // 不覆盖 environment：继承一个 sane 基底（TERM/USER/HOME 等），让登录 shell
-        // 在其上按用户 rc 重建 PATH（rc 里的 `export PATH="$HOME/.local/bin:$PATH"`
-        // 这种前置式扩展无论基底 PATH 长短都会把 ~/.local/bin 带进来）。
+        loginShellPath(shell: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", timeout: 5)
+    }
 
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-
-        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let out = String(data: data, encoding: .utf8) ?? ""
+    /// A shell rc file may block or fill stderr. Use the bounded command runner,
+    /// with the inherited environment to avoid recursing into childProcessPath.
+    static func loginShellPath(shell: String, timeout: TimeInterval) -> String? {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pcrew-path-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        guard let result = try? AgentCLICommand.run(URL(fileURLWithPath: shell), [
+            "-lic", "/usr/bin/printf '\(sentinelOpen)%s\(sentinelClose)' \"$PATH\"",
+        ], timeout, directory: directory, environment: ProcessInfo.processInfo.environment),
+              result.status == 0 else { return nil }
+        let out = result.output
         guard let lo = out.range(of: sentinelOpen)?.upperBound,
               let hi = out.range(of: sentinelClose, range: lo..<out.endIndex)?.lowerBound
         else { return nil }

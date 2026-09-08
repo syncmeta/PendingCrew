@@ -216,5 +216,17 @@ final class AgentCLIMaintenanceTests: XCTestCase {
         XCTAssertTrue(state.isEmpty || state.hasPrefix("Z"), "child still alive: \(state)")
     }
 
+    func testLoginShellDiscoveryHasABoundedFailureInsteadOfHangingDetection() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let shell = directory.appendingPathComponent("slow-shell")
+        try Data("#!/bin/sh\nsleep 30\n".utf8).write(to: shell)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shell.path)
+        let start = Date()
+        XCTAssertNil(LocalCodingAgentExecutable.loginShellPath(shell: shell.path, timeout: 0.2))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+    }
+
 }
 #endif

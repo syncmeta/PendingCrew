@@ -100,6 +100,8 @@ final class ModelCatalogCenter: ObservableObject {
     /// 外加一条**故意填错的 `--effort`** 把启动态那套逼出来。前两条任一解不出 → nil
     /// （半张表比没有表更危险，见 parser 注释）；第三条解不出只是少一层保护，不废表。
     nonisolated private static func probeClaude() async -> AgentModelTable? {
+        guard let cliLease = try? AgentCLIMaintenanceLease.acquire(.claudeCode, exclusive: false) else { return nil }
+        defer { withExtendedLifetime(cliLease) {} }
         guard let exe = LocalCodingAgentExecutable.resolve(.claudeCode) else { return nil }
         async let modelEcho = runClaudeSlash(exe: exe, command: "/model")
         async let effortEcho = runClaudeSlash(exe: exe, command: "/effort")
@@ -160,6 +162,8 @@ final class ModelCatalogCenter: ObservableObject {
     /// codex：起一个短命 `codex app-server`，握手后问一句 `model/list` 就退出。
     /// 帧收发形状与 `QuotaCenter.fetchCodexLive` 同源（同一套 app-server 协议）。
     nonisolated private static func probeCodex() async -> AgentModelTable? {
+        guard let cliLease = try? AgentCLIMaintenanceLease.acquire(.codex, exclusive: false) else { return nil }
+        defer { withExtendedLifetime(cliLease) {} }
         guard let exe = LocalCodingAgentExecutable.resolve(.codex) else { return nil }
         return await Task.detached(priority: .utility) { () -> AgentModelTable? in
             let p = Process()

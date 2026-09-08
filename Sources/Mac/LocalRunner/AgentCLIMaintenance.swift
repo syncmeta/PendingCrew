@@ -19,7 +19,7 @@ final class AgentCLIMaintenanceLease {
         guard fd >= 0 else { throw AgentCLIFailure(message: "无法打开 CLI 维护锁：\(String(cString: strerror(errno)))") }
         guard flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB) == 0 else {
             close(fd)
-            throw AgentCLIFailure(message: "\(kind.displayName) 仍有 PendingCrew session 存活（包括空闲/启动中），或版本维护正在进行；本次操作未执行。")
+            throw AgentCLIFailure(message: "\(kind.displayName) 仍有 PendingCrew session 或检测探针存活（包括空闲/启动中），或版本维护正在进行；请停止 session / 等待探针结束后重试，本次操作未执行。")
         }
         return AgentCLIMaintenanceLease(fd: fd)
     }
@@ -41,7 +41,8 @@ enum AgentCLICommand {
                 directory: LocalWhiteboardStore.defaultDirectory.appendingPathComponent("cli-maintenance-logs"))
     }
 
-    static func run(_ executable: URL, _ arguments: [String], _ timeout: TimeInterval, directory: URL) throws -> AgentCLICommandResult {
+    static func run(_ executable: URL, _ arguments: [String], _ timeout: TimeInterval, directory: URL,
+                    environment: [String: String]? = nil) throws -> AgentCLICommandResult {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let log = directory.appendingPathComponent(UUID().uuidString + ".log")
         let fd = open(log.path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
@@ -57,8 +58,8 @@ enum AgentCLICommand {
         posix_spawn_file_actions_adddup2(&actions, fd, STDERR_FILENO)
         posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
         posix_spawnattr_setpgroup(&attrs, 0)
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = LocalCodingAgentExecutable.childProcessPath
+        var env = environment ?? ProcessInfo.processInfo.environment
+        if environment == nil { env["PATH"] = LocalCodingAgentExecutable.childProcessPath }
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
         let argv = ([executable.path] + arguments).map { strdup($0) } + [nil]
