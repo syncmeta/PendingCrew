@@ -7,8 +7,12 @@ import AppKit
 ///
 /// 为什么要有它：crew 的工作目录此前只在建 crew 那一刻定下，仓库一搬家就只能去手改
 /// `local-crews.json` —— 而那份账 app 启动时读一次、之后整份覆写，运行中手改会被吞掉。
-/// 更要命的是 agent 侧的目录信任/权限与项目记忆按路径分家（见 `WorkdirMigrationPlan`
-/// 的文件头），光改字段等于把它们丢在旧路径上 —— 新目录下第一个 session 会挂在信任提示上。
+/// 更要命的是 agent 侧的工具权限与项目记忆按路径分家（见 `WorkdirMigrationPlan`
+/// 的文件头），光改字段等于把它们丢在旧路径上。
+///
+/// **目录信任位不搬** —— 那是人对这个目录的授权，不是我们的技术步骤。迁完如果新目录
+/// 还没被信任，这里弹一次 `WorkdirTrustPromptView`，把该跑的命令原样给人；那是**建 crew
+/// 时弹的同一个东西**，不是第二份文案。
 ///
 /// 判定全在 `WorkdirMigrationPlan`（纯逻辑、可单测），落地在 `WorkdirMigrationExecutor`
 /// （先备份、fail-loud）。这一层只负责编排和展示。
@@ -28,6 +32,8 @@ struct ChangeWorkingDirectorySheet: View {
     @State private var plan: WorkdirMigrationPlan.Plan?
     @State private var executing = false
     @State private var receipt: WorkdirMigrationExecutor.Receipt?
+    /// 迁完发现新目录还没被信任时要弹的那一份（nil = 都信过 / 还没迁）。
+    @State private var trustPrompt: WorkdirTrustPrompt.Prompt?
 
     private var currentDir: String {
         subtree.first { $0.id == crewId }?.workingDirectory ?? ""
@@ -49,6 +55,10 @@ struct ChangeWorkingDirectorySheet: View {
         }
         .frame(minWidth: 560, minHeight: 480)
         .onAppear(perform: reload)
+        // 跟建 crew 那条路弹的是同一个 —— 别在这儿写第二份文案。
+        .sheet(item: $trustPrompt) { p in
+            WorkdirTrustPromptView(prompt: p) { trustPrompt = nil }
+        }
     }
 
     // MARK: - 选目录
@@ -141,7 +151,7 @@ struct ChangeWorkingDirectorySheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     row("要改工作目录的 crew", "\(plan.crews.count) 个")
                     row("claude 项目记忆复制", "\(plan.memoryCopyCount) 个文件（旧目录原样留着）")
-                    row("目录信任 / 工具权限", WorkdirMigrationExecutor.trustSummary(plan))
+                    row("claude 工具权限", WorkdirMigrationExecutor.trustSummary(plan))
                 }.frame(maxWidth: .infinity, alignment: .leading)
             } label: { Text("会做这些").font(.headline) }
 
@@ -190,7 +200,7 @@ struct ChangeWorkingDirectorySheet: View {
     private var footer: some View {
         HStack {
             if receipt == nil {
-                Text("动手前会把 `~/.claude.json`、`~/.codex/config.toml`、crew 账本各备份一份。")
+                Text("动手前会把 `~/.claude.json`、crew 账本各备份一份。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -247,9 +257,17 @@ struct ChangeWorkingDirectorySheet: View {
         receipt = result
 
         let text = WorkdirMigrationExecutor.receiptText(result, newWorkdir: newDir)
+        // 新目录信任过没有：**只读**看一眼。没信任就弹同一个提示，并且把它也发进群里
+        // —— 对话框点掉就没了，人只看群聊。
+        let trust = WorkdirTrustPrompt.prompt(workdir: newDir, home: homeURL)
         for crew in Set(fresh.crews.map(\.id)).union([crewId]) {
             crewStore.postSystemNotice(crewId: crew, text: text)
+            if let trust {
+                crewStore.postSystemNotice(
+                    crewId: crew, text: WorkdirTrustPrompt.chatMessage(trust))
+            }
         }
+        trustPrompt = trust
         Task { await crewStore.refreshDetail(crewId) }
     }
 }

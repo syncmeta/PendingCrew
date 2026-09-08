@@ -47,8 +47,14 @@ enum WorkdirChangeCommand {
         }
 
         let receipt = execute(plan: plan, newWorkdir: WorkdirMigrationPlan.normalize(req.newPath))
-        let text = WorkdirMigrationExecutor.receiptText(
+        var text = WorkdirMigrationExecutor.receiptText(
             receipt, newWorkdir: WorkdirMigrationPlan.normalize(req.newPath))
+        // 新目录信任过没有：**只读**看一眼。没信任就把界面那条路弹的同一份提示接在
+        // 回执后面 —— 机长这条路没有对话框，但文案不许写第二份。
+        if let trust = WorkdirTrustPrompt.prompt(
+            workdir: WorkdirMigrationPlan.normalize(req.newPath), home: homeURL) {
+            text += "\n\n" + WorkdirTrustPrompt.chatMessage(trust)
+        }
         // 回执进群 —— 机长自己看到的是 long-poll 的返回值，人类只看群聊。
         var boards = Set(receipt.crewsUpdated.map(\.id))
         boards.insert(req.crewId)
@@ -60,7 +66,7 @@ enum WorkdirChangeCommand {
         return text
     }
 
-    /// 真正落地（备份 → 信任 → 记忆 → crew 字段）。界面与机长工具共用。
+    /// 真正落地（备份 → 工具权限 → 记忆 → crew 字段）。界面与机长工具共用。
     static func execute(plan: WorkdirMigrationPlan.Plan,
                         newWorkdir: String) -> WorkdirMigrationExecutor.Receipt {
         let stamp = ISO8601DateFormatter().string(from: Date())

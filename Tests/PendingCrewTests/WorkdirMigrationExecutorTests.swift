@@ -35,15 +35,15 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
       "numStartups": 400,
       "projects": {
         "/old": {
-          "hasTrustDialogAccepted": true,
+          "mcpServers": {"thing": {}},
           "allowedTools": ["Bash(ls:*)"],
           "lastCost": 1.5
         },
         "/new": {
-          "hasTrustDialogAccepted": false,
+          "mcpServers": {},
           "allowedTools": ["Bash(git:*)"]
         },
-        "/somebody-else": { "hasTrustDialogAccepted": true }
+        "/somebody-else": { "allowedTools": ["Bash(rm:*)"] }
       }
     }
     """
@@ -54,80 +54,36 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         try write(claudeJSON, to: ".claude.json")
         try WorkdirMigrationExecutor.copyClaudeProjectSettings(
             home: home, from: "/old", to: "/new",
-            keys: ["hasTrustDialogAccepted", "allowedTools"])
+            keys: ["mcpServers", "allowedTools"])
 
         let root = try JSONSerialization.jsonObject(
             with: Data(read(".claude.json").utf8)) as! [String: Any]
         let projects = root["projects"] as! [String: Any]
         let new = projects["/new"] as! [String: Any]
-        XCTAssertEqual(new["hasTrustDialogAccepted"] as? Bool, true, "false 应当被源的 true 补上")
+        XCTAssertEqual((new["mcpServers"] as? [String: Any])?.count, 1, "空字典应当被源补上")
         XCTAssertEqual(new["allowedTools"] as? [String], ["Bash(git:*)"], "目标已有的不许被覆盖")
         XCTAssertNil(new["lastCost"], "统计字段不该跟着搬")
 
         let old = projects["/old"] as! [String: Any]
-        XCTAssertEqual(old["hasTrustDialogAccepted"] as? Bool, true, "旧条目要原样留着")
+        XCTAssertEqual((old["mcpServers"] as? [String: Any])?.count, 1, "旧条目要原样留着")
         XCTAssertNotNil(projects["/somebody-else"], "别人的条目一个字都不许动")
         XCTAssertEqual(root["numStartups"] as? Int, 400, "projects 以外的设置要原样留着")
     }
 
     func testCopyClaudeProjectSettingsCreatesTargetEntryWhenAbsent() throws {
-        try write(#"{"projects":{"/old":{"hasTrustDialogAccepted":true}}}"#, to: ".claude.json")
+        try write(#"{"projects":{"/old":{"allowedTools":["a"]}}}"#, to: ".claude.json")
         try WorkdirMigrationExecutor.copyClaudeProjectSettings(
-            home: home, from: "/old", to: "/new", keys: ["hasTrustDialogAccepted"])
+            home: home, from: "/old", to: "/new", keys: ["allowedTools"])
         let root = try JSONSerialization.jsonObject(
             with: Data(read(".claude.json").utf8)) as! [String: Any]
         let new = (root["projects"] as! [String: Any])["/new"] as! [String: Any]
-        XCTAssertEqual(new["hasTrustDialogAccepted"] as? Bool, true)
+        XCTAssertEqual(new["allowedTools"] as? [String], ["a"])
     }
 
     func testCopyClaudeProjectSettingsFailsLoudWhenSourceEntryGone() throws {
         try write(#"{"projects":{}}"#, to: ".claude.json")
         XCTAssertThrowsError(try WorkdirMigrationExecutor.copyClaudeProjectSettings(
-            home: home, from: "/old", to: "/new", keys: ["hasTrustDialogAccepted"]))
-    }
-
-    // MARK: - ~/.codex/config.toml
-
-    private let codexTOML = """
-    model = "gpt-5.6-sol"
-
-    [plugins."github@x"]
-    enabled = true
-
-    [projects."/old"]
-    trust_level = "trusted"
-
-    [mcp_servers.thing]
-    command = "x"
-    args = ["mcp"]
-    """
-
-    /// 补一条，别的一个字都不动 —— 而且改完必须还是**合法 TOML**、内容恰好多这一条。
-    func testAddCodexTrustAddsEntryAndKeepsEverythingElse() throws {
-        try write(codexTOML, to: ".codex/config.toml")
-        try WorkdirMigrationExecutor.addCodexTrust(home: home, path: "/new", trustLevel: "trusted")
-
-        let levels = WorkdirMigrationExecutor.loadCodexTrustLevels(home: home)
-        XCTAssertEqual(levels["/new"], "trusted")
-        XCTAssertEqual(levels["/old"], "trusted", "旧条目要留着（别的 crew 还在用旧目录）")
-
-        let text = try read(".codex/config.toml")
-        XCTAssertTrue(text.contains("gpt-5.6-sol"), "顶层设置不能丢")
-        XCTAssertTrue(text.contains("mcp_servers"), "别的表不能丢")
-        XCTAssertTrue(text.contains("github@x"), "带引号的表名不能丢")
-    }
-
-    /// 新路径已经有条目 → 拒绝改写，不覆盖用户已有的信任级别。
-    func testAddCodexTrustRefusesToOverwrite() throws {
-        try write(codexTOML + "\n[projects.\"/new\"]\ntrust_level = \"untrusted\"\n",
-                  to: ".codex/config.toml")
-        XCTAssertThrowsError(
-            try WorkdirMigrationExecutor.addCodexTrust(home: home, path: "/new", trustLevel: "trusted"))
-        XCTAssertEqual(WorkdirMigrationExecutor.loadCodexTrustLevels(home: home)["/new"], "untrusted")
-    }
-
-    func testLoadCodexTrustLevelsOnMissingFileIsEmpty() {
-        XCTAssertTrue(WorkdirMigrationExecutor.loadCodexTrustLevels(home: home).isEmpty)
+            home: home, from: "/old", to: "/new", keys: ["allowedTools"]))
     }
 
     // MARK: - 目录枚举
@@ -142,11 +98,10 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
 
     // MARK: - 整体执行
 
-    /// 一条完整的成功路径：备份先落地 → 信任/权限 → 记忆复制（旧的还在）→
+    /// 一条完整的成功路径：备份先落地 → 工具权限 → 记忆复制（旧的还在）→
     /// crew 字段最后改。
-    func testExecuteBacksUpThenCopiesMemoryAndTrust() throws {
+    func testExecuteBacksUpThenCopiesMemoryAndSettings() throws {
         try write(claudeJSON, to: ".claude.json")
-        try write(codexTOML, to: ".codex/config.toml")
         let oldProj = home.appendingPathComponent(".claude/projects/-old").path
         let newProj = home.appendingPathComponent(".claude/projects/-new").path
         try write("mem", to: ".claude/projects/-old/memory/MEMORY.md")
@@ -154,8 +109,7 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         var plan = WorkdirMigrationPlan.Plan()
         plan.actions = [
             .copyClaudeProjectSettings(fromPath: "/old", toPath: "/new",
-                                       keys: ["hasTrustDialogAccepted"]),
-            .copyCodexTrust(fromPath: "/old", toPath: "/new", trustLevel: "trusted"),
+                                       keys: ["mcpServers"]),
             .copyClaudeMemoryFile(relativePath: "MEMORY.md",
                                   from: oldProj + "/memory/MEMORY.md",
                                   to: newProj + "/memory/MEMORY.md"),
@@ -171,13 +125,12 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         let fm = FileManager.default
         XCTAssertTrue(fm.fileExists(atPath: backup.appendingPathComponent(".claude.json").path),
                       "改 claude.json 之前必须先有备份")
-        XCTAssertTrue(fm.fileExists(atPath: backup.appendingPathComponent("config.toml").path))
         XCTAssertTrue(fm.fileExists(atPath: newProj + "/memory/MEMORY.md"))
         XCTAssertTrue(fm.fileExists(atPath: oldProj + "/memory/MEMORY.md"),
                       "记忆是共享的，只准复制")
         XCTAssertEqual(applied.map(\.0), ["c1"])
         XCTAssertEqual(receipt.copiedMemoryFiles, ["MEMORY.md"])
-        XCTAssertTrue(receipt.codexTrustCopied)
+        XCTAssertEqual(receipt.claudeSettingsKeysCopied, ["mcpServers"])
     }
 
     /// 中途炸了：停在那一步，**已经做完的照实报**，后面的不做。
@@ -227,30 +180,30 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
     func testVerifiedCopyConfirmsKeysLanded() throws {
         try write(claudeJSON, to: ".claude.json")
         let (confirmed, tries) = try WorkdirMigrationExecutor.copyClaudeProjectSettingsVerified(
-            home: home, from: "/old", to: "/new", keys: ["hasTrustDialogAccepted"])
-        XCTAssertEqual(confirmed, ["hasTrustDialogAccepted"])
+            home: home, from: "/old", to: "/new", keys: ["mcpServers"])
+        XCTAssertEqual(confirmed, ["mcpServers"])
         XCTAssertEqual(tries, 1)
     }
 
     /// 源那边这个键本来就是空的 → 写不进去也确认不了。**不许当成功**：
     /// 返回的 confirmed 里没有它，调用方据此往回执里写「没落住」。
     func testVerifiedCopyReportsKeysThatNeverLanded() throws {
-        try write(#"{"projects":{"/old":{"hasTrustDialogAccepted":false},"/new":{}}}"#,
+        try write(#"{"projects":{"/old":{"allowedTools":[]},"/new":{}}}"#,
                   to: ".claude.json")
         let (confirmed, tries) = try WorkdirMigrationExecutor.copyClaudeProjectSettingsVerified(
             home: home, from: "/old", to: "/new",
-            keys: ["hasTrustDialogAccepted"], attempts: 2, waitBetween: 0)
+            keys: ["allowedTools"], attempts: 2, waitBetween: 0)
         XCTAssertTrue(confirmed.isEmpty)
         XCTAssertEqual(tries, 2, "没落住要重试，不是写一次就算完")
     }
 
-    /// 没落住 → 回执必须出现 ⚠️ 并把「可能要手点信任框」说出来。
-    func testExecuteWarnsWhenTrustKeyDidNotLand() throws {
-        try write(#"{"projects":{"/old":{"hasTrustDialogAccepted":false},"/new":{}}}"#,
+    /// 没落住 → 回执必须出现 ⚠️ 并把「这几项要重新授权」说出来。
+    func testExecuteWarnsWhenSettingsKeyDidNotLand() throws {
+        try write(#"{"projects":{"/old":{"allowedTools":[]},"/new":{}}}"#,
                   to: ".claude.json")
         var plan = WorkdirMigrationPlan.Plan()
         plan.actions = [.copyClaudeProjectSettings(
-            fromPath: "/old", toPath: "/new", keys: ["hasTrustDialogAccepted"])]
+            fromPath: "/old", toPath: "/new", keys: ["allowedTools"])]
         let receipt = WorkdirMigrationExecutor.execute(
             plan: plan, home: home, backupDirectory: home.appendingPathComponent("backup"),
             applyCrewWorkingDirectory: { _, _ in })
@@ -259,7 +212,7 @@ final class WorkdirMigrationExecutorTests: XCTestCase {
         XCTAssertEqual(receipt.warnings.count, 1)
         let text = WorkdirMigrationExecutor.receiptText(receipt, newWorkdir: "/new")
         XCTAssertTrue(text.contains("没落住"))
-        XCTAssertTrue(text.contains("信任"))
+        XCTAssertTrue(text.contains("重新授权"))
     }
 
     // MARK: - 预览文案
