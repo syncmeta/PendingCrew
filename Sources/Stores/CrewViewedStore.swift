@@ -53,6 +53,38 @@ final class CrewViewedStore: ObservableObject {
     var snapshot: [String: Date] { lastViewed }
 
     private func persist() {
-        defaults.set(lastViewed.mapValues { $0.timeIntervalSince1970 }, forKey: Self.defaultsKey)
+        let plain = lastViewed.mapValues { $0.timeIntervalSince1970 }
+        defaults.set(plain, forKey: Self.defaultsKey)
+        Self.mirrorToDisk(plain)
+    }
+
+    // MARK: - 跨进程镜像（Todo #102）
+
+    /// 磁盘镜像的位置。UserDefaults 只有 app 进程读得到，而 MCP helper 是**另一个
+    /// 进程** —— 它要把「他最后一次打开哪个 crew」当排序原料交给总机长 session。
+    ///
+    /// 为什么是镜像而不是搬家：UserDefaults 那份是 app 内所有既有读点在用的
+    /// （侧栏未读判定等），搬家会牵动一片；而这里只需要**跨进程读得到**。
+    /// 两份都由 `persist()` 一处写，不存在第二个写点。
+    nonisolated static func mirrorURL(dataRoot: URL = PendingCrewDataRoot.url) -> URL {
+        dataRoot.appendingPathComponent("crew-last-viewed.json")
+    }
+
+    nonisolated private static func mirrorToDisk(_ plain: [String: TimeInterval]) {
+        guard let data = try? JSONEncoder().encode(plain) else { return }
+        try? data.write(to: mirrorURL(), options: .atomic)
+    }
+
+    /// 跨进程读那份镜像。
+    ///
+    /// **返回 nil 和返回空字典是两件事**，调用方必须分得开：
+    /// `nil` = 这份镜像**读不出来**（文件不在 / 坏了）→「我看不出来」；
+    /// `[:]` = 读出来了、里面确实一条都没有 →「他确实还没打开过任何 crew」。
+    /// 把前者当成后者，就是把「看不出来」报成「确实没有」—— 这台机器上栽过。
+    nonisolated static func loadMirror(dataRoot: URL = PendingCrewDataRoot.url) -> [String: Date]? {
+        guard let data = try? Data(contentsOf: mirrorURL(dataRoot: dataRoot)),
+              let plain = try? JSONDecoder().decode([String: TimeInterval].self, from: data)
+        else { return nil }
+        return plain.mapValues { Date(timeIntervalSince1970: $0) }
     }
 }

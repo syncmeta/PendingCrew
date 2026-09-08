@@ -159,6 +159,16 @@ final class CrewStore: ObservableObject {
     func selectCrew(_ id: String?) {
         selectedCrewId = id
         guard let id else { return }
+        // **记一笔「人打开过这个 crew」**（Todo #102）。在此之前 `markViewed` 全仓
+        // 只有一个调用点（侧栏底部「已隐藏的群」那一行），所以「他最后一次看哪个
+        // crew」这份数据**根本不存在** —— 而那恰恰是他那句「把手头上要用到的放前面」
+        // 语义上最贴的信号。
+        //
+        // 现在只是**开始攒**：排序目前不靠它（今天一条数据都没有，而且他习惯只在
+        // 机长群里说话、不挨个进子 crew，攒起来大概率也稀疏）。所以它将来只能当
+        // **加分项**，缺了照样得排得出来。埋点成本固定、价值随时间累积 ——
+        // 今天不埋，一周后还是没有数据。
+        CrewViewedStore.shared.markViewed(id)
         // detail 进 cache 之前，先发起 fetch（不 await）。view 会按
         // `details[id]` 的 nil / 非 nil 状态切空态 / 内容态。
         Task { await refreshDetail(id) }

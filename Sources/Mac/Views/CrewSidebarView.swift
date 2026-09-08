@@ -29,6 +29,12 @@ struct CrewSidebarView: View {
 
     private var viewMode: CrewSidebarViewMode { CrewSidebarViewMode.resolve(rawValue: viewModeRaw) }
 
+    /// 总机长排的那份顺序（Todo #102）。**读一次放在这儿，不在 body 里碰磁盘**
+    /// —— body 里读文件正是 2026-08-17「开久了卡」的形状。
+    /// 排布是 MCP helper 跨进程写的，写完那一刻它同时往群里发一行（那是「看得见
+    /// 是谁排的」的要求），于是白板目录一定会 tick —— 这里跟着那个 tick 重读。
+    @State private var arrangement: CrewArrangement?
+
     var body: some View {
         VStack(spacing: 0) {
             viewModePicker
@@ -47,7 +53,8 @@ struct CrewSidebarView: View {
                         crews: visibleCrews, childCrewTarget: $childCrewTarget)
                 case .chief:
                     CrewChiefListView(
-                        crews: visibleCrews, childCrewTarget: $childCrewTarget)
+                        crews: visibleCrews, childCrewTarget: $childCrewTarget,
+                        arrangement: arrangement)
                 }
             }
             .listStyle(.sidebar)
@@ -64,6 +71,8 @@ struct CrewSidebarView: View {
         // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
         // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由
         // WindowChromeConfigurator 一次性藏死。
+        .task { reloadArrangement() }
+        .onReceive(LocalWhiteboardStore.shared.directoryChanged) { _ in reloadArrangement() }
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -154,6 +163,11 @@ struct CrewSidebarView: View {
         .padding(.top, 6)
         .padding(.bottom, 4)
         .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机长：只列现在该管的，分「在等你回应 / 还在跑 / 安静」三段")
+    }
+
+    private func reloadArrangement() {
+        arrangement = CrewArrangementStore.load(
+            at: CrewArrangementStore.fileURL(dataRoot: PendingCrewDataRoot.url))
     }
 
     // MARK: - 机器分组

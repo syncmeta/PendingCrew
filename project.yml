@@ -256,9 +256,13 @@ targets:
       # 销号凭据的判定 + git 对象解引用（Todo #102：给了指针就必须解引用）。
       # 纯 Foundation；判定与 Process 分开，判定那半可注入可单测。
       - path: Sources/Support/TodoEvidence.swift
-      # 侧栏总机长视图的三段收敛（Todo #102：在等你回应 / 还在跑 / 安静）。
-      # 同上，纯 Foundation，依赖 CrewSummary。
+      # 侧栏总机长视图的排序（Todo #102 / #113：不分类，只排序；agent 排布是主
+      # 路径，最近活动倒序是兜底）。同上，纯 Foundation，依赖 CrewSummary。
       - path: Sources/Support/CrewChiefOverview.swift
+      # 排序原料的渲染（#113 追问：三列原样交出去，不加权）。纯 Foundation。
+      - path: Sources/Support/CrewOrderingSignals.swift
+      # 那份排布的落盘（全机一份，app 读 / helper 写）。自包含 Foundation。
+      - path: Sources/Stores/CrewArrangementStore.swift
       # 侧栏层级视图按最新活动排序（Todo #67：父的键 = max(自己, 全部后代)）。
       # 同上，纯 Foundation。
       - path: Sources/Support/CrewHierarchyOrdering.swift

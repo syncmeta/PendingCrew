@@ -322,6 +322,24 @@ final class McpServer {
                     ],
                 ],
                 [
+                    "name": "crew_ordering_signals",
+                    "description": "（机长专用）取**排序原料**：每个 crew 的三列时间 —— ① 最近有动静（任何人）/ ② 人类自己最后发言 / ③ 人类最后打开。\n\n**它不排序、不打分、不加权**，就是把三列原样给你。人类点名要的是「把各个指标拿出来 还有总机长的群聊信息 作为上下文 让总机长自行判断顺序」—— 判断是你的活。\n\n三列各自的毛病会跟数一起给你（① 量的是 agent 在哪儿忙、② 分辨率很低、③ 刚开始埋点很稀疏），**别单看数**。你自己那个群聊里的话（他说过「这周先搞 XX」之类）是任何指标都算不出来的，那部分本来就在你上下文里，记得一起用。\n\n看完用 arrange_crews 把顺序排下去，并写清理由。",
+                    "inputSchema": ["type": "object", "properties": [:]],
+                ],
+                [
+                    "name": "arrange_crews",
+                    "description": "（机长专用）把几个 crew **顶到侧栏「总机长」视图的最前面**，并说清为什么。\n\n这个视图的基础序是「最近有动静的在上」，永远算得出来；你排的这份只是**叠在上面的覆盖层**：没排过、排布读不出来、里面的 crew 已经没了 —— 一律退回基础序，界面照常能用。**你的判断可以决定「推荐他先看什么」，但决定不了「这台机器上有什么」。**\n\n`reason` 必填，而且**会显示给人看**（不是日志）：他看到一个不合意的顺序时，得分得清是规则算的还是你排的、为什么。做成黑箱，它第一次排错就会被永久关掉。\n\n`crew_ids` 传空数组 = 撤掉排布，退回纯基础序。crew id 从 directory 或组织树里取。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "crew_ids": ["type": "array", "items": ["type": "string"],
+                                         "description": "要顶到最前的 crew id，按你想要的顺序。空数组 = 撤掉排布。没提到的 crew 跟在后面、保持基础序。"],
+                            "reason": ["type": "string", "description": "为什么这么排。一句话，写给人看的（「这三个他今天在改，其余按动静排」比「已优化排序」有用一百倍）。"],
+                        ],
+                        "required": ["crew_ids", "reason"],
+                    ],
+                ],
+                [
                     "name": "set_session_profile",
                     "description": "切换你自己这个 session 的模型/thinking effort（至少给一个）。用于按任务阶段调配：机械收尾活降到轻模型/低 effort 省额度，难题升 effort。claude session 在**你本回合结束后**生效（等价终端里打 /model、/effort —— 斜杠命令只能在终端空闲时执行，所以不是当场切换；生效/失败都会回执到白板，成功还会在终端通知你）。撞额度上限时用它正合适：回合被打断后切换落地，你会被叫醒在新模型上接着跑，不用等重置。codex 没有中途切换通道——会在白板收到说明，新任务请让机长用 start_session 带 model/effort 另起。\n"
                         + catalogHint(agents: agentKey.map { [$0] } ?? ["claude", "codex"]),
@@ -1388,6 +1406,80 @@ final class McpServer {
             return toolResult(id: id, text: TodoLandingFlow.receipt(
                 ledger: .human, action: .withdrawn, number: withdrawn.number,
                 reached: announced.reached, detail: announced.detail))
+        case "crew_ordering_signals":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let signalRows = LocalCrewStore.orgTreeLines(
+                whiteboardDirectory: store.resolvedDirectory)
+            var seenCrewIds = Set<String>()
+            var rows: [CrewOrderingSignals.Row] = []
+            // ③ 走磁盘镜像 —— helper 是另一个进程，读不到 app 的 UserDefaults。
+            // **nil（读不出来）和空字典（确实一条没有）必须分开**：把前者当后者，
+            // 就是把「我看不出来」报成「他确实没打开过」。
+            let viewedMirror = CrewViewedStore.loadMirror(
+                dataRoot: store.resolvedDirectory.deletingLastPathComponent())
+            var anyOpenedRecorded = false
+            let viewed = viewedMirror ?? [:]
+            for row in signalRows where !seenCrewIds.contains(row.id) {
+                seenCrewIds.insert(row.id)
+                let messages = store.list(crewId: row.id)
+                let lastAny = messages.last.flatMap { CrewTimestamp.parse($0.createdAt) }
+                let lastHuman = messages.last { $0.senderKind == "user" }
+                    .flatMap { CrewTimestamp.parse($0.createdAt) }
+                let opened = viewed[row.id]
+                if opened != nil { anyOpenedRecorded = true }
+                rows.append(CrewOrderingSignals.Row(
+                    crewId: row.id, title: row.title,
+                    lastAnyMessageAt: lastAny, lastHumanMessageAt: lastHuman,
+                    lastOpenedAt: opened))
+            }
+            let openedState: CrewOrderingSignals.OpenedColumn =
+                viewedMirror == nil ? .unreadable
+                    : (anyOpenedRecorded ? .hasData : .emptySoFar)
+            return toolResult(id: id, text: CrewOrderingSignals.render(
+                rows: rows, now: Date(), openedColumn: openedState))
+        case "arrange_crews":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let arrangeReason = ((args["reason"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !arrangeReason.isEmpty else {
+                return toolResult(id: id, text: "ERROR: reason 不能为空 —— 它是显示给人看的。"
+                                  + "人看到一个不合意的顺序时得分得清是规则算的还是你排的；没有理由的排布就是个黑箱，"
+                                  + "第一次排错就会被永久关掉。")
+            }
+            let ids = ((args["crew_ids"] as? [Any]) ?? []).compactMap { $0 as? String }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let arrangementURL = CrewArrangementStore.fileURL(
+                whiteboardDirectory: store.resolvedDirectory)
+            if ids.isEmpty {
+                guard CrewArrangementStore.clear(at: arrangementURL) else {
+                    return toolResult(id: id, text: "ERROR: 排布没能撤掉（文件删不了）。**侧栏还是原来那个顺序。**")
+                }
+                _ = try? store.appendSessionMessageReportingFailure(
+                    crewId: crewId, sessionId: sessionId,
+                    text: "撤掉了侧栏排布，回到「按最近活动排」：\(arrangeReason)",
+                    category: "progress", senderName: sessionLabel,
+                    mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
+                    inReplyTo: nil, senderKind: isCaptain ? "captain" : "session")
+                return toolResult(id: id, text: "已撤掉排布，「总机长」视图回到纯基础序（最近有动静的在上）。")
+            }
+            let arrangement = CrewArrangement(
+                crewIds: ids, reason: arrangeReason,
+                bySessionId: sessionId, bySenderName: sessionLabel,
+                createdAt: ISO8601DateFormatter().string(from: Date()))
+            guard CrewArrangementStore.save(arrangement, to: arrangementURL) else {
+                return toolResult(id: id, text: "ERROR: 排布没写进去（磁盘写失败）。**侧栏还是原来那个顺序**，别当它已经生效。")
+            }
+            // 排完往群里说一声 —— 这既是「看得见是谁排的」的一半，也是让 app 那边
+            // 立刻重读的那个 tick（排布文件不在被监听的白板目录里）。
+            _ = try? store.appendSessionMessageReportingFailure(
+                crewId: crewId, sessionId: sessionId,
+                text: "把 \(ids.count) 个 crew 顶到了侧栏最前：\(arrangeReason)",
+                category: "progress", senderName: sessionLabel,
+                mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
+                inReplyTo: nil, senderKind: isCaptain ? "captain" : "session")
+            return toolResult(id: id, text: "已排好 \(ids.count) 个 crew（理由会显示在侧栏顶上）。"
+                              + "没提到的 crew 跟在后面、保持基础序；里面已经不存在的 id 会被忽略，不会让任何一行消失。")
         case "set_session_profile":
             let model = (args["model"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
