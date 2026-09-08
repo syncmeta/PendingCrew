@@ -232,6 +232,16 @@ enum CrewMessageTodoLink {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let commit = ((args["evidence_commit"] as? String) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            // ⚠️ **这里只检查「有没有给」，不检查「给的对不对」。**
+            //
+            // 真正的闸在 `McpServer.judgeCompletionEvidence(args:)`：它会**当场解析**
+            // `evidence_commit`，并分出 5 种结局（格式不对 / 仓库里不存在 / 环境验不了 /
+            // 散文凭据 / 解析成功）。2026-09-07 挖出的那笔假账带着一个**根本不存在的
+            // hash** 挂了 191 小时 —— 病根不是「没带凭据」，是**那个凭据从来没有被解析过**。
+            //
+            // 所以：**这一层返回 `.update` 不等于凭据验过了**，接线时必须再过那道闸，
+            // 不许拿这一层的绿去替代它。写在这儿是因为下一个人很容易把这段读成
+            // 「凭据校验在纯层做完了」。
             guard !evidence.isEmpty || !commit.isEmpty else {
                 // `respond_todo` 现在就有这道闸，**不许在这条新路上放宽** ——
                 // 一条记成「已完成」而其实没做的账，没有任何人会回来看。
