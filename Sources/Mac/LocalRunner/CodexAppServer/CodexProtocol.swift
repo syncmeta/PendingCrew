@@ -224,10 +224,21 @@ enum CodexProtocol {
         } else {
             error = nil
         }
-        guard let error, let code = error["codexErrorInfo"] as? String else { return nil }
+        guard let error else {
+            if method == "turn/completed", (params["turn"] as? [String: Any])?["status"] as? String == "failed" {
+                return CrewSessionHealth(kind: .turnFailed, detail: "Codex 回合失败，服务端没有提供错误详情。")
+            }
+            return nil
+        }
+        let code = error["codexErrorInfo"] as? String ?? ""
         let message = (error["message"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let nonemptyMessage = message.flatMap { $0.isEmpty ? nil : $0 }
+        if let message = nonemptyMessage,
+           message.localizedCaseInsensitiveContains("requires a newer version of Codex") {
+            return CrewSessionHealth(kind: .cliVersionIncompatible,
+                detail: message + "；本机 Codex 版本不兼容，请在侧栏订阅额度旁的版本管理中检查；停止所有 Codex session 后由人点击升级。")
+        }
         switch code {
         case "usageLimitExceeded":
             return CrewSessionHealth(
@@ -239,6 +250,12 @@ enum CodexProtocol {
                 kind: .authRequired,
                 detail: nonemptyMessage ?? "Codex 登录态失效，请重新登录后重启该 session。")
         default:
+            // Retrying errors are transient. Terminal failures must not become silent idle,
+            // including unknown/new structured error variants and missing error codes.
+            if method == "turn/completed" || (method == "error" && params["willRetry"] as? Bool == false) {
+                return CrewSessionHealth(kind: .turnFailed,
+                    detail: nonemptyMessage ?? "Codex 回合失败，服务端没有提供错误详情。请检查 session 日志后重试。")
+            }
             return nil
         }
     }

@@ -17,6 +17,7 @@ import SwiftUI
 /// `QuotaRingLayout`（纯 Foundation，单测钉死），这里只负责画。
 struct QuotaRingsFooter: View {
     @ObservedObject var quota: QuotaCenter
+    @ObservedObject private var versions = AgentCLIVersionCenter.shared
 
     /// 刷新按钮转一圈用的角度累加值（每点一次 +360）。
     @State private var refreshSpin: Double = 0
@@ -37,28 +38,22 @@ struct QuotaRingsFooter: View {
     }
 
     var body: some View {
-        if !claudeRings.isEmpty || !codexRings.isEmpty
-            || quota.claudeError != nil || quota.codexError != nil {
-            VStack(alignment: .leading, spacing: 2) {
-                if !claudeRings.isEmpty || quota.claudeError != nil {
-                    agentRow(asset: "ClaudeLogomark", tint: Theme.Palette.claudeMark,
-                             brand: "Claude Code", rings: claudeRings,
-                             staleBadge: claudeWarning)
-                }
-                if !codexRings.isEmpty || quota.codexError != nil {
-                    agentRow(asset: "OpenAILogomark", tint: Theme.Palette.openAIMark,
-                             brand: "Codex", rings: codexRings,
-                             staleBadge: codexWarning)
-                }
-                freshnessRow
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .help(QuotaRingLayout.helpText(claude: quota.claude, codex: quota.codex,
-                                           claudeError: quota.claudeError,
-                                           codexError: quota.codexError) ?? "")
+        VStack(alignment: .leading, spacing: 2) {
+            agentRow(asset: "ClaudeLogomark", tint: Theme.Palette.claudeMark,
+                     brand: "Claude Code", rings: claudeRings,
+                     staleBadge: claudeWarning, kind: .claudeCode)
+            agentRow(asset: "OpenAILogomark", tint: Theme.Palette.openAIMark,
+                     brand: "Codex", rings: codexRings,
+                     staleBadge: codexWarning, kind: .codex)
+            freshnessRow
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .help(QuotaRingLayout.helpText(claude: quota.claude, codex: quota.codex,
+                                       claudeError: quota.claudeError,
+                                       codexError: quota.codexError) ?? "")
+        .task { versions.start() }
     }
 
     /// 一家一行：logomark + 一排环（+ 读不到 / 窗口已翻篇 / 数据太旧时的警示标记）。
@@ -67,7 +62,7 @@ struct QuotaRingsFooter: View {
     /// 读取时刻，claude 刚查过就会把 codex 一个多月没动的数字一起盖成「刚刚」。
     /// 环一个都没有、只剩一句「读不到」时这行也照画 —— 整行消失等于把失败藏起来。
     private func agentRow(asset: String, tint: Color, brand: String,
-                          rings: [QuotaRing], staleBadge: String?) -> some View {
+                          rings: [QuotaRing], staleBadge: String?, kind: LocalCodingAgentKind) -> some View {
         HStack(spacing: 9) {
             Image(asset)
                 .renderingMode(.template)
@@ -88,6 +83,8 @@ struct QuotaRingsFooter: View {
                     .lineLimit(1)
                     .accessibilityLabel("\(brand) 额度\(staleBadge)，不是当前值")
             }
+            Spacer(minLength: 0)
+            AgentCLIVersionView(center: versions, kind: kind)
         }
         .padding(.vertical, 1)
     }

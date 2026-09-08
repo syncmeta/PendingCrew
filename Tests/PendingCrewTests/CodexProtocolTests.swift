@@ -158,6 +158,30 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertTrue(health?.detail.contains("Weekly limit reached") == true)
     }
 
+    func testOutdatedCLIIsVisibleEvenWithObjectErrorInfo() {
+        let message = "The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade..."
+        let health = CodexProtocol.sessionHealth(method: "turn/completed", params: [
+            "turn": ["status": "failed", "error": [
+                "message": message,
+                "codexErrorInfo": ["httpConnectionFailed": ["httpStatusCode": 400]],
+            ]],
+        ])
+        XCTAssertNotNil(health, "A failed turn must not become silent idle")
+        XCTAssertTrue(health?.detail.contains(message) == true)
+        XCTAssertTrue(health?.detail.contains("版本") == true)
+    }
+
+    func testUnknownTerminalFailureIsVisibleButRetryingErrorIsNotTerminal() {
+        let failed = CodexProtocol.sessionHealth(method: "turn/completed", params: [
+            "turn": ["status": "failed", "error": ["message": "new server error", "codexErrorInfo": ["futureVariant": 1]]],
+        ])
+        XCTAssertEqual(failed?.kind, .turnFailed)
+        XCTAssertTrue(failed?.detail.contains("new server error") == true)
+        XCTAssertEqual(CodexProtocol.sessionHealth(method: "turn/completed", params: ["turn": ["status": "failed"]])?.kind, .turnFailed)
+        XCTAssertNil(CodexProtocol.sessionHealth(method: "turn/completed", params: ["turn": ["status": "completed"]]))
+        XCTAssertNil(CodexProtocol.sessionHealth(method: "error", params: ["error": ["message": "transient"], "willRetry": true]))
+    }
+
     func testRateLimitUpdatedReachedTypeRaisesQuotaHealth() {
         let health = CodexProtocol.sessionHealth(method: "account/rateLimits/updated", params: [
             "rateLimits": ["rateLimitReachedType": "rate_limit_reached"],

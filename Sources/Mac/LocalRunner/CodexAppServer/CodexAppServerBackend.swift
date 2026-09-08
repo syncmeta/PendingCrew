@@ -306,6 +306,12 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
             wb?.commit()
             return .accepted
         } catch {
+            let detail: String
+            if case let CodexRPCError.malformed(message) = error { detail = message }
+            else { detail = error.localizedDescription }
+            health = CodexProtocol.sessionHealth(method: "error", params: [
+                "error": ["message": detail], "willRetry": false,
+            ])
             return .retry
         }
     }
@@ -354,7 +360,9 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 return
             }
             // Seal the exact turn's continuation before publishing idle.
-            notifyTurnEnded(lastAgentText())
+            if (params["turn"] as? [String: Any])?["status"] as? String == "completed" {
+                notifyTurnEnded(lastAgentText())
+            }
             activeTurnId = nil
             isWorking = false
             // A later successful turn is first-hand proof that a sticky quota
@@ -362,7 +370,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
             // windows). Clear it immediately instead of waiting for the old
             // reset wakeup to fire hours later.
             if (params["turn"] as? [String: Any])?["status"] as? String == "completed",
-               health?.isQuotaRelated == true {
+               (health?.isQuotaRelated == true || health?.kind == .cliVersionIncompatible || health?.kind == .turnFailed) {
                 health = nil
             }
         }

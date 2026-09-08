@@ -145,22 +145,32 @@ public enum LocalCodingAgentExecutable {
     }
 
     /// 纯逻辑（可单测）：版本目录名 → bin 目录列表，**新版在前**。
-    /// 版本号按数值分段比较，不能用字符串序 —— 字符串序会把 "v9.0.0" 排在
-    /// "v22.14.0" 前面，于是老版本 node 抢在新版前面进 PATH。
-    static func versionedNodeBinDirs(
-        root: String, versions: [String], binSubpath: String
-    ) -> [String] {
-        versions
-            .sorted { versionComponents($0).lexicographicallyPrecedes(versionComponents($1)) }
-            .reversed()
-            .map { "\(root)/\($0)/\(binSubpath)" }
+    static func versionedNodeBinDirs(root: String, versions: [String], binSubpath: String) -> [String] {
+        versions.sorted {
+            (versionComponents($0) ?? []).lexicographicallyPrecedes(versionComponents($1) ?? [])
+        }.reversed().map { "\(root)/\($0)/\(binSubpath)" }
     }
 
-    /// "v22.14.0" → [22, 14, 0]。解不出的段当 0（宁可排前后错一点，也别崩）。
-    private static func versionComponents(_ raw: String) -> [Int] {
-        raw.drop(while: { !$0.isNumber })
-            .split(separator: ".")
-            .map { Int($0.prefix(while: { $0.isNumber })) ?? 0 }
+    /// Shared numeric parser for installed CLI versions and versioned node directories.
+    /// Release tooling compares these numeric segments with missing segments padded with 0
+    /// (scripts/release/build-macos-update.sh version_gt); reject unknown suffixes here.
+    static func versionComponents(_ raw: String) -> [Int]? {
+        let value = raw.hasPrefix("v") ? String(raw.dropFirst()) : raw
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy { $0 >= 48 && $0 <= 57 } }) else { return nil }
+        let numbers = parts.compactMap { Int($0) }
+        return numbers.count == parts.count ? numbers : nil
+    }
+
+    /// Strip the CLI's presentation envelope; numeric parsing has one owner above.
+    static func cliVersion(_ output: String) -> String? {
+        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw: String
+        if value.hasPrefix("codex-cli ") { raw = String(value.dropFirst("codex-cli ".count)) }
+        else if value.hasSuffix(" (Claude Code)") { raw = String(value.dropLast(" (Claude Code)".count)) }
+        else { raw = value }
+        guard !raw.hasPrefix("v"), let parts = versionComponents(raw), parts.count == 3 else { return nil }
+        return raw
     }
 
     private static func subdirectories(of path: String) -> [String] {

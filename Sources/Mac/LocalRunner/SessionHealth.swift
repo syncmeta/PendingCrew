@@ -37,6 +37,8 @@ struct CrewSessionHealth: Equatable {
         ///
         /// 由 `StartupPromptDelivery` 的终局裁决翻（投递反复不落地 / 首屏是需要人
         /// 回答的对话框）。后续真的送达了会自己清掉。
+        case cliVersionIncompatible
+        case turnFailed
         case briefUndelivered
     }
     let kind: Kind
