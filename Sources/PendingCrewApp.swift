@@ -87,9 +87,14 @@ struct PendingCrewApp: App {
             // 品牌符号 + 可选数字。**图标恒定一个样，数字有无就是唯一的信号** ——
             // 没事没有数字，有事才有。
             //
-            // 图标用的是我们自己的 `PendingCrewSymbol`（Assets 里的 .symbolset，
+            // 图标用的是我们自己的 `PendingCrewSymbolFill`（Assets 里的 .symbolset，
             // 一份规范的 SF Symbol 模板：带 Guides / 各权重的 Baseline·Capline·margin，
-            // `fill="none"`、无渐变无位图 ⇒ **矢量单色**，菜单栏会按系统外观自动反色）。
+            // 无渐变无位图 ⇒ **矢量单色**，菜单栏会按系统外观自动反色）。
+            //
+            // **实心**是人类 2026-09-08 装上 0.1.28 看过菜单栏之后点名要的（Todo #127）。
+            // 它跟 `PendingCrewSymbol`（描边版）是同一份路径、只差 `fill` 与 `stroke`
+            // 那一处 —— 描边版仍在用：空群占位图标要的是轻，那儿用淡色 `.tertiary`，
+            // 实心在那个位置会压得太重。**两个变体各有去处，别合并成一个。**
             //
             // ⚠️ **别再给图标本身加第二种状态**（加粗、换字形、变色都算）。
             // 2026-09-08 人类当面拍的，原话：「没事不用加粗。没事就没有数字
@@ -99,7 +104,7 @@ struct PendingCrewApp: App {
             Label {
                 if let badge = menuBarAttention.count.badge { Text(badge) }
             } icon: {
-                Image("PendingCrewSymbol")
+                Image("PendingCrewSymbolFill")
             }
             .accessibilityLabel(menuBarAttention.count.summary)
         }
