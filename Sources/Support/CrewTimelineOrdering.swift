@@ -67,8 +67,10 @@ enum CrewSidebarViewMode: String, CaseIterable, Identifiable {
     case hierarchy
     /// 扁平列表，按最新活动倒序。
     case timeline
-    /// 总机长视图（Todo #102）：不列全部 crew，按「现在该管什么」收敛成三段
-    /// （在等你回应 / 还在跑 / 安静）。推导在 `CrewChiefOverview`。
+    /// 总机长视图（Todo #102）。**不分类** —— 人类 #113 把第一版那三段
+    /// （在等你回应 / 还在跑 / 安静）整个推翻了：扁平一列，顺序由总机长
+    /// session 自己判断并给出理由，它没在跑时退回按最近活动排。推导在
+    /// `CrewChiefOverview`。
     case chief
 
     var id: String { rawValue }

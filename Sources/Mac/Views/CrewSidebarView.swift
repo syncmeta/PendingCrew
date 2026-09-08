@@ -162,7 +162,11 @@ struct CrewSidebarView: View {
         .padding(.horizontal, 10)
         .padding(.top, 6)
         .padding(.bottom, 4)
-        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机长：只列现在该管的，分「在等你回应 / 还在跑 / 安静」三段")
+        // ⚠️ 这句是**给用户看的**，改总机长的排法时它必须跟着改。
+        // 2026-09-08：#113 把三段分类整个拿掉了，`CrewChiefListView` 和
+        // `CrewChiefOverview` 的注释都写了「已推翻」，**只有这句漏了**——
+        // 代码注释改了、用户看得到的文案没改，是最容易漏的那一种。
+        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机长：不分类，顺序由总机长自己判断并给出理由，它没在跑时退回按最近活动排")
     }
 
     private func reloadArrangement() {
