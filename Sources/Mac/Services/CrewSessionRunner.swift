@@ -1332,6 +1332,8 @@ final class CrewSessionRunner: ObservableObject {
         // 没显式选 model → 解析一个具体默认别名显式落进 config（argv 带 --model、
         // run.model 永不为 nil）：显示=实际跑的模型，不再糊「默认」(#489)。codex 若
         // 读不到 ~/.codex/config.toml 的 model 仍为 nil（由 app-server 采用默认模型）。
+        let cliLease = config.kind.isAgent
+            ? try AgentCLIMaintenanceLease.acquire(config.kind, exclusive: false) : nil
         var config = config
         if config.kind.isAgent, config.model == nil {
             config.model = SessionLaunchOptions.defaultModel(
@@ -1501,6 +1503,7 @@ final class CrewSessionRunner: ObservableObject {
         //   是**同 crew** 这半：你正开着 A 谈事，机长在同一个群里起了 B，右栏被切走。
         // - 唯一例外：那个 crew 还一个 run 都没选中（`selectedRunId == nil`）时选中它，
         //   否则右栏一片空白 —— 没有「正在看的东西」可打断，谈不上抢（与 #40 同一个口子）。
+        run.cliMaintenanceLease = cliLease
         runs.append(run)
         let paneState = paneStates[crewId] ?? PaneState()
         switch SessionForegroundClaim.decide(
@@ -2717,6 +2720,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         bellRevision += 1
     }
 
+    var cliMaintenanceLease: AgentCLIMaintenanceLease?
     @Published private(set) var status: Status = .running
     @Published private(set) var exitCode: Int32?
     /// 终止原因（Todo #10 ①）：finalize 时由 `SessionExitReason.classify` 算出。
@@ -2897,7 +2901,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
                 if h != nil { self.healthAt = Date() }
                 // 后端宣布恢复（health 归 nil）→ 把额度类首报重新武装：下次真撞墙
                 // 还要能再喊一次，否则「每 Kind 只喊一次」会让恢复后的再撞墙静音。
-                if h == nil { self.announcedHealthKinds.subtract([.usageLimit, .rateLimited]) }
+                if h == nil { self.announcedHealthKinds.subtract([.usageLimit, .rateLimited, .cliVersionIncompatible, .turnFailed]) }
                 guard let h else { continue }
                 self.announce(h)
             }
@@ -3152,6 +3156,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     private func finalize(exitCode: Int32?) {
         guard !finalized else { return }
         finalized = true
+        cliMaintenanceLease = nil
         // 兜底补报（#541）：下面要收掉 health 观察，而后端翻 health 与翻 status
         // 是两次独立发布 —— 拉起失败那条若还没被观察循环取到就会连同观察一起被
         // 收走，白板永远等不到告警。这里直读后端当前 health 补一次（announce 去重）。

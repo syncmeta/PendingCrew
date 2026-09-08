@@ -128,6 +128,8 @@ final class QuotaCenter: ObservableObject {
 
     /// `claude -p "/usage"`：resolve 不到 claude / 超时 / 输出解析不出 → nil。
     nonisolated private static func fetchClaude(configURL: URL) async -> AgentQuotaSnapshot? {
+        guard let cliLease = try? AgentCLIMaintenanceLease.acquire(.claudeCode, exclusive: false) else { return nil }
+        defer { withExtendedLifetime(cliLease) {} }
         guard let exe = LocalCodingAgentExecutable.resolve(.claudeCode) else { return nil }
         let text: String? = await Task.detached(priority: .utility) {
             let p = Process()
@@ -169,6 +171,8 @@ final class QuotaCenter: ObservableObject {
     /// 只读一句、不开 thread、不发 turn —— **不烧额度**（跟 claude 的 `/usage`
     /// 一样是本地控制面查询）。
     nonisolated private static func fetchCodexLive() async -> AgentQuotaSnapshot? {
+        guard let cliLease = try? AgentCLIMaintenanceLease.acquire(.codex, exclusive: false) else { return nil }
+        defer { withExtendedLifetime(cliLease) {} }
         guard let exe = LocalCodingAgentExecutable.resolve(.codex) else { return nil }
         return await Task.detached(priority: .utility) { () -> AgentQuotaSnapshot? in
             let p = Process()

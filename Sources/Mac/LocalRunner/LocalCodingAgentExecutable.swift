@@ -145,22 +145,32 @@ public enum LocalCodingAgentExecutable {
     }
 
     /// 纯逻辑（可单测）：版本目录名 → bin 目录列表，**新版在前**。
-    /// 版本号按数值分段比较，不能用字符串序 —— 字符串序会把 "v9.0.0" 排在
-    /// "v22.14.0" 前面，于是老版本 node 抢在新版前面进 PATH。
-    static func versionedNodeBinDirs(
-        root: String, versions: [String], binSubpath: String
-    ) -> [String] {
-        versions
-            .sorted { versionComponents($0).lexicographicallyPrecedes(versionComponents($1)) }
-            .reversed()
-            .map { "\(root)/\($0)/\(binSubpath)" }
+    static func versionedNodeBinDirs(root: String, versions: [String], binSubpath: String) -> [String] {
+        versions.sorted {
+            (versionComponents($0) ?? []).lexicographicallyPrecedes(versionComponents($1) ?? [])
+        }.reversed().map { "\(root)/\($0)/\(binSubpath)" }
     }
 
-    /// "v22.14.0" → [22, 14, 0]。解不出的段当 0（宁可排前后错一点，也别崩）。
-    private static func versionComponents(_ raw: String) -> [Int] {
-        raw.drop(while: { !$0.isNumber })
-            .split(separator: ".")
-            .map { Int($0.prefix(while: { $0.isNumber })) ?? 0 }
+    /// Shared numeric parser for installed CLI versions and versioned node directories.
+    /// Release tooling compares these numeric segments with missing segments padded with 0
+    /// (scripts/release/build-macos-update.sh version_gt); reject unknown suffixes here.
+    static func versionComponents(_ raw: String) -> [Int]? {
+        let value = raw.hasPrefix("v") ? String(raw.dropFirst()) : raw
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy { $0 >= 48 && $0 <= 57 } }) else { return nil }
+        let numbers = parts.compactMap { Int($0) }
+        return numbers.count == parts.count ? numbers : nil
+    }
+
+    /// Strip the CLI's presentation envelope; numeric parsing has one owner above.
+    static func cliVersion(_ output: String) -> String? {
+        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw: String
+        if value.hasPrefix("codex-cli ") { raw = String(value.dropFirst("codex-cli ".count)) }
+        else if value.hasSuffix(" (Claude Code)") { raw = String(value.dropLast(" (Claude Code)".count)) }
+        else { raw = value }
+        guard !raw.hasPrefix("v"), let parts = versionComponents(raw), parts.count == 3 else { return nil }
+        return raw
     }
 
     private static func subdirectories(of path: String) -> [String] {
@@ -179,34 +189,19 @@ public enum LocalCodingAgentExecutable {
     private static let sentinelClose = ":PCREW_PATH>>>"
 
     private static func loginShellPath() -> String? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shell)
-        // `-l` 登录（source .zprofile / .profile）+ `-i` 交互（source .zshrc）——
-        // PATH 扩展两处都可能在。`-c` 传命令后 shell 跑完即退，不会阻塞等 tty 输入。
-        // 用哨兵包住 $PATH，再从 stdout 里摘 —— 交互式 rc 偶尔往 stdout 吐东西。
-        // `printf` 用绝对路径，避免依赖刚要解析的那个 PATH。
-        process.arguments = [
-            "-lic",
-            "/usr/bin/printf '\(sentinelOpen)%s\(sentinelClose)' \"$PATH\"",
-        ]
-        let stdoutPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = Pipe()  // 丢弃 rc 噪声
-        // 不覆盖 environment：继承一个 sane 基底（TERM/USER/HOME 等），让登录 shell
-        // 在其上按用户 rc 重建 PATH（rc 里的 `export PATH="$HOME/.local/bin:$PATH"`
-        // 这种前置式扩展无论基底 PATH 长短都会把 ~/.local/bin 带进来）。
+        loginShellPath(shell: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", timeout: 5)
+    }
 
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-
-        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let out = String(data: data, encoding: .utf8) ?? ""
+    /// A shell rc file may block or fill stderr. Use the bounded command runner,
+    /// with the inherited environment to avoid recursing into childProcessPath.
+    static func loginShellPath(shell: String, timeout: TimeInterval) -> String? {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pcrew-path-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        guard let result = try? AgentCLICommand.run(URL(fileURLWithPath: shell), [
+            "-lic", "/usr/bin/printf '\(sentinelOpen)%s\(sentinelClose)' \"$PATH\"",
+        ], timeout, directory: directory, environment: ProcessInfo.processInfo.environment),
+              result.status == 0 else { return nil }
+        let out = result.output
         guard let lo = out.range(of: sentinelOpen)?.upperBound,
               let hi = out.range(of: sentinelClose, range: lo..<out.endIndex)?.lowerBound
         else { return nil }
