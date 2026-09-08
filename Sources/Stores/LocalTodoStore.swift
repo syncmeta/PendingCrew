@@ -196,8 +196,51 @@ final class LocalTodoStore: @unchecked Sendable {
     // MARK: - Read
 
     /// 活着的条目（删掉的墓碑行不出现在任何 UI / MCP 视图里）。
+    /// 活着的条目。**读不出来时返回空表** —— 这是历史行为，几十个调用点都按它写的，
+    /// 这一笔不动它。要区分「真的没有」和「读不到」的调用方走 `read(crewId:)`
+    /// （判「有没有事要做」的那类路径**必须**走那条，理由见 `LedgerRead`）。
     func list(crewId: String) -> [LocalTodoItem] {
-        withFileLock(crewId) { loadLocked(crewId).filter { !$0.isDeleted } }
+        if case let .rows(rows) = read(crewId: crewId) { return rows }
+        return []
+    }
+
+    /// 一次读的结果 —— **三态里的后两态**（真空 / 读不到）不许再压成同一个空数组。
+    ///
+    /// 病根（2026-09-08 由「机长空闲核账」那条路暴露）：`list(crewId:)` 把
+    /// `loadLocked` 的失败压成 `[]`，于是「这本账一条未完成都没有」和「这本账这次
+    /// 读不出来」在调用方眼里长得**一模一样**。判「有没有事要做」的那条路照着空表
+    /// 一算，就会在账本坏掉时**安静地说没事**。
+    ///
+    /// **要澄清一件事**：`MultiProcessJSONStore.LedgerIncident.unreadable`
+    /// （`MultiProcessJSONStore.swift` 里那个枚举）**一直都在**，`loadLocked` 也一直
+    /// 在收它、往白板报它 —— 只有**写**路径拿它做判断（`refuseUnsafeEmptyRewrite`），
+    /// **读**路径把它扔了。所以这从来不是「store 缺一个返回形状」，是**三态压成了一个值**。
+    /// 我第一次报这个缺口时归因归错了，而错的那个方向（"要改 store 的返回形状"）
+    /// 听起来是大改，正好会让它一直排不上。
+    enum LedgerRead: Equatable {
+        case rows([LocalTodoItem])
+        /// 这次没读到可信内容。**任何一种事故都算** —— `.unreadable`（打不开）、
+        /// `.misread`（读到空但文件非空）、`.corrupt`（解不开、已归档）。
+        /// 三种的共同点就是「此刻这本账的内容不可信」，而调用方要的正是这一位。
+        case unreadable
+    }
+
+    /// 跟 `list` 是**同一条读**（同一把锁、同一个解码、同一份事故上报），
+    /// 区别只在于**把「读不出来」交还给调用方**，而不是压成空表。
+    ///
+    /// 没有新造第三种读法：底下仍然是 `MultiProcessJSONStore.loadRowsLocked`
+    /// 加它本来就有的 `onIncident`，这里只是顺手把「响过没有」记下来。
+    func read(crewId: String) -> LedgerRead {
+        withFileLock(crewId) {
+            var hadIncident = false
+            let rows = MultiProcessJSONStore.loadRowsLocked(
+                LocalTodoItem.self, at: fileURL(crewId),
+                onIncident: { incident in
+                    hadIncident = true
+                    self.reportIncident(crewId: crewId, incident)
+                })
+            return hadIncident ? .unreadable : .rows(rows.filter { !$0.isDeleted })
+        }
     }
 
     func item(crewId: String, number: Int) -> LocalTodoItem? {

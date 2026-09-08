@@ -55,6 +55,16 @@ enum CaptainTodoSweep {
         let openNumbers: [Int]
     }
 
+    /// 账本这一眼读到了什么。**三态（有 / 真空 / 读不到），不许压成 `Set<Int>`。**
+    ///
+    /// 第一版这里就是 `Set<Int>`，于是「读不出来」只能被当成空集，判定照着空集一算
+    /// 就**安静地说没事** —— 一条存在意义就是「不让沉默发生」的通道，自己在读失败时
+    /// 沉默了。那是自我否定，不是保守失败。
+    enum LedgerSnapshot: Equatable {
+        case read(Set<Int>)
+        case unreadable
+    }
+
     enum Decision: Equatable {
         /// 不提醒。附一句人话的理由 —— 这条会进日志/回执，说不清为什么闭嘴的机制
         /// 没法被信任，也没法被调试。
@@ -102,8 +112,23 @@ enum CaptainTodoSweep {
     /// - `confirmation`: 上一次被接受的确认（没有 = 从没确认过）。
     /// - `lastRemindedAt`: 上一次真的提醒过的时刻（防抖用）。
     /// - `minimumInterval`: 两次提醒之间的地板间隔。
-    static func decide(open: Set<Int>, confirmation: Confirmation?, lastRemindedAt: Date?,
+    static func decide(open snapshot: LedgerSnapshot, confirmation: Confirmation?,
+                       lastRemindedAt: Date?,
                        now: Date, minimumInterval: TimeInterval) -> Decision {
+        // 读不出来 → **提醒，不静默**（机长 2026-09-08 裁定）。
+        // 静默的代价是「账上可能挂着一堆而没人知道」，提醒的代价只是多问一句。
+        //
+        // 两件事刻意不同于正常路径：
+        // - **有过确认也不管用**：确认覆盖的是**某一批具体条目**，而现在根本不知道
+        //   有哪些条目，拿旧确认去盖一次读失败等于用过期的账销今天的号。
+        // - **地板间隔仍然管用**：一本一直读不出来的账，不该在每次空闲抖动时都刷屏。
+        if case .unreadable = snapshot {
+            if let lastRemindedAt, now.timeIntervalSince(lastRemindedAt) < minimumInterval {
+                return .silent("账本读不出来，但刚提醒过，还没到最短间隔")
+            }
+            return .remind(unreadableText)
+        }
+        guard case let .read(open) = snapshot else { return .silent("不可达") }
         // ① 一条未完成都没有 —— 没什么可问的。**一条永远报「已知没事」的提醒会训练
         // 人忽略整个通道**，所以这里必须真闭嘴，而不是发一条「都做完了，很好」。
         guard !open.isEmpty else { return .silent("这本账没有未完成条目") }
@@ -123,6 +148,16 @@ enum CaptainTodoSweep {
         let uncovered = confirmation.map { open.subtracting($0.openNumbers) } ?? open
         return .remind(text(open: open, uncovered: uncovered.sorted()))
     }
+
+    /// 读不出来时说的话。**刻意不提 `confirm_todo_sweep`** —— 机长此刻交不出账，
+    /// 那条建议只会让它撞墙，然后学会忽略整条提醒。
+    private static let unreadableText = """
+    你停下来了，但**这本 Todo 账这次读不出来** —— 所以我没法告诉你还剩几条没做。
+
+    这不是「没事了」：账上可能挂着一堆，只是这一刻看不见。群聊白板上应该有一条系统警示说明是哪种事故（打不开 / 读到空但文件非空 / 解不开已归档）。
+
+    先把账弄回可读，再回来核。**在那之前这条提醒会按最短间隔继续问你** —— 一条存在意义就是不让沉默发生的通道，不该在自己读失败时先沉默下去。
+    """
 
     private static func text(open: Set<Int>, uncovered: [Int]) -> String {
         let newlyLine = uncovered.count == open.count

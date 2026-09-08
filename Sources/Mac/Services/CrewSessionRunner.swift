@@ -378,13 +378,20 @@ final class CrewSessionRunner: ObservableObject {
     private func remindCaptainToSweepTodos(_ run: CrewSessionRun) {
         guard run.role == .captain, run.kind.isAgent else { return }
         let crewId = run.crewId
-        let open = Set(LocalTodoStore.shared(.agent).list(crewId: crewId)
-            .filter { !$0.isDeleted && $0.status != "completed" }
-            .map(\.number))
+        // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是「一条未完成
+        // 都没有」和「这本账读不出来」在这里长得一模一样，机制会在账本坏掉时安静
+        // 地说没事。信号（`LedgerIncident.unreadable`）一直都在，只是 `list` 扔了它。
+        let snapshot: CaptainTodoSweep.LedgerSnapshot
+        switch LocalTodoStore.shared(.agent).read(crewId: crewId) {
+        case let .rows(rows):
+            snapshot = .read(Set(rows.filter { $0.status != "completed" }.map(\.number)))
+        case .unreadable:
+            snapshot = .unreadable
+        }
         let stored = CaptainTodoSweepStore.shared.row(crewId: crewId)
         let now = Date()
         guard case let .remind(text) = CaptainTodoSweep.decide(
-            open: open,
+            open: snapshot,
             confirmation: stored.confirmation,
             lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
             now: now,
