@@ -41,6 +41,34 @@ enum LocalSessionLaunch {
     /// helper = `Bundle.main.executablePath`（re-exec self：app 二进制兼当 helper，最自包含、
     /// 免 embed）；白板 dir = `LocalWhiteboardStore.defaultDirectory`（与 app/store 同一份）。
     /// 接合 v2：comms 恒为本地，不再按 mode 跳过。任一步失败 → 对应 nil（session 仍启动，少 comms）。
+    ///
+    /// ## ⚠️ 同一个 app 的两条腿，换新代码的时机**不一样** —— 2026-09-08 咬过两次
+    ///
+    /// 下面写进 session 配置的 `helper` 是 **`Bundle.main.executablePath`，一个固定路径**
+    /// （`/Applications/PendingCrew.app/Contents/MacOS/PendingCrew`），不带版本、不带哈希。
+    /// 装新版 = 把那个路径上的文件换掉。于是：
+    ///
+    /// - **`--mcp-hook`（每轮注入白板那条）：每次工具调用现 spawn。**
+    ///   文件一被换掉，**下一次工具调用就跑新代码**，不用重启 session。
+    /// - **`--mcp-serve`（`post_to_crew` / `read_whiteboard` 等所有 crew 工具住在这儿）：
+    ///   一个 session 一个进程，claude 起来时 spawn 一次、之后一直活着。**
+    ///   ⇒ **改了 MCP 的对外契约（工具参数、enum、校验），对已经在跑的 session 不生效**，
+    ///   要等那个 session 的 helper 进程被重起。**「合并即生效」是错的。**
+    ///
+    /// 实测（2026-09-08）：12 个在跑的 helper 全部指向那个固定路径，启动时刻都晚于
+    /// 二进制的 mtime（0.1.27 换进去那一刻）——也就是说它们跑的是当前二进制。
+    ///
+    /// ### 所以：**装版就是收口点**
+    ///
+    /// 装新版本身会重起后台、打断所有 session，而 **session 不跨 app 重启存活**。
+    /// 要把一个 MCP 契约改动「收口」（比如把某个可选参数翻成必填），安全时刻就是
+    /// **改动发出去之后的第一次装版之后** —— 那一刻不存在「还有几个老 helper 挂着」
+    /// 的长尾，它们全被那次重启带走了。**不必挑安静时刻等自然换代：这是一个我们自己
+    /// 按得下去的开关。**
+    ///
+    /// 咬过的两次：`reply_to` 的自动 @ 在仓库里修好了但旧 helper 上完全不生效
+    /// （回执还照样回「已发到」）；`post_to_crew` 的 `category` enum 改造（人类 Todo #115）
+    /// 差点按「合并即生效」去排时间点。
     static func prepareLocalCommsConfig(
         crewId: String, sessionId: String, captain: Bool = false, label: String? = nil
     ) -> (settings: String?, mcp: String?) {
