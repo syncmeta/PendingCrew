@@ -51,8 +51,22 @@ final class CrewMessageCategoryTests: XCTestCase {
     ///
     /// **所以出路要写进错误信息本身，不写进文档** —— 读到它的是一个正在写下一句话的
     /// agent，它需要的是下一步，不是诊断。
-    func test_进度缺计划号时错误信息要给出路而不只是报缺什么() {
-        guard case let .refuse(msg) = decide("progress") else {
+    /// ⚠️ `progress` 是**旧 enum 里本来就有的值**，在跑的 session 正在用它。
+    /// 所以缺参数时它**降级成「不落账 + 提醒」，而不是失败** —— 第一步不许炸任何人。
+    /// （第一版直接 refuse，当场打挂了 `McpServerTests.testPostToCrewWritesWhiteboard`，
+    /// 那条用例发的就是 `category: "progress"` 且不带计划号 —— **它替所有在跑的
+    /// session 挡了这一下**。）
+    func test_旧值progress缺计划号时降级不失败() {
+        guard case let .skipped(hint) = decide("progress") else {
+            return XCTFail("旧值因为缺参数失败了 —— 在跑的 session 会开始咽掉汇报")
+        }
+        XCTAssertTrue(hint.contains("没有落进账本"), hint)
+        XCTAssertTrue(hint.contains("finding"), "降级也要给出路：\(hint)")
+    }
+
+    /// 新值（旧 enum 里没有的）缺参数就该直接拒 —— 没有在跑的 session 在用它们。
+    func test_新值缺参数时错误信息要给出路而不只是报缺什么() {
+        guard case let .refuse(msg) = decide("done") else {
             return XCTFail("缺 plan 号却放行了 —— 那条进度会落到不知道哪条计划上")
         }
         XCTAssertTrue(msg.contains("plan"), "没说缺哪个参数：\(msg)")

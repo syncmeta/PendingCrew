@@ -663,6 +663,68 @@ final class McpServer {
             // agent 以为自己点名了，一个 mention 都没长出来，回执照样回「已发到」，
             // 然后它安心等一个永远不会醒的人。
             let mentions = mentionsWithReplyAutoMention(given, replyTo: replyTo)
+            // ── #115/#120：分类**真的驱动落账** ────────────────────────────────
+            //
+            // 人类原话的根：「不然第一 todo、cockpit等等不能及时更新」。做成一个
+            // 标签颜色 = 白做，所以这里必须真的去写那本账。
+            //
+            // **顺序照 `TodoLandingFlow` 写死的那条：落账 → 发群，一步都不许跳。**
+            // 这一单最坏的结果不是「落账失败」，是**消息发出去了、账没落上** ——
+            // 那比现在还糟，因为人会**以为**账更新了。所以下面每一处失败都是
+            // `return`，消息一个字都不发。
+            //
+            // 驾驶舱那四类（plan/progress/blocked/done）**这一笔还没接** ——
+            // `plan_add`/`plan_update` 现在是 `guard isCaptain`，worker 标了会被直接
+            // 拒；权限拆分（报进度的人 ≠ 决定条目存不存在的人）是下一笔。
+            var ledgerReceipts: [String] = []
+            switch CrewCategoryRouting.decide(category: args["category"] as? String, args: args) {
+            case let .refuse(why):
+                return toolResult(id: id, text: "ERROR: " + why)
+            case .land(.humanTodo):
+                guard let added = humanTodos.add(crewId: crewId, text: message,
+                                                 bySessionId: sessionId,
+                                                 bySenderName: sessionLabel) else {
+                    return toolResult(id: id, text: "ERROR: 人类 Todo 那本账这次写不进去，"
+                        + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
+                        + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
+                }
+                ledgerReceipts.append("已建 人类 Todo #\(added.number)（人在面板里点得进去、撤得掉）")
+            case let .skipped(hint):
+                // 不落账，但**回执里说清楚它没落**——静默跳过就是这一单要治的病本身。
+                ledgerReceipts.append("⚠️ " + hint)
+            case .land, .noLedger:
+                break
+            }
+            // #120：Todo 号是**独立参数**，跟 category 正交 —— 一条消息可能既是进度、
+            // 又对应一条 Todo，绑在某个分类上只会让写的人纠结「这算哪一类」。
+            switch CrewMessageTodoLink.decide(args: args) {
+            case let .refuse(why):
+                return toolResult(id: id, text: "ERROR: " + why)
+            case .none:
+                break
+            case let .update(number, status):
+                // ⚠️ 凭据闸走**原来那一份**（`judgeCompletionEvidence` 会当场解析
+                // commit）。`CrewMessageTodoLink` 只查了「有没有给」——
+                // 拿它的绿当凭据验过了，那道用 191 小时假账换来的闸就被放宽了。
+                if status == "completed" {
+                    switch judgeCompletionEvidence(args: args) {
+                    case .commitResolved, .prose:
+                        break
+                    case .malformedCommit, .commitNotFound, .cannotVerify, .missing:
+                        return toolResult(id: id, text: "ERROR: 要把 Todo #\(number) 挂成"
+                            + "「完成」，凭据这一关没过（`evidence_commit` 会被当场解析）。"
+                            + "**这条消息也没有发出去。** 还没做完就先挂 `in_progress`，"
+                            + "做完拿到凭据再来。")
+                    }
+                }
+                guard let updated = todos.respond(
+                    crewId: crewId, number: number, sessionId: sessionId,
+                    senderName: sessionLabel, text: message, newStatus: status) else {
+                    return toolResult(id: id, text: "ERROR: Todo #\(number) 没更新成"
+                        + "（这本账上没有这条，或者这次读不出来）。**这条消息也没有发出去。**")
+                }
+                ledgerReceipts.append("已把 Todo #\(updated.number) 翻成 \(status)")
+            }
             // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
             // 当头像种子（成员列表与气泡同一张脸），并点亮星标。
             //
@@ -679,12 +741,14 @@ final class McpServer {
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
                 // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
                 // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
+                let base = Self.postReceipt(
+                    incident: incident,
+                    attachmentCount: intake.accepted.count,
+                    attachmentErrors: intake.errors)
+                // 落账结果必须进回执：**「落账可撤」的前提是先让人知道它落了哪一条。**
                 return toolResult(
                     id: id,
-                    text: Self.postReceipt(
-                        incident: incident,
-                        attachmentCount: intake.accepted.count,
-                        attachmentErrors: intake.errors))
+                    text: ([base] + ledgerReceipts).joined(separator: "\n"))
             } catch {
                 return toolResult(id: id, text: Self.writeFailureReceipt(error))
             }

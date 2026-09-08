@@ -77,7 +77,18 @@ enum CrewCategoryRouting {
         case land(CrewMessageCategory)
         /// 拒绝，并把这句话原样回给调用方。
         case refuse(String)
+        /// **不落账，但回执里要提醒一句。** 专给「旧 enum 里本来就有、现在多要一个
+        /// 参数」的那几个值（`progress` / `question`）——
+        /// 在跑的 session 正在用它们，第一步**不许因为缺参数就让它们失败**。
+        case skipped(hint: String)
     }
+
+    /// 旧 enum 里本来就存在的三个值。**它们此刻正被在跑的 session 使用**
+    /// （`--mcp-serve` 一 session 一进程，改了 enum 对它们不生效），
+    /// 所以第一步**绝不能因为「现在多要一个参数」就让它们开始失败** ——
+    /// 有的 agent 会把失败读成「这条不该发」然后静默咽掉，
+    /// 而咽掉的正是人类最需要看到的汇报。缺参数时降级成「不落账 + 提醒一句」。
+    static let legacyValues: Set<String> = ["progress", "question", "milestone"]
 
     /// - Parameters:
     ///   - category: `post_to_crew` 传进来的分类。**第一步它仍是可选的** ——
@@ -105,6 +116,12 @@ enum CrewCategoryRouting {
                 + "或 `note`（其它）。")
         }
         for req in requirements(of: category) where args[req.key] == nil {
+            // **旧值不许因为缺参数而失败**（见 `legacyValues`）：降级成不落账 + 提醒。
+            // 收口（缺参数就拒）留到装版之后 —— 那时所有 session 都在新 helper 上。
+            if legacyValues.contains(raw) {
+                return .skipped(hint: "这条标了 `\(raw)` 但没给 `\(req.key)`，"
+                    + "所以**没有落进账本**（消息照常发出去了）。\n" + req.message)
+            }
             return .refuse(req.message)
         }
         // 不落账的那几类到此为止 —— 红测就是在这儿逮到我的：原来它们也走到了
