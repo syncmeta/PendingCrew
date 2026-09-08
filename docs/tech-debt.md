@@ -42,6 +42,35 @@
 
 ---
 
+### ✅ 产品不再写任何目录信任位（**2026-09-08 人类裁定，已拆**）
+
+- **裁定**: 产品**一个信任键都不写** —— `~/.claude.json` 的 `hasTrustDialogAccepted`、
+  `~/.codex/config.toml` 的 `trust_level`，两个都不写，**迁移那条路也不写**。
+  检测允许（只读），写不允许。未信任时**弹一个提示**，把要跑的命令原样给人。
+- **理由（钉在这儿，免得以后有人翻回来）**: 信任的单位是路径，那是 claude / codex
+  两家定的规矩，不是我们定的。人对 `/a` 点的那一下头，我们复制到 `/b`，`/b` 那份授权
+  就是**我们**签的，不是他签的。「搬」这个动词听起来像守恒，其实凭空多了一份。
+- **拆了什么**: 整套补种器（`ClaudeTrustSeedPlan` / `ClaudeTrustSeeder` 及其两个测试
+  文件、`CreateCrewSheet` 的调用点与回执）；迁移那半的 `Action.copyCodexTrust` /
+  `addCodexTrust` / `Skip.codexTrustSourceMissing` / `codexTrustTargetExists` /
+  `Probe.codexTrustLevel` / `Receipt.codexTrustCopied` / `loadCodexTrustLevels` /
+  `codexConfigURL`（连带备份名单里的 `config.toml` 与 `import TOMLKit`）；
+  `claudeSettingsKeys` 里的 `hasTrustDialogAccepted`。
+- **加了什么**: `WorkdirTrustPrompt`（只读检测 + **唯一一份**提示文案）与
+  `WorkdirTrustPromptView`。建 crew、界面迁移、机长 `change_workdir` 三条路
+  **共用同一份文案** —— 上一轮刚栽过「同一句话散在三处、改了两处漏一处」。
+- **为什么留着断言而不是只删代码**: 「显式选择不做」和「不小心漏了」在代码上长得
+  一模一样，在半年后长得完全不一样。所以 `neverWrittenClaudeKeys` 显式列着它、
+  执行层即使被点名要也挡掉，`TrustNeverWrittenTests` 五条钉住这件事。
+- **文案里不许写死那个信任框长什么样**：编号、选项顺序、默认高亮由上游说了算，
+  2026 年 8 月底到 9 月初的 11 天里整个换过一版。有测试钉着
+  （`test_文案不描述那个信任框的形状`）。
+- **诚实的那一栏**: 迁到新目录后，新目录**确实**没被信任 —— 那里的第一个 session 会
+  停在自己的信任确认上等人。这不是回归，是我们不再替人签字的**已知代价**，
+  提示里把命令给了人。
+
+---
+
 ### 🟡 iOS 的 LaunchAgent 拷贝没有尺子挡着，而且它躲在编译错误后面
 
 - **发现**: 2026-09-07 · 修 #110 顺手修 main 上的 iOS 红时撞出来的。
@@ -986,7 +1015,8 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
   才报 `No conversation found with session ID: <id>`。官方 `--help` 划的是同一条界：
   `--continue` 写明 *in the current directory*，`--resume` 一个字都没提目录。
   **搬它零功能收益。** 完整查实见 `docs/internal/2026-08-26-session-resume-workdir-evaluation.md`。
-- **必须留，别一起删**: `copyClaudeProjectSettings`（`~/.claude.json` 的
+- **必须留，别一起删**（⚠️ **2026-09-08 被推翻了一半，见下面那条**）:
+  `copyClaudeProjectSettings`（`~/.claude.json` 的
   `projects["<绝对路径>"]` 信任条目）、`copyCodexTrust`（`~/.codex/config.toml` 的
   `trust_level`）、`copyClaudeMemoryFile`、`setCrewWorkingDirectory`。**这四样跟记不记
   工作目录完全无关** —— 少了第一条，新目录下第一个 session 会**挂在**信任提示上

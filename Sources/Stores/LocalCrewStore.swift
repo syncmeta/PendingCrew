@@ -125,7 +125,7 @@ final class LocalCrewStore {
     /// `loadFromDisk` 只在启动跑一次，手改 JSON 会被 `persistToDisk` 整份覆写掉，
     /// 这就是必须有这个入口的原因。
     ///
-    /// 只改字段。agent 侧上下文（claude 的会话日志 / 项目记忆、两家的目录信任与权限）
+    /// 只改字段。agent 侧上下文（claude 的会话日志 / 项目记忆、工具权限）
     /// 按路径分家，要一起搬 —— 那套规划与执行在 `WorkdirMigrationPlan` /
     /// `WorkdirMigrationExecutor`，由 UI 编排（先预览再执行），这里不代劳。
     ///

@@ -25,8 +25,7 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     private func probe(existing: Set<String> = [], directories: Set<String> = [],
                        memory: [String] = [],
                        claudeSource: Set<String> = [], claudeTarget: Set<String> = [],
-                       claudeSourceExists: Bool = true, claudeTargetExists: Bool = true,
-                       codexOld: String? = "trusted", codexNew: String? = nil)
+                       claudeSourceExists: Bool = true, claudeTargetExists: Bool = true)
         -> WorkdirMigrationPlan.Probe {
         let newDir = self.newDir
         let dirs = directories.union([newDir])
@@ -44,8 +43,7 @@ final class WorkdirMigrationPlanTests: XCTestCase {
                     return .init(exists: claudeTargetExists, meaningfulKeys: claudeTarget)
                 }
                 return .init()
-            },
-            codexTrustLevel: { $0 == self.oldDir ? codexOld : ($0 == self.newDir ? codexNew : nil) })
+            })
     }
 
     private func inputs(crews: [WorkdirMigrationPlan.CrewInput],
@@ -283,7 +281,7 @@ final class WorkdirMigrationPlanTests: XCTestCase {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)]),
             probe: probe(directories: [oldProjectDir + "/memory"],
-                         memory: ["m.md"], claudeSource: ["hasTrustDialogAccepted"]))
+                         memory: ["m.md"], claudeSource: ["allowedTools"]))
         guard case .setCrewWorkingDirectory = p.actions.last else {
             return XCTFail("最后一个动作应该是改 crew 字段，实际是 \(String(describing: p.actions.last))")
         }
@@ -295,21 +293,21 @@ final class WorkdirMigrationPlanTests: XCTestCase {
     // MARK: - claude.json 的按键合并
 
     /// 新路径**已有条目但没接受过信任**是真实存在的状态（实测）。整条「已存在就跳过」
-    /// 会把信任弹框留着卡人，所以按键补：缺的补、已有实质值的不动。
+    /// 会把该补的权限漏掉，所以按键补：缺的补、已有实质值的不动。
     func testClaudeSettingsMergePerKey() {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)]),
-            probe: probe(claudeSource: ["hasTrustDialogAccepted", "allowedTools"],
+            probe: probe(claudeSource: ["allowedTools", "mcpServers"],
                          claudeTarget: ["allowedTools"]))
         XCTAssertTrue(p.actions.contains(.copyClaudeProjectSettings(
-            fromPath: oldDir, toPath: newDir, keys: ["hasTrustDialogAccepted"])))
+            fromPath: oldDir, toPath: newDir, keys: ["mcpServers"])))
     }
 
     func testClaudeSettingsSkippedWhenTargetAlreadyComplete() {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)]),
-            probe: probe(claudeSource: ["hasTrustDialogAccepted"],
-                         claudeTarget: ["hasTrustDialogAccepted"]))
+            probe: probe(claudeSource: ["allowedTools"],
+                         claudeTarget: ["allowedTools"]))
         XCTAssertTrue(p.skips.contains(.claudeProjectSettingsAlreadyComplete(path: newDir)))
     }
 
@@ -332,18 +330,18 @@ final class WorkdirMigrationPlanTests: XCTestCase {
 
     // MARK: - codex
 
-    func testCodexTrustIsAddedForNewPath() {
-        let p = WorkdirMigrationPlan.make(
-            inputs(crews: [crew("c1", "本群", dir: oldDir)]), probe: probe())
-        XCTAssertTrue(p.actions.contains(
-            .copyCodexTrust(fromPath: oldDir, toPath: newDir, trustLevel: "trusted")))
-    }
-
-    func testCodexTrustNotOverwrittenWhenNewPathAlreadyTrusted() {
+    /// codex 那半整个不在计划里了 —— 迁移不读也不写 `trust_level`。
+    /// 没信任时该做的事在 `WorkdirTrustPrompt`（只读检测 + 把命令给人）。
+    func test_计划里不再有任何codex动作() {
         let p = WorkdirMigrationPlan.make(
             inputs(crews: [crew("c1", "本群", dir: oldDir)]),
-            probe: probe(codexNew: "trusted"))
-        XCTAssertTrue(p.skips.contains(.codexTrustTargetExists(path: newDir)))
+            probe: probe(claudeSource: ["allowedTools"]))
+        for action in p.actions {
+            if case .copyClaudeProjectSettings(_, _, let keys) = action {
+                XCTAssertFalse(keys.contains("hasTrustDialogAccepted"))
+            }
+        }
+        XCTAssertFalse(WorkdirMigrationPlan.claudeSettingsKeys.contains("hasTrustDialogAccepted"))
     }
 }
 
