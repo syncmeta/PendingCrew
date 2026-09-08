@@ -350,7 +350,48 @@ final class CrewSessionRunner: ObservableObject {
             \(lease.note)
             先核对当前状态再继续；若这一轮结束时仍有可立即推进的工作，需重新调用 continue_work。已完成、阻塞或等外部输入则不要续约。
             """)
+            return
         }
+        remindCaptainToSweepTodos(run)
+    }
+
+    /// 机长停下来了 —— 问它一句账（驾驶舱计划 #71）。
+    ///
+    /// 人类原话：「不要新给 todo 的时候看。如果机长休眠不干活，pendingcrew 就提醒一次
+    /// 看 todo，直到机长确认 都做完了 或者卡在人类这边 明确输出确认应该停止 再停」。
+    ///
+    /// **位置是有讲究的：这一句必须排在最后。** 上面那两条（补投的唤醒、`continue_work`
+    /// 的续跑承诺）都是**真活**；只要它们认领了这个空闲窗口，就说明机长并不是「以为
+    /// 没事干了」，此刻问账只是打断。落到这里才是那个该被质问的时刻。
+    ///
+    /// 三条硬约束，跟 `fireSupervisionLease` 同一套纪律：
+    /// 1. **只叫机长自己**（`role == .captain`），不广播、不碰 worker。
+    /// 2. **一个字都不写白板** —— 白板是给人看的，不是闹钟。
+    /// 3. **没有「我知道了」出口**：闭嘴的唯一路径是 `confirm_todo_sweep` 交一份能跟
+    ///    真账本逐条对上的账（判定见 `CaptainTodoSweep`）。
+    ///
+    /// ⚠️ **「空闲」这个判据本身不可靠**（本机账本实测：显示空闲有四种完全不同的情况
+    /// —— 做完没报 / API 中断停在提示符 / 卡在阻塞框 / 真在等）。这里**不打算**去分辨
+    /// 它们，因为这条提醒对四种情况都是对的：真在等的该核账；卡住/中断的更该被叫一声。
+    /// 代价是**卡在阻塞框的那种它答不了**，于是会按地板间隔再问 —— 那正是希望的行为
+    /// （一直有人问，直到有人来管），不是缺陷。
+    private func remindCaptainToSweepTodos(_ run: CrewSessionRun) {
+        guard run.role == .captain, run.kind.isAgent else { return }
+        let crewId = run.crewId
+        let open = Set(LocalTodoStore.shared(.agent).list(crewId: crewId)
+            .filter { !$0.isDeleted && $0.status != "completed" }
+            .map(\.number))
+        let stored = CaptainTodoSweepStore.shared.row(crewId: crewId)
+        let now = Date()
+        guard case let .remind(text) = CaptainTodoSweep.decide(
+            open: open,
+            confirmation: stored.confirmation,
+            lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
+            now: now,
+            minimumInterval: CaptainTodoSweep.minimumRemindInterval)
+        else { return }
+        run.send(text)
+        CaptainTodoSweepStore.shared.recordReminded(crewId: crewId, at: now)
     }
 
     private func attemptWakeDelivery(

@@ -238,6 +238,11 @@ targets:
       # crew 级「最后看过」时间（UserDefaults，不进 crew 的磁盘 JSON）——
       # 上面那套算未读要的第二个参照点。纯 Foundation，自包含。
       - path: Sources/Stores/CrewViewedStore.swift
+      # 上面那套判定的一点点持久态（确认覆盖了哪批 / 上次什么时候提醒的）。
+      - path: Sources/Stores/CaptainTodoSweepStore.swift
+      # 机长空闲时回头看 Todo 账的判定（驾驶舱计划 #71）。纯 Foundation，自包含 ——
+      # 「什么时候提醒/什么时候闭嘴/确认在什么条件下被拒」全都能脱离 app 直接单测。
+      - path: Sources/Support/CaptainTodoSweep.swift
       # 侧栏拖拽改父子关系的判定层（Todo #27：禁环/移动语义/摘到顶层/负载编解码）。
       # 纯 Foundation，只依赖 CrewSummary（Sources/Models 已在 bundle）。
       - path: Sources/Support/CrewDragDropLogic.swift

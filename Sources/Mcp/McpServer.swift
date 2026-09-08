@@ -368,6 +368,26 @@ final class McpServer {
                 // 机长作战板（人类 Todo #66）—— 与两本 Todo 的关系：Todo 是**别人给的**
                 // （`.agent` 人类派活 / `.human` 请人拍板），这一本是**机长自己排的**。
                 // 派活 / 收活 / 翻牌这三个动作发生时顺手更一条，是这块板唯一的活法。
+                // 空闲核账（驾驶舱计划 #71）。它不是「又一个督办」——
+                // `supervise_after_minutes` 那套盯的是**单条计划、按超时**；
+                // 这一条盯的是**整本 Todo 账、按空闲**，两者共享纪律不共享代码
+                // （理由写在 `CaptainTodoSweep` 的注释里）。
+                tools.append([
+                    "name": "confirm_todo_sweep",
+                    "description": Self.confirmSweepDescription,
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "running": ["type": "array", "items": ["type": "integer"],
+                                        "description": "正在跑 / 有人在做的 #N。"],
+                            "blocked_on_human": ["type": "array", "items": ["type": "integer"],
+                                        "description": "卡在人类那边、你推不动的 #N。"],
+                            "queued": ["type": "array", "items": ["type": "integer"],
+                                        "description": "还没开始、排着的 #N。"],
+                            "note": ["type": "string", "description": "可选：一句话补充（不影响判定）。"],
+                        ],
+                    ],
+                ])
                 tools.append([
                     "name": "plan_add",
                     "description": "（机长专用）往**你自己的任务列表**上排一条活。这本账只有你写得动，人类只读——它是你整理出来的作战板，不是 Todo（Todo 是别人给你的）。新条目从「没做」起。派活给 worker、接下一件事、拆出一个阶段时顺手排一条；一条一句话说清做什么，别把整段 brief 塞进来。\n**把活交出去时顺手挂上 supervise_after_minutes**（督办）：到点这条还没有结果，系统会把**你**叫醒（只叫你一个，不进群、不打扰别人）。",
@@ -1171,6 +1191,29 @@ final class McpServer {
                                   senders: (senders?.isEmpty ?? true) ? nil : senders, off: false)
             let who = (senders?.isEmpty ?? true) ? "全部成员" : senders!.joined(separator: "、")
             return toolResult(id: id, text: "已开启群聊收听至 \(until)（听：\(who)）。期间无定向 @ 的新消息和 @ 你的消息会注入唤醒你；到期自动停。现在正常结束你的回合等消息即可，不要空转轮询。")
+        case "confirm_todo_sweep":
+            // 空闲核账的收尾（驾驶舱计划 #71）。**判定全在 `CaptainTodoSweep.validate`**，
+            // 这里只负责取真账、把拒绝原样说清楚、以及落一条确认。
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let sweepOpen = Set(todos.list(crewId: crewId)
+                .filter { !$0.isDeleted && $0.status != "completed" }
+                .map(\.number))
+            let sweepResult = CaptainTodoSweep.validate(
+                running: Self.intArray(args["running"]),
+                blockedOnHuman: Self.intArray(args["blocked_on_human"]),
+                queued: Self.intArray(args["queued"]),
+                open: sweepOpen)
+            if let refusal = sweepResult.refusal {
+                return toolResult(id: id, text: "ERROR: 这份账跟真账本对不上，没有记下。\n" + refusal.summary)
+            }
+            guard let sweepConfirmation = sweepResult.confirmation else {
+                return toolResult(id: id, text: "ERROR: 确认没能生成（内部状态异常），没有记下。")
+            }
+            CaptainTodoSweepStore.shared.recordConfirmation(crewId: crewId, sweepConfirmation)
+            return toolResult(id: id, text: sweepOpen.isEmpty
+                ? "记下了：这本账一条未完成都没有。空闲时不会再提醒你，直到有新条目进来。"
+                : "记下了：\(sweepOpen.count) 条未完成已逐条归桶。空闲时不再提醒你——**除非冒出没被这次覆盖过的新条目**（那时只会点名新的那几条）。")
+
         case "plan_add":
             // 机长作战板（人类 Todo #66）。门禁与其余机长工具同一道 `guard`。
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
@@ -2096,6 +2139,29 @@ final class McpServer {
     ///
     /// 措辞刻意把**解除条件**写死在参数说明里：这是整套机制唯一的出口，写在别处
     /// 都可能被略过。
+    /// `confirm_todo_sweep` 的说明。**「为什么不能只说一句都做完了」必须留在这儿**——
+    /// 机长读到的只有这段文字，把理由删成「请逐条归桶」它就只剩一条没来由的形式要求。
+    static let confirmSweepDescription = """
+    （机长专用）**回应「你停下来了，但账上还有 N 条没完成」那条提醒**——把每一条未完成的 Todo（人类派给你那本）归进一个桶，提醒才会停。
+
+    **为什么不能只说一句「都做完了」**：有过一次现场——机长一整天以为自己在推进，把账拉出来才发现 23 条未完成里 **9 条是「做完了没翻牌」**，其中两条早在两个版本前就发出去了。它自己的说法是「如果确认只需要说一句都做完了，我会毫不犹豫地说出口」。所以这里要求逐条归桶：**归不进任何桶的那一条，多半就是你早就做完了却没翻牌的那条**——去 respond_todo 把它翻掉。
+
+    三个桶的并集必须**恰好等于**当前未完成的那批，一条不多一条不少，否则整笔拒绝并告诉你差哪几条。确认之后，只要不冒出没被覆盖过的新条目，就不会再提醒你（**与过去多久无关**）。
+
+    这里没有「我知道了 / 顺延」这种动作——那种出口会让整件事退化成看一眼就算办完。
+    """
+
+    /// MCP 过来的整数数组可能是 `[Int]`，也可能是 `[Any]`（JSON 解出来的 NSNumber）。
+    /// **两种都要收** —— 只认前者的话，机长报的号会被静默当成空数组，
+    /// 于是一份认真填的确认被回「你一条都没归桶」。
+    static func intArray(_ raw: Any?) -> [Int] {
+        if let ints = raw as? [Int] { return ints }
+        if let anys = raw as? [Any] {
+            return anys.compactMap { ($0 as? Int) ?? ($0 as? NSNumber)?.intValue }
+        }
+        return []
+    }
+
     static let superviseParamDescription = "督办：过这么多分钟（\(Int(SupervisionLease.minMinutes))–\(Int(SupervisionLease.maxMinutes))）这条还没有结果，就把**你**叫醒去过问（只叫你一个，不进群、不打扰别人）。把活交出去/交接时挂上。\n**解除只有一条路：把这条翻到 done 或 blocked。** 没有「我知道了 / 已查看 / 顺延」这种动作 —— 看一眼不算有结果，所以想让它停就得把板更到有结果。仍无结果时它按 1×→2×→4×→8× 退避再叫你。已经挂着督办的计划不能重挂。"
 
     /// 把一笔督办挂上（写进控制通道，app 侧登记 + 起定时器），返回给机长看的那一行。

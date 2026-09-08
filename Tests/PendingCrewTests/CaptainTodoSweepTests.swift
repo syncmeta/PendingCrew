@@ -1,0 +1,287 @@
+import XCTest
+
+/// 机长空闲时被提醒回头看 Todo 账，**直到它给出一份对得上的账才停**（驾驶舱计划 #71）。
+///
+/// ## 人类的原话与它推翻的东西
+///
+/// > 不要新给 todo 的时候看。如果机长休眠不干活，pendingcrew 就提醒一次看 todo，
+/// > 直到机长确认 都做完了 或者卡在人类这边 明确输出确认应该停止 再停
+///
+/// 被推翻的是「新 Todo 进来时顺手回头看老账」：**新活进来是最差的触发时刻**，那时机长
+/// 最忙，会敷衍地扫一眼就过。而「空闲」是对的时刻 —— 没有别的事跟它抢，而且
+/// **空闲本身就意味着机长以为没事干了，那正是该被质问的一刻**。
+///
+/// ## 为什么确认必须带账，不能是一句「都做完了」
+///
+/// 现场（2026-09-08，机长自述）：它一整天以为自己在推进，直到人类问、把账拉出来，
+/// 才发现 **23 条未完成里有 9 条是「做完了没翻牌」**，其中两条早在 0.1.26 就发出去了。
+/// 它自己的结论是：**「如果确认只需要说一句『都做完了』，我今天会毫不犹豫地说出口。」**
+///
+/// 所以确认这一步要求把**每一条未完成的 #N 都归进一个桶**（在跑 / 卡人类 / 排队），
+/// 而且并集必须跟真账本逐个对上。**让敷衍的成本高于真查** —— 这是整个机制唯一的
+/// 承重点。归不进桶的那条，正是「其实早就做完了、只是没翻牌」的那条。
+///
+/// ## 量得到什么、量不到什么
+///
+/// **量得到**：什么时候提醒、什么时候闭嘴、确认在什么条件下被拒。全是纯判定，真跑。
+///
+/// **量不到**：机长会不会**认真**去查。这机制只保证「不查就答不上来」，
+/// 不保证它答得对 —— 一个决心糊弄的机长仍可以先 `list` 一遍再照抄。
+/// 那不是这一层能解决的，别声称它解决了。
+final class CaptainTodoSweepTests: XCTestCase {
+
+    private let now = Date(timeIntervalSince1970: 1_757_000_000)
+    private let floor: TimeInterval = 10 * 60
+
+    // MARK: - ① 空闲时提醒真的出现
+
+    func testRemindsWhenIdleWithOpenItemsAndNoConfirmation() {
+        let decision = CaptainTodoSweep.decide(
+            open: [3, 7, 12], confirmation: nil, lastRemindedAt: nil,
+            now: now, minimumInterval: floor)
+        guard case let .remind(text) = decision else {
+            return XCTFail("有 3 条未完成、从没确认过，机长却没被提醒 —— 这就是 #71 要治的那一刻")
+        }
+        XCTAssertTrue(text.contains("confirm_todo_sweep"),
+                      "提醒里没说该怎么让它停 —— 那它就只是噪音")
+        XCTAssertTrue(text.contains("3"), "提醒里没有未完成条数，机长看不出规模")
+    }
+
+    // MARK: - ② 确认之后不再提醒
+
+    func testSilentAfterAConfirmationThatCoversExactlyTheOpenSet() {
+        let confirmation = CaptainTodoSweep.Confirmation(
+            confirmedAt: Self.iso(now), openNumbers: [3, 7, 12])
+        let decision = CaptainTodoSweep.decide(
+            open: [3, 7, 12], confirmation: confirmation, lastRemindedAt: nil,
+            now: now.addingTimeInterval(3600), minimumInterval: floor)
+        XCTAssertEqual(decision.isSilent, true,
+                       "确认过、而且这批一个字没变，还在提醒 —— 那就是一条永远在响的提醒")
+    }
+
+    /// 「确认之后多久不再提醒」的答案**不是一个时长，是一个集合**。
+    /// 确认覆盖的是**那一批具体条目**；只要那批没变，隔多久都不该再响。
+    func testConfirmationDoesNotExpireByTimeAlone() {
+        let confirmation = CaptainTodoSweep.Confirmation(
+            confirmedAt: Self.iso(now), openNumbers: [3])
+        let decision = CaptainTodoSweep.decide(
+            open: [3], confirmation: confirmation, lastRemindedAt: nil,
+            now: now.addingTimeInterval(30 * 86400), minimumInterval: floor)
+        XCTAssertEqual(decision.isSilent, true,
+                       "光靠时间就把确认作废了 —— 那机长每隔一阵就要重报一次一模一样的账，正是「永远在响」")
+    }
+
+    /// 新 Todo 进来**算重置** —— 但只因为「确认没覆盖到它」，不是因为「来了新活」。
+    func testANewTodoReArmsTheReminder() {
+        let confirmation = CaptainTodoSweep.Confirmation(
+            confirmedAt: Self.iso(now), openNumbers: [3, 7])
+        let decision = CaptainTodoSweep.decide(
+            open: [3, 7, 99], confirmation: confirmation, lastRemindedAt: nil,
+            now: now.addingTimeInterval(60), minimumInterval: floor)
+        guard case let .remind(text) = decision else {
+            return XCTFail("多了一条 #99 没被任何确认覆盖过，却不提醒了")
+        }
+        XCTAssertTrue(text.contains("99"), "没点名是哪条没被确认覆盖，机长得自己再扫一遍全账")
+    }
+
+    /// 反面：条目**变少**（做完翻牌了）不该重新提醒 —— 那是好事，不是新情况。
+    func testFinishingItemsDoesNotReArm() {
+        let confirmation = CaptainTodoSweep.Confirmation(
+            confirmedAt: Self.iso(now), openNumbers: [3, 7, 12])
+        let decision = CaptainTodoSweep.decide(
+            open: [3], confirmation: confirmation, lastRemindedAt: nil,
+            now: now.addingTimeInterval(60), minimumInterval: floor)
+        XCTAssertEqual(decision.isSilent, true,
+                       "机长把两条做完翻了牌，反而被提醒了 —— 这会训练它别去翻牌")
+    }
+
+    // MARK: - ③ 不许变成背景噪音
+
+    func testNothingOpenMeansNothingToNag() {
+        let decision = CaptainTodoSweep.decide(
+            open: [], confirmation: nil, lastRemindedAt: nil,
+            now: now, minimumInterval: floor)
+        XCTAssertEqual(decision.isSilent, true,
+                       "一条未完成都没有还要提醒 —— 一条永远报「已知没事」的提醒会训练人忽略整个通道")
+    }
+
+    func testDoesNotRepeatWithinTheFloorInterval() {
+        let decision = CaptainTodoSweep.decide(
+            open: [3], confirmation: nil,
+            lastRemindedAt: now.addingTimeInterval(-60),
+            now: now, minimumInterval: floor)
+        XCTAssertEqual(decision.isSilent, true,
+                       "一分钟前刚提醒过又提醒 —— 机长在空闲/忙之间抖一下就会被刷屏")
+    }
+
+    func testRepeatsAfterTheFloorInterval() {
+        let decision = CaptainTodoSweep.decide(
+            open: [3], confirmation: nil,
+            lastRemindedAt: now.addingTimeInterval(-(floor + 1)),
+            now: now, minimumInterval: floor)
+        XCTAssertEqual(decision.isSilent, false,
+                       "过了间隔仍然不提醒 —— 人类要的是「直到确认为止」，不是提醒一次就算")
+    }
+
+    // MARK: - ④ 确认那一步：承重点
+
+    func testConfirmationMustAccountForEveryOpenItem() {
+        let result = CaptainTodoSweep.validate(
+            running: [3], blockedOnHuman: [], queued: [], open: [3, 7, 12])
+        XCTAssertEqual(result.refusal, .missing([7, 12]),
+                       """
+                       只交代了 3 条里的 1 条就放行了 —— 剩下那两条正是「早就做完了没翻牌」\
+                       最可能藏身的地方（机长自己那 9 条就是这么攒出来的）。
+                       """)
+    }
+
+    /// **空确认必须被拒**。这条是整个机制的承重点：允许空确认 = 允许一句「都做完了」。
+    func testEmptyConfirmationIsRefusedWhenItemsAreStillOpen() {
+        let result = CaptainTodoSweep.validate(
+            running: [], blockedOnHuman: [], queued: [], open: [3])
+        XCTAssertEqual(result.refusal, .missing([3]),
+                       "空确认被放行了 —— 那这个机制就退化成一颗可以随口按的确认按钮")
+    }
+
+    func testConfirmationWithNothingOpenIsAccepted() {
+        let result = CaptainTodoSweep.validate(
+            running: [], blockedOnHuman: [], queued: [], open: [])
+        XCTAssertNil(result.refusal, "账上真的一条未完成都没有时，空确认是唯一正确的答案")
+    }
+
+    func testUnknownNumbersAreRefused() {
+        let result = CaptainTodoSweep.validate(
+            running: [3, 404], blockedOnHuman: [], queued: [], open: [3])
+        XCTAssertEqual(result.refusal, .unknown([404]),
+                       "报了一个账上没有（或已完成）的 #N 却放行了 —— 那份账对不上真账本")
+    }
+
+    func testOverlappingBucketsAreRefused() {
+        let result = CaptainTodoSweep.validate(
+            running: [3], blockedOnHuman: [3], queued: [], open: [3])
+        XCTAssertEqual(result.refusal, .overlapping([3]),
+                       "同一条被同时说成在跑和卡人类 —— 两个桶的数加起来就不再等于未完成数")
+    }
+
+    func testAcceptedConfirmationRecordsExactlyWhatWasCovered() throws {
+        let result = CaptainTodoSweep.validate(
+            running: [7], blockedOnHuman: [3], queued: [12], open: [3, 7, 12])
+        let confirmation = try XCTUnwrap(result.confirmation)
+        XCTAssertEqual(Set(confirmation.openNumbers), [3, 7, 12],
+                       "确认没记下它覆盖了哪些条目 —— 那下次就没法判断「这批变没变」")
+    }
+
+    // MARK: - ⑤ 别造第二套督办：这套跟 supervise_after_minutes 的边界
+
+    /// `SupervisionLease` 那套是**按单条计划、按超时**触发的；这一条是**按整本 Todo 账、
+    /// 按空闲**触发的。两者共享的是纪律不是代码：**都没有「我知道了 / 顺延」出口**。
+    /// 这条断言钉住那个纪律不被偷偷加回来。
+    ///
+    /// ⚠️ 扫的是**标识符**，注释和字符串字面量都剥掉。第一版只剥了注释，结果被
+    /// 提醒正文里那句「这里没有『我知道了』『顺延』这种动作」咬红 —— 那句话正是在
+    /// **否认**有这种出口。**一把会咬到「说明自己没有 X」的尺子，量错了面**：
+    /// 风险面是 API 上真有这么个参数/分支，不是文案里提到过这个词。
+    func testThereIsNoAcknowledgeOrSnoozeWayOut() throws {
+        let source = try Self.text(of: "CaptainTodoSweep.swift")
+        for forbidden in ["snooze", "acknowledge", "顺延", "已查看", "我知道了"] {
+            XCTAssertFalse(
+                Self.identifiersOnly(source).lowercased().contains(forbidden.lowercased()),
+                """
+                判定里出现了「\(forbidden)」这种出口。一旦给了它，这个机制必然退化成\
+                「看一眼就算办完」—— 那正是 SupervisionLease 里点名要避免的东西。
+                """)
+        }
+    }
+
+    // MARK: - ⑥ 装到车上了没有（判定造好了没人调 = 等于不存在）
+
+    func testIdleHookActuallyAsksTheCaptain() throws {
+        let runner = Self.identifiersOnly(try Self.text(of: "CrewSessionRunner.swift"))
+        XCTAssertTrue(
+            runner.contains("remindCaptainToSweepTodos("),
+            "空闲钩子里没人调这套判定 —— 零件造好了没装到车上，机长永远不会被问账")
+        XCTAssertTrue(
+            runner.contains("run.role == .captain"),
+            "没限定只问机长 —— 这条是给机长的，不该去打扰 worker")
+    }
+
+    /// **顺序也是需求的一部分**：补投的唤醒和 continue_work 的续跑都是真活，
+    /// 它们认领了这个空闲窗口就说明机长并不是「以为没事干了」。核账必须排在最后。
+    func testTheSweepIsTheLastThingTriedOnIdle() throws {
+        let runner = Self.identifiersOnly(try Self.text(of: "CrewSessionRunner.swift"))
+        guard let idle = runner.range(of: "func runBecameIdle"),
+              let sweep = runner.range(of: "remindCaptainToSweepTodos(", range: idle.upperBound..<runner.endIndex),
+              let continuation = runner.range(of: "continuationStore.takeReady", range: idle.upperBound..<runner.endIndex)
+        else { return XCTFail("runBecameIdle 里的锚点找不齐 —— 先修测试") }
+        XCTAssertLessThan(
+            continuation.lowerBound, sweep.lowerBound,
+            "核账排在了 continue_work 续跑之前 —— 那会打断一个正要接着干活的机长")
+    }
+
+    func testTheConfirmToolIsCaptainOnlyAndReachable() throws {
+        let mcp = try Self.text(of: "McpServer.swift")
+        XCTAssertTrue(mcp.contains("\"confirm_todo_sweep\""),
+                      "MCP 没暴露 confirm_todo_sweep —— 机长没有任何办法让提醒停下来")
+        guard let handler = mcp.range(of: "case \"confirm_todo_sweep\":") else {
+            return XCTFail("找不到 confirm_todo_sweep 的 handler")
+        }
+        let body = String(mcp[handler.upperBound...].prefix(400))
+        XCTAssertTrue(body.contains("guard isCaptain"),
+                      "confirm_todo_sweep 没有机长门禁 —— 这本账是机长的责任，worker 不该替它销账")
+        XCTAssertTrue(body.contains("CaptainTodoSweep.validate"),
+                      "handler 没走那套校验 —— 那它就是一颗可以随口按的确认按钮")
+    }
+
+    /// 工具说明里那段「为什么不能只说一句都做完了」**必须留着**。
+    /// 机长读到的只有这段文字；把理由删成一句「请逐条归桶」，它就只剩一条没来由的
+    /// 形式要求 —— 而没来由的形式要求正是最先被绕过的东西。
+    func testTheToolStillCarriesTheReasonNotJustTheRule() throws {
+        let mcp = try Self.text(of: "McpServer.swift")
+        XCTAssertTrue(mcp.contains("confirmSweepDescription"),
+                      "工具说明被内联回去了，改一次就容易把理由一起删掉")
+        XCTAssertTrue(mcp.contains("做完了没翻牌"),
+                      "工具说明里那段「23 条里 9 条其实做完了没翻牌」的由来被删了")
+    }
+
+    // MARK: - 小工具
+
+    private static func iso(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    /// 只留标识符那一层：先剥多行字符串、再剥普通字符串、最后剥注释。
+    private static func identifiersOnly(_ text: String) -> String {
+        var out = text
+        while let open = out.range(of: "\"\"\""),
+              let close = out.range(of: "\"\"\"", range: open.upperBound..<out.endIndex) {
+            out.replaceSubrange(open.lowerBound..<close.upperBound, with: "\"\"")
+        }
+        out = out.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                let noComment = line.range(of: "//").map { String(line[..<$0.lowerBound]) }
+                    ?? String(line)
+                var kept = ""
+                var inString = false
+                for ch in noComment {
+                    if ch == "\"" { inString.toggle(); continue }
+                    if !inString { kept.append(ch) }
+                }
+                return kept
+            }
+            .joined(separator: "\n")
+        return out
+    }
+
+    private static func text(of fileName: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources", isDirectory: true)
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { throw XCTSkip("读不到源码目录") }
+        for case let url as URL in walker where url.lastPathComponent == fileName {
+            return try String(contentsOf: url, encoding: .utf8)
+        }
+        throw XCTSkip("找不到源码文件 \(fileName)")
+    }
+}
