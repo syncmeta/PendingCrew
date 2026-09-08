@@ -48,18 +48,11 @@ struct CreateCrewSheet: View {
     @State private var creating = false
     @State private var localError: String?
 
-    /// 建 crew 时**要不要由 app 直接给新目录写 claude 的信任记录**
-    /// （`~/.claude.json` 的 `hasTrustDialogAccepted`，Agent Todo #103）。
+    /// 建完之后要弹的那个「这个目录还没被信任」提示（nil = 两家都信过，不打扰人）。
     ///
-    /// **今天恒 `.notGranted` —— app 一个字都不写。** 人类 Todo #3（A 勾选项即授权 /
-    /// B 另开真 claude 点一次 / C 不做）还没拍板，在那之前替人写这个位就是替人做了
-    /// 他没授权的事。机制（写入器 + 写前备份 + 回读校验 + 回执）已经齐了，
-    /// 拍板后改的只有这一行。
-    ///
-    /// A 落地时这里换成跟界面勾选项绑定的 `@State`：**那一勾就是授权本身** ——
-    /// 因为它是人在自己 app 里的动作，性质跟 agent 代人写信任位完全不同。
-    /// 群里的点头和 runner 的放行是两层，而且故意是两层。
-    private var claudeTrustAuthorization: ClaudeTrustSeedPlan.Authorization { .notGranted }
+    /// **我们只读、不写**这两个信任位：那是人对这个目录的授权，不是我们的技术步骤。
+    /// 检测和文案都在 `WorkdirTrustPrompt` —— 跟迁移完成后弹的是同一个东西。
+    @State private var trustPrompt: WorkdirTrustPrompt.Prompt?
 
     private static let lastCaptainKindKey = "pendingcrew.lastCaptainAgentKind"
 
@@ -73,6 +66,10 @@ struct CreateCrewSheet: View {
         }
         .frame(width: 520)
         .frame(minHeight: 460)
+        // 建完发现目录没被信任 → 把该跑的命令交给人，点掉才关这个 sheet。
+        .sheet(item: $trustPrompt) { p in
+            WorkdirTrustPromptView(prompt: p) { trustPrompt = nil; dismiss() }
+        }
         .task {
             // sheet 打开时确保 subjects / machines 已拉过（父 view 多半已 prefetch，
             // 这里再保险一次）。
@@ -453,13 +450,12 @@ struct CreateCrewSheet: View {
         do {
             let subjectId = try await resolveResponsibleSubjectId()
             let resolvedDir = try resolveWorkingDirectory()
-            // CrewGround 这一档**新造**的目录在 `~/.claude.json` 里没有信任记录，
-            // 于是它下面起的第一个 claude 停在「是否信任这个文件夹」上：进程活着、
-            // 不吐字、也不报错，外面看着像「一直空闲」（Agent Todo #103）。
-            // 补种要赶在机长自动启动之前，所以放在建 crew 之前这一步。
-            // 没授权时这一步只读不写（见 `claudeTrustAuthorization`）。
-            let trustReceipt = ClaudeTrustSeeder.seedForNewCrew(
-                workdir: resolvedDir.path, authorization: claudeTrustAuthorization)
+            // CrewGround 这一档**新造**的目录，两家 agent 都没信任过它 —— 于是它下面
+            // 起的第一个 session 停在自己的信任确认上：进程活着、不吐字、也不报错，
+            // 外面看着像「一直空闲」。这里**只读地**看一眼，建完把该跑的命令交给人。
+            let trust = WorkdirTrustPrompt.prompt(
+                workdir: resolvedDir.path,
+                home: URL(fileURLWithPath: NSHomeDirectory()))
             // 自动模式：用已挑好的随机地名做初始名（就是框里显示、CrewGround 目录
             // 同名的那个）；captain 之后用 rename_crew 改成短标签。手动模式：用户填的。
             let titleValue: String? = (titleMode == .manual)
@@ -478,11 +474,11 @@ struct CreateCrewSheet: View {
                 captain: .systemGenerated(templateName: nil)
             )
             let resp = try await crewStore.createCrew(request)
-            // 补种的结果进新 crew 的群聊 —— 只在真做了点什么（补上了 / 没落住 / 失败）
-            // 时才有话说。人只看群聊，写了没落住却不说出去等于没说。
-            if let line = ClaudeTrustSeeder.receiptText(trustReceipt) {
+            // 同一份提示也进新 crew 的群聊 —— 对话框点掉就没了，人只看群聊。
+            if let trust {
                 LocalWhiteboardStore.shared.appendSessionMessage(
-                    crewId: resp.crewId, sessionId: "system", text: line, senderName: "系统")
+                    crewId: resp.crewId, sessionId: "system",
+                    text: WorkdirTrustPrompt.chatMessage(trust), senderName: "系统")
             }
             // 从某个 crew 里建的子 crew → 自动挂到父 crew 之下。
             if let parentCrewId {
@@ -490,7 +486,8 @@ struct CreateCrewSheet: View {
             }
             RecentWorkingDirectories.record(resolvedDir.path, in: .standard)
             UserDefaults.standard.set(selectedCaptainKind.rawValue, forKey: Self.lastCaptainKindKey)
-            dismiss()
+            // 没信任过就先把命令给人看一眼，点掉才关 sheet。
+            if let trust { trustPrompt = trust } else { dismiss() }
         } catch {
             localError = error.localizedDescription
         }

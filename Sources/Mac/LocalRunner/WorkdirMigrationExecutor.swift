@@ -1,15 +1,18 @@
 #if os(macOS)
 import Foundation
-import TOMLKit
 
 /// `WorkdirMigrationPlan` 的**执行层** —— 薄薄一层，照单干活，全程 fail-loud。
 ///
 /// 三条纪律：
-/// 1. **先备份**：动 `~/.claude.json` / `~/.codex/config.toml` / `local-crews.json` 之前，
-///    整份拷进一个带时间戳的备份目录。备份失败就一步都不走。
-/// 2. **顺序**：信任/权限 → 记忆（复制）→ 最后才改 crew 字段。中途炸了
-///    crew 还指着旧目录，信任与记忆照旧在旧路径上齐着。
+/// 1. **先备份**：动 `~/.claude.json` / `local-crews.json` 之前，整份拷进一个带时间戳的
+///    备份目录。备份失败就一步都不走。
+/// 2. **顺序**：工具权限 → 记忆（复制）→ 最后才改 crew 字段。中途炸了
+///    crew 还指着旧目录，权限与记忆照旧在旧路径上齐着。
 /// 3. **不吞错**：任一步失败立刻停，回执里说清停在哪一步、之前已经做了什么。
+///
+/// **目录信任位一个都不写**（claude 的 `hasTrustDialogAccepted`、codex 的 `trust_level`）
+/// —— 理由见 `WorkdirMigrationPlan.neverWrittenClaudeKeys`。所以这一层
+/// 压根不碰 `~/.codex/config.toml`，也在 `copyClaudeProjectSettings` 里显式挡住信任键。
 enum WorkdirMigrationExecutor {
 
     // MARK: - 回执
@@ -24,7 +27,6 @@ enum WorkdirMigrationExecutor {
         var backupDirectory: String = ""
         var copiedMemoryFiles: [String] = []
         var claudeSettingsKeysCopied: [String] = []
-        var codexTrustCopied: Bool = false
         var crewsUpdated: [WorkdirMigrationPlan.CrewRef] = []
         var skips: [WorkdirMigrationPlan.Skip] = []
         /// 做了、但**没能确认落住**的事（如 claude.json 被别的进程覆盖）。
@@ -41,7 +43,6 @@ enum WorkdirMigrationExecutor {
     static func probe(home: URL, fileManager fm: FileManager = .default)
         -> WorkdirMigrationPlan.Probe {
         let claudeProjects = loadClaudeProjects(home: home)
-        let codexTrust = loadCodexTrustLevels(home: home)
         return WorkdirMigrationPlan.Probe(
             pathExists: { fm.fileExists(atPath: $0) },
             isDirectory: { path in
@@ -58,8 +59,7 @@ enum WorkdirMigrationExecutor {
                     .filter { WorkdirMigrationPlan.isMeaningful(entry[$0]) }
                 return WorkdirMigrationPlan.ClaudeProjectSettings(
                     exists: true, meaningfulKeys: Set(keys))
-            },
-            codexTrustLevel: { codexTrust[$0] })
+            })
     }
 
     /// 目录下**递归**的普通文件相对路径（目录不存在 → 空）。隐藏文件也算 ——
@@ -86,9 +86,6 @@ enum WorkdirMigrationExecutor {
     // MARK: - 读 ~/.claude.json / ~/.codex/config.toml
 
     static func claudeJSONURL(home: URL) -> URL { home.appendingPathComponent(".claude.json") }
-    static func codexConfigURL(home: URL) -> URL {
-        home.appendingPathComponent(".codex/config.toml")
-    }
 
     /// `~/.claude.json` 的 `projects` 表（读不到 / 解不开 → 空，规划层会当「源没有条目」）。
     static func loadClaudeProjects(home: URL) -> [String: [String: Any]] {
@@ -98,18 +95,6 @@ enum WorkdirMigrationExecutor {
         var out: [String: [String: Any]] = [:]
         for (k, v) in projects {
             if let entry = v as? [String: Any] { out[k] = entry }
-        }
-        return out
-    }
-
-    /// `~/.codex/config.toml` 的 `[projects."<路径>"] trust_level`。
-    static func loadCodexTrustLevels(home: URL) -> [String: String] {
-        guard let text = try? String(contentsOf: codexConfigURL(home: home), encoding: .utf8),
-              let table = try? TOMLTable(string: text),
-              let projects = table["projects"]?.table else { return [:] }
-        var out: [String: String] = [:]
-        for key in projects.keys {
-            if let level = projects[key]?.table?["trust_level"]?.string { out[key] = level }
         }
         return out
     }
@@ -142,7 +127,7 @@ enum WorkdirMigrationExecutor {
         // ── 0. 备份。备份不成，一步都不走。
         do {
             try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
-            for src in [claudeJSONURL(home: home), codexConfigURL(home: home)] + extraBackupFiles
+            for src in [claudeJSONURL(home: home)] + extraBackupFiles
             where fm.fileExists(atPath: src.path) {
                 let dst = backupDirectory.appendingPathComponent(src.lastPathComponent)
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
@@ -163,14 +148,10 @@ enum WorkdirMigrationExecutor {
                     let lost = keys.filter { !confirmed.contains($0) }
                     if !lost.isEmpty {
                         receipt.warnings.append(
-                            "claude 的目录信任/权限有 \(lost.joined(separator: "、")) 没落住"
+                            "claude 的工具权限有 \(lost.joined(separator: "、")) 没落住"
                             + "（写了 \(tries) 次，读回来还是没有 —— `~/.claude.json` 被别的 claude 进程覆盖了）。"
-                            + "第一次进新目录可能要人手点一次「信任这个文件夹」。")
+                            + "新目录下这几项要重新授权一次。")
                     }
-
-                case .copyCodexTrust(_, let to, let trustLevel):
-                    try addCodexTrust(home: home, path: to, trustLevel: trustLevel)
-                    receipt.codexTrustCopied = true
 
                 case .copyClaudeMemoryFile(let rel, let from, let to):
                     try ensureParentDirectory(of: to, fileManager: fm)
@@ -194,8 +175,7 @@ enum WorkdirMigrationExecutor {
 
     static func stepLabel(_ action: WorkdirMigrationPlan.Action) -> String {
         switch action {
-        case .copyClaudeProjectSettings: return "复制 claude 的目录信任/权限记录"
-        case .copyCodexTrust: return "补 codex 的目录信任记录"
+        case .copyClaudeProjectSettings: return "复制 claude 的工具权限记录"
         case .copyClaudeMemoryFile(let rel, _, _): return "复制记忆文件 \(rel)"
         case .setCrewWorkingDirectory(_, let title, _, _): return "改「\(title)」的工作目录"
         }
@@ -215,8 +195,13 @@ enum WorkdirMigrationExecutor {
     /// claude 也会写它。这里是「读—改—写」，理论上能和它们的写撞成丢更新。缓解是
     /// ①迁移前会拒绝本 crew 有 session 在跑；②整份文件先备份（撞了能原样找回）。
     /// 真要根治得等 claude 那边给出带锁的写入通道 —— 我们这侧没有可用的锁。
+    ///
+    /// **目录信任位在这里被显式挡掉**（`neverWrittenClaudeKeys`），即使调用方点名要。
+    /// 挡在最里面这一层，是因为规划层将来被谁改回去也漏不出去；也因为
+    /// 「显式选择不做」和「不小心漏了」在代码上长得一模一样，在半年后长得完全不一样。
     static func copyClaudeProjectSettings(home: URL, from: String, to: String,
                                           keys: [String]) throws {
+        let keys = keys.filter { !WorkdirMigrationPlan.neverWrittenClaudeKeys.contains($0) }
         let url = claudeJSONURL(home: home)
         let data = try Data(contentsOf: url)
         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -244,8 +229,9 @@ enum WorkdirMigrationExecutor {
     /// 原子写 `~/.claude.json` + **按原样恢复权限**。原文件是 600（里面有 oauth 账号），
     /// 原子替换会带默认权限 —— 不恢复等于把凭证类文件放宽。
     ///
-    /// 迁移（这里）和补种（`ClaudeTrustSeeder.IO.real`）都从这一个出口落盘，
-    /// 别各写各的：这几行一旦分家，早晚有一天只改了其中一处。
+    /// 这是本 app 写 `~/.claude.json` 的**唯一出口**（曾经还有一个补种器共用它，
+    /// 那套已于 2026-09-08 整个拆掉 —— 产品不再写任何目录信任位）。
+    /// 要再写这份文件就从这儿走，别各写各的：这几行一旦分家，早晚只改得动其中一处。
     static func writeClaudeJSON(_ data: Data, home: URL,
                                 fileManager fm: FileManager = .default) throws {
         let url = claudeJSONURL(home: home)
@@ -287,46 +273,6 @@ enum WorkdirMigrationExecutor {
         return (confirmed, max(1, attempts))
     }
 
-    // MARK: - ~/.codex/config.toml
-
-    /// 给新路径补一条 `[projects."<路径>"] trust_level`（旧的留着）。
-    ///
-    /// 走 TOMLKit 正经解析 → 改 → 序列化，**再回读比对**：新文件解出来必须恰好等于
-    /// 「原内容 + 这一条」，多一分少一分都不写。字符串拼接改 TOML 是禁的。
-    static func addCodexTrust(home: URL, path: String, trustLevel: String) throws {
-        let url = codexConfigURL(home: home)
-        let text = try String(contentsOf: url, encoding: .utf8)
-        let table = try TOMLTable(string: text)
-        guard let beforeJSON = jsonObject(table.convert(to: .json)) as? [String: Any] else {
-            throw MigrationError("~/.codex/config.toml 解析后拿不到对象，拒绝改写。")
-        }
-        let projects = table["projects"]?.table ?? TOMLTable()
-        if projects[path] != nil {
-            throw MigrationError("~/.codex/config.toml 里新路径已有条目，拒绝覆盖：\(path)")
-        }
-        projects[path] = TOMLTable(["trust_level": trustLevel])
-        table["projects"] = projects
-
-        let rendered = table.convert(to: .toml)
-        // 回读校验：解得开 + 内容恰好是「原来的 + 这一条」。
-        let reparsed = try TOMLTable(string: rendered)
-        guard let afterJSON = jsonObject(reparsed.convert(to: .json)) as? [String: Any] else {
-            throw MigrationError("改写后的 config.toml 回读失败，已放弃改写（原文件未动）。")
-        }
-        var expected = beforeJSON
-        var expectedProjects = (beforeJSON["projects"] as? [String: Any]) ?? [:]
-        expectedProjects[path] = ["trust_level": trustLevel]
-        expected["projects"] = expectedProjects
-        guard NSDictionary(dictionary: afterJSON).isEqual(to: expected) else {
-            throw MigrationError("改写后的 config.toml 与预期不一致，已放弃改写（原文件未动）。")
-        }
-        try Data(rendered.utf8).write(to: url, options: .atomic)
-    }
-
-    private static func jsonObject(_ text: String) -> Any? {
-        try? JSONSerialization.jsonObject(with: Data(text.utf8))
-    }
-
     struct MigrationError: LocalizedError, Equatable {
         let message: String
         init(_ message: String) { self.message = message }
@@ -346,11 +292,10 @@ enum WorkdirMigrationExecutor {
         let crews = r.crewsUpdated.map { "「\($0.title)」" }.joined(separator: "、")
         lines.append("- 改了工作目录的 crew：\(r.crewsUpdated.isEmpty ? "无" : crews)")
         lines.append("- claude 项目记忆复制 \(r.copiedMemoryFiles.count) 个文件（旧目录原样留着，别的 crew 还在用）")
-        lines.append("- claude 目录信任/权限："
+        lines.append("- claude 工具权限："
             + (r.claudeSettingsKeysCopied.isEmpty
                ? "没补（源没有可搬的，或新路径已经有了）"
                : "补了 \(r.claudeSettingsKeysCopied.joined(separator: "、"))"))
-        lines.append("- codex 目录信任：" + (r.codexTrustCopied ? "已补" : "没补（源没有，或新路径已经有了）"))
 
         let notable = r.skips.compactMap(skipLine)
         if !notable.isEmpty {
@@ -435,8 +380,6 @@ enum WorkdirMigrationExecutor {
             switch action {
             case .copyClaudeProjectSettings(_, _, let keys):
                 parts.append("claude 补 " + keys.joined(separator: "、"))
-            case .copyCodexTrust(_, _, let level):
-                parts.append("codex 补 trust_level=\(level)")
             default: break
             }
         }
@@ -451,13 +394,10 @@ enum WorkdirMigrationExecutor {
         case .memoryDirectoryMissing:
             return "旧目录下没有项目记忆，没什么可复制的"
         case .claudeProjectSettingsSourceEmpty:
-            return "claude 那边旧路径没有可搬的信任/权限记录 —— 新目录第一次开 session 可能要按一次信任框"
-        case .codexTrustSourceMissing:
-            return "codex 那边旧路径没有信任记录 —— 新目录第一次开 codex 可能要按一次信任框"
+            return "claude 那边旧路径没有可搬的工具权限记录"
         case .crewHasNoWorkingDirectory(_, let title):
             return "「\(title)」原本就没有工作目录，只是把新目录填上"
         case .claudeProjectSettingsAlreadyComplete,
-             .codexTrustTargetExists,
              .crewAlreadyAtNewWorkdir:
             return nil
         }

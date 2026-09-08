@@ -7,14 +7,17 @@ import Foundation
 /// 2026-08-17 把 PendingCrew 从 PendingBot 的 monorepo 里拆出去）就没有任何入口能改。
 /// 而 agent 侧有三样东西**按工作目录路径分家**，光改字段等于把它们丢在旧路径上：
 ///
-/// - `~/.claude.json` 的 `projects["<绝对路径>"]` 记着「这个目录信任过 / 这些工具允许过」。
-///   新路径没有条目 → 新目录下第一个 session **挂在**信任提示上（不是弹个框就过去，是
-///   进程起来了、不吐第一个字、也不报错，而点名显示为「空闲」，见
-///   `CrewSessionsSnapshot.state` 的注释）。这是这整套东西今天存在的头号理由。
-/// - `~/.codex/config.toml` 的 `[projects."<绝对路径>"] trust_level` 同理。
+/// - `~/.claude.json` 的 `projects["<绝对路径>"]` 记着「这些工具允许过 / 挂了哪些 mcp」。
 /// - claude 的项目记忆在 `~/.claude/projects/<workdir slug>/memory/`。旧工作目录是
 ///   **多个 crew 共用**的（本机 16 个 crew 都指着同一个 dev 目录），所以只能**复制**
 ///   不能搬 —— 搬走等于把留守 crew 的记忆偷走。
+///
+/// **目录信任位（claude 的 `hasTrustDialogAccepted`、codex 的 `trust_level`）不在这张
+/// 单子里，而且刻意不搬。** 信任的单位是路径，那是这两家定的规矩：人对旧目录点的那
+/// 一下头，我们复制到新目录，新目录那份授权就是我们签的，不是他签的。新目录下第一个
+/// session 会停在自己的信任确认上等人 —— 该做的是**把命令原样给人**，不是替他签字。
+/// 那条路在 `WorkdirTrustPrompt`（只读检测 + 唯一一份提示），迁完由界面弹一次。
+/// 显式挡在 `neverWrittenClaudeKeys`。
 ///
 /// **会话日志（`<会话号>.jsonl`）不在上面这张单子里，而且刻意不搬**：2026-08-26 实测
 /// （claude 2.1.246）`claude --resume <id>` **不按目录找会话**，它扫整个
@@ -109,9 +112,9 @@ enum WorkdirMigrationPlan {
     }
 
     /// `~/.claude.json` 里一个路径条目的快照。**只看「哪几个键有实质值」**，不搬整条 ——
-    /// 实测新路径可能已经有条目、但 `hasTrustDialogAccepted` 是 `false`（人没进去过就
-    /// 被别的路径写出来了）。整条「已存在就跳过」会把信任弹框留在那儿等着卡人，所以
-    /// 按键合并：目标缺的 / 目标是空值的才补，目标已有实质值的一律不动。
+    /// 实测新路径可能已经有条目、但里面的键是 `false` / 空数组（人没进去过就被别的路径
+    /// 写出来了）。整条「已存在就跳过」会把该补的权限漏掉，所以按键合并：目标缺的 /
+    /// 目标是空值的才补，目标已有实质值的一律不动。
     struct ClaudeProjectSettings: Equatable {
         var exists: Bool = false
         /// `claudeSettingsKeys` 里**有实质值**的那些（true / 非空数组 / 非空字典）。
@@ -123,10 +126,22 @@ enum WorkdirMigrationPlan {
         }
     }
 
-    /// 迁移只关心这几个键 —— 「信任过 / 允许过哪些工具 / 挂了哪些 mcp」。
+    /// **产品一个字都不写的键。** 不是「还没做」，是选的。
+    ///
+    /// 信任的单位是路径 —— 那是 claude / codex 两家定的规矩，不是我们定的。人对 `/a`
+    /// 点的那一下头，我们复制到 `/b`，`/b` 那份授权就是我们签的，不是他签的：
+    /// 「搬」这个动词听起来像守恒，其实凭空多了一份。
+    ///
+    /// 所以它**既不在 `claudeSettingsKeys` 里，也在执行层被显式挡住**
+    /// （`WorkdirMigrationExecutor.copyClaudeProjectSettings`）。两道都留着，是因为
+    /// 「显式选择不做」和「不小心漏了」在代码上长得一模一样，在半年后长得完全不一样。
+    /// 没信任时该做的事在 `WorkdirTrustPrompt`：只读地检测，然后把命令原样给人。
+    static let neverWrittenClaudeKeys: [String] = ["hasTrustDialogAccepted"]
+
+    /// 迁移只关心这几个键 —— 「允许过哪些工具 / 挂了哪些 mcp」。
     /// 其余全是统计与缓存（lastCost / lastSessionId / exampleFiles…），跟着搬只会误导。
+    /// **目录信任位不在这里**，理由见 `neverWrittenClaudeKeys`。
     static let claudeSettingsKeys: [String] = [
-        "hasTrustDialogAccepted",
         "hasCompletedProjectOnboarding",
         "hasClaudeMdExternalIncludesApproved",
         "allowedTools",
@@ -161,23 +176,22 @@ enum WorkdirMigrationPlan {
         /// 目录下**递归**的普通文件相对路径（目录不存在 → 空）。
         var listFiles: (String) -> [String]
         /// `~/.claude.json` 的 `projects["<绝对路径>"]` 快照（存在性 + 哪几个键有实质值）。
+        ///
+        /// **没有 codex 那一项** —— 迁移不读也不写 `trust_level`，理由见
+        /// `neverWrittenClaudeKeys`。要看有没有信任过，走 `WorkdirTrustPrompt`（只读）。
         var claudeProjectSettings: (String) -> ClaudeProjectSettings
-        /// `~/.codex/config.toml` 的 `[projects."<绝对路径>"] trust_level`（无 → nil）。
-        var codexTrustLevel: (String) -> String?
 
         init(pathExists: @escaping (String) -> Bool,
              isDirectory: @escaping (String) -> Bool,
              isWritable: @escaping (String) -> Bool,
              listFiles: @escaping (String) -> [String] = { _ in [] },
              claudeProjectSettings: @escaping (String) -> ClaudeProjectSettings
-                 = { _ in ClaudeProjectSettings() },
-             codexTrustLevel: @escaping (String) -> String? = { _ in nil }) {
+                 = { _ in ClaudeProjectSettings() }) {
             self.pathExists = pathExists
             self.isDirectory = isDirectory
             self.isWritable = isWritable
             self.listFiles = listFiles
             self.claudeProjectSettings = claudeProjectSettings
-            self.codexTrustLevel = codexTrustLevel
         }
     }
 
@@ -208,8 +222,6 @@ enum WorkdirMigrationPlan {
         /// `~/.claude.json`：把旧路径 `projects` 条目里的**这几个键**补给新路径（旧的留着，
         /// 目标已有实质值的键不动）。
         case copyClaudeProjectSettings(fromPath: String, toPath: String, keys: [String])
-        /// `~/.codex/config.toml`：给新路径补一条 `[projects."<新路径>"] trust_level`。
-        case copyCodexTrust(fromPath: String, toPath: String, trustLevel: String)
         /// claude 项目记忆：整个项目共享，**复制不移动**（旧路径还有别的 crew 在用）。
         case copyClaudeMemoryFile(relativePath: String, from: String, to: String)
         /// 改 crew 自己的 `workingDirectory`（内存 + 落盘，不要求重启 app）。
@@ -224,8 +236,6 @@ enum WorkdirMigrationPlan {
         case claudeProjectSettingsSourceEmpty(path: String)
         /// 新路径那几个键都已经有实质值 → 不覆盖。
         case claudeProjectSettingsAlreadyComplete(path: String)
-        case codexTrustSourceMissing(path: String)
-        case codexTrustTargetExists(path: String)
         case crewHasNoWorkingDirectory(crewId: String, title: String)
         case crewAlreadyAtNewWorkdir(crewId: String, title: String)
     }
@@ -304,17 +314,6 @@ enum WorkdirMigrationPlan {
             } else {
                 plan.actions.append(.copyClaudeProjectSettings(
                     fromPath: rootSource, toPath: newDir, keys: keys))
-            }
-
-            if let trust = probe.codexTrustLevel(rootSource) {
-                if probe.codexTrustLevel(newDir) != nil {
-                    plan.skips.append(.codexTrustTargetExists(path: newDir))
-                } else {
-                    plan.actions.append(
-                        .copyCodexTrust(fromPath: rootSource, toPath: newDir, trustLevel: trust))
-                }
-            } else {
-                plan.skips.append(.codexTrustSourceMissing(path: rootSource))
             }
 
             let memFrom = projects + "/" + projectSlug(forWorkdir: rootSource) + "/memory"
