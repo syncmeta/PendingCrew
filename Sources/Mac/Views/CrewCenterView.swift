@@ -18,11 +18,11 @@ struct CrewCenterView: View {
     /// 防止重复注入同一条。**放在常驻中栏**（而非按需 inspector），captain 编排
     /// 不能依赖 session 终端面板是否打开。
     @State private var notifiedDecisionIds: Set<String> = []
-    /// 「只看 @ 我的消息」（Todo #61）。开关钮在 toolbar 上，状态喂给 `CrewChatView`
-    /// 的时间线。**放在这里而不是 chat 里面**：`CrewChatView` 带 `.id(crewId)`，
-    /// 切 crew 会整个重建 —— 状态放里面就没法从 toolbar 驱动它。切 crew 时下面
-    /// 显式归位（换个群还挂着筛选，人会以为新群是空的）。
-    @State private var onlyMentions = false
+    /// 「只看 @ 我的消息」（Todo #61 立、#128 改成默认点亮）。开关钮在 toolbar 上，
+    /// 状态喂给 `CrewChatView` 的时间线。**放在这里而不是 chat 里面**：
+    /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
+    /// toolbar 驱动它。切 crew 时下面显式归位（筛选状态不跨群带走）。
+    @State private var onlyMentions = CrewMentionFilter.defaultOnlyMentions
     @State private var searchQuery = ""
     @State private var searchTargetMessageId: String?
 
@@ -77,6 +77,19 @@ struct CrewCenterView: View {
         .toolbar {
             if let crewId = crewStore.selectedCrewId {
                 ToolbarItem {
+                    // Todo #79 当初把它钉在最右（`.primaryAction`）；#128 人类要它挪到
+                    // 那三个按钮**左侧**，所以改成普通 ToolbarItem 并**声明在最前**
+                    // —— toolbar 的排布跟声明顺序走。点亮色与发送键共用
+                    // Theme.Palette.accent，不继承系统蓝。文字仍是人类钉死的「仅@你」四字。
+                    Toggle(isOn: $onlyMentions) { Text("仅@你") }
+                        .toggleStyle(.button)
+                        .tint(Theme.Palette.accent)
+                        .disabled(crewStore.selectedDetail == nil)
+                        .help(onlyMentions
+                              ? "正在只显示 @ 你的消息 + 你自己发的；点一下显示全部"
+                              : "只显示 @ 你的消息 + 你自己发的")
+                }
+                ToolbarItem {
                     Button { showingDetail = true } label: {
                         Label("crew 详情", systemImage: "info.circle")
                     }
@@ -98,18 +111,6 @@ struct CrewCenterView: View {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    // Todo #79：筛选药丸固定在群聊栏最右上角；点亮色与发送键共用
-                    // Theme.Palette.accent，不再继承系统蓝色。文字仍保持人类钉死的
-                    // 「仅@你」四字。
-                    Toggle(isOn: $onlyMentions) { Text("仅@你") }
-                        .toggleStyle(.button)
-                        .tint(Theme.Palette.accent)
-                        .disabled(crewStore.selectedDetail == nil)
-                        .help(onlyMentions
-                              ? "正在只显示 @ 你的消息 + 你自己发的；点一下显示全部"
-                              : "只显示 @ 你的消息 + 你自己发的")
-                }
                 // 「Session 终端」开关已去掉 —— 右栏(成员/终端)在原生三栏里常驻;
                 // 成员列表 ↔ 终端 的切换由右栏内部(viewingTerminal / 点 session)管。
             }
@@ -127,10 +128,22 @@ struct CrewCenterView: View {
         // 轮询）：app 侧答复 + helper 跨进程 raise(目录监听)都推一个 tick,有新的(非
         // captain 自己 raise 的)就把提示注入在跑的 captain PTY。不依赖 inspector 是否打开。
         // `.task(id:)` 随选中 crew 切换重建订阅;无选中 crew 时 crewId=nil,不订阅。
-        // 切 crew：筛选归位（Todo #61）。换个群还挂着「只看 @ 我」，新群大概率筛成
+        // 切 crew：筛选归位（Todo #61 立，#128 改了归到哪儿）。
+        //
+        // **#61 当初归位到「关」，理由是**：换个群还挂着「只看 @ 我」，新群大概率筛成
         // 空的 —— 人看到的是一个空聊天页，会以为这个群没消息 / 加载失败。
+        //
+        // **#128 人类要「默认点亮」**，于是这里改成归到 `defaultOnlyMentions`（= 点亮）。
+        // 归位本身保留 —— 那是 #61 真正的意思：筛选状态不跨群带走。
+        //
+        // ⚠️ **两条合起来 = 每次进群都是点亮的 = 正是 #61 当初要防的那种空**。
+        // 这个冲突没有被消除，是被**接住**了：筛完一条不剩时，群聊空态会给一句
+        // 「这个群里没有 @ 你的消息」和一颗「看全部」
+        // （`CrewMentionFilter.showsClearFilterEscape` → `CrewChatView.emptyState`）。
+        // 人类要的是默认看到跟自己有关的，不是要一个看起来坏掉的界面 ——
+        // **动这里之前先确认那条出路还在**，没有它，这一段就退回 #61 描述的那个坑。
         .onChange(of: crewStore.selectedCrewId) { _, _ in
-            onlyMentions = false
+            onlyMentions = CrewMentionFilter.defaultOnlyMentions
             // 跨群结果的 request 会在下面紧接着重新填回查询/定位；普通切群则归零。
             if crewStore.chatSearchRequest == nil {
                 searchQuery = ""

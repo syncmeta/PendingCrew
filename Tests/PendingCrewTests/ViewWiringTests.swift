@@ -177,9 +177,15 @@ final class ViewWiringTests: XCTestCase {
                       "筛选钮不是人类指定的文字药丸「仅@你」（Todo #69）")
         XCTAssertFalse(center.contains("systemImage: \"at.circle\""),
                       "筛选钮还是那个没有文字的图标 —— 人看不出它是干什么的（Todo #69）")
-        // Todo #79 覆盖旧位置：现在明确固定在群聊栏最右上角，并与发送键同色。
-        XCTAssertTrue(center.contains("ToolbarItem(placement: .primaryAction)"),
-                      "「仅@你」没有固定到群聊栏最右上角（Todo #79）")
+        // 位置被人类改过两次，两次都写下来 —— 只留最新的一条，下一个人会看不出
+        // 「最右」当初是被谁、为什么推翻的：
+        // - Todo #79：钉在群聊栏**最右**上角（`.primaryAction`）。
+        // - Todo #128（推翻上一条，人类原话「仅@你改成放在三个按钮的左侧」）：
+        //   挪到 crew 详情 / 驾驶舱 / 刷新这三个按钮**左边**，即 toolbar 最前。
+        //   所以它不能再用 `.primaryAction` —— 那个 placement 本身就是「推到最右」。
+        // 声明顺序那条判据在 `MentionsFilterDefaultOnTests`，这里只钉「不许再钉右边」。
+        XCTAssertFalse(center.contains("ToolbarItem(placement: .primaryAction)"),
+                      "「仅@你」又被钉回最右了（Todo #128 要它在那三个按钮左侧）")
         XCTAssertTrue(center.contains(".tint(Theme.Palette.accent)"),
                       "「仅@你」点亮态没有复用发送键的主题绿色（Todo #79）")
 

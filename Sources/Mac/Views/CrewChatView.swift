@@ -1123,6 +1123,16 @@ struct CrewChatView: View {
     /// 空态。默认只有一个聊天图标（人类明确要过：空白态别堆文案）。
     /// **但筛选开着时必须说清楚**（Todo #61）——否则「筛掉了所有消息」和「这个群
     /// 一条消息都没有」长得一模一样，人会以为聊天记录没了。
+    /// 筛完一条不剩、而群里其实有消息 —— 该给一条出路（人类 Todo #128）。判定是纯的，
+    /// 单测钉在 `MentionsFilterDefaultOnTests`。
+    private var showsClearFilterEscape: Bool {
+        CrewMentionFilter.showsClearFilterEscape(
+            onlyMentions: onlyMentions,
+            isSearching: isSearching,
+            hasAnyEntries: !entries.isEmpty,
+            filteredIsEmpty: timelineEntries.isEmpty)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: isSearching
@@ -1138,6 +1148,16 @@ struct CrewChatView: View {
                 Text("这个群里没有 @ 你的消息")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)
+            }
+            // 「仅@你」默认点亮之后，**一进群就是这一屏**是常态而不是意外（#128）。
+            // 所以空态不能只是一句话 —— 得有一个一眼能点的出口，否则它看起来就像
+            // 这个群坏了。群本身空着时不给：点了还是空，那颗按钮只会误导。
+            if showsClearFilterEscape {
+                Button("看全部") { showOnlyHumanMentions?.wrappedValue = false }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(Theme.Palette.accent)
+                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

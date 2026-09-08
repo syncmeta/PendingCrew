@@ -119,6 +119,39 @@ enum CrewMentionFilter {
         return entry.senderUserId == me
     }
 
+    // MARK: - 开关的默认值与空态出路（人类 Todo #128）
+
+    /// 「仅@你」的默认值 —— **默认点亮**（人类 Todo #128 原话「并且默认点亮」）。
+    ///
+    /// 放在这儿而不是写死在 `CrewCenterView` 的 `@State` 初值里，是因为它有**两个读者**：
+    /// 初值，和切 crew 时的归位（Todo #61）。写死两处的话，「默认点亮」会在冷启动那次
+    /// 成立、切一次群就灭了 —— 而且不会有任何报错，只有人自己觉得「怎么又不亮了」。
+    static let defaultOnlyMentions = true
+
+    /// 筛完一条不剩时，要不要给一句解释和一颗「看全部」。
+    ///
+    /// ## 为什么非有它不可
+    ///
+    /// 默认点亮（#128）和切群归位（#61）合在一起 = **每次进群都是点亮的**。而 #61 当初
+    /// 归位到关闭的理由，原话就是「换个群还挂着『只看 @ 我』，新群大概率筛成空」——
+    /// 也就是说，人类这次要的正是 #61 当初要防的那件事。
+    ///
+    /// 这条判定就是让那个状态**可解释、可一键退出**：他要的是默认看到跟自己有关的，
+    /// 不是要一个看起来坏掉的界面。
+    ///
+    /// ## 四个条件缺一不可（每一条都对着一种会说错话的空）
+    ///
+    /// - `onlyMentions`：筛选没开着时，空就是真的空，不该甩锅给筛选。
+    /// - `!isSearching`：搜索没结果是另一种空，出路是搜索框本身，别再冒第二颗按钮。
+    /// - `hasAnyEntries`：**群本身就是空的时候不给**——点了「看全部」还是空，
+    ///   那颗按钮会把「这个群没人说过话」误说成「是筛选挡住了」。
+    /// - `filteredIsEmpty`：还有内容显示着就没有空态可言。
+    static func showsClearFilterEscape(
+        onlyMentions: Bool, isSearching: Bool, hasAnyEntries: Bool, filteredIsEmpty: Bool
+    ) -> Bool {
+        onlyMentions && !isSearching && hasAnyEntries && filteredIsEmpty
+    }
+
     /// 「给我一个数组、还我筛过的数组」—— 筛选开关直接喂 `timelineEntries`。
     /// 保持输入序。`roster.humanNames` 为空时正文那一半自动失效，结构化那一半照常。
     ///
