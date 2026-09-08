@@ -1,38 +1,36 @@
 #if os(macOS)
 import SwiftUI
 
-/// 左栏的**总机长视图**（Todo #102 / 人类 #109 第一步）：不列全部 crew，
-/// 按「**现在该管什么**」收敛成三段。
+/// 左栏的**总机长视图**（Todo #102 / 人类 #109，口径按 #113 改过）。
 ///
-/// 层级视图回答「谁挂在谁下面」，时间流视图回答「刚才哪儿有动静」—— 这台机器上
-/// 40+ 个 crew，这两个问题的答案都是一份同样长的列表。人类原话是「现在消息太多
-/// 太乱了」，他要的不是第三份列表，是**一屏看完现在该管什么**。所以这里的段是
-/// ①在等你回应 ②还在跑 ③安静（默认折起来），推导在 `CrewChiefOverview`。
+/// ## 这一版不分类，只排序
+/// 第一版按「在等你回应 / 还在跑 / 安静」分三段。人类 #113 把它推翻了：
+/// 「先不分类 先注重排序 什么是最近活跃处理的 就放到前面 就是把手头上要用到的
+/// 尽可能放前面」。所以这里**一个分组标题都不画**，就是一条按最近活动倒序的扁平列表。
 ///
-/// ## 这一版一个 agent 都不参与，这是刻意的
-/// 三段的判据全是机械事实（未回应的人类 Todo 条数、最新活动时间），app 今天就在
-/// 算。所以这个视图**在没有任何 agent 跑的时候就是有用的**；后面让总机长 session
-/// 接管的是「临时分类」那种判断，不是这里。一个 agent 的判断可以决定「推荐你先看
-/// 什么」，**但不能决定「这台机器上有什么」** —— 层级视图和时间流视图必须在总机长
-/// session 死掉、跑飞、压根没启动的时候，长得跟现在一模一样。
+/// ## 那它跟「时间流」差在哪
+/// 差的就是 #109 里没被推翻的那一条：**顺序由总机长那个 session 决定**。
+/// agent 排的那份顺序是**覆盖层**，叠在确定性基础序（最近活动倒序）上面 ——
+/// 一个 agent 的判断可以决定「推荐你先看什么」，**但不能决定「这台机器上有什么」**：
+/// 它死了、跑飞了、压根没启动，这个视图仍然长得跟「时间流」一样能用，
+/// 而「层级」「时间流」两个视图任何时候都不受它影响。
 ///
 /// ## 这里拖不动组织树
-/// 行传 `allowsReparentDrag: false`。这个视图是**整理用的**，人看到的分段是「现在
-/// 该管什么」而不是组织结构；如果在这儿一拖就改了汇报线，人会以为自己只是在归置
-/// 列表，结果动了真的组织树。改组织树只有层级视图那一条路 —— 两件事在界面上是
-/// 结构性分开的，不是靠一句提示文案区分。
+/// 行传 `allowsReparentDrag: false`。这个视图是**给人看的排序**，不是组织结构；
+/// 在这儿一拖就改了汇报线，人会以为自己只是在归置列表。改组织树只有层级视图那条路。
 struct CrewChiefListView: View {
-    /// 要收进来的 crew（= 侧栏当前可见的全部，与另两个视图同一份）。
+    /// 要列的 crew（= 侧栏当前可见的全部，与另两个视图同一份）。
     let crews: [CrewSummary]
 
     /// 行右键「在这下面建子 crew」的目标；值由侧栏持有，表单也挂在那一层。
     @Binding var childCrewTarget: CrewChildCreationTarget?
 
+    /// 总机长排的那份顺序（侧栏读好传进来，本视图不碰磁盘）。
+    /// `nil` = 没人排过 / 读不出来 → 纯基础序，**而且要在界面上说出来**。
+    var arrangement: CrewArrangement?
+
     /// 行视图要一个拖拽态；本视图不开拖拽，给它一个自己的实例即可（永远是空的）。
     @StateObject private var dragState = CrewDragState()
-    /// 哪些段被人折起来了。「安静」默认折着（`Section.collapsedByDefault`）。
-    @State private var collapsed: Set<CrewChiefOverview.Section> = Set(
-        CrewChiefOverview.Section.allCases.filter(\.collapsedByDefault))
 
     @EnvironmentObject private var crewStore: CrewStore
 
@@ -42,88 +40,85 @@ struct CrewChiefListView: View {
         let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
         // 与时间流视图同一份快照：**body 里不碰磁盘**（2026-08-17「开久了卡」的病根）。
         let lastMessages = crewStore.lastWhiteboardMessages
-        let attention = crewStore.humanTodoAttention
-        let groups = CrewChiefOverview.sections(
+        let entries = CrewChiefOverview.ordered(
             crews: crews,
-            // 只算**自己**那本，不含后代 —— 后代自己就在同一份扁平列表里占一行，
-            // 再算进祖先会让同一条 Todo 出现两次。
-            unanswered: { attention[$0.id]?.ownUnanswered ?? 0 },
             activity: { crew in
                 CrewActivityTime.resolve(
                     lastMessageCreatedAt: lastMessages[crew.id]?.createdAt,
                     crewUpdatedAt: crew.updatedAt)
             },
-            now: Date())
+            arrangement: arrangement?.crewIds ?? [])
 
-        if groups.isEmpty {
+        provenanceHeader
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
+        if entries.isEmpty {
             emptyRow
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
         } else {
-            ForEach(groups) { group in
-                sectionHeader(group)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                if !collapsed.contains(group.section) {
-                    ForEach(group.entries) { entry in
-                        CrewSidebarCrewRow(
-                            crew: entry.crew,
-                            crewsById: crewsById,
-                            rootTitles: rootTitles[entry.crew.id] ?? [],
-                            lineageLine: CrewTimelineOrdering.lineageLine(
-                                for: entry.crew,
-                                crewsById: crewsById,
-                                rootTitles: rootTitles[entry.crew.id] ?? []),
-                            expansion: nil, // 收敛列表是扁平的，没有展开
-                            parentId: entry.crew.parentCrewIds.first,
-                            groupCrews: crews,
-                            allowsReparentDrag: false,
-                            dragState: dragState,
-                            childCrewTarget: $childCrewTarget
-                        )
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            ForEach(entries) { entry in
+                CrewSidebarCrewRow(
+                    crew: entry.crew,
+                    crewsById: crewsById,
+                    rootTitles: rootTitles[entry.crew.id] ?? [],
+                    lineageLine: CrewTimelineOrdering.lineageLine(
+                        for: entry.crew,
+                        crewsById: crewsById,
+                        rootTitles: rootTitles[entry.crew.id] ?? []),
+                    expansion: nil, // 扁平列表没有展开
+                    parentId: entry.crew.parentCrewIds.first,
+                    groupCrews: crews,
+                    allowsReparentDrag: false,
+                    dragState: dragState,
+                    childCrewTarget: $childCrewTarget
+                )
+                // 被 agent 顶上来的那几行**要看得出来**：不然人看到一个不合意的
+                // 顺序，分不清是规则算的还是谁排的，只会觉得「这东西乱」。
+                .overlay(alignment: .topLeading) {
+                    if entry.pinnedByArrangement {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Theme.Palette.inkMuted)
+                            .padding(.leading, 2)
+                            .padding(.top, 6)
+                            .help("这一条是总机长排上来的，不是按最近活动排的")
                     }
                 }
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             }
         }
     }
 
+    /// 这一版顺序**是怎么来的** —— 有人排过就说是谁、多久前、为什么；
+    /// 没人排过就明说「按最近活动排的」。
+    ///
+    /// 这一行是第 4 条要求的落点：**退回基础序时也得看得出来是退回了**，
+    /// 不能让人以为 agent 就是排成这样的。
     @ViewBuilder
-    private func sectionHeader(_ group: CrewChiefOverview.Group) -> some View {
-        let isCollapsed = collapsed.contains(group.section)
-        Button {
-            if isCollapsed { collapsed.remove(group.section) }
-            else { collapsed.insert(group.section) }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                    .foregroundStyle(.secondary)
-                Image(systemName: group.section.systemImage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(group.section.title)
-                    .font(Theme.Fonts.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.inkMuted)
-                Text("\(group.entries.count)")
-                    .font(Theme.Fonts.caption2)
-                    .foregroundStyle(Theme.Palette.inkMuted.opacity(0.75))
-                Spacer(minLength: 0)
+    private var provenanceHeader: some View {
+        HStack(spacing: 5) {
+            Image(systemName: arrangement == nil ? "clock" : "pin.fill")
+                .font(.system(size: 9))
+            if let arrangement {
+                let who = arrangement.bySenderName ?? "总机长"
+                Text("\(who) 排的")
+                TimelineView(.everyMinute) { _ in
+                    if let at = CrewTimestamp.parse(arrangement.createdAt) {
+                        Text(at.formatted(.relative(presentation: .numeric)))
+                    }
+                }
+            } else {
+                Text("按最近活动排的（还没人排过）")
             }
-            .contentShape(Rectangle())
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
+        .font(Theme.Fonts.caption2)
+        .foregroundStyle(Theme.Palette.inkMuted)
         .padding(.horizontal, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .help(helpText(for: group.section))
-    }
-
-    private func helpText(for section: CrewChiefOverview.Section) -> String {
-        switch section {
-        case .awaitingHuman: return "这些 crew 那本「人类 Todo」还有你没回应的条目"
-        case .running: return "最近两小时内有过动静"
-        case .quiet: return "两小时以上没动静（含从来没动静过的）"
-        }
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+        .help(arrangement.map { "为什么这么排：\($0.reason)" }
+              ?? "没有人排过顺序，这里按每个 crew 最近一次有动静的时间倒序")
     }
 
     @ViewBuilder
