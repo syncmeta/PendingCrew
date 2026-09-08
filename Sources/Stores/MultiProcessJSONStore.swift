@@ -49,7 +49,9 @@ enum MultiProcessJSONStore {
     /// 这句假描述造成的。
     enum LedgerIncident {
         /// 文件在、读不出来（fd 打满 / 权限 / IO）。**原件一个字节没动**，本次写已拒。
-        case unreadable(Error)
+        /// `url` = **读的人自己用的那个路径**。错误对象里通常带 `NSFilePath`，但不保证；
+        /// 带上它，「读的进程用的数据根跟写的是不是同一个」才有得查。
+        case unreadable(Error, url: URL?)
         /// 读到空表但磁盘文件非空 —— 漏读的另一种形态。同样原件不动、本次写已拒。
         case misread
         /// **两次独立读到的字节都真解不开**。已归档为 `.corrupt-<ts>`
@@ -59,8 +61,14 @@ enum MultiProcessJSONStore {
         /// 说给人听的一句话；调用方在前面接主语（「白板」/「人类 Todo 列表」/…）。
         var summary: String {
             switch self {
-            case .unreadable(let error):
-                return "这次读不出来（\(error.localizedDescription)）。"
+            case .unreadable(let error, let url):
+                // 括号里那句是 Foundation 的原文，**它对 EPERM / EACCES / EMFILE 一字不差、
+                // 而且永远只有文件名**。后面那段方括号是把同一个错误对象里本来就装着、
+                // 却一直被扔掉的两样东西取出来：底层 errno 和绝对路径。
+                // 2026-09-01 的排查就是卡死在这里（Agent Todo #97 原话：「旧提示未保存
+                // 底层 errno，无法事后证明具体是哪种系统错误」），然后被判成「没事」。
+                return "这次读不出来（\(error.localizedDescription)）"
+                    + "【\(diagnose(error, fallbackPath: url).line)】。"
                     + "**原件一个字节都没动**，本次写入已拒绝 —— 这不是文件损坏，不用去翻归档。"
             case .misread:
                 return "读到的是空表、磁盘文件却非空（疑似漏读）。"
@@ -122,14 +130,146 @@ enum MultiProcessJSONStore {
     private static func forEachErrorInChain(
         _ error: Error, _ predicate: (NSError) -> Bool
     ) -> Bool {
+        errorChain(error).contains(where: predicate)
+    }
+
+    /// 整条 `NSUnderlyingErrorKey` 链（最多四层，同上）。判真假用上面那个，
+    /// **要把里面的值取出来**（errno / 路径）用这个。
+    private static func errorChain(_ error: Error) -> [NSError] {
+        var out: [NSError] = []
         var current: NSError? = error as NSError
-        var depth = 0
-        while let e = current, depth < 4 {
-            if predicate(e) { return true }
+        while let e = current, out.count < 4 {
+            out.append(e)
             current = e.userInfo[NSUnderlyingErrorKey] as? NSError
-            depth += 1
         }
-        return false
+        return out
+    }
+
+    // MARK: - 读失败的可诊断读数（2026-09-08）
+
+    /// 一次读失败里**本来就存在、却从没被说出口**的几样事实。
+    ///
+    /// 病根不在 Foundation：`Data(contentsOf:)` 抛的 `NSError` 里既有
+    /// `NSUnderlyingError`（POSIX errno）也有 `NSFilePath`（绝对路径）。丢它们的是
+    /// 我们自己 —— 每一处事故文案都只印 `localizedDescription`，而那句话
+    /// **对下面三种完全不同的病一字不差**：
+    ///
+    /// | errno | 是什么病 | 该怎么办 |
+    /// |---|---|---|
+    /// | `EMFILE`/`ENFILE` | 句柄耗尽（2026-08-12 那次的真身） | 抬软上限、收敛文件数 |
+    /// | `EACCES` | 文件权限位真的不给读 | 看 `ls -l` |
+    /// | `EPERM` | **环境层**拒绝（沙盒 / TCC / 数据保护） | 跟文件本身无关，查授权 |
+    ///
+    /// 三者的区别就是「该找谁」的区别，而 2026-09-01 那次排查正是因为拿不到它
+    /// 才只能写下「无法事后证明具体是哪种系统错误」并翻了 completed。
+    struct ReadFailureDiagnosis {
+        var cocoaCode: Int?
+        var posixCode: Int32?
+        var posixName: String?
+        /// 绝对路径。**那句提示里永远没有它**（`localizedDescription` 只取文件名），
+        /// 所以「读的人和写的人是不是同一个数据根」以前无从判断。
+        var path: String?
+
+        /// 说给排查的人听的一行。
+        var line: String {
+            var parts: [String] = []
+            if let posixCode {
+                parts.append("errno=\(posixCode) \(posixName ?? "（无名）")"
+                             + "（\(String(cString: strerror(posixCode)))）")
+            } else {
+                parts.append("底层 errno 没带上")
+            }
+            if let cocoaCode { parts.append("Cocoa \(cocoaCode)") }
+            parts.append("路径 " + (path ?? "（错误对象里没有，调用方也没给）"))
+            parts.append("读的进程 pid=\(getpid())")
+            return parts.joined(separator: "｜")
+        }
+    }
+
+    /// errno 号 → 名字。只列这条路上真出得来的那些；查不到时只报号，**不猜**。
+    private static let posixErrnoNames: [Int32: String] = [
+        EPERM: "EPERM", ENOENT: "ENOENT", EINTR: "EINTR", EIO: "EIO",
+        ENOMEM: "ENOMEM", EACCES: "EACCES", EBUSY: "EBUSY", ENODEV: "ENODEV",
+        ENOTDIR: "ENOTDIR", EISDIR: "EISDIR", ENFILE: "ENFILE", EMFILE: "EMFILE",
+        EDEADLK: "EDEADLK", EAGAIN: "EAGAIN", ELOOP: "ELOOP",
+        ENAMETOOLONG: "ENAMETOOLONG", ESTALE: "ESTALE", EOVERFLOW: "EOVERFLOW",
+    ]
+
+    /// 从错误链里把 errno 与绝对路径取出来。`fallbackPath` = 读的人自己用的 URL ——
+    /// 错误对象没带路径时用它兜底（**这一路才是回答「数据根对不对」的那条**）。
+    static func diagnose(_ error: Error, fallbackPath: URL?) -> ReadFailureDiagnosis {
+        var d = ReadFailureDiagnosis()
+        for e in errorChain(error) {
+            if e.domain == NSCocoaErrorDomain, d.cocoaCode == nil { d.cocoaCode = e.code }
+            if e.domain == NSPOSIXErrorDomain, d.posixCode == nil {
+                let code = Int32(truncatingIfNeeded: e.code)
+                d.posixCode = code
+                d.posixName = posixErrnoNames[code]
+            }
+            if d.path == nil {
+                if let p = e.userInfo[NSFilePathErrorKey] as? String {
+                    d.path = p
+                } else if let u = e.userInfo[NSURLErrorKey] as? URL {
+                    d.path = u.path
+                }
+            }
+        }
+        if d.path == nil { d.path = fallbackPath?.path }
+        return d
+    }
+
+    // MARK: - 只写不读的持久痕迹
+
+    /// 痕迹文件的上限。到顶**轮转**（`.1`），不是停止记录 —— 一个到点就悄悄不再
+    /// 发声的检查，和一个从来没触发过的检查长得一模一样。
+    static let readFailureLogMaxBytes = 512 * 1024
+
+    /// 出事那个文件旁边的痕迹文件。
+    ///
+    /// 为什么必须另有一条**只写不读**的痕迹：读失败的播报是往白板 append，而
+    /// append 自己要先把白板读出来。同一刻两个都读不出来时（真实形态往往正是
+    /// 「整个目录这一刻都读不了」），那条播报会被 `_ = try?` 静默吞掉 ——
+    /// **于是「这个错发作过多少次」这个问题永远查不清**，而它恰恰是排查里最便宜
+    /// 的那份证据。
+    ///
+    /// 放进 `diagnostics/` 子目录是刻意的：白板目录本身挂着 `DispatchSource`，
+    /// 直接写在那一层会把「读失败 → 写痕迹 → 目录事件 → 又一次读」接成自激。
+    static func readFailureLogURL(besideFileAt url: URL) -> URL {
+        url.deletingLastPathComponent()
+            .appendingPathComponent("diagnostics", isDirectory: true)
+            .appendingPathComponent("read-failures.log")
+    }
+
+    /// 记一条。`O_APPEND` 的小写入跨进程原子，不需要额外的锁（这条路径上**不能**
+    /// 再去拿锁：它自己就跑在别人的锁里）。全程 best-effort —— 留痕失败绝不许
+    /// 把原来那次读失败的处置变得更糟。
+    static func recordReadFailure(_ error: Error, at url: URL) {
+        let log = readFailureLogURL(besideFileAt: url)
+        try? FileManager.default.createDirectory(
+            at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+        rotateReadFailureLogIfFull(log)
+        // argv 而不是「角色」：`ProcessRole` 是 macOS-only，而这一层要同时编进 iOS；
+        // 何况**原样记下 argv 比记一个我们自己算出来的结论硬** —— `--mcp-serve` /
+        // `--daemon` / 什么都没有，读的人自己就能看出是 helper / 后台 / 界面。
+        let argv = CommandLine.arguments.dropFirst().joined(separator: " ")
+        let line = ISO8601DateFormatter().string(from: Date())
+            + "｜" + diagnose(error, fallbackPath: url).line
+            + "｜argv=" + (argv.isEmpty ? "（无）" : String(argv.prefix(240)))
+            + "\n"
+        let fd = open(log.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        _ = Array(line.utf8).withUnsafeBufferPointer { write(fd, $0.baseAddress, $0.count) }
+    }
+
+    private static func rotateReadFailureLogIfFull(_ log: URL) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: log.path),
+              let size = (attrs[.size] as? NSNumber)?.intValue,
+              size >= readFailureLogMaxBytes else { return }
+        let rotated = log.deletingLastPathComponent()
+            .appendingPathComponent(log.lastPathComponent + ".1")
+        try? FileManager.default.removeItem(at: rotated)
+        try? FileManager.default.moveItem(at: log, to: rotated)
     }
 
     /// 读原始字节，瞬时失败退避重试。返回 nil = 文件不存在（合法空）；
@@ -146,6 +286,9 @@ enum MultiProcessJSONStore {
                 usleep(readRetryBackoff[attempt])
             }
         }
+        // 全仓所有账本读失败都从这里出去 —— 留痕挂在这一个漏斗上，
+        // 不指望每个调用点自己记得（那种规矩会漏，而漏掉的那次没人看得见）。
+        recordReadFailure(lastError, at: url)
         throw lastError
     }
 
@@ -164,7 +307,7 @@ enum MultiProcessJSONStore {
         do {
             return try loadRowsLockedReportingFailure(type, at: url, onIncident: onIncident)
         } catch {
-            onIncident(.unreadable(error))
+            onIncident(.unreadable(error, url: url))
             return []
         }
     }

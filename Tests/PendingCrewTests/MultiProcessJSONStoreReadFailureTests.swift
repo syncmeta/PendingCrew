@@ -34,8 +34,12 @@ final class MultiProcessJSONStoreReadFailureTests: XCTestCase {
             // 还原权限，否则临时目录清不掉。
             for url in (try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil)) ?? [] {
+                // 目录得留着 +x，否则 removeItem 进不去（`diagnostics/` 就是一个）。
+                var isDir: ObjCBool = false
+                _ = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
                 try? FileManager.default.setAttributes(
-                    [.posixPermissions: 0o644], ofItemAtPath: url.path)
+                    [.posixPermissions: isDir.boolValue ? 0o755 : 0o644],
+                    ofItemAtPath: url.path)
             }
             try? FileManager.default.removeItem(at: dir)
         }
@@ -236,6 +240,155 @@ final class MultiProcessJSONStoreReadFailureTests: XCTestCase {
         XCTAssertNil(try MultiProcessJSONStore.readDataIfExists(at: url))
         XCTAssertTrue(
             try MultiProcessJSONStore.loadRowsLockedReportingFailure(Row.self, at: url).isEmpty)
+    }
+
+    // MARK: - 读失败的可诊断读数（2026-09-08：这一条被判过一次「没事」的根因）
+
+    /// 2026-09-01 那次排查是这么结束的：机长在 Agent Todo #97 里写下
+    /// 「旧提示未保存底层 errno，无法事后证明具体是哪种系统错误」，于是翻了
+    /// completed。**他说的就是这一层。**
+    ///
+    /// Foundation 给的那句「未能打开文件“x.json”，因为你没有查看它的权限」对
+    /// EPERM / EACCES / EMFILE **一字不差**——而这三个是完全不同的病：
+    /// 句柄耗尽（8-12 那次）、文件权限、环境层拒绝（沙盒 / TCC）。
+    /// 分它们的唯一判据是底层 errno，而 errno **本来就装在同一个错误对象里**。
+    func testDiagnosisSeparatesTheThreeErrnosThatShareOneSentence() {
+        var sentences = Set<String>()
+        for (code, name) in [(EPERM, "EPERM"), (EACCES, "EACCES"), (EMFILE, "EMFILE")] {
+            let wrapped = NSError(
+                domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+                userInfo: [NSUnderlyingErrorKey:
+                            NSError(domain: NSPOSIXErrorDomain, code: Int(code))])
+            sentences.insert(wrapped.localizedDescription)
+            let d = MultiProcessJSONStore.diagnose(wrapped, fallbackPath: nil)
+            XCTAssertEqual(d.posixCode, code, "errno 必须被取出来")
+            XCTAssertEqual(d.posixName, name)
+            XCTAssertTrue(d.line.contains(name), d.line)
+        }
+        XCTAssertEqual(sentences.count, 1,
+                       "前提核对：三个 errno 的 localizedDescription 确实一模一样，"
+                       + "所以光有那句话永远分不出是哪一种")
+    }
+
+    /// 绝对路径同理：那句话里**永远只有文件名**（Foundation 的 localizedDescription
+    /// 就是这么写的，跟数据根对不对没关系），而 `NSFilePath` 本来就在 userInfo 里。
+    /// 丢掉它，「读的进程用的数据根跟写的是不是同一个」就永远查不了。
+    func testDiagnosisKeepsTheAbsolutePathThatTheSentenceThrowsAway() {
+        let path = "/Users/x/Library/Application Support/PendingCrew/whiteboards/c.approvals.json"
+        let wrapped = NSError(
+            domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+            userInfo: [NSFilePathErrorKey: path,
+                       NSUnderlyingErrorKey:
+                        NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM))])
+        XCTAssertFalse(wrapped.localizedDescription.contains(path),
+                       "前提核对：那句话里确实没有路径")
+        let d = MultiProcessJSONStore.diagnose(wrapped, fallbackPath: nil)
+        XCTAssertEqual(d.path, path)
+        XCTAssertTrue(d.line.contains(path), d.line)
+    }
+
+    /// 错误对象没带路径时，退到**读的人自己用的那个 URL** —— 那才是回答
+    /// 「他读的到底是哪个根」的东西，不能因为 Foundation 没附上就空着。
+    func testDiagnosisFallsBackToTheURLTheReaderActuallyUsed() {
+        let bare = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
+        let url = URL(fileURLWithPath: "/tmp/somewhere/else/c.approvals.json")
+        let d = MultiProcessJSONStore.diagnose(bare, fallbackPath: url)
+        XCTAssertEqual(d.path, url.path)
+        XCTAssertEqual(d.cocoaCode, NSFileReadNoPermissionError)
+        XCTAssertNil(d.posixCode, "没带 errno 就不许编一个出来")
+        XCTAssertTrue(d.line.contains("errno 没带上"), d.line)
+    }
+
+    /// 端到端：真造一次读失败，`.unreadable` 那句话必须同时带上 errno 与绝对路径。
+    /// 这两样都在错误对象里，是我们自己在写文案时扔掉的。
+    func testUnreadableSummaryCarriesErrnoAndAbsolutePath() throws {
+        let url = dir.appendingPathComponent("rows.json")
+        try writeRows([Row(id: "1", text: "历史")], to: url)
+        guard try makeUnreadable(url) else {
+            throw XCTSkip("当前环境下 chmod 000 仍可读（root？），这条复现不成立")
+        }
+
+        var incidents: [MultiProcessJSONStore.LedgerIncident] = []
+        _ = MultiProcessJSONStore.loadRowsLocked(
+            Row.self, at: url, onIncident: { incidents.append($0) })
+
+        let summary = try XCTUnwrap(incidents.first).summary
+        XCTAssertTrue(summary.contains("EACCES"), "少了 errno 就分不出是哪种病：\(summary)")
+        XCTAssertTrue(summary.contains(url.path), "少了绝对路径就查不了数据根：\(summary)")
+        // 8-12 立的两条不变式一个字都不许被这次改动削掉。
+        XCTAssertTrue(summary.contains("不是文件损坏"), summary)
+        XCTAssertFalse(summary.contains("已归档"), summary)
+    }
+
+    /// 白板写路径那句回执同理 —— 两个现场（approvals 读失败 / 白板写失败）走的是
+    /// 同一个基座的同一次 `open()`，文案却各写各的，于是同一个病看起来像两件事。
+    func testWhiteboardUnreadableReceiptCarriesErrnoAndAbsolutePath() throws {
+        let store = LocalWhiteboardStore(directory: dir)
+        store.appendUserMessage(crewId: "c", text: "历史")
+        let url = dir.appendingPathComponent("c.json")
+        guard try makeUnreadable(url) else {
+            throw XCTSkip("当前环境下 chmod 000 仍可读（root？），这条复现不成立")
+        }
+
+        var message = ""
+        XCTAssertThrowsError(
+            try store.appendSessionMessageReportingFailure(
+                crewId: "c", sessionId: "s", text: "新消息")
+        ) { message = ($0 as NSError).localizedDescription }
+
+        XCTAssertTrue(message.contains("EACCES"), message)
+        XCTAssertTrue(message.contains(url.path), message)
+        // 这句话原本写着「读不出来且**归档失败**」—— 读不出来时我们从来没试过归档，
+        // 那是假的，而假描述在 8-12 那晚是真实的成本项（机长跑去翻不存在的归档）。
+        XCTAssertFalse(message.contains("归档失败"), message)
+    }
+
+    /// **只写不读**的持久痕迹。为什么必须另有一条：读失败的播报是往白板 append，
+    /// 而 append 自己要先把白板读出来 —— 同一刻两个都读不出来时，那条播报就被
+    /// `_ = try?` 静默吞掉。于是「这个错到底发作过多少次」永远查不清。
+    func testEveryReadFailureLeavesADurableTraceThatNeedsNoRead() throws {
+        let url = dir.appendingPathComponent("rows.json")
+        try writeRows([Row(id: "1", text: "历史")], to: url)
+        guard try makeUnreadable(url) else {
+            throw XCTSkip("当前环境下 chmod 000 仍可读（root？），这条复现不成立")
+        }
+
+        _ = try? MultiProcessJSONStore.loadRowsLockedReportingFailure(Row.self, at: url)
+
+        let log = MultiProcessJSONStore.readFailureLogURL(besideFileAt: url)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: log.path),
+                      "读失败必须留下一条不依赖任何读操作的痕迹")
+        let text = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(text.contains("EACCES"), text)
+        XCTAssertTrue(text.contains(url.path), text)
+        XCTAssertTrue(text.contains("pid="), text)
+        XCTAssertTrue(text.contains("argv="), text)
+        XCTAssertTrue(archives().isEmpty, "留痕不许顺手动原件")
+        XCTAssertEqual(rawBytes(url)?.isEmpty, false, "原件必须还在")
+    }
+
+    /// 痕迹文件不许无限长，也不许**悄悄停止记录** —— 到顶就轮转一次，
+    /// 新的照常写得进去。（「从不发声的检查」那类失效正是这么来的。）
+    func testDurableTraceRotatesInsteadOfSilentlyStopping() throws {
+        let url = dir.appendingPathComponent("rows.json")
+        try writeRows([Row(id: "1", text: "历史")], to: url)
+        let log = MultiProcessJSONStore.readFailureLogURL(besideFileAt: url)
+        try FileManager.default.createDirectory(
+            at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let filler = String(repeating: "x", count: MultiProcessJSONStore.readFailureLogMaxBytes + 1)
+        try Data(filler.utf8).write(to: log)
+
+        guard try makeUnreadable(url) else {
+            throw XCTSkip("当前环境下 chmod 000 仍可读（root？），这条复现不成立")
+        }
+        _ = try? MultiProcessJSONStore.loadRowsLockedReportingFailure(Row.self, at: url)
+
+        let rotated = log.deletingLastPathComponent()
+            .appendingPathComponent(log.lastPathComponent + ".1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rotated.path), "满了要轮转出去")
+        let text = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(text.contains("EACCES"), "轮转之后新的一条照样写得进去：\(text.prefix(200))")
+        XCTAssertLessThan(text.count, MultiProcessJSONStore.readFailureLogMaxBytes)
     }
 
     // MARK: - fd 软上限（触发闸）

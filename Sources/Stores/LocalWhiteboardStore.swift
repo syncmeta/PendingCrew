@@ -473,12 +473,20 @@ private enum WhiteboardPersistenceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsafeEmptyRewrite(let url):
-            return "白板读取为空但磁盘文件非空，已拒绝覆盖：\(url.lastPathComponent)"
+            return "白板读取为空但磁盘文件非空，已拒绝覆盖：\(url.path)"
         case .corruptQuarantineFailed(let url):
-            return "白板文件损坏且归档失败，原始记录已保留：\(url.lastPathComponent)"
+            return "白板文件损坏且归档失败，原始记录已保留：\(url.path)"
         case .unreadableAndPreserved(let url, let cause):
-            return "白板文件读不出来且归档失败（\(cause.localizedDescription)），"
-                + "原始记录已原地保留、本次一个字都没写：\(url.lastPathComponent)"
+            // 原来这句写的是「读不出来**且归档失败**」—— 读不出来时我们从来不试归档
+            // （8-12 P0 的不变式就是这条），所以那半句是假的，而假描述在那晚是真实的
+            // 成本项：一串机长跑去翻根本不存在的归档。
+            //
+            // 后面那段方括号跟 approvals 那条走的是同一个 `diagnose` —— 两个现场
+            // （白板写失败 / 待审批读失败）本来就是同一个 `open()` 的两张脸，
+            // 以前文案各写各的，于是同一个病看起来像两件事。
+            return "白板文件读不出来（\(cause.localizedDescription)）"
+                + "【\(MultiProcessJSONStore.diagnose(cause, fallbackPath: url).line)】，"
+                + "原始记录已原地保留、本次一个字都没写"
         }
     }
 }
