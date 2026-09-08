@@ -36,29 +36,10 @@ mkdir -p "${ARCHIVE}"
 
 LOG="${ARCHIVE}/${NAME}.log"
 echo "跑全量 → ${LOG}"
-
-# **先单独 build 一次再 test。** 冷 derivedDataPath 上直接 `test` 会挂在
-#   `AgentCLIMaintenanceTests.swift:3: unable to resolve module dependency: 'PendingCrew'`
-# —— 有 5 个测试文件用 `@testable import PendingCrew`，而测试 target 的
-# `dependencies:` 里**只有 package、没有 `- target: PendingCrew`**，于是模块要靠
-# 「app 恰好已经在这份 derivedData 里编好了」才解析得到。暖的 derivedData 上看不见，
-# 冷的第一趟必挂。
-#
-# 这里 build 一次是**兜住它**，不是修它 —— 根因在 project.yml 的测试 target 配置，
-# 归那条线修。写在这儿是为了：下一个看到这行的人知道它为什么在。
 rc=0
 xcodebuild -project "${ROOT}/PendingCrew.xcodeproj" -scheme PendingCrew \
-  -destination 'platform=macOS' -derivedDataPath "${DD}" build \
-  > "${LOG}" 2>&1 || rc=$?
-if [ "${rc}" -ne 0 ]; then
-  echo "构建就没过，测试没跑。看 ${LOG}"
-  grep -E "error:" "${LOG}" | head -5
-  exit "${rc}"
-fi
-
-xcodebuild -project "${ROOT}/PendingCrew.xcodeproj" -scheme PendingCrew \
   -destination 'platform=macOS' -derivedDataPath "${DD}" test \
-  >> "${LOG}" 2>&1 || rc=$?
+  > "${LOG}" 2>&1 || rc=$?
 
 # 归档 xcresult。**必须在剪枝之前做**，否则这一趟自己可能先被剪掉。
 newest=$(ls -td "${DD}"/Logs/Test/*.xcresult 2>/dev/null | head -1)

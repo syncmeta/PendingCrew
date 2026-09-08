@@ -660,6 +660,7 @@
 		F6C0D03878BA7542C3959F34 /* CrewLocalAttachmentPersist.swift in Sources */ = {isa = PBXBuildFile; fileRef = C967851468E17B61886D8E53 /* CrewLocalAttachmentPersist.swift */; };
 		F781790D544499998B43976E /* DaemonShutdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */; };
 		F790C6E1DA0ADD2E8D8B71B0 /* CrewColorBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF601A5AC69E1BA6FB748E60 /* CrewColorBar.swift */; };
+		F98D5BFAF11FD7333432E46B /* TestBundleStandaloneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */; };
 		F9CA1E459F346741BBC14AB5 /* QuotaCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1726EF91AEA2E677DC7BB02 /* QuotaCenter.swift */; };
 		F9F834E54330ABB3A6BC684E /* UnixSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A252ADCF93897267B35BC46 /* UnixSocketTransport.swift */; };
 		FA2F81016356F5D9D0CEB384 /* SessionLaunchProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7608A27FF1961D83AFE515F /* SessionLaunchProbeTests.swift */; };
@@ -1156,6 +1157,7 @@
 		FD787F4E767228796A3D51DE /* FileDescriptorLimit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDescriptorLimit.swift; sourceTree = "<group>"; };
 		FE0CACBC82045E85464C0CB1 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
 		FE733889935BCE71D20449F1 /* WorkdirMigrationPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationPlanTests.swift; sourceTree = "<group>"; };
+		FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBundleStandaloneTests.swift; sourceTree = "<group>"; };
 		FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -1740,6 +1742,7 @@
 				3F65603310BBC35C6621462F /* TerminalSnapshotFixtureTests.swift */,
 				9AAC2B3A0970EC074BAD0535 /* TerminalSnapshotHarness.swift */,
 				F271252C46BEA6D06D53C893 /* TerminatedScrollbackTests.swift */,
+				FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */,
 				A66BE415A2B49FD3458C071F /* TodoEvidenceTests.swift */,
 				6EECC7D0788EA95EDF94F09A /* TodoLandingFlowTests.swift */,
 				F004EFC6500C77213D744D1E /* TodoLedgerIsolationTests.swift */,
@@ -2668,6 +2671,7 @@
 				7D7CFFE03934ADC57EEE0942 /* TerminalSnapshotHarness.swift in Sources */,
 				6B6C9B35AE40DDFF295CCF26 /* TerminatedScrollbackPlan.swift in Sources */,
 				EA5D23935B87700ABAF77E0F /* TerminatedScrollbackTests.swift in Sources */,
+				F98D5BFAF11FD7333432E46B /* TestBundleStandaloneTests.swift in Sources */,
 				76FCFFEEC8113478FD61D7E2 /* Theme.swift in Sources */,
 				FCA3F72E6F463DDB21D29D85 /* ThemeCrewExtras.swift in Sources */,
 				6581FA8BAB65640A603A68BA /* TodoEvidence.swift in Sources */,
