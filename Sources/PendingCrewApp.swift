@@ -84,13 +84,25 @@ struct PendingCrewApp: App {
                 .environmentObject(crewStore)
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         } label: {
-            // SF Symbol + 可选数字。有事时用实心图标，安静时用空心 ——
+            // 品牌符号 + 可选数字。有事时加粗，安静时常规 ——
             // 一眼扫过去不用读数字就知道要不要停下来。
+            //
+            // 图标用的是我们自己的 `PendingCrewSymbol`（Assets 里的 .symbolset，
+            // 一份规范的 SF Symbol 模板：带 Guides / 各权重的 Baseline·Capline·margin，
+            // `fill="none"`、无渐变无位图 ⇒ **矢量单色**，菜单栏会按系统外观自动反色）。
+            //
+            // **两态为什么用权重而不是空心/实心**：空心↔实心那一对是 SF Symbol
+            // 自带的 `.fill` 变体，自定义 symbol 没有第二个字形可换。而这个符号的
+            // SVG 里本来就定义了 Ultralight→Black 各档的 margin，**它是照多权重设计的**，
+            // 所以按权重分档是顺着它的设计走，不是将就。
+            //
+            // 换图标的时候别把这个两态一起丢了 —— 它不是装饰：
+            // 常年挂一个数字会训练人忽略它，而「粗细变了」是不用读数字就能扫到的信号。
             Label {
                 if let badge = menuBarAttention.count.badge { Text(badge) }
             } icon: {
-                Image(systemName: menuBarAttention.count.isQuiet
-                      ? "person.2" : "person.2.badge.gearshape.fill")
+                Image("PendingCrewSymbol")
+                    .fontWeight(menuBarAttention.count.isQuiet ? .regular : .bold)
             }
             .accessibilityLabel(menuBarAttention.count.summary)
         }
