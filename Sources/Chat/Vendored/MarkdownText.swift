@@ -34,6 +34,11 @@ struct MarkdownText: View {
     /// toolbar. False keeps it lightweight (used in 来信 articles where
     /// "run" doesn't make sense).
     var allowCodeRun: Bool = false
+    // PENDINGCREW SHIM (人类 Todo #119): 已完成的 Todo 正文要变灰（人类明确要求过，
+    // 而且**只变灰、不加删除线**）。以前是 `Text(...).foregroundStyle(inkMuted)`，
+    // 换成 markdown 之后那句**压不动了** —— 主题里 `.text { ForegroundColor(ink) }`
+    // 是显式写死的，祖先的 `.foregroundStyle` 赢不过它。所以变灰必须从主题这一侧走。
+    var dimmed: Bool = false
     /// Web-search references for inline `[N]` markers. Empty disables the
     /// citation rewrite — the text renders verbatim, including any literal
     /// `[1]`-style brackets the bot might have meant as plain text.
@@ -42,7 +47,13 @@ struct MarkdownText: View {
     // PENDINGCREW SHIM (Todo #56 ⑥): Codex transcript prose is a denser desktop
     // reading surface than a crew chat bubble. Keep its typography opt-in so regular
     // chat, reasoning rows and tool output do not move with it.
-    enum Variant { case chat, codexTranscript, article }
+    // PENDINGCREW SHIM (人类 Todo #119): Todo 页面（右栏概览卡片 + 详细窗口）也要渲染
+    // markdown，但**不许改变现有字号** —— 人类原话「ui 格式要和外面的没点放大看进去之前
+    // 一样」。两处正文现在都是 `Theme.Fonts.footnote`(13pt)、回应是 `.caption`(12pt)，
+    // 而 `.article` 是 17pt 衬线、`.chat` 是 16pt，借哪个都会把 Todo 卡片撑大变样
+    // （离屏实测：同一段内容 `.article` 比纯 Text 高 12.5 倍）。所以另起两个 variant，
+    // `.chat` 一个字不动。
+    enum Variant { case chat, codexTranscript, article, todo, todoNote }
 
     @State private var presentedCitation: PresentedCitation?
     /// Math formulas are rasterised to bitmaps; pin the renderer to the live
@@ -118,6 +129,9 @@ struct MarkdownText: View {
         case (.codexTranscript, true):  return MarkdownText.codexTranscriptThemeRunnable
         case (.article, false): return MarkdownText.articleTheme
         case (.article, true):  return MarkdownText.articleThemeRunnable
+        // PENDINGCREW SHIM (Todo #119): Todo 面不提供「运行」，两档都走同一份。
+        case (.todo, _):        return dimmed ? MarkdownText.todoDimTheme : MarkdownText.todoTheme
+        case (.todoNote, _):    return dimmed ? MarkdownText.todoNoteDimTheme : MarkdownText.todoNoteTheme
         }
     }
 
@@ -142,6 +156,8 @@ struct MarkdownText: View {
         case .chat: return AppTheme.Fonts.scaled(16)
         case .codexTranscript: return AppTheme.Fonts.scaled(15)
         case .article: return 17
+        case .todo: return AppTheme.Fonts.scaled(13)
+        case .todoNote: return AppTheme.Fonts.scaled(12)
         }
     }
 
@@ -158,6 +174,61 @@ struct MarkdownText: View {
         .chatCodeBlock(allowRun: true, variant: .chat)
     fileprivate static let articleTheme = articleThemeBase.chatCodeBlock(allowRun: false, variant: .article)
     fileprivate static let articleThemeRunnable = articleThemeBase.chatCodeBlock(allowRun: true, variant: .article)
+
+    // PENDINGCREW SHIM (人类 Todo #119): Todo 页面两档。
+    fileprivate static let todoTheme = todoThemeBase(bodySize: AppTheme.Fonts.scaled(13))
+        .chatCodeBlock(allowRun: false, variant: .chat)
+    fileprivate static let todoNoteTheme = todoThemeBase(bodySize: AppTheme.Fonts.scaled(12))
+        .chatCodeBlock(allowRun: false, variant: .chat)
+    fileprivate static let todoDimTheme = todoThemeBase(
+        bodySize: AppTheme.Fonts.scaled(13), ink: AppTheme.Palette.inkMuted)
+        .chatCodeBlock(allowRun: false, variant: .chat)
+    fileprivate static let todoNoteDimTheme = todoThemeBase(
+        bodySize: AppTheme.Fonts.scaled(12), ink: AppTheme.Palette.inkMuted)
+        .chatCodeBlock(allowRun: false, variant: .chat)
+
+    /// Todo 页面的 markdown 主题（人类 Todo #119）。
+    ///
+    /// 起点是 `chatThemeBase`（密排、无衬线），只改三处，每一处都对着一条约束：
+    ///
+    /// 1. **正文字号跟着调用方给**（13 = `Theme.Fonts.footnote`，12 = `.caption`）。
+    ///    这是「ui 格式要和外面一样」那句话的落点 —— 加 markdown 之前两处正文就是这个
+    ///    尺寸，加完必须还是。
+    /// 2. **标题不许比正文大太多。** 聊天主题的 h1 是 22pt，那在一张 3 行高的 Todo 卡片里
+    ///    会把卡片顶开，而 Todo 正文里的 `##` 通常只是个小标题，不是文章章节。
+    ///    三级各比正文大 2/1/0 点、只留粗细差别。
+    /// 3. **段间距收紧**（6 → 4）。卡片里放得下的行数本来就少，段距吃掉的是内容。
+    ///
+    /// 列表、引用、行内代码、链接全部沿用聊天那套 —— 那些在窄卡片里本来就够克制。
+    fileprivate static func todoThemeBase(
+        bodySize: CGFloat, ink: Color = AppTheme.Palette.ink
+    ) -> MDTheme {
+        chatThemeBase
+            .text {
+                ForegroundColor(ink)
+                FontSize(bodySize)
+            }
+            .heading1 { configuration in
+                configuration.label
+                    .markdownTextStyle { FontWeight(.semibold); FontSize(bodySize + 2) }
+                    .markdownMargin(top: 4, bottom: 2)
+            }
+            .heading2 { configuration in
+                configuration.label
+                    .markdownTextStyle { FontWeight(.semibold); FontSize(bodySize + 1) }
+                    .markdownMargin(top: 4, bottom: 2)
+            }
+            .heading3 { configuration in
+                configuration.label
+                    .markdownTextStyle { FontWeight(.semibold); FontSize(bodySize) }
+                    .markdownMargin(top: 3, bottom: 2)
+            }
+            .paragraph { configuration in
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .markdownMargin(top: 0, bottom: 4)
+            }
+    }
 
     /// Chat-tuned theme: tight vertical rhythm so a short bot reply doesn't
     /// feel like a blog post. Default for `.chat` variant.

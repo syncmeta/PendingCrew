@@ -1,6 +1,5 @@
 #if os(macOS)
 import XCTest
-@testable import PendingCrew
 
 final class AgentCLIMaintenanceTests: XCTestCase {
     func testBothCLIFormatsUseTheExistingNumericVersionParser() {

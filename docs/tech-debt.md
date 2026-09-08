@@ -12,6 +12,34 @@
 
 ---
 
+### 🟡 「测试文件不许 `@testable import PendingCrew`」这条规矩**没有任何东西在执行**，今天复发
+
+- **发现**: 2026-09-08 · 修 `withdraw_human_todo` 那一单顺手撞上的。
+- **形状**：`PendingCrewTests` 是 standalone bundle（`TEST_HOST=""`，源码直接编进
+  bundle，`project.yml` 里那个 target **没有 `dependencies:`**）。所以测试文件
+  **不该** `@testable import PendingCrew` —— 这句话白纸黑字写在
+  `Tests/PendingCrewTests/DirectoryWatchCoalescingTests.swift` 第 2 行的注释里。
+  写了会怎样：**只在 DerivedData 里恰好躺着上一次构建留下的 `PendingCrew.swiftmodule`
+  时才编得过**。全新 `-derivedDataPath` 一律
+  `error: unable to resolve module dependency: 'PendingCrew'`，整个 test target 编不过。
+- **债在哪**：**这不是第一次。** 2026-09-05 已经删过一批（`347aac5`），
+  今天在 `AgentCLIMaintenanceTests.swift` 上原样复发，又删了一次（`b73ac38`）。
+  两次之间**没有任何检查会发声** —— 靠的是「下一个人记得那条注释」，
+  而那条注释在另一个文件里。
+- **为什么它特别难看见**：写的人那台机器上是**绿的**，而且是真绿。
+  假绿的来源不是测试写错，是**构建产物的残留**。红只出现在
+  「换 worktree / 换机器 / CI 第一次跑」，也就是**别人**那里。
+  本机挂着几十个 worktree，暖 DerivedData 遍地，所以正常开发几乎撞不到。
+- **该怎么治**（下一个碰它的人）：加一道能红的尺子，不要再写一条注释。
+  最便宜的形状是在既有的自查脚本里加一条：
+  `git ls-files 'Tests/**/*.swift' | xargs grep -n 'import PendingCrew'`
+  命中即退 1。**加之前先植入一个样本证明它真会红**（本仓库有过「尺子扫的是
+  `git ls-files`、而新文件还没提交所以扫不到自己」的先例）。
+  更硬的一道是让 CI / release-gate 用**全新 `-derivedDataPath`** 跑一趟 ——
+  那道尺子连没想到的同类问题一起罩住，代价是一次冷编译。
+- **旁证**：同一个坑在共享记忆里记作 ①e。规矩存在、被写下来过、还是复发了 ——
+  **规矩失效要靠加触发点，不是靠重写内容。**
+
 ### 🔴 账本 `open()` 撞 `EPERM` 的**发出者仍未知** —— 这次只补了诊断，没治病
 
 - **发现**: 2026-09-08 · 计划 #48。根因分析在
