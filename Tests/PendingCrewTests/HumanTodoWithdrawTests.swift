@@ -1,14 +1,14 @@
 import XCTest
 
-/// 提出者撤回自己那条人类 Todo（Todo #102）。
+/// 撤回一条人类 Todo（Todo #102；2026-09-08 机长那道闸）。
 ///
 /// 这扇门存在的理由：一条人类 Todo 最常见的死法是**世界变了**（版本发出去了、站
-/// 上线了、那条线被别的决定取代了），而能判断世界变没变的只有当初提的那一方。
-/// 门开之前，提出者明知道自己那条已作废，也只能看着它挂在人的账上亮灯。
+/// 上线了、那条线被别的决定取代了），而能判断世界变没变的只有 agent 这一侧。
+/// 门开之前，明知道那条已作废，也只能看着它挂在人的账上亮灯。
 ///
 /// 所以这里钉的不是「能不能撤」，是几件撤错了就会伤人的事：
-/// 只能撤自己提的、原因必填、**撤完不许静默消失**（条目留着 + 群里那行）、
-/// 撤不动时要说得出**为什么**撤不动。
+/// 撤得动的只有提出者本人和**本 crew 的机长**、原因必填、
+/// **撤完不许静默消失**（条目留着 + 群里那行）、撤不动时要说得出**为什么**撤不动。
 final class HumanTodoWithdrawTests: XCTestCase {
 
     private func tempDir() -> URL {
@@ -194,11 +194,12 @@ final class HumanTodoWithdrawTests: XCTestCase {
     // MARK: - MCP 那一层
 
     private func server(_ dir: URL, sessionId: String = "sess-1",
-                        label: String? = "机长") -> McpServer {
+                        label: String? = "机长",
+                        isCaptain: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "c", sessionId: sessionId, isCaptain: false,
+                  crewId: "c", sessionId: sessionId, isCaptain: isCaptain,
                   sessionLabel: label, todos: LocalTodoStore(directory: dir))
     }
 
@@ -359,12 +360,240 @@ final class HumanTodoWithdrawTests: XCTestCase {
         XCTAssertTrue(r.contains("别在正文里写"))
     }
 
-    func testMcpDescriptionSaysItIsNotDeletionAndOwnerOnly() {
+    func testMcpDescriptionKeepsTheTwoSafetyBelts() throws {
         // 这两句是这扇门的安全带：一句挡住「拿它清理我不想答的事」，
-        // 一句挡住「以为撤了就没人看得见了」。
-        let r = (try? XCTUnwrap(server(tempDir())
-            .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))) ?? ""
-        XCTAssertTrue(r.contains("只能撤自己提的"))
-        XCTAssertTrue(r.contains("不是删除"))
+        // 一句挡住「以为撤了就没人看得见了」。**权限放宽之后它们更要紧** ——
+        // 撤得动的东西变多了，「这不是删除、人有权追问」才是那道兜底。
+        let d = try toolDescription("withdraw_human_todo")
+        XCTAssertTrue(d.contains("不是删除"), d)
+        XCTAssertTrue(d.contains("那是人的账不是你的"), d)
+        XCTAssertTrue(d.contains("只能撤本 crew 的"), "跨 crew 那条边界不许在改文案时丢掉")
+    }
+
+    // MARK: - 机长撤得动本 crew 的任何一条（人类原话：「我希望机长能处理所有的 todo，
+    //         不要出现这种撤不掉的情况」）
+    //
+    // ## 这几条钉的是什么
+    // 原来的判据是「你是不是提出者」，判等的对象是 `createdBySessionId`。
+    // **session 是会消失的实体**（后台重启、正常收工、被停掉都会带走它），
+    // 而权限被挂在了它上面 —— 于是至少三类条目永远撤不掉：提出者已经没了的、
+    // 老得根本没记提出者的、别人代提的。今天真撞上了：一个子 crew 有两条已经
+    // 被人当面拍板作废的人类 Todo，谁也撤不掉，只能一直在人的待办里亮着灯，
+    // 催他答一个他已经答过的问题。
+    //
+    // 新判据是「你是不是这个 crew 的机长」—— **机长是常驻角色**。
+    // 把永久性的权限挂在会消失的东西上，就是这个 bug 的形状本身。
+    //
+    // 下面两条红是分开写的，因为它们在旧代码里走的是**不同分支**：
+    // 一条死在 `owner == sessionId` 的判等上，一条死在 `guard let owner` 的解包上。
+    // 一条测试盖不住两条分支。
+
+    func testCaptainCanWithdrawWhenTheAuthorSessionIsGone() {
+        // 类型①：提出者 session 已经不存在了。**store 看不见 session 的死活，
+        // 也不需要看见** —— 判据是「我是不是机长」，不是「那个 session 还在不在」。
+        // 这里用一个此刻绝不会再出现的 sessionId 表示「它已经没了」。
+        let s = store(tempDir())
+        let item = seed(s, by: "sess-已经没了", name: "某个已退出的 session")
+
+        guard case .withdrawn(let after) = s.withdraw(
+            crewId: "c", number: item.number, sessionId: "captain-新的一轮",
+            senderName: "机长", reason: "人类今天当面答过了，这条作废", isCaptain: true) else {
+            return XCTFail("机长该撤得动本 crew 的任何一条")
+        }
+        XCTAssertNotNil(after.withdrawnAt)
+        XCTAssertFalse(after.isUnanswered, "撤完不该再算等人回应，否则灯还亮着")
+    }
+
+    func testCaptainCanWithdrawALegacyItemWithNoRecordedAuthor() {
+        // 类型②：`createdBySessionId` 是后来加的字段，早期条目上根本没有 ——
+        // 判等永远不成立，这类条目在旧代码里**任何人**都撤不掉。
+        let s = store(tempDir())
+        let item = seed(s, by: nil, name: nil)
+
+        guard case .withdrawn = s.withdraw(
+            crewId: "c", number: item.number, sessionId: "captain-新的一轮",
+            senderName: "机长", reason: "老条目，那件事早就没了", isCaptain: true) else {
+            return XCTFail("没记提出者的老条目，机长也该撤得动")
+        }
+        XCTAssertFalse(s.item(crewId: "c", number: item.number)!.isUnanswered)
+    }
+
+    func testCaptainWithdrawLeavesATrailSayingWhoDidIt() {
+        // 权限放宽了就必须留痕：撤的是别人提的一条，人回头要看得出**是谁撤的**、
+        // 为什么撤 —— 不然「撤回不是删除、人有权追问」这句话就落不了地。
+        let s = store(tempDir())
+        let item = seed(s, by: "sess-已经没了", name: "某个已退出的 session")
+        _ = s.withdraw(crewId: "c", number: item.number, sessionId: "captain-9",
+                       senderName: "机长", reason: "人类今天当面答过了", isCaptain: true)
+
+        let after = s.item(crewId: "c", number: item.number)
+        XCTAssertEqual(after?.withdrawnBySessionId, "captain-9")
+        XCTAssertEqual(after?.responses.first?.senderName, "机长")
+        XCTAssertTrue(after?.responses.first?.text.contains("人类今天当面答过了") == true)
+        XCTAssertEqual(after?.createdBySenderName, "某个已退出的 session",
+                       "提出者是谁不许被撤回抹掉")
+    }
+
+    // MARK: 机长身份只解开「谁能撤」这一道闸，别的一道都不许顺手放开
+
+    func testCaptainStillNeedsAReason() {
+        let s = store(tempDir())
+        let item = seed(s, by: "sess-other")
+        XCTAssertEqual(s.withdraw(crewId: "c", number: item.number, sessionId: "captain-9",
+                                  reason: "   ", isCaptain: true), .reasonRequired)
+        XCTAssertTrue(s.item(crewId: "c", number: item.number)!.isUnanswered)
+    }
+
+    func testCaptainCannotWithdrawWhatTheHumanDeleted() {
+        // `delete` 是人类自己的动作。机长身份不该让一条人类删掉的条目复活成可撤。
+        //
+        // ⚠️ **这一条挡住的不是判据**。变异测试当场证伪：把判据里的 `!item.isDeleted`
+        // 对机长放开，这条照样全绿 —— 因为 `withdraw` 里 `liveIndexLocked` 更早一步
+        // 就找不到已删的行了。它守的是**这条路的行为**（有用，但只有这么多）；
+        // 判据本身由下面那条直接钉。
+        let s = store(tempDir())
+        let item = seed(s, by: "sess-other")
+        XCTAssertTrue(s.delete(crewId: "c", number: item.number))
+        XCTAssertEqual(s.withdraw(crewId: "c", number: item.number, sessionId: "captain-9",
+                                  reason: "过期", isCaptain: true), .notFound)
+    }
+
+    func testCaptaincyDoesNotResurrectAHumanDeletedItemInTheJudgeItself() {
+        // 上面那条测不到判据（见它的注释），所以这里绕开 `withdraw` 那条链，
+        // 直接把已删的条目递给判据 —— **判据是两扇门共用的那一份**，
+        // 哪天有人从别的地方调它，挡住机长的就只剩这一句。
+        var gone = LocalTodoItem(id: "i", number: 1, text: "t", status: "pending",
+                                 createdAt: "2026-09-07T00:00:00Z",
+                                 createdBySessionId: "sess-other")
+        gone.deletedAt = "2026-09-07T01:00:00Z"
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: gone, sessionId: "captain-9",
+                                                       isCaptain: true), .notFound)
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: gone, sessionId: "sess-other",
+                                                       isCaptain: false), .notFound,
+                       "不是机长时也一样 —— 这句证明上一句不是被别的判据顺手挡住的")
+    }
+
+    func testCaptainWithdrawIsStillIdempotent() {
+        let s = store(tempDir())
+        let item = seed(s, by: "sess-other")
+        _ = s.withdraw(crewId: "c", number: item.number, sessionId: "captain-9",
+                       reason: "过期了", isCaptain: true)
+        guard case .alreadyWithdrawn = s.withdraw(
+            crewId: "c", number: item.number, sessionId: "captain-9",
+            reason: "又过期了", isCaptain: true) else {
+            return XCTFail("撤过的再撤该说撤过了，机长也不例外")
+        }
+        XCTAssertEqual(s.item(crewId: "c", number: item.number)?.responses.count, 1)
+    }
+
+    func testNonCaptainGateIsUnchanged() {
+        // 反面：不是机长的照旧只能撤自己提的。这条守的是「别顺手放宽给所有人」。
+        let s = store(tempDir())
+        let mine = seed(s, text: "我提的", by: "sess-1")
+        let theirs = seed(s, text: "别人提的", by: "sess-other", name: "别人")
+        let legacy = seed(s, text: "老条目", by: nil, name: nil)
+
+        guard case .withdrawn = s.withdraw(crewId: "c", number: mine.number,
+                                           sessionId: "sess-1", reason: "过期") else {
+            return XCTFail("自己提的照旧撤得动")
+        }
+        XCTAssertEqual(s.withdraw(crewId: "c", number: theirs.number,
+                                  sessionId: "sess-1", reason: "过期"),
+                       .notYours(owner: "别人"))
+        XCTAssertEqual(s.withdraw(crewId: "c", number: legacy.number,
+                                  sessionId: "sess-1", reason: "过期"),
+                       .notYours(owner: nil))
+    }
+
+    func testWithdrawObstacleJudgesByCaptaincyNotByAuthorship() {
+        // 两扇门（`withdraw_human_todo` 和 `add_human_todo(supersedes:)`）共用的
+        // 那一份纯判据，也必须认机长 —— 各写一套迟早分叉。
+        let theirs = LocalTodoItem(id: "i", number: 1, text: "t", status: "pending",
+                                   createdAt: "2026-09-07T00:00:00Z",
+                                   createdBySessionId: "sess-已经没了",
+                                   createdBySenderName: "别人")
+        let legacy = LocalTodoItem(id: "j", number: 2, text: "t", status: "pending",
+                                   createdAt: "2026-09-07T00:00:00Z")
+
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: theirs, sessionId: "captain-9"),
+                       .notYours(owner: "别人"), "不是机长时判据一个字没变")
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: legacy, sessionId: "captain-9"),
+                       .notYours(owner: nil))
+
+        XCTAssertNil(LocalTodoStore.withdrawObstacle(item: theirs, sessionId: "captain-9",
+                                                     isCaptain: true))
+        XCTAssertNil(LocalTodoStore.withdrawObstacle(item: legacy, sessionId: "captain-9",
+                                                     isCaptain: true))
+        XCTAssertEqual(LocalTodoStore.withdrawObstacle(item: nil, sessionId: "captain-9",
+                                                       isCaptain: true), .notFound,
+                       "机长身份不该把「没这条」变成撤得动")
+    }
+
+    // MARK: MCP 那一层：机长的 helper 带着 --captain 起来，这道闸要真的接上去
+
+    func testMcpCaptainWithdrawsATodoLeftBehindByAGoneSession() {
+        let dir = tempDir()
+        let item = seed(store(dir), by: "sess-已经没了", name: "某个已退出的 session")
+        let receipt = call(server(dir, sessionId: "captain-9", isCaptain: true),
+                           ["number": item.number, "reason": "人类今天当面答过了"])
+        XCTAssertTrue(receipt.contains("已撤回"), receipt)
+
+        let posted = LocalWhiteboardStore(directory: dir).list(crewId: "c")
+        XCTAssertTrue(posted.contains { $0.text.contains("撤回 人类 To Do #\(item.number)：人类今天当面答过了") },
+                      "机长撤的照样要在群里留下带原因的那一行")
+    }
+
+    func testMcpRefusalTellsWorkersToAskTheCaptain() {
+        // 撤不动时给的那句建议**本身就是这次要修的东西**：旧文案让人「在群里说明、
+        // 让人类自己决定删不删」—— 那正是今天真的发生的、把一条死条目永远挂在
+        // 人账上的路。现在有确定的出口：找本 crew 机长。
+        let dir = tempDir()
+        let item = seed(store(dir), by: "sess-other", name: "别人")
+        let receipt = call(server(dir, sessionId: "sess-1"),
+                           ["number": item.number, "reason": "我看它没用了"])
+        XCTAssertTrue(receipt.contains("机长"), receipt)
+    }
+
+    func testMcpCaptainCanSupersedeATodoLeftBehindByAGoneSession() {
+        // supersede 是撤回的第二扇门，走的是同一份判据 —— 机长在这扇门上也该撤得动，
+        // 否则两扇门对同一个人给出相反的答案。
+        let dir = tempDir()
+        let old = seed(store(dir), text: "0.1.24 要不要发？", by: "sess-已经没了", name: "别人")
+        let receipt = add(server(dir, sessionId: "captain-9", isCaptain: true),
+                          ["text": "0.1.25 要不要发？", "supersedes": old.number])
+        XCTAssertTrue(receipt.contains("同时撤回了旧的 #\(old.number)"), receipt)
+
+        let ledger = LocalTodoStore(directory: dir, ledger: .human)
+        XCTAssertEqual(ledger.list(crewId: "c").filter(\.isUnanswered).count, 1,
+                       "人只该看到一条在等他")
+    }
+
+    /// `tools/list` 里那个工具自己的 description。**必须只取这一个工具的那一段** ——
+    /// 拿整份 JSON 去 `contains("机长")` 会被别的工具（`plan_add` 等）里的「机长」
+    /// 二字喂饱，那种绿跟这次改动一点关系都没有。
+    private func toolDescription(_ name: String) throws -> String {
+        let raw = try XCTUnwrap(server(tempDir())
+            .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(raw.utf8)) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let tool = try XCTUnwrap(tools.first { $0["name"] as? String == name },
+                                 "tools/list 里没有 \(name)")
+        return try XCTUnwrap(tool["description"] as? String)
+    }
+
+    func testToolDescriptionOnlyReadsTheWithdrawToolsOwnText() throws {
+        // 先证明这把尺子会红：别的工具里的「机长」不许算进来。
+        let d = try toolDescription("withdraw_human_todo")
+        XCTAssertFalse(d.contains("督办"), "取错工具了 —— 这是 plan_add 那边的词")
+    }
+
+    func testToolDescriptionSaysTheCaptainCanWithdrawAnyOfThisCrews() throws {
+        // 描述必须跟着判据改：agent 只读得到描述。描述还写着「只能撤自己提的」，
+        // 机长就根本不会去试 —— 一条修好了却没人知道的权限等于没修。
+        let d = try toolDescription("withdraw_human_todo")
+        XCTAssertTrue(d.contains("机长"), d)
+        XCTAssertTrue(d.contains("不是删除"), "这条安全带不许在改文案时被顺手拆掉")
     }
 }

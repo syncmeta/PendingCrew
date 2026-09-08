@@ -304,14 +304,14 @@ final class McpServer {
                         "type": "object",
                         "properties": [
                             "text": ["type": "string", "description": "要人拍板/要人做的那件事。一条一件，带上选项和你的建议。"],
-                            "supersedes": ["type": "integer", "description": "可选：这条**取代**你之前提的哪一条（填那条的 #N）。填了就等于同时撤回旧的那条，人只会看到新的这条在等他。**只能取代自己提的、还没被撤回的那条**；N 验不过就整件事都不做（新条目也不会加），你改对了再来。别在正文里写「本条取代 #N」——写在正文里没有任何东西会去执行它。"],
+                            "supersedes": ["type": "integer", "description": "可选：这条**取代**之前的哪一条（填那条的 #N）。填了就等于同时撤回旧的那条，人只会看到新的这条在等他。**范围与 withdraw_human_todo 同一把尺子**：自己提的、还没被撤回的那条；本 crew 机长则是本 crew 的任何一条。N 验不过就整件事都不做（新条目也不会加），你改对了再来。别在正文里写「本条取代 #N」——写在正文里没有任何东西会去执行它。"],
                         ],
                         "required": ["text"],
                     ],
                 ],
                 [
                     "name": "withdraw_human_todo",
-                    "description": "撤回**你自己提的**那条人类 Todo（Todo 面板「人类的」那本）。用在**你提的那件事已经不成立了**：版本发出去了、站上线了、你自己在群里改了主意、那条线被别的决定取代了。\n\n**这是这本账里最该常用的一个动作，因为只有你判断得了。**一条人类 Todo 最常见的死法不是人不想答，是**世界变了**——而人类判断不了世界变没变（他不知道下游走到哪一版了），能判断的只有当初提的那一方，也就是你。你不撤，它就一直挂在他账上亮着灯催他，而那件事其实早就没了。\n\n**只能撤自己提的**（按落账时记下的 session 判定，不看显示名），**只能撤本 crew 的**，**reason 必填**。撤回**不是删除**：条目留在列表里、原因写在它的时间线上、群里也会出一行「撤回 人类 To Do #N：…」——人有权知道你撤了什么、为什么，也有权追问把它问回来。别拿它清理你不想答的事，那是人的账不是你的。",
+                    "description": "撤回一条人类 Todo（Todo 面板「人类的」那本）。用在**那件事已经不成立了**：版本发出去了、站上线了、人当面答过了、那条线被别的决定取代了。\n\n**这是这本账里最该常用的一个动作，因为只有你判断得了。**一条人类 Todo 最常见的死法不是人不想答，是**世界变了**——而人类判断不了世界变没变（他不知道下游走到哪一版了），能判断的只有当初提的那一方。你不撤，它就一直挂在他账上亮着灯催他，而那件事其实早就没了。\n\n**谁撤得动**：你自己提的那条（按落账时记下的 session 判定，不看显示名）；**你要是本 crew 的机长，本 crew 的任何一条你都撤得动**——包括提出者 session 已经不在了的、和老得根本没记提出者的。机长是常驻角色，session 会消失，所以这本账的清理责任在机长身上：看到一条已经作废却没人撤得掉的，那就是你的活。**只能撤本 crew 的**（父 crew 机长也伸不进子 crew，那会绕过人家自己的机长），**reason 必填**。\n\n撤回**不是删除**：条目留在列表里、原因写在它的时间线上、群里也会出一行「撤回 人类 To Do #N：…」——人有权知道你撤了什么、为什么，也有权追问把它问回来。别拿它清理你不想答的事，那是人的账不是你的；替别人撤之前先确认那件事**真的**不成立了。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -1304,7 +1304,8 @@ final class McpServer {
             let supersedes = (args["supersedes"] as? Int) ?? (args["supersedes"] as? NSNumber)?.intValue
             if let target = supersedes {
                 let obstacle = LocalTodoStore.withdrawObstacle(
-                    item: humanTodos.item(crewId: crewId, number: target), sessionId: sessionId)
+                    item: humanTodos.item(crewId: crewId, number: target), sessionId: sessionId,
+                    isCaptain: isCaptain)
                 switch obstacle {
                 case .none:
                     break
@@ -1313,8 +1314,9 @@ final class McpServer {
                                       + "**新条目也没有加** —— 号改对了再来，或者去掉 supersedes 单纯新增。")
                 case .notYours(let owner):
                     let who = owner.map { "「\($0)」" } ?? "（账上没记提出者，老条目）"
-                    return toolResult(id: id, text: "ERROR: 人类 Todo #\(target) 不是你提的，提出者是 \(who) —— **只能取代自己提的**。"
-                                      + "**新条目也没有加。**要么去掉 supersedes 单纯新增，要么让提出者自己撤。")
+                    return toolResult(id: id, text: "ERROR: 人类 Todo #\(target) 不是你提的，提出者是 \(who) —— **你只能取代自己提的**。"
+                                      + "**新条目也没有加。**要么去掉 supersedes 单纯新增；"
+                                      + "要么让提出者自己撤，提出者已经不在了就找本 crew 的机长（机长撤得动本 crew 的任何一条）。")
                 case .alreadyWithdrawn:
                     return toolResult(id: id, text: "ERROR: 人类 Todo #\(target) 已经撤回过了，不用再取代它。"
                                       + "**新条目也没有加** —— 去掉 supersedes 再来。")
@@ -1377,7 +1379,8 @@ final class McpServer {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let outcome = humanTodos.withdraw(crewId: crewId, number: number,
                                               sessionId: sessionId,
-                                              senderName: sessionLabel, reason: reason)
+                                              senderName: sessionLabel, reason: reason,
+                                              isCaptain: isCaptain)
             let withdrawn: LocalTodoItem
             switch outcome {
             case .withdrawn(let item):
@@ -1394,8 +1397,10 @@ final class McpServer {
                                   + (live.isEmpty ? "（空）" : live.joined(separator: "\n")))
             case .notYours(let owner):
                 let who = owner.map { "「\($0)」" } ?? "（账上没记提出者，老条目）"
-                return toolResult(id: id, text: "ERROR: 人类 Todo #\(number) 不是你提的，提出者是 \(who) —— **只能撤自己提的**。"
-                                  + "什么都没改。真该撤的话，让提出者自己撤；提出者已经不在了就在群里说明，让人类自己决定删不删。")
+                return toolResult(id: id, text: "ERROR: 人类 Todo #\(number) 不是你提的，提出者是 \(who) —— **你只能撤自己提的**。"
+                                  + "什么都没改。真该撤的话：提出者还在就让他自己撤；"
+                                  + "**提出者已经不在了（或这本来就是条没记提出者的老条目）就找本 crew 的机长** —— "
+                                  + "机长撤得动本 crew 的任何一条。别让它就这么挂在人的账上亮灯。")
             case .alreadyWithdrawn:
                 return toolResult(id: id, text: "人类 Todo #\(number) 早就撤过了，这次没有重复动账，群里也不再发第二行。")
             case .ledgerUnavailable:
@@ -1998,7 +2003,8 @@ final class McpServer {
     private func supersedeOldOne(target: Int, replacedBy: Int) -> String {
         let reason = "被 #\(replacedBy) 取代"
         switch humanTodos.withdraw(crewId: crewId, number: target, sessionId: sessionId,
-                                   senderName: sessionLabel, reason: reason) {
+                                   senderName: sessionLabel, reason: reason,
+                                   isCaptain: isCaptain) {
         case .withdrawn:
             let announced = announceWithdrawal(number: target, reason: reason)
             if let detail = announced.detail {

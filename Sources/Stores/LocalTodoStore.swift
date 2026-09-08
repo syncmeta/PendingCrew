@@ -314,12 +314,13 @@ final class LocalTodoStore: @unchecked Sendable {
         }
     }
 
-    /// 提出者撤回自己提的那条（Todo #102）。**不是删除** —— 见 `LocalTodoItem.withdrawnAt`。
+    /// 撤回一条人类 Todo（Todo #102）。**不是删除** —— 见 `LocalTodoItem.withdrawnAt`。
+    /// 谁撤得动：提出者本人，**或这个 crew 的机长**（`isCaptain`，见 `withdrawObstacle`）。
     ///
     /// 三条约束，一条都不能松：
-    /// - **只能撤自己提的**。判据是条目上记着的 `createdBySessionId`，不是显示名 ——
-    ///   名字会重、会改。**记不到提出者的老条目一律不许撤**：撤不掉只是不方便，
-    ///   撤错了是把人正在等的一件事从他眼前拿走。
+    /// - **提出者本人、或这个 crew 的机长**。提出者的判据是条目上记着的
+    ///   `createdBySessionId`，不是显示名 —— 名字会重、会改。机长的判据是身份本身
+    ///   （helper 的 `--captain`），跟条目上记着什么无关，见 `withdrawObstacle`。
     /// - **原因必填**。撤回是让一条事从人的待办里消失，没有原因它就是静默消失。
     /// - **调用方必须在群里把原因说出来**（`TodoLedger.withdrawAnnouncement`）。
     ///   这一步在 MCP 那层做，但它是这个动作的一部分，不是可选装饰。
@@ -332,7 +333,9 @@ final class LocalTodoStore: @unchecked Sendable {
         case withdrawn(LocalTodoItem)
         /// 这本账上没有这个 #N（或者已经被人类删了）。
         case notFound
-        /// 这条不是你提的 —— 带上账上记着的提出者显示名（记不到就是 nil，同样不许撤）。
+        /// 这条不是你提的，而且你也不是本 crew 的机长 —— 带上账上记着的提出者显示名
+        /// （记不到就是 nil）。**这时候的出口是机长**，不是「让人类自己删」：
+        /// 提出者已经消失、或老条目根本没记提出者时，只有机长撤得动。
         case notYours(owner: String?)
         /// 已经撤过了，不重复动账。
         case alreadyWithdrawn(LocalTodoItem)
@@ -348,17 +351,43 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 在落任何账之前先验一遍** —— 给了一个指针就要解引用，不能只记下来。
     /// （今晚全机那笔假账带着一个根本不存在的 commit hash，挂了 191 小时，
     /// 因为没有任何人去解析它。）两条路各写一套判据，迟早会分叉。
-    static func withdrawObstacle(item: LocalTodoItem?, sessionId: String) -> WithdrawOutcome? {
+    ///
+    /// ## `isCaptain`：判据从「你是不是提出者」换成「你是不是这个 crew 的机长」
+    /// （2026-09-08，人类原话「我希望机长能处理所有的 todo，不要出现这种撤不掉的情况」）
+    ///
+    /// 原来只认 `createdBySessionId == sessionId`，而 **session 是会消失的实体** ——
+    /// 后台重启、正常收工、被停掉都会带走它，这是常态不是异常。把一条永久性的权限
+    /// 挂在一个会消失的东西上，就是那个 bug 的形状本身：提出者一没，那条就**谁也
+    /// 撤不掉**，只能一直挂在人的待办里亮灯，催他答一个他早就答过的问题。当天真撞上
+    /// 三类：提出者已消失的、`createdBySessionId` 根本没记的老条目（字段是后加的）、
+    /// 别人代提的。
+    ///
+    /// 换成机长身份，是因为**机长是常驻角色**：这个 session 没了，crew 还有机长；
+    /// 子 crew 换了机长，新机长照样撤得动 —— 问题就已经解决了。
+    ///
+    /// 放宽**只到这里为止**：
+    /// - 只解开「谁能撤」这一道闸。已被人类删掉（`.notFound`）、已经撤过
+    ///   （`.alreadyWithdrawn`）、原因必填（在 `withdraw` 里）三道，机长一道都绕不过。
+    /// - **不跨 crew**：这个函数根本看不见 crew —— 它只判断手上这一条。真正的边界在
+    ///   调用方：`withdraw(crewId:)` 和 MCP 那层的 `crewId` 都是本 session 那一个，
+    ///   父 crew 的机长伸不进子 crew（那会绕过人家自己的机长）。
+    static func withdrawObstacle(item: LocalTodoItem?, sessionId: String,
+                                 isCaptain: Bool = false) -> WithdrawOutcome? {
         guard let item, !item.isDeleted else { return .notFound }
-        guard let owner = item.createdBySessionId, owner == sessionId else {
-            return .notYours(owner: item.createdBySenderName)
+        if !isCaptain {
+            guard let owner = item.createdBySessionId, owner == sessionId else {
+                return .notYours(owner: item.createdBySenderName)
+            }
         }
         if item.withdrawnAt != nil { return .alreadyWithdrawn(item) }
         return nil
     }
 
+    /// `isCaptain` 默认 `false` —— 默认值刻意选在**收紧**那一侧：新调用点漏传只会
+    /// 让机长少一项权限（不方便），不会让谁多出一项权限（伤人）。
     func withdraw(crewId: String, number: Int, sessionId: String,
-                  senderName: String? = nil, reason: String) -> WithdrawOutcome {
+                  senderName: String? = nil, reason: String,
+                  isCaptain: Bool = false) -> WithdrawOutcome {
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .reasonRequired }
         return withFileLock(crewId) {
@@ -367,7 +396,8 @@ final class LocalTodoStore: @unchecked Sendable {
                 return .ledgerUnavailable
             }
             guard let idx = liveIndexLocked(rows, number) else { return .notFound }
-            if let obstacle = Self.withdrawObstacle(item: rows[idx], sessionId: sessionId) {
+            if let obstacle = Self.withdrawObstacle(item: rows[idx], sessionId: sessionId,
+                                                    isCaptain: isCaptain) {
                 return obstacle
             }
             let stamp = timestamp()
