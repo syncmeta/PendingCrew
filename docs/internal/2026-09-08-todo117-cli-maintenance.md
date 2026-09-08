@@ -28,6 +28,7 @@
 - 先在原实现上运行 `testOutdatedCLIIsVisibleEvenWithObjectErrorInfo`：1 个测试、3 条断言失败，留全日志 `.test-archive/todo117-red-test.log` 和 `.test-archive/todo117-red.xcresult`。初次缓存权限失败另留 `.test-archive/todo117-red.log`，不算功能造红。
 - 注入式覆盖两家版本格式、坏值、空闲外部进程、维护/启动互斥、进程扫描失败、升级失败、确认后安装变化、返回 0 但复验坏、未知安装拒绝、同平台回滚、候选实际版本、Claude 参数、无害命令大输出/非 0/子进程超时。全部升级命令输出为替身；回滚只改测试临时目录。
 - XcodeGen 使用仓库要求的 2.46.0 缓存生成，新增 Swift 文件和 pbxproj 一起提交；没有更改本机 XcodeGen 2.45.4。
+- 首轮全量（e726280）抓到 `SessionStatusDotTests.testEveryDerivedStateHasAnExplicitDot` 的旧健康类型数量断言：7 != 5；已补两类错误到红色状态点的实际断言，并更新覆盖数量。完整日志/结果在 `.test-archive/todo117-full.log` / `todo117-full.xcresult` 保留。
 - 全量 macOS 测试完成情况与确切 SHA 另随群交付附完整日志。
 
 ## 边界、假设与可能的错误答案

@@ -111,6 +111,12 @@ final class SessionStatusDotTests: XCTestCase {
             (CrewSessionStateDerivation.state(
                 isRunning: true, health: CrewSessionHealth(kind: .launchFailed, detail: ""),
                 isWorking: false), .attention),
+            (CrewSessionStateDerivation.state(
+                isRunning: true, health: CrewSessionHealth(kind: .cliVersionIncompatible, detail: ""),
+                isWorking: false), .attention),
+            (CrewSessionStateDerivation.state(
+                isRunning: true, health: CrewSessionHealth(kind: .turnFailed, detail: ""),
+                isWorking: false), .attention),
             // 开场 brief 没送进输入框（P5a）：进程活着、也在吐输出，但它一个字都
             // 没收到 —— 这一档以前会被推成「🟡 空闲」，机长照常派活。
             (CrewSessionStateDerivation.state(
@@ -129,7 +135,7 @@ final class SessionStatusDotTests: XCTestCase {
                 "状态词 \(state) 的点色不对")
         }
         // 覆盖到每个 health kind，新增 kind 时这条会提醒补映射。
-        XCTAssertEqual(CrewSessionHealth.Kind.allCases.count, 5)
+        XCTAssertEqual(CrewSessionHealth.Kind.allCases.count, 7)
     }
     #endif
 }
