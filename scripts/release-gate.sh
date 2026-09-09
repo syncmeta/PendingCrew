@@ -7,7 +7,7 @@
 #   · 发版闸门：     sh scripts/release-gate.sh <要发的 commit>
 #   · 日常合前基线： sh scripts/release-gate.sh $(git -C <仓库> rev-parse HEAD)
 #
-# 判读（跑完读这五样，不需要任何事前判据）：
+# 判读（跑完读这六样，不需要任何事前判据）：
 #   ① skip **不比数字，比构成** —— 逐条看这三条各自还在不在、成立条件还成不成立：
 #        · CrewLastMessageCacheTests.test_基准_现场白板目录         —— 未指定现场白板目录 → skip
 #        · SessionAwaitingReplyInputsCacheTests.test_基准_现场目录  —— 同上
@@ -28,6 +28,13 @@
 #      同一段还会先列一份**读数**：声明了 `doc-ref-base` 的文档各落后 main 多少。
 #      那是读数不是判据 —— 不设阈值、不影响退出码。快照文档落后是正常的、应该的；
 #      **一份新文档声明了很旧的 base，那个数自己会刺眼** —— 它挡的是「声明个老 base 躲开尺子」。
+#   ⑥ 工程漂移应为「无漂移」——**这一条是唯一会改退出码的**，理由见文件末尾那段。
+#      它问的是：提交进来的 pbxproj，是不是「`.xcodegen-version` 钉住的那版生成器
+#      + 这棵树的源码」生成出来的那一份。加了 Swift 文件没 regen、裸跑了别的版本的
+#      xcodegen、手改了 pbxproj —— 都在这里红。
+#      **它有三种结果，不是两种**：无漂移 / 有漂移 / **判不了**（生成器没跑起来，
+#      比如离线）。判不了**不算红** —— 一把在离线时报红的尺子会被人关掉，
+#      那就等于没有。
 set -e
 REPO=/Users/hey/Untitled/Pendingname/PendingCrew
 COMMIT="$1"; [ -n "$COMMIT" ] || { echo "用法: sh release-gate.sh <commit>"; exit 2; }
@@ -94,6 +101,36 @@ echo "--- 两端 build ---"; grep -E "BUILD SUCCEEDED|BUILD FAILED" "$LOG"/b-mac
 # `|| true`：闸门只报读数、不代人做判断（它自己也从不因为任何一条红而早退）。
 echo "--- 文档引用腐烂（名单即计数；空=零条）---"
 sh "$WT/scripts/doc-ref-check.sh" "$WT" || true
+# ⑥ 工程漂移。**位置很讲究：必须在上面 after_diff 取完之后** —— 它会重新生成
+# pbxproj，在取指纹之前跑就会把读数 ④ 弄脏（而 ④ 正是用来证明「你测的就是这棵树」的）。
+#
+# 为什么本机要有这条：完整的漂移判据本来只在 CI 的 `project-drift` job 上跑，
+# 而它挂在 push / PR 上 —— 这台机器上 main 常年领先 origin（2026-09-08 实测过一次
+# 是 27 笔未推），**那道闸平时根本没看过我们的代码**。2026-09-08 有人连续四次裸跑
+# `xcodegen generate` 绕过 scripts/gen-project.sh，本地没有任何检查会为它红。
+#
+# 三种结果，别压成两种：**「判不了」不算「有漂移」**。生成器要联网下载
+# （`--fetch` 按 scripts/xcodegen-checksums.txt 校验），离线是常事；
+# 把离线报成红，这把尺子会在两周内被人注释掉，那就等于没有。
+echo "--- 工程漂移（pbxproj == 钉住的生成器产物？）---"
+drift_rc=0
+if sh "$WT/scripts/gen-project.sh" --fetch > "$LOG"/drift.log 2>&1; then
+  if git -C "$WT" diff --quiet -- PendingCrew.xcodeproj; then
+    echo "  ✅ 无漂移"
+  else
+    echo "  ❌ 有漂移：pbxproj 和这棵树的 project.yml/源码对不上"
+    git -C "$WT" diff --numstat -- PendingCrew.xcodeproj | sed 's|^|    |'
+    echo "    修法：跑 scripts/gen-project.sh（**不是裸 xcodegen generate**），把 pbxproj 一起提交。"
+    drift_rc=1
+  fi
+else
+  echo "  ⚠️ 判不了：生成器没跑起来（离线 / 校验和对不上都算），日志 $LOG/drift.log"
+  echo "     **这不算漂移**，退出码不变 —— 别把「没量成」读成「量到了没事」，也别读成红。"
+fi
+# 还原：$WT 是闸门自己建的一次性钉死 worktree，不是共享工作树，这里还原是安全的
+# （共享树里还原 pbxproj 会拆掉别人的桥 —— 那条禁令针对的是共享树）。
+# 不还原的话，同一个 commit 跑第二趟时 before_diff 会从一棵脏树上取，读数 ④ 就变味了。
+git -C "$WT" checkout -- PendingCrew.xcodeproj 2>/dev/null || true
 echo "--- 闸门自己留下的（不自动回收）---"
 echo "本趟：$WT 和 $LOG"
 # 清单和计数出自同一次 `ls` —— 数是从名单里数出来的，两者结构上不可能对不上。
@@ -107,4 +144,14 @@ echo "  也只说闸门自己这一堆 —— 本机别处还有 worktree，不�
 echo "  另有一类更该管的：注册比目录活得久 —— worktree 建在会被回收的临时目录里"
 echo "  （比如某个 session 的 scratchpad），目录没了、git worktree list 里那条还挂着。"
 echo "  那不是占地方，是一条会骗人的登记。清它：git worktree prune（本脚本不替你跑）"
-true  # 末行 grep 若两个词都没命中会返回 1，让脚本退出码非零、误导看 $? 的人
+# 退出码 = 只有「有漂移」会让它非零。
+#
+# 为什么这一条能改退出码，而上面五条都不能：**前五条要人看**（skip 比的是构成不是
+# 数字、腐烂名单要逐条读、那 8 条跑没跑要看字面），机器判不了，所以闸门只报读数、
+# 从不早退。**⑥ 不一样：它是 `git diff` 的二值结果，没有需要人权衡的余地**，
+# 而且它红的时候，上面那趟测试其实是在一个跟源码对不上的工程上跑的。
+#
+# （原本这里是一句裸 `true`，理由是末行 grep 两个词都没命中会返回 1、让退出码
+# 非零误导人。那个理由仍然成立，所以这里显式 exit 一个自己算出来的值，
+# 而不是让它裸奔到末尾去捡上一条命令的退出码。）
+exit "$drift_rc"
