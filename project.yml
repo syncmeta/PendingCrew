@@ -376,6 +376,9 @@ targets:
       # 从 PendingCrewBackend（在 bundle 之外）抽出来的，抽之前这条链一条断言都
       # 没有 —— 而它断掉的样子跟「这条消息本来就没那个字段」一模一样。
       - path: Sources/Chat/Adapter/CrewLocalWhiteboardMapping.swift
+      # CrewChatReturnTrail.swift（人类 Todo #132/#133）：点引用胶囊跳走之后
+      # 「回去的那条路」。人类点名的判据是「别做成单程票」，所以它是被断言的行为。
+      - path: Sources/Chat/Adapter/CrewChatReturnTrail.swift
       # CrewMentionPickerLayout.swift（Todo #69）：@-候选浮层的限高判定（可用高度 +
       # 行数 + 行高 → maxHeight）。纯 CoreGraphics 几何，不碰 SwiftUI —— GUI 验不了，
       # 能被测试钉住的那部分必须钉住。
