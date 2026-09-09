@@ -115,6 +115,10 @@ final class CrewStore: ObservableObject {
     /// - 值没变就不赋值 → 连 `objectWillChange` 都不发，无关文件的写不再让整个
     ///   侧栏（乃至所有观察 `CrewStore` 的视图）重渲染。
     @Published private(set) var lastWhiteboardMessages: [String: LocalWhiteboardMessage] = [:]
+    /// 每个 crew **当前生效的那句状态**所在的那条消息（Todo #136）。
+    /// 键缺失 = 那个 crew 一次都没填过 —— 视图据此显示「还没有」，**不编一句**。
+    /// 与 `lastWhiteboardMessages` 出自**同一次解码**（见 `CrewLastMessageCache.Digest`）。
+    @Published private(set) var crewStatusCarriers: [String: LocalWhiteboardMessage] = [:]
 
     /// 每个 crew 的**本 crew / 后代 crew**人类 Todo 未回应快照 —— Todo #71 起是
     /// 侧栏黄点的唯一数据源，Todo #73 再沿父边递归冒泡。与上面那份末条快照同样
@@ -412,6 +416,7 @@ final class CrewStore: ObservableObject {
     func reset() {
         crews = []
         lastWhiteboardMessages = [:]
+        crewStatusCarriers = [:]
         lastMessageCache.clear()
         humanTodoAttention = [:]
         humanTodoCache.clear()
@@ -506,9 +511,13 @@ final class CrewStore: ObservableObject {
     /// 发布快照 —— **相等就不赋值**。`@Published` 一赋值就发 `objectWillChange`，
     /// 而 `CrewStore` 是整个侧栏（乃至更多视图）的 `EnvironmentObject`：无关文件的
     /// 写若还照旧赋值，仍会 4 次/秒把它们全部重渲染一遍。
-    private func publishLastWhiteboardMessages(_ snapshot: [String: LocalWhiteboardMessage]) {
-        guard lastWhiteboardMessages != snapshot else { return }
-        lastWhiteboardMessages = snapshot
+    private func publishLastWhiteboardMessages(_ digests: [String: CrewLastMessageCache.Digest]) {
+        let lasts = digests.mapValues(\.last)
+        if lastWhiteboardMessages != lasts { lastWhiteboardMessages = lasts }
+        // 状态那张表**单独比对**：末条变了、状态没变（很常见 —— 状态是沿用的）时
+        // 不该把它也赋值一遍，`@Published` 一赋值就把整个侧栏重渲染。
+        let carriers = digests.compactMapValues(\.status)
+        if crewStatusCarriers != carriers { crewStatusCarriers = carriers }
     }
 
     /// **共享控制通道只有编排者能排空**（前后端分离 §6.1）。

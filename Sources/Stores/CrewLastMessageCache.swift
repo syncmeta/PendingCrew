@@ -55,22 +55,51 @@ import Foundation
 /// 「指纹没变就别读」那套记账已经抽成 `FileFingerprintCache`（2026-08-18，点名快照
 /// 那条路要用同一套）。这层只剩「白板 → 末条消息」这一个语义，不再自己管缓存表。
 final class CrewLastMessageCache: @unchecked Sendable {
-    private let cache: FileFingerprintCache<String, LocalWhiteboardMessage>
+    /// 一次解码从一块白板里取到的**两样**东西。
+    ///
+    /// 为什么合成一个载荷而不是加第二个缓存：侧栏那一行现在要显示「各机长自己填的
+    /// 那句状态」（Todo #136），而它的判据是**往回找最近一条带非空状态的消息** ——
+    /// 只看末条不够。再开一个缓存去扫，就是每次文件变动**多解一整板 JSON**，
+    /// 正是 2026-08-17「开久了卡」的形状。**一次解码，两样都拿出来。**
+    struct Digest: Equatable {
+        /// 末条消息（时间、预览、相对时间都来自它）。
+        let last: LocalWhiteboardMessage
+        /// 当前生效的那句状态 + 它所在那条消息的时间。
+        /// `nil` = 这块白板上**一条都没填过**（不是「这次没填」）。
+        let status: LocalWhiteboardMessage?
+    }
+
+    private let cache: FileFingerprintCache<String, Digest>
 
     /// 生产用：直接挂在一个白板 store 上。
     convenience init(store: LocalWhiteboardStore) {
         self.init(
             fingerprintOf: { store.fingerprint(crewId: $0) },
-            loadLast: { store.list(crewId: $0).last })
+            loadDigest: { crewId in
+                let messages = store.list(crewId: crewId)
+                guard let last = messages.last else { return nil }
+                // 往回找最近一条带非空状态的 —— 「这次没填就沿用上一次」由此成立。
+                let carrier = messages.reversed().first {
+                    ($0.crewStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                }
+                return Digest(last: last, status: carrier)
+            })
     }
 
     /// 单测 / 基准用：两条 IO 都可注入，好数「到底真读了几次」。
     init(fingerprintOf: @escaping (String) -> FileChangeGate.Fingerprint?,
-         loadLast: @escaping (String) -> LocalWhiteboardMessage?) {
-        cache = FileFingerprintCache(fingerprintOf: fingerprintOf, load: loadLast)
+         loadDigest: @escaping (String) -> Digest?) {
+        cache = FileFingerprintCache(fingerprintOf: fingerprintOf, load: loadDigest)
     }
 
     /// 本 cache 迄今真正做过多少次「读文件 + 全量解码」。缓存命中不计。
+    ///
+    /// ## 载荷从「末条消息」改成「末条 + 那句状态」之后，这个数没有变（Todo #136）
+    /// 改之前 / 改之后，`CrewLastMessageCacheTests` 里那几条断言**一个数都没动**：
+    /// 冷启 5 个 crew = 5 次、无关 tick 追加 = 0 次、只改一个 crew = warm + 1。
+    /// **这就是这次改动的验收口径**：状态是在**同一次已经付过的解码**里顺手取出来的，
+    /// 不是多解一遍。**如果哪天这些数变大了，说明有人把它做成了「解码两次、看起来
+    /// 像一次」** —— 那正是这条基准该拦住的东西，别去调大它。
     /// 这是 fix 的验收口径：一次 tick 里它涨多少 = 主线程本来要付几份整板解码。
     var decodeCount: Int { cache.loadCount }
 
@@ -79,7 +108,7 @@ final class CrewLastMessageCache: @unchecked Sendable {
     /// - Returns: crewId → 末条消息。**键缺失 = 该 crew 白板是空的**（不是「没读」）
     ///   —— 每次调用都覆盖全表，所以调用方拿到的恒是完整快照。
     @discardableResult
-    func refresh(crewIds: [String]) -> [String: LocalWhiteboardMessage] {
+    func refresh(crewIds: [String]) -> [String: Digest] {
         cache.refresh(keys: crewIds)
     }
 

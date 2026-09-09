@@ -11,6 +11,17 @@ import XCTest
 ///    （+ 真变了那一个 crew 的一次解码）。
 final class CrewLastMessageCacheTests: XCTestCase {
 
+    /// 把一整板消息压成缓存的载荷。**跟生产那条 `convenience init` 同一套判据** ——
+    /// 测试里另写一份，量到的就不是生产的那条路了。
+    static func digest(_ messages: [LocalWhiteboardMessage]) -> CrewLastMessageCache.Digest? {
+        guard let last = messages.last else { return nil }
+        let carrier = messages.reversed().first {
+            ($0.crewStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        return CrewLastMessageCache.Digest(last: last, status: carrier)
+    }
+
+
     // MARK: - 夹具
 
     private func tempDir() -> URL {
@@ -49,7 +60,7 @@ final class CrewLastMessageCacheTests: XCTestCase {
         var loads = 0
         let cache = CrewLastMessageCache(
             fingerprintOf: { store.fingerprint(crewId: $0) },
-            loadLast: { loads += 1; return store.list(crewId: $0).last })
+            loadDigest: { loads += 1; return Self.digest(store.list(crewId: $0)) })
 
         let first = cache.refresh(crewIds: ids)
         XCTAssertEqual(first.count, 5)
@@ -77,7 +88,7 @@ final class CrewLastMessageCacheTests: XCTestCase {
         var loads = 0
         let cache = CrewLastMessageCache(
             fingerprintOf: { store.fingerprint(crewId: $0) },
-            loadLast: { loads += 1; return store.list(crewId: $0).last })
+            loadDigest: { loads += 1; return Self.digest(store.list(crewId: $0)) })
         _ = cache.refresh(crewIds: ids)
         loads = 0
 
@@ -85,9 +96,9 @@ final class CrewLastMessageCacheTests: XCTestCase {
         store.appendUserMessage(crewId: "c3", text: "新消息")
 
         let snapshot = cache.refresh(crewIds: ids)
-        XCTAssertEqual(snapshot["c3"]?.text, "新消息", "白板真变了，侧栏预览必须立刻跟上")
+        XCTAssertEqual(snapshot["c3"]?.last.text, "新消息", "白板真变了，侧栏预览必须立刻跟上")
         XCTAssertEqual(loads, 1, "只该重算变了的那一个 crew")
-        XCTAssertEqual(snapshot["c0"]?.text, "旧 0", "没变的 crew 仍要在快照里，且值不变")
+        XCTAssertEqual(snapshot["c0"]?.last.text, "旧 0", "没变的 crew 仍要在快照里，且值不变")
     }
 
     /// 跨进程写（helper 子进程的 `post_to_crew`）在文件层面与本进程写没有区别 ——
@@ -99,17 +110,17 @@ final class CrewLastMessageCacheTests: XCTestCase {
         writeBoard(dir, crewId: "c", messages: [message("旧")])
 
         let cache = CrewLastMessageCache(store: appSide)
-        XCTAssertEqual(cache.refresh(crewIds: ["c"])["c"]?.text, "旧")
+        XCTAssertEqual(cache.refresh(crewIds: ["c"])["c"]?.last.text, "旧")
 
         helperSide.appendSessionMessage(crewId: "c", sessionId: "worker", text: "helper 写的")
-        XCTAssertEqual(cache.refresh(crewIds: ["c"])["c"]?.text, "helper 写的")
+        XCTAssertEqual(cache.refresh(crewIds: ["c"])["c"]?.last.text, "helper 写的")
     }
 
     func test_白板文件不存在时不开锁读() {
         var loads = 0
         let cache = CrewLastMessageCache(
             fingerprintOf: { _ in nil },   // 文件不存在
-            loadLast: { _ in loads += 1; return nil })
+            loadDigest: { _ in loads += 1; return nil })
         let snapshot = cache.refresh(crewIds: ["a", "b"])
         XCTAssertTrue(snapshot.isEmpty, "键缺失 = 白板是空的")
         XCTAssertEqual(loads, 0, "已知必然为空，不该为了拿一个 nil 去开 flock")
@@ -125,14 +136,14 @@ final class CrewLastMessageCacheTests: XCTestCase {
         var loads = 0
         let cache = CrewLastMessageCache(
             fingerprintOf: { store.fingerprint(crewId: $0) },
-            loadLast: { loads += 1; return store.list(crewId: $0).last })
+            loadDigest: { loads += 1; return Self.digest(store.list(crewId: $0)) })
 
         _ = cache.refresh(crewIds: ["a", "b"])
         XCTAssertEqual(loads, 2)
         _ = cache.refresh(crewIds: ["a"])          // b 离开列表
         XCTAssertEqual(loads, 2)
         // b 回来 → 必须重新求值（证明它的条目确实被淘汰了，缓存不会随开机时长长胖）
-        XCTAssertEqual(cache.refresh(crewIds: ["a", "b"])["b"]?.text, "B")
+        XCTAssertEqual(cache.refresh(crewIds: ["a", "b"])["b"]?.last.text, "B")
         XCTAssertEqual(loads, 3)
     }
 
@@ -192,7 +203,7 @@ final class CrewLastMessageCacheTests: XCTestCase {
         let oneChangeStart = CFAbsoluteTimeGetCurrent()
         let snapshot = cache.refresh(crewIds: ids)
         let oneChangeMs = (CFAbsoluteTimeGetCurrent() - oneChangeStart) * 1000
-        XCTAssertEqual(snapshot[ids[3]]?.text, "新进展")
+        XCTAssertEqual(snapshot[ids[3]]?.last.text, "新进展")
         XCTAssertEqual(cache.decodeCount, warmDecodes + 1, "只该多解码变了的那一个")
 
         print("""
