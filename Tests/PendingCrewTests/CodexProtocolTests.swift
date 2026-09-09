@@ -412,3 +412,82 @@ final class CodexPipeWriteTests: XCTestCase {
 // 红证的复现方式（变异）：把 `CodexPipeWrite.line` 的函数体换回
 //     handle.write(Data((line + "\n").utf8))
 // 上面第一条测试就不是 failure，而是把整个 test runner 崩掉 —— 这正是它要挡的事。
+
+#if os(macOS)
+/// Plan #64: a real pipe/dispatcher/backend/transport chain, without a live model.
+/// Each fixture emits exactly one failure path, so an earlier error notification
+/// cannot hide a broken completed-event or RPC-error handler.
+@MainActor
+final class CodexFirstTurnFailureTests: XCTestCase {
+    func testFirstCompletedFailureNeverLooksIdle() async throws {
+        try await assertFirstFailure(mode: "completed")
+    }
+
+    func testFirstTerminalErrorNeverLooksIdle() async throws {
+        try await assertFirstFailure(mode: "error")
+    }
+
+    func testFirstStartRPCFailureNeverLooksIdle() async throws {
+        try await assertFirstFailure(mode: "rpc")
+    }
+
+    private func assertFirstFailure(mode: String) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-first-turn-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("server.py")
+        try #"""
+        import json, sys
+        mode = sys.argv[1]
+        def emit(value):
+            print(json.dumps(value), flush=True)
+        failure = {"message": "The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade...", "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 400}}}
+        for line in sys.stdin:
+            request = json.loads(line)
+            if "id" not in request:
+                continue
+            method = request["method"]
+            if method == "turn/start" and mode == "rpc":
+                emit({"id": request["id"], "error": {"code": -32000, "message": failure["message"]}})
+                continue
+            result = {"thread": {"id": "first-thread"}} if method == "thread/start" else {}
+            emit({"id": request["id"], "result": result})
+            if method == "turn/start":
+                if mode == "completed":
+                    emit({"method": "turn/started", "params": {"turn": {"id": "first-turn"}}})
+                    emit({"method": "turn/completed", "params": {"turn": {"id": "first-turn", "status": "failed", "error": failure}}})
+                else:
+                    emit({"method": "error", "params": {"error": failure, "willRetry": False}})
+        """#.write(to: script, atomically: true, encoding: .utf8)
+        let bridge = InProcessSessionProtocolBridge()
+        var sawCompletion = false
+        let backend = CodexAppServerBackend(
+            executable: "/usr/bin/python3", argv: ["-u", script.path, mode],
+            cwd: directory.path, env: ProcessInfo.processInfo.environment,
+            model: nil, effort: nil, resumeThreadId: nil,
+            developerInstructions: nil, mcpServers: nil,
+            whiteboardProvider: { nil }, approvalProvider: { _, _ in "decline" },
+            notifyTurnEnded: { _ in sawCompletion = true },
+            protocolNotificationSink: bridge.codexNotificationSink(sessionId: "first-failure"))
+        let remote = bridge.exposeAttached(sessionId: "first-failure", backend: backend)
+        defer { backend.stop() }
+        backend.boot(initialPrompt: "Do the assigned work")
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline && remote.health == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(backend.hasObservedLaunchSignal, "Handshake success must not mask first-turn failure")
+        XCTAssertFalse(sawCompletion, "Failed work must not be announced as completed")
+        for target: any SessionBackend in [backend, remote] {
+            XCTAssertEqual(target.status, .running, "Fixture keeps the app-server alive, matching the incident")
+            XCTAssertEqual(target.health?.kind, .cliVersionIncompatible)
+            XCTAssertTrue(target.health?.detail.contains("requires a newer version of Codex") == true)
+            let state = CrewSessionStateDerivation.state(
+                isRunning: target.status == .running, health: target.health, isWorking: target.isWorking)
+            XCTAssertEqual(state, "error", "First-turn failure must not appear as idle")
+            XCTAssertEqual(SessionStatusDotDerivation.dot(state: state), .attention)
+        }
+    }
+}
+#endif

@@ -706,6 +706,30 @@ final class ViewWiringTests: XCTestCase {
                        "侧栏仍保留 Workspace 同步 sheet 状态/接线")
     }
 
+    /// #64: the dynamic pipe tests end at SessionBackend (the standalone test
+    /// target excludes CrewSessionRun). This is explicitly a source wiring guard.
+    func testFirstTurnFailureHealthReachesRunAndMemberStatusDot() throws {
+        func code(_ text: String) -> String {
+            text.components(separatedBy: "\n").map {
+                String($0.components(separatedBy: "//")[0])
+            }.joined(separator: "\n")
+        }
+        let runner = code(try Self.projectText(of: "Sources/Mac/Services/CrewSessionRunner.swift"))
+        let observerStart = try XCTUnwrap(runner.range(of: "private func observeBackendHealth()"))
+        XCTAssertTrue(runner[..<observerStart.lowerBound].contains("observeBackendHealth()"))
+        let observerEnd = try XCTUnwrap(runner.range(
+            of: "private func observeLaunchParameterProblems()", range: observerStart.upperBound..<runner.endIndex))
+        let observer = String(runner[observerStart.upperBound..<observerEnd.lowerBound])
+        XCTAssertTrue(observer.contains("for await h in self.backend.healthPublisher.values"))
+        XCTAssertTrue(observer.contains("self.health = h"), "Backend error must reach the member's run")
+        let view = code(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let dotStart = try XCTUnwrap(view.range(of: "@ViewBuilder private var statusDot:"))
+        let dot = view[dotStart.upperBound...]
+        XCTAssertTrue(dot.contains("CrewSessionStateDerivation.state("))
+        XCTAssertTrue(dot.contains("health: run.health"))
+        XCTAssertTrue(dot.contains("SessionStatusDotDerivation.dot(state: state)"))
+    }
+
     // MARK: - 源码扫描
 
     /// 按文件名取源码原文（找不到 → 失败，不静默放过）。
