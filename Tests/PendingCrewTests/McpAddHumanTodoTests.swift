@@ -138,7 +138,7 @@ final class McpAddHumanTodoTests: XCTestCase {
 
         let r = add(server(dir), "要人拍板")
         XCTAssertTrue(r.contains("ERROR"), r)
-        XCTAssertTrue(r.contains("没有记下") || r.contains("没能记进"), r)
+        XCTAssertTrue(r.contains(WriteReceipt.notWrittenMarker), r)
         // 群里**不许**出现「人类 To do +1」—— 人以为记下了其实没有，正是 #577 的病。
         let posted = LocalWhiteboardStore(directory: dir).list(crewId: "c")
             .filter { $0.text.contains("人类 To do +1") }
