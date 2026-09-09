@@ -93,13 +93,32 @@ final class PermissionIntoTodoTests: XCTestCase {
         }
     }
 
-    /// ⚠️ 已知读不出来的一类，**写下来免得它被当成已解决**。
-    func testKnownBlindSpotConditionalApprovalReadsAsGranted() {
-        XCTAssertEqual(PermissionGrantReading.read("可以，但先备份"), .granted,
-                       """
-                       这条是**故意钉住的盲区**，不是期望行为：条件同意会被读成无条件同意。\
-                       真要治得让人在 Todo 里点「同意/不同意」而不是写自由文本 —— 那是另一单。
-                       """)
+    /// **条件同意按不同意处理** —— 上面那条不对称原样适用。
+    ///
+    /// 第一版把这个当成「已知盲区」钉成了期望值（断言它 → `.granted`）。那是错的两层：
+    /// ① 原则本来就推得出答案，只是停在了前一步；
+    /// ② **一个被写成测试的盲区，跟一个被设计成这样的行为长得一模一样** ——
+    /// 下一个人读到那条绿断言会以为「条件同意 = 放行」是设计。
+    func testConditionalApprovalIsNotAGrant() {
+        for reply in ["可以，但先备份", "行，不过你先跟我说一声", "同意，前提是别动 main",
+                      "可以，记得先看一眼", "ok, but check first"] {
+            XCTAssertNotEqual(
+                PermissionGrantReading.read(reply), .granted,
+                """
+                「\(reply)」被当成无条件同意了。他点的头和 agent 要做的事**不是一回事**：\
+                放行 = 不备份就跑了；不放行 = 再问一次。代价不对等，跟「看不懂」同类。
+                """)
+        }
+    }
+
+    /// ⚠️ **这条才是真正剩下的盲区**，写下来免得被当成已解决：判据只看词，读不出反讽。
+    func testKnownBlindSpotSarcasmStillReadsAsGranted() {
+        XCTAssertEqual(
+            PermissionGrantReading.read("行啊，你随便"), .granted,
+            """
+            **这是已知盲区，不是期望的产品行为。** 判据只看词，读不出反讽。\
+            要根治得让人在 Todo 上点按钮而不是写自由文本 —— 那是另一单。
+            """)
     }
 
     // MARK: - ③ 一次性票：用掉就没了
@@ -122,6 +141,52 @@ final class PermissionIntoTodoTests: XCTestCase {
         store.grant(crewId: "c", tool: "computer-use")
         XCTAssertFalse(store.consume(crewId: "c", tool: "rm-rf"),
                        "给 A 工具的同意被 B 工具用掉了 —— 那是把一次授权扩大成了通行证")
+    }
+
+    // MARK: - ⑤ 唤醒账本读不出来 ≠ 一条唤醒都没有（照抄 `LocalTodoStore.LedgerRead`）
+
+    /// **这本账的读失败后果比 Todo 那本更重**：`rearmWakeups()` 在 app 启动时读它来
+    /// 重挂全部定时唤醒。读失败当成空表 = **所有在途唤醒（含督办租约）静默消失**，
+    /// 没有任何人会发现 —— 那正是 #107「别人停了我不知道」的形状。
+    ///
+    /// 形状照抄 `c12c80c` 在 `LocalTodoStore` 上做的那个孪生，不是第二种设计。
+    func testWakeupLedgerReportsUnreadableInsteadOfPretendingEmpty() throws {
+        let dir = tempDir()
+        let file = dir.appendingPathComponent("wakeups.json")
+        try Data("[]".utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o644], ofItemAtPath: file.path) }
+
+        XCTAssertEqual(LocalWakeupStore(directory: dir).read(), .unreadable,
+                       """
+                       读失败被压成了「读到了，是空的」。启动时那条重挂路径会据此\
+                       一条唤醒都不挂，而且安静得像本来就没有 —— 在途的督办从此不响。
+                       """)
+    }
+
+    func testWakeupLedgerStillReportsRowsWhenReadable() {
+        let dir = tempDir()
+        let store = LocalWakeupStore(directory: dir)
+        XCTAssertEqual(store.read(), .rows([]), "空账本被说成读不出来 —— 那会每次启动都报一次假警")
+        XCTAssertTrue(store.register(LocalWakeupStore.PendingWakeup(
+            id: "w1", crewId: "c", sessionId: "s",
+            fireAt: "2026-09-09T12:00:00Z", note: "n")))
+        guard case let .rows(rows) = store.read() else { return XCTFail("加了一条却读不出来") }
+        XCTAssertEqual(rows.map(\.id), ["w1"])
+    }
+
+    /// 接线：启动重挂那条路必须走 `read`，不能退回 `list`（后者压平三态）。
+    func testRearmPathUsesTheReadThatSeesFailures() throws {
+        let runner = Self.codeOnly(try Self.text(of: "CrewSessionRunner.swift"))
+        guard let rearm = runner.range(of: "func rearmWakeups") else {
+            return XCTFail("找不到 rearmWakeups —— 先修测试")
+        }
+        let body = String(runner[rearm.upperBound...].prefix(900))
+        XCTAssertTrue(body.contains("wakeupStore.read("),
+                      "启动重挂还在用会把读失败压成空表的读法")
+        XCTAssertFalse(body.contains("wakeupStore.list("),
+                       "还留着 list —— 读失败会被当成「没有唤醒」，静默丢掉全部在途租约")
     }
 
     // MARK: - ④ 旧的阻塞路径必须真拆掉

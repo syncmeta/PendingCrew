@@ -706,8 +706,29 @@ final class CrewSessionRunner: ObservableObject {
 
     /// app 启动时重挂所有持久化的唤醒（已过期的立即触发 —— 迟到好过失约）。
     func rearmWakeups() {
-        let pending = wakeupStore.list(onIncident: { self.reportWakeupIncident($0) })
-        for w in pending where wakeupTimers[w.id] == nil { arm(w) }
+        // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是「一条待唤醒都
+        // 没有」和「这本账读不出来」在这里长得一模一样。而这两件事的后果相反 ——
+        // 前者什么都不用做，后者意味着**所有在途唤醒（含督办租约）刚刚静默消失了**，
+        // 那正是 #107「别人停了我不知道」的形状。读失败时一条都不重挂是对的（无中
+        // 生有更糟），但**必须说出来**，别让它安静地发生。
+        switch wakeupStore.read(onIncident: { self.reportWakeupIncident($0) }) {
+        case let .rows(pending):
+            for w in pending where wakeupTimers[w.id] == nil { arm(w) }
+        case .unreadable:
+            // 事故本身由 `reportWakeupIncident` 如实落白板；这里补上后果那一句 ——
+            // 「读不出来」不说清代价的话，人看不出这次重启丢了什么。
+            // 这条后果是**全局的**（整本账没重挂），所以每个有 session 在跑的 crew
+            // 各说一次 —— 只报给某一个群的话，别的群里的人不会知道自己的督办停了。
+            for crewId in Set(runs.filter { $0.status == .running }.map(\.crewId)) {
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: crewId, sessionId: "system",
+                    text: "定时唤醒账本这次读不出来，**这一轮一条唤醒都没重挂** —— "
+                        + "在途的定时唤醒和督办租约此刻都不会响。修好账本后重启 app 会重挂。",
+                    category: "error", senderName: "系统",
+                    mentions: [LocalWhiteboardMention(kind: "human", targetId: nil),
+                               LocalWhiteboardMention(kind: "captain", targetId: nil)])
+            }
+        }
     }
 
     private func arm(_ w: PendingWakeup) {

@@ -43,8 +43,43 @@ final class LocalWakeupStore: @unchecked Sendable {
 
     /// 全部待触发唤醒。出事 → `onIncident`（读不出来 / 漏读 = 原件完好、本次写已拒；
     /// 确认解不开 = 已归档、人工可找回），调用方负责 fail-loud（白板警示）。
+    /// 一次读的结果 —— **三态里的后两态（真空 / 读不到）不许压成同一个空数组**。
+    ///
+    /// 这是 `LocalTodoStore.LedgerRead` 的**孪生**（`c12c80c` 做的），形状照抄，不是
+    /// 第二种设计。同一个病：`list()` 把 `loadLocked` 的失败压成 `[]`，于是
+    /// 「一条待唤醒都没有」和「这本账这次读不出来」在调用方眼里长得一模一样。
+    ///
+    /// **这里的后果比 Todo 那本更重**：`CrewSessionRunner.rearmWakeups()` 在 app 启动时
+    /// 读它来重挂全部定时唤醒。读失败当成空表 = **所有在途的唤醒（含督办租约）静默
+    /// 全部消失**，而且没有任何人会发现 —— 那正是 #107「别人停了我不知道」的形状。
+    ///
+    /// 注意写路径**早就**在用这个信号（`register` 里的 `refuseEmptyRewriteIfNonEmptyFile`），
+    /// 只有读路径把它扔了。**「三态压成一个值」在这个仓库里是个反复出现的形状**，
+    /// 不是某一个 store 的疏漏。
+    enum LedgerRead: Equatable {
+        case rows([PendingWakeup])
+        /// 这次没读到可信内容。**任何一种事故都算**（打不开 / 读到空但文件非空 / 解不开）。
+        case unreadable
+    }
+
+    /// 跟 `list` 是**同一条读**（同一把锁、同一个解码、同一份事故上报），区别只在于
+    /// 把「读不出来」交还给调用方。
+    func read(onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> LedgerRead {
+        withFileLock {
+            var hadIncident = false
+            let rows = MultiProcessJSONStore.loadRowsLocked(
+                PendingWakeup.self, at: fileURL,
+                onIncident: { incident in hadIncident = true; onIncident(incident) })
+            return hadIncident ? .unreadable : .rows(rows)
+        }
+    }
+
+    /// 待唤醒清单。**读不出来时返回空表** —— 历史行为，既有调用点按它写的，这一笔
+    /// 不动它。要区分「真的没有」和「读不到」的调用方走 `read(onIncident:)`
+    /// （判「有没有事要做」的那类路径**必须**走那条，理由见 `LedgerRead`）。
     func list(onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> [PendingWakeup] {
-        withFileLock { loadLocked(onIncident: onIncident) }
+        if case let .rows(rows) = read(onIncident: onIncident) { return rows }
+        return []
     }
 
     /// 登记一条（同 id 已存在 → no-op，drain 重放安全）。返回是否真的新登记。
