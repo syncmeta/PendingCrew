@@ -2513,14 +2513,15 @@ final class CrewSessionRunner: ObservableObject {
         // （20%）本来续得回来的会话挡在了门外（见 `AgentSessionResume` 的实测）。
         // 真续不上由 claude 自己说了算：`retryWithoutResumeIfClaudeRefused`（claude）
         // / backend 的 resume→start 降级（codex），两边都 fail-loud。
+        var recordReadFailure: String?
         let recorded = LocalAgentSessionStore.shared.record(
-            crewId: detail.crew.id, sessionId: member.sessionId)
+            crewId: detail.crew.id, sessionId: member.sessionId,
+            onIncident: { recordReadFailure = $0.summary })
         // runner 的持久记录是恢复判据；显示名只给旧数据兜底。否则一个被人改过
         // 标题的 Codex session 会按 crew 默认误拉成 Claude（#23/#80）。
-        let recordedKind = recorded.flatMap { LocalCodingAgentKind(rawValue: $0.kind) }
-        let kind = (recordedKind?.isAgent == true ? recordedKind : nil)
-            ?? LocalCodingAgentKind.inferred(fromDisplayName: member.displayName)
-            ?? LocalCodingAgentKind.captainDefault(detail.crew.captainAgentKind)
+        let kind = try LocalCodingAgentKind.restartingMember(
+            recordedKind: recorded?.kind, displayName: member.displayName,
+            recordReadFailure: recordReadFailure)
         let workdir = AgentSessionResume.restartDirectory(
             recorded: recorded?.workingDirectory, crewDirectory: crewWorkdir)
         let decision = AgentSessionResume.decide(recordedId: recorded?.agentSessionId)

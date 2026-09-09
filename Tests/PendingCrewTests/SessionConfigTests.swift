@@ -2,6 +2,70 @@ import XCTest
 
 
 final class SessionConfigTests: XCTestCase {
+    func testRestartCustomNamedMemberPreservesRecordedCodex() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalAgentSessionStore(directory: directory)
+        store.record(crewId: "crew", sessionId: "member", kind: "codex", agentSessionId: "thread")
+        let recorded = try XCTUnwrap(store.record(crewId: "crew", sessionId: "member"))
+        XCTAssertEqual(try LocalCodingAgentKind.restartingMember(
+            recordedKind: recorded.kind, displayName: "修身份的成员"), .codex)
+    }
+
+    func testRestartLegacyCustomNamedMemberFailsLoud() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalAgentSessionStore(directory: directory)
+        let recorded = store.record(crewId: "crew", sessionId: "legacy")
+        XCTAssertNil(recorded)
+        XCTAssertThrowsError(try LocalCodingAgentKind.restartingMember(
+            recordedKind: recorded?.kind, displayName: "修身份的成员")) { error in
+            XCTAssertEqual(error as? LocalCodingAgentKind.MemberRestartError,
+                           .unknownLegacyKind("修身份的成员"))
+            XCTAssertTrue(error.localizedDescription.contains("已停止恢复"))
+        }
+    }
+
+    func testRestartRecordedKindOverridesMisleadingDisplayName() throws {
+        XCTAssertEqual(try LocalCodingAgentKind.restartingMember(
+            recordedKind: "codex", displayName: "Claude Code · old"), .codex)
+        XCTAssertEqual(try LocalCodingAgentKind.restartingMember(
+            recordedKind: "claude_code", displayName: "Codex · old"), .claudeCode)
+    }
+
+    func testRestartLegacyRecognizableNamesRemainSupported() throws {
+        XCTAssertEqual(try LocalCodingAgentKind.restartingMember(
+            recordedKind: nil, displayName: "Codex · old"), .codex)
+        XCTAssertEqual(try LocalCodingAgentKind.restartingMember(
+            recordedKind: nil, displayName: "Claude Code · old"), .claudeCode)
+    }
+
+    func testRestartInvalidRecordedKindDoesNotInferFromName() {
+        for raw in ["", "unknown", "terminal"] {
+            XCTAssertThrowsError(try LocalCodingAgentKind.restartingMember(
+                recordedKind: raw, displayName: "Codex · old")) { error in
+                XCTAssertEqual(error as? LocalCodingAgentKind.MemberRestartError,
+                               .invalidRecordedKind(raw))
+            }
+        }
+    }
+
+    func testRestartCorruptLedgerIsNotTreatedAsAbsent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalAgentSessionStore(directory: directory)
+        try Data("{broken".utf8).write(to: directory.appendingPathComponent("agent-sessions.json"))
+        var failure: String?
+        let recorded = store.record(crewId: "crew", sessionId: "member",
+                                    onIncident: { failure = $0.summary })
+        XCTAssertNotNil(failure)
+        XCTAssertThrowsError(try LocalCodingAgentKind.restartingMember(
+            recordedKind: recorded?.kind, displayName: "Codex · old", recordReadFailure: failure)) { error in
+            XCTAssertEqual(error as? LocalCodingAgentKind.MemberRestartError,
+                           .unreadableRecord(failure!))
+        }
+    }
+
     /// 2026-08-28 现场事故：另一个 session 为排查发布进程执行 `ps`，直接从
     /// Claude 的 argv 读到了本 session 的完整白板与开场任务，随后误当成自己的任务。
     /// 开场正文必须经 PTY stdin 送入，绝不能留在任何本机进程都能看到的命令行里。

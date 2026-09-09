@@ -56,10 +56,44 @@ public enum LocalCodingAgentKind: String, CaseIterable, Sendable, Hashable, Coda
         }
     }
 
-    /// 从成员显示名反推 kind —— @ 唤醒已退出成员时用。`LocalSessionMember` 只存
-    /// 了 displayName(形如「Claude Code · ab12cd」,来自 `run.displayName` =
-    /// `kind.displayName + " · " + 前缀`),没单存 kind;显示名对不上(如「机长」)
-    /// 返 nil,caller 落回 `captainDefault`。
+    enum MemberRestartError: LocalizedError, Equatable {
+        case invalidRecordedKind(String)
+        case unknownLegacyKind(String)
+        case unreadableRecord(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidRecordedKind(let raw):
+                return "成员记录中的 runner 类型无效（\(raw)），已停止恢复；请修复记录后重试。"
+            case .unknownLegacyKind(let name):
+                return "成员「\(name)」没有 runner 记录，且无法从旧显示名确定类型，已停止恢复；请明确指定 runner 后重新启动。"
+            case .unreadableRecord(let diagnostic):
+                return "成员 runner 账本读取异常，已停止恢复：\(diagnostic)"
+            }
+        }
+    }
+
+    /// 已有记录是唯一事实源。只有确认无记录的旧成员允许从显示名推断；
+    /// 无法识别时停止恢复，不得静默借用机长的 runner。
+    static func restartingMember(recordedKind raw: String?, displayName: String,
+                                 recordReadFailure: String? = nil) throws -> LocalCodingAgentKind {
+        if let recordReadFailure {
+            throw MemberRestartError.unreadableRecord(recordReadFailure)
+        }
+        if let raw {
+            guard let kind = LocalCodingAgentKind(rawValue: raw), kind.isAgent else {
+                throw MemberRestartError.invalidRecordedKind(raw)
+            }
+            return kind
+        }
+        guard let inferred = inferred(fromDisplayName: displayName) else {
+            throw MemberRestartError.unknownLegacyKind(displayName)
+        }
+        return inferred
+    }
+
+    /// 仅为没有持久记录的旧成员从显示名反推 kind。显示名不是 runner 身份，
+    /// 对不上时返回 nil，由恢复入口报错。
     public static func inferred(fromDisplayName name: String) -> LocalCodingAgentKind? {
         // 纯终端永不登记成成员，因此也不能从花名册反推出它并被 @ 唤醒。
         for kind in allCases where kind.isAgent && name.hasPrefix(kind.displayName) { return kind }

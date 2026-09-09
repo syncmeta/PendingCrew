@@ -378,8 +378,18 @@ final class ViewWiringTests: XCTestCase {
                       "恢复后没有精确选择并打开被点击的那个 session")
 
         let runner = try Self.text(of: "CrewSessionRunner.swift")
-        XCTAssertTrue(runner.contains("LocalCodingAgentKind(rawValue: $0.kind)"),
-                      "恢复 runner 仍靠显示名猜；改过标题的 Codex session 会被拉错类型")
+        let start = try XCTUnwrap(runner.range(of: "    func restartMember("))
+        let end = try XCTUnwrap(runner.range(of: "    /// worker 启动共用体", range: start.upperBound..<runner.endIndex))
+        let restart = String(runner[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(restart.contains("let kind = try LocalCodingAgentKind.restartingMember("))
+        XCTAssertTrue(restart.contains("recordedKind: recorded?.kind, displayName: member.displayName"),
+                      "恢复 runner 必须接到持久化记录决策")
+        XCTAssertTrue(restart.contains("onIncident: { recordReadFailure = $0.summary }"))
+        XCTAssertTrue(restart.contains("recordReadFailure: recordReadFailure)"))
+        XCTAssertTrue(restart.contains("brief: brief, kind: kind, workdir: workdir"),
+                      "实际启动必须使用恢复决策的 runner")
+        XCTAssertFalse(restart.contains("captainDefault("))
+        XCTAssertFalse(restart.contains("inferred(fromDisplayName:"))
     }
 
     /// Todo #88：系统帮助菜单必须落到公开文档站，不能依赖未配置的 Help Book。
