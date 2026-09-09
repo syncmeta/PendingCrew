@@ -70,7 +70,7 @@ FIX_DIR=${FIX_REL%/*}   # 那个 crew 目录的上一级 = Fixtures 本身（整
 # 那是一个可识别的读数。改成让 set -e 生效，等于把「看得出哪儿错了」换成一次早退。
 cp -R "$REPO/$FIX_DIR" "$WT/${FIX_DIR%/*}/" 2>/dev/null || true
 before_head=$(git -C "$WT" rev-parse HEAD)
-# 基线用 `status --porcelain --ignored`，三条都别改：
+# 基线口径（2026-09-09 收窄过一次，理由在下面「为什么不再 --ignored 全收」）：
 #   * 不能用 `git diff` —— 它定义上看不见未跟踪/被忽略的文件。
 #   * 也不能用 `--untracked-files=all` —— 那份 fixture 不是「未跟踪」，是 **.gitignore:27 里被忽略的**，
 #     而 `-uall` 不列 ignored。实测：`-uall` 2 行、Fixtures 命中 0；`--ignored` 10 行、命中 1。
@@ -78,7 +78,27 @@ before_head=$(git -C "$WT" rev-parse HEAD)
 #     折叠正是我们要的：要判的是「那个 fixture 目录在不在」，不是里面有几个文件。
 # 为什么非要盖住它：那份 fixture 决定 CrewChatOpenCost 那 8 条跑还是 skip —— 尺子瞎的地方
 # 恰好是它唯一被指望看清的地方。（`cp -R` 必须在取基线之前，否则前后两次不相等。）
-before_diff=$(git -C "$WT" status --porcelain --ignored | shasum | cut -c1-12)
+#
+# ⚠️ **为什么不再 `--ignored` 全收**（2026-09-09，这道读数当天就被自己人弄成过报的）：
+# 我那笔进程级数据隔离引入了 `.test-data-root/` —— gitignored、**测试跑完才被创建**。
+# 于是全新 worktree 上：before 没有它、after 有它 ⇒ 读数 ④ **必不相等**；
+# 而同一个 worktree 复跑反而相等。**它只在「第一次跑某个 commit」时报错，
+# 而那正是闸门唯一被用到的场合。**
+#
+# 修法选「口径」而不是「再删一次」：后者依赖「记得在正确的位置删」这种顺序假设，
+# 而 `.test-data-root` 不会是最后一个测试副产物（`--fetch` 的 `.tools/` 已经是第二个，
+# 只是它跑在 after 之后、一趟内影响不到 ④ —— 那是运气，不是设计）。
+# **排一个名字治一次，换口径治一类。**
+#
+# 现在的口径 = **tracked 改动 + 未跟踪文件**（`-uall` 展开到文件级），
+# 不含 ignored。它仍然回答读数 ④ 要问的那件事：「你测的还是你以为的那棵树吗」——
+# 构建产物、隔离数据根、工具缓存都是 ignored，本来就不属于「那棵树」。
+#
+# **代价说清楚**：那份被 .gitignore 挡住的 chat fixture（决定 CrewChatOpenCost 那 8 条
+# 跑还是 skip）**不再进指纹**。所以下面单列一行显式报它在不在 —— 把「盖住它」
+# 从指纹里挪成一条明写的读数，而不是悄悄丢掉。
+fixture_before=$([ -d "$WT/Tests/PendingCrewTests/Fixtures" ] && echo present || echo absent)
+before_diff=$(git -C "$WT" status --porcelain -uall | shasum | cut -c1-12)
 # ── 进程级数据隔离（2026-09-09）────────────────────────────────────────────
 # 整趟测试的**数据根**挪出人的 `~/Library/Application Support/PendingCrew`，
 # 让测试进程根本够不着它。
@@ -98,6 +118,7 @@ before_diff=$(git -C "$WT" status --porcelain --ignored | shasum | cut -c1-12)
 #
 # 这跟「测试里别忘了给 store 注入 temp dir」那把尺子是两层：
 # 那层是**别写错**，这层是**就算写错了也伤不到**。
+# 清掉上一趟留下的隔离数据根（纯清理 —— 它已经**不进指纹**了，见上面的口径说明）。
 rm -rf "$WT/.test-data-root"
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -105,9 +126,11 @@ xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' build     > "$LOG"/b-mac.log 2>&1 || true
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'generic/platform=iOS Simulator' build > "$LOG"/b-ios.log 2>&1 || true
 after_head=$(git -C "$WT" rev-parse HEAD)
-after_diff=$(git -C "$WT" status --porcelain --ignored | shasum | cut -c1-12)
+after_diff=$(git -C "$WT" status --porcelain -uall | shasum | cut -c1-12)
+fixture_after=$([ -d "$WT/Tests/PendingCrewTests/Fixtures" ] && echo present || echo absent)
 echo "HEAD $before_head -> $after_head   (必须逐字相同)"
-echo "TREE $before_diff -> $after_diff   (必须逐字相同；含被忽略的 fixture)"
+echo "TREE $before_diff -> $after_diff   (必须逐字相同；tracked+untracked，不含 ignored)"
+echo "FIXTURE $fixture_before -> $fixture_after   (present=CrewChatOpenCost 那 8 条真跑；absent=它们 skip)"
 echo "--- 汇总 / 结论 ---"; grep -E "Executed [0-9]{3,} tests, with|TEST SUCCEEDED|TEST FAILED" "$LOG"/t-mac.log | tail -3
 echo "--- 具名失败（空=零条）---"; grep -E "' failed \(" "$LOG"/t-mac.log || true
 echo "--- 那 8 条跑了没（最要紧）---"

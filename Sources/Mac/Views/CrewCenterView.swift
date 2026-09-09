@@ -14,10 +14,6 @@ struct CrewCenterView: View {
     /// 换成 `@EnvironmentObject` 会让开关驾驶舱重新把整条中栏（连着群聊）作废。
     @Environment(\.cockpitPresentation) private var cockpitPresentation
     @State private var showingDetail = false
-    /// chunk2 T5（captain 唤醒=app 注入）：已通知过 captain 的 decision id ——
-    /// 防止重复注入同一条。**放在常驻中栏**（而非按需 inspector），captain 编排
-    /// 不能依赖 session 终端面板是否打开。
-    @State private var notifiedDecisionIds: Set<String> = []
     /// 「只看 @ 我的消息」（Todo #61 立、#128 改成默认点亮）。开关钮在 toolbar 上，
     /// 状态喂给 `CrewChatView` 的时间线。**放在这里而不是 chat 里面**：
     /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
@@ -212,34 +208,27 @@ struct CrewCenterView: View {
                 }
             }
         }
-        .task(id: crewStore.selectedCrewId) {
-            guard let crewId = crewStore.selectedCrewId else { return }
-            notifyCaptainOfNewDecisions()
-            for await _ in LocalApprovalStore.shared.approvalChanges(crewId: crewId) {
-                if Task.isCancelled { return }
-                notifyCaptainOfNewDecisions()
-            }
-        }
     }
 
-    /// 发现新待决策 → 注入运行中的 captain session（spec §2 唤醒=app 注入）。
-    /// 没有在跑的 captain 就什么都不做（等 captain 启动后第一个 tick 再补通知）。
-    private func notifyCaptainOfNewDecisions() {
-        guard let crewId = crewStore.selectedDetail?.crew.id,
-              let captainRun = sessionRunner.runs.first(where: {
-                  $0.crewId == crewId && $0.role == .captain && $0.status == .running
-              })
-        else { return }
-        let items = LocalApprovalStore.shared.pending(crewId: crewId).filter {
-            $0.kind == "decision"
-                && $0.sessionId != captainRun.sessionId
-                && !notifiedDecisionIds.contains($0.id)
-        }
-        for item in items {
-            captainRun.send("有新的待决策 #\(item.id)（来自 session \(item.sessionId)）：\(item.summary)\n能拍板就用 answer_decision 工具答它（reqId=\(item.id)）；拍不了就用 post_to_crew 发消息 @human 说明需要人类决策的理由与你的建议。")
-            notifiedDecisionIds.insert(item.id)
-        }
-    }
+    // `notifyCaptainOfNewDecisions()` 已删（驾驶舱计划 #75 收尾，2026-09-09）。
+    //
+    // 它做的是：扫 `LocalApprovalStore` 里 `kind == "decision"` 的 pending，注入机长
+    // 「用 `answer_decision` 工具答它」。**这两头现在都不成立了**：
+    //
+    // - **没有任何地方再产生 `kind: "decision"`** —— `ask` 已改成写人类 Todo；
+    //   codex 原生审批那条走的是 `kind: "permission"`（`CodexManualApprovalBridge`）。
+    // - **`answer_decision` 这个工具已经删掉**（#75 ①）。
+    //
+    // 于是它只可能命中**#75 之前遗留的旧行**，然后教机长去用一个不存在的工具 ——
+    // 机长照做，工具回「找不到待决策」，而 worker 还停在那儿等。
+    // **两边都不知道对方在等什么**，正是 #75 要消灭的形状换了个位置活下来。
+    //
+    // 教训（写在这儿因为它比这段代码值钱）：**拆掉一条老路时，「还有谁在教这条老路」
+    // 要当成拆除清单的一部分** —— 实现删干净了，而提示语、文案、文档里的指路牌
+    // 会继续把人送进死胡同，且不会有任何报错。
+    //
+    // 遗留的旧 pending 行**没有清理**：它们仍在审批账本里，人类在 session 详情的
+    // 审批卡上仍看得到、也仍能处理。删数据是另一件事，不在这一笔里。
 
     private func empty(_ text: String) -> some View {
         VStack(spacing: 12) {
