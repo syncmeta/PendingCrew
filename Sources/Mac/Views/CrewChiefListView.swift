@@ -40,6 +40,10 @@ struct CrewChiefListView: View {
         let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
         // 与时间流视图同一份快照：**body 里不碰磁盘**（2026-08-17「开久了卡」的病根）。
         let lastMessages = crewStore.lastWhiteboardMessages
+        // 状态那张表跟末条快照出自同一次解码（`CrewLastMessageCache.Digest`），
+        // body 里只是一次字典查表 —— **不碰磁盘**。
+        let statusCarriers = crewStore.crewStatusCarriers
+        let now = Date()
         let entries = CrewChiefOverview.ordered(
             crews: crews,
             activity: { crew in
@@ -68,6 +72,11 @@ struct CrewChiefListView: View {
                     expansion: nil, // 扁平列表没有展开
                     parentId: entry.crew.parentCrewIds.first,
                     groupCrews: crews,
+                    statusLine: CrewStatusLine.make(
+                        resolved: statusCarriers[entry.crew.id].map {
+                            ($0.crewStatus ?? "", CrewTimestamp.parse($0.createdAt))
+                        },
+                        now: now),
                     allowsReparentDrag: false,
                     dragState: dragState,
                     childCrewTarget: $childCrewTarget
