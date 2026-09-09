@@ -37,3 +37,6 @@ Config/Local.xcconfig
 
 # scripts/test-mac.sh 的测试归档（xcresult + 全量日志），只在本机留最近几趟
 .test-archive/
+
+# 测试进程的隔离数据根（project.yml 的 scheme 环境变量指到这儿）
+.test-data-root/
