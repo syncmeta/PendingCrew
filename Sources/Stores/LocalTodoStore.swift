@@ -273,7 +273,8 @@ final class LocalTodoStore: @unchecked Sendable {
              bySessionId: String? = nil,
              bySenderName: String? = nil,
              resumeNote: String? = nil,
-             expectsResume: Bool = false) -> LocalTodoItem? {
+             expectsResume: Bool = false,
+             permissionTool: String? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
@@ -290,7 +291,8 @@ final class LocalTodoStore: @unchecked Sendable {
                 createdBySenderName: bySenderName,
                 resumeNote: resumeNote?.trimmingCharacters(in: .whitespacesAndNewlines)
                     .isEmpty == false ? resumeNote : nil,
-                expectsResume: expectsResume)
+                expectsResume: expectsResume,
+                permissionTool: permissionTool)
             rows.append(item)
             saveLocked(crewId: crewId, rows: rows)
             return item
@@ -648,6 +650,9 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     /// 一条条丢掉，账**看起来是空的**）。既有的 `TodoLedgerIsolationTests` 当场抓到了。
     /// nil = 老数据，按 `isMidFlowAsk` 的安全默认（false）处理。
     var expectsResume: Bool? = nil
+    /// 这条是**权限放行请求**吗（#75 ②）：非 nil = agent 要跑这个工具、在等人放行。
+    /// hook 靠它去重（同一个工具已经挂着一条就别再提），app 侧靠它决定要不要写放行票。
+    var permissionTool: String? = nil
 
     /// 「这条是不是半路上问的」的取值口径。老数据（nil）按 false —— 那条路只会
     /// **少说一句提示**，不会误报，是安全的一侧。

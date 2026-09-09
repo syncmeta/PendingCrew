@@ -31,6 +31,15 @@ enum CrewHumanTodoRespond {
             return TodoLandingFlow.notPersistedReceipt(ledger: .human, action: .responded)
         }
 
+        // 这条是权限放行请求的话，把「人同意了没有」读出来，同意就留一张一次性票
+        // （#75 ②）。没有这张票，agent 重跑会再次被拒、再提一条 Todo —— 死循环，
+        // 而且每转一圈往人的账上加一条垃圾。
+        // 读法是保守的：读不准就当没同意（见 `PermissionGrantReading`）。
+        if let tool = item.permissionTool,
+           PermissionGrantReading.read(trimmed) == .granted {
+            PermissionGrantStore.shared.grant(crewId: crewId, tool: tool)
+        }
+
         let plan = HumanTodoWakePlan.plan(
             createdBySessionId: item.createdBySessionId,
             runningSessionIds: Set(runner.runs.filter { $0.status == .running }.map(\.sessionId)),

@@ -181,6 +181,45 @@ final class AskIntoTodoTests: XCTestCase {
                       "回落原因被 resume 挤掉了 —— 那条丢了机长不知道该自己办还是转达")
     }
 
+    // MARK: - ③b 有时限的决定：那 30 分钟超时被搬走了，不是丢掉了
+
+    /// 旧实现里 `awaitReply` 到点会写一句「（暂无人响应 —— 请自行判断后继续）」。
+    /// **那条超时的存在理由是「把卡住的 agent 解开」，而现在它根本不阻塞，理由消失了。**
+    /// 剩下的真需求只有一半：有些决定有时限。所以不重建全局定时器，改成 agent 自己
+    /// 事先说好「等到 X 分钟就按 Y 办」—— 比原来强，原来那句是系统替它编的。
+    func testFallbackSchedulesAWakeupCarryingWhatTheAgentSaidItWouldDo() {
+        let dir = tempDir()
+        let s = server(dir)
+        let done = expectation(description: "ask 回来了")
+        DispatchQueue.global().async {
+            _ = self.call(s, "ask",
+                #"{"question":"A 还是 B？","fallback_after_minutes":30,"fallback":"就按 A 做"}"#)
+            done.fulfill()
+        }
+        _ = XCTWaiter().wait(for: [done], timeout: 3)
+
+        let pending = LocalWakeupStore(directory: dir).list(onIncident: { _ in })
+        guard let w = pending.first(where: { $0.note.contains("人类 Todo #1") }) else {
+            return XCTFail("没约到点叫醒 —— 那条「有时限」的语义就是被丢掉了，不是搬走了")
+        }
+        XCTAssertTrue(w.note.contains("就按 A 做"),
+                      "叫醒时不念回它自己说的办法，它醒来还是不知道该怎么办")
+        XCTAssertEqual(w.sessionId, "sess-1", "该叫醒提问的那个 session")
+    }
+
+    func testNoFallbackMeansNoWakeup() {
+        let dir = tempDir()
+        let s = server(dir)
+        let done = expectation(description: "ask 回来了")
+        DispatchQueue.global().async {
+            _ = self.call(s, "ask", #"{"question":"不急，等人拍"}"#)
+            done.fulfill()
+        }
+        _ = XCTWaiter().wait(for: [done], timeout: 3)
+        XCTAssertTrue(LocalWakeupStore(directory: dir).list(onIncident: { _ in }).isEmpty,
+                      "没说时限却给排了个闹钟 —— 绝大多数问题就该一直等人")
+    }
+
     // MARK: - ④ 旧的阻塞路径必须真的拆掉，不是并存
 
     /// ⚠️ 扫的是**代码**，注释剥掉。拆掉一条老路时**正该在原地留注释说明它去哪了**，

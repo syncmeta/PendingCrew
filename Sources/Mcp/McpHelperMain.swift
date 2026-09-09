@@ -52,9 +52,13 @@ enum McpHelperMain {
             // 吐 permissionDecision 拦截/放行。不命中 → 无输出（走 claude 正常流程）。
             // stdin 是单个 hook JSON 对象（一次读到 EOF）。
             let gates = (value("--gate", args) ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            // #75 ②：权限请求提到**人类 Todo**、放行票走 `PermissionGrantStore`，
+            // 两个都跟着 `--dir` 走 —— 不给就会静默落到真实数据目录。
             let permission = McpPermissionHook(approvals: LocalApprovalStore(directory: dir),
                                                crewId: crewId, sessionId: sessionId,
-                                               gates: gates, board: store)
+                                               gates: gates, board: store,
+                                               todos: LocalTodoStore(directory: dir, ledger: .human),
+                                               grants: PermissionGrantStore(directory: dir))
             let data = FileHandle.standardInput.readDataToEndOfFile()
             let input = String(data: data, encoding: .utf8) ?? ""
             if let out = permission.handle(input) {

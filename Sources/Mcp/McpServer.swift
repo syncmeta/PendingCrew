@@ -271,6 +271,8 @@ final class McpServer {
                         "properties": [
                             "question": ["type": "string", "description": "要人拍板的那件事。把选项和你的倾向写出来——「A / B，我倾向 A，因为 …」比「这个怎么办？」好拍十倍。"],
                             "resume_note": ["type": "string", "description": "答复回来后你要接着做什么（你正做到哪一步、接下来那一步是什么）。会在人回应时**原样**念回给你。"],
+                            "fallback_after_minutes": ["type": "number", "description": "可选：等这么多分钟还没人答，就把你叫醒按 `fallback` 说的办。**有时限的决定才填** —— 不填就是一直等人。"],
+                            "fallback": ["type": "string", "description": "到点没人答时你打算怎么办（「就按 A 做」）。跟 fallback_after_minutes 一起给才有意义。"],
                         ],
                         "required": ["question"],
                     ],
@@ -827,6 +829,20 @@ final class McpServer {
             }
             let askResume = (args["resume_note"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            // 旧实现里那条 30 分钟超时（`awaitReply` 到点写一句「自行判断后继续」）
+            // 的**存在理由**是「把卡住的 agent 解开」—— 而现在它根本不阻塞，那个理由
+            // 消失了。剩下的真需求只有一半：**有些决定有时限**。所以不重建一个全局
+            // 定时器，改成让 agent 自己事先说好「等到 X 分钟就按 Y 办」，到点由现成的
+            // `LocalWakeupStore` 叫醒它并把 Y 念回去。比原来强：原来是系统替它编一句
+            // 「自行判断」，现在是它自己定的。
+            let askFallback = (args["fallback"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let askFallbackMinutes: Double?
+            switch SupervisionLease.parseMinutes(args["fallback_after_minutes"]) {
+            case .none: askFallbackMinutes = nil
+            case let .minutes(m): askFallbackMinutes = m
+            case let .refused(why): return toolResult(id: id, text: "ERROR: " + why)
+            }
             guard let askItem = humanTodos.add(
                 crewId: crewId, text: question,
                 bySessionId: sessionId, bySenderName: sessionLabel,
@@ -850,6 +866,16 @@ final class McpServer {
             **现在去干别的，别停在这儿等** —— 人回应时会直接叫醒你\
             （你已经退出的话转给机长转达），并把你写下的接续说明念回给你。
             """
+            if let minutes = askFallbackMinutes {
+                let fires = Date().addingTimeInterval(minutes * 60)
+                let note = "人类 Todo #\(askItem.number) 到点仍未答复。你当时说过：\(askFallback?.isEmpty == false ? askFallback! : "（没写到点怎么办 —— 自己判断）")"
+                if wakeups.register(LocalWakeupStore.PendingWakeup(
+                    id: "ask-fallback:\(crewId):\(askItem.number)", crewId: crewId,
+                    sessionId: sessionId, fireAt: ISO8601DateFormatter().string(from: fires),
+                    note: note), onIncident: { _ in }) {
+                    askReceipt += "\n到点（\(Int(minutes)) 分钟后）没人答的话会叫醒你，并把你说的办法念回来。"
+                }
+            }
             if askResume?.isEmpty != false {
                 askReceipt += "\n⚠️ 你没写 resume_note。被叫醒时你可能不知道从哪儿接 —— "
                     + "下次问的时候把「答复回来后接着做什么」一起写上。"

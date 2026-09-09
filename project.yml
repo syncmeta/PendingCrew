@@ -240,6 +240,9 @@ targets:
       - path: Sources/Stores/CrewViewedStore.swift
       # 上面那套判定的一点点持久态（确认覆盖了哪批 / 上次什么时候提醒的）。
       - path: Sources/Stores/CaptainTodoSweepStore.swift
+      # 权限类并进 Todo 的判定 + 一次性放行票（驾驶舱计划 #75 ②）。纯 Foundation。
+      - path: Sources/Support/PermissionRequestFlow.swift
+      - path: Sources/Stores/PermissionGrantStore.swift
       # 机长空闲时回头看 Todo 账的判定（驾驶舱计划 #71）。纯 Foundation，自包含 ——
       # 「什么时候提醒/什么时候闭嘴/确认在什么条件下被拒」全都能脱离 app 直接单测。
       - path: Sources/Support/CaptainTodoSweep.swift
