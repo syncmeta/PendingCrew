@@ -12,9 +12,38 @@ import XCTest
 /// 2. 参数够不够，不够时**该说什么**。
 final class CrewMessageCategoryTests: XCTestCase {
 
-    private func decide(_ category: String?, _ args: [String: Any] = [:])
-        -> CrewCategoryRouting.Decision {
-        CrewCategoryRouting.decide(category: category, args: args)
+    /// 默认按**机长**判 —— 下面这批用例是照机长的出路措辞写的（「先 plan_add 排一条」）。
+    /// worker 的出路不一样（它调不动 `plan_add`），单独有用例。
+    private func decide(_ category: String?, _ args: [String: Any] = [:],
+                        isCaptain: Bool = true) -> CrewCategoryRouting.Decision {
+        CrewCategoryRouting.decide(category: category, args: args, isCaptain: isCaptain)
+    }
+
+    /// worker 缺计划号时，**不许给它一条它调不动的出路**。
+    ///
+    /// `plan_add` 是机长专用工具（worker 的工具列表里根本没有）。给它这条出路
+    /// 等于没给 —— 它只会改标 `note` 走人，而那正是这一单要治的病。
+    func test_worker缺计划号时的出路不能是它调不动的工具() {
+        // 拿 `blocked` 做样本：`progress` 是旧值（缺参数降级不失败），
+        // 而 `done` 根本轮不到 worker（`CrewCockpitWritePermission` 先拦）。
+        guard case let .refuse(msg) = decide("blocked", ["blocked_by_number": 3],
+                                             isCaptain: false) else {
+            return XCTFail("worker 标 blocked 不给计划号应当被拒")
+        }
+        XCTAssertFalse(msg.contains("plan_add"),
+                       "给了 worker 一条它调不动的出路：\(msg)")
+        XCTAssertTrue(msg.contains("机长"), "没告诉它去找谁要号：\(msg)")
+        XCTAssertTrue(msg.contains("finding"), "没给第二条出路：\(msg)")
+        // 同一句出路也要出现在**旧值降级**那条路上 —— 在跑的 session 走的正是它。
+        guard case let .skipped(hint) = decide("progress", [:], isCaptain: false) else {
+            return XCTFail("旧值 progress 缺号应当降级，不是拒绝")
+        }
+        XCTAssertFalse(hint.contains("plan_add"), "降级那条路上还留着调不动的出路：\(hint)")
+        // 机长那边照旧 —— 别把两个身份的措辞改成同一句。
+        guard case let .refuse(captainMsg) = decide("blocked", ["blocked_by_number": 3]) else {
+            return XCTFail("机长标 blocked 不给计划号也应当被拒")
+        }
+        XCTAssertTrue(captainMsg.contains("plan_add"), "机长的出路丢了：\(captainMsg)")
     }
 
     // MARK: - A 组：参数齐就落账

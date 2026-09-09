@@ -98,7 +98,10 @@ enum CrewCategoryRouting {
     ///     而**有的 agent 会把失败读成「这条不该发」然后静默咽掉** ——
     ///     咽掉的正是人类最需要看到的汇报。收口留到装版之后。
     ///   - args: 同一次工具调用里的其它参数（`plan` / `todo` / `blocked_by_number`）。
-    static func decide(category: String?, args: [String: Any]) -> Decision {
+    ///   - isCaptain: **只影响「缺计划号时该往哪走」这句话**，不影响该不该落账。
+    ///     机长的出路是「先 `plan_add` 排一条」，worker 没有那个工具 ——
+    ///     给它一条它调不动的出路，等于没给出路（见 `CrewCockpitWritePermission`）。
+    static func decide(category: String?, args: [String: Any], isCaptain: Bool) -> Decision {
         let raw = (category ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return .noLedger }
 
@@ -115,7 +118,7 @@ enum CrewCategoryRouting {
                 + "投递回执这类系统通告。你要说的多半是 `finding`（值得知道的事实）"
                 + "或 `note`（其它）。")
         }
-        for req in requirements(of: category) where args[req.key] == nil {
+        for req in requirements(of: category, isCaptain: isCaptain) where args[req.key] == nil {
             // **旧值不许因为缺参数而失败**（见 `legacyValues`）：降级成不落账 + 提醒。
             // 收口（缺参数就拒）留到装版之后 —— 那时所有 session 都在新 helper 上。
             if legacyValues.contains(raw) {
@@ -144,12 +147,13 @@ enum CrewCategoryRouting {
         let message: String
     }
 
-    private static func requirements(of category: CrewMessageCategory) -> [Requirement] {
+    private static func requirements(of category: CrewMessageCategory,
+                                     isCaptain: Bool) -> [Requirement] {
         switch category {
         case .progress, .done:
-            return [Requirement(key: "plan", message: planNumberMessage(category))]
+            return [Requirement(key: "plan", message: planNumberMessage(category, isCaptain: isCaptain))]
         case .blocked:
-            return [Requirement(key: "plan", message: planNumberMessage(category)),
+            return [Requirement(key: "plan", message: planNumberMessage(category, isCaptain: isCaptain)),
                     Requirement(key: "blocked_by_number", message: blockedByMessage)]
         case .todoResponse:
             return [Requirement(key: "todo", message: todoNumberMessage)]
@@ -158,9 +162,20 @@ enum CrewCategoryRouting {
         }
     }
 
-    private static func planNumberMessage(_ category: CrewMessageCategory) -> String {
-        "category `\(category.rawValue)` 要 `plan`（驾驶舱里那条计划的 #N，plan_list 看得到）。"
+    private static func planNumberMessage(_ category: CrewMessageCategory,
+                                          isCaptain: Bool) -> String {
+        let head = "category `\(category.rawValue)` 要 `plan`（驾驶舱里那条计划的 #N，plan_list 看得到）。"
             + "\n**没有计划号，说明这条报的是一件还没排上计划的事** —— 两条出路："
+        guard isCaptain else {
+            // worker 调不动 `plan_add`（见 `CrewCockpitWritePermission`）。
+            // **给一条它调不动的出路，等于没给出路** —— 它只会改标 `note` 走人，
+            // 而那正是这一单要治的病。
+            return head
+                + "\n① 不知道挂哪条？那多半说明**派你出来的时候没给号** —— 回群里问一句机长，"
+                + "他排完会把 `#N` 给你（`plan` 只有机长能加，这是防淹）；"
+                + "\n② 它本来就不是某条计划的进度，那它是 `finding`（值得知道的事实，不构成待办）。"
+        }
+        return head
             + "\n① 先 `plan_add` 排一条，再报它的进度；"
             + "\n② 它本来就不是某条计划的进度，那它是 `finding`（值得知道的事实，不构成待办）。"
     }

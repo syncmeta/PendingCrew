@@ -7,9 +7,9 @@ import XCTest
 /// **分类做成一个标签颜色 = 这一单白做**，所以判据不是「消息里带了 category」，
 /// 是**账变了没有**。
 ///
-/// 这一笔只接不碰驾驶舱那道门的两类（`human_todo` / `todo_response`）——
-/// `plan_add` / `plan_update` 现在是 `guard isCaptain`，worker 标 `progress` 会被
-/// 直接拒，那部分等权限拆分（(D) 方案）再接。
+/// 驾驶舱那四类（`plan` / `progress` / `blocked` / `done`）也在这儿量 ——
+/// 门禁按**谁有资格决定**拆开（(D)）：新增条目和翻完成只给机长，追加进展和标卡住
+/// worker 也能做（见 `CrewCockpitWritePermission`）。
 @MainActor
 final class McpCategoryLandingTests: XCTestCase {
 
@@ -44,7 +44,19 @@ final class McpCategoryLandingTests: XCTestCase {
                   crewId: f.crewId, sessionId: "sess-1",
                   isCaptain: captain, sessionLabel: "机长",
                   quotaDirectory: f.whiteboards,
-                  todos: LocalTodoStore(directory: f.whiteboards, ledger: .agent))
+                  todos: LocalTodoStore(directory: f.whiteboards, ledger: .agent),
+                  plans: CockpitPlanStore(directory: f.whiteboards))
+    }
+
+    private func plans(_ f: Fixture) -> [CockpitPlanItem] {
+        CockpitPlanStore(directory: f.whiteboards).list(crewId: f.crewId)
+    }
+
+    /// 机长先在板上排一条，好让 worker 有号可挂。
+    @discardableResult
+    private func seedPlan(_ f: Fixture, _ title: String = "接上分类落账") -> Int {
+        CockpitPlanStore(directory: f.whiteboards)
+            .add(crewId: f.crewId, title: title)?.number ?? -1
     }
 
     private func post(_ s: McpServer, _ arguments: String) -> String {
@@ -159,5 +171,99 @@ final class McpCategoryLandingTests: XCTestCase {
         XCTAssertTrue(r.contains("ERROR:"), r)
         XCTAssertFalse(board(f).contains { $0.text.contains("随便") },
                        "参数不合法却把消息发出去了")
+    }
+
+    // MARK: - 驾驶舱：分类要真的把板改了（(D)）
+
+    func test_机长标plan会真的往板上排一条() {
+        let f = fixture()
+        XCTAssertTrue(plans(f).isEmpty, "前置条件：板本来是空的")
+
+        // 正文里不放 markdown 标题：`"##` 会把 Swift 的原始字符串提前收尾。
+        // 标题剥标记那半在 `CrewCockpitLandingTests` 里量。
+        let r = post(server(f), #"{"message":"接上分类落账\n\n细节在下面","category":"plan"}"#)
+
+        let items = plans(f)
+        XCTAssertEqual(items.count, 1, "板上没多出那一条：\(r)")
+        XCTAssertEqual(items.first?.title, "接上分类落账", "标题该是第一行，不是整段正文")
+        XCTAssertTrue(r.contains("计划 #1"), "回执没说它建了第几条，就撤不掉：\(r)")
+        XCTAssertEqual(board(f).count, 1, "消息本身也要照常发出去")
+    }
+
+    /// worker 报进度 = 板上那条真的多一条进展，**而且顺手从「没做」翻成「进行中」**。
+    /// 这是人类那句根的正面：「不然第一 todo、cockpit等等不能及时更新」。
+    func test_worker标progress会真的追加进展并翻进行中() {
+        let f = fixture()
+        let n = seedPlan(f)
+
+        let r = post(server(f, captain: false),
+                     "{\"message\":\"闸门全绿\",\"category\":\"progress\",\"plan\":\(n)}")
+
+        guard let item = plans(f).first(where: { $0.number == n }) else {
+            return XCTFail("板上那条不见了：\(r)")
+        }
+        XCTAssertEqual(item.updates.count, 1, "进展没落上 —— 分类等于白标：\(r)")
+        XCTAssertEqual(item.updates.first?.text, "闸门全绿")
+        XCTAssertEqual(item.status, CockpitPlanStatus.inProgress.rawValue)
+        XCTAssertEqual(board(f).count, 1, "消息本身也要照常发出去")
+    }
+
+    /// **worker 不许新增条目 / 翻完成，而且被拒时消息一个字都不发。**
+    ///
+    /// 「发出去了、账没落上」是这一单最坏的形态 —— 人会**以为**账更新了。
+    func test_worker标plan被拒而且消息一个字都不发() {
+        let f = fixture()
+
+        let r = post(server(f, captain: false), #"{"message":"我要开始做一件事","category":"plan"}"#)
+
+        XCTAssertTrue(r.contains("ERROR"), r)
+        XCTAssertTrue(r.contains("机长"), "没说清谁能做：\(r)")
+        XCTAssertTrue(r.contains("progress") || r.contains("finding"), "没给出路：\(r)")
+        XCTAssertTrue(plans(f).isEmpty, "板上凭空多了一条")
+        XCTAssertTrue(board(f).isEmpty, "被拒了却把消息发出去了 —— 人会以为账更新了")
+    }
+
+    func test_worker标done被拒并说清完成是验收判断() {
+        let f = fixture()
+        let n = seedPlan(f)
+
+        let r = post(server(f, captain: false),
+                     "{\"message\":\"做完了\",\"category\":\"done\",\"plan\":\(n),\"evidence\":\"跑了全量\"}")
+
+        XCTAssertTrue(r.contains("ERROR"), r)
+        XCTAssertTrue(r.contains("验收"), "没说清为什么不给它翻：\(r)")
+        XCTAssertEqual(plans(f).first?.status, CockpitPlanStatus.notStarted.rawValue, "状态被翻了")
+        XCTAssertTrue(board(f).isEmpty, "被拒了却把消息发出去了")
+    }
+
+    /// 翻完成的凭据闸走**原来那一份**（当场解析 commit）——
+    /// 「有资格判」不等于「判过了」。
+    func test_机长标done不带凭据也过不了() {
+        let f = fixture()
+        let n = seedPlan(f)
+
+        let r = post(server(f),
+                     "{\"message\":\"做完了\",\"category\":\"done\",\"plan\":\(n)}")
+
+        XCTAssertTrue(r.contains("ERROR") && r.contains("凭据"), r)
+        XCTAssertEqual(plans(f).first?.status, CockpitPlanStatus.notStarted.rawValue)
+        XCTAssertTrue(board(f).isEmpty, "凭据没过却把消息发出去了")
+    }
+
+    /// **报进度不许把「卡住」翻回「进行中」** —— 那会把指向人类 Todo 的卡点清掉，
+    /// 而人类看板看的正是那个引用。这不是「状态不准」，是**一条人在等的事从板上消失了**。
+    func test_worker报进度不会把卡点清掉() {
+        let f = fixture()
+        let n = seedPlan(f)
+        let s = server(f, captain: false)
+        _ = post(s, "{\"message\":\"卡在人类拍板上\",\"category\":\"blocked\",\"plan\":\(n),\"blocked_by_number\":9}")
+        XCTAssertEqual(plans(f).first?.status, CockpitPlanStatus.blocked.rawValue, "前置条件：先卡住")
+        XCTAssertEqual(plans(f).first?.blockedBy?.number, 9)
+
+        _ = post(s, "{\"message\":\"顺手报一句\",\"category\":\"progress\",\"plan\":\(n)}")
+
+        XCTAssertEqual(plans(f).first?.status, CockpitPlanStatus.blocked.rawValue,
+                       "报了一句进度就把卡住解了")
+        XCTAssertEqual(plans(f).first?.blockedBy?.number, 9, "卡点引用被清掉了 —— 人不知道该推哪一条了")
     }
 }
