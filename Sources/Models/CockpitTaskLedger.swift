@@ -202,6 +202,27 @@ enum CockpitBand: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// 「只看这一条计划」（人类 Todo #132/#133 的引用胶囊落点）。
+///
+/// **指到不存在的 #N 时回落成完整列表** —— 照 `TodoListPresentation.focusedRows`
+/// 那个已经在用的形状写，不发明第二种。回落而不是显示成空的理由是：计划会被改、
+/// 会被别的机长重排，一颗指着已经不存在的 #N 的胶囊如果落进一片空白，人看到的是
+/// 一个坏掉的界面；落进完整列表，他至少知道自己到了哪儿。
+enum CockpitPlanFocusing {
+    static func focused(_ items: [CockpitTaskItem], number: Int?,
+                        numberOf: (CockpitTaskItem) -> Int?) -> [CockpitTaskItem] {
+        guard let number, let hit = items.first(where: { numberOf($0) == number })
+        else { return items }
+        return [hit]
+    }
+
+    /// 真的落在单条上了吗 —— 「‹ 全部」那颗只在这时出现，回落成完整列表时不该出现
+    /// （出现了就是在说「你正看着一条」，而人明明看着一整页）。
+    static func isFocused(_ items: [CockpitTaskItem], focused: [CockpitTaskItem]) -> Bool {
+        focused.count == 1 && items.count > 1
+    }
+}
+
 struct CockpitBandGroup: Equatable, Identifiable {
     let band: CockpitBand
     let items: [CockpitTaskItem]

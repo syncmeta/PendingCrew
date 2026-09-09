@@ -43,7 +43,16 @@ struct CrewCenterView: View {
                     },
                     showOnlyHumanMentions: $onlyMentions,
                     searchQuery: $searchQuery,
-                    searchTargetMessageId: $searchTargetMessageId
+                    searchTargetMessageId: $searchTargetMessageId,
+                    // 引用胶囊的跳转（人类 Todo #132/#133）。真正动 store 的那几行
+                    // 在这里 —— 中栏本来就订阅着它，群聊那棵子树不该为此被拉进订阅。
+                    onJumpToMessage: { messageId, from in
+                        crewStore.jumpToMessage(
+                            crewId: from.crewId, messageId: messageId, from: from)
+                    },
+                    onJumpToCrew: { targetCrewId, from in
+                        crewStore.jumpToCrew(crewId: targetCrewId, from: from)
+                    }
                 )
                 // 切 crew 强制重建（对齐 iPad 的 `IPadShell`）。少了它，detail 已缓存时
                 // 视图实例被复用，会先用「新 crewId + 上一个 crew 的 entries」渲染一帧，
@@ -58,6 +67,35 @@ struct CrewCenterView: View {
                 empty("详情加载中…")
             } else {
                 placeholder
+            }
+        }
+        // 「回到刚才那条」（人类 Todo #132/#133）。**浮在群聊上方而不是插进版面**：
+        // 插进去会把整条时间线往下推一格，而它是个临时件 —— 退回去之后就该消失，
+        // 版面不该跟着抖两次。
+        //
+        // 它只在**跳转真的换了地方**时才有：开 Todo 窗口 / 开驾驶舱那几种胶囊
+        // 群聊本身没动过，关掉那层就回来了，不需要也不该多一个返回件。
+        .overlay(alignment: .top) {
+            if let stop = crewStore.chatReturnTrail.top {
+                Button { crewStore.returnToPreviousStop() } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(stop.crewId == crewStore.selectedCrewId
+                             ? "回到刚才那条消息"
+                             : "回到「\(stop.crewTitle)」")
+                            .font(Theme.Fonts.caption)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Theme.Palette.canvas))
+                    .overlay(Capsule().stroke(Theme.Palette.hairline, lineWidth: 1))
+                    .foregroundStyle(Theme.Palette.accent)
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 8)
             }
         }
         // 标题走原生 navigationTitle —— 位置/收合行为和系统窗口标题完全一致（不会跑到
@@ -157,6 +195,12 @@ struct CrewCenterView: View {
         }
         .onChange(of: crewStore.chatSearchRequest) { _, request in
             guard let request else { return }
+            // **落到某一条消息 = 「把这条给我看」，筛选一律让路。**
+            // 搜索那条老路是靠下面 `onChange(of: searchQuery)` 顺带收掉筛选的，
+            // 而引用胶囊的定位 `query` 是空的 —— 走不到那一条。少了这一行，点一颗
+            // 指向「没 @ 人类」的消息的胶囊会**什么都不发生**：目标被筛在时间线外，
+            // `locateSearchTarget` 找不到它就直接返回，看起来跟胶囊坏了一样。
+            onlyMentions = false
             searchQuery = request.query
             searchTargetMessageId = request.messageId
             // 下一拍再清 request：同一笔点击还会改变 selectedCrewId，先让上面的切群

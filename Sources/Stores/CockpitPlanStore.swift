@@ -132,7 +132,7 @@ final class CockpitPlanStore: @unchecked Sendable {
                 createdByName: byName,
                 updatedAt: now)
             rows.append(item)
-            saveLocked(crewId: crewId, rows: rows)
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return nil }
             return item
         }
     }
@@ -188,7 +188,9 @@ final class CockpitPlanStore: @unchecked Sendable {
             if statusChanged, let s = CockpitPlan.status(statusRaw ?? "") { rows[idx].status = s.rawValue }
             rows[idx].blockedBy = resolved
             rows[idx].updatedAt = now
-            saveLocked(crewId: crewId, rows: rows)
+            if let failure = saveLocked(crewId: crewId, rows: rows) {
+                return .failure(.notWritten(failure.localizedDescription))
+            }
             return .success(rows[idx])
         }
     }
@@ -203,7 +205,7 @@ final class CockpitPlanStore: @unchecked Sendable {
             let now = Self.timestamp()
             rows[idx].deletedAt = now
             rows[idx].updatedAt = now
-            saveLocked(crewId: crewId, rows: rows)
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return false }
             return true
         }
     }
@@ -218,6 +220,8 @@ final class CockpitPlanStore: @unchecked Sendable {
         case nothingToDo
         /// 过不了 `CockpitPlan` 的守卫。
         case refused(CockpitPlan.Refusal)
+        /// 读到了、也改好了，**但这一笔没落到磁盘上**。板上还是旧的。
+        case notWritten(String)
 
         var summary: String {
             switch self {
@@ -225,6 +229,7 @@ final class CockpitPlanStore: @unchecked Sendable {
             case .ledgerUnavailable: return "任务列表这次读不出来，本次写已拒——白板上有一条如实的警示"
             case .nothingToDo: return "这次调用没给进度、没给状态、也没给标题，什么都没改"
             case let .refused(r): return r.summary
+            case let .notWritten(why): return "改动\(WriteReceipt.notWrittenMarker)（\(why)）——板上还是原来那样"
             }
         }
     }
@@ -255,9 +260,12 @@ final class CockpitPlanStore: @unchecked Sendable {
             senderName: "系统")
     }
 
-    private func saveLocked(crewId: String, rows: [CockpitPlanItem]) {
-        MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL(crewId))
+    /// **返回 nil = 真的落到磁盘上了**（与两本 Todo 同一口径）。
+    private func saveLocked(crewId: String, rows: [CockpitPlanItem]) -> Error? {
+        let failure = MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL(crewId))
+        guard failure == nil else { return failure }
         changes.send(crewId)
+        return nil
     }
 
     /// 读-改-写路径开头的那道闸：读不出来时 `loadLocked` 返回空表，光靠「找不到 #N」

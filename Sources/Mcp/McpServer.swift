@@ -41,6 +41,10 @@ final class McpServer {
     /// **人类的**那本 Todo（`TodoLedger.human`，Todo #62）：方向反过来 —— agent 经
     /// `add_human_todo` 提条目请人拍板，人类在 app 里回应。与 store 同 `--dir`。
     let humanTodos: LocalTodoStore
+    /// 机长核账的那点持久态（`confirm_todo_sweep` 写）。**必须注入、不能用
+    /// `.shared`**：`.shared` 指着真实数据根，单测一跑就把确认写进人的数据目录，
+    /// 而用例自己读的是临时目录 —— 看起来像「没落账」，实际是落到别人家去了。
+    let sweeps: CaptainTodoSweepStore
     /// Current-turn one-shot continuation promises. Unlike Todo/plan ledgers this
     /// is executable control state and is scoped to this exact session turn.
     let continuations: SessionContinuationStore
@@ -83,6 +87,7 @@ final class McpServer {
          wakeups: LocalWakeupStore? = nil,
          humanTodos: LocalTodoStore? = nil,
          continuations: SessionContinuationStore? = nil,
+         sweeps: CaptainTodoSweepStore? = nil,
          agentKey: String? = nil,
          attachmentRoot: URL? = nil,
          agentSessions: LocalAgentSessionStore? = nil,
@@ -109,6 +114,8 @@ final class McpServer {
         // 就静默退回默认目录（helper 的 `--dir` 不是默认目录）。
         self.humanTodos = humanTodos ?? self.todos.sibling(.human)
         self.continuations = continuations ?? SessionContinuationStore(
+            directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
+        self.sweeps = sweeps ?? CaptainTodoSweepStore(
             directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         self.agentKey = agentKey
         self.attachmentRoot = attachmentRoot
@@ -673,7 +680,17 @@ final class McpServer {
             guard !note.isEmpty else {
                 return toolResult(id: id, text: "ERROR: note 不能为空；写清下一轮第一件事。")
             }
-            guard continuations.arm(crewId: crewId, sessionId: sessionId, note: note) else {
+            // 「已经有一条」和「没写进去」都会让 arm 返回 false —— 两句话完全不同，
+            // 所以把后者单独接出来（`onWriteFailure`）。
+            var armFailure: Error?
+            guard continuations.arm(crewId: crewId, sessionId: sessionId, note: note,
+                                    onWriteFailure: { armFailure = $0 }) else {
+                if let armFailure {
+                    return toolResult(id: id, text: WriteReceipt.notWritten(
+                        what: "续跑承诺", error: armFailure, consequence:
+                            "**本轮结束后不会有下一轮** —— 别指望它，要么现在把活做完，"
+                            + "要么在群里说清你停在哪。"))
+                }
                 return toolResult(id: id, text: "本 session 已有一条未消费的续跑承诺；没有重复登记。")
             }
             return toolResult(id: id, text: "已登记本轮一次性续跑；当前 turn 真正结束后执行，最多一次。")
@@ -843,18 +860,20 @@ final class McpServer {
             case let .minutes(m): askFallbackMinutes = m
             case let .refused(why): return toolResult(id: id, text: "ERROR: " + why)
             }
+            var askWriteFailure: Error?
             guard let askItem = humanTodos.add(
                 crewId: crewId, text: question,
                 bySessionId: sessionId, bySenderName: sessionLabel,
                 resumeNote: (askResume?.isEmpty == false) ? askResume : nil,
-                expectsResume: true) else {
-                // 没落盘（读不出来 / 漏读，白板上有系统警示）。如实说没提上去 ——
-                // 绝不返回一个根本不存在的 #N 让调用方拿去对外宣布。
-                return toolResult(
-                    id: id,
-                    text: "ERROR: 这个问题没能记进人类 Todo（账本这次读不出来或漏读，"
-                        + "原有内容没被动过，群聊白板上有系统警示）。没有人会看到你在问什么 —— "
-                        + "改用 post_to_crew 在群里直接问，或稍后重试。")
+                expectsResume: true,
+                onWriteFailure: { askWriteFailure = $0 }) else {
+                // 没落盘（读不出来 / 漏读 / 落盘失败，白板上有系统警示）。如实说没提上去
+                // —— 绝不返回一个根本不存在的 #N 让调用方拿去对外宣布。
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "这个问题", error: askWriteFailure, consequence:
+                        "（人类 Todo 这本账这次读不出来 / 漏读 / 落不了盘，原有内容没被动过，"
+                        + "群聊白板上有系统警示）。**没有人会看到你在问什么** —— "
+                        + "改用 post_to_crew 在群里直接问，或稍后重试。"))
             }
             // 通知半边：群里贴一条并 @ 到能处理的人。机长自己问时不 @ 自己。
             let askMentions: [LocalWhiteboardMention] = isCaptain
@@ -892,8 +911,10 @@ final class McpServer {
             } catch {
                 return toolResult(
                     id: id,
-                    text: "⚠️ 问题没能贴到群聊白板（\(error.localizedDescription)），"
-                        + "群里没人会看到你在问什么。\n\n\(askReceipt)")
+                    text: "⚠️ 群里那条" + WriteReceipt.notWrittenMarker
+                        + "（\(error.localizedDescription)），"
+                        + "群里没人会看到你在问什么 —— 账已经落上了，需要的话自己去群里补一句。"
+                        + "\n\n\(askReceipt)")
             }
         // `answer_decision` 已随决策类一起拆掉（驾驶舱计划 #75 ①）。
         // 它的全部作用是让机长答一条 `kind: "decision"` 待决策、解开发起方的
@@ -912,7 +933,11 @@ final class McpServer {
             guard !name.isEmpty else {
                 return toolResult(id: id, text: "ERROR: name 不能为空")
             }
-            control.requestRename(crewId: crewId, name: name)
+            if let failure = control.requestRename(crewId: crewId, name: name) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "改名请求", error: failure, consequence:
+ "**侧栏上还是原来那个名字**，别当它已经改了。"))
+            }
             return toolResult(id: id, text: "已把 crew 改名为「\(name)」。")
         case "raise_attention":
             // 旧会话兼容：attention 文案仍落盘，但 Todo #71 起不再控制状态点。
@@ -923,13 +948,21 @@ final class McpServer {
             guard !reason.isEmpty else {
                 return toolResult(id: id, text: "ERROR: reason 不能为空 —— 一句话说明为什么需要人类注意。")
             }
-            control.requestAttention(crewId: crewId, reason: reason)
+            if let failure = control.requestAttention(crewId: crewId, reason: reason) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "attention 文案", error: failure, consequence:
+ "什么都没记下。"))
+            }
             return toolResult(id: id, text: "已记录兼容 attention 文案：\(reason)。它不点亮状态指示；需要黄色呼吸指示请用 add_human_todo。")
         case "clear_attention":
             guard isCaptain else {
                 return toolResult(id: id, text: "ERROR: 仅机长可用")
             }
-            control.requestClearAttention(crewId: crewId)
+            if let failure = control.requestClearAttention(crewId: crewId) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "清除请求", error: failure,
+                    consequence: "**原来那句 attention 文案还挂着**。"))
+            }
             return toolResult(id: id, text: "已清除兼容 attention 文案；人类 Todo 的黄色呼吸指示不受影响。")
         case "start_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
@@ -961,8 +994,13 @@ final class McpServer {
             // `/effort` 不是一套（传 `auto` 会被静默降级），必须按 .launch 对照。
             let notes = profileAdvisories(model: model, effort: effort, agents: targets,
                                           phase: .launch)
-            control.enqueueStartSession(crewId: crewId, brief: brief, runner: runner,
-                                        isolation: isolation, model: model, effort: effort, title: title)
+            if let failure = control.enqueueStartSession(
+                crewId: crewId, brief: brief, runner: runner,
+                isolation: isolation, model: model, effort: effort, title: title) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "起 session 的请求", error: failure, consequence:
+                        "**没有人会起来**，这条活也没有排进任何队列。重试，或在群里请人手动开。"))
+            }
             let announceIncident = announceProfileAdvisories(
                 notes, headline: "start_session（\(title ?? brief)）的参数对不上模型表")
             var text = "已安排起 session：\(title ?? brief)。它起来后会在群聊报到。"
@@ -984,11 +1022,15 @@ final class McpServer {
             guard !target.isEmpty else {
                 return toolResult(id: id, text: "ERROR: session_id 不能为空")
             }
-            control.enqueueCaptainHandoff(
+            if let failure = control.enqueueCaptainHandoff(
                 crewId: crewId, requesterSessionId: sessionId,
                 targetCrewId: targetCrewId,
                 targetSessionId: target, runner: nil, model: nil, effort: nil,
-                title: nil, openingBrief: nil)
+                title: nil, openingBrief: nil) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "机长交接请求", error: failure, consequence:
+ "**机长没换**，一切照旧。"))
+            }
             return toolResult(
                 id: id,
                 text: "机长交接请求已受理；app 会核对成员与真实会话账本并执行停旧/起新/回滚。请以群聊最终回执为准，这里不代表最终成功。")
@@ -1017,11 +1059,15 @@ final class McpServer {
                     id: id,
                     text: "ERROR: 为直系子 crew 新建机长时，runner/model/effort/opening_brief 都必须明确填写")
             }
-            control.enqueueCaptainHandoff(
+            if let failure = control.enqueueCaptainHandoff(
                 crewId: crewId, requesterSessionId: sessionId,
                 targetCrewId: targetCrewId,
                 targetSessionId: nil, runner: runner, model: model, effort: effort,
-                title: title, openingBrief: openingBrief)
+                title: title, openingBrief: openingBrief) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "新建机长并交接的请求", error: failure,
+                    consequence: "**新机长没建、旧机长没停**，一切照旧。"))
+            }
             return toolResult(
                 id: id,
                 text: "新机长交接请求已受理（\(runner)，title=\(title)）；app 会执行真实停旧/起新/持久化与失败回滚。请以群聊最终回执为准，这里不代表最终成功。")
@@ -1031,8 +1077,14 @@ final class McpServer {
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let target = ((args["session_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !target.isEmpty else { return toolResult(id: id, text: "ERROR: session_id 不能为空") }
-            let cmdId = control.enqueueInspectSession(crewId: crewId, targetSessionId: target)
-            return toolResult(id: id, text: awaitCommandResponse(commandId: cmdId))
+            let cmd = control.enqueueInspectSession(crewId: crewId, targetSessionId: target)
+            if let failure = cmd.failure {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "查看现场的请求", error: failure, consequence:
+                        "**app 侧根本收不到这条命令**，再等下去只会等到一句「超时无应答」"
+                        + "并把病因指向「app 没在跑」。"))
+            }
+            return toolResult(id: id, text: awaitCommandResponse(commandId: cmd.id))
         case "nudge_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let target = ((args["session_id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1041,8 +1093,13 @@ final class McpServer {
             guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return toolResult(id: id, text: "ERROR: input 不能为空（\"Enter\"/\"Esc\"/文本）")
             }
-            let cmdId = control.enqueueNudgeSession(crewId: crewId, targetSessionId: target, input: input)
-            return toolResult(id: id, text: awaitCommandResponse(commandId: cmdId))
+            let cmd = control.enqueueNudgeSession(crewId: crewId, targetSessionId: target, input: input)
+            if let failure = cmd.failure {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "这次 nudge", error: failure,
+                    consequence: "**那个 session 的输入框里什么都没进去。**"))
+            }
+            return toolResult(id: id, text: awaitCommandResponse(commandId: cmd.id))
         case "stop_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let target = ((args["session_id"] as? String) ?? "")
@@ -1053,10 +1110,15 @@ final class McpServer {
             guard !reason.isEmpty else {
                 return toolResult(id: id, text: "ERROR: reason 不能为空；终止前必须把原因写进白板")
             }
-            let cmdId = control.enqueueStopSession(
+            let cmd = control.enqueueStopSession(
                 crewId: crewId, requesterSessionId: sessionId,
                 targetSessionId: target, reason: reason)
-            return toolResult(id: id, text: awaitCommandResponse(commandId: cmdId))
+            if let failure = cmd.failure {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "终止请求", error: failure, consequence:
+ "**那个 session 还在跑**，原因也没落进白板。"))
+            }
+            return toolResult(id: id, text: awaitCommandResponse(commandId: cmd.id))
         case "change_workdir":
             // 机长专用：改工作目录 + 迁 agent 上下文。规划/执行都在 app 侧（helper 是
             // 离线子进程，读不到 crew store，也看不到在跑的 run），这里只做参数卫生 +
@@ -1071,14 +1133,19 @@ final class McpServer {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let includeChildren = (args["include_children"] as? Bool) ?? true
             let confirm = (args["confirm"] as? Bool) ?? false
-            let cmdId = control.enqueueChangeWorkdir(
+            let cmd = control.enqueueChangeWorkdir(
                 crewId: crewId, sessionId: sessionId, targetHint: targetHint,
                 path: newPath, includeChildren: includeChildren, confirm: confirm)
+            if let failure = cmd.failure {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "改工作目录的请求", error: failure, consequence:
+                        "**什么都没迁**，连预览都不会有。"))
+            }
             // 迁移要复制整个项目记忆 + 重试写 ~/.claude.json（读—改—写，撞上别的 claude
             // 进程会重试几轮），默认 10 秒不够 —— 放宽 12 倍（按 `commandResponseMaxWaits`
             // 成比例，单测把基数调小后不会被这条拖慢）。
             return toolResult(id: id, text: awaitCommandResponse(
-                commandId: cmdId, maxWaits: commandResponseMaxWaits * 12,
+                commandId: cmd.id, maxWaits: commandResponseMaxWaits * 12,
                 timeoutHint: "注意：它**可能仍在执行**——迁移回执会照常发进群聊，去群里看那条，别当成没跑过。"))
         case "get_quota":
             let url = quotaDirectory.appendingPathComponent("quota.json")
@@ -1133,15 +1200,24 @@ final class McpServer {
                 return toolResult(id: id, text: "ERROR: 需要 after_minutes（1–1440）或未来的 at（ISO8601）之一。")
             }
             let iso = ISO8601DateFormatter().string(from: fireAt)
-            control.enqueueScheduleWakeup(crewId: crewId, sessionId: sessionId, fireAt: iso, note: note)
+            if let failure = control.enqueueScheduleWakeup(
+                crewId: crewId, sessionId: sessionId, fireAt: iso, note: note) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "这次定时唤醒", error: failure, consequence:
+                        "**到点不会有人叫你** —— 别按「醒来接着干」规划，把手上的活收尾到可交接状态。"))
+            }
             return toolResult(id: id, text: "已设定时唤醒：\(iso)。到点会把你的备注注入回本 session；若届时你已退出，会落到群聊白板由机长接手。")
         case "listen":
             // 群聊收听（#465）：写一条 listen 命令进控制通道，app 侧 CrewSessionRunner
             // 登记后把收听期内的广播消息直投注入本 session。到期/off 都是 app 侧语义，
             // 这里只做参数卫生 + 计算截止时刻。
             if (args["off"] as? Bool) == true {
-                control.enqueueListen(crewId: crewId, sessionId: sessionId,
-                                      until: nil, senders: nil, off: true)
+                if let failure = control.enqueueListen(crewId: crewId, sessionId: sessionId,
+                                                       until: nil, senders: nil, off: true) {
+                    return toolResult(id: id, text: WriteReceipt.notWritten(
+                        what: "停止收听的请求", error: failure, consequence:
+ "**收听还开着**，到期才会自己停。"))
+                }
                 return toolResult(id: id, text: "已停止收听群聊广播。普通 session 之后只有 @ 你的消息会唤醒你；人类未指定对象的消息仍会默认唤醒机长（白板每轮注入照旧）。")
             }
             let mins = (args["minutes"] as? Double) ?? 30
@@ -1153,8 +1229,13 @@ final class McpServer {
             let senders = (args["senders"] as? [Any])?
                 .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            control.enqueueListen(crewId: crewId, sessionId: sessionId, until: until,
-                                  senders: (senders?.isEmpty ?? true) ? nil : senders, off: false)
+            if let failure = control.enqueueListen(
+                crewId: crewId, sessionId: sessionId, until: until,
+                senders: (senders?.isEmpty ?? true) ? nil : senders, off: false) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "开启收听的请求", error: failure, consequence:
+                        "**没有在听** —— 就这么结束回合的话，群里的动静不会叫醒你。"))
+            }
             let who = (senders?.isEmpty ?? true) ? "全部成员" : senders!.joined(separator: "、")
             return toolResult(id: id, text: "已开启群聊收听至 \(until)（听：\(who)）。期间无定向 @ 的新消息和 @ 你的消息会注入唤醒你；到期自动停。现在正常结束你的回合等消息即可，不要空转轮询。")
         case "confirm_todo_sweep":
@@ -1175,7 +1256,11 @@ final class McpServer {
             guard let sweepConfirmation = sweepResult.confirmation else {
                 return toolResult(id: id, text: "ERROR: 确认没能生成（内部状态异常），没有记下。")
             }
-            CaptainTodoSweepStore.shared.recordConfirmation(crewId: crewId, sweepConfirmation)
+            if let failure = sweeps.recordConfirmation(crewId: crewId, sweepConfirmation) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "这次核账确认", error: failure, consequence:
+                        "**提醒还会再来** —— 它读的是磁盘上那条确认，而那条没写上。重试一次。"))
+            }
             return toolResult(id: id, text: sweepOpen.isEmpty
                 ? "记下了：这本账一条未完成都没有。空闲时不会再提醒你，直到有新条目进来。"
                 : "记下了：\(sweepOpen.count) 条未完成已逐条归桶。空闲时不再提醒你——**除非冒出没被这次覆盖过的新条目**（那时只会点名新的那几条）。")
@@ -1198,8 +1283,10 @@ final class McpServer {
             }
             guard let planned = plans.add(crewId: crewId, title: planTitle,
                                           bySessionId: sessionId, byName: sessionLabel) else {
-                // nil ≠「没排」这么轻描淡写：账读不出来时本次写已拒，白板上有一条如实警示。
-                return toolResult(id: id, text: "ERROR: 没排进去 —— 任务列表这次读不出来，本次写已拒（群聊白板上有一条系统警示说明是哪种事故）。")
+                // nil ≠「没排」这么轻描淡写：读不出来（本次写已拒）或落盘失败，两种都在这儿。
+                return toolResult(id: id, text: "ERROR: 这条计划" + WriteReceipt.notWrittenMarker
+                    + " —— 任务列表这次读不出来或写不进去（群聊白板上有一条系统警示说明是哪种事故）。"
+                    + "**板上没有这条**，别拿一个不存在的 #N 去对外宣布。")
             }
             var addLines = ["已排上 计划 #\(planned.number)：\(planned.title)（没做）。"]
             if let addLease {
@@ -1231,7 +1318,10 @@ final class McpServer {
             }
             if (args["drop"] as? Bool) == true {
                 guard plans.drop(crewId: crewId, number: planNumber) else {
-                    return toolResult(id: id, text: "ERROR: 撤不下 计划 #\(planNumber)（找不到这条，或任务列表读不出来 —— 后者白板上有警示）。\n" + planRows())
+                    return toolResult(id: id, text: "ERROR: 计划 #\(planNumber) 没撤下"
+                        + WriteReceipt.notWrittenMarker
+                        + "（找不到这条，或任务列表读不出来/写不进去 —— 后两者白板上有警示）。\n"
+                        + planRows())
                 }
                 return toolResult(id: id, text: "已撤下 计划 #\(planNumber)（号码保留、不复用）。")
             }
@@ -1262,6 +1352,8 @@ final class McpServer {
                                 bySessionId: sessionId, byName: sessionLabel) {
             case let .failure(failure):
                 let tail = failure == .notFound ? "\n" + planRows() : ""
+                // `.notWritten` 的 summary 自带那个记号（见 `UpdateFailure.summary`）；
+                // 其余几种是「压根没动账」，不该冒充成写失败。
                 return toolResult(id: id, text: "ERROR: " + failure.summary + tail)
             case let .success(item):
                 let now = Date()
@@ -1344,15 +1436,27 @@ final class McpServer {
             // 凭据跟着回应落在条目时间线上 —— 不落进去，人翻这条 Todo 时仍然只看到
             // 一句「做完了」，那正是要治的东西。
             let responseText = evidenceLine.map { "\(response)\n\n\($0)" } ?? response
-            guard let updated = todos.respond(crewId: crewId, number: number, sessionId: sessionId,
-                                              senderName: sessionLabel, text: responseText,
-                                              newStatus: status) else {
+            // 「找不到 #N」和「写不进去」在这儿必须分得开：前者是号写错了（多半是
+            // 指着**人类那本**的 #N 调了这个只写 agent 那本的工具 —— 两本账号码会撞），
+            // 后者是账本这一刻落不了盘。两种情况 agent 该做的事完全不同。
+            var respondWriteFailure: Error?
+            guard let updated = todos.respond(
+                crewId: crewId, number: number, sessionId: sessionId,
+                senderName: sessionLabel, text: responseText,
+                newStatus: status,
+                onWriteFailure: { respondWriteFailure = $0 }) else {
+                if let respondWriteFailure {
+                    return toolResult(id: id, text: WriteReceipt.notWritten(
+                        what: "这条回应", error: respondWriteFailure, consequence:
+                            "**Todo #\(number) 上没有它**，状态也没动。重试一次。"))
+                }
                 let rows = todos.list(crewId: crewId).map {
                     "#\($0.number) [\(LocalTodoItem.statusLabel($0.status))] \($0.text)"
                 }
                 return toolResult(id: id, text: "ERROR: 没能回应 Todo #\(number)（找不到这条，"
                                   + "或 Todo 列表文件读不出来 —— 后者群聊白板上会有一条系统警示）。"
-                                  + "当前列表：\n"
+                                  + "**这是 agent 那本账**；你要回的如果是人类那本（群里那行「To do +1」），"
+                                  + "两本号码会撞，核对一下。当前列表：\n"
                                   + (rows.isEmpty ? "（空）" : rows.joined(separator: "\n")))
             }
             return toolResult(id: id, text: "已回应 Todo #\(number)（状态：\(LocalTodoItem.statusLabel(updated.status))）。")
@@ -1401,11 +1505,14 @@ final class McpServer {
             // 只有这一份，别在这儿自己拼字符串（#577 那一族靠的就是「文案和顺序
             // 只有一份」）。这条路上没有第三步：agent 加完不用叫醒谁，人类在
             // app 里看得到，所以 `.announced` 就是它的终点。
+            var addWriteFailure: Error?
             guard let added = humanTodos.add(crewId: crewId, text: todoText,
                                              bySessionId: sessionId,
-                                             bySenderName: sessionLabel) else {
+                                             bySenderName: sessionLabel,
+                                             onWriteFailure: { addWriteFailure = $0 }) else {
                 return toolResult(id: id, text: TodoLandingFlow.notPersistedReceipt(
-                    ledger: .human, action: .added))
+                    ledger: .human, action: .added,
+                    detail: addWriteFailure?.localizedDescription))
             }
             let announce = TodoLedger.human.newItemAnnouncement(
                 number: added.number, text: todoText)
@@ -1479,6 +1586,9 @@ final class McpServer {
             case .ledgerUnavailable:
                 return toolResult(id: id, text: TodoLandingFlow.notPersistedReceipt(
                     ledger: .human, action: .withdrawn))
+            case .notWritten(let why):
+                return toolResult(id: id, text: TodoLandingFlow.notPersistedReceipt(
+                    ledger: .human, action: .withdrawn, detail: why))
             }
             let announced = announceWithdrawal(number: withdrawn.number, reason: reason)
             return toolResult(id: id, text: TodoLandingFlow.receipt(
@@ -1531,7 +1641,8 @@ final class McpServer {
                 whiteboardDirectory: store.resolvedDirectory)
             if ids.isEmpty {
                 guard CrewArrangementStore.clear(at: arrangementURL) else {
-                    return toolResult(id: id, text: "ERROR: 排布没能撤掉（文件删不了）。**侧栏还是原来那个顺序。**")
+                    return toolResult(id: id, text: "ERROR: 排布没能撤掉（文件删不了）"
+                        + WriteReceipt.notWrittenMarker + "。**侧栏还是原来那个顺序。**")
                 }
                 _ = try? store.appendSessionMessageReportingFailure(
                     crewId: crewId, sessionId: sessionId,
@@ -1546,7 +1657,8 @@ final class McpServer {
                 bySessionId: sessionId, bySenderName: sessionLabel,
                 createdAt: ISO8601DateFormatter().string(from: Date()))
             guard CrewArrangementStore.save(arrangement, to: arrangementURL) else {
-                return toolResult(id: id, text: "ERROR: 排布没写进去（磁盘写失败）。**侧栏还是原来那个顺序**，别当它已经生效。")
+                return toolResult(id: id, text: "ERROR: 排布" + WriteReceipt.notWrittenMarker
+                    + "（磁盘写失败）。**侧栏还是原来那个顺序**，别当它已经生效。")
             }
             // 排完往群里说一声 —— 这既是「看得见是谁排的」的一半，也是让 app 那边
             // 立刻重读的那个 tick（排布文件不在被监听的白板目录里）。
@@ -1576,7 +1688,12 @@ final class McpServer {
                                           phase: .runtime)
             let announceIncident = announceProfileAdvisories(
                 notes, headline: "set_session_profile 的参数对不上模型表")
-            control.enqueueSetProfile(crewId: crewId, sessionId: sessionId, model: model, effort: effort)
+            if let failure = control.enqueueSetProfile(
+                crewId: crewId, sessionId: sessionId, model: model, effort: effort) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "切换请求", error: failure, consequence:
+                        "**本回合结束后不会切** —— 你还在原来的模型/effort 上，别按已经切了来规划。"))
+            }
             let parts = [model.map { "模型→\($0)" }, effort.map { "effort→\($0)" }].compactMap { $0 }
             // 回执如实：**这里只是排队，还没切**。claude 的 /model /effort 是终端斜杠
             // 命令，你正在跑回合时写进去只会被排进消息队列、永远不当命令执行（#544
@@ -1619,8 +1736,17 @@ final class McpServer {
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let msg = ((args["message"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !msg.isEmpty else { return toolResult(id: id, text: "ERROR: message 不能为空") }
-            control.enqueueCrewMessage(crewId: crewId, sessionId: sessionId,
-                                       direction: "to_parent", targetHint: nil, message: msg)
+            // 这一条是本族缺陷的**头号现场**：数据目录写失败的那 52 分钟里它照回
+            // 「已提交向上汇报」，而父 crew 白板上一条都没有。它是子 crew 唯一的
+            // 向上通道，它一撒谎，上级就以为下面没动静。
+            if let failure = control.enqueueCrewMessage(
+                crewId: crewId, sessionId: sessionId,
+                direction: "to_parent", targetHint: nil, message: msg) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "这条向上汇报", error: failure, consequence:
+                        "**上级那边什么都没有，也不会有回执** —— 请当作没汇报过。"
+                        + "重试；仍不行就换条路（`contact` 直接打到父 crew 群里）。"))
+            }
             return toolResult(id: id, text: "已提交向上汇报。送达结果（含「本 crew 无父」的情况）会回执到本 crew 群聊。")
         case "message_child_crew":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
@@ -1629,36 +1755,61 @@ final class McpServer {
             guard !target.isEmpty, !msg.isEmpty else {
                 return toolResult(id: id, text: "ERROR: crew 与 message 都不能为空")
             }
-            control.enqueueCrewMessage(crewId: crewId, sessionId: sessionId,
-                                       direction: "to_child", targetHint: target, message: msg)
+            if let failure = control.enqueueCrewMessage(
+                crewId: crewId, sessionId: sessionId,
+                direction: "to_child", targetHint: target, message: msg) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "给子 crew「\(target)」的消息", error: failure, consequence:
+                        "**对方群里什么都没有，也不会有回执** —— 请当作未送达。"))
+            }
             return toolResult(id: id, text: "已提交给子 crew「\(target)」的消息。送达/找不到的回执会出现在本 crew 群聊。")
         case "adopt_crew":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let target = ((args["crew"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !target.isEmpty else { return toolResult(id: id, text: "ERROR: crew 不能为空") }
-            control.enqueueAdoptCrew(crewId: crewId, sessionId: sessionId, target: target)
+            if let failure = control.enqueueAdoptCrew(
+                crewId: crewId, sessionId: sessionId, target: target) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "收编「\(target)」的请求", error: failure, consequence:
+ "**组织树没有变**，也不会有回执。"))
+            }
             return toolResult(id: id, text: "已提交收编「\(target)」。结果（含解析失败/成环被拒）会回执到群聊。")
         case "release_crew":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let child = ((args["crew"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !child.isEmpty else { return toolResult(id: id, text: "ERROR: crew 不能为空") }
             let dest = (args["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            control.enqueueReleaseCrew(crewId: crewId, sessionId: sessionId,
-                                       child: child, to: (dest?.isEmpty == false) ? dest : nil)
+            if let failure = control.enqueueReleaseCrew(
+                crewId: crewId, sessionId: sessionId,
+                child: child, to: (dest?.isEmpty == false) ? dest : nil) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "把「\(child)」摘出/转挂的请求", error: failure, consequence:
+ "**组织树没有变**，也不会有回执。"))
+            }
             let destDesc = (dest?.isEmpty == false) ? "转挂到「\(dest!)」" : "摘出到顶层"
             return toolResult(id: id, text: "已提交把直系子「\(child)」\(destDesc)。结果会回执到群聊。")
         case "create_parent_crew":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let rawParentTitle = (args["title"] as? String) ?? ""
             let parentTitle = rawParentTitle.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            control.enqueueCreateParentCrew(crewId: crewId, sessionId: sessionId,
-                                            title: parentTitle.isEmpty ? nil : parentTitle)
+            if let failure = control.enqueueCreateParentCrew(
+                crewId: crewId, sessionId: sessionId,
+                title: parentTitle.isEmpty ? nil : parentTitle) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "新建父 crew 的请求", error: failure, consequence:
+ "**父 crew 没建**，本 crew 仍然没有上级。"))
+            }
             return toolResult(id: id, text: "已安排在本 crew 头上新建父 crew。父机长起来后会报到；之后可用 report_to_parent 向它汇报、请它收编其它平级 crew。")
         case "adopt_parent":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let parent = ((args["crew"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !parent.isEmpty else { return toolResult(id: id, text: "ERROR: crew 不能为空") }
-            control.enqueueAdoptParent(crewId: crewId, sessionId: sessionId, target: parent)
+            if let failure = control.enqueueAdoptParent(
+                crewId: crewId, sessionId: sessionId, target: parent) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "认「\(parent)」为父的请求", error: failure, consequence:
+ "**组织树没有变**，也不会有回执。"))
+            }
             return toolResult(id: id, text: "已提交认「\(parent)」为父 crew。结果会回执到群聊。")
         case "create_child_crew":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
@@ -1666,9 +1817,13 @@ final class McpServer {
             guard !brief.isEmpty else { return toolResult(id: id, text: "ERROR: brief 不能为空") }
             let rawTitle = (args["title"] as? String) ?? ""
             let title = rawTitle.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            control.enqueueCreateChildCrew(
+            if let failure = control.enqueueCreateChildCrew(
                 crewId: crewId, sessionId: sessionId,
-                brief: brief, title: title.isEmpty ? nil : title)
+                brief: brief, title: title.isEmpty ? nil : title) {
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "建子 crew 的请求", error: failure, consequence:
+                        "**子 crew 没建，开场任务也没有任何地方存着** —— 那段 brief 只在你这儿，重试前别丢。"))
+            }
             return toolResult(id: id, text: "已安排建子 crew。开场任务会写入子群并交给子机长执行；送达失败会在本群回执。")
         default:
             return toolResult(id: id, text: "ERROR: 未知工具 \(name ?? "nil")")
@@ -1763,7 +1918,8 @@ final class McpServer {
                 guard let added = humanTodos.add(crewId: crewId, text: message,
                                                  bySessionId: sessionId,
                                                  bySenderName: sessionLabel) else {
-                    return (false, "ERROR: 人类 Todo 那本账这次写不进去，"
+                    return (false, "ERROR: 这条人类 Todo" + WriteReceipt.notWrittenMarker
+                        + "（那本账这次读不出来或落不了盘），"
                         + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
                         + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
                 }
@@ -1808,8 +1964,10 @@ final class McpServer {
                 guard let updated = todos.respond(
                     crewId: crewId, number: number, sessionId: sessionId,
                     senderName: sessionLabel, text: message, newStatus: status) else {
-                    return (false, "ERROR: Todo #\(number) 没更新成"
-                        + "（这本账上没有这条，或者这次读不出来）。**这条消息也没有发出去。**")
+                    return (false, "ERROR: Todo #\(number) 的更新"
+                        + WriteReceipt.notWrittenMarker
+                        + "（这本账上没有这条，或者这次读不出来 / 落不了盘）。"
+                        + "**这条消息也没有发出去。**")
                 }
                 refs.agentTodoNumber = updated.number
                 ledgerReceipts.append("已把 Todo #\(updated.number) 翻成 \(status)")
@@ -1920,10 +2078,9 @@ final class McpServer {
                 references: CrewMessageReferences.build(
                     .init(crewNumber: myNumber?.text)))
         } catch {
-            return toolResult(
-                id: id,
-                text: "ERROR: 没能写进 \(number.text) 的群聊白板 —— \(error.localizedDescription)。"
-                    + "这条消息没有发出去，请当作未送达处理（对方群里什么都没有）。")
+            return toolResult(id: id, text: WriteReceipt.notWritten(
+                what: "发给 \(number.text) 的这条消息", error: error,
+                consequence: "请当作未送达处理（对方群里什么都没有）。"))
         }
         // 源群回执：让组织上看得见谁跨线找了谁。写不进去只在工具回执里说一声 ——
         // 正文已经送到对方群了，不能因为回执失败就谎报「没送到」。
@@ -1939,7 +2096,8 @@ final class McpServer {
                 // 解析出来的号码对象，不是从这句话里认出来的。
                 references: CrewMessageReferences.build(.init(crewNumber: number.text)))
         } catch {
-            receiptIncident = "本群那行「已联系」回执没写进去（\(error.localizedDescription)）——"
+            receiptIncident = "本群那行「已联系」回执" + WriteReceipt.notWrittenMarker
+                + "（\(error.localizedDescription)）——"
                 + "消息本身已送达，但组织上看不见你打过这通电话。"
         }
         let wakeNote: String
@@ -2003,7 +2161,14 @@ final class McpServer {
             + (timeoutHint.map { " " + $0 } ?? "")
     }
 
-    func awaitReply(reqId: String, pollInterval: TimeInterval = 0.5, maxWaits: Int = 3600) -> String {
+    /// `ask` 阻塞等答复的预算（30 分钟）。**做成实例属性只为让单测调小** ——
+    /// 一把要跑全部工具的尺子不能被一条 30 分钟的 long-poll 拖住。
+    var askReplyMaxWaits = 3600
+    var askReplyPollInterval: TimeInterval = 0.5
+
+    func awaitReply(reqId: String, pollInterval: TimeInterval? = nil, maxWaits: Int? = nil) -> String {
+        let pollInterval = pollInterval ?? askReplyPollInterval
+        let maxWaits = maxWaits ?? askReplyMaxWaits
         var waits = 0
         while waits < maxWaits {
             if let it = approvals.item(crewId: crewId, id: reqId), it.status == "answered" {
@@ -2239,7 +2404,8 @@ final class McpServer {
             let title = CrewCockpitLanding.title(from: message)
             guard let planned = plans.add(crewId: crewId, title: title,
                                           bySessionId: sessionId, byName: sessionLabel) else {
-                return .refused("ERROR: 没排进驾驶舱 —— 任务列表这次读不出来，本次写已拒"
+                return .refused("ERROR: 这条计划" + WriteReceipt.notWrittenMarker
+                    + " —— 任务列表这次读不出来或落不了盘"
                     + "（群聊白板上有一条系统警示说明是哪种事故）。" + unsent)
             }
             return .landed(planNumber: planned.number,
@@ -2351,16 +2517,20 @@ final class McpServer {
                     + "账是对的，群里没人看得见 —— 需要的话自己去补一句。"
             }
             return "同时撤回了旧的 #\(target)（原因：\(reason)）—— 人现在只会看到 #\(replacedBy) 在等他。"
-        case .notFound, .notYours, .alreadyWithdrawn, .reasonRequired, .ledgerUnavailable:
-            return "⚠️ **但旧的 #\(target) 没撤成**（刚才验的时候还好好的，这一下之间它被删/被撤/账读不出来了）。"
+        case .notFound, .notYours, .alreadyWithdrawn, .reasonRequired,
+             .ledgerUnavailable, .notWritten:
+            return "⚠️ **但旧的 #\(target) 没撤成**"
+                + WriteReceipt.notWrittenMarker
+                + "（刚才验的时候还好好的，这一下之间它被删/被撤/账读不出来或落不了盘了）。"
                 + "现在 #\(target) 和 #\(replacedBy) **两条都挂在人的账上问同一件事** —— "
                 + "请单独调 withdraw_human_todo 把 #\(target) 撤掉。"
         }
     }
 
     private static func writeFailureReceipt(_ error: Error) -> String {
-        "ERROR: 没能写进 crew 群聊白板 —— \(error.localizedDescription)。"
-            + "这条消息没有发出去，请当作未送达处理（别把它当已说过的话）。"
+        WriteReceipt.notWritten(
+            what: "这条群消息", error: error,
+            consequence: "请当作未送达处理（别把它当已说过的话）。")
     }
 
     // MARK: - JSON-RPC envelope helpers

@@ -165,44 +165,9 @@ final class LocalBackend: PendingCrewBackend {
 
     func listCrewWhiteboard(crewId: String) async throws -> [CrewWhiteboardEntry] {
         // 本地白板 message → 线上同形 entry（中栏渲染层只认这一个形状）。
-        whiteboard.list(crewId: crewId).map { m in
-            CrewWhiteboardEntry(
-                id: m.id,
-                senderKind: m.senderKind,
-                // session 作者 id 透传(原写死 nil)—— 中栏据此解析 session 名 + 点气泡
-                // 跳右栏对应终端 + 回复定位到该 session。user 消息本就 nil(不受影响)。
-                senderSessionId: m.senderSessionId,
-                senderUserId: m.senderUserId,
-                senderBotId: nil,
-                messageKind: "instruction",
-                summary: m.text,
-                createdAt: m.createdAt,
-                payload: CrewWhiteboardEntry.Payload(text: m.text),
-                // 本地落盘附件 → 同形 CrewAttachment。`url` 用 file:// 绝对 URL，
-                // 渲染端（CrewRemoteImage / FileAttachmentChip）据前缀分流本地读取。
-                attachments: m.attachments.map { atts in
-                    atts.map { a in
-                        CrewAttachment(
-                            id: a.id, kind: nil, mime: a.mime, size: a.size,
-                            width: nil, height: nil,
-                            url: URL(fileURLWithPath: a.path).absoluteString,
-                            filename: a.filename)
-                    }
-                },
-                // 发送者名收口在 CrewSenderNaming.localWireDisplayName:relay 远端名要显示,
-                // 但本机人类自己发的消息(senderKind=="user")不折本地 senderName("人"),
-                // 否则中栏 resolver 的 relay 守卫会把自己误判成 relay → 左对齐(#3)。
-                senderDisplayName: CrewSenderNaming.localWireDisplayName(
-                    senderKind: m.senderKind, localName: m.senderName),
-                // 本地白板消息没有成员表行 id —— 恒 nil。
-                senderMemberId: nil,
-                // #377 — 本地白板消息的回复引用(Phase 6 已加 LocalWhiteboardMessage.inReplyTo)。
-                inReplyTo: m.inReplyTo,
-                // Task 10 — 本地白板消息的定向 @（Phase 7 落的 LocalWhiteboardMention）
-                // 映射回同形 CrewMention，中栏 mention 高亮 / 唤醒判定读同一个形状。
-                mentions: m.mentions?.map { CrewMention(kind: $0.kind, targetId: $0.targetId) }
-            )
-        }
+        // 映射本体在 `CrewLocalWhiteboardMapping` —— 这个文件在单测 bundle 之外，
+        // 内联在这里的那些年整条链一条断言都没有（见那个类型的注释）。
+        whiteboard.list(crewId: crewId).map(CrewLocalWhiteboardMapping.entry)
     }
 
     func listCrewMembers(crewId: String) async throws -> CrewRoster {

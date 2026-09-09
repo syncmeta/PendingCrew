@@ -91,7 +91,8 @@ final class LocalWakeupStore: @unchecked Sendable {
                 rows, at: fileURL) else { return false }
             guard !rows.contains(where: { $0.id == w.id }) else { return false }
             rows.append(w)
-            MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
+            // 写不进去就别说「登记好了」—— 到点没人叫，而调用方以为约上了。
+            guard MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil else { return false }
             return true
         }
     }

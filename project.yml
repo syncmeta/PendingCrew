@@ -245,6 +245,9 @@ targets:
       # @MainActor 的 async hop 会挂死，实测过）。依赖 TodoLedger（LocalTodoStore.swift）
       # 与 CrewMention（CrewModels.swift），两者都已在 bundle。
       - path: Sources/Support/TodoLandingFlow.swift
+      # 「这次没写进去」那条回执的唯一措辞 + 尺子认的那个记号
+      # （McpWriteFailureHonestyTests 盯的就是它）。纯 Foundation。
+      - path: Sources/Support/WriteReceipt.swift
       # 侧栏「手动藏起来一个 crew」的判定层：可见性（藏了父，子跟着消失而不是被
       # 提到顶层）/ 已隐藏列表列谁 / 带活跃子 crew 的父能不能藏 / 未读。
       # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。
@@ -384,6 +387,18 @@ targets:
       # 结构化 mentions 与正文 `@<人类名>` 取并集，并用花名册做最长匹配防前缀误伤。
       # 纯 Foundation，依赖 CrewModels + CrewSenderNaming（两者均已在 bundle）。
       - path: Sources/Chat/Adapter/CrewMentionFilter.swift
+      # CrewMessageReferencePills.swift（人类 Todo #132/#133）：结构化引用 →
+      # 气泡下面那一排可点胶囊的**可达性判定**。「目标不可达就一颗都不长」是被
+      # 断言的行为，所以判定必须是脱离 SwiftUI 的纯函数。只依赖 CrewMessageReference
+      # （Sources/Models 已在 bundle）与 TodoLedger（LocalTodoStore 已在 bundle）。
+      - path: Sources/Chat/Adapter/CrewMessageReferencePills.swift
+      # CrewLocalWhiteboardMapping.swift：本地白板落盘行 → 中栏渲染形状。
+      # 从 PendingCrewBackend（在 bundle 之外）抽出来的，抽之前这条链一条断言都
+      # 没有 —— 而它断掉的样子跟「这条消息本来就没那个字段」一模一样。
+      - path: Sources/Chat/Adapter/CrewLocalWhiteboardMapping.swift
+      # CrewChatReturnTrail.swift（人类 Todo #132/#133）：点引用胶囊跳走之后
+      # 「回去的那条路」。人类点名的判据是「别做成单程票」，所以它是被断言的行为。
+      - path: Sources/Chat/Adapter/CrewChatReturnTrail.swift
       # CrewMentionPickerLayout.swift（Todo #69）：@-候选浮层的限高判定（可用高度 +
       # 行数 + 行高 → maxHeight）。纯 CoreGraphics 几何，不碰 SwiftUI —— GUI 验不了，
       # 能被测试钉住的那部分必须钉住。

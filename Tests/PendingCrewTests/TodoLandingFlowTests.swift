@@ -33,7 +33,8 @@ final class TodoLandingFlowTests: XCTestCase {
                                         number: 7, reached: .nothing)
         XCTAssertFalse(r.contains("已记入"), "实得：\(r)")
         XCTAssertFalse(r.contains("#7"), "账上没有这条，回执不许给号；实得：\(r)")
-        XCTAssertTrue(r.contains("没有记下"))
+        // 措辞 2026-09-09 收进 `WriteReceipt` 统一：断言盯那个记号，不盯某一句话。
+        XCTAssertTrue(r.contains(WriteReceipt.notWrittenMarker), "实得：\(r)")
     }
 
     /// 号给了、但 `reached` 是 `.nothing` —— 一样按没落账处理（拿意图当结果这条路堵死）。
@@ -49,7 +50,7 @@ final class TodoLandingFlowTests: XCTestCase {
         let r = TodoLandingFlow.receipt(ledger: .human, action: .responded,
                                         number: 3, reached: .nothing)
         XCTAssertFalse(r.contains("已回应"), "实得：\(r)")
-        XCTAssertTrue(r.contains("没有记下"))
+        XCTAssertTrue(r.contains(WriteReceipt.notWrittenMarker), "实得：\(r)")
         XCTAssertTrue(r.contains("群里也不会出现"))
     }
 
@@ -60,7 +61,9 @@ final class TodoLandingFlowTests: XCTestCase {
         let r = TodoLandingFlow.receipt(ledger: .human, action: .added, number: 4,
                                         reached: .persisted, detail: "磁盘满了")
         XCTAssertTrue(r.contains("已记入人类 Todo #4"))
-        XCTAssertTrue(r.contains("群里那行没发出去"))
+        // 半截也要带记号：那一半确实没写进去，agent 得据此自己去群里补一句。
+        XCTAssertTrue(r.contains("群里那行"))
+        XCTAssertTrue(r.contains(WriteReceipt.notWrittenMarker), "实得：\(r)")
         XCTAssertTrue(r.contains("磁盘满了"))
     }
 

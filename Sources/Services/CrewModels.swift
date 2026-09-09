@@ -79,6 +79,14 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// 结构化 @ mentions（Task 3：发送时有 @ 才落；无 → nil）。`kind` ∈
     /// 'human'/'session'/'captain'/'broadcast'/'bot'。
     let mentions: [CrewMention]?
+    /// 这条消息**指向**了什么（人类 Todo #132/#133）：Todo #N / 驾驶舱计划 /
+    /// 本群另一条消息 / 某个 session / 某个机组。渲染端据此在气泡下面长一排可点
+    /// 的小胶囊（`CrewMessageReferencePills`）。
+    ///
+    /// **`var` + 默认 nil 是刻意的**：这个类型靠合成的 memberwise init 被大量测试
+    /// 直接构造，`let` 会把新字段变成每一处调用点的必填参数 —— 一个纯粹的向后
+    /// 兼容字段不该有那个代价。老消息 / 老服务端缺这个键 → nil，一颗胶囊都不长。
+    var references: [CrewMessageReference]? = nil
 
     struct Payload: Decodable, Equatable {
         let text: String?
@@ -99,6 +107,7 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
         case senderMemberId = "sender_member_id"
         case inReplyTo = "in_reply_to"
         case mentions
+        case references
     }
 
     /// Best display text: explicit payload text → summary → empty.

@@ -26,7 +26,29 @@ import SwiftUI
 final class CockpitPresentation: ObservableObject {
     @Published var isOpen = false
 
+    /// 这次要人看的是哪条计划（人类 Todo #132/#133 的「计划 #N」胶囊）。
+    ///
+    /// `token` 是为了让**同一个 #N 连点两次**也算一次新请求：光比 `number` 的话，
+    /// 第二次点下去值没变、`onChange` 不触发 —— 人已经在驾驶舱里翻到别处了，
+    /// 再点那颗胶囊却毫无反应。同一套做法见 `CrewTodoFocus`。
+    struct PlanFocus: Equatable {
+        let number: Int
+        let token: Int
+    }
+
+    @Published private(set) var planFocus: PlanFocus?
+    private var token = 0
+
     func open() { isOpen = true }
+
+    /// 开驾驶舱并落在这条计划上。**开与落点是同一个动作** —— 分成两步调用时，
+    /// 「开了但没落点」是一个写得出来的中间态，而它长得就跟功能坏了一样。
+    func open(planNumber: Int) {
+        token += 1
+        planFocus = PlanFocus(number: planNumber, token: token)
+        isOpen = true
+    }
+
     func close() { isOpen = false }
 }
 
