@@ -145,8 +145,24 @@ final class LocalTodoStore: @unchecked Sendable {
         ledger == .human ? humanShared : shared
     }
 
-    /// 合法状态集（待办 → 进行中 → 完成）。
-    static let validStatuses: Set<String> = ["pending", "in_progress", "completed"]
+    /// 合法状态 —— **全仓唯一一份**（人类 Todo #139）。
+    ///
+    /// 有序，因为它有三类读者，都需要「按这个顺序念一遍」：数据层的合法性判定、
+    /// MCP 工具 JSON schema 的 `enum`（模型能填哪些值）、以及报错文案。
+    ///
+    /// ⚠️ **别在别的文件里再抄一份。** #139 开工时以为只有两份，机械扫全仓扫出**四份**
+    /// （`CrewMessageCategory` 一份、`McpServer` 两处 schema `enum`）。漏改任何一处都
+    /// **不报错**：漏数据层 = 群里能标、工具标不了；漏 schema = 模型压根填不出这个值。
+    /// `TodoBlockedOnHumanTests.testValidStatusesHasExactlyOneTruthSource` 扫全仓钉住它。
+    static let statusOrder: [String] = [
+        "pending", "in_progress", "completed", LocalTodoItem.blockedOnHumanStatus,
+    ]
+
+    /// 合法状态集（成员判定用）。恒等于 `statusOrder`。
+    static let validStatuses: Set<String> = Set(statusOrder)
+
+    /// 报错/说明文案里那一串「a / b / c」。跟着 `statusOrder` 走，加一档自动出现。
+    static var statusListText: String { statusOrder.joined(separator: " / ") }
 
     /// 这个实例管哪本账。文件名、锁名、事故警示主语全从它来。
     let ledger: TodoLedger
@@ -760,12 +776,25 @@ struct LocalTodoResponse: Codable, Equatable, Identifiable {
 }
 
 extension LocalTodoItem {
+    /// **「在等人类回复」**（人类 Todo #139）。人类原话：「我希望 todo 应该多几个状态，
+    /// 比如在等我回复的应该是黄色，并挂到给人类的 todo 上。」
+    ///
+    /// 语义：这条活**推不动了，卡的是人**。agent 用 `respond_todo` 翻上来，
+    /// 人类那本的**视图**（`TodoListPresentation.humanFacingRows`）把它显示出来。
+    ///
+    /// ⚠️ **不许再开一条。** 这一档存在的全部理由，就是**消灭**「同一件事在两本账上
+    /// 各有一条」——在它之前，想让人看见一条卡在他身上的 agent 活，唯一的办法就是
+    /// `add_human_todo` 再记一条；两条会各自被回应、各自翻牌，从此对不上。
+    /// **两个事实源就是没有事实源。**
+    static let blockedOnHumanStatus = "blocked_on_human"
+
     /// 状态的中文显示（面板徽章 + MCP 回执共用）。
     static func statusLabel(_ status: String) -> String {
         switch status {
         case "pending": return "待办"
         case "in_progress": return "进行中"
         case "completed": return "完成"
+        case blockedOnHumanStatus: return "等你回复"
         default: return status
         }
     }

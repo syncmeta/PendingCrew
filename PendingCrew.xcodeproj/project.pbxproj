@@ -68,6 +68,7 @@
 		1A8DD7316C583E4A775A5A13 /* CrewTimelineOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC117CCF335B9AF5CB2BD848 /* CrewTimelineOrdering.swift */; };
 		1A928FAA7ECCD916641180DE /* LocalAgentSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9720FEFDC8F509BFC0230E /* LocalAgentSessionStore.swift */; };
 		1AAB1B34C5492E9C39349B3D /* CrewChildCreationTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 437EC206ED3E345A7C0E304B /* CrewChildCreationTargetTests.swift */; };
+		1B356BCCE23E5E083F21E560 /* TodoBlockedOnHumanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F61A2A28F398965D5910AB1 /* TodoBlockedOnHumanTests.swift */; };
 		1BE5B59CF3366782CC66008F /* DaemonStopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 178828D9F58E503F2B3205B8 /* DaemonStopTests.swift */; };
 		1C3B38D321DBF95EA513364B /* CrewLocalWhiteboardMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645961BC09834D3F4E7B1932 /* CrewLocalWhiteboardMappingTests.swift */; };
 		1CA7C078D765C106528A8066 /* LocalCaptainReassignmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08983F71FFC034A8EDE72D0E /* LocalCaptainReassignmentStore.swift */; };
@@ -922,6 +923,7 @@
 		5D4475F4F6F662461F71C1B9 /* CrewRosterBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRosterBar.swift; sourceTree = "<group>"; };
 		5D74B1C537C235EFB0E69DCB /* PromptTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTemplate.swift; sourceTree = "<group>"; };
 		5DDED10023139BDCC71AD956 /* LayoutLoopRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutLoopRegressionTests.swift; sourceTree = "<group>"; };
+		5F61A2A28F398965D5910AB1 /* TodoBlockedOnHumanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoBlockedOnHumanTests.swift; sourceTree = "<group>"; };
 		5F7356E3D77DE2A3D6063804 /* CrewStatusLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewStatusLine.swift; sourceTree = "<group>"; };
 		5F9E93F3524D21F015A470EE /* AppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceMode.swift; sourceTree = "<group>"; };
 		60202465DF374BE31614C151 /* GitInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitInspector.swift; sourceTree = "<group>"; };
@@ -1849,6 +1851,7 @@
 				F271252C46BEA6D06D53C893 /* TerminatedScrollbackTests.swift */,
 				FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */,
 				7A6EA1DC19E214535D977D7E /* TestProcessDataRootIsolationTests.swift */,
+				5F61A2A28F398965D5910AB1 /* TodoBlockedOnHumanTests.swift */,
 				A66BE415A2B49FD3458C071F /* TodoEvidenceTests.swift */,
 				6EECC7D0788EA95EDF94F09A /* TodoLandingFlowTests.swift */,
 				F004EFC6500C77213D744D1E /* TodoLedgerIsolationTests.swift */,
@@ -2829,6 +2832,7 @@
 				DC9D8ED0E4C2E7253B1AA188 /* TestProcessDataRootIsolationTests.swift in Sources */,
 				76FCFFEEC8113478FD61D7E2 /* Theme.swift in Sources */,
 				FCA3F72E6F463DDB21D29D85 /* ThemeCrewExtras.swift in Sources */,
+				1B356BCCE23E5E083F21E560 /* TodoBlockedOnHumanTests.swift in Sources */,
 				6581FA8BAB65640A603A68BA /* TodoEvidence.swift in Sources */,
 				002013C931534BC908DE4B5E /* TodoEvidenceTests.swift in Sources */,
 				62224640E497CD15C7AD85DF /* TodoLandingFlow.swift in Sources */,

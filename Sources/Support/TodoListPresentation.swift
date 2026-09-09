@@ -73,6 +73,11 @@ enum TodoListPresentation {
         case "completed":
             return StatusIcon(symbol: "largecircle.fill.circle",
                               isFilled: true, isBreathing: false, dimsText: true)
+        // 「等你回复」（#139）：**呼吸**，因为它在等一个动作，跟「完成」那种停下来的
+        // 状态不是一回事；问号是为了不靠颜色单独承载语义（色觉障碍 / 截图变灰）。
+        case LocalTodoItem.blockedOnHumanStatus:
+            return StatusIcon(symbol: "questionmark.circle.fill",
+                              isFilled: true, isBreathing: true, dimsText: false)
         default:
             return StatusIcon(symbol: "circle",
                               isFilled: false, isBreathing: false, dimsText: false)
@@ -219,6 +224,82 @@ enum TodoListPresentation {
     static func focusedRows(_ rows: [LocalTodoItem], focus: Int?) -> [LocalTodoItem] {
         guard let focus, let hit = rows.first(where: { $0.number == focus }) else { return rows }
         return [hit]
+    }
+
+    // MARK: - 人类那本的视图（人类 Todo #139）
+
+    /// 人类那本 Todo 列表**这一屏该显示什么** —— 他自己那本，**加上** agent 那本里
+    /// 正卡在他身上的那几条。
+    ///
+    /// ## 为什么是「合并视图」而不是「复制一条」
+    ///
+    /// 「在等人类回复」有两类，只有一类是缺口：
+    ///
+    /// - agent 主动问人类（`ask` / `add_human_todo`）—— 本来就写进人类那本，他看得见。
+    /// - **人类派下来的活（agent 那本），agent 卡在他身上推不动** —— 在 #139 之前，
+    ///   想让他看见**唯一的办法就是 `add_human_todo` 再开一条**。
+    ///
+    /// 也就是说复制**已经在发生**。两条会各自被回应、各自翻牌，从此对不上 ——
+    /// **两个事实源就是没有事实源。** 所以这里只动视图：条目仍然**只有一条、
+    /// 只有一个归属、一个号、一份回应列表**，它照旧躺在 agent 那本里。
+    ///
+    /// `TodoBlockedOnHumanTests.testFlippingToBlockedWritesNothingToTheHumanLedger`
+    /// 量的就是这件事本身 —— 翻牌前后**人类那本的条数一个字不变**。
+    ///
+    /// ## 顺序是故意的
+    ///
+    /// 等他回复的置顶（每一条都堵着一件真在跑的活），其余按这本账原本的「新的在上面」。
+    /// **不做全局按号排**：两本账的 #N 各自从 1 起，混着排没有意义。
+    struct Row: Identifiable, Equatable {
+        /// 这条**属于哪本账** —— 回应/翻牌要写回原处。少了它就会写串本：
+        /// 两本账的 #1 是两件不同的事。
+        let ledger: TodoLedger
+        let item: LocalTodoItem
+        var id: String { "\(ledger.rawValue)#\(item.number)" }
+    }
+
+    static func humanFacingRows(
+        human: [LocalTodoItem], agent: [LocalTodoItem]
+    ) -> [Row] {
+        let waiting = newestFirst(agent.filter { $0.status == LocalTodoItem.blockedOnHumanStatus })
+        return waiting.map { Row(ledger: .agent, item: $0) }
+            + newestFirst(human).map { Row(ledger: .human, item: $0) }
+    }
+
+    /// 面板/详细窗口**这一屏的行** —— 药丸选哪本，就走哪条。视图只调这一个。
+    static func rows(
+        for ledger: TodoLedger, human: [LocalTodoItem], agent: [LocalTodoItem]
+    ) -> [Row] {
+        switch ledger {
+        case .human: return humanFacingRows(human: human, agent: agent)
+        // agent 那本原样显示全部（卡在人身上的那几条**也留在这里**，只是画成黄的）
+        // —— 它们本来就属于这本账，不是被「搬走」了。
+        case .agent: return newestFirst(agent).map { Row(ledger: .agent, item: $0) }
+        }
+    }
+
+    /// 行首那个号怎么写。**跨本账借显过来的那几条必须带本账名**：
+    /// 两本账的 #N 各自从 1 起，人类那本里裸写一个「7」，他会去人类那本找 #7 ——
+    /// 那是另一件事。
+    static func rowNumberLabel(_ row: Row, shownIn ledger: TodoLedger) -> String {
+        row.ledger == ledger ? "\(row.item.number)" : "\(row.ledger.pillTitle) \(row.item.number)"
+    }
+
+    /// 详细窗口停在「人类的」那本时，那句指路。
+    ///
+    /// ## 为什么这里是指路，外面那张概览却是直接借显
+    ///
+    /// 详细窗口是**可写面**：追问 / 改正文 / 删除 / 人类回应，六处写入全都按
+    /// 「当前药丸是哪本」决定往哪个 store 写。把借来的行混进这张列表，就得把
+    /// 「这一行属于哪本」贯穿到每一条写入路径和编辑器状态里 —— 漏一处就是
+    /// **把回应写进另一本账的同号条目**，而两本账的 #N 恒定都存在，不会报错。
+    ///
+    /// 概览面板是**只读面**，没有这个风险，所以那边直接借显。
+    /// 这不是「详细窗口没做」，是两张面的风险面不一样，判断也就不一样。
+    /// 代价写在这儿：他在详细窗口里得多点一下。
+    static func blockedOnHumanHint(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return "另有 \(count) 条「Agent 的」那本的活卡在你身上 —— 点这里去看"
     }
 
     /// 每条 Todo 共用的本地化时间元信息（概览与详细窗口同一口径）。旧条目的

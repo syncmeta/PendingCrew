@@ -28,11 +28,19 @@ struct CrewTodoPanel: View {
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
 
     @State private var todos: [LocalTodoItem] = []
+    /// agent 那本里**正卡在人类身上**的条目（人类 Todo #139）。看「人类的」那本时
+    /// 借显在同一屏里 —— **借显，不是复制**：条目仍只有一条，躺在 agent 那本。
+    /// 看「Agent 的」那本时用不上（那本自己就全在 `todos` 里），保持空。
+    @State private var waitingOnHuman: [LocalTodoItem] = []
     /// 当前看的是哪本账（Todo #62）。两个药丸「Agent 的 / 人类的」切它。
     @State private var ledger: TodoLedger = .agent
 
-    /// 从新到旧 —— 人类明确要求新建的在最上面（纯逻辑有单测钉住）。
-    private var rows: [LocalTodoItem] { TodoListPresentation.newestFirst(todos) }
+    /// 这一屏的行（排序 + 跨本账借显都在纯逻辑里，有单测钉住）。
+    private var rows: [TodoListPresentation.Row] {
+        ledger == .human
+            ? TodoListPresentation.rows(for: .human, human: todos, agent: waitingOnHuman)
+            : TodoListPresentation.rows(for: .agent, human: [], agent: todos)
+    }
     private let layout = TodoListPresentation.overviewLayout
 
     var body: some View {
@@ -43,7 +51,7 @@ struct CrewTodoPanel: View {
                     .foregroundStyle(Theme.Palette.ink)
                 CrewTodoLedgerPills(ledger: $ledger)
                 Spacer(minLength: 8)
-                Button(layout.detailButtonTitle) { openDetail(focus: nil) }
+                Button(layout.detailButtonTitle) { openDetail(ledger: ledger, focus: nil) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .font(Theme.Fonts.caption)
@@ -77,13 +85,26 @@ struct CrewTodoPanel: View {
                 todos = store.list(crewId: crewId)
             }
         }
+        // 「人类的」那本还要跟着 agent 那本走 —— 那边翻成 `blocked_on_human` 时，
+        // 这一屏要当场多出一行。**只在看人类那本时才订**（看 agent 那本时它就是
+        // `todos` 自己，再订一份是白烧一条目录监听）。
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
+            guard ledger == .human else { waitingOnHuman = []; return }
+            let agentStore = LocalTodoStore.shared(.agent)
+            waitingOnHuman = agentStore.list(crewId: crewId)
+            for await _ in agentStore.todoChanges(crewId: crewId) {
+                waitingOnHuman = agentStore.list(crewId: crewId)
+            }
+        }
     }
 
     /// 详细窗口入口。每 crew 最多一个窗口，重复调用只前置 —— 但 `focus` 每次都会送进去。
     ///
     /// `focus` = 这次要人看的那一条的 #N（人类 Todo #122）。点某一行传它的号，
     /// 顶部「放大看」按钮传 nil（那是**列表**入口，不是某一条）。
-    private func openDetail(focus: Int?) {
+    /// `ledger` 传**这一行自己那本**，不是药丸选的那本 —— 借显过来的行点进去，
+    /// 要落在 agent 那本的 #N 上，否则会打开人类那本里号码相同的另一件事。
+    private func openDetail(ledger: TodoLedger, focus: Int?) {
         CrewTodoDetailWindowPresenter.shared.open(
             crewId: crewId, crewName: crewName, ledger: ledger, focus: focus,
             runner: runner, appModel: appModel,
@@ -93,7 +114,8 @@ struct CrewTodoPanel: View {
     // MARK: - 行渲染
 
     @ViewBuilder
-    private func todoRow(_ item: LocalTodoItem) -> some View {
+    private func todoRow(_ row: TodoListPresentation.Row) -> some View {
+        let item = row.item
         let icon = TodoListPresentation.statusIcon(item.status)
         let corners = layout.cardCorners
         let cardShape = UnevenRoundedRectangle(
@@ -107,7 +129,9 @@ struct CrewTodoPanel: View {
             // 附图的层级：状态圆点 + 序号先单独成行，正文另进下面的卡片。
             HStack(alignment: .center, spacing: 6) {
                 CrewTodoStatusCircle(status: item.status, size: 15)
-                Text("\(item.number)")
+                // 借显过来的行要带上本账名（#139）：两本账的 #N 各自从 1 起，
+                // 人类那本里裸写一个「7」，他会去人类那本找 #7 —— 那是另一件事。
+                Text(TodoListPresentation.rowNumberLabel(row, shownIn: ledger))
                     .font(Theme.Fonts.footnote.weight(.semibold).monospacedDigit())
                     .foregroundStyle(Theme.Palette.accent)
             }
@@ -156,7 +180,7 @@ struct CrewTodoPanel: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { openDetail(focus: item.number) }
+        .onTapGesture { openDetail(ledger: row.ledger, focus: item.number) }
     }
 }
 

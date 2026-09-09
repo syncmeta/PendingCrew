@@ -226,8 +226,10 @@ enum CrewMessageTodoLink {
         case refuse(String)
     }
 
-    /// `respond_todo` 认的三档，照抄它不另立一套。
-    static let validStatuses = ["pending", "in_progress", "completed"]
+    /// `respond_todo` 认的那几档 —— **引用，不照抄**（人类 Todo #139）。
+    /// 这里原本抄了一份字面量，加一档状态就得记得改两处；漏了不报错，
+    /// 表现成「群里能标、工具标不了」。
+    static var validStatuses: [String] { LocalTodoStore.statusOrder }
 
     static func decide(args: [String: Any]) -> Decision {
         let number = (args["todo"] as? Int) ?? (args["todo"] as? NSNumber)?.intValue
@@ -251,7 +253,8 @@ enum CrewMessageTodoLink {
             // 填不出状态的那条，本来就不该挂这个号。
             return .refuse("挂了 `todo` #\(number) 就必须同时给 `todo_status` —— 人类要的就是"
                 + "「对应上了就强制更新状态」，只挂号不更新等于账还是旧的。"
-                + "\n三档：`pending`（还没开始）/ `in_progress`（在做）/ `completed`（做完了）。"
+                + "\n档位：`pending`（还没开始）/ `in_progress`（在做）/ `completed`（做完了）"
+                + "/ `\(LocalTodoItem.blockedOnHumanStatus)`（推不动了，卡的是人）。"
                 + "\n**出路**：说不准是哪一档，多半说明这条消息跟这条 Todo 其实没有强对应 —— "
                 + "把 `todo` 去掉，它就是一条普通的进度或发现。")
         }

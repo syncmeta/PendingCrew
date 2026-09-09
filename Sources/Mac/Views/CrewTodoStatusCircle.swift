@@ -18,6 +18,9 @@ struct CrewTodoStatusCircle: View {
         switch status {
         case "in_progress": return Theme.Palette.accent
         case "completed": return Theme.Palette.success
+        // 人类原话：「在等我回复的应该是黄色」。琥珀是本仓库既有的那一档提醒色
+        // （群聊/侧栏共用），不为这一处新造颜色。
+        case LocalTodoItem.blockedOnHumanStatus: return Theme.Palette.amber
         default: return Theme.Palette.inkMuted
         }
     }

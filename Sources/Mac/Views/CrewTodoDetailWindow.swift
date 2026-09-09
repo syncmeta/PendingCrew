@@ -118,6 +118,9 @@ struct CrewTodoDetailView: View {
     @State private var todos: [LocalTodoItem] = []
     /// 只看这一条（人类 Todo #122）。nil = 全列表。
     @State private var focus: Int?
+    /// agent 那本里卡在人类身上的条数（人类 Todo #139）—— 只用来给一句指路，
+    /// **不混进这张可写列表**（理由见 `blockedOnHumanHint`）。
+    @State private var blockedOnHumanCount = 0
     /// 外面又点了一条时把新落点收进来（窗口是复用的，见 `CrewTodoFocus`）。
     @ObservedObject private var focusMailbox: CrewTodoFocus
 
@@ -186,6 +189,22 @@ struct CrewTodoDetailView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            // 人类那本这一屏看不到「卡在你身上的 agent 活」（它们躺在另一本账里）——
+            // 外面那张概览是直接借显的，这里给一条同样到得了的路，别让两张面对不上。
+            if !isFocused, ledger == .human,
+               let hint = TodoListPresentation.blockedOnHumanHint(count: blockedOnHumanCount) {
+                Button { ledger = .agent; focus = nil } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "questionmark.circle.fill")
+                        Text(hint).font(Theme.Fonts.caption)
+                        Image(systemName: "chevron.right").font(Theme.Fonts.caption2)
+                    }
+                    .foregroundStyle(Theme.Palette.amber)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+                .buttonStyle(.plain)
+            }
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
@@ -221,6 +240,18 @@ struct CrewTodoDetailView: View {
             for await _ in store.todoChanges(crewId: crewId) {
                 todos = store.list(crewId: crewId)
             }
+        }
+        // 指路那句的计数。只在人类那本上订；换回 agent 那本时清零（那本自己就全在
+        // `todos` 里，指路无意义）。
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
+            guard ledger == .human else { blockedOnHumanCount = 0; return }
+            let agentStore = LocalTodoStore.shared(.agent)
+            func recount() {
+                blockedOnHumanCount = agentStore.list(crewId: crewId)
+                    .filter { $0.status == LocalTodoItem.blockedOnHumanStatus }.count
+            }
+            recount()
+            for await _ in agentStore.todoChanges(crewId: crewId) { recount() }
         }
     }
 
