@@ -51,7 +51,14 @@ git -C "$root" merge-base --is-ancestor "$build_commit" origin/main 2>/dev/null 
   exit 2
 }
 git -C "$root" push origin "refs/tags/v$version" 2>/dev/null || true
-remote_tag=$(git -C "$root" ls-remote --tags origin "v$version" | cut -f1)
+# ⚠️ annotated tag 有两层：`refs/tags/X` 是 **tag 对象**自己的 sha，
+# `refs/tags/X^{}` 才是它指向的 commit。以前这里只取前者 —— 对
+# **轻量 tag**（发版脚本自己 `git tag X <commit>` 打的那种）恰好相等，所以一直没露馅；
+# 有人改用 `git tag -a` 之后，这条判据会拿 tag 对象的 sha 去跟 commit 比，
+# **稳定误报「对不上，拒绝发布」**，而产物其实是对的。2026-09-09 发 0.1.31 时撞上。
+# 取 `^{}` 那一行；它对两种 tag 都成立（轻量 tag 没有 `^{}` 行时回退到普通那行）。
+remote_tag=$(git -C "$root" ls-remote --tags origin "v$version^{}" | cut -f1)
+[ -n "$remote_tag" ] || remote_tag=$(git -C "$root" ls-remote --tags origin "v$version" | cut -f1)
 [ "$remote_tag" = "$build_commit" ] || {
   echo "远端 tag v$version 指向 ${remote_tag}，产物却构建自 $build_commit —— 对不上，拒绝发布。" >&2
   exit 2
