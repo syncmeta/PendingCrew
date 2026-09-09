@@ -594,6 +594,8 @@ final class CrewSessionRunner: ObservableObject {
                 failed.append("\(cmd.summary)：session 尚未就绪、一直没空闲窗口，或已经退出")
             case .unsupported:
                 failed.append("\(cmd.summary)：该 runner 没有中途切换通道")
+            case let .linkDown(why):
+                failed.append("\(cmd.summary)：\(why)")
             }
         }
         reportProfileSwitch(run: run, crewId: req.crewId, applied: applied, failed: failed)
