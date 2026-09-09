@@ -293,6 +293,27 @@ fi
 #    找着；2026-08-06 就是这么让一个**六道全绿、一双击就 SIGABRT** 的包上了线。
 "$root/scripts/release/verify-rpath-resolvable.sh" "$app" "$app_name"
 
+# —— 把 dSYM 留下来（2026-09-09，人类 Todo #138）——
+#
+# 这一步以前是**不存在**的：dSYM 生在 `$xcarchive/dSYMs/` 里，而 xcarchive 在
+# `mktemp -d /tmp/…` 的快照目录底下，脚本一退 trap 就把它连同符号表一起删了。
+# 于是 0.1.28 在用户机器上崩的时候，崩溃报告里我们自己那六帧全是裸地址，本机
+# 三个可能的地方（Xcode Archives / DerivedData / 那个临时目录）一个都没有能对上
+# UUID 的 dSYM，只能靠「同 commit 同配置重编」这条**近似**路去符号化。
+#
+# **落点故意不在 `$release_dir` 底下。** 那个目录是 Sparkle feed 的扫描范围，
+# `generate_appcast` 会把里面的东西当候选更新看 —— 往那儿放非更新产物是踩过的坑
+# （dmg 曾经落进去污染过更新源）。所以符号走 `dist/symbols/`，跟 feed 完全分家；
+# `dist/` 整个在 .gitignore 里，不进 git。
+symbols_dir="$root/dist/symbols/$product/$version+$build_number"
+mkdir -p "$symbols_dir"
+# 整个 dSYMs/ 都收（主 app + Sparkle 那几个内嵌件）—— 崩在内嵌件里的时候同样需要它。
+/usr/bin/ditto "$xcarchive/dSYMs" "$symbols_dir"
+# 把这一版是从哪个 commit 出来的一并写下来：光有 dSYM 还原不出「该 checkout 哪一版」。
+printf 'version=%s\nbuild=%s\ncommit=%s\n' \
+  "$version" "$build_number" "$snapshot_commit" > "$symbols_dir/BUILD-INFO.txt"
+echo "note: dSYM 已归档 → $symbols_dir"
+
 archive="$release_dir/$app_name-$version.zip"
 /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 xcrun notarytool submit "$archive" --keychain-profile "$PENDING_NOTARY_PROFILE" --wait
@@ -312,6 +333,12 @@ test -x "$gen"
 codesign --verify --deep --strict --verbose=2 "$app"
 spctl -a -vvv -t install "$app"
 xcrun stapler validate "$app"
+
+# 归档里那份必须是**这一次**的。查的不是「有没有一个叫 dSYM 的东西」——
+# 今天真正咬人的形态正是「有，但 UUID 是另一次构建的」（DerivedData 里那份）。
+# 放在这里而不是紧跟着归档那步：这样它覆盖的是签名、公证、staple 全走完之后
+# 那个**真要发出去的**二进制。
+"$root/scripts/release/verify-dsyms-archived.sh" "$app" "$app_name" "$symbols_dir"
 tag_name="v$version"
 if tagged_commit=$(git -C "$root" rev-parse --verify "$tag_name^{commit}" 2>/dev/null); then
   if [ "$tagged_commit" != "$snapshot_commit" ]; then
