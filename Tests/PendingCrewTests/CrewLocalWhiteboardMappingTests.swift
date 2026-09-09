@@ -13,12 +13,13 @@ final class CrewLocalWhiteboardMappingTests: XCTestCase {
     private func message(
         id: String = "m1",
         senderKind: String = "session",
+        senderUserId: String? = nil,
         references: [CrewMessageReference]? = nil,
         inReplyTo: String? = nil,
         mentions: [LocalWhiteboardMention]? = nil
     ) -> LocalWhiteboardMessage {
         var m = LocalWhiteboardMessage(
-            id: id, senderKind: senderKind, senderUserId: nil,
+            id: id, senderKind: senderKind, senderUserId: senderUserId,
             senderSessionId: senderKind == "session" ? "s1" : nil,
             category: nil, text: "正文", createdAt: "2026-01-01T00:00:00Z")
         m.senderName = "小绿"
@@ -48,6 +49,17 @@ final class CrewLocalWhiteboardMappingTests: XCTestCase {
         XCTAssertEqual(entry.inReplyTo, "m0")
         XCTAssertEqual(entry.mentions?.map(\.kind), ["session"])
         XCTAssertEqual(entry.mentions?.map(\.targetId), ["s2"])
+    }
+
+    /// `senderUserId` 原样透传 —— 「只看 @ 我的消息」靠它认出「我发的」，认不出就
+    /// 把自己发的消息一起筛没了（Todo #69 第 3 条）。这条断言接的是
+    /// `CrewMentionFilterRealWhiteboardTests` 原来那颗源码文本钉子：映射搬进
+    /// bundle 之后它可以被真的跑一遍，不必再靠 grep 源码。
+    func test_人类作者id原样透传() {
+        let m = message(senderKind: "user",
+                        senderUserId: LocalWhiteboardStore.localUserId)
+        XCTAssertEqual(CrewLocalWhiteboardMapping.entry(m).senderUserId,
+                       LocalWhiteboardStore.localUserId)
     }
 
     func test_正文与作者按原有口径映射() {

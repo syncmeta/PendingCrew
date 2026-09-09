@@ -17,10 +17,16 @@ import XCTest
 /// **覆盖到**：磁盘上真实的 `<crewId>.json` → `LocalWhiteboardMessage` 解码 →
 /// `senderUserId` → `CrewMentionFilter.onlyHumanMentions(includingFrom:)` 的判定。
 ///
-/// **覆盖不到**：`LocalBackend`（`PendingCrewBackend.swift`）那一步映射和
-/// `CrewChatView.localUserId` 的取值 —— 两者都住在没有编进 test bundle 的 app 模块
-/// 里。所以下面用源码文本把那两个链接**钉住**（`testTheTwoLinksThisBundleCannotRun`），
-/// 谁改坏了当场红。这不是"验过了"，是"改动会被拦下"，两者别混。
+/// **覆盖不到**：`CrewChatView.localUserId` 的取值 —— 它住在没有编进 test bundle
+/// 的 app 模块里。所以下面用源码文本把这个链接**钉住**
+/// （`testTheLinkThisBundleCannotRun`），谁改坏了当场红。这不是"验过了"，是"改动
+/// 会被拦下"，两者别混。
+///
+/// **原来还钉着第二个链接**（`LocalBackend` 那一步映射里的 `senderUserId` 透传）。
+/// 那段映射已经抽进 `CrewLocalWhiteboardMapping` 并编进了这个 bundle —— 它现在被
+/// `CrewLocalWhiteboardMappingTests` **真的跑着**，所以这里的源码文本钉子撤掉了。
+/// 留着会变成同一件事的第二份名单：两处各说各的，改动只更新其中一处时，那份没更新
+/// 的会以「还绿着」的样子继续待着。
 final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
 
     // MARK: - 真白板
@@ -66,8 +72,8 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
         return out
     }
 
-    /// `LocalBackend.listCrewWhiteboard` 的那一步映射（`senderUserId` 是原样透传，
-    /// 见 `testTheTwoLinksThisBundleCannotRun`）。
+    /// `LocalBackend.listCrewWhiteboard` 的那一步映射（`senderUserId` 是原样透传 ——
+    /// 由 `CrewLocalWhiteboardMappingTests` 真的跑着断言，不再靠源码文本钉）。
     private func entry(from m: LocalWhiteboardMessage) -> CrewWhiteboardEntry {
         CrewWhiteboardEntry(
             id: m.id, senderKind: m.senderKind, senderSessionId: m.senderSessionId,
@@ -131,12 +137,7 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
     /// `LocalBackend` 的映射 + `CrewChatView` 的 `localUserId` 取值都在 app 模块，
     /// 编不进 test bundle。改坏了上面两条测试**照样绿**、而人在窗口里看到的是自己
     /// 的消息全没了 —— 所以这两处只能这样拦。
-    func testTheTwoLinksThisBundleCannotRun() throws {
-        let backend = try Self.source("PendingCrewBackend.swift")
-        XCTAssertTrue(
-            backend.contains("senderUserId: m.senderUserId"),
-            "本地白板 → CrewWhiteboardEntry 的映射不再原样透传 senderUserId，筛选会认不出「我」")
-
+    func testTheLinkThisBundleCannotRun() throws {
         let chat = try Self.source("CrewChatView.swift")
         XCTAssertTrue(
             chat.contains("LocalWhiteboardStore.localUserId"),
