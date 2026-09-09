@@ -512,13 +512,14 @@ codex 不跑交互式 TUI，跑 `codex app-server`（stdio JSON-RPC），
 bundle 单测。工具集（`tools/list` 在 `Sources/Mcp/McpServer.swift:74-387`）：
 
 - **通信**：`post_to_crew`（可带 `mentions` / `reply_to`）、`read_whiteboard`、`listen`
-- **求助**：`ask`（raise 一条待决策 → 阻塞 long-poll → captain 或人类答复）
+- **求助**：`ask`（**不阻塞**：问题进人类 Todo + 群里 @ 人 → 人回应时叫醒提问者，并原样念回它写下的接续说明；可选 `fallback_after_minutes` 给有时限的决定兜底）
 - **通讯录**：`directory`、`contact`（跨 crew 喊话，两边留痕）
 - **自我管理**：`get_quota`、`schedule_wakeup`、`set_session_profile`、`respond_todo`
-- **机长专用**（`--captain` 才解锁）：`answer_decision`、`start_session`、`inspect_session`、
+- **机长专用**（`--captain` 才解锁）：`start_session`、`inspect_session`、
   `nudge_session`、`stop_session`、`list_sessions`、`rename_crew`、`raise_attention` /
   `clear_attention`、`change_workdir`、`report_to_parent`、`message_child_crew`、
   `create_child_crew`、`create_parent_crew`、`adopt_crew` / `adopt_parent` / `release_crew`
+  （`answer_decision` 已删，随驾驶舱计划 #75 ① 一起拆掉——决策类并进人类 Todo 之后它没有目标可答了）
 
 ### 5.4 helper 是离线的 —— 它怎么让 app 干活
 

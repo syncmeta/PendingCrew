@@ -59,6 +59,145 @@ final class DecisionKindHasNoProducerTests: XCTestCase {
                       "codex 原生审批那条也被拆了 —— 它需要审批时会无处可去")
     }
 
+    // MARK: - 扫描面不止 `Sources/`：**任何教人怎么做事的地方**
+
+    /// 拆掉一条老路之后，**「还有谁在教这条老路」是拆除清单的一部分**。
+    ///
+    /// 上一笔（`18b5e82`）只扫了 `Sources/`，于是漏掉了真正在教人的那一处：
+    /// **`Resources/Prompts/crew-captain.zh.md` —— 机长自己的提示词**，里面白纸黑字写着
+    /// 「直接用工具 `answer_decision(reqId, reply)` 答它」。机长照做，工具回「找不到
+    /// 待决策」，而 worker 还停在那儿等。**实现删干净了，指路牌还在把人往死胡同送，
+    /// 而且不会有任何报错。**
+    ///
+    /// ## 判据：可以提它，但同一行必须说清它没了
+    ///
+    /// Markdown **没有注释语法**，所以「跳过注释」那招在文档上不成立 —— 而文档里
+    /// 记录「这条路被删了」又是**应该**做的事。本仓已经因为这个形状红过三次
+    /// （拆老路时留的注释里必然写着老路的名字）。
+    ///
+    /// 所以规则不是「不许出现」，是 **「出现时同一行必须带作废标记」**（`\(Self.retiredMarker)`）：
+    /// - 教人用它 → 红；
+    /// - 记录它没了 → 绿，**而且强制作者把「它没了」写出来**。
+    ///
+    /// 判据仍是零判断的 `contains`，不区分「叙述」和「指令」——那种区分需要判断，
+    /// 而需要判断的判据会在第一次争议时被绕过。
+    ///
+    /// ## 扫描面的边界
+    ///
+    /// 扫：`Sources/`、`Resources/Prompts/`、`docs/` 顶层、`scripts/`、README / CONTRIBUTING。
+    /// **不扫 `docs/internal/`** —— 那是按日期归档的事故与审计记录，**按构造就是历史**，
+    /// 不是指导文本。把归档也纳进来，等于要求每一份事故报告在提到旧路时改写它的原话。
+    func testNothingTeachesTheDeletedToolAnyMore() throws {
+        var offenders: [String] = []
+        var pendingHuman: [String] = []
+        for (name, path, text) in try Self.instructionalFiles() {
+            for (i, line) in Self.stripComments(text, ext: Self.ext(name)).enumerated()
+            where line.contains("answer_decision") && !line.contains(Self.retiredMarker) {
+                let hit = "\(path):\(i + 1)"
+                if name == Self.humanOnlyFile { pendingHuman.append(hit) } else { offenders.append(hit) }
+            }
+        }
+        if !pendingHuman.isEmpty {
+            // **扫得到、但不红**（机长 2026-09-09 定）：那个文件只有人类能动，
+            // 一把因为谁都改不了的文件而永远红的尺子，两周内会被人关掉。
+            print("［已知不一致·等人处理］\(Self.humanOnlyFile) 仍在教已删的 answer_decision：\n  "
+                  + pendingHuman.joined(separator: "\n  "))
+        }
+        XCTAssertTrue(
+            offenders.isEmpty,
+            """
+            这些**写给人或 agent 看的**地方还在教 `answer_decision`，而那个工具 #75 ① 已删：
+            \(offenders.joined(separator: "\n"))
+
+            要保留这句话（比如记录它被删过），在**同一行**加上「\(Self.retiredMarker)」。
+            """)
+    }
+
+    /// 豁免必须**恰好一处**。上次学到的：豁免就是那个洞，第二个悄悄出现时尺子就瞎了、
+    /// 而且**依然全绿**。
+    ///
+    /// ⚠️ **这个豁免此刻是空转的，说出来免得它被当成一层保护**：实测
+    /// `session-world-model.zh.md` 里 **一处 `answer_decision` 都没有**（我先前跟机长
+    /// 报过两次「它还在教 answer_decision」，**那是错的，没开文件就说了**）。
+    ///
+    /// 那个文件里真正过期的是**另一件事**：`ask` 仍被描述成「阻塞」（第 30 / 149 / 156 行
+    /// 一带），而 #75 之后它不阻塞了。**这把尺子不覆盖那一条** —— 它只认
+    /// `answer_decision` 这个名字。要覆盖「口径过期」得能区分「描述现状」和「描述历史」，
+    /// 那需要判断，而需要判断的判据会在第一次争议时被绕过。
+    ///
+    /// 所以那处不一致**不靠尺子治，靠人**：已经在给人类的清单里（只有人类能动那个文件）。
+    func testTheHumanOnlyExemptionIsExactlyOne() {
+        XCTAssertEqual(Self.humanOnlyFile, "session-world-model.zh.md",
+                       "豁免的目标变了 —— 换目标要有人明确决定，不该是顺手改的")
+    }
+
+    /// 扫描面自己不许缩水：**扫不到的地方跟没有问题长得一模一样。**
+    func testTheScanReachesPromptsAndDocsNotJustSources() throws {
+        let files = try Self.instructionalFiles()
+        for expected in ["crew-captain.zh.md", "architecture.md"] {
+            XCTAssertTrue(files.contains { $0.0 == expected },
+                          "扫描面里没有 \(expected) —— 上一笔漏的正是这一类")
+        }
+        XCTAssertTrue(files.contains { $0.0.hasSuffix(".swift") }, "连 Sources 都不扫了")
+        XCTAssertFalse(files.contains { $0.1.contains("docs/internal/") },
+                       "把归档也扫进来了 —— 那会要求每份事故报告改写它的原话")
+    }
+
+    /// 作废标记；同一行带上它就算「记录」而不是「教」。
+    static let retiredMarker = "已删"
+    /// 唯一的豁免：只有人类能动它。
+    static let humanOnlyFile = "session-world-model.zh.md"
+
+    private static func ext(_ name: String) -> String {
+        name.contains(".") ? String(name.split(separator: ".").last!) : ""
+    }
+
+    /// 按后缀剥注释。**零判断**，照 `ReleaseScriptSourceContractTests` 那条：
+    /// 整行第一个非空字符是注释符才算注释；不做行内解析（字符串里的 `//` 不是注释）。
+    /// `.md` 没有注释语法 —— 一行都不剥，这正是需要作废标记那条规则的原因。
+    private static func stripComments(_ text: String, ext: String) -> [String] {
+        let marker: String?
+        switch ext {
+        case "swift": marker = "//"
+        case "sh": marker = "#"
+        default: marker = nil
+        }
+        return text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            guard let marker,
+                  line.trimmingCharacters(in: .whitespaces).hasPrefix(marker) else { return String(line) }
+            return ""
+        }
+    }
+
+    /// 「会教人怎么做事」的全部文件。(文件名, 仓库相对路径, 内容)
+    private static func instructionalFiles() throws -> [(String, String, String)] {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        var out: [(String, String, String)] = []
+        func add(_ url: URL) {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+            let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")
+            out.append((url.lastPathComponent, rel, text))
+        }
+        for sub in ["Sources", "Resources/Prompts", "scripts"] {
+            guard let walker = FileManager.default.enumerator(
+                at: root.appendingPathComponent(sub), includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]) else { continue }
+            for case let url as URL in walker
+            where ["swift", "md", "sh"].contains(url.pathExtension) { add(url) }
+        }
+        // docs 只取顶层 —— `docs/internal/` 是按日期归档的事故记录，不是指导文本。
+        if let names = try? FileManager.default.contentsOfDirectory(
+            atPath: root.appendingPathComponent("docs").path) {
+            for n in names where n.hasSuffix(".md") {
+                add(root.appendingPathComponent("docs").appendingPathComponent(n))
+            }
+        }
+        for n in ["README.md", "CONTRIBUTING.md"] { add(root.appendingPathComponent(n)) }
+        guard out.count > 50 else { throw XCTSkip("扫描面异常小（\(out.count)），测试本身失效了") }
+        return out
+    }
+
     private static func codeOnly(_ text: String) -> String {
         text.split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> Substring in
