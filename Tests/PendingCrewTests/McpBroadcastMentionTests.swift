@@ -18,7 +18,8 @@ final class McpBroadcastMentionTests: XCTestCase {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "c", sessionId: "sess-1")
+                  crewId: "c", sessionId: "sess-1",
+                  quotaDirectory: dir)
     }
 
     /// 枚举里得有 broadcast —— 不在枚举里，模型就不会去填它。

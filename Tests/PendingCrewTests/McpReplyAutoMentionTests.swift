@@ -28,7 +28,8 @@ final class McpReplyAutoMentionTests: XCTestCase {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "c", sessionId: sessionId)
+                  crewId: "c", sessionId: sessionId,
+                  quotaDirectory: dir)
     }
 
     /// 发一条 `post_to_crew`，返回落盘后的**最后一条**消息。

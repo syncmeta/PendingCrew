@@ -31,6 +31,15 @@ enum CrewHumanTodoRespond {
             return TodoLandingFlow.notPersistedReceipt(ledger: .human, action: .responded)
         }
 
+        // 这条是权限放行请求的话，把「人同意了没有」读出来，同意就留一张一次性票
+        // （#75 ②）。没有这张票，agent 重跑会再次被拒、再提一条 Todo —— 死循环，
+        // 而且每转一圈往人的账上加一条垃圾。
+        // 读法是保守的：读不准就当没同意（见 `PermissionGrantReading`）。
+        if let tool = item.permissionTool,
+           PermissionGrantReading.read(trimmed) == .granted {
+            PermissionGrantStore.shared.grant(crewId: crewId, tool: tool)
+        }
+
         let plan = HumanTodoWakePlan.plan(
             createdBySessionId: item.createdBySessionId,
             runningSessionIds: Set(runner.runs.filter { $0.status == .running }.map(\.sessionId)),
@@ -41,9 +50,13 @@ enum CrewHumanTodoRespond {
         let announce = TodoLedger.human.responseAnnouncement(number: item.number, text: trimmed)
         // 回落原因必须跟着同一条白板消息进 agentText；过去它只塞进 composer 的
         // 第二条直投通道，白板唤醒一旦接管就会丢。现在白板既是真相也是唯一投递源。
-        let delivered = [announce, plan.fallbackNote]
-            .compactMap { $0 }
-            .joined(separator: "\n")
+        // 承重点（驾驶舱计划 #75）：`ask` 不再阻塞之后，agent 提完问题就去干别的了。
+        // 答复送回去时必须带上**它提问那一刻自己写下的**「接着做什么」，否则它被叫醒
+        // 却不知道从哪儿接 —— 那比原来停在那儿等还糟。措辞与空值处理归
+        // `TodoLandingFlow.wakeText`（纯逻辑，有单测），这里只喂参数。
+        let delivered = TodoLandingFlow.wakeText(
+            announce: announce, fallbackNote: plan.fallbackNote,
+            resumeNote: item.resumeNote, expectsResume: item.isMidFlowAsk)
 
         // 步骤 2：发群。失败**不回滚**已落的账（本地已落是事实），但回执必须如实。
         guard let backend = appModel.backend else {

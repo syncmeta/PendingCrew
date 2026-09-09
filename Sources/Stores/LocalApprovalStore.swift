@@ -1,7 +1,20 @@
 import Foundation
 import Combine
 
-/// 本地待审批 / 待决策 store（spec 2026-06-08-pendingcrew-ask-approval-design §4）。
+/// **codex 原生审批（elicitation）的会合点。**
+///
+/// # 这本账**曾经**装两件事，2026-09-09 拆掉了一件（驾驶舱计划 #75）
+///
+/// 原来它同时装：① agent 问人类（`ask` 的决策类 + 权限 hook）、② codex 运行时自己
+/// 弹的审批请求。人类拍板把 ① 整个并进人类 Todo（**不阻塞**：问题进账、agent 接着
+/// 干别的、人回应时叫醒它），于是这里只剩 ②。
+///
+/// **② 没有跟着拆，是刻意的**：codex 的审批是 codex 协议自己要的东西，不是我们
+/// 发明的。拆了它 codex 在需要审批时无处可去 —— **那是新造一个「停」，跟 #75 的
+/// 目的正相反**。（`CodexAppServerBackend` 的 `approvalProvider` 把它路进来。）
+///
+/// **所以它不再叫「待审批/待决策列表」** —— 那个名字属于已经拆掉的那一半，
+/// 留着会让人以为界面上还有一份要他盯的清单。
 ///
 /// 每 crew 一个 JSON：`<dir>/<crewId>.approvals.json` = `[ApprovalItem]`。
 /// - **决策类（decision）**：session 经 `ask` 工具 raise 一条 pending；人类（先 captain，
@@ -169,7 +182,7 @@ final class LocalApprovalStore: @unchecked Sendable {
             : "在途的 ask/审批已丢失，等答复的 session 需要重新发起。"
         LocalWhiteboardStore(directory: directory).appendSessionMessage(
             crewId: crewId, sessionId: "system",
-            text: "待审批/待决策列表：" + incident.summary + tail,
+            text: "codex 原生审批账本：" + incident.summary + tail,
             senderName: "系统")
     }
     /// **返回 nil = 真的落到磁盘上了。**写失败时不发变更信号 —— 那会让订阅方

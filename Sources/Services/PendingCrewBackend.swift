@@ -41,10 +41,16 @@ protocol PendingCrewBackend: AnyObject {
     /// 发一条群聊消息(默认广播)。`replyToId` 非 nil = 回复某条消息
     /// (LocalBackend 记本地白板 `in_reply_to` 引用)。`localAttachments` = 已由
     /// `CrewLocalAttachmentPersist` 落盘的附件条目,挂到白板消息上(Todo #3)。
+    ///
+    /// `extraReferences`（#132/#133）= 这条消息**指向**的账目号（如 Todo 落账刚拿到
+    /// 的 `#N`）。**只放这一类**：指向另一条消息、指向某个 session 的引用由实现从
+    /// `replyToId` / `mentions` 自己派生 —— 那两样它手里已经有了，让调用方再传一遍
+    /// 只会多出一处能忘的地方。
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
         replyToId: String?,
-        localAttachments: [LocalWhiteboardAttachment]) async throws
+        localAttachments: [LocalWhiteboardAttachment],
+        extraReferences: [CrewMessageReference]) async throws
 
     /// crew 白板/花名册的**事件驱动变更流**（Phase 5：去 3s 轮询）。
     ///
@@ -72,7 +78,17 @@ extension PendingCrewBackend {
         replyToId: String?) async throws {
         try await postCrewMessage(
             crewId: crewId, text: text, mentions: mentions,
-            replyToId: replyToId, localAttachments: [])
+            replyToId: replyToId, localAttachments: [], extraReferences: [])
+    }
+
+    /// 不带账目引用的便捷重载 —— 既有调用点不用逐个补 `extraReferences: []`。
+    func postCrewMessage(
+        crewId: String, text: String, mentions: [CrewMention],
+        replyToId: String?,
+        localAttachments: [LocalWhiteboardAttachment]) async throws {
+        try await postCrewMessage(
+            crewId: crewId, text: text, mentions: mentions,
+            replyToId: replyToId, localAttachments: localAttachments, extraReferences: [])
     }
 }
 
@@ -222,7 +238,8 @@ final class LocalBackend: PendingCrewBackend {
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
         replyToId: String?,
-        localAttachments: [LocalWhiteboardAttachment]) async throws {
+        localAttachments: [LocalWhiteboardAttachment],
+        extraReferences: [CrewMessageReference]) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // 附件-only（无正文只发图）也放行（Todo #3）。
         guard !trimmed.isEmpty || !localAttachments.isEmpty else { return }
@@ -237,10 +254,18 @@ final class LocalBackend: PendingCrewBackend {
         // `@小王` 排他（#543），「回复」的自动 @ 是 `[broadcast, 被回复者]`
         // （全组可见 + 只叫醒他，组装在 `CrewComposerMentionParser.mentionsToSend`）。
         // 唤醒面一行没改：谁被叫醒仍由 `CrewLocalMentionInjectLogic` 决定。
+        // #132/#133：引用**从这两个已经在手的结构化参数派生** —— 回复的那条
+        // （`replyToId`）和被 @ 的 session（`mentions`）。正文一个字不参与。
+        let derived = CrewMessageReferences.build(.init(
+            inReplyTo: replyToId,
+            mentionedSessionIds: mentions.compactMap {
+                $0.kind == "session" ? $0.targetId : nil
+            }))
         whiteboard.appendUserMessage(
             crewId: crewId, text: trimmed, senderName: "人", inReplyTo: replyToId,
             attachments: localAttachments,
-            mentions: mentions.map(LocalWhiteboardMention.init))
+            mentions: mentions.map(LocalWhiteboardMention.init),
+            references: extraReferences + derived.filter { !extraReferences.contains($0) })
     }
 
     /// 本地白板变更流（去 3s 轮询）。两个上游合流成 `Void` tick：

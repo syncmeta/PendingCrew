@@ -201,7 +201,9 @@ final class HumanTodoWithdrawTests: XCTestCase {
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: sessionId, isCaptain: isCaptain,
-                  sessionLabel: label, todos: LocalTodoStore(directory: dir))
+                  sessionLabel: label,
+                  quotaDirectory: dir,
+                  todos: LocalTodoStore(directory: dir))
     }
 
     private func call(_ s: McpServer, _ args: [String: Any]) -> String {

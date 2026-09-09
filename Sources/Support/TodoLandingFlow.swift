@@ -131,4 +131,30 @@ enum TodoLandingFlow {
                 + "**那条仍然挂在人的账上等他回应**，请重试。"
         }
     }
+
+    /// 人类回应一条人类 Todo 时，**送回提问者手上的那段话**（驾驶舱计划 #75 承重点）。
+    ///
+    /// `ask` 不再阻塞之后多了一个新风险，而且**比原来更糟**：agent 提完问题去干别的，
+    /// 就再也不回来做那件事了 —— 原来它至少停在那儿等。所以答复回去时必须带上
+    /// agent 提问那一刻自己写下的「接着做什么」。
+    ///
+    /// 三种情况分开，**空值不许静默通过**：
+    /// - 写了 resume → 原样念回去。**原样**很要紧：那是它自己的话，转述会走样。
+    /// - 半路上问的（`ask`）却没写 → **明说这件事**。叫醒了却不知道从哪儿接，
+    ///   跟没叫醒差不多，而且**不说出来就没有任何人会发现**。
+    /// - 普通 Todo（`add_human_todo`，agent 本来就没在半路上）→ 一个字不加。
+    ///   那是绝大多数条目，加料就是给所有人添噪音。
+    static func wakeText(announce: String, fallbackNote: String?,
+                         resumeNote: String?, expectsResume: Bool) -> String {
+        var lines = [announce]
+        if let fallbackNote { lines.append(fallbackNote) }
+        let resume = resumeNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !resume.isEmpty {
+            lines.append("你提这个问题时写下的：\(resume)")
+        } else if expectsResume {
+            lines.append("（你当时是在半路上问的，但没写下答复回来后要接着做什么 —— "
+                + "先核一下自己停在哪儿再继续。）")
+        }
+        return lines.joined(separator: "\n")
+    }
 }

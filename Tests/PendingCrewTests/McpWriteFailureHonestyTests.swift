@@ -73,8 +73,6 @@ final class McpWriteFailureHonestyTests: XCTestCase {
             args: #"{"minutes":30}"#, captainOnly: false),
         "set_session_profile": .writesSharedFile(
             args: #"{"effort":"high"}"#, captainOnly: false),
-        "answer_decision": .writesSharedFile(
-            args: #"{"reqId":"REQ","reply":"选 A"}"#, captainOnly: true),
         "rename_crew": .writesSharedFile(
             args: #"{"name":"新名字"}"#, captainOnly: true),
         "raise_attention": .writesSharedFile(
@@ -312,12 +310,6 @@ final class McpWriteFailureHonestyTests: XCTestCase {
     private func call(_ fx: Fixture, tool: String, args: String, captain: Bool) -> String {
         let s = server(fx, captain: captain)
         var args = args
-        // `answer_decision` 要一个真实存在的 reqId —— 号自己拼的话拿到的是
-        // 「找不到待决策」，那条路根本走不到写盘，会伪装成「诚实」。
-        if tool == "answer_decision",
-           let pending = s.approvals.pending(crewId: fx.crewId).first {
-            args = args.replacingOccurrences(of: "REQ", with: pending.id)
-        }
         if tool == "contact" {
             // 号码是通讯录发的，不是我们拼的。
             guard let dir = try? CrewDirectory.load(whiteboardDirectory: fx.whiteboards),

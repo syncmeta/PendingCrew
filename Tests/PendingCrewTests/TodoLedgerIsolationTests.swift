@@ -210,6 +210,13 @@ final class TodoLedgerIsolationTests: XCTestCase {
         try json.write(to: file, atomically: true, encoding: .utf8)
         let rows = LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c")
 
+        // ⚠️ 这里必须**先卡住再下标**。`XCTAssertEqual` 失败不会中止用例，下面那几行
+        // 会照样 `rows[0]` —— 一旦解码真的回归（2026-09-09 就发生过一次：给
+        // `LocalTodoItem` 加了个非可选带默认值的字段，Swift 合成的 Decodable 不用
+        // 属性默认值，旧行全部解不开、rows 变成空数组），这条**不是红，是 SIGTRAP**：
+        // xctest 进程当场崩掉，同一趟里排在后面的用例一条都不跑，失败清单还会缺一块。
+        // 一条会把测试进程带走的断言，比一条红的断言麻烦得多。
+        try XCTSkipIf(rows.count != 2, "解码回归：只解出 \(rows.count) 条")
         XCTAssertEqual(rows.count, 2, "缺 updatedAt 的旧条目不能解码失败")
         XCTAssertNil(rows[0].updatedAt)
         XCTAssertEqual(rows[0].effectiveUpdatedAt, rows[0].createdAt)

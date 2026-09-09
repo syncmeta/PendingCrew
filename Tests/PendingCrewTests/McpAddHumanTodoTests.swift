@@ -18,7 +18,9 @@ final class McpAddHumanTodoTests: XCTestCase {
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: sessionId, isCaptain: isCaptain,
-                  sessionLabel: label, todos: LocalTodoStore(directory: dir))
+                  sessionLabel: label,
+                  quotaDirectory: dir,
+                  todos: LocalTodoStore(directory: dir))
     }
 
     private func add(_ s: McpServer, _ text: String) -> String {

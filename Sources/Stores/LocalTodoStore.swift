@@ -267,14 +267,17 @@ final class LocalTodoStore: @unchecked Sendable {
     /// `bySessionId` / `bySenderName`（Todo #62）：**谁提的**。`.human` 那本
     /// 缺了它整个功能落不了地 —— 人类回应时根本不知道该叫醒谁（回落规则见
     /// `HumanTodoWakePlan`）。`.agent` 那本由人类新增，两个都留 nil。
-    @discardableResult
     /// `onWriteFailure`：**落盘失败时拿到那个错误**（同时本方法返回 nil）。
     /// 回执必须如实的调用点（MCP 写工具）传它；不在乎的调用点照旧不传。
     /// 形状照抄本仓库既有的 `loadRowsLocked(onIncident:)` —— 别发明第二种。
+    @discardableResult
     func add(crewId: String, text: String,
              attachments: [LocalWhiteboardAttachment]? = nil,
              bySessionId: String? = nil,
              bySenderName: String? = nil,
+             resumeNote: String? = nil,
+             expectsResume: Bool = false,
+             permissionTool: String? = nil,
              onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
@@ -289,7 +292,11 @@ final class LocalTodoStore: @unchecked Sendable {
                 updatedAt: stamp,
                 attachments: (attachments?.isEmpty ?? true) ? nil : attachments,
                 createdBySessionId: bySessionId,
-                createdBySenderName: bySenderName)
+                createdBySenderName: bySenderName,
+                resumeNote: resumeNote?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty == false ? resumeNote : nil,
+                expectsResume: expectsResume,
+                permissionTool: permissionTool)
             rows.append(item)
             if let failure = saveLocked(crewId: crewId, rows: rows) {
                 onWriteFailure?(failure)
@@ -657,6 +664,25 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     var createdBySessionId: String? = nil
     /// 提问者的显示名（session label，如「机长」）。只用于渲染，唤醒不看它。
     var createdBySenderName: String? = nil
+    /// 提这条问题时，agent 自己写下的「答复回来后接着做什么」（驾驶舱计划 #75）。
+    /// 老文件没这字段 → nil。
+    var resumeNote: String? = nil
+    /// 这条是**半路上问的**吗（`ask` 提的恒为 true；`add_human_todo` 提的为 false）。
+    /// 决定 `resumeNote` 为空时要不要明说出来 —— 详见 `TodoLandingFlow.wakeText`。
+    ///
+    /// ⚠️ **必须是 optional，不能写成 `Bool = false`。** Swift 合成的 `Decodable`
+    /// **不使用属性默认值** —— 非可选字段缺键就是整条解码失败。写成 `Bool = false`
+    /// 的话，这次改动之前落盘的每一条 Todo 都会当场解不开（逐条 lenient 解码会把它们
+    /// 一条条丢掉，账**看起来是空的**）。既有的 `TodoLedgerIsolationTests` 当场抓到了。
+    /// nil = 老数据，按 `isMidFlowAsk` 的安全默认（false）处理。
+    var expectsResume: Bool? = nil
+    /// 这条是**权限放行请求**吗（#75 ②）：非 nil = agent 要跑这个工具、在等人放行。
+    /// hook 靠它去重（同一个工具已经挂着一条就别再提），app 侧靠它决定要不要写放行票。
+    var permissionTool: String? = nil
+
+    /// 「这条是不是半路上问的」的取值口径。老数据（nil）按 false —— 那条路只会
+    /// **少说一句提示**，不会误报，是安全的一侧。
+    var isMidFlowAsk: Bool { expectsResume ?? false }
 
     var isDeleted: Bool { deletedAt != nil }
 

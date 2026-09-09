@@ -26,14 +26,25 @@ final class McpPermissionHook {
     let gates: [String]
     /// 可选：raise 待审批时往本地群聊白板贴一条通知（spec §6 通知半边，v1 降级 reporter）。
     let board: LocalWhiteboardStore?
+    /// 人类 Todo（`.human` 那本）—— 权限请求现在提到这儿（#75 ②）。
+    let todos: LocalTodoStore?
+    /// 一次性放行票。人同意那条 Todo 之后由 app 侧写，这里读并当场作废。
+    ///
+    /// **必填，故意不给默认值。** 给一个 `PermissionGrantStore()` 的默认值就意味着
+    /// 漏传时静默落到**真实数据目录** —— 那正是 2026-09-08/09 连着栽两次的形状
+    /// （见 `McpServerTestDirectoryContractTests`）。这里让编译器替我们看住。
+    let grants: PermissionGrantStore
 
     init(approvals: LocalApprovalStore, crewId: String, sessionId: String = "",
-         gates: [String], board: LocalWhiteboardStore? = nil) {
+         gates: [String], board: LocalWhiteboardStore? = nil,
+         todos: LocalTodoStore? = nil, grants: PermissionGrantStore) {
         self.approvals = approvals
         self.crewId = crewId
         self.sessionId = sessionId
         self.gates = gates
         self.board = board
+        self.todos = todos
+        self.grants = grants
     }
 
     /// 处理一条 PreToolUse hook stdin JSON。
@@ -48,69 +59,58 @@ final class McpPermissionHook {
 
         guard gates.contains(where: { !$0.isEmpty && toolName.contains($0) }) else { return nil }
 
-        // 归档用**本地** sessionId（self.sessionId），不是 stdin 里 claude 的 session_id。
+        // 驾驶舱计划 #75 ②：**不再阻塞等人**。
+        //
+        // 旧路：raise 一条 `kind: "permission"` 待审批 → long-poll 最多一小时 → 到点判 deny。
+        // 那是人类反复问的「怎么又停了」的另一半。
+        //
+        // 新路：当场拒 + 提一条人类 Todo 说清「我要跑 X、为了 Y」，agent 去干别的，
+        // 人同意之后留下一张一次性票，它重跑时见票放行。
         let summary = permissionSummary(toolName: toolName, toolInput: obj["tool_input"])
-        guard let reqId = approvals.raise(
-            crewId: crewId, kind: "permission", sessionId: sessionId, summary: summary) else {
-            // 审批账本没落盘（读不出来 / 漏读，白板上有系统警示）。再去 long-poll
-            // 只会对着一条磁盘上不存在的待审批干等一小时。保守判 deny 让 turn 继续，
-            // 并把真正的原因说出来（#577）。措辞不说「已归档」—— 读不出来时原件
-            // 一字未动、不产生归档（2026-08-12）。
-            board?.appendSessionMessage(
-                crewId: crewId, sessionId: sessionId,
-                text: "待审批没能记进审批账本（文件这次读不出来或漏读，原有内容没被动过），已代为回绝："
-                    + "\(summary)\n审批列表这会儿不可用，修好后让它重试。",
-                category: "question",
-                mentions: [LocalWhiteboardMention(kind: "human", targetId: nil),
-                           LocalWhiteboardMention(kind: "captain", targetId: nil)])
+        let pending = todos?.list(crewId: crewId).contains {
+            !$0.isDeleted && $0.status != "completed" && $0.permissionTool == toolName
+        } ?? false
+        switch PermissionRequestFlow.decide(
+            hasGrant: grants.consume(crewId: crewId, tool: toolName),
+            hasPendingRequest: pending) {
+        case .allowConsumingGrant:
+            // 票已经在上面的 `consume` 里作废了 —— 一次同意 = 一次放行。
+            return hookOutput(decision: "allow", toolName: toolName)
+        case .denyWithoutFiling:
+            // **这一支是承重点**：同一个工具已经有一条挂着的请求，再提就是往人的账上
+            // 灌垃圾（agent 每重试一次加一条）。只拒，不写。
             return hookOutput(decision: "deny", toolName: toolName)
-        }
-        // 通知半边（spec §6）：贴到本地群聊白板 + **@ 到能处理的人**。审批只有人类能
-        // allow/deny，所以 @human 是主（人默认不进 session 详情，全靠群里这条 @ 才会注意到、
-        // 去详情里的审批卡处理）；@captain 兜底让机长知道有 session 卡在审批、可催人。
-        board?.appendSessionMessage(crewId: crewId, sessionId: sessionId,
-                                    text: "待审批：\(summary)\n（去该 session 详情的审批卡 allow / deny）",
-                                    category: "question",
-                                    mentions: [LocalWhiteboardMention(kind: "human", targetId: nil),
-                                               LocalWhiteboardMention(kind: "captain", targetId: nil)])
-        let decision = awaitDecision(reqId: reqId, pollInterval: pollInterval, maxWaits: maxWaits)
-        if decision == "timedOut" {
-            // 到点没人审 —— **说出来**（Todo #6）。此前这里是无限干等：没人审就永远
-            // 挂着，群里也没有第二句话，这个 session 就此静默死掉。现在保守判 deny
-            // 让 turn 继续（agent 拿到「被拒绝」自己决定绕路还是求助），并把这件事
-            // 亮到群里，别让「等到没人管」变成一次无人知晓的失踪。
-            board?.appendSessionMessage(
-                crewId: crewId, sessionId: sessionId,
-                text: "等了 \(Int(Double(Self.defaultMaxWaits) * pollInterval / 60)) 分钟没人审批，已代为回绝："
-                    + "\(summary)\n它会带着「被拒绝」继续跑，要放行就让它重试。",
-                category: "question",
-                mentions: [LocalWhiteboardMention(kind: "human", targetId: nil),
-                           LocalWhiteboardMention(kind: "captain", targetId: nil)])
-            return hookOutput(decision: "deny", toolName: toolName)
-        }
-        return hookOutput(decision: decision, toolName: toolName)
-    }
-
-    /// 不设 `maxWaits` 时的兜底上限（× `pollInterval` 0.5s = 1 小时）。
-    /// 「一直等人审」听着稳妥，实际是让 session 无限期静默挂死 —— 有个上限 +
-    /// 到点亮出来，比永远悬着诚实。
-    static let defaultMaxWaits = 7200
-
-    /// 阻塞 long-poll 直到 permission 待审批被 decide。
-    /// 返回 "allow" / "deny"，或到点未决的 "timedOut"（调用方负责亮出来 + 判 deny）。
-    /// `maxWaits` 单测可传 0 立即到点；生产不传则走 `defaultMaxWaits`。
-    func awaitDecision(reqId: String, pollInterval: TimeInterval = 0.5, maxWaits: Int? = nil) -> String {
-        let cap = maxWaits ?? Self.defaultMaxWaits
-        var waits = 0
-        while true {
-            if let it = approvals.item(crewId: crewId, id: reqId), it.status == "answered" {
-                return it.decision == "allow" ? "allow" : "deny"
+        case .denyAndFile:
+            guard let todos, let item = todos.add(
+                crewId: crewId, text: "我要跑 `\(toolName)`：\(summary)\n同意的话回复这条（回「可以 / 同意」即放行一次），不同意就说不行。",
+                bySessionId: sessionId, bySenderName: nil,
+                resumeNote: "人同意之后重跑 \(toolName)：\(summary)",
+                expectsResume: true,
+                permissionTool: toolName) else {
+                // 账本没落盘：如实说，并保守判 deny 让 turn 继续。
+                board?.appendSessionMessage(
+                    crewId: crewId, sessionId: sessionId,
+                    text: "要跑 `\(toolName)` 需要你放行，但这条没能记进人类 Todo"
+                        + "（账本这次读不出来或漏读，原有内容没被动过），已代为回绝：\(summary)",
+                    category: "question",
+                    mentions: [LocalWhiteboardMention(kind: "human", targetId: nil),
+                               LocalWhiteboardMention(kind: "captain", targetId: nil)])
+                return hookOutput(decision: "deny", toolName: toolName)
             }
-            if waits >= cap { return "timedOut" }
-            waits += 1
-            Thread.sleep(forTimeInterval: pollInterval)
+            board?.appendSessionMessage(
+                crewId: crewId, sessionId: sessionId,
+                text: "人类 To do +1: #\(item.number) 要跑 `\(toolName)` 需要你放行：\(summary)",
+                category: "question",
+                mentions: [LocalWhiteboardMention(kind: "human", targetId: nil),
+                           LocalWhiteboardMention(kind: "captain", targetId: nil)])
+            return hookOutput(decision: "deny", toolName: toolName)
         }
     }
+
+    // `awaitDecision` 与那条一小时 long-poll 已随 #75 ② 一起删掉。
+    // 它存在的意义是「阻塞到人来审」，而现在权限走 Todo、当场返回 —— 留着就是
+    // 一条永远没人调的等待路径，还会让下一个人以为这里仍然会等人。
+
 
     /// 待审批摘要：工具名 + 关键入参（command / url / path 之一，截断）。
     private func permissionSummary(toolName: String, toolInput: Any?) -> String {

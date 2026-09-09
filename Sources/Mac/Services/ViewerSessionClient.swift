@@ -83,12 +83,31 @@ final class ViewerSessionClient: ObservableObject {
         stopped = true
         heartbeat?.invalidate()
         heartbeat = nil
+        teardownLink()
+        raceStartedAt = nil
+        isConnected = false
+    }
+
+    /// **放掉这条链路的唯一出口**（Todo #138 ①）。
+    ///
+    /// 以前三条自发关闭路径（`stop()` / 赛跑判定子进程先退了 / 心跳判定对端没回应）
+    /// 各写各的 `link?.close(); link = nil; client = nil`，**谁都没通知过底下那批
+    /// 后端**：它们的连接句柄和能力表原样留着最后一次成功的值。改 weak 之后不再崩，
+    /// 但开始骗人 —— 「读屏」「投唤醒」这类先看能力表的调用会以为通道还在。
+    ///
+    /// 病根不在这三处各自写错，而在 `SessionMessageLink.close()` 按约定不触发
+    /// `onClose`（这条约定是对的：重连策略不该被自己的 detach 触发），而 `onClose`
+    /// 后面同时挂着**状态清理**和**重连策略**两件事。`SessionProtocolClient.close()`
+    /// 把它们拆开了，这里只要走那一个口子。
+    ///
+    /// **这个方法是唯一允许出现 `client = nil` 的地方**，`ViewWiringTests` 里那条
+    /// 断言盯着这一点 —— 多一处就是多一条会漏掉状态清理的路。
+    private func teardownLink() {
+        client?.close()
         link?.close()
         link = nil
         client = nil
         linkState = .none
-        raceStartedAt = nil
-        isConnected = false
     }
 
     // MARK: -
@@ -152,7 +171,7 @@ final class ViewerSessionClient: ObservableObject {
             if case .exitedBeforeHandshake = outcome {
                 // 它没了，那条 socket 也就没意义了 —— 下一轮重开。
                 lastSpawnedChild = nil
-                closeLink()
+                teardownLink()
             }
             applyFallback(
                 spawn: OrchestrationFallback.spawn(
@@ -196,13 +215,6 @@ final class ViewerSessionClient: ObservableObject {
         }
     }
 
-    private func closeLink() {
-        link?.close()
-        link = nil
-        client = nil
-        linkState = .none
-    }
-
     /// 真握上手之后才做的那些事。
     private func finishConnected() {
         isConnected = true
@@ -243,9 +255,7 @@ final class ViewerSessionClient: ObservableObject {
         isConnected = false
         heartbeat?.invalidate()
         heartbeat = nil
-        link = nil
-        client = nil
-        linkState = .none
+        teardownLink()
         runner.viewerLinkClosed()
         scheduleReconnect()
     }
@@ -274,8 +284,7 @@ final class ViewerSessionClient: ObservableObject {
                 guard let self, let client = self.client else { return }
                 if Date().timeIntervalSince(client.lastPongAt) > SessionReconnectPolicy.pongTimeout {
                     self.lastError = "后台进程 \(Int(SessionReconnectPolicy.pongTimeout)) 秒没有回应，正在重连。"
-                    self.link?.close()
-                    self.linkClosed()
+                    self.linkClosed()   // teardownLink() 会关 link
                     return
                 }
                 client.ping()

@@ -214,6 +214,7 @@ final class McpServer {
                                 "description": "可选：随这条消息一起发到群里的图片/文件，填**本机绝对路径**（`~` 可用）。图片在群聊气泡里直接显示，其它类型显示成文件条。收到的人（包括别的 session）拿到的是可以直接 Read 的绝对路径 —— 所以截图、生成的图表、报告文件都可以这样递过去，不用把路径写在正文里让人自己拼。\n\n**你的原文件不会被搬走**，收进群聊的是一份副本（存在 app 数据目录，随聊天记录长期保留，worktree 清掉也还在）。\n\n收不下的会**逐条**在回执里说明原因（文件不存在 / 是文件夹 / 超过大小上限），不会静默丢；带了附件时正文可以为空（只发图）。",
                                 "items": ["type": "string"],
                             ],
+                            "crew_status": ["type": "string", "description": "（机长专用）一句话说清**整个机组**现在什么情况 —— 它直接显示在侧栏这个机组那一行，替掉原来那条「最新消息」。\n**和消息同一次动作产生**，所以它永远不会比最新消息更旧；不填就沿用上一次填的（侧栏会把那句话的年龄一起摆出来）。\n侧栏那行大概露得出 40 字，超了照写、回执提醒一句；**超过 200 字拒收**（那不是一句状态，是一篇报告——报告发正文）。\n整批发多条时这是**一次一个**的顶层参数，不是每条一个。"],
                             "reply_to": [
                                 "type": "string",
                                 "description": "可选：你在回复哪条群聊消息的 id —— 给了会自动 @ 那条的原发送者。**这个自动 @ 不收窄可见范围**：落盘的形状是 `[{kind:\"broadcast\"},{被回复者}]` —— 全组照样看得见全文，只是把被回复的那个现在叫醒。你自己在 mentions 里手打了定向 @（session/captain）时按你选的排他来，不替你放宽。",
@@ -271,10 +272,15 @@ final class McpServer {
                 ],
                 [
                     "name": "ask",
-                    "description": "向负责人提问并拿到答复（先 captain，再人类）。任何需要人 / captain 判断、决策、方向选择、澄清、授权的，都走这个 —— 不要在纯文本里问。会阻塞直到有人答。",
+                    "description": "向人类提一个需要拍板的问题。任何需要人判断、决策、方向选择、澄清、授权的，都走这个 —— 不要在纯文本里问。\n\n**它不阻塞。** 问题会记进人类 Todo（「人类的」那本，人翻得到、不回应不会消失），群里同时 @ 到人。你**立刻拿到回执，然后去干别的或者收工** —— 人回应时系统会直接叫醒你（你已经退出的话转给机长转达）。\n\n**`resume_note` 很重要**：写下「答复回来后我要接着做什么」。不阻塞意味着你会去干别的，被叫醒时如果不知道从哪儿接，这件事就等于丢了 —— 那比停在这儿等还糟。半路上问的问题**一定要写**。",
                     "inputSchema": [
                         "type": "object",
-                        "properties": ["question": ["type": "string"]],
+                        "properties": [
+                            "question": ["type": "string", "description": "要人拍板的那件事。把选项和你的倾向写出来——「A / B，我倾向 A，因为 …」比「这个怎么办？」好拍十倍。"],
+                            "resume_note": ["type": "string", "description": "答复回来后你要接着做什么（你正做到哪一步、接下来那一步是什么）。会在人回应时**原样**念回给你。"],
+                            "fallback_after_minutes": ["type": "number", "description": "可选：等这么多分钟还没人答，就把你叫醒按 `fallback` 说的办。**有时限的决定才填** —— 不填就是一直等人。"],
+                            "fallback": ["type": "string", "description": "到点没人答时你打算怎么办（「就按 A 做」）。跟 fallback_after_minutes 一起给才有意义。"],
+                        ],
                         "required": ["question"],
                     ],
                 ],
@@ -392,18 +398,6 @@ final class McpServer {
                 ],
             ]
             if isCaptain {
-                tools.append([
-                    "name": "answer_decision",
-                    "description": "（机长专用）答复一条待决策：用你的判断给出答复，answering 会立刻解开发起 session 的等待。",
-                    "inputSchema": [
-                        "type": "object",
-                        "properties": [
-                            "reqId": ["type": "string"],
-                            "reply": ["type": "string"],
-                        ],
-                        "required": ["reqId", "reply"],
-                    ],
-                ])
                 // 机长作战板（人类 Todo #66）—— 与两本 Todo 的关系：Todo 是**别人给的**
                 // （`.agent` 人类派活 / `.human` 请人拍板），这一本是**机长自己排的**。
                 // 派活 / 收活 / 翻牌这三个动作发生时顺手更一条，是这块板唯一的活法。
@@ -832,76 +826,101 @@ final class McpServer {
                 text: "找到 \(rendered.count) 条（最新优先；时间边界包含；附件仅 filename/MIME）：\n\n"
                     + rendered.joined(separator: "\n\n"))
         case "ask":
+            // 驾驶舱计划 #75 ①：**`ask` 不再阻塞。**
+            //
+            // 旧实现：raise 一条 `kind: "decision"` 待决策 → `awaitReply` 每 0.5s 轮询、
+            // 最多 3600 次 = **正好 30 分钟**，人不在就真的停在那儿。那就是人类反复问的
+            // 「怎么又停了」的一个主要来源。
+            //
+            // 新实现：问题**进人类 Todo 那本账**（2026-08-25 才有的账；待审批那套的 spec
+            // 是 2026-06-08 —— 它诞生时「agent 请人类拍板」无处可去，所以自造了一套，
+            // 账出来之后没人回头拆），立刻返回，agent 接着干别的。人回应时由
+            // `HumanTodoWakePlan` 叫醒提问者（退出了回落机长转达），**不静默丢**。
+            //
+            // 承重点在 `resume_note`：不阻塞之后多了一个新风险，而且**比原来更糟** ——
+            // 提完问题去干别的，就再也不回来做那件事了。所以提问时把「答复回来后接着
+            // 做什么」一起记下，人回应时原样念回去（`TodoLandingFlow.wakeText`）。
             let question = (args["question"] as? String) ?? ""
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return toolResult(id: id, text: "ERROR: question 不能为空")
             }
-            // 直达人类退化路径（captain-first triage 等 chunk 2）：raise 一条待决策 →
-            // 阻塞 long-poll 人类/captain 答复（spec ask-approval §3/§5）。
-            guard let reqId = approvals.raise(
-                crewId: crewId, kind: "decision", sessionId: sessionId, summary: question) else {
-                // 待决策没落盘（读不出来 / 漏读，白板上有系统警示）：再 long-poll
-                // 就是对着不存在的条目干等 30 分钟。如实说没提上去（#577）。
-                // 措辞不说「已归档」—— 读不出来时原件一字未动、不产生归档（2026-08-12）。
+            let askResume = (args["resume_note"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // 旧实现里那条 30 分钟超时（`awaitReply` 到点写一句「自行判断后继续」）
+            // 的**存在理由**是「把卡住的 agent 解开」—— 而现在它根本不阻塞，那个理由
+            // 消失了。剩下的真需求只有一半：**有些决定有时限**。所以不重建一个全局
+            // 定时器，改成让 agent 自己事先说好「等到 X 分钟就按 Y 办」，到点由现成的
+            // `LocalWakeupStore` 叫醒它并把 Y 念回去。比原来强：原来是系统替它编一句
+            // 「自行判断」，现在是它自己定的。
+            let askFallback = (args["fallback"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let askFallbackMinutes: Double?
+            switch SupervisionLease.parseMinutes(args["fallback_after_minutes"]) {
+            case .none: askFallbackMinutes = nil
+            case let .minutes(m): askFallbackMinutes = m
+            case let .refused(why): return toolResult(id: id, text: "ERROR: " + why)
+            }
+            var askWriteFailure: Error?
+            guard let askItem = humanTodos.add(
+                crewId: crewId, text: question,
+                bySessionId: sessionId, bySenderName: sessionLabel,
+                resumeNote: (askResume?.isEmpty == false) ? askResume : nil,
+                expectsResume: true,
+                onWriteFailure: { askWriteFailure = $0 }) else {
+                // 没落盘（读不出来 / 漏读 / 落盘失败，白板上有系统警示）。如实说没提上去
+                // —— 绝不返回一个根本不存在的 #N 让调用方拿去对外宣布。
                 return toolResult(id: id, text: WriteReceipt.notWritten(
-                    what: "这个问题", consequence:
-                        "（待决策列表这次读不出来 / 漏读 / 落不了盘，原有内容没被动过，"
+                    what: "这个问题", error: askWriteFailure, consequence:
+                        "（人类 Todo 这本账这次读不出来 / 漏读 / 落不了盘，原有内容没被动过，"
                         + "群聊白板上有系统警示）。**没有人会看到你在问什么** —— "
                         + "改用 post_to_crew 在群里直接问，或稍后重试。"))
             }
-            // 通知半边（spec §6「PendingCrew 只做通知+列表+答复」）：把问题贴到本地群聊白板，
-            // 并 **@ 到能处理的人** —— 决策 captain-first，@captain 让机长优先看到来答；同时
-            // @human 兜底（人默认不进 session 详情，全靠群里这条 @ 才会注意到、去待办列表答）。
-            // captain 自己发起 ask 时不 @ 自己（去重），只 @human。答复仍走待办列表（approvals）。
+            // 通知半边：群里贴一条并 @ 到能处理的人。机长自己问时不 @ 自己。
             let askMentions: [LocalWhiteboardMention] = isCaptain
                 ? [LocalWhiteboardMention(kind: "human", targetId: nil)]
                 : [LocalWhiteboardMention(kind: "human", targetId: nil),
                    LocalWhiteboardMention(kind: "captain", targetId: nil)]
-            // 通知半边写不进去就别傻等（#577）：白板上没有这条 @，没人知道你在问，
-            // long-poll 会一直挂着。如实说明并让调用方自己决定怎么办 —— 待决策已经
-            // 进了待办列表，人类仍可在那里答复。
+            var askReceipt = """
+            已记进人类 Todo #\(askItem.number)（「人类的」那本），群里也 @ 了。
+            **现在去干别的，别停在这儿等** —— 人回应时会直接叫醒你\
+            （你已经退出的话转给机长转达），并把你写下的接续说明念回给你。
+            """
+            if let minutes = askFallbackMinutes {
+                let fires = Date().addingTimeInterval(minutes * 60)
+                let note = "人类 Todo #\(askItem.number) 到点仍未答复。你当时说过：\(askFallback?.isEmpty == false ? askFallback! : "（没写到点怎么办 —— 自己判断）")"
+                if wakeups.register(LocalWakeupStore.PendingWakeup(
+                    id: "ask-fallback:\(crewId):\(askItem.number)", crewId: crewId,
+                    sessionId: sessionId, fireAt: ISO8601DateFormatter().string(from: fires),
+                    note: note), onIncident: { _ in }) {
+                    askReceipt += "\n到点（\(Int(minutes)) 分钟后）没人答的话会叫醒你，并把你说的办法念回来。"
+                }
+            }
+            if askResume?.isEmpty != false {
+                askReceipt += "\n⚠️ 你没写 resume_note。被叫醒时你可能不知道从哪儿接 —— "
+                    + "下次问的时候把「答复回来后接着做什么」一起写上。"
+            }
             do {
                 let incident = try store.appendSessionMessageReportingFailure(
                     crewId: crewId, sessionId: sessionId,
-                    text: "待决策：\(question)\n（去待办列表答复）",
+                    text: "人类 To do +1: #\(askItem.number) \(question)",
                     category: "question", senderName: sessionLabel,
                     mentions: askMentions,
                     senderKind: isCaptain ? "captain" : "session")
-                let reply = awaitReply(reqId: reqId)
-                guard let incident else { return toolResult(id: id, text: reply) }
-                return toolResult(id: id, text: "⚠️ \(incident)\n\n\(reply)")
+                guard let incident else { return toolResult(id: id, text: askReceipt) }
+                return toolResult(id: id, text: "⚠️ \(incident)\n\n\(askReceipt)")
             } catch {
-                return toolResult(id: id, text: WriteReceipt.notWritten(
-                    what: "群里那条「待决策」", error: error, consequence:
-                        "没人会在群里看到你在问什么，这次 ask 不再等待。"
-                        + "待决策 \(reqId) 已经进了人类的待办列表，可提醒人去那里答复。"))
+                return toolResult(
+                    id: id,
+                    text: "⚠️ 群里那条" + WriteReceipt.notWrittenMarker
+                        + "（\(error.localizedDescription)），"
+                        + "群里没人会看到你在问什么 —— 账已经落上了，需要的话自己去群里补一句。"
+                        + "\n\n\(askReceipt)")
             }
-        case "answer_decision":
-            // 机长专用（chunk2 T4）：答复一条 decision，解开发起 session 的 long-poll。
-            guard isCaptain else {
-                return toolResult(id: id, text: "ERROR: 仅机长可用")
-            }
-            let reqId = (args["reqId"] as? String) ?? ""
-            let reply = (args["reply"] as? String) ?? ""
-            guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return toolResult(id: id, text: "ERROR: reply 不能为空")
-            }
-            guard let item = approvals.item(crewId: crewId, id: reqId) else {
-                return toolResult(id: id, text: "ERROR: 找不到待决策 \(reqId)")
-            }
-            guard item.kind == "decision" else {
-                return toolResult(id: id, text: "ERROR: 该条不是待决策（权限审批请人类处理）")
-            }
-            guard item.status == "pending" else {
-                return toolResult(id: id, text: "ERROR: 该条已被答复")
-            }
-            if let failure = approvals.answer(crewId: crewId, id: reqId, reply: reply) {
-                return toolResult(id: id, text: WriteReceipt.notWritten(
-                    what: "这条答复", error: failure, consequence:
-                        "**发起的 session 还在等** —— 它 long-poll 的是磁盘上那条待决策，"
-                        + "而那条没被改动。稍后重试，或直接在群里 @ 它把答案说一遍。"))
-            }
-            return toolResult(id: id, text: "已答复，发起的 session 将继续。")
+        // `answer_decision` 已随决策类一起拆掉（驾驶舱计划 #75 ①）。
+        // 它的全部作用是让机长答一条 `kind: "decision"` 待决策、解开发起方的
+        // long-poll —— 而 `ask` 不再产生待决策、也不再 long-poll，留着它就是一个
+        // **永远找不到目标**的工具，还会在机长的世界观里继续教它去用。
+        // 决策现在走人类 Todo：机长要拍板就直接 respond_todo 回那条。
         case "rename_crew":
             // 机长专用（crew-naming）：写一条待改名进控制通道；app 侧 CrewStore
             // 排空落地到 LocalCrewStore.setTitle 并刷新侧栏。不限长度 —— 标签思想
@@ -1863,7 +1882,29 @@ final class McpServer {
             // 驾驶舱那四类（plan/progress/blocked/done）走 `landOnCockpit`，
             // 写入口复用 `CockpitPlanStore.add/update`（不另开一个）。谁写得动由
             // `CrewCockpitWritePermission` 判：**报进度的人 ≠ 决定条目存不存在的人**。
+            // #136：这次发言顺手报一句**整组**的状态（侧栏那一行读它）。
+            // 拒了就一个字都不发 —— 半截状态（消息发了、状态没落）会让侧栏显示
+            // 一句过期的话，而看的人以为那是刚报的。
+            var crewStatus: String?
+            var statusHint: String?
+            switch CrewStatusIntake.decide(args["crew_status"], isCaptain: isCaptain) {
+            case .none:
+                break
+            case let .refused(why):
+                return (false, "ERROR: " + why)
+            case let .accepted(value, hint):
+                crewStatus = value
+                statusHint = hint
+            }
             var ledgerReceipts: [String] = []
+            // #132/#133：这条消息**指向**了什么。每一项都来自结构化字段或落账刚拿到
+            // 的号 —— 正文一个字都不参与（见 `CrewMessageReference`）。
+            var refs = CrewMessageReferences.Input(
+                planNumber: CrewCockpitLanding.number(args["plan"]),
+                inReplyTo: replyTo,
+                mentionedSessionIds: (mentions ?? []).compactMap {
+                    $0.kind == "session" ? $0.targetId : nil
+                })
             // (D)：谁写得动驾驶舱那本账。**拒了就一个字都不发** —— 跟落账失败同一条
             // 纪律：消息发出去了、账没落上，比现在还糟。
             if let why = cockpitPermissionRefusal(args: args) {
@@ -1882,14 +1923,18 @@ final class McpServer {
                         + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
                         + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
                 }
+                refs.humanTodoNumber = added.number
                 ledgerReceipts.append("已建 人类 Todo #\(added.number)（人在面板里点得进去、撤得掉）")
             case let .skipped(hint):
                 // 不落账，但**回执里说清楚它没落**——静默跳过就是这一单要治的病本身。
                 ledgerReceipts.append("⚠️ " + hint)
             case let .land(cockpit) where cockpit.ledger == .cockpit:
                 switch landOnCockpit(category: cockpit, args: args, message: message) {
-                case let .refused(why): return (false, why)
-                case let .landed(receipt): ledgerReceipts.append(receipt)
+                case let .refused(why):
+                    return (false, why)
+                case let .landed(planNumber, receipt):
+                    refs.planNumber = planNumber
+                    ledgerReceipts.append(receipt)
                 }
             case .land, .noLedger:
                 break
@@ -1924,6 +1969,7 @@ final class McpServer {
                         + "（这本账上没有这条，或者这次读不出来 / 落不了盘）。"
                         + "**这条消息也没有发出去。**")
                 }
+                refs.agentTodoNumber = updated.number
                 ledgerReceipts.append("已把 Todo #\(updated.number) 翻成 \(status)")
             }
             // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
@@ -1938,7 +1984,9 @@ final class McpServer {
                     senderName: sessionLabel,
                     mentions: mentions, inReplyTo: replyTo,
                     senderKind: isCaptain ? "captain" : "session",
-                    attachments: intake.accepted)
+                    attachments: intake.accepted,
+                    references: CrewMessageReferences.build(refs),
+                    crewStatus: crewStatus)
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
                 // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
                 // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
@@ -1947,7 +1995,8 @@ final class McpServer {
                     attachmentCount: intake.accepted.count,
                     attachmentErrors: intake.errors)
                 // 落账结果必须进回执：**「落账可撤」的前提是先让人知道它落了哪一条。**
-                return (true, ([base] + ledgerReceipts).joined(separator: "\n"))
+                return (true, ([base] + ledgerReceipts + [statusHint].compactMap { $0 })
+                    .joined(separator: "\n"))
             } catch {
                 return (false, Self.writeFailureReceipt(error))
             }
@@ -2023,7 +2072,11 @@ final class McpServer {
                 crewId: target.crewId, sessionId: sessionId, text: message,
                 category: "contact", senderName: signature,
                 mentions: mentions, senderKind: "session",
-                externalContactFrom: myNumber?.text ?? sourceTitle)
+                externalContactFrom: myNumber?.text ?? sourceTitle,
+                // #132：外线来电挂一颗指回**来电方**的机组胶囊 —— 收到的人点它就能
+                // 找回是谁打的。号码是这一刻算出来的，不是从署名那行文本里抠的。
+                references: CrewMessageReferences.build(
+                    .init(crewNumber: myNumber?.text)))
         } catch {
             return toolResult(id: id, text: WriteReceipt.notWritten(
                 what: "发给 \(number.text) 的这条消息", error: error,
@@ -2038,7 +2091,10 @@ final class McpServer {
                 crewId: crewId, sessionId: sessionId,
                 text: "已联系 \(number.text)（\(target.displayName)）：\(snippet)",
                 category: "progress", senderName: sessionLabel,
-                senderKind: isCaptain ? "captain" : "session")
+                senderKind: isCaptain ? "captain" : "session",
+                // #132：这行回执挂一颗指向**目标机组**的胶囊。`number` 是 `contact`
+                // 解析出来的号码对象，不是从这句话里认出来的。
+                references: CrewMessageReferences.build(.init(crewNumber: number.text)))
         } catch {
             receiptIncident = "本群那行「已联系」回执" + WriteReceipt.notWrittenMarker
                 + "（\(error.localizedDescription)）——"
@@ -2315,7 +2371,10 @@ final class McpServer {
     /// `landOnCockpit` 的结局。**不用 `Result`**：失败侧是一句给 agent 看的话，
     /// 不是 `Error`。
     enum CockpitLandingOutcome: Equatable {
-        case landed(String)
+        /// 落成了：动的是**哪一条**计划，以及给调用方的那句回执。
+        /// 号码要带出来 —— 它同时是这条消息的引用（#132），
+        /// 而引用**只能从这种结构化的地方来**，不能事后从回执文本里正则抠。
+        case landed(planNumber: Int, receipt: String)
         case refused(String)
     }
 
@@ -2349,7 +2408,8 @@ final class McpServer {
                     + " —— 任务列表这次读不出来或落不了盘"
                     + "（群聊白板上有一条系统警示说明是哪种事故）。" + unsent)
             }
-            return .landed("已排上 计划 #\(planned.number)：\(planned.title)（没做）"
+            return .landed(planNumber: planned.number,
+                receipt: "已排上 计划 #\(planned.number)：\(planned.title)（没做）"
                 + " —— 标题是从这条消息第一行取的，不对就 `plan_update` 改。")
         }
         guard let number = CrewCockpitLanding.number(args["plan"]), number >= 1 else {
@@ -2398,7 +2458,8 @@ final class McpServer {
             return .refused("ERROR: 计划 #\(number) 没更新成 —— " + failure.summary + unsent)
         case let .success(item):
             let state = CockpitPlan.status(item.status)?.title ?? item.status
-            return .landed("已往 计划 #\(item.number)「\(item.title)」追加一条进展（现在是「\(state)」）")
+            return .landed(planNumber: item.number,
+                receipt: "已往 计划 #\(item.number)「\(item.title)」追加一条进展（现在是「\(state)」）")
         }
     }
 
