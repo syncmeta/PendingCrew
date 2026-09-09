@@ -61,6 +61,20 @@ targets:
       testTargets:
         - PendingCrewTests
       gatherCoverageData: false
+      # 进程级数据隔离（2026-09-09）：整趟测试的**数据根**挪出人的
+      # `~/Library/Application Support/PendingCrew`，让测试进程根本够不着它。
+      #
+      # ⚠️ **必须放在 scheme 里，shell 里 export 是没用的** —— 实测：
+      # `PENDINGCREW_DATA_DIR=... xcodebuild test` 那条断言照样红，xcodebuild
+      # 不把任意 shell 环境变量转给 xctest 进程；`TEST_RUNNER_` 前缀也不行
+      # （那是给有 test host 的 runner 的，这个 bundle 是 standalone）。
+      # 生成的 scheme 里 TestAction 带 `shouldUseLaunchSchemeArgsEnv = YES`，
+      # 所以 launch action 的环境变量会被测试继承 —— 这是唯一到得了的那条路。
+      #
+      # 这样连**在 Xcode 里点运行**也是隔离的，不只是脚本入口。
+      # `TestProcessDataRootIsolationTests` 断言它真的生效了。
+      environmentVariables:
+        PENDINGCREW_DATA_DIR: $(SRCROOT)/.test-data-root
     # 版本戳地基(Shared/)：把「这个产物从哪个 commit 出的」写进产物
     # Info.plist。跑在 code signing 之前，所以不会让签名失效。
     # basedOnDependencyAnalysis: false —— 没有输入/输出文件可声明，必须每次

@@ -25,7 +25,20 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
 
     // MARK: - 真白板
 
-    private static let whiteboardDir = LocalWhiteboardStore.defaultDirectory
+    /// **真白板的路径，显式算，不走 `LocalWhiteboardStore.defaultDirectory`。**
+    ///
+    /// 2026-09-09 起整趟测试的数据根被 `PENDINGCREW_DATA_DIR` 挪到了隔离目录
+    /// （见 `TestProcessDataRootIsolationTests`），默认目录因此指向一个空壳。
+    /// 而这三条测试**的全部意义就是读人类真实的那份数据** —— 跟着默认目录走的话，
+    /// 它们会从「拿真数据验」**静默退化成每趟都 skip**，而报告上跟「这台机器没数据」
+    /// 长得一模一样。
+    ///
+    /// 所以这里独立算真路径。**只读**：这三条一个字节都不往里写。
+    private static let whiteboardDir: URL = (
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory)
+        .appendingPathComponent("PendingCrew", isDirectory: true)
+        .appendingPathComponent("whiteboards", isDirectory: true)
 
     private static let missingHint = """
 
@@ -50,8 +63,24 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
             // 旁挂账本（approvals / todos / awareness …）不是白板，跳过。
             let name = url.deletingPathExtension().lastPathComponent
             guard !name.contains(".") else { continue }
-            guard let data = try? Data(contentsOf: url),
-                  let rows = (try? JSONSerialization.jsonObject(with: data)) as? [Any]
+            // **读失败不许当成「没数据」。** 2026-09-09 现场：本机数据目录出了一次
+            // EPERM，这里的 `try?` 把它吞成空 → 三条一起 skip、**而且 skip 没有原因**，
+            // 整套照报 `0 failures`。「一个没有原因的 skip」和「一条本来就该跳过的
+            // 测试」在报告上长得一模一样 —— 那正是这次要治的东西。
+            //
+            // 现在分三种：读不出来 → **说出是哪个文件、什么错**再 skip（不是 pass，
+            // 也不是无声）；不是数组 → 跳过这个文件（旁挂账本形状不同，正常）；
+            // 正常 → 照旧逐条 lenient 解。
+            let data: Data
+            do { data = try Data(contentsOf: url) } catch {
+                throw XCTSkip("""
+                    ✗ 真白板读不出来，**这不是「本机没有数据」**：
+                      \(url.lastPathComponent) — \(error.localizedDescription)
+
+                      这三条因此没有跑。修好再来，别把这次 skip 当成通过。
+                    """)
+            }
+            guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [Any]
             else { continue }
             // 逐条 lenient —— 与 LocalWhiteboardStore.list 同口径：一行坏掉不该让
             // 整个文件消失（而且这里是别人正在写的活文件，撞上半截很正常）。

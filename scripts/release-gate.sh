@@ -72,6 +72,28 @@ before_head=$(git -C "$WT" rev-parse HEAD)
 # 为什么非要盖住它：那份 fixture 决定 CrewChatOpenCost 那 8 条跑还是 skip —— 尺子瞎的地方
 # 恰好是它唯一被指望看清的地方。（`cp -R` 必须在取基线之前，否则前后两次不相等。）
 before_diff=$(git -C "$WT" status --porcelain --ignored | shasum | cut -c1-12)
+# ── 进程级数据隔离（2026-09-09）────────────────────────────────────────────
+# 整趟测试的**数据根**挪出人的 `~/Library/Application Support/PendingCrew`，
+# 让测试进程根本够不着它。
+#
+# **隔离本身不在这个脚本里**，在 `project.yml` 的 scheme 环境变量
+# （`PENDINGCREW_DATA_DIR: $(SRCROOT)/.test-data-root`）。
+#
+# ⚠️ **别把它挪回脚本里 export，那样是无效的** —— 实测过：
+#   `PENDINGCREW_DATA_DIR=/tmp/x xcodebuild test ...`  → 隔离断言照样红
+#   `TEST_RUNNER_PENDINGCREW_DATA_DIR=/tmp/x ...`      → 同样红
+# xcodebuild 不把任意 shell 环境变量转给 xctest 进程（这个 bundle 是 standalone、
+# 没有 test host，`TEST_RUNNER_` 那条是给有 host 的 runner 的）。能到达它的只有
+# scheme：生成的 TestAction 带 `shouldUseLaunchSchemeArgsEnv = YES`。
+#
+# 好处是连**在 Xcode 里点运行**也隔离，不只是这个入口。
+# `TestProcessDataRootIsolationTests` 会断言它真的生效 —— 没生效就红。
+#
+# 这跟「测试里别忘了给 store 注入 temp dir」那把尺子是两层：
+# 那层是**别写错**，这层是**就算写错了也伤不到**。
+rm -rf "$WT/.test-data-root"
+# ─────────────────────────────────────────────────────────────────────────
+
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' test      > "$LOG"/t-mac.log 2>&1 || true
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' build     > "$LOG"/b-mac.log 2>&1 || true
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'generic/platform=iOS Simulator' build > "$LOG"/b-ios.log 2>&1 || true
