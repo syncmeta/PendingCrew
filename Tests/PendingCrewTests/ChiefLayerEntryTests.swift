@@ -137,21 +137,43 @@ final class ChiefLayerEntryTests: XCTestCase {
     /// **不占号**。号码是通讯录里「第 7 号机组」那个 7，而且**终身不变、永不
     /// 回收** —— 让内建那一层占掉 1 号，全新一台机器上人建的第一个机组就永远
     /// 是 2 号了。这条是造它那一步（`init` 里）最容易带出来的暗伤。
+    ///
+    /// ⚠️ **这条必须重开一次 store 才测得到**。发号在 `backfillNumbers` 里，
+    /// 而它跑在 `loadFromDisk` 那一步 —— **早于**同一个 `init` 里造总机组那一句。
+    /// 所以第一个实例上它压根走不到那条记录：只在下一次打开时才轮到它。
+    /// 第一版这条测试没重开，于是「把 builtin 跳过那句删掉」一刀下去照样全绿。
     func testTheChiefLayerDoesNotConsumeADirectoryNumber() {
-        let s = store()
-        let first = makeCrew(s, "第一个机组")
-        XCTAssertNil(s.crewNumber(of: LocalCrew.chiefCrewId),
+        let base: URL
+        do {
+            let s = store()
+            base = baseDir
+            _ = makeCrew(s, "第一个机组")
+        }
+        // 重开：这一次 `backfillNumbers` 才看得见总机组那条记录。
+        let reopened = LocalCrewStore(baseDirectory: base)
+        XCTAssertNil(reopened.crewNumber(of: LocalCrew.chiefCrewId),
                      "它不是一个机组，不该占号")
-        XCTAssertEqual(s.crewNumber(of: first), 1,
-                       "人建的第一个机组仍然是 1 号 —— 内建那一层不许把它挤到 2")
+        let fresh = reopened.createCrew(CreateCrewRequest(
+            responsibleSubjectId: "local", title: "第二个机组", machineId: nil,
+            workingDirectory: nil, captainAgentKind: "claude_code",
+            initialTitleSource: .human,
+            captain: .systemGenerated(templateName: nil))).crewId
+        XCTAssertEqual(reopened.crewNumber(of: fresh), 2,
+                       "第二个机组就该是 2 号 —— 内建那一层不许在中间吃掉一个号")
     }
 
     /// 不占号的**下游**：它因此也不出现在通讯录里（`CrewDirectory` 收的正是
     /// 有号的那批）。这条把「不占号」和「看得见的后果」钉在一起。
     func testTheChiefLayerIsNotListedInTheDirectory() {
-        let s = store()
-        _ = makeCrew(s, "第一个机组")
-        XCTAssertFalse(s.directory().render().contains("总机组"),
+        let base: URL
+        do {
+            let s = store()
+            base = baseDir
+            _ = makeCrew(s, "第一个机组")
+        }
+        // 同上：重开之后才是「它有没有被发到号」真正落定的那一刻。
+        let reopened = LocalCrewStore(baseDirectory: base)
+        XCTAssertFalse(reopened.directory().render().contains("总机组"),
                        "通讯录列的是机组，不该出现内建那一层")
     }
 
