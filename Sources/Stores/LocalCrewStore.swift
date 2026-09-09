@@ -76,7 +76,23 @@ final class LocalCrewStore {
     // MARK: - Public API
 
     /// 全量 crew 列表(顺序按 createdAt DESC,跟 edge 端一致)。
-    func listCrews() -> [CrewSummary] {
+    /// 全量 crew 列表。
+    ///
+    /// ## 「全机有几个 crew」这个数**不含总机组**（口径写在这儿，只此一份）
+    /// 总机组是产品内建的**一层**，不是一个工作机组：它不该出现在 crew 列表、
+    /// 不该被算进「全机 N 个 crew」、也不该出现在组织树里。所以默认排除。
+    /// 要它的地方（总机组自己那块界面）显式传 `includingBuiltin: true`。
+    ///
+    /// **两种口径都行，但只能有一种是默认的** —— 否则同一个问题会有两个答案，
+    /// 而且两边都不报错。顺带：一次性普查脚本也该走名册；真要按目录扫，
+    /// 把「名册外命中了几个、分别是什么」打出来，别让差异静默。
+    func listCrews(includingBuiltin: Bool = false) -> [CrewSummary] {
+        let all = listCrewsIncludingBuiltin()
+        guard !includingBuiltin else { return all }
+        return all.filter { crews[$0.id]?.builtin != true }
+    }
+
+    private func listCrewsIncludingBuiltin() -> [CrewSummary] {
         crews.values
             .sorted { $0.createdAt > $1.createdAt }
             .map(\.summary)
@@ -319,6 +335,9 @@ final class LocalCrewStore {
     /// children 由「谁的 parentCrewIds 含本 crew」反推,所以"后代"判定走
     /// `descendants(of:)`。自挂自(crewId == parentCrewId)也算环,拒绝。
     func attachParent(crewId: String, parentCrewId: String) throws {
+        // 拒绝点 3/4。`adopt` 已经拦过一道，这里再拦是因为**它是那条原语** ——
+        // 将来多一个调用方，不该指望那个调用方记得也拦一次。
+        try refuseBuiltin(crewId, parentCrewId)
         try mutatingCrews {
         guard crewId != parentCrewId else {
             throw LocalCrewStoreError.wouldCreateCycle
@@ -439,6 +458,17 @@ final class LocalCrewStore {
     /// 否则汇报线/注入会无限递归。层数不限 —— PendingCrew 就是给大规模 agent
     /// 组织用的，组织树想多深就多深。
     func adopt(crewId: String, underParent parentId: String) throws {
+        // 拒绝点 1/4：内建那一层既不能被收编，也不能收编别人。
+        //
+        // ⚠️ **这一处是冗余的，而且没有任何测试能单独证明它。**实测过：只把这一行
+        // 拆掉，两条 adopt 测试**照样绿** —— 因为 `adopt` 末尾会调 `attachParent`，
+        // 那里的同一道 guard 在下游把它接住了（同一条判据链上更早/更晚的短路会
+        // 挡住变异，见 docs/tech-debt.md 那条）。
+        //
+        // 留着它是**故意的纵深**：将来 `adopt` 里多一条不经过 `attachParent` 的
+        // 分支时，这一行仍然拦得住。但别把它数进「四处都被测到」——
+        // 真正被独立证明会红的是 attachParent / release / deleteCrew 三处。
+        try refuseBuiltin(crewId, parentId)
         guard crews[crewId] != nil else { throw LocalCrewStoreError.crewNotFound(crewId) }
         guard crews[parentId] != nil else { throw LocalCrewStoreError.crewNotFound(parentId) }
         guard crewId != parentId else { throw LocalCrewStoreError.wouldCreateCycle }
@@ -453,6 +483,8 @@ final class LocalCrewStore {
     /// 环校验，校验不过原边不动 —— 先挂新边再摘旧边，失败无副作用）。
     /// `crewId` 不是 `parentId` 的直系子 → 抛 `notDirectChild`（上级只能动直系子）。
     func release(crewId: String, from parentId: String, to newParentId: String?) throws {
+        // 拒绝点 2/4。
+        try refuseBuiltin(crewId, parentId, newParentId)
         guard let crew = crews[crewId] else { throw LocalCrewStoreError.crewNotFound(crewId) }
         guard crew.parentCrewIds.contains(parentId) else {
             throw LocalCrewStoreError.notDirectChild(crewId)
@@ -520,7 +552,9 @@ final class LocalCrewStore {
         guard let data = try? Data(contentsOf: file),
               let payload = try? JSONDecoder().decode(LocalCrewFile.self, from: data)
         else { return [] }
-        let all = payload.crews.sorted { $0.createdAt < $1.createdAt }
+        // 组织树里没有内建那一层 —— 它是一层不是节点（口径同 `listCrews`）。
+        let all = payload.crews.filter { $0.isBuiltin != true }
+            .sorted { $0.createdAt < $1.createdAt }
         var childMap: [String: [LocalCrew]] = [:]
         for c in all {
             for p in c.parentCrewIds { childMap[p, default: []].append(c) }
@@ -595,9 +629,67 @@ final class LocalCrewStore {
         return CrewPhoneNumber(crew: crew, ext: ext)
     }
 
-    /// 删除一条 crew。
-    func deleteCrew(_ id: String) {
-        mutatingCrews { crews.removeValue(forKey: id) != nil }
+    /// 删除一条 crew 的结果。**三态，不许压成 Bool** —— 「删了」「本来就没有」
+    /// 「拒绝删内建层」在调用方那里要说成不同的话。
+    enum DeleteOutcome: Equatable {
+        case deleted
+        case notFound
+        /// 拒绝点 4/4：内建那一层删不得。
+        case refusedBuiltin
+    }
+
+    /// 删除一条 crew。（写这行注释时**全仓没有任何调用方**，所以改成返回三态是
+    /// 零波及的；等真有人调它的那天，三态已经在那儿了。）
+    @discardableResult
+    func deleteCrew(_ id: String) -> DeleteOutcome {
+        if crews[id]?.builtin == true { return .refusedBuiltin }
+        var removed = false
+        mutatingCrews {
+            removed = crews.removeValue(forKey: id) != nil
+            return removed
+        }
+        return removed ? .deleted : .notFound
+    }
+
+    /// 保证**总机组那一层**在名册里有一条（幂等）。
+    ///
+    /// 它不是「建一个 crew」：id 是固定的保留值、`isBuiltin` 恒为真、
+    /// 没有父边也永远不会有（四处组织操作都拒绝它）。已经在了就不动 ——
+    /// 尤其**不覆盖 title 和 sessionMembers**，那两样是它真正在用的东西。
+    @discardableResult
+    func upsertBuiltinChiefCrew(title: String = "总机组") -> Bool {
+        var created = false
+        mutatingCrews {
+            guard crews[LocalCrew.chiefCrewId] == nil else { return false }
+            let now = ISO8601DateFormatter().string(from: Date())
+            // 用显式 init 造完再打标记 —— `LocalCrew` 有自定义 init，
+            // memberwise 那条路走不通（isBuiltin 不在它的参数表里）。
+            var record = LocalCrew(
+                id: LocalCrew.chiefCrewId,
+                title: title,
+                titleSource: .human,
+                responsibleSubjectId: "local",
+                runtimeLocation: "local_host",
+                workingDirectory: nil,
+                machineId: nil,
+                captainBotId: nil,
+                captainName: "总机长",
+                createdAt: now,
+                updatedAt: now,
+                parentCrewIds: [])
+            record.isBuiltin = true
+            crews[LocalCrew.chiefCrewId] = record
+            created = true
+            return true
+        }
+        return created
+    }
+
+    /// 四处拒绝共用的那一道判据。**只有一份** —— 四处各写一遍，迟早有一处漏。
+    private func refuseBuiltin(_ ids: String?...) throws {
+        for id in ids.compactMap({ $0 }) where crews[id]?.builtin == true {
+            throw LocalCrewStoreError.builtinCrewNotOrganizable(id)
+        }
     }
 
     /// 全清(调试 / 本地数据重置用)。
@@ -799,6 +891,29 @@ struct LocalCrew: Codable, Equatable {
     /// 第一个 worker 分机号。1 恒归机长（crew 建起来第一个成员就是它）。
     static let firstWorkerExtension = 2
 
+    /// **总机组**那一条的保留 id（人类 Todo #130 / #137）。
+    /// 形状刻意**不长成 `local-<uuid>`** —— 一眼看得出它不是普通 crew。
+    static let chiefCrewId = "pendingcrew-chief"
+
+    /// 这条是不是**产品内建的那一层**，而不是一个工作机组。
+    ///
+    /// ## 为什么它进名册，而不是靠「不存在」来防护
+    /// 进名册是为了**白拿**那一整套按 crewId 挂着的东西：成员表与分机号
+    /// （`recordSessionMember` 第一行就查名册）、通讯录、群聊 @ 的可见性判定、
+    /// 注入面、listen、附件、唤醒。不进名册就要么全丢，要么把同一件事在特例
+    /// 分支里再写一遍。
+    ///
+    /// 代价是它变得「碰得到」。所以碰得到的那几处**逐个显式拒绝**
+    /// （`adopt` / `release` / `attachParent` / `deleteCrew`），每处配一条会红的测试。
+    /// **显式拒绝可以被测试；靠缺席防护测不了** —— 「因为它不存在所以没被删」
+    /// 写不出一条会红的断言，只写得出把实现照抄一遍的那种，改坏了照样绿。
+    ///
+    /// 老 JSON 缺这个键 → nil → 一律当普通 crew，既有行为一个字不变。
+    var isBuiltin: Bool? = nil
+
+    /// 便捷判定（nil 当 false）。
+    var builtin: Bool { isBuiltin == true }
+
     let id: String
     /// `var` —— captain `rename_crew` 经 `LocalCrewStore.setTitle` 改名。
     var title: String
@@ -896,6 +1011,10 @@ struct LocalCrew: Codable, Equatable {
     /// 合成 Codable 会抛 keyNotFound,这里用 decodeIfPresent ?? [] 兜底。
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // 内建那一层的标记。**必须在这儿显式解** —— 这个类型有自定义 decoder，
+        // 合成的那套不生效；漏了它就会 decode 成 nil，于是「组织树里排除内建层」
+        // 那条过滤悄悄失效（写这条注释时就是被那条测试抓到的）。
+        isBuiltin = try c.decodeIfPresent(Bool.self, forKey: .isBuiltin)
         id = try c.decode(String.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
         titleSource = try c.decodeIfPresent(LocalCrewTitleSource.self, forKey: .titleSource)
@@ -1010,6 +1129,9 @@ enum LocalCrewStoreError: LocalizedError {
     case notDirectChild(String)
     /// 机长只能由真实 agent runner 承担。
     case invalidCaptainAgentKind(String)
+    /// 对**内建那一层**做组织操作（收编 / 摘出 / 挂父 / 删除）—— 一律拒绝。
+    /// 它不是树里的一个节点，是产品内建的一层；能被 adopt 的东西就能被 adopt 错。
+    case builtinCrewNotOrganizable(String)
 
     var errorDescription: String? {
         switch self {
@@ -1021,6 +1143,8 @@ enum LocalCrewStoreError: LocalizedError {
             return "crew \(id) 不是本 crew 的直系子,不能操作"
         case .invalidCaptainAgentKind(let kind):
             return "\(kind) 不是可用的机长 runner（只支持 claude_code/codex）"
+        case .builtinCrewNotOrganizable(let id):
+            return "\(id) 是 PendingCrew 内建的那一层，不是一个机组 —— 收编 / 摘出 / 挂父 / 删除都不适用于它"
         }
     }
 }

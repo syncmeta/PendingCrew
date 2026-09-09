@@ -327,6 +327,7 @@
 		7A1BBAF83CA7A6AD2EFBF3A4 /* SessionOutputEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8AAA5D7F3A3E6F092B06EC /* SessionOutputEvidence.swift */; };
 		7A64F53E8D085D3A9ECE9879 /* AgentTerminationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */; };
 		7A9893020C4D9D7313AB41EB /* AgentModelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 701A0F37ADEB1AE4294C58F2 /* AgentModelCatalogTests.swift */; };
+		7BCA0BADBA1C3E590306DA25 /* BuiltinChiefCrewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20A3D9C4BDA92E3F45C9E285 /* BuiltinChiefCrewTests.swift */; };
 		7C9343CBF91E44FF7114700F /* SessionDaemonStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = D744C326EE4375DF70D19833 /* SessionDaemonStatus.swift */; };
 		7CF0B6C668567CC7BF21CEDC /* CaptainTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CC1FEBE8F4A567B53B0BCF /* CaptainTemplateStore.swift */; };
 		7D490E14D74357DE36C76493 /* LocalCrewStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBB438AE76CF441D4A9A071F /* LocalCrewStore.swift */; };
@@ -757,6 +758,7 @@
 		1D9796510A2DADE77ABA9726 /* SessionAwaitingReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAwaitingReply.swift; sourceTree = "<group>"; };
 		1F16A819715D78A73D291706 /* McpServerCaptainSpawnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServerCaptainSpawnTests.swift; sourceTree = "<group>"; };
 		20809FE40D45005C09C13E4C /* CrewChatOpenCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatOpenCostTests.swift; sourceTree = "<group>"; };
+		20A3D9C4BDA92E3F45C9E285 /* BuiltinChiefCrewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltinChiefCrewTests.swift; sourceTree = "<group>"; };
 		20B6C08618440D0A73D85398 /* AppUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdater.swift; sourceTree = "<group>"; };
 		20E897103D805A3B2B5F32F2 /* CrewHidingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHidingTests.swift; sourceTree = "<group>"; };
 		219AD4E22DF4542909B2067A /* PendingCrewEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCrewEntry.swift; sourceTree = "<group>"; };
@@ -1594,6 +1596,7 @@
 				FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */,
 				C99570207FA989386B3336D2 /* AgentTuiFixtureRecorder.swift */,
 				53B34A248FCC85B2A6D067BC /* AppUpdateSharedTests.swift */,
+				20A3D9C4BDA92E3F45C9E285 /* BuiltinChiefCrewTests.swift */,
 				F5BC3153376478000FA529F3 /* CaptainBriefDeliveryTests.swift */,
 				BC4DF511C961AE26A7B10024 /* CaptainHandoffSiteTests.swift */,
 				BFDD5AF1984839C992B8C863 /* CaptainHandoffTests.swift */,
@@ -2370,6 +2373,7 @@
 				49B66843EFA2EF699C6EDC39 /* AppearanceMode.swift in Sources */,
 				CF48B24D285987856F41A7AF /* BreathingDotView.swift in Sources */,
 				8272BAD958FC9B083E2DD7F5 /* BreathingSymbolView.swift in Sources */,
+				7BCA0BADBA1C3E590306DA25 /* BuiltinChiefCrewTests.swift in Sources */,
 				572A57BBC66A784273167D28 /* CaptainBriefDelivery.swift in Sources */,
 				7868143E494C5BB3E71A5B1A /* CaptainBriefDeliveryTests.swift in Sources */,
 				0E4816633C12549FB47ED971 /* CaptainHandoffSite.swift in Sources */,
