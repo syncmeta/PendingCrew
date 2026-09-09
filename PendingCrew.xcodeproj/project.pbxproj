@@ -131,6 +131,7 @@
 		340F05F7B7CF9398657E6988 /* SessionTurnTraceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87E5A371B34927F6567957C3 /* SessionTurnTraceTests.swift */; };
 		341FCB271AD8120BAE01DFA4 /* CrewChatAttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C9B215B057BE66CE2BBC284 /* CrewChatAttachmentStore.swift */; };
 		350F0582F43506BA481ECBF1 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = 92DC9F1481CEF559E09B3E39 /* SwiftMath */; };
+		362A8C165D61F9CE3E36048E /* ProjectFileManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7508173C7BE2A174096E8054 /* ProjectFileManifestTests.swift */; };
 		373C9A7E3824631F2AFFA26F /* CrewCockpitWritePermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEBEF2B77F7BDCA85D11F1E /* CrewCockpitWritePermission.swift */; };
 		3759C2F1C10510AD96E7939A /* CrewChildCreationTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07E7B55886F489DE4C6D6C7 /* CrewChildCreationTarget.swift */; };
 		379B165C6C4E3456BA6F7680 /* McpTurnHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1953FE154BAF675E9B6ABED0 /* McpTurnHook.swift */; };
@@ -944,6 +945,7 @@
 		745BD2D3859D837C923BCA05 /* ShellFullWidthPunctuationLocaleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellFullWidthPunctuationLocaleTests.swift; sourceTree = "<group>"; };
 		74B220684144C61518760836 /* CockpitPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitPresentation.swift; sourceTree = "<group>"; };
 		74B6F0850B04A668C560FA4C /* CrewHumanTodoAttentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHumanTodoAttentionTests.swift; sourceTree = "<group>"; };
+		7508173C7BE2A174096E8054 /* ProjectFileManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectFileManifestTests.swift; sourceTree = "<group>"; };
 		759D7BCA6A80A775E8D94387 /* OrchestrationFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestrationFallbackTests.swift; sourceTree = "<group>"; };
 		75FCD1D2D65A4A61849B5CE2 /* CrewOrderingSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewOrderingSignals.swift; sourceTree = "<group>"; };
 		764566D04ED690F7762B786E /* RemoteSessionBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionBackendTests.swift; sourceTree = "<group>"; };
@@ -1751,6 +1753,7 @@
 				3C33AA481F8A3F9F932B3B03 /* PendingCrewDataRootTests.swift */,
 				DB6363B999F7FFE61F7D9500 /* PendingRequestQueueTests.swift */,
 				D32A75D450B97F384C440342 /* ProcessRoleTests.swift */,
+				7508173C7BE2A174096E8054 /* ProjectFileManifestTests.swift */,
 				76C210B9708141CE1293B918 /* PromptTemplateTests.swift */,
 				2D271DB3CF14DAC4F915C249 /* QuotaRingLayoutTests.swift */,
 				51B756CCFFA5254E53F29F98 /* QuotaWarningPlanTests.swift */,
@@ -2666,6 +2669,7 @@
 				765C61EBEB8DA35CEFAD299F /* PlatformImage.swift in Sources */,
 				F3FD0332567FD6AD80E4FE17 /* ProcessRole.swift in Sources */,
 				A480B1CDA9AAD37FA08C5198 /* ProcessRoleTests.swift in Sources */,
+				362A8C165D61F9CE3E36048E /* ProjectFileManifestTests.swift in Sources */,
 				055DFE844FB3BA1547AEC159 /* PromptTemplate.swift in Sources */,
 				1146ACFD9CB88120EB1D7A84 /* PromptTemplateTests.swift in Sources */,
 				4B6DAC1272E367B1737EBEBC /* QuotaRingLayout.swift in Sources */,
