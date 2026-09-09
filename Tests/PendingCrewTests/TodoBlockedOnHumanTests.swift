@@ -189,10 +189,14 @@ final class TodoBlockedOnHumanTests: XCTestCase {
 
     // MARK: - ⑤c 接线（视觉我验不了，只能钉住「产品真的调了它」）
 
-    /// 纯函数绿 ≠ 界面上看得见。这两条钉的是**视图真的调了新那条路** ——
-    /// 少了它，上面十条可以全绿而屏幕上一点没变。
+    /// 纯函数绿 ≠ 界面上看得见。这几条钉的是**视图真的调了新那条路** ——
+    /// 少了它，上面那些可以全绿而屏幕上一点没变。
+    ///
+    /// ⚠️ 一律走 `codeOnly`：**注释里提到函数名会让这条尺子自己变哑**。
+    /// 变异自证抓到过一次 —— 把详细窗口的调用整个换掉，测试照样绿，
+    /// 因为同一个文件的一句 doc comment 里写着「理由见 `blockedOnHumanHint`」。
     func testTheViewsActuallyUseTheNewPaths() throws {
-        let panel = try Self.text(of: "CrewTodoPanel.swift")
+        let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
         XCTAssertTrue(panel.contains("TodoListPresentation.rows(for:"),
                       "概览面板没走合并那条路 —— 纯函数再绿，人类那本屏幕上也不会多出一行")
         XCTAssertTrue(panel.contains("rowNumberLabel"),
@@ -200,9 +204,28 @@ final class TodoBlockedOnHumanTests: XCTestCase {
         XCTAssertTrue(panel.contains("openDetail(ledger: row.ledger"),
                       "点进去用的还是药丸那本，不是这一行自己那本 —— 会打开另一件事")
 
-        let detail = try Self.text(of: "CrewTodoDetailWindow.swift")
-        XCTAssertTrue(detail.contains("blockedOnHumanHint"),
+        let detail = Self.codeOnly(try Self.text(of: "CrewTodoDetailWindow.swift"))
+        XCTAssertTrue(detail.contains("TodoListPresentation.blockedOnHumanHint("),
                       "详细窗口的人类那本既不借显也不指路 —— 那张面上他就是看不见")
+    }
+
+    /// **面板得真去读 agent 那本**，否则借显那半边恒定是空的。
+    ///
+    /// 变异自证抓到的第二个缺口：把喂进去的 agent 数组换成 `[]`，
+    /// 上面那条「调了 rows(for:)」照样绿 —— 它只证明了调用存在，
+    /// 没证明**喂进去的东西不是空的**。函数调对了、参数是空的，
+    /// 屏幕上的结果跟没做完全一样。
+    func testThePanelActuallyReadsTheAgentLedger() throws {
+        let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
+        XCTAssertTrue(panel.contains("rows(for: .human, human: todos, agent: waitingOnHuman)"),
+                      "人类那屏喂给合并函数的不是真读来的 agent 条目 —— 借显恒为空")
+        XCTAssertTrue(panel.contains("LocalTodoStore.shared(.agent)"),
+                      "面板压根没读 agent 那本")
+        XCTAssertTrue(panel.contains("agentStore.todoChanges(crewId: crewId)"),
+                      """
+                      没订 agent 那本的变更流 —— agent 翻成「等你回复」时这一屏不会动，
+                      他得关掉驾驶舱重开才看得见，那跟没做差不多。
+                      """)
     }
 
     func testTheHintOnlyShowsWhenThereIsSomethingToShow() {
