@@ -83,24 +83,45 @@ struct CrewHumanTodoAttention: Equatable, Sendable {
 ///
 /// 非 `@MainActor`：**刻意**要在后台队列上跑（stat 与解码都是磁盘 IO）。
 final class CrewHumanTodoAttentionCache: @unchecked Sendable {
-    private let cache: FileFingerprintCache<String, Int>
+    /// **两本账各一个指纹门**，但判据只有一个（`LocalTodoItem.isWaitingOnHuman`）。
+    ///
+    /// 人类 Todo #139 ②：黄点也要为 agent 那本里「等你回复」的活亮。
+    /// 落地时的坑机长点了名 —— **不许在旁边并排加第二个判据**：那样以后改一个
+    /// 忘一个，黄点开始骗人，而「亮着但点进去没事」没有人会报 bug，
+    /// 只会让人慢慢学会忽略这盏灯。
+    ///
+    /// 这里复制的是 **IO**（两个文件、两个 mtime，本来就得各 stat 各的），
+    /// **不是判断**。两边喂的是同一个 `isWaitingOnHuman`，只换一个 `ledger` 参数。
+    private let caches: [FileFingerprintCache<String, Int>]
 
-    /// 生产用：挂在 `.human` 那本账上。
-    convenience init(store: LocalTodoStore = .shared(.human)) {
-        self.init(
-            fingerprintOf: { store.fingerprint(crewId: $0) },
-            loadUnansweredCount: { store.list(crewId: $0).filter(\.isUnanswered).count })
+    /// 生产用：人类那本 + agent 那本。
+    convenience init(human: LocalTodoStore = .shared(.human),
+                     agent: LocalTodoStore = .shared(.agent)) {
+        self.init(sources: [(human, .human), (agent, .agent)])
+    }
+
+    private convenience init(sources: [(LocalTodoStore, TodoLedger)]) {
+        self.init(caches: sources.map { store, ledger in
+            FileFingerprintCache(
+                fingerprintOf: { store.fingerprint(crewId: $0) },
+                load: { store.list(crewId: $0).filter { $0.isWaitingOnHuman(in: ledger) }.count })
+        })
     }
 
     /// 单测用：两条 IO 都可注入，好数「到底真读了几次」。
-    init(fingerprintOf: @escaping (String) -> FileChangeGate.Fingerprint?,
-         loadUnansweredCount: @escaping (String) -> Int?) {
-        cache = FileFingerprintCache(fingerprintOf: fingerprintOf, load: loadUnansweredCount)
+    convenience init(fingerprintOf: @escaping (String) -> FileChangeGate.Fingerprint?,
+                     loadUnansweredCount: @escaping (String) -> Int?) {
+        self.init(caches: [FileFingerprintCache(fingerprintOf: fingerprintOf,
+                                                load: loadUnansweredCount)])
+    }
+
+    private init(caches: [FileFingerprintCache<String, Int>]) {
+        self.caches = caches
     }
 
     /// 本 cache 迄今真正做过多少次「读文件 + 全量解码」。缓存命中不计 ——
     /// 这是「没把 2026-08-17 那个形状再造一遍」的验收口径。
-    var decodeCount: Int { cache.loadCount }
+    var decodeCount: Int { caches.reduce(0) { $0 + $1.loadCount } }
 
     /// 刷新这批 crew 的未回应条数。
     ///
@@ -108,7 +129,12 @@ final class CrewHumanTodoAttentionCache: @unchecked Sendable {
     ///   （不是「没读」）—— 每次调用都覆盖全表，调用方拿到的恒是完整快照。
     @discardableResult
     func refresh(crewIds: [String]) -> [String: Int] {
-        cache.refresh(keys: crewIds)
+        // 两本账的条数相加 —— 「这条线下面一共有几件事在等你」，跟 badgeTotal 同一个读法。
+        caches.reduce(into: [String: Int]()) { out, cache in
+            for (crewId, count) in cache.refresh(keys: crewIds) {
+                out[crewId, default: 0] += count
+            }
+        }
     }
 
     /// 在同一次后台刷新里，把指纹门控得到的**本 crew**条数沿 DAG 父边向上传播。
@@ -118,7 +144,7 @@ final class CrewHumanTodoAttentionCache: @unchecked Sendable {
         parentsByCrew: [String: [String]]
     ) -> [String: CrewHumanTodoAttention] {
         Self.aggregate(
-            directCounts: cache.refresh(keys: crewIds),
+            directCounts: refresh(crewIds: crewIds),
             parentsByCrew: parentsByCrew)
     }
 
@@ -162,5 +188,5 @@ final class CrewHumanTodoAttentionCache: @unchecked Sendable {
     }
 
     /// 丢掉全部缓存（`CrewStore.reset` 调）。
-    func clear() { cache.clear() }
+    func clear() { caches.forEach { $0.clear() } }
 }

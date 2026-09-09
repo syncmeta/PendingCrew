@@ -328,7 +328,7 @@ final class McpServer {
                 ],
                 [
                     "name": "respond_todo",
-                    "description": "回应本 crew **Agent 那本** Todo 的某个条目（Todo 面板「Agent 的」药丸；就是人类派给你们的活）。⚠️ 两本账别搞混：要**提一件请人类拍板的事**用 add_human_todo，那是「人类的」那本，这个工具动不了它。**追加式**：每次调用追加一条回应，不覆盖旧回应；可同时用 status 推进条目状态（待办 pending → 进行中 in_progress → 完成 completed）。**推不动、卡在人类身上时翻 `blocked_on_human`**（人类 Todo #139）——它会**原地**出现在人类那本 Todo 的列表里、标成黄色，**不要再用 add_human_todo 另开一条**：两条会各自被回应、各自翻牌，从此对不上。人答复之后照常翻回 in_progress / completed。人类加条目时群里会出现「To do +1: #N …」——看到后用这个工具认领/回应，number 填那个 N。每个条目都该尽快有机器人回应；status 只在真有进展时才给（开始做→in_progress，做完验证过→completed）。**翻成 completed 必须带凭据**：`evidence_commit`（会当场解析，解不出来拒绝销号）或 `evidence`（产出不是 commit 时，一句话写清是什么），两个都不给不能销号 —— 这道闸是让「宣布完成」贵一点点，因为一条记成「已完成」而其实没做的账，没有任何人会回来看。领了 Todo 对应的活，落 main 时顺手翻牌——人类 Todo 面板和 task 账是两本账，别只更 task 漏翻 Todo。",
+                    "description": "回应本 crew **Agent 那本** Todo 的某个条目（Todo 面板「Agent 的」药丸；就是人类派给你们的活）。⚠️ 两本账别搞混：要**提一件请人类拍板的事**用 add_human_todo，那是「人类的」那本，这个工具动不了它。**追加式**：每次调用追加一条回应，不覆盖旧回应；可同时用 status 推进条目状态（待办 pending → 进行中 in_progress → 完成 completed）。**推不动、卡在人类身上时翻 `blocked_on_human`**（人类 Todo #139）——它会**原地**出现在人类那本 Todo 的列表里、标成黄色，**不要再用 add_human_todo 另开一条**：两条会各自被回应、各自翻牌，从此对不上。人答复之后照常翻回 in_progress / completed。**人类喊停、决定不做的翻 `dropped`**（「已叫停」）——它**不是** completed 的近义词：completed 说「做完了，凭据在这儿」，dropped 说「不做了，是谁决定的、为什么」。翻 dropped **不要凭据**（叫停没有产出），但那句回应必须写清是谁叫停的、理由是什么。把叫停记成完成，会让「完成 N 条」这个数当场变假，而且没有人看得出来。人类加条目时群里会出现「To do +1: #N …」——看到后用这个工具认领/回应，number 填那个 N。每个条目都该尽快有机器人回应；status 只在真有进展时才给（开始做→in_progress，做完验证过→completed）。**翻成 completed 必须带凭据**：`evidence_commit`（会当场解析，解不出来拒绝销号）或 `evidence`（产出不是 commit 时，一句话写清是什么），两个都不给不能销号 —— 这道闸是让「宣布完成」贵一点点，因为一条记成「已完成」而其实没做的账，没有任何人会回来看。领了 Todo 对应的活，落 main 时顺手翻牌——人类 Todo 面板和 task 账是两本账，别只更 task 漏翻 Todo。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -1243,7 +1243,7 @@ final class McpServer {
             // 这里只负责取真账、把拒绝原样说清楚、以及落一条确认。
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let sweepOpen = Set(todos.list(crewId: crewId)
-                .filter { !$0.isDeleted && $0.status != "completed" }
+                .filter { !$0.isDeleted && !$0.isSettled }
                 .map(\.number))
             let sweepResult = CaptainTodoSweep.validate(
                 running: Self.intArray(args["running"]),

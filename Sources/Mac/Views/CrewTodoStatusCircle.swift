@@ -21,6 +21,8 @@ struct CrewTodoStatusCircle: View {
         // 人类原话：「在等我回复的应该是黄色」。琥珀是本仓库既有的那一档提醒色
         // （群聊/侧栏共用），不为这一处新造颜色。
         case LocalTodoItem.blockedOnHumanStatus: return Theme.Palette.amber
+        // 「已叫停」：静音色。它不是坏事、也不是成就，不该抢眼。
+        case LocalTodoItem.droppedStatus: return Theme.Palette.inkMuted
         default: return Theme.Palette.inkMuted
         }
     }

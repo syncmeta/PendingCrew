@@ -68,7 +68,9 @@ final class McpPermissionHook {
         // 人同意之后留下一张一次性票，它重跑时见票放行。
         let summary = permissionSummary(toolName: toolName, toolInput: obj["tool_input"])
         let pending = todos?.list(crewId: crewId).contains {
-            !$0.isDeleted && $0.status != "completed" && $0.permissionTool == toolName
+            // 「还挂着」= 既没结掉也没被叫停（`isSettled`）。人类叫停一条放行请求
+            // 之后，这条不该再永远堵着去重 —— 否则 agent 下次真需要时也提不出来。
+            !$0.isDeleted && !$0.isSettled && $0.permissionTool == toolName
         } ?? false
         switch PermissionRequestFlow.decide(
             hasGrant: grants.consume(crewId: crewId, tool: toolName),

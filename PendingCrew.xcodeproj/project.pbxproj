@@ -217,6 +217,7 @@
 		517C76E5590FE32680D1D99B /* SessionAttachQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B6F1FF899BC360DF671DCE /* SessionAttachQueueTests.swift */; };
 		51904CEEAF5BC4C561C8807B /* CockpitRoadmapParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E54EBB06E47F440F0DD05D1D /* CockpitRoadmapParserTests.swift */; };
 		51B4CD5460658D4276AA30C9 /* OrchestrationNoticeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B27606647FEDF280EB476FC /* OrchestrationNoticeBar.swift */; };
+		5204C280C5DE18FF07551206 /* TodoDroppedAndAttentionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEEC8DFFE4A0BF5D7D9FD457 /* TodoDroppedAndAttentionTests.swift */; };
 		5209334AC5A77F04D3C0984C /* QuotaWarningPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE174F684386551180E6B50C /* QuotaWarningPlan.swift */; };
 		52B74FA2919986145C55A136 /* LocalAgentSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295F4E13C2CFA5C6FC2FBE02 /* LocalAgentSessionStoreTests.swift */; };
 		52B8FB6AB701D58747813432 /* SessionDaemonHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 336F25E170E424F0FA04DC86 /* SessionDaemonHost.swift */; };
@@ -1174,6 +1175,7 @@
 		DCD0082F9C198968F4C9573B /* CrewHierarchyOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHierarchyOrderingTests.swift; sourceTree = "<group>"; };
 		DD167E62AA7A9C5365CE0D0E /* CrewMessageBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageBatch.swift; sourceTree = "<group>"; };
 		DE16EE932E2CBB87B2A7D691 /* LocalSessionLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionLaunch.swift; sourceTree = "<group>"; };
+		DEEC8DFFE4A0BF5D7D9FD457 /* TodoDroppedAndAttentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoDroppedAndAttentionTests.swift; sourceTree = "<group>"; };
 		DF4746BDF24E4DDA8FCCE894 /* CrewTimelineListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewTimelineListView.swift; sourceTree = "<group>"; };
 		DF601A5AC69E1BA6FB748E60 /* CrewColorBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewColorBar.swift; sourceTree = "<group>"; };
 		DF848E30878BD9A462B2ABD4 /* SessionConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfigTests.swift; sourceTree = "<group>"; };
@@ -1852,6 +1854,7 @@
 				FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */,
 				7A6EA1DC19E214535D977D7E /* TestProcessDataRootIsolationTests.swift */,
 				5F61A2A28F398965D5910AB1 /* TodoBlockedOnHumanTests.swift */,
+				DEEC8DFFE4A0BF5D7D9FD457 /* TodoDroppedAndAttentionTests.swift */,
 				A66BE415A2B49FD3458C071F /* TodoEvidenceTests.swift */,
 				6EECC7D0788EA95EDF94F09A /* TodoLandingFlowTests.swift */,
 				F004EFC6500C77213D744D1E /* TodoLedgerIsolationTests.swift */,
@@ -2833,6 +2836,7 @@
 				76FCFFEEC8113478FD61D7E2 /* Theme.swift in Sources */,
 				FCA3F72E6F463DDB21D29D85 /* ThemeCrewExtras.swift in Sources */,
 				1B356BCCE23E5E083F21E560 /* TodoBlockedOnHumanTests.swift in Sources */,
+				5204C280C5DE18FF07551206 /* TodoDroppedAndAttentionTests.swift in Sources */,
 				6581FA8BAB65640A603A68BA /* TodoEvidence.swift in Sources */,
 				002013C931534BC908DE4B5E /* TodoEvidenceTests.swift in Sources */,
 				62224640E497CD15C7AD85DF /* TodoLandingFlow.swift in Sources */,

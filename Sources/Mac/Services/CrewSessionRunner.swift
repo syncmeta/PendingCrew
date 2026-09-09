@@ -384,7 +384,9 @@ final class CrewSessionRunner: ObservableObject {
         let snapshot: CaptainTodoSweep.LedgerSnapshot
         switch LocalTodoStore.shared(.agent).read(crewId: crewId) {
         case let .rows(rows):
-            snapshot = .read(Set(rows.filter { $0.status != "completed" }.map(\.number)))
+                        // 「还欠着」= 既没做完、也没被叫停（`isSettled`）。写成「不等于
+            // completed」的话，人类喊停的那几条会永远算作欠账，督办为它一直响。
+            snapshot = .read(Set(rows.filter { !$0.isSettled }.map(\.number)))
         case .unreadable:
             snapshot = .unreadable
         }

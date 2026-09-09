@@ -78,6 +78,11 @@ enum TodoListPresentation {
         case LocalTodoItem.blockedOnHumanStatus:
             return StatusIcon(symbol: "questionmark.circle.fill",
                               isFilled: true, isBreathing: true, dimsText: false)
+        // 「已叫停」（#139）：正文跟「完成」一样变灰（都不用再看了），但**符号不同**
+        // —— 它记的不是「做完了」，一眼要能跟完成分开，否则统计错了也看不出来。
+        case LocalTodoItem.droppedStatus:
+            return StatusIcon(symbol: "minus.circle.fill",
+                              isFilled: true, isBreathing: false, dimsText: true)
         default:
             return StatusIcon(symbol: "circle",
                               isFilled: false, isBreathing: false, dimsText: false)

@@ -155,7 +155,8 @@ final class LocalTodoStore: @unchecked Sendable {
     /// **不报错**：漏数据层 = 群里能标、工具标不了；漏 schema = 模型压根填不出这个值。
     /// `TodoBlockedOnHumanTests.testValidStatusesHasExactlyOneTruthSource` 扫全仓钉住它。
     static let statusOrder: [String] = [
-        "pending", "in_progress", "completed", LocalTodoItem.blockedOnHumanStatus,
+        "pending", "in_progress", "completed",
+        LocalTodoItem.blockedOnHumanStatus, LocalTodoItem.droppedStatus,
     ]
 
     /// 合法状态集（成员判定用）。恒等于 `statusOrder`。
@@ -163,6 +164,24 @@ final class LocalTodoStore: @unchecked Sendable {
 
     /// 报错/说明文案里那一串「a / b / c」。跟着 `statusOrder` 走，加一档自动出现。
     static var statusListText: String { statusOrder.joined(separator: " / ") }
+
+    /// 一本账的分项计数。**`completed` 与 `dropped` 分开** —— 合起来报一个
+    /// 「完成 N 条」的数，那个数就是假的（见 `LocalTodoItem.droppedStatus`）。
+    struct Tally: Equatable {
+        let total: Int
+        let completed: Int
+        let dropped: Int
+        /// 还欠着的（既没做完也没被叫停）。
+        let open: Int
+    }
+
+    static func tally(_ rows: [LocalTodoItem]) -> Tally {
+        let live = rows.filter { !$0.isDeleted }
+        let completed = live.filter { $0.status == "completed" }.count
+        let dropped = live.filter { $0.status == LocalTodoItem.droppedStatus }.count
+        return Tally(total: live.count, completed: completed, dropped: dropped,
+                     open: live.count - completed - dropped)
+    }
 
     /// 这个实例管哪本账。文件名、锁名、事故警示主语全从它来。
     let ledger: TodoLedger
@@ -708,10 +727,7 @@ struct LocalTodoItem: Codable, Equatable, Identifiable {
     ///
     /// 已完成、已删墓碑都不算（即使坏数据/旧调用绕过了 `list`）；`dismissedAt`
     /// 非 nil = 人类看过、决定不办、直接按灭，同样不再算未回应。
-    var isUnanswered: Bool {
-        !isDeleted && status != "completed" && responses.isEmpty
-            && dismissedAt == nil && withdrawnAt == nil
-    }
+    var isUnanswered: Bool { isWaitingOnHuman(in: .human) }
 
     /// 提出者自己撤回了这条（Todo #102）。**不是删除**：条目留在列表里、原因写在
     /// 时间线上，只是不再算「等人回应」。
@@ -788,6 +804,48 @@ extension LocalTodoItem {
     /// **两个事实源就是没有事实源。**
     static let blockedOnHumanStatus = "blocked_on_human"
 
+    /// **「被叫停」**（人类 Todo #139 第二批）—— 这条不做了。
+    ///
+    /// ⚠️ **不是 `completed` 的近义词。** 两者都表示「不用再推了」，但记的是完全
+    /// 不同的事：`completed` 说「做完了，凭据在这儿」；`dropped` 说「不做了，
+    /// 是谁决定的、为什么」。
+    ///
+    /// 代价是实打实发生过的：2026-09-09 向人类报的「138 条完成 111」里，有三条
+    /// （#123 / #18 / #102）是他自己喊停的、被记成了完成。**那个数当时就是错的，
+    /// 只是没有任何人看得出来** —— 一条记成「已完成」的假账没有人会回来看。
+    ///
+    /// 凭据口径也不同：翻 `completed` 必须带 `evidence_commit` / `evidence`；
+    /// 翻 `dropped` **不要凭据**（叫停没有产出，逼它给凭据的结果只会是 agent
+    /// 改去翻 `completed`，恰好把账变假），但**要理由** —— 理由就是那句必填的回应。
+    static let droppedStatus = "dropped"
+
+    /// **这条还欠着吗** —— 「已结」的唯一判据：做完了，或被叫停了。
+    ///
+    /// ⚠️ 别再写 `status != "completed"` 来表达「还没结」。`dropped` 一加，那种
+    /// 写法当场变成一条会骗人的判据，而且**不报错**：机长的 Todo 督办会为一件
+    /// 人类已经喊停的事一直响。
+    /// `TodoDroppedAndAttentionTests.testNobodySpellsUnfinishedAsNotCompleted` 扫全仓钉住。
+    var isSettled: Bool { status == "completed" || status == Self.droppedStatus }
+
+    /// **这条事现在卡在人身上吗** —— 侧栏黄点的**唯一**判据，两本账都喂它。
+    ///
+    /// 机长原话：「别在旁边并排加一个『agent 那本有 blocked_on_human』的第二判据
+    /// —— 那样以后改一个忘一个，黄点会开始骗人。」分叉之后的表现是「黄点亮着但
+    /// 点进去没事」：**没有人会因此报 bug，只会慢慢学会忽略这盏灯**，那时它就
+    /// 什么也不表示了。
+    ///
+    /// 两本账问的是同一个问题，只是问法不同：
+    /// - `.human`（agent 请你拍板那本）：agent 问了，你还没答。
+    /// - `.agent`（你派给 agent 那本）：agent 把它翻成了「等你回复」。
+    func isWaitingOnHuman(in ledger: TodoLedger) -> Bool {
+        guard !isDeleted, !isSettled,
+              dismissedAt == nil, withdrawnAt == nil else { return false }
+        switch ledger {
+        case .human: return responses.isEmpty
+        case .agent: return status == Self.blockedOnHumanStatus
+        }
+    }
+
     /// 状态的中文显示（面板徽章 + MCP 回执共用）。
     static func statusLabel(_ status: String) -> String {
         switch status {
@@ -795,6 +853,7 @@ extension LocalTodoItem {
         case "in_progress": return "进行中"
         case "completed": return "完成"
         case blockedOnHumanStatus: return "等你回复"
+        case droppedStatus: return "已叫停"
         default: return status
         }
     }
