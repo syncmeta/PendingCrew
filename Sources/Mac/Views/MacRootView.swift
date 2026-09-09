@@ -114,7 +114,7 @@ private struct CockpitOverlay: View {
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { presentation.close() }
-            CockpitView(onClose: { presentation.close() })
+            CockpitView(onClose: { presentation.close() }, planFocus: presentation.planFocus)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius)

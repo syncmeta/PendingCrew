@@ -31,12 +31,24 @@ struct CrewChatView: View {
     var searchQuery: Binding<String>? = nil
     /// 跨群结果点进来时的消息 id。定位成功后置 nil，避免白板刷新时反复抢滚动位置。
     var searchTargetMessageId: Binding<String?>? = nil
+    /// 点引用胶囊跳到本群另一条消息 / 别的机组（人类 Todo #132/#133）。
+    ///
+    /// **刻意是闭包，不是 `@EnvironmentObject CrewStore`**：这棵子树一旦订阅那个
+    /// store，crew 列表刷新、detail 落 cache、待办脉冲每一次都会把整条群聊作废 ——
+    /// 正是 #443 那个配方。真正跳转的那几行在中栏（它本来就订阅着 store）。
+    var onJumpToMessage: ((_ messageId: String, _ from: CrewChatReturnTrail.Stop) -> Void)? = nil
+    var onJumpToCrew: ((_ crewId: String, _ from: CrewChatReturnTrail.Stop) -> Void)? = nil
 
     @EnvironmentObject private var appModel: AppModel
     #if os(macOS)
     /// MacThreePaneView 注入（经 CrewCenterView）—— session 发的消息点击可
     /// 跳到右栏对应 session（chunk2 T6 中栏跳转）。
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
+    /// 驾驶舱开关位的**写句柄**（人类 Todo #96）：`@Environment` 取一个 class 值
+    /// **不订阅**它 —— 群聊只按「落到计划 #N」这一下，不需要知道驾驶舱开着没有。
+    @Environment(\.cockpitPresentation) private var cockpitPresentation
+    /// Todo 详细窗口要按当前外观开（与 `CrewTodoPanel` 同一口径）。
+    @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
     #endif
 
     @State private var entries: [CrewWhiteboardEntry] = []
@@ -583,6 +595,117 @@ struct CrewChatView: View {
     /// quoted sender + a one-line snippet. The degraded case (`found == false`)
     /// shows just the generic placeholder snippet, no sender prefix.
     @ViewBuilder
+    // MARK: - 引用胶囊（人类 Todo #132/#133）
+
+    /// 这条消息该长哪几颗胶囊。
+    ///
+    /// **第一行那道 guard 是承重的**：这个函数在每一行渲染时都会被调，而绝大多数
+    /// 消息（所有老消息 + 所有没引用的新消息）根本没有 `references`。下面那些
+    /// 上下文（已加载消息 id 的集合、在跑的 session、通讯录）逐条建都不便宜，
+    /// 不许为了「代码整齐」把它提到 guard 前面 —— #443 就是这么来的。
+    private func referencePills(for entry: CrewWhiteboardEntry) -> [CrewMessageReferencePill] {
+        guard let references = entry.references, !references.isEmpty else { return [] }
+        return CrewMessageReferencePills.pills(references, in: pillContext(for: entry))
+    }
+
+    /// 这一刻的可达性事实。判定本身在纯函数里（`CrewMessageReferencePills`），
+    /// 这里只负责从活状态里把事实取出来。
+    private func pillContext(for entry: CrewWhiteboardEntry) -> CrewMessageReferencePills.Context {
+        #if os(macOS)
+        // 只认**这个群里在跑的** session：跳右栏靠 run 的 runID，没有 run 就跳不过去。
+        let sessions = Dictionary(
+            sessionRunner.runs.filter { $0.crewId == crewId }.map {
+                ($0.sessionId, $0.title.isEmpty ? $0.displayName : $0.title)
+            },
+            uniquingKeysWith: { first, _ in first })
+        // 号码 → 目标。**只解这条消息真的引到的那几个号**，不建全表。
+        let directory = LocalCrewStore.shared.directory()
+        var targets: [String: CrewMessageReferencePills.Target] = [:]
+        for reference in entry.references ?? [] where reference.resolvedKind == .crew {
+            guard let resolved = directory.resolve(reference.targetId) else { continue }
+            targets[reference.targetId] = CrewMessageReferencePills.Target(
+                crewId: resolved.crewId,
+                title: resolved.displayName,
+                sessionId: {
+                    if case .session(_, _, let sessionId, _) = resolved { return sessionId }
+                    return nil
+                }())
+        }
+        #else
+        let sessions: [String: String] = [:]
+        let targets: [String: CrewMessageReferencePills.Target] = [:]
+        #endif
+        return .init(
+            selfMessageId: entry.id,
+            // 用 `entries` 而不是 `timelineEntries`：筛选开着时目标可能被筛掉，
+            // 但**点下去会把筛选收掉再定位**（见 `CrewCenterView` 的请求处理），
+            // 所以「筛掉了」不等于「跳不过去」。
+            loadedMessageIds: Set(entries.map(\.id)),
+            openableSessions: sessions,
+            crewTargets: targets)
+    }
+
+    /// 气泡下面那一排。老消息没有引用 → 这一排根本不存在，正文一个字不变。
+    @ViewBuilder
+    private func referencePillRow(_ pills: [CrewMessageReferencePill],
+                                  from entry: CrewWhiteboardEntry) -> some View {
+        HStack(spacing: 6) {
+            ForEach(pills) { pill in
+                Button { activate(pill, from: entry) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: pill.symbol)
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(pill.label)
+                            .font(Theme.Fonts.caption2)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Theme.Palette.accent.opacity(0.10)))
+                    .overlay(Capsule().stroke(Theme.Palette.accent.opacity(0.25), lineWidth: 1))
+                    .foregroundStyle(Theme.Palette.accent)
+                }
+                .buttonStyle(.plain)
+                .help(pill.label)
+            }
+        }
+        .padding(.horizontal, Theme.Metrics.gutter)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 点一颗胶囊。
+    ///
+    /// **每一种都留了回去的路**，只是路不同：开窗口 / 开驾驶舱那几种，群聊本身
+    /// 没动过（关掉那层就回来了）；换群 / 换消息那两种会把出发点压进返回路，
+    /// 由中栏顶上那颗返回件退回来。
+    private func activate(_ pill: CrewMessageReferencePill, from entry: CrewWhiteboardEntry) {
+        #if os(macOS)
+        let here = CrewChatReturnTrail.Stop(
+            crewId: crewId, crewTitle: crewTitle, messageId: entry.id)
+        switch pill.action {
+        case .todo(let ledger, let number):
+            CrewTodoDetailWindowPresenter.shared.open(
+                crewId: crewId, crewName: crewTitle, ledger: ledger, focus: number,
+                runner: sessionRunner, appModel: appModel,
+                colorScheme: (AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
+        case .plan(let number):
+            cockpitPresentation.open(planNumber: number)
+        case .message(let id):
+            onJumpToMessage?(id, here)
+        case .session(let sessionId):
+            if let run = sessionRunner.runs.first(where: { $0.sessionId == sessionId }) {
+                onOpenSession?(run.runID)
+            }
+        case .crew(let targetCrewId, let sessionId):
+            onJumpToCrew?(targetCrewId, here)
+            if let sessionId,
+               let run = sessionRunner.runs.first(where: { $0.sessionId == sessionId }) {
+                onOpenSession?(run.runID)
+            }
+        }
+        #endif
+    }
+
     private func replyQuoteStrip(_ ref: CrewReplyReference) -> some View {
         HStack(spacing: 6) {
             Rectangle()
@@ -857,7 +980,16 @@ struct CrewChatView: View {
             .onChange(of: onlyMentions) { _, _ in
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
-                landAtBottom(proxy, animated: false, force: true)
+                // **有待定位的目标时不落底**（人类 Todo #132/#133）：筛选是为这次
+                // 定位才被收掉的（见 `CrewCenterView` 里那一行），落底会把刚跳过去
+                // 的位置抢回来 —— 症状是点了那颗胶囊，画面闪一下又回到最新一条，
+                // 看起来跟胶囊坏了一模一样。`landAtBottom` 是同步调用、
+                // `locateSearchTarget` 排在下一拍，所以先后不能靠运气。
+                if searchTargetMessageId?.wrappedValue == nil {
+                    landAtBottom(proxy, animated: false, force: true)
+                } else {
+                    locateSearchTarget(proxy)
+                }
             }
             .onChange(of: searchText) { _, _ in
                 renderLimit = CrewChatWindow.pageSize
@@ -997,6 +1129,25 @@ struct CrewChatView: View {
             }
         }
         .modifier(BubbleTextSelection(owner: selectionOwner, id: entry.id))
+        // 引用胶囊（人类 Todo #132/#133）——**排在气泡下面单独一排，而且在整条
+        // 气泡那个点击手势的作用域之外**。放进去的话，点胶囊会连带触发「点气泡跳
+        // 右栏那个 session」，人点的是 Todo、跳走的却是终端。
+        let pills = referencePills(for: entry)
+        if pills.isEmpty {
+            tappableBubble(bubble, entry: entry, text: msg.content)
+        } else {
+            VStack(alignment: msg.mine ? .trailing : .leading, spacing: 3) {
+                tappableBubble(bubble, entry: entry, text: msg.content)
+                referencePillRow(pills, from: entry)
+            }
+            .frame(maxWidth: .infinity, alignment: msg.mine ? .trailing : .leading)
+        }
+    }
+
+    /// 气泡本体那一块的手势与右键菜单（引用胶囊排**不**在里面，见调用点）。
+    @ViewBuilder
+    private func tappableBubble<V: View>(_ bubble: V, entry: CrewWhiteboardEntry,
+                                         text: String) -> some View {
         #if os(macOS)
         // session 发的消息可点 → 右栏切到对应 session（chunk2 T6 中栏跳转）。
         // 找不到对应 run（已移除/别的 crew）则点击无事发生。
@@ -1008,14 +1159,14 @@ struct CrewChatView: View {
                         onOpenSession?(run.runID)
                     }
                 }
-                .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+                .modifier(MessageContextMenu(text: text) { beginReply(to: entry) })
         } else {
             bubble
-                .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+                .modifier(MessageContextMenu(text: text) { beginReply(to: entry) })
         }
         #else
         bubble
-            .modifier(MessageContextMenu(text: msg.content) { beginReply(to: entry) })
+            .modifier(MessageContextMenu(text: text) { beginReply(to: entry) })
         #endif
     }
 

@@ -620,6 +620,14 @@ final class LocalCrewStore {
         crews[crewId]?.sessionMembers?.first { $0.sessionId == sessionId }?.extensionNumber
     }
 
+    /// 全机通讯录（号码 → 目标）。**号码解析仍是 `CrewDirectory` 那一份，不另开
+    /// 第二套** —— 这个项目吃过「两本账漂移」的亏，号码尤其不能有第二种解法。
+    ///
+    /// 与 helper 子进程那边的区别只有数据来源：那边跨进程只能读盘，app 内直接用
+    /// 内存里的 crew 账。不带 `crew-sessions.json` 快照 —— `resolve` 只拿它取机长
+    /// 的**显示名**，解析本身不依赖它（分机走 `sessionMembers`）。
+    func directory() -> CrewDirectory { CrewDirectory(crews: Array(crews.values)) }
+
     /// 某个 session 的完整号码（`7-3`）。crew 没号 / 该 session 不是本 crew 持久
     /// 成员 → nil。`isCaptain` 走机长分机（`7-1`），不查成员表。
     func phoneNumber(crewId: String, sessionId: String, isCaptain: Bool) -> CrewPhoneNumber? {

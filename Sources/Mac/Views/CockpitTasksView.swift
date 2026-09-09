@@ -12,13 +12,28 @@ import SwiftUI
 /// 界面默认展示最新判断，点开才看这条计划的完整更新序列。
 struct CockpitAgentMindView: View {
     let crewId: String
+    /// 群聊里那颗「计划 #N」胶囊带过来的落点（人类 Todo #132/#133）。
+    var planFocus: CockpitPresentation.PlanFocus? = nil
 
     /// 读回来的账 —— **按 crew 认领**（见 `CockpitPlanFeed`）。读改成异步之后，
     /// 迟到的结果不认、别的 crew 的行不显示。
     @State private var feed = CockpitPlanFeed()
     @State private var expanded: Set<Int> = []
+    /// 只看这一条（人类 Todo #132/#133）。nil = 完整列表。
+    @State private var focused: Int?
+    /// 已经认领过的落点 token（见 `applyPlanFocusIfNeeded`）。
+    @State private var appliedFocusToken: Int?
 
     private var plans: [CockpitPlanItem] { feed.plans(for: crewId) }
+
+    /// 这次要显示的行。指到不存在的 #N 时回落成完整列表（见 `CockpitPlanFocusing`）。
+    private var visibleItems: [CockpitTaskItem] {
+        CockpitPlanFocusing.focused(planItems, number: focused, numberOf: Self.planNumber)
+    }
+    /// 真的落在单条上了吗 —— 「‹ 全部」只在这时出现。
+    private var isFocused: Bool {
+        CockpitPlanFocusing.isFocused(planItems, focused: visibleItems)
+    }
 
     var body: some View {
         ScrollView {
@@ -26,7 +41,19 @@ struct CockpitAgentMindView: View {
                 if plans.isEmpty {
                     emptyState
                 } else {
-                    ForEach(CockpitTaskLedger.bands(planItems)) { group in
+                    if isFocused {
+                        // 落点没砍掉列表能力 —— 这颗把它原样还回来（同 Todo 详细窗口）。
+                        Button {
+                            focused = nil
+                        } label: {
+                            Label("全部", systemImage: "chevron.left")
+                                .font(Theme.Fonts.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.Palette.accent)
+                        .help("回到完整的计划列表")
+                    }
+                    ForEach(CockpitTaskLedger.bands(visibleItems)) { group in
                         bandSection(group)
                     }
                 }
@@ -37,6 +64,15 @@ struct CockpitAgentMindView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Theme.Palette.canvas)
+        // 群聊里点了「计划 #N」—— 落在那条上并把它摊开。
+        //
+        // **`onAppear` 与 `onChange` 都要挂**：`open(planNumber:)` 是先写落点再开
+        // 驾驶舱，所以首次出现时值已经在了，`onChange` 一次都不会触发 —— 只挂
+        // `onChange` 的话「关掉再点一颗胶囊」永远落不上，而这恰好是最常走的那条路。
+        .onAppear { applyPlanFocusIfNeeded() }
+        .onChange(of: planFocus) { _, _ in applyPlanFocusIfNeeded() }
+        // 换 crew：落点作废。别的 crew 的 #N 是另一条计划，留着就是张冠李戴。
+        .onChange(of: crewId) { _, _ in focused = nil }
         // `.task` 继承 MainActor —— 所以这里**一次磁盘 IO 都不能直接做**（人类 Todo #96）。
         // `CockpitPlanStore.list` 里是阻塞式 `flock(LOCK_EX)` + 整份 JSON 解码：
         // 只要有 helper 正在写这个 crew 的 .plan.lock，主线程就停在那儿等，
@@ -86,8 +122,24 @@ struct CockpitAgentMindView: View {
     private static let iso = ISO8601DateFormatter()
 
     private func plan(for item: CockpitTaskItem) -> CockpitPlanItem? {
-        guard let number = Int(item.id.dropFirst(Self.planPrefix.count)) else { return nil }
+        guard let number = Self.planNumber(item) else { return nil }
         return plans.first { $0.number == number }
+    }
+
+    /// 条目 id（`plan:7`）→ 计划号。落点判定与行查找共用这一份，别再解析第二遍。
+    private static func planNumber(_ item: CockpitTaskItem) -> Int? {
+        Int(item.id.dropFirst(planPrefix.count))
+    }
+
+    /// 把外面送来的落点应用一次。**按 token 认领**（不是按 #N）：同一个 #N 连点
+    /// 两次是两次请求，而人可能已经在驾驶舱里翻到别处去了；只比 #N 的话第二次
+    /// 毫无反应。反过来，重建视图时重复应用同一个 token 也会把人自己按的
+    /// 「‹ 全部」抹掉 —— 所以认领过就不再应用。
+    private func applyPlanFocusIfNeeded() {
+        guard let focus = planFocus, focus.token != appliedFocusToken else { return }
+        appliedFocusToken = focus.token
+        focused = focus.number
+        expanded.insert(focus.number)
     }
 
     @ViewBuilder private func bandSection(_ group: CockpitBandGroup) -> some View {

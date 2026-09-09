@@ -32,6 +32,9 @@ final class CrewStore: ObservableObject {
     @Published var selectedCrewId: String?
     /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
     @Published var chatSearchRequest: CrewChatSearchRequest?
+    /// 点引用胶囊跳走之后**回去的那条路**（人类 Todo #132/#133）。
+    /// 判定与层数全在纯函数 `CrewChatReturnTrail` 里。
+    @Published private(set) var chatReturnTrail = CrewChatReturnTrail()
     @Published private(set) var loadingList: Bool = false
     @Published private(set) var loadingDetailIds: Set<String> = []
     @Published private(set) var loadingSubjects: Bool = false
@@ -157,6 +160,10 @@ final class CrewStore: ObservableObject {
     // MARK: - Selection
 
     func selectCrew(_ id: String?) {
+        // 人自己换群 = 他走开了 —— 那条返回路作废（见 `CrewChatReturnTrail.clear`）。
+        // **引用胶囊的跳转走的也是这个方法**，所以要一个显式的「这次是跳转」标记：
+        // 分不开的话，第一次跳转就会把自己刚压上去的那一层清掉，返回件当场消失。
+        if !navigatingByReference { chatReturnTrail.clear() }
         selectedCrewId = id
         guard let id else { return }
         // **记一笔「人打开过这个 crew」**（Todo #102）。在此之前 `markViewed` 全仓
@@ -175,12 +182,58 @@ final class CrewStore: ObservableObject {
     }
 
     func openChatSearchResult(_ result: CrewMessageSearchResult, query: String) {
+        // 人自己从搜索走进来 = 走开了。留着一条通往他早已离开的地方的返回路，
+        // 比没有返回路更让人困惑（见 `CrewChatReturnTrail.clear`）。
+        chatReturnTrail.clear()
         selectCrew(result.document.crewId)
         chatSearchRequest = CrewChatSearchRequest(
             crewId: result.document.crewId,
             query: query,
             messageId: result.document.messageId)
     }
+
+    // MARK: - 引用胶囊的跳转与返回（人类 Todo #132/#133）
+
+    /// 跳到某个群的某条消息，并把**出发点**压进返回路。
+    ///
+    /// `from` 是「按返回该回到哪儿」—— 出发的那个群 + 出发时看着的那条消息。
+    /// 传 nil 表示这一跳没有起点可记（不该发生，但不值得为它崩）。
+    func jumpToMessage(crewId: String, messageId: String,
+                       from: CrewChatReturnTrail.Stop?) {
+        if let from { chatReturnTrail.push(from) }
+        navigatingByReference = true
+        defer { navigatingByReference = false }
+        selectCrew(crewId)
+        // `query` 留空：这不是搜索，是定位。中栏那条老路以 query 是否为空来决定
+        // 要不要开搜索态，空串正好只走定位。
+        chatSearchRequest = CrewChatSearchRequest(
+            crewId: crewId, query: "", messageId: messageId)
+    }
+
+    /// 切到某个机组（引用胶囊里的 `7` / `7-1`），并把出发点压进返回路。
+    func jumpToCrew(crewId: String, from: CrewChatReturnTrail.Stop?) {
+        if let from { chatReturnTrail.push(from) }
+        navigatingByReference = true
+        defer { navigatingByReference = false }
+        selectCrew(crewId)
+    }
+
+    /// 按返回：退一层，回到那个群的那条消息。**不再往返回路里压新的一层** ——
+    /// 否则「返回」自己会变成一次跳转，人就永远退不出去了。
+    func returnToPreviousStop() {
+        guard let stop = chatReturnTrail.pop() else { return }
+        navigatingByReference = true
+        defer { navigatingByReference = false }
+        selectCrew(stop.crewId)
+        chatSearchRequest = CrewChatSearchRequest(
+            crewId: stop.crewId, query: "", messageId: stop.messageId)
+    }
+
+    /// 整条返回路作废（人自己换了群 / 走进了别的入口）。
+    func clearChatReturnTrail() { chatReturnTrail.clear() }
+
+    /// 这一次 `selectCrew` 是引用胶囊的跳转（或按返回），不是人自己换群。
+    private var navigatingByReference = false
 
     // MARK: - Refresh
 
