@@ -41,6 +41,8 @@ final class ViewWiringTests: XCTestCase {
          "没有任何地方把筛选开关喂给群聊，toolbar 上那个钮点了不动（Todo #61 失效）"),
         ("CrewMentionPickerLayout.maxHeight", "CrewMentionPickerLayout.swift",
          "@ 候选浮层的限高算好了却没人扣上去，列表照旧顶穿窗口（Todo #69 失效）"),
+        ("AgentCLIVersionView(", "AgentCLIVersionView.swift",
+         "设置里看不到 claude / codex 版本，检测/升级/回滚/doctor 全没有入口（Todo #131 挪过去之后就只剩设置这一个调用点）"),
         ("TerminalBellTrace.summary(", "TerminalBellTrace.swift",
          "响铃变成了纯静音：BEL 不再发声，但也没人显示是哪个 session 响的（Todo #110 只剩一半）"),
     ]
@@ -498,6 +500,48 @@ final class ViewWiringTests: XCTestCase {
             XCTAssertFalse(source.contains("手动设置"),
                            "\(name) 仍可能向 session 注入手动档位")
         }
+    }
+
+    /// 人类 Todo #131：左下角那块只留额度环 —— 账号头像那行的今日 token 用量去掉，
+    /// claude / codex 的 CLI 版本从页脚**挪进**设置页（挪，不是复制）。
+    ///
+    /// 三条分别对着三个会翻车的方向：
+    /// ① 版本还留在左下角（挪成了复制）；
+    /// ② 设置页压根没接上（挪丢了）；
+    /// ③ 账号头像那行的用量还在（该去的没去）。
+    func testAgentCLIVersionMovedFromFooterToSettingsTodo131() throws {
+        let footer = try Self.text(of: "QuotaRingsFooter.swift")
+        let sidebar = try Self.text(of: "CrewSidebarView.swift")
+        let settings = try Self.text(of: "CrewSettingsView.swift")
+
+        // ① 左下角不再出现 CLI 版本 —— 页脚和侧栏都不许再引用它。
+        for (name, source) in [("QuotaRingsFooter.swift", footer),
+                               ("CrewSidebarView.swift", sidebar)] {
+            XCTAssertFalse(source.contains("AgentCLIVersionView("),
+                           "\(name) 仍在左下角画 CLI 版本（Todo #131 要求挪走，不是复制）")
+            XCTAssertFalse(source.contains("AgentCLIVersionCenter"),
+                           "\(name) 仍持有 CLI 版本检测中心，左下角还会跑版本检测")
+        }
+
+        // ② 设置里出现了，而且四个能力（升级 / 回滚 / doctor / 重新检测）跟着一起到。
+        XCTAssertTrue(settings.contains("AgentCLIVersionView("),
+                      "设置页没有 CLI 版本入口 —— 版本被挪丢了，不是挪走了")
+        XCTAssertTrue(settings.contains("AgentCLIVersionCenter.shared"),
+                      "设置页没接上版本检测中心，打开设置不会去检测")
+        let version = try Self.text(of: "AgentCLIVersionView.swift")
+        for capability in ["检查更新并升级…", "回滚到本机保留版本…",
+                           "运行健康检查（doctor）", "重新检测版本"] {
+            XCTAssertTrue(version.contains(capability),
+                          "挪位置时把「\(capability)」一起删了 —— 人类要的是换个地方显示")
+        }
+
+        // ③ 账号头像那行的今日 token 用量去掉（额度环是另一回事，必须还在）。
+        XCTAssertFalse(sidebar.contains("AgentUsageLine"),
+                       "账号头像那行还挂着今日 token 用量")
+        XCTAssertFalse(sidebar.contains("LocalAgentUsageMonitor"),
+                       "侧栏仍在读今日 token 用量")
+        XCTAssertTrue(sidebar.contains("QuotaRingsFooter(quota: quota)"),
+                      "订阅额度环被一起删掉了 —— 人类去掉的是账号头像那行的用量，不是额度环")
     }
 
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
