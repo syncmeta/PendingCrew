@@ -132,6 +132,29 @@ final class ChiefLayerEntryTests: XCTestCase {
                        "下半段不许再出现总机组")
     }
 
+    // MARK: - 它进名册，但不占通讯录的号
+
+    /// **不占号**。号码是通讯录里「第 7 号机组」那个 7，而且**终身不变、永不
+    /// 回收** —— 让内建那一层占掉 1 号，全新一台机器上人建的第一个机组就永远
+    /// 是 2 号了。这条是造它那一步（`init` 里）最容易带出来的暗伤。
+    func testTheChiefLayerDoesNotConsumeADirectoryNumber() {
+        let s = store()
+        let first = makeCrew(s, "第一个机组")
+        XCTAssertNil(s.crewNumber(of: LocalCrew.chiefCrewId),
+                     "它不是一个机组，不该占号")
+        XCTAssertEqual(s.crewNumber(of: first), 1,
+                       "人建的第一个机组仍然是 1 号 —— 内建那一层不许把它挤到 2")
+    }
+
+    /// 不占号的**下游**：它因此也不出现在通讯录里（`CrewDirectory` 收的正是
+    /// 有号的那批）。这条把「不占号」和「看得见的后果」钉在一起。
+    func testTheChiefLayerIsNotListedInTheDirectory() {
+        let s = store()
+        _ = makeCrew(s, "第一个机组")
+        XCTAssertFalse(s.directory().render().contains("总机组"),
+                       "通讯录列的是机组，不该出现内建那一层")
+    }
+
     // MARK: - ③ 选中站得住
 
     /// 总机组**永远不在** crew 列表里，所以「不在列表里就清掉选中」那条规则

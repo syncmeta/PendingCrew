@@ -802,7 +802,13 @@ final class LocalCrewStore {
         for id in crews.keys.sorted(by: { (crews[$0]?.createdAt ?? "") < (crews[$1]?.createdAt ?? "") }) {
             guard var crew = crews[id] else { continue }
             var touched = false
-            if crew.crewNumber == nil {
+            // **内建那一层不占号**（人类 Todo #130 / #137）。号码是通讯录里
+            // 「第 7 号机组」那个 7 —— 总机组不是一个机组，占了号就等于：
+            // ① 它出现在通讯录列表里（`CrewDirectory` 收的正是 `crewNumber != nil`
+            //    那批），跟「不进 crew 列表 / 不进组织树」的口径当场打架；
+            // ② 全新一台机器上，人建的第一个机组从 1 变成 2 —— 而号码是**终身
+            //    不变、永不回收**的，错一次就永远错着。
+            if crew.crewNumber == nil, crew.builtin != true {
                 crew.crewNumber = nextCrewNumber
                 nextCrewNumber += 1
                 touched = true

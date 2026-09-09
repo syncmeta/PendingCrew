@@ -176,9 +176,16 @@ final class LocalCrewStoreTests: XCTestCase {
         let s = LocalCrewStore(baseDirectory: dir)
         XCTAssertEqual(s.titleSource(of: "place"), .placeholder)
         XCTAssertEqual(s.titleSource(of: "named"), .human)
-        let persisted = try String(contentsOf: file, encoding: .utf8)
-        XCTAssertEqual(persisted.components(separatedBy: "\"titleSource\"").count - 1, 2,
-                       "两条旧记录都应一次性写回来源字段")
+        // **数的是那两条记录自己有没有被写回，不是整份文件里出现过几次
+        // `titleSource`**。原来那句数的是全文件的子串出现次数 —— 它是个代理量：
+        // 名册里多出任何一条带该字段的记录（2026-09-09 起「总机组那一层」就是
+        // 一条）都会把它顶红，而那跟「这两条旧记录回填了没有」毫无关系。
+        let persisted = try JSONDecoder().decode(
+            LocalCrewFile.self, from: try Data(contentsOf: file))
+        for id in ["place", "named"] {
+            XCTAssertNotNil(persisted.crews.first { $0.id == id }?.titleSource,
+                            "旧记录 \(id) 应一次性写回来源字段")
+        }
         XCTAssertEqual(LocalCrewStore(baseDirectory: dir).titleSource(of: "place"), .placeholder)
     }
 
