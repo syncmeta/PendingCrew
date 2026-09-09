@@ -23,7 +23,9 @@ struct AgentCLIVersionView: View {
                     .monospacedDigit()
                 Image(systemName: "chevron.down")
             }
-            .font(.system(size: 10))
+            // 字号跟设置页 Form 的正文走（Todo #131 之前它挂在侧栏页脚，那里是
+            // 10pt 小字；搬进设置后 10pt 会小得像坏了）。
+            .font(.callout)
         }
         .buttonStyle(.plain)
         .help("\(kind.displayName) 版本管理\(center.errors[kind].map { "：" + $0 } ?? "")")

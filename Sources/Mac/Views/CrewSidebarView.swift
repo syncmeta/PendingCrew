@@ -20,8 +20,6 @@ struct CrewSidebarView: View {
     @State private var hiddenExpanded = false
     /// crew 级「最后看过」时间（UserDefaults）—— 已隐藏那行算未读的第二个参照点。
     @ObservedObject private var viewed = CrewViewedStore.shared
-    /// 长期职责的唯一所有者（spec §6）—— 用量监视归它持有，这里只观察。
-    @EnvironmentObject private var sessionHost: SessionHost
     @ObservedObject private var quota = QuotaCenter.shared
     /// 层级 / 时间流（Todo #50）。写 UserDefaults，与外观模式同一条持久化路子 ——
     /// 用户切过一次，下次开 app 还停在那儿。默认层级（不动现有肌肉记忆）。
@@ -64,7 +62,7 @@ struct CrewSidebarView: View {
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             quotaFooterLine
-            // 本机身份 + 今日用量。#63 之后不登录到任何地方,这一行只是展示。
+            // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
         }
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
@@ -405,22 +403,19 @@ struct CrewSidebarView: View {
     }
 
     /// Sidebar 底部固定条：「人」+ 随机头像 —— 与成员列表里那个「人」**同一张脸**
-    /// (同一 seed `LocalWhiteboardStore.localUserId` 喂同一套 `BotAvatar`)，
-    /// 底下跟今日 CC / Codex 用量小字行。
+    /// (同一 seed `LocalWhiteboardStore.localUserId` 喂同一套 `BotAvatar`)。
     ///
     /// #63:PendingCrew 不登录到任何地方,原来那条「点「人」开登录面板」的入口
     /// 和已登录态的 subject/签出菜单一并删掉 —— 这一行现在纯展示,不可点。
-    /// 用量小字行原先嵌在已登录分支里,它跟登录无关(本机 runner 的 token 用量),
-    /// 所以挪出来保住,不随登录层一起陪葬。
+    ///
+    /// 人类 Todo #131:头像旁边那行「今日 CC / Codex token 用量」去掉 ——
+    /// **去掉的只是这一行**,上面那块订阅额度环(`quotaFooterLine`)照旧。
     private var identityFooter: some View {
         HStack(spacing: 10) {
             BotAvatar(seed: LocalWhiteboardStore.localUserId, size: 26)
                 .frame(width: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("人")
-                    .font(.callout.weight(.medium))
-                agentUsageLine
-            }
+            Text("人")
+                .font(.callout.weight(.medium))
             Spacer(minLength: 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -445,45 +440,6 @@ struct CrewSidebarView: View {
         }
     }
 
-    /// 今日 CC / Codex token 用量小字行（两项都 nil 时隐藏）。
-    private var agentUsageLine: some View {
-        AgentUsageLine(monitor: sessionHost.usage)
-    }
-
-}
-
-/// 今日 CC / Codex token 用量小字行（两项都 nil 时隐藏）。
-///
-/// 单独成 View 是因为它读 `LocalAgentUsageMonitor` 的 `@Published`：monitor 现在
-/// 由 app 级 `SessionHost` 持有（前后端分离 P0），侧栏从 `sessionHost.usage` 取到的
-/// 计算属性拿不到刷新 —— 得有个 `@ObservedObject` 才会随它重绘。
-private struct AgentUsageLine: View {
-    @ObservedObject var monitor: LocalAgentUsageMonitor
-
-    @ViewBuilder
-    var body: some View {
-        let cc = monitor.claudeTodayTokens
-        let cx = monitor.codexTodayTokens
-        if cc != nil || cx != nil {
-            HStack(spacing: 6) {
-                if let n = cc {
-                    HStack(spacing: 2) {
-                        Text("Claude")
-                        Text(LocalAgentUsageMonitor.formatTokens(n))
-                    }
-                }
-                if cc != nil, cx != nil { Text("·") }
-                if let n = cx {
-                    HStack(spacing: 2) {
-                        Text("Codex")
-                        Text(LocalAgentUsageMonitor.formatTokens(n))
-                    }
-                }
-            }
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-        }
-    }
 }
 
 #endif
