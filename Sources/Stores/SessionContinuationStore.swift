@@ -53,8 +53,12 @@ final class SessionContinuationStore: @unchecked Sendable {
 
     /// At most one unconsumed promise per session. Repeated calls in one turn keep
     /// the first promise instead of manufacturing multiple future turns.
+    /// `onWriteFailure`: called with the IO error when the promise could not be
+    /// persisted (the method then returns false). Without it, "write failed" and
+    /// "already armed" are the same `false` — and the receipt for the two must differ.
     @discardableResult
-    func arm(crewId: String, sessionId: String, note: String) -> Bool {
+    func arm(crewId: String, sessionId: String, note: String,
+             onWriteFailure: ((Error) -> Void)? = nil) -> Bool {
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return withLock {
@@ -67,7 +71,10 @@ final class SessionContinuationStore: @unchecked Sendable {
                 id: UUID().uuidString.lowercased(), crewId: crewId, sessionId: sessionId,
                 note: trimmed, phase: .armed,
                 createdAt: ISO8601DateFormatter().string(from: Date())))
-            MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
+            if let failure = MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) {
+                onWriteFailure?(failure)
+                return false
+            }
             return true
         }
     }
@@ -108,7 +115,9 @@ final class SessionContinuationStore: @unchecked Sendable {
                 $0.sessionId == sessionId && $0.phase == .ready
             }) else { return nil }
             let lease = rows.remove(at: index)
-            MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
+            // 取走没落盘 = 这条租约还在文件里，下次会被再取一次（at-most-once 破了）。
+            // 宁可这一轮不续跑，也不要续两轮。
+            guard MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil else { return nil }
             return lease
         }
     }

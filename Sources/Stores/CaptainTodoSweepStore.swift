@@ -37,18 +37,23 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
 
     /// 记下一次被接受的确认。**提醒时刻一并清空** —— 确认之后重新计时，
     /// 免得「确认完又冒出新条目」时被上一次的地板间隔压着不吭声。
-    func recordConfirmation(crewId: String, _ confirmation: CaptainTodoSweep.Confirmation) {
+    /// **返回 nil = 真的落到磁盘上了。**没落盘却回一句「记下了」，机长下次空闲
+    /// 会被重新问一遍同一批条目 —— 而它以为自己已经交代过了。
+    @discardableResult
+    func recordConfirmation(crewId: String,
+                            _ confirmation: CaptainTodoSweep.Confirmation) -> Error? {
         withFileLock(crewId) {
             saveLocked(crewId: crewId, Row(confirmation: confirmation, lastRemindedAt: nil))
         }
     }
 
     /// 记下「刚提醒过」。**不碰确认** —— 提醒不会让已有的确认作废。
-    func recordReminded(crewId: String, at date: Date) {
+    @discardableResult
+    func recordReminded(crewId: String, at date: Date) -> Error? {
         withFileLock(crewId) {
             var row = loadLocked(crewId) ?? Row()
             row.lastRemindedAt = ISO8601DateFormatter().string(from: date)
-            saveLocked(crewId: crewId, row)
+            return saveLocked(crewId: crewId, row)
         }
     }
 
@@ -70,7 +75,7 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
             Row.self, at: fileURL(crewId), onIncident: { _ in }).first
     }
 
-    private func saveLocked(crewId: String, _ row: Row) {
+    private func saveLocked(crewId: String, _ row: Row) -> Error? {
         MultiProcessJSONStore.saveRowsLocked([row], to: fileURL(crewId))
     }
 }

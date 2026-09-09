@@ -103,13 +103,16 @@ final class LocalApprovalStore: @unchecked Sendable {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
             rows.append(item)
-            saveLocked(crewId: crewId, rows: rows)
+            // 没落盘就别把 id 交出去：调用方会拿它 long-poll 一条磁盘上不存在的
+            // 待决策，干等到超时，而超时那句话把病因指向「没人答」。
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return nil }
             return item.id
         }
     }
 
-    /// 决策类答复（人类 / captain 答文本）。
-    func answer(crewId: String, id: String, reply: String) {
+    /// 决策类答复（人类 / captain 答文本）。**返回 nil = 真的落到磁盘上了。**
+    @discardableResult
+    func answer(crewId: String, id: String, reply: String) -> Error? {
         update(crewId: crewId, id: id) { $0.status = "answered"; $0.reply = reply }
     }
 
@@ -126,13 +129,14 @@ final class LocalApprovalStore: @unchecked Sendable {
             else { return false }
             rows[idx].status = "answered"
             rows[idx].reply = reply
-            saveLocked(crewId: crewId, rows: rows)
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return false }
             return true
         }
     }
 
-    /// 权限类决定（allow / deny）。
-    func decide(crewId: String, id: String, decision: String) {
+    /// 权限类决定（allow / deny）。**返回 nil = 真的落到磁盘上了。**
+    @discardableResult
+    func decide(crewId: String, id: String, decision: String) -> Error? {
         update(crewId: crewId, id: id) { $0.status = "answered"; $0.decision = decision }
     }
 
@@ -168,11 +172,15 @@ final class LocalApprovalStore: @unchecked Sendable {
             text: "待审批/待决策列表：" + incident.summary + tail,
             senderName: "系统")
     }
-    private func saveLocked(crewId: String, rows: [ApprovalItem]) {
-        MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL(crewId))
+    /// **返回 nil = 真的落到磁盘上了。**写失败时不发变更信号 —— 那会让订阅方
+    /// 去重读一份没变的文件，并把「刷新过了」误当成「答复生效了」。
+    private func saveLocked(crewId: String, rows: [ApprovalItem]) -> Error? {
+        let failure = MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL(crewId))
+        guard failure == nil else { return failure }
         // 单一写入漏斗 —— raise / answer / decide 都经此,发一个变更信号(去轮询)。
         // 订阅方(`approvalChanges`)按 crewId 过滤。
         changes.send(crewId)
+        return nil
     }
     private func refuseUnsafeEmptyRewrite(crewId: String, rows: [ApprovalItem]) -> Bool {
         // 拒写闸不再自己报警：读失败 / 损坏都已由上面的 `loadLocked` 如实报过一次
@@ -181,15 +189,37 @@ final class LocalApprovalStore: @unchecked Sendable {
         // 而群聊里的重复噪音正是这次事故要治的东西之一。
         return MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL(crewId))
     }
-    private func update(crewId: String, id: String, _ mut: (inout ApprovalItem) -> Void) {
+    /// **返回 nil = 真的改到磁盘上了**；非 nil = 这次没写进去（读不出来 / 找不到 /
+    /// 落盘失败三种，各带各的原因）。
+    private func update(crewId: String, id: String,
+                        _ mut: (inout ApprovalItem) -> Void) -> Error? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
             // 读不出来时 rows 是空表，光凭 firstIndex 找不到就返回等于静默作废这次
             // 答复。先过拒写闸（归档 + 白板警示），至少群里知道审批账本出事了（#577）。
-            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return }
-            guard let idx = rows.firstIndex(where: { $0.id == id }) else { return }
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
+                return ApprovalWriteError.ledgerUnavailable
+            }
+            guard let idx = rows.firstIndex(where: { $0.id == id }) else {
+                return ApprovalWriteError.itemGone
+            }
             mut(&rows[idx])
-            saveLocked(crewId: crewId, rows: rows)
+            return saveLocked(crewId: crewId, rows: rows)
+        }
+    }
+}
+
+/// 答复/决定这一笔没成的两种非 IO 原因。跟磁盘错误分开，因为调用方该说的话不同。
+enum ApprovalWriteError: LocalizedError {
+    /// 列表这次读不出来 / 漏读 —— 原件没动，本次写已拒（白板上已有系统警示）。
+    case ledgerUnavailable
+    /// 这条待决策在账上找不到了（被别的进程消费掉、或从来没落盘）。
+    case itemGone
+
+    var errorDescription: String? {
+        switch self {
+        case .ledgerUnavailable: return "待决策列表这次读不出来，本次写已拒（白板上有系统警示）"
+        case .itemGone: return "账上找不到这条待决策了"
         }
     }
 }

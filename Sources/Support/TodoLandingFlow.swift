@@ -103,7 +103,7 @@ enum TodoLandingFlow {
         guard reached < terminal(action) else { return head }
         switch reached {
         case .persisted:
-            return head + "\n⚠️ 但**群里那行没发出去**：\(detail ?? "原因不明")。"
+            return head + "\n⚠️ 但**群里那行**\(WriteReceipt.notWrittenMarker)：\(detail ?? "原因不明")。"
                 + "条目/回应已经落在账上了，群里没人看得见 —— 需要的话自己去群里补一句。"
         case .announced:
             return head + "\n⚠️ 但**没能叫醒该醒的那个**：\(detail ?? "原因不明")。"
@@ -121,12 +121,14 @@ enum TodoLandingFlow {
         let why = detail ?? "列表文件这次读不出来或漏读，原有内容没被动过（群聊白板上有一条系统警示）"
         switch action {
         case .added:
-            return "ERROR: 没能记进\(noun) —— \(why)。**这条没有记下**，请重试；"
-                + "急事改用 ask（阻塞等人答）。"
+            return "ERROR: 这条\(noun)\(WriteReceipt.notWrittenMarker) —— \(why)。"
+                + "**账上没有它**，请重试；急事改用 ask（阻塞等人答）。"
         case .responded:
-            return "回应没能落上 —— \(why)。**这条回应没有记下**，群里也不会出现它，请重试。"
+            return "这条回应\(WriteReceipt.notWrittenMarker) —— \(why)。"
+                + "**账上没有它**，群里也不会出现它，请重试。"
         case .withdrawn:
-            return "撤回没能落上 —— \(why)。**那条仍然挂在人的账上等他回应**，请重试。"
+            return "这次撤回\(WriteReceipt.notWrittenMarker) —— \(why)。"
+                + "**那条仍然挂在人的账上等他回应**，请重试。"
         }
     }
 }

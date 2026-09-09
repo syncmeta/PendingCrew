@@ -268,10 +268,14 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 缺了它整个功能落不了地 —— 人类回应时根本不知道该叫醒谁（回落规则见
     /// `HumanTodoWakePlan`）。`.agent` 那本由人类新增，两个都留 nil。
     @discardableResult
+    /// `onWriteFailure`：**落盘失败时拿到那个错误**（同时本方法返回 nil）。
+    /// 回执必须如实的调用点（MCP 写工具）传它；不在乎的调用点照旧不传。
+    /// 形状照抄本仓库既有的 `loadRowsLocked(onIncident:)` —— 别发明第二种。
     func add(crewId: String, text: String,
              attachments: [LocalWhiteboardAttachment]? = nil,
              bySessionId: String? = nil,
-             bySenderName: String? = nil) -> LocalTodoItem? {
+             bySenderName: String? = nil,
+             onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
@@ -287,7 +291,10 @@ final class LocalTodoStore: @unchecked Sendable {
                 createdBySessionId: bySessionId,
                 createdBySenderName: bySenderName)
             rows.append(item)
-            saveLocked(crewId: crewId, rows: rows)
+            if let failure = saveLocked(crewId: crewId, rows: rows) {
+                onWriteFailure?(failure)
+                return nil
+            }
             return item
         }
     }
@@ -298,7 +305,8 @@ final class LocalTodoStore: @unchecked Sendable {
     @discardableResult
     func respond(crewId: String, number: Int, sessionId: String,
                  senderName: String? = nil, text: String,
-                 newStatus: String? = nil) -> LocalTodoItem? {
+                 newStatus: String? = nil,
+                 onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
@@ -315,7 +323,10 @@ final class LocalTodoStore: @unchecked Sendable {
                 rows[idx].status = s
             }
             rows[idx].updatedAt = stamp
-            saveLocked(crewId: crewId, rows: rows)
+            if let failure = saveLocked(crewId: crewId, rows: rows) {
+                onWriteFailure?(failure)
+                return nil
+            }
             return rows[idx]
         }
     }
@@ -334,7 +345,8 @@ final class LocalTodoStore: @unchecked Sendable {
             guard rows[idx].text != trimmed else { return rows[idx] }
             rows[idx].text = trimmed
             rows[idx].updatedAt = timestamp()
-            saveLocked(crewId: crewId, rows: rows)
+            // 写不进去就别把改好的那一行交出去 —— 磁盘上还是旧文本。
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return nil }
             return rows[idx]
         }
     }
@@ -352,7 +364,7 @@ final class LocalTodoStore: @unchecked Sendable {
             let stamp = timestamp()
             rows[idx].deletedAt = stamp
             rows[idx].updatedAt = stamp
-            saveLocked(crewId: crewId, rows: rows)
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return false }
             return true
         }
     }
@@ -386,6 +398,9 @@ final class LocalTodoStore: @unchecked Sendable {
         case reasonRequired
         /// 列表文件这次读不出来 / 读到空但磁盘非空 —— 什么都没改。
         case ledgerUnavailable
+        /// 读到了、也改好了，**但这一笔没落到磁盘上**。原件仍是撤回之前的样子：
+        /// 那条 Todo 还挂在人的账上等他回应。带的是错误原文。
+        case notWritten(String)
     }
 
     /// 撤回资格的**唯一判据**（纯函数）。`nil` = 撤得动；非 nil = 撤不动的那个原因。
@@ -456,7 +471,9 @@ final class LocalTodoStore: @unchecked Sendable {
             rows[idx].withdrawnAt = stamp
             rows[idx].withdrawnBySessionId = sessionId
             rows[idx].updatedAt = stamp
-            saveLocked(crewId: crewId, rows: rows)
+            if let failure = saveLocked(crewId: crewId, rows: rows) {
+                return .notWritten(failure.localizedDescription)
+            }
             return .withdrawn(rows[idx])
         }
     }
@@ -475,7 +492,7 @@ final class LocalTodoStore: @unchecked Sendable {
             let stamp = timestamp()
             rows[idx].dismissedAt = dismissed ? stamp : nil
             rows[idx].updatedAt = stamp
-            saveLocked(crewId: crewId, rows: rows)
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return false }
             return true
         }
     }
@@ -531,7 +548,7 @@ final class LocalTodoStore: @unchecked Sendable {
                 attachments: (attachments?.isEmpty ?? true) ? nil : attachments))
             if wasCompleted { rows[idx].status = "pending" }
             rows[idx].updatedAt = stamp
-            saveLocked(crewId: crewId, rows: rows)
+            guard saveLocked(crewId: crewId, rows: rows) == nil else { return nil }
             return rows[idx]
         }
     }
@@ -585,9 +602,18 @@ final class LocalTodoStore: @unchecked Sendable {
             senderName: "系统")
     }
 
-    private func saveLocked(crewId: String, rows: [LocalTodoItem]) {
-        MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL(crewId))
-        changes.send(crewId)
+    /// **返回 nil = 这些行真的落到磁盘上了。**
+    ///
+    /// 读那一侧早就是 fail-closed 的（`loadLocked` 报 `.unreadable`、
+    /// `refuseUnsafeEmptyRewrite` 拒写）；**写这一侧以前是敞开的** —— `saveRowsLocked`
+    /// 吞掉 IO 错误、这里返回 `Void`、于是 `respond` 照常返回改好的那一行、
+    /// `respond_todo` 照常回一句「已回应 Todo #N」，而账本上什么都没多。
+    private func saveLocked(crewId: String, rows: [LocalTodoItem]) -> Error? {
+        let failure = MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL(crewId))
+        // 写失败就别发变更信号：那会让界面去重读一份没变的文件，
+        // 并把「刷新过了」误当成「改动生效了」。
+        if failure == nil { changes.send(crewId) }
+        return failure
     }
 
     /// **每一条**读-改-写路径开头都要过这道闸（#577）：文件读不出来时 `loadLocked`
