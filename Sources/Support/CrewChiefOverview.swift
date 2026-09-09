@@ -79,6 +79,53 @@ enum CrewChiefOverview {
         arranged(base: baseOrder(crews: crews, activity: activity), arrangement: arrangement)
     }
 
+    // MARK: - 侧栏第三视图画出来的那份行列表
+
+    /// 第三视图的一行：**总机组那个固定入口**，或者一个普通 crew。
+    ///
+    /// 入口做成一个 `Row` 而不是在视图里硬插一段，是为了让「它在不在、排第几、
+    /// 指向谁」这三件事变成**可以红的断言**。写在视图里的话，只剩目视能验。
+    enum Row: Identifiable, Equatable {
+        /// 总机组那一层的固定入口（永远第一行）。
+        case chiefLayer(CrewSummary)
+        /// 一个普通机组。
+        case crew(Entry)
+
+        var id: String {
+            switch self {
+            case .chiefLayer(let crew): return "chief-layer:\(crew.id)"
+            case .crew(let entry): return entry.id
+            }
+        }
+
+        /// 普通机组那一行对应的 crew id（固定入口那行是 nil）。
+        var crewId: String? {
+            if case .crew(let entry) = self { return entry.crew.id }
+            return nil
+        }
+    }
+
+    /// 第三视图从上到下要画的那份行列表。
+    ///
+    /// - `chiefLayer` 给了就**钉在第一行**，不参与排序、不受 agent 排布影响 ——
+    ///   它是「这一层的界面」，不是列表里的一条；
+    /// - `chiefLayer` 为 nil（名册里还没有那一层）就**只是不画这一行**，
+    ///   下面那份列表照常。入口挂了不该让整个侧栏一起挂；
+    /// - 下半段**显式滤掉**总机组，哪怕它漏进了 `crews`：一个入口出现两次，
+    ///   人分不清该点哪个。
+    static func rows(
+        chiefLayer: CrewSummary?,
+        crews: [CrewSummary],
+        activity: (CrewSummary) -> Date?,
+        arrangement: [String] = []
+    ) -> [Row] {
+        let listed = crews.filter { $0.id != LocalCrew.chiefCrewId }
+        let body = ordered(crews: listed, activity: activity, arrangement: arrangement)
+            .map(Row.crew)
+        guard let chiefLayer else { return body }
+        return [.chiefLayer(chiefLayer)] + body
+    }
+
     private static func precedes(_ lhs: Entry, _ rhs: Entry) -> Bool {
         switch (lhs.activity, rhs.activity) {
         case let (l?, r?):

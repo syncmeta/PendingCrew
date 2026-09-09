@@ -71,6 +71,16 @@ final class LocalCrewStore {
         self.fileURL = base.appendingPathComponent("local-crews.json")
         self.lockURL = base.appendingPathComponent("local-crews.lock")
         loadFromDisk()
+        // **总机组那一层在这里被造出来**（人类 Todo #130 / #137）。
+        //
+        // 在 `init` 里而不是某个界面路径上：这条记录是**成员表、分机号、群聊
+        // @ 可见性、通讯录、附件**共同的挂载点，helper 子进程也要读得到它。
+        // 挂在「侧栏第一次刷新」那种地方，等于让它的存在取决于谁先跑起来。
+        //
+        // 幂等：已经在了就**一个字节都不写**（`upsertBuiltinChiefCrew` 里那道
+        // guard 直接 return false，`mutatingCrews` 因此跳过落盘）。尤其不覆盖
+        // title 和 sessionMembers —— 那两样是它真正在用的东西。
+        upsertBuiltinChiefCrew()
     }
 
     // MARK: - Public API

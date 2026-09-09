@@ -44,7 +44,11 @@ struct CrewChiefListView: View {
         // body 里只是一次字典查表 —— **不碰磁盘**。
         let statusCarriers = crewStore.crewStatusCarriers
         let now = Date()
-        let entries = CrewChiefOverview.ordered(
+        // 顶上那个固定入口 + 下面那份排好序的列表，**一次算出来**
+        // （`CrewChiefOverview.rows`）。入口在不在、排第几、指向谁，是那边的
+        // 单元测试压着的，不是这里目视出来的。
+        let rows = CrewChiefOverview.rows(
+            chiefLayer: crewStore.chiefLayer,
             crews: crews,
             activity: { crew in
                 CrewActivityTime.resolve(
@@ -52,6 +56,23 @@ struct CrewChiefListView: View {
                     crewUpdatedAt: crew.updatedAt)
             },
             arrangement: arrangement?.crewIds ?? [])
+        let entries = rows.compactMap { row -> CrewChiefOverview.Entry? in
+            if case .crew(let entry) = row { return entry }
+            return nil
+        }
+
+        // 总机组那一层的门。它在**溯源行之上** —— 那行讲的是「下面这份列表是
+        // 谁排的」，跟这一层无关，压在它下面会读成「这一层也是排出来的」。
+        ForEach(rows.filter { if case .chiefLayer = $0 { return true } else { return false } }) { row in
+            if case .chiefLayer(let chief) = row {
+                CrewChiefLayerEntryRow(crew: chief)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                Divider()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 2)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            }
+        }
 
         provenanceHeader
             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))

@@ -19,6 +19,13 @@ protocol PendingCrewBackend: AnyObject {
 
     // MARK: - Crew
     func listCrews() async throws -> [CrewSummary]
+
+    /// **总机组那一层**（人类 Todo #130 / #137），它不在 `listCrews()` 里。
+    /// nil = 名册里还没有那一条。分开一个方法而不是给 `listCrews` 加参数：
+    /// 「这台机器上有哪些机组」和「那一层在不在」是两个问题，混成一个返回值
+    /// 之后每个调用方都得再判一次 `isBuiltin`，迟早有一处漏。
+    func chiefLayer() async throws -> CrewSummary?
+
     func getCrew(_ crewId: String) async throws -> CrewDetail
     func createCrew(_ request: CreateCrewRequest) async throws -> CreateCrewResponse
 
@@ -128,6 +135,11 @@ final class LocalBackend: PendingCrewBackend {
 
     func listCrews() async throws -> [CrewSummary] {
         store.listCrews()
+    }
+
+    func chiefLayer() async throws -> CrewSummary? {
+        store.listCrews(includingBuiltin: true)
+            .first { $0.id == LocalCrew.chiefCrewId }
     }
 
     func getCrew(_ crewId: String) async throws -> CrewDetail {

@@ -284,6 +284,10 @@ targets:
       # 侧栏总机长视图的排序（Todo #102 / #113：不分类，只排序；agent 排布是主
       # 路径，最近活动倒序是兜底）。同上，纯 Foundation，依赖 CrewSummary。
       - path: Sources/Support/CrewChiefOverview.swift
+      # 「列表刷新后选中该不该清掉」的判据（Todo #130/#137）。总机组按设计永远
+      # 不在 crew 列表里，旧规则会把它从选中位上弹下来 —— 拆出来是为了让
+      # 「放行它」和「真的没了就清掉」两半各有一条压着的测试。纯 Foundation。
+      - path: Sources/Support/CrewSelectionRule.swift
       # 排序原料的渲染（#113 追问：三列原样交出去，不加权）。纯 Foundation。
       - path: Sources/Support/CrewOrderingSignals.swift
       # 侧栏那一行「各机长自己填的那句状态」的解析与渲染（Todo #136）。纯 Foundation。

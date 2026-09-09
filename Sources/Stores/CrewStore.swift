@@ -120,6 +120,15 @@ final class CrewStore: ObservableObject {
     /// 与 `lastWhiteboardMessages` 出自**同一次解码**（见 `CrewLastMessageCache.Digest`）。
     @Published private(set) var crewStatusCarriers: [String: LocalWhiteboardMessage] = [:]
 
+    /// **总机组那一层**（人类 Todo #130 / #137）。
+    ///
+    /// 它刻意**不在** `crews` 里 —— 那份列表的口径是「这台机器上有哪些工作机组」，
+    /// 混进去就等于把一层当成一个机组。但它**要能被打开**，所以单独发布一份：
+    /// 侧栏第三视图顶上那个固定入口画的就是它。
+    /// nil = 名册里还没有那一条（老数据 / 造它那步失败）→ 那一行**不画**，
+    /// 侧栏其余部分照常。
+    @Published private(set) var chiefLayer: CrewSummary?
+
     /// 每个 crew 的**本 crew / 后代 crew**人类 Todo 未回应快照 —— Todo #71 起是
     /// 侧栏黄点的唯一数据源，Todo #73 再沿父边递归冒泡。与上面那份末条快照同样
     /// 是后台算好、只在真变了时发布，body 里零磁盘 IO。
@@ -153,6 +162,9 @@ final class CrewStore: ObservableObject {
 
     var selectedCrew: CrewSummary? {
         guard let id = selectedCrewId else { return nil }
+        // 总机组不在 `crews` 里（那是设计），但它选得中 —— 这里补上它那一条，
+        // 否则中栏拿不到 summary，顶栏标题会空掉。
+        if id == LocalCrew.chiefCrewId { return chiefLayer }
         return crews.first(where: { $0.id == id })
     }
 
@@ -249,11 +261,15 @@ final class CrewStore: ObservableObject {
         do {
             let result = try await backend.listCrews()
             crews = result
+            // 总机组那一层单独取 —— 它按口径不在上面那份列表里。
+            chiefLayer = try await backend.chiefLayer()
             // 列表变了（新 crew / 删掉的 crew）→ 末条消息快照跟着补齐一次，
             // 否则新 crew 的预览要等下一次目录 tick 才出现。
             refreshLastWhiteboardMessages()
-            // 选中项消失（比如刚被删）的话清掉。
-            if let sel = selectedCrewId, !result.contains(where: { $0.id == sel }) {
+            // 选中项消失（比如刚被删）的话清掉。**判据在 `CrewSelectionRule`** ——
+            // 「不在列表里」和「没了」不是一回事：总机组按设计永远不在列表里。
+            if CrewSelectionRule.shouldClearSelection(
+                selected: selectedCrewId, listedIds: result.map(\.id)) {
                 selectedCrewId = nil
             }
         } catch {
