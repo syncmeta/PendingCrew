@@ -245,6 +245,9 @@ targets:
       # @MainActor 的 async hop 会挂死，实测过）。依赖 TodoLedger（LocalTodoStore.swift）
       # 与 CrewMention（CrewModels.swift），两者都已在 bundle。
       - path: Sources/Support/TodoLandingFlow.swift
+      # 「这次没写进去」那条回执的唯一措辞 + 尺子认的那个记号
+      # （McpWriteFailureHonestyTests 盯的就是它）。纯 Foundation。
+      - path: Sources/Support/WriteReceipt.swift
       # 侧栏「手动藏起来一个 crew」的判定层：可见性（藏了父，子跟着消失而不是被
       # 提到顶层）/ 已隐藏列表列谁 / 带活跃子 crew 的父能不能藏 / 未读。
       # 纯 Foundation，依赖 CrewSummary + CrewTimestamp（都已在 bundle）。

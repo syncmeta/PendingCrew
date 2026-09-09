@@ -176,7 +176,8 @@ final class HumanTodoWithdrawTests: XCTestCase {
         // 落了账、群里没吱声 —— 回执必须带警示。没有那行群消息，撤回就是静默消失。
         let r = TodoLandingFlow.receipt(ledger: .human, action: .withdrawn,
                                         number: 7, reached: .persisted, detail: "写失败")
-        XCTAssertTrue(r.contains("群里那行没发出去"))
+        XCTAssertTrue(r.contains("群里那行"))
+        XCTAssertTrue(r.contains(WriteReceipt.notWrittenMarker), "实得：\(r)")
     }
 
     func testNotPersistedReceiptSaysTheItemIsStillWaiting() {

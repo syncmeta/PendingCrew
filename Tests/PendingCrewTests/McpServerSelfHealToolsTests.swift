@@ -103,7 +103,9 @@ final class McpServerSelfHealToolsTests: XCTestCase {
         let control = LocalCrewControlStore(directory: dir)
         let s = server(dir, isCaptain: true)
         s.commandResponseMaxWaits = 50
-        let cmdId = control.enqueueInspectSession(crewId: "c", targetSessionId: "w1")
+        let enqueued = control.enqueueInspectSession(crewId: "c", targetSessionId: "w1")
+        XCTAssertNil(enqueued.failure, "入队本身该成功")
+        let cmdId = enqueued.id
         control.writeCommandResponse(crewId: "c", commandId: cmdId, text: "「w1」状态：空闲")
         XCTAssertEqual(s.awaitCommandResponse(commandId: cmdId), "「w1」状态：空闲")
         XCTAssertNil(control.takeCommandResponse(crewId: "c", commandId: cmdId), "应答读后即删")

@@ -382,8 +382,26 @@ enum MultiProcessJSONStore {
 
     /// 锁内整写（atomic：临时文件 + rename）。编码失败放弃本次写（行结构都是
     /// 简单 Codable，实际不会发生），宁可少写一笔也不落半截文件。
-    static func saveRowsLocked<Row: Encodable>(_ rows: [Row], to url: URL) {
-        try? saveRowsLockedReportingFailure(rows, to: url)
+    ///
+    /// **返回 nil = 这些行真的落到磁盘上了**；返回非 nil = 这次没写进去，错误原样带回。
+    ///
+    /// 2026-09-09 之前这里是个光秃秃的 `try?`，返回 `Void` —— 于是「写盘失败」
+    /// 在**每一个**调用点都长得跟成功一模一样：账本 store 照常返回改好的那一行，
+    /// MCP 工具照常回一句「已回应 / 已排上 / 已提交」，而磁盘上什么都没发生。
+    /// 读那一侧早就是 fail-closed 的（`.unreadable` / 拒空写闸），**写这一侧
+    /// 一直是敞开的** —— 这个不对称就是「回执说成功了、那件事其实没发生」
+    /// 这一族缺陷在本仓库的总病根。
+    ///
+    /// 保留 `@discardableResult`：确实不在乎的调用点（纯缓存类）可以照旧忽略，
+    /// 但**忽略必须是一次显式选择**，而不是这一层根本说不出话。
+    @discardableResult
+    static func saveRowsLocked<Row: Encodable>(_ rows: [Row], to url: URL) -> Error? {
+        do {
+            try saveRowsLockedReportingFailure(rows, to: url)
+            return nil
+        } catch {
+            return error
+        }
     }
 
     /// 需要确认投递成功的调用点使用这个版本。既有 store 多为 best-effort，继续走
