@@ -200,7 +200,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     func appendUserMessage(
         crewId: String, text: String, senderName: String? = nil, inReplyTo: String? = nil,
         attachments: [LocalWhiteboardAttachment]? = nil,
-        mentions: [LocalWhiteboardMention]? = nil) {
+        mentions: [LocalWhiteboardMention]? = nil,
+        references: [CrewMessageReference]? = nil) {
         append(crewId: crewId, LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
             senderKind: "user",
@@ -212,7 +213,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             senderName: senderName,
             inReplyTo: inReplyTo,
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
-            attachments: (attachments?.isEmpty == true) ? nil : attachments))
+            attachments: (attachments?.isEmpty == true) ? nil : attachments,
+            references: (references?.isEmpty == true) ? nil : references))
     }
 
     /// 追加一条 session（编码 agent）消息（chunk 4：`post_to_crew`）。`senderName` =
@@ -233,12 +235,14 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                               inReplyTo: String? = nil,
                               senderKind: String = "session",
                               externalContactFrom: String? = nil,
-                              attachments: [LocalWhiteboardAttachment]? = nil) {
+                              attachments: [LocalWhiteboardAttachment]? = nil,
+                              references: [CrewMessageReference]? = nil,
+                              crewStatus: String? = nil) {
         _ = try? appendSessionMessageReportingFailure(
             crewId: crewId, sessionId: sessionId, text: text, category: category,
             senderName: senderName, mentions: mentions, inReplyTo: inReplyTo,
             senderKind: senderKind, externalContactFrom: externalContactFrom,
-            attachments: attachments)
+            attachments: attachments, references: references, crewStatus: crewStatus)
     }
 
     /// 与 `appendSessionMessage` 相同，但把编码/落盘错误抛给调用者 —— 用于回执
@@ -255,7 +259,9 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         inReplyTo: String? = nil,
         senderKind: String = "session",
         externalContactFrom: String? = nil,
-        attachments: [LocalWhiteboardAttachment]? = nil
+        attachments: [LocalWhiteboardAttachment]? = nil,
+        references: [CrewMessageReference]? = nil,
+        crewStatus: String? = nil
     ) throws -> String? {
         let isSystem = PendingCrewSystemMessage.isSystem(
             senderKind: senderKind, senderSessionId: sessionId)
@@ -271,7 +277,9 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             inReplyTo: inReplyTo,
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
-            externalContactFrom: externalContactFrom))
+            crewStatus: crewStatus,
+            externalContactFrom: externalContactFrom,
+            references: (references?.isEmpty == true) ? nil : references))
     }
 
     /// 旧白板已经落过 `senderKind=session / senderName=系统`，只正规化新写入会让
@@ -294,7 +302,14 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             inReplyTo: message.inReplyTo,
             mentions: message.mentions,
             attachments: message.attachments,
-            externalContactFrom: message.externalContactFrom)
+            // 系统消息本来就不该带 crew 状态（它不是某个机长在报自己那一组），
+            // 所以搬过去的实际上恒为 nil。**照样写上** —— 让下一个人看到
+            // 「这个函数每个字段都在」，而不是猜哪些是故意漏的。
+            crewStatus: message.crewStatus,
+            externalContactFrom: message.externalContactFrom,
+            // ⚠️ 这个函数**逐字段重建**消息 —— 每加一个新字段都得在这里补一行，
+            // 漏了不会报错，只会让系统消息**静默丢掉那个字段**。
+            references: message.references)
     }
 
     // MARK: - Persistence
@@ -549,6 +564,14 @@ struct LocalWhiteboardMessage: Codable, Equatable {
     /// 本群成员之间的普通广播仍然不唤醒任何人，语义不变。
     /// 新增可选字段向后兼容（旧 JSON 缺键 → nil）。
     var externalContactFrom: String? = nil
+    /// 这条消息**指向**了什么（人类 Todo #132/#133）：Todo #N / 另一条消息 /
+    /// 某个 session / 某个机组。渲染端据此在气泡下面长一排可点的小胶囊。
+    ///
+    /// **只从结构化字段来**（`post_to_crew(todo:/plan:/reply_to:/mentions:)`、
+    /// 落账刚拿到的 #N、`contact` 的目标号码），**绝不从正文正则认** ——
+    /// 见 `CrewMessageReference` 的注释。
+    /// 新增可选字段向后兼容（旧 JSON 缺键 → nil）：老消息一颗胶囊都不长，正文不变。
+    var references: [CrewMessageReference]? = nil
 
     /// 这条消息的附件该署谁的名（Todo #48）。人类发的照旧是「用户」；session /
     /// 机长发的用它的显示名，没有 label 时退回「队友」—— 宁可说得笼统，也不许

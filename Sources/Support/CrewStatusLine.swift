@@ -73,3 +73,54 @@ enum CrewStatusLine {
         return "\(Int(age / 86_400)) 天前"
     }
 }
+
+/// 写侧：`post_to_crew(crew_status:)` 收下来的那句话（人类 Todo #136）。
+///
+/// 读侧规则在上面（`CrewStatusLine`），写侧的判定放在同一个文件里 ——
+/// 同一个字段的两头分开住，两套口径迟早会打架。
+enum CrewStatusIntake {
+
+    /// 侧栏那一行大概露得出多少字。**它是提醒线，不是合法性判据** ——
+    /// 超了照写、回执提醒一句。理由：显示宽度不该变成写入端的合法性判据，
+    /// 那行以后变宽了，拒收线不会跟着变，于是它会开始拒掉本来能显示的内容。
+    static let hintLength = 40
+    /// 硬闸。防的是「有人把整段进展粘进来」——那不是一句状态，是一篇报告。
+    static let maxLength = 200
+
+    enum Decision: Equatable {
+        /// 没填。
+        case none
+        /// 收下这句话；`hint` 非 nil 时回执里带一句提醒（**照样写进去了**）。
+        case accepted(String, hint: String?)
+        /// 拒收，并把这句话原样回给调用方。**整条消息都不发** ——
+        /// 半截状态（消息发了、状态没落）会让侧栏显示一句过期的话，
+        /// 而看的人以为那是刚报的。
+        case refused(String)
+    }
+
+    /// - Parameters:
+    ///   - raw: `crew_status` 参数。
+    ///   - isCaptain: 只有机长填得了。侧栏那一行是**这个机组**的状态，
+    ///     而机长是唯一为整个机组说话的人；worker 报的是它自己那件活的进展，
+    ///     让它写进去，侧栏就会拿一条 worker 的近况冒充整组的状态。
+    static func decide(_ raw: Any?, isCaptain: Bool) -> Decision {
+        let text = ((raw as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return .none }
+        guard isCaptain else {
+            return .refused("`crew_status` 只有机长填得了 —— 侧栏那一行是**整个机组**的状态，"
+                + "你报的是自己手上这件活。\n**出路**：把这句话写进正文（或标 `progress` "
+                + "挂到计划号上），机长会在他下一条发言里把整组的状态报上去。")
+        }
+        guard text.count <= maxLength else {
+            return .refused("`crew_status` 最多 \(maxLength) 字，收到 \(text.count) 字 —— "
+                + "这么长的不是一句状态，是一篇报告。\n**出路**：报告发正文，"
+                + "`crew_status` 只留一句「现在整组在干什么」。**这条消息也没有发出去。**")
+        }
+        guard text.count <= hintLength else {
+            return .accepted(text, hint: "`crew_status` \(text.count) 字，"
+                + "侧栏那一行大概露得出 \(hintLength) 字左右，后面会被截掉 —— "
+                + "**已经照原样写进去了**，只是提醒你前 \(hintLength) 字要能自己说清。")
+        }
+        return .accepted(text, hint: nil)
+    }
+}

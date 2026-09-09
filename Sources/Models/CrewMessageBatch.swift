@@ -42,6 +42,12 @@ enum CrewMessageBatch {
         case refuse(String)
     }
 
+    /// 只能写在**每一条**上的参数。顶层给了就拒 —— 不是不支持，是放错地方了。
+    static let perEntryOnly = ["mentions", "reply_to", "attachments"]
+
+    /// 顶层「一次一个」、但落盘时**每条都带**的参数。
+    static let wholeBatch = ["crew_status"]
+
     static func parse(args: [String: Any]) -> Decision {
         let rawMessages = args["messages"]
         guard rawMessages != nil else { return .single }
@@ -69,6 +75,17 @@ enum CrewMessageBatch {
                 + "\n出路：把最要紧的那几条这次发，其余的等有结果了再说。")
         }
 
+        // **顶层参数在分条模式下会被悄悄丢掉** —— `Entry.args` 就是那一项自己的
+        // 字典，顶层的 `mentions` / `reply_to` / `attachments` 一个字都不会跟过去。
+        // 静默丢是这一路最坏的形态：回执照回「已发到」，而 @ 谁都没 @ 到。
+        // 所以**明说**，让调用方挪到那一条上（那儿是支持的）。
+        for key in perEntryOnly where args[key] != nil {
+            return .refuse("`\(key)` 跟 `messages` 一起给了 —— 分条发送时它是**每条自己的**，"
+                + "放在顶层会被丢掉，而回执照样回「已发到」。"
+                + "\n出路：把 `\(key)` 挪进 `messages` 里那一条对象。"
+                + "\n**整批都没有发出去。**")
+        }
+
         var entries: [Entry] = []
         for (i, item) in list.enumerated() {
             let text = (item["text"] as? String)?
@@ -78,7 +95,15 @@ enum CrewMessageBatch {
                     + "\n**整批都没有发出去** —— 分条发送的校验是全有或全无，"
                     + "免得前几条已经出去了、后面那条才发现写错。")
             }
-            entries.append(Entry(index: i, text: text, args: item))
+            var merged = item
+            // 顶层「一次一个」的参数**每条都带**（今天只有 `crew_status`）。
+            // 为什么不是只挂最后一条：分条执行期可能一半成功，只挂最后一条时它
+            // 正好挂在最可能没发出去的那条上，于是侧栏显示着上一次的旧状态、
+            // 看起来像「他没报」。
+            for key in wholeBatch where merged[key] == nil {
+                if let value = args[key] { merged[key] = value }
+            }
+            entries.append(Entry(index: i, text: text, args: merged))
         }
         return .batch(entries)
     }

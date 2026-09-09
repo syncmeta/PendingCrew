@@ -166,6 +166,7 @@
 		41EC06D6C49BA45DADBC2365 /* CrewTypingIndicatorRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B1D24F77E0C6CE0602FB7B4 /* CrewTypingIndicatorRow.swift */; };
 		42000F0D3D7E94A22412C0F1 /* CrewChatWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 360A8274A85AB07936C46F2E /* CrewChatWindow.swift */; };
 		4272D61ACE8535B3EC1BACB4 /* TypingDotsLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CD9F009A7D0B4895CDEC79 /* TypingDotsLayerView.swift */; };
+		430EAE0590125C99E4F122F8 /* CrewMessageReferenceLandingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D85207E3DAC7467F312A99 /* CrewMessageReferenceLandingTests.swift */; };
 		4473033266C2699EC7237D7F /* CrewSessionTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933A5868B64D471EDCBE2896 /* CrewSessionTitle.swift */; };
 		4553DD6A124DBDAE9BABA0B4 /* ChatCodeBlockRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5BD109F24112A63BFE678D6 /* ChatCodeBlockRenderTests.swift */; };
 		456CE7BDCE23260B94849FDE /* CrewCockpitWritePermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B543F7E5A3B403135821AFE /* CrewCockpitWritePermissionTests.swift */; };
@@ -314,6 +315,7 @@
 		764AF6E01C6DB29C2E657D78 /* RecentWorkingDirectoriesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F58C644D7581A63224473C7 /* RecentWorkingDirectoriesTests.swift */; };
 		765C61EBEB8DA35CEFAD299F /* PlatformImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13BBB95F39A5DDA90728B897 /* PlatformImage.swift */; };
 		7664F32017EE9E7CA4C68B89 /* TerminalBellTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E877EA7245349111E11378B /* TerminalBellTrace.swift */; };
+		76D11CAA34016E86A7A1AE5C /* CrewMessageReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7CAFD68BA96FE5F76B5906 /* CrewMessageReference.swift */; };
 		76FCFFEEC8113478FD61D7E2 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904E7226BC285C21F3C1652F /* Theme.swift */; };
 		773699A00BE0BD047630F89A /* TerminalScrollbarGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70209890FBBD1D7CBC3C7B4B /* TerminalScrollbarGeometry.swift */; };
 		77386E0248AC84E10EB3098E /* CrewDirectoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63DC7AE1CC8372DFBCFE1D2A /* CrewDirectoryTests.swift */; };
@@ -399,6 +401,7 @@
 		914E165EF6B84EA90CA655B3 /* PendingCrewDataRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267EB70067AC8947DE402A14 /* PendingCrewDataRoot.swift */; };
 		91EE4232C8883E1AE6FA4E60 /* CrewChatRefreshGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA08BEA4EC77F9304EC252 /* CrewChatRefreshGate.swift */; };
 		925788E9058181C1F9963F60 /* ProcessRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B4829144C42B8EC8550EBD /* ProcessRole.swift */; };
+		92D7473A4CD6F68519C6B271 /* CrewStatusIntakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 558B6DFD8CB6A43B2FE9D090 /* CrewStatusIntakeTests.swift */; };
 		9347FC62A561CF8BFD786EC0 /* CrewDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE268DAD47EF9D09BA481621 /* CrewDirectory.swift */; };
 		93864A012F832F77B88FE34A /* QuotaRingLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC47F84B3A1CB404ADDA14E9 /* QuotaRingLayout.swift */; };
 		939E2030BF3C9753C1F54C67 /* CodexThreadItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE34BA1080CD0D29F160C9A6 /* CodexThreadItem.swift */; };
@@ -427,6 +430,7 @@
 		9E72A9948E5C602E7BD831FB /* SessionAwaitingReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9796510A2DADE77ABA9726 /* SessionAwaitingReply.swift */; };
 		9EAD044967B6F9214651C5EC /* CrewCockpitWritePermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEBEF2B77F7BDCA85D11F1E /* CrewCockpitWritePermission.swift */; };
 		9F0812F426FC9F5976E9CC98 /* CrewChiefOverviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B073CF7750BB10BCC1A92E1 /* CrewChiefOverviewTests.swift */; };
+		9F0C03E15BA9584270C65AA0 /* CrewMessageReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7CAFD68BA96FE5F76B5906 /* CrewMessageReference.swift */; };
 		9FC744D78322316477BF9DCF /* CrewStartupRescueLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C9C8250CAE8090DFCB2F41 /* CrewStartupRescueLogic.swift */; };
 		A03752DADDF071EF761710A4 /* CrewDeferredWakeQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2542D7AD06F6553F9AAE42FD /* CrewDeferredWakeQueue.swift */; };
 		A03CE7208E488DE500914D75 /* WorkdirMigrationPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10FBCD1074589CD56A00BEC8 /* WorkdirMigrationPlan.swift */; };
@@ -673,6 +677,7 @@
 		F59E6499F8F9A918EA384F5B /* ColorHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46681CA2C4390D6C45E3101C /* ColorHash.swift */; };
 		F5FB1B5F727AF7F8838D05F6 /* PendingCrewDeepLinkRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B1A2BBA684270B0A2BE996 /* PendingCrewDeepLinkRoute.swift */; };
 		F6A41191A41F1320507B05CB /* CrewMessageFold.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CBAA23E5B76FE69D0EFC63 /* CrewMessageFold.swift */; };
+		F6B3D4C30CCBAF30D82BA1BD /* CrewMessageReferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8810DF3A4980C658BBB21ED /* CrewMessageReferenceTests.swift */; };
 		F6C0D03878BA7542C3959F34 /* CrewLocalAttachmentPersist.swift in Sources */ = {isa = PBXBuildFile; fileRef = C967851468E17B61886D8E53 /* CrewLocalAttachmentPersist.swift */; };
 		F781790D544499998B43976E /* DaemonShutdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */; };
 		F790C6E1DA0ADD2E8D8B71B0 /* CrewColorBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF601A5AC69E1BA6FB748E60 /* CrewColorBar.swift */; };
@@ -716,6 +721,7 @@
 		0972370135B6D56F11913E27 /* CrewStartupRescueLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewStartupRescueLogicTests.swift; sourceTree = "<group>"; };
 		0982A94B0AC44A73A416608A /* CockpitPlanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitPlanStore.swift; sourceTree = "<group>"; };
 		09830F2EDE90F7CE4C75A0DB /* CrewComposerDraftStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewComposerDraftStoreTests.swift; sourceTree = "<group>"; };
+		09D85207E3DAC7467F312A99 /* CrewMessageReferenceLandingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageReferenceLandingTests.swift; sourceTree = "<group>"; };
 		0A1CE57B2DC05BB140D205C1 /* PendingAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingAttachment.swift; sourceTree = "<group>"; };
 		0A252ADCF93897267B35BC46 /* UnixSocketTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketTransport.swift; sourceTree = "<group>"; };
 		0B073CF7750BB10BCC1A92E1 /* CrewChiefOverviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChiefOverviewTests.swift; sourceTree = "<group>"; };
@@ -868,6 +874,7 @@
 		53B34A248FCC85B2A6D067BC /* AppUpdateSharedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateSharedTests.swift; sourceTree = "<group>"; };
 		53FB4DF079945BBB34443F32 /* McpPermissionHook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpPermissionHook.swift; sourceTree = "<group>"; };
 		543938013409584487334AB5 /* CrewMessageSearchAdapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageSearchAdapters.swift; sourceTree = "<group>"; };
+		558B6DFD8CB6A43B2FE9D090 /* CrewStatusIntakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewStatusIntakeTests.swift; sourceTree = "<group>"; };
 		5635FAC12ED7BF5407A3B9AD /* UpdateCheckGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckGate.swift; sourceTree = "<group>"; };
 		56EE240B000037CC49E1DD0F /* SessionDaemonAttachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDaemonAttachTests.swift; sourceTree = "<group>"; };
 		574DF310289F087CF7744953 /* CrewRecentContextRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewRecentContextRenderTests.swift; sourceTree = "<group>"; };
@@ -1111,6 +1118,7 @@
 		D75149E56C43DE393B0F774D /* ServerImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerImage.swift; sourceTree = "<group>"; };
 		D8011F49B6E57993FB1D1B9F /* CrewLocalMentionInjectLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalMentionInjectLogic.swift; sourceTree = "<group>"; };
 		D801D66512D8868F4FC65D72 /* CrewChiefOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChiefOverview.swift; sourceTree = "<group>"; };
+		D8810DF3A4980C658BBB21ED /* CrewMessageReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageReferenceTests.swift; sourceTree = "<group>"; };
 		D8DFCCC3B6D35F9E5AA70197 /* UncaughtExceptionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UncaughtExceptionLog.swift; sourceTree = "<group>"; };
 		D93038419311F5CF05D0DAA7 /* CrewDragDropLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewDragDropLogic.swift; sourceTree = "<group>"; };
 		D9B99648689F0C7C7A0545F7 /* CrewHumanMentionLandingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewHumanMentionLandingTests.swift; sourceTree = "<group>"; };
@@ -1188,6 +1196,7 @@
 		FE733889935BCE71D20449F1 /* WorkdirMigrationPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationPlanTests.swift; sourceTree = "<group>"; };
 		FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBundleStandaloneTests.swift; sourceTree = "<group>"; };
 		FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminationTests.swift; sourceTree = "<group>"; };
+		FF7CAFD68BA96FE5F76B5906 /* CrewMessageReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageReference.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1661,6 +1670,8 @@
 				BD97288B77378FA09D76EA35 /* CrewMessageBatchTests.swift */,
 				C4E631C983F130551C5D0995 /* CrewMessageCategoryTests.swift */,
 				F918912535EEACBD45646AA2 /* CrewMessageFoldTests.swift */,
+				09D85207E3DAC7467F312A99 /* CrewMessageReferenceLandingTests.swift */,
+				D8810DF3A4980C658BBB21ED /* CrewMessageReferenceTests.swift */,
 				BFFA547961BE3DE4CAA9E9F1 /* CrewMessageSearchTests.swift */,
 				3BF8C05BAE6320FC3F056F05 /* CrewOrderingSignalsTests.swift */,
 				D4368B745709AF4685183778 /* CrewPasteAttachmentsTests.swift */,
@@ -1673,6 +1684,7 @@
 				0C3630D87A90241260230DF8 /* CrewSessionTitleTests.swift */,
 				0972370135B6D56F11913E27 /* CrewStartupRescueLogicTests.swift */,
 				13510F0FBBDAD9CE10A6205D /* CrewStatusAggregationTests.swift */,
+				558B6DFD8CB6A43B2FE9D090 /* CrewStatusIntakeTests.swift */,
 				5C882504793FB8C1AC34F904 /* CrewStatusLineTests.swift */,
 				9ACBC95D4D951EC5505A60A5 /* CrewTimelineOrderingTests.swift */,
 				9AC7B8B44BFE9170EA83EDDC /* CrewWakeDispatchTests.swift */,
@@ -1824,6 +1836,7 @@
 				DD167E62AA7A9C5365CE0D0E /* CrewMessageBatch.swift */,
 				2F00FB63CA8735D3D0923CAC /* CrewMessageCategory.swift */,
 				C3CBAA23E5B76FE69D0EFC63 /* CrewMessageFold.swift */,
+				FF7CAFD68BA96FE5F76B5906 /* CrewMessageReference.swift */,
 				051E45F99057FB8295F991DA /* CrewSummary.swift */,
 				9D22DD7E3911B65CBC9847EB /* Machine.swift */,
 				2C78204BFE04404235068547 /* ModelCatalogEntry.swift */,
@@ -2181,6 +2194,7 @@
 				EB5BDD93AAA1367E9B606B89 /* CrewMessageBatch.swift in Sources */,
 				494079BC8F534C4D0103AF12 /* CrewMessageCategory.swift in Sources */,
 				0369D2320541707857B6CD7B /* CrewMessageFold.swift in Sources */,
+				9F0C03E15BA9584270C65AA0 /* CrewMessageReference.swift in Sources */,
 				96036076F069CEFCC6C62C42 /* CrewMessageSearch.swift in Sources */,
 				86596B9D3C7D95577801B63F /* CrewMessageSearchAdapters.swift in Sources */,
 				BFBAAF89FE49D7DC1F5E1146 /* CrewModels.swift in Sources */,
@@ -2497,6 +2511,9 @@
 				B7A23FF27D3FFE6DAC6BE64A /* CrewMessageCategoryTests.swift in Sources */,
 				F6A41191A41F1320507B05CB /* CrewMessageFold.swift in Sources */,
 				F1B7A91EF24D30AA1CEDB95B /* CrewMessageFoldTests.swift in Sources */,
+				76D11CAA34016E86A7A1AE5C /* CrewMessageReference.swift in Sources */,
+				430EAE0590125C99E4F122F8 /* CrewMessageReferenceLandingTests.swift in Sources */,
+				F6B3D4C30CCBAF30D82BA1BD /* CrewMessageReferenceTests.swift in Sources */,
 				D0BBBCF03BA46F084B2D77F9 /* CrewMessageSearch.swift in Sources */,
 				C05E5959E51C478920FD51F6 /* CrewMessageSearchAdapters.swift in Sources */,
 				2CD011C415A5C453A9FBD73C /* CrewMessageSearchTests.swift in Sources */,
@@ -2522,6 +2539,7 @@
 				9C3280D976E67D23204CDAFF /* CrewStartupRescueLogicTests.swift in Sources */,
 				EE40EDF6F4804CB2803CA1E3 /* CrewStatusAggregation.swift in Sources */,
 				D3F098906956CE0F7660C354 /* CrewStatusAggregationTests.swift in Sources */,
+				92D7473A4CD6F68519C6B271 /* CrewStatusIntakeTests.swift in Sources */,
 				1DAF10061F80B14BCE01935F /* CrewStatusLine.swift in Sources */,
 				E5C556A09184CFB3BA43FFF9 /* CrewStatusLineTests.swift in Sources */,
 				41773DF5BECD5A77434018FA /* CrewSummary.swift in Sources */,
