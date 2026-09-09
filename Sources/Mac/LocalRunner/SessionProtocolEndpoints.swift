@@ -648,6 +648,22 @@ final class SessionProtocolClient {
                           appBuild: appBuild, capabilities: capabilities)))
     }
 
+    /// **本端主动关闭这条链路**（Todo #138 ①）。
+    ///
+    /// 与 `transportDisconnected()` 的分工：这条多关一次 link，两条都保证**状态跟着
+    /// 断**；两条都**不**触发 `onLinkClosed` —— 谁主动关的谁自己知道，重连策略不该
+    /// 被自己的 detach 触发。
+    ///
+    /// 存在的理由就是这个「两件事绑在一个触发点上」的坑：`SessionMessageLink.close()`
+    /// 按约定不触发 `onClose`（这条约定是对的），而 `onClose` 后面同时挂着**状态清理**
+    /// 和**重连策略**。于是 viewer 那三条自发关闭路径只想退订重连，却把状态清理一起
+    /// 退掉了 —— 后端的连接句柄和能力表全留着**最后一次成功的值**，跟真的连着长得
+    /// 一模一样。
+    func close() {
+        link.close()
+        transportDisconnected()
+    }
+
     func transportDisconnected() {
         frameDecoder = SessionFrameDecoder()
         stateReconciler.resetForReconnect()
@@ -655,6 +671,31 @@ final class SessionProtocolClient {
         negotiated = []
         isConnected = false
         remotes.values.forEach { $0.transportDisconnected() }
+        failPendingRequests()
+    }
+
+    /// 断链时把**在途请求**明确以失败恢复（Todo #138 ②）。
+    ///
+    /// 这几张表以前没人在断链时碰过：投唤醒那条有 5 秒兜底还能返回，切档位和
+    /// 切审批模式**一个都没有** —— 链路一断，那次 `await` 永远挂着，调用方不会
+    /// 收到成功也不会收到失败。
+    ///
+    /// 先摘表再 resume：`submitWake` 的 5 秒兜底也会来摘同一个 key，先摘掉就不会
+    /// 有第二次 resume。
+    private func failPendingRequests() {
+        let profiles = pendingProfile
+        pendingProfile.removeAll()
+        profiles.values.forEach { $0.resume(returning: .linkDown("后台链路断了，切没切成不确定")) }
+
+        let controls = pendingControls
+        pendingControls.removeAll()
+        controls.values.forEach {
+            $0(.failure(SessionProtocolControlError.failed("后台链路断了，这次切换没有完成")))
+        }
+
+        let wakes = pendingWakes
+        pendingWakes.removeAll()
+        wakes.values.forEach { $0.resume(returning: .retry) }
     }
 
     func reconnect() {

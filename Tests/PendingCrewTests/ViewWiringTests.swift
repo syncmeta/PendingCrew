@@ -287,6 +287,33 @@ final class ViewWiringTests: XCTestCase {
                       "人拉过的窗口尺寸不会被记住，下次开又得重拉")
     }
 
+    /// **Todo #138 ①：viewer 侧放掉链路只许有一个出口，而且必须走 `client.close()`。**
+    ///
+    /// 这条只能靠读源码：`Sources/Mac/Services` 不在 test bundle 里（project.yml 里
+    /// 那一段注释写了为什么），所以那三条自发关闭路径没法在单测里真跑一遍。
+    /// **这是这条断言的边界，写在这儿免得有人以为行为被覆盖了** —— 行为那一半在
+    /// `RemoteSessionBackendTests.testSelfInitiatedCloseTearsDownEveryBackendState`，
+    /// 它测的是出口本身；这一条只保证三条路都从那个出口走。
+    ///
+    /// 判据选「`client = nil` 只许出现一次」而不是「每处都调过 close」：后者要靠
+    /// 读上下文，改法一变就成假的；前者是结构性的 —— 只有一个地方能放掉它，
+    /// 那个地方对了就都对了。
+    func testViewerLinkTeardownHasExactlyOneSiteAndItGoesThroughTheClient() throws {
+        let text = try Self.text(of: "ViewerSessionClient.swift")
+        // 只数**代码**里的：注释里解释这条规矩时也会写出 `client = nil` 这几个字，
+        // 数进去的话这把尺子会被自己要防的那段说明骗到。
+        let code = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        let drops = code.components(separatedBy: "client = nil").count - 1
+        XCTAssertEqual(drops, 1,
+                       "放掉 client 的地方不止一处 —— 断链的状态清理迟早会漏掉其中一条")
+        XCTAssertTrue(code.contains("client?.close()"),
+                      "那个唯一出口没走 client.close()，句柄和能力表不会跟着断")
+        XCTAssertTrue(code.contains("teardownLink()"),
+                      "三条自发关闭路径没有汇合到同一个出口")
+    }
+
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
     func testCloseButtonStyleIsDefinedOnlyOnce() throws {
         for file in ["CockpitView.swift"] {

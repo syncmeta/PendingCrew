@@ -35,6 +35,12 @@ enum SessionProfileSwitchOutcome: Equatable {
     case neverIdle
     /// 该 runner 没有中途切换通道（例如普通 terminal）。
     case unsupported
+    /// **通往 runner 的那条链路断了**（Todo #138 ②）。带一句人话说明断在哪一步。
+    ///
+    /// 为什么不复用上面任何一个：`rejected` 会把「后台链路断了」说成「runner 拒绝了」，
+    /// 把责任安到 claude 头上；`noConfirmation` 的人话是「已注入终端但没等到回显」，
+    /// 而这一类里有一半根本没送出去。**两个都会让读的人去查错的地方。**
+    case linkDown(String)
 
     var isApplied: Bool { if case .applied = self { return true }; return false }
 }

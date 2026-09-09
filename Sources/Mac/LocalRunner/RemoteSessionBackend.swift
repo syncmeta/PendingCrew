@@ -346,7 +346,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     func clearQuotaHealth() { client?.sendControl(sessionId: sessionId, op: "clearQuotaHealth") }
 
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
-        guard let client else { return .rejected("后台链路已断开，这条命令根本没发出去") }
+        guard let client else { return .linkDown("后台链路已断开，这条命令根本没发出去") }
         return await client.applyProfileSwitch(sessionId: sessionId, command: cmd)
     }
 
@@ -537,6 +537,10 @@ final class InProcessSessionProtocolBridge: SessionProtocolPublishing {
         }
     }
 
+    /// **本端主动关闭**（viewer 侧那三条自发关闭路径的形状）。
+    /// 与 `disconnectViewer()` 的区别：那条模拟的是**对端**走了（会触发 `onClose`）。
+    func closeViewerLink() { client.close() }
+
     func disconnectViewer() {
         transport.disconnect()
         daemonLink.peerDisconnected()
@@ -605,6 +609,7 @@ extension SessionProfileSwitchOutcome {
         case .noConfirmation: pair = ("noConfirmation", nil)
         case .neverIdle: pair = ("neverIdle", nil)
         case .unsupported: pair = ("unsupported", nil)
+        case let .linkDown(detail): pair = ("linkDown", detail)
         }
         var fields: [String: SessionWireJSONValue] = ["outcome": .string(pair.0)]
         if let detail = pair.1 { fields["detail"] = .string(detail) }
@@ -620,6 +625,7 @@ extension SessionProfileSwitchOutcome {
         case "rejected": self = .rejected(detail)
         case "noConfirmation": self = .noConfirmation
         case "neverIdle": self = .neverIdle
+        case "linkDown": self = .linkDown(detail)
         default: self = .unsupported
         }
     }
