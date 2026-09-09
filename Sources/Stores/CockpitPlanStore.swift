@@ -105,7 +105,11 @@ final class CockpitPlanStore: @unchecked Sendable {
         list(crewId: crewId).first { $0.number == number }
     }
 
-    // MARK: - 写（全部只给机长）
+    // MARK: - 写
+    //
+    // ⚠️ 曾经写着「全部只给机长」。**现在不是了**（人类 Todo #115 的 (D)）：
+    // 机长能做四样，worker 能追加进展 / 标卡住 —— 门禁在
+    // `CrewCockpitWritePermission`，不在这一层。这里照旧不判身份。
 
     /// 新排一条活。**nil = 没写进去**（列表读不出来 / 读到空但磁盘非空）——
     /// 与 Todo 那本同一条纪律：绝不返回一个根本没落盘的 #N 让调用方拿去对外宣布。

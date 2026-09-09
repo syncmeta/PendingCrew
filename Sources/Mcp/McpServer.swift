@@ -30,8 +30,9 @@ final class McpServer {
     /// `respond_todo` 追加回应 + 推进状态；新增条目只有人类能做（app 面板），
     /// MCP 不暴露新增。与 store 同 `--dir`。
     let todos: LocalTodoStore
-    /// 机长作战板（人类 Todo #66）。**只有机长写得动** —— `plan_add` / `plan_update`
-    /// 前面站着 `guard isCaptain`，worker 连工具列表里都看不到它们。与 store 同 `--dir`。
+    /// 机长作战板（人类 Todo #66）。`plan_add` / `plan_update` 这两个**工具**仍然只给
+    /// 机长（worker 连工具列表里都看不到）；但 worker 现在能通过 `post_to_crew` 标
+    /// `progress` / `blocked` 往板上写 —— 见 `CrewCockpitWritePermission`。与 store 同 `--dir`。
     let plans: CockpitPlanStore
     /// 定时唤醒账本（`LocalWakeupStore`）。helper 这边**只读它一次** —— 判断
     /// 「这条计划是不是已经挂着督办」，好把「顺延」当场拒掉。真正的登记/触发/
@@ -94,8 +95,13 @@ final class McpServer {
         self.isCaptain = isCaptain
         self.sessionLabel = sessionLabel
         self.quotaDirectory = quotaDirectory ?? LocalWhiteboardStore.defaultDirectory
-        self.todos = todos ?? LocalTodoStore()
-        self.plans = plans ?? CockpitPlanStore()
+        // **没显式传就跟着注入的白板目录走**，别静默退回真实数据根 ——
+        // 跟下面 `attachmentRoot` 那条注释说的是同一个暗线。这条不是假设出来的：
+        // 分类落账的第一版用例没注入 `todos`，于是往**真的 app 数据目录**写进了
+        // 三条 Todo，而用例自己读 fixture 读到 0 条 —— 看起来像「没落账」，
+        // 实际是**落到别人家去了**。驾驶舱这本账现在也走同一条路，同样得跟。
+        self.todos = todos ?? LocalTodoStore(directory: quotaDirectory)
+        self.plans = plans ?? CockpitPlanStore(directory: quotaDirectory)
         self.wakeups = wakeups ?? LocalWakeupStore(
             directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         // 两本账落在同一个 `--dir` 下，只是文件名不同（见 `TodoLedger.fileSuffix`）。
@@ -166,8 +172,12 @@ final class McpServer {
                                         "text": ["type": "string"],
                                         "category": ["type": "string"],
                                         "plan": ["type": "integer"],
+                                        "blocked_by_number": ["type": "integer"],
+                                        "blocked_by_ledger": ["type": "string"],
                                         "todo": ["type": "integer"],
                                         "todo_status": ["type": "string"],
+                                        "evidence_commit": ["type": "string"],
+                                        "evidence": ["type": "string"],
                                     ],
                                     "required": ["text"],
                                 ],
@@ -175,7 +185,11 @@ final class McpServer {
                             "category": ["type": "string", "description": "这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。不给 = 不落账。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
                             "todo_status": ["type": "string", "enum": ["pending", "in_progress", "completed"], "description": "配合 `todo` 用。翻 `completed` 必须带 `evidence_commit`（会当场解析）或 `evidence`。"],
-                            "plan": ["type": "integer", "description": "配合 `progress` / `blocked` / `done` 用：驾驶舱里那条计划的 #N（plan_list 看得到）。"],
+                            "plan": ["type": "integer", "description": "配合 `progress` / `blocked` / `done` 用：驾驶舱里那条计划的 #N（plan_list 看得到）。\n**这三类会真的写进驾驶舱那本账**：`progress` 追加一条进展（板上那条是「没做」时顺手翻成「进行中」，是「卡住」时**不动** —— 报进度不等于解了卡）；`blocked` 翻卡住并挂上卡点；`done` 翻完成。\n`plan`(新增一条计划) 和 `done`(翻完成) **只有机长能做** —— 板上有哪些条目是机长的编排权（也是防淹），而完成是验收判断、不是自我声明。worker 报 `progress` / `blocked` 照常。"],
+                            "blocked_by_number": ["type": "integer", "description": "配合 `blocked` 用：卡在哪条 Todo 的 #N。**「卡住」的意思就是卡在人身上** —— 不指出是哪一条，人看到板也不知道该推什么。"],
+                            "blocked_by_ledger": ["type": "string", "enum": ["human", "agent"], "description": "配合 `blocked_by_number` 用：哪一本 Todo 账 —— human（你请人类拍板那本，默认）/ agent（人类派给你那本）。两本各自从 #1 起，裸 #N 有歧义。"],
+                            "evidence_commit": ["type": "string", "description": "翻 `done`（计划完成）或 `todo_status: completed` 时的凭据：产出所在的 commit（7–40 位十六进制）。**会当场在本 crew 登记的工作目录里解析**，解析不出来就拒绝，并且**这条消息也不会发出去**。"],
+                            "evidence": ["type": "string", "description": "产出不是 commit 时的凭据：一句话写清是什么（跑了哪趟全量、读数多少）。与 `evidence_commit` 二选一。"],
                             "mentions": [
                                 "type": "array",
                                 "description": "可选定向 @ 列表 —— 要某个具体对象接手/回应时带上；不填=广播给全 crew。@session / @captain 会**收窄可见范围**：只有被点到的 agent 看得到，并把这条投进它的定向信箱（它优先看到）。@human 不收窄 —— 它只是「这条是讲给人听的、别为它叫醒 agent」的标记，消息对全 crew 照常可见。@broadcast 是**显式放宽器**：和 @session/@captain 一起给（如 `[{kind:\"broadcast\"},{kind:\"session\",target_id:\"…\"}]`）= **全组都看得见、但只叫醒被点到的那个**；别人的注入面上那条会标「（发给 XX 的）」，看得见也看得出不是给自己的活。单独给 @broadcast 等于不填。",
@@ -678,7 +692,11 @@ final class McpServer {
                 // 而它最容易被读成「全成了」。任何一条不合法就整批拒、一条不发。
                 for e in entries {
                     if case let .refuse(why) = CrewCategoryRouting.decide(
-                        category: e.args["category"] as? String, args: e.args) {
+                        category: e.args["category"] as? String, args: e.args,
+                        isCaptain: isCaptain) {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
+                    }
+                    if let why = cockpitPermissionRefusal(args: e.args) {
                         return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
                     }
                     if case let .refuse(why) = CrewMessageTodoLink.decide(args: e.args) {
@@ -1210,10 +1228,10 @@ final class McpServer {
             // 引用**连账本一起收**：两本 Todo 各自从 #1 起，裸 #N 有歧义（群里那行
             // 都被迫加「人类」二字才分得清）。默认 human —— 机长的活卡住，绝大多数
             // 情况就是卡在「请人类拍板」那本上。
-            let blockerLedger = ((args["blocked_by_ledger"] as? String) ?? "human")
-                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard ["human", "agent"].contains(blockerLedger) else {
-                return toolResult(id: id, text: "ERROR: blocked_by_ledger 只能是 human（你请人类拍板那本）或 agent（人类派给你那本）。")
+            let blockerLedger: String
+            switch CrewCockpitLanding.blockerLedger(args["blocked_by_ledger"]) {
+            case let .refused(why): return toolResult(id: id, text: "ERROR: " + why)
+            case let .ok(value): blockerLedger = value
             }
             let blockerNumber = (args["blocked_by_number"] as? Int) ?? (args["blocked_by_number"] as? Double).map(Int.init)
             let blocker = blockerNumber.map { CockpitPlanBlocker(ledger: blockerLedger, number: $0) }
@@ -1687,11 +1705,17 @@ final class McpServer {
             // 那比现在还糟，因为人会**以为**账更新了。所以下面每一处失败都是
             // `return`，消息一个字都不发。
             //
-            // 驾驶舱那四类（plan/progress/blocked/done）**这一笔还没接** ——
-            // `plan_add`/`plan_update` 现在是 `guard isCaptain`，worker 标了会被直接
-            // 拒；权限拆分（报进度的人 ≠ 决定条目存不存在的人）是下一笔。
+            // 驾驶舱那四类（plan/progress/blocked/done）走 `landOnCockpit`，
+            // 写入口复用 `CockpitPlanStore.add/update`（不另开一个）。谁写得动由
+            // `CrewCockpitWritePermission` 判：**报进度的人 ≠ 决定条目存不存在的人**。
             var ledgerReceipts: [String] = []
-            switch CrewCategoryRouting.decide(category: args["category"] as? String, args: args) {
+            // (D)：谁写得动驾驶舱那本账。**拒了就一个字都不发** —— 跟落账失败同一条
+            // 纪律：消息发出去了、账没落上，比现在还糟。
+            if let why = cockpitPermissionRefusal(args: args) {
+                return (false, "ERROR: " + why + "\n**这条消息也没有发出去。**")
+            }
+            switch CrewCategoryRouting.decide(category: args["category"] as? String, args: args,
+                                              isCaptain: isCaptain) {
             case let .refuse(why):
                 return (false, "ERROR: " + why)
             case .land(.humanTodo):
@@ -1706,6 +1730,11 @@ final class McpServer {
             case let .skipped(hint):
                 // 不落账，但**回执里说清楚它没落**——静默跳过就是这一单要治的病本身。
                 ledgerReceipts.append("⚠️ " + hint)
+            case let .land(cockpit) where cockpit.ledger == .cockpit:
+                switch landOnCockpit(category: cockpit, args: args, message: message) {
+                case let .refused(why): return (false, why)
+                case let .landed(receipt): ledgerReceipts.append(receipt)
+                }
             case .land, .noLedger:
                 break
             }
@@ -2118,6 +2147,95 @@ final class McpServer {
     /// 发包树、别的项目仓都可能在祖先链上）。那条路的失败形态是**在错的仓库里解析
     /// 成功**，于是一条假账带着一句「凭据解析成功」挂上去。**验不了会逼人换条路；
     /// 假绿不会。**
+    /// `landOnCockpit` 的结局。**不用 `Result`**：失败侧是一句给 agent 看的话，
+    /// 不是 `Error`。
+    enum CockpitLandingOutcome: Equatable {
+        case landed(String)
+        case refused(String)
+    }
+
+    /// (D) 那道门：这条分类要写驾驶舱，而这个身份写不动时，把话原样回出去。
+    ///
+    /// **两处调用**（单条 / 分条批量的预校验）用同一份，免得批量那条路悄悄放宽 ——
+    /// 分条之后「一半成功」本来就是新的失败形态。
+    private func cockpitPermissionRefusal(args: [String: Any]) -> String? {
+        let raw = ((args["category"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let category = CrewMessageCategory(rawValue: raw) else { return nil }
+        if case let .refused(why) = CrewCockpitWritePermission.decide(
+            category: category, isCaptain: isCaptain) {
+            return why
+        }
+        return nil
+    }
+
+    /// 分类 → 驾驶舱那本账。**写入口复用 `CockpitPlanStore`，不另开一个。**
+    ///
+    /// 每一处失败都是 `.failure`，调用方据此**一个字都不发** —— 顺序是「落账 → 发群」，
+    /// 账没落上就不发，免得人以为板上已经更新了。
+    private func landOnCockpit(category: CrewMessageCategory, args: [String: Any], message: String)
+        -> CockpitLandingOutcome {
+        let unsent = "\n**这条消息也没有发出去。**"
+        if category == .plan {
+            let title = CrewCockpitLanding.title(from: message)
+            guard let planned = plans.add(crewId: crewId, title: title,
+                                          bySessionId: sessionId, byName: sessionLabel) else {
+                return .refused("ERROR: 没排进驾驶舱 —— 任务列表这次读不出来，本次写已拒"
+                    + "（群聊白板上有一条系统警示说明是哪种事故）。" + unsent)
+            }
+            return .landed("已排上 计划 #\(planned.number)：\(planned.title)（没做）"
+                + " —— 标题是从这条消息第一行取的，不对就 `plan_update` 改。")
+        }
+        guard let number = CrewCockpitLanding.number(args["plan"]), number >= 1 else {
+            return .refused("ERROR: `plan` 需为正整数（驾驶舱里那条计划的 #N）。" + unsent)
+        }
+        var statusRaw: String?
+        var blocker: CockpitPlanBlocker?
+        switch category {
+        case .progress:
+            // 只把「没做」翻成「进行中」；blocked 的不动（不许顺手把卡点清掉）。
+            statusRaw = CrewCockpitLanding.statusForProgress(current:
+                plans.item(crewId: crewId, number: number).flatMap { CockpitPlan.status($0.status) })
+        case .blocked:
+            statusRaw = CockpitPlanStatus.blocked.rawValue
+            switch CrewCockpitLanding.blockerLedger(args["blocked_by_ledger"]) {
+            case let .refused(why):
+                return .refused("ERROR: " + why + unsent)
+            case let .ok(ledger):
+                guard let blockerNumber = CrewCockpitLanding.number(args["blocked_by_number"]),
+                      blockerNumber >= 1 else {
+                    return .refused("ERROR: `blocked_by_number` 需为正整数"
+                        + "（卡在哪条 Todo 的 #N）。" + unsent)
+                }
+                blocker = CockpitPlanBlocker(ledger: ledger, number: blockerNumber)
+            }
+        case .done:
+            // ⚠️ 凭据闸走**原来那一份**（当场解析 commit）。翻完成只有机长能做，
+            // 但「有资格判」不等于「判过了」—— 那笔挂了 191 小时的假账带的正是一个
+            // 根本不存在的 hash。
+            switch judgeCompletionEvidence(args: args) {
+            case .commitResolved, .prose:
+                break
+            case .malformedCommit, .commitNotFound, .cannotVerify, .missing:
+                return .refused("ERROR: 要把 计划 #\(number) 翻成「完成」，凭据这一关没过"
+                    + "（`evidence_commit` 会被当场解析）。还没做完就先标 `progress`，"
+                    + "做完拿到凭据再来。" + unsent)
+            }
+            statusRaw = CockpitPlanStatus.done.rawValue
+        default:
+            break
+        }
+        switch plans.update(crewId: crewId, number: number, progress: message,
+                            statusRaw: statusRaw, blocker: blocker,
+                            bySessionId: sessionId, byName: sessionLabel) {
+        case let .failure(failure):
+            return .refused("ERROR: 计划 #\(number) 没更新成 —— " + failure.summary + unsent)
+        case let .success(item):
+            let state = CockpitPlan.status(item.status)?.title ?? item.status
+            return .landed("已往 计划 #\(item.number)「\(item.title)」追加一条进展（现在是「\(state)」）")
+        }
+    }
+
     private func judgeCompletionEvidence(args: [String: Any]) -> TodoEvidence.Verdict {
         let commit = args["evidence_commit"] as? String
         let prose = args["evidence"] as? String
