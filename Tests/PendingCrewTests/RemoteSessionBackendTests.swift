@@ -253,6 +253,55 @@ final class RemoteSessionBackendTests: XCTestCase {
             .init(cols: 80, rows: 25),
         ])
     }
+
+    /// **viewer 侧的后端比它那条链路活得久 —— 这是设计，不是意外。**
+    ///
+    /// 链路断了之后 `CrewSessionRunner.viewerLinkClosed()` 明写着「镜像 run 全部标成
+    /// 连不上，但**不删** —— 删了右栏会闪一下变空」。所以 `RemoteSessionBackend`
+    /// （连同它那个还挂在 SwiftUI 树上的 `TerminalMirrorView`）必然会遇上
+    /// 「client 已经没了、我还在」这一拍。
+    ///
+    /// 而 client 有好几条**自发**关闭路径不经过 `transportDisconnected()`：心跳判定
+    /// 对端没回应、`ViewerSessionClient.stop()`、`closeLink()` 走的都是
+    /// `link.close()`，那条按设计不通知上层（`UnixSocketTransport` 把 `close()` 和
+    /// `peerDisconnected()` 分成两条正是为此）。于是 `handle` 还在、能力表还在，
+    /// 而 client 已经被置 nil 析构。
+    ///
+    /// 2026-09-09 10:42 的闪退（人类 Todo #138，0.1.28）走的就是这条：
+    ///   `AgentTerminalView.makeNSView` → `TerminalView.font.setter` → `resetFont()`
+    ///   → `sizeChanged(source:)` → `TerminalMirrorView.sizeChanged` → `onResize`
+    ///   → `resizeTerminal` → `client.resize` → `swift_unownedRetainStrong`
+    ///   → `swift_abortRetainUnowned` → SIGABRT
+    /// （这条链是拿 0.1.28 那个 commit 重建出的 dSYM 逐帧符号化来的。）
+    ///
+    /// ⚠️ `client` 是 `unowned` 时这条测试**不是红，是把整个测试进程 abort 掉** ——
+    /// 这正是它要钉的东西：SwiftUI 布局这一拍碰到死引用没有「失败」这个中间态。
+    func testBackendOutlivingItsClientStaysInertInsteadOfAborting() async {
+        let direct = ProtocolTestBackend(kind: .claudeCode)
+        var bridge: InProcessSessionProtocolBridge? = InProcessSessionProtocolBridge()
+        let remote = bridge!.exposeAttached(sessionId: "outlives-client", backend: direct)
+        weak var released = bridge
+
+        // 自发关闭那条形状：谁都没喊 `transportDisconnected()`，handle 还在。
+        bridge = nil
+        XCTAssertNil(released, "client 必须真的析构了，否则这条测试是空跑的")
+
+        // 崩溃现场那一拍：布局驱动的 resize。
+        remote.resizeTerminal(cols: 132, rows: 43)
+        XCTAssertEqual(remote.requestedTerminalSize, .init(cols: 132, rows: 43),
+                       "视口尺寸照旧记在本地，只是发不出去")
+
+        // 同一颗雷的其它引信 —— 这几条连 `handle` 那道 guard 都没有。
+        remote.stop()
+        remote.clearQuotaHealth()
+        remote.sendRaw([0x03])
+        _ = await remote.submitWake("wake")
+        _ = await remote.applyProfileSwitch(.init(knob: .model, value: "gpt-5"))
+        _ = remote.screenText(maxLines: 10)
+
+        XCTAssertEqual(direct.stopCount, 0, "链路没了就送不到对端，但也不许崩")
+        XCTAssertEqual(direct.rawInputs, [])
+    }
 }
 
 /// 协议两端共用的后端替身。`SessionProtocolOverSocketTests` 也用它 ——

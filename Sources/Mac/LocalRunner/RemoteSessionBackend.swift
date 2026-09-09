@@ -263,7 +263,30 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     private var handle: UInt32?
     private var snapshotBytes: [UInt8] = []
     private var nextSnapshotSequence: UInt32 = 0
-    private unowned let client: SessionProtocolClient
+    /// **`weak` 不是 `unowned`：这个后端按设计比它那条链路活得久。**
+    ///
+    /// 链路断了以后 `CrewSessionRunner.viewerLinkClosed()` 明写着「镜像 run 全部标成
+    /// 连不上，但**不删**」—— 删了右栏会闪一下变空，而 session 其实好好地在 daemon
+    /// 里跑着。所以「client 已经没了、这个后端和它那个还挂在 SwiftUI 树上的
+    /// `TerminalMirrorView` 还在」是**常态**，不是异常。
+    ///
+    /// 而 client 有好几条**自发**关闭路径不经过 `transportDisconnected()`：心跳判定
+    /// 对端没回应、`ViewerSessionClient.stop()`、`closeLink()` 走的都是
+    /// `link.close()`，那条按设计不通知上层（`UnixSocketTransport` 把 `close()` 和
+    /// `peerDisconnected()` 分成两条正是为此）。于是 `handle`、能力表都还留着，而
+    /// client 已经被置 nil 析构 —— 下面那几道 `guard let handle` 一条都拦不住。
+    ///
+    /// `unowned` 在这一拍不是「读到旧值」，是 `swift_abortRetainUnowned` **当场
+    /// SIGABRT**，没有中间态可言。2026-09-09 10:42 的闪退（人类 Todo #138，0.1.28）
+    /// 就是 SwiftUI 布局踩上去的：`AgentTerminalView.makeNSView` → `TerminalView`
+    /// 的 `font` setter → `resetFont()` → `sizeChanged(source:)` →
+    /// `TerminalMirrorView.sizeChanged` → `onResize` → `resizeTerminal` →
+    /// `client.resize`。
+    ///
+    /// 改成 `weak` 之后语义正是这条链路本来就想要的：**链路没了就什么都不做**，
+    /// 与旁边那几道 `guard let handle else { return }` 同一口径。防环的作用不变 ——
+    /// `SessionProtocolClient.remotes` 强持有这些后端。
+    private weak var client: SessionProtocolClient?
 
     /// - Parameter rendersLocally: 这一份 viewer 要不要**在本地画出来**。
     ///   false = 只收字节、不建 mirror（`TerminalMirrorView` 是 AppKit 视图）。
@@ -314,39 +337,44 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     }
 
     func submitWake(_ text: String) async -> SessionWakeSubmission {
-        guard supportsCapability("wake-submit") else { return .retry }
+        guard supportsCapability("wake-submit"), let client else { return .retry }
         return await client.submitWake(sessionId: sessionId, text: text)
     }
 
     func interrupt() { sendRaw(kind == .terminal ? [0x03] : [0x1b]) }
-    func stop() { client.sendControl(sessionId: sessionId, op: "stop") }
-    func clearQuotaHealth() { client.sendControl(sessionId: sessionId, op: "clearQuotaHealth") }
+    func stop() { client?.sendControl(sessionId: sessionId, op: "stop") }
+    func clearQuotaHealth() { client?.sendControl(sessionId: sessionId, op: "clearQuotaHealth") }
 
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
-        await client.applyProfileSwitch(sessionId: sessionId, command: cmd)
+        guard let client else { return .rejected("后台链路已断开，这条命令根本没发出去") }
+        return await client.applyProfileSwitch(sessionId: sessionId, command: cmd)
     }
 
     func updateApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
         guard supportsCapability("approval-mode") else {
             throw SessionProtocolControlError.unsupported("daemon 不支持运行态审批模式切换")
         }
+        guard let client else {
+            throw SessionProtocolControlError.failed("后台链路已断开，切换没有发出去")
+        }
         try await client.updateApprovalsReviewer(sessionId: sessionId, reviewer: reviewer)
     }
 
     func screenText(maxLines: Int) -> String {
         guard supportsCapability("screen-text") else { return "（daemon 不支持读取输出）" }
+        guard let client else { return "（连不上后台进程）" }
         return client.screenText(sessionId: sessionId, maxLines: maxLines) ?? "（输出为空）"
     }
 
     func sendRaw(_ bytes: [UInt8]) {
         guard let handle else { return }
-        client.sendInput(handle: handle, bytes: bytes)
+        client?.sendInput(handle: handle, bytes: bytes)
     }
 
     func resizeTerminal(cols: Int, rows: Int) {
         requestedTerminalSize = .init(cols: cols, rows: rows)
         guard let handle else { return }
-        client.resize(handle: handle, cols: cols, rows: rows)
+        client?.resize(handle: handle, cols: cols, rows: rows)
         refreshScrollState(userInitiated: false)
     }
 
