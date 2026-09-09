@@ -112,4 +112,46 @@ final class CrewMessageReferenceLandingTests: XCTestCase {
                        [CrewMessageReference(.agentTodo, "5")],
                        "系统消息过了一遍身份正规化，引用被丢掉了")
     }
+
+    // MARK: - #136：整组状态跟着消息落盘
+
+    func test_机长填的状态落在消息上() {
+        let f = fixture()
+        _ = post(server(f), #"{"message":"报一句","category":"note","crew_status":"在接引用可点"}"#)
+        XCTAssertEqual(board(f).first?.crewStatus, "在接引用可点")
+    }
+
+    func test_worker填状态被拒而且消息一个字都不发() {
+        let f = fixture()
+        let r = post(server(f, captain: false),
+                     #"{"message":"报一句","category":"note","crew_status":"我在跑全量"}"#)
+        XCTAssertTrue(r.contains("ERROR") && r.contains("机长"), r)
+        XCTAssertTrue(board(f).isEmpty, "被拒了却把消息发出去了")
+    }
+
+    /// **分条发送时状态每条都带**（不是只挂最后一条）。
+    ///
+    /// 只挂最后一条的话，执行期一半成功时它正好挂在最可能没发出去的那条上，
+    /// 于是侧栏显示着上一次的旧状态、看起来像「他没报」。
+    func test_分条发送时每条都带着同一句状态() {
+        let f = fixture()
+        _ = post(server(f), #"""
+        {"messages":[{"text":"一","category":"note"},{"text":"二","category":"note"}],        "crew_status":"在接引用可点"}
+        """#)
+        let msgs = board(f)
+        XCTAssertEqual(msgs.count, 2)
+        XCTAssertEqual(msgs.map(\.crewStatus), ["在接引用可点", "在接引用可点"])
+    }
+
+    /// 顶层给 `mentions` / `reply_to` / `attachments` **会被丢掉** —— 所以要明说，
+    /// 不许静默丢：回执照回「已发到」而 @ 谁都没 @ 到，是这一路最坏的形态。
+    func test_顶层给每条自己的参数要整批拒并说清挪到哪() {
+        let f = fixture()
+        let r = post(server(f), #"""
+        {"messages":[{"text":"一","category":"note"}],        "mentions":[{"kind":"session","target_id":"sess-9"}]}
+        """#)
+        XCTAssertTrue(r.contains("ERROR") && r.contains("mentions"), r)
+        XCTAssertTrue(r.contains("挪进") || r.contains("每条"), "没说清该挪到哪：\(r)")
+        XCTAssertTrue(board(f).isEmpty, "整批该一条都不发")
+    }
 }

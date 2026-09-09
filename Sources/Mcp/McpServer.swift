@@ -207,6 +207,7 @@ final class McpServer {
                                 "description": "可选：随这条消息一起发到群里的图片/文件，填**本机绝对路径**（`~` 可用）。图片在群聊气泡里直接显示，其它类型显示成文件条。收到的人（包括别的 session）拿到的是可以直接 Read 的绝对路径 —— 所以截图、生成的图表、报告文件都可以这样递过去，不用把路径写在正文里让人自己拼。\n\n**你的原文件不会被搬走**，收进群聊的是一份副本（存在 app 数据目录，随聊天记录长期保留，worktree 清掉也还在）。\n\n收不下的会**逐条**在回执里说明原因（文件不存在 / 是文件夹 / 超过大小上限），不会静默丢；带了附件时正文可以为空（只发图）。",
                                 "items": ["type": "string"],
                             ],
+                            "crew_status": ["type": "string", "description": "（机长专用）一句话说清**整个机组**现在什么情况 —— 它直接显示在侧栏这个机组那一行，替掉原来那条「最新消息」。\n**和消息同一次动作产生**，所以它永远不会比最新消息更旧；不填就沿用上一次填的（侧栏会把那句话的年龄一起摆出来）。\n侧栏那行大概露得出 40 字，超了照写、回执提醒一句；**超过 200 字拒收**（那不是一句状态，是一篇报告——报告发正文）。\n整批发多条时这是**一次一个**的顶层参数，不是每条一个。"],
                             "reply_to": [
                                 "type": "string",
                                 "description": "可选：你在回复哪条群聊消息的 id —— 给了会自动 @ 那条的原发送者。**这个自动 @ 不收窄可见范围**：落盘的形状是 `[{kind:\"broadcast\"},{被回复者}]` —— 全组照样看得见全文，只是把被回复的那个现在叫醒。你自己在 mentions 里手打了定向 @（session/captain）时按你选的排他来，不替你放宽。",
@@ -1708,6 +1709,20 @@ final class McpServer {
             // 驾驶舱那四类（plan/progress/blocked/done）走 `landOnCockpit`，
             // 写入口复用 `CockpitPlanStore.add/update`（不另开一个）。谁写得动由
             // `CrewCockpitWritePermission` 判：**报进度的人 ≠ 决定条目存不存在的人**。
+            // #136：这次发言顺手报一句**整组**的状态（侧栏那一行读它）。
+            // 拒了就一个字都不发 —— 半截状态（消息发了、状态没落）会让侧栏显示
+            // 一句过期的话，而看的人以为那是刚报的。
+            var crewStatus: String?
+            var statusHint: String?
+            switch CrewStatusIntake.decide(args["crew_status"], isCaptain: isCaptain) {
+            case .none:
+                break
+            case let .refused(why):
+                return (false, "ERROR: " + why)
+            case let .accepted(value, hint):
+                crewStatus = value
+                statusHint = hint
+            }
             var ledgerReceipts: [String] = []
             // #132/#133：这条消息**指向**了什么。每一项都来自结构化字段或落账刚拿到
             // 的号 —— 正文一个字都不参与（见 `CrewMessageReference`）。
@@ -1794,7 +1809,8 @@ final class McpServer {
                     mentions: mentions, inReplyTo: replyTo,
                     senderKind: isCaptain ? "captain" : "session",
                     attachments: intake.accepted,
-                    references: CrewMessageReferences.build(refs))
+                    references: CrewMessageReferences.build(refs),
+                    crewStatus: crewStatus)
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
                 // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
                 // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
@@ -1803,7 +1819,8 @@ final class McpServer {
                     attachmentCount: intake.accepted.count,
                     attachmentErrors: intake.errors)
                 // 落账结果必须进回执：**「落账可撤」的前提是先让人知道它落了哪一条。**
-                return (true, ([base] + ledgerReceipts).joined(separator: "\n"))
+                return (true, ([base] + ledgerReceipts + [statusHint].compactMap { $0 })
+                    .joined(separator: "\n"))
             } catch {
                 return (false, Self.writeFailureReceipt(error))
             }

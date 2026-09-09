@@ -236,12 +236,13 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                               senderKind: String = "session",
                               externalContactFrom: String? = nil,
                               attachments: [LocalWhiteboardAttachment]? = nil,
-                              references: [CrewMessageReference]? = nil) {
+                              references: [CrewMessageReference]? = nil,
+                              crewStatus: String? = nil) {
         _ = try? appendSessionMessageReportingFailure(
             crewId: crewId, sessionId: sessionId, text: text, category: category,
             senderName: senderName, mentions: mentions, inReplyTo: inReplyTo,
             senderKind: senderKind, externalContactFrom: externalContactFrom,
-            attachments: attachments, references: references)
+            attachments: attachments, references: references, crewStatus: crewStatus)
     }
 
     /// 与 `appendSessionMessage` 相同，但把编码/落盘错误抛给调用者 —— 用于回执
@@ -259,7 +260,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         senderKind: String = "session",
         externalContactFrom: String? = nil,
         attachments: [LocalWhiteboardAttachment]? = nil,
-        references: [CrewMessageReference]? = nil
+        references: [CrewMessageReference]? = nil,
+        crewStatus: String? = nil
     ) throws -> String? {
         let isSystem = PendingCrewSystemMessage.isSystem(
             senderKind: senderKind, senderSessionId: sessionId)
@@ -275,6 +277,7 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             inReplyTo: inReplyTo,
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
+            crewStatus: crewStatus,
             externalContactFrom: externalContactFrom,
             references: (references?.isEmpty == true) ? nil : references))
     }
@@ -299,6 +302,10 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             inReplyTo: message.inReplyTo,
             mentions: message.mentions,
             attachments: message.attachments,
+            // 系统消息本来就不该带 crew 状态（它不是某个机长在报自己那一组），
+            // 所以搬过去的实际上恒为 nil。**照样写上** —— 让下一个人看到
+            // 「这个函数每个字段都在」，而不是猜哪些是故意漏的。
+            crewStatus: message.crewStatus,
             externalContactFrom: message.externalContactFrom,
             // ⚠️ 这个函数**逐字段重建**消息 —— 每加一个新字段都得在这里补一行，
             // 漏了不会报错，只会让系统消息**静默丢掉那个字段**。
