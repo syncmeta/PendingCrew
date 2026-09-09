@@ -277,6 +277,7 @@
 		6761DDF0C26513763523681F /* HumanTodoWakePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71D09553E4AAB7122A466B3 /* HumanTodoWakePlan.swift */; };
 		67F1A713B214BE38547CFBA4 /* McpPermissionHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53FB4DF079945BBB34443F32 /* McpPermissionHook.swift */; };
 		6885CECA646E42B99A1BC89A /* CodexTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62034E32CA0F14CE5ACAC93F /* CodexTranscriptView.swift */; };
+		68CDB5B7A2CC2D60F165DDEC /* CockpitPlanFocusingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE8E646C2546A3AB4307B76 /* CockpitPlanFocusingTests.swift */; };
 		68E496CB988B23E2E3A5BA8D /* CodexTranscriptText.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7DE2287BFFB9A08A603D329 /* CodexTranscriptText.swift */; };
 		68F22BFE40E19C1E40B56E3B /* WorkdirMigrationExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F08FE518FBFBFE1C5441F5F /* WorkdirMigrationExecutor.swift */; };
 		69326FB0AECEA6EACFBA3A2E /* SessionUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2809602DDEF4A750138A88 /* SessionUnreadStore.swift */; };
@@ -971,6 +972,7 @@
 		7BFDFF2B2559EED9C9B68734 /* McpServerPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServerPlanTests.swift; sourceTree = "<group>"; };
 		7CA43A26736A92F61E4C00E2 /* McpDirectoryIOFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpDirectoryIOFailureTests.swift; sourceTree = "<group>"; };
 		7CCD472BA2B27A5116C0E0AD /* CodexThreadItemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexThreadItemTests.swift; sourceTree = "<group>"; };
+		7DE8E646C2546A3AB4307B76 /* CockpitPlanFocusingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitPlanFocusingTests.swift; sourceTree = "<group>"; };
 		7F08FE518FBFBFE1C5441F5F /* WorkdirMigrationExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationExecutor.swift; sourceTree = "<group>"; };
 		7FBF4A0076FC9AEFACAF381A /* CrewLocalMentionWakePinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalMentionWakePinTests.swift; sourceTree = "<group>"; };
 		7FDB2CB78C24C1101D76D13A /* CrewArrangementStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewArrangementStore.swift; sourceTree = "<group>"; };
@@ -1644,6 +1646,7 @@
 				F5BD109F24112A63BFE678D6 /* ChatCodeBlockRenderTests.swift */,
 				CDC4F0DC33326557BBDF66CF /* ClaudeInputBoxFixtureTests.swift */,
 				77E6E717964A3666AF02FA96 /* CockpitOpenCloseCostTests.swift */,
+				7DE8E646C2546A3AB4307B76 /* CockpitPlanFocusingTests.swift */,
 				3C65EFF88E3B5842B900C951 /* CockpitPlanTests.swift */,
 				E54EBB06E47F440F0DD05D1D /* CockpitRoadmapParserTests.swift */,
 				23B6EDDD5BBECBC09E32571F /* CockpitTaskLedgerTests.swift */,
@@ -2445,6 +2448,7 @@
 				91277F1B7ABA7994114E1699 /* CockpitOpenCloseCostTests.swift in Sources */,
 				D609646E7B8DBCFA95A7775D /* CockpitPlan.swift in Sources */,
 				7289B34639FD9D3166B83E07 /* CockpitPlanFeed.swift in Sources */,
+				68CDB5B7A2CC2D60F165DDEC /* CockpitPlanFocusingTests.swift in Sources */,
 				7ED081393EA12A2257DF1DE1 /* CockpitPlanStore.swift in Sources */,
 				6F1F4459FE37346D26F559A3 /* CockpitPlanTests.swift in Sources */,
 				51904CEEAF5BC4C561C8807B /* CockpitRoadmapParserTests.swift in Sources */,

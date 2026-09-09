@@ -14,6 +14,11 @@ struct CockpitView: View {
     /// runner 每一次 `objectWillChange`（session 状态、输出、心跳，一秒好几次）
     /// 都会让整个驾驶舱重算一遍。
     let onClose: () -> Void
+    /// 这次要落在哪条计划上（人类 Todo #132/#133）。**当值传进来，不订阅
+    /// `CockpitPresentation`** —— 订阅它就把「只有 CockpitLayer 观察开关位」那条
+    /// 铁律破掉了（见 `CockpitPresentation` 的注释）。外面那层本来就在观察，
+    /// 值变了它会带着新值重建这棵子树。
+    var planFocus: CockpitPresentation.PlanFocus? = nil
     @EnvironmentObject private var crewStore: CrewStore
 
     var body: some View {
@@ -46,7 +51,7 @@ struct CockpitView: View {
 
     @ViewBuilder private var content: some View {
         if let crewId = crewStore.selectedDetail?.crew.id ?? crewStore.selectedCrewId {
-            CockpitAgentMindView(crewId: crewId)
+            CockpitAgentMindView(crewId: crewId, planFocus: planFocus)
         } else {
             emptyState("选一个 crew 看 Agent 的计划与想法")
         }
