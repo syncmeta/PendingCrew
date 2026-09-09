@@ -265,10 +265,13 @@ final class McpServer {
                 ],
                 [
                     "name": "ask",
-                    "description": "向负责人提问并拿到答复（先 captain，再人类）。任何需要人 / captain 判断、决策、方向选择、澄清、授权的，都走这个 —— 不要在纯文本里问。会阻塞直到有人答。",
+                    "description": "向人类提一个需要拍板的问题。任何需要人判断、决策、方向选择、澄清、授权的，都走这个 —— 不要在纯文本里问。\n\n**它不阻塞。** 问题会记进人类 Todo（「人类的」那本，人翻得到、不回应不会消失），群里同时 @ 到人。你**立刻拿到回执，然后去干别的或者收工** —— 人回应时系统会直接叫醒你（你已经退出的话转给机长转达）。\n\n**`resume_note` 很重要**：写下「答复回来后我要接着做什么」。不阻塞意味着你会去干别的，被叫醒时如果不知道从哪儿接，这件事就等于丢了 —— 那比停在这儿等还糟。半路上问的问题**一定要写**。",
                     "inputSchema": [
                         "type": "object",
-                        "properties": ["question": ["type": "string"]],
+                        "properties": [
+                            "question": ["type": "string", "description": "要人拍板的那件事。把选项和你的倾向写出来——「A / B，我倾向 A，因为 …」比「这个怎么办？」好拍十倍。"],
+                            "resume_note": ["type": "string", "description": "答复回来后你要接着做什么（你正做到哪一步、接下来那一步是什么）。会在人回应时**原样**念回给你。"],
+                        ],
                         "required": ["question"],
                     ],
                 ],
@@ -386,18 +389,6 @@ final class McpServer {
                 ],
             ]
             if isCaptain {
-                tools.append([
-                    "name": "answer_decision",
-                    "description": "（机长专用）答复一条待决策：用你的判断给出答复，answering 会立刻解开发起 session 的等待。",
-                    "inputSchema": [
-                        "type": "object",
-                        "properties": [
-                            "reqId": ["type": "string"],
-                            "reply": ["type": "string"],
-                        ],
-                        "required": ["reqId", "reply"],
-                    ],
-                ])
                 // 机长作战板（人类 Todo #66）—— 与两本 Todo 的关系：Todo 是**别人给的**
                 // （`.agent` 人类派活 / `.human` 请人拍板），这一本是**机长自己排的**。
                 // 派活 / 收活 / 翻牌这三个动作发生时顺手更一条，是这块板唯一的活法。
@@ -816,72 +807,73 @@ final class McpServer {
                 text: "找到 \(rendered.count) 条（最新优先；时间边界包含；附件仅 filename/MIME）：\n\n"
                     + rendered.joined(separator: "\n\n"))
         case "ask":
+            // 驾驶舱计划 #75 ①：**`ask` 不再阻塞。**
+            //
+            // 旧实现：raise 一条 `kind: "decision"` 待决策 → `awaitReply` 每 0.5s 轮询、
+            // 最多 3600 次 = **正好 30 分钟**，人不在就真的停在那儿。那就是人类反复问的
+            // 「怎么又停了」的一个主要来源。
+            //
+            // 新实现：问题**进人类 Todo 那本账**（2026-08-25 才有的账；待审批那套的 spec
+            // 是 2026-06-08 —— 它诞生时「agent 请人类拍板」无处可去，所以自造了一套，
+            // 账出来之后没人回头拆），立刻返回，agent 接着干别的。人回应时由
+            // `HumanTodoWakePlan` 叫醒提问者（退出了回落机长转达），**不静默丢**。
+            //
+            // 承重点在 `resume_note`：不阻塞之后多了一个新风险，而且**比原来更糟** ——
+            // 提完问题去干别的，就再也不回来做那件事了。所以提问时把「答复回来后接着
+            // 做什么」一起记下，人回应时原样念回去（`TodoLandingFlow.wakeText`）。
             let question = (args["question"] as? String) ?? ""
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return toolResult(id: id, text: "ERROR: question 不能为空")
             }
-            // 直达人类退化路径（captain-first triage 等 chunk 2）：raise 一条待决策 →
-            // 阻塞 long-poll 人类/captain 答复（spec ask-approval §3/§5）。
-            guard let reqId = approvals.raise(
-                crewId: crewId, kind: "decision", sessionId: sessionId, summary: question) else {
-                // 待决策没落盘（读不出来 / 漏读，白板上有系统警示）：再 long-poll
-                // 就是对着不存在的条目干等 30 分钟。如实说没提上去（#577）。
-                // 措辞不说「已归档」—— 读不出来时原件一字未动、不产生归档（2026-08-12）。
+            let askResume = (args["resume_note"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let askItem = humanTodos.add(
+                crewId: crewId, text: question,
+                bySessionId: sessionId, bySenderName: sessionLabel,
+                resumeNote: (askResume?.isEmpty == false) ? askResume : nil,
+                expectsResume: true) else {
+                // 没落盘（读不出来 / 漏读，白板上有系统警示）。如实说没提上去 ——
+                // 绝不返回一个根本不存在的 #N 让调用方拿去对外宣布。
                 return toolResult(
                     id: id,
-                    text: "ERROR: 这个问题没能记进待决策列表（文件这次读不出来或漏读，"
+                    text: "ERROR: 这个问题没能记进人类 Todo（账本这次读不出来或漏读，"
                         + "原有内容没被动过，群聊白板上有系统警示）。没有人会看到你在问什么 —— "
                         + "改用 post_to_crew 在群里直接问，或稍后重试。")
             }
-            // 通知半边（spec §6「PendingCrew 只做通知+列表+答复」）：把问题贴到本地群聊白板，
-            // 并 **@ 到能处理的人** —— 决策 captain-first，@captain 让机长优先看到来答；同时
-            // @human 兜底（人默认不进 session 详情，全靠群里这条 @ 才会注意到、去待办列表答）。
-            // captain 自己发起 ask 时不 @ 自己（去重），只 @human。答复仍走待办列表（approvals）。
+            // 通知半边：群里贴一条并 @ 到能处理的人。机长自己问时不 @ 自己。
             let askMentions: [LocalWhiteboardMention] = isCaptain
                 ? [LocalWhiteboardMention(kind: "human", targetId: nil)]
                 : [LocalWhiteboardMention(kind: "human", targetId: nil),
                    LocalWhiteboardMention(kind: "captain", targetId: nil)]
-            // 通知半边写不进去就别傻等（#577）：白板上没有这条 @，没人知道你在问，
-            // long-poll 会一直挂着。如实说明并让调用方自己决定怎么办 —— 待决策已经
-            // 进了待办列表，人类仍可在那里答复。
+            var askReceipt = """
+            已记进人类 Todo #\(askItem.number)（「人类的」那本），群里也 @ 了。
+            **现在去干别的，别停在这儿等** —— 人回应时会直接叫醒你\
+            （你已经退出的话转给机长转达），并把你写下的接续说明念回给你。
+            """
+            if askResume?.isEmpty != false {
+                askReceipt += "\n⚠️ 你没写 resume_note。被叫醒时你可能不知道从哪儿接 —— "
+                    + "下次问的时候把「答复回来后接着做什么」一起写上。"
+            }
             do {
                 let incident = try store.appendSessionMessageReportingFailure(
                     crewId: crewId, sessionId: sessionId,
-                    text: "待决策：\(question)\n（去待办列表答复）",
+                    text: "人类 To do +1: #\(askItem.number) \(question)",
                     category: "question", senderName: sessionLabel,
                     mentions: askMentions,
                     senderKind: isCaptain ? "captain" : "session")
-                let reply = awaitReply(reqId: reqId)
-                guard let incident else { return toolResult(id: id, text: reply) }
-                return toolResult(id: id, text: "⚠️ \(incident)\n\n\(reply)")
+                guard let incident else { return toolResult(id: id, text: askReceipt) }
+                return toolResult(id: id, text: "⚠️ \(incident)\n\n\(askReceipt)")
             } catch {
                 return toolResult(
                     id: id,
-                    text: "ERROR: 问题没能贴到 crew 群聊白板 —— \(error.localizedDescription)。"
-                        + "没人会在群里看到你在问什么，这次 ask 不再等待。"
-                        + "待决策 \(reqId) 已经进了人类的待办列表，可提醒人去那里答复。")
+                    text: "⚠️ 问题没能贴到群聊白板（\(error.localizedDescription)），"
+                        + "群里没人会看到你在问什么。\n\n\(askReceipt)")
             }
-        case "answer_decision":
-            // 机长专用（chunk2 T4）：答复一条 decision，解开发起 session 的 long-poll。
-            guard isCaptain else {
-                return toolResult(id: id, text: "ERROR: 仅机长可用")
-            }
-            let reqId = (args["reqId"] as? String) ?? ""
-            let reply = (args["reply"] as? String) ?? ""
-            guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return toolResult(id: id, text: "ERROR: reply 不能为空")
-            }
-            guard let item = approvals.item(crewId: crewId, id: reqId) else {
-                return toolResult(id: id, text: "ERROR: 找不到待决策 \(reqId)")
-            }
-            guard item.kind == "decision" else {
-                return toolResult(id: id, text: "ERROR: 该条不是待决策（权限审批请人类处理）")
-            }
-            guard item.status == "pending" else {
-                return toolResult(id: id, text: "ERROR: 该条已被答复")
-            }
-            approvals.answer(crewId: crewId, id: reqId, reply: reply)
-            return toolResult(id: id, text: "已答复，发起的 session 将继续。")
+        // `answer_decision` 已随决策类一起拆掉（驾驶舱计划 #75 ①）。
+        // 它的全部作用是让机长答一条 `kind: "decision"` 待决策、解开发起方的
+        // long-poll —— 而 `ask` 不再产生待决策、也不再 long-poll，留着它就是一个
+        // **永远找不到目标**的工具，还会在机长的世界观里继续教它去用。
+        // 决策现在走人类 Todo：机长要拍板就直接 respond_todo 回那条。
         case "rename_crew":
             // 机长专用（crew-naming）：写一条待改名进控制通道；app 侧 CrewStore
             // 排空落地到 LocalCrewStore.setTitle 并刷新侧栏。不限长度 —— 标签思想

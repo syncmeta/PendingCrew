@@ -8,11 +8,22 @@ final class McpServerTests: XCTestCase {
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }
+    /// ⚠️ **每一个 store 都必须显式给 `dir`。** 漏一个，那个 store 就会落到
+    /// `LocalWhiteboardStore.defaultDirectory` —— 也就是**用户真实的数据目录**，
+    /// 测试会往人的账本里写东西。
+    ///
+    /// 这不是假设：`ask` 改成写人类 Todo（#75 ①）之后，这个工厂因为没传 `todos:`
+    /// 而在真数据目录里造出了 `c.human-todos.json`（crewId "c" 是测试 id）。
+    /// **加 store 的时候顺手在这儿也加一行**，否则下一次同样静默发生。
     private func server(_ dir: URL, isCaptain: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "c", sessionId: "sess-1", isCaptain: isCaptain)
+                  crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
+                  quotaDirectory: dir,
+                  todos: LocalTodoStore(directory: dir),
+                  plans: CockpitPlanStore(directory: dir),
+                  wakeups: LocalWakeupStore(directory: dir))
     }
     private func callRenameCrew(_ s: McpServer, name: String) -> String {
         s.handleLine("""
@@ -205,98 +216,65 @@ final class McpServerTests: XCTestCase {
                       "不得让已继续工作的 session 仍被标成等答复")
     }
 
-    // ask 在 raise 后把问题贴到本地白板（spec §6 通知半边），答复仍走待办列表。
-    func testAskPostsWhiteboardNotificationAndReturnsReply() {
+    // MARK: - ask（驾驶舱计划 #75 ①：口径整个换了，不是这几条测试写错了）
+    //
+    // **旧契约**：`ask` raise 一条待决策 → 阻塞 long-poll 最多 30 分钟 → 返回答复；
+    // 机长用 `answer_decision` 解开它。下面这几条当年钉的就是那套。
+    //
+    // **新契约**（人类拍板）：问题进人类 Todo，`ask` **立刻返回**，agent 去干别的；
+    // 人回应时由 `HumanTodoWakePlan` 叫醒提问者。`answer_decision` 随之删除 ——
+    // 它的全部作用是解开那条 long-poll，而 long-poll 没有了。
+    //
+    // 这几条**不是删掉了事，是改口径**：留下旧契约的名字和它为什么被推翻，
+    // 否则下一个人看到「ask 不返回答复」会以为是 bug。
+
+    /// worker 的 ask 通知要 @ 到能处理的人 —— @human（人默认不进详情）+ @captain。
+    /// 这一半**没变**：不 @ 到人 = 静默广播，没人会被唤醒（#491）。
+    func testAskPostsWhiteboardNotificationMentioningHumanAndCaptain() {
         let s = server(tempDir())
-        DispatchQueue.global().async {   // 后台答复，解 ask 的阻塞 long-poll
-            for _ in 0..<500 {
-                if let it = s.approvals.pending(crewId: "c").first {
-                    s.approvals.answer(crewId: "c", id: it.id, reply: "选 A"); break
-                }
-                Thread.sleep(forTimeInterval: 0.01)
-            }
-        }
         let r = s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"question":"选 A 还是 B?"}}}"#)
-        XCTAssertTrue(r?.contains("选 A") ?? false, "ask 应拿到答复返回")
-        let note = s.store.list(crewId: "c").first { $0.text.contains("待决策：") && $0.text.contains("选 A 还是 B?") }
-        XCTAssertNotNil(note, "ask 应往白板贴一条待决策通知")
-        // #491：worker 的 ask 通知要 @ 到能处理的人 —— @human（人默认不进详情）+ @captain（决策
-        // captain-first）。不 @ 到人 = 静默广播，没人会被唤醒/注意到。
+        XCTAssertTrue(r?.contains("#1") ?? false, "回执没说记成了人类 Todo 第几条")
+        let note = s.store.list(crewId: "c").first { $0.text.contains("选 A 还是 B?") }
+        XCTAssertNotNil(note, "ask 应往白板贴一条通知")
         XCTAssertEqual(Set(note?.mentions?.map(\.kind) ?? []), ["human", "captain"],
                        "worker ask 通知应 @human + @captain")
     }
 
-    // #491：captain 自己发起 ask 时不 @ 自己（去重）—— 只 @human，避免机长 @ 自己的噪音/自唤醒。
+    /// **问题落进人类 Todo，不再进待决策列表。** 两套并存就是「只做一半」。
+    func testAskFilesIntoHumanTodoAndNotIntoApprovals() {
+        let dir = tempDir()
+        let s = server(dir)
+        _ = s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"question":"要不要上线?"}}}"#)
+        XCTAssertEqual(LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c").count, 1,
+                       "问题没进人类 Todo")
+        XCTAssertTrue(s.approvals.pending(crewId: "c").isEmpty,
+                      "还往待决策列表里 raise 了 —— 决策类该并进 Todo，不是两套并存")
+    }
+
+    // captain 自己发起 ask 时不 @ 自己（去重）—— 只 @human（#491，这一半没变）。
     func testCaptainAskMentionsHumanOnly() {
         let s = server(tempDir(), isCaptain: true)
-        DispatchQueue.global().async {
-            for _ in 0..<500 {
-                if let it = s.approvals.pending(crewId: "c").first {
-                    s.approvals.answer(crewId: "c", id: it.id, reply: "ok"); break
-                }
-                Thread.sleep(forTimeInterval: 0.01)
-            }
-        }
         _ = s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"question":"要不要上线?"}}}"#)
-        let note = s.store.list(crewId: "c").first { $0.text.contains("待决策：") }
+        let note = s.store.list(crewId: "c").first { $0.text.contains("要不要上线?") }
         XCTAssertEqual(note?.mentions?.map(\.kind), ["human"], "captain 的 ask 只 @human，不 @ 自己")
     }
 
-    // MARK: - answer_decision（机长专用，chunk2 T4）
+    // MARK: - answer_decision 已删除（#75 ①）
 
     func testNonCaptainToolsListLacksAnswerDecision() {
         let r = server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)!
         XCTAssertFalse(r.contains("answer_decision"))
     }
 
-    func testCaptainToolsListHasAnswerDecision() {
+    /// 机长那边也没有了。**这条原来断言的是反面**（`XCTAssertTrue`）—— 口径被人类推翻，
+    /// 不是测试写错了。留着这个名字是为了让下一个人看得见它翻过面。
+    func testCaptainToolsListNoLongerHasAnswerDecision() {
         let r = server(tempDir(), isCaptain: true).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)!
-        XCTAssertTrue(r.contains("answer_decision"))
-    }
-
-    func testNonCaptainAnswerDecisionRejected() throws {
-        let s = server(tempDir())
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "w", summary: "q"))
-        XCTAssertTrue(callAnswerDecision(s, reqId: id, reply: "选 A").contains("仅机长可用"))
-        XCTAssertEqual(s.approvals.item(crewId: "c", id: id)?.status, "pending")
-    }
-
-    func testCaptainAnswerDecisionAnswersAndUnblocksAsk() throws {
-        let s = server(tempDir(), isCaptain: true)
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "w", summary: "选 A 还是 B?"))
-        let r = callAnswerDecision(s, reqId: id, reply: "选 A")
-        XCTAssertTrue(r.contains("已答复"))
-        let item = s.approvals.item(crewId: "c", id: id)
-        XCTAssertEqual(item?.status, "answered")
-        XCTAssertEqual(item?.reply, "选 A")
-        // 发起方 ask 的 long-poll（已预先答复）立刻拿到答复
-        XCTAssertEqual(s.awaitReply(reqId: id, pollInterval: 0.01), "选 A")
-    }
-
-    func testAnswerDecisionWrongReqId() {
-        let s = server(tempDir(), isCaptain: true)
-        XCTAssertTrue(callAnswerDecision(s, reqId: "nope", reply: "x").contains("找不到待决策"))
-    }
-
-    func testAnswerDecisionAlreadyAnswered() throws {
-        let s = server(tempDir(), isCaptain: true)
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "w", summary: "q"))
-        s.approvals.answer(crewId: "c", id: id, reply: "first")
-        XCTAssertTrue(callAnswerDecision(s, reqId: id, reply: "second").contains("已被答复"))
-        XCTAssertEqual(s.approvals.item(crewId: "c", id: id)?.reply, "first")
-    }
-
-    func testAnswerDecisionPermissionKindRejected() throws {
-        let s = server(tempDir(), isCaptain: true)
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "permission", sessionId: "w", summary: "rm?"))
-        XCTAssertTrue(callAnswerDecision(s, reqId: id, reply: "allow").contains("不是待决策"))
-        XCTAssertEqual(s.approvals.item(crewId: "c", id: id)?.status, "pending")
-    }
-
-    func testAnswerDecisionEmptyReplyRejected() throws {
-        let s = server(tempDir(), isCaptain: true)
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "w", summary: "q"))
-        XCTAssertTrue(callAnswerDecision(s, reqId: id, reply: "  ").contains("reply 不能为空"))
+        XCTAssertFalse(r.contains("answer_decision"),
+                       """
+                       `answer_decision` 还在。ask 不再产生待决策、也不再 long-poll，\
+                       它从此永远找不到目标 —— 留着等于在机长的世界观里继续教它用一个死工具。
+                       """)
     }
 
     // MARK: - rename_crew（机长专用，crew-naming）
