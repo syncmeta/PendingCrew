@@ -30,9 +30,14 @@ enum CrewLocalTodoLanding {
             throw TodoLandingError.notPersisted
         }
         let message = "To do +1: #\(item.number) \(text)"
+        // #132：群里那行的 `#N` 要点得进去。号码从**刚落盘的条目**上取
+        // （`item.number`），不是从上面那句拼好的话里正则认回来 ——
+        // 这两者今天恰好相等，但只有前者在改文案之后仍然成立。
         try await backend.postCrewMessage(
             crewId: crewId, text: message, mentions: [],
-            replyToId: nil, localAttachments: attachments)
+            replyToId: nil, localAttachments: attachments,
+            extraReferences: CrewMessageReferences.build(
+                .init(agentTodoNumber: item.number)))
         return item
     }
 

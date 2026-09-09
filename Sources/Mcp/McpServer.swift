@@ -1709,6 +1709,14 @@ final class McpServer {
             // 写入口复用 `CockpitPlanStore.add/update`（不另开一个）。谁写得动由
             // `CrewCockpitWritePermission` 判：**报进度的人 ≠ 决定条目存不存在的人**。
             var ledgerReceipts: [String] = []
+            // #132/#133：这条消息**指向**了什么。每一项都来自结构化字段或落账刚拿到
+            // 的号 —— 正文一个字都不参与（见 `CrewMessageReference`）。
+            var refs = CrewMessageReferences.Input(
+                planNumber: CrewCockpitLanding.number(args["plan"]),
+                inReplyTo: replyTo,
+                mentionedSessionIds: (mentions ?? []).compactMap {
+                    $0.kind == "session" ? $0.targetId : nil
+                })
             // (D)：谁写得动驾驶舱那本账。**拒了就一个字都不发** —— 跟落账失败同一条
             // 纪律：消息发出去了、账没落上，比现在还糟。
             if let why = cockpitPermissionRefusal(args: args) {
@@ -1726,14 +1734,18 @@ final class McpServer {
                         + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
                         + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
                 }
+                refs.humanTodoNumber = added.number
                 ledgerReceipts.append("已建 人类 Todo #\(added.number)（人在面板里点得进去、撤得掉）")
             case let .skipped(hint):
                 // 不落账，但**回执里说清楚它没落**——静默跳过就是这一单要治的病本身。
                 ledgerReceipts.append("⚠️ " + hint)
             case let .land(cockpit) where cockpit.ledger == .cockpit:
                 switch landOnCockpit(category: cockpit, args: args, message: message) {
-                case let .refused(why): return (false, why)
-                case let .landed(receipt): ledgerReceipts.append(receipt)
+                case let .refused(why):
+                    return (false, why)
+                case let .landed(planNumber, receipt):
+                    refs.planNumber = planNumber
+                    ledgerReceipts.append(receipt)
                 }
             case .land, .noLedger:
                 break
@@ -1766,6 +1778,7 @@ final class McpServer {
                     return (false, "ERROR: Todo #\(number) 没更新成"
                         + "（这本账上没有这条，或者这次读不出来）。**这条消息也没有发出去。**")
                 }
+                refs.agentTodoNumber = updated.number
                 ledgerReceipts.append("已把 Todo #\(updated.number) 翻成 \(status)")
             }
             // 机长发言标 senderKind "captain" —— 渲染端据此用稳定的 captainBotId
@@ -1780,7 +1793,8 @@ final class McpServer {
                     senderName: sessionLabel,
                     mentions: mentions, inReplyTo: replyTo,
                     senderKind: isCaptain ? "captain" : "session",
-                    attachments: intake.accepted)
+                    attachments: intake.accepted,
+                    references: CrewMessageReferences.build(refs))
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
                 // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
                 // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
@@ -1865,7 +1879,11 @@ final class McpServer {
                 crewId: target.crewId, sessionId: sessionId, text: message,
                 category: "contact", senderName: signature,
                 mentions: mentions, senderKind: "session",
-                externalContactFrom: myNumber?.text ?? sourceTitle)
+                externalContactFrom: myNumber?.text ?? sourceTitle,
+                // #132：外线来电挂一颗指回**来电方**的机组胶囊 —— 收到的人点它就能
+                // 找回是谁打的。号码是这一刻算出来的，不是从署名那行文本里抠的。
+                references: CrewMessageReferences.build(
+                    .init(crewNumber: myNumber?.text)))
         } catch {
             return toolResult(
                 id: id,
@@ -1881,7 +1899,10 @@ final class McpServer {
                 crewId: crewId, sessionId: sessionId,
                 text: "已联系 \(number.text)（\(target.displayName)）：\(snippet)",
                 category: "progress", senderName: sessionLabel,
-                senderKind: isCaptain ? "captain" : "session")
+                senderKind: isCaptain ? "captain" : "session",
+                // #132：这行回执挂一颗指向**目标机组**的胶囊。`number` 是 `contact`
+                // 解析出来的号码对象，不是从这句话里认出来的。
+                references: CrewMessageReferences.build(.init(crewNumber: number.text)))
         } catch {
             receiptIncident = "本群那行「已联系」回执没写进去（\(error.localizedDescription)）——"
                 + "消息本身已送达，但组织上看不见你打过这通电话。"
@@ -2150,7 +2171,10 @@ final class McpServer {
     /// `landOnCockpit` 的结局。**不用 `Result`**：失败侧是一句给 agent 看的话，
     /// 不是 `Error`。
     enum CockpitLandingOutcome: Equatable {
-        case landed(String)
+        /// 落成了：动的是**哪一条**计划，以及给调用方的那句回执。
+        /// 号码要带出来 —— 它同时是这条消息的引用（#132），
+        /// 而引用**只能从这种结构化的地方来**，不能事后从回执文本里正则抠。
+        case landed(planNumber: Int, receipt: String)
         case refused(String)
     }
 
@@ -2183,7 +2207,8 @@ final class McpServer {
                 return .refused("ERROR: 没排进驾驶舱 —— 任务列表这次读不出来，本次写已拒"
                     + "（群聊白板上有一条系统警示说明是哪种事故）。" + unsent)
             }
-            return .landed("已排上 计划 #\(planned.number)：\(planned.title)（没做）"
+            return .landed(planNumber: planned.number,
+                receipt: "已排上 计划 #\(planned.number)：\(planned.title)（没做）"
                 + " —— 标题是从这条消息第一行取的，不对就 `plan_update` 改。")
         }
         guard let number = CrewCockpitLanding.number(args["plan"]), number >= 1 else {
@@ -2232,7 +2257,8 @@ final class McpServer {
             return .refused("ERROR: 计划 #\(number) 没更新成 —— " + failure.summary + unsent)
         case let .success(item):
             let state = CockpitPlan.status(item.status)?.title ?? item.status
-            return .landed("已往 计划 #\(item.number)「\(item.title)」追加一条进展（现在是「\(state)」）")
+            return .landed(planNumber: item.number,
+                receipt: "已往 计划 #\(item.number)「\(item.title)」追加一条进展（现在是「\(state)」）")
         }
     }
 
