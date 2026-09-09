@@ -68,6 +68,7 @@
 		1A928FAA7ECCD916641180DE /* LocalAgentSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C9720FEFDC8F509BFC0230E /* LocalAgentSessionStore.swift */; };
 		1AAB1B34C5492E9C39349B3D /* CrewChildCreationTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 437EC206ED3E345A7C0E304B /* CrewChildCreationTargetTests.swift */; };
 		1BE5B59CF3366782CC66008F /* DaemonStopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 178828D9F58E503F2B3205B8 /* DaemonStopTests.swift */; };
+		1C3B38D321DBF95EA513364B /* CrewLocalWhiteboardMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645961BC09834D3F4E7B1932 /* CrewLocalWhiteboardMappingTests.swift */; };
 		1CA7C078D765C106528A8066 /* LocalCaptainReassignmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08983F71FFC034A8EDE72D0E /* LocalCaptainReassignmentStore.swift */; };
 		1D2CE060F773DE8A1ECE4B41 /* CrewBubbleTextSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75FA08DEBE2224571234836 /* CrewBubbleTextSelection.swift */; };
 		1D670E7D1541934DB5321DFD /* CrewFileAttachmentIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48CA6AFD52A872A4490EF9F5 /* CrewFileAttachmentIntake.swift */; };
@@ -441,6 +442,7 @@
 		A1A572D2DDB7D9182B08EC74 /* HumanAttentionTally.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D31BCCB9FC69C0262839B66 /* HumanAttentionTally.swift */; };
 		A1B1989CF16B5D641BCB851D /* CrewSenderResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A256EE91689195597389D43F /* CrewSenderResolverTests.swift */; };
 		A1B5CB16C2E816557427BAE2 /* CrewLocalImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65E2DBDAFE0BF55EF25A4B84 /* CrewLocalImageCache.swift */; };
+		A2BFFEABDD30EA06571F8764 /* CrewLocalWhiteboardMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80172010A448EB0BA8409F61 /* CrewLocalWhiteboardMapping.swift */; };
 		A2E17C847EAEA9FCFB2A7FDA /* TodoLandingFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C545E2A3810B952ECB28E6F0 /* TodoLandingFlow.swift */; };
 		A2EF3DA159444D2FA80648BE /* CrewMailboxWakeLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F40D59113575AA4C63F7C17 /* CrewMailboxWakeLogic.swift */; };
 		A31028C571C5D07F2EFD3C42 /* AgentSessionCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD6675A6B71621D7A612F0C /* AgentSessionCoreTests.swift */; };
@@ -577,6 +579,7 @@
 		D1F892B04C519A05740FB818 /* SessionStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0576DE8369E9943B320315BD /* SessionStatusDot.swift */; };
 		D24B6CB2DDE226254E98869D /* LocalSessionWorldModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1C7822F4F8AFCC1F3AC147 /* LocalSessionWorldModel.swift */; };
 		D3F098906956CE0F7660C354 /* CrewStatusAggregationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13510F0FBBDAD9CE10A6205D /* CrewStatusAggregationTests.swift */; };
+		D42FC52D21EB5A90593EBD3F /* CrewLocalWhiteboardMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80172010A448EB0BA8409F61 /* CrewLocalWhiteboardMapping.swift */; };
 		D44248D3B099337EC06D0B67 /* CrewWakeDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC7B8B44BFE9170EA83EDDC /* CrewWakeDispatchTests.swift */; };
 		D461676E477353731E35A493 /* CrewColorHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = B35628BFE9FF1852C997981E /* CrewColorHash.swift */; };
 		D4992470201EDD4A26E883A2 /* LocalCrewControlStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B8FABAFB70A3A36CAF8C52D /* LocalCrewControlStore.swift */; };
@@ -910,6 +913,7 @@
 		629509CEBA42FDBDEF1C132B /* CrewReplayDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewReplayDeliveryTests.swift; sourceTree = "<group>"; };
 		62AD9CBFA871A2852066D3C2 /* DaemonLaunchPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonLaunchPlan.swift; sourceTree = "<group>"; };
 		63DC7AE1CC8372DFBCFE1D2A /* CrewDirectoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewDirectoryTests.swift; sourceTree = "<group>"; };
+		645961BC09834D3F4E7B1932 /* CrewLocalWhiteboardMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalWhiteboardMappingTests.swift; sourceTree = "<group>"; };
 		645A608B36FF83CE0A362B1A /* SessionOrphanReaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrphanReaper.swift; sourceTree = "<group>"; };
 		64E91CB08ACAB98E0616E633 /* TypingActivityTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingActivityTracker.swift; sourceTree = "<group>"; };
 		653E5262E263AED9996AF100 /* CrewTimeSeparator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewTimeSeparator.swift; sourceTree = "<group>"; };
@@ -967,6 +971,7 @@
 		7F08FE518FBFBFE1C5441F5F /* WorkdirMigrationExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirMigrationExecutor.swift; sourceTree = "<group>"; };
 		7FBF4A0076FC9AEFACAF381A /* CrewLocalMentionWakePinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalMentionWakePinTests.swift; sourceTree = "<group>"; };
 		7FDB2CB78C24C1101D76D13A /* CrewArrangementStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewArrangementStore.swift; sourceTree = "<group>"; };
+		80172010A448EB0BA8409F61 /* CrewLocalWhiteboardMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalWhiteboardMapping.swift; sourceTree = "<group>"; };
 		80B1D98B47459ECA53FA1B5A /* CrewLocalTodoLanding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalTodoLanding.swift; sourceTree = "<group>"; };
 		845C8C15B805012BF7FD6165 /* CrewCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewCenterView.swift; sourceTree = "<group>"; };
 		847C19FA2408D1E82949B72B /* PendingRequestQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingRequestQueue.swift; sourceTree = "<group>"; };
@@ -1334,6 +1339,7 @@
 				48CA6AFD52A872A4490EF9F5 /* CrewFileAttachmentIntake.swift */,
 				CD438CD94A9CB0E5775EA5C3 /* CrewFoldableMessageText.swift */,
 				C967851468E17B61886D8E53 /* CrewLocalAttachmentPersist.swift */,
+				80172010A448EB0BA8409F61 /* CrewLocalWhiteboardMapping.swift */,
 				68023480E672AF1330D5A191 /* CrewMemberOrdering.swift */,
 				E20B7C99BE7318C740C4220E /* CrewMentionFilter.swift */,
 				5971CE50FF30D3716FE7B687 /* CrewMentionPickerLayout.swift */,
@@ -1667,6 +1673,7 @@
 				1466A957294102664CEAB66E /* CrewLocalMentionWakeLogicTests.swift */,
 				7FBF4A0076FC9AEFACAF381A /* CrewLocalMentionWakePinTests.swift */,
 				E55172D618DBB8B616D274D3 /* CrewLocalMentionWakeStalenessTests.swift */,
+				645961BC09834D3F4E7B1932 /* CrewLocalWhiteboardMappingTests.swift */,
 				AA3FBED08E2034A2109B0D37 /* CrewMailboxWakeLogicTests.swift */,
 				78AEA2B8862EE2A35E664DB6 /* CrewManuallyHiddenStorageTests.swift */,
 				6089F335E4EFE19D488D3FE3 /* CrewMemberOrderingTests.swift */,
@@ -2193,6 +2200,7 @@
 				D0B705C4B137D88D666941FE /* CrewLocalMentionWakeLogic.swift in Sources */,
 				B951B69A87A9F296EDB4DA8D /* CrewLocalMentionWaker.swift in Sources */,
 				C06EC6EFE6F2D1C6FE3C0C87 /* CrewLocalTodoLanding.swift in Sources */,
+				A2BFFEABDD30EA06571F8764 /* CrewLocalWhiteboardMapping.swift in Sources */,
 				09B59D5C37D3953440612A34 /* CrewMailboxWakeLogic.swift in Sources */,
 				9DC8FF79E848916B5B5B7C53 /* CrewMemberOrdering.swift in Sources */,
 				CFEB22801B2698ABA102FDC1 /* CrewMentionFilter.swift in Sources */,
@@ -2503,6 +2511,8 @@
 				E8AE82E9F3BF0D51F7D4A57C /* CrewLocalMentionWakeLogicTests.swift in Sources */,
 				A1288A1E2B993A03F5C93311 /* CrewLocalMentionWakePinTests.swift in Sources */,
 				D8044E8E366289C3E0F8B9CC /* CrewLocalMentionWakeStalenessTests.swift in Sources */,
+				D42FC52D21EB5A90593EBD3F /* CrewLocalWhiteboardMapping.swift in Sources */,
+				1C3B38D321DBF95EA513364B /* CrewLocalWhiteboardMappingTests.swift in Sources */,
 				A2EF3DA159444D2FA80648BE /* CrewMailboxWakeLogic.swift in Sources */,
 				E4A7619D671924635AA43F92 /* CrewMailboxWakeLogicTests.swift in Sources */,
 				2128BFC02DACFAD2A1B3E9B6 /* CrewManuallyHiddenStorageTests.swift in Sources */,

@@ -372,6 +372,10 @@ targets:
       # 断言的行为，所以判定必须是脱离 SwiftUI 的纯函数。只依赖 CrewMessageReference
       # （Sources/Models 已在 bundle）与 TodoLedger（LocalTodoStore 已在 bundle）。
       - path: Sources/Chat/Adapter/CrewMessageReferencePills.swift
+      # CrewLocalWhiteboardMapping.swift：本地白板落盘行 → 中栏渲染形状。
+      # 从 PendingCrewBackend（在 bundle 之外）抽出来的，抽之前这条链一条断言都
+      # 没有 —— 而它断掉的样子跟「这条消息本来就没那个字段」一模一样。
+      - path: Sources/Chat/Adapter/CrewLocalWhiteboardMapping.swift
       # CrewMentionPickerLayout.swift（Todo #69）：@-候选浮层的限高判定（可用高度 +
       # 行数 + 行高 → maxHeight）。纯 CoreGraphics 几何，不碰 SwiftUI —— GUI 验不了，
       # 能被测试钉住的那部分必须钉住。
