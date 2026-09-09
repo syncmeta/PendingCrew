@@ -49,7 +49,8 @@ final class McpServerAttachmentRootIsolationTests: XCTestCase {
             store: LocalWhiteboardStore(directory: nil),
             approvals: LocalApprovalStore(directory: nil),
             control: LocalCrewControlStore(directory: nil),
-            crewId: "c", sessionId: "s")
+            crewId: "c", sessionId: "s",
+            quotaDirectory: nil)
         XCTAssertEqual(server.attachmentRoot.standardizedFileURL,
                        CrewChatAttachmentStore.defaultDirectory.standardizedFileURL)
     }

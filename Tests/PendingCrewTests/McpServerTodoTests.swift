@@ -12,7 +12,9 @@ final class McpServerTodoTests: XCTestCase {
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
-                  sessionLabel: label, todos: LocalTodoStore(directory: dir))
+                  sessionLabel: label,
+                  quotaDirectory: dir,
+                  todos: LocalTodoStore(directory: dir))
     }
     private func call(_ s: McpServer, _ args: String) -> String {
         s.handleLine("""

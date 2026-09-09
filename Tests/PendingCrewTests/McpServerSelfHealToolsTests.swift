@@ -14,7 +14,8 @@ final class McpServerSelfHealToolsTests: XCTestCase {
         let s = McpServer(store: LocalWhiteboardStore(directory: dir),
                           approvals: LocalApprovalStore(directory: dir),
                           control: LocalCrewControlStore(directory: dir),
-                          crewId: "c", sessionId: "cap-1", isCaptain: isCaptain)
+                          crewId: "c", sessionId: "cap-1", isCaptain: isCaptain,
+                          quotaDirectory: dir)
         // 单测不等真超时（默认 ~10s）。
         s.commandResponsePollInterval = 0.01
         s.commandResponseMaxWaits = 3

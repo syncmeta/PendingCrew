@@ -157,7 +157,9 @@ final class TodoEvidenceTests: XCTestCase {
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: false,
-                  sessionLabel: "机长", todos: LocalTodoStore(directory: dir))
+                  sessionLabel: "机长",
+                  quotaDirectory: dir,
+                  todos: LocalTodoStore(directory: dir))
     }
 
     private func respond(_ s: McpServer, _ args: [String: Any]) -> String {

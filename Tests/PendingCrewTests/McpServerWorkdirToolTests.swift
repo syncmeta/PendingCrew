@@ -16,7 +16,8 @@ final class McpServerWorkdirToolTests: XCTestCase {
         let s = McpServer(store: LocalWhiteboardStore(directory: dir),
                           approvals: LocalApprovalStore(directory: dir),
                           control: LocalCrewControlStore(directory: dir),
-                          crewId: "c", sessionId: "cap-1", isCaptain: isCaptain)
+                          crewId: "c", sessionId: "cap-1", isCaptain: isCaptain,
+                          quotaDirectory: dir)
         s.commandResponsePollInterval = 0.005
         s.commandResponseMaxWaits = 2
         return s

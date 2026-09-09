@@ -26,6 +26,7 @@ final class McpPostAttachmentsTests: XCTestCase {
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1",
                   sessionLabel: sessionLabel,
+                  quotaDirectory: dir,
                   attachmentRoot: attachmentRoot)
     }
 

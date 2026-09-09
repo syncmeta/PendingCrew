@@ -10,7 +10,8 @@ final class McpServerCaptainSpawnTests: XCTestCase {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "local-x", sessionId: "cap", isCaptain: isCaptain, sessionLabel: "Captain")
+                  crewId: "local-x", sessionId: "cap", isCaptain: isCaptain, sessionLabel: "Captain",
+                  quotaDirectory: dir)
     }
     private func tmp() -> URL {
         let d = FileManager.default.temporaryDirectory.appendingPathComponent("mcpspawn-\(UUID().uuidString)")
