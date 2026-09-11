@@ -338,6 +338,10 @@ targets:
       # 自包含 Foundation（只依赖 LocalWhiteboardStore，已在 bundle）。
       - path: Sources/Mcp/SessionTurnTrace.swift
       - path: Sources/Mcp/McpTurnHook.swift
+      # helper 的自保：爹没了就自己退（人类 Todo #111 第二轮）。判定 + 轮询 + serve
+      # 读循环都在这一个文件里 —— 读循环从 McpHelperMain 抽出来正是为了让「看门狗
+      # 有没有被装上」测得到，所以它必须跟着进 bundle。自包含 Foundation。
+      - path: Sources/Mcp/McpHelperOrphanGuard.swift
       - path: Resources/Prompts
       # CrewChatAdapter + isMine 单一真值源 + GroupBubbleSender SHIM（A6）
       # 只列纯 Foundation 逻辑文件，**不**整目录纳入 —— Chat/Adapter 下还有
