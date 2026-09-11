@@ -2008,8 +2008,13 @@ final class McpServer {
                 // 是出错那一刻的这句话。
                 let guessHint = CrewMessageFold.receiptHintIfGuessed(
                     text: message, headline: headline)
+                // #142：`question` 却没指定问谁 —— 不落账 + 不在他眼前 = 问出去就没了。
+                // 只管这一类能从结构上证明的，别的等收件人真变成字段（人类 Todo #16）。
+                let addressHint = CrewMessageRecipients.receiptHintIfUnaddressed(
+                    category: args["category"] as? String,
+                    mentionKinds: (mentions ?? []).map(\.kind))
                 return (true, ([base] + ledgerReceipts
-                               + [statusHint, guessHint].compactMap { $0 })
+                               + [statusHint, guessHint, addressHint].compactMap { $0 })
                     .joined(separator: "\n"))
             } catch {
                 return (false, Self.writeFailureReceipt(error))

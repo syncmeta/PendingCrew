@@ -290,3 +290,56 @@ enum CrewMessageTodoLink {
         return .update(number: number, status: status)
     }
 }
+
+
+/// 「这条发给谁看」——**收件人这一面**（人类 Todo #142）。
+///
+/// 人类原话：「每一条消息应该指定接收者，也就是必须要有 @ 的人，
+/// **避免给人的消息不能通过仅 @ 人筛选**。」
+///
+/// ## 这一笔只做能从结构上证明的那一小块
+///
+/// 「所有消息都必须指定收件人」是不是硬闸，等人类拍（人类 Todo #16）。
+/// 但有**一类**不用等，因为它的漏法是结构性的、不需要猜这条消息是写给谁的：
+///
+/// > `category: question` + **一个 mention 都没有**。
+///
+/// 两件事叠在一起才成立：
+/// 1. `question` 的账本映射是 `.none`（见 `CrewMessageCategory.ledger`）——
+///    **问题不落任何账**，没有面板能翻出它；
+/// 2. 没有 mention = 广播，而人类那个「仅 @ 我」筛选**默认是开着的**（#128）。
+///
+/// 于是这条消息：**问了一个需要有人回答的问题，却既不在账上、也不在他眼前。**
+/// 问出去就没了。
+///
+/// ## 为什么不扩大到别的分类
+///
+/// 会变成噪音，而**一条永远都在的提醒等于没有提醒**。
+/// `human_todo` 本来就落进人类 Todo 面板（他翻得到）；`progress` / `note`
+/// 绝大多数本来就是发给组里的，警告它们等于警告一切。
+/// 至于「这条汇报其实是写给人看的却没 @ 他」——**那需要猜内容，这一层不猜。**
+/// 那一半只有等收件人变成一个真字段之后才量得出来、也才管得住。
+enum CrewMessageRecipients {
+
+    /// 发出去之后回执里该不该补一句。`nil` = 不该。
+    ///
+    /// - Parameters:
+    ///   - category: `post_to_crew` 的分类（原始字符串，认不出来的一律不提醒）。
+    ///   - mentionKinds: 这条消息落盘的 mentions 的 `kind` 列表。
+    ///     **`broadcast` 不算指定了收件人** —— 它是「全组可见」的显式放宽器，
+    ///     回答的是「谁看得见」，不是「这条问谁」。
+    static func receiptHintIfUnaddressed(category: String?,
+                                         mentionKinds: [String]) -> String? {
+        let raw = (category ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw == CrewMessageCategory.question.rawValue else { return nil }
+        let addressed = mentionKinds.contains { $0 != "broadcast" }
+        guard !addressed else { return nil }
+        return "⚠️ 这条标了 `question` 但**没指定问谁**，而 `question` 不落任何账本 ——"
+            + "人类那边「仅 @ 我」的筛选默认开着，所以这条问出去他多半看不到，"
+            + "也没有任何面板翻得出它。"
+            + "\n**出路**：`mentions` 里带上要回答的那个 —— `{kind:\"human\"}`（问人类）"
+            + "/ `{kind:\"captain\"}`（问机长）/ `{kind:\"session\", target_id:\"…\"}`。"
+            + "\n要人拍板而且等得起的，用 `add_human_todo` 更稳：群消息刷过去就漏，那本账不会。"
+    }
+}
+
