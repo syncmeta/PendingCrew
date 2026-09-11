@@ -11,10 +11,10 @@ import Foundation
 /// 对照：`--mcp-hook` 是每次调用现 spawn 的，换文件立刻生效。同一个 app 的
 /// 两条腿，换代码的时机不同 —— 这条差别是这个类型存在的全部理由。
 struct HelperBuildStamp: Equatable {
-    /// `CFBundleShortVersionString`（如 `0.1.32`）。读不到 → nil。
-    var shortVersion: String?
-    /// `CFBundleVersion`（build 号）。读不到 → nil。
-    var buildVersion: String?
+    /// 人读的版本串。**走 `AppBuildStamp.versionDisplay`，不自己拼** —— 仓库里
+    /// 已经有一份「这一份构建是谁」的口径（版本 + build 号 + 构建戳 commit），
+    /// 再发明第二种只会让两处慢慢说不一样的话。读不到 plist → nil。
+    var versionText: String?
     /// 可执行文件的最后修改时刻。
     var modified: Date?
     /// 可执行文件字节数。
@@ -23,15 +23,9 @@ struct HelperBuildStamp: Equatable {
     /// 原地覆写则只动 mtime/size —— 三样一起看，两种换法都盖得住。
     var inode: UInt64?
 
-    /// 人读的版本串。三种情况分开写，别把「读不到」伪装成一个版本号。
-    var versionText: String {
-        switch (shortVersion, buildVersion) {
-        case let (.some(short), .some(build)): return "\(short)(\(build))"
-        case let (.some(short), .none): return short
-        case let (.none, .some(build)): return "build \(build)"
-        case (.none, .none): return "版本号读不出来"
-        }
-    }
+    /// 说给人 / agent 看的那一句。**读不到就明说读不到**，不拿占位串假装能比对
+    /// （跟 `AppBuildStamp` 里「不写占位 SHA」是同一条）。
+    var displayText: String { versionText ?? "版本读不出来" }
 
     /// 读一份快照。`executable` 是 `<x>.app/Contents/MacOS/<x>`，
     /// Info.plist 按 bundle 惯例取 `<x>.app/Contents/Info.plist`。
@@ -54,8 +48,7 @@ struct HelperBuildStamp: Equatable {
         if let data = try? Data(contentsOf: plist),
            let info = (try? PropertyListSerialization.propertyList(
                from: data, options: [], format: nil)) as? [String: Any] {
-            stamp.shortVersion = info["CFBundleShortVersionString"] as? String
-            stamp.buildVersion = info["CFBundleVersion"] as? String
+            stamp.versionText = AppBuildStamp.versionDisplay(info: info)
         }
         return stamp
     }
@@ -108,8 +101,8 @@ final class HelperBuildWatch {
         guard running != onDisk else { return nil }
         let since = launchedFormatter.string(from: launchedAt)
         return """
-            ⚠️ 本 session 的工具表可能是旧的：这个 helper 进程跑的是 \(running.versionText)（起于 \(since)），\
-            磁盘上的 PendingCrew 已经是 \(onDisk.versionText)。**工具表在 helper 启动那一刻就定死了**，\
+            ⚠️ 本 session 的工具表可能是旧的：这个 helper 进程跑的是 \(running.displayText)（起于 \(since)），\
+            磁盘上的 PendingCrew 已经是 \(onDisk.displayText)。**工具表在 helper 启动那一刻就定死了**，\
             装新版只换磁盘上的文件，换不掉活着的进程。
             所以上面那句拒绝分不出两件事：这个能力这一版真的没有，还是这一版有、只是你这个进程太老。\
             要拿到新工具只能重开这个 session。

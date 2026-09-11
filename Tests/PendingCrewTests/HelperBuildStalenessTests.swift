@@ -29,15 +29,18 @@ final class HelperBuildStalenessTests: XCTestCase {
     /// 替身会带着我此刻的世界模型，跟实现一起错还互相背书。
     @discardableResult
     private func makeBundle(_ root: URL, version: String, build: String,
-                            bytes: Int) -> URL {
+                            bytes: Int, commit: String? = nil) -> URL {
         let macos = root.appendingPathComponent("PendingCrew.app/Contents/MacOS")
         try? FileManager.default.createDirectory(at: macos, withIntermediateDirectories: true)
         let exe = macos.appendingPathComponent("PendingCrew")
         try? Data(repeating: 0x41, count: bytes).write(to: exe)
-        let plist: [String: Any] = [
+        var plist: [String: Any] = [
             "CFBundleShortVersionString": version,
             "CFBundleVersion": build,
         ]
+        // 真实的 app bundle 带构建戳（`stamp-build-info.sh` 写的 BuildStampCommit）——
+        // 两次构建版本号可以一模一样，commit 不会。
+        if let commit { plist["BuildStampCommit"] = commit }
         let data = try! PropertyListSerialization.data(
             fromPropertyList: plist, format: .xml, options: 0)
         try? data.write(to: root.appendingPathComponent("PendingCrew.app/Contents/Info.plist"))
@@ -82,12 +85,14 @@ final class HelperBuildStalenessTests: XCTestCase {
     /// 整份换掉（装新版就是这个形状：文件被替换，版本号也变了）。
     func test_磁盘上已经是新版_拒绝回执要说清是这个进程太老() {
         let dir = tempDir("stale")
-        let exe = makeBundle(dir, version: "0.1.30", build: "250910", bytes: 128)
+        let exe = makeBundle(dir, version: "0.1.30", build: "250910", bytes: 128,
+                             commit: "aaaaaaa1111")
         let old = HelperBuildStamp.read(executable: exe)
         XCTAssertNotNil(old, "前提没立住：连自己这份都读不出来")
 
         // 人类装了新版：同一个路径上换成另一份二进制 + 另一份 Info.plist。
-        makeBundle(dir, version: "0.1.32", build: "250911", bytes: 4096)
+        makeBundle(dir, version: "0.1.32", build: "250911", bytes: 4096,
+                   commit: "bbbbbbb2222")
 
         let watch = HelperBuildWatch(running: old,
                                      probe: { HelperBuildStamp.read(executable: exe) })
@@ -98,6 +103,9 @@ final class HelperBuildStalenessTests: XCTestCase {
         XCTAssertTrue(text.contains("0.1.32"), "得说清磁盘上现在是哪一版：\(text)")
         XCTAssertTrue(text.contains("工具表"), "得说清为什么换不掉：\(text)")
         XCTAssertTrue(text.contains("重开这个 session"), "得给出唯一那条出路：\(text)")
+        // 构建戳那一列也要在 —— 版本号一样、commit 不一样是开发机上的常态形状。
+        XCTAssertTrue(text.contains("aaaaaaa"), "得带上我这份的构建戳：\(text)")
+        XCTAssertTrue(text.contains("bbbbbbb"), "得带上磁盘那份的构建戳：\(text)")
     }
 
     /// 原地覆写：inode 不变，只有 mtime / 大小动了。版本号可能一个字都没改
