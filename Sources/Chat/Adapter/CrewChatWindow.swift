@@ -113,4 +113,46 @@ enum CrewChatWindow {
         guard added > 0, limit > pageSize else { return limit }
         return limit + added
     }
+
+    /// 同上，但问的是**对的那个问题**（人类 Todo #144）。
+    ///
+    /// ## 上面那个守卫问错了对象
+    ///
+    /// `limit > pageSize` 问的是「**他翻过页没有**」。要挡的事却是
+    /// 「**他正在看上面的内容，别把他正看的东西抽走**」—— 而看上面的内容
+    /// **不需要先翻页**：默认窗口就有 `pageSize`(\(pageSize)) 条，气泡又高，
+    /// 在窗口内往上滚几屏是最常见的读历史方式，此时 `limit == pageSize`，
+    /// 上面那个守卫直接放行。
+    ///
+    /// 于是新消息一到：窗口仍取「最近 limit 条」→ **最老那条被挤出窗口** →
+    /// 视口上方的内容少了一行的高度。而不跟随时滚动锚点是**内容顶端**
+    /// （`ChatScrollAnchor`：`defaultScrollAnchor(.top, for: .sizeChanges)`），
+    /// 顶端一缩，他正在读的那段就**整体上移一行** —— 这就是「消息位置会乱跳」。
+    ///
+    /// **注意方向**：不跟随时锚在顶端，本来是为了「新消息在**下面**长、视口不动」。
+    /// 那一半是对的。坏在这里的增长不是发生在下面，是**上面被剪掉了**，
+    /// 同一个锚点对这两件事的效果正好相反。
+    ///
+    /// ## 判据
+    ///
+    /// **用户已经滑走（`!isFollowing`）时，窗口里最顶那条在新消息到达前后必须是同一条。**
+    /// 做法就是把新增条数补进上限 —— 窗口取的是后缀，上限跟着涨，顶端那条就不动。
+    ///
+    /// ## 成本还封得住吗
+    ///
+    /// 封得住，但靠的是**另一头**：他滑回底部（重新跟随）时把 `limit` 归位到一页。
+    /// 所以窗口最多长「这一次往上看」的那段时间里来的消息数，不会一路长回整表。
+    /// 而且补出来的那几行全在视口**下方**、且此时窗口已超过一页（`usesEagerInitialLayout`
+    /// 为 false），是懒渲染的，不进视图树、不付测量的钱。
+    /// **归位那一记必须由调用方在「重新跟随」时做** —— 这个纯函数只管别把人正看的
+    /// 东西抽走。
+    static func afterInsert(limit: Int, added: Int, isFollowing: Bool,
+                            pageSize: Int = CrewChatWindow.pageSize) -> Int {
+        guard added > 0 else { return limit }
+        // 跟随中：窗口滑走是想要的（成本恒定封顶，而且他看的就是最新那几条）。
+        guard !isFollowing else {
+            return afterInsert(limit: limit, added: added, pageSize: pageSize)
+        }
+        return limit + added
+    }
 }
