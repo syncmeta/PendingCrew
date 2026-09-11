@@ -23,41 +23,49 @@ final class CrewLocalImageCacheTests: XCTestCase {
     }
 
     func testStoreThenPeekHits() throws {
-        let cache = CrewLocalImageCache()
+        let cache = CrewLocalImageCache(storage: DictionaryStorage())
         let url = try writePNG(width: 200, height: 200)
         let key = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
         XCTAssertNil(cache.peek(key), "还没存过")
 
         let image = try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: 100))
         cache.store(key, image)
-        XCTAssertTrue(cache.peek(key) === image, "同一 key 必须命中同一张，不该重解")
+        XCTAssertTrue(cache.peek(key) === image, "存储仍持有时，同一 key 返回原对象，调用方可以跳过重解")
     }
 
     /// 文件被覆盖 → mtime/size 变 → key 变 → 旧图自然失效，不用手工 invalidate。
     func testOverwritingFileInvalidatesKey() throws {
-        let cache = CrewLocalImageCache()
+        let cache = CrewLocalImageCache(storage: DictionaryStorage())
         let url = try writePNG(width: 200, height: 200)
         let oldKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
-        cache.store(oldKey, try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: 100)))
+        let oldImage = try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: 100))
+        cache.store(oldKey, oldImage)
+        XCTAssertTrue(cache.peek(oldKey) === oldImage)
 
         try writePNG(width: 320, height: 240, at: url)
         let newKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
 
         XCTAssertNotEqual(oldKey, newKey, "同路径不同内容必须是不同的 key")
         XCTAssertNil(cache.peek(newKey), "覆盖后不该拿到旧解码结果")
+        XCTAssertTrue(cache.peek(oldKey) === oldImage, "未命中源于 key 改变，而非旧条目已被驱逐")
     }
 
     /// 缩略图和「看大图」的原图是两份，不能互相顶替。
     func testDifferentMaxPixelIsDifferentEntry() throws {
-        let cache = CrewLocalImageCache()
+        let cache = CrewLocalImageCache(storage: DictionaryStorage())
         let url = try writePNG(width: 400, height: 400)
         let thumbKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
         let fullKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: nil))
         XCTAssertNotEqual(thumbKey, fullKey)
 
-        cache.store(thumbKey, try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: 100)))
-        XCTAssertNotNil(cache.peek(thumbKey))
+        let thumb = try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: 100))
+        let full = try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: nil))
+        cache.store(thumbKey, thumb)
+        XCTAssertTrue(cache.peek(thumbKey) === thumb)
         XCTAssertNil(cache.peek(fullKey), "看大图不该拿到 100px 的缩略图")
+        cache.store(fullKey, full)
+        XCTAssertTrue(cache.peek(fullKey) === full)
+        XCTAssertTrue(cache.peek(thumbKey) === thumb, "原图不能覆盖缩略图的桶")
     }
 
     func testMissingFileHasNoKeyAndDoesNotDecode() {
@@ -65,6 +73,54 @@ final class CrewLocalImageCacheTests: XCTestCase {
             .appendingPathComponent("\(UUID().uuidString).png")
         XCTAssertNil(CrewLocalImageCache.key(for: url, maxPixel: 100))
         XCTAssertNil(CrewLocalImageCache.decode(url: url, maxPixel: 100))
+    }
+
+    func testEvictedEntryMayMiss() {
+        let cache = CrewLocalImageCache(storage: ImmediateEvictionStorage())
+        let key = CrewLocalImageCache.Key(path: "/evicted.png", modified: 1, size: 10, maxPixel: nil)
+        cache.store(key, NSImage(size: NSSize(width: 10, height: 20)))
+        XCTAssertNil(cache.peek(key), "存储可立即驱逐；调用方仍须处理 miss")
+    }
+
+    func testInjectedStorageReceivesKeyCostReplacementAndClear() {
+        let storage = DictionaryStorage()
+        let cache = CrewLocalImageCache(storage: storage)
+        let key = CrewLocalImageCache.Key(path: "/cost.png", modified: 123, size: 456, maxPixel: 100)
+        let storageKey: NSString = "/cost.png|123.0|456|100"
+        let first = NSImage(size: NSSize(width: 10, height: 20))
+        cache.store(key, first)
+        XCTAssertTrue(storage.object(forKey: storageKey) === first, "必须写到注入的存储")
+        XCTAssertEqual(storage.cost(forKey: storageKey), 800)
+        let replacement = NSImage(size: .zero)
+        cache.store(key, replacement)
+        XCTAssertTrue(cache.peek(key) === replacement)
+        XCTAssertEqual(storage.cost(forKey: storageKey), 1, "无有效像素时成本下限为 1")
+        cache.removeAll()
+        XCTAssertNil(storage.object(forKey: storageKey))
+        XCTAssertNil(cache.peek(key))
+    }
+
+    /// Dictionary lifetime is controlled by the test, never by system memory pressure.
+    private final class DictionaryStorage: CrewLocalImageStorage, @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: (image: NSImage, cost: Int)] = [:]
+
+        func object(forKey key: NSString) -> NSImage? {
+            lock.withLock { entries[key as String]?.image }
+        }
+        func setObject(_ image: NSImage, forKey key: NSString, cost: Int) {
+            lock.withLock { entries[key as String] = (image, cost) }
+        }
+        func removeAllObjects() { lock.withLock { entries.removeAll() } }
+        func cost(forKey key: NSString) -> Int? {
+            lock.withLock { entries[key as String]?.cost }
+        }
+    }
+
+    private final class ImmediateEvictionStorage: CrewLocalImageStorage {
+        func object(forKey key: NSString) -> NSImage? { nil }
+        func setObject(_ image: NSImage, forKey key: NSString, cost: Int) {}
+        func removeAllObjects() {}
     }
 
     // MARK: - fixtures
