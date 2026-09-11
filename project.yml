@@ -395,6 +395,14 @@ targets:
       # 结构化 mentions 与正文 `@<人类名>` 取并集，并用花名册做最长匹配防前缀误伤。
       # 纯 Foundation，依赖 CrewModels + CrewSenderNaming（两者均已在 bundle）。
       - path: Sources/Chat/Adapter/CrewMentionFilter.swift
+      # ── 人类 Todo #140（打字不畅顺）那三处浪费的尺子与缓存 ──────────────────
+      # CrewChatCostCounters.swift：热路径上「这一帧又重建了多少次贵东西」的计数器。
+      # 成本断言钉在这些离散数上而不是毫秒 —— 那趟现场采样的机器在换页，毫秒不可比。
+      - path: Sources/Chat/Adapter/CrewChatCostCounters.swift
+      # CrewTimelineFilter.swift：从 `CrewChatView.timelineEntries` 抽出来的纯判定
+      # （一帧里那个计算属性被读八次，每次把 2618 条重筛一遍）+ 它的单槽记忆盒。
+      # 依赖 CrewMentionFilter / CrewMessageSearch(Adapters) / CrewModels，均已在 bundle。
+      - path: Sources/Chat/Adapter/CrewTimelineFilter.swift
       # CrewMessageReferencePills.swift（人类 Todo #132/#133）：结构化引用 →
       # 气泡下面那一排可点胶囊的**可达性判定**。「目标不可达就一颗都不长」是被
       # 断言的行为，所以判定必须是脱离 SwiftUI 的纯函数。只依赖 CrewMessageReference

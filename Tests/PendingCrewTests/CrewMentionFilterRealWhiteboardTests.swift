@@ -166,14 +166,25 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
     /// `LocalBackend` 的映射 + `CrewChatView` 的 `localUserId` 取值都在 app 模块，
     /// 编不进 test bundle。改坏了上面两条测试**照样绿**、而人在窗口里看到的是自己
     /// 的消息全没了 —— 所以这两处只能这样拦。
+    /// **这条链现在跨两个文件**（人类 Todo #140 ③ 把判定从 `CrewChatView.timelineEntries`
+    /// 搬进了 `CrewTimelineFilter`），所以两跳都得钉：视图把 `localUserId` 交出去，
+    /// 判定再把它喂给筛选。**少钉任何一跳，断掉的那一跳都会静默**（人看到的是自己的
+    /// 消息全没了，而上面那些能跑的用例照样绿）。
     func testTheLinkThisBundleCannotRun() throws {
         let chat = try Self.source("CrewChatView.swift")
         XCTAssertTrue(
             chat.contains("LocalWhiteboardStore.localUserId"),
             "CrewChatView.localUserId 不再回落到本机哨兵常量 —— 未登录（本机常态）下它会是 nil")
+        // 第一跳：视图 → 判定的输入。
         XCTAssertTrue(
-            chat.contains("includingFrom: localUserId"),
-            "时间线筛选没把 localUserId 喂进去，自己发的消息会被筛没")
+            chat.contains("localUserId: localUserId"),
+            "CrewChatView 没把 localUserId 交给时间线判定，自己发的消息会被筛没")
+        // 第二跳：判定 → 筛选。这个文件能编进 bundle，但「它有没有被真的接上」
+        // 只有源码文本看得见，所以仍然放在这条用例里一起钉。
+        let filter = try Self.source("CrewTimelineFilter.swift")
+        XCTAssertTrue(
+            filter.contains("includingFrom: inputs.localUserId"),
+            "时间线判定没把 localUserId 喂进筛选，自己发的消息会被筛没")
     }
 
     private static func source(_ fileName: String) throws -> String {

@@ -25,11 +25,17 @@ enum CrewMemberOrdering {
     }
 
     /// ISO8601 字符串 → Date（本地 session 成员的 `createdAt` 就是这个格式）。
+    ///
+    /// **转发给 `CrewTimestamp.parse`，不在这里自己建格式器**（人类 Todo #140 ①）。
+    /// 改动前这里每次调用都新建一到两个 `ISO8601DateFormatter`，而调用方
+    /// `CrewSessionWindowView.memberRowItems` 是计算属性 —— 每次 body 求值把全部成员
+    /// 重排一遍，于是现场 sample 里 `libicucore` 那 7.1% 全在这条路上。
+    ///
+    /// `CrewTimestamp` 本来就是「全 app 一份口径」的那一份，尝试顺序（先带小数秒、
+    /// 再不带）与改动前这两行逐字相同 —— 所以这是复用既有的那份，不是第二套。
     static func parseDate(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return withFraction.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+        return CrewTimestamp.parse(raw)
     }
 
     /// 通用排序：调用方给出每个元素的 `Key`，返回排好序的元素。

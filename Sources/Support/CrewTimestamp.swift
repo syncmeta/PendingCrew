@@ -9,12 +9,38 @@ import Foundation
 /// 能单测**：侧栏时间流的排序键要用它，而视图文件带 Theme/SwiftUI 依赖，进不了
 /// test bundle。`CrewTimeSeparator.parse` 现在只是这里的转发。
 enum CrewTimestamp {
+
+    /// 进程级复用的两个格式器 —— **别改回每次 `ISO8601DateFormatter()`**（人类 Todo #140 ①）。
+    ///
+    /// 那个构造要开 ICU 的日期格式器 + locale + 数字格式器。2026-09-11 症状发生时对界面
+    /// 进程采的样里，`libicucore` 吃掉主线程独占耗时的 **7.1%**，全部落在
+    /// `udat_open` / `__CreateCFDateFormatter` / `_localeWithNewCalendarIdentifier`
+    /// 这条路上（读数见 `docs/internal/2026-09-11-typing-lag-profile.md`）。
+    ///
+    /// **为什么是两个实例、而不是一个来回改 `formatOptions`**：改选项就是写共享状态，
+    /// 那才是真正不能共享的那种用法。两个各自只读，构造完再没人写过它们。
+    ///
+    /// **「只读地共享安全」这一条是实测的，不是引文**：
+    /// `CrewChatTypingLagCostTests.test_共享格式器并发解析结果与串行一致` 拿 8 条队列
+    /// × 500 轮打同一对实例，与串行结果逐条对齐。边界也写在那条用例上 —— 它证明的是
+    /// 结果一致，不是「没有数据竞争」（那一趟没开 TSan）。
+    ///
+    /// 顺序固定「先带小数秒、再不带」。两种 options 在实测里对同一个字符串**互斥**
+    /// （`test_三个解析入口的结果与改动前逐条一致` 钉的就是这个），所以调用方原来各自
+    /// 的尝试顺序收到这一份来，结果一个字不差。
+    private static let fractional = make([.withInternetDateTime, .withFractionalSeconds])
+    private static let plain = make([.withInternetDateTime])
+
+    private static func make(_ options: ISO8601DateFormatter.Options) -> ISO8601DateFormatter {
+        CrewChatCostCounters.note(.iso8601FormatterBuild)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = options
+        return formatter
+    }
+
     static func parse(_ iso: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: iso) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: iso)
+        if let date = fractional.date(from: iso) { return date }
+        return plain.date(from: iso)
     }
 }
 

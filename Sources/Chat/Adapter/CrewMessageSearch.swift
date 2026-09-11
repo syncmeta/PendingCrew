@@ -106,11 +106,15 @@ enum CrewMessageSearch {
     }
 
     /// 搜索/API 的时间都收标准 ISO8601；带或不带小数秒都接受。
+    ///
+    /// **转发给 `CrewTimestamp.parse`，不在这里自己建格式器**（人类 Todo #140 ①）。
+    /// `search` 对**每一个 document** 都调它一次 —— 在本 crew 这个量级上，搜一次
+    /// 原来要构造 2×2618 个 ICU 格式器。
+    ///
+    /// 改动前这里的尝试顺序是「先不带小数秒」，`CrewTimestamp` 是「先带」。实测两种
+    /// options 对同一个字符串互斥（`CrewChatTypingLagCostTests` 钉住了逐条等价），
+    /// 所以换过来结果一个字不差。
     static func parseISO(_ value: String) -> Date? {
-        let plain = ISO8601DateFormatter()
-        if let date = plain.date(from: value) { return date }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value)
+        CrewTimestamp.parse(value)
     }
 }

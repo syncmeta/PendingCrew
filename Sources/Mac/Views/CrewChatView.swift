@@ -102,6 +102,15 @@ struct CrewChatView: View {
     /// 从头到尾没人往这个 `@State` 赋值，所以**不会**让 body 失效。
     @State private var selectionOwner = CrewBubbleSelectionOwner()
 
+    /// 时间线筛选结果的记忆盒（人类 Todo #140 ③）。**同 `selectionOwner` 一套做法**：
+    /// 引用型、住在 `@State` 里只为拿一个跨 body 稳定的实例，从头到尾没人给这个
+    /// `@State` 赋过值，所以它自己不会让 body 失效。
+    ///
+    /// 为什么不把筛好的数组存进 `@State`：`refresh()` 那段注释写死了 —— 往 `@State`
+    /// 重新赋一个数组，哪怕内容一模一样，SwiftUI 也会让整个 body 失效，`LazyVStack`
+    /// 跟着把整条消息列表重新测量一遍。**缓存不能反过来引发一次全表重排**（#443）。
+    @State private var timelineFilterCache = CrewTimelineFilterCache()
+
     // MARK: - @-mention / reply state (Phase 6)
     /// Mentions staged for the next send, paired with the readable `@token`
     /// sitting in `draft`. `send()` flushes these; `reconcile` (on draft change)
@@ -796,27 +805,21 @@ struct CrewChatView: View {
     /// 它们自动按**筛选后**的列表算。筛在下游的话会出现「显示还有 300 条、点开
     /// 什么都没有」。
     ///
-    /// 关着的时候一条判定都不跑（`guard onlyMentions`），成本与改动前逐字相同；
-    /// 开着时每条的常见路径是「正文里找一个 `@`，找不到就走人」（#443 的口径：
-    /// 这个属性每次访问都重算，所以判定必须廉价）。
+    /// 关着的时候一条判定都不跑，成本与改动前逐字相同；开着时每条的常见路径是
+    /// 「正文里找一个 `@`，找不到就走人」。
+    ///
+    /// **判定本身搬去了 `CrewTimelineFilter`，这里只剩一次查缓存**（人类 Todo #140 ③）。
+    /// 非搬不可的理由：一次 body 求值会读这个属性**八次**（空态 overlay、
+    /// `onChange(of:count)`、「上面还有 N 条」、`windowedEntries`、空态出路、
+    /// `expandEarlier`、跳转定位……），而它每次都把全部条目重筛一遍 —— 本 crew 现状
+    /// 2618 条、正文 965 KB，于是一帧里那 965 KB 被扫八遍。#443 留下的那句口径
+    /// 「这个属性每次访问都重算，所以判定必须廉价」没变，只是在这个量级上「廉价」
+    /// 不够用了，得先让那八次收敛成一次。
     private var timelineEntries: [CrewWhiteboardEntry] {
-        let base = entries
-        let mentionFiltered = onlyMentions
-            ? CrewMentionFilter.onlyHumanMentions(
-                base, roster: mentionRoster, includingFrom: localUserId)
-            : base
-        guard isSearching else { return mentionFiltered }
-
-        // 核心统一按「最新优先、最多 200」选出结果；聊天时间线仍按原来的时间正序
-        // 展示，所以最后用 id 集合回滤 source order。这样全局结果点进来时一定能在
-        // 当前群这一页找到同一条，又不把聊天顺序翻转。
-        let documents = mentionFiltered.map {
-            CrewMessageSearchAdapters.entry($0, crewId: crewId, crewTitle: crewTitle)
-        }
-        let ids = Set(CrewMessageSearch.search(
-            documents, query: searchText, limit: CrewMessageSearch.maximumLimit,
-            order: .newestFirst).map(\.document.messageId))
-        return mentionFiltered.filter { ids.contains($0.id) }
+        timelineFilterCache.entries(for: CrewTimelineFilter.Inputs(
+            entries: entries, onlyMentions: onlyMentions, roster: mentionRoster,
+            localUserId: localUserId, searchText: searchText,
+            crewId: crewId, crewTitle: crewTitle))
     }
 
     /// 时间线的一行：消息本体 + 「它上面要不要插一条时间分隔」。

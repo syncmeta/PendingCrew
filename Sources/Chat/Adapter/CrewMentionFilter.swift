@@ -58,10 +58,53 @@ enum CrewMentionFilter {
         /// 本 crew 全体成员显示名（已归一化），用于「@X 到底 @ 的是谁」的最长匹配。
         let allNames: [String]
 
+        /// 判定用的预计算，**构造时算一次**（人类 Todo #140 ②）。
+        ///
+        /// 改动前这两样都在 `bodyMentionsHuman` 里、也就是**每条消息**算一遍：小写人类名
+        /// 集合每条重建，最长匹配每遇到一个 `@` 就把整份花名册扫一遍。本 crew 现状是
+        /// 2618 条消息、正文里 814 个 `@`，花名册二十多个名字 —— 那是一帧里几万次
+        /// `range(of:)` 加 2618 次 Set 构造。
+        ///
+        /// 放在 `Roster` 里而不是放一个静态缓存：花名册本来就是「每次判定前取一次快照」
+        /// 的东西，它自己就是那个天然的缓存层，不需要第二套失效规则。
+        fileprivate let matchIndex: MatchIndex
+
+        /// 最长匹配的预排顺序 + 人类名的小写键。
+        fileprivate struct MatchIndex {
+            /// `allNames` 按**长度降序**；等长时保持 `allNames` 原序（稳定）。
+            /// 降序之后「第一个匹配上的就是最长那个」，不必扫完全表再比长度。
+            let candidates: [String]
+            /// 人类名的小写键集合（判「最长匹配到的那个是不是人类」）。
+            let humanKeys: Set<String>
+
+            init(humanNames: [String], allNames: [String]) {
+                CrewChatCostCounters.note(.mentionMatcherBuild)
+                // `sorted` 不保证稳定，所以把原下标带进判据 —— 等长时必须仍按 allNames
+                // 原序，否则「等长的人类名与非人类名同时匹配」时选出来的那个会变，
+                // 那是行为变了不是变快了。
+                candidates = allNames.enumerated()
+                    .sorted { lhs, rhs in
+                        let (l, r) = (lhs.element.count, rhs.element.count)
+                        return l != r ? l > r : lhs.offset < rhs.offset
+                    }
+                    .map(\.element)
+                humanKeys = Set(humanNames.map { $0.lowercased() })
+            }
+        }
+
         init(humanNames: [String], otherNames: [String] = []) {
             let humans = Roster.normalize(humanNames)
+            let all = Roster.normalize(humans + otherNames)
             self.humanNames = humans
-            self.allNames = Roster.normalize(humans + otherNames)
+            self.allNames = all
+            self.matchIndex = MatchIndex(humanNames: humans, allNames: all)
+        }
+
+        /// **只比两份名字**，不比 `matchIndex` —— 它完全由名字推导出来，比它等于把同一件
+        /// 事比两遍。`Roster` 的 `==` 有真实调用方（`CrewTimelineFilter.Inputs` 拿它当
+        /// 缓存键的一部分），所以这里每省一次都是省在热路径上。
+        static func == (lhs: Roster, rhs: Roster) -> Bool {
+            lhs.humanNames == rhs.humanNames && lhs.allNames == rhs.allNames
         }
 
         /// 从 crew 成员列表构造。显示名取 `CrewSenderNaming.groupSender` 那一份
@@ -173,20 +216,24 @@ enum CrewMentionFilter {
     /// 逐个扫 `@`，在每个 `@` 之后取**花名册里能匹配的最长**成员名（大小写不敏感）：
     /// 最长那个是人类名 → 命中。没有任何成员名匹配上 → 这个 `@` 不算数（`@人`
     /// 这种「人」在花名册里时仍会匹配到「人」本身）。
+    /// 判据与改动前逐字相同，只是**预计算搬到了 `Roster` 构造时**（人类 Todo #140 ②）：
+    /// 候选按长度降序排好，所以「第一个匹配上的就是最长那个」，命中即可停 ——
+    /// 改动前是扫完整份花名册再比长度。
     static func bodyMentionsHuman(text: String, roster: Roster) -> Bool {
         guard !roster.humanNames.isEmpty, !text.isEmpty else { return false }
-        let humans = Set(roster.humanNames.map { $0.lowercased() })
+        let index = roster.matchIndex
         var cursor = text.startIndex
         while cursor < text.endIndex, let at = text[cursor...].firstIndex(of: "@") {
             let after = text.index(after: at)
             if after < text.endIndex {
                 let rest = text[after...]
-                var best: String?
-                for name in roster.allNames
+                for name in index.candidates
                 where rest.range(of: name, options: [.caseInsensitive, .anchored]) != nil {
-                    if best == nil || name.count > best!.count { best = name }
+                    // 降序 ⇒ 这就是最长匹配。是人类名 → 命中；不是 → 这个 `@` 不算数，
+                    // 换下一个 `@`（与改动前「最长那个不是人类就跳过」一字不差）。
+                    if index.humanKeys.contains(name.lowercased()) { return true }
+                    break
                 }
-                if let best, humans.contains(best.lowercased()) { return true }
             }
             cursor = after
         }

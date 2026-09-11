@@ -197,13 +197,17 @@ final class ViewWiringTests: XCTestCase {
                       "层级/时间流仍继承系统蓝色，没有改成主题绿色（Todo #79）")
 
         let chat = try Self.text(of: "CrewChatView.swift")
-        XCTAssertTrue(chat.contains("CrewMentionFilter.onlyHumanMentions"),
-                      "群聊时间线没走筛选判定")
-        // 必须筛在 timelineEntries 这个源头 —— 渲染窗口那一整套（renderLimit /
+        // 人类 Todo #140 ③ 之后筛选判定住在 `CrewTimelineFilter`（那个计算属性一帧被读
+        // 八次、每次重筛 2618 条），所以「走没走筛选」要在那个文件里钉。
+        let filter = try Self.text(of: "CrewTimelineFilter.swift")
+        XCTAssertTrue(filter.contains("CrewMentionFilter.onlyHumanMentions"),
+                      "群聊时间线判定没走筛选")
+        // 仍然必须筛在 timelineEntries 这个源头 —— 渲染窗口那一整套（renderLimit /
         // hasMore /「上面还有 N 条」/ anchorOnExpand）全读它，筛在下游会出现
-        // 「显示还有 300 条、点开什么都没有」。
+        // 「显示还有 300 条、点开什么都没有」。判定搬走了，**这条判据一个字没松**：
+        // timelineEntries 仍要先取到筛过的那一份，windowedEntries 才在它下游开窗。
         let source = chat.range(of: "private var timelineEntries")
-        let filtered = chat.range(of: "CrewMentionFilter.onlyHumanMentions")
+        let filtered = chat.range(of: "timelineFilterCache.entries(for:")
         let windowed = chat.range(of: "private var windowedEntries")
         XCTAssertNotNil(source); XCTAssertNotNil(filtered); XCTAssertNotNil(windowed)
         if let source, let filtered, let windowed {
@@ -211,6 +215,8 @@ final class ViewWiringTests: XCTestCase {
                           && filtered.lowerBound < windowed.lowerBound,
                           "筛选没落在 timelineEntries 里 —— 渲染窗口会按未筛选的条数算")
         }
+        XCTAssertTrue(chat.contains("CrewChatWindow.window(timelineEntries"),
+                      "渲染窗口不再开在 timelineEntries 下游")
     }
 
     /// 人类消息只能由白板观察器按 message id 投递。composer / Todo 再直投一次会用
