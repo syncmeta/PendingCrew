@@ -173,6 +173,69 @@ final class CrewChatWindowTests: XCTestCase {
             XCTAssertEqual(after.firstIndex(of: anchor), shift, "第 \(step + 1) 次点击")
         }
     }
+
+    // MARK: - #144：在翻看历史时，新消息不许把视口里的内容挪走
+
+    /// **这一单的判据**：用户已经滑走（不跟随）时，窗口里**最顶那条**在新消息
+    /// 到达前后必须是同一条。
+    ///
+    /// 顶端一变，不跟随时的滚动锚点（`ChatScrollAnchor` 把尺寸变化锚在**内容顶端**）
+    /// 就会让他正在读的那段整体平移 —— 那就是人类说的「消息位置会乱跳」。
+    func test_滑走看历史时新消息不许把最顶那条挤出窗口() throws {
+        let limit = CrewChatWindow.pageSize          // 他没点过「加载更早」，这是常态
+        let before = CrewChatWindow.window(msgs(200), limit: limit)
+        let topBefore = try XCTUnwrap(before.first)
+
+        let after = CrewChatWindow.afterInsert(limit: limit, added: 1, isFollowing: false)
+        let now = CrewChatWindow.window(msgs(200) + [200], limit: after)
+
+        XCTAssertEqual(now.first, topBefore,
+                       "最顶那条被挤掉了 —— 不跟随时锚在内容顶端，顶端一缩，"
+                       + "他正在读的那段就整体上移，这就是「位置乱跳」")
+        XCTAssertEqual(now.last, 200, "新消息仍然在窗口里（只是在视口下方）")
+    }
+
+    /// **不需要先翻页** —— 老守卫问的是「他翻过页没有」，而这是两回事。
+    /// 默认窗口就有一页、气泡又高，在窗口内往上滚几屏是最常见的读历史方式。
+    func test_老判定问错了对象_没翻页就挡不住() {
+        XCTAssertEqual(
+            CrewChatWindow.afterInsert(limit: CrewChatWindow.pageSize, added: 1),
+            CrewChatWindow.pageSize,
+            "老判定在 limit == pageSize 时放行 —— 它问的是「翻过页没有」，"
+            + "不是「他是不是正在看上面」")
+        XCTAssertEqual(
+            CrewChatWindow.afterInsert(limit: CrewChatWindow.pageSize, added: 1,
+                                       isFollowing: false),
+            CrewChatWindow.pageSize + 1,
+            "新判定问的是「他滑走了没有」")
+    }
+
+    /// 跟随中窗口照旧往前滑 —— 成本恒定封顶那一半不许被这次修改弄丢。
+    func test_跟随时仍然照旧滑走_封顶不许丢() {
+        XCTAssertEqual(
+            CrewChatWindow.afterInsert(limit: CrewChatWindow.pageSize, added: 20,
+                                       isFollowing: true),
+            CrewChatWindow.pageSize)
+        XCTAssertEqual(
+            CrewChatWindow.afterInsert(limit: 60, added: 3, isFollowing: true),
+            CrewChatWindow.afterInsert(limit: 60, added: 3))
+    }
+
+    func test_滑走且翻过页时两条约束同时成立() throws {
+        let expanded = CrewChatWindow.expanded(CrewChatWindow.pageSize, total: 200)
+        let before = CrewChatWindow.window(msgs(200), limit: expanded)
+        let topBefore = try XCTUnwrap(before.first)
+        let after = CrewChatWindow.afterInsert(limit: expanded, added: 2, isFollowing: false)
+        let now = CrewChatWindow.window(msgs(200) + [200, 201], limit: after)
+        XCTAssertEqual(now.first, topBefore)
+        XCTAssertEqual(now.last, 201)
+    }
+
+    func test_没有新消息时上限不动_新判定同样() {
+        XCTAssertEqual(CrewChatWindow.afterInsert(limit: 60, added: 0, isFollowing: false), 60)
+        XCTAssertEqual(CrewChatWindow.afterInsert(limit: 60, added: -5, isFollowing: false), 60)
+    }
+
 }
 
 #if os(macOS)
