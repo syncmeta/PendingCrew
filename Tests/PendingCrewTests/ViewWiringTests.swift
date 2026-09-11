@@ -751,6 +751,61 @@ final class ViewWiringTests: XCTestCase {
     // MARK: - 源码扫描
 
     /// 按文件名取源码原文（找不到 → 失败，不静默放过）。
+    /// **汇报线上那条派生规则，有没有真的被接到投递路上**（人类 Todo #141 / #137）。
+    ///
+    /// `ReportingParentTests` 测的是规则本身对不对（`reportingParentIds` 在什么时候
+    /// 派生出总机组）。但**那组测试证明不了规则被用上了** —— 实测过：把下面这两处
+    /// 各自改回 `parentIds`，全量 2553 条**一条都不红**。`CrewStore` 不在 test
+    /// target 里，`LocalSessionLaunch` 在、却没有测试走到那条路。
+    ///
+    /// 所以这里用的是本文件既有那套办法（扫源码文本），理由跟本文件开头那段一样：
+    /// 「零件造好了没装到车上」测不出来。两处都**正反各断一次** ——
+    /// 只断「有 reportingParentIds」的话，有人把那一行改回 `parentIds` 又在别处留下
+    /// 一个 `reportingParentIds` 的提及，这把尺子照样绿。
+    func testTheReportingParentRuleIsWiredIntoDelivery() throws {
+        let store = try Self.text(of: "CrewStore.swift")
+        XCTAssertTrue(
+            store.contains("targets = store.reportingParentIds(of: cmd.crewId)"),
+            """
+            to_parent 投递没走派生的父：顶层机组往上汇报会回「你已是根」，            总机组永远收不到任何汇报（Todo #141 白做）。
+            """)
+        XCTAssertFalse(
+            store.contains("targets = store.parentIds(of: cmd.crewId)"),
+            "to_parent 投递被改回了「存下来的边」—— 那是上一版的行为")
+
+        let launch = try Self.text(of: "LocalSessionLaunch.swift")
+        XCTAssertTrue(
+            launch.contains("LocalCrewStore.shared.reportingParentIds(of: detail.crew.id)"),
+            """
+            注入给 agent 的「上级是谁」没走派生的父：提示词会说「你是根、没有上级」，            而它 report_to_parent 照样送到总机组 —— 提示词对 agent 撒谎。
+            """)
+        XCTAssertFalse(
+            launch.contains("LocalCrewStore.shared.parentIds(of: detail.crew.id)"),
+            "注入那处被改回了「存下来的边」—— 提示词会跟投递说两样话")
+    }
+
+    /// 反过来钉住**不该被派生污染的那一侧**：机长交接的授权判定必须走
+    /// `parentIds`（存下来的边）。
+    ///
+    /// 这条比上面那条更要紧。`resolveTargetCrewId` 判的是「目标是不是我的直系子」——
+    /// 换成派生的父之后，**总机组的机长凭空成为所有顶层机组的父**，
+    /// 等于把机长交接权放开到全机。它不会报错，只会悄悄多给权限。
+    func testCaptainHandoffAuthorizationStillUsesStoredEdges() throws {
+        let store = try Self.text(of: "CrewStore.swift")
+        XCTAssertTrue(
+            store.contains("LocalCrewStore.shared.parentIds(of: $0) } ?? []"),
+            "机长交接授权那处不再读「存下来的边」了 —— 越权风险，见本测试注释")
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(
+            runner.contains("targetParentIds: LocalCrewStore.shared.parentIds(of: request.targetCrewId)"),
+            "daemon 侧机长交接授权那处不再读「存下来的边」了 —— 越权风险")
+        XCTAssertFalse(
+            runner.contains("reportingParentIds"),
+            """
+            CrewSessionRunner 里出现了 reportingParentIds —— 这个文件里唯一用到父边的            地方是交接授权，它必须走存下来的边。
+            """)
+    }
+
     private static func text(of fileName: String) throws -> String {
         guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
         else { throw XCTSkip("找不到源码文件 \(fileName)") }

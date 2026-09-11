@@ -206,7 +206,14 @@ enum LocalSessionLaunch {
         // 组织位置（本地 DAG）：caller 都在 MainActor（startCaptain/startForBrief/
         // 零配置启动）,直接读 store;非本地 crew（store 查无此 id）自然得空数组。
         let parents = MainActor.assumeIsolated {
-            LocalCrewStore.shared.parentIds(of: detail.crew.id)
+            // **这一行描述的是汇报线**（紧接着那段就是「汇报线是主干、用
+            // `report_to_parent`」），所以跟着汇报走派生的父：顶层机组的机长会看到
+            // 「上级（父）crew：总机组」，而它 `report_to_parent` 确实送到那儿。
+            // 用 `parentIds` 会让提示词说「你是根、没有上级」而投递照样送到总机组
+            // —— 提示词对 agent 撒谎，比少一行更坏。
+            // 名册里没有那一层时 `title(of:)` 为 nil，compactMap 丢掉 → 照旧显示
+            // 「是根 crew」，不会出现一个没名字的上级。
+            LocalCrewStore.shared.reportingParentIds(of: detail.crew.id)
                 .compactMap { LocalCrewStore.shared.title(of: $0) }
         }
         let children = MainActor.assumeIsolated {
