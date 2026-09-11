@@ -343,3 +343,20 @@ daemon 读写照常，界面和群聊对**人**是通的。**瞎的是 agent 这
 launchd 起的进程仍然继承了某种归属。**机制我只解释到一半，明写在这儿。**
 
 **结论：从 agent 这一侧没有任何绕路。只剩人在系统设置里授权这一条。**
+
+### 01:27 —— 再排除两条，其中一条是我差点认下的自己的锅
+
+**① 不是 agent 自己那个 Bash 工具的沙盒。** Claude Code 的 Bash 工具带沙盒，
+而症状（仓库读得动、别处读不动、所有子进程都中招、TCC 无日志）**跟沙盒的形状高度吻合**，
+我一度以为整晚的结论都要推翻。**带 `dangerouslyDisableSandbox` 重跑：照样 EPERM。**
+排除。
+
+**② 不是 app 签名坏了。** `codesign -v`：valid on disk + satisfies its Designated Requirement；
+`spctl`：accepted，source=Notarized Developer ID。
+
+**③ 关键的反证：TCC 和沙盒都没有日志。**
+`log show --last 50m --predicate 'subsystem == "com.apple.TCC"'` → **零命中**；
+沙盒拒绝日志同样零命中。**TCC 拒绝是一定会记日志的** ——
+所以「这是 TCC」这个大方向本身就存疑，而我前面几节都建立在它上面。
+
+**目前的诚实状态：机制不明。** 已排除 8 条，剩下的候选我举不出来。
