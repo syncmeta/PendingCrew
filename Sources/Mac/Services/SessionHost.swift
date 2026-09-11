@@ -149,8 +149,37 @@ final class SessionHost: ObservableObject {
     private(set) var lastExitOfPreviousRun: ProcessExitClassification = .noPriorRun
     /// 上一轮 GUI 是哪个版本 —— 「刚更新过」那一档比它，不需要第二套机制。
     private(set) var previousRunBuild: String?
+    /// 要不要问人「恢复上次的 session」，以及要恢复哪些。
+    /// **`shouldAsk == false` 时界面一个字都不许弹。**
+    @Published private(set) var restoreOffer = SessionRestoreOffer.Decision(
+        reason: nil, candidates: [], message: "")
     private var exitMarker: ProcessLifecycleMarker?
     private var terminationObserver: NSObjectProtocol?
+
+    /// 上一轮在跑的那些。来源是 daemon 的 registry —— **不新造第二本账**。
+    private static func restoreCandidates() -> [SessionRestoreOffer.Candidate] {
+        let url = PendingCrewDaemonPaths.standard().registry
+        guard let data = try? Data(contentsOf: url),
+              let registry = try? JSONDecoder().decode(SessionProcessRegistry.self, from: data)
+        else { return [] }
+        return registry.entries.map {
+            SessionRestoreOffer.Candidate(sessionId: $0.sessionId, crewId: $0.crewId)
+        }
+    }
+
+    /// 人在弹窗里点了「恢复」。**只有这条路会恢复，没有任何自动恢复。**
+    @discardableResult
+    func restoreOfferedSessions(model: AppModel) async -> SessionRestoreOutcome {
+        let candidates = restoreOffer.candidates
+        dismissRestoreOffer()
+        return await runner.restoreSessions(candidates, backend: model.backend)
+    }
+
+    /// 人点了「不恢复」，或者已经恢复过了。**问过一次就不再问** —— 同一次启动里
+    /// 反复弹同一个窗，比不弹更糟。
+    func dismissRestoreOffer() {
+        restoreOffer = SessionRestoreOffer.Decision(reason: nil, candidates: [], message: "")
+    }
 
     func start(model: AppModel, crewStore: CrewStore) {
         precondition(
@@ -169,6 +198,18 @@ final class SessionHost: ObservableObject {
         previousRunBuild = marker.previousBuild
         marker.markRunning()
         exitMarker = marker
+        // 上一轮在跑的那些（daemon 的 registry 本来就在记它们，收尸逻辑遍历的就是这份）。
+        // **读不出来就是空** —— 这里读不到只会让我们少问一次，不会让我们乱恢复。
+        let candidates = Self.restoreCandidates()
+        restoreOffer = SessionRestoreOffer.decide(
+            exit: lastExitOfPreviousRun,
+            previousBuild: previousRunBuild,
+            currentBuild: SessionDaemonHost.currentBuild,
+            candidates: candidates)
+        if restoreOffer.shouldAsk {
+            NSLog("[SessionHost] 上一轮：%@，有 %d 个 session 可以接回，等人决定",
+                  lastExitOfPreviousRun.text, candidates.count)
+        }
         // ⌘Q / 正常退出：收尾一开始记 draining，做完记 clean。崩溃走不到这里，
         // 盘上留的就还是 running —— 那正是我们要认出来的那一档。
         terminationObserver = NotificationCenter.default.addObserver(
