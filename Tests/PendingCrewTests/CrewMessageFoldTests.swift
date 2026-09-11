@@ -72,11 +72,52 @@ final class CrewMessageFoldTests: XCTestCase {
         XCTAssertFalse(s?.contains("*") ?? true, "收起条是一行纯文本，留着星号只会看见星号")
     }
 
-    func test_过长的摘要截断加省略号() {
+    /// 2026-09-12 起 `summaryCap` 数的是**显示宽度**不是字符数。
+    ///
+    /// 这条用例原来断言 `s.count == cap + 1`（61 个字符）—— 那正是旧口径的化身：
+    /// 60 个汉字远超任何气泡宽度，**这道闸对中文其实从没生效过**，
+    /// 真正在截的是视图那层 `lineLimit(2)`，模型这边那个「…」根本没机会出现。
+    /// **一道从不生效的闸，和没有这道闸，看起来一模一样。**
+    func test_过长的中文摘要按显示宽度截断() throws {
         let long = String(repeating: "长", count: 200)
-        let s = CrewMessageFold.fold("**\(long)**\n" + lines(20))?.summary
-        XCTAssertEqual(s?.count, CrewMessageFold.summaryCap + 1)
-        XCTAssertTrue(s?.hasSuffix("…") ?? false)
+        let s = try XCTUnwrap(CrewMessageFold.fold("**\(long)**\n" + lines(20))?.summary)
+        XCTAssertTrue(s.hasSuffix("…"))
+        let body = String(s.dropLast())
+        XCTAssertEqual(CrewMessageFold.displayWidth(body), CrewMessageFold.summaryCap,
+                       "汉字记 2，60 宽 = 30 个字")
+        XCTAssertEqual(body.count, 30)
+    }
+
+    /// 同一个 cap，英文能装到两倍的字数 —— **这才是「同一个长度」的意思**。
+    func test_英文摘要按同一个宽度截断_字数是中文的两倍() throws {
+        let long = String(repeating: "a", count: 200)
+        let s = try XCTUnwrap(CrewMessageFold.fold("**\(long)**\n" + lines(20))?.summary)
+        XCTAssertEqual(String(s.dropLast()).count, CrewMessageFold.summaryCap)
+    }
+
+    /// 截在字符边界上：宁可短一格，不许把一个字切成半个。
+    func test_截断不许切出半个字() throws {
+        // 59 宽（29 个汉字 + 1 个字母）之后再来一个汉字 → 加上会变成 61，必须停。
+        let head = String(repeating: "长", count: 29) + "a"
+        let s = try XCTUnwrap(
+            CrewMessageFold.fold("**\(head)长长长**\n" + lines(20))?.summary)
+        XCTAssertEqual(s, head + "…")
+        XCTAssertEqual(CrewMessageFold.displayWidth(String(s.dropLast())), 59)
+    }
+
+    func test_刚好卡在宽度上不截() throws {
+        let exact = String(repeating: "长", count: 30)          // 正好 60 宽
+        let s = try XCTUnwrap(CrewMessageFold.fold("**\(exact)**\n" + lines(20))?.summary)
+        XCTAssertEqual(s, exact, "正好等于 cap 不该截")
+    }
+
+    func test_宽度口径_全角半角绘文字() {
+        XCTAssertEqual(CrewMessageFold.displayWidth("abc"), 3)
+        XCTAssertEqual(CrewMessageFold.displayWidth("闸门"), 4)
+        XCTAssertEqual(CrewMessageFold.displayWidth("，"), 2, "全角标点也占两格")
+        XCTAssertEqual(CrewMessageFold.displayWidth(","), 1)
+        XCTAssertEqual(CrewMessageFold.displayWidth("✅"), 2)
+        XCTAssertEqual(CrewMessageFold.displayWidth(""), 0)
     }
 
     func test_显式摘要优先于推导() {

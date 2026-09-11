@@ -32,8 +32,22 @@ enum CrewMessageFold {
     /// - `>15` 行 → 只折 18.6%，−58%。
     static let lineThreshold = 8
 
-    /// 摘要最长多少字符；超了截断加省略号。**这不是「截断前 N 字」** —— 被截的是
-    /// 一句作者自己写的结论，不是消息开头。
+    /// 摘要最长多少**半角宽**；超了截断加省略号。**这不是「截断前 N 字」** ——
+    /// 被截的是一句作者自己写的结论，不是消息开头。
+    ///
+    /// ## 为什么是宽度不是字符数（2026-09-12 改）
+    ///
+    /// 原来这里数的是 `Character`。可收起态那一行是**被宽度约束**的，
+    /// 而一个汉字占的横向空间约等于两个拉丁字母 —— 于是同一个「60」对中文和英文
+    /// 是两个完全不同的长度。实际后果是**这道闸对中文几乎从不生效**：
+    /// 60 个汉字远超任何气泡宽度，真正在截的是视图那层 `lineLimit(2)`，
+    /// 而模型这边那个「…」根本没机会出现。
+    ///
+    /// **一道从不生效的闸，和没有这道闸，看起来一模一样。**（同族：`explicitSummary`
+    /// 那条从没跑过的「最可靠的一级」。）
+    ///
+    /// 所以改成按**显示宽度**算：全角/CJK 记 2，其余记 1。60 ≈ 30 个汉字
+    /// ≈ 60 个字母 —— 两种文字终于是同一个长度了。
     static let summaryCap = 60
 
     struct Folded: Equatable {
@@ -74,6 +88,22 @@ enum CrewMessageFold {
     ///   人会以为它写完了。
     static func decideForRender(text: String, headline: String?, isStreaming: Bool) -> Folded? {
         isStreaming ? nil : fold(text, explicitSummary: headline)
+    }
+
+    /// 发出去之后回执里该不该提醒一句「这条的标题是猜的」（人类 Todo #143）。
+    ///
+    /// **schema 里的说明只在写之前被读到一次，而且多半没读。** 真正教得会人的是
+    /// **出错那一刻的那句话** —— 所以这条消息够长会被折、作者又没给 `headline` 时，
+    /// 回执里把**猜出来的那一行原样摆给他看**：他一眼就看出那不是他的结论。
+    ///
+    /// - Returns: 提醒文案；不该提醒（太短不折 / 已经给了 / 猜都猜不出来）时 nil。
+    static func receiptHintIfGuessed(text: String, headline: String?) -> String? {
+        guard (headline?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        else { return nil }
+        guard let folded = fold(text) else { return nil }
+        return "⚠️ 这条 \(folded.lineCount) 行，群里会**默认收起**，而你没给 `headline` ——"
+            + "收起态那一行现在是**猜**的，猜出来是：「\(folded.summary)」。"
+            + "\n不是你要的结论就下次带上 `headline`（一句话说清结果是什么）。"
     }
 
     // MARK: - 摘要推导
@@ -137,9 +167,57 @@ enum CrewMessageFold {
         return out.split(separator: " ").joined(separator: " ")
     }
 
+    /// 一个字符占几个「半角宽」。
+    ///
+    /// 判据取 Unicode 的东亚宽度性质：**全角（F）/ 宽（W）记 2，其余记 1**。
+    /// 这不是精确排版（真实宽度还看字体和字距），是一个**比字符数近得多的近似** ——
+    /// 目的只是让「60」对中英文意味着差不多长的一行。
+    static func displayWidth(_ c: Character) -> Int {
+        for scalar in c.unicodeScalars {
+            // 绘文字用 Unicode 自己的性质判，别手搓范围表 —— 手搓的那张表
+            // 第一版就漏了 ✅（U+2705 在 Dingbats 里，不在任何 CJK 段）。
+            if scalar.properties.isEmojiPresentation { return 2 }
+            switch scalar.value {
+            // CJK 统一表意文字（含扩展 A）、兼容表意文字
+            case 0x1100...0x115F,           // 韩文字母 Jamo
+                 0x2E80...0x303E,           // CJK 部首补充 · 康熙部首 · CJK 符号与标点
+                 0x3041...0x33FF,           // 假名 · 韩文兼容字母 · CJK 方块
+                 0x3400...0x4DBF,           // 扩展 A
+                 0x4E00...0x9FFF,           // 基本区
+                 0xA000...0xA4CF,           // 彝文
+                 0xAC00...0xD7A3,           // 韩文音节
+                 0xF900...0xFAFF,           // 兼容表意
+                 0xFE10...0xFE19,           // 竖排标点
+                 0xFE30...0xFE6F,           // CJK 兼容形式
+                 0xFF00...0xFF60,           // 全角 ASCII 与标点
+                 0xFFE0...0xFFE6,           // 全角符号
+                 0x20000...0x3FFFD:         // 扩展 B 及以后
+                return 2
+            default:
+                continue
+            }
+        }
+        return 1
+    }
+
+    /// 这一串有多宽（半角为 1）。
+    static func displayWidth(_ s: String) -> Int {
+        s.reduce(0) { $0 + displayWidth($1) }
+    }
+
+    /// 按显示宽度截断。**截在字符边界上** —— 不许把一个字切一半，
+    /// 所以中文串的实际宽度可能比 cap 少 1（宁可短一格，不许出半个字）。
     private static func clip(_ s: String) -> String {
-        guard s.count > summaryCap else { return s }
-        return String(s.prefix(summaryCap)) + "…"
+        guard displayWidth(s) > summaryCap else { return s }
+        var out = ""
+        var width = 0
+        for c in s {
+            let w = displayWidth(c)
+            if width + w > summaryCap { break }
+            out.append(c)
+            width += w
+        }
+        return out + "…"
     }
 }
 
