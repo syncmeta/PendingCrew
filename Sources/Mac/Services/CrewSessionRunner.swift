@@ -2474,6 +2474,65 @@ final class CrewSessionRunner: ObservableObject {
                                userInitiated: userInitiated)
     }
 
+    /// 把上一轮在跑的那些接回来（人在恢复弹窗里点了「恢复」之后才会走到这里）。
+    ///
+    /// **没有任何自动路径调它** —— 人类的规格是「问了才恢复，一次都不自动」。
+    ///
+    /// 三条：
+    /// - **一个失败不许拖垮其余的**：逐个来，失败的记下继续下一个。
+    /// - **每个失败各自落进它自己 crew 的白板，带原话** —— 不汇总成一句「部分失败」，
+    ///   人得能在出事的那个群里看到是什么原因。
+    /// - **claude 和 codex 两套会话号不混**：这里根本不碰会话号，`restartMember`
+    ///   查账本自己按 `kind` 分流（`AgentSessionResume` / `LocalAgentSessionStore`），
+    ///   我们只给 sessionId。
+    @discardableResult
+    func restoreSessions(_ candidates: [SessionRestoreOffer.Candidate],
+                         backend: PendingCrewBackend?) async -> SessionRestoreOutcome {
+        var outcome = SessionRestoreOutcome()
+        guard let backend else {
+            outcome.failures = candidates.map {
+                .init(sessionId: $0.sessionId, crewId: $0.crewId, reason: "后端还没就绪")
+            }
+            return outcome
+        }
+        for candidate in candidates {
+            // 已经在跑的跳过（人可能在弹窗上犹豫了一会儿，期间 @ 把它唤醒了）。
+            if runs.contains(where: { $0.sessionId == candidate.sessionId && $0.status == .running }) {
+                outcome.restored.append(candidate.sessionId)
+                continue
+            }
+            do {
+                let detail = try await backend.getCrew(candidate.crewId)
+                let members = LocalCrewStore.shared.sessionMembers(crewId: candidate.crewId)
+                guard let member = members.first(where: { $0.sessionId == candidate.sessionId }) else {
+                    // 成员被人删了 —— 这不是错误，但也绝不能算成「已接回」。
+                    outcome.failures.append(.init(
+                        sessionId: candidate.sessionId, crewId: candidate.crewId,
+                        reason: "这个成员已经不在 crew 的成员列表里了"))
+                    continue
+                }
+                try await restartMember(
+                    detail: detail, backend: backend, member: member,
+                    wakeText: "PendingCrew 重启后接回了这个 session。接着做你上一轮没做完的事；"
+                        + "上一轮的最后一次输出可能没来得及产出，需要的话重做那一步。")
+                outcome.restored.append(candidate.sessionId)
+            } catch {
+                outcome.failures.append(.init(
+                    sessionId: candidate.sessionId, crewId: candidate.crewId,
+                    reason: error.localizedDescription))
+            }
+        }
+        // fail-loud：**每个失败各自落进它自己的群**，带原话。
+        for failure in outcome.failures {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: failure.crewId, sessionId: "system",
+                text: "接回 session `\(failure.sessionId)` 失败：\(failure.reason)"
+                    + "\n它还在成员列表里，@ 它同样能再试一次。",
+                category: "progress", senderName: "系统")
+        }
+        return outcome
+    }
+
     /// @ 唤醒一个**已退出**的持久成员：复用原 sessionId 重启（白板读游标 / 成员
     /// 登记 / 审批归档全延续 —— 新进程第一轮就把停摆期间的未读白板接上，群记忆
     /// 不断片）。**agent 自己的对话上下文也接**（Todo #28）：起 session 时记下的

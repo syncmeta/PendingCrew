@@ -138,6 +138,10 @@ private struct PendingCrewUpdateCommands: Commands {
 /// 「是否已配置」在主界面 / 登录页之间分叉的路由一并去掉。
 struct RootView: View {
     @EnvironmentObject private var crewStore: CrewStore
+    #if os(macOS)
+    @EnvironmentObject private var sessionHost: SessionHost
+    @EnvironmentObject private var model: AppModel
+    #endif
 
     var body: some View {
         Group {
@@ -151,6 +155,25 @@ struct RootView: View {
         .task {
             await crewStore.refreshMachines()
         }
+        #if os(macOS)
+        // 恢复弹窗（人类 2026-09-11 定的规格）：**只有「刚更新过」或「上次意外结束」
+        // 才问**，而且必须真有东西可恢复；问了他点头才恢复，**一次都不自动**。
+        // 判定全在 `SessionRestoreOffer`（有测试），这里只负责显示。
+        .alert("要接回上次的 session 吗？",
+               isPresented: .constant(sessionHost.restoreOffer.shouldAsk)) {
+            // **「不恢复」放在前面、并且是 cancel 角色** —— 默认不恢复是规格的一部分，
+            // 回车不该等于「恢复」。
+            Button("不恢复", role: .cancel) { sessionHost.dismissRestoreOffer() }
+            Button("接回来") {
+                Task { @MainActor in
+                    let outcome = await sessionHost.restoreOfferedSessions(model: model)
+                    NSLog("[RootView] 恢复结果：%@", outcome.summary)
+                }
+            }
+        } message: {
+            Text(sessionHost.restoreOffer.message)
+        }
+        #endif
     }
 }
 
