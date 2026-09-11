@@ -66,6 +66,10 @@ final class McpServer {
     /// 与 `~/.codex/sessions`；单测喂假目录走同一条生产代码路径。
     let outputProbe: SessionOutputProbe
 
+    /// 「本 session 的工具表是不是已经旧了」。**只在拒绝话术上挂一句**，见
+    /// `toolResult`。nil（app 进程、绝大多数单测）= 这条通道不存在，回执一个字不变。
+    let buildWatch: HelperBuildWatch?
+
     /// `list_sessions` 的工具描述。抽成常量是为了让单测直接盯住它 ——
     /// 「产出证据这一列在什么情况下说不出话」必须写在这里，机长读到
     /// 「看不出来」时才不会把它当成「没干活」再犯一次同样的病。
@@ -91,7 +95,8 @@ final class McpServer {
          agentKey: String? = nil,
          attachmentRoot: URL? = nil,
          agentSessions: LocalAgentSessionStore? = nil,
-         outputProbe: SessionOutputProbe? = nil) {
+         outputProbe: SessionOutputProbe? = nil,
+         buildWatch: HelperBuildWatch? = nil) {
         self.store = store
         self.approvals = approvals
         self.control = control
@@ -123,6 +128,7 @@ final class McpServer {
         self.agentSessions = agentSessions
             ?? LocalAgentSessionStore(directory: quotaDirectory ?? LocalWhiteboardStore.defaultDirectory)
         self.outputProbe = outputProbe ?? SessionOutputProbe.onThisMachine()
+        self.buildWatch = buildWatch
     }
 
     /// 没显式传附件根时用哪儿。
@@ -2670,8 +2676,23 @@ final class McpServer {
         envelope(["jsonrpc": "2.0", "id": id ?? NSNull(), "result": result])
     }
 
+    /// 工具回执。**拒绝话术会额外挂一句「你这个进程的工具表可能是旧的」** ——
+    /// 挂在这里而不是逐个拒绝点，是因为拒绝点有一百多处，一份手工名单跟它要防的
+    /// 东西不在同一个地方，方案一变就成了假的。
+    ///
+    /// 只挂在拒绝上、不挂在成功回执上：装了新版却没重开 session 是常态，
+    /// 每条回执都带一句就成了背景噪音，而一直亮着的提示等于没有提示。
     private func toolResult(id: Any?, text: String) -> String? {
-        result(id: id, ["content": [["type": "text", "text": text]]])
+        var text = text
+        if Self.isRefusal(text), let notice = buildWatch?.staleNotice() {
+            text += "\n\n" + notice
+        }
+        return result(id: id, ["content": [["type": "text", "text": text]]])
+    }
+
+    /// 这条回执是不是一句拒绝。全仓的拒绝都以 `ERROR` 起头（`ERROR: …`）。
+    static func isRefusal(_ text: String) -> Bool {
+        text.hasPrefix("ERROR")
     }
 
     private func error(id: Any?, code: Int, message: String) -> String? {

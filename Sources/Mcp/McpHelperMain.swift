@@ -30,6 +30,9 @@ enum McpHelperMain {
             // `--label` → post_to_crew 写白板时的发送者显示名（白板不再裸 uuid）。
             // `--agent claude|codex` → 本 session 跑在哪家 runner 上，供
             // set_session_profile 挑对照哪张可用模型表（Todo #37）。没传就两家都对照。
+            // **进程一起来就把「我跑的是哪一份二进制」记下**，晚一步就白记：
+            // 等 app 被换掉之后再读，读到的是新版，于是永远判「一样」。
+            let buildWatch = HelperBuildWatch.captureAtLaunch()
             let captain = args.contains("--captain")
             let label = value("--label", args)
             let agent = value("--agent", args).flatMap { ["claude", "codex"].contains($0) ? $0 : nil }
@@ -40,7 +43,8 @@ enum McpHelperMain {
                                    quotaDirectory: dir,
                                    todos: LocalTodoStore(directory: dir),
                                    plans: CockpitPlanStore(directory: dir),
-                                   agentKey: agent)
+                                   agentKey: agent,
+                                   buildWatch: buildWatch)
             McpHelperServeLoop(handle: { server.handleLine($0) }).run()
         } else if permHook {
             // PreToolUse hook：gate 命中的工具 → raise 待审批 + 阻塞 long-poll allow/deny，
