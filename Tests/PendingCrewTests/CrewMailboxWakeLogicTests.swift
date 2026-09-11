@@ -142,5 +142,85 @@ final class CrewMailboxWakeLogicTests: XCTestCase {
         XCTAssertTrue(text.contains("inspect_session"), text)
         XCTAssertTrue(text.contains("nudge_session"), text)
     }
+
+    // MARK: - busy 那一支到底触发得了吗（本机全历史 0 次，账本里挂着）
+
+    /// `wakeBusyStallAlert` 在全机 47 个白板的全部历史里**一次都没出现过**
+    /// （2026-09-07 实测；同期 `wakeFailureAlert` 有 112 次，所以不是统计口径的事）。
+    ///
+    /// 「从没触发过」有两个完全不同的意思，那个读数分不开：
+    /// ① 它防的情况真没发生过；② **它根本触发不了**（判据写错，永远进不去）。
+    /// 一个从不发声的东西看起来像「没问题」，实际可能已经退出检测器行列了。
+    ///
+    /// 下面四条是账本里点名要的那次**构造实验**，一起回答「② 在纯判定这一层成不成立」。
+    /// 结论写在最后一条上面。**它们不回答 ①**，也不假装回答。
+
+    /// 收摊时挂着忙碌指示 ⇒ 出来的必须是 busy 那一句。
+    /// 选择本身 2026-09-12 之前长在 `CrewSessionRunner` 的一个三元表达式里，
+    /// 那个文件不进 test bundle —— 所以这一条在此之前**没有尺子量得到**。
+    func test_收摊时还挂着忙碌指示_出来的是busy那一句() {
+        let busy = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 7, latestPostId: "p1",
+            lastOutputAt: Date(timeIntervalSince1970: 1_000), isBusyNow: true)
+        let text = CrewMailboxWakeLogic.unconfirmedAlert(
+            latest: busy, targetLabel: "机长", waited: 300)
+        XCTAssertEqual(text, CrewMailboxWakeLogic.wakeBusyStallAlert(
+            targetLabel: "机长", waited: 300),
+            "挂着忙碌指示还喊「疑似卡死」——人会去 nudge 一个正在跑的 session：\(text)")
+    }
+
+    /// 反面：什么都没挂（以及一拍都没采到）时仍然是老那一句。
+    /// 没有这一条，一个**永远**返回 busy 的实现也会让上面那条绿。
+    func test_什么都没挂时_出来的是卡死那一句() {
+        let idle = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 7, latestPostId: "p1",
+            lastOutputAt: Date(timeIntervalSince1970: 1_000), isBusyNow: false)
+        for latest in [idle, nil] {
+            let text = CrewMailboxWakeLogic.unconfirmedAlert(
+                latest: latest, targetLabel: "机长", waited: 300)
+            XCTAssertEqual(text, CrewMailboxWakeLogic.wakeFailureAlert(targetLabel: "机长"),
+                           "latest=\(String(describing: latest))：\(text)")
+        }
+    }
+
+    /// **这一条是整组的关键**：忙碌指示本身**不算**到达证据。
+    ///
+    /// 若哪天有人把 `isBusyNow` 加进 `receiptVerdict` 的或运算里，一个挂着指示的
+    /// 目标就会被判成 confirmed，于是 busy 那一支**永远选不中** —— 变成解释 ②，
+    /// 而且盘上不会留下任何痕迹（它本来就是 0 次，谁也看不出少了什么）。
+    /// 这条断言是那一刀唯一会碰到的东西。
+    func test_忙碌指示本身永远不算到达证据() {
+        let t = Date(timeIntervalSince1970: 1_000)
+        let baseline = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 7, latestPostId: "p1",
+            lastOutputAt: t, isBusyNow: false)
+        // 整窗每一拍都只有 isBusyNow 跟基线不同，别的逐字相同。
+        let samples = (0..<5).map { _ in
+            CrewMailboxWakeLogic.ReceiptEvidence(
+                isWorking: false, activityRevision: 7, latestPostId: "p1",
+                lastOutputAt: t, isBusyNow: true)
+        }
+        XCTAssertEqual(
+            CrewMailboxWakeLogic.receiptVerdict(baseline: baseline, samples: samples), .failed,
+            "忙碌指示被当成了到达证据 —— busy 告警那一支从此永远选不中，而它本来就 0 次，没人看得出来")
+    }
+
+    /// 等待的寿命到头时**确实会收摊**（而不是挂着指示就无限等下去）。
+    /// 连上上面三条，「② 在纯判定这一层」就被排除了：等得到头、选得中、
+    /// 而且忙碌本身不会把它先判成 confirmed。
+    ///
+    /// ⚠️ **剩下的那半仍然没被证明**，别把这一组读成「已经确认是 ①」：
+    /// 真实世界里 `isBusyNow` 能不能在 `lastOutputAt` 一动不动的同时挂满 300 秒，
+    /// 这里量不到 —— 那要一次真实现场。
+    func test_挂着忙碌指示也等得到头_不会无限等下去() {
+        let busy = CrewMailboxWakeLogic.ReceiptEvidence(
+            isWorking: false, activityRevision: 7, latestPostId: "p1",
+            lastOutputAt: Date(timeIntervalSince1970: 1_000), isBusyNow: true)
+        let limit = CrewMailboxWakeLogic.busyWaitLimit
+        XCTAssertTrue(CrewMailboxWakeLogic.shouldKeepWaiting(latest: busy, elapsed: limit - 1),
+                      "上限之前就收摊了，那条「长静默 ≠ 卡死」的让步等于没有")
+        XCTAssertFalse(CrewMailboxWakeLogic.shouldKeepWaiting(latest: busy, elapsed: limit),
+                       "挂着忙碌指示就无限等下去 —— busy 告警永远发不出来")
+    }
 }
 #endif

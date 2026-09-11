@@ -1150,10 +1150,8 @@ final class CrewSessionRunner: ObservableObject {
                 // 两种处境两句话：一直挂着忙碌指示的那条要说清依据、并承认可能是误报，
                 // 别让人拿着「疑似卡死」去 nudge 一个正在跑的 session。
                 let waited = Date().timeIntervalSince(startedAt)
-                let text = latest?.isBusyNow == true
-                    ? CrewMailboxWakeLogic.wakeBusyStallAlert(
-                        targetLabel: targetLabel, waited: waited)
-                    : CrewMailboxWakeLogic.wakeFailureAlert(targetLabel: targetLabel)
+                let text = CrewMailboxWakeLogic.unconfirmedAlert(
+                    latest: latest, targetLabel: targetLabel, waited: waited)
                 LocalWhiteboardStore.shared.appendSessionMessage(
                     crewId: crewId, sessionId: "system", text: text,
                     category: "question", senderName: "系统",

@@ -124,5 +124,27 @@ enum CrewMailboxWakeLogic {
             + "也没有新发言。若它正在做一件长的不吐字的事（压缩上下文、长思考、长工具等待），"
             + "这条是误报，不用管；真要确认就 inspect_session 看一眼终端现场。消息留待重投。"
     }
+
+    /// 观察窗收摊、又没等到到达证据时，白板上该出现上面两句里的哪一句。
+    ///
+    /// **这个选择原来是 `CrewSessionRunner.confirmWake` 里的一个三元表达式。**
+    /// 那个文件不进 test bundle，所以「busy 那一支到底选不选得中」在这个仓库里
+    /// **没有任何尺子量得到** —— 而它恰好是本机全历史 0 次触发的那一支
+    /// （`wakeFailureAlert` 同期 112 次）。搬到这里来是为了让它量得到：
+    /// **判据一个字没改**（依然只看 `latest?.isBusyNow`），改的只是它站在哪儿。
+    ///
+    /// 「0 次」有两个解释，这个函数只负责把其中一个钉死：
+    /// ① 它防的情况真没发生过；② 它根本触发不了。
+    /// `CrewMailboxWakeLogicTests` 里那一组证明**在纯判定这一层 ② 不成立**（选得中、等得到上限、
+    /// 忙碌指示本身也不算到达证据）。**剩下的那半仍然量不到**：真实世界里
+    /// `isBusyNow` 能不能在 `lastOutputAt` 一动不动的同时挂满 300 秒 —— 那要一次
+    /// 真实现场，不是一次单测。
+    static func unconfirmedAlert(
+        latest: ReceiptEvidence?, targetLabel: String, waited: TimeInterval
+    ) -> String {
+        latest?.isBusyNow == true
+            ? wakeBusyStallAlert(targetLabel: targetLabel, waited: waited)
+            : wakeFailureAlert(targetLabel: targetLabel)
+    }
 }
 #endif
