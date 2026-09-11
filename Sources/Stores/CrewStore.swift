@@ -1019,6 +1019,49 @@ final class CrewStore: ObservableObject {
         }
     }
 
+    // MARK: - 总机长「重排一次」（人类 Todo #145）
+
+    /// 上一次**真发出去**的时刻。只在内存里 —— app 一关就忘，而冷却窗只有一分钟，
+    /// 为它落一个盘上状态不值当。
+    private var chiefResortRequestedAt: Date?
+
+    /// 刚才那一下的回执，显示在侧栏溯源行旁边。
+    /// **发不出去时也要有话** —— 一个按了没反应的按钮比没有按钮更糟。
+    @Published var chiefResortNote: String?
+
+    /// 请总机长现在重新排一次侧栏顺序。
+    ///
+    /// 做法是**往总机组群聊里发一条人类消息**，不新造唤醒通道：无 @ 的人类消息
+    /// 本来就默认唤醒（必要时拉起）那个 crew 的机长，这条路已经在跑了。
+    /// 顺带的好处是人回头翻群聊，看得到「这个顺序是我几点钟叫它重排的」。
+    ///
+    /// 判定全在 `ChiefResortRequest`（有单测）；这里只负责发和记回执。
+    @MainActor
+    func requestChiefResort(now: Date = Date()) async {
+        switch ChiefResortRequest.decide(chiefCrewId: chiefLayer?.id,
+                                         lastRequestedAt: chiefResortRequestedAt,
+                                         now: now) {
+        case let .refuse(why):
+            chiefResortNote = why
+        case let .send(text):
+            guard let crewId = chiefLayer?.id, let backend = currentBackend() else {
+                chiefResortNote = "发不出去：没有可用的后端。"
+                return
+            }
+            do {
+                try await backend.postCrewMessage(
+                    crewId: crewId, text: text, mentions: [],
+                    replyToId: nil, localAttachments: [], extraReferences: [])
+                // **先发成功再记时刻** —— 发失败也记的话，人重按会被自己的冷却窗挡住，
+                // 而那条消息根本没发出去。
+                chiefResortRequestedAt = now
+                chiefResortNote = "已请总机长重排（消息发进了总机组群聊）。"
+            } catch {
+                chiefResortNote = "发不出去：\(error.localizedDescription)"
+            }
+        }
+    }
+
     /// 往 crew 白板发一行系统回执。`LocalWhiteboardStore` 没有单独的
     /// "系统消息" API —— 复用 `appendSessionMessage`（senderKind "session"），
     /// `senderName` 标成「系统」区分于真实 session/机长发言，`sessionId` 用固定

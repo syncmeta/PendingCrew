@@ -141,6 +141,7 @@ struct CrewChiefListView: View {
                 Text("按最近活动排的（还没人排过）")
             }
             Spacer(minLength: 0)
+            resortButton
         }
         .font(Theme.Fonts.caption2)
         .foregroundStyle(Theme.Palette.inkMuted)
@@ -149,6 +150,37 @@ struct CrewChiefListView: View {
         .padding(.bottom, 2)
         .help(arrangement.map { "为什么这么排：\($0.reason)" }
               ?? "没有人排过顺序，这里按每个 crew 最近一次有动静的时间倒序")
+    }
+
+    /// 手动刷新（人类 Todo #145：「再给个手动刷新按钮，手动出发让总机长重新…排序」）。
+    ///
+    /// 它**不是刷新界面**（顺序本来就是实时读的），是**请总机长现在跑一轮**。
+    /// 所以图标用「叫人」而不是循环箭头 —— 循环箭头会让人以为是重新加载数据，
+    /// 按下去半天没变化就以为坏了。真正要等的是一个 agent 醒过来、想一遍、写回来。
+    ///
+    /// 判定在 `ChiefResortRequest`、动作在 `CrewStore.requestChiefResort`，
+    /// 这里只负责按和显示回执。
+    @ViewBuilder
+    private var resortButton: some View {
+        Button {
+            Task { await crewStore.requestChiefResort() }
+        } label: {
+            Image(systemName: "arrow.trianglehead.clockwise.rotate.90")
+                .font(.system(size: 9))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Theme.Palette.inkMuted)
+        .help("请总机长现在重新排一次顺序（会在总机组群聊里留一条）")
+        .accessibilityLabel("请总机长重排")
+        // 回执**就画在按钮旁边**：发出去了 / 被冷却挡了 / 没有总机组，三种都要看得见。
+        .popover(isPresented: Binding(
+            get: { crewStore.chiefResortNote != nil },
+            set: { if !$0 { crewStore.chiefResortNote = nil } })) {
+            Text(crewStore.chiefResortNote ?? "")
+                .font(Theme.Fonts.caption2)
+                .padding(10)
+                .frame(maxWidth: 240)
+        }
     }
 
     @ViewBuilder

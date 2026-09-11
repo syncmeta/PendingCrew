@@ -41,6 +41,14 @@ final class ViewWiringTests: XCTestCase {
          "没有任何地方把筛选开关喂给群聊，toolbar 上那个钮点了不动（Todo #61 失效）"),
         ("CrewMentionPickerLayout.maxHeight", "CrewMentionPickerLayout.swift",
          "@ 候选浮层的限高算好了却没人扣上去，列表照旧顶穿窗口（Todo #69 失效）"),
+        ("ChiefResortRequest.decide", "ChiefResortRequest.swift",
+         "刷新按钮的判定造好了没人调 —— 按下去要么什么都不发，要么绕开冷却窗连发（Todo #145 失效）"),
+        // 找的是**调用点的形状**（`crewStore.requestChiefResort()`），不是方法名 ——
+        // 光搜 `requestChiefResort` 会被 `CrewChiefListView` 顶上那段注释里的
+        // `CrewStore.requestChiefResort` 满足，**接线拆掉照样绿**（拆线跑一趟当场抓到，
+        // 与同文件 `acknowledgeBells` 那条是同一个坑）。
+        ("crewStore.requestChiefResort()", "CrewStore.swift",
+         "侧栏「总机长」视图上那个刷新按钮没接到任何动作，按了不动（Todo #145 失效）"),
         ("AgentCLIVersionView(", "AgentCLIVersionView.swift",
          "设置里看不到 claude / codex 版本，检测/升级/回滚/doctor 全没有入口（Todo #131 挪过去之后就只剩设置这一个调用点）"),
         ("TerminalBellTrace.summary(", "TerminalBellTrace.swift",

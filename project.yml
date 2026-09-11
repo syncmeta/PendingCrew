@@ -299,6 +299,9 @@ targets:
       - path: Sources/Support/CrewOrderingSignals.swift
       # 侧栏那一行「各机长自己填的那句状态」的解析与渲染（Todo #136）。纯 Foundation。
       - path: Sources/Support/CrewStatusLine.swift
+      # 侧栏「总机长」那个刷新按钮按下去会发生什么（人类 Todo #145）。
+      # 纯 Foundation，自包含 —— 判定不进 test bundle 就没人验它到底发不发得出去。
+      - path: Sources/Support/ChiefResortRequest.swift
       # 那份排布的落盘（全机一份，app 读 / helper 写）。自包含 Foundation。
       - path: Sources/Stores/CrewArrangementStore.swift
       # 侧栏层级视图按最新活动排序（Todo #67：父的键 = max(自己, 全部后代)）。
