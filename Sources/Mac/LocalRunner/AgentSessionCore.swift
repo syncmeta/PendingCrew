@@ -84,8 +84,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// （回执要的正是「注入后马上有反应」这个即时性）。所以原始信号原样保留，
     /// 另出一条只服务 UI 的：见 `TypingActivityTracker`（指纹 + 不对称迟滞）。
     @Published private(set) var displayIsTyping = false
-    /// PTY 输出健康扫描（未登录/额度到顶）—— 每 Kind 只翻一次;`health` 保留
-    /// 最近一条(auth 优先级高于 quota 的覆盖顺序由到达先后决定,展示层不细分)。
+    /// 额度来自 PTY 扫描；认证来自同 session 的结构化证据，可恢复或退回未知。
     @Published private(set) var health: CrewSessionHealth? {
         didSet {
             // 额度类 health 置上的时刻 —— 恢复判定只认「此刻之后才开始」的干活 streak，
@@ -112,6 +111,9 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 当前这段**连续**干活的起点（`isWorking` false→true 时置，true→false 时清）。
     private var workingSince: Date?
     private let healthScanner = SessionHealthScanner()
+    @Published private(set) var authenticationState: ClaudeAuthenticationState = .unknown
+    private var authenticationObservation: Task<Void, Never>?
+
     /// rate-limit 模态菜单检测（Todo #10 层1）—— 命中即自动应答，别让 session
     /// 卡死等人按键（2026-07-19 全员卡一天的根因之一）。
     private let rateLimitScanner = RateLimitMenuScanner()
@@ -149,6 +151,23 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         self.protocolOutputSink = protocolOutputSink
         self.launchDeadline = launchDeadline
         super.init()
+        if mode == .agent, config.kind == .claudeCode,
+           let sessionId = config.resumeSessionId ?? config.newSessionId,
+           !sessionId.isEmpty {
+            let configDirectory = env["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0, relativeTo: URL(fileURLWithPath: workdir, isDirectory: true)).standardizedFileURL }
+                ?? URL(fileURLWithPath: env["HOME"] ?? NSHomeDirectory()).appendingPathComponent(".claude")
+            let probe = ClaudeAuthenticationProbe(sessionId: sessionId,
+                projectsDirectory: configDirectory.appendingPathComponent("projects"), since: Date())
+            authenticationObservation = Task { [weak self] in
+                while !Task.isCancelled {
+                    let state = await Task.detached(priority: .utility) { probe.read() }.value
+                    guard !Task.isCancelled, self?.status == .running else { return }
+                    self?.applyAuthentication(state)
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+        }
+
 
         if mode == .agent, config.kind == .claudeCode,
            let prompt = config.initialPrompt, !prompt.isEmpty {
@@ -211,6 +230,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     }
 
     deinit {
+        authenticationObservation?.cancel()
         busyTimer?.invalidate()
         launchWatchdog?.cancel()
     }
@@ -423,6 +443,12 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 劈分前这一整段是终端视图 `onData` 旁路闭包的闭包体，逐字搬过来 ——
     /// 旁路顺序不许改（launchFailed 自我纠正 → health → rate-limit → 待决策 →
     /// 正在输入 → 切档回显 → 启动参数）。
+    private func applyAuthentication(_ state: ClaudeAuthenticationState) {
+        if authenticationState != state { authenticationState = state }
+        let next = state.applying(to: health)
+        if next != health { health = next }
+    }
+
     private func scanOutput(_ slice: ArraySlice<UInt8>) {
         // 半死判定的自我纠正（#541）：`stalled` 是「到点还没吐字」的推断，
         // 万一它只是启动特别慢，第一个字节到达就证明其实活着 —— 立刻撤掉

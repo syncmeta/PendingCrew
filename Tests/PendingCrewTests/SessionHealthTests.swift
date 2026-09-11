@@ -10,13 +10,174 @@ final class SessionHealthTests: XCTestCase {
         return scanner.feed(bytes[...])
     }
 
+    // #90: opposing regressions; ordinary tool output is not authentication evidence.
+    func testWorkingSessionQuotingLoginDocumentationIsNotUnauthenticated() {
+        let sc = SessionHealthScanner()
+        let output = """
+        ● Bash(cat Sources/Mac/LocalRunner/SessionHealth.swift)
+          ⎿  static let authPhrases = ["run /login", "not logged in", "invalid api key"]
+        ✢ Sketching… (39s)
+        ⏵⏵ auto mode on
+        """
+        XCTAssertEqual(authState(records: [authRecord()]), .authenticated)
+        XCTAssertFalse(feed(sc, output).contains { $0.kind == .authRequired },
+                       "Quoted source text must not issue a /login instruction to a working session")
+    }
+
+    func testExplicitAuthenticationFailureWithoutLegacyPhraseStillReports() {
+        let sc = SessionHealthScanner()
+        let output = "API Error: 401 {\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired\"}}\n"
+        // A PTY line alone is still unknown; the runner's envelope confirms it.
+        XCTAssertTrue(feed(sc, output).isEmpty)
+        let state = authState(records: [authRecord(failed: true)])
+        XCTAssertEqual(state, .authenticationRequired)
+        XCTAssertEqual(state.applying(to: nil)?.kind, .authRequired,
+                       "A real authentication failure must not be hidden by a no-op detector")
+    }
+
+    private let authStart = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func authRecord(failed: Bool = false, offset: TimeInterval = 1) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        var record: [String: Any] = [
+            "sessionId": "owned-session", "type": "assistant", "isSidechain": false,
+            "timestamp": formatter.string(from: authStart.addingTimeInterval(offset)),
+            "message": ["role": "assistant", "id": "msg_real", "model": "claude-model",
+                        "content": [["type": "text", "text": "run /login is quoted documentation"]]],
+        ]
+        if failed {
+            record["isApiErrorMessage"] = true
+            record["error"] = "authentication_failed"
+            record["apiErrorStatus"] = 401
+        }
+        return record
+    }
+
+    private func authData(_ records: [[String: Any]]) -> Data {
+        records.reduce(into: Data()) { data, record in
+            data.append(try! JSONSerialization.data(withJSONObject: record))
+            data.append(10)
+        }
+    }
+
+    private func authState(records: [[String: Any]]) -> ClaudeAuthenticationState {
+        ClaudeAuthenticationProbe.state(in: authData(records), sessionId: "owned-session", since: authStart)
+    }
+
+    func testUnknownAuthenticationNeverProducesLoginInstruction() {
+        XCTAssertEqual(authState(records: []), .unknown)
+        XCTAssertNil(ClaudeAuthenticationState.unknown.applying(to: nil))
+        XCTAssertEqual(ClaudeAuthenticationProbe.state(in: Data("broken\n".utf8),
+            sessionId: "owned-session", since: authStart), .unknown)
+        let quota = CrewSessionHealth(kind: .usageLimit, detail: "quota")
+        XCTAssertEqual(ClaudeAuthenticationState.unknown.applying(to: quota), quota)
+    }
+
+    func testAuthenticationEvidenceMustBeCurrentOwnedAndFromRunnerEnvelope() {
+        var other = authRecord(failed: true); other["sessionId"] = "other"
+        var child = authRecord(failed: true); child["isSidechain"] = true
+        var user = authRecord(failed: true); user["type"] = "user"
+        var synthetic = authRecord(); synthetic["message"] = ["role": "assistant", "model": "<synthetic>", "id": "msg_fake", "content": []]
+        for record in [other, child, user, synthetic, authRecord(failed: true, offset: -10)] {
+            XCTAssertEqual(authState(records: [record]), .unknown)
+        }
+        let partial = authData([authRecord(failed: true)]).dropLast()
+        XCTAssertEqual(ClaudeAuthenticationProbe.state(in: Data(partial),
+            sessionId: "owned-session", since: authStart), .unknown)
+    }
+
+    func testSuccessfulResponseClearsFailureAndLaterFailureStillReports() {
+        let error = authState(records: [authRecord(failed: true)])
+        let recovered = authState(records: [authRecord(failed: true), authRecord(offset: 2)])
+        XCTAssertEqual(recovered, .authenticated)
+        XCTAssertNil(recovered.applying(to: error.applying(to: nil)))
+        let again = authState(records: [authRecord(failed: true), authRecord(offset: 2), authRecord(failed: true, offset: 3)])
+        XCTAssertEqual(again.applying(to: nil)?.kind, .authRequired)
+    }
+
+    func testMissingTranscriptAndDuplicateLocationsStayUnknown() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let probe = ClaudeAuthenticationProbe(sessionId: "owned-session", projectsDirectory: root, since: authStart)
+        XCTAssertEqual(probe.read(), .unknown)
+        for name in ["first", "second"] {
+            let directory = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try authData([authRecord(failed: true)]).write(to: directory.appendingPathComponent("owned-session.jsonl"))
+            XCTAssertEqual(probe.read(), name == "first" ? .authenticationRequired : .unknown)
+        }
+    }
+
+    func testBoundedTailDropsPartialRecordButKeepsCompleteFailure() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("owned-session.jsonl")
+        var data = Data(repeating: 32, count: ClaudeAuthenticationProbe.maximumBytes + 20)
+        data.append(10)
+        data.append(authData([authRecord(failed: true)]))
+        try data.write(to: file)
+        let probe = ClaudeAuthenticationProbe(sessionId: "owned-session", projectsDirectory: root, since: authStart)
+        XCTAssertEqual(probe.read(), .authenticationRequired)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        XCTAssertEqual(probe.read(), .unknown, "An unreadable transcript must not mean logged out")
+    }
+
+    @MainActor
+    func testCoreConfirmsItsOwnSessionAndClearsRecoveredAuthenticationFailure() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let project = root.appendingPathComponent("config/projects/original-workdir")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("fixture.sh")
+        try "#!/bin/sh\necho 'cat: run /login; not logged in; invalid api key'\nexec sleep 30\n"
+            .write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        var config = SessionConfig(kind: .claudeCode)
+        config.newSessionId = "owned-session"
+        let core = AgentSessionCore(config: config, executable: executable.path, workdir: root.path,
+            env: ["HOME": root.path, "PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": root.appendingPathComponent("config").path])
+        defer { core.stop() }
+        func wait(_ predicate: () -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(6)
+            while !predicate(), Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertTrue(predicate(), "Health did not converge within the observation window")
+        }
+        try await wait { core.lastOutputAt != .distantPast }
+        XCTAssertEqual(core.authenticationState, .unknown)
+        XCTAssertNil(core.health, "PTY hints alone must not issue a login instruction")
+        let log = project.appendingPathComponent("owned-session.jsonl")
+        var records: [[String: Any]] = []
+        func append(failed: Bool) throws {
+            var record = authRecord(failed: failed)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            record["timestamp"] = formatter.string(from: Date())
+            records.append(record)
+            try authData(records).write(to: log, options: .atomic)
+        }
+        try append(failed: false)
+        try await wait { core.authenticationState == .authenticated }
+        XCTAssertNil(core.health)
+        try append(failed: true)
+        try await wait { core.health?.kind == .authRequired }
+        try append(failed: false)
+        try await wait { core.authenticationState == .authenticated && core.health == nil }
+        try append(failed: true)
+        try await wait { core.health?.kind == .authRequired }
+        try FileManager.default.removeItem(at: log)
+        try await wait { core.authenticationState == .unknown && core.health == nil }
+    }
+
     // MARK: - 基本命中
 
-    func testAuthPhraseFiresAuthRequiredOnce() {
+    func testAuthPhraseAloneRemainsUnknown() {
         let sc = SessionHealthScanner()
         let hits = feed(sc, "Error: Not logged in. Run claude auth login to authenticate.\n")
-        XCTAssertEqual(hits.map(\.kind), [.authRequired])
-        // 同一故障 TUI 反复重绘 → 不再重复报。
+        XCTAssertTrue(hits.isEmpty)
+        // 重绘未知文案不能升级为已确认。
         XCTAssertTrue(feed(sc, "Not logged in\n").isEmpty)
     }
 
@@ -29,7 +190,7 @@ final class SessionHealthTests: XCTestCase {
     func testRunLoginVariantsMatch() {
         for line in ["Please run /login to sign in.", "Run /login and retry."] {
             let sc = SessionHealthScanner()
-            XCTAssertEqual(feed(sc, line).map(\.kind), [.authRequired], line)
+            XCTAssertTrue(feed(sc, line).isEmpty, line)
         }
     }
 
@@ -39,15 +200,15 @@ final class SessionHealthTests: XCTestCase {
         let sc = SessionHealthScanner()
         // 短语中间插 SGR 颜色码：run \e[1m/login\e[0m
         let hits = feed(sc, "Please run \u{1b}[1m/login\u{1b}[0m to authenticate")
-        XCTAssertEqual(hits.map(\.kind), [.authRequired])
+        XCTAssertTrue(hits.isEmpty)
     }
 
     func testOscTitleSequenceIsStripped() {
         let sc = SessionHealthScanner()
         // OSC 设窗口标题（BEL 结尾）里出现的短语**不该**算命中——它被整段剥掉。
         XCTAssertTrue(feed(sc, "\u{1b}]0;run /login\u{07}normal output").isEmpty)
-        // 但正文里的照常命中。
-        XCTAssertEqual(feed(sc, "please run /login now").map(\.kind), [.authRequired])
+        // 正文也不是有来源的认证证据。
+        XCTAssertTrue(feed(sc, "please run /login now").isEmpty)
     }
 
     // MARK: - 跨 chunk 拼接
@@ -60,10 +221,10 @@ final class SessionHealthTests: XCTestCase {
 
     // MARK: - 双 Kind / 无命中
 
-    func testBothKindsInOneChunkFireBoth() {
+    func testUnconfirmedAuthTextDoesNotSuppressQuota() {
         let sc = SessionHealthScanner()
         let hits = feed(sc, "Invalid API key\nCredit balance is too low\n")
-        XCTAssertEqual(Set(hits.map(\.kind)), [.authRequired, .usageLimit])
+        XCTAssertEqual(Set(hits.map(\.kind)), [.usageLimit])
     }
 
     func testOrdinaryOutputNoFalsePositive() {
@@ -194,8 +355,7 @@ final class QuotaHealthRecoveryTests: XCTestCase {
     /// 字节匹配必须与老的 `tail.lowercased().contains(phrase)` 在**整张短语表**上
     /// 同判。这条同时覆盖大小写、弯引号多字节、跨 chunk 拼接三种情况。
     func testByteMatchingAgreesWithLowercasedContains() {
-        let allPhrases = SessionHealthScanner.authPhrases
-            + SessionHealthScanner.quotaPhrases
+        let allPhrases = SessionHealthScanner.quotaPhrases
             + RateLimitMenuScanner.menuPhrases
         let noise = "⎿  · Thinking… 中文 tokens 12345\n  ✻ Welcome  "
         var cases: [String] = [noise, "", "完全无关的一段输出"]
@@ -234,8 +394,7 @@ final class QuotaHealthRecoveryTests: XCTestCase {
         var filler = ""
         while filler.count < 16000 { filler += "⎿  · Thinking… 中文一行 tokens 12345\n" }
         tail.feed(Array(filler.utf8)[...])
-        let needles = SessionHealthScanner.authNeedles
-            + SessionHealthScanner.quotaNeedles + RateLimitMenuScanner.menuNeedles
+        let needles = SessionHealthScanner.quotaNeedles + RateLimitMenuScanner.menuNeedles
         let t0 = DispatchTime.now().uptimeNanoseconds
         for n in needles { _ = tail.containsLoweredASCII(n) }
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
