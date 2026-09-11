@@ -45,12 +45,7 @@ enum McpHelperMain {
                                    plans: CockpitPlanStore(directory: dir),
                                    agentKey: agent,
                                    buildWatch: buildWatch)
-            while let line = readLine(strippingNewline: true) {
-                if let out = server.handleLine(line) {
-                    print(out)
-                    fflush(stdout)
-                }
-            }
+            McpHelperServeLoop(handle: { server.handleLine($0) }).run()
         } else if permHook {
             // PreToolUse hook：gate 命中的工具 → raise 待审批 + 阻塞 long-poll allow/deny，
             // 吐 permissionDecision 拦截/放行。不命中 → 无输出（走 claude 正常流程）。
