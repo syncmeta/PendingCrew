@@ -167,6 +167,12 @@ final class CrewLocalMentionWaker {
     }
 
     /// 把「上次没钉上」那个窗口写到白板上（幂等：写成功才清记录）。
+    ///
+    /// **它在白板变更的处理路径里往同一块白板写 —— 为什么不会打转**：`append` 内部
+    /// 的 `changes.send` 会把本 crew 再扫一遍，但订阅那头是 `Task { @MainActor … }`，
+    /// 隔了一个回合；而清记录是这次调用**同步**做完的，所以那一遍扫到时
+    /// `pinFailedAt[crewId]` 已经是 nil，它自己就停住了。写失败的那条路更不会打转 ——
+    /// 没写成就没有 `changes.send`。
     private func emitMissedPinWindowNotice(_ crewId: String) {
         guard let text = CrewLocalMentionWakeLogic.missedPinWindowNotice(
             failedAt: pinFailedAt[crewId], recoveredAt: Date()) else { return }
