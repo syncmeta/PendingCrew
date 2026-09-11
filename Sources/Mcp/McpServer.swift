@@ -1244,9 +1244,25 @@ final class McpServer {
             // 空闲核账的收尾（驾驶舱计划 #71）。**判定全在 `CaptainTodoSweep.validate`**，
             // 这里只负责取真账、把拒绝原样说清楚、以及落一条确认。
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
-            let sweepOpen = Set(todos.list(crewId: crewId)
-                .filter { !$0.isDeleted && !$0.isSettled }
-                .map(\.number))
+            // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是
+            // 「一条未完成都没有」和「这本账这次读不出来」长得一模一样，
+            // 而这条路的收尾动作是**把提醒关掉**——照空表一算就会在账本坏掉时
+            // 安静地说没事，并且**永久熄掉那个唯一还在报信的通道**。
+            //
+            // `LocalTodoStore.LedgerRead` 的注释里点名的就是这条路
+            // （「病根 2026-09-08 由『机长空闲核账』那条路暴露」）——
+            // 三态读为它而建，却一直没接到它身上。2026-09-12 的 EPERM 断线里
+            // 才发现这一处还在用 `list`。
+            let sweepOpen: Set<Int>
+            switch todos.read(crewId: crewId) {
+            case let .rows(rows):
+                sweepOpen = Set(rows.filter { !$0.isDeleted && !$0.isSettled }.map(\.number))
+            case .unreadable:
+                return toolResult(id: id, text:
+                    "ERROR: 这本账这次读不出来，**这次核账没有记下**（白板上有一条如实的警示）。"
+                    + "\n**这不等于「一条未完成都没有」** —— 账上可能挂着一堆，只是这一刻看不见。"
+                    + "\n提醒会继续来，这是对的：在账读得回来之前，谁也不该替它宣布没事。")
+            }
             let sweepResult = CaptainTodoSweep.validate(
                 running: Self.intArray(args["running"]),
                 blockedOnHuman: Self.intArray(args["blocked_on_human"]),
