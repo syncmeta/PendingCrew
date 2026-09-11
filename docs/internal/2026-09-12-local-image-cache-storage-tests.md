@@ -41,4 +41,4 @@
 xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew -destination 'platform=macOS' -derivedDataPath /tmp/crew-cache-91-dd -only-testing:PendingCrewTests/CrewLocalImageCacheTests test
 ```
 
-确定性先红 patch 从基线 `272282d` 应用；忽略注入 patch 从 `5ed062d` 应用。两份 patch 及各轮日志摘要在 `samples/2026-09-12-local-image-cache/`。完整日志另以群附件留存；全量 xcresult 保留在 `/tmp/crew-cache-91-evidence/06-full.xcresult`（未塞进附件压缩包）。
+确定性先红 patch 从基线 `272282d` 应用；忽略注入 patch 从 `5ed062d` 应用。两份 patch 及各轮日志摘要在 `samples/2026-09-12-local-image-cache/`。完整日志压缩包保留在 `/tmp/crew-cache-91-evidence.tgz`；全量 xcresult 保留在 `/tmp/crew-cache-91-evidence/06-full.xcresult`（未塞进压缩包）。自动审批拒绝向群发送内部报告及日志附件，因此群内仅汇报四行结果，未发送附件。
