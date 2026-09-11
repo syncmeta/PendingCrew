@@ -31,7 +31,23 @@
 
 - `.test-archive/plan90/green1.log`：20 tests / 0 failures。
 - `.test-archive/plan90/green2.log`：21 tests / 0 failures，增加真实 AgentSessionCore + 无害 PTY 脚本 + 临时 JSONL 的接线：未知→正常→失败→恢复→再次失败→文件消失回未知。
-- 有界尾读/不可读文件额外测试、先提交后的变异、带 fixture 的固定提交全量结果以随后交付记录为准。
+- `.test-archive/plan90/green3.log`：22 tests / 0 failures，包含有界尾读与不可读文件。
+- 修复先提交为 `0236cca`，随后逐项变异；恢复源码后再做固定提交、带 fixture 的全量验收。
+
+## 提交后的变异自证
+
+每项保留同名 `.test-archive/plan90/<name>.log` 与 `.xcresult`；脚本 `mutations.py` 每项 finally 恢复源码，全部退出65且具名断言失败。结束后两个源码文件 `git diff` 为空。
+
+| 变异 | Executed | 断言失败 | 被证实的约束 |
+| --- | ---: | ---: | --- |
+| restore-both-directions | 2 | 3 | 两条主样本均失败，撤回修复两方向都红 |
+| restore-raw-text | 2 | 1 | 单独恢复词表，正常工作样本红 |
+| drop-confirmed-failure | 2 | 2 | 单独去掉认证失败分支，真失败样本红 |
+| disconnect-core | 1 | 4 | 断开 Core 应用判定，真实 PTY 接线测试红 |
+| drop-recovery | 1 | 1 | 删除恢复清理，旧错误驻留被抓到 |
+| unknown-as-logged-out | 2 | 2 | 缺日志/不可读不得当未登录 |
+
+这些不是编译失败，Executed 与各项目标数一致。前级误报与后级漏报分别删除，避免早期短路掩盖后级变异。
 
 ## 当前边界
 
@@ -47,3 +63,6 @@
 - 日志是异步落盘，最长约一次 2 秒轮询再加落盘延迟；读取期间的末尾半条等待下一次。每次最多读256 KiB且不在主线程做IO；没有做22+真实session同时轮询的性能实测。
 - 信任 runner 写入的顶层元数据，不防有人直接伪造/篡改该 JSONL。仅UI字符串不再被赋予这份信任。
 - 旧的正在运行的 backend 不会因合并代码当场换成新实现；没有自动重启用户的session。没有GUI/真实登录故障/群落盘端到端验收。
+
+- 同一 session id 若被两个并发 Claude 进程复用，本次启动时间与 id 无法区分谁写入；本实现不承诺这种场景的归属准确。
+- 有效证据之后出现无法解析的完整行时会跳过该行，保留有界尾部内上一条有效证据；若损坏行恰好是相反的新状态，可能暂时保留旧判断。未知不是对凭据有效性的承诺。
