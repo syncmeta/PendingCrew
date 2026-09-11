@@ -81,6 +81,7 @@ final class LocalCrewStore {
         // guard 直接 return false，`mutatingCrews` 因此跳过落盘）。尤其不覆盖
         // title 和 sessionMembers —— 那两样是它真正在用的东西。
         upsertBuiltinChiefCrew()
+        backfillChiefWorkingDirectoryIfMissing()
     }
 
     // MARK: - Public API
@@ -722,6 +723,32 @@ final class LocalCrewStore {
             return true
         }
         return created
+    }
+
+    /// 总机组**没有工作目录时**补一个（人类 Todo #141 / #145 的前提）。
+    ///
+    /// 为什么是「补」而不是「造它的时候一起填」：**那条记录在很多机器上已经存在了**
+    /// （0.1.33/0.1.34 造的，`workingDirectory` 是 nil），而 `upsertBuiltinChiefCrew`
+    /// 见到已存在就整个跳过。只在建的那一刻填，等于只修好新机器，老机器永远是 nil。
+    ///
+    /// **已经有目录就一个字节都不动** —— 人可能自己 `change_workdir` 指到别处了。
+    /// 算不出候选（全新机器、一个 crew 都没有）也不动：宁可保持「还没设」，
+    /// 也不编一个不存在的路径（见 `ChiefCrewWorkingDirectory` 的文档注释）。
+    private func backfillChiefWorkingDirectoryIfMissing() {
+        mutatingCrews {
+            guard var chief = crews[LocalCrew.chiefCrewId] else { return false }
+            guard (chief.workingDirectory ?? "").isEmpty else { return false }
+            let candidates = crews.values
+                .filter { $0.id != LocalCrew.chiefCrewId }
+                .map(\.workingDirectory)
+            guard let resolved = ChiefCrewWorkingDirectory.resolve(
+                existing: candidates,
+                exists: { FileManager.default.fileExists(atPath: $0) })
+            else { return false }
+            chief.workingDirectory = resolved
+            crews[LocalCrew.chiefCrewId] = chief
+            return true
+        }
     }
 
     /// 四处拒绝共用的那一道判据。**只有一份** —— 四处各写一遍，迟早有一处漏。

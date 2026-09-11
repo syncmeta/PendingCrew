@@ -287,6 +287,10 @@ targets:
       # 「汇报该送到谁」的判据（Todo #141/#137）。总机组不作为存下来的边存在，
       # 顶层机组向上汇报落到它这件事是派生的 —— 三个分支各有测试。纯 Foundation。
       - path: Sources/Support/CrewReportingParent.swift
+      # 总机组该拿哪个工作目录（Todo #141/#145 的前提）。没有 cwd 那四道 guard
+      # 会把它挡死、机长永远起不来。取名册里现有 crew 工作目录的众数，算不出就回
+      # nil 不编。纯 Foundation。
+      - path: Sources/Support/ChiefCrewWorkingDirectory.swift
       # 「列表刷新后选中该不该清掉」的判据（Todo #130/#137）。总机组按设计永远
       # 不在 crew 列表里，旧规则会把它从选中位上弹下来 —— 拆出来是为了让
       # 「放行它」和「真的没了就清掉」两半各有一条压着的测试。纯 Foundation。
