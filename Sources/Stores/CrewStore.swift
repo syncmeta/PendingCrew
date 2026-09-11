@@ -983,7 +983,11 @@ final class CrewStore: ObservableObject {
         var targets: [String] = []
         switch cmd.direction {
         case "to_parent":
-            targets = store.parentIds(of: cmd.crewId)
+            // **汇报走派生的父**（人类 Todo #141 / #137）：存下来的父为空时落到
+            // 总机组那一层。这里**刻意不用 `parentIds`** —— 那是「存下来的边」，
+            // 树/深度/成环/adopt 都靠它，派生进去会当场把组织树改掉。
+            // 判据在 `CrewReportingParent.resolve`。
+            targets = store.reportingParentIds(of: cmd.crewId)
             if targets.isEmpty {
                 postSystemNotice(crewId: cmd.crewId, text: "向上汇报未送出：本 crew 已是根，没有父 crew。")
                 return

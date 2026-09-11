@@ -397,8 +397,29 @@ final class LocalCrewStore {
     }
 
     /// `crewId` 的父 crew id 列表（直系,不递归）。
+    ///
+    /// **这是「存下来的边」的唯一出口，它永远不含内建那一层。** 树、深度、成环、
+    /// adopt/release、机长交接授权全走它 —— 别在这里派生任何东西：
+    /// 一旦派生，没有任何 crew 还是根、深度全体 +1、每个顶层 crew 都变成
+    /// 「已有父」于是 adopt 语义当场改变。要「汇报该送到谁」用
+    /// `reportingParentIds(of:)`，那是另一件事。
     func parentIds(of crewId: String) -> [String] {
         crews[crewId]?.parentCrewIds ?? []
+    }
+
+    /// **汇报该送到谁**（人类 Todo #141 / #137）—— 跟 `parentIds` 刻意不同名。
+    ///
+    /// 存下来的父非空 → 原样返回；为空 → 派生出总机组那一层。
+    /// 判据在 `CrewReportingParent.resolve`（纯函数，三个分支各有测试）。
+    ///
+    /// **只有汇报那条路用它。** 组织树、深度、成环、adopt/release、机长交接授权
+    /// 一律继续走 `parentIds` —— 总机组永远不是一条存下来的边。
+    func reportingParentIds(of crewId: String) -> [String] {
+        guard crews[crewId] != nil else { return [] }
+        return CrewReportingParent.resolve(
+            stored: parentIds(of: crewId),
+            selfId: crewId,
+            builtinLayerExists: crews[LocalCrew.chiefCrewId] != nil)
     }
 
     /// `crewId` 挂在哪些**根 crew**（组织树最顶层的祖先）之下 —— 名字后面那行黄字
