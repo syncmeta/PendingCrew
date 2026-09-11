@@ -1,0 +1,92 @@
+diff --git a/Sources/Mac/Support/CrewLocalImageCache.swift b/Sources/Mac/Support/CrewLocalImageCache.swift
+index d55e7c3..e3e15fd 100644
+--- a/Sources/Mac/Support/CrewLocalImageCache.swift
++++ b/Sources/Mac/Support/CrewLocalImageCache.swift
+@@ -3,6 +3,28 @@ import AppKit
+ import Foundation
+ import ImageIO
+ 
++/// Implementations must synchronize access; retaining an entry is never guaranteed.
++protocol CrewLocalImageStorage: AnyObject, Sendable {
++    func object(forKey key: NSString) -> NSImage?
++    func setObject(_ image: NSImage, forKey key: NSString, cost: Int)
++    func removeAllObjects()
++}
++
++/// Production storage retains NSCache's cost limit, thread safety and eviction policy.
++private final class CrewLocalNSImageStorage: CrewLocalImageStorage, @unchecked Sendable {
++    private let cache = NSCache<NSString, NSImage>()
++
++    init(costLimitBytes: Int) {
++        cache.totalCostLimit = costLimitBytes
++    }
++
++    func object(forKey key: NSString) -> NSImage? { cache.object(forKey: key) }
++    func setObject(_ image: NSImage, forKey key: NSString, cost: Int) {
++        cache.setObject(image, forKey: key, cost: cost)
++    }
++    func removeAllObjects() { cache.removeAllObjects() }
++}
++
+ /// 本地附件图（`file://`）的解码缓存（#443 病根 2）。
+ ///
+ /// 此前 `CrewRemoteImage` 的 `file://` 分支直接 `NSImage(contentsOf:)`：**同步
+@@ -50,10 +72,11 @@ final class CrewLocalImageCache: @unchecked Sendable {
+     }
+ 
+     /// `NSCache` 自带线程安全 + 内存压力下自动清空，按像素字节数计成本。
+-    private let cache = NSCache<NSString, NSImage>()
++    private let cache: any CrewLocalImageStorage
+ 
+-    init(costLimitBytes: Int = 64 * 1024 * 1024) {
+-        cache.totalCostLimit = costLimitBytes
++    init(costLimitBytes: Int = 64 * 1024 * 1024,
++         storage: (any CrewLocalImageStorage)? = nil) {
++        cache = storage ?? CrewLocalNSImageStorage(costLimitBytes: costLimitBytes)
+     }
+ 
+     /// 同步命中查询。命中就直接换上图，**不必先把 image 置 nil** —— 置 nil 会
+diff --git a/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift b/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift
+index b915f1f..e3b59bc 100644
+--- a/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift
++++ b/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift
+@@ -23,7 +23,7 @@ final class CrewLocalImageCacheTests: XCTestCase {
+     }
+ 
+     func testStoreThenPeekHits() throws {
+-        let cache = CrewLocalImageCache()
++        let cache = CrewLocalImageCache(storage: ImmediateEvictionStorage())
+         let url = try writePNG(width: 200, height: 200)
+         let key = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
+         XCTAssertNil(cache.peek(key), "还没存过")
+@@ -35,7 +35,7 @@ final class CrewLocalImageCacheTests: XCTestCase {
+ 
+     /// 文件被覆盖 → mtime/size 变 → key 变 → 旧图自然失效，不用手工 invalidate。
+     func testOverwritingFileInvalidatesKey() throws {
+-        let cache = CrewLocalImageCache()
++        let cache = CrewLocalImageCache(storage: ImmediateEvictionStorage())
+         let url = try writePNG(width: 200, height: 200)
+         let oldKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
+         cache.store(oldKey, try XCTUnwrap(CrewLocalImageCache.decode(url: url, maxPixel: 100)))
+@@ -49,7 +49,7 @@ final class CrewLocalImageCacheTests: XCTestCase {
+ 
+     /// 缩略图和「看大图」的原图是两份，不能互相顶替。
+     func testDifferentMaxPixelIsDifferentEntry() throws {
+-        let cache = CrewLocalImageCache()
++        let cache = CrewLocalImageCache(storage: ImmediateEvictionStorage())
+         let url = try writePNG(width: 400, height: 400)
+         let thumbKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: 100))
+         let fullKey = try XCTUnwrap(CrewLocalImageCache.key(for: url, maxPixel: nil))
+@@ -67,6 +67,12 @@ final class CrewLocalImageCacheTests: XCTestCase {
+         XCTAssertNil(CrewLocalImageCache.decode(url: url, maxPixel: 100))
+     }
+ 
++    private final class ImmediateEvictionStorage: CrewLocalImageStorage {
++        func object(forKey key: NSString) -> NSImage? { nil }
++        func setObject(_ image: NSImage, forKey key: NSString, cost: Int) {}
++        func removeAllObjects() {}
++    }
++
+     // MARK: - fixtures
+ 
+     @discardableResult

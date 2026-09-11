@@ -3,6 +3,28 @@ import AppKit
 import Foundation
 import ImageIO
 
+/// Implementations must synchronize access; retaining an entry is never guaranteed.
+protocol CrewLocalImageStorage: AnyObject, Sendable {
+    func object(forKey key: NSString) -> NSImage?
+    func setObject(_ image: NSImage, forKey key: NSString, cost: Int)
+    func removeAllObjects()
+}
+
+/// Production storage retains NSCache's cost limit, thread safety and eviction policy.
+private final class CrewLocalNSImageStorage: CrewLocalImageStorage, @unchecked Sendable {
+    private let cache = NSCache<NSString, NSImage>()
+
+    init(costLimitBytes: Int) {
+        cache.totalCostLimit = costLimitBytes
+    }
+
+    func object(forKey key: NSString) -> NSImage? { cache.object(forKey: key) }
+    func setObject(_ image: NSImage, forKey key: NSString, cost: Int) {
+        cache.setObject(image, forKey: key, cost: cost)
+    }
+    func removeAllObjects() { cache.removeAllObjects() }
+}
+
 /// 本地附件图（`file://`）的解码缓存（#443 病根 2）。
 ///
 /// 此前 `CrewRemoteImage` 的 `file://` 分支直接 `NSImage(contentsOf:)`：**同步
@@ -50,10 +72,11 @@ final class CrewLocalImageCache: @unchecked Sendable {
     }
 
     /// `NSCache` 自带线程安全 + 内存压力下自动清空，按像素字节数计成本。
-    private let cache = NSCache<NSString, NSImage>()
+    private let cache: any CrewLocalImageStorage
 
-    init(costLimitBytes: Int = 64 * 1024 * 1024) {
-        cache.totalCostLimit = costLimitBytes
+    init(costLimitBytes: Int = 64 * 1024 * 1024,
+         storage: (any CrewLocalImageStorage)? = nil) {
+        cache = storage ?? CrewLocalNSImageStorage(costLimitBytes: costLimitBytes)
     }
 
     /// 同步命中查询。命中就直接换上图，**不必先把 image 置 nil** —— 置 nil 会
