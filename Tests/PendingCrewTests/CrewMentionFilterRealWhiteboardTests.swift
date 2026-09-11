@@ -176,8 +176,14 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
             chat.contains("LocalWhiteboardStore.localUserId"),
             "CrewChatView.localUserId 不再回落到本机哨兵常量 —— 未登录（本机常态）下它会是 nil")
         // 第一跳：视图 → 判定的输入。
+        //
+        // **必须切到 `timelineEntries` 那一段里去看，不能整文件 `contains`** ——
+        // `localUserId: localUserId` 在这个文件里另有四处（气泡归属、布局令牌……）。
+        // 第一版就是整文件找，于是把「时间线那处改成 nil」这刀**读成了绿**：变异自证
+        // 那一趟抓到的，不是想出来的。
+        let timeline = try Self.propertyBody("timelineEntries", in: chat)
         XCTAssertTrue(
-            chat.contains("localUserId: localUserId"),
+            timeline.contains("localUserId: localUserId"),
             "CrewChatView 没把 localUserId 交给时间线判定，自己发的消息会被筛没")
         // 第二跳：判定 → 筛选。这个文件能编进 bundle，但「它有没有被真的接上」
         // 只有源码文本看得见，所以仍然放在这条用例里一起钉。
@@ -185,6 +191,17 @@ final class CrewMentionFilterRealWhiteboardTests: XCTestCase {
         XCTAssertTrue(
             filter.contains("includingFrom: inputs.localUserId"),
             "时间线判定没把 localUserId 喂进筛选，自己发的消息会被筛没")
+    }
+
+    /// 切出某个计算属性的正文（从声明行到它那个 4 空格缩进的收尾花括号）。
+    /// 整文件 `contains` 会被同名参数在别处的出现糊住 —— 见上面那条用例的注释。
+    private static func propertyBody(_ name: String, in source: String) throws -> String {
+        guard let decl = source.range(of: "private var \(name)") else {
+            throw XCTSkip("找不到 \(name) 这个属性 —— 它被改名或删了，那是另一个问题")
+        }
+        let tail = source[decl.upperBound...]
+        guard let end = tail.range(of: "\n    }") else { return String(tail) }
+        return String(tail[..<end.lowerBound])
     }
 
     private static func source(_ fileName: String) throws -> String {

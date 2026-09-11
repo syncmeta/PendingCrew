@@ -200,7 +200,19 @@ final class ViewWiringTests: XCTestCase {
         // 人类 Todo #140 ③ 之后筛选判定住在 `CrewTimelineFilter`（那个计算属性一帧被读
         // 八次、每次重筛 2618 条），所以「走没走筛选」要在那个文件里钉。
         let filter = try Self.text(of: "CrewTimelineFilter.swift")
-        XCTAssertTrue(filter.contains("CrewMentionFilter.onlyHumanMentions"),
+        // **切到 `resolve` 的函数体里去看，而且要带括号。** 整文件找
+        // `CrewMentionFilter.onlyHumanMentions` 会撞上同一文件注释里那句「口径见
+        // `CrewMentionFilter.onlyHumanMentions`」—— 第一版就是这样，于是「把筛选整条
+        // 拿掉」那刀被读成了绿。变异自证那一趟抓到的：**为了讲清楚而写下的注释，
+        // 长成了被检测的形状。**
+        let resolveBody: String = {
+            guard let decl = filter.range(of: "static func resolve(") else { return "" }
+            let tail = filter[decl.upperBound...]
+            guard let end = tail.range(of: "\n    }") else { return String(tail) }
+            return String(tail[..<end.lowerBound])
+        }()
+        XCTAssertFalse(resolveBody.isEmpty, "CrewTimelineFilter.resolve 不见了")
+        XCTAssertTrue(resolveBody.contains("CrewMentionFilter.onlyHumanMentions("),
                       "群聊时间线判定没走筛选")
         // 仍然必须筛在 timelineEntries 这个源头 —— 渲染窗口那一整套（renderLimit /
         // hasMore /「上面还有 N 条」/ anchorOnExpand）全读它，筛在下游会出现
