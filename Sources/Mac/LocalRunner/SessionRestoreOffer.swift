@@ -75,6 +75,22 @@ enum SessionRestoreOffer {
                         message: message(reason: reason, count: candidates.count))
     }
 
+    /// **我们自己刚把后端换掉**之后的那一次。
+    ///
+    /// 为什么不能走 `decide`：那条按「app 的退出印记」判，而**换后端这件事跟 app
+    /// 有没有更新无关** —— 人手起过一个旧后台、或者只有后端落后时，app 这边是
+    /// 「正常退出 + 同版」，`decide` 一个字都不会问。**而我们刚刚亲手打断了他的
+    /// session。** 打断了却不问，是这条链上最难查的那种沉默。
+    ///
+    /// 「没东西可恢复就不问」这条仍然管着。
+    static func afterBackendReplaced(oldBuild: String, newBuild: String,
+                                     candidates: [Candidate]) -> Decision {
+        guard !candidates.isEmpty else { return Decision(reason: nil, candidates: [], message: "") }
+        let reason = Reason.justUpdated(from: oldBuild, to: newBuild)
+        return Decision(reason: reason, candidates: candidates,
+                        message: message(reason: reason, count: candidates.count))
+    }
+
     /// 弹窗正文。**说清三件事**：发生了什么、有几个、点「不恢复」会怎样。
     static func message(reason: Reason, count: Int) -> String {
         let what: String

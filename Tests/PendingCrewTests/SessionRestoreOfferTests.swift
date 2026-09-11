@@ -97,6 +97,28 @@ final class SessionRestoreOfferTests: XCTestCase {
         XCTAssertTrue(d.message.contains("0.1.34(1)"), d.message)
     }
 
+    // MARK: - 我们自己换掉后端之后那一次
+
+    /// **打断了就必须问。** 只有后端落后（app 没更新）时，`decide` 会判成
+    /// 「正常退出 + 同版」→ 不问；可我们刚刚亲手把他的 session 打断了。
+    /// 打断了却不问，是这条链上最难查的那种沉默。
+    func testAsksAfterWeOurselvesReplacedTheBackend() {
+        let same = decide(.clean)          // 这一档本来不问
+        XCTAssertFalse(same.shouldAsk)
+
+        let d = SessionRestoreOffer.afterBackendReplaced(
+            oldBuild: "0.1.31(4)", newBuild: "0.1.34(1)", candidates: two)
+        XCTAssertTrue(d.shouldAsk, "我们打断了他的 session 却不问")
+        XCTAssertEqual(d.reason, .justUpdated(from: "0.1.31(4)", to: "0.1.34(1)"))
+        XCTAssertEqual(d.candidates, two)
+    }
+
+    /// 但「没东西可恢复就不问」这条仍然管着。
+    func testBackendReplacedWithNothingRunningStillDoesNotAsk() {
+        XCTAssertFalse(SessionRestoreOffer.afterBackendReplaced(
+            oldBuild: "a", newBuild: "b", candidates: []).shouldAsk)
+    }
+
     func testCandidatesComeBackForTheCaller() {
         XCTAssertEqual(decide(.unexpected, candidates: two).candidates, two)
     }

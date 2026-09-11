@@ -201,11 +201,25 @@ final class SessionHost: ObservableObject {
         // 上一轮在跑的那些（daemon 的 registry 本来就在记它们，收尸逻辑遍历的就是这份）。
         // **读不出来就是空** —— 这里读不到只会让我们少问一次，不会让我们乱恢复。
         let candidates = Self.restoreCandidates()
-        restoreOffer = SessionRestoreOffer.decide(
-            exit: lastExitOfPreviousRun,
-            previousBuild: previousRunBuild,
-            currentBuild: SessionDaemonHost.currentBuild,
-            candidates: candidates)
+
+        // 前端更新了，本机后端跟着换代（人类 9-11 点名的那条）。
+        // **必须在算恢复弹窗之前跑** —— 它可能亲手打断这些 session，
+        // 而打断了就得问。判定在 `BackendUpdatePlan`（有测试）。
+        let update = BackendUpdateCoordinator.runIfNeeded(
+            log: { NSLog("[SessionHost] %@", $0) })
+
+        if case let .replace(oldBuild, newBuild, _) = update {
+            // 是我们自己把它打断的 —— 这一档 `decide` 判不出来（app 可能根本没更新），
+            // 所以单独走一条。
+            restoreOffer = SessionRestoreOffer.afterBackendReplaced(
+                oldBuild: oldBuild, newBuild: newBuild, candidates: candidates)
+        } else {
+            restoreOffer = SessionRestoreOffer.decide(
+                exit: lastExitOfPreviousRun,
+                previousBuild: previousRunBuild,
+                currentBuild: SessionDaemonHost.currentBuild,
+                candidates: candidates)
+        }
         if restoreOffer.shouldAsk {
             NSLog("[SessionHost] 上一轮：%@，有 %d 个 session 可以接回，等人决定",
                   lastExitOfPreviousRun.text, candidates.count)
