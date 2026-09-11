@@ -338,6 +338,10 @@ targets:
       # 自包含 Foundation（只依赖 LocalWhiteboardStore，已在 bundle）。
       - path: Sources/Mcp/SessionTurnTrace.swift
       - path: Sources/Mcp/McpTurnHook.swift
+      # 「本 session 的工具表是不是已经旧了」（装了新版而 helper 进程还是旧的）。
+      # 纯 Foundation + 一层 stat/plist 取证 —— 单测拿真的 app bundle 骨架走同一条
+      # 生产代码路径，所以它必须是独立类型而不是 McpServer 里的一段。
+      - path: Sources/Mcp/HelperBuildWatch.swift
       - path: Resources/Prompts
       # CrewChatAdapter + isMine 单一真值源 + GroupBubbleSender SHIM（A6）
       # 只列纯 Foundation 逻辑文件，**不**整目录纳入 —— Chat/Adapter 下还有
