@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import AppKit
 import Combine
 
 /// **长期职责的唯一所有者**（spec `docs/internal/2026-08-19-backend-split-design.md` §6）。
@@ -144,12 +145,41 @@ final class SessionHost: ObservableObject {
     /// 第一行的断言是 spec §6.2 的闸门 1：viewer 进程里误起一套定时器 = 当场崩，
     /// 不是悄悄跑起来变成双头。双头的症状（账被两个进程交替覆盖、唤醒发两遍）
     /// 事后极难定位，所以宁可在这里响。
+    /// 上一轮 GUI 是怎么结束的（恢复弹窗读它）。`start` 之后才有值。
+    private(set) var lastExitOfPreviousRun: ProcessExitClassification = .noPriorRun
+    /// 上一轮 GUI 是哪个版本 —— 「刚更新过」那一档比它，不需要第二套机制。
+    private(set) var previousRunBuild: String?
+    private var exitMarker: ProcessLifecycleMarker?
+    private var terminationObserver: NSObjectProtocol?
+
     func start(model: AppModel, crewStore: CrewStore) {
         precondition(
             ProcessRole.effective == .orchestrator,
             "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
         guard !started else { return }
         started = true
+
+        // 退出印记（恢复弹窗的承重件）。**GUI 也会崩** —— 2026-09-09 真崩过一次
+        // （SIGABRT），只盯 daemon 的话人类撞到过的那个场景反而不弹窗。
+        // **先读上一轮再写这一轮**，顺序反了就把结论盖掉了。
+        let marker = ProcessLifecycleMarker(
+            role: .app, build: SessionDaemonHost.currentBuild,
+            onWriteFailure: { NSLog("[SessionHost] %@", $0) })
+        lastExitOfPreviousRun = marker.classifyPreviousRun()
+        previousRunBuild = marker.previousBuild
+        marker.markRunning()
+        exitMarker = marker
+        // ⌘Q / 正常退出：收尾一开始记 draining，做完记 clean。崩溃走不到这里，
+        // 盘上留的就还是 running —— 那正是我们要认出来的那一档。
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak runner] _ in
+            MainActor.assumeIsolated {
+                marker.markDraining()
+                for run in runner?.runs ?? [] where run.status == .running { run.stop() }
+                marker.markClean()
+            }
+        }
 
         // app 重启后重挂持久化的定时唤醒（schedule_wakeup 不因重启失约）。
         runner.rearmWakeups()

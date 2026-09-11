@@ -44,6 +44,11 @@ final class DaemonGracefulShutdown {
     }
 
     private let budget: TimeInterval
+    /// 收尾**第一件事**（在停 session 之前）。退出印记就挂在这里 —— 放到后面的话，
+    /// 收尾卡死被强杀时盘上留的还是「在跑」，那一次就跟真崩溃分不开了。
+    private let beforeDraining: () -> Void
+    /// 真的要 `exit` 之前的最后一件事。
+    private let beforeExit: () -> Void
     private let stopSessions: () -> Void
     private let releaseHost: () -> Void
     private let schedule: Schedule
@@ -52,11 +57,15 @@ final class DaemonGracefulShutdown {
     private var begun = false
 
     init(budget: TimeInterval = DaemonShutdownPolicy.drainBudget,
+         beforeDraining: @escaping () -> Void = {},
+         beforeExit: @escaping () -> Void = {},
          stopSessions: @escaping () -> Void,
          releaseHost: @escaping () -> Void,
          schedule: @escaping Schedule = DaemonGracefulShutdown.offMainQueue,
          exitProcess: @escaping (Int32) -> Void = { exit($0) }) {
         self.budget = budget
+        self.beforeDraining = beforeDraining
+        self.beforeExit = beforeExit
         self.stopSessions = stopSessions
         self.releaseHost = releaseHost
         self.schedule = schedule
@@ -74,9 +83,11 @@ final class DaemonGracefulShutdown {
         begun = true
         lock.unlock()
 
+        beforeDraining()
         stopSessions()
         releaseHost()
-        schedule(budget) { [exitProcess] in
+        schedule(budget) { [exitProcess, beforeExit] in
+            beforeExit()
             exitProcess(DaemonShutdownPolicy.gracefulExitCode)
         }
     }

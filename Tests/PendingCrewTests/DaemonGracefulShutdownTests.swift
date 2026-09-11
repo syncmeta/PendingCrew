@@ -31,6 +31,26 @@ final class DaemonGracefulShutdownTests: XCTestCase {
         XCTAssertEqual(code, DaemonShutdownPolicy.gracefulExitCode)
     }
 
+    /// 退出印记那两笔必须落在**正确的两端**：`draining` 在停 session **之前**
+    /// （放后面的话，收尾卡死被强杀时盘上还是「在跑」，那次就跟真崩溃分不开了），
+    /// `clean` 在真的 `exit` **之前**。
+    func testExitMarkerHooksBracketTheDrain() {
+        var trace: [String] = []
+        let shutdown = DaemonGracefulShutdown(
+            budget: 0.01,
+            beforeDraining: { trace.append("draining") },
+            beforeExit: { trace.append("clean") },
+            stopSessions: { trace.append("sessions") },
+            releaseHost: { trace.append("host") },
+            schedule: { _, work in work() },
+            exitProcess: { _ in trace.append("exit") })
+
+        shutdown.begin()
+
+        XCTAssertEqual(trace, ["draining", "sessions", "host", "clean", "exit"],
+                       "印记落错了位置 —— 它是「要不要问人恢复」的唯一依据")
+    }
+
     /// 连按两次 ⌃C、或安装脚本补发一次 SIGTERM：不该把 session 再停一遍，
     /// 也不该排第二个退出计时器。
     func testASecondSignalDoesNotDrainTwice() {

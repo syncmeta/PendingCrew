@@ -48,6 +48,16 @@ enum SessionDaemonMain {
             exit(DaemonExitCode.forDaemonStart(start))
         }
 
+        // 退出印记（恢复弹窗的承重件）。**必须先读上一轮再写这一轮** —— 顺序反了
+        // 就把上一轮的结论盖掉了，而那正是「要不要问人恢复」的唯一依据。
+        let marker = ProcessLifecycleMarker(
+            role: .daemon, build: SessionDaemonHost.currentBuild,
+            onWriteFailure: { [log = host.log] in log.write($0) })
+        let previous = marker.classifyPreviousRun()
+        host.log.write("上一轮：\(previous.text)（上一轮版本 \(marker.previousBuild ?? "未知")）")
+        marker.markRunning()
+        Self.marker = marker
+
         // 编排本体。**与 GUI 那条路同一份代码**，只是发布口换成了 socket 服务端。
         let model = AppModel()
         let crewStore = CrewStore(appModel: model)
@@ -236,6 +246,8 @@ enum SessionDaemonMain {
         host: SessionDaemonHost, runner: CrewSessionRunner
     ) {
         let shutdown = DaemonGracefulShutdown(
+            beforeDraining: { Self.marker?.markDraining() },
+            beforeExit: { Self.marker?.markClean() },
             stopSessions: {
                 MainActor.assumeIsolated {
                     host.log.write("收尾：停掉 \(runner.runs.count) 个 session")
@@ -260,5 +272,8 @@ enum SessionDaemonMain {
 
     /// DispatchSource 必须被持有，否则装完就被回收、信号处理静默失效。
     @MainActor private static var signalSources: [DispatchSourceSignal] = []
+
+    /// 本进程的退出印记记录器。收尾回调要够得到它，所以挂在这里。
+    @MainActor private static var marker: ProcessLifecycleMarker?
 }
 #endif

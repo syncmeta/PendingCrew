@@ -201,6 +201,7 @@
 		4AB17DC5C8411A562B83A090 /* LocalSessionWorldModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1C7822F4F8AFCC1F3AC147 /* LocalSessionWorldModel.swift */; };
 		4AC6269E4A657341E5773089 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 476A276CBDA4640936A8B817 /* Assets.xcassets */; };
 		4AF0F34346789C815463BC1B /* SessionForegroundClaim.swift in Sources */ = {isa = PBXBuildFile; fileRef = 905409EB0256AC7BFA9B9018 /* SessionForegroundClaim.swift */; };
+		4B680C50B8AED7CFCFA7A983 /* ProcessExitMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2CA71E0A30AB3C311C980A0 /* ProcessExitMarkerTests.swift */; };
 		4B6DAC1272E367B1737EBEBC /* QuotaRingLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC47F84B3A1CB404ADDA14E9 /* QuotaRingLayout.swift */; };
 		4B8DFC60B2830824071C9D39 /* CrewChatRefreshGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA08BEA4EC77F9304EC252 /* CrewChatRefreshGate.swift */; };
 		4BBD947643CE1EEDFA953B4A /* CrewWhiteboardVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 373E64A85EDA4D661F1D2AE0 /* CrewWhiteboardVisibilityTests.swift */; };
@@ -234,6 +235,7 @@
 		53F828251130467F096C6895 /* SessionStopCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3312113A3A694A5601C2C99F /* SessionStopCoordinatorTests.swift */; };
 		5427F479233E9D113A88E23C /* HookEmitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B4FFD76B026D94E642C541 /* HookEmitter.swift */; };
 		549797245BB71B36F293AE99 /* RemoteSessionBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B5975B6F5C7C8282012965 /* RemoteSessionBackend.swift */; };
+		55EAB00DCC80597500B9B66C /* ProcessExitMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4527AE71810D47CD695923A0 /* ProcessExitMarker.swift */; };
 		56522395B86BC4A0F33D1BE5 /* CaptainHandoffSiteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4DF511C961AE26A7B10024 /* CaptainHandoffSiteTests.swift */; };
 		5694B9D50550A11C5E624EC6 /* DaemonSpawnJudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B33F3FED7FD1CFD8F28852B /* DaemonSpawnJudgeTests.swift */; };
 		56FE471BBF27C029BCD908F2 /* CrewBubbleTextSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75FA08DEBE2224571234836 /* CrewBubbleTextSelection.swift */; };
@@ -595,6 +597,7 @@
 		CE61B3F6ABA108827E5CB3BB /* TOMLKit in Frameworks */ = {isa = PBXBuildFile; productRef = C4653E940A98A5E53AE76AD5 /* TOMLKit */; };
 		CF27C4A3380DE3F9638A7A51 /* LocalDataReset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250E9F715D6468C774F3F176 /* LocalDataReset.swift */; };
 		CF48B24D285987856F41A7AF /* BreathingDotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FDCC99A15C5B160DB0D82DD /* BreathingDotView.swift */; };
+		CF9C1D6DC0DC1C1CC6C9E2BB /* ProcessExitMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4527AE71810D47CD695923A0 /* ProcessExitMarker.swift */; };
 		CFA1E0E3DC9398F4D3E89C0B /* TodoLedgerIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F004EFC6500C77213D744D1E /* TodoLedgerIsolationTests.swift */; };
 		CFD6A156B296A4BEB00CF2F7 /* CrewChatRefreshGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85139BC93B415272A99FA6CC /* CrewChatRefreshGateTests.swift */; };
 		CFEB22801B2698ABA102FDC1 /* CrewMentionFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20B7C99BE7318C740C4220E /* CrewMentionFilter.swift */; };
@@ -899,6 +902,7 @@
 		42F31D2E3BD084EEFE454085 /* CrewListenLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewListenLogicTests.swift; sourceTree = "<group>"; };
 		437EC206ED3E345A7C0E304B /* CrewChildCreationTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChildCreationTargetTests.swift; sourceTree = "<group>"; };
 		43B4829144C42B8EC8550EBD /* ProcessRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRole.swift; sourceTree = "<group>"; };
+		4527AE71810D47CD695923A0 /* ProcessExitMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessExitMarker.swift; sourceTree = "<group>"; };
 		452A5534A75E96E57FE85C37 /* SessionOutputEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOutputEvidenceTests.swift; sourceTree = "<group>"; };
 		45ABD06213BDA13CBF1C79EC /* BlinkingCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlinkingCursor.swift; sourceTree = "<group>"; };
 		46681CA2C4390D6C45E3101C /* ColorHash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorHash.swift; sourceTree = "<group>"; };
@@ -1071,6 +1075,7 @@
 		A218AFAC10D41E2BDF7DCA31 /* CrewLastMessageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLastMessageCache.swift; sourceTree = "<group>"; };
 		A24E82C5101B4CADE4221958 /* AppBuildStamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBuildStamp.swift; sourceTree = "<group>"; };
 		A256EE91689195597389D43F /* CrewSenderResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSenderResolverTests.swift; sourceTree = "<group>"; };
+		A2CA71E0A30AB3C311C980A0 /* ProcessExitMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessExitMarkerTests.swift; sourceTree = "<group>"; };
 		A2F9E015A85ED1A0DCA8E12A /* TerminalScrollbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScrollbackTests.swift; sourceTree = "<group>"; };
 		A48848C6D823FBAAA912491A /* PendingCrewPlaceholderIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCrewPlaceholderIcon.swift; sourceTree = "<group>"; };
 		A4E6A0DAA702E21E6FB3928A /* CrewComposerMentionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewComposerMentionsTests.swift; sourceTree = "<group>"; };
@@ -1335,6 +1340,7 @@
 				982E59D92EE3D62C0A02A978 /* OrchestrationFallbackCoordinator.swift */,
 				122E47E4767D52AAA4F28DF1 /* OrchestrationGate.swift */,
 				DAA3C19B41EF18AA3378B768 /* PlainTerminalSession.swift */,
+				4527AE71810D47CD695923A0 /* ProcessExitMarker.swift */,
 				43B4829144C42B8EC8550EBD /* ProcessRole.swift */,
 				BE174F684386551180E6B50C /* QuotaWarningPlan.swift */,
 				A6B5975B6F5C7C8282012965 /* RemoteSessionBackend.swift */,
@@ -1844,6 +1850,7 @@
 				3C33AA481F8A3F9F932B3B03 /* PendingCrewDataRootTests.swift */,
 				DB6363B999F7FFE61F7D9500 /* PendingRequestQueueTests.swift */,
 				EA93EAC0B3411F5EC6B35261 /* PermissionIntoTodoTests.swift */,
+				A2CA71E0A30AB3C311C980A0 /* ProcessExitMarkerTests.swift */,
 				D32A75D450B97F384C440342 /* ProcessRoleTests.swift */,
 				7508173C7BE2A174096E8054 /* ProjectFileManifestTests.swift */,
 				76C210B9708141CE1293B918 /* PromptTemplateTests.swift */,
@@ -2415,6 +2422,7 @@
 				8BAE00F15D98D768928BCF42 /* Platform.swift in Sources */,
 				37E9586B5C65BBD58EB74F3C /* PlatformImage.swift in Sources */,
 				D0314E5A7888AB1A42BEA8AA /* PlatformModifiers.swift in Sources */,
+				55EAB00DCC80597500B9B66C /* ProcessExitMarker.swift in Sources */,
 				925788E9058181C1F9963F60 /* ProcessRole.swift in Sources */,
 				092A82A123D30DFE80145B50 /* PromptTemplate.swift in Sources */,
 				F9CA1E459F346741BBC14AB5 /* QuotaCenter.swift in Sources */,
@@ -2800,6 +2808,8 @@
 				A70F6F04E48909328C3577F6 /* PlainTerminalSession.swift in Sources */,
 				B5588EFE93ACB994195E47BF /* Platform.swift in Sources */,
 				765C61EBEB8DA35CEFAD299F /* PlatformImage.swift in Sources */,
+				CF9C1D6DC0DC1C1CC6C9E2BB /* ProcessExitMarker.swift in Sources */,
+				4B680C50B8AED7CFCFA7A983 /* ProcessExitMarkerTests.swift in Sources */,
 				F3FD0332567FD6AD80E4FE17 /* ProcessRole.swift in Sources */,
 				A480B1CDA9AAD37FA08C5198 /* ProcessRoleTests.swift in Sources */,
 				362A8C165D61F9CE3E36048E /* ProjectFileManifestTests.swift in Sources */,
