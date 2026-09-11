@@ -87,6 +87,51 @@ final class CockpitPlanStore: @unchecked Sendable {
         withFileLock(crewId) { loadLocked(crewId).filter { !$0.isDeleted } }
     }
 
+    /// 这一本账这次读到了什么 —— **把「读不出来」交还给调用方，不压成空表。**
+    ///
+    /// 同一个病在本仓已经被点名修过两次（`CrewSessionRunner` 里那两处都写着
+    /// 「必须走 `read`，不能走 `list`：后者把读失败压成空表」）。
+    /// **`plan_list` 是同一条链上漏掉的第三处** —— 2026-09-12 那次断线里机长调它，
+    /// 拿到「任务列表是空的」，而盘上那本账 186 KB、92 条。
+    /// 「一条都没有」会让机长把排过的活再排一遍。
+    ///
+    /// 跟 `list` 是**同一条读**（同一把锁、同一个解码、同一份事故上报），
+    /// 没有新造第三种读法。
+    enum LedgerRead: Equatable {
+        case rows([CockpitPlanItem])
+        /// 这次没读到可信内容。**任何一种事故都算**（打不开 / 读到空但文件非空 / 解不开）。
+        ///
+        /// 跟另外两本账的 `LedgerRead` 唯一的区别：**这里把事故本身带出来**。
+        /// 因为 `plan_list` 要把它讲给人听 —— 只说「读不出来」而不说是哪份文件、
+        /// 底层是什么错，人只知道失败、不知道往哪查（`McpDirectoryIOFailureTests`
+        /// 立的就是这个口径）。
+        case unreadable(MultiProcessJSONStore.LedgerIncident)
+
+        static func == (lhs: LedgerRead, rhs: LedgerRead) -> Bool {
+            switch (lhs, rhs) {
+            case let (.rows(a), .rows(b)): return a == b
+            // 事故对象里装着 `Error`，没有值语义可比；两边都是事故即视为相等 ——
+            // 调用方要的就是「可不可信」这一位。
+            case (.unreadable, .unreadable): return true
+            default: return false
+            }
+        }
+    }
+
+    func read(crewId: String) -> LedgerRead {
+        withFileLock(crewId) {
+            var incident: MultiProcessJSONStore.LedgerIncident?
+            let rows = MultiProcessJSONStore.loadRowsLocked(
+                CockpitPlanItem.self, at: fileURL(crewId),
+                onIncident: { got in
+                    incident = got
+                    self.reportIncident(crewId: crewId, got)
+                })
+            if let incident { return .unreadable(incident) }
+            return .rows(rows.filter { !$0.isDeleted })
+        }
+    }
+
     /// `list` 的后台版 —— **UI 唯一该用的那条**（人类 Todo #96）。
     ///
     /// 驾驶舱正文的 `.task` 继承 MainActor，此前直接调同步的 `list`，把那把阻塞锁和

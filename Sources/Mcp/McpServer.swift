@@ -2598,8 +2598,22 @@ final class McpServer {
     }
 
     private func planRows() -> String {
+        // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是「一条都没排」
+        // 和「这本账这次读不出来」在这里长得一模一样 —— 2026-09-12 那次断线里，
+        // 机长拿到的就是「任务列表是空的」，而盘上那本账 186 KB、92 条。
+        // 那句话会直接让它把排过的活再排一遍。判据见 `McpPlanListIOFailureTests`。
+        let items: [CockpitPlanItem]
+        switch plans.read(crewId: crewId) {
+        case let .rows(rows):
+            items = rows
+        case let .unreadable(incident):
+            // 主语要有：一条「读不出来」不指名是哪本账，人不知道该翻哪个文件。
+            // `incident.summary` 里带着系统原文 + errno + 绝对路径。
+            return "⚠️ 机长任务列表" + incident.summary
+                + "\n**别把这条当成「一条都没排」** —— 账可能挂着一堆，只是这一刻看不见。"
+        }
         let now = Date()
-        let rows = CockpitPlan.newestFirst(plans.list(crewId: crewId)).map { item -> String in
+        let rows = CockpitPlan.newestFirst(items).map { item -> String in
             var line = "#\(item.number) [" 
                 + CockpitPlan.statusLine(statusRaw: item.status,
                                          updated: Self.iso.date(from: item.updatedAt), now: now)

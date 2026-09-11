@@ -168,6 +168,7 @@
 		3B078A08CD1DC86598DB3750 /* SessionProfileSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7034EA9D3D45EA3FA969BB91 /* SessionProfileSwitch.swift */; };
 		3B42FBE56F8747B1CCC27830 /* SessionDaemonMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AC9B7332324C1B1FA26525C /* SessionDaemonMain.swift */; };
 		3BD984C730926A0BE8165320 /* CrossPlatformSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D07DA70BEE572BE8E98546EA /* CrossPlatformSourceTests.swift */; };
+		3BE76E93A6D07B523A125E38 /* McpPlanListIOFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67D5722709F344AC535DDA5B /* McpPlanListIOFailureTests.swift */; };
 		3C135530D66FE140F3D2951D /* PendingCrewPlaceholderIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A48848C6D823FBAAA912491A /* PendingCrewPlaceholderIcon.swift */; };
 		3C2190C8B59CEBACE8C9B594 /* TerminalSnapshotEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 605626CC2AABC5323A22354C /* TerminalSnapshotEncoder.swift */; };
 		3CA77DFFAB59D4AAB71CB807 /* PendingRequestQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847C19FA2408D1E82949B72B /* PendingRequestQueue.swift */; };
@@ -993,6 +994,7 @@
 		65E2DBDAFE0BF55EF25A4B84 /* CrewLocalImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalImageCache.swift; sourceTree = "<group>"; };
 		66582D8B5956E7197698364F /* McpServerDirectoryToolsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServerDirectoryToolsTests.swift; sourceTree = "<group>"; };
 		671C59EE4CEFD8F01F9C6A92 /* SessionRosterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRosterTests.swift; sourceTree = "<group>"; };
+		67D5722709F344AC535DDA5B /* McpPlanListIOFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpPlanListIOFailureTests.swift; sourceTree = "<group>"; };
 		68023480E672AF1330D5A191 /* CrewMemberOrdering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMemberOrdering.swift; sourceTree = "<group>"; };
 		680D708A55DE564A6915C4F5 /* WorkdirTrustPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirTrustPrompt.swift; sourceTree = "<group>"; };
 		68C5A19E1F02F8D829ED4C65 /* SessionForegroundClaimTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionForegroundClaimTests.swift; sourceTree = "<group>"; };
@@ -1860,6 +1862,7 @@
 				34CB36F316ADF2563B476097 /* McpHelperOrphanGuardTests.swift */,
 				CCEEF4D3D3D89D72507A576D /* McpMultiMessageTests.swift */,
 				D36E53A3EEA55369A75ADB82 /* McpPermissionHookTests.swift */,
+				67D5722709F344AC535DDA5B /* McpPlanListIOFailureTests.swift */,
 				D66C18293A147DBEC648912F /* McpPostAttachmentsTests.swift */,
 				2B0A8BE5A9AAE6545A25DE79 /* McpReplyAutoMentionTests.swift */,
 				E9F9F21BD2713A043CB29F74 /* McpServerAttachmentRootIsolationTests.swift */,
@@ -2815,6 +2818,7 @@
 				0CE83D534F9CA4A179E2D690 /* McpMultiMessageTests.swift in Sources */,
 				67F1A713B214BE38547CFBA4 /* McpPermissionHook.swift in Sources */,
 				9784D71E9DBD98F8CEA30145 /* McpPermissionHookTests.swift in Sources */,
+				3BE76E93A6D07B523A125E38 /* McpPlanListIOFailureTests.swift in Sources */,
 				8D9F00CE8BE3579D7D087838 /* McpPostAttachmentsTests.swift in Sources */,
 				B7938ADA84EDD2610F37872B /* McpReplyAutoMentionTests.swift in Sources */,
 				A67C0B2B38BE0BFB0B06E905 /* McpServer.swift in Sources */,
