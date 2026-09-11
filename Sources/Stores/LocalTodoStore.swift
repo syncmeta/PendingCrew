@@ -637,11 +637,25 @@ final class LocalTodoStore: @unchecked Sendable {
 
     /// 往白板落一条如实的系统警示。主语点名**是哪本账**（Todo #62 起有两本，
     /// 只说「Todo 列表」没人知道坏的是哪一本），其余措辞由事故类型定。
+    /// 把一次账本事故报到白板上。
+    ///
+    /// **它经常写不进去，而那不是 bug** —— append 要先把整份白板读一遍，读不了就
+    /// 整条拒写（`unreadableAndPreserved`，2026-08-12 P0 的不变式）。整个数据目录
+    /// 读不出来的那种事故里，账本和白板是一起瞎的，所以这条警示**必然落不了盘**。
+    ///
+    /// 以前这里用的是吞错的 `appendSessionMessage`，于是它连「没写成」都不说一声。
+    /// 现在改成报错的那一支，写不成就退到系统日志 —— **别让一条专门用来留痕的东西
+    /// 自己静默失败**（同一条毛病在 `CrewLocalMentionWaker` 的留痕上也治过一次）。
     private func reportIncident(crewId: String, _ incident: MultiProcessJSONStore.LedgerIncident) {
-        LocalWhiteboardStore(directory: directory).appendSessionMessage(
-            crewId: crewId, sessionId: "system",
-            text: ledger.incidentSubject + "：" + incident.summary,
-            senderName: "系统")
+        let text = ledger.incidentSubject + "：" + incident.summary
+        do {
+            _ = try LocalWhiteboardStore(directory: directory)
+                .appendSessionMessageReportingFailure(
+                    crewId: crewId, sessionId: "system", text: text, senderName: "系统")
+        } catch {
+            NSLog("[PendingCrew] 账本事故没能写进白板（白板多半也读不出来）：%@ / %@",
+                  text, error.localizedDescription)
+        }
     }
 
     /// **返回 nil = 这些行真的落到磁盘上了。**

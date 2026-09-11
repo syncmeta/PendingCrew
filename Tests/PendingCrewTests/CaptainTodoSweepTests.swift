@@ -243,6 +243,28 @@ final class CaptainTodoSweepTests: XCTestCase {
                        "读不出来时还让机长去 confirm —— 它交不出账，那条建议只会让它撞墙")
     }
 
+    /// 那段话**不许保证白板上有警示**。
+    ///
+    /// 原文写的是「群聊白板上**应该**有一条系统警示说明是哪种事故」，而事实相反：
+    /// 报事故走 `LocalWhiteboardStore.appendSessionMessage`，append 要先把整份白板
+    /// 读一遍，读不了就整条拒写。**整个数据目录读不出来的那种事故里——也就是这条
+    /// 提醒最常出现的那种——那条警示必然不存在**，而原文正把人支去找它。
+    ///
+    /// 2026-09-12 实测撞到：数据目录 EPERM 连续 7 小时，这条提醒按最短间隔一直在响，
+    /// 而它让人去看的那条警示一次都没能写进去。
+    func test_读不出来那段话不许保证白板上有警示() {
+        guard case let .remind(text) = CaptainTodoSweep.decide(
+            open: .unreadable, confirmation: nil, lastRemindedAt: nil,
+            now: Date(), minimumInterval: 60)
+        else { return XCTFail("读不出来时没提醒") }
+        XCTAssertFalse(text.contains("白板上应该有"),
+                       "又把「白板上应该有一条警示」写死了 —— 数据目录整个读不出来时它必然没有：\(text)")
+        XCTAssertTrue(text.contains("写不进去") || text.contains("可能"),
+                      "没说清那条警示可能根本不存在：\(text)")
+        XCTAssertTrue(text.contains("不等于账本没事"),
+                      "没说「白板上没警示 ≠ 账本没事」—— 少了这句，人会把「找不到警示」当成没事：\(text)")
+    }
+
     // MARK: - ⑤c 读失败真的能被这条路看见（不是只在纯逻辑里成立）
 
     /// **信号一直在，只是被 `list()` 扔了。** 这条钉住新读法真的把它接住了。
