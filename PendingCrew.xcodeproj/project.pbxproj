@@ -18,6 +18,7 @@
 		039D307EC6F70B40EB36599B /* ModelCatalogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C78204BFE04404235068547 /* ModelCatalogEntry.swift */; };
 		03D88ACB2075CB2424832C2B /* SessionDaemonStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = D744C326EE4375DF70D19833 /* SessionDaemonStatus.swift */; };
 		04180E5C148F072E0DB3176A /* OrchestrationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 122E47E4767D52AAA4F28DF1 /* OrchestrationGate.swift */; };
+		0479939B65ADFA9A45E5930C /* CrewChatNewMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 057708EAEE038AAD36788D1C /* CrewChatNewMessages.swift */; };
 		055DFE844FB3BA1547AEC159 /* PromptTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D74B1C537C235EFB0E69DCB /* PromptTemplate.swift */; };
 		06181AEE3F7FB3893E59E955 /* LocalTodoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAED97C1D654597B1DAC2C6 /* LocalTodoStore.swift */; };
 		06DD7179B81A42A417E051B3 /* CrewDeferredWakeQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2542D7AD06F6553F9AAE42FD /* CrewDeferredWakeQueue.swift */; };
@@ -166,6 +167,7 @@
 		3CA77DFFAB59D4AAB71CB807 /* PendingRequestQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847C19FA2408D1E82949B72B /* PendingRequestQueue.swift */; };
 		3CD877B94EF6574C22D60CBD /* CaptainBriefDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19AE2D821D04AE0298F19D4E /* CaptainBriefDelivery.swift */; };
 		3D51DB2BF331A8104556B846 /* CrewMessageReferencePills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100076B70C8A76B4324311E6 /* CrewMessageReferencePills.swift */; };
+		3D9C14CC1BF4BC3C302D7912 /* CrewChatNewMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 057708EAEE038AAD36788D1C /* CrewChatNewMessages.swift */; };
 		3E11EF9A73838FA5D2CEECA7 /* TypingActivityTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E91CB08ACAB98E0616E633 /* TypingActivityTracker.swift */; };
 		3EFA2A6C11BB03BB0A0178A5 /* HeadlessLaunchFailLoudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7200B25FFB6D4273F45370F2 /* HeadlessLaunchFailLoudTests.swift */; };
 		3F0891F97BA1B1E63F65D97B /* CrewWakeDispatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF186B1180EFC81E792573C /* CrewWakeDispatch.swift */; };
@@ -453,6 +455,7 @@
 		9B70B537FED7ED06DF7ECC13 /* LocalWakeupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4BC4E3C29A337FB855AE60 /* LocalWakeupStore.swift */; };
 		9C3280D976E67D23204CDAFF /* CrewStartupRescueLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0972370135B6D56F11913E27 /* CrewStartupRescueLogicTests.swift */; };
 		9C48B30904E702F58F406799 /* LocalCrewControlStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 323CE7A962695737A30AE3F2 /* LocalCrewControlStoreTests.swift */; };
+		9C57E6B681B6EF0D74F2DE80 /* CrewChatNewMessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EEEB82612E57C33B1B834C2 /* CrewChatNewMessagesTests.swift */; };
 		9C7DC7B36D6AFA36CF2C1EFF /* MenuBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B83EBF17BAB3D13C27176D89 /* MenuBarPanel.swift */; };
 		9DC8FF79E848916B5B5B7C53 /* CrewMemberOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68023480E672AF1330D5A191 /* CrewMemberOrdering.swift */; };
 		9E72A9948E5C602E7BD831FB /* SessionAwaitingReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D9796510A2DADE77ABA9726 /* SessionAwaitingReply.swift */; };
@@ -758,6 +761,7 @@
 		04D483AE4AA363994E5FEE6F /* MultiProcessJSONStoreReadFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiProcessJSONStoreReadFailureTests.swift; sourceTree = "<group>"; };
 		051E45F99057FB8295F991DA /* CrewSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSummary.swift; sourceTree = "<group>"; };
 		0576DE8369E9943B320315BD /* SessionStatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStatusDot.swift; sourceTree = "<group>"; };
+		057708EAEE038AAD36788D1C /* CrewChatNewMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatNewMessages.swift; sourceTree = "<group>"; };
 		0595EC3C2AF4F6D1B66C805F /* SessionRosterReconciliation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRosterReconciliation.swift; sourceTree = "<group>"; };
 		06D0F17C9D45D20BEC01941F /* TrustNeverWrittenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustNeverWrittenTests.swift; sourceTree = "<group>"; };
 		07951B6F5170355BDE344873 /* WriteReceipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WriteReceipt.swift; sourceTree = "<group>"; };
@@ -778,6 +782,7 @@
 		0E19C258DB78B2AA42FF241C /* OrchestrationFallback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrchestrationFallback.swift; sourceTree = "<group>"; };
 		0E3D5A6F8A84FAAF37EEC934 /* McpServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServerTests.swift; sourceTree = "<group>"; };
 		0E5A7C63B37740B3B978DBBA /* McpServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServer.swift; sourceTree = "<group>"; };
+		0EEEB82612E57C33B1B834C2 /* CrewChatNewMessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewChatNewMessagesTests.swift; sourceTree = "<group>"; };
 		0F58735ECC1D2FD177BFB792 /* CodexRPCMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexRPCMessageTests.swift; sourceTree = "<group>"; };
 		100076B70C8A76B4324311E6 /* CrewMessageReferencePills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageReferencePills.swift; sourceTree = "<group>"; };
 		1096B8D6E9204A99CE9E60B5 /* SessionProtocolEndpoints.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionProtocolEndpoints.swift; sourceTree = "<group>"; };
@@ -1400,6 +1405,7 @@
 				5268E9892E52DCCB1FE00FBF /* CrewChatBottomFollow.swift */,
 				F9802373A1B4E6DF81D15282 /* CrewChatCostCounters.swift */,
 				ED731B9FBC4FCAABA1696C82 /* CrewChatMessage.swift */,
+				057708EAEE038AAD36788D1C /* CrewChatNewMessages.swift */,
 				4CAA08BEA4EC77F9304EC252 /* CrewChatRefreshGate.swift */,
 				EF86AC53CE78FB4C2CC168B3 /* CrewChatReturnTrail.swift */,
 				360A8274A85AB07936C46F2E /* CrewChatWindow.swift */,
@@ -1727,6 +1733,7 @@
 				B1486E525D7299C2A93C4853 /* CrewBubbleSelectionOwnerTests.swift */,
 				C8A233B79D2CE87B8C6D3BF1 /* CrewChatAdapterTests.swift */,
 				5C3E61DB13BCB83DEFAEABD7 /* CrewChatBottomFollowTests.swift */,
+				0EEEB82612E57C33B1B834C2 /* CrewChatNewMessagesTests.swift */,
 				20809FE40D45005C09C13E4C /* CrewChatOpenCostTests.swift */,
 				85139BC93B415272A99FA6CC /* CrewChatRefreshGateTests.swift */,
 				FD13869C90D8588F6CFC851E /* CrewChatReturnTrailTests.swift */,
@@ -2260,6 +2267,7 @@
 				EFB2C6F0908F3DDFF845D91E /* CrewChatBottomFollow.swift in Sources */,
 				6ADBB89F607229A3DBF7F387 /* CrewChatCostCounters.swift in Sources */,
 				336192C555B6417C3568CEF8 /* CrewChatMessage.swift in Sources */,
+				0479939B65ADFA9A45E5930C /* CrewChatNewMessages.swift in Sources */,
 				91EE4232C8883E1AE6FA4E60 /* CrewChatRefreshGate.swift in Sources */,
 				217CE9A9AD109C2B036DC490 /* CrewChatReturnTrail.swift in Sources */,
 				158F52EEED3AA21F5E5C0B09 /* CrewChatView.swift in Sources */,
@@ -2575,6 +2583,8 @@
 				00D5607C6F91DCC5048A3E5A /* CrewChatBottomFollowTests.swift in Sources */,
 				D74EAD84F871F72E78DA61F8 /* CrewChatCostCounters.swift in Sources */,
 				B094D64B0509EF9E543C90F7 /* CrewChatMessage.swift in Sources */,
+				3D9C14CC1BF4BC3C302D7912 /* CrewChatNewMessages.swift in Sources */,
+				9C57E6B681B6EF0D74F2DE80 /* CrewChatNewMessagesTests.swift in Sources */,
 				C9D5E22CCECB50FF822E0C42 /* CrewChatOpenCostTests.swift in Sources */,
 				4B8DFC60B2830824071C9D39 /* CrewChatRefreshGate.swift in Sources */,
 				CFD6A156B296A4BEB00CF2F7 /* CrewChatRefreshGateTests.swift in Sources */,
