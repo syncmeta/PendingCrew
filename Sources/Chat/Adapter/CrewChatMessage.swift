@@ -42,6 +42,10 @@ struct CrewChatMessage: Identifiable, Hashable {
     // ── Content ───────────────────────────────────────────────────────────────
 
     let content: String
+    /// 作者写的一句话结论 —— 收起态那一行（人类 Todo #143）。nil = 没写，
+    /// 渲染端退回 `CrewMessageFold` 的猜法。**不是** `CrewWhiteboardEntry.summary`
+    /// （那个是正文兜底），见那边的注释。
+    var headline: String? = nil
     let attachments: [Attachment]?
 
     // ── Send-state ────────────────────────────────────────────────────────────
@@ -77,6 +81,7 @@ struct CrewChatMessage: Identifiable, Hashable {
         sender_type: String,
         sender_id: String,
         content: String,
+        headline: String? = nil,
         attachments: [Attachment]? = nil,
         status: String? = nil,
         mine: Bool = false
@@ -85,6 +90,7 @@ struct CrewChatMessage: Identifiable, Hashable {
         self.sender_type = sender_type
         self.sender_id = sender_id
         self.content = content
+        self.headline = headline
         self.attachments = attachments
         self.status = status
         self.mine = mine

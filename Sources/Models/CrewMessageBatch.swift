@@ -43,7 +43,7 @@ enum CrewMessageBatch {
     }
 
     /// 只能写在**每一条**上的参数。顶层给了就拒 —— 不是不支持，是放错地方了。
-    static let perEntryOnly = ["mentions", "reply_to", "attachments"]
+    static let perEntryOnly = ["mentions", "reply_to", "attachments", "headline"]
 
     /// 顶层「一次一个」、但落盘时**每条都带**的参数。
     static let wholeBatch = ["crew_status"]

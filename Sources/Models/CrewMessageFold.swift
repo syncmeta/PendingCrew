@@ -62,6 +62,20 @@ enum CrewMessageFold {
         return Folded(summary: clip(flatten(raw)), lineCount: lines)
     }
 
+    /// 渲染层这一拍折不折、折起来显示哪一行。
+    ///
+    /// 它是「作者写的结论」那根管子的**最后一节**：前面几节（工具参数 → 落盘 →
+    /// 白板条目 → 气泡模型）各有用例钉着，而这一节原来长在
+    /// `CrewFoldableMessageText` 的 `private var` 里 —— **那个 View 不进 test
+    /// bundle**，所以谁把 `explicitSummary:` 删掉，前面那些用例照样全绿。
+    /// **一条链最后一节没有尺子，等于整条链没有尺子。**
+    ///
+    /// - Parameter isStreaming: 正在流式吐字的不折 —— 折一个还在长的东西，
+    ///   人会以为它写完了。
+    static func decideForRender(text: String, headline: String?, isStreaming: Bool) -> Folded? {
+        isStreaming ? nil : fold(text, explicitSummary: headline)
+    }
+
     // MARK: - 摘要推导
 
     /// 从正文里找一句作者自己写下的结论：**先粗体、后标题**，且只在**前 3 段**里找。

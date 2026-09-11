@@ -181,6 +181,7 @@ final class McpServer {
                                         "plan": ["type": "integer"],
                                         "blocked_by_number": ["type": "integer"],
                                         "blocked_by_ledger": ["type": "string"],
+                                        "headline": ["type": "string"],
                                         "todo": ["type": "integer"],
                                         "todo_status": ["type": "string"],
                                         "evidence_commit": ["type": "string"],
@@ -189,6 +190,7 @@ final class McpServer {
                                     "required": ["text"],
                                 ],
                             ],
+                            "headline": ["type": "string", "description": "**这条消息的一句话结论** —— 长消息在群里会默认收起，收起态显示的就是这一行。\n不给的话，界面只能**猜**（取正文前 3 段里第一个加粗），猜出来的常常是句子中间某个强调词，而不是结论。\n写法：一句话说清「结果是什么」，不是「我做了什么」。别把整段粘进来，收起态只露一行。\n分条发送时它是**每条自己的**（写在 `messages` 里那一条上）。"],
                             "category": ["type": "string", "description": "这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。不给 = 不落账。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
                             "todo_status": ["type": "string", "enum": LocalTodoStore.statusOrder, "description": "配合 `todo` 用。翻 `completed` 必须带 `evidence_commit`（会当场解析）或 `evidence`。"],
@@ -1885,6 +1887,11 @@ final class McpServer {
             // #136：这次发言顺手报一句**整组**的状态（侧栏那一行读它）。
             // 拒了就一个字都不发 —— 半截状态（消息发了、状态没落）会让侧栏显示
             // 一句过期的话，而看的人以为那是刚报的。
+            // #143：作者自己写的那一行结论。**空白当没给** —— 写个空格就算写过，
+            // 是最廉价的一种假账（同 `crew_status` 那条）。
+            let headlineRaw = ((args["headline"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let headline: String? = headlineRaw.isEmpty ? nil : headlineRaw
             var crewStatus: String?
             var statusHint: String?
             switch CrewStatusIntake.decide(args["crew_status"], isCaptain: isCaptain) {
@@ -1986,7 +1993,8 @@ final class McpServer {
                     senderKind: isCaptain ? "captain" : "session",
                     attachments: intake.accepted,
                     references: CrewMessageReferences.build(refs),
-                    crewStatus: crewStatus)
+                    crewStatus: crewStatus,
+                    headline: headline)
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
                 // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
                 // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
