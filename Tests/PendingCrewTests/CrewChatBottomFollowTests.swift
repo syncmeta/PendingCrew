@@ -369,11 +369,25 @@ final class CrewChatBottomFollowTests: XCTestCase {
     }
 
     /// 未读只走 `Pin.received`：视图里不许出现「不管在不在底部都滚一下」的老写法。
+    ///
+    /// **2026-09-12（人类 Todo #144）改了一次落点**：条目数变化那一拍的判定整段搬进
+    /// `CrewChatNewMessages.apply`（视图那个文件不进 test bundle，判定留在里面就等于
+    /// 真实路径上没有尺子）。所以这里改成钉两处 —— 视图调那一层，那一层里仍然是
+    /// `Pin.received` 在判。**这条闸本身没松，只是跟着接线挪了一格。**
     func testNewMessagesGoThroughThePinInsteadOfAlwaysScrolling() throws {
         let text = try Self.source("Mac/Views/CrewChatView.swift")
         XCTAssertTrue(
-            Self.containsCode("bottomPin.received(", in: text),
-            "条目数变化必须过 `Pin.received` 判「跟着走还是记未读」（Todo #47 行为 2/3）。")
+            Self.containsCode("CrewChatNewMessages.apply(", in: text),
+            "条目数变化必须走 `CrewChatNewMessages.apply` —— 判定留在视图闭包里，"
+            + "真实调用路径上就一条尺子都没有（#144 的病根正是调用点漏传 isFollowing）。")
+        XCTAssertFalse(
+            Self.containsCode("CrewChatWindow.afterInsert(", in: text),
+            "视图自己调了 `afterInsert` —— 那条两参数的路没有 `isFollowing`，"
+            + "新消息会把他正在看的最顶那条剪掉（#144）。判定要走 CrewChatNewMessages。")
+        let judge = try Self.source("Chat/Adapter/CrewChatNewMessages.swift")
+        XCTAssertTrue(
+            Self.containsCode("pin.received(", in: judge),
+            "「跟着走还是记未读」仍然必须过 `Pin.received`（Todo #47 行为 2/3）。")
         XCTAssertTrue(
             Self.containsCode("bottomPin.jumpToBottom()", in: text),
             "未读箭头必须调 `jumpToBottom()`（落底 + 清零 + 重新跟随，行为 4）。")

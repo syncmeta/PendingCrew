@@ -141,31 +141,13 @@ final class CrewChatNewMessagesTests: XCTestCase {
                        "min 取的是较小者 —— 窗口比记号浅时别反过来把它撑大")
     }
 
-    // MARK: - 「它被谁调了」这一问，自己带一把尺子
-
-    /// 上面七条证明 `apply` 算得对。**这一条证明视图真的在调它。**
-    ///
-    /// 本仓两天内三次「建好了没接上」——规则有测试、接线没有。那种错的形状是：
-    /// 纯层全绿、人一用就坏。所以这里直接读那个文件，钉两件事：
-    /// ① `CrewChatView` 调了 `CrewChatNewMessages.apply`；
-    /// ② 它**不再**自己调 `CrewChatWindow.afterInsert` —— 直接调的那条路
-    ///    没有 `isFollowing`，正是 #144 的病根。
-    ///
-    /// 读不到文件**算失败**，不算通过：一把找不到被测对象的尺子，
-    /// 沉默的样子跟「全都对」一模一样。
-    func test_视图真的在调这一层而不是自己算() throws {
-        let url = URL(fileURLWithPath: #filePath)          // …/Tests/PendingCrewTests/x.swift
-            .deletingLastPathComponent()                   // …/Tests/PendingCrewTests
-            .deletingLastPathComponent()                   // …/Tests
-            .deletingLastPathComponent()                   // 仓库根
-            .appendingPathComponent("Sources/Mac/Views/CrewChatView.swift")
-        let src = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertGreaterThan(src.count, 1000, "读到的文件太小，多半根本不是它")
-
-        XCTAssertTrue(src.contains("CrewChatNewMessages.apply("),
-                      "视图没在调 `CrewChatNewMessages.apply` —— 这一层的用例全绿也没用")
-        XCTAssertFalse(src.contains("CrewChatWindow.afterInsert("),
-                       "视图自己调了 `CrewChatWindow.afterInsert` —— 那条路没有 "
-                       + "`isFollowing`，正是 #144 的病根；判定要走 CrewChatNewMessages")
-    }
+    // MARK: - 「它被谁调了」
+    //
+    // 接线闸不在这儿 —— 仓库里**本来就有**一整节「源码级闸」
+    // （`CrewChatBottomFollowTests` 的 `testNewMessagesGoThroughThePinInsteadOfAlwaysScrolling`
+    // 等），带着跳注释行的 `containsCode` 帮手。#144 的接线钉在那里，
+    // 跟 Todo #45 / #47 / #56 那几条闸放在一起。
+    //
+    // 我第一版在这里又写了一个自己读文件的版本 —— 那是「没找仓库里正确的孪生」，
+    // 而且它用裸 `contains`，会被注释里提到的同一串字骗过去。
 }
