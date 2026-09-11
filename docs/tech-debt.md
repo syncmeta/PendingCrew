@@ -1675,27 +1675,44 @@ append cmd1 发 `[cmd1]`、append cmd2 发 `[cmd1, cmd2]`。两次投递都到�
 
 ---
 
-## 接线扫描会被一句注释满足（2026-09-12 发现，只修了撞上的那一条）
+## ~~接线扫描会被一句注释满足~~（2026-09-12 发现，同日修掉）
 
 `ViewWiringTests.wirings` 的判据是「这个符号在定义文件**之外**的 `Sources/` 里
 出现过」。**出现在注释里也算。**
 
-当天新加 Todo #145 那个按钮时当场撞到：把按钮的动作整个摘掉（`Task { }`），
-这把尺子**照样绿** —— 因为 `CrewChiefListView` 顶上那段说明里写了一句
-「动作在 `CrewStore.requestChiefResort`」。零件没装到车上，尺子说装了。
+新接一个按钮时当场撞到：把按钮动作整个摘掉（`Task { }`），尺子照样绿 ——
+因为那个 View 顶上写着一句「动作在 `CrewStore.requestChiefResort`」。
+零件没装到车上，尺子说装了。
 
-改法是**钉调用点的形状**而不是方法名（`crewStore.requestChiefResort()`），
-改完拆线会红、接回来会绿，两头都跑过。
+### 这个洞是量出来的，不是推出来的
 
-同一个坑这个文件里已经记过一次（`acknowledgeBells`，注释写着「光搜方法名会撞上
-同一个文件里的 `func` 定义」）。**两次都是拆线跑一趟当场抓到的，不是看出来的。**
+拆掉 `TodoListPresentation.newestFirst` 在详细窗口里那个**唯一的真调用点**
+（只留 `CrewTodoPanel` 顶上那句提到它的注释），跑两趟：
 
-### 没做的那一半
+| | 结果 |
+|---|---|
+| 不剥注释（原样） | **绿** —— 洞是真的 |
+| 剥掉注释 | 红 |
 
-**其余约 30 条没有逐条复核。** 判据只有一条、而且不需要读懂代码：
-把那个零件的调用点拆掉，跑 `ViewWiringTests`，不红就是这一条也空绿。
-一条一条来，别批量改 —— 改成什么形状取决于那个零件是怎么被用的。
+### 修法：用仓库里已有的那个孪生
 
-为什么没顺手做完：那是 30 次「拆线—跑—还原」，每次一趟构建；
-而且改错形状会把一条能用的尺子改成永远红。**这件事该单独排一次，不该塞在一个
-按钮的补丁里。**
+本仓另外四份源码级扫描（`TodoBlockedOnHumanTests`、`DecisionKindHasNoProducerTests`、
+`TodoDroppedAndAttentionTests`、`CockpitOpenCloseCostTests`）**早就各自带着
+`codeOnly` 了** —— 其中一份的注释还写着它当初也是变异自证抓到的。
+`ViewWiringTests` 是漏掉的那一个。照抄过来，17 条一次性全修好。
+
+### 逐条复核的结果（先前这里写的是「约 30 条没复核」，两处都不对）
+
+清单是 **17 条不是 30 条**（数过了），而且**没有一条是当下空绿的** ——
+每一条在 `Sources/` 里都至少有一个真调用点。两条身上带着注释凑数：
+
+| 条目 | 真调用点 | 注释命中 |
+|---|---|---|
+| `TodoListPresentation.newestFirst` | `CrewTodoDetailWindow.swift:154` | `CrewTodoPanel.swift:14` |
+| `CrewMentionFilter.onlyHumanMentions` | `CrewTimelineFilter.swift:52` | 同文件 :25 |
+
+这两条在修之前是「离空绿只差一次删除」：真调用点一旦没了，注释会接着顶住。
+剥注释之后这层顶不住了。
+
+**先前那句「其余约 30 条没有逐条复核」是估的，不是数的。** 记在这儿是因为
+[[verify-the-list-not-just-its-items]] 说的就是这件事：报 N 条就把 N 个名字列全再数一遍。

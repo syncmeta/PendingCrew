@@ -61,7 +61,21 @@ final class ViewWiringTests: XCTestCase {
 
         for wiring in Self.wirings {
             let callSites = sources.filter { url, text in
-                url.lastPathComponent != wiring.definedIn && text.contains(wiring.symbol)
+                // **先把注释剥掉再找。** 不剥的话，一句 doc comment 里提到这个名字
+                // 就足以让这条永远绿 —— 零件从车上拆下来了，尺子说还装着。
+                //
+                // 两趟变异量出来的（2026-09-12，拆掉 `newestFirst` 在详细窗口里那个
+                // 唯一真调用点，只留 `CrewTodoPanel` 顶上那句注释）：
+                //   不剥注释 → **绿**（这个洞是真的）
+                //   剥了注释 → 红
+                //
+                // 本仓另外四份源码级扫描（`TodoBlockedOnHumanTests` /
+                // `DecisionKindHasNoProducerTests` / `TodoDroppedAndAttentionTests` /
+                // `CockpitOpenCloseCostTests`）早就各自带着 `codeOnly` 了，
+                // 其中一份的注释还写着它是变异自证抓到的 ——
+                // **这一份是漏掉的那个，不是新发明。**
+                url.lastPathComponent != wiring.definedIn
+                    && Self.codeOnly(text).contains(wiring.symbol)
             }
             XCTAssertFalse(
                 callSites.isEmpty,
@@ -844,6 +858,16 @@ final class ViewWiringTests: XCTestCase {
     }
 
     /// 仓库里 `apps/pendingcrew/Sources` 下的全部 .swift（路径由本文件位置推出）。
+    /// 去掉行注释再扫。照抄本仓已有的同名助手，不发明第二种。
+    private static func codeOnly(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let slash = line.range(of: "//") else { return line }
+                return line[..<slash.lowerBound]
+            }
+            .joined(separator: "\n")
+    }
+
     private static func sourceFiles() throws -> [(URL, String)] {
         let root = URL(fileURLWithPath: #filePath)      // .../Tests/PendingCrewTests/ViewWiringTests.swift
             .deletingLastPathComponent()                 // .../Tests/PendingCrewTests
