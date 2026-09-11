@@ -87,6 +87,14 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// 直接构造，`let` 会把新字段变成每一处调用点的必填参数 —— 一个纯粹的向后
     /// 兼容字段不该有那个代价。老消息 / 老服务端缺这个键 → nil，一颗胶囊都不长。
     var references: [CrewMessageReference]? = nil
+    /// 作者自己写的一句话结论，收起态显示它（人类 Todo #143）。
+    ///
+    /// ⚠️ **跟上面那个 `summary` 不是一回事**：`summary` 是 wire 层的正文兜底
+    /// （`displayText` 用它顶 `payload.text`），本地映射把整条正文塞进去；
+    /// 这个是**作者显式写的那一行**。同名不同物撞过一次就够了，所以叫 `headline`。
+    ///
+    /// `var` + 默认 nil 的理由同 `references`：这个类型被大量测试直接 memberwise 构造。
+    var headline: String? = nil
 
     struct Payload: Decodable, Equatable {
         let text: String?
@@ -108,6 +116,7 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
         case inReplyTo = "in_reply_to"
         case mentions
         case references
+        case headline
     }
 
     /// Best display text: explicit payload text → summary → empty.

@@ -135,7 +135,10 @@ struct BubbleView<Menu: View>: View {
                     // PENDINGCREW SHIM: 正文过长时默认收起成一行摘要（人类 Todo #104
                     // 「消息太多太乱了」）。判定在纯逻辑 `CrewMessageFold`，折不起来
                     // （太短 / 作者没写结论）时这层原样退回 MarkdownText，气泡外观不变。
+                    // PENDINGCREW SHIM: `headline` = 作者自己写的那一行结论
+                    // （人类 Todo #143）。给了就当收起态标题，不给才退回猜第一个粗体。
                     CrewFoldableMessageText(text: message.content,
+                                            headline: message.headline,
                                             allowCodeRun: true,
                                             citations: citations,
                                             isStreaming: isStreaming)

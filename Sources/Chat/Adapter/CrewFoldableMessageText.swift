@@ -15,6 +15,12 @@ import SwiftUI
 /// 压根不经过这里，有 `CrewMessageFoldTests` 钉着）。
 struct CrewFoldableMessageText: View {
     let text: String
+    /// 作者显式写的那一行结论（人类 Todo #143）。给了就用它当收起态标题，
+    /// **不给才退回猜**（`CrewMessageFold.derivedSummary` 取第一个粗体）。
+    ///
+    /// 这一级 `CrewMessageFold` 早就留着（形参 + 注释「最可靠的一级」），
+    /// 但在 2026-09-11 之前**没有任何调用点传过它** —— 整条路不存在。
+    var headline: String? = nil
     let allowCodeRun: Bool
     let citations: [MessageCitation]
     /// 正在流式吐字的消息不折 —— 折一个还在长的东西，人会以为它写完了。
@@ -22,8 +28,10 @@ struct CrewFoldableMessageText: View {
 
     @State private var expanded = false
 
+    /// 判定整个搬去 `CrewMessageFold.decideForRender` —— **这个 View 不进 test
+    /// bundle**，判定留在这里就等于那一节没有尺子。
     private var folded: CrewMessageFold.Folded? {
-        isStreaming ? nil : CrewMessageFold.fold(text)
+        CrewMessageFold.decideForRender(text: text, headline: headline, isStreaming: isStreaming)
     }
 
     var body: some View {

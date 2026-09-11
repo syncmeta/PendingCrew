@@ -51,6 +51,7 @@ enum CrewChatAdapter {
             sender_type: s.isMine ? "user" : (s.kind == .bot ? "bot" : "user"),
             sender_id: e.senderUserId ?? e.senderBotId ?? e.senderSessionId ?? e.id,
             content: e.displayText,
+            headline: e.headline,
             attachments: attachments,
             status: nil,
             mine: s.isMine          // single source of truth — CrewSenderResolver

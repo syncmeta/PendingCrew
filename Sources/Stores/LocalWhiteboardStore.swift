@@ -201,7 +201,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         crewId: String, text: String, senderName: String? = nil, inReplyTo: String? = nil,
         attachments: [LocalWhiteboardAttachment]? = nil,
         mentions: [LocalWhiteboardMention]? = nil,
-        references: [CrewMessageReference]? = nil) {
+        references: [CrewMessageReference]? = nil,
+        headline: String? = nil) {
         append(crewId: crewId, LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
             senderKind: "user",
@@ -214,7 +215,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             inReplyTo: inReplyTo,
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
-            references: (references?.isEmpty == true) ? nil : references))
+            references: (references?.isEmpty == true) ? nil : references,
+            headline: headline))
     }
 
     /// 追加一条 session（编码 agent）消息（chunk 4：`post_to_crew`）。`senderName` =
@@ -237,12 +239,14 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                               externalContactFrom: String? = nil,
                               attachments: [LocalWhiteboardAttachment]? = nil,
                               references: [CrewMessageReference]? = nil,
-                              crewStatus: String? = nil) {
+                              crewStatus: String? = nil,
+                              headline: String? = nil) {
         _ = try? appendSessionMessageReportingFailure(
             crewId: crewId, sessionId: sessionId, text: text, category: category,
             senderName: senderName, mentions: mentions, inReplyTo: inReplyTo,
             senderKind: senderKind, externalContactFrom: externalContactFrom,
-            attachments: attachments, references: references, crewStatus: crewStatus)
+            attachments: attachments, references: references, crewStatus: crewStatus,
+            headline: headline)
     }
 
     /// 与 `appendSessionMessage` 相同，但把编码/落盘错误抛给调用者 —— 用于回执
@@ -261,7 +265,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         externalContactFrom: String? = nil,
         attachments: [LocalWhiteboardAttachment]? = nil,
         references: [CrewMessageReference]? = nil,
-        crewStatus: String? = nil
+        crewStatus: String? = nil,
+        headline: String? = nil
     ) throws -> String? {
         let isSystem = PendingCrewSystemMessage.isSystem(
             senderKind: senderKind, senderSessionId: sessionId)
@@ -279,7 +284,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
             crewStatus: crewStatus,
             externalContactFrom: externalContactFrom,
-            references: (references?.isEmpty == true) ? nil : references))
+            references: (references?.isEmpty == true) ? nil : references,
+            headline: headline))
     }
 
     /// 旧白板已经落过 `senderKind=session / senderName=系统`，只正规化新写入会让
@@ -309,7 +315,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             externalContactFrom: message.externalContactFrom,
             // ⚠️ 这个函数**逐字段重建**消息 —— 每加一个新字段都得在这里补一行，
             // 漏了不会报错，只会让系统消息**静默丢掉那个字段**。
-            references: message.references)
+            references: message.references,
+            headline: message.headline)
     }
 
     // MARK: - Persistence
@@ -572,6 +579,25 @@ struct LocalWhiteboardMessage: Codable, Equatable {
     /// 见 `CrewMessageReference` 的注释。
     /// 新增可选字段向后兼容（旧 JSON 缺键 → nil）：老消息一颗胶囊都不长，正文不变。
     var references: [CrewMessageReference]? = nil
+    /// 作者自己写的**一句话结论**——收起态气泡上显示的那一行（人类 Todo #143）。
+    ///
+    /// ## 为什么叫 headline 不叫 summary
+    ///
+    /// `CrewWhiteboardEntry` 上**已经有一个 `summary`**，那个是 wire 层的正文兜底
+    /// （`displayText` = `payload?.text ?? summary`），本地映射把整条正文塞进去。
+    /// 两者同名不同物，撞上了没人会报错、只会有人拿错。**所以这条从头到尾叫 `headline`。**
+    ///
+    /// ## 它治什么
+    ///
+    /// 在此之前，收起态那一行是**猜**出来的：`CrewMessageFold.derivedSummary` 取正文
+    /// 前 3 段里的第一个粗体。`fold` 早就留了 `explicitSummary` 这一级、注释写着
+    /// 「最可靠的一级」，但那条路**从上线到 2026-09-11 一次都没跑过** ——
+    /// 没有工具参数、没有落盘字段、零调用点。这个字段就是把那根管子接上。
+    ///
+    /// 不到折叠阈值的短消息**也存**：它进白板不花什么，而以后「列表里只看结论」
+    /// 这类需求就不用再改一次数据。
+    /// 新增可选字段向后兼容（旧 JSON 缺键 → nil）：老消息照旧走猜。
+    var headline: String? = nil
 
     /// 这条消息的附件该署谁的名（Todo #48）。人类发的照旧是「用户」；session /
     /// 机长发的用它的显示名，没有 label 时退回「队友」—— 宁可说得笼统，也不许
