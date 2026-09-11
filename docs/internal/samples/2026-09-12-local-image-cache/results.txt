@@ -1,0 +1,43 @@
+02-eviction-red.log
+/Users/hey/Untitled/Pendingname/PendingCrew/.pendingcrew/worktrees/Todo-126-126-astra-Linux----91-T-bec195e1/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:59: error: -[PendingCrewTests.CrewLocalImageCacheTests testDifferentMaxPixelIsDifferentEntry] : XCTAssertNotNil failed
+Test Case '-[PendingCrewTests.CrewLocalImageCacheTests testDifferentMaxPixelIsDifferentEntry]' failed (0.846 seconds).
+/Users/hey/Untitled/Pendingname/PendingCrew/.pendingcrew/worktrees/Todo-126-126-astra-Linux----91-T-bec195e1/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:33: error: -[PendingCrewTests.CrewLocalImageCacheTests testStoreThenPeekHits] : XCTAssertTrue failed - 同一 key 必须命中同一张，不该重解
+Test Case '-[PendingCrewTests.CrewLocalImageCacheTests testStoreThenPeekHits]' failed (0.003 seconds).
+	 Executed 6 tests, with 2 failures (0 unexpected) in 0.881 (0.883) seconds
+	 Executed 6 tests, with 2 failures (0 unexpected) in 0.881 (0.883) seconds
+	 Executed 6 tests, with 2 failures (0 unexpected) in 0.881 (0.884) seconds
+** TEST FAILED **
+
+03-fixed-green.log
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.050 (0.053) seconds
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.050 (0.053) seconds
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.050 (0.054) seconds
+** TEST SUCCEEDED **
+
+04-mutation-red.log
+/Users/hey/Untitled/Pendingname/PendingCrew/.pendingcrew/worktrees/Todo-126-126-astra-Linux----91-T-bec195e1/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:82: error: -[PendingCrewTests.CrewLocalImageCacheTests testEvictedEntryMayMiss] : XCTAssertNil failed: "<NSImage 0xa0ed25540 Size={10, 20} RepProvider=(null)>" - 存储可立即驱逐；调用方仍须处理 miss
+Test Case '-[PendingCrewTests.CrewLocalImageCacheTests testEvictedEntryMayMiss]' failed (1.016 seconds).
+/Users/hey/Untitled/Pendingname/PendingCrew/.pendingcrew/worktrees/Todo-126-126-astra-Linux----91-T-bec195e1/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:92: error: -[PendingCrewTests.CrewLocalImageCacheTests testInjectedStorageReceivesKeyCostReplacementAndClear] : XCTAssertTrue failed - 必须写到注入的存储
+/Users/hey/Untitled/Pendingname/PendingCrew/.pendingcrew/worktrees/Todo-126-126-astra-Linux----91-T-bec195e1/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:93: error: -[PendingCrewTests.CrewLocalImageCacheTests testInjectedStorageReceivesKeyCostReplacementAndClear] : XCTAssertEqual failed: ("nil") is not equal to ("Optional(800)")
+/Users/hey/Untitled/Pendingname/PendingCrew/.pendingcrew/worktrees/Todo-126-126-astra-Linux----91-T-bec195e1/Tests/PendingCrewTests/CrewLocalImageCacheTests.swift:97: error: -[PendingCrewTests.CrewLocalImageCacheTests testInjectedStorageReceivesKeyCostReplacementAndClear] : XCTAssertEqual failed: ("nil") is not equal to ("Optional(1)") - 无有效像素时成本下限为 1
+Test Case '-[PendingCrewTests.CrewLocalImageCacheTests testInjectedStorageReceivesKeyCostReplacementAndClear]' failed (0.001 seconds).
+	 Executed 8 tests, with 4 failures (0 unexpected) in 1.059 (1.061) seconds
+	 Executed 8 tests, with 4 failures (0 unexpected) in 1.059 (1.061) seconds
+	 Executed 8 tests, with 4 failures (0 unexpected) in 1.059 (1.062) seconds
+** TEST FAILED **
+
+05-restored-green.log
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.043 (0.045) seconds
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.043 (0.045) seconds
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.043 (0.046) seconds
+** TEST SUCCEEDED **
+
+06-full.log
+Test Case '-[PendingCrewTests.AgentTuiFixtureRecorder testRecord]' skipped (0.002 seconds).
+Test Case '-[PendingCrewTests.CrewLastMessageCacheTests test_基准_现场白板目录]' skipped (0.001 seconds).
+Test Case '-[PendingCrewTests.SessionAwaitingReplyInputsCacheTests test_基准_现场目录]' skipped (0.001 seconds).
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.010 (0.013) seconds
+	 Executed 2607 tests, with 3 tests skipped and 0 failures (0 unexpected) in 151.188 (151.796) seconds
+	 Executed 2607 tests, with 3 tests skipped and 0 failures (0 unexpected) in 151.188 (151.797) seconds
+** TEST SUCCEEDED **
+Per-case counts: {'passed': 2604, 'skipped': 3, 'failed': 0}
