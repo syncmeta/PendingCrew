@@ -158,5 +158,10 @@ B 的代价是「当前回合会断」。**这个代价可以不付** —— 因
 - **没有端到端验证过 A 的那条通知路** —— 只读了 claude 的客户端代码（见 §3 A）。
 - **没量过 `--resume` 重起一个真 session 的耗时和 token 代价**，§4 那条节流建议是估的。
 - **只量了这一台机器、这一个时刻**。
-- **codex 那条腿没单独量**。它跟 claude 共用同一个 `--mcp-serve` helper，所以结论应当同样成立，
-  但「codex 会不会在 thread/resume 之后重新拉工具表」我没核。
+- **codex 那条腿的触发器不是同一个，已核清**：codex 的 session **没有 hook**
+  （`Sources/Mac/LocalRunner/LocalSessionLaunch.swift:191` `codexMcpServers` 只产 mcpServers，不产 settings.json），
+  所以 §4 里「新代码的 Stop hook 自己发现」那条路对它不成立。但它有另一条：codex 的回合结束
+  是 app/daemon 侧经协议看见的（`turn/completed`，`Sources/Mcp/McpTurnHook.swift:16` 已写明两家
+  共用同一套回合留痕）。**所以 B+ 对 codex 照样做得了，只是判定住在后台而不是 hook 里** ——
+  代价是那半截依赖 daemon 自己先换代（§4 最后一条鸡生蛋）。
+- **「codex 会不会在 thread/resume 之后重新拉工具表」没核。**
