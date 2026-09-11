@@ -6,8 +6,7 @@ import Foundation
 /// app 零感知，用户得进终端肉眼看（分诊第 7 点）。
 ///
 /// 检测面（能可靠拿到什么就报什么，不猜）：
-/// - claude（PTY）：`SessionHealthScanner` 对终端输出做去 ANSI 的文案匹配，
-///   匹配串全部从本机 claude CLI 2.1.201 二进制 strings 实测核出，非臆测。
+/// - claude：认证取同 session 结构化 transcript；额度仍使用 PTY 文案扫描。
 /// - codex（app-server）：`account/chatgptAuthTokens/refresh` server-request
 ///   —— codex 要客户端刷新 ChatGPT token,我们无法提供 = 登录态失效的强信号。
 struct CrewSessionHealth: Equatable {
@@ -224,18 +223,10 @@ final class AnsiPlainTextTail {
 /// 2. 滚动尾窗 —— 只保留最近一段明文（跨 chunk 断开的短语在窗内重新连上）。
 /// 3. 匹配 —— 小写子串匹配下面的实测短语表。
 ///
-/// 已知边界：终端里**内容级**出现这些短语（比如 agent 在 cat 一段含
-/// "run /login" 的文档）会误报 —— 这是提示性 warning 且每 Kind 只一次，
-/// 接受这个噪音换「不用进终端就知道挂了」（记 tech-debt）。
+/// PTY 是内容与 runner UI 的混合流。认证文案只能算未知，不能据此要求 /login。
+/// 认证的三态证据来自同一 session 的结构化 transcript，见 ClaudeAuthenticationProbe。
 final class SessionHealthScanner {
 
-    /// 实测短语表（本机 claude 2.1.201 strings 核出;小写匹配）。
-    /// 注意保持短语足够特异 —— 别放 "usage limit" 这种会出现在普通 UI 提示里的宽串。
-    static let authPhrases = [
-        "run /login",             // "Please run /login to authenticate" 等全家
-        "not logged in",          // "Not logged in. Run claude auth login …"
-        "invalid api key",
-    ]
     static let quotaPhrases = [
         "you've reached your",    // "You've reached your … usage limit"
         "you’ve reached your",    //  同上,弯引号变体
@@ -253,12 +244,10 @@ final class SessionHealthScanner {
     /// （见 `AnsiPlainTextTail.loweredASCII` 上那段为什么）。短语全是 ASCII
     /// （`you’ve` 的弯引号是多字节，但按字节比一样精确），所以字节比与原来的
     /// `lowercased()` + `contains` 在这张表上等价，有单测钉。
-    static let authNeedles = authPhrases.map(AnsiPlainTextTail.loweredNeedle)
     static let quotaNeedles = quotaPhrases.map(AnsiPlainTextTail.loweredNeedle)
 
-    /// 本扫描器只可能翻这两类（`rateLimited` 归 `RateLimitMenuScanner`、
-    /// `launchFailed` 归 `SessionLaunchProbe`）——两类都报过就彻底收工。
-    private static let scannerKinds: Set<CrewSessionHealth.Kind> = [.authRequired, .usageLimit]
+    /// 本扫描器只报额度；认证由独立的结构化证据判定。
+    private static let scannerKinds: Set<CrewSessionHealth.Kind> = [.usageLimit]
 
     /// 喂一段 PTY 原始字节，返回**新**命中的健康异常（通常空数组）。
     func feed(_ bytes: ArraySlice<UInt8>) -> [CrewSessionHealth] {
@@ -266,13 +255,6 @@ final class SessionHealthScanner {
         guard stripper.feed(bytes) else { return [] }
 
         var out: [CrewSessionHealth] = []
-        if !fired.contains(.authRequired),
-           Self.authNeedles.contains(where: { stripper.containsLoweredASCII($0) }) {
-            fired.insert(.authRequired)
-            out.append(CrewSessionHealth(
-                kind: .authRequired,
-                detail: "Claude Code 未登录或登录已失效 —— 打开这个 session 的终端跑 /login 登录后再继续。"))
-        }
         if !fired.contains(.usageLimit),
            Self.quotaNeedles.contains(where: { stripper.containsLoweredASCII($0) }) {
             fired.insert(.usageLimit)
@@ -286,6 +268,97 @@ final class SessionHealthScanner {
     /// 重新武装额度类命中（额度重置唤醒到点后调）——下一个限额窗再撞墙时
     /// 能再次首报（fail-loud），而不是被「每 Kind 一次」永久哑掉。
     func rearmQuota() { fired.remove(.usageLimit) }
+}
+
+/// Authentication evidence is deliberately separate from process/PTY liveness.
+/// `.authenticated` means a genuine model response was observed in this launch,
+/// not a promise that credentials can never expire afterwards.
+enum ClaudeAuthenticationState: Equatable {
+    case unknown
+    case authenticated
+    case authenticationRequired
+
+    func applying(to health: CrewSessionHealth?) -> CrewSessionHealth? {
+        switch self {
+        case .authenticationRequired:
+            return CrewSessionHealth(kind: .authRequired,
+                detail: "Claude Code 在本 session 报告了认证失败。请检查该 session 的登录或凭据配置。")
+        case .authenticated, .unknown:
+            return health?.kind == .authRequired ? nil : health
+        }
+    }
+}
+
+/// Read-only, bounded evidence from the runner's JSONL envelope. Tool/user text,
+/// including quoted JSON or login advice, never participates in authentication.
+struct ClaudeAuthenticationProbe: Sendable {
+    let sessionId: String
+    let projectsDirectory: URL
+    let since: Date
+    static let maximumBytes = 256 * 1024
+
+    func read() -> ClaudeAuthenticationState {
+        guard !sessionId.isEmpty, !sessionId.contains("/"), !sessionId.contains("\\"),
+              !sessionId.contains("\0") else { return .unknown }
+        do {
+            // Locate by session id, not the current cwd: resumed sessions can move.
+            let directories = try FileManager.default.contentsOfDirectory(
+                at: projectsDirectory, includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles])
+            let candidates = directories.map { $0.appendingPathComponent(sessionId + ".jsonl") }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard candidates.count == 1 else { return .unknown }
+            let file = try FileHandle(forReadingFrom: candidates[0])
+            defer { try? file.close() }
+            let size = try file.seekToEnd()
+            let offset = size > UInt64(Self.maximumBytes) ? size - UInt64(Self.maximumBytes) : 0
+            try file.seek(toOffset: offset)
+            var data = try file.read(upToCount: Self.maximumBytes) ?? Data()
+            if offset > 0 {
+                guard let newline = data.firstIndex(of: 10) else { return .unknown }
+                data.removeSubrange(...newline) // drop the possibly partial first record
+            }
+            return Self.state(in: data, sessionId: sessionId, since: since)
+        } catch {
+            return .unknown // denied/missing data is neither logged out nor healthy
+        }
+    }
+
+    static func state(in data: Data, sessionId: String, since: Date) -> ClaudeAuthenticationState {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let secondsFormatter = ISO8601DateFormatter()
+        var state = ClaudeAuthenticationState.unknown
+        var newest = since
+        // An incomplete last record can be in the middle of a write; wait for newline.
+        let lines = data.split(separator: 10, omittingEmptySubsequences: false).dropLast()
+        for line in lines {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  object["sessionId"] as? String == sessionId,
+                  object["type"] as? String == "assistant",
+                  object["isSidechain"] as? Bool != true,
+                  let timestamp = object["timestamp"] as? String,
+                  let date = formatter.date(from: timestamp) ?? secondsFormatter.date(from: timestamp),
+                  date >= newest else { continue }
+            newest = date
+            if object["isApiErrorMessage"] as? Bool == true,
+               object["error"] as? String == "authentication_failed" {
+                state = .authenticationRequired
+            } else if object["isApiErrorMessage"] as? Bool != true,
+                      object["error"] == nil,
+                      let message = object["message"] as? [String: Any],
+                      message["role"] as? String == "assistant",
+                      let model = message["model"] as? String, !model.isEmpty,
+                      !model.hasPrefix("<"),
+                      let id = message["id"] as? String, id.hasPrefix("msg_"),
+                      message["content"] is [Any] {
+                state = .authenticated
+            } else {
+                state = .unknown
+            }
+        }
+        return state
+    }
 }
 
 /// claude 撞限额弹出的 `/rate-limit-options` 模态菜单检测器（Todo #10 层1）。

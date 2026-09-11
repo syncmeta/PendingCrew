@@ -2975,7 +2975,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
                 if h != nil { self.healthAt = Date() }
                 // 后端宣布恢复（health 归 nil）→ 把额度类首报重新武装：下次真撞墙
                 // 还要能再喊一次，否则「每 Kind 只喊一次」会让恢复后的再撞墙静音。
-                if h == nil { self.announcedHealthKinds.subtract([.usageLimit, .rateLimited, .cliVersionIncompatible, .turnFailed]) }
+                if h == nil { self.announcedHealthKinds.subtract([.authRequired, .usageLimit, .rateLimited, .cliVersionIncompatible, .turnFailed]) }
                 guard let h else { continue }
                 self.announce(h)
             }
