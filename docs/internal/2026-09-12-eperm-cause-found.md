@@ -68,6 +68,37 @@ zsh ← claude ← PendingCrew(daemon) ← PendingCrew(GUI) ← launchd
 **我是 PendingCrew 的后代，却照样被拒。** 所以「TCC 按 app 身份放行、我不是那个 app」
 这个解释**不成立** —— 至少不是那么简单。这一条我没解释掉，明写在这儿。
 
+## ⚠️ 更正（00:57，写完上面那段之后立刻跑的对照）
+
+**`com.apple.provenance` 不是原因。** 我把它写成「载体」是错的。
+
+跑对照才发现：**`Application Support/Codex` 目录上也有 `com.apple.provenance`，而它读得好好的。**
+
+| 目录 | 有 provenance | 读 |
+|---|---|---|
+| PendingCrew | ✅ | ❌ EPERM |
+| Codex | ✅ | ✅ |
+| Claude | ✅ | ✅ |
+| Cursor | ❌（没这个 xattr） | ✅ |
+
+所以 provenance 是**这一类目录的常态**，不是病。**病在别处，我没找到。**
+
+这是同一天第五次「机制说得通就当成结论」—— 我看到一个属性、它的语义正好能解释现象，
+就把它写成了载体。**救我的是那条「便宜的对照」**：多量一个已知正常的对象，五秒钟。
+
+**还站得住的读数**（这些是量的，不是推的）：
+- 罩的是**目录**：新建的空文件也读不回。
+- **不是每个进程不一样**：全新 `env -i /bin/sh` 一样被拒。
+- 范围就是 `PendingCrew*`，同层另外 18 个 app 全正常。
+- **写/stat/列目录/删除照常，只有读被拒。**
+- **产品没瘫**：daemon 此刻仍在正常写盘（`crew-sessions.json` 两秒前刚写）。
+- **app 二进制也被拒**：`post_to_crew` 失败回执点名读的进程是 `pid=53687`，
+  那是 MCP helper —— **它就是 PendingCrew 的二进制**。所以「按 app 身份放行」也不成立。
+
+## 原成因段（已作废，保留以便对照）
+
+### （以下为已被上面推翻的原文）
+
 ## 成因：一个有证据支撑的假设，**不是结论**
 
 `com.apple.provenance` 是 macOS 用来标记「这份文件归哪个 app」的扩展属性，
