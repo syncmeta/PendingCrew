@@ -44,6 +44,38 @@ final class TodoListPresentationTests: XCTestCase {
 
     // MARK: - #11 状态 → 圆圈图标（提醒事项逻辑）
 
+    // MARK: - `rows(for:)` 真的把排序用上了
+
+    /// **面板调的是 `rows(for:)`，不是 `newestFirst`。** 上面那五条钉住了
+    /// `newestFirst` 自己排得对，但没有一条钉住 `rows` 会去调它 ——
+    /// 把 `case .agent` 那一行的 `newestFirst(` 拿掉，**全量 2695 条一条不红**
+    /// （2026-09-12 变异量的）。于是「agent 那本从新到旧」这条保证当时没人守。
+    ///
+    /// 接线尺子也挡不住这一刀：`newestFirst` 在 `humanFacingRows` 里仍有调用点，
+    /// `ViewWiringTests` 照样绿。**那把尺子问的是「有没有人用」，
+    /// 不是「这一条路上有没有用」。**
+    func test_agent那本经由rows也从新到旧() {
+        let rows = TodoListPresentation.rows(
+            for: .agent, human: [], agent: [item(1), item(3), item(2)])
+        XCTAssertEqual(rows.map(\.item.number), [3, 2, 1],
+                       "agent 那本没按从新到旧排 —— 新建的条目不在最上面")
+        XCTAssertEqual(rows.map(\.ledger), [.agent, .agent, .agent])
+    }
+
+    /// 人类那本同理：`humanFacingRows` 自己排得对是一回事，`rows(for: .human)`
+    /// 有没有走它是另一回事。
+    func test_人类那本经由rows也是置顶加从新到旧() {
+        let rows = TodoListPresentation.rows(
+            for: .human,
+            human: [item(1), item(2)],
+            agent: [item(9, status: LocalTodoItem.blockedOnHumanStatus),
+                    item(8, status: "in_progress")])
+        XCTAssertEqual(rows.map(\.item.number), [9, 2, 1],
+                       "等他回复的那条没置顶，或人类那本没从新到旧")
+        XCTAssertEqual(rows.map(\.ledger), [.agent, .human, .human],
+                       "每条必须带着自己那本账的归属")
+    }
+
     func testPendingIsHollowCircleNotBreathing() {
         let icon = TodoListPresentation.statusIcon("pending")
         XCTAssertEqual(icon.symbol, "circle")
