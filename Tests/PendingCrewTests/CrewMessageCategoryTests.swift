@@ -240,4 +240,45 @@ final class CrewMessageCategoryTests: XCTestCase {
         XCTAssertTrue(msg.contains("pending"), msg)
     }
 
+
+    // MARK: - #142：问了却没指定问谁
+
+    /// `question` + 一个 mention 都没有 = **问出去就没了**：
+    /// `question` 不落任何账（`ledger == .none`），而人类的「仅 @ 我」筛选默认开着。
+    /// 两件事叠起来才成立，所以这条判定不需要猜消息内容。
+    func test_question没指定问谁要提醒() throws {
+        let hint = try XCTUnwrap(
+            CrewMessageRecipients.receiptHintIfUnaddressed(category: "question",
+                                                           mentionKinds: []))
+        XCTAssertTrue(hint.contains("没指定问谁"), hint)
+        XCTAssertTrue(hint.contains("出路"), "只说不行不给出路，下次还这么发：\(hint)")
+        XCTAssertTrue(hint.contains("add_human_todo"),
+                      "等得起的那条路要说出来，否则他只会改成 @human 然后照样被刷过去")
+    }
+
+    /// **`broadcast` 不算指定了收件人** —— 它回答的是「谁看得见」，不是「这条问谁」。
+    func test_只带broadcast仍然算没指定问谁() {
+        XCTAssertNotNil(CrewMessageRecipients.receiptHintIfUnaddressed(
+            category: "question", mentionKinds: ["broadcast"]))
+    }
+
+    func test_指定了就不提醒() {
+        for kinds in [["human"], ["captain"], ["session"], ["broadcast", "session"]] {
+            XCTAssertNil(
+                CrewMessageRecipients.receiptHintIfUnaddressed(category: "question",
+                                                               mentionKinds: kinds),
+                "\(kinds)")
+        }
+    }
+
+    /// **只管 `question` 这一类。** 扩大到别的分类会变成噪音，
+    /// 而一条永远都在的提醒等于没有提醒 —— 这条用例就是那道闸。
+    func test_别的分类一律不提醒() {
+        for c in ["progress", "note", "human_todo", "finding", "ack", "done", nil] {
+            XCTAssertNil(
+                CrewMessageRecipients.receiptHintIfUnaddressed(category: c,
+                                                               mentionKinds: []),
+                "\(c ?? "nil") 被警告了 —— 警告一切等于没有警告")
+        }
+    }
 }

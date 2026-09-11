@@ -154,4 +154,18 @@ final class CrewMessageReferenceLandingTests: XCTestCase {
         XCTAssertTrue(r.contains("挪进") || r.contains("每条"), "没说清该挪到哪：\(r)")
         XCTAssertTrue(board(f).isEmpty, "整批该一条都不发")
     }
+
+    /// #142 接线：回执真的带上了那句提醒（纯层算得对 ≠ 它被调了）。
+    func test_question没指定问谁时回执真的提醒了() {
+        let f = fixture()
+        let r = post(server(f), #"{"message":"这个怎么办？","category":"question"}"#)
+        XCTAssertTrue(r.contains("没指定问谁"), r)
+    }
+
+    func test_question指定了人就不提醒() {
+        let f = fixture()
+        let r = post(server(f),
+                     #"{"message":"这个怎么办？","category":"question","mentions":[{"kind":"human"}]}"#)
+        XCTAssertFalse(r.contains("没指定问谁"), r)
+    }
 }

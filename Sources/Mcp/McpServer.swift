@@ -190,7 +190,7 @@ final class McpServer {
                                     "required": ["text"],
                                 ],
                             ],
-                            "headline": ["type": "string", "description": "**这条消息的一句话结论** —— 长消息在群里会默认收起，收起态显示的就是这一行。\n不给的话，界面只能**猜**（取正文前 3 段里第一个加粗），猜出来的常常是句子中间某个强调词，而不是结论。\n写法：一句话说清「结果是什么」，不是「我做了什么」。别把整段粘进来，收起态只露一行。\n分条发送时它是**每条自己的**（写在 `messages` 里那一条上）。"],
+                            "headline": ["type": "string", "description": "**一句话说清「结果是什么」** —— 超过 8 行的消息在群里**默认收起**，收起态就只露这一行，人看不看正文全看它。\n\n**写结果，不写动作：**\n✅「闸门全绿，0.1.34 可以发」\n✅「病根是守卫问错了对象，已修，等接线」\n✅「这条要你拍：A 拒收 / B 降级，我倾向 B」\n❌「关于折叠标题的一些进展」（说了等于没说）\n❌「我改了 CrewMessageFold 和 McpServer」（这是过程，不是结果）\n❌ 把整段摘要粘进来（收起态只露一行，多的会被截掉）\n\n长度：约 60 个半角宽 ≈ **30 个汉字**，超了截断加省略号。\n**不给的话界面只能猜**（取正文前 3 段里第一个加粗）—— 猜出来的常常是句子中间某个强调词。真没结论可写，多半说明这条消息本身不该这么长。\n分条发送时它是**每条自己的**（写在 `messages` 里那一条上，顶层给会整批拒）。"],
                             "category": ["type": "string", "description": "这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。不给 = 不落账。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
                             "todo_status": ["type": "string", "enum": LocalTodoStore.statusOrder, "description": "配合 `todo` 用。翻 `completed` 必须带 `evidence_commit`（会当场解析）或 `evidence`。"],
@@ -2003,7 +2003,18 @@ final class McpServer {
                     attachmentCount: intake.accepted.count,
                     attachmentErrors: intake.errors)
                 // 落账结果必须进回执：**「落账可撤」的前提是先让人知道它落了哪一条。**
-                return (true, ([base] + ledgerReceipts + [statusHint].compactMap { $0 })
+                // #143：长消息没给结论时，把**猜出来的那一行**摆给作者看。
+                // schema 里的说明只在写之前被读到一次（多半没读），真正教得会人的
+                // 是出错那一刻的这句话。
+                let guessHint = CrewMessageFold.receiptHintIfGuessed(
+                    text: message, headline: headline)
+                // #142：`question` 却没指定问谁 —— 不落账 + 不在他眼前 = 问出去就没了。
+                // 只管这一类能从结构上证明的，别的等收件人真变成字段（人类 Todo #16）。
+                let addressHint = CrewMessageRecipients.receiptHintIfUnaddressed(
+                    category: args["category"] as? String,
+                    mentionKinds: (mentions ?? []).map(\.kind))
+                return (true, ([base] + ledgerReceipts
+                               + [statusHint, guessHint, addressHint].compactMap { $0 })
                     .joined(separator: "\n"))
             } catch {
                 return (false, Self.writeFailureReceipt(error))

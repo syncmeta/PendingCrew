@@ -161,4 +161,50 @@ final class CrewHeadlinePipeTests: XCTestCase {
         let r = post(server(f), #"{"messages":[{"text":"一","category":"note","headline":"结论甲"},{"text":"二","category":"note","headline":"结论乙"}]}"#)
         XCTAssertEqual(board(f).map(\.headline), ["结论甲", "结论乙"], "回执：\(r)")
     }
+
+    // MARK: - 回执在出错那一刻教人（#143 的「文案真的教得会」那半）
+
+    /// JSON 里的正文：把换行转义掉。**不用 `#"""…"""#` 拼** —— 原始字符串里
+    /// 行尾的 `\` 是字面反斜杠，会把 JSON 弄坏，而坏掉的 JSON 表现为
+    /// 「回执为空、一条没发」，跟「被拒」长得一模一样。
+    private var wallEscaped: String {
+        wall.replacingOccurrences(of: "\n", with: "\\n")
+    }
+
+    /// **schema 里的说明只在写之前被读到一次，而且多半没读。**
+    /// 真正教得会人的是出错那一刻的那句话 —— 所以长消息没给结论时，
+    /// 回执把**猜出来的那一行原样摆给作者看**：他一眼看出那不是他的结论。
+    func test_长消息没给结论时回执把猜出来的那行摆出来() {
+        let f = fixture()
+        let r = post(server(f), "{\"message\":\"\(wallEscaped)\",\"category\":\"note\"}")
+        XCTAssertTrue(r.contains("没给 `headline`"), "回执没提醒：\(r)")
+        XCTAssertTrue(r.contains("顺手"),
+                      "没把猜出来的那一行摆出来，提醒就只是一句空话：\(r)")
+    }
+
+    func test_给了结论就不提醒() {
+        let f = fixture()
+        let r = post(server(f),
+                     "{\"message\":\"\(wallEscaped)\",\"category\":\"note\","
+                     + "\"headline\":\"闸门全绿\"}")
+        XCTAssertFalse(r.contains("没给 `headline`"), r)
+    }
+
+    /// 短消息不折，就别拿这句去烦人 —— **一条永远都在提醒的提醒会被忽略**。
+    func test_短消息不提醒() {
+        let f = fixture()
+        let r = post(server(f), #"{"message":"一句话","category":"note"}"#)
+        XCTAssertFalse(r.contains("没给 `headline`"), r)
+    }
+
+    func test_长但猜不出结论时也不提醒() {
+        // 没有粗体、没有标题 —— `fold` 返回 nil（这条根本折不起来）。
+        let plain = (1...12).map { "第 \($0) 段。" }.joined(separator: "\n")
+        XCTAssertNil(CrewMessageFold.receiptHintIfGuessed(text: plain, headline: nil),
+                     "猜都猜不出来时提醒没有内容可摆，等于噪音")
+    }
+
+    func test_空白结论视同没给() {
+        XCTAssertNotNil(CrewMessageFold.receiptHintIfGuessed(text: wall, headline: "   "))
+    }
 }

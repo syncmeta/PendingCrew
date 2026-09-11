@@ -73,6 +73,9 @@ struct CrewChatView: View {
 
     /// 渲染窗口上限（#443）：只把最近这么多条交给 `ForEach`。切 crew 时归位到一页。
     @State private var renderLimit = CrewChatWindow.pageSize
+    /// 「人往上看」那一刻的窗口深度 —— 回到底部时按它回吐这一段（#144）。
+    /// 跟随中恒为 nil。
+    @State private var limitBeforeExcursion: Int?
     /// `.scrollPosition(id:)` 的回写落点（Todo #60 返工）。**故意是个引用盒子、不是
     /// `@State` 的值**：那个绑定会在人滚动时不停回写「现在顶上是哪一条」，落进被 SwiftUI
     /// 观察的存储就是**每次回写重算一次 body** —— 这条聊天视图的 body 里挂着整段消息列表，
@@ -960,14 +963,28 @@ struct CrewChatView: View {
             }
             .animation(.easeOut(duration: 0.12), value: bottomPin.unread > 0)
             .onChange(of: timelineEntries.count) { old, new in
-                let added = new - old
-                // 已经翻开过更早的话，把新增条数补进上限 —— 否则来一条新消息就把
-                // 他刚翻出来的最老那条挤出窗口，正在读的内容从上面消失（#443）。
-                renderLimit = CrewChatWindow.afterInsert(limit: renderLimit, added: added)
-                // 在底部 → 跟着走（行为 2）；不在底部 → 位置一动不动，只把未读加上去
-                // （行为 3）。判定收口在 `Pin.received`。
-                if bottomPin.received(added) { landAtBottom(proxy, animated: true) }
+                // 判定整段收在 `CrewChatNewMessages.apply` 里 —— **这个文件不进
+                // test bundle**，留在这儿写就等于真实调用路径上一条尺子都没有
+                // （`afterInsert` 和 `Pin.received` 各自有一排用例，也照样挡不住
+                // 「调用点漏传 isFollowing」这种错）。人类 Todo #144。
+                let outcome = CrewChatNewMessages.apply(
+                    added: new - old, renderLimit: renderLimit, pin: bottomPin)
+                renderLimit = outcome.renderLimit
+                bottomPin = outcome.pin
+                if outcome.shouldLandAtBottom { landAtBottom(proxy, animated: true) }
                 locateSearchTarget(proxy)
+            }
+            // 跟随开关翻了：松开时记下窗口深度，回到底部时**只回吐这一次往上看
+            // 期间涨出来的那一段**（他滑走之前就翻出来的那几页不收回去）。
+            // 不回吐的话，一次长时间的「往上看」会让窗口随聊天一路长大，
+            // #443 那道成本封顶就白做了。
+            .onChange(of: bottomPin.isFollowing) { _, following in
+                let next = CrewChatNewMessages.followChanged(
+                    isFollowing: following,
+                    renderLimit: renderLimit,
+                    limitBeforeExcursion: limitBeforeExcursion)
+                renderLimit = next.renderLimit
+                limitBeforeExcursion = next.limitBeforeExcursion
             }
             // 切换筛选（Todo #61）：列表整个换了一批内容，不是「来了新消息」。
             // 窗口深度归位到一页 + 跟随/未读归位 + 落到最新一条 —— 与切 crew 同一
