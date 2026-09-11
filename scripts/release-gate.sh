@@ -7,6 +7,11 @@
 #   · 发版闸门：     sh scripts/release-gate.sh <要发的 commit>
 #   · 日常合前基线： sh scripts/release-gate.sh $(git -C <仓库> rev-parse HEAD)
 #
+# 跑完的现场全在 /tmp/pcw-<commit>-log/：三份 .log ＋ **一份 .xcresult**（失败用例名在里面）。
+# xcresult 是 2026-09-12 才补上的 —— 在那之前这道闸门只留 .log，而
+# **日常跑红了可以再跑一次；发版闸门红了、日志又丢了，你面对的是一个已经开始的
+# 发布流程和一条查不出来的红。**
+#
 # 判读（跑完读这六样，不需要任何事前判据）：
 #   ① skip **不比数字，比构成** —— 逐条看这三条各自还在不在、成立条件还成不成立：
 #        · CrewLastMessageCacheTests.test_基准_现场白板目录         —— 未指定现场白板目录 → skip
@@ -47,6 +52,15 @@ git -C "$REPO" merge-base --is-ancestor "$COMMIT" main || {
 WT=/tmp/pcw-$COMMIT
 LOG=/tmp/pcw-$COMMIT-log   # 日志带 commit：两个人同时跑不会互相冲掉读数
 mkdir -p "$LOG"
+# 这一趟自己的 DerivedData。**给它显式路径不是为了隔离，是为了「知道 xcresult 在哪」**。
+# 不指定时产物落进共享 DerivedData，多条线并跑时「最近那个 xcresult」是谁的**并不确定**；
+# 在那儿猜一个比不归档更坏 —— **它会让人拿着别人的日志去查自己的红**。
+# 指定之后这个猜测整个消失：这个目录底下的 xcresult 只可能是这个 commit 这一趟的。
+#
+# 位置选在 $LOG 底下（不是 $WT 底下）是**刻意的**：worktree 里多一个未跟踪目录会被
+# `status --porcelain -uall` 数进去，读数 ④ 的前后指纹就必不相等 ——
+# `.test-data-root` 2026-09-09 就是这么把 ④ 弄成过报的，别再踩第二次。
+DD="$LOG"/dd
 # 幂等：worktree 已在就复用（我们不删 worktree），否则同一 commit 跑第二趟会因为
 # `add` 报错 + set -e 当场早退，而那个报错跟测试毫无关系
 [ -d "$WT" ] || git -C "$REPO" worktree add --detach "$WT" "$COMMIT"
@@ -122,9 +136,22 @@ before_diff=$(git -C "$WT" status --porcelain -uall | shasum | cut -c1-12)
 rm -rf "$WT/.test-data-root"
 # ─────────────────────────────────────────────────────────────────────────
 
-xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' test      > "$LOG"/t-mac.log 2>&1 || true
-xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' build     > "$LOG"/b-mac.log 2>&1 || true
-xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'generic/platform=iOS Simulator' build > "$LOG"/b-ios.log 2>&1 || true
+xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' -derivedDataPath "$DD" test  > "$LOG"/t-mac.log 2>&1 || true
+# 归档 xcresult。**必须紧跟在 test 后面**：下面两趟 build 要是挂住或被人打断，
+# 这一趟的失败用例名也已经落盘了。照 scripts/test-mac.sh 的形状（带时间戳的名字），
+# 不发明第二种 —— 同一个 commit 跑第二趟不会把第一趟的现场盖掉。
+xcresult=$(ls -td "$DD"/Logs/Test/*.xcresult 2>/dev/null | head -1)
+if [ -n "$xcresult" ]; then
+  # 报出去的必须是**真写下去的那个路径本身**，不是照规则再拼一次 ——
+  # 拼的那份平时都对，只在你真要照着去找的时候错。
+  archived="$LOG/$(date -u +%Y%m%dT%H%M%SZ).xcresult"
+  cp -R "$xcresult" "$archived"
+  echo "xcresult 已归档 → $archived"
+else
+  echo "⚠️ 这一趟没找到 xcresult —— **归档是空的，别把它当成「查得到」**（$DD/Logs/Test 下没有）"
+fi
+xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' -derivedDataPath "$DD" build > "$LOG"/b-mac.log 2>&1 || true
+xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'generic/platform=iOS Simulator' -derivedDataPath "$DD" build > "$LOG"/b-ios.log 2>&1 || true
 after_head=$(git -C "$WT" rev-parse HEAD)
 after_diff=$(git -C "$WT" status --porcelain -uall | shasum | cut -c1-12)
 fixture_after=$([ -d "$WT/Tests/PendingCrewTests/Fixtures" ] && echo present || echo absent)
@@ -184,6 +211,7 @@ ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | sed 's|^|  |'
 printf '共 %s 趟，合计 %s（含各自的 -log 目录）\n' \
   "$(ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | wc -l | tr -d ' ')" \
   "$(du -shc /tmp/pcw-* 2>/dev/null | tail -1 | awk '{print $1}')"
+echo "  合计里的大头是每趟自己的 DerivedData（-log/dd/），不是源码也不是日志。"
 echo "  只报不删：清不清、什么时候清是仓库主人的事。"
 echo "  也只说闸门自己这一堆 —— 本机别处还有 worktree，不在此列。"
 echo "  另有一类更该管的：注册比目录活得久 —— worktree 建在会被回收的临时目录里"
