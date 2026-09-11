@@ -119,6 +119,28 @@ enum CrewLocalMentionWakeLogic {
         return .pin(WhiteboardCursorPosition(id: last.id, createdAt: last.createdAt))
     }
 
+    /// 上一次钉游标没钉上（`.retryLater`：白板那一刻整份读不出来）、这一次补上了 ——
+    /// 那中间写进来的定向 @ 落在补钉位置**之前**，唤醒器扫不到它们。
+    ///
+    /// **这条缺口原本在磁盘上一点痕迹都没有**：没有告警、没有计数，白板上看不出
+    /// 「这里本该有人被叫醒」。所以它既量不到，也没人会回头查 —— 账本里记的正是这个。
+    /// 补不回那些消息（读失败的那一刻白板只返回一条内存里的警示行，**连一个真实锚点
+    /// 都没有**，所以「钉在最后一条真行上」这条路不存在），能做的是**把静默的丢变成
+    /// 看得见的丢**：补钉成功的那一刻白板已经可读了，就在那儿留一行，写清窗口的两端。
+    ///
+    /// 调用方以 system 身份贴板、**不 @ 任何人**：目的是让人回头查得到，不是再叫醒谁
+    /// （`pending` 对无 mention 的 session 条目返回空，所以它天然不唤醒）。
+    ///
+    /// 返回 `nil` = 没有缺口，什么都别写。
+    static func missedPinWindowNotice(failedAt: Date?, recoveredAt: Date) -> String? {
+        guard let failedAt, recoveredAt > failedAt else { return nil }
+        let f = ISO8601DateFormatter()
+        return "唤醒器的扫描游标上次没钉上（那一刻白板读不出来），刚补钉在当前最新一条上。"
+            + "\(f.string(from: failedAt)) 到 \(f.string(from: recoveredAt))"
+            + "（约 \(Int(recoveredAt.timeIntervalSince(failedAt))) 秒）之间写进来的定向 @ "
+            + "落在补钉位置之前、扫不到 —— 要找就翻这段。"
+    }
+
     /// 发送者标注（与 `HookEmitter.render` 的取名次序一致）：显示名优先，
     /// 机长兜底「机长」，再兜 `session:<前6>`，最后退回原 kind。
     static func senderLabel(_ e: LocalWhiteboardMessage) -> String {

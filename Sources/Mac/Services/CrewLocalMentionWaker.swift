@@ -40,6 +40,11 @@ final class CrewLocalMentionWaker {
     /// 悬空，而「悬空」在旧实现里等于「全是新的」—— 全机 session 被几周前的 @ 拉起来
     /// 照过期指令返工。带上时间戳后，悬空也只切出真正更新的那批。
     private var cursors: [String: WhiteboardCursorPosition] = [:]
+    /// 上一次钉游标失败（`.retryLater`）的时刻，per-crew。补钉成功后清掉，
+    /// 并在白板上留一行说明那个窗口 —— 见 `CrewLocalMentionWakeLogic.missedPinWindowNotice`。
+    /// **留痕本身也可能写失败**（白板正不可读时，写未必就通），所以清是在写成功之后，
+    /// 没清掉的下一次 `scan` 还会再试一次。
+    private var pinFailedAt: [String: Date] = [:]
     /// per-crew 白板文件指纹门（Todo #59）。
     ///
     /// 目录事件不带文件名，所以 `directoryChanged` 一来就要把 `watched` 里**每个**
@@ -148,10 +153,30 @@ final class CrewLocalMentionWaker {
         switch CrewLocalMentionWakeLogic.pinPosition(
             rows: LocalWhiteboardStore.shared.list(crewId: crewId)) {
         case .retryLater:
+            // 第一次失败的时刻才是窗口左端，后面每次重试都不许把它往后推。
+            if pinFailedAt[crewId] == nil { pinFailedAt[crewId] = Date() }
             return
         case .pin(let position):
             pinned.insert(crewId)
             cursors[crewId] = position
+            // 留痕排在钉之后：这一行落在游标**后面**，会被当成新增扫到一次，
+            // 而它没有 mention —— `pending` 对无 mention 的 session 条目返回空，
+            // 所以它谁也叫不醒，只是留在板上给人查。
+            emitMissedPinWindowNotice(crewId)
+        }
+    }
+
+    /// 把「上次没钉上」那个窗口写到白板上（幂等：写成功才清记录）。
+    private func emitMissedPinWindowNotice(_ crewId: String) {
+        guard let text = CrewLocalMentionWakeLogic.missedPinWindowNotice(
+            failedAt: pinFailedAt[crewId], recoveredAt: Date()) else { return }
+        do {
+            _ = try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+                crewId: crewId, sessionId: "system", text: text, senderName: "系统")
+            pinFailedAt[crewId] = nil
+        } catch {
+            // 写不进去就留着 —— 下一次 scan 再试。**不许在这儿吞掉记录**：
+            // 吞掉等于把「看得见的丢」又变回「静默的丢」，那正是这条要治的病。
         }
     }
 
@@ -167,6 +192,8 @@ final class CrewLocalMentionWaker {
             if watched.contains(crewId) { pin(crewId) }
             return
         }
+        // 钉上了但留痕还没写进去（上一次写也失败了）—— 再试一次。
+        if pinFailedAt[crewId] != nil { emitMissedPinWindowNotice(crewId) }
         // 指纹必须在读**之前**取：反过来的话，取指纹与读之间落进来的那次写会被
         // 记成「已读过」，下一拍就跳过 —— 那是真丢消息。现在这个顺序最坏只是
         // 多解一遍（游标会把它变成零投递）。
