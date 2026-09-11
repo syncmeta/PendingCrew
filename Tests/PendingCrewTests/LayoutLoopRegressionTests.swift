@@ -25,6 +25,7 @@ import AppKit
 ///
 /// 钉死四条（两条反面守前提，两条正面守线上件）：
 /// 1. **反面**：SwiftUI `.repeatForever` ＋ 滚动锚点 ＋ 程序化 `scrollTo` 会自激。
+///    （标本 2026-09-12 换过一次，理由写在那条测试上 —— 前提没变，换的是量它的那个样品。）
 /// 2. **反面**：SwiftUI `.repeatForever` 长在 `LazyVStack` 行里（Todo 面板那屏）会自激。
 ///    （两条前提要是哪天被 SwiftUI 修了，会转红，提醒我们下面那些防护可能已不需要。）
 /// 3. **正面**：`TypingDotsLayerView` / `BreathingDot`（CoreAnimation 驱动）不自激。
@@ -129,12 +130,54 @@ final class LayoutLoopRegressionTests: XCTestCase {
     }
 
     /// 前提：这个组合确实有毒（红了说明 SwiftUI 侧变了，回来重估下面那条防护还要不要）。
+    ///
+    /// **这条同时是 `quietLayouts` 自己的阳性对照** —— 下面两条防线全是
+    /// 「次数 < 10」，尺子一旦量不动就会集体空绿。有它在，尺子死了这里先红。
+    /// 所以**别把它改成「次数 == 0 也算过」，也别 skip 掉**：那等于把三条一起关掉。
+    ///
+    /// ## 标本为什么从 dots 换成了这个（2026-09-12）
+    ///
+    /// 原标本是 `SwiftUIRepeatForeverDots`，那天在全量里红了，读到 0 次。
+    /// 当场做了交叉对照，**四格里三格自激**：
+    ///
+    /// | 标本 \ 骨架 | 聊天（本条） | Todo 面板 |
+    /// |---|---|---|
+    /// | `SwiftUIRepeatForeverDots` | **0** | 37574 |
+    /// | `TodoCircleAsCrashed` | 71690 | 39161 |
+    ///
+    /// 右上角 37574 说明**这个标本仍然有毒**；左下角 71690 说明**这台尺子仍然量得动**
+    /// （而且走的就是 `quietLayouts` 本身）。坏掉的只有「这个标本 × 这个骨架」这一格。
+    ///
+    /// 那一格为什么坏，**没有钉死**：延迟、`scaleEffect`、`.onAppear` 换 `.task`、
+    /// 固定尺寸 Shape 换 SF Symbol，八个变体逐个试过，全是 0；而能复现的那个标本
+    /// 与它相差不止一处，所以到此为止，**不写一个猜出来的成因**。
+    ///
+    /// 换标本不是把红的调绿：这条守的是「`.repeatForever` ＋ 滚动锚点 ＋ `scrollTo`
+    /// 会自激」这个前提，换完它照样守着，而且换的是本仓里**已经存在**的那份复刻件，
+    /// 没有为了让它变绿新造一个标本。
     func testSwiftUIRepeatForeverInAnchoredScrollViewSelfExcites() {
-        let n = quietLayouts { SwiftUIRepeatForeverDots() }
+        let n = quietLayouts { TodoCircleAsCrashed(breathes: true) }
         XCTAssertGreaterThan(
             n, 1000,
             "SwiftUI repeatForever ＋ 滚动锚点 ＋ scrollTo 这个组合本该自激（实测几万次）。"
-            + "只测到 \(n) 次 —— 要么 SwiftUI 修了这个坑，要么这条测试的判据失效了，两种都要人来看一眼。")
+            + "只测到 \(n) 次 —— 要么 SwiftUI 修了这个坑，要么这台尺子量不动了，两种都要人来看一眼。"
+            + "⚠️ 它一红，下面两条「< 10」的防线就同时失去意义，别只看它们还是绿的。")
+    }
+
+    /// 观察，不是防线：老标本（`SwiftUIRepeatForeverDots`）在**这个**骨架里已经不自激了。
+    ///
+    /// 留着它有两个用处：① 老标本不至于从仓库里消失，日后要复查那一格还找得到；
+    /// ② 它要是哪天变红，说明 SwiftUI 又变回去了 —— 那是**好消息**，回来把上面那条
+    /// 的标本换回 dots，并把这条删掉。
+    ///
+    /// **别据此认为 `.repeatForever` 已经没事了** —— 同一个标本在 Todo 面板骨架里
+    /// 当天仍然量到 37574 次（见 `testSwiftUIRepeatForeverInLazyListSelfExcites`）。
+    func testSwiftUIRepeatForeverDotsNoLongerSelfExciteInChatShape() {
+        let n = quietLayouts { SwiftUIRepeatForeverDots() }
+        XCTAssertLessThan(
+            n, 10,
+            "老标本在聊天骨架里又自激了（\(n) 次）—— SwiftUI 侧变回去了。"
+            + "把 testSwiftUIRepeatForeverInAnchoredScrollViewSelfExcites 的标本换回 dots，再删掉本条。")
     }
 
     /// 第二条真防线：session 头像上那颗「需要人出手」的呼吸红点（2026-08-08 两点合一）。
