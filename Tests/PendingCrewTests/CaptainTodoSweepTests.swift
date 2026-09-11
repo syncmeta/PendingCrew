@@ -332,6 +332,63 @@ final class CaptainTodoSweepTests: XCTestCase {
         XCTAssertEqual(rows.map(\.number), [1])
     }
 
+    // MARK: - ⑤c 报事故那条路自己不许静默失败（三本账同一个形状）
+
+    /// 账本出事时往白板报一行，是这三本账（Todo / 机长任务列表 / codex 审批）
+    /// 唯一会留在盘上的痕迹。而**它经常写不进去**：append 要先把整份白板读一遍，
+    /// 读不了就整条拒写（2026-08-12 P0 的不变式）。整个数据目录读不出来时账本和
+    /// 白板一起瞎，这条警示必然落不了盘。
+    ///
+    /// 用吞错的 `appendSessionMessage` 的话，它连「没写成」都不说一声 ——
+    /// **一条专门用来留痕的东西自己静默失败**，那是这个仓库反复被咬的那种病。
+    ///
+    /// 名单是**扫出来的不是写死的**：将来多一本账，它自动进这道闸，
+    /// 而不是「那张名单上没有它，所以没人管」。
+    func test_每一个reportIncident都不许吞掉写失败() throws {
+        let found = try Self.sourcesContaining("func reportIncident")
+        XCTAssertGreaterThanOrEqual(
+            found.count, 3,
+            "只扫到 \(found.count) 处 reportIncident —— 三本账至少各有一处，"
+            + "少了说明这把尺子自己瞎了（被改名 / 扫不到源码目录），别当成「都合规」")
+        for (name, text) in found {
+            let body = try XCTUnwrap(Self.bodyOfFunc("reportIncident", in: text),
+                                     "\(name)：切不出 reportIncident 的函数体")
+            XCTAssertTrue(
+                body.contains("appendSessionMessageReportingFailure("),
+                "\(name) 的 reportIncident 没用会报错的那一支")
+            XCTAssertFalse(
+                body.contains("appendSessionMessage("),
+                "\(name) 的 reportIncident 还在用吞错的 appendSessionMessage —— "
+                + "白板写不进去时它一声不吭，而那正是它唯一该说话的时刻")
+        }
+    }
+
+    /// 扫 Sources 下所有 .swift，返回含 `needle` 的 (文件名, 全文)。
+    private static func sourcesContaining(_ needle: String) throws -> [(String, String)] {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources", isDirectory: true)
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { throw XCTSkip("读不到源码目录") }
+        var out: [(String, String)] = []
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            guard let text = try? String(contentsOf: url, encoding: .utf8),
+                  identifiersOnly(text).contains(needle) else { continue }
+            out.append((url.lastPathComponent, text))
+        }
+        return out.sorted { $0.0 < $1.0 }
+    }
+
+    /// 切出一个函数体：从 `func <name>` 起到下一个顶格四空格的 `}` 为止。
+    /// 够用就行 —— 切不出来时返回 nil，调用方当场红，不会静默放过。
+    private static func bodyOfFunc(_ name: String, in text: String) -> String? {
+        guard let start = text.range(of: "func \(name)") else { return nil }
+        let rest = text[start.lowerBound...]
+        guard let end = rest.range(of: "\n    }") else { return nil }
+        return String(rest[..<end.upperBound])
+    }
+
     // MARK: - ⑥ 装到车上了没有（判定造好了没人调 = 等于不存在）
 
     func testIdleHookActuallyAsksTheCaptain() throws {

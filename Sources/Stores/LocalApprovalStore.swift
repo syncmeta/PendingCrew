@@ -180,10 +180,19 @@ final class LocalApprovalStore: @unchecked Sendable {
         let tail = incident.isDataIntact
             ? "在途的 ask/审批没丢，等这次读得动就还在。"
             : "在途的 ask/审批已丢失，等答复的 session 需要重新发起。"
-        LocalWhiteboardStore(directory: directory).appendSessionMessage(
-            crewId: crewId, sessionId: "system",
-            text: "codex 原生审批账本：" + incident.summary + tail,
-            senderName: "系统")
+        // **它经常写不进去，而那不是 bug**（2026-09-12 补的话）：append 要先把整份
+        // 白板读一遍，读不了就整条拒写。整个数据目录读不出来的那种事故里，账本和
+        // 白板是一起瞎的，所以这条警示**必然落不了盘** —— 写不成就退到系统日志。
+        // 三本账（Todo / 机长任务列表 / codex 审批）用同一个形状，别只改一处。
+        let text = "codex 原生审批账本：" + incident.summary + tail
+        do {
+            _ = try LocalWhiteboardStore(directory: directory)
+                .appendSessionMessageReportingFailure(
+                    crewId: crewId, sessionId: "system", text: text, senderName: "系统")
+        } catch {
+            NSLog("[PendingCrew] 账本事故没能写进白板（白板多半也读不出来）：%@ / %@",
+                  text, error.localizedDescription)
+        }
     }
     /// **返回 nil = 真的落到磁盘上了。**写失败时不发变更信号 —— 那会让订阅方
     /// 去重读一份没变的文件，并把「刷新过了」误当成「答复生效了」。
