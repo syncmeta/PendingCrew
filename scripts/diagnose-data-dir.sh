@@ -134,6 +134,52 @@ done
 
 echo
 [ "$me" = ok ] && { echo "结论：读得动。"; exit 0; }
+
+# 只在「读不动」这条路上跑：趁窗口开着，铸一个**真·打不开的样本**。
+#
+# 为什么值得专门铸：仓库里复现读失败一律用 `chmod 000`，那给的是 EACCES(13)；
+# 真故障是 EPERM(1)。两者在 Cocoa 层都映成 257，长得一模一样。
+# （2026-09-12 核过一条：`isTransientReadFailure` 的集合两个都收，所以退避重试
+# 这条轴上替身不分叉。**别据此推断别处也不分叉** —— 那是一条一条查的事。）
+#
+# 手段是 clonefile(2)：它按路径克隆、**不 open 源文件**、产出新 inode，
+# 而"打不开"这个标记会跟着克隆走（同日实测：坏文件的克隆照样 EPERM，
+# 好文件的克隆可读）。所以窗口里克隆一份，窗口过去之后还能拿它做实验 ——
+# 不用再守着几小时一次的发作。
+echo
+echo "⑦ 铸一个真 EPERM 样本（只有此刻做得成）"
+fixture="$HOME/.pendingcrew-eperm-sample"
+src=$(find "$ROOT" -maxdepth 2 -type f -name '*.json' 2>/dev/null | head -1)
+if [ -z "${src:-}" ]; then
+  echo "   跳过：$ROOT 下没找到可克隆的 .json"
+else
+  mkdir -p "$fixture"
+  /usr/bin/python3 - "$src" "$fixture" <<'PYEOF' || echo "   铸样本失败（不影响本脚本的结论）"
+import ctypes, ctypes.util, os, sys
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+libc.clonefile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+src, fixture = sys.argv[1], sys.argv[2]
+
+def readable(p):
+    try:
+        fd = os.open(p, os.O_RDONLY); os.close(fd); return True
+    except OSError:
+        return False
+
+if readable(src):
+    print("   源此刻可读 —— 窗口已关，铸不成（这不是错误）"); sys.exit(0)
+bad = os.path.join(fixture, "unreadable.json")
+good = os.path.join(fixture, "readable.json")
+if os.path.exists(bad):
+    os.unlink(bad)
+if libc.clonefile(src.encode(), bad.encode(), 0) != 0:
+    print("   clonefile 失败 errno=%d" % ctypes.get_errno()); sys.exit(1)
+open(good, "w").write('{"note":"对照组：证明这把尺子会绿"}\n')
+# 两边都要验：只报坏的那个，分不清「样本成了」和「整台机器都读不了」。
+print("   %s -> %s" % (bad, "读不了 ✅ 样本成立" if not readable(bad) else "可读 ❌ 样本没成"))
+print("   %s -> %s" % (good, "可读 ✅ 对照组正常" if readable(good) else "读不了 ❌ 对照组也坏，样本说明不了任何事"))
+PYEOF
+fi
 cat <<'TXT'
 结论：**读不动，属于「建得了、看得见、删得掉，只要它已经存在就打不开」那一族。**
 
