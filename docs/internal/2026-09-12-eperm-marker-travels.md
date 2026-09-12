@@ -93,3 +93,58 @@
 **顺带一条**：真 EPERM 的 Foundation 文案是**繁体**的
 （「無法打開檔案…因為你沒有權限檢視」），用户看到的就是这句。
 errno 那段是我们自己拼的，稳定 —— 所以判据要挂在 errno 上，别挂在这句话上。
+
+---
+
+## 7. 第十条绕路：**它管用**（同夜，已落 main）
+
+前九条全死（直接读 / `env -i` / `nohup` / `launchctl asuser` / `launchctl submit` /
+硬链 / 四份历史备份 / 所有 open 模式 / MCP helper）。第十条成立：
+
+> **在数据根之外建好文件，再 `rename` 进来。**
+
+同一个故障窗口里量的三行：
+
+| 在哪儿建的 | 建好时 | rename 进来之后 | 1.5 秒后 | 再原地改写一次 |
+|---|---|---|---|---|
+| `~/Library/Caches/` | 可读 | **可读** | 可读 | 成功，改完仍可读 |
+| `/private/tmp/` | 可读 | **可读** | 可读 | 成功，改完仍可读 |
+| `~/Library/Application Support/` 底下 | **读不了** | 读不了 | 读不了 | **失败 EPERM** |
+
+### 7.1 拦的范围比「我们那个目录」宽
+
+| 路径 | 新建的文件 |
+|---|---|
+| `AppSupport/PendingCrew/…` | 读不了 |
+| `AppSupport/PendingCrew-<随便>.json`（兄弟，同前缀） | 读不了 |
+| `AppSupport/PendingCrewX/`、`AppSupport/Pending/` | 读不了 |
+| `AppSupport/ZZZ-unrelated/`、`AppSupport/` 根下 | **读不了** |
+| `AppSupport/Code/`（别人家**已存在**的目录） | 可读 |
+| `~/Library/`、`~/Library/Caches/`、`~/Documents/` | 可读 |
+
+所以这不是「PendingCrew 这个名字被针对」。倒数第三行（一个跟我们毫无关系的新目录
+也被拦）和倒数第二行（别人家已存在的目录不被拦）是这张表里最要紧的两格 ——
+**没有它们，很容易把范围划在自己身上，而那正好是范围偏误最舒服的落点。**
+
+### 7.2 一个能解释全部观测的模型（是模型，不是机制）
+
+- 标记在**创建时**按创建位置打上，之后**跟着文件**走（`clonefile` 复制得过去）；
+- 发作期间**带标记的一律 `open()` 被拒**，不发作时它们照常可读
+  （数据目录里那些文件平时读得好好的，就是这一条）；
+- 没标记的文件任何时候都读得动。
+
+⚠️ **这是能解释观测的最简模型，不是查明的机制。** 具体哪个策略、标记存在哪儿，
+仍然要发作当口的 `sudo` 抓取（人类 Todo #21）。
+
+### 7.3 落地
+
+`MultiProcessJSONStore.writeStaged(_:to:)`，落脚点 `~/Library/Caches/PendingCrew/staging`，
+POSIX `rename` 进来（原子性不降级 —— `rename` 本来就是原子替换）。
+落脚点建不了或跨卷退回 `.atomic`。
+
+全仓 **16 处** `Data.write(options:.atomic)` 全部改走它 ——
+Foundation 的 `.atomic` 把临时文件建在**目标目录里**，那正是每份账本
+从出生起就带标记的原因。`NoRawAtomicWriteTests` 扫全仓钉住这条。
+
+**只对改动之后新写的文件生效。** 已经带标记的老文件不会自己变好，
+但每次整写都会把它换成一份没标记的，所以一个正常窗口过去之后账本就自愈了。
