@@ -462,4 +462,86 @@ final class LocalTodoStoreTests: XCTestCase {
         XCTAssertEqual(board[0].senderSessionId, "system")
         XCTAssertTrue(board[0].text.contains("Todo"))
     }
+
+    // MARK: - 账读不动时，提上来的话先存着别丢（2026-09-12）
+
+    /// 人类那条提醒每次都在问的，就是这件事：「账上可能挂着一堆，只是这一刻看不见。」
+    /// 而看不见的那段时间里**提上来的**，以前一条都没留下 —— `add` 撞上拒写闸就
+    /// `return nil`，那句话当场蒸发。
+    ///
+    /// 这里用 `chmod 000` 把账做成读不动来复现。判据落在**「话有没有留下来」**，
+    /// 不落在 errno：真故障是 EPERM，这里是 EACCES，两者走同一条拒写闸。
+    private func makeLedgerUnreadable(_ dir: URL, crew: String) throws -> URL {
+        let s = LocalTodoStore(directory: dir)
+        _ = s.add(crewId: crew, text: "开张第一条")
+        let f = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .first { $0.contains(crew) && $0.hasSuffix(".json") })
+        let url = dir.appendingPathComponent(f)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        return url
+    }
+
+    func testAddOnUnreadableLedgerSpoolsTheRequest() throws {
+        let dir = tempDir(), crew = "c-spool"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+
+        var reported: Error?
+        let item = s.add(crewId: crew, text: "这条必须活下来",
+                         onWriteFailure: { reported = $0 })
+        XCTAssertNil(item, "账读不动时不该硬落号")
+        XCTAssertTrue(
+            (reported?.localizedDescription ?? "").contains("会自动补成"),
+            "没告诉提的人这条已经存下来了，他就会再提一遍，于是一件事两条账：\(reported?.localizedDescription ?? "nil")")
+
+        let spooled = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox-todos").path)) ?? []
+        XCTAssertEqual(spooled.count, 1, "话没被存下来 —— 这正是这一单要治的病")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    }
+
+    /// 恢复之后补成正式条目，**号在那一刻才算**，而且按当初的顺序。
+    func testSpooledRequestsBecomeRealItemsInOrderOnceReadable() throws {
+        let dir = tempDir(), crew = "c-spool2"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+
+        for t in ["断网期第一条", "断网期第二条"] {
+            _ = s.add(crewId: crew, text: t)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+
+        let fresh = try XCTUnwrap(s.add(crewId: crew, text: "恢复之后这条"))
+        let rows = s.list(crewId: crew)
+        XCTAssertEqual(rows.map(\.text),
+                       ["开张第一条", "断网期第一条", "断网期第二条", "恢复之后这条"],
+                       "补回来的顺序不对 —— 倒过来会让账上的因果乱掉")
+        XCTAssertEqual(rows.map(\.number), [1, 2, 3, 4], "号没有连续现算")
+        XCTAssertEqual(fresh.number, 4, "恢复后那条的号要排在补发的后面")
+
+        let left = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox-todos").path)) ?? []
+        XCTAssertTrue(left.isEmpty, "补完没清掉，下次会再补一遍：\(left)")
+    }
+
+    /// 补过一次不再补，而且按 crew 分家。
+    func testDrainIsIdempotentAndPerCrew() throws {
+        let dir = tempDir(), crew = "c-spool3", other = "c-other"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+        _ = s.add(crewId: crew, text: "存下来的那条")
+
+        _ = s.add(crewId: other, text: "别人家的")
+        XCTAssertEqual(s.list(crewId: other).map(\.text), ["别人家的"],
+                       "另一个 crew 的写把这个 crew 的积压捞过去了")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        _ = s.add(crewId: crew, text: "第一次恢复")
+        _ = s.add(crewId: crew, text: "第二次")
+        XCTAssertEqual(s.list(crewId: crew).filter { $0.text == "存下来的那条" }.count, 1,
+                       "补了两遍")
+    }
+
 }

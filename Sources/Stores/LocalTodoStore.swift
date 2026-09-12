@@ -316,7 +316,26 @@ final class LocalTodoStore: @unchecked Sendable {
              onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
-            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
+                // 这本账这一刻读不出来 —— 以前到这儿就 `return nil`，**那句话就没了**。
+                // 而这正是人类那条提醒每次都在问的东西：账上可能挂着一堆，只是看不见；
+                // 看不见的那段时间里提上来的，一条都没留下。
+                //
+                // 存法与白板那条一样（`LocalWhiteboardStore` 的 outbox）：这类故障是
+                // 「open 已存在的 inode 被拒、建新文件照样成」，所以存得下来。
+                // **区别在存什么**：Todo 的 `#N` 要数着现有行才算得出来，而现在正是
+                // 数不着的时候 —— 所以存的是**那次请求**，不是一条算好号的条目；
+                // 等账读得动了再走一遍正常的 `add`，号由那时候的账现算。
+                let spooled = spoolRequest(
+                    crewId: crewId,
+                    PendingTodoRequest(
+                        text: text, attachments: attachments, bySessionId: bySessionId,
+                        bySenderName: bySenderName, resumeNote: resumeNote,
+                        expectsResume: expectsResume, permissionTool: permissionTool))
+                onWriteFailure?(TodoSpoolOutcome(spooled: spooled))
+                return nil
+            }
+            drainRequests(crewId: crewId, rows: &rows)
             let stamp = timestamp()
             let item = LocalTodoItem(
                 id: UUID().uuidString.lowercased(),
@@ -676,6 +695,60 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 返回空表，光靠 `liveIndexLocked` 找不到 #N 就返回 nil 的话，回执会说「找不到
     /// 这条 Todo」—— 听起来像人类删过，其实是列表读不出来。过闸后至少归档 + 白板
     /// 警示，群里看得见真正的原因。
+    // MARK: - 账读不动时把请求先存着（2026-09-12）
+
+    private var requestSpoolDirectory: URL {
+        fileURL("x").deletingLastPathComponent()
+            .appendingPathComponent("outbox-todos", isDirectory: true)
+    }
+
+    /// 每条一个新文件；文件名定宽、字典序 = 时间序（同微秒由进程内序号兜）。
+    /// 秒级时间戳在这里是不够的 —— 白板那条的回归测试实测过：同一秒的两条会按后面的
+    /// uuid 排，也就是随机，补回去顺序是乱的。
+    private static var requestSequence: UInt64 = 0
+
+    @discardableResult
+    private func spoolRequest(crewId: String, _ req: PendingTodoRequest) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                at: requestSpoolDirectory, withIntermediateDirectories: true)
+            Self.requestSequence &+= 1
+            let name = "\(crewId)."
+                + String(format: "%017.6f", Date().timeIntervalSince1970) + "."
+                + String(format: "%06llu", Self.requestSequence) + "."
+                + UUID().uuidString.lowercased() + ".json"
+            try JSONEncoder().encode(req)
+                .write(to: requestSpoolDirectory.appendingPathComponent(name))
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 账读得动了，把积压的请求按当初的顺序补成真条目。**号在这一刻才算**。
+    private func drainRequests(crewId: String, rows: inout [LocalTodoItem]) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: requestSpoolDirectory.path)
+        else { return }
+        for name in names.filter({ $0.hasPrefix(crewId + ".") && $0.hasSuffix(".json") }).sorted() {
+            let u = requestSpoolDirectory.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: u),
+                  let req = try? JSONDecoder().decode(PendingTodoRequest.self, from: data)
+            else { continue }
+            let stamp = timestamp()
+            rows.append(LocalTodoItem(
+                id: UUID().uuidString.lowercased(),
+                number: (rows.map(\.number).max() ?? 0) + 1,
+                text: req.text, status: "pending", createdAt: stamp, updatedAt: stamp,
+                attachments: (req.attachments?.isEmpty ?? true) ? nil : req.attachments,
+                createdBySessionId: req.bySessionId,
+                createdBySenderName: req.bySenderName,
+                resumeNote: req.resumeNote, expectsResume: req.expectsResume,
+                permissionTool: req.permissionTool))
+            try? fm.removeItem(at: u)
+        }
+    }
+
     private func refuseUnsafeEmptyRewrite(crewId: String, rows: [LocalTodoItem]) -> Bool {
         // 拒写闸不再自己报警：读失败 / 损坏都已由上面的 `loadLocked` 如实报过一次
         // （2026-08-12 起宽松读也报 `.unreadable`）。这道闸现在只负责**拒写**——
@@ -870,5 +943,29 @@ extension LocalTodoItem {
         case droppedStatus: return "已叫停"
         default: return status
         }
+    }
+}
+
+/// 账读不动时存下来的**一次 `add` 请求**（不是一条算好号的条目 —— 号要数着现有行
+/// 才算得出来，而存它的那一刻正是数不着的时候）。
+struct PendingTodoRequest: Codable {
+    let text: String
+    let attachments: [LocalWhiteboardAttachment]?
+    let bySessionId: String?
+    let bySenderName: String?
+    let resumeNote: String?
+    let expectsResume: Bool
+    let permissionTool: String?
+}
+
+/// `add` 因为账读不动而没落成时交给调用方的结果。**存没存下来必须说清** ——
+/// 说「没写进去」而不说「已经存下来了」，提的人就会再提一遍，于是一件事两条账。
+struct TodoSpoolOutcome: LocalizedError {
+    let spooled: Bool
+    var errorDescription: String? {
+        spooled
+        ? "这本 Todo 账这一刻读不出来，所以**没有当场落号**；"
+          + "但这条已经存下来了，账恢复可读时会自动补成一条正式条目 —— 不用你重提。"
+        : "这本 Todo 账这一刻读不出来，**而且这次连存都没存下来** —— 要它的话得重提。"
     }
 }
