@@ -120,6 +120,43 @@ final class McpPlanListIOFailureTests: XCTestCase {
         XCTAssertFalse(r.contains("读不出来"), r)
     }
 
+    // MARK: - 同一个病的第四处：`search_whiteboard`
+
+    /// 白板整份读不出来时 `list` 回的是**一行内存警示**，搜索照着它搜必然零命中，
+    /// 于是工具说「没有找到匹配消息」—— **把「我读不到」说成「它不在」**，
+    /// 而提问的人会据此认定那条消息不存在。判据收在
+    /// `LocalWhiteboardStore.readFailure(in:)`，别在调用点各写各的。
+    func test_白板读不出来时_搜索不许说没找到() throws {
+        let f = fixture()
+        let posted = call(server(f), "post_to_crew", #"{"message":"甲乙丙这条要被搜到"}"#)
+        let board = f.whiteboards.appendingPathComponent("\(f.crewId).json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: board.path),
+                      "post_to_crew 没把白板写出来，回的是：\(posted)")
+        try FileManager.default.setAttributes([.posixPermissions: 0],
+                                              ofItemAtPath: board.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                   ofItemAtPath: board.path)
+        }
+        XCTAssertThrowsError(try Data(contentsOf: board),
+                             "前置条件没成立：白板仍然读得出来，后面的断言不算数")
+        let r = call(server(f), "search_whiteboard", #"{"query":"甲乙丙"}"#)
+        XCTAssertFalse(r.contains("没有找到匹配消息"),
+                       "把「我读不到」说成「它不在」——问的人会认定那条消息不存在：\(r)")
+        XCTAssertTrue(r.contains("读不出来"), "没说这是一次读失败：\(r)")
+    }
+
+    /// 反面：白板读得好好的、只是真没匹配 —— 照旧说「没找到」。
+    /// 少了这一条，一个**永远**说「读不出来」的实现也会让上面那条绿。
+    func test_白板读得出来但真没匹配时_照旧说没找到() {
+        let f = fixture()
+        _ = call(server(f), "post_to_crew", #"{"message":"甲乙丙"}"#)
+        let r = call(server(f), "search_whiteboard", #"{"query":"戊己庚辛"}"#)
+        XCTAssertTrue(r.contains("没有找到匹配消息"),
+                      "真没匹配却说成读不出来，人会去查一个根本没坏的文件：\(r)")
+        XCTAssertFalse(r.contains("读不出来"), r)
+    }
+
     /// 账有内容时照常列出来 —— 第三条「会绿」的样本。
     func test_账有内容时照常列出() {
         let f = fixture()

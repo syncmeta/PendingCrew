@@ -808,6 +808,13 @@ final class McpServer {
             }
             let requested = integerArgument(args["limit"]) ?? CrewMessageSearch.defaultLimit
             let rows = store.list(crewId: crewId)
+            // 白板整份读不出来时 `list` 回的是一行内存警示 —— 不认它的话，下面那句
+            // 「没有找到匹配消息」就是把「我读不到」说成「它不在」，而提问的人会据此
+            // 认定那条消息不存在。同一个病本仓修过三次了。
+            if let why = LocalWhiteboardStore.readFailure(in: rows) {
+                return toolResult(id: id, text: "ERROR: 白板这次读不出来，**没法判断有没有匹配** —— "
+                                  + "别把这当成「没找到」。原因：\(why)")
+            }
             let crewTitle = LocalCrewStore.title(
                 ofCrew: crewId, whiteboardDirectory: sharedDirectory) ?? ""
             let documents = rows.map {

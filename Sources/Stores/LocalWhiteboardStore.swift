@@ -50,6 +50,21 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     /// 认出它并跳过（#595：钉了它就是当场钉一个表里不存在的 id → 下次扫描全量重放）。
     static let readFailureRowId = "whiteboard-read-failure"
 
+    /// 这一批行**是不是「整份读不出来」的那个替身**。
+    ///
+    /// 读失败时 `list(crewId:)` 返回的是**恰好一行**内存里的警示（`loadLocked` 的
+    /// catch 分支），磁盘上一行真内容都没有。**调用方要是不认它，就会把「读不出来」
+    /// 当成业务事实**：搜索说「没找到匹配消息」、列表说「空的」、游标钉到一个不存在
+    /// 的 id 上。这个病在本仓点名修过三次（`plan_list`、两处 `CrewSessionRunner`），
+    /// 所以判据收在这儿一份，别在调用点各写各的。
+    ///
+    /// 返回警示原文（含系统给的错误原因）；正常读到的行返回 `nil`。
+    static func readFailure(in rows: [LocalWhiteboardMessage]) -> String? {
+        guard rows.count == 1, let only = rows.first,
+              only.id == readFailureRowId else { return nil }
+        return only.text
+    }
+
     static let shared = LocalWhiteboardStore()
 
     /// 默认白板目录（app 与 helper 共用同一路径）。
