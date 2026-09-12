@@ -197,6 +197,15 @@ cat <<'TXT'
   · 真想知道「谁拒的」，目前没有不要 sudo 且不被 SIP 挡住的现成办法；
     已经排完的层（TCC / 内核沙盒 / 文件提供方 / 磁盘 / 第三方扩展）见现场档，别重跑。
 
+已经装上 0.1.36 或更新的版本时，还有一步能把老文件也免掉这个故障：
+
+  · `writeStaged` 只管**以后新写的**文件。常写的账（白板 / Todo / 驾驶舱）
+    一次正常写入就换新了；`local-crews.json`、机长模板、后端表这种几天才写
+    一次的，**装了新版之后下一窗照样读不出来**，而人会以为已经修好了。
+  · 把已有的也重新出生一次（⌘Q 退出 app 之后跑，默认只看不动）：
+      sh scripts/immunize-data-root.sh            # 先干跑看一眼
+      sh scripts/immunize-data-root.sh --apply    # 真做，前面会提示先冷备份
+
 现场与已排除项：docs/internal/2026-09-12-eperm-cause-found.md
 TXT
 exit 1
