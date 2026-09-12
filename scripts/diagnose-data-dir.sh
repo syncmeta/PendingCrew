@@ -58,6 +58,50 @@ done
 echo "   （这些都 ok 而①是 fail ⇒ 拦的是这棵子树，不是整个 Application Support）"
 
 echo
+echo "③b 到底是哪个系统调用被拒（三个目录同一秒各建一个文件，逐调用量）"
+echo "   ⚠️ **必须直接调那个系统调用。** 用 \`xattr\` 这类命令行量是错的 —— 它是个"
+echo "      Python 包装、自己会先 open 文件，于是 open 的 EPERM 被报成「xattr 被拒」。"
+echo "      2026-09-12 我就是这么把一整族假说错误排除掉的，详见那份现场档。"
+/usr/bin/python3 - "$ROOT" <<'PY' 2>/dev/null || echo "   （python3 不可用，跳过这一节）"
+import ctypes, ctypes.util, os, sys
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+
+def getx(path, name):
+    buf = ctypes.create_string_buffer(256)
+    n = libc.getxattr(path.encode(), name.encode(), buf, 256, ctypes.c_uint32(0), 0)
+    return ("FAIL errno=%d" % ctypes.get_errno()) if n < 0 else buf.raw[:n].hex()
+
+def listx(path):
+    buf = ctypes.create_string_buffer(1024)
+    n = libc.listxattr(path.encode(), buf, 1024, 0)
+    return ("FAIL errno=%d" % ctypes.get_errno()) if n < 0 else "ok"
+
+def opn(path):
+    try:
+        open(path, "rb").read(2); return "ok"
+    except OSError as e:
+        return "FAIL errno=%d" % e.errno
+
+home = os.path.expanduser("~")
+targets = [("本树（疑）", sys.argv[1]),
+           ("Codex（对照）", home + "/Library/Application Support/Codex"),
+           ("/tmp（对照）", "/tmp")]
+print("   %-16s %-14s %-14s %s" % ("目录", "open", "listxattr", "provenance 值"))
+for label, d in targets:
+    if not os.path.isdir(d):
+        print("   %-16s （本机没有）" % label); continue
+    f = os.path.join(d, "diag-syscall-%d.txt" % os.getpid())
+    try:
+        open(f, "w").write("hi")
+    except OSError as e:
+        print("   %-16s 连建都建不了：errno=%d" % (label, e.errno)); continue
+    print("   %-16s %-14s %-14s %s"
+          % (label, opn(f), listx(f), getx(f, "com.apple.provenance")))
+    os.unlink(f)
+print("   读法：只有 open 那一列 FAIL、后两列 ok，且三行 provenance 值相同")
+print("   ⇒ 被掐的只有「拿到文件内容」，元数据路径全通 ——「属性被做了手脚」那类假说全出局。")
+PY
+
 echo "④ 写这一侧还剩什么（解释「为什么文件还在被更新」）"
 echo "   整份原子写 = 临时文件 + rename，而 rename / unlink / open(O_CREAT) 都在放行那侧。"
 echo "   所以 **mtime 一直在动不代表它读得到东西** —— app 可能在靠启动时的内存快照跑。"
