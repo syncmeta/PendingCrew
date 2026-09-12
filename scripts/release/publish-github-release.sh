@@ -101,4 +101,18 @@ if [ "$draft" = "--draft" ]; then
   echo "        scripts/release/update-homebrew-tap.sh $version $dmg"
 else
   "$root/scripts/release/update-homebrew-tap.sh" "$version" "$dmg"
+
+  # **最后再站到用户那一侧看一眼。** 上面每一道闸验的都是「我们手里这份」；
+  # 这一道验的是「外面下得到的那份」—— 传了一半、传错文件、cask 的 sha 没跟着更新，
+  # 这几种坏法在我们这边全绿，而用户 brew 装不上。
+  #
+  # 放在 tap 更新**之后**：它要核的正是 cask 里那个 sha256，更新前跑必然对不上。
+  #
+  # 失败不回滚（东西已经发出去了，回滚才是更危险的动作），但**必须响** ——
+  # 它响的时候，是唯一一次有人还站在这条链路上、能当场补救的机会。
+  "$root/scripts/release/verify-published-release.sh" "$version" || {
+    echo "⚠️ 产物已经发出去了，但外面下回来的那一份没通过复验（见上面停在第几步）。" >&2
+    echo "   别当没事：用户这会儿 brew 装到的就是它。" >&2
+    exit 2
+  }
 fi
