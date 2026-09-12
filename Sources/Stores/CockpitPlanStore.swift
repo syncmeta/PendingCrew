@@ -354,14 +354,25 @@ final class CockpitPlanStore: @unchecked Sendable {
             var rows = loadLocked(crewId)
             // 还是读不动就原地不动 —— 绝不在这时候落号，空表算出来的 #N 会跟盘上撞车。
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return }
-            let before = rows.count
-            drainRequests(crewId: crewId, rows: &rows)
-            guard rows.count > before else { return }
+            // ⚠️ **别拿 `rows.count` 当「有没有变」的信号。** 今天在 Todo 那本上
+            // 犯过一次并被回归测试抓到：一次「只改已有那行」的补发不增行，于是判成
+            // 没变、不落盘，而待发件箱里那条已经被删 —— 补发把它吃掉又扔了。
+            // 这本账现在只存 add（行数确实会变），所以那个写法**此刻还没害人**，
+            // 但它是同一颗雷：谁哪天往这里加一种「改已有行」的补发，它就会静默吃数据。
+            // 数「应用了几笔」由 drain 自己报，那才是那件事本身。
+            guard drainRequests(crewId: crewId, rows: &rows) > 0 else { return }
             _ = saveLocked(crewId: crewId, rows: rows)
         }
     }
 
-    private func drainRequests(crewId: String, rows: inout [CockpitPlanItem]) {
+    /// 返回**应用了几笔**（不是「多了几行」—— 见上面那段）。
+    ///
+    /// 只处理 `add`。板上的 `update`（进度描述 / 翻状态）**故意没有存**：那是机长
+    /// 几秒前自己写的一句进度，它还在自己的上下文里，重发一次的代价接近零；而 Todo
+    /// 的回应是**别人在等的答复**，丢了没人补得回来。两者不同档，所以这里是一个
+    /// 明确的取舍，不是漏了。真要加，连上面那条 count 的雷一起想清楚。
+    @discardableResult
+    private func drainRequests(crewId: String, rows: inout [CockpitPlanItem]) -> Int {
         var appended: [CockpitPlanItem] = []
         var nextNumber = (rows.map(\.number).max() ?? 0) + 1
         _ = spool.drain(key: crewId) { req in
@@ -376,6 +387,7 @@ final class CockpitPlanStore: @unchecked Sendable {
             return true
         }
         rows.append(contentsOf: appended)
+        return appended.count
     }
 
     private func refuseUnsafeEmptyRewrite(crewId: String, rows: [CockpitPlanItem]) -> Bool {
