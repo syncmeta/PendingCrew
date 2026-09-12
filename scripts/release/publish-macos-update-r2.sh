@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 product=${1:-}
 release_dir=${2:-}
 
@@ -54,7 +55,13 @@ for file in "$release_dir"/*; do
   name=$(basename "$file")
   case "$name" in
     appcast.xml) continue ;;
-    *.zip) upload "$file" "application/zip" "public, max-age=31536000, immutable" ;;
+    *.zip)
+      # **上传前逐个验公证**：这个循环把目录里的**每一个**文件都推上公开 CDN，
+      # 包括某次公证失败留下的半成品（0.1.35 那个躺了一上午）。判据与
+      # `build-macos-update.sh` / `publish-github-release.sh` 共用同一份脚本。
+      "$here/verify-zip-notarized.sh" "$file" || {
+        echo "拒绝上传：$file 没公证 —— 它会挂在公开 CDN 上。" >&2; exit 2; }
+      upload "$file" "application/zip" "public, max-age=31536000, immutable" ;;
     *.html) upload "$file" "text/html; charset=utf-8" "public, max-age=300" ;;
     *.json) upload "$file" "application/json" "public, max-age=300" ;;
     *) upload "$file" "application/octet-stream" "public, max-age=300" ;;

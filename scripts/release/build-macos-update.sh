@@ -346,20 +346,14 @@ test -x "$gen"
 # 留下的**——历史上已经躺了一个（0.1.35，见上面那段），而且 feed 目录不入 git、
 # 没有任何东西会替我们记得它在那儿。
 #
-# 判据是 `stapler validate` 的退出码，不需要读懂输出。**一个都不许漏**：
-# 被签进 feed 的每一项都会被用户的 Sparkle 下载并交给 Gatekeeper。
+# 判据在 `verify-zip-notarized.sh`（同一份，三个调用方共用 —— 别在这儿写第二份）。
+# **一个都不许漏**：被签进 feed 的每一项都会被用户的 Sparkle 下载并交给 Gatekeeper。
 for z in "$release_dir"/*.zip; do
   [ -e "$z" ] || break
-  zt=$(mktemp -d "/tmp/$product-staplecheck.XXXXXX")
-  /usr/bin/ditto -x -k "$z" "$zt" 2>/dev/null || { echo "✋ feed 里这个 zip 解不开：$z"; rm -rf "$zt"; exit 6; }
-  za=$(/usr/bin/find "$zt" -maxdepth 2 -name '*.app' | head -1)
-  if [ -z "$za" ] || ! xcrun stapler validate "$za" >/dev/null 2>&1; then
-    echo "✋ **feed 目录里有没公证的包，拒绝生成 appcast**：$z"
-    echo "   它会被当成候选更新签进 feed，发出去在用户机器上被 Gatekeeper 拒。"
-    echo "   先确认它是什么（多半是某次公证失败留下的半成品），删掉或补公证后重来。"
-    rm -rf "$zt"; exit 6
-  fi
-  rm -rf "$zt"
+  "$root/scripts/release/verify-zip-notarized.sh" "$z" || {
+    echo "✋ **feed 目录里有没公证的包，拒绝生成 appcast** —— 它会被签进 feed 发出去。"
+    exit 6
+  }
 done
 "$gen" --account "com.pendingname.$product" \
   --download-url-prefix "https://updates.pendingname.com/$product/" \
