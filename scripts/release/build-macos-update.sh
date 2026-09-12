@@ -315,8 +315,22 @@ printf 'version=%s\nbuild=%s\ncommit=%s\n' \
 echo "note: dSYM 已归档 → $symbols_dir"
 
 archive="$release_dir/$app_name-$version.zip"
-/usr/bin/ditto -c -k --keepParent "$app" "$archive"
-xcrun notarytool submit "$archive" --keychain-profile "$PENDING_NOTARY_PROFILE" --wait
+# ⚠️ **送公证的那一份不落 feed 目录**（2026-09-12 改）。
+#
+# 原来这里是「先 ditto 进 $release_dir → 提交公证 → staple → 再 ditto 覆盖」。
+# 公证失败时 `set -e` 当场退出，于是**第一份、没有公证票据的 zip 就永远留在 feed
+# 目录里了** —— 而 `generate_appcast` 扫的就是那个目录。下一次发别的版本时它是候选
+# 更新，可能被签进 feed 发给所有人，用户机器上 Gatekeeper 直接拒（"Unnotarized
+# Developer ID"），更新链当场断掉，而我们这边一切看起来正常。
+#
+# 这不是假想：0.1.35 在 2026-09-12 02:54 公证失败，`PendingCrew-0.1.35.zip`
+# （13.7 MB、无票据、`spctl` rejected）在 feed 目录里躺了一个上午，而当时的记录写的
+# 是「停得很干净，没有半成品要收拾」。
+#
+# 现在送公证的那份落在快照临时目录里，**只有 staple 之后才往 feed 目录写**。
+notarize_zip="$snap/$app_name-$version.notarize.zip"
+/usr/bin/ditto -c -k --keepParent "$app" "$notarize_zip"
+xcrun notarytool submit "$notarize_zip" --keychain-profile "$PENDING_NOTARY_PROFILE" --wait
 xcrun stapler staple "$app"
 /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 
@@ -326,6 +340,27 @@ PENDING_CHANGELOG="$snap/src/CHANGELOG.md" \
 
 gen="$derived/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
 test -x "$gen"
+# feed 目录里**每一个** zip 都必须带公证票据，否则不生成 appcast。
+#
+# 上面那笔改动堵的是「这一趟不再往 feed 里放没公证的东西」；这道闸堵的是**别人
+# 留下的**——历史上已经躺了一个（0.1.35，见上面那段），而且 feed 目录不入 git、
+# 没有任何东西会替我们记得它在那儿。
+#
+# 判据是 `stapler validate` 的退出码，不需要读懂输出。**一个都不许漏**：
+# 被签进 feed 的每一项都会被用户的 Sparkle 下载并交给 Gatekeeper。
+for z in "$release_dir"/*.zip; do
+  [ -e "$z" ] || break
+  zt=$(mktemp -d "/tmp/$product-staplecheck.XXXXXX")
+  /usr/bin/ditto -x -k "$z" "$zt" 2>/dev/null || { echo "✋ feed 里这个 zip 解不开：$z"; rm -rf "$zt"; exit 6; }
+  za=$(/usr/bin/find "$zt" -maxdepth 2 -name '*.app' | head -1)
+  if [ -z "$za" ] || ! xcrun stapler validate "$za" >/dev/null 2>&1; then
+    echo "✋ **feed 目录里有没公证的包，拒绝生成 appcast**：$z"
+    echo "   它会被当成候选更新签进 feed，发出去在用户机器上被 Gatekeeper 拒。"
+    echo "   先确认它是什么（多半是某次公证失败留下的半成品），删掉或补公证后重来。"
+    rm -rf "$zt"; exit 6
+  fi
+  rm -rf "$zt"
+done
 "$gen" --account "com.pendingname.$product" \
   --download-url-prefix "https://updates.pendingname.com/$product/" \
   "$release_dir"

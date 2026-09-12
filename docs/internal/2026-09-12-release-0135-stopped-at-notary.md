@@ -42,3 +42,35 @@ sh scripts/release/publish-github-release.sh 0.1.35
 ```
 
 脚本会从头重跑一遍构建（幂等），不需要先清什么。
+
+---
+
+## 08:17 更正：**停得并不干净**
+
+上面写着「tag / Release / R2 / tap 全都还没动，没有半成品要收拾」。**最后半句是错的。**
+
+`dist/updates/pendingcrew/PendingCrew-0.1.35.zip`（13.7 MB，02:54 落的）一直躺在
+**Sparkle feed 目录**里。实测它**没有公证票据**：
+
+```
+xcrun stapler validate … → PendingCrew.app does not have a ticket stapled to it.
+spctl -a -vv -t exec …   → rejected / source=Unnotarized Developer ID
+```
+
+原因在脚本自己身上：那一段本来是「先 `ditto` 进 `$release_dir` → 提交公证 →
+staple → 再 `ditto` 覆盖」。公证失败时 `set -e` 当场退出，**第一份、没票据的 zip
+就永远留在 feed 目录里**，而 `generate_appcast` 扫的正是那个目录。下一次发别的版本
+时它是候选更新，可能被签进 feed 发给所有人 —— 用户那边 Gatekeeper 直接拒，更新链
+断掉，而我们这边一切看起来正常。
+
+**两处都改了（同一笔）**：
+
+1. 送公证的那份改落快照临时目录，**只有 staple 之后才往 feed 目录写**。
+2. `generate_appcast` 之前加一道闸：feed 目录里**每一个** zip 都必须过
+   `stapler validate`，否则拒绝生成并指名是哪一个。堵的是**别人留下的** ——
+   feed 目录不入 git，没有任何东西会替我们记得那儿躺了什么。
+
+闸门当场红绿都证了：跑真 feed 目录，0.1.26–0.1.34 那 8 个逐个通过，**停在 0.1.35，
+退出码 6**，并打印出它的路径。
+
+**那个 zip 本身没动** —— 删不删是仓库主人的事；重跑发版会用带票据的那份覆盖它。
