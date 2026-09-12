@@ -34,6 +34,26 @@ spctl -a -t open --context context:primary-signature "$dmg" >/dev/null 2>&1 \
 xcrun stapler validate "$dmg" >/dev/null 2>&1 \
   || { echo "$dmg 没 staple 上公证票 —— 用户离线首次打开会被拦。拒绝发布。" >&2; exit 2; }
 
+# **zip 也要验，而且理由比 dmg 更硬**（2026-09-12 补）：dmg 是人手动下载的，
+# zip 是 **Sparkle 自更新吃的那一份**。原来这里只验 dmg —— 于是一个没公证的 zip
+# 可以一路挂上 Release，而 dmg 全绿、脚本一声不吭。
+#
+# 这不是假想：0.1.35 公证失败那次，`dist/updates/pendingcrew/PendingCrew-0.1.35.zip`
+# 就是个没票据的包（`spctl` rejected），在 feed 目录里躺了一上午。
+#
+# zip 不能直接 `stapler validate`（它认 .app/.dmg/.pkg），所以解到临时目录再验。
+echo "note: 复验 zip 的签名与公证（Sparkle 自更新吃的就是它）"
+zt=$(mktemp -d "/tmp/pendingcrew-zipcheck.XXXXXX")
+trap 'rm -rf "$zt"' EXIT INT TERM
+/usr/bin/ditto -x -k "$zip" "$zt" 2>/dev/null \
+  || { echo "$zip 解不开 —— 拒绝发布。" >&2; exit 2; }
+zip_app=$(/usr/bin/find "$zt" -maxdepth 2 -name '*.app' | head -1)
+[ -n "$zip_app" ] || { echo "$zip 里没有 .app —— 拒绝发布。" >&2; exit 2; }
+xcrun stapler validate "$zip_app" >/dev/null 2>&1 \
+  || { echo "$zip 里的 app 没 staple 上公证票 —— 自更新装上去会被 Gatekeeper 拦。拒绝发布。" >&2; exit 2; }
+spctl -a -vv -t exec "$zip_app" >/dev/null 2>&1 \
+  || { echo "$zip 里的 app 过不了 Gatekeeper —— 拒绝发布。" >&2; exit 2; }
+
 # tag 必须先在远端，而且必须指向**产物真正的来源**。
 #
 # 不先推的话，`gh release create` 会替你在远端凭空造一个 tag —— 造在
@@ -72,7 +92,9 @@ else
   # Release 正文取自 CHANGELOG.md，不用 --generate-notes —— 那个会把提交标题
   # 列成一串倒给用户看。取不到就在这儿挂掉，此时还什么都没传上去。
   notes=$(mktemp)
-  trap 'rm -f "$notes"' EXIT INT TERM
+  # ⚠️ **两个 trap 只有最后一个算数** —— 这里必须把上面那个解压临时目录一起带上，
+  # 否则每发一版漏一个几十 MB 的 /tmp 目录，而且一声不吭（`trap` 是覆盖不是叠加）。
+  trap 'rm -f "$notes"; rm -rf "$zt"' EXIT INT TERM
   "$root/scripts/release/changelog-section.sh" "$version" > "$notes"
   # shellcheck disable=SC2086
   gh release create "v$version" "$dmg" "$zip" --repo "$repo" \
