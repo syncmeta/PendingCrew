@@ -61,6 +61,25 @@ fi
 
 stage="$HOME/Library/Caches/PendingCrew/immunize.$$"
 mkdir -p "$stage"
+
+# ③ 落脚点必须与数据根**同卷**。
+#
+# 不同卷时 `mv` 退化成「复制 + 删原件」，而复制出来的那个文件是**在目标目录里
+# 出生的** —— 于是它照样带上标记，这个脚本等于一件事没做，却一条 ⚠️ 都不会打。
+# 这是本脚本唯一一种会静默失效的方式，所以当场判掉，不留给以后去猜。
+#
+# ⚠️ **想验这道闸会不会响，别拿 `/System/...` 试** —— APFS 的 firmlink 让系统卷
+# 和数据卷在 `stat -f %d` 下是**同一个 dev**（本机实测 `/`、`/System/Library`、
+# `/tmp`、`~/Library` 全是 16777230），试出来会以为这道闸是摆设。
+# 拿一个真正独立的卷试：`/System/Volumes/Preboot`（16777229）当场就红了。
+dev_stage=$(stat -f %d "$stage")
+dev_root=$(stat -f %d "$root")
+if [ "$dev_stage" != "$dev_root" ]; then
+  echo "落脚点与数据根不在同一个卷（$dev_stage vs $dev_root）—— 拒绝执行。" >&2
+  echo "跨卷时 mv 会变成复制，新文件仍然在目标目录里出生，做了等于没做而且不会报错。" >&2
+  echo "把落脚点换到跟数据根同卷的位置（改本脚本里的 stage）再来。" >&2
+  exit 2
+fi
 trap 'rm -rf "$stage"' EXIT INT TERM
 
 # 用 find -print0 + read 逐个走，文件名里有空格也不会散架。
