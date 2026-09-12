@@ -597,4 +597,50 @@ final class CaptainTodoSweepTests: XCTestCase {
         }
         throw XCTSkip("找不到源码文件 \(fileName)")
     }
+
+    // MARK: - 地板间隔要扛得住「账读不出来 + 进程重启」（2026-09-12 傍晚）
+
+    /// 病历就是今晚：这条提醒该 15 分钟一次，实际每一两分钟问一遍，问了三个多小时。
+    /// 病根是**守卫的输入跟被守的东西一起坏了** —— 地板间隔的「上次提醒时刻」存在
+    /// 那本读不出来的账里。进程内退路挡住了一半，但 app 在故障期间重启一次它就空了。
+    ///
+    /// 这一层用的是这类故障**恰好还放行**的操作：建新文件 / 列目录 / 删文件。
+    /// 时刻写进**文件名**，读它只要 readdir，永远不用 open。
+    ///
+    /// 判据落在「换一个全新的 store 实例还记不记得」—— 那正是重启后的样子。
+    func test_提醒时刻写进文件名_换个进程也还记得() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweep-marker-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let crew = "local-marker"
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+
+        CaptainTodoSweepStore(directory: dir).recordReminded(crewId: crew, at: at)
+
+        // **换一个实例** = 进程内那份退路为空，只剩文件名标记。
+        let fresh = CaptainTodoSweepStore(directory: dir)
+        XCTAssertEqual(
+            fresh.row(crewId: crew).lastRemindedAt,
+            ISO8601DateFormatter().string(from: at),
+            "换个进程就不记得上次提醒过 —— 地板间隔又没了输入，于是每次空闲都刷一遍")
+    }
+
+    /// 确认之后要**重新计时**：标记得跟着清，否则「确认完又冒出新条目」会被上一次的
+    /// 地板间隔压着不吭声 —— 那正是这道闸最不该发生的事。
+    func test_确认之后标记要清掉_不许压着新条目不吭声() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweep-marker-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let crew = "local-marker2"
+        let store = CaptainTodoSweepStore(directory: dir)
+        store.recordReminded(crewId: crew, at: Date())
+        store.recordConfirmation(
+            crewId: crew,
+            CaptainTodoSweep.Confirmation(
+                confirmedAt: ISO8601DateFormatter().string(from: Date()), openNumbers: []))
+
+        XCTAssertNil(CaptainTodoSweepStore(directory: dir).row(crewId: crew).lastRemindedAt,
+                     "确认之后提醒时刻还留着 —— 新条目会被上一次的地板间隔压住")
+    }
+
 }
