@@ -124,7 +124,7 @@ struct WhiteboardCursor {
             return da < db
         }
         guard let newest, let raw = try? String(contentsOf: newest, encoding: .utf8) else { return }
-        try? raw.write(to: cursorURL, atomically: true, encoding: .utf8)
+        try? MultiProcessJSONStore.writeStaged(Data(raw.utf8), to: cursorURL)
     }
 
     /// 当前游标位置（三态，见 `State`）。
@@ -292,7 +292,7 @@ struct WhiteboardCursor {
     private func writeLocked(_ position: WhiteboardCursorPosition) {
         var line = position.id
         if let createdAt = position.createdAt, !createdAt.isEmpty { line += "\t" + createdAt }
-        try? line.write(to: cursorURL, atomically: true, encoding: .utf8)
+        try? MultiProcessJSONStore.writeStaged(Data(line.utf8), to: cursorURL)
     }
 
     private func withCursorLock(_ body: () -> Void) {

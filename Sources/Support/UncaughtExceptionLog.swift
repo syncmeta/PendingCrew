@@ -38,7 +38,7 @@ enum UncaughtExceptionLog {
 
             guard let dir = UncaughtExceptionLog.crashDirectory() else { return }
             let file = dir.appendingPathComponent("\(stamp.replacingOccurrences(of: ":", with: "-")).log")
-            try? text.write(to: file, atomically: true, encoding: .utf8)
+            try? MultiProcessJSONStore.writeStaged(Data(text.utf8), to: file)
             NSLog("[PendingCrew] 异常详情已写入 %@", file.path)
         }
     }

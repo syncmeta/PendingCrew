@@ -110,7 +110,7 @@ final class SessionDaemonLog {
                 try? handle.seekToEnd()
                 try? handle.write(contentsOf: data)
             } else {
-                try? data.write(to: url)
+                try? MultiProcessJSONStore.writeStaged(data, to: url)
             }
         }
     }

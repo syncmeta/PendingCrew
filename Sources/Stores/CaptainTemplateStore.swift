@@ -114,7 +114,7 @@ final class CaptainTemplateStore: ObservableObject {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(payload)
-            try data.write(to: fileURL, options: [.atomic])
+            try MultiProcessJSONStore.writeStaged(data, to: fileURL)
         } catch {
             NSLog("[CaptainTemplateStore] persist failed: \(error)")
         }

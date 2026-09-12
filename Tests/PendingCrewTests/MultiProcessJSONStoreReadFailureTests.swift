@@ -491,14 +491,42 @@ final class NoRawAtomicWriteTests: XCTestCase {
     /// 唯一允许出现的地方：`writeStaged` 自己的退路（落脚点不可用 / 跨卷）。
     private static let allowed = "MultiProcessJSONStore.swift"
 
+    /// ⚠️ **这份名单要按「危险是什么」列，不是按「我上次看到的那个字符串」列。**
+    ///
+    /// 2026-09-13 第一版只查 `options: .atomic`，于是漏掉了两种同样危险的写法：
+    /// `options: [.atomic]`（带方括号）和 `write(to:atomically:encoding:)`。
+    /// 漏掉的里面有 `local-crews.json` —— 通讯录读不出来时垮的正是它。
+    /// 一把照着自己碰巧见过的形状写的尺子，会把没见过的那几种判成绿。
+    ///
+    /// 危险的定义：**任何会在目标目录里造临时文件、或直接在数据根里造新文件的写法**。
+    /// 三种拼法都算。
+    private static let bannedSpellings = [
+        "options: .atomic",
+        "options: [.atomic]",
+        "atomically: true",
+    ]
+
+    /// **写在数据根之外**、因此本来就碰不到这个故障的地方。每条都写清写到哪儿 ——
+    /// 白名单的意思是「这条我看过、确认在外面」，不是「这条我不想管」。
+    /// 位置变了（有人把它挪进数据根）就该把它从这儿拿掉。
+    private static let writesOutsideDataRoot = [
+        // → FileManager.temporaryDirectory，世界观 md，交给 claude 当 flag 文件用。
+        "LocalSessionLaunch.swift",
+        // → <crew 工作目录>/docs/handbook，是仓库里的文档，不是数据根。
+        "CockpitPageView.swift",
+    ]
+
     func test_没有人绕过_writeStaged_直接原子写() throws {
-        let offenders = try Self.sourceFiles().compactMap { url, text -> String? in
-            guard url.lastPathComponent != Self.allowed else { return nil }
-            guard let line = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let offenders = try Self.sourceFiles().flatMap { url, text -> [String] in
+            guard url.lastPathComponent != Self.allowed,
+                  !Self.writesOutsideDataRoot.contains(url.lastPathComponent)
+            else { return [] }
+            return text.split(separator: "\n", omittingEmptySubsequences: false)
                 .enumerated()
-                .first(where: { $0.element.contains("options: .atomic") })
-            else { return nil }
-            return "\(url.lastPathComponent):\(line.offset + 1)"
+                .filter { line in
+                    Self.bannedSpellings.contains { line.element.contains($0) }
+                }
+                .map { "\(url.lastPathComponent):\($0.offset + 1)" }
         }
         XCTAssertEqual(
             offenders, [],
