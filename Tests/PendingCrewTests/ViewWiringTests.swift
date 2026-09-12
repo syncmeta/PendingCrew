@@ -632,6 +632,17 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(version.contains("LocalCodingAgentExecutable.setOverrideDirectory"),
                       "「设置目录」没接上：界面上填了也不会改变 CLI 的解析结果")
 
+        // ④ 「后端」那一页真的接上了模型层（人类 Todo #11 后半 / #121）。
+        //
+        // **这条不是锦上添花**：`BackendRegistry` 建好之后，全仓引用它的文件数是 **0** ——
+        // 一个 192 行、注释写得很完整的模型层，界面上一个字都看不到。
+        // 「建好了没接上」在这个仓库里是常客，而它最安静：编译过、测试绿、没人报错。
+        XCTAssertTrue(settings.contains("BackendRegistry.load"),
+                      "设置里没有「后端」那一页，或者它没去读登记表 —— 模型层又成了孤儿")
+        XCTAssertTrue(settings.contains("BackendRegistry.connectivity"),
+                      "「能不能连」没问模型层 —— 界面自己判的话，"
+                      + "「远程绝不静默降级成本机」那条保证就绕过去了")
+
         // ③ 账号头像那行的今日 token 用量去掉（额度环是另一回事，必须还在）。
         XCTAssertFalse(sidebar.contains("AgentUsageLine"),
                        "账号头像那行还挂着今日 token 用量")

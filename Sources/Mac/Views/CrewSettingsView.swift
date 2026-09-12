@@ -16,6 +16,8 @@ struct CrewSettingsView: View {
                 .tabItem { Label("通用", systemImage: "gearshape") }
             CodingToolsSettingsTab()
                 .tabItem { Label("编码工具", systemImage: "terminal") }
+            BackendsSettingsTab()
+                .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
         }
         .frame(width: 520, height: 520)
     }
@@ -105,4 +107,71 @@ private struct CodingToolsSettingsTab: View {
         .task { versions.start() }
     }
 }
+
+/// 「管理、连接后端」（人类 Todo #11 的后半 / #121）。
+///
+/// 人类原话：「我希望 pendingcrew 要有管理后端的能力 **本机的后端也是一个** 要能管理
+/// 这些的更新」。模型层（`BackendRegistry`）今天已经由别的 session 建好了，**而且
+/// 一个文件都没引用它** —— 这一页就是把它接上。判定一条都不在这儿重写：能不能连、
+/// 删不删得掉、读不出来怎么说，全问模型层。
+private struct BackendsSettingsTab: View {
+    @State private var load: BackendRegistry.Load = .fresh([])
+
+    /// 登记表跟锁、socket 一样落在数据根下（`PENDINGCREW_DATA_DIR` 挪走时跟着走）。
+    private var registryFile: URL {
+        PendingCrewDataRoot.subdirectory("backends").appendingPathComponent("registry.json")
+    }
+
+    var body: some View {
+        Form {
+            if let problem = load.problem {
+                Section {
+                    Text(problem).foregroundStyle(.orange).font(.callout)
+                } header: {
+                    Text("读这份登记表时出了事")
+                }
+            }
+
+            Section {
+                ForEach(load.refs) { ref in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(ref.displayName).bold()
+                            if ref.isBuiltIn {
+                                Text("内置").font(.caption)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                        Text(address(of: ref)).font(.caption)
+                            .foregroundStyle(.secondary).textSelection(.enabled)
+                        // **能不能连由模型层说**，这里不自己判。远程那一档它会明确拒绝，
+                        // 并且说明为什么不退回本机 —— 那句话要原样摆出来给人看。
+                        if case let .unsupported(why) = BackendRegistry.connectivity(of: ref) {
+                            Text(why).font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            } header: {
+                Text("认识的后端")
+            } footer: {
+                Text("本机那条是内置的：删不掉，也永远排第一 —— 删了之后这个界面就没有"
+                     + "任何后端可连了。远程那一档还没做，列在这里只是为了让你看见"
+                     + "「它还没做」，连不上时**不会**悄悄退回本机。")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .task { load = BackendRegistry.load(from: registryFile) }
+    }
+
+    private func address(of ref: BackendRef) -> String {
+        switch ref.transport {
+        case let .localSocket(path): return path
+        case let .remote(url): return url
+        }
+    }
+}
+
 #endif
