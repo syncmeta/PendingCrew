@@ -424,3 +424,58 @@ launchd 起的进程仍然继承了某种归属。**机制我只解释到一半�
 原来写的是「`sudo fs_usage` / `sudo log stream`，得人在场」——那条仍然成立。
 **但在叫人之前先做这个**：`tail ~/Library/Logs/PendingCrew/daemon.log`，
 以及数一下 `*.crewcmd.json` 还剩几条。两样都不需要读数据目录里的任何文件。
+
+---
+
+## 08:05 定性完成：**不是「这些文件」的事，是「已经存在的路径」的事**
+
+一直没人做的那个实验只花了两分钟：**自己在那棵树里新建一个文件，再打开读它自己。**
+
+```
+① open(新路径, O_CREAT|O_WRONLY)      ✅
+② open(同一个路径, O_APPEND)          ❌ EPERM
+③ open(同一个路径, O_TRUNC)           ❌ EPERM
+④ stat(同一个路径)                    ✅ 4 字节
+⑤ open(同一个路径, O_RDONLY)          ❌ EPERM
+⑥ mkdir(树里的新子目录)                ✅
+⑦ 在那个新子目录里新建文件              ✅
+⑧ 读⑦刚建的那个                       ❌ EPERM ← **整棵子树，不是某几个文件**
+```
+
+### 规则一句话
+
+**可以 `stat` / 列目录 / `mkdir` / `unlink` / `open(O_CREAT)` 一个不存在的路径；
+永远不能 `open` 一个已经存在的路径 —— 读、写、追加、截断，一律 EPERM。**
+
+### 横向对照（同一条探针，同一个进程，同一分钟）
+
+| 目录 | 新建后读回来 |
+| --- | --- |
+| `Application Support/Codex` | ✅ |
+| `Application Support/Claude` | ✅ |
+| `Application Support/Google/Chrome` | ✅ |
+| `Application Support/PendingCrew` | ❌ |
+
+### 它推翻了什么
+
+- **「写照常」是错的**（那张老表里写着 ✅）。写只有**新建**那一种成立；
+  往已存在的文件里写同样被拒。白板 append 是读-改-写，所以它必然失败 ——
+  `post_to_crew` 拒绝得对。
+- **凡是「这些文件被做了什么」的假说全部出局**：xattr / provenance / flags / ACL /
+  归档状态 / 内容损坏 —— 我**自己刚建的**文件，建完那一刻起就打不开了。
+  九条死路里有四条（硬链、四份历史备份、所有 open 模式、直接读）本质都在这一族里。
+- **也不是「整个 Application Support 被锁」**：另外三个 app 的同类目录同一分钟正常。
+  拦的是**这棵子树**。
+
+### 剩下的那一半仍然分不开
+
+**「谁被拦」还是没定**：这条探针只证明**这个进程**被拦。daemon 手上那些 fd
+（`lsof` 看得到：`daemon.sock`、`orchestrator.lock`、`whiteboards` 目录、
+4 个 `cli-claude_code.lock` 共享租约 ＋ 1 个 codex 的）**全是故障之前打开的**
+（那 4 个租约按设计是「每个活着的 claude session 一个」，session 都在 00:19–00:24
+attach 的）。所以 `lsof` 既不能证明 daemon 现在开得了，也不能证明它开不了。
+
+**形状对得上 TCC 的「App 管理 / 应用数据保护」**：新建放行、碰既有对象要授权。
+人那边的修法（系统设置 → 隐私与安全性 → App 管理里加终端）正好是这个形状。
+**但这仍是形状吻合，不是证据** —— 定死它要 `sudo log stream --predicate 'subsystem
+== "com.apple.TCC"'`，那条得人在场。
