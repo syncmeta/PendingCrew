@@ -352,6 +352,47 @@ final class CaptainTodoSweepTests: XCTestCase {
         XCTAssertEqual(rows.map(\.number), [1])
     }
 
+    // MARK: - ⑤e 地板间隔的输入，不许跟被守的那本账一起坏
+
+    /// **守卫的输入跟被守的东西共用同一个基座，就会一起坏。**
+    ///
+    /// `decide` 里那句「一本一直读不出来的账，不该在每次空闲抖动时都刷屏」靠
+    /// `lastRemindedAt` 成立。而它来自 `CaptainTodoSweepStore`，那本账跟 Todo 账
+    /// **在同一个目录、同一个基座** —— 数据目录整片读不出来时，它也读不出来，
+    /// `row()` 兜成空 `Row()`，`lastRemindedAt` 恒为 nil，**地板间隔在唯一需要它的
+    /// 场合失效**。2026-09-12 那次断了八个多小时，机长每次空闲都被问一遍同一句话。
+    ///
+    /// 修法是给它一份进程内的退路。这条钉住：盘上读不出来时，`row()` 仍然记得
+    /// 刚才提醒过。
+    func test_盘上读不出来时地板间隔仍然管用() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweepstore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let crewId = "local-sweepstore-unreadable"
+        let store = CaptainTodoSweepStore(directory: dir)
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertNil(store.recordReminded(crewId: crewId, at: at), "前置条件没成立：这一笔没落盘")
+
+        let file = dir.appendingPathComponent("\(crewId).todo-sweep.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                      "前置条件没成立：账本文件没生成，后面的断言不算数（文件名口径变了？）")
+        try FileManager.default.setAttributes([.posixPermissions: 0],
+                                              ofItemAtPath: file.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                   ofItemAtPath: file.path)
+        }
+        XCTAssertThrowsError(try Data(contentsOf: file),
+                             "前置条件没成立：文件仍读得出来")
+
+        let stamp = store.row(crewId: crewId).lastRemindedAt
+        XCTAssertNotNil(stamp,
+                        "盘上读不出来就把「刚提醒过」忘了 —— 地板间隔失效，"
+                        + "机长会在每次空闲抖动时被问一遍同一句话")
+    }
+
     // MARK: - ⑤c 报事故那条路自己不许静默失败（三本账同一个形状）
 
     /// 账本出事时往白板报一行，是这三本账（Todo / 机长任务列表 / codex 审批）

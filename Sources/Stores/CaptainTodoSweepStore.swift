@@ -31,9 +31,31 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
+    /// **盘上读不出来时，提醒时刻退到进程内的那份。**
+    ///
+    /// 病根（2026-09-12 实测到，而且是被它打了八个多小时才看出来的）：数据目录
+    /// 整片读不出来的那种事故里，**这本账自己也读不出来** —— `loadLocked` 回 nil、
+    /// 兜成 `Row()`，于是 `lastRemindedAt` 恒为 nil，**地板间隔的输入没了**。
+    /// 而 `CaptainTodoSweep.decide` 里那句「一本一直读不出来的账不该在每次空闲抖动时
+    /// 都刷屏」正是靠它成立的 —— 结果那道闸在**唯一需要它的场合**失效，
+    /// 机长每次空闲都被问一遍同一句话。
+    ///
+    /// **典型的「守卫的输入跟被守的东西一起坏了」**：两者共用同一个基座、同一个目录。
+    /// 所以退路不能也放在盘上，只能放进程内（`--mcp-serve` 一 session 一进程、长期
+    /// 存活，这份内存活得够久）。写成功时两处一起更新，读不出来时用内存那份。
     func row(crewId: String) -> Row {
-        withFileLock(crewId) { loadLocked(crewId) } ?? Row()
+        guard var row = withFileLock(crewId, { loadLocked(crewId) }) else {
+            // 盘上读不到：确认无从得知（保守当成没有），但提醒时刻还记得。
+            return Row(confirmation: nil,
+                       lastRemindedAt: Self.rememberedReminded[crewId])
+        }
+        if row.lastRemindedAt == nil { row.lastRemindedAt = Self.rememberedReminded[crewId] }
+        return row
     }
+
+    /// 进程内的「上次提醒时刻」，只在盘上读不出来时顶上。
+    /// `nonisolated(unsafe)` 与本 store 其余部分同一口径（靠 flock 与单进程串行）。
+    nonisolated(unsafe) private static var rememberedReminded: [String: String] = [:]
 
     /// 记下一次被接受的确认。**提醒时刻一并清空** —— 确认之后重新计时，
     /// 免得「确认完又冒出新条目」时被上一次的地板间隔压着不吭声。
@@ -50,9 +72,13 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     /// 记下「刚提醒过」。**不碰确认** —— 提醒不会让已有的确认作废。
     @discardableResult
     func recordReminded(crewId: String, at date: Date) -> Error? {
-        withFileLock(crewId) {
+        let stamp = ISO8601DateFormatter().string(from: date)
+        // 先记进程内那份：盘上写不写得成都不影响「刚提醒过」这个事实，
+        // 而地板间隔要的正是这个事实。
+        Self.rememberedReminded[crewId] = stamp
+        return withFileLock(crewId) {
             var row = loadLocked(crewId) ?? Row()
-            row.lastRemindedAt = ISO8601DateFormatter().string(from: date)
+            row.lastRemindedAt = stamp
             return saveLocked(crewId: crewId, row)
         }
     }
