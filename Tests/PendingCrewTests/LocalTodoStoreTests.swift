@@ -586,4 +586,54 @@ final class LocalTodoStoreTests: XCTestCase {
         XCTAssertEqual(s.list(crewId: crew).map(\.number), [1, 2], "恢复后才落，且接着盘上的号")
     }
 
+
+    /// **回应比新提一条更不能丢**：那是有人在等的答复。
+    func testResponseIsSpooledAndReplayedOntoTheRightItem() throws {
+        let dir = tempDir(), crew = "c-resp"
+        let url = try makeLedgerUnreadable(dir, crew: crew)   // 里面已经有 #1「开张第一条」
+        let s = LocalTodoStore(directory: dir)
+
+        var reported: Error?
+        XCTAssertNil(s.respond(crewId: crew, number: 1, sessionId: "s1",
+                               text: "答复：选 B", newStatus: "completed",
+                               onWriteFailure: { reported = $0 }))
+        XCTAssertTrue((reported?.localizedDescription ?? "").contains("会自动补成"),
+                      "没告诉答复的人这条存下来了：\(reported?.localizedDescription ?? "nil")")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        let row = try XCTUnwrap(s.list(crewId: crew).first { $0.number == 1 })
+        XCTAssertEqual(row.responses.map(\.text), ["答复：选 B"], "答复没补回到那条上")
+        XCTAssertEqual(row.status, "completed", "状态也该跟着补")
+    }
+
+    /// **add 和 respond 必须在同一条有序流里。** 分成两个待发件箱的话，
+    /// 「先提一条、再回应它」补发时会乱序 —— 而乱序在账上比丢一条更难发现。
+    func testAddAndRespondReplayInTheOrderTheyHappened() throws {
+        let dir = tempDir(), crew = "c-order"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+
+        _ = s.add(crewId: crew, text: "断网期提的")          // 还没有号
+        _ = s.respond(crewId: crew, number: 1, sessionId: "s1", text: "答复给 #1")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        let rows = s.list(crewId: crew)
+        XCTAssertEqual(rows.map(\.text), ["开张第一条", "断网期提的"])
+        XCTAssertEqual(rows.first { $0.number == 1 }?.responses.map(\.text), ["答复给 #1"])
+    }
+
+    /// 答复的那条在这期间被删了：**不能永远卡在待发件箱里**，每次读都白试一遍。
+    func testResponseToADeletedItemIsDiscardedNotRetriedForever() throws {
+        let dir = tempDir(), crew = "c-gone"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+        _ = s.respond(crewId: crew, number: 999, sessionId: "s1", text: "答复给一条不存在的")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        _ = s.list(crewId: crew)
+        let left = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox-todos").path)) ?? []
+        XCTAssertTrue(left.isEmpty, "补不上的那条永远留着，每次读都白试：\(left)")
+    }
+
 }

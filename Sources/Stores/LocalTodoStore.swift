@@ -335,10 +335,10 @@ final class LocalTodoStore: @unchecked Sendable {
                 // 数不着的时候 —— 所以存的是**那次请求**，不是一条算好号的条目；
                 // 等账读得动了再走一遍正常的 `add`，号由那时候的账现算。
                 let spooled = spool.spool(
-                    PendingTodoRequest(
+                    .add(PendingTodoRequest(
                         text: text, attachments: attachments, bySessionId: bySessionId,
                         bySenderName: bySenderName, resumeNote: resumeNote,
-                        expectsResume: expectsResume, permissionTool: permissionTool),
+                        expectsResume: expectsResume, permissionTool: permissionTool)),
                     key: crewId)
                 onWriteFailure?(TodoSpoolOutcome(spooled: spooled))
                 return nil
@@ -378,7 +378,18 @@ final class LocalTodoStore: @unchecked Sendable {
                  onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
-            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
+                // **回应比新提一条更不能丢**：那是有人在等的答复。以前这里也是
+                // `return nil`，那句话当场没了，而提问的人还在等。
+                let spooled = spool.spool(
+                    .respond(PendingTodoResponse(
+                        number: number, sessionId: sessionId, senderName: senderName,
+                        text: text, newStatus: newStatus)),
+                    key: crewId)
+                onWriteFailure?(TodoSpoolOutcome(spooled: spooled))
+                return nil
+            }
+            drainRequests(crewId: crewId, rows: &rows)
             guard let idx = liveIndexLocked(rows, number) else { return nil }
             let stamp = timestamp()
             rows[idx].responses.append(LocalTodoResponse(
@@ -712,9 +723,11 @@ final class LocalTodoStore: @unchecked Sendable {
             // 账这一刻还是读不动 —— 原地不动，下次再说。**绝不能在这里落号**：
             // 拿一张空表算出来的 #N 会跟盘上真实的号撞车。
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return }
-            let before = rows.count
-            drainRequests(crewId: crewId, rows: &rows)
-            guard rows.count > before else { return }
+            // ⚠️ **别拿 `rows.count` 当「有没有变」的信号。** 第一版就是那样，于是
+            // 一次 respond（它只改已有那一行、不增行）补发之后**没有落盘**，
+            // 而待发件箱里那条已经被删了 —— 等于补发把它吃掉又扔了。回归测试当场抓到。
+            // 数出来的「变了几笔」由 drain 自己报，那才是那件事本身。
+            guard drainRequests(crewId: crewId, rows: &rows) > 0 else { return }
             _ = saveLocked(crewId: crewId, rows: rows)
         }
     }
@@ -726,29 +739,52 @@ final class LocalTodoStore: @unchecked Sendable {
     ///
     /// 存的是**那次请求**而不是一条算好号的条目：`#N` 要数着现有行才算得出来，
     /// 而存它的那一刻正是数不着的时候。号留到补发那一刻现算。
-    private var spool: LedgerSpool<PendingTodoRequest> {
+    private var spool: LedgerSpool<PendingTodoWrite> {
         LedgerSpool(directory: fileURL("x").deletingLastPathComponent()
             .appendingPathComponent("outbox-todos", isDirectory: true))
     }
 
-    private func drainRequests(crewId: String, rows: inout [LocalTodoItem]) {
-        var appended: [LocalTodoItem] = []
-        var nextNumber = (rows.map(\.number).max() ?? 0) + 1
-        _ = spool.drain(key: crewId) { req in
+    /// **一条有序流，两种写**。故意不分成两个 spool：分开的话「先提一条、再回应它」
+    /// 这种顺序会在补发时乱掉。
+    @discardableResult
+    private func drainRequests(crewId: String, rows: inout [LocalTodoItem]) -> Int {
+        var working = rows
+        var applied = 0
+        var nextNumber = (working.map(\.number).max() ?? 0) + 1
+        _ = spool.drain(key: crewId) { write in
             let stamp = timestamp()
-            appended.append(LocalTodoItem(
-                id: UUID().uuidString.lowercased(),
-                number: nextNumber, text: req.text, status: "pending",
-                createdAt: stamp, updatedAt: stamp,
-                attachments: (req.attachments?.isEmpty ?? true) ? nil : req.attachments,
-                createdBySessionId: req.bySessionId,
-                createdBySenderName: req.bySenderName,
-                resumeNote: req.resumeNote, expectsResume: req.expectsResume,
-                permissionTool: req.permissionTool))
-            nextNumber += 1
+            switch write {
+            case let .add(req):
+                working.append(LocalTodoItem(
+                    id: UUID().uuidString.lowercased(),
+                    number: nextNumber, text: req.text, status: "pending",
+                    createdAt: stamp, updatedAt: stamp,
+                    attachments: (req.attachments?.isEmpty ?? true) ? nil : req.attachments,
+                    createdBySessionId: req.bySessionId,
+                    createdBySenderName: req.bySenderName,
+                    resumeNote: req.resumeNote, expectsResume: req.expectsResume,
+                    permissionTool: req.permissionTool))
+                nextNumber += 1
+                applied += 1
+            case let .respond(r):
+                // 那一条可能在这期间被删了 —— **照样算吃下**（返回 true 把它清掉），
+                // 不然它会永远留在待发件箱里、每次读都白试一遍。
+                guard let idx = working.firstIndex(where: { $0.number == r.number && !$0.isDeleted })
+                else { return true }
+                working[idx].responses.append(LocalTodoResponse(
+                    id: UUID().uuidString.lowercased(),
+                    sessionId: r.sessionId, senderName: r.senderName,
+                    text: r.text, status: r.newStatus, createdAt: stamp))
+                if let st = r.newStatus, Self.validStatuses.contains(st) {
+                    working[idx].status = st
+                }
+                working[idx].updatedAt = stamp
+                applied += 1
+            }
             return true
         }
-        rows.append(contentsOf: appended)
+        rows = working
+        return applied
     }
 
     private func refuseUnsafeEmptyRewrite(crewId: String, rows: [LocalTodoItem]) -> Bool {
@@ -950,6 +986,21 @@ extension LocalTodoItem {
 
 /// 账读不动时存下来的**一次 `add` 请求**（不是一条算好号的条目 —— 号要数着现有行
 /// 才算得出来，而存它的那一刻正是数不着的时候）。
+/// 账读不动时存下来的一次写。**add 和 respond 共用一条有序流** —— 见 `drainRequests`。
+enum PendingTodoWrite: Codable {
+    case add(PendingTodoRequest)
+    case respond(PendingTodoResponse)
+}
+
+/// 一次回应。**它比一次新提更不能丢**：有人在等这个答复。
+struct PendingTodoResponse: Codable {
+    let number: Int
+    let sessionId: String
+    let senderName: String?
+    let text: String
+    let newStatus: String?
+}
+
 struct PendingTodoRequest: Codable {
     let text: String
     let attachments: [LocalWhiteboardAttachment]?
