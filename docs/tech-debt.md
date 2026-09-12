@@ -1827,3 +1827,28 @@ append cmd1 发 `[cmd1]`、append cmd2 发 `[cmd1, cmd2]`。两次投递都到�
 
 `reportIncident` 那一族已经有闸守着（`CaptainTodoSweepTests`，名单是扫出来的，
 将来多一本账自动进闸）。其余 44 处**没有闸**。
+
+## 两态 `list()` 还有 42 个调用点 —— 查过的只有承重的那一个（读数，不是待办）
+
+「读失败被压成空表」这个病在本仓咬过两次（`plan_list` 说「任务列表是空的」而账有
+92 条；`CrewSessionRunner` 里两处点名「必须走 `read` 不能走 `list`」）。三本账现在
+都有三态读（`LocalTodoStore` / `CockpitPlanStore` / `LocalWakeupStore` 的 `LedgerRead`）。
+
+**但两态的 `list(crewId:)` 还有 42 个调用点**（2026-09-12 数的，`Sources/` 下）。
+
+**只逐条查了承重的那一个**：`McpPermissionHook` 拿 Todo 判 `hasPendingRequest`，
+拿 `PermissionGrantStore.consume` 判 `hasGrant` —— 这是**放行/拒绝**的判据，
+读失败压成空表会不会放行一个不该放的？
+
+**不会，两个方向都 fail-closed**（读代码读到的，不是推的）：
+
+- `consume` 读失败 → `rows` 空 → `contains` false → 返回 false → **拒**。
+- `hasPendingRequest` 只在 `.denyWithoutFiling` 和 `.denyAndFile` 之间选，
+  **两支都是拒**；读失败最多让它重复提一条人类 Todo，不会多放行。
+
+代价只有一个，而且只在故障期间：人已经同意过的那一次，票读不出来 ⇒ 照样拒 ＋ 再提
+一条，人会看到「我要跑 X」问第二遍。
+
+**其余 41 处没有逐条看过** —— 从名字看多是渲染/展示路（侧栏末条、未读数、注入面），
+那类压成空只是少显示，不会产生假的业务结论。**但「从名字看」不是「查过」，
+别把这一条读成「另外 41 处都审过没事」。**
