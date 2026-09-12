@@ -26,6 +26,12 @@
 
 ### 1.2 ⚠️ 但那个「可靠的一级」**一次都没跑过**
 
+> **⚠️ 这一小节 2026-09-12 起已经不成立了，留着是为了看得懂当时为什么这么判。**
+> 那条路现在**通了**：参数叫 `headline`（**不叫 `summary`** —— 下面文字里那个
+> `summary` 从来没在代码里存在过，别去找它），schema 里有、落盘有，
+> `CrewFoldableMessageText` 也真的把它传给了 `fold(explicitSummary:)`。
+> 所以下面「schema 里没有」「整条路不存在」那几句，读的时候要当成历史。
+
 - `explicitSummary` 全仓 **0 个调用点**（除定义本身）。
 - `CrewMessageFold.fold` 全仓**唯一** call site：
   `Sources/Chat/Adapter/CrewFoldableMessageText.swift:26` → `CrewMessageFold.fold(text)`，

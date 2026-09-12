@@ -63,7 +63,9 @@ enum CrewMessageFold {
 
     /// 这条该折吗？`nil` = 不折（太短，或没有能当摘要的东西）。
     ///
-    /// - Parameter explicitSummary: 发送者显式给的摘要（`post_to_crew` 的 `summary`）。
+    /// - Parameter explicitSummary: 发送者显式给的摘要。**在 `post_to_crew` 那一侧
+    ///   它叫 `headline`** —— 早期方案里写的那个 `summary` 从来没在代码里存在过，
+    ///   照着它去 grep 只会一无所获。
     ///   给了就用它，最可靠的一级。
     static func fold(_ text: String,
                      threshold: Int = lineThreshold,
