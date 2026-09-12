@@ -1852,3 +1852,23 @@ append cmd1 发 `[cmd1]`、append cmd2 发 `[cmd1, cmd2]`。两次投递都到�
 **其余 41 处没有逐条看过** —— 从名字看多是渲染/展示路（侧栏末条、未读数、注入面），
 那类压成空只是少显示，不会产生假的业务结论。**但「从名字看」不是「查过」，
 别把这一条读成「另外 41 处都审过没事」。**
+
+## 十个源码扫描类断言，只有一个的剥离口径会让它对字符串瞎（2026-09-12 查过）
+
+今天在 `CaptainTodoSweepTests` 里亲手造出一个假绿：要判的是**字符串内容**，
+筛文件却用了**剥掉字符串之后的文本**，于是关键词只出现在字符串里的文件一个都没被
+选中。变异（把一处改回旧话）当场没红，才发现。
+
+顺手把全部十个用剥离 helper 的扫描类断言按同一条判据过了一遍：
+
+| 剥离口径 | 文件 |
+| --- | --- |
+| 只剥注释（判字符串内容**安全**） | `MentionsFilterDefaultOn` / `TodoMarkdownRendering` / `TodoBlockedOnHuman` / `DecisionKindHasNoProducer` / `CockpitOpenCloseCost` / `AskIntoTodo` / `PermissionIntoTodo` / `TodoDroppedAndAttention` / `ViewWiring` |
+| 剥注释**并剥字符串** | `CaptainTodoSweepTests`（就是踩坑那个，已加 `inCodeOnly` 参数） |
+
+判据是文件里有没有 `inString` 那段逐字符状态机 —— 有它就会把字符串内容一起吃掉。
+`DecisionKindHasNoProducerTests` 值得单独说一句：它筛的是 `kind: "decision"`
+这种**字符串字面量**，而它的 helper 只剥注释，所以成立。
+
+**这一条是读数不是待办**：九个「安全」是按剥离口径判的，**不等于它们各自都变异证过**。
+要证只能一条条来（每条造一次它要禁的那个写法）。**别把这张表读成「九条都是真的会红」。**
