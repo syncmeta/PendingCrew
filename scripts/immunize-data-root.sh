@@ -75,7 +75,7 @@ mkdir -p "$stage"
 dev_stage=$(stat -f %d "$stage")
 dev_root=$(stat -f %d "$root")
 if [ "$dev_stage" != "$dev_root" ]; then
-  echo "落脚点与数据根不在同一个卷（$dev_stage vs $dev_root）—— 拒绝执行。" >&2
+  echo "落脚点与数据根不在同一个卷（${dev_stage} vs ${dev_root}）—— 拒绝执行。" >&2
   echo "跨卷时 mv 会变成复制，新文件仍然在目标目录里出生，做了等于没做而且不会报错。" >&2
   echo "把落脚点换到跟数据根同卷的位置（改本脚本里的 stage）再来。" >&2
   exit 2
