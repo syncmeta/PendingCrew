@@ -691,8 +691,13 @@ final class LocalTodoStore: @unchecked Sendable {
                 .appendSessionMessageReportingFailure(
                     crewId: crewId, sessionId: "system", text: text, senderName: "系统")
         } catch {
-            NSLog("[PendingCrew] 账本事故没能写进白板（白板多半也读不出来）：%@ / %@",
-                  text, error.localizedDescription)
+            // ⚠️ 这条 catch 是整条链上**最该说清楚**的一句：那条系统警示的作用就是
+            // 「让人知道账出事了」，而这类故障里白板跟账本在同一棵树下，**两个一起瞎**。
+            // 以前这里只说「没能写进白板」，读起来像「这条警示没了」——
+            // 而自 2026-09-12 起它会被存进待发件箱、白板恢复可读时自动补发。
+            // 存没存下来由 `error.localizedDescription` 自己说，别在这儿另编一句。
+            NSLog("[PendingCrew] 账本事故没能当场写进白板：%@ / %@", text,
+                  error.localizedDescription)
         }
     }
 
