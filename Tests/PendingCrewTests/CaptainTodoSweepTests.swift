@@ -253,8 +253,12 @@ final class CaptainTodoSweepTests: XCTestCase {
         else { return XCTFail("读不出来时没提醒") }
         XCTAssertTrue(text.contains("git"),
                       "没说 git 还通 —— 收到这条的人会以为整个人被卡住了：\(text)")
-        XCTAssertTrue(text.contains("diagnose-data-dir.sh"),
-                      "没给定性那一步，人只能凭「界面看起来正常」判，而那恰恰判不了：\(text)")
+        XCTAssertTrue(text.contains("自己新建一个文件再打开读它"),
+                      "没给定性那一步的**做法**。只给脚本名不行 —— 这条提醒发给所有机组，"
+                      + "而别的工作目录里没有这个仓库的脚本：\(text)")
+        XCTAssertTrue(text.contains("别的工作目录没有这个脚本"),
+                      "引用了仓库里的脚本却没说它只在这个仓库有 —— "
+                      + "别的机组照着跑会得到 No such file：\(text)")
         XCTAssertTrue(text.contains("别逐分钟重试") || text.contains("哨"),
                       "没说别空等 —— 这条提醒每分钟响一次，不说就是在催人空转：\(text)")
     }
