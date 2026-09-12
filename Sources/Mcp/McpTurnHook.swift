@@ -37,10 +37,16 @@ struct McpTurnHook {
         let marker = SessionTurnMarker(directory: markerDirectory, crewId: crewId, sessionId: sessionId)
         let prev = marker.read()
         let messages = board.list(crewId: crewId)
+        // 白板整份读不出来时 `list` 回的是**一行只存在于内存**的警示。这一拍要是照常
+        // 往下走，两件事都会错：① 拿那一行去算「本轮新增」，代发一条毫无根据的留痕；
+        // ② 把本轮边界记成那条不存在的 id —— **而这一步是落盘的**，下一轮再拿它去切
+        // 「自那条之后」，切的是一个白板上找不到的锚点。
+        // 所以读不出来这一拍：不代发、不动边界，别的照常（都不依赖白板）。
+        let boardUnreadable = LocalWhiteboardStore.readFailure(in: messages) != nil
         let turnId = obj["prompt_id"] as? String
 
         let lastAgentText = obj["last_assistant_message"] as? String ?? ""
-        let post = SessionTurnTrace.decide(.init(
+        let post = boardUnreadable ? nil : SessionTurnTrace.decide(.init(
             messages: messages,
             sessionId: sessionId,
             sessionName: (sessionLabel?.isEmpty == false) ? sessionLabel! : sessionId,
@@ -59,7 +65,8 @@ struct McpTurnHook {
 
         // 记账无论发没发都推进：本轮边界 = 现在的白板末条（代发的那条已在其中）。
         // `awaitingQuestion` 每轮重写（层 2）——这轮不是停在问句上就写 nil，红点自然熄。
-        marker.write(.init(lastMessageId: board.list(crewId: crewId).last?.id ?? prev.lastMessageId,
+        let boundary = boardUnreadable ? nil : board.list(crewId: crewId).last?.id
+        marker.write(.init(lastMessageId: boundary ?? prev.lastMessageId,
                            lastTurnId: turnId ?? prev.lastTurnId,
                            lastAssistantMessage: lastAgentText,
                            awaitingQuestion: SessionTurnTrace.trailingQuestion(from: lastAgentText)))

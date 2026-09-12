@@ -198,4 +198,45 @@ final class SessionTurnTraceTests: XCTestCase {
         XCTAssertNil(SessionTurnTrace.decide(input(
             messages: [msg("a", session: nil)], since: "a", lastTurn: nil, turn: "t1", text: "")))
     }
+
+    // MARK: - 白板读不出来那一拍：不代发、不动本轮边界（2026-09-12）
+
+    /// 读失败时 `list` 回的是**一行只存在于内存**的警示。照常往下走会错两件事：
+    /// ① 拿那一行去算「本轮新增」，代发一条毫无根据的留痕；
+    /// ② 把本轮边界记成那条不存在的 id —— **而这一步是落盘的**，下一轮再拿它去切
+    /// 「自那条之后」，切的是一个白板上找不到的锚点。
+    func test_白板读不出来时_Stop钩子不代发也不动边界() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turnhook-io-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let crewId = "local-turnhook-unreadable"
+        let board = LocalWhiteboardStore(directory: dir)
+        board.appendSessionMessage(crewId: crewId, sessionId: "sess-1", text: "真内容")
+        let file = dir.appendingPathComponent("\(crewId).json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                      "前置条件没成立：白板没生成")
+        try FileManager.default.setAttributes([.posixPermissions: 0],
+                                              ofItemAtPath: file.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                   ofItemAtPath: file.path)
+        }
+        XCTAssertNotNil(LocalWhiteboardStore.readFailure(in: board.list(crewId: crewId)),
+                        "前置条件没成立：list 没回那条读失败警示")
+
+        let hook = McpTurnHook(board: board, crewId: crewId, sessionId: "sess-1",
+                               sessionLabel: "机长", isCaptain: true, markerDirectory: dir)
+        let posted = hook.handle("""
+        {"hook_event_name":"Stop","prompt_id":"p1",\
+        "last_assistant_message":"我做完了，你看一下？"}
+        """)
+        XCTAssertFalse(posted, "白板读不出来还代发了一条留痕 —— 它是拿一行内存警示算出来的")
+
+        let marker = SessionTurnMarker(directory: dir, crewId: crewId, sessionId: "sess-1")
+        XCTAssertNotEqual(marker.read().lastMessageId, LocalWhiteboardStore.readFailureRowId,
+                          "本轮边界被记成了那条磁盘上不存在的 id —— 下一轮从它往后切必然切错")
+    }
+
 }
