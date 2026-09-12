@@ -118,7 +118,8 @@ if [ $apply -eq 0 ]; then
   echo "  sh scripts/immunize-data-root.sh --apply"
   echo
   echo "做之前建议先冷备份一份数据目录（这台机器上有过白板被清光的教训）："
-  echo "  cp -a \"$root\" \"$root-backup-\$(date +%Y%m%d-%H%M%S)\""
+  echo "  sh scripts/clone-data-root.sh"
+  echo "  （走 clonefile(2)，故障发作期间也做得了 —— 那时 cp/ditto/rsync 一个字节都拿不到）"
 else
   echo
   echo "做完了。逐条结果见上面；没有输出 ⚠️ 就是全部重新出生成功。"

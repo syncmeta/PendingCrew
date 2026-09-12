@@ -206,6 +206,15 @@ cat <<'TXT'
       sh scripts/immunize-data-root.sh            # 先干跑看一眼
       sh scripts/immunize-data-root.sh --apply    # 真做，前面会提示先冷备份
 
+⚠️ 想先备份的话，**此刻 `cp -R` 一个字节都拿不到** —— cp / ditto / rsync / tar
+   全都要 open() 源文件，而 open 正是被拒的那个（`cp -c` 也一样，它先 open 再
+   决定用不用克隆）。用这个，它走 clonefile(2)，按路径克隆、从不打开源：
+
+      sh scripts/clone-data-root.sh                # 默认落 ~/PendingCrew-backup-<时间戳>
+
+   克隆出来的文件**此刻同样读不出来**（标记跟着克隆走）。那是预期，不是备份失败：
+   字节在里面，等这一窗过去就读得动。
+
 现场与已排除项：docs/internal/2026-09-12-eperm-cause-found.md
 TXT
 exit 1
