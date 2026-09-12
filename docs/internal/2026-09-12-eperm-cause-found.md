@@ -923,3 +923,54 @@ open-read-close 是微秒级的，六拍抓不到，**零句柄不构成证据**
 **剩下要做的仍然只有一件**：故障当口 `sudo fs_usage -f filesys`，看那次 `open` 的
 返回是谁给的。
 
+---
+
+## 「只拒 open」这个形状指向哪种机制（第四窗，新线索 + 它没走通）
+
+### 为什么值得追这条
+
+上面那张表把形状收窄成一句话：**元数据全通，只有 `open()` 被拒**。这不是随便哪种
+权限问题都能长成的样子。内核里这几件事走的是**不同的授权项**：
+
+| 系统调用 | 授权项 |
+| --- | --- |
+| `open()` 读 | `KAUTH_VNODE_READ_DATA` |
+| `getxattr` | `KAUTH_VNODE_READ_EXTATTRIBUTES` |
+| `stat` | `KAUTH_VNODE_READ_ATTRIBUTES` |
+
+**只有 `READ_DATA` 被拒、另两个放行**，意味着拦它的东西是**按操作类型**做判断的。
+Endpoint Security 正好有一个独立的 `ES_EVENT_TYPE_AUTH_OPEN`，一个 ES 客户端可以
+**只否决 open 而不碰别的**，返回值就是 EPERM。这个假说还顺带解释了另外三件事：
+自愈又复发（扫描是一阵一阵的）、对所有进程一视同仁（daemon 也读不到）、
+以及 TCC 与沙盒日志里为什么一行都没有（ES 的否决不走那两个子系统）。
+
+### 查了，没查到
+
+本机跑着的 632 个可执行文件逐个看 `endpoint-security.client` 授权，
+**只有两个，都是苹果自己的**：`/usr/libexec/watchdogd`、`/usr/libexec/xprotectd`。
+**没有任何第三方 ES 客户端。**
+
+⚠️ 这个「2」是可信的，因为**先证明了尺子会红**：它确实从 632 个里挑出了这两个，
+而且拿 `syspolicyd` 做红样本时读得出它的 `endpoint-security.submit.*` 授权。
+（第一版我把 `/System`、`/usr/libexec` 全过滤掉了，报了个「0 个」—— 那个 0 是
+**尺子自己的盲区**，不是读数。苹果自己的 ES 客户端恰恰全在那些目录里。）
+
+再查 XProtect 的日志：近 12 小时里提到 `PendingCrew` 的**只有 9 行**，全部是
+Gatekeeper 在评估**测试 bundle**（`com.pendingname.pendingcrew.tests`），
+时刻是 07:42 / 08:09 / 08:47 —— 那是我自己在跑测试，而且**都不在本次故障窗
+（17:24 起）里**。一行都没提到数据目录。
+
+### 给下一个人留两句，省得重走
+
+1. **`Forwarding detection succeeded!` 不是查杀命中。** 它在 12 小时里出现二十来次，
+   均匀分布，是 Gatekeeper 对新执行的二进制做例行评估。我差点把它当成证据。
+2. **判系统调用通不通要直接调它。** `xattr <file>` 会自己 open 文件，所以它的
+   `Operation not permitted` 说的是 open 的事，不是 xattr 的事（上一节那条更正
+   就是这么来的）。
+
+### 结论
+
+「是某个 ES 客户端在否决 AUTH_OPEN」**仍然是目前最合形状的假说**，但如果成立，
+嫌疑人只能是苹果自己的 `xprotectd` 或 `watchdogd`，而日志里没有任何一行把它们
+跟这个目录连起来。**这条线到此为止，下一步还是那一条：故障当口 `sudo fs_usage`。**
+
