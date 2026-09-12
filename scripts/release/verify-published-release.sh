@@ -68,8 +68,8 @@ mnt=$(hdiutil attach -nobrowse -readonly "$work/app.dmg" 2>/dev/null | awk -F'\t
 [ -n "$mnt" ] || { echo "   ❌ 挂不上这个 dmg。" >&2; exit 2; }
 inside=$(defaults read "$mnt/PendingCrew.app/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "?")
 hdiutil detach "$mnt" >/dev/null 2>&1 || true
-[ "$inside" = "$version" ] || { echo "   ❌ 包里是 $inside，不是 $version —— 发错包了。" >&2; exit 2; }
-echo "   ok（$inside）"
+[ "$inside" = "$version" ] || { echo "   ❌ 包里是 ${inside}，不是 ${version} —— 发错包了。" >&2; exit 2; }
+echo "   ok（${inside}）"
 
 echo
 echo "v$version 外面下得到的那一份：装得上、打得开、版本对。"
