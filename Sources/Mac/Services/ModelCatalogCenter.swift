@@ -90,8 +90,8 @@ final class ModelCatalogCenter: ObservableObject {
 
     private func persist(_ file: AgentModelCatalogFile) {
         guard let data = try? JSONEncoder().encode(file) else { return }
-        try? data.write(to: directory.appendingPathComponent(AgentModelCatalog.fileName),
-                        options: .atomic)
+        try? MultiProcessJSONStore.writeStaged(
+            data, to: directory.appendingPathComponent(AgentModelCatalog.fileName))
     }
 
     // MARK: - probes（nonisolated，跑在后台）

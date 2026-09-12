@@ -41,7 +41,7 @@ enum CrewChatAttachmentStore {
         do {
             let url = try makeDestination(
                 mime: mime, filename: filename, crewId: crewId, root: root)
-            try data.write(to: url, options: .atomic)
+            try MultiProcessJSONStore.writeStaged(data, to: url)
             return LocalWhiteboardAttachment(
                 id: UUID().uuidString.lowercased(),
                 mime: mime,

@@ -282,7 +282,7 @@ final class SessionDaemonHost {
         guard next != registry else { return }
         registry = next
         guard let data = try? JSONEncoder().encode(next) else { return }
-        try? data.write(to: paths.registry, options: .atomic)
+        try? MultiProcessJSONStore.writeStaged(data, to: paths.registry)
     }
 
     /// 上一轮 daemon 没了之后留下的子进程（§8.2）。

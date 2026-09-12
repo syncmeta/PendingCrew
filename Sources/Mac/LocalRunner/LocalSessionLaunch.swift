@@ -266,7 +266,7 @@ enum LocalSessionLaunch {
 
     private static func writeJSON(_ obj: [String: Any], to url: URL) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted]),
-              (try? data.write(to: url, options: .atomic)) != nil else { return nil }
+              (try? MultiProcessJSONStore.writeStaged(data, to: url)) != nil else { return nil }
         return url.path
     }
 

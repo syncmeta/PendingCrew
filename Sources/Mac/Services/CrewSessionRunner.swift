@@ -1056,7 +1056,7 @@ final class CrewSessionRunner: ObservableObject {
         let url = LocalWhiteboardStore.defaultDirectory
             .appendingPathComponent(CrewSessionsSnapshot.fileName)
         Task.detached(priority: .utility) {
-            try? data.write(to: url, options: .atomic)
+            try? MultiProcessJSONStore.writeStaged(data, to: url)
         }
     }
 

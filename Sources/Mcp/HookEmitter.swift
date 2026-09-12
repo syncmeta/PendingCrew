@@ -402,7 +402,7 @@ struct HookEmitter {
 
     private func saveAwarenessState(_ state: CaptainAwarenessCooldownState) {
         guard let data = try? JSONEncoder().encode(state) else { return }
-        try? data.write(to: awarenessStateURL, options: .atomic)
+        try? MultiProcessJSONStore.writeStaged(data, to: awarenessStateURL)
     }
 
     /// 快照每 2 秒刷新；超过 15 秒说明 app 已停或数据链异常，不拿陈旧 roster 制造

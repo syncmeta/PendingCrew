@@ -236,7 +236,7 @@ enum WorkdirMigrationExecutor {
                                 fileManager fm: FileManager = .default) throws {
         let url = claudeJSONURL(home: home)
         let perms = (try? fm.attributesOfItem(atPath: url.path))?[.posixPermissions]
-        try data.write(to: url, options: .atomic)
+        try MultiProcessJSONStore.writeStaged(data, to: url)
         if let perms {
             try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
         }

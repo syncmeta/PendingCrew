@@ -153,7 +153,8 @@ enum BackendRegistry {
     static func save(_ refs: [BackendRef], to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(refs.filter { !$0.isBuiltIn }).write(to: url, options: .atomic)
+        try MultiProcessJSONStore.writeStaged(
+            encoder.encode(refs.filter { !$0.isBuiltIn }), to: url)
     }
 
     /// 删一条。**内置那条删不得**，而且要说清为什么，不是静默忽略。

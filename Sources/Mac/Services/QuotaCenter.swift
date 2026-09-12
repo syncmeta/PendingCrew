@@ -121,7 +121,8 @@ final class QuotaCenter: ObservableObject {
         let file = AgentQuotaFile(claude: claude, codex: codex,
                                   claudeError: claudeError, codexError: codexError)
         guard let data = try? JSONEncoder().encode(file) else { return }
-        try? data.write(to: directory.appendingPathComponent(Self.quotaFileName), options: .atomic)
+        try? MultiProcessJSONStore.writeStaged(
+            data, to: directory.appendingPathComponent(Self.quotaFileName))
     }
 
     // MARK: - fetchers（nonisolated，跑在后台）

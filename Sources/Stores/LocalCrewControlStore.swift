@@ -39,7 +39,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
             return ControlChannelWriteError.refusedHere("编码失败")
         }
         do {
-            try data.write(to: fileURL(crewId), options: .atomic)
+            try MultiProcessJSONStore.writeStaged(data, to: fileURL(crewId))
             return nil
         } catch {
             return error
@@ -127,7 +127,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
             return ControlChannelWriteError.refusedHere("编码失败")
         }
         do {
-            try data.write(to: attentionFileURL(crewId), options: .atomic)
+            try MultiProcessJSONStore.writeStaged(data, to: attentionFileURL(crewId))
             return nil
         } catch {
             return error
@@ -340,7 +340,8 @@ final class LocalCrewControlStore: @unchecked Sendable {
             return ControlChannelWriteError.refusedHere("编码失败")
         }
         do {
-            try data.write(to: responseURL(crewId: crewId, commandId: commandId), options: .atomic)
+            try MultiProcessJSONStore.writeStaged(
+                data, to: responseURL(crewId: crewId, commandId: commandId))
             return nil
         } catch {
             return error
@@ -426,7 +427,7 @@ final class LocalCrewControlStore: @unchecked Sendable {
         }
         let url = directory.appendingPathComponent("\(cmd.crewId).\(cmd.id)\(Self.cmdSuffix)")
         do {
-            try data.write(to: url, options: .atomic)
+            try MultiProcessJSONStore.writeStaged(data, to: url)
             return nil
         } catch {
             return error

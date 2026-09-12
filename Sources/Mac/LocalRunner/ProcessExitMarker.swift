@@ -166,7 +166,7 @@ struct ProcessExitMarkerStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // 原子写：写到一半被打死时，盘上要么是上一版要么是这一版，
         // 绝不会是半个 JSON（半个 JSON 会被读成「解不开」→ 判成崩溃，白问一次）。
-        try encoder.encode(marker).write(to: url, options: .atomic)
+        try MultiProcessJSONStore.writeStaged(encoder.encode(marker), to: url)
         return marker
     }
 

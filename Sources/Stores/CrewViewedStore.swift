@@ -72,7 +72,7 @@ final class CrewViewedStore: ObservableObject {
 
     nonisolated private static func mirrorToDisk(_ plain: [String: TimeInterval]) {
         guard let data = try? JSONEncoder().encode(plain) else { return }
-        try? data.write(to: mirrorURL(), options: .atomic)
+        try? MultiProcessJSONStore.writeStaged(data, to: mirrorURL())
     }
 
     /// 跨进程读那份镜像。

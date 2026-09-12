@@ -479,3 +479,49 @@ final class StagedWriteTests: XCTestCase {
                        "落脚点在 Application Support 底下：\(staging)")
     }
 }
+
+
+/// 钉住「别再直接用 `.atomic` 往数据根里写」。
+///
+/// 光把现有 16 处换掉不够 —— 下一个人随手写一句 `data.write(to:options:.atomic)`
+/// 就又埋回去一处，而且**不会响**：它平时完全正常，只在那个故障发作时才让
+/// 那份文件读不出来。所以拿一把尺子钉着。
+final class NoRawAtomicWriteTests: XCTestCase {
+
+    /// 唯一允许出现的地方：`writeStaged` 自己的退路（落脚点不可用 / 跨卷）。
+    private static let allowed = "MultiProcessJSONStore.swift"
+
+    func test_没有人绕过_writeStaged_直接原子写() throws {
+        let offenders = try Self.sourceFiles().compactMap { url, text -> String? in
+            guard url.lastPathComponent != Self.allowed else { return nil }
+            guard let line = text.split(separator: "\n", omittingEmptySubsequences: false)
+                .enumerated()
+                .first(where: { $0.element.contains("options: .atomic") })
+            else { return nil }
+            return "\(url.lastPathComponent):\(line.offset + 1)"
+        }
+        XCTAssertEqual(
+            offenders, [],
+            "这些地方直接原子写了 —— 临时文件会建在目标目录里，那份文件从出生起就带上"
+                + "那个 EPERM 故障的标记。改用 MultiProcessJSONStore.writeStaged(_:to:)。")
+    }
+
+    private static func sourceFiles() throws -> [(URL, String)] {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources", isDirectory: true)
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else {
+            throw XCTSkip("读不到源码目录 \(root.path)（不在开发机上跑）")
+        }
+        return walker.compactMap { any in
+            guard let url = any as? URL, url.pathExtension == "swift",
+                  let text = try? String(contentsOf: url, encoding: .utf8)
+            else { return nil }
+            return (url, text)
+        }
+    }
+}

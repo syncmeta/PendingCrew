@@ -57,7 +57,7 @@ enum CrewArrangementStore {
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
+            try MultiProcessJSONStore.writeStaged(data, to: url)
             return true
         } catch {
             return false

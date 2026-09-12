@@ -262,7 +262,7 @@ struct SessionTurnMarker {
     func write(_ s: State) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard let d = try? JSONEncoder().encode(s) else { return }
-        try? d.write(to: url, options: .atomic)
+        try? MultiProcessJSONStore.writeStaged(d, to: url)
     }
 
     /// 只熄掉「在等回复」，其余记账原样保留（app 侧 nudge / 发文本进去时调）。
