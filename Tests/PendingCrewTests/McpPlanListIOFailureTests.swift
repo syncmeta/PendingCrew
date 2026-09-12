@@ -146,6 +146,32 @@ final class McpPlanListIOFailureTests: XCTestCase {
         XCTAssertTrue(r.contains("读不出来"), "没说这是一次读失败：\(r)")
     }
 
+    /// **边界：损坏重建之后的白板也只剩一行，但那一行是真的、在磁盘上。**
+    ///
+    /// 两种事故在「只剩一行」这个形状上长得一样，性质却相反：
+    /// - 读失败 → `readFailureRowId`，**只在内存里**，磁盘上没有；
+    /// - 确认损坏 → 归档原件 + 写一行新警示，**id 是新 UUID、真落盘**。
+    ///
+    /// 判据只认前者。要是写成「只剩一行就当读不出来」，一个刚被重建的白板会被
+    /// 永远说成读不出来，而它其实是好的（只是历史被归档了）。
+    func test_损坏重建后那一行不算读失败() {
+        let rebuilt = LocalWhiteboardMessage(
+            id: UUID().uuidString.lowercased(), senderKind: "session",
+            senderUserId: nil, senderSessionId: "system", category: nil,
+            text: "内容损坏，已归档为 xxx.corrupt-123（whiteboards 目录），本板从这条警示重新开始。",
+            createdAt: ISO8601DateFormatter().string(from: Date()))
+        XCTAssertNil(LocalWhiteboardStore.readFailure(in: [rebuilt]),
+                     "把「损坏重建」误判成「读不出来」—— 那块白板其实是好的，只是历史被归档了")
+
+        let failure = LocalWhiteboardMessage(
+            id: LocalWhiteboardStore.readFailureRowId, senderKind: "session",
+            senderUserId: nil, senderSessionId: "system", category: nil,
+            text: "白板文件存在但暂时无法读取，原始记录未被改动。",
+            createdAt: ISO8601DateFormatter().string(from: Date()))
+        XCTAssertNotNil(LocalWhiteboardStore.readFailure(in: [failure]),
+                        "读失败那一行没被认出来 —— 那正是这个判据唯一的职责")
+    }
+
     /// 反面：白板读得好好的、只是真没匹配 —— 照旧说「没找到」。
     /// 少了这一条，一个**永远**说「读不出来」的实现也会让上面那条绿。
     func test_白板读得出来但真没匹配时_照旧说没找到() {
