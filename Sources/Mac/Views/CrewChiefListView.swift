@@ -65,8 +65,35 @@ struct CrewChiefListView: View {
         // 谁排的」，跟这一层无关，压在它下面会读成「这一层也是排出来的」。
         ForEach(rows.filter { if case .chiefLayer = $0 { return true } else { return false } }) { row in
             if case .chiefLayer(let chief) = row {
-                CrewChiefLayerEntryRow(crew: chief)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                // **用的是跟普通机组同一个行视图**（人类 2026-09-12：「总机组和普通
+                // 机组的样式要一样 包括sidebar里的 颜色条可以不使用」）。
+                //
+                // 这里原本是一个自成一格的自定义行（`CrewChiefLayerEntryRow`，已删）——
+                // 那是刻意做成不一样的，人类明确推翻了。共用同一个行视图之后，
+                // 「总机组那行跟普通行不一致」**结构性地不可能**再发生，想掉也掉不了。
+                //
+                // 三处差异全部由参数表达，不另写一套：色条（连状态点）不画、
+                // 右键菜单不挂（那两项对它会坏，见那两个参数的注释）、拖拽不开。
+                CrewSidebarCrewRow(
+                    crew: chief,
+                    crewsById: crewsById,
+                    rootTitles: [],          // 它没有父边，没有根可标注
+                    lineageLine: nil,        // 同上：没有「挂在谁下面」可说
+                    expansion: nil,          // 没有子节点
+                    parentId: nil,
+                    groupCrews: crews,
+                    statusLine: CrewStatusLine.make(
+                        resolved: statusCarriers[chief.id].map {
+                            ($0.crewStatus ?? "", CrewTimestamp.parse($0.createdAt))
+                        },
+                        now: now),
+                    allowsReparentDrag: false,
+                    showsColorBar: false,
+                    showsContextMenu: false,
+                    dragState: dragState,
+                    childCrewTarget: $childCrewTarget
+                )
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                 Divider()
                     .padding(.horizontal, 10)
                     .padding(.vertical, 2)

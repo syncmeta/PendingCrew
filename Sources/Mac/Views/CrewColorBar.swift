@@ -10,7 +10,11 @@ import SwiftUI
 struct CrewColorBar: View {
     /// 色链：[0] = 本 crew，依次向上直到根。至少 1 个。
     let colors: [Color]
-    var width: CGFloat = 5
+    /// 默认宽度的**单一真值** —— 侧栏行在「不画色条」时要留同宽的空位保持左缘
+    /// 对齐（见 `CrewSidebarCrewRow.showsColorBar`），那边不该再抄一个 5 过去。
+    static let defaultWidth: CGFloat = 5
+
+    var width: CGFloat = Self.defaultWidth
     var height: CGFloat = 32
 
     var body: some View {

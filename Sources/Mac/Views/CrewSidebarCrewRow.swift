@@ -50,6 +50,31 @@ struct CrewSidebarCrewRow: View {
     /// 自己只是在归置列表，结果动了真的组织树 —— 所以这两件事在界面上是**结构性
     /// 分开**的，不是靠一句提示文案区分：改组织树只有层级视图那一条路。
     var allowsReparentDrag: Bool = true
+
+    /// 画不画左边那道谱系竖色条（连同浮在它右上角的状态点）。默认画 —— 三个视图里
+    /// 的普通行一个字不受影响。
+    ///
+    /// **总机组那一行传 `false`**。人类 2026-09-12 原话：「总机组和普通机组的样式要
+    /// 一样 包括sidebar里的 颜色条可以不使用」。色条画的是**谱系二分色**（沿父链算
+    /// 出来的），而总机组按设计没有也永远不会有父边，那道条对它本来就没有含义。
+    ///
+    /// **传 false 时色条的位置留空、不塌缩** —— 标题因此仍与其它行左缘对齐，
+    /// 那才是「样式一样」。真要让它吃掉那 3pt，改这里一行。
+    ///
+    /// ⚠️ **状态点挂在色条上，所以它跟着一起没了。** 对总机组这是安全的：那个点的
+    /// 两个信号源（本 crew 的人类 Todo、沿父边聚合的后代 Todo）对它结构上都取不到值
+    /// —— 它没有 session 去提 Todo，也没有存下来的子边可聚合。**别把这条推广到普通行。**
+    var showsColorBar: Bool = true
+
+    /// 挂不挂右键菜单。默认挂。
+    ///
+    /// **总机组那一行传 `false`**，而这一条不是样式，是挡住两个点了会坏的动作：
+    /// - 「在这下面建子 crew」：建子要走 `attachParent`，那里第一行 `refuseBuiltin`
+    ///   直接抛 —— 点了只会拿到一个错误。
+    /// - 「藏起来」：`setManuallyHidden` **没有**拦内建那一层，而「已隐藏的群」那份
+    ///   列表喂的是 `crewStore.crews`（不含 builtin）—— 藏完它不在那份列表里，
+    ///   也没有第二个入口把它取回来。
+    var showsContextMenu: Bool = true
     @ObservedObject var dragState: CrewDragState
     /// 右键「在这下面建子 crew」的目标（侧栏持有，表单也在那层弹）。
     @Binding var childCrewTarget: CrewChildCreationTarget?
@@ -67,7 +92,7 @@ struct CrewSidebarCrewRow: View {
         Group {
             if allowsReparentDrag {
                 rowCore
-                    .contextMenu { menuItems }
+                    .contextMenu { if showsContextMenu { menuItems } }
                     // 拖起：负载带上「哪个 crew + 当前这条父边」，落地时才知道该摘哪条边。
                     .draggable(CrewDragDropLogic.encode(crewId: crew.id, parentId: parentId)) {
                         Text(crew.title)
@@ -82,7 +107,7 @@ struct CrewSidebarCrewRow: View {
             } else {
                 // 整理用的视图：右键菜单照旧（建子 crew / 藏起来都不改隶属关系），
                 // 但**没有** draggable / dropDestination —— 改汇报线在这里根本没有入口。
-                rowCore.contextMenu { menuItems }
+                rowCore.contextMenu { if showsContextMenu { menuItems } }
             }
         }
         // 每个 crew 之间留一道竖向呼吸间距 —— 加在高亮 pill 之外(背景/点击区已闭合),
@@ -109,20 +134,25 @@ struct CrewSidebarCrewRow: View {
                 Color.clear.frame(width: 12, height: 1)
             }
 
-            CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
-                // 状态点浮在色条右上角（Todo #71/#73）：红=错误、黄=本 crew 或
-                // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
-                .overlay(alignment: .topTrailing) {
-                    CrewStatusDotView(
-                        // 黄点唯一来源：人类 Todo 那本还有几条没回应；后台快照已把
-                        // 后代条数沿父边递归聚合，并保留 own/descendant 语义。
-                        // 读的是 `CrewStore` 后台指纹门控算好的快照，一次字典查表 ——
-                        // **不在这里现读 Todo 文件**（那就是 2026-08-17 的形状）。
-                        attention: crewStore.humanTodoAttention[crew.id] ?? .none,
-                        runs: sessionRunner.runs.filter { $0.crewId == crew.id }
-                    )
-                    .offset(x: 6, y: -5)
-                }
+            if showsColorBar {
+                CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
+                    // 状态点浮在色条右上角（Todo #71/#73）：红=错误、黄=本 crew 或
+                    // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
+                    .overlay(alignment: .topTrailing) {
+                        CrewStatusDotView(
+                            // 黄点唯一来源：人类 Todo 那本还有几条没回应；后台快照已把
+                            // 后代条数沿父边递归聚合，并保留 own/descendant 语义。
+                            // 读的是 `CrewStore` 后台指纹门控算好的快照，一次字典查表 ——
+                            // **不在这里现读 Todo 文件**（那就是 2026-08-17 的形状）。
+                            attention: crewStore.humanTodoAttention[crew.id] ?? .none,
+                            runs: sessionRunner.runs.filter { $0.crewId == crew.id }
+                        )
+                        .offset(x: 6, y: -5)
+                    }
+            } else {
+                // 位置留着、不上色：标题左缘因此仍与其它行对齐（「样式一样」的那一半）。
+                Color.clear.frame(width: CrewColorBar.defaultWidth)
+            }
 
             let last = resolvedLastMessage
             VStack(alignment: .leading, spacing: 4) {

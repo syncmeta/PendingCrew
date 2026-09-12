@@ -866,6 +866,46 @@ final class ViewWiringTests: XCTestCase {
             """)
     }
 
+    /// **总机组那一行跟普通机组用同一个行视图**（人类 2026-09-12：「总机组和普通机组
+    /// 的样式要一样 包括sidebar里的 颜色条可以不使用」）。
+    ///
+    /// 这条挡的是一种特定的退化：有人为了给总机组加点什么，又写回一个自定义行。
+    /// 那正是这一单之前的状态 —— 上一版刻意做成不一样，人类当面推翻了。
+    /// 共用行视图是本仓既有的做法（见 `CrewSidebarCrewRow` 开头那段「为什么必须共用」），
+    /// 自定义行会让两者再次漂开，而且只有目视才看得出来。
+    func testTheChiefLayerRowUsesTheSharedCrewRow() throws {
+        let chiefView = try Self.text(of: "CrewChiefListView.swift")
+        XCTAssertTrue(chiefView.contains("CrewSidebarCrewRow("),
+                      "总机组那一行没用共用行视图 —— 它会跟普通行漂开")
+        XCTAssertTrue(chiefView.contains("showsColorBar: false"),
+                      "总机组那一行还画着谱系色条 —— 人类点名说可以不要，而它没有父边，那道条对它没有含义")
+        XCTAssertTrue(chiefView.contains("showsContextMenu: false"),
+                      """
+                      总机组那一行挂着右键菜单 —— 那两项对它都会坏：建子会被 refuseBuiltin                       抛；「藏起来」藏完进不了「已隐藏的群」那份列表（它喂的是不含 builtin                       的 crewStore.crews），没有第二个入口取回来。
+                      """)
+
+        // 那个自定义行必须真的没了 —— 只断「用了共用行」的话，两个行视图并存、
+        // 而视图里实际画的是旧那个，这把尺子照样绿。
+        let sources = try Self.sourceFiles()
+        XCTAssertGreaterThan(sources.count, 50, "源码扫描没扫到东西，测试本身失效了")
+        let strays = sources.filter { url, text in
+            url.lastPathComponent != "CrewChiefListView.swift"   // 那里只有一句注释提到它
+                && text.contains("CrewChiefLayerEntryRow")
+        }
+        XCTAssertTrue(strays.isEmpty,
+                      "那个自成一格的自定义行又回来了：\(strays.map(\.0.lastPathComponent))")
+    }
+
+    /// 反向：**普通行的色条和右键菜单不许被顺手关掉。** 上面那条只说总机组要关，
+    /// 这条守住「别顺手改别的行的样式」那条纪律 —— 两个开关的默认值必须仍是 true。
+    func testOrdinaryRowsKeepTheirColorBarAndMenu() throws {
+        let row = try Self.text(of: "CrewSidebarCrewRow.swift")
+        XCTAssertTrue(row.contains("var showsColorBar: Bool = true"),
+                      "色条开关的默认值不是 true —— 所有普通行的色条被顺手关掉了")
+        XCTAssertTrue(row.contains("var showsContextMenu: Bool = true"),
+                      "右键菜单开关的默认值不是 true —— 所有普通行的右键菜单被顺手关掉了")
+    }
+
     private static func text(of fileName: String) throws -> String {
         guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
         else { throw XCTSkip("找不到源码文件 \(fileName)") }
