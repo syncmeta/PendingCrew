@@ -137,9 +137,20 @@ echo
 cat <<'TXT'
 结论：**读不动，属于「建得了、看得见、删得掉，只要它已经存在就打不开」那一族。**
 
-下一步（都要人在场，agent 拿不到）：
-  · 系统设置 → 隐私与安全性 → App 管理 / 完全磁盘访问，把终端加进去
-  · 要钉死成因：sudo log stream --predicate 'subsystem == "com.apple.TCC"'
+下一步（要人在场，agent 拿不到 sudo）：
+
+  ⚠️ **别再抓 TCC 日志了。** 这里以前写的是
+     `sudo log stream --predicate 'subsystem == "com.apple.TCC"'`，
+     而 2026-09-12 实测：20 分钟 616 行里**文件类服务 0 次**（全是 AppleEvents）——
+     TCC 连评估都没评估这件事。照那条走只会得到一屏无关日志，然后以为「查过了」。
+
+  · 发作当口跑：sudo scripts/capture-eperm-fsusage.sh
+    它能告诉你：这次 open 的 errno、是谁在那一刻碰这个文件、有没有别的进程插在中间。
+    **它不能告诉你「谁拒的」** —— fs_usage 停在系统调用边界，看不到内核里哪个
+    授权钩子返的错。这条边界写在这里，免得跑完一趟以为定案了。
+  · 真想知道「谁拒的」，目前没有不要 sudo 且不被 SIP 挡住的现成办法；
+    已经排完的层（TCC / 内核沙盒 / 文件提供方 / 磁盘 / 第三方扩展）见现场档，别重跑。
+
 现场与已排除项：docs/internal/2026-09-12-eperm-cause-found.md
 TXT
 exit 1
