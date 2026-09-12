@@ -39,6 +39,19 @@ final class LocalAgentSessionStore: @unchecked Sendable {
         var updatedAt: String
         /// 本特性上线前写的记录没有这个字段 —— 解成 nil，调用方按「不知道」处理。
         var workingDirectory: String?
+        /// **这个 session 被明确指定过的模型 / effort**（2026-09-12，Todo #146）。
+        ///
+        /// 在这之前，切模型只改内存里的 `run.model`，一个字都不落盘。于是
+        /// `restartMember` 用 `model: nil` 重起、`startCaptain` 也不带，
+        /// **session 被 @ 唤醒拉起来的那一刻就悄悄回到默认模型** —— codex 的默认
+        /// 恰好是最贵的那个（`~/.codex/config.toml` 顶层 model）。人看到的是
+        /// 「切了，回执说成功了，过一会儿又变回去了」，而没有任何地方说过它退回去。
+        ///
+        /// 只记**明确指定过的**值：没指定过就是 nil，重启时照旧走默认解析 ——
+        /// 把一次默认解析的结果记成「这个 session 的选择」会让以后改默认对老 session
+        /// 无效，那是另一种静默。
+        var model: String?
+        var effort: String?
     }
 
     static let shared = LocalAgentSessionStore()
@@ -57,6 +70,7 @@ final class LocalAgentSessionStore: @unchecked Sendable {
     /// 「这个成员没有工作目录」，把已知的信息覆盖成未知是净损失。
     func record(crewId: String, sessionId: String, kind: String, agentSessionId: String,
                 workingDirectory: String? = nil,
+                model: String? = nil, effort: String? = nil,
                 now: Date = Date(), onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) {
         let trimmed = agentSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -71,11 +85,41 @@ final class LocalAgentSessionStore: @unchecked Sendable {
                 rows[i].agentSessionId = trimmed
                 rows[i].updatedAt = stamp
                 if let workdir, !workdir.isEmpty { rows[i].workingDirectory = workdir }
+                // 同 workingDirectory 的规矩：传 nil = 这次不知道，**不清空已知值**。
+                if let model, !model.isEmpty { rows[i].model = model }
+                if let effort, !effort.isEmpty { rows[i].effort = effort }
             } else {
                 rows.append(Record(crewId: crewId, sessionId: sessionId, kind: kind,
                                    agentSessionId: trimmed, updatedAt: stamp,
-                                   workingDirectory: (workdir?.isEmpty == false) ? workdir : nil))
+                                   workingDirectory: (workdir?.isEmpty == false) ? workdir : nil,
+                                   model: (model?.isEmpty == false) ? model : nil,
+                                   effort: (effort?.isEmpty == false) ? effort : nil))
             }
+            MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
+        }
+    }
+
+    /// 切换成功之后把档位记下来（Todo #146）。**只更新已存在的那一行** ——
+    /// 切换成功的前提是 session 正在跑，而正在跑就意味着启动时那条记录已经写过了
+    /// （claude 在拿到会话号那一刻写、codex 在握手拿到 threadId 那一刻写）。
+    /// 查不到行就什么都不做：与其凭空造一条没有会话号的记录，不如让这次不记 ——
+    /// 一条会话号为空的记录会把「续跑哪一轮」这个判断带偏。
+    ///
+    /// 两个档位各自独立：只切了模型就只传模型，另一个传 nil（不清空）。
+    func recordProfile(crewId: String, sessionId: String,
+                       model: String? = nil, effort: String? = nil,
+                       now: Date = Date(),
+                       onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) {
+        guard model?.isEmpty == false || effort?.isEmpty == false else { return }
+        withFileLock {
+            var rows = loadLocked(onIncident: onIncident)
+            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(
+                rows, at: fileURL) else { return }
+            guard let i = rows.firstIndex(where: {
+                $0.crewId == crewId && $0.sessionId == sessionId }) else { return }
+            if let model, !model.isEmpty { rows[i].model = model }
+            if let effort, !effort.isEmpty { rows[i].effort = effort }
+            rows[i].updatedAt = ISO8601DateFormatter().string(from: now)
             MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
         }
     }

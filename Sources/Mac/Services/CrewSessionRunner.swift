@@ -584,6 +584,13 @@ final class CrewSessionRunner: ObservableObject {
                 case .model: run.model = cmd.value
                 case .effort: run.effort = cmd.value
                 }
+                // **落盘**（Todo #146）。在这之前切换只改内存，session 一被重启或
+                // 被 @ 唤醒拉起就回到默认模型（codex 的默认是最贵的那个），
+                // 而且没有任何地方会说它退回去了。
+                LocalAgentSessionStore.shared.recordProfile(
+                    crewId: req.crewId, sessionId: req.sessionId,
+                    model: cmd.knob == .model ? cmd.value : nil,
+                    effort: cmd.knob == .effort ? cmd.value : nil)
                 applied.append(cmd.summary)
                 // 换模型正是「撞限额后自救」的手段 —— 切成了就别再挂着「⏳ 限额中」。
                 // （活跃度那条恢复判定也会兜到，但这里是确定性的，不等 6s streak。）
@@ -1406,6 +1413,11 @@ final class CrewSessionRunner: ObservableObject {
         let cliLease = config.kind.isAgent
             ? try AgentCLIMaintenanceLease.acquire(config.kind, exclusive: false) : nil
         var config = config
+        // 记账时只记**明确指定过的**那个值，所以要在默认解析之前抓一份（Todo #146）。
+        // 记成解析后的默认值 = 把「这次碰巧是这个默认」写成「这个 session 选了它」，
+        // 以后改默认对老 session 就无效了。
+        let explicitModel = config.model
+        let explicitEffort = config.effort
         if config.kind.isAgent, config.model == nil {
             config.model = SessionLaunchOptions.defaultModel(
                 for: config.kind, projectDir: workingDirectory)
@@ -1456,7 +1468,8 @@ final class CrewSessionRunner: ObservableObject {
                 LocalAgentSessionStore.shared.record(
                     crewId: crewId, sessionId: sessionId,
                     kind: config.kind.rawValue, agentSessionId: agentId,
-                    workingDirectory: workingDirectory.path)
+                    workingDirectory: workingDirectory.path,
+                    model: explicitModel, effort: explicitEffort)
             }
             let sink = SessionBackendRouting.usesProtocolTransport
                 ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
@@ -1510,7 +1523,8 @@ final class CrewSessionRunner: ObservableObject {
                     LocalAgentSessionStore.shared.record(
                         crewId: crewId, sessionId: sessionId,
                         kind: LocalCodingAgentKind.codex.rawValue, agentSessionId: tid,
-                        workingDirectory: workingDirectory.path)
+                        workingDirectory: workingDirectory.path,
+                        model: explicitModel, effort: explicitEffort)
                 },
                 // 续不回来 → 已降级新起一条 thread，如实进群说明（不静默假装恢复）。
                 notifyResumeFallback: { failedId, reason in
@@ -2375,6 +2389,9 @@ final class CrewSessionRunner: ObservableObject {
         // `--resume` 是纯粹的错。续不上由 agent 自己说了算（claude 走
         // `retryWithoutResumeIfClaudeRefused`，codex 走 backend 的 resume→start 降级）。
         var resumeCaptainId = resumeSessionIdOverride
+        // 参数不可变；沿用上一任档位要在本地兜一层（Todo #146）。
+        var model = model
+        var effort = effort
         if resumeCaptainId == nil && resumePreviousConversation {
             let previousCaptain = LocalAgentSessionStore.shared.latestCaptainRecord(
                 crewId: crewId, kind: captainKind.rawValue)
@@ -2382,6 +2399,11 @@ final class CrewSessionRunner: ObservableObject {
                 recordedId: previousCaptain?.agentSessionId) {
                 resumeCaptainId = id
             }
+            // Todo #146：机长这条路同样会丢档位 —— 每次被 @ 唤醒都新造
+            // `captain-<uuid8>` 并以 model=nil 起，于是人切过的模型一次唤醒就没了。
+            // 调用方明确传了就听调用方的，没传才用上一任记下来的。
+            if model == nil { model = previousCaptain?.model }
+            if effort == nil { effort = previousCaptain?.effort }
         }
         var cfg = SessionConfig(kind: captainKind, model: model, effort: effort,
                                 initialPrompt: initialPrompt,
@@ -2599,7 +2621,10 @@ final class CrewSessionRunner: ObservableObject {
         if case .resume(let id) = decision { resumeId = id }
         try await launchWorker(detail: detail, backend: backend, sessionId: member.sessionId,
                                brief: brief, kind: kind, workdir: workdir,
-                               model: nil, effort: nil, title: member.displayName,
+                               // Todo #146：用这个 session 记下来的档位，别一律 nil ——
+                               // nil 会走默认解析，等于把人切过的模型悄悄撤销。
+                               model: recorded?.model, effort: recorded?.effort,
+                               title: member.displayName,
                                resumeAgentSessionId: resumeId,
                                wakeEntryId: wakeEntryId)
     }

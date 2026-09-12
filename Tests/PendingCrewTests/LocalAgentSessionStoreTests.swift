@@ -146,4 +146,97 @@ final class LocalAgentSessionStoreTests: XCTestCase {
                  agentSessionId: "theirs", now: stamp("2026-08-25T10:00:00Z"))
         XCTAssertNil(s.latestCaptainRecord(crewId: "c", kind: "claude_code"))
     }
+
+    // MARK: - 档位落盘（Todo #146）
+
+    /// 切模型只改内存、不落盘，是「切了、回执说成功、一重启又变回去」的全部机制。
+    func test_切换的档位会落盘并且能查回来() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "w1", kind: "codex", agentSessionId: "thread-1")
+        XCTAssertNil(s.record(crewId: "c", sessionId: "w1")?.model, "起始不该有档位")
+
+        s.recordProfile(crewId: "c", sessionId: "w1", model: "gpt-5.6-sol")
+        XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.model, "gpt-5.6-sol")
+        XCTAssertNil(s.record(crewId: "c", sessionId: "w1")?.effort,
+                     "只切了模型，effort 不该被写上")
+
+        s.recordProfile(crewId: "c", sessionId: "w1", effort: "high")
+        XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.model, "gpt-5.6-sol",
+                       "再切 effort 不该把模型冲掉")
+        XCTAssertEqual(s.record(crewId: "c", sessionId: "w1")?.effort, "high")
+    }
+
+    /// 会话号那一路（重启接回原对话）不能被档位写坏 —— 它们同住一行。
+    func test_写档位不动会话号和工作目录() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "w1", kind: "codex", agentSessionId: "thread-1",
+                 workingDirectory: "/tmp/wd")
+        s.recordProfile(crewId: "c", sessionId: "w1", model: "gpt-5.5")
+        let r = s.record(crewId: "c", sessionId: "w1")
+        XCTAssertEqual(r?.agentSessionId, "thread-1")
+        XCTAssertEqual(r?.workingDirectory, "/tmp/wd")
+        XCTAssertEqual(r?.kind, "codex")
+    }
+
+    /// 反过来：后续的 `record`（握手又写一次会话号）不能把人切过的档位清掉 ——
+    /// 它传的 model 是 nil，而 nil 的意思是「这次不知道」，不是「没有」。
+    func test_后续写会话号不清掉已记的档位() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "w1", kind: "codex", agentSessionId: "thread-1")
+        s.recordProfile(crewId: "c", sessionId: "w1", model: "gpt-5.6-sol", effort: "high")
+        s.record(crewId: "c", sessionId: "w1", kind: "codex", agentSessionId: "thread-2")
+        let r = s.record(crewId: "c", sessionId: "w1")
+        XCTAssertEqual(r?.agentSessionId, "thread-2")
+        XCTAssertEqual(r?.model, "gpt-5.6-sol", "换了 thread 不等于换了模型")
+        XCTAssertEqual(r?.effort, "high")
+    }
+
+    /// 没有那一行时不凭空造一条 —— 一条会话号为空的记录会把「续跑哪一轮」带偏。
+    func test_查无此行时不造记录() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.recordProfile(crewId: "c", sessionId: "w1", model: "gpt-5.5")
+        XCTAssertEqual(s.list().count, 0)
+    }
+
+    /// 旧账本（没有这两个字段）照样解得开，解成 nil。
+    func test_旧记录解得开且档位为nil() throws {
+        let dir = tempDir()
+        try Data("""
+            [{"crewId":"c","sessionId":"w1","kind":"claude",\
+            "agentSessionId":"uuid-1","updatedAt":"2026-09-01T00:00:00Z"}]
+            """.utf8).write(to: rawFileURL(dir))
+        let s = LocalAgentSessionStore(directory: dir)
+        let r = s.record(crewId: "c", sessionId: "w1")
+        XCTAssertEqual(r?.agentSessionId, "uuid-1")
+        XCTAssertNil(r?.model)
+        XCTAssertNil(r?.effort)
+    }
+
+    // MARK: - 接线（Todo #146）
+
+    /// 上面那些只证明 store 会存会取。**「存了但没人用」跟「没存」对用户是同一件事**，
+    /// 而且本仓一天之内撞过三次（规则有测试、接线没有）。所以这里直接扫源码，
+    /// 断言三个用它的地方都真的接上了。
+    func test_档位落盘真的被接上了三处() throws {
+        let runner = try Self.source("Sources/Mac/Services/CrewSessionRunner.swift")
+
+        XCTAssertTrue(runner.contains("LocalAgentSessionStore.shared.recordProfile("),
+                      "切换成功后没有落盘 —— 切了还是会在下次重启丢掉")
+        XCTAssertTrue(runner.contains("model: recorded?.model, effort: recorded?.effort"),
+                      "restartMember 没有用记下来的档位（用 nil 就是走默认解析，等于撤销）")
+        XCTAssertTrue(runner.contains("if model == nil { model = previousCaptain?.model }"),
+                      "机长续跑没有沿用上一任的档位 —— 每次 @ 唤醒都会把它打回默认")
+    }
+
+    private static func source(_ relative: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // .../Tests/PendingCrewTests
+            .deletingLastPathComponent()   // .../Tests
+            .deletingLastPathComponent()   // 仓库根
+        let url = root.appendingPathComponent(relative)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            throw XCTSkip("读不到 \(url.path)（不在开发机上跑）")
+        }
+        return text
+    }
 }
