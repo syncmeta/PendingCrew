@@ -47,6 +47,64 @@ final class CaptainOrgToolsTests: XCTestCase {
         XCTAssertNil(s.resolveChild(of: auth, hint: "深色模式"))             // 非直系子
     }
 
+    // MARK: - 机长不许有「解散 crew」这种能力（人类 Todo #12）
+
+    /// 人类 2026-09-12 定的一条硬边界：
+    /// 「**不要让机长能够解散。解散必须人工解散。**另外，收编啊 真的搬走啊 还是多挂
+    /// 一个父 这都由机长决定。」
+    ///
+    /// 也就是说组织**结构**归机长（adopt / release / create_parent / adopt_parent
+    /// 一个都不减），但把一个 crew **消灭掉**只能是人在界面上做的动作。
+    ///
+    /// ## 为什么这条测试长成「扫注册表」而不是「调某个函数」
+    ///
+    /// 今天这条约束**已经成立** —— MCP 注册表里压根没有这样一个工具，侧栏的「藏起来」
+    /// 是右键菜单、agent 够不着。一条「现在没有」的事实不需要测试，需要测试的是
+    /// **以后别人顺手加一个**：那时候没有任何地方会报错，而它恰恰是最难挽回的一类动作。
+    ///
+    /// 所以判据落在**工具注册表本身**：凡是名字里带 dissolve / disband / delete_crew /
+    /// remove_crew / destroy 这类词的工具一旦出现，这条当场红，加的人会在这里读到
+    /// 人类的原话，然后决定是去掉它、还是拿着这段话去找人类改口径。
+    func testNoMcpToolCanDestroyACrew() throws {
+        let server = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Tests/PendingCrewTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // 仓库根
+            .appendingPathComponent("Sources/Mcp/McpServer.swift")
+        guard let text = try? String(contentsOf: server, encoding: .utf8) else {
+            throw XCTSkip("读不到 \(server.path)（不在开发机上跑）")
+        }
+
+        // 注册表里每个 `"name": "xxx"`。
+        let names = text
+            .components(separatedBy: "\"name\"")
+            .dropFirst()
+            .compactMap { chunk -> String? in
+                guard let open = chunk.firstIndex(of: "\"") else { return nil }
+                let rest = chunk[chunk.index(after: open)...]
+                guard let close = rest.firstIndex(of: "\"") else { return nil }
+                return String(rest[..<close])
+            }
+        // 先证明这把尺子确实读到了东西 —— 解析一坏，下面的「零命中」就是假绿。
+        XCTAssertTrue(
+            names.contains("adopt_crew") && names.contains("create_child_crew"),
+            "没从注册表里解析出已知工具名，说明解析坏了，这条的绿不算数：\(names.prefix(10))")
+
+        let destructive = ["dissolve", "disband", "destroy", "delete_crew",
+                           "remove_crew", "drop_crew", "archive_crew", "purge"]
+        let offenders = names.filter { name in
+            destructive.contains { name.contains($0) }
+        }
+        XCTAssertTrue(
+            offenders.isEmpty,
+            """
+            MCP 注册表里出现了能消灭 crew 的工具：\(offenders)
+            人类 2026-09-12 的原话是「不要让机长能够解散。解散必须人工解散」——
+            组织结构（收编 / 搬走 / 多挂一个父）归机长，消灭一个 crew 只能是人在界面上做。
+            要改这条口径，先去问人，别在这里放行。
+            """)
+    }
+
     // MARK: - 汇报线工具入队（helper 侧）
 
     private func makeServer(isCaptain: Bool, dir: URL) -> McpServer {
