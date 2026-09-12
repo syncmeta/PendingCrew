@@ -304,6 +304,22 @@ docs/                   release-macos.md（发版）、tech-debt.md（债）
 docs/internal/          开发过程记录，写完即冻结，**不随代码更新**
 ```
 
+## 数据根突然全是 EPERM（工具集体瞎掉时先跑这个）
+
+`~/Library/Application Support/PendingCrew/` 会**周期性**变成「建得了、看得见、
+删得掉，但只要文件已经存在就打不开」。这时 agent 那一侧的全部 crew 工具都瞎了，
+而 app 因为存盘走的是整份原子写（临时文件 + rename），**看起来还活着**。
+
+```sh
+sh scripts/diagnose-data-dir.sh        # 退出码 0 = 读得动，1 = 就是这一族
+```
+
+它不猜成因、不要 sudo、不碰任何既有文件，一次量完：这棵树 / 是不是整棵子树 /
+三个别人的 Application Support 做横向对照 / daemon 日志末尾 / 排不空的机长命令。
+现场与已排除的十条成因：`docs/internal/2026-09-12-eperm-cause-found.md`。
+
+**解只有人能给**：系统设置 → 隐私与安全性 → App 管理 / 完全磁盘访问。
+
 ## 有几个测试需要现取 fixture
 
 `CrewChatOpenCostTests` 用的是真实群聊数据（不入版本历史，见 `.gitignore`）。
