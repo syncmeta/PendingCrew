@@ -243,6 +243,22 @@ final class CaptainTodoSweepTests: XCTestCase {
                        "读不出来时还让机长去 confirm —— 它交不出账，那条建议只会让它撞墙")
     }
 
+    /// 读不出来那段话要**教得动**：它每隔一分钟响一次，而收到它的人这时候
+    /// 什么也交不出来。2026-09-12 那次断了 8.5 小时，机长是自己摸出「git 还通、
+    /// 先定性、架哨别空等」这条路的 —— 那条路本该写在提醒里。
+    func test_读不出来那段话要告诉人这时候能干什么() {
+        guard case let .remind(text) = CaptainTodoSweep.decide(
+            open: .unreadable, confirmation: nil, lastRemindedAt: nil,
+            now: Date(), minimumInterval: 60)
+        else { return XCTFail("读不出来时没提醒") }
+        XCTAssertTrue(text.contains("git"),
+                      "没说 git 还通 —— 收到这条的人会以为整个人被卡住了：\(text)")
+        XCTAssertTrue(text.contains("diagnose-data-dir.sh"),
+                      "没给定性那一步，人只能凭「界面看起来正常」判，而那恰恰判不了：\(text)")
+        XCTAssertTrue(text.contains("别逐分钟重试") || text.contains("哨"),
+                      "没说别空等 —— 这条提醒每分钟响一次，不说就是在催人空转：\(text)")
+    }
+
     /// 那段话**不许保证白板上有警示**。
     ///
     /// 原文写的是「群聊白板上**应该**有一条系统警示说明是哪种事故」，而事实相反：
