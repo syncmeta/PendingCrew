@@ -94,6 +94,32 @@ enum TodoListPresentation {
         LocalTodoItem.statusLabel(status)
     }
 
+    // MARK: - 撤回：它不在 `status` 那一列里（人类 Todo #10 / #14）
+
+    /// **撤回是另一个字段**（`LocalTodoItem.withdrawnAt`），`status` 那一列记不下它 ——
+    /// 撤回只写 `withdrawnAt` 和一条回应，**`status` 一个字不动**。
+    ///
+    /// 于是一条撤回过的条目在界面上仍然显示「待办」，人类连着问了两次
+    /// 「你不是说撤回吗，为什么没标记成撤回的样子」（#10、#14）。
+    ///
+    /// **修在读这一侧而不是写这一侧**，理由是它**当场治好已有的那些**：
+    /// 盘上那批老条目的 `withdrawnAt` 早就写着，改渲染判据就立刻显示对，
+    /// 不用迁移数据、也不用担心迁移漏掉哪条。
+    ///
+    /// （写那一侧不再补 `status` 也是刻意的：两个字段各记一件事，
+    /// 再让 `status` 兼职记撤回，就又回到「同一件事两个真值」。）
+    static func statusIcon(status: String, isWithdrawn: Bool) -> StatusIcon {
+        guard isWithdrawn else { return statusIcon(status) }
+        // 符号跟「已叫停」刻意不同：叫停是人决定不办，撤回是**提的人自己收回**，
+        // 两者都不用再看，但来源不同，一眼要能分开。
+        return StatusIcon(symbol: "arrow.uturn.backward.circle.fill",
+                          isFilled: true, isBreathing: false, dimsText: true)
+    }
+
+    static func statusAccessibilityLabel(status: String, isWithdrawn: Bool) -> String {
+        isWithdrawn ? "已撤回" : statusAccessibilityLabel(status)
+    }
+
     /// 概览只露最近一条回应，并折成一行；完整回应仍留给「放大看」。
     static func overviewResponse(for item: LocalTodoItem) -> String? {
         guard let response = item.responses.last else { return nil }

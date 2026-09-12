@@ -8,13 +8,16 @@ import SwiftUI
 /// 这里只负责画 + 跑动画。概览面板与详细窗口共用。
 struct CrewTodoStatusCircle: View {
     let status: String
+    /// 撤回过没有。**它不在 `status` 里** —— 撤回只写 `withdrawnAt`（人类 #10/#14）。
+    var isWithdrawn: Bool = false
     var size: CGFloat = 13
 
     private var icon: TodoListPresentation.StatusIcon {
-        TodoListPresentation.statusIcon(status)
+        TodoListPresentation.statusIcon(status: status, isWithdrawn: isWithdrawn)
     }
 
     private var tint: Color {
+        if isWithdrawn { return Theme.Palette.inkMuted }
         switch status {
         case "in_progress": return Theme.Palette.accent
         case "completed": return Theme.Palette.success
@@ -35,8 +38,9 @@ struct CrewTodoStatusCircle: View {
     var body: some View {
         BreathingSymbol(symbol: icon.symbol, pointSize: size, tint: tint,
                         breathing: icon.isBreathing)
-            .accessibilityLabel(TodoListPresentation.statusAccessibilityLabel(status))
-            .help(TodoListPresentation.statusAccessibilityLabel(status))
+            .accessibilityLabel(
+                TodoListPresentation.statusAccessibilityLabel(status: status, isWithdrawn: isWithdrawn))
+            .help(TodoListPresentation.statusAccessibilityLabel(status: status, isWithdrawn: isWithdrawn))
     }
 }
 #endif

@@ -116,7 +116,7 @@ struct CrewTodoPanel: View {
     @ViewBuilder
     private func todoRow(_ row: TodoListPresentation.Row) -> some View {
         let item = row.item
-        let icon = TodoListPresentation.statusIcon(item.status)
+        let icon = TodoListPresentation.statusIcon(status: item.status, isWithdrawn: item.withdrawnAt != nil)
         let corners = layout.cardCorners
         let cardShape = UnevenRoundedRectangle(
             cornerRadii: .init(
@@ -128,7 +128,7 @@ struct CrewTodoPanel: View {
         VStack(alignment: .leading, spacing: 7) {
             // 附图的层级：状态圆点 + 序号先单独成行，正文另进下面的卡片。
             HStack(alignment: .center, spacing: 6) {
-                CrewTodoStatusCircle(status: item.status, size: 15)
+                CrewTodoStatusCircle(status: item.status, isWithdrawn: item.withdrawnAt != nil, size: 15)
                 // 借显过来的行要带上本账名（#139）：两本账的 #N 各自从 1 起，
                 // 人类那本里裸写一个「7」，他会去人类那本找 #7 —— 那是另一件事。
                 Text(TodoListPresentation.rowNumberLabel(row, shownIn: ledger))

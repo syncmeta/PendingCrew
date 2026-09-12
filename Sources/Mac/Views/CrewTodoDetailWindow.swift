@@ -264,7 +264,7 @@ struct CrewTodoDetailView: View {
             // 正文从前是挤在这个 HStack 里、夹在 #N 和按钮中间的：纯文本时看不出来，
             // 一旦渲染 markdown（标题/列表各自成块）就会被挤成另一副样子。
             HStack(alignment: .center, spacing: 8) {
-                CrewTodoStatusCircle(status: item.status, size: 14)
+                CrewTodoStatusCircle(status: item.status, isWithdrawn: item.withdrawnAt != nil, size: 14)
                 Text("#\(item.number)")
                     .font(Theme.Fonts.footnote.weight(.semibold).monospacedDigit())
                     .foregroundStyle(Theme.Palette.inkMuted)

@@ -208,4 +208,41 @@ final class TodoListPresentationTests: XCTestCase {
         LocalTodoResponse(id: id, sessionId: sessionId, senderName: senderName, text: text,
                           createdAt: "2026-08-28T00:00:00Z")
     }
+
+    // MARK: - 撤回不在 status 那一列里（人类 Todo #10 / #14）
+
+    /// 撤回只写 `withdrawnAt`，`status` 一个字不动 —— 所以一条撤回过的条目
+    /// 以前在界面上仍然显示「待办」。人类连着问了两次「你不是说撤回吗」。
+    func test_撤回过的条目显示成已撤回而不是待办() {
+        let icon = TodoListPresentation.statusIcon(status: "pending", isWithdrawn: true)
+        XCTAssertTrue(icon.dimsText, "撤回了正文还不变灰 —— 看着跟要办的一样")
+        XCTAssertFalse(icon.isBreathing, "撤回的条目在呼吸 —— 那是「进行中」的语言")
+        XCTAssertEqual(
+            TodoListPresentation.statusAccessibilityLabel(status: "pending", isWithdrawn: true),
+            "已撤回",
+            "撤回过的条目 tooltip 还写「待办」")
+    }
+
+    /// 跟「已叫停」必须能一眼分开：都不用再看，但来源不同
+    /// （叫停是人决定不办，撤回是提的人自己收回）。
+    func test_已撤回跟已叫停的符号不一样() {
+        let withdrawn = TodoListPresentation.statusIcon(status: "pending", isWithdrawn: true)
+        let dropped = TodoListPresentation.statusIcon(LocalTodoItem.droppedStatus)
+        XCTAssertNotEqual(withdrawn.symbol, dropped.symbol,
+                          "撤回和叫停画成同一个符号 —— 统计错了也看不出来")
+    }
+
+    /// 反面：没撤回的照旧按 status 走。少了这条，一个**永远**返回「已撤回」的实现
+    /// 也会让上面两条绿。
+    func test_没撤回的照旧按status走() {
+        for st in ["pending", "in_progress", "completed", LocalTodoItem.droppedStatus] {
+            XCTAssertEqual(TodoListPresentation.statusIcon(status: st, isWithdrawn: false),
+                           TodoListPresentation.statusIcon(st),
+                           "status=\(st) 没撤回却被当成撤回")
+            XCTAssertEqual(
+                TodoListPresentation.statusAccessibilityLabel(status: st, isWithdrawn: false),
+                TodoListPresentation.statusAccessibilityLabel(st))
+        }
+    }
+
 }
