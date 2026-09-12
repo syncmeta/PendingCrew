@@ -1,5 +1,6 @@
 # P0 · 所有权归拢 实施计划
 
+<!-- doc-ref-base: 0b1882a -->
 > **For agentic workers:** 用 `superpowers:executing-plans` 逐任务执行。步骤是 `- [ ]` checkbox，做一条勾一条。
 
 **Goal:** 把当前挂在 SwiftUI 视图上的所有长期职责（编排器、中继、三个唤醒器、用量监视、两个轮询中心）交给一个 app 级的单一所有者 `SessionHost`，并加一道运行期硬闸防止将来有人又把它们挂回视图上。

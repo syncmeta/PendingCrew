@@ -1,5 +1,6 @@
 # 两条比病根更有复用价值的东西（#144 / #143 顺出来的）
 
+<!-- doc-ref-base: e6abbeb -->
 写这份不是为了记录那两个 bug —— 它们各自的病根写在
 `8d683ed` 和 `docs/internal/2026-09-11-structured-message-fields-plan.md` 里。
 这里记的是**下一次遇到别的东西时还用得上的那两句**。

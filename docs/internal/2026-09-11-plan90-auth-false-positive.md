@@ -1,5 +1,6 @@
 # 计划 #90：Claude 未登录误报（新单，不修改 #64）
 
+<!-- doc-ref-base: 6cc941e -->
 基线 `0d98b93`，独立分支 `pendingcrew/plan90-auth-health`。
 
 ## 已核事实
