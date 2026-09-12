@@ -116,6 +116,11 @@ private struct CodingToolsSettingsTab: View {
 /// 删不删得掉、读不出来怎么说，全问模型层。
 private struct BackendsSettingsTab: View {
     @State private var load: BackendRegistry.Load = .fresh([])
+    @State private var newName = ""
+    @State private var newURL = ""
+    /// 删除被拒 / 存盘失败时那句话。**拒绝必须看得见** —— 模型层特意为「内置那条
+    /// 删不掉」写了一句解释，静默忽略等于把它扔了。
+    @State private var notice: String?
 
     /// 登记表跟锁、socket 一样落在数据根下（`PENDINGCREW_DATA_DIR` 挪走时跟着走）。
     private var registryFile: URL {
@@ -152,6 +157,14 @@ private struct BackendsSettingsTab: View {
                         }
                     }
                     .padding(.vertical, 2)
+                    .swipeActions {
+                        // 内置那条也让划 —— **拒绝要由模型层说出来**，而不是这里
+                        // 把按钮藏掉。藏掉的话人只会觉得「这条怎么没反应」。
+                        Button(role: .destructive) { remove(ref) } label: { Text("移除") }
+                    }
+                }
+                if let notice {
+                    Text(notice).font(.caption).foregroundStyle(.orange)
                 }
             } header: {
                 Text("认识的后端")
@@ -160,10 +173,58 @@ private struct BackendsSettingsTab: View {
                      + "任何后端可连了。远程那一档还没做，列在这里只是为了让你看见"
                      + "「它还没做」，连不上时**不会**悄悄退回本机。")
             }
+            Section {
+                TextField("名字（你自己认得出就行）", text: $newName)
+                    .textFieldStyle(.roundedBorder)
+                TextField("地址，例如 https://…", text: $newURL)
+                    .textFieldStyle(.roundedBorder)
+                Button("加进来") { add() }
+                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
+                              || newURL.trimmingCharacters(in: .whitespaces).isEmpty)
+            } header: {
+                Text("加一个远程后端")
+            } footer: {
+                Text("**加进来不等于连得上** —— 远程那一档还没实现，列表里它会明说。"
+                     + "现在就让你加，是为了那份登记表先立起来；等远程做好，这里不用再改。")
+            }
         }
         .formStyle(.grouped)
         .padding()
-        .task { load = BackendRegistry.load(from: registryFile) }
+        .task { reload() }
+    }
+
+    private func reload() { load = BackendRegistry.load(from: registryFile) }
+
+    private func add() {
+        let name = newName.trimmingCharacters(in: .whitespaces)
+        let url = newURL.trimmingCharacters(in: .whitespaces)
+        var refs = load.refs
+        refs.append(BackendRef(id: UUID().uuidString.lowercased(),
+                               displayName: name, transport: .remote(url: url)))
+        persist(refs, onSuccess: { newName = ""; newURL = ""; notice = nil })
+    }
+
+    private func remove(_ ref: BackendRef) {
+        switch BackendRegistry.removing(ref.id, from: load.refs) {
+        case let .refused(why):
+            notice = why          // 模型层那句解释原样摆出来，别自己另编一句
+        case let .removed(rest):
+            persist(rest, onSuccess: { notice = nil })
+        }
+    }
+
+    /// 存盘。**失败必须说** —— 这本登记表跟白板在同一棵树下，那个周期性故障里它
+    /// 一样写不进去；静默失败的话人会以为加上了，下次打开却不见。
+    private func persist(_ refs: [BackendRef], onSuccess: () -> Void) {
+        do {
+            try FileManager.default.createDirectory(
+                at: registryFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try BackendRegistry.save(refs, to: registryFile)
+            onSuccess()
+            reload()
+        } catch {
+            notice = "没写进去：\(error.localizedDescription)。这次的改动没有生效。"
+        }
     }
 
     private func address(of ref: BackendRef) -> String {

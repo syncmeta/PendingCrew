@@ -639,6 +639,13 @@ final class ViewWiringTests: XCTestCase {
         // 「建好了没接上」在这个仓库里是常客，而它最安静：编译过、测试绿、没人报错。
         XCTAssertTrue(settings.contains("BackendRegistry.load"),
                       "设置里没有「后端」那一页，或者它没去读登记表 —— 模型层又成了孤儿")
+        // 人类要的是「**管理**、连接后端」，不是「看一眼后端」。加和删都必须真的接上
+        // 模型层：`removing` 那条对内置后端的拒绝理由是写好的一句话，界面自己把按钮
+        // 藏掉的话，那句话永远不会被人看到，而人只会觉得「这条怎么没反应」。
+        XCTAssertTrue(settings.contains("BackendRegistry.save"),
+                      "「加一个后端」没接上存盘 —— 填完就没了")
+        XCTAssertTrue(settings.contains("BackendRegistry.removing"),
+                      "「移除」没走模型层 —— 内置那条的拒绝理由就再也没人看得到")
         XCTAssertTrue(settings.contains("BackendRegistry.connectivity"),
                       "「能不能连」没问模型层 —— 界面自己判的话，"
                       + "「远程绝不静默降级成本机」那条保证就绕过去了")
