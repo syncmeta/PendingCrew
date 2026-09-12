@@ -2042,8 +2042,14 @@ final class McpServer {
                 let addressHint = CrewMessageRecipients.receiptHintIfUnaddressed(
                     category: args["category"] as? String,
                     mentionKinds: (mentions ?? []).map(\.kind))
+                // 人类 Todo #16 = C：必须有人接的那几类要有一句结论。
+                // **这一步只提醒、不拒收**，理由（含 11 条红测那次实测）写在
+                // `CrewMessageHeadline` 上，收紧成拒收是第二步。
+                let headlineHint = CrewMessageHeadline.receiptHintIfMissing(
+                    category: args["category"] as? String, headline: headline)
                 return (true, ([base] + ledgerReceipts
-                               + [statusHint, guessHint, addressHint].compactMap { $0 })
+                               + [statusHint, guessHint, addressHint, headlineHint]
+                                .compactMap { $0 })
                     .joined(separator: "\n"))
             } catch {
                 return (false, Self.writeFailureReceipt(error))

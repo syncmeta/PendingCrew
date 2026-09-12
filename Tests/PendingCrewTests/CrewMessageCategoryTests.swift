@@ -281,4 +281,56 @@ final class CrewMessageCategoryTests: XCTestCase {
                 "\(c ?? "nil") 被警告了 —— 警告一切等于没有警告")
         }
     }
+
+    // MARK: - 必须有人接的那几类要一句结论（人类 Todo #16 = C）
+
+    /// 人类选的是 C：「`human_todo` / `question` / `blocked` 这些**必须有人接**的强制；
+    /// `ack` / `note` 这类不强制」。
+    ///
+    /// ⚠️ **这一步是提醒不是拒收**，理由写在 `CrewMessageHeadline` 上：`blocked` 正是
+    /// 「我卡住了」那条消息的分类，做成拒收会让真卡住的 agent 拿到一条错误、
+    /// 然后把它读成「这条不该发」静默咽掉。写成拒收试过一次，仓库自己的测试当场红 11 条。
+    func test_必须有人接的三类缺结论要在回执里说一句() {
+        for category in ["human_todo", "question", "blocked"] {
+            guard let hint = CrewMessageHeadline.receiptHintIfMissing(
+                category: category, headline: nil) else {
+                return XCTFail("\(category) 缺 headline 时回执一个字都没说")
+            }
+            XCTAssertTrue(hint.contains("headline"), "没说缺的是什么：\(hint)")
+            XCTAssertTrue(hint.contains("必须有人接"), "没说清为什么是这一类：\(hint)")
+            XCTAssertTrue(hint.contains("finding") || hint.contains("note"),
+                          "没给「写不出结论就改标别的」这条出路：\(hint)")
+        }
+    }
+
+    /// **空白等于没给。** `headline: ""` 满足「键存在」却一个字都没说；
+    /// 放它过去，这条提醒对任何一个图省事的调用方都等于不存在。
+    func test_空白结论等于没给() {
+        XCTAssertNotNil(CrewMessageHeadline.receiptHintIfMissing(
+            category: "human_todo", headline: "   \n "))
+        XCTAssertNil(CrewMessageHeadline.receiptHintIfMissing(
+            category: "human_todo", headline: "这条要你拍：A 还是 B"))
+    }
+
+    /// **反面，而且是这组里最要紧的一条**：不强制的那几类不许被顺手带进来。
+    ///
+    /// 没有它，这道提醒可能悄悄长成「所有分类都要 headline」，而
+    /// 「一条永远都在的提醒等于没有提醒」—— 人类当时否掉硬闸就是为了这个。
+    func test_不必须有人接的分类不许被这条提醒碰到() {
+        for category in ["ack", "note", "finding", "progress", "done",
+                         "plan", "todo_response", "handoff", nil] {
+            XCTAssertNil(
+                CrewMessageHeadline.receiptHintIfMissing(category: category, headline: nil),
+                "分类 \(category ?? "nil") 不该被强制写结论 —— 强制「收到」写结论只是徒增仪式")
+        }
+    }
+
+    /// 落账**不受影响**：这一步只在回执里多说一句，消息照发、账照落。
+    /// 这条钉的正是「提醒 ≠ 拒收」那道分界 —— 它要是红了，说明有人把第二步提前做了，
+    /// 而第二步要连带改 `McpCategoryLandingTests` 里那一批用例。
+    func test_缺结论不影响落账() {
+        XCTAssertEqual(decide("human_todo"), .land(.humanTodo))
+        XCTAssertEqual(decide("blocked", ["plan": 3, "blocked_by_number": 7]), .land(.blocked))
+    }
+
 }

@@ -97,6 +97,28 @@ final class McpCategoryLandingTests: XCTestCase {
         XCTAssertTrue(r.contains("#1"), "回执没给号，撤不掉也点不进去：\(r)")
     }
 
+    /// **接线证明**（人类 Todo #16 = C）：判定层写好了不等于回执里会出现。
+    /// 「建好了没接上」在这个仓库里一天撞过三处，所以新函数必须有一条用例回答
+    /// 「它被谁调了」—— 这条走的是真的 `post_to_crew`，读的是真的回执文本。
+    func test_必须有人接的分类缺结论时回执里真的多一句() {
+        let f = fixture()
+        let r = post(server(f), #"{"message":"要你拍板","category":"human_todo"}"#)
+        XCTAssertTrue(r.contains("headline"),
+                      "判定层有这句、回执里却没有 —— 那就是建好了没接上：\(r)")
+        // 提醒归提醒，**账照落、消息照发**：这一步是提醒不是拒收。
+        XCTAssertEqual(humanTodos(f).count, 1, "提醒不该拦住落账：\(r)")
+        XCTAssertEqual(board(f).count, 1, "提醒不该拦住发消息：\(r)")
+    }
+
+    /// 给了结论就不该再被念叨 —— 一条永远都在的提醒等于没有提醒。
+    func test_给了结论就不再提醒() {
+        let f = fixture()
+        let r = post(
+            server(f),
+            #"{"message":"要你拍板","category":"human_todo","headline":"这条要你拍：A 还是 B"}"#)
+        XCTAssertFalse(r.contains("但没给 `headline`"), "给了还念：\(r)")
+    }
+
     // MARK: - 不落账的分类：一条账都不许动
 
     func test_不落账的分类不许动任何账() {

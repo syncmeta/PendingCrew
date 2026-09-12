@@ -319,6 +319,63 @@ enum CrewMessageTodoLink {
 /// 绝大多数本来就是发给组里的，警告它们等于警告一切。
 /// 至于「这条汇报其实是写给人看的却没 @ 他」——**那需要猜内容，这一层不猜。**
 /// 那一半只有等收件人变成一个真字段之后才量得出来、也才管得住。
+/// **必须有人接的那几类要有一句结论**（人类 Todo #16 = C）。
+///
+/// 人类原话是选 C：「`human_todo` / `question` / `blocked` 这些**必须有人接**的强制；
+/// `ack` / `note` 这类不强制」。理由也在那条里：痛点是「给人的消息看不见」和
+/// 「摘要是猜的」，两件都集中在要人接的那几类上，而强制 `ack`（「收到」）写结论只是
+/// 徒增仪式。
+///
+/// ## 为什么这里是「提醒」而不是「拒收」
+///
+/// 方案（`docs/internal/2026-09-11-structured-message-fields-plan.md` §3.1）把落地钉成
+/// 两步，第二步（收紧成拒收）必须等所有 session 都换到新 helper。这不是谨慎，是有
+/// 具体后果的：
+///
+/// 1. `--mcp-serve` 是**一 session 一进程、长期存活**的，改了契约，在跑的 session
+///    不会生效，直到它被换掉；
+/// 2. 更要命的是 **`blocked` 正是「我卡住了」那条消息的分类**。把它做成拒收，
+///    一个真卡住的 agent 会拿到一条错误，而**有的 agent 会把失败读成「这条不该发」
+///    然后静默咽掉** —— 咽掉的正是人类最需要看到的那条。
+///
+/// 2026-09-12 真把它写成拒收试过一次：仓库自己的测试当场红了 11 条，其中 9 条是
+/// `human_todo` / `blocked` 的落账用例。那 11 条不是测试写错了，是**这道闸的爆炸半径
+/// 的一次实测** —— 连自家用例都有这么多不带结论，在跑的 session 只会更多。
+///
+/// 所以这里走回执提醒：**消息照发、账照落**，只在回执里补一句。收紧成拒收是第二步。
+///
+/// ## 第二步谁做、什么时候做
+///
+/// #115 的第二步至今没人做（方案 §1.3 记着），所以这里把它写死：
+/// **下一次发版之后**，由当时的机长把这个类型从「回执提醒」改成
+/// `CrewCategoryRouting.requirements` 里的一条 `Requirement`，并把上面那 11 条用例
+/// 一起改成新契约。判据是「仓库里还有没有不带 headline 的 human_todo/blocked 用例」。
+enum CrewMessageHeadline {
+
+    /// 这几类必须有人接，所以必须有一句结论。
+    static let mustBeReceived: Set<String> = [
+        CrewMessageCategory.humanTodo.rawValue,
+        CrewMessageCategory.question.rawValue,
+        CrewMessageCategory.blocked.rawValue,
+    ]
+
+    /// 发出去之后回执里该不该补一句。`nil` = 不该。
+    ///
+    /// **空白等于没给**：`headline: ""` 满足「键存在」却一个字都没说。
+    static func receiptHintIfMissing(category: String?, headline: String?) -> String? {
+        let raw = (category ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard mustBeReceived.contains(raw) else { return nil }
+        let written = (headline ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard written.isEmpty else { return nil }
+        return "⚠️ 这条标了 `\(raw)`（**必须有人接**的那一档）但没给 `headline`。"
+            + "\n超过 8 行的消息在群里默认收起，收起态就只露 `headline` 那一行 ——"
+            + "不给的话界面只能从正文里猜一个加粗词出来，猜出来的常常不是结论。"
+            + "\n**下次发这一类时带上它**：一句话说清结果是什么，约 30 个汉字，"
+            + "像「这条要你拍：A 拒收 / B 降级，我倾向 B」。"
+            + "\n写不出一句结论的话，多半说明这条**不属于这一类** —— 那它是 `finding` 或 `note`。"
+    }
+}
+
 enum CrewMessageRecipients {
 
     /// 发出去之后回执里该不该补一句。`nil` = 不该。
