@@ -118,7 +118,7 @@ enum TodoLandingFlow {
     static func notPersistedReceipt(ledger: TodoLedger, action: Action,
                                     detail: String? = nil) -> String {
         let noun = ledger == .human ? "人类 Todo" : "Todo"
-        let why = detail ?? "列表文件这次读不出来或漏读，原有内容没被动过（群聊白板上有一条系统警示）"
+        let why = detail ?? "列表文件这次读不出来或漏读，原有内容没被动过（\(MultiProcessJSONStore.whiteboardNoticeCaveat)）"
         switch action {
         case .added:
             return "ERROR: 这条\(noun)\(WriteReceipt.notWrittenMarker) —— \(why)。"

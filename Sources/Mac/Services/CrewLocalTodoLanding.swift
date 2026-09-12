@@ -46,7 +46,7 @@ enum CrewLocalTodoLanding {
 
         var errorDescription: String? {
             "Todo 没能写进列表文件（这次读不出来或漏读，原有内容没被动过，"
-                + "群聊白板上有系统警示），这条待办没有记下，请重试。"
+                + "\(MultiProcessJSONStore.whiteboardNoticeCaveat)），这条待办没有记下，请重试。"
         }
     }
 }

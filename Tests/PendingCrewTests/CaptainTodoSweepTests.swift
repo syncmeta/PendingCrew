@@ -364,7 +364,17 @@ final class CaptainTodoSweepTests: XCTestCase {
     }
 
     /// 扫 Sources 下所有 .swift，返回含 `needle` 的 (文件名, 全文)。
-    private static func sourcesContaining(_ needle: String) throws -> [(String, String)] {
+    ///
+    /// `inCodeOnly` 决定**拿什么去筛**：
+    /// - `true`（默认）：拿剥掉注释和字符串之后的文本筛 —— 找符号名该这样。
+    /// - `false`：拿原文筛 —— **判字符串内容时必须这样**。
+    ///
+    /// ⚠️ 这个参数是被一次变异测试逼出来的：第一版把要判字符串的那条也走了 `true`，
+    /// 于是「白板」只出现在字符串里的文件**一个都没被选中**，那条断言从此永远绿。
+    /// **自查照着尺子自己的口径写，就会继承它的盲区。**
+    private static func sourcesContaining(
+        _ needle: String, inCodeOnly: Bool = true
+    ) throws -> [(String, String)] {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources", isDirectory: true)
@@ -374,7 +384,7 @@ final class CaptainTodoSweepTests: XCTestCase {
         var out: [(String, String)] = []
         for case let url as URL in walker where url.pathExtension == "swift" {
             guard let text = try? String(contentsOf: url, encoding: .utf8),
-                  identifiersOnly(text).contains(needle) else { continue }
+                  (inCodeOnly ? identifiersOnly(text) : text).contains(needle) else { continue }
             out.append((url.lastPathComponent, text))
         }
         return out.sorted { $0.0 < $1.0 }
@@ -387,6 +397,46 @@ final class CaptainTodoSweepTests: XCTestCase {
         let rest = text[start.lowerBound...]
         guard let end = rest.range(of: "\n    }") else { return nil }
         return String(rest[..<end.upperBound])
+    }
+
+    // MARK: - ⑤d 别再有回执**保证**白板上有那条警示
+
+    /// 报事故那一行**经常写不进去**（append 要先读整份白板，读不了就整条拒写）。
+    /// 所以「群聊白板上有一条系统警示」这句话在**整个数据目录读不出来**时是假的 ——
+    /// 而那正是这类回执最常出现的场合。把人支去找一个不存在的东西，
+    /// 他会得出「那就不是这种事故」的反结论。
+    ///
+    /// 2026-09-12 一次把 7 处改成共用 `MultiProcessJSONStore.whiteboardNoticeCaveat`。
+    /// 这条钉住别再长回来：**扫的是代码，不是注释**（`identifiersOnly` 已经把注释和
+    /// 字符串里的引号剥掉；这里改扫原文但排除注释行，因为要判的正是字符串内容）。
+    func test_没有回执再保证白板上一定有警示() throws {
+        let caveat = MultiProcessJSONStore.whiteboardNoticeCaveat
+        XCTAssertTrue(caveat.contains("可能"), "这句话自己就把「一定有」写死了：\(caveat)")
+        XCTAssertTrue(caveat.contains("写不进去"), "没说清它可能根本不存在：\(caveat)")
+        XCTAssertTrue(caveat.contains("不等于没事"),
+                      "没说「没看到 ≠ 没事」—— 少了这句，人会把找不到当成没事：\(caveat)")
+
+        let banned = ["群聊白板上有系统警示", "群聊白板上有一条系统警示",
+                      "白板上有一条系统警示", "白板上会有一条系统警示",
+                      "群聊白板上应该有一条系统警示"]
+        for (name, text) in try Self.sourcesContaining("白板", inCodeOnly: false) {
+            let code = Self.linesWithoutComments(text)
+            for phrase in banned where code.contains(phrase) {
+                XCTFail("\(name) 里还写着「\(phrase)」—— 改用 "
+                        + "MultiProcessJSONStore.whiteboardNoticeCaveat，"
+                        + "那句话在整个数据目录读不出来时是假的")
+            }
+        }
+    }
+
+    /// 只去掉整行注释与行尾 `//` 之后的部分；字符串字面量要留着（判的就是它）。
+    private static func linesWithoutComments(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let slash = line.range(of: "//") else { return line }
+                return line[..<slash.lowerBound]
+            }
+            .joined(separator: "\n")
     }
 
     // MARK: - ⑥ 装到车上了没有（判定造好了没人调 = 等于不存在）

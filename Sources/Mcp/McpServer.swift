@@ -880,7 +880,7 @@ final class McpServer {
                 return toolResult(id: id, text: WriteReceipt.notWritten(
                     what: "这个问题", error: askWriteFailure, consequence:
                         "（人类 Todo 这本账这次读不出来 / 漏读 / 落不了盘，原有内容没被动过，"
-                        + "群聊白板上有系统警示）。**没有人会看到你在问什么** —— "
+                        + "\(MultiProcessJSONStore.whiteboardNoticeCaveat)）。**没有人会看到你在问什么** —— "
                         + "改用 post_to_crew 在群里直接问，或稍后重试。"))
             }
             // 通知半边：群里贴一条并 @ 到能处理的人。机长自己问时不 @ 自己。
@@ -1309,7 +1309,7 @@ final class McpServer {
                                           bySessionId: sessionId, byName: sessionLabel) else {
                 // nil ≠「没排」这么轻描淡写：读不出来（本次写已拒）或落盘失败，两种都在这儿。
                 return toolResult(id: id, text: "ERROR: 这条计划" + WriteReceipt.notWrittenMarker
-                    + " —— 任务列表这次读不出来或写不进去（群聊白板上有一条系统警示说明是哪种事故）。"
+                    + " —— 任务列表这次读不出来或写不进去（\(MultiProcessJSONStore.whiteboardNoticeCaveat)）。"
                     + "**板上没有这条**，别拿一个不存在的 #N 去对外宣布。")
             }
             var addLines = ["已排上 计划 #\(planned.number)：\(planned.title)（没做）。"]
@@ -1478,7 +1478,7 @@ final class McpServer {
                     "#\($0.number) [\(LocalTodoItem.statusLabel($0.status))] \($0.text)"
                 }
                 return toolResult(id: id, text: "ERROR: 没能回应 Todo #\(number)（找不到这条，"
-                                  + "或 Todo 列表文件读不出来 —— 后者群聊白板上会有一条系统警示）。"
+                                  + "或 Todo 列表文件读不出来 —— \(MultiProcessJSONStore.whiteboardNoticeCaveat)）。"
                                   + "**这是 agent 那本账**；你要回的如果是人类那本（群里那行「To do +1」），"
                                   + "两本号码会撞，核对一下。当前列表：\n"
                                   + (rows.isEmpty ? "（空）" : rows.joined(separator: "\n")))
@@ -1950,7 +1950,7 @@ final class McpServer {
                     return (false, "ERROR: 这条人类 Todo" + WriteReceipt.notWrittenMarker
                         + "（那本账这次读不出来或落不了盘），"
                         + "**这条消息也没有发出去** —— 顺序是「落账 → 发群」，账没落上就不发，"
-                        + "免得你以为账更新了。（白板上有一条系统警示说明是哪种事故。）")
+                        + "免得你以为账更新了。（\(MultiProcessJSONStore.whiteboardNoticeCaveat)。）")
                 }
                 refs.humanTodoNumber = added.number
                 ledgerReceipts.append("已建 人类 Todo #\(added.number)（人在面板里点得进去、撤得掉）")
@@ -2447,7 +2447,7 @@ final class McpServer {
                                           bySessionId: sessionId, byName: sessionLabel) else {
                 return .refused("ERROR: 这条计划" + WriteReceipt.notWrittenMarker
                     + " —— 任务列表这次读不出来或落不了盘"
-                    + "（群聊白板上有一条系统警示说明是哪种事故）。" + unsent)
+                    + "（\(MultiProcessJSONStore.whiteboardNoticeCaveat)）。" + unsent)
             }
             return .landed(planNumber: planned.number,
                 receipt: "已排上 计划 #\(planned.number)：\(planned.title)（没做）"
