@@ -156,6 +156,16 @@ else
 fi
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' -derivedDataPath "$DD" build > "$LOG"/b-mac.log 2>&1 || true
 xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'generic/platform=iOS Simulator' -derivedDataPath "$DD" build > "$LOG"/b-ios.log 2>&1 || true
+# 三趟都跑完、xcresult 也归档了 ⇒ **DerivedData 可以扔了**。
+#
+# 改这个决定是因为量到了数（2026-09-12 08:45）：**每趟 2.1 GB，而真正要留的
+# xcresult 只有 133 MB —— 16 倍**。第一版为了「同一个 commit 复跑能热启动」留着它，
+# 那个好处一年用不上几次，而这道闸门每次发版、每次合前基线都跑一趟，
+# 两趟就 4.3 GB。**留下的是失败用例名，不是编译中间产物。**
+#
+# 三份 .log ＋ drift.log 已经把 xcodebuild 的全部输出接住了，所以扔掉它不会让
+# 任何一条读数变得查不了。
+rm -rf "$DD"
 after_head=$(git -C "$WT" rev-parse HEAD)
 after_diff=$(git -C "$WT" status --porcelain -uall | shasum | cut -c1-12)
 fixture_after=$([ -d "$WT/Tests/PendingCrewTests/Fixtures" ] && echo present || echo absent)
@@ -215,7 +225,8 @@ ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | sed 's|^|  |'
 printf '共 %s 趟，合计 %s（含各自的 -log 目录）\n' \
   "$(ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | wc -l | tr -d ' ')" \
   "$(du -shc /tmp/pcw-* 2>/dev/null | tail -1 | awk '{print $1}')"
-echo "  合计里的大头是每趟自己的 DerivedData（-log/dd/），不是源码也不是日志。"
+echo "  合计里的大头是每趟归档的 xcresult（-log/*.xcresult，约 130 MB/趟）——"
+echo "  DerivedData 跑完就扔了（它是那 130 MB 的 16 倍，留着不值）。"
 echo "  只报不删：清不清、什么时候清是仓库主人的事。"
 echo "  也只说闸门自己这一堆 —— 本机别处还有 worktree，不在此列。"
 echo "  另有一类更该管的：注册比目录活得久 —— worktree 建在会被回收的临时目录里"
