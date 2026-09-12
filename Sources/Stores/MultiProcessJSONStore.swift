@@ -460,7 +460,20 @@ private struct FailableRow<Row: Decodable>: Decodable {
     }
 }
 
-/// 定序用的进程内计数器。**泛型类型不能有存储型 static**，所以单拎出来放这儿。
+/// 一个 key 最多存这么多条。**这不是容量估算，是一道跑飞保护**：故障窗口可能持续
+/// 几小时，而这期间自动重试的东西（定时提醒、轮询、循环里的 agent）会一直往里存。
+/// 没有上限的话，一个卡住的循环能把盘刷满，而且是在**系统已经出着毛病**的时候 ——
+/// 那是最不该再补一刀的时刻。
+///
+/// 到顶之后**拒绝再存并如实说**（`spool` 返回 false，调用方的回执本来就分
+/// 「存下来了 / 连存都没存下」两句话）。**不丢旧的换新的** —— 旧的那些是先发生的，
+/// 丢它们等于按时间倒序丢数据，而且没有任何人看得见。
+enum LedgerSpoolLimits {
+    static let capacityPerKey = 500
+}
+
+/// 定序用的进程内计数器。**泛型类型不能有存储型 static**，所以单拎出来放这儿
+/// （上面那个上限同理）。
 private enum LedgerSpoolSequence {
     private static var value: UInt64 = 0
     static func next() -> UInt64 { value &+= 1; return value }
@@ -500,6 +513,7 @@ struct LedgerSpool<Payload: Codable> {
     /// 存一条。`key` 用来分账（通常是 crewId）：补发只认自己那一份。
     @discardableResult
     func spool(_ payload: Payload, key: String) -> Bool {
+        guard fileNames(key: key).count < LedgerSpoolLimits.capacityPerKey else { return false }
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)

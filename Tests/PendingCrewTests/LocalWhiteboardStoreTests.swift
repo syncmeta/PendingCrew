@@ -494,4 +494,37 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         XCTAssertEqual(store.list(crewId: crew).filter { $0.text == "存下来的那条" }.count, 1)
     }
 
+
+    /// **到顶之后拒绝再存，而且如实说。**
+    ///
+    /// 这不是容量估算，是跑飞保护：故障窗口可能持续几小时，期间自动重试的东西
+    /// （定时提醒、轮询、循环里的 agent）会一直往里存。没有上限的话，一个卡住的循环
+    /// 能在**系统已经出着毛病**的时候把盘刷满。
+    ///
+    /// 同时钉住**不丢旧的换新的**：旧的那些是先发生的，丢它们等于按时间倒序丢数据，
+    /// 而且没有任何人看得见。
+    func testSpoolRefusesPastItsCapAndKeepsTheOldOnes() throws {
+        let dir = tempDir()
+        let spool = LedgerSpool<LocalWhiteboardMessage>(
+            directory: dir.appendingPathComponent("outbox", isDirectory: true))
+        func msg(_ t: String) -> LocalWhiteboardMessage {
+            LocalWhiteboardMessage(
+                id: UUID().uuidString, senderKind: "session", senderUserId: nil,
+                senderSessionId: "s", category: nil, text: t,
+                createdAt: ISO8601DateFormatter().string(from: Date()), senderName: nil)
+        }
+        let cap = LedgerSpoolLimits.capacityPerKey
+        for i in 0..<cap {
+            XCTAssertTrue(spool.spool(msg("第\(i)条"), key: "c"), "第 \(i) 条就存不下了")
+        }
+        XCTAssertFalse(spool.spool(msg("超出上限的"), key: "c"), "到顶了还在存 —— 跑飞时会把盘刷满")
+
+        // 旧的一条都不许少，而且第一条还得是最早那条。
+        var seen: [String] = []
+        _ = spool.drain(key: "c") { seen.append($0.text); return true }
+        XCTAssertEqual(seen.count, cap, "到顶时丢了旧的换新的")
+        XCTAssertEqual(seen.first, "第0条", "顺序都乱了")
+        XCTAssertFalse(seen.contains("超出上限的"), "被拒的那条居然进去了")
+    }
+
 }
