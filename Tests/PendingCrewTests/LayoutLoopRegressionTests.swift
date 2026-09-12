@@ -164,20 +164,39 @@ final class LayoutLoopRegressionTests: XCTestCase {
             + "⚠️ 它一红，下面两条「< 10」的防线就同时失去意义，别只看它们还是绿的。")
     }
 
-    /// 观察，不是防线：老标本（`SwiftUIRepeatForeverDots`）在**这个**骨架里已经不自激了。
+    /// **读数，不是断言** —— 这条的历史值得完整留着，因为它是「一次读数被当成事实」的标本。
     ///
-    /// 留着它有两个用处：① 老标本不至于从仓库里消失，日后要复查那一格还找得到；
-    /// ② 它要是哪天变红，说明 SwiftUI 又变回去了 —— 那是**好消息**，回来把上面那条
-    /// 的标本换回 dots，并把这条删掉。
+    /// 老标本（`SwiftUIRepeatForeverDots`）在**这个**骨架里量到过：
+    ///
+    /// | 何时何地 | 读数 |
+    /// | --- | --- |
+    /// | 开发机 2026-09-12 上午 | **0** |
+    /// | GitHub Actions runner 同日同 commit | **19555** |
+    /// | 开发机同日 09:15，单跑三趟 | **66717 / 66308 / 66888** |
+    ///
+    /// 我上午拿第一行那个 0 做了两件事：把这条写成 `XCTAssertLessThan(n, 10)`、
+    /// 并据此判定「老标本不自激了」而把上面那条正向对照的标本换掉。
+    /// **CI 当天就红（第二行），几小时后同一台开发机自己也翻到六万多（第三行）。**
+    ///
+    /// **所以问题不是「两台机器不同意」，是这个读数本身不稳。** 一次读数在这里
+    /// 既不构成跨机器的判据，也不构成同一台机器上的判据 —— 它连自己都复现不了。
+    ///
+    /// 所以这里只打印不断言。它仍然有两个用处：① 老标本不至于从仓库里消失，
+    /// 日后要复查那一格还找得到；② 哪天想重新钉这件事，**先在同一台机器上连量几趟、
+    /// 再换一台量**，两边都稳了才谈阈值。
+    ///
+    /// 上面那条正向对照**不改回 dots**：它换成的那个标本（`TodoCircleAsCrashed`）
+    /// 上午量到 71690，今天几趟都稳定在几万量级，比 dots 可靠。
+    ///
+    /// 真正守「自激回来了没有」的是这一屏上另外三条：上面那条正向对照
+    /// （`…SelfExcites`，> 1000），以及下面两条线上部件的 `< 10`。
     ///
     /// **别据此认为 `.repeatForever` 已经没事了** —— 同一个标本在 Todo 面板骨架里
     /// 当天仍然量到 37574 次（见 `testSwiftUIRepeatForeverInLazyListSelfExcites`）。
-    func testSwiftUIRepeatForeverDotsNoLongerSelfExciteInChatShape() {
+    func testRecordSwiftUIRepeatForeverDotsInChatShape() {
         let n = quietLayouts { SwiftUIRepeatForeverDots() }
-        XCTAssertLessThan(
-            n, 10,
-            "老标本在聊天骨架里又自激了（\(n) 次）—— SwiftUI 侧变回去了。"
-            + "把 testSwiftUIRepeatForeverInAnchoredScrollViewSelfExcites 的标本换回 dots，再删掉本条。")
+        print("[读数] SwiftUIRepeatForeverDots 在聊天骨架里安静期布局 \(n) 次"
+              + "（开发机 2026-09-12 量到 0，CI runner 同日量到 19555 —— 这条只报不判）")
     }
 
     /// 第二条真防线：session 头像上那颗「需要人出手」的呼吸红点（2026-08-08 两点合一）。
