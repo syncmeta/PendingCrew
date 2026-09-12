@@ -334,12 +334,12 @@ final class LocalTodoStore: @unchecked Sendable {
                 // **区别在存什么**：Todo 的 `#N` 要数着现有行才算得出来，而现在正是
                 // 数不着的时候 —— 所以存的是**那次请求**，不是一条算好号的条目；
                 // 等账读得动了再走一遍正常的 `add`，号由那时候的账现算。
-                let spooled = spoolRequest(
-                    crewId: crewId,
+                let spooled = spool.spool(
                     PendingTodoRequest(
                         text: text, attachments: attachments, bySessionId: bySessionId,
                         bySenderName: bySenderName, resumeNote: resumeNote,
-                        expectsResume: expectsResume, permissionTool: permissionTool))
+                        expectsResume: expectsResume, permissionTool: permissionTool),
+                    key: crewId)
                 onWriteFailure?(TodoSpoolOutcome(spooled: spooled))
                 return nil
             }
@@ -706,10 +706,7 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 有积压就补一次。**先便宜地看一眼有没有**（列目录在这类故障里也是通的），
     /// 没有就什么都不做 —— 别让每次读都去抢文件锁。
     private func recoverSpooledIfAny(crewId: String) {
-        let names = (try? FileManager.default.contentsOfDirectory(
-            atPath: requestSpoolDirectory.path)) ?? []
-        guard names.contains(where: { $0.hasPrefix(crewId + ".") && $0.hasSuffix(".json") })
-        else { return }
+        guard spool.hasPending(key: crewId) else { return }
         withFileLock(crewId) {
             var rows = loadLocked(crewId)
             // 账这一刻还是读不动 —— 原地不动，下次再说。**绝不能在这里落号**：
@@ -724,56 +721,34 @@ final class LocalTodoStore: @unchecked Sendable {
 
     // MARK: - 账读不动时把请求先存着（2026-09-12）
 
-    private var requestSpoolDirectory: URL {
-        fileURL("x").deletingLastPathComponent()
-            .appendingPathComponent("outbox-todos", isDirectory: true)
+    /// 机制全在 `LedgerSpool` 里（三本账共用一份）。这里只决定**存哪儿**、
+    /// **存什么**、以及**补回来时怎么变成一条真条目**。
+    ///
+    /// 存的是**那次请求**而不是一条算好号的条目：`#N` 要数着现有行才算得出来，
+    /// 而存它的那一刻正是数不着的时候。号留到补发那一刻现算。
+    private var spool: LedgerSpool<PendingTodoRequest> {
+        LedgerSpool(directory: fileURL("x").deletingLastPathComponent()
+            .appendingPathComponent("outbox-todos", isDirectory: true))
     }
 
-    /// 每条一个新文件；文件名定宽、字典序 = 时间序（同微秒由进程内序号兜）。
-    /// 秒级时间戳在这里是不够的 —— 白板那条的回归测试实测过：同一秒的两条会按后面的
-    /// uuid 排，也就是随机，补回去顺序是乱的。
-    private static var requestSequence: UInt64 = 0
-
-    @discardableResult
-    private func spoolRequest(crewId: String, _ req: PendingTodoRequest) -> Bool {
-        do {
-            try FileManager.default.createDirectory(
-                at: requestSpoolDirectory, withIntermediateDirectories: true)
-            Self.requestSequence &+= 1
-            let name = "\(crewId)."
-                + String(format: "%017.6f", Date().timeIntervalSince1970) + "."
-                + String(format: "%06llu", Self.requestSequence) + "."
-                + UUID().uuidString.lowercased() + ".json"
-            try JSONEncoder().encode(req)
-                .write(to: requestSpoolDirectory.appendingPathComponent(name))
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    /// 账读得动了，把积压的请求按当初的顺序补成真条目。**号在这一刻才算**。
     private func drainRequests(crewId: String, rows: inout [LocalTodoItem]) {
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: requestSpoolDirectory.path)
-        else { return }
-        for name in names.filter({ $0.hasPrefix(crewId + ".") && $0.hasSuffix(".json") }).sorted() {
-            let u = requestSpoolDirectory.appendingPathComponent(name)
-            guard let data = try? Data(contentsOf: u),
-                  let req = try? JSONDecoder().decode(PendingTodoRequest.self, from: data)
-            else { continue }
+        var appended: [LocalTodoItem] = []
+        var nextNumber = (rows.map(\.number).max() ?? 0) + 1
+        _ = spool.drain(key: crewId) { req in
             let stamp = timestamp()
-            rows.append(LocalTodoItem(
+            appended.append(LocalTodoItem(
                 id: UUID().uuidString.lowercased(),
-                number: (rows.map(\.number).max() ?? 0) + 1,
-                text: req.text, status: "pending", createdAt: stamp, updatedAt: stamp,
+                number: nextNumber, text: req.text, status: "pending",
+                createdAt: stamp, updatedAt: stamp,
                 attachments: (req.attachments?.isEmpty ?? true) ? nil : req.attachments,
                 createdBySessionId: req.bySessionId,
                 createdBySenderName: req.bySenderName,
                 resumeNote: req.resumeNote, expectsResume: req.expectsResume,
                 permissionTool: req.permissionTool))
-            try? fm.removeItem(at: u)
+            nextNumber += 1
+            return true
         }
+        rows.append(contentsOf: appended)
     }
 
     private func refuseUnsafeEmptyRewrite(crewId: String, rows: [LocalTodoItem]) -> Bool {

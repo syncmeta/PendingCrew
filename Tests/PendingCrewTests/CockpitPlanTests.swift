@@ -267,4 +267,38 @@ final class CockpitPlanTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("c.plan.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("c.todos.json").path))
     }
+
+    // MARK: - 板读不动时排的那条也别丢（2026-09-12）
+
+    /// 三本账（白板 / Todo / 驾驶舱）同一个病：落盘前要先读，而那个周期性故障恰恰
+    /// 只掐读。前两本已经各修一遍，这一本是照着抽出来的 `LedgerSpool` 接上的。
+    ///
+    /// 判据落在**「话有没有留下来」**，不落在 errno：真故障是 EPERM，这里用
+    /// `chmod 000` 造出 EACCES，两者走同一条拒写闸。
+    func test_板读不动时排的条目会被存下来并在恢复后补回() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("plan-spool-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let crew = "c-plan-spool"
+        let s = CockpitPlanStore(directory: dir)
+        XCTAssertNotNil(s.add(crewId: crew, title: "开张第一条"))
+
+        let f = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .first { $0.contains(crew) && $0.hasSuffix(".json") })
+        let url = dir.appendingPathComponent(f)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+
+        XCTAssertNil(s.add(crewId: crew, title: "断板期排的"), "板读不动时不该硬落号")
+        let spooled = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox-plans").path)) ?? []
+        XCTAssertEqual(spooled.count, 1, "标题没被存下来 —— 三本账里这一本还漏着")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        // **只读不写**：补发不许依赖「之后还有人再排一条」。
+        let rows = s.list(crewId: crew)
+        XCTAssertEqual(rows.map(\.title), ["开张第一条", "断板期排的"])
+        XCTAssertEqual(rows.map(\.number), [1, 2], "号要接着盘上的现算")
+    }
+
 }

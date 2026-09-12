@@ -84,7 +84,11 @@ final class CockpitPlanStore: @unchecked Sendable {
     /// 只要有 helper 正在写这个 crew 的 `.plan.lock`，调用方就停在这儿等。
     /// UI 路径一律走 `listOffMain`（人类 Todo #96：驾驶舱打开时卡的就是这一下）。
     func list(crewId: String) -> [CockpitPlanItem] {
-        withFileLock(crewId) { loadLocked(crewId).filter { !$0.isDeleted } }
+        // 补发也挂在读路径上：只在「下一次写成功」时补，意味着一块板只要之后没人再排
+        // 新条目，存下来的就永远补不回来、也永远看不见。**这条不是推论** ——
+        // Todo 那本先犯过一次，这一本的回归测试在接线时又当场抓了一次。
+        recoverSpooledIfAny(crewId: crewId)
+        return withFileLock(crewId) { loadLocked(crewId).filter { !$0.isDeleted } }
     }
 
     /// 这一本账这次读到了什么 —— **把「读不出来」交还给调用方，不压成空表。**
@@ -163,9 +167,19 @@ final class CockpitPlanStore: @unchecked Sendable {
              bySessionId: String? = nil, byName: String? = nil) -> CockpitPlanItem? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        recoverSpooledIfAny(crewId: crewId)
         return withFileLock(crewId) {
             var rows = loadLocked(crewId)
-            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
+                // 这本账这一刻读不出来 —— 以前到这儿就 `return nil`，那条标题就没了。
+                // 三本账同一个病、同一个办法（`LedgerSpool`）：存的是**那次请求**，
+                // `#N` 留到补发那一刻现算。
+                spool.spool(
+                    PendingPlanRequest(title: trimmed, bySessionId: bySessionId, byName: byName),
+                    key: crewId)
+                return nil
+            }
+            drainRequests(crewId: crewId, rows: &rows)
             let now = Self.timestamp()
             let item = CockpitPlanItem(
                 id: UUID().uuidString.lowercased(),
@@ -325,6 +339,45 @@ final class CockpitPlanStore: @unchecked Sendable {
 
     /// 读-改-写路径开头的那道闸：读不出来时 `loadLocked` 返回空表，光靠「找不到 #N」
     /// 回执会说成「这条不存在」，听起来像机长自己撤过——其实是账读不出来。
+    // MARK: - 账读不动时把请求先存着（2026-09-12）
+
+    private var spool: LedgerSpool<PendingPlanRequest> {
+        LedgerSpool(directory: fileURL("x").deletingLastPathComponent()
+            .appendingPathComponent("outbox-plans", isDirectory: true))
+    }
+
+    /// 有积压就补一次。**补发不能只挂在写路径上**：一块板只要之后没人再排新条目，
+    /// 存下来的就永远补不回来、也永远看不见（`list` 里没有它）。
+    private func recoverSpooledIfAny(crewId: String) {
+        guard spool.hasPending(key: crewId) else { return }
+        withFileLock(crewId) {
+            var rows = loadLocked(crewId)
+            // 还是读不动就原地不动 —— 绝不在这时候落号，空表算出来的 #N 会跟盘上撞车。
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return }
+            let before = rows.count
+            drainRequests(crewId: crewId, rows: &rows)
+            guard rows.count > before else { return }
+            _ = saveLocked(crewId: crewId, rows: rows)
+        }
+    }
+
+    private func drainRequests(crewId: String, rows: inout [CockpitPlanItem]) {
+        var appended: [CockpitPlanItem] = []
+        var nextNumber = (rows.map(\.number).max() ?? 0) + 1
+        _ = spool.drain(key: crewId) { req in
+            let now = Self.timestamp()
+            appended.append(CockpitPlanItem(
+                id: UUID().uuidString.lowercased(),
+                number: nextNumber, title: req.title,
+                status: CockpitPlanStatus.notStarted.rawValue,
+                createdAt: now, createdBySessionId: req.bySessionId,
+                createdByName: req.byName, updatedAt: now))
+            nextNumber += 1
+            return true
+        }
+        rows.append(contentsOf: appended)
+    }
+
     private func refuseUnsafeEmptyRewrite(crewId: String, rows: [CockpitPlanItem]) -> Bool {
         MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL(crewId))
     }
@@ -332,4 +385,12 @@ final class CockpitPlanStore: @unchecked Sendable {
     private static func timestamp() -> String {
         ISO8601DateFormatter().string(from: Date())
     }
+}
+
+/// 板读不动时存下来的**一次 `add` 请求**（不是一条算好号的条目 —— 号要数着现有行
+/// 才算得出来，而存它的那一刻正是数不着的时候）。
+struct PendingPlanRequest: Codable {
+    let title: String
+    let bySessionId: String?
+    let byName: String?
 }

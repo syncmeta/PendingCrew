@@ -491,7 +491,7 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                 // （逐系统调用量过，见 docs/internal/2026-09-12-eperm-cause-found.md）。
                 // 也就是说**存得下来，只是当时读不回去** —— 那就存：一条一个新文件，
                 // 等白板重新读得动的那一刻自己补回去。
-                let spooled = (try? spool(msg, crewId: crewId)) ?? false
+                let spooled = spool.spool(msg, key: crewId)
                 throw WhiteboardPersistenceError.unreadableAndPreserved(url, error, spooled: spooled)
             }
             if incident == nil {
@@ -519,56 +519,24 @@ final class LocalWhiteboardStore: @unchecked Sendable {
 
     // MARK: - 发不出去时先存着（2026-09-12）
 
-    /// 存不进白板的消息暂存在哪。**每条一个新文件** —— 这不是风格选择：
-    /// 这类故障的形状正是「`open()` 一个已存在的 inode 被拒、建新文件照样成」，
-    /// 追加进一个共用文件要先读它，那条路恰恰是断的。
-    private var spoolDirectory: URL { directory.appendingPathComponent("outbox", isDirectory: true) }
-
-    /// 同一进程内的排队序号 —— 文件名里的时间戳做不到的那一位由它兜。
-    private static var spoolSequence: UInt64 = 0
-
-    /// 文件名 = `<crewId>.<秒级以下的时间戳>.<序号>.<uuid>.json`，**定宽、可按字典序排**。
-    ///
-    /// ⚠️ 第一版这里用的是 `ISO8601DateFormatter`，秒级精度，于是同一秒内存下的两条
-    /// 排序由后面那个 uuid 决定 = **随机**。回归测试当场抓到：两条补回去是倒着的。
-    /// 白板上因果颠倒比丢一条更难发现，所以这里必须是一个真的单调键：
-    /// 高精度时间戳定宽零填充（字典序 = 时间序），再加一个进程内序号兜住同微秒。
-    private func spool(_ msg: LocalWhiteboardMessage, crewId: String) throws -> Bool {
-        try FileManager.default.createDirectory(
-            at: spoolDirectory, withIntermediateDirectories: true)
-        Self.spoolSequence &+= 1
-        let stamp = String(format: "%017.6f", Date().timeIntervalSince1970)
-        let seq = String(format: "%06llu", Self.spoolSequence)
-        let name = "\(crewId).\(stamp).\(seq).\(UUID().uuidString.lowercased()).json"
-        let data = try JSONEncoder().encode(msg)
-        // ⚠️ 不用 `.atomic`：原子写是「临时文件 + rename」，临时文件也在这棵树里，
-        // 而这里要的就是「一次 creat 就落地」。故障期间两条都通，但少一步少一个变数。
-        try data.write(to: spoolDirectory.appendingPathComponent(name))
-        return true
+    /// 机制全在 `LedgerSpool` 里（三本账共用一份，别再各写各的）。
+    /// 这里只决定**存哪儿**和**补回来时怎么合进 rows**。
+    private var spool: LedgerSpool<LocalWhiteboardMessage> {
+        LedgerSpool(directory: directory.appendingPathComponent("outbox", isDirectory: true))
     }
 
-    /// 把该 crew 积压的补进 `rows`，成功搬进去的就删掉。返回补了几条。
-    ///
-    /// **读不出来的那几条原地不动、下次再试** —— 这个函数只在「白板已经读得动」
-    /// 之后才被调到，所以读不动多半是别的毛病，删掉它就等于把话丢了。
-    @discardableResult
+    /// 把该 crew 积压的补进 `rows`。返回补了几条。
     private func drainSpool(into rows: inout [LocalWhiteboardMessage], crewId: String) -> Int {
-        let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: spoolDirectory.path) else { return 0 }
-        let mine = names.filter { $0.hasPrefix(crewId + ".") && $0.hasSuffix(".json") }.sorted()
-        var n = 0
-        for name in mine {
-            let u = spoolDirectory.appendingPathComponent(name)
-            guard let data = try? Data(contentsOf: u),
-                  let msg = try? JSONDecoder().decode(LocalWhiteboardMessage.self, from: data)
-            else { continue }
-            // 同一条别补两遍（补发过程中途失败、下一趟又跑到这里）。
-            if !rows.contains(where: { $0.id == msg.id }) {
-                rows.append(msg)
-                n += 1
+        var appended: [LocalWhiteboardMessage] = []
+        let n = spool.drain(key: crewId) { msg in
+            // 同一条别补两遍（补发中途失败、下一趟又跑到这里）。
+            if !rows.contains(where: { $0.id == msg.id }),
+               !appended.contains(where: { $0.id == msg.id }) {
+                appended.append(msg)
             }
-            try? fm.removeItem(at: u)
+            return true
         }
+        rows.append(contentsOf: appended)
         return n
     }
 }

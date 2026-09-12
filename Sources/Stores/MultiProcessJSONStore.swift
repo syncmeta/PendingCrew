@@ -459,3 +459,87 @@ private struct FailableRow<Row: Decodable>: Decodable {
         row = try? Row(from: decoder)
     }
 }
+
+/// 定序用的进程内计数器。**泛型类型不能有存储型 static**，所以单拎出来放这儿。
+private enum LedgerSpoolSequence {
+    private static var value: UInt64 = 0
+    static func next() -> UInt64 { value &+= 1; return value }
+}
+
+/// **落盘失败时把内容先存成一个新文件，等那本账重新读得动了再补回去。**
+///
+/// ## 为什么存得下来
+///
+/// 这台机器上那个周期性故障的形状是：**`open()` 一个已经存在的 inode 被拒，
+/// `open(O_CREAT)` 建新文件照样成**（逐系统调用量过，见
+/// `docs/internal/2026-09-12-eperm-cause-found.md`）。所以「存不下来」从来不是事实，
+/// 只是以前没人去存 —— 每一窗里 agent 组织好的消息、提上来的 Todo 都当场蒸发，
+/// 回执还明写着「没有留在任何地方」。
+///
+/// ## 两条不肯让步的规矩（都是被红测按着头学会的）
+///
+/// 1. **一条一个新文件，绝不追加进一个共用文件。** 追加要先读，而那条路正是断的。
+/// 2. **文件名必须是真的单调键。** 第一版用秒级 ISO8601 时间戳，于是同一秒存下的两条
+///    排序由后面那个 uuid 决定 = 随机，补回去是倒着的。**账上因果颠倒比丢一条更难
+///    发现**。所以是「高精度定宽时间戳（字典序=时间序）+ 进程内序号兜同微秒」。
+///
+/// ## 还有一条是接线，不是算法
+///
+/// 补发**不能只挂在写路径上**。只在「下一次写成功」时补，意味着一本账只要之后没人再
+/// 写，存下来的就永远补不回来、也永远看不见 —— 那是另一种形式的丢，而且更难发现，
+/// 因为回执已经承诺过会自动补。所以读路径也要调 `drain`（先用 `hasPending` 便宜地
+/// 探一眼，没积压就什么都不做）。
+struct LedgerSpool<Payload: Codable> {
+
+    /// 存哪儿。**不在被拒的那份账文件旁边另起炉灶** —— 用独立子目录，
+    /// 免得它自己被当成账的一部分读进去。
+    let directory: URL
+
+    init(directory: URL) { self.directory = directory }
+
+    /// 存一条。`key` 用来分账（通常是 crewId）：补发只认自己那一份。
+    @discardableResult
+    func spool(_ payload: Payload, key: String) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            let name = key + "."
+                + String(format: "%017.6f", Date().timeIntervalSince1970) + "."
+                + String(format: "%06llu", LedgerSpoolSequence.next()) + "."
+                + UUID().uuidString.lowercased() + ".json"
+            try JSONEncoder().encode(payload).write(to: directory.appendingPathComponent(name))
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 有没有积压。**列目录在那个故障里是通的**，所以这一眼很便宜，
+    /// 可以放在读路径上每次都问。
+    func hasPending(key: String) -> Bool {
+        !fileNames(key: key).isEmpty
+    }
+
+    /// 按当初的顺序交给 `consume`。`consume` 返回 true = 已经吃下，这条就删掉；
+    /// 返回 false = 这次先不动它（下次再试）。返回吃下了几条。
+    @discardableResult
+    func drain(key: String, consume: (Payload) -> Bool) -> Int {
+        var n = 0
+        for name in fileNames(key: key) {
+            let u = directory.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: u),
+                  let payload = try? JSONDecoder().decode(Payload.self, from: data)
+            else { continue }   // 这一条读不出来：**原地留着**，别删 —— 删了就是丢
+            guard consume(payload) else { continue }
+            n += 1
+            try? FileManager.default.removeItem(at: u)
+        }
+        return n
+    }
+
+    private func fileNames(key: String) -> [String] {
+        let all = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return all.filter { $0.hasPrefix(key + ".") && $0.hasSuffix(".json") }.sorted()
+    }
+}
+
