@@ -228,6 +228,24 @@ final class LocalAgentSessionStoreTests: XCTestCase {
                       "机长续跑没有沿用上一任的档位 —— 每次 @ 唤醒都会把它打回默认")
     }
 
+    /// codex 的默认模型交给 codex 自己定（2026-09-13，人类原话「codex 本身的
+    /// 默认模型是什么逻辑就用什么逻辑」）。
+    ///
+    /// 这条改动的失效方式很安静：**不传了、但也没把真值读回来** —— 界面就会退回
+    /// 显示「默认」，而没有任何东西会报错。所以两半各钉一条。
+    func test_codex的默认交给codex自己定并且把真值读回来() throws {
+        let runner = try Self.source("Sources/Mac/Services/CrewSessionRunner.swift")
+        let backend = try Self.source(
+            "Sources/Mac/LocalRunner/CodexAppServer/CodexAppServerBackend.swift")
+
+        XCTAssertTrue(runner.contains("if config.kind == .claudeCode, config.model == nil {"),
+                      "又在替 codex 算一遍默认模型了——那是重算 codex 的逻辑，用户用上 profile 就会算岔")
+        XCTAssertTrue(runner.contains("notifyResolvedProfile: { [weak self] m, e in"),
+                      "没把 codex 报回来的真值接上——显示会退回「默认」，而且不会报错")
+        XCTAssertTrue(backend.contains("result?[\"model\"] as? String"),
+                      "握手回包里的模型没被读出来")
+    }
+
     private static func source(_ relative: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // .../Tests/PendingCrewTests

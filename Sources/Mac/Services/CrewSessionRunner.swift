@@ -1418,7 +1418,16 @@ final class CrewSessionRunner: ObservableObject {
         // 以后改默认对老 session 就无效了。
         let explicitModel = config.model
         let explicitEffort = config.effort
-        if config.kind.isAgent, config.model == nil {
+        // **只给 claude 兜**（2026-09-13 改）。claude 那边没有「问它用了什么」的
+        // 回传通道，不兜就只能显示「默认」，所以照旧读 settings/env 解析一个出来。
+        //
+        // codex 不兜：不传 model 就让 app-server 自己按它的逻辑定，然后从
+        // `thread/start` 的回包里读真值回填（`notifyResolvedProfile`）。
+        // 以前这里也替 codex 读一遍 `~/.codex/config.toml` 的顶层 model 再钉给它 ——
+        // 今天两者结果一样，但那是我们**重算了一遍它的逻辑**，用户一旦用上 profile
+        // 之类的东西就可能算岔，而且不会有任何地方报错。人类原话：「codex 本身的
+        // 默认模型是什么逻辑就用什么逻辑」。
+        if config.kind == .claudeCode, config.model == nil {
             config.model = SessionLaunchOptions.defaultModel(
                 for: config.kind, projectDir: workingDirectory)
         }
@@ -1518,6 +1527,15 @@ final class CrewSessionRunner: ObservableObject {
                     sessionName: CrewSessionTitle.resolve(explicit: title, brief: taskBrief),
                     isCaptain: role == .captain),
                 // Todo #28：握手拿到 threadId 就记账，重启这个成员时 thread/resume 回来。
+                // codex 自己定的模型/effort，握手回来时回填显示（#489 的「显示=实际」
+                // 现在靠这条，而不靠我们自己算一遍 codex 的默认解析）。
+                notifyResolvedProfile: { [weak self] m, e in
+                    guard let self,
+                          let run = self.runs.first(where: { $0.sessionId == sessionId })
+                    else { return }
+                    if let m, !m.isEmpty { run.model = m }
+                    if let e, !e.isEmpty { run.effort = e }
+                },
                 notifyThreadId: { tid in
                     // Todo #68：同 claude 那处 —— 真实 cwd 一并记下（唤醒时定进程目录用）。
                     LocalAgentSessionStore.shared.record(

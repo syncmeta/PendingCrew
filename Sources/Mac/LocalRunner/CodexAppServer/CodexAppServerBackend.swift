@@ -74,6 +74,17 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// 握手拿到 threadId 时回调 —— runner 把它记进 `LocalAgentSessionStore`，
     /// 下次重启这个成员就能 `thread/resume` 回同一条线（Todo #28）。
     private let notifyThreadId: (_ threadId: String) -> Void
+    /// 握手回包里 codex **自己解析出来的**模型/effort（2026-09-13）。
+    ///
+    /// 以前是我们先去读 `~/.codex/config.toml` 的顶层 `model`、再把它明确钉进
+    /// `thread/start`。今天这台机器上两者结果一样，但那是**我们重算了一遍它的
+    /// 逻辑** —— 一旦用户用上 codex 的 profile 之类的东西，我们算的就可能跟它
+    /// 不一样，而且不会有任何地方报错。人类原话：「codex 本身的默认模型是什么
+    /// 逻辑就用什么逻辑」。
+    ///
+    /// 所以现在不传就是不传，让 codex 自己定，然后**从回包里读真值**回填显示 ——
+    /// 显示=实际跑的模型这条（#489）靠这条回调保住，不靠我们自己算。
+    private let notifyResolvedProfile: (_ model: String?, _ effort: String?) -> Void
     /// `thread/resume` 失败、已降级成新起一条 thread 时回调（Todo #28 fail-loud）——
     /// runner 据此往群里如实说「原会话接不回来了，这是新开的」，不静默假装恢复。
     private let notifyResumeFallback: (_ failedThreadId: String, _ reason: String) -> Void
@@ -103,11 +114,13 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
          approvalProvider: @escaping (_ summary: String, _ decisions: [String]) async -> String,
          notifyUnanswerable: @escaping (_ summary: String) -> Void = { _ in },
          notifyTurnEnded: @escaping (_ lastAgentText: String) -> Void = { _ in },
+         notifyResolvedProfile: @escaping (_ model: String?, _ effort: String?) -> Void = { _, _ in },
          notifyThreadId: @escaping (_ threadId: String) -> Void = { _ in },
          notifyResumeFallback: @escaping (_ failedThreadId: String, _ reason: String) -> Void = { _, _ in },
          protocolNotificationSink: ((_ method: String, _ params: [String: Any]) -> Void)? = nil) {
         self.notifyTurnEnded = notifyTurnEnded
         self.notifyThreadId = notifyThreadId
+        self.notifyResolvedProfile = notifyResolvedProfile
         self.notifyResumeFallback = notifyResumeFallback
         self.protocolNotificationSink = protocolNotificationSink
         self.connection = CodexAppServerConnection(executable: executable, argv: argv, cwd: cwd, env: env)
@@ -177,6 +190,15 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 }
                 let tid = (result?["thread"] as? [String: Any])?["id"] as? String
                 self.threadId = tid
+                // 回包里带着 codex 这一轮真正用的模型/effort —— 以它为准，
+                // 不管我们传没传（传了它也会原样回来，所以两条路一个写法）。
+                let resolvedModel = result?["model"] as? String
+                let resolvedEffort = result?["reasoningEffort"] as? String
+                if let resolvedModel, !resolvedModel.isEmpty { self.model = resolvedModel }
+                if let resolvedEffort, !resolvedEffort.isEmpty { self.effort = resolvedEffort }
+                if resolvedModel != nil || resolvedEffort != nil {
+                    self.notifyResolvedProfile(resolvedModel, resolvedEffort)
+                }
                 if let tid, !tid.isEmpty { self.notifyThreadId(tid) }
                 if let p = initialPrompt, !p.isEmpty { self.send(p) }
             } catch {
