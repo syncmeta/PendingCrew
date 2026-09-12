@@ -400,4 +400,98 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         XCTAssertNil(m[0].attachments)
         XCTAssertEqual(m[0].agentText, "old")
     }
+
+    // MARK: - 白板读不动时，话先存着别丢（2026-09-12）
+
+    /// 病历：那天这个故障连着四窗，每一窗里 agent 组织好的消息都当场蒸发，
+    /// 回执还明写着「没有留在任何地方 —— 要它们的话得重发」。
+    ///
+    /// 而这类故障的形状是 **`open()` 一个已存在的 inode 被拒、建新文件照样成**
+    /// （逐系统调用量过）。所以「存不下来」从来不是事实，只是没人去存。
+    ///
+    /// 这里用 `chmod 000` 把白板文件做成读不动来复现 —— 判据落在
+    /// **「话有没有留下来」**，不落在「哪种 errno」：真故障是 EPERM，这里是 EACCES，
+    /// 而两者走的是同一条 `catch`。换句话说这条测的是那条 catch 的行为，不是那个故障。
+    private func makeUnreadable(_ dir: URL, crew: String) throws -> URL {
+        let store = LocalWhiteboardStore(directory: dir)
+        store.appendUserMessage(crewId: crew, text: "开张第一条")
+        let f = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .first { $0.contains(crew) && $0.hasSuffix(".json") })
+        let url = dir.appendingPathComponent(f)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        return url
+    }
+
+    func testUnreadableBoardSpoolsTheMessageInsteadOfDroppingIt() throws {
+        let dir = tempDir(), crew = "local-spool"
+        let url = try makeUnreadable(dir, crew: crew)
+        let store = LocalWhiteboardStore(directory: dir)
+
+        XCTAssertThrowsError(
+            try store.appendSessionMessageReportingFailure(
+                crewId: crew, sessionId: "s1", text: "这条必须活下来")
+        ) { err in
+            XCTAssertTrue(
+                err.localizedDescription.contains("待发件箱"),
+                "回执没告诉作者这条被存下来了，他就会去重发，于是同一条出现两次：\(err.localizedDescription)")
+        }
+
+        let spooled = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox").path)) ?? []
+        XCTAssertEqual(spooled.count, 1, "话没被存下来 —— 这正是这一单要治的病")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    }
+
+    /// 恢复之后自己补回去，而且**排在恢复后那条的前面** —— 它本来就发生得更早。
+    func testSpooledMessagesComeBackInOrderOnceTheBoardIsReadableAgain() throws {
+        let dir = tempDir(), crew = "local-spool2"
+        let url = try makeUnreadable(dir, crew: crew)
+        let store = LocalWhiteboardStore(directory: dir)
+
+        for t in ["断网期第一条", "断网期第二条"] {
+            _ = try? store.appendSessionMessageReportingFailure(
+                crewId: crew, sessionId: "s1", text: t)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+
+        let note = try store.appendSessionMessageReportingFailure(
+            crewId: crew, sessionId: "s1", text: "恢复之后这条")
+        XCTAssertTrue(
+            (note ?? "").contains("补发了之前存下的 2 条"),
+            "补发了却不在回执里说 —— 白板上凭空多出两条旧消息，两边账对不上：\(note ?? "nil")")
+
+        let texts = store.list(crewId: crew).map(\.text)
+        XCTAssertEqual(texts, ["开张第一条", "断网期第一条", "断网期第二条", "恢复之后这条"],
+                       "补发的顺序不对 —— 倒过来会让白板上的因果乱掉")
+
+        let left = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox").path)) ?? []
+        XCTAssertTrue(left.isEmpty, "补发完没清掉，下次会再补一遍：\(left)")
+    }
+
+    /// 补过一次就不该再补 —— 顺手也证明 outbox 是按 crew 分的，别的 crew 恢复
+    /// 不会把这个 crew 的话拖进去。
+    func testDrainDoesNotDuplicateAndIsPerCrew() throws {
+        let dir = tempDir(), crew = "local-spool3", other = "local-other"
+        let url = try makeUnreadable(dir, crew: crew)
+        let store = LocalWhiteboardStore(directory: dir)
+        _ = try? store.appendSessionMessageReportingFailure(
+            crewId: crew, sessionId: "s1", text: "存下来的那条")
+
+        // 另一个 crew 照常写：它不该把上面那条捞走。
+        store.appendUserMessage(crewId: other, text: "别人家的")
+        XCTAssertEqual(store.list(crewId: other).map(\.text), ["别人家的"],
+                       "另一个 crew 的恢复把这个 crew 的积压捞过去了")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        _ = try store.appendSessionMessageReportingFailure(
+            crewId: crew, sessionId: "s1", text: "第一次恢复")
+        let after = try store.appendSessionMessageReportingFailure(
+            crewId: crew, sessionId: "s1", text: "第二次")
+        XCTAssertFalse((after ?? "").contains("补发"), "补了两遍：\(after ?? "nil")")
+        XCTAssertEqual(store.list(crewId: crew).filter { $0.text == "存下来的那条" }.count, 1)
+    }
+
 }

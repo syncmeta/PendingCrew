@@ -483,7 +483,16 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                 // 读不出来 ≠ 内容损坏（2026-08-12 P0）。这里以前是「先归档搬走原件、
                 // 再从警示行重建」—— 瞬时 EPERM/EMFILE 撞上它，一趟扫掉全机 19-24 份
                 // 完好白板。现在一个字节都不动：拒写 + 如实回执，历史留在原地。
-                throw WhiteboardPersistenceError.unreadableAndPreserved(url, error)
+                //
+                // **但「不写白板」不等于「把话扔了」**（2026-09-12）：那天故障连着四窗，
+                // 每一窗里 agent 组织好的消息都当场蒸发，回执还明写着「没有留在任何地方
+                // —— 要它们的话得重发」。而这类故障的形状恰恰是
+                // **`open()` 一个已存在的 inode 被拒，`open(O_CREAT)` 建新文件照样成**
+                // （逐系统调用量过，见 docs/internal/2026-09-12-eperm-cause-found.md）。
+                // 也就是说**存得下来，只是当时读不回去** —— 那就存：一条一个新文件，
+                // 等白板重新读得动的那一刻自己补回去。
+                let spooled = (try? spool(msg, crewId: crewId)) ?? false
+                throw WhiteboardPersistenceError.unreadableAndPreserved(url, error, spooled: spooled)
             }
             if incident == nil {
                 // 漏读兜底同理：只拒写、不归档、不重建（`refuseEmptyRewrite…` 已改成
@@ -492,20 +501,82 @@ final class LocalWhiteboardStore: @unchecked Sendable {
                     throw WhiteboardPersistenceError.unsafeEmptyRewrite(url)
                 }
             }
+            // 读得动了 = 上一窗过去了。把积压的按时间顺序补回去，**排在本条之前** ——
+            // 它们本来就发生得更早，倒过来会让白板上的因果乱掉。
+            let recovered = drainSpool(into: &rows, crewId: crewId)
             rows.append(msg)
             try MultiProcessJSONStore.saveRowsLockedReportingFailure(rows, to: url)
             // 单一写入漏斗 —— 所有 public append 变体都经此，发一个变更信号即覆盖全部
             // （人类发送 / session 进展）。订阅方按 crewId 过滤。
             changes.send(crewId)
-            return incident
+            guard recovered > 0 else { return incident }
+            // 补发这件事**必须出现在回执里**：白板上凭空多出几条旧消息，而当初发它们的
+            // 那几个 agent 收到的是「没发出去」—— 不说一声，两边的账就永远对不上。
+            let note = "（顺带：白板恢复可读，补发了之前存下的 \(recovered) 条）"
+            return incident.map { $0 + "\n" + note } ?? note
         }
+    }
+
+    // MARK: - 发不出去时先存着（2026-09-12）
+
+    /// 存不进白板的消息暂存在哪。**每条一个新文件** —— 这不是风格选择：
+    /// 这类故障的形状正是「`open()` 一个已存在的 inode 被拒、建新文件照样成」，
+    /// 追加进一个共用文件要先读它，那条路恰恰是断的。
+    private var spoolDirectory: URL { directory.appendingPathComponent("outbox", isDirectory: true) }
+
+    /// 同一进程内的排队序号 —— 文件名里的时间戳做不到的那一位由它兜。
+    private static var spoolSequence: UInt64 = 0
+
+    /// 文件名 = `<crewId>.<秒级以下的时间戳>.<序号>.<uuid>.json`，**定宽、可按字典序排**。
+    ///
+    /// ⚠️ 第一版这里用的是 `ISO8601DateFormatter`，秒级精度，于是同一秒内存下的两条
+    /// 排序由后面那个 uuid 决定 = **随机**。回归测试当场抓到：两条补回去是倒着的。
+    /// 白板上因果颠倒比丢一条更难发现，所以这里必须是一个真的单调键：
+    /// 高精度时间戳定宽零填充（字典序 = 时间序），再加一个进程内序号兜住同微秒。
+    private func spool(_ msg: LocalWhiteboardMessage, crewId: String) throws -> Bool {
+        try FileManager.default.createDirectory(
+            at: spoolDirectory, withIntermediateDirectories: true)
+        Self.spoolSequence &+= 1
+        let stamp = String(format: "%017.6f", Date().timeIntervalSince1970)
+        let seq = String(format: "%06llu", Self.spoolSequence)
+        let name = "\(crewId).\(stamp).\(seq).\(UUID().uuidString.lowercased()).json"
+        let data = try JSONEncoder().encode(msg)
+        // ⚠️ 不用 `.atomic`：原子写是「临时文件 + rename」，临时文件也在这棵树里，
+        // 而这里要的就是「一次 creat 就落地」。故障期间两条都通，但少一步少一个变数。
+        try data.write(to: spoolDirectory.appendingPathComponent(name))
+        return true
+    }
+
+    /// 把该 crew 积压的补进 `rows`，成功搬进去的就删掉。返回补了几条。
+    ///
+    /// **读不出来的那几条原地不动、下次再试** —— 这个函数只在「白板已经读得动」
+    /// 之后才被调到，所以读不动多半是别的毛病，删掉它就等于把话丢了。
+    @discardableResult
+    private func drainSpool(into rows: inout [LocalWhiteboardMessage], crewId: String) -> Int {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: spoolDirectory.path) else { return 0 }
+        let mine = names.filter { $0.hasPrefix(crewId + ".") && $0.hasSuffix(".json") }.sorted()
+        var n = 0
+        for name in mine {
+            let u = spoolDirectory.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: u),
+                  let msg = try? JSONDecoder().decode(LocalWhiteboardMessage.self, from: data)
+            else { continue }
+            // 同一条别补两遍（补发过程中途失败、下一趟又跑到这里）。
+            if !rows.contains(where: { $0.id == msg.id }) {
+                rows.append(msg)
+                n += 1
+            }
+            try? fm.removeItem(at: u)
+        }
+        return n
     }
 }
 
 private enum WhiteboardPersistenceError: LocalizedError {
     case unsafeEmptyRewrite(URL)
     case corruptQuarantineFailed(URL)
-    case unreadableAndPreserved(URL, Error)
+    case unreadableAndPreserved(URL, Error, spooled: Bool)
 
     var errorDescription: String? {
         switch self {
@@ -513,7 +584,7 @@ private enum WhiteboardPersistenceError: LocalizedError {
             return "白板读取为空但磁盘文件非空，已拒绝覆盖：\(url.path)"
         case .corruptQuarantineFailed(let url):
             return "白板文件损坏且归档失败，原始记录已保留：\(url.path)"
-        case .unreadableAndPreserved(let url, let cause):
+        case .unreadableAndPreserved(let url, let cause, let spooled):
             // 原来这句写的是「读不出来**且归档失败**」—— 读不出来时我们从来不试归档
             // （8-12 P0 的不变式就是这条），所以那半句是假的，而假描述在那晚是真实的
             // 成本项：一串机长跑去翻根本不存在的归档。
@@ -524,6 +595,10 @@ private enum WhiteboardPersistenceError: LocalizedError {
             return "白板文件读不出来（\(cause.localizedDescription)）"
                 + "【\(MultiProcessJSONStore.diagnose(cause, fallbackPath: url).line)】，"
                 + "原始记录已原地保留、本次一个字都没写"
+                + (spooled
+                   ? "。\n**这条已经存进待发件箱**，白板重新读得动的那一刻会自动补发 —— "
+                     + "不用你重发，也别当它已经说出去了（现在群里还看不到它）。"
+                   : "。\n⚠️ **而且这次连存都没存下来** —— 内容只剩在你自己上下文里，要它的话得重发。")
         }
     }
 }
