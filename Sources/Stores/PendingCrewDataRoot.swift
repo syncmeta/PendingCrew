@@ -67,6 +67,30 @@ enum PendingCrewDataRoot {
         url.appendingPathComponent(name, isDirectory: true)
     }
 
+    /// **新文件的出生地**，故意**不在数据根里**（`~/Library/Caches/PendingCrew/staging`）。
+    ///
+    /// 2026-09-12 量出来的：那个周期性 EPERM 故障拦的是「在 Application Support 底下
+    /// 出生的文件」—— 标记在**创建时**按创建位置打上，之后跟着文件走（`clonefile`
+    /// 都复制得过去），发作期间带标记的一律 `open()` 被拒。
+    /// 而**在外面建好再 `rename` 进来的文件没有标记**，发作期间照样读得动、
+    /// 之后原地改写也照样读得动（三个落脚点各验过一遍）。
+    ///
+    /// 所以整写一份账本时，临时文件建在这里再挪进去，那份账本就对这个故障免疫。
+    /// Foundation 的 `.atomic` 把临时文件建在**目标目录里**，正是每份账本
+    /// 从出生起就带标记的原因。
+    ///
+    /// ⚠️ **这是绕路，不是根治** —— 拒绝来自哪个系统策略仍然不知道
+    /// （要发作当口的 `sudo` 抓取，见 `scripts/capture-eperm-fsusage.sh`）。
+    /// 根治之后这条可以退役，但**退役前要先确认故障真的没了**，别看它安静就撤。
+    /// 现场：`docs/internal/2026-09-12-eperm-marker-travels.md`
+    ///
+    /// 必须与数据根**同卷**，否则 `rename` 会 EXDEV —— 跨卷时调用方退回原子写。
+    static let stagingDirectory: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return caches.appendingPathComponent("PendingCrew/staging", isDirectory: true)
+    }()
+
     /// 启动时说一句「我到底在读写哪儿」。
     ///
     /// **这一行不是装饰。** 2026-08-26 那次事故是「daemon 悄悄跑在了真目录上」；

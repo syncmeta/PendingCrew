@@ -428,7 +428,46 @@ enum MultiProcessJSONStore {
         _ rows: [Row], to url: URL
     ) throws {
         let data = try JSONEncoder().encode(rows)
-        try data.write(to: url, options: .atomic)
+        try writeStaged(data, to: url)
+    }
+
+    /// 整写一份字节：**临时文件在数据根之外出生**，再 `rename` 进来。
+    ///
+    /// 为什么不能用 `Data.write(options: .atomic)`：它把临时文件建在**目标目录里**，
+    /// 于是新文件带上那个周期性 EPERM 故障的标记（标记按创建位置打、之后跟着文件走）。
+    /// 从外面 `rename` 进来的文件没有标记，发作期间照样读得动。
+    /// 判据与对照见 `PendingCrewDataRoot.stagingDirectory` 的注释。
+    ///
+    /// **原子性不降级**：POSIX `rename` 本来就是原子替换，跟 `.atomic` 给的是
+    /// 同一条保证；差别只在临时文件建在哪儿。
+    ///
+    /// 落脚点建不了、或跟目标**跨卷**（`rename` EXDEV）时**退回 `.atomic`** ——
+    /// 那种环境下这个故障本来也不成立（它只在 Application Support 底下发作）。
+    ///
+    /// - Returns: 实际用过的落脚路径；`nil` = 走了退路（原地原子写）。
+    ///   生产调用点不看它，**测试靠它断言「这个文件不是在目标目录里出生的」** ——
+    ///   出生地是这个函数的全部意义，而出生地事后在磁盘上看不出来。
+    @discardableResult
+    static func writeStaged(
+        _ data: Data, to url: URL,
+        staging: URL = PendingCrewDataRoot.stagingDirectory
+    ) throws -> URL? {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            let staged = staging.appendingPathComponent(UUID().uuidString + ".staged")
+            try data.write(to: staged)
+            defer { try? fm.removeItem(at: staged) }
+            try fm.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard rename(staged.path, url.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            return staged
+        } catch {
+            try data.write(to: url, options: .atomic)
+            return nil
+        }
     }
 
     /// 把**确认损坏**的文件挪到 `<file>.corrupt-<unix毫秒>`（同目录，人工可找回）。
@@ -521,7 +560,10 @@ struct LedgerSpool<Payload: Codable> {
                 + String(format: "%017.6f", Date().timeIntervalSince1970) + "."
                 + String(format: "%06llu", LedgerSpoolSequence.next()) + "."
                 + UUID().uuidString.lowercased() + ".json"
-            try JSONEncoder().encode(payload).write(to: directory.appendingPathComponent(name))
+            // 同样走落脚点：待发件箱的文件建在数据根里就会带上标记，
+            // 而它恰恰要在故障期间被写、故障过去后被读回来。
+            try MultiProcessJSONStore.writeStaged(
+                JSONEncoder().encode(payload), to: directory.appendingPathComponent(name))
             return true
         } catch {
             return false

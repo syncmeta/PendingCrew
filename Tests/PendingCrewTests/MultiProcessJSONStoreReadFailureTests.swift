@@ -414,3 +414,68 @@ final class MultiProcessJSONStoreReadFailureTests: XCTestCase {
         XCTAssertEqual(first, second)
     }
 }
+
+
+/// 新文件**在数据根之外出生**（2026-09-12）。
+///
+/// 为什么这件事需要一把尺子：出生地事后在磁盘上**看不出来** —— 落地之后
+/// 那个文件长得跟 `.atomic` 写出来的一模一样。所以 `writeStaged` 把用过的
+/// 落脚路径返回来，这里才有得断言。改回 `Data.write(options:.atomic)` 时
+/// 这两条会红。
+final class StagedWriteTests: XCTestCase {
+
+    func test_临时文件不在目标目录里出生() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("staged-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("ledger.json")
+
+        // 落脚点由测试给，免得这条判据跟着 CI 有没有 Caches 目录一起红。
+        let staging = dir.deletingLastPathComponent()
+            .appendingPathComponent("staging-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let staged = try MultiProcessJSONStore.writeStaged(
+            Data("[1,2]".utf8), to: target, staging: staging)
+
+        guard let staged else {
+            return XCTFail("走了退路（原地原子写）——这台机器上落脚点应该可用")
+        }
+        // ⚠️ 比 `.path`，别比 URL：`deletingLastPathComponent()` 返回**带尾斜杠**的
+        // URL，跟不带尾斜杠的 `dir` 用 `==` 永远不等 —— 那样写这条断言恒真，
+        // 变异测试里刀都切进去了它还是绿的（2026-09-12 亲手撞上）。
+        XCTAssertNotEqual(
+            staged.deletingLastPathComponent().standardizedFileURL.path,
+            dir.standardizedFileURL.path,
+            "临时文件建在了目标目录里，等于没改：\(staged.path)")
+        XCTAssertEqual(try Data(contentsOf: target), Data("[1,2]".utf8))
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: dir.path), ["ledger.json"],
+            "目标目录里留下了别的东西")
+    }
+
+    func test_替换已存在的文件() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("staged-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("ledger.json")
+        try Data("旧的".utf8).write(to: target)
+
+        try MultiProcessJSONStore.writeStaged(Data("新的".utf8), to: target)
+
+        XCTAssertEqual(String(data: try Data(contentsOf: target), encoding: .utf8), "新的")
+    }
+
+    /// 上面那条用的是注入的落脚点，所以**生产那个落脚点在哪**要单独钉一条 ——
+    /// 否则它哪天被改回数据根里面，上面那条照样绿。
+    func test_生产的落脚点在数据根之外() {
+        let root = PendingCrewDataRoot.url.standardizedFileURL.path
+        let staging = PendingCrewDataRoot.stagingDirectory.standardizedFileURL.path
+        XCTAssertFalse(staging.hasPrefix(root),
+                       "落脚点落在数据根里了，新文件照样带标记：\(staging)")
+        // 那个故障拦的是整个 Application Support 底下新出生的文件，不只是数据根。
+        XCTAssertFalse(staging.contains("/Application Support/"),
+                       "落脚点在 Application Support 底下：\(staging)")
+    }
+}
