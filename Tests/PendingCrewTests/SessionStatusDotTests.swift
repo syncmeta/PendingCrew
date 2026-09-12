@@ -122,6 +122,12 @@ final class SessionStatusDotTests: XCTestCase {
             (CrewSessionStateDerivation.state(
                 isRunning: true, health: CrewSessionHealth(kind: .briefUndelivered, detail: ""),
                 isWorking: false), .attention),
+            // 运行中的一条指令没送进输入框（人类 Todo #15）：它跟上面那条同源，
+            // 坏法却更安静 —— 进程活着、TUI 在重绘、输入框里躺着一段没人敲过的字。
+            // 同样不许被推成「🟡 空闲」。
+            (CrewSessionStateDerivation.state(
+                isRunning: true, health: CrewSessionHealth(kind: .promptUndelivered, detail: ""),
+                isWorking: false), .attention),
             (CrewSessionStateDerivation.state(
                 isRunning: true, health: nil, isWorking: false, awaitingDecision: true),
              .attention),
@@ -135,7 +141,7 @@ final class SessionStatusDotTests: XCTestCase {
                 "状态词 \(state) 的点色不对")
         }
         // 覆盖到每个 health kind，新增 kind 时这条会提醒补映射。
-        XCTAssertEqual(CrewSessionHealth.Kind.allCases.count, 7)
+        XCTAssertEqual(CrewSessionHealth.Kind.allCases.count, 8)
     }
     #endif
 }
