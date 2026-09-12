@@ -1,5 +1,6 @@
 # #91：本地图缓存测试只约束本仓逻辑
 
+<!-- doc-ref-base: 5ed062d -->
 ## 根因与修复
 
 原来的 `testStoreThenPeekHits`、`testDifferentMaxPixelIsDifferentEntry` 用默认 NSCache，存入后断言一定还在；这与源码已声明的可驱逐行为冲突。历史内存读数可在 `2026-09-11-typing-lag-profile.md:20` 复核，但那次测试失败的原始日志本轮未找到，不能独立确认当时每次失败都由驱逐造成。本轮用立即丢弃写入的存储确定性复现这两条断言失败。

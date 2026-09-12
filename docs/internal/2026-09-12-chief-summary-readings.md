@@ -1,5 +1,6 @@
 # 侧栏那一行显示什么 —— #145 动手前的四个读数
 
+<!-- doc-ref-base: 1137e7b -->
 基准提交：`272282d`（本机 main，2026-09-12）。数据面：本机
 `~/Library/Application Support/PendingCrew/`，52 本白板、13592 条消息。
 

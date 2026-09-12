@@ -1,5 +1,6 @@
 # EPERM 故障：载体找到了，是 `com.apple.provenance`，罩的是目录
 
+<!-- doc-ref-base: db725af -->
 - 基准提交：`be98b9c`
 - 现场时刻：2026-09-12 00:50–00:55，**故障正在发生时逐项量的**
 - 前情：`docs/internal/2026-09-08-eperm-live-capture.md`（四次现场，成因未定）
