@@ -614,12 +614,23 @@ final class ViewWiringTests: XCTestCase {
                       "设置页没有 CLI 版本入口 —— 版本被挪丢了，不是挪走了")
         XCTAssertTrue(settings.contains("AgentCLIVersionCenter.shared"),
                       "设置页没接上版本检测中心，打开设置不会去检测")
+        // ⚠️ 认的是**能力**，不是那四个按钮的全名。原来这里钉的是逐字的按钮文案，
+        // 2026-09-12 把 popover 摊平成设置里的一块（Todo #11）时顺手改短了两个标签
+        // （「运行健康检查（doctor）」→「健康检查（doctor）」、「重新检测版本」→
+        // 「重新检测」），这条当场红 —— 它红得对（有东西变了），但红的原因是措辞，
+        // 而它要防的是**能力丢失**。措辞会一直改，能力不该没了，所以判据下沉到
+        // 认得出那件事的最短片段。
         let version = try Self.text(of: "AgentCLIVersionView.swift")
-        for capability in ["检查更新并升级…", "回滚到本机保留版本…",
-                           "运行健康检查（doctor）", "重新检测版本"] {
+        for capability in ["检查更新并升级", "回滚到本机保留版本", "doctor", "重新检测"] {
             XCTAssertTrue(version.contains(capability),
-                          "挪位置时把「\(capability)」一起删了 —— 人类要的是换个地方显示")
+                          "挪位置时把「\(capability)」这项能力一起删了 —— 人类要的是换个地方显示")
         }
+        // 人类 Todo #11 加的两条：这块要摊开（不许再靠 popover 才看得见），
+        // 而且每个 harness 都要能指定目录。
+        XCTAssertFalse(version.contains(".popover("),
+                       "编码工具那块又变回「点一下才出来」了 —— 人类原话：不希望点击之后再出一个框")
+        XCTAssertTrue(version.contains("LocalCodingAgentExecutable.setOverrideDirectory"),
+                      "「设置目录」没接上：界面上填了也不会改变 CLI 的解析结果")
 
         // ③ 账号头像那行的今日 token 用量去掉（额度环是另一回事，必须还在）。
         XCTAssertFalse(sidebar.contains("AgentUsageLine"),

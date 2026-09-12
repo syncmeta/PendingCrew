@@ -137,5 +137,80 @@ final class LocalCodingAgentTests: XCTestCase {
             root: "/fnm", versions: ["v20.1.0"], binSubpath: "installation/bin")
         XCTAssertEqual(dirs, ["/fnm/v20.1.0/installation/bin"])
     }
+
+    // MARK: - 人工指定 CLI 目录（人类 Todo #11）
+
+    /// 人类要「每一个 harness 都有一块设置的地方……要能更新、**设置目录**、检测」。
+    /// 这一组测的是那个「设置目录」背后的存取与校验，不测界面。
+    ///
+    /// 用一个独立的 `UserDefaults` suite，不碰本机真设置 —— 跑测试不该把开发机上
+    /// 指好的目录冲掉。
+    private func scratchDefaults() throws -> UserDefaults {
+        let name = "pendingcrew-test-\(UUID().uuidString)"
+        guard let d = UserDefaults(suiteName: name) else {
+            throw XCTSkip("建不出临时 UserDefaults suite")
+        }
+        addTeardownBlock { d.removePersistentDomain(forName: name) }
+        return d
+    }
+
+    func testOverrideDirectoryRoundTripsAndClearsOnEmpty() throws {
+        let d = try scratchDefaults()
+        XCTAssertNil(LocalCodingAgentExecutable.overrideDirectory(.claudeCode, defaults: d))
+
+        LocalCodingAgentExecutable.setOverrideDirectory("/opt/x/bin", for: .claudeCode, defaults: d)
+        XCTAssertEqual(
+            LocalCodingAgentExecutable.overrideDirectory(.claudeCode, defaults: d), "/opt/x/bin")
+        // 每个 harness 各存各的 —— 设了 claude 不该顺手把 codex 也设了。
+        XCTAssertNil(LocalCodingAgentExecutable.overrideDirectory(.codex, defaults: d))
+
+        // 留空 = 取消指定，回到自动搜索。空白串也算空。
+        LocalCodingAgentExecutable.setOverrideDirectory("   ", for: .claudeCode, defaults: d)
+        XCTAssertNil(LocalCodingAgentExecutable.overrideDirectory(.claudeCode, defaults: d))
+    }
+
+    func testOverrideDirectoryExpandsTilde() throws {
+        let d = try scratchDefaults()
+        LocalCodingAgentExecutable.setOverrideDirectory("~/some/bin", for: .codex, defaults: d)
+        let got = LocalCodingAgentExecutable.overrideDirectory(.codex, defaults: d)
+        XCTAssertEqual(got, NSHomeDirectory() + "/some/bin",
+                       "存的是人打的原样，读出来要展开 ~，否则拼路径时会当成相对目录")
+    }
+
+    /// 填错了要**当场**说，不能让人保存完再去猜为什么 session 还是起不来。
+    /// 三种错法各说各的话，且都不是致命的（仍会回落到自动搜索）。
+    func testOverrideProblemNamesEachWayItCanBeWrong() throws {
+        let d = try scratchDefaults()
+        XCTAssertNil(LocalCodingAgentExecutable.overrideProblem(.claudeCode, defaults: d),
+                     "没设过就没有问题可报")
+
+        LocalCodingAgentExecutable.setOverrideDirectory(
+            "/definitely/not/here-\(UUID().uuidString)", for: .claudeCode, defaults: d)
+        XCTAssertEqual(
+            LocalCodingAgentExecutable.overrideProblem(.claudeCode, defaults: d), "这个目录不存在。")
+
+        // 指到一个文件上（用本测试源文件自己，它一定存在）。
+        LocalCodingAgentExecutable.setOverrideDirectory(#filePath, for: .claudeCode, defaults: d)
+        XCTAssertTrue(
+            LocalCodingAgentExecutable.overrideProblem(.claudeCode, defaults: d)?
+                .contains("不是目录") == true)
+
+        // 存在、是目录、但里面没有那个 CLI。
+        let empty = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cli-override-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: empty) }
+        LocalCodingAgentExecutable.setOverrideDirectory(empty.path, for: .claudeCode, defaults: d)
+        XCTAssertTrue(
+            LocalCodingAgentExecutable.overrideProblem(.claudeCode, defaults: d)?
+                .contains("没有可执行的") == true)
+
+        // 放一个可执行的同名文件进去 → 不再有问题可报。
+        let bin = empty.appendingPathComponent(LocalCodingAgentKind.claudeCode.binaryName)
+        FileManager.default.createFile(atPath: bin.path, contents: Data("#!/bin/sh\n".utf8))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.path)
+        XCTAssertNil(LocalCodingAgentExecutable.overrideProblem(.claudeCode, defaults: d))
+    }
+
 }
 #endif

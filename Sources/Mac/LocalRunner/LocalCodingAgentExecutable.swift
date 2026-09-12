@@ -20,9 +20,11 @@ import Foundation
 public enum LocalCodingAgentExecutable {
 
     /// 解析 `kind` 对应的可执行文件 URL。命中目录列表里第一个可执行的同名文件。
+    /// 人在设置里指定过目录的话，那个目录排最前 —— 它的语义就是「别再自动猜了，
+    /// 就用这个」。
     public static func resolve(_ kind: LocalCodingAgentKind) -> URL? {
         guard kind.isAgent else { return nil }
-        for dir in searchDirectories() {
+        for dir in (overrideDirectory(kind).map { [$0] } ?? []) + searchDirectories() {
             let candidate = URL(fileURLWithPath: dir).appendingPathComponent(kind.binaryName)
             if FileManager.default.isExecutableFile(atPath: candidate.path) {
                 return candidate
@@ -49,8 +51,73 @@ public enum LocalCodingAgentExecutable {
     /// 复用 `searchDirectories()`（登录 shell PATH 已进程级缓存，不会再起一次 shell）。
     public static var childProcessPath: String {
         composeChildPath(
-            searchDirs: searchDirectories(),
+            // 人工指定的目录也要进子进程 PATH：人指一个目录是为了让那里的 CLI 被用上，
+            // 而 CLI 的同伴运行时（node/bun）多半就在它旁边 —— 只让定位看得见、
+            // 运行看不见，正是本文件开头那段「定位用富 PATH、运行用短 PATH」的老坑。
+            searchDirs: allOverrideDirectories() + searchDirectories(),
             parentPath: ProcessInfo.processInfo.environment["PATH"])
+    }
+
+    // MARK: - 人工指定的目录（人类 Todo #11）
+
+    /// 人在设置里为某个 harness 指定的 CLI 目录。
+    ///
+    /// **存 UserDefaults，不进 app 数据目录**，这是有意的：这块设置存在的意义就是
+    /// 「自动找不到时人来指一下」，而那时候机器多半正出着别的毛病（本机数据目录
+    /// 周期性读不动就是其中一种）。把「救场用的设置」押在另一处可能同时坏掉的存储上，
+    /// 等于在它最该管用的时候不管用。
+    public static func overrideDirectoryKey(_ kind: LocalCodingAgentKind) -> String {
+        "cli.directoryOverride.\(kind.rawValue)"
+    }
+
+    /// 展开 `~` 之后的目录；没设过 / 设了空串 = nil。
+    public static func overrideDirectory(
+        _ kind: LocalCodingAgentKind, defaults: UserDefaults = .standard
+    ) -> String? {
+        let raw = (defaults.string(forKey: overrideDirectoryKey(kind)) ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        return raw.isEmpty ? nil : (raw as NSString).expandingTildeInPath
+    }
+
+    /// 设为空 / nil = 取消指定，回到自动搜索。
+    public static func setOverrideDirectory(
+        _ path: String?, for kind: LocalCodingAgentKind, defaults: UserDefaults = .standard
+    ) {
+        let trimmed = (path ?? "").trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: overrideDirectoryKey(kind))
+        } else {
+            defaults.set(trimmed, forKey: overrideDirectoryKey(kind))
+        }
+    }
+
+    /// 这个指定目录有没有问题 —— 供设置界面**当场**告诉人，而不是让他保存完去猜
+    /// 为什么 session 还是起不来。nil = 没问题（或压根没设）。
+    public static func overrideProblem(
+        _ kind: LocalCodingAgentKind, defaults: UserDefaults = .standard
+    ) -> String? {
+        guard let dir = overrideDirectory(kind, defaults: defaults) else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) else {
+            return "这个目录不存在。"
+        }
+        guard isDir.boolValue else {
+            return "这是一个文件，不是目录 —— 这里要填 \(kind.binaryName) **所在的目录**。"
+        }
+        let candidate = URL(fileURLWithPath: dir).appendingPathComponent(kind.binaryName)
+        guard FileManager.default.isExecutableFile(atPath: candidate.path) else {
+            return "这个目录里没有可执行的 \(kind.binaryName)。会继续按自动搜索找。"
+        }
+        return nil
+    }
+
+    /// 全部已设定的目录（给子进程 PATH 用）。
+    public static func allOverrideDirectories(
+        defaults: UserDefaults = .standard
+    ) -> [String] {
+        LocalCodingAgentKind.allCases
+            .filter(\.isAgent)
+            .compactMap { overrideDirectory($0, defaults: defaults) }
     }
 
     /// `childProcessPath` 的纯逻辑内核（可单测）：搜索目录 → 父进程 PATH → 系统兜底，
