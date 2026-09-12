@@ -74,13 +74,18 @@ fi
 
 echo
 echo "⑥ 排空不掉的机长命令（只 ls，不读内容；**还在 = 一直没读成**）"
+echo "   —— 看的是**躺了多久**，不是有几条：排空要先 open 它，所以一条躺很久"
+echo "      说明消费那一侧此刻也 open 不了。⚠️ 但**没有非故障时刻的对照**时，"
+echo "      「躺了 N 秒」说不出是症状还是常态（正常要多久，本仓还没量过）。"
 n=$(ls "$ROOT"/whiteboards/*.crewcmd.json 2>/dev/null | wc -l | tr -d ' ')
 echo "   $n 条"
 # 逐条打印「落盘时刻 + 文件名」。**不要拿 awk 切 ls 的列** —— 路径里有空格
 # （`Application Support`），切出来的「文件名」会在空格处断掉，看着像另一个文件。
 for c in "$ROOT"/whiteboards/*.crewcmd.json; do
   [ -e "$c" ] || break
-  printf '     %s  %s\n' "$(stat -f%Sm -t '%m-%d %H:%M:%S' "$c")" "$(basename "$c")"
+  age=$(( $(date +%s) - $(stat -f%m "$c") ))
+  printf '     %s  躺了 %ss  %s\n' \
+    "$(stat -f%Sm -t '%m-%d %H:%M:%S' "$c")" "$age" "$(basename "$c")"
 done
 
 echo
