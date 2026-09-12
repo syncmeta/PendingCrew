@@ -1,12 +1,13 @@
 #!/bin/sh
-# 用法: PENDING_NOTARY_PROFILE=pendingcrew-notary [PENDING_PUBLISH_R2=1] \
-#       scripts/release/build-macos-update.sh [release-ref]
+# 用法: [PENDING_PUBLISH_R2=1] scripts/release/build-macos-update.sh [release-ref]
 #
-# 公证 profile 叫 `pendingcrew-notary`，在登录钥匙串里，用本机那把 App Store
-# Connect API key 建的（团队 M42BKJN82S，与 PendingBot 传 TestFlight 同一把）。
-# 没有的话按 `docs/release-macos.md` 里的 `notarytool store-credentials` 重建 ——
-# **别在这儿翻半天然后把公证关掉**：2026-08-19 查出线上装着的包正是这么来的，
-# 签名对、hardened runtime 对，就是没公证票，换台机器直接被 Gatekeeper 拦。
+# 公证凭据不用你操心：默认读 `~/.appstoreconnect/pendingbot.env` 里那把 App Store
+# Connect API key（团队 M42BKJN82S，与 PendingBot 传 TestFlight 同一把），也仍然
+# 支持老的 `PENDING_NOTARY_PROFILE` 钥匙串 profile。挑法见
+# `scripts/release/notary-credentials.sh`，它会在开始构建**之前**认证一次。
+# **一条铁律**：凭据找不到就停在这儿，**别把公证关掉** —— 2026-08-19 查出线上装着的
+# 包正是这么来的，签名对、hardened runtime 对，就是没公证票，换台机器直接被
+# Gatekeeper 拦。
 #
 # 干净快照（钉传入 ref；默认 main）里构建 Release → Developer ID 签名（含 Sparkle
 # 内嵌件）→ 公证 → staple → 生成更新说明 → generate_appcast 签 feed
@@ -15,16 +16,20 @@ set -eu
 
 product=pendingcrew
 app_name=PendingCrew
-: "${PENDING_NOTARY_PROFILE:?set the notarytool Keychain profile}"
-
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+
 
 # release ref 只解析一次，后面的 worktree、产物版本戳和 tag 都钉同一个完整 commit。
 # 默认仍发 main，保住原来的零参数调用；需要从已审核的 commit/tag 发时显式传 ref。
 [ "$#" -le 1 ] || {
-  echo "用法: PENDING_NOTARY_PROFILE=<profile> $0 [release-ref]" >&2
+  echo "用法: $0 [release-ref]（公证凭据见 scripts/release/notary-credentials.sh）" >&2
   exit 2
 }
+# 公证凭据：三条路（显式 key / ~/.appstoreconnect/pendingbot.env / 钥匙串 profile），
+# 挑法和「先认证再构建」都在这一处，见该文件顶上的注释。
+. "$root/scripts/release/notary-credentials.sh"
+notary_resolve
+
 release_ref=${1:-main}
 release_commit=$(git -C "$root" rev-parse --verify "$release_ref^{commit}" 2>/dev/null) || {
   echo "release ref '$release_ref' 不能解析成 commit，拒绝构建" >&2
@@ -330,7 +335,7 @@ archive="$release_dir/$app_name-$version.zip"
 # 现在送公证的那份落在快照临时目录里，**只有 staple 之后才往 feed 目录写**。
 notarize_zip="$snap/$app_name-$version.notarize.zip"
 /usr/bin/ditto -c -k --keepParent "$app" "$notarize_zip"
-xcrun notarytool submit "$notarize_zip" --keychain-profile "$PENDING_NOTARY_PROFILE" --wait
+notary_submit "$notarize_zip"
 xcrun stapler staple "$app"
 /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 

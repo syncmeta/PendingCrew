@@ -3,7 +3,7 @@
 **一句话**：只跑 `scripts/release/build-macos-update.sh`，别手搓。
 
 ```sh
-PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh [release-ref]
+scripts/release/build-macos-update.sh [release-ref]
 # 要顺带发到 R2（线上自动更新 feed）才加 PENDING_PUBLISH_R2=1
 ```
 
@@ -55,8 +55,7 @@ GitHub Release 的正文和 app 内 Sparkle 更新弹窗里那页说明，**都�
 ```sh
 # 1. 造 dmg（输入是已公证的 .zip 或 .app；dmg 自己也会签名+公证+staple）
 #    输出落在 dist/releases/pendingcrew/ —— 不是 zip 旁边，理由见下面「产物放哪」
-PENDING_NOTARY_PROFILE=pendingcrew-notary \
-  scripts/release/make-dmg.sh dist/updates/pendingcrew/PendingCrew-<版本>.zip
+scripts/release/make-dmg.sh dist/updates/pendingcrew/PendingCrew-<版本>.zip
 
 # 2. 把 tag 推上去（发版脚本已经在本地打过 tag 了）
 git push origin v<版本>
@@ -107,16 +106,24 @@ xcrun stapler validate <dmg>
 注意判 dmg 的口径（`-t open --context context:primary-signature`）和判 app 的
 （`-t install`）**不是一回事**，别拿后者去验 dmg。
 
-## 公证凭据（`PENDING_NOTARY_PROFILE`）
+## 公证凭据
 
-profile 名：**`pendingcrew-notary`**，存在**登录钥匙串**里。
+挑法和校验都在 `scripts/release/notary-credentials.sh` 一处，两个脚本都点它，
+**顺序是先显式、后约定**：
 
-2026-08-19 之前这台机器上**根本没有**这个 profile —— 于是发版脚本一次都没跑成过，
-装机的包全是手搓的，**没过公证**（`spctl` 判 `Unnotarized Developer ID`：自用没事，
-换台机器就会被拦成「无法验证开发者」）。别再走那条路。
+1. `PENDING_NOTARY_KEY` / `PENDING_NOTARY_KEY_ID` / `PENDING_NOTARY_ISSUER`
+2. `~/.appstoreconnect/pendingbot.env`（`ASC_KEY_PATH` / `ASC_KEY_ID` /
+   `ASC_ISSUER_ID`，600）—— **这台机器上走的就是这条**，不用设任何环境变量
+3. `PENDING_NOTARY_PROFILE` 钥匙串 profile（老路，仍然支持）
 
-profile 用的是本机那把 **App Store Connect API key**（团队 `M42BKJN82S`，与
-PendingBot 传 TestFlight 是同一把；公证是这把 key 的正当用途）。重建方法：
+用的都是那把 **App Store Connect API key**（团队 `M42BKJN82S`，与 PendingBot 传
+TestFlight 是同一把；公证是这把 key 的正当用途）。具体的 key-id / issuer / `.p8`
+**不写进仓库**，在本机 `~/.appstoreconnect/` 下；换机器时问人要。
+
+**为什么不再钉死在钥匙串 profile 上**：2026-09-13 发 0.1.37 时它凭空不见了
+（`No Keychain password item found`），而同一把 profile 前一天 15:18Z 刚公证过
+0.1.36。钥匙串条目是本机状态，会没、而且没的时候不留痕迹；profile 本来也只是那把
+key 的一层缓存，直接用 key 少绕一层。想重建 profile 仍然可以：
 
 ```sh
 xcrun notarytool store-credentials "pendingcrew-notary" \
@@ -124,12 +131,13 @@ xcrun notarytool store-credentials "pendingcrew-notary" \
   --key-id <KEYID> --issuer <ISSUER-UUID>
 ```
 
-`<KEYID>` / `<ISSUER-UUID>` / `.p8` 的具体值**不写进仓库**。它们在本机
-`~/.appstoreconnect/` 下；换机器时问人要，别贴进任何聊天或提交。
+`notary_resolve` 会在**开始构建之前**拿挑中的凭据跑一次 `notarytool history`
+（只读、几秒）。它挡的是「构建十几分钟之后才发现凭据是坏的」。
 
-验证 profile 活着：`xcrun notarytool history --keychain-profile pendingcrew-notary`。
-
-**公证失败或卡住就停下来说**，不要退回「关掉公证先装上」—— 那正是上面那个洞。
+2026-08-19 之前这台机器上根本没有公证凭据 —— 于是发版脚本一次都没跑成过，装机的包
+全是手搓的、**没过公证**（`spctl` 判 `Unnotarized Developer ID`：自用没事，换台机器
+就会被拦成「无法验证开发者」）。**公证失败或卡住就停下来说**，不要退回「关掉公证先
+装上」—— 那正是上面那个洞。
 
 ## build 号
 

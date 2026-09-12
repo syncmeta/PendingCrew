@@ -1,5 +1,7 @@
 #!/bin/sh
-# 用法: PENDING_NOTARY_PROFILE=pendingcrew-notary \
+# 用法: scripts/release/make-dmg.sh <app-or-zip> [outdir]
+#       （公证凭据见 scripts/release/notary-credentials.sh）
+# 旧写法仍然支持: PENDING_NOTARY_PROFILE=pendingcrew-notary \
 #       scripts/release/make-dmg.sh <PendingCrew.app 或 .zip> [输出目录]
 #
 # 把一个**已经签名+公证+staple 好**的 .app 装进 .dmg，再把 dmg 自己也签名 +
@@ -20,11 +22,14 @@
 set -eu
 
 app_name=PendingCrew
-: "${PENDING_NOTARY_PROFILE:?set the notarytool Keychain profile}"
 src=${1:?usage: make-dmg.sh <app-or-zip> [outdir]}
 [ -e "$src" ] || { echo "找不到 $src" >&2; exit 2; }
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+
+# 公证凭据的挑法 + 「先认证再干活」都在这一处，见该文件顶上的注释。
+. "$root/scripts/release/notary-credentials.sh"
+notary_resolve
 
 # 默认**不**输出到输入文件旁边（那是 dist/updates/pendingcrew/ —— Sparkle
 # generate_appcast 的扫描目录）。dmg 只给 GitHub Release 用，Sparkle 只吃 zip；
@@ -74,7 +79,7 @@ hdiutil create -volname "$app_name $version" -srcfolder "$stage" \
 
 identity=${PENDING_SIGN_IDENTITY:-Developer ID Application: Yanze Tan (M42BKJN82S)}
 codesign --sign "$identity" --timestamp --force "$dmg"
-xcrun notarytool submit "$dmg" --keychain-profile "$PENDING_NOTARY_PROFILE" --wait
+notary_submit "$dmg"
 xcrun stapler staple "$dmg"
 
 # —— 出门前自查。`-t open --context context:primary-signature` 是 Gatekeeper

@@ -654,7 +654,7 @@ xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
 ### 7.2 发版：一条命令，六道断言
 
 ```sh
-PENDING_NOTARY_PROFILE=pendingcrew-notary scripts/release/build-macos-update.sh [release-ref]
+scripts/release/build-macos-update.sh [release-ref]
 # 要顺带发到线上自动更新 feed 才加 PENDING_PUBLISH_R2=1
 ```
 
