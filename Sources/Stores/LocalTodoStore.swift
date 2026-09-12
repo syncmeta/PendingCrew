@@ -266,7 +266,15 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 没有新造第三种读法：底下仍然是 `MultiProcessJSONStore.loadRowsLocked`
     /// 加它本来就有的 `onIncident`，这里只是顺手把「响过没有」记下来。
     func read(crewId: String) -> LedgerRead {
-        withFileLock(crewId) {
+        // ⚠️ **补发不能只挂在写路径上。** 第一版就是那样：`add` 成功时才补。
+        // 可那意味着一个 crew 只要之后不再提新的 Todo，存下来的那几条就**永远补不回来
+        // 也永远看不见** —— 它们不在 `list` 里，人类面板上一条都不显示。
+        // 「存下来了」于是变成另一种形式的丢，而且更难发现：回执还说过会自动补。
+        //
+        // 所以读也补。代价是这条读路径在有积压时会写一次盘（只在有积压时，
+        // 平时只多一次目录探测），换来的是**补发不依赖任何人再说一句话**。
+        recoverSpooledIfAny(crewId: crewId)
+        return withFileLock(crewId) {
             var hadIncident = false
             let rows = MultiProcessJSONStore.loadRowsLocked(
                 LocalTodoItem.self, at: fileURL(crewId),
@@ -695,6 +703,25 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 返回空表，光靠 `liveIndexLocked` 找不到 #N 就返回 nil 的话，回执会说「找不到
     /// 这条 Todo」—— 听起来像人类删过，其实是列表读不出来。过闸后至少归档 + 白板
     /// 警示，群里看得见真正的原因。
+    /// 有积压就补一次。**先便宜地看一眼有没有**（列目录在这类故障里也是通的），
+    /// 没有就什么都不做 —— 别让每次读都去抢文件锁。
+    private func recoverSpooledIfAny(crewId: String) {
+        let names = (try? FileManager.default.contentsOfDirectory(
+            atPath: requestSpoolDirectory.path)) ?? []
+        guard names.contains(where: { $0.hasPrefix(crewId + ".") && $0.hasSuffix(".json") })
+        else { return }
+        withFileLock(crewId) {
+            var rows = loadLocked(crewId)
+            // 账这一刻还是读不动 —— 原地不动，下次再说。**绝不能在这里落号**：
+            // 拿一张空表算出来的 #N 会跟盘上真实的号撞车。
+            guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return }
+            let before = rows.count
+            drainRequests(crewId: crewId, rows: &rows)
+            guard rows.count > before else { return }
+            _ = saveLocked(crewId: crewId, rows: rows)
+        }
+    }
+
     // MARK: - 账读不动时把请求先存着（2026-09-12）
 
     private var requestSpoolDirectory: URL {

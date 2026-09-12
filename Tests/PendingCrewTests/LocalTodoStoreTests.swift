@@ -544,4 +544,46 @@ final class LocalTodoStoreTests: XCTestCase {
                        "补了两遍")
     }
 
+
+    /// **补发不能只挂在写路径上。** 第一版就是那样，而那意味着一个 crew 只要之后不再
+    /// 提新的 Todo，存下来的那几条就永远补不回来、也永远看不见 —— 它们不在 `list` 里，
+    /// 人类面板上一条都不显示。「存下来了」于是变成另一种形式的丢，而且更难发现：
+    /// 回执还说过会自动补。
+    ///
+    /// 所以这一条只做一件事：**只读，不写**，看它回不回得来。
+    func testSpooledRequestsComeBackOnAPlainReadWithNoFurtherWrites() throws {
+        let dir = tempDir(), crew = "c-readback"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+        _ = s.add(crewId: crew, text: "断网期提的")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+
+        // 从这里往下**一次写都没有** —— 只是看一眼账。
+        let rows = s.list(crewId: crew)
+        XCTAssertEqual(rows.map(\.text), ["开张第一条", "断网期提的"],
+                       "只读不写就补不回来 —— 这个 crew 要是不再提新的，它就永远看不见")
+        XCTAssertEqual(rows.map(\.number), [1, 2])
+
+        let left = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox-todos").path)) ?? []
+        XCTAssertTrue(left.isEmpty, "补完没清掉：\(left)")
+    }
+
+    /// 账还没恢复的时候去读，**绝不能落号** —— 拿一张空表算出来的 #N 会跟盘上
+    /// 真实的号撞车，而撞车之后两条 Todo 共用一个号，回应打在哪条都说不准。
+    func testReadWhileStillUnreadableDoesNotAssignNumbers() throws {
+        let dir = tempDir(), crew = "c-nonum"
+        let url = try makeLedgerUnreadable(dir, crew: crew)
+        let s = LocalTodoStore(directory: dir)
+        _ = s.add(crewId: crew, text: "断网期提的")
+
+        XCTAssertEqual(s.read(crewId: crew), .unreadable, "前置：这会儿就该是读不出来")
+        let stillSpooled = (try? FileManager.default.contentsOfDirectory(
+            atPath: dir.appendingPathComponent("outbox-todos").path)) ?? []
+        XCTAssertEqual(stillSpooled.count, 1, "账还没好就把它落号了 —— 号会跟盘上的撞车")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        XCTAssertEqual(s.list(crewId: crew).map(\.number), [1, 2], "恢复后才落，且接着盘上的号")
+    }
+
 }
