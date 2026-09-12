@@ -17,6 +17,15 @@ final class ViewWiringTests: XCTestCase {
     private static let wirings: [(symbol: String, definedIn: String, impact: String)] = [
         ("TodoListPresentation.newestFirst", "TodoListPresentation.swift",
          "Todo 列表不会从新到旧排，新建的条目不在最上面"),
+        // 恢复 session 那条链（Todo #58）：印记 → 判定 → 弹窗 → 真恢复。
+        // 判定层有 18 条用例，**接线一条都没有** —— 而这条链最容易断的正是接线：
+        // 判定照样全绿，而人重启之后什么都不会被问、也什么都不会恢复。
+        ("SessionRestoreOffer.decide", "SessionRestoreOffer.swift",
+         "重启后不再判「上次是怎么结束的」，那枚退出印记写了没人读，恢复永远不触发"),
+        ("SessionRestoreOffer.afterBackendReplaced", "SessionRestoreOffer.swift",
+         "「刚更新过」那一路不再问，换完后端 session 静默全丢"),
+        ("restoreSessions(", "CrewSessionRunner.swift",
+         "人点了「恢复」也没有任何东西被拉起来 —— 弹窗成了一个空按钮"),
         ("CrewTodoStatusCircle(", "CrewTodoStatusCircle.swift",
          "Todo 行还是旧的方块状态标签，没有提醒事项那种圆圈/呼吸"),
         ("CrewTodoDetailWindowPresenter.shared", "CrewTodoDetailWindow.swift",
