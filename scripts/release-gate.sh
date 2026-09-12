@@ -221,9 +221,12 @@ echo "--- 闸门自己留下的（不自动回收）---"
 echo "本趟：$WT 和 $LOG"
 # 清单和计数出自同一次 `ls` —— 数是从名单里数出来的，两者结构上不可能对不上。
 # （报「N 份」却另起一路去数，正是把名单和计数分家；分了家，错的通常是名单。）
-ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | sed 's|^|  |'
+# 排掉两类**不是闸门趟次**的目录：`-log` 是本趟自己的日志目录；`-dd` 是有人手工
+# 跑构建时按同样前缀放的 DerivedData。不排的话它们会被数进「共 N 趟」——
+# 清单和计数出自同一次 ls 保证了两者不打架，但**不保证这次 ls 圈对了东西**。
+ls -d /tmp/pcw-* 2>/dev/null | grep -vE -- '-(log|dd)$' | sed 's|^|  |'
 printf '共 %s 趟，合计 %s（含各自的 -log 目录）\n' \
-  "$(ls -d /tmp/pcw-* 2>/dev/null | grep -v -- '-log$' | wc -l | tr -d ' ')" \
+  "$(ls -d /tmp/pcw-* 2>/dev/null | grep -vE -- '-(log|dd)$' | wc -l | tr -d ' ')" \
   "$(du -shc /tmp/pcw-* 2>/dev/null | tail -1 | awk '{print $1}')"
 echo "  合计里的大头是每趟归档的 xcresult（-log/*.xcresult，约 130 MB/趟）——"
 echo "  DerivedData 跑完就扔了（它是那 130 MB 的 16 倍，留着不值）。"
