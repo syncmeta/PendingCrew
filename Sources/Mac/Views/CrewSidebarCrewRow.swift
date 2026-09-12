@@ -340,7 +340,9 @@ struct CrewStatusDotView: View {
                     hasHealthIssue: $0.health != nil,
                     // `awaitingReply` 仍留在信号快照供其它状态消费，但 Todo #71 起不再
                     // 把“等回复”当错误染红；要人处理的事由人类 Todo 黄点表达。
-                    isAwaitingReply: $0.awaitingReply != nil)
+                    isAwaitingReply: $0.awaitingReply != nil,
+                    // 卡在终端那个等人选的框上 —— 人类 2026-09-12 要求它染红不染黄。
+                    isBlockedOnTerminalChoice: $0.pendingDecision != nil)
             },
             attention: attention)
     }
