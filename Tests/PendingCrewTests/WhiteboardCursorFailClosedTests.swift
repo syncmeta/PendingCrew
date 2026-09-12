@@ -365,4 +365,53 @@ final class WhiteboardCursorFailClosedTests: XCTestCase {
         XCTAssertEqual(WhiteboardCursor(directory: dir, crewId: "c", sessionId: "s").read(),
                        .anchored(.init(id: "legacy-id", createdAt: nil)))
     }
+
+    // MARK: - 白板读不出来那一拍：不投、不推、不 resync（2026-09-12）
+
+    /// 读失败时 `list` 回的是**一行只存在于内存**的警示。把它当消息投出去、再把游标
+    /// 推到它身上，游标就钉在一个磁盘上不存在的 id 上 —— 正是 #595 那个病。
+    ///
+    /// **更坏的是那条警示的时间戳是「此刻」**：悬空之后走时间戳兜底，比它旧的消息
+    /// 一律被判成「已投过」，于是**故障窗口里别人写进来的消息在恢复之后被静默跳过**。
+    func test_白板读不出来时_不投也不推游标() throws {
+        let dir = tempDir()
+        let crewId = "local-unreadable-board"
+        seed([msg("真内容", at: "2026-09-12T00:00:00Z", id: "real-1")], crewId: crewId, in: dir)
+        let board = dir.appendingPathComponent("\(crewId).json")
+        try FileManager.default.setAttributes([.posixPermissions: 0],
+                                              ofItemAtPath: board.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                   ofItemAtPath: board.path)
+        }
+        XCTAssertThrowsError(try Data(contentsOf: board),
+                             "前置条件没成立：白板仍读得出来，这条断言不算数")
+
+        let store = LocalWhiteboardStore(directory: dir)
+        let rows = store.list(crewId: crewId)
+        XCTAssertNotNil(LocalWhiteboardStore.readFailure(in: rows),
+                        "前置条件没成立：list 没回那条读失败警示，拿到的是 \(rows.count) 行")
+
+        let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-unreadable")
+        let unread = cursor.unread(in: store)
+        XCTAssertTrue(unread.messages.isEmpty,
+                      "把那条内存警示当成新消息投出去了：\(unread.messages.map { $0.id })")
+        XCTAssertEqual(cursor.read(), .absent,
+                       "白板读不出来的那一拍居然把游标写下去了 —— 它只可能钉在那条不存在的行上")
+    }
+
+    /// 第二道：就算调用方直接拿着那条警示来推，也不许写。
+    func test_绝不把游标推到那条内存警示上() {
+        let dir = tempDir()
+        let crewId = "local-never-pin-warning"
+        let warning = msg("白板文件存在但暂时无法读取", at: "2026-09-12T08:00:00Z",
+                          id: LocalWhiteboardStore.readFailureRowId)
+        seed([warning], crewId: crewId, in: dir)
+        let store = LocalWhiteboardStore(directory: dir)
+        let cursor = WhiteboardCursor(directory: dir, crewId: crewId, sessionId: "sess-never-pin")
+        cursor.advance(to: warning, in: store)
+        XCTAssertEqual(cursor.read(), .absent,
+                       "游标被推到了 whiteboard-read-failure —— 磁盘上没有这个 id，当场悬空")
+    }
+
 }

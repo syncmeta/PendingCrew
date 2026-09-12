@@ -171,6 +171,15 @@ struct WhiteboardCursor {
     /// 攒出几百条，上限不能只有首次那一份。
     func unread(in store: LocalWhiteboardStore) -> Unread {
         let all = store.list(crewId: crewId)
+        // 白板整份读不出来时 `list` 回的是**一行内存警示**（磁盘上没有这条）。
+        // 不认它的话有两条路都会坏：
+        //   ① `.absent` 那支把它当成一条新消息投出去，调用方随后 `advance` 到它身上
+        //      —— **游标就钉在一个磁盘上不存在的 id 上**（#595 那个病）；
+        //   ② `.unreadable` 那支会 `resync(toTailOf:)` 到它，同样悬空。
+        // 更坏的是那条警示的时间戳是**此刻**：悬空之后走时间戳兜底，比它旧的消息
+        // 一律被当成「已投过」，于是**故障窗口里别人写进来的消息在恢复之后被静默跳过**。
+        // 所以这一拍什么都不做：不投、不推、不 resync，留到白板读得动那一拍。
+        guard LocalWhiteboardStore.readFailure(in: all) == nil else { return .none }
         switch read() {
         case .absent:
             return capped(Array(all))
@@ -234,6 +243,10 @@ struct WhiteboardCursor {
     ///   同一批消息每次唤醒再来一遍（#595 第二个放大器）。修好锚点比守住一个
     ///   认不出的旧位置重要。
     func advance(to entry: LocalWhiteboardMessage, in store: LocalWhiteboardStore) {
+        // 绝不把游标推到那条**只存在于内存**的读失败警示上 —— 磁盘上没有这个 id，
+        // 钉上去就是当场悬空。上面 `unread` 已经不会把它交出来了，这里是第二道：
+        // 调用方不止一个，而这一步一旦写下去就是持久的。
+        guard entry.id != LocalWhiteboardStore.readFailureRowId else { return }
         let target = WhiteboardCursorPosition(id: entry.id, createdAt: entry.createdAt)
         withCursorLock {
             let all = store.list(crewId: crewId)
