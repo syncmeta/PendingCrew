@@ -128,12 +128,17 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     /// 启动参数没被 CLI 接受的首屏扫描器（Todo #36）。只在拉起窗口内活着，
     /// 过期/报完两类就置 nil 停扫。没显式传 model/effort 时压根不建。
     private var launchParameterScanner: SessionLaunchParameterScanner?
-    /// 开场 brief 的正文。**只在内存里**，绝不进 `config.argv()` —— argv 对本机
-    /// 任何一个 session 的 `ps` 都是公开的。
-    private var startupPrompt: String?
-    /// 开场 brief 的投递编排（P5a）。判据、重试、上限、翻 health 全在它里面；
-    /// 这里只负责喂观测量、执行动作。终局之后置 nil。
-    private var startupDelivery: StartupPromptDelivery?
+    /// 正在投的那一笔正文（开场 brief 或运行中的 steer）。**只在内存里**，绝不进
+    /// `config.argv()` —— argv 对本机任何一个 session 的 `ps` 都是公开的。
+    private var deliveringText: String?
+    /// 这一笔是什么（只影响失败时说的话与翻的 health kind，不影响任何判据）。
+    private var deliverySubject: StartupPromptDelivery.Subject = .startupBrief
+    /// 投递编排（P5a）。判据、重试、上限、终局裁决全在它里面；这里只负责喂观测量、
+    /// 执行动作。终局之后置 nil，随即取下一笔。
+    private var delivery: StartupPromptDelivery?
+    /// 还没轮到的 steer。**一次只投一笔** —— 两笔同时往同一个输入框写会叠成一段谁也
+    /// 看不懂的东西，而重投时那下 Ctrl-U 也只清得掉一笔。
+    private var queuedTexts: [String] = []
     private var busyTimer: Timer?
 
     /// `executable` = 已 resolve 的 claude/codex 绝对路径（`.plainShell` 时是用户的
@@ -171,8 +176,9 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
 
         if mode == .agent, config.kind == .claudeCode,
            let prompt = config.initialPrompt, !prompt.isEmpty {
-            startupPrompt = prompt
-            startupDelivery = StartupPromptDelivery()
+            deliveringText = prompt
+            deliverySubject = .startupBrief
+            delivery = StartupPromptDelivery(subject: .startupBrief)
         }
 
         var opts = TerminalOptions.default
@@ -219,7 +225,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
                     // 开场 brief 的投递也挂在这一拍上：判据要回读画面，而画面在
                     // 「TUI 画完就安静下来」之后不再产生 PTY 字节 —— 只挂在
                     // dataReceived 上会永远停在最后一批字节那一刻。
-                    self?.stepStartupPromptDelivery()
+                    self?.stepPromptDelivery()
                     // canScroll/thumbSize 会因输出增长而变，但只在 yDisp 变化时才有 scrolled
                     // 回调；顶到底持续吐字时 yDisp 每行都动能覆盖，静止但 buffer 变化的边角用
                     // 轮询兜一层（非用户主动，只同步几何不点亮）。
@@ -246,8 +252,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     }
 
     private func handleProcessTerminated(exitCode: Int32?) {
-        startupDelivery = nil
-        startupPrompt = nil
+        abandonDeliveries(reason: "进程退出", report: true)
         switch mode {
         case .plainShell:
             Task { @MainActor [weak self] in
@@ -285,20 +290,24 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         if mode == .agent { scanOutput(slice) }
         onOutput?(slice)
         protocolOutputSink?(Array(slice))
-        stepStartupPromptDelivery()
+        stepPromptDelivery()
     }
 
-    /// 开场 brief 投递的一拍（P5a）。判据全在 `StartupPromptDelivery` 里，这里只
-    /// 负责**喂它权威缓冲区当前长什么样**、把它裁决的动作执行掉。
+    /// 正文投递的一拍（P5a）。判据全在 `StartupPromptDelivery` 里，这里只负责
+    /// **喂它权威缓冲区当前长什么样**、把它裁决的动作执行掉。
+    ///
+    /// 开场 brief 与运行中的 steer 走的是**同一台机器**：两者投不进去的样子一模一样
+    /// （首屏重绘吞掉正文 / 回车被模态吃掉 / 输入框压根没画出来），没有理由为它们写
+    /// 两套判据 —— 写两套的那次代价就是 `send` 那条路一条判据都没有。
     ///
     /// 这个函数是幂等的、可以被高频调用：每笔 PTY 输出一次 + 0.6s 轮询一次。没事做
-    /// 的时候它返回 `.idle`，成本只有一次画面渲染 —— 而且只在开场那一小段有 delivery
-    /// 挂着的时候才走到这里（`startupDelivery` 为 nil 时第一行就短路）。
-    private func stepStartupPromptDelivery() {
-        guard var delivery = startupDelivery, let prompt = startupPrompt,
+    /// 的时候它返回 `.idle`，成本只有一次画面渲染 —— 而且只在真有东西待投的时候才走
+    /// 到这里（`delivery` 为 nil 时第一行就短路）。
+    private func stepPromptDelivery() {
+        guard var machine = delivery, let prompt = deliveringText,
               status == .running else { return }
         let rows = screenRows()
-        let action = delivery.step(StartupPromptDelivery.Observation(
+        let action = machine.step(StartupPromptDelivery.Observation(
             inputRow: ClaudeInputBox.inputRow(rows),
             bodyVisible: ClaudeInputBox.bodyTailVisible(prompt: prompt, rows: rows),
             // 对话框判定**不复用** `pendingDecision`：那台跟踪器吃的是去 ANSI 的
@@ -306,7 +315,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
             // 是瞎的（理由与实测证据见 `ClaudeInputBox.blockingDialog`）。
             dialogPresent: ClaudeInputBox.blockingDialog(rows) != nil,
             now: Date()))
-        startupDelivery = delivery.isFinished ? nil : delivery
+        delivery = machine.isFinished ? nil : machine
 
         switch action {
         case .idle:
@@ -321,6 +330,10 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
             // 仍可能只结束 paste 而不提交；真实 daemon 现场连续三次 Enter 都被吃掉，
             // 再补一个普通字符后才恢复按键语义。这里先发一个空格再删掉（输入行判据
             // 会 trim，因此不会误判提交；最终正文也逐字不变），隔一拍再发 Enter。
+            //
+            // ⚠️ 这个 `Task` **允许被丢**：它丢了只意味着这一次 Enter 没发出去，
+            // 下一拍回读画面会发现输入行没变，于是照常重试、到顶照常翻 health。
+            // 「fire-and-forget 之后没人回看」才是坏的那一半，而那一半在上面。
             inject([0x20])
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -330,16 +343,65 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
                 guard self.status == .running else { return }
                 self.inject([0x0d])
             }
-        case let .blockedByDialog(detail):
-            health = CrewSessionHealth(kind: .briefUndelivered, detail: detail)
-        case let .notReady(detail), let .undelivered(detail), let .unsubmitted(detail):
-            health = CrewSessionHealth(kind: .briefUndelivered, detail: detail)
+        case let .blockedByDialog(detail), let .notReady(detail),
+             let .undelivered(detail), let .unsubmitted(detail):
+            finishDelivery(failure: detail)
         case .delivered:
-            startupPrompt = nil
-            // 之前报过的「没送到」是过期消息了（典型路径：先卡在信任对话框上、
-            // 有人代答之后 brief 自己补投成功）。留着它会让点名一直谎报异常。
-            if health?.kind == .briefUndelivered { health = nil }
+            finishDelivery(failure: nil)
         }
+    }
+
+    /// 这一笔有了终局裁决 —— 报账（或清掉过期的报账），然后取下一笔。
+    private func finishDelivery(failure: String?) {
+        let kind: CrewSessionHealth.Kind =
+            deliverySubject == .startupBrief ? .briefUndelivered : .promptUndelivered
+        if let failure {
+            health = CrewSessionHealth(kind: kind, detail: failure)
+        } else if health?.kind == kind {
+            // 之前报过的「没送到」是过期消息了（典型路径：先卡在信任对话框上、
+            // 有人代答之后它自己补投成功）。留着会让点名一直谎报异常。
+            health = nil
+        }
+        deliveringText = nil
+        delivery = nil
+        startNextQueuedDelivery()
+    }
+
+    /// 排队里还有就接着投。**失败也接着投下一笔** —— 上一笔没送到是上一笔的账，
+    /// 把后面的一起扣住只会让「丢了几条」变得更难数。
+    private func startNextQueuedDelivery() {
+        guard delivery == nil, !queuedTexts.isEmpty, status == .running else { return }
+        beginDelivery(queuedTexts.removeFirst(), subject: .steer)
+    }
+
+    private func beginDelivery(_ text: String, subject: StartupPromptDelivery.Subject) {
+        deliveringText = text
+        deliverySubject = subject
+        delivery = StartupPromptDelivery(subject: subject)
+    }
+
+    /// 进程没了 / session 被停：手上这笔和排队的都投不出去了。
+    ///
+    /// `report: true` 时**必须留下一条账** —— 每一笔都是别人以为已经送到的一条指令，
+    /// 静默丢掉正是这次要修的病。开场 brief 那笔不在这里报：它有 `launchFailed` /
+    /// `briefUndelivered` 两条自己的路，重复报只会刷屏。
+    private func abandonDeliveries(reason: String, report: Bool) {
+        var lost = queuedTexts
+        if deliverySubject == .steer, let inFlight = deliveringText { lost.insert(inFlight, at: 0) }
+        delivery = nil
+        deliveringText = nil
+        queuedTexts = []
+        guard report, !lost.isEmpty else { return }
+        health = CrewSessionHealth(
+            kind: .promptUndelivered,
+            detail: "\(lost.count) 条指令没送到就\(reason)了，第一条开头是"
+                + "「\(Self.deliveryPreview(lost[0]))」。这些指令没有被任何人接收，需要重发。")
+    }
+
+    /// 账里给一眼能认出是哪条的长度就够 —— 正文可能是整份 brief，不往白板上倒。
+    private static func deliveryPreview(_ text: String) -> String {
+        let oneLine = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        return oneLine.count <= 40 ? oneLine : String(oneLine.prefix(40)) + "…"
     }
 
     /// 报给 PTY 的窗口尺寸。像素维度报 16×16 的常量（SwiftTerm 自带的
@@ -684,7 +746,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         // 于是此前它只会安静地卡着（今天这条 P0）。合并规则在 `poll` 的注释里。
         //
         // 画面这一份**必须挂在这里**（0.6s busyTimer），不能挂进
-        // `stepStartupPromptDelivery` —— 那个在 `startupDelivery == nil` 时第一行就
+        // `stepPromptDelivery` —— 那个在 `delivery == nil` 时第一行就
         // 短路，开场那一段过去之后就没有任何人再看屏幕上有没有框了。
         switch decisionTracker.poll(screen: screenRows()) {
         case let .appeared(d): pendingDecision = d
@@ -701,17 +763,54 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         process.send(data: bytes[...])
     }
 
-    /// 程序化发文本(prompt / steer)：先写正文，隔一拍再单发回车。
-    /// claude TUI 按字节到达时序区分「粘贴 vs 敲键」——正文+回车一笔写入会被
-    /// 整段判成粘贴，回车被吞进输入框文本 → 不提交（用户得手动按 Enter）。
-    /// 回车必须作为独立的一次按键、在粘贴判定窗口之外到达才触发提交。
+    /// 程序化发文本（定时唤醒 / 续跑 / steer）。
+    ///
+    /// ## 这里以前是什么样，以及它怎么坏的
+    ///
+    /// 旧实现是「写正文 → 起一个 `Task` 睡 200ms → 补一个回车」，而那个 `Task`
+    /// 在 `status != .running` 时直接 `return`。于是只要那一瞬 session 恰好不在跑、
+    /// 或者 claude 把这笔写入当成 paste 把回车吃掉，**正文就原样躺在输入框里，
+    /// 回车永远不来，而没有任何人知道** —— 进程活着、TUI 在重绘、点名说它「空闲」。
+    /// 2026-09-12 人类在一个 session 的输入框里看见自己没敲过的文字，问的就是这个：
+    /// 「不是我敲的。怎么会因为没提交的字而卡住？」
+    ///
+    /// 更要命的是这条路**一条判据都没有**：睡够 200ms 就闭着眼写回车，写完再不回看。
+    /// 而同一个文件里、为开场 brief 写的那台编排机（`StartupPromptDelivery`）判的正是
+    /// 同一件事，还带重试和上限。两套并存，出事的偏偏是没判据的那套。
+    ///
+    /// ## 现在
+    ///
+    /// 走**同一台编排机**：判据是回读权威缓冲区那一屏（正文进没进输入行、回车之后那
+    /// 一行变没变），不是睡够时间就下注；投不进 / 提交不掉都有上限，到顶翻
+    /// `.promptUndelivered` 把它说出来。**没有静默这条路了。**
+    ///
+    /// 同时只投一笔，其余排队：两笔一起往同一个输入框写会叠成一段谁也看不懂的东西。
     func send(_ text: String) {
-        inject(Array(text.utf8))
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            guard let self, self.status == .running else { return }
-            self.inject([0x0d])
+        guard !text.isEmpty else { return }
+        guard mode == .agent, kind == .claudeCode else {
+            // 非 claude 的 PTY agent 没有 `ClaudeInputBox` 那把尺子（它认的是 claude 的
+            // 输入框形状），判据在这里会一路判「没就绪」、到期报一条假异常。今天这条路
+            // 没有使用者（codex 走 app-server，普通 shell 走 `sendPlainShell`），保留
+            // 旧时序只是为了别在这儿静默改变行为；真要有第二种 agent 走 PTY，
+            // 该做的是给它一把自己的尺子，不是回到「睡一会儿闭眼写」。
+            inject(Array(text.utf8))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let self, self.status == .running else { return }
+                self.inject([0x0d])
+            }
+            return
         }
+        guard status == .running else {
+            // 以前这里是那个 `Task` 里的一句 `return` —— 同样的判断，只是没人听见。
+            health = CrewSessionHealth(
+                kind: .promptUndelivered,
+                detail: "一条指令没送出去：session 已经不在跑了。开头是"
+                    + "「\(Self.deliveryPreview(text))」。需要重起或改派。")
+            return
+        }
+        guard delivery == nil else { queuedTexts.append(text); return }
+        beginDelivery(text, subject: .steer)
     }
 
     /// 打断进行中的回合(Esc)。
@@ -782,8 +881,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
     func stop() {
         guard status == .running else { return }
         userStopped = true
-        startupDelivery = nil
-        startupPrompt = nil
+        // 人主动停的，没送出去的那几笔不报 —— 是人自己叫停的，不是坏了。
+        abandonDeliveries(reason: "session 被停掉", report: false)
         let pid = process.shellPid
         process.terminate()                 // SIGTERM + close PTY（但不回调 processTerminated）
         status = .exited(nil)               // ← 自己翻状态，否则 UI 永远 running

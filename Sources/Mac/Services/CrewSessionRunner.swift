@@ -2905,7 +2905,9 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// Guards double-finalize.
     private var finalized = false
     /// 已经往白板 fail-loud 过的健康异常 Kind（每 Kind 只喊一次，TUI 重绘不刷屏）。
-    private var announcedHealthKinds: Set<CrewSessionHealth.Kind> = []
+    /// 已经喊过的 health。**存的是字符串键不是 kind** —— `.promptUndelivered` 要连
+    /// detail 一起去重（见 `announce`），而其余 kind 的键就是 kind 名本身。
+    private var announcedHealthKeys: Set<String> = []
     private var statusObservation: Task<Void, Never>?
     private var workingObservation: Task<Void, Never>?
     private var typingObservation: Task<Void, Never>?
@@ -3032,7 +3034,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
                 if h != nil { self.healthAt = Date() }
                 // 后端宣布恢复（health 归 nil）→ 把额度类首报重新武装：下次真撞墙
                 // 还要能再喊一次，否则「每 Kind 只喊一次」会让恢复后的再撞墙静音。
-                if h == nil { self.announcedHealthKinds.subtract([.authRequired, .usageLimit, .rateLimited, .cliVersionIncompatible, .turnFailed]) }
+                if h == nil { self.announcedHealthKeys.subtract(Self.announceKeys(.authRequired, .usageLimit, .rateLimited, .cliVersionIncompatible, .turnFailed)) }
                 guard let h else { continue }
                 self.announce(h)
             }
@@ -3074,13 +3076,24 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         }
     }
 
+    /// kind → 去重键。非 `.promptUndelivered` 的键就是 kind 名本身，所以「撤销已喊过」
+    /// 的那几处照样按 kind 写，不用各自拼字符串。
+    private static func announceKeys(_ kinds: CrewSessionHealth.Kind...) -> Set<String> {
+        Set(kinds.map { "\($0)" })
+    }
+
     /// 健康异常 → 白板 fail-loud（每 Kind 一次，TUI 重绘不刷屏）+ 相应挂钩。
-    /// 观察循环与 `finalize` 兜底都调这里，`announcedHealthKinds` 保证只喊一次。
+    /// 观察循环与 `finalize` 兜底都调这里，`announcedHealthKeys` 保证只喊一次。
     private func announce(_ h: CrewSessionHealth) {
         guard !isMirror else { return }      // 白板 fail-loud + 续跑挂钩都归真身
-        guard !announcedHealthKinds.contains(h.kind) else { return }
-        announcedHealthKinds.insert(h.kind)
-        if h.kind == .launchFailed || h.kind == .briefUndelivered {
+        // ⚠️ 去重按 kind，**唯独 `.promptUndelivered` 连内容一起去重**。它跟别的不同：
+        // 别的异常是「这个 session 现在坏了」，报一次就够；它是「**这一条**指令没送到」，
+        // 一个 session 活着的时候可能发生很多次，每一次都是另一条丢掉的指令。
+        // 只按 kind 去重的话，第二条以后全被第一条吃掉 —— 又变回静默。
+        let dedupeKey = h.kind == .promptUndelivered ? "\(h.kind)|\(h.detail)" : "\(h.kind)"
+        guard !announcedHealthKeys.contains(dedupeKey) else { return }
+        announcedHealthKeys.insert(dedupeKey)
+        if h.kind == .launchFailed || h.kind == .briefUndelivered || h.kind == .promptUndelivered {
             // 拉起失败 = 派出去的活没人干（#541）；开场任务没送到（P5a）在机长这边
             // 是**同一件事** —— 进程活得好好的，但它一个字都没收到，活等于没派出去。
             // 两者都**定向 @ 机长**：机长看到才能立刻改派/代答，广播一条谁都不认领
@@ -3088,7 +3101,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
             // mention + question 类别），不另起炉灶。
             // 例外：**挂掉的就是机长自己**时不 @ —— @机长会触发「目标缺席拉起」，
             // 起不来又发一条，就此成环；那条广播给人看。
-            let headline = h.kind == .launchFailed ? "拉起失败" : "开场任务没送到"
+            let headline: String
+            switch h.kind {
+            case .launchFailed:      headline = "拉起失败"
+            case .briefUndelivered:  headline = "开场任务没送到"
+            default:                 headline = "一条指令没送到"
+            }
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system",
                 text: "\(displayName)（\(sessionId)）\(headline)：\(h.detail)"
@@ -3279,7 +3297,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 额度重置唤醒到点后清限额态（runner 的 `fire` 调）：health 红点熄灭、
     /// 扫描器与白板首报重新武装 —— 下个限额窗再撞墙能再次报警 + 再挂唤醒。
     func rearmQuotaHealth() {
-        announcedHealthKinds.subtract([.usageLimit, .rateLimited])
+        announcedHealthKeys.subtract(Self.announceKeys(.usageLimit, .rateLimited))
         backend.clearQuotaHealth()
     }
 

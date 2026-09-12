@@ -39,6 +39,15 @@ struct CrewSessionHealth: Equatable {
         case cliVersionIncompatible
         case turnFailed
         case briefUndelivered
+        /// **运行中的一条指令没送进输入框**（唤醒 / 续跑 / steer）。与
+        /// `briefUndelivered` 同一台编排机、同一组判据，分成两类只为一件事：
+        /// 它们要人做的事不同，而且 `announce` 是**按 kind 去重**的 —— 合在一起的话
+        /// 「开场没送到」报过一次之后，后面每一条卡在输入框里的指令都会被那次去重吃掉。
+        ///
+        /// 这一类的坏法最安静：进程活着、TUI 在重绘、点名说它「空闲」，而输入框里
+        /// 躺着一段没人敲过的字。2026-09-12 人类就是这么发现它的
+        /// （「不是我敲的。怎么会因为没提交的字而卡住？」）。
+        case promptUndelivered
     }
     let kind: Kind
     /// 人话说明 + 下一步动作（白板 fail-loud 消息与成员列表副行直接展示）。

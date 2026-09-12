@@ -30,6 +30,34 @@ import Foundation
 /// 纯值语义、时间由调用方喂 —— 所以整台状态机可以脱离进程单测。
 struct StartupPromptDelivery {
 
+    /// 这台机器这一笔在投什么。**只影响裁决消息的措辞，不影响任何一条判据** ——
+    /// 两种正文投不进去的样子一模一样，该说的下一步却完全不同：
+    /// - 开场 brief 没送到 = 派出去的活等于没派出去，机长要改派或重起；
+    /// - 运行中的 steer 没送到 = **一条指令卡在输入框里，而 session 从外面看完全正常**。
+    ///   2026-09-12 人类在一个 session 的输入框里看到自己没敲过的文字，就是这一种。
+    enum Subject: Equatable {
+        case startupBrief
+        case steer
+
+        /// 消息里对这笔正文的称呼。
+        var noun: String {
+            switch self {
+            case .startupBrief: return "开场任务"
+            case .steer:        return "这条指令"
+            }
+        }
+
+        /// 「彻底没送到」时的下一步。两者要人做的事不同。
+        var lostTail: String {
+            switch self {
+            case .startupBrief:
+                return "这个 session 一个字都没收到，派给它的活等于没派出去——请改派或重起。"
+            case .steer:
+                return "session 本身是好的、屏幕上也有字，但它没收到这条——需要有人重发。"
+            }
+        }
+    }
+
     /// 三个上限。默认值的理由写在各自旁边；调小只该发生在测试里。
     struct Timing: Equatable {
         /// 等输入框就绪的总期限。claude 画完 banner + 输入框远早于此（MCP server
@@ -109,6 +137,7 @@ struct StartupPromptDelivery {
     }
 
     let timing: Timing
+    let subject: Subject
     private var phase: Phase = .awaitingReady
     /// 等就绪的起点；被对话框挡住期间会往后推 —— 卡在等人身上不该再算进「没就绪」。
     private var readinessSince: Date
@@ -117,8 +146,9 @@ struct StartupPromptDelivery {
     private var reportedDialog = false
     private var reportedNotReady = false
 
-    init(timing: Timing = .default, startedAt: Date = Date()) {
+    init(timing: Timing = .default, subject: Subject = .startupBrief, startedAt: Date = Date()) {
         self.timing = timing
+        self.subject = subject
         self.readinessSince = startedAt
     }
 
@@ -140,9 +170,9 @@ struct StartupPromptDelivery {
                 guard !reportedDialog else { return .idle }
                 reportedDialog = true
                 return .blockedByDialog(
-                    "开场任务没投出去：首屏是一个需要人回答的对话框（信任此文件夹 / 命令审批这类），"
-                    + "brief 投进去会被当成按键吃掉。用 inspect_session 看现场、nudge_session 代答，"
-                    + "答完它会自己把开场任务补投出去。")
+                    "\(subject.noun)没投出去：屏幕上摆着一个需要人回答的对话框（信任此文件夹 / "
+                    + "命令审批这类），正文投进去会被当成按键吃掉。用 inspect_session 看现场、"
+                    + "nudge_session 代答，答完它会自己补投出去。")
             }
             dialogSince = nil
             if let row = obs.inputRow {
@@ -157,7 +187,7 @@ struct StartupPromptDelivery {
                   !reportedNotReady else { return .idle }
             reportedNotReady = true
             return .notReady(
-                "开场任务还没投出去：TUI 在吐输出，但等了 \(Int(timing.readinessDeadline))s "
+                "\(subject.noun)还没投出去：TUI 在吐输出，但等了 \(Int(timing.readinessDeadline))s "
                 + "也没在画面上等到输入框。用 inspect_session 看它停在哪一屏。")
 
         case let .writing(attempt, notBefore, deadline, baseline):
@@ -183,9 +213,8 @@ struct StartupPromptDelivery {
             guard attempt < timing.maxAttempts else {
                 phase = .finished
                 return .undelivered(
-                    "开场任务没送到：正文写了 \(attempt) 次，回读权威缓冲区确认输入行始终是空的"
-                    + "（首屏重绘把它吞了）。这个 session 一个字都没收到，派给它的活等于没派出去——"
-                    + "请改派或重起。")
+                    "\(subject.noun)没送到：正文写了 \(attempt) 次，回读权威缓冲区确认输入行始终是空的"
+                    + "（重绘把它吞了）。" + subject.lostTail)
             }
             phase = .writing(
                 attempt: attempt + 1,
@@ -205,8 +234,9 @@ struct StartupPromptDelivery {
             guard attempt < timing.maxAttempts else {
                 phase = .finished
                 return .unsubmitted(
-                    "开场任务卡在输入框里没提交：正文已经进去了，但回车发了 \(attempt) 次都没被接受"
-                    + "（多半有个模态挡在前面）。用 inspect_session 看现场。")
+                    "\(subject.noun)卡在输入框里没提交：正文已经进去了，但回车发了 \(attempt) 次"
+                    + "都没被接受（多半有个模态挡在前面）。**输入框里那段没人敲过的字就是它** —— "
+                    + "用 inspect_session 看现场，代答掉挡路的框，或按 Ctrl-U 清掉再重发。")
             }
             phase = .submitting(
                 attempt: attempt + 1,

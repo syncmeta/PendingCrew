@@ -178,11 +178,123 @@ final class StartupPromptDeliveryTests: XCTestCase {
         XCTAssertTrue(core.isProcessRunning, "只报不答：现场要留着给 inspect_session")
     }
 
+    // MARK: - ⑤ 运行中的 steer 走同一台机器（#15）
+
+    /// **人类 2026-09-12 报的那条**：在一个 session 的输入框里看见自己没敲过的文字，
+    /// session 就那么卡着 ——「不是我敲的。怎么会因为没提交的字而卡住？」
+    ///
+    /// 病根在旧的 `send(_:)`：写完正文起一个 `Task` 睡 200ms 再补回车，而那个 Task
+    /// 在 `status != .running` 时直接 `return`；claude 把整笔当成 paste 时回车也会被
+    /// 吞掉。两种情况下正文都原样躺在输入框里，**而没有任何人回看一眼**。
+    ///
+    /// 这一条钉的是：steer 必须**被提交**，不是「被打进去」。假 TUI 只有真的读到一
+    /// 整行才会回显 `GOT:` —— 字进了输入框但没提交时，它一个字都不会回。
+    ///
+    /// ⚠️ **这条的边界（实测，不是推论）**：把 `send` 换回旧的 fire-and-forget 实现
+    /// 跑一趟，本组四条新测里三条变红，**这一条照样绿**。原因是假 TUI 不模拟 claude 的
+    /// 「粘贴 vs 敲键」判定，旧实现那笔 `正文 + 200ms 后回车` 在它面前是能成的。
+    /// 所以它**不是**挡住这条 bug 的那把尺子 —— 挡住的是下面三条（没落地要报、
+    /// 两笔要排队、已退出要报）。留着它是为了防新实现自己走丢，不是为了防旧实现回来。
+    func testSteerIsSubmittedNotJustTypedIntoTheBox() async throws {
+        let script = try makeFakeTui(mode: "normal", readyDelay: 0)
+        let core = makeCore(script: script, prompt: nil, withBrief: false)
+        defer { core.stop() }
+
+        let ready = await waitUntil(10) { ClaudeInputBox.inputRow(core.screenRows()) != nil }
+        XCTAssertTrue(ready, "假 TUI 的输入框没画出来，后面测什么都不算数")
+        core.send(marker)
+
+        let submitted = await waitUntil(20) {
+            core.screenText(maxLines: 60).contains("GOT:\(self.marker)")
+        }
+        XCTAssertTrue(
+            submitted,
+            """
+            steer 没被提交 —— 正文多半正躺在输入框里等人手动按回车，而这正是人类看到的\
+            「不是我敲的字」。当前画面：
+            \(core.screenText(maxLines: 60))
+            """)
+        XCTAssertNil(core.health, "正常送达不该翻 health")
+    }
+
+    /// 送不进去时**不许静默**。旧 `send` 在这里一个字都不报：写完就走，没人回看。
+    ///
+    /// 这条同时钉住 kind 必须是 `.promptUndelivered` 而不是 `.briefUndelivered` ——
+    /// 两者共用一台编排机，但 `announce` 是按 kind 去重的，合成一类的话第二条以后
+    /// 全被第一条吃掉，又变回静默。
+    func testRaisesHealthWhenASteerNeverLands() async throws {
+        let script = try makeFakeTui(mode: "deaf", readyDelay: 0)
+        let core = makeCore(script: script, prompt: nil, withBrief: false)
+        defer { core.stop() }
+
+        let ready = await waitUntil(10) { ClaudeInputBox.inputRow(core.screenRows()) != nil }
+        XCTAssertTrue(ready, "deaf 模式也该先把输入框画出来")
+        core.send(marker)
+
+        let raised = await waitUntil(30) { core.health != nil }
+        XCTAssertTrue(raised, "steer 反复没进输入行，却一个字都没报 —— 这正是这条 bug 的全部代价")
+        XCTAssertEqual(core.health?.kind, .promptUndelivered)
+        XCTAssertFalse(
+            core.health?.detail.contains("开场") == true,
+            "运行中的 steer 不该说成「开场任务」：\(core.health?.detail ?? "nil")")
+    }
+
+    /// 两笔同时发 → **排队，不叠**。两段正文一起往同一个输入框写会糊成一段谁也看不懂
+    /// 的东西，而重投时那下 Ctrl-U 只清得掉一笔。
+    func testConcurrentSteersAreQueuedAndBothArrive() async throws {
+        let script = try makeFakeTui(mode: "normal", readyDelay: 0)
+        let core = makeCore(script: script, prompt: nil, withBrief: false)
+        defer { core.stop() }
+
+        let ready = await waitUntil(10) { ClaudeInputBox.inputRow(core.screenRows()) != nil }
+        XCTAssertTrue(ready)
+        core.send("FIRST_\(marker)")
+        core.send("SECOND_\(marker)")
+
+        let first = await waitUntil(20) {
+            core.screenText(maxLines: 60).contains("GOT:FIRST_\(self.marker)")
+        }
+        XCTAssertTrue(first, "第一笔没到：\(core.screenText(maxLines: 60))")
+        let second = await waitUntil(20) {
+            core.screenText(maxLines: 60).contains("GOT:SECOND_\(self.marker)")
+        }
+        XCTAssertTrue(
+            second,
+            """
+            第二笔没到 —— 排队里的那笔被吞了。当前画面：
+            \(core.screenText(maxLines: 60))
+            """)
+        XCTAssertNil(core.health)
+    }
+
+    /// session 已经不在跑了还往里发 —— 旧代码就是在这一步 `return` 的，静默。
+    /// 现在它必须留下一条账：这条指令没有被任何人接收。
+    func testSendingToAnExitedSessionIsReportedNotDropped() async throws {
+        let script = try makeFakeTui(mode: "normal", readyDelay: 0)
+        let core = makeCore(script: script, prompt: nil, withBrief: false)
+        core.stop()
+        let exited = await waitUntil(5) { core.status != .running }
+        XCTAssertTrue(exited)
+
+        core.send(marker)
+        XCTAssertEqual(
+            core.health?.kind, .promptUndelivered,
+            "往一个已经退出的 session 发指令，必须报出来而不是悄悄丢掉")
+        XCTAssertTrue(
+            core.health?.detail.contains(marker) == true,
+            "账里要能看出丢的是哪条：\(core.health?.detail ?? "nil")")
+    }
+
     // MARK: - 器材
 
-    private func makeCore(script: String, prompt: String? = nil) -> AgentSessionCore {
+    /// `withBrief: false` = 压根不给开场正文，于是开场那台投递机不会起 ——
+    /// 运行中 steer 的那几条要的正是一个「已经在跑、手上没活」的 core。
+    private func makeCore(
+        script: String, prompt: String? = nil, withBrief: Bool = true
+    ) -> AgentSessionCore {
         AgentSessionCore(
-            config: SessionConfig(kind: .claudeCode, initialPrompt: prompt ?? marker),
+            config: SessionConfig(
+                kind: .claudeCode, initialPrompt: withBrief ? (prompt ?? marker) : nil),
             mode: .agent,
             executable: script,
             workdir: NSTemporaryDirectory(),
