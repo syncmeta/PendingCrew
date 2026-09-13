@@ -1029,36 +1029,49 @@ final class CrewStore: ObservableObject {
     /// **发不出去时也要有话** —— 一个按了没反应的按钮比没有按钮更糟。
     @Published var chiefResortNote: String?
 
-    /// 请总机长现在重新排一次侧栏顺序。
+    /// 请总机长现在重新总结每个机组、重新排一次侧栏顺序。
     ///
     /// 做法是**往总机组群聊里发一条人类消息**，不新造唤醒通道：无 @ 的人类消息
     /// 本来就默认唤醒（必要时拉起）那个 crew 的机长，这条路已经在跑了。
-    /// 顺带的好处是人回头翻群聊，看得到「这个顺序是我几点钟叫它重排的」。
+    /// 顺带的好处是人回头翻群聊，看得到「这一轮是我几点钟叫它做的」。
     ///
-    /// 判定全在 `ChiefResortRequest`（有单测）；这里只负责发和记回执。
+    /// 判定和回执文案全在 `ChiefResortRequest`（有单测）；这里只负责发、记日志、记回执。
+    /// 「按下」那行日志不在这里 —— 它在按钮回调的第一行，早于这个 Task 被调度。
     @MainActor
     func requestChiefResort(now: Date = Date()) async {
         switch ChiefResortRequest.decide(chiefCrewId: chiefLayer?.id,
                                          lastRequestedAt: chiefResortRequestedAt,
                                          now: now) {
         case let .refuse(why):
+            ChiefResortRequest.logRefused(why)
             chiefResortNote = why
         case let .send(text):
             guard let crewId = chiefLayer?.id, let backend = currentBackend() else {
-                chiefResortNote = "发不出去：没有可用的后端。"
+                let why = "没发出去：没有可用的后端。"
+                ChiefResortRequest.logWriteFailed(why)
+                chiefResortNote = why
                 return
             }
+            // 写盘失败**必须抛到这里**（`LocalBackend.postCrewMessage` 走的是
+            // `appendUserMessageReportingFailure`）。2026-09-13 之前那条路是 `try?`，
+            // 这里的 catch 永远进不来，回执永远说「已请」。
+            let result: Result<String?, Error>
             do {
-                try await backend.postCrewMessage(
+                result = .success(try await backend.postCrewMessage(
                     crewId: crewId, text: text, mentions: [],
-                    replyToId: nil, localAttachments: [], extraReferences: [])
-                // **先发成功再记时刻** —— 发失败也记的话，人重按会被自己的冷却窗挡住，
-                // 而那条消息根本没发出去。
-                chiefResortRequestedAt = now
-                chiefResortNote = "已请总机长重排（消息发进了总机组群聊）。"
+                    replyToId: nil, localAttachments: [], extraReferences: []))
             } catch {
-                chiefResortNote = "发不出去：\(error.localizedDescription)"
+                result = .failure(error)
             }
+            switch result {
+            case .success(let incident):
+                ChiefResortRequest.logWritten(crewId: crewId, incident: incident)
+            case .failure(let error):
+                ChiefResortRequest.logWriteFailed(error.localizedDescription)
+            }
+            let receipt = ChiefResortRequest.receipt(for: result)
+            if receipt.startsCooldown { chiefResortRequestedAt = now }
+            chiefResortNote = receipt.text
         }
     }
 

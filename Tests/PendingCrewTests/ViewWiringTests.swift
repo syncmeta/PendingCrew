@@ -1024,6 +1024,83 @@ final class ViewWiringTests: XCTestCase {
                       "右键菜单开关的默认值不是 true —— 所有普通行的右键菜单被顺手关掉了")
     }
 
+    /// **人类 Todo #145（2026-09-13）：刷新按钮那条路写不进去必须说实话，事后查得到。**
+    ///
+    /// 那天人类按了、总机组群聊里一条都没有，回执说「已请总机长重排」，而事后分不清
+    /// 是没点着还是写盘失败被吞了。这里钉三个接头 —— 判定和回执文案那一半在
+    /// `ChiefResortRequestTests`，但这三处都长在不进 test bundle 的文件里，只能读源码：
+    /// ① `LocalBackend.postCrewMessage` 走会抛的写入口（原来那个 `try?` 就是吞错点）；
+    /// ② 按钮回调**第一行**记「按下」—— 早于任何判定和写盘，它在不在是分辨「没点着」的唯一凭据；
+    /// ③ `CrewStore` 那一步把拒绝 / 写进去 / 没写进去各记一行，回执走纯函数。
+    func testChiefResortPathReportsWriteFailuresAndLogsEveryStep() throws {
+        // ①
+        let backend = Self.codeOnly(try Self.text(of: "PendingCrewBackend.swift"))
+        guard let local = backend.range(of: "final class LocalBackend"),
+              let post = backend.range(of: "func postCrewMessage(",
+                                       range: local.upperBound..<backend.endIndex),
+              let next = backend.range(of: "func whiteboardChanges(",
+                                       range: post.upperBound..<backend.endIndex) else {
+            return XCTFail("找不到 LocalBackend.postCrewMessage")
+        }
+        let postBody = String(backend[post.lowerBound..<next.lowerBound])
+        XCTAssertTrue(postBody.contains("return try whiteboard.appendUserMessageReportingFailure("),
+                      "LocalBackend 发人类消息没走会抛的写入口 —— 写不进去，回执照样说已发")
+        XCTAssertFalse(postBody.contains("try?"),
+                       "LocalBackend 发人类消息又把写盘错误 try? 掉了")
+        XCTAssertFalse(postBody.contains("whiteboard.appendUserMessage("),
+                       "LocalBackend 发人类消息又调回了不抛的 appendUserMessage")
+
+        // ②
+        let list = Self.codeOnly(try Self.text(of: "CrewChiefListView.swift"))
+        guard let button = list.range(of: "private var resortButton"),
+              let open = list.range(of: "Button {", range: button.upperBound..<list.endIndex),
+              let task = list.range(of: "Task {", range: open.upperBound..<list.endIndex) else {
+            return XCTFail("找不到刷新按钮的回调")
+        }
+        XCTAssertEqual(
+            list[open.upperBound..<task.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines),
+            "ChiefResortRequest.logPressed()",
+            "刷新按钮回调的第一行不是「按下」日志 —— 事后分不清没点着和没写进去")
+
+        // ③
+        let store = Self.codeOnly(try Self.text(of: "CrewStore.swift"))
+        guard let start = store.range(of: "func requestChiefResort("),
+              let end = store.range(of: "func postSystemNotice(",
+                                    range: start.upperBound..<store.endIndex) else {
+            return XCTFail("找不到 CrewStore.requestChiefResort")
+        }
+        let resort = String(store[start.lowerBound..<end.lowerBound])
+        for needle in ["ChiefResortRequest.logRefused(", "ChiefResortRequest.logWritten(",
+                       "ChiefResortRequest.logWriteFailed(", "ChiefResortRequest.receipt(for:"] {
+            XCTAssertTrue(resort.contains(needle), "requestChiefResort 里少了 \(needle)")
+        }
+        XCTAssertFalse(resort.contains("\"已请总机长"),
+                       "回执又在 CrewStore 里就地写死了「已请」—— 不经过纯函数，失败也会这么说")
+
+        // 四行日志同一个 logger（同 subsystem + category，一条 log show 查得全）。
+        let request = Self.codeOnly(try Self.text(of: "ChiefResortRequest.swift"))
+        XCTAssertEqual(request.components(separatedBy: "Logger(").count - 1, 1,
+                       "刷新按钮那条路的日志不止一个 logger，一条查询查不全")
+    }
+
+    /// 人类 Todo #145：总机长摘要要真的接到那一行上 —— 摘要表读了没传、传了没进
+    /// `make`、`make` 判了过期而行没画，任何一处断了，人看到的都是「过期的跟新鲜的长得一样」。
+    func testChiefSummariesAreWiredIntoTheRow() throws {
+        let sidebar = try Self.text(of: "CrewSidebarView.swift")
+        XCTAssertTrue(sidebar.contains("CrewChiefSummaryStore.load("), "侧栏没读摘要表")
+        XCTAssertTrue(sidebar.contains("summaries: chiefSummaries"), "侧栏读了摘要表没传给总机长视图")
+
+        let list = Self.codeOnly(try Self.text(of: "CrewChiefListView.swift"))
+        XCTAssertTrue(list.contains("summary: summaries[entry.crew.id]"),
+                      "总机长视图的机组行没把摘要喂给 CrewStatusLine.make")
+
+        let row = Self.codeOnly(try Self.text(of: "CrewSidebarCrewRow.swift"))
+        XCTAssertTrue(row.contains("Text(statusLine.displayText)"),
+                      "行里画的不是 displayText —— 「已过时」三个字画不出来")
+        XCTAssertTrue(row.contains("statusLine.isStale"), "行里没按过期变淡")
+        XCTAssertTrue(row.contains(".help(statusLine.help)"), "悬停提示没说来源和写入时刻")
+    }
+
     private static func text(of fileName: String) throws -> String {
         guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
         else { throw XCTSkip("找不到源码文件 \(fileName)") }

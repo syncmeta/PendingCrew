@@ -1,11 +1,14 @@
 import XCTest
 import Foundation
 
-/// 侧栏「总机长」视图每行那句状态（人类 Todo #136）。
+/// 侧栏「总机长」视图每行那句话（人类 Todo #136，#145 改过口径）。
 ///
 /// 换掉的是「这个群最后一条消息」——那是一手的、永远为真。所以这里钉的不是
 /// 「显示得好不好看」，是**它有没有把自己的可信度一起说出来**：
-/// 没填过就说没填过（别编）、沿用来的要带年龄（别让人以为是刚刚的）。
+/// 没有就说没有（别编）、谁写的要说清、**写完之后有了新消息的要标成已过时**。
+///
+/// 2026-09-13 人类要求消息位不再拼时间。原来那几条「年龄必须在正文里」的用例
+/// 换成了「正文里没有时间 + 旧的必须标已过时」—— 去掉时间那一刀不许让旧的看起来像新的。
 final class CrewStatusLineTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -14,80 +17,177 @@ final class CrewStatusLineTests: XCTestCase {
         ISO8601DateFormatter().string(from: now.addingTimeInterval(-secondsAgo))
     }
 
-    private func line(_ messages: [(status: String?, createdAt: String)]) -> CrewStatusLine.Line {
-        CrewStatusLine.make(resolved: CrewStatusLine.resolve(messages: messages), now: now)
+    private func msg(_ id: String, status: String? = nil,
+                     secondsAgo: TimeInterval) -> LocalWhiteboardMessage {
+        LocalWhiteboardMessage(
+            id: id, senderKind: "captain", senderUserId: nil, senderSessionId: "s",
+            category: nil, text: "正文 \(id)", createdAt: iso(secondsAgo), crewStatus: status)
     }
 
-    // MARK: - 一次都没填过就说没填过（这条是承重的）
+    private func summary(_ text: String, secondsAgo: TimeInterval) -> CrewChiefSummary {
+        CrewChiefSummary(text: text, writtenAt: iso(secondsAgo),
+                         bySessionId: "chief", bySenderName: "总机长")
+    }
 
-    func testNeverFilledSaysSoAndNeverInventsOne() {
-        // 「还没有」本身是有用的信息：这个机组的机长还没报过状态。
-        // 编一句（比如拿最后一条消息顶上）会让人以为他报过。
-        let l = line([(nil, iso(60)), (nil, iso(30))])
+    private func line(summary: CrewChiefSummary? = nil,
+                      carrier: LocalWhiteboardMessage? = nil,
+                      last: LocalWhiteboardMessage?) -> CrewStatusLine.Line {
+        CrewStatusLine.make(summary: summary, statusCarrier: carrier, lastMessage: last)
+    }
+
+    // MARK: - 什么都没有就说没有（这条是承重的）
+
+    func testNothingSaysSoAndNeverInventsOne() {
+        // 「还没有」本身是有用的信息。编一句（比如拿最后一条消息顶上）会让人以为有人写过。
+        let l = line(last: msg("m1", secondsAgo: 30))
         XCTAssertEqual(l.text, "还没有")
+        XCTAssertEqual(l.source, .missing)
         XCTAssertTrue(l.isMissing)
+        XCTAssertFalse(l.isStale)
+        XCTAssertEqual(l.displayText, "还没有")
     }
 
-    func testEmptyMessageListIsAlsoNotFilled() {
-        let l = line([])
-        XCTAssertEqual(l.text, "还没有")
-        XCTAssertTrue(l.isMissing)
-    }
-
-    func testBlankStatusIsTreatedAsNotFilled() {
-        // 写了个空格就算填过，是最廉价的一种假账。
+    func testBlankStatusAndBlankSummaryAreTreatedAsNothing() {
+        // 写了个空格就算写过，是最廉价的一种假账。
         for blank in ["", "   ", "\n", " \t "] {
-            let l = line([(blank, iso(60))])
-            XCTAssertEqual(l.text, "还没有", "「\(blank)」不该算填过")
-            XCTAssertTrue(l.isMissing)
+            let m = msg("m1", status: blank, secondsAgo: 60)
+            let l = line(summary: summary(blank, secondsAgo: 10), carrier: m, last: m)
+            XCTAssertEqual(l.source, .missing, "「\(blank)」不该算写过")
         }
     }
 
-    // MARK: - 沿用上一次填的
+    // MARK: - 优先级：总机长摘要 > 机长自报 > 还没有
 
-    func testCarriesForwardTheMostRecentNonEmptyStatus() {
-        // 这次没填就沿用上一次填的 —— 「往回找最近一条带状态的」自然实现了它，
-        // 不需要任何额外的账。
-        let l = line([("在等 CI", iso(7200)), (nil, iso(60)), (nil, iso(30))])
-        XCTAssertFalse(l.isMissing)
-        XCTAssertTrue(l.text.contains("在等 CI"), l.text)
+    func testFreshSummaryBeatsFreshStatus() {
+        let m = msg("m1", status: "机长报的", secondsAgo: 600)
+        let l = line(summary: summary("总机长写的", secondsAgo: 60), carrier: m, last: m)
+        XCTAssertEqual(l.source, .chiefSummary)
+        XCTAssertEqual(l.text, "总机长写的")
+        XCTAssertFalse(l.isStale)
     }
 
-    func testNewerStatusWins() {
-        let l = line([("老状态", iso(7200)), ("新状态", iso(60))])
-        XCTAssertTrue(l.text.contains("新状态"), l.text)
-        XCTAssertFalse(l.text.contains("老状态"), l.text)
+    func testStatusShowsWhenThereIsNoSummary() {
+        let m = msg("m1", status: "在跑全量", secondsAgo: 60)
+        let l = line(carrier: m, last: m)
+        XCTAssertEqual(l.source, .captainStatus)
+        XCTAssertEqual(l.text, "在跑全量")
+        XCTAssertFalse(l.isStale)
     }
 
-    func testAgeComesFromTheMessageThatCarriedItNotFromNow() {
-        // 沿用来的那句可能来自三天前，而群里已经有更新的消息了。
-        // **年龄必须是那条消息的年龄**，否则「沿用」看起来就像「刚刚报的」。
-        let l = line([("在等人类拍板", iso(3 * 86_400)), (nil, iso(30))])
-        XCTAssertTrue(l.text.hasPrefix("3 天前："), l.text)
+    func testFreshStatusBeatsStaleSummary() {
+        // 摘要写完之后机长又报了一句：状态严格更新，别拿二手旧话盖住一手新话。
+        let m = msg("m2", status: "机长刚报的", secondsAgo: 60)
+        let l = line(summary: summary("旧摘要", secondsAgo: 600), carrier: m, last: m)
+        XCTAssertEqual(l.source, .captainStatus)
+        XCTAssertEqual(l.text, "机长刚报的")
+        XCTAssertFalse(l.isStale)
     }
 
-    func testAgeIsInTheBodyNotOnlyInATooltip() {
-        // tooltip 要悬停才看得见，而「多久前报的」是「还算不算数」的前提。
-        let l = line([("在跑全量", iso(1800))])
-        XCTAssertEqual(l.text, "30 分钟前：在跑全量")
+    func testWhenBothAreStaleTheSummaryStillWins() {
+        let carrier = msg("m1", status: "机长很早报的", secondsAgo: 900)
+        let last = msg("m2", secondsAgo: 60)
+        let l = line(summary: summary("总机长写的", secondsAgo: 600), carrier: carrier, last: last)
+        XCTAssertEqual(l.source, .chiefSummary)
+        XCTAssertTrue(l.isStale)
     }
 
-    func testJustNowReadsAsJustNow() {
-        XCTAssertEqual(line([("刚合完", iso(20))]).text, "刚刚：刚合完")
+    // MARK: - 过期：写完之后又有了更新的消息
+
+    func testSummaryGoesStaleWhenTheCrewHasANewerMessage() {
+        let l = line(summary: summary("在改侧栏", secondsAgo: 600), last: msg("m9", secondsAgo: 60))
+        XCTAssertTrue(l.isStale)
+        XCTAssertEqual(l.displayText, "已过时 · 在改侧栏")
+        XCTAssertTrue(l.help.hasPrefix("已过时"), l.help)
     }
 
-    // MARK: - 时间戳坏了
-
-    func testUnparseableTimestampSaysUnknownAgeInsteadOfPretendingItIsFresh() {
-        let l = line([("在等 CI", "不是时间")])
-        XCTAssertTrue(l.text.contains("不知道多久前"), l.text)
-        XCTAssertTrue(l.text.contains("在等 CI"), l.text)
-        XCTAssertFalse(l.isMissing, "有话就不是「还没有」")
+    func testSummaryStaysFreshWhenNothingNewSinceWriting() {
+        let l = line(summary: summary("在改侧栏", secondsAgo: 60), last: msg("m1", secondsAgo: 600))
+        XCTAssertFalse(l.isStale)
+        XCTAssertEqual(l.displayText, "在改侧栏")
+        XCTAssertFalse(l.help.contains("已过时"), l.help)
     }
 
-    func testFutureTimestampDoesNotRenderNegativeAge() {
-        let future = ISO8601DateFormatter().string(from: now.addingTimeInterval(600))
-        XCTAssertEqual(line([("x", future)]).text, "刚刚：x")
+    func testAMessageInTheSameSecondCountsAsNewer() {
+        // 时间戳只到秒，同一秒里分不出先后 —— 分不出就说旧。
+        XCTAssertTrue(CrewStatusLine.summaryIsStale(writtenAt: iso(60), lastMessageCreatedAt: iso(60)))
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let sameSecondLater = fractional.string(from: now.addingTimeInterval(-60 + 0.4))
+        XCTAssertTrue(CrewStatusLine.summaryIsStale(writtenAt: iso(60),
+                                                    lastMessageCreatedAt: sameSecondLater))
+        XCTAssertFalse(CrewStatusLine.summaryIsStale(writtenAt: iso(60),
+                                                     lastMessageCreatedAt: iso(61)))
+    }
+
+    func testUnknownTimesCountAsStale() {
+        // 证明不了它新鲜，就不许画成新鲜的。
+        XCTAssertTrue(CrewStatusLine.summaryIsStale(writtenAt: "不是时间", lastMessageCreatedAt: iso(600)))
+        XCTAssertTrue(CrewStatusLine.summaryIsStale(writtenAt: iso(60), lastMessageCreatedAt: "坏的"))
+        XCTAssertTrue(CrewStatusLine.summaryIsStale(writtenAt: iso(60), lastMessageCreatedAt: nil))
+        XCTAssertTrue(CrewStatusLine.statusIsStale(carrierId: "m1", lastMessageId: nil))
+    }
+
+    func testCarriedForwardStatusIsStale() {
+        // 「这次没填就沿用上一次」—— 沿用 = 之后又有了没带状态的消息 = 过期。
+        // 去掉正文里的时间之后，这条就是不让三天前那句冒充刚刚的那道闸。
+        let carrier = msg("m1", status: "在等 CI", secondsAgo: 3 * 86_400)
+        let l = line(carrier: carrier, last: msg("m2", secondsAgo: 30))
+        XCTAssertEqual(l.source, .captainStatus)
+        XCTAssertTrue(l.isStale)
+        XCTAssertEqual(l.displayText, "已过时 · 在等 CI")
+    }
+
+    func testStatusStalenessIsByMessageIdNotByClock() {
+        // 同一秒两条消息：状态挂在前一条上，就是过期了，不管时间戳长得一不一样。
+        let carrier = msg("m1", status: "x", secondsAgo: 60)
+        let later = msg("m2", secondsAgo: 60)
+        XCTAssertTrue(line(carrier: carrier, last: later).isStale)
+        XCTAssertFalse(line(carrier: carrier, last: carrier).isStale)
+    }
+
+    // MARK: - 正文里不再有时间（人类 2026-09-13）
+
+    func testBodyCarriesNoAgeAnyMore() {
+        let cases: [CrewStatusLine.Line] = [
+            line(carrier: msg("m1", status: "在跑全量", secondsAgo: 1800),
+                 last: msg("m1", status: "在跑全量", secondsAgo: 1800)),
+            line(carrier: msg("m1", status: "在等人类拍板", secondsAgo: 3 * 86_400),
+                 last: msg("m2", secondsAgo: 30)),
+            line(summary: summary("在改侧栏", secondsAgo: 20), last: msg("m1", secondsAgo: 7200)),
+        ]
+        for l in cases {
+            for age in ["刚刚", "分钟前", "小时前", "天前", "不知道多久前"] {
+                XCTAssertFalse(l.displayText.contains(age), "正文里又拼了时间：\(l.displayText)")
+            }
+        }
+        XCTAssertEqual(cases[0].displayText, "在跑全量")
+    }
+
+    // MARK: - 悬停提示：来源 + 写入时刻
+
+    func testHelpNamesTheSourceAndTheWriteTime() {
+        let s = summary("在改侧栏", secondsAgo: 60)
+        let fromChief = line(summary: s, last: msg("m1", secondsAgo: 600))
+        XCTAssertTrue(fromChief.help.contains("总机长"), fromChief.help)
+        XCTAssertTrue(fromChief.help.contains(
+            CrewStatusLine.clockText(CrewTimestamp.parse(s.writtenAt))), fromChief.help)
+
+        let carrier = msg("m1", status: "在跑全量", secondsAgo: 60)
+        let fromCaptain = line(carrier: carrier, last: carrier)
+        XCTAssertTrue(fromCaptain.help.contains("机长发消息时自己报的"), fromCaptain.help)
+        XCTAssertTrue(fromCaptain.help.contains(
+            CrewStatusLine.clockText(CrewTimestamp.parse(carrier.createdAt))), fromCaptain.help)
+
+        XCTAssertTrue(line(last: nil).help.contains("还没有总机长写的摘要"))
+    }
+
+    func testUnparseableCarrierTimeSaysUnknownInTheHelp() {
+        let carrier = LocalWhiteboardMessage(
+            id: "m1", senderKind: "captain", senderUserId: nil, senderSessionId: "s",
+            category: nil, text: "x", createdAt: "不是时间", crewStatus: "在等 CI")
+        let l = line(carrier: carrier, last: carrier)
+        XCTAssertEqual(l.text, "在等 CI")
+        XCTAssertTrue(l.help.contains("时间不详"), l.help)
     }
 
     // MARK: - 落盘那一半

@@ -38,9 +38,9 @@ struct CrewSidebarCrewRow: View {
     ///
     /// `nil` = 照旧显示最后一条消息（层级 / 时间流两个老视图永远是 nil）。
     ///
-    /// 被替掉的那个东西**是一手的、永远为真**（它就是那条消息）；这句状态是机长
-    /// 自己报的，跟消息同一次动作产生，所以不会凭空烂 —— 但**沿用来的那句可能来自
-    /// 三天前**。年龄已经由 `CrewStatusLine` 拼进正文，这里只负责画。
+    /// 被替掉的那个东西**是一手的、永远为真**（它就是那条消息）；替上来的这句是总机长
+    /// 写的摘要或机长自报的状态，**都可能已经过时**。过没过时、来源是谁、写于几点，
+    /// 全由 `CrewStatusLine` 判好放在 `Line` 里（#145 起正文不再拼年龄），这里只负责画。
     var statusLine: CrewStatusLine.Line?
 
     /// 这一行**能不能靠拖拽改隶属关系**。默认能（层级/时间流两个老视图不受影响）。
@@ -183,16 +183,18 @@ struct CrewSidebarCrewRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let statusLine {
                         // 「还没有」画得更淡：它不是内容，是一句「这里还没有内容」。
-                        Text(statusLine.text)
+                        // 「已过时」更淡、正文前带那三个字（`displayText` 拼好的）——
+                        // 旧话不许跟新话长得一样（#145 硬要求）。判定全在 `CrewStatusLine`。
+                        Text(statusLine.displayText)
                             .font(Theme.Fonts.caption)
-                            .foregroundStyle(statusLine.isMissing
-                                             ? Theme.Palette.inkMuted.opacity(0.6)
-                                             : Theme.Palette.inkMuted)
+                            .foregroundStyle(statusLine.isStale
+                                             ? Theme.Palette.inkMuted.opacity(0.45)
+                                             : statusLine.isMissing
+                                                ? Theme.Palette.inkMuted.opacity(0.6)
+                                                : Theme.Palette.inkMuted)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                            .help(statusLine.isMissing
-                                  ? "这个机组的机长还没报过状态（这里不显示最新消息，也不替他编一句）"
-                                  : "这是机长发消息时自己报的状态，不是这个群的最新消息")
+                            .help(statusLine.help)
                     } else {
                         Text(CrewSidebarCrewRow.preview(of: last))
                             .font(Theme.Fonts.caption)

@@ -29,6 +29,10 @@ struct CrewChiefListView: View {
     /// `nil` = 没人排过 / 读不出来 → 纯基础序，**而且要在界面上说出来**。
     var arrangement: CrewArrangement?
 
+    /// 总机长给每个机组写的摘要（#145，侧栏读好传进来）。每行消息位按
+    /// 「总机长摘要 > 机长自报 > 还没有」取，过没过期由 `CrewStatusLine` 判。
+    var summaries: [String: CrewChiefSummary] = [:]
+
     /// 行视图要一个拖拽态；本视图不开拖拽，给它一个自己的实例即可（永远是空的）。
     @StateObject private var dragState = CrewDragState()
 
@@ -43,7 +47,6 @@ struct CrewChiefListView: View {
         // 状态那张表跟末条快照出自同一次解码（`CrewLastMessageCache.Digest`），
         // body 里只是一次字典查表 —— **不碰磁盘**。
         let statusCarriers = crewStore.crewStatusCarriers
-        let now = Date()
         // 顶上那个固定入口 + 下面那份排好序的列表，**一次算出来**
         // （`CrewChiefOverview.rows`）。入口在不在、排第几、指向谁，是那边的
         // 单元测试压着的，不是这里目视出来的。
@@ -82,11 +85,13 @@ struct CrewChiefListView: View {
                     expansion: nil,          // 没有子节点
                     parentId: nil,
                     groupCrews: crews,
+                    // 总机组这一行**不取摘要**：它是一层、不是一个机组（`chiefLayer` 的注释），
+                    // 总机长也不给自己写摘要 —— 何况 `arrange_crews` 写完会往这个群里发一行，
+                    // 写给它自己的那句会被这一行当场判成过期。
                     statusLine: CrewStatusLine.make(
-                        resolved: statusCarriers[chief.id].map {
-                            ($0.crewStatus ?? "", CrewTimestamp.parse($0.createdAt))
-                        },
-                        now: now),
+                        summary: nil,
+                        statusCarrier: statusCarriers[chief.id],
+                        lastMessage: lastMessages[chief.id]),
                     allowsReparentDrag: false,
                     showsColorBar: false,
                     showsContextMenu: false,
@@ -121,10 +126,9 @@ struct CrewChiefListView: View {
                     parentId: entry.crew.parentCrewIds.first,
                     groupCrews: crews,
                     statusLine: CrewStatusLine.make(
-                        resolved: statusCarriers[entry.crew.id].map {
-                            ($0.crewStatus ?? "", CrewTimestamp.parse($0.createdAt))
-                        },
-                        now: now),
+                        summary: summaries[entry.crew.id],
+                        statusCarrier: statusCarriers[entry.crew.id],
+                        lastMessage: lastMessages[entry.crew.id]),
                     allowsReparentDrag: false,
                     dragState: dragState,
                     childCrewTarget: $childCrewTarget
@@ -179,26 +183,37 @@ struct CrewChiefListView: View {
               ?? "没有人排过顺序，这里按每个 crew 最近一次有动静的时间倒序")
     }
 
-    /// 手动刷新（人类 Todo #145：「再给个手动刷新按钮，手动出发让总机长重新…排序」）。
+    /// 手动刷新（人类 Todo #145：「手动出发让总机长重新总结、排序」）。
     ///
-    /// 它**不是刷新界面**（顺序本来就是实时读的），是**请总机长现在跑一轮**。
-    /// 所以图标用「叫人」而不是循环箭头 —— 循环箭头会让人以为是重新加载数据，
-    /// 按下去半天没变化就以为坏了。真正要等的是一个 agent 醒过来、想一遍、写回来。
+    /// 它**不是刷新界面**（顺序本来就是实时读的），是**请总机长现在跑一轮**：
+    /// 给每个机组重写一句摘要、重排一次顺序。真正要等的是一个 agent 醒过来、想一遍、写回来。
     ///
-    /// 判定在 `ChiefResortRequest`、动作在 `CrewStore.requestChiefResort`，
+    /// 判定和回执在 `ChiefResortRequest`、动作在 `CrewStore.requestChiefResort`，
     /// 这里只负责按和显示回执。
+    ///
+    /// ## 点击区的形状（2026-09-13）
+    /// 原来是一个 9pt 的图标配 `.buttonStyle(.plain)`：可点的只有那颗字形本身那么大，
+    /// 而且是在 List 行里。人按了、群里一条都没有，事后分不清是没点着还是没写进去。
+    /// 现在：`.borderless`（macOS 上 List 行里放按钮的那个样式）+ 显式的 22×18 点击框
+    /// + `contentShape`，点击区不再取决于字形的像素。**这是读代码做的判断，没真点过。**
+    ///
+    /// 回调**第一行**先记「按下」日志，早于任何判定和写盘（冷却挡掉的也算点着了）——
+    /// 这一行在不在，就是事后分辨「没点着」的唯一凭据。查询语句见 `ChiefResortRequest`。
     @ViewBuilder
     private var resortButton: some View {
         Button {
+            ChiefResortRequest.logPressed()
             Task { await crewStore.requestChiefResort() }
         } label: {
             Image(systemName: "arrow.trianglehead.clockwise.rotate.90")
-                .font(.system(size: 9))
+                .font(.system(size: 10))
+                .frame(width: 22, height: 18)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .foregroundStyle(Theme.Palette.inkMuted)
-        .help("请总机长现在重新排一次顺序（会在总机组群聊里留一条）")
-        .accessibilityLabel("请总机长重排")
+        .help("请总机长现在重新总结每个机组、重新排一次顺序（会在总机组群聊里留一条）")
+        .accessibilityLabel("请总机长重新总结并排序")
         // 回执**就画在按钮旁边**：发出去了 / 被冷却挡了 / 没有总机组，三种都要看得见。
         .popover(isPresented: Binding(
             get: { crewStore.chiefResortNote != nil },

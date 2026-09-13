@@ -53,11 +53,15 @@ protocol PendingCrewBackend: AnyObject {
     /// 的 `#N`）。**只放这一类**：指向另一条消息、指向某个 session 的引用由实现从
     /// `replyToId` / `mentions` 自己派生 —— 那两样它手里已经有了，让调用方再传一遍
     /// 只会多出一处能忘的地方。
+    ///
+    /// **写不进去一律抛**（人类 Todo #145，2026-09-13）—— 调用方不许把没抛当成「大概发了」。
+    /// 返回值：nil = 干干净净写进去了；非 nil = 写进去了、但白板出过事，那句话要原样报给人。
+    @discardableResult
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
         replyToId: String?,
         localAttachments: [LocalWhiteboardAttachment],
-        extraReferences: [CrewMessageReference]) async throws
+        extraReferences: [CrewMessageReference]) async throws -> String?
 
     /// crew 白板/花名册的**事件驱动变更流**（Phase 5：去 3s 轮询）。
     ///
@@ -80,19 +84,21 @@ protocol PendingCrewBackend: AnyObject {
 
 extension PendingCrewBackend {
     /// 无本地附件的便捷重载 —— 既有调用点不用逐个补 `localAttachments: []`。
+    @discardableResult
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
-        replyToId: String?) async throws {
+        replyToId: String?) async throws -> String? {
         try await postCrewMessage(
             crewId: crewId, text: text, mentions: mentions,
             replyToId: replyToId, localAttachments: [], extraReferences: [])
     }
 
     /// 不带账目引用的便捷重载 —— 既有调用点不用逐个补 `extraReferences: []`。
+    @discardableResult
     func postCrewMessage(
         crewId: String, text: String, mentions: [CrewMention],
         replyToId: String?,
-        localAttachments: [LocalWhiteboardAttachment]) async throws {
+        localAttachments: [LocalWhiteboardAttachment]) async throws -> String? {
         try await postCrewMessage(
             crewId: crewId, text: text, mentions: mentions,
             replyToId: replyToId, localAttachments: localAttachments, extraReferences: [])
@@ -216,10 +222,10 @@ final class LocalBackend: PendingCrewBackend {
         crewId: String, text: String, mentions: [CrewMention],
         replyToId: String?,
         localAttachments: [LocalWhiteboardAttachment],
-        extraReferences: [CrewMessageReference]) async throws {
+        extraReferences: [CrewMessageReference]) async throws -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // 附件-only（无正文只发图）也放行（Todo #3）。
-        guard !trimmed.isEmpty || !localAttachments.isEmpty else { return }
+        guard !trimmed.isEmpty || !localAttachments.isEmpty else { return nil }
         // 本机人类显示名「人」—— agent 看的白板渲染成「- 人: …」而非裸「人类」。
         // `replyToId` 记成本地白板的 `in_reply_to` 引用。
         //
@@ -238,7 +244,12 @@ final class LocalBackend: PendingCrewBackend {
             mentionedSessionIds: mentions.compactMap {
                 $0.kind == "session" ? $0.targetId : nil
             }))
-        whiteboard.appendUserMessage(
+        //
+        // **写盘失败抛出去**（人类 Todo #145，2026-09-13）。这里原来调的是不抛的
+        // `appendUserMessage`（内部 `try?`）：写不进去也照常返回，所有调用方的 catch
+        // 永远进不来 —— 侧栏刷新按钮就是这样回执「已请总机长重排」、群里却一条都没有。
+        // 调用方（composer / Todo 落账 / 追问 / 回应 / 刷新按钮）本来都 catch 了，只是没东西可接。
+        return try whiteboard.appendUserMessageReportingFailure(
             crewId: crewId, text: trimmed, senderName: "人", inReplyTo: replyToId,
             attachments: localAttachments,
             mentions: mentions.map(LocalWhiteboardMention.init),

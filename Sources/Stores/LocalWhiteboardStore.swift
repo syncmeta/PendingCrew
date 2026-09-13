@@ -218,7 +218,31 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         mentions: [LocalWhiteboardMention]? = nil,
         references: [CrewMessageReference]? = nil,
         headline: String? = nil) {
-        append(crewId: crewId, LocalWhiteboardMessage(
+        _ = try? appendUserMessageReportingFailure(
+            crewId: crewId, text: text, senderName: senderName, inReplyTo: inReplyTo,
+            attachments: attachments, mentions: mentions, references: references,
+            headline: headline)
+    }
+
+    /// 与 `appendUserMessage` 相同，但把落盘错误抛给调用者 —— 与
+    /// `appendSessionMessageReportingFailure` 同一个形状，不另造第二种。
+    ///
+    /// **为什么人类这条路也要有它**（人类 Todo #145，2026-09-13）：侧栏「总机长」视图的
+    /// 刷新按钮走 `LocalBackend.postCrewMessage` → 这里。以前那条路只有上面那个 `try?`
+    /// 的版本，写盘失败被当场吞掉，回执照样说「已请总机长重排」—— 人按了、群里没有、
+    /// 回执说发了，事后连「是没点着还是没写进去」都分不出来。
+    ///
+    /// 返回值语义同 session 那个：nil = 干干净净写进去了；非 nil = 写进去了但白板出过事，
+    /// 这句话要原样报给人。
+    @discardableResult
+    func appendUserMessageReportingFailure(
+        crewId: String, text: String, senderName: String? = nil, inReplyTo: String? = nil,
+        attachments: [LocalWhiteboardAttachment]? = nil,
+        mentions: [LocalWhiteboardMention]? = nil,
+        references: [CrewMessageReference]? = nil,
+        headline: String? = nil
+    ) throws -> String? {
+        try appendReportingFailure(crewId: crewId, LocalWhiteboardMessage(
             id: UUID().uuidString.lowercased(),
             senderKind: "user",
             senderUserId: Self.localUserId,
@@ -232,6 +256,17 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
             references: (references?.isEmpty == true) ? nil : references,
             headline: headline))
+    }
+
+    /// 一次写入失败是不是「读不出来、但**已存进待发件箱**、恢复后会自动补发」那种。
+    ///
+    /// 给回执用（人类 Todo #145 的刷新按钮）：这种失败人不该再按一次 —— 再按只会在恢复时
+    /// 补出两条。错误类型本身留在这个文件里私有，外面只问这一个问题。
+    static func wasPreservedForRetry(_ error: Error) -> Bool {
+        if case WhiteboardPersistenceError.unreadableAndPreserved(_, _, let spooled) = error {
+            return spooled
+        }
+        return false
     }
 
     /// 追加一条 session（编码 agent）消息（chunk 4：`post_to_crew`）。`senderName` =
@@ -450,10 +485,6 @@ final class LocalWhiteboardStore: @unchecked Sendable {
     private static func incidentText(archive: URL, reason: WhiteboardIncident) -> String {
         "\(reason.cause)，原文件已归档为 \(archive.lastPathComponent)（whiteboards 目录，"
             + "可人工找回），本板已从一条系统警示重新开始。"
-    }
-
-    private func append(crewId: String, _ msg: LocalWhiteboardMessage) {
-        _ = try? appendReportingFailure(crewId: crewId, msg)
     }
 
     /// 锁内追加：重读-合并-写。load 与 write 之间没有别的写者能插进来（flock）。

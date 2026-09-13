@@ -376,18 +376,20 @@ final class McpServer {
                 ],
                 [
                     "name": "crew_ordering_signals",
-                    "description": "（机长专用）取**排序原料**：每个 crew 的三列时间 —— ① 最近有动静（任何人）/ ② 人类自己最后发言 / ③ 人类最后打开。\n\n**它不排序、不打分、不加权**，就是把三列原样给你。人类点名要的是「把各个指标拿出来 还有总机长的群聊信息 作为上下文 让总机长自行判断顺序」—— 判断是你的活。\n\n三列各自的毛病会跟数一起给你（① 量的是 agent 在哪儿忙、② 分辨率很低、③ 刚开始埋点很稀疏），**别单看数**。你自己那个群聊里的话（他说过「这周先搞 XX」之类）是任何指标都算不出来的，那部分本来就在你上下文里，记得一起用。\n\n看完用 arrange_crews 把顺序排下去，并写清理由。",
+                    "description": "（机长专用）取**排序原料**：每个 crew 的三列时间 —— ① 最近有动静（任何人）/ ② 人类自己最后发言 / ③ 人类最后打开。\n\n**它不排序、不打分、不加权**，就是把三列原样给你。人类点名要的是「把各个指标拿出来 还有总机长的群聊信息 作为上下文 让总机长自行判断顺序」—— 判断是你的活。\n\n三列各自的毛病会跟数一起给你（① 量的是 agent 在哪儿忙、② 分辨率很低、③ 刚开始埋点很稀疏），**别单看数**。你自己那个群聊里的话（他说过「这周先搞 XX」之类）是任何指标都算不出来的，那部分本来就在你上下文里，记得一起用。\n\n看完用 arrange_crews 把顺序排下去，并写清理由（侧栏刷新按钮触发的那种请求，要连每个机组的 summaries 一起写）。",
                     "inputSchema": ["type": "object", "properties": [:]],
                 ],
                 [
                     "name": "arrange_crews",
-                    "description": "（机长专用）把几个 crew **顶到侧栏「总机长」视图的最前面**，并说清为什么。\n\n这个视图的基础序是「最近有动静的在上」，永远算得出来；你排的这份只是**叠在上面的覆盖层**：没排过、排布读不出来、里面的 crew 已经没了 —— 一律退回基础序，界面照常能用。**你的判断可以决定「推荐他先看什么」，但决定不了「这台机器上有什么」。**\n\n`reason` 必填，而且**会显示给人看**（不是日志）：他看到一个不合意的顺序时，得分得清是规则算的还是你排的、为什么。做成黑箱，它第一次排错就会被永久关掉。\n\n`crew_ids` 传空数组 = 撤掉排布，退回纯基础序。crew id 从 directory 或组织树里取。",
+                    "description": "（机长专用）把几个 crew **顶到侧栏「总机长」视图的最前面**，并说清为什么。\n\n这个视图的基础序是「最近有动静的在上」，永远算得出来；你排的这份只是**叠在上面的覆盖层**：没排过、排布读不出来、里面的 crew 已经没了 —— 一律退回基础序，界面照常能用。**你的判断可以决定「推荐他先看什么」，但决定不了「这台机器上有什么」。**\n\n`reason` 必填，而且**会显示给人看**（不是日志）：他看到一个不合意的顺序时，得分得清是规则算的还是你排的、为什么。做成黑箱，它第一次排错就会被永久关掉。\n\n`crew_ids` 传空数组 = 撤掉排布，退回纯基础序（摘要不受影响）。crew id 从 directory 或组织树里取。\n\n**`summaries`：给每个机组写一句摘要。** 它显示在侧栏「总机长」视图那一行原来放最新消息的位置，排在机长自报的 crew_status 前面。形状 `{\"crewId\": \"一句话\"}`；一行、40 字左右，说清这个机组现在在干什么、卡在哪（超了照写，回执提醒一句）。**合并写入**：这次没给的机组保留上次那句。每句自带写入时刻，**那个机组之后一有新消息，侧栏就把这句标成「已过时」**，所以写一次管不了多久。\n\n**收到侧栏刷新按钮发来的请求时**（总机组群聊里一条人类消息，末尾写着「刷新按钮触发」）：先用 crew_ordering_signals 看一遍各机组，**给每个机组都写 summaries**，再排 crew_ids、写 reason，一次调用做完。只排序、不写摘要，人按了按钮看到的每一行还是旧话。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
                             "crew_ids": ["type": "array", "items": ["type": "string"],
                                          "description": "要顶到最前的 crew id，按你想要的顺序。空数组 = 撤掉排布。没提到的 crew 跟在后面、保持基础序。"],
                             "reason": ["type": "string", "description": "为什么这么排。一句话，写给人看的（「这三个他今天在改，其余按动静排」比「已优化排序」有用一百倍）。"],
+                            "summaries": ["type": "object", "additionalProperties": ["type": "string"],
+                                          "description": "可选。每个机组一句摘要：`{\"crewId\": \"一句话\"}`，40 字左右。合并写入，没给的机组保留上次那句。刷新按钮触发的请求要给每个机组都写。形状不对（不是对象 / 值不是字符串）时整次调用什么都不写。"],
                         ],
                         "required": ["crew_ids", "reason"],
                     ],
@@ -1668,20 +1670,66 @@ final class McpServer {
             let ids = ((args["crew_ids"] as? [Any]) ?? []).compactMap { $0 as? String }
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
+            // 摘要（#145）**先判形状、先写**：形状不对整次什么都不写；摘要写不进去也不去动顺序 ——
+            // 半截（顺序是这一轮的、每行的话是上一轮的）会让人以为那几句是刚写的。
+            var summaryCount = 0
+            var summaryNotes: [String] = []
+            let summaryIntake = CrewChiefSummaryIntake.decide(args["summaries"])
+            if case .refused(let why) = summaryIntake {
+                return toolResult(id: id, text: "ERROR: " + why)
+            }
+            if case .accepted(let incoming, let notes) = summaryIntake {
+                summaryNotes = notes
+                if !incoming.isEmpty {
+                    let summariesURL = CrewChiefSummaryStore.fileURL(
+                        whiteboardDirectory: store.resolvedDirectory)
+                    let existing: [String: CrewChiefSummary]
+                    do {
+                        existing = try CrewChiefSummaryStore.loadReportingFailure(at: summariesURL)
+                    } catch {
+                        // 读失败**不当成空表**：合并写回会拿这次这几句盖掉其它机组的旧摘要。
+                        return toolResult(id: id, text: "ERROR: 摘要表读不出来（\(error.localizedDescription)），"
+                            + "为了不拿这次这几句盖掉其它机组的旧摘要，摘要" + WriteReceipt.notWrittenMarker
+                            + "，顺序也没动。过一会儿再调一次。")
+                    }
+                    let merged = CrewChiefSummaryStore.merging(
+                        existing, incoming: incoming,
+                        writtenAt: ISO8601DateFormatter().string(from: Date()),
+                        bySessionId: sessionId, bySenderName: sessionLabel)
+                    guard CrewChiefSummaryStore.save(merged, to: summariesURL) else {
+                        return toolResult(id: id, text: "ERROR: 摘要" + WriteReceipt.notWrittenMarker
+                            + "（磁盘写失败），顺序也没动。**侧栏那几行还是原来的话**，别当它已经生效。")
+                    }
+                    summaryCount = incoming.count
+                }
+            }
+            let summaryClause = summaryCount > 0 ? "，并给 \(summaryCount) 个机组写了摘要" : ""
+            let summaryReceipt: String = {
+                var out = summaryCount > 0
+                    ? "\n已写 \(summaryCount) 句摘要（每句带这次的写入时刻；那个机组之后一有新消息，"
+                        + "侧栏就把那句标成「已过时」）。没给的机组保留上次那句。"
+                    : "\n这次没写 summaries —— 侧栏每行的摘要没更新。刷新按钮触发的请求要连每个机组的摘要一起给。"
+                if !summaryNotes.isEmpty { out += "\n提醒：" + summaryNotes.joined(separator: "；") }
+                return out
+            }()
+            let summariesAlreadyWritten = summaryCount > 0
+                ? "（\(summaryCount) 句摘要已经写进去了，只是顺序没动）" : ""
             let arrangementURL = CrewArrangementStore.fileURL(
                 whiteboardDirectory: store.resolvedDirectory)
             if ids.isEmpty {
                 guard CrewArrangementStore.clear(at: arrangementURL) else {
                     return toolResult(id: id, text: "ERROR: 排布没能撤掉（文件删不了）"
-                        + WriteReceipt.notWrittenMarker + "。**侧栏还是原来那个顺序。**")
+                        + WriteReceipt.notWrittenMarker + "。**侧栏还是原来那个顺序。**"
+                        + summariesAlreadyWritten)
                 }
                 _ = try? store.appendSessionMessageReportingFailure(
                     crewId: crewId, sessionId: sessionId,
-                    text: "撤掉了侧栏排布，回到「按最近活动排」：\(arrangeReason)",
+                    text: "撤掉了侧栏排布，回到「按最近活动排」\(summaryClause)：\(arrangeReason)",
                     category: "progress", senderName: sessionLabel,
                     mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
                     inReplyTo: nil, senderKind: isCaptain ? "captain" : "session")
-                return toolResult(id: id, text: "已撤掉排布，「总机长」视图回到纯基础序（最近有动静的在上）。")
+                return toolResult(id: id, text: "已撤掉排布，「总机长」视图回到纯基础序（最近有动静的在上）。"
+                                  + summaryReceipt)
             }
             let arrangement = CrewArrangement(
                 crewIds: ids, reason: arrangeReason,
@@ -1689,18 +1737,20 @@ final class McpServer {
                 createdAt: ISO8601DateFormatter().string(from: Date()))
             guard CrewArrangementStore.save(arrangement, to: arrangementURL) else {
                 return toolResult(id: id, text: "ERROR: 排布" + WriteReceipt.notWrittenMarker
-                    + "（磁盘写失败）。**侧栏还是原来那个顺序**，别当它已经生效。")
+                    + "（磁盘写失败）。**侧栏还是原来那个顺序**，别当它已经生效。"
+                    + summariesAlreadyWritten)
             }
             // 排完往群里说一声 —— 这既是「看得见是谁排的」的一半，也是让 app 那边
-            // 立刻重读的那个 tick（排布文件不在被监听的白板目录里）。
+            // 立刻重读的那个 tick（排布和摘要两个文件都不在被监听的白板目录里）。
             _ = try? store.appendSessionMessageReportingFailure(
                 crewId: crewId, sessionId: sessionId,
-                text: "把 \(ids.count) 个 crew 顶到了侧栏最前：\(arrangeReason)",
+                text: "把 \(ids.count) 个 crew 顶到了侧栏最前\(summaryClause)：\(arrangeReason)",
                 category: "progress", senderName: sessionLabel,
                 mentions: [LocalWhiteboardMention(kind: "human", targetId: nil)],
                 inReplyTo: nil, senderKind: isCaptain ? "captain" : "session")
             return toolResult(id: id, text: "已排好 \(ids.count) 个 crew（理由会显示在侧栏顶上）。"
-                              + "没提到的 crew 跟在后面、保持基础序；里面已经不存在的 id 会被忽略，不会让任何一行消失。")
+                              + "没提到的 crew 跟在后面、保持基础序；里面已经不存在的 id 会被忽略，不会让任何一行消失。"
+                              + summaryReceipt)
         case "set_session_profile":
             let model = (args["model"] as? String)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

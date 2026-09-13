@@ -429,4 +429,84 @@ final class McpServerTests: XCTestCase {
         XCTAssertFalse(r.contains("ERROR"), r)
         XCTAssertFalse(r.contains("请注意"), r)
     }
+
+    // MARK: - arrange_crews(summaries:)（人类 Todo #145）
+
+    /// 排布和摘要表写在白板目录的**上一级**。直接拿 `tempDir()` 当白板目录，
+    /// 它们就会写进系统临时目录本身，测试之间互相串 —— 所以白板目录下沉一层。
+    private func chiefRoot() -> (root: URL, whiteboards: URL) {
+        let root = tempDir()
+        let whiteboards = root.appendingPathComponent("whiteboards")
+        try? FileManager.default.createDirectory(at: whiteboards, withIntermediateDirectories: true)
+        return (root, whiteboards)
+    }
+
+    func testArrangeCrewsWritesSummariesWithTheirOwnWriteTimeAndKeepsTheRest() throws {
+        let (root, whiteboards) = chiefRoot()
+        let s = server(whiteboards, isCaptain: true)
+        let url = CrewChiefSummaryStore.fileURL(dataRoot: root)
+
+        let r1 = callTool(s, name: "arrange_crews", argsJSON:
+            #"{"crew_ids":["a"],"reason":"他今天在改 a","summaries":{"a":"在改侧栏","b":"等 CI"}}"#)
+        XCTAssertFalse(r1.contains("ERROR"), r1)
+        XCTAssertTrue(r1.contains("已写 2 句摘要"), r1)
+        let first = try CrewChiefSummaryStore.loadReportingFailure(at: url)
+        XCTAssertEqual(first["a"]?.text, "在改侧栏")
+        XCTAssertEqual(first["b"]?.text, "等 CI")
+        XCTAssertNotNil(first["a"].flatMap { CrewTimestamp.parse($0.writtenAt) },
+                        "摘要没带解析得出来的写入时刻 —— 过期判定会一律判成过期")
+        XCTAssertEqual(CrewArrangementStore.load(
+            at: CrewArrangementStore.fileURL(dataRoot: root))?.crewIds, ["a"])
+
+        let r2 = callTool(s, name: "arrange_crews", argsJSON:
+            #"{"crew_ids":["b"],"reason":"换 b","summaries":{"a":"侧栏改完了"}}"#)
+        XCTAssertFalse(r2.contains("ERROR"), r2)
+        let second = try CrewChiefSummaryStore.loadReportingFailure(at: url)
+        XCTAssertEqual(second["a"]?.text, "侧栏改完了")
+        XCTAssertEqual(second["b"], first["b"], "这次没给的机组那句（连同它的写入时刻）要原样留着")
+    }
+
+    func testArrangeCrewsWithMalformedSummariesWritesNothingAtAll() {
+        let (root, whiteboards) = chiefRoot()
+        let s = server(whiteboards, isCaptain: true)
+        let r = callTool(s, name: "arrange_crews", argsJSON:
+            #"{"crew_ids":["a"],"reason":"r","summaries":{"a":3}}"#)
+        XCTAssertTrue(r.contains("ERROR"), r)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: CrewChiefSummaryStore.fileURL(dataRoot: root).path))
+        XCTAssertNil(CrewArrangementStore.load(at: CrewArrangementStore.fileURL(dataRoot: root)),
+                     "摘要形状不对，顺序也不许动 —— 半截会让新顺序配旧话")
+    }
+
+    func testArrangeCrewsRefusesToOverwriteAnUnreadableSummaryTable() throws {
+        let (root, whiteboards) = chiefRoot()
+        let url = CrewChiefSummaryStore.fileURL(dataRoot: root)
+        let garbage = Data("{ 坏的".utf8)
+        try garbage.write(to: url)
+        let s = server(whiteboards, isCaptain: true)
+
+        let r = callTool(s, name: "arrange_crews", argsJSON:
+            #"{"crew_ids":["a"],"reason":"r","summaries":{"a":"在改侧栏"}}"#)
+        XCTAssertTrue(r.contains("ERROR"), r)
+        XCTAssertEqual(try Data(contentsOf: url), garbage, "读不出来的旧表不许被这次这几句盖掉")
+        XCTAssertNil(CrewArrangementStore.load(at: CrewArrangementStore.fileURL(dataRoot: root)))
+    }
+
+    func testArrangeCrewsWithoutSummariesSaysSoInTheReceipt() {
+        let (_, whiteboards) = chiefRoot()
+        let s = server(whiteboards, isCaptain: true)
+        let r = callTool(s, name: "arrange_crews", argsJSON: #"{"crew_ids":["a"],"reason":"r"}"#)
+        XCTAssertFalse(r.contains("ERROR"), r)
+        XCTAssertTrue(r.contains("这次没写 summaries"), r)
+    }
+
+    /// 总机长要知道有这回事：工具描述里写清「收到刷新请求要给每个机组写摘要」。
+    /// 认的是按钮那句话里的「刷新按钮触发」—— 两头对不上，总机长就认不出那是刷新请求。
+    func testArrangeCrewsDescriptionTellsTheChiefToSummarizeOnRefresh() {
+        let r = server(tempDir(), isCaptain: true)
+            .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#) ?? ""
+        XCTAssertTrue(r.contains("summaries"), "arrange_crews 的 schema 里没有 summaries")
+        XCTAssertTrue(r.contains("刷新按钮触发"), "工具描述没告诉总机长怎么认出刷新请求")
+        XCTAssertTrue(ChiefResortRequest.requestText.contains("刷新按钮触发"))
+    }
 }

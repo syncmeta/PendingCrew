@@ -32,6 +32,9 @@ struct CrewSidebarView: View {
     /// 排布是 MCP helper 跨进程写的，写完那一刻它同时往群里发一行（那是「看得见
     /// 是谁排的」的要求），于是白板目录一定会 tick —— 这里跟着那个 tick 重读。
     @State private var arrangement: CrewArrangement?
+    /// 总机长给每个机组写的摘要（#145）。与排布同一个读法、同一个重读时机：
+    /// `arrange_crews` 写完摘要也会往群里发那一行，白板目录照样 tick。
+    @State private var chiefSummaries: [String: CrewChiefSummary] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,7 +55,7 @@ struct CrewSidebarView: View {
                 case .chief:
                     CrewChiefListView(
                         crews: visibleCrews, childCrewTarget: $childCrewTarget,
-                        arrangement: arrangement)
+                        arrangement: arrangement, summaries: chiefSummaries)
                 }
             }
             .listStyle(.sidebar)
@@ -170,6 +173,10 @@ struct CrewSidebarView: View {
     private func reloadArrangement() {
         arrangement = CrewArrangementStore.load(
             at: CrewArrangementStore.fileURL(dataRoot: PendingCrewDataRoot.url))
+        let summaries = CrewChiefSummaryStore.load(
+            at: CrewChiefSummaryStore.fileURL(dataRoot: PendingCrewDataRoot.url))
+        // 相等就不赋值：这个函数跟着白板目录每个 tick 跑，别让它每次都重渲染侧栏。
+        if summaries != chiefSummaries { chiefSummaries = summaries }
     }
 
     // MARK: - 机器分组

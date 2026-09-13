@@ -142,6 +142,27 @@ final class LocalWhiteboardStoreTests: XCTestCase {
             crewId: "child", sessionId: "captain-parent", text: "开场任务"))
     }
 
+    /// 人类身份那条写入路径同样要能抛（人类 Todo #145，2026-09-13）。
+    /// 侧栏刷新按钮就是走这里；原来只有内部 `try?` 的版本，写不进去回执照样说「已请」。
+    func testHumanReportingFailureAppendThrowsWhenWhiteboardCannotBeWritten() throws {
+        let path = tempDir().appendingPathComponent("not-a-directory")
+        try Data("occupied by a file".utf8).write(to: path)
+        let store = LocalWhiteboardStore(directory: path)
+
+        XCTAssertThrowsError(try store.appendUserMessageReportingFailure(
+            crewId: "pendingcrew-chief", text: "请重新总结并排序", senderName: "人"))
+    }
+
+    func testHumanReportingFailureAppendWritesAUserRowWhenHealthy() throws {
+        let store = LocalWhiteboardStore(directory: tempDir())
+        XCTAssertNil(try store.appendUserMessageReportingFailure(
+            crewId: "c", text: "hi", senderName: "人"))
+        let rows = store.list(crewId: "c")
+        XCTAssertEqual(rows.map(\.text), ["hi"])
+        XCTAssertEqual(rows.first?.senderKind, "user")
+        XCTAssertEqual(rows.first?.senderName, "人")
+    }
+
     // MARK: - #483 解码失败 fail-loud + 逐条 lenient 解码 + 并发写防护
 
     private func rawFileURL(_ dir: URL, _ crewId: String) -> URL {
