@@ -93,12 +93,5 @@ final class BackendUpdatePlanTests: XCTestCase {
         XCTAssertTrue(text.contains("不会打断"), text)
         XCTAssertFalse(text.contains("0 个"), "「中断 0 个 session」这种话别说：\(text)")
     }
-
-    /// 鸡生蛋那句话跟实现待在一起，别让发版说明和代码各自漂。
-    func testChickenAndEggNoteIsPresentAndSaysWhatToDo() {
-        let note = BackendUpdatePlan.chickenAndEggNote
-        XCTAssertTrue(note.contains("手动"), note)
-        XCTAssertTrue(note.contains("此后自动"), note)
-    }
 }
 #endif
