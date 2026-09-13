@@ -659,6 +659,62 @@ final class ViewWiringTests: XCTestCase {
                       "订阅额度环被一起删掉了 —— 人类去掉的是账号头像那行的用量，不是额度环")
     }
 
+    /// 恢复弹窗 / 前端更新带后台换代 / app 退出印记，必须跑在**界面进程**里。
+    ///
+    /// 它们原来写在 `SessionHost.start`。默认模式（viewer）下界面从不调 `start`，
+    /// 调它的是**后台进程** —— 于是弹窗永远不弹、换代永远不换，后台还冒名写 app 印记。
+    /// 三笔判定层都有测试，接线只有构建证明；这条补的就是那一截。
+    /// 见 `docs/internal/2026-09-13-startup-duties-wiring-fix.md`。
+    func testInterfaceStartupDutiesRunInTheInterfaceProcessNotTheDaemon() throws {
+        let host = Self.codeOnly(try Self.text(of: "SessionHost.swift"))
+        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+
+        /// 从签名切到下一个同缩进的方法声明。
+        func body(_ signature: String) throws -> String {
+            guard let head = host.range(of: signature) else {
+                throw XCTSkip("SessionHost.swift 里找不到 \(signature) —— 改名了就同步改这条测试")
+            }
+            let rest = host[head.upperBound...]
+            let next = ["\n    func ", "\n    private func ", "\n    @discardableResult"]
+                .compactMap { rest.range(of: $0)?.lowerBound }.min() ?? rest.endIndex
+            return String(rest[..<next])
+        }
+        let start = try body("func start(model: AppModel, crewStore: CrewStore)")
+        let begin = try body("func begin(model: AppModel, crewStore: CrewStore)")
+        let duties = try body("private func runInterfaceStartupDutiesOnce()")
+
+        // ① `start` 里不许再有它们 —— 后台进程也调 `start`。
+        for needle in ["role: .app", "BackendUpdateCoordinator.runIfNeeded",
+                       "SessionRestoreOffer.decide", "willTerminateNotification"] {
+            XCTAssertFalse(start.contains(needle),
+                           "`SessionHost.start` 里又出现了 \(needle) —— 那会跑在后台进程里，界面一次都不跑")
+            XCTAssertTrue(duties.contains(needle), "界面启动职责里缺了 \(needle)")
+            XCTAssertFalse(daemon.contains(needle) && needle == "role: .app",
+                           "后台进程在写 app 印记")
+        }
+
+        // ② `begin` 必须调它，而且在按角色分岔**之前** —— viewer 那一支也得跑。
+        guard let call = begin.range(of: "runInterfaceStartupDutiesOnce()"),
+              let fork = begin.range(of: "switch ProcessRole.requested") else {
+            return XCTFail("`begin` 没调界面启动职责 —— 默认模式下弹窗又不弹了")
+        }
+        XCTAssertLessThan(call.lowerBound, fork.lowerBound,
+                          "界面启动职责排在角色分岔之后 —— 某一支会漏掉它")
+
+        // ③ 只跑一次：`begin` 挂在 `.task` 上会重跑。
+        XCTAssertTrue(duties.contains("guard !interfaceDutiesRan"),
+                      "界面启动职责没有只跑一次的门 —— 视图重挂会把本轮印记读成上一轮")
+
+        // ④ ⌘Q 时只有真编排者才停 run。viewer 里的 run 是后台的镜像，
+        //    停它等于关界面就停掉后台全部 session。
+        guard let guardAt = duties.range(of: "ProcessRole.effective == .orchestrator"),
+              let stopAt = duties.range(of: "run.stop()") else {
+            return XCTFail("⌘Q 观察者里找不到「只有编排者才停 run」那道判断")
+        }
+        XCTAssertLessThan(guardAt.lowerBound, stopAt.lowerBound,
+                          "⌘Q 时 viewer 也会停 run —— 关界面就停掉后台的 session")
+    }
+
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")

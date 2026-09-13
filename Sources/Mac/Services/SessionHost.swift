@@ -63,6 +63,9 @@ final class SessionHost: ObservableObject {
 
     func begin(model: AppModel, crewStore: CrewStore) {
         orchestrationContext = (model, crewStore)
+        // **在按角色分岔之前。** viewer 和 inproc 编排者都是界面，都要跑；
+        // 换代检查还必须赶在 viewer 连上后台之前（停掉旧的，viewer 自己会拉起新版）。
+        runInterfaceStartupDutiesOnce()
         switch ProcessRole.requested {
         case .orchestrator:
             // 闸门在**进程入口**取好了（`OrchestrationGate.installForGUIProcess`）。
@@ -181,12 +184,23 @@ final class SessionHost: ObservableObject {
         restoreOffer = SessionRestoreOffer.Decision(reason: nil, candidates: [], message: "")
     }
 
-    func start(model: AppModel, crewStore: CrewStore) {
-        precondition(
-            ProcessRole.effective == .orchestrator,
-            "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
-        guard !started else { return }
-        started = true
+    private var interfaceDutiesRan = false
+
+    /// **界面进程**启动时只做一次的三件事：app 退出印记、前端更新带后台换代、算恢复弹窗。
+    ///
+    /// ## 为什么不在 `start` 里
+    ///
+    /// 原来就在 `start` 里。可 `start` 的调用者是 inproc 的界面**和后台进程**，而默认
+    /// 模式（viewer）下界面根本不调它 —— 于是：弹窗永远不弹（算它的是后台里那个
+    /// SessionHost，弹窗读的是界面里这个）；换代永远不换（后台拿自己跟自己比版本）；
+    /// 后台还冒名写 `app.lastexit.json`。三笔判定都有测试，接线只有构建证明。
+    /// 实测与推理见 `docs/internal/2026-09-13-startup-duties-wiring-fix.md`。
+    ///
+    /// **只跑一次**：`begin` 挂在 `.task` 上，视图重挂会重跑；第二次跑会把上一轮的
+    /// 印记读成「正在跑」（就是这一轮自己写的）并再探一次后台。
+    private func runInterfaceStartupDutiesOnce() {
+        guard !interfaceDutiesRan else { return }
+        interfaceDutiesRan = true
 
         // 退出印记（恢复弹窗的承重件）。**GUI 也会崩** —— 2026-09-09 真崩过一次
         // （SIGABRT），只盯 daemon 的话人类撞到过的那个场景反而不弹窗。
@@ -205,6 +219,7 @@ final class SessionHost: ObservableObject {
         // 前端更新了，本机后端跟着换代（人类 9-11 点名的那条）。
         // **必须在算恢复弹窗之前跑** —— 它可能亲手打断这些 session，
         // 而打断了就得问。判定在 `BackendUpdatePlan`（有测试）。
+        // inproc 且没有后台时它探到 `.none`，什么都不做。
         let update = BackendUpdateCoordinator.runIfNeeded(
             log: { NSLog("[SessionHost] %@", $0) })
 
@@ -231,10 +246,29 @@ final class SessionHost: ObservableObject {
         ) { [weak runner] _ in
             MainActor.assumeIsolated {
                 marker.markDraining()
-                for run in runner?.runs ?? [] where run.status == .running { run.stop() }
+                // **只有本进程此刻真是编排者才停 run。** viewer 里这些 run 是后台那边的
+                // 镜像，`stop()` 会转成 `stopRun` 发过去 —— 关界面就等于停掉后台全部
+                // session，而「关界面不打断 session」正是前后端分离的全部意义。
+                // 在退出这一刻才问：临时本地接管可能发生在启动之后。
+                if ProcessRole.effective == .orchestrator {
+                    for run in runner?.runs ?? [] where run.status == .running { run.stop() }
+                }
                 marker.markClean()
             }
         }
+    }
+
+    func start(model: AppModel, crewStore: CrewStore) {
+        precondition(
+            ProcessRole.effective == .orchestrator,
+            "SessionHost.start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
+        guard !started else { return }
+        started = true
+
+        // ⚠️ app 退出印记 / 换代检查 / 恢复弹窗**不在这里**，在 `runInterfaceStartupDutiesOnce`。
+        // 这个方法的调用者除了 inproc 的界面，还有**后台进程**（`SessionDaemonMain`）；
+        // 放在这里时，默认模式下界面一次都没跑过它们，后台却冒名写 app 印记、
+        // 拿自己去跟自己比版本。见 `docs/internal/2026-09-13-startup-duties-wiring-fix.md`。
 
         // app 重启后重挂持久化的定时唤醒（schedule_wakeup 不因重启失约）。
         runner.rearmWakeups()
