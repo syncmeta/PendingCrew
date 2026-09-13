@@ -27,7 +27,49 @@
   用 clonefile 把数据根克隆一份。
 - 日志：`~/Library/Logs/PendingCrew-eperm/watch-20260913-112638.log`
 
+## 恢复：11:28:18 到 11:28:28 之间（守候实测）
+
+- 11:28:18 那次探针还读不动，11:28:28 那次读得动。起守时读得动 13 个、读不动 155 个；
+  恢复时读得动 168 个、读不动 0 个。
+- 这一窗从开始到恢复**最长 15 分钟**（起点只能卡到 11:13:27 之后）。
+- 待发件箱在白板恢复后的第一次写入里补发了 74 条，没有丢，也没有让人重发。
+- 这是**第一次拿到恢复那一刻的现场**：`~/Library/Logs/PendingCrew-eperm/`
+  - `watch-20260913-112638.log`：时刻、个数、进程表 diff
+  - `ps-start-…` / `ps-recover-…`：两份进程表全文
+  - `data-root-at-recovery-20260913-112638/`：恢复那一刻的数据根克隆
+
+### 进程表 diff 里的线索（**只是时间上相关，没证明是它引起的**）
+
+恢复前几秒新出现的进程：
+- 11:28:21–22：`MailCacheDelete`、`MusicCacheExtension`、`TVCacheExtension`、
+  Safari 的 `CacheDeleteExtension`、`trustevaluationagent`
+- 11:28:26：`efilogin-helper`
+
+四个 CacheDelete 扩展是系统在清可清除空间时拉起来的。当时磁盘可用只有 13 GB 左右，
+之后又降到 10 GB。「磁盘紧 → 系统清缓存 → 顺带放开了什么」是一个**可以查的假设**，
+目前只有这一个样本。
+
+### 恢复的钟点也值得记一笔（n=2，可能是巧合）
+
+| 日期 | 恢复时刻 |
+|---|---|
+| 09-12 | 09:11，11:26:15 |
+| 09-13 | 09:28:22，11:28:18–28 |
+
+两天都在 9 点多和 11 点半前后各恢复了一次。今天两次正好相隔 2 小时，昨天两次相隔
+2 小时 15 分，**不是严格周期**。本机 StartInterval=7200 的 launchd job 只查到一个：
+`com.apple.ManagedClientAgent.enrollagent`（MDM 注册代理），跟这件事有没有关系，没有证据。
+
+### 这一步没量到的（写清楚，免得当成「查过没有」）
+
+- **统一日志对 agent 这侧读不出来**：`log show` 在恢复那 10 秒里只回 1 行（表头），
+  所以「那一刻系统日志里有没有 CacheDelete / 清空间的记录」**没量到**，不是「量了没有」。
+  要查就得人在 Terminal 里跑，或者用 sudo。
+- 发作那一刻的进程表只有 11:26:26 这一份，比起点晚了 2 到 13 分钟，
+  **起点那一刻是什么变了，这份看不出来**。
+
 ## 还缺的
 
-- 人类 Todo #21：发作当口 `sudo scripts/capture-eperm-fsusage.sh`。
-  这一窗是第 6 个机会。
+- 人类 Todo #21：发作当口 `sudo scripts/capture-eperm-fsusage.sh`。这一窗又错过了。
+- 下次发作时，守候仍然要当场挂上（`scripts/watch-eperm-recovery.sh`）。
+  它不会自己起来，要有人发现发作了再挂。
