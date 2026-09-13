@@ -33,6 +33,8 @@ struct CrewSessionsSnapshot: Codable, Equatable {
         /// state=="error"/"rateLimited"/"launchFailed" 时的人话说明；
         /// state=="awaitingDecision"/"awaitingReply" 时是「在等什么」。
         var healthDetail: String? = nil
+        /// 这个成员的 helper 跑在哪一版、是不是旧的（`HelperProcessForensics`）。
+        var helperBuild: HelperBuildReport? = nil
     }
 
     /// crewId → 该 crew 的 session 条目（含 exited,直到被人从切换条移除）。
@@ -59,6 +61,21 @@ struct CrewSessionsSnapshot: Codable, Equatable {
             out[e.sessionId] = e.name
         }
         return out
+    }
+
+    /// 「某个成员的 helper 跑在哪一版」的查表。界面读快照时用它，不在 View 里自己拼。
+    struct HelperBuildLookupTable: Equatable {
+        fileprivate var entries: [String: HelperBuildReport?]
+        fileprivate var failure: String?
+
+        func lookup(sessionId: String) -> HelperBuildLookup {
+            .notInSnapshot  // SKELETON
+        }
+    }
+
+    /// 现读快照文件，建一张查表。**文件不在 / 读不动 / 解不开是三件事**。
+    static func helperBuildLookupTable(directory: URL) -> HelperBuildLookupTable {
+        HelperBuildLookupTable(entries: [:], failure: nil)  // SKELETON
     }
 
     /// 机长 `list_sessions` 的渲染：一行一个成员,直接可读。

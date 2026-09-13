@@ -54,6 +54,64 @@ struct HelperBuildStamp: Equatable {
     }
 }
 
+/// 「这份在跑的」和「磁盘上那份」是不是同一个文件。**三态，不许压成 Bool** ——
+/// 读不出来和一样是两件事（`.unknown` 被算成「是新的」正是这个类型要挡的那一刀）。
+enum HelperBuildVerdict: String, Codable, Equatable {
+    case current
+    case stale
+    case unknown
+
+    static func judge(running: HelperBuildStamp?, onDisk: HelperBuildStamp?) -> HelperBuildVerdict {
+        .unknown  // SKELETON
+    }
+}
+
+/// 点名快照里「这个成员的 helper 跑在哪一版」那一格。app 侧（编排者）写，
+/// helper 的 `list_sessions` 和界面读。
+struct HelperBuildReport: Codable, Equatable {
+    var verdict: HelperBuildVerdict
+    /// 正在执行的那份的版本串（`HelperBuildStamp.displayText` 口径）。nil = 读不出来。
+    var runningVersion: String?
+    /// 磁盘上那份的版本串。nil = 读不出来。
+    var diskVersion: String?
+    /// `.unknown` 时为什么判不了；其余情况的补充说明。
+    var reason: String?
+    /// 找到了几个属于这个 session 的 helper 进程。
+    var helperCount: Int
+}
+
+/// 界面 / 点名去查「某个成员的 helper 版本」时拿到的东西。**四种来源各说各的话**，
+/// 其中三种都是「判不了」，但判不了的原因不同，人要据此做的事也不同。
+enum HelperBuildLookup: Equatable {
+    case report(HelperBuildReport)
+    /// 快照里有这个人，但没有这一格 —— 写快照的那个进程比这个功能旧。
+    case writerTooOld
+    /// 快照里没有这个人（刚起来，下一拍快照还没写到）。
+    case notInSnapshot
+    /// 快照文件本身读不出来。
+    case unreadable(String)
+}
+
+/// 界面上那枚小标。纯值，判定不长在 View 里。
+struct HelperBuildBadge: Equatable {
+    enum Tone: Equatable { case neutral, warning, unknown }
+    var text: String
+    var tone: Tone
+    /// 悬停说明：完整那句话。
+    var help: String
+
+    static func make(_ lookup: HelperBuildLookup, isRunning: Bool) -> HelperBuildBadge? {
+        nil  // SKELETON
+    }
+}
+
+extension HelperBuildReport {
+    /// `list_sessions` 每行那一列。
+    static func rosterColumn(_ lookup: HelperBuildLookup) -> String {
+        ""  // SKELETON
+    }
+}
+
 /// 「本进程的二进制」与「磁盘上现在那份」的对照。
 ///
 /// 只做一件事：**在 agent 看得见的地方**说清「你这个 session 的工具表是旧的」。
