@@ -152,4 +152,150 @@ final class BackendRegistryTests: XCTestCase {
                         "不认识的传输方式被猜成了某种能连的东西")
     }
 }
+
+/// 设置「后端」页每一行的实况与「重启后台」按钮。
+///
+/// 重点和 `BackendRegistryTests` 同一条：**本机探针的读数绝不许填到别的条目上**。
+@MainActor
+final class BackendLiveStatusTests: XCTestCase {
+
+    private let paths = PendingCrewDaemonPaths.standard(
+        dataRoot: URL(fileURLWithPath: "/tmp/pc-live-status-tests", isDirectory: true))
+
+    /// 一碰就红的探针 —— 用来证明「根本没去探」。
+    private var mustNotProbe: BackendRegistry.LocalProbe {
+        .init(daemonIsRunning: { XCTFail("不该探本机后台"); return true },
+              query: { XCTFail("不该跟本机后台握手"); throw CocoaError(.featureUnsupported) })
+    }
+
+    private func probe(running: Bool = true,
+                       _ result: @escaping () throws -> SessionDaemonStatusSnapshot)
+        -> BackendRegistry.LocalProbe {
+        .init(daemonIsRunning: { running }, query: result)
+    }
+
+    private func snapshot(build: String = "0.1.40(1)",
+                          statuses: [SessionWireStatus]) -> SessionDaemonStatusSnapshot {
+        SessionDaemonStatusSnapshot(
+            hello: .init(protocolVersion: 1, daemonBuild: build, capabilities: [],
+                         sessionCount: statuses.count, pid: 777, viewerCount: 1, startedAt: 0),
+            sessions: statuses.enumerated().map { index, status in
+                SessionSummary(sessionId: "s\(index)", stateSeq: 1,
+                               state: .init(status: status, isWorking: false,
+                                            displayIsTyping: false, health: nil,
+                                            pendingDecision: nil, kind: "claude_code",
+                                            launchParameterProblem: nil, scrollState: nil))
+            })
+    }
+
+    // MARK: - 实况：管不了的条目绝不探本机
+
+    func testRemoteIsNeverProbedLocally() {
+        let ref = BackendRef(id: "tokyo", displayName: "东京",
+                             transport: .remote(url: "wss://tokyo.example"))
+        guard case let .unsupported(why) = BackendRegistry.liveStatus(
+            of: ref, paths: paths, probe: mustNotProbe) else {
+            return XCTFail("远程条目给出了实况 —— 那只可能是本机的读数")
+        }
+        XCTAssertTrue(why.contains("没有退回本机"), why)
+    }
+
+    /// 一条 socket 条目、但不是本数据根那一个：探针只认得本数据根，不许拿它的读数冒充。
+    func testAForeignSocketIsNeverFilledWithTheLocalReading() {
+        let ref = BackendRef(id: "other", displayName: "别处",
+                             transport: .localSocket(path: "/tmp/somewhere-else.sock"))
+        guard case let .unsupported(why) = BackendRegistry.liveStatus(
+            of: ref, paths: paths, probe: mustNotProbe) else {
+            return XCTFail("别的 socket 条目被填上了本机后台的实况")
+        }
+        XCTAssertTrue(why.contains("不会拿后者的实况冒充它"), why)
+    }
+
+    // MARK: - 实况：本机那条走同一个函数
+
+    func testNotRunningDoesNotHandshake() {
+        let status = BackendRegistry.liveStatus(
+            of: BackendRegistry.builtInLocal(paths: paths), paths: paths,
+            probe: .init(daemonIsRunning: { false },
+                         query: { XCTFail("没在跑还去握手"); throw CocoaError(.featureUnsupported) }))
+        XCTAssertEqual(status, .notRunning)
+    }
+
+    func testAHandshakeFailureIsUndecidableNotNotRunning() {
+        let status = BackendRegistry.liveStatus(
+            of: BackendRegistry.builtInLocal(paths: paths), paths: paths,
+            probe: probe { throw SessionDaemonStatusProbe.ProbeError.timeout })
+        guard case let .undecidable(why) = status else {
+            return XCTFail("问不出被说成了别的：\(status) —— 「没在跑」会让人以为什么都不会被打断")
+        }
+        XCTAssertTrue(why.contains("超时"), why)
+    }
+
+    /// **已退出的不算「在跑」**。后台的 records 退出后照旧留着，`hello.sessionCount` 把它们也数进去。
+    func testExitedSessionsAreNotCountedAsRunning() {
+        let snap = snapshot(statuses: [.running, .running, .exited(0)])
+        XCTAssertEqual(snap.hello.sessionCount, 3, "前提：握手里的数混着已退出的")
+        XCTAssertEqual(BackendRegistry.runningSessionCount(in: snap), 2)
+        XCTAssertEqual(
+            BackendRegistry.liveStatus(of: BackendRegistry.builtInLocal(paths: paths),
+                                       paths: paths, probe: probe { snap }),
+            .running(build: "0.1.40(1)", pid: 777, runningSessions: 2, retainedSessions: 1))
+    }
+
+    // MARK: - 重启入口
+
+    private func action(_ status: BackendLiveStatus, app: String = "0.1.40(1)",
+                        viewer: Bool = true) -> (title: String, text: String)? {
+        guard case let .available(title, text) = BackendRegistry.restartAction(
+            for: status, appBuild: app, interfaceRelaunchesBackend: viewer) else { return nil }
+        return (title, text)
+    }
+
+    /// viewer 里「停」完界面会马上再拉一个 —— 叫「停用」就是在骗人。
+    func testInAViewerItIsARestartNotAStop() {
+        let a = action(.running(build: "0.1.40(1)", pid: 1, runningSessions: 2, retainedSessions: 0))
+        XCTAssertEqual(a?.title, "重启后台")
+        XCTAssertTrue(a?.text.contains("会打断正在跑的 2 个 session") == true, a?.text ?? "")
+        XCTAssertTrue(a?.text.contains("马上拉起") == true, a?.text ?? "")
+        XCTAssertTrue(a?.text.contains("不会自动接回") == true,
+                      "同版重启是人自己按的，规格是不问 —— 得提前说清：\(a?.text ?? "")")
+    }
+
+    func testADifferentBuildIsAReplacementAndPromisesToAsk() {
+        let a = action(.running(build: "0.1.34(9)", pid: 1, runningSessions: 3, retainedSessions: 0))
+        XCTAssertEqual(a?.title, "换成 0.1.40(1)")
+        XCTAssertTrue(a?.text.contains("换完会问你") == true, a?.text ?? "")
+    }
+
+    func testOutsideAViewerItIsAStopAndSaysItStaysStopped() {
+        let a = action(.running(build: "0.1.40(1)", pid: 1, runningSessions: 1, retainedSessions: 0),
+                       viewer: false)
+        XCTAssertEqual(a?.title, "停止后台")
+        XCTAssertTrue(a?.text.contains("不会自动再起") == true, a?.text ?? "")
+    }
+
+    /// 没东西在跑时**不许吓人**，也别说「打断 0 个」。
+    func testNothingRunningDoesNotScare() {
+        let a = action(.running(build: "0.1.40(1)", pid: 1, runningSessions: 0, retainedSessions: 4))
+        XCTAssertTrue(a?.text.contains("不会打断任何东西") == true, a?.text ?? "")
+        XCTAssertFalse(a?.text.contains("0 个") == true, a?.text ?? "")
+    }
+
+    /// 卡死、握手超时的后台最需要重启 —— 仍给按，但照实说说不清会打断几个。
+    func testUndecidableStillOffersRestartButAdmitsItCannotCount() {
+        let a = action(.undecidable("握手超时"))
+        XCTAssertNotNil(a, "问不出的后台不给重启 —— 那正是最需要重启的那种")
+        XCTAssertTrue(a?.text.contains("说不清会打断几个") == true, a?.text ?? "")
+    }
+
+    func testUnsupportedAndNotRunningAreUnavailableWithTheReason() {
+        XCTAssertEqual(BackendRegistry.restartAction(for: .unsupported("远程还没做"),
+                                                     appBuild: "x", interfaceRelaunchesBackend: true),
+                       .unavailable("远程还没做"))
+        guard case .unavailable = BackendRegistry.restartAction(
+            for: .notRunning, appBuild: "x", interfaceRelaunchesBackend: true) else {
+            return XCTFail("没在跑的后台给了重启按钮")
+        }
+    }
+}
 #endif

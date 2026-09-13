@@ -22,9 +22,11 @@ enum BackendUpdateCoordinator {
         guard SessionDaemonControl.runningDaemonPid(paths: paths) != nil else { return .none }
         do {
             let snapshot = try SessionDaemonStatusProbe.query(paths: paths)
+            // **不用 `hello.sessionCount`**：它把已退出、画面还留着的也算进去，
+            // 群里那句「会中断当前在跑的 N 个」就说多了。
             return .running(build: snapshot.hello.daemonBuild,
                             pid: snapshot.hello.pid,
-                            sessionCount: snapshot.hello.sessionCount)
+                            sessionCount: BackendRegistry.runningSessionCount(in: snapshot))
         } catch {
             return .undecidable(error.localizedDescription)
         }

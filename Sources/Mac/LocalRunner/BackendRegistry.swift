@@ -190,4 +190,118 @@ enum BackendRegistry {
         }
     }
 }
+
+// MARK: - 实况与重启入口（设置「后端」页用）
+
+/// 一条后端此刻的实况。**四态**，别压成「在 / 不在」：
+/// 「管不了这条」「没在跑」「在跑但问不出」「在跑」对界面该说什么完全不同。
+enum BackendLiveStatus: Equatable {
+    /// 这个 app 探不了它（远程 / 不是本数据根下那个 socket）。**不探本机冒充它。**
+    case unsupported(String)
+    case notRunning
+    /// 有后台占着锁，但握手问不出实况。
+    case undecidable(String)
+    /// `runningSessions` 只数真在跑的；`retainedSessions` 是已退出、画面还留在后台里的。
+    case running(build: String, pid: Int32, runningSessions: Int, retainedSessions: Int)
+}
+
+/// 「重启后台」按钮能不能按、按之前要让人确认什么。
+enum BackendRestartAction: Equatable {
+    case available(title: String, confirmation: String)
+    case unavailable(String)
+}
+
+extension BackendRegistry {
+    /// 本机那一个后台的探针。注入以便测试不碰真 socket。
+    /// **主线程上调**：真的握手靠主队列收回调（`SessionDaemonStatusProbe.query` 是 MainActor 隔离的）。
+    struct LocalProbe {
+        var daemonIsRunning: @MainActor () -> Bool
+        var query: @MainActor () throws -> SessionDaemonStatusSnapshot
+
+        @MainActor
+        static func standard(paths: PendingCrewDaemonPaths) -> LocalProbe {
+            LocalProbe(
+                daemonIsRunning: { SessionDaemonControl.runningDaemonPid(paths: paths) != nil },
+                query: { try SessionDaemonStatusProbe.query(paths: paths) })
+        }
+    }
+
+    /// **只数真在跑的。** 后台的 records 在 session 退出后照旧留着（右栏还要看画面），
+    /// `hello.sessionCount` 把它们也算进去 —— 拿它说「会打断 N 个」就把数说多了。
+    /// 同一个毛病 `--daemon-status` 在 2026-09-04 撞过一次（`SessionDaemonStatusTextTests`）。
+    static func runningSessionCount(in snapshot: SessionDaemonStatusSnapshot) -> Int {
+        snapshot.sessions.filter { $0.state.status == .running }.count
+    }
+
+    /// 一条后端的实况。
+    ///
+    /// **远程、以及 socket 不是本数据根那一个的，一律不探** —— 探针只认得本数据根下
+    /// 那一把锁、那一个 socket；拿它的读数填到别的条目上，就是「界面说连着 A，
+    /// 看到的是本机」那种查不出来的错。本机那条走的是同一个函数，不开特例。
+    ///
+    /// ⚠️ 真探针要在主线程上调：socket 的回调投主队列（`UnixSocketTransport`），
+    /// 握手最多等 2 秒。
+    @MainActor
+    static func liveStatus(of ref: BackendRef,
+                           paths: PendingCrewDaemonPaths = .standard(),
+                           probe: LocalProbe? = nil) -> BackendLiveStatus {
+        if case let .unsupported(why) = connectivity(of: ref) { return .unsupported(why) }
+        if case let .localSocket(path) = ref.transport, path != paths.socket {
+            return .unsupported("这条指向 \(path)，不是这个 app 数据根下的后台（\(paths.socket)）。"
+                + "现在只探得了后者，**也不会拿后者的实况冒充它**。")
+        }
+        let probe = probe ?? .standard(paths: paths)
+        guard probe.daemonIsRunning() else { return .notRunning }
+        do {
+            let snapshot = try probe.query()
+            let running = runningSessionCount(in: snapshot)
+            return .running(build: snapshot.hello.daemonBuild, pid: snapshot.hello.pid,
+                            runningSessions: running,
+                            retainedSessions: snapshot.sessions.count - running)
+        } catch {
+            return .undecidable(String(describing: error))
+        }
+    }
+
+    /// 重启入口。
+    ///
+    /// - Parameter interfaceRelaunchesBackend: 本界面是不是 viewer。**是的话「停」之后
+    ///   界面会自己马上拉起一个新的**（`DaemonLaunchPlan`：锁空了就拉）—— 所以按钮叫
+    ///   「重启」不叫「停用」；叫「停用」就是在骗人。
+    static func restartAction(for status: BackendLiveStatus, appBuild: String,
+                              interfaceRelaunchesBackend: Bool) -> BackendRestartAction {
+        let after = interfaceRelaunchesBackend
+            ? "停掉之后界面会马上拉起 \(appBuild) 版本的后台。"
+            : "停掉之后不会自动再起。"
+        switch status {
+        case let .unsupported(why):
+            return .unavailable(why)
+        case .notRunning:
+            return .unavailable(interfaceRelaunchesBackend
+                ? "没有后台进程在跑，界面会自己拉起一个。"
+                : "没有后台进程在跑，没有可停的。")
+        case let .undecidable(why):
+            // 卡死、握手超时的后台正是最需要重启的那种，所以仍然给按；
+            // 但**说不出会打断几个**，就照实说说不出。
+            return .available(
+                title: interfaceRelaunchesBackend ? "重启后台" : "停止后台",
+                confirmation: "问不出后台现在的情况（\(why)），也就说不清会打断几个 session。"
+                    + after)
+        case let .running(build, _, running, _):
+            let replacing = build != appBuild
+            let title = !interfaceRelaunchesBackend ? "停止后台"
+                : replacing ? "换成 \(appBuild)" : "重启后台"
+            var text = running > 0
+                ? "会打断正在跑的 \(running) 个 session。"
+                : "当前没有在跑的 session，不会打断任何东西。"
+            text += after
+            if running > 0 {
+                text += (interfaceRelaunchesBackend && replacing)
+                    ? "换完会问你要不要把它们接回来。"
+                    : "被打断的不会自动接回，之后 @ 它们能接回。"
+            }
+            return .available(title: title, confirmation: text)
+        }
+    }
+}
 #endif
