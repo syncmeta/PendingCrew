@@ -1,0 +1,13 @@
+diff --git a/Sources/Mac/Support/CrewLocalImageCache.swift b/Sources/Mac/Support/CrewLocalImageCache.swift
+index e3e15fd..4f6a70c 100644
+--- a/Sources/Mac/Support/CrewLocalImageCache.swift
++++ b/Sources/Mac/Support/CrewLocalImageCache.swift
+@@ -76,7 +76,7 @@ final class CrewLocalImageCache: @unchecked Sendable {
+ 
+     init(costLimitBytes: Int = 64 * 1024 * 1024,
+          storage: (any CrewLocalImageStorage)? = nil) {
+-        cache = storage ?? CrewLocalNSImageStorage(costLimitBytes: costLimitBytes)
++        cache = CrewLocalNSImageStorage(costLimitBytes: costLimitBytes)
+     }
+ 
+     /// 同步命中查询。命中就直接换上图，**不必先把 image 置 nil** —— 置 nil 会

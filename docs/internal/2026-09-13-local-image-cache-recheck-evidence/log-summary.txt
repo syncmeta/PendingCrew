@@ -1,0 +1,29 @@
+full.log
+sha256 e034ae70b05e86157800f19eaab845d103b0063154884f47a4b5b8d067d2e83b
+Executed 2781 tests, with 3 tests skipped and 8 failures (0 unexpected) in 190.613 (191.207) seconds
+** TEST FAILED **
+
+01-old-assertions-red.log
+sha256 2d2ab509bf8c2ed61c67372db7b32cacd6c7365e23d14edf01c7b5c6b0c251cf
+Executed 6 tests, with 2 failures (0 unexpected) in 1.093 (1.096) seconds
+** TEST FAILED **
+
+02-ignore-injection-red.log
+sha256 f2b196b715ba44b1001910e49a6ccd459784920645a1fb7bf48788a8001d8994
+Executed 8 tests, with 4 failures (0 unexpected) in 0.974 (0.976) seconds
+** TEST FAILED **
+
+03-restored-green.log
+sha256 e402e67364682ded1e2735cb0e9d688bde9864672f679f51bbc3afe3eba4b801
+Executed 8 tests, with 0 failures (0 unexpected) in 0.038 (0.041) seconds
+** TEST SUCCEEDED **
+
+04-unrelated-failure-recheck.log
+sha256 7ed2e77b817129bc7f8ceaa8c545824b048adb86159759ecd792e391b4131cc2
+Executed 1 test, with 0 failures (0 unexpected) in 0.042 (0.043) seconds
+** TEST SUCCEEDED **
+
+full-recheck.log
+sha256 607e8e950ea6f71bdb7c7c69e35b2c43f2cdf1c40d914990a94ddc9a99ffa532
+Executed 2781 tests, with 3 tests skipped and 0 failures (0 unexpected) in 182.217 (182.847) seconds
+** TEST SUCCEEDED **

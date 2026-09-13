@@ -20,4 +20,17 @@
 
 干净 detached 验收树 `/tmp/crew-cache-91-recheck-5f02cb2`，由 `git worktree add --detach ... 5f02cb2` 创建，并 `cp -R` 共享 Fixtures；复制后 status 为空。开跑前磁盘可用 15 GiB。全量通过 `scripts/test-mac.sh`，DerivedData 在该树自己的 `.test-archive/dd`。首次尝试被沙箱 DNS 阻断，没有执行测试，不算红；获准后重试。
 
-本轮日志目录 `/tmp/crew-cache-91-recheck-evidence/`。结果待运行完成后补入。
+本轮日志目录 `/tmp/crew-cache-91-recheck-evidence/`。本次已完成：
+
+- 首次实际全量 `full.log`：2781 executed、3 skipped、8 failures，exit 65，缓存 8 条通过。唯一具名失败为 `CodexFirstTurnFailureTests.testFirstCompletedFailureNeverLooksIdle`（8 条断言，backend 和 remote 各 4 条；health nil、state/dot 仍 working）。这是当前基线全量失败，不能以历史绿代替。
+- 变异前报告已提交为 `aced692`，被变异实现早已提交于 `5ed062d`，验收树 HEAD 为 `5f02cb2`。当前树先保留源码/测试 cp 备份，再从 `5ed062d^` 取旧测试并注入立即驱逐 fake，原断言重放 `01-old-assertions-red.log`：6 tests、2 failures，exit 65，恰好为任务点名的两条测试。
+- 恢复现有测试后仅移除 `storage ??`：`02-ignore-injection-red.log` 为 8 tests、4 failures，exit 65。字典接线断言再次稳定检出对象、成本未写入。
+- 通过 cp 还原两文件，`git diff --exit-code` 通过，`03-restored-green.log`：8 tests、0 failures，exit 0。上述操作由 `replay.sh` 执行，含 EXIT trap 再次 cp 还原。
+- 全量失败用例定向复查 `04-unrelated-failure-recheck.log`：1 test、0 failures，exit 0。这不足以判定根因；未修改该用例或其生产实现。
+- 复跑全量前 status 仍为空，磁盘 14 GiB。第二次全量 `full-recheck.log`：2781 tests、3 skipped、0 failures，182.847 秒，exit 0；逐条为 2778 passed + 3 skipped。跳过为 `AgentTuiFixtureRecorder.testRecord`、`CrewLastMessageCacheTests.test_基准_现场白板目录`、`SessionAwaitingReplyInputsCacheTests.test_基准_现场目录`。
+
+最终验收树 HEAD 仍为 `5f02cb29fdd5a9c3eb958b6c5afe74a39c2e08ae`，status 为空。两次全量的日志与 xcresult 均拷入独立证据目录后，自有 `.test-archive` 已删除，磁盘恢复 15 GiB。没有 push、没有 merge、没有修改生产或测试最终源码；本轮交付仅是复核报告与重放证据。
+
+第二次全量绿不能消除第一次红：Codex 首轮失败状态用例在首轮全量的 8 秒等待后 health 仍为 nil，单测和第二次全量通过；原因未查明，不宣称缓存修复解决了它。后续若跟进应另立该用例的调查，不把此次缓存修复回退。
+
+可随提交审阅的重放脚本、两份 patch、红绿摘要及完整日志 SHA-256 位于同目录 `2026-09-13-local-image-cache-recheck-evidence/`。完整日志和 xcresult 留在 `/tmp/crew-cache-91-recheck-evidence/`，临时路径不承诺长期保留。
