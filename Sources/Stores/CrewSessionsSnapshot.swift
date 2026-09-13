@@ -95,8 +95,9 @@ struct CrewSessionsSnapshot: Codable, Equatable {
             let snapshot = try JSONDecoder().decode(CrewSessionsSnapshot.self, from: data)
             var entries: [String: HelperBuildReport?] = [:]
             for entry in snapshot.crews.values.flatMap({ $0 }) {
-                // ⚠️ 必须显式 `.some` —— 往值类型是 Optional 的字典里直接赋 nil 等于删键，
-                // 「没这一格」会被静默改写成「没这个人」。
+                // 值本身是 Optional：外层「有没有这个人」、内层「有没有这一格」。`.some` 只是
+                // 把这层意思写在明面上 —— 去掉它行为不变（Swift 会把 `T?` 自动包一层，
+                // 只有字面量 `nil` 才会删键；变异 M6a 实测过，一条都不红）。
                 entries[entry.sessionId] = .some(entry.helperBuild)
             }
             return HelperBuildLookupTable(entries: entries, failure: nil)
