@@ -35,7 +35,7 @@ if [ "${EPERM_WATCH_DETACHED:-}" != 1 ]; then
   cp "$0" "$SELF"   # 跑副本：仓库里那份以后被改，不会让正在跑的这份读到半行
   EPERM_WATCH_DETACHED=1 nohup /usr/bin/perl -e 'use POSIX qw(setsid); setsid(); exec @ARGV' \
     /bin/sh "$SELF" "$MAX_SECS" > "$LOG" 2>&1 < /dev/null &
-  echo "守候已脱离会话起跑，pid $!，日志 → $LOG"
+  echo "守候已脱离会话起跑，pid ${!}，日志 → ${LOG}"
   exit 0
 fi
 
