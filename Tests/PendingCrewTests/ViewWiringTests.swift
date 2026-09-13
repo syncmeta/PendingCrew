@@ -1093,6 +1093,12 @@ final class ViewWiringTests: XCTestCase {
         let list = Self.codeOnly(try Self.text(of: "CrewChiefListView.swift"))
         XCTAssertTrue(list.contains("summary: summaries[entry.crew.id]"),
                       "总机长视图的机组行没把摘要喂给 CrewStatusLine.make")
+        // #145 追加：判过期要看「最后一条算数的发言」，不是末条消息 —— 喂错了，
+        // 一次故障补发几十条系统通知，每个机组的摘要都会当场变「已过时」。
+        XCTAssertTrue(list.contains("lastActivity: lastActivities[entry.crew.id]"),
+                      "总机长视图没把「最后一条算数的发言」喂进过期判定")
+        XCTAssertTrue(list.contains("crewStore.lastActivityMessages"),
+                      "总机长视图没读 lastActivityMessages —— 过期判定又在拿末条消息判")
 
         let row = Self.codeOnly(try Self.text(of: "CrewSidebarCrewRow.swift"))
         XCTAssertTrue(row.contains("Text(statusLine.displayText)"),

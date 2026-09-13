@@ -62,11 +62,36 @@ final class CrewLastMessageCache: @unchecked Sendable {
     /// 只看末条不够。再开一个缓存去扫，就是每次文件变动**多解一整板 JSON**，
     /// 正是 2026-08-17「开久了卡」的形状。**一次解码，两样都拿出来。**
     struct Digest: Equatable {
-        /// 末条消息（时间、预览、相对时间都来自它）。
+        /// 末条消息（时间、预览、相对时间都来自它）。**不分是谁发的** —— 侧栏显示
+        /// 「最新一条消息」和排序要的就是这个语义，别改它。
         let last: LocalWhiteboardMessage
         /// 当前生效的那句状态 + 它所在那条消息的时间。
         /// `nil` = 这块白板上**一条都没填过**（不是「这次没填」）。
         let status: LocalWhiteboardMessage?
+        /// 最后一条**算数的发言**（人类或 agent；系统通知、「已送达」「已联系」回执不算，
+        /// 判据 `CrewActivityMessage.counts`）。总机长视图拿它判摘要 / 自报过没过期（#145）。
+        /// `nil` = 这块白板上一条算数的都没有。
+        let lastActivity: LocalWhiteboardMessage?
+    }
+
+    /// 一整板消息 → 载荷。**生产和测试共用这一个**：测试里另写一份判据，
+    /// 量到的就不是生产那条路了。三样东西在**同一次解码**的同一趟倒扫里取出来。
+    static func digest(of messages: [LocalWhiteboardMessage]) -> Digest? {
+        guard let last = messages.last else { return nil }
+        var carrier: LocalWhiteboardMessage?
+        var activity: LocalWhiteboardMessage?
+        for message in messages.reversed() {
+            // 往回找最近一条带非空状态的 —— 「这次没填就沿用上一次」由此成立。
+            if carrier == nil,
+               !(message.crewStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                carrier = message
+            }
+            if activity == nil, CrewActivityMessage.counts(message) {
+                activity = message
+            }
+            if carrier != nil && activity != nil { break }
+        }
+        return Digest(last: last, status: carrier, lastActivity: activity)
     }
 
     private let cache: FileFingerprintCache<String, Digest>
@@ -75,15 +100,7 @@ final class CrewLastMessageCache: @unchecked Sendable {
     convenience init(store: LocalWhiteboardStore) {
         self.init(
             fingerprintOf: { store.fingerprint(crewId: $0) },
-            loadDigest: { crewId in
-                let messages = store.list(crewId: crewId)
-                guard let last = messages.last else { return nil }
-                // 往回找最近一条带非空状态的 —— 「这次没填就沿用上一次」由此成立。
-                let carrier = messages.reversed().first {
-                    ($0.crewStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                }
-                return Digest(last: last, status: carrier)
-            })
+            loadDigest: { crewId in Self.digest(of: store.list(crewId: crewId)) })
     }
 
     /// 单测 / 基准用：两条 IO 都可注入，好数「到底真读了几次」。

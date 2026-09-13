@@ -119,6 +119,10 @@ final class CrewStore: ObservableObject {
     /// 键缺失 = 那个 crew 一次都没填过 —— 视图据此显示「还没有」，**不编一句**。
     /// 与 `lastWhiteboardMessages` 出自**同一次解码**（见 `CrewLastMessageCache.Digest`）。
     @Published private(set) var crewStatusCarriers: [String: LocalWhiteboardMessage] = [:]
+    /// 每个 crew **最后一条算数的发言**（人类 / agent；系统通知与回执不算，#145）。
+    /// 总机长视图判摘要和自报过没过期用它。与上面两张表出自**同一次解码**；
+    /// 键缺失 = 那个 crew 一条算数的都没有（或白板空 —— 用 `lastWhiteboardMessages` 分）。
+    @Published private(set) var lastActivityMessages: [String: LocalWhiteboardMessage] = [:]
 
     /// **总机组那一层**（人类 Todo #130 / #137）。
     ///
@@ -433,6 +437,7 @@ final class CrewStore: ObservableObject {
         crews = []
         lastWhiteboardMessages = [:]
         crewStatusCarriers = [:]
+        lastActivityMessages = [:]
         lastMessageCache.clear()
         humanTodoAttention = [:]
         humanTodoCache.clear()
@@ -534,6 +539,9 @@ final class CrewStore: ObservableObject {
         // 不该把它也赋值一遍，`@Published` 一赋值就把整个侧栏重渲染。
         let carriers = digests.compactMapValues(\.status)
         if crewStatusCarriers != carriers { crewStatusCarriers = carriers }
+        // 同理单独比对：系统通知刷一串进来时末条天天变，这张表却一动不动。
+        let activities = digests.compactMapValues(\.lastActivity)
+        if lastActivityMessages != activities { lastActivityMessages = activities }
     }
 
     /// **共享控制通道只有编排者能排空**（前后端分离 §6.1）。

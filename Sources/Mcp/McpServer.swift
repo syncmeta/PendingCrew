@@ -2194,7 +2194,10 @@ final class McpServer {
             _ = try store.appendSessionMessageReportingFailure(
                 crewId: crewId, sessionId: sessionId,
                 text: "已联系 \(number.text)（\(target.displayName)）：\(snippet)",
-                category: "progress", senderName: sessionLabel,
+                // 回执不是发言（#145 追加）：它以 agent 自己的身份写回本群，原来是
+                // `progress`，跟一条真的进展汇报一个字段都不差，侧栏会拿它把总机长摘要
+                // 判成「已过时」。这个 category 就是那个结构标记，判据在 `CrewActivityMessage`。
+                category: CrewActivityMessage.contactReceiptCategory, senderName: sessionLabel,
                 senderKind: isCaptain ? "captain" : "session",
                 // #132：这行回执挂一颗指向**目标机组**的胶囊。`number` 是 `contact`
                 // 解析出来的号码对象，不是从这句话里认出来的。

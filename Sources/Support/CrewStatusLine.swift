@@ -58,10 +58,11 @@ enum CrewStatusLine {
     ///   - summary: 总机长给这个机组写的摘要；`nil` = 没写过。
     ///   - statusCarrier: 这个机组**当前生效的那句状态**所在的消息
     ///     （`CrewStore.crewStatusCarriers`）；`nil` = 机长一次都没报过。
-    ///   - lastMessage: 这个机组的**最新一条消息**（`CrewStore.lastWhiteboardMessages`）。
+    ///   - activity: 这个机组**最后一条算数的发言**（见 `Activity` / `CrewActivityMessage`）。
+    ///     **不是**「最后一条消息」—— 系统通知、「已送达」「已联系」回执不让它过期。
     static func make(summary: CrewChiefSummary?,
                      statusCarrier: LocalWhiteboardMessage?,
-                     lastMessage: LocalWhiteboardMessage?) -> Line {
+                     activity: Activity) -> Line {
         let status = statusCarrier.flatMap { carrier -> (LocalWhiteboardMessage, String)? in
             // 全空白的状态就当没填（写了个空格就算填过，是最廉价的一种假账）。
             let body = (carrier.crewStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,10 +72,10 @@ enum CrewStatusLine {
         let usableSummary = (summaryText?.isEmpty == false) ? summary : nil
 
         let summaryStale = usableSummary.map {
-            summaryIsStale(writtenAt: $0.writtenAt, lastMessageCreatedAt: lastMessage?.createdAt)
+            summaryIsStale(writtenAt: $0.writtenAt, activity: activity)
         }
         let statusStale = status.map {
-            statusIsStale(carrierId: $0.0.id, lastMessageId: lastMessage?.id)
+            statusIsStale(carrierId: $0.0.id, activity: activity)
         }
 
         // 优先级：新鲜的摘要 > 新鲜的状态 > 过期的摘要 > 过期的状态 > 还没有。
@@ -101,26 +102,62 @@ enum CrewStatusLine {
 
     // MARK: - 过期判定（纯函数）
 
-    /// 总机长的摘要过没过期：**写完之后，这个机组有没有更新的消息**。
+    /// 这个机组**最后一条算数的发言**，三种情况分开 —— 「不知道」和「一条都没有」
+    /// 对过期判定的意思相反，压成一个 `nil` 就会让其中一种说错话。
+    ///
+    /// ## 为什么不是「最后一条消息」（2026-09-13，父机长抓到的）
+    /// 第一版拿的是末条消息，不分是谁发的。而白板上大量是系统通知和工具回执：本机真数据
+    /// 14887 条里，系统身份的有 2100+ 条（其中「已送达」1122 条），「已联系」回执 338 条；
+    /// 一次读不出来的故障恢复时，一个群一次就补发 74 条系统通知。照第一版装上去，
+    /// **每个机组的摘要都会立刻变成「已过时」**，人看到的等于没做。
+    enum Activity: Equatable {
+        /// 快照里没有这个机组（白板还没读到 / 是空的）→ 证明不了新鲜，当过期。
+        case unknown
+        /// 读到了白板，但**一条算数的发言都没有**（只有系统通知之类）→ 之后没人说过话。
+        case noneYet
+        /// 最后一条算数的发言。
+        case latest(LocalWhiteboardMessage)
+    }
+
+    /// 从 store 那两份快照拼出 `Activity`。视图只调它，不自己拿 nil 判。
+    ///
+    /// - Parameters:
+    ///   - lastMessage: 末条消息（`CrewStore.lastWhiteboardMessages`，**只用来判「读没读到」**）。
+    ///   - lastActivity: 最后一条算数的发言（`CrewStore.lastActivityMessages`）。
+    static func activity(lastMessage: LocalWhiteboardMessage?,
+                         lastActivity: LocalWhiteboardMessage?) -> Activity {
+        guard lastMessage != nil else { return .unknown }
+        return lastActivity.map(Activity.latest) ?? .noneYet
+    }
+
+    /// 总机长的摘要过没过期：**写完之后，这个机组有没有更新的算数发言**。
     ///
     /// - 按**秒**比、而且「同一秒」算过期：消息时间戳只精确到秒，同一秒里谁先谁后
     ///   分不出来 —— 分不出来的时候宁可说旧，不许把旧的说成新的。
     /// - 任何一边的时间解析不出来 → 过期（证明不了它新鲜）。
-    /// - 最新消息不知道（快照里没有这个机组）→ 过期。同上：证明不了。
-    static func summaryIsStale(writtenAt: String, lastMessageCreatedAt: String?) -> Bool {
-        guard let lastMessageCreatedAt,
-              let last = CrewTimestamp.parse(lastMessageCreatedAt),
-              let written = CrewTimestamp.parse(writtenAt) else { return true }
-        return floor(last.timeIntervalSince1970) >= floor(written.timeIntervalSince1970)
+    /// - 快照里没有这个机组 → 过期。同上：证明不了。
+    /// - 读到了、但一条算数的发言都没有 → 新鲜（写完之后没人说过话）。
+    static func summaryIsStale(writtenAt: String, activity: Activity) -> Bool {
+        guard let written = CrewTimestamp.parse(writtenAt) else { return true }
+        switch activity {
+        case .unknown:
+            return true
+        case .noneYet:
+            return false
+        case .latest(let message):
+            guard let last = CrewTimestamp.parse(message.createdAt) else { return true }
+            return floor(last.timeIntervalSince1970) >= floor(written.timeIntervalSince1970)
+        }
     }
 
-    /// 机长自报的状态过没过期：**它所在那条消息是不是这个机组的最新一条**。
+    /// 机长自报的状态过没过期：**它所在那条消息是不是最后一条算数的发言**。
     ///
-    /// 用消息 id 比，不用时间比 —— 状态本来就挂在一条具体的消息上，「之后还有没有别的
-    /// 消息」按 id 问是精确的，不受秒级时间戳同秒的影响。最新消息不知道 → 过期。
-    static func statusIsStale(carrierId: String, lastMessageId: String?) -> Bool {
-        guard let lastMessageId else { return true }
-        return carrierId != lastMessageId
+    /// 用消息 id 比，不用时间比 —— 状态本来就挂在一条具体的消息上，「之后还有没有别人
+    /// 说过话」按 id 问是精确的，不受秒级时间戳同秒的影响。
+    /// 快照里没有这个机组 → 过期；「一条算数的都没有」却有一句状态，自相矛盾 → 也当过期。
+    static func statusIsStale(carrierId: String, activity: Activity) -> Bool {
+        guard case .latest(let message) = activity else { return true }
+        return carrierId != message.id
     }
 
     // MARK: - 文案
@@ -160,6 +197,38 @@ enum CrewStatusLine {
         f.dateFormat = "M月d日 HH:mm"
         return f
     }()
+}
+
+/// **哪些消息算「这个机组又有人说话了」**（人类 Todo #145 追加，2026-09-13）。
+///
+/// 只有人类和 agent 的发言算；系统通知、「已送达」回执、「已联系」回执都不算。
+///
+/// ## 判据只看落盘时的结构字段，不看显示名
+/// 显示名什么都可能是：机组可以叫任何名字、人类显示名是「人」、机长是「机长」。
+/// 真正不同的字段：
+/// - **系统通知 / 「已送达」回执**：写入时 `sessionId == "system"`
+///   （`postSystemNotice` 与十几处 `senderName: "系统"` 全是这个形状，逐处核过），
+///   新写入还会被正规化成 `senderKind == "pendingcrew"`。老数据两种形状都有，
+///   `PendingCrewSystemMessage.isSystem` 两种都认 —— 老数据不用迁移。
+/// - **「已联系」回执**：`contact` 工具以**调用它的那个 agent 自己的身份**写回本群，
+///   原来是 `category: "progress"`，跟一条真的进展汇报一个字段都不差。所以在写入端补了
+///   一个明确标记：`category == contactReceiptCategory`。
+///   **老数据里的「已联系」回执没有这个标记，仍然算发言**（本机 338 条）——
+///   它们全都早于任何一句摘要（摘要是这一版才有的），只有「装了新 app、但某个 helper
+///   还是旧二进制」那段时间里新写的回执会被误算。
+enum CrewActivityMessage {
+    /// 「已联系」回执的 category。写入端在 `McpServer` 的 `contact` 工具里。
+    static let contactReceiptCategory = "contact_receipt"
+
+    /// 这条消息算不算发言。
+    static func counts(_ message: LocalWhiteboardMessage) -> Bool {
+        if PendingCrewSystemMessage.isSystem(senderKind: message.senderKind,
+                                             senderSessionId: message.senderSessionId) {
+            return false
+        }
+        if message.category == contactReceiptCategory { return false }
+        return true
+    }
 }
 
 /// 写侧：`post_to_crew(crew_status:)` 收下来的那句话（人类 Todo #136）。

@@ -102,6 +102,15 @@ final class McpServerDirectoryToolsTests: XCTestCase {
         XCTAssertEqual(receipts.count, 1)
         XCTAssertTrue(receipts[0].text.hasPrefix("已联系 2（应用自动更新 全群）："), receipts[0].text)
         XCTAssertNil(receipts[0].externalContactFrom)
+
+        // #145 追加：这行回执以调用者**自己的身份**写回本群，不带标记就跟一条真的进展
+        // 汇报一个字段都不差，侧栏会拿它把总机长摘要判成「已过时」。
+        XCTAssertEqual(receipts[0].category, CrewActivityMessage.contactReceiptCategory)
+        XCTAssertFalse(CrewActivityMessage.counts(receipts[0]),
+                       "「已联系」回执算成了发言 —— 打一通电话就会把本群的摘要判成已过时")
+        // 对方群里收到的那条是真的外线发言，要算。
+        XCTAssertTrue(CrewActivityMessage.counts(landed[0]),
+                      "对方群里收到的外线消息没算发言 —— 那是真有人说了话")
     }
 
     func testContactCaptainExtensionMentionsCaptain() {

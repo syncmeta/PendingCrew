@@ -14,11 +14,24 @@ final class CrewLastMessageCacheTests: XCTestCase {
     /// 把一整板消息压成缓存的载荷。**跟生产那条 `convenience init` 同一套判据** ——
     /// 测试里另写一份，量到的就不是生产的那条路了。
     static func digest(_ messages: [LocalWhiteboardMessage]) -> CrewLastMessageCache.Digest? {
-        guard let last = messages.last else { return nil }
-        let carrier = messages.reversed().first {
-            ($0.crewStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }
-        return CrewLastMessageCache.Digest(last: last, status: carrier)
+        CrewLastMessageCache.digest(of: messages)
+    }
+
+    /// #145 追加：`last` 的语义不许变（侧栏显示最新一条、排序都读它），
+    /// 「最后一条算数的发言」另起一个字段，**同一次解码**里取出来。
+    func test_末条不分是谁发的_最后算数发言跳过系统消息() {
+        let human = LocalWhiteboardMessage(
+            id: "h", senderKind: "user", senderUserId: LocalWhiteboardStore.localUserId,
+            senderSessionId: nil, category: nil, text: "人说的",
+            createdAt: Self.iso.string(from: Date()))
+        let notice = LocalWhiteboardMessage(
+            id: "s", senderKind: "session", senderUserId: nil, senderSessionId: "system",
+            category: nil, text: "已送达「PendingCrew」群聊。",
+            createdAt: Self.iso.string(from: Date()), senderName: "系统")
+        let digest = Self.digest([human, notice])
+        XCTAssertEqual(digest?.last.id, "s", "末条的语义被改了 —— 侧栏预览和排序会跟着变")
+        XCTAssertEqual(digest?.lastActivity?.id, "h")
+        XCTAssertNil(Self.digest([notice])?.lastActivity, "只有系统消息时不许拿它充数")
     }
 
 

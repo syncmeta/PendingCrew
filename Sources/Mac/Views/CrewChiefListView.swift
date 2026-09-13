@@ -47,6 +47,9 @@ struct CrewChiefListView: View {
         // 状态那张表跟末条快照出自同一次解码（`CrewLastMessageCache.Digest`），
         // body 里只是一次字典查表 —— **不碰磁盘**。
         let statusCarriers = crewStore.crewStatusCarriers
+        // 判过期用的是「最后一条算数的发言」，不是末条消息（#145 追加）——
+        // 系统通知、「已送达」「已联系」回执不让摘要变成「已过时」。同一次解码，查表。
+        let lastActivities = crewStore.lastActivityMessages
         // 顶上那个固定入口 + 下面那份排好序的列表，**一次算出来**
         // （`CrewChiefOverview.rows`）。入口在不在、排第几、指向谁，是那边的
         // 单元测试压着的，不是这里目视出来的。
@@ -91,7 +94,9 @@ struct CrewChiefListView: View {
                     statusLine: CrewStatusLine.make(
                         summary: nil,
                         statusCarrier: statusCarriers[chief.id],
-                        lastMessage: lastMessages[chief.id]),
+                        activity: CrewStatusLine.activity(
+                            lastMessage: lastMessages[chief.id],
+                            lastActivity: lastActivities[chief.id])),
                     allowsReparentDrag: false,
                     showsColorBar: false,
                     showsContextMenu: false,
@@ -128,7 +133,9 @@ struct CrewChiefListView: View {
                     statusLine: CrewStatusLine.make(
                         summary: summaries[entry.crew.id],
                         statusCarrier: statusCarriers[entry.crew.id],
-                        lastMessage: lastMessages[entry.crew.id]),
+                        activity: CrewStatusLine.activity(
+                            lastMessage: lastMessages[entry.crew.id],
+                            lastActivity: lastActivities[entry.crew.id])),
                     allowsReparentDrag: false,
                     dragState: dragState,
                     childCrewTarget: $childCrewTarget
