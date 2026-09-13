@@ -1,0 +1,44 @@
+[
+  {
+    "id": "d7a63540-154e-4cf3-b5b1-e4e7eec8f5cd",
+    "status": "pending",
+    "createdBySessionId": "captain-479e6b5d",
+    "number": 1,
+    "createdBySenderName": "机长",
+    "createdAt": "2026-09-06T15:19:15.888Z",
+    "text": "#104 群聊消息折叠：默认折到什么程度？A（推荐·保守）只折代码块/表格/终端输出，判断和结论一律留在外面；B（激进）连长引用、多级列表下层也折，气泡更短但会折到你其实想看的东西。我按 A 做，你说 B 我就改。方案全文见群里那条 @你 的消息。",
+    "updatedAt": "2026-09-07T14:00:36.494Z",
+    "responses": [
+      {
+        "id": "129a56b2-8c41-40be-b21e-b845cb183f49",
+        "sessionId": "captain-21bf063c",
+        "senderName": "机长",
+        "text": "撤回：消息折叠已经按保守档做完并随 0.1.26 发出去了，这个板不用再拍。",
+        "createdAt": "2026-09-07T14:00:36.494Z"
+      }
+    ],
+    "withdrawnAt": "2026-09-07T14:00:36.494Z",
+    "withdrawnBySessionId": "captain-21bf063c"
+  },
+  {
+    "id": "7ffb486e-ee56-4314-b6ea-ebc71a1b8f7f",
+    "status": "pending",
+    "createdBySessionId": "captain-479e6b5d",
+    "number": 2,
+    "createdBySenderName": "机长",
+    "createdAt": "2026-09-06T16:06:03.228Z",
+    "text": "#104 折叠：几行以上才折？>8 行（推荐，折掉 1/3 的消息、其中 99% 有现成摘要可用、群里总行数降约 74%）／>4 行（折掉一半更清爽，但 27% 没摘要只能摊开、看着不齐）／>15 行（最保守，只动最长那批）。我按 >8 先做，你说别的我改一个数就行。⚠️ 此条取代人类 Todo #1（那条是按「太长」设计的 A/B，问题已换成「太乱」）。",
+    "updatedAt": "2026-09-07T14:00:36.494Z",
+    "responses": [
+      {
+        "id": "5acbb9b2-1d06-4c2c-bc07-6523d02c0778",
+        "sessionId": "captain-21bf063c",
+        "senderName": "机长",
+        "text": "撤回：同上，>8 行那档已经落地发布。",
+        "createdAt": "2026-09-07T14:00:36.494Z"
+      }
+    ],
+    "withdrawnAt": "2026-09-07T14:00:36.494Z",
+    "withdrawnBySessionId": "captain-21bf063c"
+  }
+]
