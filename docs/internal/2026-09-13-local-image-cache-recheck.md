@@ -34,3 +34,22 @@
 第二次全量绿不能消除第一次红：Codex 首轮失败状态用例在首轮全量的 8 秒等待后 health 仍为 nil，单测和第二次全量通过；原因未查明，不宣称缓存修复解决了它。后续若跟进应另立该用例的调查，不把此次缓存修复回退。
 
 可随提交审阅的重放脚本、两份 patch、红绿摘要及完整日志 SHA-256 位于同目录 `2026-09-13-local-image-cache-recheck-evidence/`。完整日志和 xcresult 留在 `/tmp/crew-cache-91-recheck-evidence/`，临时路径不承诺长期保留。
+
+## 机长要求的补充复核
+
+首轮全量失败断言原文（8 条，未经去重）：
+
+```text
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:484: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertEqual failed: ("nil") is not equal to ("Optional(PendingCrewTests.CrewSessionHealth.Kind.cliVersionIncompatible)")
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:485: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertTrue failed
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:488: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertEqual failed: ("working") is not equal to ("error") - First-turn failure must not appear as idle
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:489: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertEqual failed: ("Optional(PendingCrewTests.SessionStatusDot.working)") is not equal to ("Optional(PendingCrewTests.SessionStatusDot.attention)")
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:484: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertEqual failed: ("nil") is not equal to ("Optional(PendingCrewTests.CrewSessionHealth.Kind.cliVersionIncompatible)")
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:485: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertTrue failed
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:488: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertEqual failed: ("working") is not equal to ("error") - First-turn failure must not appear as idle
+/tmp/crew-cache-91-recheck-5f02cb2/Tests/PendingCrewTests/CodexProtocolTests.swift:489: error: -[PendingCrewTests.CodexFirstTurnFailureTests testFirstCompletedFailureNeverLooksIdle] : XCTAssertEqual failed: ("Optional(PendingCrewTests.SessionStatusDot.working)") is not equal to ("Optional(PendingCrewTests.SessionStatusDot.attention)")
+```
+
+补跑范围是整个 `CodexFirstTurnFailureTests` 套件（3 条），区别于此前只跑失败的 1 条用例。仍使用干净 detached `5f02cb2`，新建该树自有 `.test-archive/dd`；未修改测试或生产源码。两次顺序执行，完整日志为 `05-codex-suite-1.log` 与 `05-codex-suite-2.log`，两次均 exit 0、Executed 3 tests / 0 failures，分别 0.108 秒和 0.082 秒。与机长提供的两次 3/0 对照读数一致。
+
+结论限于：首轮全量失败未在这两次单独套件运行中复现，且此前第二次全量也通过。不能仅凭这些样本确定执行顺序是根因，尚需区分共享状态、时序与资源因素；本轮不修。

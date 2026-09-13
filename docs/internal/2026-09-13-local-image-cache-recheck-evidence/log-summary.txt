@@ -27,3 +27,13 @@ full-recheck.log
 sha256 607e8e950ea6f71bdb7c7c69e35b2c43f2cdf1c40d914990a94ddc9a99ffa532
 Executed 2781 tests, with 3 tests skipped and 0 failures (0 unexpected) in 182.217 (182.847) seconds
 ** TEST SUCCEEDED **
+
+05-codex-suite-1.log
+sha256 744a5ce557d517acf75e2bc6689573914cdca95d42d5d1996660de74395bd053
+Executed 3 tests, with 0 failures (0 unexpected) in 0.106 (0.108) seconds
+** TEST SUCCEEDED **
+
+05-codex-suite-2.log
+sha256 a09d892a38a53ba37635bd229eeb84245c6ba6c55295d9e23ccee761f622adfa
+Executed 3 tests, with 0 failures (0 unexpected) in 0.080 (0.082) seconds
+** TEST SUCCEEDED **
