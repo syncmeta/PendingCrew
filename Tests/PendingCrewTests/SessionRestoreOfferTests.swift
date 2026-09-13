@@ -162,5 +162,73 @@ final class SessionRestoreOutcomeTests: XCTestCase {
         let f = fail("a")
         XCTAssertTrue(f.reason.contains("No conversation found"))
     }
+
+    /// 交给后台 ≠ 接回来了。viewer 这边根本不知道结果。
+    func testForwardedNeverClaimsRestored() {
+        let o = SessionRestoreOutcome(forwarded: ["a", "b"])
+        XCTAssertFalse(o.summary.contains("已接回"), "只是转交却说「已接回」：\(o.summary)")
+        XCTAssertTrue(o.summary.contains("交给后台"), o.summary)
+        XCTAssertTrue(o.summary.contains("2"), o.summary)
+    }
+}
+
+/// 「接回来」在哪个进程里做。**viewer 里自己拉 agent = 与后台双头**，
+/// 所以转交不了时必须拒绝，绝不退回本地。
+final class SessionRestoreRouteTests: XCTestCase {
+
+    private let cap = [SessionRestoreRoute.capability]
+
+    func testTheOrchestratorRestoresItself() {
+        // 编排者进程（后台 / inproc 界面）不看连接和能力表。
+        XCTAssertEqual(SessionRestoreRoute.decide(isViewer: false, connected: false, negotiated: []),
+                       .runHere)
+    }
+
+    func testViewerForwardsWhenTheBackendUnderstands() {
+        XCTAssertEqual(SessionRestoreRoute.decide(isViewer: true, connected: true, negotiated: cap),
+                       .forwardToBackend)
+    }
+
+    /// **这个类的重点。** 没连上时不许退回 `.runHere`。
+    func testViewerNotConnectedRefusesAndNeverRunsLocally() {
+        let route = SessionRestoreRoute.decide(isViewer: true, connected: false, negotiated: cap)
+        guard case let .refuse(why) = route else {
+            return XCTFail("没连上后台却没拒绝：\(route) —— 那会在界面里自己拉 agent")
+        }
+        XCTAssertTrue(why.contains("没有改在界面里自己拉"), why)
+    }
+
+    /// 旧后台不认识这个请求时只写一行日志就丢 —— 不看能力表就发 = 静默失败。
+    func testOldBackendWithoutTheCapabilityIsRefused() {
+        let route = SessionRestoreRoute.decide(
+            isViewer: true, connected: true, negotiated: ["screen-text", "terminal-bytes"])
+        guard case let .refuse(why) = route else {
+            return XCTFail("后台没声明能力却照发了：\(route)")
+        }
+        XCTAssertTrue(why.contains("版本太旧"), why)
+    }
+
+    /// 能力表是后台和界面共用的那一份；少了它，协商永远出不来，转交永远被拒。
+    func testTheDaemonAdvertisesTheCapability() {
+        XCTAssertTrue(SessionDaemonHost.defaultCapabilities.contains(SessionRestoreRoute.capability))
+        XCTAssertTrue(SessionOrchestrationOp.all.contains(SessionOrchestrationOp.restoreSessions))
+    }
+
+    func testCandidatesRoundTripOverTheWire() {
+        let list: [SessionRestoreOffer.Candidate] = [
+            .init(sessionId: "s1", crewId: "c1"), .init(sessionId: "s2", crewId: "c2"),
+        ]
+        XCTAssertEqual(SessionRestoreOffer.Candidate.list(fromWire: .array(list.map(\.wireValue))),
+                       list)
+    }
+
+    /// 解不开就整份作废，不挑能用的几个 —— 挑的话另外那几个连一句失败都没有。
+    func testOneBadEntryVoidsTheWholeList() {
+        let good = SessionRestoreOffer.Candidate(sessionId: "s1", crewId: "c1").wireValue
+        let bad = SessionWireJSONValue.object(["sessionId": .string("s2")])   // 缺 crewId
+        XCTAssertNil(SessionRestoreOffer.Candidate.list(fromWire: .array([good, bad])))
+        XCTAssertNil(SessionRestoreOffer.Candidate.list(fromWire: nil))
+        XCTAssertNil(SessionRestoreOffer.Candidate.list(fromWire: .string("s1")))
+    }
 }
 #endif

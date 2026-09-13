@@ -210,6 +210,18 @@ enum SessionDaemonMain {
             Task { @MainActor in
                 await runner.applyCodexApprovalMode(to: target, reviewer: reviewer)
             }
+        case SessionOrchestrationOp.restoreSessions:
+            // 界面恢复弹窗里点了「接回来」，整笔转交到这里（viewer 自己拉 = 双头）。
+            // 失败各自落群那一套在 `restoreSessions` 里，这里不重写。
+            guard let candidates = SessionRestoreOffer.Candidate.list(
+                fromWire: control.arguments["candidates"]) else {
+                log.write("接回 session 的请求解不开（candidates 缺失或格式不对），一个都没有接回")
+                return
+            }
+            Task { @MainActor in
+                let outcome = await runner.restoreSessions(candidates, backend: model.backend)
+                log.write("接回 session（界面转交）：\(outcome.summary)")
+            }
         default:
             log.write("未知编排请求 \(control.op)，忽略（§4.4：新增能力不断连）")
         }

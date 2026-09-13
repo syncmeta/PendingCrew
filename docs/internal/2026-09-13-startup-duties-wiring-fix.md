@@ -82,6 +82,24 @@
 
 **单元 3：设置「后端」页补实况 + 重启入口**（原计划 #15，排在后面）。
 
+### 4.1 单元 1 落地：`06894b1`
+
+### 4.2 单元 2 实际形状
+
+- 判定 `SessionRestoreRoute.decide(isViewer:connected:negotiated:)`（`SessionRestoreOffer.swift`）：
+  编排者 → 本进程接；viewer 且连上且协商出 `restore-sessions` → 转交；**其余一律拒绝，
+  拒绝理由按候选逐个落各自 crew 的群**（沿用原来那段 fail-loud）。
+- 能力项加进 `SessionDaemonHost.defaultCapabilities`（界面与后台共用同一份，协商取交集）
+  → 现在跑着的 0.1.34 后台协商不出，转交会被拒而不是被静默丢。
+- 候选名单编解码：**一条坏的整份作废**，后台只写日志、一个也不接。
+- `SessionHost.restoreOfferedSessions`：viewer 下最多等 15 秒连上后台，等不到交给判定拒绝。
+
+**单元 2 的边界**：
+- 转交之后界面回执只进 NSLog（「已把 N 个交给后台去接」）；接没接回来**只在各 crew 群里**
+  看得到（后台 `restoreSessions` 的失败落群那一套），弹窗那侧不再回显。
+- 名单解不开（只会是 bug）时只有后台日志一行，群里没有——界面那侧已经说了「已交给后台」。
+- 协议往返本身没有端到端测过（真起一个后台再发请求）；只有判定测试 + 接线源码断言 + 构建。
+
 ## 5. 边界（这份修法**不**覆盖的）
 
 - **后台单独崩了、界面一直开着**：viewer 会重连并拉起新后台，session 被打断，

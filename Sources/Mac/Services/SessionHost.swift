@@ -175,8 +175,18 @@ final class SessionHost: ObservableObject {
     func restoreOfferedSessions(model: AppModel) async -> SessionRestoreOutcome {
         let candidates = restoreOffer.candidates
         dismissRestoreOffer()
+        // viewer：弹窗是启动时弹的，那一刻多半还没连上后台（换代时更是刚拉起新版）。
+        // 等一小会儿；等不到由 `SessionRestoreRoute` 如实拒绝并落群，**不排队**。
+        if let viewer {
+            for _ in 0..<Self.restoreConnectWaitTicks where !viewer.isConnected {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
         return await runner.restoreSessions(candidates, backend: model.backend)
     }
+
+    /// 60 × 0.25s = 15 秒。比拉起后台的赛跑上限宽一点。
+    private static let restoreConnectWaitTicks = 60
 
     /// 人点了「不恢复」，或者已经恢复过了。**问过一次就不再问** —— 同一次启动里
     /// 反复弹同一个窗，比不弹更糟。

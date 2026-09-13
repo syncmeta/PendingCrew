@@ -715,6 +715,36 @@ final class ViewWiringTests: XCTestCase {
                           "⌘Q 时 viewer 也会停 run —— 关界面就停掉后台的 session")
     }
 
+    /// 恢复弹窗里点「接回来」：viewer 必须整笔转交后台，后台必须真的接住。
+    ///
+    /// 判定在 `SessionRestoreRoute`（有测试）；这条钉的是**接线**：`restoreSessions`
+    /// 先问路由再决定在本进程拉，后台 `handle` 真的处理了这个操作 —— 少了后一半，
+    /// 请求会落进 `default:` 只写一行日志，而界面回执说「已交给后台」。
+    func testRestoreIsRoutedAndTheDaemonHandlesIt() throws {
+        let runner = Self.codeOnly(try Self.text(of: "CrewSessionRunner.swift"))
+        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+
+        guard let head = runner.range(of: "func restoreSessions(") else {
+            return XCTFail("找不到 CrewSessionRunner.restoreSessions")
+        }
+        let rest = runner[head.upperBound...]
+        guard let route = rest.range(of: "SessionRestoreRoute.decide("),
+              let local = rest.range(of: "restoreHere(") else {
+            return XCTFail("`restoreSessions` 没先问路由 —— viewer 里会自己拉 agent，与后台双头")
+        }
+        XCTAssertLessThan(route.lowerBound, local.lowerBound,
+                          "在本进程接回排在路由判定之前 —— viewer 里会先拉起来再问")
+        XCTAssertTrue(rest.contains("SessionOrchestrationOp.restoreSessions"),
+                      "转交那一支没发编排请求")
+
+        guard let handled = daemon.range(of: "case SessionOrchestrationOp.restoreSessions:") else {
+            return XCTFail("后台没处理 restoreSessions —— 请求会落进 default: 被静默丢掉")
+        }
+        let branch = daemon[handled.upperBound...].prefix(900)
+        XCTAssertTrue(branch.contains("runner.restoreSessions("),
+                      "后台接到了请求却没去接回")
+    }
+
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")

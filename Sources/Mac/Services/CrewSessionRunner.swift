@@ -2527,6 +2527,40 @@ final class CrewSessionRunner: ObservableObject {
     func restoreSessions(_ candidates: [SessionRestoreOffer.Candidate],
                          backend: PendingCrewBackend?) async -> SessionRestoreOutcome {
         var outcome = SessionRestoreOutcome()
+        // **先问在哪个进程里接。** 接回 = 拉 agent；viewer 里自己拉就和后台双头。
+        // 判定在 `SessionRestoreRoute`（有测试）。
+        switch SessionRestoreRoute.decide(
+            isViewer: isViewer,
+            connected: viewerClient?.isConnected ?? false,
+            negotiated: viewerClient?.negotiatedCapabilities ?? []) {
+        case .forwardToBackend:
+            sendOrchestration(SessionOrchestrationOp.restoreSessions, [
+                "candidates": .array(candidates.map(\.wireValue)),
+            ])
+            outcome.forwarded = candidates.map(\.sessionId)
+            return outcome
+        case let .refuse(why):
+            outcome.failures = candidates.map {
+                .init(sessionId: $0.sessionId, crewId: $0.crewId, reason: why)
+            }
+        case .runHere:
+            outcome = await restoreHere(candidates, backend: backend)
+        }
+        // fail-loud：**每个失败各自落进它自己的群**，带原话。
+        for failure in outcome.failures {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: failure.crewId, sessionId: "system",
+                text: "接回 session `\(failure.sessionId)` 失败：\(failure.reason)"
+                    + "\n它还在成员列表里，@ 它同样能再试一次。",
+                category: "progress", senderName: "系统")
+        }
+        return outcome
+    }
+
+    /// 本进程就是编排者时的接回本体。
+    private func restoreHere(_ candidates: [SessionRestoreOffer.Candidate],
+                             backend: PendingCrewBackend?) async -> SessionRestoreOutcome {
+        var outcome = SessionRestoreOutcome()
         guard let backend else {
             outcome.failures = candidates.map {
                 .init(sessionId: $0.sessionId, crewId: $0.crewId, reason: "后端还没就绪")
@@ -2559,14 +2593,6 @@ final class CrewSessionRunner: ObservableObject {
                     sessionId: candidate.sessionId, crewId: candidate.crewId,
                     reason: error.localizedDescription))
             }
-        }
-        // fail-loud：**每个失败各自落进它自己的群**，带原话。
-        for failure in outcome.failures {
-            LocalWhiteboardStore.shared.appendSessionMessage(
-                crewId: failure.crewId, sessionId: "system",
-                text: "接回 session `\(failure.sessionId)` 失败：\(failure.reason)"
-                    + "\n它还在成员列表里，@ 它同样能再试一次。",
-                category: "progress", senderName: "系统")
         }
         return outcome
     }

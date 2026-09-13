@@ -969,9 +969,12 @@ enum SessionOrchestrationOp {
     /// 交接的每一步都是「对 run 做点什么，然后看 run 变成什么样」，只转发其中
     /// 「起新」那一步、把「确认」留在 viewer 里，正是 Todo #101 那个 bug 的形状。
     static let captainHandoff = "orchestration.captainHandoff"
+    /// 恢复弹窗里点了「接回来」。**整笔转交**：接回就是拉 agent，viewer 里自己拉 = 双头。
+    /// 只在协商出 `SessionRestoreRoute.capability` 时才发 —— 旧后台不认识会静默丢掉。
+    static let restoreSessions = "orchestration.restoreSessions"
 
     static let all = [startSession, stopRun, removeRun, sendText, interrupt,
-                      profileChange, approvalMode, captainHandoff]
+                      profileChange, approvalMode, captainHandoff, restoreSessions]
 
     static func isOrchestration(_ op: String) -> Bool { op.hasPrefix("orchestration.") }
 }

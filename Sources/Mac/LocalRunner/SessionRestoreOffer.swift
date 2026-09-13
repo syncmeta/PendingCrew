@@ -128,11 +128,18 @@ struct SessionRestoreOutcome: Equatable {
 
     var restored: [String] = []
     var failures: [Failure] = []
+    /// 交给后台去接的（viewer 里）。**这不是「已接回」** —— 接没接回来是后台那边的事，
+    /// 结果（尤其是失败）由后台写进各自 crew 的群里。
+    var forwarded: [String] = []
 
     var allSucceeded: Bool { failures.isEmpty }
 
     /// 给人看的一句（弹窗回执 / 白板）。
     var summary: String {
+        if !forwarded.isEmpty && restored.isEmpty && failures.isEmpty {
+            return "已把 \(forwarded.count) 个 session 交给后台去接；"
+                + "接没接回来，后台会写进各自 crew 的群里。"
+        }
         if restored.isEmpty && failures.isEmpty { return "没有需要接回的 session。" }
         if failures.isEmpty { return "已接回 \(restored.count) 个 session。" }
         let named = failures.map(\.sessionId).joined(separator: "、")
@@ -142,6 +149,60 @@ struct SessionRestoreOutcome: Equatable {
         }
         return "接回了 \(restored.count) 个，**\(failures.count) 个没接回来**：\(named)。"
             + "失败原因已经写进各自 crew 的群里。"
+    }
+}
+
+/// 「接回来」这件事**在哪个进程里做**。
+///
+/// 接回 = `restartMember → launchWorker`，那是真的拉 agent 子进程。viewer（默认模式下的
+/// 界面）里这么做，就和后台各养一份同一个 session —— 双头。所以 viewer 必须**整笔转交**
+/// 后台，而转交不了时**如实拒绝，绝不退回在界面里自己拉**。
+///
+/// 两种转交不了：
+/// - 还没连上后台：`sendOrchestration` 不排队（排队会变成「点了没反应，半分钟后突然起两个」）。
+/// - 后台版本旧、不认识这个请求：后台遇到不认识的编排请求**只写一行日志就丢**
+///   （`SessionDaemonMain.handle` 的 `default:`）。不先看能力表就发，就是静默失败。
+enum SessionRestoreRoute: Equatable {
+    case runHere
+    case forwardToBackend
+    case refuse(String)
+
+    /// 后台在握手里声明「我认识 `orchestration.restoreSessions`」。
+    static let capability = "restore-sessions"
+
+    static func decide(isViewer: Bool, connected: Bool, negotiated: [String]) -> SessionRestoreRoute {
+        guard isViewer else { return .runHere }
+        guard connected else {
+            return .refuse("还没连上后台进程，没有接回。没有改在界面里自己拉 —— "
+                + "那会和后台各跑一份同样的 session。连上之后 @ 它同样能接回。")
+        }
+        guard SessionCapabilities.supports(capability, in: negotiated) else {
+            return .refuse("后台进程版本太旧，不认识「接回 session」这个请求，没有接回；"
+                + "也没有改在界面里自己拉（那会和后台双头）。"
+                + "让后台换成新版（重启 PendingCrew）之后 @ 它同样能接回。")
+        }
+        return .forwardToBackend
+    }
+}
+
+/// 候选名单在协议上的样子。**解不开就整份作废**（返回 nil），不挑能用的几个 ——
+/// 挑的话人以为接了 5 个，其实只接了 3 个，另外 2 个连一句失败都没有。
+extension SessionRestoreOffer.Candidate {
+    var wireValue: SessionWireJSONValue {
+        .object(["sessionId": .string(sessionId), "crewId": .string(crewId)])
+    }
+
+    static func list(fromWire value: SessionWireJSONValue?) -> [SessionRestoreOffer.Candidate]? {
+        guard case let .array(items)? = value else { return nil }
+        var out: [SessionRestoreOffer.Candidate] = []
+        for item in items {
+            guard case let .object(fields) = item,
+                  case let .string(sessionId)? = fields["sessionId"], !sessionId.isEmpty,
+                  case let .string(crewId)? = fields["crewId"], !crewId.isEmpty
+            else { return nil }
+            out.append(.init(sessionId: sessionId, crewId: crewId))
+        }
+        return out
     }
 }
 #endif

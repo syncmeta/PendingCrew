@@ -191,7 +191,7 @@ final class SessionDaemonHost {
 
     static let defaultCapabilities = [
         "approval-mode", "launch-parameter-problem", "profile-switch", "screen-text",
-        "terminal-bytes", "transcript-events",
+        "terminal-bytes", "transcript-events", SessionRestoreRoute.capability,
     ]
 
     nonisolated static var currentBuild: String {
