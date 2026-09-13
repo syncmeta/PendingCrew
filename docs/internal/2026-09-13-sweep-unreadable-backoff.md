@@ -99,7 +99,16 @@
 
 ### 干净树全量
 
-（待补：`git worktree add --detach 05b3878` + 复制 Fixtures + 独立 derivedDataPath）
+`git worktree add --detach 05b3878` → `cp -R` 共享目录的 `Tests/PendingCrewTests/Fixtures/`（2.0 MB，LEDDriverCrew）→ 独立 `-derivedDataPath` 跑全量：
+
+`Executed 2868 tests, with 6 tests skipped and 0 failures (0 unexpected)`，`** TEST SUCCEEDED **`。
+
+- #88 那趟是 2860 条、跳过 3 条。多出来的 8 条是这次新加的用例，对得上。
+- 6 条跳过：
+  - 以前就有的 3 条：`AgentTuiFixtureRecorder.testRecord`、`CrewLastMessageCacheTests.test_基准_现场白板目录`、`SessionAwaitingReplyInputsCacheTests.test_基准_现场目录`
+  - 多出来的 3 条是 `CrewMentionFilterRealWhiteboardTests` 的 `testAWrongLocalUserIdDoesNotKeepThem`、`testEveryRealHumanMessageCarriesTheLocalSentinelId`、`testFilterKeepsEveryRealMessageTheHumanSent`。跳过原因原文是「✗ 真白板读不出来，**这不是『本机没有数据』**」。这三条读的是本机真实的数据目录，而那段时间数据目录正在发作：12:54 从 shell 读 `whiteboards/…approvals.json` 就报 `Operation not permitted`。它们跟这次改动没有关系，但**这三条这一趟没有验到**。
+- 已知偶发的 `CodexFirstTurnFailureTests`、`CaptainLaunchReadinessTests` 这一趟没有红。
+- 跑完两份 DerivedData 都删了（1.4 G + 1.2 G）。干净树 worktree 本身留着，没删。
 
 ## 六、边界
 
