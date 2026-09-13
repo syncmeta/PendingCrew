@@ -64,6 +64,9 @@ struct PendingCrewApp: App {
         // 这样在设置窗口改外观时它本身也即时重绘。对齐 PendingBot #299。
         Settings {
             CrewSettingsView()
+                // 「后端」页的重启入口要走 SessionHost（换代公告 / 停旧 / 问接回同一套）。
+                // **不注入就是一读就崩**，接线测试钉着。
+                .environmentObject(sessionHost)
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         }
         .commands {

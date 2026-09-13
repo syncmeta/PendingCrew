@@ -188,6 +188,48 @@ final class SessionHost: ObservableObject {
     /// 60 × 0.25s = 15 秒。比拉起后台的赛跑上限宽一点。
     private static let restoreConnectWaitTicks = 60
 
+    /// 设置「后端」页的「重启后台 / 换成新版」。返回给人看的一句。
+    ///
+    /// **走的是启动换代同一套**：同一个探针、同一个判定（`BackendUpdatePlan.decide`）、
+    /// 同一句换代公告、同一个 stopper。按钮叫什么、确认框说什么在
+    /// `BackendRegistry.restartAction`（有测试）。
+    ///
+    /// - **先说再停**：反过来人先看到 session 全断、几秒后才看到解释。
+    /// - 停旧最多等 8 秒，放到主线程外；探针要主线程（socket 回调投主队列）。
+    /// - 版本不同 = 换代 → 停成功后照启动换代那样问要不要接回；
+    ///   同版重启是人自己按的 → 规格是不问（确认框里已经提前说了）。
+    /// - viewer 里不用我们起新的：锁空了 `ViewerSessionClient` 自己会拉。
+    func restartLocalBackend() async -> String {
+        let appBuild = SessionDaemonHost.currentBuild
+        let candidates = Self.restoreCandidates()
+        let decision = BackendUpdatePlan.decide(
+            backend: BackendUpdateCoordinator.probeState(), appBuild: appBuild)
+        let text: String
+        if case let .replace(oldBuild, newBuild, count) = decision {
+            text = BackendUpdatePlan.announcement(
+                oldBuild: oldBuild, newBuild: newBuild, sessionCount: count)
+        } else {
+            text = "有人在设置里手动重启了本机后台，正在跑的 session 会被打断；"
+                + "之后 @ 它们能接回。"
+        }
+        for crewId in BackendUpdateCoordinator.affectedCrewIds() {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system", text: text,
+                category: "progress", senderName: "系统")
+        }
+
+        let dataRoot = PendingCrewDaemonPaths.standard().lock.deletingLastPathComponent()
+        let outcome = await Task.detached { DaemonStopper(dataRoot: dataRoot).stop() }.value
+        NSLog("[SessionHost] 设置里重启后台：%@", outcome.text)
+        // 停不掉时**不许假装换过了** —— 不然会去问人接回一批根本没断的 session。
+        guard outcome.isSuccess else { return outcome.text }
+        if case let .replace(oldBuild, newBuild, _) = decision {
+            restoreOffer = SessionRestoreOffer.afterBackendReplaced(
+                oldBuild: oldBuild, newBuild: newBuild, candidates: candidates)
+        }
+        return outcome.text
+    }
+
     /// 人点了「不恢复」，或者已经恢复过了。**问过一次就不再问** —— 同一次启动里
     /// 反复弹同一个窗，比不弹更糟。
     func dismissRestoreOffer() {

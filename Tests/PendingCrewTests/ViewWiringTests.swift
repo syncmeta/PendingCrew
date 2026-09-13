@@ -649,6 +649,38 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(settings.contains("BackendRegistry.connectivity"),
                       "「能不能连」没问模型层 —— 界面自己判的话，"
                       + "「远程绝不静默降级成本机」那条保证就绕过去了")
+        // 实况与重启入口（计划 #15）：判定在模型层（`BackendLiveStatusTests`），
+        // 这里钉**接上了**。界面自己去探本机再填到行上，「外部条目不许拿本机读数冒充」
+        // 那条就绕过去了；自己拼按钮文案，「viewer 里不许叫停用」那条也绕过去了。
+        XCTAssertTrue(settings.contains("BackendRegistry.liveStatus"),
+                      "后端页没显示实况，或者没问模型层")
+        XCTAssertTrue(settings.contains("BackendRegistry.restartAction"),
+                      "重启按钮没问模型层 —— 文案和能不能按是界面自己定的")
+        XCTAssertTrue(settings.contains("sessionHost.restartLocalBackend"),
+                      "重启没走 SessionHost —— 换代公告 / 问接回就漏了")
+        let app = Self.codeOnly(try Self.text(of: "PendingCrewApp.swift"))
+        if let settingsScene = app.range(of: "Settings {") {
+            XCTAssertTrue(app[settingsScene.upperBound...].prefix(400)
+                            .contains(".environmentObject(sessionHost)"),
+                          "设置窗没注入 sessionHost —— 打开「后端」页一读环境对象就崩")
+        } else {
+            XCTFail("找不到 Settings 场景")
+        }
+        let host = Self.codeOnly(try Self.text(of: "SessionHost.swift"))
+        if let restart = host.range(of: "func restartLocalBackend()") {
+            let body = String(host[restart.upperBound...].prefix(3000))
+            if let announce = body.range(of: "appendSessionMessage"),
+               let stop = body.range(of: "DaemonStopper(") {
+                XCTAssertLessThan(announce.lowerBound, stop.lowerBound,
+                                  "重启是先停再说 —— 人先看到 session 全断、几秒后才看到解释")
+            } else {
+                XCTFail("restartLocalBackend 里找不到公告或停旧")
+            }
+            XCTAssertTrue(body.contains("SessionRestoreOffer.afterBackendReplaced"),
+                          "设置里换代之后没问要不要接回")
+        } else {
+            XCTFail("找不到 SessionHost.restartLocalBackend")
+        }
 
         // ③ 账号头像那行的今日 token 用量去掉（额度环是另一回事，必须还在）。
         XCTAssertFalse(sidebar.contains("AgentUsageLine"),
