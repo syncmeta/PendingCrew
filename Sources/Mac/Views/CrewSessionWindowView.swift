@@ -41,6 +41,8 @@ struct CrewSessionWindowView: View {
 
     /// 本 crew 白板条目（拿来取「最新一步动作」）。
     @State private var entries: [CrewWhiteboardEntry] = []
+    /// 每个成员的 helper 跑在哪一版（#88）。nil = 还没读过一次快照。
+    @State private var helperBuildTable: CrewSessionsSnapshot.HelperBuildLookupTable?
     /// 本 crew server 成员名册。
     @State private var members: [CrewMember] = []
     @State private var captainBotId: String?
@@ -68,6 +70,19 @@ struct CrewSessionWindowView: View {
         // "Session" 盖掉 crew 名)。窗标题由中栏 toolbar 的 crew 名负责。
         // 成员列表模式要的白板/roster 数据 —— 事件驱动订阅（去 3s 轮询，与中栏各订各的）。
         .task(id: crewStore.selectedDetail?.crew.id) { await subscribeRoster() }
+        .task {
+            // 成员的 helper 跑在哪一版（#88）：编排者每 2 秒写进点名快照，这里 5 秒读一次。
+            // **读盘在后台**，body 里不碰磁盘（同 `latestStep` 那条教训）。
+            // 不跟白板变更走：装完新版之后群里可能一句话都没有，而成员就是在那一刻变旧的。
+            while !Task.isCancelled {
+                let dir = LocalWhiteboardStore.defaultDirectory
+                let table = await Task.detached(priority: .utility) {
+                    CrewSessionsSnapshot.helperBuildLookupTable(directory: dir)
+                }.value
+                if helperBuildTable != table { helperBuildTable = table }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
         // 切前台 = 看过了：清掉新选中 run 的未读（T6）。
         .onChange(of: sessionRunner.selectedRunId) { _, newId in
             if let run = sessionRunner.runs.first(where: { $0.runID == newId }) {
@@ -527,6 +542,12 @@ struct CrewSessionWindowView: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     SessionProfileReadonlyPill(run: run)
+                    // helper 跑在哪一版 / 是不是旧的（#88）。判定全在 `HelperBuildBadge.make`。
+                    if let badge = HelperBuildBadge.make(
+                        helperBuildTable?.lookup(sessionId: run.sessionId) ?? .notInSnapshot,
+                        isRunning: run.status == .running) {
+                        HelperBuildBadgeLabel(badge: badge)
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -1305,6 +1326,28 @@ private struct SessionProfilePillLabel: View {
 /// 成员列表不做选择入口，切换在 session 详情/终端页里做）。
 /// `@ObservedObject` 观察 run —— 切换（终端页/MCP 自切）回写 `run.model` /
 /// `run.effort` 后这里即时刷新（父 view 订不到嵌套 run 的 `@Published`）。
+/// 成员行上「helper 跑在哪一版」那枚标（#88）。**只负责画**：文字、色调、悬停说明
+/// 全部来自 `HelperBuildBadge.make`（在 test bundle 里有单测），这里不做任何判断。
+private struct HelperBuildBadgeLabel: View {
+    let badge: HelperBuildBadge
+
+    var body: some View {
+        Text(badge.text)
+            .lineLimit(1)
+            .font(Theme.Fonts.caption2)
+            .foregroundStyle(badge.tone == .warning ? Theme.Palette.amber : Theme.Palette.inkMuted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(badge.tone == .warning ? Theme.Palette.amberBg : Theme.Palette.surfaceMuted)
+            )
+            // 判不了的那枚跟只读 pill 一样压暗；旧版那枚不压，它就是要被看见的。
+            .opacity(badge.tone == .unknown ? 0.6 : 1)
+            .help(badge.help)
+    }
+}
+
 private struct SessionProfileReadonlyPill: View {
     @ObservedObject var run: CrewSessionRun
 

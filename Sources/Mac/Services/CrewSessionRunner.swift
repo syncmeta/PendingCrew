@@ -991,17 +991,20 @@ final class CrewSessionRunner: ObservableObject {
         let cache = awaitingInputs
         Task.detached(priority: .utility) { [weak self] in
             let inputs = cache.refresh(runs: keys)
-            await self?.applySnapshotTick(inputs)
+            // 每个成员的 helper 跑在哪一版（#88）：扫进程 + 读盘，同样不占主线程。
+            let helperBuilds = HelperProcessForensics.reports(for: keys)
+            await self?.applySnapshotTick(inputs, helperBuilds: helperBuilds)
         }
     }
 
     /// 一拍的主线程那半：把后台读到的输入写回 run，再组装 + 落盘点名快照。
     @MainActor
     private func applySnapshotTick(_ inputs: [SessionAwaitingReplyInputsCache.RunKey:
-                                              SessionAwaitingReplyInputsCache.Inputs]) {
+                                              SessionAwaitingReplyInputsCache.Inputs],
+                                    helperBuilds: [SessionAwaitingReplyInputsCache.RunKey: HelperBuildReport]) {
         snapshotTickInFlight = false
         refreshAwaitingReplies(inputs)
-        writeSessionsSnapshot()
+        writeSessionsSnapshot(helperBuilds: helperBuilds)
         if snapshotTickQueued {
             snapshotTickQueued = false
             persistSessionsSnapshot()
@@ -1030,7 +1033,12 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 组装点名快照并落盘。编码在主线程（对象小、必须与 runs 同一拍取值），
     /// **写盘挪到后台** —— 那是 2 秒一次的同步磁盘 IO，没有理由占着主线程。
-    private func writeSessionsSnapshot() {
+    ///
+    /// `helperBuilds` **没有默认值**：漏传的调用点会让每一格都写成空，读出来就是
+    /// 「后台太旧」—— 一句假话。让编译器把每个调用点顶出来。
+    private func writeSessionsSnapshot(
+        helperBuilds: [SessionAwaitingReplyInputsCache.RunKey: HelperBuildReport]
+    ) {
         var snapshot = CrewSessionsSnapshot()
         snapshot.updatedAt = ISO8601DateFormatter().string(from: Date())
         for run in runs where run.kind.isAgent {
@@ -1057,7 +1065,9 @@ final class CrewSessionRunner: ObservableObject {
                 sessionId: run.sessionId, name: run.displayName,
                 role: run.role == .captain ? "captain" : "worker",
                 brief: run.role == .captain ? "" : run.taskBrief,
-                state: state, healthDetail: healthDetail))
+                state: state, healthDetail: healthDetail,
+                helperBuild: helperBuilds[SessionAwaitingReplyInputsCache.RunKey(
+                    crewId: run.crewId, sessionId: run.sessionId)]))
         }
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         let url = LocalWhiteboardStore.defaultDirectory

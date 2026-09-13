@@ -305,7 +305,7 @@ final class HelperBuildPerMemberTests: XCTestCase {
             XCTAssertFalse(col.contains("一致"), "\(c) → \(col)")
             XCTAssertFalse(col.contains("旧"), "判不了不是旧：\(c) → \(col)")
         }
-        XCTAssertTrue(HelperBuildReport.rosterColumn(.writerTooOld).contains("旧版"),
+        XCTAssertTrue(HelperBuildReport.rosterColumn(.writerTooOld).contains("后台"),
                       "写快照的进程太老这件事要说出来（它和「没找到 helper」要人做的事不一样）")
     }
 

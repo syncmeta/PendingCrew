@@ -64,18 +64,45 @@ struct CrewSessionsSnapshot: Codable, Equatable {
     }
 
     /// 「某个成员的 helper 跑在哪一版」的查表。界面读快照时用它，不在 View 里自己拼。
-    struct HelperBuildLookupTable: Equatable {
+    struct HelperBuildLookupTable: Equatable, Sendable {
         fileprivate var entries: [String: HelperBuildReport?]
         fileprivate var failure: String?
 
         func lookup(sessionId: String) -> HelperBuildLookup {
-            .notInSnapshot  // SKELETON
+            if let failure { return .unreadable(failure) }
+            // 外层 nil = 快照里没这个人；内层 nil = 有这个人、没这一格。
+            guard let cell = entries[sessionId] else { return .notInSnapshot }
+            return cell.map { .report($0) } ?? .writerTooOld
         }
     }
 
-    /// 现读快照文件，建一张查表。**文件不在 / 读不动 / 解不开是三件事**。
+    /// 现读快照文件，建一张查表。**文件不在 / 读不动 / 解不开是三件事**：
+    /// 文件不在 = 还没有任何 session（每个人都是「快照里没有」）；读不动、解不开 =
+    /// 每个人都是「读不出来」，**不许退回空表**（空表会让每一行都落到「刚起来」那句话上）。
     static func helperBuildLookupTable(directory: URL) -> HelperBuildLookupTable {
-        HelperBuildLookupTable(entries: [:], failure: nil)  // SKELETON
+        let url = directory.appendingPathComponent(fileName)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain
+                && (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError) {
+            return HelperBuildLookupTable(entries: [:], failure: nil)
+        } catch {
+            return HelperBuildLookupTable(entries: [:], failure: error.localizedDescription)
+        }
+        do {
+            let snapshot = try JSONDecoder().decode(CrewSessionsSnapshot.self, from: data)
+            var entries: [String: HelperBuildReport?] = [:]
+            for entry in snapshot.crews.values.flatMap({ $0 }) {
+                // ⚠️ 必须显式 `.some` —— 往值类型是 Optional 的字典里直接赋 nil 等于删键，
+                // 「没这一格」会被静默改写成「没这个人」。
+                entries[entry.sessionId] = .some(entry.helperBuild)
+            }
+            return HelperBuildLookupTable(entries: entries, failure: nil)
+        } catch {
+            return HelperBuildLookupTable(entries: [:], failure: "解不开：\(error.localizedDescription)")
+        }
     }
 
     /// 机长 `list_sessions` 的渲染：一行一个成员,直接可读。
@@ -112,7 +139,11 @@ struct CrewSessionsSnapshot: Codable, Equatable {
             }
             let briefPart = e.brief.isEmpty ? "" : " — \(e.brief)"
             let evidencePart = " | " + evidence(e).rosterColumn(now: now)
-            return "- \(e.name) [\(e.role == "captain" ? "机长" : "worker")] \(stateLabel)\(briefPart)\(evidencePart) (session_id: \(e.sessionId))"
+            // helper 跑在哪一版（#88）。已退出的成员没有 helper，不挂；没有这一格 =
+            // 写快照的后台比这个功能早 —— 说「判不了」，不许默认成「一致」。
+            let buildPart = e.state == "exited" ? "" : " | " + HelperBuildReport.rosterColumn(
+                e.helperBuild.map { .report($0) } ?? .writerTooOld)
+            return "- \(e.name) [\(e.role == "captain" ? "机长" : "worker")] \(stateLabel)\(briefPart)\(evidencePart)\(buildPart) (session_id: \(e.sessionId))"
         }
         return lines.joined(separator: "\n") + "\n（快照时间 \(updatedAt)）"
     }
