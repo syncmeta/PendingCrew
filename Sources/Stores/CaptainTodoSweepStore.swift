@@ -56,9 +56,19 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
             unreadableStreak: streak,
             now: now,
             minimumInterval: minimumInterval)
-        guard case let .remind(text) = decision else { return nil }
-        recordReminded(crewId: crewId, at: now, unreadableStreak: 0)
-        return text
+        let next = CaptainTodoSweep.nextUnreadableStreak(
+            after: decision, snapshot: snapshot, previous: streak)
+        switch decision {
+        case let .remind(text):
+            recordReminded(crewId: crewId, at: now, unreadableStreak: next)
+            return text
+        case .silent:
+            // 读得回来但这一拍不提醒 —— 档位照样清零（时刻不动，只动档位）。
+            if next != streak, let stamp = stored.lastRemindedAt {
+                remember(crewId: crewId, Reminded(stamp: stamp, unreadableStreak: next))
+            }
+            return nil
+        }
     }
 
     /// 测试用：清掉进程内那份退路，模拟「进程重启了」。
@@ -95,18 +105,38 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     /// 逐系统调用量过，见 `docs/internal/2026-09-12-eperm-cause-found.md`）。
     /// 把时刻写进**文件名**，于是读它只需要 `readdir`，永远不用 `open`。
     ///
-    /// 三层优先级：盘上那本账 → 进程内 → 文件名标记。越往后越粗，但都比「没有」强。
+    /// ## 三层取**最新**的那一份，不按层排优先（计划 #98 改）
+    ///
+    /// 原来是「盘上 → 进程内 → 文件名」按层兜底。加上退避档位之后这不够了：
+    /// 盘上那份可能是**旧的**（故障期间写不进去，或者读得回来时还停在上一窗），
+    /// 按层取就会拿旧档位去压新情况。所以三份里取时刻最新的；时刻相同时取档位
+    /// **小**的 —— 同一时刻只有「清零」会改档位，小的那份才是后写的，而且
+    /// 这个方向错了也只是多问一次，不会压住。
     func row(crewId: String) -> Row {
-        guard var row = withFileLock(crewId, { loadLocked(crewId) }) else {
-            // 盘上读不到：确认无从得知（保守当成没有），但提醒时刻还记得。
-            return Row(confirmation: nil,
-                       lastRemindedAt: Self.rememberedReminded[crewId]
-                           ?? markerReminded(crewId: crewId))
+        let disk = withFileLock(crewId) { loadLocked(crewId) }
+        // 盘上读不到：确认无从得知（保守当成没有），但提醒时刻和档位还记得。
+        var row = disk.row ?? Row()
+        let onDisk = row.lastRemindedAt.map {
+            Reminded(stamp: $0, unreadableStreak: row.unreadableStreak ?? 0)
         }
-        if row.lastRemindedAt == nil {
-            row.lastRemindedAt = Self.rememberedReminded[crewId] ?? markerReminded(crewId: crewId)
-        }
+        let latest = Self.latest(
+            [onDisk, Self.rememberedReminded[crewId], markerReminded(crewId: crewId)]
+                .compactMap { $0 })
+        row.lastRemindedAt = latest?.stamp
+        row.unreadableStreak = latest.map(\.unreadableStreak)
         return row
+    }
+
+    /// 一次提醒留下的事实：什么时候、当时连续第几次是因为读不出来。
+    private struct Reminded {
+        let stamp: String
+        let unreadableStreak: Int
+    }
+
+    private static func latest(_ all: [Reminded]) -> Reminded? {
+        all.max { a, b in
+            a.stamp != b.stamp ? a.stamp < b.stamp : a.unreadableStreak > b.unreadableStreak
+        }
     }
 
     /// 标记文件放哪。**独立子目录** —— 免得这些零字节文件被当成账的一部分。
@@ -114,15 +144,21 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         directory.appendingPathComponent("sweep-reminded", isDirectory: true)
     }
 
-    /// 从文件名里读回「上次提醒时刻」。只列目录，不打开任何文件。
-    private func markerReminded(crewId: String) -> String? {
+    /// 从文件名里读回「上次提醒时刻 + 档位」。只列目录，不打开任何文件。
+    /// 文件名：`<crewId>.<ISO8601>.u<档位>.marker`；没有 `.u<档位>` 的按 0 算。
+    private func markerReminded(crewId: String) -> Reminded? {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: markerDirectory.path))
             ?? []
         let prefix = crewId + "."
-        return names
+        return Self.latest(names
             .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".marker") }
-            .map { String($0.dropFirst(prefix.count).dropLast(".marker".count)) }
-            .max()   // ISO8601 定宽，字典序 = 时间序
+            .map { name -> Reminded in
+                let body = String(name.dropFirst(prefix.count).dropLast(".marker".count))
+                let parts = body.components(separatedBy: ".u")
+                // ISO8601 定宽，字典序 = 时间序
+                return Reminded(stamp: parts[0],
+                                unreadableStreak: parts.count > 1 ? Int(parts[1]) ?? 0 : 0)
+            })
     }
 
     private func clearMarkers(crewId: String) {
@@ -133,11 +169,11 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     }
 
     /// 落一个标记，并把这个 crew 的旧标记删掉（`unlink` 在故障里也是通的）。
-    private func writeMarker(crewId: String, stamp: String) {
+    private func writeMarker(crewId: String, _ reminded: Reminded) {
         guard (try? FileManager.default.createDirectory(
             at: markerDirectory, withIntermediateDirectories: true)) != nil else { return }
-        let safe = stamp.replacingOccurrences(of: "/", with: "-")
-        let keep = "\(crewId).\(safe).marker"
+        let safe = reminded.stamp.replacingOccurrences(of: "/", with: "-")
+        let keep = "\(crewId).\(safe).u\(reminded.unreadableStreak).marker"
         try? Data().write(to: markerDirectory.appendingPathComponent(keep))
         for name in (try? FileManager.default.contentsOfDirectory(atPath: markerDirectory.path)) ?? []
         where name.hasPrefix(crewId + ".") && name.hasSuffix(".marker") && name != keep {
@@ -147,7 +183,7 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
 
     /// 进程内的「上次提醒时刻」，只在盘上读不出来时顶上。
     /// `nonisolated(unsafe)` 与本 store 其余部分同一口径（靠 flock 与单进程串行）。
-    nonisolated(unsafe) private static var rememberedReminded: [String: String] = [:]
+    nonisolated(unsafe) private static var rememberedReminded: [String: Reminded] = [:]
 
     /// 记下一次被接受的确认。**提醒时刻一并清空** —— 确认之后重新计时，
     /// 免得「确认完又冒出新条目」时被上一次的地板间隔压着不吭声。
@@ -168,15 +204,29 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     /// 记下「刚提醒过」。**不碰确认** —— 提醒不会让已有的确认作废。
     @discardableResult
     func recordReminded(crewId: String, at date: Date, unreadableStreak: Int = 0) -> Error? {
-        let stamp = ISO8601DateFormatter().string(from: date)
+        remember(crewId: crewId, Reminded(stamp: ISO8601DateFormatter().string(from: date),
+                                          unreadableStreak: unreadableStreak))
+    }
+
+    @discardableResult
+    private func remember(crewId: String, _ reminded: Reminded) -> Error? {
         // 先记进程内那份：盘上写不写得成都不影响「刚提醒过」这个事实，
         // 而地板间隔要的正是这个事实。
-        Self.rememberedReminded[crewId] = stamp
+        Self.rememberedReminded[crewId] = reminded
         // 再落一个文件名标记：进程重启后还认得（见 `row(crewId:)` 上的注释）。
-        writeMarker(crewId: crewId, stamp: stamp)
+        writeMarker(crewId: crewId, reminded)
         return withFileLock(crewId) {
-            var row = loadLocked(crewId) ?? Row()
-            row.lastRemindedAt = stamp
+            let disk = loadLocked(crewId)
+            // **读不出来就别整份重写**（计划 #98 顺手发现）。原来是 `loadLocked ?? Row()`
+            // 再写回：写走的是 rename，故障期间照样落得了盘 —— 于是每次提醒都用一个
+            // 空 `Row()` 盖掉那份读不出来的账，**机长上一次交的确认就这么没了**，故障一过
+            // 又被问一遍同一批条目。时刻和档位此刻已经在进程内和文件名里了，不差这一份。
+            guard !disk.unreadable else {
+                return CocoaError(.fileReadNoPermission)
+            }
+            var row = disk.row ?? Row()
+            row.lastRemindedAt = reminded.stamp
+            row.unreadableStreak = reminded.unreadableStreak == 0 ? nil : reminded.unreadableStreak
             return saveLocked(crewId: crewId, row)
         }
     }
@@ -194,9 +244,13 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
 
     /// 读不出来 → nil。**调用方一律按「没确认过」处理，也就是照常提醒** ——
     /// 这个方向的失败是安全的：宁可多问一次，不可因为一次读失败就把机制静默关掉。
-    private func loadLocked(_ crewId: String) -> Row? {
-        MultiProcessJSONStore.loadRowsLocked(
-            Row.self, at: fileURL(crewId), onIncident: { _ in }).first
+    /// `unreadable` = 这次读出过事故（打不开 / 读到空但文件非空 / 解不开）。
+    /// 跟「文件不存在」分开 —— 后者 `row` 也是 nil，但可以放心新写一份。
+    private func loadLocked(_ crewId: String) -> (row: Row?, unreadable: Bool) {
+        var incident = false
+        let row = MultiProcessJSONStore.loadRowsLocked(
+            Row.self, at: fileURL(crewId), onIncident: { _ in incident = true }).first
+        return (row, incident)
     }
 
     private func saveLocked(crewId: String, _ row: Row) -> Error? {

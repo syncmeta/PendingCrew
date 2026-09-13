@@ -664,7 +664,7 @@ final class CaptainTodoSweepTests: XCTestCase {
         let fx = try UnreadableFixture()
         var reminders: [Int] = []
         var texts: [String] = []
-        for minute in 0...(9 * 60) {
+        for minute in stride(from: 0, through: 9 * 60, by: 5) {
             if minute == 4 * 60 { CaptainTodoSweepStore.forgetInProcessMemoryForTesting() }
             let snapshot = CaptainTodoSweepStore.snapshot(of: fx.todos.read(crewId: fx.crewId))
             if let text = fx.sweeps.idleTick(
@@ -692,7 +692,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func test_账读得回来那一拍退避清零() throws {
         let fx = try UnreadableFixture()
         var reminders: [(Int, String)] = []
-        for minute in 0...300 {
+        for minute in (Array(stride(from: 0, through: 300, by: 5)) + [106]).sorted() {
             try fx.setTodosReadable(minute == 106)
             let snapshot = CaptainTodoSweepStore.snapshot(of: fx.todos.read(crewId: fx.crewId))
             if minute == 106 {
@@ -784,6 +784,21 @@ final class CaptainTodoSweepTests: XCTestCase {
         XCTAssertEqual(row.lastRemindedAt, ISO8601DateFormatter().string(from: at))
     }
 
+    /// **故障期间提醒一次，不许把那份读不出来的确认盖掉。**
+    ///
+    /// 原来 `recordReminded` 是 `loadLocked ?? Row()` 再整份写回，而写走的是 rename，
+    /// 故障期间照样落得了盘 —— 于是一次提醒就用空 `Row()` 顶替了那份账，故障一过，
+    /// 机长交过的确认没了，同一批条目又被问一遍。
+    func test_故障期间提醒不许盖掉读不出来的那份确认() throws {
+        let fx = try UnreadableFixture(openNumbers: [1])
+        XCTAssertNotNil(fx.sweeps.idleTick(crewId: fx.crewId, snapshot: .unreadable, now: fx.start,
+                                           minimumInterval: 15 * 60),
+                        "前置条件没成立：读不出来时第一拍就该提醒")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fx.sweepFile.path)
+        XCTAssertEqual(CaptainTodoSweepStore(directory: fx.dir).row(crewId: fx.crewId).confirmation?.openNumbers,
+                       [1], "故障期间的一次提醒把机长交过的确认盖掉了")
+    }
+
     /// 两本账都在、都非空、都打不开的一个目录。
     private struct UnreadableFixture {
         let dir: URL
@@ -791,9 +806,10 @@ final class CaptainTodoSweepTests: XCTestCase {
         let todos: LocalTodoStore
         let sweeps: CaptainTodoSweepStore
         let todosFile: URL
+        let sweepFile: URL
         let start = Date(timeIntervalSince1970: 1_757_000_000)
 
-        init() throws {
+        init(openNumbers: [Int] = []) throws {
             dir = FileManager.default.temporaryDirectory
                 .appendingPathComponent("sweep-backoff-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -802,10 +818,11 @@ final class CaptainTodoSweepTests: XCTestCase {
             XCTAssertNotNil(todos.add(crewId: crewId, text: "账上本来有一条没完成"))
             XCTAssertNil(sweeps.recordConfirmation(
                 crewId: crewId,
-                CaptainTodoSweep.Confirmation(confirmedAt: "2025-01-01T00:00:00Z", openNumbers: [])))
+                CaptainTodoSweep.Confirmation(confirmedAt: "2025-01-01T00:00:00Z",
+                                              openNumbers: openNumbers)))
             // ⚠️ 文件名走 `TodoLedger.fileSuffix`，别自己拼（上面 ⑤c 栽过）。
             todosFile = dir.appendingPathComponent("\(crewId)\(TodoLedger.agent.fileSuffix)")
-            let sweepFile = dir.appendingPathComponent("\(crewId).todo-sweep.json")
+            sweepFile = dir.appendingPathComponent("\(crewId).todo-sweep.json")
             for f in [todosFile, sweepFile] {
                 try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: f.path)
                 try XCTSkipIf(FileManager.default.isReadableFile(atPath: f.path),

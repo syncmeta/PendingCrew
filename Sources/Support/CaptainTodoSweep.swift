@@ -121,12 +121,16 @@ enum CaptainTodoSweep {
         // 两件事刻意不同于正常路径：
         // - **有过确认也不管用**：确认覆盖的是**某一批具体条目**，而现在根本不知道
         //   有哪些条目，拿旧确认去盖一次读失败等于用过期的账销今天的号。
-        // - **地板间隔仍然管用**：一本一直读不出来的账，不该在每次空闲抖动时都刷屏。
+        // - **间隔按退避拉长**（计划 #98）：一窗故障能长到 9 小时，固定地板也要叫 37 次，
+        //   每次都烧一轮额度。1×→2×→4×→8× 封顶，**封顶之后照叫** —— 不熄灭。
         if case .unreadable = snapshot {
-            if let lastRemindedAt, now.timeIntervalSince(lastRemindedAt) < minimumInterval {
-                return .silent("账本读不出来，但刚提醒过，还没到最短间隔")
+            let gap = unreadableGap(streak: unreadableStreak, minimumInterval: minimumInterval)
+            if let lastRemindedAt, now.timeIntervalSince(lastRemindedAt) < gap {
+                return .silent("账本读不出来，已连续提醒 \(unreadableStreak) 次，这一档要隔 \(minutes(gap)) 分钟，还没到")
             }
-            return .remind(unreadableText)
+            let nth = unreadableStreak + 1
+            return .remind(unreadableText(
+                nth: nth, nextAfter: unreadableGap(streak: nth, minimumInterval: minimumInterval)))
         }
         guard case let .read(open) = snapshot else { return .silent("不可达") }
         // ① 一条未完成都没有 —— 没什么可问的。**一条永远报「已知没事」的提醒会训练
@@ -158,14 +162,21 @@ enum CaptainTodoSweep {
     /// 读不了就 `throw unreadableAndPreserved` 整条拒写（2026-08-12 P0 的不变式：
     /// 读不出来 ≠ 内容损坏，一个字节都不许动）。于是**整个数据目录读不出来的那种事故里
     /// ——也就是这条提醒最常出现的那种——那条警示必然不存在**，而这段话正把人支去找它。
-    private static let unreadableText = """
-    你停下来了，但**这本 Todo 账这次读不出来** —— 所以我没法告诉你还剩几条没做。
+    ///
+    /// **开头就说是第几次、下次多久**（计划 #98）：同一本账读不出来的第 5 次提醒，
+    /// 读起来要跟第 1 次不一样，否则机长每次都从头定性一遍。
+    private static func unreadableText(nth: Int, nextAfter: TimeInterval) -> String {
+        let which = nth == 1
+            ? "这是第 1 次提醒"
+            : "这是第 \(nth) 次提醒 —— **不是新情况**，还是同一本账读不出来"
+        return """
+    你停下来了，但**这本 Todo 账这次读不出来** —— 所以我没法告诉你还剩几条没做。\(which)；下一次最早在 \(minutes(nextAfter)) 分钟后（而且要等你再停下来一次才会问）。
 
     这不是「没事了」：账上可能挂着一堆，只是这一刻看不见。
 
     白板上**可能**有一条系统警示说明是哪种事故（打不开 / 读到空但文件非空 / 解不开已归档）。**但白板自己也读不出来时，那条警示根本写不进去** —— 追加一条要先把整份读一遍，读不了就整条拒写。整个数据目录出事时就是这样。所以**白板上没有警示不等于账本没事**，那反而是「连白板也读不了」的旁证：先去看那个目录还能不能读。
 
-    先把账弄回可读，再回来核。**在那之前这条提醒会按最短间隔继续问你** —— 一条存在意义就是不让沉默发生的通道，不该在自己读失败时先沉默下去。
+    先把账弄回可读，再回来核。**在那之前这条提醒会继续问你** —— 一条存在意义就是不让沉默发生的通道，不该在自己读失败时先沉默下去。但间隔按 1×→2×→4×→8× 拉长、到 8× 不再变长：一窗故障能持续几个小时，每次都叫只是在烧额度。账读得回来那一刻，档位清零。
 
     **它一直响不等于你该一直等。** 读不出来时这些事照样做得了（2026-09-12 那次断了 8.5 小时，是这么过来的）：
     - **git 还通** —— 改代码、跑测试、提交、推，一样不受影响。数据目录瞎了，仓库没瞎。
@@ -173,6 +184,11 @@ enum CaptainTodoSweep {
     - **别逐分钟重试**。架一个后台哨盯恢复，然后去做别的；恢复那一刻再回来核账。
     - **群聊发不出去，但入队可以** —— `message_child_crew` 是新建文件，属于放行那一侧。
     """
+    }
+
+    private static func minutes(_ seconds: TimeInterval) -> Int {
+        Int((seconds / 60).rounded())
+    }
 
     private static func text(open: Set<Int>, uncovered: [Int]) -> String {
         let newlyLine = uncovered.count == open.count
@@ -228,15 +244,29 @@ enum CaptainTodoSweep {
 
     // MARK: - 读不出来时的退避（计划 #98）
 
-    /// 这一拍之后「连续几次因为读不出来而提醒」该记成几。骨架：尚未实现。
+    /// 这一拍之后「连续几次因为读不出来而提醒」该记成几。
+    ///
+    /// - 读得回来 → **0**，不管这一拍提不提醒。读得回来之后恢复正常判定，
+    ///   下一窗故障是一件新情况，不许被上一窗的档位压着。
+    /// - 读不出来、真叫出去了 → +1。
+    /// - 读不出来、这一拍闭嘴 → 不动。**没叫出去不算叫过一次**（与
+    ///   `SupervisionLease.reschedule` 的 `delivered` 同一条纪律），否则间隔会在
+    ///   没人听见的时候越拉越长。
     static func nextUnreadableStreak(after decision: Decision, snapshot: LedgerSnapshot,
                                      previous: Int) -> Int {
-        0
+        guard case .unreadable = snapshot else { return 0 }
+        if case .remind = decision { return previous + 1 }
+        return previous
     }
 
-    /// 已经连续提醒了 `streak` 次之后，下一次至少要隔多久。骨架：尚未实现。
+    /// 已经连续提醒了 `streak` 次之后，下一次至少要隔多久：地板间隔 × 1、1、2、4、8、8…
+    ///
+    /// **倍数走 `SupervisionLease.backoffMultiplier`，不在这里另写一份。**
+    /// 封顶 8× 的理由也是它那条：不封顶的指数退避等于「叫几次没人理就永远闭嘴」。
+    /// 以 15 分钟地板算封顶是 2 小时 —— 一窗 9 小时的故障叫 7 次（固定地板是 37 次），
+    /// 而且任何时刻离上一次被问都不超过 2 小时。
     static func unreadableGap(streak: Int, minimumInterval: TimeInterval) -> TimeInterval {
-        minimumInterval
+        minimumInterval * SupervisionLease.backoffMultiplier(step: streak - 1)
     }
 
     // MARK: - 参数
