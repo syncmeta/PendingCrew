@@ -381,26 +381,14 @@ final class CrewSessionRunner: ObservableObject {
         // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是「一条未完成
         // 都没有」和「这本账读不出来」在这里长得一模一样，机制会在账本坏掉时安静
         // 地说没事。信号（`LedgerIncident.unreadable`）一直都在，只是 `list` 扔了它。
-        let snapshot: CaptainTodoSweep.LedgerSnapshot
-        switch LocalTodoStore.shared(.agent).read(crewId: crewId) {
-        case let .rows(rows):
-                        // 「还欠着」= 既没做完、也没被叫停（`isSettled`）。写成「不等于
-            // completed」的话，人类喊停的那几条会永远算作欠账，督办为它一直响。
-            snapshot = .read(Set(rows.filter { !$0.isSettled }.map(\.number)))
-        case .unreadable:
-            snapshot = .unreadable
-        }
-        let stored = CaptainTodoSweepStore.shared.row(crewId: crewId)
-        let now = Date()
-        guard case let .remind(text) = CaptainTodoSweep.decide(
-            open: snapshot,
-            confirmation: stored.confirmation,
-            lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
-            now: now,
-            minimumInterval: CaptainTodoSweep.minimumRemindInterval)
+        let snapshot = CaptainTodoSweepStore.snapshot(
+            of: LocalTodoStore.shared(.agent).read(crewId: crewId))
+        // 判定、退避档位、记账全在 `idleTick` 里（计划 #98）：留在这个 @MainActor 的
+        // runner 里就只能读源码断言，没法真跑一趟「9 小时读不出来」。
+        guard let text = CaptainTodoSweepStore.shared.idleTick(
+            crewId: crewId, snapshot: snapshot, now: Date())
         else { return }
         run.send(text)
-        CaptainTodoSweepStore.shared.recordReminded(crewId: crewId, at: now)
     }
 
     private func attemptWakeDelivery(

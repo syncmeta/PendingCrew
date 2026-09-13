@@ -38,7 +38,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func testRemindsWhenIdleWithOpenItemsAndNoConfirmation() {
         let decision = CaptainTodoSweep.decide(
             open: .read([3, 7, 12]), confirmation: nil, lastRemindedAt: nil,
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         guard case let .remind(text) = decision else {
             return XCTFail("有 3 条未完成、从没确认过，机长却没被提醒 —— 这就是 #71 要治的那一刻")
         }
@@ -54,7 +54,7 @@ final class CaptainTodoSweepTests: XCTestCase {
             confirmedAt: Self.iso(now), openNumbers: [3, 7, 12])
         let decision = CaptainTodoSweep.decide(
             open: .read([3, 7, 12]), confirmation: confirmation, lastRemindedAt: nil,
-            now: now.addingTimeInterval(3600), minimumInterval: floor)
+            unreadableStreak: 0, now: now.addingTimeInterval(3600), minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "确认过、而且这批一个字没变，还在提醒 —— 那就是一条永远在响的提醒")
     }
@@ -66,7 +66,7 @@ final class CaptainTodoSweepTests: XCTestCase {
             confirmedAt: Self.iso(now), openNumbers: [3])
         let decision = CaptainTodoSweep.decide(
             open: .read([3]), confirmation: confirmation, lastRemindedAt: nil,
-            now: now.addingTimeInterval(30 * 86400), minimumInterval: floor)
+            unreadableStreak: 0, now: now.addingTimeInterval(30 * 86400), minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "光靠时间就把确认作废了 —— 那机长每隔一阵就要重报一次一模一样的账，正是「永远在响」")
     }
@@ -77,7 +77,7 @@ final class CaptainTodoSweepTests: XCTestCase {
             confirmedAt: Self.iso(now), openNumbers: [3, 7])
         let decision = CaptainTodoSweep.decide(
             open: .read([3, 7, 99]), confirmation: confirmation, lastRemindedAt: nil,
-            now: now.addingTimeInterval(60), minimumInterval: floor)
+            unreadableStreak: 0, now: now.addingTimeInterval(60), minimumInterval: floor)
         guard case let .remind(text) = decision else {
             return XCTFail("多了一条 #99 没被任何确认覆盖过，却不提醒了")
         }
@@ -90,7 +90,7 @@ final class CaptainTodoSweepTests: XCTestCase {
             confirmedAt: Self.iso(now), openNumbers: [3, 7, 12])
         let decision = CaptainTodoSweep.decide(
             open: .read([3]), confirmation: confirmation, lastRemindedAt: nil,
-            now: now.addingTimeInterval(60), minimumInterval: floor)
+            unreadableStreak: 0, now: now.addingTimeInterval(60), minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "机长把两条做完翻了牌，反而被提醒了 —— 这会训练它别去翻牌")
     }
@@ -100,7 +100,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func testNothingOpenMeansNothingToNag() {
         let decision = CaptainTodoSweep.decide(
             open: .read([]), confirmation: nil, lastRemindedAt: nil,
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "一条未完成都没有还要提醒 —— 一条永远报「已知没事」的提醒会训练人忽略整个通道")
     }
@@ -109,7 +109,7 @@ final class CaptainTodoSweepTests: XCTestCase {
         let decision = CaptainTodoSweep.decide(
             open: .read([3]), confirmation: nil,
             lastRemindedAt: now.addingTimeInterval(-60),
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "一分钟前刚提醒过又提醒 —— 机长在空闲/忙之间抖一下就会被刷屏")
     }
@@ -118,7 +118,7 @@ final class CaptainTodoSweepTests: XCTestCase {
         let decision = CaptainTodoSweep.decide(
             open: .read([3]), confirmation: nil,
             lastRemindedAt: now.addingTimeInterval(-(floor + 1)),
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, false,
                        "过了间隔仍然不提醒 —— 人类要的是「直到确认为止」，不是提醒一次就算")
     }
@@ -206,7 +206,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func testUnreadableLedgerRemindsInsteadOfGoingSilent() {
         let decision = CaptainTodoSweep.decide(
             open: .unreadable, confirmation: nil, lastRemindedAt: nil,
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, false,
                        "账本读不出来却闭嘴了 —— 账上可能挂着一堆，而没有任何人会知道")
     }
@@ -217,7 +217,7 @@ final class CaptainTodoSweepTests: XCTestCase {
             confirmedAt: Self.iso(now), openNumbers: [3, 7, 12])
         let decision = CaptainTodoSweep.decide(
             open: .unreadable, confirmation: confirmation, lastRemindedAt: nil,
-            now: now.addingTimeInterval(60), minimumInterval: floor)
+            unreadableStreak: 0, now: now.addingTimeInterval(60), minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, false,
                        "拿一份旧确认去盖住一次读失败 —— 那份确认覆盖的是当时那批，现在有哪些条目根本不知道")
     }
@@ -227,7 +227,7 @@ final class CaptainTodoSweepTests: XCTestCase {
         let decision = CaptainTodoSweep.decide(
             open: .unreadable, confirmation: nil,
             lastRemindedAt: now.addingTimeInterval(-60),
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "读失败绕过了地板间隔 —— 账一直坏着就会每次空闲都刷一遍")
     }
@@ -235,7 +235,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func testUnreadableReminderSaysWhatIsWrong() {
         guard case let .remind(text) = CaptainTodoSweep.decide(
             open: .unreadable, confirmation: nil, lastRemindedAt: nil,
-            now: now, minimumInterval: floor)
+            unreadableStreak: 0, now: now, minimumInterval: floor)
         else { return XCTFail("读不出来时没提醒") }
         XCTAssertTrue(text.contains("读不出来"),
                       "提醒没说清是「读不到」而不是「有 N 条没做」—— 机长会去找一批根本查不到的条目")
@@ -249,7 +249,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func test_读不出来那段话要告诉人这时候能干什么() {
         guard case let .remind(text) = CaptainTodoSweep.decide(
             open: .unreadable, confirmation: nil, lastRemindedAt: nil,
-            now: Date(), minimumInterval: 60)
+            unreadableStreak: 0, now: Date(), minimumInterval: 60)
         else { return XCTFail("读不出来时没提醒") }
         XCTAssertTrue(text.contains("git"),
                       "没说 git 还通 —— 收到这条的人会以为整个人被卡住了：\(text)")
@@ -275,7 +275,7 @@ final class CaptainTodoSweepTests: XCTestCase {
     func test_读不出来那段话不许保证白板上有警示() {
         guard case let .remind(text) = CaptainTodoSweep.decide(
             open: .unreadable, confirmation: nil, lastRemindedAt: nil,
-            now: Date(), minimumInterval: 60)
+            unreadableStreak: 0, now: Date(), minimumInterval: 60)
         else { return XCTFail("读不出来时没提醒") }
         XCTAssertFalse(text.contains("白板上应该有"),
                        "又把「白板上应该有一条警示」写死了 —— 数据目录整个读不出来时它必然没有：\(text)")
@@ -508,6 +508,9 @@ final class CaptainTodoSweepTests: XCTestCase {
             runner.contains("remindCaptainToSweepTodos("),
             "空闲钩子里没人调这套判定 —— 零件造好了没装到车上，机长永远不会被问账")
         XCTAssertTrue(
+            runner.contains("CaptainTodoSweepStore.shared.idleTick("),
+            "空闲钩子没走 idleTick —— 退避档位和记账都在那里面，绕开它就回到了按地板连环叫")
+        XCTAssertTrue(
             runner.contains("run.role == .captain"),
             "没限定只问机长 —— 这条是给机长的，不该去打扰 worker")
         XCTAssertTrue(
@@ -641,6 +644,183 @@ final class CaptainTodoSweepTests: XCTestCase {
 
         XCTAssertNil(CaptainTodoSweepStore(directory: dir).row(crewId: crew).lastRemindedAt,
                      "确认之后提醒时刻还留着 —— 新条目会被上一次的地板间隔压住")
+    }
+
+    // MARK: - ⑦ 读不出来时按退避叫，不按地板间隔连环叫（计划 #98）
+
+    /// 现场（2026-09-13 11:59 起，「机组群聊体验」机长）：第 7 次数据目录故障里他那本
+    /// Agent Todo 打不开，这条提醒 17 分钟里叫醒了他 105 次 —— 每次都在他回完一句、
+    /// 停下来的 4–6 秒后。那一次跑的是 09-12 00:14 起的旧常驻后台（0.1.34 的
+    /// `row()` 在读失败时兜成空 `Row()`，地板间隔没有输入）。0.1.36 起地板有了输入，
+    /// 但一窗 9 小时仍是每 15 分钟一次、37 次。**这条钉的是退避：同一窗 7 次。**
+    ///
+    /// 样本是真的：两本账的文件都在、都非空、都打不开。`chmod 000` 给的是 EACCES，
+    /// 真故障是 EPERM —— 两者在 `MultiProcessJSONStore` 里落到同一个 `.unreadable`，
+    /// 所以前置条件断言的是那个口径，不是 errno。
+    ///
+    /// 第 4 小时清一次进程内那份，模拟故障期间 app 重启：档位得靠文件名标记活下来。
+    /// 清在第 4 小时是有讲究的：那时已经提醒了 5 次，档位一丢，下一次就会提前到 240 分钟。
+    func test_账读不出来九小时_按退避叫而不是每个地板间隔都叫() throws {
+        let fx = try UnreadableFixture()
+        var reminders: [Int] = []
+        var texts: [String] = []
+        for minute in 0...(9 * 60) {
+            if minute == 4 * 60 { CaptainTodoSweepStore.forgetInProcessMemoryForTesting() }
+            let snapshot = CaptainTodoSweepStore.snapshot(of: fx.todos.read(crewId: fx.crewId))
+            if let text = fx.sweeps.idleTick(
+                crewId: fx.crewId, snapshot: snapshot,
+                now: fx.start.addingTimeInterval(TimeInterval(minute * 60)),
+                minimumInterval: 15 * 60) {
+                reminders.append(minute)
+                texts.append(text)
+            }
+        }
+        let gaps = zip(reminders.dropFirst(), reminders).map { $0 - $1 }
+        XCTAssertEqual(gaps, [15, 30, 60, 120, 120, 120],
+                       "提醒时刻（分钟）：\(reminders)。间隔不翻倍 = 一窗 9 小时照样叫几十次；"
+                       + "封顶后还在叫 = 读不出来时没有熄灭")
+        XCTAssertTrue(texts.first?.contains("第 1 次") == true, texts.first ?? "一次都没提醒")
+        XCTAssertTrue(texts.last?.contains("第 \(reminders.count) 次") == true,
+                      "机长看不出这是同一件事的第几次：\(texts.last ?? "")")
+    }
+
+    /// 读得回来那一拍就清零。否则一窗故障把档位推到 8× 之后，**下一窗新故障**会被
+    /// 上一窗的档位压两个小时 —— 对机长来说那是一件新情况，却被当成老情况按住了。
+    ///
+    /// 清零发生在「读得回来、但这一拍不提醒」的那条路上（地板间隔还没到），而且
+    /// 核账那本自己仍读不出来 —— 所以清零只能落到进程内和文件名标记里。
+    func test_账读得回来那一拍退避清零() throws {
+        let fx = try UnreadableFixture()
+        var reminders: [(Int, String)] = []
+        for minute in 0...300 {
+            try fx.setTodosReadable(minute == 106)
+            let snapshot = CaptainTodoSweepStore.snapshot(of: fx.todos.read(crewId: fx.crewId))
+            if minute == 106 {
+                XCTAssertEqual(snapshot, .read([1]), "前置条件没成立：第 106 分钟账应该读得回来")
+            }
+            if let text = fx.sweeps.idleTick(
+                crewId: fx.crewId, snapshot: snapshot,
+                now: fx.start.addingTimeInterval(TimeInterval(minute * 60)),
+                minimumInterval: 15 * 60) {
+                reminders.append((minute, text))
+            }
+        }
+        XCTAssertEqual(reminders.prefix(4).map(\.0), [0, 15, 45, 105], "前置条件：先退避到第 4 档")
+        let afterRecovery = reminders.first { $0.0 > 106 }
+        XCTAssertEqual(afterRecovery?.0, 120,
+                       "读得回来之后档位没清零 —— 新一窗故障被上一窗的档位压着：\(reminders.map(\.0))")
+        XCTAssertTrue(afterRecovery?.1.contains("第 1 次") == true, afterRecovery?.1 ?? "")
+    }
+
+    func test_读不出来的提醒说清第几次_下次最早多久() {
+        guard case let .remind(first) = CaptainTodoSweep.decide(
+            open: .unreadable, confirmation: nil, lastRemindedAt: nil,
+            unreadableStreak: 0, now: now, minimumInterval: 15 * 60)
+        else { return XCTFail("读不出来时没提醒") }
+        XCTAssertTrue(first.contains("第 1 次"), first)
+        XCTAssertTrue(first.contains("15 分钟"), "没说下一次最早多久：\(first)")
+
+        guard case let .remind(third) = CaptainTodoSweep.decide(
+            open: .unreadable, confirmation: nil, lastRemindedAt: now.addingTimeInterval(-3 * 3600),
+            unreadableStreak: 2, now: now, minimumInterval: 15 * 60)
+        else { return XCTFail("读不出来、而且早过了间隔，却没提醒") }
+        XCTAssertTrue(third.contains("第 3 次"), third)
+        XCTAssertTrue(third.contains("60 分钟"), "第 3 次之后应隔 4×：\(third)")
+        XCTAssertTrue(third.contains("不是新情况"),
+                      "第 3 次还读起来像一件新事 —— 机长会每次都从头定性一遍：\(third)")
+    }
+
+    /// 档位没到时闭嘴 —— 但**只闭到那一档的间隔**，不是永远。
+    func test_档位没到时闭嘴_到了照叫() {
+        let base: TimeInterval = 15 * 60
+        let early = CaptainTodoSweep.decide(
+            open: .unreadable, confirmation: nil,
+            lastRemindedAt: now.addingTimeInterval(-(4 * base - 1)),
+            unreadableStreak: 3, now: now, minimumInterval: base)
+        XCTAssertTrue(early.isSilent, "第 3 次之后应隔 4×，差一秒就叫了")
+        let due = CaptainTodoSweep.decide(
+            open: .unreadable, confirmation: nil,
+            lastRemindedAt: now.addingTimeInterval(-(4 * base)),
+            unreadableStreak: 3, now: now, minimumInterval: base)
+        XCTAssertFalse(due.isSilent, "到了那一档的间隔却没叫 —— 读不出来时熄灭了")
+    }
+
+    func test_退避档位怎么走() {
+        let r = CaptainTodoSweep.Decision.remind("x")
+        let s = CaptainTodoSweep.Decision.silent("x")
+        XCTAssertEqual(CaptainTodoSweep.nextUnreadableStreak(after: r, snapshot: .unreadable, previous: 2), 3)
+        XCTAssertEqual(CaptainTodoSweep.nextUnreadableStreak(after: s, snapshot: .unreadable, previous: 2), 2,
+                       "没叫出去也推档 —— 那就是在没人听见的时候把间隔越拉越长")
+        XCTAssertEqual(CaptainTodoSweep.nextUnreadableStreak(after: s, snapshot: .read([1]), previous: 4), 0)
+        XCTAssertEqual(CaptainTodoSweep.nextUnreadableStreak(after: r, snapshot: .read([1]), previous: 4), 0)
+    }
+
+    /// 1×→2×→4×→8×、封顶，**而且是督办租约那一个公式**，不是照着抄的第二份。
+    func test_退避用的是督办租约那一个公式() throws {
+        let base: TimeInterval = 15 * 60
+        XCTAssertEqual((1...6).map { CaptainTodoSweep.unreadableGap(streak: $0, minimumInterval: base) },
+                       [base, 2 * base, 4 * base, 8 * base, 8 * base, 8 * base])
+        let code = Self.identifiersOnly(try Self.text(of: "CaptainTodoSweep.swift"))
+        XCTAssertTrue(code.contains("SupervisionLease.backoffMultiplier("),
+                      "退避没走 SupervisionLease 那一份公式")
+        XCTAssertFalse(code.contains("pow("), "CaptainTodoSweep 里又长出了第二份退避公式")
+    }
+
+    /// 档位要跟「上次提醒时刻」一起活过重启，也要能被清零 —— 三层（盘上 / 进程内 / 文件名）
+    /// 同一个口径。
+    func test_档位写进文件名_换个进程也还记得() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweep-streak-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let crew = "local-streak-\(UUID().uuidString)"
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        CaptainTodoSweepStore(directory: dir).recordReminded(crewId: crew, at: at, unreadableStreak: 3)
+        // 盘上那份删掉、进程内那份清掉 —— 只剩文件名。
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("\(crew).todo-sweep.json"))
+        CaptainTodoSweepStore.forgetInProcessMemoryForTesting()
+        let row = CaptainTodoSweepStore(directory: dir).row(crewId: crew)
+        XCTAssertEqual(row.unreadableStreak, 3, "重启之后退避档位没了 —— 故障一窗里每重启一次就从 1× 重来")
+        XCTAssertEqual(row.lastRemindedAt, ISO8601DateFormatter().string(from: at))
+    }
+
+    /// 两本账都在、都非空、都打不开的一个目录。
+    private struct UnreadableFixture {
+        let dir: URL
+        let crewId = "local-backoff-\(UUID().uuidString)"
+        let todos: LocalTodoStore
+        let sweeps: CaptainTodoSweepStore
+        let todosFile: URL
+        let start = Date(timeIntervalSince1970: 1_757_000_000)
+
+        init() throws {
+            dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sweep-backoff-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            todos = LocalTodoStore(directory: dir, ledger: .agent)
+            sweeps = CaptainTodoSweepStore(directory: dir)
+            XCTAssertNotNil(todos.add(crewId: crewId, text: "账上本来有一条没完成"))
+            XCTAssertNil(sweeps.recordConfirmation(
+                crewId: crewId,
+                CaptainTodoSweep.Confirmation(confirmedAt: "2025-01-01T00:00:00Z", openNumbers: [])))
+            // ⚠️ 文件名走 `TodoLedger.fileSuffix`，别自己拼（上面 ⑤c 栽过）。
+            todosFile = dir.appendingPathComponent("\(crewId)\(TodoLedger.agent.fileSuffix)")
+            let sweepFile = dir.appendingPathComponent("\(crewId).todo-sweep.json")
+            for f in [todosFile, sweepFile] {
+                try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: f.path)
+                try XCTSkipIf(FileManager.default.isReadableFile(atPath: f.path),
+                              "这个身份读得动 000 的文件（多半是 root），换个身份跑")
+            }
+            XCTAssertEqual(todos.read(crewId: crewId), .unreadable,
+                           "前置条件没成立：Todo 账没有落到 .unreadable 那个口径")
+            XCTAssertThrowsError(try Data(contentsOf: sweepFile),
+                                 "前置条件没成立：核账那本仍读得出来，测不到「守卫的输入一起坏了」")
+        }
+
+        func setTodosReadable(_ readable: Bool) throws {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: readable ? 0o644 : 0], ofItemAtPath: todosFile.path)
+        }
     }
 
 }

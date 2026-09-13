@@ -22,6 +22,48 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         var confirmation: CaptainTodoSweep.Confirmation?
         /// 上一次**真的发出去**的提醒时刻（ISO8601）。没发过 = nil。
         var lastRemindedAt: String?
+        /// 连续几次是因为「账读不出来」而提醒的（计划 #98 的退避档位）。nil = 0。
+        var unreadableStreak: Int?
+    }
+
+    // MARK: - 机长变闲的那一拍（计划 #98 从 CrewSessionRunner 挪进来，好让它能被真跑）
+
+    /// Todo 账那一眼 → 判定用的三态。**必须喂 `read` 的结果，不能喂 `list`**
+    /// （后者把读失败压成空表，理由见 `LocalTodoStore.LedgerRead`）。
+    static func snapshot(of read: LocalTodoStore.LedgerRead) -> CaptainTodoSweep.LedgerSnapshot {
+        switch read {
+        case let .rows(rows):
+            // 「还欠着」= 既没做完、也没被叫停（`isSettled`）。写成「不等于
+            // completed」的话，人类喊停的那几条会永远算作欠账，督办为它一直响。
+            return .read(Set(rows.filter { !$0.isSettled }.map(\.number)))
+        case .unreadable:
+            return .unreadable
+        }
+    }
+
+    /// 机长变闲时的一整拍：读存量 → 判定 → 记账。返回要发给机长的正文，nil = 这一拍不发。
+    ///
+    /// **记账在返回之前做**：调用方拿到正文就发（`run.send` 只是入队），
+    /// 先记后发和先发后记在这里没有可观察的差别，而这样这一拍整个能在单测里跑。
+    func idleTick(crewId: String, snapshot: CaptainTodoSweep.LedgerSnapshot, now: Date,
+                  minimumInterval: TimeInterval = CaptainTodoSweep.minimumRemindInterval) -> String? {
+        let stored = row(crewId: crewId)
+        let streak = stored.unreadableStreak ?? 0
+        let decision = CaptainTodoSweep.decide(
+            open: snapshot,
+            confirmation: stored.confirmation,
+            lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
+            unreadableStreak: streak,
+            now: now,
+            minimumInterval: minimumInterval)
+        guard case let .remind(text) = decision else { return nil }
+        recordReminded(crewId: crewId, at: now, unreadableStreak: 0)
+        return text
+    }
+
+    /// 测试用：清掉进程内那份退路，模拟「进程重启了」。
+    static func forgetInProcessMemoryForTesting() {
+        rememberedReminded.removeAll()
     }
 
     private let directory: URL
@@ -125,7 +167,7 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
 
     /// 记下「刚提醒过」。**不碰确认** —— 提醒不会让已有的确认作废。
     @discardableResult
-    func recordReminded(crewId: String, at date: Date) -> Error? {
+    func recordReminded(crewId: String, at date: Date, unreadableStreak: Int = 0) -> Error? {
         let stamp = ISO8601DateFormatter().string(from: date)
         // 先记进程内那份：盘上写不写得成都不影响「刚提醒过」这个事实，
         // 而地板间隔要的正是这个事实。

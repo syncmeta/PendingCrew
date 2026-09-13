@@ -113,7 +113,7 @@ enum CaptainTodoSweep {
     /// - `lastRemindedAt`: 上一次真的提醒过的时刻（防抖用）。
     /// - `minimumInterval`: 两次提醒之间的地板间隔。
     static func decide(open snapshot: LedgerSnapshot, confirmation: Confirmation?,
-                       lastRemindedAt: Date?,
+                       lastRemindedAt: Date?, unreadableStreak: Int,
                        now: Date, minimumInterval: TimeInterval) -> Decision {
         // 读不出来 → **提醒，不静默**（机长 2026-09-08 裁定）。
         // 静默的代价是「账上可能挂着一堆而没人知道」，提醒的代价只是多问一句。
@@ -224,6 +224,19 @@ enum CaptainTodoSweep {
                 confirmedAt: ISO8601DateFormatter().string(from: Date()),
                 openNumbers: open.sorted()),
             refusal: nil)
+    }
+
+    // MARK: - 读不出来时的退避（计划 #98）
+
+    /// 这一拍之后「连续几次因为读不出来而提醒」该记成几。骨架：尚未实现。
+    static func nextUnreadableStreak(after decision: Decision, snapshot: LedgerSnapshot,
+                                     previous: Int) -> Int {
+        0
+    }
+
+    /// 已经连续提醒了 `streak` 次之后，下一次至少要隔多久。骨架：尚未实现。
+    static func unreadableGap(streak: Int, minimumInterval: TimeInterval) -> TimeInterval {
+        minimumInterval
     }
 
     // MARK: - 参数

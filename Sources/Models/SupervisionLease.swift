@@ -125,8 +125,16 @@ enum SupervisionLease {
     ///   重启就能把督办退避到几小时以后 —— 那恰好是 #107 的现场。
     static func reschedule(baseSeconds: TimeInterval, step: Int, delivered: Bool) -> Reschedule {
         let nextStep = delivered ? step + 1 : step
-        let multiplier = min(pow(2, Double(max(0, nextStep))), maxBackoffMultiplier)
-        return Reschedule(after: max(1, baseSeconds) * multiplier, step: nextStep)
+        return Reschedule(after: max(1, baseSeconds) * backoffMultiplier(step: nextStep), step: nextStep)
+    }
+
+    /// 第 `step` 档的倍数：2^step，负数按 0 算，封顶 `maxBackoffMultiplier`。
+    ///
+    /// **单独拿出来是为了只有一份退避公式**：机长空闲核账在「账读不出来」时也要退避
+    /// （`CaptainTodoSweep.unreadableGap`，计划 #98），它调的就是这一个函数，
+    /// 不是照着抄一遍 —— 抄出来的两份迟早会各改各的。
+    static func backoffMultiplier(step: Int) -> Double {
+        min(pow(2, Double(max(0, step))), maxBackoffMultiplier)
     }
 
     /// 到期后的下一条租约。**id 与挂单时刻不动** —— 时长得从最初交出去那一刻算，
