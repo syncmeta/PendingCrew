@@ -66,7 +66,40 @@
 
 ## 五、红 / 绿 / 变异
 
-（待补）
+跑的都是本 worktree、同一份 `-derivedDataPath`，只选 `CaptainTodoSweepTests` 等几个类。
+
+### 先造红（`7c08c8e`：骨架 = 新 API、旧行为）
+
+`Executed 56 tests, with 16 failures`（CaptainTodoSweepTests 40 条 + SupervisionLeaseTests 16 条）。红的 7 条用例全是新加的：
+
+- `test_账读不出来九小时_按退避叫而不是每个地板间隔都叫` —— 实测 gaps 是 36 个 15，提醒时刻 0,15,30,…,540，**37 次**
+- `test_账读得回来那一拍退避清零` —— 前 4 次是 [0,15,30,45]
+- `test_读不出来的提醒说清第几次_下次最早多久`、`test_档位没到时闭嘴_到了照叫`、`test_退避档位怎么走`、`test_退避用的是督办租约那一个公式`、`test_档位写进文件名_换个进程也还记得`
+
+`test_故障期间提醒不许盖掉读不出来的那份确认` 是造红之后才加的，**没有在骨架上跑过红**。它会红，靠的是下面的 M4。
+
+### 绿（`05b3878` 的内容）
+
+`Executed 60 tests, with 0 failures`，其中 CaptainTodoSweepTests 41、McpSweepUnreadableTests 3、SupervisionLeaseTests 16。
+
+### 变异（`05b3878` 上，逐刀 `cp` 备份 → perl 改一处 → 只跑 CaptainTodoSweepTests → `cp` 还原）
+
+| 刀 | 改了什么 | Executed | 红的用例 |
+|---|---|---|---|
+| M1 无退避 | `unreadableGap` 直接返回地板 | 41，6 failures | 档位没到时闭嘴_到了照叫、读不出来的提醒说清第几次、九小时按退避叫、读得回来那一拍清零、退避用的是督办租约那一个公式 |
+| M2 不清零 | 读得回来时档位返回 `previous` 而不是 0 | 41，4 failures | 读得回来那一拍清零、退避档位怎么走 |
+| M3 档位不进文件名 | 标记文件名去掉 `.u<档位>` | 41，4 failures | 档位写进文件名_换个进程也还记得、九小时按退避叫（第 240 分钟重启后提前叫）、读得回来那一拍清零 |
+| M4 读不出来照样整份重写 | `guard !disk.unreadable` → `guard true` | 41，1 failure | 故障期间提醒不许盖掉读不出来的那份确认 |
+| M5 idleTick 不记档位 | `recordReminded(… unreadableStreak: next)` → `0` | 41，3 failures | 九小时按退避叫、读得回来那一拍清零 |
+
+- 每一刀先用 `cmp` 确认改动真的落上了（替换 0 处会报「读数无效」），五刀都落上了。
+- 还原后两个文件跟备份逐字节相同（`cmp`），`git diff` 为空。
+- ⚠️ 脚本的闸有个自己的 bug：它 grep 的是 `with N failures`，M4 输出的是单数 `with 1 failure`，于是当场报了「没有 Executed 行 —— 读数无效」。回头读了日志原文：`Executed 41 tests, with 1 failure (0 unexpected)`，`Failing tests: CaptainTodoSweepTests.test_故障期间提醒不许盖掉读不出来的那份确认()`。表里 M4 那行是按原文填的。
+- M3 那刀没有在 M4 修掉之前跑过：修之前第一次提醒就会把读不出来的那份账整份换成读得出来的，第 240 分钟的「重启」读的其实是盘上那份，不是文件名。所以 M4 那个修复也是 M3 这条尺子成立的前提。
+
+### 干净树全量
+
+（待补：`git worktree add --detach 05b3878` + 复制 Fixtures + 独立 derivedDataPath）
 
 ## 六、边界
 
