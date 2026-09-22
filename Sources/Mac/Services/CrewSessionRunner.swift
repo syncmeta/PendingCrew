@@ -148,6 +148,16 @@ final class CrewSessionRunner: ObservableObject {
         viewerClient = nil
     }
 
+    /// A backend selection is an identity boundary, not an ordinary reconnect.  Drop the old
+    /// machine's mirror before the new connector starts so a slow hello cannot display local
+    /// sessions under a remote backend name.
+    func viewerBackendWillChange() {
+        guard isViewer else { return }
+        viewerClient = nil
+        runs.removeAll()
+        selectedRunId = nil
+    }
+
     /// 把 daemon 的全量 roster 对齐到本地镜像。
     ///
     /// **只增删改，不重建**：`runs` 每次整份换新的话，右栏正开着的那个 session 会

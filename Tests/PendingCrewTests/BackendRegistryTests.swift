@@ -181,6 +181,35 @@ final class BackendRegistryTests: XCTestCase {
         XCTAssertNotNil(BackendRegistry.load(from: url).problem,
                         "不认识的传输方式被猜成了某种能连的东西")
     }
+
+    func testPersistedRemoteSelectionResolvesAndMissingRemoteFailsClosed() throws {
+        let registry = tempURL()
+        let selection = registry.deletingLastPathComponent().appendingPathComponent("selection.json")
+        let tokyo = remote("tokyo", url: "pendingcrew+tls://127.0.0.1:7443")
+        try BackendRegistry.save([tokyo], to: registry)
+        try BackendRegistry.select(tokyo, selectionFile: selection)
+
+        XCTAssertEqual(
+            BackendRegistry.selectedBackend(registryFile: registry, selectionFile: selection),
+            .selected(tokyo))
+
+        try FileManager.default.removeItem(at: registry)
+        guard case let .unavailable(reason) = BackendRegistry.selectedBackend(
+            registryFile: registry, selectionFile: selection) else {
+            return XCTFail("显式选择消失后被静默退回本机")
+        }
+        XCTAssertTrue(reason.contains("没有退回本机"), reason)
+    }
+
+    func testNoSelectionYetDefaultsToBuiltInLocal() {
+        let registry = tempURL()
+        let selection = registry.deletingLastPathComponent().appendingPathComponent("selection.json")
+        guard case let .selected(ref) = BackendRegistry.selectedBackend(
+            registryFile: registry, selectionFile: selection) else {
+            return XCTFail("全新安装应该从内置本机开始")
+        }
+        XCTAssertEqual(ref.id, BackendRegistry.localId)
+    }
 }
 
 final class DevicePairingIdentityTests: XCTestCase {

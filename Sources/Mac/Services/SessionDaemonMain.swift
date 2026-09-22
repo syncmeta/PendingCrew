@@ -32,8 +32,15 @@ enum SessionDaemonMain {
         // 没，而「更新 app 不打断在跑的 session」当场不成立。已经是会话首时
         // `setsid()` 返回 -1（EPERM），那是正常的，不是错误。
         _ = setsid()
-        let host = SessionDaemonHost()
+        let host: SessionDaemonHost
         do {
+            let secureListener = try SessionDaemonSecureListenerConfiguration.fromEnvironment()
+            host = SessionDaemonHost(secureListener: secureListener)
+            host.onSecureListenerFailure = { error in
+                FileHandle.standardError.write(
+                    Data(("PendingCrew daemon：安全监听失败，已停止本机 socket：\(error)\n").utf8))
+                exit(DaemonExitCode.failed)
+            }
             try host.start()
         } catch {
             // 退出码按「期望状态成立了没有」给，判定在 `DaemonExitCode`（那一层进得了

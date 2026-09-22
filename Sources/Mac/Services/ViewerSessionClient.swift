@@ -46,6 +46,7 @@ final class ViewerSessionClient: ObservableObject {
 
     private let runner: CrewSessionRunner
     private let paths: PendingCrewDaemonPaths
+    private let selection: BackendRegistry.Selection
     /// 编排锁所在的数据根（锁文件就落在它下面，同 `SessionDaemonControl`）。
     private var dataRoot: URL { paths.lock.deletingLastPathComponent() }
     private let spawnDaemon: () -> DaemonLaunch
@@ -59,30 +60,43 @@ final class ViewerSessionClient: ObservableObject {
     /// 且协商兼容（`SessionProtocolClient.isConnected` 翻 true）才算握上手。
     /// 这两者差着一整个握手，而把前者当后者正是 2026-09-04 读代码逮到的那条偏离。
     private var linkState: DaemonLaunchRace.LinkState = .none
-    private var link: UnixSocketTransport?
+    private var link: (any SessionMessageLink)?
     private var client: SessionProtocolClient?
+    private var remoteConnection: ViewerBackendConnection?
     private var heartbeat: Timer?
     private var reconnectAttempt = 0
     private var stopped = false
 
     init(runner: CrewSessionRunner,
          paths: PendingCrewDaemonPaths? = nil,
+         selection: BackendRegistry.Selection? = nil,
          spawnDaemon: (() -> DaemonLaunch)? = nil) {
         self.runner = runner
         let resolved = paths ?? .standard()
         self.paths = resolved
+        self.selection = selection ?? .selected(BackendRegistry.builtInLocal(paths: resolved))
         self.spawnDaemon = spawnDaemon ?? { ViewerSessionClient.launchBundledDaemon() }
     }
 
+    var selectedBackendID: String? { selection.backendID }
+
     func start() {
         stopped = false
-        connect()
+        switch selection {
+        case let .unavailable(reason):
+            lastError = reason
+            isConnected = false
+        case let .selected(ref):
+            if ref.isRemote { connectRemoteBackend() } else { connect() }
+        }
     }
 
     func stop() {
         stopped = true
         heartbeat?.invalidate()
         heartbeat = nil
+        remoteConnection?.stop()
+        remoteConnection = nil
         teardownLink()
         raceStartedAt = nil
         isConnected = false
@@ -127,6 +141,45 @@ final class ViewerSessionClient: ObservableObject {
         case .launch:
             launchAndRace()
         }
+    }
+
+    /// Remote production leg.  The connector has no Unix-socket or local takeover branch: every
+    /// parse, trust, TCP, TLS, hello, or later disconnect failure stays attached to this backend.
+    private func connectRemoteBackend() {
+        guard !stopped, remoteConnection == nil,
+              case let .selected(ref) = selection, ref.isRemote else { return }
+        runner.viewerBackendWillChange()
+        let connection = ViewerBackendConnection(
+            capabilities: Self.capabilities, appBuild: SessionDaemonHost.currentBuild,
+            connect: { try BackendRegistry.connectRemote(to: ref) })
+        connection.onClientCreated = { [weak self] client in
+            MainActor.assumeIsolated { self?.runner.attachViewer(client: client) }
+        }
+        connection.onHello = { [weak self] _ in
+            MainActor.assumeIsolated { self?.finishConnected() }
+        }
+        connection.onSessionList = { [weak self] list in
+            MainActor.assumeIsolated { self?.runner.applyRemoteRoster(list) }
+        }
+        connection.onStateChange = { [weak self] state in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                switch state {
+                case let .waitingToRetry(_, reason):
+                    self.isConnected = false
+                    self.lastError = reason
+                    self.heartbeat?.invalidate()
+                    self.heartbeat = nil
+                    self.runner.viewerLinkClosed()
+                case .connecting:
+                    self.isConnected = false
+                case .connected, .stopped:
+                    break
+                }
+            }
+        }
+        remoteConnection = connection
+        connection.start()
     }
 
     /// 拉起 daemon，然后**并行等两件事**：首次协议握手 / 子进程终止，谁先到算谁
@@ -276,15 +329,22 @@ final class ViewerSessionClient: ObservableObject {
     /// 一个字节都不来，而右栏看起来一切正常。心跳是唯一能把这种情况变成可见的东西。
     private func startHeartbeat() {
         heartbeat?.invalidate()
-        client?.noteHeartbeat()
+        let activeClient = remoteConnection?.client ?? client
+        activeClient?.noteHeartbeat()
         heartbeat = Timer.scheduledTimer(
             withTimeInterval: SessionReconnectPolicy.pingInterval, repeats: true
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, let client = self.client else { return }
+                guard let self,
+                      let client = self.remoteConnection?.client ?? self.client else { return }
                 if Date().timeIntervalSince(client.lastPongAt) > SessionReconnectPolicy.pongTimeout {
-                    self.lastError = "后台进程 \(Int(SessionReconnectPolicy.pongTimeout)) 秒没有回应，正在重连。"
-                    self.linkClosed()   // teardownLink() 会关 link
+                    let reason = "后台进程 \(Int(SessionReconnectPolicy.pongTimeout)) 秒没有回应，正在重连。"
+                    self.lastError = reason
+                    if let remote = self.remoteConnection {
+                        remote.connectionLost(reason: reason)
+                    } else {
+                        self.linkClosed()   // teardownLink() 会关 link
+                    }
                     return
                 }
                 client.ping()

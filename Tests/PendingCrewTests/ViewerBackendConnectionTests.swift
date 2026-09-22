@@ -46,6 +46,10 @@ final class ViewerBackendConnectionTests: XCTestCase {
         XCTAssertEqual(hellos.count, 2)
         XCTAssertEqual(lists.count, 2)
         XCTAssertEqual(connection.reconnectAttempt, 0)
+
+        clients[0].onSessionList?(.init(sessions: []))
+        XCTAssertEqual(lists.count, 2,
+                       "旧 client 排队中的迟到 list 不能越过重连边界覆盖新 roster")
     }
 
     func test_factoryErrorIsVisibleAndRetryableWithoutAnyImplicitFallback() {
@@ -76,6 +80,73 @@ final class ViewerBackendConnectionTests: XCTestCase {
         connection.stop()
         XCTAssertEqual(connection.state, .stopped)
         XCTAssertTrue(scheduled.isEmpty || attempts == 2)
+    }
+
+    func test_preHandshakeTimeoutRetriesAndStaleTimeoutCannotBreakNewConnection() {
+        let server = SessionProtocolServer(capabilities: [], daemonBuild: "remote")
+        var connectCount = 0
+        var timeouts: [() -> Void] = []
+        var retries: [() -> Void] = []
+        let connection = ViewerBackendConnection(
+            capabilities: [], appBuild: "viewer",
+            connect: {
+                connectCount += 1
+                let transport = InProcessTransport()
+                let app = InProcessSessionLink(transport: transport, side: .app)
+                if connectCount > 1 {
+                    server.accept(link: InProcessSessionLink(transport: transport, side: .daemon))
+                }
+                return app
+            },
+            scheduleRetry: { _, action in retries.append(action) },
+            scheduleHandshakeTimeout: { _, action in timeouts.append(action) })
+
+        connection.start()
+        XCTAssertEqual(connection.state, .connecting,
+                       "能建字节流但没有 hello 时不能误报 connected")
+        XCTAssertEqual(timeouts.count, 1)
+
+        timeouts[0]()
+        guard case let .waitingToRetry(attempt, reason) = connection.state else {
+            return XCTFail("握手超时没有进入可见重试态：\(connection.state)")
+        }
+        XCTAssertEqual(attempt, 1)
+        XCTAssertTrue(reason.contains("握手超时"), reason)
+
+        retries.removeFirst()()
+        XCTAssertEqual(connection.state, .connected)
+        XCTAssertEqual(connectCount, 2)
+        XCTAssertEqual(timeouts.count, 2)
+
+        timeouts[0]()
+        timeouts[1]()
+        XCTAssertEqual(connection.state, .connected,
+                       "旧 generation 或已经 hello 的 timeout 不能打断当前连接")
+    }
+
+    func test_stopReleasesClientAndLinkWithoutCallbackRetainCycle() {
+        let server = SessionProtocolServer(capabilities: [], daemonBuild: "remote")
+        weak var weakClient: SessionProtocolClient?
+        weak var weakLink: InProcessSessionLink?
+        let connection = ViewerBackendConnection(
+            capabilities: [], appBuild: "viewer",
+            connect: {
+                let transport = InProcessTransport()
+                let app = InProcessSessionLink(transport: transport, side: .app)
+                weakLink = app
+                server.accept(link: InProcessSessionLink(transport: transport, side: .daemon))
+                return app
+            },
+            scheduleHandshakeTimeout: { _, _ in })
+        connection.onClientCreated = { weakClient = $0 }
+
+        connection.start()
+        XCTAssertNotNil(weakClient)
+        XCTAssertNotNil(weakLink)
+
+        connection.stop()
+        XCTAssertNil(weakClient, "client 的回调闭包不能反向强持有 client")
+        XCTAssertNil(weakLink, "client teardown 后不能因 hello/timeout 闭包继续持有 link")
     }
 }
 #endif

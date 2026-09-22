@@ -122,6 +122,50 @@ final class SessionDaemonLog {
     }()
 }
 
+/// Opt-in production configuration for the daemon's cross-machine listener.
+///
+/// Absence of the environment key means local-only mode.  Once the key is present, every invalid
+/// port/identity/trust condition is an error; it is never reinterpreted as "just use the local
+/// socket".
+struct SessionDaemonSecureListenerConfiguration: Equatable {
+    static let portEnvironmentKey = "PENDINGCREW_SECURE_LISTEN_PORT"
+
+    enum ConfigurationError: Error, Equatable, CustomStringConvertible {
+        case invalidPort(String)
+        case noTrustedPeers
+
+        var description: String {
+            switch self {
+            case let .invalidPort(raw):
+                return "\(portEnvironmentKey) 不是有效的 1...65535 端口：\(raw)"
+            case .noTrustedPeers:
+                return "已要求安全监听，但信任账本里没有任何对端；拒绝启动远程监听"
+            }
+        }
+    }
+
+    var localIdentity: PairingDeviceIdentity
+    var trustedPeers: [PeerTrustRecord]
+    var port: UInt16
+
+    static func fromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment,
+        loadIdentity: () throws -> PairingDeviceIdentity = { try DeviceIdentityStore.loadOrCreate() },
+        loadTrustedPeers: () throws -> [PeerTrustRecord] = {
+            try PeerTrustStore.load(from: DevicePairingPaths.trustedPeers)
+        }
+    ) throws -> SessionDaemonSecureListenerConfiguration? {
+        guard let raw = environment[portEnvironmentKey] else { return nil }
+        guard let port = UInt16(raw), port != 0 else {
+            throw ConfigurationError.invalidPort(raw)
+        }
+        let identity = try loadIdentity()
+        let peers = try loadTrustedPeers()
+        guard !peers.isEmpty else { throw ConfigurationError.noTrustedPeers }
+        return .init(localIdentity: identity, trustedPeers: peers, port: port)
+    }
+}
+
 /// **`--daemon` 进程的本体**（spec §9 P4 那一行）。
 ///
 /// 它自己不做编排 —— 编排还是 `SessionHost` + `CrewSessionRunner`，**一份代码，
@@ -168,18 +212,25 @@ final class SessionDaemonHost {
             crewId: crewId, sessionId: "system", text: text,
             category: "progress", senderName: "系统")
     }
+    /// Explicit secure-listener startup can fail asynchronously (`NWListener`).  Production exits;
+    /// tests inject an observer.  The host is already stopped before this callback runs.
+    var onSecureListenerFailure: (SecureTransportError) -> Void = { _ in }
 
     private var lock: SessionOrchestratorLock.Handle?
     private var listener: UnixSocketListener?
+    private let secureListenerConfiguration: SessionDaemonSecureListenerConfiguration?
+    private var secureListener: SecureTCPListener?
     private var registry = SessionProcessRegistry()
     private let startedAt = Date()
 
     init(paths: PendingCrewDaemonPaths? = nil,
          capabilities: [String] = SessionDaemonHost.defaultCapabilities,
-         build: String? = nil) {
+         build: String? = nil,
+         secureListener: SessionDaemonSecureListenerConfiguration? = nil) {
         let paths = paths ?? .standard()
         let build = build ?? SessionDaemonHost.currentBuild
         self.paths = paths
+        secureListenerConfiguration = secureListener
         log = SessionDaemonLog(url: paths.log)
         server = SessionProtocolServer(
             capabilities: capabilities, daemonBuild: build,
@@ -188,6 +239,8 @@ final class SessionDaemonHost {
             reclaimsIdleConnections: true)
         server.onDiagnostic = { [log] line in log.write(line) }
     }
+
+    var secureListenerPort: UInt16? { secureListener?.port }
 
     static let defaultCapabilities = [
         "approval-mode", "launch-parameter-problem", "profile-switch", "screen-text",
@@ -233,9 +286,39 @@ final class SessionDaemonHost {
             }
             listener.start()
             self.listener = listener
+            if let configuration = secureListenerConfiguration {
+                let secureListener = try SecureTCPListener(
+                    localIdentity: configuration.localIdentity,
+                    trustedPeers: configuration.trustedPeers,
+                    port: configuration.port)
+                secureListener.onAccept = { [weak self] link in
+                    MainActor.assumeIsolated { self?.server.accept(link: link) }
+                }
+                secureListener.onReady = { [weak self] actualPort in
+                    MainActor.assumeIsolated {
+                        self?.log.write("安全监听已就绪 TCP/TLS 端口 \(actualPort)")
+                    }
+                }
+                secureListener.onFailure = { [weak self] error in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.log.write("安全监听启动失败：\(error)")
+                        self.stop()
+                        self.onSecureListenerFailure(error)
+                    }
+                }
+                self.secureListener = secureListener
+                secureListener.start()
+                log.write("正在启动安全监听，请求端口 \(configuration.port)")
+            }
             startIdleReclaimTimer()
             log.write("监听 \(paths.socket)")
         } catch {
+            secureListener?.close()
+            secureListener = nil
+            listener?.close()
+            listener = nil
+            lock = nil
             throw StartError.listen(error)
         }
     }
@@ -332,6 +415,10 @@ final class SessionDaemonHost {
     /// 停 daemon：先摘监听、再放锁。session 由调用方决定停不停 ——
     /// 这个方法本身**不碰任何 session**。
     func stop() {
+        idleReclaimTimer?.invalidate()
+        idleReclaimTimer = nil
+        secureListener?.close()
+        secureListener = nil
         listener?.close()
         listener = nil
         log.write("=== daemon 退出 ===")

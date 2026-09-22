@@ -103,7 +103,17 @@ final class SessionHost: ObservableObject {
     /// 连上后台那条腿。**一个长期定时器都不起**（下面那两个的理由各自写在方法上）。
     private func beginViewer() {
         guard viewer == nil else { return }
-        let viewer = ViewerSessionClient(runner: runner)
+        installViewer(selection: BackendRegistry.selectedBackend())
+        guard viewer != nil else { return }
+        // 这两个在 viewer 里照跑，理由各自写在方法上：一个只跟着 daemon 写好的
+        // 文件走（不写），一个只读磁盘算个和（不写）。**闸门 1 防的是第二个
+        // writer，不是第二个 reader。**
+        QuotaCenter.shared.startFollowingFile()
+        usage.startReadOnly()
+    }
+
+    private func installViewer(selection: BackendRegistry.Selection) {
+        let viewer = ViewerSessionClient(runner: runner, selection: selection)
         self.viewer = viewer
         // §9.2 唯一允许的那一支：拿到独占编排锁、且后台确实起不来 → 本窗口临时接管。
         // **判断不在这里**（在 `OrchestrationFallback` 那个纯函数里），这里只执行。
@@ -111,11 +121,23 @@ final class SessionHost: ObservableObject {
             MainActor.assumeIsolated { self?.takeOverLocally() }
         }
         viewer.start()
-        // 这两个在 viewer 里照跑，理由各自写在方法上：一个只跟着 daemon 写好的
-        // 文件走（不写），一个只读磁盘算个和（不写）。**闸门 1 防的是第二个
-        // writer，不是第二个 reader。**
-        QuotaCenter.shared.startFollowingFile()
-        usage.startReadOnly()
+    }
+
+    /// 设置里的后端选择。先持久化再换腿；写失败时当前连接保持不动。
+    func connectViewer(to ref: BackendRef) -> String? {
+        guard ProcessRole.effective == .viewer else {
+            return "当前窗口正在本机编排 session；请以 viewer 模式启动后再切换后端。"
+        }
+        do {
+            try BackendRegistry.select(ref)
+        } catch {
+            return "后端选择没写进去：\(error.localizedDescription)。当前连接没有改变。"
+        }
+        viewer?.stop()
+        installViewer(selection: .selected(ref))
+        return ref.isRemote
+            ? "正在通过配对的安全通道连接「\(ref.displayName)」；失败不会退回本机。"
+            : "正在连接本机后台。"
     }
 
     /// **后台起不来时的临时本地接管**（设计 §9.2 表里唯一允许的那一支）。

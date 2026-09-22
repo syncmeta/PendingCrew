@@ -1,35 +1,6 @@
 #if os(macOS)
 import Foundation
 
-/// 一条**已经连上的**协议链路，单侧视角（spec
-/// `docs/internal/2026-08-19-backend-split-design.md` §4.1）。
-///
-/// P2 的 `SessionTransport` 是「两端都在我手里」的对称抽象 —— 那只在同进程里成立。
-/// 真分家之后每个进程只握得住自己这一端，所以协议服务端/客户端认的是这个单侧接口，
-/// `InProcessTransport` 与 `UnixSocketTransport` 各自往上贴一层适配。
-///
-/// `onReceive` 是**可靠有序字节流**，回调边界没有协议含义：可能半帧、整帧或多帧粘在
-/// 一起。当前 UDS 实现为了 IO 效率会尽量按整帧交付，但 endpoint 自己持有增量 decoder，
-/// 绝不能依赖这件事。TLS/TCP 实现因此可以原样上交任意 read chunk。
-@MainActor
-protocol SessionMessageLink: AnyObject {
-    var onReceive: ((Data) -> Void)? { get set }
-    var onClose: (() -> Void)? { get set }
-    var isOpen: Bool { get }
-    /// 这条链路是否支持**同一调用栈内**的请求/应答（`InProcessTransport` 支持，
-    /// socket 不支持）。同步 `screenText` 那条路只在 true 时成立，false 时调用方
-    /// 必须降级 —— 见 `RemoteSessionBackend.screenText`。
-    var isSynchronous: Bool { get }
-    /// 已经交给传输层、但还没真正写出去的字节数。daemon 侧据此判断这条链路是不是
-    /// 跟不上了（§5.4 的背压闸门读的就是它）。同进程直调恒为 0。
-    var pendingWriteBytes: Int { get }
-    /// 写入一段字节。调用方目前按完整 framed message 写，但对端不得假设 write 边界保留。
-    func send(_ framed: Data)
-    /// 本端主动关闭。**不触发 `onClose`** —— 那是留给「对端走了 / 链路断了」的，
-    /// 谁主动关的谁自己知道，重连策略不该被自己的 detach 触发。
-    func close()
-}
-
 /// 把字节流切回「一条一条完整的 framed message」，**不解码内容**。
 ///
 /// 与 `SessionFrameDecoder` 的分工：那个把帧解成 `SessionWireFrame`（要读 payload），
@@ -374,7 +345,11 @@ final class UnixSocketListener {
         guard !closed else { return }
         closed = true
         if let source {
-            source.cancel()          // fd 与 socket 文件在 cancel handler 里收
+            // Stop new connects immediately.  The fd itself still belongs to the asynchronous
+            // cancel handler (closing it here can race fd reuse), but unlinking the pathname is
+            // safe and makes an explicit secure-listener failure fail closed at once.
+            unlink(path)
+            source.cancel()
             self.source = nil
         } else {
             Darwin.close(fd)

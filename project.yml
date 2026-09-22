@@ -146,6 +146,8 @@ targets:
       # LocalRunner 模块是纯 Foundation 代码（不依赖 SwiftUI / NSApplicationMain），
       # 重复编译进 test bundle 完全没问题。
       - path: Sources/Mac/LocalRunner
+      # Session 协议的最小跨平台字节流边界；macOS 实现与下一批 iOS connector 共用。
+      - path: Sources/Shared/SessionMessageLink.swift
       # 待办队列的取走语义（2026-09-04：@Published 数组当队列 → 同一条命令被执行
       # 两遍）。纯 Foundation 泛型，CrewStore/SessionHost 共用。
       - path: Sources/Stores/PendingRequestQueue.swift

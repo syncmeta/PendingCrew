@@ -139,7 +139,7 @@ private struct BackendsSettingsTab: View {
 
     /// 登记表跟锁、socket 一样落在数据根下（`PENDINGCREW_DATA_DIR` 挪走时跟着走）。
     private var registryFile: URL {
-        PendingCrewDataRoot.subdirectory("backends").appendingPathComponent("registry.json")
+        BackendRegistry.registryFile
     }
 
     var body: some View {
@@ -174,6 +174,11 @@ private struct BackendsSettingsTab: View {
                             statusLine(status, isRemote: ref.isRemote)
                             restartButton(for: status)
                         }
+                        Button(sessionHost.viewer?.selectedBackendID == ref.id
+                               ? "当前后端" : "连接") {
+                            notice = sessionHost.connectViewer(to: ref)
+                        }
+                        .disabled(sessionHost.viewer?.selectedBackendID == ref.id)
                     }
                     .padding(.vertical, 2)
                     .swipeActions {
@@ -191,8 +196,8 @@ private struct BackendsSettingsTab: View {
                 Text("认识的后端")
             } footer: {
                 Text("本机那条是内置的：删不掉，也永远排第一 —— 删了之后这个界面就没有"
-                     + "任何后端可连了。远程那一档还没做，列在这里只是为了让你看见"
-                     + "「它还没做」，连不上时**不会**悄悄退回本机。")
+                     + "任何后端可连了。远程连接使用已配对的 TLS 安全通道；握手或信任"
+                     + "失败会留在远程错误态，**不会**悄悄退回本机。")
             }
             Section {
                 TextField("名字（你自己认得出就行）", text: $newName)
@@ -205,8 +210,8 @@ private struct BackendsSettingsTab: View {
             } header: {
                 Text("加一个远程后端")
             } footer: {
-                Text("**加进来不等于连得上** —— 远程那一档还没实现，列表里它会明说。"
-                     + "现在就让你加，是为了那份登记表先立起来；等远程做好，这里不用再改。")
+                Text("**加进来不等于已经配对**。这一批要求信任账本中已有对应记录；"
+                     + "Bonjour、二维码与完整配对界面留到下一批。")
             }
         }
         .formStyle(.grouped)

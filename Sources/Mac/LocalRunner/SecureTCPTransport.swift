@@ -333,6 +333,7 @@ final class SecureTCPTransport: SessionMessageLink {
     private(set) var pendingWriteBytes = 0
     private(set) var failure: SecureTransportError?
     private(set) var negotiatedCipherSuite: UInt16?
+    var terminalErrorDescription: String? { failure?.description }
 
     private let connection: NWConnection
     private let queue: DispatchQueue
@@ -453,7 +454,10 @@ final class SecureTCPTransport: SessionMessageLink {
             isOpen = true
             onReady?()
         case let .failed(error):
-            finish(with: .classify(error), notifyPeerClose: isOpen)
+            // A TLS authentication failure happens before `.ready`, but it is still a terminal link
+            // failure that the viewer must see and retry.  Suppressing `onClose` while `isOpen` is
+            // false would leave the production viewer stuck forever in "connecting".
+            finish(with: .classify(error), notifyPeerClose: true)
         case .cancelled:
             finish(with: nil, notifyPeerClose: isOpen)
         default:
@@ -478,6 +482,8 @@ final class SecureTCPTransport: SessionMessageLink {
 @MainActor
 final class SecureTCPListener {
     var onAccept: ((SecureTCPTransport) -> Void)?
+    var onReady: ((UInt16) -> Void)?
+    var onFailure: ((SecureTransportError) -> Void)?
     private(set) var port: UInt16?
     private(set) var failure: SecureTransportError?
     private(set) var lastConnectionFailure: SecureTransportError?
@@ -535,9 +541,11 @@ final class SecureTCPListener {
                     switch state {
                     case .ready:
                         self.port = self.listener.port?.rawValue
+                        if let port = self.port { self.onReady?(port) }
                     case let .failed(error):
                         self.failure = .listenerFailure(String(describing: error))
                         self.port = nil
+                        if let failure = self.failure { self.onFailure?(failure) }
                     case .cancelled:
                         self.port = nil
                     default:

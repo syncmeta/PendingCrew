@@ -178,6 +178,40 @@ final class SessionDaemonHostTests: XCTestCase {
         XCTAssertEqual(configuration.trustedPeers, [peer])
     }
 
+    func test_显式安全端口被占用时host整体停掉而不是静默只剩本机socket() throws {
+        let clientIdentity = PairingDeviceIdentity.generate()
+        let serverIdentity = PairingDeviceIdentity.generate()
+        let peer = PeerTrustRecord(
+            backendID: "viewer", peerDeviceID: clientIdentity.id,
+            peerPublicSigningKey: clientIdentity.publicSigningKey,
+            preSharedKey: Data(repeating: 0x62, count: 32))
+        let blocker = try SecureTCPListener(
+            localIdentity: serverIdentity, trustedPeers: [peer], port: 0)
+        blocker.start()
+        defer { blocker.close() }
+        try pump(until: { blocker.port != nil })
+
+        let host = SessionDaemonHost(
+            paths: paths(),
+            secureListener: .init(
+                localIdentity: serverIdentity, trustedPeers: [peer],
+                port: try XCTUnwrap(blocker.port)))
+        host.onCrewNotice = { _, _ in }
+        var observed: SecureTransportError?
+        host.onSecureListenerFailure = { observed = $0 }
+        try host.start()
+        defer { host.stop() }
+
+        try pump(until: { observed != nil })
+        guard case .listenerFailure? = observed else {
+            return XCTFail("端口占用没有归类为监听失败：\(String(describing: observed))")
+        }
+        XCTAssertNil(SessionDaemonControl.runningDaemonPid(paths: paths()),
+                     "显式安全监听失败后必须放掉 host 锁，不能留下 local-only daemon")
+        XCTAssertThrowsError(try UnixSocketTransport.connect(toPath: paths().socket),
+                             "显式安全监听失败后 UDS 也必须关闭")
+    }
+
     // MARK: - §8.2 崩溃善后（这一组是整条线上唯一「判错就杀掉无辜进程」的地方）
 
     /// 记录对得上 → 真的回收。

@@ -87,6 +87,64 @@ enum BackendRegistry {
     /// 本机那条的固定 id。
     static let localId = "local"
 
+    static var registryFile: URL {
+        PendingCrewDataRoot.subdirectory("backends").appendingPathComponent("registry.json")
+    }
+
+    static var selectionFile: URL {
+        PendingCrewDataRoot.subdirectory("backends").appendingPathComponent("selection.json")
+    }
+
+    private struct SelectionRecord: Codable, Equatable { var backendID: String }
+
+    enum Selection: Equatable {
+        case selected(BackendRef)
+        /// A previously explicit choice cannot be resolved.  This is intentionally not local.
+        case unavailable(String)
+
+        var backendID: String? {
+            if case let .selected(ref) = self { return ref.id }
+            return nil
+        }
+    }
+
+    /// Resolve the persisted viewer target.  No selection file means the installation has never
+    /// selected a backend and therefore starts on the built-in local entry.  Once a selection was
+    /// written, unreadable/missing data fails closed instead of silently changing machines.
+    static func selectedBackend(
+        registryFile: URL = BackendRegistry.registryFile,
+        selectionFile: URL = BackendRegistry.selectionFile,
+        paths: PendingCrewDaemonPaths = .standard()
+    ) -> Selection {
+        let data: Data
+        do {
+            data = try Data(contentsOf: selectionFile)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+            return .selected(builtInLocal(paths: paths))
+        } catch {
+            return .unavailable("后端选择读不出来：\(error.localizedDescription)。没有退回本机。")
+        }
+        guard let record = try? JSONDecoder().decode(SelectionRecord.self, from: data),
+              !record.backendID.isEmpty else {
+            return .unavailable("后端选择已损坏。没有退回本机。")
+        }
+        let loaded = load(from: registryFile, paths: paths)
+        if let problem = loaded.problem {
+            return .unavailable("\(problem) 当前选择是 \(record.backendID)，没有退回本机。")
+        }
+        guard let ref = loaded.refs.first(where: { $0.id == record.backendID }) else {
+            return .unavailable("之前选择的后端 \(record.backendID) 已不在登记表中。没有退回本机。")
+        }
+        return .selected(ref)
+    }
+
+    static func select(_ ref: BackendRef,
+                       selectionFile: URL = BackendRegistry.selectionFile) throws {
+        try MultiProcessJSONStore.writeStaged(
+            JSONEncoder().encode(SelectionRecord(backendID: ref.id)), to: selectionFile)
+    }
+
     /// 本机那条。**每次现算**（socket 路径跟着数据根走，写死会在
     /// `PENDINGCREW_DATA_DIR` 挪走之后指向错的地方）。
     static func builtInLocal(paths: PendingCrewDaemonPaths = .standard()) -> BackendRef {

@@ -369,6 +369,7 @@ final class ViewWiringTests: XCTestCase {
         let main = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
         let host = Self.codeOnly(try Self.text(of: "SessionDaemonHost.swift"))
         let viewer = Self.codeOnly(try Self.text(of: "ViewerSessionClient.swift"))
+        let runner = Self.codeOnly(try Self.text(of: "CrewSessionRunner.swift"))
         let sessionHost = Self.codeOnly(try Self.text(of: "SessionHost.swift"))
         let settings = Self.codeOnly(try Self.text(of: "CrewSettingsView.swift"))
 
@@ -392,6 +393,10 @@ final class ViewWiringTests: XCTestCase {
                        "远程失败走进了本机接管路径，会把本机 session 冒充远端")
         XCTAssertFalse(remoteBody.contains("UnixSocketTransport.connect"),
                        "远程失败路径仍可能退到本机 socket")
+        XCTAssertTrue(remoteBody.contains("runner.viewerBackendWillChange()"),
+                      "远程 connector 启动前没有清掉旧后端的 viewer roster/link")
+        XCTAssertTrue(runner.contains("func viewerBackendWillChange()"),
+                      "runner 没有把跨后端切换与普通断线区分开")
 
         XCTAssertTrue(sessionHost.contains("func connectViewer(to ref: BackendRef)"),
                       "SessionHost 没有可由后端选择触发的重连入口")
