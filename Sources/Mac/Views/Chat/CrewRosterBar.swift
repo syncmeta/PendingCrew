@@ -8,19 +8,19 @@ import SwiftUI
 struct CrewRosterBar: View {
     let members: [CrewMember]
     let captainBotId: String?
+    var onOpenSession: ((String) -> Void)? = nil
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
                 ForEach(members) { m in
                     let sender = CrewSenderNaming.groupSender(for: m, captainBotId: captainBotId)
-                    VStack(spacing: 3) {
-                        CrewAvatarBadges(sender: sender, size: 28)
-                        Text(sender.displayName)
-                            .font(Theme.Fonts.caption2)
-                            .foregroundStyle(Theme.Palette.inkMuted)
-                            .lineLimit(1)
-                            .frame(maxWidth: 76)
+                    if let sessionID = m.codeSessionId, let onOpenSession {
+                        Button { onOpenSession(sessionID) } label: { member(sender) }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("查看远端 session 与终端")
+                    } else {
+                        member(sender)
                     }
                 }
             }
@@ -28,5 +28,16 @@ struct CrewRosterBar: View {
             .padding(.vertical, 8)
         }
         .background(Theme.Palette.surfaceMuted.opacity(0.5))
+    }
+
+    private func member(_ sender: GroupBubbleSender) -> some View {
+        VStack(spacing: 3) {
+            CrewAvatarBadges(sender: sender, size: 28)
+            Text(sender.displayName)
+                .font(Theme.Fonts.caption2)
+                .foregroundStyle(Theme.Palette.inkMuted)
+                .lineLimit(1)
+                .frame(maxWidth: 76)
+        }
     }
 }

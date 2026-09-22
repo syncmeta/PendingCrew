@@ -464,6 +464,7 @@
 		93CF27F46F386E7FB7DFEEBE /* CrewDragDropLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93038419311F5CF05D0DAA7 /* CrewDragDropLogic.swift */; };
 		944E034728CA3E9A935459BA /* CaptainLaunchReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA032E4E4C0344CB2F7DC87 /* CaptainLaunchReadiness.swift */; };
 		945CD4E64E68F0005D687FBC /* LocalRunnerPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CC4D38A8ADADF050411F604 /* LocalRunnerPlaceholder.swift */; };
+		9462E6E0B8B91E5206F2FF3E /* IOSRemoteSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E599EA9F8026977EA1CF868 /* IOSRemoteSessionView.swift */; };
 		948AEC2D92A5BBE6DCFF82A5 /* AgentSessionResume.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AC47DF3752DBA4E2F07C9CD /* AgentSessionResume.swift */; };
 		95C3C445435C868A3AC5D917 /* CrewChatReturnTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF86AC53CE78FB4C2CC168B3 /* CrewChatReturnTrail.swift */; };
 		95CD81185B683FA0FD1E74C4 /* PendingComposerAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85FDABD0C0A7910C75C39C8 /* PendingComposerAttachment.swift */; };
@@ -950,6 +951,7 @@
 		3C8AAA5D7F3A3E6F092B06EC /* SessionOutputEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOutputEvidence.swift; sourceTree = "<group>"; };
 		3DF5F466F921DB1C819C14B6 /* ReportingParentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportingParentTests.swift; sourceTree = "<group>"; };
 		3E15FE8C83DE144D94F5AE1B /* MultiProcessJSONStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiProcessJSONStore.swift; sourceTree = "<group>"; };
+		3E599EA9F8026977EA1CF868 /* IOSRemoteSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSRemoteSessionView.swift; sourceTree = "<group>"; };
 		3EF004A7B177C4A299BDA739 /* SessionRestoreOffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRestoreOffer.swift; sourceTree = "<group>"; };
 		3F40D59113575AA4C63F7C17 /* CrewMailboxWakeLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMailboxWakeLogic.swift; sourceTree = "<group>"; };
 		3F65603310BBC35C6621462F /* TerminalSnapshotFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSnapshotFixtureTests.swift; sourceTree = "<group>"; };
@@ -1755,6 +1757,7 @@
 				D60CE404DBA41800A4216C77 /* CrewListView.swift */,
 				1798347262420DBF93C0935D /* CrewRootBadge.swift */,
 				DBEA0D501D0F53D19064B6B2 /* IOSRemotePairingView.swift */,
+				3E599EA9F8026977EA1CF868 /* IOSRemoteSessionView.swift */,
 				2CD2E19FFE0BDAC1918FA06E /* IPadShell.swift */,
 				A48848C6D823FBAAA912491A /* PendingCrewPlaceholderIcon.swift */,
 			);
@@ -2502,6 +2505,7 @@
 				B83C1AA5784B8F9C5B70F880 /* HumanAttentionTally.swift in Sources */,
 				6761DDF0C26513763523681F /* HumanTodoWakePlan.swift in Sources */,
 				AD45C1B274DB5870EDD5B733 /* IOSRemotePairingView.swift in Sources */,
+				9462E6E0B8B91E5206F2FF3E /* IOSRemoteSessionView.swift in Sources */,
 				8094B3158013057F7624AA35 /* IPadShell.swift in Sources */,
 				CFFCCE0BBDE3D119D2140C41 /* ImageViewer.swift in Sources */,
 				E3B0ECB788708CD081C63466 /* InProcessTransport.swift in Sources */,

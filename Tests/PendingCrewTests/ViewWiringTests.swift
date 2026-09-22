@@ -470,6 +470,36 @@ final class ViewWiringTests: XCTestCase {
         }
     }
 
+    /// #121 第五批的 production caller：行为尺已经跑真实 TLS，这里防 iOS 导航或
+    /// daemon approvals ledger 接头被拆掉后只剩一堆绿的底层零件。
+    func testIOSRemoteSessionTerminalAndApprovalsAreWiredIntoProductionCallers() throws {
+        let shell = Self.codeOnly(try Self.text(of: "IPadShell.swift"))
+        let chat = Self.codeOnly(try Self.text(of: "CrewChatView.swift"))
+        let roster = Self.codeOnly(try Self.text(of: "CrewRosterBar.swift"))
+        let detail = Self.codeOnly(try Self.text(of: "IOSRemoteSessionView.swift"))
+        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+        let host = Self.codeOnly(try Self.text(of: "SessionDaemonHost.swift"))
+
+        XCTAssertTrue(roster.contains("onOpenSession(sessionID)"),
+                      "iOS roster 的 session 成员仍不可点")
+        XCTAssertTrue(chat.contains("onOpenSession: onOpenRemoteSession"),
+                      "CrewChat 没把远端 session 导航交给 roster")
+        XCTAssertTrue(shell.contains("IOSRemoteSessionView(crewID:"),
+                      "iOS shell 没有 session 详情导航")
+        XCTAssertTrue(detail.contains("backend.openSession(sessionID:"),
+                      "详情页没有接共享连接上的 attach")
+        XCTAssertTrue(detail.contains("remoteSessionBackend?.closeSession(sessionID:"),
+                      "详情退出时没有 detach/release 远端 session")
+        XCTAssertTrue(detail.contains("backend.decideApproval("))
+        XCTAssertTrue(detail.contains("backend.answerApproval("))
+        XCTAssertTrue(detail.contains("Button(\"重新连接\""),
+                      "显式断线态没有恢复入口")
+        XCTAssertTrue(daemon.contains("host.server.approvalStore = .shared"),
+                      "daemon 不是结构化 approvals ledger 的唯一写者")
+        XCTAssertTrue(host.contains("ApprovalRPC.capability"),
+                      "生产 daemon 没广告 approval RPC 能力")
+    }
+
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
     func testCloseButtonStyleIsDefinedOnlyOnce() throws {
         for file in ["CockpitView.swift"] {

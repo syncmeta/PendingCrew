@@ -19,6 +19,9 @@ struct CrewChatView: View {
     /// macOS:点 session(右侧成员行 / session 气泡)时打开 inspector 并选中。
     /// 由 CrewCenterView 注入(用它持有的 inspectorPresented + sessionRunner)。iOS 传 nil。
     var onOpenSession: ((UUID) -> Void)? = nil
+    /// iOS 远端成员头像 → 同一安全连接上的 session 详情。String 是 daemon sessionId，
+    /// 不强行假设它一定能转 UUID。
+    var onOpenRemoteSession: ((String) -> Void)? = nil
     /// macOS:成员区「+」起新 session(进新建态 + 弹 inspector)。iOS 传 nil。
     var onNewSession: (() -> Void)? = nil
     /// 「只看 @ 我的消息」筛选开关（Todo #61）。开关**钮**在窗口 toolbar 上（归
@@ -332,7 +335,9 @@ struct CrewChatView: View {
         #else
         VStack(spacing: 0) {
             if !members.isEmpty {
-                CrewRosterBar(members: members, captainBotId: captainBotId)
+                CrewRosterBar(
+                    members: members, captainBotId: captainBotId,
+                    onOpenSession: onOpenRemoteSession)
                 Divider()
             }
             timeline

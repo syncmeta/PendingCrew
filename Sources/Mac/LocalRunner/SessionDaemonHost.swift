@@ -260,6 +260,7 @@ final class SessionDaemonHost {
     static let defaultCapabilities = [
         "approval-mode", "launch-parameter-problem", "profile-switch", "screen-text",
         "terminal-bytes", "transcript-events", SessionRestoreRoute.capability, CrewRPC.capability,
+        ApprovalRPC.capability,
     ]
 
     nonisolated static var currentBuild: String {

@@ -27,6 +27,7 @@ struct IPadShell: View {
 
     @State private var selectedCrewId: String?
     @State private var showingPairing = false
+    @State private var selectedRemoteSessionID: String?
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -55,13 +56,18 @@ struct IPadShell: View {
     @ViewBuilder
     private var detail: some View {
         if let id = selectedCrewId, let title = crewTitle(for: id) {
-            CrewChatView(crewId: id, crewTitle: title)
+            CrewChatView(
+                crewId: id, crewTitle: title,
+                onOpenRemoteSession: { selectedRemoteSessionID = $0 })
                 .id(id) // 切换 crew 时强制重建 chat view（清空旧 state）
                 // compact 下这一屏是被推上来的，得有标题；regular 下留空
                 // 标题 = 与改动前一致（别动 iPad）。不碰 .toolbar 可见性 ——
                 // iPad detail 列那条导航条上挂着系统的侧栏开关，隐了就没了。
                 .navigationTitle(isCompact ? title : "")
                 .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(item: $selectedRemoteSessionID) { sessionID in
+                    IOSRemoteSessionView(crewID: id, sessionID: sessionID)
+                }
         } else {
             PendingCrewPlaceholderIcon(size: 64)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// A codex `ThreadItem` reduced to what the transcript renders. `.unknown`
@@ -362,4 +361,3 @@ struct CodexActivityPresentation: Equatable {
         return name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
     }
 }
-#endif

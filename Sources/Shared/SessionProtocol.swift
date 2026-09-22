@@ -184,6 +184,58 @@ enum SessionWireJSONValue: Equatable, Codable {
     }
 }
 
+extension SessionWireJSONValue {
+    /// Codable ↔ 线上 JSON 值。放在共享协议层，macOS 与 iOS 对 Codex event / control
+    /// 使用同一套递归转换，不各自猜字段形状。
+    static func encoding<T: Encodable>(_ value: T) -> SessionWireJSONValue? {
+        guard let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        return SessionWireJSONValue(object)
+    }
+
+    func decoding<T: Decodable>(_ type: T.Type) -> T? {
+        guard let data = try? JSONSerialization.data(withJSONObject: foundationObject) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    init?(_ value: Any) {
+        switch value {
+        case let value as String: self = .string(value)
+        case let value as Bool: self = .bool(value)
+        case let value as NSNumber: self = .number(value.doubleValue)
+        case let value as [String: Any]:
+            var object: [String: SessionWireJSONValue] = [:]
+            for (key, child) in value {
+                guard let converted = SessionWireJSONValue(child) else { return nil }
+                object[key] = converted
+            }
+            self = .object(object)
+        case let value as [Any]:
+            var array: [SessionWireJSONValue] = []
+            for child in value {
+                guard let converted = SessionWireJSONValue(child) else { return nil }
+                array.append(converted)
+            }
+            self = .array(array)
+        case _ as NSNull: self = .null
+        default: return nil
+        }
+    }
+
+    var foundationObject: Any {
+        switch self {
+        case let .string(value): return value
+        case let .number(value): return value
+        case let .bool(value): return value
+        case let .object(value): return value.mapValues(\.foundationObject)
+        case let .array(value): return value.map(\.foundationObject)
+        case .null: return NSNull()
+        }
+    }
+}
+
 // MARK: - app -> daemon (8 messages)
 
 struct SessionAppHello: Codable, Equatable {
@@ -477,6 +529,26 @@ struct SessionEvent: Codable, Equatable {
         fields = try c.decodeIfPresent(
             [String: SessionWireJSONValue].self, forKey: .fields) ?? [:]
     }
+}
+
+/// SessionProtocol 上 Codex 通知的唯一解包口径。macOS viewer 与 iOS viewer
+/// 都消费 daemon 发出的真实 `sessionId/method/params` 形状，避免各写一套猜测。
+struct SessionCodexNotification {
+    var sessionID: String
+    var method: String
+    var params: [String: SessionWireJSONValue]
+
+    init?(_ event: SessionEvent) {
+        guard event.kind == "codexNotification",
+              case let .string(sessionID)? = event.fields["sessionId"],
+              case let .string(method)? = event.fields["method"],
+              case let .object(params)? = event.fields["params"] else { return nil }
+        self.sessionID = sessionID
+        self.method = method
+        self.params = params
+    }
+
+    var foundationParams: [String: Any] { params.mapValues(\.foundationObject) }
 }
 
 struct SessionPong: Codable, Equatable { var nonce: UInt64? = nil }

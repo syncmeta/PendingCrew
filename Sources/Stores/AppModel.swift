@@ -40,6 +40,8 @@ final class AppModel: ObservableObject {
             backendConfigurationError = "远端配置不可用：\(error.localizedDescription)"
         }
     }
+
+    var remoteSessionBackend: RemotePendingCrewBackend? { remoteBackend }
     #endif
 
     /// 当前生效的 backend。

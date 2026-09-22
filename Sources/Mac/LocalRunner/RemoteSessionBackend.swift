@@ -448,12 +448,10 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     }
 
     func receiveEvent(_ event: SessionEvent) {
-        guard event.kind == "codexNotification",
-              case let .string(eventSessionId)? = event.fields["sessionId"],
-              eventSessionId == sessionId,
-              case let .string(method)? = event.fields["method"],
-              case let .object(params)? = event.fields["params"] else { return }
-        transcript?.apply(method: method, params: params.mapValues(\.foundationObject))
+        guard let notification = SessionCodexNotification(event),
+              notification.sessionID == sessionId else { return }
+        let method = notification.method
+        transcript?.apply(method: method, params: notification.foundationParams)
         // codex notification 比下一份 state snapshot 更早到 app。立刻镜像 turn
         // 生命周期，避免这段窗口里 inspect_session / 状态点谎报“空闲”。
         if method == "turn/started" || method.hasPrefix("item/") {
@@ -631,55 +629,4 @@ extension SessionProfileSwitchOutcome {
     }
 }
 
-extension SessionWireJSONValue {
-    /// Codable ↔ 线上 JSON 值。控制帧的 `arguments` 是 `[String: SessionWireJSONValue]`，
-    /// 而我们要送的东西（`SessionConfig` 之类）本来就是 Codable —— 中间不再手抄字段。
-    static func encoding<T: Encodable>(_ value: T) -> SessionWireJSONValue? {
-        guard let data = try? JSONEncoder().encode(value),
-              let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
-        return SessionWireJSONValue(object)
-    }
-
-    func decoding<T: Decodable>(_ type: T.Type) -> T? {
-        guard let data = try? JSONSerialization.data(withJSONObject: foundationObject) else {
-            return nil
-        }
-        return try? JSONDecoder().decode(type, from: data)
-    }
-
-    init?(_ value: Any) {
-        switch value {
-        case let value as String: self = .string(value)
-        case let value as Bool: self = .bool(value)
-        case let value as NSNumber: self = .number(value.doubleValue)
-        case let value as [String: Any]:
-            var object: [String: SessionWireJSONValue] = [:]
-            for (key, child) in value {
-                guard let converted = SessionWireJSONValue(child) else { return nil }
-                object[key] = converted
-            }
-            self = .object(object)
-        case let value as [Any]:
-            var array: [SessionWireJSONValue] = []
-            for child in value {
-                guard let converted = SessionWireJSONValue(child) else { return nil }
-                array.append(converted)
-            }
-            self = .array(array)
-        case _ as NSNull: self = .null
-        default: return nil
-        }
-    }
-
-    var foundationObject: Any {
-        switch self {
-        case let .string(value): return value
-        case let .number(value): return value
-        case let .bool(value): return value
-        case let .object(value): return value.mapValues(\.foundationObject)
-        case let .array(value): return value.map(\.foundationObject)
-        case .null: return NSNull()
-        }
-    }
-}
 #endif

@@ -25,6 +25,7 @@ final class SessionProtocolServer {
         /// 那条链路永远不会落后一拍——给它排队等于凭空造一个不存在的中间态。
         var queues: [UInt32: SessionAttachQueue] = [:]
         var crewSubscriptions: [String: Task<Void, Never>] = [:]
+        var approvalSubscriptions: [String: Task<Void, Never>] = [:]
         var pumpScheduled = false
         /// 最近一次**收到**对端字节的时刻。半开链路回收的唯一判据（§4.5
         /// `daemonIdleTimeout`）—— 只认「收到」，不认「我们发出去了」：往一条
@@ -72,6 +73,8 @@ final class SessionProtocolServer {
     var onOrchestrationRequest: ((SessionControl) -> Void)?
     /// daemon 的唯一 crew 账本。只由生产 daemon 接入 `LocalBackend`；viewer 不写文件。
     var crewBackend: (any PendingCrewBackend)?
+    /// daemon 的唯一结构化审批账本。远端 viewer 只走 RPC，绝不直接读写这份文件。
+    var approvalStore: LocalApprovalStore?
 
     var connectionCount: Int { connections.count }
     var sessionCount: Int { records.count }
@@ -152,6 +155,8 @@ final class SessionProtocolServer {
         guard let connection = connections.removeValue(forKey: key) else { return }
         connection.crewSubscriptions.values.forEach { $0.cancel() }
         connection.crewSubscriptions.removeAll()
+        connection.approvalSubscriptions.values.forEach { $0.cancel() }
+        connection.approvalSubscriptions.removeAll()
         for handle in connection.handles {
             if let sessionId = sessionByHandle.removeValue(forKey: handle) {
                 records[sessionId]?.handles.remove(handle)
@@ -327,6 +332,8 @@ final class SessionProtocolServer {
         case let .control(value):
             if CrewRPC.Op.isCrew(value.op) {
                 handleCrewRPC(value, on: connection)
+            } else if ApprovalRPC.Op.isApproval(value.op) {
+                handleApprovalRPC(value, on: connection)
             } else if SessionOrchestrationOp.isOrchestration(value.op) {
                 handleOrchestration(value)
             } else {
@@ -502,6 +509,12 @@ final class SessionProtocolServer {
         connections.values.filter { $0.crewSubscriptions[crewId] != nil }.count
     }
 
+    func attachmentCount(sessionId: String) -> Int { records[sessionId]?.handles.count ?? 0 }
+
+    func approvalSubscriptionCount(crewId: String) -> Int {
+        connections.values.filter { $0.approvalSubscriptions[crewId] != nil }.count
+    }
+
     private func handleCrewRPC(_ control: SessionControl, on connection: Connection) {
         guard connection.negotiatedCapabilities.contains(CrewRPC.capability) else {
             sendCrewFailure(control.requestId, "连接没有协商 crew RPC 能力", on: connection)
@@ -582,6 +595,89 @@ final class SessionProtocolServer {
     }
 
     private struct CrewRPCOptional<Value: Codable>: Codable { var value: Value? }
+
+    // MARK: - Structured approval RPC
+
+    private func handleApprovalRPC(_ control: SessionControl, on connection: Connection) {
+        guard connection.negotiatedCapabilities.contains(ApprovalRPC.capability) else {
+            sendApprovalFailure(control.requestId, "连接没有协商结构化审批能力", on: connection)
+            return
+        }
+        guard let store = approvalStore else {
+            sendApprovalFailure(control.requestId, "daemon 未接入审批账本", on: connection)
+            return
+        }
+        guard let requestID = control.requestId else { return }
+        do {
+            let payload: Data
+            switch control.op {
+            case ApprovalRPC.Op.subscribe:
+                let scope: ApprovalRPC.Scope = try decodeCrewArguments(control)
+                connection.approvalSubscriptions[scope.crewId]?.cancel()
+                connection.approvalSubscriptions[scope.crewId] = Task {
+                    @MainActor [weak self, weak connection] in
+                    for await _ in store.approvalChanges(crewId: scope.crewId) {
+                        guard !Task.isCancelled, let self, let connection else { return }
+                        self.send(.event(.init(
+                            kind: ApprovalRPC.changedEvent, requestId: nil,
+                            fields: ["crewId": .string(scope.crewId)])), on: connection)
+                    }
+                }
+                payload = try JSONEncoder().encode(ApprovalRPC.Empty())
+            case ApprovalRPC.Op.list:
+                let scope: ApprovalRPC.Scope = try decodeCrewArguments(control)
+                let items = store.pending(crewId: scope.crewId).filter {
+                    $0.sessionId == scope.sessionId
+                }
+                payload = try JSONEncoder().encode(items)
+            case ApprovalRPC.Op.answer:
+                let value: ApprovalRPC.Answer = try decodeCrewArguments(control)
+                guard !value.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw CrewRPCError.remote("待决策答复不能为空")
+                }
+                guard let item = store.item(crewId: value.crewId, id: value.approvalId),
+                      item.sessionId == value.sessionId, item.kind == "decision",
+                      item.status == "pending" else {
+                    throw CrewRPCError.remote("待决策不存在、已处理或不属于这个 session")
+                }
+                if let error = store.answer(
+                    crewId: value.crewId, id: value.approvalId, reply: value.reply) {
+                    throw error
+                }
+                payload = try JSONEncoder().encode(ApprovalRPC.Empty())
+            case ApprovalRPC.Op.decide:
+                let value: ApprovalRPC.Decide = try decodeCrewArguments(control)
+                guard value.decision == "allow" || value.decision == "deny" else {
+                    throw CrewRPCError.remote("审批决定只能是 allow 或 deny")
+                }
+                guard let item = store.item(crewId: value.crewId, id: value.approvalId),
+                      item.sessionId == value.sessionId, item.kind == "permission",
+                      item.status == "pending" else {
+                    throw CrewRPCError.remote("待审批不存在、已处理或不属于这个 session")
+                }
+                if let error = store.decide(
+                    crewId: value.crewId, id: value.approvalId, decision: value.decision) {
+                    throw error
+                }
+                payload = try JSONEncoder().encode(ApprovalRPC.Empty())
+            default:
+                throw CrewRPCError.unsupported("不支持的远端审批操作：\(control.op)")
+            }
+            send(.event(.init(
+                kind: ApprovalRPC.resultEvent, requestId: requestID,
+                fields: ["payload": .string(payload.base64EncodedString())])), on: connection)
+        } catch {
+            sendApprovalFailure(requestID, error.localizedDescription, on: connection)
+        }
+    }
+
+    private func sendApprovalFailure(
+        _ requestID: String?, _ reason: String, on connection: Connection
+    ) {
+        guard let requestID else { return }
+        send(.event(.init(kind: ApprovalRPC.resultEvent, requestId: requestID,
+                          fields: ["error": .string(reason)])), on: connection)
+    }
 
     // MARK: - 背压泵
 

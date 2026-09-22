@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// **把 codex 的 reduced transcript 变成文本**的唯一口径。
@@ -39,4 +38,3 @@ enum CodexTranscriptText {
         }
     }
 }
-#endif

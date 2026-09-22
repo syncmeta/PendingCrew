@@ -1,4 +1,4 @@
-#if os(macOS)
+import Combine
 import Foundation
 
 /// Observable transcript built from codex streaming notifications. v1 renders on
@@ -97,4 +97,3 @@ final class CodexTranscript: ObservableObject {
         return CodexThreadItem(id: item.id, kind: .reasoning(summary: summary, content: content))
     }
 }
-#endif

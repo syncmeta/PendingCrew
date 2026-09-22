@@ -110,6 +110,7 @@ enum SessionDaemonMain {
             runner?.runs.first { $0.sessionId == sessionId }?.protocolSummary
         }
         host.server.crewBackend = model.backend
+        host.server.approvalStore = .shared
         host.server.onOrchestrationRequest = { control in
             MainActor.assumeIsolated {
                 handle(control, runner: runner, crewStore: crewStore,
