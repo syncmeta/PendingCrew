@@ -21,8 +21,9 @@ final class BackendRegistryTests: XCTestCase {
         return dir.appendingPathComponent("backends.json")
     }
 
-    private func remote(_ id: String) -> BackendRef {
-        BackendRef(id: id, displayName: id, transport: .remote(url: "wss://\(id).example"))
+    private func remote(_ id: String, url: String? = nil) -> BackendRef {
+        BackendRef(id: id, displayName: id,
+                   transport: .remote(url: url ?? "wss://\(id).example"))
     }
 
     // MARK: - 本机那条：是列表的一员，但删不掉
@@ -72,17 +73,46 @@ final class BackendRegistryTests: XCTestCase {
         XCTAssertEqual(refs.map(\.id), [BackendRegistry.localId, "a", "b"])
     }
 
-    // MARK: - 远程那一档：拒绝，而且绝不降级
+    // MARK: - 远程：只有安全地址 + 已配对身份才可连，而且绝不降级
 
     /// **这条是这个文件的重点。** 静默降级的症状是：人填了远程地址、界面显示
     /// 「已连接」，而他看到的其实是自己这台机器上的 session。那种错查不出来。
-    func testRemoteIsRefusedAndNeverFallsBackToLocal() {
+    func testUnpairedRemoteIsRefusedAndNeverFallsBackToLocal() {
         guard case let .unsupported(why) = BackendRegistry.connectivity(
-            of: remote("tokyo")) else {
-            return XCTFail("远程后端被当成可连 —— 它还没实现")
+            of: remote("tokyo", url: "pendingcrew+tls://tokyo.example:7443"),
+            trustedPeers: []) else {
+            return XCTFail("没配对的远程后端被当成可连")
         }
         XCTAssertTrue(why.contains("没有退回本机"), "没说清不会降级：\(why)")
-        XCTAssertTrue(why.contains("tokyo"), "没带上他填的地址：\(why)")
+        XCTAssertTrue(why.contains("配对"), "没说清缺的是信任记录：\(why)")
+    }
+
+    func testPairedRemoteWithSecureAddressBecomesConnectable() throws {
+        let peer = DeviceIdentity.generate()
+        let trust = PeerTrustRecord(
+            backendID: "tokyo", peerDeviceID: peer.id,
+            peerPublicSigningKey: peer.publicSigningKey,
+            preSharedKey: Data(repeating: 0x71, count: 32))
+        XCTAssertEqual(
+            BackendRegistry.connectivity(
+                of: remote("tokyo", url: "pendingcrew+tls://127.0.0.1:7443"),
+                trustedPeers: [trust]),
+            .supported)
+    }
+
+    func testPairedRemoteStillRejectsAnInsecureAddress() throws {
+        let peer = DeviceIdentity.generate()
+        let trust = PeerTrustRecord(
+            backendID: "tokyo", peerDeviceID: peer.id,
+            peerPublicSigningKey: peer.publicSigningKey,
+            preSharedKey: Data(repeating: 0x71, count: 32))
+        guard case let .unsupported(why) = BackendRegistry.connectivity(
+            of: remote("tokyo", url: "tcp://127.0.0.1:7443"),
+            trustedPeers: [trust]) else {
+            return XCTFail("明文 TCP 地址被当成可连")
+        }
+        XCTAssertTrue(why.contains("安全"), why)
+        XCTAssertTrue(why.contains("没有退回本机"), why)
     }
 
     func testLocalIsConnectable() {
@@ -150,6 +180,46 @@ final class BackendRegistryTests: XCTestCase {
             .write(to: url)
         XCTAssertNotNil(BackendRegistry.load(from: url).problem,
                         "不认识的传输方式被猜成了某种能连的东西")
+    }
+}
+
+final class DevicePairingIdentityTests: XCTestCase {
+    private func tempDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pc-device-identity-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    func testLocalIdentityIsPersistentAndPrivateOnDisk() throws {
+        let url = tempDirectory().appendingPathComponent("identity.json")
+        let first = try DeviceIdentityStore.loadOrCreate(at: url)
+        let second = try DeviceIdentityStore.loadOrCreate(at: url)
+
+        XCTAssertEqual(first, second, "第二次启动换了身份，既有配对会全部失效")
+        XCTAssertEqual(first.privateSigningKey.count, 32)
+        XCTAssertEqual(first.publicSigningKey.count, 32)
+        XCTAssertFalse(first.id.isEmpty)
+        let mode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue & 0o777, 0o600, "长期私钥文件必须只让本用户读写")
+    }
+
+    func testPeerTrustRoundTripsAndCorruptionFailsClosed() throws {
+        let url = tempDirectory().appendingPathComponent("trusted-peers.json")
+        let peer = DeviceIdentity.generate()
+        let record = PeerTrustRecord(
+            backendID: "office-mac", peerDeviceID: peer.id,
+            peerPublicSigningKey: peer.publicSigningKey,
+            preSharedKey: Data(repeating: 0x42, count: 32))
+
+        try PeerTrustStore.save([record], to: url)
+        XCTAssertEqual(try PeerTrustStore.load(from: url), [record])
+
+        try Data("{ broken".utf8).write(to: url)
+        XCTAssertThrowsError(try PeerTrustStore.load(from: url),
+                             "损坏的信任账本不能被当成空账本后继续连接")
     }
 }
 

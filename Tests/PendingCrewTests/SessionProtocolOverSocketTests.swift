@@ -223,6 +223,108 @@ final class SessionProtocolOverSocketTests: XCTestCase {
     }
 }
 
+/// 第一批跨机链路的验收尺：真实 loopback TCP + TLS-PSK，而不是把加密层 mock 掉。
+@MainActor
+final class SecureTCPTransportTests: XCTestCase {
+    private let capabilities = ["screen-text", "terminal-bytes", "transcript-events"]
+
+    func testTLSHandshakePreservesFragmentedAndCoalescedProtocolBytesThenNotifiesDisconnect()
+        throws {
+        let clientIdentity = DeviceIdentity.generate()
+        let serverIdentity = DeviceIdentity.generate()
+        let key = Data(repeating: 0x5a, count: 32)
+        let serverTrustsClient = PeerTrustRecord(
+            backendID: "client", peerDeviceID: clientIdentity.id,
+            peerPublicSigningKey: clientIdentity.publicSigningKey, preSharedKey: key)
+        let clientTrustsServer = PeerTrustRecord(
+            backendID: "server", peerDeviceID: serverIdentity.id,
+            peerPublicSigningKey: serverIdentity.publicSigningKey, preSharedKey: key)
+
+        let listener = try SecureTCPListener(
+            localIdentity: serverIdentity, trustedPeers: [serverTrustsClient], port: 0)
+        var serverLink: SecureTCPTransport?
+        listener.onAccept = { serverLink = $0 }
+        listener.start()
+        defer { listener.close() }
+        try pump(until: { listener.port != nil })
+
+        let parameters = SecureConnectionParameters(
+            host: "127.0.0.1", port: try XCTUnwrap(listener.port),
+            localIdentity: clientIdentity, peer: clientTrustsServer)
+        let clientLink = try SecureTCPTransport.connect(parameters: parameters)
+        defer { clientLink.close(); serverLink?.close() }
+        try pump(until: { clientLink.isOpen && serverLink?.isOpen == true })
+
+        let server = SessionProtocolServer(capabilities: capabilities, daemonBuild: "tls-daemon")
+        server.accept(link: try XCTUnwrap(serverLink))
+
+        let codec = SessionProtocolCodec()
+        var stream = Data()
+        stream.append(try codec.encode(.hello(.init(
+            protocolVersion: SessionProtocolVersion.current,
+            appBuild: "tls-app", capabilities: capabilities))))
+        stream.append(try codec.encode(.listSessions))
+
+        var decoder = SessionFrameDecoder()
+        var replies: [SessionDaemonMessage] = []
+        clientLink.onReceive = { bytes in
+            guard let frames = try? decoder.append(bytes) else { return }
+            replies.append(contentsOf: frames.compactMap { try? codec.decodeDaemon($0) })
+        }
+
+        clientLink.send(Data(stream.prefix(2)))
+        clientLink.send(Data(stream.dropFirst(2)))
+        try pump(until: { replies.count == 2 })
+        guard case .hello? = replies.first else { return XCTFail("TLS 后第一条不是 hello") }
+        guard case .sessions? = replies.last else { return XCTFail("TLS 后粘着的第二帧丢了") }
+
+        var serverSawDisconnect = false
+        serverLink?.onClose = { serverSawDisconnect = true }
+        clientLink.close()
+        try pump(until: { serverSawDisconnect })
+    }
+
+    func testWrongPairingKeyIsRejectedAsAuthenticationFailure() throws {
+        let clientIdentity = DeviceIdentity.generate()
+        let serverIdentity = DeviceIdentity.generate()
+        let listener = try SecureTCPListener(
+            localIdentity: serverIdentity,
+            trustedPeers: [.init(
+                backendID: "client", peerDeviceID: clientIdentity.id,
+                peerPublicSigningKey: clientIdentity.publicSigningKey,
+                preSharedKey: Data(repeating: 0x11, count: 32))],
+            port: 0)
+        listener.start()
+        defer { listener.close() }
+        try pump(until: { listener.port != nil })
+
+        let wrongTrust = PeerTrustRecord(
+            backendID: "server", peerDeviceID: serverIdentity.id,
+            peerPublicSigningKey: serverIdentity.publicSigningKey,
+            preSharedKey: Data(repeating: 0x22, count: 32))
+        let link = try SecureTCPTransport.connect(parameters: .init(
+            host: "127.0.0.1", port: try XCTUnwrap(listener.port),
+            localIdentity: clientIdentity, peer: wrongTrust))
+        defer { link.close() }
+        try pump(until: { link.failure != nil })
+
+        guard case .authenticationFailed? = link.failure else {
+            return XCTFail("错误配对密钥没有归类为认证失败：\(String(describing: link.failure))")
+        }
+        XCTAssertFalse(link.isOpen)
+    }
+
+    private func pump(until condition: () -> Bool,
+                      timeout: TimeInterval = 5,
+                      file: StaticString = #filePath, line: UInt = #line) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { return XCTFail("等待超时", file: file, line: line) }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+    }
+}
+
 /// 模拟 TCP/TLS/UDS 都可能出现的任意字节交付边界；它刻意不替 endpoint 重组帧。
 @MainActor
 private final class ByteStreamLink: SessionMessageLink {
