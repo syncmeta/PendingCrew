@@ -110,6 +110,74 @@ final class SessionDaemonHostTests: XCTestCase {
         XCTAssertTrue(status.text.contains("运行中 session：0"), status.text)
     }
 
+    func test_显式安全监听把真实TLS连接接到同一个协议服务并在停机时通知断线() throws {
+        let clientIdentity = PairingDeviceIdentity.generate()
+        let serverIdentity = PairingDeviceIdentity.generate()
+        let key = Data(repeating: 0x71, count: 32)
+        let serverTrustsClient = PeerTrustRecord(
+            backendID: "viewer", peerDeviceID: clientIdentity.id,
+            peerPublicSigningKey: clientIdentity.publicSigningKey, preSharedKey: key)
+        let clientTrustsServer = PeerTrustRecord(
+            backendID: "daemon", peerDeviceID: serverIdentity.id,
+            peerPublicSigningKey: serverIdentity.publicSigningKey, preSharedKey: key)
+        let host = SessionDaemonHost(
+            paths: paths(), build: "secure-daemon",
+            secureListener: .init(
+                localIdentity: serverIdentity, trustedPeers: [serverTrustsClient], port: 0))
+        host.onCrewNotice = { _, _ in }
+        try host.start()
+        defer { host.stop() }
+        try pump(until: { host.secureListenerPort != nil })
+
+        let link = try SecureTCPTransport.connect(parameters: .init(
+            host: "127.0.0.1", port: try XCTUnwrap(host.secureListenerPort),
+            localIdentity: clientIdentity, peer: clientTrustsServer))
+        let client = SessionProtocolClient(
+            link: link, capabilities: SessionDaemonHost.defaultCapabilities,
+            appBuild: "secure-viewer")
+        var hello: SessionDaemonHello?
+        var list: SessionList?
+        var disconnected = false
+        client.onDaemonHello = { hello = $0 }
+        client.onSessionList = { list = $0 }
+        client.onLinkClosed = { disconnected = true }
+        client.connect()
+        client.requestSessionList()
+
+        try pump(until: { client.isConnected && hello != nil && list != nil })
+        XCTAssertEqual(hello?.daemonBuild, "secure-daemon")
+        XCTAssertEqual(list?.sessions, [])
+        XCTAssertEqual(host.server.connectionCount, 1,
+                       "Unix socket 与 TLS 必须汇入 host 持有的同一个 server")
+
+        host.stop()
+        try pump(until: { disconnected })
+        XCTAssertFalse(client.isConnected)
+    }
+
+    func test_安全监听只有显式环境参数才启用且配置坏掉会拒绝启动() throws {
+        XCTAssertNil(try SessionDaemonSecureListenerConfiguration.fromEnvironment(
+            [:], loadIdentity: { PairingDeviceIdentity.generate() }, loadTrustedPeers: { [] }))
+
+        XCTAssertThrowsError(try SessionDaemonSecureListenerConfiguration.fromEnvironment(
+            ["PENDINGCREW_SECURE_LISTEN_PORT": "not-a-port"],
+            loadIdentity: { PairingDeviceIdentity.generate() }, loadTrustedPeers: { [] }))
+
+        let identity = PairingDeviceIdentity.generate()
+        let peerIdentity = PairingDeviceIdentity.generate()
+        let peer = PeerTrustRecord(
+            backendID: "viewer", peerDeviceID: peerIdentity.id,
+            peerPublicSigningKey: peerIdentity.publicSigningKey,
+            preSharedKey: Data(repeating: 0x44, count: 32))
+        let configuration = try XCTUnwrap(
+            SessionDaemonSecureListenerConfiguration.fromEnvironment(
+                ["PENDINGCREW_SECURE_LISTEN_PORT": "7443"],
+                loadIdentity: { identity }, loadTrustedPeers: { [peer] }))
+        XCTAssertEqual(configuration.port, 7443)
+        XCTAssertEqual(configuration.localIdentity, identity)
+        XCTAssertEqual(configuration.trustedPeers, [peer])
+    }
+
     // MARK: - §8.2 崩溃善后（这一组是整条线上唯一「判错就杀掉无辜进程」的地方）
 
     /// 记录对得上 → 真的回收。
@@ -199,6 +267,16 @@ final class SessionDaemonHostTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
         }
         return !process.isRunning
+    }
+
+    private func pump(until condition: () -> Bool,
+                      timeout: TimeInterval = 5,
+                      file: StaticString = #filePath, line: UInt = #line) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { return XCTFail("等待超时", file: file, line: line) }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
     }
 }
 #endif

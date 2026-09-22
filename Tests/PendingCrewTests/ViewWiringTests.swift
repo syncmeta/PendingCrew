@@ -363,6 +363,48 @@ final class ViewWiringTests: XCTestCase {
                       "三条自发关闭路径没有汇合到同一个出口")
     }
 
+    /// #121 第二批：不是只造 TLS 零件。daemon 入口、viewer 选择与设置按钮必须首尾接通；
+    /// 远程分支失败时不能经过本机 daemon 的接管/拉起路径。
+    func testSecureRemoteBackendIsWiredIntoProductionCallersWithoutLocalFallback() throws {
+        let main = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+        let host = Self.codeOnly(try Self.text(of: "SessionDaemonHost.swift"))
+        let viewer = Self.codeOnly(try Self.text(of: "ViewerSessionClient.swift"))
+        let sessionHost = Self.codeOnly(try Self.text(of: "SessionHost.swift"))
+        let settings = Self.codeOnly(try Self.text(of: "CrewSettingsView.swift"))
+
+        XCTAssertTrue(main.contains("SessionDaemonSecureListenerConfiguration.fromEnvironment"),
+                      "--daemon 生产入口没有显式读取安全监听配置")
+        XCTAssertTrue(main.contains("SessionDaemonHost(secureListener:"),
+                      "安全监听配置没有传进真实 daemon host")
+        XCTAssertTrue(host.contains("SecureTCPListener("), "daemon host 没有真正创建 TLS listener")
+        XCTAssertTrue(host.contains("server.accept(link: link)"),
+                      "TLS accept 没汇入现有 SessionProtocolServer")
+
+        XCTAssertTrue(viewer.contains("BackendRegistry.connectRemote("),
+                      "viewer 远程分支没有调用安全 registry connector")
+        XCTAssertTrue(viewer.contains("SessionProtocolClient("),
+                      "viewer 没用现有协议客户端握手并取 roster")
+        guard let remoteStart = viewer.range(of: "private func connectRemoteBackend()"),
+              let remoteEnd = viewer.range(of: "private func", range: remoteStart.upperBound..<viewer.endIndex)
+        else { return XCTFail("找不到独立的远程连接分支") }
+        let remoteBody = String(viewer[remoteStart.lowerBound..<remoteEnd.lowerBound])
+        XCTAssertFalse(remoteBody.contains("applyFallback("),
+                       "远程失败走进了本机接管路径，会把本机 session 冒充远端")
+        XCTAssertFalse(remoteBody.contains("UnixSocketTransport.connect"),
+                       "远程失败路径仍可能退到本机 socket")
+
+        XCTAssertTrue(sessionHost.contains("func connectViewer(to ref: BackendRef)"),
+                      "SessionHost 没有可由后端选择触发的重连入口")
+        XCTAssertTrue(settings.contains("sessionHost.connectViewer(to: ref)"),
+                      "设置里的后端选择没有接到 viewer")
+
+        let sharedLink = try Self.projectText(of: "Sources/Shared/SessionMessageLink.swift")
+        XCTAssertFalse(sharedLink.contains("#if os(macOS)"),
+                       "下一批 iOS 要复用的链路接口仍被 macOS 编译条件锁死")
+        XCTAssertTrue(sharedLink.contains("protocol SessionMessageLink"))
+        XCTAssertTrue(sharedLink.contains("protocol SessionMessageLinkConnecting"))
+    }
+
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
     func testCloseButtonStyleIsDefinedOnlyOnce() throws {
         for file in ["CockpitView.swift"] {
