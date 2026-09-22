@@ -150,6 +150,10 @@ targets:
       - path: Sources/Shared/SessionMessageLink.swift
       # 两步手动配对的 Codable 文本格式；不依赖 AppKit，下一批 iOS 直接复用。
       - path: Sources/Shared/PairingExchange.swift
+      # 第四批真实数据面测试直接让 daemon 侧走现有 LocalBackend；不是手工构造 RPC
+      # 返回值。生产 target 本来就包含它，standalone test bundle 需显式列入。
+      - path: Sources/Services/PendingCrewBackend.swift
+      - path: Sources/Stores/DeviceIdentity.swift
       # 待办队列的取走语义（2026-09-04：@Published 数组当队列 → 同一条命令被执行
       # 两遍）。纯 Foundation 泛型，CrewStore/SessionHost 共用。
       - path: Sources/Stores/PendingRequestQueue.swift
