@@ -410,6 +410,28 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(sharedLink.contains("protocol SessionMessageLinkConnecting"))
     }
 
+    func testManualPairingAndPersistentListenerAreWiredIntoProductionSettingsAndDaemon() throws {
+        let main = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+        let settings = Self.codeOnly(try Self.text(of: "CrewSettingsView.swift"))
+        let shared = try Self.projectText(of: "Sources/Shared/PairingExchange.swift")
+
+        XCTAssertTrue(main.contains("fromPersistentSettings("),
+                      "daemon 仍只靠人工环境变量启用安全监听")
+        XCTAssertTrue(settings.contains("ManualPairingCoordinator.production("),
+                      "设置页没有接到生产配对存储")
+        XCTAssertTrue(settings.contains("createInvitation("), "设置页不能生成手动邀请")
+        XCTAssertTrue(settings.contains("importText("), "设置页不能导入邀请或回应")
+        XCTAssertTrue(settings.contains("sessionHost.restartLocalBackend()"),
+                      "配对完成后没有复用已有安全重启入口")
+        XCTAssertTrue(settings.contains("需要重启"), "设置页没告诉人监听配置何时生效")
+
+        XCTAssertFalse(shared.contains("#if os(macOS)"),
+                       "下一批 iOS 要复用的配对数据格式仍被锁在 macOS")
+        XCTAssertTrue(shared.contains("struct ManualPairingInvitationEnvelope"))
+        XCTAssertTrue(shared.contains("struct ManualPairingResponseEnvelope"))
+        XCTAssertTrue(shared.contains("enum ManualPairingTextCodec"))
+    }
+
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
     func testCloseButtonStyleIsDefinedOnlyOnce() throws {
         for file in ["CockpitView.swift"] {
