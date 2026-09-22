@@ -34,7 +34,11 @@ enum SessionDaemonMain {
         _ = setsid()
         let host: SessionDaemonHost
         do {
-            let secureListener = try SessionDaemonSecureListenerConfiguration.fromEnvironment()
+            // Persistent settings are the product path.  The environment variable remains only as
+            // a compatibility escape hatch when no persistent pairing configuration exists.
+            let secureListener = try SessionDaemonSecureListenerConfiguration
+                .fromPersistentSettings()
+                ?? SessionDaemonSecureListenerConfiguration.fromEnvironment()
             host = SessionDaemonHost(secureListener: secureListener)
             host.onSecureListenerFailure = { error in
                 FileHandle.standardError.write(

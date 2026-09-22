@@ -132,6 +132,26 @@ final class BackendRegistryTests: XCTestCase {
         XCTAssertTrue(refs[1].isRemote)
     }
 
+    func testPersistedRemovalRereadsUnderLockAndPreservesALateAddition() throws {
+        let url = tempURL()
+        let initiallyVisible = remote("old")
+        try BackendRegistry.save([initiallyVisible], to: url)
+        let staleUIRefs = BackendRegistry.load(from: url).refs
+
+        let pairedAfterSettingsOpened = remote(
+            "paired-later", url: "pendingcrew+tls://later.example:7443")
+        try BackendRegistry.save([initiallyVisible, pairedAfterSettingsOpened], to: url)
+        XCTAssertFalse(staleUIRefs.contains(pairedAfterSettingsOpened),
+                       "前提失效：设置页快照不再是旧的")
+
+        guard case .removed = try BackendRegistry.removePersisted("old", from: url) else {
+            return XCTFail("普通后端未删除")
+        }
+        XCTAssertEqual(BackendRegistry.load(from: url).refs.map(\.id),
+                       [BackendRegistry.localId, "paired-later"],
+                       "旧设置页删除一条记录时覆盖了随后完成的配对新增")
+    }
+
     /// 内置那条**不写进存盘文件** —— 它每次现算；写进去会在 `PENDINGCREW_DATA_DIR`
     /// 挪走之后变成一条指向旧 socket 路径的假记录。
     func testTheBuiltInEntryIsNotPersisted() throws {

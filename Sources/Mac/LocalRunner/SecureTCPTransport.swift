@@ -205,14 +205,19 @@ enum PeerTrustStore {
     }
 
     static func save(_ records: [PeerTrustRecord], to url: URL) throws {
+        let data = try encoded(records)
+        try PairingFileTransaction.withExclusiveFiles([url]) {
+            try PairingFileTransaction.commit([
+                .init(url: url, data: data, mode: 0o600),
+            ])
+        }
+    }
+
+    static func encoded(_ records: [PeerTrustRecord]) throws -> Data {
         try validate(records)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try MultiProcessJSONStore.writeStaged(encoder.encode(records), to: url)
-        chmod(url.deletingLastPathComponent().path, 0o700)
-        guard chmod(url.path, 0o600) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+        return try encoder.encode(records)
     }
 
     private static func validate(_ records: [PeerTrustRecord]) throws {
@@ -231,6 +236,8 @@ enum PeerTrustStore {
 enum DevicePairingPaths {
     static var directory: URL { PendingCrewDataRoot.subdirectory("pairing") }
     static var trustedPeers: URL { directory.appendingPathComponent("trusted-peers.json") }
+    static var exchangeLedger: URL { directory.appendingPathComponent("exchange-ledger.json") }
+    static var listenerSettings: URL { directory.appendingPathComponent("listener.json") }
 }
 
 // MARK: - TLS connection
@@ -282,7 +289,7 @@ enum SecureTransportError: Error, Equatable, CustomStringConvertible {
 private enum SecureTLSOptions {
     static let applicationProtocol = "pendingcrew-session/1"
     static let cipherSuite = tls_ciphersuite_t(
-        rawValue: TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256)!
+        rawValue: UInt16(TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256))!
 
     static func parameters(keys: [(identity: String, key: Data)]) -> NWParameters {
         let tls = NWProtocolTLS.Options()

@@ -148,6 +148,21 @@ struct SessionDaemonSecureListenerConfiguration: Equatable {
     var trustedPeers: [PeerTrustRecord]
     var port: UInt16
 
+    static func fromPersistentSettings(
+        settingsFile: URL = DevicePairingPaths.listenerSettings,
+        loadIdentity: () throws -> PairingDeviceIdentity = { try DeviceIdentityStore.loadOrCreate() },
+        loadTrustedPeers: () throws -> [PeerTrustRecord] = {
+            try PeerTrustStore.load(from: DevicePairingPaths.trustedPeers)
+        }
+    ) throws -> SessionDaemonSecureListenerConfiguration? {
+        guard let settings = try SessionDaemonSecureListenerSettings.load(from: settingsFile)
+        else { return nil }
+        let identity = try loadIdentity()
+        let peers = try loadTrustedPeers()
+        guard !peers.isEmpty else { throw ConfigurationError.noTrustedPeers }
+        return .init(localIdentity: identity, trustedPeers: peers, port: settings.port)
+    }
+
     static func fromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment,
         loadIdentity: () throws -> PairingDeviceIdentity = { try DeviceIdentityStore.loadOrCreate() },

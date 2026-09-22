@@ -210,16 +210,34 @@ enum BackendRegistry {
     /// 存盘。**内置那条不写进去** —— 它每次现算，写进去只会在数据根挪走之后变成
     /// 一条指向旧路径的假记录。
     static func save(_ refs: [BackendRef], to url: URL) throws {
+        let data = try encodedStored(refs)
+        try PairingFileTransaction.withExclusiveFiles([url]) {
+            try PairingFileTransaction.commit([
+                .init(url: url, data: data, mode: 0o600),
+            ])
+        }
+    }
+
+    static func encodedStored(_ refs: [BackendRef]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try MultiProcessJSONStore.writeStaged(
-            encoder.encode(refs.filter { !$0.isBuiltIn }), to: url)
+        return try encoder.encode(refs.filter { !$0.isBuiltIn })
     }
 
     /// 删一条。**内置那条删不得**，而且要说清为什么，不是静默忽略。
     enum RemoveResult: Equatable {
         case removed([BackendRef])
         case refused(String)
+    }
+
+    enum MutationError: Error, CustomStringConvertible {
+        case unreadable(String)
+
+        var description: String {
+            switch self {
+            case let .unreadable(reason): return reason
+            }
+        }
     }
 
     static func removing(_ id: String, from refs: [BackendRef]) -> RemoveResult {
@@ -231,6 +249,27 @@ enum BackendRegistry {
                 + "删了之后这个界面就没有任何后端可连了。")
         }
         return .removed(refs.filter { $0.id != id })
+    }
+
+    /// Production mutations must re-read while holding the same file lock used by pairing.
+    /// Otherwise a settings view that was opened before a pairing import could later save its
+    /// stale snapshot and silently erase the newly paired backend.
+    static func removePersisted(
+        _ id: String, from url: URL = registryFile,
+        paths: PendingCrewDaemonPaths = .standard()
+    ) throws -> RemoveResult {
+        try PairingFileTransaction.withExclusiveFiles([url]) {
+            let current = load(from: url, paths: paths)
+            if let problem = current.problem { throw MutationError.unreadable(problem) }
+            switch removing(id, from: current.refs) {
+            case let .refused(reason): return .refused(reason)
+            case let .removed(refs):
+                try PairingFileTransaction.commit([
+                    .init(url: url, data: try encodedStored(refs), mode: 0o600),
+                ])
+                return .removed(refs)
+            }
+        }
     }
 
     enum RemoteConnectionError: Error, Equatable, CustomStringConvertible {

@@ -116,8 +116,11 @@ private struct CodingToolsSettingsTab: View {
 /// 删不删得掉、读不出来怎么说，全问模型层。
 private struct BackendsSettingsTab: View {
     @State private var load: BackendRegistry.Load = .fresh([])
-    @State private var newName = ""
-    @State private var newURL = ""
+    @State private var pairingName = ""
+    @State private var pairingURL = ""
+    @State private var pairingText = ""
+    @State private var pairingNotice: String?
+    @State private var pairingNeedsRestart = false
     /// 删除被拒 / 存盘失败时那句话。**拒绝必须看得见** —— 模型层特意为「内置那条
     /// 删不掉」写了一句解释，静默忽略等于把它扔了。
     @State private var notice: String?
@@ -200,18 +203,45 @@ private struct BackendsSettingsTab: View {
                      + "失败会留在远程错误态，**不会**悄悄退回本机。")
             }
             Section {
-                TextField("名字（你自己认得出就行）", text: $newName)
+                Text("① 在接受连接的 Mac 上填名称和可达地址，生成邀请并复制给另一台 Mac。"
+                     + "② 另一台导入邀请后，把生成的回应复制回来。③ 原 Mac 导入回应并重启后台。")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("这台 Mac 的名字", text: $pairingName)
                     .textFieldStyle(.roundedBorder)
-                TextField("地址，例如 pendingcrew+tls://host:7443", text: $newURL)
+                TextField("这台 Mac 的可达地址，例如 pendingcrew+tls://host:7443",
+                          text: $pairingURL)
                     .textFieldStyle(.roundedBorder)
-                Button("加进来") { add() }
-                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
-                              || newURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("生成邀请文本") { createInvitation() }
+                    .disabled(pairingName.trimmingCharacters(in: .whitespaces).isEmpty
+                              || pairingURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                TextEditor(text: $pairingText)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 120)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+                HStack {
+                    Button("导入邀请或回应") { importPairingText() }
+                        .disabled(pairingText.trimmingCharacters(
+                            in: .whitespacesAndNewlines).isEmpty)
+                    if pairingNeedsRestart {
+                        Button("应用并安全重启本机后台") {
+                            restartPrompt = RestartPrompt(
+                                title: "应用安全监听并重启后台",
+                                confirmation: "安全监听配置已经持久化，需要重启本机后台才会生效。"
+                                    + "正在跑的 session 会被打断；之后 @ 它们能接回。")
+                        }
+                        .disabled(restarting)
+                    }
+                }
+                if let pairingNotice {
+                    Text(pairingNotice).font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             } header: {
-                Text("加一个远程后端")
+                Text("手动配对两台 Mac")
             } footer: {
-                Text("**加进来不等于已经配对**。这一批要求信任账本中已有对应记录；"
-                     + "Bonjour、二维码与完整配对界面留到下一批。")
+                Text("邀请是 30 分钟有效、只能使用一次的敏感 bearer 文本，包含一次性 PSK，"
+                     + "请只直接交给目标设备。回应不含 PSK；两种文本都不包含长期私钥。"
+                     + "本流程不使用账号或云中继。Bonjour、二维码与 iOS 配对界面仍后置。")
             }
         }
         .formStyle(.grouped)
@@ -291,35 +321,50 @@ private struct BackendsSettingsTab: View {
         }
     }
 
-    private func add() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
-        let url = newURL.trimmingCharacters(in: .whitespaces)
-        var refs = load.refs
-        refs.append(BackendRef(id: UUID().uuidString.lowercased(),
-                               displayName: name, transport: .remote(url: url)))
-        persist(refs, onSuccess: { newName = ""; newURL = ""; notice = nil })
-    }
-
-    private func remove(_ ref: BackendRef) {
-        switch BackendRegistry.removing(ref.id, from: load.refs) {
-        case let .refused(why):
-            notice = why          // 模型层那句解释原样摆出来，别自己另编一句
-        case let .removed(rest):
-            persist(rest, onSuccess: { notice = nil })
+    private func createInvitation() {
+        do {
+            let coordinator = try ManualPairingCoordinator.production()
+            pairingText = try coordinator.createInvitation(
+                displayName: pairingName, remoteURL: pairingURL)
+            pairingNeedsRestart = false
+            pairingNotice = "邀请已生成。请把整段文本复制到另一台 Mac；不要发到群聊或云剪贴板。"
+        } catch {
+            pairingNotice = "邀请没有生成：\(error)"
         }
     }
 
-    /// 存盘。**失败必须说** —— 这本登记表跟白板在同一棵树下，那个周期性故障里它
-    /// 一样写不进去；静默失败的话人会以为加上了，下次打开却不见。
-    private func persist(_ refs: [BackendRef], onSuccess: () -> Void) {
+    private func importPairingText() {
         do {
-            try FileManager.default.createDirectory(
-                at: registryFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try BackendRegistry.save(refs, to: registryFile)
-            onSuccess()
-            reload()
+            let coordinator = try ManualPairingCoordinator.production()
+            switch try coordinator.importText(pairingText) {
+            case let .invitationAccepted(response, backend):
+                pairingText = response
+                pairingNeedsRestart = false
+                pairingNotice = "已信任 \(backend.displayName) 并加入后端列表。"
+                    + "请把上面的回应复制回生成邀请的 Mac。"
+                reload()
+                refreshStatuses()
+            case let .responseAccepted(port, peerDeviceID):
+                pairingNeedsRestart = true
+                pairingNotice = "已信任设备 \(peerDeviceID)，安全监听端口 \(port) 已持久化；"
+                    + "需要重启本机后台才会生效。"
+            }
         } catch {
-            notice = "没写进去：\(error.localizedDescription)。这次的改动没有生效。"
+            pairingNotice = "没有导入，任何信任或监听配置都未生效：\(error)"
+        }
+    }
+
+    private func remove(_ ref: BackendRef) {
+        do {
+            switch try BackendRegistry.removePersisted(ref.id, from: registryFile) {
+            case let .refused(why):
+                notice = why      // 模型层那句解释原样摆出来，别自己另编一句
+            case .removed:
+                notice = nil
+                reload()
+            }
+        } catch {
+            notice = "没写进去：\(error)。这次的改动没有生效。"
         }
     }
 

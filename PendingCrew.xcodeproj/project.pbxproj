@@ -18,6 +18,7 @@
 		039D307EC6F70B40EB36599B /* ModelCatalogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C78204BFE04404235068547 /* ModelCatalogEntry.swift */; };
 		03D88ACB2075CB2424832C2B /* SessionDaemonStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = D744C326EE4375DF70D19833 /* SessionDaemonStatus.swift */; };
 		04180E5C148F072E0DB3176A /* OrchestrationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 122E47E4767D52AAA4F28DF1 /* OrchestrationGate.swift */; };
+		0454821653E35FDC1379C959 /* PairingExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = E942A766AAEA0B9A6823EC89 /* PairingExchange.swift */; };
 		0479939B65ADFA9A45E5930C /* CrewChatNewMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 057708EAEE038AAD36788D1C /* CrewChatNewMessages.swift */; };
 		055DFE844FB3BA1547AEC159 /* PromptTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D74B1C537C235EFB0E69DCB /* PromptTemplate.swift */; };
 		06181AEE3F7FB3893E59E955 /* LocalTodoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAED97C1D654597B1DAC2C6 /* LocalTodoStore.swift */; };
@@ -132,6 +133,7 @@
 		2FBED63D73C912B1126427C7 /* Subject.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB0A9A2B511BAA8446CF9A4 /* Subject.swift */; };
 		306D67AEA805E8EEA63B9461 /* ReportingParentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DF5F466F921DB1C819C14B6 /* ReportingParentTests.swift */; };
 		30AC0D6B888542C7558094A8 /* CrewListenLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42F31D2E3BD084EEFE454085 /* CrewListenLogicTests.swift */; };
+		30DA76BF5FCFBFA8B1358F76 /* ManualPairingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 590557B3F1107A721099EE33 /* ManualPairingCoordinator.swift */; };
 		310CB5C1291471BAEEE740EA /* BreathingSymbolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D444497957C2DC933C72B2C8 /* BreathingSymbolView.swift */; };
 		310DDCE7ED06B5AD73E36FD7 /* McpBroadcastMentionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DD2C6E726F767AAFDB1B8F4 /* McpBroadcastMentionTests.swift */; };
 		31A4414C66F61EDF24A66E66 /* CrewRootLineageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D74F34B76291247636390B19 /* CrewRootLineageTests.swift */; };
@@ -179,6 +181,7 @@
 		3D51DB2BF331A8104556B846 /* CrewMessageReferencePills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100076B70C8A76B4324311E6 /* CrewMessageReferencePills.swift */; };
 		3D9C14CC1BF4BC3C302D7912 /* CrewChatNewMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 057708EAEE038AAD36788D1C /* CrewChatNewMessages.swift */; };
 		3E11EF9A73838FA5D2CEECA7 /* TypingActivityTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E91CB08ACAB98E0616E633 /* TypingActivityTracker.swift */; };
+		3E192BF0A46B0D5AFBC02E14 /* ManualPairingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 590557B3F1107A721099EE33 /* ManualPairingCoordinator.swift */; };
 		3EFA2A6C11BB03BB0A0178A5 /* HeadlessLaunchFailLoudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7200B25FFB6D4273F45370F2 /* HeadlessLaunchFailLoudTests.swift */; };
 		3F0891F97BA1B1E63F65D97B /* CrewWakeDispatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF186B1180EFC81E792573C /* CrewWakeDispatch.swift */; };
 		3F3953CEB9CF8C3356763E19 /* TodoListPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4FBE88C4EE22D059C9E4D0 /* TodoListPresentation.swift */; };
@@ -546,6 +549,7 @@
 		B39211936F327F65D54E921F /* CrewStartupRescueLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C9C8250CAE8090DFCB2F41 /* CrewStartupRescueLogic.swift */; };
 		B41CAE8FF1D9506974AEB5D1 /* DaemonShutdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27FAF0B1E863BBDDC0A597D /* DaemonShutdown.swift */; };
 		B4A500C63F56A660FBC9D415 /* session-world-model.en.md in Resources */ = {isa = PBXBuildFile; fileRef = 38F5E570088DE41977747A62 /* session-world-model.en.md */; };
+		B4AF51630C1FA3F7A0829F8C /* PairingExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = E942A766AAEA0B9A6823EC89 /* PairingExchange.swift */; };
 		B4FBE94B9E0DB131BE3327C0 /* PendingCrewEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219AD4E22DF4542909B2067A /* PendingCrewEntry.swift */; };
 		B5588EFE93ACB994195E47BF /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13CB4287864AEB5C5A8FECC /* Platform.swift */; };
 		B5694F4E70336A24BDE0656D /* HelperProcessForensics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010245B08B5B2E030F657FA1 /* HelperProcessForensics.swift */; };
@@ -982,6 +986,7 @@
 		57601C3D5BABFD232A8EA172 /* McpWriteFailureHonestyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpWriteFailureHonestyTests.swift; sourceTree = "<group>"; };
 		57BA94A80F722B26C851373D /* AgentCLIMaintenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCLIMaintenanceTests.swift; sourceTree = "<group>"; };
 		581482E75D6BBD5082976B77 /* AgentTerminalLaunchFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminalLaunchFailureTests.swift; sourceTree = "<group>"; };
+		590557B3F1107A721099EE33 /* ManualPairingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualPairingCoordinator.swift; sourceTree = "<group>"; };
 		5971CE50FF30D3716FE7B687 /* CrewMentionPickerLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMentionPickerLayout.swift; sourceTree = "<group>"; };
 		5AC9B7332324C1B1FA26525C /* SessionDaemonMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDaemonMain.swift; sourceTree = "<group>"; };
 		5B882C24BF6C522FFF9CFAA9 /* MentionsFilterDefaultOnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MentionsFilterDefaultOnTests.swift; sourceTree = "<group>"; };
@@ -1288,6 +1293,7 @@
 		E81F99F03EC8539085EE0FB3 /* crewground_places.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = crewground_places.txt; sourceTree = "<group>"; };
 		E8437534E4C20DD9E9686EDC /* SessionAwaitingReplyInputsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAwaitingReplyInputsCache.swift; sourceTree = "<group>"; };
 		E86BC9D3E6E3F7B1E091225D /* SessionOrphanReaperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrphanReaperTests.swift; sourceTree = "<group>"; };
+		E942A766AAEA0B9A6823EC89 /* PairingExchange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingExchange.swift; sourceTree = "<group>"; };
 		E9F8081B6B56259BF3FA5ECE /* BackendUpdatePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendUpdatePlan.swift; sourceTree = "<group>"; };
 		E9F9F21BD2713A043CB29F74 /* McpServerAttachmentRootIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpServerAttachmentRootIsolationTests.swift; sourceTree = "<group>"; };
 		EA6403638CEFD51F0B84AAFF /* CaptainTodoSweepStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptainTodoSweepStore.swift; sourceTree = "<group>"; };
@@ -1402,6 +1408,7 @@
 				DF8E8FC64275B7932540FB17 /* LocalCodingAgentSpec.swift */,
 				2CC4D38A8ADADF050411F604 /* LocalRunnerPlaceholder.swift */,
 				DE16EE932E2CBB87B2A7D691 /* LocalSessionLaunch.swift */,
+				590557B3F1107A721099EE33 /* ManualPairingCoordinator.swift */,
 				0E19C258DB78B2AA42FF241C /* OrchestrationFallback.swift */,
 				982E59D92EE3D62C0A02A978 /* OrchestrationFallbackCoordinator.swift */,
 				122E47E4767D52AAA4F28DF1 /* OrchestrationGate.swift */,
@@ -1639,6 +1646,7 @@
 		637122F2C07AD865E63CE20E /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				E942A766AAEA0B9A6823EC89 /* PairingExchange.swift */,
 				DF1402A3582DC598109B9CBA /* SessionMessageLink.swift */,
 			);
 			path = Shared;
@@ -2490,6 +2498,7 @@
 				B6354746E8966251161A34F4 /* MacRootView.swift in Sources */,
 				2C5E9ADC4EF5B0D2767865CA /* Machine.swift in Sources */,
 				D7A3CE1A30CE4689155798D4 /* MachineGrouping.swift in Sources */,
+				30DA76BF5FCFBFA8B1358F76 /* ManualPairingCoordinator.swift in Sources */,
 				89807FB95510F3F9C61B59FC /* MarkdownText.swift in Sources */,
 				AF0C56C89C97ED8702406062 /* MathMarkup.swift in Sources */,
 				E8A563E5B8F3443DE835008B /* MathRendering.swift in Sources */,
@@ -2508,6 +2517,7 @@
 				2191D606DDCCBB49E45DF340 /* OrchestrationGate.swift in Sources */,
 				DEDD8D8BE4D9D3AED413CEA3 /* OrchestrationNotice.swift in Sources */,
 				51B4CD5460658D4276AA30C9 /* OrchestrationNoticeBar.swift in Sources */,
+				0454821653E35FDC1379C959 /* PairingExchange.swift in Sources */,
 				155A969673BC235EEFD4341A /* PendingAttachment.swift in Sources */,
 				95CD81185B683FA0FD1E74C4 /* PendingComposerAttachment.swift in Sources */,
 				6942FF0B2E3D04AF1005374B /* PendingCrewApp.swift in Sources */,
@@ -2877,6 +2887,7 @@
 				8E7D37A6F71551879D6BD1E9 /* Machine.swift in Sources */,
 				E98C5C70533EECF07B9B2378 /* MachineGrouping.swift in Sources */,
 				F31E1336842FAD56B712AAB8 /* MachineGroupingTests.swift in Sources */,
+				3E192BF0A46B0D5AFBC02E14 /* ManualPairingCoordinator.swift in Sources */,
 				7C32CF99C8B6490DAA97A6D2 /* ManualPairingTests.swift in Sources */,
 				0E590DF71F36BF89CF2458BD /* MarkdownText.swift in Sources */,
 				FB48B178E7C39BA24FFDE24B /* MathMarkup.swift in Sources */,
@@ -2922,6 +2933,7 @@
 				267A895D7E65F68DFADE3C35 /* OrchestrationGateTests.swift in Sources */,
 				F4819C12D6FEA2F94A97AE2C /* OrchestrationNotice.swift in Sources */,
 				3A39336EBD021D209E9C8995 /* OrchestrationNoticeTests.swift in Sources */,
+				B4AF51630C1FA3F7A0829F8C /* PairingExchange.swift in Sources */,
 				B13EB1811C1B5D822F492E41 /* PendingComposerAttachment.swift in Sources */,
 				A955E1A2D13E89EAE095EFB2 /* PendingCrewDataRoot.swift in Sources */,
 				E7143CEEEED13B7502E38E5D /* PendingCrewDataRootTests.swift in Sources */,
