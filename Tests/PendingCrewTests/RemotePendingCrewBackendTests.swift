@@ -124,6 +124,118 @@ final class RemotePendingCrewBackendTests: XCTestCase {
         }
     }
 
+    /// #121 第五批的承重回归：crew / session / terminal / 结构化审批必须走同一次
+    /// TLS accept、同一个 SessionProtocol link。审批特意落到真实临时账本再从远端改写，
+    /// 不能用 `SessionProtocolState.pendingDecision` 或客户端假数组冒充。
+    func test_oneTLSLinkCarriesCrewSessionTerminalAndStructuredApprovals() async throws {
+        let serverPaths = paths("fifth-server")
+        let iosPaths = paths("fifth-ios")
+        let serverIdentityFile = identityFile(for: serverPaths)
+        let iosIdentityFile = identityFile(for: iosPaths)
+        let serverIdentity = try DeviceIdentityStore.loadOrCreate(at: serverIdentityFile)
+        let iosIdentity = try DeviceIdentityStore.loadOrCreate(at: iosIdentityFile)
+        let port = try reserveLoopbackPort()
+
+        let serverPairing = ManualPairingCoordinator(
+            identity: serverIdentity, paths: serverPaths, now: { self.instant },
+            makeInvitationID: { "ios-session-loopback" },
+            makePreSharedKey: { Data(repeating: 0xd8, count: 32) })
+        let iosPairing = ManualPairingCoordinator(
+            identity: iosIdentity, paths: iosPaths, now: { self.instant })
+        let invitation = try serverPairing.createInvitation(
+            displayName: "Home Mac",
+            remoteURL: "pendingcrew+tls://127.0.0.1:\(port)")
+        guard case let .invitationAccepted(response, importedBackend) =
+                try iosPairing.importText(invitation) else {
+            return XCTFail("iOS 没有产出配对回应")
+        }
+        _ = try serverPairing.importText(response)
+
+        let crewStore = LocalCrewStore(baseDirectory: temporaryDirectory("fifth-crews"))
+        let whiteboard = LocalWhiteboardStore(directory: temporaryDirectory("fifth-whiteboard"))
+        let created = crewStore.createCrew(.make(
+            responsibleSubjectId: LocalBackend.localSubjectId,
+            title: "远端会话", machineId: nil, workingDirectory: "/tmp/remote-session",
+            captainAgentKind: "claudeCode", captain: .systemGenerated(templateName: nil)))
+        let localBackend = LocalBackend(store: crewStore, whiteboard: whiteboard)
+        let approvals = LocalApprovalStore(directory: temporaryDirectory("fifth-approvals"))
+        let permissionID = try XCTUnwrap(approvals.raise(
+            crewId: created.crewId, kind: "permission", sessionId: "remote-session",
+            summary: "允许运行测试命令"))
+        let questionID = try XCTUnwrap(approvals.raise(
+            crewId: created.crewId, kind: "decision", sessionId: "remote-session",
+            summary: "请选择发布窗口"))
+
+        let persistedListener = try XCTUnwrap(
+            SessionDaemonSecureListenerConfiguration.fromPersistentSettings(
+                settingsFile: serverPaths.listenerSettings,
+                loadIdentity: { try DeviceIdentityStore.loadOrCreate(at: serverIdentityFile) },
+                loadTrustedPeers: { try PeerTrustStore.load(from: serverPaths.trustedPeers) }))
+        let listener = try SecureTCPListener(
+            localIdentity: persistedListener.localIdentity,
+            trustedPeers: persistedListener.trustedPeers,
+            port: persistedListener.port)
+        let protocolServer = SessionProtocolServer(
+            capabilities: SessionDaemonHost.defaultCapabilities + [
+                CrewRPC.capability, ApprovalRPC.capability,
+            ], daemonBuild: "fifth-daemon")
+        protocolServer.crewBackend = localBackend
+        protocolServer.approvalStore = approvals
+        let terminal = ProtocolTestBackend(kind: .claudeCode)
+        terminal.terminalSnapshot = .init(
+            cols: 80, rows: 25, bytes: Array("initial terminal\n".utf8))
+        protocolServer.register(sessionId: "remote-session", backend: terminal)
+        protocolServer.runSummaryProvider = { sessionID in
+            guard sessionID == "remote-session" else { return nil }
+            return .init(
+                crewId: created.crewId, role: "captain", title: "远端机长",
+                taskBrief: "第五批", workingDirectory: "/tmp/remote-session",
+                model: nil, effort: nil, pendingProfile: nil,
+                approvalsReviewer: nil, permissionModeOverride: nil,
+                startedAt: self.instant.timeIntervalSince1970, runStatus: "running",
+                exitCode: nil, exitReason: nil, awaitingReply: "approval")
+        }
+        var acceptCount = 0
+        var acceptedLink: SecureTCPTransport?
+        listener.onAccept = { link in
+            acceptCount += 1
+            acceptedLink = link
+            protocolServer.accept(link: link)
+        }
+        listener.start()
+        defer { listener.close(); acceptedLink?.close() }
+        try await eventually { listener.port == port || listener.failure != nil }
+        XCTAssertNil(listener.failure)
+
+        let configuration = try RemoteBackendConfiguration.load(
+            backendID: importedBackend.id,
+            registryFile: iosPaths.backendRegistry,
+            trustFile: iosPaths.trustedPeers,
+            localIdentity: try DeviceIdentityStore.loadOrCreate(at: iosIdentityFile))
+        let remote = RemotePendingCrewBackend(configuration: configuration, requestTimeout: 2)
+        defer { remote.disconnect() }
+        try await remote.connect()
+
+        XCTAssertEqual(try await remote.listCrews().map(\.id), [created.crewId])
+        let sessions = try await remote.listRemoteSessions()
+        XCTAssertEqual(sessions.map(\.sessionId), ["remote-session"])
+        let channel = try await remote.openSession(sessionID: "remote-session")
+        try await eventually { channel.terminalText.contains("initial terminal") }
+        protocolServer.publishTerminalBytes(
+            sessionId: "remote-session", bytes: Array("live output\n".utf8))
+        try await eventually { channel.terminalText.contains("live output") }
+
+        try await eventually { channel.pendingApprovals.count == 2 }
+        try await remote.decideApproval(
+            crewID: created.crewId, approvalID: permissionID, decision: "allow")
+        try await remote.answerApproval(
+            crewID: created.crewId, approvalID: questionID, reply: "今晚")
+        try await eventually { channel.pendingApprovals.isEmpty }
+        XCTAssertEqual(approvals.item(crewId: created.crewId, id: permissionID)?.decision, "allow")
+        XCTAssertEqual(approvals.item(crewId: created.crewId, id: questionID)?.reply, "今晚")
+        XCTAssertEqual(acceptCount, 1, "crew/session/terminal/approval 不得另开第二条连接")
+    }
+
     func test_disconnectAndTimeoutFailEveryPendingCrewRequest() async throws {
         let identity = PairingDeviceIdentity.generate()
         let peerIdentity = PairingDeviceIdentity.generate()
