@@ -27,20 +27,26 @@ struct CrewTodoPanel: View {
     @EnvironmentObject private var appModel: AppModel
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
 
-    @State private var todos: [LocalTodoItem] = []
+    /// 当前药丸的可信读取。不能用 `list()`：它会把“账本读不到”压成空数组，随后
+    /// 人类那本只剩 Agent 借显行，看起来像纯给人类的 Todo 全被删了。
+    @State private var ownRead: LocalTodoStore.LedgerRead = .rows([])
+    @State private var loadedLedger: TodoLedger?
+    @State private var refreshToken = 0
     /// agent 那本里**正卡在人类身上**的条目（人类 Todo #139）。看「人类的」那本时
     /// 借显在同一屏里 —— **借显，不是复制**：条目仍只有一条，躺在 agent 那本。
-    /// 看「Agent 的」那本时用不上（那本自己就全在 `todos` 里），保持空。
+    /// 看「Agent 的」那本时用不上（那本自己就全在 `ownRead` 里），保持空。
     @State private var waitingOnHuman: [LocalTodoItem] = []
     /// 当前看的是哪本账（Todo #62）。两个药丸「Agent 的 / 人类的」切它。
     @State private var ledger: TodoLedger = .agent
 
     /// 这一屏的行（排序 + 跨本账借显都在纯逻辑里，有单测钉住）。
-    private var rows: [TodoListPresentation.Row] {
-        ledger == .human
-            ? TodoListPresentation.rows(for: .human, human: todos, agent: waitingOnHuman)
-            : TodoListPresentation.rows(for: .agent, human: [], agent: todos)
+    private var snapshot: TodoListPresentation.LedgerRows {
+        TodoListPresentation.rows(
+            for: ledger,
+            own: loadedLedger == ledger ? ownRead : .rows([]),
+            agent: waitingOnHuman)
     }
+    private var rows: [TodoListPresentation.Row] { snapshot.rows }
     private let layout = TodoListPresentation.overviewLayout
 
     var body: some View {
@@ -60,7 +66,24 @@ struct CrewTodoPanel: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            if rows.isEmpty {
+            if let hint = TodoListPresentation.unreadableHint(
+                ledger: ledger,
+                unavailable: snapshot.ownLedgerUnavailable,
+                borrowedRowCount: rows.filter { $0.ledger != ledger }.count
+            ) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Label(hint, systemImage: "exclamationmark.triangle")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.danger)
+                    Spacer(minLength: 8)
+                    Button("重试") { refreshToken &+= 1 }
+                        .buttonStyle(.borderless)
+                        .font(Theme.Fonts.caption)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
+            if rows.isEmpty, !snapshot.ownLedgerUnavailable {
                 Text(TodoListPresentation.emptyHint(ledger))
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.inkMuted)
@@ -78,17 +101,21 @@ struct CrewTodoPanel: View {
         // 首拉 + 订阅变更（人类新增本进程即推；机器人回应经目录监听跨进程补齐）。
         // `id` 带上 ledger —— 换药丸就换一本账重订（两本各自一个文件、一把锁）。
         // 读全量只在这条 task 里做，**不在 body 求值路径上**（那条红线）。
-        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
-            let store = LocalTodoStore.shared(ledger)
-            todos = store.list(crewId: crewId)
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
+            let requestedLedger = ledger
+            let store = LocalTodoStore.shared(requestedLedger)
+            ownRead = store.read(crewId: crewId)
+            loadedLedger = requestedLedger
             for await _ in store.todoChanges(crewId: crewId) {
-                todos = store.list(crewId: crewId)
+                guard !Task.isCancelled, ledger == requestedLedger else { return }
+                ownRead = store.read(crewId: crewId)
+                loadedLedger = requestedLedger
             }
         }
         // 「人类的」那本还要跟着 agent 那本走 —— 那边翻成 `blocked_on_human` 时，
         // 这一屏要当场多出一行。**只在看人类那本时才订**（看 agent 那本时它就是
-        // `todos` 自己，再订一份是白烧一条目录监听）。
-        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger)) {
+        // `ownRead` 自己，再订一份是白烧一条目录监听）。
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
             guard ledger == .human else { waitingOnHuman = []; return }
             let agentStore = LocalTodoStore.shared(.agent)
             waitingOnHuman = agentStore.list(crewId: crewId)
@@ -214,5 +241,12 @@ struct CrewTodoLedgerPills: View {
 struct TodoFeedKey: Equatable {
     let crewId: String
     let ledger: TodoLedger
+    let refreshToken: Int
+
+    init(crewId: String, ledger: TodoLedger, refreshToken: Int = 0) {
+        self.crewId = crewId
+        self.ledger = ledger
+        self.refreshToken = refreshToken
+    }
 }
 #endif

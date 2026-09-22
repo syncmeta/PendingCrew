@@ -132,7 +132,8 @@ final class TodoBlockedOnHumanTests: XCTestCase {
         XCTAssertEqual(snapshot.rows.map(\.ledger), [.agent],
                        "借显行仍应保留，让人知道哪些 Agent 活正在等他")
         XCTAssertNotNil(TodoListPresentation.unreadableHint(
-            ledger: .human, borrowedRowCount: snapshot.rows.count),
+            ledger: .human, unavailable: snapshot.ownLedgerUnavailable,
+            borrowedRowCount: snapshot.rows.count),
             "读失败时没有可见说明，人只能把缺行误判成数据被删了")
     }
 
@@ -146,7 +147,8 @@ final class TodoBlockedOnHumanTests: XCTestCase {
         XCTAssertFalse(snapshot.ownLedgerUnavailable)
         XCTAssertEqual(snapshot.rows.map(\.ledger), [.agent, .human])
         XCTAssertNil(TodoListPresentation.unreadableHint(
-            ledger: .human, borrowedRowCount: snapshot.rows.count))
+            ledger: .human, unavailable: snapshot.ownLedgerUnavailable,
+            borrowedRowCount: snapshot.rows.count))
     }
 
     // MARK: - ④ 黄色（他点名的）
@@ -228,8 +230,12 @@ final class TodoBlockedOnHumanTests: XCTestCase {
     /// 因为同一个文件的一句 doc comment 里写着「理由见 `blockedOnHumanHint`」。
     func testTheViewsActuallyUseTheNewPaths() throws {
         let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
-        XCTAssertTrue(panel.contains("TodoListPresentation.rows(for:"),
+        XCTAssertTrue(panel.contains("TodoListPresentation.rows("),
                       "概览面板没走合并那条路 —— 纯函数再绿，人类那本屏幕上也不会多出一行")
+        XCTAssertTrue(panel.contains("TodoListPresentation.unreadableHint("),
+                      "概览面板没有把账本读失败显示出来 —— 部分列表仍会伪装成完整列表")
+        XCTAssertTrue(panel.contains("Button(\"重试\")"),
+                      "账本恢复后没有手动重读入口，人只能反复切药丸碰运气")
         XCTAssertTrue(panel.contains("rowNumberLabel"),
                       "概览面板还在裸写 #N —— 借显过来的号会指错本账")
         XCTAssertTrue(panel.contains("openDetail(ledger: row.ledger"),
@@ -248,8 +254,10 @@ final class TodoBlockedOnHumanTests: XCTestCase {
     /// 屏幕上的结果跟没做完全一样。
     func testThePanelActuallyReadsTheAgentLedger() throws {
         let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
-        XCTAssertTrue(panel.contains("rows(for: .human, human: todos, agent: waitingOnHuman)"),
+        XCTAssertTrue(panel.contains("agent: waitingOnHuman"),
                       "人类那屏喂给合并函数的不是真读来的 agent 条目 —— 借显恒为空")
+        XCTAssertTrue(panel.contains("ownRead = store.read(crewId: crewId)"),
+                      "当前药丸仍走 list() —— 读失败会继续被压成空账")
         XCTAssertTrue(panel.contains("LocalTodoStore.shared(.agent)"),
                       "面板压根没读 agent 那本")
         XCTAssertTrue(panel.contains("agentStore.todoChanges(crewId: crewId)"),

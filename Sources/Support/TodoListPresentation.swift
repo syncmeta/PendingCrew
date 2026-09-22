@@ -289,6 +289,13 @@ enum TodoListPresentation {
         var id: String { "\(ledger.rawValue)#\(item.number)" }
     }
 
+    /// 当前药丸的一次可信读取。借显行来自另一本账，可能在“自己的账读失败”时仍然
+    /// 正常存在；把这两件事压成一个数组，就会把部分列表伪装成完整列表。
+    struct LedgerRows: Equatable {
+        let rows: [Row]
+        let ownLedgerUnavailable: Bool
+    }
+
     static func humanFacingRows(
         human: [LocalTodoItem], agent: [LocalTodoItem]
     ) -> [Row] {
@@ -307,6 +314,35 @@ enum TodoListPresentation {
         // —— 它们本来就属于这本账，不是被「搬走」了。
         case .agent: return newestFirst(agent).map { Row(ledger: .agent, item: $0) }
         }
+    }
+
+    /// 接受 `LedgerRead`，保留“空账”和“读不到”的区别。人类那本读不到时仍保留
+    /// Agent 借显行，但把 `ownLedgerUnavailable` 交给 UI 明说这只是一张部分列表。
+    static func rows(
+        for ledger: TodoLedger, own: LocalTodoStore.LedgerRead, agent: [LocalTodoItem]
+    ) -> LedgerRows {
+        switch own {
+        case let .rows(items):
+            let rows = ledger == .human
+                ? rows(for: .human, human: items, agent: agent)
+                : rows(for: .agent, human: [], agent: items)
+            return LedgerRows(rows: rows, ownLedgerUnavailable: false)
+        case .unreadable:
+            let rows = ledger == .human
+                ? rows(for: .human, human: [], agent: agent)
+                : []
+            return LedgerRows(rows: rows, ownLedgerUnavailable: true)
+        }
+    }
+
+    static func unreadableHint(
+        ledger: TodoLedger, unavailable: Bool, borrowedRowCount: Int
+    ) -> String? {
+        guard unavailable else { return nil }
+        if ledger == .human, borrowedRowCount > 0 {
+            return "人类 Todo 列表暂时读不出来；目前只显示 \(borrowedRowCount) 条来自「Agent 的」卡点。"
+        }
+        return "\(ledger.pillTitle) Todo 列表暂时读不出来。"
     }
 
     /// 行首那个号怎么写。**跨本账借显过来的那几条必须带本账名**：
