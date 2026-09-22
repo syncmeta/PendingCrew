@@ -230,8 +230,11 @@ final class SecureTCPTransportTests: XCTestCase {
 
     func testTLSHandshakePreservesFragmentedAndCoalescedProtocolBytesThenNotifiesDisconnect()
         throws {
-        let clientIdentity = DeviceIdentity.generate()
-        let serverIdentity = DeviceIdentity.generate()
+        let pairingDirectory = tempDirectory()
+        let identityFile = pairingDirectory.appendingPathComponent("identity.json")
+        let trustFile = pairingDirectory.appendingPathComponent("trusted-peers.json")
+        let clientIdentity = try DeviceIdentityStore.loadOrCreate(at: identityFile)
+        let serverIdentity = PairingDeviceIdentity.generate()
         let key = Data(repeating: 0x5a, count: 32)
         let serverTrustsClient = PeerTrustRecord(
             backendID: "client", peerDeviceID: clientIdentity.id,
@@ -239,6 +242,7 @@ final class SecureTCPTransportTests: XCTestCase {
         let clientTrustsServer = PeerTrustRecord(
             backendID: "server", peerDeviceID: serverIdentity.id,
             peerPublicSigningKey: serverIdentity.publicSigningKey, preSharedKey: key)
+        try PeerTrustStore.save([clientTrustsServer], to: trustFile)
 
         let listener = try SecureTCPListener(
             localIdentity: serverIdentity, trustedPeers: [serverTrustsClient], port: 0)
@@ -248,45 +252,49 @@ final class SecureTCPTransportTests: XCTestCase {
         defer { listener.close() }
         try pump(until: { listener.port != nil })
 
-        let parameters = SecureConnectionParameters(
-            host: "127.0.0.1", port: try XCTUnwrap(listener.port),
-            localIdentity: clientIdentity, peer: clientTrustsServer)
-        let clientLink = try SecureTCPTransport.connect(parameters: parameters)
+        let ref = BackendRef(
+            id: "server", displayName: "loopback",
+            transport: .remote(url: "pendingcrew+tls://127.0.0.1:\(try XCTUnwrap(listener.port))"))
+        let clientLink = try BackendRegistry.connectRemote(
+            to: ref, identityFile: identityFile, trustFile: trustFile)
         defer { clientLink.close(); serverLink?.close() }
-        try pump(until: { clientLink.isOpen && serverLink?.isOpen == true })
+        try pump(until: {
+            (clientLink.isOpen && serverLink?.isOpen == true)
+                || clientLink.failure != nil || listener.failure != nil
+        })
+        XCTAssertNil(clientLink.failure, "client TLS failed: \(String(describing: clientLink.failure))")
+        XCTAssertNil(listener.failure, "server TLS failed: \(String(describing: listener.failure))")
+        XCTAssertTrue(clientLink.isOpen)
+        XCTAssertTrue(serverLink?.isOpen == true)
+        XCTAssertEqual(clientLink.negotiatedCipherSuite, 0xCCAC,
+                       "安全链路必须固定到具备前向保密的 ECDHE-PSK AEAD 套件")
 
         let server = SessionProtocolServer(capabilities: capabilities, daemonBuild: "tls-daemon")
         server.accept(link: try XCTUnwrap(serverLink))
 
-        let codec = SessionProtocolCodec()
-        var stream = Data()
-        stream.append(try codec.encode(.hello(.init(
-            protocolVersion: SessionProtocolVersion.current,
-            appBuild: "tls-app", capabilities: capabilities))))
-        stream.append(try codec.encode(.listSessions))
-
-        var decoder = SessionFrameDecoder()
-        var replies: [SessionDaemonMessage] = []
-        clientLink.onReceive = { bytes in
-            guard let frames = try? decoder.append(bytes) else { return }
-            replies.append(contentsOf: frames.compactMap { try? codec.decodeDaemon($0) })
-        }
-
-        clientLink.send(Data(stream.prefix(2)))
-        clientLink.send(Data(stream.dropFirst(2)))
-        try pump(until: { replies.count == 2 })
-        guard case .hello? = replies.first else { return XCTFail("TLS 后第一条不是 hello") }
-        guard case .sessions? = replies.last else { return XCTFail("TLS 后粘着的第二帧丢了") }
+        // Exercise the real SessionProtocolClient and SessionProtocolServer.  This thin shim makes
+        // the first two writes (hello + list) arrive as one coalesced stream split after byte 2.
+        let byteBoundaryLink = FragmentingAndCoalescingLink(base: clientLink)
+        let client = SessionProtocolClient(
+            link: byteBoundaryLink, capabilities: capabilities, appBuild: "tls-app")
+        var hello: SessionDaemonHello?
+        var list: SessionList?
+        client.onDaemonHello = { hello = $0 }
+        client.onSessionList = { list = $0 }
+        client.connect()
+        client.requestSessionList()
+        try pump(until: { client.isConnected && hello != nil && list != nil })
+        XCTAssertEqual(hello?.daemonBuild, "tls-daemon")
 
         var serverSawDisconnect = false
         serverLink?.onClose = { serverSawDisconnect = true }
-        clientLink.close()
+        client.close()
         try pump(until: { serverSawDisconnect })
     }
 
     func testWrongPairingKeyIsRejectedAsAuthenticationFailure() throws {
-        let clientIdentity = DeviceIdentity.generate()
-        let serverIdentity = DeviceIdentity.generate()
+        let clientIdentity = PairingDeviceIdentity.generate()
+        let serverIdentity = PairingDeviceIdentity.generate()
         let listener = try SecureTCPListener(
             localIdentity: serverIdentity,
             trustedPeers: [.init(
@@ -323,6 +331,52 @@ final class SecureTCPTransportTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
     }
+
+    private func tempDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pc-secure-transport-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+}
+
+@MainActor
+private final class FragmentingAndCoalescingLink: SessionMessageLink {
+    var onReceive: ((Data) -> Void)? {
+        didSet { base.onReceive = onReceive }
+    }
+    var onClose: (() -> Void)? {
+        didSet { base.onClose = onClose }
+    }
+    var isOpen: Bool { base.isOpen }
+    var isSynchronous: Bool { base.isSynchronous }
+    var pendingWriteBytes: Int { base.pendingWriteBytes }
+
+    private let base: SecureTCPTransport
+    private var firstWrite: Data?
+    private var didManipulateInitialWrites = false
+
+    init(base: SecureTCPTransport) { self.base = base }
+
+    func send(_ framed: Data) {
+        if didManipulateInitialWrites {
+            base.send(framed)
+            return
+        }
+        guard let firstWrite else {
+            self.firstWrite = framed
+            return
+        }
+        var stream = firstWrite
+        stream.append(framed)
+        self.firstWrite = nil
+        didManipulateInitialWrites = true
+        base.send(Data(stream.prefix(2)))
+        base.send(Data(stream.dropFirst(2)))
+    }
+
+    func close() { base.close() }
 }
 
 /// 模拟 TCP/TLS/UDS 都可能出现的任意字节交付边界；它刻意不替 endpoint 重组帧。

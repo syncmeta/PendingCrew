@@ -11,11 +11,12 @@ import Foundation
 ///   而以后加远程就得把整层重写。
 /// - **它也不许被删掉**：删了之后这个 app 就没有任何后端可连，界面上却看不出为什么。
 ///
-/// ## 远程这一档：**只出现在类型里，不实现**
+/// ## 远程这一档：安全地址与配对信任缺一不可
 ///
-/// `.remote` 是给以后留的。现在连它一律返回「未实现」并说清楚 ——
-/// **绝不许静默降级成本机**。静默降级的症状是：人填了一个远程地址，界面显示「已连接」，
-/// 而他看到的其实是自己这台机器上的 session。那种错人是查不出来的。
+/// `.remote` 只接受 `pendingcrew+tls://host:port`，并且必须有同 backend id 的对端信任
+/// 记录。任何解析、信任账本或握手失败都原样失败，**绝不静默降级成本机**。静默降级的
+/// 症状是：人填了一个远程地址，界面显示「已连接」，而他看到的其实是自己这台机器上的
+/// session。那种错人是查不出来的。
 ///
 /// ## 读不出来 ≠ 空列表
 ///
@@ -26,7 +27,7 @@ struct BackendRef: Codable, Equatable, Identifiable {
     enum Transport: Equatable {
         /// 本机后端：Unix socket。
         case localSocket(path: String)
-        /// 远程后端。**占位，现在连不上** —— 见类型注释。
+        /// 远程后端。地址必须是 `pendingcrew+tls://host:port`。
         case remote(url: String)
     }
 
@@ -174,20 +175,110 @@ enum BackendRegistry {
         return .removed(refs.filter { $0.id != id })
     }
 
-    /// 能不能连它。**远程那一档现在一律拒，且绝不降级成本机。**
+    enum RemoteConnectionError: Error, Equatable, CustomStringConvertible {
+        case insecureScheme(String?)
+        case invalidAddress(String)
+        case trustStoreUnreadable(String)
+        case notPaired(String)
+        case invalidTrust(String)
+        case localSocketIsNotRemote
+
+        var description: String {
+            switch self {
+            case let .insecureScheme(scheme):
+                return "远程地址必须使用 pendingcrew+tls 安全通道，不能用 \(scheme ?? "空")"
+            case let .invalidAddress(address):
+                return "远程地址无效（必须带主机和端口）：\(address)"
+            case let .trustStoreUnreadable(reason):
+                return "对端信任账本读不出来：\(reason)"
+            case let .notPaired(id):
+                return "远程后端 \(id) 还没有配对信任记录"
+            case let .invalidTrust(id):
+                return "远程后端 \(id) 的配对信任记录无效"
+            case .localSocketIsNotRemote:
+                return "本机 socket 不是远程连接"
+            }
+        }
+    }
+
+    /// 能不能连它。远程必须同时通过地址解析和信任记录验证；失败绝不降级成本机。
     enum Connectivity: Equatable {
         case supported
         case unsupported(String)
     }
 
-    static func connectivity(of ref: BackendRef) -> Connectivity {
+    static func connectivity(of ref: BackendRef,
+                             trustedPeers suppliedPeers: [PeerTrustRecord]? = nil) -> Connectivity {
         switch ref.transport {
         case .localSocket:
             return .supported
-        case let .remote(url):
-            return .unsupported("远程后端还没做（\(url)）。**没有退回本机** ——"
-                + "退回去的话你会看到自己这台机器上的 session，而界面显示的是远程那台。")
+        case .remote:
+            do {
+                let peers: [PeerTrustRecord]
+                if let suppliedPeers {
+                    peers = suppliedPeers
+                } else {
+                    do { peers = try PeerTrustStore.load(from: DevicePairingPaths.trustedPeers) }
+                    catch { throw RemoteConnectionError.trustStoreUnreadable(String(describing: error)) }
+                }
+                _ = try remoteConnectionParameters(
+                    of: ref, localIdentity: PairingDeviceIdentity.generate(), trustedPeers: peers)
+                return .supported
+            } catch {
+                return .unsupported("\(error)。**没有退回本机** ——"
+                    + "退回去的话你会看到自己这台机器上的 session，而界面显示的是远程那台。")
+            }
         }
+    }
+
+    /// Parse and bind an endpoint to one exact paired peer.  This is also the single source of
+    /// truth used by `connectivity`; the UI cannot report supported parameters that the connector
+    /// later interprets differently.
+    static func remoteConnectionParameters(
+        of ref: BackendRef,
+        localIdentity: PairingDeviceIdentity,
+        trustedPeers: [PeerTrustRecord]
+    ) throws -> SecureConnectionParameters {
+        guard case let .remote(rawAddress) = ref.transport else {
+            throw RemoteConnectionError.localSocketIsNotRemote
+        }
+        guard let components = URLComponents(string: rawAddress) else {
+            throw RemoteConnectionError.invalidAddress(rawAddress)
+        }
+        guard components.scheme?.lowercased() == "pendingcrew+tls" else {
+            throw RemoteConnectionError.insecureScheme(components.scheme)
+        }
+        guard let host = components.host, !host.isEmpty,
+              let integerPort = components.port,
+              let port = UInt16(exactly: integerPort), port != 0,
+              components.user == nil, components.password == nil,
+              components.path.isEmpty || components.path == "/",
+              components.query == nil, components.fragment == nil else {
+            throw RemoteConnectionError.invalidAddress(rawAddress)
+        }
+        guard let peer = trustedPeers.first(where: { $0.backendID == ref.id }) else {
+            throw RemoteConnectionError.notPaired(ref.id)
+        }
+        guard peer.isValid else { throw RemoteConnectionError.invalidTrust(ref.id) }
+        return .init(host: host, port: port, localIdentity: localIdentity, peer: peer)
+    }
+
+    /// Production remote connector.  Every failure is thrown; there is deliberately no local
+    /// branch in this function, so a remote `BackendRef` can never become a Unix socket by accident.
+    @MainActor
+    static func connectRemote(
+        to ref: BackendRef,
+        identityFile: URL? = nil,
+        trustFile: URL = DevicePairingPaths.trustedPeers
+    ) throws -> SecureTCPTransport {
+        let identity = try identityFile.map(DeviceIdentityStore.loadOrCreate(at:))
+            ?? DeviceIdentityStore.loadOrCreate()
+        let peers: [PeerTrustRecord]
+        do { peers = try PeerTrustStore.load(from: trustFile) }
+        catch { throw RemoteConnectionError.trustStoreUnreadable(String(describing: error)) }
+        let parameters = try remoteConnectionParameters(
+            of: ref, localIdentity: identity, trustedPeers: peers)
+        return try SecureTCPTransport.connect(parameters: parameters)
     }
 }
 
@@ -246,6 +337,12 @@ extension BackendRegistry {
                            paths: PendingCrewDaemonPaths = .standard(),
                            probe: LocalProbe? = nil) -> BackendLiveStatus {
         if case let .unsupported(why) = connectivity(of: ref) { return .unsupported(why) }
+        if case .remote = ref.transport {
+            // Connectivity is now real for paired remotes, but this synchronous settings probe
+            // cannot block the main actor on a TCP/TLS handshake.  Most importantly, it returns
+            // before touching LocalProbe: no local reading can be mislabeled as the remote one.
+            return .undecidable("远程后端已配对；建立安全连接后才能读取实况")
+        }
         if case let .localSocket(path) = ref.transport, path != paths.socket {
             return .unsupported("这条指向 \(path)，不是这个 app 数据根下的后台（\(paths.socket)）。"
                 + "现在只探得了后者，**也不会拿后者的实况冒充它**。")

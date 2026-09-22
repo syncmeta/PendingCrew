@@ -88,7 +88,7 @@ final class BackendRegistryTests: XCTestCase {
     }
 
     func testPairedRemoteWithSecureAddressBecomesConnectable() throws {
-        let peer = DeviceIdentity.generate()
+        let peer = PairingDeviceIdentity.generate()
         let trust = PeerTrustRecord(
             backendID: "tokyo", peerDeviceID: peer.id,
             peerPublicSigningKey: peer.publicSigningKey,
@@ -101,7 +101,7 @@ final class BackendRegistryTests: XCTestCase {
     }
 
     func testPairedRemoteStillRejectsAnInsecureAddress() throws {
-        let peer = DeviceIdentity.generate()
+        let peer = PairingDeviceIdentity.generate()
         let trust = PeerTrustRecord(
             backendID: "tokyo", peerDeviceID: peer.id,
             peerPublicSigningKey: peer.publicSigningKey,
@@ -204,11 +204,17 @@ final class DevicePairingIdentityTests: XCTestCase {
         let mode = try XCTUnwrap(
             FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
         XCTAssertEqual(mode.intValue & 0o777, 0o600, "长期私钥文件必须只让本用户读写")
+
+        let broken = Data("{ broken".utf8)
+        try broken.write(to: url)
+        XCTAssertThrowsError(try DeviceIdentityStore.loadOrCreate(at: url),
+                             "身份损坏时不能静默生成新身份继续连接")
+        XCTAssertEqual(try Data(contentsOf: url), broken, "损坏身份必须保留给诊断，不能覆盖")
     }
 
     func testPeerTrustRoundTripsAndCorruptionFailsClosed() throws {
         let url = tempDirectory().appendingPathComponent("trusted-peers.json")
-        let peer = DeviceIdentity.generate()
+        let peer = PairingDeviceIdentity.generate()
         let record = PeerTrustRecord(
             backendID: "office-mac", peerDeviceID: peer.id,
             peerPublicSigningKey: peer.publicSigningKey,
@@ -216,6 +222,9 @@ final class DevicePairingIdentityTests: XCTestCase {
 
         try PeerTrustStore.save([record], to: url)
         XCTAssertEqual(try PeerTrustStore.load(from: url), [record])
+        let mode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue & 0o777, 0o600, "PSK 信任账本必须只让本用户读写")
 
         try Data("{ broken".utf8).write(to: url)
         XCTAssertThrowsError(try PeerTrustStore.load(from: url),

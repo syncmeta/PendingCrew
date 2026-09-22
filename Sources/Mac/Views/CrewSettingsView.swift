@@ -197,7 +197,7 @@ private struct BackendsSettingsTab: View {
             Section {
                 TextField("名字（你自己认得出就行）", text: $newName)
                     .textFieldStyle(.roundedBorder)
-                TextField("地址，例如 https://…", text: $newURL)
+                TextField("地址，例如 pendingcrew+tls://host:7443", text: $newURL)
                     .textFieldStyle(.roundedBorder)
                 Button("加进来") { add() }
                     .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
