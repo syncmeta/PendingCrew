@@ -153,6 +153,26 @@ final class CaptainLaunchReadinessTests: XCTestCase {
         XCTAssertEqual(detail, health.detail, "认证失败原因要原样进入交接失败回执")
     }
 
+    func testAutomaticRecoveryOnlyTargetsUnavailableClaudeCaptains() {
+        let auth = CrewSessionHealth(kind: .authRequired, detail: "logged out")
+        let stalled = CrewSessionHealth(kind: .launchFailed, detail: "no output")
+        let quota = CrewSessionHealth(kind: .usageLimit, detail: "limited")
+
+        XCTAssertTrue(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: true, kind: .claudeCode, health: auth))
+        XCTAssertTrue(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: true, kind: .claudeCode, health: stalled))
+        XCTAssertFalse(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: false, kind: .claudeCode, health: auth),
+            "worker 故障不能擅自改 crew 的机长 runner")
+        XCTAssertFalse(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: true, kind: .codex, health: stalled),
+            "Codex 自身故障不能递归切回 Codex")
+        XCTAssertFalse(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: true, kind: .claudeCode, health: quota),
+            "额度等待沿用既有唤醒恢复，不应永久改 runner")
+    }
+
     /// codex 的账本兜底照旧有效（它跨的是协议边界，与本次修复解决的问题不是一件事）。
     func testCodexLedgerRecordStillCountsAsReady() {
         XCTAssertEqual(

@@ -60,7 +60,10 @@ enum CaptainLaunchReadiness {
         elapsed: TimeInterval,
         deadline: TimeInterval = SessionLaunchProbe.firstOutputDeadline + 1
     ) -> Step {
-        if let health, health.kind == .launchFailed { return .failed(health.detail) }
+        if let health,
+           health.kind == .launchFailed || health.kind == .authRequired {
+            return .failed(health.detail)
+        }
         guard isRunning else { return .failed("runner 在启动观察窗内退出。") }
         if kind == .terminal { return .failed("纯终端不能当 agent 机长。") }
         if observedSignal { return .ready }
@@ -91,6 +94,17 @@ enum CaptainLaunchReadiness {
         case .terminal:
             return "纯终端不能当 agent 机长。"
         }
+    }
+}
+
+/// 自动切到 Codex 的触发边界。只处理「Claude 机长明确不可用」：worker 的故障仍交给
+/// 机长改派，额度/普通 turn 错误也不擅自更换 runner。
+enum CaptainUnavailableRecovery {
+    static func shouldAttempt(
+        isCaptain: Bool, kind: LocalCodingAgentKind, health: CrewSessionHealth
+    ) -> Bool {
+        guard isCaptain, kind == .claudeCode else { return false }
+        return health.kind == .launchFailed || health.kind == .authRequired
     }
 }
 #endif

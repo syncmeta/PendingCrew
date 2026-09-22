@@ -231,6 +231,11 @@ final class CrewSessionRunner: ObservableObject {
     /// 若它在交接登记前已起跑，fulfill 的有界重试会等它落成后停掉再接管。
     private var captainReassignmentsInFlight: Set<String> = []
 
+    /// Claude 机长已经明确不可用时，同一个 crew 只允许一笔自动 Codex 接任。
+    /// 与人工交接的门禁分开：人工事务进行中时自动路让路；普通启动的健康回调
+    /// 可能被 status/finalize 两条观察链重复送达，这把锁负责去重。
+    private var captainAutoRecoveriesInFlight: Set<String> = []
+
     /// 交接期间被上面那道门禁挡下来的普通 @唤醒。挡住是对的，丢掉不是 ——
     /// 交接一结束就补投给新机长；补投不成（谁都没起来）就落白板留痕。
     private var captainHandoffHeldWakes = CaptainHandoffHeldWakes()
@@ -1642,6 +1647,9 @@ final class CrewSessionRunner: ObservableObject {
             run.onLaunchFailure = { [weak self] r, h in
                 self?.lastStartError = "「\(r.displayName)」拉起失败：\(h.detail)"
             }
+            run.onCaptainUnavailable = { [weak self] r, h in
+                self?.recoverUnavailableClaudeCaptain(r, health: h)
+            }
         // Codex turn 完成的这一拍冲刷 busy 期间的待投消息；不依赖第二条白板消息
         // 或 hub 事件来“碰醒”。Claude `isBusy` 恒 false，仍走即时投递。
             run.onBecameIdle = { [weak self] r in
@@ -2019,6 +2027,46 @@ final class CrewSessionRunner: ObservableObject {
             progressText: "将新建一位 \(kind.displayName) 机长（\(title)）；系统会先停旧机长，再以全新 conversation 启动。",
             successText: "机长交接完成：新的 \(kind.displayName) 机长已用全新 conversation 启动。",
             userInitiated: userInitiated)
+    }
+
+    /// 普通唤醒路径不像显式交接那样会 `awaitCaptainLaunchReady`：它先把 run 放进 roster，
+    /// 再由后端健康链异步报告零输出/认证失效。过去这里只留一条错误，坏掉的 Claude
+    /// 仍占着机长角色，后续任务继续投给它。这里把两条路收回同一个可回滚交接事务。
+    private func recoverUnavailableClaudeCaptain(
+        _ run: CrewSessionRun, health: CrewSessionHealth
+    ) {
+        guard CaptainUnavailableRecovery.shouldAttempt(
+                isCaptain: run.role == .captain, kind: run.kind, health: health),
+              runs.contains(where: { $0.runID == run.runID }),
+              !captainReassignmentsInFlight.contains(run.crewId),
+              captainAutoRecoveriesInFlight.insert(run.crewId).inserted
+        else { return }
+        let crewId = run.crewId
+
+        Task { @MainActor [weak self, weak run] in
+            guard let self else { return }
+            defer { self.captainAutoRecoveriesInFlight.remove(crewId) }
+            guard let run,
+                  self.runs.contains(where: { $0.runID == run.runID }),
+                  let detail = LocalCrewStore.shared.getCrew(run.crewId)
+            else { return }
+            do {
+                try await self.startFreshCaptain(
+                    detail: detail, backend: nil,
+                    openingBrief: "Claude 机长因认证失败或启动后无首个输出而未能接单。"
+                        + "请先在群里确认已由 Codex 接管，再从白板继续未完成任务。",
+                    kind: .codex, model: "gpt-5.6-sol", effort: "high",
+                    title: "机长", userInitiated: false)
+            } catch {
+                self.lastStartError = "Claude 机长不可用，Codex 自动接任失败："
+                    + error.localizedDescription
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: run.crewId, sessionId: "system",
+                    text: "Claude 机长不可用，Codex 自动接任失败：\(error.localizedDescription)"
+                        + "\n请由本 crew 或父 crew 机长重新执行 create_and_handoff_captain。",
+                    category: "error", senderName: "系统")
+            }
+        }
     }
 
     /// captain MCP 控制队列的落地入口。它不信 helper 给的任何显示名/runner 猜测：
@@ -2972,6 +3020,9 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// 拉起失败时回调（#541）—— runner 挂上后把原因落进 `lastStartError`
     /// （UI 横幅，与「人类发言自动拉起机长失败」同一条留痕通道）。
     var onLaunchFailure: ((CrewSessionRun, CrewSessionHealth) -> Void)?
+    /// 当前 run 是 Claude 机长，且认证失效或启动后没有首字节时回调。
+    /// 真正的接任事务归 runner；run 只负责把已经去重的健康事实交出去。
+    var onCaptainUnavailable: ((CrewSessionRun, CrewSessionHealth) -> Void)?
     /// 后端从 working/busy 翻到 idle 的边沿。runner 用它冲刷本 session 的待投消息。
     var onBecameIdle: ((CrewSessionRun) -> Void)?
     /// 进程自然退出时让 runner 清掉尚未投出的正文与回调，避免同 id 重启后吃旧队列。
@@ -3193,13 +3244,23 @@ final class CrewSessionRun: ObservableObject, Identifiable {
                     ? nil : [LocalWhiteboardMention(kind: "captain", targetId: nil)])
             // `onLaunchFailure` 挂着机长交接事务的回滚 —— 那条只认「从来没跑起来」，
             // 开场没送到的 session 进程还在，不该走它。
-            if h.kind == .launchFailed { onLaunchFailure?(self, h) }
+            if h.kind == .launchFailed {
+                onLaunchFailure?(self, h)
+                if CaptainUnavailableRecovery.shouldAttempt(
+                    isCaptain: role == .captain, kind: kind, health: h) {
+                    onCaptainUnavailable?(self, h)
+                }
+            }
             return
         }
         LocalWhiteboardStore.shared.appendSessionMessage(
             crewId: crewId, sessionId: sessionId,
             text: "\(displayName) 出问题了：\(h.detail)",
             category: "error", senderName: displayName)
+        if CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: role == .captain, kind: kind, health: h) {
+            onCaptainUnavailable?(self, h)
+        }
         if h.isQuotaRelated { onUsageLimit?(self) }
     }
 
