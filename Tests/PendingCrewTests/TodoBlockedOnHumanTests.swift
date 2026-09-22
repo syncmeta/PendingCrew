@@ -118,6 +118,37 @@ final class TodoBlockedOnHumanTests: XCTestCase {
                        "两本账的 #1 被当成同一条了 —— 回应会打在错的那本上")
     }
 
+    /// 人类那本读失败时，借显的 Agent 条目仍然可能正常读到。这个组合不能被画成
+    /// 一张看似完整、其实漏掉整本人类 Todo 的列表；界面必须知道“自己的账没读到”。
+    func testUnreadableHumanLedgerIsNotMasqueradedAsAnEmptyLedger() {
+        let snapshot = TodoListPresentation.rows(
+            for: .human,
+            own: .unreadable,
+            agent: [Self.item(7, "卡在你身上的活",
+                              status: LocalTodoItem.blockedOnHumanStatus)])
+
+        XCTAssertTrue(snapshot.ownLedgerUnavailable,
+                      "人类账读失败却被当成空账 —— 画面只剩 Agent 借显行，看起来像纯人类条目消失了")
+        XCTAssertEqual(snapshot.rows.map(\.ledger), [.agent],
+                       "借显行仍应保留，让人知道哪些 Agent 活正在等他")
+        XCTAssertNotNil(TodoListPresentation.unreadableHint(
+            ledger: .human, borrowedRowCount: snapshot.rows.count),
+            "读失败时没有可见说明，人只能把缺行误判成数据被删了")
+    }
+
+    func testReadableHumanLedgerStillShowsOwnAndBorrowedRows() {
+        let snapshot = TodoListPresentation.rows(
+            for: .human,
+            own: .rows([Self.item(3, "纯给人类的 Todo", status: "pending")]),
+            agent: [Self.item(7, "卡在你身上的活",
+                              status: LocalTodoItem.blockedOnHumanStatus)])
+
+        XCTAssertFalse(snapshot.ownLedgerUnavailable)
+        XCTAssertEqual(snapshot.rows.map(\.ledger), [.agent, .human])
+        XCTAssertNil(TodoListPresentation.unreadableHint(
+            ledger: .human, borrowedRowCount: snapshot.rows.count))
+    }
+
     // MARK: - ④ 黄色（他点名的）
 
     func testBlockedOnHumanRendersDistinctlyFromTheOtherStates() {
