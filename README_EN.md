@@ -17,20 +17,28 @@
   <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
 </p>
 
-Work deeply with multiple coding agents on your Mac. Organize and manage them like a company.
+Imagine you are building a complex piece of software. You need to communicate with developers
+continuously, and you need to help them collaborate efficiently with one another. That may mean
+building a company, assigning roles, handing out work, and creating group chats.
 
-It is far more extensible than Agent Teams 😁 There is a reason companies use hierarchies to
-manage large projects. I want to make the most of those ideas.
+What happens when those developers are AI? You still need to communicate and collaborate with
+them, and help them collaborate efficiently with one another. That is why I built PendingCrew.
 
-This app is about **deep collaboration between people and AI. It is a cockpit for human-AI
-collaboration—not a way for people to put everything on autopilot!!** A good company depends on
-the judgment of its leaders. The same principle applies to AI.
+**Feishu, DingTalk, and WeCom are harnesses for employees. PendingCrew is the harness for
+harnesses.** It is a platform where you and agents can collaborate efficiently and create things
+together.
 
 ![PendingCrew main window: the member list on the right shows five members—the captain running Opus and three workers running GPT-5.6-Sol. Agents from different vendors work together in one group chat. The conversation shows real collaboration: “Terminal tree rendering” reports a shared Git index race while committing; “HTML organization chart rendering” turns it into a pending decision and asks the captain whether it should move its own work aside or let the captain reorganize the commits; two other members are typing.](docs/screenshots/crew-collaboration.png)
 
-<p align="center"><sub>Real screenshot</sub></p>
+<p align="center"><sub>Main interface</sub></p>
 
-> This file is the English translation. It tracks [`README.md`](README.md), which is the original.
+Without false modesty, I think this is far more extensible than Agent Teams. There is a reason
+companies use hierarchies to manage large projects, and I want to make the most of those ideas.
+
+This app emphasizes **deep collaboration between people and AI. It provides a cockpit for
+human-AI collaboration instead of letting people become absentee managers**.
+
+For a company to work well, the boss's decisions are crucial. The same principle applies to AI.
 
 ## Quick start
 
@@ -50,16 +58,14 @@ want. Like this:
 
 ![A PendingCrew crew conversation](docs/screenshots/crew-1.png)
 
-A crew can have a parent crew and child crews. Every crew has a captain by default, along with the
-agent members who do the work. You can also bring in other networked agents, real people, or bots
-and people from PendingBot to work together in the same crew.
+A crew can have a parent and children, a captain, and agent members. The long-term plan is to let
+other networked agents or real people join its group chat.
 
-Crews can form a hierarchy. You can arrange that hierarchy around the goals and work at hand, and
-you can simply ask the captain to organize it for you. A rough direction is enough. You can also
-delegate everything, although personnel decisions are best left to human leadership.
+Crews can form a hierarchy. You can arrange responsibilities, authority, and reporting lines as
+you see fit. For advice on the exact arrangement, consult McKinsey.
 
-When assigning work, turn on the To Do icon to the left of the message box. Every To Do is kept on
-record, and the To Do List shows the response attached to each one.
+When assigning work, turn on the To Do icon to the left of the message box. Then you can hand out
+work one item at a time.
 
 Always remember: you lead the agents, and human organizations usually hold their leaders to the
 highest standard. I want PendingCrew to help people stay meaningfully engaged when they use AI,
