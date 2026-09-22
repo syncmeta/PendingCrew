@@ -1004,6 +1004,12 @@ final class ViewWiringTests: XCTestCase {
                       "普通机长重启的历史续跑默认语义被破坏")
         XCTAssertTrue(runner.contains("if resumeCaptainId == nil && resumePreviousConversation"),
                       "新建机长没有真正绕开历史 conversation 查询")
+        XCTAssertTrue(runner.contains("run.onCaptainUnavailable ="),
+                      "普通机长启动失败/认证失效仍只报错，没有接到自动救援入口")
+        XCTAssertTrue(runner.contains("recoverUnavailableClaudeCaptain("),
+                      "Claude 机长不可用时没有实际执行 Codex 接任")
+        XCTAssertTrue(runner.contains("model: \"gpt-5.6-sol\", effort: \"high\""),
+                      "自动接任没有钉住获授权的 Codex Sol/high 配置")
     }
 
     /// Todo #71：纯逻辑说「黄色呼吸」还不够，侧栏实际那颗 crew 点必须真的用上

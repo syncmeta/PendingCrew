@@ -140,6 +140,19 @@ final class CaptainLaunchReadinessTests: XCTestCase {
         XCTAssertEqual(detail, "子进程没能启动", "原因要原样带出去，别丢")
     }
 
+    /// Claude 登录失效时 TUI 往往已经吐过登录提示。PTY 有字节只证明进程画过界面，
+    /// 不能覆盖同一 session 的结构化认证失败证据，否则交接会把失效机长当成成功。
+    func testAuthenticationFailureOverridesObservedPTYOutput() {
+        let health = CrewSessionHealth(
+            kind: .authRequired,
+            detail: "Claude Code 在本 session 报告了认证失败。")
+        guard case .failed(let detail) = CaptainLaunchReadiness.step(
+            kind: .claudeCode, isRunning: true, health: health,
+            observedSignal: true, ledgerAgentSessionId: nil, elapsed: 1)
+        else { return XCTFail("认证失败必须压过已观测到的 PTY 输出") }
+        XCTAssertEqual(detail, health.detail, "认证失败原因要原样进入交接失败回执")
+    }
+
     /// codex 的账本兜底照旧有效（它跨的是协议边界，与本次修复解决的问题不是一件事）。
     func testCodexLedgerRecordStillCountsAsReady() {
         XCTAssertEqual(
