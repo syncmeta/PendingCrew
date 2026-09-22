@@ -31,6 +31,15 @@ final class McpServerModelCatalogTests: XCTestCase {
         return s.handleLine(line) ?? ""
     }
 
+    private func callText(_ s: McpServer, _ name: String, _ args: [String: Any]) throws -> String {
+        let raw = call(s, name, args)
+        let obj = try XCTUnwrap(
+            (try JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any])
+        let result = try XCTUnwrap(obj["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        return try XCTUnwrap(content.first?["text"] as? String)
+    }
+
     private func toolDescription(_ s: McpServer, _ name: String) throws -> String {
         let raw = try XCTUnwrap(s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#))
         let obj = try XCTUnwrap(
@@ -90,6 +99,25 @@ final class McpServerModelCatalogTests: XCTestCase {
         XCTAssertTrue(text.contains("gpt-5.6-sol"), text)
         XCTAssertFalse(text.contains("opus"),
                        "codex session 不该看到 claude 的清单（照着切只会白切）：\(text)")
+        XCTAssertTrue(text.contains("thread/settings/update"),
+                      "Codex 的说明必须写真实运行态切换通道：\(text)")
+        XCTAssertTrue(text.contains("下一回合"),
+                      "Codex 切换只对后续回合生效，说明必须说清：\(text)")
+        XCTAssertFalse(text.contains("没有中途切换通道"),
+                       "生产代码已经支持 thread/settings/update，不能继续给相反指引：\(text)")
+    }
+
+    func testCodexSetProfileReceiptDescribesQueuedNativeSwitch() throws {
+        let dir = tmp()
+        writeProbedCatalog(dir: dir)
+        let out = try callText(makeServer(dir: dir, agentKey: "codex"),
+                               "set_session_profile",
+                               ["model": "gpt-5.6-sol", "effort": "high"])
+
+        XCTAssertTrue(out.contains("thread/settings/update"), out)
+        XCTAssertTrue(out.contains("下一回合"), out)
+        XCTAssertFalse(out.contains("claude 的 /model /effort"), out)
+        XCTAssertFalse(out.contains("codex 无中途切换通道"), out)
     }
 
     // MARK: - 参数提醒：说话，但**不拦**

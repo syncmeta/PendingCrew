@@ -397,7 +397,7 @@ final class McpServer {
                 ],
                 [
                     "name": "set_session_profile",
-                    "description": "切换你自己这个 session 的模型/thinking effort（至少给一个）。用于按任务阶段调配：机械收尾活降到轻模型/低 effort 省额度，难题升 effort。claude session 在**你本回合结束后**生效（等价终端里打 /model、/effort —— 斜杠命令只能在终端空闲时执行，所以不是当场切换；生效/失败都会回执到白板，成功还会在终端通知你）。撞额度上限时用它正合适：回合被打断后切换落地，你会被叫醒在新模型上接着跑，不用等重置。codex 没有中途切换通道——会在白板收到说明，新任务请让机长用 start_session 带 model/effort 另起。\n"
+                    "description": setSessionProfileToolDescription + "\n"
                         + catalogHint(agents: agentKey.map { [$0] } ?? ["claude", "codex"]),
                     "inputSchema": [
                         "type": "object",
@@ -1777,17 +1777,10 @@ final class McpServer {
                         "**本回合结束后不会切** —— 你还在原来的模型/effort 上，别按已经切了来规划。"))
             }
             let parts = [model.map { "模型→\($0)" }, effort.map { "effort→\($0)" }].compactMap { $0 }
-            // 回执如实：**这里只是排队，还没切**。claude 的 /model /effort 是终端斜杠
-            // 命令，你正在跑回合时写进去只会被排进消息队列、永远不当命令执行（#544
-            // 的根因就是老回执谎称「立即生效」，机长信了，继续用旧模型跑到撞上限）。
-            var receipt = """
-                已排队切换：\(parts.joined(separator: "、"))。现在还没生效 —— claude 的 /model /effort \
-                只能在终端空闲时执行，所以会在你**本回合结束后**才注入并核对回显。
-                结果（成功或失败）都会回执到群聊白板，成功时你还会在终端收到一条通知。\
-                别假定下一次工具调用已经在新模型上跑。
-                撞额度上限时用它是对的：本回合被打断后切换就会落地，你会被叫醒在新模型上接着跑，不用等额度重置。
-                codex 无中途切换通道（会在白板收到说明）。
-                """
+            // 回执按真实 runner 分流：claude 要等空闲后敲斜杠命令；codex 走
+            // thread/settings/update，当前回合不变、下一回合使用新设置。两条腿都必须
+            // 等底层确认后才算成功，不能在 helper 仅写入请求时谎称已经生效（#544）。
+            var receipt = profileSwitchQueuedReceipt(parts: parts)
             if !notes.isEmpty {
                 receipt += "\n⚠️ 参数提醒（已照常排队，没拦你；同一份提醒已发白板）：\n"
                     + notes.map { "· \($0)" }.joined(separator: "\n")
@@ -2375,6 +2368,54 @@ final class McpServer {
     /// 缓存下来就会一直用启动那一刻的旧表。
     private var modelCatalogFile: AgentModelCatalogFile? {
         AgentModelCatalogFile.load(from: quotaDirectory)
+    }
+
+    private var setSessionProfileToolDescription: String {
+        let lead = "切换你自己这个 session 的模型/thinking effort（至少给一个）。用于按任务阶段调配：机械收尾活降轻模型/低 effort，难题升 effort。"
+        let confirmation = "底层确认后才算生效；成功或失败都会回执到白板，成功时也会通知当前 session。"
+        switch agentKey {
+        case "codex":
+            return lead
+                + "Codex 通过 app-server `thread/settings/update` 更新运行中 thread，当前回合保持原配置，**下一回合**使用新 model/effort。"
+                + confirmation
+        case "claude":
+            return lead
+                + "Claude 要等本回合结束、终端空闲后执行 `/model` / `/effort` 并核对回显。"
+                + confirmation
+        default:
+            return lead
+                + "当前回合保持原配置：Claude 等终端空闲后执行斜杠命令；Codex 通过 app-server `thread/settings/update` 更新后续回合。"
+                + confirmation
+        }
+    }
+
+    private func profileSwitchQueuedReceipt(parts: [String]) -> String {
+        let head = "已排队切换：\(parts.joined(separator: "、"))。现在还没生效；当前回合仍使用原配置。"
+        let result = "底层确认后，成功或失败都会回执到群聊白板，成功时当前 session 也会收到通知。"
+        let recovery = "撞额度上限时可以直接切换；确认成功后，未完成的工作可在新配置下继续。"
+        switch agentKey {
+        case "codex":
+            return """
+                \(head)
+                Codex 会通过 app-server `thread/settings/update` 应用到**下一回合**。
+                \(result)
+                \(recovery)
+                """
+        case "claude":
+            return """
+                \(head)
+                Claude 会在本回合结束、终端空闲后执行 `/model` / `/effort` 并核对回显。
+                \(result)
+                \(recovery)
+                """
+        default:
+            return """
+                \(head)
+                Claude 会等终端空闲后执行斜杠命令；Codex 会通过 app-server `thread/settings/update` 应用到**下一回合**。
+                \(result)
+                \(recovery)
+                """
+        }
     }
 
     /// 工具描述尾巴：每家一行「可用模型 + effort + 不选时跑什么 + 新鲜度警示」。
