@@ -109,6 +109,7 @@ enum SessionDaemonMain {
         host.server.runSummaryProvider = { [weak runner] sessionId in
             runner?.runs.first { $0.sessionId == sessionId }?.protocolSummary
         }
+        host.server.crewBackend = model.backend
         host.server.onOrchestrationRequest = { control in
             MainActor.assumeIsolated {
                 handle(control, runner: runner, crewStore: crewStore,

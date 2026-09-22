@@ -1,5 +1,5 @@
-#if os(macOS)
 import CryptoKit
+import Darwin
 import Foundation
 
 struct ManualPairingPaths: Equatable {
@@ -11,7 +11,7 @@ struct ManualPairingPaths: Equatable {
     static var standard: ManualPairingPaths {
         .init(
             trustedPeers: DevicePairingPaths.trustedPeers,
-            backendRegistry: BackendRegistry.registryFile,
+            backendRegistry: DevicePairingPaths.backendRegistry,
             exchangeLedger: DevicePairingPaths.exchangeLedger,
             listenerSettings: DevicePairingPaths.listenerSettings)
     }
@@ -240,9 +240,7 @@ struct ManualPairingCoordinator {
             var trusts = try Self.loadTrusts(from: paths.trustedPeers)
             try Self.mergeTrust(trust, into: &trusts)
 
-            let loaded = BackendRegistry.load(from: paths.backendRegistry)
-            if let problem = loaded.problem { throw ManualPairingError.storage(problem) }
-            var refs = loaded.refs
+            var refs = try RemoteBackendRecordStore.load(from: paths.backendRegistry)
             if let existing = refs.first(where: { $0.id == backend.id }) {
                 guard existing == backend else {
                     throw ManualPairingError.trustConflict(backend.id)
@@ -255,7 +253,7 @@ struct ManualPairingCoordinator {
                 .init(url: paths.trustedPeers,
                       data: try PeerTrustStore.encoded(trusts), mode: 0o600),
                 .init(url: paths.backendRegistry,
-                      data: try BackendRegistry.encodedStored(refs), mode: 0o600),
+                      data: try RemoteBackendRecordStore.encoded(refs), mode: 0o600),
                 .init(url: paths.exchangeLedger, data: try ledger.encoded(), mode: 0o600),
             ])
         }
@@ -501,4 +499,3 @@ enum PairingFileTransaction {
         return try acquire(locks, index: index + 1, body)
     }
 }
-#endif

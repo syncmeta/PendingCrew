@@ -29,7 +29,7 @@ struct CrewMention: Codable, Equatable {
 /// url / filename (PendingCrew has no direct Supabase access to resolve ids).
 /// `url` is the auth-gated `/v1/uploads/<id>` path, fetched with the
 /// device-grant bearer token.
-struct CrewAttachment: Decodable, Identifiable, Equatable, Hashable {
+struct CrewAttachment: Codable, Identifiable, Equatable, Hashable {
     let id: String
     let kind: String?
     let mime: String
@@ -47,7 +47,7 @@ struct CrewAttachment: Decodable, Identifiable, Equatable, Hashable {
 /// display line. 形状对齐 edge 的 `crew_announcements` 读模型 —— #63 第二期删掉
 /// edge 那一层之后，唯一的构造点是 `LocalBackend.listCrewWhiteboard`（本地白板
 /// 消息 → 同形 entry），保留这个形状是为了中栏渲染层不必跟着改一遍。
-struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
+struct CrewWhiteboardEntry: Codable, Identifiable, Equatable {
     let id: String
     let senderKind: String          // 'session' | 'user' | 'bot' | ...
     let senderSessionId: String?
@@ -96,7 +96,7 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
     /// `var` + 默认 nil 的理由同 `references`：这个类型被大量测试直接 memberwise 构造。
     var headline: String? = nil
 
-    struct Payload: Decodable, Equatable {
+    struct Payload: Codable, Equatable {
         let text: String?
     }
 
@@ -125,7 +125,7 @@ struct CrewWhiteboardEntry: Decodable, Identifiable, Equatable {
 
 /// The crew roster (`listCrewMembers`). `captainBotId` lets the UI tag which
 /// bot member is the captain.
-struct CrewRoster: Decodable {
+struct CrewRoster: Codable {
     let captainBotId: String?
     let members: [CrewMember]
 
@@ -137,7 +137,7 @@ struct CrewRoster: Decodable {
 
 /// One crew member (a row of `temporary_group_members`). `memberKind` ∈
 /// human / bot / captain / code_session.
-struct CrewMember: Decodable, Identifiable, Equatable {
+struct CrewMember: Codable, Identifiable, Equatable {
     let id: String
     let memberKind: String
     let userId: String?

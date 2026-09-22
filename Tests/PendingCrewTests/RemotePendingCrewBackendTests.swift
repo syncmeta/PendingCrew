@@ -79,14 +79,16 @@ final class RemotePendingCrewBackendTests: XCTestCase {
         defer { remote.disconnect() }
         try await remote.connect()
 
-        XCTAssertEqual(try await remote.listCrews().map(\.id), [created.crewId])
-        XCTAssertEqual(try await remote.chiefLayer()?.id, LocalCrew.chiefCrewId)
-        XCTAssertEqual(try await remote.getCrew(created.crewId).crew.title, "远端数据面")
-        XCTAssertEqual(try await remote.listCrewWhiteboard(crewId: created.crewId), [])
-        XCTAssertEqual(
-            try await remote.listCrewMembers(crewId: created.crewId).members
-                .filter { $0.memberKind == "human" }.count,
-            1)
+        let crews = try await remote.listCrews()
+        let chief = try await remote.chiefLayer()
+        let detail = try await remote.getCrew(created.crewId)
+        let initialWhiteboard = try await remote.listCrewWhiteboard(crewId: created.crewId)
+        let roster = try await remote.listCrewMembers(crewId: created.crewId)
+        XCTAssertEqual(crews.map(\.id), [created.crewId])
+        XCTAssertEqual(chief?.id, LocalCrew.chiefCrewId)
+        XCTAssertEqual(detail.crew.title, "远端数据面")
+        XCTAssertEqual(initialWhiteboard, [])
+        XCTAssertEqual(roster.members.filter { $0.memberKind == "human" }.count, 1)
 
         let changed = expectation(description: "同一 SessionProtocol 连接推白板变化")
         let watcher = Task { @MainActor in
@@ -99,9 +101,10 @@ final class RemotePendingCrewBackendTests: XCTestCase {
         try await eventually {
             protocolServer.crewSubscriptionCount(crewId: created.crewId) == 1
         }
-        XCTAssertNil(try await remote.postCrewMessage(
+        let warning = try await remote.postCrewMessage(
             crewId: created.crewId, text: "来自 iPhone", mentions: [.broadcast],
-            replyToId: nil, localAttachments: [], extraReferences: []))
+            replyToId: nil, localAttachments: [], extraReferences: [])
+        XCTAssertNil(warning)
         await fulfillment(of: [changed], timeout: 2)
 
         let rows = try await remote.listCrewWhiteboard(crewId: created.crewId)
@@ -166,6 +169,55 @@ final class RemotePendingCrewBackendTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("超时"), "实际错误：\(error)")
         }
         XCTAssertEqual(timedOut.pendingRequestCount, 0)
+    }
+
+    func test_concurrentConnectIsSingleFlightAndLateOldHelloCannotWin() async throws {
+        let identity = PairingDeviceIdentity.generate()
+        let peerIdentity = PairingDeviceIdentity.generate()
+        let backend = BackendRef(
+            id: peerIdentity.id, displayName: "Mac",
+            transport: .remote(url: "pendingcrew+tls://example.invalid:7443"))
+        let configuration = RemoteBackendConfiguration(
+            backend: backend, localIdentity: identity,
+            peer: .init(backendID: backend.id, peerDeviceID: peerIdentity.id,
+                        peerPublicSigningKey: peerIdentity.publicSigningKey,
+                        preSharedKey: Data(repeating: 0x22, count: 32)))
+        var links: [CrewRPCStubLink] = []
+        let remote = RemotePendingCrewBackend(
+            configuration: configuration,
+            connector: ClosureSessionMessageLinkConnector {
+                let link = CrewRPCStubLink(automaticallyCompletesHello: false)
+                links.append(link)
+                return link
+            }, requestTimeout: 2)
+
+        let first = Task { try await remote.connect() }
+        let concurrent = Task { try await remote.connect() }
+        try await eventually { links.count == 1 }
+        links[0].deliverHello()
+        try await first.value
+        try await concurrent.value
+        XCTAssertEqual(links.count, 1, "并发 connect 必须共用同一条 in-flight 握手")
+        XCTAssertTrue(remote.isConnected)
+
+        remote.disconnect()
+        let old = Task { try await remote.connect() }
+        try await eventually { links.count == 2 }
+        remote.disconnect()
+        do {
+            try await old.value
+            XCTFail("主动换代必须终止旧握手")
+        } catch { }
+
+        let replacement = Task { try await remote.connect() }
+        try await eventually { links.count == 3 }
+        links[1].deliverHello()
+        await Task.yield()
+        XCTAssertFalse(remote.isConnected, "旧连接迟到的 hello 不能污染当前代")
+        links[2].deliverHello()
+        try await replacement.value
+        XCTAssertTrue(remote.isConnected)
+        remote.disconnect()
     }
 
     private func paths(_ name: String) -> ManualPairingPaths {
@@ -234,15 +286,18 @@ private final class CrewRPCStubLink: SessionMessageLink {
     let isSynchronous = false
     let pendingWriteBytes = 0
     private let codec = SessionProtocolCodec()
+    private let automaticallyCompletesHello: Bool
+    private var receivedHello: SessionAppHello?
+
+    init(automaticallyCompletesHello: Bool = true) {
+        self.automaticallyCompletesHello = automaticallyCompletesHello
+    }
 
     func send(_ framed: Data) {
         guard let message = try? codec.decodeApp(framed) else { return }
         if case let .hello(hello) = message {
-            let response = SessionDaemonMessage.hello(.init(
-                protocolVersion: hello.protocolVersion,
-                daemonBuild: "stub",
-                capabilities: [CrewRPC.capability], sessionCount: 0, pid: 1))
-            if let data = try? codec.encode(response) { onReceive?(data) }
+            receivedHello = hello
+            if automaticallyCompletesHello { deliverHello() }
         }
         // Crew requests intentionally stay pending until the test disconnects or times out.
     }
@@ -252,6 +307,14 @@ private final class CrewRPCStubLink: SessionMessageLink {
     func failRemote() {
         isOpen = false
         onClose?()
+    }
+
+    func deliverHello() {
+        guard let hello = receivedHello else { return }
+        let response = SessionDaemonMessage.hello(.init(
+            protocolVersion: hello.protocolVersion, daemonBuild: "stub",
+            capabilities: [CrewRPC.capability], sessionCount: 0, pid: 1))
+        if let data = try? codec.encode(response) { onReceive?(data) }
     }
 }
 #endif

@@ -5,8 +5,7 @@ import SwiftUI
 ///
 /// **本地为家**（接合 v2，spec 2026-06-10）：
 /// - macOS 上 `backend` **恒为 `LocalBackend`** —— 本地 crew 永远在、永远显示。
-/// - iOS 暂无本地后端（LocalRunner 是 macOS-only）→ `backend` 恒 nil，
-///   等本地后端跨平台后统一。
+/// - iOS 没有本地账本；有持久配对时使用 `RemotePendingCrewBackend`，否则显式报未配置。
 ///
 /// #63 第二期之前这里还挂着整片凭据层（`credential` / `isAuthenticated` /
 /// `imageAuth` / `loggedAPIClient()` / `ensureRunnerHost` / `apiBaseURL` /
@@ -20,16 +19,37 @@ import SwiftUI
 final class AppModel: ObservableObject {
     /// 启动时一次性构造,不在 each-call 时 new(LocalBackend.store 是 shared singleton)。
     private lazy var localBackend: LocalBackend = LocalBackend(store: .shared, whiteboard: .shared)
+    #if os(iOS)
+    private var remoteBackend: RemotePendingCrewBackend?
+    @Published private(set) var backendConfigurationError: String?
+
+    init() { reloadRemoteBackend() }
+
+    func reloadRemoteBackend() {
+        remoteBackend?.disconnect()
+        do {
+            guard let configuration = try RemoteBackendConfiguration.production() else {
+                remoteBackend = nil
+                backendConfigurationError = "尚未配对远端 Mac。请导入 Mac 生成的一次性邀请。"
+                return
+            }
+            remoteBackend = RemotePendingCrewBackend(configuration: configuration)
+            backendConfigurationError = nil
+        } catch {
+            remoteBackend = nil
+            backendConfigurationError = "远端配置不可用：\(error.localizedDescription)"
+        }
+    }
+    #endif
 
     /// 当前生效的 backend。
     /// - macOS:恒为 `LocalBackend` —— 本地 crew 是常驻 home。
-    /// - iOS:**恒 nil**(空壳)。LocalRunner 是 macOS-only,而云端那条路随 #63
-    ///   第二期整层删除；等本地后端跨平台后统一成恒本地。
+    /// - iOS:从 Keychain 身份 + trust/backend 持久记录构造安全远端 backend。
     var backend: PendingCrewBackend? {
         #if os(macOS)
         return localBackend
         #else
-        return nil
+        return remoteBackend
         #endif
     }
 }

@@ -23,7 +23,7 @@ extension SessionMessageLink {
     var terminalErrorDescription: String? { nil }
 }
 
-/// Smallest cross-platform construction seam required by a future iOS viewer.
+/// Cross-platform construction seam shared by the macOS viewer and iOS crew data client.
 @MainActor
 protocol SessionMessageLinkConnecting {
     func connect() throws -> any SessionMessageLink

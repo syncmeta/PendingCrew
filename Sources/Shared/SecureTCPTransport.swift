@@ -1,5 +1,5 @@
-#if os(macOS)
 import CryptoKit
+import Darwin
 import Foundation
 import Network
 import Security
@@ -238,6 +238,9 @@ enum DevicePairingPaths {
     static var trustedPeers: URL { directory.appendingPathComponent("trusted-peers.json") }
     static var exchangeLedger: URL { directory.appendingPathComponent("exchange-ledger.json") }
     static var listenerSettings: URL { directory.appendingPathComponent("listener.json") }
+    static var backendRegistry: URL {
+        PendingCrewDataRoot.subdirectory("backends").appendingPathComponent("registry.json")
+    }
 }
 
 // MARK: - TLS connection
@@ -585,4 +588,3 @@ final class SecureTCPListener {
         }
     }
 }
-#endif

@@ -771,7 +771,7 @@ struct CrewChatView: View {
     // #63 第二期之前这里还先取 `AppModel.currentUserId`（edge 回填的真实账号
     // id），为的是让 relay 从其它设备回流的、同一账号发的消息也认成"我"。
     // 云端整层删掉后本机没有账号概念了，那一层跟着去掉。
-    // iOS: 暂无本地后端（`backend` 恒 nil）→ 没有作者身份可言。
+    // iOS 远端数据面本批不提供 subject 身份目录，沿用无本地作者身份的展示。
     private var localUserId: String? {
         #if os(macOS)
         return LocalWhiteboardStore.localUserId
@@ -1437,7 +1437,7 @@ struct CrewChatView: View {
             }
             #else
             // iOS 侧的附件通道是 edge 上传（拿 id 再随消息发），随 #63 第二期一起
-            // 删掉了 —— iOS 自第一期起已是空壳（`AppModel.backend` 恒 nil）。
+            // iOS 远端数据面本批明确不支持附件；不能把手机路径发给 Mac 账本。
             // 这里不再上传，选中的文件在下面 discardStaging 时清掉。
             if !toUpload.isEmpty {
                 loadError = "这个平台暂不支持群聊附件"

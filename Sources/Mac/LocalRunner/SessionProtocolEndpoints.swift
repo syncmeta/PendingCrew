@@ -24,6 +24,7 @@ final class SessionProtocolServer {
         /// 只有**跟得上跟不上是个问题**的链路才需要背压队列（§5.4）。同进程直调
         /// 那条链路永远不会落后一拍——给它排队等于凭空造一个不存在的中间态。
         var queues: [UInt32: SessionAttachQueue] = [:]
+        var crewSubscriptions: [String: Task<Void, Never>] = [:]
         var pumpScheduled = false
         /// 最近一次**收到**对端字节的时刻。半开链路回收的唯一判据（§4.5
         /// `daemonIdleTimeout`）—— 只认「收到」，不认「我们发出去了」：往一条
@@ -69,6 +70,8 @@ final class SessionProtocolServer {
     /// viewer 发来的编排请求（起 session / 停 / 移除 / 切档位）。daemon 接上编排层；
     /// 同进程桥不接（那边 UI 直接调 runner）。
     var onOrchestrationRequest: ((SessionControl) -> Void)?
+    /// daemon 的唯一 crew 账本。只由生产 daemon 接入 `LocalBackend`；viewer 不写文件。
+    var crewBackend: (any PendingCrewBackend)?
 
     var connectionCount: Int { connections.count }
     var sessionCount: Int { records.count }
@@ -147,6 +150,8 @@ final class SessionProtocolServer {
     /// 对端消失 → 该 viewer 的 handle 全作废、停止推字节。**session 照常跑。**
     func dropConnection(_ key: ObjectIdentifier) {
         guard let connection = connections.removeValue(forKey: key) else { return }
+        connection.crewSubscriptions.values.forEach { $0.cancel() }
+        connection.crewSubscriptions.removeAll()
         for handle in connection.handles {
             if let sessionId = sessionByHandle.removeValue(forKey: handle) {
                 records[sessionId]?.handles.remove(handle)
@@ -320,7 +325,9 @@ final class SessionProtocolServer {
                 (backend as? SessionProtocolTerminalControlling)?.sendRaw(value.bytes)
             }
         case let .control(value):
-            if SessionOrchestrationOp.isOrchestration(value.op) {
+            if CrewRPC.Op.isCrew(value.op) {
+                handleCrewRPC(value, on: connection)
+            } else if SessionOrchestrationOp.isOrchestration(value.op) {
                 handleOrchestration(value)
             } else {
                 handleControl(value, on: connection)
@@ -488,6 +495,93 @@ final class SessionProtocolServer {
     private func handleOrchestration(_ control: SessionControl) {
         onOrchestrationRequest?(control)
     }
+
+    // MARK: - Crew data RPC
+
+    func crewSubscriptionCount(crewId: String) -> Int {
+        connections.values.filter { $0.crewSubscriptions[crewId] != nil }.count
+    }
+
+    private func handleCrewRPC(_ control: SessionControl, on connection: Connection) {
+        guard connection.negotiatedCapabilities.contains(CrewRPC.capability) else {
+            sendCrewFailure(control.requestId, "连接没有协商 crew RPC 能力", on: connection)
+            return
+        }
+        guard let backend = crewBackend else {
+            sendCrewFailure(control.requestId, "daemon 未接入 crew 账本", on: connection)
+            return
+        }
+        if control.op == CrewRPC.Op.subscribeWhiteboard {
+            do {
+                let value: CrewRPC.CrewID = try decodeCrewArguments(control)
+                connection.crewSubscriptions[value.crewId]?.cancel()
+                connection.crewSubscriptions[value.crewId] = Task { @MainActor [weak self, weak connection] in
+                    for await _ in backend.whiteboardChanges(crewId: value.crewId) {
+                        guard !Task.isCancelled, let self, let connection else { return }
+                        self.send(.event(.init(
+                            kind: CrewRPC.whiteboardChangedEvent, requestId: nil,
+                            fields: ["crewId": .string(value.crewId)])), on: connection)
+                    }
+                }
+            } catch { sendCrewFailure(control.requestId, error.localizedDescription, on: connection) }
+            return
+        }
+        guard let requestID = control.requestId else { return }
+        Task { @MainActor [weak self, weak connection] in
+            guard let self, let connection else { return }
+            do {
+                let payload: Data
+                switch control.op {
+                case CrewRPC.Op.listCrews:
+                    payload = try JSONEncoder().encode(try await backend.listCrews())
+                case CrewRPC.Op.chiefLayer:
+                    payload = try JSONEncoder().encode(
+                        CrewRPCOptional(value: try await backend.chiefLayer()))
+                case CrewRPC.Op.getCrew:
+                    let value: CrewRPC.CrewID = try self.decodeCrewArguments(control)
+                    payload = try JSONEncoder().encode(try await backend.getCrew(value.crewId))
+                case CrewRPC.Op.listWhiteboard:
+                    let value: CrewRPC.CrewID = try self.decodeCrewArguments(control)
+                    payload = try JSONEncoder().encode(
+                        try await backend.listCrewWhiteboard(crewId: value.crewId))
+                case CrewRPC.Op.listMembers:
+                    let value: CrewRPC.CrewID = try self.decodeCrewArguments(control)
+                    payload = try JSONEncoder().encode(
+                        try await backend.listCrewMembers(crewId: value.crewId))
+                case CrewRPC.Op.postMessage:
+                    let value: CrewRPC.PostMessage = try self.decodeCrewArguments(control)
+                    let warning = try await backend.postCrewMessage(
+                        crewId: value.crewId, text: value.text, mentions: value.mentions,
+                        replyToId: value.replyToId, localAttachments: [],
+                        extraReferences: value.extraReferences)
+                    payload = try JSONEncoder().encode(CrewRPC.PostResult(warning: warning))
+                default:
+                    throw CrewRPCError.unsupported("不支持的远端 crew 操作：\(control.op)")
+                }
+                self.send(.event(.init(
+                    kind: CrewRPC.resultEvent, requestId: requestID,
+                    fields: ["payload": .string(payload.base64EncodedString())])), on: connection)
+            } catch {
+                self.sendCrewFailure(requestID, error.localizedDescription, on: connection)
+            }
+        }
+    }
+
+    private func decodeCrewArguments<Value: Decodable>(_ control: SessionControl) throws -> Value {
+        guard case let .string(raw)? = control.arguments["payload"],
+              let data = Data(base64Encoded: raw) else { throw CrewRPCError.invalidResponse }
+        return try JSONDecoder().decode(Value.self, from: data)
+    }
+
+    private func sendCrewFailure(
+        _ requestID: String?, _ reason: String, on connection: Connection
+    ) {
+        guard let requestID else { return }
+        send(.event(.init(kind: CrewRPC.resultEvent, requestId: requestID,
+                          fields: ["error": .string(reason)])), on: connection)
+    }
+
+    private struct CrewRPCOptional<Value: Codable>: Codable { var value: Value? }
 
     // MARK: - 背压泵
 
@@ -979,9 +1073,4 @@ enum SessionOrchestrationOp {
     static func isOrchestration(_ op: String) -> Bool { op.hasPrefix("orchestration.") }
 }
 
-/// 协议版本。**改它需要在 PR 里写明为什么不可避免**（§4.4）——「新增消息」「新增
-/// 字段」「新增能力」三种都不许 +1，只有「改帧头布局 / 改字段语义 / 删字段」才算。
-enum SessionProtocolVersion {
-    static let current = 1
-}
 #endif

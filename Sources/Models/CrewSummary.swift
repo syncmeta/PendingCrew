@@ -8,7 +8,7 @@ import Foundation
 /// `runtimeLocation` 是字符串而不是 enum —— spec v2 §6.2 留了 v1.1
 /// 后续新增 location kind 的余地，client 端遇到没见过的值应当回落
 /// 显示原始字符串，不应 decode 失败。
-struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
+struct CrewSummary: Codable, Identifiable, Equatable, Hashable {
     let id: String
     let title: String
     let responsibleSubjectId: String
@@ -29,7 +29,7 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
     let rootCrewTitles: [String]
 
     /// `rootCrews` 的 wire 形状（id + 名字）。只取名字用，id 留着将来点标注跳转。
-    struct RootCrewRef: Decodable, Equatable, Hashable {
+    struct RootCrewRef: Codable, Equatable, Hashable {
         let crewId: String
         let title: String
     }
@@ -107,6 +107,26 @@ struct CrewSummary: Decodable, Identifiable, Equatable, Hashable {
         machineId = try c.decodeIfPresent(String.self, forKey: .machineId)
         attentionReason = try c.decodeIfPresent(String.self, forKey: .attentionReason)
         manuallyHiddenAt = try c.decodeIfPresent(String.self, forKey: .manuallyHiddenAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(responsibleSubjectId, forKey: .responsibleSubjectId)
+        try c.encode(runtimeLocation, forKey: .runtimeLocation)
+        try c.encodeIfPresent(captainBotId, forKey: .captainBotId)
+        try c.encodeIfPresent(status, forKey: .status)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encode(parentCrewIds, forKey: .parentCrewIds)
+        try c.encode(rootCrewTitles.enumerated().map {
+            RootCrewRef(crewId: "root-\($0.offset)", title: $0.element)
+        }, forKey: .rootCrews)
+        try c.encodeIfPresent(captainAgentKind, forKey: .captainAgentKind)
+        try c.encodeIfPresent(machineId, forKey: .machineId)
+        try c.encodeIfPresent(attentionReason, forKey: .attentionReason)
+        try c.encodeIfPresent(manuallyHiddenAt, forKey: .manuallyHiddenAt)
     }
 
     private enum CodingKeys: String, CodingKey {

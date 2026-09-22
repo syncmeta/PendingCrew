@@ -5,7 +5,7 @@ import Combine
 ///
 /// **#63 第二期起只剩一个实现**：`LocalBackend`，macOS 上的常驻 home ——
 /// crew CRUD / 白板 / 花名册全走它。原来还有一个 `EdgeBackend`（登录态的云端
-/// API 面），随跨端遥控整层删除。iOS 上 `AppModel.backend` 恒 nil。
+/// API 面），随跨端遥控整层删除。#121 起 iOS 的第二个实现通过配对 Mac 的安全长连接供数。
 ///
 /// protocol 留着而不是把 `LocalBackend` 直接暴露给 UI：人类原话是「以后前后端
 /// 解耦时重新做」—— 那一刀落下来时，第二个实现会重新出现在这个位置。

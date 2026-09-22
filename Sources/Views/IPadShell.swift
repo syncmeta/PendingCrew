@@ -26,6 +26,7 @@ struct IPadShell: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var selectedCrewId: String?
+    @State private var showingPairing = false
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -33,11 +34,21 @@ struct IPadShell: View {
         NavigationSplitView {
             CrewListView(selection: $selectedCrewId)
                 .navigationTitle("机组")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("连接 Mac", systemImage: "link") { showingPairing = true }
+                    }
+                }
         } detail: {
             detail
         }
         .onChange(of: selectedCrewId) { _, id in
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
+        }
+        .sheet(isPresented: $showingPairing) {
+            IOSRemotePairingView()
+                .environmentObject(appModel)
+                .environmentObject(crewStore)
         }
     }
 

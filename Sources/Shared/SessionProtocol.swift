@@ -1,5 +1,8 @@
-#if os(macOS)
 import Foundation
+
+/// Additive messages/capabilities do not change this value; only incompatible frame/semantic
+/// changes do. Shared because iOS and macOS negotiate the same protocol.
+enum SessionProtocolVersion { static let current = 1 }
 
 // MARK: - Wire frames (§4.1)
 
@@ -629,4 +632,3 @@ enum SessionCompatibility: Equatable {
             app: appCapabilities, daemon: daemonCapabilities))
     }
 }
-#endif

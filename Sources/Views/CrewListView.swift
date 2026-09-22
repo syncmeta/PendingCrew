@@ -33,18 +33,24 @@ struct CrewListView: View {
     /// 空态文案要诚实。旧文案是「还没有 crew / 新建一个来开始」——在 iPhone
     /// 上这两句都不成立：iPhone/iPad 上根本没有「新建」入口（`CreateCrewSheet`
     /// 是 macOS-only），而列表空的真实原因通常不是「没有 crew」，是
-    /// **crew 存在 Mac 本机**（`AppModel.backend` 在 macOS 上是 LocalBackend，
-    /// 在 iOS 上 **恒 nil** —— 本地后端是 macOS-only，云端那条路已随 #63 第二期
-    /// 整层删除）。照旧文案念，人会一直在手机上找那个不存在的「+」。
+    /// **远端尚未配对或当前不可达**。这两类都必须显示原因与重试，不能冒充“没有 crew”。
     @ViewBuilder
     private var emptyOverlay: some View {
         if crewStore.loadingList {
             ProgressView()
+        } else if let error = crewStore.error {
+            ContentUnavailableView {
+                Label("远端连接不可用", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(error)
+            } actions: {
+                Button("重试") { Task { await crewStore.refreshList() } }
+            }
         } else {
             ContentUnavailableView {
                 Label("这里还没有 crew", systemImage: "person.2.slash")
             } description: {
-                Text("这份列表只显示**已接入云端**的 crew。在 Mac 上新建的 crew 默认只存在那台 Mac 上，要在这儿看到它，先去 Mac 的 crew 详情里把它接入。")
+                Text("远端 Mac 当前没有可显示的 crew。")
             }
         }
     }

@@ -259,6 +259,7 @@ final class CrewStore: ObservableObject {
 
     func refreshList() async {
         startRenameWatchIfNeeded()   // crew-naming：首刷时挂上改名监听（仅 macOS，幂等）
+        error = nil
         guard let backend = currentBackend() else { return }
         loadingList = true
         defer { loadingList = false }
@@ -267,6 +268,7 @@ final class CrewStore: ObservableObject {
             crews = result
             // 总机组那一层单独取 —— 它按口径不在上面那份列表里。
             chiefLayer = try await backend.chiefLayer()
+            error = nil
             // 列表变了（新 crew / 删掉的 crew）→ 末条消息快照跟着补齐一次，
             // 否则新 crew 的预览要等下一次目录 tick 才出现。
             refreshLastWhiteboardMessages()
@@ -278,6 +280,12 @@ final class CrewStore: ObservableObject {
             }
         } catch {
             self.error = "加载 crew 列表失败：\(error.localizedDescription)"
+            #if os(iOS)
+            // A disconnected phone must not keep presenting the last Mac roster as current.
+            // Clearing exposes the explicit error/retry empty state instead of a stale fake list.
+            crews = []
+            chiefLayer = nil
+            #endif
         }
     }
 
@@ -451,10 +459,14 @@ final class CrewStore: ObservableObject {
     // MARK: - Internals
 
     /// 拿当前生效的 backend;nil 时设 error 给 UI 显示。
-    /// macOS 恒 `LocalBackend`;iOS 恒 nil（空壳）。
+    /// macOS 恒 `LocalBackend`;iOS 必须已有持久配对配置，否则把原因显式给 UI。
     private func currentBackend() -> PendingCrewBackend? {
         guard let backend = appModel.backend else {
+            #if os(iOS)
+            self.error = appModel.backendConfigurationError ?? "未配置远端 backend"
+            #else
             self.error = "未配置 backend(凭据缺失)"
+            #endif
             return nil
         }
         return backend

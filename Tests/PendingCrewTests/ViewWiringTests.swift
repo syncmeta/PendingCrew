@@ -432,6 +432,44 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(shared.contains("enum ManualPairingTextCodec"))
     }
 
+    /// #121 第四批：行为测试证明了真实 TLS/RPC；这条只锁生产 caller，防止绿零件
+    /// 没有被 iOS 根状态、配对入口和 daemon 唯一账本接上。
+    func testIOSRemoteCrewDataPlaneIsWiredIntoProductionCallers() throws {
+        let appModel = Self.codeOnly(try Self.text(of: "AppModel.swift"))
+        let pairing = Self.codeOnly(try Self.text(of: "IOSRemotePairingView.swift"))
+        let shell = Self.codeOnly(try Self.text(of: "IPadShell.swift"))
+        let list = Self.codeOnly(try Self.text(of: "CrewListView.swift"))
+        let store = Self.codeOnly(try Self.text(of: "CrewStore.swift"))
+        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+        let server = try Self.projectText(of: "Sources/Mac/LocalRunner/SessionProtocolEndpoints.swift")
+
+        XCTAssertTrue(appModel.contains("RemoteBackendConfiguration.production()"))
+        XCTAssertTrue(appModel.contains("RemotePendingCrewBackend(configuration:"))
+        XCTAssertFalse(appModel.contains("return nil\n        #endif"),
+                       "iOS AppModel.backend 又退回恒 nil 空壳")
+        XCTAssertTrue(pairing.contains("ManualPairingCoordinator.production()"))
+        XCTAssertTrue(pairing.contains("appModel.reloadRemoteBackend()"))
+        XCTAssertTrue(pairing.contains("crewStore.refreshList()"),
+                      "首次配对后没有主动刷新，启动时跑过的 .task 不会再来")
+        XCTAssertTrue(shell.contains("IOSRemotePairingView()"))
+        XCTAssertTrue(list.contains("Button(\"重试\")"))
+        XCTAssertTrue(store.contains("error = nil"), "列表重试仍会显示上一轮错误")
+        XCTAssertTrue(daemon.contains("host.server.crewBackend = model.backend"),
+                      "daemon 没把唯一 LocalBackend 账本接到 crew RPC")
+        XCTAssertTrue(server.contains("backend.postCrewMessage("),
+                      "远端 post 没有直达 daemon backend")
+
+        for path in [
+            "Sources/Shared/SessionProtocol.swift",
+            "Sources/Shared/SecureTCPTransport.swift",
+            "Sources/Shared/ManualPairingCoordinator.swift",
+            "Sources/Shared/CrewRPC.swift",
+        ] {
+            XCTAssertFalse(try Self.projectText(of: path).contains("#if os(macOS)"),
+                           "\(path) 仍被 macOS-only 条件锁住")
+        }
+    }
+
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
     func testCloseButtonStyleIsDefinedOnlyOnce() throws {
         for file in ["CockpitView.swift"] {
