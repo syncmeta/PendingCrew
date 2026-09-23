@@ -198,6 +198,23 @@ final class LocalAgentSessionStoreTests: XCTestCase {
         XCTAssertEqual(s.list().count, 0)
     }
 
+    /// Todo #150：选回 Codex 默认必须清掉旧的显式 model 覆盖；effort、会话号和
+    /// 工作目录仍然保留。否则菜单看似选了默认，下一次 @ 唤醒还是旧模型。
+    func test_清掉模型覆盖但保留其它恢复信息() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "w1", kind: "codex",
+                 agentSessionId: "thread-1", workingDirectory: "/tmp/wd",
+                 model: "gpt-5.5", effort: "high")
+
+        s.clearModelOverride(crewId: "c", sessionId: "w1")
+
+        let r = s.record(crewId: "c", sessionId: "w1")
+        XCTAssertNil(r?.model)
+        XCTAssertEqual(r?.effort, "high")
+        XCTAssertEqual(r?.agentSessionId, "thread-1")
+        XCTAssertEqual(r?.workingDirectory, "/tmp/wd")
+    }
+
     /// 旧账本（没有这两个字段）照样解得开，解成 nil。
     func test_旧记录解得开且档位为nil() throws {
         let dir = tempDir()

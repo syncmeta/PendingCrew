@@ -228,6 +228,25 @@ final class AgentModelCatalogTests: XCTestCase {
         XCTAssertTrue(table.knowsEffort("ultra"), "不指定模型时退表级并集")
     }
 
+    /// Todo #150："Codex 默认"是一个可选择的模型来源，不是今天解析出来的某个
+    /// slug。用户配置有 model 时尊重配置；没有时跟随 model/list 的 isDefault。
+    func testCodexDefaultSelectionPrefersConfigThenLiveCatalog() throws {
+        let table = try XCTUnwrap(CodexModelProbeParser.table(
+            result: codexResult, probedAt: at("2026-08-09T00:00:00Z")))
+        let catalog = AgentModelCatalogFile(codex: table)
+
+        XCTAssertEqual(
+            SessionLaunchOptions.codexDefaultModel(
+                configuredModel: "gpt-5.5", catalog: catalog),
+            "gpt-5.5",
+            "显式 Codex 配置是默认解析链的高优先级，不能被 catalog 覆盖")
+        XCTAssertEqual(
+            SessionLaunchOptions.codexDefaultModel(
+                configuredModel: nil, catalog: catalog),
+            "gpt-5.6-sol",
+            "未配置 model 时必须跟随 Codex model/list 的 isDefault，而不是写死 slug")
+    }
+
     func testCodexMalformedResultYieldsNil() {
         XCTAssertNil(CodexModelProbeParser.table(result: nil, probedAt: Date()))
         XCTAssertNil(CodexModelProbeParser.table(result: ["data": []], probedAt: Date()))

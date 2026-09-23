@@ -536,6 +536,14 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(view.contains("// 第三排：Codex 原生审批模式"))
         XCTAssertTrue(view.contains("private var modelMenu"), "模型没有独立手动菜单")
         XCTAssertTrue(view.contains("private var effortMenu"), "effort 没有独立手动菜单")
+        XCTAssertTrue(view.contains("跟随 Codex 默认"),
+                      "模型菜单没有恢复到 Codex 当前默认的明确入口")
+
+        let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("clearModelOverride("),
+                      "选择 Codex 默认后没有清掉持久模型覆盖，重启还会回到旧模型")
+        XCTAssertTrue(runner.contains("codexDefaultModelSelection"),
+                      "UI 的默认选项没有传到真正的运行时切换编排")
 
         let codex = try Self.text(of: "CodexTranscriptView.swift")
         let presentation = try Self.text(of: "CodexThreadItem.swift")
