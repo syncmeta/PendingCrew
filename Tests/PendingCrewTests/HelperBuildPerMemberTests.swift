@@ -10,8 +10,9 @@ import Darwin
 ///
 /// 这一族分三截：
 ///   ① 纯判定（三态，读不出来 ≠ 一样）；
-///   ② **真进程**：把一份真的 PendingCrew 可执行文件拷到临时目录、以 `--mcp-serve`
-///      起起来，再照 Sparkle 的形状把包挪走、原路径换上新的 —— 必须判成「旧」；
+///   ② **真进程**：把独立系统 Mach-O 拷进临时 App、命名为 PendingCrew 并带
+///      `--mcp-serve` argv 起起来，再照 Sparkle 的形状把包挪走、原路径换上新的 ——
+///      必须判成「旧」；
 ///   ③ 接线：点名那一列、界面那枚标、编排者每拍写快照那一行，少一处就红。
 final class HelperBuildPerMemberTests: XCTestCase {
 
@@ -157,20 +158,18 @@ final class HelperBuildPerMemberTests: XCTestCase {
         XCTAssertNil(HelperProcessForensics.parseProcArgs(bytes), "argc 说 5 个、实际 1 个 → 解不出来")
     }
 
-    // MARK: - ② 真进程：真的 PendingCrew 二进制、真的 --mcp-serve、真的挪包
+    // MARK: - ② 真进程：独立 Mach-O、真实 helper argv、真实挪包
 
-    /// 找一份真的 PendingCrew 可执行文件。优先同一次构建的产物（test bundle 旁边那个 app），
-    /// 其次本机装的。
-    private func realExecutable() throws -> URL {
-        let products = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
-        let candidates = [
-            products.appendingPathComponent("PendingCrew.app/Contents/MacOS/PendingCrew"),
-            URL(fileURLWithPath: "/Applications/PendingCrew.app/Contents/MacOS/PendingCrew"),
-        ]
-        guard let hit = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
-            throw XCTSkip("本机找不到任何一份 PendingCrew 可执行文件（\(candidates.map(\.path))），真进程这条跑不了")
+    /// 用不依赖 Xcode 调试 App 包内部 dylib 的系统 Mach-O 造真进程夹具。拷贝后仍命名为
+    /// `PendingCrew`，所以覆盖扫描器的进程名、argv、vnode 与包移动行为；`read` 由管道
+    /// 写端保活。直接拷测试构建的 PendingCrew 会在部分 Xcode 版本里随包移动退出，测到
+    /// 调试产物装载方式而不是这里的进程取证。
+    private func processFixtureExecutable() throws -> URL {
+        let shell = URL(fileURLWithPath: "/bin/sh")
+        guard FileManager.default.isExecutableFile(atPath: shell.path) else {
+            throw XCTSkip("本机找不到 /bin/sh，真进程这条跑不了")
         }
-        return hit
+        return shell
     }
 
     /// 在 `root` 下造一个 `PendingCrew.app`：可执行文件是真二进制的拷贝（`extraBytes`
@@ -207,7 +206,7 @@ final class HelperBuildPerMemberTests: XCTestCase {
     }
 
     func test_真进程_Sparkle把包挪走换上新版_argv路径没变_必须判旧() throws {
-        let exe = try realExecutable()
+        let exe = try processFixtureExecutable()
         let root = tempDir("sparkle")
         let apps = root.appendingPathComponent("Applications")
         let data = root.appendingPathComponent("data")
@@ -217,7 +216,7 @@ final class HelperBuildPerMemberTests: XCTestCase {
         let session = "helper-member-real-\(UUID().uuidString)"
         let proc = Process()
         proc.executableURL = installed
-        proc.arguments = ["--mcp-serve", "--crew", "c-real", "--dir", data.path,
+        proc.arguments = ["-c", "read _", "--mcp-serve", "--crew", "c-real", "--dir", data.path,
                           "--session", session, "--agent", "claude"]
         var env = ProcessInfo.processInfo.environment
         env["PENDINGCREW_DATA_DIR"] = data.path   // 绝不碰真数据目录
