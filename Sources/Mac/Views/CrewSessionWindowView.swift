@@ -1397,8 +1397,27 @@ private struct SessionProfileControl: View {
         SessionLaunchOptions.efforts(for: run.kind, catalog: catalog.file)
     }
 
+    private var codexDefaultModel: String? {
+        guard run.kind == .codex else { return nil }
+        return SessionLaunchOptions.codexDefaultModel(catalog: catalog.file)
+    }
+
     private var modelMenu: some View {
         Menu {
+            if run.kind == .codex {
+                Button {
+                    onSwitch(SessionLaunchOptions.codexDefaultModelSelection, nil)
+                } label: {
+                    let suffix = codexDefaultModel.map {
+                        "（\(SessionLaunchOptions.displayName(for: $0, catalog: catalog.file))）"
+                    } ?? ""
+                    // `run.model` 是当前实际 slug，无法区分「默认解析到它」和
+                    // 「人显式选了同一个 slug」。这里不画假 checkmark；点击本行会
+                    // 明确清掉持久覆盖，成功回执再说明已进入跟随状态。
+                    Text("跟随 Codex 默认\(suffix)")
+                }
+                Divider()
+            }
             ForEach(availableModels, id: \.self) { model in
                 Button {
                     if model != run.model { onSwitch(model, nil) }
@@ -1417,7 +1436,9 @@ private struct SessionProfileControl: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(run.status != .running)
-        .help("手动选择这个 session 的模型")
+        .help(run.kind == .codex
+              ? "可跟随 Codex 当前默认；手动选具体模型会为这个 session 保留覆盖"
+              : "手动选择这个 session 的模型")
     }
 
     private var effortMenu: some View {

@@ -570,8 +570,23 @@ final class CrewSessionRunner: ObservableObject {
         }
         // 纯终端没有模型/effort，也不属于 crew agent 编排；不往白板伪造失败回执。
         guard run.kind.isAgent else { return }
+        let followsCodexDefault = run.kind == .codex
+            && req.model == SessionLaunchOptions.codexDefaultModelSelection
+        var requestedModel = req.model
+        if followsCodexDefault {
+            requestedModel = SessionLaunchOptions.codexDefaultModel(
+                catalog: ModelCatalogCenter.shared.file)
+            guard requestedModel?.isEmpty == false else {
+                reportProfileSwitch(
+                    run: run, crewId: req.crewId, applied: [],
+                    failed: ["模型→跟随 Codex 默认：当前模型目录没有给出默认模型"])
+                return
+            }
+        }
         var commands: [SessionProfileSwitchCommand] = []
-        if let m = req.model { commands.append(SessionProfileSwitchCommand(knob: .model, value: m)) }
+        if let m = requestedModel {
+            commands.append(SessionProfileSwitchCommand(knob: .model, value: m))
+        }
         if let e = req.effort { commands.append(SessionProfileSwitchCommand(knob: .effort, value: e)) }
         guard !commands.isEmpty else { return }
 
@@ -590,11 +605,20 @@ final class CrewSessionRunner: ObservableObject {
                 // **落盘**（Todo #146）。在这之前切换只改内存，session 一被重启或
                 // 被 @ 唤醒拉起就回到默认模型（codex 的默认是最贵的那个），
                 // 而且没有任何地方会说它退回去了。
-                LocalAgentSessionStore.shared.recordProfile(
-                    crewId: req.crewId, sessionId: req.sessionId,
-                    model: cmd.knob == .model ? cmd.value : nil,
-                    effort: cmd.knob == .effort ? cmd.value : nil)
-                applied.append(cmd.summary)
+                if cmd.knob == .model, followsCodexDefault {
+                    // app-server 0.153.4 实测：`thread/settings/update` 的 model:null
+                    // 返回成功但保持原模型。因此 live thread 先切到此刻的默认 slug，
+                    // 再清掉持久覆盖；下一次启动继续不传 model，随 Codex 后续默认变化。
+                    LocalAgentSessionStore.shared.clearModelOverride(
+                        crewId: req.crewId, sessionId: req.sessionId)
+                    applied.append("模型→跟随 Codex 默认（\(cmd.value)）")
+                } else {
+                    LocalAgentSessionStore.shared.recordProfile(
+                        crewId: req.crewId, sessionId: req.sessionId,
+                        model: cmd.knob == .model ? cmd.value : nil,
+                        effort: cmd.knob == .effort ? cmd.value : nil)
+                    applied.append(cmd.summary)
+                }
                 // 换模型正是「撞限额后自救」的手段 —— 切成了就别再挂着「⏳ 限额中」。
                 // （活跃度那条恢复判定也会兜到，但这里是确定性的，不等 6s streak。）
                 if run.health?.isQuotaRelated == true { run.rearmQuotaHealth() }

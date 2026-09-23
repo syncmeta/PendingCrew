@@ -124,6 +124,24 @@ final class LocalAgentSessionStore: @unchecked Sendable {
         }
     }
 
+    /// 选回 runner 默认模型时撤掉这个 session 的显式 model 覆盖。只清 model；
+    /// effort、会话号与工作目录仍是恢复所需的独立信息，不能一起抹掉。
+    func clearModelOverride(
+        crewId: String, sessionId: String, now: Date = Date(),
+        onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }
+    ) {
+        withFileLock {
+            var rows = loadLocked(onIncident: onIncident)
+            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(
+                rows, at: fileURL) else { return }
+            guard let i = rows.firstIndex(where: {
+                $0.crewId == crewId && $0.sessionId == sessionId }) else { return }
+            rows[i].model = nil
+            rows[i].updatedAt = ISO8601DateFormatter().string(from: now)
+            MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
+        }
+    }
+
     /// 某个 crew 的全部记录，按 sessionId 索引。**一次取完**：机长点名要给每一行
     /// 附产出证据（Todo #107），逐行现查等于逐行上一次文件锁。
     /// 查不到的 sessionId 在这张表里就是**不存在**，调用方必须自己决定那叫什么 ——
