@@ -485,13 +485,13 @@ skip 通常是 0、路径通常只有一条。于是你会越来越信它。**�
   `SessionMessageLink` 的可靠有序字节流语义；新增 transport 替身把第一帧切成半包、再与第二帧
   粘在同一次投递里。旧代码实跑 6 tests / 4 failures，修后专项 32 / 0；合最新 main 后全量
   1766 tests / 3 个登记 skip / 0 failures，iOS Simulator build 通过。
-- **位置**: `Sources/Mac/LocalRunner/RemoteSessionBackend.swift:567-568`（server 侧 `receive`）、
-  `:855-859`（client 侧 `receive`）、`Sources/Mac/LocalRunner/SessionProtocol.swift:469` / `:486` →
-  `:503-509` `exactlyOneFrame(_:)`。
+- **位置**: 当前实现已迁到 `Sources/Mac/LocalRunner/SessionProtocolEndpoints.swift:15-24`
+  （server 每连接 decoder）与 `:785-795`（client decoder）；帧解码本体在
+  `Sources/Shared/SessionProtocol.swift:84-117`，单帧兼容入口在 `:654-660`。
 - **问题**: 两个 endpoint 收到 `Data` 后都直接 `codec.decodeApp/decodeDaemon`，而它们经 `exactlyOneFrame`
   要求这一次投递**恰好解出一帧**；不满足就 `throw`，调用点是 `guard let … = try? … else { return }`。
   于是**半帧到达 → 丢；两帧粘在一起 → 两帧都丢**。不断连、不报错、不落日志。
-  正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧，`Sources/Mac/LocalRunner/SessionProtocol.swift:81-107`）已经写好了，
+  正确的增量缓冲 `SessionFrameDecoder`（带 `buffer`、能处理半帧，`Sources/Shared/SessionProtocol.swift:84-117`）已经写好了，
   **只是没接到 endpoint 的收包路径上**。
 - **为什么今天照不出来**: `InProcessTransport.sendFromApp/sendFromDaemon` 把整个 `Data` 原样交给对端回调
   （`Sources/Mac/LocalRunner/InProcessTransport.swift:22-30`），投递边界恒等于帧边界。**现有测试全部跑在这条传输上，所以这条永远是绿的。**
