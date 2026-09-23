@@ -254,8 +254,8 @@ final class HelperBuildPerMemberTests: XCTestCase {
                                          to: caches.appendingPathComponent("PendingCrew.app"))
         try makeRealBundle(at: apps, from: exe, version: "0.1.32", commit: "bbbbbbb2222", extraBytes: 64)
 
-        guard let after = HelperProcessForensics.scanHelpers().first(where: { $0.sessionId == session }) else {
-            return XCTFail("换包之后找不到这个 helper 了")
+        guard let after = waitForHelper(session: session) else {
+            return XCTFail("换包之后找不到这个 helper 了 —— 它是否活着：\(proc.isRunning)")
         }
         // 陷阱本身：argv 里的路径跟换包前一字不差，看路径永远判「一样」。
         XCTAssertEqual(after.launchPath, installed.path)
