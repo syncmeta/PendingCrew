@@ -171,6 +171,7 @@ PendingCrew 不同进程组，用户按 ⌘Q 不会连带杀掉它；等待窗�
 
 | 版本 | 闸门 | 结果 |
 | --- | --- | --- |
+| 0.1.38 | 跑了，钉在 `a7837fc` | **2929 例 / 5 skip / 0 失败**，`** TEST SUCCEEDED **`；macOS 与 iOS Simulator build 都过。5 条 skip 逐项是 `AgentTuiFixtureRecorder.testRecord`、两条现场目录基准，以及 macOS 27 上无法区分 `.top` / `.bottom` 的两条旧锚点探针（原因见 `docs/tech-debt.md`）。`CrewChatOpenCostTests` 8 条真执行且 passed；具名失败为空；HEAD / TREE 前后相同；文档引用腐烂 0 条，工程无漂移。**真全绿，含 2 条平台限定 skip。** |
 | 0.1.25 | 跑了，钉在 `6418fe6` | **1987 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。3 条 skip 逐项核过名字：`AgentTuiFixtureRecorder.testRecord`、`CrewLastMessageCacheTests.test_基准_现场白板目录`、`SessionAwaitingReplyInputsCacheTests.test_基准_现场目录`；`CrewChatOpenCostTests` 8 条逐条列名确认真执行且 passed；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
 | 0.1.24 | 跑了，钉在 `f512170` | **1763 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。`CrewChatOpenCostTests` 8 条真执行；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
 | 0.1.23 | 跑了，钉在 `bb7555c` | **1762 例 / 3 skip / 0 失败**，`** TEST SUCCEEDED **`，macOS 与 iOS Simulator build 都过。`CrewChatOpenCostTests` 8 条真执行；具名失败为空；HEAD / TREE 前后逐字相同。**真全绿。** |
