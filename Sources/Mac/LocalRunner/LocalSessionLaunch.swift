@@ -253,6 +253,13 @@ enum LocalSessionLaunch {
         }
         let plans = (quota?.claude?.subscriptionPlanDescription,
                      quota?.codex?.subscriptionPlanDescription)
+        let claudeCapability = CaptainRunnerProbe.inspect(.claudeCode)
+        let codexCapability = CaptainRunnerProbe.inspect(.codex)
+        let runnerBlock = "新机组机长 runner 选择：先核对可执行文件、登录和健康；不可用或未认证者不能因偏好入选。"
+            + "\nClaude Code：\(claudeCapability.summary)"
+            + "\nCodex：\(codexCapability.summary)"
+            + "\n以下情况中新机组机长优先用 Claude Code：\(CaptainRunnerPreferences.get(.claudeCode))"
+            + "\n以下情况中新机组机长优先用 Codex：\(CaptainRunnerPreferences.get(.codex))"
         let ctx = LocalSessionWorldModel.Context(
             sessionTaskBrief: taskBrief,
             runnerKind: {
@@ -272,7 +279,8 @@ enum LocalSessionLaunch {
             parentTitles: parents,
             childTitles: children,
             claudeSubscriptionPlan: plans.0,
-            codexSubscriptionPlan: plans.1)
+            codexSubscriptionPlan: plans.1,
+            captainRunnerBlock: runnerBlock)
         guard var md = try? LocalSessionWorldModel().render(ctx) else { return nil }
         if let persona = appendPersona {
             md += "\n\n---\n\n" + persona

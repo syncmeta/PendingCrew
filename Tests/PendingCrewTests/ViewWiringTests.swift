@@ -799,12 +799,11 @@ final class ViewWiringTests: XCTestCase {
             XCTAssertTrue(version.contains(capability),
                           "挪位置时把「\(capability)」这项能力一起删了 —— 人类要的是换个地方显示")
         }
-        // 人类 Todo #11 加的两条：这块要摊开（不许再靠 popover 才看得见），
-        // 而且每个 harness 都要能指定目录。
+        // 这一块保持直接可见；Todo #152 移除了 CLI 手选目录。
         XCTAssertFalse(version.contains(".popover("),
                        "编码工具那块又变回「点一下才出来」了 —— 人类原话：不希望点击之后再出一个框")
-        XCTAssertTrue(version.contains("LocalCodingAgentExecutable.setOverrideDirectory"),
-                      "「设置目录」没接上：界面上填了也不会改变 CLI 的解析结果")
+        XCTAssertFalse(version.contains("LocalCodingAgentExecutable.setOverrideDirectory"),
+                       "CLI 路径由 PATH 首命中决定，设置不应提供旧的手选目录")
 
         // ④ 「后端」那一页真的接上了模型层（人类 Todo #11 后半 / #121）。
         //

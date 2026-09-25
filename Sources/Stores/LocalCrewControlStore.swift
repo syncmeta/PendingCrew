@@ -179,10 +179,10 @@ final class LocalCrewControlStore: @unchecked Sendable {
     /// 机长以当前 crew 为父建子 crew：brief 必填；title 可选（不给 → app 侧地名占位）。
     @discardableResult
     func enqueueCreateChildCrew(crewId: String, sessionId: String,
-                                brief: String, title: String?) -> Error? {
+                                brief: String, title: String?, runner: String? = nil) -> Error? {
         return enqueue(CrewCommand(
             id: UUID().uuidString.lowercased(), crewId: crewId, kind: "create_child_crew",
-            brief: brief, runner: nil, isolation: nil, title: title,
+            brief: brief, runner: runner, isolation: nil, title: title,
             model: nil, effort: nil, sessionId: sessionId,
             ts: ISO8601DateFormatter().string(from: Date())))
     }

@@ -30,6 +30,7 @@
 		074CE30D6A687574FD5F4C74 /* ReleaseScriptSourceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5854B0F1D0C5BFE1CC85B9F /* ReleaseScriptSourceContractTests.swift */; };
 		07C19E9A91C5B9E92739B610 /* CrewReplayDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 629509CEBA42FDBDEF1C132B /* CrewReplayDeliveryTests.swift */; };
 		092A82A123D30DFE80145B50 /* PromptTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D74B1C537C235EFB0E69DCB /* PromptTemplate.swift */; };
+		093C1FE31933F594F44791AD /* CaptainRunnerPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88BB47BAAC6B3F33DBF3BBD1 /* CaptainRunnerPreferences.swift */; };
 		09912DDF56746C52B61B56F0 /* CrewReportingParent.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA1E023BE4F12FDCCEAACC91 /* CrewReportingParent.swift */; };
 		09B59D5C37D3953440612A34 /* CrewMailboxWakeLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F40D59113575AA4C63F7C17 /* CrewMailboxWakeLogic.swift */; };
 		09E91282CE2D598455F41DAA /* McpServerSelfHealToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2488F0C68EA62227EF2682 /* McpServerSelfHealToolsTests.swift */; };
@@ -222,6 +223,7 @@
 		4B8DFC60B2830824071C9D39 /* CrewChatRefreshGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAA08BEA4EC77F9304EC252 /* CrewChatRefreshGate.swift */; };
 		4BBD947643CE1EEDFA953B4A /* CrewWhiteboardVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 373E64A85EDA4D661F1D2AE0 /* CrewWhiteboardVisibilityTests.swift */; };
 		4D14730A2E6B6FF5AB9EF1B5 /* TerminalScrollbarGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70209890FBBD1D7CBC3C7B4B /* TerminalScrollbarGeometry.swift */; };
+		4E14F14580C7AD4C818AF455 /* Todo152SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804B716662BB0BFF33BE0CA4 /* Todo152SettingsTests.swift */; };
 		4E2752B678EBFC0578257CF5 /* BreathingDotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FDCC99A15C5B160DB0D82DD /* BreathingDotView.swift */; };
 		4E6F6027A843A4140ABE7813 /* SessionMessageLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF1402A3582DC598109B9CBA /* SessionMessageLink.swift */; };
 		4EEAC2578F38635D79A51A1B /* FirstLaunchDisclosureRemovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62010BFA308D94B5E1C8519B /* FirstLaunchDisclosureRemovalTests.swift */; };
@@ -801,6 +803,7 @@
 		FF2B6EE2FD0985DA32E0B491 /* SessionRosterReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0595EC3C2AF4F6D1B66C805F /* SessionRosterReconciliation.swift */; };
 		FF2D6413D1A5798D008A889A /* CrewHiding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13848CD52B154ECC13F01AAA /* CrewHiding.swift */; };
 		FF48D3B747561242FE65B3CD /* McpAddHumanTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0289B7CA9949BA817F748B6A /* McpAddHumanTodoTests.swift */; };
+		FF58C8EF769FBFB39F76FDCE /* CaptainRunnerPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88BB47BAAC6B3F33DBF3BBD1 /* CaptainRunnerPreferences.swift */; };
 		FF9BE8106C80F0581C04480D /* CrewLocalAttachmentPersistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FB6CBB0B9FAA3C6B00383E6 /* CrewLocalAttachmentPersistTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -1101,6 +1104,7 @@
 		7FBF4A0076FC9AEFACAF381A /* CrewLocalMentionWakePinTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalMentionWakePinTests.swift; sourceTree = "<group>"; };
 		7FDB2CB78C24C1101D76D13A /* CrewArrangementStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewArrangementStore.swift; sourceTree = "<group>"; };
 		80172010A448EB0BA8409F61 /* CrewLocalWhiteboardMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalWhiteboardMapping.swift; sourceTree = "<group>"; };
+		804B716662BB0BFF33BE0CA4 /* Todo152SettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo152SettingsTests.swift; sourceTree = "<group>"; };
 		80B1D98B47459ECA53FA1B5A /* CrewLocalTodoLanding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewLocalTodoLanding.swift; sourceTree = "<group>"; };
 		845C8C15B805012BF7FD6165 /* CrewCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewCenterView.swift; sourceTree = "<group>"; };
 		847C19FA2408D1E82949B72B /* PendingRequestQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingRequestQueue.swift; sourceTree = "<group>"; };
@@ -1109,6 +1113,7 @@
 		86FFD5638EE3356AB12E632B /* CrewMentionFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMentionFilterTests.swift; sourceTree = "<group>"; };
 		87E5A371B34927F6567957C3 /* SessionTurnTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTurnTraceTests.swift; sourceTree = "<group>"; };
 		87F000A18A5E886FA706EC9B /* session-world-model.zh.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "session-world-model.zh.md"; sourceTree = "<group>"; };
+		88BB47BAAC6B3F33DBF3BBD1 /* CaptainRunnerPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptainRunnerPreferences.swift; sourceTree = "<group>"; };
 		893AB7E42899FC40BD581E15 /* TodoEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoEvidence.swift; sourceTree = "<group>"; };
 		898C59DF68CE3C7C8872DF67 /* PlatformModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformModifiers.swift; sourceTree = "<group>"; };
 		8A058D5FFDE599BD1ECA7BF7 /* HelperBuildStalenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperBuildStalenessTests.swift; sourceTree = "<group>"; };
@@ -1409,6 +1414,7 @@
 				273C6B29B357837414F42C68 /* BackendUpdateCoordinator.swift */,
 				E9F8081B6B56259BF3FA5ECE /* BackendUpdatePlan.swift */,
 				EAA032E4E4C0344CB2F7DC87 /* CaptainLaunchReadiness.swift */,
+				88BB47BAAC6B3F33DBF3BBD1 /* CaptainRunnerPreferences.swift */,
 				B7DE2287BFFB9A08A603D329 /* CodexTranscriptText.swift */,
 				2542D7AD06F6553F9AAE42FD /* CrewDeferredWakeQueue.swift */,
 				9AC04B12A737E3391063187B /* CrewListenLogic.swift */,
@@ -2031,6 +2037,7 @@
 				F271252C46BEA6D06D53C893 /* TerminatedScrollbackTests.swift */,
 				FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */,
 				7A6EA1DC19E214535D977D7E /* TestProcessDataRootIsolationTests.swift */,
+				804B716662BB0BFF33BE0CA4 /* Todo152SettingsTests.swift */,
 				5F61A2A28F398965D5910AB1 /* TodoBlockedOnHumanTests.swift */,
 				DEEC8DFFE4A0BF5D7D9FD457 /* TodoDroppedAndAttentionTests.swift */,
 				A66BE415A2B49FD3458C071F /* TodoEvidenceTests.swift */,
@@ -2363,6 +2370,7 @@
 				EB208259C8981DA12637281D /* CaptainDelegationPolicyStore.swift in Sources */,
 				623576E897AB90BF271813B7 /* CaptainHandoffSite.swift in Sources */,
 				9B61648DEF05B681DDC54315 /* CaptainLaunchReadiness.swift in Sources */,
+				093C1FE31933F594F44791AD /* CaptainRunnerPreferences.swift in Sources */,
 				827AE4A12634BCEFAD3456FB /* CaptainTemplateEditorSheet.swift in Sources */,
 				7CF0B6C668567CC7BF21CEDC /* CaptainTemplateStore.swift in Sources */,
 				FA228C0F2A8E097C993B9AB7 /* CaptainTodoSweep.swift in Sources */,
@@ -2700,6 +2708,7 @@
 				944E034728CA3E9A935459BA /* CaptainLaunchReadiness.swift in Sources */,
 				E49479EB00229041C305AC29 /* CaptainLaunchReadinessTests.swift in Sources */,
 				CAAEAE683DD9887B5A0FABEC /* CaptainOrgToolsTests.swift in Sources */,
+				FF58C8EF769FBFB39F76FDCE /* CaptainRunnerPreferences.swift in Sources */,
 				B26F19202FCFA86F3E5B59FC /* CaptainTodoSweep.swift in Sources */,
 				3217A0AA885D0AA6E9039B92 /* CaptainTodoSweepStore.swift in Sources */,
 				9A9FF63C83543B7B090B3819 /* CaptainTodoSweepTests.swift in Sources */,
@@ -3091,6 +3100,7 @@
 				DC9D8ED0E4C2E7253B1AA188 /* TestProcessDataRootIsolationTests.swift in Sources */,
 				76FCFFEEC8113478FD61D7E2 /* Theme.swift in Sources */,
 				FCA3F72E6F463DDB21D29D85 /* ThemeCrewExtras.swift in Sources */,
+				4E14F14580C7AD4C818AF455 /* Todo152SettingsTests.swift in Sources */,
 				1B356BCCE23E5E083F21E560 /* TodoBlockedOnHumanTests.swift in Sources */,
 				5204C280C5DE18FF07551206 /* TodoDroppedAndAttentionTests.swift in Sources */,
 				6581FA8BAB65640A603A68BA /* TodoEvidence.swift in Sources */,

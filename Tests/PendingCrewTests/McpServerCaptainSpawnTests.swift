@@ -94,6 +94,17 @@ final class McpServerCaptainSpawnTests: XCTestCase {
         XCTAssertEqual(cmds[0].title, "支付")
     }
 
+    func testCreateChildCrewCarriesPreferredRunnerAndRejectsUnknown() {
+        let dir = tmp()
+        let server = makeServer(isCaptain: true, dir: dir)
+        _ = call(server, "create_child_crew", ["brief": "做支付", "runner": "codex"])
+        let commands = LocalCrewControlStore(directory: dir).drainCommands()
+        XCTAssertEqual(commands.map(\.runner), ["codex"])
+        let rejected = call(server, "create_child_crew", ["brief": "做支付", "runner": "terminal"])
+        XCTAssertTrue((rejected ?? "").contains("ERROR"))
+        XCTAssertTrue(LocalCrewControlStore(directory: dir).drainCommands().isEmpty)
+    }
+
     func testEmptyBriefRejectedNoEnqueue() {
         let dir = tmp()
         let out = call(makeServer(isCaptain: true, dir: dir), "start_session", ["brief": "   "])

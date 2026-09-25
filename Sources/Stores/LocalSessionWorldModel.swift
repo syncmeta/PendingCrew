@@ -40,6 +40,7 @@ struct LocalSessionWorldModel {
         var childTitles: [String] = []
         var claudeSubscriptionPlan: String? = nil
         var codexSubscriptionPlan: String? = nil
+        var captainRunnerBlock: String = ""
         var locale: String = "zh"
     }
 
@@ -70,6 +71,7 @@ struct LocalSessionWorldModel {
             "quotaPlanBlock": renderQuotaPlans(
                 claude: ctx.claudeSubscriptionPlan, codex: ctx.codexSubscriptionPlan,
                 locale: ctx.locale),
+            "captainRunnerBlock": ctx.captainRunnerBlock,
             // sharesBlock / tiebreakerBlock 本地不提供（无责任分账）→ strip 成空。
         ]
     }

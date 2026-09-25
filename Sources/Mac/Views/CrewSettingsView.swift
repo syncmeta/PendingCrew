@@ -2,13 +2,6 @@
 import SwiftUI
 
 /// PendingCrew macOS 设置窗口（⌘,）。
-///
-/// 人类 2026-09-12（Todo #11）：「我希望设置里面专门有一个 tab 设置编码工具，特别是
-/// 准备加 acp 的支持了。每一个 harness 都有一块设置的地方，不用点了才出来。要能更新、
-/// 设置目录、检测。」—— 所以这里是分页的，编码工具单独一页，页面里每个 harness 一块，
-/// 全部摊开，没有「点一下才出来」的框。
-///
-/// iPad shell 暂为占位页(task B2)，外观 Picker 届时在 iPad 设置入口再暴露。
 struct CrewSettingsView: View {
     var body: some View {
         TabView {
@@ -83,28 +76,59 @@ private struct GeneralSettingsTab: View {
 /// 接线表钉着它，删了就红）。
 private struct CodingToolsSettingsTab: View {
     @ObservedObject private var versions = AgentCLIVersionCenter.shared
+    @State private var claudePreference = ""
+    @State private var codexPreference = ""
+    @State private var capabilities: [LocalCodingAgentKind: CaptainRunnerCapability] = [:]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                ForEach([LocalCodingAgentKind.claudeCode, .codex], id: \.self) { kind in
-                    GroupBox {
-                        AgentCLIVersionView(center: versions, kind: kind)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(6)
-                    }
+        Form {
+            Section("新机组机长") {
+                VStack(alignment: .leading) {
+                    Text("以下情况中新机组机长优先用 Claude Code")
+                    TextEditor(text: $claudePreference)
+                        .frame(minHeight: 56)
+                        .accessibilityIdentifier("captain.preference.claude")
                 }
-                Text("版本每 10 分钟自动检测一次，只读取本机版本，不判断是否最新；"
-                     + "升级、回滚都要单独确认，且该 runner 必须没有存活 session。\n"
-                     + "「CLI 所在目录」留空时按登录 shell 的 PATH 加一串常见安装位自动搜索；"
-                     + "填了就只用它 —— 自动搜索找错了版本、或者装在冷僻位置时用这个。")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading) {
+                    Text("以下情况中新机组机长优先用 Codex")
+                    TextEditor(text: $codexPreference)
+                        .frame(minHeight: 56)
+                        .accessibilityIdentifier("captain.preference.codex")
+                }
+                Button("刷新可用状态") { Task { await refreshCapabilities() } }
+                    .accessibilityIdentifier("captain.capability.refresh")
             }
-            .padding()
+            ForEach([LocalCodingAgentKind.claudeCode, .codex], id: \.self) { kind in
+                Section(kind.displayName) {
+                    if let capability = capabilities[kind] {
+                        LabeledContent("可用状态", value: capability.summary)
+                    }
+                    AgentCLIVersionView(center: versions, kind: kind)
+                }
+            }
         }
-        // 检测在打开设置时才起（`start()` 自带「只起一次」的门），关掉设置后那个
-        // 10 分钟的轮询继续跑 —— 跟原来挂在侧栏页脚上时同一个共享中心。
-        .task { versions.start() }
+        .formStyle(.grouped)
+        .onAppear {
+            claudePreference = CaptainRunnerPreferences.get(.claudeCode)
+            codexPreference = CaptainRunnerPreferences.get(.codex)
+        }
+        .onChange(of: claudePreference) { _, value in
+            CaptainRunnerPreferences.set(value, for: .claudeCode)
+        }
+        .onChange(of: codexPreference) { _, value in
+            CaptainRunnerPreferences.set(value, for: .codex)
+        }
+        .task {
+            versions.start()
+            await refreshCapabilities()
+        }
+    }
+
+    private func refreshCapabilities() async {
+        capabilities = await Task.detached(priority: .utility) {
+            [LocalCodingAgentKind.claudeCode: CaptainRunnerProbe.inspect(.claudeCode),
+             .codex: CaptainRunnerProbe.inspect(.codex)]
+        }.value
     }
 }
 
@@ -175,6 +199,7 @@ private struct BackendsSettingsTab: View {
                         }
                         if let status = statuses[ref.id] {
                             statusLine(status, isRemote: ref.isRemote)
+                                .accessibilityIdentifier("backend.status")
                             restartButton(for: status)
                         }
                         Button(sessionHost.viewer?.selectedBackendID == ref.id
@@ -182,46 +207,40 @@ private struct BackendsSettingsTab: View {
                             notice = sessionHost.connectViewer(to: ref)
                         }
                         .disabled(sessionHost.viewer?.selectedBackendID == ref.id)
+                        .accessibilityIdentifier("backend.connect")
+                        Button("移除", role: .destructive) { remove(ref) }
+                            .accessibilityIdentifier("backend.remove")
                     }
                     .padding(.vertical, 2)
-                    .swipeActions {
-                        // 内置那条也让划 —— **拒绝要由模型层说出来**，而不是这里
-                        // 把按钮藏掉。藏掉的话人只会觉得「这条怎么没反应」。
-                        Button(role: .destructive) { remove(ref) } label: { Text("移除") }
-                    }
                 }
                 if let notice {
                     Text(notice).font(.caption).foregroundStyle(.orange)
                 }
                 Button("刷新实况") { refreshStatuses() }
                     .disabled(restarting)
+                    .accessibilityIdentifier("backend.refresh")
             } header: {
-                Text("认识的后端")
-            } footer: {
-                Text("本机那条是内置的：删不掉，也永远排第一 —— 删了之后这个界面就没有"
-                     + "任何后端可连了。远程连接使用已配对的 TLS 安全通道；握手或信任"
-                     + "失败会留在远程错误态，**不会**悄悄退回本机。")
+                Text("后端")
             }
             Section {
-                Text("① 在接受连接的 Mac 上填名称和可达地址，生成邀请并复制给另一台 Mac。"
-                     + "② 另一台导入邀请后，把生成的回应复制回来。③ 原 Mac 导入回应并重启后台。")
-                    .font(.caption).foregroundStyle(.secondary)
                 TextField("这台 Mac 的名字", text: $pairingName)
-                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("backend.pair.name")
                 TextField("这台 Mac 的可达地址，例如 pendingcrew+tls://host:7443",
                           text: $pairingURL)
-                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("backend.pair.address")
                 Button("生成邀请文本") { createInvitation() }
                     .disabled(pairingName.trimmingCharacters(in: .whitespaces).isEmpty
                               || pairingURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityIdentifier("backend.pair.create")
                 TextEditor(text: $pairingText)
                     .font(.system(.caption, design: .monospaced))
                     .frame(minHeight: 120)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+                    .accessibilityIdentifier("backend.pair.text")
                 HStack {
                     Button("导入邀请或回应") { importPairingText() }
                         .disabled(pairingText.trimmingCharacters(
                             in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("backend.pair.import")
                     if pairingNeedsRestart {
                         Button("应用并安全重启本机后台") {
                             restartPrompt = RestartPrompt(
@@ -230,6 +249,7 @@ private struct BackendsSettingsTab: View {
                                     + "正在跑的 session 会被打断；之后 @ 它们能接回。")
                         }
                         .disabled(restarting)
+                        .accessibilityIdentifier("backend.pair.restart")
                     }
                 }
                 if let pairingNotice {
@@ -237,11 +257,7 @@ private struct BackendsSettingsTab: View {
                         .textSelection(.enabled)
                 }
             } header: {
-                Text("手动配对两台 Mac")
-            } footer: {
-                Text("邀请是 30 分钟有效、只能使用一次的敏感 bearer 文本，包含一次性 PSK，"
-                     + "请只直接交给目标设备。回应不含 PSK；两种文本都不包含长期私钥。"
-                     + "本流程不使用账号或云中继。Bonjour、二维码与 iOS 配对界面仍后置。")
+                Text("配对")
             }
         }
         .formStyle(.grouped)
@@ -306,6 +322,7 @@ private struct BackendsSettingsTab: View {
                 restartPrompt = RestartPrompt(title: title, confirmation: confirmation)
             }
             .disabled(restarting)
+            .accessibilityIdentifier("backend.restart")
         }
     }
 

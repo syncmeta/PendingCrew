@@ -1,23 +1,12 @@
 #if os(macOS)
 import SwiftUI
 
-/// 一个 harness（claude / codex）在设置里的那一整块。
-///
-/// ## 为什么不是原来那个「点一下弹个框」
-///
-/// 人类 2026-09-12 的原话：「**我不希望点击之后再出一个框。**我希望设置里面专门有一个
-/// tab 设置编码工具……每一个 harness 都有一块设置的地方，**不用点了才出来**。
-/// 要能更新、设置目录、检测。」
-///
-/// 所以这里把原来藏在 popover 里的全部动作摊平在页面上。名字沿用
-/// `AgentCLIVersionView` 没有改 —— 它在 `ViewWiringTests` 的接线表里挂着，
-/// 换个名字只是让那张表跟着动一遍，对人没有任何区别。
+/// 一个 runner 在设置里的版本、默认配置与维护操作。
 struct AgentCLIVersionView: View {
     @ObservedObject var center: AgentCLIVersionCenter
     let kind: LocalCodingAgentKind
 
     @State private var target = ""
-    @State private var directory = ""
     @State private var pending: AgentCLIVersionCenter.Action?
     @State private var confirmedInstallation: AgentCLIInstallation?
     @State private var confirming = false
@@ -31,7 +20,6 @@ struct AgentCLIVersionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            directoryRow
             launchDefaults
             if let installation {
                 pathRows(installation)
@@ -52,7 +40,6 @@ struct AgentCLIVersionView: View {
         }
         .disabled(busy)
         .onAppear {
-            directory = LocalCodingAgentExecutable.overrideDirectory(kind) ?? ""
             defaultModel = AgentLaunchPreferences.model(for: kind) ?? ""
             defaultFastMode = AgentLaunchPreferences.fastMode(for: kind)
         }
@@ -84,25 +71,6 @@ struct AgentCLIVersionView: View {
         }
     }
 
-    /// 「设置目录」。留空 = 自动搜索（登录 shell 的 PATH + 一串常见安装位）。
-    /// 填错什么样当场说，不让人保存完再去猜为什么 session 还是起不来。
-    private var directoryRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                TextField("CLI 所在目录（留空 = 自动搜索）", text: $directory)
-                    .textFieldStyle(.roundedBorder)
-                Button("选择…") { chooseDirectory() }
-                Button("应用") { applyDirectory() }
-            }
-            if let problem = LocalCodingAgentExecutable.overrideProblem(kind) {
-                Text(problem).font(.caption).foregroundStyle(.orange)
-            } else if LocalCodingAgentExecutable.overrideDirectory(kind) != nil {
-                Text("已指定：自动搜索会被跳过，就用这个目录里的 \(kind.binaryName)。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private var launchDefaults: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("新 session 默认配置").font(.subheadline.weight(.medium))
@@ -124,8 +92,6 @@ struct AgentCLIVersionView: View {
                 .onChange(of: defaultFastMode) { _, value in
                     UserDefaults.standard.set(value, forKey: "pendingcrew.defaultFastMode.\(kind.rawValue)")
                 }
-            Text("只作用于新 session；运行中的 session 可在会话页切换。快速模式可能增加用量或费用。")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -167,22 +133,6 @@ struct AgentCLIVersionView: View {
     }
 
     // MARK: - 动作
-
-    private func chooseDirectory() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "选择"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        directory = url.path
-        applyDirectory()
-    }
-
-    private func applyDirectory() {
-        LocalCodingAgentExecutable.setOverrideDirectory(directory, for: kind)
-        Task { await center.refresh(kind) }
-    }
 
     private var confirmationText: String {
         let action: String

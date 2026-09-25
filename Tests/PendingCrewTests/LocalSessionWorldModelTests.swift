@@ -37,6 +37,14 @@ final class LocalSessionWorldModelTests: XCTestCase {
         XCTAssertTrue(out.contains("continue_work(note)"), "explicit one-shot continuation lease reaches agents")
     }
 
+    func testCaptainRunnerPreferencesAndCapabilitiesReachPrompt() throws {
+        var context = sampleContext()
+        context.captainRunnerBlock = "Claude Code：需要登录；Codex：已登录 · 正常。以下情况中新机组机长优先用 Codex：多文件测试"
+        let output = try renderer.render(context)
+        XCTAssertTrue(output.contains("以下情况中新机组机长优先用 Codex：多文件测试"))
+        XCTAssertTrue(output.contains("Claude Code：需要登录"))
+    }
+
     func testGUIAutomationBanReachesRenderedPrompt() throws {
         // 界面自动化会以 PendingCrew 的名义弹系统权限框吓到人类 —— 这条禁令必须真的
         // 进到 agent 看到的渲染结果里，不能只躺在模板某个未渲染的角落。

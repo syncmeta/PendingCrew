@@ -742,13 +742,29 @@ final class CrewStore: ObservableObject {
             postSystemNotice(crewId: parentId, text: "建子 crew 被拒：父 crew 无工作目录。")
             return
         }
+        guard cmd.runner == nil || cmd.runner == "claude" || cmd.runner == "codex" else {
+            postSystemNotice(crewId: parentId, text: "建子 crew 被拒：runner 只接受 claude/codex。")
+            return
+        }
+        let capabilities = await Task.detached(priority: .utility) {
+            (CaptainRunnerProbe.inspect(.claudeCode), CaptainRunnerProbe.inspect(.codex))
+        }.value
+        guard let selectedKind = CaptainRunnerChoice.select(
+            inherited: cmd.runner == "claude" ? .claudeCode
+                : cmd.runner == "codex" ? .codex
+                : LocalCodingAgentKind.captainDefault(parentSummary.captainAgentKind),
+            claude: capabilities.0, codex: capabilities.1) else {
+            postSystemNotice(crewId: parentId,
+                             text: "建子 crew 被拒：没有已认证且健康的 runner。Claude Code：\(capabilities.0.summary)；Codex：\(capabilities.1.summary)。")
+            return
+        }
         do {
             let request = CreateCrewRequest.make(
                 responsibleSubjectId: parentSummary.responsibleSubjectId,
                 title: cmd.title,
                 machineId: parentSummary.machineId,
                 workingDirectory: wd,
-                captainAgentKind: parentSummary.captainAgentKind,
+                captainAgentKind: selectedKind.rawValue,
                 initialTitleSource: cmd.title == nil ? .placeholder : .captain,
                 captain: .systemGenerated(templateName: nil))
             // 子 crew 要在挂父边 + brief 白板留痕之后再起机长，确保它首轮拿到
@@ -801,11 +817,11 @@ final class CrewStore: ObservableObject {
             } else if placement == .topLevelExecutionCrew {
                 postSystemNotice(
                     crewId: parentId,
-                    text: "已建顶层执行 crew「\(childTitle)」，开场任务已写入执行群，机长将自动接手。")
+                    text: "已建顶层执行 crew「\(childTitle)」（\(selectedKind.displayName) 机长），开场任务已写入执行群，机长将自动接手。")
             } else {
                 postSystemNotice(
                     crewId: parentId,
-                    text: "已建子 crew「\(childTitle)」，开场任务已写入子群，子机长将自动接手。")
+                    text: "已建子 crew「\(childTitle)」（\(selectedKind.displayName) 机长），开场任务已写入子群，子机长将自动接手。")
             }
         } catch {
             postSystemNotice(crewId: parentId, text: "建子 crew 失败：\(error.localizedDescription)")

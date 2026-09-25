@@ -1854,6 +1854,7 @@ final class CrewSessionRunner: ObservableObject {
 
     enum RunnerError: LocalizedError {
         case toolNotInstalled(kind: LocalCodingAgentKind)
+        case captainRunnerUnavailable(String)
         case defaultShellUnavailable
         case fastSettingsUnavailable
         case terminalCannotBeAgent
@@ -1870,6 +1871,8 @@ final class CrewSessionRunner: ObservableObject {
             switch self {
             case .toolNotInstalled(let kind):
                 return "未在 PATH 中找到 \(kind.binaryName)，请先安装 \(kind.displayName) CLI。"
+            case .captainRunnerUnavailable(let summary):
+                return "机长 runner 当前不可用：\(summary)。旧机长保持不变。"
             case .defaultShellUnavailable:
                 return "找不到可执行的用户默认 shell（$SHELL 与 /bin/zsh 均不可用）。"
             case .fastSettingsUnavailable:
@@ -2228,6 +2231,17 @@ final class CrewSessionRunner: ObservableObject {
         }
         guard LocalCodingAgentExecutable.resolve(kind) != nil else {
             throw RunnerError.toolNotInstalled(kind: kind)
+        }
+        let capability = await Task.detached(priority: .utility) {
+            CaptainRunnerProbe.inspect(kind)
+        }.value
+        guard capability.selectable else {
+            throw RunnerError.captainRunnerUnavailable(capability.summary)
+        }
+        if let unhealthy = runs.first(where: {
+            $0.kind == kind && $0.status == .running && $0.health != nil
+        })?.health {
+            throw RunnerError.captainRunnerUnavailable("已有 \(kind.displayName) 会话报告健康异常：\(unhealthy.detail)")
         }
         // `ownership` 不在这里检查 —— 它是**参数**：造不出票就调不动这个函数。
         // 见 `CaptainHandoffOwnership`：这条规矩原来靠人记得写 `if isViewer`，

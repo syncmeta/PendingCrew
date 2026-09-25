@@ -678,12 +678,13 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "create_child_crew",
-                    "description": "（机长专用）以当前 crew 为父，建一个子 crew。两个维度判断该不该拆，满足其一即可：**规模**——一块事大到该独立成组、要有自己的机长和群聊；**噪音**——要和某个对象高频往来大量消息时，哪怕子 crew 只有两个 session，也把高量私聊挪出去，别在主群刷屏。两头都不沾就别滥拆。子 crew 继承本 crew 的工作目录与机长类型，会自动起自己的机长，brief 作为它的开场任务。总机组调用时是特例：创建顶层执行 crew，不写总机组父边；普通 crew 仍创建直属子 crew。title 可不填（自动取个地名，子机长之后自己改名）。组织树层数不限。",
+                    "description": "（机长专用）以当前 crew 为父建子 crew；适用于独立任务或高频沟通。子 crew 继承工作目录，自动起机长，brief 是开场任务。runner 可选 claude/codex，省略时优先沿用父机长。系统会在创建前检查 PATH、登录与健康；首选不可用时改用另一边，两边都不可用则拒绝创建。总机组调用时创建顶层执行 crew。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
                             "brief": ["type": "string", "description": "这个子 crew 要干的事（子机长的开场任务）。"],
                             "title": ["type": "string", "description": "可选：短标签名。不填自动取地名。"],
+                            "runner": ["type": "string", "enum": ["claude", "codex"], "description": "偏好的新机长 runner；最终以本机当前可用状态为准。"],
                         ],
                         "required": ["brief"],
                     ],
@@ -1943,9 +1944,13 @@ final class McpServer {
             guard !brief.isEmpty else { return toolResult(id: id, text: "ERROR: brief 不能为空") }
             let rawTitle = (args["title"] as? String) ?? ""
             let title = rawTitle.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            let runner = args["runner"] as? String
+            if runner != nil && runner != "claude" && runner != "codex" {
+                return toolResult(id: id, text: "ERROR: runner 只接受 claude/codex")
+            }
             if let failure = control.enqueueCreateChildCrew(
                 crewId: crewId, sessionId: sessionId,
-                brief: brief, title: title.isEmpty ? nil : title) {
+                brief: brief, title: title.isEmpty ? nil : title, runner: runner) {
                 return toolResult(id: id, text: WriteReceipt.notWritten(
                     what: "建子 crew 的请求", error: failure, consequence:
                         "**子 crew 没建，开场任务也没有任何地方存着** —— 那段 brief 只在你这儿，重试前别丢。"))
