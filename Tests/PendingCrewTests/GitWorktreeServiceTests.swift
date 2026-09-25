@@ -35,7 +35,7 @@ final class GitWorktreeServiceTests: XCTestCase {
 
     /// 起一个临时 git repo,塞一个 commit,跑 isGitRepository / listBranches /
     /// addWorktree。验证 worktree 真的建出来 + 在新分支上。
-    func testAddWorktreeCreatesNewWorktreeOnNewBranch() throws {
+    func testAddWorktreeCreatesNewWorktreeOnNewBranch() async throws {
         guard locateGitForTest() != nil else {
             throw XCTSkip("git not on PATH — skipping")
         }
@@ -75,6 +75,11 @@ final class GitWorktreeServiceTests: XCTestCase {
         // 4. checkout 的是新分支
         let currentBranch = try GitWorktreeService.currentBranch(at: worktreeURL)
         XCTAssertEqual(currentBranch, newBranch)
+        // Codex footer uses this read-only inspector for mode + branch.
+        XCTAssertFalse(GitInspector.isLinkedWorktree(repoRoot: repo))
+        XCTAssertTrue(GitInspector.isLinkedWorktree(repoRoot: worktreeURL))
+        let inspectedBranch = await GitInspector.currentBranch(at: worktreeURL)
+        XCTAssertEqual(inspectedBranch, newBranch)
     }
 
     // MARK: - helpers

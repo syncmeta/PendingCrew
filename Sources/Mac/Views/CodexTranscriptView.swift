@@ -35,14 +35,16 @@ struct CodexTranscriptRows: View {
     var body: some View {
         Group {
             if lazy {
-                LazyVStack(alignment: .leading, spacing: 7) { content }
+                LazyVStack(alignment: .leading, spacing: 10) { content }
             } else {
-                VStack(alignment: .leading, spacing: 7) { content }
+                VStack(alignment: .leading, spacing: 10) { content }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 22)
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder private var content: some View {

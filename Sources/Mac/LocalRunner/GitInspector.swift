@@ -12,6 +12,17 @@ import Foundation
 /// - 全异步 + 静默错误:工作目录不是 repo / 没装 git 都返回 nil 或空 array,
 ///   不抛错;调用方 UI 上做"未检测到 git 仓库"的灰显即可。
 enum GitInspector {
+    /// A linked worktree has a `.git` pointer file at its root; a primary
+    /// checkout has a `.git` directory. A missing root is not a worktree.
+    static func isLinkedWorktree(repoRoot: URL?) -> Bool {
+        guard let repoRoot else { return false }
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: repoRoot.appendingPathComponent(".git").path,
+            isDirectory: &isDirectory)
+        return exists && !isDirectory.boolValue
+    }
+
     /// 在 `directory` 跑 `git rev-parse --show-toplevel`;非 repo / git 未装
     /// 都返回 nil。
     static func repoRoot(at directory: URL) async -> URL? {

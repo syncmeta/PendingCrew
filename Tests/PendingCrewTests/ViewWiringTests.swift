@@ -527,13 +527,10 @@ final class ViewWiringTests: XCTestCase {
                       "auto_review 没走禁止建卡/通知的门禁")
     }
 
-    /// Todo #82/#83/#90：窄右栏不能再把四种控件挤成一排；Codex 技术流折叠态
-    /// 只说具体程序/档名，完整命令与路径放进可展开详情。
+    /// Todo #82/#83/#90/#151：窄右栏保留独立的模型与 effort 菜单；Codex
+    /// 技术流折叠态只说具体程序/档名，完整命令与路径放进可展开详情。
     func testSessionHeaderAndCodexActivityUseHumanFacingPresentation() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")
-        XCTAssertTrue(view.contains("// 第一排：名字"))
-        XCTAssertTrue(view.contains("// 第二排：模型与 effort"))
-        XCTAssertTrue(view.contains("// 第三排：Codex 原生审批模式"))
         XCTAssertTrue(view.contains("private var modelMenu"), "模型没有独立手动菜单")
         XCTAssertTrue(view.contains("private var effortMenu"), "effort 没有独立手动菜单")
 
@@ -548,6 +545,46 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(codex.contains("presentation.headline"), "折叠态没有具体活动摘要")
         XCTAssertFalse(codex.contains("Text(command).font(Theme.Fonts.monoSmall)"),
                        "Codex 活动流仍在折叠态直接铺 shell 原文")
+    }
+
+    /// Todo #151：这是源码级结构/命令回归，测试 target 不编译 SwiftUI 详情页。
+    /// 把关键区段单独截出，避免 Claude/终端路径或注释碰巧含同名控件而假绿。
+    func testCodexSessionChromeKeepsControlsNearComposerAndCommandsReachable() throws {
+        let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        func section(_ start: String, _ end: String) throws -> String {
+            let a = try XCTUnwrap(view.range(of: start), "缺少 \(start)")
+            let b = try XCTUnwrap(view.range(of: end, range: a.upperBound..<view.endIndex), "缺少 \(end)")
+            return String(view[a.upperBound..<b.lowerBound])
+        }
+
+        let terminal = try section("private var terminalContent:", "private var memberListMode:")
+        XCTAssertTrue(terminal.contains("if sessionRunner.current?.kind == .codex"))
+        XCTAssertTrue(terminal.contains("codexComposer"), "Codex 未接独立 composer")
+        XCTAssertTrue(terminal.contains("SessionApprovalCardsView(crewId: run.crewId, sessionId: run.sessionId)"))
+
+        let composer = try section("private var codexComposer:", "private var canStartSession:")
+        for symbol in ["CodexSessionComposer(", "onSend:", "onSwitchProfile:", "onSwitchApproval:"] {
+            XCTAssertTrue(composer.contains(symbol), "Codex composer 缺少 \(symbol)")
+        }
+        XCTAssertTrue(composer.contains("sessionRunner.applyProfileChange("))
+        XCTAssertTrue(composer.contains("sessionRunner.applyCodexApprovalMode("))
+        XCTAssertTrue(view.contains("run.send(text)"), "发送没有注入当前 run")
+        let chrome = try section("private struct CodexSessionComposer:", "private struct SessionApprovalModeControl:")
+        for symbol in ["ComposerTextField(", "onHardwareReturn:", "SessionProfileControl(run: run", "SessionApprovalModeControl(run: run", "CodexWorkspaceFooter(", "GitInspector.repoRoot(", "GitInspector.currentBranch(", "GitInspector.isLinkedWorktree(", ".accessibilityLabel(\"发送到 Codex\")"] {
+            XCTAssertTrue(chrome.contains(symbol),
+                          "Codex 输入区缺少可发现的操作或状态：\(symbol)")
+        }
+        let runContent = try section("private struct SessionRunContentView:", "private struct CodexSessionComposer:")
+        XCTAssertTrue(runContent.contains("if run.kind == .codex"), "Codex 没有独立的简洁顶栏")
+        XCTAssertTrue(runContent.contains("Button(\"压缩上下文\""), "压缩命令从菜单消失")
+        XCTAssertTrue(runContent.contains("run.stop()"), "停止命令消失")
+        XCTAssertTrue(runContent.contains("CodexTranscriptView(transcript:"), "结构化 transcript 消失")
+        XCTAssertTrue(runContent.contains("codexUsageRow"), "上下文和额度信息消失")
+        XCTAssertTrue(view.contains(".accessibilityLabel(\"Codex 会话操作\")"))
+        XCTAssertTrue(view.contains(".accessibilityLabel(\"停止这个 Codex session\")"))
+        XCTAssertTrue(view.contains(".accessibilityLabel(\"Codex 审批模式\")"))
+        XCTAssertTrue(view.contains(".accessibilityLabel(\"选择模型\")"))
+        XCTAssertTrue(view.contains(".accessibilityLabel(\"选择推理强度\")"))
     }
 
     /// Todo #80：退出后的成员行必须恢复那一个持久 session，不能把点击退化成

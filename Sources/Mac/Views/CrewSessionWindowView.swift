@@ -148,6 +148,7 @@ struct CrewSessionWindowView: View {
             }
             .buttonStyle(.plain)
             .padding(.vertical, 10)
+            .accessibilityLabel("返回成员列表")
             .help("返回成员列表")
             ScrollView {
                 LazyVStack(spacing: 6) {
@@ -172,18 +173,32 @@ struct CrewSessionWindowView: View {
                                           ? railSelectionColor : .clear))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("新建 session")
                     .help("起一个新 session")
                 }
                 .padding(.vertical, 8)
             }
         }
         .frame(width: 64)
+        .background(
+            isShowingCodexSession
+                ? Color.adaptive(light: 0xF4F6F9, dark: 0x1B2025)
+                : Theme.Palette.canvas)
+    }
+
+    private var isShowingCodexSession: Bool {
+        !sessionRunner.isComposingNew && sessionRunner.current?.kind == .codex
     }
 
     /// 头像栏选中框底色：浅色 = sidebar 选中 crew 同款很浅绿（accentBg）；
     /// 深色 = 很浅的白灰（白低透明）—— 深色下 accentBg 偏「绿盒子」太重。
     private var railSelectionColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.12) : Theme.Palette.accentBg
+        if isShowingCodexSession {
+            return colorScheme == .dark
+                ? Color.white.opacity(0.12)
+                : Color.adaptive(light: 0xE5EAF0, dark: 0x303943)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.12) : Theme.Palette.accentBg
     }
 
     @ViewBuilder
@@ -199,6 +214,7 @@ struct CrewSessionWindowView: View {
         if let run = item.run {
             Button { sessionRunner.select(run.runID) } label: { av }
                 .buttonStyle(.plain)
+                .accessibilityLabel("切换到 \(item.sender.displayName)")
                 .help(item.sender.displayName)
         } else {
             av.help(item.sender.displayName)
@@ -222,12 +238,6 @@ struct CrewSessionWindowView: View {
                                     model: model, effort: effort, fastMode: fastMode))
                         }
                     },
-                    onSwitchApproval: { reviewer in
-                        Task {
-                            await sessionRunner.applyCodexApprovalMode(
-                                to: run, reviewer: reviewer)
-                        }
-                    },
                     onCompact: {
                         Task { await sessionRunner.requestCodexCompaction(for: run) }
                     })
@@ -239,9 +249,9 @@ struct CrewSessionWindowView: View {
                 idleState
             }
             // 底部输入按态分家：claude 在跑 = 不给（真终端本身可交互，双输入框
-            // 反而歧义）；codex 在跑 = 群聊同款输入胶囊（transcript 不可直接打字）；
+            // 反而歧义）；codex 在跑 = 专用 composer（transcript 不可直接打字）；
             // 新建 / 已退出 = 原 composer（runner picker + 首条指令；model/effort
-            // 建后在终端页头部选，#485）。
+            // 建后在详情页选，#485）。
             if isContinuing {
                 if sessionRunner.current?.kind == .codex {
                     codexComposer
@@ -734,9 +744,15 @@ struct CrewSessionWindowView: View {
 
     private var idleState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "apple.terminal")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
+            Group {
+                if selectedKind == .codex {
+                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+                } else {
+                    Image(systemName: "apple.terminal")
+                }
+            }
+            .font(.system(size: 40))
+            .foregroundStyle(.tertiary)
             if crewStore.selectedDetail == nil {
                 Text("先在左侧选一个 crew").foregroundStyle(.secondary)
             } else {
@@ -747,23 +763,27 @@ struct CrewSessionWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// codex 续聊输入框 —— 照搬群聊的 ComposerView 输入胶囊（附件功能关掉：
-    /// 消息注入的是 codex 会话，不走群聊附件通道）。发送 = 注入当前 run。
+    /// Codex 续聊输入卡只接结构化 Codex backend；发送仍走统一 send() 注入当前 run。
     private var codexComposer: some View {
-        ComposerView(
-            input: $draft,
-            pending: .constant([]),
-            photoItems: .constant([]),
-            cameraImage: .constant(nil),
-            showFileImporter: .constant(false),
-            showPhotoPicker: .constant(false),
-            showCamera: .constant(false),
-            canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            onSend: { Task { await send() } },
-            isStreaming: false,
-            showsAttachments: false,
-            placeholder: "继续对 agent 说…"
-        )
+        Group {
+            if let run = sessionRunner.current {
+                CodexSessionComposer(
+                    run: run,
+                    draft: $draft,
+                    onSend: { Task { await send() } },
+                    onSwitchProfile: { model, effort, fastMode in
+                        Task {
+                            await sessionRunner.applyProfileChange(
+                                SessionProfileChangeRequest(
+                                    crewId: run.crewId, sessionId: run.sessionId,
+                                    model: model, effort: effort, fastMode: fastMode))
+                        }
+                    },
+                    onSwitchApproval: { reviewer in
+                        Task { await sessionRunner.applyCodexApprovalMode(to: run, reviewer: reviewer) }
+                    })
+            }
+        }
     }
 
     /// 新建 / 已退出态能否发送（= 起 agent session）：有非空草稿、未在起、已选 crew。
@@ -1149,15 +1169,18 @@ private struct SessionBarItemView: View {
 private struct SessionRunContentView: View {
     @ObservedObject var run: CrewSessionRun
     @ObservedObject private var quota = QuotaCenter.shared
+    @State private var showingCodexUsage = false
     /// 终端页头部切换控件的回调（→ `applyProfileChange`）。只带改动的那一个档位。
     let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
-    /// Codex-only native approval reviewer switch.
-    let onSwitchApproval: (_ reviewer: CodexProtocol.ApprovalsReviewer) -> Void
     let onCompact: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            if run.kind == .codex {
+                codexHeader
+            } else {
+                header
+            }
             Divider()
             if let terminalView = run.terminalView {
                 // 左右留白：终端网格自绘不透明底,贴边显得挤。padding 区用
@@ -1188,6 +1211,60 @@ private struct SessionRunContentView: View {
         }
     }
 
+    /// Codex-only chrome: keep the thread title quiet and put infrequent
+    /// operations in a named menu. Configuration lives beside its composer.
+    private var codexHeader: some View {
+        HStack(spacing: 8) {
+            Text(run.displayName)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: 8)
+            Button { showingCodexUsage = true } label: {
+                Image(systemName: "chart.bar.xaxis")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("查看 Codex 用量")
+            .help("查看上下文、账号额度与压缩状态")
+            .popover(isPresented: $showingCodexUsage) {
+                codexUsageRow
+                    .frame(minWidth: 260, idealWidth: 330, maxWidth: 400)
+                    .padding(16)
+            }
+            Menu {
+                Button("压缩上下文", action: onCompact)
+                    .disabled(run.status != .running || run.isWorking || run.codexIsCompacting)
+                Button("查看上下文与额度") { showingCodexUsage = true }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 28, height: 28)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Codex 会话操作")
+            .help("压缩上下文、查看用量")
+            if run.status == .running {
+                Button { run.stop() } label: {
+                    Label("停止", systemImage: "stop.fill")
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background(Theme.Palette.surfaceMuted, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("停止这个 Codex session")
+                .help("停止这个 session")
+            } else {
+                statusBadge(run.status, exitCode: run.exitCode)
+            }
+        }
+        .foregroundStyle(Theme.Palette.ink)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(Color.adaptive(light: 0xFAFAF8, dark: 0x1C1B18))
+    }
+
     @ViewBuilder
     private var header: some View {
         // 三排各自占满可用宽度（Todo #82）。旧版把名称、配置、审批和停止全塞进
@@ -1215,21 +1292,9 @@ private struct SessionRunContentView: View {
                 }
             }
 
-            // 第二排：模型与 effort 分开选，不再藏在一个含混的小药丸里。
-            if run.kind.isAgent {
+            // Claude 保留原来的模型/effort 页头；Codex 放在 composer 内。
+            if run.kind == .claudeCode {
                 SessionProfileControl(run: run, onSwitch: onSwitchProfile)
-            }
-
-            // 第三排：Codex 原生审批模式。
-            if run.kind == .codex {
-                HStack(spacing: 8) {
-                    Text("审批模式")
-                        .font(Theme.Fonts.caption)
-                        .foregroundStyle(Theme.Palette.inkMuted)
-                    SessionApprovalModeControl(run: run, onSwitch: onSwitchApproval)
-                    Spacer(minLength: 0)
-                }
-                codexUsageRow
             }
         }
         .padding(.horizontal, 12)
@@ -1311,6 +1376,121 @@ private struct SessionRunContentView: View {
     }
 }
 
+/// The Codex-only input card. Reuses the existing NSTextView bridge for
+/// Return/Shift-Return, IME and focus behavior, while keeping the controls
+/// and workspace status in the same visual unit as the prompt.
+private struct CodexSessionComposer: View {
+    @ObservedObject var run: CrewSessionRun
+    @Binding var draft: String
+    @State private var isFocused = false
+    let onSend: () -> Void
+    let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
+    let onSwitchApproval: (_ reviewer: CodexProtocol.ApprovalsReviewer) -> Void
+
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && run.status == .running
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    ComposerTextField(
+                        text: $draft,
+                        placeholder: "向 Codex 发送消息…",
+                        isFocused: $isFocused,
+                        onHardwareReturn: { if canSend { onSend() } })
+                        .accessibilityLabel("Codex 消息")
+                    Button(action: onSend) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 28, height: 28)
+                            .background(canSend ? Theme.Palette.ink : Theme.Palette.inkMuted,
+                                        in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .accessibilityLabel("发送到 Codex")
+                    .help("发送到当前 Codex session")
+                }
+                SessionProfileControl(run: run, onSwitch: onSwitchProfile)
+                HStack(spacing: 8) {
+                    SessionApprovalModeControl(run: run, onSwitch: onSwitchApproval)
+                    Spacer(minLength: 0)
+                    if let pending = run.pendingProfile {
+                        Text("切换至 \(pending)…")
+                            .font(Theme.Fonts.caption2)
+                            .foregroundStyle(Theme.Palette.inkMuted)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Theme.Palette.surface,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+            }
+            CodexWorkspaceFooter(run: run)
+        }
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
+        .background(Color.adaptive(light: 0xFAFAF8, dark: 0x1C1B18))
+    }
+}
+
+private struct CodexWorkspaceFooter: View {
+    @ObservedObject var run: CrewSessionRun
+    @State private var branch: String?
+    @State private var isGitRepository = false
+    @State private var isWorktree = false
+    @State private var loaded = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Label(run.workingDirectory.lastPathComponent, systemImage: "folder")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(run.workingDirectory.path)
+            Spacer(minLength: 4)
+            Text(loaded ? (isWorktree ? "工作树" : "本地") : "检查中")
+            Label(loaded
+                  ? (branch ?? (isGitRepository ? "分离 HEAD" : "无 Git 分支"))
+                  : "检查中",
+                  systemImage: "arrow.triangle.branch")
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(Theme.Fonts.caption2)
+        .foregroundStyle(Theme.Palette.inkMuted)
+        .accessibilityElement(children: .combine)
+        .task(id: run.workingDirectory) {
+            branch = nil
+            isGitRepository = false
+            isWorktree = false
+            loaded = false
+            // The agent can switch branches mid-session. Only the visible
+            // Codex footer refreshes this read-only status, at a low rate.
+            while !Task.isCancelled {
+                let root = await GitInspector.repoRoot(at: run.workingDirectory)
+                let currentBranch = await GitInspector.currentBranch(at: run.workingDirectory)
+                guard !Task.isCancelled else { break }
+                isGitRepository = root != nil
+                isWorktree = GitInspector.isLinkedWorktree(repoRoot: root)
+                branch = currentBranch
+                loaded = true
+                do { try await Task.sleep(nanoseconds: 15_000_000_000) }
+                catch { break }
+            }
+        }
+    }
+}
+
 /// Codex's native reviewer switch. Manual mode is the only mode allowed to create
 /// PendingCrew approval cards; auto_review keeps decisions inside Codex.
 private struct SessionApprovalModeControl: View {
@@ -1332,15 +1512,31 @@ private struct SessionApprovalModeControl: View {
                 }
             }
         } label: {
-            Label(
-                run.approvalsReviewer?.displayName ?? "Approve for me",
-                systemImage: run.approvalsReviewer == .user ? "hand.raised" : "checkmark.shield")
-                .font(Theme.Fonts.caption)
+            CodexControlPillLabel(
+                title: "审批 · \(run.approvalsReviewer?.displayName ?? "Approve for me")",
+                icon: run.approvalsReviewer == .user ? "hand.raised" : "checkmark.shield")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(run.status != .running)
+        .accessibilityLabel("Codex 审批模式")
         .help("Approve for me 由 Codex 原生代审；手动批准会在本 session 内显示可操作审批卡")
+    }
+}
+
+private struct CodexControlPillLabel: View {
+    let title: String
+    let icon: String
+
+    var body: some View {
+        Label(title, systemImage: icon)
+            .font(Theme.Fonts.caption2)
+            .lineLimit(1)
+            .foregroundStyle(Theme.Palette.inkMuted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Theme.Palette.surfaceMuted.opacity(0.55), in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.Palette.hairline, lineWidth: 1))
     }
 }
 
@@ -1411,8 +1607,8 @@ private struct SessionProfileReadonlyPill: View {
     }
 }
 
-/// 终端页头部的运行态 model / effort 两个独立菜单（Todo #82）。Claude 经空闲时
-/// 斜杠命令切；Codex 经 app-server `thread/settings/update` 切。两边都只在底层确认
+/// 运行态 model / effort 两个独立菜单（Todo #82）。Claude 放在页头、经空闲时
+/// 斜杠命令切；Codex 放在 composer、经 app-server `thread/settings/update` 切。两边都只在底层确认
 /// 成功后回写 run，UI 不抢先显示假配置。
 private struct SessionProfileControl: View {
     @ObservedObject var run: CrewSessionRun
@@ -1433,13 +1629,25 @@ private struct SessionProfileControl: View {
             HStack(spacing: 8) {
                 modelMenu
                 effortMenu
-                Toggle("快速", isOn: Binding(
-                    get: { run.fastMode ?? false },
-                    set: { onSwitch(nil, nil, $0) }
-                ))
-                .toggleStyle(.switch)
-                .disabled(run.status != .running || run.pendingProfile != nil)
-                .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
+                if run.kind == .codex {
+                    Toggle("快速", isOn: Binding(
+                        get: { run.fastMode ?? false },
+                        set: { onSwitch(nil, nil, $0) }
+                    ))
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .disabled(run.status != .running || run.pendingProfile != nil)
+                    .accessibilityLabel("Codex 快速模式")
+                    .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
+                } else {
+                    Toggle("快速", isOn: Binding(
+                        get: { run.fastMode ?? false },
+                        set: { onSwitch(nil, nil, $0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(run.status != .running || run.pendingProfile != nil)
+                    .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
+                }
                 if run.pendingProfile != nil {
                     ProgressView().controlSize(.small)
                 }
@@ -1473,11 +1681,16 @@ private struct SessionProfileControl: View {
             let name = run.model.map {
                 SessionLaunchOptions.displayName(for: $0, catalog: catalog.file)
             } ?? "默认"
-            SessionProfilePillLabel(text: "模型  \(name)", active: true)
+            if run.kind == .codex {
+                CodexControlPillLabel(title: name, icon: "cpu")
+            } else {
+                SessionProfilePillLabel(text: "模型  \(name)", active: true)
+            }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(run.status != .running)
+        .accessibilityLabel("选择模型")
         .help("手动选择这个 session 的模型")
     }
 
@@ -1492,11 +1705,16 @@ private struct SessionProfileControl: View {
                 }
             }
         } label: {
-            SessionProfilePillLabel(text: "Effort  \(run.effort ?? "默认")", active: true)
+            if run.kind == .codex {
+                CodexControlPillLabel(title: run.effort ?? "默认", icon: "brain.head.profile")
+            } else {
+                SessionProfilePillLabel(text: "Effort  \(run.effort ?? "默认")", active: true)
+            }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(run.status != .running)
+        .accessibilityLabel("选择推理强度")
         .help("手动选择这个 session 的思考强度")
     }
 }
