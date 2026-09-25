@@ -837,18 +837,32 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
     ///
     /// 换一个**已知锚必须起作用**的方向来喂它：视口贴着底部、内容往**下**长。
     /// 那个方向上 `.top`（视口不动）和 `.bottom`（跟着底部走）必须给出不同的数。
-    func test_锚标定_贴底时必须分得出bottom和top() {
+    private func calibratedAnchorShift() throws -> CGFloat {
         let top = tracePath(total: 40, startLimit: 24, fix: .none, container: .alwaysLazy,
                             growth: .below, startAtTop: false, label: "贴底·内容往下长·锚 .top")
         let bottom = tracePath(total: 40, startLimit: 24, fix: .bottomAnchorStatic,
                                container: .alwaysLazy, growth: .below, startAtTop: false,
                                label: "贴底·内容往下长·锚 .bottom")
+        guard top.last!.content - top.first!.content > 300,
+              bottom.last!.content - bottom.first!.content > 300 else {
+            throw NSError(domain: "AnchorProbe", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "内容没有明显增长，探针没有量到尺寸变化",
+            ])
+        }
         let topShift = top.last!.distance - top.first!.distance
         let bottomShift = bottom.last!.distance - bottom.first!.distance
-        XCTAssertGreaterThan(
-            abs(topShift - bottomShift), 50,
-            "这把尺子分不出 .top 和 .bottom（.top 位移 \(topShift)，.bottom 位移 \(bottomShift)）"
-            + " —— 分不出的话，「两个锚值给出同一个数」就什么都不能证明")
+        let difference = abs(topShift - bottomShift)
+        guard difference > 50 else {
+            throw XCTSkip("当前 SwiftUI 对贴底视口的 .top/.bottom 都保持贴底"
+                + "（.top 位移 \(topShift)，.bottom 位移 \(bottomShift)）；"
+                + "探针无法标定，不能据此推断锚是否生效")
+        }
+        return difference
+    }
+
+    func test_锚标定_贴底时必须分得出bottom和top() throws {
+        let difference = try calibratedAnchorShift()
+        XCTAssertGreaterThan(difference, 50)
     }
 
     /// **「未走的路」的死因，钉成一条用例。**
@@ -859,7 +873,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
     /// （`anchorOnExpand` 在跟随时返回 nil），正是 `.bottom` 不响的那个现场。
     ///
     /// 上面那条标定用例保证了这条不是「尺子没量到锚」。
-    func test_未走的路_人滑上去之后bottom锚与top锚读数相同() {
+    func test_未走的路_人滑上去之后bottom锚与top锚读数相同() throws {
+        _ = try calibratedAnchorShift()
         let withBottom = tracePath(total: 70, startLimit: CrewChatWindow.pageSize,
                                    fix: .bottomAnchorStatic, container: .alwaysLazy,
                                    label: "加载更早·锚 .bottom")

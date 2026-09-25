@@ -1072,7 +1072,9 @@ final class McpServer {
                 try policy.updatePolicy(crewId: crewId, text: (args["text"] as? String) ?? "")
                 return toolResult(id: id, text: "派活策略已更新：\(policy.policyURL(crewId: crewId).path)。下一轮会读到新内容。")
             } catch {
-                return toolResult(id: id, text: "ERROR: 派活策略没有更新：\(error.localizedDescription)")
+                return toolResult(id: id, text: WriteReceipt.notWritten(
+                    what: "派活策略", error: error,
+                    consequence: "原策略仍生效；下一轮不会读到这次修改。"))
             }
         case "handoff_captain_to_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }

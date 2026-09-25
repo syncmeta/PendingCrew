@@ -107,6 +107,8 @@ final class McpWriteFailureHonestyTests: XCTestCase {
             args: #"{"crew":"某个爹"}"#, captainOnly: true),
         "create_child_crew": .writesSharedFile(
             args: #"{"brief":"去做一件事"}"#, captainOnly: true),
+        "update_delegation_policy": .writesSharedFile(
+            args: #"{"text":"把独立任务交给合适的 crew，并验收完成证据。"}"#, captainOnly: true),
 
         // ---- 会写、但这把尺子造不出它的写失败 ----
         // 这四条 enqueue 完要 long-poll 等 app 侧应答（app 不在跑 → 每次固定等满
@@ -117,6 +119,8 @@ final class McpWriteFailureHonestyTests: XCTestCase {
         "nudge_session": .uncovered(why: "同 inspect_session"),
         "stop_session": .uncovered(why: "同 inspect_session"),
         "change_workdir": .uncovered(why: "同 inspect_session，且超时预算是 12 倍"),
+        "read_delegation_policy": .uncovered(
+            why: "首次读取会补建默认策略；已有策略只读，创建失败会返回 ERROR"),
 
         // ---- 只读 ----
         "directory": .readOnly(why: "读 local-crews.json + crew-sessions.json"),
