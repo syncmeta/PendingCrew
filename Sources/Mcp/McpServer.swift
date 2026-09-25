@@ -508,23 +508,27 @@ final class McpServer {
                         "required": ["new_path"],
                     ],
                 ])
-                tools.append([
-                    "name": "start_session",
-                    "description": "（机长专用）在当前 crew 里起一个 worker session 去干一件明确的编码任务。brief 写清要干什么。title 可选但强烈建议：一句 ≤18 字、不带项目名的任务概括——它是这个 session 在群聊气泡和成员列表里的显示名（不传就从 brief 兜底截断，可能不够精简）。runner 默认随本 crew（不填即可），可填 \"claude\"/\"codex\" 覆盖。isolation 必填：机长必须根据并行冲突、改动范围和任务关系明确决定；false 使用 crew 共享目录，true 新建独立 worktree，创建失败会直接报错而不会偷偷退回共享目录。model/effort 可选：按任务难度配置；不填沿用对应 runner 默认。派的活对应人类 Todo 条目（「To do +1: #N」）时，把 #N 显式写进 brief，并要求 worker 落 main 时顺手 respond_todo 翻牌——别只更 task 账漏翻 Todo。起完 worker 会自己报到，你在群聊看得到。\n"
-                        + catalogHint(agents: ["claude", "codex"]),
-                    "inputSchema": [
-                        "type": "object",
-                        "properties": [
-                            "brief": ["type": "string", "description": "要这个 session 干的明确任务。"],
-                            "title": ["type": "string", "description": "可选：≤18 字、无项目名的任务概括，作 session 群聊/成员列表显示名。不填从 brief 兜底。"],
-                            "runner": ["type": "string", "enum": ["claude", "codex"]],
-                            "isolation": ["type": "boolean", "description": "必填。false=crew 共享目录；true=新建独立 worktree。必须由机长逐次判断。"],
-                            "model": ["type": "string", "description": "可选：模型别名/slug（清单见工具描述里的可用模型表）。不填=对应 runner 的默认解析，那条腿指向哪也写在表里。"],
-                            "effort": ["type": "string", "description": "可选：thinking effort（档位见工具描述里的可用模型表；codex 逐模型不同）。不填=对应 runner 默认。"],
+                // 总机组是协调层，不在本组养执行 worker；tools/call 也会再次
+                // fail closed，防旧客户端或直接调用绕过这份工具清单。
+                if crewId != LocalCrew.chiefCrewId {
+                    tools.append([
+                        "name": "start_session",
+                        "description": "（机长专用）在当前 crew 里起一个 worker session 去干一件明确的编码任务。brief 写清要干什么。title 可选但强烈建议：一句 ≤18 字、不带项目名的任务概括——它是这个 session 在群聊气泡和成员列表里的显示名（不传就从 brief 兜底截断，可能不够精简）。runner 默认随本 crew（不填即可），可填 \"claude\"/\"codex\" 覆盖。isolation 必填：机长必须根据并行冲突、改动范围和任务关系明确决定；false 使用 crew 共享目录，true 新建独立 worktree，创建失败会直接报错而不会偷偷退回共享目录。model/effort 可选：按任务难度配置；不填沿用对应 runner 默认。派的活对应人类 Todo 条目（「To do +1: #N」）时，把 #N 显式写进 brief，并要求 worker 落 main 时顺手 respond_todo 翻牌——别只更 task 账漏翻 Todo。起完 worker 会自己报到，你在群聊看得到。\n"
+                            + catalogHint(agents: ["claude", "codex"]),
+                        "inputSchema": [
+                            "type": "object",
+                            "properties": [
+                                "brief": ["type": "string", "description": "要这个 session 干的明确任务。"],
+                                "title": ["type": "string", "description": "可选：≤18 字、无项目名的任务概括，作 session 群聊/成员列表显示名。不填从 brief 兜底。"],
+                                "runner": ["type": "string", "enum": ["claude", "codex"]],
+                                "isolation": ["type": "boolean", "description": "必填。false=crew 共享目录；true=新建独立 worktree。必须由机长逐次判断。"],
+                                "model": ["type": "string", "description": "可选：模型别名/slug（清单见工具描述里的可用模型表）。不填=对应 runner 的默认解析，那条腿指向哪也写在表里。"],
+                                "effort": ["type": "string", "description": "可选：thinking effort（档位见工具描述里的可用模型表；codex 逐模型不同）。不填=对应 runner 默认。"],
+                            ],
+                            "required": ["brief", "isolation"],
                         ],
-                        "required": ["brief", "isolation"],
-                    ],
-                ])
+                    ])
+                }
                 tools.append([
                     "name": "handoff_captain_to_session",
                     "description": "（机长专用）把机长位置交给一个**现有 session 成员**。target_crew_id 省略时仍只操作本 crew；显式填写时只允许自己的直系子 crew，不允许上级、平级、孙 crew，且发起者在执行时仍须是父 crew 当前机长。session_id 必须属于目标 crew 且是稳定 id；app 会按成员表 + agent-sessions 账本核对真实 runner 和可续接会话号，绝不从显示名猜。停旧、续接新机长、持久化与失败回滚复用同一事务，最终成功/失败以群聊系统回执为准。",
@@ -594,6 +598,20 @@ final class McpServer {
                     "inputSchema": ["type": "object", "properties": [String: Any]()],
                 ])
                 tools.append([
+                    "name": "read_delegation_policy",
+                    "description": "（机长专用）读取本 crew 可编辑的派活原则及文件路径。周期复盘快照会在每轮上下文中按需更新；修改原则用 update_delegation_policy。",
+                    "inputSchema": ["type": "object", "properties": [String: Any]()],
+                ])
+                tools.append([
+                    "name": "update_delegation_policy",
+                    "description": "（机长专用）修订本 crew 的派活原则。提交完整新文本，不会被每日自动复盘覆盖；下一轮会注入机长上下文。复盘时根据完成、返工、等待和协调成本调整，不追求固定派活比例。",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": ["text": ["type": "string", "description": "完整的新策略正文。"]],
+                        "required": ["text"],
+                    ],
+                ])
+                tools.append([
                     "name": "report_to_parent",
                     "description": "（机长专用）向上级（父 crew）汇报：消息会送达所有直系父 crew 的群聊并唤醒父机长。用于:阶段性成果、需要上级拍板/协调资源、本部门被阻塞。汇报要短、带结论——上级不看过程日志。本 crew 没有父（根 crew）时会收到提示。",
                     "inputSchema": [
@@ -660,7 +678,7 @@ final class McpServer {
                 ])
                 tools.append([
                     "name": "create_child_crew",
-                    "description": "（机长专用）以当前 crew 为父，建一个子 crew。两个维度判断该不该拆，满足其一即可：**规模**——一块事大到该独立成组、要有自己的机长和群聊；**噪音**——要和某个对象高频往来大量消息时，哪怕子 crew 只有两个 session，也把高量私聊挪出去，别在主群刷屏。两头都不沾就别滥拆。子 crew 继承本 crew 的工作目录与机长类型，会自动起自己的机长，brief 作为它的开场任务。title 可不填（自动取个地名，子机长之后自己改名）。组织树层数不限。",
+                    "description": "（机长专用）以当前 crew 为父，建一个子 crew。两个维度判断该不该拆，满足其一即可：**规模**——一块事大到该独立成组、要有自己的机长和群聊；**噪音**——要和某个对象高频往来大量消息时，哪怕子 crew 只有两个 session，也把高量私聊挪出去，别在主群刷屏。两头都不沾就别滥拆。子 crew 继承本 crew 的工作目录与机长类型，会自动起自己的机长，brief 作为它的开场任务。总机组调用时是特例：创建顶层执行 crew，不写总机组父边；普通 crew 仍创建直属子 crew。title 可不填（自动取个地名，子机长之后自己改名）。组织树层数不限。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -984,6 +1002,11 @@ final class McpServer {
             return toolResult(id: id, text: "已清除兼容 attention 文案；人类 Todo 的黄色呼吸指示不受影响。")
         case "start_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            guard crewId != LocalCrew.chiefCrewId else {
+                return toolResult(
+                    id: id,
+                    text: "ERROR: 总机组只负责协调，不能在本组启动执行 session；请用 directory/contact 指定现有执行 crew，缺组时用 create_child_crew 新建顶层执行 crew。")
+            }
             let brief = ((args["brief"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !brief.isEmpty else { return toolResult(id: id, text: "ERROR: brief 不能为空") }
             // 可选精简 title：单行折叠 + trim；空则 nil，app 侧从 brief 兜底 derive。clamp 归 app。
@@ -1027,7 +1050,30 @@ final class McpServer {
                     + notes.map { "· \($0)" }.joined(separator: "\n")
             }
             if let announceIncident { text += "\n⚠️ \(announceIncident)" }
+            if !CaptainDelegationPolicyStore(directory: sharedDirectory)
+                .record(crewId: crewId, route: .localWorker) {
+                text += "\n⚠️ 派活已入队，但派活复盘账没有写进去；近期统计会漏掉这次。"
+            }
             return toolResult(id: id, text: text)
+        case "read_delegation_policy":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let policy = CaptainDelegationPolicyStore(directory: sharedDirectory)
+            do {
+                try policy.ensurePolicy(crewId: crewId)
+                return toolResult(id: id, text: "文件：\(policy.policyURL(crewId: crewId).path)\n\n"
+                    + (try policy.readPolicy(crewId: crewId)))
+            } catch {
+                return toolResult(id: id, text: "ERROR: 派活策略读不出来：\(error.localizedDescription)")
+            }
+        case "update_delegation_policy":
+            guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
+            let policy = CaptainDelegationPolicyStore(directory: sharedDirectory)
+            do {
+                try policy.updatePolicy(crewId: crewId, text: (args["text"] as? String) ?? "")
+                return toolResult(id: id, text: "派活策略已更新：\(policy.policyURL(crewId: crewId).path)。下一轮会读到新内容。")
+            } catch {
+                return toolResult(id: id, text: "ERROR: 派活策略没有更新：\(error.localizedDescription)")
+            }
         case "handoff_captain_to_session":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let targetCrewId = (args["target_crew_id"] as? String)
@@ -1837,7 +1883,10 @@ final class McpServer {
                     what: "给子 crew「\(target)」的消息", error: failure, consequence:
                         "**对方群里什么都没有，也不会有回执** —— 请当作未送达。"))
             }
-            return toolResult(id: id, text: "已提交给子 crew「\(target)」的消息。送达/找不到的回执会出现在本 crew 群聊。")
+            let recorded = CaptainDelegationPolicyStore(directory: sharedDirectory)
+                .record(crewId: crewId, route: .existingChildCrew)
+            return toolResult(id: id, text: "已提交给子 crew「\(target)」的消息。送达/找不到的回执会出现在本 crew 群聊。"
+                + (recorded ? "" : "\n⚠️ 派活复盘账未写入，这次不会进近期统计。"))
         case "adopt_crew":
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             let target = ((args["crew"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1899,7 +1948,10 @@ final class McpServer {
                     what: "建子 crew 的请求", error: failure, consequence:
                         "**子 crew 没建，开场任务也没有任何地方存着** —— 那段 brief 只在你这儿，重试前别丢。"))
             }
-            return toolResult(id: id, text: "已安排建子 crew。开场任务会写入子群并交给子机长执行；送达失败会在本群回执。")
+            let recorded = CaptainDelegationPolicyStore(directory: sharedDirectory)
+                .record(crewId: crewId, route: .newChildCrew)
+            return toolResult(id: id, text: "已安排建子 crew。开场任务会写入子群并交给子机长执行；送达失败会在本群回执。"
+                + (recorded ? "" : "\n⚠️ 派活复盘账未写入，这次不会进近期统计。"))
         default:
             return toolResult(id: id, text: "ERROR: 未知工具 \(name ?? "nil")")
         }
@@ -2210,6 +2262,12 @@ final class McpServer {
         var text = "已发到 \(number.text)（\(target.displayName)）的群聊白板，署名「\(signature)」。\(wakeNote)。"
         if let incident { text += "\n⚠️ 但请注意：\(incident)" }
         if let receiptIncident { text += "\n⚠️ \(receiptIncident)" }
+        if isCaptain {
+            if !CaptainDelegationPolicyStore(directory: sharedDirectory)
+                .record(crewId: crewId, route: .otherCrew) {
+                text += "\n⚠️ 跨组联系已送达，但派活复盘账未写入，这次不会进近期统计。"
+            }
+        }
         return toolResult(id: id, text: text)
     }
 

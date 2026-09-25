@@ -4,7 +4,7 @@ import Combine
 import Foundation
 
 private let inProcessProtocolCapabilities = [
-    "approval-mode", "launch-parameter-problem", "profile-switch", "screen-text",
+    "approval-mode", "codex-compaction", "launch-parameter-problem", "profile-switch", "screen-text",
     "terminal-bytes", "transcript-events", "wake-submit",
 ]
 
@@ -232,8 +232,11 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
 
     @Published private(set) var status: SessionStatus = .running
     var statusPublisher: Published<SessionStatus>.Publisher { $status }
-    var isBusy: Bool { kind == .codex && isWorking }
+    var isBusy: Bool { kind == .codex && (isWorking || isCompacting) }
     @Published private(set) var isWorking = false
+    @Published private(set) var contextUsage: CodexContextUsage?
+    @Published private(set) var isCompacting = false
+    @Published private(set) var compactionProblem: String?
     var isWorkingPublisher: Published<Bool>.Publisher { $isWorking }
     @Published private(set) var displayIsTyping = false
     var displayIsTypingUpdates: AnyPublisher<Bool, Never> { $displayIsTyping.eraseToAnyPublisher() }
@@ -337,7 +340,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     }
 
     func submitWake(_ text: String) async -> SessionWakeSubmission {
-        guard supportsCapability("wake-submit"), let client else { return .retry }
+        guard !isCompacting, supportsCapability("wake-submit"), let client else { return .retry }
         return await client.submitWake(sessionId: sessionId, text: text)
     }
 
@@ -358,6 +361,22 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
             throw SessionProtocolControlError.failed("后台链路已断开，切换没有发出去")
         }
         try await client.updateApprovalsReviewer(sessionId: sessionId, reviewer: reviewer)
+    }
+
+    func requestCodexCompaction() async throws {
+        guard kind == .codex, supportsCapability("codex-compaction") else {
+            throw SessionProtocolControlError.unsupported("daemon 不支持 Codex 原生压缩")
+        }
+        guard let client else {
+            throw SessionProtocolControlError.failed("后台链路已断开，压缩请求没有发出去")
+        }
+        compactionProblem = nil
+        isCompacting = true
+        do { try await client.requestCodexCompaction(sessionId: sessionId) }
+        catch {
+            isCompacting = false
+            throw error
+        }
     }
 
     func screenText(maxLines: Int) -> String {
@@ -398,6 +417,7 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
 
     func apply(state: SessionProtocolState) {
         status = state.status.sessionStatus
+        if status != .running { isCompacting = false }
         isWorking = state.isWorking || transcript?.turnActive == true
         displayIsTyping = state.displayIsTyping
         health = state.health?.health
@@ -451,6 +471,30 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
         guard let notification = SessionCodexNotification(event),
               notification.sessionID == sessionId else { return }
         let method = notification.method
+        if method == "pendingcrew/compactionFailed" {
+            compactionProblem = notification.foundationParams["message"] as? String
+            isCompacting = false
+            return
+        }
+        if method == "thread/tokenUsage/updated" {
+            if let usage = CodexProtocol.contextUsage(params: notification.foundationParams) {
+                contextUsage = usage
+            }
+        }
+        if method == "item/started",
+           let item = notification.foundationParams["item"] as? [String: Any],
+           (item["type"] as? String)?.lowercased() == "contextcompaction" {
+            compactionProblem = nil
+            isCompacting = true
+        }
+        if method == "turn/completed", isCompacting {
+            let turn = notification.foundationParams["turn"] as? [String: Any]
+            if turn?["status"] as? String != "completed" {
+                let message = (turn?["error"] as? [String: Any])?["message"] as? String
+                compactionProblem = "Codex 压缩失败：\(message ?? "回合未完成")"
+            }
+            isCompacting = false
+        }
         transcript?.apply(method: method, params: notification.foundationParams)
         // codex notification 比下一份 state snapshot 更早到 app。立刻镜像 turn
         // 生命周期，避免这段窗口里 inspect_session / 状态点谎报“空闲”。

@@ -137,6 +137,22 @@ enum LocalSessionLaunch {
         )
     }
 
+    /// Keep Claude's hooks while applying a session-local fast preference through
+    /// the same --settings file. A fresh file is used so another session is untouched.
+    static func settingsWithFastMode(_ path: String?, enabled: Bool,
+                                     sessionId: String) -> String? {
+        var settings: [String: Any] = [:]
+        if let path {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            settings = existing
+        }
+        settings["fastMode"] = enabled
+        return writeJSON(settings, to: FileManager.default.temporaryDirectory
+            .appendingPathComponent("pendingcrew-fast-settings-\(sessionId).json"))
+    }
+
     /// 渲染本地世界观 system prompt → 临时 `.md` → 返回路径供
     /// `--append-system-prompt-file`。best-effort：任一步失败返 nil，session
     /// 仍照常启动（只是没世界观）。`appendPersona` 非 nil 时（captain session）

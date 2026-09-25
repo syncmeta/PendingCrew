@@ -39,4 +39,15 @@ final class CrewChildCreationTargetTests: XCTestCase {
         XCTAssertEqual(target.id, "b")
         XCTAssertEqual(target, CrewChildCreationTarget.forRow(crew("b")))
     }
+
+    /// 总机组在组织模型里是派生的最上层，不存真实父边。它发出的
+    /// create_child_crew 应创建一个顶层执行 crew；普通机长仍照旧挂真实父边。
+    func testChiefCreatesTopLevelExecutionCrewWhileOrdinaryCrewCreatesChild() {
+        XCTAssertEqual(
+            CrewChildCreationPlacement.resolve(parentCrewId: LocalCrew.chiefCrewId),
+            .topLevelExecutionCrew)
+        XCTAssertEqual(
+            CrewChildCreationPlacement.resolve(parentCrewId: "ordinary"),
+            .attachedChild(parentCrewId: "ordinary"))
+    }
 }

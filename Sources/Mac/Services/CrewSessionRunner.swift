@@ -183,6 +183,7 @@ final class CrewSessionRunner: ObservableObject {
                 taskBrief: meta.taskBrief, title: meta.title,
                 workingDirectory: URL(fileURLWithPath: meta.workingDirectory),
                 model: meta.model, effort: meta.effort,
+                fastMode: meta.fastMode,
                 approvalsReviewer: meta.approvalsReviewer
                     .flatMap(CodexProtocol.ApprovalsReviewer.init(rawValue:)),
                 permissionModeOverride: meta.permissionModeOverride,
@@ -541,6 +542,20 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
+    /// Starts Codex's own thread compactor. Its RPC acknowledgement only means
+    /// the operation began; the contextCompaction item and turn completion are
+    /// tracked by the backend before normal wake delivery resumes.
+    func requestCodexCompaction(for run: CrewSessionRun) async {
+        guard run.kind == .codex, run.status == .running else { return }
+        if let remote = run.backend as? RemoteSessionBackend {
+            do { try await remote.requestCodexCompaction() }
+            catch { lastStartError = "Codex 压缩未启动：\(error.localizedDescription)" }
+        } else if let codex = run.backend as? CodexAppServerBackend {
+            do { try await codex.requestCompaction() }
+            catch { lastStartError = "Codex 压缩未启动：\(error.localizedDescription)" }
+        }
+    }
+
     /// 应用一条 session 自切模型/effort 请求，**并核实到底切没切成**（#544）。
     ///
     /// 老实现的坑（人类实测撞到）：直接往 PTY 写 `/model opus` 就当切好了、还抢先
@@ -559,6 +574,7 @@ final class CrewSessionRunner: ObservableObject {
             sendOrchestration(SessionOrchestrationOp.profileChange, [
                 "sessionId": .string(req.sessionId), "crewId": .string(req.crewId),
                 "model": .string(req.model ?? ""), "effort": .string(req.effort ?? ""),
+                "fastMode": .string(req.fastMode.map { $0 ? "on" : "off" } ?? ""),
             ])
             return
         }
@@ -573,6 +589,9 @@ final class CrewSessionRunner: ObservableObject {
         var commands: [SessionProfileSwitchCommand] = []
         if let m = req.model { commands.append(SessionProfileSwitchCommand(knob: .model, value: m)) }
         if let e = req.effort { commands.append(SessionProfileSwitchCommand(knob: .effort, value: e)) }
+        if let fast = req.fastMode {
+            commands.append(SessionProfileSwitchCommand(knob: .fast, value: fast ? "on" : "off"))
+        }
         guard !commands.isEmpty else { return }
 
         run.pendingProfile = commands.map(\.value).joined(separator: " / ")
@@ -584,8 +603,24 @@ final class CrewSessionRunner: ObservableObject {
             switch await run.applyProfileSwitch(cmd) {
             case .applied:
                 switch cmd.knob {
-                case .model: run.model = cmd.value
+                case .model:
+                    run.model = cmd.value
+                    if run.kind == .claudeCode, !cmd.value.lowercased().contains("opus") {
+                        run.fastMode = false
+                        AgentLaunchPreferences.setSessionFastMode(false,
+                            crewId: req.crewId, sessionId: req.sessionId)
+                    } else if let codex = run.backend as? CodexAppServerBackend {
+                        run.fastMode = codex.effectiveFastMode
+                    }
                 case .effort: run.effort = cmd.value
+                case .fast:
+                    run.fastMode = cmd.value == "on"
+                    AgentLaunchPreferences.setSessionFastMode(run.fastMode ?? false,
+                        crewId: req.crewId, sessionId: req.sessionId)
+                    if run.kind == .claudeCode, cmd.value == "on",
+                       run.model?.lowercased().contains("opus") != true {
+                        run.model = "opus"
+                    }
                 }
                 // **落盘**（Todo #146）。在这之前切换只改内存，session 一被重启或
                 // 被 @ 唤醒拉起就回到默认模型（codex 的默认是最贵的那个），
@@ -1431,6 +1466,17 @@ final class CrewSessionRunner: ObservableObject {
         // 以后改默认对老 session 就无效了。
         let explicitModel = config.model
         let explicitEffort = config.effort
+        if config.model == nil {
+            config.model = AgentLaunchPreferences.model(for: config.kind)
+        }
+        if config.kind.isAgent {
+            config.fastMode = config.fastMode ?? AgentLaunchPreferences.sessionFastMode(
+                crewId: crewId, sessionId: sessionId, kind: config.kind)
+            if let fastMode = config.fastMode {
+                AgentLaunchPreferences.setSessionFastMode(fastMode,
+                    crewId: crewId, sessionId: sessionId)
+            }
+        }
         // **只给 claude 兜**（2026-09-13 改）。claude 那边没有「问它用了什么」的
         // 回传通道，不兜就只能显示「默认」，所以照旧读 settings/env 解析一个出来。
         //
@@ -1443,6 +1489,16 @@ final class CrewSessionRunner: ObservableObject {
         if config.kind == .claudeCode, config.model == nil {
             config.model = SessionLaunchOptions.defaultModel(
                 for: config.kind, projectDir: workingDirectory)
+        }
+        if config.kind == .claudeCode, let fastMode = config.fastMode {
+            if fastMode, config.model?.lowercased().contains("opus") != true {
+                config.model = "opus"
+            }
+            guard let settings = LocalSessionLaunch.settingsWithFastMode(
+                config.settingsFile, enabled: fastMode, sessionId: sessionId) else {
+                throw RunnerError.fastSettingsUnavailable
+            }
+            config.settingsFile = settings
         }
         // 1. 校验可执行路径。纯终端直接用用户默认 shell，不走 coding-agent CLI 发现。
         let executable: URL
@@ -1526,6 +1582,7 @@ final class CrewSessionRunner: ObservableObject {
                 env: env,
                 model: config.model,
                 effort: config.effort,
+                fastMode: config.fastMode ?? false,
                 resumeThreadId: config.resumeSessionId,
                 approvalsReviewer: approvalsReviewer,
                 developerInstructions: developerInstructions,
@@ -1542,12 +1599,13 @@ final class CrewSessionRunner: ObservableObject {
                 // Todo #28：握手拿到 threadId 就记账，重启这个成员时 thread/resume 回来。
                 // codex 自己定的模型/effort，握手回来时回填显示（#489 的「显示=实际」
                 // 现在靠这条，而不靠我们自己算一遍 codex 的默认解析）。
-                notifyResolvedProfile: { [weak self] m, e in
+                notifyResolvedProfile: { [weak self] m, e, fast in
                     guard let self,
                           let run = self.runs.first(where: { $0.sessionId == sessionId })
                     else { return }
                     if let m, !m.isEmpty { run.model = m }
                     if let e, !e.isEmpty { run.effort = e }
+                    if let fast { run.fastMode = fast }
                 },
                 notifyThreadId: { tid in
                     // Todo #68：同 claude 那处 —— 真实 cwd 一并记下（唤醒时定进程目录用）。
@@ -1600,6 +1658,7 @@ final class CrewSessionRunner: ObservableObject {
             workingDirectory: workingDirectory,
             model: config.model,
             effort: config.effort,
+            fastMode: config.fastMode,
             approvalsReviewer: config.kind == .codex
                 ? CodexApprovalModeStore.shared.reviewer(
                     crewId: crewId,
@@ -1682,9 +1741,9 @@ final class CrewSessionRunner: ObservableObject {
 
     // MARK: - codex backend providers
 
-    /// codex 每轮 turn 前准备未读白板上下文 —— 复用 claude PostToolUse hook 的
-    /// 同一份 `HookEmitter`，但拆成 prepare / commit：只有 `turn/start` RPC 确认
-    /// 受理后才推进 per-session 游标。无未读 → nil（不注入）。
+    /// codex 每轮 turn 前准备未读白板与机长策略更新 —— 复用 claude PostToolUse
+    /// hook 的同一份 `HookEmitter`，但拆成 prepare / commit：只有 `turn/start`
+    /// RPC 确认受理后才推进白板游标和策略版本。两者都没更新才不注入。
     nonisolated static func makeWhiteboardProvider(
         crewId: String, sessionId: String, captain: Bool = false
     ) -> () -> CodexPreparedWhiteboardContext? {
@@ -1796,6 +1855,7 @@ final class CrewSessionRunner: ObservableObject {
     enum RunnerError: LocalizedError {
         case toolNotInstalled(kind: LocalCodingAgentKind)
         case defaultShellUnavailable
+        case fastSettingsUnavailable
         case terminalCannotBeAgent
         case captainNoWorkingDirectory
         case captainCandidateInvalid
@@ -1812,6 +1872,8 @@ final class CrewSessionRunner: ObservableObject {
                 return "未在 PATH 中找到 \(kind.binaryName)，请先安装 \(kind.displayName) CLI。"
             case .defaultShellUnavailable:
                 return "找不到可执行的用户默认 shell（$SHELL 与 /bin/zsh 均不可用）。"
+            case .fastSettingsUnavailable:
+                return "无法写入 Claude Code 的会话快速模式设置；session 未启动。"
             case .terminalCannotBeAgent:
                 return "纯终端不是 agent，不能作为机长或被编排启动。"
             case .captainNoWorkingDirectory:
@@ -2437,6 +2499,9 @@ final class CrewSessionRunner: ObservableObject {
         let localSessionId = "captain-" + String(UUID().uuidString.lowercased().prefix(8))
         let initialPrompt = CaptainBriefDelivery.openingPrompt(
             brief: openingBrief, wakeText: wakeText)
+        // 每个 crew 首次起机长时落一份可编辑策略。既有文件绝不被新版默认文案覆盖；
+        // HookEmitter 首轮及策略变化时会把它交给 Codex/Claude 的机长上下文。
+        try CaptainDelegationPolicyStore().ensurePolicy(crewId: crewId)
         // persona / members best-effort：加载失败不挡启动（只是少人设/世界观，与 worker 同策略）。
         let persona = try? LocalPromptLoader().rawTemplate(name: "crew-captain", locale: "zh")
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
@@ -2905,6 +2970,10 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     @Published var model: String?
     /// 当前生效的 thinking effort 档位（同 `model`，运行态切换后回写）。nil = runner 默认。
     @Published var effort: String?
+    @Published var fastMode: Bool?
+    @Published var codexContextUsage: CodexContextUsage?
+    @Published var codexIsCompacting = false
+    @Published var codexCompactionProblem: String?
     /// Codex native reviewer currently acknowledged by app-server. nil for Claude.
     @Published var approvalsReviewer: CodexProtocol.ApprovalsReviewer?
     /// 在途切换的目标（如「opus」）——**切换真生效前 `model`/`effort` 不动**，
@@ -3041,6 +3110,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     private var typingObservation: Task<Void, Never>?
     private var healthObservation: Task<Void, Never>?
     private var decisionObservation: Task<Void, Never>?
+    private var contextObservations: Set<AnyCancellable> = []
     /// 启动参数没生效的观察（Todo #36）—— 与 health 分开，见 `observeLaunchParameterProblems`。
     private var launchParameterObservation: Task<Void, Never>?
     /// 待决策的「等太久就升级找人」计时（一个菜单一条，清掉即取消）。
@@ -3057,6 +3127,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         workingDirectory: URL,
         model: String? = nil,
         effort: String? = nil,
+        fastMode: Bool? = nil,
         approvalsReviewer: CodexProtocol.ApprovalsReviewer? = nil,
         permissionModeOverride: String? = nil,
         backend: any SessionBackend,
@@ -3075,6 +3146,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         self.workingDirectory = workingDirectory
         self.model = model
         self.effort = effort
+        self.fastMode = fastMode
         self.approvalsReviewer = kind == .codex ? (approvalsReviewer ?? .autoReview) : nil
         self.permissionModeOverride = permissionModeOverride
         self.backend = backend
@@ -3096,6 +3168,31 @@ final class CrewSessionRun: ObservableObject, Identifiable {
             observeBackendHealth()
             observeLaunchParameterProblems()
             observePendingDecision()
+            if kind == .codex { observeCodexContext() }
+        }
+    }
+
+    private func observeCodexContext() {
+        if let codex = backend as? CodexAppServerBackend {
+            codex.$contextUsage.sink { [weak self] usage in
+                MainActor.assumeIsolated { self?.codexContextUsage = usage }
+            }.store(in: &contextObservations)
+            codex.$isCompacting.sink { [weak self] value in
+                MainActor.assumeIsolated { self?.codexIsCompacting = value }
+            }.store(in: &contextObservations)
+            codex.$compactionProblem.sink { [weak self] problem in
+                MainActor.assumeIsolated { self?.codexCompactionProblem = problem }
+            }.store(in: &contextObservations)
+        } else if let remote = backend as? RemoteSessionBackend {
+            remote.$contextUsage.sink { [weak self] usage in
+                MainActor.assumeIsolated { self?.codexContextUsage = usage }
+            }.store(in: &contextObservations)
+            remote.$isCompacting.sink { [weak self] value in
+                MainActor.assumeIsolated { self?.codexIsCompacting = value }
+            }.store(in: &contextObservations)
+            remote.$compactionProblem.sink { [weak self] problem in
+                MainActor.assumeIsolated { self?.codexCompactionProblem = problem }
+            }.store(in: &contextObservations)
         }
     }
 
@@ -3390,6 +3487,10 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         guard isMirror else { return }
         model = summary.model
         effort = summary.effort
+        fastMode = summary.fastMode
+        codexContextUsage = summary.codexContextUsage
+        codexIsCompacting = summary.codexIsCompacting ?? false
+        codexCompactionProblem = summary.codexCompactionProblem
         pendingProfile = summary.pendingProfile
         if let raw = summary.approvalsReviewer {
             approvalsReviewer = CodexProtocol.ApprovalsReviewer(rawValue: raw)
@@ -3414,7 +3515,11 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         .init(crewId: crewId, role: role == .captain ? "captain" : "worker",
               title: title, taskBrief: taskBrief,
               workingDirectory: workingDirectory.path,
-              model: model, effort: effort, pendingProfile: pendingProfile,
+              model: model, effort: effort, fastMode: fastMode,
+              codexContextUsage: codexContextUsage,
+              codexIsCompacting: codexIsCompacting,
+              codexCompactionProblem: codexCompactionProblem,
+              pendingProfile: pendingProfile,
               approvalsReviewer: approvalsReviewer?.rawValue,
               permissionModeOverride: permissionModeOverride,
               startedAt: startedAt.timeIntervalSince1970,

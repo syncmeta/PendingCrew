@@ -21,6 +21,9 @@ struct AgentCLIVersionView: View {
     @State private var pending: AgentCLIVersionCenter.Action?
     @State private var confirmedInstallation: AgentCLIInstallation?
     @State private var confirming = false
+    @State private var defaultModel = ""
+    @State private var defaultFastMode = false
+    @ObservedObject private var catalog = ModelCatalogCenter.shared
 
     private var installation: AgentCLIInstallation? { center.installations[kind] }
     private var busy: Bool { center.busy.contains(kind) }
@@ -29,6 +32,7 @@ struct AgentCLIVersionView: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             directoryRow
+            launchDefaults
             if let installation {
                 pathRows(installation)
                 actions(installation)
@@ -47,7 +51,11 @@ struct AgentCLIVersionView: View {
             }
         }
         .disabled(busy)
-        .onAppear { directory = LocalCodingAgentExecutable.overrideDirectory(kind) ?? "" }
+        .onAppear {
+            directory = LocalCodingAgentExecutable.overrideDirectory(kind) ?? ""
+            defaultModel = AgentLaunchPreferences.model(for: kind) ?? ""
+            defaultFastMode = AgentLaunchPreferences.fastMode(for: kind)
+        }
         .confirmationDialog(
             "确认维护 \(kind.displayName)？", isPresented: $confirming, titleVisibility: .visible
         ) {
@@ -92,6 +100,32 @@ struct AgentCLIVersionView: View {
                 Text("已指定：自动搜索会被跳过，就用这个目录里的 \(kind.binaryName)。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var launchDefaults: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("新 session 默认配置").font(.subheadline.weight(.medium))
+            Picker("默认模型", selection: $defaultModel) {
+                Text("沿用 \(kind.displayName) 当前默认").tag("")
+                if !defaultModel.isEmpty,
+                   !SessionLaunchOptions.models(for: kind, catalog: catalog.file).contains(defaultModel) {
+                    Text(defaultModel).tag(defaultModel)
+                }
+                ForEach(SessionLaunchOptions.models(for: kind, catalog: catalog.file), id: \.self) { model in
+                    Text(SessionLaunchOptions.displayName(for: model, catalog: catalog.file)).tag(model)
+                }
+            }
+            .onChange(of: defaultModel) { _, value in
+                UserDefaults.standard.set(value, forKey: "pendingcrew.defaultModel.\(kind.rawValue)")
+                Task { await catalog.refresh() }
+            }
+            Toggle("默认开启快速模式", isOn: $defaultFastMode)
+                .onChange(of: defaultFastMode) { _, value in
+                    UserDefaults.standard.set(value, forKey: "pendingcrew.defaultFastMode.\(kind.rawValue)")
+                }
+            Text("只作用于新 session；运行中的 session 可在会话页切换。快速模式可能增加用量或费用。")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

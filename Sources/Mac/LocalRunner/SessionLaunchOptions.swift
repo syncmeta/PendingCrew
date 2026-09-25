@@ -79,6 +79,7 @@ enum SessionLaunchOptions {
     /// （用户定调：不许再糊「默认」，#489）。
     ///
     /// **只做主链，不复刻 claude 全部解析规则**（drift 风险已记 tech-debt 🟡）：
+    /// - **两家先看 PendingCrew 编码工具设置**；未设置时沿用下面各自的规则。
     /// - **claude**：`ANTHROPIC_MODEL` env → 项目 `.claude/settings.local.json` →
     ///   项目 `.claude/settings.json` → 用户 `~/.claude/settings.json` 的 `model` 字段。
     ///   都没有 → 兜底当代默认 `sonnet` + fail-loud 日志（绝不返回 nil / 糊「默认」）。
@@ -103,6 +104,9 @@ enum SessionLaunchOptions {
 
     static func defaultModelResolution(for kind: LocalCodingAgentKind,
                                        projectDir: URL?) -> DefaultModelResolution {
+        if let override = AgentLaunchPreferences.model(for: kind) {
+            return DefaultModelResolution(value: override, source: "PendingCrew 编码工具设置的默认模型")
+        }
         switch kind {
         case .claudeCode:
             if let env = ProcessInfo.processInfo.environment["ANTHROPIC_MODEL"],

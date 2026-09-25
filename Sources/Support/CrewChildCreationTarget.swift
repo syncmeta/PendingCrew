@@ -1,5 +1,22 @@
 import Foundation
 
+/// 机长工具 `create_child_crew` 的落点。
+///
+/// 总机组是派生的协调层，不是一条可持久化的父边；它缺执行组时创建的是新的
+/// 顶层 crew（该 crew 的汇报父级仍会由 `reportingParentIds` 派生为总机组）。
+/// 普通 crew 保持原语义，创建并挂接直属子 crew。
+enum CrewChildCreationPlacement: Equatable {
+    case topLevelExecutionCrew
+    case attachedChild(parentCrewId: String)
+
+    static func resolve(parentCrewId: String) -> CrewChildCreationPlacement {
+        if parentCrewId == LocalCrew.chiefCrewId {
+            return .topLevelExecutionCrew
+        }
+        return .attachedChild(parentCrewId: parentCrewId)
+    }
+}
+
 /// 侧栏 crew 行右键「在这下面建子 crew」的目标（Todo #35）。
 ///
 /// 存在的意义只有一个：把「新 crew 挂到谁下面」这个 id 钉死成**被右键的那一行的

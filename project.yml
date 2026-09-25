@@ -45,7 +45,7 @@ settings:
     # sed 从 project.yml 取 MARKETING_VERSION）；Info.plist 用
     # $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) 变量替换，
     # 构建期 -MARKETING_VERSION=... 才能真正落进产物。对齐 apps/pendingbot。
-    MARKETING_VERSION: "0.1.37"
+    MARKETING_VERSION: "0.1.38"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   PendingCrew:
@@ -174,6 +174,8 @@ targets:
       # LocalWhiteboardStore 同理：自包含 Foundation 代码（本地白板持久化，
       # 不引 CrewWhiteboardEntry / app module），单独编进 bundle 单测。
       - path: Sources/Stores/LocalWhiteboardStore.swift
+      # 机长可编辑派活原则与每日历史复盘：hook、MCP helper、test bundle 共用。
+      - path: Sources/Stores/CaptainDelegationPolicyStore.swift
       # 目录监听的合流 + 相关性判定（#443 点进群聊转彩虹圈）。纯 Foundation，
       # LocalWhiteboardStore 依赖它，所以 test bundle 也要带上。
       - path: Sources/Stores/DirectoryWatchCoalescing.swift

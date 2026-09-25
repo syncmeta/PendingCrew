@@ -181,7 +181,8 @@ private struct CaptainAwarenessCooldownState: Codable {
 struct HookEmitter {
     struct PreparedContext {
         let context: String?
-        fileprivate let last: LocalWhiteboardMessage
+        fileprivate let last: LocalWhiteboardMessage?
+        fileprivate let delegation: CaptainDelegationPolicyStore.Prepared?
     }
 
     let store: LocalWhiteboardStore
@@ -197,7 +198,8 @@ struct HookEmitter {
         WhiteboardCursor(directory: cursorDir, crewId: crewId, sessionId: sessionId)
     }
 
-    /// 有未读 → 返回 hook JSON 字符串（并推进游标）；无未读 → nil（不注入）。
+    /// 有未读白板或机长策略更新 → 返回 hook JSON；两者都没有时 nil。
+    /// 白板游标只在确有未读时推进；策略版本标记也只在提交成功后更新。
     ///
     /// #543：注入前按 `CrewWhiteboardVisibility` 滤掉**定向 @ 了别人**的条目 ——
     /// 定向消息在注入面上与广播不可区分，是「机长点名派给一个 worker、全 crew 都
@@ -241,20 +243,29 @@ struct HookEmitter {
     func prepareContext(excluding excludedId: String? = nil,
                         now: Date = Date()) -> PreparedContext? {
         let unread = cursor.unread(in: store)
-        guard let last = unread.messages.last else { return nil }
+        let delegation = isCaptain
+            ? CaptainDelegationPolicyStore(directory: cursorDir)
+                .prepare(crewId: crewId, sessionId: sessionId, now: now)
+            : nil
+        let last = unread.messages.last
+        guard last != nil || delegation != nil else { return nil }
         // 要的是「**看得见吗**」，不是「该叫醒吗」—— 这条路每轮都跑，本身就不唤醒
         // 任何人，只决定渲染什么进上下文。只 @ 了人类的消息在这里必须可见（2026-08-23
         // 修的正主：过去它对所有 agent 隐身）。
         var mine = CrewWhiteboardVisibility.visible(
             unread.messages, to: sessionId, isCaptain: isCaptain)
         if let excludedId { mine.removeAll { $0.id == excludedId } }
-        return PreparedContext(
-            context: mine.isEmpty ? nil : render(mine, omitted: unread.omitted, now: now),
-            last: last)
+        let whiteboard = mine.isEmpty ? nil : render(mine, omitted: unread.omitted, now: now)
+        let context = [delegation?.text, whiteboard].compactMap { $0 }.joined(separator: "\n\n")
+        return PreparedContext(context: context.isEmpty ? nil : context,
+                               last: last, delegation: delegation)
     }
 
     func commit(_ prepared: PreparedContext) {
-        cursor.advance(to: prepared.last, in: store)
+        if let last = prepared.last { cursor.advance(to: last, in: store) }
+        if let delegation = prepared.delegation {
+            CaptainDelegationPolicyStore(directory: cursorDir).commit(delegation)
+        }
     }
 
     private func render(_ msgs: [LocalWhiteboardMessage], omitted: Int, now: Date) -> String {
@@ -372,8 +383,8 @@ struct HookEmitter {
     /// 界面上也一直显示「进行中 · 最后更新 3 天前」；缺的只是把它送进注入面，
     /// 让机长不必点开驾驶舱也知道自己那块板停在哪儿。
     ///
-    /// ⚠️ **这条只治得了 #108，治不了 #107**：整个注入面挂在 `prepareContext` 的
-    /// 「有未读白板消息」那道 guard 后面，群里安静时它一个字也送不出去。#107 那种
+    /// ⚠️ **这条只治得了 #108，治不了 #107**：陈旧度检查只在渲染未读白板时运行，
+    /// 派活策略可以独立注入也不会顺带计算陈旧度。#107 那种
     /// 「交出去的活没人管、群里又没人说话」只有主动唤醒（① 督办租约）能救。这句话
     /// 有一条测试钉着：`testStaleBoardCannotReachACaptainWhoHasNoUnreadMessages`。
     private func staleHint(state: inout CaptainAwarenessCooldownState, now: Date) -> String? {

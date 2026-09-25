@@ -5,9 +5,12 @@ import Foundation
 enum SessionProfileKnob: String, Equatable {
     case model
     case effort
+    case fast
 
     /// 人话名（白板回执用）。
-    var label: String { self == .model ? "模型" : "effort" }
+    var label: String {
+        switch self { case .model: return "模型"; case .effort: return "effort"; case .fast: return "快速模式" }
+    }
 }
 
 /// 一次具体的切换动作（一个档位一条命令 —— model 与 effort 分两笔发、各自核对）。
@@ -74,6 +77,7 @@ enum SessionProfileEchoVerdict {
     static let appliedPhrases: [SessionProfileKnob: [String]] = [
         .model: ["setmodelto", "resetmodeltotheworkspacedefault"],
         .effort: ["seteffortlevelto", "effortlevelsettoauto"],
+        .fast: ["fastmodeon", "fastmodeoff"],
     ]
 
     /// 明确失败回显。注意 `notapplied:` 覆盖 claude 的两条 effort 拒绝
@@ -82,6 +86,8 @@ enum SessionProfileEchoVerdict {
         .model: ["unknownmodel", "failedtovalidatemodel", "keptmodelas"],
         .effort: ["failedtoseteffortlevel", "notapplied:", "invalidargument:",
                   "exceedsyourorganization'slimit"],
+        .fast: ["fastmodeunavailable", "fastmoderequires", "fastmodehasbeendisabled",
+                "fastmodeisnotavailable", "notinyourorganization'sallowedmodels"],
     ]
 
     /// 去掉全部空白 + 小写；同时留一张「新下标 → 原字符下标」的映射，
@@ -129,14 +135,18 @@ enum SessionProfileEchoVerdict {
 
     /// 判定一段去 ANSI 明文里有没有该档位的生效/失败回显。nil = 还没有结论。
     /// 失败优先（同窗里两者都出现时，宁可报失败也不谎报成功）。
-    static func classify(_ plain: String, knob: SessionProfileKnob) -> SessionProfileSwitchOutcome? {
+    static func classify(_ plain: String, knob: SessionProfileKnob,
+                         expectedValue: String? = nil) -> SessionProfileSwitchOutcome? {
         let (text, origin) = squeeze(plain)
         if let quote = firstMatch(text, origin, in: plain,
                                   phrases: rejectedPhrases[knob] ?? []) {
             return .rejected(quote)
         }
+        let confirmations = knob == .fast && expectedValue != nil
+            ? [expectedValue == "on" ? "fastmodeon" : "fastmodeoff"]
+            : appliedPhrases[knob] ?? []
         if let quote = firstMatch(text, origin, in: plain,
-                                  phrases: appliedPhrases[knob] ?? []) {
+                                  phrases: confirmations) {
             return .applied(quote)
         }
         return nil
@@ -162,14 +172,19 @@ enum SessionProfileEchoVerdict {
 final class SessionProfileEchoScanner {
     private let stripper = AnsiPlainTextTail()
     private let knob: SessionProfileKnob
+    private let expectedValue: String?
     private(set) var outcome: SessionProfileSwitchOutcome?
 
-    init(knob: SessionProfileKnob) { self.knob = knob }
+    init(knob: SessionProfileKnob, expectedValue: String? = nil) {
+        self.knob = knob
+        self.expectedValue = expectedValue
+    }
 
     @discardableResult
     func feed(_ bytes: ArraySlice<UInt8>) -> SessionProfileSwitchOutcome? {
         guard outcome == nil, stripper.feed(bytes) else { return outcome }
-        outcome = SessionProfileEchoVerdict.classify(stripper.tail, knob: knob)
+        outcome = SessionProfileEchoVerdict.classify(stripper.tail, knob: knob,
+                                                      expectedValue: expectedValue)
         return outcome
     }
 }

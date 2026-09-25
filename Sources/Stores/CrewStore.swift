@@ -717,18 +717,23 @@ final class CrewStore: ObservableObject {
         }
     }
 
-    /// 执行一条 `create_child_crew` 命令：继承父
+    /// 执行一条 `create_child_crew` 命令：继承来源 crew
     /// `workingDirectory`/`captainAgentKind`/`machineId`/`responsibleSubjectId`
-    /// 建子 crew → 挂父边 → 父白板回执一行。全部失败路径都落一行回执，
+    /// 建执行 crew。普通来源挂真实父边；总机组来源保持顶层（汇报父级由现有派生
+    /// 规则指回总机组）。全部失败路径都落一行回执，
     /// 不静默吞（机长看不到 app 里的错误提示，只能靠白板知道命令没成）。
     private func executeCreateChildCrew(_ cmd: CrewCommand) async {
         let parentId = cmd.crewId
+        let placement = CrewChildCreationPlacement.resolve(parentCrewId: parentId)
         // 父 crew 的 workingDirectory 只在 detail（CrewBody）里,summary 没有这个字段 ——
         // 需要时才 fetch,不常驻占内存。取不到 detail 就现拉一次再读。
         if details[parentId] == nil {
             await refreshDetail(parentId)
         }
-        guard let parentSummary = crews.first(where: { $0.id == parentId }),
+        let parentSummary = parentId == LocalCrew.chiefCrewId
+            ? chiefLayer
+            : crews.first(where: { $0.id == parentId })
+        guard let parentSummary,
               let parentDetail = details[parentId] else {
             postSystemNotice(crewId: parentId, text: "建子 crew 被拒：找不到父 crew 信息。")
             return
@@ -750,13 +755,15 @@ final class CrewStore: ObservableObject {
             // 完整组织关系和开场任务；因此这里抑制 createCrew 的普通自动报到。
             let resp = try await createCrew(request, autostartCaptain: false)
             let childTitle = cmd.title ?? resp.crewId
-            // attachParent 单独 catch：createCrew 已成功，子 crew 真实存在（子机长
-            // 仍会带 brief 自动启动），只是没挂上父 DAG 边——回执必须如实说。
+            // attachParent 单独 catch：普通 crew 保持真实父边；总机组是派生层，
+            // 新执行 crew 必须留在顶层，不能写一条内建父边。
             var attachFailure: Error?
-            do {
-                try await attachParent(crewId: resp.crewId, parentCrewId: parentId)
-            } catch {
-                attachFailure = error
+            if case let .attachedChild(attachedParentId) = placement {
+                do {
+                    try await attachParent(crewId: resp.crewId, parentCrewId: attachedParentId)
+                } catch {
+                    attachFailure = error
+                }
             }
 
             let autostart = CaptainAutostartRequest(
@@ -791,6 +798,10 @@ final class CrewStore: ObservableObject {
                 postSystemNotice(
                     crewId: parentId,
                     text: "子 crew「\(childTitle)」已建出，但挂接父级失败：\(attachFailure.localizedDescription)。需在侧栏手动挂；开场任务仍会交给子机长。")
+            } else if placement == .topLevelExecutionCrew {
+                postSystemNotice(
+                    crewId: parentId,
+                    text: "已建顶层执行 crew「\(childTitle)」，开场任务已写入执行群，机长将自动接手。")
             } else {
                 postSystemNotice(
                     crewId: parentId,
@@ -1156,6 +1167,7 @@ struct SessionProfileChangeRequest: Equatable {
     let sessionId: String
     let model: String?
     let effort: String?
+    var fastMode: Bool? = nil
 }
 
 /// `schedule_wakeup` 命令排空后的一次待登记唤醒。

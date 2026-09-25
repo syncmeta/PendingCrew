@@ -461,12 +461,12 @@ final class HookEmitterTests: XCTestCase {
 
     /// **这条是 #107 / #108 的分工依据，不是普通回归。**
     ///
-    /// `prepareContext` 开头 `guard let last = unread.last else { return nil }` ——
-    /// 白板没有未读就整段不注入。所以「陈旧度进注入面」这个机制**只送得到已经
+    /// 陈旧度提示仍只随未读白板渲染；独立的派活策略更新可在无未读时送达，
+    /// 但不会顺带计算陈旧度。所以「陈旧度进注入面」这个机制**只送得到已经
     /// 因为别的事被叫醒的机长**；而 #107 的现场恰恰是群里安静、没人 @ 任何人。
     /// 也就是说 ② 修得了 #108，修不了 #107 —— 能修 #107 的只有主动唤醒（① 督办租约）。
     ///
-    /// 删掉那道 guard，这条立刻红：那时它会拿到一段只有陈旧度提示的注入。
+    /// 若未来让陈旧度独立注入，这条需相应重审。
     func testStaleBoardCannotReachACaptainWhoHasNoUnreadMessages() {
         let dir = tempDir()
         let store = LocalWhiteboardStore(directory: dir)

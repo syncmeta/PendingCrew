@@ -5,6 +5,39 @@ import XCTest
 /// P4 viewer：daemon 的 roster 怎么变成右栏里那份镜像。
 @MainActor
 final class SessionRosterTests: XCTestCase {
+    func testFastModeSurvivesRosterEncodingAndOldRosterRemainsReadable() throws {
+        var current = meta()
+        current.fastMode = true
+        let encoded = try JSONEncoder().encode(current)
+        XCTAssertEqual(try JSONDecoder().decode(SessionRunSummary.self, from: encoded).fastMode, true)
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        old.removeValue(forKey: "fastMode")
+        let oldData = try JSONSerialization.data(withJSONObject: old)
+        XCTAssertNil(try JSONDecoder().decode(SessionRunSummary.self, from: oldData).fastMode)
+    }
+
+    func testCodexUsageAndCompactionStateSurviveRosterEncoding() throws {
+        var current = meta()
+        current.codexContextUsage = .init(turnId: "t", contextTokens: 128_486,
+                                          contextWindow: 258_400, cumulativeTokens: 2_312_214)
+        current.codexIsCompacting = true
+        current.codexCompactionProblem = "压缩失败"
+        let encoded = try JSONEncoder().encode(current)
+        let decoded = try JSONDecoder().decode(SessionRunSummary.self, from: encoded)
+        XCTAssertEqual(decoded.codexContextUsage, current.codexContextUsage)
+        XCTAssertEqual(decoded.codexIsCompacting, true)
+        XCTAssertEqual(decoded.codexCompactionProblem, "压缩失败")
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for key in ["codexContextUsage", "codexIsCompacting",
+                    "codexCompactionProblem"] {
+            old.removeValue(forKey: key)
+        }
+        let oldData = try JSONSerialization.data(withJSONObject: old)
+        let oldDecoded = try JSONDecoder().decode(SessionRunSummary.self, from: oldData)
+        XCTAssertNil(oldDecoded.codexContextUsage)
+        XCTAssertNil(oldDecoded.codexIsCompacting)
+        XCTAssertNil(oldDecoded.codexCompactionProblem)
+    }
 
     private func state(kind: String = "claude_code") -> SessionProtocolState {
         .init(status: .running, isWorking: false, displayIsTyping: false,

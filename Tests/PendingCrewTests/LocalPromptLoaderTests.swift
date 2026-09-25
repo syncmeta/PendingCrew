@@ -45,6 +45,18 @@ final class LocalPromptLoaderTests: XCTestCase {
         XCTAssertTrue(out.contains("机长"), "should fall back to bundled zh crew-captain")
     }
 
+    /// 总机组不是一个亲自干活的项目组。普通机长规则会教 agent 在明确任务时
+    /// `start_session`，所以必须有一段更高优先级的总机组特例把这条翻掉；否则
+    /// 总机长拿到 VPS 迁移这类任务时会顺着通用自治规则直接跑 SSH / 改线上。
+    func testChiefCaptainIsCoordinationOnly() throws {
+        let captain = try loader.rawTemplate(name: "crew-captain", locale: "zh")
+        XCTAssertTrue(captain.contains("pendingcrew-chief"), "总机组边界必须按稳定 id 判，不靠可改标题")
+        XCTAssertTrue(captain.contains("只做任务识别"), "总机长职责应明确收窄到协调")
+        XCTAssertTrue(captain.contains("不得亲自运行 SSH"), "必须点名拦住本次真实越界")
+        XCTAssertTrue(captain.contains("不得调用 `start_session`"), "不能在总机组里偷起执行 worker")
+        XCTAssertTrue(captain.contains("`create_child_crew`"), "缺执行组时必须给出可行的新建路径")
+    }
+
     func testMissingThrows() {
         XCTAssertThrowsError(try loader.rawTemplate(name: "does-not-exist", locale: "zh")) { err in
             XCTAssertEqual(err as? LocalPromptLoader.LoaderError,

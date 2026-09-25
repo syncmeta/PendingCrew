@@ -43,9 +43,12 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     var statusPublisher: Published<SessionStatus>.Publisher { $status }
     /// app-server 有真 turn 生命周期：turn/started→activeTurnId 置位，turn/completed→清空。
     /// （唤醒注入门禁用，main 语义保留。）
-    var isBusy: Bool { activeTurnId != nil }
+    var isBusy: Bool { activeTurnId != nil || isCompacting }
     /// UI 头像「干活中/空闲」用,与 isBusy 同值但可观察。turn/started→true,completed→false。
     @Published private(set) var isWorking = false
+    @Published private(set) var contextUsage: CodexContextUsage?
+    @Published private(set) var isCompacting = false
+    @Published private(set) var compactionProblem: String?
     var isWorkingPublisher: Published<Bool>.Publisher { $isWorking }
     /// runner 健康异常 —— codex 侧目前只有一个可靠信号:`account/*` server-request
     /// (token 刷新请求 = 登录态失效),见 `handleServerRequest` 的 `.account` 分支。
@@ -56,6 +59,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private let cwd: String
     private var model: String?
     private var effort: String?
+    private var fastMode: Bool
+    var effectiveFastMode: Bool { fastMode }
     private let resumeThreadId: String?
     private let developerInstructions: String?
     private let mcpServers: [String: Any]?
@@ -84,7 +89,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     ///
     /// 所以现在不传就是不传，让 codex 自己定，然后**从回包里读真值**回填显示 ——
     /// 显示=实际跑的模型这条（#489）靠这条回调保住，不靠我们自己算。
-    private let notifyResolvedProfile: (_ model: String?, _ effort: String?) -> Void
+    private let notifyResolvedProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
     /// `thread/resume` 失败、已降级成新起一条 thread 时回调（Todo #28 fail-loud）——
     /// runner 据此往群里如实说「原会话接不回来了，这是新开的」，不静默假装恢复。
     private let notifyResumeFallback: (_ failedThreadId: String, _ reason: String) -> Void
@@ -99,6 +104,14 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// 与 `isLaunchReady` 同一件事，这里只是把它接到协议上。
     var hasObservedLaunchSignal: Bool { isLaunchReady }
     private var activeTurnId: String?
+    private var turnStartCumulativeTokens: Int64?
+    private var turnsSinceCompaction = 3
+    private var compactedInCurrentTurn = false
+    private var currentTurnSawAgentMessage = false
+    private var compactionEpoch: UInt64 = 0
+    private var pendingCompletedTurnUsage: (turnId: String, baseline: Int64?,
+                                            turnsSinceCompaction: Int)?
+    private var messagesQueuedDuringCompaction: [String] = []
     private let notificationSequencer = CodexNotificationSequencer()
     private var notificationTask: Task<Void, Never>?
     private var approvalsReviewer: CodexProtocol.ApprovalsReviewer
@@ -107,14 +120,14 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private var notifiedMethods: Set<String> = []
 
     init(executable: String, argv: [String], cwd: String, env: [String: String],
-         model: String?, effort: String?, resumeThreadId: String?,
+         model: String?, effort: String?, fastMode: Bool = false, resumeThreadId: String?,
          approvalsReviewer: CodexProtocol.ApprovalsReviewer = .autoReview,
          developerInstructions: String?, mcpServers: [String: Any]?,
          whiteboardProvider: @escaping () -> CodexPreparedWhiteboardContext?,
          approvalProvider: @escaping (_ summary: String, _ decisions: [String]) async -> String,
          notifyUnanswerable: @escaping (_ summary: String) -> Void = { _ in },
          notifyTurnEnded: @escaping (_ lastAgentText: String) -> Void = { _ in },
-         notifyResolvedProfile: @escaping (_ model: String?, _ effort: String?) -> Void = { _, _ in },
+         notifyResolvedProfile: @escaping (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void = { _, _, _ in },
          notifyThreadId: @escaping (_ threadId: String) -> Void = { _ in },
          notifyResumeFallback: @escaping (_ failedThreadId: String, _ reason: String) -> Void = { _, _ in },
          protocolNotificationSink: ((_ method: String, _ params: [String: Any]) -> Void)? = nil) {
@@ -127,6 +140,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         self.cwd = cwd
         self.model = model
         self.effort = effort
+        self.fastMode = fastMode
         self.resumeThreadId = resumeThreadId
         self.approvalsReviewer = approvalsReviewer
         self.developerInstructions = developerInstructions
@@ -161,6 +175,13 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                     onTerminate: { [weak self] code in
                         Task { @MainActor in
                             guard let self, self.status == .running else { return }   // stop() already set .exited; don't clobber
+                            if self.isCompacting {
+                                self.compactionProblem = "Codex 压缩中断：app-server 已退出"
+                                self.protocolNotificationSink?("pendingcrew/compactionFailed", [
+                                    "message": self.compactionProblem ?? "Codex 压缩中断",
+                                ])
+                                self.isCompacting = false
+                            }
                             self.status = .exited(code)
                             self.isWorking = false
                         }
@@ -180,7 +201,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                                 effort: effort,
                                 developerInstructions: developerInstructions,
                                 mcpServers: mcpServers,
-                                approvalsReviewer: approvalsReviewer)) as? [String: Any]
+                                approvalsReviewer: approvalsReviewer,
+                                serviceTier: fastMode ? "fast" : "default")) as? [String: Any]
                     } catch {
                         self.notifyResumeFallback(resumeThreadId, error.localizedDescription)
                         result = try await self.startFreshThread()
@@ -194,10 +216,12 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 // 不管我们传没传（传了它也会原样回来，所以两条路一个写法）。
                 let resolvedModel = result?["model"] as? String
                 let resolvedEffort = result?["reasoningEffort"] as? String
+                let resolvedTier = result?["serviceTier"] as? String
                 if let resolvedModel, !resolvedModel.isEmpty { self.model = resolvedModel }
                 if let resolvedEffort, !resolvedEffort.isEmpty { self.effort = resolvedEffort }
-                if resolvedModel != nil || resolvedEffort != nil {
-                    self.notifyResolvedProfile(resolvedModel, resolvedEffort)
+                if resolvedModel != nil || resolvedEffort != nil || resolvedTier != nil {
+                    self.notifyResolvedProfile(resolvedModel, resolvedEffort,
+                        resolvedTier.map { $0 == "fast" || $0 == "priority" })
                 }
                 if let tid, !tid.isEmpty { self.notifyThreadId(tid) }
                 if let p = initialPrompt, !p.isEmpty { self.send(p) }
@@ -219,7 +243,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 effort: effort,
                 developerInstructions: developerInstructions,
                 mcpServers: mcpServers,
-                approvalsReviewer: approvalsReviewer)) as? [String: Any]
+                approvalsReviewer: approvalsReviewer,
+                serviceTier: fastMode ? "fast" : "default")) as? [String: Any]
     }
 
     /// Apply the native Codex reviewer to a live thread. Persistence is achieved by
@@ -250,11 +275,24 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
             case .effort:
                 params = CodexProtocol.threadSettingsUpdateParams(
                     threadId: threadId, effort: command.value)
+            case .fast:
+                params = CodexProtocol.threadSettingsUpdateParams(
+                    threadId: threadId, serviceTier: command.value == "on" ? "fast" : "default")
             }
-            _ = try await connection.request(method: "thread/settings/update", params: params)
+            let result = try await connection.request(method: "thread/settings/update", params: params)
+            if let tier = (result as? [String: Any])?["serviceTier"] as? String {
+                fastMode = tier == "fast" || tier == "priority"
+                if command.knob == .fast, fastMode != (command.value == "on") {
+                    return .rejected("Codex 返回的实际服务档位是 \(tier)")
+                }
+            }
             switch command.knob {
             case .model: model = command.value
             case .effort: effort = command.value
+            case .fast:
+                if (result as? [String: Any])?["serviceTier"] == nil {
+                    fastMode = command.value == "on"
+                }
             }
             return .applied("thread/settings/update acknowledged")
         } catch {
@@ -314,11 +352,20 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     }
 
     func send(_ text: String) {
-        Task { _ = await submitWake(text) }
+        if isCompacting {
+            messagesQueuedDuringCompaction.append(text)
+            return
+        }
+        Task {
+            let result = await submitWake(text)
+            if result == .retry, isCompacting {
+                messagesQueuedDuringCompaction.append(text)
+            }
+        }
     }
 
     func submitWake(_ text: String) async -> SessionWakeSubmission {
-        guard let threadId else { return .retry }
+        guard let threadId, !isCompacting else { return .retry }
         let wb = whiteboardProvider()
         do {
             _ = try await connection.request(
@@ -350,6 +397,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     func stop() {
         guard status == .running else { return }
         status = .exited(nil)
+        isCompacting = false
+        messagesQueuedDuringCompaction.removeAll()
         isWorking = false
         launchWatchdog?.cancel()   // 主动停的别被自检倒打一耙报成「拉起失败」
         notificationTask?.cancel()
@@ -363,14 +412,47 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         // ready continuation lease.
         trackTurn(method: method, params: params)
         protocolNotificationSink?(method, params)
+        // The mirrored transcript clears busy on turn/completed. Re-publish the
+        // state after that event when a native compaction immediately follows.
+        if method == "turn/completed", isCompacting { isWorking = true }
     }
 
     private func trackTurn(method: String, params: [String: Any]) {
         if let detected = CodexProtocol.sessionHealth(method: method, params: params) {
             health = detected
         }
+        if method == "thread/tokenUsage/updated", let threadId,
+           let usage = CodexProtocol.contextUsage(params: params, expectedThreadId: threadId) {
+            contextUsage = usage
+            if turnStartCumulativeTokens == nil {
+                turnStartCumulativeTokens = usage.cumulativeTokens
+            }
+            if let pending = pendingCompletedTurnUsage, pending.turnId == usage.turnId,
+               activeTurnId == nil, !isCompacting {
+                pendingCompletedTurnUsage = nil
+                if shouldCompact(usage: usage, baseline: pending.baseline,
+                                 turnsSinceCompaction: pending.turnsSinceCompaction) {
+                    beginCompaction()
+                }
+            }
+        }
+        if method == "item/completed",
+           let item = params["item"] as? [String: Any],
+           (item["type"] as? String)?.lowercased() == "contextcompaction" {
+            compactedInCurrentTurn = true
+            turnsSinceCompaction = 0
+        }
+        if method == "item/completed",
+           let item = params["item"] as? [String: Any],
+           (item["type"] as? String)?.lowercased() == "agentmessage" {
+            currentTurnSawAgentMessage = true
+        }
         if method == "turn/started" {
             activeTurnId = (params["turn"] as? [String: Any])?["id"] as? String
+            pendingCompletedTurnUsage = nil
+            turnStartCumulativeTokens = contextUsage?.cumulativeTokens
+            compactedInCurrentTurn = false
+            currentTurnSawAgentMessage = false
             isWorking = true
         } else if method.hasPrefix("item/") {
             // First-hand transcript activity repairs a missing/delayed start edge.
@@ -381,12 +463,40 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
             if let activeTurnId, let completedId, activeTurnId != completedId {
                 return
             }
-            // Seal the exact turn's continuation before publishing idle.
-            if (params["turn"] as? [String: Any])?["status"] as? String == "completed" {
+            let completed = (params["turn"] as? [String: Any])?["status"] as? String == "completed"
+            let finishingCompaction = isCompacting
+            if finishingCompaction && !completed {
+                let message = ((params["turn"] as? [String: Any])?["error"] as? [String: Any])?["message"] as? String
+                compactionProblem = "Codex 压缩失败：\(message ?? "回合未完成")"
+            }
+            // A compaction turn has no new agent answer. Reusing the prior answer
+            // here would post a duplicate crew message.
+            if completed, !finishingCompaction,
+               (!compactedInCurrentTurn || currentTurnSawAgentMessage) {
                 notifyTurnEnded(lastAgentText())
             }
+            var compactAfterTurn = false
+            if completed, !finishingCompaction, !compactedInCurrentTurn,
+               let completedId {
+                if let usage = contextUsage, usage.turnId == completedId {
+                    compactAfterTurn = shouldCompact(
+                        usage: usage, baseline: turnStartCumulativeTokens,
+                        turnsSinceCompaction: turnsSinceCompaction)
+                } else {
+                    pendingCompletedTurnUsage = (
+                        completedId, turnStartCumulativeTokens, turnsSinceCompaction)
+                }
+            }
             activeTurnId = nil
-            isWorking = false
+            if finishingCompaction || compactedInCurrentTurn {
+                turnsSinceCompaction = 0
+            } else {
+                turnsSinceCompaction = min(3, turnsSinceCompaction + 1)
+            }
+            if finishingCompaction { isCompacting = false }
+            if compactAfterTurn { beginCompaction() }
+            else { isWorking = false }
+            if finishingCompaction { flushMessagesQueuedDuringCompaction() }
             // A later successful turn is first-hand proof that a sticky quota
             // health flag is stale (for example after switching subscription
             // windows). Clear it immediately instead of waiting for the old
@@ -395,6 +505,67 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                (health?.isQuotaRelated == true || health?.kind == .cliVersionIncompatible || health?.kind == .turnFailed) {
                 health = nil
             }
+        }
+    }
+
+    private func shouldCompact(usage: CodexContextUsage, baseline: Int64?,
+                               turnsSinceCompaction: Int) -> Bool {
+        CodexCompactionPolicy.shouldCompact(
+            usage: usage,
+            turnTokens: usage.cumulativeTokens - (baseline ?? usage.cumulativeTokens),
+            turnsSinceCompaction: turnsSinceCompaction)
+    }
+
+    private func flushMessagesQueuedDuringCompaction() {
+        guard !isCompacting, !messagesQueuedDuringCompaction.isEmpty else { return }
+        let text = messagesQueuedDuringCompaction.joined(separator: "\n\n")
+        messagesQueuedDuringCompaction.removeAll()
+        send(text)
+    }
+
+    /// Request native compaction only while the thread is idle. The RPC's `{}`
+    /// reply means accepted, not finished; the following turn/completed is the
+    /// completion signal. Queued crew messages wait while `isCompacting` is true.
+    func requestCompaction() async throws {
+        guard status == .running, !isBusy, let reservation = reserveCompaction() else {
+            throw SessionProtocolControlError.failed("Codex session 正在执行回合、正在压缩，或尚未就绪")
+        }
+        try await performCompaction(reservation)
+    }
+
+    private func beginCompaction() {
+        guard let reservation = reserveCompaction() else { return }
+        Task { [weak self] in
+            try? await self?.performCompaction(reservation)
+        }
+    }
+
+    private func reserveCompaction() -> (threadId: String, epoch: UInt64)? {
+        guard status == .running, let threadId, !isCompacting else { return nil }
+        compactionEpoch &+= 1
+        pendingCompletedTurnUsage = nil
+        compactionProblem = nil
+        isCompacting = true
+        isWorking = true
+        return (threadId, compactionEpoch)
+    }
+
+    private func performCompaction(_ reservation: (threadId: String, epoch: UInt64)) async throws {
+        do {
+            _ = try await connection.request(
+                method: "thread/compact/start", params: ["threadId": reservation.threadId])
+        } catch {
+            if compactionEpoch == reservation.epoch, status == .running {
+                compactionProblem = "Codex 压缩未启动：\(error.localizedDescription)"
+                turnsSinceCompaction = 0
+                isCompacting = false
+                isWorking = activeTurnId != nil
+                protocolNotificationSink?("pendingcrew/compactionFailed", [
+                    "message": compactionProblem ?? "Codex 压缩未启动",
+                ])
+                flushMessagesQueuedDuringCompaction()
+            }
+            throw error
         }
     }
 

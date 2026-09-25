@@ -2,6 +2,56 @@ import XCTest
 
 
 final class CodexProtocolTests: XCTestCase {
+    func testContextUsageUsesLastForWindowAndTotalForCumulativeCost() {
+        let usage = CodexProtocol.contextUsage(params: [
+            "threadId": "thread-a", "turnId": "turn-a",
+            "tokenUsage": [
+                "last": ["totalTokens": 128_486],
+                "total": ["totalTokens": 2_312_214],
+                "modelContextWindow": 258_400,
+            ],
+        ], expectedThreadId: "thread-a")
+        XCTAssertEqual(usage?.contextTokens, 128_486)
+        XCTAssertEqual(usage?.cumulativeTokens, 2_312_214)
+        XCTAssertEqual(usage?.contextWindow, 258_400)
+        XCTAssertNil(CodexProtocol.contextUsage(params: ["threadId": "other"],
+                                              expectedThreadId: "thread-a"))
+        let unknownWindow = CodexProtocol.contextUsage(params: [
+            "threadId": "thread-a", "turnId": "turn-b",
+            "tokenUsage": [
+                "last": ["totalTokens": 35_000], "total": ["totalTokens": 70_000],
+                "modelContextWindow": NSNull(),
+            ],
+        ])
+        XCTAssertEqual(unknownWindow?.contextTokens, 35_000)
+        XCTAssertEqual(unknownWindow?.contextWindow, 0)
+    }
+
+    func testProactiveCompactionRequiresContextPressureAndSkipsRecentCompaction() {
+        let usage = CodexContextUsage(turnId: "turn-a", contextTokens: 128_486,
+                                      contextWindow: 258_400, cumulativeTokens: 2_312_214)
+        XCTAssertTrue(CodexCompactionPolicy.shouldCompact(
+            usage: usage, turnTokens: 2_300_000, turnsSinceCompaction: 3))
+        XCTAssertFalse(CodexCompactionPolicy.shouldCompact(
+            usage: usage, turnTokens: 50_000, turnsSinceCompaction: 3))
+        XCTAssertFalse(CodexCompactionPolicy.shouldCompact(
+            usage: usage, turnTokens: 2_300_000, turnsSinceCompaction: 1))
+        let nearlyFull = CodexContextUsage(turnId: "turn-b", contextTokens: 190_000,
+                                           contextWindow: 258_400, cumulativeTokens: 500_000)
+        XCTAssertTrue(CodexCompactionPolicy.shouldCompact(
+            usage: nearlyFull, turnTokens: 40_000, turnsSinceCompaction: 3))
+    }
+    func testFastTierTravelsThroughStartResumeAndLiveUpdate() {
+        let start = CodexProtocol.threadStartParams(cwd: "/repo", model: nil, effort: nil,
+            developerInstructions: nil, mcpServers: nil, serviceTier: "fast")
+        let resume = CodexProtocol.threadResumeParams(threadId: "old", cwd: "/repo",
+            model: nil, effort: nil, developerInstructions: nil, mcpServers: nil,
+            serviceTier: "default")
+        let update = CodexProtocol.threadSettingsUpdateParams(threadId: "old", serviceTier: "fast")
+        XCTAssertEqual(start["serviceTier"] as? String, "fast")
+        XCTAssertEqual(resume["serviceTier"] as? String, "default")
+        XCTAssertEqual(update["serviceTier"] as? String, "fast")
+    }
     func testInitializeParamsCarryClientInfoAndExperimentalApi() {
         let p = CodexProtocol.initializeParams(clientName: "PendingCrew", version: "1.0")
         let info = p["clientInfo"] as? [String: Any]
@@ -414,6 +464,148 @@ final class CodexPipeWriteTests: XCTestCase {
 // 上面第一条测试就不是 failure，而是把整个 test runner 崩掉 —— 这正是它要挡的事。
 
 #if os(macOS)
+@MainActor
+final class CodexCompactionLifecycleTests: XCTestCase {
+    func testManualCompactionCrossesSessionProtocolAndWaitsForNativeTurn() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-manual-compaction-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("server.py")
+        let methods = directory.appendingPathComponent("methods.txt")
+        let release = directory.appendingPathComponent("release-compaction")
+        try #"""
+        import json, os, sys, time
+        def emit(value):
+            print(json.dumps(value), flush=True)
+        for line in sys.stdin:
+            request = json.loads(line)
+            if "id" not in request:
+                continue
+            method = request["method"]
+            with open(sys.argv[1], "a") as log:
+                log.write(method + "\n")
+            result = {"thread": {"id": "manual-thread"}} if method == "thread/start" else {}
+            emit({"id": request["id"], "result": result})
+            if method == "thread/compact/start":
+                while not os.path.exists(sys.argv[2]):
+                    time.sleep(0.01)
+                emit({"method": "turn/started", "params": {"turn": {"id": "compact-turn"}}})
+                emit({"method": "item/started", "params": {
+                    "item": {"id": "compact-item", "type": "contextCompaction"}}})
+                emit({"method": "item/completed", "params": {
+                    "item": {"id": "compact-item", "type": "contextCompaction"}}})
+                emit({"method": "turn/completed", "params": {
+                    "turn": {"id": "compact-turn", "status": "completed"}}})
+        """#.write(to: script, atomically: true, encoding: .utf8)
+        let bridge = InProcessSessionProtocolBridge()
+        let backend = CodexAppServerBackend(
+            executable: "/usr/bin/python3", argv: ["-u", script.path, methods.path, release.path],
+            cwd: directory.path, env: ProcessInfo.processInfo.environment,
+            model: nil, effort: nil, resumeThreadId: nil,
+            developerInstructions: nil, mcpServers: nil,
+            whiteboardProvider: { nil }, approvalProvider: { _, _ in "decline" },
+            protocolNotificationSink: bridge.codexNotificationSink(sessionId: "manual"))
+        let remote = bridge.exposeAttached(sessionId: "manual", backend: backend)
+        defer { backend.stop() }
+        backend.boot(initialPrompt: nil)
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline && !backend.hasObservedLaunchSignal {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(backend.hasObservedLaunchSignal)
+        try await remote.requestCodexCompaction()
+        XCTAssertTrue(backend.isCompacting)
+        remote.send("continue after compaction")
+        try "go".write(to: release, atomically: true, encoding: .utf8)
+        while Date() < deadline {
+            let log = (try? String(contentsOf: methods, encoding: .utf8)) ?? ""
+            if !backend.isCompacting && !remote.isCompacting && log.contains("turn/start") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let log = try String(contentsOf: methods, encoding: .utf8)
+        XCTAssertEqual(log.components(separatedBy: "thread/compact/start").count - 1, 1)
+        XCTAssertEqual(log.components(separatedBy: "turn/start").count - 1, 1,
+                       "A message sent during compaction must be delivered afterward")
+        XCTAssertFalse(backend.isCompacting)
+        XCTAssertFalse(remote.isCompacting)
+    }
+
+    func testHighContextStartsOneNativeCompactionAndDoesNotRepeatTurnEnd() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-compaction-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("server.py")
+        let methods = directory.appendingPathComponent("methods.txt")
+        try #"""
+        import json, sys
+        def emit(value):
+            print(json.dumps(value), flush=True)
+        for line in sys.stdin:
+            request = json.loads(line)
+            if "id" not in request:
+                continue
+            method = request["method"]
+            with open(sys.argv[1], "a") as log:
+                log.write(method + "\n")
+            result = {"thread": {"id": "fixture-thread"}} if method == "thread/start" else {}
+            emit({"id": request["id"], "result": result})
+            if method == "turn/start":
+                emit({"method": "turn/started", "params": {"turn": {"id": "work-turn"}}})
+                emit({"method": "turn/completed", "params": {
+                    "turn": {"id": "work-turn", "status": "completed"}}})
+                emit({"method": "thread/tokenUsage/updated", "params": {
+                    "threadId": "fixture-thread", "turnId": "work-turn",
+                    "tokenUsage": {"last": {"totalTokens": 190000},
+                                   "total": {"totalTokens": 500000},
+                                   "modelContextWindow": 258400}}})
+            if method == "thread/compact/start":
+                emit({"method": "turn/started", "params": {"turn": {"id": "compact-turn"}}})
+                emit({"method": "item/started", "params": {
+                    "item": {"id": "compact-item", "type": "contextCompaction"}}})
+                emit({"method": "item/completed", "params": {
+                    "item": {"id": "compact-item", "type": "contextCompaction"}}})
+                emit({"method": "thread/tokenUsage/updated", "params": {
+                    "threadId": "fixture-thread", "turnId": "compact-turn",
+                    "tokenUsage": {"last": {"totalTokens": 28000},
+                                   "total": {"totalTokens": 525000},
+                                   "modelContextWindow": 258400}}})
+                emit({"method": "turn/completed", "params": {
+                    "turn": {"id": "compact-turn", "status": "completed"}}})
+        """#.write(to: script, atomically: true, encoding: .utf8)
+
+        let bridge = InProcessSessionProtocolBridge()
+        var turnEndCount = 0
+        let backend = CodexAppServerBackend(
+            executable: "/usr/bin/python3", argv: ["-u", script.path, methods.path],
+            cwd: directory.path, env: ProcessInfo.processInfo.environment,
+            model: nil, effort: nil, resumeThreadId: nil,
+            developerInstructions: nil, mcpServers: nil,
+            whiteboardProvider: { nil }, approvalProvider: { _, _ in "decline" },
+            notifyTurnEnded: { _ in turnEndCount += 1 },
+            protocolNotificationSink: bridge.codexNotificationSink(sessionId: "compaction"))
+        let remote = bridge.exposeAttached(sessionId: "compaction", backend: backend)
+        defer { backend.stop() }
+        backend.boot(initialPrompt: "Do the assigned work")
+
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline {
+            let log = (try? String(contentsOf: methods, encoding: .utf8)) ?? ""
+            if log.contains("thread/compact/start") && !backend.isCompacting,
+               remote.contextUsage?.contextTokens == 28_000 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let log = try String(contentsOf: methods, encoding: .utf8)
+        XCTAssertEqual(log.components(separatedBy: "thread/compact/start").count - 1, 1)
+        XCTAssertEqual(turnEndCount, 1, "Compaction completion is not a second agent answer")
+        XCTAssertEqual(remote.contextUsage?.contextTokens, 28_000)
+        XCTAssertEqual(remote.contextUsage?.cumulativeTokens, 525_000)
+        XCTAssertFalse(backend.isCompacting)
+        XCTAssertFalse(backend.isBusy)
+    }
+}
+
 /// Plan #64: a real pipe/dispatcher/backend/transport chain, without a live model.
 /// Each fixture emits exactly one failure path, so an earlier error notification
 /// cannot hide a broken completed-event or RPC-error handler.

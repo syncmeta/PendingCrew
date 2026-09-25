@@ -198,7 +198,8 @@ enum SessionDaemonMain {
             Task { @MainActor in
                 await runner.applyProfileChange(.init(
                     crewId: crewId, sessionId: sessionId,
-                    model: string("model"), effort: string("effort")))
+                    model: string("model"), effort: string("effort"),
+                    fastMode: string("fastMode").flatMap { $0 == "on" ? true : $0 == "off" ? false : nil }))
             }
         case SessionOrchestrationOp.captainHandoff:
             // 整笔交接（Todo #101）。detail 同 startSession 那条：daemon 里没有 UI，

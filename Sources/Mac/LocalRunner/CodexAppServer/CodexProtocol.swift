@@ -1,9 +1,40 @@
 #if os(macOS)
 import Foundation
 
+/// A soft, turn-boundary trigger for Codex's own compactor. It never blocks a
+/// turn or truncates tool output. Recent compactions and low-spend turns are
+/// excluded so that compaction cost does not create a compaction loop.
+enum CodexCompactionPolicy {
+    static func shouldCompact(usage: CodexContextUsage, turnTokens: Int64,
+                              turnsSinceCompaction: Int) -> Bool {
+        guard usage.contextWindow > 0, usage.contextTokens >= 0,
+              turnsSinceCompaction >= 2 else { return false }
+        let pressure = usage.contextFraction
+        return pressure >= 0.70 ||
+            (pressure >= 0.45 && Double(max(0, turnTokens)) >= Double(usage.contextWindow) * 2)
+    }
+}
+
 /// Param builders for the core-loop methods. Plain dictionaries (paired with
 /// CodexRPCMessage encoding) keep this Foundation-only + unit-testable.
 enum CodexProtocol {
+    static func contextUsage(params: [String: Any],
+                             expectedThreadId: String? = nil) -> CodexContextUsage? {
+        guard let actualThreadId = params["threadId"] as? String,
+              expectedThreadId == nil || actualThreadId == expectedThreadId,
+              let turnId = params["turnId"] as? String,
+              let usage = params["tokenUsage"] as? [String: Any],
+              let last = usage["last"] as? [String: Any],
+              let total = usage["total"] as? [String: Any],
+              let context = (last["totalTokens"] as? NSNumber)?.int64Value,
+              let cumulative = (total["totalTokens"] as? NSNumber)?.int64Value,
+              context >= 0, cumulative >= 0 else { return nil }
+        let window = (usage["modelContextWindow"] as? NSNumber)?.int64Value ?? 0
+        guard window >= 0 else { return nil }
+        return CodexContextUsage(turnId: turnId, contextTokens: context,
+                                 contextWindow: window, cumulativeTokens: cumulative)
+    }
+
     enum ApprovalsReviewer: String, Codable, CaseIterable, Sendable {
         case autoReview = "auto_review"
         case user
@@ -43,7 +74,8 @@ enum CodexProtocol {
         effort: String?,
         developerInstructions: String?,
         mcpServers: [String: Any]?,
-        approvalsReviewer: ApprovalsReviewer = .autoReview
+        approvalsReviewer: ApprovalsReviewer = .autoReview,
+        serviceTier: String? = nil
     ) -> [String: Any] {
         var p: [String: Any] = [
             "cwd": cwd,
@@ -52,6 +84,7 @@ enum CodexProtocol {
             "approvalsReviewer": approvalsReviewer.rawValue,
         ]
         if let model, !model.isEmpty { p["model"] = model }
+        if let serviceTier { p["serviceTier"] = serviceTier }
         if let di = developerInstructions, !di.isEmpty { p["developerInstructions"] = di }
         var config: [String: Any] = [:]
         if let effort, !effort.isEmpty { config["model_reasoning_effort"] = effort }
@@ -67,7 +100,8 @@ enum CodexProtocol {
         effort: String?,
         developerInstructions: String?,
         mcpServers: [String: Any]?,
-        approvalsReviewer: ApprovalsReviewer = .autoReview
+        approvalsReviewer: ApprovalsReviewer = .autoReview,
+        serviceTier: String? = nil
     ) -> [String: Any] {
         var p = threadStartParams(
             cwd: cwd,
@@ -75,7 +109,8 @@ enum CodexProtocol {
             effort: effort,
             developerInstructions: developerInstructions,
             mcpServers: mcpServers,
-            approvalsReviewer: approvalsReviewer)
+            approvalsReviewer: approvalsReviewer,
+            serviceTier: serviceTier)
         p["threadId"] = threadId
         // Codex 0.149 added `excludeTurns` for clients that only need to rejoin the
         // live thread. Without it, `thread/resume` serializes the complete persisted
@@ -93,11 +128,13 @@ enum CodexProtocol {
         threadId: String,
         model: String? = nil,
         effort: String? = nil,
-        approvalsReviewer: ApprovalsReviewer? = nil
+        approvalsReviewer: ApprovalsReviewer? = nil,
+        serviceTier: String? = nil
     ) -> [String: Any] {
         var params: [String: Any] = ["threadId": threadId]
         if let model, !model.isEmpty { params["model"] = model }
         if let effort, !effort.isEmpty { params["effort"] = effort }
+        if let serviceTier { params["serviceTier"] = serviceTier }
         if let approvalsReviewer { params["approvalsReviewer"] = approvalsReviewer.rawValue }
         return params
     }

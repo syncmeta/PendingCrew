@@ -1,4 +1,25 @@
 import XCTest
+// Fast mode uses the same confirmed switch path as model and effort.
+
+extension SessionProfileSwitchTests {
+    func testFastCommandsAndClaudeConfirmation() {
+        XCTAssertEqual(SessionProfileSwitchCommand(knob: .fast, value: "on").line, "/fast on")
+        XCTAssertEqual(SessionProfileSwitchCommand(knob: .fast, value: "off").line, "/fast off")
+        guard case .applied? = SessionProfileEchoVerdict.classify("Fast mode ON", knob: .fast) else {
+            return XCTFail("Claude must confirm the fast switch")
+        }
+        XCTAssertNil(SessionProfileEchoVerdict.classify("Fast mode OFF", knob: .fast,
+                                                         expectedValue: "on"))
+        guard case .applied? = SessionProfileEchoVerdict.classify("Fast mode OFF", knob: .fast,
+                                                                  expectedValue: "off") else {
+            return XCTFail("Claude must confirm disabling fast mode")
+        }
+        guard case .rejected? = SessionProfileEchoVerdict.classify(
+            "Fast mode requires usage credits", knob: .fast, expectedValue: "on") else {
+            return XCTFail("An unavailable fast tier must leave the switch unchanged")
+        }
+    }
+}
 // SessionProfileSwitch 直接编进 PendingCrewTests target，无需 import。
 
 /// 中途切模型/effort 的回显判定单测（#544）。

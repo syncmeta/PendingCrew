@@ -942,7 +942,7 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
             guard await waitForTerminalIdle(policy: policy) else { continue }
             sawIdle = true
 
-            let scanner = SessionProfileEchoScanner(knob: cmd.knob)
+            let scanner = SessionProfileEchoScanner(knob: cmd.knob, expectedValue: cmd.value)
             profileEchoScanner = scanner
             send(cmd.line)
 

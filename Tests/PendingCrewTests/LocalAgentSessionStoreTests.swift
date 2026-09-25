@@ -240,7 +240,7 @@ final class LocalAgentSessionStoreTests: XCTestCase {
 
         XCTAssertTrue(runner.contains("if config.kind == .claudeCode, config.model == nil {"),
                       "又在替 codex 算一遍默认模型了——那是重算 codex 的逻辑，用户用上 profile 就会算岔")
-        XCTAssertTrue(runner.contains("notifyResolvedProfile: { [weak self] m, e in"),
+        XCTAssertTrue(runner.contains("notifyResolvedProfile: { [weak self] m, e, fast in"),
                       "没把 codex 报回来的真值接上——显示会退回「默认」，而且不会报错")
         XCTAssertTrue(backend.contains("result?[\"model\"] as? String"),
                       "握手回包里的模型没被读出来")

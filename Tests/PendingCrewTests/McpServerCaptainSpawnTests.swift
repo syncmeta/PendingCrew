@@ -6,11 +6,11 @@ import XCTest
 // isCaptain=false 拒绝 + 空 brief 拒绝，均不落队列（见 McpServer.swift handleToolCall）。
 
 final class McpServerCaptainSpawnTests: XCTestCase {
-    private func makeServer(isCaptain: Bool, dir: URL) -> McpServer {
+    private func makeServer(isCaptain: Bool, dir: URL, crewId: String = "local-x") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "local-x", sessionId: "cap", isCaptain: isCaptain, sessionLabel: "Captain",
+                  crewId: crewId, sessionId: "cap", isCaptain: isCaptain, sessionLabel: "Captain",
                   quotaDirectory: dir)
     }
     private func tmp() -> URL {
@@ -113,6 +113,20 @@ final class McpServerCaptainSpawnTests: XCTestCase {
         let out = call(makeServer(isCaptain: false, dir: dir), "start_session", ["brief": "干活"])
         XCTAssertTrue((out ?? "").contains("仅机长可用"))
         XCTAssertTrue(LocalCrewControlStore(directory: dir).drainCommands().isEmpty)
+    }
+
+    /// 总机组是协调层，不是执行 crew。工具面也要 fail closed：提示词即使失守，
+    /// 旧客户端或直接 tools/call 也不能在总机组里起 worker 偷着执行。
+    func testChiefCaptainCannotStartWorkerSession() {
+        let dir = tmp()
+        let server = makeServer(isCaptain: true, dir: dir, crewId: LocalCrew.chiefCrewId)
+        let names = Set(listedTools(server).compactMap { $0["name"] as? String })
+        XCTAssertFalse(names.contains("start_session"), "总机组不应暴露执行 worker 入口")
+
+        let out = call(server, "start_session", ["brief": "SSH 迁移 VPS", "isolation": false])
+        XCTAssertTrue((out ?? "").contains("总机组只负责协调"), out ?? "")
+        XCTAssertTrue(LocalCrewControlStore(directory: dir).drainCommands().isEmpty,
+                      "绕过 tools/list 直调也不能入队")
     }
 
     func testCaptainHandoffToolsAreCaptainOnlyAndHaveUnambiguousSchemas() {

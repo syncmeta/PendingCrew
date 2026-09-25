@@ -436,6 +436,21 @@ final class SessionProtocolServer {
         switch control.op {
         case "stop": backend.stop()
         case "clearQuotaHealth": backend.clearQuotaHealth()
+        case "compactCodexThread":
+            guard let requestId = control.requestId else { return }
+            Task { @MainActor [weak self, weak connection] in
+                let problem: String?
+                if let codex = backend as? CodexAppServerBackend {
+                    do { try await codex.requestCompaction(); problem = nil }
+                    catch { problem = error.localizedDescription }
+                } else {
+                    problem = "此 backend 不支持 Codex 原生压缩"
+                }
+                guard let self, let connection else { return }
+                self.send(.event(.controlResult(
+                    kind: "codexCompactionResult", requestId: requestId,
+                    sessionId: sessionId, error: problem)), on: connection)
+            }
         case "submitWake":
             guard let requestId = control.requestId,
                   case let .string(text)? = control.arguments["text"] else { return }
@@ -1001,6 +1016,21 @@ final class SessionProtocolClient {
         }
     }
 
+    func requestCodexCompaction(sessionId: String) async throws {
+        let requestId = UUID().uuidString
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            pendingControls[requestId] = { continuation.resume(with: $0) }
+            send(.control(.init(requestId: requestId, op: "compactCodexThread", arguments: [
+                "sessionId": .string(sessionId),
+            ])))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                self?.pendingControls.removeValue(forKey: requestId)?(
+                    .failure(SessionProtocolControlError.failed("压缩请求等待后台确认超时")))
+            }
+        }
+    }
+
     private func receive(_ data: Data) {
         do {
             for frame in try frameDecoder.append(data) { receive(frame) }
@@ -1055,7 +1085,8 @@ final class SessionProtocolClient {
             } else if value.kind == "profileSwitchResult", let requestId = value.requestId,
                let continuation = pendingProfile.removeValue(forKey: requestId) {
                 continuation.resume(returning: .init(protocolEvent: value))
-            } else if value.kind == "approvalModeResult", let requestId = value.requestId,
+            } else if (value.kind == "approvalModeResult" || value.kind == "codexCompactionResult"),
+                      let requestId = value.requestId,
                       let completion = pendingControls.removeValue(forKey: requestId) {
                 if case let .string(error)? = value.fields["error"] {
                     completion(.failure(SessionProtocolControlError.failed(error)))

@@ -214,12 +214,12 @@ struct CrewSessionWindowView: View {
                 // `.id(run.runID)` 强制换 run 时整个终端视图重建。
                 SessionRunContentView(
                     run: run,
-                    onSwitchProfile: { model, effort in
+                    onSwitchProfile: { model, effort, fastMode in
                         Task {
                             await sessionRunner.applyProfileChange(
                                 SessionProfileChangeRequest(
                                     crewId: run.crewId, sessionId: run.sessionId,
-                                    model: model, effort: effort))
+                                    model: model, effort: effort, fastMode: fastMode))
                         }
                     },
                     onSwitchApproval: { reviewer in
@@ -227,6 +227,9 @@ struct CrewSessionWindowView: View {
                             await sessionRunner.applyCodexApprovalMode(
                                 to: run, reviewer: reviewer)
                         }
+                    },
+                    onCompact: {
+                        Task { await sessionRunner.requestCodexCompaction(for: run) }
                     })
                     .id(run.runID)
                 if run.kind.isAgent {
@@ -1145,10 +1148,12 @@ private struct SessionBarItemView: View {
 /// `AgentTerminalView`（真终端），codex 显示 `CodexTranscriptView`（结构化 transcript）。
 private struct SessionRunContentView: View {
     @ObservedObject var run: CrewSessionRun
+    @ObservedObject private var quota = QuotaCenter.shared
     /// 终端页头部切换控件的回调（→ `applyProfileChange`）。只带改动的那一个档位。
-    let onSwitchProfile: (_ model: String?, _ effort: String?) -> Void
+    let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
     /// Codex-only native approval reviewer switch.
     let onSwitchApproval: (_ reviewer: CodexProtocol.ApprovalsReviewer) -> Void
+    let onCompact: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1224,10 +1229,59 @@ private struct SessionRunContentView: View {
                     SessionApprovalModeControl(run: run, onSwitch: onSwitchApproval)
                     Spacer(minLength: 0)
                 }
+                codexUsageRow
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    private var codexUsageRow: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                if let usage = run.codexContextUsage {
+                    Text(usage.contextWindow > 0
+                        ? "上下文 \(usage.contextTokens.formatted()) / \(usage.contextWindow.formatted()) token (\(Int(usage.contextFraction * 100))%)"
+                        : "上下文 \(usage.contextTokens.formatted()) token（窗口未知）")
+                        .lineLimit(1)
+                } else {
+                    Text("上下文用量待 Codex 回报")
+                }
+                Spacer(minLength: 0)
+                if run.codexIsCompacting {
+                    ProgressView().controlSize(.small)
+                    Text("正在压缩")
+                } else {
+                    Button("压缩上下文", action: onCompact)
+                        .buttonStyle(.link)
+                        .disabled(run.status != .running || run.isWorking)
+                        .help("调用 Codex 原生 thread/compact/start；压缩完成后继续收消息")
+                }
+            }
+            if let usage = run.codexContextUsage {
+                Text("此 Codex 线程累计 \(usage.cumulativeTokens.formatted()) token；不是账号剩余额度")
+                    .lineLimit(1)
+            }
+            if let snapshot = quota.codex {
+                let warning = QuotaRingLayout.warningBadge(
+                    snapshot, failure: quota.codexError)
+                Text("账号额度：" + snapshot.windows.map {
+                    "\($0.label)已用 \($0.usedPercent)%"
+                }.joined(separator: " · ") + (warning.map { " ⚠︎ \($0)" } ?? ""))
+                    .lineLimit(1)
+                    .help(QuotaRingLayout.helpText(
+                        claude: nil, codex: snapshot,
+                        claudeError: nil, codexError: quota.codexError) ?? "")
+            } else {
+                Text(quota.codexError == nil ? "账号额度：暂无可用数据" : "账号额度：读不到")
+                    .help(quota.codexError ?? "尚无 Codex 额度快照")
+            }
+            if let problem = run.codexCompactionProblem {
+                Text(problem).foregroundStyle(Theme.Palette.amber)
+            }
+        }
+        .font(Theme.Fonts.caption2)
+        .foregroundStyle(Theme.Palette.inkMuted)
     }
 
     @ViewBuilder
@@ -1366,9 +1420,9 @@ private struct SessionProfileControl: View {
     /// 兜底表 —— 不再在这里硬编模型名。
     @ObservedObject private var catalog = ModelCatalogCenter.shared
     /// 只带**改动的那一个**（另一个传 nil），避免误发未变的档位。
-    let onSwitch: (_ model: String?, _ effort: String?) -> Void
+    let onSwitch: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
 
-    init(run: CrewSessionRun, onSwitch: @escaping (_ model: String?, _ effort: String?) -> Void) {
+    init(run: CrewSessionRun, onSwitch: @escaping (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void) {
         self.run = run
         self.onSwitch = onSwitch
     }
@@ -1379,6 +1433,13 @@ private struct SessionProfileControl: View {
             HStack(spacing: 8) {
                 modelMenu
                 effortMenu
+                Toggle("快速", isOn: Binding(
+                    get: { run.fastMode ?? false },
+                    set: { onSwitch(nil, nil, $0) }
+                ))
+                .toggleStyle(.switch)
+                .disabled(run.status != .running || run.pendingProfile != nil)
+                .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
                 if run.pendingProfile != nil {
                     ProgressView().controlSize(.small)
                 }
@@ -1401,7 +1462,7 @@ private struct SessionProfileControl: View {
         Menu {
             ForEach(availableModels, id: \.self) { model in
                 Button {
-                    if model != run.model { onSwitch(model, nil) }
+                    if model != run.model { onSwitch(model, nil, nil) }
                 } label: {
                     let name = SessionLaunchOptions.displayName(for: model, catalog: catalog.file)
                     if model == run.model { Label(name, systemImage: "checkmark") }
@@ -1424,7 +1485,7 @@ private struct SessionProfileControl: View {
         Menu {
             ForEach(availableEfforts, id: \.self) { effort in
                 Button {
-                    if effort != run.effort { onSwitch(nil, effort) }
+                    if effort != run.effort { onSwitch(nil, effort, nil) }
                 } label: {
                     if effort == run.effort { Label(effort, systemImage: "checkmark") }
                     else { Text(effort) }

@@ -2,6 +2,36 @@ import XCTest
 
 
 final class SessionConfigTests: XCTestCase {
+    func testLaunchPreferencesKeepNativeModelAndRememberSessionFastChoice() throws {
+        let suiteName = UUID().uuidString
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        XCTAssertNil(AgentLaunchPreferences.model(for: .codex, defaults: suite))
+        XCTAssertFalse(AgentLaunchPreferences.fastMode(for: .codex, defaults: suite))
+        suite.set("gpt-6-sol", forKey: "pendingcrew.defaultModel.\(LocalCodingAgentKind.codex.rawValue)")
+        suite.set(true, forKey: "pendingcrew.defaultFastMode.\(LocalCodingAgentKind.codex.rawValue)")
+        XCTAssertEqual(AgentLaunchPreferences.model(for: .codex, defaults: suite), "gpt-6-sol")
+        XCTAssertTrue(AgentLaunchPreferences.sessionFastMode(crewId: "c", sessionId: "s",
+                                                           kind: .codex, defaults: suite))
+        AgentLaunchPreferences.setSessionFastMode(false, crewId: "c", sessionId: "s", defaults: suite)
+        XCTAssertFalse(AgentLaunchPreferences.sessionFastMode(crewId: "c", sessionId: "s",
+                                                            kind: .codex, defaults: suite))
+    }
+
+    func testClaudeFastSettingsPreserveHooks() throws {
+        let original = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(#"{"hooks":{"Stop":[]}}"#.utf8).write(to: original)
+        defer { try? FileManager.default.removeItem(at: original) }
+        let path = try XCTUnwrap(LocalSessionLaunch.settingsWithFastMode(
+            original.path, enabled: true, sessionId: UUID().uuidString))
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
+        XCTAssertEqual(object["fastMode"] as? Bool, true)
+        XCTAssertNotNil(object["hooks"])
+        XCTAssertNil(LocalSessionLaunch.settingsWithFastMode(
+            "/missing/pendingcrew-settings.json", enabled: false, sessionId: UUID().uuidString),
+            "Unreadable hook settings must not be replaced by an empty file")
+    }
     func testRestartCustomNamedMemberPreservesRecordedCodex() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

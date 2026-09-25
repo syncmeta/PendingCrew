@@ -1,6 +1,35 @@
 #if os(macOS)
 import Foundation
 
+/// PendingCrew defaults are overrides only when the user has chosen a value.
+/// An unset model leaves each CLI's own model resolution intact.
+enum AgentLaunchPreferences {
+    static func model(for kind: LocalCodingAgentKind, defaults: UserDefaults = .standard) -> String? {
+        defaults.synchronize() // viewer and daemon may be separate processes
+        let value = defaults.string(forKey: "pendingcrew.defaultModel.\(kind.rawValue)")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func fastMode(for kind: LocalCodingAgentKind, defaults: UserDefaults = .standard) -> Bool {
+        defaults.synchronize()
+        return defaults.bool(forKey: "pendingcrew.defaultFastMode.\(kind.rawValue)")
+    }
+
+    static func sessionFastMode(crewId: String, sessionId: String,
+                                kind: LocalCodingAgentKind,
+                                defaults: UserDefaults = .standard) -> Bool {
+        defaults.synchronize()
+        let key = "pendingcrew.sessionFastMode.\(crewId).\(sessionId)"
+        return defaults.object(forKey: key) as? Bool ?? fastMode(for: kind, defaults: defaults)
+    }
+
+    static func setSessionFastMode(_ enabled: Bool, crewId: String, sessionId: String,
+                                   defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: "pendingcrew.sessionFastMode.\(crewId).\(sessionId)")
+    }
+}
+
 /// Per-crew/per-session Codex approval preference. Captain uses a stable crew key
 /// because its local run id may change after an app restart; workers keep independent
 /// session keys. Missing and malformed values intentionally fall back to auto_review.
@@ -64,6 +93,8 @@ public struct SessionConfig: Sendable, Equatable, Codable {
     /// `thread/start.config.model_reasoning_effort`.
     /// Passthrough string — valid levels are runner-owned (UI validates; see spec probe §11).
     public var effort: String?
+    /// Explicit session preference. nil resolves through PendingCrew's default.
+    public var fastMode: Bool?
     /// The session's first instruction. Claude receives it over the PTY only after the
     /// TUI produces output; it must never be a process argument because `ps` exposes argv
     /// to every local session. Codex sends it over app-server after the handshake.
@@ -102,6 +133,7 @@ public struct SessionConfig: Sendable, Equatable, Codable {
     public init(kind: LocalCodingAgentKind,
                 model: String? = nil,
                 effort: String? = nil,
+                fastMode: Bool? = nil,
                 initialPrompt: String? = nil,
                 resumeSessionId: String? = nil,
                 permissionMode: String = "auto",
@@ -112,6 +144,7 @@ public struct SessionConfig: Sendable, Equatable, Codable {
         self.kind = kind
         self.model = model
         self.effort = effort
+        self.fastMode = fastMode
         self.initialPrompt = initialPrompt
         self.resumeSessionId = resumeSessionId
         self.permissionMode = permissionMode

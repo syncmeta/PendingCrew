@@ -432,9 +432,22 @@ struct SessionProtocolState: Codable, Equatable {
 ///
 /// 它与 `SessionProtocolState` 分开是有理由的：那个是后端每拍都可能变的派生状态，
 /// 这个大部分是起 session 时就定死的元数据。分家之后 app 退化成 viewer，
+/// `last` is current context use; `total` is cumulative token activity.
+struct CodexContextUsage: Codable, Equatable, Sendable {
+    let turnId: String
+    let contextTokens: Int64
+    let contextWindow: Int64
+    let cumulativeTokens: Int64
+
+    var contextFraction: Double {
+        guard contextWindow > 0 else { return 0 }
+        return min(1, Double(contextTokens) / Double(contextWindow))
+    }
+}
+
 /// **右栏那份 roster 的唯一真值在 daemon 里** —— 这就是它过江的形状。
 ///
-/// 全部字段可选/带默认值（§4.4）：旧 app 连新 daemon 时整块忽略即可，不升版本。
+/// 新字段可选（§4.4）：旧 app 连新 daemon 时忽略即可，不升版本。
 struct SessionRunSummary: Codable, Equatable {
     var crewId: String
     /// "captain" / "worker"。
@@ -444,6 +457,10 @@ struct SessionRunSummary: Codable, Equatable {
     var workingDirectory: String
     var model: String?
     var effort: String?
+    var fastMode: Bool? = nil
+    var codexContextUsage: CodexContextUsage? = nil
+    var codexIsCompacting: Bool? = nil
+    var codexCompactionProblem: String? = nil
     var pendingProfile: String?
     var approvalsReviewer: String?
     var permissionModeOverride: String?
