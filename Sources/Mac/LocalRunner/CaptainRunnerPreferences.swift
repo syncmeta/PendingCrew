@@ -31,6 +31,7 @@ struct CaptainRunnerCapability: Equatable, Sendable {
     let executable: URL?
     let authentication: Authentication
     let health: Health
+    var healthReason: String? = nil
 
     var selectable: Bool {
         executable != nil && authentication == .confirmed && health == .normal
@@ -50,7 +51,8 @@ struct CaptainRunnerCapability: Equatable, Sendable {
         case .unhealthy: healthText = "异常"
         case .unknown: healthText = "健康未知"
         }
-        return "\(auth) · \(healthText) · \(executable.path)"
+        let reason = healthReason.map { "（\($0)）" } ?? ""
+        return "\(auth) · \(healthText)\(reason) · \(executable.path)"
     }
 }
 
@@ -98,7 +100,35 @@ enum CaptainRunnerProbe {
         } else {
             auth = .unknown
         }
-        return .init(kind: kind, executable: executable, authentication: auth, health: health)
+        let observedProblem = observedHealthProblem(kind: kind, snapshot: loadRuntimeSnapshot())
+        return .init(kind: kind, executable: executable, authentication: auth,
+                     health: observedProblem == nil ? health : .unhealthy,
+                     healthReason: observedProblem)
+    }
+
+    /// 复用 daemon 每 2 秒写的会话健康快照；旧版/过期快照不当成当前故障。
+    static func observedHealthProblem(kind: LocalCodingAgentKind,
+                                      snapshot: CrewSessionsSnapshot?, now: Date = Date()) -> String? {
+        guard let snapshot,
+              let updated = ISO8601DateFormatter().date(from: snapshot.updatedAt),
+              now.timeIntervalSince(updated) >= -5,
+              now.timeIntervalSince(updated) <= 30 else { return nil }
+        for crewId in snapshot.crews.keys.sorted() {
+            for entry in (snapshot.crews[crewId] ?? []).sorted(by: { $0.sessionId < $1.sessionId })
+                where entry.runnerKind == kind.rawValue {
+                if ["error", "rateLimited", "launchFailed"].contains(entry.state) {
+                    return entry.healthDetail ?? "现有会话报告 \(entry.state)"
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func loadRuntimeSnapshot() -> CrewSessionsSnapshot? {
+        let file = LocalWhiteboardStore.defaultDirectory
+            .appendingPathComponent(CrewSessionsSnapshot.fileName)
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return try? JSONDecoder().decode(CrewSessionsSnapshot.self, from: data)
     }
 
     private static func run(_ executable: URL, _ arguments: [String],

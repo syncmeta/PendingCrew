@@ -56,6 +56,35 @@ final class Todo152SettingsTests: XCTestCase {
             path: "\(second.path):\(first.path)"), b)
     }
 
+    func testFreshRunnerHealthOverridesHealthyCLIProbe() throws {
+        let now = Date()
+        var snapshot = CrewSessionsSnapshot()
+        snapshot.updatedAt = ISO8601DateFormatter().string(from: now)
+        snapshot.crews = ["crew-a": [
+            .init(sessionId: "one", name: "Codex", role: "worker", brief: "",
+                  state: "error", healthDetail: "认证失效", runnerKind: "codex"),
+        ]]
+        XCTAssertEqual(CaptainRunnerProbe.observedHealthProblem(
+            kind: .codex, snapshot: snapshot, now: now), "认证失效")
+        XCTAssertNil(CaptainRunnerProbe.observedHealthProblem(
+            kind: .claudeCode, snapshot: snapshot, now: now))
+        snapshot.updatedAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(-45))
+        XCTAssertNil(CaptainRunnerProbe.observedHealthProblem(
+            kind: .codex, snapshot: snapshot, now: now))
+        let writer = try source("Sources/Mac/Services/CrewSessionRunner.swift")
+        let probe = try source("Sources/Mac/LocalRunner/CaptainRunnerPreferences.swift")
+        XCTAssertTrue(writer.contains("runnerKind: run.kind.rawValue"))
+        XCTAssertTrue(probe.contains("snapshot: loadRuntimeSnapshot()"))
+    }
+
+    func testOldSessionSnapshotWithoutRunnerKindStillDecodes() throws {
+        let json = """
+        {"updatedAt":"2026-09-25T00:00:00Z","crews":{"crew-a":[{"sessionId":"one","name":"worker","role":"worker","brief":"","state":"idle"}]}}
+        """
+        let snapshot = try JSONDecoder().decode(CrewSessionsSnapshot.self, from: Data(json.utf8))
+        XCTAssertNil(snapshot.crews["crew-a"]?.first?.runnerKind)
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()

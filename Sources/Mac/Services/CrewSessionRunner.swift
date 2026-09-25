@@ -1105,7 +1105,8 @@ final class CrewSessionRunner: ObservableObject {
                 brief: run.role == .captain ? "" : run.taskBrief,
                 state: state, healthDetail: healthDetail,
                 helperBuild: helperBuilds[SessionAwaitingReplyInputsCache.RunKey(
-                    crewId: run.crewId, sessionId: run.sessionId)]))
+                    crewId: run.crewId, sessionId: run.sessionId)],
+                runnerKind: run.kind.rawValue))
         }
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         let url = LocalWhiteboardStore.defaultDirectory

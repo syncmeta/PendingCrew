@@ -35,6 +35,8 @@ struct CrewSessionsSnapshot: Codable, Equatable {
         var healthDetail: String? = nil
         /// 这个成员的 helper 跑在哪一版、是不是旧的（`HelperProcessForensics`）。
         var helperBuild: HelperBuildReport? = nil
+        /// 运行中的 runner；旧快照没有此字段时不据此判断全局健康。
+        var runnerKind: String? = nil
     }
 
     /// crewId → 该 crew 的 session 条目（含 exited,直到被人从切换条移除）。
