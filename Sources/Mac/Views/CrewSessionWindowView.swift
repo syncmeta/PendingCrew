@@ -1250,13 +1250,13 @@ private struct SessionRunContentView: View {
             .help("压缩上下文、查看用量")
             if run.status == .running {
                 Button { run.stop() } label: {
-                    Label("停止", systemImage: "stop.fill")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .frame(height: 28)
+                    Image(systemName: "stop.fill")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 32, height: 28)
                         .background(Theme.Palette.surfaceMuted, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
                 .accessibilityLabel("停止这个 Codex session")
                 .help("停止这个 session")
             } else {
