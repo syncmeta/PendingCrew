@@ -67,6 +67,22 @@ enum CaptainRunnerChoice {
     }
 }
 
+/// Session launch obtains this off the main actor before rendering either prompt format.
+struct CaptainRunnerCapabilities: Sendable {
+    let claude: CaptainRunnerCapability
+    let codex: CaptainRunnerCapability
+
+    static func capture() async -> Self {
+        let claude = Task.detached(priority: .utility) {
+            CaptainRunnerProbe.inspect(.claudeCode)
+        }
+        let codex = Task.detached(priority: .utility) {
+            CaptainRunnerProbe.inspect(.codex)
+        }
+        return await Self(claude: claude.value, codex: codex.value)
+    }
+}
+
 /// `claude auth status` / `codex login status` 加 `--version` 只读本机状态；不会发起登录。
 /// 退出码失败在 Claude 的 JSON 明确 loggedIn=false 时才判需登录；其余保守判未知。
 enum CaptainRunnerProbe {

@@ -104,6 +104,20 @@ final class Todo152SettingsTests: XCTestCase {
         XCTAssertTrue(en.contains("{{captainRunnerBlock}}"))
     }
 
+    func testWorldModelRendererOnlyConsumesPreviouslyProbedCapabilities() throws {
+        let renderer = try source("Sources/Mac/LocalRunner/LocalSessionLaunch.swift")
+        let renderBody = try XCTUnwrap(renderer.components(separatedBy:
+            "private static func renderWorldModelMarkdown(").last?.components(separatedBy:
+            "private static func writeJSON(").first)
+        XCTAssertFalse(renderBody.contains("CaptainRunnerProbe.inspect"))
+        XCTAssertTrue(renderBody.contains("captainCapabilities.claude"))
+        XCTAssertTrue(renderBody.contains("captainCapabilities.codex"))
+        let runner = try source("Sources/Mac/Services/CrewSessionRunner.swift")
+        let view = try source("Sources/Mac/Views/CrewSessionWindowView.swift")
+        XCTAssertTrue(runner.contains("await CaptainRunnerCapabilities.capture()"))
+        XCTAssertTrue(view.contains("await CaptainRunnerCapabilities.capture()"))
+    }
+
     func testPathAndSettingsRemoveManualCLIOverride() throws {
         let executable = try source("Sources/Mac/LocalRunner/LocalCodingAgentExecutable.swift")
         let version = try source("Sources/Mac/Views/AgentCLIVersionView.swift")

@@ -1047,9 +1047,11 @@ struct CrewSessionWindowView: View {
                                       appendPersona: String? = nil) async -> String? {
         guard let backend = appModel.backend else { return nil }
         let members = (try? await backend.listCrewMembers(crewId: detail.crew.id))?.members ?? []
+        let captainCapabilities = await CaptainRunnerCapabilities.capture()
         return LocalSessionLaunch.renderWorldModelFile(
             detail: detail, members: members, taskBrief: taskBrief, workdir: workdir,
-            sessionId: sessionId, runnerKind: selectedKind, appendPersona: appendPersona)
+            sessionId: sessionId, runnerKind: selectedKind,
+            captainCapabilities: captainCapabilities, appendPersona: appendPersona)
     }
 
     /// codex 变体：渲染同一份世界观但返回字符串（→ thread/start.developerInstructions），
@@ -1058,9 +1060,11 @@ struct CrewSessionWindowView: View {
                                         appendPersona: String? = nil) async -> String? {
         guard let backend = appModel.backend else { return nil }
         let members = (try? await backend.listCrewMembers(crewId: detail.crew.id))?.members ?? []
+        let captainCapabilities = await CaptainRunnerCapabilities.capture()
         return LocalSessionLaunch.renderWorldModelString(
             detail: detail, members: members, taskBrief: taskBrief, workdir: workdir,
-            sessionId: sessionId, appendPersona: appendPersona)
+            sessionId: sessionId, captainCapabilities: captainCapabilities,
+            appendPersona: appendPersona)
     }
 
     private func prepareLocalCommsConfig(crewId: String, sessionId: String,

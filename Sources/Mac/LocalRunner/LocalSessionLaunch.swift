@@ -165,12 +165,14 @@ enum LocalSessionLaunch {
         workdir: URL,
         sessionId: String,
         runnerKind: LocalCodingAgentKind,
+        captainCapabilities: CaptainRunnerCapabilities,
         appendPersona: String? = nil
     ) -> String? {
         guard runnerKind.isAgent else { return nil }
         guard let md = renderWorldModelMarkdown(
             detail: detail, members: members, taskBrief: taskBrief, workdir: workdir,
-            sessionId: sessionId, runnerKind: runnerKind, appendPersona: appendPersona)
+            sessionId: sessionId, runnerKind: runnerKind,
+            captainCapabilities: captainCapabilities, appendPersona: appendPersona)
         else { return nil }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("pendingcrew-worldmodel-\(UUID().uuidString).md")
@@ -193,11 +195,13 @@ enum LocalSessionLaunch {
         taskBrief: String,
         workdir: URL,
         sessionId: String,
+        captainCapabilities: CaptainRunnerCapabilities,
         appendPersona: String? = nil
     ) -> String? {
         renderWorldModelMarkdown(
             detail: detail, members: members, taskBrief: taskBrief, workdir: workdir,
-            sessionId: sessionId, runnerKind: .codex, appendPersona: appendPersona)
+            sessionId: sessionId, runnerKind: .codex,
+            captainCapabilities: captainCapabilities, appendPersona: appendPersona)
     }
 
     /// codex 的 crew MCP 配置 dict → `thread/start.mcpServers`。与 claude 走同一个
@@ -224,6 +228,7 @@ enum LocalSessionLaunch {
         workdir: URL,
         sessionId: String,
         runnerKind: LocalCodingAgentKind,
+        captainCapabilities: CaptainRunnerCapabilities,
         appendPersona: String?
     ) -> String? {
         let humans = members
@@ -253,11 +258,9 @@ enum LocalSessionLaunch {
         }
         let plans = (quota?.claude?.subscriptionPlanDescription,
                      quota?.codex?.subscriptionPlanDescription)
-        let claudeCapability = CaptainRunnerProbe.inspect(.claudeCode)
-        let codexCapability = CaptainRunnerProbe.inspect(.codex)
         let runnerBlock = "新机组机长 runner 选择：先核对可执行文件、登录和健康；不可用或未认证者不能因偏好入选。"
-            + "\nClaude Code：\(claudeCapability.summary)"
-            + "\nCodex：\(codexCapability.summary)"
+            + "\nClaude Code：\(captainCapabilities.claude.summary)"
+            + "\nCodex：\(captainCapabilities.codex.summary)"
             + "\n以下情况中新机组机长优先用 Claude Code：\(CaptainRunnerPreferences.get(.claudeCode))"
             + "\n以下情况中新机组机长优先用 Codex：\(CaptainRunnerPreferences.get(.codex))"
         let ctx = LocalSessionWorldModel.Context(

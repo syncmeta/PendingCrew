@@ -2570,11 +2570,13 @@ final class CrewSessionRunner: ObservableObject {
         // 否则机长无世界观、无 crew 工具。
         var developerInstructions: String? = nil
         var codexMcpServers: [String: Any]? = nil
+        let captainCapabilities = await CaptainRunnerCapabilities.capture()
         switch captainKind {
         case .claudeCode:
             cfg.appendSystemPromptFile = LocalSessionLaunch.renderWorldModelFile(
                 detail: detail, members: members, taskBrief: initialPrompt, workdir: workdir,
-                sessionId: localSessionId, runnerKind: captainKind, appendPersona: persona)
+                sessionId: localSessionId, runnerKind: captainKind,
+                captainCapabilities: captainCapabilities, appendPersona: persona)
             let comms = LocalSessionLaunch.prepareLocalCommsConfig(
                 crewId: crewId, sessionId: localSessionId, captain: true, label: "机长")
             cfg.settingsFile = comms.settings
@@ -2582,7 +2584,8 @@ final class CrewSessionRunner: ObservableObject {
         case .codex:
             developerInstructions = LocalSessionLaunch.renderWorldModelString(
                 detail: detail, members: members, taskBrief: initialPrompt, workdir: workdir,
-                sessionId: localSessionId, appendPersona: persona)
+                sessionId: localSessionId, captainCapabilities: captainCapabilities,
+                appendPersona: persona)
             codexMcpServers = LocalSessionLaunch.codexMcpServers(
                 crewId: crewId, sessionId: localSessionId, captain: true, label: "机长")
         case .terminal:
@@ -2836,11 +2839,13 @@ final class CrewSessionRunner: ObservableObject {
         cfg.wakeEntryId = wakeEntryId
         var developerInstructions: String? = nil
         var codexMcpServers: [String: Any]? = nil
+        let captainCapabilities = await CaptainRunnerCapabilities.capture()
         switch kind {
         case .claudeCode:
             cfg.appendSystemPromptFile = LocalSessionLaunch.renderWorldModelFile(
                 detail: detail, members: members, taskBrief: brief, workdir: workdir,
-                sessionId: localSessionId, runnerKind: kind, appendPersona: nil)
+                sessionId: localSessionId, runnerKind: kind,
+                captainCapabilities: captainCapabilities, appendPersona: nil)
             let comms = LocalSessionLaunch.prepareLocalCommsConfig(
                 crewId: crewId, sessionId: localSessionId, captain: false, label: resolvedTitle)
             cfg.settingsFile = comms.settings
@@ -2848,7 +2853,8 @@ final class CrewSessionRunner: ObservableObject {
         case .codex:
             developerInstructions = LocalSessionLaunch.renderWorldModelString(
                 detail: detail, members: members, taskBrief: brief, workdir: workdir,
-                sessionId: localSessionId, appendPersona: nil)
+                sessionId: localSessionId, captainCapabilities: captainCapabilities,
+                appendPersona: nil)
             codexMcpServers = LocalSessionLaunch.codexMcpServers(
                 crewId: crewId, sessionId: localSessionId, captain: false, label: resolvedTitle)
         case .terminal:
