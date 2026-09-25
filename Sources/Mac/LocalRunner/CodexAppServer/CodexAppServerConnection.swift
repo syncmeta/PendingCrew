@@ -17,6 +17,23 @@ enum CodexPipeReadability {
     }
 }
 
+/// FileHandle callbacks can deliver successive pipe chunks before an actor hop runs.
+/// Queue them in callback order; independent Tasks can resume out of order and
+/// corrupt JSON line framing or let an older token-usage event overwrite a newer one.
+final class CodexPipeChunkSequencer: @unchecked Sendable {
+    let stream: AsyncStream<Data>
+    private let continuation: AsyncStream<Data>.Continuation
+
+    init() {
+        var captured: AsyncStream<Data>.Continuation!
+        stream = AsyncStream { captured = $0 }
+        continuation = captured
+    }
+
+    func yield(_ data: Data) { continuation.yield(data) }
+    func finish() { continuation.finish() }
+}
+
 /// 往子进程 stdin 写一行。
 ///
 /// **必须用会抛的 `write(contentsOf:)`，不能用 `write(_:)`。** 后者是 ObjC 的
@@ -66,6 +83,8 @@ actor CodexAppServerConnection {
     private let stdoutPipe = Pipe()
     private let stderrPipe = Pipe()
     private let dispatcher = CodexRPCDispatcher()
+    private let stdoutChunks = CodexPipeChunkSequencer()
+    private var stdoutTask: Task<Void, Never>?
     private var nextId = 0
     private var readBuffer = Data()
     private var onTerminate: ((Int32?) -> Void)?
@@ -87,9 +106,13 @@ actor CodexAppServerConnection {
         self.onTerminate = onTerminate
         await dispatcher.setServerRequestHandler(onServerRequest)
         await dispatcher.setNotificationHandler(onNotification)
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] h in
+        let chunks = stdoutChunks
+        stdoutTask = Task { [weak self] in
+            for await data in chunks.stream { await self?.ingest(data) }
+        }
+        stdoutPipe.fileHandleForReading.readabilityHandler = { h in
             CodexPipeReadability.drain(h) { data in
-                Task { await self?.ingest(data) }
+                chunks.yield(data)
             }
         }
         // Drain stderr too. codex writes tracing/diagnostics there; if nobody reads it,
@@ -156,6 +179,8 @@ actor CodexAppServerConnection {
     func terminate() {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
+        stdoutChunks.finish()
+        stdoutTask?.cancel()
         if process.isRunning { process.terminate() }
         let pid = process.processIdentifier
         Task { await terminateTree(pid: pid, graceSeconds: 2.0) }

@@ -225,11 +225,17 @@ final class HelperBuildPerMemberTests: XCTestCase {
         proc.standardInput = stdin            // 攥着写端 → helper 停在 readLine 上不退
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
+        let ended = DispatchSemaphore(value: 0)
+        proc.terminationHandler = { _ in ended.signal() }
         try proc.run()
         defer {
-            proc.terminate()
+            // Let `read` see EOF and exit naturally. Calling terminate then
+            // waitUntilExit raced Foundation's Process state machine in full suites.
             try? stdin.fileHandleForWriting.close()
-            proc.waitUntilExit()
+            if ended.wait(timeout: .now() + 5) == .timedOut, proc.isRunning {
+                proc.terminate()
+                _ = ended.wait(timeout: .now() + 5)
+            }
         }
 
         guard let before = waitForHelper(session: session) else {
@@ -251,7 +257,13 @@ final class HelperBuildPerMemberTests: XCTestCase {
         try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: apps.appendingPathComponent("PendingCrew.app"),
                                          to: caches.appendingPathComponent("PendingCrew.app"))
-        try makeRealBundle(at: apps, from: exe, version: "0.1.32", commit: "bbbbbbb2222", extraBytes: 64)
+        // Stage the replacement elsewhere, then swap the bundle into place as
+        // Sparkle does. macOS 27 may deny writes inside a running app's old path.
+        let staging = root.appendingPathComponent("Staging")
+        try makeRealBundle(at: staging, from: exe, version: "0.1.32",
+                           commit: "bbbbbbb2222", extraBytes: 64)
+        try FileManager.default.moveItem(at: staging.appendingPathComponent("PendingCrew.app"),
+                                         to: apps.appendingPathComponent("PendingCrew.app"))
 
         guard let after = waitForHelper(session: session) else {
             return XCTFail("换包之后找不到这个 helper 了 —— 它是否活着：\(proc.isRunning)")
