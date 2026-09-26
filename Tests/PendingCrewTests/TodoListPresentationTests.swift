@@ -15,6 +15,31 @@ final class TodoListPresentationTests: XCTestCase {
         XCTAssertEqual(sorted.map(\.number), [3, 2, 1])
     }
 
+    func testChiefRowsKeepSourceCrewAndLedgerWhenNumbersCollide() {
+        let older = item(4, createdAt: "2026-07-26T00:00:00Z")
+        let newer = item(4, createdAt: "2026-07-27T00:00:00Z")
+        let rows = TodoListPresentation.chiefRows(
+            ledger: .human,
+            sources: [
+                .init(crewId: "rss", title: "RSS", human: [older], agent: []),
+                .init(crewId: "net", title: "PendingNet", human: [newer], agent: []),
+            ])
+        XCTAssertEqual(rows.map(\.crewId), ["net", "rss"])
+        XCTAssertEqual(rows.map(\.ledger), [.human, .human])
+        XCTAssertEqual(Set(rows.map(\.id)).count, 2)
+        XCTAssertEqual(rows.map(\.item.number), [4, 4])
+    }
+
+    func testChiefOverviewOnlyShowsOpenSourceTodos() {
+        let rows = TodoListPresentation.chiefRows(ledger: .agent, sources: [
+            .init(crewId: "rss", title: "RSS", human: [], agent: [
+                item(1, status: "pending"), item(2, status: "completed"),
+                item(3, status: LocalTodoItem.droppedStatus),
+            ]),
+        ])
+        XCTAssertEqual(rows.map(\.item.number), [1])
+    }
+
     func testNewestFirstIsIndependentOfInputOrder() {
         let sorted = TodoListPresentation.newestFirst([item(2), item(11), item(1), item(7)])
         XCTAssertEqual(sorted.map(\.number), [11, 7, 2, 1])

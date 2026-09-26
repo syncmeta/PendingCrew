@@ -188,7 +188,7 @@ struct CrewChatView: View {
     /// Todo 切换钮只在 macOS 亮出（见 `todoMode`）。
     private var todoModeBinding: Binding<Bool>? {
         #if os(macOS)
-        return $todoMode
+        return crewId == LocalCrew.chiefCrewId ? nil : $todoMode
         #else
         return nil
         #endif
@@ -638,6 +638,7 @@ struct CrewChatView: View {
         // 号码 → 目标。**只解这条消息真的引到的那几个号**，不建全表。
         let directory = LocalCrewStore.shared.directory()
         var targets: [String: CrewMessageReferencePills.Target] = [:]
+        var externalTodos: [String: CrewMessageReferencePills.Context.ExternalTodoTarget] = [:]
         for reference in entry.references ?? [] where reference.resolvedKind == .crew {
             guard let resolved = directory.resolve(reference.targetId) else { continue }
             targets[reference.targetId] = CrewMessageReferencePills.Target(
@@ -648,9 +649,29 @@ struct CrewChatView: View {
                     return nil
                 }())
         }
+        for reference in entry.references ?? [] {
+            guard let source = reference.sourceCrewId,
+                  let itemId = reference.todoItemId,
+                  let number = Int(reference.targetId), number > 0,
+                  let ledger = { () -> TodoLedger? in
+                      switch reference.resolvedKind {
+                      case .humanTodo: return .human
+                      case .agentTodo: return .agent
+                      default: return nil
+                      }
+                  }(),
+                  let crew = directory.crews.first(where: { $0.id == source }),
+                  let item = LocalTodoStore.shared(ledger).item(crewId: source, number: number),
+                  item.id == itemId else { continue }
+            externalTodos[itemId] = .init(
+                crewId: source,
+                crewTitle: crew.crewNumber.map { "\($0) · \(crew.title)" } ?? crew.title,
+                ledger: ledger, number: number, itemId: itemId)
+        }
         #else
         let sessions: [String: String] = [:]
         let targets: [String: CrewMessageReferencePills.Target] = [:]
+        let externalTodos: [String: CrewMessageReferencePills.Context.ExternalTodoTarget] = [:]
         #endif
         return .init(
             selfMessageId: entry.id,
@@ -659,7 +680,8 @@ struct CrewChatView: View {
             // 所以「筛掉了」不等于「跳不过去」。
             loadedMessageIds: Set(entries.map(\.id)),
             openableSessions: sessions,
-            crewTargets: targets)
+            crewTargets: targets,
+            externalTodos: externalTodos)
     }
 
     /// 气泡下面那一排。老消息没有引用 → 这一排根本不存在，正文一个字不变。
@@ -703,6 +725,11 @@ struct CrewChatView: View {
         case .todo(let ledger, let number):
             CrewTodoDetailWindowPresenter.shared.open(
                 crewId: crewId, crewName: crewTitle, ledger: ledger, focus: number,
+                runner: sessionRunner, appModel: appModel,
+                colorScheme: (AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
+        case .crossCrewTodo(let source, let title, let ledger, let number):
+            CrewTodoDetailWindowPresenter.shared.open(
+                crewId: source, crewName: title, ledger: ledger, focus: number,
                 runner: sessionRunner, appModel: appModel,
                 colorScheme: (AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         case .plan(let number):
@@ -1484,6 +1511,10 @@ struct CrewChatView: View {
     /// 上、也挂到群里那条「To do +1」上。@ 不参与（todo 没有收件人）；发完 Todo 模式
     /// 保持 sticky（Todo #6），只有用户手动再点 Todo 钮才熄灭。
     private func sendTodo() async {
+        guard crewId != LocalCrew.chiefCrewId else {
+            loadError = ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription
+            return
+        }
         let toUpload = pendingAttachments
         guard let text = TodoListPresentation.newTodoText(
                 draft: draft, attachmentCount: toUpload.count,

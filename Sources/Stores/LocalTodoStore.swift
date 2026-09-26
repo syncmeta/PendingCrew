@@ -104,6 +104,16 @@ enum TodoParty: String, Codable, Sendable {
     case agent
 }
 
+/// 总机组只汇总和引用执行组 Todo，不再拥有自己的新增账。
+/// 留在存储写入口，防止新 UI / 工具漏掉上层校验。
+enum ChiefTodoCreationRefusal: LocalizedError {
+    case useExecutionCrew
+
+    var errorDescription: String? {
+        "总机组不能新建或修改本组 Todo；请在具体执行组建账并更新，再引用其来源机组、账本和编号。"
+    }
+}
+
 /// 每 crew 一本 Todo 列表（task #478；#487 后列表在驾驶舱 CrewTodoPanel。
 /// Todo #62 起同一套基座跑**两本账**，见 `TodoLedger`）。
 ///
@@ -322,7 +332,11 @@ final class LocalTodoStore: @unchecked Sendable {
              expectsResume: Bool = false,
              permissionTool: String? = nil,
              onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
-        withFileLock(crewId) {
+        guard crewId != LocalCrew.chiefCrewId else {
+            onWriteFailure?(ChiefTodoCreationRefusal.useExecutionCrew)
+            return nil
+        }
+        return withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
                 // 这本账这一刻读不出来 —— 以前到这儿就 `return nil`，**那句话就没了**。
@@ -376,7 +390,11 @@ final class LocalTodoStore: @unchecked Sendable {
                  senderName: String? = nil, text: String,
                  newStatus: String? = nil,
                  onWriteFailure: ((Error) -> Void)? = nil) -> LocalTodoItem? {
-        withFileLock(crewId) {
+        guard crewId != LocalCrew.chiefCrewId else {
+            onWriteFailure?(ChiefTodoCreationRefusal.useExecutionCrew)
+            return nil
+        }
+        return withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else {
                 // **回应比新提一条更不能丢**：那是有人在等的答复。以前这里也是
@@ -416,6 +434,7 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 时间线。找不到 #N（或已删）→ nil；正文全空白 → nil 不动（空 Todo 无意义）。
     @discardableResult
     func edit(crewId: String, number: Int, text: String) -> LocalTodoItem? {
+        guard crewId != LocalCrew.chiefCrewId else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return withFileLock(crewId) {
@@ -437,7 +456,8 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 找不到 #N（或已删）→ false。
     @discardableResult
     func delete(crewId: String, number: Int) -> Bool {
-        withFileLock(crewId) {
+        guard crewId != LocalCrew.chiefCrewId else { return false }
+        return withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return false }
             guard let idx = liveIndexLocked(rows, number) else { return false }
@@ -564,7 +584,8 @@ final class LocalTodoStore: @unchecked Sendable {
     /// `dismissed: false` = 反悔，重新算作未回应。找不到 #N（或已删）→ false。
     @discardableResult
     func setDismissed(crewId: String, number: Int, dismissed: Bool = true) -> Bool {
-        withFileLock(crewId) {
+        guard crewId != LocalCrew.chiefCrewId else { return false }
+        return withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return false }
             guard let idx = liveIndexLocked(rows, number) else { return false }
@@ -609,7 +630,8 @@ final class LocalTodoStore: @unchecked Sendable {
     private func followUp(crewId: String, number: Int, note: String,
                           attachments: [LocalWhiteboardAttachment]?,
                           requireCompleted: Bool) -> LocalTodoItem? {
-        withFileLock(crewId) {
+        guard crewId != LocalCrew.chiefCrewId else { return nil }
+        return withFileLock(crewId) {
             var rows = loadLocked(crewId)
             guard !refuseUnsafeEmptyRewrite(crewId: crewId, rows: rows) else { return nil }
             guard let idx = liveIndexLocked(rows, number) else { return nil }
@@ -722,6 +744,9 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 有积压就补一次。**先便宜地看一眼有没有**（列目录在这类故障里也是通的），
     /// 没有就什么都不做 —— 别让每次读都去抢文件锁。
     private func recoverSpooledIfAny(crewId: String) {
+        // 新规则不允许总机组拥有自己的 Todo。旧待补请求原样保留供审计，
+        // 不能在一次无害的读取中自动变成新的总机组条目。
+        guard crewId != LocalCrew.chiefCrewId else { return }
         guard spool.hasPending(key: crewId) else { return }
         withFileLock(crewId) {
             var rows = loadLocked(crewId)

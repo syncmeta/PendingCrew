@@ -13,11 +13,12 @@ final class McpAddHumanTodoTests: XCTestCase {
     }
 
     private func server(_ dir: URL, isCaptain: Bool = false,
+                        crewId: String = "c",
                         sessionId: String = "sess-1", label: String? = "两本账") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
-                  crewId: "c", sessionId: sessionId, isCaptain: isCaptain,
+                  crewId: crewId, sessionId: sessionId, isCaptain: isCaptain,
                   sessionLabel: label,
                   quotaDirectory: dir,
                   todos: LocalTodoStore(directory: dir))
@@ -29,6 +30,42 @@ final class McpAddHumanTodoTests: XCTestCase {
         return s.handleLine("""
             {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add_human_todo","arguments":\(args)}}
             """) ?? ""
+    }
+
+    func testChiefCrewRejectsEveryHumanTodoCreationTool() {
+        let dir = tempDir()
+        let s = server(dir, isCaptain: true, crewId: LocalCrew.chiefCrewId)
+        let calls = [
+            add(s, "请人拍板"),
+            s.handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ask","arguments":{"question":"请人拍板"}}}"#) ?? "",
+            s.handleLine(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"message":"请人拍板","category":"human_todo"}}}"#) ?? "",
+            s.handleLine(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"messages":[{"text":"普通进展"},{"text":"请人拍板","category":"human_todo"}]}}}"#) ?? "",
+            s.handleLine(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"respond_todo","arguments":{"number":1,"response":"收到"}}}"#) ?? "",
+            s.handleLine(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"message":"本组 Todo 进度","todo":1,"todo_status":"in_progress"}}}"#) ?? "",
+        ]
+        for receipt in calls {
+            XCTAssertTrue(receipt.contains("ERROR"), receipt)
+            XCTAssertTrue(receipt.contains("执行组"), receipt)
+        }
+        XCTAssertTrue(LocalTodoStore(directory: dir, ledger: .human)
+            .list(crewId: LocalCrew.chiefCrewId).isEmpty)
+        XCTAssertTrue(LocalWhiteboardStore(directory: dir)
+            .list(crewId: LocalCrew.chiefCrewId).isEmpty,
+            "批量消息必须整体拒绝，不可先发普通进展")
+    }
+
+    func testChiefToolListDoesNotAdvertiseOwnTodoMutation() throws {
+        let s = server(tempDir(), isCaptain: true, crewId: LocalCrew.chiefCrewId)
+        let raw = try XCTUnwrap(s.handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let names = Set(tools.compactMap { $0["name"] as? String })
+        XCTAssertFalse(names.contains("ask"))
+        XCTAssertFalse(names.contains("add_human_todo"))
+        XCTAssertFalse(names.contains("respond_todo"))
+        XCTAssertTrue(names.contains("post_to_crew"))
+        XCTAssertTrue(names.contains("withdraw_human_todo"), "历史重复条目仍要能留痕撤回")
     }
 
     /// 全员可见 —— worker 也要能请人拍板，不是机长专用。

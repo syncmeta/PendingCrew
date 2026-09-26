@@ -50,6 +50,23 @@ final class CrewMessageReferencePillsTests: XCTestCase {
         XCTAssertTrue(pills[0].label.contains("人类"))
     }
 
+    func test_跨组Todo必须核对来源账本编号和稳定ID才可跳() {
+        let ref = CrewMessageReference(.humanTodo, "8",
+                                       sourceCrewId: "rss-crew", todoItemId: "item-8")
+        var context = openContext
+        context.externalTodos = ["item-8": .init(
+            crewId: "rss-crew", crewTitle: "自建RSS栈", ledger: .human,
+            number: 8, itemId: "item-8")]
+        let pill = CrewMessageReferencePills.pills([ref], in: context)
+        XCTAssertEqual(pill.map(\.action), [
+            .crossCrewTodo(crewId: "rss-crew", crewTitle: "自建RSS栈",
+                           ledger: .human, number: 8)])
+        XCTAssertTrue(pill[0].label.contains("自建RSS栈"))
+        XCTAssertTrue(pill[0].label.contains("人类 Todo #8"))
+        context.externalTodos["item-8"] = nil
+        XCTAssertTrue(CrewMessageReferencePills.pills([ref], in: context).isEmpty)
+    }
+
     func test_计划的号解析成计划胶囊() {
         let pills = CrewMessageReferencePills.pills([ref(.plan, "3")], in: openContext)
         XCTAssertEqual(pills.map(\.action), [.plan(number: 3)])

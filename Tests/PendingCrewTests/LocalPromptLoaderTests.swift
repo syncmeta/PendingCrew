@@ -55,6 +55,8 @@ final class LocalPromptLoaderTests: XCTestCase {
         XCTAssertTrue(captain.contains("不得亲自运行 SSH"), "必须点名拦住本次真实越界")
         XCTAssertTrue(captain.contains("不得调用 `start_session`"), "不能在总机组里偷起执行 worker")
         XCTAssertTrue(captain.contains("`create_child_crew`"), "缺执行组时必须给出可行的新建路径")
+        XCTAssertTrue(captain.contains("总机组不得新建自己的 Todo"),
+                      "总机组的高优先级特例须覆盖普通机长的 add_human_todo/ask 指引")
     }
 
     func testMissingThrows() {

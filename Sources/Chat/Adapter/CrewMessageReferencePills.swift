@@ -8,6 +8,9 @@ struct CrewMessageReferencePill: Equatable, Identifiable {
     enum Action: Equatable {
         /// 开 Todo 详细窗口，落在这本账的这一条上（`CrewTodoDetailWindowPresenter`）。
         case todo(ledger: TodoLedger, number: Int)
+        /// 总机组引用执行组的原条目，不打开总机组自己的同号 Todo。
+        case crossCrewTodo(crewId: String, crewTitle: String,
+                           ledger: TodoLedger, number: Int)
         /// 开驾驶舱，落在这条计划上（`CockpitPresentation.focus`）。
         case plan(number: Int)
         /// 在本群时间线上滚到这条消息。
@@ -55,6 +58,13 @@ enum CrewMessageReferencePills {
 
     /// 渲染这一刻的可达性事实。
     struct Context: Equatable {
+        struct ExternalTodoTarget: Equatable {
+            let crewId: String
+            let crewTitle: String
+            let ledger: TodoLedger
+            let number: Int
+            let itemId: String
+        }
         /// 这条消息自己的 id。指向自己的引用不长胶囊（跳到原地等于没反应）。
         var selfMessageId: String?
         /// 本群此刻**已经加载进来**的消息 id。不在里面的滚不到。
@@ -63,15 +73,19 @@ enum CrewMessageReferencePills {
         var openableSessions: [String: String]
         /// 解析得出的号码：号码文本（`7` / `7-1`）→ 目标。查无此号的不长。
         var crewTargets: [String: Target]
+        /// 已从来源 crew 的真实账本核过的目标，按稳定条目 ID 索引。
+        var externalTodos: [String: ExternalTodoTarget]
 
         init(selfMessageId: String? = nil,
              loadedMessageIds: Set<String> = [],
              openableSessions: [String: String] = [:],
-             crewTargets: [String: Target] = [:]) {
+             crewTargets: [String: Target] = [:],
+             externalTodos: [String: ExternalTodoTarget] = [:]) {
             self.selfMessageId = selfMessageId
             self.loadedMessageIds = loadedMessageIds
             self.openableSessions = openableSessions
             self.crewTargets = crewTargets
+            self.externalTodos = externalTodos
         }
     }
 
@@ -81,7 +95,7 @@ enum CrewMessageReferencePills {
         for reference in references ?? [] {
             // 认不出的种类只丢**这一颗** —— 同一条消息上其它胶囊照长。
             guard let kind = reference.resolvedKind,
-                  let pill = pill(kind: kind, target: reference.targetId, in: context)
+                  let pill = pill(reference: reference, kind: kind, in: context)
             else { continue }
             guard !out.contains(where: { $0.action == pill.action }) else { continue }
             out.append(pill)
@@ -91,15 +105,41 @@ enum CrewMessageReferencePills {
 
     // MARK: - 一颗
 
-    private static func pill(kind: CrewMessageReference.Kind, target: String,
+    private static func pill(reference: CrewMessageReference,
+                             kind: CrewMessageReference.Kind,
                              in context: Context) -> CrewMessageReferencePill? {
+        let target = reference.targetId
         switch kind {
         case .humanTodo:
             guard let n = number(target) else { return nil }
+            if let source = reference.sourceCrewId {
+                guard let itemId = reference.todoItemId,
+                      let resolved = context.externalTodos[itemId],
+                      resolved.crewId == source, resolved.ledger == .human,
+                      resolved.number == n, resolved.itemId == itemId else { return nil }
+                return .init(label: "\(resolved.crewTitle) · 人类 Todo #\(n)",
+                             symbol: "person.crop.square",
+                             action: .crossCrewTodo(crewId: source,
+                                                    crewTitle: resolved.crewTitle,
+                                                    ledger: .human, number: n))
+            }
+            guard reference.todoItemId == nil else { return nil }
             return .init(label: "人类 Todo #\(n)", symbol: "person.crop.square",
                          action: .todo(ledger: .human, number: n))
         case .agentTodo:
             guard let n = number(target) else { return nil }
+            if let source = reference.sourceCrewId {
+                guard let itemId = reference.todoItemId,
+                      let resolved = context.externalTodos[itemId],
+                      resolved.crewId == source, resolved.ledger == .agent,
+                      resolved.number == n, resolved.itemId == itemId else { return nil }
+                return .init(label: "\(resolved.crewTitle) · Todo #\(n)",
+                             symbol: "checklist",
+                             action: .crossCrewTodo(crewId: source,
+                                                    crewTitle: resolved.crewTitle,
+                                                    ledger: .agent, number: n))
+            }
+            guard reference.todoItemId == nil else { return nil }
             return .init(label: "Todo #\(n)", symbol: "checklist",
                          action: .todo(ledger: .agent, number: n))
         case .plan:

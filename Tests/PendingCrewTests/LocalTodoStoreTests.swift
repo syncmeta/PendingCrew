@@ -38,6 +38,60 @@ final class LocalTodoStoreTests: XCTestCase {
         XCTAssertEqual(s.add(crewId: "c1", text: "c")?.number, 2)
     }
 
+    func testChiefCrewCannotCreateEitherTodoLedger() {
+        let dir = tempDir()
+        for ledger in TodoLedger.allCases {
+            let store = LocalTodoStore(directory: dir, ledger: ledger)
+            var failure: Error?
+            XCTAssertNil(store.add(crewId: LocalCrew.chiefCrewId, text: "应由执行组建账",
+                                   onWriteFailure: { failure = $0 }))
+            XCTAssertNotNil(failure, "拒绝应给调用方明确原因")
+            XCTAssertTrue(store.list(crewId: LocalCrew.chiefCrewId).isEmpty)
+            XCTAssertNotNil(store.add(crewId: "execution-crew", text: "执行组自己的 Todo"))
+        }
+    }
+
+    func testChiefLegacyTodoIsReadOnlyExceptExplicitWithdrawal() throws {
+        let dir = tempDir()
+        for ledger in TodoLedger.allCases {
+            let item = LocalTodoItem(id: "legacy-\(ledger.rawValue)", number: 4,
+                                     text: "历史条目", status: "pending",
+                                     createdAt: "2026-09-25T00:00:00Z")
+            let file = dir.appendingPathComponent(LocalCrew.chiefCrewId + ledger.fileSuffix)
+            try JSONEncoder().encode([item]).write(to: file)
+            let store = LocalTodoStore(directory: dir, ledger: ledger)
+            XCTAssertNil(store.respond(crewId: LocalCrew.chiefCrewId, number: 4,
+                                       sessionId: "captain", text: "新回应"))
+            XCTAssertNil(store.edit(crewId: LocalCrew.chiefCrewId, number: 4, text: "改写"))
+            XCTAssertFalse(store.delete(crewId: LocalCrew.chiefCrewId, number: 4))
+            XCTAssertFalse(store.setDismissed(crewId: LocalCrew.chiefCrewId, number: 4))
+            XCTAssertNil(store.followUp(crewId: LocalCrew.chiefCrewId, number: 4, note: "追问"))
+            XCTAssertEqual(store.item(crewId: LocalCrew.chiefCrewId, number: 4), item)
+            let withdrawal = store.withdraw(crewId: LocalCrew.chiefCrewId, number: 4,
+                                            sessionId: "captain", reason: "历史重复条目已核对",
+                                            isCaptain: true)
+            guard case let .withdrawn(withdrawn) = withdrawal else {
+                return XCTFail("历史条目仍须可审计地撤回：\(withdrawal)")
+            }
+            XCTAssertNotNil(withdrawn.withdrawnAt)
+        }
+    }
+
+    func testChiefPendingWritesArePreservedButNeverAutoReplayedIntoOwnTodo() {
+        let dir = tempDir()
+        let spool = LedgerSpool<PendingTodoWrite>(
+            directory: dir.appendingPathComponent("outbox-todos"))
+        let request = PendingTodoRequest(text: "旧待补请求", attachments: nil,
+                                         bySessionId: "chief", bySenderName: "总机组",
+                                         resumeNote: nil, expectsResume: false,
+                                         permissionTool: nil)
+        XCTAssertTrue(spool.spool(.add(request), key: LocalCrew.chiefCrewId))
+        let store = LocalTodoStore(directory: dir, ledger: .agent)
+        XCTAssertTrue(store.list(crewId: LocalCrew.chiefCrewId).isEmpty)
+        XCTAssertTrue(spool.hasPending(key: LocalCrew.chiefCrewId),
+                      "旧请求须保留供审计，不能被自动补成总机组新 Todo 或悄悄丢掉")
+    }
+
     func testRespondAppendsAndAdvancesStatus() {
         let s = LocalTodoStore(directory: tempDir())
         _ = s.add(crewId: "c", text: "修复登录")

@@ -76,4 +76,18 @@ final class CrewMessageReferenceTests: XCTestCase {
         XCTAssertTrue(s.contains("\"target_id\""), s)
         XCTAssertTrue(s.contains("\"human_todo\""), s)
     }
+
+    func test_跨组Todo引用带来源与稳定条目ID且老引用仍可解码() throws {
+        let ref = CrewMessageReference(.humanTodo, "8",
+                                       sourceCrewId: "rss-crew", todoItemId: "item-uuid")
+        let encoded = try JSONEncoder().encode(ref)
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"source_crew_id\""), json)
+        XCTAssertTrue(json.contains("\"todo_item_id\""), json)
+        XCTAssertEqual(try JSONDecoder().decode(CrewMessageReference.self, from: encoded), ref)
+        let old = try JSONDecoder().decode(CrewMessageReference.self,
+            from: #"{"kind":"human_todo","target_id":"8"}"#.data(using: .utf8)!)
+        XCTAssertNil(old.sourceCrewId)
+        XCTAssertNil(old.todoItemId)
+    }
 }

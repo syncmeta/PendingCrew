@@ -23,6 +23,9 @@ enum CrewLocalTodoLanding {
         attachments: [LocalWhiteboardAttachment] = [],
         backend: PendingCrewBackend
     ) async throws -> LocalTodoItem {
+        guard crewId != LocalCrew.chiefCrewId else {
+            throw ChiefTodoCreationRefusal.useExecutionCrew
+        }
         // 没落盘就别去群里宣布（#577）：`add` 返回 nil = Todo 列表文件读不出来 /
         // 漏读，条目根本没写进去。此前照发「To do +1: #N」，人以为记下了，其实没有。
         guard let item = LocalTodoStore.shared.add(

@@ -38,6 +38,12 @@ struct CrewTodoPanel: View {
     @State private var waitingOnHuman: [LocalTodoItem] = []
     /// 当前看的是哪本账（Todo #62）。两个药丸「Agent 的 / 人类的」切它。
     @State private var ledger: TodoLedger = .agent
+    @State private var chiefRows: [TodoListPresentation.ChiefRow] = []
+    @State private var chiefUnreadable = false
+    @State private var chiefLoadedLedger: TodoLedger?
+    private var visibleChiefRows: [TodoListPresentation.ChiefRow] {
+        chiefLoadedLedger == ledger ? chiefRows : []
+    }
 
     /// 这一屏的行（排序 + 跨本账借显都在纯逻辑里，有单测钉住）。
     private var snapshot: TodoListPresentation.LedgerRows {
@@ -52,21 +58,34 @@ struct CrewTodoPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("待做")
+                Text(crewId == LocalCrew.chiefCrewId ? "执行组待做" : "待做")
                     .font(Theme.Fonts.headline.weight(.semibold))
                     .foregroundStyle(Theme.Palette.ink)
                 CrewTodoLedgerPills(ledger: $ledger)
                 Spacer(minLength: 8)
-                Button(layout.detailButtonTitle) { openDetail(ledger: ledger, focus: nil) }
+                if crewId != LocalCrew.chiefCrewId {
+                    Button(layout.detailButtonTitle) { openDetail(ledger: ledger, focus: nil) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .font(Theme.Fonts.caption)
                     .tint(Theme.Palette.accent)
                     .help("打开 Todo 详细窗口：全量回应 + 重开")
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            if let hint = TodoListPresentation.unreadableHint(
+            if crewId == LocalCrew.chiefCrewId, chiefUnreadable {
+                HStack {
+                    Label("部分来源组 Todo 账本读不出来，当前列表不完整", systemImage: "exclamationmark.triangle")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.danger)
+                    Spacer(minLength: 8)
+                    Button("重试") { refreshToken &+= 1 }
+                        .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            } else if crewId != LocalCrew.chiefCrewId, let hint = TodoListPresentation.unreadableHint(
                 ledger: ledger,
                 unavailable: snapshot.ownLedgerUnavailable,
                 borrowedRowCount: rows.filter { $0.ledger != ledger }.count
@@ -83,7 +102,24 @@ struct CrewTodoPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 8)
             }
-            if rows.isEmpty, !snapshot.ownLedgerUnavailable {
+            if crewId == LocalCrew.chiefCrewId {
+                if visibleChiefRows.isEmpty, !chiefUnreadable {
+                    Text("暂无执行组 Todo")
+                        .font(Theme.Fonts.caption)
+                        .foregroundStyle(Theme.Palette.inkMuted)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 6)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(visibleChiefRows) { source in
+                            todoRow(.init(ledger: source.ledger, item: source.item),
+                                    source: (source.crewId, source.crewTitle))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+            } else if rows.isEmpty, !snapshot.ownLedgerUnavailable {
                 Text(TodoListPresentation.emptyHint(ledger))
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.inkMuted)
@@ -102,6 +138,7 @@ struct CrewTodoPanel: View {
         // `id` 带上 ledger —— 换药丸就换一本账重订（两本各自一个文件、一把锁）。
         // 读全量只在这条 task 里做，**不在 body 求值路径上**（那条红线）。
         .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
+            guard crewId != LocalCrew.chiefCrewId else { return }
             let requestedLedger = ledger
             let store = LocalTodoStore.shared(requestedLedger)
             ownRead = store.read(crewId: crewId)
@@ -116,6 +153,7 @@ struct CrewTodoPanel: View {
         // 这一屏要当场多出一行。**只在看人类那本时才订**（看 agent 那本时它就是
         // `ownRead` 自己，再订一份是白烧一条目录监听）。
         .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
+            guard crewId != LocalCrew.chiefCrewId else { return }
             guard ledger == .human else { waitingOnHuman = []; return }
             let agentStore = LocalTodoStore.shared(.agent)
             waitingOnHuman = agentStore.list(crewId: crewId)
@@ -123,6 +161,40 @@ struct CrewTodoPanel: View {
                 waitingOnHuman = agentStore.list(crewId: crewId)
             }
         }
+        .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
+            guard crewId == LocalCrew.chiefCrewId else { return }
+            let requestedLedger = ledger
+            refreshChiefRows(ledger: requestedLedger)
+            for await _ in LocalTodoStore.shared(requestedLedger).todoChanges(crewId: crewId) {
+                guard !Task.isCancelled, ledger == requestedLedger else { return }
+                refreshChiefRows(ledger: requestedLedger)
+            }
+        }
+    }
+
+    /// 总机组只读来源账本；不把任何条目复制进总机组自己的 Todo 文件。
+    private func refreshChiefRows(ledger: TodoLedger) {
+        var incomplete = false
+        let sources = LocalCrewStore.shared.allCrewTitles()
+            .filter { $0.id != LocalCrew.chiefCrewId }
+            .map { source -> TodoListPresentation.ChiefSource in
+                func read(_ book: TodoLedger) -> [LocalTodoItem] {
+                    switch LocalTodoStore.shared(book).read(crewId: source.id) {
+                    case let .rows(items): return items
+                    case .unreadable:
+                        incomplete = true
+                        return []
+                    }
+                }
+                let number = LocalCrewStore.shared.crewNumber(of: source.id)
+                let title = number.map { "\($0) · \(source.title)" } ?? source.title
+                return .init(crewId: source.id, title: title,
+                             human: ledger == .human ? read(.human) : [],
+                             agent: read(.agent))
+            }
+        chiefRows = TodoListPresentation.chiefRows(ledger: ledger, sources: sources)
+        chiefUnreadable = incomplete
+        chiefLoadedLedger = ledger
     }
 
     /// 详细窗口入口。每 crew 最多一个窗口，重复调用只前置 —— 但 `focus` 每次都会送进去。
@@ -131,9 +203,11 @@ struct CrewTodoPanel: View {
     /// 顶部「放大看」按钮传 nil（那是**列表**入口，不是某一条）。
     /// `ledger` 传**这一行自己那本**，不是药丸选的那本 —— 借显过来的行点进去，
     /// 要落在 agent 那本的 #N 上，否则会打开人类那本里号码相同的另一件事。
-    private func openDetail(ledger: TodoLedger, focus: Int?) {
+    private func openDetail(ledger: TodoLedger, focus: Int?,
+                            source: (id: String, title: String)? = nil) {
         CrewTodoDetailWindowPresenter.shared.open(
-            crewId: crewId, crewName: crewName, ledger: ledger, focus: focus,
+            crewId: source?.id ?? crewId, crewName: source?.title ?? crewName,
+            ledger: ledger, focus: focus,
             runner: runner, appModel: appModel,
             colorScheme: (AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
     }
@@ -141,7 +215,8 @@ struct CrewTodoPanel: View {
     // MARK: - 行渲染
 
     @ViewBuilder
-    private func todoRow(_ row: TodoListPresentation.Row) -> some View {
+    private func todoRow(_ row: TodoListPresentation.Row,
+                         source: (id: String, title: String)? = nil) -> some View {
         let item = row.item
         let icon = TodoListPresentation.statusIcon(status: item.status, isWithdrawn: item.withdrawnAt != nil)
         let corners = layout.cardCorners
@@ -158,7 +233,8 @@ struct CrewTodoPanel: View {
                 CrewTodoStatusCircle(status: item.status, isWithdrawn: item.withdrawnAt != nil, size: 15)
                 // 借显过来的行要带上本账名（#139）：两本账的 #N 各自从 1 起，
                 // 人类那本里裸写一个「7」，他会去人类那本找 #7 —— 那是另一件事。
-                Text(TodoListPresentation.rowNumberLabel(row, shownIn: ledger))
+                Text((source.map { "\($0.title) · " } ?? "")
+                    + TodoListPresentation.rowNumberLabel(row, shownIn: ledger))
                     .font(Theme.Fonts.footnote.weight(.semibold).monospacedDigit())
                     .foregroundStyle(Theme.Palette.accent)
             }
@@ -207,7 +283,9 @@ struct CrewTodoPanel: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { openDetail(ledger: row.ledger, focus: item.number) }
+        .onTapGesture {
+            openDetail(ledger: row.ledger, focus: item.number, source: source)
+        }
     }
 }
 

@@ -234,8 +234,8 @@ final class TodoMarkdownRenderingTests: XCTestCase {
         // 判据跟着改到新写法，**没有放宽**：仍然钉「行带自己的 #N」「顶部按钮开全列表」，
         // 另外多钉了一条「点行用的是这一行自己的账本」。
         XCTAssertTrue(
-            panel.contains("openDetail(ledger: row.ledger, focus: item.number)"),
-            "点某一行没有把它的 #N（和它自己那本账）带进详细窗口 —— 那窗口就不知道该显示哪条")
+            panel.contains("openDetail(ledger: row.ledger, focus: item.number, source: source)"),
+            "点某一行没有把来源 crew、账本和 #N 一起带进详细窗口 —— 同号时可能跳错组")
         XCTAssertTrue(
             panel.contains("openDetail(ledger: ledger, focus: nil)"),
             "顶部「放大看」按钮该开的是全列表（那是列表入口，不是某一条）")

@@ -289,6 +289,40 @@ enum TodoListPresentation {
         var id: String { "\(ledger.rawValue)#\(item.number)" }
     }
 
+    /// 总机组这本只读索引不复制 Todo：每一行仍指向来源 crew 的原条目。
+    struct ChiefSource: Equatable {
+        let crewId: String
+        let title: String
+        let human: [LocalTodoItem]
+        let agent: [LocalTodoItem]
+    }
+
+    struct ChiefRow: Identifiable, Equatable {
+        let crewId: String
+        let crewTitle: String
+        let ledger: TodoLedger
+        let item: LocalTodoItem
+        var id: String { "\(crewId)/\(ledger.rawValue)/\(item.id)" }
+    }
+
+    static func chiefRows(ledger: TodoLedger, sources: [ChiefSource]) -> [ChiefRow] {
+        sources.flatMap { source in
+            rows(for: ledger, human: source.human, agent: source.agent)
+                .filter {
+                    !$0.item.isSettled && $0.item.withdrawnAt == nil
+                }.map {
+                ChiefRow(crewId: source.crewId, crewTitle: source.title,
+                         ledger: $0.ledger, item: $0.item)
+            }
+        }.sorted {
+            if $0.item.createdAt != $1.item.createdAt {
+                return $0.item.createdAt > $1.item.createdAt
+            }
+            if $0.crewId != $1.crewId { return $0.crewId < $1.crewId }
+            return $0.item.number > $1.item.number
+        }
+    }
+
     /// 当前药丸的一次可信读取。借显行来自另一本账，可能在“自己的账读失败”时仍然
     /// 正常存在；把这两件事压成一个数组，就会把部分列表伪装成完整列表。
     struct LedgerRows: Equatable {

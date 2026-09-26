@@ -44,10 +44,17 @@ struct CrewMessageReference: Codable, Equatable {
     /// 指向谁：Todo / 计划是 `#N` 的 N（十进制字符串）；消息是白板消息 id；
     /// session 是 sessionId；机组是短号码。
     let targetId: String
+    /// 跨组 Todo 的来源；nil 保持老消息的「本群 Todo」语义。
+    let sourceCrewId: String?
+    /// 目标条目的稳定 UUID。跨组引用必须带它，防止同号被误认。
+    let todoItemId: String?
 
-    init(_ kind: Kind, _ targetId: String) {
+    init(_ kind: Kind, _ targetId: String,
+         sourceCrewId: String? = nil, todoItemId: String? = nil) {
         self.kind = kind.rawValue
         self.targetId = targetId
+        self.sourceCrewId = sourceCrewId
+        self.todoItemId = todoItemId
     }
 
     var resolvedKind: Kind? { Kind(rawValue: kind) }
@@ -55,6 +62,8 @@ struct CrewMessageReference: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case kind
         case targetId = "target_id"
+        case sourceCrewId = "source_crew_id"
+        case todoItemId = "todo_item_id"
     }
 }
 

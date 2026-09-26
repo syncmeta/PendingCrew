@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// 本地 crew-comms 的 MCP server 逻辑（spec local-first chunk 4）。claude 经
 /// `--mcp-config` 把 `pendingcrew-mcp serve` 拉成子进程，session 用 `post_to_crew`
@@ -190,6 +191,11 @@ final class McpServer {
                                         "blocked_by_ledger": ["type": "string"],
                                         "headline": ["type": "string"],
                                         "todo": ["type": "integer"],
+                                        "todo_reference": ["type": "object", "properties": [
+                                            "source_crew": ["type": "string"],
+                                            "ledger": ["type": "string", "enum": ["agent", "human"]],
+                                            "number": ["type": "integer"],
+                                        ], "required": ["source_crew", "ledger", "number"]],
                                         "todo_status": ["type": "string"],
                                         "evidence_commit": ["type": "string"],
                                         "evidence": ["type": "string"],
@@ -200,6 +206,11 @@ final class McpServer {
                             "headline": ["type": "string", "description": "**一句话说清「结果是什么」** —— 超过 8 行的消息在群里**默认收起**，收起态就只露这一行，人看不看正文全看它。\n\n**写结果，不写动作：**\n✅「闸门全绿，0.1.34 可以发」\n✅「病根是守卫问错了对象，已修，等接线」\n✅「这条要你拍：A 拒收 / B 降级，我倾向 B」\n❌「关于折叠标题的一些进展」（说了等于没说）\n❌「我改了 CrewMessageFold 和 McpServer」（这是过程，不是结果）\n❌ 把整段摘要粘进来（收起态只露一行，多的会被截掉）\n\n长度：约 60 个半角宽 ≈ **30 个汉字**，超了截断加省略号。\n**不给的话界面只能猜**（取正文前 3 段里第一个加粗）—— 猜出来的常常是句子中间某个强调词。真没结论可写，多半说明这条消息本身不该这么长。\n分条发送时它是**每条自己的**（写在 `messages` 里那一条上，顶层给会整批拒）。"],
                             "category": ["type": "string", "description": "这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。不给 = 不落账。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
+                            "todo_reference": ["type": "object", "description": "总机组只读引用执行组已有 Todo；source_crew 填 directory 的机组短号，ledger 填 agent/human，number 填来源账本编号。会当场核实并记录来源 crew 与稳定条目 ID；不创建或更改 Todo。", "properties": [
+                                "source_crew": ["type": "string"],
+                                "ledger": ["type": "string", "enum": ["agent", "human"]],
+                                "number": ["type": "integer"],
+                            ], "required": ["source_crew", "ledger", "number"]],
                             "todo_status": ["type": "string", "enum": LocalTodoStore.statusOrder, "description": "配合 `todo` 用。翻 `completed` 必须带 `evidence_commit`（会当场解析）或 `evidence`。"],
                             "plan": ["type": "integer", "description": "配合 `progress` / `blocked` / `done` 用：驾驶舱里那条计划的 #N（plan_list 看得到）。\n**这三类会真的写进驾驶舱那本账**：`progress` 追加一条进展（板上那条是「没做」时顺手翻成「进行中」，是「卡住」时**不动** —— 报进度不等于解了卡）；`blocked` 翻卡住并挂上卡点；`done` 翻完成。\n`plan`(新增一条计划) 和 `done`(翻完成) **只有机长能做** —— 板上有哪些条目是机长的编排权（也是防淹），而完成是验收判断、不是自我声明。worker 报 `progress` / `blocked` 照常。"],
                             "blocked_by_number": ["type": "integer", "description": "配合 `blocked` 用：卡在哪条 Todo 的 #N。**「卡住」的意思就是卡在人身上** —— 不指出是哪一条，人看到板也不知道该推什么。"],
@@ -690,6 +701,15 @@ final class McpServer {
                     ],
                 ])
             }
+            if crewId == LocalCrew.chiefCrewId {
+                // 总机组只引用执行组 Todo。旧 helper 仍可能缓存工具表，所以
+                // handleToolCall 的写闸保留；新工具表也不再诱导它尝试这些入口。
+                let localTodoWriters: Set<String> = ["ask", "add_human_todo", "respond_todo"]
+                tools.removeAll { tool in
+                    guard let name = tool["name"] as? String else { return false }
+                    return localTodoWriters.contains(name)
+                }
+            }
             return result(id: id, ["tools": tools])
         case "tools/call":
             let params = obj["params"] as? [String: Any]
@@ -732,6 +752,18 @@ final class McpServer {
                 // **先全部校验，再逐条执行**：分条之后「一半成功」是新的失败形态，
                 // 而它最容易被读成「全成了」。任何一条不合法就整批拒、一条不发。
                 for e in entries {
+                    if crewId == LocalCrew.chiefCrewId, e.args["todo"] != nil {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条："
+                            + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+                    }
+                    if let why = resolveExternalTodoReference(e.args).error {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
+                    }
+                    if crewId == LocalCrew.chiefCrewId,
+                       e.args["category"] as? String == "human_todo" {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条："
+                            + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+                    }
                     if case let .refuse(why) = CrewCategoryRouting.decide(
                         category: e.args["category"] as? String, args: e.args,
                         isCaptain: isCaptain) {
@@ -863,6 +895,10 @@ final class McpServer {
                 text: "找到 \(rendered.count) 条（最新优先；时间边界包含；附件仅 filename/MIME）：\n\n"
                     + rendered.joined(separator: "\n\n"))
         case "ask":
+            guard crewId != LocalCrew.chiefCrewId else {
+                return toolResult(id: id, text: "ERROR: "
+                    + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+            }
             // 驾驶舱计划 #75 ①：**`ask` 不再阻塞。**
             //
             // 旧实现：raise 一条 `kind: "decision"` 待决策 → `awaitReply` 每 0.5s 轮询、
@@ -1468,6 +1504,10 @@ final class McpServer {
             guard isCaptain else { return toolResult(id: id, text: "ERROR: 仅机长可用") }
             return toolResult(id: id, text: planRows())
         case "respond_todo":
+            guard crewId != LocalCrew.chiefCrewId else {
+                return toolResult(id: id, text: "ERROR: "
+                    + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+            }
             // 人类 Todo 的机器人回应（task #478）：追加式回应 + 可选状态推进。
             // number 收 Int/Double 两种形状（JSON 数字经 JSONSerialization 可能是
             // 任一种）。找不到 #N 时把当前列表带在错误里 —— agent 不用另一个工具
@@ -1544,6 +1584,10 @@ final class McpServer {
             }
             return toolResult(id: id, text: "已回应 Todo #\(number)（状态：\(LocalTodoItem.statusLabel(updated.status))）。")
         case "add_human_todo":
+            guard crewId != LocalCrew.chiefCrewId else {
+                return toolResult(id: id, text: "ERROR: "
+                    + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+            }
             // 人类 Todo 的新增（Todo #62 ④）：**这本账只有 agent 能加**，方向与
             // respond_todo 那本正好相反。三步一条都不能少：
             //   1. 落账（记下 `createdBySessionId` —— 人类回应时靠它知道叫醒谁）
@@ -1973,7 +2017,62 @@ final class McpServer {
     /// 所以它返回**结果**而不是直接返回 JSON —— 一次批量里每条的成败要分别记账。
     ///
     /// `ok == false` = **这一条没有发出去**（参数不合法 / 落账失败 / 白板写失败）。
+    /// `todo_reference` 是来源账本的**只读解引用**，不是另一条新增 Todo 路径。
+    /// 三件事同时钉住：具体来源 crew、哪本账、稳定条目 ID。读不到就整条拒发，
+    /// 绝不能退化成「正文里写个 #N」后仍回执成功。
+    private func resolveExternalTodoReference(_ args: [String: Any])
+        -> (reference: CrewMessageReference?, error: String?) {
+        guard let raw = args["todo_reference"] else { return (nil, nil) }
+        guard crewId == LocalCrew.chiefCrewId else {
+            return (nil, "todo_reference 只供总机组引用执行组 Todo。")
+        }
+        guard let fields = raw as? [String: Any],
+              let sourceNumber = fields["source_crew"] as? String,
+              let phone = CrewPhoneNumber.parse(sourceNumber), phone.ext == nil,
+              let ledgerName = fields["ledger"] as? String,
+              let ledger = TodoLedger(rawValue: ledgerName),
+              let rawNumber = fields["number"] as? NSNumber,
+              CFGetTypeID(rawNumber) != CFBooleanGetTypeID(),
+              let number = Int(exactly: rawNumber.doubleValue), number > 0 else {
+            return (nil, "todo_reference 须给有效的 source_crew 机组短号、ledger(agent/human) 和正整数 number。")
+        }
+        let directory: CrewDirectory
+        do {
+            directory = try CrewDirectory.load(whiteboardDirectory: sharedDirectory)
+        } catch {
+            return (nil, "来源机组名册读不出来：\(error.localizedDescription)；引用没有发出。")
+        }
+        guard let source = directory.resolve(phone),
+              source.crewId != LocalCrew.chiefCrewId else {
+            return (nil, "source_crew 不是已登记的具体执行组；引用没有发出。")
+        }
+        let store = ledger == .human ? humanTodos : todos
+        let rows: [LocalTodoItem]
+        switch store.read(crewId: source.crewId) {
+        case let .rows(found): rows = found
+        case .unreadable:
+            return (nil, "来源执行组的 \(ledger.pillTitle) Todo 账本读不出来；引用没有发出。")
+        }
+        guard let item = rows.first(where: { $0.number == number }) else {
+            return (nil, "来源执行组 \(source.crewTitle) 的 \(ledger.pillTitle) Todo #\(number) 不存在；引用没有发出。")
+        }
+        let kind: CrewMessageReference.Kind = ledger == .human ? .humanTodo : .agentTodo
+        return (CrewMessageReference(kind, String(number),
+                                     sourceCrewId: source.crewId, todoItemId: item.id), nil)
+    }
+
     private func postToCrewOnce(args: [String: Any]) -> (ok: Bool, text: String) {
+            let externalTodo = resolveExternalTodoReference(args)
+            if let why = externalTodo.error { return (false, "ERROR: " + why) }
+            if crewId == LocalCrew.chiefCrewId, args["todo"] != nil {
+                return (false, "ERROR: "
+                    + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+            }
+            if crewId == LocalCrew.chiefCrewId,
+               args["category"] as? String == "human_todo" {
+                return (false, "ERROR: "
+                    + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
+            }
             let message = (args["message"] as? String) ?? ""
             // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与
             // 软报错文案跟人类拖入共用 `CrewFileAttachmentIntake`，不另立一套口径。
@@ -2124,7 +2223,8 @@ final class McpServer {
                     mentions: mentions, inReplyTo: replyTo,
                     senderKind: isCaptain ? "captain" : "session",
                     attachments: intake.accepted,
-                    references: CrewMessageReferences.build(refs),
+                    references: CrewMessageReferences.build(refs)
+                        + (externalTodo.reference.map { [$0] } ?? []),
                     crewStatus: crewStatus,
                     headline: headline)
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说

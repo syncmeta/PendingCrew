@@ -50,6 +50,41 @@ final class McpServerDirectoryToolsTests: XCTestCase {
         """) ?? ""
     }
 
+    func testChiefTodoReferenceResolvesSourceLedgerAndStableItemWithoutCreatingOwnTodo() throws {
+        let f = fixture()
+        let sourceStore = LocalTodoStore(directory: f.whiteboards, ledger: .human)
+        let item = try XCTUnwrap(sourceStore.add(crewId: f.targetCrewId, text: "由执行组拍板"))
+        let chief = McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
+                              approvals: LocalApprovalStore(directory: f.whiteboards),
+                              control: LocalCrewControlStore(directory: f.whiteboards),
+                              crewId: LocalCrew.chiefCrewId, sessionId: "chief",
+                              isCaptain: true, sessionLabel: "总机组",
+                              quotaDirectory: f.whiteboards,
+                              todos: LocalTodoStore(directory: f.whiteboards))
+        let good = call(chief, "post_to_crew",
+            #"{"message":"执行组 Todo 已建立","todo_reference":{"source_crew":"2","ledger":"human","number":1}}"#)
+        XCTAssertTrue(good.contains("已发到"), good)
+        let posted = try XCTUnwrap(LocalWhiteboardStore(directory: f.whiteboards)
+            .list(crewId: LocalCrew.chiefCrewId).last)
+        XCTAssertEqual(posted.references, [CrewMessageReference(
+            .humanTodo, "1", sourceCrewId: f.targetCrewId, todoItemId: item.id)])
+        XCTAssertTrue(sourceStore.list(crewId: LocalCrew.chiefCrewId).isEmpty)
+
+        let bad = call(chief, "post_to_crew",
+            #"{"messages":[{"text":"普通消息"},{"text":"错误引用","todo_reference":{"source_crew":"2","ledger":"human","number":99}}]}"#)
+        XCTAssertTrue(bad.contains("ERROR"), bad)
+        XCTAssertEqual(LocalWhiteboardStore(directory: f.whiteboards)
+            .list(crewId: LocalCrew.chiefCrewId).count, 1,
+            "批量预检失败不能先发出普通消息")
+        for invalid in ["1.5", "true", "0", "-1"] {
+            let receipt = call(chief, "post_to_crew",
+                """
+                {"message":"错误编号","todo_reference":{"source_crew":"2","ledger":"human","number":\(invalid)}}
+                """)
+            XCTAssertTrue(receipt.contains("ERROR"), receipt)
+        }
+    }
+
     // MARK: - 注册
 
     func testBothToolsAreListedForEveryone() {
