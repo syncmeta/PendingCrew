@@ -1,5 +1,5 @@
 import XCTest
-// McpPermissionHook.swift + LocalApprovalStore.swift 编进 test bundle（见 project.yml）。
+// MCP hook 只使用人类 Todo 与一次性放行票，不再依赖旧审批账本。
 
 final class McpPermissionHookTests: XCTestCase {
     private func tempDir() -> URL {
@@ -11,7 +11,7 @@ final class McpPermissionHookTests: XCTestCase {
     /// ⚠️ 每个 store 都显式给 `dir`。漏一个就静默落到**人的真实数据目录**
     /// （2026-09-08/09 连栽两次，见 `McpServerTestDirectoryContractTests`）。
     private func hook(_ dir: URL, gates: [String], sessionId: String = "local-x") -> McpPermissionHook {
-        McpPermissionHook(approvals: LocalApprovalStore(directory: dir), crewId: "c",
+        McpPermissionHook(crewId: "c",
                           sessionId: sessionId, gates: gates,
                           board: LocalWhiteboardStore(directory: dir),
                           todos: LocalTodoStore(directory: dir, ledger: .human),
@@ -40,7 +40,8 @@ final class McpPermissionHookTests: XCTestCase {
         XCTAssertTrue(out.contains("\"permissionDecision\":\"deny\""), "该当场拒")
         XCTAssertTrue(out.contains("\"hookEventName\":\"PreToolUse\""), "输出带 PreToolUse 事件名")
 
-        XCTAssertTrue(LocalApprovalStore(directory: dir).pending(crewId: "c").isEmpty,
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("c.approvals.json").path),
                       "还往待审批列表 raise —— 权限类该走 Todo，不是两套并存")
         let todos = LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c")
         XCTAssertEqual(todos.count, 1, "请求没进人类 Todo，那人根本不知道它要放行什么")
@@ -72,13 +73,13 @@ final class McpPermissionHookTests: XCTestCase {
         grants.grant(crewId: "c", tool: "toolX")
         let stdin = #"{"tool_name":"toolX","tool_input":{},"session_id":"s"}"#
         let first = McpPermissionHook(
-            approvals: LocalApprovalStore(directory: dir), crewId: "c", sessionId: "local-x",
+            crewId: "c", sessionId: "local-x",
             gates: ["toolX"], board: LocalWhiteboardStore(directory: dir),
             todos: LocalTodoStore(directory: dir, ledger: .human), grants: grants).handle(stdin)!
         XCTAssertTrue(first.contains("\"permissionDecision\":\"allow\""), "人同意过还被拒 —— 那就是死循环")
 
         let second = McpPermissionHook(
-            approvals: LocalApprovalStore(directory: dir), crewId: "c", sessionId: "local-x",
+            crewId: "c", sessionId: "local-x",
             gates: ["toolX"], board: LocalWhiteboardStore(directory: dir),
             todos: LocalTodoStore(directory: dir, ledger: .human), grants: grants).handle(stdin)!
         XCTAssertTrue(second.contains("\"permissionDecision\":\"deny\""),

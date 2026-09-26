@@ -8,7 +8,7 @@ import Foundation
 ///
 /// 每 crew 一个 JSON：`<dir>/<crewId>.crewmeta.json` = `CrewMetaChange`（last-write-wins ——
 /// 只保留最新一次改名，captain 反复改也只落最后那个）。与 `LocalWhiteboardStore`
-/// 的 `<crewId>.json` / `LocalApprovalStore` 的 `<crewId>.approvals.json` 后缀不同，不冲突；
+/// 的 `<crewId>.json` 后缀不同，不冲突；
 /// 共用 `LocalWhiteboardStore.defaultDirectory`，所以写盘即触发 app 的 `directoryChanged`。
 ///
 /// **自包含 Foundation**（编进 `pendingcrew-mcp` re-exec helper + PendingCrewTests bundle）。

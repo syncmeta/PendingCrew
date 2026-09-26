@@ -276,7 +276,6 @@ final class SessionOutputEvidenceTests: XCTestCase {
 
         let server = McpServer(
             store: LocalWhiteboardStore(directory: dir),
-            approvals: LocalApprovalStore(directory: dir),
             control: LocalCrewControlStore(directory: dir),
             crewId: "local-org", sessionId: "cap-1", isCaptain: true,
             sessionLabel: "机长", quotaDirectory: dir,

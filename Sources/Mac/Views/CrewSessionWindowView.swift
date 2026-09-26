@@ -3,11 +3,11 @@ import SwiftUI
 
 /// 右栏（inspector）：两模式合一。
 ///
-/// - **成员列表模式**（`sessionRunner.viewingTerminal == false`，平时）：待审批区 +
+/// - **成员列表模式**（`sessionRunner.viewingTerminal == false`，平时）：
 ///   crew 成员富列表，「+ 新 session」作为成员列表第一行（session
 ///   行带简介 + 最新一步动作，可点进终端）。
 /// - **终端模式**（`viewingTerminal == true`）：顶部「‹ 成员」返回，下面是原样的
-///   session 切换条 + 终端 + composer + 内联审批卡。
+///   session 切换条 + 终端 + composer。
 ///
 /// 终端那一层只观察 `CrewSessionRunner.current`（哪个 run 在前台）。具体 run 的
 /// status 变化由内层 `SessionRunContentView` 通过 `@ObservedObject` 观察 ——
@@ -126,7 +126,7 @@ struct CrewSessionWindowView: View {
         LocalCodingAgentKind.captainDefault(detail?.crew.captainAgentKind)
     }
 
-    // MARK: - 终端模式（原样保留：切换条 + 终端 + composer + 审批卡）
+    // MARK: - 终端模式（切换条 + 终端 + composer）
 
     private var terminalMode: some View {
         HStack(spacing: 0) {
@@ -242,9 +242,6 @@ struct CrewSessionWindowView: View {
                         Task { await sessionRunner.requestCodexCompaction(for: run) }
                     })
                     .id(run.runID)
-                if run.kind.isAgent {
-                    SessionApprovalCardsView(crewId: run.crewId, sessionId: run.sessionId)
-                }
             } else {
                 idleState
             }
@@ -264,10 +261,10 @@ struct CrewSessionWindowView: View {
         }
     }
 
-    // MARK: - 成员列表模式（平时：上半 Todo 面板 | 下半 待审批 + 成员富列表）
+    // MARK: - 成员列表模式（平时：上半 Todo 面板 | 下半成员富列表）
 
     /// Todo #16：右栏拆上下两半 —— 上半人类 Todo 列表（与驾驶舱同一个
-    /// `CrewTodoPanel`），下半原有的待审批 + 成员列表。用原生 `VSplitView`：
+    /// `CrewTodoPanel`），下半是成员列表。用原生 `VSplitView`：
     /// 分割线可拖、两 pane 各自 ScrollView 滚动，min 高度小到窗口矮时也不塌
     ///（VSplitView 在 NavigationSplitView 的固定列内做垂直分割，不影响列宽协商）。
     private var memberListMode: some View {
@@ -679,8 +676,8 @@ struct CrewSessionWindowView: View {
         return runs.filter { $0.role == .captain } + runs.filter { $0.role != .captain }
     }
 
-    /// 未读数（chunk2 T6）：本 session 的 pending 待办 + 上次查看后该 session
-    /// 发的白板消息。`badgeTick` 由 `subscribeRoster` 的白板变更事件 bump，强制
+    /// 未读数（chunk2 T6）：上次查看后该 session 发的白板消息。
+    /// `badgeTick` 由 `subscribeRoster` 的白板变更事件 bump，强制
     /// 重算（store 数据在文件里，没有 ObservableObject 推送）。前台选中的 run 不显
     /// 角标（看着呢）。
     private func badgeCount(for run: CrewSessionRun) -> Int {
@@ -688,7 +685,7 @@ struct CrewSessionWindowView: View {
         if run.runID == sessionRunner.selectedRunId { return 0 }
         return SessionUnreadStore.shared.unreadCount(
             crewId: run.crewId, sessionId: run.sessionId,
-            approvals: .shared, whiteboard: .shared)
+            whiteboard: .shared)
     }
 
     /// 横向滚动的 session 切换条：每个 run 一个 capsule（名字 + 状态点 +
@@ -778,9 +775,6 @@ struct CrewSessionWindowView: View {
                                     crewId: run.crewId, sessionId: run.sessionId,
                                     model: model, effort: effort, fastMode: fastMode))
                         }
-                    },
-                    onSwitchApproval: { reviewer in
-                        Task { await sessionRunner.applyCodexApprovalMode(to: run, reviewer: reviewer) }
                     })
             }
         }
@@ -1389,7 +1383,6 @@ private struct CodexSessionComposer: View {
     @State private var isFocused = false
     let onSend: () -> Void
     let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
-    let onSwitchApproval: (_ reviewer: CodexProtocol.ApprovalsReviewer) -> Void
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1421,7 +1414,6 @@ private struct CodexSessionComposer: View {
                 }
                 SessionProfileControl(run: run, onSwitch: onSwitchProfile)
                 HStack(spacing: 8) {
-                    SessionApprovalModeControl(run: run, onSwitch: onSwitchApproval)
                     Spacer(minLength: 0)
                     if let pending = run.pendingProfile {
                         Text("切换至 \(pending)…")
@@ -1492,39 +1484,6 @@ private struct CodexWorkspaceFooter: View {
                 catch { break }
             }
         }
-    }
-}
-
-/// Codex's native reviewer switch. Manual mode is the only mode allowed to create
-/// PendingCrew approval cards; auto_review keeps decisions inside Codex.
-private struct SessionApprovalModeControl: View {
-    @ObservedObject var run: CrewSessionRun
-    let onSwitch: (CodexProtocol.ApprovalsReviewer) -> Void
-
-    var body: some View {
-        Menu {
-            ForEach(CodexProtocol.ApprovalsReviewer.allCases, id: \.rawValue) { reviewer in
-                Button {
-                    guard reviewer != run.approvalsReviewer else { return }
-                    onSwitch(reviewer)
-                } label: {
-                    if reviewer == run.approvalsReviewer {
-                        Label(reviewer.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(reviewer.displayName)
-                    }
-                }
-            }
-        } label: {
-            CodexControlPillLabel(
-                title: "审批 · \(run.approvalsReviewer?.displayName ?? "Approve for me")",
-                icon: run.approvalsReviewer == .user ? "hand.raised" : "checkmark.shield")
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .disabled(run.status != .running)
-        .accessibilityLabel("Codex 审批模式")
-        .help("Approve for me 由 Codex 原生代审；手动批准会在本 session 内显示可操作审批卡")
     }
 }
 

@@ -39,7 +39,6 @@ final class McpCategoryLandingTests: XCTestCase {
         // （第一版就写进去了三条，事后删掉的）—— 而且用例自己读 fixture、
         // 读到 0 条，看起来像「没落账」，实际是**落到别人家去了**。
         McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
-                  approvals: LocalApprovalStore(directory: f.whiteboards),
                   control: LocalCrewControlStore(directory: f.whiteboards),
                   crewId: f.crewId, sessionId: "sess-1",
                   isCaptain: captain, sessionLabel: "机长",

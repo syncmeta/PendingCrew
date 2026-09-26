@@ -3,7 +3,7 @@ import Combine
 import Foundation
 
 /// 菜单栏那个数字的取数层（P5b·B）。判定在 `HumanAttentionTally`（进得了单测），
-/// 这里只负责把三样输入捞出来喂给它。
+/// 这里只负责把运行状态与人类 Todo 捞出来喂给它。
 ///
 /// ## 为什么读 `crew-sessions.json` 而不是内存里的 `runs`
 ///
@@ -47,15 +47,12 @@ final class MenuBarAttentionModel: ObservableObject {
 
     private func refresh() {
         guard let crewStore else { return }
-        let crewIds = crewStore.crews.map(\.id)
-        let approvals = crewIds.flatMap { LocalApprovalStore.shared.pending(crewId: $0) }
-            .map(\.sessionId)
         let todos = crewStore.humanTodoAttention.values.reduce(0) { $0 + $1.ownUnanswered }
 
         do {
             let states = try Self.rosterStates()
             count = HumanAttentionTally.tally(
-                pendingApprovalSessionIds: approvals,
+                pendingApprovalSessionIds: [],
                 sessionStates: states,
                 unansweredTodos: todos)
             lastGoodAt = Date()

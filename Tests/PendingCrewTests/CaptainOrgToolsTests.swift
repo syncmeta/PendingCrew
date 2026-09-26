@@ -109,7 +109,6 @@ final class CaptainOrgToolsTests: XCTestCase {
 
     private func makeServer(isCaptain: Bool, dir: URL) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "local-org", sessionId: "cap-1", isCaptain: isCaptain,
                   sessionLabel: "机长", quotaDirectory: dir)

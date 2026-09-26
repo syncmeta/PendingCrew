@@ -8,7 +8,7 @@ import XCTest
 /// 「用 `answer_decision` 工具答它」。#75 之后**两头都不成立**：
 ///
 /// - `ask` 改成写人类 Todo，**不再产生 `decision`**；
-/// - codex 原生审批走的是 `kind: "permission"`（`CodexManualApprovalBridge`）；
+/// - Codex 的常规审批由原生 auto_review 处理；旧手动桥现已移除；
 /// - `answer_decision` 这个工具**已经删了**。
 ///
 /// 于是它只可能命中 #75 **之前**遗留的旧行，然后把机长送进死胡同：机长照着答，
@@ -50,13 +50,11 @@ final class DecisionKindHasNoProducerTests: XCTestCase {
             """)
     }
 
-    /// 反面：codex 原生那条**必须还在**。#75 拆的是 agent 问人类那一半，
-    /// codex 协议自己要的审批留着 —— 拆了它 codex 在需要审批时无处可去，
-    /// 那是新造一个「停」，跟这一单目的正相反。
-    func testCodexNativeApprovalPathIsStillThere() throws {
-        let store = try Self.text(of: "LocalApprovalStore.swift")
-        XCTAssertTrue(store.contains(#"kind: "permission""#),
-                      "codex 原生审批那条也被拆了 —— 它需要审批时会无处可去")
+    /// Codex 自己的 auto_review 保留，本地手动审批账本不再是后备路径。
+    func testCodexNativeAutoReviewRemainsWithoutManualReviewer() throws {
+        let protocolSource = try Self.text(of: "CodexProtocol.swift")
+        XCTAssertTrue(protocolSource.contains(#"case autoReview = "auto_review""#))
+        XCTAssertFalse(protocolSource.contains("case user"))
     }
 
     // MARK: - 扫描面不止 `Sources/`：**任何教人怎么做事的地方**

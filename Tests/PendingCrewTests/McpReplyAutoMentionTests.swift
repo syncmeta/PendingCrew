@@ -26,7 +26,6 @@ final class McpReplyAutoMentionTests: XCTestCase {
 
     private func server(_ dir: URL, sessionId: String = "me") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: sessionId,
                   quotaDirectory: dir)

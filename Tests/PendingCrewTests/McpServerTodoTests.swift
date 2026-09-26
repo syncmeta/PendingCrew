@@ -9,7 +9,6 @@ final class McpServerTodoTests: XCTestCase {
     }
     private func server(_ dir: URL, isCaptain: Bool = false, label: String? = "机长") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
                   sessionLabel: label,

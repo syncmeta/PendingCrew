@@ -1,5 +1,5 @@
 import XCTest
-// McpServer.swift + LocalWhiteboardStore.swift + LocalApprovalStore.swift 编进 test
+// McpServer.swift + LocalWhiteboardStore.swift 编进 test
 // bundle（见 project.yml）；main / McpHelperMain 顶层不进 bundle。
 
 final class McpServerTests: XCTestCase {
@@ -17,7 +17,6 @@ final class McpServerTests: XCTestCase {
     /// **加 store 的时候顺手在这儿也加一行**，否则下一次同样静默发生。
     private func server(_ dir: URL, isCaptain: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
                   quotaDirectory: dir,
@@ -191,29 +190,11 @@ final class McpServerTests: XCTestCase {
         XCTAssertNil(server(tempDir()).handleLine(""))
     }
 
-    // MARK: - ask（待决策 raise + long-poll 答复）
+    // MARK: - ask（问题转入人类 Todo，不阻塞）
 
     func testAskEmptyQuestionRejected() {
         let r = server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ask","arguments":{"question":"  "}}}"#)!
         XCTAssertTrue(r.contains("ERROR"))
-    }
-
-    func testAwaitReplyReturnsAnswerOnFirstPoll() throws {
-        let s = server(tempDir())
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "sess-1", summary: "q"))
-        s.approvals.answer(crewId: "c", id: id, reply: "选 A")
-        XCTAssertEqual(s.awaitReply(reqId: id, pollInterval: 0.01), "选 A")
-    }
-
-    func testAwaitReplyTimeoutClosesUnreachableDecision() throws {
-        let s = server(tempDir())
-        let id = try XCTUnwrap(s.approvals.raise(crewId: "c", kind: "decision", sessionId: "sess-1", summary: "q"))
-        let reply = s.awaitReply(reqId: id, pollInterval: 0.01, maxWaits: 2)
-        XCTAssertTrue(reply.contains("自行判断"))
-        XCTAssertEqual(s.approvals.item(crewId: "c", id: id)?.status, "answered",
-                       "ask 已超时返回，晚到答复无法再送达 agent，卡片不得永久 pending")
-        XCTAssertTrue(s.approvals.pending(crewId: "c").isEmpty,
-                      "不得让已继续工作的 session 仍被标成等答复")
     }
 
     // MARK: - ask（驾驶舱计划 #75 ①：口径整个换了，不是这几条测试写错了）
@@ -247,8 +228,9 @@ final class McpServerTests: XCTestCase {
         _ = s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask","arguments":{"question":"要不要上线?"}}}"#)
         XCTAssertEqual(LocalTodoStore(directory: dir, ledger: .human).list(crewId: "c").count, 1,
                        "问题没进人类 Todo")
-        XCTAssertTrue(s.approvals.pending(crewId: "c").isEmpty,
-                      "还往待决策列表里 raise 了 —— 决策类该并进 Todo，不是两套并存")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("c.approvals.json").path),
+            "还创建了旧审批账本 —— 决策类该只进 Todo")
     }
 
     // captain 自己发起 ask 时不 @ 自己（去重）—— 只 @human（#491，这一半没变）。

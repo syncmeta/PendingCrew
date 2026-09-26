@@ -17,7 +17,6 @@ final class McpServerModelCatalogTests: XCTestCase {
 
     private func makeServer(dir: URL, isCaptain: Bool = true, agentKey: String? = nil) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "local-x", sessionId: "s1", isCaptain: isCaptain,
                   sessionLabel: "测试 session", quotaDirectory: dir,

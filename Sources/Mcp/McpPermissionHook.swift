@@ -15,7 +15,6 @@ import Foundation
 ///
 /// **自包含 Foundation**（编进 `pendingcrew-mcp` re-exec helper + PendingCrewTests bundle）。
 final class McpPermissionHook {
-    let approvals: LocalApprovalStore
     let crewId: String
     /// **本地** session id（= startSession 的 localSessionId，经 `--session` argv 传入）。
     /// 待审批必须归档在这个 id 下，右栏内联卡片才按 `run.sessionId` 过滤得到 ——
@@ -35,10 +34,9 @@ final class McpPermissionHook {
     /// （见 `McpServerTestDirectoryContractTests`）。这里让编译器替我们看住。
     let grants: PermissionGrantStore
 
-    init(approvals: LocalApprovalStore, crewId: String, sessionId: String = "",
+    init(crewId: String, sessionId: String = "",
          gates: [String], board: LocalWhiteboardStore? = nil,
          todos: LocalTodoStore? = nil, grants: PermissionGrantStore) {
-        self.approvals = approvals
         self.crewId = crewId
         self.sessionId = sessionId
         self.gates = gates

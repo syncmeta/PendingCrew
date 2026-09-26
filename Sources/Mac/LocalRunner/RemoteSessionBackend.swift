@@ -4,7 +4,7 @@ import Combine
 import Foundation
 
 private let inProcessProtocolCapabilities = [
-    "approval-mode", "codex-compaction", "launch-parameter-problem", "profile-switch", "screen-text",
+    "codex-compaction", "launch-parameter-problem", "profile-switch", "screen-text",
     "terminal-bytes", "transcript-events", "wake-submit",
 ]
 
@@ -63,11 +63,6 @@ protocol SessionWakeActivityProviding: AnyObject {
 @MainActor
 protocol SessionOutputActivityProviding: AnyObject {
     var lastOutputAt: Date { get }
-}
-
-@MainActor
-protocol SessionProtocolApprovalControlling: AnyObject {
-    func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws
 }
 
 @MainActor
@@ -139,7 +134,7 @@ extension CodexAppServerBackend: SessionProcessIdentifying {
 }
 
 extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
-    SessionProtocolApprovalControlling, SessionProtocolCodexHistoryProviding,
+    SessionProtocolCodexHistoryProviding,
     SessionWakeActivityProviding {
     var protocolCodexHistory: [CodexThreadItem] { transcript.items }
     var wakeActivityRevision: UInt64 { transcript.activityRevision }
@@ -151,9 +146,6 @@ extension CodexAppServerBackend: SessionProtocolScreenTextProviding,
         CodexTranscriptText.render(items: transcript.items, maxLines: maxLines)
     }
 
-    func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
-        try await updateApprovalsReviewer(reviewer)
-    }
 }
 
 extension CodexThreadItem {
@@ -351,16 +343,6 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     func applyProfileSwitch(_ cmd: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
         guard let client else { return .linkDown("后台链路已断开，这条命令根本没发出去") }
         return await client.applyProfileSwitch(sessionId: sessionId, command: cmd)
-    }
-
-    func updateApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
-        guard supportsCapability("approval-mode") else {
-            throw SessionProtocolControlError.unsupported("daemon 不支持运行态审批模式切换")
-        }
-        guard let client else {
-            throw SessionProtocolControlError.failed("后台链路已断开，切换没有发出去")
-        }
-        try await client.updateApprovalsReviewer(sessionId: sessionId, reviewer: reviewer)
     }
 
     func requestCodexCompaction() async throws {

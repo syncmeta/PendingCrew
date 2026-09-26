@@ -158,16 +158,6 @@ final class RemotePendingCrewBackendTests: XCTestCase {
             title: "远端会话", machineId: nil, workingDirectory: "/tmp/remote-session",
             captainAgentKind: "claudeCode", captain: .systemGenerated(templateName: nil)))
         let localBackend = LocalBackend(store: crewStore, whiteboard: whiteboard)
-        let approvals = LocalApprovalStore(directory: temporaryDirectory("fifth-approvals"))
-        let permissionID = try XCTUnwrap(approvals.raise(
-            crewId: created.crewId, kind: "permission", sessionId: "remote-session",
-            summary: "允许运行测试命令"))
-        let deniedPermissionID = try XCTUnwrap(approvals.raise(
-            crewId: created.crewId, kind: "permission", sessionId: "remote-session",
-            summary: "拒绝危险命令"))
-        let questionID = try XCTUnwrap(approvals.raise(
-            crewId: created.crewId, kind: "decision", sessionId: "remote-session",
-            summary: "请选择发布窗口"))
 
         let persistedListener = try XCTUnwrap(
             SessionDaemonSecureListenerConfiguration.fromPersistentSettings(
@@ -180,10 +170,9 @@ final class RemotePendingCrewBackendTests: XCTestCase {
             port: persistedListener.port)
         let protocolServer = SessionProtocolServer(
             capabilities: SessionDaemonHost.defaultCapabilities + [
-                CrewRPC.capability, ApprovalRPC.capability,
+                CrewRPC.capability,
             ], daemonBuild: "fifth-daemon")
         protocolServer.crewBackend = localBackend
-        protocolServer.approvalStore = approvals
         let terminal = ProtocolTestBackend(kind: .claudeCode)
         terminal.terminalSnapshot = .init(
             cols: 80, rows: 25, bytes: Array("initial terminal\n".utf8))
@@ -253,40 +242,6 @@ final class RemotePendingCrewBackendTests: XCTestCase {
         XCTAssertTrue(codexChannel.transcriptText.contains("[回复]"),
                       "iOS 必须复用权威 CodexThreadItem/CodexTranscriptText 解析")
 
-        try await eventually {
-            channel.pendingApprovals.count == 3
-                && protocolServer.approvalSubscriptionCount(crewId: created.crewId) == 1
-        }
-        await Task.yield()
-        let pushedPermissionID = try XCTUnwrap(approvals.raise(
-            crewId: created.crewId, kind: "permission", sessionId: "remote-session",
-            summary: "daemon 新增审批"))
-        try await eventually {
-            channel.pendingApprovals.contains { $0.id == pushedPermissionID }
-        }
-        try await remote.decideApproval(
-            crewID: created.crewId, approvalID: permissionID, decision: "allow")
-        try await remote.decideApproval(
-            crewID: created.crewId, approvalID: deniedPermissionID, decision: "deny")
-        try await remote.decideApproval(
-            crewID: created.crewId, approvalID: pushedPermissionID, decision: "deny")
-        do {
-            try await remote.answerApproval(
-                crewID: created.crewId, approvalID: questionID, reply: "   ")
-            XCTFail("daemon 必须拒绝空 ask answer")
-        } catch {
-            XCTAssertTrue(error.localizedDescription.contains("不能为空"), "实际错误：\(error)")
-        }
-        XCTAssertEqual(approvals.item(crewId: created.crewId, id: questionID)?.status, "pending")
-        try await remote.answerApproval(
-            crewID: created.crewId, approvalID: questionID, reply: "今晚")
-        try await eventually { channel.pendingApprovals.isEmpty }
-        XCTAssertEqual(approvals.item(crewId: created.crewId, id: permissionID)?.decision, "allow")
-        XCTAssertEqual(
-            approvals.item(crewId: created.crewId, id: deniedPermissionID)?.decision, "deny")
-        XCTAssertEqual(
-            approvals.item(crewId: created.crewId, id: pushedPermissionID)?.decision, "deny")
-        XCTAssertEqual(approvals.item(crewId: created.crewId, id: questionID)?.reply, "今晚")
         remote.closeSession(sessionID: "remote-session")
         remote.closeSession(sessionID: "codex-session")
         try await eventually { protocolServer.attachmentCount(sessionId: "remote-session") == 0 }
@@ -296,7 +251,7 @@ final class RemotePendingCrewBackendTests: XCTestCase {
             sessionId: "remote-session", bytes: Array("after detach\n".utf8))
         await Task.yield()
         XCTAssertEqual(channel.terminalText, detachedText)
-        XCTAssertEqual(acceptCount, 1, "crew/session/terminal/approval 不得另开第二条连接")
+        XCTAssertEqual(acceptCount, 1, "crew/session/terminal 不得另开第二条连接")
     }
 
     func test_disconnectAndTimeoutFailEveryPendingCrewRequest() async throws {
@@ -358,7 +313,6 @@ final class RemotePendingCrewBackendTests: XCTestCase {
                         peerPublicSigningKey: peerIdentity.publicSigningKey,
                         preSharedKey: Data(repeating: 0x44, count: 32)))
         let link = CrewRPCStubLink()
-        link.respondsToApprovalList = false
         let remote = RemotePendingCrewBackend(
             configuration: configuration,
             connector: ClosureSessionMessageLinkConnector { link }, requestTimeout: 30)
@@ -366,13 +320,11 @@ final class RemotePendingCrewBackendTests: XCTestCase {
 
         let crew = Task { try await remote.listCrews() }
         let sessions = Task { try await remote.listRemoteSessions() }
-        let approvals = Task { try await remote.listApprovals(crewID: "c", sessionID: "s") }
-        try await eventually { remote.pendingRequestCount == 3 }
+        try await eventually { remote.pendingRequestCount == 2 }
         link.failRemote()
 
         do { _ = try await crew.value; XCTFail("crew request 未因断线恢复") } catch { }
         do { _ = try await sessions.value; XCTFail("session list 未因断线恢复") } catch { }
-        do { _ = try await approvals.value; XCTFail("approval request 未因断线恢复") } catch { }
         XCTAssertEqual(remote.pendingRequestCount, 0)
     }
 
@@ -515,10 +467,6 @@ final class RemotePendingCrewBackendTests: XCTestCase {
         let oldHandle = try XCTUnwrap(links[0].lastAttachedHandle)
         links[0].deliverTerminal(handle: oldHandle, text: "old-live")
         try await eventually { channel.terminalText.contains("old-live") }
-        channel.setApprovals([.init(
-            id: "old-approval", kind: "permission", sessionId: "s1", summary: "旧审批",
-            status: "pending", reply: nil, decision: nil, createdAt: "now")], generation: 1)
-        XCTAssertEqual(channel.pendingApprovals.map(\.id), ["old-approval"])
 
         links[0].failRemote()
         try await eventually {
@@ -526,12 +474,9 @@ final class RemotePendingCrewBackendTests: XCTestCase {
             return false
         }
         try await remote.connect()
-        XCTAssertTrue(channel.pendingApprovals.isEmpty,
-                      "新连接 bind 时必须先清掉仍可操作的旧审批")
         try await eventually {
             links.count == 2 && links[1].lastAttachedHandle != nil
                 && links[1].subscribedCrewIDs.contains("crew-1")
-                && links[1].approvalCrewIDs.contains("crew-1")
         }
 
         links[0].deliverTerminal(handle: oldHandle, text: "late-old")
@@ -615,11 +560,9 @@ private final class CrewRPCStubLink: SessionMessageLink {
     var sessionList: SessionList?
     private(set) var lastAttachedHandle: UInt32?
     private(set) var subscribedCrewIDs: Set<String> = []
-    private(set) var approvalCrewIDs: Set<String> = []
     private(set) var sentInputBytes: [[UInt8]] = []
     private(set) var detachedHandles: [UInt32] = []
     private var nextHandle: UInt32 = 1
-    var respondsToApprovalList = true
 
     init(automaticallyCompletesHello: Bool = true) {
         self.automaticallyCompletesHello = automaticallyCompletesHello
@@ -649,20 +592,6 @@ private final class CrewRPCStubLink: SessionMessageLink {
             if value.op == CrewRPC.Op.subscribeWhiteboard,
                let scope = try? JSONDecoder().decode(CrewRPC.CrewID.self, from: payload) {
                 subscribedCrewIDs.insert(scope.crewId)
-            } else if value.op == ApprovalRPC.Op.subscribe,
-                      let scope = try? JSONDecoder().decode(ApprovalRPC.Scope.self, from: payload),
-                      let requestID = value.requestId {
-                approvalCrewIDs.insert(scope.crewId)
-                let response = (try? JSONEncoder().encode(ApprovalRPC.Empty())) ?? Data("{}".utf8)
-                deliver(.event(.init(
-                    kind: ApprovalRPC.resultEvent, requestId: requestID,
-                    fields: ["payload": .string(response.base64EncodedString())])))
-            } else if value.op == ApprovalRPC.Op.list, respondsToApprovalList,
-                      let requestID = value.requestId {
-                let response = (try? JSONEncoder().encode([ApprovalItem]())) ?? Data("[]".utf8)
-                deliver(.event(.init(
-                    kind: ApprovalRPC.resultEvent, requestId: requestID,
-                    fields: ["payload": .string(response.base64EncodedString())])))
             }
         }
         // Crew requests intentionally stay pending until the test disconnects or times out.
@@ -679,7 +608,7 @@ private final class CrewRPCStubLink: SessionMessageLink {
         guard let hello = receivedHello else { return }
         let response = SessionDaemonMessage.hello(.init(
             protocolVersion: hello.protocolVersion, daemonBuild: "stub",
-            capabilities: [CrewRPC.capability, ApprovalRPC.capability, "terminal-bytes"],
+            capabilities: [CrewRPC.capability, "terminal-bytes"],
             sessionCount: 0, pid: 1))
         deliver(response)
     }

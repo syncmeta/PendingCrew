@@ -23,7 +23,6 @@ final class TodoDroppedAndAttentionTests: XCTestCase {
 
     private func server(_ dir: URL) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: true,
                   sessionLabel: "机长",

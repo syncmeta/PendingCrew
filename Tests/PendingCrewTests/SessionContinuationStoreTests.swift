@@ -61,7 +61,7 @@ final class SessionContinuationStoreTests: XCTestCase {
         let dir = tempDir()
         let board = LocalWhiteboardStore(directory: dir)
         let server = McpServer(
-            store: board, approvals: LocalApprovalStore(directory: dir),
+            store: board,
             control: LocalCrewControlStore(directory: dir),
             crewId: "c", sessionId: "s", quotaDirectory: dir,
             continuations: SessionContinuationStore(directory: dir))

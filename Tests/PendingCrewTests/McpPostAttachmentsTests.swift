@@ -22,7 +22,6 @@ final class McpPostAttachmentsTests: XCTestCase {
     private func server(dir: URL, attachmentRoot: URL,
                         sessionLabel: String? = "Claude Code · abc123") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1",
                   sessionLabel: sessionLabel,

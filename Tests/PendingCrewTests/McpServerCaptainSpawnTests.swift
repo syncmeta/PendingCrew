@@ -1,5 +1,5 @@
 import XCTest
-// McpServer.swift + LocalWhiteboardStore.swift + LocalApprovalStore.swift +
+// McpServer.swift + LocalWhiteboardStore.swift +
 // LocalCrewControlStore.swift 编进 test bundle（见 project.yml）。
 //
 // 覆盖机长专用 start_session / create_child_crew 两工具：happy path 入队 +
@@ -8,7 +8,6 @@ import XCTest
 final class McpServerCaptainSpawnTests: XCTestCase {
     private func makeServer(isCaptain: Bool, dir: URL, crewId: String = "local-x") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: crewId, sessionId: "cap", isCaptain: isCaptain, sessionLabel: "Captain",
                   quotaDirectory: dir)

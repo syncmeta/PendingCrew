@@ -198,7 +198,6 @@ final class HumanTodoWithdrawTests: XCTestCase {
                         label: String? = "机长",
                         isCaptain: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: sessionId, isCaptain: isCaptain,
                   sessionLabel: label,

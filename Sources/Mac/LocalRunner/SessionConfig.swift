@@ -30,55 +30,6 @@ enum AgentLaunchPreferences {
     }
 }
 
-/// Per-crew/per-session Codex approval preference. Captain uses a stable crew key
-/// because its local run id may change after an app restart; workers keep independent
-/// session keys. Missing and malformed values intentionally fall back to auto_review.
-final class CodexApprovalModeStore: @unchecked Sendable {
-    static let shared = CodexApprovalModeStore()
-    static let defaultsKey = "pendingcrew.codexApprovalModes.v1"
-
-    enum Scope: Equatable {
-        case captain
-        case session(String)
-    }
-
-    private let defaults: UserDefaults
-    private let defaultsKey: String
-    private let lock = NSLock()
-
-    init(defaults: UserDefaults = .standard,
-         defaultsKey: String = CodexApprovalModeStore.defaultsKey) {
-        self.defaults = defaults
-        self.defaultsKey = defaultsKey
-    }
-
-    func reviewer(crewId: String, scope: Scope) -> CodexProtocol.ApprovalsReviewer {
-        lock.lock()
-        defer { lock.unlock() }
-        let raw = values()[Self.storageKey(crewId: crewId, scope: scope)]
-        return raw.flatMap(CodexProtocol.ApprovalsReviewer.init(rawValue:)) ?? .autoReview
-    }
-
-    func set(_ reviewer: CodexProtocol.ApprovalsReviewer, crewId: String, scope: Scope) {
-        lock.lock()
-        defer { lock.unlock() }
-        var next = values()
-        next[Self.storageKey(crewId: crewId, scope: scope)] = reviewer.rawValue
-        defaults.set(next, forKey: defaultsKey)
-    }
-
-    private func values() -> [String: String] {
-        defaults.dictionary(forKey: defaultsKey) as? [String: String] ?? [:]
-    }
-
-    private static func storageKey(crewId: String, scope: Scope) -> String {
-        switch scope {
-        case .captain: return "\(crewId)|captain"
-        case .session(let sessionId): return "\(crewId)|session|\(sessionId)"
-        }
-    }
-}
-
 /// Per-session launch configuration (spec §1 启动带指令 / §11 per-session 配置).
 /// Pure value type so `argv()` is unit-testable without spawning a process.
 /// `Codable` 是 P4 加的：viewer 起 session 时把**已经解析好的**这一份原样送到

@@ -14,7 +14,6 @@ final class McpServerWorkdirToolTests: XCTestCase {
 
     private func server(_ dir: URL, isCaptain: Bool) -> McpServer {
         let s = McpServer(store: LocalWhiteboardStore(directory: dir),
-                          approvals: LocalApprovalStore(directory: dir),
                           control: LocalCrewControlStore(directory: dir),
                           crewId: "c", sessionId: "cap-1", isCaptain: isCaptain,
                           quotaDirectory: dir)

@@ -258,9 +258,8 @@ final class SessionDaemonHost {
     var secureListenerPort: UInt16? { secureListener?.port }
 
     static let defaultCapabilities = [
-        "approval-mode", "codex-compaction", "launch-parameter-problem", "profile-switch", "screen-text",
+        "codex-compaction", "launch-parameter-problem", "profile-switch", "screen-text",
         "terminal-bytes", "transcript-events", SessionRestoreRoute.capability, CrewRPC.capability,
-        ApprovalRPC.capability,
     ]
 
     nonisolated static var currentBuild: String {

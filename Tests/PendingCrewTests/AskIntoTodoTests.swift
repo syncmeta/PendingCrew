@@ -41,7 +41,6 @@ final class AskIntoTodoTests: XCTestCase {
 
     private func server(_ dir: URL, isCaptain: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
                   sessionLabel: "小工", quotaDirectory: dir,

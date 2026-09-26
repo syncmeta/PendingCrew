@@ -16,8 +16,7 @@ struct IOSRemoteSessionView: View {
         Group {
             if let channel {
                 IOSRemoteSessionDetail(
-                    crewID: crewID, channel: channel,
-                    retry: { Task { await load(reconnect: true) } })
+                    channel: channel, retry: { Task { await load(reconnect: true) } })
             } else if loading {
                 ProgressView("正在连接远端 session…")
             } else {
@@ -58,12 +57,8 @@ struct IOSRemoteSessionView: View {
 }
 
 private struct IOSRemoteSessionDetail: View {
-    let crewID: String
     @ObservedObject var channel: RemoteSessionChannel
     let retry: () -> Void
-    @EnvironmentObject private var appModel: AppModel
-    @State private var replies: [String: String] = [:]
-    @State private var actionError: String?
 
     var body: some View {
         List {
@@ -71,9 +66,6 @@ private struct IOSRemoteSessionDetail: View {
                 connectionRow
                 if case .disconnected = channel.connectionState {
                     Button("重新连接", action: retry)
-                }
-                if let actionError {
-                    Text(actionError).foregroundStyle(.red)
                 }
             }
 
@@ -103,13 +95,6 @@ private struct IOSRemoteSessionDetail: View {
                 }
             }
 
-            if !channel.pendingApprovals.isEmpty {
-                Section("待审批与待决策") {
-                    ForEach(channel.pendingApprovals, id: \.id) { item in
-                        approvalCard(item)
-                    }
-                }
-            }
         }
     }
 
@@ -138,54 +123,5 @@ private struct IOSRemoteSessionDetail: View {
         }
     }
 
-    @ViewBuilder
-    private func approvalCard(_ item: ApprovalItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(item.summary)
-            if item.kind == "permission" {
-                HStack {
-                    Button("拒绝", role: .destructive) { decide(item, "deny") }
-                    Button("允许") { decide(item, "allow") }
-                }
-            } else {
-                TextField("答复…", text: Binding(
-                    get: { replies[item.id] ?? "" },
-                    set: { replies[item.id] = $0 }))
-                Button("发送答复") { answer(item) }
-                    .disabled((replies[item.id] ?? "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-
-    private func decide(_ item: ApprovalItem, _ decision: String) {
-        Task { @MainActor in
-            do {
-                guard let backend = appModel.remoteSessionBackend else {
-                    throw CrewRPCError.notConnected
-                }
-                try await backend.decideApproval(
-                    crewID: crewID, approvalID: item.id, decision: decision)
-                actionError = nil
-            } catch { actionError = error.localizedDescription }
-        }
-    }
-
-    private func answer(_ item: ApprovalItem) {
-        let reply = (replies[item.id] ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reply.isEmpty else { return }
-        Task { @MainActor in
-            do {
-                guard let backend = appModel.remoteSessionBackend else {
-                    throw CrewRPCError.notConnected
-                }
-                try await backend.answerApproval(
-                    crewID: crewID, approvalID: item.id, reply: reply)
-                replies[item.id] = nil
-                actionError = nil
-            } catch { actionError = error.localizedDescription }
-        }
-    }
 }
 #endif

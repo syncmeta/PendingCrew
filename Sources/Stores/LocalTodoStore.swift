@@ -220,7 +220,7 @@ final class LocalTodoStore: @unchecked Sendable {
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
-    // MARK: - 变更流（去轮询；与 LocalApprovalStore.approvalChanges 同模式）
+    // MARK: - 变更流（去轮询）
 
     /// 本 crew 的 todo 变更流：本进程 `changes` 按 crewId 过滤 + 跨进程目录监听
     ///（helper `respond_todo` 写盘落在同一被监听目录，事件不带 crewId 不过滤）。

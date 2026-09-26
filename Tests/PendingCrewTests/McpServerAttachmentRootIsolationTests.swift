@@ -23,7 +23,6 @@ final class McpServerAttachmentRootIsolationTests: XCTestCase {
 
         let server = McpServer(
             store: LocalWhiteboardStore(directory: whiteboards),
-            approvals: LocalApprovalStore(directory: whiteboards),
             control: LocalCrewControlStore(directory: whiteboards),
             crewId: "c", sessionId: "s",
             quotaDirectory: whiteboards,
@@ -47,7 +46,6 @@ final class McpServerAttachmentRootIsolationTests: XCTestCase {
     func testAttachmentRootStaysRealWhenNothingInjected() {
         let server = McpServer(
             store: LocalWhiteboardStore(directory: nil),
-            approvals: LocalApprovalStore(directory: nil),
             control: LocalCrewControlStore(directory: nil),
             crewId: "c", sessionId: "s",
             quotaDirectory: nil)

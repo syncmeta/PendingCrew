@@ -29,40 +29,6 @@ enum CrewRPC {
     struct PostResult: Codable { var warning: String? }
 }
 
-/// 结构化审批账本的 SessionProtocol RPC。客户端只传 Codable 值；只有 daemon
-/// 持有并改写 `LocalApprovalStore`，iOS 从不直接碰 Mac 的 JSON 文件。
-enum ApprovalRPC {
-    static let capability = "approval-rpc-v1"
-    static let resultEvent = "approvalRPCResult"
-    static let changedEvent = "approvalChanged"
-
-    enum Op {
-        static let list = "approval.list"
-        static let subscribe = "approval.subscribe"
-        static let answer = "approval.answer"
-        static let decide = "approval.decide"
-        static func isApproval(_ value: String) -> Bool { value.hasPrefix("approval.") }
-    }
-
-    struct Scope: Codable {
-        var crewId: String
-        var sessionId: String
-    }
-    struct Answer: Codable {
-        var crewId: String
-        var sessionId: String
-        var approvalId: String
-        var reply: String
-    }
-    struct Decide: Codable {
-        var crewId: String
-        var sessionId: String
-        var approvalId: String
-        var decision: String
-    }
-    struct Empty: Codable {}
-}
-
 enum CrewRPCError: LocalizedError, Equatable {
     case notConnected
     case incompatibleServer
@@ -96,7 +62,6 @@ final class CrewRPCClient {
     private var pending: [String: (Result<Data, Error>) -> Void] = [:]
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
     private var changeHandlers: [UUID: (String) -> Void] = [:]
-    private var approvalChangeHandlers: [UUID: (String) -> Void] = [:]
     private var sessionListWaiters: [String: (Result<SessionList, Error>) -> Void] = [:]
     private var sessionListTimeouts: [String: Task<Void, Never>] = [:]
     private var latestSessions = SessionList(sessions: [])
@@ -134,7 +99,7 @@ final class CrewRPCClient {
             scheduleHelloTimeout()
             send(.hello(.init(protocolVersion: SessionProtocolVersion.current,
                               appBuild: "ios-remote", capabilities: [
-                                CrewRPC.capability, ApprovalRPC.capability,
+                                CrewRPC.capability,
                                 "terminal-bytes", "transcript-events",
                               ])))
         }
@@ -171,13 +136,6 @@ final class CrewRPCClient {
         else { return }
         send(.control(.init(requestId: nil, op: CrewRPC.Op.subscribeWhiteboard,
                             arguments: ["payload": .string(payload.base64EncodedString())])))
-    }
-
-    func subscribeApprovals(crewID: String, sessionID: String) async throws {
-        let _: ApprovalRPC.Empty = try await request(
-            op: ApprovalRPC.Op.subscribe,
-            arguments: ApprovalRPC.Scope(crewId: crewID, sessionId: sessionID),
-            as: ApprovalRPC.Empty.self)
     }
 
     func listSessions() async throws -> SessionList {
@@ -222,17 +180,10 @@ final class CrewRPCClient {
         send(.input(.init(handle: handle, bytes: bytes)))
     }
 
-    func addApprovalChangeHandler(_ handler: @escaping (String) -> Void) -> UUID {
-        let id = UUID(); approvalChangeHandlers[id] = handler; return id
-    }
-
     func addChangeHandler(_ handler: @escaping (String) -> Void) -> UUID {
         let id = UUID(); changeHandlers[id] = handler; return id
     }
     func removeChangeHandler(_ id: UUID) { changeHandlers.removeValue(forKey: id) }
-    func removeApprovalChangeHandler(_ id: UUID) {
-        approvalChangeHandlers.removeValue(forKey: id)
-    }
 
     private struct Empty: Codable {}
 
@@ -282,8 +233,7 @@ final class CrewRPCClient {
         switch message {
         case let .hello(hello):
             guard hello.protocolVersion == SessionProtocolVersion.current,
-                  hello.capabilities.contains(CrewRPC.capability),
-                  hello.capabilities.contains(ApprovalRPC.capability) else {
+                  hello.capabilities.contains(CrewRPC.capability) else {
                 let waiter = helloWaiter; helloWaiter = nil; helloTimeout?.cancel()
                 waiter?.resume(throwing: CrewRPCError.incompatibleServer)
                 link.close(); return
@@ -336,19 +286,6 @@ final class CrewRPCClient {
         case let .event(event) where event.kind == CrewRPC.whiteboardChangedEvent:
             guard case let .string(crewID)? = event.fields["crewId"] else { return }
             changeHandlers.values.forEach { $0(crewID) }
-        case let .event(event) where event.kind == ApprovalRPC.resultEvent:
-            guard let id = event.requestId,
-                  let completion = pending.removeValue(forKey: id) else { return }
-            timeoutTasks.removeValue(forKey: id)?.cancel()
-            if case let .string(reason)? = event.fields["error"] {
-                completion(.failure(CrewRPCError.remote(reason)))
-            } else if case let .string(encoded)? = event.fields["payload"],
-                      let data = Data(base64Encoded: encoded) {
-                completion(.success(data))
-            } else { completion(.failure(CrewRPCError.invalidResponse)) }
-        case let .event(event) where event.kind == ApprovalRPC.changedEvent:
-            guard case let .string(crewID)? = event.fields["crewId"] else { return }
-            approvalChangeHandlers.values.forEach { $0(crewID) }
         case let .event(event):
             if case let .string(sessionID)? = event.fields["sessionId"] {
                 channels[sessionID]?.receive(event: event, generation: generation)
@@ -394,7 +331,6 @@ final class RemoteSessionChannel: ObservableObject {
     @Published private(set) var summary: SessionSummary?
     @Published private(set) var terminalText = ""
     @Published private(set) var connectionState: RemoteSessionConnectionState = .connecting
-    @Published private(set) var pendingApprovals: [ApprovalItem] = []
     @Published private(set) var transcriptText = ""
 
     private weak var client: CrewRPCClient?
@@ -412,7 +348,6 @@ final class RemoteSessionChannel: ObservableObject {
         self.generation = generation
         handle = nil
         snapshotBytes = []
-        pendingApprovals = []
         connectionState = .connecting
     }
 
@@ -474,11 +409,6 @@ final class RemoteSessionChannel: ObservableObject {
             items: transcript.items, maxLines: 10_000)
     }
 
-    func setApprovals(_ approvals: [ApprovalItem], generation: UInt64) {
-        guard generation == self.generation else { return }
-        pendingApprovals = approvals
-    }
-
     func disconnected(_ reason: String, generation: UInt64) {
         guard generation == self.generation else { return }
         handle = nil
@@ -497,7 +427,6 @@ final class RemoteSessionChannel: ObservableObject {
     func didDetach(generation: UInt64) {
         guard generation == self.generation else { return }
         handle = nil
-        pendingApprovals = []
         connectionState = .connecting
     }
 

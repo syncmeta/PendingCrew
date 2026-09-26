@@ -47,7 +47,6 @@ final class McpDirectoryIOFailureTests: XCTestCase {
 
     private func server(_ f: Fixture) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
-                  approvals: LocalApprovalStore(directory: f.whiteboards),
                   control: LocalCrewControlStore(directory: f.whiteboards),
                   crewId: f.sourceCrewId, sessionId: "sess-1",
                   isCaptain: true, sessionLabel: "机长",

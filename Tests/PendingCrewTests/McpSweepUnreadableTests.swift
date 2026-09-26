@@ -43,7 +43,6 @@ final class McpSweepUnreadableTests: XCTestCase {
 
     private func server() -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: wb),
-                  approvals: LocalApprovalStore(directory: wb),
                   control: LocalCrewControlStore(directory: wb),
                   crewId: crewId, sessionId: "captain-x",
                   isCaptain: true, sessionLabel: "机长",

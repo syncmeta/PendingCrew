@@ -66,9 +66,6 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private let mcpServers: [String: Any]?
     /// Pulls the unread-whiteboard string to inject as a leading text input each turn.
     private let whiteboardProvider: () -> CodexPreparedWhiteboardContext?
-    /// Routes a codex approval request into the existing approval UI; returns the
-    /// decision string ("accept"/"decline"/…) once the human answers.
-    private let approvalProvider: (_ summary: String, _ decisions: [String]) async -> String
     /// 「codex 在要一个我们给不出的回答，已代它拒绝」→ 发群通知（Todo #6）。
     /// 由 runner 注入（backend 层不认识白板/mention 模型）。
     private let notifyUnanswerable: (_ summary: String) -> Void
@@ -124,7 +121,6 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
          approvalsReviewer: CodexProtocol.ApprovalsReviewer = .autoReview,
          developerInstructions: String?, mcpServers: [String: Any]?,
          whiteboardProvider: @escaping () -> CodexPreparedWhiteboardContext?,
-         approvalProvider: @escaping (_ summary: String, _ decisions: [String]) async -> String,
          notifyUnanswerable: @escaping (_ summary: String) -> Void = { _ in },
          notifyTurnEnded: @escaping (_ lastAgentText: String) -> Void = { _ in },
          notifyResolvedProfile: @escaping (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void = { _, _, _ in },
@@ -146,7 +142,6 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         self.developerInstructions = developerInstructions
         self.mcpServers = mcpServers
         self.whiteboardProvider = whiteboardProvider
-        self.approvalProvider = approvalProvider
         self.notifyUnanswerable = notifyUnanswerable
     }
 
@@ -245,20 +240,6 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 mcpServers: mcpServers,
                 approvalsReviewer: approvalsReviewer,
                 serviceTier: fastMode ? "fast" : "default")) as? [String: Any]
-    }
-
-    /// Apply the native Codex reviewer to a live thread. Persistence is achieved by
-    /// also sending the same reviewer on every start/resume; this RPC covers a thread
-    /// that was already running when the app setting changed.
-    func updateApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
-        guard let threadId else {
-            throw CodexRPCError.malformed("codex thread is not ready")
-        }
-        _ = try await connection.request(
-            method: "thread/settings/update",
-            params: CodexProtocol.threadSettingsUpdateParams(
-                threadId: threadId, approvalsReviewer: reviewer))
-        approvalsReviewer = reviewer
     }
 
     /// Codex app-server exposes model and effort as live thread settings. The
@@ -584,25 +565,11 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private func handleServerRequest(id: Int, method: String, params: [String: Any]) async {
         switch CodexProtocol.serverRequestKind(method: method) {
         case .approval:
-            let summary = (params["command"] as? String) ?? (params["reason"] as? String) ?? method
-            guard CodexProtocol.approvalRequestDisposition(reviewer: approvalsReviewer)
-                    == .presentCard else {
-                // auto_review owns routine command/file/network decisions inside Codex.
-                // A request that still reaches the client was already in flight while
-                // switching modes; do not raise a card and, critically, do not emit the
-                // "待审批" whiteboard notice that only makeApprovalProvider may create.
-                try? await connection.respondError(
-                    serverId: id,
-                    code: -32000,
-                    message: "approval request reached client while auto_review is enabled")
-                return
-            }
-            let decisions = CodexProtocol.safeApprovalDecisions(params: params)
-            let decision = await approvalProvider(summary, decisions)
-            try? await connection.respond(
-                serverId: id,
-                result: CodexProtocol.approvalResponse(
-                    method: method, params: params, decision: decision))
+            // Native auto_review handles routine approvals inside Codex. Never
+            // recreate a PendingCrew approval card or silently grant a stray request.
+            try? await connection.respondError(
+                serverId: id, code: -32000,
+                message: "approval request reached client while auto_review is enabled")
         case .elicitation:
             // codex 0.137.0 delivers the MCP tool-call approval prompt AS an elicitation
             // (`_meta.codex_approval_kind == "mcp_tool_call"`). Auto-approve those — the

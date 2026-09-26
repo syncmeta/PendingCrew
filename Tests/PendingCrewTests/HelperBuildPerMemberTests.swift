@@ -350,7 +350,6 @@ final class HelperBuildPerMemberTests: XCTestCase {
         snap.crews["local-org"] = [e]
         try JSONEncoder().encode(snap).write(to: dir.appendingPathComponent(CrewSessionsSnapshot.fileName))
         let server = McpServer(store: LocalWhiteboardStore(directory: dir),
-                               approvals: LocalApprovalStore(directory: dir),
                                control: LocalCrewControlStore(directory: dir),
                                crewId: "local-org", sessionId: "cap", isCaptain: true,
                                quotaDirectory: dir,

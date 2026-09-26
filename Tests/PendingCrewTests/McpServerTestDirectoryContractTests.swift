@@ -39,7 +39,6 @@ final class McpServerTestDirectoryContractTests: XCTestCase {
     func testDetectorFiresOnADirectConstructionWithoutTheDirectory() {
         let code = """
         let s = McpServer(store: LocalWhiteboardStore(directory: dir),
-                          approvals: LocalApprovalStore(directory: dir),
                           crewId: "c", sessionId: "s")
         """
         XCTAssertTrue(Self.constructsMcpServerWithoutDirectory(code),
@@ -49,7 +48,6 @@ final class McpServerTestDirectoryContractTests: XCTestCase {
     func testDetectorStaysQuietWhenTheDirectoryIsPassed() {
         let code = """
         let s = McpServer(store: LocalWhiteboardStore(directory: dir),
-                          approvals: LocalApprovalStore(directory: dir),
                           crewId: "c", sessionId: "s", quotaDirectory: dir)
         """
         XCTAssertFalse(Self.constructsMcpServerWithoutDirectory(code),

@@ -470,15 +470,13 @@ final class ViewWiringTests: XCTestCase {
         }
     }
 
-    /// #121 第五批的 production caller：行为尺已经跑真实 TLS，这里防 iOS 导航或
-    /// daemon approvals ledger 接头被拆掉后只剩一堆绿的底层零件。
-    func testIOSRemoteSessionTerminalAndApprovalsAreWiredIntoProductionCallers() throws {
+    /// #121 第五批的 production caller：保留 iOS 远端会话和终端导航，
+    /// 退役的本地手动审批不再是连接门槛。
+    func testIOSRemoteSessionTerminalIsWiredIntoProductionCallers() throws {
         let shell = Self.codeOnly(try Self.text(of: "IPadShell.swift"))
         let chat = Self.codeOnly(try Self.text(of: "CrewChatView.swift"))
         let roster = Self.codeOnly(try Self.text(of: "CrewRosterBar.swift"))
         let detail = Self.codeOnly(try Self.text(of: "IOSRemoteSessionView.swift"))
-        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
-        let host = Self.codeOnly(try Self.text(of: "SessionDaemonHost.swift"))
 
         XCTAssertTrue(roster.contains("onOpenSession(sessionID)"),
                       "iOS roster 的 session 成员仍不可点")
@@ -490,14 +488,8 @@ final class ViewWiringTests: XCTestCase {
                       "详情页没有接共享连接上的 attach")
         XCTAssertTrue(detail.contains("remoteSessionBackend?.closeSession(sessionID:"),
                       "详情退出时没有 detach/release 远端 session")
-        XCTAssertTrue(detail.contains("backend.decideApproval("))
-        XCTAssertTrue(detail.contains("backend.answerApproval("))
         XCTAssertTrue(detail.contains("Button(\"重新连接\""),
                       "显式断线态没有恢复入口")
-        XCTAssertTrue(daemon.contains("host.server.approvalStore = .shared"),
-                      "daemon 不是结构化 approvals ledger 的唯一写者")
-        XCTAssertTrue(host.contains("ApprovalRPC.capability"),
-                      "生产 daemon 没广告 approval RPC 能力")
     }
 
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
@@ -512,21 +504,6 @@ final class ViewWiringTests: XCTestCase {
     }
 
     /// Todo #4/#5：不能只造 protocol/store 零件。人必须能从正在看的 Codex
-    /// session 切模式，且同一详情页必须挂着按 sessionId 过滤的可操作卡。
-    func testCodexApprovalModeAndCardsAreWiredIntoSessionDetail() throws {
-        let view = try Self.text(of: "CrewSessionWindowView.swift")
-        XCTAssertTrue(view.contains("SessionApprovalModeControl(run: run"),
-                      "Codex session 详情没有审批模式切换入口")
-        XCTAssertTrue(view.contains("sessionRunner.applyCodexApprovalMode("),
-                      "模式控件没有接 thread/settings/update + 持久化编排")
-        XCTAssertTrue(view.contains("SessionApprovalCardsView(crewId: run.crewId, sessionId: run.sessionId)"),
-                      "手动模式请求即使入账也没有挂到当前 session 的可操作卡")
-
-        let backend = try Self.text(of: "CodexAppServerBackend.swift")
-        XCTAssertTrue(backend.contains("approvalRequestDisposition(reviewer: approvalsReviewer)"),
-                      "auto_review 没走禁止建卡/通知的门禁")
-    }
-
     /// Todo #82/#83/#90/#151：窄右栏保留独立的模型与 effort 菜单；Codex
     /// 技术流折叠态只说具体程序/档名，完整命令与路径放进可展开详情。
     func testSessionHeaderAndCodexActivityUseHumanFacingPresentation() throws {
@@ -560,17 +537,15 @@ final class ViewWiringTests: XCTestCase {
         let terminal = try section("private var terminalContent:", "private var memberListMode:")
         XCTAssertTrue(terminal.contains("if sessionRunner.current?.kind == .codex"))
         XCTAssertTrue(terminal.contains("codexComposer"), "Codex 未接独立 composer")
-        XCTAssertTrue(terminal.contains("SessionApprovalCardsView(crewId: run.crewId, sessionId: run.sessionId)"))
 
         let composer = try section("private var codexComposer:", "private var canStartSession:")
-        for symbol in ["CodexSessionComposer(", "onSend:", "onSwitchProfile:", "onSwitchApproval:"] {
+        for symbol in ["CodexSessionComposer(", "onSend:", "onSwitchProfile:"] {
             XCTAssertTrue(composer.contains(symbol), "Codex composer 缺少 \(symbol)")
         }
         XCTAssertTrue(composer.contains("sessionRunner.applyProfileChange("))
-        XCTAssertTrue(composer.contains("sessionRunner.applyCodexApprovalMode("))
         XCTAssertTrue(view.contains("run.send(text)"), "发送没有注入当前 run")
-        let chrome = try section("private struct CodexSessionComposer:", "private struct SessionApprovalModeControl:")
-        for symbol in ["ComposerTextField(", "onHardwareReturn:", "SessionProfileControl(run: run", "SessionApprovalModeControl(run: run", "CodexWorkspaceFooter(", "GitInspector.repoRoot(", "GitInspector.currentBranch(", "GitInspector.isLinkedWorktree(", ".accessibilityLabel(\"发送到 Codex\")"] {
+        let chrome = try section("private struct CodexSessionComposer:", "private struct CodexControlPillLabel:")
+        for symbol in ["ComposerTextField(", "onHardwareReturn:", "SessionProfileControl(run: run", "CodexWorkspaceFooter(", "GitInspector.repoRoot(", "GitInspector.currentBranch(", "GitInspector.isLinkedWorktree(", ".accessibilityLabel(\"发送到 Codex\")"] {
             XCTAssertTrue(chrome.contains(symbol),
                           "Codex 输入区缺少可发现的操作或状态：\(symbol)")
         }
@@ -582,7 +557,6 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(runContent.contains("codexUsageRow"), "上下文和额度信息消失")
         XCTAssertTrue(view.contains(".accessibilityLabel(\"Codex 会话操作\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"停止这个 Codex session\")"))
-        XCTAssertTrue(view.contains(".accessibilityLabel(\"Codex 审批模式\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择模型\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择推理强度\")"))
     }
@@ -1290,6 +1264,33 @@ final class ViewWiringTests: XCTestCase {
         guard let hit = try sourceFiles().first(where: { $0.0.lastPathComponent == fileName })
         else { throw XCTSkip("找不到源码文件 \(fileName)") }
         return hit.1
+    }
+
+    func testRetiredManualApprovalDoesNotReadLegacyLedgerOrShowCards() throws {
+        let noLegacyApproval: [(String, [String])] = [
+            ("CrewSessionWindowView.swift", ["SessionApprovalModeControl(", "SessionApprovalCardsView("]),
+            ("MenuBarAttentionModel.swift", ["LocalApprovalStore.shared.pending"]),
+            ("CrewSessionRunner.swift", ["CodexManualApprovalBridge.provider", "CodexApprovalModeStore.shared"]),
+            ("SessionAwaitingReplyInputsCache.swift", ["LocalApprovalStore.shared"]),
+            ("SessionUnreadStore.swift", ["approvals.pending("]),
+            ("IOSRemoteSessionView.swift", ["approvalCard("]),
+            ("SessionDaemonMain.swift", ["server.approvalStore ="]),
+            ("SessionDaemonHost.swift", ["ApprovalRPC.capability"]),
+            ("RemotePendingCrewBackend.swift", ["refreshApprovals(", "subscribeApprovals("]),
+        ]
+        for (file, forbidden) in noLegacyApproval {
+            let source = try Self.codeOnly(Self.text(of: file))
+            for symbol in forbidden {
+                XCTAssertFalse(source.contains(symbol), "\(file) still uses retired manual approval: \(symbol)")
+            }
+        }
+        XCTAssertFalse(try Self.codeOnly(Self.text(of: "CodexProtocol.swift"))
+            .contains("case user"), "Codex must only expose its native auto reviewer")
+        let sourceNames = Set(try Self.sourceFiles().map { $0.0.lastPathComponent })
+        XCTAssertFalse(sourceNames.contains("LocalApprovalStore.swift"))
+        XCTAssertFalse(sourceNames.contains("SessionApprovalCardsView.swift"))
+        XCTAssertFalse(try Self.codeOnly(Self.text(of: "CrewRPC.swift"))
+            .contains("enum ApprovalRPC"))
     }
 
     private static func projectText(of relativePath: String) throws -> String {

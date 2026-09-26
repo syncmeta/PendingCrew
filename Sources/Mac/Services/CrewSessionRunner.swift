@@ -26,7 +26,7 @@ final class CrewSessionRunner: ObservableObject {
     /// composer（消费的一端）无需额外 binding 即可共享。
     @Published var isComposingNew = false
 
-    /// inspector 内的模式开关：`false`=成员列表模式（平时看 roster + 待审批），
+    /// inspector 内的模式开关：`false`=成员列表模式（平时看 roster），
     /// `true`=终端模式（看某个 session 的终端 + composer）。点 session 行 / 起新
     /// session 翻 true；inspector 顶「‹ 成员」返回翻 false。toolbar 的「Session 终端」
     /// 开关只翻 inspector 呈现态，不强制 true —— 让用户先落在成员列表。
@@ -510,38 +510,6 @@ final class CrewSessionRunner: ObservableObject {
 
     // MARK: - session 自我配置（set_session_profile；#455）
 
-    /// Change one live Codex thread between native auto_review and manual review.
-    /// Persist only after app-server acknowledges thread/settings/update, so a failed
-    /// switch is never shown as active and is not silently applied on the next resume.
-    func applyCodexApprovalMode(
-        to run: CrewSessionRun, reviewer: CodexProtocol.ApprovalsReviewer
-    ) async {
-        guard run.kind == .codex, run.status == .running else { return }
-        if isViewer {
-            // 切档位本身能走 backend（协议里有），但**落账那一步是编排性写入**
-            // （§6.1）—— 两个进程都写 `CodexApprovalModeStore` 就是双 writer。
-            sendOrchestration(SessionOrchestrationOp.approvalMode, [
-                "sessionId": .string(run.sessionId), "reviewer": .string(reviewer.rawValue),
-            ])
-            return
-        }
-        do {
-            if let backend = run.backend as? CodexAppServerBackend {
-                try await backend.updateApprovalsReviewer(reviewer)
-            } else if let backend = run.backend as? RemoteSessionBackend {
-                try await backend.updateApprovalsReviewer(reviewer)
-            } else {
-                return
-            }
-            run.approvalsReviewer = reviewer
-            let scope: CodexApprovalModeStore.Scope = run.role == .captain
-                ? .captain : .session(run.sessionId)
-            CodexApprovalModeStore.shared.set(reviewer, crewId: run.crewId, scope: scope)
-        } catch {
-            lastStartError = "切换 Codex 审批模式失败：\(error.localizedDescription)"
-        }
-    }
-
     /// Starts Codex's own thread compactor. Its RPC acknowledgement only means
     /// the operation began; the contextCompaction item and turn completion are
     /// tracked by the backend before normal wake delivery resumes.
@@ -989,13 +957,8 @@ final class CrewSessionRunner: ObservableObject {
     /// 最迟 2 秒进快照,机长点名够用,不追帧。
     private var snapshotTimer: Timer?
 
-    /// 「在等谁回话」那两样磁盘输入（审批账本 + 回合 marker）的指纹门控缓存。
-    ///
-    /// 2026-08-18「开久了卡」第三条：这一拍原本在 MainActor 上按 crew 逐个
-    /// flock + 整份解码审批 JSON、再按 run 逐个读 turn marker，而 crew / run 只增
-    /// 不减 —— 开一天下来每 2 秒几十次加锁读盘挂在主线程。现在两样都走指纹门控
-    /// （没变就不读）且整段挪到后台队列，主线程只剩「把结果写回 @Published + 组装
-    /// 快照」。判定口径一个字没改，详见 `SessionAwaitingReplyInputsCache`。
+    /// 「在等谁回话」的回合 marker 指纹门控缓存。磁盘读取在后台完成，
+    /// 主线程只把结果写回并组装快照。
     private let awaitingInputs = SessionAwaitingReplyInputsCache(
         directory: LocalWhiteboardStore.defaultDirectory)
 
@@ -1052,10 +1015,8 @@ final class CrewSessionRunner: ObservableObject {
     /// 重算每个 run 的「在等谁回话」（人类 Todo #25 层 2）。跟着点名快照的 2 秒定时器
     /// 走 —— 红点晚 2 秒亮完全够用，换来的是**每拍重算**：不存在「进得去出不来」。
     ///
-    /// 两样磁盘输入（审批账本里本 session 的 pending 摘要 / 上一轮的收尾问句）由
-    /// `SessionAwaitingReplyInputsCache` 在后台按 crew、按 run 各取一次分发下来，
-    /// 这里只做纯内存的判定与赋值。ask 与权限钩子写的是同一份，两类都算「它被挡在
-    /// 那儿等人」。
+    /// 上一轮的收尾问句由 `SessionAwaitingReplyInputsCache` 在后台读取，
+    /// 这里只做纯内存的判定与赋值。
     private func refreshAwaitingReplies(
         _ inputs: [SessionAwaitingReplyInputsCache.RunKey:
                    SessionAwaitingReplyInputsCache.Inputs]
@@ -1064,7 +1025,6 @@ final class CrewSessionRunner: ObservableObject {
             let key = SessionAwaitingReplyInputsCache.RunKey(
                 crewId: run.crewId, sessionId: run.sessionId)
             run.refreshAwaitingReply(
-                pendingApprovalSummary: inputs[key]?.pendingApprovalSummary,
                 trailingQuestion: inputs[key]?.trailingQuestion)
         }
     }
@@ -1426,8 +1386,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 把新 run 追加进 `runs` 并选中；agent 在内嵌终端里交互式跑，旧 run 不受影响。
     func start(
         crewId: String,
-        /// 本 session 的合成 id（BYOK localSessionId / logged 服务端 id）—— 存到 run 上，
-        /// 右栏内联待办卡片靠它从 `LocalApprovalStore` 过滤出本 session 的待决策/待审批。
+        /// 本 session 的合成 id（BYOK localSessionId / logged 服务端 id）。
         sessionId: String,
         /// 完整的 per-session 启动配置（kind / model / effort / initialPrompt /
         /// permissionMode）。Claude 生成 argv；Codex 除 `app-server` 子命令外的配置
@@ -1570,12 +1529,8 @@ final class CrewSessionRunner: ObservableObject {
         case .codex:
             // codex 没有 claude 的 hook/settings 通道：session 配置、世界观与 MCP
             // 全走 app-server thread/start（或 thread/resume），白板逐轮走 turn/start。
-            // 后两者用 in-process provider 复用同一份本地 store（与 claude 的 helper 子进程
-            // 读写同一份白板/审批 JSON —— 右栏内联卡片 / 群聊白板对齐）。
-            let approvalScope: CodexApprovalModeStore.Scope = role == .captain
-                ? .captain : .session(sessionId)
-            let approvalsReviewer = CodexApprovalModeStore.shared.reviewer(
-                crewId: crewId, scope: approvalScope)
+            // Codex approval stays native auto_review; PendingCrew no longer
+            // creates a parallel manual card or local approval ledger.
             let cb = CodexAppServerBackend(
                 executable: executable.path,
                 argv: config.argv(),
@@ -1585,12 +1540,11 @@ final class CrewSessionRunner: ObservableObject {
                 effort: config.effort,
                 fastMode: config.fastMode ?? false,
                 resumeThreadId: config.resumeSessionId,
-                approvalsReviewer: approvalsReviewer,
+                approvalsReviewer: .autoReview,
                 developerInstructions: developerInstructions,
                 mcpServers: codexMcpServers,
                 whiteboardProvider: Self.makeWhiteboardProvider(
                     crewId: crewId, sessionId: sessionId, captain: role == .captain),
-                approvalProvider: Self.makeApprovalProvider(crewId: crewId, sessionId: sessionId),
                 notifyUnanswerable: Self.makeUnanswerableNotifier(
                     crewId: crewId, sessionId: sessionId, isCaptain: role == .captain),
                 notifyTurnEnded: Self.makeTurnEndedNotifier(
@@ -1660,11 +1614,7 @@ final class CrewSessionRunner: ObservableObject {
             model: config.model,
             effort: config.effort,
             fastMode: config.fastMode,
-            approvalsReviewer: config.kind == .codex
-                ? CodexApprovalModeStore.shared.reviewer(
-                    crewId: crewId,
-                    scope: role == .captain ? .captain : .session(sessionId))
-                : nil,
+            approvalsReviewer: config.kind == .codex ? .autoReview : nil,
             permissionModeOverride: config.kind.isAgent ? config.permissionMode : nil,
             backend: backend,
             role: role
@@ -1760,28 +1710,6 @@ final class CrewSessionRunner: ObservableObject {
                 text: prepared.context,
                 commit: { emitter.commit(prepared) })
         }
-    }
-
-    /// codex 审批 provider —— 镜像 `McpPermissionHook` 的 raise→long-poll→answer，
-    /// 但在 app 进程内异步等（不阻塞线程）。codex 经 server request 发来审批，
-    /// 这里 raise 一条 `permission` 待审批（归档在本 sessionId 下，右栏内联卡片
-    /// 据此过滤）+ 通知半边贴本地白板，再 poll `LocalApprovalStore` 直到人类在待审批
-    /// 列表 allow/deny。映射：allow→"accept"，deny / 超时→"decline"（安全侧 fail-safe）。
-    /// 超时取 `McpPermissionHook` 一样保守的兜底（v1 不设硬等人上限，但 in-process
-    /// 异步等设一个长上限防 turn 永久挂死）。
-    nonisolated static func makeApprovalProvider(
-        crewId: String,
-        sessionId: String,
-        directory: URL = LocalWhiteboardStore.defaultDirectory,
-        pollIntervalNanoseconds: UInt64 = 500_000_000,
-        maxWaits: Int = 3600
-    ) -> (_ summary: String, _ decisions: [String]) async -> String {
-        CodexManualApprovalBridge.provider(
-            crewId: crewId,
-            sessionId: sessionId,
-            directory: directory,
-            pollIntervalNanoseconds: pollIntervalNanoseconds,
-            maxWaits: maxWaits)
     }
 
     /// codex「要一个我们给不出的回答」→ 发群通知（Todo #6）。
@@ -2974,8 +2902,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     let runID = UUID()
     let crewId: String
     /// 本 session 的合成 id（BYOK = startSession 生成的 localSessionId；logged =
-    /// 服务端 session id）。与 MCP `--session` / 世界观 / `LocalApprovalStore` 条目
-    /// 的 sessionId 三处一致 —— 右栏内联待办卡片靠它过滤出本 session 的待决策/待审批。
+    /// 服务端 session id）。与 MCP `--session` / 世界观的 sessionId 一致。
     let sessionId: String
     let kind: LocalCodingAgentKind
     let taskBrief: String
@@ -3452,15 +3379,13 @@ final class CrewSessionRun: ObservableObject, Identifiable {
 
     /// 重算「在等谁回话」（Todo #25 层 2）。跟着点名快照的 2 秒定时器走。
     ///
-    /// 两样磁盘输入都由 runner 在**后台**取好分发下来（`SessionAwaitingReplyInputsCache`，
+    /// 磁盘输入由 runner 在**后台**取好分发下来（`SessionAwaitingReplyInputsCache`，
     /// 2026-08-18）—— 这个方法里一次磁盘 IO 都没有，纯内存判定 + 赋值。
     /// - Parameters:
-    ///   - pendingApprovalSummary: 审批账本里本 session 的 pending 条目摘要（每 crew 取一次）。
     ///   - trailingQuestion: 上一轮收尾那句问句（`SessionTurnMarker`，每 run 取一次）。
-    func refreshAwaitingReply(pendingApprovalSummary: String?, trailingQuestion: String?) {
+    func refreshAwaitingReply(trailingQuestion: String?) {
         let next = SessionAwaitingReply.reason(.init(
             isRunning: status == .running,
-            pendingApprovalSummary: pendingApprovalSummary,
             pendingMenuPrompt: pendingDecision?.prompt,
             trailingQuestion: trailingQuestion,
             isProducingOutput: displayIsTyping))
@@ -3670,7 +3595,6 @@ extension SessionAwaitingReply.Reason {
     /// 的自由文本，冒号/竖线之类在里面是家常便饭，拿它们当分隔符迟早切错。
     var wire: String {
         switch self {
-        case let .approval(text): return "approval\u{1}" + text
         case let .menu(text): return "menu\u{1}" + text
         case let .question(text): return "question\u{1}" + text
         }
@@ -3680,7 +3604,6 @@ extension SessionAwaitingReply.Reason {
         guard let wire, let index = wire.firstIndex(of: "\u{1}") else { return nil }
         let text = String(wire[wire.index(after: index)...])
         switch wire[wire.startIndex..<index] {
-        case "approval": self = .approval(text)
         case "menu": self = .menu(text)
         case "question": self = .question(text)
         default: return nil

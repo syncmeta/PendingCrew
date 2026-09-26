@@ -107,18 +107,18 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(update["threadId"] as? String, "thr_old")
         XCTAssertEqual(update["approvalsReviewer"] as? String, "auto_review")
     }
-    func testStartResumeAndLiveSettingsCarryManualReviewer() {
+    func testStartResumeAndLiveSettingsStayOnNativeAutoReviewer() {
         let start = CodexProtocol.threadStartParams(
             cwd: "/repo", model: nil, effort: nil,
-            developerInstructions: nil, mcpServers: nil, approvalsReviewer: .user)
+            developerInstructions: nil, mcpServers: nil, approvalsReviewer: .autoReview)
         let resume = CodexProtocol.threadResumeParams(
             threadId: "thr_old", cwd: "/repo", model: nil, effort: nil,
-            developerInstructions: nil, mcpServers: nil, approvalsReviewer: .user)
+            developerInstructions: nil, mcpServers: nil, approvalsReviewer: .autoReview)
         let update = CodexProtocol.threadSettingsUpdateParams(
-            threadId: "thr_old", approvalsReviewer: .user)
-        XCTAssertEqual(start["approvalsReviewer"] as? String, "user")
-        XCTAssertEqual(resume["approvalsReviewer"] as? String, "user")
-        XCTAssertEqual(update["approvalsReviewer"] as? String, "user")
+            threadId: "thr_old", approvalsReviewer: .autoReview)
+        XCTAssertEqual(start["approvalsReviewer"] as? String, "auto_review")
+        XCTAssertEqual(resume["approvalsReviewer"] as? String, "auto_review")
+        XCTAssertEqual(update["approvalsReviewer"] as? String, "auto_review")
     }
     func testLiveSettingsCanSwitchModelAndEffortWithoutChangingReviewer() {
         let update = CodexProtocol.threadSettingsUpdateParams(
@@ -176,27 +176,6 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(CodexProtocol.serverRequestKind(method: "attestation/generate"), .unsupported)
     }
 
-    func testStructuredApprovalChoicesDoNotDropSafeStringChoices() {
-        let params: [String: Any] = [
-            "availableDecisions": [
-                "accept",
-                ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": ["git", "switch"]]],
-                "decline",
-            ] as [Any],
-        ]
-        XCTAssertEqual(CodexProtocol.safeApprovalDecisions(params: params), ["accept", "decline"])
-    }
-
-    func testStructuredOnlyApprovalNeverTurnsPlainAllowIntoPersistentGrant() {
-        let params: [String: Any] = [
-            "availableDecisions": [
-                ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": ["git"]]],
-                "decline",
-            ] as [Any],
-        ]
-        XCTAssertEqual(CodexProtocol.safeApprovalDecisions(params: params), ["decline"])
-    }
-
     func testUsageLimitHealthComesFromFailedTurnProtocolField() {
         let health = CodexProtocol.sessionHealth(method: "turn/completed", params: [
             "turn": [
@@ -246,93 +225,10 @@ final class CodexProtocolTests: XCTestCase {
         ]))
     }
 
-    func testApprovalRoutingOnlyManualModePresentsACard() {
-        XCTAssertEqual(
-            CodexProtocol.approvalRequestDisposition(reviewer: .user), .presentCard)
-        XCTAssertEqual(
-            CodexProtocol.approvalRequestDisposition(reviewer: .autoReview),
-            .rejectWithoutNotice,
-            "auto_review must not call the provider that raises a card and 待审批 notice")
-    }
-
-    func testPermissionsApprovalUsesGrantedProfileEnvelope() {
-        let requested: [String: Any] = [
-            "network": ["enabled": true],
-            "fileSystem": ["write": ["/repo/generated"]],
-        ]
-        let allow = CodexProtocol.approvalResponse(
-            method: "item/permissions/requestApproval",
-            params: ["permissions": requested], decision: "accept")
-        XCTAssertEqual(allow["scope"] as? String, "turn")
-        XCTAssertEqual(
-            (allow["permissions"] as? [String: Any])?["network"] as? [String: Bool],
-            ["enabled": true])
-
-        let deny = CodexProtocol.approvalResponse(
-            method: "item/permissions/requestApproval",
-            params: ["permissions": requested], decision: "decline")
-        XCTAssertTrue((deny["permissions"] as? [String: Any])?.isEmpty == true)
-        XCTAssertNil(deny["decision"], "permissions response has no decision field in 0.145")
-
-        let fileChange = CodexProtocol.approvalResponse(
-            method: "item/fileChange/requestApproval", params: [:], decision: "accept")
-        XCTAssertEqual(fileChange["decision"] as? String, "accept")
-    }
-
-    func testManualApprovalProviderCreatesOperableCardBeforeNoticeAndReturnsDecision() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("codex-manual-approval-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let approvals = LocalApprovalStore(directory: directory)
-        let board = LocalWhiteboardStore(directory: directory)
-        let provider = CodexManualApprovalBridge.provider(
-            crewId: "crew", sessionId: "codex-session", directory: directory,
-            pollIntervalNanoseconds: 1_000_000, maxWaits: 1_000)
-
-        let response = Task { await provider("git switch -c fix/x", ["accept", "decline"]) }
-
-        var pending: ApprovalItem?
-        for _ in 0..<100 where pending == nil {
-            pending = approvals.pending(crewId: "crew").first
-            if pending == nil { try await Task.sleep(nanoseconds: 1_000_000) }
-        }
-        let item = try XCTUnwrap(pending)
-        XCTAssertEqual(item.kind, "permission")
-        XCTAssertEqual(item.sessionId, "codex-session")
-        XCTAssertEqual(item.summary, "git switch -c fix/x")
-        // 卡片先落、群里那条通知后落 —— 两次写之间有真实的时间窗。**这里必须等，
-        // 不能读一次就断言**：读一次在满载的全量跑里会撞进那个窗口（实测约一半
-        // 概率红），而这一族的语义是「通知只有在卡片之后出现才算数」，不是「通知
-        // 与卡片同一瞬间出现」。等到它出现即满足语义；等不到才是真红。
-        var noticed = false
-        for _ in 0..<100 where !noticed {
-            noticed = board.list(crewId: "crew").contains { $0.text.contains("待审批：git switch") }
-            if !noticed { try await Task.sleep(nanoseconds: 1_000_000) }
-        }
-        XCTAssertTrue(noticed, "a notice is valid only after the pending card exists")
-
-        approvals.decide(crewId: "crew", id: item.id, decision: "allow")
-        let decision = await response.value
-        XCTAssertEqual(decision, "accept")
-        XCTAssertTrue(approvals.pending(crewId: "crew").isEmpty)
-    }
-
-    func testManualApprovalTimeoutClosesStaleCard() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("codex-manual-timeout-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let approvals = LocalApprovalStore(directory: directory)
-        let provider = CodexManualApprovalBridge.provider(
-            crewId: "crew", sessionId: "codex-session", directory: directory,
-            pollIntervalNanoseconds: 1, maxWaits: 1)
-
-        let decision = await provider("write outside workspace", ["accept", "decline"])
-        XCTAssertEqual(decision, "decline")
-        XCTAssertTrue(approvals.pending(crewId: "crew").isEmpty,
-                      "a completed server request must not leave an inoperable stale card")
-        XCTAssertEqual(approvals.list(crewId: "crew").first?.decision, "deny")
+    func testApprovalRoutingNeverCreatesPendingCrewCard() {
+        XCTAssertEqual(CodexProtocol.ApprovalsReviewer.allCases.map(\.rawValue), ["auto_review"])
+        XCTAssertNil(CodexProtocol.ApprovalsReviewer(rawValue: "user"),
+                     "legacy manual preference must not survive a fresh launch")
     }
 
     func testElicitationDeclineResultMatchesRealSchema() {
@@ -504,7 +400,7 @@ final class CodexCompactionLifecycleTests: XCTestCase {
             cwd: directory.path, env: ProcessInfo.processInfo.environment,
             model: nil, effort: nil, resumeThreadId: nil,
             developerInstructions: nil, mcpServers: nil,
-            whiteboardProvider: { nil }, approvalProvider: { _, _ in "decline" },
+            whiteboardProvider: { nil },
             protocolNotificationSink: bridge.codexNotificationSink(sessionId: "manual"))
         let remote = bridge.exposeAttached(sessionId: "manual", backend: backend)
         defer { backend.stop() }
@@ -582,7 +478,7 @@ final class CodexCompactionLifecycleTests: XCTestCase {
             cwd: directory.path, env: ProcessInfo.processInfo.environment,
             model: nil, effort: nil, resumeThreadId: nil,
             developerInstructions: nil, mcpServers: nil,
-            whiteboardProvider: { nil }, approvalProvider: { _, _ in "decline" },
+            whiteboardProvider: { nil },
             notifyTurnEnded: { _ in turnEndCount += 1 },
             protocolNotificationSink: bridge.codexNotificationSink(sessionId: "compaction"))
         let remote = bridge.exposeAttached(sessionId: "compaction", backend: backend)
@@ -659,7 +555,7 @@ final class CodexFirstTurnFailureTests: XCTestCase {
             cwd: directory.path, env: ProcessInfo.processInfo.environment,
             model: nil, effort: nil, resumeThreadId: nil,
             developerInstructions: nil, mcpServers: nil,
-            whiteboardProvider: { nil }, approvalProvider: { _, _ in "decline" },
+            whiteboardProvider: { nil },
             notifyTurnEnded: { _ in sawCompletion = true },
             protocolNotificationSink: bridge.codexNotificationSink(sessionId: "first-failure"))
         let remote = bridge.exposeAttached(sessionId: "first-failure", backend: backend)

@@ -49,7 +49,6 @@ final class HelperBuildStalenessTests: XCTestCase {
 
     private func server(dir: URL, watch: HelperBuildWatch?) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1",
                   quotaDirectory: dir,

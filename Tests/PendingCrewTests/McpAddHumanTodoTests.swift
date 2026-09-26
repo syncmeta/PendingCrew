@@ -16,7 +16,6 @@ final class McpAddHumanTodoTests: XCTestCase {
                         crewId: String = "c",
                         sessionId: String = "sess-1", label: String? = "两本账") -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: crewId, sessionId: sessionId, isCaptain: isCaptain,
                   sessionLabel: label,

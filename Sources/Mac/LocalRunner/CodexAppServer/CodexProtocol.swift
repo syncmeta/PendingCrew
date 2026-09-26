@@ -37,14 +37,7 @@ enum CodexProtocol {
 
     enum ApprovalsReviewer: String, Codable, CaseIterable, Sendable {
         case autoReview = "auto_review"
-        case user
-
-        var displayName: String {
-            switch self {
-            case .autoReview: return "Approve for me"
-            case .user: return "手动批准"
-            }
-        }
+        var displayName: String { "Approve for me" }
     }
 
     static func initializeParams(clientName: String, version: String) -> [String: Any] {
@@ -180,33 +173,6 @@ enum CodexProtocol {
     /// + `account/chatgptAuthTokens/refresh` + `attestation/generate`.
     enum ServerRequestKind: Equatable { case approval, elicitation, account, unsupported }
 
-    /// Only a manual-review thread may surface an approval request to PendingCrew.
-    /// Keeping this decision pure makes the no-phantom-notice invariant testable:
-    /// auto_review requests are answered fail-closed without raising a card or notice.
-    enum ApprovalRequestDisposition: Equatable { case presentCard, rejectWithoutNotice }
-
-    static func approvalRequestDisposition(
-        reviewer: ApprovalsReviewer
-    ) -> ApprovalRequestDisposition {
-        reviewer == .user ? .presentCard : .rejectWithoutNotice
-    }
-
-    /// Response envelopes differ for permissions requests. Codex 0.145 expects a
-    /// GrantedPermissionProfile rather than `{decision: ...}`: allow echoes the
-    /// requested profile, while deny grants an empty profile, both scoped to this turn.
-    static func approvalResponse(
-        method: String, params: [String: Any], decision: String
-    ) -> [String: Any] {
-        guard method == "item/permissions/requestApproval" else {
-            return ["decision": decision]
-        }
-        let requested = params["permissions"] as? [String: Any] ?? [:]
-        return [
-            "permissions": decision == "accept" ? requested : [:],
-            "scope": "turn",
-        ]
-    }
-
     static func serverRequestKind(method: String) -> ServerRequestKind {
         if method.hasSuffix("requestApproval") { return .approval }   // command / fileChange / permissions
         if method == "mcpServer/elicitation/request" { return .elicitation }
@@ -215,22 +181,6 @@ enum CodexProtocol {
         // 单列出来给健康感知用(此前混在 unsupported 里被静默丢,分诊第 7 点)。
         if method.hasPrefix("account/") { return .account }
         return .unsupported
-    }
-
-    /// `availableDecisions` is a union in Codex 0.145: ordinary choices are
-    /// strings, while persistent exec/network-policy choices are structured
-    /// objects. Casting the whole array to `[String]` drops *every* choice as
-    /// soon as one structured option is present. PendingCrew's current card is
-    /// deliberately only allow/deny, so expose only the non-persistent choices
-    /// it can represent without silently broadening an approval.
-    static func safeApprovalDecisions(params: [String: Any]) -> [String] {
-        guard let raw = params["availableDecisions"] as? [Any] else {
-            return ["accept", "decline"]
-        }
-        let supported = raw.compactMap { $0 as? String }.filter {
-            $0 == "accept" || $0 == "decline" || $0 == "cancel"
-        }
-        return supported.isEmpty ? ["decline"] : supported
     }
 
     /// Translate Codex app-server health notifications into the shared runner

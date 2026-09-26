@@ -78,7 +78,6 @@ final class CaptainDelegationPolicyStoreTests: XCTestCase {
         let dir = directory()
         func server(_ captain: Bool) -> McpServer {
             McpServer(store: LocalWhiteboardStore(directory: dir),
-                      approvals: LocalApprovalStore(directory: dir),
                       control: LocalCrewControlStore(directory: dir),
                       crewId: "crew-a", sessionId: captain ? "captain-1" : "worker-1",
                       isCaptain: captain, quotaDirectory: dir)

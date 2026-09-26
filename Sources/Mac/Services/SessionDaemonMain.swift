@@ -110,7 +110,6 @@ enum SessionDaemonMain {
             runner?.runs.first { $0.sessionId == sessionId }?.protocolSummary
         }
         host.server.crewBackend = model.backend
-        host.server.approvalStore = .shared
         host.server.onOrchestrationRequest = { control in
             MainActor.assumeIsolated {
                 handle(control, runner: runner, crewStore: crewStore,
@@ -217,12 +216,6 @@ enum SessionDaemonMain {
                     runnerRaw: string("runner"), brief: string("brief") ?? "",
                     detail: detail, backend: model.backend)
                 await crewStore.refreshDetail(crewId)
-            }
-        case SessionOrchestrationOp.approvalMode:
-            guard let target = run(), let raw = string("reviewer"),
-                  let reviewer = CodexProtocol.ApprovalsReviewer(rawValue: raw) else { return }
-            Task { @MainActor in
-                await runner.applyCodexApprovalMode(to: target, reviewer: reviewer)
             }
         case SessionOrchestrationOp.restoreSessions:
             // 界面恢复弹窗里点了「接回来」，整笔转交到这里（viewer 自己拉 = 双头）。

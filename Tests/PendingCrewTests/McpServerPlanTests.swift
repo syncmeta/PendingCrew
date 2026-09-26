@@ -13,7 +13,6 @@ final class McpServerPlanTests: XCTestCase {
 
     private func server(_ dir: URL, isCaptain: Bool = true) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
                   sessionLabel: "机长", quotaDirectory: dir,

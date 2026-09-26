@@ -272,25 +272,4 @@ final class SessionConfigTests: XCTestCase {
                 crewDirectory: directory, isolation: true, hint: "isolated"))
     }
 
-    func testCodexApprovalModesDefaultPersistAndStaySessionScoped() {
-        let suite = "CodexApprovalModeStoreTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let store = CodexApprovalModeStore(defaults: defaults, defaultsKey: "modes")
-
-        XCTAssertEqual(store.reviewer(crewId: "crew-a", scope: .captain), .autoReview)
-        XCTAssertEqual(store.reviewer(crewId: "crew-a", scope: .session("one")), .autoReview)
-
-        store.set(.user, crewId: "crew-a", scope: .captain)
-        store.set(.user, crewId: "crew-a", scope: .session("one"))
-        XCTAssertEqual(store.reviewer(crewId: "crew-a", scope: .captain), .user)
-        XCTAssertEqual(store.reviewer(crewId: "crew-a", scope: .session("one")), .user)
-        XCTAssertEqual(store.reviewer(crewId: "crew-a", scope: .session("two")), .autoReview)
-        XCTAssertEqual(store.reviewer(crewId: "crew-b", scope: .captain), .autoReview)
-
-        let restored = CodexApprovalModeStore(defaults: defaults, defaultsKey: "modes")
-        XCTAssertEqual(restored.reviewer(crewId: "crew-a", scope: .captain), .user)
-        XCTAssertEqual(restored.reviewer(crewId: "crew-a", scope: .session("one")), .user)
-    }
-
 }

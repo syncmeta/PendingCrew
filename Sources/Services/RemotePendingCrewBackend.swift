@@ -10,9 +10,7 @@ final class RemotePendingCrewBackend: PendingCrewBackend {
     private var connectionGeneration: UInt64 = 0
     private var streams: [String: [UUID: AsyncStream<Void>.Continuation]] = [:]
     private var changeHandlerID: UUID?
-    private var approvalChangeHandlerID: UUID?
     private var sessionChannels: [String: RemoteSessionChannel] = [:]
-    private var crewBySession: [String: String] = [:]
 
     var pendingRequestCount: Int { client?.pendingRequestCount ?? 0 }
     var isConnected: Bool { client?.connected == true }
@@ -65,17 +63,6 @@ final class RemotePendingCrewBackend: PendingCrewBackend {
                   generation == self.connectionGeneration, self.client === newClient else { return }
             self.streams[crewID]?.values.forEach { $0.yield(()) }
         }
-        approvalChangeHandlerID = newClient.addApprovalChangeHandler {
-            [weak self, weak newClient] crewID in
-            guard let self, let newClient,
-                  generation == self.connectionGeneration, self.client === newClient else { return }
-            Task { @MainActor [weak self, weak newClient] in
-                guard let self, let newClient,
-                      generation == self.connectionGeneration,
-                      self.client === newClient else { return }
-                await self.refreshApprovals(crewID: crewID, generation: generation)
-            }
-        }
         newClient.onDisconnect = { [weak self, weak newClient] _ in
             guard let self, let newClient,
                   generation == self.connectionGeneration, self.client === newClient else { return }
@@ -90,16 +77,9 @@ final class RemotePendingCrewBackend: PendingCrewBackend {
             streams.keys.forEach { newClient.subscribe(crewID: $0) }
             for channel in sessionChannels.values {
                 newClient.attach(channel)
-                if let crewID = crewBySession[channel.sessionID] {
-                    try await newClient.subscribeApprovals(
-                        crewID: crewID, sessionID: channel.sessionID)
-                }
             }
             if !sessionChannels.isEmpty {
                 _ = try await newClient.listSessions()
-            }
-            for crewID in Set(crewBySession.values) {
-                await refreshApprovals(crewID: crewID, generation: generation)
             }
         } catch {
             newClient.close()
@@ -177,7 +157,7 @@ final class RemotePendingCrewBackend: PendingCrewBackend {
         }
     }
 
-    // MARK: - Remote sessions and structured approvals
+    // MARK: - Remote sessions
 
     func listRemoteSessions() async throws -> [SessionSummary] {
         if client?.connected != true { try await connect() }
@@ -194,75 +174,12 @@ final class RemotePendingCrewBackend: PendingCrewBackend {
         sessionChannels[sessionID] = channel
         client?.attach(channel)
         channel.apply(summary: summary, generation: connectionGeneration)
-        if let crewID = summary.run?.crewId {
-            crewBySession[sessionID] = crewID
-            guard let client else { throw CrewRPCError.notConnected }
-            try await client.subscribeApprovals(crewID: crewID, sessionID: sessionID)
-        }
-        if let crewID = summary.run?.crewId {
-            await refreshApprovals(crewID: crewID, generation: connectionGeneration)
-        }
         return channel
     }
 
     func closeSession(sessionID: String) {
         guard let channel = sessionChannels.removeValue(forKey: sessionID) else { return }
-        crewBySession.removeValue(forKey: sessionID)
         client?.detach(channel)
-    }
-
-    func listApprovals(crewID: String, sessionID: String) async throws -> [ApprovalItem] {
-        try await rpc(
-            ApprovalRPC.Op.list,
-            ApprovalRPC.Scope(crewId: crewID, sessionId: sessionID),
-            as: [ApprovalItem].self)
-    }
-
-    func answerApproval(
-        crewID: String, approvalID: String, reply: String
-    ) async throws {
-        guard let sessionID = sessionChannels.values.first(where: {
-            $0.pendingApprovals.contains(where: { $0.id == approvalID })
-        })?.sessionID else {
-            throw CrewRPCError.remote("待决策不在当前远端 session 中")
-        }
-        let _: ApprovalRPC.Empty = try await rpc(
-            ApprovalRPC.Op.answer,
-            ApprovalRPC.Answer(crewId: crewID, sessionId: sessionID,
-                               approvalId: approvalID, reply: reply),
-            as: ApprovalRPC.Empty.self)
-        await refreshApprovals(crewID: crewID, generation: connectionGeneration)
-    }
-
-    func decideApproval(
-        crewID: String, approvalID: String, decision: String
-    ) async throws {
-        guard let sessionID = sessionChannels.values.first(where: {
-            $0.pendingApprovals.contains(where: { $0.id == approvalID })
-        })?.sessionID else {
-            throw CrewRPCError.remote("待审批不在当前远端 session 中")
-        }
-        let _: ApprovalRPC.Empty = try await rpc(
-            ApprovalRPC.Op.decide,
-            ApprovalRPC.Decide(crewId: crewID, sessionId: sessionID,
-                               approvalId: approvalID, decision: decision),
-            as: ApprovalRPC.Empty.self)
-        await refreshApprovals(crewID: crewID, generation: connectionGeneration)
-    }
-
-    private func refreshApprovals(crewID: String, generation: UInt64) async {
-        let sessionIDs = crewBySession.filter { $0.value == crewID }.map(\.key)
-        for sessionID in sessionIDs {
-            do {
-                let approvals = try await listApprovals(crewID: crewID, sessionID: sessionID)
-                guard generation == connectionGeneration else { return }
-                sessionChannels[sessionID]?.setApprovals(approvals, generation: generation)
-            } catch {
-                guard generation == connectionGeneration else { return }
-                sessionChannels[sessionID]?.disconnected(
-                    error.localizedDescription, generation: generation)
-            }
-        }
     }
 
     func listMySubjects() async throws -> [UserSubject] {

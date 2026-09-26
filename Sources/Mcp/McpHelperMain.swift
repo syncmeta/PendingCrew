@@ -36,7 +36,7 @@ enum McpHelperMain {
             let captain = args.contains("--captain")
             let label = value("--label", args)
             let agent = value("--agent", args).flatMap { ["claude", "codex"].contains($0) ? $0 : nil }
-            let server = McpServer(store: store, approvals: LocalApprovalStore(directory: dir),
+            let server = McpServer(store: store,
                                    control: LocalCrewControlStore(directory: dir),
                                    crewId: crewId, sessionId: sessionId, isCaptain: captain,
                                    sessionLabel: label,
@@ -53,8 +53,7 @@ enum McpHelperMain {
             let gates = (value("--gate", args) ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
             // #75 ②：权限请求提到**人类 Todo**、放行票走 `PermissionGrantStore`，
             // 两个都跟着 `--dir` 走 —— 不给就会静默落到真实数据目录。
-            let permission = McpPermissionHook(approvals: LocalApprovalStore(directory: dir),
-                                               crewId: crewId, sessionId: sessionId,
+            let permission = McpPermissionHook(crewId: crewId, sessionId: sessionId,
                                                gates: gates, board: store,
                                                todos: LocalTodoStore(directory: dir, ledger: .human),
                                                grants: PermissionGrantStore(directory: dir))

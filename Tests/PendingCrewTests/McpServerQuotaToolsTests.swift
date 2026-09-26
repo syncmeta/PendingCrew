@@ -10,7 +10,6 @@ final class McpServerQuotaToolsTests: XCTestCase {
     }
     private func makeServer(dir: URL) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
-                  approvals: LocalApprovalStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "local-q", sessionId: "worker-abc", isCaptain: false,
                   sessionLabel: "测试", quotaDirectory: dir)

@@ -45,8 +45,6 @@ final class RemoteSessionBackendTests: XCTestCase {
         direct.inspectionText = "authoritative tail"
         XCTAssertEqual(remote.screenText(maxLines: 17), "authoritative tail")
         XCTAssertEqual(direct.requestedScreenTextLineLimits, [17])
-        try? await remote.updateApprovalsReviewer(.user)
-        XCTAssertEqual(direct.approvalsReviewers, [.user])
 
         remote.stop()
         XCTAssertEqual(direct.stopCount, 1)
@@ -82,13 +80,12 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testMissingCapabilityDegradesWithoutRejectingConnection() {
         let direct = ProtocolTestBackend(kind: .codex)
         let bridge = InProcessSessionProtocolBridge(
-            appCapabilities: ["transcript-events", "approval-mode"],
+            appCapabilities: ["transcript-events"],
             daemonCapabilities: ["transcript-events"])
         let remote = bridge.exposeAttached(sessionId: "session-old-daemon", backend: direct)
 
         XCTAssertTrue(remote.isProtocolConnected)
         XCTAssertEqual(remote.negotiatedCapabilities, ["transcript-events"])
-        XCTAssertFalse(remote.supportsCapability("approval-mode"))
         XCTAssertFalse(remote.supportsCapability("screen-text"))
         direct.inspectionText = "must not be read"
         XCTAssertEqual(remote.screenText(maxLines: 20), "（daemon 不支持读取输出）")
@@ -370,32 +367,6 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(outcome, .linkDown("后台链路断了，切没切成不确定"))
     }
 
-    /// 同上，审批模式那条走的是 `pendingControls`，抛错而不是返回值。
-    func testApprovalsReviewerInFlightWhenLinkDiesThrowsInsteadOfHangingForever() {
-        let link = SilentSessionLink()
-        let client = SessionProtocolClient(link: link, capabilities: [])
-        _ = client.attach(sessionId: "in-flight-approval", kind: .codex)
-
-        let returned = expectation(description: "断链后 updateApprovalsReviewer 必须返回")
-        var thrown: Error?
-        Task { @MainActor in
-            do {
-                try await client.updateApprovalsReviewer(
-                    sessionId: "in-flight-approval", reviewer: .user)
-            } catch {
-                thrown = error
-            }
-            returned.fulfill()
-        }
-        waitUntil(link.sentControlOps.contains("updateApprovalsReviewer"),
-                  "审批模式请求没发出去，后面的断链就不是在途状态了")
-
-        client.close()
-
-        wait(for: [returned], timeout: 3)
-        XCTAssertNotNil(thrown, "不许静默丢 —— 断链要以明确的失败恢复")
-    }
-
     /// 投唤醒那条**本来就有** 5 秒兜底，所以它不像上面两条那样永远挂着。
     /// 但断链是当场就知道的事，没有理由让调用方再干等 5 秒 —— 这条测试用 3 秒的
     /// 上限把「断链即返回」和「靠 5 秒兜底」区分开：只靠兜底的话它会红。
@@ -447,7 +418,7 @@ final class SilentSessionLink: SessionMessageLink {
 
     /// 帧 = 长度前缀 + JSON，整段当 UTF-8 解会是 nil，所以直接在字节里找。
     func send(_ framed: Data) {
-        for op in ["applyProfileSwitch", "updateApprovalsReviewer", "submitWake"]
+        for op in ["applyProfileSwitch", "submitWake"]
         where framed.range(of: Data(op.utf8)) != nil {
             sentControlOps.append(op)
         }
@@ -462,7 +433,7 @@ final class SilentSessionLink: SessionMessageLink {
 /// 所以它是 internal，不是 private。
 @MainActor
 final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControlling,
-    SessionProtocolScreenTextProviding, SessionProtocolApprovalControlling,
+    SessionProtocolScreenTextProviding,
     SessionProtocolLaunchProblemProviding, SessionProtocolTerminalSnapshotProviding,
     SessionProtocolCodexHistoryProviding {
     let kind: LocalCodingAgentKind
@@ -490,7 +461,6 @@ final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControll
     }
     var inspectionText = ""
     var requestedScreenTextLineLimits: [Int] = []
-    var approvalsReviewers: [CodexProtocol.ApprovalsReviewer] = []
     var terminalSnapshot: TerminalSnapshotEncoder.Snapshot?
     var codexHistory: [CodexThreadItem] = []
     var wakeResults: [SessionWakeSubmission] = []
@@ -515,9 +485,6 @@ final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControll
     func screenText(maxLines: Int) -> String {
         requestedScreenTextLineLimits.append(maxLines)
         return inspectionText
-    }
-    func updateProtocolApprovalsReviewer(_ reviewer: CodexProtocol.ApprovalsReviewer) async throws {
-        approvalsReviewers.append(reviewer)
     }
     func protocolTerminalSnapshot() -> TerminalSnapshotEncoder.Snapshot? { terminalSnapshot }
     var protocolCodexHistory: [CodexThreadItem] { codexHistory }

@@ -408,8 +408,8 @@ final class CaptainTodoSweepTests: XCTestCase {
     func test_每一个reportIncident都不许吞掉写失败() throws {
         let found = try Self.sourcesContaining("func reportIncident")
         XCTAssertGreaterThanOrEqual(
-            found.count, 3,
-            "只扫到 \(found.count) 处 reportIncident —— 三本账至少各有一处，"
+            found.count, 2,
+            "只扫到 \(found.count) 处 reportIncident —— Todo 与计划账至少各有一处，"
             + "少了说明这把尺子自己瞎了（被改名 / 扫不到源码目录），别当成「都合规」")
         for (name, text) in found {
             let body = try XCTUnwrap(Self.bodyOfFunc("reportIncident", in: text),

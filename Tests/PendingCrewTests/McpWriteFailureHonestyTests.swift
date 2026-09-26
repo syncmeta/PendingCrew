@@ -265,8 +265,6 @@ final class McpWriteFailureHonestyTests: XCTestCase {
                              bySessionId: "sess-1", bySenderName: "我")
         _ = s.plans.add(crewId: fx.crewId, title: "板上的一条",
                         bySessionId: "sess-1", byName: "我")
-        _ = s.approvals.raise(crewId: fx.crewId, kind: "decision",
-                              sessionId: "sess-1", summary: "一条待决策")
         s.store.appendSessionMessage(crewId: fx.crewId, sessionId: "sess-1", text: "开张")
         s.store.appendSessionMessage(crewId: fx.otherCrewId, sessionId: "sess-1", text: "开张")
         // flock sidecar 与命令队列文件都要先存在/目录先建好，别让「新建文件失败」
@@ -297,7 +295,6 @@ final class McpWriteFailureHonestyTests: XCTestCase {
     private func server(_ fx: Fixture, captain: Bool) -> McpServer {
         let s = McpServer(
             store: LocalWhiteboardStore(directory: fx.whiteboards),
-            approvals: LocalApprovalStore(directory: fx.whiteboards),
             control: LocalCrewControlStore(directory: fx.whiteboards),
             crewId: fx.crewId, sessionId: "sess-1", isCaptain: captain,
             sessionLabel: "尺子", quotaDirectory: fx.whiteboards,
@@ -306,8 +303,6 @@ final class McpWriteFailureHonestyTests: XCTestCase {
         // long-poll 的工具（`ask` 超时那条路）在这把尺子里不该拖住整趟。
         s.commandResponseMaxWaits = 1
         s.commandResponsePollInterval = 0.01
-        s.askReplyMaxWaits = 1
-        s.askReplyPollInterval = 0.01
         return s
     }
 

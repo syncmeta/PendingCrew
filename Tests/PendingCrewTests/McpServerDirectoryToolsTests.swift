@@ -36,7 +36,6 @@ final class McpServerDirectoryToolsTests: XCTestCase {
 
     private func server(_ f: Fixture, isCaptain: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
-                  approvals: LocalApprovalStore(directory: f.whiteboards),
                   control: LocalCrewControlStore(directory: f.whiteboards),
                   crewId: f.sourceCrewId, sessionId: "sess-1",
                   isCaptain: isCaptain, sessionLabel: "通讯录",
@@ -55,7 +54,6 @@ final class McpServerDirectoryToolsTests: XCTestCase {
         let sourceStore = LocalTodoStore(directory: f.whiteboards, ledger: .human)
         let item = try XCTUnwrap(sourceStore.add(crewId: f.targetCrewId, text: "由执行组拍板"))
         let chief = McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
-                              approvals: LocalApprovalStore(directory: f.whiteboards),
                               control: LocalCrewControlStore(directory: f.whiteboards),
                               crewId: LocalCrew.chiefCrewId, sessionId: "chief",
                               isCaptain: true, sessionLabel: "总机组",

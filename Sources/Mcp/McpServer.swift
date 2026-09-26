@@ -11,9 +11,8 @@ import CoreFoundation
 /// 在 `main.swift`。用 `JSONSerialization`（不给每个 RPC 形状写 Codable）。
 final class McpServer {
     let store: LocalWhiteboardStore
-    let approvals: LocalApprovalStore
     /// crew 元数据控制通道（机长 `rename_crew` → 写待改名，app 侧 `CrewStore`
-    /// 排空落地）。与 store/approvals 同 `--dir` —— 离线 helper 唯一能碰的共享文件层。
+    /// 排空落地）。与 store 同 `--dir` —— 离线 helper 唯一能碰的共享文件层。
     let control: LocalCrewControlStore
     let crewId: String
     let sessionId: String
@@ -85,7 +84,7 @@ final class McpServer {
         每行最后还有一列 **helper 版本**：这个成员的 crew 工具进程正在执行的那份文件，跟磁盘上现在那份是不是同一个        （比的是文件本身，不看路径 —— 装新版后路径不变、跑的仍是旧包是常态）。「⚠️ helper 是旧的」= 它的工具表        是旧的，新加的工具/参数它拿不到，它说「没有这个能力」时要先想到这一条，要新工具只能重开它；「❔ 判不了」        **不等于是新的**，括号里写着为什么判不了。
         """
 
-    init(store: LocalWhiteboardStore, approvals: LocalApprovalStore, control: LocalCrewControlStore,
+    init(store: LocalWhiteboardStore, control: LocalCrewControlStore,
          crewId: String, sessionId: String,
          isCaptain: Bool = false, sessionLabel: String? = nil,
          quotaDirectory: URL? = nil, todos: LocalTodoStore? = nil,
@@ -100,7 +99,6 @@ final class McpServer {
          outputProbe: SessionOutputProbe? = nil,
          buildWatch: HelperBuildWatch? = nil) {
         self.store = store
-        self.approvals = approvals
         self.control = control
         self.crewId = crewId
         self.sessionId = sessionId
@@ -2425,36 +2423,6 @@ final class McpServer {
         }
         return "（超时无应答 —— PendingCrew app 可能没在运行，或该命令未被执行。）"
             + (timeoutHint.map { " " + $0 } ?? "")
-    }
-
-    /// `ask` 阻塞等答复的预算（30 分钟）。**做成实例属性只为让单测调小** ——
-    /// 一把要跑全部工具的尺子不能被一条 30 分钟的 long-poll 拖住。
-    var askReplyMaxWaits = 3600
-    var askReplyPollInterval: TimeInterval = 0.5
-
-    func awaitReply(reqId: String, pollInterval: TimeInterval? = nil, maxWaits: Int? = nil) -> String {
-        let pollInterval = pollInterval ?? askReplyPollInterval
-        let maxWaits = maxWaits ?? askReplyMaxWaits
-        var waits = 0
-        while waits < maxWaits {
-            if let it = approvals.item(crewId: crewId, id: reqId), it.status == "answered" {
-                return it.reply ?? "（已答复，无文本）"
-            }
-            waits += 1
-            Thread.sleep(forTimeInterval: pollInterval)
-        }
-        let timeoutReply = "（暂无人响应 —— 请自行判断后继续）"
-        // 这个 MCP 调用已经要返回；之后点卡片的答复不可能再送达 agent。
-        // 和 Codex manual approval bridge 的超时路径一样，必须把持久卡片同步结束，
-        // 否则 session 虽已开始后续回合，仍会永久显示“等答复”。原子条件更新避免
-        // 覆盖最后一拍同时到达的真实答复。
-        if approvals.answerIfPending(crewId: crewId, id: reqId, reply: timeoutReply) {
-            return timeoutReply
-        }
-        if let item = approvals.item(crewId: crewId, id: reqId), item.status == "answered" {
-            return item.reply ?? "（已答复，无文本）"
-        }
-        return timeoutReply
     }
 
     /// 把 `post_to_crew` 的 `mentions` 参数（JSON 数组）解析成本地 mention 模型。

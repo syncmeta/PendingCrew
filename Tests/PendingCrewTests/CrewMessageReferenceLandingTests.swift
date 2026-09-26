@@ -29,7 +29,6 @@ final class CrewMessageReferenceLandingTests: XCTestCase {
 
     private func server(_ f: Fixture, captain: Bool = true) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
-                  approvals: LocalApprovalStore(directory: f.whiteboards),
                   control: LocalCrewControlStore(directory: f.whiteboards),
                   crewId: f.crewId, sessionId: "sess-1",
                   isCaptain: captain, sessionLabel: "机长",
