@@ -12,7 +12,7 @@ struct CrewSettingsView: View {
             BackendsSettingsTab()
                 .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
         }
-        .frame(width: 520, height: 520)
+        .frame(width: 560, height: 540)
     }
 }
 
@@ -69,13 +69,14 @@ private struct GeneralSettingsTab: View {
     }
 }
 
-/// 编码工具：每个 harness 一块，摊开。
+/// 编码工具：先选择新机组机长的优先工具，再查看各 CLI 的实况。
 ///
 /// 人类 Todo #131 那条仍然成立 —— 版本只在设置里出现，不回侧栏页脚。
 /// **这里是全 app 唯一用到 `AgentCLIVersionView` 的地方**（`ViewWiringTests` 的
 /// 接线表钉着它，删了就红）。
 private struct CodingToolsSettingsTab: View {
     @ObservedObject private var versions = AgentCLIVersionCenter.shared
+    @State private var captainPreference: CaptainRunnerPreference = .custom
     @State private var claudePreference = ""
     @State private var codexPreference = ""
     @State private var capabilities: [LocalCodingAgentKind: CaptainRunnerCapability] = [:]
@@ -83,18 +84,19 @@ private struct CodingToolsSettingsTab: View {
     var body: some View {
         Form {
             Section("新机组机长") {
-                VStack(alignment: .leading) {
-                    Text("以下情况中新机组机长优先用 Claude Code")
-                    TextEditor(text: $claudePreference)
-                        .frame(minHeight: 56)
-                        .accessibilityIdentifier("captain.preference.claude")
+                Picker("优先使用", selection: $captainPreference) {
+                    Text("Codex").tag(CaptainRunnerPreference.codex)
+                    Text("Claude Code").tag(CaptainRunnerPreference.claudeCode)
+                    Text("自定义").tag(CaptainRunnerPreference.custom)
                 }
-                VStack(alignment: .leading) {
-                    Text("以下情况中新机组机长优先用 Codex")
-                    TextEditor(text: $codexPreference)
-                        .frame(minHeight: 56)
-                        .accessibilityIdentifier("captain.preference.codex")
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("captain.preference.mode")
+
+                if captainPreference == .custom {
+                    customPreferenceEditors
                 }
+            }
+            Section("工具状态") {
                 Button("刷新可用状态") { Task { await refreshCapabilities() } }
                     .accessibilityIdentifier("captain.capability.refresh")
             }
@@ -108,9 +110,15 @@ private struct CodingToolsSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .tint(Theme.Palette.accent)
+        .padding(.horizontal, 12)
         .onAppear {
+            captainPreference = CaptainRunnerPreferences.preference()
             claudePreference = CaptainRunnerPreferences.get(.claudeCode)
             codexPreference = CaptainRunnerPreferences.get(.codex)
+        }
+        .onChange(of: captainPreference) { _, value in
+            CaptainRunnerPreferences.setPreference(value)
         }
         .onChange(of: claudePreference) { _, value in
             CaptainRunnerPreferences.set(value, for: .claudeCode)
@@ -121,6 +129,29 @@ private struct CodingToolsSettingsTab: View {
         .task {
             versions.start()
             await refreshCapabilities()
+        }
+    }
+
+    private var customPreferenceEditors: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            preferenceEditor("以下情况中新机组机长优先用 Claude Code",
+                             text: $claudePreference, identifier: "captain.preference.claude")
+            preferenceEditor("以下情况中新机组机长优先用 Codex",
+                             text: $codexPreference, identifier: "captain.preference.codex")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func preferenceEditor(_ title: String, text: Binding<String>,
+                                  identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.callout.weight(.medium))
+            TextEditor(text: text)
+                .font(.body)
+                .frame(minHeight: 64)
+                .accessibilityLabel(title)
+                .accessibilityIdentifier(identifier)
         }
     }
 

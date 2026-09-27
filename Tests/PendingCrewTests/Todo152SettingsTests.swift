@@ -50,6 +50,37 @@ final class Todo152SettingsTests: XCTestCase {
                        "an explicit tool request must override the global setting")
     }
 
+    func testTodo167CodingToolsOffersThreeNativePriorityChoices() throws {
+        let settings = try source("Sources/Mac/Views/CrewSettingsView.swift")
+        let coding = try XCTUnwrap(settings.components(separatedBy:
+            "private struct CodingToolsSettingsTab: View {").last?.components(separatedBy:
+            "private struct BackendsSettingsTab: View {").first)
+        XCTAssertTrue(coding.contains("Picker(\"优先使用\""),
+                      "编码工具页缺少机长工具优先级的原生三选一控件")
+        for label in ["Codex", "Claude Code", "自定义"] {
+            XCTAssertTrue(coding.contains("Text(\"\(label)\")"), "缺少 \(label) 选项")
+        }
+        XCTAssertTrue(coding.contains(".tint(Theme.Palette.accent)"),
+                      "选择控件须复用现有绿色主题")
+        XCTAssertTrue(coding.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(coding.contains(".accessibilityIdentifier(\"captain.preference.mode\")"))
+        let customOnly = try XCTUnwrap(coding.components(separatedBy:
+            "if captainPreference == .custom {").last?.components(separatedBy: "}").first)
+        XCTAssertTrue(customOnly.contains("customPreferenceEditors"),
+                      "只有自定义模式可见旧条件编辑区")
+        XCTAssertTrue(coding.contains("captainPreference = CaptainRunnerPreferences.preference()"))
+        let modeChange = try XCTUnwrap(coding.components(separatedBy:
+            ".onChange(of: captainPreference) { _, value in").last?.components(separatedBy:
+            ".onChange(of: claudePreference)").first)
+        XCTAssertTrue(modeChange.contains("CaptainRunnerPreferences.setPreference(value)"))
+        XCTAssertFalse(modeChange.contains("claudePreference ="))
+        XCTAssertFalse(modeChange.contains("codexPreference ="))
+        XCTAssertTrue(coding.contains("CaptainRunnerPreferences.get(.claudeCode)"))
+        XCTAssertTrue(coding.contains("CaptainRunnerPreferences.get(.codex)"))
+        XCTAssertTrue(coding.contains("CaptainRunnerPreferences.set(value, for: .claudeCode)"))
+        XCTAssertTrue(coding.contains("CaptainRunnerPreferences.set(value, for: .codex)"))
+    }
+
     func testPreferencePersistenceAndClear() throws {
         let name = "captain-preference-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
