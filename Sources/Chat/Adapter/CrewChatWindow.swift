@@ -227,6 +227,86 @@ enum CrewChatWindow {
     }
 }
 
+/// Opt-in, crew-scoped numeric scroll trace for Agent Todo #164.
+final class CrewChatScrollDiagnostic {
+    static let optInCrewIDKey = "CrewChatScrollDiagnosticCrewID"
+    static let maxSamples = 128
+
+    /// Only bounded numeric measurements leave the chat view; no IDs, text or credentials.
+    struct Sample: Codable, Equatable {
+        let timestampMs: Int64
+        let cause: Int
+        let offset: Double
+        let viewportHeight: Double
+        let contentHeight: Double
+        let firstWindowIndex: Int
+        let lastWindowIndex: Int
+        let visibleTopIndex: Int
+        let total: Int
+        let renderLimit: Int
+        let newMessages: Int
+    }
+
+    private let defaults: UserDefaults
+    private let capacity: Int
+    private let outputURL: URL
+    private var buffer: [Sample] = []
+    private var flushScheduled = false
+    private var lastGeometryAt: TimeInterval = -.infinity
+    private let writer = DispatchQueue(label: "CrewChatScrollDiagnostic.writer")
+
+    init(defaults: UserDefaults = .standard, capacity: Int = maxSamples,
+         outputURL: URL = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                    in: .userDomainMask)[0]
+            .appendingPathComponent("PendingCrew/Diagnostics/crew-chat-scroll.json")) {
+        self.defaults = defaults
+        self.capacity = min(max(capacity, 1), Self.maxSamples)
+        self.outputURL = outputURL
+    }
+
+    func isEnabled(for crewID: String) -> Bool {
+        defaults.string(forKey: Self.optInCrewIDKey) == crewID
+    }
+
+    func shouldCaptureGeometry(at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        time - lastGeometryAt >= 0.016
+    }
+
+    func record(crewID: String, _ sample: Sample, at time: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard isEnabled(for: crewID) else { return }
+        // Capture the first visible frame of a jump; never sample faster than
+        // a display frame. The ring and delayed file rewrite bound memory and IO.
+        if sample.cause == 0 {
+            guard shouldCaptureGeometry(at: time) else { return }
+            lastGeometryAt = time
+        }
+        buffer.append(sample)
+        if buffer.count > capacity { buffer.removeFirst(buffer.count - capacity) }
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.flush()
+        }
+    }
+
+    var samples: [Sample] { buffer }
+
+    /// Rewrites one small bounded file. Used by the delayed live flush and tests.
+    func flush() {
+        guard flushScheduled, !buffer.isEmpty else { return }
+        flushScheduled = false
+        guard let data = try? JSONEncoder().encode(buffer) else { return }
+        let url = outputURL
+        writer.async {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    func waitForWrites() { writer.sync {} }
+}
+
 #if os(macOS)
 /// macOS 14 没有 `onScrollGeometryChange` 和 `onScrollPhaseChange`；新系统也用此传感器
 /// 识别近顶时的滚动方向，避免「已在阈值内但向下滚」被 Bool 几何回调误判。
@@ -236,17 +316,20 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
     let scopeID: String
     let gestureBox: CrewChatWindow.WheelGestureBox
     let onUserScroll: (Int, Bool, Bool, Bool) -> Void
+    var onGeometry: ((CGFloat, CGFloat, CGFloat) -> Void)? = nil
 
     func makeNSView(context: Context) -> WheelView {
         let view = WheelView()
         view.scopeID = scopeID
         view.gestureBox = gestureBox
         view.onUserScroll = onUserScroll
+        view.onGeometry = onGeometry
         return view
     }
 
     func updateNSView(_ nsView: WheelView, context: Context) {
         nsView.onUserScroll = onUserScroll
+        nsView.onGeometry = onGeometry
         nsView.scopeID = scopeID
         nsView.gestureBox = gestureBox
         nsView.connect()
@@ -254,6 +337,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
 
     @MainActor final class WheelView: NSView {
         var onUserScroll: ((Int, Bool, Bool, Bool) -> Void)?
+        var onGeometry: ((CGFloat, CGFloat, CGFloat) -> Void)?
         var scopeID = "" {
             didSet {
                 if oldValue != scopeID {
@@ -265,8 +349,10 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
         var isConnected: Bool { trackedScroll != nil && wheelMonitor != nil }
         var attachedScrollView: NSScrollView? { trackedScroll }
         private weak var trackedScroll: NSScrollView?
+        private weak var trackedDocument: NSView?
         private var wheelMonitor: Any?
         private var boundsObserver: NSObjectProtocol?
+        private var frameObserver: NSObjectProtocol?
         var gestureBox = CrewChatWindow.WheelGestureBox()
         private var pendingGesture: Int?
         private var pendingTowardTop = false
@@ -288,7 +374,10 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
                 disconnect()
                 return
             }
-            guard trackedScroll !== scroll else { return }
+            guard trackedScroll !== scroll else {
+                connectDocument(scroll.documentView)
+                return
+            }
             disconnect()
             trackedScroll = scroll
             scroll.contentView.postsBoundsChangedNotifications = true
@@ -297,6 +386,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
                 queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.boundsChanged() }
                 }
+            connectDocument(scroll.documentView)
             wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 MainActor.assumeIsolated { self?.wheel(event) }
                 return event
@@ -305,11 +395,32 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
 
         private func disconnect() {
             if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+            if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
             boundsObserver = nil
+            frameObserver = nil
             wheelMonitor = nil
             trackedScroll = nil
+            trackedDocument = nil
             pendingGesture = nil
+        }
+
+        private func connectDocument(_ document: NSView?) {
+            guard onGeometry != nil, let document else {
+                if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+                frameObserver = nil
+                trackedDocument = nil
+                return
+            }
+            guard trackedDocument !== document else { return }
+            if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+            trackedDocument = document
+            document.postsFrameChangedNotifications = true
+            frameObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: document,
+                queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.boundsChanged() }
+                }
         }
 
         private func nearTop(_ scroll: NSScrollView) -> Bool {
@@ -366,7 +477,13 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
         }
 
         private func boundsChanged() {
-            guard let scroll = trackedScroll, let gesture = pendingGesture,
+            guard let scroll = trackedScroll else { return }
+            if let document = scroll.documentView {
+                let clip = scroll.contentView.bounds
+                let offset = document.isFlipped ? clip.minY : document.bounds.height - clip.maxY
+                onGeometry?(offset, clip.height, document.bounds.height)
+            }
+            guard let gesture = pendingGesture,
                   ProcessInfo.processInfo.systemUptime - pendingAt < 1.0,
                   movedInWheelDirection(scroll) else { return }
             pendingOriginY = scroll.contentView.bounds.minY
@@ -375,6 +492,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
 
         deinit {
             if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+            if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
         }
     }

@@ -135,10 +135,21 @@ final class CrewChatWindowTests: XCTestCase {
                       "旧系统和自动续载没触发时仍要有手动按钮")
         XCTAssertTrue(phase.contains("userScrollGeneration += 1"),
                       "内容增高不能伪装成新手势重复续载")
-        XCTAssertTrue(view.contains("LegacyTopApproachSensor(scopeID: crewId, gestureBox: wheelGestureBox)"),
+        XCTAssertTrue(view.contains("LegacyTopApproachSensor(") &&
+                      view.contains("scopeID: crewId, gestureBox: wheelGestureBox,"),
                       "所有 macOS 版本均以本聊天的真滚轮判方向与近顶")
         XCTAssertTrue(view.contains("bottomPin.leftBottomByUser()"),
                       "macOS 14 缺 SwiftUI 相位时真用户滚轮仍要能解除底部跟随")
+    }
+
+    func testOptInDiagnosticIsWiredToGeometryMessageChangesAndPaging() throws {
+        let view = try Self.source("Mac/Views/CrewChatView.swift")
+        XCTAssertTrue(view.contains("ChatScrollDiagnosticGeometry(enabled: scrollDiagnostic.isEnabled(for: crewId))"))
+        XCTAssertTrue(view.contains("onGeometry: legacyDiagnosticGeometry"),
+                      "macOS 14 须从当前聊天的本地传感器取数")
+        XCTAssertTrue(view.contains("recordScrollDiagnostic(cause: 1, newMessages: new - old)"))
+        XCTAssertTrue(view.contains("recordScrollDiagnostic(cause: 2)"))
+        XCTAssertTrue(view.contains("recordScrollDiagnostic(cause: 3)"))
     }
 
     func test_只渲染最近一页且保持时间顺序() {
@@ -371,6 +382,97 @@ final class CrewChatWindowTests: XCTestCase {
         XCTAssertEqual(CrewChatWindow.afterInsert(limit: 60, added: -5, isFollowing: false), 60)
     }
 
+}
+
+final class CrewChatScrollDiagnosticTests: XCTestCase {
+    private func sample(_ n: Int, cause: Int = 1) -> CrewChatScrollDiagnostic.Sample {
+        .init(timestampMs: Int64(n * 1_000), cause: cause, offset: Double(n), viewportHeight: 400,
+              contentHeight: 2400, firstWindowIndex: 70,
+              lastWindowIndex: 99, visibleTopIndex: 76,
+              total: 100, renderLimit: 30, newMessages: n)
+    }
+
+    private func temporaryTraceURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("crew-164-\(UUID().uuidString).json")
+    }
+
+    func testDisabledByDefaultAndBoundToOneCrew() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("crew-164-disabled-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let disabled = CrewChatScrollDiagnostic(defaults: defaults, outputURL: url)
+        disabled.record(crewID: "a", sample(1))
+        XCTAssertTrue(disabled.samples.isEmpty)
+        disabled.flush()
+        disabled.waitForWrites()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+
+        defaults.set("a", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        let enabled = CrewChatScrollDiagnostic(defaults: defaults, outputURL: url)
+        enabled.record(crewID: "b", sample(2))
+        enabled.record(crewID: "a", sample(3))
+        XCTAssertEqual(enabled.samples, [sample(3)])
+    }
+
+    func testTraceRetainsOnlyNewestNumericSamples() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("a", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        let trace = CrewChatScrollDiagnostic(defaults: defaults, capacity: 3,
+                                             outputURL: temporaryTraceURL())
+        for n in 0..<5 { trace.record(crewID: "a", sample(n)) }
+        XCTAssertEqual(trace.samples.map(\.offset), [2, 3, 4])
+        XCTAssertEqual(trace.samples.count, 3)
+    }
+
+    func testGeometryKeepsFirstFrameAndCapsSamplingToDisplayRate() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("a", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        let trace = CrewChatScrollDiagnostic(defaults: defaults, outputURL: temporaryTraceURL())
+        trace.record(crewID: "a", sample(1, cause: 0), at: 0)
+        trace.record(crewID: "a", sample(2, cause: 0), at: 0.001)
+        trace.record(crewID: "a", sample(3, cause: 0), at: 0.017)
+        XCTAssertEqual(trace.samples.map(\.offset), [1, 3])
+    }
+
+    func testRequestedCapacityCannotExceedGlobalLimit() {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("a", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        let trace = CrewChatScrollDiagnostic(defaults: defaults, capacity: 1024,
+                                             outputURL: temporaryTraceURL())
+        for n in 0..<200 { trace.record(crewID: "a", sample(n)) }
+        XCTAssertEqual(trace.samples.count, CrewChatScrollDiagnostic.maxSamples)
+        XCTAssertEqual(trace.samples.first?.offset, 72)
+    }
+
+    func testPersistedTraceIsBoundedAndContainsNumbersOnly() throws {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("private-crew-name", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("crew-164-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let trace = CrewChatScrollDiagnostic(defaults: defaults, capacity: 3, outputURL: url)
+        for n in 0..<5 { trace.record(crewID: "private-crew-name", sample(n)) }
+        trace.flush()
+        trace.waitForWrites()
+        let data = try Data(contentsOf: url)
+        let persisted = try JSONDecoder().decode([CrewChatScrollDiagnostic.Sample].self, from: data)
+        XCTAssertEqual(persisted.map(\.offset), [2, 3, 4])
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("private-crew-name"))
+        XCTAssertLessThan(data.count, 2_048)
+    }
 }
 
 #if os(macOS)

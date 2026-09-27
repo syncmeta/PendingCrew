@@ -77,6 +77,8 @@ struct CrewChatView: View {
     @State private var autoLoadGate = CrewChatWindow.AutoLoadGate()
     /// 传感器会随首屏 eager→lazy 重建；滚轮手势号须活在滚动视图这一层。
     @State private var wheelGestureBox = CrewChatWindow.WheelGestureBox()
+    /// Per-view reference box: a trace is active only when this exact crew ID is opted in.
+    @State private var scrollDiagnostic = CrewChatScrollDiagnostic()
 
     /// 渲染窗口上限（#443）：只把最近这么多条交给 `ForEach`。切 crew 时归位到一页。
     @State private var renderLimit = CrewChatWindow.pageSize
@@ -952,11 +954,12 @@ struct CrewChatView: View {
                 .padding(.vertical, 10)
                 #if os(macOS)
                 .background {
-                    LegacyTopApproachSensor(scopeID: crewId, gestureBox: wheelGestureBox) {
-                        gesture, nearTop, atBottom, towardTop in
-                        wheelScroll(gesture: gesture, nearTop: nearTop,
-                                    atBottom: atBottom, towardTop: towardTop)
-                    }
+                    LegacyTopApproachSensor(
+                        scopeID: crewId, gestureBox: wheelGestureBox,
+                        onUserScroll: { gesture, nearTop, atBottom, towardTop in
+                            wheelScroll(gesture: gesture, nearTop: nearTop,
+                                        atBottom: atBottom, towardTop: towardTop)
+                        }, onGeometry: legacyDiagnosticGeometry)
                     .frame(width: 0, height: 0)
                 }
                 #endif
@@ -997,6 +1000,10 @@ struct CrewChatView: View {
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
             // 不会逐帧改 @State，也不改变内容高度，因此没有布局自激的反馈边。
             .modifier(BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
+            .modifier(ChatScrollDiagnosticGeometry(enabled: scrollDiagnostic.isEnabled(for: crewId)) {
+                offset, viewport, content in
+                diagnosticGeometry(offset: offset, viewport: viewport, content: content)
+            })
             #if !os(macOS)
             .modifier(TopApproachTracker { autoLoadEarlier() })
             #endif
@@ -1019,6 +1026,7 @@ struct CrewChatView: View {
                     added: new - old, renderLimit: renderLimit, pin: bottomPin)
                 renderLimit = outcome.renderLimit
                 bottomPin = outcome.pin
+                recordScrollDiagnostic(cause: 1, newMessages: new - old)
                 if outcome.shouldLandAtBottom { landAtBottom(proxy, animated: true) }
                 locateSearchTarget(proxy)
             }
@@ -1048,6 +1056,7 @@ struct CrewChatView: View {
             .onChange(of: onlyMentions) { _, _ in
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
+                recordScrollDiagnostic(cause: 3)
                 // **有待定位的目标时不落底**（人类 Todo #132/#133）：筛选是为这次
                 // 定位才被收掉的（见 `CrewCenterView` 里那一行），落底会把刚跳过去
                 // 的位置抢回来 —— 症状是点了那颗胶囊，画面闪一下又回到最新一条，
@@ -1062,6 +1071,7 @@ struct CrewChatView: View {
             .onChange(of: searchText) { _, _ in
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
+                recordScrollDiagnostic(cause: 3)
                 landAtBottom(proxy, animated: false, force: true)
                 locateSearchTarget(proxy)
             }
@@ -1342,6 +1352,7 @@ struct CrewChatView: View {
             topAnchorBox.id = anchorID
         }
         renderLimit = CrewChatWindow.expanded(renderLimit, total: timelineEntries.count)
+        recordScrollDiagnostic(cause: 2)
     }
 
     private func wheelScroll(gesture: Int, nearTop: Bool, atBottom: Bool, towardTop: Bool) {
@@ -1349,6 +1360,42 @@ struct CrewChatView: View {
         if atBottom { bottomPin.reachedBottom() } else { bottomPin.leftBottomByUser() }
         guard CrewChatWindow.shouldAutoLoad(nearTop: nearTop, towardTop: towardTop) else { return }
         autoLoadEarlier(legacyGesture: gesture)
+    }
+
+    private func diagnosticGeometry(offset: CGFloat, viewport: CGFloat, content: CGFloat) {
+        guard scrollDiagnostic.isEnabled(for: crewId),
+              scrollDiagnostic.shouldCaptureGeometry() else { return }
+        topAnchorBox.diagnosticOffset = Double(offset)
+        topAnchorBox.diagnosticViewport = Double(viewport)
+        topAnchorBox.diagnosticContent = Double(content)
+        recordScrollDiagnostic(cause: 0)
+    }
+
+    private var legacyDiagnosticGeometry: ((CGFloat, CGFloat, CGFloat) -> Void)? {
+        guard scrollDiagnostic.isEnabled(for: crewId) else { return nil }
+        return { offset, viewport, content in
+            diagnosticGeometry(offset: offset, viewport: viewport, content: content)
+        }
+    }
+
+    private func recordScrollDiagnostic(cause: Int, newMessages: Int = 0) {
+        guard scrollDiagnostic.isEnabled(for: crewId) else { return }
+        let visible = timelineEntries
+        let shown = CrewChatWindow.clampedLimit(renderLimit, total: visible.count)
+        let first = visible.count - shown
+        let top = topAnchorBox.id.flatMap { id in visible.firstIndex(where: { $0.id == id }) } ?? -1
+        scrollDiagnostic.record(crewID: crewId, .init(
+            timestampMs: Int64(ProcessInfo.processInfo.systemUptime * 1_000),
+            cause: cause,
+            offset: topAnchorBox.diagnosticOffset,
+            viewportHeight: topAnchorBox.diagnosticViewport,
+            contentHeight: topAnchorBox.diagnosticContent,
+            firstWindowIndex: first,
+            lastWindowIndex: visible.isEmpty ? -1 : visible.count - 1,
+            visibleTopIndex: top,
+            total: visible.count,
+            renderLimit: renderLimit,
+            newMessages: newMessages))
     }
 
     private func autoLoadEarlier(legacyGesture: Int? = nil) {
@@ -1854,6 +1901,36 @@ private struct BottomOnContentGrowth: ViewModifier {
 /// `.scrollPosition(id:)` 的回写落点（Todo #60）。见 `CrewChatView.topAnchorBox`。
 private final class ChatTopAnchorBox {
     var id: String?
+    var diagnosticOffset = 0.0
+    var diagnosticViewport = 0.0
+    var diagnosticContent = 0.0
+}
+
+/// macOS 15 / iOS 18 geometry feed; disabled mode returns a constant projection.
+private struct ChatScrollDiagnosticGeometry: ViewModifier {
+    let enabled: Bool
+    let capture: (CGFloat, CGFloat, CGFloat) -> Void
+
+    private struct Geometry: Equatable {
+        let offset: CGFloat
+        let viewport: CGFloat
+        let content: CGFloat
+    }
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, iOS 18.0, *) {
+            content.onScrollGeometryChange(for: Geometry.self) { geo in
+                guard enabled else { return Geometry(offset: 0, viewport: 0, content: 0) }
+                return Geometry(offset: geo.contentOffset.y,
+                                viewport: geo.containerSize.height,
+                                content: geo.contentSize.height)
+            } action: { _, current in
+                if enabled { capture(current.offset, current.viewport, current.content) }
+            }
+        } else {
+            content
+        }
+    }
 }
 
 private struct ChatScrollAnchor: ViewModifier {
