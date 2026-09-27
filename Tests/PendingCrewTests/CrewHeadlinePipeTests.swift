@@ -170,6 +170,57 @@ final class CrewHeadlinePipeTests: XCTestCase {
         wall.replacingOccurrences(of: "\n", with: "\\n")
     }
 
+    func test_当前阶段单条和分条schema不硬性要求headline() throws {
+        let raw = try XCTUnwrap(server(fixture()).handleLine(
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+        let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+        let modes = try XCTUnwrap(schema["oneOf"] as? [[String: Any]])
+        let single = try XCTUnwrap(modes.first {
+            ($0["required"] as? [String])?.contains("message") == true
+        })
+        XCTAssertFalse((single["required"] as? [String])?.contains("headline") == true)
+        XCTAssertTrue(modes.contains {
+            ($0["required"] as? [String]) == ["messages"]
+        }, "分条入口不能被顶层单条必填项挡住")
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
+        let items = try XCTUnwrap(messages["items"] as? [String: Any])
+        XCTAssertFalse((items["required"] as? [String])?.contains("headline") == true)
+    }
+
+    func test_长消息显式空白headline仍发送并提醒() {
+        let f = fixture()
+        let r = post(server(f),
+            "{\"message\":\"\(wallEscaped)\",\"category\":\"note\",\"headline\":\"   \"}")
+        XCTAssertFalse(r.contains("ERROR"), r)
+        XCTAssertTrue(r.contains("没给 `headline`"), r)
+        XCTAssertEqual(board(f).count, 1)
+        XCTAssertNil(board(f).first?.headline)
+    }
+
+    func test_分条中长消息显式空白headline仍发送() {
+        let f = fixture()
+        let r = post(server(f),
+            "{\"messages\":[{\"text\":\"先说\",\"category\":\"note\",\"headline\":\"先说\"},"
+            + "{\"text\":\"\(wallEscaped)\",\"category\":\"note\",\"headline\":\"   \"}]}")
+        XCTAssertFalse(r.contains("ERROR"), r)
+        XCTAssertEqual(board(f).count, 2)
+        XCTAssertNil(board(f).last?.headline)
+    }
+
+    func test_必须有人接的短消息缺headline照发并提醒() {
+        let f = fixture()
+        let r = post(server(f), #"{"message":"需要答复","category":"question"}"#)
+        XCTAssertFalse(r.contains("ERROR"), r)
+        XCTAssertTrue(r.contains("必须有人接") && r.contains("headline"), r)
+        XCTAssertEqual(board(f).map(\.text), ["需要答复"])
+    }
+
     /// **schema 里的说明只在写之前被读到一次，而且多半没读。**
     /// 真正教得会人的是出错那一刻的那句话 —— 所以长消息没给结论时，
     /// 回执把**猜出来的那一行原样摆给作者看**：他一眼看出那不是他的结论。

@@ -201,7 +201,7 @@ final class McpServer {
                                     "required": ["text", "category"],
                                 ],
                             ],
-                            "headline": ["type": "string", "description": "**一句话说清「结果是什么」** —— 超过 8 行的消息在群里**默认收起**，收起态就只露这一行，人看不看正文全看它。\n\n**写结果，不写动作：**\n✅「闸门全绿，0.1.34 可以发」\n✅「病根是守卫问错了对象，已修，等接线」\n✅「这条要你拍：A 拒收 / B 降级，我倾向 B」\n❌「关于折叠标题的一些进展」（说了等于没说）\n❌「我改了 CrewMessageFold 和 McpServer」（这是过程，不是结果）\n❌ 把整段摘要粘进来（收起态只露一行，多的会被截掉）\n\n长度：约 60 个半角宽 ≈ **30 个汉字**，超了截断加省略号。\n**不给的话界面只能猜**（取正文前 3 段里第一个加粗）—— 猜出来的常常是句子中间某个强调词。真没结论可写，多半说明这条消息本身不该这么长。\n分条发送时它是**每条自己的**（写在 `messages` 里那一条上，顶层给会整批拒）。"],
+                            "headline": ["type": "string", "description": "`human_todo` / `question` / `blocked` 请写一句结论；当前阶段缺失或空白时消息照发，回执会提醒。`ack` / `note` 等短消息不用为此凑标题。超过 8 行的消息默认收起，给出 headline 时收起态优先显示它；没给时仍按旧消息规则从正文猜。分条发送时 headline 写在各条 `messages` 项里。"],
                             "category": ["type": "string", "enum": CrewMessageCategory.agentSelectable.map(\.rawValue), "description": "必填。这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的也要明确选：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。旧进程直调的旧值仍由运行时兼容。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
                             "todo_reference": ["type": "object", "description": "总机组只读引用执行组已有 Todo；source_crew 填 directory 的机组短号，ledger 填 agent/human，number 填来源账本编号。会当场核实并记录来源 crew 与稳定条目 ID；不创建或更改 Todo。", "properties": [
