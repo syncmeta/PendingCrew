@@ -108,11 +108,17 @@ enum CaptainRunnerProbe {
                let object = try? JSONSerialization.jsonObject(with: output) as? [String: Any],
                let loggedIn = object["loggedIn"] as? Bool {
                 auth = loggedIn && authResult.0 == 0 ? .confirmed : .required
-            } else if authResult.0 == 0 {
-                auth = .confirmed
+            } else if kind == .codex {
+                // The short-lived CLI status can fail in an app launch environment even
+                // when Codex's own app-server can read the active account. Ask that
+                // native control surface before rejecting a captain handoff.
+                let account = authResult.0 == 0 ? nil : readCodexAccount(executable)
+                auth = codexAuthentication(cliExit: authResult.0, account: account)
             } else {
-                auth = .unknown
+                auth = authResult.0 == 0 ? .confirmed : .unknown
             }
+        } else if kind == .codex {
+            auth = codexAuthentication(cliExit: nil, account: readCodexAccount(executable))
         } else {
             auth = .unknown
         }
@@ -145,6 +151,75 @@ enum CaptainRunnerProbe {
             .appendingPathComponent(CrewSessionsSnapshot.fileName)
         guard let data = try? Data(contentsOf: file) else { return nil }
         return try? JSONDecoder().decode(CrewSessionsSnapshot.self, from: data)
+    }
+
+    /// `account/read` is Codex's documented auth-state query. Unknown or malformed
+    /// responses remain unknown; neither CLI installation nor a healthy version
+    /// response is authentication evidence.
+    static func codexAuthentication(cliExit: Int32?, account: [String: Any]?)
+        -> CaptainRunnerCapability.Authentication {
+        if cliExit == 0 { return .confirmed }
+        guard let account else { return .unknown }
+        if account["account"] is NSNull {
+            return account["requiresOpenaiAuth"] as? Bool == true ? .required : .unknown
+        }
+        guard let current = account["account"] as? [String: Any],
+              let type = current["type"] as? String,
+              ["chatgpt", "apiKey", "amazonBedrock"].contains(type) else { return .unknown }
+        return .confirmed
+    }
+
+    /// Bounded one-shot app-server query, used only after the CLI status is
+    /// inconclusive. Never read or expose tokens, email, or the account payload.
+    static func readCodexAccount(_ executable: URL) -> [String: Any]? {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["app-server"]
+        process.environment = LocalCodingAgentEnv.build(additionalEnv: [:], kind: .codex)
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 12, execute: watchdog)
+        defer {
+            watchdog.cancel()
+            if process.isRunning { process.terminate() }
+        }
+
+        func send(_ object: [String: Any]) -> Bool {
+            guard var line = try? JSONSerialization.data(withJSONObject: object) else { return false }
+            line.append(0x0a)
+            do { try input.fileHandleForWriting.write(contentsOf: line); return true }
+            catch { return false }
+        }
+        guard send(["jsonrpc": "2.0", "id": 0, "method": "initialize",
+                    "params": ["clientInfo": ["name": "PendingCrew", "title": "PendingCrew",
+                                               "version": "1.0"],
+                               "capabilities": ["experimentalApi": false,
+                                                "requestAttestation": false]]]) else { return nil }
+        var buffer = Data()
+        var initialized = false
+        while true {
+            let chunk = output.fileHandleForReading.availableData
+            if chunk.isEmpty { return nil }
+            buffer.append(chunk)
+            while let newline = buffer.firstIndex(of: 0x0a) {
+                let line = Data(buffer[buffer.startIndex..<newline])
+                buffer.removeSubrange(buffer.startIndex...newline)
+                guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
+                else { continue }
+                if message["id"] as? Int == 0, !initialized {
+                    initialized = true
+                    guard send(["jsonrpc": "2.0", "method": "initialized", "params": [:]]),
+                          send(["jsonrpc": "2.0", "id": 1, "method": "account/read",
+                                "params": ["refreshToken": false]]) else { return nil }
+                } else if message["id"] as? Int == 1 {
+                    return message["result"] as? [String: Any]
+                }
+            }
+        }
     }
 
     private static func run(_ executable: URL, _ arguments: [String],

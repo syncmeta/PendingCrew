@@ -77,6 +77,47 @@ final class Todo152SettingsTests: XCTestCase {
         XCTAssertTrue(probe.contains("snapshot: loadRuntimeSnapshot()"))
     }
 
+    func testCodexNativeAccountReadRecoversOnlyConfirmedCLIProbeFailure() {
+        let chatgpt: [String: Any] = ["account": ["type": "chatgpt"],
+                                      "requiresOpenaiAuth": true]
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: nil, account: chatgpt),
+                       .confirmed)
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: 1, account: chatgpt),
+                       .confirmed)
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: 0, account: nil),
+                       .confirmed)
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: 1, account: nil),
+                       .unknown)
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: nil,
+            account: ["account": NSNull(), "requiresOpenaiAuth": true]), .required)
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: nil,
+            account: ["account": NSNull(), "requiresOpenaiAuth": false]), .unknown)
+    }
+
+    func testCodexNativeAccountReadUsesHandshakeAndDoesNotNeedATurn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("fake-codex")
+        let script = """
+        #!/bin/sh
+        IFS= read -r initialize || exit 1
+        printf '%s\\n' '{"jsonrpc":"2.0","id":0,"result":{}}'
+        IFS= read -r initialized || exit 1
+        IFS= read -r account_read || exit 1
+        case "$account_read" in
+          *account*read*) ;;
+          *) exit 2 ;;
+        esac
+        printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}}'
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let account = try XCTUnwrap(CaptainRunnerProbe.readCodexAccount(executable))
+        XCTAssertEqual(CaptainRunnerProbe.codexAuthentication(cliExit: nil, account: account),
+                       .confirmed)
+    }
+
     func testOldSessionSnapshotWithoutRunnerKindStillDecodes() throws {
         let json = """
         {"updatedAt":"2026-09-25T00:00:00Z","crews":{"crew-a":[{"sessionId":"one","name":"worker","role":"worker","brief":"","state":"idle"}]}}
