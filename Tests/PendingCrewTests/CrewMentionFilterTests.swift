@@ -171,13 +171,13 @@ final class CrewMentionFilterTests: XCTestCase {
         let filtered = CrewMentionFilter.onlyHumanMentions(all, roster: roster)
         XCTAssertEqual(filtered.count, 4)   // i = 0/13/26/39
 
-        // 未筛选时：一页 12 条，上面还有 28 条。
+        // 未筛选时：一页 30 条，上面还有 10 条。
         XCTAssertTrue(CrewChatWindow.hasMore(total: all.count, limit: CrewChatWindow.pageSize))
         XCTAssertEqual(
-            CrewChatWindow.remaining(total: all.count, limit: CrewChatWindow.pageSize), 28)
+            CrewChatWindow.remaining(total: all.count, limit: CrewChatWindow.pageSize), 10)
 
         // 筛选后：4 条不足一页 —— 「加载更早」必须消失、剩余数必须是 0。
-        // 若窗口仍按未筛选的 40 条算，这里会写着「上面还有 28 条」而点开空空如也。
+        // 若窗口仍按未筛选的 40 条算，这里会写着「上面还有 10 条」而点开空空如也。
         XCTAssertFalse(
             CrewChatWindow.hasMore(total: filtered.count, limit: CrewChatWindow.pageSize))
         XCTAssertEqual(
@@ -191,16 +191,16 @@ final class CrewMentionFilterTests: XCTestCase {
     /// 筛选后仍然长过一页时，`anchorOnExpand` 钉的是**筛选后**窗口的首条。
     func testExpandAnchorFollowsFilteredList() {
         var all: [CrewWhiteboardEntry] = []
-        for i in 0..<60 { all.append(entry(id: "n\(i)", text: i % 2 == 0 ? "@人 \(i)" : "闲聊 \(i)")) }
+        for i in 0..<80 { all.append(entry(id: "n\(i)", text: i % 2 == 0 ? "@人 \(i)" : "闲聊 \(i)")) }
         let filtered = CrewMentionFilter.onlyHumanMentions(all, roster: roster)
-        XCTAssertEqual(filtered.count, 30)
+        XCTAssertEqual(filtered.count, 40)
         let anchor = CrewChatWindow.anchorOnExpand(
             CrewChatWindow.window(filtered, limit: CrewChatWindow.pageSize),
             limit: CrewChatWindow.pageSize, isFollowing: false)
-        // 筛后 30 条的最后 12 条，首条是 filtered[18] —— 即原列表的 n36。
-        XCTAssertEqual(anchor?.id, "n36")
+        // 筛后 40 条的最后 30 条，首条是 filtered[10] —— 即原列表的 n20。
+        XCTAssertEqual(anchor?.id, "n20")
         XCTAssertEqual(
-            CrewChatWindow.insertedAbove(total: filtered.count, limit: CrewChatWindow.pageSize), 12)
+            CrewChatWindow.insertedAbove(total: filtered.count, limit: CrewChatWindow.pageSize), 10)
     }
 
     // MARK: - Roster 归一化 / 从成员列表构造
