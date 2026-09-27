@@ -524,6 +524,9 @@ session，因此原 §1.1 A1 的「更新不中断、三路径均不断线」不
 GitHub 而执行 0 条；改用本机缓存后，当前 main 全量 macOS 测试执行 2931 条，
 4 条跳过、1 条真进程 helper 用例失败（单独重跑通过）。细节见
 `2026-09-27-todo-84-main-audit.md`，不得借历史测试结果称当前全绿。
+其后 daemon 单独退出后的恢复提示已合入本地 main（`6e9053e`）；显式排除会触发
+系统弹窗的真进程 helper 夹具后，集成 suite 执行 2944 条、4 条跳过、0 失败。
+这证明本地源码的安全回归，不证明已安装 app 的 GUI 恢复弹窗。
 
 **实况**：P0–P3 早已合进 main；**P4 于 2026-09-04 合入 main（`a8f4597`）**，对齐 0.1.24。
 判据在 P4 worktree 实跑：全量 macOS 1828 passed / 3 skipped / 0 failed；macOS + iOS Simulator
