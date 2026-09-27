@@ -10,7 +10,7 @@ import Darwin
 ///
 /// 这一族分三截：
 ///   ① 纯判定（三态，读不出来 ≠ 一样）；
-///   ② **真进程**：把独立系统 Mach-O 拷进临时 App、命名为 PendingCrew 并带
+///   ② **真进程**：把独立系统 Mach-O 拷进临时包、命名为 PendingCrew 并带
 ///      `--mcp-serve` argv 起起来，再照 Sparkle 的形状把包挪走、原路径换上新的 ——
 ///      必须判成「旧」；
 ///   ③ 接线：点名那一列、界面那枚标、编排者每拍写快照那一行，少一处就红。
@@ -172,12 +172,14 @@ final class HelperBuildPerMemberTests: XCTestCase {
         return shell
     }
 
-    /// 在 `root` 下造一个 `PendingCrew.app`：可执行文件是真二进制的拷贝（`extraBytes`
-    /// 追加在尾巴上，好让「新版」是另一份内容），Info.plist 写指定版本。
+    /// 在 `root` 下造一个非 .app 的临时包，避免 macOS 把假 PendingCrew.app
+    /// 当作 GUI 应用校验并弹系统框。仍保留 Contents/MacOS、Info.plist 和
+    /// PendingCrew 可执行文件名，供进程扫描及版本取证走原路径。
+    /// `extraBytes` 追加在尾巴上，好让「新版」是另一份内容。
     @discardableResult
     private func makeRealBundle(at root: URL, from exe: URL, version: String, commit: String,
                                 extraBytes: Int = 0) throws -> URL {
-        let macos = root.appendingPathComponent("PendingCrew.app/Contents/MacOS")
+        let macos = root.appendingPathComponent("PendingCrew-fixture/Contents/MacOS")
         try FileManager.default.createDirectory(at: macos, withIntermediateDirectories: true)
         let dst = macos.appendingPathComponent("PendingCrew")
         try FileManager.default.copyItem(at: exe, to: dst)
@@ -190,8 +192,37 @@ final class HelperBuildPerMemberTests: XCTestCase {
         let plist: [String: Any] = ["CFBundleShortVersionString": version,
                                     "CFBundleVersion": "1", "BuildStampCommit": commit]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-            .write(to: root.appendingPathComponent("PendingCrew.app/Contents/Info.plist"))
+            .write(to: root.appendingPathComponent("PendingCrew-fixture/Contents/Info.plist"))
         return dst
+    }
+
+    /// 只检查磁盘夹具；绝不启动这份临时可执行文件。
+    func test_真进程夹具不伪装成App包_移包后原路径判旧() throws {
+        let root = tempDir("fixture-layout")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let apps = root.appendingPathComponent("Applications")
+        let executable = try makeRealBundle(at: apps, from: processFixtureExecutable(),
+                                            version: "0.1.30", commit: "aaaaaaa1111")
+        XCTAssertEqual(executable.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().lastPathComponent, "PendingCrew-fixture")
+        XCTAssertEqual(executable.lastPathComponent, "PendingCrew")
+        let running = try XCTUnwrap(HelperBuildStamp.read(executable: executable))
+        XCTAssertTrue(running.versionText?.contains("0.1.30") == true)
+
+        let caches = root.appendingPathComponent("Caches")
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: apps.appendingPathComponent("PendingCrew-fixture"),
+                                         to: caches.appendingPathComponent("PendingCrew-fixture"))
+        try makeRealBundle(at: apps, from: processFixtureExecutable(),
+                           version: "0.1.32", commit: "bbbbbbb2222", extraBytes: 64)
+        let helper = HelperProcessRecord(pid: 1, crewId: "c", sessionId: "s",
+                                         launchPath: executable.path, running: running)
+        let result = HelperProcessForensics.report(crewId: "c", sessionId: "s", helpers: [helper],
+            onDisk: { HelperBuildStamp.read(executable: URL(fileURLWithPath: $0)) })
+        XCTAssertEqual(helper.launchPath, executable.path)
+        XCTAssertEqual(result.verdict, .stale)
+        XCTAssertTrue(result.runningVersion?.contains("0.1.30") == true)
+        XCTAssertTrue(result.diskVersion?.contains("0.1.32") == true)
     }
 
     private func waitForHelper(session: String, timeout: TimeInterval = 15) -> HelperProcessRecord? {
@@ -255,15 +286,15 @@ final class HelperBuildPerMemberTests: XCTestCase {
         // Sparkle 的形状：旧包整个挪进 Caches，原路径放上新包。
         let caches = root.appendingPathComponent("Caches/org.sparkle-project.Sparkle/Installation/x")
         try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: apps.appendingPathComponent("PendingCrew.app"),
-                                         to: caches.appendingPathComponent("PendingCrew.app"))
+        try FileManager.default.moveItem(at: apps.appendingPathComponent("PendingCrew-fixture"),
+                                         to: caches.appendingPathComponent("PendingCrew-fixture"))
         // Stage the replacement elsewhere, then swap the bundle into place as
         // Sparkle does. macOS 27 may deny writes inside a running app's old path.
         let staging = root.appendingPathComponent("Staging")
         try makeRealBundle(at: staging, from: exe, version: "0.1.32",
                            commit: "bbbbbbb2222", extraBytes: 64)
-        try FileManager.default.moveItem(at: staging.appendingPathComponent("PendingCrew.app"),
-                                         to: apps.appendingPathComponent("PendingCrew.app"))
+        try FileManager.default.moveItem(at: staging.appendingPathComponent("PendingCrew-fixture"),
+                                         to: apps.appendingPathComponent("PendingCrew-fixture"))
 
         guard let after = waitForHelper(session: session) else {
             return XCTFail("换包之后找不到这个 helper 了 —— 它是否活着：\(proc.isRunning)")
