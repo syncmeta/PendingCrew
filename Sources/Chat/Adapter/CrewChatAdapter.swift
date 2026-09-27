@@ -52,6 +52,7 @@ enum CrewChatAdapter {
             sender_id: e.senderUserId ?? e.senderBotId ?? e.senderSessionId ?? e.id,
             content: e.displayText,
             headline: e.headline,
+            isProblem: isProblem(e),
             attachments: attachments,
             status: nil,
             mine: s.isMine          // single source of truth — CrewSenderResolver
@@ -88,5 +89,17 @@ enum CrewChatAdapter {
             senderKind: e.senderKind, senderSessionId: e.senderSessionId)
 
         return (msg, sender)
+    }
+
+    /// 新消息按结构化 category；旧版事故行没有分类，只对系统作者识别故障词。
+    private static func isProblem(_ entry: CrewWhiteboardEntry) -> Bool {
+        if ["error", "incident", "warning"].contains(entry.category ?? "") { return true }
+        guard entry.category == nil,
+              PendingCrewSystemMessage.isSystem(
+                  senderKind: entry.senderKind, senderSessionId: entry.senderSessionId)
+        else { return false }
+        let text = entry.displayText
+        return ["读不出来", "写不进去", "唤醒失败", "启动失败", "连不上", "不可用"]
+            .contains { text.contains($0) }
     }
 }

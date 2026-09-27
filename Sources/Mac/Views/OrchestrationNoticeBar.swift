@@ -1,7 +1,7 @@
 #if os(macOS)
 import SwiftUI
 
-/// **「这个窗口现在到底管不管事」的那一条横幅**（前后端分离 §6.2 闸门 2）。
+/// **整个窗口的编排冲突或临时接管横幅**。单一后端的连接态在侧栏对应后端显示。
 ///
 /// ## 它不是装饰，它是这道闸门的最后一段
 ///
@@ -66,24 +66,14 @@ private struct NoticeBar: View {
                       background: Theme.Palette.dangerBg,
                       title: "本窗口没有接管后台编排",
                       detail: detail)
-        case let .connecting(detail):
-            NoticeBar(symbol: "bolt.horizontal.circle.fill",
-                      tint: Theme.Palette.amber,
-                      background: Theme.Palette.amberBg,
-                      title: "正在连接后台进程…",
-                      detail: detail)
+        case .connecting, .refused:
+            EmptyView()
         case let .localFallback(detail):
             // **一直挂着**，不是弹一下就没 —— 临时模式必须随时看得出来。
             NoticeBar(symbol: "arrow.triangle.2.circlepath.circle.fill",
                       tint: Theme.Palette.amber,
                       background: Theme.Palette.amberBg,
                       title: "后台起不来，已临时由本窗口接管",
-                      detail: detail)
-        case let .refused(detail):
-            NoticeBar(symbol: "exclamationmark.triangle.fill",
-                      tint: Theme.Palette.danger,
-                      background: Theme.Palette.dangerBg,
-                      title: "后台连不上，本窗口不接管编排",
                       detail: detail)
         }
     }

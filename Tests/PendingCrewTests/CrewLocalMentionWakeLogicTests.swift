@@ -146,6 +146,14 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
         XCTAssertNil(out.first!.senderSessionId)
     }
 
+    func testLedgerDiagnosticWithoutMentionDoesNotWakeAnySession() {
+        let legacy = entry("session", sessionId: "system",
+                           text: "codex 原生审批账本：这次读不出来", name: "系统")
+        let current = entry("pendingcrew", sessionId: "system",
+                            text: "Todo 列表（Agent 的）：这次读不出来", name: "PendingCrew")
+        XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [legacy, current]).isEmpty)
+    }
+
     func testSenderLabelFallbacks() {
         // 无显示名的 captain → 「机长」；无名 session → session:<前6>。
         let cap = entry("captain", sessionId: "cap-1",

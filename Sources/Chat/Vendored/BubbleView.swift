@@ -148,7 +148,7 @@ struct BubbleView<Menu: View>: View {
                         .background(
                             RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,
                                              style: .continuous)
-                                .fill(Theme.Palette.surface)
+                                .fill(message.isProblem ? Theme.Palette.dangerBg : Theme.Palette.surface)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,

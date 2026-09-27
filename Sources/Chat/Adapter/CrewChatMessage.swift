@@ -46,6 +46,8 @@ struct CrewChatMessage: Identifiable, Hashable {
     /// 渲染端退回 `CrewMessageFold` 的猜法。**不是** `CrewWhiteboardEntry.summary`
     /// （那个是正文兜底），见那边的注释。
     var headline: String? = nil
+    /// 群内故障/异常消息以淡红底呈现；与发送失败状态不同。
+    var isProblem: Bool = false
     let attachments: [Attachment]?
 
     // ── Send-state ────────────────────────────────────────────────────────────
@@ -82,6 +84,7 @@ struct CrewChatMessage: Identifiable, Hashable {
         sender_id: String,
         content: String,
         headline: String? = nil,
+        isProblem: Bool = false,
         attachments: [Attachment]? = nil,
         status: String? = nil,
         mine: Bool = false
@@ -91,6 +94,7 @@ struct CrewChatMessage: Identifiable, Hashable {
         self.sender_id = sender_id
         self.content = content
         self.headline = headline
+        self.isProblem = isProblem
         self.attachments = attachments
         self.status = status
         self.mine = mine

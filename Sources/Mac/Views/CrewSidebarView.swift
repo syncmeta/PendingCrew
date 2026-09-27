@@ -21,6 +21,7 @@ struct CrewSidebarView: View {
     /// crew 级「最后看过」时间（UserDefaults）—— 已隐藏那行算未读的第二个参照点。
     @ObservedObject private var viewed = CrewViewedStore.shared
     @ObservedObject private var quota = QuotaCenter.shared
+    @EnvironmentObject private var sessionHost: SessionHost
     /// 层级 / 时间流（Todo #50）。写 UserDefaults，与外观模式同一条持久化路子 ——
     /// 用户切过一次，下次开 app 还停在那儿。默认层级（不动现有肌肉记忆）。
     @AppStorage(CrewSidebarViewMode.storageKey) private var viewModeRaw = CrewSidebarViewMode.default.rawValue
@@ -40,6 +41,10 @@ struct CrewSidebarView: View {
         VStack(spacing: 0) {
             viewModePicker
             List {
+                if let viewer = sessionHost.viewer {
+                    BackendSidebarConnectionStatus(
+                        client: viewer, decision: sessionHost.orchestrationDecision)
+                }
                 switch viewMode {
                 case .hierarchy:
                     ForEach(machineGroups) { group in
@@ -447,6 +452,52 @@ struct CrewSidebarView: View {
         }
     }
 
+}
+
+/// 连接问题属于被选中的后端，不是整扇窗口的全局横幅。
+private struct BackendSidebarConnectionStatus: View {
+    @ObservedObject var client: ViewerSessionClient
+    let decision: OrchestrationGate.Decision?
+
+    var body: some View {
+        let notice = OrchestrationNotice.resolve(
+            decision: decision,
+            viewer: .init(isConnected: client.isConnected, lastError: client.lastError,
+                          fallback: client.fallback))
+        switch notice {
+        case let .connecting(detail):
+            Section {
+                statusRow("正在连接", detail: detail,
+                          symbol: "arrow.triangle.2.circlepath", tint: Theme.Palette.amber)
+            } header: {
+                Text(client.selectedBackendName)
+            }
+        case let .refused(detail):
+            Section {
+                statusRow("连接不可用", detail: detail,
+                          symbol: "exclamationmark.triangle.fill", tint: Theme.Palette.danger)
+                    .listRowBackground(Theme.Palette.dangerBg)
+            } header: {
+                Text(client.selectedBackendName)
+            }
+        case .none, .conflict, .localFallback:
+            EmptyView()
+        }
+    }
+
+    private func statusRow(_ title: String, detail: String, symbol: String, tint: Color) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.callout.weight(.medium)).foregroundStyle(tint)
+                if !detail.isEmpty {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(3).help(detail)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
 }
 
 #endif

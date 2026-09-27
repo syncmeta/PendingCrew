@@ -318,11 +318,14 @@ final class CockpitPlanStore: @unchecked Sendable {
     /// 专门用来留痕的东西自己静默失败。三本账（Todo / 机长任务列表 / codex 审批）
     /// 用同一个形状，别只改一处。
     private func reportIncident(crewId: String, _ incident: MultiProcessJSONStore.LedgerIncident) {
+        let key = "\(directory.path)|plan|\(crewId)|\(incident.summary)"
+        guard LedgerIncidentNoticeGate.shared.shouldEmit(key: key) else { return }
         let text = "机长任务列表：" + incident.summary
         do {
             _ = try LocalWhiteboardStore(directory: directory)
                 .appendSessionMessageReportingFailure(
-                    crewId: crewId, sessionId: "system", text: text, senderName: "系统")
+                    crewId: crewId, sessionId: "system", text: text,
+                    category: "error", senderName: "系统")
         } catch {
             NSLog("[PendingCrew] 账本事故没能写进白板（白板多半也读不出来）：%@ / %@",
                   text, error.localizedDescription)

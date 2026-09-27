@@ -64,6 +64,20 @@ private func makeMember(
 
 final class CrewChatAdapterTests: XCTestCase {
 
+    func testLegacySystemLedgerFailureIsProblemButOrdinaryProgressIsNot() throws {
+        let failure = try makeEntry(
+            senderKind: "pendingcrew", senderSessionId: "system",
+            summary: "codex 原生审批账本：这次读不出来")
+        let progress = try makeEntry(
+            senderKind: "pendingcrew", senderSessionId: "system", summary: "后台已恢复")
+        let failureBubble = CrewChatAdapter.adapt(
+            failure, members: [], captainBotId: nil, localUserId: "local-byok-user").0
+        let progressBubble = CrewChatAdapter.adapt(
+            progress, members: [], captainBotId: nil, localUserId: "local-byok-user").0
+        XCTAssertTrue(failureBubble.isProblem)
+        XCTAssertFalse(progressBubble.isProblem)
+    }
+
     // ── 1. Own user message → isMine true, groupSender nil ───────────────────
 
     func testOwnUserMessage_isMineAndNoGroupSender() throws {

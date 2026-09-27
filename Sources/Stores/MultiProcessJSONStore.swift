@@ -490,6 +490,27 @@ enum MultiProcessJSONStore {
     }
 }
 
+/// 同一进程周期性重读一份坏账时，事故在群里至多按窗口报一次。
+/// 只抑制重复通知，不改变读失败的返回值或任何写入/归档判定。
+final class LedgerIncidentNoticeGate: @unchecked Sendable {
+    static let shared = LedgerIncidentNoticeGate()
+    private let lock = NSLock()
+    private var lastByKey: [String: Date] = [:]
+
+    func shouldEmit(key: String, now: Date = Date(), minimumInterval: TimeInterval = 60 * 60) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let last = lastByKey[key], now.timeIntervalSince(last) < minimumInterval {
+            return false
+        }
+        lastByKey[key] = now
+        if lastByKey.count > 2048 {
+            lastByKey = lastByKey.filter { now.timeIntervalSince($0.value) < minimumInterval }
+        }
+        return true
+    }
+}
+
 /// 逐条 lenient 解码壳（②）：元素解码失败吞成 `nil`（丢那一条），不让单条坏行
 /// 把整个数组解码失败连坐成空表。新旧 schema 混跑时只丢真坏的。
 private struct FailableRow<Row: Decodable>: Decodable {
@@ -598,4 +619,3 @@ struct LedgerSpool<Payload: Codable> {
         return all.filter { $0.hasPrefix(key + ".") && $0.hasSuffix(".json") }.sorted()
     }
 }
-

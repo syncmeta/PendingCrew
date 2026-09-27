@@ -14,6 +14,7 @@ final class CrewLocalWhiteboardMappingTests: XCTestCase {
         id: String = "m1",
         senderKind: String = "session",
         senderUserId: String? = nil,
+        category: String? = nil,
         references: [CrewMessageReference]? = nil,
         inReplyTo: String? = nil,
         mentions: [LocalWhiteboardMention]? = nil
@@ -21,7 +22,7 @@ final class CrewLocalWhiteboardMappingTests: XCTestCase {
         var m = LocalWhiteboardMessage(
             id: id, senderKind: senderKind, senderUserId: senderUserId,
             senderSessionId: senderKind == "session" ? "s1" : nil,
-            category: nil, text: "正文", createdAt: "2026-01-01T00:00:00Z")
+            category: category, text: "正文", createdAt: "2026-01-01T00:00:00Z")
         m.senderName = "小绿"
         m.references = references
         m.inReplyTo = inReplyTo
@@ -70,6 +71,15 @@ final class CrewLocalWhiteboardMappingTests: XCTestCase {
         // 本机人类自己发的不折 senderName（否则中栏会把自己误判成 relay → 左对齐）。
         XCTAssertNil(CrewLocalWhiteboardMapping.entry(
             message(senderKind: "user")).senderDisplayName)
+    }
+
+    func test_错误类别保留到气泡渲染() {
+        let entry = CrewLocalWhiteboardMapping.entry(
+            message(senderKind: "pendingcrew", category: "error"))
+        XCTAssertEqual(entry.category, "error")
+        let (bubble, _) = CrewChatAdapter.adapt(
+            entry, members: [], captainBotId: nil, localUserId: "local-byok-user")
+        XCTAssertTrue(bubble.isProblem)
     }
 }
 #endif

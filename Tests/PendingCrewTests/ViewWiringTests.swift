@@ -1293,6 +1293,16 @@ final class ViewWiringTests: XCTestCase {
             .contains("enum ApprovalRPC"))
     }
 
+    func testBackendConnectionStatusIsInSidebarAndProblemBubblesHaveRedWash() throws {
+        let sidebar = try Self.codeOnly(Self.text(of: "CrewSidebarView.swift"))
+        let notice = try Self.codeOnly(Self.text(of: "OrchestrationNoticeBar.swift"))
+        let bubble = try Self.codeOnly(Self.text(of: "BubbleView.swift"))
+        XCTAssertTrue(sidebar.contains("BackendSidebarConnectionStatus("))
+        XCTAssertFalse(notice.contains("case let .connecting(detail):"))
+        XCTAssertFalse(notice.contains("case let .refused(detail):"))
+        XCTAssertTrue(bubble.contains("message.isProblem ? Theme.Palette.dangerBg"))
+    }
+
     private static func projectText(of relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

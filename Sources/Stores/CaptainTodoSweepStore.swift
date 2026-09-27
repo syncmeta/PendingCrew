@@ -22,7 +22,7 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         var confirmation: CaptainTodoSweep.Confirmation?
         /// 上一次**真的发出去**的提醒时刻（ISO8601）。没发过 = nil。
         var lastRemindedAt: String?
-        /// 连续几次是因为「账读不出来」而提醒的（计划 #98 的退避档位）。nil = 0。
+        /// 旧版「账读不出来」提醒的退避档位；保留字段以兼容盘上记录。新版不再因此唤醒。
         var unreadableStreak: Int?
     }
 

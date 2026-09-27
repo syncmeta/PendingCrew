@@ -80,6 +80,11 @@ final class ViewerSessionClient: ObservableObject {
 
     var selectedBackendID: String? { selection.backendID }
 
+    var selectedBackendName: String {
+        if case let .selected(ref) = selection { return ref.displayName }
+        return "所选后端"
+    }
+
     func start() {
         stopped = false
         switch selection {

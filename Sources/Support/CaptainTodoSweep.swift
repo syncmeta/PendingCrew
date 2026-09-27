@@ -115,22 +115,11 @@ enum CaptainTodoSweep {
     static func decide(open snapshot: LedgerSnapshot, confirmation: Confirmation?,
                        lastRemindedAt: Date?, unreadableStreak: Int,
                        now: Date, minimumInterval: TimeInterval) -> Decision {
-        // 读不出来 → **提醒，不静默**（机长 2026-09-08 裁定）。
-        // 静默的代价是「账上可能挂着一堆而没人知道」，提醒的代价只是多问一句。
-        //
-        // 两件事刻意不同于正常路径：
-        // - **有过确认也不管用**：确认覆盖的是**某一批具体条目**，而现在根本不知道
-        //   有哪些条目，拿旧确认去盖一次读失败等于用过期的账销今天的号。
-        // - **间隔按退避拉长**（计划 #98）：一窗故障能长到 9 小时，固定地板也要叫 37 次，
-        //   每次都烧一轮额度。1×→2×→4×→8× 封顶，**封顶之后照叫** —— 不熄灭。
+        // 账本 IO 故障不是 agent 能修复的待办：错误留给系统告警/界面，不能
+        // 借空闲核账把同一事故周期性塞给 LLM（人类 Todo #157）。读得回来后，
+        // 正常未完成条目的核账提醒仍照旧。
         if case .unreadable = snapshot {
-            let gap = unreadableGap(streak: unreadableStreak, minimumInterval: minimumInterval)
-            if let lastRemindedAt, now.timeIntervalSince(lastRemindedAt) < gap {
-                return .silent("账本读不出来，已连续提醒 \(unreadableStreak) 次，这一档要隔 \(minutes(gap)) 分钟，还没到")
-            }
-            let nth = unreadableStreak + 1
-            return .remind(unreadableText(
-                nth: nth, nextAfter: unreadableGap(streak: nth, minimumInterval: minimumInterval)))
+            return .silent("账本读不出来；已由系统错误通道报告，不唤醒 agent")
         }
         guard case let .read(open) = snapshot else { return .silent("不可达") }
         // ① 一条未完成都没有 —— 没什么可问的。**一条永远报「已知没事」的提醒会训练
@@ -153,43 +142,7 @@ enum CaptainTodoSweep {
         return .remind(text(open: open, uncovered: uncovered.sorted()))
     }
 
-    /// 读不出来时说的话。**刻意不提 `confirm_todo_sweep`** —— 机长此刻交不出账，
-    /// 那条建议只会让它撞墙，然后学会忽略整条提醒。
-    ///
-    /// **也刻意不保证白板上有警示**（2026-09-12 改）。原文写的是「群聊白板上**应该**
-    /// 有一条系统警示」，而事实相反：`LocalTodoStore.reportIncident` 走
-    /// `LocalWhiteboardStore.appendSessionMessage`，而 append **要先把整份白板读一遍**，
-    /// 读不了就 `throw unreadableAndPreserved` 整条拒写（2026-08-12 P0 的不变式：
-    /// 读不出来 ≠ 内容损坏，一个字节都不许动）。于是**整个数据目录读不出来的那种事故里
-    /// ——也就是这条提醒最常出现的那种——那条警示必然不存在**，而这段话正把人支去找它。
-    ///
-    /// **开头就说是第几次、下次多久**（计划 #98）：同一本账读不出来的第 5 次提醒，
-    /// 读起来要跟第 1 次不一样，否则机长每次都从头定性一遍。
-    private static func unreadableText(nth: Int, nextAfter: TimeInterval) -> String {
-        let which = nth == 1
-            ? "这是第 1 次提醒"
-            : "这是第 \(nth) 次提醒 —— **不是新情况**，还是同一本账读不出来"
-        return """
-    你停下来了，但**这本 Todo 账这次读不出来** —— 所以我没法告诉你还剩几条没做。\(which)；下一次最早在 \(minutes(nextAfter)) 分钟后（而且要等你再停下来一次才会问）。
-
-    这不是「没事了」：账上可能挂着一堆，只是这一刻看不见。
-
-    白板上**可能**有一条系统警示说明是哪种事故（打不开 / 读到空但文件非空 / 解不开已归档）。**但白板自己也读不出来时，那条警示根本写不进去** —— 追加一条要先把整份读一遍，读不了就整条拒写。整个数据目录出事时就是这样。所以**白板上没有警示不等于账本没事**，那反而是「连白板也读不了」的旁证：先去看那个目录还能不能读。
-
-    先把账弄回可读，再回来核。**在那之前这条提醒会继续问你** —— 一条存在意义就是不让沉默发生的通道，不该在自己读失败时先沉默下去。但间隔按 1×→2×→4×→8× 拉长、到 8× 不再变长：一窗故障能持续几个小时，每次都叫只是在烧额度。账读得回来那一刻，档位清零。
-
-    **它一直响不等于你该一直等。** 读不出来时这些事照样做得了（2026-09-12 那次断了 8.5 小时，是这么过来的）：
-    - **git 还通** —— 改代码、跑测试、提交、推，一样不受影响。数据目录瞎了，仓库没瞎。
-    - **先定性，别用「界面看起来正常」判**（存盘走整份原子写，文件 mtime 照动）。两分钟：在数据目录里**自己新建一个文件再打开读它** —— 读不回来就是这一族；再拿别的 app 的 Application Support 同样试一次做对照。（在 PendingCrew 仓库里可以直接 `sh scripts/diagnose-data-dir.sh`；**别的工作目录没有这个脚本**。）
-    - **别逐分钟重试**。架一个后台哨盯恢复，然后去做别的；恢复那一刻再回来核账。
-    - **群聊发不出去，但入队可以** —— `message_child_crew` 是新建文件，属于放行那一侧。
-    """
-    }
-
-    private static func minutes(_ seconds: TimeInterval) -> Int {
-        Int((seconds / 60).rounded())
-    }
-
+    /// 对可读且有未完成条目的账，生成给机长的一次核账提醒。
     private static func text(open: Set<Int>, uncovered: [Int]) -> String {
         let newlyLine = uncovered.count == open.count
             ? ""

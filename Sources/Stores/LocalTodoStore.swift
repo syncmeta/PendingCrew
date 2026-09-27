@@ -707,11 +707,14 @@ final class LocalTodoStore: @unchecked Sendable {
     /// 现在改成报错的那一支，写不成就退到系统日志 —— **别让一条专门用来留痕的东西
     /// 自己静默失败**（同一条毛病在 `CrewLocalMentionWaker` 的留痕上也治过一次）。
     private func reportIncident(crewId: String, _ incident: MultiProcessJSONStore.LedgerIncident) {
+        let key = "\(directory.path)|todo|\(ledger.rawValue)|\(crewId)|\(incident.summary)"
+        guard LedgerIncidentNoticeGate.shared.shouldEmit(key: key) else { return }
         let text = ledger.incidentSubject + "：" + incident.summary
         do {
             _ = try LocalWhiteboardStore(directory: directory)
                 .appendSessionMessageReportingFailure(
-                    crewId: crewId, sessionId: "system", text: text, senderName: "系统")
+                    crewId: crewId, sessionId: "system", text: text,
+                    category: "error", senderName: "系统")
         } catch {
             // ⚠️ 这条 catch 是整条链上**最该说清楚**的一句：那条系统警示的作用就是
             // 「让人知道账出事了」，而这类故障里白板跟账本在同一棵树下，**两个一起瞎**。

@@ -15,6 +15,15 @@ import XCTest
 /// 不去真把机器逼到 fd 耗尽 —— 那会波及正在跑的 app。root 下 chmod 拦不住读，
 /// 所以 root 环境自动跳过。
 final class MultiProcessJSONStoreReadFailureTests: XCTestCase {
+    func testRepeatedReadFailureReportsAtMostOncePerWindowAndSubject() {
+        let gate = LedgerIncidentNoticeGate()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertTrue(gate.shouldEmit(key: "crew|todo|EPERM", now: now))
+        XCTAssertFalse(gate.shouldEmit(key: "crew|todo|EPERM", now: now.addingTimeInterval(30)))
+        XCTAssertTrue(gate.shouldEmit(key: "crew|plan|EPERM", now: now.addingTimeInterval(30)))
+        XCTAssertTrue(gate.shouldEmit(key: "crew|todo|EPERM", now: now.addingTimeInterval(3600)))
+    }
+
     private struct Row: Codable, Equatable {
         let id: String
         let text: String

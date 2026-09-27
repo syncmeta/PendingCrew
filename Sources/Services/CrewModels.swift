@@ -95,6 +95,8 @@ struct CrewWhiteboardEntry: Codable, Identifiable, Equatable {
     ///
     /// `var` + 默认 nil 的理由同 `references`：这个类型被大量测试直接 memberwise 构造。
     var headline: String? = nil
+    /// 本地群消息分类；旧记录/远端消息没有时保持 nil。
+    var category: String? = nil
 
     struct Payload: Codable, Equatable {
         let text: String?
@@ -117,6 +119,7 @@ struct CrewWhiteboardEntry: Codable, Identifiable, Equatable {
         case mentions
         case references
         case headline
+        case category
     }
 
     /// Best display text: explicit payload text → summary → empty.
