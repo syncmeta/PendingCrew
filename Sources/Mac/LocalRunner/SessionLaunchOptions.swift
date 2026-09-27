@@ -18,6 +18,10 @@ import Foundation
 /// 下面 `defaultModelResolution` 那条（claude 读 env/settings，codex 读
 /// config.toml）。给清单不给默认腿，机长照样不知道不填会跑什么。
 enum SessionLaunchOptions {
+    /// 运行中模型菜单传给编排层的内部值。它不是 Codex model slug；runner 收到后
+    /// 会解析当前默认的真实 slug、切换 live thread，再清掉持久 model 覆盖。
+    static let codexDefaultModelSelection = "__pendingcrew_codex_default__"
+
     /// `LocalCodingAgentKind` → 目录里两家表的键（"claude" / "codex"）。
     /// 表那一层是跨平台的（随 McpServer 上 iOS），不能用这个 macOS-only 的 enum。
     static func agentKey(for kind: LocalCodingAgentKind) -> String {
@@ -37,6 +41,26 @@ enum SessionLaunchOptions {
             return []
         }
         return table.visibleModels.map(\.id)
+    }
+
+    /// 「跟随 Codex 默认」此刻应切到的具体模型。配置文件的显式 model 属于 Codex
+    /// 自己的默认解析链，优先于 model/list 的 `isDefault`；两边都没有才返回 nil，
+    /// 由调用方 fail-loud，绝不猜一个可能很贵或已下线的 slug。
+    static func codexDefaultModel(
+        configuredModel: String?, catalog: AgentModelCatalogFile?
+    ) -> String? {
+        if let configuredModel = configuredModel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configuredModel.isEmpty {
+            return configuredModel
+        }
+        return AgentModelCatalogFile.resolveTable(agent: "codex", file: catalog)?
+            .models.first(where: \.isDefault)?.id
+    }
+
+    static func codexDefaultModel(catalog: AgentModelCatalogFile?) -> String? {
+        codexDefaultModel(
+            configuredModel: defaultModelResolution(for: .codex, projectDir: nil).value,
+            catalog: catalog)
     }
 
     /// 别名 → UI 友好显示名（**只标系列、不标版本号**）。传给 CLI/MCP 的仍是裸
