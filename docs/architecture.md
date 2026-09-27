@@ -810,10 +810,11 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 身份 `--daemon`）养；app 退化成「连上去看的那个窗口」。顺带从结构上解掉 `docs/tech-debt.md`
 第一条（PTY 每批输出都过主线程、代价随 session 数线性涨）。
 
-六个阶段，**当前 P0–P4 已落地（P4 在分支上、未落 main），P5 未开工**
-（核对方式：`grep -r 'import ServiceManagement\|MenuBarExtra' Sources/` 零命中）：
+六个阶段中，**当前 main 已包含 P0–P4，P5a 已把默认切到 daemon**。
+P5 的开机自启后来被人类取消；菜单栏、后台状态与停止入口已经落地。
+这里的原始阶段表保留实现脉络，现行验收以本节下方的修订说明为准。
 
-> **这个「核对方式」是这张表里唯一不会烂的部分，别删它。** 它上一版写的是
+> **以下是历史阶段核对方式的演变，不是当前验收尺子。** 它上一版写的是
 > 「grep 不到 `RemoteSessionBackend` / `InProcessTransport` / `SessionTransport`」——
 > 2026-08-26 P2/P3 落地后那三个符号全部命中，**于是它自己把这张表的过时抓了出来**。
 > 一个会过期的结论配一把会红的尺子，尺子红了就该改结论。
@@ -841,10 +842,16 @@ PendingCrew 之后能恢复 session 而不用等它？就像休眠而不是关�
 | **P1** 终端劈半 | `AgentTerminalSession` → 无画面 `AgentSessionCore` + 只负责画的 `TerminalMirrorView` | ✅ 三个文件都在，`AgentTerminalSession` 已退化成 162 行的薄门面 |
 | **P2** 协议 + 进程内传输 | 定义全部消息、`RemoteSessionBackend` 走传输层 | ✅ `SessionProtocol.swift` / `InProcessTransport.swift` / `RemoteSessionBackend.swift`（`c57e24d`）。`attach` 按 backend 种类分流：终端型发 kind=2 快照帧，codex 型发 daemon 内存里的结构化历史 |
 | **P3** 快照 + 背压 | 终端缓冲区快照序列化（全项目风险最高的一块） | ✅ `TerminalSnapshotEncoder.swift` / `SessionAttachQueue.swift`（`c2e6909`）。真 TUI 语料在 `Tests/Fixtures/`，它逮到了合成语料测不出的「延迟折行 + 整行空白续行凭空消失」 |
-| **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ✅ `UnixSocketTransport.swift` / `SessionProtocolEndpoints.swift` / `SessionDaemonHost.swift` / `SessionDaemonMain.swift` / `HeadlessSessionBackend.swift` / `SessionOrphanReaper.swift` / `ViewerSessionClient.swift`。**总闸 `PENDINGCREW_BACKEND` 默认仍是 `inproc`**，daemon 是显式开关 |
-| **P5** 常驻与善后 | ~~`SMAppService.agent` 登录项~~、菜单栏项、`--daemon-status`、`--daemon-stop` | 🟡 **登录项已作废**（2026-09-07 人类原话：「不要开机自启。我不是要常驻后台。我意思是 session 能恢复就可以了」）；菜单栏项 ✅ `MenuBarPanel.swift`；`--daemon-status` / `--daemon-stop` ✅；孤儿回收的双重核对已随 P4 落地 |
+| **P4** 真进程分家 | `--daemon` 身份、Unix socket、编排搬进 daemon | ✅ 已落 main：`UnixSocketTransport.swift` / `SessionProtocolEndpoints.swift` / `SessionDaemonHost.swift` / `SessionDaemonMain.swift` / `HeadlessSessionBackend.swift` / `SessionOrphanReaper.swift` / `ViewerSessionClient.swift`。`inproc` 现在是显式回退开关 |
+| **P5** 常驻与善后 | ~~`SMAppService.agent` 登录项~~、菜单栏项、`--daemon-status`、`--daemon-stop` | 🟡 登录项已作废（2026-09-07 人类原话：「不要开机自启。我不是要常驻后台。我意思是 session 能恢复就可以了」）；默认 daemon、菜单栏、状态/停止入口、孤儿回收及半开连接回收已落地。安装态恢复、终端手感与性能仍需按现行目标验收 |
 
-**P4 已经改变了什么，读代码时要知道**（`inproc` 默认路径上一条都不生效）：
+2026-09-27 按 main `45232ec` 复核：`ProcessRole.resolve` 默认返回 viewer，后台持有
+session；本机安装版 0.1.40 的 `--daemon-status` 可连到同版后台。前端更新时，
+`BackendUpdatePlan` 会在版本不同时换代后台，即使仍有 session 在跑，随后询问是否接回。
+这遵循 2026-09-11 之后的恢复目标，**不满足原设计 A1 的「更新全程不中断」**；
+不得把原 A1 三路径当作已通过，也不得把旧分支测试当作当前测试结果。
+
+**P4 已经改变了什么，读代码时要知道**（当时的 `inproc` 默认路径上这些行为不生效；当前默认是 daemon）：
 
 - **编排只有一份代码**。`SessionHost` + `CrewSessionRunner` 在 GUI 与 `--daemon` 两个
   进程里跑的是同一个类；两种模式的差别全收在 `SessionProtocolPublishing` 这一个接缝
