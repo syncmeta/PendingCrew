@@ -47,9 +47,8 @@ enum CrewChatWindow {
         offsetY + insetTop <= autoLoadThreshold
     }
 
-    static func shouldCheckTopOnUserStart(wasUserScrolling: Bool, isUserScrolling: Bool,
-                                          nearTop: Bool) -> Bool {
-        !wasUserScrolling && isUserScrolling && nearTop
+    static func shouldAutoLoad(nearTop: Bool, towardTop: Bool) -> Bool {
+        nearTop && towardTop
     }
 
     /// 引用型门闩，不写进 SwiftUI 的依赖图；每次真实用户滚动手势至多续载一页。
@@ -210,31 +209,47 @@ enum CrewChatWindow {
 }
 
 #if os(macOS)
-/// macOS 14 没有 `onScrollGeometryChange` 和 `onScrollPhaseChange`。
+/// macOS 14 没有 `onScrollGeometryChange` 和 `onScrollPhaseChange`；新系统也用此传感器
+/// 识别近顶时的滚动方向，避免「已在阈值内但向下滚」被 Bool 几何回调误判。
 /// 只监听落在本 ScrollView 内的真实滚轮事件；内容插入引起的 bounds 通知没有新手势号，
 /// 因此不会把自己的插入当成下一次续页。放在 ScrollView 的内容背景里获取 enclosingScrollView。
 struct LegacyTopApproachSensor: NSViewRepresentable {
-    let onApproach: (Int, Bool) -> Void
+    let scopeID: String
+    let onUserScroll: (Int, Bool, Bool, Bool) -> Void
 
     func makeNSView(context: Context) -> WheelView {
         let view = WheelView()
-        view.onApproach = onApproach
+        view.scopeID = scopeID
+        view.onUserScroll = onUserScroll
         return view
     }
 
     func updateNSView(_ nsView: WheelView, context: Context) {
-        nsView.onApproach = onApproach
+        nsView.onUserScroll = onUserScroll
+        nsView.scopeID = scopeID
         nsView.connect()
     }
 
     @MainActor final class WheelView: NSView {
-        var onApproach: ((Int, Bool) -> Void)?
+        var onUserScroll: ((Int, Bool, Bool, Bool) -> Void)?
+        var scopeID = "" {
+            didSet {
+                if oldValue != scopeID {
+                    disconnect()
+                    burst = CrewChatWindow.WheelBurst()
+                    connect()
+                }
+            }
+        }
         var isConnected: Bool { trackedScroll != nil && wheelMonitor != nil }
+        var attachedScrollView: NSScrollView? { trackedScroll }
         private weak var trackedScroll: NSScrollView?
         private var wheelMonitor: Any?
         private var boundsObserver: NSObjectProtocol?
         private var burst = CrewChatWindow.WheelBurst()
         private var pendingGesture: Int?
+        private var pendingTowardTop = false
+        private var pendingOriginY: CGFloat = 0
         private var pendingAt: TimeInterval = 0
 
         override func viewDidMoveToSuperview() {
@@ -287,32 +302,54 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
             guard let document = scroll.documentView else { return true }
             let clip = scroll.contentView.bounds
             let distance = document.isFlipped ? document.bounds.height - clip.maxY : clip.minY
-            return distance <= 80
+            return distance <= CrewChatBottomFollow.bottomSlack
+        }
+
+        private func movedInWheelDirection(_ scroll: NSScrollView) -> Bool {
+            guard let document = scroll.documentView else { return false }
+            let change = scroll.contentView.bounds.minY - pendingOriginY
+            let towardTop = document.isFlipped ? change < -0.5 : change > 0.5
+            return pendingTowardTop ? towardTop : (document.isFlipped ? change > 0.5 : change < -0.5)
+        }
+
+        func acceptsWheel(window eventWindow: NSWindow?, locationInWindow: NSPoint) -> Bool {
+            guard let scroll = trackedScroll, eventWindow === scroll.window else { return false }
+            return scroll.bounds.contains(scroll.convert(locationInWindow, from: nil))
         }
 
         private func wheel(_ event: NSEvent) {
-            guard let scroll = trackedScroll, event.window === scroll.window,
-                  scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)),
+            guard let scroll = trackedScroll,
+                  acceptsWheel(window: event.window, locationInWindow: event.locationInWindow),
                   !event.phase.contains(.ended) else { return }
-            let gesture: Int
-            if event.momentumPhase.isEmpty {
-                gesture = burst.recordWheel(at: event.timestamp,
-                                            beginsGesture: event.phase.contains(.began),
-                                            isPhased: !event.phase.isEmpty)
-            } else {
-                gesture = burst.generation
-            }
+            receiveWheelSample(at: event.timestamp, scrollingDeltaY: event.scrollingDeltaY,
+                               nearTop: nearTop(scroll), atBottom: atBottom(scroll),
+                               beginsGesture: event.phase.contains(.began),
+                               isPhased: !event.phase.isEmpty,
+                               isMomentum: !event.momentumPhase.isEmpty)
+        }
+
+        /// 由本地 NSEvent 监听器调用；测试可直接注入滚轮样本，不向系统派发事件。
+        func receiveWheelSample(at time: TimeInterval, scrollingDeltaY: CGFloat,
+                                nearTop: Bool, atBottom: Bool,
+                                beginsGesture: Bool = false, isPhased: Bool = false,
+                                isMomentum: Bool = false) {
+            guard let scroll = trackedScroll, scrollingDeltaY != 0 else { return }
+            let gesture = isMomentum ? burst.generation : burst.recordWheel(
+                at: time, beginsGesture: beginsGesture, isPhased: isPhased)
             guard gesture > 0 else { return }
             pendingGesture = gesture
+            pendingTowardTop = scrollingDeltaY > 0
+            pendingOriginY = scroll.contentView.bounds.minY
             pendingAt = ProcessInfo.processInfo.systemUptime
-            if nearTop(scroll) { onApproach?(gesture, atBottom(scroll)) }
+            onUserScroll?(gesture, nearTop, atBottom, pendingTowardTop)
         }
 
         private func boundsChanged() {
             guard let scroll = trackedScroll, let gesture = pendingGesture,
                   ProcessInfo.processInfo.systemUptime - pendingAt < 1.0,
-                  nearTop(scroll) else { return }
-            onApproach?(gesture, atBottom(scroll))
+                  movedInWheelDirection(scroll) else { return }
+            pendingOriginY = scroll.contentView.bounds.minY
+            onUserScroll?(gesture, nearTop(scroll), atBottom(scroll), pendingTowardTop)
         }
 
         deinit {

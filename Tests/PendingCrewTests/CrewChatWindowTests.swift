@@ -25,13 +25,9 @@ final class CrewChatWindowTests: XCTestCase {
         XCTAssertTrue(CrewChatWindow.isNearTop(offsetY: 180, insetTop: 0))
         XCTAssertTrue(CrewChatWindow.isNearTop(offsetY: 155, insetTop: 25))
         XCTAssertEqual(CrewChatWindow.expanded(30, total: 100), 60)
-        XCTAssertTrue(CrewChatWindow.shouldCheckTopOnUserStart(
-            wasUserScrolling: false, isUserScrolling: true, nearTop: true),
-            "起手已在阈值内时，几何 Bool 不会再次跨入，须由新手势检查")
-        XCTAssertFalse(CrewChatWindow.shouldCheckTopOnUserStart(
-            wasUserScrolling: true, isUserScrolling: true, nearTop: true))
-        XCTAssertFalse(CrewChatWindow.shouldCheckTopOnUserStart(
-            wasUserScrolling: false, isUserScrolling: true, nearTop: false))
+        XCTAssertTrue(CrewChatWindow.shouldAutoLoad(nearTop: true, towardTop: true))
+        XCTAssertFalse(CrewChatWindow.shouldAutoLoad(nearTop: true, towardTop: false),
+                       "近顶时向下滚不许加载历史")
     }
 
     func testAutoPagingRequiresUserScrollAndConsumesGestureOnce() {
@@ -71,6 +67,8 @@ final class CrewChatWindowTests: XCTestCase {
                                        isFollowing: false, gesture: next, total: 90, limit: 90))
 
         var remountedSensor = CrewChatWindow.WheelBurst()
+        XCTAssertNotEqual(remountedSensor.recordWheel(at: 2.0), first,
+                          "30→60 重建后第一手势不能复用重建前已消费的第一手势")
         XCTAssertNotEqual(remountedSensor.recordWheel(at: 2.0), next,
                           "首屏 eager 切 lazy 重建传感器时不能复用已消费的令牌")
         var trackpad = CrewChatWindow.WheelBurst()
@@ -100,15 +98,17 @@ final class CrewChatWindowTests: XCTestCase {
         XCTAssertTrue(view.contains(".modifier(TopApproachTracker { autoLoadEarlier() })"))
         XCTAssertTrue(view.contains("onScrollGeometryChange(for: Bool.self)"))
         XCTAssertTrue(view.contains("autoLoadGate.shouldLoad("))
-        XCTAssertTrue(view.contains("onUserStartNearTop: { autoLoadEarlier() }"),
-                      "几何已在阈值内时必须从新用户手势再次检查")
+        XCTAssertTrue(view.contains("wheelScroll(gesture: gesture, nearTop: nearTop,"),
+                      "macOS 起手已在阈值内时须由真滚轮直接检查")
+        XCTAssertTrue(view.contains("CrewChatWindow.shouldAutoLoad(nearTop: nearTop, towardTop: towardTop)"),
+                      "近顶时只许向上翻历史触发续页")
         XCTAssertTrue(view.contains("expandEarlier(visibleTopID: topAnchorBox.id)"))
         XCTAssertTrue(view.contains("Button {\n                expandEarlier()"),
                       "旧系统和自动续载没触发时仍要有手动按钮")
         XCTAssertTrue(phase.contains("userScrollGeneration += 1"),
                       "内容增高不能伪装成新手势重复续载")
-        XCTAssertTrue(view.contains("LegacyTopApproachSensor"),
-                      "macOS 14 必须能独立于新系统滚动几何 API 识别真用户滚轮")
+        XCTAssertTrue(view.contains("LegacyTopApproachSensor(scopeID: crewId)"),
+                      "所有 macOS 版本均以本聊天的真滚轮判方向与近顶")
         XCTAssertTrue(view.contains("bottomPin.leftBottomByUser()"),
                       "macOS 14 缺 SwiftUI 相位时真用户滚轮仍要能解除底部跟随")
     }
@@ -359,7 +359,9 @@ final class CrewChatLegacyWheelSensorTests: XCTestCase {
                     Color.blue.frame(height: 40)
                 }
             }
-            .background(LegacyTopApproachSensor { _, _ in approaches += 1 }
+            .background(LegacyTopApproachSensor(scopeID: "crew-a") {
+                _, _, _, _ in approaches += 1
+            }
                 .frame(width: 0, height: 0))
         })
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
@@ -382,6 +384,70 @@ final class CrewChatLegacyWheelSensorTests: XCTestCase {
                       "传感器必须接到当前 ScrollView 才能接收 macOS 14 用户滚轮")
         XCTAssertEqual(approaches, 0, "布局/内容变化本身不是用户手势")
         window.contentView = nil
+    }
+
+    func testWheelInputCanReleaseFollowLoadOnlyUpwardAndRestoreAtBottom() {
+        var pin = CrewChatBottomFollow.Pin()
+        let gate = CrewChatWindow.AutoLoadGate()
+        var limit = CrewChatWindow.pageSize
+        let host = NSHostingView(rootView: ScrollView {
+            Color.blue.frame(height: 2000)
+                .background(LegacyTopApproachSensor(scopeID: "crew-a") {
+                    gesture, nearTop, atBottom, towardTop in
+                    if atBottom { pin.reachedBottom() } else { pin.leftBottomByUser() }
+                    if CrewChatWindow.shouldAutoLoad(nearTop: nearTop, towardTop: towardTop),
+                       gate.shouldLoad(nearTop: nearTop, isUserScrolling: true,
+                                       isFollowing: pin.isFollowing, gesture: gesture,
+                                       total: 120, limit: limit) {
+                        limit = CrewChatWindow.expanded(limit, total: 120)
+                    }
+                }.frame(width: 0, height: 0))
+        })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = window.contentView!.bounds
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        func findSensor(_ view: NSView) -> LegacyTopApproachSensor.WheelView? {
+            if let sensor = view as? LegacyTopApproachSensor.WheelView { return sensor }
+            return view.subviews.compactMap(findSensor).first
+        }
+        guard let sensor = findSensor(host) else { return XCTFail("传感器未附着") }
+        XCTAssertTrue(sensor.isConnected)
+        XCTAssertTrue(sensor.acceptsWheel(window: window,
+                                          locationInWindow: NSPoint(x: 100, y: 100)))
+        let foreignWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                                     styleMask: [.borderless], backing: .buffered, defer: false)
+        XCTAssertFalse(sensor.acceptsWheel(window: foreignWindow,
+                                           locationInWindow: NSPoint(x: 10, y: 10)),
+                       "其他窗口的滚轮不能触发本聊天")
+        XCTAssertFalse(sensor.acceptsWheel(window: window,
+                                           locationInWindow: NSPoint(x: 900, y: 900)),
+                       "本窗口其他区域的滚轮不能触发本聊天")
+        sensor.receiveWheelSample(at: 1.0, scrollingDeltaY: -40,
+                                  nearTop: true, atBottom: false)
+        XCTAssertFalse(pin.isFollowing)
+        XCTAssertFalse(pin.received(1), "离底读历史时新消息不得拉回底部")
+        XCTAssertEqual(pin.unread, 1)
+        XCTAssertEqual(limit, 30, "向下滚过顶部不得续页")
+        sensor.receiveWheelSample(at: 1.5, scrollingDeltaY: 40,
+                                  nearTop: true, atBottom: false)
+        XCTAssertEqual(limit, 60, "向上翻历史的真滚轮样本触发一页")
+        sensor.receiveWheelSample(at: 1.6, scrollingDeltaY: 40,
+                                  nearTop: true, atBottom: false)
+        XCTAssertEqual(limit, 60, "同一手势只能一页")
+        sensor.receiveWheelSample(at: 2.0, scrollingDeltaY: -40,
+                                  nearTop: false, atBottom: true)
+        XCTAssertTrue(pin.isFollowing, "滑回底部须恢复跟随")
+        XCTAssertEqual(pin.unread, 0, "回底须清未读")
+        XCTAssertTrue(pin.received(1), "回底后新消息须重新跟随")
+        sensor.scopeID = "crew-b"
+        XCTAssertTrue(sensor.isConnected, "切群后须为当前聊天重新挂监听")
+        window.contentView = nil
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        XCTAssertFalse(sensor.isConnected, "切走聊天后旧监听必须释放")
     }
 }
 

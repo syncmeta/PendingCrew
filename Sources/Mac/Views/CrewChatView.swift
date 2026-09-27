@@ -950,14 +950,12 @@ struct CrewChatView: View {
                 .padding(.vertical, 10)
                 #if os(macOS)
                 .background {
-                    if #available(macOS 15.0, *) {
-                        EmptyView()
-                    } else {
-                        LegacyTopApproachSensor { gesture, atBottom in
-                            autoLoadEarlier(legacyGesture: gesture, legacyAtBottom: atBottom)
-                        }
-                        .frame(width: 0, height: 0)
+                    LegacyTopApproachSensor(scopeID: crewId) {
+                        gesture, nearTop, atBottom, towardTop in
+                        wheelScroll(gesture: gesture, nearTop: nearTop,
+                                    atBottom: atBottom, towardTop: towardTop)
                     }
+                    .frame(width: 0, height: 0)
                 }
                 #endif
             }
@@ -993,12 +991,13 @@ struct CrewChatView: View {
                                         set: { topAnchorBox.id = $0 }),
                             anchor: .top)
             .modifier(ChatScrollAnchor(isFollowing: bottomPin.isFollowing))
-            .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox,
-                                       onUserStartNearTop: { autoLoadEarlier() }))
+            .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
             // 不会逐帧改 @State，也不改变内容高度，因此没有布局自激的反馈边。
             .modifier(BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
+            #if !os(macOS)
             .modifier(TopApproachTracker { autoLoadEarlier() })
+            #endif
             .modifier(BottomOnContentGrowth(
                 isFollowing: bottomPin.isFollowing,
                 phaseBox: scrollPhaseBox
@@ -1343,11 +1342,14 @@ struct CrewChatView: View {
         renderLimit = CrewChatWindow.expanded(renderLimit, total: timelineEntries.count)
     }
 
-    private func autoLoadEarlier(legacyGesture: Int? = nil, legacyAtBottom: Bool? = nil) {
-        if legacyGesture != nil, legacyAtBottom == false {
-            // macOS 14 无相位回调；顶部且不在底部的真滚轮足以证明用户已离底。
-            bottomPin.leftBottomByUser()
-        }
+    private func wheelScroll(gesture: Int, nearTop: Bool, atBottom: Bool, towardTop: Bool) {
+        // macOS 14 无 SwiftUI 相位/到底回调；同一滚轮传感器闭合离底与回底。
+        if atBottom { bottomPin.reachedBottom() } else { bottomPin.leftBottomByUser() }
+        guard CrewChatWindow.shouldAutoLoad(nearTop: nearTop, towardTop: towardTop) else { return }
+        autoLoadEarlier(legacyGesture: gesture)
+    }
+
+    private func autoLoadEarlier(legacyGesture: Int? = nil) {
         guard autoLoadGate.shouldLoad(
             nearTop: true, isUserScrolling: legacyGesture != nil || scrollPhaseBox.isUserScrolling,
             isFollowing: bottomPin.isFollowing,
@@ -1684,7 +1686,6 @@ private struct BottomPinTracker: ViewModifier {
     /// 相位标志写进引用型盒子，**不写 @State** —— 手势刚开始那一下让 body 失效
     /// 会把整条列表重新测一遍（#443 的热点）。见 `ScrollPhaseBox` 顶部。
     let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
-    let onUserStartNearTop: () -> Void
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
@@ -1704,13 +1705,6 @@ private struct BottomPinTracker: ViewModifier {
                 // 人已经离底，Pin 仍说 following，新消息把视口拽回去（Todo #89）。
                 if CrewChatBottomFollow.isUserActive(phaseKind), !atBottom {
                     pin.leftBottomByUser()
-                }
-                if CrewChatWindow.shouldCheckTopOnUserStart(
-                    wasUserScrolling: CrewChatBottomFollow.isUserActive(Self.kind(oldPhase)),
-                    isUserScrolling: CrewChatBottomFollow.isUserActive(phaseKind),
-                    nearTop: CrewChatWindow.isNearTop(
-                        offsetY: geo.contentOffset.y, insetTop: geo.contentInsets.top)) {
-                    onUserStartNearTop()
                 }
                 guard phase == .idle else { return }
                 pin.settled(
@@ -1739,8 +1733,8 @@ private struct BottomPinTracker: ViewModifier {
     }
 }
 
-/// 接近顶部时只投影一个 Bool，不让逐帧 offset 进入 SwiftUI 状态。
-/// macOS 14 由下方 AppKit 滚轮传感器负责；iOS 17 保留手动入口。
+/// iOS 18 的接近顶部投影；macOS 统一由 AppKit 滚轮传感器判方向与近顶。
+/// iOS 17 保留手动入口。
 private struct TopApproachTracker: ViewModifier {
     let onApproach: () -> Void
 
