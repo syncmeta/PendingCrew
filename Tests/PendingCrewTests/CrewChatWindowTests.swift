@@ -12,6 +12,21 @@ final class CrewChatWindowTests: XCTestCase {
                           encoding: .utf8)
     }
 
+    func testVisibleTopTrackerIsWiredIntoRealCrewScrollView() throws {
+        let view = try Self.source("Mac/Views/CrewChatView.swift")
+        XCTAssertTrue(view.contains(".modifier(ChatVisibleTopTracker(anchorBox: topAnchorBox,"),
+                      "探针通过还不够；真实群聊滚动视图必须接上可见行锚")
+        XCTAssertTrue(view.contains("onScrollTargetVisibilityChange(idType: String.self"))
+        XCTAssertTrue(view.contains("if following { topAnchorBox.id = nil }"),
+                      "回到底部后不能让浏览历史的旧锚抢跟随")
+        XCTAssertTrue(view.contains("private func subscribe() async {\n        entries = []\n        topAnchorBox.id = nil"),
+                      "切群时不能把上一聊天的锚带进来")
+        XCTAssertTrue(view.contains(".onChange(of: onlyMentions) { _, _ in\n                topAnchorBox.id = nil"),
+                      "切换仅看 @ 时须清旧锚")
+        XCTAssertTrue(view.contains(".onChange(of: searchText) { _, _ in\n                topAnchorBox.id = nil"),
+                      "搜索筛选切换时须清旧锚")
+    }
+
     // MARK: - Agent Todo #163: automatic history paging
 
     func testFirstPageContainsThirtyNewestMessages() {
@@ -651,6 +666,10 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         @Published var container = Container.flipping
         /// C 档：连 `.sizeChanges` 那个锚都不挂 —— 「没有机制」的基准线。
         @Published var attachSizeChangesAnchor = true
+        @Published var streamExtra: CGFloat = 0
+        var useViewOnChange = false
+        var useVisibilityTracking = false
+        var viewCountChangeCalls = 0
 
         var scroll: ((String) -> Void)?
         /// 落底那一记（`landAtBottom` 在生产里做的事）。
@@ -659,6 +678,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         var distanceFromBottom: CGFloat = .nan
         var offsetY: CGFloat = .nan
         var contentHeight: CGFloat = .nan
+        var trackedRowID: String?
+        var trackedRowY: CGFloat = .nan
 
         // MARK: `.scrollPosition(id:)` 那一档
 
@@ -702,13 +723,15 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             var commit: Int
             var offset: CGFloat
             var content: CGFloat
+            var rowY: CGFloat
             /// 视口顶 → 内容底。这一格不变 ⇔ 眼前的内容没动。
             var distance: CGFloat { content - offset }
         }
 
         private var sample: Sample? {
             guard !offsetY.isNaN, !contentHeight.isNaN else { return nil }
-            return Sample(turn: turn, commit: commit, offset: offsetY, content: contentHeight)
+            return Sample(turn: turn, commit: commit, offset: offsetY,
+                          content: contentHeight, rowY: trackedRowY)
         }
 
         /// `.scrollPosition(id:)` 的绑定 setter 走的就是这条路 —— 单测直接调它，
@@ -754,13 +777,21 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
 
     /// 内容往哪边长。`.above` 是「加载更早」；`.below` 是「来新消息」——
     /// 后者只用来标定那把锚。
-    private enum Growth { case above, below }
+    private enum Growth { case above, below, stream }
 
     /// `onScrollGeometryChange` 要的 Equatable 载荷。分开存 offset 与 contentSize，
     /// 不预先相减 —— 「内容在上面长了多少」和「视口被拽了多少」是两件事。
     private struct Geo: Equatable {
         var offset: CGFloat
         var content: CGFloat
+    }
+
+    private struct TrackedRowY: PreferenceKey {
+        static var defaultValue: CGFloat = -1
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            let next = nextValue()
+            if next != -1 { value = next }
+        }
     }
 
     /// `.sizeChanges` 那个锚挂不挂。`on` 每次 run 内是常量，不会改视图身份。
@@ -789,6 +820,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         /// 行高故意不等（真群聊也不等），但对同一个 id 恒定 —— 否则两次量的是两张表。
         private func height(_ id: String) -> CGFloat {
             30 + CGFloat((Int(id.dropFirst()) ?? 0) % 4) * 18
+                + (id == "m69" ? rig.streamExtra : 0)
         }
 
         /// 现状的判据只在 `.flipping` 下用；另两种是为了把「翻面」单独关掉再量。
@@ -846,6 +878,21 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                     rig.geoCallbacks += 1
                     rig.record()
                 }
+                .onPreferenceChange(TrackedRowY.self) { y in
+                    rig.trackedRowY = y
+                    rig.record()
+                }
+                .onChange(of: rig.ids.count) { old, new in
+                    guard rig.useViewOnChange else { return }
+                    rig.viewCountChangeCalls += 1
+                    rig.limit = CrewChatNewMessages.apply(
+                        added: new - old, renderLimit: rig.limit,
+                        pin: .init(isFollowing: false)).renderLimit
+                }
+                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+                    guard rig.useVisibilityTracking, let first = ids.first else { return }
+                    rig.pinnedID = first
+                }
                 .onAppear {
                     rig.scroll = { id in proxy.scrollTo(id, anchor: .top) }
                     rig.scrollToBottom = { id in proxy.scrollTo(id, anchor: .bottom) }
@@ -861,6 +908,14 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             }
             ForEach(CrewChatWindow.window(rig.ids, limit: rig.limit), id: \.self) { id in
                 Color.blue.opacity(0.15).frame(height: height(id)).id(id)
+                    .background {
+                        if id == rig.trackedRowID {
+                            GeometryReader { geo in
+                                Color.clear.preference(key: TrackedRowY.self,
+                                    value: geo.frame(in: .global).minY)
+                            }
+                        }
+                    }
             }
         }
     }
@@ -1034,20 +1089,30 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                            container: Container = .flipping,
                            growth: Growth = .above, startAtTop: Bool = true,
                            attachAnchor: Bool = true,
-                           label: String, settleFor: TimeInterval = 1.0) -> [Rig.Sample] {
+                           label: String, settleFor: TimeInterval = 1.0,
+                           appendCount: Int = CrewChatWindow.pageSize,
+                           returnCommits: Bool = false,
+                           useViewOnChange: Bool = false,
+                           pinBefore: Bool = true,
+                           visibleID: String? = nil,
+                           useVisibilityTracking: Bool = false) -> [Rig.Sample] {
         let rig = Rig()
         rig.ids = ids(total)
         rig.limit = startLimit
         rig.container = container
         rig.usesScrollPosition = (fix == .scrollPositionPin)
         rig.attachSizeChangesAnchor = attachAnchor
+        rig.useViewOnChange = useViewOnChange
+        rig.useVisibilityTracking = useVisibilityTracking
         if fix == .bottomAnchorStatic { rig.expanding = true }
         let anchorID = CrewChatWindow.window(rig.ids, limit: startLimit).first!
+        let scrollID = visibleID ?? anchorID
+        if growth == .below || growth == .stream { rig.trackedRowID = scrollID }
         currentRig = rig
         let win = hostInWindow(Harness(rig: rig))
         settle(win)
         if startAtTop {
-            rig.scroll?(anchorID)  // 人自己滑到顶
+            rig.scroll?(scrollID)  // 人自己滑到目标历史行
             settle(win)
         }                          // 否则就停在 `.initialOffset` 放下的地方：底部
 
@@ -1060,8 +1125,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             rig.expanding = true
             settle(win)
         }
-        if fix == .scrollPositionPin {
-            rig.pinnedID = anchorID
+        if fix == .scrollPositionPin && pinBefore {
+            rig.pinnedID = scrollID
             settle(win)
         }
 
@@ -1083,11 +1148,18 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
 
         rig.recording = true
         rig.record()               // 起点
+        let pinnedBefore = rig.pinnedID
 
         if growth == .below {
-            // 标定那一路：内容往**下**长（来了一页新消息）。
-            rig.limit += CrewChatWindow.pageSize
-            rig.ids += (0 ..< CrewChatWindow.pageSize).map { "n\($0)" }
+            // 内容往下长；不跟随时与 CrewChatNewMessages.apply 同拍扩窗。
+            let oldLimit = rig.limit
+            rig.ids += (0 ..< appendCount).map { "n\($0)" }
+            if !useViewOnChange {
+                rig.limit = CrewChatWindow.afterInsert(
+                    limit: oldLimit, added: appendCount, isFollowing: false)
+            }
+        } else if growth == .stream {
+            rig.streamExtra = 120
         } else {
             // 点下去那一拍。各档的区别全在这几行里：
             switch fix {
@@ -1116,11 +1188,14 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         win.contentView = nil
 
         let path = rig.trace
-        if growth == .below {
+        if growth == .below || growth == .stream {
+            print("[#164 接线] \(label): onChange=\(rig.viewCountChangeCalls), limit=\(rig.limit)")
+            print("[#164 绑定] \(label): before=\(pinnedBefore ?? "nil"), after=\(rig.pinnedID ?? "nil")")
             print(String(format: "[#60 锚标定] %@：视口顶→内容底 %.0f → %.0f（位移 %+.0f）",
                          label, path.first!.distance, path.last!.distance,
                          path.last!.distance - path.first!.distance))
-            return path
+            print("[#164 提交帧] \(label): \(rig.commits.prefix(8).map { String(format: "#%d:距离%.0f,行Y%.0f", $0.commit, $0.distance, $0.rowY) }.joined(separator: ", "))")
+            return returnCommits ? [path.first!] + rig.commits : path
         }
         print("[#60 path] \(label) —— 经过 \(path.count) 个不同几何：")
         for s in path {
@@ -1133,6 +1208,56 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                          s.commit, s.turn, s.distance))
         }
         return path
+    }
+
+    func test_离屏提交帧_读历史时来一条新消息不跳() throws {
+        let path = tracePath(total: 70, startLimit: CrewChatWindow.pageSize,
+                             fix: .scrollPositionPin, growth: .below,
+                             label: "读历史·追加一条", appendCount: 1,
+                             returnCommits: true, useViewOnChange: true,
+                             pinBefore: false)
+        XCTAssertGreaterThan(path.count, 1, "探针必须收到内容变化的几何样本")
+        let start = try XCTUnwrap(path.first?.rowY)
+        XCTAssertNotEqual(start, -1, "可见行探针必须挂到真实行")
+        let worst = path.map { abs($0.rowY - start) }.max() ?? .infinity
+        XCTAssertLessThan(worst, 20, "任何提交帧都不应把眼前那行移走；路径 \(path.map(\.rowY))")
+    }
+
+    func test_离屏提交帧_读历史时最新消息流式增长不跳() throws {
+        let path = tracePath(total: 70, startLimit: CrewChatWindow.pageSize,
+                             fix: .scrollPositionPin, growth: .stream,
+                             label: "读历史·最新消息增长", returnCommits: true,
+                             pinBefore: false, visibleID: "m64")
+        XCTAssertGreaterThan(path.count, 1)
+        let start = try XCTUnwrap(path.first?.rowY)
+        XCTAssertNotEqual(start, -1)
+        let worst = path.map { abs($0.rowY - start) }.max() ?? .infinity
+        XCTAssertLessThan(worst, 20, "流式增长的提交帧不应移动眼前那行；\(path.map(\.rowY))")
+    }
+
+    func test_离屏提交帧_分页后可见目标锚阻止追加跳位() throws {
+        for (limit, visible) in [(30, "m50"), (60, "m30"), (60, "m60")] {
+            if limit == 60 {
+                let broken = tracePath(total: 70, startLimit: limit,
+                                       fix: .scrollPositionPin, growth: .below,
+                                       label: "无可见锚·窗口\(limit)·浏览\(visible)", appendCount: 1,
+                                       returnCommits: true, useViewOnChange: true,
+                                       pinBefore: false, visibleID: visible)
+                let origin = try XCTUnwrap(broken.first?.rowY)
+                XCTAssertGreaterThan(broken.map { abs($0.rowY - origin) }.max() ?? 0, 20,
+                                     "无锚对照必须能重现跳位，否则绿测没有判别力")
+            }
+            let path = tracePath(total: 70, startLimit: limit,
+                                 fix: .scrollPositionPin, growth: .below,
+                                 label: "窗口\(limit)·浏览\(visible)·追加", appendCount: 1,
+                                 returnCommits: true, useViewOnChange: true,
+                                 pinBefore: false, visibleID: visible,
+                                 useVisibilityTracking: true)
+            let start = try XCTUnwrap(path.first?.rowY)
+            XCTAssertNotEqual(start, -1)
+            let worst = path.map { abs($0.rowY - start) }.max() ?? .infinity
+            XCTAssertLessThan(worst, 20, "\(visible) 被新消息移走；\(path.map(\.rowY))")
+        }
     }
 
     /// 提交边界序列（跑完 `tracePath` 后可读）。

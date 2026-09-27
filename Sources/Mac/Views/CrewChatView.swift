@@ -995,6 +995,11 @@ struct CrewChatView: View {
             .scrollPosition(id: Binding(get: { topAnchorBox.id },
                                         set: { topAnchorBox.id = $0 }),
                             anchor: .top)
+            // `.scrollPosition` 在懒窗口里可能一直不回写顶行 ID。续页后新消息到来时，
+            // 缺这个锚会让可见行随估算高度调整而跳位；可见目标回调只写引用盒子，
+            // 不让滚动中的每次回调重算整条时间线。
+            .modifier(ChatVisibleTopTracker(anchorBox: topAnchorBox,
+                                            isFollowing: bottomPin.isFollowing))
             .modifier(ChatScrollAnchor(isFollowing: bottomPin.isFollowing))
             .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
@@ -1035,6 +1040,7 @@ struct CrewChatView: View {
             // 不回吐的话，一次长时间的「往上看」会让窗口随聊天一路长大，
             // #443 那道成本封顶就白做了。
             .onChange(of: bottomPin.isFollowing) { _, following in
+                if following { topAnchorBox.id = nil }
                 let next = CrewChatNewMessages.followChanged(
                     isFollowing: following,
                     renderLimit: renderLimit,
@@ -1054,6 +1060,7 @@ struct CrewChatView: View {
             // 两条路的终点都是「一页 + 贴在最新一条」，所以不依赖 SwiftUI 的 onChange
             // 触发次序。
             .onChange(of: onlyMentions) { _, _ in
+                topAnchorBox.id = nil
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
                 recordScrollDiagnostic(cause: 3)
@@ -1069,6 +1076,7 @@ struct CrewChatView: View {
                 }
             }
             .onChange(of: searchText) { _, _ in
+                topAnchorBox.id = nil
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
                 recordScrollDiagnostic(cause: 3)
@@ -1470,6 +1478,7 @@ struct CrewChatView: View {
     /// 的 `onTermination` 随之退订上游（Local 退 Combine / Edge 关 hub）。
     private func subscribe() async {
         entries = []
+        topAnchorBox.id = nil
         // 切 crew：渲染窗口归位到一页，别把上一个 crew 翻开的深度带过来（#443）。
         renderLimit = CrewChatWindow.pageSize
         // 切 crew：跟随/未读也归位 —— 进一个新群就该停在它的最新一条、未读从 0 算起
@@ -1904,6 +1913,22 @@ private final class ChatTopAnchorBox {
     var diagnosticOffset = 0.0
     var diagnosticViewport = 0.0
     var diagnosticContent = 0.0
+}
+
+private struct ChatVisibleTopTracker: ViewModifier {
+    let anchorBox: ChatTopAnchorBox
+    let isFollowing: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, iOS 18.0, *) {
+            content.onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+                guard !isFollowing, let first = ids.first else { return }
+                anchorBox.id = first
+            }
+        } else {
+            content
+        }
+    }
 }
 
 /// macOS 15 / iOS 18 geometry feed; disabled mode returns a constant projection.
