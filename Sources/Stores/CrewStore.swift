@@ -702,7 +702,11 @@ final class CrewStore: ObservableObject {
             case "crew_message":
                 executeCrewMessage(cmd)
             case "create_child_crew":
+                #if os(macOS)
                 await executeCreateChildCrew(cmd)
+                #else
+                postSystemNotice(crewId: cmd.crewId, text: "建子 crew 被拒：此命令只能由本机 macOS 主端执行。")
+                #endif
             case "adopt_crew":
                 await executeAdoptCrew(cmd)
             case "release_crew":
@@ -722,6 +726,7 @@ final class CrewStore: ObservableObject {
     /// 建执行 crew。普通来源挂真实父边；总机组来源保持顶层（汇报父级由现有派生
     /// 规则指回总机组）。全部失败路径都落一行回执，
     /// 不静默吞（机长看不到 app 里的错误提示，只能靠白板知道命令没成）。
+    #if os(macOS)
     private func executeCreateChildCrew(_ cmd: CrewCommand) async {
         let parentId = cmd.crewId
         let placement = CrewChildCreationPlacement.resolve(parentCrewId: parentId)
@@ -827,6 +832,7 @@ final class CrewStore: ObservableObject {
             postSystemNotice(crewId: parentId, text: "建子 crew 失败：\(error.localizedDescription)")
         }
     }
+    #endif
 
     // MARK: - 组织架构调整命令（#22/#25：收编/摘出/建父/认父）
     //
