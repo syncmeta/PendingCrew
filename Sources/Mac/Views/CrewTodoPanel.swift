@@ -238,12 +238,16 @@ struct CrewTodoPanel: View {
                     .font(Theme.Fonts.footnote.weight(.semibold).monospacedDigit())
                     .foregroundStyle(Theme.Palette.accent)
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                openDetail(ledger: row.ledger, focus: item.number, source: source)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 // 已完成只变灰，**不加删除线**（人类明确要求）。
                 //
-                // 正文渲染 markdown（人类 Todo #119），字号仍是 footnote(13pt) ——
-                // 「ui 格式要和外面的没点放大看进去之前一样」。截断在**源文本层**做
+                // 正文渲染 markdown（人类 Todo #119），与详情窗口共用放大的 Todo 字号。
+                // 截断在**源文本层**做
                 // （`cardMarkdown`）：`.lineLimit` 对 markdown 是逐 block 生效的，
                 // 单靠它一条长 Todo 就能把卡片撑到 12.5 倍高。lineLimit 仍留着当兜底。
                 MarkdownText(
@@ -274,18 +278,31 @@ struct CrewTodoPanel: View {
                         .lineLimit(layout.responseLineLimit)
                 }
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(cardShape.fill(Theme.Palette.surface))
-            .overlay(cardShape.strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
+            .frame(maxHeight: CGFloat(layout.previewMaxHeight), alignment: .top)
+            .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture {
+                openDetail(ledger: row.ledger, focus: item.number, source: source)
+            }
+
+            Button(layout.rowDetailTitle) {
+                openDetail(ledger: row.ledger, focus: item.number, source: source)
+            }
+            .buttonStyle(.plain)
+            .font(Theme.Fonts.caption.weight(.semibold))
+            .foregroundStyle(Theme.Palette.accent)
+            .accessibilityLabel("查看 #\(item.number) 的完整详情")
+            .help("在详细窗口阅读完整 Todo 与全部回应")
         }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxHeight: CGFloat(layout.cardMaxHeight), alignment: .top)
+        .clipped()
+        .background(cardShape.fill(Theme.Palette.surface))
+        .overlay(cardShape.strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            openDetail(ledger: row.ledger, focus: item.number, source: source)
-        }
     }
 }
 

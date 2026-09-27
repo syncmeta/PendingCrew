@@ -48,11 +48,7 @@ struct MarkdownText: View {
     // reading surface than a crew chat bubble. Keep its typography opt-in so regular
     // chat, reasoning rows and tool output do not move with it.
     // PENDINGCREW SHIM (人类 Todo #119): Todo 页面（右栏概览卡片 + 详细窗口）也要渲染
-    // markdown，但**不许改变现有字号** —— 人类原话「ui 格式要和外面的没点放大看进去之前
-    // 一样」。两处正文现在都是 `Theme.Fonts.footnote`(13pt)、回应是 `.caption`(12pt)，
-    // 而 `.article` 是 17pt 衬线、`.chat` 是 16pt，借哪个都会把 Todo 卡片撑大变样
-    // （离屏实测：同一段内容 `.article` 比纯 Text 高 12.5 倍）。所以另起两个 variant，
-    // `.chat` 一个字不动。
+    // markdown；概览与详情共用 Todo 字号，和聊天主题分开调整。
     enum Variant { case chat, codexTranscript, article, todo, todoNote }
 
     @State private var presentedCitation: PresentedCitation?
@@ -156,8 +152,8 @@ struct MarkdownText: View {
         case .chat: return AppTheme.Fonts.scaled(16)
         case .codexTranscript: return AppTheme.Fonts.scaled(15)
         case .article: return 17
-        case .todo: return AppTheme.Fonts.scaled(13)
-        case .todoNote: return AppTheme.Fonts.scaled(12)
+        case .todo: return AppTheme.Fonts.scaled(CGFloat(TodoListPresentation.overviewLayout.bodyFontSize))
+        case .todoNote: return AppTheme.Fonts.scaled(CGFloat(TodoListPresentation.overviewLayout.responseFontSize))
         }
     }
 
@@ -176,24 +172,26 @@ struct MarkdownText: View {
     fileprivate static let articleThemeRunnable = articleThemeBase.chatCodeBlock(allowRun: true, variant: .article)
 
     // PENDINGCREW SHIM (人类 Todo #119): Todo 页面两档。
-    fileprivate static let todoTheme = todoThemeBase(bodySize: AppTheme.Fonts.scaled(13))
+    fileprivate static let todoTheme = todoThemeBase(
+        bodySize: AppTheme.Fonts.scaled(CGFloat(TodoListPresentation.overviewLayout.bodyFontSize)))
         .chatCodeBlock(allowRun: false, variant: .chat)
-    fileprivate static let todoNoteTheme = todoThemeBase(bodySize: AppTheme.Fonts.scaled(12))
+    fileprivate static let todoNoteTheme = todoThemeBase(
+        bodySize: AppTheme.Fonts.scaled(CGFloat(TodoListPresentation.overviewLayout.responseFontSize)))
         .chatCodeBlock(allowRun: false, variant: .chat)
     fileprivate static let todoDimTheme = todoThemeBase(
-        bodySize: AppTheme.Fonts.scaled(13), ink: AppTheme.Palette.inkMuted)
+        bodySize: AppTheme.Fonts.scaled(CGFloat(TodoListPresentation.overviewLayout.bodyFontSize)),
+        ink: AppTheme.Palette.inkMuted)
         .chatCodeBlock(allowRun: false, variant: .chat)
     fileprivate static let todoNoteDimTheme = todoThemeBase(
-        bodySize: AppTheme.Fonts.scaled(12), ink: AppTheme.Palette.inkMuted)
+        bodySize: AppTheme.Fonts.scaled(CGFloat(TodoListPresentation.overviewLayout.responseFontSize)),
+        ink: AppTheme.Palette.inkMuted)
         .chatCodeBlock(allowRun: false, variant: .chat)
 
     /// Todo 页面的 markdown 主题（人类 Todo #119）。
     ///
     /// 起点是 `chatThemeBase`（密排、无衬线），只改三处，每一处都对着一条约束：
     ///
-    /// 1. **正文字号跟着调用方给**（13 = `Theme.Fonts.footnote`，12 = `.caption`）。
-    ///    这是「ui 格式要和外面一样」那句话的落点 —— 加 markdown 之前两处正文就是这个
-    ///    尺寸，加完必须还是。
+    /// 1. **正文字号跟着布局契约给**，概览与详情使用同一 Todo variant。
     /// 2. **标题不许比正文大太多。** 聊天主题的 h1 是 22pt，那在一张 3 行高的 Todo 卡片里
     ///    会把卡片顶开，而 Todo 正文里的 `##` 通常只是个小标题，不是文章章节。
     ///    三级各比正文大 2/1/0 点、只留粗细差别。

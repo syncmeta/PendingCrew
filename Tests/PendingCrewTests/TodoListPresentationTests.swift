@@ -158,6 +158,33 @@ final class TodoListPresentationTests: XCTestCase {
             .init(topLeading: 0, bottomLeading: 8, bottomTrailing: 8, topTrailing: 8))
     }
 
+    func testTodo154OverviewHasBoundedPreviewAndReadableType() {
+        let layout = TodoListPresentation.overviewLayout
+        XCTAssertGreaterThanOrEqual(layout.bodyFontSize, 15)
+        XCTAssertGreaterThanOrEqual(layout.responseFontSize, 13)
+        XCTAssertGreaterThan(layout.previewMaxHeight, 0)
+        XCTAssertLessThanOrEqual(layout.previewMaxHeight, 180)
+        XCTAssertEqual(layout.rowDetailTitle, "查看完整详情")
+    }
+
+    func testTodo154LongCardsKeepDistinctDetailTargets() {
+        let longText = String(repeating: "很长的正文和更多内容。", count: 90)
+        let items = (1...12).map { number in
+            LocalTodoItem(id: "long-\(number)", number: number, text: longText,
+                          status: "pending", createdAt: "2026-09-27")
+        }
+        let rows = TodoListPresentation.rows(for: .agent, human: [], agent: items)
+        XCTAssertEqual(rows.count, 12)
+        XCTAssertEqual(Set(rows.map(\.item.number)).count, 12)
+        for row in rows {
+            let preview = TodoListPresentation.cardMarkdown(
+                row.item.text, lineBudget: TodoListPresentation.overviewLayout.bodyLineLimit)
+            XCTAssertLessThan(preview.count, row.item.text.count)
+            XCTAssertEqual(TodoListPresentation.focusedRows(items, focus: row.item.number)
+                .map(\.number), [row.item.number])
+        }
+    }
+
     func testOverviewResponseUsesOnlyLatestResponseAsCompactSingleLineSummary() {
         var todo = item(84)
         todo.responses = [

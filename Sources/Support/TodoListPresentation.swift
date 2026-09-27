@@ -23,6 +23,11 @@ enum TodoListPresentation {
 
         let bodyLineLimit: Int
         let responseLineLimit: Int
+        let bodyFontSize: Int
+        let responseFontSize: Int
+        let previewMaxHeight: Int
+        let cardMaxHeight: Int
+        let rowDetailTitle: String
         let statusNumberPlacement: StatusNumberPlacement
         let responsePlacement: ResponsePlacement
         let detailButtonTitle: String
@@ -32,6 +37,11 @@ enum TodoListPresentation {
     static let overviewLayout = OverviewLayout(
         bodyLineLimit: 3,
         responseLineLimit: 1,
+        bodyFontSize: 15,
+        responseFontSize: 13,
+        previewMaxHeight: 160,
+        cardMaxHeight: 240,
+        rowDetailTitle: "查看完整详情",
         statusNumberPlacement: .aboveCard,
         responsePlacement: .insideCard,
         detailButtonTitle: "放大看",
