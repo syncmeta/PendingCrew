@@ -1,17 +1,16 @@
 import XCTest
 
-/// 「仅@你」挪到三个按钮左边、并且**默认点亮**（人类 Todo #128）。
+/// 「仅@你」挪到三个按钮左边（人类 Todo #128）；#155 将默认值改为关闭。
 ///
-/// ## 这条改动跟一条既有设计正面冲突，本文件的一半是为它立的
+/// ## 默认状态与空态出路
 ///
 /// `CrewCenterView` 里有 Todo #61 定的行为：**切 crew 时筛选归位**，理由原文是
 /// 「换个群还挂着『只看 @ 我』，新群大概率筛成空」。
 ///
-/// 默认点亮 + 切群归位 ⇒ **每次进群都是点亮的** ⇒ 按 #61 自己的说法，大概率一进群
-/// 就是一片空白。人类要的正是 #61 当初要防的那件事。
+/// #128 曾要求默认点亮；#155 新口径只将默认值改为关闭，点击后的筛选判定不变。
 ///
-/// 机长的裁定：照人类说的做，但**空状态必须可解释、可一键退出**。所以这里除了钉
-/// 「默认点亮」「位置在最左」，还钉死那条出路 —— 筛完一条不剩时，得有一个明说
+/// 手动打开筛选后，空状态仍须可解释、可一键退出。所以这里除了钉
+/// 「默认关闭」「位置在最左」，还钉死那条出路 —— 筛完一条不剩时，得有一个明说
 /// 「这个群没有 @ 你的消息」和一个点一下就看全部的按钮。
 ///
 /// ## 量得到什么、量不到什么
@@ -24,24 +23,24 @@ import XCTest
 /// **本文件全绿不构成「位置对了」** —— 那一条只有人眼能验。
 final class MentionsFilterDefaultOnTests: XCTestCase {
 
-    // MARK: - ① 默认点亮
+    // MARK: - ① 默认关闭
 
-    func testFilterDefaultsToOn() throws {
+    func testFilterDefaultsToOff() throws {
         let center = Self.codeOnly(try Self.text(of: "CrewCenterView.swift"))
         XCTAssertTrue(
             center.contains("@State private var onlyMentions = CrewMentionFilter.defaultOnlyMentions"),
             """
             「仅@你」的默认值不是从 `CrewMentionFilter.defaultOnlyMentions` 来的。\
             这个默认值有两个读者（初值 + 切群归位），写死两处迟早会分叉 —— \
-            那时「默认点亮」在冷启动时成立、切一次群就不成立了，而且没有任何报错。
+            那时冷启动与切群后的默认状态可能分叉，而且没有任何报错。
             """)
-        XCTAssertTrue(
+        XCTAssertFalse(
             CrewMentionFilter.defaultOnlyMentions,
-            "默认不是点亮的 —— 人类原话「并且默认点亮」")
+            "新口径要求「仅@你」默认不点亮")
     }
 
     /// 切群归位**保留**（那是 Todo #61 的意思：筛选状态不跨群带走），
-    /// 但归到的是**新的默认值**，不再是写死的 false。
+    /// 且仍通过共享默认值归位，不另写一份常量。
     ///
     /// 判据只切**切群那一段**，不扫全文件 —— 第一版扫全文件，被
     /// 「搜索时强制看全部」那条合法的 `onlyMentions = false` 咬红了。
@@ -53,9 +52,8 @@ final class MentionsFilterDefaultOnTests: XCTestCase {
         XCTAssertTrue(
             handler.contains("onlyMentions = CrewMentionFilter.defaultOnlyMentions"),
             """
-            切群归位没有归到 `defaultOnlyMentions`。它要么还写死着 false —— 那「默认点亮」\
-            只在冷启动那一次成立、切一次群就灭了；要么整条归位被删了 —— 那 Todo #61 \
-            「筛选状态不跨群带走」就没了。两种都不会报错，只有人自己觉得不对劲。
+            切群归位没有归到 `defaultOnlyMentions`，默认状态可能与冷启动分叉，\
+            或失去 Todo #61 要求的「筛选状态不跨群带走」。
             """)
         XCTAssertFalse(
             handler.contains("onlyMentions = false"),
@@ -64,7 +62,7 @@ final class MentionsFilterDefaultOnTests: XCTestCase {
 
     /// 反面守卫：**搜索时仍然强制看全部**。
     ///
-    /// 这条是上面那把尺子第一版咬到的东西，单独钉住 —— 它和「默认点亮」不冲突：
+    /// 这条是上面那把尺子第一版咬到的东西，单独钉住：
     /// 人打字搜东西时，再叠一层「只看 @ 我」会把结果筛得莫名其妙地少。
     func testTypingASearchStillForcesShowingEverything() throws {
         let handler = try Self.onChangeBlock(
@@ -110,7 +108,7 @@ final class MentionsFilterDefaultOnTests: XCTestCase {
                 onlyMentions: true, isSearching: false,
                 hasAnyEntries: true, filteredIsEmpty: true),
             """
-            群里有消息、筛选把它们全筛没了 —— 这正是「默认点亮」最常见的样子，\
+            群里有消息、手动打开筛选后却全筛没了，\
             必须给一句解释和一个看全部的出口，否则人看到的就是一个坏掉的界面。
             """)
     }
@@ -160,15 +158,13 @@ final class MentionsFilterDefaultOnTests: XCTestCase {
             "空态里没有「看全部」这颗按钮")
     }
 
-    /// #61 那段注释是这次冲突**唯一的线索来源**，不许删掉了事 —— 要改写成现在的口径。
+    /// #61/#128 的历史与 #155 的当前默认值，都要留在切群归位处。
     func testTheConflictIsWrittenDownWhereTheNextPersonWillLook() throws {
         let center = try Self.text(of: "CrewCenterView.swift")
         XCTAssertTrue(
-            center.contains("#61") && center.contains("#128"),
+            center.contains("#61") && center.contains("#128") && center.contains("#155"),
             """
-            切群归位那段注释没有同时留下 #61 和 #128。\
-            「默认点亮」和「切群归位」是一对会互相解释的设定，\
-            只写现在这条、把当初为什么归位删掉，下一个人会把这个坑重走一遍。
+            切群归位的说明缺少 #61、#128 或 #155，下一次修改可能误判默认状态。
             """)
     }
 

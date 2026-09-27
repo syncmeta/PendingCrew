@@ -14,7 +14,7 @@ struct CrewCenterView: View {
     /// 换成 `@EnvironmentObject` 会让开关驾驶舱重新把整条中栏（连着群聊）作废。
     @Environment(\.cockpitPresentation) private var cockpitPresentation
     @State private var showingDetail = false
-    /// 「只看 @ 我的消息」（Todo #61 立、#128 改成默认点亮）。开关钮在 toolbar 上，
+    /// 「只看 @ 我的消息」（Todo #61 立、#155 改成默认不点亮）。开关钮在 toolbar 上，
     /// 状态喂给 `CrewChatView` 的时间线。**放在这里而不是 chat 里面**：
     /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
     /// toolbar 驱动它。切 crew 时下面显式归位（筛选状态不跨群带走）。
@@ -162,20 +162,18 @@ struct CrewCenterView: View {
         // 轮询）：app 侧答复 + helper 跨进程 raise(目录监听)都推一个 tick,有新的(非
         // captain 自己 raise 的)就把提示注入在跑的 captain PTY。不依赖 inspector 是否打开。
         // `.task(id:)` 随选中 crew 切换重建订阅;无选中 crew 时 crewId=nil,不订阅。
-        // 切 crew：筛选归位（Todo #61 立，#128 改了归到哪儿）。
+        // 切 crew：筛选归位（Todo #61 立，#128 曾改为默认点亮，#155 改回关闭）。
         //
         // **#61 当初归位到「关」，理由是**：换个群还挂着「只看 @ 我」，新群大概率筛成
         // 空的 —— 人看到的是一个空聊天页，会以为这个群没消息 / 加载失败。
         //
-        // **#128 人类要「默认点亮」**，于是这里改成归到 `defaultOnlyMentions`（= 点亮）。
+        // #155 改成默认不点亮，这里仍归到 `defaultOnlyMentions`（= 关闭）。
         // 归位本身保留 —— 那是 #61 真正的意思：筛选状态不跨群带走。
         //
-        // ⚠️ **两条合起来 = 每次进群都是点亮的 = 正是 #61 当初要防的那种空**。
-        // 这个冲突没有被消除，是被**接住**了：筛完一条不剩时，群聊空态会给一句
+        // 手动打开筛选后仍可能筛成空；这时群聊空态会给一句
         // 「这个群里没有 @ 你的消息」和一颗「看全部」
         // （`CrewMentionFilter.showsClearFilterEscape` → `CrewChatView.emptyState`）。
-        // 人类要的是默认看到跟自己有关的，不是要一个看起来坏掉的界面 ——
-        // **动这里之前先确认那条出路还在**，没有它，这一段就退回 #61 描述的那个坑。
+        // **动这里之前先确认那条出路还在**，手动打开筛选后仍需要它。
         .onChange(of: crewStore.selectedCrewId) { _, _ in
             onlyMentions = CrewMentionFilter.defaultOnlyMentions
             // 跨群结果的 request 会在下面紧接着重新填回查询/定位；普通切群则归零。

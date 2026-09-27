@@ -1352,8 +1352,7 @@ struct CrewChatView: View {
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)
             }
-            // 「仅@你」默认点亮之后，**一进群就是这一屏**是常态而不是意外（#128）。
-            // 所以空态不能只是一句话 —— 得有一个一眼能点的出口，否则它看起来就像
+            // 手动打开「仅@你」后仍可能筛成空，所以空态需要一个可点的出口，否则它看起来就像
             // 这个群坏了。群本身空着时不给：点了还是空，那颗按钮只会误导。
             if showsClearFilterEscape {
                 Button("看全部") { showOnlyHumanMentions?.wrappedValue = false }
