@@ -754,10 +754,11 @@ final class CrewStore: ObservableObject {
         let capabilities = await Task.detached(priority: .utility) {
             (CaptainRunnerProbe.inspect(.claudeCode), CaptainRunnerProbe.inspect(.codex))
         }.value
+        let requestedKind: LocalCodingAgentKind? = cmd.runner == "claude" ? .claudeCode
+            : cmd.runner == "codex" ? .codex : nil
         guard let selectedKind = CaptainRunnerChoice.select(
-            inherited: cmd.runner == "claude" ? .claudeCode
-                : cmd.runner == "codex" ? .codex
-                : LocalCodingAgentKind.captainDefault(parentSummary.captainAgentKind),
+            inherited: LocalCodingAgentKind.captainDefault(parentSummary.captainAgentKind),
+            requested: requestedKind, preference: CaptainRunnerPreferences.preference(),
             claude: capabilities.0, codex: capabilities.1) else {
             postSystemNotice(crewId: parentId,
                              text: "建子 crew 被拒：没有已认证且健康的 runner。Claude Code：\(capabilities.0.summary)；Codex：\(capabilities.1.summary)。")

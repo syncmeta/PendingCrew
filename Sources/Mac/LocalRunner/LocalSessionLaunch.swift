@@ -258,11 +258,22 @@ enum LocalSessionLaunch {
         }
         let plans = (quota?.claude?.subscriptionPlanDescription,
                      quota?.codex?.subscriptionPlanDescription)
+        let runnerPreference = CaptainRunnerPreferences.preference()
+        let preferenceDetail: String
+        switch runnerPreference {
+        case .codex:
+            preferenceDetail = "新机组机长优先使用：Codex。"
+        case .claudeCode:
+            preferenceDetail = "新机组机长优先使用：Claude Code。"
+        case .custom:
+            preferenceDetail = "自定义选择条件："
+                + "\n以下情况中新机组机长优先用 Claude Code：\(CaptainRunnerPreferences.condition(for: .claudeCode))"
+                + "\n以下情况中新机组机长优先用 Codex：\(CaptainRunnerPreferences.condition(for: .codex))"
+        }
         let runnerBlock = "新机组机长 runner 选择：先核对可执行文件、登录和健康；不可用或未认证者不能因偏好入选。"
             + "\nClaude Code：\(captainCapabilities.claude.summary)"
             + "\nCodex：\(captainCapabilities.codex.summary)"
-            + "\n以下情况中新机组机长优先用 Claude Code：\(CaptainRunnerPreferences.get(.claudeCode))"
-            + "\n以下情况中新机组机长优先用 Codex：\(CaptainRunnerPreferences.get(.codex))"
+            + "\n\(preferenceDetail)"
         let ctx = LocalSessionWorldModel.Context(
             sessionTaskBrief: taskBrief,
             runnerKind: {

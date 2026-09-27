@@ -1,23 +1,64 @@
 #if os(macOS)
 import Foundation
 
+/// 新建 crew 未指定 runner 时的用户偏好。`.custom` 保留此前按来源 runner 的选择
+/// 顺序，并只把旧的两段条件文字当作给机长的建议；它是缺省值，以免升级改变行为。
+enum CaptainRunnerPreference: String, CaseIterable, Codable, Sendable {
+    case codex
+    case claudeCode = "claude_code"
+    case custom
+
+    var preferredKind: LocalCodingAgentKind? {
+        switch self {
+        case .codex: return .codex
+        case .claudeCode: return .claudeCode
+        case .custom: return nil
+        }
+    }
+}
+
 /// 人写给机长的选择条件；它们是建议，不代表 CLI 当前可用。
 enum CaptainRunnerPreferences {
+    static let preferenceKey = "pendingcrew.captainPreference.mode"
     static let claudeKey = "pendingcrew.captainPreference.claude"
     static let codexKey = "pendingcrew.captainPreference.codex"
 
-    static func get(_ kind: LocalCodingAgentKind, defaults: UserDefaults = .standard) -> String {
+    /// 对旧安装不做写迁移：缺失/未知值都回落 `.custom`，保留原两段文字与继承顺序。
+    static func preference(defaults: UserDefaults = .standard) -> CaptainRunnerPreference {
+        guard let raw = defaults.string(forKey: preferenceKey) else { return .custom }
+        return CaptainRunnerPreference(rawValue: raw) ?? .custom
+    }
+
+    static func setPreference(_ preference: CaptainRunnerPreference,
+                              defaults: UserDefaults = .standard) {
+        defaults.set(preference.rawValue, forKey: preferenceKey)
+    }
+
+    /// 旧文本的兼容入口。模式切换不会清除它们，回到 `.custom` 后仍可编辑。
+    static func condition(for kind: LocalCodingAgentKind,
+                          defaults: UserDefaults = .standard) -> String {
         defaults.string(forKey: kind == .claudeCode ? claudeKey : codexKey) ?? ""
     }
 
-    static func set(_ text: String, for kind: LocalCodingAgentKind,
-                    defaults: UserDefaults = .standard) {
+    static func setCondition(_ text: String, for kind: LocalCodingAgentKind,
+                             defaults: UserDefaults = .standard) {
         let key = kind == .claudeCode ? claudeKey : codexKey
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             defaults.removeObject(forKey: key)
         } else {
             defaults.set(text, forKey: key)
         }
+    }
+
+    /// Source-compatible name for the settings UI before #167.
+    static func get(_ kind: LocalCodingAgentKind, defaults: UserDefaults = .standard) -> String {
+        condition(for: kind, defaults: defaults)
+    }
+
+    /// Source-compatible name for the settings UI before #167.
+    static func set(_ text: String, for kind: LocalCodingAgentKind,
+                    defaults: UserDefaults = .standard) {
+        setCondition(text, for: kind, defaults: defaults)
     }
 }
 
@@ -64,6 +105,28 @@ enum CaptainRunnerChoice {
         let first = inherited == .codex ? codex : claude
         let second = inherited == .codex ? claude : codex
         return first.selectable ? first.kind : (second.selectable ? second.kind : nil)
+    }
+
+    /// 显式偏好只影响未指定 runner 的新 crew；`.custom` 精确保留原有继承顺序。
+    /// 无论偏好是什么，未登录、未知或不健康的 runner 都不能入选。
+    static func select(inherited: LocalCodingAgentKind,
+                       preference: CaptainRunnerPreference,
+                       claude: CaptainRunnerCapability,
+                       codex: CaptainRunnerCapability) -> LocalCodingAgentKind? {
+        select(inherited: preference.preferredKind ?? inherited, claude: claude, codex: codex)
+    }
+
+    /// Tool-level `runner` is an explicit request and therefore wins over the settings
+    /// preference. This is kept here rather than at the UI call site so the precedence
+    /// is regression-testable with the selection policy itself.
+    static func select(inherited: LocalCodingAgentKind,
+                       requested: LocalCodingAgentKind?,
+                       preference: CaptainRunnerPreference,
+                       claude: CaptainRunnerCapability,
+                       codex: CaptainRunnerCapability) -> LocalCodingAgentKind? {
+        select(inherited: requested ?? inherited,
+               preference: requested == nil ? preference : .custom,
+               claude: claude, codex: codex)
     }
 }
 

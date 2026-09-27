@@ -1,6 +1,55 @@
 import XCTest
 
 final class Todo152SettingsTests: XCTestCase {
+    func testRunnerPreferenceModeDefaultsToCustomAndPreservesLegacyConditions() throws {
+        let name = "captain-preference-mode-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        // Existing installations only have these two strings. Reading the new mode must
+        // neither discard them nor alter the old inherited-runner behavior.
+        CaptainRunnerPreferences.set("复杂重构", for: .claudeCode, defaults: defaults)
+        CaptainRunnerPreferences.set("多文件测试", for: .codex, defaults: defaults)
+
+        XCTAssertEqual(CaptainRunnerPreferences.preference(defaults: defaults), .custom)
+        XCTAssertEqual(CaptainRunnerPreferences.condition(for: .claudeCode, defaults: defaults),
+                       "复杂重构")
+        XCTAssertEqual(CaptainRunnerPreferences.condition(for: .codex, defaults: defaults),
+                       "多文件测试")
+        XCTAssertNil(defaults.object(forKey: CaptainRunnerPreferences.preferenceKey),
+                     "compatibility read must not eagerly rewrite user defaults")
+
+        CaptainRunnerPreferences.setPreference(.codex, defaults: defaults)
+        XCTAssertEqual(CaptainRunnerPreferences.preference(defaults: defaults), .codex)
+        XCTAssertEqual(defaults.string(forKey: CaptainRunnerPreferences.preferenceKey), "codex")
+        XCTAssertEqual(CaptainRunnerPreferences.condition(for: .claudeCode, defaults: defaults),
+                       "复杂重构", "mode changes must not erase legacy conditions")
+
+        defaults.set("retired_runner", forKey: CaptainRunnerPreferences.preferenceKey)
+        XCTAssertEqual(CaptainRunnerPreferences.preference(defaults: defaults), .custom,
+                       "unknown persisted values must preserve the safe old behavior")
+    }
+
+    func testRunnerPreferenceModeChangesAutoSelectionButCustomKeepsInheritedRunner() {
+        let claude = CaptainRunnerCapability(kind: .claudeCode,
+            executable: URL(fileURLWithPath: "/bin/claude"), authentication: .confirmed,
+            health: .normal)
+        let codex = CaptainRunnerCapability(kind: .codex,
+            executable: URL(fileURLWithPath: "/bin/codex"), authentication: .confirmed,
+            health: .normal)
+
+        XCTAssertEqual(CaptainRunnerChoice.select(inherited: .claudeCode, preference: .custom,
+                                                   claude: claude, codex: codex), .claudeCode)
+        XCTAssertEqual(CaptainRunnerChoice.select(inherited: .claudeCode, preference: .codex,
+                                                   claude: claude, codex: codex), .codex)
+        XCTAssertEqual(CaptainRunnerChoice.select(inherited: .codex, preference: .claudeCode,
+                                                   claude: claude, codex: codex), .claudeCode)
+        XCTAssertEqual(CaptainRunnerChoice.select(inherited: .claudeCode, requested: .codex,
+                                                   preference: .claudeCode,
+                                                   claude: claude, codex: codex), .codex,
+                       "an explicit tool request must override the global setting")
+    }
+
     func testPreferencePersistenceAndClear() throws {
         let name = "captain-preference-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
