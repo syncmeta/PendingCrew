@@ -39,6 +39,12 @@ struct HumanAttentionCount: Equatable {
 }
 
 enum HumanAttentionTally {
+    /// 每拍读共享名册；GUI / daemon 在另一进程新建 crew 后，启动时的
+    /// `LocalCrewStore` 内存列表不会自动重载。复用通讯录的失败即抛语义。
+    static func loadCrewIds(whiteboardDirectory: URL) throws -> [String] {
+        try CrewDirectory.load(whiteboardDirectory: whiteboardDirectory).crews.map(\.id)
+    }
+
     enum TodoReadError: LocalizedError {
         case unreadable(String, TodoLedger)
         var errorDescription: String? {

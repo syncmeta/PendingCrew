@@ -58,6 +58,37 @@ final class HumanAttentionTallyTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testNewCrewFromAnotherStoreAppearsInFreshRosterAndReadFailureThrows() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("menu-roster-\(UUID().uuidString)")
+        let whiteboards = root.appendingPathComponent("whiteboards")
+        try FileManager.default.createDirectory(at: whiteboards, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cached = LocalCrewStore(baseDirectory: root)
+        let before = try HumanAttentionTally.loadCrewIds(whiteboardDirectory: whiteboards)
+        let other = LocalCrewStore(baseDirectory: root)
+        let request = CreateCrewRequest.make(
+            responsibleSubjectId: "local-byok", title: "new crew", machineId: nil,
+            workingDirectory: "/tmp/x", captainAgentKind: "codex",
+            captain: .systemGenerated(templateName: nil))
+        let created = other.createCrew(request)
+        XCTAssertFalse(cached.listCrews().contains { $0.id == created.crewId })
+        XCTAssertFalse(before.contains(created.crewId))
+        let currentIds = try HumanAttentionTally.loadCrewIds(whiteboardDirectory: whiteboards)
+        XCTAssertTrue(currentIds.contains(created.crewId))
+        let agent = LocalTodoStore(directory: whiteboards)
+        let human = LocalTodoStore(directory: whiteboards, ledger: .human)
+        XCTAssertNotNil(agent.add(crewId: created.crewId, text: "new work"))
+        let records = try HumanAttentionTally.readRecords(crewIds: currentIds) { crewId, ledger in
+            (ledger == .agent ? agent : human).read(crewId: crewId)
+        }
+        XCTAssertEqual(HumanAttentionTally.tally(todos: records,
+            pendingApprovalSessionIds: [], sessionStates: [:]).badge, "1")
+        try Data("invalid".utf8).write(to: root.appendingPathComponent("local-crews.json"))
+        XCTAssertThrowsError(try HumanAttentionTally.loadCrewIds(whiteboardDirectory: whiteboards))
+    }
+
     func testQuietWhenNothingIsWaiting() {
         let count = HumanAttentionTally.tally(
             pendingApprovalSessionIds: [], sessionStates: ["s1": "working", "s2": "idle"],

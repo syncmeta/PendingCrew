@@ -55,7 +55,8 @@ final class MenuBarAttentionModel: ObservableObject {
         guard let crewStore else { return }
         do {
             let todos = try HumanAttentionTally.readRecords(
-                crewIds: LocalCrewStore.shared.listCrews(includingBuiltin: true).map(\.id)) {
+                crewIds: HumanAttentionTally.loadCrewIds(
+                    whiteboardDirectory: LocalWhiteboardStore.defaultDirectory)) {
                 crewId, ledger in
                 LocalTodoStore.shared(ledger).read(crewId: crewId)
             }
@@ -66,7 +67,8 @@ final class MenuBarAttentionModel: ObservableObject {
             staleReason = nil
         } catch {
             // **数字不动。** 见类型注释：读不动的时候刷成 0 就是在说「没事了」。
-            staleReason = error.localizedDescription
+            staleReason = (error as? CrewDirectory.Unavailable)?.message
+                ?? error.localizedDescription
         }
     }
 
