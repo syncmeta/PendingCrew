@@ -241,7 +241,8 @@ final class CrewChatScrollDiagnostic {
         let contentHeight: Double
         let firstWindowIndex: Int
         let lastWindowIndex: Int
-        let visibleTopIndex: Int
+        /// Index of SwiftUI's scroll-position anchor, not a measured visible row.
+        let anchorIndex: Int
         let total: Int
         let renderLimit: Int
         let newMessages: Int
@@ -253,6 +254,8 @@ final class CrewChatScrollDiagnostic {
     private var buffer: [Sample] = []
     private var flushScheduled = false
     private var lastGeometryAt: TimeInterval = -.infinity
+    private var observedTarget: String?
+    private var hasObservedTarget = false
     private let writer = DispatchQueue(label: "CrewChatScrollDiagnostic.writer")
 
     init(defaults: UserDefaults = .standard, capacity: Int = maxSamples,
@@ -265,7 +268,22 @@ final class CrewChatScrollDiagnostic {
     }
 
     func isEnabled(for crewID: String) -> Bool {
-        defaults.string(forKey: Self.optInCrewIDKey) == crewID
+        syncTarget()
+        return observedTarget == crewID
+    }
+
+    private func syncTarget() {
+        let selected = defaults.string(forKey: Self.optInCrewIDKey)
+        guard !hasObservedTarget || selected != observedTarget else { return }
+        hasObservedTarget = true
+        observedTarget = selected
+        buffer.removeAll(keepingCapacity: true)
+        flushScheduled = false
+        lastGeometryAt = -.infinity
+        let url = outputURL
+        // Drain the previous crew's in-flight flush and remove its file before
+        // any caller can observe the new target or append a new sample.
+        writer.sync { try? FileManager.default.removeItem(at: url) }
     }
 
     func shouldCaptureGeometry(at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
@@ -289,10 +307,14 @@ final class CrewChatScrollDiagnostic {
         }
     }
 
-    var samples: [Sample] { buffer }
+    var samples: [Sample] {
+        syncTarget()
+        return buffer
+    }
 
     /// Rewrites one small bounded file. Used by the delayed live flush and tests.
     func flush() {
+        syncTarget()
         guard flushScheduled, !buffer.isEmpty else { return }
         flushScheduled = false
         guard let data = try? JSONEncoder().encode(buffer) else { return }

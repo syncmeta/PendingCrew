@@ -388,7 +388,7 @@ final class CrewChatScrollDiagnosticTests: XCTestCase {
     private func sample(_ n: Int, cause: Int = 1) -> CrewChatScrollDiagnostic.Sample {
         .init(timestampMs: Int64(n * 1_000), cause: cause, offset: Double(n), viewportHeight: 400,
               contentHeight: 2400, firstWindowIndex: 70,
-              lastWindowIndex: 99, visibleTopIndex: 76,
+              lastWindowIndex: 99, anchorIndex: 76,
               total: 100, renderLimit: 30, newMessages: n)
     }
 
@@ -472,6 +472,39 @@ final class CrewChatScrollDiagnosticTests: XCTestCase {
         let text = String(decoding: data, as: UTF8.self)
         XCTAssertFalse(text.contains("private-crew-name"))
         XCTAssertLessThan(data.count, 2_048)
+    }
+
+    func testChangingOptInCrewDropsOldSamplesAndFileBeforeNewCrewRecords() throws {
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let url = temporaryTraceURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let trace = CrewChatScrollDiagnostic(defaults: defaults, outputURL: url)
+
+        defaults.set("crew-a", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        trace.record(crewID: "crew-a", sample(1))
+        trace.flush()
+        trace.waitForWrites()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        defaults.set("crew-b", forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        XCTAssertTrue(trace.isEnabled(for: "crew-b"))
+        XCTAssertTrue(trace.samples.isEmpty, "切换目标后环形缓冲不能混入旧聊天")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
+                       "新聊天尚未记录时，磁盘上不能残留上一聊天")
+
+        trace.record(crewID: "crew-b", sample(2))
+        trace.flush()
+        trace.waitForWrites()
+        let persisted = try JSONDecoder().decode([CrewChatScrollDiagnostic.Sample].self,
+                                                 from: Data(contentsOf: url))
+        XCTAssertEqual(persisted, [sample(2)])
+
+        defaults.removeObject(forKey: CrewChatScrollDiagnostic.optInCrewIDKey)
+        XCTAssertFalse(trace.isEnabled(for: "crew-b"))
+        XCTAssertTrue(trace.samples.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 }
 

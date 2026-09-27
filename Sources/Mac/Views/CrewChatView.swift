@@ -1383,7 +1383,7 @@ struct CrewChatView: View {
         let visible = timelineEntries
         let shown = CrewChatWindow.clampedLimit(renderLimit, total: visible.count)
         let first = visible.count - shown
-        let top = topAnchorBox.id.flatMap { id in visible.firstIndex(where: { $0.id == id }) } ?? -1
+        let anchor = topAnchorBox.id.flatMap { id in visible.firstIndex(where: { $0.id == id }) } ?? -1
         scrollDiagnostic.record(crewID: crewId, .init(
             timestampMs: Int64(ProcessInfo.processInfo.systemUptime * 1_000),
             cause: cause,
@@ -1392,7 +1392,7 @@ struct CrewChatView: View {
             contentHeight: topAnchorBox.diagnosticContent,
             firstWindowIndex: first,
             lastWindowIndex: visible.isEmpty ? -1 : visible.count - 1,
-            visibleTopIndex: top,
+            anchorIndex: anchor,
             total: visible.count,
             renderLimit: renderLimit,
             newMessages: newMessages))
