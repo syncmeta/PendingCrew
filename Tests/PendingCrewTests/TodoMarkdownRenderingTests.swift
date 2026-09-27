@@ -245,13 +245,18 @@ final class TodoMarkdownRenderingTests: XCTestCase {
 
     func testTodo154BoundedCardHasKeyboardAndVoiceOverDetailEntry() throws {
         let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
-        XCTAssertTrue(panel.contains(".frame(maxHeight: CGFloat(layout.previewMaxHeight)"))
-        XCTAssertTrue(panel.contains(".frame(maxHeight: CGFloat(layout.cardMaxHeight)"))
-        XCTAssertTrue(panel.contains("Button(layout.rowDetailTitle)"),
+        let rowStart = try XCTUnwrap(panel.range(of: "private func todoRow("))
+        let row = String(panel[rowStart.lowerBound...])
+        XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.previewMaxHeight), alignment: .top)"),
+                      "限高值必须用在实际 Todo 行的内容预览")
+        XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.cardMaxHeight), alignment: .top)"),
+                      "限高值必须用在实际 Todo 卡片")
+        XCTAssertTrue(row.contains("Button(layout.rowDetailTitle) {\n                openDetail(ledger: row.ledger, focus: item.number, source: source)"),
                       "卡片需要真正的 Button，才能用键盘和 VoiceOver 打开全文")
-        XCTAssertTrue(panel.contains(".accessibilityLabel(\"查看 #\\(item.number) 的完整详情\")"))
-        XCTAssertTrue(panel.contains("openDetail(ledger: row.ledger, focus: item.number, source: source)"),
-                      "逐条详情必须保留来源账本、组与编号")
+        XCTAssertTrue(row.contains(".accessibilityLabel(\"查看 #\\(item.number) 的完整详情\")"),
+                      "逐条按钮需要读得出具体 Todo 编号")
+        XCTAssertTrue(row.contains(".onTapGesture {\n                openDetail(ledger: row.ledger, focus: item.number, source: source)"),
+                      "原有点行看详情的交互须保留")
     }
 
     func testTodo154DetailRemainsScrollableAtSmallWindowSize() throws {
