@@ -640,6 +640,14 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(profile.contains("availableModels.isEmpty"), "无合格目录时未显示空态")
         XCTAssertTrue(profile.contains("暂无可选模型"), "无目录时缺简短空态")
         XCTAssertTrue(profile.contains("重试"), "无目录时缺探测重试线索")
+        XCTAssertTrue(profile.contains("Text(modelPickerOptions.unavailableReason ??"),
+                      "模型不可用的具体原因必须在菜单正文可见，不能只藏在 help")
+        XCTAssertTrue(profile.contains("Text(effortUnavailableReason ??"),
+                      "effort 不可用的具体原因必须在菜单正文可见，不能只藏在 help")
+        XCTAssertTrue(profile.contains(".accessibilityLabel(modelPickerOptions.unavailableReason ??"),
+                      "模型不可用原因的完整文案须可供辅助使用读取")
+        XCTAssertTrue(profile.contains(".accessibilityLabel(effortUnavailableReason ??"),
+                      "effort 不可用原因的完整文案须可供辅助使用读取")
         XCTAssertTrue(profile.contains("SessionLaunchOptions.effortPickerOptions("),
                       "effort 候选未走逐模型 PickerOptions")
         XCTAssertTrue(profile.contains("for: .codex, model: run.model, catalog: catalog.file"),

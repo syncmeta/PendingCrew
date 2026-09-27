@@ -1665,8 +1665,11 @@ private struct SessionProfileControl: View {
                 Divider()
             }
             if availableModels.isEmpty {
-                Text("暂无可选模型")
-                    .help(modelPickerOptions.unavailableReason ?? "模型目录暂无可选项")
+                Text(modelPickerOptions.unavailableReason ?? "暂无可选模型")
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .accessibilityLabel(modelPickerOptions.unavailableReason ?? "暂无可选模型")
+                    .help(modelPickerOptions.unavailableReason ?? "暂无可选模型")
                 Text("请稍后重试目录探测")
             } else {
                 ForEach(availableModels, id: \.self) { model in
@@ -1706,8 +1709,11 @@ private struct SessionProfileControl: View {
     private var effortMenu: some View {
         Menu {
             if availableEfforts.isEmpty {
-                Text("暂无可选推理强度")
-                    .help(effortUnavailableReason ?? "模型目录暂无可选项")
+                Text(effortUnavailableReason ?? "暂无可选推理强度")
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .accessibilityLabel(effortUnavailableReason ?? "暂无可选推理强度")
+                    .help(effortUnavailableReason ?? "暂无可选推理强度")
                 Text("请稍后重试目录探测")
             } else {
                 ForEach(availableEfforts, id: \.self) { effort in
