@@ -22,9 +22,7 @@ import XCTest
 ///    面板顶垮。`.lineLimit` 是**逐 block** 生效的，不是「整段最多 3 行」。
 ///    → 所以卡片必须在**源文本层**先截断（`TodoListPresentation.cardMarkdown`），
 ///      光靠视图层的 lineLimit 不行。
-/// 2. **`.article` 会改字号**（17pt 衬线），`.chat` 是 16pt —— 而两处正文现在都是
-///    `Theme.Fonts.footnote`（13pt）。人类明说「ui 格式要和外面的…一样」，
-///    → 所以不能借用现成 variant，得加一个 13pt 的 `.todo`（`.chat` 一个字不动）。
+/// 2. Todo 两处共用独立的 `.todo` variant；它的字号由概览布局契约统一控制。
 ///
 /// ## 这里量得到什么、量不到什么
 ///
@@ -106,23 +104,17 @@ final class TodoMarkdownRenderingTests: XCTestCase {
             "列表卡片的末条回应没走 markdown")
     }
 
-    // MARK: - ③ 字号不许动
+    // MARK: - ③ Todo 字号两处一致，聊天字号不动
 
-    func testTodoVariantKeepsTheExistingFootnoteSize() throws {
+    func testTodoVariantUsesSharedReadableSize() throws {
         let markdown = try Self.text(of: "MarkdownText.swift")
         XCTAssertTrue(
             markdown.contains("case chat, codexTranscript, article, todo, todoNote"),
             "MarkdownText 没有加 .todo / .todoNote variant（也别去改 .chat）")
-        XCTAssertTrue(
-            markdown.contains("AppTheme.Fonts.scaled(13)"),
-            """
-            .todo 主题没有钉在 13pt。两处正文现在都是 `Theme.Fonts.footnote`（=13pt），\
-            人类说「ui 格式要和外面的一样」—— 借 `.article`(17pt 衬线) 或 `.chat`(16pt) \
-            都会把 Todo 卡片撑大变样。
-            """)
-        XCTAssertTrue(
-            markdown.contains("AppTheme.Fonts.scaled(12)"),
-            ".todoNote 主题没有钉在 12pt（回应现在是 Theme.Fonts.caption）")
+        XCTAssertTrue(markdown.contains("TodoListPresentation.overviewLayout.bodyFontSize"),
+                      ".todo 主题没有读取概览和详情共用的字号")
+        XCTAssertTrue(markdown.contains("TodoListPresentation.overviewLayout.responseFontSize"),
+                      ".todoNote 主题没有读取共用的回应字号")
     }
 
     func testChatVariantIsUntouched() throws {
@@ -249,6 +241,30 @@ final class TodoMarkdownRenderingTests: XCTestCase {
         XCTAssertTrue(
             detail.contains("focus = nil"),
             "详细窗口里没有回到全列表的出路 —— 那就是把列表能力砍掉了")
+    }
+
+    func testTodo154BoundedCardHasKeyboardAndVoiceOverDetailEntry() throws {
+        let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
+        let rowStart = try XCTUnwrap(panel.range(of: "private func todoRow("))
+        let row = String(panel[rowStart.lowerBound...])
+        XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.previewMaxHeight), alignment: .top)"),
+                      "限高值必须用在实际 Todo 行的内容预览")
+        XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.cardMaxHeight), alignment: .top)"),
+                      "限高值必须用在实际 Todo 卡片")
+        XCTAssertTrue(row.contains("Button(layout.rowDetailTitle) {\n                openDetail(ledger: row.ledger, focus: item.number, source: source)"),
+                      "卡片需要真正的 Button，才能用键盘和 VoiceOver 打开全文")
+        XCTAssertTrue(row.contains(".accessibilityLabel(\"查看 #\\(item.number) 的完整详情\")"),
+                      "逐条按钮需要读得出具体 Todo 编号")
+        XCTAssertTrue(row.contains(".onTapGesture {\n                openDetail(ledger: row.ledger, focus: item.number, source: source)"),
+                      "原有点行看详情的交互须保留")
+    }
+
+    func testTodo154DetailRemainsScrollableAtSmallWindowSize() throws {
+        let detail = Self.codeOnly(try Self.text(of: "CrewTodoDetailWindow.swift"))
+        XCTAssertTrue(detail.contains("window.contentMinSize = NSSize(width: 420, height: 360)"))
+        XCTAssertTrue(detail.contains("ScrollView {"))
+        XCTAssertTrue(detail.contains("MarkdownText(text: item.text, variant: .todo"),
+                      "详细窗口须保留未截断正文")
     }
 
     private static let ledgerRows: [LocalTodoItem] = [
