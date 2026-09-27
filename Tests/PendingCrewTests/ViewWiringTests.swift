@@ -512,6 +512,8 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(view.contains("private var effortMenu"), "effort 没有独立手动菜单")
         XCTAssertTrue(view.contains("跟随 Codex 默认"),
                       "模型菜单没有恢复到 Codex 当前默认的明确入口")
+        XCTAssertTrue(view.contains("当前在途推理保持原模型"),
+                      "Codex 菜单必须区分已选模型的即时提交与在途推理仍用原模型的边界")
 
         let runner = try Self.text(of: "CrewSessionRunner.swift")
         XCTAssertTrue(runner.contains("clearModelOverride("),

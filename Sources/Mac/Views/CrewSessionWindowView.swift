@@ -1674,7 +1674,7 @@ private struct SessionProfileControl: View {
         .disabled(run.status != .running)
         .accessibilityLabel("选择模型")
         .help(run.kind == .codex
-              ? "可跟随 Codex 当前默认；手动选具体模型会为这个 session 保留覆盖"
+              ? "选择会立即提交给运行中 Codex thread；确认后更新显示。当前在途推理保持原模型，下一回合使用新模型。手动选具体模型会为这个 session 保留覆盖"
               : "手动选择这个 session 的模型")
     }
 

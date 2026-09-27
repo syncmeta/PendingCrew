@@ -100,6 +100,8 @@ final class McpServerModelCatalogTests: XCTestCase {
                        "codex session 不该看到 claude 的清单（照着切只会白切）：\(text)")
         XCTAssertTrue(text.contains("thread/settings/update"),
                       "Codex 的说明必须写真实运行态切换通道：\(text)")
+        XCTAssertTrue(text.contains("无需等本回合结束"),
+                      "Codex 的选择请求应立刻提交给运行中 thread，不能误报成要等长回合结束：\(text)")
         XCTAssertTrue(text.contains("下一回合"),
                       "Codex 切换只对后续回合生效，说明必须说清：\(text)")
         XCTAssertFalse(text.contains("没有中途切换通道"),
@@ -114,6 +116,7 @@ final class McpServerModelCatalogTests: XCTestCase {
                                ["model": "gpt-5.6-sol", "effort": "high"])
 
         XCTAssertTrue(out.contains("thread/settings/update"), out)
+        XCTAssertTrue(out.contains("无需等本回合结束"), out)
         XCTAssertTrue(out.contains("下一回合"), out)
         XCTAssertFalse(out.contains("claude 的 /model /effort"), out)
         XCTAssertFalse(out.contains("codex 无中途切换通道"), out)

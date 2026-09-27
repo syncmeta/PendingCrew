@@ -1868,9 +1868,10 @@ final class McpServer {
                         "**本回合结束后不会切** —— 你还在原来的模型/effort 上，别按已经切了来规划。"))
             }
             let parts = [model.map { "模型→\($0)" }, effort.map { "effort→\($0)" }].compactMap { $0 }
-            // 回执按真实 runner 分流：claude 要等空闲后敲斜杠命令；codex 走
-            // thread/settings/update，当前回合不变、下一回合使用新设置。两条腿都必须
-            // 等底层确认后才算成功，不能在 helper 仅写入请求时谎称已经生效（#544）。
+            // 回执按真实 runner 分流：claude 要等空闲后敲斜杠命令；codex 会把
+            // thread/settings/update 立即提交给运行中 thread，但在途推理不重路由，
+            // 下一回合才使用新设置。两条腿都必须等底层确认后才算成功，不能在 helper
+            // 仅写入请求时谎称已经生效（#544）。
             var receipt = profileSwitchQueuedReceipt(parts: parts)
             if !notes.isEmpty {
                 receipt += "\n⚠️ 参数提醒（已照常排队，没拦你；同一份提醒已发白板）：\n"
@@ -2509,7 +2510,7 @@ final class McpServer {
         switch agentKey {
         case "codex":
             return lead
-                + "Codex 通过 app-server `thread/settings/update` 更新运行中 thread，当前回合保持原配置，**下一回合**使用新 model/effort。"
+                + "Codex 会立即向运行中 thread 提交 app-server `thread/settings/update`，无需等本回合结束；确认后更新已选 model/effort。当前在途推理保持原配置，**下一回合**使用新 model/effort。"
                 + confirmation
         case "claude":
             return lead
@@ -2530,7 +2531,7 @@ final class McpServer {
         case "codex":
             return """
                 \(head)
-                Codex 会通过 app-server `thread/settings/update` 应用到**下一回合**。
+                Codex 无需等本回合结束；host 收到后会立即向运行中 thread 提交 app-server `thread/settings/update`，确认后更新已选 model/effort。当前在途推理保持原配置，**下一回合**使用新设置。
                 \(result)
                 \(recovery)
                 """
@@ -2544,7 +2545,7 @@ final class McpServer {
         default:
             return """
                 \(head)
-                Claude 会等终端空闲后执行斜杠命令；Codex 会通过 app-server `thread/settings/update` 应用到**下一回合**。
+                Claude 会等终端空闲后执行斜杠命令；Codex 无需等本回合结束，会立即向运行中 thread 提交 app-server `thread/settings/update`，当前在途推理保持原配置，**下一回合**使用新设置。
                 \(result)
                 \(recovery)
                 """
