@@ -568,6 +568,20 @@ final class CrewChatBottomFollowTests: XCTestCase {
         }
     }
 
+    func testAutoPageGestureGenerationChangesOnlyWhenUserStartsScrolling() {
+        let box = CrewChatBottomFollow.ScrollPhaseBox()
+        XCTAssertEqual(box.userScrollGeneration, 0)
+        box.phaseChanged(to: .tracking)
+        box.phaseChanged(to: .interacting)
+        box.phaseChanged(to: .decelerating)
+        XCTAssertEqual(box.userScrollGeneration, 1)
+        box.phaseChanged(to: .animating)
+        box.phaseChanged(to: .idle)
+        XCTAssertEqual(box.userScrollGeneration, 1)
+        box.phaseChanged(to: .tracking)
+        XCTAssertEqual(box.userScrollGeneration, 2)
+    }
+
     /// **本次修复的接线闸**：首屏必须有第三个执行者接在滚动几何上。
     /// 少了它，两记落底双双跑在 LazyVStack 量出真实行高之前，Todo #54 复发。
     func testChatViewLandsAgainAfterRealRowHeightsExpand() throws {

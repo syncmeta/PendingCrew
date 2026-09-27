@@ -159,12 +159,15 @@ enum CrewChatBottomFollow {
     /// 稳定的实例，从头到尾没人给那个 `@State` 赋值）。
     final class ScrollPhaseBox {
         private(set) var isUserScrolling = false
+        private(set) var userScrollGeneration = 0
 
         init() {}
 
         /// 滚动相位变了。只记「手在不在上面」，不碰跟随/未读 —— 那仍归 `Pin.settled`。
         func phaseChanged(to phase: ScrollPhaseKind) {
-            isUserScrolling = CrewChatBottomFollow.isUserActive(phase)
+            let userActive = CrewChatBottomFollow.isUserActive(phase)
+            if userActive && !isUserScrolling { userScrollGeneration += 1 }
+            isUserScrolling = userActive
         }
     }
 

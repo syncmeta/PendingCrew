@@ -73,6 +73,8 @@ struct CrewChatView: View {
     /// 全量重测（#443 的热点），在手势刚开始那一下做这件事最伤。这个 `@State` 从头到尾
     /// 没人赋值，只是拿一个跨 body 稳定的实例（与 `selectionOwner` 同一套做法）。
     @State private var scrollPhaseBox = CrewChatBottomFollow.ScrollPhaseBox()
+    /// 自动续载的每手势门闩；引用型，滚动几何回调不触发时间线重排。
+    @State private var autoLoadGate = CrewChatWindow.AutoLoadGate()
 
     /// 渲染窗口上限（#443）：只把最近这么多条交给 `ForEach`。切 crew 时归位到一页。
     @State private var renderLimit = CrewChatWindow.pageSize
@@ -932,11 +934,10 @@ struct CrewChatView: View {
     private var messageScroll: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // 首屏 12 条刻意用 eager VStack 一次量完；LazyVStack 会先拿估算行高解
+                // 首屏 30 条刻意用 eager VStack 一次量完；LazyVStack 会先拿估算行高解
                 // `scrollTo(tail)`，真实高度回缩后视口可能留在内容范围外，直到用户滚一下
-                // 系统才钳回来 —— Todo #56 的空白现场。人点「加载更早」后改回 lazy，
-                // 避免一路翻到几百条又把主线程撑爆。分支只由按钮这个离散事件改变，绝不
-                // 用滚动位置驱动内容增长。
+                // 系统才钳回来 —— Todo #56 的空白现场。续载后改回 lazy，避免一路
+                // 翻到几百条又把主线程撑爆；自动续载每次用户手势至多触发一页。
                 Group {
                     if CrewChatWindow.usesEagerInitialLayout(limit: renderLimit) {
                         VStack(alignment: .leading, spacing: 0) { timelineContent(proxy) }
@@ -947,6 +948,18 @@ struct CrewChatView: View {
                     }
                 }
                 .padding(.vertical, 10)
+                #if os(macOS)
+                .background {
+                    if #available(macOS 15.0, *) {
+                        EmptyView()
+                    } else {
+                        LegacyTopApproachSensor { gesture, atBottom in
+                            autoLoadEarlier(legacyGesture: gesture, legacyAtBottom: atBottom)
+                        }
+                        .frame(width: 0, height: 0)
+                    }
+                }
+                #endif
             }
             // 打开聊天默认落在最新消息（IM 惯例；Todo #28 起，#45 补首屏路径，#47 补
             // 「跟随只许自己开、不许自己关」与未读计数）。
@@ -980,10 +993,12 @@ struct CrewChatView: View {
                                         set: { topAnchorBox.id = $0 }),
                             anchor: .top)
             .modifier(ChatScrollAnchor(isFollowing: bottomPin.isFollowing))
-            .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
+            .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox,
+                                       onUserStartNearTop: { autoLoadEarlier() }))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
             // 不会逐帧改 @State，也不改变内容高度，因此没有布局自激的反馈边。
             .modifier(BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
+            .modifier(TopApproachTracker { autoLoadEarlier() })
             .modifier(BottomOnContentGrowth(
                 isFollowing: bottomPin.isFollowing,
                 phaseBox: scrollPhaseBox
@@ -1100,9 +1115,7 @@ struct CrewChatView: View {
 
     @ViewBuilder
     private func timelineContent(_ proxy: ScrollViewProxy) -> some View {
-        // 渲染窗口之上还有更早的 → 一条「加载更早」占位（#443）。
-        // 只认「点一下」这个离散事件，**不做滚到顶自动加载** —— 滚动位置驱动内容增长、
-        // 内容增长又改滚动位置，正是布局自激的配方（2026-07-26 / 08-10 两次事故）。
+        // 渲染窗口之上还有更早的 → 一条「加载更早」按钮，自动续载不可用时兜底。
         if CrewChatWindow.hasMore(total: timelineEntries.count, limit: renderLimit) {
             loadEarlierRow()
         }
@@ -1231,7 +1244,7 @@ struct CrewChatView: View {
             Button {
                 expandEarlier()
             } label: {
-                Text("加载更早的 \(min(remaining, CrewChatWindow.pageSize)) 条（上面还有 \(remaining) 条）")
+                Text("加载更早的 \(min(remaining, CrewChatWindow.historyBatchSize)) 条（上面还有 \(remaining) 条）")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(Theme.Palette.inkMuted)
                     .padding(.horizontal, 12)
@@ -1246,7 +1259,7 @@ struct CrewChatView: View {
         .padding(.vertical, 8)
     }
 
-    /// 点「加载更早」：往前放一页。**位置由 `.scrollPosition(id:anchor: .top)` 自己按住**，
+    /// 手动或自动「加载更早」：往前放一页。**位置由 `.scrollPosition(id:anchor: .top)` 自己按住**，
     /// 这里除了改上限什么都不做（Todo #60，2026-08-26 返工）。
     ///
     /// ## 上一版是什么样、为什么被退回
@@ -1299,28 +1312,48 @@ struct CrewChatView: View {
     ///
     /// ## 容器身份翻面还留着，代价已经量过了
     ///
-    /// `usesEagerInitialLayout` 的 `limit <= pageSize` 判据仍会让 12→24 那一下换容器、
+    /// `usesEagerInitialLayout` 的 `limit <= pageSize` 判据仍会让 30→60 那一下换容器、
     /// 整棵树重建。它不再是承重项：翻面在场时第一帧偏 −24pt，消灭之后偏 +4pt ——
     /// 从 680pt 降到 21pt 的差。消灭它要动首屏 eager 测量那条路（Todo #56 的地盘），
     /// 是独立一笔，记在 `docs/tech-debt.md`。
     ///
     /// ## 为什么这不是一根新柴火
     ///
-    /// 触发源是**用户点一下**这个离散事件，不是滚动位置 —— 没有「滚到顶→加载→改滚动
-    /// 位置→再触发加载」那条自激边（`CrewChatWindow` 顶部讲的配方）。这里连一次程序化
-    /// 滚动都没有了，只改一个 `@State`；位置是滚动视图自己维持的，不构成反馈边。
-    private func expandEarlier() {
+    /// 手动按钮是离散事件；自动续载只在真实用户手势中跨入顶部阈值时触发，每手势
+    /// 一页。内容增长造成的几何回调不能再触发第二页，避免反馈环。
+    private func expandEarlier(visibleTopID: String? = nil) {
         // 先把「展开前视口顶上那条」写进绑定的盒子，再改上限 —— **两件事落在同一次 body
         // 更新里**，所以新的一页插进来和视口跟上去是同一帧。顺序不能反：盒子不被观察，
         // 它靠下一次更新被读走，而那次更新正是下面这一行引发的。
         //
         // 还跟着底部时 `anchorOnExpand` 返回 nil —— 那时不写，让 `landAtBottom` 那条路
         // 照常把人留在底部，别把他拽到顶部去。
-        if let anchorID = CrewChatWindow.anchorOnExpand(
-            windowedEntries, limit: renderLimit, isFollowing: bottomPin.isFollowing)?.id {
+        let anchorID: String?
+        if let visibleTopID {
+            anchorID = CrewChatWindow.anchorOnAutoExpand(
+                windowedEntries.map(\.id), visibleTop: visibleTopID,
+                isFollowing: bottomPin.isFollowing)
+        } else {
+            anchorID = CrewChatWindow.anchorOnExpand(
+                windowedEntries, limit: renderLimit, isFollowing: bottomPin.isFollowing)?.id
+        }
+        if let anchorID {
             topAnchorBox.id = anchorID
         }
         renderLimit = CrewChatWindow.expanded(renderLimit, total: timelineEntries.count)
+    }
+
+    private func autoLoadEarlier(legacyGesture: Int? = nil, legacyAtBottom: Bool? = nil) {
+        if legacyGesture != nil, legacyAtBottom == false {
+            // macOS 14 无相位回调；顶部且不在底部的真滚轮足以证明用户已离底。
+            bottomPin.leftBottomByUser()
+        }
+        guard autoLoadGate.shouldLoad(
+            nearTop: true, isUserScrolling: legacyGesture != nil || scrollPhaseBox.isUserScrolling,
+            isFollowing: bottomPin.isFollowing,
+            gesture: legacyGesture ?? scrollPhaseBox.userScrollGeneration,
+            total: timelineEntries.count, limit: renderLimit) else { return }
+        expandEarlier(visibleTopID: topAnchorBox.id)
     }
 
     /// 空态。默认只有一个聊天图标（人类明确要过：空白态别堆文案）。
@@ -1651,6 +1684,7 @@ private struct BottomPinTracker: ViewModifier {
     /// 相位标志写进引用型盒子，**不写 @State** —— 手势刚开始那一下让 body 失效
     /// 会把整条列表重新测一遍（#443 的热点）。见 `ScrollPhaseBox` 顶部。
     let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
+    let onUserStartNearTop: () -> Void
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
@@ -1670,6 +1704,13 @@ private struct BottomPinTracker: ViewModifier {
                 // 人已经离底，Pin 仍说 following，新消息把视口拽回去（Todo #89）。
                 if CrewChatBottomFollow.isUserActive(phaseKind), !atBottom {
                     pin.leftBottomByUser()
+                }
+                if CrewChatWindow.shouldCheckTopOnUserStart(
+                    wasUserScrolling: CrewChatBottomFollow.isUserActive(Self.kind(oldPhase)),
+                    isUserScrolling: CrewChatBottomFollow.isUserActive(phaseKind),
+                    nearTop: CrewChatWindow.isNearTop(
+                        offsetY: geo.contentOffset.y, insetTop: geo.contentInsets.top)) {
+                    onUserStartNearTop()
                 }
                 guard phase == .idle else { return }
                 pin.settled(
@@ -1697,6 +1738,26 @@ private struct BottomPinTracker: ViewModifier {
         }
     }
 }
+
+/// 接近顶部时只投影一个 Bool，不让逐帧 offset 进入 SwiftUI 状态。
+/// macOS 14 由下方 AppKit 滚轮传感器负责；iOS 17 保留手动入口。
+private struct TopApproachTracker: ViewModifier {
+    let onApproach: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, iOS 18.0, *) {
+            content.onScrollGeometryChange(for: Bool.self) { geo in
+                CrewChatWindow.isNearTop(
+                    offsetY: geo.contentOffset.y, insetTop: geo.contentInsets.top)
+            } action: { _, nearTop in
+                if nearTop { onApproach() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 
 /// 真实滚动位置到达底部就清未读（Todo #56）。
 ///

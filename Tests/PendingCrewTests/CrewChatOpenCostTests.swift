@@ -476,7 +476,7 @@ final class CrewChatOpenCostTests: XCTestCase {
 
     /// Todo #56 ①：渲染窗口封顶后改用 eager VStack，必须把真实高度先量出来，同时仍守住
     /// 一次重排 100ms 的既有预算。否则只是用卡顿换掉空白，不算修好。
-    func test_窗口内12条eager布局仍在预算内() throws {
+    func test_首屏eager布局仍在预算内() throws {
         let texts = try loadEntries().compactMap(\.text).filter { !$0.isEmpty }
         warmUp()
         let windowed = CrewChatWindow.window(texts, limit: CrewChatWindow.pageSize)

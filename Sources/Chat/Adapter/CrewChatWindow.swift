@@ -1,4 +1,8 @@
 import Foundation
+#if os(macOS)
+import AppKit
+import SwiftUI
+#endif
 
 /// 群聊时间线的**渲染窗口**（#443 第三道闸）。
 ///
@@ -21,27 +25,67 @@ import Foundation
 /// ## 这个窗口做什么
 ///
 /// 只把**最近 `pageSize` 条**交给 `ForEach`；更早的用顶部一条「加载更早的消息」占位，
-/// 点一下往前放一页。这样打开一个 crew 的成本与「这个 crew 历史有多长」**脱钩** ——
+/// 接近顶部自动续载，按钮仍可手动兜底。这样打开一个 crew 的成本与「这个 crew 历史有多长」**脱钩** ——
 /// 从 O(消息数) 变成 O(pageSize)。
 ///
 /// **不减功能**：更早的消息一条都没丢，往上翻就能加载到最早（`hasMore` 为 false 时
 /// 占位消失）。渲染窗口只影响「一次往视图树里塞多少」，不影响数据。
 ///
-/// ## 为什么不做「按滚动位置自动加载」
-///
-/// 这个文件所在的这条路上已经出过两次布局自激事故（2026-07-26 打字圆点、2026-08-10
-/// Todo 呼吸圈）。「滚到顶自动加载」= 滚动位置驱动内容增长、内容增长又改滚动位置，
-/// 正是自激的配方。所以这里只认**用户点一下**这个离散事件，和 `landAtBottom` 的两个
-/// 触发点一样保守。
+/// 自动续载仅认用户滚动，且每次手势至多一页；内容增长自己造成的几何变化不再触发
+/// 第二次续载，避免滚动位置 ↔ 内容增长的布局自激。
 enum CrewChatWindow {
 
-    /// 一页多少条。Todo #56 为消除 LazyVStack 估算高度导致的空白首屏，窗口改为 eager
-    /// measure；拿当前真实 LED驱动板 fixture 多轮量：30 条 130–143ms、24 条
-    /// 94–134ms、16 条在整组回归里 113ms。12 条给既有 100ms 预算留出抖动余量；
-    /// 紧凑视口可能直接看见顶部「加载更早」，这是确定性首屏与翻页频率之间的取舍。
-    static let pageSize = 12
+    /// 首屏 30 条（Agent Todo #163）。首屏仍 eager measure 以免估算高度
+    /// 造成空白落点；历史 fixture 曾量出 30 条约 130–143ms，需保留性能回归风险。
+    static let pageSize = 30
+    /// 每次续页也是 30 条；离屏首帧锚探针覆盖第一次与第二次续页。
+    static let historyBatchSize = 30
 
-    /// 只有首屏用 eager stack 把真实行高一次量完；人明确点过「加载更早」后仍用 lazy，
+    static let autoLoadThreshold: CGFloat = 180
+
+    static func isNearTop(offsetY: CGFloat, insetTop: CGFloat) -> Bool {
+        offsetY + insetTop <= autoLoadThreshold
+    }
+
+    static func shouldCheckTopOnUserStart(wasUserScrolling: Bool, isUserScrolling: Bool,
+                                          nearTop: Bool) -> Bool {
+        !wasUserScrolling && isUserScrolling && nearTop
+    }
+
+    /// 引用型门闩，不写进 SwiftUI 的依赖图；每次真实用户滚动手势至多续载一页。
+    final class AutoLoadGate {
+        private var consumedGesture: Int?
+
+        func shouldLoad(nearTop: Bool, isUserScrolling: Bool, isFollowing: Bool,
+                        gesture: Int, total: Int, limit: Int) -> Bool {
+            guard nearTop, isUserScrolling, !isFollowing, gesture > 0,
+                  hasMore(total: total, limit: limit), consumedGesture != gesture else {
+                return false
+            }
+            consumedGesture = gesture
+            return true
+        }
+    }
+
+    /// macOS 14 没有 SwiftUI 滚动相位；只从 AppKit 的真实滚轮事件产生手势令牌。
+    /// 用事件时间生成令牌，传感器随 eager/lazy 容器重建时也不会复用旧令牌。
+    /// 连续滚轮事件与惯性事件共用一号，停止 0.3 秒后再次滚动才开下一页。
+    struct WheelBurst {
+        private var lastWheelAt: TimeInterval?
+        private(set) var generation = 0
+
+        mutating func recordWheel(at time: TimeInterval, beginsGesture: Bool = false,
+                                  isPhased: Bool = false) -> Int {
+            if beginsGesture || generation == 0 ||
+                (!isPhased && (lastWheelAt.map({ time - $0 > 0.3 || time < $0 }) ?? true)) {
+                generation = Int((time * 1_000).rounded(.down)) + 1
+            }
+            lastWheelAt = time
+            return generation
+        }
+    }
+
+    /// 只有首屏用 eager stack 把真实行高一次量完；续载后仍用 lazy，
     /// 否则一路翻到几百条会把窗口化省下来的成本重新吃光。
     static func usesEagerInitialLayout(limit: Int) -> Bool {
         limit <= pageSize
@@ -66,7 +110,7 @@ enum CrewChatWindow {
     }
 
     /// 「加载更早」按一下之后的新上限。到顶就是 total（占位随之消失）。
-    static func expanded(_ limit: Int, total: Int, pageSize: Int = CrewChatWindow.pageSize) -> Int {
+    static func expanded(_ limit: Int, total: Int, pageSize: Int = CrewChatWindow.historyBatchSize) -> Int {
         clampedLimit(clampedLimit(limit, total: total) + pageSize, total: total)
     }
 
@@ -87,9 +131,17 @@ enum CrewChatWindow {
         return window(all, limit: limit).first
     }
 
+    /// 自动续载时人在按钮下面几行也可能触发；优先锚真实可见行，失效时回退窗口首行。
+    static func anchorOnAutoExpand<T: Equatable>(_ windowed: [T], visibleTop: T?,
+                                                  isFollowing: Bool) -> T? {
+        guard !isFollowing else { return nil }
+        if let visibleTop, windowed.contains(visibleTop) { return visibleTop }
+        return windowed.first
+    }
+
     /// 展开之后，锚点那条上面新插进来了几条 —— 也就是「不补偿的话视口会被推走多远」
     /// （按行数算）。为 0 时说明这一下什么都没多出来，锚不锚都一样。
-    static func insertedAbove(total: Int, limit: Int, pageSize: Int = CrewChatWindow.pageSize) -> Int {
+    static func insertedAbove(total: Int, limit: Int, pageSize: Int = CrewChatWindow.historyBatchSize) -> Int {
         expanded(limit, total: total, pageSize: pageSize) - clampedLimit(limit, total: total)
     }
 
@@ -156,3 +208,117 @@ enum CrewChatWindow {
         return limit + added
     }
 }
+
+#if os(macOS)
+/// macOS 14 没有 `onScrollGeometryChange` 和 `onScrollPhaseChange`。
+/// 只监听落在本 ScrollView 内的真实滚轮事件；内容插入引起的 bounds 通知没有新手势号，
+/// 因此不会把自己的插入当成下一次续页。放在 ScrollView 的内容背景里获取 enclosingScrollView。
+struct LegacyTopApproachSensor: NSViewRepresentable {
+    let onApproach: (Int, Bool) -> Void
+
+    func makeNSView(context: Context) -> WheelView {
+        let view = WheelView()
+        view.onApproach = onApproach
+        return view
+    }
+
+    func updateNSView(_ nsView: WheelView, context: Context) {
+        nsView.onApproach = onApproach
+        nsView.connect()
+    }
+
+    @MainActor final class WheelView: NSView {
+        var onApproach: ((Int, Bool) -> Void)?
+        var isConnected: Bool { trackedScroll != nil && wheelMonitor != nil }
+        private weak var trackedScroll: NSScrollView?
+        private var wheelMonitor: Any?
+        private var boundsObserver: NSObjectProtocol?
+        private var burst = CrewChatWindow.WheelBurst()
+        private var pendingGesture: Int?
+        private var pendingAt: TimeInterval = 0
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            connect()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            connect()
+        }
+
+        func connect() {
+            guard let scroll = enclosingScrollView, window != nil else {
+                disconnect()
+                return
+            }
+            guard trackedScroll !== scroll else { return }
+            disconnect()
+            trackedScroll = scroll
+            scroll.contentView.postsBoundsChangedNotifications = true
+            boundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: scroll.contentView,
+                queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.boundsChanged() }
+                }
+            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                MainActor.assumeIsolated { self?.wheel(event) }
+                return event
+            }
+        }
+
+        private func disconnect() {
+            if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+            boundsObserver = nil
+            wheelMonitor = nil
+            trackedScroll = nil
+            pendingGesture = nil
+        }
+
+        private func nearTop(_ scroll: NSScrollView) -> Bool {
+            guard let document = scroll.documentView else { return false }
+            let clip = scroll.contentView.bounds
+            let distance = document.isFlipped ? clip.minY : document.bounds.height - clip.maxY
+            return distance <= CrewChatWindow.autoLoadThreshold
+        }
+
+        private func atBottom(_ scroll: NSScrollView) -> Bool {
+            guard let document = scroll.documentView else { return true }
+            let clip = scroll.contentView.bounds
+            let distance = document.isFlipped ? document.bounds.height - clip.maxY : clip.minY
+            return distance <= 80
+        }
+
+        private func wheel(_ event: NSEvent) {
+            guard let scroll = trackedScroll, event.window === scroll.window,
+                  scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)),
+                  !event.phase.contains(.ended) else { return }
+            let gesture: Int
+            if event.momentumPhase.isEmpty {
+                gesture = burst.recordWheel(at: event.timestamp,
+                                            beginsGesture: event.phase.contains(.began),
+                                            isPhased: !event.phase.isEmpty)
+            } else {
+                gesture = burst.generation
+            }
+            guard gesture > 0 else { return }
+            pendingGesture = gesture
+            pendingAt = ProcessInfo.processInfo.systemUptime
+            if nearTop(scroll) { onApproach?(gesture, atBottom(scroll)) }
+        }
+
+        private func boundsChanged() {
+            guard let scroll = trackedScroll, let gesture = pendingGesture,
+                  ProcessInfo.processInfo.systemUptime - pendingAt < 1.0,
+                  nearTop(scroll) else { return }
+            onApproach?(gesture, atBottom(scroll))
+        }
+
+        deinit {
+            if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+        }
+    }
+}
+#endif

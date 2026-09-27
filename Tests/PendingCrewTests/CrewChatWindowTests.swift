@@ -5,6 +5,113 @@ import XCTest
 final class CrewChatWindowTests: XCTestCase {
 
     private func msgs(_ n: Int) -> [Int] { Array(0 ..< n) }
+    private static func source(_ path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent("Sources").appendingPathComponent(path),
+                          encoding: .utf8)
+    }
+
+    // MARK: - Agent Todo #163: automatic history paging
+
+    func testFirstPageContainsThirtyNewestMessages() {
+        XCTAssertEqual(CrewChatWindow.pageSize, 30)
+        XCTAssertEqual(CrewChatWindow.window(msgs(100), limit: CrewChatWindow.pageSize),
+                       Array(70 ..< 100))
+    }
+
+    func testNearTopUsesScrollInsetAndLoadsBoundedBatch() {
+        XCTAssertFalse(CrewChatWindow.isNearTop(offsetY: 181, insetTop: 0))
+        XCTAssertTrue(CrewChatWindow.isNearTop(offsetY: 180, insetTop: 0))
+        XCTAssertTrue(CrewChatWindow.isNearTop(offsetY: 155, insetTop: 25))
+        XCTAssertEqual(CrewChatWindow.expanded(30, total: 100), 60)
+        XCTAssertTrue(CrewChatWindow.shouldCheckTopOnUserStart(
+            wasUserScrolling: false, isUserScrolling: true, nearTop: true),
+            "起手已在阈值内时，几何 Bool 不会再次跨入，须由新手势检查")
+        XCTAssertFalse(CrewChatWindow.shouldCheckTopOnUserStart(
+            wasUserScrolling: true, isUserScrolling: true, nearTop: true))
+        XCTAssertFalse(CrewChatWindow.shouldCheckTopOnUserStart(
+            wasUserScrolling: false, isUserScrolling: true, nearTop: false))
+    }
+
+    func testAutoPagingRequiresUserScrollAndConsumesGestureOnce() {
+        let gate = CrewChatWindow.AutoLoadGate()
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: false,
+                                       isFollowing: false, gesture: 1, total: 100, limit: 30))
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                       isFollowing: true, gesture: 1, total: 100, limit: 30))
+        XCTAssertTrue(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                      isFollowing: false, gesture: 1, total: 100, limit: 30))
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                       isFollowing: false, gesture: 1, total: 100, limit: 30),
+                       "同一手势/内容变动的回调不能重复翻页")
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                       isFollowing: false, gesture: 2, total: 60, limit: 60),
+                       "到底后不能继续翻页")
+        XCTAssertTrue(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                      isFollowing: false, gesture: 2, total: 100, limit: 60))
+    }
+
+    func testLegacyWheelBurstAllowsAlreadyNearTopOnNextRealGestureOnly() {
+        var burst = CrewChatWindow.WheelBurst()
+        let gate = CrewChatWindow.AutoLoadGate()
+        let first = burst.recordWheel(at: 1.0)
+        XCTAssertTrue(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                      isFollowing: false, gesture: first, total: 120, limit: 30))
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                       isFollowing: false, gesture: burst.recordWheel(at: 1.1),
+                                       total: 120, limit: 60),
+                       "同一串滚轮事件不能因内容增长连续加载")
+        let next = burst.recordWheel(at: 1.5)
+        XCTAssertNotEqual(first, next)
+        XCTAssertTrue(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                      isFollowing: false, gesture: next, total: 120, limit: 60),
+                      "用户再次起手时即使已在阈值内也要能续页")
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                       isFollowing: false, gesture: next, total: 90, limit: 90))
+
+        var remountedSensor = CrewChatWindow.WheelBurst()
+        XCTAssertNotEqual(remountedSensor.recordWheel(at: 2.0), next,
+                          "首屏 eager 切 lazy 重建传感器时不能复用已消费的令牌")
+        var trackpad = CrewChatWindow.WheelBurst()
+        let trackpadStart = trackpad.recordWheel(at: 3.0, beginsGesture: true, isPhased: true)
+        XCTAssertEqual(trackpad.recordWheel(at: 3.7, isPhased: true), trackpadStart,
+                       "慢手势的 changed 事件不能因超过时间阈值而翻第二页")
+        XCTAssertNotEqual(trackpad.recordWheel(at: 3.8, beginsGesture: true, isPhased: true),
+                          trackpadStart, "下一个明确的 began 事件应开启新手势")
+    }
+
+    func testAutoPagingAnchorsActualVisibleRow() {
+        let before = CrewChatWindow.window(msgs(100), limit: 30)
+        let visible = CrewChatWindow.anchorOnAutoExpand(before, visibleTop: 76,
+                                                        isFollowing: false)
+        XCTAssertEqual(visible, 76)
+        let after = CrewChatWindow.window(msgs(100), limit: 60)
+        XCTAssertEqual(after[after.firstIndex(of: 76)!], visible)
+        XCTAssertEqual(CrewChatWindow.anchorOnAutoExpand(before, visibleTop: 1,
+                                                         isFollowing: false), 70)
+        XCTAssertNil(CrewChatWindow.anchorOnAutoExpand(before, visibleTop: 76,
+                                                       isFollowing: true))
+    }
+
+    func testAutoPagingIsWiredToScrollAndManualButtonRemains() throws {
+        let view = try Self.source("Mac/Views/CrewChatView.swift")
+        let phase = try Self.source("Chat/Adapter/CrewChatBottomFollow.swift")
+        XCTAssertTrue(view.contains(".modifier(TopApproachTracker { autoLoadEarlier() })"))
+        XCTAssertTrue(view.contains("onScrollGeometryChange(for: Bool.self)"))
+        XCTAssertTrue(view.contains("autoLoadGate.shouldLoad("))
+        XCTAssertTrue(view.contains("onUserStartNearTop: { autoLoadEarlier() }"),
+                      "几何已在阈值内时必须从新用户手势再次检查")
+        XCTAssertTrue(view.contains("expandEarlier(visibleTopID: topAnchorBox.id)"))
+        XCTAssertTrue(view.contains("Button {\n                expandEarlier()"),
+                      "旧系统和自动续载没触发时仍要有手动按钮")
+        XCTAssertTrue(phase.contains("userScrollGeneration += 1"),
+                      "内容增高不能伪装成新手势重复续载")
+        XCTAssertTrue(view.contains("LegacyTopApproachSensor"),
+                      "macOS 14 必须能独立于新系统滚动几何 API 识别真用户滚轮")
+        XCTAssertTrue(view.contains("bottomPin.leftBottomByUser()"),
+                      "macOS 14 缺 SwiftUI 相位时真用户滚轮仍要能解除底部跟随")
+    }
 
     func test_只渲染最近一页且保持时间顺序() {
         let all = msgs(70)
@@ -158,7 +265,7 @@ final class CrewChatWindowTests: XCTestCase {
     }
 
     func test_连点多次每一次的锚点都还在新窗口里() throws {
-        // 第一次点击（12→24）与之后的点击是两种不同现场（容器身份翻面 vs 纯 lazy），
+        // 第一次点击（30→60）与之后的点击是两种不同现场（容器身份翻面 vs 纯 lazy），
         // 但「锚哪条、锚点在新窗口的第几位」这条纯逻辑对两者一模一样。
         let all = msgs(70)
         var limit = CrewChatWindow.pageSize
@@ -242,6 +349,42 @@ final class CrewChatWindowTests: XCTestCase {
 import AppKit
 import SwiftUI
 
+@MainActor
+final class CrewChatLegacyWheelSensorTests: XCTestCase {
+    func testOffscreenSwiftUIScrollViewAttachesWheelSensorWithoutContentFeedback() {
+        var approaches = 0
+        let host = NSHostingView(rootView: ScrollView {
+            VStack {
+                ForEach(0 ..< 50, id: \.self) { _ in
+                    Color.blue.frame(height: 40)
+                }
+            }
+            .background(LegacyTopApproachSensor { _, _ in approaches += 1 }
+                .frame(width: 0, height: 0))
+        })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = window.contentView!.bounds
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        func findSensor(_ view: NSView) -> LegacyTopApproachSensor.WheelView? {
+            if let sensor = view as? LegacyTopApproachSensor.WheelView { return sensor }
+            for subview in view.subviews {
+                if let sensor = findSensor(subview) { return sensor }
+            }
+            return nil
+        }
+        let sensor = findSensor(host)
+        XCTAssertNotNil(sensor, "SwiftUI 内容背景必须确实创建 AppKit 滚轮传感器")
+        XCTAssertTrue(sensor?.isConnected == true,
+                      "传感器必须接到当前 ScrollView 才能接收 macOS 14 用户滚轮")
+        XCTAssertEqual(approaches, 0, "布局/内容变化本身不是用户手势")
+        window.contentView = nil
+    }
+}
+
 /// 「加载更早」那一下的**位置**探针（Todo #60）。
 ///
 /// 上面那组钉的是纯逻辑（该锚哪一条）；这里钉另一半：**那一下到底有没有把位置按住**。
@@ -273,7 +416,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         @Published var ids: [String] = []
         /// 这一拍尺寸变化锚哪边（`.bottom` = 「未走的路」那一档）。
         @Published var expanding = false
-        /// 容器身份：`.flipping` 是现状（`limit <= pageSize` 判据，12→24 那一下翻面）。
+        /// 容器身份：`.flipping` 是现状（`limit <= pageSize` 判据，30→60 那一下翻面）。
         @Published var container = Container.flipping
         /// C 档：连 `.sizeChanges` 那个锚都不挂 —— 「没有机制」的基准线。
         @Published var attachSizeChangesAnchor = true
@@ -602,7 +745,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                      plain.shift, settleOnly.shift, pinOnly.shift, both.shift))
     }
 
-    /// 12 → 24：`usesEagerInitialLayout` 判据翻面，`if VStack / else LazyVStack` 换容器、
+    /// 30 → 60：`usesEagerInitialLayout` 判据翻面，`if VStack / else LazyVStack` 换容器、
     /// 整棵内容树重建 —— 任何靠 anchor 保位置的做法都救不了这一下。
     func test_第一次点击_容器身份翻面那一下也按得住() {
         let ctrl = run(total: 70, startLimit: CrewChatWindow.pageSize,
@@ -617,16 +760,16 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         XCTAssertLessThan(fixed.shift, 80, "现在这条机制必须基本不动")
     }
 
-    /// 24 → 36：一直在 `LazyVStack` 里，没有身份翻面，但上面那些行是懒的。
+    /// 60 → 90：一直在 `LazyVStack` 里，没有身份翻面，但上面那些行是懒的。
     func test_第二次点击_纯LazyVStack里也按得住() {
-        let start = CrewChatWindow.expanded(CrewChatWindow.pageSize, total: 70)   // 24
-        let ctrl = run(total: 70, startLimit: start,
+        let start = CrewChatWindow.expanded(CrewChatWindow.pageSize, total: 130) // 60
+        let ctrl = run(total: 130, startLimit: start,
                        fix: .none, label: "第二次点击·对照（什么都不做）")
         XCTAssertLessThan(ctrl.beforeOffset, 120,
                           "起点必须是「人滑到顶」，实际 contentOffset=\(ctrl.beforeOffset)")
         XCTAssertGreaterThan(ctrl.shift, 200, "对照组必须跳")
 
-        let fixed = run(total: 70, startLimit: start, fix: .scrollPositionPin,
+        let fixed = run(total: 130, startLimit: start, fix: .scrollPositionPin,
                         label: "第二次点击·现在这条机制")
         XCTAssertLessThan(fixed.shift, 80, "现在这条机制必须基本不动")
     }
@@ -795,7 +938,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
 
     func test_第一次点击_插入与跟上必须落在同一帧() {
         let path = tracePath(total: 70, startLimit: CrewChatWindow.pageSize,
-                             fix: .scrollPositionPin, container: .alwaysLazy,
+                             fix: .scrollPositionPin, container: .flipping,
                              label: "第一次点击·路径")
         assertLandsInOneCommit(path, commits: lastCommits, label: "第一次点击")
     }
