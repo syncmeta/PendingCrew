@@ -120,6 +120,18 @@ final class SessionHost: ObservableObject {
         viewer.onTakeOverLocally = { [weak self] in
             MainActor.assumeIsolated { self?.takeOverLocally() }
         }
+        viewer.onDaemonReconnected = { [weak self] previousPID, offer in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.suppressedDaemonReconnectPID == previousPID {
+                    self.suppressedDaemonReconnectPID = nil
+                    return
+                }
+                // Startup update and Settings replacement already own this prompt.
+                guard offer.shouldAsk, !self.restoreOffer.shouldAsk else { return }
+                self.restoreOffer = offer
+            }
+        }
         viewer.start()
     }
 
@@ -180,6 +192,7 @@ final class SessionHost: ObservableObject {
         reason: nil, candidates: [], message: "")
     private var exitMarker: ProcessLifecycleMarker?
     private var terminationObserver: NSObjectProtocol?
+    private var suppressedDaemonReconnectPID: Int32?
 
     /// 上一轮在跑的那些。来源是 daemon 的 registry —— **不新造第二本账**。
     private static func restoreCandidates() -> [SessionRestoreOffer.Candidate] {
@@ -222,6 +235,7 @@ final class SessionHost: ObservableObject {
     ///   同版重启是人自己按的 → 规格是不问（确认框里已经提前说了）。
     /// - viewer 里不用我们起新的：锁空了 `ViewerSessionClient` 自己会拉。
     func restartLocalBackend() async -> String {
+        let previousDaemonPID = viewer?.connectedDaemonPID
         let appBuild = SessionDaemonHost.currentBuild
         let candidates = Self.restoreCandidates()
         let decision = BackendUpdatePlan.decide(
@@ -241,10 +255,14 @@ final class SessionHost: ObservableObject {
         }
 
         let dataRoot = PendingCrewDaemonPaths.standard().lock.deletingLastPathComponent()
+        suppressedDaemonReconnectPID = previousDaemonPID
         let outcome = await Task.detached { DaemonStopper(dataRoot: dataRoot).stop() }.value
         NSLog("[SessionHost] 设置里重启后台：%@", outcome.text)
         // 停不掉时**不许假装换过了** —— 不然会去问人接回一批根本没断的 session。
-        guard outcome.isSuccess else { return outcome.text }
+        guard outcome.isSuccess else {
+            suppressedDaemonReconnectPID = nil
+            return outcome.text
+        }
         if case let .replace(oldBuild, newBuild, _) = decision {
             restoreOffer = SessionRestoreOffer.afterBackendReplaced(
                 oldBuild: oldBuild, newBuild: newBuild, candidates: candidates)

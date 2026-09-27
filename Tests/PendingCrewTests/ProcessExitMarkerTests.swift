@@ -50,6 +50,16 @@ final class ProcessExitMarkerTests: XCTestCase {
         XCTAssertFalse(s.classifyPreviousRun().shouldOfferRestore)
     }
 
+    func testAppCleanExitKeepsTheOriginalSingleMarkerBehavior() throws {
+        let s = try store(.app)
+        try mark(s, .running)
+        try mark(s, .draining)
+        try mark(s, .clean)
+        XCTAssertEqual(s.classifyPreviousRun(), .clean)
+        XCTAssertEqual(s.readRun(pid: 42), .absent)
+        XCTAssertEqual(s.readPrevious().marker?.phase, .clean)
+    }
+
     /// 起来了、还没开始收尾就没了 = 崩溃 / SIGKILL / 断电。
     func testDiedWhileRunningIsUnexpected() throws {
         let s = try store()
@@ -68,6 +78,84 @@ final class ProcessExitMarkerTests: XCTestCase {
         XCTAssertTrue(s.classifyPreviousRun().shouldOfferRestore)
         XCTAssertNotEqual(s.classifyPreviousRun(), .unexpected,
                           "收尾中途被打断和从没开始收尾，对人的意义不一样")
+    }
+
+    /// A replacement may write its running marker before the old daemon finishes draining.
+    /// The viewer must still be able to read the old process's final clean marker.
+    func testOldRunCleanSurvivesReplacementRunningMarker() throws {
+        let s = try store()
+        let oldStart = Date(timeIntervalSince1970: 1_000)
+        let newStart = Date(timeIntervalSince1970: 2_000)
+        try s.markRunning(pid: 41, startedAt: oldStart, build: "old")
+        try s.markDraining(pid: 41, startedAt: oldStart, build: "old")
+        try s.markRunning(pid: 42, startedAt: newStart, build: "new")
+        try s.markClean(pid: 41, startedAt: oldStart, build: "old")
+
+        XCTAssertEqual(s.readRun(pid: 41).marker?.phase, .clean)
+        XCTAssertEqual(s.readRun(pid: 42).marker?.phase, .running)
+        XCTAssertEqual(s.readPrevious().marker?.pid, 42,
+                       "旧进程的迟到 clean 不得把新进程的 running 覆盖掉")
+    }
+
+    func testEPERMStillMeansOldProcessMayBeAlive() {
+        XCTAssertTrue(DaemonProcessPresence.mayBeAlive(killResult: -1, error: EPERM))
+        XCTAssertFalse(DaemonProcessPresence.mayBeAlive(killResult: -1, error: ESRCH))
+        XCTAssertTrue(DaemonProcessPresence.mayBeAlive(killResult: 0, error: 0))
+    }
+
+    func testCleanMarkerDoesNotRequireASeparateLockFile() throws {
+        let s = try store()
+        let started = Date(timeIntervalSince1970: 1_000)
+        try s.markRunning(pid: 41, startedAt: started, build: "build")
+        let lockPath = s.directory.appendingPathComponent("daemon.lastexit.json.lock")
+        try FileManager.default.createDirectory(at: lockPath, withIntermediateDirectories: false)
+        try s.markDraining(pid: 41, startedAt: started, build: "build")
+        try s.markClean(pid: 41, startedAt: started, build: "build")
+        XCTAssertEqual(s.classifyPreviousRun(), .clean)
+    }
+
+    func testRunningStillRecordsUnexpectedExitIfPerPIDWriteFails() throws {
+        let s = try store()
+        try FileManager.default.createDirectory(at: s.directory,
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: s.runURL(pid: 41),
+                                                withIntermediateDirectories: false)
+        XCTAssertThrowsError(try s.markRunning(pid: 41,
+            startedAt: Date(timeIntervalSince1970: 1_000), build: "build"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let shared = try decoder.decode(ProcessExitMarker.self, from: Data(contentsOf: s.url))
+        XCTAssertEqual(shared.phase, .running)
+        XCTAssertEqual(s.readPrevious().marker?.phase, nil)
+        XCTAssertEqual(s.classifyPreviousRun(), .unexpected,
+                       "逐 PID 写失败也不能让前一轮 clean 掩盖当前进程")
+    }
+
+    func testRunMarkerRejectsReusedPIDWithDifferentStartTime() throws {
+        let s = try store()
+        let oldStart = Date(timeIntervalSince1970: 1_000.25)
+        try s.markRunning(pid: 41, startedAt: oldStart, build: "build")
+        let marker = try XCTUnwrap(s.readRun(pid: 41).marker)
+        let oldHello = SessionDaemonHello(protocolVersion: SessionProtocolVersion.current,
+            daemonBuild: "build", sessionCount: 1, pid: 41,
+            startedAt: oldStart.timeIntervalSince1970)
+        let reusedHello = SessionDaemonHello(protocolVersion: SessionProtocolVersion.current,
+            daemonBuild: "build", sessionCount: 1, pid: 41,
+            startedAt: oldStart.addingTimeInterval(2).timeIntervalSince1970)
+        XCTAssertTrue(marker.belongs(to: oldHello))
+        XCTAssertFalse(marker.belongs(to: reusedHello))
+    }
+
+    func testLegacySharedMarkerWithoutPerPIDFileStillClassifiesClean() throws {
+        let s = try store()
+        try FileManager.default.createDirectory(at: s.directory,
+                                                withIntermediateDirectories: true)
+        let legacy = """
+        {"role":"daemon","phase":"clean","at":"1970-01-01T00:16:40Z",
+         "build":"old","pid":41,"startedAt":"1970-01-01T00:16:40Z"}
+        """
+        try Data(legacy.utf8).write(to: s.url)
+        XCTAssertEqual(s.classifyPreviousRun(), .clean)
     }
 
     /// 每一档都得能对人说清「发生了什么」，不是只给个状态名。
@@ -135,6 +223,8 @@ final class ProcessExitMarkerTests: XCTestCase {
 
         XCTAssertEqual(daemon.classifyPreviousRun(), .clean, "GUI 那份把 daemon 那份盖了")
         XCTAssertEqual(app.classifyPreviousRun(), .unexpected)
+        XCTAssertEqual(app.readRun(pid: 42), .absent,
+                       "逐 PID 印记只供 daemon 重连使用，不增加 GUI 的磁盘账本")
         XCTAssertNotEqual(daemon.url, app.url)
         XCTAssertEqual(Set(ProcessExitMarkerRole.allCases.map(\.fileName)).count,
                        ProcessExitMarkerRole.allCases.count, "两个 role 共用了一个文件名")

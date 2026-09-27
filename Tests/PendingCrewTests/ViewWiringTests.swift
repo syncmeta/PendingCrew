@@ -848,6 +848,43 @@ final class ViewWiringTests: XCTestCase {
                       "订阅额度环被一起删掉了 —— 人类去掉的是账号头像那行的用量，不是额度环")
     }
 
+    /// A live GUI must carry the interrupted daemon's registry through reconnect.
+    /// The replacement daemon removes that registry before its first hello.
+    func testDaemonReconnectReachesTheGUIRestoreOfferOnce() throws {
+        let viewer = Self.codeOnly(try Self.text(of: "ViewerSessionClient.swift"))
+        let host = Self.codeOnly(try Self.text(of: "SessionHost.swift"))
+        guard let closed = viewer.range(of: "private func linkClosed()"),
+              let reconnected = viewer.range(of: "private func finishConnected()"),
+              let deliver = viewer.range(of: "private func deliverInterruptedDaemonOffer(to"),
+              let install = host.range(of: "private func installViewer(selection:") else {
+            return XCTFail("viewer 断线 / 重连 / GUI 接线入口缺失")
+        }
+        let closeBody = String(viewer[closed.upperBound...].prefix(2200))
+        let reconnectBody = String(viewer[reconnected.upperBound...].prefix(900))
+        let deliverBody = String(viewer[deliver.upperBound...].prefix(2400))
+        let installBody = String(host[install.upperBound...].prefix(1600))
+        XCTAssertTrue(closeBody.contains("reconnectOffer.capture(hello: lastHello"))
+        XCTAssertTrue(closeBody.contains("registry.daemonPid == lastHello.pid"))
+        XCTAssertTrue(reconnectBody.contains("deliverInterruptedDaemonOffer(to: lastHello)"))
+        XCTAssertTrue(deliverBody.contains("reconnectOffer.complete(with: hello)"))
+        XCTAssertTrue(deliverBody.contains("onDaemonReconnected?"))
+        XCTAssertTrue(viewer.contains("store.readRun(pid: interruptedDaemon.hello.pid)"),
+                      "新 daemon 覆盖共享印记后仍须读旧进程的最终状态")
+        XCTAssertTrue(viewer.contains("marker.belongs(to: interruptedDaemon.hello)"),
+                      "旧 PID 被复用时不能把另一轮印记当成旧进程的退出状态")
+        XCTAssertTrue(deliverBody.contains("current.exit == .diedWhileDraining"),
+                      "正常排空期间新 daemon 抢先握手时不能误弹")
+        XCTAssertTrue(installBody.contains("viewer.onDaemonReconnected ="))
+        XCTAssertTrue(installBody.contains("self.restoreOffer = offer"),
+                      "恢复提示必须交给 GUI 的 SessionHost")
+        XCTAssertTrue(installBody.contains("offer.shouldAsk, !self.restoreOffer.shouldAsk"),
+                      "已有启动或换代提示时不能叠第二个")
+        XCTAssertTrue(installBody.contains("suppressedDaemonReconnectPID == previousPID"),
+                      "设置里主动重启不能再由重连事件弹第二次")
+        XCTAssertTrue(host.contains("suppressedDaemonReconnectPID = previousDaemonPID"),
+                      "主动重启前必须记住要忽略的旧 daemon")
+    }
+
     /// 恢复弹窗 / 前端更新带后台换代 / app 退出印记，必须跑在**界面进程**里。
     ///
     /// 它们原来写在 `SessionHost.start`。默认模式（viewer）下界面从不调 `start`，

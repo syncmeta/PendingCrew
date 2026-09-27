@@ -75,6 +75,17 @@ struct ProcessExitMarker: Codable, Equatable {
     var pid: Int32
     /// 进程启动时刻。跟 pid 一起比，防 pid 复用。
     var startedAt: Date
+    /// Hello uses this exact timestamp; the ISO8601 date above loses subsecond precision.
+    /// Optional for markers written by older builds.
+    var exactStartedAt: Double? = nil
+
+    func belongs(to hello: SessionDaemonHello) -> Bool {
+        guard pid == hello.pid else { return false }
+        if let exactStartedAt, let startedAt = hello.startedAt {
+            return exactStartedAt == startedAt
+        }
+        return true
+    }
 }
 
 /// 上一轮是怎么结束的。
@@ -124,6 +135,12 @@ struct ProcessExitMarkerStore {
 
     var url: URL { directory.appendingPathComponent(role.fileName) }
 
+    /// A daemon can finish draining after its successor has already written the shared marker.
+    /// Keep each process's final phase separately so a connected viewer can read the old run.
+    func runURL(pid: Int32) -> URL {
+        directory.appendingPathComponent("\(role.fileName).pid-\(pid).json")
+    }
+
     // MARK: - 写
 
     /// 起来了。**进程启动时调一次。**
@@ -133,7 +150,8 @@ struct ProcessExitMarkerStore {
                      build: String,
                      now: Date = Date()) throws -> ProcessExitMarker {
         try write(.init(role: role, phase: .running, at: now,
-                        build: build, pid: pid, startedAt: startedAt))
+                        build: build, pid: pid, startedAt: startedAt,
+                        exactStartedAt: startedAt.timeIntervalSince1970))
     }
 
     /// 开始收尾。**收尾的第一件事就调它** —— 放在最后调的话，收尾卡死被强杀时
@@ -144,7 +162,8 @@ struct ProcessExitMarkerStore {
                       build: String,
                       now: Date = Date()) throws -> ProcessExitMarker {
         try write(.init(role: role, phase: .draining, at: now,
-                        build: build, pid: pid, startedAt: startedAt))
+                        build: build, pid: pid, startedAt: startedAt,
+                        exactStartedAt: startedAt.timeIntervalSince1970))
     }
 
     /// 收尾做完了，马上退。
@@ -154,7 +173,8 @@ struct ProcessExitMarkerStore {
                    build: String,
                    now: Date = Date()) throws -> ProcessExitMarker {
         try write(.init(role: role, phase: .clean, at: now,
-                        build: build, pid: pid, startedAt: startedAt))
+                        build: build, pid: pid, startedAt: startedAt,
+                        exactStartedAt: startedAt.timeIntervalSince1970))
     }
 
     @discardableResult
@@ -166,7 +186,17 @@ struct ProcessExitMarkerStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // 原子写：写到一半被打死时，盘上要么是上一版要么是这一版，
         // 绝不会是半个 JSON（半个 JSON 会被读成「解不开」→ 判成崩溃，白问一次）。
-        try MultiProcessJSONStore.writeStaged(encoder.encode(marker), to: url)
+        let data = try encoder.encode(marker)
+        if role == .app {
+            try MultiProcessJSONStore.writeStaged(data, to: url)
+            return marker
+        }
+        // The shared file only names the latest run. Final phases belong to that
+        // run's file, so an old clean write cannot overwrite a new running phase.
+        if marker.phase == .running || read(url) == .absent {
+            try MultiProcessJSONStore.writeStaged(data, to: url)
+        }
+        try MultiProcessJSONStore.writeStaged(data, to: runURL(pid: marker.pid))
         return marker
     }
 
@@ -193,9 +223,34 @@ struct ProcessExitMarkerStore {
         case absent
         case unreadable(String)
         case found(ProcessExitMarker)
+
+        var marker: ProcessExitMarker? {
+            if case let .found(marker) = self { return marker }
+            return nil
+        }
     }
 
     func readPrevious() -> Read {
+        let shared = read(url)
+        guard role == .daemon else { return shared }
+        guard case let .found(head) = shared else { return shared }
+        switch readRun(pid: head.pid) {
+        case .absent:
+            // Older builds only wrote the shared file.
+            return shared
+        case let .found(run) where run.role == head.role
+                && run.pid == head.pid && run.startedAt == head.startedAt:
+            return .found(run)
+        case .found:
+            return .unreadable("\(role.fileName) 的进程身份与逐 PID 印记不一致")
+        case let .unreadable(detail):
+            return .unreadable(detail)
+        }
+    }
+
+    func readRun(pid: Int32) -> Read { read(runURL(pid: pid)) }
+
+    private func read(_ url: URL) -> Read {
         let data: Data
         do {
             data = try Data(contentsOf: url)

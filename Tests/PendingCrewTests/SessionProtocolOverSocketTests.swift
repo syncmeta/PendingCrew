@@ -11,6 +11,67 @@ import XCTest
 final class SessionProtocolOverSocketTests: XCTestCase {
     private let capabilities = ["screen-text", "terminal-bytes", "transcript-events"]
 
+    /// The production viewer uses this tracker after a local daemon link closes.
+    /// Two real socket handshakes exercise hello ordering and one-shot delivery.
+    func testDaemonReconnectOfferAcrossSocketHellos() throws {
+        for (newPID, newStart, exit, expectedOffers) in [
+            (Int32(42), 2_000.0, ProcessExitClassification.unexpected, 1),
+            (Int32(41), 1_000.0, .unexpected, 0),
+            (Int32(41), 2_000.0, .unexpected, 1),
+            (Int32(42), 2_000.0, .clean, 0),
+        ] {
+            var tracker = DaemonReconnectOfferTracker()
+            let candidates = [SessionRestoreOffer.Candidate(sessionId: "s1", crewId: "c1")]
+            let codec = SessionProtocolCodec()
+            var oldHello: SessionDaemonHello?
+            var closed = false
+            var offers: [SessionRestoreOffer.Decision] = []
+
+            let oldPair = try UnixSocketTransport.makePair()
+            let oldClient = SessionProtocolClient(link: oldPair.app,
+                                                   capabilities: capabilities, appBuild: "viewer")
+            oldClient.onDaemonHello = { oldHello = $0 }
+            oldClient.onLinkClosed = {
+                if let oldHello { tracker.capture(hello: oldHello, exit: exit, candidates: candidates) }
+                closed = true
+            }
+            oldClient.connect()
+            oldPair.daemon.send(try codec.encode(.hello(.init(
+                protocolVersion: SessionProtocolVersion.current, daemonBuild: "build",
+                capabilities: capabilities, sessionCount: 1, pid: 41,
+                startedAt: 1_000))))
+            try pump(until: { oldHello != nil })
+            oldPair.daemon.close()
+            try pump(until: { closed })
+
+            let newPair = try UnixSocketTransport.makePair()
+            defer { oldPair.app.close(); newPair.app.close(); newPair.daemon.close() }
+            let newClient = SessionProtocolClient(link: newPair.app,
+                                                   capabilities: capabilities, appBuild: "viewer")
+            var newHelloCount = 0
+            newClient.onDaemonHello = { hello in
+                newHelloCount += 1
+                if let result = tracker.complete(with: hello) { offers.append(result.offer) }
+            }
+            newClient.connect()
+            newPair.daemon.send(try codec.encode(.hello(.init(
+                protocolVersion: SessionProtocolVersion.current, daemonBuild: "build",
+                capabilities: capabilities, sessionCount: 0, pid: newPID,
+                startedAt: newStart))))
+            try pump(until: { newHelloCount == 1 })
+            // A duplicate delivery attempt must not turn one old daemon into two prompts.
+            if let hello = oldHello {
+                if let result = tracker.complete(with: .init(protocolVersion: hello.protocolVersion,
+                    daemonBuild: "build", capabilities: capabilities,
+                    sessionCount: 0, pid: newPID,
+                    startedAt: newStart)) { offers.append(result.offer) }
+            }
+            XCTAssertEqual(offers.count, expectedOffers)
+            XCTAssertTrue(offers.allSatisfy(\.shouldAsk))
+            XCTAssertNil(tracker.interrupted)
+        }
+    }
+
     /// endpoint 的传输契约是可靠双向**字节流**，不能偷认「一次回调就是一帧」。
     /// 第一块只有 2 字节；第二块既补完第一帧，又紧跟完整第二帧，同时覆盖半包与粘包。
     func test_server接受任意切分与粘包的可靠字节流() throws {

@@ -1,5 +1,6 @@
 #if os(macOS)
 import Combine
+import Darwin
 import Foundation
 
 /// **app 退化成 viewer 之后，它与 daemon 之间的那条腿**（spec §4.5 / §9 P4）。
@@ -25,6 +26,9 @@ final class ViewerSessionClient: ObservableObject {
     /// 拿到独占编排锁、后台确实起不来时回调一次（§9.2 唯一允许的那一支）。
     /// 由 `SessionHost` 挂上去起本地编排 —— **这条腿自己不编排任何东西**。
     var onTakeOverLocally: (() -> Void)?
+
+    /// A previously connected local daemon was replaced. The GUI SessionHost owns the offer.
+    var onDaemonReconnected: ((Int32, SessionRestoreOffer.Decision) -> Void)?
 
     /// 拉起 daemon 的结果。
     ///
@@ -66,6 +70,11 @@ final class ViewerSessionClient: ObservableObject {
     private var heartbeat: Timer?
     private var reconnectAttempt = 0
     private var stopped = false
+    private var lastHello: SessionDaemonHello?
+    private var incomingHello: SessionDaemonHello?
+    private var reconnectOffer = DaemonReconnectOfferTracker()
+
+    var connectedDaemonPID: Int32? { isConnected ? lastHello?.pid : nil }
 
     init(runner: CrewSessionRunner,
          paths: PendingCrewDaemonPaths? = nil,
@@ -98,6 +107,7 @@ final class ViewerSessionClient: ObservableObject {
 
     func stop() {
         stopped = true
+        reconnectOffer.clear()
         heartbeat?.invalidate()
         heartbeat = nil
         remoteConnection?.stop()
@@ -127,12 +137,14 @@ final class ViewerSessionClient: ObservableObject {
         link = nil
         client = nil
         linkState = .none
+        incomingHello = nil
     }
 
     // MARK: -
 
     private func connect() {
         guard !stopped else { return }
+        refreshInterruptedDaemonExit()
         if stalledSince == nil { stalledSince = Date() }
         raceStartedAt = Date()
         // **该不该拉一个新的，不在这里判** —— 判断在 `DaemonLaunchPlan`（那一层进得了
@@ -258,8 +270,11 @@ final class ViewerSessionClient: ObservableObject {
             }
             // **握上手的那一拍**：daemon 回了 hello 且协议/能力协商兼容
             // （`SessionProtocolClient` 只在这两条都成立时才调它）。
-            client.onDaemonHello = { [weak self] _ in
-                MainActor.assumeIsolated { self?.linkState = .handshaken }
+            client.onDaemonHello = { [weak self] hello in
+                MainActor.assumeIsolated {
+                    self?.incomingHello = hello
+                    self?.linkState = .handshaken
+                }
             }
             self.link = link
             self.client = client
@@ -275,6 +290,10 @@ final class ViewerSessionClient: ObservableObject {
 
     /// 真握上手之后才做的那些事。
     private func finishConnected() {
+        if let hello = incomingHello {
+            lastHello = hello
+        }
+        incomingHello = nil
         isConnected = true
         lastError = nil
         // 连上了 = 上一轮那条降级裁决过期了，别在屏幕上留一条过期横幅。
@@ -283,6 +302,34 @@ final class ViewerSessionClient: ObservableObject {
         lastSpawnedChild = nil
         reconnectAttempt = 0
         startHeartbeat()
+        if let lastHello { deliverInterruptedDaemonOffer(to: lastHello) }
+    }
+
+    private func deliverInterruptedDaemonOffer(to hello: SessionDaemonHello,
+                                               deadline: Date = Date().addingTimeInterval(4)) {
+        guard !stopped, isConnected, lastHello == hello,
+              reconnectOffer.interrupted != nil else { return }
+        refreshInterruptedDaemonExit()
+        guard let current = reconnectOffer.interrupted else { return }
+        // Graceful shutdown releases the socket and lock before its 2.5-second
+        // drain budget ends. The replacement can say hello while the old marker
+        // still says "draining"; wait for its final clean write before deciding.
+        let probeResult = kill(current.hello.pid, 0)
+        let probeError = errno
+        if current.exit == .diedWhileDraining,
+           current.hello.pid != hello.pid,
+           DaemonProcessPresence.mayBeAlive(killResult: probeResult, error: probeError),
+           Date() < deadline {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.deliverInterruptedDaemonOffer(to: hello, deadline: deadline)
+                }
+            }
+            return
+        }
+        if let result = reconnectOffer.complete(with: hello) {
+            onDaemonReconnected?(result.previousPID, result.offer)
+        }
     }
 
     /// **连不上之后决定怎么办**（设计 §9.2）。顺序那一段在
@@ -310,12 +357,47 @@ final class ViewerSessionClient: ObservableObject {
 
     private func linkClosed() {
         guard !stopped else { return }
+        if isConnected, let lastHello, reconnectOffer.interrupted == nil,
+           case let .selected(ref) = selection, !ref.isRemote {
+            // The new daemon reaps and removes this registry before its first hello.
+            // Keep the old daemon's candidates while its process identity is known.
+            let candidates: [SessionRestoreOffer.Candidate]
+            if let data = try? Data(contentsOf: paths.registry),
+               let registry = try? JSONDecoder().decode(SessionProcessRegistry.self, from: data),
+               registry.daemonPid == lastHello.pid {
+                candidates = registry.entries.map {
+                    .init(sessionId: $0.sessionId, crewId: $0.crewId)
+                }
+            } else {
+                candidates = []
+            }
+            // A marker read failure must not silently turn an observed process
+            // replacement into a first run. A readable clean marker can downgrade it.
+            reconnectOffer.capture(hello: lastHello, exit: .unexpected, candidates: candidates)
+            refreshInterruptedDaemonExit()
+        }
         isConnected = false
         heartbeat?.invalidate()
         heartbeat = nil
         teardownLink()
         runner.viewerLinkClosed()
         scheduleReconnect()
+    }
+
+    /// Read the old marker again before spawning a replacement: graceful shutdown may
+    /// have moved from draining to clean since the socket closed.
+    private func refreshInterruptedDaemonExit() {
+        guard let interruptedDaemon = reconnectOffer.interrupted else { return }
+        let store = ProcessExitMarkerStore(directory: dataRoot, role: .daemon)
+        let perRun = store.readRun(pid: interruptedDaemon.hello.pid)
+        let observed = perRun == .absent ? store.readPrevious() : perRun
+        guard case let .found(marker) = observed,
+              marker.belongs(to: interruptedDaemon.hello) else { return }
+        switch marker.phase {
+        case .running: reconnectOffer.updateExit(.unexpected)
+        case .draining: reconnectOffer.updateExit(.diedWhileDraining)
+        case .clean: reconnectOffer.updateExit(.clean)
+        }
     }
 
     private func scheduleReconnect() {

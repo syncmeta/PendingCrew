@@ -63,6 +63,7 @@ enum SessionDaemonMain {
         // 就把上一轮的结论盖掉了，而那正是「要不要问人恢复」的唯一依据。
         let marker = ProcessLifecycleMarker(
             role: .daemon, build: SessionDaemonHost.currentBuild,
+            startedAt: host.processStartedAt,
             onWriteFailure: { [log = host.log] in log.write($0) })
         let previous = marker.classifyPreviousRun()
         host.log.write("上一轮：\(previous.text)（上一轮版本 \(marker.previousBuild ?? "未知")）")

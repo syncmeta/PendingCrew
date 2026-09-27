@@ -237,6 +237,7 @@ final class SessionDaemonHost {
     private var secureListener: SecureTCPListener?
     private var registry = SessionProcessRegistry()
     private let startedAt = Date()
+    var processStartedAt: Date { startedAt }
 
     init(paths: PendingCrewDaemonPaths? = nil,
          capabilities: [String] = SessionDaemonHost.defaultCapabilities,

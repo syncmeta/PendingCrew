@@ -122,6 +122,50 @@ final class SessionRestoreOfferTests: XCTestCase {
     func testCandidatesComeBackForTheCaller() {
         XCTAssertEqual(decide(.unexpected, candidates: two).candidates, two)
     }
+
+    // GUI stays open while its connected local daemon dies and a new one answers.
+    func testReconnectedDaemonCrashOffersTheInterruptedSessions() {
+        let d = SessionRestoreOffer.afterDaemonReconnect(
+            previousPID: 41, currentPID: 42, exit: .unexpected,
+            previousBuild: "0.1.40", currentBuild: "0.1.40", candidates: two)
+        XCTAssertEqual(d.reason, .unexpectedExit(.unexpected))
+        XCTAssertEqual(d.candidates, two)
+    }
+
+    func testReconnectedSameDaemonDoesNotOfferAfterASocketDrop() {
+        let d = SessionRestoreOffer.afterDaemonReconnect(
+            previousPID: 41, currentPID: 41, exit: .unexpected,
+            previousBuild: "0.1.40", currentBuild: "0.1.40", candidates: two)
+        XCTAssertFalse(d.shouldAsk)
+    }
+
+    func testReusedPIDWithDifferentStartTimeIsANewDaemon() {
+        let d = SessionRestoreOffer.afterDaemonReconnect(
+            previousPID: 41, currentPID: 41, exit: .unexpected,
+            previousBuild: "0.1.40", currentBuild: "0.1.40", candidates: two,
+            previousStartedAt: 1_000, currentStartedAt: 2_000)
+        XCTAssertTrue(d.shouldAsk)
+    }
+
+    func testReconnectedDaemonCleanSameBuildOrEmptyRegistryDoesNotOffer() {
+        for candidates in [two, []] {
+            let d = SessionRestoreOffer.afterDaemonReconnect(
+                previousPID: 41, currentPID: 42, exit: .clean,
+                previousBuild: "0.1.40", currentBuild: "0.1.40", candidates: candidates)
+            XCTAssertFalse(d.shouldAsk)
+        }
+        let crashedWithoutCandidates = SessionRestoreOffer.afterDaemonReconnect(
+            previousPID: 41, currentPID: 42, exit: .unexpected,
+            previousBuild: "0.1.40", currentBuild: "0.1.40", candidates: [])
+        XCTAssertFalse(crashedWithoutCandidates.shouldAsk)
+    }
+
+    func testReconnectedDaemonUpdateUsesExistingUpdateOffer() {
+        let d = SessionRestoreOffer.afterDaemonReconnect(
+            previousPID: 41, currentPID: 42, exit: .clean,
+            previousBuild: "0.1.39", currentBuild: "0.1.40", candidates: one)
+        XCTAssertEqual(d.reason, .justUpdated(from: "0.1.39", to: "0.1.40"))
+    }
 }
 
 /// 恢复跑完之后那句话。**这个类型存在的唯一理由是不让失败被包装成成功。**

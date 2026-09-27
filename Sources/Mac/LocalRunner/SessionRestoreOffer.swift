@@ -1,4 +1,5 @@
 #if os(macOS)
+import Darwin
 import Foundation
 
 /// 「要不要问人恢复上次的 session」—— 弹窗那一下的判定层。
@@ -91,6 +92,23 @@ enum SessionRestoreOffer {
                         message: message(reason: reason, count: candidates.count))
     }
 
+    /// A connected viewer lost its local daemon and later handshook with another one.
+    /// A socket drop to the same process is not a process exit.
+    static func afterDaemonReconnect(previousPID: Int32, currentPID: Int32,
+                                     exit: ProcessExitClassification,
+                                     previousBuild: String, currentBuild: String,
+                                     candidates: [Candidate],
+                                     previousStartedAt: Double? = nil,
+                                     currentStartedAt: Double? = nil) -> Decision {
+        let reusedPID = previousStartedAt != nil && currentStartedAt != nil
+            && previousStartedAt != currentStartedAt
+        guard previousPID != currentPID || reusedPID else {
+            return Decision(reason: nil, candidates: [], message: "")
+        }
+        return decide(exit: exit, previousBuild: previousBuild,
+                      currentBuild: currentBuild, candidates: candidates)
+    }
+
     /// 弹窗正文。**说清三件事**：发生了什么、有几个、点「不恢复」会怎样。
     static func message(reason: Reason, count: Int) -> String {
         let what: String
@@ -104,6 +122,49 @@ enum SessionRestoreOffer {
             + "\n\n上次有 \(count) 个 session 在运行。要把它们接回来吗？"
             + "\n（接回来会续上原来的对话；选「不恢复」的话它们就留在原地，"
             + "之后 @ 它们同样能接回来。）"
+    }
+}
+
+/// One interrupted local daemon can produce at most one reconnect decision.
+/// The viewer owns the file and socket observations; this value owns their ordering.
+struct DaemonReconnectOfferTracker {
+    struct Interrupted {
+        var hello: SessionDaemonHello
+        var exit: ProcessExitClassification
+        var candidates: [SessionRestoreOffer.Candidate]
+    }
+
+    private(set) var interrupted: Interrupted?
+
+    mutating func capture(hello: SessionDaemonHello, exit: ProcessExitClassification,
+                          candidates: [SessionRestoreOffer.Candidate]) {
+        guard interrupted == nil else { return }
+        interrupted = .init(hello: hello, exit: exit, candidates: candidates)
+    }
+
+    mutating func updateExit(_ exit: ProcessExitClassification) {
+        interrupted?.exit = exit
+    }
+
+    mutating func clear() { interrupted = nil }
+
+    mutating func complete(with hello: SessionDaemonHello)
+        -> (previousPID: Int32, offer: SessionRestoreOffer.Decision)? {
+        guard let old = interrupted else { return nil }
+        interrupted = nil
+        let offer = SessionRestoreOffer.afterDaemonReconnect(
+            previousPID: old.hello.pid, currentPID: hello.pid, exit: old.exit,
+            previousBuild: old.hello.daemonBuild, currentBuild: hello.daemonBuild,
+            candidates: old.candidates,
+            previousStartedAt: old.hello.startedAt, currentStartedAt: hello.startedAt)
+        guard offer.shouldAsk else { return nil }
+        return (old.hello.pid, offer)
+    }
+}
+
+enum DaemonProcessPresence {
+    static func mayBeAlive(killResult: Int32, error: Int32) -> Bool {
+        killResult == 0 || error == EPERM
     }
 }
 
