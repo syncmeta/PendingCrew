@@ -128,6 +128,13 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(update["effort"] as? String, "xhigh")
         XCTAssertNil(update["approvalsReviewer"])
     }
+    func testNativeDefaultProbeLetsAppServerResolveModelForTheSessionCwd() {
+        let probe = CodexProtocol.nativeDefaultModelProbeParams(cwd: "/project/child")
+        XCTAssertEqual(probe["cwd"] as? String, "/project/child")
+        XCTAssertEqual(probe["ephemeral"] as? Bool, true)
+        XCTAssertNil(probe["model"], "不能把 model/list 或本地解析结果塞回去固定 slug")
+        XCTAssertNil(probe["config"], "probe 不得覆盖项目、profile 或用户级配置")
+    }
     func testTurnStartPutsWhiteboardInAdditionalContext() {
         // codex's native per-turn context channel is `turn/start.additionalContext`
         // (experimental, unlocked via initialize.experimentalApi). The whiteboard rides

@@ -228,9 +228,10 @@ final class AgentModelCatalogTests: XCTestCase {
         XCTAssertTrue(table.knowsEffort("ultra"), "不指定模型时退表级并集")
     }
 
-    /// Todo #150："Codex 默认"是一个可选择的模型来源，不是今天解析出来的某个
-    /// slug。用户配置有 model 时尊重配置；没有时跟随 model/list 的 isDefault。
-    func testCodexDefaultSelectionPrefersConfigThenLiveCatalog() throws {
+    /// `model/list.isDefault` 是服务目录的推荐值，不是某个 cwd 在完整 Codex
+    /// 配置优先级下的实际默认。运行中“跟随 Codex 默认”必须由 app-server 原生
+    /// 解析；这里不能偷拿目录值固定成 slug。
+    func testCodexDefaultHintNeverTreatsCatalogDefaultAsResolvedNativeDefault() throws {
         let table = try XCTUnwrap(CodexModelProbeParser.table(
             result: codexResult, probedAt: at("2026-08-09T00:00:00Z")))
         let catalog = AgentModelCatalogFile(codex: table)
@@ -239,12 +240,11 @@ final class AgentModelCatalogTests: XCTestCase {
             SessionLaunchOptions.codexDefaultModel(
                 configuredModel: "gpt-5.5", catalog: catalog),
             "gpt-5.5",
-            "显式 Codex 配置是默认解析链的高优先级，不能被 catalog 覆盖")
-        XCTAssertEqual(
+            "明确传入的显示提示可以保留，但运行时仍由 app-server 作最终解析")
+        XCTAssertNil(
             SessionLaunchOptions.codexDefaultModel(
                 configuredModel: nil, catalog: catalog),
-            "gpt-5.6-sol",
-            "未配置 model 时必须跟随 Codex model/list 的 isDefault，而不是写死 slug")
+            "model/list 的 isDefault 不是完整 config 优先级的解析结果，不能拿来切运行中 thread")
     }
 
     func testCodexMalformedResultYieldsNil() {

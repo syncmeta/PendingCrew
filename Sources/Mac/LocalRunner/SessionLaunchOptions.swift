@@ -43,9 +43,9 @@ enum SessionLaunchOptions {
         return table.visibleModels.map(\.id)
     }
 
-    /// 「跟随 Codex 默认」此刻应切到的具体模型。配置文件的显式 model 属于 Codex
-    /// 自己的默认解析链，优先于 model/list 的 `isDefault`；两边都没有才返回 nil，
-    /// 由调用方 fail-loud，绝不猜一个可能很贵或已下线的 slug。
+    /// 供只拿到了**已经原生解析过的**值的调用方显示。`model/list.isDefault` 是服务
+    /// 目录的推荐值，不能代替某个 session cwd 的 config/profile 解析结果，更不能拿来
+    /// 固定运行中 thread 的 slug。
     static func codexDefaultModel(
         configuredModel: String?, catalog: AgentModelCatalogFile?
     ) -> String? {
@@ -53,14 +53,13 @@ enum SessionLaunchOptions {
            !configuredModel.isEmpty {
             return configuredModel
         }
-        return AgentModelCatalogFile.resolveTable(agent: "codex", file: catalog)?
-            .models.first(where: \.isDefault)?.id
+        return nil
     }
 
-    static func codexDefaultModel(catalog: AgentModelCatalogFile?) -> String? {
-        codexDefaultModel(
-            configuredModel: defaultModelResolution(for: .codex, projectDir: nil).value,
-            catalog: catalog)
+    /// 模型菜单没有 session cwd，不能假装解析出 Codex 默认；运行中会单独向
+    /// app-server 请求该 session 的原生解析值。这里留空比错标一个 slug 诚实。
+    static func codexDefaultModel(catalog _: AgentModelCatalogFile?) -> String? {
+        nil
     }
 
     /// 别名 → UI 友好显示名（**只标系列、不标版本号**）。传给 CLI/MCP 的仍是裸
@@ -107,8 +106,8 @@ enum SessionLaunchOptions {
     /// - **claude**：`ANTHROPIC_MODEL` env → 项目 `.claude/settings.local.json` →
     ///   项目 `.claude/settings.json` → 用户 `~/.claude/settings.json` 的 `model` 字段。
     ///   都没有 → 兜底当代默认 `sonnet` + fail-loud 日志（绝不返回 nil / 糊「默认」）。
-    /// - **codex**：`~/.codex/config.toml` 顶层 `model = "..."` 一眼可读则用；读不到就
-    ///   返回 nil（保持 Codex app-server 自身默认；显示端会退「默认」，复杂 TOML 解析留 tech-debt 尾巴）。
+    /// - **codex**：不在 PendingCrew 重算。新 session 不传 model，由 app-server 按 cwd
+    ///   和完整原生配置优先级解析，再从回包回填显示。
     ///
     /// - Parameter projectDir: session 的工作目录（claude 会在此找项目级 settings）。
     static func defaultModel(for kind: LocalCodingAgentKind, projectDir: URL?) -> String? {
@@ -158,15 +157,8 @@ enum SessionLaunchOptions {
             return DefaultModelResolution(
                 value: "sonnet", source: "env/settings 都没写，PendingCrew 兜底成 sonnet")
         case .codex:
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let toml = home.appendingPathComponent(".codex/config.toml")
-            if let m = tomlTopLevelString("model", at: toml), !m.isEmpty {
-                return DefaultModelResolution(value: m, source: "~/.codex/config.toml 顶层 model")
-            }
-            // 解析不出就照实留白 —— codex app-server 自己会挑默认（`model/list` 里
-            // `isDefault` 那个），我们不冒充知道是哪一个。
             return DefaultModelResolution(
-                value: nil, source: "~/.codex/config.toml 没写顶层 model，交给 codex app-server 自己的默认")
+                value: nil, source: "由 Codex app-server 按 session 工作目录和原生配置优先级解析")
         case .terminal:
             return DefaultModelResolution(value: nil, source: "纯终端没有模型")
         }
@@ -180,25 +172,5 @@ enum SessionLaunchOptions {
         return obj[key] as? String
     }
 
-    /// 从 TOML 里读**顶层**（第一个 `[section]` 之前）的 `key = "..."`。只认一眼可读的
-    /// 简单形式，不做完整 TOML 解析（codex 复杂配置留 tech-debt 尾巴）。
-    private static func tomlTopLevelString(_ key: String, at url: URL) -> String? {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("#") { continue }
-            if line.hasPrefix("[") { break } // 进入某个 section，顶层结束
-            guard let eq = line.firstIndex(of: "=") else { continue }
-            let name = line[line.startIndex..<eq].trimmingCharacters(in: .whitespaces)
-            guard name == key else { continue }
-            var value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-            if let hash = value.firstIndex(of: "#") { // 行尾注释
-                value = String(value[value.startIndex..<hash]).trimmingCharacters(in: .whitespaces)
-            }
-            value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            return value.isEmpty ? nil : value
-        }
-        return nil
-    }
 }
 #endif

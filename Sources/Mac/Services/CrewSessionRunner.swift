@@ -558,12 +558,11 @@ final class CrewSessionRunner: ObservableObject {
             && req.model == SessionLaunchOptions.codexDefaultModelSelection
         var requestedModel = req.model
         if followsCodexDefault {
-            requestedModel = SessionLaunchOptions.codexDefaultModel(
-                catalog: ModelCatalogCenter.shared.file)
+            requestedModel = await (run.backend as? CodexAppServerBackend)?.resolveNativeDefaultModel()
             guard requestedModel?.isEmpty == false else {
                 reportProfileSwitch(
                     run: run, crewId: req.crewId, applied: [],
-                    failed: ["模型→跟随 Codex 默认：当前模型目录没有给出默认模型"])
+                    failed: ["模型→跟随 Codex 默认：app-server 未返回当前工作目录的原生默认模型"])
                 return
             }
         }

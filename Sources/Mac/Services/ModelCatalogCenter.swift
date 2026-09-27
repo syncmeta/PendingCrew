@@ -29,7 +29,15 @@ final class ModelCatalogCenter: ObservableObject {
 
     init(directory: URL? = nil) {
         self.directory = directory ?? LocalWhiteboardStore.defaultDirectory
-        self.file = AgentModelCatalogFile.load(from: self.directory)
+        var loaded = AgentModelCatalogFile.load(from: self.directory)
+        // 旧缓存里的 codex resolvedDefault 只读了用户级顶层 config，不能代表项目、
+        // profile 或其他原生层级。保留目录本身，但立刻撤掉这条错误的全局 slug 断言。
+        if var codex = loaded?.codex {
+            codex.resolvedDefault = nil
+            codex.resolvedDefaultSource = "由 Codex app-server 按 session 工作目录和原生配置优先级解析"
+            loaded?.codex = codex
+        }
+        self.file = loaded
     }
 
     /// 启动：立即探一轮，之后 6 小时一轮。模型清单是**天**级变化的东西，
@@ -75,9 +83,10 @@ final class ModelCatalogCenter: ObservableObject {
             next.claudeError = "读不到（claude -p \"/model\" 没跑起来或回显解析不出）"
         }
         if var table = await x {
-            let resolution = SessionLaunchOptions.defaultModelResolution(for: .codex, projectDir: nil)
-            table.resolvedDefault = resolution.value
-            table.resolvedDefaultSource = resolution.source
+            // `model/list.isDefault` 仅是服务目录默认；不在此重算某个 cwd 的 Codex
+            // 配置。新 session 与运行中“跟随默认”都交 app-server 返回真值。
+            table.resolvedDefault = nil
+            table.resolvedDefaultSource = "由 Codex app-server 按 session 工作目录和原生配置优先级解析"
             next.codex = table
             next.codexError = nil
         } else {

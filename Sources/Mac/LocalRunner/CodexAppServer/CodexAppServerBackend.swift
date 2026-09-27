@@ -281,6 +281,23 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         }
     }
 
+    /// Resolve the effective native model for this session's cwd. `model/list` only
+    /// reports a catalog default; it cannot represent project config, profiles, or
+    /// other Codex precedence layers. An ephemeral model-less thread lets app-server
+    /// apply those layers without starting a turn or pinning the live thread.
+    func resolveNativeDefaultModel() async -> String? {
+        do {
+            let result = try await connection.request(
+                method: "thread/start",
+                params: CodexProtocol.nativeDefaultModelProbeParams(cwd: cwd)) as? [String: Any]
+            let model = result?["model"] as? String
+            return model?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? model : nil
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - 拉起自检（#541）
 
     private var launchWatchdog: Task<Void, Never>?

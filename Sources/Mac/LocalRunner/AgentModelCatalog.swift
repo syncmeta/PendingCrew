@@ -65,9 +65,9 @@ struct AgentModelTable: Codable, Equatable {
     /// 未公开 = 随时可能变，注入时要标不确定，不能当稳定契约推荐。
     var undocumentedLaunchEfforts: [String]
     /// **不显式选 model 时实际会跑的那个值**。picker/清单只管「显式选」那条腿，
-    /// 不选时走的是另一条腿（`SessionLaunchOptions.defaultModel`：codex 读
-    /// `~/.codex/config.toml`，claude 读 env/settings）。只给清单不给这个，机长
-    /// 照样不知道「我不填 model 会跑什么」。nil = 解析不出（照实留白，不猜）。
+    /// 不选时走的是另一条腿（claude 读 env/settings；codex 由 app-server 按 session
+    /// cwd 解析）。只给清单不给这个，机长照样不知道「我不填 model 会跑什么」。nil
+    /// 可以是刻意不在全局目录层猜一个值。
     var resolvedDefault: String?
     /// 上面那个值**从哪读出来的**（人话，如「~/.codex/config.toml 顶层 model」）。
     var resolvedDefaultSource: String?
@@ -330,6 +330,9 @@ enum AgentModelCatalog {
     /// 不把这句一起说出来，机长仍然不知道默认指向哪（机长 2026-08-09 的实测修正）。
     static func defaultLegPhrase(for table: AgentModelTable) -> String {
         guard let value = table.resolvedDefault, !value.isEmpty else {
+            if let source = table.resolvedDefaultSource, !source.isEmpty {
+                return "不显式选 model 时由 \(source)（未预先固定 slug）"
+            }
             return "不显式选 model 时跑什么解析不出（照实留白，别猜）"
         }
         let from = table.resolvedDefaultSource.map { "，来源 \($0)" } ?? ""

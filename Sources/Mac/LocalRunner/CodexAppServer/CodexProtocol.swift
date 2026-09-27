@@ -86,6 +86,18 @@ enum CodexProtocol {
         return p
     }
 
+    /// Ask app-server to resolve the effective default for a particular cwd without
+    /// turning it into a user conversation. The returned thread carries the native
+    /// model after Codex applies its own configuration precedence.
+    static func nativeDefaultModelProbeParams(cwd: String) -> [String: Any] {
+        var p = threadStartParams(
+            cwd: cwd, model: nil, effort: nil,
+            developerInstructions: nil, mcpServers: nil,
+            approvalsReviewer: .autoReview)
+        p["ephemeral"] = true
+        return p
+    }
+
     static func threadResumeParams(
         threadId: String,
         cwd: String,

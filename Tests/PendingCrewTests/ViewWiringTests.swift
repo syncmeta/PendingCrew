@@ -520,6 +520,10 @@ final class ViewWiringTests: XCTestCase {
                       "选择 Codex 默认后没有清掉持久模型覆盖，重启还会回到旧模型")
         XCTAssertTrue(runner.contains("codexDefaultModelSelection"),
                       "UI 的默认选项没有传到真正的运行时切换编排")
+        XCTAssertTrue(runner.contains("resolveNativeDefaultModel()"),
+                      "运行中“跟随 Codex 默认”必须让 app-server 按 session cwd 原生解析")
+        XCTAssertFalse(runner.contains("requestedModel = SessionLaunchOptions.codexDefaultModel("),
+                       "运行中切换不能用顶层 config 或 model/list 自己固定一个 slug")
 
         let codex = try Self.text(of: "CodexTranscriptView.swift")
         let presentation = try Self.text(of: "CodexThreadItem.swift")
