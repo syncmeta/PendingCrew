@@ -420,6 +420,9 @@ final class CodexCompactionLifecycleTests: XCTestCase {
         try await remote.requestCodexCompaction()
         XCTAssertTrue(backend.isCompacting)
         remote.send("continue after compaction")
+        XCTAssertEqual(remote.transcript?.items.count, 1,
+                       "viewer 发出即显示占位，不能在压缩队列里消失")
+        XCTAssertEqual(remote.transcript?.inputDelivery.values.first, .queued)
         try "go".write(to: release, atomically: true, encoding: .utf8)
         while Date() < deadline {
             let log = (try? String(contentsOf: methods, encoding: .utf8)) ?? ""
@@ -432,6 +435,10 @@ final class CodexCompactionLifecycleTests: XCTestCase {
                        "A message sent during compaction must be delivered afterward")
         XCTAssertFalse(backend.isCompacting)
         XCTAssertFalse(remote.isCompacting)
+        XCTAssertEqual(remote.transcript?.items.filter {
+            if case .userMessage = $0.kind { return true }
+            return false
+        }.count, 1, "daemon 的队列通知不应把 viewer 的同一条用户消息画两次")
     }
 
     func testHighContextStartsOneNativeCompactionAndDoesNotRepeatTurnEnd() async throws {

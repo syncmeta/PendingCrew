@@ -63,7 +63,7 @@ struct CodexTranscriptRows: View {
     private func row(_ item: CodexThreadItem) -> some View {
         switch item.kind {
         case let .userMessage(text):
-            userRow(text)
+            userRow(text, delivery: transcript.inputDelivery[item.id])
         case let .agentMessage(text, _):
             agentRow(text)
         case let .reasoning(summary, content):
@@ -119,22 +119,30 @@ struct CodexTranscriptRows: View {
 
     /// Human input — full-strength, marked by a leading accent rule (codex's `▌`).
     @ViewBuilder
-    private func userRow(_ text: String) -> some View {
+    private func userRow(_ text: String, delivery: CodexTranscript.InputDelivery?) -> some View {
         HStack(alignment: .top) {
             Spacer(minLength: 36)
-            Text(text)
-                .font(Theme.Fonts.system(size: 15))
-                .lineSpacing(5)
-                .foregroundStyle(Theme.Palette.ink)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,
-                                     style: .continuous)
-                        .fill(Theme.Palette.userBubble))
-                .frame(maxWidth: Theme.Metrics.readableColumn, alignment: .leading)
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(text)
+                    .font(Theme.Fonts.system(size: 15))
+                    .lineSpacing(5)
+                    .foregroundStyle(Theme.Palette.ink)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,
+                                         style: .continuous)
+                            .fill(Theme.Palette.userBubble))
+                if let delivery {
+                    Text(delivery == .failed ? "发送失败" : delivery == .queued ? "排队中" : "已发送")
+                        .font(Theme.Fonts.caption2)
+                        .foregroundStyle(delivery == .failed ? Theme.Palette.danger : Theme.Palette.inkMuted)
+                        .accessibilityLabel(delivery == .failed ? "消息发送失败" : delivery == .queued ? "消息排队中" : "消息已发送")
+                }
+            }
+            .frame(maxWidth: Theme.Metrics.readableColumn, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }

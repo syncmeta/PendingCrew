@@ -3,6 +3,116 @@ import XCTest
 
 @MainActor
 final class CodexTranscriptTests: XCTestCase {
+    func testQueuedNativeInputStaysVisibleUntilAuthoritativeUserItemReplacesIt() {
+        let transcript = CodexTranscript()
+        transcript.apply(method: "pendingcrew/inputQueued", params: [
+            "id": "local-1", "text": "排队中的提问",
+        ])
+        XCTAssertEqual(transcript.items.count, 1, "send 清空草稿后，队列中的正文仍须可见")
+        guard case let .userMessage(queuedText) = transcript.items.first?.kind else {
+            return XCTFail("队列消息须呈现为用户消息")
+        }
+        XCTAssertEqual(queuedText, "排队中的提问")
+
+        transcript.apply(method: "pendingcrew/inputAccepted", params: ["id": "local-1"])
+        transcript.apply(method: "turn/started", params: ["turn": ["id": "turn-1"]])
+        XCTAssertEqual(transcript.items.count, 1, "受理和开始期间不许短暂消失")
+
+        let authoritative = ["id": "server-1", "type": "userMessage",
+                             "content": [["type": "text", "text": "排队中的提问"]]] as [String: Any]
+        transcript.apply(method: "item/completed", params: ["item": authoritative])
+        transcript.apply(method: "item/completed", params: ["item": authoritative])
+        XCTAssertEqual(transcript.items.count, 1, "权威消息到位后替换本地行，重复通知也不重影")
+        XCTAssertEqual(transcript.items.first?.id, "server-1")
+    }
+
+    func testRepeatedTextKeepsTwoQueuedRowsAndConsumesOnePerAuthoritativeItem() {
+        let transcript = CodexTranscript()
+        for id in ["local-a", "local-b"] {
+            transcript.apply(method: "pendingcrew/inputQueued", params: ["id": id, "text": "再试一次"])
+        }
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": "local-a", "text": "再试一次"])
+        XCTAssertEqual(transcript.items.count, 2, "相同正文的两次提交是两条消息，同 ID 重放不是")
+        for id in ["server-a", "server-b"] {
+            transcript.apply(method: "item/completed", params: ["item": [
+                "id": id, "type": "userMessage", "content": [["type": "text", "text": "再试一次"]],
+            ]])
+        }
+        XCTAssertEqual(transcript.items.map(\.id), ["server-a", "server-b"])
+        XCTAssertTrue(transcript.inputDelivery.isEmpty)
+    }
+
+    func testFailedQueuedInputRemainsVisibleAndCannotClaimLaterIdenticalMessage() {
+        let transcript = CodexTranscript()
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": "failed", "text": "相同正文"])
+        transcript.apply(method: "pendingcrew/inputFailed", params: ["id": "failed"])
+        XCTAssertEqual(transcript.inputDelivery["failed"], .failed)
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": "retry", "text": "相同正文"])
+        transcript.apply(method: "item/completed", params: ["item": [
+            "id": "server-retry", "type": "userMessage", "content": [["type": "text", "text": "相同正文"]],
+        ]])
+        XCTAssertEqual(transcript.items.map(\.id), ["failed", "server-retry"])
+        XCTAssertEqual(transcript.inputDelivery["failed"], .failed)
+    }
+
+    func testTurnFailureMarksUnconfirmedStartedInputAsFailed() {
+        let transcript = CodexTranscript()
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": "local", "text": "会失败"])
+        transcript.apply(method: "pendingcrew/inputAccepted", params: ["id": "local"])
+        transcript.apply(method: "turn/started", params: ["turn": ["id": "turn-1"]])
+        XCTAssertEqual(transcript.inputDelivery["local"], .started)
+        transcript.apply(method: "turn/completed", params: ["turn": ["id": "turn-1", "status": "failed"]])
+        XCTAssertEqual(transcript.inputDelivery["local"], .failed)
+        XCTAssertEqual(transcript.items.count, 1)
+    }
+
+    func testQueuedInputsBelongOnlyToTheirSessionTranscript() {
+        let first = CodexTranscript()
+        let second = CodexTranscript()
+        first.apply(method: "pendingcrew/inputQueued", params: ["id": "a", "text": "只给 A"])
+        XCTAssertEqual(first.items.count, 1)
+        XCTAssertTrue(second.items.isEmpty)
+        second.apply(method: "pendingcrew/inputQueued", params: ["id": "b", "text": "只给 B"])
+        XCTAssertEqual(first.items.map(\.id), ["a"])
+        XCTAssertEqual(second.items.map(\.id), ["b"])
+    }
+
+    func testServerQueueEchoBindsToLocalRowsWithoutDoublingIdenticalMessages() {
+        let transcript = CodexTranscript()
+        for id in ["pendingcrew-client-input-a", "pendingcrew-client-input-b"] {
+            transcript.apply(method: "pendingcrew/inputQueued", params: ["id": id, "text": "重复发送"])
+        }
+        for id in ["server-a", "server-b"] {
+            transcript.apply(method: "pendingcrew/inputQueued", params: [
+                "id": id, "text": "重复发送", "source": "server",
+            ])
+            transcript.apply(method: "pendingcrew/inputAccepted", params: ["id": id])
+        }
+        XCTAssertEqual(transcript.items.map(\.id), ["pendingcrew-client-input-a", "pendingcrew-client-input-b"])
+        XCTAssertEqual(transcript.inputDelivery["pendingcrew-client-input-a"], .accepted)
+        XCTAssertEqual(transcript.inputDelivery["pendingcrew-client-input-b"], .accepted)
+    }
+
+    func testServerOnlyQueuedInputAppearsInAttachedSession() {
+        let transcript = CodexTranscript()
+        transcript.apply(method: "pendingcrew/inputQueued", params: [
+            "id": "server-only", "text": "开场指令", "source": "server",
+        ])
+        XCTAssertEqual(transcript.items.map(\.id), ["server-only"])
+        XCTAssertEqual(transcript.inputDelivery["server-only"], .queued)
+    }
+
+    func testCompactionCoalescedInputReplacesAllQueuedRowsWithoutDuplicates() {
+        let transcript = CodexTranscript()
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": "a", "text": "第一条"])
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": "b", "text": "第二条"])
+        transcript.apply(method: "item/completed", params: ["item": [
+            "id": "combined", "type": "userMessage",
+            "content": [["type": "text", "text": "第一条\n\n第二条"]],
+        ]])
+        XCTAssertEqual(transcript.items.map(\.id), ["combined"])
+        XCTAssertTrue(transcript.inputDelivery.isEmpty)
+    }
     func testNotificationSequencerPreservesArrivalOrderAcrossActorHop() async {
         let sequencer = CodexNotificationSequencer()
         sequencer.yield(method: "turn/started", params: ["turn": ["id": "a"]])

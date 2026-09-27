@@ -108,7 +108,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private var compactionEpoch: UInt64 = 0
     private var pendingCompletedTurnUsage: (turnId: String, baseline: Int64?,
                                             turnsSinceCompaction: Int)?
-    private var messagesQueuedDuringCompaction: [String] = []
+    private var messagesQueuedDuringCompaction: [(id: String, text: String)] = []
     private let notificationSequencer = CodexNotificationSequencer()
     private var notificationTask: Task<Void, Never>?
     private var approvalsReviewer: CodexProtocol.ApprovalsReviewer
@@ -350,14 +350,29 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     }
 
     func send(_ text: String) {
+        let localID = "pendingcrew-input-\(UUID().uuidString)"
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": localID, "text": text])
+        protocolNotificationSink?("pendingcrew/inputQueued", [
+            "id": localID, "text": text, "source": "server",
+        ])
+        guard status == .running else {
+            transcript.apply(method: "pendingcrew/inputFailed", params: ["id": localID])
+            protocolNotificationSink?("pendingcrew/inputFailed", ["id": localID, "text": text])
+            return
+        }
         if isCompacting {
-            messagesQueuedDuringCompaction.append(text)
+            messagesQueuedDuringCompaction.append((localID, text))
             return
         }
         Task {
             let result = await submitWake(text)
             if result == .retry, isCompacting {
-                messagesQueuedDuringCompaction.append(text)
+                messagesQueuedDuringCompaction.append((localID, text))
+            } else {
+                let method = result == .accepted ? "pendingcrew/inputAccepted" : "pendingcrew/inputFailed"
+                let params = ["id": localID, "text": text]
+                transcript.apply(method: method, params: params)
+                protocolNotificationSink?(method, params)
             }
         }
     }
@@ -516,9 +531,20 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
 
     private func flushMessagesQueuedDuringCompaction() {
         guard !isCompacting, !messagesQueuedDuringCompaction.isEmpty else { return }
-        let text = messagesQueuedDuringCompaction.joined(separator: "\n\n")
+        let queued = messagesQueuedDuringCompaction
+        let text = queued.map(\.text).joined(separator: "\n\n")
         messagesQueuedDuringCompaction.removeAll()
-        send(text)
+        Task {
+            let result = await submitWake(text)
+            let method = result == .accepted ? "pendingcrew/inputAccepted" : "pendingcrew/inputFailed"
+            // Native compaction coalesces queued inputs into one turn. The transcript
+            // keeps their individual rows until the authoritative item arrives.
+            for input in queued {
+                let params = ["id": input.id, "text": input.text]
+                transcript.apply(method: method, params: params)
+                protocolNotificationSink?(method, params)
+            }
+        }
     }
 
     /// Request native compaction only while the thread is idle. The RPC's `{}`

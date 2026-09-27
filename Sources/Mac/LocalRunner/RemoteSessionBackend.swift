@@ -319,6 +319,16 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     }
 
     func send(_ text: String) {
+        if kind == .codex {
+            let inputID = "pendingcrew-client-input-\(UUID().uuidString)"
+            transcript?.apply(method: "pendingcrew/inputQueued", params: [
+                "id": inputID, "text": text,
+            ])
+            if handle == nil || client == nil {
+                transcript?.apply(method: "pendingcrew/inputFailed", params: ["id": inputID])
+                return
+            }
+        }
         sendRaw(Array(text.utf8))
         // Preserve AgentSessionCore.send's paste-vs-key timing at the app side:
         // body and Enter are two input frames, never one JSON/control message.
