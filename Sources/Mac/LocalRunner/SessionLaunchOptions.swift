@@ -5,8 +5,9 @@ import Foundation
 /// 不在 UI 里散写字符串）。
 ///
 /// **清单现在来自 `AgentModelCatalog`（Todo #37），不再手写在这个文件里**：
-/// app 的 `ModelCatalogCenter` 定时实探两家 CLI 落成 models.json，这里只是取用；
-/// 探不到才回落 `AgentModelCatalog` 里带 `lastVerified` 的手工兜底表。
+/// app 的 `ModelCatalogCenter` 定时实探两家 CLI 落成 models.json。手工兜底表仍可供
+/// helper 的非否决性诊断使用，但**不能**成为 picker 的可选项；探测失败或过期时，
+/// picker 留空并把不可验证原因交给 UI 显示。
 ///
 /// 为什么非改不可：旧版把 codex 候选写死成 `gpt-5-codex` / `gpt-5`，而
 /// 2026-08-09 实测 codex-cli 0.145.0 的 `model/list` 里这两个**已经不在了**
@@ -22,6 +23,16 @@ enum SessionLaunchOptions {
     /// 会解析当前默认的真实 slug、切换 live thread，再清掉持久 model 覆盖。
     static let codexDefaultModelSelection = "__pendingcrew_codex_default__"
 
+    /// 供 UI 呈现模型/effort picker 的异步快照结果。`values` 只有当前、无错误的
+    /// app-server / CLI 现探表才会非空；其它情形一律带 `unavailableReason`，避免把
+    /// 缓存、陈旧或手工表冒充当前可选值。
+    struct PickerOptions: Equatable {
+        let values: [String]
+        let unavailableReason: String?
+
+        var isAvailable: Bool { unavailableReason == nil }
+    }
+
     /// `LocalCodingAgentKind` → 目录里两家表的键（"claude" / "codex"）。
     /// 表那一层是跨平台的（随 McpServer 上 iOS），不能用这个 macOS-only 的 enum。
     static func agentKey(for kind: LocalCodingAgentKind) -> String {
@@ -32,15 +43,25 @@ enum SessionLaunchOptions {
         }
     }
 
-    /// 该 runner 当前该推荐的模型（picker 用）。`catalog` 传 app 现探的那份；
-    /// 传 nil 或那一家没探到 → 回落手工兜底表。
+    /// 该 runner 当前可显式选择的模型（兼容只消费数组的旧调用方）。无法核实的
+    /// 快照返回空；UI 若要显示原因，改用 `modelPickerOptions`。
     static func models(for kind: LocalCodingAgentKind,
                        catalog: AgentModelCatalogFile? = nil) -> [String] {
-        let key = agentKey(for: kind)
-        guard let table = AgentModelCatalogFile.resolveTable(agent: key, file: catalog) else {
-            return []
+        modelPickerOptions(for: kind, catalog: catalog).values
+    }
+
+    /// 模型 picker 的值与状态。它只读 `ModelCatalogCenter` 已有的异步快照，绝不在
+    /// 视图求值或主线程上自行探 CLI。
+    static func modelPickerOptions(
+        for kind: LocalCodingAgentKind,
+        catalog: AgentModelCatalogFile? = nil,
+        now: Date = Date()
+    ) -> PickerOptions {
+        let selection = livePickerTable(for: kind, catalog: catalog, now: now)
+        guard let table = selection.table else {
+            return PickerOptions(values: [], unavailableReason: selection.unavailableReason)
         }
-        return table.visibleModels.map(\.id)
+        return PickerOptions(values: table.visibleModels.map(\.id), unavailableReason: nil)
     }
 
     /// 供只拿到了**已经原生解析过的**值的调用方显示。`model/list.isDefault` 是服务
@@ -90,11 +111,62 @@ enum SessionLaunchOptions {
     /// `AgentModelTable.knowsEffort(_:forModel:)`，这里给的是该家的并集。
     static func efforts(for kind: LocalCodingAgentKind,
                         catalog: AgentModelCatalogFile? = nil) -> [String] {
-        let key = agentKey(for: kind)
-        guard let table = AgentModelCatalogFile.resolveTable(agent: key, file: catalog) else {
-            return []
+        let selection = livePickerTable(for: kind, catalog: catalog, now: Date())
+        return selection.table?.efforts ?? []
+    }
+
+    /// 某个当前/目标模型的 effort picker 值与状态。Codex 各模型支持的 effort 不同；
+    /// 调用方必须传入将要显示或切换到的 model，不能拿全表并集给人选择。
+    static func effortPickerOptions(
+        for kind: LocalCodingAgentKind,
+        model: String?,
+        catalog: AgentModelCatalogFile? = nil,
+        now: Date = Date()
+    ) -> PickerOptions {
+        let selection = livePickerTable(for: kind, catalog: catalog, now: now)
+        guard let table = selection.table else {
+            return PickerOptions(values: [], unavailableReason: selection.unavailableReason)
         }
-        return table.efforts
+        guard let model = model?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty else {
+            return PickerOptions(values: [], unavailableReason: "尚未取得当前有效模型，无法确认可选 effort")
+        }
+        guard let entry = table.models.first(where: { $0.id.caseInsensitiveCompare(model) == .orderedSame }) else {
+            return PickerOptions(values: [],
+                                 unavailableReason: "当前有效模型不在最新模型清单中，无法确认可选 effort")
+        }
+        return PickerOptions(values: entry.efforts, unavailableReason: nil)
+    }
+
+    /// Picker 专用的可信表：不是参数白名单，不能影响 helper 对显式旧别名的处理。
+    /// 它只负责避免 UI 将不可靠的推荐清单说成「当前可选」。
+    private static func livePickerTable(
+        for kind: LocalCodingAgentKind,
+        catalog: AgentModelCatalogFile?,
+        now: Date
+    ) -> (table: AgentModelTable?, unavailableReason: String?) {
+        let key = agentKey(for: kind)
+        guard key == "claude" || key == "codex" else {
+            return (nil, "此 runner 没有模型清单")
+        }
+        guard let catalog else {
+            return (nil, "尚无模型探测快照，无法确认当前可选模型")
+        }
+        if let error = catalog.error(agent: key)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !error.isEmpty {
+            return (nil, "模型清单暂不可验证：\(error)")
+        }
+        guard let table = catalog.table(agent: key) else {
+            return (nil, "本轮 app-server 模型探测没有返回结果")
+        }
+        guard table.agent == key else {
+            return (nil, "模型清单来源不匹配，无法确认当前可选模型")
+        }
+        guard AgentModelCatalog.isLiveProbe(table, now: now) else {
+            let note = AgentModelCatalog.stalenessNote(for: table, now: now)
+                ?? "模型清单不是当前 app-server 探测结果"
+            return (nil, "模型清单暂不可验证：\(note)")
+        }
+        return (table, nil)
     }
 
     /// 当调用方**没显式选 model** 时，解析出一个具体别名显式落到启动配置里 ——

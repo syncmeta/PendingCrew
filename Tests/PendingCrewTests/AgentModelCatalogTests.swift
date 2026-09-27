@@ -476,14 +476,62 @@ final class AgentModelCatalogTests: XCTestCase {
         XCTAssertEqual(SessionLaunchOptions.efforts(for: .codex, catalog: probed), ["low", "ultra"])
     }
 
-    func testPickerFallsBackToManualTableWithoutProbe() {
-        // 没有 models.json 时也不能空 —— 回落手工兜底表。
-        XCTAssertTrue(SessionLaunchOptions.models(for: .claudeCode, catalog: nil).contains("opus"))
-        let codex = SessionLaunchOptions.models(for: .codex, catalog: nil)
-        XCTAssertTrue(codex.contains("gpt-5.6-sol"))
-        XCTAssertFalse(codex.contains("gpt-5-codex"), "picker 不该继续把人导向已下线的档")
-        XCTAssertTrue(SessionLaunchOptions.efforts(for: .codex, catalog: nil).contains("xhigh"),
-                      "旧硬编码的 minimal/low/medium/high 少了 xhigh/max/ultra")
+    func testPickerNeverOffersManualStaleOrErroredCatalogs() {
+        // 旧实现把无目录 / 手工表 / 过期表都静默展开成菜单项；这些都不是当前
+        // app-server 的可用性事实，picker 必须留空并让 UI 显示 unavailable 原因。
+        XCTAssertEqual(SessionLaunchOptions.models(for: .codex, catalog: nil), [])
+        XCTAssertEqual(SessionLaunchOptions.efforts(for: .codex, catalog: nil), [])
+
+        let manual = AgentModelCatalogFile(codex: manualTable(lastVerified: "2026-08-09"))
+        XCTAssertEqual(SessionLaunchOptions.models(for: .codex, catalog: manual), [])
+        XCTAssertEqual(SessionLaunchOptions.efforts(for: .codex, catalog: manual), [])
+
+        let stale = AgentModelCatalogFile(codex: AgentModelTable(
+            agent: "codex", source: .probe, probedAt: "2000-01-01T00:00:00Z",
+            models: [AgentModel(id: "gpt-old", efforts: ["low", "ultra"])],
+            efforts: ["low", "ultra"]))
+        XCTAssertEqual(SessionLaunchOptions.models(for: .codex, catalog: stale), [])
+        XCTAssertEqual(SessionLaunchOptions.efforts(for: .codex, catalog: stale), [])
+
+        let errored = AgentModelCatalogFile(
+            codex: AgentModelTable(
+                agent: "codex", source: .probe,
+                probedAt: ISO8601DateFormatter().string(from: Date()),
+                models: [AgentModel(id: "gpt-cached", efforts: ["low", "ultra"])],
+                efforts: ["low", "ultra"]),
+            codexError: "model/list 没答上")
+        XCTAssertEqual(SessionLaunchOptions.models(for: .codex, catalog: errored), [])
+        XCTAssertEqual(SessionLaunchOptions.efforts(for: .codex, catalog: errored), [])
+    }
+
+    func testPickerOptionsExplainUnavailableStateAndFilterEffortPerModel() {
+        let now = at("2026-08-09T12:00:00Z")
+        let fresh = AgentModelCatalogFile(codex: AgentModelTable(
+            agent: "codex", source: .probe, probedAt: "2026-08-09T06:00:00Z",
+            models: [
+                AgentModel(id: "gpt-wide", efforts: ["low", "medium", "ultra"]),
+                AgentModel(id: "gpt-limited", efforts: ["low", "medium"]),
+            ],
+            efforts: ["low", "medium", "ultra"]))
+
+        let models = SessionLaunchOptions.modelPickerOptions(for: .codex, catalog: fresh, now: now)
+        XCTAssertTrue(models.isAvailable)
+        XCTAssertNil(models.unavailableReason)
+        XCTAssertEqual(models.values, ["gpt-wide", "gpt-limited"])
+
+        let efforts = SessionLaunchOptions.effortPickerOptions(
+            for: .codex, model: "gpt-limited", catalog: fresh, now: now)
+        XCTAssertTrue(efforts.isAvailable)
+        XCTAssertEqual(efforts.values, ["low", "medium"],
+                       "不能把全表的 ultra 给不支持它的模型")
+
+        let unavailable = SessionLaunchOptions.modelPickerOptions(
+            for: .codex,
+            catalog: AgentModelCatalogFile(codex: manualTable(lastVerified: "2026-08-09")),
+            now: now)
+        XCTAssertFalse(unavailable.isAvailable)
+        XCTAssertEqual(unavailable.values, [])
+        XCTAssertTrue(unavailable.unavailableReason?.contains("手工兜底表") == true)
     }
 
     func testDisplayNamePrefersTableName() {
