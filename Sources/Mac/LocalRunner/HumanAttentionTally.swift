@@ -1,38 +1,15 @@
 #if os(macOS)
 import Foundation
 
-/// 菜单栏那个数字：**有几件事在等人拍板**（P5b·B，人类 Todo #7）。
-///
-/// 用途人类说得很具体：不开主窗口也能看到有没有事在等他，点一下进去。所以这里只回答
-/// 一个问题 —— 「现在有几件事非你不可」。判定全在这一层（纯 Foundation，进得了
-/// test bundle），菜单栏那个视图只负责把它显示出来。
-///
-/// ## 计哪三类，以及**为什么不计第四类**
-///
-/// 1. `approvals` —— 审批台账里 `status == "pending"` 的条目（`ask` 提的问题 +
-///    权限 hook 的放行请求）。
-/// 2. `screenMenus` —— 卡在**屏幕上那个框**、点名状态落 `awaitingDecision` 的
-///    session。它跟第 1 类不是一本账：审批台账是 MCP 工具写的，这一类是终端画面
-///    上明摆着的菜单，没有对应的台账条目。
-/// 3. `todos` —— 人类那本 Todo 里还没回应的条数。
-///
-/// **`awaitingReply` 故意不计。** 它看起来也是「在等人」，但它的判定输入之一
-/// 就是「审批台账里本 session 的 pending 条目」（见 `SessionAwaitingReply`）——
-/// 把它一起加进来，同一件事会被数两遍。**一个人看到「3 件事在等你」点进去只找到
-/// 2 件，下一次他就不信这个数字了**，而一个没人信的数字比没有更糟。
-///
-/// ## 去重规则写在这里，不靠调用方记得
-///
-/// 一个 session 理论上可以既有 pending 审批条目、又卡在屏幕菜单上（先问了一句，
-/// 又撞上一个框）。那是**一个人要处理的两件事还是一件？**——按人的角度是一件：
-/// 他打开那个 session 就都看见了。所以 `screenMenus` 只数**没有** pending 审批
-/// 条目的那些 session。
+/// 菜单栏品牌图标右侧的数字：全机两本 Todo 账中未解决条目的去重数。
+/// 身份是 (crewId, item.id)，不使用各账独立分配的编号。审批与屏幕菜单等待
+/// 事项保留为面板分项，但不进入这个数字。
 struct HumanAttentionCount: Equatable {
     var approvals: Int = 0
     var screenMenus: Int = 0
     var todos: Int = 0
 
-    var total: Int { approvals + screenMenus + todos }
+    var total: Int { todos }
 
     /// 没事的时候**保持安静**：不显示数字、不加角标。
     /// 图标本身仍在 —— 它是「点一下进去」的入口，消失了人就没地方点。
@@ -41,27 +18,81 @@ struct HumanAttentionCount: Equatable {
     /// 菜单栏图标旁边那个数字。安静时为 nil。
     ///
     /// ⚠️ **这个数和侧栏黄点上的数不是同一个口径，它们本来就不该相等。**
-    /// 这个 = **全机** × 三类（待审批 + 卡在屏幕框上的 session + 人类 Todo）；
-    /// 侧栏那个（`CrewHumanTodoAttention.badge`）= **单个 crew** × 只数人类那本
-    /// Todo × 自身+后代。看到两个数不一样是正常的，**不是 bug，别去「修」成一致**。
+    /// 这个 = **全机** × 两本账的未解决 Todo 去重数；
+    /// 侧栏那个（`CrewHumanTodoAttention.badge`）= **单个 crew** × 等人回复的
+    /// Todo × 自身+后代。看到两个数不一样是正常的。
     var badge: String? { isQuiet ? nil : String(total) }
 
-    /// 展开后的分项。**只列非零的那几项** —— 常年显示「待审批 0」会训练人忽略它。
+    /// 展开后的分项。只列非零的项，审批和屏幕菜单与 Todo 数字分开。
     var lines: [String] {
         var out: [String] = []
         if approvals > 0 { out.append("\(approvals) 件待审批") }
         if screenMenus > 0 { out.append("\(screenMenus) 个 session 卡在框上等你选") }
-        if todos > 0 { out.append("\(todos) 条 Todo 没回") }
+        if todos > 0 { out.insert("\(todos) 条未解决 Todo", at: 0) }
         return out
     }
 
     /// 一句话（辅助功能标签 / tooltip）。
     var summary: String {
-        isQuiet ? "没有等你拍板的事" : lines.joined(separator: "，")
+        lines.isEmpty ? "没有未解决 Todo 或其它等待事项" : lines.joined(separator: "，")
     }
 }
 
 enum HumanAttentionTally {
+    enum TodoReadError: LocalizedError {
+        case unreadable(String, TodoLedger)
+        var errorDescription: String? {
+            switch self {
+            case .unreadable(let crewId, let ledger):
+                return "\(crewId) 的\(ledger.pillTitle) Todo 账读不出来"
+            }
+        }
+    }
+
+    private struct TodoIdentity: Hashable {
+        let crewId: String
+        let itemId: String
+    }
+
+    struct TodoRecord {
+        let crewId: String
+        let ledger: TodoLedger
+        let item: LocalTodoItem
+    }
+
+    static func readRecords(crewIds: [String],
+                            read: (String, TodoLedger) -> LocalTodoStore.LedgerRead) throws -> [TodoRecord] {
+        var records: [TodoRecord] = []
+        for crewId in crewIds {
+            for ledger in TodoLedger.allCases {
+                switch read(crewId, ledger) {
+                case .rows(let rows):
+                    records.append(contentsOf: rows.map {
+                        TodoRecord(crewId: crewId, ledger: ledger, item: $0)
+                    })
+                case .unreadable:
+                    throw TodoReadError.unreadable(crewId, ledger)
+                }
+            }
+        }
+        return records
+    }
+
+    /// 同一 crew 的同一条 UUID 跨账只算一次；编号在不同 crew 或账内可重复。
+    static func tally(todos: [TodoRecord], pendingApprovalSessionIds: [String],
+                      sessionStates: [String: String]) -> HumanAttentionCount {
+        let open = todos.filter { !$0.item.isDeleted && !$0.item.isSettled && $0.item.withdrawnAt == nil }
+        let identities = Set(open.map { TodoIdentity(crewId: $0.crewId, itemId: $0.item.id) })
+        let sessionsWithApproval = Set(pendingApprovalSessionIds)
+        let onScreenMenu = sessionStates
+            .filter { $0.value == CrewSessionStateDerivation.awaitingDecision }
+            .keys.filter { !sessionsWithApproval.contains($0) }
+        return HumanAttentionCount(approvals: pendingApprovalSessionIds.count,
+                                   screenMenus: onScreenMenu.count, todos: identities.count)
+    }
+
+    /// 旧调用兼容入口；菜单栏生产路径使用携带真实条目的 `tally(todos:...)`。
+    /// 当前 `ask` / 权限请求已进人类 Todo，生产调用方不再读取旧审批账。
     /// - Parameters:
     ///   - pendingApprovalSessionIds: 每个 pending 审批条目对应的 sessionId
     ///     （**按条目来，不是按 session 去重** —— 同一个 session 上两个待审批就是两件事）。

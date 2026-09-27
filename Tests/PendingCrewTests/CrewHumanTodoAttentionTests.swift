@@ -268,12 +268,12 @@ final class CrewHumanTodoAttentionTests: XCTestCase {
     /// **两个数不是同一个口径，本来就不该相等。** 这条不是在测相等，是把这件事
     /// 钉在用例里 —— 下一个人看到两个数不一样时，先看见这条，别当 bug 去「修」。
     func test_侧栏这个数与菜单栏那个数口径不同() {
-        // 侧栏：单个 crew × 只数人类那本 Todo × 自身+后代。
+        // 侧栏：单个 crew × 等人回复的 Todo × 自身+后代。
         let sidebar = CrewHumanTodoAttention(ownUnanswered: 2, descendantUnanswered: 0)
-        // 菜单栏：全机 × 三类（待审批 + 卡在屏幕框上的 session + 人类 Todo）。
-        let menuBar = HumanAttentionCount(approvals: 5, screenMenus: 1, todos: 2)
+        // 菜单栏：全机 × 两本账未解决 Todo；其它等待事项不加进数字。
+        let menuBar = HumanAttentionCount(approvals: 5, screenMenus: 1, todos: 3)
         XCTAssertEqual(sidebar.badge, "2")
-        XCTAssertEqual(menuBar.badge, "8")
+        XCTAssertEqual(menuBar.badge, "3")
         XCTAssertNotEqual(sidebar.badge, menuBar.badge,
                           "同一批 Todo 下两个角标显示不同的数，是设计，不是 bug")
     }

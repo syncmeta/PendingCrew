@@ -3,7 +3,7 @@ import Combine
 import Foundation
 
 /// 菜单栏那个数字的取数层（P5b·B）。判定在 `HumanAttentionTally`（进得了单测），
-/// 这里只负责把运行状态与人类 Todo 捞出来喂给它。
+/// 这里只负责把运行状态与全机两本 Todo 账捞出来喂给它。
 ///
 /// ## 为什么读 `crew-sessions.json` 而不是内存里的 `runs`
 ///
@@ -24,6 +24,12 @@ final class MenuBarAttentionModel: ObservableObject {
     @Published private(set) var lastGoodAt: Date?
     /// 最近一次取数失败的原因（nil = 上一次是成功的）。
     @Published private(set) var staleReason: String?
+
+    var accessibilitySummary: String {
+        guard staleReason != nil else { return count.summary }
+        return lastGoodAt == nil ? "数据读不出来，未解决 Todo 数未知"
+            : "数据读不出来，显示的是上次读取的未解决 Todo 数。\(count.summary)"
+    }
 
     private var timer: Timer?
     private weak var crewStore: CrewStore?
@@ -47,14 +53,15 @@ final class MenuBarAttentionModel: ObservableObject {
 
     private func refresh() {
         guard let crewStore else { return }
-        let todos = crewStore.humanTodoAttention.values.reduce(0) { $0 + $1.ownUnanswered }
-
         do {
+            let todos = try HumanAttentionTally.readRecords(
+                crewIds: LocalCrewStore.shared.listCrews(includingBuiltin: true).map(\.id)) {
+                crewId, ledger in
+                LocalTodoStore.shared(ledger).read(crewId: crewId)
+            }
             let states = try Self.rosterStates()
             count = HumanAttentionTally.tally(
-                pendingApprovalSessionIds: [],
-                sessionStates: states,
-                unansweredTodos: todos)
+                todos: todos, pendingApprovalSessionIds: [], sessionStates: states)
             lastGoodAt = Date()
             staleReason = nil
         } catch {

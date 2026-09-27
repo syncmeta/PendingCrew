@@ -47,8 +47,8 @@ struct CrewHumanTodoAttention: Equatable, Sendable {
     /// 这个孪生，照它写，不发明第二种。
     ///
     /// ⚠️ **这个数和菜单栏那个数不是同一个口径，它们本来就不该相等。**
-    /// 侧栏这个 = **单个 crew** × 只数**人类那本 Todo** × 自身+后代；
-    /// 菜单栏那个 = **全机** × 三类（待审批 + 卡在屏幕框上的 session + 人类 Todo）。
+    /// 侧栏这个 = **单个 crew** × 等人回复的 Todo × 自身+后代；
+    /// 菜单栏那个 = **全机** × 两本账未解决 Todo 去重数。
     /// 看到两个数不一样是正常的，**不是 bug，别去「修」成一致**。
     var badge: String? {
         guard badgeTotal > 0 else { return nil }

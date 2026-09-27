@@ -78,7 +78,7 @@ struct PendingCrewApp: App {
                 .keyboardShortcut("?", modifiers: .command)
             }
         }
-        // 菜单栏常驻入口（P5b·B）：不开主窗口也看得到有几件事在等人拍板。
+        // 菜单栏常驻入口：不开主窗口也看得到全机未解决 Todo 数。
         // **图标常在、数字只在有事时出现** —— 图标是「点一下进去」的入口，
         // 消失了人就没地方点；而常年挂一个 0 会训练人忽略它。
         MenuBarExtra {
@@ -109,7 +109,7 @@ struct PendingCrewApp: App {
             } icon: {
                 Image("PendingCrewSymbolFill")
             }
-            .accessibilityLabel(menuBarAttention.count.summary)
+            .accessibilityLabel(menuBarAttention.accessibilitySummary)
         }
         .menuBarExtraStyle(.window)
         .onChange(of: crewStore.crews.count, initial: true) { _, _ in

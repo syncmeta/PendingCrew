@@ -2,12 +2,61 @@
 import Foundation
 import XCTest
 
-/// 菜单栏那个数字（P5b·B）。
-///
-/// 这个数字唯一的价值是**准**：人看到「3 件事在等你」点进去只找到 2 件，
-/// 下一次他就不信它了 —— 而一个没人信的数字比没有更糟。所以这里钉的主要是
-/// 「什么不算」，不是「什么算」。
+/// 菜单栏数字：全机两本账的未解决 Todo 去重数；其它等待事项单列。
 final class HumanAttentionTallyTests: XCTestCase {
+    private func item(_ id: String, number: Int, status: String = "pending",
+                      withdrawn: Bool = false) -> LocalTodoItem {
+        var row = LocalTodoItem(id: id, number: number, text: "todo", status: status,
+                                createdAt: "2026-01-01T00:00:00Z")
+        if withdrawn { row.withdrawnAt = "2026-01-02T00:00:00Z" }
+        return row
+    }
+
+    func testBadgeCountsOpenTodosAcrossBothLedgersAndCrewsByIdentity() {
+        let rows: [HumanAttentionTally.TodoRecord] = [
+            .init(crewId: "a", ledger: .agent, item: item("same", number: 1)),
+            .init(crewId: "a", ledger: .human, item: item("same", number: 1)),
+            .init(crewId: "b", ledger: .agent, item: item("same", number: 1)),
+            .init(crewId: "a", ledger: .agent, item: item("done", number: 2, status: "completed")),
+            .init(crewId: "a", ledger: .human, item: item("stopped", number: 3, status: LocalTodoItem.droppedStatus)),
+            .init(crewId: "a", ledger: .human, item: item("withdrawn", number: 4, withdrawn: true)),
+        ]
+        let count = HumanAttentionTally.tally(todos: rows, pendingApprovalSessionIds: ["s"],
+                                               sessionStates: ["m": CrewSessionStateDerivation.awaitingDecision])
+        XCTAssertEqual(count.badge, "2")
+        XCTAssertEqual(count.todos, 2)
+        XCTAssertEqual(count.approvals, 1)
+        XCTAssertEqual(count.screenMenus, 1)
+        XCTAssertTrue(count.lines.contains("2 条未解决 Todo"))
+    }
+
+    func testBadgeHidesAtZeroEvenIfOtherAttentionRemains() {
+        let count = HumanAttentionTally.tally(todos: [], pendingApprovalSessionIds: ["s"],
+                                               sessionStates: [:])
+        XCTAssertNil(count.badge)
+        XCTAssertTrue(count.lines.contains("1 件待审批"))
+    }
+
+    func testStateChangeImmediatelyChangesComputedBadge() {
+        var row = item("one", number: 1)
+        func count() -> String? {
+            HumanAttentionTally.tally(todos: [.init(crewId: "a", ledger: .agent, item: row)],
+                                      pendingApprovalSessionIds: [], sessionStates: [:]).badge
+        }
+        XCTAssertEqual(count(), "1")
+        row.status = "completed"
+        XCTAssertNil(count())
+        row.status = "in_progress"
+        XCTAssertEqual(count(), "1")
+    }
+
+    func testUnreadableEitherLedgerNeverBecomesZero() {
+        for failedLedger in TodoLedger.allCases {
+            XCTAssertThrowsError(try HumanAttentionTally.readRecords(crewIds: ["a"]) { _, ledger in
+                ledger == failedLedger ? .unreadable : .rows([self.item("one", number: 1)])
+            })
+        }
+    }
 
     func testQuietWhenNothingIsWaiting() {
         let count = HumanAttentionTally.tally(
@@ -24,8 +73,8 @@ final class HumanAttentionTallyTests: XCTestCase {
             sessionStates: ["s3": "awaitingDecision", "s4": "working"],
             unansweredTodos: 4)
         XCTAssertEqual(count, HumanAttentionCount(approvals: 2, screenMenus: 1, todos: 4))
-        XCTAssertEqual(count.total, 7)
-        XCTAssertEqual(count.badge, "7")
+        XCTAssertEqual(count.total, 4)
+        XCTAssertEqual(count.badge, "4")
     }
 
     /// 同一个 session 上的两个待审批**是两件事**（按条目数，不按 session 去重）。
@@ -42,7 +91,7 @@ final class HumanAttentionTallyTests: XCTestCase {
             pendingApprovalSessionIds: ["s1"],
             sessionStates: ["s1": "awaitingDecision"],
             unansweredTodos: 0)
-        XCTAssertEqual(count.total, 1, "同一个 session 被数了两遍")
+        XCTAssertEqual(count.total, 0, "审批不进入 Todo 数字")
         XCTAssertEqual(count.screenMenus, 0)
     }
 
@@ -79,7 +128,7 @@ final class HumanAttentionTallyTests: XCTestCase {
     func testSummaryOnlyMentionsWhatIsActuallyWaiting() {
         let count = HumanAttentionTally.tally(
             pendingApprovalSessionIds: [], sessionStates: [:], unansweredTodos: 2)
-        XCTAssertEqual(count.summary, "2 条 Todo 没回")
+        XCTAssertEqual(count.summary, "2 条未解决 Todo")
         XCTAssertFalse(count.summary.contains("待审批"))
     }
 }
