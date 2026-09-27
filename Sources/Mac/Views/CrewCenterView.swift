@@ -65,6 +65,10 @@ struct CrewCenterView: View {
                 placeholder
             }
         }
+        // 窗口使用透明 titlebar + fullSizeContentView。只给中栏标题后面铺一层
+        // 与聊天画布相同的不透明底色，挡住滚到标题下面的消息；不改变整窗 toolbar
+        // 背景，sidebar 仍保留自己的材质。高度跟随系统安全区，窄窗口也不写死宽度。
+        .overlay(alignment: .top) { chatTitleBacking }
         // 「回到刚才那条」（人类 Todo #132/#133）。**浮在群聊上方而不是插进版面**：
         // 插进去会把整条时间线往下推一格，而它是个临时件 —— 退回去之后就该消失，
         // 版面不该跟着抖两次。
@@ -205,6 +209,19 @@ struct CrewCenterView: View {
                     crewStore.chatSearchRequest = nil
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var chatTitleBacking: some View {
+        if crewStore.selectedCrewId != nil {
+            GeometryReader { geometry in
+                Theme.Palette.canvas
+                    .frame(height: geometry.safeAreaInsets.top)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .offset(y: -geometry.safeAreaInsets.top)
+            }
+            .allowsHitTesting(false)
         }
     }
 

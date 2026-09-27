@@ -21,6 +21,24 @@ import CoreGraphics
 /// 仍然测不了的那一条写在末尾的注释里，别当成已覆盖。
 final class CrewChatBottomFollowTests: XCTestCase {
 
+    /// #162：透明窗口标题后不能露出滚动消息。源码契约只能守住中栏的接线与
+    /// 自适应底色；实际标题遮挡、深浅色和窄窗口仍需装机后目视验收。
+    func testChatTitleHasOpaqueColumnScopedBacking() throws {
+        let center = try Self.source("Mac/Views/CrewCenterView.swift")
+        let chat = try Self.source("Mac/Views/CrewChatView.swift")
+        let backing = center.components(separatedBy: "private var chatTitleBacking: some View")
+            .dropFirst().first?.components(separatedBy: "private var placeholder: some View").first ?? ""
+        XCTAssertTrue(center.contains(".overlay(alignment: .top) { chatTitleBacking }"),
+                      "标题遮挡必须挂在群聊中栏，不能刷整窗 toolbar 或 sidebar")
+        XCTAssertTrue(backing.contains("crewStore.selectedCrewId != nil") &&
+                      backing.contains("Theme.Palette.canvas") &&
+                      backing.contains("geometry.safeAreaInsets.top") &&
+                      backing.contains(".allowsHitTesting(false)"),
+                      "标题背后需要自适应不透明底色，覆盖动态安全区且不拦工具栏点击")
+        XCTAssertTrue(chat.contains(".background(Theme.Palette.canvas)"),
+                      "标题底色需与群聊画布衔接")
+    }
+
     // MARK: - 在不在底部
 
     func testAtBottomWhenOffsetReachesTheEnd() {
