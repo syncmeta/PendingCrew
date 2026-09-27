@@ -1580,8 +1580,8 @@ private struct SessionProfileReadonlyPill: View {
 /// 成功后回写 run，UI 不抢先显示假配置。
 private struct SessionProfileControl: View {
     @ObservedObject var run: CrewSessionRun
-    /// 可用模型表（Todo #37）：菜单候选来自现探的 models.json，探不到才回落手工
-    /// 兜底表 —— 不再在这里硬编模型名。
+    /// 菜单只读后台已完成的目录快照；Codex 候选需经 PickerOptions 确认新鲜度，
+    /// 探测未就绪或失败时不把旧缓存与手工表当作当前可选值。
     @ObservedObject private var catalog = ModelCatalogCenter.shared
     /// 只带**改动的那一个**（另一个传 nil），避免误发未变的档位。
     let onSwitch: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
@@ -1630,16 +1630,25 @@ private struct SessionProfileControl: View {
     }
 
     private var availableModels: [String] {
-        SessionLaunchOptions.models(for: run.kind, catalog: catalog.file)
+        modelPickerOptions.values
     }
 
     private var availableEfforts: [String] {
-        SessionLaunchOptions.efforts(for: run.kind, catalog: catalog.file)
+        if run.kind == .codex {
+            return SessionLaunchOptions.effortPickerOptions(
+                for: .codex, model: run.model, catalog: catalog.file).values
+        }
+        return SessionLaunchOptions.efforts(for: run.kind, catalog: catalog.file)
     }
 
-    private var codexDefaultModel: String? {
+    private var modelPickerOptions: SessionLaunchOptions.PickerOptions {
+        SessionLaunchOptions.modelPickerOptions(for: run.kind, catalog: catalog.file)
+    }
+
+    private var effortUnavailableReason: String? {
         guard run.kind == .codex else { return nil }
-        return SessionLaunchOptions.codexDefaultModel(catalog: catalog.file)
+        return SessionLaunchOptions.effortPickerOptions(
+            for: .codex, model: run.model, catalog: catalog.file).unavailableReason
     }
 
     private var modelMenu: some View {
@@ -1648,23 +1657,31 @@ private struct SessionProfileControl: View {
                 Button {
                     onSwitch(SessionLaunchOptions.codexDefaultModelSelection, nil, nil)
                 } label: {
-                    let suffix = codexDefaultModel.map {
-                        "（\(SessionLaunchOptions.displayName(for: $0, catalog: catalog.file))）"
-                    } ?? ""
                     // `run.model` 是当前实际 slug，无法区分「默认解析到它」和
                     // 「人显式选了同一个 slug」。这里不画假 checkmark；点击本行会
                     // 明确清掉持久覆盖，成功回执再说明已进入跟随状态。
-                    Text("跟随 Codex 默认\(suffix)")
+                    Text("跟随 Codex 默认")
                 }
                 Divider()
             }
-            ForEach(availableModels, id: \.self) { model in
-                Button {
-                    if model != run.model { onSwitch(model, nil, nil) }
-                } label: {
-                    let name = SessionLaunchOptions.displayName(for: model, catalog: catalog.file)
-                    if model == run.model { Label(name, systemImage: "checkmark") }
-                    else { Text(name) }
+            if availableModels.isEmpty {
+                Text("暂无可选模型")
+                    .help(modelPickerOptions.unavailableReason ?? "模型目录暂无可选项")
+                Text("请稍后重试目录探测")
+            } else {
+                ForEach(availableModels, id: \.self) { model in
+                    Button {
+                        // 实际 slug 相同也可能正处于「跟随默认」；显式点选仍要
+                        // 把覆盖写入该 session，不能从 run.model 推断为无变化。
+                        if run.kind == .codex || model != run.model {
+                            onSwitch(model, nil, nil)
+                        }
+                    } label: {
+                        let name = SessionLaunchOptions.displayName(for: model, catalog: catalog.file)
+                        if run.kind == .codex { Text(name) }
+                        else if model == run.model { Label(name, systemImage: "checkmark") }
+                        else { Text(name) }
+                    }
                 }
             }
         } label: {
@@ -1688,12 +1705,20 @@ private struct SessionProfileControl: View {
 
     private var effortMenu: some View {
         Menu {
-            ForEach(availableEfforts, id: \.self) { effort in
-                Button {
-                    if effort != run.effort { onSwitch(nil, effort, nil) }
-                } label: {
-                    if effort == run.effort { Label(effort, systemImage: "checkmark") }
-                    else { Text(effort) }
+            if availableEfforts.isEmpty {
+                Text("暂无可选推理强度")
+                    .help(effortUnavailableReason ?? "模型目录暂无可选项")
+                Text("请稍后重试目录探测")
+            } else {
+                ForEach(availableEfforts, id: \.self) { effort in
+                    Button {
+                        if run.kind == .codex || effort != run.effort {
+                            onSwitch(nil, effort, nil)
+                        }
+                    } label: {
+                        if effort == run.effort { Label(effort, systemImage: "checkmark") }
+                        else { Text(effort) }
+                    }
                 }
             }
         } label: {

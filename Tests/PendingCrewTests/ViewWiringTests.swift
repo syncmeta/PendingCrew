@@ -599,8 +599,8 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(profile.contains("icon: \"brain.head.profile\""))
         XCTAssertTrue(profile.contains("run.fastMode == true ? \"bolt.fill\" : \"bolt\""))
         XCTAssertTrue(profile.contains(".accessibilityLabel(\"Codex 快速模式\")"))
-        XCTAssertTrue(profile.contains("SessionLaunchOptions.models(for: run.kind, catalog: catalog.file)"),
-                      "模型仍须来自运行时目录")
+        XCTAssertTrue(profile.contains("SessionLaunchOptions.modelPickerOptions(for: run.kind, catalog: catalog.file)"),
+                      "模型须来自已验新鲜度的运行时目录")
         XCTAssertTrue(profile.contains("SessionLaunchOptions.codexDefaultModelSelection"),
                       "跟随 Codex 默认仍须清除持久覆盖")
         XCTAssertTrue(composer.contains("placeholder: \"\""))
@@ -616,6 +616,36 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(header.contains("Menu {"), "压缩折叠菜单应移除")
         XCTAssertFalse(header.contains("查看上下文与额度"), "重复统计入口应移除")
         XCTAssertFalse(usage.contains("Button(\"压缩上下文\""), "统计弹窗里不应重复压缩入口")
+    }
+
+    /// #166 follow-up: Codex's running-session menus must consume only the
+    /// fresh app-server picker snapshot. This source contract checks the View
+    /// wiring; catalog eligibility and per-model efforts need executable core
+    /// tests, and visible menu layout still needs human review.
+    func testCodexSessionProfileRequiresFreshPickerAndHonestEmptyState() throws {
+        let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let start = try XCTUnwrap(view.range(of: "private struct SessionProfileControl:"))
+        let end = try XCTUnwrap(view.range(of: "#endif", range: start.upperBound..<view.endIndex))
+        let profile = String(view[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(profile.contains("PickerOptions"), "Codex 菜单未接入目录资格判定")
+        XCTAssertFalse(profile.contains("SessionLaunchOptions.codexDefaultModel(catalog:"),
+                       "运行中 session 的默认模型不能用全局目录猜 slug")
+        XCTAssertTrue(profile.contains("if run.kind == .codex { Text(name) }"),
+                      "实际运行 slug 不能冒充用户显式选择的模型")
+        XCTAssertTrue(profile.contains("if run.kind == .codex || model != run.model"),
+                      "跟随默认解析到相同 slug 时仍须允许显式固定该模型")
+        XCTAssertTrue(profile.contains("if run.kind == .codex || effort != run.effort"),
+                      "Codex 当前 effort 与显式覆盖也不能只凭显示值混同")
+        XCTAssertTrue(profile.contains("availableModels.isEmpty"), "无合格目录时未显示空态")
+        XCTAssertTrue(profile.contains("暂无可选模型"), "无目录时缺简短空态")
+        XCTAssertTrue(profile.contains("重试"), "无目录时缺探测重试线索")
+        XCTAssertTrue(profile.contains("SessionLaunchOptions.effortPickerOptions("),
+                      "effort 候选未走逐模型 PickerOptions")
+        XCTAssertTrue(profile.contains("for: .codex, model: run.model, catalog: catalog.file"),
+                      "换模型后须按新目标模型重算 effort 候选")
+        XCTAssertTrue(profile.contains("SessionLaunchOptions.codexDefaultModelSelection"),
+                      "跟随 Codex 默认入口必须始终独立可选")
     }
 
     /// Todo #80：退出后的成员行必须恢复那一个持久 session，不能把点击退化成
