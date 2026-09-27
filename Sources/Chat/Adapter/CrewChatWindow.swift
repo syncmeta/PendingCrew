@@ -67,7 +67,7 @@ enum CrewChatWindow {
     }
 
     /// macOS 14 没有 SwiftUI 滚动相位；只从 AppKit 的真实滚轮事件产生手势令牌。
-    /// 用事件时间生成令牌，传感器随 eager/lazy 容器重建时也不会复用旧令牌。
+    /// 由随聊天 ScrollView 保持的 WheelGestureBox 持有，传感器重建不截断手势。
     /// 连续滚轮事件与惯性事件共用一号，停止 0.3 秒后再次滚动才开下一页。
     struct WheelBurst {
         private var lastWheelAt: TimeInterval?
@@ -81,6 +81,25 @@ enum CrewChatWindow {
             }
             lastWheelAt = time
             return generation
+        }
+    }
+
+    /// 传感器可以随 eager/lazy 内容重建；滚动视图的状态盒必须跨重建保留手势。
+    final class WheelGestureBox {
+        private var scopeID: String?
+        private var burst = WheelBurst()
+
+        func generation(scopeID: String) -> Int {
+            self.scopeID == scopeID ? burst.generation : 0
+        }
+
+        func recordWheel(scopeID: String, at time: TimeInterval,
+                         beginsGesture: Bool = false, isPhased: Bool = false) -> Int {
+            if self.scopeID != scopeID {
+                self.scopeID = scopeID
+                burst = WheelBurst()
+            }
+            return burst.recordWheel(at: time, beginsGesture: beginsGesture, isPhased: isPhased)
         }
     }
 
@@ -215,11 +234,13 @@ enum CrewChatWindow {
 /// 因此不会把自己的插入当成下一次续页。放在 ScrollView 的内容背景里获取 enclosingScrollView。
 struct LegacyTopApproachSensor: NSViewRepresentable {
     let scopeID: String
+    let gestureBox: CrewChatWindow.WheelGestureBox
     let onUserScroll: (Int, Bool, Bool, Bool) -> Void
 
     func makeNSView(context: Context) -> WheelView {
         let view = WheelView()
         view.scopeID = scopeID
+        view.gestureBox = gestureBox
         view.onUserScroll = onUserScroll
         return view
     }
@@ -227,6 +248,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
     func updateNSView(_ nsView: WheelView, context: Context) {
         nsView.onUserScroll = onUserScroll
         nsView.scopeID = scopeID
+        nsView.gestureBox = gestureBox
         nsView.connect()
     }
 
@@ -236,7 +258,6 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
             didSet {
                 if oldValue != scopeID {
                     disconnect()
-                    burst = CrewChatWindow.WheelBurst()
                     connect()
                 }
             }
@@ -246,7 +267,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
         private weak var trackedScroll: NSScrollView?
         private var wheelMonitor: Any?
         private var boundsObserver: NSObjectProtocol?
-        private var burst = CrewChatWindow.WheelBurst()
+        var gestureBox = CrewChatWindow.WheelGestureBox()
         private var pendingGesture: Int?
         private var pendingTowardTop = false
         private var pendingOriginY: CGFloat = 0
@@ -334,8 +355,8 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
                                 beginsGesture: Bool = false, isPhased: Bool = false,
                                 isMomentum: Bool = false) {
             guard let scroll = trackedScroll, scrollingDeltaY != 0 else { return }
-            let gesture = isMomentum ? burst.generation : burst.recordWheel(
-                at: time, beginsGesture: beginsGesture, isPhased: isPhased)
+            let gesture = isMomentum ? gestureBox.generation(scopeID: scopeID) : gestureBox.recordWheel(
+                scopeID: scopeID, at: time, beginsGesture: beginsGesture, isPhased: isPhased)
             guard gesture > 0 else { return }
             pendingGesture = gesture
             pendingTowardTop = scrollingDeltaY > 0

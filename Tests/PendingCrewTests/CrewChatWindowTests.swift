@@ -79,6 +79,34 @@ final class CrewChatWindowTests: XCTestCase {
                           trackpadStart, "下一个明确的 began 事件应开启新手势")
     }
 
+    func testRemountedWheelSensorDoesNotLoadSecondPageInSameGesture() {
+        let gate = CrewChatWindow.AutoLoadGate()
+        let gestureBox = CrewChatWindow.WheelGestureBox()
+        let firstGesture = gestureBox.recordWheel(scopeID: "crew-a", at: 1.0)
+        XCTAssertTrue(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                      isFollowing: false, gesture: firstGesture,
+                                      total: 120, limit: 30))
+        let limitAfterFirstWheel = CrewChatWindow.expanded(30, total: 120)
+        XCTAssertEqual(limitAfterFirstWheel, 60)
+
+        // 30→60 switches the eager stack to lazy. A newly mounted sensor can see
+        // the next event in the very same wheel burst while the gate survives.
+        let sameGesture = gestureBox.recordWheel(scopeID: "crew-a", at: 1.1)
+        XCTAssertFalse(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                       isFollowing: false, gesture: sameGesture,
+                                       total: 120, limit: limitAfterFirstWheel),
+                       "同一手势跨传感器重建不能从 60 连载到 90")
+        let newGesture = gestureBox.recordWheel(scopeID: "crew-a", at: 1.5)
+        XCTAssertTrue(gate.shouldLoad(nearTop: true, isUserScrolling: true,
+                                      isFollowing: false, gesture: newGesture,
+                                      total: 120, limit: limitAfterFirstWheel),
+                      "停顿后新手势仍须能继续翻到 90")
+        XCTAssertEqual(gestureBox.generation(scopeID: "crew-b"), 0,
+                       "切群后旧群的惯性事件不能借用手势号")
+        XCTAssertNotEqual(gestureBox.recordWheel(scopeID: "crew-b", at: 1.6), newGesture,
+                          "切群时不得沿用上一群的手势号")
+    }
+
     func testAutoPagingAnchorsActualVisibleRow() {
         let before = CrewChatWindow.window(msgs(100), limit: 30)
         let visible = CrewChatWindow.anchorOnAutoExpand(before, visibleTop: 76,
@@ -107,7 +135,7 @@ final class CrewChatWindowTests: XCTestCase {
                       "旧系统和自动续载没触发时仍要有手动按钮")
         XCTAssertTrue(phase.contains("userScrollGeneration += 1"),
                       "内容增高不能伪装成新手势重复续载")
-        XCTAssertTrue(view.contains("LegacyTopApproachSensor(scopeID: crewId)"),
+        XCTAssertTrue(view.contains("LegacyTopApproachSensor(scopeID: crewId, gestureBox: wheelGestureBox)"),
                       "所有 macOS 版本均以本聊天的真滚轮判方向与近顶")
         XCTAssertTrue(view.contains("bottomPin.leftBottomByUser()"),
                       "macOS 14 缺 SwiftUI 相位时真用户滚轮仍要能解除底部跟随")
@@ -359,7 +387,8 @@ final class CrewChatLegacyWheelSensorTests: XCTestCase {
                     Color.blue.frame(height: 40)
                 }
             }
-            .background(LegacyTopApproachSensor(scopeID: "crew-a") {
+            .background(LegacyTopApproachSensor(scopeID: "crew-a",
+                                                gestureBox: CrewChatWindow.WheelGestureBox()) {
                 _, _, _, _ in approaches += 1
             }
                 .frame(width: 0, height: 0))
@@ -392,7 +421,8 @@ final class CrewChatLegacyWheelSensorTests: XCTestCase {
         var limit = CrewChatWindow.pageSize
         let host = NSHostingView(rootView: ScrollView {
             Color.blue.frame(height: 2000)
-                .background(LegacyTopApproachSensor(scopeID: "crew-a") {
+                .background(LegacyTopApproachSensor(scopeID: "crew-a",
+                                                    gestureBox: CrewChatWindow.WheelGestureBox()) {
                     gesture, nearTop, atBottom, towardTop in
                     if atBottom { pin.reachedBottom() } else { pin.leftBottomByUser() }
                     if CrewChatWindow.shouldAutoLoad(nearTop: nearTop, towardTop: towardTop),

@@ -75,6 +75,8 @@ struct CrewChatView: View {
     @State private var scrollPhaseBox = CrewChatBottomFollow.ScrollPhaseBox()
     /// 自动续载的每手势门闩；引用型，滚动几何回调不触发时间线重排。
     @State private var autoLoadGate = CrewChatWindow.AutoLoadGate()
+    /// 传感器会随首屏 eager→lazy 重建；滚轮手势号须活在滚动视图这一层。
+    @State private var wheelGestureBox = CrewChatWindow.WheelGestureBox()
 
     /// 渲染窗口上限（#443）：只把最近这么多条交给 `ForEach`。切 crew 时归位到一页。
     @State private var renderLimit = CrewChatWindow.pageSize
@@ -950,7 +952,7 @@ struct CrewChatView: View {
                 .padding(.vertical, 10)
                 #if os(macOS)
                 .background {
-                    LegacyTopApproachSensor(scopeID: crewId) {
+                    LegacyTopApproachSensor(scopeID: crewId, gestureBox: wheelGestureBox) {
                         gesture, nearTop, atBottom, towardTop in
                         wheelScroll(gesture: gesture, nearTop: nearTop,
                                     atBottom: atBottom, towardTop: towardTop)
