@@ -144,8 +144,8 @@ final class CrewMessageCategoryTests: XCTestCase {
 
     /// `post_to_crew` 失败对一个 agent 意味着什么**取决于它当时在干嘛** —— 有的重试，
     /// **有的会把错读成「这条不该发」然后静默咽掉**，而咽掉的正是人类最需要看到的汇报。
-    /// 所以第一步：分类**仍可选**，不给就是 `note`，一条都不许失败。
-    func test_不给分类不算错只当note() {
+    /// 新 schema 要求分类；旧客户端直调仍可发，避免旧 session 静默丢话。
+    func test_旧调用缺分类仍放行但不落账() {
         XCTAssertEqual(decide(nil), .noLedger)
         XCTAssertEqual(decide(""), .noLedger)
     }

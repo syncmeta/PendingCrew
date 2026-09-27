@@ -69,6 +69,13 @@ final class McpMultiMessageTests: XCTestCase {
         XCTAssertTrue(r.contains("已发出 3 条"), "回执没说发了几条：\(r)")
     }
 
+    func test_旧分条缺分类仍发但回执逐项提示() {
+        let f = fixture()
+        let r = post(server(f), #"{"messages":[{"text":"第一条","category":"note"},{"text":"第二条"}]}"#)
+        XCTAssertTrue(r.contains("第 2 条") && r.contains("category"), r)
+        XCTAssertEqual(board(f).map(\.text), ["第一条", "第二条"])
+    }
+
     /// 校验全有或全无：第 3 条空白 ⇒ 前两条也不许出去。
     func test_有一条不合法时一条都不发() {
         let f = fixture()

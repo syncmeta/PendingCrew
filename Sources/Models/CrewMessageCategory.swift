@@ -91,12 +91,8 @@ enum CrewCategoryRouting {
     static let legacyValues: Set<String> = ["progress", "question", "milestone"]
 
     /// - Parameters:
-    ///   - category: `post_to_crew` 传进来的分类。**第一步它仍是可选的** ——
-    ///     `--mcp-serve` 一个 session 一个进程、长期存活，改了 enum 对在跑的 session
-    ///     不生效（见 `LocalSessionLaunch.prepareLocalCommsConfig` 的注释）。
-    ///     此刻把它翻成必填，会让一批在跑的 session 的 `post_to_crew` 开始失败，
-    ///     而**有的 agent 会把失败读成「这条不该发」然后静默咽掉** ——
-    ///     咽掉的正是人类最需要看到的汇报。收口留到装版之后。
+    ///   - category: `post_to_crew` 传进来的分类。新工具 schema 必填，
+    ///     旧客户端直调时仍按旧契约放行并在回执提醒，以免丢消息。
     ///   - args: 同一次工具调用里的其它参数（`plan` / `todo` / `blocked_by_number`）。
     ///   - isCaptain: **只影响「缺计划号时该往哪走」这句话**，不影响该不该落账。
     ///     机长的出路是「先 `plan_add` 排一条」，worker 没有那个工具 ——
@@ -132,6 +128,15 @@ enum CrewCategoryRouting {
         // **`handoff` 一旦 land 就意味着起进程**，那正是这一单最不该发生的事。
         guard category.ledger != .none else { return .noLedger }
         return .land(category)
+    }
+
+    /// 新工具 schema 要求分类；旧调用方绕过 schema 时仍发出消息，并如实告知没落账。
+    static func legacyMissingCategoryHint(_ category: String?) -> String? {
+        guard (category ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return "⚠️ 这条没给 `category`，按旧调用兼容发出，但没有分类落账。"
+            + "下次请明确选 `note` / `finding` / `ack` 等类别。"
     }
 
     // MARK: - 缺什么，以及**该往哪走**
@@ -399,4 +404,3 @@ enum CrewMessageRecipients {
             + "\n要人拍板而且等得起的，用 `add_human_todo` 更稳：群消息刷过去就漏，那本账不会。"
     }
 }
-

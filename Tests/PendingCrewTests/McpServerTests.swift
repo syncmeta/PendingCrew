@@ -61,6 +61,93 @@ final class McpServerTests: XCTestCase {
         XCTAssertEqual(msgs[0].category, "progress")
     }
 
+    func testLegacyPostWithoutCategoryKeepsMessageAndWarns() {
+        let s = server(tempDir())
+        let r = s.handleLine(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"message":"没有分类"}}}"#) ?? ""
+        XCTAssertFalse(r.contains("ERROR"), r)
+        XCTAssertTrue(r.contains("category") && r.contains("note"), r)
+        XCTAssertEqual(s.store.list(crewId: "c").map(\.text), ["没有分类"])
+    }
+
+    func testPostSchemaRequiresCategoryInSingleAndBatch() throws {
+        let raw = try XCTUnwrap(server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+        let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+        let modes = try XCTUnwrap(schema["oneOf"] as? [[String: Any]])
+        let single = try XCTUnwrap(modes.first {
+            ($0["required"] as? [String])?.contains("message") == true
+        })
+        XCTAssertTrue((single["required"] as? [String])?.contains("category") == true)
+        XCTAssertTrue(modes.contains {
+            ($0["required"] as? [String]) == ["messages"]
+        }, "分条入口不能被顶层单条必填项挡住")
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
+        let items = try XCTUnwrap(messages["items"] as? [String: Any])
+        XCTAssertTrue((items["required"] as? [String])?.contains("category") == true)
+    }
+
+    func testPostSchemaAcceptsExclusiveSingleAndBatchCalls() throws {
+        let raw = try XCTUnwrap(server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+        let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+
+        func satisfiesRequired(_ rule: [String: Any], _ args: [String: Any]) -> Bool {
+            let required = rule["required"] as? [String] ?? []
+            return required.allSatisfy { args[$0] != nil }
+        }
+
+        func accepts(_ args: [String: Any]) -> Bool {
+            guard satisfiesRequired(schema, args) else { return false }
+            let branches = schema["oneOf"] as? [[String: Any]] ?? []
+            guard branches.filter({ satisfiesRequired($0, args) }).count == 1 else { return false }
+            if let messages = args["messages"] as? [[String: Any]],
+               let properties = schema["properties"] as? [String: Any],
+               let messagesRule = properties["messages"] as? [String: Any],
+               let itemRule = messagesRule["items"] as? [String: Any] {
+                return messages.allSatisfy { satisfiesRequired(itemRule, $0) }
+            }
+            return true
+        }
+
+        let single: [String: Any] = ["message": "进度", "category": "note", "headline": "进度"]
+        let batch: [String: Any] = ["messages": [["text": "进度", "category": "note", "headline": "进度"]]]
+        XCTAssertTrue(accepts(single), "单条调用必须符合发布的 schema")
+        XCTAssertTrue(accepts(batch), "分条调用不能被顶层单条字段挡住")
+        XCTAssertFalse(accepts(["message": "进度", "headline": "进度"]), "新单条调用必须分类")
+        XCTAssertFalse(accepts(["messages": [["text": "进度", "headline": "进度"]]]), "新分条每项必须分类")
+        XCTAssertFalse(accepts(single.merging(batch) { current, _ in current }), "两种形态不能混用")
+    }
+
+    func testPostSchemaCategoriesOfferOnlyAgentSelectableValues() throws {
+        let raw = try XCTUnwrap(server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+        let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let single = try XCTUnwrap(properties["category"] as? [String: Any])
+        let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
+        let items = try XCTUnwrap(messages["items"] as? [String: Any])
+        let itemProperties = try XCTUnwrap(items["properties"] as? [String: Any])
+        let batch = try XCTUnwrap(itemProperties["category"] as? [String: Any])
+        let selectable = Set(CrewMessageCategory.agentSelectable.map(\.rawValue))
+        XCTAssertEqual(Set(single["enum"] as? [String] ?? []), selectable)
+        XCTAssertEqual(Set(batch["enum"] as? [String] ?? []), selectable)
+        XCTAssertFalse(selectable.contains("system"))
+        XCTAssertFalse(selectable.contains("milestone"), "旧值只走运行时兼容")
+    }
+
     // Phase 7：post_to_crew schema 暴露 mentions + reply_to。
     func testToolsListPostToCrewHasMentionsAndReplyTo() {
         let r = server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)!
