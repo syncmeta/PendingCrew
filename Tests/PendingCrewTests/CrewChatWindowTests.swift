@@ -814,6 +814,15 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
     }
 
     @available(macOS 15.0, *)
+    private struct ScrollPositionPin: ViewModifier {
+        let on: Bool
+        let pinned: Binding<String?>
+        @ViewBuilder func body(content: Content) -> some View {
+            if on { content.scrollPosition(id: pinned, anchor: .top) } else { content }
+        }
+    }
+
+    @available(macOS 15.0, *)
     private struct Harness: View {
         @ObservedObject var rig: Rig
 
@@ -842,13 +851,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             return content
         }
 
-        @ViewBuilder private var content: some View {
-            if rig.usesScrollPosition {
-                scroll.scrollPosition(id: pinned, anchor: .top)
-            } else {
-                scroll
-            }
-        }
+        private var content: some View { scroll }
 
         private var scroll: some View {
             ScrollViewReader { proxy in
@@ -864,6 +867,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                     }
                     .padding(.vertical, 10)
                 }
+                .modifier(ScrollPositionPin(on: rig.usesScrollPosition, pinned: pinned))
                 // 与 CrewChatView.ChatScrollAnchor 一字不差（isFollowing = false，
                 // 也就是「人自己滑上去看历史」那个现场）。
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -1149,6 +1153,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         rig.recording = true
         rig.record()               // 起点
         let pinnedBefore = rig.pinnedID
+        let pinnedWritesBefore = rig.pinnedWrites
 
         if growth == .below {
             // 内容往下长；不跟随时与 CrewChatNewMessages.apply 同拍扩窗。
@@ -1190,7 +1195,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         let path = rig.trace
         if growth == .below || growth == .stream {
             print("[#164 接线] \(label): onChange=\(rig.viewCountChangeCalls), limit=\(rig.limit)")
-            print("[#164 绑定] \(label): before=\(pinnedBefore ?? "nil"), after=\(rig.pinnedID ?? "nil")")
+            print("[#164 绑定] \(label): before=\(pinnedBefore ?? "nil"), after=\(rig.pinnedID ?? "nil"), setter=\(pinnedWritesBefore)→\(rig.pinnedWrites)")
             print(String(format: "[#60 锚标定] %@：视口顶→内容底 %.0f → %.0f（位移 %+.0f）",
                          label, path.first!.distance, path.last!.distance,
                          path.last!.distance - path.first!.distance))
@@ -1244,6 +1249,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                                        returnCommits: true, useViewOnChange: true,
                                        pinBefore: false, visibleID: visible)
                 let origin = try XCTUnwrap(broken.first?.rowY)
+                XCTAssertNil(currentRig?.pinnedID, "无可见回调时绑定不能凭空获得可见 ID")
+                XCTAssertEqual(currentRig?.pinnedWrites, 0, "无可见回调时 SwiftUI 没有自动回写顶行")
                 XCTAssertGreaterThan(broken.map { abs($0.rowY - origin) }.max() ?? 0, 20,
                                      "无锚对照必须能重现跳位，否则绿测没有判别力")
             }
@@ -1255,6 +1262,10 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                                  useVisibilityTracking: true)
             let start = try XCTUnwrap(path.first?.rowY)
             XCTAssertNotEqual(start, -1)
+            if limit == 60 {
+                XCTAssertEqual(currentRig?.pinnedID, visible)
+                XCTAssertGreaterThan(currentRig?.pinnedWrites ?? 0, 0)
+            }
             let worst = path.map { abs($0.rowY - start) }.max() ?? .infinity
             XCTAssertLessThan(worst, 20, "\(visible) 被新消息移走；\(path.map(\.rowY))")
         }
