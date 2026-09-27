@@ -27,6 +27,23 @@ final class CrewChatWindowTests: XCTestCase {
                       "搜索筛选切换时须清旧锚")
     }
 
+    /// #164 macOS 14: the target visibility callback exists only on 15+.
+    /// Keep a source-level gate beside the offscreen legacy-anchor probe so
+    /// the tested row geometry is actually wired into the production scroll.
+    func testLegacyVisibleRowAnchorIsWiredIntoRealCrewScrollView() throws {
+        let view = try Self.source("Mac/Views/CrewChatView.swift")
+        XCTAssertTrue(view.contains(".coordinateSpace(name: \"crewChatViewport\")"),
+                      "旧系统行几何必须量当前 ScrollView 的视口坐标")
+        XCTAssertTrue(view.contains(".modifier(ChatLegacyVisibleRow(id: row.entry.id))"),
+                      "真实消息行未上报旧系统的可见行几何")
+        XCTAssertTrue(view.contains("content.onPreferenceChange(ChatLegacyVisibleRows.self)"),
+                      "旧系统没有把可见行 ID 回填给现有锚盒")
+        XCTAssertTrue(view.contains("guard !isFollowing, let first = rows.filter"),
+                      "重建瞬间没有可见行时须保留旧锚，不能写 nil 放掉视口")
+        XCTAssertTrue(view.contains("if #available(macOS 15.0, *) {\n            content\n        } else"),
+                      "额外的行测量只能在 macOS 14 兼容分支启用")
+    }
+
     // MARK: - Agent Todo #163: automatic history paging
 
     func testFirstPageContainsThirtyNewestMessages() {

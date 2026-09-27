@@ -1971,9 +1971,9 @@ private struct ChatVisibleTopTracker: ViewModifier {
         } else {
             #if os(macOS)
             content.onPreferenceChange(ChatLegacyVisibleRows.self) { rows in
-                guard !isFollowing else { return }
-                anchorBox.id = rows.filter { $0.maxY > 0 }
-                    .min(by: { $0.minY < $1.minY })?.id
+                guard !isFollowing, let first = rows.filter({ $0.maxY > 0 })
+                    .min(by: { $0.minY < $1.minY })?.id else { return }
+                anchorBox.id = first
             }
             #else
             content
