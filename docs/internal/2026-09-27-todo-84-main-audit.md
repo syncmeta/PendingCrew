@@ -18,7 +18,8 @@
 ## 本轮运行与测试
 
 - `/Applications/PendingCrew.app` 的 `CFBundleShortVersionString` 为 `0.1.40`；安装版 `--daemon-status` 返回成功：daemon PID 33627，版本 `0.1.40(20723.43230)`、协议 1、前端连接数 1、运行中 session 10。该读数证明状态接口及当前后台可连接，**不证明**更新或崩溃恢复全链路。
-- 在 `/tmp` 中从当前 HEAD 的 `git archive` 建隔离树，两次运行 macOS 相关 `xcodebuild test` 均在 Swift 包解析阶段退出 74；`github.com` DNS 解析失败，执行用例数为 0。第二次复用本机 SPM 缓存，Xcode 仍尝试重新拉取。因此本轮不能宣称现行测试全绿。
+- 最初在 `/tmp` 从 HEAD 的 `git archive` 建隔离树，两次 `xcodebuild test` 均在 Swift 包解析阶段退出 74；`github.com` DNS 失败，执行用例数为 0。后来找到本机 SPM 缓存并在全新 DerivedData 中使用；当前 main 的 `ProcessRoleTests` 7/7、`TodoMarkdownRenderingTests` 19/19 通过。
+- 当前 main 的全新构建目录全量 macOS 测试执行 **2931 tests / 4 skips / 1 failure**。唯一失败是 `HelperBuildPerMemberTests.test_真进程_Sparkle把包挪走换上新版_argv路径没变_必须判旧`：换包后真 helper 已退出。该具名用例单独重跑通过（5.021 秒）。所以全量门槛本轮仍记红，不能用单独重跑覆盖原失败。完整日志在 `/tmp/pcw84-current-full.log`，具名重跑在 `/tmp/pcw84-helper-recheck.log`。
 - 工作目录原有 `.wrangler/` 与 ACP 文档未跟踪项未动。
 
 ## 现行目标与剩余范围
@@ -27,7 +28,7 @@
 
 尚缺本轮可采信的验收：
 
-1. 网络恢复后在当前 main 重跑相关测试与全量 macOS 测试，保留命令、结果和具名失败。
+1. 候选补丁完成后在其隔离树运行相关与全量 macOS 测试，保留命令、结果和具名失败；当前 main 的全量门槛有一条真进程测试单次失败、单独重跑通过，不能称全绿。
 2. 安装态更新、重开、恢复与 daemon 单独崩溃的闭环。`docs/internal/2026-09-13-startup-duties-wiring-fix.md` 已记下「后台单独崩而界面一直开着不会询问恢复」的边界；这是现行恢复目标下的明确缺口，应单列实现和验证。
 3. 终端复制、回滚、缩放和未 attach 时主线程开销的验收。图形界面验证需先获人类许可；旧人工验收记录不能冒充本轮实测，也不作为已经落地的 P0–P5 代码核对阻塞。
 
