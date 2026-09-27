@@ -41,6 +41,7 @@ final class CodexTranscript: ObservableObject {
                let localID = pendingInputIDs.first(where: { candidate in
                    guard candidate.hasPrefix("pendingcrew-client-input-"),
                          !pendingAliases.values.contains(candidate),
+                         inputDelivery[candidate] != .failed,
                          let item = items.first(where: { $0.id == candidate }),
                          case let .userMessage(value) = item.kind else { return false }
                    return value == text

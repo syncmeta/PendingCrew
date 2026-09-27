@@ -93,6 +93,31 @@ final class CodexTranscriptTests: XCTestCase {
         XCTAssertEqual(transcript.inputDelivery["pendingcrew-client-input-b"], .accepted)
     }
 
+    func testFailedLocalInputDoesNotClaimSameTextRetryServerEcho() {
+        let transcript = CodexTranscript()
+        let failedID = "pendingcrew-client-input-failed"
+        let retryID = "pendingcrew-client-input-retry"
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": failedID, "text": "重试"])
+        transcript.apply(method: "pendingcrew/inputFailed", params: ["id": failedID])
+        transcript.apply(method: "pendingcrew/inputQueued", params: ["id": retryID, "text": "重试"])
+
+        transcript.apply(method: "pendingcrew/inputQueued", params: [
+            "id": "server-retry-queue", "text": "重试", "source": "server",
+        ])
+        transcript.apply(method: "pendingcrew/inputAccepted", params: ["id": "server-retry-queue"])
+        XCTAssertEqual(transcript.items.map(\.id), [failedID, retryID], "server 回声须归到重试行")
+        XCTAssertEqual(transcript.inputDelivery[failedID], .failed)
+        XCTAssertEqual(transcript.inputDelivery[retryID], .accepted)
+
+        transcript.apply(method: "item/completed", params: ["item": [
+            "id": "server-retry-item", "type": "userMessage",
+            "content": [["type": "text", "text": "重试"]],
+        ]])
+        XCTAssertEqual(transcript.items.map(\.id), [failedID, "server-retry-item"])
+        XCTAssertEqual(transcript.inputDelivery[failedID], .failed)
+        XCTAssertNil(transcript.inputDelivery[retryID])
+    }
+
     func testServerOnlyQueuedInputAppearsInAttachedSession() {
         let transcript = CodexTranscript()
         transcript.apply(method: "pendingcrew/inputQueued", params: [
