@@ -104,8 +104,13 @@ struct CodexTranscriptRows: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Theme.Palette.surfaceMuted))
+                    RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,
+                                     style: .continuous)
+                        .fill(Theme.Palette.surface))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,
+                                     style: .continuous)
+                        .strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
                 .frame(maxWidth: Theme.Metrics.readableColumn, alignment: .leading)
             Spacer(minLength: 36)
         }
@@ -126,8 +131,9 @@ struct CodexTranscriptRows: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Theme.Palette.surfaceMuted))
+                    RoundedRectangle(cornerRadius: Theme.Metrics.bubbleRadius,
+                                     style: .continuous)
+                        .fill(Theme.Palette.userBubble))
                 .frame(maxWidth: Theme.Metrics.readableColumn, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)

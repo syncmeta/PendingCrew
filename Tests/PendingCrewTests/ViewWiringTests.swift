@@ -565,14 +565,57 @@ final class ViewWiringTests: XCTestCase {
         }
         let runContent = try section("private struct SessionRunContentView:", "private struct CodexSessionComposer:")
         XCTAssertTrue(runContent.contains("if run.kind == .codex"), "Codex 没有独立的简洁顶栏")
-        XCTAssertTrue(runContent.contains("Button(\"压缩上下文\""), "压缩命令从菜单消失")
+        XCTAssertTrue(runContent.contains("Button(action: onCompact)"), "压缩图标按钮消失")
         XCTAssertTrue(runContent.contains("run.stop()"), "停止命令消失")
         XCTAssertTrue(runContent.contains("CodexTranscriptView(transcript:"), "结构化 transcript 消失")
         XCTAssertTrue(runContent.contains("codexUsageRow"), "上下文和额度信息消失")
-        XCTAssertTrue(view.contains(".accessibilityLabel(\"Codex 会话操作\")"))
+        XCTAssertTrue(view.contains(".accessibilityLabel(\"压缩上下文\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"停止这个 Codex session\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择模型\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择推理强度\")"))
+    }
+
+    /// #166: source contract for Codex's narrow session chrome. The test target
+    /// does not compile the SwiftUI view, so this guards wiring and labels;
+    /// the macOS app build separately checks SwiftUI type correctness.
+    func testCodexSessionChromeUsesCompactControlsAndChatBubblePalette() throws {
+        let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let transcript = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CodexTranscriptView.swift"))
+        func section(_ source: String, _ start: String, _ end: String) throws -> String {
+            let a = try XCTUnwrap(source.range(of: start), "缺少 \(start)")
+            let b = try XCTUnwrap(source.range(of: end, range: a.upperBound..<source.endIndex), "缺少 \(end)")
+            return String(source[a.upperBound..<b.lowerBound])
+        }
+        let header = try section(view, "private var codexHeader:", "private var header:")
+        let usage = try section(view, "private var codexUsageRow:", "private func statusBadge(")
+        let composer = try section(view, "private struct CodexSessionComposer:", "private struct CodexWorkspaceFooter:")
+        let profile = try section(view, "private struct SessionProfileControl:", "#endif")
+        let agent = try section(transcript, "private func agentRow(", "private func userRow(")
+        let user = try section(transcript, "private func userRow(", "enum Dot")
+
+        XCTAssertTrue(view.contains("CodexControlPillLabel(title: name)"))
+        XCTAssertTrue(view.contains("CodexControlPillLabel(title: run.effort ?? \"默认\")"))
+        XCTAssertFalse(profile.contains("icon: \"cpu\""))
+        XCTAssertFalse(profile.contains("icon: \"brain.head.profile\""))
+        XCTAssertTrue(profile.contains("run.fastMode == true ? \"bolt.fill\" : \"bolt\""))
+        XCTAssertTrue(profile.contains(".accessibilityLabel(\"Codex 快速模式\")"))
+        XCTAssertTrue(profile.contains("SessionLaunchOptions.models(for: run.kind, catalog: catalog.file)"),
+                      "模型仍须来自运行时目录")
+        XCTAssertTrue(profile.contains("SessionLaunchOptions.codexDefaultModelSelection"),
+                      "跟随 Codex 默认仍须清除持久覆盖")
+        XCTAssertTrue(composer.contains("placeholder: \"\""))
+        XCTAssertFalse(composer.contains("向 Codex 发送消息"))
+
+        XCTAssertTrue(agent.contains(".fill(Theme.Palette.surface)"))
+        XCTAssertTrue(user.contains(".fill(Theme.Palette.userBubble)"))
+        XCTAssertTrue(header.contains("Circle().trim(from: 0, to:"), "顶栏缺少上下文占用圆环")
+        XCTAssertTrue(header.contains("to: usage.contextFraction"), "圆环须反映当前上下文占用")
+        XCTAssertTrue(header.contains("showingCodexUsage = true"), "统计入口必须保留")
+        XCTAssertTrue(header.contains("Button(action: onCompact)"), "压缩应为独立图标按钮")
+        XCTAssertTrue(header.contains(".help(\"压缩上下文\")"))
+        XCTAssertFalse(header.contains("Menu {"), "压缩折叠菜单应移除")
+        XCTAssertFalse(header.contains("查看上下文与额度"), "重复统计入口应移除")
+        XCTAssertFalse(usage.contains("Button(\"压缩上下文\""), "统计弹窗里不应重复压缩入口")
     }
 
     /// Todo #80：退出后的成员行必须恢复那一个持久 session，不能把点击退化成

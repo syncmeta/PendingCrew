@@ -1209,8 +1209,8 @@ private struct SessionRunContentView: View {
         }
     }
 
-    /// Codex-only chrome: keep the thread title quiet and put infrequent
-    /// operations in a named menu. Configuration lives beside its composer.
+    /// Codex-only chrome: context pressure and the two infrequent actions stay
+    /// visible without a second menu. Configuration lives beside its composer.
     private var codexHeader: some View {
         HStack(spacing: 8) {
             Text(run.displayName)
@@ -1219,29 +1219,40 @@ private struct SessionRunContentView: View {
                 .layoutPriority(1)
             Spacer(minLength: 8)
             Button { showingCodexUsage = true } label: {
-                Image(systemName: "chart.bar.xaxis")
-                    .frame(width: 28, height: 28)
+                ZStack {
+                    Circle().stroke(Theme.Palette.quotaTrack, lineWidth: 3)
+                    if let usage = run.codexContextUsage, usage.contextWindow > 0 {
+                        Circle().trim(from: 0, to: usage.contextFraction)
+                            .stroke(Theme.Palette.accent,
+                                    style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    } else {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                }
+                .frame(width: 25, height: 25)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("查看 Codex 用量")
+            .accessibilityValue(run.codexContextUsage.map {
+                $0.contextWindow > 0 ? "上下文已用 \(Int($0.contextFraction * 100))%" : "上下文窗口未知"
+            } ?? "上下文用量待回报")
             .help("查看上下文、账号额度与压缩状态")
             .popover(isPresented: $showingCodexUsage) {
                 codexUsageRow
                     .frame(minWidth: 260, idealWidth: 330, maxWidth: 400)
                     .padding(16)
             }
-            Menu {
-                Button("压缩上下文", action: onCompact)
-                    .disabled(run.status != .running || run.isWorking || run.codexIsCompacting)
-                Button("查看上下文与额度") { showingCodexUsage = true }
-            } label: {
-                Image(systemName: "ellipsis")
+            Button(action: onCompact) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
                     .frame(width: 28, height: 28)
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
             .fixedSize()
-            .accessibilityLabel("Codex 会话操作")
-            .help("压缩上下文、查看用量")
+            .disabled(run.status != .running || run.isWorking || run.codexIsCompacting)
+            .accessibilityLabel("压缩上下文")
+            .help("压缩上下文")
             if run.status == .running {
                 Button { run.stop() } label: {
                     Image(systemName: "stop.fill")
@@ -1314,11 +1325,6 @@ private struct SessionRunContentView: View {
                 if run.codexIsCompacting {
                     ProgressView().controlSize(.small)
                     Text("正在压缩")
-                } else {
-                    Button("压缩上下文", action: onCompact)
-                        .buttonStyle(.link)
-                        .disabled(run.status != .running || run.isWorking)
-                        .help("调用 Codex 原生 thread/compact/start；压缩完成后继续收消息")
                 }
             }
             if let usage = run.codexContextUsage {
@@ -1395,7 +1401,7 @@ private struct CodexSessionComposer: View {
                 HStack(alignment: .bottom, spacing: 8) {
                     ComposerTextField(
                         text: $draft,
-                        placeholder: "向 Codex 发送消息…",
+                        placeholder: "",
                         isFocused: $isFocused,
                         onHardwareReturn: { if canSend { onSend() } })
                         .accessibilityLabel("Codex 消息")
@@ -1489,10 +1495,9 @@ private struct CodexWorkspaceFooter: View {
 
 private struct CodexControlPillLabel: View {
     let title: String
-    let icon: String
 
     var body: some View {
-        Label(title, systemImage: icon)
+        Text(title)
             .font(Theme.Fonts.caption2)
             .lineLimit(1)
             .foregroundStyle(Theme.Palette.inkMuted)
@@ -1593,14 +1598,17 @@ private struct SessionProfileControl: View {
                 modelMenu
                 effortMenu
                 if run.kind == .codex {
-                    Toggle("快速", isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { run.fastMode ?? false },
                         set: { onSwitch(nil, nil, $0) }
-                    ))
+                    )) {
+                        Image(systemName: run.fastMode == true ? "bolt.fill" : "bolt")
+                    }
                     .toggleStyle(.button)
                     .controlSize(.small)
                     .disabled(run.status != .running || run.pendingProfile != nil)
                     .accessibilityLabel("Codex 快速模式")
+                    .accessibilityValue(run.fastMode == true ? "开启" : "关闭")
                     .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
                 } else {
                     Toggle("快速", isOn: Binding(
@@ -1664,7 +1672,7 @@ private struct SessionProfileControl: View {
                 SessionLaunchOptions.displayName(for: $0, catalog: catalog.file)
             } ?? "默认"
             if run.kind == .codex {
-                CodexControlPillLabel(title: name, icon: "cpu")
+                CodexControlPillLabel(title: name)
             } else {
                 SessionProfilePillLabel(text: "模型  \(name)", active: true)
             }
@@ -1690,7 +1698,7 @@ private struct SessionProfileControl: View {
             }
         } label: {
             if run.kind == .codex {
-                CodexControlPillLabel(title: run.effort ?? "默认", icon: "brain.head.profile")
+                CodexControlPillLabel(title: run.effort ?? "默认")
             } else {
                 SessionProfilePillLabel(text: "Effort  \(run.effort ?? "默认")", active: true)
             }
