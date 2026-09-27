@@ -428,8 +428,9 @@ final class CrewBroadcastWakeAndDisambiguationTests: XCTestCase {
             viewer: "w-2", displayName: { $0 == "w-1" ? "小王" : nil })
         XCTAssertTrue(text.contains("- 人: （发给 小王 的）这件事就这么定了"),
                       "近期群聊块也是注入面；实得：\n\(text)")
-        // 「有人@你」那一行本来就是定向给 viewer 的，不该被标注。
-        XCTAssertTrue(text.contains("有人@你：\n- 机长: 换你接手"))
+        // 正文是直接投给 viewer 的，不该被标注或套提醒壳。
+        XCTAssertTrue(text.contains("机长：换你接手"))
+        XCTAssertFalse(text.contains("有人@你"))
     }
 
     /// 目标自己看同一块 → 不带标注。

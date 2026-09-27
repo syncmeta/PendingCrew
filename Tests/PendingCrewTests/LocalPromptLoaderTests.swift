@@ -45,6 +45,15 @@ final class LocalPromptLoaderTests: XCTestCase {
         XCTAssertTrue(out.contains("机长"), "should fall back to bundled zh crew-captain")
     }
 
+    func testMentionAcknowledgementLivesInWorldModel() throws {
+        let zh = try loader.rawTemplate(name: "session-world-model", locale: "zh")
+        XCTAssertTrue(zh.contains("**被 @ 先吱一声**"))
+        XCTAssertFalse(zh.contains("注入里带「有人@你」"))
+        let en = try loader.rawTemplate(name: "session-world-model", locale: "en")
+        XCTAssertTrue(en.contains("**Ack an @ before diving in**"))
+        XCTAssertFalse(en.contains("injection says someone @'d you"))
+    }
+
     /// 总机组不是一个亲自干活的项目组。普通机长规则会教 agent 在明确任务时
     /// `start_session`，所以必须有一段更高优先级的总机组特例把这条翻掉；否则
     /// 总机长拿到 VPS 迁移这类任务时会顺着通用自治规则直接跑 SSH / 改线上。

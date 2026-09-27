@@ -25,8 +25,8 @@ final class CrewLocalMentionInjectLogicTests: XCTestCase {
             senderName: "我")
         XCTAssertEqual(out.count, 1)
         XCTAssertEqual(out.first?.sessionId, "sess-a")
-        XCTAssertTrue(out.first!.text.contains("有人@你："))
-        XCTAssertTrue(out.first!.text.contains("我: 跑下测试"))
+        XCTAssertEqual(out.first?.text, "我：跑下测试")
+        XCTAssertFalse(out.first!.text.contains("先 post_to_crew"))
     }
 
     func testBusySessionNotInterrupted() {
@@ -239,7 +239,9 @@ final class CrewLocalMentionInjectLogicTests: XCTestCase {
             mentions: [.session("a")], runs: [run("a", busy: false, claude: true)],
             messageText: "跑测试", senderName: "我", recent: { _ in [wbMsg("user", "早")] })
         let t = out.first!.text
-        XCTAssertTrue(t.range(of: "近期群聊：")!.lowerBound < t.range(of: "有人@你：")!.lowerBound)
+        XCTAssertTrue(t.range(of: "近期群聊：")!.lowerBound < t.range(of: "我：跑测试")!.lowerBound)
+        XCTAssertFalse(t.contains("有人@你"))
+        XCTAssertFalse(t.contains("先 post_to_crew"))
     }
 
     // MARK: - 项10：无 @ 默认给机长 + IM 式渲染

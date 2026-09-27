@@ -42,16 +42,14 @@ enum CaptainBriefDelivery {
 
         if let task, !task.isEmpty {
             var prompt = "你是本 crew 的机长。父机长交给你的开场任务如下：\n\(task)"
-                + "\n先用 post_to_crew 简短确认已收到，然后立即推进这项任务。"
             if let wake, !wake.isEmpty {
-                prompt += "\n同时有人在群里 @ 你：「\(wake)」，一并处理。"
+                prompt += "\n群聊消息：\(wake)"
             }
             return prompt
         }
         if let wake, !wake.isEmpty {
-            return "你是本 crew 的机长。刚有人在群里 @ 你：「\(wake)」"
-                + "——用 post_to_crew 报到一句，然后处理这条消息。"
+            return "你是本 crew 的机长。群聊消息：\(wake)"
         }
-        return "你是本 crew 的机长，用 post_to_crew 报到一句即可。"
+        return "你是本 crew 的机长。"
     }
 }

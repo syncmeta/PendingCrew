@@ -157,12 +157,11 @@ enum CrewLocalMentionInjectLogic {
     }
 
     /// 把人类发的这条消息渲染成注入给目标 run 的文本。
-    ///   * 定向 @(默认):单行前导「有人@你：」+ 保留发送者身份(CC-P3)的正文行,
-    ///     尾随一句「先吱一声」提醒(#530:被 @ 先 post_to_crew 简短确认再干活)。
-    ///   * `imStyle`(项10 无 @ 默认给机长):IM 式「发送者：正文」,不套「有人@你」壳。
+    ///   * 定向 @ 与无 @ 默认给机长都用 IM 式「发送者：正文」；收到定向消息先
+    ///     `post_to_crew` 确认的规则只在世界观 prompt 里讲一次。
     /// `recent` 非空 → 在定向/IM 文本**之前**前置一块「近期群聊」上下文(项8)。
     /// `viewer` / `viewerIsCaptain` / `displayName` 只作用在前置的「近期群聊」块上
-    /// （注入面消歧，#62）——「有人@你」那一行本来就是定向给 viewer 的，不需要标注。
+    /// （注入面消歧，#62）——最后一行本来就是定向给 viewer 的，不需要标注。
     static func renderInjection(
         messageText: String, senderName: String,
         recent: [LocalWhiteboardMessage] = [], imStyle: Bool = false,
@@ -170,9 +169,7 @@ enum CrewLocalMentionInjectLogic {
         displayName: (String) -> String? = { _ in nil }
     ) -> String {
         let body = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let directed = imStyle
-            ? "\(senderName)：\(body)"
-            : "有人@你：\n- \(senderName): \(body)\n（先 post_to_crew 吱一声「收到/我看看」再干活）"
+        let directed = "\(senderName)：\(body)"
         guard let ctx = CrewRecentContextRender.block(
             recent, viewer: viewer, viewerIsCaptain: viewerIsCaptain,
             displayName: displayName) else { return directed }

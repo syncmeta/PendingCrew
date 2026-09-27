@@ -14,7 +14,8 @@ final class CaptainBriefDeliveryTests: XCTestCase {
             brief: request.brief, wakeText: nil)
         XCTAssertTrue(prompt.contains("父机长交给你的开场任务"))
         XCTAssertTrue(prompt.contains("检查机长自知力并落地修复"))
-        XCTAssertTrue(prompt.contains("立即推进"))
+        XCTAssertFalse(prompt.contains("先用 post_to_crew"))
+        XCTAssertFalse(prompt.contains("有人在群里 @ 你"))
     }
 
     func testNonemptyBriefStartFailureProducesParentReceipt() {

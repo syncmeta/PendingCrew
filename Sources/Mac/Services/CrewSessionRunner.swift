@@ -684,12 +684,12 @@ final class CrewSessionRunner: ObservableObject {
         var targets = Set(runs.filter(\.kind.isAgent).map(\.crewId))
         if targets.isEmpty { targets = Set(LocalCrewStore.shared.listCrews().map(\.id)) }
         for crewId in targets {
+            let key = "wakeup|\(crewId)|\(incident.summary)"
+            guard LedgerIncidentNoticeGate.shared.shouldEmit(key: key) else { continue }
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system",
                 text: "定时唤醒账本 wakeups.json：" + incident.summary + tail,
-                category: "question",
-                senderName: "系统",
-                mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
+                category: "error", senderName: "系统")
         }
     }
 
@@ -2717,8 +2717,8 @@ final class CrewSessionRunner: ObservableObject {
         let workdir = AgentSessionResume.restartDirectory(
             recorded: recorded?.workingDirectory, crewDirectory: crewWorkdir)
         let decision = AgentSessionResume.decide(recordedId: recorded?.agentSessionId)
-        var brief = "有人在群里 @ 你：「\(wakeText)」。你是本 crew 的既有成员"
-            + "「\(member.displayName)」,此前群里的上下文在白板里(每轮自动注入),接着处理这条。"
+        var brief = "你是本 crew 的既有成员「\(member.displayName)」；此前群里的上下文"
+            + "在白板里（每轮自动注入）。群聊消息：\(wakeText)"
         if let notice = AgentSessionResume.briefNotice(for: decision) {
             brief = notice + "\n\n" + brief
         }
