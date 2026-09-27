@@ -669,6 +669,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         @Published var streamExtra: CGFloat = 0
         var useViewOnChange = false
         var useVisibilityTracking = false
+        var legacyDefaultAnchor = false
+        var legacyVisibleRowTracking = false
         var viewCountChangeCalls = 0
 
         var scroll: ((String) -> Void)?
@@ -794,6 +796,36 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         }
     }
 
+    private struct VisibleRow: Equatable {
+        let id: String
+        let minY: CGFloat
+        let maxY: CGFloat
+    }
+
+    private struct VisibleRows: PreferenceKey {
+        static var defaultValue: [VisibleRow] = []
+        static func reduce(value: inout [VisibleRow], nextValue: () -> [VisibleRow]) {
+            value += nextValue()
+        }
+    }
+
+    private struct LegacyVisibleRow: ViewModifier {
+        let id: String
+        let enabled: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if enabled {
+                content.background {
+                    GeometryReader { geo in
+                        Color.clear.preference(key: VisibleRows.self, value: [
+                            VisibleRow(id: id, minY: geo.frame(in: .named("probeViewport")).minY,
+                                       maxY: geo.frame(in: .named("probeViewport")).maxY)
+                        ])
+                    }
+                }
+            } else { content }
+        }
+    }
+
     /// `.sizeChanges` 那个锚挂不挂。`on` 每次 run 内是常量，不会改视图身份。
     @available(macOS 15.0, *)
     private struct SizeChangesAnchor: ViewModifier {
@@ -819,6 +851,22 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         let pinned: Binding<String?>
         @ViewBuilder func body(content: Content) -> some View {
             if on { content.scrollPosition(id: pinned, anchor: .top) } else { content }
+        }
+    }
+
+    @available(macOS 15.0, *)
+    private struct HarnessDefaultAnchor: ViewModifier {
+        let legacy: Bool
+        let attachSizeChanges: Bool
+        let expanding: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if legacy {
+                content.defaultScrollAnchor(.bottom)
+            } else {
+                content.defaultScrollAnchor(.bottom, for: .initialOffset)
+                    .modifier(SizeChangesAnchor(on: attachSizeChanges,
+                                                anchor: expanding ? .bottom : .top))
+            }
         }
     }
 
@@ -868,11 +916,12 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                     .padding(.vertical, 10)
                 }
                 .modifier(ScrollPositionPin(on: rig.usesScrollPosition, pinned: pinned))
+                .coordinateSpace(name: "probeViewport")
                 // 与 CrewChatView.ChatScrollAnchor 一字不差（isFollowing = false，
                 // 也就是「人自己滑上去看历史」那个现场）。
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .modifier(SizeChangesAnchor(on: rig.attachSizeChangesAnchor,
-                                            anchor: rig.expanding ? .bottom : .top))
+                .modifier(HarnessDefaultAnchor(legacy: rig.legacyDefaultAnchor,
+                                               attachSizeChanges: rig.attachSizeChangesAnchor,
+                                               expanding: rig.expanding))
                 .onScrollGeometryChange(for: Geo.self) { geo in
                     Geo(offset: geo.contentOffset.y, content: geo.contentSize.height)
                 } action: { _, v in
@@ -885,6 +934,11 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                 .onPreferenceChange(TrackedRowY.self) { y in
                     rig.trackedRowY = y
                     rig.record()
+                }
+                .onPreferenceChange(VisibleRows.self) { rows in
+                    guard rig.legacyVisibleRowTracking else { return }
+                    rig.pinnedID = rows.filter { $0.maxY > 0 }
+                        .min(by: { $0.minY < $1.minY })?.id
                 }
                 .onChange(of: rig.ids.count) { old, new in
                     guard rig.useViewOnChange else { return }
@@ -912,6 +966,7 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             }
             ForEach(CrewChatWindow.window(rig.ids, limit: rig.limit), id: \.self) { id in
                 Color.blue.opacity(0.15).frame(height: height(id)).id(id)
+                    .modifier(LegacyVisibleRow(id: id, enabled: rig.legacyVisibleRowTracking))
                     .background {
                         if id == rig.trackedRowID {
                             GeometryReader { geo in
@@ -1099,7 +1154,9 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
                            useViewOnChange: Bool = false,
                            pinBefore: Bool = true,
                            visibleID: String? = nil,
-                           useVisibilityTracking: Bool = false) -> [Rig.Sample] {
+                           useVisibilityTracking: Bool = false,
+                           legacyDefaultAnchor: Bool = false,
+                           legacyVisibleRowTracking: Bool = false) -> [Rig.Sample] {
         let rig = Rig()
         rig.ids = ids(total)
         rig.limit = startLimit
@@ -1108,6 +1165,8 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         rig.attachSizeChangesAnchor = attachAnchor
         rig.useViewOnChange = useViewOnChange
         rig.useVisibilityTracking = useVisibilityTracking
+        rig.legacyDefaultAnchor = legacyDefaultAnchor
+        rig.legacyVisibleRowTracking = legacyVisibleRowTracking
         if fix == .bottomAnchorStatic { rig.expanding = true }
         let anchorID = CrewChatWindow.window(rig.ids, limit: startLimit).first!
         let scrollID = visibleID ?? anchorID
@@ -1268,6 +1327,40 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
             }
             let worst = path.map { abs($0.rowY - start) }.max() ?? .infinity
             XCTAssertLessThan(worst, 20, "\(visible) 被新消息移走；\(path.map(\.rowY))")
+        }
+    }
+
+    func test_旧系统默认底部锚_分页后追加需要预先写可见行() throws {
+        for visible in ["m30", "m60"] {
+            let noID = tracePath(total: 70, startLimit: 60,
+                                 fix: .scrollPositionPin, growth: .below,
+                                 label: "旧锚·无ID·\(visible)", appendCount: 1,
+                                 returnCommits: true, useViewOnChange: true,
+                                 pinBefore: false, visibleID: visible,
+                                 legacyDefaultAnchor: true)
+            let noIDStart = try XCTUnwrap(noID.first?.rowY)
+            XCTAssertNil(currentRig?.pinnedID)
+            XCTAssertGreaterThan(noID.map { abs($0.rowY - noIDStart) }.max() ?? 0, 20)
+
+            let withID = tracePath(total: 70, startLimit: 60,
+                                   fix: .scrollPositionPin, growth: .below,
+                                   label: "旧锚·预写ID·\(visible)", appendCount: 1,
+                                   returnCommits: true, useViewOnChange: true,
+                                   pinBefore: true, visibleID: visible,
+                                   legacyDefaultAnchor: true)
+            let withIDStart = try XCTUnwrap(withID.first?.rowY)
+            XCTAssertLessThan(withID.map { abs($0.rowY - withIDStart) }.max() ?? .infinity, 20)
+
+            let tracked = tracePath(total: 70, startLimit: 60,
+                                    fix: .scrollPositionPin, growth: .below,
+                                    label: "旧锚·行几何ID·\(visible)", appendCount: 1,
+                                    returnCommits: true, useViewOnChange: true,
+                                    pinBefore: false, visibleID: visible,
+                                    legacyDefaultAnchor: true,
+                                    legacyVisibleRowTracking: true)
+            let trackedStart = try XCTUnwrap(tracked.first?.rowY)
+            XCTAssertNotNil(currentRig?.pinnedID)
+            XCTAssertLessThan(tracked.map { abs($0.rowY - trackedStart) }.max() ?? .infinity, 20)
         }
     }
 

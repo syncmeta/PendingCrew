@@ -995,6 +995,7 @@ struct CrewChatView: View {
             .scrollPosition(id: Binding(get: { topAnchorBox.id },
                                         set: { topAnchorBox.id = $0 }),
                             anchor: .top)
+            .coordinateSpace(name: "crewChatViewport")
             // `.scrollPosition` 在懒窗口里可能一直不回写顶行 ID。续页后新消息到来时，
             // 缺这个锚会让可见行随估算高度调整而跳位；可见目标回调只写引用盒子，
             // 不让滚动中的每次回调重算整条时间线。
@@ -1142,7 +1143,12 @@ struct CrewChatView: View {
             if let sep = row.separator {
                 CrewTimeSeparator(date: sep)
             }
+            #if os(macOS)
             rowView(row.entry).id(row.entry.id)
+                .modifier(ChatLegacyVisibleRow(id: row.entry.id))
+            #else
+            rowView(row.entry).id(row.entry.id)
+            #endif
         }
         #if os(macOS)
         // Todo #4：iMessage 式「正在输入」。本 crew 每个在跑 run 一行，行内自己观察
@@ -1915,6 +1921,43 @@ private final class ChatTopAnchorBox {
     var diagnosticContent = 0.0
 }
 
+#if os(macOS)
+/// macOS 14 lacks `onScrollTargetVisibilityChange`. Only that OS measures
+/// realized rows in the ScrollView's viewport coordinate space.
+private struct ChatLegacyVisibleRowValue: Equatable {
+    let id: String
+    let minY: CGFloat
+    let maxY: CGFloat
+}
+
+private struct ChatLegacyVisibleRows: PreferenceKey {
+    static var defaultValue: [ChatLegacyVisibleRowValue] = []
+    static func reduce(value: inout [ChatLegacyVisibleRowValue],
+                       nextValue: () -> [ChatLegacyVisibleRowValue]) {
+        value += nextValue()
+    }
+}
+
+private struct ChatLegacyVisibleRow: ViewModifier {
+    let id: String
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content
+        } else {
+            content.background {
+                GeometryReader { geo in
+                    let frame = geo.frame(in: .named("crewChatViewport"))
+                    Color.clear.preference(key: ChatLegacyVisibleRows.self, value: [
+                        ChatLegacyVisibleRowValue(id: id, minY: frame.minY, maxY: frame.maxY)
+                    ])
+                }
+            }
+        }
+    }
+}
+#endif
+
 private struct ChatVisibleTopTracker: ViewModifier {
     let anchorBox: ChatTopAnchorBox
     let isFollowing: Bool
@@ -1926,7 +1969,15 @@ private struct ChatVisibleTopTracker: ViewModifier {
                 anchorBox.id = first
             }
         } else {
+            #if os(macOS)
+            content.onPreferenceChange(ChatLegacyVisibleRows.self) { rows in
+                guard !isFollowing else { return }
+                anchorBox.id = rows.filter { $0.maxY > 0 }
+                    .min(by: { $0.minY < $1.minY })?.id
+            }
+            #else
             content
+            #endif
         }
     }
 }
