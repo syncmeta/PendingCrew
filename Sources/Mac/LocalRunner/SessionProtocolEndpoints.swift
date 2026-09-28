@@ -404,7 +404,7 @@ final class SessionProtocolServer {
             }
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: summary.crewId, sessionId: "system",
-                text: "终端回车未确认送达；控制键没有持久保存或自动重放。输入行仍在终端，请核对后人工重试。",
+                text: "终端回车未确认送达；控制键没有持久保存或自动重放。请核对终端输入行并人工重试。",
                 category: "error", senderName: "系统")
         }
     }

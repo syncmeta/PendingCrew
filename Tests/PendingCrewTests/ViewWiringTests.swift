@@ -296,6 +296,10 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(runner.contains("run.send(ready.text)"),
                        "瞬时 idle 后仍直接 fire-and-forget，拒绝会被误消费")
         XCTAssertTrue(runner.contains("deferredWakes.resolve(delivery, as: result)"))
+        let wakeEntry = try XCTUnwrap(runner.range(of: "private func attemptWakeDelivery("))
+        let wakeTail = runner[wakeEntry.lowerBound...]
+        XCTAssertTrue(wakeTail.contains("CrewWakeOutbound.submit("),
+                      "Runner must use the tested owner/viewer outbound route")
         XCTAssertTrue(runner.contains("scheduleDeferredWakeRetry(for: run)"),
                       "拒绝后仍要等第二条消息/新 idle 边沿，不能自行补投")
         let codex = try Self.text(of: "CodexAppServerBackend.swift")
@@ -330,6 +334,8 @@ final class ViewWiringTests: XCTestCase {
                       "protocol .input must not bypass admission")
         XCTAssertTrue(endpoints.contains("admitLiveTerminalReturn(sessionId: sessionId"),
                       "terminal Return must be admitted as live control input")
+        XCTAssertFalse(endpoints.contains("输入行仍在终端"),
+                       "a mixed text and Enter batch can already have changed the terminal")
         XCTAssertFalse(endpoints.contains("rawBytes: value.bytes"),
                        "terminal control bytes must never enter the durable text queue")
         let admission = try Self.text(of: "AutomaticWakeAdmission.swift")

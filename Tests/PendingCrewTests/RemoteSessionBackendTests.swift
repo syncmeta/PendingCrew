@@ -12,6 +12,72 @@ final class RemoteSessionBackendTests: XCTestCase {
               awaitingReply: nil)
     }
 
+    func testOwnerWakeThroughTrustedBridgeIsRejectedBeforeBackendAtMachineCap() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("owner-bridge-denial-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)") else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let backend = ProtocolTestBackend(kind: .codex)
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "owner-target", backend: backend)
+        let result = await CrewWakeOutbound.submit(
+            text: "automatic wake", to: remote, isViewer: false,
+            sessionId: "owner-target", crewId: "crew-entry", sourceKey: "todo:sweep",
+            priority: .automatic, admission: gate)
+        guard case .denied = result else { return XCTFail("owner wake bypassed admission") }
+        XCTAssertEqual(backend.submittedWakes, [],
+                       "the trusted bridge must never see a denied owner wake")
+        XCTAssertFalse(AutomaticWakeAdmission(directory: directory).reserve(
+            sessionId: "after-restart", crewId: "crew-entry", sourceKey: "another",
+            priority: .automatic).isAllowed)
+    }
+
+    func testOwnerWakeThroughTrustedBridgeUsesOneReservationAndRealReceipt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("owner-bridge-receipt-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        let backend = ProtocolTestBackend(kind: .codex)
+        backend.wakeResults = [.retry, .accepted]
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "owner-target", backend: backend)
+        let first = await CrewWakeOutbound.submit(
+            text: "first", to: remote, isViewer: false,
+            sessionId: "owner-target", crewId: "crew-entry", sourceKey: "todo:first",
+            priority: .automatic, admission: gate)
+        guard case let .attempted(receipt, recorded) = first else {
+            return XCTFail("first owner wake unexpectedly denied")
+        }
+        XCTAssertEqual(receipt, .retry)
+        XCTAssertTrue(recorded)
+        XCTAssertEqual(backend.submittedWakes, ["first"])
+        let second = await CrewWakeOutbound.submit(
+            text: "second", to: remote, isViewer: false,
+            sessionId: "owner-target", crewId: "crew-entry", sourceKey: "todo:second",
+            priority: .automatic, admission: gate)
+        guard case let .attempted(secondReceipt, secondRecorded) = second else {
+            return XCTFail("second owner wake unexpectedly denied")
+        }
+        XCTAssertEqual(secondReceipt, .accepted)
+        XCTAssertTrue(secondRecorded)
+        XCTAssertEqual(backend.submittedWakes, ["first", "second"])
+        let state = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
+                                              from: Data(contentsOf: gate.fileURL))
+        XCTAssertEqual(state.attempts?.filter { $0.sessionId == "owner-target" }.count, 2,
+                       "trusted bridge must not count an owner's wake twice")
+        XCTAssertEqual(state.attempts?.filter { $0.sessionId == "owner-target" }
+            .map(\.accepted), [false, true],
+            "backend rejection consumes budget but never claims delivery")
+        XCTAssertEqual(state.events.filter { $0.sessionId == "owner-target" }.map(\.accepted),
+                       [true], "only backend acceptance marks an event delivered")
+    }
+
     func testRealProtocolHumanSubmitRejectsAtMachineCapAndRetainsOriginal() async {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("protocol-human-admission-\(UUID().uuidString)")

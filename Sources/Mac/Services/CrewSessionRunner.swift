@@ -465,19 +465,11 @@ final class CrewSessionRunner: ObservableObject {
                 self?.deferredWakes.resolve(delivery, as: .retry)
                 return
             }
-            let outcome: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
-            if let remote = run.backend as? RemoteSessionBackend {
-                // The viewer owns no session. The daemon executes the same
-                // admission before touching its authoritative backend.
-                outcome = .attempted(await remote.submitWake(text, sourceKey: delivery.key),
-                                     recorded: true)
-            } else {
-                outcome = await self.wakeAdmission.performSend(
-                    sessionId: run.sessionId, crewId: run.crewId, sourceKey: delivery.key,
-                    priority: self.deferredWakePriorities[delivery.key] ?? .automatic,
-                    isAccepted: { $0 == .accepted },
-                    operation: { await run.backend.submitWake(text) })
-            }
+            let outcome = await CrewWakeOutbound.submit(
+                text: text, to: run.backend, isViewer: self.isViewer,
+                sessionId: run.sessionId, crewId: run.crewId, sourceKey: delivery.key,
+                priority: self.deferredWakePriorities[delivery.key] ?? .automatic,
+                admission: self.wakeAdmission)
             guard case let .attempted(result, recorded) = outcome else {
                 if case let .denied(admission) = outcome, let reason = admission.reason {
                     let key = "wake-admission|\(run.crewId)|\(reason)"

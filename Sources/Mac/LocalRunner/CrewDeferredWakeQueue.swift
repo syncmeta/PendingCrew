@@ -99,4 +99,24 @@ struct CrewDeferredWakeQueue {
         }
     }
 }
+
+/// The owner admits before its in-process bridge, whose server trusts this
+/// reservation. Only an external viewer delegates admission to the daemon.
+@MainActor
+enum CrewWakeOutbound {
+    static func submit(text: String, to backend: any SessionBackend,
+                       isViewer: Bool, sessionId: String, crewId: String,
+                       sourceKey: String, priority: AutomaticWakeAdmission.Priority,
+                       admission: AutomaticWakeAdmission)
+        async -> AutomaticWakeAdmission.Submission<SessionWakeSubmission> {
+        if isViewer, let remote = backend as? RemoteSessionBackend {
+            return .attempted(await remote.submitWake(text, sourceKey: sourceKey),
+                              recorded: true)
+        }
+        return await admission.performSend(
+            sessionId: sessionId, crewId: crewId, sourceKey: sourceKey,
+            priority: priority, isAccepted: { $0 == .accepted },
+            operation: { await backend.submitWake(text) })
+    }
+}
 #endif
