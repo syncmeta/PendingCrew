@@ -350,13 +350,10 @@ final class CrewLocalMentionWaker {
             } catch {
                 if let runnerError = error as? CrewSessionRunner.RunnerError,
                    case .automaticWakeDeferred = runnerError {
-                    // The whiteboard entry remains unread. Keep a retry alive while
-                    // this process runs; startup rescue handles an app restart.
-                    Task { @MainActor [weak self] in
-                        try? await Task.sleep(nanoseconds: 30_000_000_000)
-                        guard !Task.isCancelled else { return }
-                        self?.wakeAbsent(d, crewId: crewId)
-                    }
+                    // Admission has a durable hard stop. Keep the original
+                    // whiteboard entry unread; never turn it into a 30-second
+                    // automatic start loop. The incident notice tells a human
+                    // to start the session explicitly when it is safe.
                     return
                 }
                 // fail-loud：拉起失败落白板（system，不再 @ 防环），机长/人看得见。

@@ -470,17 +470,17 @@ final class SessionProtocolServer {
                     decision = .allowed("priority:in-process")
                 }
                 guard case let .allowed(token) = decision else {
-                    if let summary, case let .deferred(reason) = decision,
+                    if let summary, let reason = decision.reason,
                        LedgerIncidentNoticeGate.shared.shouldEmit(
                         key: "wake-admission|\(summary.crewId)|\(reason)") {
                         LocalWhiteboardStore.shared.appendSessionMessage(
                             crewId: summary.crewId, sessionId: "system",
-                            text: "自动唤醒已暂缓：\(reason)。原消息仍保留，稍后重试。",
+                            text: "自动唤醒已暂停：\(reason)。原消息仍保留；熔断须由人工明确启动 session 恢复。",
                             category: "error", senderName: "系统")
                     }
                     if let connection {
                         self.send(.event(.init(kind: "wakeSubmitResult", requestId: requestId,
-                            fields: ["sessionId": .string(sessionId), "result": .string("retry")])),
+                            fields: ["sessionId": .string(sessionId), "result": .string("blocked")])),
                             on: connection)
                     }
                     return
@@ -492,7 +492,8 @@ final class SessionProtocolServer {
                     kind: "wakeSubmitResult", requestId: requestId,
                     fields: [
                         "sessionId": .string(sessionId),
-                        "result": .string(result == .accepted ? "accepted" : "retry"),
+                        "result": .string(result == .accepted ? "accepted"
+                            : result == .blocked ? "blocked" : "retry"),
                     ])), on: connection)
             }
         case "applyProfileSwitch":
@@ -988,6 +989,8 @@ final class SessionProtocolClient {
                 let result: SessionWakeSubmission
                 if case .string("accepted")? = value.fields["result"] {
                     result = .accepted
+                } else if case .string("blocked")? = value.fields["result"] {
+                    result = .blocked
                 } else {
                     result = .retry
                 }

@@ -458,16 +458,19 @@ final class CrewSessionRunner: ObservableObject {
                                     priority: deferredWakePriorities[delivery.key] ?? .automatic)
         guard case let .allowed(admissionToken) = admission else {
             deferredWakes.resolve(delivery, as: .retry)
-            if case let .deferred(reason) = admission {
+            deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
+            if let reason = admission.reason {
                 let key = "wake-admission|\(run.crewId)|\(reason)"
                 if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
                     LocalWhiteboardStore.shared.appendSessionMessage(
                         crewId: run.crewId, sessionId: "system",
-                        text: "自动唤醒已暂缓：\(reason)。原消息和待发事项仍保留；额度恢复后会重试。",
+                        text: "自动唤醒已暂停：\(reason)。原消息和待发事项仍保留；熔断须由人工明确启动 session 恢复。",
                         category: "error", senderName: "系统")
                 }
             }
-            scheduleDeferredWakeRetry(for: run, after: 15)
+            // Admission refusal must not drive a polling loop. The pending
+            // delivery stays queued; a human start or a later idle edge can
+            // reconsider it, while a hard stop remains latched on disk.
             return
         }
         let baseline = wakeReceiptEvidence(for: run)
@@ -508,13 +511,17 @@ final class CrewSessionRunner: ObservableObject {
                 }
             case .retry:
                 self.scheduleDeferredWakeRetry(for: run)
+            case .blocked:
+                // Daemon's durable admission latch owns recovery. The original
+                // delivery remains queued, but the viewer must not poll it.
+                self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
             }
         }
     }
 
     /// 状态快照可能仍显示 idle，而真实 app-server 正在收尾上一 turn。拒绝后的原
-    /// delivery 已回队列；短延迟后主动再试，不依赖第二条白板消息或新的 idle 边沿。
-    private func scheduleDeferredWakeRetry(for run: CrewSessionRun, after seconds: Double = 0.5) {
+    /// delivery 已回队列；60 秒后再试，不依赖第二条白板消息或新的 idle 边沿。
+    private func scheduleDeferredWakeRetry(for run: CrewSessionRun, after seconds: Double = 60) {
         deferredWakeRetryTasks[run.sessionId]?.cancel()
         deferredWakeRetryTasks[run.sessionId] = Task { @MainActor [weak self, weak run] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -843,7 +850,7 @@ final class CrewSessionRunner: ObservableObject {
 
     private func retryWakeupLedger(_ w: PendingWakeup) {
         wakeupTimers[w.id]?.invalidate()
-        wakeupTimers[w.id] = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) {
+        wakeupTimers[w.id] = Timer.scheduledTimer(withTimeInterval: 3600, repeats: false) {
             [weak self] _ in
             Task { @MainActor in self?.fire(w) }
         }
@@ -860,7 +867,7 @@ final class CrewSessionRunner: ObservableObject {
                 _ = wakeAdmission.acknowledgeLease(sourceKey: leaseKey)
             } else {
                 reportWakeSettlementFailure(crewId: w.crewId, key: leaseKey,
-                    detail: "定时唤醒已受理，但租约清账失败；原约仍在，60 秒后重试清账。")
+                    detail: "定时唤醒已受理，但租约清账失败；原约仍在，1 小时后重试清账。")
                 retryWakeupLedger(w)
             }
             return
@@ -890,7 +897,7 @@ final class CrewSessionRunner: ObservableObject {
                     _ = self.wakeAdmission.acknowledgeLease(sourceKey: leaseKey)
                 } else {
                     self.reportWakeSettlementFailure(crewId: w.crewId, key: leaseKey,
-                        detail: "定时唤醒已受理，但租约清账失败；原约仍在，60 秒后重试清账。")
+                        detail: "定时唤醒已受理，但租约清账失败；原约仍在，1 小时后重试清账。")
                     self.retryWakeupLedger(w)
                 }
             }
@@ -904,7 +911,7 @@ final class CrewSessionRunner: ObservableObject {
                 senderName: "系统",
                 mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
             var retry = w
-            retry.fireAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
+            retry.fireAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
             if wakeupStore.replace(retry, onIncident: { self.reportWakeupIncident($0) }) {
                 arm(retry)
             }
@@ -937,7 +944,7 @@ final class CrewSessionRunner: ObservableObject {
                 arm(next)
             } else {
                 reportWakeSettlementFailure(crewId: w.crewId, key: leaseKey,
-                    detail: "督办已受理，但下一租约写盘失败；原约仍在，60 秒后重试。")
+                    detail: "督办已受理，但下一租约写盘失败；原约仍在，1 小时后重试。")
                 retryWakeupLedger(w)
             }
             return
@@ -972,7 +979,7 @@ final class CrewSessionRunner: ObservableObject {
                     self.arm(next)
                 } else {
                     self.reportWakeSettlementFailure(crewId: w.crewId, key: leaseKey,
-                        detail: "督办已受理，但下一租约写盘失败；原约仍在，60 秒后重试。")
+                        detail: "督办已受理，但下一租约写盘失败；原约仍在，1 小时后重试。")
                     self.retryWakeupLedger(w)
                 }
             }
@@ -989,7 +996,7 @@ final class CrewSessionRunner: ObservableObject {
         else { return }
         LocalWhiteboardStore.shared.appendSessionMessage(
             crewId: crewId, sessionId: "system",
-            text: "自动唤醒 admission 账本读不出来；定时与督办租约原样保留，60 秒后重试，暂不发模型请求。",
+            text: "自动唤醒 admission 账本读不出来；定时与督办租约原样保留，1 小时后重查，暂不发模型请求。",
             category: "error", senderName: "系统")
     }
 
@@ -1604,12 +1611,12 @@ final class CrewSessionRunner: ObservableObject {
             sessionId: sessionId, crewId: crewId, sourceKey: launchSource,
             priority: userInitiated || !config.kind.isAgent ? .human : admissionPriority)
         guard case let .allowed(launchToken) = launchDecision else {
-            if case let .deferred(reason) = launchDecision {
+            if let reason = launchDecision.reason {
                 let key = "wake-admission-launch|\(crewId)|\(reason)"
                 if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
                     LocalWhiteboardStore.shared.appendSessionMessage(
                         crewId: crewId, sessionId: "system",
-                        text: "自动拉起 session 已暂缓：\(reason)。原始白板消息仍在，请稍后重试。",
+                        text: "自动拉起 session 已暂停：\(reason)。原始白板消息仍在；须由人工明确启动 session 恢复。",
                         category: "error", senderName: "系统")
                 }
                 throw RunnerError.automaticWakeDeferred(reason)
@@ -1892,6 +1899,12 @@ final class CrewSessionRunner: ObservableObject {
                 crewId: crewId, sessionId: sessionId, displayName: run.displayName)
         }
         launchAccepted = true
+        if userInitiated && config.kind.isAgent && !wakeAdmission.resetHardStopsAfterHumanStart() {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "人工启动已受理，但自动唤醒熔断状态清账失败；自动路径仍保持暂停，请检查本机数据目录。",
+                category: "error", senderName: "系统")
+        }
     }
 
     // MARK: - codex backend providers
@@ -2897,6 +2910,7 @@ final class CrewSessionRunner: ObservableObject {
     func restartMember(detail: CrewDetail, backend: PendingCrewBackend?,
                        member: LocalSessionMember, wakeText: String,
                        wakeEntryId: String? = nil,
+                       userInitiated: Bool = false,
                        admissionPriority: AutomaticWakeAdmission.Priority = .automatic) async throws {
         guard !runs.contains(where: {
             $0.sessionId == member.sessionId && $0.status == .running
@@ -2950,6 +2964,7 @@ final class CrewSessionRunner: ObservableObject {
                                model: recorded?.model, effort: recorded?.effort,
                                title: member.displayName,
                                resumeAgentSessionId: resumeId,
+                               userInitiated: userInitiated,
                                wakeEntryId: wakeEntryId,
                                admissionPriority: admissionPriority)
     }
@@ -2965,7 +2980,7 @@ final class CrewSessionRunner: ObservableObject {
         /// agent 侧会话号 —— 非 nil 时续跑原对话（Todo #28，claude `--resume` /
         /// codex `thread/resume`）。nil = 新起一轮。
         resumeAgentSessionId: String? = nil,
-        /// 见 `start(userInitiated:)`。`restartMember`（@ 唤醒拉起）恒 false。
+        /// 见 `start(userInitiated:)`。自动 @ 拉起为 false；人从成员行点开为 true。
         userInitiated: Bool = false,
         /// #105 ②：被 @ 醒时那条 @ 的白板 id —— 正文已经在 `brief` 里，
         /// 首轮未读注入要排除它，否则同一段话在同一份开场里出现两遍。

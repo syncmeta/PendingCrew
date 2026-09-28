@@ -8,8 +8,15 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
     enum Decision {
         case allowed(String)
         case deferred(String)
+        case hardStopped(String)
 
         var isAllowed: Bool { if case .allowed = self { return true }; return false }
+        var reason: String? {
+            switch self {
+            case .allowed: return nil
+            case let .deferred(reason), let .hardStopped(reason): return reason
+            }
+        }
     }
 
     struct Event: Codable {
@@ -29,6 +36,11 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         var sourceDenials: [String: Int] = [:]
         var sourceDenialAt: [String: TimeInterval] = [:]
         var sourceBlockedUntil: [String: TimeInterval] = [:]
+        // Optional so admission ledgers written by the first #170 candidate decode
+        // without a migration that could accidentally reset their rate history.
+        var hardStoppedSessions: Set<String>? = nil
+        var hardStoppedCrews: Set<String>? = nil
+        var hardStoppedMachine: Bool? = nil
         /// Backend accepted, but the source lease has not yet been acknowledged.
         /// Kept separately from the rate window so a restart never resubmits it.
         var acceptedLeases: Set<String> = []
@@ -57,6 +69,13 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         guard priority == .automatic else { return .allowed("priority:" + UUID().uuidString) }
         return withLock { () -> Decision in
             guard var state = read() else { return .deferred("admission 账本读不出来") }
+            if state.hardStoppedMachine == true { return .hardStopped("全机自动唤醒已熔断") }
+            if state.hardStoppedCrews?.contains(crewId) == true {
+                return .hardStopped("crew 自动唤醒已熔断")
+            }
+            if state.hardStoppedSessions?.contains(sessionId) == true {
+                return .hardStopped("session 自动唤醒已熔断")
+            }
             let wall = now.timeIntervalSince1970
             if state.logicalNow == 0 {
                 state.logicalNow = wall
@@ -93,6 +112,17 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             } else if window.count >= 12 { reason = "全机滑窗已满" }
             else { reason = nil }
             if let reason {
+                // Any exhausted window or accepted-source repetition is evidence of
+                // an automatic loop. Latch the *scope* on disk until a human starts
+                // a session explicitly; waiting out a clock window is not recovery.
+                if sameSource || (state.sourceBlockedUntil[source] ?? 0) > clock
+                    || window.filter({ $0.sessionId == sessionId }).count >= 2 {
+                    state.hardStoppedSessions = (state.hardStoppedSessions ?? []).union([sessionId])
+                } else if window.filter({ $0.crewId == crewId }).count >= 5 {
+                    state.hardStoppedCrews = (state.hardStoppedCrews ?? []).union([crewId])
+                } else {
+                    state.hardStoppedMachine = true
+                }
                 let recentCount = clock - (state.sourceDenialAt[source] ?? .infinity) < 60
                     ? (state.sourceDenials[source] ?? 0) : 0
                 let count = min(8, recentCount + 1)
@@ -102,7 +132,7 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
                     state.sourceBlockedUntil[source] = clock + Double(min(900, 15 * (1 << (count - 3))))
                 }
                 guard write(state) else { return .deferred("admission 账本写不进去") }
-                return .deferred(reason)
+                return .hardStopped(reason)
             }
             let token = UUID().uuidString
             state.events.append(Event(token: token, sessionId: sessionId, crewId: crewId,
@@ -110,6 +140,19 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             guard write(state) else { return .deferred("admission 账本写不进去") }
             return .allowed(token)
         } ?? .deferred("admission 锁打不开")
+    }
+
+    /// An explicit human start is the recovery action. Existing rate history and
+    /// accepted source leases remain, so an unresolved loop trips again promptly.
+    @discardableResult
+    func resetHardStopsAfterHumanStart() -> Bool {
+        withLock {
+            guard var state = read() else { return false }
+            state.hardStoppedSessions = []
+            state.hardStoppedCrews = []
+            state.hardStoppedMachine = false
+            return write(state)
+        } ?? false
     }
 
     /// Only a true backend acceptance makes an event durable. Rejection frees its

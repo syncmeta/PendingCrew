@@ -51,6 +51,9 @@ enum SessionExitReason: Equatable {
 enum SessionWakeSubmission: Equatable {
     case accepted
     case retry
+    /// Authoritative daemon admission refused; retain the source without
+    /// scheduling another short-interval RPC from the viewer.
+    case blocked
 }
 
 /// `CrewSessionRun` 所需的控制 + 生命周期接口，由终端后端（claude）

@@ -52,6 +52,17 @@ final class CrewDeferredWakeQueueTests: XCTestCase {
         XCTAssertEqual(queue.popWhenIdle(sessionId: "b")?.targetSessionId, "b")
     }
 
+    func testDaemonAdmissionBlockKeepsOriginalDeliveryPending() {
+        var queue = CrewDeferredWakeQueue()
+        let wake = delivery("whiteboard:blocked")
+        guard case let .deliver(first) = queue.submit(wake, isBusy: false) else {
+            return XCTFail("initial delivery")
+        }
+        queue.resolve(first, as: .blocked)
+        XCTAssertEqual(queue.pendingCount(sessionId: "captain"), 1)
+        XCTAssertEqual(queue.popWhenIdle(sessionId: "captain"), wake)
+    }
+
     /// 2026-08-30 根因红测：状态快照说 idle，但可控后端拒绝第一次 turn/start。
     /// 回调代表「可以推进消费游标」，只能在请求真的受理后执行；重试也只能受理一次。
     @MainActor

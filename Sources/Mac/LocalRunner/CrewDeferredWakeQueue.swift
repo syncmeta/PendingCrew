@@ -69,7 +69,7 @@ struct CrewDeferredWakeQueue {
         switch result {
         case .accepted:
             rememberDelivered(delivery.key)
-        case .retry:
+        case .retry, .blocked:
             guard !pendingKeys.contains(delivery.key), !deliveredKeys.contains(delivery.key)
             else { return }
             pending[delivery.targetSessionId, default: []].insert(delivery, at: 0)

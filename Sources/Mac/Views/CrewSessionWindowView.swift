@@ -469,6 +469,7 @@ struct CrewSessionWindowView: View {
                 backend: appModel.backend,
                 member: member,
                 wakeText: "人类点击了这个未运行的 session，请恢复原 conversation 并继续待命。",
+                userInitiated: true,
                 admissionPriority: .human)
             guard let run = sessionRunner.runs.first(where: {
                 $0.sessionId == member.sessionId && $0.status == .running

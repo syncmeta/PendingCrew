@@ -113,4 +113,67 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         XCTAssertEqual(AutomaticWakeAdmission(directory: gate.directory)
             .acceptedLease(sourceKey: "scheduled:w1"), false)
     }
+
+    func testCrossSourceSessionStormHardStopsAcrossHoursAndRestart() {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<2 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s", crewId: "c", sourceKey: "source-\(index)",
+                now: t, uptime: 100) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: true))
+        }
+        XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "third",
+                                    now: t, uptime: 100).isAllowed)
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertFalse(reopened.reserve(sessionId: "s", crewId: "c", sourceKey: "new-after-hours",
+                                       now: t.addingTimeInterval(12 * 3600), uptime: 12 * 3600 + 100).isAllowed)
+        XCTAssertTrue(reopened.reserve(sessionId: "s", crewId: "c", sourceKey: "manual",
+                                      priority: .human).isAllowed)
+    }
+
+    func testCrewAndMachineHardStopsSurviveClockAndRestart() {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<5 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s\(index)", crewId: "crew", sourceKey: "one",
+                now: t, uptime: 100) else { return XCTFail("crew setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: true))
+        }
+        XCTAssertFalse(gate.reserve(sessionId: "s5", crewId: "crew", sourceKey: "trip",
+                                    now: t, uptime: 100).isAllowed)
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertFalse(reopened.reserve(sessionId: "fresh", crewId: "crew", sourceKey: "later",
+                                       now: t.addingTimeInterval(86400), uptime: 100_000).isAllowed)
+        let machineGate = store()
+        for index in 0..<12 {
+            guard case let .allowed(token) = machineGate.reserve(
+                sessionId: "other\(index)", crewId: "other\(index)", sourceKey: "one",
+                now: t, uptime: 100) else { return XCTFail("machine setup") }
+            XCTAssertTrue(machineGate.finish(token: token, accepted: true))
+        }
+        XCTAssertFalse(machineGate.reserve(sessionId: "last", crewId: "last", sourceKey: "trip",
+                                           now: t, uptime: 100).isAllowed)
+        XCTAssertFalse(AutomaticWakeAdmission(directory: machineGate.directory).reserve(
+            sessionId: "never-seen", crewId: "never-seen", sourceKey: "after-reboot",
+            now: t.addingTimeInterval(7 * 86400), uptime: 1).isAllowed)
+    }
+
+    func testExplicitHumanStartCanResetLatchWithoutErasingAcceptedLease() {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<2 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s", crewId: "c", sourceKey: "source-\(index)",
+                now: t, uptime: 100) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: true))
+        }
+        XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "trip",
+                                    now: t, uptime: 100).isAllowed)
+        XCTAssertTrue(gate.resetHardStopsAfterHumanStart())
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertTrue(reopened.reserve(sessionId: "s", crewId: "c", sourceKey: "fresh",
+                                       now: t.addingTimeInterval(3600), uptime: 3700).isAllowed)
+    }
 }
