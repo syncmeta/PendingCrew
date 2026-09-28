@@ -72,7 +72,7 @@ final class CodexTranscript: ObservableObject {
             // notification must never clear a newer active turn.
             if let activeTurnId, let completedId, activeTurnId != completedId { break }
             if let turn = params["turn"] as? [String: Any],
-               let status = turn["status"] as? String, status != "completed",
+               let turnStatus = turn["status"] as? String, turnStatus != "completed",
                let id = pendingInputIDs.first(where: { inputDelivery[$0] == .started }) {
                 inputDelivery[id] = .failed
             }

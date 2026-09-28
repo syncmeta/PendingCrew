@@ -46,16 +46,6 @@ enum SessionExitReason: Equatable {
     }
 }
 
-/// 唤醒正文交给后端后的受理结果。普通 composer 的 `send` 仍是 fire-and-forget；
-/// 白板唤醒必须拿到这个回执，不能把「调用了 send」当作「turn 已受理」。
-enum SessionWakeSubmission: Equatable {
-    case accepted
-    case retry
-    /// Authoritative daemon admission refused; retain the source without
-    /// scheduling another short-interval RPC from the viewer.
-    case blocked
-}
-
 /// `CrewSessionRun` 所需的控制 + 生命周期接口，由终端后端（claude）
 /// 与未来的 app-server 后端（codex）共同实现。
 /// 视图层（`AgentTerminalView` 等）由具体类型/kind 决定；

@@ -42,7 +42,7 @@
 
 **口径**：读不出来时仍然提醒（不熄灭），但两次之间至少隔 `地板 × 1、1、2、4、8、8…`。地板仍是 `CaptainTodoSweep.minimumRemindInterval` = 15 分钟，所以间隔是 15 → 30 → 60 → 120 → 120… 分钟。读得回来的那一拍档位清零。
 
-- **倍数没有另写一份**：`SupervisionLease.backoffMultiplier(step:)` 是从 `reschedule` 里原样抽出来的（`Sources/Models/SupervisionLease.swift:136`），`reschedule` 和核账都调它（`Sources/Support/CaptainTodoSweep.swift:269`）。有一条测试钉着 `CaptainTodoSweep.swift` 里不许出现 `pow(`。
+- **倍数没有另写一份**：`SupervisionLease.backoffMultiplier(step:)` 是从 `reschedule` 里原样抽出来的（`Sources/Models/SupervisionLease.swift:136`），`reschedule` 和核账都调它（`Sources/Support/CaptainTodoSweep.swift:222`）。有一条测试钉着 `CaptainTodoSweep.swift` 里不许出现 `pow(`。
 - **封顶 8×（2 小时）的理由**沿用督办租约那条：不封顶的指数退避等于「叫几次没人理就永远闭嘴」。按 15 分钟的地板算，一窗 9 小时的故障叫 7 次（固定地板要叫 37 次，旧后台那种循环要叫几千次），任何时刻离上一次被问都不超过 2 小时。
 - **档位怎么走**（`CaptainTodoSweep.nextUnreadableStreak`）：读得回来就归零；读不出来并且真叫出去了就 +1；读不出来但这一拍没叫，就不动。最后这条和 `reschedule` 里 `delivered` 的纪律一样：没叫出去不算叫过一次。
 - **正文开头就说**「这是第 N 次提醒 —— 不是新情况」，以及「下一次最早在 X 分钟后（而且要等你再停下来一次才会问）」。

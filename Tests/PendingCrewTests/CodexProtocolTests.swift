@@ -401,7 +401,15 @@ final class CodexCompactionLifecycleTests: XCTestCase {
                 emit({"method": "turn/completed", "params": {
                     "turn": {"id": "compact-turn", "status": "completed"}}})
         """#.write(to: script, atomically: true, encoding: .utf8)
-        let bridge = InProcessSessionProtocolBridge()
+        let bridge = InProcessSessionProtocolBridge(
+            wakeAdmission: AutomaticWakeAdmission(directory: directory))
+        bridge.setRunSummaryProvider { _ in
+            .init(crewId: "compaction-test", role: "worker", title: "test", taskBrief: "test",
+                  workingDirectory: directory.path, model: nil, effort: nil,
+                  pendingProfile: nil, approvalsReviewer: nil,
+                  permissionModeOverride: nil, startedAt: 0, runStatus: "running",
+                  exitCode: nil, exitReason: nil, awaitingReply: nil)
+        }
         let backend = CodexAppServerBackend(
             executable: "/usr/bin/python3", argv: ["-u", script.path, methods.path, release.path],
             cwd: directory.path, env: ProcessInfo.processInfo.environment,
@@ -424,7 +432,10 @@ final class CodexCompactionLifecycleTests: XCTestCase {
                        "viewer 发出即显示占位，不能在压缩队列里消失")
         XCTAssertEqual(remote.transcript?.inputDelivery.values.first, .queued)
         try "go".write(to: release, atomically: true, encoding: .utf8)
-        while Date() < deadline {
+        // Startup and compaction are separate asynchronous phases. Give the
+        // queued turn its own timeout after releasing the fake compactor.
+        let deliveryDeadline = Date().addingTimeInterval(8)
+        while Date() < deliveryDeadline {
             let log = (try? String(contentsOf: methods, encoding: .utf8)) ?? ""
             if !backend.isCompacting && !remote.isCompacting && log.contains("turn/start") { break }
             try await Task.sleep(nanoseconds: 10_000_000)

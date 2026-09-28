@@ -1,5 +1,13 @@
 import Foundation
 
+/// Result of handing a wake to a session backend. Shared by admission and the
+/// macOS runner so the admission ledger also compiles for the iOS target.
+enum SessionWakeSubmission: Equatable {
+    case accepted
+    case retry
+    case blocked
+}
+
 /// Durable, machine-wide budget for app-originated model turns. The lock covers the
 /// read, decision, reservation and write, including callers in another process.
 /// Every reservation remains an attempt in the short window even if a backend
@@ -555,7 +563,7 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
 
     private func write(_ state: State) -> Bool {
         guard let data = try? JSONEncoder().encode(state) else { return false }
-        do { try data.write(to: fileURL, options: .atomic); return true }
+        do { try MultiProcessJSONStore.writeStaged(data, to: fileURL); return true }
         catch { return false }
     }
 }

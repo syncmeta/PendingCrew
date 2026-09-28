@@ -190,7 +190,18 @@ final class SessionProtocolOverSocketTests: XCTestCase {
         let pair = try UnixSocketTransport.makePair()
         defer { pair.app.close(); pair.daemon.close() }
 
-        let server = SessionProtocolServer(capabilities: capabilities, daemonBuild: "test-daemon")
+        let admissionDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("socket-input-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: admissionDirectory) }
+        let server = SessionProtocolServer(capabilities: capabilities, daemonBuild: "test-daemon",
+                                           wakeAdmission: AutomaticWakeAdmission(directory: admissionDirectory))
+        server.runSummaryProvider = { _ in
+            .init(crewId: "socket-test", role: "worker", title: "test", taskBrief: "test",
+                  workingDirectory: "/private/tmp", model: nil, effort: nil,
+                  pendingProfile: nil, approvalsReviewer: nil,
+                  permissionModeOverride: nil, startedAt: 0, runStatus: "running",
+                  exitCode: nil, exitReason: nil, awaitingReply: nil)
+        }
         let client = SessionProtocolClient(link: pair.app, capabilities: capabilities,
                                            appBuild: "test-app")
         server.accept(link: pair.daemon)

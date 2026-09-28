@@ -378,7 +378,14 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     }
 
     func submitWake(_ text: String) async -> SessionWakeSubmission {
-        guard let threadId, !isCompacting else { return .retry }
+        // A viewer can submit a human message while native compaction is in
+        // flight. Keep this authoritative submission pending until compaction
+        // ends; reporting retry here loses the queued viewer input.
+        let deadline = Date().addingTimeInterval(90)
+        while isCompacting && status == .running && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard status == .running, let threadId, !isCompacting else { return .retry }
         let wb = whiteboardProvider()
         do {
             _ = try await connection.request(
