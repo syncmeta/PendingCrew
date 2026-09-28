@@ -21,13 +21,16 @@ import Foundation
 /// **这条还该发吗**（目标游标是不是已经过去了）、**该发什么**（现取，不是快照）。
 enum CrewWakeDispatch {
 
-    /// 队列里携带的东西。**白板来的唤醒必须是 `.whiteboardEntry`** ——
-    /// 一旦它以 `.literal` 形态入队，出队时就没有任何东西可以重新决定。
+    /// 队列里携带的东西。白板来的唤醒必须保留消息 id，不能以 `.literal`
+    /// 形态入队；持久欠账用独立 case，允许游标被后来消息推进后仍现取原文。
     enum Payload: Equatable {
         /// 与白板无关的唤醒（机长交接期间攒下的补投等）：没有「现取」可言。
         case literal(String)
         /// 白板上的某一条。真要发时按 id 现取。
         case whiteboardEntry(crewId: String, entryId: String)
+        /// Admission 已持久记下的欠账。游标可能被后续消息推进，不能仅凭
+        /// hasDelivered 丢弃这条；只有本次后端受理/回执才清欠账。
+        case whiteboardDebtEntry(crewId: String, entryId: String)
     }
 
     /// 出队要发之前重新决定。返回 `nil` = **别发了**。
@@ -48,6 +51,8 @@ enum CrewWakeDispatch {
             return text
         case .whiteboardEntry(let crewId, let entryId):
             guard !hasDelivered(crewId, entryId) else { return nil }
+            return renderNow(crewId, entryId)
+        case .whiteboardDebtEntry(let crewId, let entryId):
             return renderNow(crewId, entryId)
         }
     }

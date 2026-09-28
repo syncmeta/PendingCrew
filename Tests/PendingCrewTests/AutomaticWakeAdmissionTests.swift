@@ -176,4 +176,24 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         XCTAssertTrue(reopened.reserve(sessionId: "s", crewId: "c", sourceKey: "fresh",
                                        now: t.addingTimeInterval(3600), uptime: 3700).isAllowed)
     }
+
+    func testSuppressedWhiteboardDebtSurvivesRestartUntilAcknowledged() {
+        let gate = store()
+        let pending = AutomaticWakeAdmission.PendingWhiteboard(
+            crewId: "c", entryId: "old-entry", targetId: "s")
+        XCTAssertTrue(gate.rememberWhiteboard(pending))
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertEqual(reopened.pendingWhiteboard(crewId: "c"), [pending])
+        XCTAssertTrue(reopened.acknowledgeWhiteboard(pending))
+        XCTAssertEqual(AutomaticWakeAdmission(directory: gate.directory)
+            .pendingWhiteboard(crewId: "c"), [])
+    }
+
+    func testUnreadableAdmissionCannotPretendPendingWhiteboardIsEmpty() throws {
+        let gate = store()
+        try FileManager.default.createDirectory(at: gate.directory, withIntermediateDirectories: true)
+        try Data("broken".utf8).write(to: gate.fileURL)
+        XCTAssertNil(gate.pendingWhiteboard(crewId: "c"))
+        XCTAssertFalse(gate.rememberWhiteboard(.init(crewId: "c", entryId: "e", targetId: "s")))
+    }
 }

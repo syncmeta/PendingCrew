@@ -26,6 +26,7 @@ import Combine
 @MainActor
 final class CrewLocalMentionWaker {
     private weak var runner: CrewSessionRunner?
+    private let wakeAdmission = AutomaticWakeAdmission()
     /// 拉起缺席目标需要 crew detail —— 从 app 态现取 backend（弱化对 AppModel 的依赖）。
     private let backendProvider: () -> PendingCrewBackend?
     private var watchers: [AnyCancellable] = []
@@ -111,12 +112,18 @@ final class CrewLocalMentionWaker {
     /// 找出「该唤醒它、却从没送到」的 @，走**同一条** `deliver` 补上 ——
     /// busy 处理、回执、缺席拉起全部复用活体路，不另开一条语义。
     ///
-    /// 只捞 `maxWakeAge`（6 小时）以内的：更老的积压捞回来就是再演一次
-    /// 2026-08-12 的全机重放。**代价明说：超过 6 小时的欠账救不回来，
-    /// 这条防的是往后，不是往回。**
+    /// 普通未读只捞 `maxWakeAge`（6 小时）以内的，以免重演全机旧消息
+    /// 重放。只有 admission 事先持久登记过的特定消息 id 可以越过年龄闸。
     private func rescueBacklog(_ crewId: String) {
         let store = LocalWhiteboardStore.shared
         let cursorDir = LocalWhiteboardStore.defaultDirectory
+        // Snapshot debt *before* fresh unread rescue. That rescue may enqueue
+        // new debt; replaying it again in this same pass would duplicate a
+        // launch attempt before its first backend receipt arrives.
+        guard let pending = wakeAdmission.pendingWhiteboard(crewId: crewId) else {
+            reportAdmissionDebtFailure(crewId: crewId)
+            return
+        }
         // 机长那本是归并键（#105 ①）：用键本身当伪 sessionId 去读同一份游标。
         let captainKey = CrewConversationKey.captain
         var ids = LocalCrewStore.shared.sessionMembers(crewId: crewId).map(\.sessionId)
@@ -128,13 +135,31 @@ final class CrewLocalMentionWaker {
         }
         let owed = CrewStartupRescueLogic.pending(
             unreadBySession: unreadBySession, captainSessionId: captainKey)
-        guard !owed.isEmpty else { return }
         let all = store.list(crewId: crewId)
-        var handled = Set<String>()
-        for p in owed where handled.insert(p.entryId).inserted {
+        let alreadyRecorded = Set(pending)
+        for p in owed {
+            guard !alreadyRecorded.contains(.init(
+                crewId: crewId, entryId: p.entryId, targetId: p.sessionId)) else { continue }
             guard let entry = all.first(where: { $0.id == p.entryId }) else { continue }
             for d in CrewLocalMentionWakeLogic.pending(entries: [entry]) {
-                deliver(d, crewId: crewId)
+                deliver(d, crewId: crewId, onlyTarget: p.sessionId)
+            }
+        }
+        // The ordinary startup sweep deliberately ignores old @s. Only entries
+        // explicitly recorded before an automatic wake was queued may bypass
+        // that age gate; the marker survives app restart and cursor capping.
+        for debt in pending {
+            guard let entry = all.first(where: { $0.id == debt.entryId }) else {
+                reportAdmissionDebtFailure(crewId: crewId,
+                    detail: "自动唤醒欠账指向的白板原文找不到；欠账未清，请人工核查白板归档。")
+                continue
+            }
+            for d in CrewLocalMentionWakeLogic.pending(entries: [entry], includeStale: true) {
+                guard d.mentions.contains(where: {
+                    ($0.kind == "captain" && debt.targetId == captainKey)
+                        || ($0.kind == "session" && $0.targetId == debt.targetId)
+                }) else { continue }
+                deliver(d, crewId: crewId, onlyTarget: debt.targetId, forceDebt: true)
             }
         }
     }
@@ -142,6 +167,21 @@ final class CrewLocalMentionWaker {
     /// run 启动时钉它所在 crew 的游标（幂等）。runner.start() 在 CLI 子进程能发出
     /// 第一条 post_to_crew 之前调它 —— 该 crew 后续所有 @ 都保证被扫到。
     func notifyRunStarted(crewId: String) { pin(crewId) }
+
+    /// Human launch cleared the persistent latch; re-offer only recorded debt.
+    func notifyAdmissionRecovered(crewId: String) { rescueBacklog(crewId) }
+
+    private func reportAdmissionDebtFailure(
+        crewId: String,
+        detail: String = "自动唤醒欠账读不出来；旧白板消息仍保留，自动补投暂停，请检查本机数据目录。"
+    ) {
+        guard LedgerIncidentNoticeGate.shared.shouldEmit(key: "wake-debt|\(crewId)|\(detail)")
+        else { return }
+        LocalWhiteboardStore.shared.appendSessionMessage(
+            crewId: crewId, sessionId: "system",
+            text: detail,
+            category: "error", senderName: "系统")
+    }
 
     /// 钉一个 crew 的扫描游标（幂等）。判定在 `CrewLocalMentionWakeLogic.pinPosition`
     /// （纯函数、有单测）：白板末条是**读失败的合成警示行**时这次不钉 —— 那条只在内存里，
@@ -218,13 +258,16 @@ final class CrewLocalMentionWaker {
     }
 
     /// 一条待唤醒投递：在跑目标走 decide 注入（busy 不打断），缺席目标拉起。
-    private func deliver(_ d: CrewLocalMentionWakeLogic.PendingDelivery, crewId: String) {
+    private func deliver(_ d: CrewLocalMentionWakeLogic.PendingDelivery, crewId: String,
+                         onlyTarget: String? = nil, forceDebt: Bool = false) {
         guard let runner else { return }
         let store = LocalWhiteboardStore.shared
         let cursorDir = LocalWhiteboardStore.defaultDirectory
         // 候选 = 本 crew 在跑 run，排除发送者自己（自己 @ 自己不注入）。
         let candidates = runner.runs.filter {
             $0.crewId == crewId && $0.status == .running && $0.sessionId != d.senderSessionId
+                && (onlyTarget == nil || $0.sessionId == onlyTarget
+                    || (onlyTarget == CrewConversationKey.captain && $0.role == .captain))
         }
         // 近期上下文（仅 claude 目标）：按目标自己的未读游标现取（#490 语义），
         // 剔掉本条 @ 消息自身 —— 它已是注入正文，重复出现会读两遍。
@@ -258,27 +301,40 @@ final class CrewLocalMentionWaker {
         let entry = store.list(crewId: crewId).first { $0.id == d.entryId }
         for inj in injections {
             guard let run = candidates.first(where: { $0.sessionId == inj.sessionId }) else { continue }
-            if let entry, WhiteboardCursor(
+            let debt = AutomaticWakeAdmission.PendingWhiteboard(
+                crewId: crewId, entryId: d.entryId,
+                targetId: run.role == .captain ? CrewConversationKey.captain : run.sessionId)
+            if !forceDebt, let entry, WhiteboardCursor(
                 directory: cursorDir, crewId: crewId, sessionId: inj.sessionId
             ).hasDelivered(entry, in: store) { continue }
+            if !d.isHuman && !wakeAdmission.rememberWhiteboard(debt) {
+                reportAdmissionDebtFailure(crewId: crewId)
+                continue
+            }
             // 目标游标推进 = 本地链路的「已消费」标记：回执确认到达才推进（失败
             // 留着未读，目标解卡后 hook 路 / 下次唤醒还能带到，消息不丢）。
             let consume: () -> Void = { [weak self] in
-                guard self != nil else { return }
+                guard let self else { return }
                 if run.kind == .claudeCode, let lastUnread = unreadBySession[inj.sessionId]?.last {
                     WhiteboardCursor(directory: cursorDir, crewId: crewId, sessionId: inj.sessionId)
                         .advance(to: lastUnread, in: store)
                 }
+                _ = self.wakeAdmission.acknowledgeWhiteboard(debt)
             }
             // #105 ③：进队列的是**消息身份**，不是这一刻渲染出来的串。
             // `renderNow` 只在**真要发的那一刻**被调用 —— 压队期间目标可能已经
             // 从 hook 路看过这条了（那时 `hasDelivered` 会让它整条被丢掉），
             // 也可能上下文变了（那就按当下重渲染，而不是把旧快照发出去）。
-            let renderNow: (String, String) -> String? = { [weak runner] crewId, entryId in
+            let renderNow: (String, String) -> String? = { [weak self, weak runner] crewId, entryId in
                 guard let runner,
                       let target = runner.runs.first(where: {
                           $0.sessionId == inj.sessionId && $0.status == .running })
                 else { return nil }
+                guard store.list(crewId: crewId).contains(where: { $0.id == entryId }) else {
+                    self?.reportAdmissionDebtFailure(crewId: crewId,
+                        detail: "待投白板原文在出站前找不到；本次未发送，原欠账保留，请人工核查。")
+                    return nil
+                }
                 let freshUnread = CrewWhiteboardVisibility.visible(
                     WhiteboardCursor(directory: cursorDir, crewId: crewId,
                                      sessionId: inj.sessionId).unread(in: store).messages,
@@ -298,7 +354,9 @@ final class CrewLocalMentionWaker {
             runner.deliverOrDeferWake(
                 sourceKey: "whiteboard:" + d.entryId,
                 to: run,
-                payload: .whiteboardEntry(crewId: crewId, entryId: d.entryId),
+                payload: forceDebt
+                    ? .whiteboardDebtEntry(crewId: crewId, entryId: d.entryId)
+                    : .whiteboardEntry(crewId: crewId, entryId: d.entryId),
                 renderNow: renderNow,
                 priority: d.isHuman ? .human : .automatic
             ) { baseline in
@@ -312,23 +370,36 @@ final class CrewLocalMentionWaker {
             }
         }
         // @ 的目标完全没在跑 → 真拉起来（与人类路 wakeAbsentMentionTargets 同语义）。
-        wakeAbsent(d, crewId: crewId)
+        wakeAbsent(d, crewId: crewId, onlyTarget: onlyTarget)
     }
 
     /// 拉起缺席目标：captain → startCaptain（带唤醒文本开场）；持久成员 →
     /// restartMember（复用原 sessionId，白板游标延续）。目标既不在跑也不在本地
     /// 成员登记（登录态 edge session）→ 跳过，那是 mailbox 唤醒的辖区。
-    private func wakeAbsent(_ d: CrewLocalMentionWakeLogic.PendingDelivery, crewId: String) {
+    private func wakeAbsent(_ d: CrewLocalMentionWakeLogic.PendingDelivery, crewId: String,
+                            onlyTarget: String? = nil) {
         guard let runner else { return }
         let runningIds = Set(runner.runs
             .filter { $0.crewId == crewId && $0.status == .running }.map(\.sessionId))
         let captainRunning = runner.runs.contains {
             $0.crewId == crewId && $0.role == .captain && $0.status == .running
         }
-        let wake = CrewLocalMentionInjectLogic.wakeTargets(
+        var wake = CrewLocalMentionInjectLogic.wakeTargets(
             mentions: d.mentions, runningSessionIds: runningIds, captainRunning: captainRunning)
+        if let onlyTarget {
+            wake = (needCaptain: wake.needCaptain && onlyTarget == CrewConversationKey.captain,
+                    sessionIds: wake.sessionIds.filter { $0 == onlyTarget })
+        }
         guard wake.needCaptain || !wake.sessionIds.isEmpty,
               let backend = backendProvider() else { return }
+        if !d.isHuman {
+            let targets = (wake.needCaptain ? [CrewConversationKey.captain] : []) + wake.sessionIds
+            for target in targets where !wakeAdmission.rememberWhiteboard(.init(
+                crewId: crewId, entryId: d.entryId, targetId: target)) {
+                reportAdmissionDebtFailure(crewId: crewId)
+                return
+            }
+        }
         let members = LocalCrewStore.shared.sessionMembers(crewId: crewId)
         let wakeText = "\(d.senderName)：\(d.messageText)"
         Task { @MainActor in

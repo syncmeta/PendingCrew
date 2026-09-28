@@ -17,6 +17,13 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             case let .deferred(reason), let .hardStopped(reason): return reason
             }
         }
+        var recoveryHint: String {
+            switch self {
+            case .allowed: return ""
+            case .deferred: return "请检查目标会话身份及本机 admission 账本；恢复前自动出站保持暂停。"
+            case .hardStopped: return "须由人工明确启动 session 恢复自动唤醒。"
+            }
+        }
     }
 
     struct Event: Codable {
@@ -26,6 +33,14 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         let sourceKey: String
         let at: TimeInterval
         var accepted: Bool
+    }
+
+    /// A whiteboard wake that reached the app but has not been acknowledged by
+    /// its target. IDs only: the original text remains in the whiteboard store.
+    struct PendingWhiteboard: Codable, Hashable {
+        let crewId: String
+        let entryId: String
+        let targetId: String
     }
 
     struct State: Codable {
@@ -41,6 +56,7 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         var hardStoppedSessions: Set<String>? = nil
         var hardStoppedCrews: Set<String>? = nil
         var hardStoppedMachine: Bool? = nil
+        var pendingWhiteboard: Set<PendingWhiteboard>? = nil
         /// Backend accepted, but the source lease has not yet been acknowledged.
         /// Kept separately from the rate window so a restart never resubmits it.
         var acceptedLeases: Set<String> = []
@@ -151,6 +167,35 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             state.hardStoppedSessions = []
             state.hardStoppedCrews = []
             state.hardStoppedMachine = false
+            return write(state)
+        } ?? false
+    }
+
+    /// Record before queuing or starting a whiteboard wake. If this write fails,
+    /// callers must not attempt an automatic outbound request.
+    @discardableResult
+    func rememberWhiteboard(_ pending: PendingWhiteboard) -> Bool {
+        withLock {
+            guard var state = read() else { return false }
+            state.pendingWhiteboard = (state.pendingWhiteboard ?? []).union([pending])
+            return write(state)
+        } ?? false
+    }
+
+    /// nil is a failed read, not an empty queue. Callers must leave cursors alone.
+    func pendingWhiteboard(crewId: String) -> [PendingWhiteboard]? {
+        withLock {
+            guard let state = read() else { return nil }
+            return (state.pendingWhiteboard ?? []).filter { $0.crewId == crewId }
+                .sorted { ($0.entryId, $0.targetId) < ($1.entryId, $1.targetId) }
+        } ?? nil
+    }
+
+    @discardableResult
+    func acknowledgeWhiteboard(_ pending: PendingWhiteboard) -> Bool {
+        withLock {
+            guard var state = read() else { return false }
+            state.pendingWhiteboard?.remove(pending)
             return write(state)
         } ?? false
     }

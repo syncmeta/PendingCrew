@@ -53,10 +53,12 @@ enum CrewLocalMentionWakeLogic {
     static let maxWakeAge: TimeInterval = 6 * 60 * 60
 
     /// 扫描一批新增白板条目 → 待唤醒投递集（保持输入序）。
-    /// 明显陈旧的条目（`maxWakeAge` 之前写的）直接丢，不拉起也不注入。
-    static func pending(entries: [LocalWhiteboardMessage], now: Date = Date()) -> [PendingDelivery] {
+    /// 明显陈旧的条目默认不拉起也不注入。只有持久欠账按原 id 精准重查时
+    /// 才传 `includeStale`；普通扫描绝不能打开它。
+    static func pending(entries: [LocalWhiteboardMessage], now: Date = Date(),
+                        includeStale: Bool = false) -> [PendingDelivery] {
         entries.compactMap { e in
-            guard !isStale(e, now: now) else { return nil }
+            guard includeStale || !isStale(e, now: now) else { return nil }
             let isHuman = e.senderKind == "user" || e.senderKind == "human"
             guard e.senderKind == "session" || e.senderKind == "captain" || isHuman else {
                 return nil

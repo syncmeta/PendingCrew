@@ -82,5 +82,13 @@ final class CrewWakeDispatchTests: XCTestCase {
         XCTAssertNil(CrewWakeDispatch.resolve(
             entryPayload(), hasDelivered: { _, _ in false }, renderNow: { _, _ in nil }))
     }
+
+    func test_持久欠账不因后来推进的游标而消失() {
+        let out = CrewWakeDispatch.resolve(
+            .whiteboardDebtEntry(crewId: "c", entryId: "old"),
+            hasDelivered: { _, _ in true },
+            renderNow: { crewId, entryId in "\(crewId):\(entryId)" })
+        XCTAssertEqual(out, "c:old")
+    }
 }
 #endif

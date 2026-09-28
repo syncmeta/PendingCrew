@@ -30,6 +30,13 @@ final class CrewLocalMentionWakeStalenessTests: XCTestCase {
         XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [e], now: now).isEmpty)
     }
 
+    func testOnlyExplicitDebtPathMayRevisitStaleMention() {
+        let e = mention(at: "2026-07-25T02:00:00Z")
+        XCTAssertTrue(CrewLocalMentionWakeLogic.pending(entries: [e], now: now).isEmpty)
+        XCTAssertEqual(CrewLocalMentionWakeLogic.pending(
+            entries: [e], now: now, includeStale: true).map(\.entryId), [e.id])
+    }
+
     func testFreshMentionStillWakes() {
         let e = mention(at: iso(now.addingTimeInterval(-60)))
         XCTAssertEqual(CrewLocalMentionWakeLogic.pending(entries: [e], now: now).count, 1)

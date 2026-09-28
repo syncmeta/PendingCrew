@@ -464,7 +464,7 @@ final class CrewSessionRunner: ObservableObject {
                 if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
                     LocalWhiteboardStore.shared.appendSessionMessage(
                         crewId: run.crewId, sessionId: "system",
-                        text: "自动唤醒已暂停：\(reason)。原消息和待发事项仍保留；熔断须由人工明确启动 session 恢复。",
+                        text: "自动唤醒已暂停：\(reason)。原消息和待发事项仍保留；\(admission.recoveryHint)",
                         category: "error", senderName: "系统")
                 }
             }
@@ -1616,7 +1616,7 @@ final class CrewSessionRunner: ObservableObject {
                 if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
                     LocalWhiteboardStore.shared.appendSessionMessage(
                         crewId: crewId, sessionId: "system",
-                        text: "自动拉起 session 已暂停：\(reason)。原始白板消息仍在；须由人工明确启动 session 恢复。",
+                        text: "自动拉起 session 已暂停：\(reason)。原始白板消息仍在；\(launchDecision.recoveryHint)",
                         category: "error", senderName: "系统")
                 }
                 throw RunnerError.automaticWakeDeferred(reason)
@@ -1899,11 +1899,20 @@ final class CrewSessionRunner: ObservableObject {
                 crewId: crewId, sessionId: sessionId, displayName: run.displayName)
         }
         launchAccepted = true
-        if userInitiated && config.kind.isAgent && !wakeAdmission.resetHardStopsAfterHumanStart() {
-            LocalWhiteboardStore.shared.appendSessionMessage(
-                crewId: crewId, sessionId: "system",
-                text: "人工启动已受理，但自动唤醒熔断状态清账失败；自动路径仍保持暂停，请检查本机数据目录。",
-                category: "error", senderName: "系统")
+        if let entryId = config.wakeEntryId {
+            _ = wakeAdmission.acknowledgeWhiteboard(.init(
+                crewId: crewId, entryId: entryId,
+                targetId: role == .captain ? CrewConversationKey.captain : sessionId))
+        }
+        if userInitiated && config.kind.isAgent {
+            if wakeAdmission.resetHardStopsAfterHumanStart() {
+                localMentionWaker?.notifyAdmissionRecovered(crewId: crewId)
+            } else {
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: crewId, sessionId: "system",
+                    text: "人工启动已受理，但自动唤醒熔断状态清账失败；自动路径仍保持暂停，请检查本机数据目录。",
+                    category: "error", senderName: "系统")
+            }
         }
     }
 

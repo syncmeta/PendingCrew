@@ -475,7 +475,7 @@ final class SessionProtocolServer {
                         key: "wake-admission|\(summary.crewId)|\(reason)") {
                         LocalWhiteboardStore.shared.appendSessionMessage(
                             crewId: summary.crewId, sessionId: "system",
-                            text: "自动唤醒已暂停：\(reason)。原消息仍保留；熔断须由人工明确启动 session 恢复。",
+                            text: "自动唤醒已暂停：\(reason)。原消息仍保留；\(decision.recoveryHint)",
                             category: "error", senderName: "系统")
                     }
                     if let connection {
