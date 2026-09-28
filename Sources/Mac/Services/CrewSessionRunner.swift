@@ -3001,7 +3001,8 @@ final class CrewSessionRunner: ObservableObject {
                 try await restartMember(
                     detail: detail, backend: backend, member: member,
                     wakeText: "PendingCrew 重启后接回了这个 session。接着做你上一轮没做完的事；"
-                        + "上一轮的最后一次输出可能没来得及产出，需要的话重做那一步。")
+                        + "上一轮的最后一次输出可能没来得及产出，需要的话重做那一步。",
+                    admissionPriority: .human)
                 outcome.restored.append(candidate.sessionId)
             } catch {
                 outcome.failures.append(.init(
