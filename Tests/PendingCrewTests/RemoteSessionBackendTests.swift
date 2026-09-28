@@ -85,7 +85,7 @@ final class RemoteSessionBackendTests: XCTestCase {
                        ["legacy direct input"])
     }
 
-    func testRealProtocolTerminalReturnDoesNotBypassAdmission() async {
+    func testRealProtocolTerminalReturnIsRejectedWithoutPersistingControlBytes() async {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("protocol-return-admission-\(UUID().uuidString)")
         let gate = AutomaticWakeAdmission(directory: directory)
@@ -102,11 +102,20 @@ final class RemoteSessionBackendTests: XCTestCase {
         bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
         let remote = bridge.exposeAttached(sessionId: "return-target", backend: backend)
         remote.sendRaw([0x0d])
-        for _ in 0..<30 where gate.pendingExplicitText(crewId: "crew-entry")?.isEmpty != false {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(backend.rawInputs, [])
-        XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry")?.map(\.rawBytes), [[0x0d]])
+        let restarted = AutomaticWakeAdmission(directory: directory)
+        XCTAssertEqual(restarted.pendingExplicitText(crewId: "crew-entry"), [],
+                       "return is a live control key, never durable text debt")
+        let bytesOnDisk = try? Data(contentsOf: gate.fileURL)
+        XCTAssertFalse(bytesOnDisk.flatMap { String(data: $0, encoding: .utf8) }?
+            .contains("rawBytes") ?? true)
+        let newMenu = ProtocolTestBackend(kind: .claudeCode)
+        let reconnected = InProcessSessionProtocolBridge(wakeAdmission: restarted)
+        reconnected.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        _ = reconnected.exposeAttached(sessionId: "return-target", backend: newMenu)
+        XCTAssertEqual(newMenu.rawInputs, [],
+                       "restart/new menu must not receive a stale Enter")
     }
 
     func testSessionBackendControlsAndStateCrossTheFramedTransport() async {

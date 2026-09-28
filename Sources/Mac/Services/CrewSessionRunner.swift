@@ -2096,10 +2096,18 @@ final class CrewSessionRunner: ObservableObject {
                 category: "error", senderName: "系统")
             return false
         }
+        for id in Set(pending.filter(\.requiresManualReview).map(\.crewId)) {
+            if LedgerIncidentNoticeGate.shared.shouldEmit(key: "legacy-control-review|\(id)") {
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: id, sessionId: "system",
+                    text: "旧版待发账本中的终端控制字节已清除，未自动重放；请核对终端当前输入行和菜单后人工决定是否重试。",
+                    category: "error", senderName: "系统")
+            }
+        }
         var offered: Set<String> = []
         for item in pending {
             if case .session(let id) = scope, id != item.sessionId { continue }
-            if item.rawBytes != nil { continue } // terminal input may have changed; human retries Enter
+            if item.requiresManualReview { continue } // terminal input may have changed
             if wakeAdmission.explicitTextAccepted(item) == true {
                 _ = wakeAdmission.acknowledgeExplicitText(id: item.id)
                 continue

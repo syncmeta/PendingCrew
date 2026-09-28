@@ -334,8 +334,8 @@ final class SessionProtocolServer {
                 }
             } else if backend.kind != .terminal,
                       value.bytes.contains(where: { $0 == 0x0d || $0 == 0x0a }) {
-                submitExplicitInput(sessionId: sessionId, backend: backend,
-                                    text: "", rawBytes: value.bytes)
+                admitLiveTerminalReturn(sessionId: sessionId, backend: backend,
+                                        bytes: value.bytes)
             } else {
                 (backend as? SessionProtocolTerminalControlling)?.sendRaw(value.bytes)
             }
@@ -353,25 +353,18 @@ final class SessionProtocolServer {
     }
 
     private func submitExplicitInput(sessionId: String, backend: any SessionBackend,
-                                     text: String, rawBytes: [UInt8]? = nil) {
+                                     text: String) {
         guard let summary = runSummaryProvider?(sessionId) else {
             onDiagnostic?("拒绝无 crew 身份的交互输入：\(sessionId)")
             return
         }
         let item = AutomaticWakeAdmission.PendingExplicitText(
             id: UUID().uuidString, sessionId: sessionId, crewId: summary.crewId,
-            text: text, rawBytes: rawBytes)
+            text: text)
         Task { @MainActor [weak self] in
             guard let self else { return }
             let outcome = await self.wakeAdmission.performExplicitText(item) {
-                if let rawBytes {
-                    guard backend.status == .running,
-                          let terminal = backend as? SessionProtocolTerminalControlling
-                    else { return .retry }
-                    terminal.sendRaw(rawBytes)
-                    return .accepted
-                }
-                return await backend.submitWake(text)
+                await backend.submitWake(text)
             }
             if case .attempted(.accepted, true) = outcome {
                 self.onExplicitInputAccepted?(sessionId)
@@ -379,9 +372,39 @@ final class SessionProtocolServer {
             }
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: summary.crewId, sessionId: "system",
-                text: rawBytes == nil
-                    ? "交互文本未被确认：原文已保存在人工待发账本，检查唤醒恢复后重试。"
-                    : "终端回车未被确认：回车字节已登记，输入行仍在终端；检查后请人工重试回车。",
+                text: "交互文本未被确认：原文已保存在人工待发账本，检查唤醒恢复后重试。",
+                category: "error", senderName: "系统")
+        }
+    }
+
+    /// Terminal control bytes are live interaction, never durable work. Gate
+    /// Enter before it reaches a model prompt, but do not queue it for replay:
+    /// after reconnect it could activate a completely different menu.
+    private func admitLiveTerminalReturn(sessionId: String, backend: any SessionBackend,
+                                         bytes: [UInt8]) {
+        guard let summary = runSummaryProvider?(sessionId) else {
+            onDiagnostic?("拒绝无 crew 身份的终端回车：\(sessionId)")
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await self.wakeAdmission.performSend(
+                sessionId: sessionId, crewId: summary.crewId,
+                sourceKey: "terminal-control:\(UUID().uuidString)", priority: .human,
+                isAccepted: { $0 == .accepted }, operation: {
+                    guard backend.status == .running,
+                          let terminal = backend as? SessionProtocolTerminalControlling
+                    else { return SessionWakeSubmission.retry }
+                    terminal.sendRaw(bytes)
+                    return SessionWakeSubmission.accepted
+                })
+            if case .attempted(.accepted, true) = outcome {
+                self.onExplicitInputAccepted?(sessionId)
+                return
+            }
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: summary.crewId, sessionId: "system",
+                text: "终端回车未确认送达；控制键没有持久保存或自动重放。输入行仍在终端，请核对后人工重试。",
                 category: "error", senderName: "系统")
         }
     }

@@ -308,6 +308,35 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         XCTAssertEqual(calls, 2)
     }
 
+    func testLegacyPersistedReturnIsScrubbedAndNeverResubmitted() async throws {
+        let gate = store()
+        let old = AutomaticWakeAdmission.PendingExplicitText(
+            id: "old-return", sessionId: "session", crewId: "crew", text: "")
+        XCTAssertTrue(gate.rememberExplicitText(old))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: gate.fileURL)) as? [String: Any])
+        var pending = try XCTUnwrap(root["pendingExplicitText"] as? [String: [String: Any]])
+        pending[old.id]?["rawBytes"] = [13]
+        root["pendingExplicitText"] = pending
+        try JSONSerialization.data(withJSONObject: root).write(to: gate.fileURL)
+
+        let restarted = AutomaticWakeAdmission(directory: gate.directory)
+        let migrated = try XCTUnwrap(restarted.pendingExplicitText(crewId: "crew")?.first)
+        XCTAssertTrue(migrated.requiresManualReview)
+        let scrubbed = try String(contentsOf: gate.fileURL, encoding: .utf8)
+        XCTAssertFalse(scrubbed.contains("\"rawBytes\""),
+                       "the first read must scrub legacy control bytes on disk")
+        var sends = 0
+        let result = await restarted.performExplicitText(migrated) {
+            sends += 1
+            return SessionWakeSubmission.accepted
+        }
+        guard case .denied = result else { return XCTFail("legacy Enter must not replay") }
+        XCTAssertEqual(sends, 0)
+        XCTAssertTrue(AutomaticWakeAdmission(directory: gate.directory)
+            .pendingExplicitText(crewId: "crew")?.first?.requiresManualReview == true)
+    }
+
     func testSuppressedWhiteboardDebtSurvivesRestartUntilAcknowledged() {
         let gate = store()
         let pending = AutomaticWakeAdmission.PendingWhiteboard(

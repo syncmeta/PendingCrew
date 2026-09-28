@@ -64,7 +64,43 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         let sessionId: String
         let crewId: String
         let text: String
-        var rawBytes: [UInt8]? = nil
+        /// Older candidate ledgers may contain a terminal Enter. Keep only a
+        /// review marker; never serialize or automatically replay those bytes.
+        var requiresManualReview: Bool = false
+        var wasLegacyRawBytes: Bool = false
+
+        init(id: String, sessionId: String, crewId: String, text: String,
+             requiresManualReview: Bool = false) {
+            self.id = id
+            self.sessionId = sessionId
+            self.crewId = crewId
+            self.text = text
+            self.requiresManualReview = requiresManualReview
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, sessionId, crewId, text, requiresManualReview, rawBytes
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(String.self, forKey: .id)
+            sessionId = try values.decode(String.self, forKey: .sessionId)
+            crewId = try values.decode(String.self, forKey: .crewId)
+            text = try values.decode(String.self, forKey: .text)
+            wasLegacyRawBytes = values.contains(.rawBytes)
+            requiresManualReview = (try values.decodeIfPresent(
+                Bool.self, forKey: .requiresManualReview) ?? false) || wasLegacyRawBytes
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(id, forKey: .id)
+            try values.encode(sessionId, forKey: .sessionId)
+            try values.encode(crewId, forKey: .crewId)
+            try values.encode(text, forKey: .text)
+            if requiresManualReview { try values.encode(true, forKey: .requiresManualReview) }
+        }
     }
 
     enum RecoveryScope: Codable, Hashable {
@@ -383,12 +419,15 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
 
     private static func explicitDigest(_ item: PendingExplicitText) -> String {
         fingerprint(item.sessionId + "\u{0}" + item.crewId + "\u{0}" + item.text
-                    + "\u{0}" + Data(item.rawBytes ?? []).base64EncodedString())
+                    + "\u{0}" + (item.requiresManualReview ? "legacy-control" : ""))
     }
 
     func performExplicitText(_ item: PendingExplicitText,
                              operation: () async -> SessionWakeSubmission)
         async -> Submission<SessionWakeSubmission> {
+        guard !item.requiresManualReview else {
+            return .denied(.deferred("旧版终端控制输入须人工核对，不能自动重放"))
+        }
         guard rememberExplicitText(item) else {
             return .denied(.deferred("人工消息待发账本写不进去"))
         }
@@ -505,7 +544,13 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         }
         guard (metadata.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return nil }
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(State.self, from: data)
+        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return nil }
+        if state.pendingExplicitText?.values.contains(where: { $0.wasLegacyRawBytes }) == true {
+            // Migration is fail-closed. The old bytes must be scrubbed on disk
+            // before any caller may use this ledger again.
+            guard write(state) else { return nil }
+        }
+        return state
     }
 
     private func write(_ state: State) -> Bool {

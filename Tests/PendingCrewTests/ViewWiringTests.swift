@@ -328,6 +328,15 @@ final class ViewWiringTests: XCTestCase {
                       "legacy daemon sendText must not bypass admission")
         XCTAssertTrue(endpoints.contains("submitExplicitInput(sessionId: sessionId"),
                       "protocol .input must not bypass admission")
+        XCTAssertTrue(endpoints.contains("admitLiveTerminalReturn(sessionId: sessionId"),
+                      "terminal Return must be admitted as live control input")
+        XCTAssertFalse(endpoints.contains("rawBytes: value.bytes"),
+                       "terminal control bytes must never enter the durable text queue")
+        let admission = try Self.text(of: "AutomaticWakeAdmission.swift")
+        XCTAssertFalse(admission.contains("var rawBytes: [UInt8]?"),
+                       "pending human text must not persist terminal control bytes")
+        XCTAssertTrue(runner.contains("if item.requiresManualReview { continue }"),
+                      "legacy raw-control markers must never be replayed into a new menu")
         let window = try Self.text(of: "CrewSessionWindowView.swift")
         XCTAssertTrue(window.contains("sessionRunner.submitExplicitText(text, id: id, to: run)"),
                       "composer must wait for backend acceptance before clearing input")
