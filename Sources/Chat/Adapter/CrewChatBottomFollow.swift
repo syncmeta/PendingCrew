@@ -65,9 +65,11 @@ import CoreGraphics
 /// 自己发了一条。
 enum CrewChatBottomFollow {
 
-    /// 判定「已在底部」的容差（点）。一行气泡（头像 + 名字行 + 一行正文）远高于它，
-    /// 所以不会把「差一整行」误判成到底；又足够吸收滚动惯性停下时的零点几点残差。
-    static let bottomSlack: CGFloat = 40
+    /// 判定「已在底部」的容差（点）。时间线外层底部 padding 10pt，
+    /// 尾哨兵高 1pt；`scrollTo(tail, anchor: .bottom)` 后内容底边可余 10pt，
+    /// 但末行仍完整可见。11pt 正好覆盖这层布局和亚像素残差。
+    /// 旧值 40 会在末行仍被视口裁掉约 20pt 时提前切回跟随，并回吐分页窗口。
+    static let bottomSlack: CGFloat = 11
 
     /// 落底滚到的锚点 id。
     ///

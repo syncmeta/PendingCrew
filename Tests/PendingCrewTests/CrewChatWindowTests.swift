@@ -1660,4 +1660,224 @@ final class CrewChatExpandAnchorProbeTests: XCTestCase {
         print("[#60 比选]\n" + rows.joined(separator: "\n"))
     }
 }
+/// #174: offscreen, real SwiftUI ScrollView at the same modifier layer as
+/// CrewChatView.messageScroll. The last row and viewport are measured in the
+/// same named coordinate space; the tail sentinel alone is not the oracle.
+@available(macOS 15.0, *)
+final class CrewChatBottomReboundProbeTests: XCTestCase {
+    private final class Rig: ObservableObject {
+        @Published var following = true
+        @Published var ids = (0..<90).map { "m\($0)" }
+        @Published var renderLimit = 30
+        var limitBeforeExcursion: Int?
+        var topID: String?
+        var topWrites = 0
+        var geometryCalls = 0
+        var phaseCalls = 0
+        var programAnchorCalls = 0
+        var newMessageEvents = 0
+        var offset: CGFloat = .nan
+        var viewport: CGFloat = .nan
+        var content: CGFloat = .nan
+        var lastRowMaxY: CGFloat = .nan
+        var scrollTo: ((String, UnitPoint) -> Void)?
+        var lastRowGap: CGFloat { viewport - lastRowMaxY }
+        var bottomGap: CGFloat { content - viewport - offset }
+    }
+
+    private struct LastRowY: PreferenceKey {
+        static var defaultValue: CGFloat = .nan
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            let next = nextValue()
+            if !next.isNaN { value = next }
+        }
+    }
+
+    private struct Harness: View {
+        @ObservedObject var rig: Rig
+        var body: some View {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Group {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(CrewChatWindow.window(rig.ids, limit: rig.renderLimit), id: \.self) { id in
+                                Color.blue.opacity(0.1)
+                                    .frame(height: id == rig.ids.last ? 91 : 48)
+                                    .id(id)
+                                    .background {
+                                        if id == rig.ids.last {
+                                            GeometryReader { geo in
+                                                Color.clear.preference(key: LastRowY.self,
+                                                    value: geo.frame(in: .named("crewChatViewport")).maxY)
+                                            }
+                                        }
+                                    }
+                            }
+                            Color.clear.frame(height: 1).id(CrewChatBottomFollow.bottomAnchorID)
+                        }
+                        .scrollTargetLayout()
+                    }
+                    .padding(.vertical, 10)
+                }
+                .scrollPosition(id: Binding(get: { rig.topID }, set: {
+                    rig.topID = $0; rig.topWrites += 1
+                }), anchor: .top)
+                .coordinateSpace(name: "crewChatViewport")
+                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+                    if !rig.following, let first = ids.first { rig.topID = first }
+                }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(rig.following ? .bottom : .top, for: .sizeChanges)
+                .onScrollPhaseChange { _, _, _ in rig.phaseCalls += 1 }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentOffset.y
+                } action: { _, _ in
+                    rig.geometryCalls += 1
+                }
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    CrewChatBottomFollow.isAtBottom(
+                        contentOffsetY: geo.contentOffset.y,
+                        containerHeight: geo.containerSize.height,
+                        contentHeight: geo.contentSize.height,
+                        insetTop: geo.contentInsets.top,
+                        insetBottom: geo.contentInsets.bottom)
+                } action: { _, atBottom in
+                    if atBottom { rig.following = true; rig.topID = nil }
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentSize.height
+                } action: { _, _ in }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentOffset.y
+                } action: { _, _ in }
+                .onScrollGeometryChange(for: Geometry.self) { geo in
+                    Geometry(offset: geo.contentOffset.y,
+                             viewport: geo.containerSize.height,
+                             content: geo.contentSize.height)
+                } action: { _, g in
+                    rig.offset = g.offset; rig.viewport = g.viewport; rig.content = g.content
+                }
+                .onPreferenceChange(LastRowY.self) { rig.lastRowMaxY = $0 }
+                .onChange(of: rig.following) { _, following in
+                    if following { rig.topID = nil }
+                    let next = CrewChatNewMessages.followChanged(
+                        isFollowing: following, renderLimit: rig.renderLimit,
+                        limitBeforeExcursion: rig.limitBeforeExcursion)
+                    rig.renderLimit = next.renderLimit
+                    rig.limitBeforeExcursion = next.limitBeforeExcursion
+                }
+                .onChange(of: rig.ids.count) { old, new in
+                    rig.newMessageEvents += 1
+                    let outcome = CrewChatNewMessages.apply(
+                        added: new - old, renderLimit: rig.renderLimit,
+                        pin: CrewChatBottomFollow.Pin(isFollowing: rig.following))
+                    rig.renderLimit = outcome.renderLimit
+                    if outcome.shouldLandAtBottom {
+                        proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
+                    }
+                }
+                .onAppear { rig.scrollTo = { id, anchor in
+                    rig.programAnchorCalls += 1
+                    proxy.scrollTo(id, anchor: anchor)
+                } }
+            }
+            .frame(width: 420, height: 500)
+        }
+        private struct Geometry: Equatable {
+            let offset: CGFloat
+            let viewport: CGFloat
+            let content: CGFloat
+        }
+    }
+
+    private func settle(_ window: NSWindow, _ rig: Rig) {
+        var previous: CGFloat = .nan
+        var stable = 0
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            window.layoutIfNeeded()
+            window.contentView?.displayIfNeeded()
+            if !rig.offset.isNaN && !rig.lastRowMaxY.isNaN &&
+                abs(rig.offset - previous) < 0.01 {
+                stable += 1
+                if stable >= 25 { return }
+            } else { stable = 0 }
+            previous = rig.offset
+        }
+    }
+
+    func testNearBottomDoesNotPrematurelyTrimHistoryWindow() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.scrollTo?("m75", .top) // explicit program anchor only prepares history
+        settle(window, rig)
+        rig.following = false // user-departure phase, separate from program anchor
+        settle(window, rig)
+        rig.topID = "m75" // #164 top-row anchor before page expansion
+        rig.renderLimit = 60 // #163 30 -> 60 pagination
+        settle(window, rig)
+        rig.ids.append("new") // new-message branch while browsing history
+        settle(window, rig)
+        let before = rig.bottomGap
+        let phaseBeforeManual = rig.phaseCalls
+        let programAnchorsBeforeManual = rig.programAnchorCalls
+        let newMessageEventsBeforeManual = rig.newMessageEvents
+        let geometryBeforeManual = rig.geometryCalls
+        // Direct clip movement is the headless manual-position branch. It does
+        // not synthesize a user gesture or claim ScrollPhase user callbacks.
+        let scroll = try XCTUnwrap(host.subviewsRecursive.first { $0 is NSScrollView } as? NSScrollView)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, rig.content - rig.viewport - 30)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        settle(window, rig)
+        print("[#174 near-bottom] requestedGap=30 actualGap=\(rig.bottomGap)"
+            + " lastRowGap=\(rig.lastRowGap) following=\(rig.following)"
+            + " limit=\(rig.renderLimit) geometry=\(rig.geometryCalls)"
+            + " phase=\(rig.phaseCalls) programAnchors=\(rig.programAnchorCalls)"
+            + " newMessageEvents=\(rig.newMessageEvents)")
+        XCTAssertFalse(rig.following,
+            "末行还留 30pt 可滚空间时，几何回调不能提前切回跟随并回吐分页窗口")
+        XCTAssertGreaterThan(rig.renderLimit, 30)
+        XCTAssertLessThan(rig.lastRowGap, -5,
+            "先量清末行确实仍被视口裁掉，而不是用内容高度推断可见性")
+        XCTAssertGreaterThan(rig.geometryCalls, geometryBeforeManual)
+        XCTAssertEqual(rig.phaseCalls, phaseBeforeManual,
+            "此步只由滚动位置几何反馈触发，不能误当手势相位回调")
+        XCTAssertEqual(rig.programAnchorCalls, programAnchorsBeforeManual,
+            "此步没有程序化锚定")
+        XCTAssertEqual(rig.newMessageEvents, newMessageEventsBeforeManual,
+            "新消息先前已单独追加，此步没有新消息")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, rig.content - rig.viewport)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        settle(window, rig)
+        print("[#174 rebound] history gap=\(before) offset=\(rig.offset) limit=\(rig.renderLimit)"
+            + " bottomGap=\(rig.bottomGap) lastRowGap=\(rig.lastRowGap)"
+            + " geometry=\(rig.geometryCalls) topWrites=\(rig.topWrites) following=\(rig.following)")
+        XCTAssertGreaterThan(before, 100)
+        XCTAssertGreaterThan(rig.geometryCalls, 0)
+        XCTAssertLessThan(abs(rig.bottomGap), 2)
+        XCTAssertGreaterThanOrEqual(rig.lastRowGap, 0)
+        XCTAssertLessThan(rig.lastRowGap, 20)
+        rig.ids.append("new2") // now following: the new-message path must remain at the tail
+        settle(window, rig)
+        print("[#174 appended-at-bottom] bottomGap=\(rig.bottomGap)"
+            + " lastRowGap=\(rig.lastRowGap) following=\(rig.following)"
+            + " newMessageEvents=\(rig.newMessageEvents)")
+        XCTAssertTrue(rig.following)
+        XCTAssertLessThanOrEqual(rig.bottomGap, CrewChatBottomFollow.bottomSlack,
+            "程序滚到尾哨兵后约留 10pt 内容 padding，仍必须被视为到底")
+        XCTAssertGreaterThanOrEqual(rig.lastRowGap, 0)
+        XCTAssertLessThan(rig.lastRowGap, 20)
+        window.contentView = nil
+    }
+}
+
+private extension NSView {
+    var subviewsRecursive: [NSView] { subviews + subviews.flatMap(\.subviewsRecursive) }
+}
 #endif
