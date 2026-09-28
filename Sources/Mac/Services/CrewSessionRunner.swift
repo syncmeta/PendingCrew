@@ -114,7 +114,10 @@ final class CrewSessionRunner: ObservableObject {
     private var deferredWakeCallbacks: [String: (CrewMailboxWakeLogic.ReceiptEvidence) -> Void] = [:]
     private var deferredWakePriorities: [String: AutomaticWakeAdmission.Priority] = [:]
     private let continuationStore = SessionContinuationStore()
-    private let wakeAdmission = AutomaticWakeAdmission()
+    private let wakeAdmission: AutomaticWakeAdmission
+    /// Headless tests can run the real start entry without opening a CLI or terminal.
+    private let launchOperationOverride: (() async throws -> Void)?
+    private let launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)?
     private var deferredWakeRetryTasks: [String: Task<Void, Never>] = [:]
 
     /// 正在拉起中的目标（`captain:<crewId>` / `member:<sessionId>`）。
@@ -243,8 +246,14 @@ final class CrewSessionRunner: ObservableObject {
     /// `sessionPublisher` 收 `nil` 默认值而不是默认实参：默认实参在 **nonisolated**
     /// 上下文求值，而 `InProcessSessionProtocolBridge` 是 `@MainActor`（同
     /// `SessionHost` 那两个依赖）。
-    init(sessionPublisher: (any SessionProtocolPublishing)? = nil) {
+    init(sessionPublisher: (any SessionProtocolPublishing)? = nil,
+         wakeAdmission: AutomaticWakeAdmission? = nil,
+         launchOperationOverride: (() async throws -> Void)? = nil,
+         launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)? = nil) {
         self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
+        self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
+        self.launchOperationOverride = launchOperationOverride
+        self.launchDenialNoticeOverride = launchDenialNoticeOverride
         (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.protocolSummary
@@ -1672,6 +1681,11 @@ final class CrewSessionRunner: ObservableObject {
             isCaptain: role == .captain, isAgent: config.kind.isAgent,
             userInitiated: userInitiated, requestedPriority: admissionPriority,
             deniedError: { launchDecision in
+                if let launchDenialNoticeOverride {
+                    launchDenialNoticeOverride(launchDecision)
+                    return RunnerError.automaticWakeDeferred(
+                        launchDecision.reason ?? "admission 未受理")
+                }
                 if let reason = launchDecision.reason {
                 let key = "wake-admission-launch|\(crewId)|\(reason)"
                 if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
@@ -1684,6 +1698,10 @@ final class CrewSessionRunner: ObservableObject {
                 }
                 return RunnerError.automaticWakeDeferred("admission 未受理")
             }, operation: {
+        if let launchOperationOverride {
+            try await launchOperationOverride()
+            return
+        }
         // 没显式选 model → 解析一个具体默认别名显式落进 config（argv 带 --model、
         // run.model 永不为 nil）：显示=实际跑的模型，不再糊「默认」(#489)。codex 若
         // 读不到 ~/.codex/config.toml 的 model 仍为 nil（由 app-server 采用默认模型）。

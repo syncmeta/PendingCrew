@@ -10,6 +10,40 @@ import XCTest
 /// 「消息留待重投」被随后的重启抹掉）。
 final class CrewStartupRescueLogicTests: XCTestCase {
 
+    @MainActor
+    func testRunnerStartRejectsAbsentCaptainAndMemberWithoutConstructingBackend() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runner-instance-denial-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)") else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        var constructed = 0
+        var notices = 0
+        for role in [CrewSessionRun.Role.captain, .worker] {
+            let reopened = AutomaticWakeAdmission(directory: directory)
+            let runner = CrewSessionRunner(
+                sessionPublisher: InProcessSessionProtocolBridge(wakeAdmission: reopened),
+                wakeAdmission: reopened,
+                launchOperationOverride: { constructed += 1 },
+                launchDenialNoticeOverride: { _ in notices += 1 })
+            do {
+                try await runner.start(
+                    crewId: "launch-crew",
+                    sessionId: role == .captain ? "captain-1" : "member-1",
+                    config: SessionConfig(kind: .codex), workingDirectory: directory,
+                    taskBrief: "headless denial", role: role)
+                XCTFail("machine stop must reject the Runner.start entry")
+            } catch { }
+            XCTAssertTrue(runner.runs.isEmpty)
+        }
+        XCTAssertEqual(constructed, 0, "neither start may enter the backend body")
+        XCTAssertEqual(notices, 2, "both denials must be surfaced")
+    }
+
     func testProductionLaunchGateRejectsAbsentCaptainAndMemberBeforeProcessAcrossRestart()
         async throws {
         enum LaunchError: Error { case denied }

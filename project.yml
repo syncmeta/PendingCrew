@@ -146,6 +146,14 @@ targets:
       # LocalRunner 模块是纯 Foundation 代码（不依赖 SwiftUI / NSApplicationMain），
       # 重复编译进 test bundle 完全没问题。
       - path: Sources/Mac/LocalRunner
+      # Runner.start instance rejection is safe only with an injected no-process body.
+      # Its direct app-side dependencies compile into this standalone bundle; tests
+      # never instantiate a GUI view or launch an agent process.
+      - path: Sources/Stores/CrewSessionRequests.swift
+      - path: Sources/Mac/Services/CrewSessionRunner.swift
+      - path: Sources/Mac/Services/CrewLocalMentionWaker.swift
+      - path: Sources/Mac/Services/ModelCatalogCenter.swift
+      - path: Sources/Mac/Services/QuotaCenter.swift
       # Session 协议的最小跨平台字节流边界；macOS 实现与下一批 iOS connector 共用。
       - path: Sources/Shared/SessionMessageLink.swift
       - path: Sources/Shared/SessionProtocol.swift
