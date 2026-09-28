@@ -134,6 +134,7 @@ struct CrewTodoPanel: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CrewTodoPagePalette.background)
         // 首拉 + 订阅变更（人类新增本进程即推；机器人回应经目录监听跨进程补齐）。
         // `id` 带上 ledger —— 换药丸就换一本账重订（两本各自一个文件、一把锁）。
         // 读全量只在这条 task 里做，**不在 body 求值路径上**（那条红线）。
@@ -299,11 +300,17 @@ struct CrewTodoPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(maxHeight: CGFloat(layout.cardMaxHeight), alignment: .top)
         .clipped()
-        .background(cardShape.fill(Theme.Palette.surface))
+        .background(cardShape.fill(CrewTodoPagePalette.card))
         .overlay(cardShape.strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
+
+/// The Todo overview and detail window share a warm page and white cards.
+enum CrewTodoPagePalette {
+    static let background = Color.adaptive(light: 0xFDFCF9, dark: 0x161512)
+    static let card = Theme.Palette.surface
 }
 
 /// 「Agent 的 / 人类的」两个药丸（Todo #62）—— 概览面板与详细窗口共用一份，

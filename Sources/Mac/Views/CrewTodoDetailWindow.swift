@@ -180,12 +180,6 @@ struct CrewTodoDetailView: View {
                         get: { ledger },
                         set: { ledger = $0; focus = nil }))
                 }
-                Spacer(minLength: 8)
-                Text(isFocused
-                     ? "只看这一条"
-                     : (ledger == .agent ? "你派给 agent 的活" : "agent 请你拍板的事"))
-                    .font(Theme.Fonts.caption2)
-                    .foregroundStyle(Theme.Palette.inkMuted)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -222,7 +216,7 @@ struct CrewTodoDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .background(Theme.Palette.canvas)
+        .background(CrewTodoPagePalette.background)
         // 换药丸 = 换一本账重订（两本各自一个文件、一把锁）。换的同时收掉编辑器 ——
         // 编辑器挂在 #N 上，两本账的 #N 指两件事，留着会张冠李戴。
         // 外面又点了一条 —— 窗口是复用的，所以新落点从信箱来（人类 Todo #122）。
@@ -309,7 +303,7 @@ struct CrewTodoDetailView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.Palette.surfaceMuted.opacity(0.5),
+        .background(CrewTodoPagePalette.card,
                     in: RoundedRectangle(cornerRadius: 8))
     }
 

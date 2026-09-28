@@ -267,6 +267,26 @@ final class TodoMarkdownRenderingTests: XCTestCase {
                       "详细窗口须保留未截断正文")
     }
 
+    func testTodo175UsesWarmPageWhiteCardsAndNoLedgerHeaderExplanation() throws {
+        let panel = Self.codeOnly(try Self.text(of: "CrewTodoPanel.swift"))
+        let detail = Self.codeOnly(try Self.text(of: "CrewTodoDetailWindow.swift"))
+
+        XCTAssertTrue(panel.contains("Color.adaptive(light: 0xFDFCF9, dark: 0x161512)"),
+                      "Todo 页须定义 #fdfcf9 背景")
+        XCTAssertTrue(panel.contains(".background(CrewTodoPagePalette.background)"),
+                      "概览列表须使用 Todo 页背景")
+        XCTAssertTrue(detail.contains(".background(CrewTodoPagePalette.background)"),
+                      "详细列表须使用同一 Todo 页背景")
+        XCTAssertTrue(panel.contains("cardShape.fill(CrewTodoPagePalette.card)"),
+                      "概览卡片须为白底")
+        XCTAssertTrue(detail.contains(".background(CrewTodoPagePalette.card,"),
+                      "详细卡片须为白底")
+        XCTAssertFalse(detail.contains("你派给 agent 的活"), "Agent 页右上说明仍在")
+        XCTAssertFalse(detail.contains("agent 请你拍板的事"), "Human 页右上说明仍在")
+        XCTAssertFalse(detail.contains("只看这一条"), "聚焦页右上说明仍在")
+
+    }
+
     private static let ledgerRows: [LocalTodoItem] = [
         LocalTodoItem(id: "a", number: 9, text: "九", status: "pending", createdAt: "2026-09-03"),
         LocalTodoItem(id: "b", number: 7, text: "七", status: "pending", createdAt: "2026-09-02"),
