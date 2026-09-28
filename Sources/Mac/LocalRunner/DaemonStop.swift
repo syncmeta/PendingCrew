@@ -77,6 +77,18 @@ enum DaemonStopOutcome: Equatable {
 /// Keeping the decision here lets the standalone test bundle exercise it without AppKit.
 enum AppQuitDaemonPolicy {
     enum Reason: Equatable { case explicitQuit, windowClosed, sparkleInstall }
+    static func isExplicitDockQuit(event: NSAppleEventDescriptor?,
+                                   senderPIDAttribute: (NSAppleEventDescriptor) -> NSAppleEventDescriptor? = {
+                                       $0.attributeDescriptor(forKeyword: 0x73706964)
+                                   },
+                                   bundleIdentifierForPID: (Int32) -> String?) -> Bool {
+        guard let event,
+              event.eventClass == 0x61657674, event.eventID == 0x71756974,
+              let senderPID = senderPIDAttribute(event)?.int32Value else {
+            return false
+        }
+        return isExplicitDockQuit(senderBundleIdentifier: bundleIdentifierForPID(senderPID))
+    }
     static func isExplicitDockQuit(senderBundleIdentifier: String?) -> Bool {
         senderBundleIdentifier == "com.apple.dock"
     }

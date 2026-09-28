@@ -13,6 +13,7 @@ final class DaemonStopTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let app = try String(contentsOf: root.appendingPathComponent("Sources/PendingCrewApp.swift"))
+        let stop = try String(contentsOf: root.appendingPathComponent("Sources/Mac/LocalRunner/DaemonStop.swift"))
         let host = try String(contentsOf: root.appendingPathComponent("Sources/Mac/Services/SessionHost.swift"))
         let updater = try String(contentsOf: root.appendingPathComponent("Shared/AppUpdate/AppUpdater.swift"))
         XCTAssertTrue(app.contains("@NSApplicationDelegateAdaptor(PendingCrewApplicationDelegate.self)"))
@@ -25,8 +26,10 @@ final class DaemonStopTests: XCTestCase {
         XCTAssertTrue(app.contains("CommandGroup(replacing: .appTermination)"))
         XCTAssertTrue(app.contains("AppQuitLifecycle.shared.userRequestedQuit = true"))
         XCTAssertTrue(app.contains("lifecycle.isSystemQuitEvent"))
-        XCTAssertTrue(app.contains("attributeDescriptor(forKeyword: 0x73706964)"))
-        XCTAssertTrue(app.contains("AppQuitDaemonPolicy.isExplicitDockQuit"))
+        XCTAssertTrue(app.contains("event: NSAppleEventManager.shared().currentAppleEvent"))
+        XCTAssertTrue(app.contains("NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier"))
+        XCTAssertTrue(stop.contains("attributeDescriptor(forKeyword: 0x73706964)"))
+        XCTAssertTrue(stop.contains("isExplicitDockQuit(senderBundleIdentifier: bundleIdentifierForPID(senderPID))"))
         XCTAssertTrue(app.contains("AppQuitDaemonPolicy.resolveReason("))
         XCTAssertTrue(app.contains("if reason == .sparkleInstall { return .terminateNow }"))
     }
@@ -65,6 +68,53 @@ final class DaemonStopTests: XCTestCase {
         XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
             senderBundleIdentifier: "org.sparkle-project.Sparkle.InstallerProgress"))
         XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(senderBundleIdentifier: nil))
+    }
+
+    func testQuitAppleEventUsesSenderPIDToDistinguishDockFromSparkle() {
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: 0x61657674, eventID: 0x71756974,
+            targetDescriptor: nil, returnID: 0, transactionID: 0)
+        XCTAssertEqual(event.eventClass, 0x61657674)
+        XCTAssertEqual(event.eventID, 0x71756974)
+        let senderPID = NSAppleEventDescriptor(int32: 31415)
+        var lookedUpPIDs: [Int32] = []
+        let dock = AppQuitDaemonPolicy.isExplicitDockQuit(event: event,
+                                                         senderPIDAttribute: { _ in senderPID }) { pid in
+            lookedUpPIDs.append(pid)
+            return "com.apple.dock"
+        }
+        let sparkle = AppQuitDaemonPolicy.isExplicitDockQuit(event: event,
+                                                            senderPIDAttribute: { _ in senderPID }) { pid in
+            lookedUpPIDs.append(pid)
+            return "org.sparkle-project.Sparkle.InstallerProgress"
+        }
+        XCTAssertTrue(dock)
+        XCTAssertFalse(sparkle)
+        XCTAssertEqual(lookedUpPIDs, [31415, 31415])
+
+        let wrongEvent = NSAppleEventDescriptor.appleEvent(
+            withEventClass: 0x61657674, eventID: 0x6f617070,
+            targetDescriptor: nil, returnID: 0, transactionID: 0)
+        let noSender = NSAppleEventDescriptor.appleEvent(
+            withEventClass: 0x61657674, eventID: 0x71756974,
+            targetDescriptor: nil, returnID: 0, transactionID: 0)
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
+            event: wrongEvent, senderPIDAttribute: { _ in
+                XCTFail("non-quit event must not look up a sender PID")
+                return senderPID
+            }) { _ in
+                XCTFail("invalid event must not look up a sender")
+                return "com.apple.dock"
+            })
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
+            event: noSender, senderPIDAttribute: { _ in nil }) { _ in
+                XCTFail("missing sender PID must not look up a bundle")
+                return "com.apple.dock"
+            })
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(event: noSender) { _ in
+            XCTFail("synthetic event without system spid must not look up a bundle")
+            return "com.apple.dock"
+        })
     }
 
     func testQuitCancellationAndUnreachableOrStuckDaemonNeverClaimSuccess() {

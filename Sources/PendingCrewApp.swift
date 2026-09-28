@@ -214,13 +214,10 @@ final class AppQuitLifecycle {
     /// Both Dock and Sparkle's installer send aevt/quit. Attribute `spid`
     /// identifies the sender; only Dock is an explicit user Quit here.
     var isSystemQuitEvent: Bool {
-        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
-        guard event.eventClass == 0x61657674, event.eventID == 0x71756974,
-              let senderPID = event.attributeDescriptor(forKeyword: 0x73706964)?.int32Value else {
-            return false
+        AppQuitDaemonPolicy.isExplicitDockQuit(
+            event: NSAppleEventManager.shared().currentAppleEvent) { senderPID in
+            NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier
         }
-        let senderBundle = NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier
-        return AppQuitDaemonPolicy.isExplicitDockQuit(senderBundleIdentifier: senderBundle)
     }
     var runningSessionCount: (() -> Int)?
     var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
