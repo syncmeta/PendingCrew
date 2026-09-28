@@ -214,8 +214,9 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         }
         let request = AutomaticWakeAdmission.HumanRecoveryRequest.directUI(
             scope: .session("s1"))
-        XCTAssertTrue(gate.recover(request))
-        XCTAssertFalse(gate.recover(request), "one action must never be reusable")
+        XCTAssertTrue(gate.recover(request, now: t.addingTimeInterval(3600), uptime: 3700))
+        XCTAssertFalse(gate.recover(request, now: t.addingTimeInterval(3600), uptime: 3700),
+                       "one action must never be reusable")
         let reopened = AutomaticWakeAdmission(directory: gate.directory)
         XCTAssertTrue(reopened.reserve(sessionId: "s1", crewId: "s1", sourceKey: "fresh",
                                        now: t.addingTimeInterval(3600), uptime: 3700).isAllowed)
