@@ -1061,15 +1061,25 @@ final class CrewStore: ObservableObject {
         }
         let label = "\(sourceTitle)·机长"
         for target in targets {
-            LocalWhiteboardStore.shared.appendSessionMessage(
-                crewId: target, sessionId: cmd.sessionId ?? "captain-\(cmd.crewId)",
-                text: cmd.brief, category: "report", senderName: label,
-                mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
-            enqueue(CrewMessageWake(
-                targetCrewId: target, text: cmd.brief, senderLabel: label), into: crewMessageWakes)
-            postSystemNotice(
-                crewId: cmd.crewId,
-                text: "已送达「\(store.title(of: target) ?? target)」群聊。")
+            do {
+                let warning = try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+                    crewId: target, sessionId: cmd.sessionId ?? "captain-\(cmd.crewId)",
+                    text: cmd.brief, category: "report", senderName: label,
+                    mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
+                enqueue(CrewMessageWake(
+                    targetCrewId: target, text: cmd.brief, senderLabel: label), into: crewMessageWakes)
+                postSystemNotice(
+                    crewId: cmd.crewId,
+                    text: "已写入「\(store.title(of: target) ?? target)」群聊；机长唤醒仍待后端受理。"
+                        + (warning.map { " 白板提示：\($0)" } ?? ""))
+            } catch {
+                let preserved = LocalWhiteboardStore.wasPreservedForRetry(error)
+                postSystemNotice(crewId: cmd.crewId,
+                                 text: "向「\(store.title(of: target) ?? target)」写入群聊失败："
+                                    + error.localizedDescription
+                                    + (preserved ? "。已存待发箱，恢复后自动补发。"
+                                                 : "。未宣称送达，请核对后重试。"))
+            }
         }
     }
 

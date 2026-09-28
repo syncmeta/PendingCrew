@@ -32,6 +32,7 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
         XCTAssertEqual(out.first?.messageText, "开工吧")
         XCTAssertEqual(out.first?.senderName, "机长")
         XCTAssertEqual(out.first?.senderSessionId, "cap-1")
+        XCTAssertFalse(out.first!.isHuman)
         XCTAssertTrue(out.first!.trackReceipt)
     }
 
@@ -51,6 +52,7 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
         XCTAssertEqual(out.first?.messageText, "修复啊")
         XCTAssertEqual(out.first?.senderName, "人")
         XCTAssertNil(out.first?.senderSessionId)
+        XCTAssertTrue(out.first!.isHuman, "人类显式消息应走优先 admission 通道")
         XCTAssertFalse(out.first!.trackReceipt,
                        "人类短消息可能很快处理完，不能用延迟采样误报唤醒失败")
     }

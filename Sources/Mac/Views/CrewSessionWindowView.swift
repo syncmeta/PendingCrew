@@ -468,7 +468,8 @@ struct CrewSessionWindowView: View {
                 detail: detail,
                 backend: appModel.backend,
                 member: member,
-                wakeText: "人类点击了这个未运行的 session，请恢复原 conversation 并继续待命。")
+                wakeText: "人类点击了这个未运行的 session，请恢复原 conversation 并继续待命。",
+                admissionPriority: .human)
             guard let run = sessionRunner.runs.first(where: {
                 $0.sessionId == member.sessionId && $0.status == .running
             }) else {
@@ -1005,7 +1006,8 @@ struct CrewSessionWindowView: View {
         // 按钮所在的成员列表模式里显出来，而不是只在终端模式 composer 里（点了像没反应）。
         sessionRunner.lastStartError = nil
         do {
-            try await sessionRunner.startCaptain(detail: detail, backend: appModel.backend)
+            try await sessionRunner.startCaptain(
+                detail: detail, backend: appModel.backend, userInitiated: true)
         } catch {
             sessionRunner.reportStartFailure(
                 crewId: detail.crew.id, brief: nil, error: error, mentionCaptain: false)

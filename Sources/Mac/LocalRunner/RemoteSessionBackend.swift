@@ -342,8 +342,12 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
     }
 
     func submitWake(_ text: String) async -> SessionWakeSubmission {
+        await submitWake(text, sourceKey: nil)
+    }
+
+    func submitWake(_ text: String, sourceKey: String?) async -> SessionWakeSubmission {
         guard !isCompacting, supportsCapability("wake-submit"), let client else { return .retry }
-        return await client.submitWake(sessionId: sessionId, text: text)
+        return await client.submitWake(sessionId: sessionId, text: text, sourceKey: sourceKey)
     }
 
     func interrupt() { sendRaw(kind == .terminal ? [0x03] : [0x1b]) }

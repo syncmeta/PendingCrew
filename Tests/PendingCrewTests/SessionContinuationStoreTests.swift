@@ -57,6 +57,18 @@ final class SessionContinuationStoreTests: XCTestCase {
         XCTAssertNil(SessionContinuationStore(directory: dir).takeReady(sessionId: "s"))
     }
 
+    func testReadyLeaseSurvivesAdmissionDeferralUntilBackendAcceptance() {
+        let dir = tempDir()
+        let first = SessionContinuationStore(directory: dir)
+        XCTAssertTrue(first.arm(crewId: "c", sessionId: "s", note: "保留原承诺"))
+        first.finishTurn(crewId: "c", sessionId: "s", outcome: .continuing)
+        guard let id = first.peekReady(sessionId: "s")?.id else { return XCTFail("missing lease") }
+        XCTAssertEqual(SessionContinuationStore(directory: dir).peekReady(sessionId: "s")?.id, id,
+                       "admission 暂缓或后端拒绝时仍须跨重启留约")
+        XCTAssertTrue(first.acknowledgeReady(id: id))
+        XCTAssertNil(SessionContinuationStore(directory: dir).peekReady(sessionId: "s"))
+    }
+
     func testMcpToolArmsAndStopHookSealsTheSameLease() {
         let dir = tempDir()
         let board = LocalWhiteboardStore(directory: dir)

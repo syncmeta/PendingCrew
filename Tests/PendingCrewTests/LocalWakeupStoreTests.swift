@@ -41,6 +41,17 @@ final class LocalWakeupStoreTests: XCTestCase {
         XCTAssertEqual(s.list().map(\.note), ["第一次"])
     }
 
+    func testLeaseIsReplacedOnlyAfterAcceptedWake() {
+        let dir = tempDir()
+        let store = LocalWakeupStore(directory: dir)
+        XCTAssertTrue(store.register(wakeup("a", note: "原约")))
+        XCTAssertEqual(LocalWakeupStore(directory: dir).list().first?.note, "原约",
+                       "admission 暂缓时原租约仍在盘上")
+        XCTAssertTrue(store.replace(wakeup("a", note: "受理后下一约")))
+        XCTAssertEqual(LocalWakeupStore(directory: dir).list().map(\.note), ["受理后下一约"])
+        XCTAssertFalse(store.replace(wakeup("missing")), "不可凭空造出下一约")
+    }
+
     func testPersistsAcrossInstances() {
         let dir = tempDir()
         _ = LocalWakeupStore(directory: dir).register(wakeup("a"))

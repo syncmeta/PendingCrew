@@ -38,6 +38,7 @@ enum CrewLocalMentionWakeLogic {
         let senderName: String
         /// 作者 session id —— 唤醒器据此排除「自己 @ 自己」的注入；system/relay 为 nil。
         let senderSessionId: String?
+        let isHuman: Bool
         /// false = 系统或人类条目，注入后不做延迟回执判定。系统免判防告警环；
         /// 人类短消息可能在采样前已经处理完，免判防误报。
         let trackReceipt: Bool
@@ -86,6 +87,7 @@ enum CrewLocalMentionWakeLogic {
                 messageText: e.agentText,
                 senderName: senderLabel(e),
                 senderSessionId: isSystem ? nil : e.senderSessionId,
+                isHuman: isHuman,
                 trackReceipt: !isSystem && !isHuman)
         }
     }

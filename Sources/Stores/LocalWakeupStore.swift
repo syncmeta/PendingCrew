@@ -102,12 +102,27 @@ final class LocalWakeupStore: @unchecked Sendable {
     /// 这里也必须过拒写闸（#577）：读不出来时 `loadLocked` 给的是空表，直接
     /// `filter + save` 就是拿空数组整写覆盖 —— 全部在途约定一次抹光，正是 #576
     /// 那道闸要拦的形态，而这条路径当初漏装了闸。
-    func remove(id: String, onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) {
+    @discardableResult
+    func remove(id: String, onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> Bool {
         withFileLock {
             let rows = loadLocked(onIncident: onIncident)
             guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(
-                rows, at: fileURL) else { return }
-            MultiProcessJSONStore.saveRowsLocked(rows.filter { $0.id != id }, to: fileURL)
+                rows, at: fileURL) else { return false }
+            return MultiProcessJSONStore.saveRowsLocked(rows.filter { $0.id != id }, to: fileURL) == nil
+        }
+    }
+
+    /// Replace only an existing lease. Used after an accepted wake or a safe
+    /// no-target retry; the old lease remains intact if the write fails.
+    @discardableResult
+    func replace(_ w: PendingWakeup,
+                 onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> Bool {
+        withFileLock {
+            var rows = loadLocked(onIncident: onIncident)
+            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL),
+                  let index = rows.firstIndex(where: { $0.id == w.id }) else { return false }
+            rows[index] = w
+            return MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil
         }
     }
 

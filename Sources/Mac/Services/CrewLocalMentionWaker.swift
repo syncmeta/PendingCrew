@@ -299,7 +299,8 @@ final class CrewLocalMentionWaker {
                 sourceKey: "whiteboard:" + d.entryId,
                 to: run,
                 payload: .whiteboardEntry(crewId: crewId, entryId: d.entryId),
-                renderNow: renderNow
+                renderNow: renderNow,
+                priority: d.isHuman ? .human : .automatic
             ) { baseline in
                 if d.trackReceipt {
                     runner.confirmWake(
@@ -336,15 +337,28 @@ final class CrewLocalMentionWaker {
                 if wake.needCaptain {
                     try await runner.startCaptain(
                         detail: detail, backend: backend,
-                        wakeText: wakeText, wakeEntryId: d.entryId)
+                        wakeText: wakeText, wakeEntryId: d.entryId,
+                        admissionPriority: d.isHuman ? .human : .automatic)
                 }
                 for sid in wake.sessionIds {
                     guard let m = members.first(where: { $0.sessionId == sid }) else { continue }
                     try await runner.restartMember(
                         detail: detail, backend: backend, member: m,
-                        wakeText: wakeText, wakeEntryId: d.entryId)
+                        wakeText: wakeText, wakeEntryId: d.entryId,
+                        admissionPriority: d.isHuman ? .human : .automatic)
                 }
             } catch {
+                if let runnerError = error as? CrewSessionRunner.RunnerError,
+                   case .automaticWakeDeferred = runnerError {
+                    // The whiteboard entry remains unread. Keep a retry alive while
+                    // this process runs; startup rescue handles an app restart.
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 30_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        self?.wakeAbsent(d, crewId: crewId)
+                    }
+                    return
+                }
                 // fail-loud：拉起失败落白板（system，不再 @ 防环），机长/人看得见。
                 LocalWhiteboardStore.shared.appendSessionMessage(
                     crewId: crewId, sessionId: "system",

@@ -164,7 +164,8 @@ enum SessionDaemonMain {
                     if isCaptain {
                         try await runner.startCaptain(
                             detail: detail, backend: model.backend,
-                            wakeText: string("wakeText"), openingBrief: string("brief"))
+                            wakeText: string("wakeText"), wakeEntryId: string("wakeEntryId"),
+                            openingBrief: string("brief"), userInitiated: bool("userInitiated"))
                     } else {
                         try await runner.startForBrief(
                             detail: detail, backend: model.backend,

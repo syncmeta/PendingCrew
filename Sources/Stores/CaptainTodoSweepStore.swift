@@ -71,6 +71,23 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         }
     }
 
+    /// Prepare a reminder without claiming delivery. The runner records its time
+    /// only after the backend accepts the wake; admission deferral leaves it due.
+    func reminder(crewId: String, snapshot: CaptainTodoSweep.LedgerSnapshot,
+                  now: Date) -> String? {
+        // A failed read of the sweep confirmation ledger must not turn an old
+        // confirmed batch into a fresh model turn every idle edge.
+        guard withFileLock(crewId, { !loadLocked(crewId).unreadable }) else { return nil }
+        let stored = row(crewId: crewId)
+        let decision = CaptainTodoSweep.decide(
+            open: snapshot, confirmation: stored.confirmation,
+            lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
+            unreadableStreak: stored.unreadableStreak ?? 0, now: now,
+            minimumInterval: CaptainTodoSweep.minimumRemindInterval)
+        if case let .remind(text) = decision { return text }
+        return nil
+    }
+
     /// 测试用：清掉进程内那份退路，模拟「进程重启了」。
     static func forgetInProcessMemoryForTesting() {
         rememberedReminded.removeAll()

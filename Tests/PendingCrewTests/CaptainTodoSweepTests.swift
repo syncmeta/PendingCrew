@@ -468,8 +468,9 @@ final class CaptainTodoSweepTests: XCTestCase {
             runner.contains("remindCaptainToSweepTodos("),
             "空闲钩子里没人调这套判定 —— 零件造好了没装到车上，机长永远不会被问账")
         XCTAssertTrue(
-            runner.contains("CaptainTodoSweepStore.shared.idleTick("),
-            "空闲钩子没走 idleTick —— 退避档位和记账都在那里面，绕开它就回到了按地板连环叫")
+            runner.contains("CaptainTodoSweepStore.shared.reminder(")
+                && runner.contains("CaptainTodoSweepStore.shared.recordReminded("),
+            "核账须先按退避判定，后端受理后才记提醒时刻")
         XCTAssertTrue(
             runner.contains("run.role == .captain"),
             "没限定只问机长 —— 这条是给机长的，不该去打扰 worker")
@@ -487,7 +488,7 @@ final class CaptainTodoSweepTests: XCTestCase {
         let runner = Self.identifiersOnly(try Self.text(of: "CrewSessionRunner.swift"))
         guard let idle = runner.range(of: "func runBecameIdle"),
               let sweep = runner.range(of: "remindCaptainToSweepTodos(", range: idle.upperBound..<runner.endIndex),
-              let continuation = runner.range(of: "continuationStore.takeReady", range: idle.upperBound..<runner.endIndex)
+              let continuation = runner.range(of: "continuationStore.peekReady", range: idle.upperBound..<runner.endIndex)
         else { return XCTFail("runBecameIdle 里的锚点找不齐 —— 先修测试") }
         XCTAssertLessThan(
             continuation.lowerBound, sweep.lowerBound,

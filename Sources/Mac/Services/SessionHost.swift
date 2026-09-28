@@ -658,8 +658,12 @@ final class SessionHost: ObservableObject {
                         }
                         if let run = captainRun {
                             if !run.backend.isBusy {
-                                run.send(CrewLocalMentionInjectLogic.renderInjection(
-                                    messageText: wake.text, senderName: wake.senderLabel))
+                                sessionRunner.deliverOrDeferWake(
+                                    sourceKey: "crew-report:\(wake.targetCrewId):"
+                                        + AutomaticWakeAdmission.fingerprint(wake.senderLabel + wake.text),
+                                    to: run,
+                                    text: CrewLocalMentionInjectLogic.renderInjection(
+                                        messageText: wake.text, senderName: wake.senderLabel))
                             }
                         } else {
                             Task {

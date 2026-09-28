@@ -122,6 +122,29 @@ final class SessionContinuationStore: @unchecked Sendable {
         }
     }
 
+    /// Look without consuming. Automatic wake admission and backend submission may
+    /// refuse a turn; the lease must survive either refusal and an app restart.
+    func peekReady(sessionId: String) -> Lease? {
+        withLock {
+            let rows = loadLocked()
+            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL)
+            else { return nil }
+            return rows.first { $0.sessionId == sessionId && $0.phase == .ready }
+        }
+    }
+
+    @discardableResult
+    func acknowledgeReady(id: String) -> Bool {
+        withLock {
+            var rows = loadLocked()
+            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL),
+                  let index = rows.firstIndex(where: { $0.id == id && $0.phase == .ready })
+            else { return false }
+            rows.remove(at: index)
+            return MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil
+        }
+    }
+
     private var fileURL: URL { directory.appendingPathComponent("session-continuations.json") }
 
     private func withLock<T>(_ body: () -> T) -> T {

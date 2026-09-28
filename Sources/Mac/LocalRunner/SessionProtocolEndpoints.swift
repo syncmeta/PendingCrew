@@ -55,6 +55,7 @@ final class SessionProtocolServer {
     private let daemonBuild: String
     private let startedAt: Double
     private var records: [String: Record] = [:]
+    private let wakeAdmission = AutomaticWakeAdmission()
     private var connections: [ObjectIdentifier: Connection] = [:]
     private var sessionByHandle: [UInt32: String] = [:]
     private var connectionByHandle: [UInt32: ObjectIdentifier] = [:]
@@ -448,8 +449,45 @@ final class SessionProtocolServer {
             guard let requestId = control.requestId,
                   case let .string(text)? = control.arguments["text"] else { return }
             Task { @MainActor [weak self, weak connection] in
+                guard let self else { return }
+                let summary = self.runSummaryProvider?(sessionId)
+                let sourceKey: String
+                if case let .string(key)? = control.arguments["sourceKey"] {
+                    sourceKey = key
+                } else {
+                    // Stable fallback for older viewers. Do not persist prompt text.
+                    sourceKey = "remote:" + AutomaticWakeAdmission.fingerprint(text)
+                }
+                let decision: AutomaticWakeAdmission.Decision
+                if let summary {
+                    decision = self.wakeAdmission.reserve(
+                        sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey)
+                } else if self.onOrchestrationRequest != nil {
+                    decision = .deferred("daemon 找不到目标 session 的 crew 身份")
+                } else {
+                    // The in-process protocol bridge has no orchestration roster;
+                    // its owning runner already admitted this request.
+                    decision = .allowed("priority:in-process")
+                }
+                guard case let .allowed(token) = decision else {
+                    if let summary, case let .deferred(reason) = decision,
+                       LedgerIncidentNoticeGate.shared.shouldEmit(
+                        key: "wake-admission|\(summary.crewId)|\(reason)") {
+                        LocalWhiteboardStore.shared.appendSessionMessage(
+                            crewId: summary.crewId, sessionId: "system",
+                            text: "自动唤醒已暂缓：\(reason)。原消息仍保留，稍后重试。",
+                            category: "error", senderName: "系统")
+                    }
+                    if let connection {
+                        self.send(.event(.init(kind: "wakeSubmitResult", requestId: requestId,
+                            fields: ["sessionId": .string(sessionId), "result": .string("retry")])),
+                            on: connection)
+                    }
+                    return
+                }
                 let result = await backend.submitWake(text)
-                guard let self, let connection else { return }
+                self.wakeAdmission.finish(token: token, accepted: result == .accepted)
+                guard let connection else { return }
                 self.send(.event(.init(
                     kind: "wakeSubmitResult", requestId: requestId,
                     fields: [
@@ -846,13 +884,15 @@ final class SessionProtocolClient {
         send(.control(.init(requestId: nil, op: op, arguments: arguments)))
     }
 
-    func submitWake(sessionId: String, text: String) async -> SessionWakeSubmission {
+    func submitWake(sessionId: String, text: String,
+                    sourceKey: String? = nil) async -> SessionWakeSubmission {
         let requestId = UUID().uuidString
         return await withCheckedContinuation { continuation in
             pendingWakes[requestId] = continuation
-            send(.control(.init(requestId: requestId, op: "submitWake", arguments: [
-                "sessionId": .string(sessionId), "text": .string(text),
-            ])))
+            var args: [String: SessionWireJSONValue] = [
+                "sessionId": .string(sessionId), "text": .string(text)]
+            if let sourceKey { args["sourceKey"] = .string(sourceKey) }
+            send(.control(.init(requestId: requestId, op: "submitWake", arguments: args)))
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 self?.pendingWakes.removeValue(forKey: requestId)?.resume(returning: .retry)
