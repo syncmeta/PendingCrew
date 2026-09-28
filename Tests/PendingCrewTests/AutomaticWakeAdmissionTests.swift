@@ -239,6 +239,7 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
                                         sourceKey: "trip", now: t, uptime: 100).isAllowed)
         }
         let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertEqual(reopened.knownCrew(sessionId: "captain-old"), "one")
         XCTAssertEqual(Set(reopened.stoppedSessions(crewId: "one") ?? []),
                        ["captain-old", "worker-old"])
         XCTAssertEqual(reopened.stoppedSessions(crewId: "two"), ["captain-other"])

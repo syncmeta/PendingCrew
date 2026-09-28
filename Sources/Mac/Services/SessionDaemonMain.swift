@@ -193,14 +193,31 @@ enum SessionDaemonMain {
             guard let target = run() else { return }
             runner.remove(target.runID)
         case SessionOrchestrationOp.sendText:
-            guard let target = run(), let text = string("text") else { return }
+            guard let sessionId = string("sessionId"), let text = string("text") else { return }
+            guard let target = run() else {
+                let id = UUID().uuidString
+                if let crewId = runner.retainAbsentExplicitText(text, id: id,
+                                                                sessionId: sessionId) {
+                    LocalWhiteboardStore.shared.appendSessionMessage(
+                        crewId: crewId, sessionId: "system",
+                        text: "旧版 viewer 的目标 session 已缺席；人工原文留在后台待发账本，尚未发送。请恢复目标后核对。",
+                        category: "error", senderName: "系统")
+                } else {
+                    log.write("旧版 viewer 输入目标缺席且身份/账本不可用；session=\(sessionId)，原文未获受理")
+                }
+                return
+            }
             Task { @MainActor in
-                let result = await runner.submitExplicitText(text, id: UUID().uuidString,
+                let id = UUID().uuidString
+                let result = await runner.submitExplicitText(text, id: id,
                                                              to: target)
                 if result != .accepted {
+                    let retained = runner.hasPendingExplicitText(id: id, crewId: target.crewId)
                     LocalWhiteboardStore.shared.appendSessionMessage(
                         crewId: target.crewId, sessionId: "system",
-                        text: "旧版 viewer 的人工输入未被后端确认，原文保留在后台待发账本；请更新界面并检查唤醒恢复告警。",
+                        text: retained
+                            ? "旧版 viewer 的人工输入未被后端确认，原文保留在后台待发账本；请更新界面并检查唤醒恢复告警。"
+                            : "旧版 viewer 的人工输入未被后端确认，且后台账本未能保存原文；请从原 viewer 重发并检查本机数据目录。",
                         category: "error", senderName: "系统")
                 }
             }

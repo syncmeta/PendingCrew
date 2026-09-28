@@ -1987,6 +1987,11 @@ final class CrewSessionRunner: ObservableObject {
 
     func submitExplicitText(_ text: String, id: String, to run: CrewSessionRun)
         async -> SessionWakeSubmission {
+        let pending = AutomaticWakeAdmission.PendingExplicitText(
+            id: id, sessionId: run.sessionId, crewId: run.crewId, text: text)
+        if !isViewer {
+            guard wakeAdmission.rememberExplicitText(pending) else { return .blocked }
+        }
         guard run.status == .running else { return .retry }
         let result: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
         if isViewer, let remote = run.backend as? RemoteSessionBackend {
@@ -1995,8 +2000,7 @@ final class CrewSessionRunner: ObservableObject {
             if receipt == .accepted { run.noteAcceptedHumanInput() }
             return receipt
         }
-        result = await wakeAdmission.performExplicitText(.init(
-            id: id, sessionId: run.sessionId, crewId: run.crewId, text: text),
+        result = await wakeAdmission.performExplicitText(pending,
             operation: { await run.backend.submitWake(text) })
         switch result {
         case .denied(let decision):
@@ -2019,6 +2023,28 @@ final class CrewSessionRunner: ObservableObject {
 
     func isAdmissionStoppedSession(_ sessionId: String, crewId: String) -> Bool {
         !isViewer && wakeAdmission.stoppedSessions(crewId: crewId)?.contains(sessionId) == true
+    }
+
+    func hasPendingExplicitText(id: String, crewId: String) -> Bool {
+        !isViewer && wakeAdmission.pendingExplicitText(crewId: crewId)?.contains {
+            $0.id == id
+        } == true
+    }
+
+    func retainAbsentExplicitText(_ text: String, id: String,
+                                  sessionId: String) -> String? {
+        guard !isViewer else { return nil }
+        let crewId = wakeAdmission.knownCrew(sessionId: sessionId)
+            ?? LocalCrewStore.shared.allCrewTitles().first(where: { crew in
+                LocalCrewStore.shared.sessionMembers(crewId: crew.id).contains {
+                    $0.sessionId == sessionId
+                }
+            })?.id
+        guard let crewId,
+              wakeAdmission.rememberExplicitText(.init(
+                id: id, sessionId: sessionId, crewId: crewId, text: text))
+        else { return nil }
+        return crewId
     }
 
     /// A viewer asks the owning daemon to recover. Only the owner writes the

@@ -324,7 +324,7 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(daemon.contains("case SessionOrchestrationOp.admissionRecovery:"))
         XCTAssertTrue(daemon.contains("runner.requestAdmissionRecovery(scope: scope, crewId: crewId)"),
                       "viewer recovery must be applied by the owning daemon, not claimed locally")
-        XCTAssertTrue(daemon.contains("runner.submitExplicitText(text, id: UUID().uuidString"),
+        XCTAssertTrue(daemon.contains("runner.submitExplicitText(text, id: id"),
                       "legacy daemon sendText must not bypass admission")
         XCTAssertTrue(endpoints.contains("submitExplicitInput(sessionId: sessionId"),
                       "protocol .input must not bypass admission")

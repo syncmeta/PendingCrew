@@ -333,6 +333,14 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         } ?? nil
     }
 
+    func knownCrew(sessionId: String) -> String? {
+        withLock {
+            guard let state = read() else { return nil }
+            return state.sessionCrewIds?[sessionId]
+                ?? state.events.last(where: { $0.sessionId == sessionId })?.crewId
+        } ?? nil
+    }
+
     /// Save the original human input before admission. A failed ledger write
     /// forbids sending, and a denied/failed backend receipt leaves it pending.
     @discardableResult
