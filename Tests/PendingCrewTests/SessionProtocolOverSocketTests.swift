@@ -11,6 +11,65 @@ import XCTest
 final class SessionProtocolOverSocketTests: XCTestCase {
     private let capabilities = ["screen-text", "terminal-bytes", "transcript-events"]
 
+    func testSocketWakeUsesOneAuthoritativeReservationAndRejectsAtMachineCap() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("socket-wake-budget-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        let pair = try UnixSocketTransport.makePair()
+        defer { pair.app.close(); pair.daemon.close() }
+        let wakeCapabilities = capabilities + ["wake-submit"]
+        let server = SessionProtocolServer(capabilities: wakeCapabilities,
+                                           wakeAdmission: gate)
+        server.runSummaryProvider = { _ in
+            .init(crewId: "socket-crew", role: "worker", title: "test", taskBrief: "test",
+                  workingDirectory: "/private/tmp", model: nil, effort: nil,
+                  pendingProfile: nil, approvalsReviewer: nil,
+                  permissionModeOverride: nil, startedAt: 0, runStatus: "running",
+                  exitCode: nil, exitReason: nil, awaitingReply: nil)
+        }
+        let backend = ProtocolTestBackend(kind: .codex)
+        backend.wakeResults = [.accepted, .retry]
+        server.register(sessionId: "socket-target", backend: backend)
+        let client = SessionProtocolClient(link: pair.app, capabilities: wakeCapabilities)
+        server.accept(link: pair.daemon)
+        client.connect()
+        for _ in 0..<100 where !client.negotiatedCapabilities.contains("wake-submit") {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard client.negotiatedCapabilities.contains("wake-submit") else {
+            return XCTFail("socket wake-submit handshake did not complete")
+        }
+        let remote = client.attach(sessionId: "socket-target", kind: .codex)
+        let accepted = await remote.submitWake("socket first", sourceKey: "socket:first")
+        let retried = await remote.submitWake("socket second", sourceKey: "socket:second")
+        XCTAssertEqual([accepted, retried], [.accepted, .retry])
+        XCTAssertEqual(backend.submittedWakes, ["socket first", "socket second"])
+        let beforeStop = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
+                                                  from: Data(contentsOf: gate.fileURL))
+        XCTAssertEqual(beforeStop.attempts?.filter { $0.sessionId == "socket-target" }.count, 2,
+                       "socket requests must reserve once, not at both ends")
+        XCTAssertEqual(beforeStop.events.filter { $0.sessionId == "socket-target" }.count, 1,
+                       "only the accepted backend receipt marks delivery")
+        for index in 0..<10 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "seed-\(index)",
+                sourceKey: "seed-\(index)") else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let blocked = await remote.submitWake("socket denied", sourceKey: "socket:denied")
+        XCTAssertEqual(blocked, .blocked)
+        let human = await remote.submitWake("original human text",
+                                            sourceKey: "explicit:socket-human",
+                                            explicitId: "socket-human")
+        XCTAssertEqual(human, .blocked)
+        XCTAssertEqual(gate.pendingExplicitText(crewId: "socket-crew")?.map(\.text),
+                       ["original human text"], "denied human text stays recoverable")
+        let emergency = await remote.submitWake("urgent", sourceKey: "socket:urgent",
+                                                priority: .emergency)
+        XCTAssertEqual(emergency, .blocked, "emergency still obeys the machine hard cap")
+        XCTAssertEqual(backend.submittedWakes, ["socket first", "socket second"])
+    }
+
     /// The production viewer uses this tracker after a local daemon link closes.
     /// Two real socket handshakes exercise hello ordering and one-shot delivery.
     func testDaemonReconnectOfferAcrossSocketHellos() throws {
