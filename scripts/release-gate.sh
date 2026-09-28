@@ -140,7 +140,9 @@ before_diff=$(git -C "$WT" status --porcelain -uall | shasum | cut -c1-12)
 rm -rf "$WT/.test-data-root"
 # ─────────────────────────────────────────────────────────────────────────
 
-xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' -derivedDataPath "$DD" test  > "$LOG"/t-mac.log 2>&1 || true
+# 这一整类含会触发 macOS「App 已损坏」提示的真进程夹具；发版闸门
+# 明确排除整类。其余测试仍按同一口径执行，汇总时把该排除列为限制。
+xcodebuild -project "$WT/PendingCrew.xcodeproj" -scheme PendingCrew -destination 'platform=macOS' -derivedDataPath "$DD" -skip-testing:PendingCrewTests/HelperBuildPerMemberTests test > "$LOG"/t-mac.log 2>&1 || true
 # 归档 xcresult。**必须紧跟在 test 后面**：下面两趟 build 要是挂住或被人打断，
 # 这一趟的失败用例名也已经落盘了。照 scripts/test-mac.sh 的形状（带时间戳的名字），
 # 不发明第二种 —— 同一个 commit 跑第二趟不会把第一趟的现场盖掉。
