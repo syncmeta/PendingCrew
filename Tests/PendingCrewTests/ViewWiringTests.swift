@@ -288,8 +288,8 @@ final class ViewWiringTests: XCTestCase {
         let outbound = try Self.text(of: "CrewDeferredWakeQueue.swift")
         XCTAssertTrue(outbound.contains("admission.performSend("),
                       "direct backend submit must execute inside durable admission")
-        XCTAssertTrue(runner.contains("wakeAdmission.performLaunch("),
-                      "real process launch must execute inside durable admission")
+        XCTAssertTrue(runner.contains("CrewSessionLaunchAdmission.perform("),
+                      "Runner.start must call the testable production launch gate")
         XCTAssertFalse(runner.contains("run.backend.send(input)"),
                        "agent nudge text must not bypass durable admission")
         XCTAssertTrue(outbound.contains("await backend.submitWake(text)"),
@@ -326,7 +326,7 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(waker.contains("guard progress.process("),
                       "scan must not consume its cursor when durable debt registration fails")
         let daemon = try Self.text(of: "SessionDaemonMain.swift")
-        let launchGate = try XCTUnwrap(runner.range(of: "wakeAdmission.performLaunch("))
+        let launchGate = try XCTUnwrap(runner.range(of: "CrewSessionLaunchAdmission.perform("))
         let backendStart = try XCTUnwrap(runner.range(of: "let cliLease = config.kind.isAgent"))
         XCTAssertLessThan(launchGate.lowerBound, backendStart.lowerBound,
                           "Runner.start must admit before constructing or launching a backend")

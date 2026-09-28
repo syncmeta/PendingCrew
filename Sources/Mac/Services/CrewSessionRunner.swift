@@ -1667,11 +1667,10 @@ final class CrewSessionRunner: ObservableObject {
         userInitiated: Bool = false,
         admissionPriority: AutomaticWakeAdmission.Priority = .automatic
     ) async throws {
-        let launchSource = role == .captain ? "launch:captain:\(crewId)"
-                                            : "launch:member:\(sessionId)"
-        let launchRecorded = try await wakeAdmission.performLaunch(
-            sessionId: sessionId, crewId: crewId, sourceKey: launchSource,
-            priority: userInitiated || !config.kind.isAgent ? .human : admissionPriority,
+        let launchRecorded = try await CrewSessionLaunchAdmission.perform(
+            admission: wakeAdmission, sessionId: sessionId, crewId: crewId,
+            isCaptain: role == .captain, isAgent: config.kind.isAgent,
+            userInitiated: userInitiated, requestedPriority: admissionPriority,
             deniedError: { launchDecision in
                 if let reason = launchDecision.reason {
                 let key = "wake-admission-launch|\(crewId)|\(reason)"

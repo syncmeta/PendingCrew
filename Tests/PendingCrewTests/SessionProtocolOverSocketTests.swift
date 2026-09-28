@@ -20,13 +20,14 @@ final class SessionProtocolOverSocketTests: XCTestCase {
         let wakeCapabilities = capabilities + ["wake-submit"]
         let server = SessionProtocolServer(capabilities: wakeCapabilities,
                                            wakeAdmission: gate)
-        server.runSummaryProvider = { _ in
+        let summaryProvider: (String) -> SessionRunSummary? = { _ in
             .init(crewId: "socket-crew", role: "worker", title: "test", taskBrief: "test",
                   workingDirectory: "/private/tmp", model: nil, effort: nil,
                   pendingProfile: nil, approvalsReviewer: nil,
                   permissionModeOverride: nil, startedAt: 0, runStatus: "running",
                   exitCode: nil, exitReason: nil, awaitingReply: nil)
         }
+        server.runSummaryProvider = summaryProvider
         let backend = ProtocolTestBackend(kind: .codex)
         backend.wakeResults = [.accepted, .retry]
         server.register(sessionId: "socket-target", backend: backend)
@@ -50,6 +51,12 @@ final class SessionProtocolOverSocketTests: XCTestCase {
                        "socket requests must reserve once, not at both ends")
         XCTAssertEqual(beforeStop.events.filter { $0.sessionId == "socket-target" }.count, 1,
                        "only the accepted backend receipt marks delivery")
+        server.runSummaryProvider = nil
+        let unidentified = await remote.submitWake("without crew identity",
+                                                    sourceKey: "socket:unidentified")
+        XCTAssertEqual(unidentified, .blocked, "socket daemon must fail closed on missing roster")
+        XCTAssertEqual(backend.submittedWakes, ["socket first", "socket second"])
+        server.runSummaryProvider = summaryProvider
         for index in 0..<10 {
             guard case let .allowed(token) = gate.reserve(
                 sessionId: "seed-\(index)", crewId: "seed-\(index)",

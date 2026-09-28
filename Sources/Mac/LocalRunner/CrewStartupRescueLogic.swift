@@ -73,4 +73,24 @@ enum CrewStartupRescueLogic {
         }
     }
 }
+
+/// The first executable step of CrewSessionRunner.start. Keep the source key,
+/// human priority decision and reservation together so absent captain/member
+/// launch refusals can be tested without constructing a backend or process.
+enum CrewSessionLaunchAdmission {
+    static func perform(admission: AutomaticWakeAdmission,
+                        sessionId: String, crewId: String, isCaptain: Bool,
+                        isAgent: Bool, userInitiated: Bool,
+                        requestedPriority: AutomaticWakeAdmission.Priority,
+                        deniedError: (AutomaticWakeAdmission.Decision) -> Error,
+                        operation: () async throws -> Void) async throws -> Bool {
+        let sourceKey = isCaptain ? "launch:captain:\(crewId)"
+                                  : "launch:member:\(sessionId)"
+        let priority: AutomaticWakeAdmission.Priority =
+            userInitiated || !isAgent ? .human : requestedPriority
+        return try await admission.performLaunch(
+            sessionId: sessionId, crewId: crewId, sourceKey: sourceKey,
+            priority: priority, deniedError: deniedError, operation: operation)
+    }
+}
 #endif

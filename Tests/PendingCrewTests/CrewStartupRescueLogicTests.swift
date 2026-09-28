@@ -10,6 +10,79 @@ import XCTest
 /// 「消息留待重投」被随后的重启抹掉）。
 final class CrewStartupRescueLogicTests: XCTestCase {
 
+    func testProductionLaunchGateRejectsAbsentCaptainAndMemberBeforeProcessAcrossRestart()
+        async throws {
+        enum LaunchError: Error { case denied }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runner-launch-denial-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)") else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        var constructed = 0
+        for isCaptain in [true, false] {
+            let reopened = AutomaticWakeAdmission(directory: directory)
+            do {
+                _ = try await CrewSessionLaunchAdmission.perform(
+                    admission: reopened, sessionId: isCaptain ? "captain-1" : "member-1",
+                    crewId: "launch-crew", isCaptain: isCaptain, isAgent: true,
+                    userInitiated: false, requestedPriority: .automatic,
+                    deniedError: { _ in LaunchError.denied },
+                    operation: { constructed += 1 })
+                XCTFail("machine stop must reject before backend construction")
+            } catch LaunchError.denied { }
+        }
+        XCTAssertEqual(constructed, 0,
+                       "neither absent-target launch may enter its process body")
+    }
+
+    func testProductionLaunchGatePreservesExplicitHumanPriorityAndRealAcceptance()
+        async throws {
+        enum LaunchError: Error { case failed, denied }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runner-launch-priority-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        var constructed = 0
+        for _ in 0..<2 {
+            do {
+                _ = try await CrewSessionLaunchAdmission.perform(
+                    admission: gate, sessionId: "member-1", crewId: "launch-crew",
+                    isCaptain: false, isAgent: true, userInitiated: false,
+                    requestedPriority: .automatic,
+                    deniedError: { _ in LaunchError.denied },
+                    operation: { constructed += 1; throw LaunchError.failed })
+                XCTFail("fake backend must fail")
+            } catch LaunchError.failed { }
+        }
+        do {
+            _ = try await CrewSessionLaunchAdmission.perform(
+                admission: gate, sessionId: "member-1", crewId: "launch-crew",
+                isCaptain: false, isAgent: true, userInitiated: false,
+                requestedPriority: .automatic,
+                deniedError: { _ in LaunchError.denied },
+                operation: { constructed += 1 })
+            XCTFail("third automatic launch must be refused")
+        } catch LaunchError.denied { }
+        XCTAssertEqual(constructed, 2)
+        let recorded = try await CrewSessionLaunchAdmission.perform(
+            admission: gate, sessionId: "member-1", crewId: "launch-crew",
+            isCaptain: false, isAgent: true, userInitiated: true,
+            requestedPriority: .automatic,
+            deniedError: { _ in LaunchError.denied },
+            operation: { constructed += 1 })
+        XCTAssertTrue(recorded)
+        XCTAssertEqual(constructed, 3)
+        let state = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
+                                              from: Data(contentsOf: gate.fileURL))
+        XCTAssertEqual(state.events.filter { $0.sessionId == "member-1" }
+            .map(\.sourceKey), ["launch:member:member-1"])
+        XCTAssertEqual(state.attempts?.filter { $0.sessionId == "member-1" }.count, 3,
+                       "two failed starts and one accepted human start each use one budget slot")
+    }
+
     private let now = Date(timeIntervalSince1970: 1_788_000_000)
     private func iso(_ d: Date) -> String { ISO8601DateFormatter().string(from: d) }
 
