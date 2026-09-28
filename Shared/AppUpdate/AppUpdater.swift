@@ -16,6 +16,9 @@ final class AppUpdater: NSObject, ObservableObject {
     /// 忙判定注入点：PendingCrew 在 MacRootView 注入「有 session 在跑」；
     /// PendingBot 不注入（nil = 永不忙）。见 UpdateCheckGate。
     var isBusy: (() -> Bool)?
+    /// Host app can distinguish an installer-requested relaunch from user Quit.
+    var onWillInstallUpdate: (() -> Void)?
+    var onDidAbortUpdate: (() -> Void)?
 
     @Published private(set) var canCheckForUpdates = false
     let isConfigured: Bool
@@ -44,6 +47,14 @@ final class AppUpdater: NSObject, ObservableObject {
 }
 
 extension AppUpdater: SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        onWillInstallUpdate?()
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        onDidAbortUpdate?()
+    }
+
     /// 每次检查前 Sparkle 都来问；抛错 = 这次不查（Sparkle 稍后自动重试）。
     /// `.updates` 是人手点的，永远放行；后台定时检查看忙不忙。
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {

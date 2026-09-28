@@ -73,6 +73,54 @@ enum DaemonStopOutcome: Equatable {
     }
 }
 
+/// The GUI quit decision shares the same identity-checked stop path as --daemon-stop.
+/// Keeping the decision here lets the standalone test bundle exercise it without AppKit.
+enum AppQuitDaemonPolicy {
+    enum Reason { case explicitQuit, windowClosed, sparkleInstall }
+    enum Decision: Equatable {
+        case allowTermination
+        case cancelTermination
+        case stopFailed(String)
+    }
+
+    static func evaluate(reason: Reason, runningSessionCount: Int,
+                         confirmInterruption: (Int) -> Bool,
+                         stopDaemon: () -> DaemonStopOutcome) -> Decision {
+        guard case .explicitQuit = reason else { return .allowTermination }
+        if runningSessionCount > 0 && !confirmInterruption(runningSessionCount) {
+            return .cancelTermination
+        }
+        let outcome = stopDaemon()
+        return outcome.isSuccess ? .allowTermination : .stopFailed(outcome.text)
+    }
+
+    /// A viewer may have spawned the daemon before it acquired the lock. A
+    /// lock-only .none result during that window is not proof it will stay gone.
+    static func stopAfterPendingLaunch(
+        pendingLaunch: (() -> DaemonLaunchRace.ChildState)?,
+        presence: () -> SessionOrchestratorLock.Presence,
+        stopDaemon: () -> DaemonStopOutcome,
+        now: () -> Date = Date.init,
+        tick: () -> Void = { usleep(100_000) },
+        timeout: TimeInterval = ViewerLaunchWait.timeout
+    ) -> DaemonStopOutcome {
+        guard let pendingLaunch else { return stopDaemon() }
+        let deadline = now().addingTimeInterval(timeout)
+        while now() < deadline {
+            switch presence() {
+            case .none:
+                if case .exited = pendingLaunch() { return stopDaemon() }
+            case .held, .heldByUnknown, .undecidable:
+                return stopDaemon()
+            }
+            tick()
+        }
+        return .refused("本机后台仍在启动，无法确认它退出后不会继续运行。请稍后重试退出。")
+    }
+
+    private enum ViewerLaunchWait { static let timeout: TimeInterval = 15 }
+}
+
 /// 停用动作本体。三个系统调用（探锁 / `kill` / 再探锁）全部走注入点，
 /// 于是「停不掉时报什么」这件事进得了单测 —— 不需要真的起一个 daemon 再打死它。
 struct DaemonStopper {
@@ -142,11 +190,20 @@ struct DaemonStopper {
 
     private func terminate(_ holder: SessionOrchestratorLock.Holder) -> DaemonStopOutcome {
         let pid = holder.pid
+        // A lock record alone is not authority to signal a PID: it may have been
+        // replaced before this call. Fail closed if the recorded process vanished.
+        if processIsGone(holder) {
+            return .refused("锁仍被占用，但记录的后台进程 pid \(pid) 身份已改变；没有向复用的 PID 发信号。")
+        }
         let code = sendTerm(pid)
         if code != 0 {
             if code == ESRCH {
-                // 刚才还在，发信号时已经没了 —— 期望状态成立。
-                return .alreadyStopped("PendingCrew 后台进程已经退出。")
+                // The process may be gone while a new owner already holds the
+                // lock. Do not claim the desired state from ESRCH alone.
+                if case .none = presence() {
+                    return .alreadyStopped("PendingCrew 后台进程已经退出。")
+                }
+                return .refused("pid \(pid) 已不存在，但本机编排锁仍被占用；没有确认后台停止。")
             }
             return .refused("发信号给 pid \(pid) 失败：\(String(cString: strerror(code)))")
         }
@@ -156,7 +213,7 @@ struct DaemonStopper {
             switch presence() {
             case .none:
                 lockIsFree = true
-            case let .held(other) where other.pid != pid:
+            case let .held(other) where other != holder:
                 lockIsFree = true              // 锁已经换人，那个 daemon 放手了
             case .held, .heldByUnknown:
                 break                          // 还在收尾，继续等

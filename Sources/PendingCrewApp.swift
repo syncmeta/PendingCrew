@@ -11,6 +11,9 @@ enum PendingCrewLinks {
 /// `--mcp-hook` 时本进程当 crew-comms helper 跑（re-exec self，spec local-first
 /// chunk 4：app 二进制兼当 MCP server/hook，最自包含、免 embed），否则起 GUI。
 struct PendingCrewApp: App {
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(PendingCrewApplicationDelegate.self) private var applicationDelegate
+    #endif
     @StateObject private var model: AppModel
     @StateObject private var crewStore: CrewStore
     #if os(macOS)
@@ -39,6 +42,12 @@ struct PendingCrewApp: App {
         // 对齐 PendingBotApp.swift 的同款 init 接线。
         MainActor.assumeIsolated {
             _ = AppUpdater.shared
+            AppUpdater.shared.onWillInstallUpdate = {
+                AppQuitLifecycle.shared.sparkleInstalling = true
+            }
+            AppUpdater.shared.onDidAbortUpdate = {
+                AppQuitLifecycle.shared.sparkleInstalling = false
+            }
         }
         #endif
     }
@@ -118,6 +127,83 @@ struct PendingCrewApp: App {
         #endif
     }
 }
+
+#if os(macOS)
+/// Only an actual AppKit termination request enters this path. Closing a WindowGroup
+/// window leaves the MenuBarExtra and viewer connection running.
+@MainActor
+final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var waitingForDaemon = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let lifecycle = AppQuitLifecycle.shared
+        if lifecycle.sparkleInstalling { return .terminateNow }
+        if waitingForDaemon { return .terminateLater }
+
+        let count = lifecycle.runningSessionCount?() ?? 0
+        if count != 0 {
+            let alert = NSAlert()
+            alert.messageText = "退出 PendingCrew 会停止正在运行的 session"
+            alert.informativeText = count > 0
+                ? "当前记录有 \(count) 个 session。退出后本机后台和它管理的 agent 会停止。"
+                : "无法读取本机后台的 session 数量。退出会停止本机后台和它管理的 agent。"
+            alert.addButton(withTitle: "退出并停止")
+            alert.addButton(withTitle: "取消")
+            if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
+        }
+
+        waitingForDaemon = true
+        let pendingLaunch = lifecycle.pauseViewer?()
+        let dataRoot = PendingCrewDaemonPaths.standard().lock.deletingLastPathComponent()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let decision = AppQuitDaemonPolicy.evaluate(
+                reason: .explicitQuit, runningSessionCount: 0,
+                confirmInterruption: { _ in true },
+                stopDaemon: {
+                    // In explicit inproc mode the GUI itself owns this lock;
+                    // its willTerminate observer drains those runs.
+                    if case let .held(holder) = SessionOrchestratorLock.presence(dataRoot: dataRoot),
+                       holder.kind == "app", holder.pid == getpid() {
+                        return .alreadyStopped("本机没有独立后台进程。")
+                    }
+                    return AppQuitDaemonPolicy.stopAfterPendingLaunch(
+                        pendingLaunch: pendingLaunch,
+                        presence: { SessionOrchestratorLock.presence(dataRoot: dataRoot) },
+                        stopDaemon: { DaemonStopper(dataRoot: dataRoot).stop() })
+                })
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.waitingForDaemon = false
+                switch decision {
+                case .allowTermination:
+                    sender.reply(toApplicationShouldTerminate: true)
+                case .cancelTermination:
+                    lifecycle.resumeViewer?()
+                    sender.reply(toApplicationShouldTerminate: false)
+                case let .stopFailed(message):
+                    lifecycle.resumeViewer?()
+                    let alert = NSAlert()
+                    alert.messageText = "未能确认本机后台已经停止"
+                    alert.informativeText = message
+                    alert.addButton(withTitle: "留在 PendingCrew")
+                    alert.runModal()
+                    sender.reply(toApplicationShouldTerminate: false)
+                }
+            }
+        }
+        return .terminateLater
+    }
+}
+
+@MainActor
+final class AppQuitLifecycle {
+    static let shared = AppQuitLifecycle()
+    var sparkleInstalling = false
+    var runningSessionCount: (() -> Int)?
+    var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
+    var resumeViewer: (() -> Void)?
+}
+#endif
 
 #if os(macOS)
 /// 放在 App 菜单「关于 PendingCrew」下方；观察 updater 才能在 Sparkle 启动完成后

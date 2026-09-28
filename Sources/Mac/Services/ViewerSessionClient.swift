@@ -76,6 +76,12 @@ final class ViewerSessionClient: ObservableObject {
 
     var connectedDaemonPID: Int32? { isConnected ? lastHello?.pid : nil }
 
+    /// A launched child can still be acquiring its lock when the user quits.
+    /// The quit path captures this probe before stop() cancels reconnection.
+    var pendingDaemonLaunchProbe: (() -> DaemonLaunchRace.ChildState)? {
+        raceStartedAt == nil ? nil : lastSpawnedChild
+    }
+
     init(runner: CrewSessionRunner,
          paths: PendingCrewDaemonPaths? = nil,
          selection: BackendRegistry.Selection? = nil,
