@@ -116,7 +116,7 @@ enum CrewWakeOutbound {
         }
         return await admission.performSend(
             sessionId: sessionId, crewId: crewId, sourceKey: sourceKey,
-            priority: priority, isAccepted: { $0 == .accepted },
+            priority: priority, isAccepted: { $0 == SessionWakeSubmission.accepted },
             operation: { await backend.submitWake(text) })
     }
 }

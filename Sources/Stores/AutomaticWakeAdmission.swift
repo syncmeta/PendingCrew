@@ -445,7 +445,7 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         }
         let result = await performSend(sessionId: item.sessionId, crewId: item.crewId,
                                        sourceKey: "explicit:\(item.id)", priority: .human,
-                                       isAccepted: { $0 == .accepted }, operation: operation)
+                                       isAccepted: { $0 == SessionWakeSubmission.accepted }, operation: operation)
         if case let .attempted(.accepted, recorded) = result, recorded {
             _ = acknowledgeExplicitText(id: item.id)
         }

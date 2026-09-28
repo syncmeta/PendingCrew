@@ -386,7 +386,7 @@ final class SessionProtocolServer {
             let outcome = await self.wakeAdmission.performSend(
                 sessionId: sessionId, crewId: summary.crewId,
                 sourceKey: "terminal-control:\(UUID().uuidString)", priority: .human,
-                isAccepted: { $0 == .accepted }, operation: {
+                isAccepted: { $0 == SessionWakeSubmission.accepted }, operation: {
                     guard backend.status == .running,
                           let terminal = backend as? SessionProtocolTerminalControlling
                     else { return SessionWakeSubmission.retry }
@@ -540,7 +540,7 @@ final class SessionProtocolServer {
                         outcome = await self.wakeAdmission.performSend(
                             sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey,
                             priority: priority,
-                            isAccepted: { $0 == .accepted },
+                            isAccepted: { $0 == SessionWakeSubmission.accepted },
                             operation: { await backend.submitWake(text) })
                     }
                 } else {

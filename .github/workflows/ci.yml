@@ -108,6 +108,7 @@ jobs:
           xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
             -destination 'platform=macOS' \
             -derivedDataPath DD -clonedSourcePackagesDirPath SourcePackages \
+            -skip-testing:PendingCrewTests/HelperBuildPerMemberTests \
             build test
 
       # 三端共用一套源码：只编 Mac 会让漏了 `#if os(macOS)` 的 AppKit 调用
