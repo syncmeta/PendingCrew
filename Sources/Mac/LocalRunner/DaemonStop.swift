@@ -76,7 +76,15 @@ enum DaemonStopOutcome: Equatable {
 /// The GUI quit decision shares the same identity-checked stop path as --daemon-stop.
 /// Keeping the decision here lets the standalone test bundle exercise it without AppKit.
 enum AppQuitDaemonPolicy {
-    enum Reason { case explicitQuit, windowClosed, sparkleInstall }
+    enum Reason: Equatable { case explicitQuit, windowClosed, sparkleInstall }
+    static func isExplicitDockQuit(senderBundleIdentifier: String?) -> Bool {
+        senderBundleIdentifier == "com.apple.dock"
+    }
+    static func resolveReason(sparkleInstalling: Bool,
+                              userRequestedQuit: Bool) -> Reason {
+        if userRequestedQuit { return .explicitQuit }
+        return sparkleInstalling ? .sparkleInstall : .explicitQuit
+    }
     enum Decision: Equatable {
         case allowTermination
         case cancelTermination
@@ -214,7 +222,7 @@ struct DaemonStopper {
             case .none:
                 lockIsFree = true
             case let .held(other) where other != holder:
-                lockIsFree = true              // 锁已经换人，那个 daemon 放手了
+                return .refused("原后台 pid \(pid) 已放锁，但另一个进程 pid \(other.pid) 正在管理本机；没有确认后台停止。")
             case .held, .heldByUnknown:
                 break                          // 还在收尾，继续等
             case let .undecidable(detail):

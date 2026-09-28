@@ -80,6 +80,13 @@ struct PendingCrewApp: App {
         }
         .commands {
             PendingCrewUpdateCommands()
+            CommandGroup(replacing: .appTermination) {
+                Button("退出 PendingCrew") {
+                    AppQuitLifecycle.shared.userRequestedQuit = true
+                    NSApp.terminate(nil)
+                }
+                .keyboardShortcut("q", modifiers: .command)
+            }
             CommandGroup(replacing: .help) {
                 Button("PendingCrew 帮助") {
                     NSWorkspace.shared.open(PendingCrewLinks.helpDocumentation)
@@ -137,8 +144,12 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let lifecycle = AppQuitLifecycle.shared
-        if lifecycle.sparkleInstalling { return .terminateNow }
         if waitingForDaemon { return .terminateLater }
+        let reason = AppQuitDaemonPolicy.resolveReason(
+            sparkleInstalling: lifecycle.sparkleInstalling,
+            userRequestedQuit: lifecycle.userRequestedQuit || lifecycle.isSystemQuitEvent)
+        lifecycle.userRequestedQuit = false
+        if reason == .sparkleInstall { return .terminateNow }
 
         let count = lifecycle.runningSessionCount?() ?? 0
         if count != 0 {
@@ -199,6 +210,18 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
 final class AppQuitLifecycle {
     static let shared = AppQuitLifecycle()
     var sparkleInstalling = false
+    var userRequestedQuit = false
+    /// Both Dock and Sparkle's installer send aevt/quit. Attribute `spid`
+    /// identifies the sender; only Dock is an explicit user Quit here.
+    var isSystemQuitEvent: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        guard event.eventClass == 0x61657674, event.eventID == 0x71756974,
+              let senderPID = event.attributeDescriptor(forKeyword: 0x73706964)?.int32Value else {
+            return false
+        }
+        let senderBundle = NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier
+        return AppQuitDaemonPolicy.isExplicitDockQuit(senderBundleIdentifier: senderBundle)
+    }
     var runningSessionCount: (() -> Int)?
     var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
     var resumeViewer: (() -> Void)?

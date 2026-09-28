@@ -22,7 +22,13 @@ final class DaemonStopTests: XCTestCase {
         XCTAssertTrue(host.contains("AppQuitLifecycle.shared.pauseViewer"))
         XCTAssertTrue(app.contains("lifecycle.pauseViewer?()"))
         XCTAssertTrue(updater.contains("func updater(_ updater: SPUUpdater, willInstallUpdate"))
-        XCTAssertTrue(app.contains("lifecycle.sparkleInstalling { return .terminateNow }"))
+        XCTAssertTrue(app.contains("CommandGroup(replacing: .appTermination)"))
+        XCTAssertTrue(app.contains("AppQuitLifecycle.shared.userRequestedQuit = true"))
+        XCTAssertTrue(app.contains("lifecycle.isSystemQuitEvent"))
+        XCTAssertTrue(app.contains("attributeDescriptor(forKeyword: 0x73706964)"))
+        XCTAssertTrue(app.contains("AppQuitDaemonPolicy.isExplicitDockQuit"))
+        XCTAssertTrue(app.contains("AppQuitDaemonPolicy.resolveReason("))
+        XCTAssertTrue(app.contains("if reason == .sparkleInstall { return .terminateNow }"))
     }
 
     func testExplicitQuitWarnsAboutRunningSessionsThenStopsLocalDaemon() {
@@ -43,6 +49,22 @@ final class DaemonStopTests: XCTestCase {
                 stopDaemon: { XCTFail("unexpected daemon stop"); return .stopped(pid: 42) })
             XCTAssertEqual(decision, .allowTermination)
         }
+    }
+
+    func testInstallationMarkerBeforeExplicitQuitStillRequiresDaemonStop() {
+        XCTAssertEqual(
+            AppQuitDaemonPolicy.resolveReason(
+                sparkleInstalling: true, userRequestedQuit: true),
+            .explicitQuit)
+        XCTAssertEqual(
+            AppQuitDaemonPolicy.resolveReason(
+                sparkleInstalling: true, userRequestedQuit: false),
+            .sparkleInstall)
+        XCTAssertTrue(AppQuitDaemonPolicy.isExplicitDockQuit(
+            senderBundleIdentifier: "com.apple.dock"))
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
+            senderBundleIdentifier: "org.sparkle-project.Sparkle.InstallerProgress"))
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(senderBundleIdentifier: nil))
     }
 
     func testQuitCancellationAndUnreachableOrStuckDaemonNeverClaimSuccess() {
@@ -165,6 +187,17 @@ final class DaemonStopTests: XCTestCase {
         // mismatch would. The lock still appears held: another process owns it.
         XCTAssertEqual(signals, [])
         XCTAssertFalse(outcome.isSuccess)
+    }
+
+    func testReplacementLockHolderDoesNotCountAsStopped() {
+        var signals: [Int32] = []
+        let old = holder(kind: "daemon", pid: 111)
+        let replacement = holder(kind: "daemon", pid: 222)
+        let outcome = stopper([.held(old), .held(replacement)],
+                              signals: &signals, timeout: 0.2).stop()
+        XCTAssertEqual(signals, [111])
+        XCTAssertFalse(outcome.isSuccess,
+                       "old daemon left, but another daemon still owns the lock")
     }
 
     // MARK: - 绝不许报成功的几种情形
