@@ -59,6 +59,14 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         let targetId: String
     }
 
+    struct PendingExplicitText: Codable, Hashable {
+        let id: String
+        let sessionId: String
+        let crewId: String
+        let text: String
+        var rawBytes: [UInt8]? = nil
+    }
+
     enum RecoveryScope: Codable, Hashable {
         case session(String)
         case crew(String)
@@ -98,7 +106,12 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         var hardStoppedCrews: Set<String>? = nil
         var hardStoppedMachine: Bool? = nil
         var pendingWhiteboard: Set<PendingWhiteboard>? = nil
+        var pendingExplicitText: [String: PendingExplicitText]? = nil
+        var acceptedExplicitTextDigests: [String: String]? = nil
         var recoveryRecords: [RecoveryRecord]? = nil
+        /// Needed to recover a stopped session after its short windows expire.
+        var sessionCrewIds: [String: String]? = nil
+        var sessionLastAttemptAt: [String: TimeInterval]? = nil
         /// Backend accepted, but the source lease has not yet been acknowledged.
         /// Kept separately from the rate window so a restart never resubmits it.
         var acceptedLeases: Set<String> = []
@@ -135,6 +148,11 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             }
             advanceClock(&state, wall: now.timeIntervalSince1970, uptime: uptime)
             let clock = state.logicalNow
+            state.sessionCrewIds = (state.sessionCrewIds ?? [:]).merging([sessionId: crewId]) {
+                _, newest in newest
+            }
+            state.sessionLastAttemptAt = (state.sessionLastAttemptAt ?? [:]).merging(
+                [sessionId: clock]) { _, newest in newest }
             if state.attempts == nil {
                 state.attempts = state.events.map {
                     Attempt(token: $0.token, sessionId: $0.sessionId,
@@ -298,6 +316,87 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         } ?? nil
     }
 
+    /// nil is an unreadable ledger. A stopped captain can be selected through
+    /// its logical crew role; resolve exactly one real latched session ID here.
+    func stoppedSessions(crewId: String) -> [String]? {
+        withLock {
+            guard let state = read() else { return nil }
+            let knownCrews = state.sessionCrewIds ?? Dictionary(
+                state.events.map { ($0.sessionId, $0.crewId) },
+                uniquingKeysWith: { _, newest in newest })
+            return (state.hardStoppedSessions ?? []).filter { knownCrews[$0] == crewId }
+                .sorted {
+                    let times = state.sessionLastAttemptAt ?? [:]
+                    let left = times[$0] ?? 0, right = times[$1] ?? 0
+                    return left != right ? left > right : $0 < $1
+                }
+        } ?? nil
+    }
+
+    /// Save the original human input before admission. A failed ledger write
+    /// forbids sending, and a denied/failed backend receipt leaves it pending.
+    @discardableResult
+    func rememberExplicitText(_ item: PendingExplicitText) -> Bool {
+        withLock {
+            guard var state = read() else { return false }
+            if let accepted = state.acceptedExplicitTextDigests?[item.id],
+               accepted != Self.explicitDigest(item) { return false }
+            if let old = state.pendingExplicitText?[item.id], old != item { return false }
+            state.pendingExplicitText = (state.pendingExplicitText ?? [:]).merging(
+                [item.id: item], uniquingKeysWith: { old, _ in old })
+            return write(state)
+        } ?? false
+    }
+
+    func pendingExplicitText(crewId: String? = nil) -> [PendingExplicitText]? {
+        withLock {
+            guard let state = read() else { return nil }
+            return (state.pendingExplicitText ?? [:]).values
+                .filter { crewId == nil || $0.crewId == crewId }
+                .sorted { $0.id < $1.id }
+        } ?? nil
+    }
+
+    @discardableResult
+    func acknowledgeExplicitText(id: String) -> Bool {
+        withLock {
+            guard var state = read() else { return false }
+            state.pendingExplicitText?.removeValue(forKey: id)
+            return write(state)
+        } ?? false
+    }
+
+    func explicitTextAccepted(_ item: PendingExplicitText) -> Bool? {
+        withLock {
+            guard let state = read() else { return nil }
+            return state.acceptedExplicitTextDigests?[item.id] == Self.explicitDigest(item)
+        } ?? nil
+    }
+
+    private static func explicitDigest(_ item: PendingExplicitText) -> String {
+        fingerprint(item.sessionId + "\u{0}" + item.crewId + "\u{0}" + item.text
+                    + "\u{0}" + Data(item.rawBytes ?? []).base64EncodedString())
+    }
+
+    func performExplicitText(_ item: PendingExplicitText,
+                             operation: () async -> SessionWakeSubmission)
+        async -> Submission<SessionWakeSubmission> {
+        guard rememberExplicitText(item) else {
+            return .denied(.deferred("人工消息待发账本写不进去"))
+        }
+        if explicitTextAccepted(item) == true {
+            _ = acknowledgeExplicitText(id: item.id)
+            return .attempted(.accepted, recorded: true)
+        }
+        let result = await performSend(sessionId: item.sessionId, crewId: item.crewId,
+                                       sourceKey: "explicit:\(item.id)", priority: .human,
+                                       isAccepted: { $0 == .accepted }, operation: operation)
+        if case let .attempted(.accepted, recorded) = result, recorded {
+            _ = acknowledgeExplicitText(id: item.id)
+        }
+        return result
+    }
+
     /// Record before queuing or starting a whiteboard wake. If this write fails,
     /// callers must not attempt an automatic outbound request.
     @discardableResult
@@ -336,6 +435,13 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             else { return false }
             if accepted {
                 state.events[index].accepted = true
+                if state.events[index].sourceKey.hasPrefix("explicit:") {
+                    let id = String(state.events[index].sourceKey.dropFirst("explicit:".count))
+                    if let item = state.pendingExplicitText?[id] {
+                        state.acceptedExplicitTextDigests = (state.acceptedExplicitTextDigests ?? [:])
+                            .merging([id: Self.explicitDigest(item)]) { _, newest in newest }
+                    }
+                }
                 if let attemptIndex = state.attempts?.firstIndex(where: { $0.token == token }) {
                     state.attempts?[attemptIndex].accepted = true
                 }

@@ -224,6 +224,89 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         XCTAssertEqual(reopened.recoveryHistory()?.count, 1)
     }
 
+    func testStoppedSessionLookupKeepsExactCrewAndScopeAcrossRestart() {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for (session, crew) in [("captain-old", "one"), ("worker-old", "one"),
+                                ("captain-other", "two")] {
+            for index in 0..<2 {
+                guard case let .allowed(token) = gate.reserve(
+                    sessionId: session, crewId: crew, sourceKey: "source-\(index)",
+                    now: t, uptime: 100) else { return XCTFail("setup") }
+                XCTAssertTrue(gate.finish(token: token, accepted: false))
+            }
+            XCTAssertFalse(gate.reserve(sessionId: session, crewId: crew,
+                                        sourceKey: "trip", now: t, uptime: 100).isAllowed)
+        }
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertEqual(Set(reopened.stoppedSessions(crewId: "one") ?? []),
+                       ["captain-old", "worker-old"])
+        XCTAssertEqual(reopened.stoppedSessions(crewId: "two"), ["captain-other"])
+        XCTAssertTrue(reopened.recover(.directUI(scope: .session("captain-old")),
+                                       now: t.addingTimeInterval(61), uptime: 161))
+        XCTAssertEqual(Set(reopened.stoppedSessions(crewId: "one") ?? []), ["worker-old"])
+        XCTAssertEqual(reopened.stoppedSessions(crewId: "two"), ["captain-other"])
+    }
+
+    func testDeniedHumanTextSurvivesRestartAndClearsOnlyAfterBackendAcceptance() async {
+        let gate = store()
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)", priority: .human) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let item = AutomaticWakeAdmission.PendingExplicitText(
+            id: "human-id", sessionId: "target", crewId: "human-crew", text: "原始人工消息")
+        var calls = 0
+        let denied = await gate.performExplicitText(item) {
+            calls += 1
+            return SessionWakeSubmission.accepted
+        }
+        guard case .denied = denied else { return XCTFail("machine cap must deny") }
+        XCTAssertEqual(calls, 0)
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertEqual(reopened.pendingExplicitText(crewId: "human-crew"), [item])
+        XCTAssertTrue(reopened.recover(.directUI(scope: .machine),
+                                       now: Date().addingTimeInterval(61),
+                                       uptime: ProcessInfo.processInfo.systemUptime + 61))
+        let rejected = await reopened.performExplicitText(item) {
+            calls += 1
+            return SessionWakeSubmission.retry
+        }
+        guard case .attempted(.retry, recorded: true) = rejected else {
+            return XCTFail("backend retry must remain pending")
+        }
+        XCTAssertEqual(reopened.pendingExplicitText(crewId: "human-crew"), [item])
+        let accepted = await reopened.performExplicitText(item) {
+            calls += 1
+            return SessionWakeSubmission.accepted
+        }
+        guard case .attempted(.accepted, recorded: true) = accepted else {
+            return XCTFail("backend accepted receipt must settle")
+        }
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(reopened.pendingExplicitText(crewId: "human-crew"), [])
+        let duplicate = await reopened.performExplicitText(item) {
+            calls += 1
+            return SessionWakeSubmission.accepted
+        }
+        guard case .attempted(.accepted, recorded: true) = duplicate else {
+            return XCTFail("same delivery ID should read accepted receipt")
+        }
+        XCTAssertEqual(calls, 2)
+        let changed = AutomaticWakeAdmission.PendingExplicitText(
+            id: item.id, sessionId: item.sessionId, crewId: item.crewId, text: "不同原文")
+        let collision = await reopened.performExplicitText(changed) {
+            calls += 1
+            return SessionWakeSubmission.accepted
+        }
+        guard case .denied = collision else {
+            return XCTFail("accepted ID cannot acknowledge a different message")
+        }
+        XCTAssertEqual(calls, 2)
+    }
+
     func testSuppressedWhiteboardDebtSurvivesRestartUntilAcknowledged() {
         let gate = store()
         let pending = AutomaticWakeAdmission.PendingWhiteboard(

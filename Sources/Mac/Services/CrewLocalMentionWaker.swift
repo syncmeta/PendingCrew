@@ -143,7 +143,7 @@ final class CrewLocalMentionWaker {
                 crewId: crewId, entryId: p.entryId, targetId: p.sessionId)) else { continue }
             guard let entry = all.first(where: { $0.id == p.entryId }) else { continue }
             for d in CrewLocalMentionWakeLogic.pending(entries: [entry]) {
-                deliver(d, crewId: crewId, onlyTarget: p.sessionId)
+                _ = deliver(d, crewId: crewId, onlyTarget: p.sessionId)
             }
         }
         // The ordinary startup sweep deliberately ignores old @s. Only entries
@@ -160,7 +160,7 @@ final class CrewLocalMentionWaker {
                     ($0.kind == "captain" && debt.targetId == captainKey)
                         || ($0.kind == "session" && $0.targetId == debt.targetId)
                 }) else { continue }
-                deliver(d, crewId: crewId, onlyTarget: debt.targetId, forceDebt: true)
+                _ = deliver(d, crewId: crewId, onlyTarget: debt.targetId, forceDebt: true)
             }
         }
     }
@@ -229,8 +229,8 @@ final class CrewLocalMentionWaker {
         }
     }
 
-    /// 扫一个 crew 的新增条目 → 逐条投递。游标先行推进：投递触发的白板写
-    /// （告警/回执）再进扫描时是新批次，不会重扫本批。
+    /// 扫一个 crew 的新增条目。只有全部目标的待发 ID 已持久登记，
+    /// 才推进扫描游标和文件指纹；写账失败时同进程下一次扫描仍能看见原消息。
     ///
     /// `gated: true` 用于目录 tick 那条扇出路 —— 先比一次白板文件指纹，没变就
     /// 什么都不做（见 `fileGates`）。进程内 `changes` 那条带着 crewId 直投，不门控，
@@ -249,21 +249,26 @@ final class CrewLocalMentionWaker {
         let fingerprint = LocalWhiteboardStore.shared.fingerprint(crewId: crewId)
         var gate = fileGates[crewId] ?? FileChangeGate(seed: nil)
         let changed = gate.shouldYield(fingerprint)
-        fileGates[crewId] = gate
         if gated, !changed { return }
 
-        let entries = LocalWhiteboardStore.shared.entries(crewId: crewId, after: cursors[crewId])
-        guard let last = entries.last else { return }
-        cursors[crewId] = WhiteboardCursorPosition(id: last.id, createdAt: last.createdAt)
-        for delivery in CrewLocalMentionWakeLogic.pending(entries: entries) {
-            deliver(delivery, crewId: crewId)
+        let rows = LocalWhiteboardStore.shared.list(crewId: crewId)
+        if let issue = LocalWhiteboardStore.readFailure(in: rows) {
+            reportAdmissionDebtFailure(crewId: crewId,
+                detail: "白板读取失败，扫描游标和待发状态保持不变：\(issue)")
+            return
         }
+        var progress = CrewWakeScanProgress(cursor: cursors[crewId])
+        guard progress.process(rows: rows,
+                               deliver: { self.deliver($0, crewId: crewId) }) else { return }
+        cursors[crewId] = progress.cursor
+        fileGates[crewId] = gate
     }
 
     /// 一条待唤醒投递：在跑目标走 decide 注入（busy 不打断），缺席目标拉起。
     private func deliver(_ d: CrewLocalMentionWakeLogic.PendingDelivery, crewId: String,
-                         onlyTarget: String? = nil, forceDebt: Bool = false) {
-        guard let runner else { return }
+                         onlyTarget: String? = nil, forceDebt: Bool = false) -> Bool {
+        guard let runner else { return false }
+        var allRegistered = true
         let store = LocalWhiteboardStore.shared
         let cursorDir = LocalWhiteboardStore.defaultDirectory
         // 候选 = 本 crew 在跑 run，排除发送者自己（自己 @ 自己不注入）。
@@ -312,6 +317,7 @@ final class CrewLocalMentionWaker {
             ).hasDelivered(entry, in: store) { continue }
             if !wakeAdmission.rememberWhiteboard(debt) {
                 reportAdmissionDebtFailure(crewId: crewId)
+                allRegistered = false
                 continue
             }
             // 目标游标推进 = 本地链路的「已消费」标记：回执确认到达才推进（失败
@@ -373,15 +379,15 @@ final class CrewLocalMentionWaker {
             }
         }
         // @ 的目标完全没在跑 → 真拉起来（与人类路 wakeAbsentMentionTargets 同语义）。
-        wakeAbsent(d, crewId: crewId, onlyTarget: onlyTarget)
+        return wakeAbsent(d, crewId: crewId, onlyTarget: onlyTarget) && allRegistered
     }
 
     /// 拉起缺席目标：captain → startCaptain（带唤醒文本开场）；持久成员 →
     /// restartMember（复用原 sessionId，白板游标延续）。目标既不在跑也不在本地
     /// 成员登记（登录态 edge session）→ 跳过，那是 mailbox 唤醒的辖区。
     private func wakeAbsent(_ d: CrewLocalMentionWakeLogic.PendingDelivery, crewId: String,
-                            onlyTarget: String? = nil) {
-        guard let runner else { return }
+                            onlyTarget: String? = nil) -> Bool {
+        guard let runner else { return false }
         let runningIds = Set(runner.runs
             .filter { $0.crewId == crewId && $0.status == .running }.map(\.sessionId))
         let captainRunning = runner.runs.contains {
@@ -393,17 +399,17 @@ final class CrewLocalMentionWaker {
             wake = (needCaptain: wake.needCaptain && onlyTarget == CrewConversationKey.captain,
                     sessionIds: wake.sessionIds.filter { $0 == onlyTarget })
         }
-        guard wake.needCaptain || !wake.sessionIds.isEmpty else { return }
+        guard wake.needCaptain || !wake.sessionIds.isEmpty else { return true }
         let targets = (wake.needCaptain ? [CrewConversationKey.captain] : []) + wake.sessionIds
         for target in targets where !wakeAdmission.rememberWhiteboard(.init(
             crewId: crewId, entryId: d.entryId, targetId: target)) {
             reportAdmissionDebtFailure(crewId: crewId)
-            return
+            return false
         }
         guard let backend = backendProvider() else {
             reportAdmissionDebtFailure(crewId: crewId,
                 detail: "目标当前没有可用后端；白板原文和待发 ID 已保留，恢复连接后可继续投递。")
-            return
+            return true
         }
         let members = LocalCrewStore.shared.sessionMembers(crewId: crewId)
         let wakeText = "\(d.senderName)：\(d.messageText)"
@@ -440,6 +446,7 @@ final class CrewLocalMentionWaker {
                     senderName: "系统")
             }
         }
+        return true
     }
 }
 #endif

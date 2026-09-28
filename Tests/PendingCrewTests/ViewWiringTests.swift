@@ -312,10 +312,27 @@ final class ViewWiringTests: XCTestCase {
         let host = try Self.text(of: "SessionHost.swift")
         XCTAssertFalse(host.contains("crewMessageWakes.take()"),
                        "cross-crew report must not wake once by ID and again by direct host send")
+        let waker = try Self.text(of: "CrewLocalMentionWaker.swift")
+        XCTAssertTrue(waker.contains("CrewWakeScanProgress(cursor: cursors[crewId])"))
+        XCTAssertTrue(waker.contains("guard progress.process("),
+                      "scan must not consume its cursor when durable debt registration fails")
         let daemon = try Self.text(of: "SessionDaemonMain.swift")
+        let launchGate = try XCTUnwrap(runner.range(of: "wakeAdmission.performLaunch("))
+        let backendStart = try XCTUnwrap(runner.range(of: "let cliLease = config.kind.isAgent"))
+        XCTAssertLessThan(launchGate.lowerBound, backendStart.lowerBound,
+                          "Runner.start must admit before constructing or launching a backend")
         XCTAssertTrue(daemon.contains("case SessionOrchestrationOp.admissionRecovery:"))
         XCTAssertTrue(daemon.contains("runner.requestAdmissionRecovery(scope: scope, crewId: crewId)"),
                       "viewer recovery must be applied by the owning daemon, not claimed locally")
+        XCTAssertTrue(daemon.contains("runner.submitExplicitText(text, id: UUID().uuidString"),
+                      "legacy daemon sendText must not bypass admission")
+        XCTAssertTrue(endpoints.contains("submitExplicitInput(sessionId: sessionId"),
+                      "protocol .input must not bypass admission")
+        let window = try Self.text(of: "CrewSessionWindowView.swift")
+        XCTAssertTrue(window.contains("sessionRunner.submitExplicitText(text, id: id, to: run)"),
+                      "composer must wait for backend acceptance before clearing input")
+        XCTAssertTrue(window.contains("恢复缺席机长的自动唤醒"),
+                      "stopped captain must have a session-scoped recovery action")
         XCTAssertTrue(remote.contains("func submitWake(_ text: String) async"),
                       "远端 backend 没有把 wake 受理结果暴露给 runner")
         XCTAssertTrue(endpoints.contains("op: \"submitWake\""),
@@ -574,7 +591,8 @@ final class ViewWiringTests: XCTestCase {
             XCTAssertTrue(composer.contains(symbol), "Codex composer 缺少 \(symbol)")
         }
         XCTAssertTrue(composer.contains("sessionRunner.applyProfileChange("))
-        XCTAssertTrue(view.contains("run.send(text)"), "发送没有注入当前 run")
+        XCTAssertTrue(view.contains("sessionRunner.submitExplicitText(text, id: id, to: run)"),
+                      "人工发送必须经 admission 并等受理回执")
         let chrome = try section("private struct CodexSessionComposer:", "private struct CodexControlPillLabel:")
         for symbol in ["ComposerTextField(", "onHardwareReturn:", "SessionProfileControl(run: run", "CodexWorkspaceFooter(", "GitInspector.repoRoot(", "GitInspector.currentBranch(", "GitInspector.isLinkedWorktree(", ".accessibilityLabel(\"发送到 Codex\")"] {
             XCTAssertTrue(chrome.contains(symbol),

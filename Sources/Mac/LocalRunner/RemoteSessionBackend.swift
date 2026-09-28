@@ -345,9 +345,11 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
         await submitWake(text, sourceKey: nil)
     }
 
-    func submitWake(_ text: String, sourceKey: String?) async -> SessionWakeSubmission {
+    func submitWake(_ text: String, sourceKey: String?, explicitId: String? = nil)
+        async -> SessionWakeSubmission {
         guard !isCompacting, supportsCapability("wake-submit"), let client else { return .retry }
-        return await client.submitWake(sessionId: sessionId, text: text, sourceKey: sourceKey)
+        return await client.submitWake(sessionId: sessionId, text: text,
+                                       sourceKey: sourceKey, explicitId: explicitId)
     }
 
     func interrupt() { sendRaw(kind == .terminal ? [0x03] : [0x1b]) }
@@ -527,14 +529,24 @@ final class InProcessSessionProtocolBridge: SessionProtocolPublishing {
     private let server: SessionProtocolServer
     private let client: SessionProtocolClient
 
+    func setRunSummaryProvider(_ provider: @escaping (String) -> SessionRunSummary?) {
+        server.runSummaryProvider = provider
+    }
+
+    func setExplicitInputAccepted(_ callback: @escaping (String) -> Void) {
+        server.onExplicitInputAccepted = callback
+    }
+
     init(appCapabilities: [String] = inProcessProtocolCapabilities,
-         daemonCapabilities: [String] = inProcessProtocolCapabilities) {
+         daemonCapabilities: [String] = inProcessProtocolCapabilities,
+         wakeAdmission: AutomaticWakeAdmission = AutomaticWakeAdmission()) {
         let transport = InProcessTransport()
         self.transport = transport
         appLink = InProcessSessionLink(transport: transport, side: .app)
         daemonLink = InProcessSessionLink(transport: transport, side: .daemon)
         server = SessionProtocolServer(capabilities: daemonCapabilities,
-                                       trustedPreAdmittedWake: true)
+                                       trustedPreAdmittedWake: true,
+                                       wakeAdmission: wakeAdmission)
         client = SessionProtocolClient(link: appLink, capabilities: appCapabilities)
         // accept / init 会各自把 onReceive 装到链路上；两条链路互不覆盖对方的回调。
         server.accept(link: daemonLink)
@@ -554,6 +566,7 @@ final class InProcessSessionProtocolBridge: SessionProtocolPublishing {
     }
 
     func retire(sessionId: String) { server.unregister(sessionId: sessionId) }
+
 
     func publishTerminalBytes(sessionId: String, bytes: [UInt8]) {
         server.publishTerminalBytes(sessionId: sessionId, bytes: bytes)

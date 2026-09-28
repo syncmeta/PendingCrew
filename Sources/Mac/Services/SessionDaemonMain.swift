@@ -110,6 +110,9 @@ enum SessionDaemonMain {
         host.server.runSummaryProvider = { [weak runner] sessionId in
             runner?.runs.first { $0.sessionId == sessionId }?.protocolSummary
         }
+        host.server.onExplicitInputAccepted = { [weak runner] sessionId in
+            runner?.runs.first { $0.sessionId == sessionId }?.noteAcceptedHumanInput()
+        }
         host.server.crewBackend = model.backend
         host.server.onOrchestrationRequest = { control in
             MainActor.assumeIsolated {
@@ -191,7 +194,16 @@ enum SessionDaemonMain {
             runner.remove(target.runID)
         case SessionOrchestrationOp.sendText:
             guard let target = run(), let text = string("text") else { return }
-            target.send(text)
+            Task { @MainActor in
+                let result = await runner.submitExplicitText(text, id: UUID().uuidString,
+                                                             to: target)
+                if result != .accepted {
+                    LocalWhiteboardStore.shared.appendSessionMessage(
+                        crewId: target.crewId, sessionId: "system",
+                        text: "旧版 viewer 的人工输入未被后端确认，原文保留在后台待发账本；请更新界面并检查唤醒恢复告警。",
+                        category: "error", senderName: "系统")
+                }
+            }
         case SessionOrchestrationOp.interrupt:
             run()?.interrupt()
         case SessionOrchestrationOp.profileChange:
@@ -236,9 +248,14 @@ enum SessionDaemonMain {
             let scope: AutomaticWakeAdmission.RecoveryScope
             switch kind {
             case "session":
-                guard let id = string("scopeId"), runner.runs.contains(where: {
-                    $0.sessionId == id && $0.crewId == crewId
-                }) else { return }
+                guard let id = string("scopeId") else { return }
+                let known = runner.runs.contains { $0.sessionId == id && $0.crewId == crewId }
+                    || LocalCrewStore.shared.sessionMembers(crewId: crewId).contains {
+                        $0.sessionId == id
+                    }
+                    || runner.isAdmissionStoppedSession(id, crewId: crewId)
+                    || id == CrewConversationKey.captain
+                guard known else { return }
                 scope = .session(id)
             case "crew":
                 guard string("scopeId") == crewId else { return }
@@ -247,10 +264,12 @@ enum SessionDaemonMain {
             default: return
             }
             let result = runner.requestAdmissionRecovery(scope: scope, crewId: crewId)
-            let succeeded: Bool
-            if case .applied = result { succeeded = true } else { succeeded = false }
+            let appliedScope: AutomaticWakeAdmission.RecoveryScope?
+            if case let .applied(actual) = result { appliedScope = actual }
+            else { appliedScope = nil }
+            let succeeded = appliedScope != nil
             let notice = succeeded
-                ? "界面请求的自动唤醒恢复已在后台执行（\(scope)），范围和时间已写入 admission 审计；待发消息按原文重试。"
+                ? "界面请求的自动唤醒恢复已在后台执行（\(appliedScope!)），范围和时间已写入 admission 审计；待发文本按原文重试，终端回车须人工核对后重试。"
                 : "界面请求的自动唤醒恢复未执行（\(scope)）：滑窗尚未冷却、该范围未熔断，或 admission 账本不可读写。"
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system", text: notice,

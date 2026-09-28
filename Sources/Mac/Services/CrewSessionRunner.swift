@@ -210,10 +210,6 @@ final class CrewSessionRunner: ObservableObject {
 
     private func forwardMirrorAction(_ action: CrewSessionRun.RemoteAction, sessionId: String) {
         switch action {
-        case let .send(text):
-            sendOrchestration(SessionOrchestrationOp.sendText, [
-                "sessionId": .string(sessionId), "text": .string(text),
-            ])
         case .stop:
             sendOrchestration(SessionOrchestrationOp.stopRun, ["sessionId": .string(sessionId)])
         case .interrupt:
@@ -249,6 +245,14 @@ final class CrewSessionRunner: ObservableObject {
     /// `SessionHost` 那两个依赖）。
     init(sessionPublisher: (any SessionProtocolPublishing)? = nil) {
         self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
+        (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
+            [weak self] sessionId in
+            self?.runs.first { $0.sessionId == sessionId }?.protocolSummary
+        }
+        (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setExplicitInputAccepted {
+            [weak self] sessionId in
+            self?.runs.first { $0.sessionId == sessionId }?.noteAcceptedHumanInput()
+        }
     }
 
     /// 切换前台 run（退出「新建」态）。
@@ -361,6 +365,9 @@ final class CrewSessionRunner: ObservableObject {
     /// 到主线程期间目标已经开始另一 turn 的窄竞态。
     private func runBecameIdle(_ run: CrewSessionRun) {
         guard run.status == .running, !run.backend.isBusy, !run.activityIsWorking else { return }
+        if reofferPendingExplicitText(scope: .session(run.sessionId), crewId: run.crewId) {
+            return
+        }
         if let delivery = deferredWakes.popWhenIdle(sessionId: run.sessionId) {
             attemptWakeDelivery(delivery, to: run)
             // 这次 idle 已经被本地补投占用；`turn/start` 正在受理下一 turn，别同时让
@@ -1974,7 +1981,45 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    enum AdmissionRecoveryResult { case applied, forwarded, failed }
+    enum AdmissionRecoveryResult {
+        case applied(AutomaticWakeAdmission.RecoveryScope), forwarded, failed
+    }
+
+    func submitExplicitText(_ text: String, id: String, to run: CrewSessionRun)
+        async -> SessionWakeSubmission {
+        guard run.status == .running else { return .retry }
+        let result: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
+        if isViewer, let remote = run.backend as? RemoteSessionBackend {
+            let receipt = await remote.submitWake(text, sourceKey: "explicit:\(id)",
+                                                  explicitId: id)
+            if receipt == .accepted { run.noteAcceptedHumanInput() }
+            return receipt
+        }
+        result = await wakeAdmission.performExplicitText(.init(
+            id: id, sessionId: run.sessionId, crewId: run.crewId, text: text),
+            operation: { await run.backend.submitWake(text) })
+        switch result {
+        case .denied(let decision):
+            if let reason = decision.reason,
+               LedgerIncidentNoticeGate.shared.shouldEmit(
+                   key: "explicit-admission|\(run.crewId)|\(reason)") {
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: run.crewId, sessionId: "system",
+                    text: "人工消息未发送：\(reason)。原文保留在待发账本；\(decision.recoveryHint)",
+                    category: "error", senderName: "系统")
+            }
+            return .blocked
+        case .attempted(.accepted, true):
+            run.noteAcceptedHumanInput()
+            return .accepted
+        case .attempted:
+            return .retry
+        }
+    }
+
+    func isAdmissionStoppedSession(_ sessionId: String, crewId: String) -> Bool {
+        !isViewer && wakeAdmission.stoppedSessions(crewId: crewId)?.contains(sessionId) == true
+    }
 
     /// A viewer asks the owning daemon to recover. Only the owner writes the
     /// latch/audit and reoffers debt, so a forwarded request is not a receipt.
@@ -1993,9 +2038,58 @@ final class CrewSessionRunner: ObservableObject {
                 "crewId": .string(crewId), "scope": .string(kind), "scopeId": .string(id)])
             return .forwarded
         }
-        guard wakeAdmission.recover(.directUI(scope: scope)) else { return .failed }
-        reofferRecordedWakes(scope: scope, crewId: crewId)
-        return .applied
+        let resolved: AutomaticWakeAdmission.RecoveryScope
+        if case .session(CrewConversationKey.captain) = scope {
+            guard let stopped = wakeAdmission.stoppedSessions(crewId: crewId),
+                  let captain = stopped.first(where: {
+                      $0.hasPrefix(CrewConversationKey.captainPrefix)
+                  }) else { return .failed }
+            resolved = .session(captain)
+        } else {
+            resolved = scope
+        }
+        guard wakeAdmission.recover(.directUI(scope: resolved)) else { return .failed }
+        reofferRecordedWakes(scope: resolved, crewId: crewId)
+        reofferPendingExplicitText(scope: resolved, crewId: crewId)
+        return .applied(resolved)
+    }
+
+    @discardableResult
+    private func reofferPendingExplicitText(scope: AutomaticWakeAdmission.RecoveryScope,
+                                            crewId: String) -> Bool {
+        let pending: [AutomaticWakeAdmission.PendingExplicitText]?
+        if case .machine = scope {
+            pending = wakeAdmission.pendingExplicitText()
+        } else {
+            pending = wakeAdmission.pendingExplicitText(crewId: crewId)
+        }
+        guard let pending else {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "人工待发消息账本不可读；恢复后没有重试，请检查本机数据目录。",
+                category: "error", senderName: "系统")
+            return false
+        }
+        var offered: Set<String> = []
+        for item in pending {
+            if case .session(let id) = scope, id != item.sessionId { continue }
+            if item.rawBytes != nil { continue } // terminal input may have changed; human retries Enter
+            if wakeAdmission.explicitTextAccepted(item) == true {
+                _ = wakeAdmission.acknowledgeExplicitText(id: item.id)
+                continue
+            }
+            if offered.contains(item.sessionId) { continue }
+            guard let run = runs.first(where: {
+                $0.sessionId == item.sessionId && $0.crewId == item.crewId
+                    && $0.status == .running
+            }) else { continue }
+            offered.insert(item.sessionId)
+            Task { @MainActor [weak self, weak run] in
+                guard let self, let run else { return }
+                _ = await self.submitExplicitText(item.text, id: item.id, to: run)
+            }
+        }
+        return !offered.isEmpty
     }
 
     /// Called only after the owner successfully writes a scoped recovery
@@ -3300,13 +3394,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// `inproc`（默认）恒 false，下面每一处 `guard !isMirror` 都是恒真的直通。
     let isMirror: Bool
 
-    /// 镜像的编排动作要回到真身那边去做。`send` 顺手清回合 marker、`stop` 要落
+    /// 镜像的编排动作要回到真身那边去做。`stop` 要落
     /// `.cancelled`（「是不是用户停的」只有真身那边算得对）—— 这些都不是往 PTY
     /// 写几个字节就完事的，所以不能走 backend 直通。inproc 时为 nil。
     var remoteOrchestration: ((RemoteAction) -> Void)?
 
     enum RemoteAction: Equatable {
-        case send(String)
         case stop
         case interrupt
     }
@@ -3705,18 +3798,12 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         }
     }
 
-    /// 发文本给 agent（首条指令 / 续聊 / steer）。终端原样接收。
-    /// 顺手熄掉「在等回复」——有人回话了就不该继续红着（下一轮结束时 marker 会重写）。
-    func send(_ text: String) {
+    func noteAcceptedHumanInput() {
         if isMirror {
-            // 回真身那边发：那里 `send` 会清回合 marker、并走 core 原生的
-            // 「正文 + 隔拍回车」时序。镜像直接写 backend 的话 marker 不会清，
-            // 「在等回复」的红点就永远熄不掉。
-            remoteOrchestration?(.send(text))
-            return
+            if case .question = awaitingReply { awaitingReply = nil }
+        } else {
+            clearAwaitingQuestionMarker()
         }
-        clearAwaitingQuestionMarker()
-        backend.send(text)
     }
 
     /// 本 session 的回合记账文件（层 1 写、层 2 读）。

@@ -25,6 +25,7 @@ struct CrewSessionWindowView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var draft = ""
+    @State private var pendingExplicitId: String?
     @State private var starting = false
     @State private var localError: String?
     /// 成员行右键「设为机长」的待确认目标。确认后不是原地翻角色，而是续接同一
@@ -88,6 +89,9 @@ struct CrewSessionWindowView: View {
             if let run = sessionRunner.runs.first(where: { $0.runID == newId }) {
                 SessionUnreadStore.shared.markViewed(run.sessionId)
             }
+        }
+        .onChange(of: draft) { old, new in
+            if old != new { pendingExplicitId = nil }
         }
         // composer 的 agent kind 默认跟随 crew 建好时选的 captainAgentKind ——
         // 初次出现 + 切 crew 都重算（crew 没记 → `.codex`）。
@@ -735,6 +739,21 @@ struct CrewSessionWindowView: View {
                                 recoverAutomaticWakes(.session(run.sessionId), crewId: detail.crew.id)
                             }
                         }
+                        Button("恢复缺席机长的自动唤醒") {
+                            recoverAutomaticWakes(.session(CrewConversationKey.captain),
+                                                  crewId: detail.crew.id)
+                        }
+                        Menu("恢复缺席成员的自动唤醒") {
+                            ForEach(LocalCrewStore.shared.sessionMembers(crewId: detail.crew.id)
+                                .filter { member in
+                                    !sessionRunner.runs.contains { $0.sessionId == member.sessionId }
+                                }, id: \.sessionId) { member in
+                                Button(member.displayName) {
+                                    recoverAutomaticWakes(.session(member.sessionId),
+                                                          crewId: detail.crew.id)
+                                }
+                            }
+                        }
                         Button("恢复此 crew 的自动唤醒") {
                             recoverAutomaticWakes(.crew(detail.crew.id), crewId: detail.crew.id)
                         }
@@ -770,11 +789,11 @@ struct CrewSessionWindowView: View {
             sessionRunner.lastStartError = "自动唤醒恢复失败：该范围未熔断、滑窗尚未冷却，或账本不可读写；请检查告警和本机数据目录。"
         case .forwarded:
             sessionRunner.lastStartError = "恢复请求已交后台，尚未确认；请以群聊中的恢复回执为准。"
-        case .applied:
+        case .applied(let actual):
             sessionRunner.lastStartError = nil
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system",
-                text: "人从本机界面执行了自动唤醒恢复（\(scope)）；范围和时间已写入 admission 审计。待发白板消息将按原文重试。",
+                text: "人从本机界面执行了自动唤醒恢复（\(actual)）；范围和时间已写入 admission 审计。待发文本按原文重试，终端回车须人工核对后重试。",
                 category: "info", senderName: "系统")
         }
     }
@@ -942,10 +961,18 @@ struct CrewSessionWindowView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if isContinuing, let run = sessionRunner.current {
-            // Running session（且非新建态）→ inject the text straight into the
-            // embedded terminal (the agent's interactive prompt picks it up).
-            run.send(text)
-            draft = ""
+            let id = pendingExplicitId ?? UUID().uuidString
+            pendingExplicitId = id
+            let receipt = await sessionRunner.submitExplicitText(text, id: id, to: run)
+            if receipt == .accepted {
+                draft = ""
+                pendingExplicitId = nil
+                localError = nil
+            } else {
+                localError = receipt == .blocked
+                    ? "人工消息受全机限额或账本故障拦截；原文仍在待发账本，恢复后可重试。"
+                    : "后端尚未受理人工消息；原文仍在待发账本，请查看连接后重试。"
+            }
         } else {
             // 无 run / 已退出 / 新建态 → 开一个新 session。
             await startSession(firstPrompt: text)

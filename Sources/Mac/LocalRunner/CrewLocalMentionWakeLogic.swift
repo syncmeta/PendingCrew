@@ -154,4 +154,27 @@ enum CrewLocalMentionWakeLogic {
         return e.senderKind
     }
 }
+
+/// One scan transaction. Its cursor commits only after every delivery has
+/// durably registered its pending ID; a failed admission ledger write leaves
+/// the same messages available to the next scan in this process.
+struct CrewWakeScanProgress {
+    private(set) var cursor: WhiteboardCursorPosition?
+
+    init(cursor: WhiteboardCursorPosition?) { self.cursor = cursor }
+
+    mutating func process(rows: [LocalWhiteboardMessage], now: Date = Date(),
+                          deliver: (CrewLocalMentionWakeLogic.PendingDelivery) -> Bool) -> Bool {
+        guard LocalWhiteboardStore.readFailure(in: rows) == nil else { return false }
+        let entries = LocalWhiteboardStore.entries(in: rows, after: cursor)
+        guard let last = entries.last else { return true }
+        var registered = true
+        for pending in CrewLocalMentionWakeLogic.pending(entries: entries, now: now) {
+            if !deliver(pending) { registered = false }
+        }
+        guard registered else { return false }
+        cursor = WhiteboardCursorPosition(id: last.id, createdAt: last.createdAt)
+        return true
+    }
+}
 #endif

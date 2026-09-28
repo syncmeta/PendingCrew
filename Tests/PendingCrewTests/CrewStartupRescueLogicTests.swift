@@ -46,6 +46,56 @@ final class CrewStartupRescueLogicTests: XCTestCase {
         XCTAssertEqual(out, [.init(sessionId: "cap-1", entryId: "e-retry")])
     }
 
+    func testAdmissionRegistrationFailureRetainsScanCursorForSameProcessAndRestart() throws {
+        let anchor = msg("before", mentions: [.broadcast], ageSeconds: 120)
+        let owed = msg("wake-id", mentions: [.session("worker-a")])
+        let initial = WhiteboardCursorPosition(id: anchor.id, createdAt: anchor.createdAt)
+        var progress = CrewWakeScanProgress(cursor: initial)
+        var attempted: [String] = []
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scan-debt-failure-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("unreadable".utf8).write(to: gate.fileURL)
+        let debt = AutomaticWakeAdmission.PendingWhiteboard(
+            crewId: "crew-scan", entryId: owed.id, targetId: "worker-a")
+        XCTAssertFalse(progress.process(rows: [anchor, owed], now: now) { delivery in
+            attempted.append(delivery.entryId)
+            return gate.rememberWhiteboard(debt)
+        })
+        XCTAssertEqual(progress.cursor, initial, "failed registration must not consume scan cursor")
+        XCTAssertEqual(attempted, [owed.id])
+
+        // Restart before repair: the durable delivery cursor still says unread.
+        let restartedOwed = CrewStartupRescueLogic.pending(
+            unreadBySession: ["worker-a": [owed]], captainSessionId: nil, now: now)
+        XCTAssertEqual(restartedOwed, [.init(sessionId: "worker-a", entryId: owed.id)])
+
+        // Same process, same whiteboard fingerprint: the caller keeps its old
+        // file gate too, so this original ID is presented again without new mail.
+        try JSONEncoder().encode(AutomaticWakeAdmission.State()).write(to: gate.fileURL)
+        XCTAssertTrue(progress.process(rows: [anchor, owed], now: now) { delivery in
+            attempted.append(delivery.entryId)
+            return gate.rememberWhiteboard(debt)
+        })
+        XCTAssertEqual(attempted, [owed.id, owed.id])
+        XCTAssertEqual(progress.cursor?.id, owed.id)
+        XCTAssertEqual(AutomaticWakeAdmission(directory: directory)
+            .pendingWhiteboard(crewId: "crew-scan"), [debt])
+    }
+
+    func testUnreadableWhiteboardSentinelNeverBecomesScanCursor() {
+        let anchor = msg("before", mentions: [.broadcast], ageSeconds: 120)
+        let original = WhiteboardCursorPosition(id: anchor.id, createdAt: anchor.createdAt)
+        var progress = CrewWakeScanProgress(cursor: original)
+        let warning = msg(LocalWhiteboardStore.readFailureRowId, mentions: [])
+        XCTAssertFalse(progress.process(rows: [warning], now: now) { _ in
+            XCTFail("synthetic read failure is not a real message")
+            return true
+        })
+        XCTAssertEqual(progress.cursor, original)
+    }
+
     // MARK: - 反面：不许变成一条「只要有 @ 就捞」的规则
 
     /// **2026-08-12 全机重放的那道独立闸必须仍然管用。** 启动时把几周前的 @ 全捞

@@ -55,7 +55,7 @@ final class SessionProtocolServer {
     private let daemonBuild: String
     private let startedAt: Double
     private var records: [String: Record] = [:]
-    private let wakeAdmission = AutomaticWakeAdmission()
+    private let wakeAdmission: AutomaticWakeAdmission
     /// Only the explicitly constructed same-process bridge is pre-admitted by
     /// its owning runner. Socket daemons default to fail-closed on missing roster.
     private let trustedPreAdmittedWake: Bool
@@ -71,6 +71,7 @@ final class SessionProtocolServer {
     /// 这个 session 的编排身份（属于哪个 crew、机长还是 worker、当前档位…）。
     /// daemon 由编排层填；同进程桥不填 —— 那边 app 自己就持有 run。
     var runSummaryProvider: ((String) -> SessionRunSummary?)?
+    var onExplicitInputAccepted: ((String) -> Void)?
     /// viewer 发来的编排请求（起 session / 停 / 移除 / 切档位）。daemon 接上编排层；
     /// 同进程桥不接（那边 UI 直接调 runner）。
     var onOrchestrationRequest: ((SessionControl) -> Void)?
@@ -94,12 +95,14 @@ final class SessionProtocolServer {
     init(capabilities: [String], daemonBuild: String = "in-process",
          startedAt: Double = Date().timeIntervalSince1970,
          reclaimsIdleConnections: Bool = false,
-         trustedPreAdmittedWake: Bool = false) {
+         trustedPreAdmittedWake: Bool = false,
+         wakeAdmission: AutomaticWakeAdmission = AutomaticWakeAdmission()) {
         self.capabilities = capabilities
         self.daemonBuild = daemonBuild
         self.startedAt = startedAt
         self.reclaimsIdle = reclaimsIdleConnections
         self.trustedPreAdmittedWake = trustedPreAdmittedWake
+        self.wakeAdmission = wakeAdmission
     }
 
     // MARK: - 链路
@@ -326,7 +329,13 @@ final class SessionProtocolServer {
                   let backend = records[sessionId]?.backend else { return }
             if backend.kind == .codex {
                 if value.bytes == [0x1b] { backend.interrupt() }
-                else if let text = String(bytes: value.bytes, encoding: .utf8) { backend.send(text) }
+                else if let text = String(bytes: value.bytes, encoding: .utf8) {
+                    submitExplicitInput(sessionId: sessionId, backend: backend, text: text)
+                }
+            } else if backend.kind != .terminal,
+                      value.bytes.contains(where: { $0 == 0x0d || $0 == 0x0a }) {
+                submitExplicitInput(sessionId: sessionId, backend: backend,
+                                    text: "", rawBytes: value.bytes)
             } else {
                 (backend as? SessionProtocolTerminalControlling)?.sendRaw(value.bytes)
             }
@@ -340,6 +349,40 @@ final class SessionProtocolServer {
             }
         case let .ping(value):
             send(.pong(.init(nonce: value.nonce)), on: connection)
+        }
+    }
+
+    private func submitExplicitInput(sessionId: String, backend: any SessionBackend,
+                                     text: String, rawBytes: [UInt8]? = nil) {
+        guard let summary = runSummaryProvider?(sessionId) else {
+            onDiagnostic?("拒绝无 crew 身份的交互输入：\(sessionId)")
+            return
+        }
+        let item = AutomaticWakeAdmission.PendingExplicitText(
+            id: UUID().uuidString, sessionId: sessionId, crewId: summary.crewId,
+            text: text, rawBytes: rawBytes)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await self.wakeAdmission.performExplicitText(item) {
+                if let rawBytes {
+                    guard backend.status == .running,
+                          let terminal = backend as? SessionProtocolTerminalControlling
+                    else { return .retry }
+                    terminal.sendRaw(rawBytes)
+                    return .accepted
+                }
+                return await backend.submitWake(text)
+            }
+            if case .attempted(.accepted, true) = outcome {
+                self.onExplicitInputAccepted?(sessionId)
+                return
+            }
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: summary.crewId, sessionId: "system",
+                text: rawBytes == nil
+                    ? "交互文本未被确认：原文已保存在人工待发账本，检查唤醒恢复后重试。"
+                    : "终端回车未被确认：回车字节已登记，输入行仍在终端；检查后请人工重试回车。",
+                category: "error", senderName: "系统")
         }
     }
 
@@ -464,13 +507,20 @@ final class SessionProtocolServer {
                     sourceKey = "remote:" + AutomaticWakeAdmission.fingerprint(text)
                 }
                 let outcome: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
-                if let summary {
-                    outcome = await self.wakeAdmission.performSend(
-                        sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey,
-                        isAccepted: { $0 == .accepted },
-                        operation: { await backend.submitWake(text) })
-                } else if self.trustedPreAdmittedWake {
+                if self.trustedPreAdmittedWake,
+                   control.arguments["explicitId"] == nil {
                     outcome = .attempted(await backend.submitWake(text), recorded: true)
+                } else if let summary {
+                    if case let .string(explicitId)? = control.arguments["explicitId"] {
+                        outcome = await self.wakeAdmission.performExplicitText(.init(
+                            id: explicitId, sessionId: sessionId, crewId: summary.crewId,
+                            text: text), operation: { await backend.submitWake(text) })
+                    } else {
+                        outcome = await self.wakeAdmission.performSend(
+                            sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey,
+                            isAccepted: { $0 == .accepted },
+                            operation: { await backend.submitWake(text) })
+                    }
                 } else {
                     outcome = .denied(.deferred("daemon 找不到目标 session 的 crew 身份"))
                 }
@@ -481,7 +531,7 @@ final class SessionProtocolServer {
                         key: "wake-admission|\(summary.crewId)|\(reason)") {
                         LocalWhiteboardStore.shared.appendSessionMessage(
                             crewId: summary.crewId, sessionId: "system",
-                            text: "自动唤醒已暂停：\(reason)。原消息仍保留；\(decision.recoveryHint)",
+                            text: "唤醒出站已暂停：\(reason)。原消息仍保留；\(decision.recoveryHint)",
                             category: "error", senderName: "系统")
                     }
                     if let connection {
@@ -499,12 +549,16 @@ final class SessionProtocolServer {
                         text: "唤醒出站后无法写入 admission 账本；请检查本机数据目录。",
                         category: "error", senderName: "系统")
                 }
+                if result == .accepted && recorded,
+                   control.arguments["explicitId"] != nil {
+                    self.onExplicitInputAccepted?(sessionId)
+                }
                 guard let connection else { return }
                 self.send(.event(.init(
                     kind: "wakeSubmitResult", requestId: requestId,
                     fields: [
                         "sessionId": .string(sessionId),
-                        "result": .string(result == .accepted ? "accepted"
+                        "result": .string(result == .accepted && recorded ? "accepted"
                             : result == .blocked ? "blocked" : "retry"),
                     ])), on: connection)
             }
@@ -898,13 +952,15 @@ final class SessionProtocolClient {
     }
 
     func submitWake(sessionId: String, text: String,
-                    sourceKey: String? = nil) async -> SessionWakeSubmission {
+                    sourceKey: String? = nil, explicitId: String? = nil)
+        async -> SessionWakeSubmission {
         let requestId = UUID().uuidString
         return await withCheckedContinuation { continuation in
             pendingWakes[requestId] = continuation
             var args: [String: SessionWireJSONValue] = [
                 "sessionId": .string(sessionId), "text": .string(text)]
             if let sourceKey { args["sourceKey"] = .string(sourceKey) }
+            if let explicitId { args["explicitId"] = .string(explicitId) }
             send(.control(.init(requestId: requestId, op: "submitWake", arguments: args)))
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -1096,6 +1152,7 @@ final class DaemonSessionPublisher: SessionProtocolPublishing {
     }
 
     func retire(sessionId: String) { server.unregister(sessionId: sessionId) }
+
 }
 
 /// viewer 能请求 daemon 做的编排动作。

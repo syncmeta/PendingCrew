@@ -4,6 +4,111 @@ import XCTest
 
 @MainActor
 final class RemoteSessionBackendTests: XCTestCase {
+    private func summary(crewId: String = "crew-entry") -> SessionRunSummary {
+        .init(crewId: crewId, role: "worker", title: "test", taskBrief: "test",
+              workingDirectory: "/private/tmp", model: nil, effort: nil,
+              pendingProfile: nil, approvalsReviewer: nil, permissionModeOverride: nil,
+              startedAt: 0, runStatus: "running", exitCode: nil, exitReason: nil,
+              awaitingReply: nil)
+    }
+
+    func testRealProtocolHumanSubmitRejectsAtMachineCapAndRetainsOriginal() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("protocol-human-admission-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)", priority: .human) else {
+                return XCTFail("setup")
+            }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let backend = ProtocolTestBackend(kind: .codex)
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "human-target", backend: backend)
+        let result = await remote.submitWake("original human prompt", sourceKey: "explicit:id-1",
+                                             explicitId: "id-1")
+        XCTAssertEqual(result, .blocked)
+        XCTAssertEqual(backend.submittedWakes, [])
+        XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry")?.map(\.text),
+                       ["original human prompt"])
+        XCTAssertFalse(AutomaticWakeAdmission(directory: directory).reserve(
+            sessionId: "after-restart", crewId: "crew-entry", sourceKey: "human",
+            priority: .human).isAllowed)
+    }
+
+    func testRealProtocolHumanTextWaitsForBackendAcceptanceBeforeSettling() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("protocol-human-receipt-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        let backend = ProtocolTestBackend(kind: .codex)
+        backend.wakeResults = [.retry, .accepted]
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "receipt-target", backend: backend)
+        let first = await remote.submitWake("original", sourceKey: "explicit:receipt-id",
+                                            explicitId: "receipt-id")
+        XCTAssertEqual(first, .retry)
+        XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry")?.map(\.text), ["original"])
+        let second = await remote.submitWake("original", sourceKey: "explicit:receipt-id",
+                                             explicitId: "receipt-id")
+        XCTAssertEqual(second, .accepted)
+        XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry"), [])
+        XCTAssertEqual(backend.submittedWakes, ["original", "original"])
+    }
+
+    func testRealProtocolInputDoesNotBypassAdmission() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("protocol-input-admission-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)", priority: .human) else {
+                return XCTFail("setup")
+            }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let backend = ProtocolTestBackend(kind: .codex)
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "input-target", backend: backend)
+        remote.send("legacy direct input")
+        for _ in 0..<30 where gate.pendingExplicitText(crewId: "crew-entry")?.isEmpty != false {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(backend.sent, [])
+        XCTAssertEqual(backend.submittedWakes, [])
+        XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry")?.map(\.text),
+                       ["legacy direct input"])
+    }
+
+    func testRealProtocolTerminalReturnDoesNotBypassAdmission() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("protocol-return-admission-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)", priority: .human) else {
+                return XCTFail("setup")
+            }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let backend = ProtocolTestBackend(kind: .claudeCode)
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "return-target", backend: backend)
+        remote.sendRaw([0x0d])
+        for _ in 0..<30 where gate.pendingExplicitText(crewId: "crew-entry")?.isEmpty != false {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(backend.rawInputs, [])
+        XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry")?.map(\.rawBytes), [[0x0d]])
+    }
+
     func testSessionBackendControlsAndStateCrossTheFramedTransport() async {
         let direct = ProtocolTestBackend(kind: .codex)
         direct.profileOutcome = .applied("Set model to gpt-5")
@@ -14,10 +119,9 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(remote.kind, .codex)
         XCTAssertTrue(remote.isProtocolConnected)
 
-        remote.send("hello")
         remote.interrupt()
         remote.clearQuotaHealth()
-        XCTAssertEqual(direct.sent, ["hello"])
+        XCTAssertEqual(direct.sent, [])
         XCTAssertEqual(direct.interruptCount, 1)
         XCTAssertEqual(direct.clearQuotaCount, 1)
 
@@ -50,9 +154,10 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertEqual(direct.stopCount, 1)
     }
 
-    func testTerminalBytesUseKindOneAndKeyboardResizeUseInputMessages() {
+    func testTerminalBytesUseKindOneAndKeyboardResizeUseInputMessages() async {
         let direct = ProtocolTestBackend(kind: .claudeCode)
         let bridge = InProcessSessionProtocolBridge()
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
         let remote = bridge.exposeAttached(sessionId: "session-terminal", backend: direct)
 
         bridge.publishTerminalBytes(sessionId: "session-terminal", bytes: [0xff, 0x00, 0x41])
@@ -60,6 +165,9 @@ final class RemoteSessionBackendTests: XCTestCase {
 
         remote.sendRaw([0x1b, 0x0d])
         remote.resizeTerminal(cols: 132, rows: 43)
+        for _ in 0..<30 where direct.rawInputs.isEmpty {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
         XCTAssertEqual(direct.rawInputs, [[0x1b, 0x0d]])
         XCTAssertEqual(direct.resizes, [
             .init(cols: 80, rows: 25), // attach preserves AgentSessionCore's default viewport
