@@ -594,7 +594,7 @@ final class ViewWiringTests: XCTestCase {
 
     /// Todo #151：这是源码级结构/命令回归，测试 target 不编译 SwiftUI 详情页。
     /// 把关键区段单独截出，避免 Claude/终端路径或注释碰巧含同名控件而假绿。
-    func testCodexSessionChromeKeepsControlsNearComposerAndCommandsReachable() throws {
+    func testCodexSessionChromeKeepsControlsUnderNameAndCommandsReachable() throws {
         let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
         func section(_ start: String, _ end: String) throws -> String {
             let a = try XCTUnwrap(view.range(of: start), "缺少 \(start)")
@@ -607,24 +607,23 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(terminal.contains("codexComposer"), "Codex 未接独立 composer")
 
         let composer = try section("private var codexComposer:", "private var canStartSession:")
-        for symbol in ["CodexSessionComposer(", "onSend:", "onSwitchProfile:"] {
+        for symbol in ["CodexSessionComposer(", "onSend:"] {
             XCTAssertTrue(composer.contains(symbol), "Codex composer 缺少 \(symbol)")
         }
-        XCTAssertTrue(composer.contains("sessionRunner.applyProfileChange("))
+        XCTAssertTrue(terminal.contains("sessionRunner.applyProfileChange("))
         XCTAssertTrue(view.contains("sessionRunner.submitExplicitText(text, id: id, to: run)"),
                       "人工发送必须经 admission 并等受理回执")
         let chrome = try section("private struct CodexSessionComposer:", "private struct CodexControlPillLabel:")
-        for symbol in ["ComposerTextField(", "onHardwareReturn:", "SessionProfileControl(run: run", "CodexWorkspaceFooter(", "GitInspector.repoRoot(", "GitInspector.currentBranch(", "GitInspector.isLinkedWorktree(", ".accessibilityLabel(\"发送到 Codex\")"] {
+        for symbol in ["ComposerTextField(", "onHardwareReturn:", "CodexWorkspaceFooter(", "GitInspector.repoRoot(", "GitInspector.currentBranch(", "GitInspector.isLinkedWorktree(", ".accessibilityLabel(\"发送到 Codex\")"] {
             XCTAssertTrue(chrome.contains(symbol),
                           "Codex 输入区缺少可发现的操作或状态：\(symbol)")
         }
         let runContent = try section("private struct SessionRunContentView:", "private struct CodexSessionComposer:")
         XCTAssertTrue(runContent.contains("if run.kind == .codex"), "Codex 没有独立的简洁顶栏")
-        XCTAssertTrue(runContent.contains("Button(action: onCompact)"), "压缩图标按钮消失")
+        XCTAssertTrue(runContent.contains("SessionProfileControl(run: run, onSwitch: onSwitchProfile)"), "会话配置未移到名称下")
         XCTAssertTrue(runContent.contains("run.stop()"), "停止命令消失")
         XCTAssertTrue(runContent.contains("CodexTranscriptView(transcript:"), "结构化 transcript 消失")
         XCTAssertTrue(runContent.contains("codexUsageRow"), "上下文和额度信息消失")
-        XCTAssertTrue(view.contains(".accessibilityLabel(\"压缩上下文\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"停止这个 Codex session\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择模型\")"))
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择推理强度\")"))
@@ -652,7 +651,8 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(view.contains("CodexControlPillLabel(title: run.effort ?? \"默认\")"))
         XCTAssertFalse(profile.contains("icon: \"cpu\""))
         XCTAssertFalse(profile.contains("icon: \"brain.head.profile\""))
-        XCTAssertTrue(profile.contains("run.fastMode == true ? \"bolt.fill\" : \"bolt\""))
+        XCTAssertTrue(profile.contains("run.fastMode.map { $0 ? \"bolt.fill\" : \"bolt\" } ?? \"questionmark\""))
+        XCTAssertTrue(profile.contains("run.fastMode == nil)"), "未知态不能显示为关闭并接受点击")
         XCTAssertTrue(profile.contains(".accessibilityLabel(\"Codex 快速模式\")"))
         XCTAssertTrue(profile.contains("SessionLaunchOptions.modelPickerOptions(for: run.kind, catalog: catalog.file)"),
                       "模型须来自已验新鲜度的运行时目录")
@@ -666,8 +666,21 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(header.contains("Circle().trim(from: 0, to:"), "顶栏缺少上下文占用圆环")
         XCTAssertTrue(header.contains("to: usage.contextFraction"), "圆环须反映当前上下文占用")
         XCTAssertTrue(header.contains("showingCodexUsage = true"), "统计入口必须保留")
-        XCTAssertTrue(header.contains("Button(action: onCompact)"), "压缩应为独立图标按钮")
-        XCTAssertTrue(header.contains(".help(\"压缩上下文\")"))
+        XCTAssertFalse(header.contains("Button(action: onCompact)"), "Codex 压缩由原生流程管理")
+        XCTAssertFalse(header.contains("arrow.down.right.and.arrow.up.left"), "移除疑似退出全屏的压缩图标")
+        XCTAssertTrue(header.contains("SessionProfileControl(run: run, onSwitch: onSwitchProfile)"),
+                      "模型、effort、快速控件应在 session 名下")
+        XCTAssertTrue(header.contains(".frame(width: 18, height: 18)"), "上下文圆环应缩小")
+        XCTAssertTrue(header.contains("Circle().fill(.red)"), "停止按钮应恢复红色")
+        XCTAssertTrue(usage.contains("usage.contextTokens.formatted()"))
+        XCTAssertTrue(usage.contains("usage.contextWindow.formatted()"))
+        XCTAssertFalse(composer.contains("SessionProfileControl(run: run"), "输入框内不应重复放配置控件")
+        XCTAssertFalse(profile.contains(".toggleStyle(.button)"), "快速图标不应有按钮底色")
+        XCTAssertTrue(profile.contains("let current = run.fastMode else { return }"), "未知状态不能发反向请求")
+        XCTAssertTrue(profile.contains("onSwitch(nil, nil, !current) {"), "快速请求须从已确认状态取反")
+        XCTAssertTrue(profile.contains("fastRequestInFlight = false"), "须等切换回调完成才解锁")
+        XCTAssertTrue(profile.contains("|| fastRequestInFlight || run.fastMode == nil)"),
+                      "连点和未知状态须禁用快速入口")
         XCTAssertFalse(header.contains("Menu {"), "压缩折叠菜单应移除")
         XCTAssertFalse(header.contains("查看上下文与额度"), "重复统计入口应移除")
         XCTAssertFalse(usage.contains("Button(\"压缩上下文\""), "统计弹窗里不应重复压缩入口")

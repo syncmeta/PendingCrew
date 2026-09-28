@@ -234,16 +234,14 @@ struct CrewSessionWindowView: View {
                 // `.id(run.runID)` 强制换 run 时整个终端视图重建。
                 SessionRunContentView(
                     run: run,
-                    onSwitchProfile: { model, effort, fastMode in
+                    onSwitchProfile: { model, effort, fastMode, finished in
                         Task {
                             await sessionRunner.applyProfileChange(
                                 SessionProfileChangeRequest(
                                     crewId: run.crewId, sessionId: run.sessionId,
                                     model: model, effort: effort, fastMode: fastMode))
+                            finished()
                         }
-                    },
-                    onCompact: {
-                        Task { await sessionRunner.requestCodexCompaction(for: run) }
                     })
                     .id(run.runID)
             } else {
@@ -826,15 +824,7 @@ struct CrewSessionWindowView: View {
                 CodexSessionComposer(
                     run: run,
                     draft: $draft,
-                    onSend: { Task { await send() } },
-                    onSwitchProfile: { model, effort, fastMode in
-                        Task {
-                            await sessionRunner.applyProfileChange(
-                                SessionProfileChangeRequest(
-                                    crewId: run.crewId, sessionId: run.sessionId,
-                                    model: model, effort: effort, fastMode: fastMode))
-                        }
-                    })
+                    onSend: { Task { await send() } })
             }
         }
     }
@@ -1237,8 +1227,7 @@ private struct SessionRunContentView: View {
     @ObservedObject private var quota = QuotaCenter.shared
     @State private var showingCodexUsage = false
     /// 终端页头部切换控件的回调（→ `applyProfileChange`）。只带改动的那一个档位。
-    let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
-    let onCompact: () -> Void
+    let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?, _ finished: @escaping () -> Void) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1277,63 +1266,62 @@ private struct SessionRunContentView: View {
         }
     }
 
-    /// Codex-only chrome: context pressure and the two infrequent actions stay
-    /// visible without a second menu. Configuration lives beside its composer.
+    /// Codex-only chrome: session configuration sits below its name.
     private var codexHeader: some View {
-        HStack(spacing: 8) {
-            Text(run.displayName)
-                .font(.callout.weight(.semibold))
-                .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 8)
-            Button { showingCodexUsage = true } label: {
-                ZStack {
-                    Circle().stroke(Theme.Palette.quotaTrack, lineWidth: 3)
-                    if let usage = run.codexContextUsage, usage.contextWindow > 0 {
-                        Circle().trim(from: 0, to: usage.contextFraction)
-                            .stroke(Theme.Palette.accent,
-                                    style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    } else {
-                        Image(systemName: "chart.bar.xaxis")
-                            .font(.system(size: 10, weight: .medium))
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(run.displayName)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                Button { showingCodexUsage = true } label: {
+                    ZStack {
+                        Circle().stroke(Theme.Palette.quotaTrack, lineWidth: 3)
+                        if let usage = run.codexContextUsage, usage.contextWindow > 0 {
+                            Circle().trim(from: 0, to: usage.contextFraction)
+                                .stroke(Theme.Palette.accent,
+                                        style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                        } else {
+                            Image(systemName: "chart.bar.xaxis")
+                                .font(.system(size: 10, weight: .medium))
+                        }
                     }
-                }
-                .frame(width: 25, height: 25)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("查看 Codex 用量")
-            .accessibilityValue(run.codexContextUsage.map {
-                $0.contextWindow > 0 ? "上下文已用 \(Int($0.contextFraction * 100))%" : "上下文窗口未知"
-            } ?? "上下文用量待回报")
-            .help("查看上下文、账号额度与压缩状态")
-            .popover(isPresented: $showingCodexUsage) {
-                codexUsageRow
-                    .frame(minWidth: 260, idealWidth: 330, maxWidth: 400)
-                    .padding(16)
-            }
-            Button(action: onCompact) {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .fixedSize()
-            .disabled(run.status != .running || run.isWorking || run.codexIsCompacting)
-            .accessibilityLabel("压缩上下文")
-            .help("压缩上下文")
-            if run.status == .running {
-                Button { run.stop() } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 32, height: 28)
-                        .background(Theme.Palette.surfaceMuted, in: Capsule())
+                    .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
-                .fixedSize()
-                .accessibilityLabel("停止这个 Codex session")
-                .help("停止这个 session")
-            } else {
-                statusBadge(run.status, exitCode: run.exitCode)
+                .accessibilityLabel("查看 Codex 用量")
+                .accessibilityValue(run.codexContextUsage.map {
+                    $0.contextWindow > 0 ? "上下文已用 \(Int($0.contextFraction * 100))%" : "上下文窗口未知"
+                } ?? "上下文用量待回报")
+                .help("查看上下文、账号额度与压缩状态")
+                .popover(isPresented: $showingCodexUsage) {
+                    codexUsageRow
+                        .frame(minWidth: 260, idealWidth: 330, maxWidth: 400)
+                        .padding(16)
+                }
+                if run.status == .running {
+                    Button { run.stop() } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(.red))
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .accessibilityLabel("停止这个 Codex session")
+                    .help("停止这个 session")
+                } else {
+                    statusBadge(run.status, exitCode: run.exitCode)
+                }
+            }
+            SessionProfileControl(run: run, onSwitch: onSwitchProfile)
+            if let pending = run.pendingProfile {
+                Text("切换至 \(pending)…")
+                    .font(Theme.Fonts.caption2)
+                    .foregroundStyle(Theme.Palette.inkMuted)
             }
         }
         .foregroundStyle(Theme.Palette.ink)
@@ -1369,7 +1357,7 @@ private struct SessionRunContentView: View {
                 }
             }
 
-            // Claude 保留原来的模型/effort 页头；Codex 放在 composer 内。
+            // Claude 保留原来的模型/effort 页头。
             if run.kind == .claudeCode {
                 SessionProfileControl(run: run, onSwitch: onSwitchProfile)
             }
@@ -1456,7 +1444,6 @@ private struct CodexSessionComposer: View {
     @Binding var draft: String
     @State private var isFocused = false
     let onSend: () -> Void
-    let onSwitchProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1485,15 +1472,6 @@ private struct CodexSessionComposer: View {
                     .disabled(!canSend)
                     .accessibilityLabel("发送到 Codex")
                     .help("发送到当前 Codex session")
-                }
-                SessionProfileControl(run: run, onSwitch: onSwitchProfile)
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    if let pending = run.pendingProfile {
-                        Text("切换至 \(pending)…")
-                            .font(Theme.Fonts.caption2)
-                            .foregroundStyle(Theme.Palette.inkMuted)
-                    }
                 }
             }
             .padding(12)
@@ -1644,17 +1622,18 @@ private struct SessionProfileReadonlyPill: View {
 }
 
 /// 运行态 model / effort 两个独立菜单（Todo #82）。Claude 放在页头、经空闲时
-/// 斜杠命令切；Codex 放在 composer、经 app-server `thread/settings/update` 切。两边都只在底层确认
+/// 斜杠命令切；Codex 放在 session 名下、经 app-server `thread/settings/update` 切。两边都只在底层确认
 /// 成功后回写 run，UI 不抢先显示假配置。
 private struct SessionProfileControl: View {
     @ObservedObject var run: CrewSessionRun
+    @State private var fastRequestInFlight = false
     /// 菜单只读后台已完成的目录快照；Codex 候选需经 PickerOptions 确认新鲜度，
     /// 探测未就绪或失败时不把旧缓存与手工表当作当前可选值。
     @ObservedObject private var catalog = ModelCatalogCenter.shared
     /// 只带**改动的那一个**（另一个传 nil），避免误发未变的档位。
-    let onSwitch: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
+    let onSwitch: (_ model: String?, _ effort: String?, _ fastMode: Bool?, _ finished: @escaping () -> Void) -> Void
 
-    init(run: CrewSessionRun, onSwitch: @escaping (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void) {
+    init(run: CrewSessionRun, onSwitch: @escaping (_ model: String?, _ effort: String?, _ fastMode: Bool?, _ finished: @escaping () -> Void) -> Void) {
         self.run = run
         self.onSwitch = onSwitch
     }
@@ -1666,28 +1645,33 @@ private struct SessionProfileControl: View {
                 modelMenu
                 effortMenu
                 if run.kind == .codex {
-                    Toggle(isOn: Binding(
-                        get: { run.fastMode ?? false },
-                        set: { onSwitch(nil, nil, $0) }
-                    )) {
-                        Image(systemName: run.fastMode == true ? "bolt.fill" : "bolt")
+                    Button {
+                        guard !fastRequestInFlight, run.pendingProfile == nil,
+                              let current = run.fastMode else { return }
+                        fastRequestInFlight = true
+                        onSwitch(nil, nil, !current) {
+                            fastRequestInFlight = false
+                        }
+                    } label: {
+                        Image(systemName: run.fastMode.map { $0 ? "bolt.fill" : "bolt" } ?? "questionmark")
                     }
-                    .toggleStyle(.button)
+                    .buttonStyle(.plain)
                     .controlSize(.small)
-                    .disabled(run.status != .running || run.pendingProfile != nil)
+                    .disabled(run.status != .running || run.pendingProfile != nil
+                              || fastRequestInFlight || run.fastMode == nil)
                     .accessibilityLabel("Codex 快速模式")
-                    .accessibilityValue(run.fastMode == true ? "开启" : "关闭")
+                    .accessibilityValue(fastRequestInFlight ? "正在切换" : run.fastMode == nil ? "未知" : run.fastMode == true ? "开启" : "关闭")
                     .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
                 } else {
                     Toggle("快速", isOn: Binding(
                         get: { run.fastMode ?? false },
-                        set: { onSwitch(nil, nil, $0) }
+                        set: { onSwitch(nil, nil, $0, {}) }
                     ))
                     .toggleStyle(.switch)
                     .disabled(run.status != .running || run.pendingProfile != nil)
                     .help(run.fastMode == nil ? "快速模式状态未知" : "切换这个 session 的快速模式")
                 }
-                if run.pendingProfile != nil {
+                if run.pendingProfile != nil || fastRequestInFlight {
                     ProgressView().controlSize(.small)
                 }
                 Spacer(minLength: 0)
@@ -1723,7 +1707,7 @@ private struct SessionProfileControl: View {
         Menu {
             if run.kind == .codex {
                 Button {
-                    onSwitch(SessionLaunchOptions.codexDefaultModelSelection, nil, nil)
+                    onSwitch(SessionLaunchOptions.codexDefaultModelSelection, nil, nil, {})
                 } label: {
                     // `run.model` 是当前实际 slug，无法区分「默认解析到它」和
                     // 「人显式选了同一个 slug」。这里不画假 checkmark；点击本行会
@@ -1745,7 +1729,7 @@ private struct SessionProfileControl: View {
                         // 实际 slug 相同也可能正处于「跟随默认」；显式点选仍要
                         // 把覆盖写入该 session，不能从 run.model 推断为无变化。
                         if run.kind == .codex || model != run.model {
-                            onSwitch(model, nil, nil)
+                            onSwitch(model, nil, nil, {})
                         }
                     } label: {
                         let name = SessionLaunchOptions.displayName(for: model, catalog: catalog.file)
@@ -1787,7 +1771,7 @@ private struct SessionProfileControl: View {
                 ForEach(availableEfforts, id: \.self) { effort in
                     Button {
                         if run.kind == .codex || effort != run.effort {
-                            onSwitch(nil, effort, nil)
+                            onSwitch(nil, effort, nil, {})
                         }
                     } label: {
                         if effort == run.effort { Label(effort, systemImage: "checkmark") }
