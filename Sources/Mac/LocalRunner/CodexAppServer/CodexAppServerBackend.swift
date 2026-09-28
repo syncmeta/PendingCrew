@@ -30,6 +30,48 @@ struct CodexPreparedWhiteboardContext {
     let commit: () -> Void
 }
 
+/// `thread/settings/update` only acknowledges receipt.  A Fast-mode control is
+/// authoritative only after the paired `thread/settings/updated` event names a
+/// service tier, so keep that short-lived acknowledgement separate from the RPC.
+@MainActor
+private final class CodexFastModeConfirmation {
+    let threadId: String
+    private var resolved = false
+    private var tier: String?
+    private var continuation: CheckedContinuation<String?, Never>?
+    private var timeoutTask: Task<Void, Never>?
+
+    init(threadId: String) { self.threadId = threadId }
+
+    func resolve(_ tier: String?) {
+        guard !resolved else { return }
+        resolved = true
+        self.tier = tier
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        continuation?.resume(returning: tier)
+        continuation = nil
+    }
+
+    func wait(timeout: TimeInterval) async -> String? {
+        if resolved { return tier }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                self?.resolve(nil)
+            }
+        }
+    }
+
+    func cancel() {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        resolve(nil)
+    }
+}
+
 /// codex session over app-server. Conforms to SessionBackend so CrewSessionRun
 /// treats it like the terminal backend. Output goes to `transcript` (rendered by
 /// CodexTranscriptView). `send` runs a turn; `interrupt` cancels the active turn;
@@ -60,6 +102,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private var model: String?
     private var effort: String?
     private var fastMode: Bool
+    private var pendingFastModeConfirmation: CodexFastModeConfirmation?
     var effectiveFastMode: Bool { fastMode }
     private let resumeThreadId: String?
     private let developerInstructions: String?
@@ -179,6 +222,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                             }
                             self.status = .exited(code)
                             self.isWorking = false
+                            self.pendingFastModeConfirmation?.cancel()
+                            self.pendingFastModeConfirmation = nil
                         }
                     })
                 cachedAgentProcessIdentifier = await connection.processIdentifier
@@ -247,6 +292,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// the session can switch in place without manufacturing a new thread.
     func applyProfileSwitch(_ command: SessionProfileSwitchCommand) async -> SessionProfileSwitchOutcome {
         guard let threadId else { return .neverIdle }
+        var fastConfirmation: CodexFastModeConfirmation?
         do {
             let params: [String: Any]
             switch command.knob {
@@ -260,23 +306,40 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 params = CodexProtocol.threadSettingsUpdateParams(
                     threadId: threadId, serviceTier: command.value == "on" ? "fast" : "default")
             }
-            let result = try await connection.request(method: "thread/settings/update", params: params)
-            if let tier = (result as? [String: Any])?["serviceTier"] as? String {
-                fastMode = tier == "fast" || tier == "priority"
-                if command.knob == .fast, fastMode != (command.value == "on") {
-                    return .rejected("Codex 返回的实际服务档位是 \(tier)")
-                }
+            let confirmation: CodexFastModeConfirmation?
+            if command.knob == .fast {
+                guard pendingFastModeConfirmation == nil else { return .neverIdle }
+                let pending = CodexFastModeConfirmation(threadId: threadId)
+                pendingFastModeConfirmation = pending
+                fastConfirmation = pending
+                confirmation = pending
+            } else {
+                confirmation = nil
             }
+            let result = try await connection.request(method: "thread/settings/update", params: params)
             switch command.knob {
             case .model: model = command.value
             case .effort: effort = command.value
             case .fast:
-                if (result as? [String: Any])?["serviceTier"] == nil {
-                    fastMode = command.value == "on"
+                // Current app-server returns `{}` here.  Its later
+                // `thread/settings/updated` event is the only actual state echo.
+                _ = result
+                let tier = await confirmation?.wait(timeout: 8)
+                if pendingFastModeConfirmation === confirmation {
+                    pendingFastModeConfirmation = nil
+                }
+                guard let tier else { return .noConfirmation }
+                fastMode = Self.isFastTier(tier)
+                guard fastMode == (command.value == "on") else {
+                    return .rejected("Codex 返回的实际服务档位是 \(tier)")
                 }
             }
             return .applied("thread/settings/update acknowledged")
         } catch {
+            fastConfirmation?.cancel()
+            if pendingFastModeConfirmation === fastConfirmation {
+                pendingFastModeConfirmation = nil
+            }
             return .rejected(error.localizedDescription)
         }
     }
@@ -422,11 +485,24 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         isWorking = false
         launchWatchdog?.cancel()   // 主动停的别被自检倒打一耙报成「拉起失败」
         notificationTask?.cancel()
+        pendingFastModeConfirmation?.cancel()
+        pendingFastModeConfirmation = nil
         Task { await connection.terminate() }
     }
 
     private func handleNotification(method: String, params: [String: Any]) {
         transcript.apply(method: method, params: params)
+        if method == "thread/settings/updated",
+           let updatedThreadId = params["threadId"] as? String,
+           updatedThreadId == threadId,
+           let settings = params["threadSettings"] as? [String: Any],
+           let tier = settings["serviceTier"] as? String {
+            fastMode = Self.isFastTier(tier)
+            notifyResolvedProfile(nil, nil, fastMode)
+            if pendingFastModeConfirmation?.threadId == updatedThreadId {
+                pendingFastModeConfirmation?.resolve(tier)
+            }
+        }
         // Update/seal local lifecycle before relaying the event. The remote facade
         // may publish idle synchronously, and its idle callback must already see a
         // ready continuation lease.
@@ -435,6 +511,13 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         // The mirrored transcript clears busy on turn/completed. Re-publish the
         // state after that event when a native compaction immediately follows.
         if method == "turn/completed", isCompacting { isWorking = true }
+    }
+
+    private static func isFastTier(_ tier: String) -> Bool {
+        switch tier.lowercased() {
+        case "fast", "priority": true
+        default: false
+        }
     }
 
     private func trackTurn(method: String, params: [String: Any]) {

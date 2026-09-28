@@ -703,7 +703,15 @@ final class CrewSessionRunner: ObservableObject {
             case let .rejected(quote):
                 failed.append("\(cmd.summary)：runner 拒绝了 —— \(quote)")
             case .noConfirmation:
-                failed.append("\(cmd.summary)：`\(cmd.line)` 已注入终端，但没等到 claude 的生效回显（当作没切成）")
+                if cmd.knob == .fast, run.kind == .codex {
+                    // app-server accepted the setting request but did not send an
+                    // authoritative tier echo.  It may have applied or rejected it;
+                    // showing the old Boolean would turn uncertainty into a lie.
+                    run.fastMode = nil
+                    failed.append("\(cmd.summary)：Codex 已受理请求但未回显实际服务档位，状态未知（当作没切成）")
+                } else {
+                    failed.append("\(cmd.summary)：`\(cmd.line)` 已注入终端，但没等到 claude 的生效回显（当作没切成）")
+                }
             case .neverIdle:
                 failed.append("\(cmd.summary)：session 尚未就绪、一直没空闲窗口，或已经退出")
             case .unsupported:

@@ -604,3 +604,59 @@ final class CodexFirstTurnFailureTests: XCTestCase {
     }
 }
 #endif
+
+#if os(macOS)
+/// The app-server ACK only confirms it accepted the settings request.  The
+/// authoritative tier arrives later in `thread/settings/updated`; the UI must
+/// not display the requested value if that event says otherwise.
+@MainActor
+final class CodexFastModeConfirmationTests: XCTestCase {
+    func testFastModeWaitsForConfirmedTierInsteadOfTrustingEmptyACK() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-fast-confirm-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("server.py")
+        try #"""
+        import json, sys
+        def emit(value):
+            print(json.dumps(value), flush=True)
+        for line in sys.stdin:
+            request = json.loads(line)
+            if "id" not in request:
+                continue
+            method = request["method"]
+            if method == "thread/start":
+                emit({"id": request["id"], "result": {"thread": {"id": "fast-thread"}}})
+            elif method == "thread/settings/update":
+                emit({"id": request["id"], "result": {}})
+                emit({"method": "thread/settings/updated", "params": {
+                    "threadId": "fast-thread",
+                    "threadSettings": {"serviceTier": "default"}
+                }})
+            else:
+                emit({"id": request["id"], "result": {}})
+        """#.write(to: script, atomically: true, encoding: .utf8)
+
+        let backend = CodexAppServerBackend(
+            executable: "/usr/bin/python3", argv: ["-u", script.path],
+            cwd: directory.path, env: ProcessInfo.processInfo.environment,
+            model: nil, effort: nil, resumeThreadId: nil,
+            developerInstructions: nil, mcpServers: nil,
+            whiteboardProvider: { nil })
+        defer { backend.stop() }
+        backend.boot(initialPrompt: nil)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline && !backend.hasObservedLaunchSignal {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(backend.hasObservedLaunchSignal)
+
+        let outcome = await backend.applyProfileSwitch(.init(knob: .fast, value: "on"))
+        guard case .rejected = outcome else {
+            return XCTFail("An empty ACK followed by default tier must not report Fast as applied")
+        }
+        XCTAssertFalse(backend.effectiveFastMode)
+    }
+}
+#endif
