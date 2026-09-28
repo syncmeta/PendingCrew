@@ -63,6 +63,19 @@ final class CrewDeferredWakeQueueTests: XCTestCase {
         XCTAssertEqual(queue.popWhenIdle(sessionId: "captain"), wake)
     }
 
+    func testExplicitRecoveryMustPopRefusedDeliveryBecauseRescanIsDuplicate() {
+        var queue = CrewDeferredWakeQueue()
+        let wake = delivery("whiteboard:human-limited")
+        guard case let .deliver(first) = queue.submit(wake, isBusy: false) else {
+            return XCTFail("initial delivery")
+        }
+        queue.resolve(first, as: .blocked)
+        XCTAssertEqual(queue.submit(wake, isBusy: false), .duplicate,
+                       "whiteboard rescan alone cannot reoffer a retained in-memory wake")
+        XCTAssertEqual(queue.popWhenIdle(sessionId: "captain"), wake,
+                       "direct UI recovery must drain the retained queue entry")
+    }
+
     /// 2026-08-30 根因红测：状态快照说 idle，但可控后端拒绝第一次 turn/start。
     /// 回调代表「可以推进消费游标」，只能在请求真的受理后执行；重试也只能受理一次。
     @MainActor

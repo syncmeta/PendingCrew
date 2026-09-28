@@ -2,7 +2,8 @@ import Foundation
 
 /// Durable, machine-wide budget for app-originated model turns. The lock covers the
 /// read, decision, reservation and write, including callers in another process.
-/// A reservation counts against the budget until the backend accepts or rejects it.
+/// Every reservation remains an attempt in the short window even if a backend
+/// rejects it; acceptance is tracked separately for settlement.
 final class AutomaticWakeAdmission: @unchecked Sendable {
     enum Priority: Equatable { case automatic, human, emergency }
     enum Decision {
@@ -21,9 +22,14 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             switch self {
             case .allowed: return ""
             case .deferred: return "请检查目标会话身份及本机 admission 账本；恢复前自动出站保持暂停。"
-            case .hardStopped: return "须由人工明确启动 session 恢复自动唤醒。"
+            case .hardStopped: return "须由人从界面明确选择对应范围的恢复操作。"
             }
         }
+    }
+
+    enum Submission<Result> {
+        case denied(Decision)
+        case attempted(Result, recorded: Bool)
     }
 
     struct Event: Codable {
@@ -31,6 +37,16 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         let sessionId: String
         let crewId: String
         let sourceKey: String
+        let at: TimeInterval
+        var accepted: Bool
+    }
+
+    /// Every reserved outbound attempt remains in the sliding window even if
+    /// the backend rejects it. `accepted` separately records real acceptance.
+    struct Attempt: Codable {
+        let token: String
+        let sessionId: String
+        let crewId: String
         let at: TimeInterval
         var accepted: Bool
     }
@@ -43,11 +59,36 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         let targetId: String
     }
 
+    enum RecoveryScope: Codable, Hashable {
+        case session(String)
+        case crew(String)
+        case machine
+    }
+
+    /// Constructed only by the explicit UI action, locally or by its trusted
+    /// viewer-to-daemon orchestration handler. It is never exposed as an agent tool.
+    struct HumanRecoveryRequest {
+        let token: String
+        let scope: RecoveryScope
+
+        static func directUI(scope: RecoveryScope) -> Self {
+            Self(token: UUID().uuidString, scope: scope)
+        }
+    }
+
+    struct RecoveryRecord: Codable {
+        let token: String
+        let scope: RecoveryScope
+        let at: TimeInterval
+        let actor: String
+    }
+
     struct State: Codable {
         var logicalNow: TimeInterval = 0
         var lastWall: TimeInterval = 0
         var lastUptime: TimeInterval = 0
         var events: [Event] = []
+        var attempts: [Attempt]? = nil
         var sourceDenials: [String: Int] = [:]
         var sourceDenialAt: [String: TimeInterval] = [:]
         var sourceBlockedUntil: [String: TimeInterval] = [:]
@@ -57,6 +98,7 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         var hardStoppedCrews: Set<String>? = nil
         var hardStoppedMachine: Bool? = nil
         var pendingWhiteboard: Set<PendingWhiteboard>? = nil
+        var recoveryRecords: [RecoveryRecord]? = nil
         /// Backend accepted, but the source lease has not yet been acknowledged.
         /// Kept separately from the rate window so a restart never resubmits it.
         var acceptedLeases: Set<String> = []
@@ -77,61 +119,58 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         return String(hash, radix: 16)
     }
 
-    /// Explicit human input and urgent events have a separate lane. They are never
-    /// labelled delivered by this decision; their caller still needs backend receipt.
+    /// Human and emergency input bypass only session/crew automation latches;
+    /// every priority reserves from the same hard machine attempt budget.
     func reserve(sessionId: String, crewId: String, sourceKey: String,
                  priority: Priority = .automatic, now: Date = Date(),
                  uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Decision {
-        guard priority == .automatic else { return .allowed("priority:" + UUID().uuidString) }
         return withLock { () -> Decision in
             guard var state = read() else { return .deferred("admission 账本读不出来") }
             if state.hardStoppedMachine == true { return .hardStopped("全机自动唤醒已熔断") }
-            if state.hardStoppedCrews?.contains(crewId) == true {
+            if priority == .automatic && state.hardStoppedCrews?.contains(crewId) == true {
                 return .hardStopped("crew 自动唤醒已熔断")
             }
-            if state.hardStoppedSessions?.contains(sessionId) == true {
+            if priority == .automatic && state.hardStoppedSessions?.contains(sessionId) == true {
                 return .hardStopped("session 自动唤醒已熔断")
             }
-            let wall = now.timeIntervalSince1970
-            if state.logicalNow == 0 {
-                state.logicalNow = wall
-            } else if uptime >= state.lastUptime && uptime - state.lastUptime < 7 * 86400 {
-                // A live machine's uptime, unlike wall time, does not jump when the
-                // clock is changed. It also survives an app restart on the same boot.
-                state.logicalNow += uptime - state.lastUptime
-            } else {
-                // A lower uptime means reboot (or an invalid clock sample). The
-                // wall clock may have jumped arbitrarily; wait for measured uptime
-                // on this boot before replenishing the budget.
-            }
-            state.lastWall = wall
-            state.lastUptime = uptime
+            advanceClock(&state, wall: now.timeIntervalSince1970, uptime: uptime)
             let clock = state.logicalNow
+            if state.attempts == nil {
+                state.attempts = state.events.map {
+                    Attempt(token: $0.token, sessionId: $0.sessionId,
+                            crewId: $0.crewId, at: $0.at, accepted: $0.accepted)
+                }
+            }
             state.events.removeAll { clock - $0.at >= ($0.accepted ? 3600 : 120) }
+            state.attempts = (state.attempts ?? []).filter { clock - $0.at < 60 }
             state.sourceDenialAt = state.sourceDenialAt.filter { clock - $0.value < 3600 }
             state.sourceDenials = state.sourceDenials.filter {
                 state.sourceDenialAt[$0.key] != nil
             }
             state.sourceBlockedUntil = state.sourceBlockedUntil.filter { $0.value > clock }
             let source = sessionId + "|" + sourceKey
-            let window = state.events.filter { clock - $0.at < 60 }
+            let window = state.attempts ?? []
             let sameSource = state.events.contains {
                 $0.sessionId == sessionId && $0.sourceKey == sourceKey && clock - $0.at < 900
             }
             let reason: String?
-            if sameSource { reason = "同一唤醒仍在冷却" }
+            if window.count >= 12 { reason = "全机滑窗已满" }
+            else if priority != .automatic { reason = nil }
+            else if sameSource { reason = "同一唤醒仍在冷却" }
             else if (state.sourceBlockedUntil[source] ?? 0) > clock { reason = "来源熔断中" }
             else if window.filter({ $0.sessionId == sessionId }).count >= 2 {
                 reason = "session 滑窗已满"
             } else if window.filter({ $0.crewId == crewId }).count >= 5 {
                 reason = "crew 滑窗已满"
-            } else if window.count >= 12 { reason = "全机滑窗已满" }
+            }
             else { reason = nil }
             if let reason {
                 // Any exhausted window or accepted-source repetition is evidence of
-                // an automatic loop. Latch the *scope* on disk until a human starts
-                // a session explicitly; waiting out a clock window is not recovery.
-                if sameSource || (state.sourceBlockedUntil[source] ?? 0) > clock
+                // an automatic loop. Latch the scope on disk until the explicit
+                // scoped UI recovery is audited; waiting out a window is not recovery.
+                if window.count >= 12 {
+                    state.hardStoppedMachine = true
+                } else if sameSource || (state.sourceBlockedUntil[source] ?? 0) > clock
                     || window.filter({ $0.sessionId == sessionId }).count >= 2 {
                     state.hardStoppedSessions = (state.hardStoppedSessions ?? []).union([sessionId])
                 } else if window.filter({ $0.crewId == crewId }).count >= 5 {
@@ -153,22 +192,110 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             let token = UUID().uuidString
             state.events.append(Event(token: token, sessionId: sessionId, crewId: crewId,
                                       sourceKey: sourceKey, at: clock, accepted: false))
+            state.attempts?.append(Attempt(token: token, sessionId: sessionId,
+                                            crewId: crewId, at: clock, accepted: false))
             guard write(state) else { return .deferred("admission 账本写不进去") }
             return .allowed(token)
         } ?? .deferred("admission 锁打不开")
     }
 
-    /// An explicit human start is the recovery action. Existing rate history and
-    /// accepted source leases remain, so an unresolved loop trips again promptly.
+    /// The operation is the real backend submit. A denial never invokes it;
+    /// only the backend's receipt marks the reservation accepted.
+    func performSend<Result>(sessionId: String, crewId: String, sourceKey: String,
+                             priority: Priority = .automatic,
+                             isAccepted: (Result) -> Bool,
+                             operation: () async -> Result) async -> Submission<Result> {
+        let decision = reserve(sessionId: sessionId, crewId: crewId,
+                               sourceKey: sourceKey, priority: priority)
+        guard case let .allowed(token) = decision else { return .denied(decision) }
+        let result = await operation()
+        return .attempted(result, recorded: finish(token: token, accepted: isAccepted(result)))
+    }
+
+    /// The closure is the actual launch body. Throwing before it completes
+    /// records a failed attempt without claiming that a session was started.
+    func performLaunch(sessionId: String, crewId: String, sourceKey: String,
+                       priority: Priority = .automatic,
+                       deniedError: (Decision) -> Error,
+                       operation: () async throws -> Void) async throws -> Bool {
+        let decision = reserve(sessionId: sessionId, crewId: crewId,
+                               sourceKey: sourceKey, priority: priority)
+        guard case let .allowed(token) = decision else { throw deniedError(decision) }
+        do {
+            try await operation()
+            return finish(token: token, accepted: true)
+        } catch {
+            _ = finish(token: token, accepted: false)
+            throw error
+        }
+    }
+
+    /// A separate, scoped direct-UI action is the only recovery path. No normal
+    /// launch, message, agent command or backend receipt clears a hard latch.
+    /// The one-use token and scope are audited atomically with the state change.
     @discardableResult
-    func resetHardStopsAfterHumanStart() -> Bool {
+    func recover(_ request: HumanRecoveryRequest, now: Date = Date(),
+                 uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
         withLock {
             guard var state = read() else { return false }
-            state.hardStoppedSessions = []
-            state.hardStoppedCrews = []
-            state.hardStoppedMachine = false
+            guard !(state.recoveryRecords ?? []).contains(where: { $0.token == request.token })
+            else { return false }
+            advanceClock(&state, wall: now.timeIntervalSince1970, uptime: uptime)
+            let recent = (state.attempts ?? state.events.map {
+                Attempt(token: $0.token, sessionId: $0.sessionId,
+                        crewId: $0.crewId, at: $0.at, accepted: $0.accepted)
+            }).filter { state.logicalNow - $0.at < 60 }
+            switch request.scope {
+            case .session(let id):
+                guard state.hardStoppedSessions?.contains(id) == true else { return false }
+                guard recent.filter({ $0.sessionId == id }).count < 2,
+                      !state.events.contains(where: {
+                          $0.sessionId == id && state.logicalNow - $0.at < 900
+                      }) else {
+                    _ = write(state) // persist new-boot uptime baseline without clearing latch
+                    return false
+                }
+                state.hardStoppedSessions?.remove(id)
+            case .crew(let id):
+                guard state.hardStoppedCrews?.contains(id) == true else { return false }
+                guard recent.filter({ $0.crewId == id }).count < 5 else {
+                    _ = write(state)
+                    return false
+                }
+                state.hardStoppedCrews?.remove(id)
+            case .machine:
+                guard state.hardStoppedMachine == true else { return false }
+                guard recent.count < 12 else {
+                    _ = write(state)
+                    return false
+                }
+                state.hardStoppedMachine = false
+            }
+            state.recoveryRecords = (state.recoveryRecords ?? []) + [RecoveryRecord(
+                token: request.token, scope: request.scope,
+                at: now.timeIntervalSince1970, actor: "explicit UI recovery")]
             return write(state)
         } ?? false
+    }
+
+    private func advanceClock(_ state: inout State, wall: TimeInterval,
+                              uptime: TimeInterval) {
+        if state.logicalNow == 0 {
+            state.logicalNow = wall
+        } else if uptime >= state.lastUptime && uptime - state.lastUptime < 7 * 86400 {
+            // Uptime ignores wall clock jumps and survives app restart on this boot.
+            state.logicalNow += uptime - state.lastUptime
+        }
+        // A lower uptime means reboot. Wait for measured time on this boot.
+        state.lastWall = wall
+        state.lastUptime = uptime
+    }
+
+    func recoveryHistory() -> [RecoveryRecord]? {
+        withLock {
+            guard let state = read() else { return nil }
+            return state.recoveryRecords ?? []
+        } ?? nil
     }
 
     /// Record before queuing or starting a whiteboard wake. If this write fails,
@@ -200,16 +327,18 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         } ?? false
     }
 
-    /// Only a true backend acceptance makes an event durable. Rejection frees its
-    /// reservation, leaving the original wake available for retry.
+    /// Only a true backend acceptance marks an event delivered. Rejection removes
+    /// its pending event but leaves the attempt in the rate window.
     @discardableResult
     func finish(token: String, accepted: Bool) -> Bool {
-        if token.hasPrefix("priority:") { return true }
         return withLock {
             guard var state = read(), let index = state.events.firstIndex(where: { $0.token == token })
             else { return false }
             if accepted {
                 state.events[index].accepted = true
+                if let attemptIndex = state.attempts?.firstIndex(where: { $0.token == token }) {
+                    state.attempts?[attemptIndex].accepted = true
+                }
                 let source = state.events[index].sessionId + "|" + state.events[index].sourceKey
                 if state.events[index].sourceKey.hasPrefix("scheduled:")
                     || state.events[index].sourceKey.hasPrefix("supervision:") {
@@ -254,7 +383,13 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
     }
 
     private func read() -> State? {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return State() }
+        var metadata = stat()
+        if lstat(fileURL.path, &metadata) != 0 {
+            // `fileExists` also returns false for EACCES/EMFILE. Only a real
+            // ENOENT is a new ledger; every other failure keeps the gate shut.
+            return errno == ENOENT ? State() : nil
+        }
+        guard (metadata.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return nil }
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(State.self, from: data)
     }

@@ -231,6 +231,31 @@ enum SessionDaemonMain {
                 let outcome = await runner.restoreSessions(candidates, backend: model.backend)
                 log.write("接回 session（界面转交）：\(outcome.summary)")
             }
+        case SessionOrchestrationOp.admissionRecovery:
+            guard let crewId = string("crewId"), let kind = string("scope") else { return }
+            let scope: AutomaticWakeAdmission.RecoveryScope
+            switch kind {
+            case "session":
+                guard let id = string("scopeId"), runner.runs.contains(where: {
+                    $0.sessionId == id && $0.crewId == crewId
+                }) else { return }
+                scope = .session(id)
+            case "crew":
+                guard string("scopeId") == crewId else { return }
+                scope = .crew(crewId)
+            case "machine": scope = .machine
+            default: return
+            }
+            let result = runner.requestAdmissionRecovery(scope: scope, crewId: crewId)
+            let succeeded: Bool
+            if case .applied = result { succeeded = true } else { succeeded = false }
+            let notice = succeeded
+                ? "界面请求的自动唤醒恢复已在后台执行（\(scope)），范围和时间已写入 admission 审计；待发消息按原文重试。"
+                : "界面请求的自动唤醒恢复未执行（\(scope)）：滑窗尚未冷却、该范围未熔断，或 admission 账本不可读写。"
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system", text: notice,
+                category: succeeded ? "info" : "error", senderName: "系统")
+            log.write(notice)
         default:
             log.write("未知编排请求 \(control.op)，忽略（§4.4：新增能力不断连）")
         }

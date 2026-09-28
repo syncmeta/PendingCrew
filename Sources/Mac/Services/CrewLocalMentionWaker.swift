@@ -114,7 +114,8 @@ final class CrewLocalMentionWaker {
     ///
     /// 普通未读只捞 `maxWakeAge`（6 小时）以内的，以免重演全机旧消息
     /// 重放。只有 admission 事先持久登记过的特定消息 id 可以越过年龄闸。
-    private func rescueBacklog(_ crewId: String) {
+    private func rescueBacklog(_ crewId: String, onlyTarget: String? = nil,
+                               includeOrdinaryUnread: Bool = true) {
         let store = LocalWhiteboardStore.shared
         let cursorDir = LocalWhiteboardStore.defaultDirectory
         // Snapshot debt *before* fresh unread rescue. That rescue may enqueue
@@ -137,7 +138,7 @@ final class CrewLocalMentionWaker {
             unreadBySession: unreadBySession, captainSessionId: captainKey)
         let all = store.list(crewId: crewId)
         let alreadyRecorded = Set(pending)
-        for p in owed {
+        for p in owed where includeOrdinaryUnread && (onlyTarget == nil || p.sessionId == onlyTarget) {
             guard !alreadyRecorded.contains(.init(
                 crewId: crewId, entryId: p.entryId, targetId: p.sessionId)) else { continue }
             guard let entry = all.first(where: { $0.id == p.entryId }) else { continue }
@@ -148,7 +149,7 @@ final class CrewLocalMentionWaker {
         // The ordinary startup sweep deliberately ignores old @s. Only entries
         // explicitly recorded before an automatic wake was queued may bypass
         // that age gate; the marker survives app restart and cursor capping.
-        for debt in pending {
+        for debt in pending where onlyTarget == nil || debt.targetId == onlyTarget {
             guard let entry = all.first(where: { $0.id == debt.entryId }) else {
                 reportAdmissionDebtFailure(crewId: crewId,
                     detail: "自动唤醒欠账指向的白板原文找不到；欠账未清，请人工核查白板归档。")
@@ -168,8 +169,10 @@ final class CrewLocalMentionWaker {
     /// 第一条 post_to_crew 之前调它 —— 该 crew 后续所有 @ 都保证被扫到。
     func notifyRunStarted(crewId: String) { pin(crewId) }
 
-    /// Human launch cleared the persistent latch; re-offer only recorded debt.
-    func notifyAdmissionRecovered(crewId: String) { rescueBacklog(crewId) }
+    /// The owning runner recorded an explicit scoped recovery; re-offer only debt.
+    func notifyAdmissionRecovered(crewId: String, targetId: String? = nil) {
+        rescueBacklog(crewId, onlyTarget: targetId, includeOrdinaryUnread: false)
+    }
 
     private func reportAdmissionDebtFailure(
         crewId: String,
@@ -307,7 +310,7 @@ final class CrewLocalMentionWaker {
             if !forceDebt, let entry, WhiteboardCursor(
                 directory: cursorDir, crewId: crewId, sessionId: inj.sessionId
             ).hasDelivered(entry, in: store) { continue }
-            if !d.isHuman && !wakeAdmission.rememberWhiteboard(debt) {
+            if !wakeAdmission.rememberWhiteboard(debt) {
                 reportAdmissionDebtFailure(crewId: crewId)
                 continue
             }
@@ -390,15 +393,17 @@ final class CrewLocalMentionWaker {
             wake = (needCaptain: wake.needCaptain && onlyTarget == CrewConversationKey.captain,
                     sessionIds: wake.sessionIds.filter { $0 == onlyTarget })
         }
-        guard wake.needCaptain || !wake.sessionIds.isEmpty,
-              let backend = backendProvider() else { return }
-        if !d.isHuman {
-            let targets = (wake.needCaptain ? [CrewConversationKey.captain] : []) + wake.sessionIds
-            for target in targets where !wakeAdmission.rememberWhiteboard(.init(
-                crewId: crewId, entryId: d.entryId, targetId: target)) {
-                reportAdmissionDebtFailure(crewId: crewId)
-                return
-            }
+        guard wake.needCaptain || !wake.sessionIds.isEmpty else { return }
+        let targets = (wake.needCaptain ? [CrewConversationKey.captain] : []) + wake.sessionIds
+        for target in targets where !wakeAdmission.rememberWhiteboard(.init(
+            crewId: crewId, entryId: d.entryId, targetId: target)) {
+            reportAdmissionDebtFailure(crewId: crewId)
+            return
+        }
+        guard let backend = backendProvider() else {
+            reportAdmissionDebtFailure(crewId: crewId,
+                detail: "目标当前没有可用后端；白板原文和待发 ID 已保留，恢复连接后可继续投递。")
+            return
         }
         let members = LocalCrewStore.shared.sessionMembers(crewId: crewId)
         let wakeText = "\(d.senderName)：\(d.messageText)"

@@ -725,6 +725,28 @@ struct CrewSessionWindowView: View {
                         remove: { sessionRunner.remove(run.runID) }
                     )
                 }
+                if let detail = crewStore.selectedDetail {
+                    Menu {
+                        if let run = sessionRunner.runs.first(where: {
+                            $0.runID == sessionRunner.selectedRunId
+                                && $0.crewId == detail.crew.id
+                        }) {
+                            Button("恢复当前 session 的自动唤醒") {
+                                recoverAutomaticWakes(.session(run.sessionId), crewId: detail.crew.id)
+                            }
+                        }
+                        Button("恢复此 crew 的自动唤醒") {
+                            recoverAutomaticWakes(.crew(detail.crew.id), crewId: detail.crew.id)
+                        }
+                        Button("恢复全机自动唤醒") {
+                            recoverAutomaticWakes(.machine, crewId: detail.crew.id)
+                        }
+                    } label: {
+                        Label("唤醒恢复", systemImage: "arrow.clockwise.circle")
+                            .font(.caption)
+                    }
+                    .help("仅在检查循环原因后手动恢复；范围和时间写入本机 admission 审计")
+                }
                 // 「+」起一个新 session（不动在跑的 run）。选中态高亮。
                 Button { sessionRunner.composeNew() } label: {
                     Label("新 session", systemImage: "plus")
@@ -738,6 +760,22 @@ struct CrewSessionWindowView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+        }
+    }
+
+    private func recoverAutomaticWakes(_ scope: AutomaticWakeAdmission.RecoveryScope,
+                                       crewId: String) {
+        switch sessionRunner.requestAdmissionRecovery(scope: scope, crewId: crewId) {
+        case .failed:
+            sessionRunner.lastStartError = "自动唤醒恢复失败：该范围未熔断、滑窗尚未冷却，或账本不可读写；请检查告警和本机数据目录。"
+        case .forwarded:
+            sessionRunner.lastStartError = "恢复请求已交后台，尚未确认；请以群聊中的恢复回执为准。"
+        case .applied:
+            sessionRunner.lastStartError = nil
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "人从本机界面执行了自动唤醒恢复（\(scope)）；范围和时间已写入 admission 审计。待发白板消息将按原文重试。",
+                category: "info", senderName: "系统")
         }
     }
 

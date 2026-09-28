@@ -43,6 +43,19 @@ final class CrewLocalMentionWakeLogicTests: XCTestCase {
         XCTAssertEqual(out.first?.mentions, [.captain])
     }
 
+    func testTwoEqualCrossCrewReportsRetainDistinctWhiteboardWakeIdentities() {
+        let mention = [LocalWhiteboardMention(kind: "captain", targetId: nil)]
+        let first = entry("session", sessionId: "source-captain", text: "同一份汇报",
+                          name: "子组·机长", mentions: mention)
+        let second = entry("session", sessionId: "source-captain", text: "同一份汇报",
+                           name: "子组·机长", mentions: mention)
+        let pending = CrewLocalMentionWakeLogic.pending(entries: [first, second])
+        XCTAssertEqual(pending.map(\.entryId), [first.id, second.id])
+        XCTAssertEqual(pending.map(\.mentions), [[.captain], [.captain]])
+        XCTAssertNotEqual("whiteboard:" + pending[0].entryId,
+                          "whiteboard:" + pending[1].entryId)
+    }
+
     func testPlainHumanEntryDefaultsToCaptain() {
         let e = entry("user", text: "修复啊", name: "人")
         let out = CrewLocalMentionWakeLogic.pending(entries: [e])

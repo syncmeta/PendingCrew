@@ -41,7 +41,9 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         }
     }
 
-    /// 机长变闲时的一整拍：读存量 → 判定 → 记账。返回要发给机长的正文，nil = 这一拍不发。
+    /// Legacy simulation API kept for historical regression tests. Runtime
+    /// outbound code must call `reminder` and settle with `recordReminded`
+    /// only after backend acceptance.
     ///
     /// **记账在返回之前做**：调用方拿到正文就发（`run.send` 只是入队），
     /// 先记后发和先发后记在这里没有可观察的差别，而这样这一拍整个能在单测里跑。
@@ -86,6 +88,14 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
             minimumInterval: CaptainTodoSweep.minimumRemindInterval)
         if case let .remind(text) = decision { return text }
         return nil
+    }
+
+    /// Stable while a reminder is pending, distinct after its accepted receipt
+    /// advances lastRemindedAt. The in-memory wake queue must not swallow the
+    /// next valid reminder as an already delivered `todo-sweep:<crew>` key.
+    func deliveryKey(crewId: String, text: String) -> String {
+        let previous = row(crewId: crewId).lastRemindedAt ?? "first"
+        return "todo-sweep:\(crewId):\(previous):\(AutomaticWakeAdmission.fingerprint(text))"
     }
 
     /// 测试用：清掉进程内那份退路，模拟「进程重启了」。

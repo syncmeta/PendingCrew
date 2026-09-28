@@ -533,7 +533,8 @@ final class InProcessSessionProtocolBridge: SessionProtocolPublishing {
         self.transport = transport
         appLink = InProcessSessionLink(transport: transport, side: .app)
         daemonLink = InProcessSessionLink(transport: transport, side: .daemon)
-        server = SessionProtocolServer(capabilities: daemonCapabilities)
+        server = SessionProtocolServer(capabilities: daemonCapabilities,
+                                       trustedPreAdmittedWake: true)
         client = SessionProtocolClient(link: appLink, capabilities: appCapabilities)
         // accept / init 会各自把 onReceive 装到链路上；两条链路互不覆盖对方的回调。
         server.accept(link: daemonLink)

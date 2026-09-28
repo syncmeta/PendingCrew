@@ -285,6 +285,12 @@ final class ViewWiringTests: XCTestCase {
                        "右栏观察器仍会与白板唯一 waker 抢拉 captain，赢家可能不带原消息")
 
         let runner = try Self.text(of: "CrewSessionRunner.swift")
+        XCTAssertTrue(runner.contains("wakeAdmission.performSend("),
+                      "real backend submit must execute inside durable admission")
+        XCTAssertTrue(runner.contains("wakeAdmission.performLaunch("),
+                      "real process launch must execute inside durable admission")
+        XCTAssertFalse(runner.contains("run.backend.send(input)"),
+                       "agent nudge text must not bypass durable admission")
         XCTAssertTrue(runner.contains("await run.backend.submitWake"),
                       "runner 仍把无回执 send 当作 wake 已投递")
         XCTAssertFalse(runner.contains("run.send(ready.text)"),
@@ -299,6 +305,17 @@ final class ViewWiringTests: XCTestCase {
                       "Codex 仍可能在 turn/start 受理前推进白板消费游标")
         let remote = try Self.text(of: "RemoteSessionBackend.swift")
         let endpoints = try Self.text(of: "SessionProtocolEndpoints.swift")
+        XCTAssertTrue(endpoints.contains("wakeAdmission.performSend("),
+                      "daemon submitWake must use the same durable admission")
+        XCTAssertFalse(endpoints.contains("priority:in-process"),
+                       "unknown daemon roster must not silently bypass admission")
+        let host = try Self.text(of: "SessionHost.swift")
+        XCTAssertFalse(host.contains("crewMessageWakes.take()"),
+                       "cross-crew report must not wake once by ID and again by direct host send")
+        let daemon = try Self.text(of: "SessionDaemonMain.swift")
+        XCTAssertTrue(daemon.contains("case SessionOrchestrationOp.admissionRecovery:"))
+        XCTAssertTrue(daemon.contains("runner.requestAdmissionRecovery(scope: scope, crewId: crewId)"),
+                      "viewer recovery must be applied by the owning daemon, not claimed locally")
         XCTAssertTrue(remote.contains("func submitWake(_ text: String) async"),
                       "远端 backend 没有把 wake 受理结果暴露给 runner")
         XCTAssertTrue(endpoints.contains("op: \"submitWake\""),

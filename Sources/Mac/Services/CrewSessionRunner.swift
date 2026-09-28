@@ -123,7 +123,8 @@ final class CrewSessionRunner: ObservableObject {
     /// 而 run 是在一串 `await`（拉 crew detail、列成员、起进程）**之后**才进
     /// `runs` 的 —— 两个并发调用会双双通过那道守卫，起出两个进程。**同一条消息
     /// 有两个投递者时这就是活的**（2026-08-11 通讯录把唤醒器的扫描面扩到全部 crew
-    /// 之后，休眠 crew 的机长同时被唤醒器和 `crewMessageWakes` 拉，正好凑齐）。
+    /// 之后，休眠 crew 的机长曾同时被唤醒器和旧 `crewMessageWakes` 拉；
+    /// 后者已移除，但不同白板扫描仍可能并发命中同一目标）。
     /// 这里补的是 await 窗口内的互斥；`runs` 那道守卫照旧留着（管已经起好的）。
     private var launchesInFlight: Set<String> = []
 
@@ -411,12 +412,12 @@ final class CrewSessionRunner: ObservableObject {
         // 地说没事。信号（`LedgerIncident.unreadable`）一直都在，只是 `list` 扔了它。
         let snapshot = CaptainTodoSweepStore.snapshot(
             of: LocalTodoStore.shared(.agent).read(crewId: crewId))
-        // 判定、退避档位、记账全在 `idleTick` 里（计划 #98）：留在这个 @MainActor 的
-        // runner 里就只能读源码断言，没法真跑一趟「9 小时读不出来」。
+        // 判定与退避由 store 准备；真正提醒时刻只在后端受理回调里落盘。
         guard let text = CaptainTodoSweepStore.shared.reminder(
             crewId: crewId, snapshot: snapshot, now: Date())
         else { return }
-        deliverOrDeferWake(sourceKey: "todo-sweep:" + crewId, to: run, text: text) { _ in
+        deliverOrDeferWake(sourceKey: CaptainTodoSweepStore.shared.deliveryKey(
+            crewId: crewId, text: text), to: run, text: text) { _ in
             if CaptainTodoSweepStore.shared.recordReminded(crewId: crewId, at: Date()) != nil {
                 LocalWhiteboardStore.shared.appendSessionMessage(
                     crewId: crewId, sessionId: "system",
@@ -451,42 +452,39 @@ final class CrewSessionRunner: ObservableObject {
         }
         // A viewer has no authoritative session ownership. Its submitWake RPC is
         // admitted on the daemon before the real backend, using the same key.
-        let admission = isViewer
-            ? AutomaticWakeAdmission.Decision.allowed("priority:remote")
-            : wakeAdmission.reserve(sessionId: run.sessionId, crewId: run.crewId,
-                                    sourceKey: delivery.key,
-                                    priority: deferredWakePriorities[delivery.key] ?? .automatic)
-        guard case let .allowed(admissionToken) = admission else {
-            deferredWakes.resolve(delivery, as: .retry)
-            deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
-            if let reason = admission.reason {
-                let key = "wake-admission|\(run.crewId)|\(reason)"
-                if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
-                    LocalWhiteboardStore.shared.appendSessionMessage(
-                        crewId: run.crewId, sessionId: "system",
-                        text: "自动唤醒已暂停：\(reason)。原消息和待发事项仍保留；\(admission.recoveryHint)",
-                        category: "error", senderName: "系统")
-                }
-            }
-            // Admission refusal must not drive a polling loop. The pending
-            // delivery stays queued; a human start or a later idle edge can
-            // reconsider it, while a hard stop remains latched on disk.
-            return
-        }
         let baseline = wakeReceiptEvidence(for: run)
         Task { @MainActor [weak self, weak run] in
             guard let self, let run, run.status == .running else {
-                self?.wakeAdmission.finish(token: admissionToken, accepted: false)
+                self?.deferredWakes.resolve(delivery, as: .retry)
                 return
             }
-            let result: SessionWakeSubmission
+            let outcome: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
             if let remote = run.backend as? RemoteSessionBackend {
-                result = await remote.submitWake(text, sourceKey: delivery.key)
+                // The viewer owns no session. The daemon executes the same
+                // admission before touching its authoritative backend.
+                outcome = .attempted(await remote.submitWake(text, sourceKey: delivery.key),
+                                     recorded: true)
             } else {
-                result = await run.backend.submitWake(text)
+                outcome = await self.wakeAdmission.performSend(
+                    sessionId: run.sessionId, crewId: run.crewId, sourceKey: delivery.key,
+                    priority: self.deferredWakePriorities[delivery.key] ?? .automatic,
+                    isAccepted: { $0 == .accepted },
+                    operation: { await run.backend.submitWake(text) })
             }
-            let accepted = result == .accepted
-            let recorded = self.wakeAdmission.finish(token: admissionToken, accepted: accepted)
+            guard case let .attempted(result, recorded) = outcome else {
+                if case let .denied(admission) = outcome, let reason = admission.reason {
+                    let key = "wake-admission|\(run.crewId)|\(reason)"
+                    if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
+                        LocalWhiteboardStore.shared.appendSessionMessage(
+                            crewId: run.crewId, sessionId: "system",
+                            text: "自动唤醒已暂停：\(reason)。原消息和待发事项仍保留；\(admission.recoveryHint)",
+                            category: "error", senderName: "系统")
+                    }
+                }
+                self.deferredWakes.resolve(delivery, as: .retry)
+                self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
+                return
+            }
             if !recorded, LedgerIncidentNoticeGate.shared.shouldEmit(
                 key: "wake-admission-finish|\(run.crewId)") {
                 LocalWhiteboardStore.shared.appendSessionMessage(
@@ -1407,7 +1405,10 @@ final class CrewSessionRunner: ObservableObject {
             return
         }
         if let input = req.input {
-            respond(nudge(run: run, input: input))
+            Task { @MainActor in
+                respond(await nudge(run: run, input: input,
+                                    sourceKey: "nudge:" + req.commandId))
+            }
         } else {
             respond(inspect(run: run))
         }
@@ -1472,13 +1473,12 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 向目标发文本/按键。"Enter"/"Esc" 是按键（解模态菜单）；其余文本走 send
     /// （claude=正文+隔拍回车提交；codex=起新 turn）。
-    private func nudge(run: CrewSessionRun, input: String) -> String {
+    private func nudge(run: CrewSessionRun, input: String,
+                       sourceKey: String) async -> String {
         guard run.status == .running else { return "「\(run.displayName)」已退出，无法注入。" }
         guard run.kind.isAgent else {
             return "「\(run.displayName)」是人的纯终端，不接受 crew agent 编排注入。"
         }
-        // 有人来答了 —— 先熄掉「在等回复」，别让机长代答完界面还红着（Todo #25 层 2）。
-        run.clearAwaitingQuestionMarker()
         let key = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let term = run.backend as? SessionProtocolTerminalControlling,
            run.kind != .codex {
@@ -1486,13 +1486,42 @@ final class CrewSessionRunner: ObservableObject {
             // 搬动高亮」就是按同一张表算的**。在这里手写一个 switch、再在文案里手写一遍
             // 键名，就是给「加了新键之后文案安静过期」留门（今天这条 P0 的同款病）。
             if let bytes = SessionNudgeKeys.byAlias[key] {
-                term.sendRaw(bytes)
+                if bytes != [0x1b] {
+                    let decision = wakeAdmission.reserve(sessionId: run.sessionId,
+                        crewId: run.crewId, sourceKey: sourceKey)
+                    guard case let .allowed(token) = decision else {
+                        reportNudgeAdmissionDenied(run: run, decision: decision)
+                        return "按键未送出：\(decision.reason ?? "admission 未受理")。原命令已明确拒绝，请核查告警后重试。"
+                    }
+                    term.sendRaw(bytes)
+                    if !wakeAdmission.finish(token: token, accepted: true) {
+                        reportNudgeLedgerFailure(run: run)
+                        return "按键已写入目标终端，但 admission 受理记录写盘失败；请检查本机数据目录。"
+                    }
+                } else {
+                    term.sendRaw(bytes)
+                }
+                run.clearAwaitingQuestionMarker()
                 return "已向「\(run.displayName)」发送 \(key)。稍后 inspect_session 复查画面。"
             }
             // 其余一律当文本 + 自动补回车。**那个回车会确认菜单当前高亮的那一项** ——
             // 所以在待决策现场随手发点什么，等于替它做了一个你没看过的选择。
-            run.backend.send(input)
-            return "已把文本发给「\(run.displayName)」（自动回车提交）。"
+            let outcome = await wakeAdmission.performSend(
+                sessionId: run.sessionId, crewId: run.crewId, sourceKey: sourceKey,
+                isAccepted: { $0 == .accepted },
+                operation: { await run.backend.submitWake(input) })
+            if case let .denied(decision) = outcome {
+                reportNudgeAdmissionDenied(run: run, decision: decision)
+            }
+            guard case let .attempted(result, recorded) = outcome, result == .accepted else {
+                return "文本未送达「\(run.displayName)」；admission 或后端拒绝。原命令已明确失败，请核查告警后重试。"
+            }
+            if !recorded { reportNudgeLedgerFailure(run: run) }
+            run.clearAwaitingQuestionMarker()
+            if !recorded {
+                return "后端已受理文本，但 admission 受理记录写盘失败；请检查本机数据目录。"
+            }
+            return "后端已受理发给「\(run.displayName)」的文本（自动回车提交）。"
                 + "它要是正卡在一个选择框上，那个回车已经确认了**当时高亮的那一项**——"
                 + "现在就 inspect_session 复查画面。"
         }
@@ -1511,8 +1540,42 @@ final class CrewSessionRunner: ObservableObject {
             return "「\(run.displayName)」是 codex session，没有终端按键，`\(key)` 在这里"
                 + "没有对应动作；要说话就直接发文本，它会作为新 turn 输入。"
         }
-        run.backend.send(input)
-        return "已把文本作为新 turn 输入发给「\(run.displayName)」。"
+        let outcome = await wakeAdmission.performSend(
+            sessionId: run.sessionId, crewId: run.crewId, sourceKey: sourceKey,
+            isAccepted: { $0 == .accepted },
+            operation: { await run.backend.submitWake(input) })
+        if case let .denied(decision) = outcome {
+            reportNudgeAdmissionDenied(run: run, decision: decision)
+        }
+        guard case let .attempted(result, recorded) = outcome, result == .accepted else {
+            return "文本未送达「\(run.displayName)」；admission 或后端拒绝。原命令已明确失败，请核查告警后重试。"
+        }
+        if !recorded { reportNudgeLedgerFailure(run: run) }
+        run.clearAwaitingQuestionMarker()
+        if !recorded {
+            return "后端已受理新 turn，但 admission 受理记录写盘失败；请检查本机数据目录。"
+        }
+        return "后端已受理发给「\(run.displayName)」的新 turn。"
+    }
+
+    private func reportNudgeAdmissionDenied(run: CrewSessionRun,
+                                            decision: AutomaticWakeAdmission.Decision) {
+        let reason = decision.reason ?? "admission 未受理"
+        guard LedgerIncidentNoticeGate.shared.shouldEmit(
+            key: "wake-admission-nudge|\(run.crewId)|\(reason)") else { return }
+        LocalWhiteboardStore.shared.appendSessionMessage(
+            crewId: run.crewId, sessionId: "system",
+            text: "机长督促目标 session 的输入未送出：\(reason)。命令调用方已收到失败回执；\(decision.recoveryHint)",
+            category: "error", senderName: "系统")
+    }
+
+    private func reportNudgeLedgerFailure(run: CrewSessionRun) {
+        guard LedgerIncidentNoticeGate.shared.shouldEmit(
+            key: "wake-admission-nudge-finish|\(run.crewId)") else { return }
+        LocalWhiteboardStore.shared.appendSessionMessage(
+            crewId: run.crewId, sessionId: "system",
+            text: "督促输入出站后无法写入 admission 账本；后续自动唤醒保持安全暂停，请检查本机数据目录。",
+            category: "error", senderName: "系统")
     }
 
     /// 已广播过的警戒键（agent|窗|重置时刻）——一个重置周期只喊一次,不刷屏。
@@ -1553,7 +1616,7 @@ final class CrewSessionRunner: ObservableObject {
     /// （机长 start_session 排队、驾驶舱派活、手动起机长）都走这里，别各自吞。
     /// ① `lastStartError` → UI 横幅（沿用「人类发言自动拉起机长失败」那条留痕通道）；
     /// ② 白板一条 @机长 —— 机长看到才能立刻改派，否则 brief 就此人间蒸发。
-    /// `brief` 非空时带上任务前缀，让机长认得出是哪份活没派出去。
+    /// `brief` 非空时保留原文，让被 admission 拒绝的派单仍可完整改派。
     ///
     /// `mentionCaptain: false` 用于**起机长自己失败**那条来路 —— @机长会触发
     /// 「目标缺席拉起」，起不来又发一条，就此成环。那条改成广播，受众本来也是人。
@@ -1562,7 +1625,7 @@ final class CrewSessionRunner: ObservableObject {
     ) {
         let reason = error.localizedDescription
         lastStartError = reason
-        let briefPart = (brief?.isEmpty == false) ? "\n无人接手的活：\(brief!.prefix(80))" : ""
+        let briefPart = (brief?.isEmpty == false) ? "\n无人接手的活：\(brief!)" : ""
         LocalWhiteboardStore.shared.appendSessionMessage(
             crewId: crewId, sessionId: "system",
             text: "起 session 失败：\(reason)\(briefPart)\n请改派或重起。",
@@ -1607,11 +1670,11 @@ final class CrewSessionRunner: ObservableObject {
     ) async throws {
         let launchSource = role == .captain ? "launch:captain:\(crewId)"
                                             : "launch:member:\(sessionId)"
-        let launchDecision = wakeAdmission.reserve(
+        let launchRecorded = try await wakeAdmission.performLaunch(
             sessionId: sessionId, crewId: crewId, sourceKey: launchSource,
-            priority: userInitiated || !config.kind.isAgent ? .human : admissionPriority)
-        guard case let .allowed(launchToken) = launchDecision else {
-            if let reason = launchDecision.reason {
+            priority: userInitiated || !config.kind.isAgent ? .human : admissionPriority,
+            deniedError: { launchDecision in
+                if let reason = launchDecision.reason {
                 let key = "wake-admission-launch|\(crewId)|\(reason)"
                 if LedgerIncidentNoticeGate.shared.shouldEmit(key: key) {
                     LocalWhiteboardStore.shared.appendSessionMessage(
@@ -1619,12 +1682,10 @@ final class CrewSessionRunner: ObservableObject {
                         text: "自动拉起 session 已暂停：\(reason)。原始白板消息仍在；\(launchDecision.recoveryHint)",
                         category: "error", senderName: "系统")
                 }
-                throw RunnerError.automaticWakeDeferred(reason)
-            }
-            throw RunnerError.automaticWakeDeferred("admission 未受理")
-        }
-        var launchAccepted = false
-        defer { wakeAdmission.finish(token: launchToken, accepted: launchAccepted) }
+                    return RunnerError.automaticWakeDeferred(reason)
+                }
+                return RunnerError.automaticWakeDeferred("admission 未受理")
+            }, operation: {
         // 没显式选 model → 解析一个具体默认别名显式落进 config（argv 带 --model、
         // run.model 永不为 nil）：显示=实际跑的模型，不再糊「默认」(#489)。codex 若
         // 读不到 ~/.codex/config.toml 的 model 仍为 nil（由 app-server 采用默认模型）。
@@ -1898,21 +1959,74 @@ final class CrewSessionRunner: ObservableObject {
             LocalCrewStore.shared.recordSessionMember(
                 crewId: crewId, sessionId: sessionId, displayName: run.displayName)
         }
-        launchAccepted = true
         if let entryId = config.wakeEntryId {
             _ = wakeAdmission.acknowledgeWhiteboard(.init(
                 crewId: crewId, entryId: entryId,
                 targetId: role == .captain ? CrewConversationKey.captain : sessionId))
         }
-        if userInitiated && config.kind.isAgent {
-            if wakeAdmission.resetHardStopsAfterHumanStart() {
-                localMentionWaker?.notifyAdmissionRecovered(crewId: crewId)
-            } else {
-                LocalWhiteboardStore.shared.appendSessionMessage(
-                    crewId: crewId, sessionId: "system",
-                    text: "人工启动已受理，但自动唤醒熔断状态清账失败；自动路径仍保持暂停，请检查本机数据目录。",
-                    category: "error", senderName: "系统")
+        })
+        if !launchRecorded, LedgerIncidentNoticeGate.shared.shouldEmit(
+            key: "wake-admission-launch-finish|\(crewId)") {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "session 已拉起，但 admission 受理记录写盘失败；后续自动唤醒暂停，请检查本机数据目录。",
+                category: "error", senderName: "系统")
+        }
+    }
+
+    enum AdmissionRecoveryResult { case applied, forwarded, failed }
+
+    /// A viewer asks the owning daemon to recover. Only the owner writes the
+    /// latch/audit and reoffers debt, so a forwarded request is not a receipt.
+    func requestAdmissionRecovery(scope: AutomaticWakeAdmission.RecoveryScope,
+                                  crewId: String) -> AdmissionRecoveryResult {
+        if isViewer {
+            guard viewerClient != nil else { return .failed }
+            let kind: String
+            let id: String
+            switch scope {
+            case .session(let value): kind = "session"; id = value
+            case .crew(let value): kind = "crew"; id = value
+            case .machine: kind = "machine"; id = ""
             }
+            sendOrchestration(SessionOrchestrationOp.admissionRecovery, [
+                "crewId": .string(crewId), "scope": .string(kind), "scopeId": .string(id)])
+            return .forwarded
+        }
+        guard wakeAdmission.recover(.directUI(scope: scope)) else { return .failed }
+        reofferRecordedWakes(scope: scope, crewId: crewId)
+        return .applied
+    }
+
+    /// Called only after the owner successfully writes a scoped recovery
+    /// record. The original whiteboard debt remains authoritative.
+    func reofferRecordedWakes(scope: AutomaticWakeAdmission.RecoveryScope, crewId: String) {
+        switch scope {
+        case .session(let sessionId):
+            let target = sessionId.hasPrefix(CrewConversationKey.captainPrefix)
+                ? CrewConversationKey.captain : sessionId
+            localMentionWaker?.notifyAdmissionRecovered(crewId: crewId, targetId: target)
+        case .crew(let id):
+            localMentionWaker?.notifyAdmissionRecovered(crewId: id)
+        case .machine:
+            for id in LocalCrewStore.shared.allCrewTitles().map(\.id) {
+                localMentionWaker?.notifyAdmissionRecovered(crewId: id)
+            }
+        }
+        // The in-memory queue intentionally kept refused deliveries pending.
+        // A whiteboard re-scan sees the same ID as duplicate, so explicitly
+        // drain one idle delivery here instead of waiting for a new idle edge.
+        for run in runs where run.status == .running && run.kind.isAgent
+            && !run.backend.isBusy && !run.activityIsWorking {
+            let matches: Bool
+            switch scope {
+            case .session(let id): matches = run.sessionId == id
+            case .crew(let id): matches = run.crewId == id
+            case .machine: matches = true
+            }
+            guard matches, let delivery = deferredWakes.popWhenIdle(sessionId: run.sessionId)
+            else { continue }
+            attemptWakeDelivery(delivery, to: run)
         }
     }
 

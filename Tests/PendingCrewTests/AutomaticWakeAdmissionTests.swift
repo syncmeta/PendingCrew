@@ -41,13 +41,13 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
                                        now: t.addingTimeInterval(172800), uptime: 1).isAllowed)
     }
 
-    func testUnreadableLedgerFailsClosedButManualPasses() throws {
+    func testUnreadableLedgerFailsClosedForAutomaticAndManual() throws {
         let gate = store()
         try FileManager.default.createDirectory(at: gate.directory, withIntermediateDirectories: true)
         try Data("broken".utf8).write(to: gate.fileURL)
         XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "auto").isAllowed)
-        XCTAssertTrue(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "human",
-                                   priority: .human).isAllowed)
+        XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "human",
+                                    priority: .human).isAllowed)
         XCTAssertEqual(try Data(contentsOf: gate.fileURL), Data("broken".utf8))
     }
 
@@ -74,6 +74,44 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         XCTAssertTrue(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "one").isAllowed)
     }
 
+    func testRejectedBackendStillConsumesAttemptBudgetAndTripsStickyCircuit() {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<2 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s", crewId: "c", sourceKey: "failed-\(index)",
+                now: t, uptime: 100) else { return XCTFail("two reservations should pass") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "third",
+                                    now: t, uptime: 100).isAllowed)
+        XCTAssertFalse(AutomaticWakeAdmission(directory: gate.directory).reserve(
+            sessionId: "s", crewId: "c", sourceKey: "after-restart",
+            now: t.addingTimeInterval(12 * 3600), uptime: 12 * 3600 + 100).isAllowed)
+    }
+
+    func testHumanAndEmergencyStillObserveMachineHardLimitAndUnreadableLedger() throws {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<12 {
+            let priority: AutomaticWakeAdmission.Priority = index.isMultiple(of: 2)
+                ? .human : .emergency
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s\(index)", crewId: "c\(index)", sourceKey: "explicit-\(index)",
+                priority: priority, now: t, uptime: 100) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        XCTAssertFalse(gate.reserve(sessionId: "human", crewId: "new", sourceKey: "more",
+                                    priority: .human, now: t, uptime: 100).isAllowed)
+        XCTAssertFalse(gate.reserve(sessionId: "urgent", crewId: "new", sourceKey: "more",
+                                    priority: .emergency, now: t, uptime: 100).isAllowed)
+        let corrupt = store()
+        try FileManager.default.createDirectory(at: corrupt.directory, withIntermediateDirectories: true)
+        try Data("broken".utf8).write(to: corrupt.fileURL)
+        XCTAssertFalse(corrupt.reserve(sessionId: "s", crewId: "c", sourceKey: "human",
+                                       priority: .human).isAllowed)
+    }
+
     func testCrewAndMachineWindowsCannotBeBypassedWithNewSessions() {
         let gate = store()
         let t = Date(timeIntervalSince1970: 1_000_000)
@@ -95,10 +133,10 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         }
         XCTAssertFalse(gate.reserve(sessionId: "new", crewId: "new", sourceKey: "new",
                                     now: t, uptime: 100).isAllowed)
-        XCTAssertTrue(gate.reserve(sessionId: "new", crewId: "new", sourceKey: "human",
-                                   priority: .human, now: t, uptime: 100).isAllowed)
-        XCTAssertTrue(gate.reserve(sessionId: "new", crewId: "new", sourceKey: "urgent",
-                                   priority: .emergency, now: t, uptime: 100).isAllowed)
+        XCTAssertFalse(gate.reserve(sessionId: "new", crewId: "new", sourceKey: "human",
+                                    priority: .human, now: t, uptime: 100).isAllowed)
+        XCTAssertFalse(gate.reserve(sessionId: "new", crewId: "new", sourceKey: "urgent",
+                                    priority: .emergency, now: t, uptime: 100).isAllowed)
     }
 
     func testAcceptedTimedLeaseSurvivesRestartUntilSourceAcknowledgesIt() {
@@ -160,21 +198,30 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
             now: t.addingTimeInterval(7 * 86400), uptime: 1).isAllowed)
     }
 
-    func testExplicitHumanStartCanResetLatchWithoutErasingAcceptedLease() {
+    func testScopedHumanRecoveryIsAuditedSingleUseAndPreservesOtherLatches() {
         let gate = store()
         let t = Date(timeIntervalSince1970: 1_000_000)
-        for index in 0..<2 {
-            guard case let .allowed(token) = gate.reserve(
-                sessionId: "s", crewId: "c", sourceKey: "source-\(index)",
-                now: t, uptime: 100) else { return XCTFail("setup") }
-            XCTAssertTrue(gate.finish(token: token, accepted: true))
+        for session in ["s1", "s2"] {
+            for index in 0..<2 {
+                guard case let .allowed(token) = gate.reserve(
+                    sessionId: session, crewId: session,
+                    sourceKey: "source-\(index)", now: t, uptime: 100)
+                else { return XCTFail("setup") }
+                XCTAssertTrue(gate.finish(token: token, accepted: true))
+            }
+            XCTAssertFalse(gate.reserve(sessionId: session, crewId: session,
+                                        sourceKey: "trip", now: t, uptime: 100).isAllowed)
         }
-        XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "trip",
-                                    now: t, uptime: 100).isAllowed)
-        XCTAssertTrue(gate.resetHardStopsAfterHumanStart())
+        let request = AutomaticWakeAdmission.HumanRecoveryRequest.directUI(
+            scope: .session("s1"))
+        XCTAssertTrue(gate.recover(request))
+        XCTAssertFalse(gate.recover(request), "one action must never be reusable")
         let reopened = AutomaticWakeAdmission(directory: gate.directory)
-        XCTAssertTrue(reopened.reserve(sessionId: "s", crewId: "c", sourceKey: "fresh",
+        XCTAssertTrue(reopened.reserve(sessionId: "s1", crewId: "s1", sourceKey: "fresh",
                                        now: t.addingTimeInterval(3600), uptime: 3700).isAllowed)
+        XCTAssertFalse(reopened.reserve(sessionId: "s2", crewId: "s2", sourceKey: "still-stopped",
+                                        now: t.addingTimeInterval(3600), uptime: 3700).isAllowed)
+        XCTAssertEqual(reopened.recoveryHistory()?.count, 1)
     }
 
     func testSuppressedWhiteboardDebtSurvivesRestartUntilAcknowledged() {
@@ -195,5 +242,101 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         try Data("broken".utf8).write(to: gate.fileURL)
         XCTAssertNil(gate.pendingWhiteboard(crewId: "c"))
         XCTAssertFalse(gate.rememberWhiteboard(.init(crewId: "c", entryId: "e", targetId: "s")))
+    }
+
+    func testRealSendOperationIsNotInvokedAfterRejectedAttemptsTripSessionCircuit() async {
+        let gate = store()
+        var submitCount = 0
+        for source in ["todo", "timer", "supervision"] {
+            let outcome = await gate.performSend(
+                sessionId: "s", crewId: "c", sourceKey: source,
+                isAccepted: { (result: Bool) in result },
+                operation: { submitCount += 1; return false })
+            if source == "supervision" {
+                guard case .denied = outcome else { return XCTFail("third source must be denied") }
+            }
+        }
+        XCTAssertEqual(submitCount, 2, "the backend submit closure must never run on denial")
+    }
+
+    func testRealLaunchOperationIsNotInvokedAfterFailedAttemptsAndRestart() async throws {
+        enum FakeLaunchError: Error { case backend, denied }
+        let gate = store()
+        var launchCount = 0
+        for source in ["first", "second"] {
+            do {
+                try await gate.performLaunch(
+                    sessionId: "s", crewId: "c", sourceKey: source,
+                    deniedError: { _ in FakeLaunchError.denied },
+                    operation: { launchCount += 1; throw FakeLaunchError.backend })
+                XCTFail("fake launch must reject")
+            } catch FakeLaunchError.backend { }
+        }
+        let reopened = AutomaticWakeAdmission(directory: gate.directory)
+        do {
+            try await reopened.performLaunch(
+                sessionId: "s", crewId: "c", sourceKey: "third",
+                deniedError: { _ in FakeLaunchError.denied },
+                operation: { launchCount += 1 })
+            XCTFail("third launch must be denied")
+        } catch FakeLaunchError.denied { }
+        XCTAssertEqual(launchCount, 2, "denial must precede the actual start closure")
+    }
+
+    func testMachineLimitedHumanSendKeepsOriginalWhiteboardDebtForRecovery() async {
+        let gate = store()
+        let debt = AutomaticWakeAdmission.PendingWhiteboard(
+            crewId: "human-crew", entryId: "human-entry", targetId: "captain")
+        XCTAssertTrue(gate.rememberWhiteboard(debt))
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s\(index)", crewId: "c\(index)", sourceKey: "human-\(index)",
+                priority: .human) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        var submissions = 0
+        let outcome = await gate.performSend(
+            sessionId: "captain", crewId: "human-crew", sourceKey: "whiteboard:human-entry",
+            priority: .human, isAccepted: { (result: Bool) in result },
+            operation: { submissions += 1; return true })
+        guard case .denied = outcome else { return XCTFail("human turn must obey machine cap") }
+        XCTAssertEqual(submissions, 0)
+        XCTAssertEqual(AutomaticWakeAdmission(directory: gate.directory)
+            .pendingWhiteboard(crewId: "human-crew"), [debt])
+        let recovery = AutomaticWakeAdmission.HumanRecoveryRequest.directUI(scope: .machine)
+        XCTAssertFalse(gate.recover(recovery), "hard window has not cooled yet")
+        XCTAssertTrue(gate.recover(recovery, now: Date().addingTimeInterval(61),
+                                   uptime: ProcessInfo.processInfo.systemUptime + 61))
+        let recovered = await gate.performSend(
+            sessionId: "captain", crewId: "human-crew", sourceKey: "whiteboard:human-entry",
+            priority: .human, isAccepted: { (result: Bool) in result },
+            operation: { submissions += 1; return true })
+        guard case .attempted(true, recorded: true) = recovered else {
+            return XCTFail("explicit scoped recovery should reoffer the original human message")
+        }
+        XCTAssertEqual(submissions, 1)
+        XCTAssertEqual(gate.pendingWhiteboard(crewId: "human-crew"), [debt],
+                       "backend acceptance alone must not fake a whiteboard consumption receipt")
+        XCTAssertTrue(gate.acknowledgeWhiteboard(debt))
+        XCTAssertEqual(gate.pendingWhiteboard(crewId: "human-crew"), [])
+    }
+
+    func testRebootRecoveryRequiresMeasuredUptimeAndPersistsItsNewBaseline() {
+        let gate = store()
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "s\(index)", crewId: "c\(index)", sourceKey: "e\(index)",
+                priority: .human, now: t, uptime: 1000) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        XCTAssertFalse(gate.reserve(sessionId: "extra", crewId: "extra", sourceKey: "trip",
+                                    priority: .human, now: t, uptime: 1000).isAllowed)
+        let request = AutomaticWakeAdmission.HumanRecoveryRequest.directUI(scope: .machine)
+        XCTAssertFalse(gate.recover(request, now: t.addingTimeInterval(86400), uptime: 1),
+                       "wall-clock jump and reboot cannot clear the window immediately")
+        let restarted = AutomaticWakeAdmission(directory: gate.directory)
+        XCTAssertTrue(restarted.recover(request, now: t.addingTimeInterval(86461), uptime: 62),
+                      "61 measured seconds on the new boot should safely cool the window")
     }
 }

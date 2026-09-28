@@ -743,6 +743,19 @@ final class CaptainTodoSweepTests: XCTestCase {
                        [1], "故障期间的一次提醒把机长交过的确认盖掉了")
     }
 
+    func testAcceptedSweepGetsNewQueueIdentityButDeferredSweepKeepsItsIdentity() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweep-queue-key-\(UUID().uuidString)")
+        let crew = "crew-\(UUID().uuidString)"
+        let sweeps = CaptainTodoSweepStore(directory: dir)
+        let before = sweeps.deliveryKey(crewId: crew, text: "请核账")
+        XCTAssertEqual(before, sweeps.deliveryKey(crewId: crew, text: "请核账"))
+        XCTAssertNil(sweeps.recordReminded(crewId: crew, at: Date()))
+        let after = sweeps.deliveryKey(crewId: crew, text: "请核账")
+        XCTAssertNotEqual(after, before,
+                          "下一轮合法提醒不能被内存队列的 deliveredKeys 当作旧条目吞掉")
+    }
+
     /// 两本账都在、都非空、都打不开的一个目录。
     private struct UnreadableFixture {
         let dir: URL

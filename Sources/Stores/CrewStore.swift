@@ -88,9 +88,6 @@ final class CrewStore: ObservableObject {
     /// `schedule_wakeup` 命令排空后的待登记队列。`MacRootView` 交给
     /// `CrewSessionRunner.scheduleWakeup`（持久化 + 定时器）。
     let wakeupRequests = PendingRequestQueue<SessionWakeupRequest>()
-    /// `crew_message` 投递后的待唤醒队列（目标 crew 机长）。`MacRootView` 找
-    /// 目标机长 run 直投注入（idle 才注,busy 靠下轮白板注入）。
-    let crewMessageWakes = PendingRequestQueue<CrewMessageWake>()
     /// `listen` 命令排空后的待登记队列（群聊收听;#465）。`MacRootView` 交给
     /// `CrewSessionRunner.applyListen`（登记 + 白板观察 + 到期自动停）。
     let listenRequests = PendingRequestQueue<SessionListenRequest>()
@@ -1029,7 +1026,7 @@ final class CrewStore: ObservableObject {
     /// 读不到 crew store）：to_parent → 所有直系父;to_child → resolveChild
     /// 按 标签/id/唯一前缀 解析,歧义或无匹配回执现有子 crew 清单（别投错部门）。
     /// 投递 = 写目标 crew 白板（署名「<源crew名>·机长」,@captain）+ 唤醒请求
-    /// 交 `crewMessageWakes`（MacRootView 找目标机长 run 直投注入）。
+    /// 统一由白板 mention waker 按这条消息的真实 ID 唤醒或拉起目标。
     /// 全部失败路径都回执源 crew 白板,不静默吞。
     private func executeCrewMessage(_ cmd: CrewCommand) {
         let store = LocalCrewStore.shared
@@ -1066,8 +1063,6 @@ final class CrewStore: ObservableObject {
                     crewId: target, sessionId: cmd.sessionId ?? "captain-\(cmd.crewId)",
                     text: cmd.brief, category: "report", senderName: label,
                     mentions: [LocalWhiteboardMention(kind: "captain", targetId: nil)])
-                enqueue(CrewMessageWake(
-                    targetCrewId: target, text: cmd.brief, senderLabel: label), into: crewMessageWakes)
                 postSystemNotice(
                     crewId: cmd.crewId,
                     text: "已写入「\(store.title(of: target) ?? target)」群聊；机长唤醒仍待后端受理。"
@@ -1151,13 +1146,6 @@ final class CrewStore: ObservableObject {
 
 /// `start_session` 命令排空后的一次待起会话请求。`MacRootView` 观察
 /// `CrewStore.sessionSpawnRequests` 数组，逐条调 `runner.startForBrief`。
-/// `crew_message` 投递后的一次目标机长唤醒（汇报线;#463）。
-struct CrewMessageWake: Equatable {
-    let targetCrewId: String
-    let text: String
-    let senderLabel: String
-}
-
 /// `listen` 命令排空后的一次收听登记请求（群聊收听;#465）。`off == true` 时
 /// until/senders 无意义（撤销该 session 的收听）。
 struct SessionListenRequest: Equatable {

@@ -495,7 +495,7 @@ final class SessionHost: ObservableObject {
                             guard let detail = crewStore.details[req.crewId] else {
                                 crewStore.postSystemNotice(
                                     crewId: req.crewId,
-                                    text: "起 session 失败：拉不到 crew 详情，brief 已丢弃：\(req.brief.prefix(60))…")
+                                    text: "起 session 失败：拉不到 crew 详情。原 brief 保留供改派：\(req.brief)")
                                 continue
                             }
                             let kind: LocalCodingAgentKind? = req.runner.flatMap {
@@ -635,53 +635,6 @@ final class SessionHost: ObservableObject {
                     let reqs = crewStore.listenRequests.take()
                     guard !reqs.isEmpty else { return }
                     for req in reqs { sessionRunner.applyListen(req) }
-                }
-            }
-            .store(in: &bag)
-
-        // 跨 crew 汇报线消息 → 唤醒目标 crew 机长（#463）。idle 才直投注入（busy
-        // 的机长下轮白板注入自然看到）；机长没在跑 → **直接拉起**（@ 唤醒语义：
-        // 不在跑不能只留白板），开场 prompt 带上这条消息;拉起失败才落白板注记。
-        crewStore.$pendingRequestsRevision
-            .receive(on: DispatchQueue.main)
-            .sink { [weak crewStore, weak model] _ in
-                MainActor.assumeIsolated {
-                    guard let crewStore, let model else { return }
-                    // **取走语义**：不看脉冲的值，直接原子取走整批。
-                    // 重复/滞后的脉冲只能取到空 —— 「同一批被处理两遍」
-                    // 因此在结构上不可能，不是靠这里小心。
-                    let wakes = crewStore.crewMessageWakes.take()
-                    guard !wakes.isEmpty else { return }
-                    for wake in wakes {
-                        let captainRun = sessionRunner.runs.first {
-                            $0.crewId == wake.targetCrewId && $0.role == .captain && $0.status == .running
-                        }
-                        if let run = captainRun {
-                            if !run.backend.isBusy {
-                                sessionRunner.deliverOrDeferWake(
-                                    sourceKey: "crew-report:\(wake.targetCrewId):"
-                                        + AutomaticWakeAdmission.fingerprint(wake.senderLabel + wake.text),
-                                    to: run,
-                                    text: CrewLocalMentionInjectLogic.renderInjection(
-                                        messageText: wake.text, senderName: wake.senderLabel))
-                            }
-                        } else {
-                            Task {
-                                do {
-                                    guard let backend = model.backend else { throw CancellationError() }
-                                    let detail = try await backend.getCrew(wake.targetCrewId)
-                                    try await sessionRunner.startCaptain(
-                                        detail: detail, backend: backend,
-                                        wakeText: "\(wake.senderLabel)：\(wake.text)")
-                                } catch {
-                                    LocalWhiteboardStore.shared.appendSessionMessage(
-                                        crewId: wake.targetCrewId, sessionId: "system",
-                                        text: "收到「\(wake.senderLabel)」的消息，但自动拉起机长失败：\(error.localizedDescription)。",
-                                        senderName: "系统")
-                                }
-                            }
-                        }
-                    }
                 }
             }
             .store(in: &bag)

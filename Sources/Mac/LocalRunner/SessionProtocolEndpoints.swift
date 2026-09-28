@@ -56,6 +56,9 @@ final class SessionProtocolServer {
     private let startedAt: Double
     private var records: [String: Record] = [:]
     private let wakeAdmission = AutomaticWakeAdmission()
+    /// Only the explicitly constructed same-process bridge is pre-admitted by
+    /// its owning runner. Socket daemons default to fail-closed on missing roster.
+    private let trustedPreAdmittedWake: Bool
     private var connections: [ObjectIdentifier: Connection] = [:]
     private var sessionByHandle: [UInt32: String] = [:]
     private var connectionByHandle: [UInt32: ObjectIdentifier] = [:]
@@ -90,11 +93,13 @@ final class SessionProtocolServer {
 
     init(capabilities: [String], daemonBuild: String = "in-process",
          startedAt: Double = Date().timeIntervalSince1970,
-         reclaimsIdleConnections: Bool = false) {
+         reclaimsIdleConnections: Bool = false,
+         trustedPreAdmittedWake: Bool = false) {
         self.capabilities = capabilities
         self.daemonBuild = daemonBuild
         self.startedAt = startedAt
         self.reclaimsIdle = reclaimsIdleConnections
+        self.trustedPreAdmittedWake = trustedPreAdmittedWake
     }
 
     // MARK: - 链路
@@ -458,18 +463,19 @@ final class SessionProtocolServer {
                     // Stable fallback for older viewers. Do not persist prompt text.
                     sourceKey = "remote:" + AutomaticWakeAdmission.fingerprint(text)
                 }
-                let decision: AutomaticWakeAdmission.Decision
+                let outcome: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
                 if let summary {
-                    decision = self.wakeAdmission.reserve(
-                        sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey)
-                } else if self.onOrchestrationRequest != nil {
-                    decision = .deferred("daemon 找不到目标 session 的 crew 身份")
+                    outcome = await self.wakeAdmission.performSend(
+                        sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey,
+                        isAccepted: { $0 == .accepted },
+                        operation: { await backend.submitWake(text) })
+                } else if self.trustedPreAdmittedWake {
+                    outcome = .attempted(await backend.submitWake(text), recorded: true)
                 } else {
-                    // The in-process protocol bridge has no orchestration roster;
-                    // its owning runner already admitted this request.
-                    decision = .allowed("priority:in-process")
+                    outcome = .denied(.deferred("daemon 找不到目标 session 的 crew 身份"))
                 }
-                guard case let .allowed(token) = decision else {
+                guard case let .attempted(result, recorded) = outcome else {
+                    guard case let .denied(decision) = outcome else { return }
                     if let summary, let reason = decision.reason,
                        LedgerIncidentNoticeGate.shared.shouldEmit(
                         key: "wake-admission|\(summary.crewId)|\(reason)") {
@@ -485,8 +491,14 @@ final class SessionProtocolServer {
                     }
                     return
                 }
-                let result = await backend.submitWake(text)
-                self.wakeAdmission.finish(token: token, accepted: result == .accepted)
+                if !recorded, let summary,
+                   LedgerIncidentNoticeGate.shared.shouldEmit(
+                    key: "wake-admission-finish|\(summary.crewId)") {
+                    LocalWhiteboardStore.shared.appendSessionMessage(
+                        crewId: summary.crewId, sessionId: "system",
+                        text: "唤醒出站后无法写入 admission 账本；请检查本机数据目录。",
+                        category: "error", senderName: "系统")
+                }
                 guard let connection else { return }
                 self.send(.event(.init(
                     kind: "wakeSubmitResult", requestId: requestId,
@@ -1105,9 +1117,11 @@ enum SessionOrchestrationOp {
     /// 恢复弹窗里点了「接回来」。**整笔转交**：接回就是拉 agent，viewer 里自己拉 = 双头。
     /// 只在协商出 `SessionRestoreRoute.capability` 时才发 —— 旧后台不认识会静默丢掉。
     static let restoreSessions = "orchestration.restoreSessions"
+    /// Explicit UI recovery is executed and audited by the owning daemon.
+    static let admissionRecovery = "orchestration.admissionRecovery"
 
     static let all = [startSession, stopRun, removeRun, sendText, interrupt,
-                      profileChange, captainHandoff, restoreSessions]
+                      profileChange, captainHandoff, restoreSessions, admissionRecovery]
 
     static func isOrchestration(_ op: String) -> Bool { op.hasPrefix("orchestration.") }
 }
