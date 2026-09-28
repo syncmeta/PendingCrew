@@ -7,6 +7,7 @@ import Combine
 /// AsyncStream consumer preserves the connection order across the actor hop.
 final class CodexNotificationSequencer: @unchecked Sendable {
     struct Event: @unchecked Sendable {
+        let sequence: UInt64
         let method: String
         let params: [String: Any]
     }
@@ -20,8 +21,15 @@ final class CodexNotificationSequencer: @unchecked Sendable {
         continuation = captured
     }
 
+    func yield(sequence: UInt64, method: String, params: [String: Any]) {
+        continuation.yield(.init(sequence: sequence, method: method, params: params))
+    }
+
+    /// Test and local-only producers that do not participate in an RPC ACK can
+    /// retain the ordering-only API; production app-server events always supply
+    /// their dispatcher sequence above.
     func yield(method: String, params: [String: Any]) {
-        continuation.yield(.init(method: method, params: params))
+        yield(sequence: 0, method: method, params: params)
     }
 }
 
@@ -37,11 +45,35 @@ struct CodexPreparedWhiteboardContext {
 private final class CodexFastModeConfirmation {
     let threadId: String
     private var resolved = false
+    private var acceptsEcho = false
+    private var minimumEchoSequence: UInt64?
+    private var bufferedEcho: (tier: String?, sequence: UInt64)?
     private var tier: String?
     private var continuation: CheckedContinuation<String?, Never>?
     private var timeoutTask: Task<Void, Never>?
 
     init(threadId: String) { self.threadId = threadId }
+
+    /// The RPC ACK is receipt, not native state.  Dispatcher ordering lets us
+    /// discard events that arrived before it, while retaining a valid later
+    /// event whose MainActor delivery was delayed.
+    func beginAwaitingEcho(after acknowledgementSequence: UInt64) {
+        acceptsEcho = true
+        minimumEchoSequence = acknowledgementSequence
+        if let bufferedEcho, bufferedEcho.sequence > acknowledgementSequence {
+            resolve(bufferedEcho.tier)
+        }
+        bufferedEcho = nil
+    }
+
+    func resolveEcho(_ tier: String?, sequence: UInt64) {
+        guard acceptsEcho, let minimumEchoSequence else {
+            bufferedEcho = (tier, sequence)
+            return
+        }
+        guard sequence > minimumEchoSequence else { return }
+        resolve(tier)
+    }
 
     func resolve(_ tier: String?) {
         guard !resolved else { return }
@@ -101,9 +133,10 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private let cwd: String
     private var model: String?
     private var effort: String?
-    private var fastMode: Bool
+    private var fastMode: Bool?
     private var pendingFastModeConfirmation: CodexFastModeConfirmation?
-    var effectiveFastMode: Bool { fastMode }
+    var effectiveFastMode: Bool? { fastMode }
+    private let fastModeConfirmationTimeout: TimeInterval
     private let resumeThreadId: String?
     private let developerInstructions: String?
     private let mcpServers: [String: Any]?
@@ -130,6 +163,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     /// 所以现在不传就是不传，让 codex 自己定，然后**从回包里读真值**回填显示 ——
     /// 显示=实际跑的模型这条（#489）靠这条回调保住，不靠我们自己算。
     private let notifyResolvedProfile: (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void
+    private let notifyFastModeUnknown: () -> Void
     /// `thread/resume` 失败、已降级成新起一条 thread 时回调（Todo #28 fail-loud）——
     /// runner 据此往群里如实说「原会话接不回来了，这是新开的」，不静默假装恢复。
     private let notifyResumeFallback: (_ failedThreadId: String, _ reason: String) -> Void
@@ -160,19 +194,22 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private var notifiedMethods: Set<String> = []
 
     init(executable: String, argv: [String], cwd: String, env: [String: String],
-         model: String?, effort: String?, fastMode: Bool = false, resumeThreadId: String?,
+         model: String?, effort: String?, fastMode: Bool = false,
+         fastModeConfirmationTimeout: TimeInterval = 8, resumeThreadId: String?,
          approvalsReviewer: CodexProtocol.ApprovalsReviewer = .autoReview,
          developerInstructions: String?, mcpServers: [String: Any]?,
          whiteboardProvider: @escaping () -> CodexPreparedWhiteboardContext?,
          notifyUnanswerable: @escaping (_ summary: String) -> Void = { _ in },
          notifyTurnEnded: @escaping (_ lastAgentText: String) -> Void = { _ in },
          notifyResolvedProfile: @escaping (_ model: String?, _ effort: String?, _ fastMode: Bool?) -> Void = { _, _, _ in },
+         notifyFastModeUnknown: @escaping () -> Void = {},
          notifyThreadId: @escaping (_ threadId: String) -> Void = { _ in },
          notifyResumeFallback: @escaping (_ failedThreadId: String, _ reason: String) -> Void = { _, _ in },
          protocolNotificationSink: ((_ method: String, _ params: [String: Any]) -> Void)? = nil) {
         self.notifyTurnEnded = notifyTurnEnded
         self.notifyThreadId = notifyThreadId
         self.notifyResolvedProfile = notifyResolvedProfile
+        self.notifyFastModeUnknown = notifyFastModeUnknown
         self.notifyResumeFallback = notifyResumeFallback
         self.protocolNotificationSink = protocolNotificationSink
         self.connection = CodexAppServerConnection(executable: executable, argv: argv, cwd: cwd, env: env)
@@ -180,6 +217,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         self.model = model
         self.effort = effort
         self.fastMode = fastMode
+        self.fastModeConfirmationTimeout = fastModeConfirmationTimeout
         self.resumeThreadId = resumeThreadId
         self.approvalsReviewer = approvalsReviewer
         self.developerInstructions = developerInstructions
@@ -198,7 +236,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         notificationTask = Task { @MainActor [weak self] in
             for await event in eventStream {
                 guard let self, self.status == .running else { return }
-                self.handleNotification(method: event.method, params: event.params)
+                self.handleNotification(sequence: event.sequence, method: event.method, params: event.params)
             }
         }
         Task {
@@ -207,8 +245,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                     onServerRequest: { [weak self] id, method, params in
                         Task { await self?.handleServerRequest(id: id, method: method, params: params) }
                     },
-                    onNotification: { [notificationSequencer] method, params in
-                        notificationSequencer.yield(method: method, params: params)
+                    onNotification: { [notificationSequencer] sequence, method, params in
+                        notificationSequencer.yield(sequence: sequence, method: method, params: params)
                     },
                     onTerminate: { [weak self] code in
                         Task { @MainActor in
@@ -242,7 +280,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                                 developerInstructions: developerInstructions,
                                 mcpServers: mcpServers,
                                 approvalsReviewer: approvalsReviewer,
-                                serviceTier: fastMode ? "fast" : "default")) as? [String: Any]
+                                serviceTier: (fastMode ?? false) ? "fast" : "default")) as? [String: Any]
                     } catch {
                         self.notifyResumeFallback(resumeThreadId, error.localizedDescription)
                         result = try await self.startFreshThread()
@@ -259,9 +297,13 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 let resolvedTier = result?["serviceTier"] as? String
                 if let resolvedModel, !resolvedModel.isEmpty { self.model = resolvedModel }
                 if let resolvedEffort, !resolvedEffort.isEmpty { self.effort = resolvedEffort }
+                if let resolvedTier {
+                    self.fastMode = Self.fastMode(forServiceTier: resolvedTier)
+                }
                 if resolvedModel != nil || resolvedEffort != nil || resolvedTier != nil {
                     self.notifyResolvedProfile(resolvedModel, resolvedEffort,
-                        resolvedTier.map { $0 == "fast" || $0 == "priority" })
+                        resolvedTier.flatMap(Self.fastMode(forServiceTier:)))
+                    if resolvedTier != nil, self.fastMode == nil { self.notifyFastModeUnknown() }
                 }
                 if let tid, !tid.isEmpty { self.notifyThreadId(tid) }
                 if let p = initialPrompt, !p.isEmpty { self.send(p) }
@@ -284,7 +326,7 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
                 developerInstructions: developerInstructions,
                 mcpServers: mcpServers,
                 approvalsReviewer: approvalsReviewer,
-                serviceTier: fastMode ? "fast" : "default")) as? [String: Any]
+                serviceTier: (fastMode ?? false) ? "fast" : "default")) as? [String: Any]
     }
 
     /// Codex app-server exposes model and effort as live thread settings. The
@@ -316,21 +358,32 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
             } else {
                 confirmation = nil
             }
-            let result = try await connection.request(method: "thread/settings/update", params: params)
+            let response = try await connection.requestWithResponseSequence(
+                method: "thread/settings/update", params: params)
             switch command.knob {
             case .model: model = command.value
             case .effort: effort = command.value
             case .fast:
                 // Current app-server returns `{}` here.  Its later
                 // `thread/settings/updated` event is the only actual state echo.
-                _ = result
-                let tier = await confirmation?.wait(timeout: 8)
+                _ = response.result
+                confirmation?.beginAwaitingEcho(after: response.responseSequence)
+                let tier = await confirmation?.wait(timeout: fastModeConfirmationTimeout)
                 if pendingFastModeConfirmation === confirmation {
                     pendingFastModeConfirmation = nil
                 }
-                guard let tier else { return .noConfirmation }
-                fastMode = Self.isFastTier(tier)
-                guard fastMode == (command.value == "on") else {
+                guard let tier else {
+                    fastMode = nil
+                    notifyFastModeUnknown()
+                    return .noConfirmation
+                }
+                guard let resolvedFastMode = Self.fastMode(forServiceTier: tier) else {
+                    fastMode = nil
+                    notifyFastModeUnknown()
+                    return .noConfirmation
+                }
+                fastMode = resolvedFastMode
+                guard resolvedFastMode == (command.value == "on") else {
                     return .rejected("Codex 返回的实际服务档位是 \(tier)")
                 }
             }
@@ -490,17 +543,21 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         Task { await connection.terminate() }
     }
 
-    private func handleNotification(method: String, params: [String: Any]) {
+    private func handleNotification(sequence: UInt64, method: String, params: [String: Any]) {
         transcript.apply(method: method, params: params)
         if method == "thread/settings/updated",
            let updatedThreadId = params["threadId"] as? String,
            updatedThreadId == threadId,
            let settings = params["threadSettings"] as? [String: Any],
            let tier = settings["serviceTier"] as? String {
-            fastMode = Self.isFastTier(tier)
-            notifyResolvedProfile(nil, nil, fastMode)
+            fastMode = Self.fastMode(forServiceTier: tier)
+            if let fastMode {
+                notifyResolvedProfile(nil, nil, fastMode)
+            } else {
+                notifyFastModeUnknown()
+            }
             if pendingFastModeConfirmation?.threadId == updatedThreadId {
-                pendingFastModeConfirmation?.resolve(tier)
+                pendingFastModeConfirmation?.resolveEcho(tier, sequence: sequence)
             }
         }
         // Update/seal local lifecycle before relaying the event. The remote facade
@@ -513,10 +570,11 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
         if method == "turn/completed", isCompacting { isWorking = true }
     }
 
-    private static func isFastTier(_ tier: String) -> Bool {
+    private static func fastMode(forServiceTier tier: String) -> Bool? {
         switch tier.lowercased() {
-        case "fast", "priority": true
-        default: false
+        case "fast", "priority": return true
+        case "default": return false
+        default: return nil
         }
     }
 

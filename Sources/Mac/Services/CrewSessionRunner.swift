@@ -630,6 +630,11 @@ final class CrewSessionRunner: ObservableObject {
         }
         // 纯终端没有模型/effort，也不属于 crew agent 编排；不往白板伪造失败回执。
         guard run.kind.isAgent else { return }
+        guard run.pendingProfile == nil else {
+            reportProfileSwitch(run: run, crewId: req.crewId, applied: [],
+                                failed: ["已有配置切换等待原生确认，未接受重叠请求"])
+            return
+        }
         let followsCodexDefault = run.kind == .codex
             && req.model == SessionLaunchOptions.codexDefaultModelSelection
         var requestedModel = req.model
@@ -1856,6 +1861,9 @@ final class CrewSessionRunner: ObservableObject {
                     if let m, !m.isEmpty { run.model = m }
                     if let e, !e.isEmpty { run.effort = e }
                     if let fast { run.fastMode = fast }
+                },
+                notifyFastModeUnknown: { [weak self] in
+                    self?.runs.first(where: { $0.sessionId == sessionId })?.fastMode = nil
                 },
                 notifyThreadId: { tid in
                     // Todo #68：同 claude 那处 —— 真实 cwd 一并记下（唤醒时定进程目录用）。

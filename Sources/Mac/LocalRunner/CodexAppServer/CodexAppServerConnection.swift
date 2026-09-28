@@ -101,7 +101,7 @@ actor CodexAppServerConnection {
 
     /// Spawn + initialize handshake. Wire the streaming + server-request callbacks.
     func start(onServerRequest: @escaping (Int, String, [String: Any]) -> Void,
-               onNotification: @escaping (String, [String: Any]) -> Void,
+               onNotification: @escaping (UInt64, String, [String: Any]) -> Void,
                onTerminate: ((Int32?) -> Void)? = nil) async throws {
         self.onTerminate = onTerminate
         await dispatcher.setServerRequestHandler(onServerRequest)
@@ -149,8 +149,22 @@ actor CodexAppServerConnection {
 
     @discardableResult
     func request(method: String, params: [String: Any]) async throws -> Any? {
+        let response = try await requestEnvelope(method: method, params: params)
+        return response.result
+    }
+
+    /// Same request path as `request`, with the serialized inbound position of
+    /// its response for state changes that require an authoritative later echo.
+    func requestWithResponseSequence(
+        method: String, params: [String: Any]
+    ) async throws -> (result: Any?, responseSequence: UInt64) {
+        let response = try await requestEnvelope(method: method, params: params)
+        return (response.result, response.sequence)
+    }
+
+    private func requestEnvelope(method: String, params: [String: Any]) async throws -> CodexRPCResponse {
         let id = nextId; nextId += 1
-        async let response: Any? = dispatcher.awaitResponse(id: id)
+        async let response: CodexRPCResponse = dispatcher.awaitResponseEnvelope(id: id)
         try writeLine(CodexRPCMessage.encodeRequest(id: id, method: method, params: params))
         return try await response
     }

@@ -611,16 +611,16 @@ final class CodexFirstTurnFailureTests: XCTestCase {
 /// not display the requested value if that event says otherwise.
 @MainActor
 final class CodexFastModeConfirmationTests: XCTestCase {
-    func testFastModeWaitsForConfirmedTierInsteadOfTrustingEmptyACK() async throws {
+    private func bootBackend(mode: String, confirmationTimeout: TimeInterval = 8) async throws -> (CodexAppServerBackend, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-fast-confirm-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
         let script = directory.appendingPathComponent("server.py")
         try #"""
-        import json, sys
+        import json, sys, time
         def emit(value):
             print(json.dumps(value), flush=True)
+        mode = sys.argv[1]
         for line in sys.stdin:
             request = json.loads(line)
             if "id" not in request:
@@ -629,34 +629,126 @@ final class CodexFastModeConfirmationTests: XCTestCase {
             if method == "thread/start":
                 emit({"id": request["id"], "result": {"thread": {"id": "fast-thread"}}})
             elif method == "thread/settings/update":
-                emit({"id": request["id"], "result": {}})
-                emit({"method": "thread/settings/updated", "params": {
-                    "threadId": "fast-thread",
-                    "threadSettings": {"serviceTier": "default"}
-                }})
+                if mode == "pre-ack":
+                    emit({"method": "thread/settings/updated", "params": {
+                        "threadId": "fast-thread",
+                        "threadSettings": {"serviceTier": "priority"}
+                    }})
+                    time.sleep(0.05)
+                    emit({"id": request["id"], "result": {}})
+                else:
+                    emit({"id": request["id"], "result": {}})
+                    if mode == "default":
+                        emit({"method": "thread/settings/updated", "params": {
+                            "threadId": "fast-thread",
+                            "threadSettings": {"serviceTier": "default"}
+                        }})
+                    elif mode == "unknown":
+                        emit({"method": "thread/settings/updated", "params": {
+                            "threadId": "fast-thread",
+                            "threadSettings": {"serviceTier": "future-tier"}
+                        }})
+                    elif mode == "wrong-thread":
+                        emit({"method": "thread/settings/updated", "params": {
+                            "threadId": "another-thread",
+                            "threadSettings": {"serviceTier": "priority"}
+                        }})
+                    elif mode == "delayed-priority":
+                        time.sleep(0.05)
+                        emit({"method": "thread/settings/updated", "params": {
+                            "threadId": "fast-thread",
+                            "threadSettings": {"serviceTier": "priority"}
+                        }})
             else:
                 emit({"id": request["id"], "result": {}})
         """#.write(to: script, atomically: true, encoding: .utf8)
 
         let backend = CodexAppServerBackend(
-            executable: "/usr/bin/python3", argv: ["-u", script.path],
+            executable: "/usr/bin/python3", argv: ["-u", script.path, mode],
             cwd: directory.path, env: ProcessInfo.processInfo.environment,
-            model: nil, effort: nil, resumeThreadId: nil,
+            model: nil, effort: nil, fastModeConfirmationTimeout: confirmationTimeout, resumeThreadId: nil,
             developerInstructions: nil, mcpServers: nil,
             whiteboardProvider: { nil })
-        defer { backend.stop() }
         backend.boot(initialPrompt: nil)
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline && !backend.hasObservedLaunchSignal {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTAssertTrue(backend.hasObservedLaunchSignal)
+        return (backend, directory)
+    }
+
+    func testFastModeWaitsForConfirmedTierInsteadOfTrustingEmptyACK() async throws {
+        let (backend, directory) = try await bootBackend(mode: "default")
+        defer { backend.stop(); try? FileManager.default.removeItem(at: directory) }
 
         let outcome = await backend.applyProfileSwitch(.init(knob: .fast, value: "on"))
         guard case .rejected = outcome else {
             return XCTFail("An empty ACK followed by default tier must not report Fast as applied")
         }
-        XCTAssertFalse(backend.effectiveFastMode)
+        XCTAssertEqual(backend.effectiveFastMode, false)
+    }
+
+    func testFastModeRejectsAnUnknownFutureTierInsteadOfDisplayingStandard() async throws {
+        let (backend, directory) = try await bootBackend(mode: "unknown")
+        defer { backend.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let outcome = await backend.applyProfileSwitch(.init(knob: .fast, value: "off"))
+        guard case .noConfirmation = outcome else {
+            return XCTFail("An unknown tier cannot confirm that Fast is off")
+        }
+        XCTAssertNil(backend.effectiveFastMode)
+    }
+
+    func testFastModeDoesNotAcceptAnEchoThatArrivedBeforeTheRPCACK() async throws {
+        let (backend, directory) = try await bootBackend(mode: "pre-ack")
+        defer { backend.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let outcome = await backend.applyProfileSwitch(.init(knob: .fast, value: "on"))
+        guard case .noConfirmation = outcome else {
+            return XCTFail("A prior same-thread event cannot confirm a newly ACKed request")
+        }
+    }
+
+    func testFastModeIgnoresAnEchoForAnotherThread() async throws {
+        let (backend, directory) = try await bootBackend(mode: "wrong-thread", confirmationTimeout: 0.05)
+        defer { backend.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let outcome = await backend.applyProfileSwitch(.init(knob: .fast, value: "on"))
+        guard case .noConfirmation = outcome else {
+            return XCTFail("An echo for another thread cannot confirm this session")
+        }
+        XCTAssertNil(backend.effectiveFastMode)
+    }
+
+    func testFastModeWithoutAnEchoBecomesUnknown() async throws {
+        let (backend, directory) = try await bootBackend(mode: "no-echo", confirmationTimeout: 0.05)
+        defer { backend.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let outcome = await backend.applyProfileSwitch(.init(knob: .fast, value: "on"))
+        guard case .noConfirmation = outcome else {
+            return XCTFail("An ACK without an echo cannot confirm Fast")
+        }
+        XCTAssertNil(backend.effectiveFastMode)
+    }
+
+    func testFastModeRefusesAnOverlappingSecondClickUntilTheFirstEchoArrives() async throws {
+        let (backend, directory) = try await bootBackend(mode: "delayed-priority")
+        defer { backend.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let first = Task { @MainActor in
+            await backend.applyProfileSwitch(.init(knob: .fast, value: "on"))
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        let second = await backend.applyProfileSwitch(.init(knob: .fast, value: "off"))
+
+        guard case .neverIdle = second else {
+            return XCTFail("The second click must not start another unconfirmed request")
+        }
+        guard case .applied = await first.value else {
+            return XCTFail("The first click must remain pending until its native echo")
+        }
+        XCTAssertEqual(backend.effectiveFastMode, true)
     }
 }
 #endif

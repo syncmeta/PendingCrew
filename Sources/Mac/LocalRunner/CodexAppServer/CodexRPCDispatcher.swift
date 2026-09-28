@@ -15,23 +15,37 @@ import Foundation
 /// dropped and the request would hang. `earlyResults` holds any response that
 /// arrived before its awaiter; `awaitResponse` drains it synchronously — safe
 /// because the actor serialises both writes.
+struct CodexRPCResponse {
+    let sequence: UInt64
+    let result: Any?
+}
+
 actor CodexRPCDispatcher {
-    private var pending: [Int: CheckedContinuation<Any?, Error>] = [:]
-    private var earlyResults: [Int: Result<Any?, Error>] = [:]
+    private var pending: [Int: CheckedContinuation<CodexRPCResponse, Error>] = [:]
+    private var earlyResults: [Int: Result<CodexRPCResponse, Error>] = [:]
     private var onServerRequest: ((Int, String, [String: Any]) -> Void)?
-    private var onNotification: ((String, [String: Any]) -> Void)?
+    private var onNotification: ((UInt64, String, [String: Any]) -> Void)?
+    private var nextInboundSequence: UInt64 = 0
 
     func setServerRequestHandler(_ h: @escaping (Int, String, [String: Any]) -> Void) {
         onServerRequest = h
     }
 
-    func setNotificationHandler(_ h: @escaping (String, [String: Any]) -> Void) {
+    func setNotificationHandler(_ h: @escaping (UInt64, String, [String: Any]) -> Void) {
         onNotification = h
     }
 
     /// Suspends the caller until the server sends a `.response` with this id.
     /// If the response already arrived, returns immediately from the buffer.
     func awaitResponse(id: Int) async throws -> Any? {
+        let response = try await awaitResponseEnvelope(id: id)
+        return response.result
+    }
+
+    /// The connection's byte stream is serialized here.  Expose the local
+    /// sequence to callers that must distinguish a post-ACK notification from
+    /// an older event delayed by a later actor hop.
+    func awaitResponseEnvelope(id: Int) async throws -> CodexRPCResponse {
         if let early = earlyResults.removeValue(forKey: id) { return try early.get() }
         return try await withCheckedThrowingContinuation { cont in
             pending[id] = cont
@@ -41,11 +55,13 @@ actor CodexRPCDispatcher {
     /// Route one classified message. Only `.response` messages touch `pending`;
     /// `.serverRequest` goes to `onServerRequest`; `.notification` goes to `onNotification`.
     func handle(_ msg: CodexRPCMessage) throws {
+        let sequence = nextInboundSequence
+        nextInboundSequence &+= 1
         switch msg {
         case let .response(id, result, error):
-            let outcome: Result<Any?, Error> = error
+            let outcome: Result<CodexRPCResponse, Error> = error
                 .map { .failure(CodexRPCError.malformed("server error: \($0["message"] as? String ?? "unknown")")) }
-                ?? .success(result)
+                ?? .success(.init(sequence: sequence, result: result))
             if let cont = pending.removeValue(forKey: id) {
                 cont.resume(with: outcome)
             } else {
@@ -54,7 +70,7 @@ actor CodexRPCDispatcher {
         case let .serverRequest(id, method, params):
             onServerRequest?(id, method, params)
         case let .notification(method, params):
-            onNotification?(method, params)
+            onNotification?(sequence, method, params)
         }
     }
 

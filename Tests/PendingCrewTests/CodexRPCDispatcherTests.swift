@@ -31,7 +31,7 @@ final class CodexRPCDispatcherTests: XCTestCase {
     func testNotificationForwarded() async throws {
         let d = CodexRPCDispatcher()
         let box = NoteBox()
-        await d.setNotificationHandler { method, _ in box.append(method) }
+        await d.setNotificationHandler { _, method, _ in box.append(method) }
         try await d.handle(.notification(method: "item/completed", params: [:]))
         XCTAssertEqual(box.all, ["item/completed"])
     }
