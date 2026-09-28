@@ -285,6 +285,13 @@ final class TodoMarkdownRenderingTests: XCTestCase {
         XCTAssertFalse(detail.contains("agent 请你拍板的事"), "Human 页右上说明仍在")
         XCTAssertFalse(detail.contains("只看这一条"), "聚焦页右上说明仍在")
 
+        let session = Self.codeOnly(try Self.text(of: "CrewSessionWindowView.swift"))
+        let overviewStart = try XCTUnwrap(session.range(of: "CrewTodoPanel(crewId:"))
+        let overviewEnd = try XCTUnwrap(session.range(of: ".frame(minHeight: 100", range: overviewStart.upperBound..<session.endIndex))
+        let overviewContainer = String(session[overviewStart.lowerBound..<overviewEnd.lowerBound])
+        XCTAssertTrue(overviewContainer.contains(".background(CrewTodoPagePalette.background)"),
+                      "Todo 列表短于分栏时，ScrollView 空白区也须是页面底色")
+
     }
 
     private static let ledgerRows: [LocalTodoItem] = [

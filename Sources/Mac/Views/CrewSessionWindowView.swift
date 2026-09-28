@@ -288,6 +288,7 @@ struct CrewSessionWindowView: View {
                         CrewTodoPanel(crewId: crewId, runner: sessionRunner,
                                       crewName: crewStore.selectedDetail?.crew.title)
                     }
+                    .background(CrewTodoPagePalette.background)
                     .frame(minHeight: 100, idealHeight: 240, maxHeight: .infinity)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
