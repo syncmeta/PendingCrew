@@ -24,7 +24,8 @@ final class DaemonStopTests: XCTestCase {
         XCTAssertTrue(app.contains("lifecycle.pauseViewer?()"))
         XCTAssertTrue(updater.contains("func updater(_ updater: SPUUpdater, willInstallUpdate"))
         XCTAssertTrue(app.contains("CommandGroup(replacing: .appTermination)"))
-        XCTAssertTrue(app.contains("AppQuitLifecycle.shared.userRequestedQuit = true"))
+        XCTAssertTrue(app.contains("AppQuitLifecycle.shared.userRequestedQuit = true\n                    NSApp.terminate(nil)"))
+        XCTAssertTrue(app.contains("NSApp.terminate(nil)\n                }\n                .keyboardShortcut(\"q\", modifiers: .command)"))
         XCTAssertTrue(app.contains("lifecycle.isSystemQuitEvent"))
         XCTAssertTrue(app.contains("event: NSAppleEventManager.shared().currentAppleEvent"))
         XCTAssertTrue(app.contains("NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier"))
@@ -68,6 +69,30 @@ final class DaemonStopTests: XCTestCase {
         XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
             senderBundleIdentifier: "org.sparkle-project.Sparkle.InstallerProgress"))
         XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(senderBundleIdentifier: nil))
+    }
+
+    func testPureSparkleInstallQuitLeavesDaemonAndSessionsAlone() {
+        let reason = AppQuitDaemonPolicy.resolveReason(
+            sparkleInstalling: true, userRequestedQuit: false)
+        XCTAssertEqual(reason, .sparkleInstall)
+        let decision = AppQuitDaemonPolicy.evaluate(
+            reason: reason, runningSessionCount: 2,
+            confirmInterruption: { _ in XCTFail("pure install must not warn"); return true },
+            stopDaemon: { XCTFail("pure install must not stop daemon"); return .stopped(pid: 42) })
+        XCTAssertEqual(decision, .allowTermination)
+    }
+
+    func testMenuQuitIntentWithInstallMarkerWarnsAndStopsDaemon() {
+        let reason = AppQuitDaemonPolicy.resolveReason(
+            sparkleInstalling: true, userRequestedQuit: true)
+        XCTAssertEqual(reason, .explicitQuit)
+        var trace: [String] = []
+        let decision = AppQuitDaemonPolicy.evaluate(
+            reason: reason, runningSessionCount: 2,
+            confirmInterruption: { count in trace.append("warn:\(count)"); return true },
+            stopDaemon: { trace.append("stop"); return .stopped(pid: 42) })
+        XCTAssertEqual(decision, .allowTermination)
+        XCTAssertEqual(trace, ["warn:2", "stop"])
     }
 
     func testQuitAppleEventUsesSenderPIDToDistinguishDockFromSparkle() {
