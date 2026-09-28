@@ -56,9 +56,6 @@ final class SessionProtocolServer {
     private let startedAt: Double
     private var records: [String: Record] = [:]
     private let wakeAdmission: AutomaticWakeAdmission
-    /// Only the explicitly constructed same-process bridge is pre-admitted by
-    /// its owning runner. Socket daemons default to fail-closed on missing roster.
-    private let trustedPreAdmittedWake: Bool
     private var connections: [ObjectIdentifier: Connection] = [:]
     private var sessionByHandle: [UInt32: String] = [:]
     private var connectionByHandle: [UInt32: ObjectIdentifier] = [:]
@@ -69,7 +66,7 @@ final class SessionProtocolServer {
     /// 让 daemon 侧把 attach/detach/重同步记进滚动日志（§8.5）。
     var onDiagnostic: ((String) -> Void)?
     /// 这个 session 的编排身份（属于哪个 crew、机长还是 worker、当前档位…）。
-    /// daemon 由编排层填；同进程桥不填 —— 那边 app 自己就持有 run。
+    /// daemon 与同进程桥都由各自的 runner 填；缺身份时唤醒拒绝出站。
     var runSummaryProvider: ((String) -> SessionRunSummary?)?
     var onExplicitInputAccepted: ((String) -> Void)?
     /// viewer 发来的编排请求（起 session / 停 / 移除 / 切档位）。daemon 接上编排层；
@@ -95,13 +92,11 @@ final class SessionProtocolServer {
     init(capabilities: [String], daemonBuild: String = "in-process",
          startedAt: Double = Date().timeIntervalSince1970,
          reclaimsIdleConnections: Bool = false,
-         trustedPreAdmittedWake: Bool = false,
          wakeAdmission: AutomaticWakeAdmission = AutomaticWakeAdmission()) {
         self.capabilities = capabilities
         self.daemonBuild = daemonBuild
         self.startedAt = startedAt
         self.reclaimsIdle = reclaimsIdleConnections
-        self.trustedPreAdmittedWake = trustedPreAdmittedWake
         self.wakeAdmission = wakeAdmission
     }
 
@@ -530,17 +525,21 @@ final class SessionProtocolServer {
                     sourceKey = "remote:" + AutomaticWakeAdmission.fingerprint(text)
                 }
                 let outcome: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
-                if self.trustedPreAdmittedWake,
-                   control.arguments["explicitId"] == nil {
-                    outcome = .attempted(await backend.submitWake(text), recorded: true)
-                } else if let summary {
+                if let summary {
                     if case let .string(explicitId)? = control.arguments["explicitId"] {
                         outcome = await self.wakeAdmission.performExplicitText(.init(
                             id: explicitId, sessionId: sessionId, crewId: summary.crewId,
                             text: text), operation: { await backend.submitWake(text) })
                     } else {
+                        let priority: AutomaticWakeAdmission.Priority
+                        switch control.arguments["priority"] {
+                        case .some(.string("human")): priority = .human
+                        case .some(.string("emergency")): priority = .emergency
+                        default: priority = .automatic
+                        }
                         outcome = await self.wakeAdmission.performSend(
                             sessionId: sessionId, crewId: summary.crewId, sourceKey: sourceKey,
+                            priority: priority,
                             isAccepted: { $0 == .accepted },
                             operation: { await backend.submitWake(text) })
                     }
@@ -975,7 +974,8 @@ final class SessionProtocolClient {
     }
 
     func submitWake(sessionId: String, text: String,
-                    sourceKey: String? = nil, explicitId: String? = nil)
+                    sourceKey: String? = nil, explicitId: String? = nil,
+                    priority: AutomaticWakeAdmission.Priority = .automatic)
         async -> SessionWakeSubmission {
         let requestId = UUID().uuidString
         return await withCheckedContinuation { continuation in
@@ -984,6 +984,11 @@ final class SessionProtocolClient {
                 "sessionId": .string(sessionId), "text": .string(text)]
             if let sourceKey { args["sourceKey"] = .string(sourceKey) }
             if let explicitId { args["explicitId"] = .string(explicitId) }
+            switch priority {
+            case .automatic: break
+            case .human: args["priority"] = .string("human")
+            case .emergency: args["priority"] = .string("emergency")
+            }
             send(.control(.init(requestId: requestId, op: "submitWake", arguments: args)))
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)

@@ -457,8 +457,8 @@ final class CrewSessionRunner: ObservableObject {
             deferredWakePriorities.removeValue(forKey: delivery.key)
             return
         }
-        // A viewer has no authoritative session ownership. Its submitWake RPC is
-        // admitted on the daemon before the real backend, using the same key.
+        // The protocol server is the single admission authority for both the
+        // in-process mirror and a remote viewer's daemon.
         let baseline = wakeReceiptEvidence(for: run)
         Task { @MainActor [weak self, weak run] in
             guard let self, let run, run.status == .running else {
@@ -466,7 +466,7 @@ final class CrewSessionRunner: ObservableObject {
                 return
             }
             let outcome = await CrewWakeOutbound.submit(
-                text: text, to: run.backend, isViewer: self.isViewer,
+                text: text, to: run.backend,
                 sessionId: run.sessionId, crewId: run.crewId, sourceKey: delivery.key,
                 priority: self.deferredWakePriorities[delivery.key] ?? .automatic,
                 admission: self.wakeAdmission)
@@ -1505,10 +1505,10 @@ final class CrewSessionRunner: ObservableObject {
             }
             // 其余一律当文本 + 自动补回车。**那个回车会确认菜单当前高亮的那一项** ——
             // 所以在待决策现场随手发点什么，等于替它做了一个你没看过的选择。
-            let outcome = await wakeAdmission.performSend(
-                sessionId: run.sessionId, crewId: run.crewId, sourceKey: sourceKey,
-                isAccepted: { $0 == .accepted },
-                operation: { await run.backend.submitWake(input) })
+            let outcome = await CrewWakeOutbound.submit(
+                text: input, to: run.backend, sessionId: run.sessionId,
+                crewId: run.crewId, sourceKey: sourceKey, priority: .automatic,
+                admission: wakeAdmission)
             if case let .denied(decision) = outcome {
                 reportNudgeAdmissionDenied(run: run, decision: decision)
             }
@@ -1539,10 +1539,10 @@ final class CrewSessionRunner: ObservableObject {
             return "「\(run.displayName)」是 codex session，没有终端按键，`\(key)` 在这里"
                 + "没有对应动作；要说话就直接发文本，它会作为新 turn 输入。"
         }
-        let outcome = await wakeAdmission.performSend(
-            sessionId: run.sessionId, crewId: run.crewId, sourceKey: sourceKey,
-            isAccepted: { $0 == .accepted },
-            operation: { await run.backend.submitWake(input) })
+        let outcome = await CrewWakeOutbound.submit(
+            text: input, to: run.backend, sessionId: run.sessionId,
+            crewId: run.crewId, sourceKey: sourceKey, priority: .automatic,
+            admission: wakeAdmission)
         if case let .denied(decision) = outcome {
             reportNudgeAdmissionDenied(run: run, decision: decision)
         }
@@ -1986,7 +1986,7 @@ final class CrewSessionRunner: ObservableObject {
         }
         guard run.status == .running else { return .retry }
         let result: AutomaticWakeAdmission.Submission<SessionWakeSubmission>
-        if isViewer, let remote = run.backend as? RemoteSessionBackend {
+        if let remote = run.backend as? RemoteSessionBackend {
             let receipt = await remote.submitWake(text, sourceKey: "explicit:\(id)",
                                                   explicitId: id)
             if receipt == .accepted { run.noteAcceptedHumanInput() }

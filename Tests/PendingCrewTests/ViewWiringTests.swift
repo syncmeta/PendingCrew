@@ -285,13 +285,14 @@ final class ViewWiringTests: XCTestCase {
                        "右栏观察器仍会与白板唯一 waker 抢拉 captain，赢家可能不带原消息")
 
         let runner = try Self.text(of: "CrewSessionRunner.swift")
-        XCTAssertTrue(runner.contains("wakeAdmission.performSend("),
-                      "real backend submit must execute inside durable admission")
+        let outbound = try Self.text(of: "CrewDeferredWakeQueue.swift")
+        XCTAssertTrue(outbound.contains("admission.performSend("),
+                      "direct backend submit must execute inside durable admission")
         XCTAssertTrue(runner.contains("wakeAdmission.performLaunch("),
                       "real process launch must execute inside durable admission")
         XCTAssertFalse(runner.contains("run.backend.send(input)"),
                        "agent nudge text must not bypass durable admission")
-        XCTAssertTrue(runner.contains("await run.backend.submitWake"),
+        XCTAssertTrue(outbound.contains("await backend.submitWake(text)"),
                       "runner 仍把无回执 send 当作 wake 已投递")
         XCTAssertFalse(runner.contains("run.send(ready.text)"),
                        "瞬时 idle 后仍直接 fire-and-forget，拒绝会被误消费")
@@ -311,6 +312,10 @@ final class ViewWiringTests: XCTestCase {
         let endpoints = try Self.text(of: "SessionProtocolEndpoints.swift")
         XCTAssertTrue(endpoints.contains("wakeAdmission.performSend("),
                       "daemon submitWake must use the same durable admission")
+        XCTAssertFalse(endpoints.contains("trustedPreAdmittedWake"),
+                       "protocol servers must never trust an unproven pre-admission claim")
+        XCTAssertFalse(remote.contains("trustedPreAdmittedWake"),
+                       "the in-process bridge must use its own authoritative admission")
         XCTAssertFalse(endpoints.contains("priority:in-process"),
                        "unknown daemon roster must not silently bypass admission")
         let host = try Self.text(of: "SessionHost.swift")

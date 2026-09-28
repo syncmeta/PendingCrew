@@ -345,11 +345,13 @@ final class RemoteSessionBackend: ObservableObject, SessionBackend,
         await submitWake(text, sourceKey: nil)
     }
 
-    func submitWake(_ text: String, sourceKey: String?, explicitId: String? = nil)
+    func submitWake(_ text: String, sourceKey: String?, explicitId: String? = nil,
+                    priority: AutomaticWakeAdmission.Priority = .automatic)
         async -> SessionWakeSubmission {
         guard !isCompacting, supportsCapability("wake-submit"), let client else { return .retry }
         return await client.submitWake(sessionId: sessionId, text: text,
-                                       sourceKey: sourceKey, explicitId: explicitId)
+                                       sourceKey: sourceKey, explicitId: explicitId,
+                                       priority: priority)
     }
 
     func interrupt() { sendRaw(kind == .terminal ? [0x03] : [0x1b]) }
@@ -545,7 +547,6 @@ final class InProcessSessionProtocolBridge: SessionProtocolPublishing {
         appLink = InProcessSessionLink(transport: transport, side: .app)
         daemonLink = InProcessSessionLink(transport: transport, side: .daemon)
         server = SessionProtocolServer(capabilities: daemonCapabilities,
-                                       trustedPreAdmittedWake: true,
                                        wakeAdmission: wakeAdmission)
         client = SessionProtocolClient(link: appLink, capabilities: appCapabilities)
         // accept / init 会各自把 onReceive 装到链路上；两条链路互不覆盖对方的回调。

@@ -12,7 +12,63 @@ final class RemoteSessionBackendTests: XCTestCase {
               awaitingReply: nil)
     }
 
-    func testOwnerWakeThroughTrustedBridgeIsRejectedBeforeBackendAtMachineCap() async {
+    func testDirectRemoteWakeCannotBypassInProcessMachineStopAcrossRestart() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("direct-bridge-stop-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        for index in 0..<12 {
+            guard case let .allowed(token) = gate.reserve(
+                sessionId: "seed-\(index)", crewId: "crew-\(index)",
+                sourceKey: "seed-\(index)") else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let backend = ProtocolTestBackend(kind: .codex)
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "direct-target", backend: backend)
+        let first = await remote.submitWake("direct first", sourceKey: "direct:first")
+        XCTAssertEqual(first, .blocked)
+        XCTAssertEqual(backend.submittedWakes, [])
+
+        let restartedGate = AutomaticWakeAdmission(directory: directory)
+        let nextBackend = ProtocolTestBackend(kind: .codex)
+        let restartedBridge = InProcessSessionProtocolBridge(wakeAdmission: restartedGate)
+        restartedBridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let reconnected = restartedBridge.exposeAttached(sessionId: "direct-target",
+                                                         backend: nextBackend)
+        let second = await reconnected.submitWake("direct after restart",
+                                                  sourceKey: "direct:second")
+        XCTAssertEqual(second, .blocked)
+        XCTAssertEqual(nextBackend.submittedWakes, [])
+    }
+
+    func testDirectRemoteWakeIsCountedOnceAndKeepsPrioritySemantics() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("direct-bridge-count-\(UUID().uuidString)")
+        let gate = AutomaticWakeAdmission(directory: directory)
+        let backend = ProtocolTestBackend(kind: .codex)
+        backend.wakeResults = [.accepted, .retry, .accepted, .accepted]
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
+        let remote = bridge.exposeAttached(sessionId: "direct-target", backend: backend)
+        let first = await remote.submitWake("first", sourceKey: "direct:first")
+        let second = await remote.submitWake("second", sourceKey: "direct:second")
+        let third = await remote.submitWake("human", sourceKey: "direct:human",
+                                            priority: .human)
+        let fourth = await remote.submitWake("emergency", sourceKey: "direct:emergency",
+                                             priority: .emergency)
+        XCTAssertEqual([first, second, third, fourth],
+                       [.accepted, .retry, .accepted, .accepted])
+        XCTAssertEqual(backend.submittedWakes, ["first", "second", "human", "emergency"])
+        let state = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
+                                              from: Data(contentsOf: gate.fileURL))
+        XCTAssertEqual(state.attempts?.filter { $0.sessionId == "direct-target" }.count, 4,
+                       "one durable reservation per direct remote submission")
+        XCTAssertEqual(state.events.filter { $0.sessionId == "direct-target" }.count, 3,
+                       "a rejected backend receipt is never recorded as delivered")
+    }
+
+    func testOwnerWakeThroughProtocolBridgeIsRejectedBeforeBackendAtMachineCap() async {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("owner-bridge-denial-\(UUID().uuidString)")
         let gate = AutomaticWakeAdmission(directory: directory)
@@ -27,18 +83,21 @@ final class RemoteSessionBackendTests: XCTestCase {
         bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
         let remote = bridge.exposeAttached(sessionId: "owner-target", backend: backend)
         let result = await CrewWakeOutbound.submit(
-            text: "automatic wake", to: remote, isViewer: false,
+            text: "automatic wake", to: remote,
             sessionId: "owner-target", crewId: "crew-entry", sourceKey: "todo:sweep",
             priority: .automatic, admission: gate)
-        guard case .denied = result else { return XCTFail("owner wake bypassed admission") }
+        guard case let .attempted(receipt, _) = result else {
+            return XCTFail("protocol server gave no refusal receipt")
+        }
+        XCTAssertEqual(receipt, .blocked)
         XCTAssertEqual(backend.submittedWakes, [],
-                       "the trusted bridge must never see a denied owner wake")
+                       "the protocol server must never forward a denied owner wake")
         XCTAssertFalse(AutomaticWakeAdmission(directory: directory).reserve(
             sessionId: "after-restart", crewId: "crew-entry", sourceKey: "another",
             priority: .automatic).isAllowed)
     }
 
-    func testOwnerWakeThroughTrustedBridgeUsesOneReservationAndRealReceipt() async throws {
+    func testOwnerWakeThroughProtocolBridgeUsesOneReservationAndRealReceipt() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("owner-bridge-receipt-\(UUID().uuidString)")
         let gate = AutomaticWakeAdmission(directory: directory)
@@ -48,7 +107,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
         let remote = bridge.exposeAttached(sessionId: "owner-target", backend: backend)
         let first = await CrewWakeOutbound.submit(
-            text: "first", to: remote, isViewer: false,
+            text: "first", to: remote,
             sessionId: "owner-target", crewId: "crew-entry", sourceKey: "todo:first",
             priority: .automatic, admission: gate)
         guard case let .attempted(receipt, recorded) = first else {
@@ -58,7 +117,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         XCTAssertTrue(recorded)
         XCTAssertEqual(backend.submittedWakes, ["first"])
         let second = await CrewWakeOutbound.submit(
-            text: "second", to: remote, isViewer: false,
+            text: "second", to: remote,
             sessionId: "owner-target", crewId: "crew-entry", sourceKey: "todo:second",
             priority: .automatic, admission: gate)
         guard case let .attempted(secondReceipt, secondRecorded) = second else {
@@ -70,7 +129,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         let state = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
                                               from: Data(contentsOf: gate.fileURL))
         XCTAssertEqual(state.attempts?.filter { $0.sessionId == "owner-target" }.count, 2,
-                       "trusted bridge must not count an owner's wake twice")
+                       "protocol server must not count an owner's wake twice")
         XCTAssertEqual(state.attempts?.filter { $0.sessionId == "owner-target" }
             .map(\.accepted), [false, true],
             "backend rejection consumes budget but never claims delivery")
@@ -187,7 +246,10 @@ final class RemoteSessionBackendTests: XCTestCase {
     func testSessionBackendControlsAndStateCrossTheFramedTransport() async {
         let direct = ProtocolTestBackend(kind: .codex)
         direct.profileOutcome = .applied("Set model to gpt-5")
-        let bridge = InProcessSessionProtocolBridge()
+        let gate = AutomaticWakeAdmission(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("protocol-basic-\(UUID().uuidString)"))
+        let bridge = InProcessSessionProtocolBridge(wakeAdmission: gate)
+        bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
         let remote = bridge.exposeAttached(sessionId: "session-1", backend: direct)
 
         XCTAssertEqual(remote.status, .running)

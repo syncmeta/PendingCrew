@@ -100,17 +100,18 @@ struct CrewDeferredWakeQueue {
     }
 }
 
-/// The owner admits before its in-process bridge, whose server trusts this
-/// reservation. Only an external viewer delegates admission to the daemon.
+/// A protocol-backed session is admitted by its server in both in-process and
+/// socket modes. Direct backends reserve locally before their real submit.
 @MainActor
 enum CrewWakeOutbound {
     static func submit(text: String, to backend: any SessionBackend,
-                       isViewer: Bool, sessionId: String, crewId: String,
+                       sessionId: String, crewId: String,
                        sourceKey: String, priority: AutomaticWakeAdmission.Priority,
                        admission: AutomaticWakeAdmission)
         async -> AutomaticWakeAdmission.Submission<SessionWakeSubmission> {
-        if isViewer, let remote = backend as? RemoteSessionBackend {
-            return .attempted(await remote.submitWake(text, sourceKey: sourceKey),
+        if let remote = backend as? RemoteSessionBackend {
+            return .attempted(await remote.submitWake(text, sourceKey: sourceKey,
+                                                      priority: priority),
                               recorded: true)
         }
         return await admission.performSend(
