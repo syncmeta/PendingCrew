@@ -7,6 +7,9 @@
   The Harness of Harness.
 </p>
 <p align="center">
+  为持续任务流设计的人机深度协作工具
+</p>
+<p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
   <img alt="Swift" src="https://img.shields.io/badge/lang-Swift%205-F05138?logo=swift&logoColor=white" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" />
