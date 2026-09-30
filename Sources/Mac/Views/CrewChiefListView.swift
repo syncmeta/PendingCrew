@@ -29,10 +29,6 @@ struct CrewChiefListView: View {
     /// `nil` = 没人排过 / 读不出来 → 纯基础序，**而且要在界面上说出来**。
     var arrangement: CrewArrangement?
 
-    /// 总机长给每个机组写的摘要（#145，侧栏读好传进来）。每行消息位按
-    /// 「总机长摘要 > 机长自报 > 还没有」取，过没过期由 `CrewStatusLine` 判。
-    var summaries: [String: CrewChiefSummary] = [:]
-
     /// 行视图要一个拖拽态；本视图不开拖拽，给它一个自己的实例即可（永远是空的）。
     @StateObject private var dragState = CrewDragState()
 
@@ -44,12 +40,6 @@ struct CrewChiefListView: View {
         let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
         // 与时间流视图同一份快照：**body 里不碰磁盘**（2026-08-17「开久了卡」的病根）。
         let lastMessages = crewStore.lastWhiteboardMessages
-        // 状态那张表跟末条快照出自同一次解码（`CrewLastMessageCache.Digest`），
-        // body 里只是一次字典查表 —— **不碰磁盘**。
-        let statusCarriers = crewStore.crewStatusCarriers
-        // 判过期用的是「最后一条算数的发言」，不是末条消息（#145 追加）——
-        // 系统通知、「已送达」「已联系」回执不让摘要变成「已过时」。同一次解码，查表。
-        let lastActivities = crewStore.lastActivityMessages
         // 顶上那个固定入口 + 下面那份排好序的列表，**一次算出来**
         // （`CrewChiefOverview.rows`）。入口在不在、排第几、指向谁，是那边的
         // 单元测试压着的，不是这里目视出来的。
@@ -88,15 +78,7 @@ struct CrewChiefListView: View {
                     expansion: nil,          // 没有子节点
                     parentId: nil,
                     groupCrews: crews,
-                    // 总机组这一行**不取摘要**：它是一层、不是一个机组（`chiefLayer` 的注释），
-                    // 总机长也不给自己写摘要 —— 何况 `arrange_crews` 写完会往这个群里发一行，
-                    // 写给它自己的那句会被这一行当场判成过期。
-                    statusLine: CrewStatusLine.make(
-                        summary: nil,
-                        statusCarrier: statusCarriers[chief.id],
-                        activity: CrewStatusLine.activity(
-                            lastMessage: lastMessages[chief.id],
-                            lastActivity: lastActivities[chief.id])),
+                    statusLine: nil, // 共用行展示真实末条消息
                     allowsReparentDrag: false,
                     showsColorBar: false,
                     showsContextMenu: false,
@@ -130,12 +112,7 @@ struct CrewChiefListView: View {
                     expansion: nil, // 扁平列表没有展开
                     parentId: entry.crew.parentCrewIds.first,
                     groupCrews: crews,
-                    statusLine: CrewStatusLine.make(
-                        summary: summaries[entry.crew.id],
-                        statusCarrier: statusCarriers[entry.crew.id],
-                        activity: CrewStatusLine.activity(
-                            lastMessage: lastMessages[entry.crew.id],
-                            lastActivity: lastActivities[entry.crew.id])),
+                    statusLine: nil, // 保持真实末条消息，不再用摘要覆盖
                     allowsReparentDrag: false,
                     dragState: dragState,
                     childCrewTarget: $childCrewTarget

@@ -35,7 +35,6 @@ struct CrewSidebarView: View {
     @State private var arrangement: CrewArrangement?
     /// 总机长给每个机组写的摘要（#145）。与排布同一个读法、同一个重读时机：
     /// `arrange_crews` 写完摘要也会往群里发那一行，白板目录照样 tick。
-    @State private var chiefSummaries: [String: CrewChiefSummary] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,7 +59,7 @@ struct CrewSidebarView: View {
                 case .chief:
                     CrewChiefListView(
                         crews: visibleCrews, childCrewTarget: $childCrewTarget,
-                        arrangement: arrangement, summaries: chiefSummaries)
+                        arrangement: arrangement)
                 }
             }
             .listStyle(.sidebar)
@@ -172,16 +171,12 @@ struct CrewSidebarView: View {
         // 2026-09-08：#113 把三段分类整个拿掉了，`CrewChiefListView` 和
         // `CrewChiefOverview` 的注释都写了「已推翻」，**只有这句漏了**——
         // 代码注释改了、用户看得到的文案没改，是最容易漏的那一种。
-        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机长：不分类，顺序由总机长自己判断并给出理由，它没在跑时退回按最近活动排")
+        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机组：展示真实最新消息，顺序由总机长判断并给出理由，它没在跑时退回按最近活动排")
     }
 
     private func reloadArrangement() {
         arrangement = CrewArrangementStore.load(
             at: CrewArrangementStore.fileURL(dataRoot: PendingCrewDataRoot.url))
-        let summaries = CrewChiefSummaryStore.load(
-            at: CrewChiefSummaryStore.fileURL(dataRoot: PendingCrewDataRoot.url))
-        // 相等就不赋值：这个函数跟着白板目录每个 tick 跑，别让它每次都重渲染侧栏。
-        if summaries != chiefSummaries { chiefSummaries = summaries }
     }
 
     // MARK: - 机器分组

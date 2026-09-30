@@ -1461,28 +1461,17 @@ final class ViewWiringTests: XCTestCase {
                        "刷新按钮那条路的日志不止一个 logger，一条查询查不全")
     }
 
-    /// 人类 Todo #145：总机长摘要要真的接到那一行上 —— 摘要表读了没传、传了没进
-    /// `make`、`make` 判了过期而行没画，任何一处断了，人看到的都是「过期的跟新鲜的长得一样」。
-    func testChiefSummariesAreWiredIntoTheRow() throws {
-        let sidebar = try Self.text(of: "CrewSidebarView.swift")
-        XCTAssertTrue(sidebar.contains("CrewChiefSummaryStore.load("), "侧栏没读摘要表")
-        XCTAssertTrue(sidebar.contains("summaries: chiefSummaries"), "侧栏读了摘要表没传给总机长视图")
-
+    /// #179：总机组视图与其它两种视图一样，行内必须展示真实末条消息。
+    /// 摘要仍可存取，但不能再盖掉这行一手消息。
+    func testChiefRowsShowActualLatestMessageInsteadOfSummary() throws {
         let list = Self.codeOnly(try Self.text(of: "CrewChiefListView.swift"))
-        XCTAssertTrue(list.contains("summary: summaries[entry.crew.id]"),
-                      "总机长视图的机组行没把摘要喂给 CrewStatusLine.make")
-        // #145 追加：判过期要看「最后一条算数的发言」，不是末条消息 —— 喂错了，
-        // 一次故障补发几十条系统通知，每个机组的摘要都会当场变「已过时」。
-        XCTAssertTrue(list.contains("lastActivity: lastActivities[entry.crew.id]"),
-                      "总机长视图没把「最后一条算数的发言」喂进过期判定")
-        XCTAssertTrue(list.contains("crewStore.lastActivityMessages"),
-                      "总机长视图没读 lastActivityMessages —— 过期判定又在拿末条消息判")
-
+        XCTAssertEqual(list.components(separatedBy: "statusLine: nil").count - 1, 2,
+                       "总机组入口和普通机组行都应走共用行的最新消息预览")
+        XCTAssertFalse(list.contains("CrewStatusLine.make("),
+                       "总机长摘要或机长自报仍会遮住真实最新消息")
         let row = Self.codeOnly(try Self.text(of: "CrewSidebarCrewRow.swift"))
-        XCTAssertTrue(row.contains("Text(statusLine.displayText)"),
-                      "行里画的不是 displayText —— 「已过时」三个字画不出来")
-        XCTAssertTrue(row.contains("statusLine.isStale"), "行里没按过期变淡")
-        XCTAssertTrue(row.contains(".help(statusLine.help)"), "悬停提示没说来源和写入时刻")
+        XCTAssertTrue(row.contains("CrewSidebarCrewRow.preview(of: last)"),
+                      "共用行没有接上末条消息预览")
     }
 
     private static func text(of fileName: String) throws -> String {

@@ -91,7 +91,7 @@ enum CrewSidebarViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .hierarchy: return "层级"
         case .timeline: return "时间流"
-        case .chief: return "总机长"
+        case .chief: return "总机组"
         }
     }
 

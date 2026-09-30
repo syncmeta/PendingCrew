@@ -103,7 +103,7 @@ final class CrewChiefOverviewTests: XCTestCase {
         XCTAssertEqual(CrewSidebarViewMode.default, .hierarchy)
         XCTAssertEqual(CrewSidebarViewMode.allCases, [.hierarchy, .timeline, .chief])
         XCTAssertEqual(CrewSidebarViewMode.resolve(rawValue: "chief"), .chief)
-        XCTAssertEqual(CrewSidebarViewMode.chief.label, "总机长")
+        XCTAssertEqual(CrewSidebarViewMode.chief.label, "总机组")
     }
 
     // MARK: - 排布落盘
