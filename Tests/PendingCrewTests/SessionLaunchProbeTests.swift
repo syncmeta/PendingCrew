@@ -15,6 +15,32 @@ final class SessionLaunchProbeTests: XCTestCase {
         XCTAssertNil(action.forFailure(NSError(domain: "unrelated", code: 1)))
     }
 
+    @MainActor
+    func testBuiltinMessageActionsAreAllowlistedAcrossErrorAndTranscript() {
+        XCTAssertEqual(CrewMessageActionCatalog.forSystemError(
+            text: "缺少 Codex CLI", action: .installCodexCLI),
+            [.prepareOfficialCodexCLIInstall, .copyText("缺少 Codex CLI")])
+        XCTAssertEqual(CrewMessageActionCatalog.forSystemError(
+            text: "普通错误", action: nil), [.copyText("普通错误")])
+        XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
+            .init(id: "u", kind: .userMessage(text: "原文"))), [.copyText("原文")])
+        XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
+            .init(id: "a", kind: .agentMessage(text: "回复", phase: nil))), [.copyText("回复")])
+        XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
+            .init(id: "x", kind: .unknown(type: "untrusted-action"))), [])
+        XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
+            .init(id: "hidden", kind: .commandExecution(.init(
+                command: "secret hidden command", cwd: nil, status: nil,
+                aggregatedOutput: "hidden output", exitCode: nil)))), [])
+
+        var copied: String?
+        XCTAssertEqual(CrewMessageActionDispatcher.dispatch(
+            .copyText("rm -rf / is just text"), copy: { copied = $0 }, prepare: { nil }), .copied)
+        XCTAssertEqual(copied, "rm -rf / is just text")
+        XCTAssertEqual(CrewMessageActionDispatcher.dispatch(
+            .prepareOfficialCodexCLIInstall, copy: { _ in XCTFail() }, prepare: { nil }), .unavailable)
+    }
+
     private let deadline: TimeInterval = 25
 
     // MARK: - 事故复现

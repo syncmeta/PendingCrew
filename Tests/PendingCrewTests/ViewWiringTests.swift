@@ -662,7 +662,7 @@ final class ViewWiringTests: XCTestCase {
                       "错误行动必须来自启动失败的类型化标记")
         XCTAssertTrue(session.contains("CrewSessionErrorMessage("),
                       "安装行动必须附在对应的报错消息，而不是仅有独立提示卡")
-        XCTAssertTrue(session.contains("if action == .installCodexCLI")
+        XCTAssertTrue(session.contains("actions.contains(.prepareOfficialCodexCLIInstall)")
                       && session.contains("CodexCLIInstallActionButton(center: cliVersions)"),
                       "报错行的按钮必须受类型化行动门控")
         XCTAssertTrue(settings.contains(".onChange(of: confirmingCodexInstall)"),
@@ -686,6 +686,24 @@ final class ViewWiringTests: XCTestCase {
         }
         XCTAssertGreaterThan(button.lowerBound, waiting.lowerBound,
                              "报错行确认框宿主不能只活在 missing 分支中")
+    }
+
+    /// #188: one allowlisted action model must drive a system launch error and
+    /// a Codex transcript row. Message text is payload only, never an action key.
+    func testBuiltinMessageActionsAreWiredToErrorAndTranscriptRows() throws {
+        let session = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let transcript = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CodexTranscriptView.swift"))
+        let runner = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Services/CrewSessionRunner.swift"))
+        XCTAssertTrue(runner.contains("enum CrewMessageAction"),
+                      "缺少封闭的类型化消息动作目录")
+        XCTAssertTrue(transcript.contains("CrewMessageActionCatalog.forTranscript"),
+                      "会话正文没有接消息动作")
+        XCTAssertTrue(session.contains("CrewMessageActionCatalog.forSystemError"),
+                      "系统启动错误没有接同一套动作目录")
+        XCTAssertTrue(session.contains("CrewMessageActionDispatcher.dispatch"),
+                      "系统错误行没有经白名单分发")
+        XCTAssertTrue(transcript.contains("CrewMessageActionDispatcher.dispatch"),
+                      "会话动作没有经白名单分发")
     }
 
     /// #166: source contract for Codex's narrow session chrome. The test target

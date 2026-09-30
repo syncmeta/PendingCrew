@@ -100,6 +100,22 @@ final class AgentCLIMaintenanceTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testBuiltinInstallMessageActionOnlyReturnsPreparedFixedPlan() throws {
+        try provisioningFixture { service, _, _, _ in
+            let plan = try service.prepareOfficialInstall()
+            var prepares = 0
+            var copies = 0
+            let result = CrewMessageActionDispatcher.dispatch(
+                .prepareOfficialCodexCLIInstall,
+                copy: { _ in copies += 1 },
+                prepare: { prepares += 1; return plan })
+            XCTAssertEqual(result, .prepared(plan))
+            XCTAssertEqual(prepares, 1)
+            XCTAssertEqual(copies, 0)
+        }
+    }
+
     func testProvisioningConfirmedActionUsesFixedNpmThenVerifiesWithoutAuth() throws {
         try provisioningFixture { service, _, root, _ in
             var prepared = service

@@ -3,6 +3,54 @@ import Combine
 import Foundation
 import SwiftUI
 
+/// Built-in message actions. Message text is payload for copying, never an
+/// instruction or a key that selects an executable action.
+enum CrewMessageAction: Hashable {
+    case copyText(String)
+    case prepareOfficialCodexCLIInstall
+}
+
+enum CrewMessageActionCatalog {
+    static func forSystemError(text: String,
+                               action: CrewSessionRunner.StartErrorAction?) -> [CrewMessageAction] {
+        var actions: [CrewMessageAction] = []
+        if action == .installCodexCLI { actions.append(.prepareOfficialCodexCLIInstall) }
+        if !text.isEmpty { actions.append(.copyText(text)) }
+        return actions
+    }
+
+    static func forTranscript(_ item: CodexThreadItem) -> [CrewMessageAction] {
+        let text: String
+        switch item.kind {
+        case let .userMessage(body), let .agentMessage(body, _): text = body
+        default: return []
+        }
+        return text.isEmpty ? [] : [.copyText(text)]
+    }
+}
+
+@MainActor
+enum CrewMessageActionDispatcher {
+    enum Result: Equatable {
+        case copied
+        case prepared(CodexCLIInstallAction)
+        case unavailable
+    }
+
+    static func dispatch(_ action: CrewMessageAction,
+                         copy: (String) -> Void,
+                         prepare: () -> CodexCLIInstallAction?) -> Result {
+        switch action {
+        case let .copyText(text):
+            copy(text)
+            return .copied
+        case .prepareOfficialCodexCLIInstall:
+            guard let plan = prepare() else { return .unavailable }
+            return .prepared(plan)
+        }
+    }
+}
+
 /// local coding agent 跑动的 view-side 视图模型（chunk2 T1：多 run 并存）。
 ///
 /// 每次 `start(...)` 起一个新 `CrewSessionRun` 追加进 `runs` 并选中——旧 run

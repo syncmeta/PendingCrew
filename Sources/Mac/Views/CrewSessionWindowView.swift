@@ -1147,11 +1147,19 @@ private struct CrewSessionErrorMessage: View {
     @ObservedObject var cliVersions: AgentCLIVersionCenter
 
     var body: some View {
+        let actions = CrewMessageActionCatalog.forSystemError(text: text, action: action)
         VStack(alignment: .leading, spacing: 5) {
             Text(text)
                 .foregroundStyle(Theme.Palette.danger)
                 .textSelection(.enabled)
-            if action == .installCodexCLI {
+            if actions.contains(.copyText(text)) {
+                Button("复制消息", systemImage: "doc.on.doc") {
+                    _ = CrewMessageActionDispatcher.dispatch(
+                        .copyText(text), copy: CrewMessageActionPasteboard.copy, prepare: { nil })
+                }
+                .buttonStyle(.borderless)
+            }
+            if actions.contains(.prepareOfficialCodexCLIInstall) {
                 switch cliVersions.codexProvisioningState {
                 case .missing:
                     EmptyView()

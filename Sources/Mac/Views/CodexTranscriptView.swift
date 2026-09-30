@@ -1,5 +1,13 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
+
+enum CrewMessageActionPasteboard {
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
 
 /// Structured Codex session, close to Codex Desktop's information hierarchy:
 /// assistant prose stays full strength; process details become short natural-language
@@ -99,8 +107,14 @@ struct CodexCLIInstallActionButton: View {
         Group {
             if case .missing = center.codexProvisioningState {
                 Button("准备安装…") {
-                    guard let action = center.prepareCodexInstall() else { return }
-                    pendingAction = action
+                    guard case let .prepared(plan) = CrewMessageActionDispatcher.dispatch(
+                        .prepareOfficialCodexCLIInstall,
+                        copy: { _ in },
+                        prepare: {
+                            guard case .missing = center.codexProvisioningState else { return nil }
+                            return center.prepareCodexInstall()
+                        }) else { return }
+                    pendingAction = plan
                     showingConfirmation = true
                 }
                 .accessibilityLabel("准备安装官方 Codex CLI")
@@ -170,7 +184,18 @@ struct CodexTranscriptRows: View {
 
     @ViewBuilder private var content: some View {
         ForEach(transcript.items) { item in
-            row(item).id(item.id)
+            row(item)
+                .contextMenu {
+                    ForEach(CrewMessageActionCatalog.forTranscript(item), id: \.self) { action in
+                        if case .copyText = action {
+                            Button("复制消息", systemImage: "doc.on.doc") {
+                                _ = CrewMessageActionDispatcher.dispatch(
+                                    action, copy: CrewMessageActionPasteboard.copy, prepare: { nil })
+                            }
+                        }
+                    }
+                }
+                .id(item.id)
         }
         if transcript.turnActive {
             workingRow.id("__spinner__")
