@@ -22,9 +22,9 @@ final class ViewWiringTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: base) }
         _ = PendingCrewFirstSend() // Opening a draft has no persistence operation.
         XCTAssertTrue(ledger.listCrews().isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
         XCTAssertTrue(LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
             .listCrews().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 
     @MainActor
@@ -39,7 +39,7 @@ final class ViewWiringTests: XCTestCase {
                 crewGround: root, title: "Draft", create: { _ in
                     creates += 1
                     return "unexpected"
-                }, attach: { _ in }, post: { _, _ in }, rollback: { _ in })
+                }, attach: { _ in }, post: { _, _ in }, rollback: { _ in .notFound })
             XCTFail("missing manual path should be rejected")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("工作目录"))
@@ -74,7 +74,7 @@ final class ViewWiringTests: XCTestCase {
                     await Task.yield()
                     _ = try await backend.postCrewMessage(crewId: id, text: text,
                         mentions: [], replyToId: nil, localAttachments: [])
-                }, rollback: { id in _ = ledger.deleteCrew(id) })
+                }, rollback: { id in backend.rollbackNewCrew(id) })
         }
         let firstTask = Task { try await submit() }
         let duplicateTask = Task { try await submit() }
@@ -118,10 +118,12 @@ final class ViewWiringTests: XCTestCase {
                     return created.crewId
                 }, attach: { _ in }, post: { _, _ in
                     throw PendingCrewBackendError.invalidConfig("simulated post failure")
-                }, rollback: { id in _ = ledger.deleteCrew(id) })
+                }, rollback: { id in backend.rollbackNewCrew(id) })
             XCTFail("default post should fail")
         } catch { }
         XCTAssertTrue(ledger.listCrews().isEmpty)
+        XCTAssertTrue(LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+            .listCrews().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
         let sender = PendingCrewFirstSend()
         var shouldFail = true
@@ -139,7 +141,7 @@ final class ViewWiringTests: XCTestCase {
                     }
                     _ = try await backend.postCrewMessage(crewId: id, text: text,
                         mentions: [], replyToId: nil, localAttachments: [])
-                }, rollback: { id in _ = ledger.deleteCrew(id) })
+                }, rollback: { id in backend.rollbackNewCrew(id) })
         }
         do {
             _ = try await submit()
@@ -148,6 +150,8 @@ final class ViewWiringTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("simulated post failure"))
         }
         XCTAssertTrue(ledger.listCrews().isEmpty)
+        XCTAssertTrue(LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+            .listCrews().isEmpty)
         XCTAssertTrue(board.list(crewId: "missing").isEmpty)
         XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "keep")
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
@@ -158,6 +162,82 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertEqual(ledger.getCrew(crew.id)?.crew.workingDirectory, manual.path)
         XCTAssertEqual(board.list(crewId: crew.id).filter { $0.senderKind == "user" }.map(\.text),
                        ["retry me"])
+    }
+
+    @MainActor
+    func testPendingFirstSendDoesNotRetryWhenRollbackDidNotDeleteCrew() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let sender = PendingCrewFirstSend()
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        ledger.upsertBuiltinChiefCrew()
+        var creates = 0
+        func submit() async throws -> PendingCrewFirstSend.Outcome? {
+            try await sender.commit(message: "hello", selectedDirectory: nil,
+                crewGround: root, title: "Draft", create: { _ in
+                    creates += 1
+                    return LocalCrew.chiefCrewId
+                }, attach: { _ in }, post: { _, _ in
+                    throw PendingCrewBackendError.invalidConfig("post failed")
+                }, rollback: { id in ledger.deleteCrew(id) })
+        }
+        do { _ = try await submit(); XCTFail("post must fail") } catch { }
+        do {
+            _ = try await submit()
+            XCTFail("unverified rollback must remain visible on retry")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("回滚"))
+        }
+        XCTAssertEqual(creates, 1, "an unverified rollback must block a second creation")
+        XCTAssertNotNil(ledger.getCrew(LocalCrew.chiefCrewId))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path),
+                      "an orphaned crew may still own its workdir")
+    }
+
+    @MainActor
+    func testPendingFirstSendNotFoundRollbackAlsoStopsRetry() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        let sender = PendingCrewFirstSend()
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        var creates = 0
+        for _ in 0..<2 {
+            do {
+                _ = try await sender.commit(message: "hello", selectedDirectory: nil,
+                    crewGround: root, title: "Draft", create: { _ in
+                        creates += 1
+                        return "missing-crew"
+                    }, attach: { _ in }, post: { _, _ in
+                        throw PendingCrewBackendError.invalidConfig("post failed")
+                    }, rollback: { id in ledger.deleteCrew(id) })
+            } catch { }
+        }
+        XCTAssertEqual(creates, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    @MainActor
+    func testPendingFirstSendWithoutBackendRollbackRejectsBeforeCreate() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        var remoteCreates = 0
+        do {
+            _ = try await PendingCrewFirstSend().commit(
+                message: "hello", selectedDirectory: nil, crewGround: root, title: "Draft",
+                create: { _ in remoteCreates += 1; return "remote-crew" },
+                attach: { _ in }, post: { _, _ in }, rollback: nil)
+            XCTFail("remote backend without deletion must be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("回滚"))
+        }
+        XCTAssertEqual(remoteCreates, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 
     @MainActor
@@ -209,6 +289,10 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(store.contains("pendingFirstSend = PendingCrewFirstSend()"))
         XCTAssertTrue(store.contains("machineId: nil,"),
                       "Mac 本地草稿应使用本机机器，旧跨机器入口不应偷偷继承")
+        XCTAssertTrue(store.contains("backend as? LocalBackend"),
+                      "Remote backend has no delete operation; reject draft commit before create")
+        XCTAssertTrue(store.contains("localBackend.rollbackNewCrew(crewId)"),
+                      "Rollback must use the same local backend ledger that created the crew")
         let commitBody = String(store[commit.lowerBound...])
         let post = try XCTUnwrap(commitBody.range(of: "backend.postCrewMessage("))
         let start = try XCTUnwrap(commitBody.range(of: "enqueue(CaptainAutostartRequest("))

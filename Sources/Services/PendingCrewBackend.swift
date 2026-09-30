@@ -164,6 +164,12 @@ final class LocalBackend: PendingCrewBackend {
         return store.createCrew(request)
     }
 
+    /// Roll back a draft on the same ledger that accepted its create request.
+    /// The caller must inspect all three outcomes before permitting a retry.
+    func rollbackNewCrew(_ crewId: String) -> LocalCrewStore.DeleteOutcome {
+        store.deleteCrew(crewId)
+    }
+
     func attachParent(crewId: String, parentCrewId: String, childKeepsBps: Int) async throws {
         // 本地 DAG 父边 —— 「家」在本地。`childKeepsBps`
         // 本地暂忽略(责任分账是后续计费的事,本次只落 DAG 边)。禁环由

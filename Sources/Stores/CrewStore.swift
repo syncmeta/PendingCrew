@@ -11,9 +11,11 @@ struct PendingCrewDraft: Equatable {
 
 private enum PendingCrewCommitError: LocalizedError {
     case noSubject
+    case rollbackUnavailable
     var errorDescription: String? {
         switch self {
         case .noSubject: return "没有可代表的 subject"
+        case .rollbackUnavailable: return "此连接暂不支持首条消息创建机组，请在本机完成创建"
         }
     }
 }
@@ -262,6 +264,11 @@ final class CrewStore: ObservableObject {
         pendingCrewSending = true
         defer { pendingCrewSending = false }
         guard let backend = currentBackend() else { throw PendingCrewBackendError.notAuthenticated }
+        // RemotePendingCrewBackend has no delete RPC. Reject before create,
+        // otherwise a failed first post could strand a remote crew.
+        guard let localBackend = backend as? LocalBackend else {
+            throw PendingCrewCommitError.rollbackUnavailable
+        }
         if subjects.isEmpty { await refreshSubjects() }
         guard pendingCrew?.id == draft.id else { throw CancellationError() }
         guard let subjectId = subjects.first?.id else { throw PendingCrewCommitError.noSubject }
@@ -298,7 +305,7 @@ final class CrewStore: ObservableObject {
                         guard LocalWhiteboardStore.wasPreservedForRetry(error) else { throw error }
                     }
                 },
-                rollback: { crewId in _ = LocalCrewStore.shared.deleteCrew(crewId) })
+                rollback: { crewId in localBackend.rollbackNewCrew(crewId) })
             guard let outcome else { return }
             #if os(macOS)
             if let trust = WorkdirTrustPrompt.prompt(
