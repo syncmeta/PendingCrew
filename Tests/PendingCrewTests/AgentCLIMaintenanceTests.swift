@@ -1,4 +1,5 @@
 #if os(macOS)
+import Darwin
 import XCTest
 
 final class AgentCLIMaintenanceTests: XCTestCase {
@@ -84,8 +85,11 @@ final class AgentCLIMaintenanceTests: XCTestCase {
             XCTAssertEqual(action.package, "@openai/codex@0.159.1")
             XCTAssertEqual(action.target.standardizedFileURL.path,
                            prepared.managedRoot.appendingPathComponent("0.159.1", isDirectory: true).standardizedFileURL.path)
+            XCTAssertEqual(action.cache.standardizedFileURL.path,
+                           prepared.managedRoot.appendingPathComponent("npm-cache", isDirectory: true).standardizedFileURL.path)
             XCTAssertEqual(action.arguments, [
                 "install", "--prefix", action.target.path,
+                "--cache", action.cache.path,
                 "--userconfig", "/dev/null", "--globalconfig", "/dev/null",
                 "--registry", "https://registry.npmjs.org/",
                 "--ignore-scripts", "--no-audit", "--no-fund", "@openai/codex@0.159.1",
@@ -130,6 +134,7 @@ final class AgentCLIMaintenanceTests: XCTestCase {
             XCTAssertEqual(calls[0].1, action.arguments)
             XCTAssertEqual(calls[1].1, ["--version"])
             XCTAssertEqual(calls[0].2["npm_config_registry"], "https://registry.npmjs.org/")
+            XCTAssertEqual(calls[0].2["npm_config_cache"], action.cache.path)
             XCTAssertEqual(calls[0].2["npm_config_ignore_scripts"], "true")
             XCTAssertEqual(calls[0].2["HOME"], prepared.home.path)
             XCTAssertNil(calls[0].2["OPENAI_API_KEY"])
@@ -190,6 +195,128 @@ final class AgentCLIMaintenanceTests: XCTestCase {
             XCTAssertEqual(calls, 1, "失败后不自动重试或继续版本探测")
             XCTAssertNil(CodexCLIProvisioningService.managedExecutable(root: prepared.managedRoot))
         }
+    }
+
+    /// #188 permission boundary: before the package manager can download or run
+    /// anything, the managed root, version target and npm cache must all be
+    /// private to this user. A compromised or merely group-writable directory is
+    /// not a safe place to later execute the downloaded CLI from.
+    func testProvisioningCreatesPrivateRootTargetAndDedicatedCacheBeforeNpm() throws {
+        try provisioningFixture { service, _, _, _ in
+            var prepared = service
+            let action = try prepared.prepareOfficialInstall()
+            let cache = prepared.managedRoot.appendingPathComponent("npm-cache", isDirectory: true)
+            prepared.processExecute = { _, _, _ in
+                .init(status: 0, output: "1 /sbin/launchd\n", logURL: nil)
+            }
+            prepared.execute = { _, arguments, _, environment in
+                guard arguments.first == "install" else {
+                    return .init(status: 0, output: "codex-cli 0.159.1", logURL: nil)
+                }
+                for directory in [prepared.managedRoot, action.target, cache] {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+                    let mode = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue & 0o777
+                    XCTAssertEqual(mode, 0o700, "受管目录必须是当前用户私有的 0700：\(directory.path)")
+                    XCTAssertEqual((try XCTUnwrap(attributes[.ownerAccountID] as? NSNumber)).uint32Value,
+                                   UInt32(geteuid()),
+                                   "受管目录不能由别的本机用户拥有：\(directory.path)")
+                }
+                XCTAssertEqual(environment["npm_config_cache"], cache.path,
+                               "npm 不能落回共享的 HOME cache")
+                return .init(status: 17, output: "injected npm failure", logURL: nil)
+            }
+
+            XCTAssertThrowsError(try prepared.installConfirmed(action))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: action.target.path),
+                          "失败产物必须留在固定 target，供人工核对；不能悄悄清理或重试")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: cache.path),
+                          "失败后的私有 npm cache 必须保留，不能自动改用 HOME cache")
+        }
+    }
+
+    func testProvisioningRejectsSymlinkedOrGroupWritableManagedRootBeforeNpm() throws {
+        try provisioningFixture { service, _, root, _ in
+            for insecureRoot in ["symlink", "group-writable"] {
+                var prepared = service
+                let action = try prepared.prepareOfficialInstall()
+                if insecureRoot == "symlink" {
+                    let destination = root.appendingPathComponent("outside")
+                    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                    try FileManager.default.createSymbolicLink(at: prepared.managedRoot,
+                                                                withDestinationURL: destination)
+                } else {
+                    try FileManager.default.createDirectory(at: prepared.managedRoot, withIntermediateDirectories: true)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o770],
+                                                          ofItemAtPath: prepared.managedRoot.path)
+                }
+                var npmRan = false
+                prepared.processExecute = { _, _, _ in
+                    .init(status: 0, output: "1 /sbin/launchd\n", logURL: nil)
+                }
+                prepared.execute = { _, _, _, _ in
+                    npmRan = true
+                    return .init(status: 0, output: "unexpected", logURL: nil)
+                }
+
+                XCTAssertThrowsError(try prepared.installConfirmed(action),
+                                     "\(insecureRoot) root 必须在 npm 之前被拒绝")
+                XCTAssertFalse(npmRan, "不安全 root 下不得调用 npm：\(insecureRoot)")
+                try? FileManager.default.removeItem(at: prepared.managedRoot)
+            }
+        }
+    }
+
+    func testProvisioningRejectsDanglingTargetOrCacheSymlinkBeforeNpm() throws {
+        try provisioningFixture { service, _, root, _ in
+            for unsafeName in ["target", "cache"] {
+                var prepared = service
+                let action = try prepared.prepareOfficialInstall()
+                try FileManager.default.createDirectory(at: prepared.managedRoot,
+                                                        withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])
+                let unsafe = unsafeName == "target" ? action.target : action.cache
+                try FileManager.default.createSymbolicLink(atPath: unsafe.path,
+                                                            withDestinationPath: root.appendingPathComponent("missing").path)
+                var npmRan = false
+                prepared.processExecute = { _, _, _ in
+                    .init(status: 0, output: "1 /sbin/launchd\n", logURL: nil)
+                }
+                prepared.execute = { _, _, _, _ in
+                    npmRan = true
+                    return .init(status: 0, output: "unexpected", logURL: nil)
+                }
+
+                XCTAssertThrowsError(try prepared.installConfirmed(action),
+                                     "\(unsafeName) symlink 必须在 npm 之前被拒绝")
+                XCTAssertFalse(npmRan, "受管 \(unsafeName) 不得跟随 symlink 后再运行 npm")
+                try? FileManager.default.removeItem(at: prepared.managedRoot)
+            }
+        }
+    }
+
+    func testManagedExecutableRejectsPostInstallWritableRootOrTarget() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("0.159.1", isDirectory: true)
+        let binary = target.appendingPathComponent("node_modules/@openai/codex/bin/codex")
+        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fixture".utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
+        let link = target.appendingPathComponent("node_modules/.bin/codex")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path,
+                                                    withDestinationPath: "../@openai/codex/bin/codex")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        XCTAssertNotNil(CodexCLIProvisioningService.managedExecutable(root: root))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o770], ofItemAtPath: target.path)
+        XCTAssertNil(CodexCLIProvisioningService.managedExecutable(root: root),
+                     "后来变成 group-writable 的 version target 不能再被当作可执行 CLI")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o707], ofItemAtPath: root.path)
+        XCTAssertNil(CodexCLIProvisioningService.managedExecutable(root: root),
+                     "后来变成 others-writable 的 managed root 不能再被当作可执行 CLI")
     }
 
     func testManagedProvisioningRejectsSymlinkEscapingItsFixedTarget() throws {

@@ -158,19 +158,22 @@ struct CodexCLIInstallGuide: Equatable {
 struct CodexCLIInstallAction: Equatable {
     let packageManager: URL
     let target: URL
+    let cache: URL
     let registry: String
     let package: String
     let arguments: [String]
     let requiresSecondConfirmation = true
 
-    fileprivate init(packageManager: URL, target: URL) {
+    fileprivate init(packageManager: URL, target: URL, cache: URL) {
         self.packageManager = packageManager
         self.target = target
+        self.cache = cache
         self.registry = CodexCLIInstallGuide.officialRegistry
         self.package = CodexCLIInstallGuide.officialPackage + "@" + CodexCLIInstallGuide.officialPackageVersion
         self.arguments = [
             "install",
             "--prefix", target.path,
+            "--cache", cache.path,
             "--userconfig", "/dev/null",
             "--globalconfig", "/dev/null",
             "--registry", CodexCLIInstallGuide.officialRegistry,
@@ -241,7 +244,7 @@ struct CodexCLIProvisioningService {
         guard !FileManager.default.fileExists(atPath: target.path) else {
             throw AgentCLIFailure(message: "受管 Codex CLI 目标已存在；不会覆盖或自动重试，请重新检测后人工处理。")
         }
-        return .init(packageManager: npm, target: target)
+        return .init(packageManager: npm, target: target, cache: managedCache)
     }
 
     /// 只能由 UI 的第二次确认调用。动作字段逐项回验，避免未来调用点把它退化成
@@ -251,7 +254,11 @@ struct CodexCLIProvisioningService {
               action.registry == CodexCLIInstallGuide.officialRegistry,
               action.package == CodexCLIInstallGuide.officialPackage + "@" + CodexCLIInstallGuide.officialPackageVersion,
               action.target == managedTarget,
-              action.arguments == CodexCLIInstallAction(packageManager: action.packageManager, target: managedTarget).arguments,
+              action.cache == managedCache,
+              action.arguments == CodexCLIInstallAction(
+                  packageManager: action.packageManager,
+                  target: managedTarget,
+                  cache: managedCache).arguments,
               action.packageManager.lastPathComponent == "npm",
               FileManager.default.isExecutableFile(atPath: action.packageManager.path)
         else {
@@ -270,6 +277,17 @@ struct CodexCLIProvisioningService {
         guard !FileManager.default.fileExists(atPath: action.target.path) else {
             throw AgentCLIFailure(message: "确认前受管目标已出现；不会覆盖或自动重试。")
         }
+
+        // This is deliberately after the second confirmation and every launch/process
+        // gate. Creating these private directories is part of the confirmed action;
+        // the first click remains offline and leaves no filesystem artifacts.
+        //
+        // If npm itself fails, root/target/cache and the 0600 command log are retained
+        // for human inspection. A later prepare refuses the existing version target,
+        // so this path never silently cleans up, retries, or falls back to HOME's cache.
+        try Self.preparePrivateDirectory(managedRoot)
+        try Self.preparePrivateDirectory(managedCache)
+        try Self.preparePrivateDirectory(action.target)
 
         let install = try execute(action.packageManager, action.arguments, 300, environment)
         guard install.status == 0 else {
@@ -291,7 +309,9 @@ struct CodexCLIProvisioningService {
         let target = managedTarget(root: root)
         let executable = target.appendingPathComponent("node_modules/.bin/codex")
         let resolved = executable.resolvingSymlinksInPath()
-        guard isDescendant(executable, of: target),
+        guard isPrivateDirectory(root),
+              isPrivateDirectory(target),
+              isDescendant(executable, of: target),
               isDescendant(resolved, of: target),
               FileManager.default.isExecutableFile(atPath: executable.path)
         else { return nil }
@@ -314,6 +334,7 @@ struct CodexCLIProvisioningService {
     }
 
     private var managedTarget: URL { Self.managedTarget(root: managedRoot) }
+    private var managedCache: URL { managedRoot.appendingPathComponent("npm-cache", isDirectory: true) }
 
     private static func managedTarget(root: URL) -> URL {
         root.appendingPathComponent(CodexCLIInstallGuide.officialPackageVersion, isDirectory: true)
@@ -324,6 +345,7 @@ struct CodexCLIProvisioningService {
             "HOME": home.path,
             "PATH": LocalCodingAgentExecutable.childProcessPath,
             "npm_config_registry": CodexCLIInstallGuide.officialRegistry,
+            "npm_config_cache": managedCache.path,
             "npm_config_ignore_scripts": "true",
             "npm_config_audit": "false",
             "npm_config_fund": "false",
@@ -336,6 +358,49 @@ struct CodexCLIProvisioningService {
         let childPath = child.standardizedFileURL.path
         let parentPath = parent.standardizedFileURL.path
         return childPath.hasPrefix(parentPath + "/")
+    }
+
+    /// Make a directory private only after proving an existing directory is safe to
+    /// touch. In particular, never chmod through a symlink or repair a directory that
+    /// another local user/group could already have populated.
+    private static func preparePrivateDirectory(_ url: URL) throws {
+        var metadata = stat()
+        if lstat(url.path, &metadata) != 0 {
+            guard errno == ENOENT else {
+                throw AgentCLIFailure(message: "无法检查受管 Codex CLI 目录；拒绝安装。")
+            }
+            try FileManager.default.createDirectory(
+                at: url,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            guard lstat(url.path, &metadata) == 0 else {
+                throw AgentCLIFailure(message: "受管 Codex CLI 目录创建后无法检查；拒绝安装。")
+            }
+        }
+
+        guard isOwnedDirectory(metadata) else {
+            throw AgentCLIFailure(message: "受管 Codex CLI 目录不是当前用户私有目录（符号链接、owner 或 group/others 写入不安全）；拒绝安装。")
+        }
+        guard chmod(url.path, 0o700) == 0, isPrivateDirectory(url) else {
+            throw AgentCLIFailure(message: "无法把受管 Codex CLI 目录固定为当前用户 0700；拒绝安装。")
+        }
+    }
+
+    private static func isPrivateDirectory(_ url: URL) -> Bool {
+        var metadata = stat()
+        guard lstat(url.path, &metadata) == 0,
+              isOwnedDirectory(metadata),
+              metadata.st_mode & mode_t(0o777) == mode_t(0o700)
+        else { return false }
+        return true
+    }
+
+    private static func isOwnedDirectory(_ metadata: stat) -> Bool {
+        guard metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+              metadata.st_uid == geteuid(),
+              metadata.st_mode & mode_t(0o022) == 0
+        else { return false }
+        return true
     }
 }
 
