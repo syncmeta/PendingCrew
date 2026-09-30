@@ -65,12 +65,22 @@ struct AgentCLIVersionView: View {
         ) {
             Button("确认安装") {
                 if let pendingCodexInstall {
+                    self.pendingCodexInstall = nil
                     Task { await center.installCodex(pendingCodexInstall) }
                 }
             }
-            Button("取消", role: .cancel) { pendingCodexInstall = nil }
+            Button("取消", role: .cancel) {
+                pendingCodexInstall = nil
+                Task { await center.refresh(.codex) }
+            }
         } message: {
             Text(codexInstallConfirmationText)
+        }
+        .onChange(of: confirmingCodexInstall) { _, confirming in
+            if !confirming && pendingCodexInstall != nil {
+                pendingCodexInstall = nil
+                Task { await center.refresh(.codex) }
+            }
         }
     }
 

@@ -55,7 +55,21 @@ final class CrewSessionRunner: ObservableObject {
     /// 那屏）两处都看不到会让人误以为「点了没反应」—— 所以放在 runner 上，让按钮所在
     /// 的成员列表模式也能显，且自动起（MacRootView，无 view-local error）失败时同样有处可落。
     /// 成功启动或下一次尝试开始时清空。
-    @Published var lastStartError: String?
+    @Published var lastStartError: String? {
+        didSet { lastStartErrorAction = nil }
+    }
+    /// Action attached to the specific failed launch, never inferred from prose.
+    @Published private(set) var lastStartErrorAction: StartErrorAction?
+
+    enum StartErrorAction: Equatable {
+        case installCodexCLI
+
+        static func forFailure(_ error: Error) -> Self? {
+            guard let failure = error as? RunnerError else { return nil }
+            if case .toolNotInstalled(kind: .codex) = failure { return .installCodexCLI }
+            return nil
+        }
+    }
 
     /// 前台 run：选中的那个；没选中（或选中的已被移除）时回退最后一个 ——
     /// 回退只在前台 crew 内找,不越 crew 顶出别人的终端（#481）。
@@ -1646,6 +1660,7 @@ final class CrewSessionRunner: ObservableObject {
     ) {
         let reason = error.localizedDescription
         lastStartError = reason
+        lastStartErrorAction = StartErrorAction.forFailure(error)
         let briefPart = (brief?.isEmpty == false) ? "\n无人接手的活：\(brief!)" : ""
         LocalWhiteboardStore.shared.appendSessionMessage(
             crewId: crewId, sessionId: "system",

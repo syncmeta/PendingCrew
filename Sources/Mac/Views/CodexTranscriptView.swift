@@ -34,38 +34,11 @@ struct CodexTranscriptView: View {
 /// prose from a session or a whiteboard entry is never interpreted as one.
 struct CodexCLIProvisioningNotice: View {
     @ObservedObject var center: AgentCLIVersionCenter
-    @State private var pendingAction: CodexCLIInstallAction?
-    @State private var showingConfirmation = false
 
     var body: some View {
         Group {
             if let state = center.codexProvisioningState {
                 notice(for: state)
-            }
-        }
-        .confirmationDialog(
-            "确认安装官方 Codex CLI？",
-            isPresented: $showingConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("确认安装") {
-                guard let pendingAction else { return }
-                self.pendingAction = nil
-                Task { await center.installCodex(pendingAction) }
-            }
-            Button("取消", role: .cancel) {
-                pendingAction = nil
-                Task { await center.refresh(.codex) }
-            }
-        } message: {
-            if let pendingAction {
-                Text("来源：\(pendingAction.registry)\n目标：\(pendingAction.target.path)\n参数：\(pendingAction.arguments.joined(separator: " "))\n此操作将安装并复验 CLI；不会读取认证状态或自动启动 session。")
-            }
-        }
-        .onChange(of: showingConfirmation) { _, showing in
-            if !showing && pendingAction != nil {
-                pendingAction = nil
-                Task { await center.refresh(.codex) }
             }
         }
     }
@@ -84,13 +57,7 @@ struct CodexCLIProvisioningNotice: View {
                     .textSelection(.enabled)
                 HStack {
                     Link("查看官方安装指引", destination: guide.documentation)
-                    Button("准备安装…") {
-                        if let action = center.prepareCodexInstall() {
-                            pendingAction = action
-                            showingConfirmation = true
-                        }
-                    }
-                    .accessibilityLabel("准备安装官方 Codex CLI")
+                    CodexCLIInstallActionButton(center: center)
                 }
             }
             .modifier(ProvisioningNoticeCard())
@@ -115,6 +82,49 @@ struct CodexCLIProvisioningNotice: View {
                     .accessibilityLabel("重新检测 Codex CLI")
             }
             .modifier(ProvisioningNoticeCard())
+        }
+    }
+}
+
+/// An action attached to a typed Codex-missing error or the explicit CLI
+/// notice. It never accepts a command or package from message prose.
+struct CodexCLIInstallActionButton: View {
+    @ObservedObject var center: AgentCLIVersionCenter
+    @State private var pendingAction: CodexCLIInstallAction?
+    @State private var showingConfirmation = false
+
+    var body: some View {
+        Button("准备安装…") {
+            guard case .missing = center.codexProvisioningState,
+                  let action = center.prepareCodexInstall() else { return }
+            pendingAction = action
+            showingConfirmation = true
+        }
+        .accessibilityLabel("准备安装官方 Codex CLI")
+        .confirmationDialog(
+            "确认安装官方 Codex CLI？",
+            isPresented: $showingConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("确认安装") {
+                guard let pendingAction else { return }
+                self.pendingAction = nil
+                Task { await center.installCodex(pendingAction) }
+            }
+            Button("取消", role: .cancel) {
+                pendingAction = nil
+                Task { await center.refresh(.codex) }
+            }
+        } message: {
+            if let pendingAction {
+                Text("来源：\(pendingAction.registry)\n目标：\(pendingAction.target.path)\n参数：\(pendingAction.arguments.joined(separator: " "))\n此操作将安装并复验 CLI；不会读取认证状态或自动启动 session。")
+            }
+        }
+        .onChange(of: showingConfirmation) { _, showing in
+            if !showing && pendingAction != nil {
+                pendingAction = nil
+                Task { await center.refresh(.codex) }
+            }
         }
     }
 }

@@ -5,6 +5,16 @@ import XCTest
 /// 并钉住三类失败与「正常」的边界。纯逻辑，不起真进程。
 final class SessionLaunchProbeTests: XCTestCase {
 
+    @MainActor
+    func testOnlyTypedMissingCodexFailureOffersInstallAction() {
+        let action = CrewSessionRunner.StartErrorAction.self
+        XCTAssertEqual(action.forFailure(CrewSessionRunner.RunnerError.toolNotInstalled(kind: .codex)),
+                       .installCodexCLI)
+        XCTAssertNil(action.forFailure(CrewSessionRunner.RunnerError.toolNotInstalled(kind: .claudeCode)))
+        XCTAssertNil(action.forFailure(CrewSessionRunner.RunnerError.captainNoWorkingDirectory))
+        XCTAssertNil(action.forFailure(NSError(domain: "unrelated", code: 1)))
+    }
+
     private let deadline: TimeInterval = 25
 
     // MARK: - 事故复现

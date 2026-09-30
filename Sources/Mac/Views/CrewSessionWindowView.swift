@@ -29,6 +29,7 @@ struct CrewSessionWindowView: View {
     @State private var pendingExplicitId: String?
     @State private var starting = false
     @State private var localError: String?
+    @State private var localErrorAction: CrewSessionRunner.StartErrorAction?
     /// 成员行右键「设为机长」的待确认目标。确认后不是原地翻角色，而是续接同一
     /// agent conversation 以 captain 世界观/工具权限重新挂起。
     @State private var pendingCaptainRun: CrewSessionRun?
@@ -276,18 +277,15 @@ struct CrewSessionWindowView: View {
     ///（VSplitView 在 NavigationSplitView 的固定列内做垂直分割，不影响列宽协商）。
     private var memberListMode: some View {
         VStack(spacing: 0) {
-            if selectedKind == .codex || sessionRunner.lastStartError != nil {
+            if selectedKind == .codex && sessionRunner.lastStartError == nil {
                 CodexCLIProvisioningNotice(center: cliVersions)
             }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——
             // 点击入口（captain 成员行）就在这屏，错误必须在这显，否则点了像没反应。
             if let err = sessionRunner.lastStartError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                CrewSessionErrorMessage(
+                    text: err, action: sessionRunner.lastStartErrorAction,
+                    cliVersions: cliVersions)
                 Divider()
             }
             if let crewId = crewStore.selectedDetail?.crew.id {
@@ -858,9 +856,9 @@ struct CrewSessionWindowView: View {
                 .padding(.top, 8)
             }
             if let localError {
-                Text(localError).font(.caption).foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
+                CrewSessionErrorMessage(
+                    text: localError, action: localErrorAction,
+                    cliVersions: cliVersions)
             }
             if selectedKind == .terminal {
                 Button {
@@ -963,6 +961,7 @@ struct CrewSessionWindowView: View {
             let id = pendingExplicitId ?? UUID().uuidString
             pendingExplicitId = id
             let receipt = await sessionRunner.submitExplicitText(text, id: id, to: run)
+            localErrorAction = nil
             if receipt == .accepted {
                 draft = ""
                 pendingExplicitId = nil
@@ -984,6 +983,7 @@ struct CrewSessionWindowView: View {
     private func startSession(firstPrompt: String) async {
         guard let detail = crewStore.selectedDetail else { return }
         guard let wd = detail.crew.workingDirectory, !wd.isEmpty else {
+            localErrorAction = nil
             localError = "这个 crew 没有工作目录 —— 在建 crew 时设置后再开 session。"
             return
         }
@@ -991,6 +991,7 @@ struct CrewSessionWindowView: View {
         starting = true
         defer { starting = false }
         localError = nil
+        localErrorAction = nil
 
         do {
             if startsAsCaptain {
@@ -1057,6 +1058,7 @@ struct CrewSessionWindowView: View {
             draft = ""
         } catch {
             localError = error.localizedDescription
+            localErrorAction = CrewSessionRunner.StartErrorAction.forFailure(error)
         }
     }
 
@@ -1135,6 +1137,40 @@ struct CrewSessionWindowView: View {
             crewId: crewId, sessionId: sessionId, captain: captain, label: label)
     }
 
+}
+
+/// A launch failure's optional action comes from its typed error, never its text.
+/// The button stays in the same message row as the failure it can resolve.
+private struct CrewSessionErrorMessage: View {
+    let text: String
+    let action: CrewSessionRunner.StartErrorAction?
+    @ObservedObject var cliVersions: AgentCLIVersionCenter
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(text)
+                .foregroundStyle(Theme.Palette.danger)
+                .textSelection(.enabled)
+            if action == .installCodexCLI {
+                switch cliVersions.codexProvisioningState {
+                case .missing:
+                    CodexCLIInstallActionButton(center: cliVersions)
+                case .installing:
+                    ProgressView("正在安装并复验 Codex CLI…")
+                case let .installedNeedsManualSignIn(installed):
+                    Text("CLI \(installed.version) 已复验；请自行完成原生 Codex 登录，认证状态尚未验证。")
+                case let .failed(message):
+                    Text(message).foregroundStyle(Theme.Palette.danger)
+                case .awaitingSecondConfirmation, .ready, .none:
+                    EmptyView()
+                }
+            }
+        }
+        .font(Theme.Fonts.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
 }
 
 /// **响铃留下的那道痕迹**（人类 Todo #110）。agent 敲 BEL 时不再放系统提示音，

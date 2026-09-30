@@ -649,6 +649,26 @@ final class ViewWiringTests: XCTestCase {
                       "安装成功只证明 CLI，不能冒充已认证或自动启动 session")
     }
 
+    /// #188 review: only a typed Codex-missing launch failure may put the install
+    /// action on that error message; dismissing the settings dialog must reset it.
+    func testCodexCLIRecoveryActionIsScopedToTypedFailureAndDismissalResetsIt() throws {
+        let session = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let settings = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/AgentCLIVersionView.swift"))
+        let runner = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Services/CrewSessionRunner.swift"))
+        XCTAssertFalse(session.contains("selectedKind == .codex || sessionRunner.lastStartError != nil"),
+                       "Claude 启动报错不能顺带露出 Codex 安装提示")
+        XCTAssertTrue(session.contains("action: sessionRunner.lastStartErrorAction")
+                      && runner.contains("lastStartErrorAction = StartErrorAction.forFailure(error)"),
+                      "错误行动必须来自启动失败的类型化标记")
+        XCTAssertTrue(session.contains("CrewSessionErrorMessage("),
+                      "安装行动必须附在对应的报错消息，而不是仅有独立提示卡")
+        XCTAssertTrue(session.contains("if action == .installCodexCLI")
+                      && session.contains("CodexCLIInstallActionButton(center: cliVersions)"),
+                      "报错行的按钮必须受类型化行动门控")
+        XCTAssertTrue(settings.contains(".onChange(of: confirmingCodexInstall)"),
+                      "Esc 或外侧关闭确认框时必须复位待确认动作")
+    }
+
     /// #166: source contract for Codex's narrow session chrome. The test target
     /// does not compile the SwiftUI view, so this guards wiring and labels;
     /// the macOS app build separately checks SwiftUI type correctness.
