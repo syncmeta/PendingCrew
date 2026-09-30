@@ -9,6 +9,183 @@ import XCTest
 /// 退出码 0 会让 `--daemon-stop && rm -rf 数据根` 一路走下去，删在一个正在写的目录上。
 final class DaemonStopTests: XCTestCase {
 
+    func testAppAndSparkleWireTheQuitBoundary() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let app = try String(contentsOf: root.appendingPathComponent("Sources/PendingCrewApp.swift"))
+        let stop = try String(contentsOf: root.appendingPathComponent("Sources/Mac/LocalRunner/DaemonStop.swift"))
+        let host = try String(contentsOf: root.appendingPathComponent("Sources/Mac/Services/SessionHost.swift"))
+        let updater = try String(contentsOf: root.appendingPathComponent("Shared/AppUpdate/AppUpdater.swift"))
+        XCTAssertTrue(app.contains("@NSApplicationDelegateAdaptor(PendingCrewApplicationDelegate.self)"))
+        XCTAssertTrue(app.contains("func applicationShouldTerminate("))
+        XCTAssertTrue(app.contains("AppQuitDaemonPolicy.evaluate("))
+        XCTAssertTrue(app.contains("sender.reply(toApplicationShouldTerminate: false)"))
+        XCTAssertTrue(host.contains("AppQuitLifecycle.shared.pauseViewer"))
+        XCTAssertTrue(app.contains("lifecycle.pauseViewer?()"))
+        XCTAssertTrue(updater.contains("func updater(_ updater: SPUUpdater, willInstallUpdate"))
+        XCTAssertTrue(app.contains("CommandGroup(replacing: .appTermination)"))
+        XCTAssertTrue(app.contains("AppQuitLifecycle.shared.userRequestedQuit = true\n                    NSApp.terminate(nil)"))
+        XCTAssertTrue(app.contains("NSApp.terminate(nil)\n                }\n                .keyboardShortcut(\"q\", modifiers: .command)"))
+        XCTAssertTrue(app.contains("lifecycle.isSystemQuitEvent"))
+        XCTAssertTrue(app.contains("event: NSAppleEventManager.shared().currentAppleEvent"))
+        XCTAssertTrue(app.contains("NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier"))
+        XCTAssertTrue(stop.contains("attributeDescriptor(forKeyword: 0x73706964)"))
+        XCTAssertTrue(stop.contains("isExplicitDockQuit(senderBundleIdentifier: bundleIdentifierForPID(senderPID))"))
+        XCTAssertTrue(app.contains("AppQuitDaemonPolicy.resolveReason("))
+        XCTAssertTrue(app.contains("if reason == .sparkleInstall { return .terminateNow }"))
+    }
+
+    func testExplicitQuitWarnsAboutRunningSessionsThenStopsLocalDaemon() {
+        var trace: [String] = []
+        let decision = AppQuitDaemonPolicy.evaluate(
+            reason: .explicitQuit, runningSessionCount: 3,
+            confirmInterruption: { count in trace.append("warn:\(count)"); return true },
+            stopDaemon: { trace.append("stop"); return .stopped(pid: 42) })
+        XCTAssertEqual(decision, .allowTermination)
+        XCTAssertEqual(trace, ["warn:3", "stop"])
+    }
+
+    func testClosingWindowAndSparkleInstallDoNotStopDaemon() {
+        for reason in [AppQuitDaemonPolicy.Reason.windowClosed, .sparkleInstall] {
+            let decision = AppQuitDaemonPolicy.evaluate(
+                reason: reason, runningSessionCount: 2,
+                confirmInterruption: { _ in XCTFail("unexpected alert"); return true },
+                stopDaemon: { XCTFail("unexpected daemon stop"); return .stopped(pid: 42) })
+            XCTAssertEqual(decision, .allowTermination)
+        }
+    }
+
+    func testInstallationMarkerBeforeExplicitQuitStillRequiresDaemonStop() {
+        XCTAssertEqual(
+            AppQuitDaemonPolicy.resolveReason(
+                sparkleInstalling: true, userRequestedQuit: true),
+            .explicitQuit)
+        XCTAssertEqual(
+            AppQuitDaemonPolicy.resolveReason(
+                sparkleInstalling: true, userRequestedQuit: false),
+            .sparkleInstall)
+        XCTAssertTrue(AppQuitDaemonPolicy.isExplicitDockQuit(
+            senderBundleIdentifier: "com.apple.dock"))
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
+            senderBundleIdentifier: "org.sparkle-project.Sparkle.InstallerProgress"))
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(senderBundleIdentifier: nil))
+    }
+
+    func testPureSparkleInstallQuitLeavesDaemonAndSessionsAlone() {
+        let reason = AppQuitDaemonPolicy.resolveReason(
+            sparkleInstalling: true, userRequestedQuit: false)
+        XCTAssertEqual(reason, .sparkleInstall)
+        let decision = AppQuitDaemonPolicy.evaluate(
+            reason: reason, runningSessionCount: 2,
+            confirmInterruption: { _ in XCTFail("pure install must not warn"); return true },
+            stopDaemon: { XCTFail("pure install must not stop daemon"); return .stopped(pid: 42) })
+        XCTAssertEqual(decision, .allowTermination)
+    }
+
+    func testMenuQuitIntentWithInstallMarkerWarnsAndStopsDaemon() {
+        let reason = AppQuitDaemonPolicy.resolveReason(
+            sparkleInstalling: true, userRequestedQuit: true)
+        XCTAssertEqual(reason, .explicitQuit)
+        var trace: [String] = []
+        let decision = AppQuitDaemonPolicy.evaluate(
+            reason: reason, runningSessionCount: 2,
+            confirmInterruption: { count in trace.append("warn:\(count)"); return true },
+            stopDaemon: { trace.append("stop"); return .stopped(pid: 42) })
+        XCTAssertEqual(decision, .allowTermination)
+        XCTAssertEqual(trace, ["warn:2", "stop"])
+    }
+
+    func testQuitAppleEventUsesSenderPIDToDistinguishDockFromSparkle() {
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: 0x61657674, eventID: 0x71756974,
+            targetDescriptor: nil, returnID: 0, transactionID: 0)
+        XCTAssertEqual(event.eventClass, 0x61657674)
+        XCTAssertEqual(event.eventID, 0x71756974)
+        let senderPID = NSAppleEventDescriptor(int32: 31415)
+        var lookedUpPIDs: [Int32] = []
+        let dock = AppQuitDaemonPolicy.isExplicitDockQuit(event: event,
+                                                         senderPIDAttribute: { _ in senderPID }) { pid in
+            lookedUpPIDs.append(pid)
+            return "com.apple.dock"
+        }
+        let sparkle = AppQuitDaemonPolicy.isExplicitDockQuit(event: event,
+                                                            senderPIDAttribute: { _ in senderPID }) { pid in
+            lookedUpPIDs.append(pid)
+            return "org.sparkle-project.Sparkle.InstallerProgress"
+        }
+        XCTAssertTrue(dock)
+        XCTAssertFalse(sparkle)
+        XCTAssertEqual(lookedUpPIDs, [31415, 31415])
+
+        let wrongEvent = NSAppleEventDescriptor.appleEvent(
+            withEventClass: 0x61657674, eventID: 0x6f617070,
+            targetDescriptor: nil, returnID: 0, transactionID: 0)
+        let noSender = NSAppleEventDescriptor.appleEvent(
+            withEventClass: 0x61657674, eventID: 0x71756974,
+            targetDescriptor: nil, returnID: 0, transactionID: 0)
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
+            event: wrongEvent, senderPIDAttribute: { _ in
+                XCTFail("non-quit event must not look up a sender PID")
+                return senderPID
+            }) { _ in
+                XCTFail("invalid event must not look up a sender")
+                return "com.apple.dock"
+            })
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(
+            event: noSender, senderPIDAttribute: { _ in nil }) { _ in
+                XCTFail("missing sender PID must not look up a bundle")
+                return "com.apple.dock"
+            })
+        XCTAssertFalse(AppQuitDaemonPolicy.isExplicitDockQuit(event: noSender) { _ in
+            XCTFail("synthetic event without system spid must not look up a bundle")
+            return "com.apple.dock"
+        })
+    }
+
+    func testQuitCancellationAndUnreachableOrStuckDaemonNeverClaimSuccess() {
+        var stops = 0
+        let cancelled = AppQuitDaemonPolicy.evaluate(
+            reason: .explicitQuit, runningSessionCount: 1,
+            confirmInterruption: { _ in false },
+            stopDaemon: { stops += 1; return .stopped(pid: 42) })
+        XCTAssertEqual(cancelled, .cancelTermination)
+        XCTAssertEqual(stops, 0)
+        for outcome in [DaemonStopOutcome.refused("无法读取本机锁"),
+                        .refused("发出 SIGTERM 后仍未停止")] {
+            let decision = AppQuitDaemonPolicy.evaluate(
+                reason: .explicitQuit, runningSessionCount: 0,
+                confirmInterruption: { _ in XCTFail("zero sessions"); return true },
+                stopDaemon: { outcome })
+            XCTAssertEqual(decision, .stopFailed(outcome.text))
+        }
+    }
+
+    func testQuitWaitsForSpawnedDaemonToAcquireLockBeforeStoppingIt() {
+        var clock = Date(timeIntervalSince1970: 0)
+        var probes = 0
+        var stops = 0
+        let result = AppQuitDaemonPolicy.stopAfterPendingLaunch(
+            pendingLaunch: { .alive },
+            presence: {
+                probes += 1
+                return probes < 3 ? .none : .held(self.holder(kind: "daemon", pid: 42))
+            },
+            stopDaemon: { stops += 1; return .stopped(pid: 42) },
+            now: { clock }, tick: { clock += 0.1 }, timeout: 1)
+        XCTAssertEqual(result, .stopped(pid: 42))
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(probes, 3)
+    }
+
+    func testQuitDoesNotClaimSuccessWhileSpawnedDaemonIsAliveWithoutLock() {
+        var clock = Date(timeIntervalSince1970: 0)
+        let result = AppQuitDaemonPolicy.stopAfterPendingLaunch(
+            pendingLaunch: { .alive }, presence: { .none },
+            stopDaemon: { XCTFail("early success"); return .alreadyStopped("none") },
+            now: { clock }, tick: { clock += 0.1 }, timeout: 0.2)
+        XCTAssertFalse(result.isSuccess)
+    }
+
     private func holder(kind: String, pid: Int32) -> SessionOrchestratorLock.Holder {
         .init(kind: kind, pid: pid, startTimeSeconds: 1, startTimeMicroseconds: 2,
               dataRoot: "/tmp/x", acquiredAt: Date(timeIntervalSince1970: 0))
@@ -32,7 +209,7 @@ final class DaemonStopTests: XCTestCase {
                 return value
             },
             sendTerm: { pid in signals.pointee.append(pid); return termResult },
-            processIsGone: { _ in ticks >= aliveTicks },
+            processIsGone: { _ in !signals.pointee.isEmpty && ticks >= aliveTicks },
             tick: { clock += 0.1; ticks += 1 },
             now: { clock },
             timeout: timeout)
@@ -60,10 +237,42 @@ final class DaemonStopTests: XCTestCase {
     /// 探到它、发信号时它刚好没了。期望状态成立，别报错吓人。
     func testAlreadyGoneBetweenTheProbeAndTheSignalIsSuccess() {
         var signals: [Int32] = []
-        let outcome = stopper([.held(holder(kind: "daemon", pid: 7))],
+        let outcome = stopper([.held(holder(kind: "daemon", pid: 7)), .none],
                               signals: &signals, termResult: ESRCH).stop()
         XCTAssertEqual(outcome, .alreadyStopped("PendingCrew 后台进程已经退出。"))
         XCTAssertEqual(outcome.exitCode, 0)
+    }
+
+    func testESRCHWithStillHeldLockIsNotReportedAsStopped() {
+        var signals: [Int32] = []
+        let outcome = stopper([.held(holder(kind: "daemon", pid: 7))],
+                              signals: &signals, termResult: ESRCH).stop()
+        XCTAssertFalse(outcome.isSuccess)
+    }
+
+    func testReusedPIDIsNotSignalledFromStaleLockIdentity() {
+        var signals: [Int32] = []
+        let stale = holder(kind: "daemon", pid: 777)
+        let outcome = DaemonStopper(
+            presence: { .held(stale) },
+            sendTerm: { pid in signals.append(pid); return 0 },
+            processIsGone: { _ in true },
+            tick: {}, now: Date.init).stop()
+        // The test stopper reports the original holder as gone, as a real start-time
+        // mismatch would. The lock still appears held: another process owns it.
+        XCTAssertEqual(signals, [])
+        XCTAssertFalse(outcome.isSuccess)
+    }
+
+    func testReplacementLockHolderDoesNotCountAsStopped() {
+        var signals: [Int32] = []
+        let old = holder(kind: "daemon", pid: 111)
+        let replacement = holder(kind: "daemon", pid: 222)
+        let outcome = stopper([.held(old), .held(replacement)],
+                              signals: &signals, timeout: 0.2).stop()
+        XCTAssertEqual(signals, [111])
+        XCTAssertFalse(outcome.isSuccess,
+                       "old daemon left, but another daemon still owns the lock")
     }
 
     // MARK: - 绝不许报成功的几种情形

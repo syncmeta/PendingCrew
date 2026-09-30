@@ -63,6 +63,31 @@ final class SessionHost: ObservableObject {
 
     func begin(model: AppModel, crewStore: CrewStore) {
         orchestrationContext = (model, crewStore)
+        AppQuitLifecycle.shared.runningSessionCount = { [weak self] in
+            guard let self else { return 0 }
+            let localRuns = self.runner.runs.filter { $0.status == .running }.count
+            let dataRoot = PendingCrewDaemonPaths.standard().lock.deletingLastPathComponent()
+            let daemonRuns: Int
+            if case let .held(holder) = SessionOrchestratorLock.presence(dataRoot: dataRoot),
+               holder.kind == "daemon" {
+                let registry = PendingCrewDaemonPaths.standard().registry
+                if let data = try? Data(contentsOf: registry),
+                   let snapshot = try? JSONDecoder().decode(SessionProcessRegistry.self, from: data) {
+                    daemonRuns = snapshot.entries.count
+                } else {
+                    daemonRuns = -1 // live daemon, but its session count is unknown
+                }
+            } else {
+                daemonRuns = 0
+            }
+            return daemonRuns < 0 ? -1 : max(localRuns, daemonRuns)
+        }
+        AppQuitLifecycle.shared.pauseViewer = { [weak self] in
+            let probe = self?.viewer?.pendingDaemonLaunchProbe
+            self?.viewer?.stop()
+            return probe
+        }
+        AppQuitLifecycle.shared.resumeViewer = { [weak self] in self?.viewer?.start() }
         // **在按角色分岔之前。** viewer 和 inproc 编排者都是界面，都要跑；
         // 换代检查还必须赶在 viewer 连上后台之前（停掉旧的，viewer 自己会拉起新版）。
         runInterfaceStartupDutiesOnce()
