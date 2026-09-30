@@ -23,6 +23,7 @@ struct CrewSessionWindowView: View {
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var cliVersions = AgentCLIVersionCenter.shared
 
     @State private var draft = ""
     @State private var pendingExplicitId: String?
@@ -71,6 +72,13 @@ struct CrewSessionWindowView: View {
         // "Session" 盖掉 crew 名)。窗标题由中栏 toolbar 的 crew 名负责。
         // 成员列表模式要的白板/roster 数据 —— 事件驱动订阅（去 3s 轮询，与中栏各订各的）。
         .task(id: crewStore.selectedDetail?.crew.id) { await subscribeRoster() }
+        .task {
+            // Read-only detection. The explicit notice owns both confirmation
+            // clicks; merely opening this pane must never install a CLI.
+            if cliVersions.codexProvisioningState == nil {
+                await cliVersions.refresh(.codex)
+            }
+        }
         .task {
             while !Task.isCancelled {
                 let dir = LocalWhiteboardStore.defaultDirectory
@@ -268,6 +276,9 @@ struct CrewSessionWindowView: View {
     ///（VSplitView 在 NavigationSplitView 的固定列内做垂直分割，不影响列宽协商）。
     private var memberListMode: some View {
         VStack(spacing: 0) {
+            if selectedKind == .codex || sessionRunner.lastStartError != nil {
+                CodexCLIProvisioningNotice(center: cliVersions)
+            }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——
             // 点击入口（captain 成员行）就在这屏，错误必须在这显，否则点了像没反应。
             if let err = sessionRunner.lastStartError {

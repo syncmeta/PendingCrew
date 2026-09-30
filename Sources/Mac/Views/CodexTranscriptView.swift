@@ -7,21 +7,127 @@ import SwiftUI
 /// by opening the row; stdout/diffs remain out of the conversation surface (Todo #90).
 struct CodexTranscriptView: View {
     @ObservedObject var transcript: CodexTranscript
+    @ObservedObject private var cliVersions = AgentCLIVersionCenter.shared
     fileprivate static let bottomAnchorID = "__codex_bottom__"
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                CodexTranscriptRows(transcript: transcript)
-            }
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: transcript.items.count) { _, _ in
-                withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
-            }
-            .onChange(of: transcript.turnActive) { _, _ in
-                withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+        VStack(spacing: 0) {
+            CodexCLIProvisioningNotice(center: cliVersions)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    CodexTranscriptRows(transcript: transcript)
+                }
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: transcript.items.count) { _, _ in
+                    withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+                }
+                .onChange(of: transcript.turnActive) { _, _ in
+                    withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+                }
             }
         }
+    }
+}
+
+/// A single action surface for the pre-run member list and an open Codex
+/// transcript. Only the core's typed state enables an install action; error
+/// prose from a session or a whiteboard entry is never interpreted as one.
+struct CodexCLIProvisioningNotice: View {
+    @ObservedObject var center: AgentCLIVersionCenter
+    @State private var pendingAction: CodexCLIInstallAction?
+    @State private var showingConfirmation = false
+
+    var body: some View {
+        Group {
+            if let state = center.codexProvisioningState {
+                notice(for: state)
+            }
+        }
+        .confirmationDialog(
+            "确认安装官方 Codex CLI？",
+            isPresented: $showingConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("确认安装") {
+                guard let pendingAction else { return }
+                self.pendingAction = nil
+                Task { await center.installCodex(pendingAction) }
+            }
+            Button("取消", role: .cancel) {
+                pendingAction = nil
+                Task { await center.refresh(.codex) }
+            }
+        } message: {
+            if let pendingAction {
+                Text("来源：\(pendingAction.registry)\n目标：\(pendingAction.target.path)\n参数：\(pendingAction.arguments.joined(separator: " "))\n此操作将安装并复验 CLI；不会读取认证状态或自动启动 session。")
+            }
+        }
+        .onChange(of: showingConfirmation) { _, showing in
+            if !showing && pendingAction != nil {
+                pendingAction = nil
+                Task { await center.refresh(.codex) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func notice(for state: CodexCLIProvisioningState) -> some View {
+        switch state {
+        case .ready:
+            EmptyView()
+        case let .missing(guide):
+            VStack(alignment: .leading, spacing: 5) {
+                Text("未找到独立 Codex CLI")
+                    .font(Theme.Fonts.footnote.weight(.semibold))
+                Text("官方来源：\(guide.registry) · \(guide.package)@\(guide.version)")
+                    .font(Theme.Fonts.caption)
+                    .textSelection(.enabled)
+                HStack {
+                    Link("查看官方安装指引", destination: guide.documentation)
+                    Button("准备安装…") {
+                        if let action = center.prepareCodexInstall() {
+                            pendingAction = action
+                            showingConfirmation = true
+                        }
+                    }
+                    .accessibilityLabel("准备安装官方 Codex CLI")
+                }
+            }
+            .modifier(ProvisioningNoticeCard())
+        case .awaitingSecondConfirmation:
+            Text("安装计划已准备，等待第二次确认；尚未下载安装。")
+                .modifier(ProvisioningNoticeCard())
+        case .installing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("正在安装并复验 Codex CLI…")
+            }
+            .modifier(ProvisioningNoticeCard())
+        case let .installedNeedsManualSignIn(installed):
+            Text("CLI \(installed.version) 已复验。请由你自行完成原生 Codex 登录后再创建 session；这里未验证认证状态。")
+                .modifier(ProvisioningNoticeCard())
+        case let .failed(message):
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Codex CLI 安装或检测未完成：\(message)")
+                    .foregroundStyle(Theme.Palette.danger)
+                    .textSelection(.enabled)
+                Button("重新检测") { Task { await center.refresh(.codex) } }
+                    .accessibilityLabel("重新检测 Codex CLI")
+            }
+            .modifier(ProvisioningNoticeCard())
+        }
+    }
+}
+
+private struct ProvisioningNoticeCard: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(Theme.Fonts.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Theme.Palette.surface)
+            .overlay(alignment: .bottom) { Divider() }
     }
 }
 

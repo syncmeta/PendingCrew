@@ -629,6 +629,26 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(view.contains(".accessibilityLabel(\"选择推理强度\")"))
     }
 
+    /// Todo #188: CLI recovery must be visible before a run exists and while
+    /// the Codex transcript is open. Both surfaces consume the same typed state;
+    /// the view must not construct install commands from an error string.
+    func testCodexCLIRecoveryUsesTypedStateInBothSessionSurfaces() throws {
+        let session = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let transcript = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CodexTranscriptView.swift"))
+        XCTAssertTrue(session.contains("CodexCLIProvisioningNotice("),
+                      "启动前的成员列表必须给出可操作的 CLI 恢复提示")
+        XCTAssertTrue(transcript.contains("CodexCLIProvisioningNotice("),
+                      "运行中的 Codex transcript 必须保留同一恢复提示")
+        XCTAssertTrue(transcript.contains("CodexCLIProvisioningState"),
+                      "统一提示必须消费核心的类型化状态，不能从报错字符串猜安装动作")
+        XCTAssertTrue(transcript.contains("center.prepareCodexInstall()"),
+                      "首次点击只能向核心准备固定安装动作")
+        XCTAssertEqual(transcript.components(separatedBy: "center.installCodex(").count - 1, 1,
+                       "安装动作只应在二次确认按钮中出现一次")
+        XCTAssertTrue(transcript.contains("请由你自行完成原生 Codex 登录"),
+                      "安装成功只证明 CLI，不能冒充已认证或自动启动 session")
+    }
+
     /// #166: source contract for Codex's narrow session chrome. The test target
     /// does not compile the SwiftUI view, so this guards wiring and labels;
     /// the macOS app build separately checks SwiftUI type correctness.
