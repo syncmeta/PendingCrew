@@ -234,6 +234,44 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(store.contains("pendingCrewDelivery == nil && !pendingRollbackGuard.isBlocked"))
     }
 
+    func testCrewStoreRestoresDurableFirstMessageOutboxAfterRestart() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let store = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Stores/CrewStore.swift"), encoding: .utf8)
+        XCTAssertTrue(store.contains("private let pendingRecovery = PendingCrewRecoveryStore()"))
+        XCTAssertTrue(store.contains("restorePendingCrewIfNeeded()"))
+        XCTAssertTrue(store.contains("try pendingRecovery.save("))
+        XCTAssertTrue(store.contains("try pendingRecovery.clear()"))
+        XCTAssertTrue(store.contains("pendingRecovery.load()"))
+        XCTAssertTrue(store.contains("autostartCaptain: !pendingRecoveredFromDisk"))
+    }
+
+    func testFirstMessageRecoveryIntentSurvivesRestartAndKeepsOriginalCrew() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("first-send-restart-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let firstProcess = PendingCrewRecoveryStore(directory: base)
+        var record = PendingCrewRecoveryStore.Record(
+            draftId: "pending-original", title: "Original", parentCrewId: nil,
+            selectedDirectory: "/tmp/manual", text: "first message",
+            crewId: nil, workingDirectory: nil)
+        try firstProcess.save(record)
+        XCTAssertNil(try PendingCrewRecoveryStore(directory: base).load()?.crewId,
+                     "an interrupted create must block a second create after relaunch")
+        record.crewId = "local-original"
+        record.workingDirectory = "/tmp/manual"
+        try firstProcess.save(record)
+        let relaunched = PendingCrewRecoveryStore(directory: base)
+        let recovered = try XCTUnwrap(relaunched.load())
+        XCTAssertEqual(recovered.draftId, "pending-original")
+        XCTAssertEqual(recovered.crewId, "local-original")
+        XCTAssertEqual(recovered.text, "first message")
+        XCTAssertEqual(recovered.selectedDirectory, "/tmp/manual")
+        try relaunched.clear()
+        XCTAssertNil(try PendingCrewRecoveryStore(directory: base).load())
+    }
+
     @MainActor
     func testRollbackGuardBlocksReplacementSenderAfterUnverifiedDeletion() async throws {
         let base = FileManager.default.temporaryDirectory
@@ -348,17 +386,31 @@ final class ViewWiringTests: XCTestCase {
                        "spooled message must keep the created crew for later delivery")
         XCTAssertEqual(created, 1)
         XCTAssertEqual(posted, 1)
+        let recoveryDirectory = base.appendingPathComponent("recovery", isDirectory: true)
+        try PendingCrewRecoveryStore(directory: recoveryDirectory).save(.init(
+            draftId: "pending-original", title: "Draft", parentCrewId: nil,
+            selectedDirectory: nil, text: "first message", crewId: pending.crewId,
+            workingDirectory: pending.workingDirectory))
+        let afterRestart = try XCTUnwrap(
+            PendingCrewRecoveryStore(directory: recoveryDirectory).load())
+        XCTAssertEqual(afterRestart.crewId, pending.crewId)
+        let restartedBoard = LocalWhiteboardStore(directory: boardDir)
+        let restartedBackend = LocalBackend(
+            store: LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger")),
+            whiteboard: restartedBoard)
         _ = try await submit()
         XCTAssertEqual(created, 1)
         XCTAssertEqual(posted, 1)
-        XCTAssertThrowsError(try backend.flushFirstMessageOutbox(
+        XCTAssertThrowsError(try restartedBackend.flushFirstMessageOutbox(
             crewId: pending.crewId, text: "first message"))
         XCTAssertEqual((try? FileManager.default.contentsOfDirectory(
             atPath: boardDir.appendingPathComponent("outbox").path))?.count, 1)
         try FileManager.default.setAttributes([.posixPermissions: 0o644],
                                               ofItemAtPath: try XCTUnwrap(unreadableFile).path)
-        XCTAssertTrue(try backend.flushFirstMessageOutbox(
+        XCTAssertTrue(try restartedBackend.flushFirstMessageOutbox(
             crewId: pending.crewId, text: "first message"))
+        try PendingCrewRecoveryStore(directory: recoveryDirectory).clear()
+        XCTAssertNil(try PendingCrewRecoveryStore(directory: recoveryDirectory).load())
         XCTAssertFalse(board.hasSpooledMessages(crewId: pending.crewId))
         XCTAssertEqual(try board.flushSpooledMessagesReportingFailure(crewId: pending.crewId), 0)
         XCTAssertEqual(board.list(crewId: pending.crewId).filter { $0.text == "first message" }.count, 1)

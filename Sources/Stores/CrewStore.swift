@@ -55,8 +55,11 @@ final class CrewStore: ObservableObject {
     @Published private(set) var pendingCrewSending = false
     @Published private(set) var pendingCrewDelivery: String?
     @Published private(set) var pendingCrewRollbackError: String?
+    @Published private(set) var pendingCrewRecoveryMessage: String?
     private var pendingFirstSend = PendingCrewFirstSend()
     private var pendingRollbackGuard = PendingCrewRollbackGuard()
+    private let pendingRecovery = PendingCrewRecoveryStore()
+    private var pendingRecoveredFromDisk = false
     private var pendingDeliveryOutcome: PendingCrewFirstSend.Outcome?
     private var pendingDeliveryText: String?
     /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
@@ -235,11 +238,13 @@ final class CrewStore: ObservableObject {
 
     /// Repeated clicks keep the same draft. Nothing here touches the backend or disk.
     func beginPendingCrew(parentCrewId: String? = nil) {
+        restorePendingCrewIfNeeded()
         if pendingRollbackGuard.isBlocked {
             if let pendingCrew { selectedCrewId = pendingCrew.id }
             error = pendingCrewRollbackError
             return
         }
+        if pendingCrewRollbackError != nil { return }
         if let pendingCrew {
             selectedCrewId = pendingCrew.id
             return
@@ -279,6 +284,10 @@ final class CrewStore: ObservableObject {
     func commitPendingCrew(_ text: String, draftId: String) async throws {
         try pendingRollbackGuard.check()
         guard let draft = pendingCrew, draft.id == draftId, !pendingCrewSending else { return }
+        if pendingCrewDelivery != nil { throw PendingCrewCommitError.deliveryStillPending }
+        if let pendingCrewRollbackError {
+            throw PendingCrewBackendError.invalidConfig(pendingCrewRollbackError)
+        }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         pendingCrewSending = true
         defer { pendingCrewSending = false }
@@ -297,7 +306,13 @@ final class CrewStore: ObservableObject {
             ? savedKind! : "codex"
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("CrewGround", isDirectory: true)
+        var recovery = PendingCrewRecoveryStore.Record(
+            draftId: draft.id, title: draft.title, parentCrewId: draft.parentCrewId,
+            selectedDirectory: draft.workingDirectory,
+            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            crewId: nil, workingDirectory: nil)
         do {
+            try pendingRecovery.save(recovery)
             let outcome = try await pendingFirstSend.commit(
                 message: text, selectedDirectory: draft.workingDirectory,
                 crewGround: root, title: draft.title,
@@ -307,7 +322,20 @@ final class CrewStore: ObservableObject {
                         workingDirectory: workdir, captainAgentKind: captainKind,
                         initialTitleSource: .placeholder,
                         captain: .systemGenerated(templateName: nil))
-                    return try await self.createCrew(request, autostartCaptain: false).crewId
+                    let crewId = try await self.createCrew(
+                        request, autostartCaptain: false).crewId
+                    recovery.crewId = crewId
+                    recovery.workingDirectory = workdir
+                    do {
+                        try self.pendingRecovery.save(recovery)
+                    } catch {
+                        let rollback = localBackend.rollbackNewCrew(crewId)
+                        if rollback != .deleted {
+                            throw PendingCrewFirstSendError.rollbackUnverified(rollback)
+                        }
+                        throw error
+                    }
+                    return crewId
                 },
                 attach: { crewId in
                     if let parent = draft.parentCrewId {
@@ -325,13 +353,17 @@ final class CrewStore: ObservableObject {
                 pendingCrewDelivery = "首条消息已存入待发件箱，尚未发到群里。白板恢复后点“检查送达”可安全补发；请勿重发。机长尚未启动。"
                 pendingDeliveryOutcome = outcome
                 pendingDeliveryText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                pendingCrewRecoveryMessage = pendingDeliveryText
                 return
             }
+            try pendingRecovery.clear()
             activatePendingCrew(draft: draft, outcome: outcome)
         } catch {
             pendingRollbackGuard.record(error)
             if pendingRollbackGuard.isBlocked {
                 pendingCrewRollbackError = error.localizedDescription
+            } else if (try? pendingRecovery.clear()) == nil {
+                pendingCrewRollbackError = "首发恢复记录未能清除，已停止新建；请检查本机数据后重试"
             } else if selectedCrewId != draft.id {
                 pendingCrew = nil
             }
@@ -352,11 +384,14 @@ final class CrewStore: ObservableObject {
         guard try backend.flushFirstMessageOutbox(crewId: outcome.crewId, text: text) else {
             throw PendingCrewCommitError.deliveryStillPending
         }
-        activatePendingCrew(draft: draft, outcome: outcome)
+        try pendingRecovery.clear()
+        activatePendingCrew(draft: draft, outcome: outcome,
+                            autostartCaptain: !pendingRecoveredFromDisk)
     }
 
     private func activatePendingCrew(draft: PendingCrewDraft,
-                                     outcome: PendingCrewFirstSend.Outcome) {
+                                     outcome: PendingCrewFirstSend.Outcome,
+                                     autostartCaptain: Bool = true) {
         #if os(macOS)
         if let trust = WorkdirTrustPrompt.prompt(
             workdir: outcome.workingDirectory,
@@ -371,11 +406,53 @@ final class CrewStore: ObservableObject {
         pendingCrewDelivery = nil
         pendingDeliveryOutcome = nil
         pendingDeliveryText = nil
+        pendingCrewRecoveryMessage = nil
         if stillSelected { selectedCrewId = outcome.crewId }
-        enqueue(CaptainAutostartRequest(crewId: outcome.crewId,
-            childTitle: details[outcome.crewId]?.crew.title ?? draft.title),
-            into: captainAutostartRequests)
+        if autostartCaptain {
+            enqueue(CaptainAutostartRequest(crewId: outcome.crewId,
+                childTitle: details[outcome.crewId]?.crew.title ?? draft.title),
+                into: captainAutostartRequests)
+        } else {
+            error = "首条已送达；重启后的机长状态需在原机组中确认，再手动启动"
+        }
+        pendingRecoveredFromDisk = false
         RecentWorkingDirectories.record(outcome.workingDirectory, in: .standard)
+    }
+
+    /// Called on the first list load and before opening another draft. An
+    /// unreadable or incomplete intent remains a visible block, not permission
+    /// to create a second crew whose first send may already have happened.
+    private func restorePendingCrewIfNeeded() {
+        guard pendingCrew == nil else { return }
+        do {
+            guard let record = try pendingRecovery.load() else { return }
+            let draft = PendingCrewDraft(
+                id: record.draftId, title: record.title,
+                parentCrewId: record.parentCrewId,
+                workingDirectory: record.selectedDirectory)
+            pendingCrew = draft
+            selectedCrewId = draft.id
+            if let crewId = record.crewId,
+               let workingDirectory = record.workingDirectory {
+                pendingDeliveryOutcome = .init(
+                    crewId: crewId, workingDirectory: workingDirectory,
+                    delivery: .pending)
+                pendingDeliveryText = record.text
+                pendingCrewRecoveryMessage = record.text
+                pendingCrewDelivery = "首条消息的送达状态待确认。请检查原待发件；确认后回到原机组。重启后机长不会自动启动。"
+                pendingRecoveredFromDisk = true
+            } else {
+                pendingCrewRecoveryMessage = record.text
+                pendingCrewRollbackError = "上次创建被中断，原机组状态未确认；已停止新建与自动起机长。恢复记录：\(pendingRecovery.file.path)"
+            }
+        } catch {
+            pendingCrewRollbackError = "首发恢复记录无法读取，已停止新建：\(error.localizedDescription)。记录：\(pendingRecovery.file.path)"
+            self.error = pendingCrewRollbackError
+            let draft = PendingCrewDraft(id: "pending-recovery", title: "待核恢复记录",
+                                         parentCrewId: nil, workingDirectory: nil)
+            pendingCrew = draft
+            selectedCrewId = draft.id
+        }
     }
 
     func openChatSearchResult(_ result: CrewMessageSearchResult, query: String) {
@@ -435,6 +512,7 @@ final class CrewStore: ObservableObject {
     // MARK: - Refresh
 
     func refreshList() async {
+        restorePendingCrewIfNeeded()
         startRenameWatchIfNeeded()   // crew-naming：首刷时挂上改名监听（仅 macOS，幂等）
         error = nil
         guard let backend = currentBackend() else { return }
@@ -623,9 +701,11 @@ final class CrewStore: ObservableObject {
         pendingFirstSend = PendingCrewFirstSend()
         pendingRollbackGuard = PendingCrewRollbackGuard()
         pendingCrewRollbackError = nil
+        pendingRecoveredFromDisk = false
         pendingCrewDelivery = nil
         pendingDeliveryOutcome = nil
         pendingDeliveryText = nil
+        pendingCrewRecoveryMessage = nil
         crews = []
         lastWhiteboardMessages = [:]
         crewStatusCarriers = [:]

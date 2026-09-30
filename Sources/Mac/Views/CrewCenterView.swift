@@ -295,6 +295,12 @@ private struct PendingCrewChatView: View {
                 Text(rollbackError).foregroundStyle(.red).font(.caption)
                     .padding(.horizontal, 18)
             }
+            if let original = crewStore.pendingCrewRecoveryMessage {
+                Text("原首条消息：\(original)")
+                    .font(.caption)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 18)
+            }
             if let pending = crewStore.pendingCrewDelivery {
                 HStack {
                     Text(pending).foregroundStyle(.orange).font(.caption)

@@ -138,3 +138,37 @@ struct PendingCrewRollbackGuard {
         if let failure { throw PendingCrewFirstSendError.rollbackUnverified(failure) }
     }
 }
+
+/// Durable first-send intent. Written before create so an interrupted create
+/// remains visible and cannot silently become another new crew on relaunch.
+struct PendingCrewRecoveryStore {
+    struct Record: Codable {
+        let draftId: String
+        let title: String
+        let parentCrewId: String?
+        let selectedDirectory: String?
+        let text: String
+        var crewId: String?
+        var workingDirectory: String?
+    }
+
+    let file: URL
+
+    init(directory: URL = PendingCrewDataRoot.subdirectory("pending-first-send")) {
+        file = directory.appendingPathComponent("recovery.json")
+    }
+
+    func load() throws -> Record? {
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        return try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
+    }
+
+    func save(_ record: Record) throws {
+        try MultiProcessJSONStore.writeStaged(JSONEncoder().encode(record), to: file)
+    }
+
+    func clear() throws {
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        try FileManager.default.removeItem(at: file)
+    }
+}
