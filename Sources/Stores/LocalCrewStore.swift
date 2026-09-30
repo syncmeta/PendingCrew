@@ -782,8 +782,8 @@ final class LocalCrewStore {
 
                 # PendingCrew 怎么用
 
-                先读 [INDEX.md](INDEX.md)，只检索并打开当前问题相关的页，不把全文装进提示词。
-                README-source-v*.md 是公开快速开始摘录；architecture-source-v*.md 只回答架构问题。读取版本号最高的一页。
+                先读 [INDEX-v2.md](INDEX-v2.md)，只检索并打开当前问题相关的页，不把全文装进提示词。
+                README-public-v*.md 与 README_EN-public-v*.md 是公开 README 全文快照；architecture-source-v*.md 只回答架构问题。读取版本号最高的一页。
                 资料有来源和快照版本。遇到差异，以当前程序和维护中的公开文档为准；不把 docs/internal、个人数据或群聊记录当作公开指南。
                 """,
                 "INDEX.md": """
@@ -794,6 +794,20 @@ final class LocalCrewStore {
                 - 本机演示 DAG：先列出 `guide-v*.md`，读取版本号最高的一页。
                 - 找一个概念：在此目录运行 `rg -n '关键词' --glob '*.md' .`，再按需打开命中的页。
                 - 来源与更新：摘录来自仓库 README.md、docs/architecture.md 的 e427fb2 快照。维护公开文档时同步增添 v2、v3 等新版页面；已有文件只补缺失、不覆盖修改。升级后读版本号最高的页面，并核对公开原文。
+                """,
+                "INDEX-v2.md": """
+                # PendingCrew 离线公开资料索引
+
+                先按问题选页，再在本目录运行 `rg -n '关键词' --glob '*.md' .`；只打开命中段落。
+
+                | 问题 | 离线页 | 公开来源 |
+                | --- | --- | --- |
+                | 中文快速开始、机组层级、To Do、系统要求、仓库结构 | README-public-v2.md | README.md 全文快照 |
+                | English quick start, crew, To Do, requirements | README_EN-public-v1.md | README_EN.md full text snapshot |
+                | 本地 CLI、群聊白板、MCP 工作原理 | architecture-source-v1.md | docs/architecture.md 第 0 节摘录 |
+                | 此处的演示、问答及双父边 | guide-v1.md | 本机教程示例 |
+
+                来源快照：仓库 e427fb2，2026-09-30。README 两页是公开仓库原文的离线副本；图片、相对链接需回仓库查看。architecture 仅收录第 0 节，原文其余章节有带日期的历史分析和实现路径，不作为当前用户操作指南。docs/internal、私有记录与用户数据不入包。维护公开原文时新增版本页和新版索引；安装只补缺失文件，不覆盖用户修改。既有 INDEX.md 保留；以本页为最新入口。
                 """,
                 "README-source-v1.md": """
                 # 公开快速开始摘录
@@ -808,6 +822,233 @@ final class LocalCrewStore {
 
                 使用要求请查当前公开 README.md 的“系统要求”；安装和登录状态以本机实际情况为准。
                 """,
+                "README-public-v2.md": #"""
+                <!-- Public source: README.md; repository snapshot e427fb2 (2026-09-30). Offline text copy. -->
+                <p align="center">
+                  <img src="docs/app-icon.png" width="128" alt="PendingCrew 应用图标" />
+                </p>
+                <h1 align="center">PendingCrew</h1>
+
+                <p align="center">
+                  The Harness of Harness.
+                </p>
+                <p align="center">
+                  为持续任务流设计的人机深度协作工具
+                </p>
+                <p align="center">
+                  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+                  <img alt="Swift" src="https://img.shields.io/badge/lang-Swift%205-F05138?logo=swift&logoColor=white" />
+                  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" />
+                  <a href="https://github.com/syncmeta/PendingCrew/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.1.13-informational" /></a>
+                </p>
+
+                <p align="center">
+                  <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
+                </p>
+
+
+                假设你要做一个复杂软件，你需要不断地和开发者沟通，还要想办法让他们内部高效协作。为此，你可能需要建立企业，安排职位，布置任务，拉群……
+
+                这群开发者变成AI之后呢？你还是需要和AI沟通、协作，并让它们之间高效协作。为此，我做了PendingCrew这个App。
+
+                **飞书/钉钉/企业微信是员工的Harness。PendingCrew是Harness的Harness。**这是一个让你和Agent高效协作、共同创造的平台。
+
+                ![PendingCrew 主界面：右侧成员列表里 5 个成员，机长挂 Opus、三个 worker 挂 GPT-5.6-Sol —— 不同厂家的 agent 在同一个群里共事。中间群聊里正在发生真实协作：「终端树渲染」报告提交时撞上共享 Git index 竞态，「HTML 组织图渲染」把这件事挂成待决策、问机长是自己移出去还是由机长统一重整提交；另外两个成员正在输入。](docs/screenshots/crew-collaboration.png)
+
+                <p align="center"><sub>主界面</sub></p>
+
+                不谦虚地说，我觉得这比 Agent teams 的扩展性强多了。企业用层级来管理大项目是有道理的，我就是想尽量利用这些道理。
+
+                这个 App 强调 **人和 AI 深度协作，提供人机协作的操作台，不是让人当甩手掌柜**。
+
+                一个企业要想好，老板的决策至关重要。同理推向 AI。
+
+                ## 快速开始
+
+                安装包： [Releases](https://github.com/syncmeta/PendingCrew/releases)
+
+                或用 Homebrew 安装：
+
+                ```bash
+                brew install --cask syncmeta/tap/pendingcrew
+                ```
+
+                作为与 Claude Code / Codex 协作的平台，你电脑上得先有它们。暂时不能接入其它 Harness。
+
+                要做什么事就拉一个群（这里的一个个群，叫机组/Crew）然后在群里说你想做什么。如图：
+
+                ![image-20260826124145407](docs/screenshots/crew-1.png)
+
+                一个机组可以有父，可以有子，有机长，有 Agent 成员。远期计划可以拉其他联网的 Agent 或者真人参与群聊。
+
+                机组之间可以形成层级关系。权责、层级可以自己安排，具体如何安排可以咨询麦肯锡。
+
+                布置工作时，把输入框左侧的 To Do 图标点亮，就可以一条条布置工作了。
+
+                时刻注意：你是 Agent 们的领导，人类社会的组织中对领导的要求通常是最高的。我希望 PendingCrew 能让人在用 AI 时保持足够的认知参与，同时又降低这个“足够”的门槛，让人在需要判断时有能力判断，把更多的认知资源拿去撬动原本需要更高认知成本才能做的事情。所以我设计群聊、通讯录等等非常直观的交互方式，尽可能让你，让我，把可贵又可怜的认知负荷腾出来。
+
+                ## 系统要求
+
+                - macOS 14 (Sonoma) 或更新
+                - 本机**已经装好并登录** [Claude Code CLI](https://claude.com/claude-code) 或 [Codex CLI](https://developers.openai.com/codex/cli)  至少一个
+
+                ## 我精心撰写的文档
+
+                 **<https://docs.pendingname.com/pendingcrew>**
+
+                ## 仓库结构
+
+                ```
+                project.yml             XcodeGen 工程定义（唯一真值，别手改 .xcodeproj）
+                .xcodegen-version       用哪一版 XcodeGen 生成 .xcodeproj —— 由仓库说了算，不由各机器的 brew
+                Config/Signing.xcconfig 签名默认值（ad-hoc）；本机覆盖写 Config/Local.xcconfig
+                Info.plist
+                Sources/
+                  PendingCrewEntry.swift 进程总入口：启动 GUI，或按参数充当 MCP / hook helper
+                  PendingCrewApp.swift  SwiftUI App 入口
+                  Mac/                  本机 runner、长期服务和 macOS 主界面（含少量跨端复用代码）
+                  Mcp/                  crew-comms MCP server —— agent 通过它读写白板、@ 人、请示
+                  Stores/               本地持久化：白板、Todo、审批、唤醒、crew 树
+                  Chat/                 群聊 UI（气泡 / Markdown / composer）
+                  Views/                跨端 / iOS 界面
+                  Services/             后端抽象与本地 crew 模型层
+                  Models/               crew、驾驶舱等值类型
+                  Support/              跨模块的纯逻辑与小工具
+                Resources/              Assets、entitlements、Prompts
+                Tests/
+                  PendingCrewTests/     XCTest（macOS）
+                  Fixtures/             群聊性能与终端解析测试语料
+                Shared/
+                  AppUpdate/            Sparkle 自动更新 + 构建版本戳
+                  scripts/              构建版本戳脚本
+                scripts/                本地小工具 + release/（Developer ID 签名、公证、发 feed）
+                packaging/homebrew/     Homebrew Cask 模板
+                docs/                   architecture.md（架构导览）、release-macos.md（发版）、
+                                        tech-debt.md（已知的债）、screenshots/
+                docs/internal/          开发过程记录，写完即冻结，不随代码更新
+                .github/workflows/      CI（三个不需要凭据的门）
+                ```
+                """#,
+                "README_EN-public-v1.md": #"""
+                <!-- Public source: README_EN.md; repository snapshot e427fb2 (2026-09-30). Offline text copy. -->
+                <p align="center">
+                  <img src="docs/app-icon.png" width="128" alt="PendingCrew app icon" />
+                </p>
+                <h1 align="center">PendingCrew</h1>
+
+                <p align="center">
+                  The Harness of Harness.
+                </p>
+                <p align="center">
+                  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+                  <img alt="Swift" src="https://img.shields.io/badge/lang-Swift%205-F05138?logo=swift&logoColor=white" />
+                  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" />
+                  <a href="https://github.com/syncmeta/PendingCrew/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.1.13-informational" /></a>
+                </p>
+
+                <p align="center">
+                  <a href="README.md">中文</a> · <a href="README_EN.md">English</a>
+                </p>
+
+                Imagine you are building a complex piece of software. You need to communicate with developers
+                continuously, and you need to help them collaborate efficiently with one another. That may mean
+                building a company, assigning roles, handing out work, and creating group chats.
+
+                What happens when those developers are AI? You still need to communicate and collaborate with
+                them, and help them collaborate efficiently with one another. That is why I built PendingCrew.
+
+                **Feishu, DingTalk, and WeCom are harnesses for employees. PendingCrew is the harness for
+                harnesses.** It is a platform where you and agents can collaborate efficiently and create things
+                together.
+
+                ![PendingCrew main window: the member list on the right shows five members—the captain running Opus and three workers running GPT-5.6-Sol. Agents from different vendors work together in one group chat. The conversation shows real collaboration: “Terminal tree rendering” reports a shared Git index race while committing; “HTML organization chart rendering” turns it into a pending decision and asks the captain whether it should move its own work aside or let the captain reorganize the commits; two other members are typing.](docs/screenshots/crew-collaboration.png)
+
+                <p align="center"><sub>Main interface</sub></p>
+
+                Without false modesty, I think this is far more extensible than Agent Teams. There is a reason
+                companies use hierarchies to manage large projects, and I want to make the most of those ideas.
+
+                This app emphasizes **deep collaboration between people and AI. It provides a cockpit for
+                human-AI collaboration instead of letting people become absentee managers**.
+
+                For a company to work well, the boss's decisions are crucial. The same principle applies to AI.
+
+                ## Quick start
+
+                Installer: [Releases](https://github.com/syncmeta/PendingCrew/releases)
+
+                Or install with Homebrew:
+
+                ```bash
+                brew install --cask syncmeta/tap/pendingcrew
+                ```
+
+                PendingCrew is a platform for working with Claude Code and Codex, so at least one of them must
+                already be installed on your Mac. Other harnesses are not supported yet.
+
+                When you have something to do, create a group—each group is called a crew—and tell it what you
+                want. Like this:
+
+                ![A PendingCrew crew conversation](docs/screenshots/crew-1.png)
+
+                A crew can have a parent and children, a captain, and agent members. The long-term plan is to let
+                other networked agents or real people join its group chat.
+
+                Crews can form a hierarchy. You can arrange responsibilities, authority, and reporting lines as
+                you see fit. For advice on the exact arrangement, consult McKinsey.
+
+                When assigning work, turn on the To Do icon to the left of the message box. Then you can hand out
+                work one item at a time.
+
+                Always remember: you lead the agents, and human organizations usually hold their leaders to the
+                highest standard. I want PendingCrew to help people stay meaningfully engaged when they use AI,
+                while lowering the threshold for that level of engagement—so they can still exercise judgment
+                when judgment is needed, and spend more of their cognitive resources on problems that once
+                required a much higher cognitive cost. That is why I designed familiar interfaces such as group
+                chat and a directory: to free up as much as possible of your—and my—precious, painfully limited
+                cognitive capacity.
+
+                ## System requirements
+
+                - macOS 14 (Sonoma) or later
+                - At least one of [Claude Code CLI](https://claude.com/claude-code) or [Codex CLI](https://developers.openai.com/codex/cli), installed and signed in on this Mac
+
+                ## Documentation I wrote with care
+
+                <https://docs.pendingname.com/pendingcrew> (Chinese)
+
+                ## Repository layout
+
+                ```
+                project.yml             XcodeGen project definition—the source of truth; do not edit .xcodeproj by hand
+                .xcodegen-version       XcodeGen version used to generate .xcodeproj; the repo decides, not each machine's Homebrew
+                Config/Signing.xcconfig Default signing settings (ad hoc); override locally with Config/Local.xcconfig
+                Info.plist
+                Sources/
+                  PendingCrewEntry.swift Process entry point: launches the GUI or acts as an MCP / hook helper
+                  PendingCrewApp.swift  SwiftUI App entry point
+                  Mac/                  Local runners, long-lived services, and the macOS UI (plus some cross-platform code)
+                  Mcp/                  crew-comms MCP server—agents use it for the whiteboard, mentions, and decisions
+                  Stores/               Local persistence: whiteboards, Todo, approvals, wakeups, and the crew tree
+                  Chat/                 Group chat UI: bubbles, Markdown, and composer
+                  Views/                Cross-platform and iOS UI
+                  Services/             Backend abstractions and the local crew model layer
+                  Models/               Value types for crews, the cockpit, and related state
+                  Support/              Cross-module pure logic and small utilities
+                Resources/              Assets, entitlements, and prompts
+                Tests/
+                  PendingCrewTests/     XCTest suite (macOS)
+                  Fixtures/             Group-chat performance and terminal-parser fixtures
+                Shared/
+                  AppUpdate/            Sparkle updates and build stamps
+                  scripts/              Build-stamp scripts
+                scripts/                Local tools plus release/ for Developer ID signing, notarization, and feed publishing
+                packaging/homebrew/     Homebrew Cask template
+                docs/                   architecture.md, release-macos.md, tech-debt.md, and screenshots/
+                docs/internal/          Frozen development records; they do not track later code changes
+                .github/workflows/      CI: three gates that require no credentials
+                ```
+                """#,
                 "architecture-source-v1.md": """
                 # 公开架构导览摘录
 

@@ -44,6 +44,8 @@ final class LocalSessionWorldModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         try "---\nname: welcome-crew\ndescription: Local PendingCrew help.\n---\nSECRET_PAGE_BODY"
             .write(to: directory.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try "# Versioned index\nSECRET_INDEX_BODY"
+            .write(to: directory.appendingPathComponent("INDEX-v2.md"), atomically: true, encoding: .utf8)
         var context = sampleContext()
         context.workingDirectory = directory.path
         for id in ["pendingcrew-welcome", "pendingcrew-welcome-demo",
@@ -51,8 +53,10 @@ final class LocalSessionWorldModelTests: XCTestCase {
             context.crewId = id
             let output = try renderer.render(context)
             XCTAssertTrue(output.contains("SKILL.md"))
+            XCTAssertTrue(output.contains("INDEX-v2.md"))
             XCTAssertTrue(output.contains(directory.path))
             XCTAssertFalse(output.contains("SECRET_PAGE_BODY"), "discovery must stay a short pointer")
+            XCTAssertFalse(output.contains("SECRET_INDEX_BODY"), "index must stay on demand")
         }
         context.crewId = "local-unrelated"
         XCTAssertFalse(try renderer.render(context).contains("SKILL.md"))

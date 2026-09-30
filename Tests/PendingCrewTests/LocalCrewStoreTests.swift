@@ -30,8 +30,22 @@ final class LocalCrewStoreTests: XCTestCase {
             .appendingPathComponent("guide-v1.md"), encoding: .utf8)
         XCTAssertTrue(guide.contains("两条父边"), "the indexed offline page must answer the DAG query")
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: workdir)),
-                       Set(["SKILL.md", "INDEX.md", "guide-v1.md",
-                            "README-source-v1.md", "architecture-source-v1.md"]))
+                       Set(["SKILL.md", "INDEX.md", "INDEX-v2.md", "guide-v1.md",
+                            "README-source-v1.md", "README-public-v2.md",
+                            "README_EN-public-v1.md", "architecture-source-v1.md"]))
+        let indexV2 = try String(contentsOf: URL(fileURLWithPath: workdir)
+            .appendingPathComponent("INDEX-v2.md"), encoding: .utf8)
+        XCTAssertTrue(indexV2.contains("README-public-v2.md"))
+        XCTAssertTrue(indexV2.contains("README_EN-public-v1.md"))
+        XCTAssertTrue(indexV2.contains("architecture-source-v1.md"))
+        let readmeFull = try String(contentsOf: URL(fileURLWithPath: workdir)
+            .appendingPathComponent("README-public-v2.md"), encoding: .utf8)
+        let readmeEnglish = try String(contentsOf: URL(fileURLWithPath: workdir)
+            .appendingPathComponent("README_EN-public-v1.md"), encoding: .utf8)
+        XCTAssertTrue(readmeFull.contains("macOS 14 (Sonoma) 或更新"))
+        XCTAssertTrue(readmeFull.contains("布置工作时，把输入框左侧的 To Do 图标点亮"))
+        XCTAssertTrue(readmeEnglish.contains("When assigning work, turn on the To Do icon"))
+        XCTAssertTrue(readmeEnglish.contains("macOS 14 (Sonoma) or later"))
         let readmeSource = try String(contentsOf: URL(fileURLWithPath: workdir)
             .appendingPathComponent("README-source-v1.md"), encoding: .utf8)
         let architectureSource = try String(contentsOf: URL(fileURLWithPath: workdir)
@@ -45,7 +59,14 @@ final class LocalCrewStoreTests: XCTestCase {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let publicReadme = try String(contentsOf: repository.appendingPathComponent("README.md"), encoding: .utf8)
+        let publicEnglish = try String(contentsOf: repository.appendingPathComponent("README_EN.md"), encoding: .utf8)
         let publicArchitecture = try String(contentsOf: repository.appendingPathComponent("docs/architecture.md"), encoding: .utf8)
+        XCTAssertEqual(String(readmeFull.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
+            .joined(separator: "\n")).trimmingCharacters(in: .newlines), publicReadme.trimmingCharacters(in: .newlines),
+            "Chinese offline page must carry the complete public README text at the pinned snapshot")
+        XCTAssertEqual(String(readmeEnglish.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
+            .joined(separator: "\n")).trimmingCharacters(in: .newlines), publicEnglish.trimmingCharacters(in: .newlines),
+            "English offline page must carry the complete public README text at the pinned snapshot")
         XCTAssertTrue(publicReadme.contains("一个机组可以有父，可以有子，有机长，有 Agent 成员。"))
         XCTAssertTrue(publicReadme.contains("布置工作时，把输入框左侧的 To Do 图标点亮"))
         XCTAssertTrue(publicArchitecture.contains("共享的**群聊白板**协作。白板是磁盘上的一堆 JSON 文件"))
@@ -59,14 +80,31 @@ final class LocalCrewStoreTests: XCTestCase {
         XCTAssertEqual(search.terminationStatus, 0)
         let hits = String(data: results.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         XCTAssertTrue(hits.contains("README-source-v1.md"), "offline search must reach the public excerpt")
+        for (question, keyword, expectedPage) in [("我的 Mac 能安装吗？", "macOS 14", "README-public-v2.md"),
+                                                  ("How do I assign work?", "When assigning work", "README_EN-public-v1.md"),
+                                                  ("Agent 怎么共用白板？", "群聊白板", "architecture-source-v1.md")] {
+            let query = Process()
+            query.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+            query.arguments = ["-R", "-l", keyword, workdir]
+            let output = Pipe()
+            query.standardOutput = output
+            try query.run()
+            query.waitUntilExit()
+            XCTAssertEqual(query.terminationStatus, 0, "offline question: \(question)")
+            XCTAssertTrue((String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
+                .contains(expectedPage), "offline question \(question) must retrieve \(expectedPage)")
+        }
 
         try "user edit".write(to: index, atomically: true, encoding: .utf8)
+        let fullPage = URL(fileURLWithPath: workdir).appendingPathComponent("README-public-v2.md")
+        try "user supplied guide".write(to: fullPage, atomically: true, encoding: .utf8)
         let existing = store.createCrew(req(title: "用户机组")).crewId
         let reopened = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
         let settled = try Data(contentsOf: directory.appendingPathComponent("local-crews.json"))
         _ = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
         XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("local-crews.json")), settled)
         XCTAssertEqual(try String(contentsOf: index, encoding: .utf8), "user edit")
+        XCTAssertEqual(try String(contentsOf: fullPage, encoding: .utf8), "user supplied guide")
         XCTAssertEqual(reopened.listCrews().count, 5)
         XCTAssertNotNil(reopened.getCrew(existing))
     }

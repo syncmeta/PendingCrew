@@ -60,8 +60,11 @@ struct LocalSessionWorldModel {
         if welcomeIds.contains(ctx.crewId), !ctx.workingDirectory.isEmpty {
             let skill = URL(fileURLWithPath: ctx.workingDirectory).appendingPathComponent("SKILL.md")
             if FileManager.default.fileExists(atPath: skill.path) {
+                let index = skill.deletingLastPathComponent().appendingPathComponent("INDEX-v2.md")
                 markdown += "\n\n本机 PendingCrew 入门资料入口：`\(skill.path)`。遇到使用方法问题时先读短 SKILL.md，"
-                    + "再按 INDEX.md 检索相关公开资料；不要预载全部文档。"
+                    + (FileManager.default.fileExists(atPath: index.path)
+                       ? "再按 `\(index.path)` 检索相关公开资料；不要预载全部文档。"
+                       : "再按 INDEX.md 检索相关公开资料；不要预载全部文档。")
             }
         }
         return markdown
