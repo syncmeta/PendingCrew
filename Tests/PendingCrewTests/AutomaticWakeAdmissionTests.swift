@@ -8,6 +8,75 @@ final class AutomaticWakeAdmissionTests: XCTestCase {
         return AutomaticWakeAdmission(directory: dir)
     }
 
+    func testLockFailureEmitsRedactedDiagnosticAndKeepsGateClosed() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wake-diagnostic-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("automatic-wake-admission.lock"),
+            withIntermediateDirectories: true)
+        var reports: [AutomaticWakeAdmission.Diagnostic] = []
+        let gate = AutomaticWakeAdmission(directory: dir,
+                                          onDiagnostic: { reports.append($0) })
+        XCTAssertFalse(gate.reserve(sessionId: "private-session", crewId: "private-crew",
+                                    sourceKey: "private-message").isAllowed)
+        let report = try XCTUnwrap(reports.first)
+        XCTAssertEqual(report.operation, .reserve)
+        XCTAssertEqual(report.stage, .lockOpen)
+        XCTAssertEqual(report.posixCode, EISDIR)
+        XCTAssertEqual(report.pathClass, .admissionLock)
+        XCTAssertEqual(report.pid, getpid())
+        XCTAssertFalse(report.processEpoch.isEmpty)
+        XCTAssertFalse(String(describing: report).contains("private-message"))
+        XCTAssertFalse(String(describing: report).contains("private-session"))
+        XCTAssertFalse(String(describing: report).contains("private-crew"))
+        XCTAssertFalse(String(describing: report).contains(dir.path))
+    }
+
+    func testFoundationReadFailureReportsUnderlyingErrnoWithoutChangingLedger() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wake-diagnostic-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("automatic-wake-admission.json")
+        let original = Data("private-ledger".utf8)
+        try original.write(to: file)
+        let error = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+                            userInfo: [NSUnderlyingErrorKey:
+                                NSError(domain: NSPOSIXErrorDomain, code: Int(EMFILE))])
+        var reports: [AutomaticWakeAdmission.Diagnostic] = []
+        let gate = AutomaticWakeAdmission(directory: dir,
+            onDiagnostic: { reports.append($0) }, readData: { _ in throw error })
+        XCTAssertFalse(gate.reserve(sessionId: "s", crewId: "c", sourceKey: "auto").isAllowed)
+        let report = try XCTUnwrap(reports.first)
+        XCTAssertEqual(report.operation, .reserve)
+        XCTAssertEqual(report.stage, .readData)
+        XCTAssertEqual(report.errorDomain, NSCocoaErrorDomain)
+        XCTAssertEqual(report.errorCode, NSFileReadNoPermissionError)
+        XCTAssertEqual(report.posixCode, EMFILE)
+        XCTAssertEqual(report.pathClass, .admissionLedger)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertFalse(String(describing: report).contains(dir.path))
+    }
+
+    func testPendingHumanTextReadFailureHasDistinctOperationAndNoReplay() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wake-diagnostic-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("automatic-wake-admission.json")
+        let original = Data("private human text".utf8)
+        try original.write(to: file)
+        var reports: [AutomaticWakeAdmission.Diagnostic] = []
+        let gate = AutomaticWakeAdmission(directory: dir,
+                                          onDiagnostic: { reports.append($0) })
+        XCTAssertNil(gate.pendingExplicitText(crewId: "private-crew"))
+        let report = try XCTUnwrap(reports.first)
+        XCTAssertEqual(report.operation, .pendingExplicitTextRead)
+        XCTAssertEqual(report.stage, .decode)
+        XCTAssertEqual(report.pathClass, .admissionLedger)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertFalse(String(describing: report).contains("private human text"))
+    }
+
     func testSameAndCrossSourceShareSessionBudget() {
         let gate = store()
         let t = Date(timeIntervalSince1970: 1_000_000)

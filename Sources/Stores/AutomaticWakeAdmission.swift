@@ -13,6 +13,33 @@ enum SessionWakeSubmission: Equatable {
 /// Every reservation remains an attempt in the short window even if a backend
 /// rejects it; acceptance is tracked separately for settlement.
 final class AutomaticWakeAdmission: @unchecked Sendable {
+    /// Only fixed labels and numeric errors leave this store. Never include a
+    /// ledger path, source key, crew/session ID, or pending message body.
+    struct Diagnostic: CustomStringConvertible {
+        enum Operation: String { case reserve, pendingExplicitTextRead, other }
+        enum Stage: String { case directory, lockOpen, lockAcquire, metadata,
+            fileType, readData, decode, legacyScrub }
+        enum PathClass: String { case admissionDirectory, admissionLock, admissionLedger }
+
+        let operation: Operation
+        let stage: Stage
+        let pathClass: PathClass
+        let errorDomain: String?
+        let errorCode: Int?
+        let posixCode: Int32?
+        let pid: Int32
+        let processEpoch: String
+
+        var description: String {
+            "wake-admission failure operation=\(operation.rawValue) stage=\(stage.rawValue) "
+                + "pathClass=\(pathClass.rawValue) errorDomain=\(errorDomain ?? "none") "
+                + "errorCode=\(errorCode.map(String.init) ?? "none") "
+                + "errno=\(posixCode.map(String.init) ?? "none") "
+                + "pid=\(pid) processEpoch=\(processEpoch)"
+        }
+    }
+
+    private static let processEpoch = UUID().uuidString
     enum Priority: Equatable { case automatic, human, emergency }
     enum Decision {
         case allowed(String)
@@ -164,9 +191,41 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
     let directory: URL
     var fileURL: URL { directory.appendingPathComponent("automatic-wake-admission.json") }
     private var lockURL: URL { directory.appendingPathComponent("automatic-wake-admission.lock") }
+    private let onDiagnostic: (Diagnostic) -> Void
+    private let readData: (URL) throws -> Data
 
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil,
+         onDiagnostic: @escaping (Diagnostic) -> Void = { NSLog("%@", $0.description) },
+         readData: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) }) {
         self.directory = directory ?? LocalWhiteboardStore.defaultDirectory
+        self.onDiagnostic = onDiagnostic
+        self.readData = readData
+    }
+
+    private func report(_ operation: Diagnostic.Operation, _ stage: Diagnostic.Stage,
+                        _ pathClass: Diagnostic.PathClass, error: Error? = nil,
+                        posixCode: Int32? = nil) {
+        let outer = error.map { $0 as NSError }
+        var underlying = outer
+        var code = posixCode
+        for _ in 0..<4 {
+            guard let current = underlying else { break }
+            if current.domain == NSPOSIXErrorDomain, code == nil {
+                code = Int32(truncatingIfNeeded: current.code)
+            }
+            underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        let domain: String?
+        switch outer?.domain {
+        case NSCocoaErrorDomain: domain = NSCocoaErrorDomain
+        case NSPOSIXErrorDomain: domain = NSPOSIXErrorDomain
+        case nil: domain = nil
+        default: domain = "other"
+        }
+        onDiagnostic(Diagnostic(operation: operation, stage: stage,
+                                pathClass: pathClass, errorDomain: domain,
+                                errorCode: outer?.code, posixCode: code,
+                                pid: getpid(), processEpoch: Self.processEpoch))
     }
 
     static func fingerprint(_ text: String) -> String {
@@ -181,8 +240,8 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
     func reserve(sessionId: String, crewId: String, sourceKey: String,
                  priority: Priority = .automatic, now: Date = Date(),
                  uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Decision {
-        return withLock { () -> Decision in
-            guard var state = read() else { return .deferred("admission 账本读不出来") }
+        return withLock(operation: .reserve) { () -> Decision in
+            guard var state = read(operation: .reserve) else { return .deferred("admission 账本读不出来") }
             if state.hardStoppedMachine == true { return .hardStopped("全机自动唤醒已熔断") }
             if priority == .automatic && state.hardStoppedCrews?.contains(crewId) == true {
                 return .hardStopped("crew 自动唤醒已熔断")
@@ -401,8 +460,8 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
     }
 
     func pendingExplicitText(crewId: String? = nil) -> [PendingExplicitText]? {
-        withLock {
-            guard let state = read() else { return nil }
+        withLock(operation: .pendingExplicitTextRead) {
+            guard let state = read(operation: .pendingExplicitTextRead) else { return nil }
             return (state.pendingExplicitText ?? [:]).values
                 .filter { crewId == nil || $0.crewId == crewId }
                 .sorted { $0.id < $1.id }
@@ -532,31 +591,61 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         } ?? false
     }
 
-    private func withLock<T>(_ body: () -> T) -> T? {
+    private func withLock<T>(operation: Diagnostic.Operation = .other,
+                             _ body: () -> T) -> T? {
         do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
-        catch { return nil }
+        catch {
+            report(operation, .directory, .admissionDirectory, error: error)
+            return nil
+        }
         let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else {
+            let code = errno
+            report(operation, .lockOpen, .admissionLock, posixCode: code)
+            return nil
+        }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { return nil }
+        guard flock(fd, LOCK_EX) == 0 else {
+            let code = errno
+            report(operation, .lockAcquire, .admissionLock, posixCode: code)
+            return nil
+        }
         defer { flock(fd, LOCK_UN) }
         return body()
     }
 
-    private func read() -> State? {
+    private func read(operation: Diagnostic.Operation = .other) -> State? {
         var metadata = stat()
         if lstat(fileURL.path, &metadata) != 0 {
+            let code = errno
             // `fileExists` also returns false for EACCES/EMFILE. Only a real
             // ENOENT is a new ledger; every other failure keeps the gate shut.
-            return errno == ENOENT ? State() : nil
+            if code != ENOENT { report(operation, .metadata, .admissionLedger, posixCode: code) }
+            return code == ENOENT ? State() : nil
         }
-        guard (metadata.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return nil }
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        guard let state = try? JSONDecoder().decode(State.self, from: data) else { return nil }
+        guard (metadata.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            report(operation, .fileType, .admissionLedger)
+            return nil
+        }
+        let data: Data
+        do { data = try readData(fileURL) }
+        catch {
+            report(operation, .readData, .admissionLedger, error: error)
+            return nil
+        }
+        let state: State
+        do { state = try JSONDecoder().decode(State.self, from: data) }
+        catch {
+            report(operation, .decode, .admissionLedger, error: error)
+            return nil
+        }
         if state.pendingExplicitText?.values.contains(where: { $0.wasLegacyRawBytes }) == true {
             // Migration is fail-closed. The old bytes must be scrubbed on disk
             // before any caller may use this ledger again.
-            guard write(state) else { return nil }
+            guard write(state) else {
+                report(operation, .legacyScrub, .admissionLedger)
+                return nil
+            }
         }
         return state
     }
