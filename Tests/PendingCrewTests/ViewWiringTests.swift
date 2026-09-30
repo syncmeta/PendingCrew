@@ -146,17 +146,17 @@ final class ViewWiringTests: XCTestCase {
     func testTodoOverviewCardsReuseIncomingChatBubbleSurfaceAndHairline() throws {
         let panel = try Self.text(of: "CrewTodoPanel.swift")
         let bubble = try Self.text(of: "BubbleView.swift")
-        let sharedStyle = [
-            ".fill(Theme.Palette.surface)",
-            ".strokeBorder(Theme.Palette.hairline, lineWidth: 0.5)",
-        ]
-
-        for token in sharedStyle {
-            XCTAssertTrue(bubble.contains(token),
-                          "群聊对方气泡的样式真值已变化，请同步更新 Todo 契约")
-            XCTAssertTrue(panel.contains(token),
-                          "Todo 概览卡片没有复用群聊气泡样式：\(token)")
-        }
+        XCTAssertTrue(bubble.contains(".fill(Theme.Palette.surface)"),
+                      "群聊对方气泡的样式真值已变化，请同步更新 Todo 契约")
+        XCTAssertTrue(panel.contains(".fill(CrewTodoPagePalette.card)"),
+                      "Todo 概览卡片没有使用页面共用的白卡片颜色")
+        XCTAssertTrue(panel.contains("static let card = Theme.Palette.surface"),
+                      "Todo 白卡片没有复用群聊对方气泡的 surface token")
+        let hairline = ".strokeBorder(Theme.Palette.hairline, lineWidth: 0.5)"
+        XCTAssertTrue(bubble.contains(hairline),
+                      "群聊对方气泡的描边真值已变化，请同步更新 Todo 契约")
+        XCTAssertTrue(panel.contains(hairline),
+                      "Todo 概览卡片没有复用群聊气泡的描边")
         XCTAssertFalse(panel.contains("Theme.Palette.surfaceMuted.opacity(0.5)"),
                        "Todo 概览仍在使用旧的灰色填充")
     }
