@@ -1146,17 +1146,7 @@ struct LocalCrew: Codable, Equatable {
             // 这些跨 crew 关系本地路径不开。
             parents: [],
             children: [],
-            shares: [
-                CrewDetail.ResponsibilityShare(
-                    subjectId: responsibleSubjectId,
-                    shareBps: 10000,
-                    isTiebreaker: true,
-                    // 面向人的名字统一叫「人」—— 与成员列表里那一项、侧栏身份区
-                    // 逐字一致(用户定调:不写"本机"、不带括号后缀)。
-                    displayName: "人",
-                    kind: "byok"
-                )
-            ],
+            shares: [],
             captain: captainBotId.map {
                 // 旧 JSON 里默认名存的是英文 "Captain" —— 归一成「机长」，
                 // 与群聊 @ 候选 / 气泡 / 成员列表的显示名统一（用户点名的

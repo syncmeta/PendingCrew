@@ -16,6 +16,55 @@ final class LocalCrewStoreTests: XCTestCase {
               captain: .systemGenerated(templateName: nil))
     }
 
+    func testInspectorOmitsResponsibilitySharesSection() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let inspector = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Mac/Views/CrewDetailInspector.swift"), encoding: .utf8)
+        // Source wiring check: no GUI or app launch is needed for this standalone bundle.
+        XCTAssertFalse(inspector.contains("sharesSection"))
+        XCTAssertFalse(inspector.contains("本 Crew 谁说了算 谁负责"))
+        XCTAssertFalse(inspector.contains("detail.shares"))
+        XCTAssertFalse(inspector.contains("sharePercent"))
+    }
+
+    func testLocalDetailDoesNotInventSharesAndRetainsResponsibleSubject() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalCrewStore(baseDirectory: directory)
+        let id = store.createCrew(req(title: "责任区回归")).crewId
+        let detail = try XCTUnwrap(store.getCrew(id))
+        XCTAssertTrue(detail.shares.isEmpty)
+        XCTAssertEqual(detail.crew.responsibleSubjectId, "local-byok")
+        XCTAssertEqual(store.listCrews().first(where: { $0.id == id })?.responsibleSubjectId,
+                       "local-byok")
+        let reloaded = try XCTUnwrap(LocalCrewStore(baseDirectory: directory).getCrew(id))
+        XCTAssertTrue(reloaded.shares.isEmpty)
+        XCTAssertEqual(reloaded.crew.responsibleSubjectId, "local-byok")
+    }
+
+    func testRemoteDetailJSONStillDecodesSharesAndResponsibleSubject() throws {
+        let json = #"""
+        {
+          "crew": {
+            "id": "remote-crew", "title": "Remote crew",
+            "responsibleSubjectId": "subject-owner", "runtimeLocation": "edge",
+            "createdAt": "2026-09-30T00:00:00Z", "updatedAt": "2026-09-30T00:00:00Z"
+          },
+          "parents": [], "children": [],
+          "shares": [{"subjectId":"subject-owner", "shareBps":7500,
+                      "isTiebreaker":true, "displayName":"Owner", "kind":"user_account"}]
+        }
+        """#
+        let detail = try JSONDecoder().decode(CrewDetail.self, from: Data(json.utf8))
+        XCTAssertEqual(detail.crew.responsibleSubjectId, "subject-owner")
+        XCTAssertEqual(detail.shares, [CrewDetail.ResponsibilityShare(
+            subjectId: "subject-owner", shareBps: 7500, isTiebreaker: true,
+            displayName: "Owner", kind: "user_account")])
+        XCTAssertEqual(try JSONDecoder().decode(CrewDetail.self,
+            from: JSONEncoder().encode(detail)), detail)
+    }
+
     func testCreateUsesProvidedTitle() {
         let s = LocalCrewStore(baseDirectory: tempDir())
         let resp = s.createCrew(req(title: "支付接入"))

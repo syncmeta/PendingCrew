@@ -3,7 +3,7 @@ import SwiftUI
 import AppKit
 
 /// crew 详情 / 设置面板（spec §9 把它从中栏挪出来，中栏改放群聊）。
-/// 显示 crew 元数据 + 父/子 crew(DAG) + 「谁说了算 谁负责」+ 工作目录。
+/// 显示 crew 元数据 + 父/子 crew(DAG) + 工作目录。
 /// 机长那一栏已按用户定调去掉 —— 机长在群聊/成员列表里本来就看得见,
 /// 信息页再列一遍是重复。
 /// 以 inspector sheet 形式从 `CrewCenterView` 顶栏 ⓘ 打开。
@@ -32,7 +32,6 @@ struct CrewDetailInspector: View {
                 VStack(alignment: .leading, spacing: 20) {
                     header
                     parentDAGSection
-                    sharesSection
                 }
                 .padding(20)
             }
@@ -240,37 +239,11 @@ struct CrewDetailInspector: View {
         }
     }
 
-    @ViewBuilder
-    private var sharesSection: some View {
-        sectionHeader("本 Crew 谁说了算 谁负责")
-        if detail.shares.isEmpty {
-            Text("(尚未结算)").foregroundStyle(.secondary)
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(detail.shares, id: \.subjectId) { share in
-                    HStack(spacing: 8) {
-                        Image(systemName: share.kind == "group_account" ? "person.3" : "person.crop.circle")
-                            .foregroundStyle(.secondary)
-                        Text(share.displayName.isEmpty ? share.subjectId : share.displayName)
-                            .lineLimit(1)
-                        Spacer()
-                        Text("\(sharePercent(share.shareBps))%")
-                            .font(.callout.monospacedDigit())
-                    }
-                }
-            }
-        }
-    }
-
     private func sectionHeader(_ text: String) -> some View {
         Text(text)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
             .padding(.top, 4)
-    }
-
-    private func sharePercent(_ bps: Int) -> String {
-        String(format: "%.2f", Double(bps) / 100.0)
     }
 
     private func revealInFinder(_ path: String) {
