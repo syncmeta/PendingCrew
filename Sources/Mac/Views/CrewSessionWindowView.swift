@@ -1154,7 +1154,7 @@ private struct CrewSessionErrorMessage: View {
             if action == .installCodexCLI {
                 switch cliVersions.codexProvisioningState {
                 case .missing:
-                    CodexCLIInstallActionButton(center: cliVersions)
+                    EmptyView()
                 case .installing:
                     ProgressView("正在安装并复验 Codex CLI…")
                 case let .installedNeedsManualSignIn(installed):
@@ -1164,6 +1164,9 @@ private struct CrewSessionErrorMessage: View {
                 case .awaitingSecondConfirmation, .ready, .none:
                     EmptyView()
                 }
+                // Keep the confirmation owner mounted while the core state
+                // changes from missing to awaitingSecondConfirmation.
+                CodexCLIInstallActionButton(center: cliVersions)
             }
         }
         .font(Theme.Fonts.caption)

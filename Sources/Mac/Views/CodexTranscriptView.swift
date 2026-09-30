@@ -36,10 +36,13 @@ struct CodexCLIProvisioningNotice: View {
     @ObservedObject var center: AgentCLIVersionCenter
 
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 0) {
             if let state = center.codexProvisioningState {
                 notice(for: state)
             }
+            // This owner must outlive `.missing` -> `.awaitingSecondConfirmation`.
+            CodexCLIInstallActionButton(center: center)
+                .padding(.horizontal, 12)
         }
     }
 
@@ -57,7 +60,6 @@ struct CodexCLIProvisioningNotice: View {
                     .textSelection(.enabled)
                 HStack {
                     Link("查看官方安装指引", destination: guide.documentation)
-                    CodexCLIInstallActionButton(center: center)
                 }
             }
             .modifier(ProvisioningNoticeCard())
@@ -94,13 +96,16 @@ struct CodexCLIInstallActionButton: View {
     @State private var showingConfirmation = false
 
     var body: some View {
-        Button("准备安装…") {
-            guard case .missing = center.codexProvisioningState,
-                  let action = center.prepareCodexInstall() else { return }
-            pendingAction = action
-            showingConfirmation = true
+        Group {
+            if case .missing = center.codexProvisioningState {
+                Button("准备安装…") {
+                    guard let action = center.prepareCodexInstall() else { return }
+                    pendingAction = action
+                    showingConfirmation = true
+                }
+                .accessibilityLabel("准备安装官方 Codex CLI")
+            }
         }
-        .accessibilityLabel("准备安装官方 Codex CLI")
         .confirmationDialog(
             "确认安装官方 Codex CLI？",
             isPresented: $showingConfirmation,

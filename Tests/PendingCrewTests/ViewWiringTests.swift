@@ -669,6 +669,25 @@ final class ViewWiringTests: XCTestCase {
                       "Esc 或外侧关闭确认框时必须复位待确认动作")
     }
 
+    /// Preparing the fixed action changes `.missing` to `.awaitingSecondConfirmation`.
+    /// The dialog's state owner must survive that switch in both entry points.
+    func testCodexInstallConfirmationOwnerSurvivesMissingToAwaitingTransition() throws {
+        let transcript = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CodexTranscriptView.swift"))
+        let session = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let notice = try Self.requiredSection(transcript, "struct CodexCLIProvisioningNotice: View {",
+                                              "@ViewBuilder\n    private func notice")
+        XCTAssertTrue(notice.contains("CodexCLIInstallActionButton(center: center)"),
+                      "notice 的确认框宿主不能只活在 missing 分支中")
+        let error = try Self.requiredSection(session, "private struct CrewSessionErrorMessage: View {",
+                                             "private struct SessionBellHintView: View {")
+        guard let waiting = error.range(of: "case .awaitingSecondConfirmation"),
+              let button = error.range(of: "CodexCLIInstallActionButton(center: cliVersions)") else {
+            return XCTFail("报错行缺少等待确认状态或安装动作")
+        }
+        XCTAssertGreaterThan(button.lowerBound, waiting.lowerBound,
+                             "报错行确认框宿主不能只活在 missing 分支中")
+    }
+
     /// #166: source contract for Codex's narrow session chrome. The test target
     /// does not compile the SwiftUI view, so this guards wiring and labels;
     /// the macOS app build separately checks SwiftUI type correctness.
