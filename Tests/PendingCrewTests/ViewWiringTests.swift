@@ -704,6 +704,10 @@ final class ViewWiringTests: XCTestCase {
                       "系统错误行没有经白名单分发")
         XCTAssertTrue(transcript.contains("CrewMessageActionDispatcher.dispatch"),
                       "会话动作没有经白名单分发")
+        XCTAssertTrue(transcript.contains("if actions.isEmpty {"),
+                      "无动作的富文本、未知或命令行不得被空 contextMenu 覆盖")
+        XCTAssertTrue(transcript.contains("let actions = CrewMessageActionCatalog.forTranscript(item)"),
+                      "菜单可用性必须由类型化目录决定")
     }
 
     /// #166: source contract for Codex's narrow session chrome. The test target

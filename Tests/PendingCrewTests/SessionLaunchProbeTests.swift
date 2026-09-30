@@ -25,7 +25,8 @@ final class SessionLaunchProbeTests: XCTestCase {
         XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
             .init(id: "u", kind: .userMessage(text: "原文"))), [.copyText("原文")])
         XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
-            .init(id: "a", kind: .agentMessage(text: "回复", phase: nil))), [.copyText("回复")])
+            .init(id: "a", kind: .agentMessage(text: "回复", phase: nil))), [],
+            "富文本渲染与原文可能不同，未核可见内容前不提供复制")
         XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
             .init(id: "x", kind: .unknown(type: "untrusted-action"))), [])
         XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
@@ -39,6 +40,23 @@ final class SessionLaunchProbeTests: XCTestCase {
         XCTAssertEqual(copied, "rm -rf / is just text")
         XCTAssertEqual(CrewMessageActionDispatcher.dispatch(
             .prepareOfficialCodexCLIInstall, copy: { _ in XCTFail() }, prepare: { nil }), .unavailable)
+    }
+
+    @MainActor
+    func testAgentMarkdownCannotCopyHiddenLinkOrImagePayload() {
+        for markdown in [
+            "[阅读](https://example.invalid/private-token)",
+            "![图](https://example.invalid/private-image)",
+            "[标题](<https://example.invalid/hidden target>)",
+        ] {
+            XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
+                .init(id: "agent", kind: .agentMessage(text: markdown, phase: nil))), [],
+                "不得通过复制菜单带出未显示的 Markdown 目标地址")
+        }
+        XCTAssertEqual(CrewMessageActionCatalog.forTranscript(
+            .init(id: "user", kind: .userMessage(text: "[阅读](https://example.invalid/private-token)"))),
+            [.copyText("[阅读](https://example.invalid/private-token)")],
+            "纯 Text 用户行复制其实际显示文字")
     }
 
     private let deadline: TimeInterval = 25

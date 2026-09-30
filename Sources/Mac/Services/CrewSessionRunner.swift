@@ -22,7 +22,9 @@ enum CrewMessageActionCatalog {
     static func forTranscript(_ item: CodexThreadItem) -> [CrewMessageAction] {
         let text: String
         switch item.kind {
-        case let .userMessage(body), let .agentMessage(body, _): text = body
+        case let .userMessage(body): text = body
+        // Agent prose is rendered by MarkdownText. The source can contain
+        // hidden link/image destinations, so copying it is not a visible-text action.
         default: return []
         }
         return text.isEmpty ? [] : [.copyText(text)]

@@ -184,9 +184,23 @@ struct CodexTranscriptRows: View {
 
     @ViewBuilder private var content: some View {
         ForEach(transcript.items) { item in
+            actionableRow(item).id(item.id)
+        }
+        if transcript.turnActive {
+            workingRow.id("__spinner__")
+        }
+        Color.clear.frame(height: 1).id(CodexTranscriptView.bottomAnchorID)
+    }
+
+    @ViewBuilder
+    private func actionableRow(_ item: CodexThreadItem) -> some View {
+        let actions = CrewMessageActionCatalog.forTranscript(item)
+        if actions.isEmpty {
+            row(item)
+        } else {
             row(item)
                 .contextMenu {
-                    ForEach(CrewMessageActionCatalog.forTranscript(item), id: \.self) { action in
+                    ForEach(actions, id: \.self) { action in
                         if case .copyText = action {
                             Button("复制消息", systemImage: "doc.on.doc") {
                                 _ = CrewMessageActionDispatcher.dispatch(
@@ -195,12 +209,7 @@ struct CodexTranscriptRows: View {
                         }
                     }
                 }
-                .id(item.id)
         }
-        if transcript.turnActive {
-            workingRow.id("__spinner__")
-        }
-        Color.clear.frame(height: 1).id(CodexTranscriptView.bottomAnchorID)
     }
 
     // MARK: - Row dispatch
