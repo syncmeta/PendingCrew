@@ -271,13 +271,15 @@ private struct PendingCrewChatView: View {
                 Spacer()
                 if draft.workingDirectory != nil {
                     Button("恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
+                        .disabled(crewStore.pendingCrewDelivery != nil)
                 }
                 Button("选择目录…") { chooseDirectory() }
-                    .disabled(crewStore.pendingCrewSending)
+                    .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil)
             }
             .font(.callout)
             .padding(.horizontal, 18)
             TextEditor(text: $message)
+                .disabled(crewStore.pendingCrewDelivery != nil)
                 .frame(minHeight: 72, maxHeight: 110)
                 .padding(8)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
@@ -286,25 +288,47 @@ private struct PendingCrewChatView: View {
                 Text(error).foregroundStyle(.red).font(.caption)
                     .padding(.horizontal, 18)
             }
+            if let pending = crewStore.pendingCrewDelivery {
+                HStack {
+                    Text(pending).foregroundStyle(.orange).font(.caption)
+                    Spacer()
+                    Button("检查送达") {
+                        Task {
+                            do {
+                                try await crewStore.checkPendingCrewDelivery()
+                                self.error = nil
+                            } catch {
+                                self.error = error.localizedDescription
+                            }
+                        }
+                    }
+                    .disabled(crewStore.pendingCrewSending)
+                }
+                .padding(.horizontal, 18)
+            }
             HStack {
                 Button("取消") { crewStore.discardPendingCrew() }
+                    .disabled(crewStore.pendingCrewDelivery != nil)
                 Spacer()
                 Button {
                     let text = message
                     Task {
                         do {
                             try await crewStore.commitPendingCrew(text, draftId: draft.id)
+                            self.error = nil
                         } catch {
                             self.error = error.localizedDescription
                         }
                     }
                 } label: {
                     if crewStore.pendingCrewSending { ProgressView().controlSize(.small) }
+                    else if crewStore.pendingCrewDelivery != nil { Text("等待送达") }
                     else { Text("发送并创建") }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                          || crewStore.pendingCrewSending)
+                          || crewStore.pendingCrewSending
+                          || crewStore.pendingCrewDelivery != nil)
             }
             .padding(18)
         }

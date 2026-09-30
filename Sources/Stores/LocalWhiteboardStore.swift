@@ -556,6 +556,10 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         LedgerSpool(directory: directory.appendingPathComponent("outbox", isDirectory: true))
     }
 
+    func hasSpooledMessages(crewId: String) -> Bool {
+        spool.hasPending(key: crewId)
+    }
+
     /// 把该 crew 积压的补进 `rows`。返回补了几条。
     private func drainSpool(into rows: inout [LocalWhiteboardMessage], crewId: String) -> Int {
         var appended: [LocalWhiteboardMessage] = []
@@ -569,6 +573,35 @@ final class LocalWhiteboardStore: @unchecked Sendable {
         }
         rows.append(contentsOf: appended)
         return n
+    }
+
+    /// Retry pending messages without adding a new visible message. Keep each
+    /// outbox file until the updated board has been durably saved.
+    @discardableResult
+    func flushSpooledMessagesReportingFailure(crewId: String) throws -> Int {
+        try withFileLock(crewId) {
+            let url = fileURL(crewId)
+            var pending: [LocalWhiteboardMessage] = []
+            spool.drain(key: crewId) { message in
+                pending.append(message)
+                return false
+            }
+            guard !pending.isEmpty else { return 0 }
+            var rows = try loadLockedReportingFailure(crewId).rows
+            if MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: url) {
+                throw WhiteboardPersistenceError.unsafeEmptyRewrite(url)
+            }
+            var seen = Set(rows.map(\.id))
+            let additions = pending.filter { seen.insert($0.id).inserted }
+            rows.append(contentsOf: additions)
+            if !additions.isEmpty {
+                try MultiProcessJSONStore.saveRowsLockedReportingFailure(rows, to: url)
+            }
+            let saved = Set(rows.map(\.id))
+            spool.drain(key: crewId) { saved.contains($0.id) }
+            if !additions.isEmpty { changes.send(crewId) }
+            return additions.count
+        }
     }
 }
 

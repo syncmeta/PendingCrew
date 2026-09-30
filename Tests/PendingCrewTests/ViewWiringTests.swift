@@ -241,6 +241,100 @@ final class ViewWiringTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingFirstSendSpooledFirstMessageStaysPendingWithoutDuplicateDelivery() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        let boardDir = base.appendingPathComponent("board", isDirectory: true)
+        let board = LocalWhiteboardStore(directory: boardDir)
+        let backend = LocalBackend(store: ledger, whiteboard: board)
+        let sender = PendingCrewFirstSend()
+        var created = 0, posted = 0
+        var unreadableFile: URL?
+        defer {
+            if let unreadableFile {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                      ofItemAtPath: unreadableFile.path)
+            }
+        }
+        func submit() async throws -> PendingCrewFirstSend.Outcome? {
+            try await sender.commit(message: "first message", selectedDirectory: nil,
+                crewGround: base.appendingPathComponent("CrewGround"), title: "Draft",
+                create: { path in
+                    created += 1
+                    return try await backend.createCrew(.make(
+                        responsibleSubjectId: LocalBackend.localSubjectId, title: "Draft",
+                        machineId: nil, workingDirectory: path, captainAgentKind: "codex",
+                        captain: .systemGenerated(templateName: nil))).crewId
+                }, attach: { _ in }, post: { id, text in
+                    posted += 1
+                    board.appendUserMessage(crewId: id, text: "older")
+                    let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+                        at: boardDir, includingPropertiesForKeys: nil)
+                        .first { $0.lastPathComponent.contains(id) && $0.pathExtension == "json" })
+                    unreadableFile = file
+                    try FileManager.default.setAttributes([.posixPermissions: 0o000],
+                                                          ofItemAtPath: file.path)
+                    do {
+                        _ = try await backend.postCrewMessage(crewId: id, text: text,
+                            mentions: [], replyToId: nil, localAttachments: [])
+                        XCTFail("unreadable board must spool instead of reporting delivery")
+                    } catch {
+                        XCTAssertTrue(LocalWhiteboardStore.wasPreservedForRetry(error))
+                        throw error
+                    }
+                }, rollback: { id in backend.rollbackNewCrew(id) })
+        }
+        let firstResult = try await submit()
+        let pending = try XCTUnwrap(firstResult)
+        XCTAssertEqual(pending.delivery, .pending,
+                       "the outbox is pending, not a delivered first message")
+        XCTAssertEqual(ledger.listCrews().map(\.id), [pending.crewId],
+                       "spooled message must keep the created crew for later delivery")
+        XCTAssertEqual(created, 1)
+        XCTAssertEqual(posted, 1)
+        _ = try await submit()
+        XCTAssertEqual(created, 1)
+        XCTAssertEqual(posted, 1)
+        XCTAssertThrowsError(try backend.flushFirstMessageOutbox(
+            crewId: pending.crewId, text: "first message"))
+        XCTAssertEqual((try? FileManager.default.contentsOfDirectory(
+            atPath: boardDir.appendingPathComponent("outbox").path))?.count, 1)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                              ofItemAtPath: try XCTUnwrap(unreadableFile).path)
+        XCTAssertTrue(try backend.flushFirstMessageOutbox(
+            crewId: pending.crewId, text: "first message"))
+        XCTAssertFalse(board.hasSpooledMessages(crewId: pending.crewId))
+        XCTAssertEqual(try board.flushSpooledMessagesReportingFailure(crewId: pending.crewId), 0)
+        XCTAssertEqual(board.list(crewId: pending.crewId).filter { $0.text == "first message" }.count, 1)
+    }
+
+    func testSpooledFirstMessageCannotActivateDraftOrCaptain() throws {
+        let store = try Self.projectText(of: "Sources/Stores/CrewStore.swift")
+        let center = try Self.projectText(of: "Sources/Mac/Views/CrewCenterView.swift")
+        let commit = try Self.requiredSection(store, "func commitPendingCrew(",
+                                              "func openChatSearchResult(")
+        let pending = try XCTUnwrap(commit.range(of: "if outcome.delivery == .pending"))
+        let activate = try XCTUnwrap(commit.range(of: "activatePendingCrew(draft: draft, outcome: outcome)"))
+        XCTAssertLessThan(pending.lowerBound, activate.lowerBound)
+        let pendingBranch = String(commit[pending.lowerBound..<activate.lowerBound])
+        XCTAssertTrue(pendingBranch.contains("return"))
+        XCTAssertTrue(commit.contains("pendingCrewDelivery ="),
+                      "draft must expose pending delivery to the user")
+        XCTAssertTrue(commit.contains("pendingDeliveryOutcome = outcome"))
+        let activation = try Self.requiredSection(store, "private func activatePendingCrew(",
+                                                  "func openChatSearchResult(")
+        XCTAssertTrue(activation.contains("pendingCrew = nil"))
+        XCTAssertTrue(activation.contains("selectedCrewId = outcome.crewId"))
+        XCTAssertTrue(activation.contains("enqueue(CaptainAutostartRequest("))
+        XCTAssertTrue(store.contains("guard try backend.flushFirstMessageOutbox"))
+        XCTAssertTrue(center.contains("if let pending = crewStore.pendingCrewDelivery"))
+        XCTAssertTrue(center.contains("crewStore.checkPendingCrewDelivery()"))
+        XCTAssertTrue(center.contains("Text(\"等待送达\")"))
+    }
+
+    @MainActor
     func testExistingLocalCreateToolKeepsItsMachineContract() async throws {
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)

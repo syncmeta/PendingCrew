@@ -12,10 +12,12 @@ struct PendingCrewDraft: Equatable {
 private enum PendingCrewCommitError: LocalizedError {
     case noSubject
     case rollbackUnavailable
+    case deliveryStillPending
     var errorDescription: String? {
         switch self {
         case .noSubject: return "没有可代表的 subject"
         case .rollbackUnavailable: return "此连接暂不支持首条消息创建机组，请在本机完成创建"
+        case .deliveryStillPending: return "首条消息仍在待发件箱；白板恢复可读后再检查送达"
         }
     }
 }
@@ -51,7 +53,10 @@ final class CrewStore: ObservableObject {
     /// A new crew is only an in-memory navigation target until its first message.
     @Published private(set) var pendingCrew: PendingCrewDraft?
     @Published private(set) var pendingCrewSending = false
+    @Published private(set) var pendingCrewDelivery: String?
     private var pendingFirstSend = PendingCrewFirstSend()
+    private var pendingDeliveryOutcome: PendingCrewFirstSend.Outcome?
+    private var pendingDeliveryText: String?
     /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
     @Published var chatSearchRequest: CrewChatSearchRequest?
     /// 点引用胶囊跳走之后**回去的那条路**（人类 Todo #132/#133）。
@@ -199,7 +204,8 @@ final class CrewStore: ObservableObject {
     // MARK: - Selection
 
     func selectCrew(_ id: String?) {
-        if let pendingCrew, id != pendingCrew.id, !pendingCrewSending {
+        if let pendingCrew, id != pendingCrew.id, !pendingCrewSending,
+           pendingCrewDelivery == nil {
             self.pendingCrew = nil
             pendingFirstSend = PendingCrewFirstSend()
         }
@@ -239,18 +245,21 @@ final class CrewStore: ObservableObject {
         let draft = PendingCrewDraft(id: "pending-\(UUID().uuidString)", title: name,
                                      parentCrewId: parentCrewId, workingDirectory: nil)
         pendingFirstSend = PendingCrewFirstSend()
+        pendingCrewDelivery = nil
+        pendingDeliveryOutcome = nil
+        pendingDeliveryText = nil
         pendingCrew = draft
         selectedCrewId = draft.id
     }
 
     func setPendingWorkingDirectory(_ path: String?) {
-        guard var pendingCrew, !pendingCrewSending else { return }
+        guard var pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil else { return }
         pendingCrew.workingDirectory = path
         self.pendingCrew = pendingCrew
     }
 
     func discardPendingCrew() {
-        guard let pendingCrew, !pendingCrewSending else { return }
+        guard let pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil else { return }
         self.pendingCrew = nil
         pendingFirstSend = PendingCrewFirstSend()
         if selectedCrewId == pendingCrew.id { selectedCrewId = nil }
@@ -296,38 +305,62 @@ final class CrewStore: ObservableObject {
                     }
                 },
                 post: { crewId, message in
-                    do {
-                        _ = try await backend.postCrewMessage(
-                            crewId: crewId, text: message,
-                            mentions: [], replyToId: nil, localAttachments: [])
-                    } catch {
-                        // A durably spooled message must not be sent again on retry.
-                        guard LocalWhiteboardStore.wasPreservedForRetry(error) else { throw error }
-                    }
+                    _ = try await backend.postCrewMessage(
+                        crewId: crewId, text: message,
+                        mentions: [], replyToId: nil, localAttachments: [])
                 },
                 rollback: { crewId in localBackend.rollbackNewCrew(crewId) })
             guard let outcome else { return }
-            #if os(macOS)
-            if let trust = WorkdirTrustPrompt.prompt(
-                workdir: outcome.workingDirectory,
-                home: URL(fileURLWithPath: NSHomeDirectory())) {
-                LocalWhiteboardStore.shared.appendSessionMessage(
-                    crewId: outcome.crewId, sessionId: "system",
-                    text: WorkdirTrustPrompt.chatMessage(trust), senderName: "系统")
+            if outcome.delivery == .pending {
+                pendingCrewDelivery = "首条消息已存入待发件箱，尚未发到群里。白板恢复后点“检查送达”可安全补发；请勿重发。机长尚未启动。"
+                pendingDeliveryOutcome = outcome
+                pendingDeliveryText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return
             }
-            #endif
-            let stillSelected = selectedCrewId == draft.id
-            pendingCrew = nil
-            if stillSelected { selectedCrewId = outcome.crewId }
-            enqueue(CaptainAutostartRequest(crewId: outcome.crewId,
-                childTitle: details[outcome.crewId]?.crew.title ?? draft.title),
-                into: captainAutostartRequests)
-            RecentWorkingDirectories.record(outcome.workingDirectory, in: .standard)
+            activatePendingCrew(draft: draft, outcome: outcome)
         } catch {
             if selectedCrewId != draft.id { pendingCrew = nil }
             await refreshList()
             throw error
         }
+    }
+
+    /// The outbox retry only flushes the saved message; it never calls create or post.
+    func checkPendingCrewDelivery() async throws {
+        guard let draft = pendingCrew, let outcome = pendingDeliveryOutcome,
+              let text = pendingDeliveryText, !pendingCrewSending else { return }
+        guard let backend = currentBackend() as? LocalBackend else {
+            throw PendingCrewCommitError.rollbackUnavailable
+        }
+        pendingCrewSending = true
+        defer { pendingCrewSending = false }
+        guard try backend.flushFirstMessageOutbox(crewId: outcome.crewId, text: text) else {
+            throw PendingCrewCommitError.deliveryStillPending
+        }
+        activatePendingCrew(draft: draft, outcome: outcome)
+    }
+
+    private func activatePendingCrew(draft: PendingCrewDraft,
+                                     outcome: PendingCrewFirstSend.Outcome) {
+        #if os(macOS)
+        if let trust = WorkdirTrustPrompt.prompt(
+            workdir: outcome.workingDirectory,
+            home: URL(fileURLWithPath: NSHomeDirectory())) {
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: outcome.crewId, sessionId: "system",
+                text: WorkdirTrustPrompt.chatMessage(trust), senderName: "系统")
+        }
+        #endif
+        let stillSelected = selectedCrewId == draft.id
+        pendingCrew = nil
+        pendingCrewDelivery = nil
+        pendingDeliveryOutcome = nil
+        pendingDeliveryText = nil
+        if stillSelected { selectedCrewId = outcome.crewId }
+        enqueue(CaptainAutostartRequest(crewId: outcome.crewId,
+            childTitle: details[outcome.crewId]?.crew.title ?? draft.title),
+            into: captainAutostartRequests)
+        RecentWorkingDirectories.record(outcome.workingDirectory, in: .standard)
     }
 
     func openChatSearchResult(_ result: CrewMessageSearchResult, query: String) {
@@ -573,6 +606,9 @@ final class CrewStore: ObservableObject {
     func reset() {
         pendingCrew = nil
         pendingFirstSend = PendingCrewFirstSend()
+        pendingCrewDelivery = nil
+        pendingDeliveryOutcome = nil
+        pendingDeliveryText = nil
         crews = []
         lastWhiteboardMessages = [:]
         crewStatusCarriers = [:]

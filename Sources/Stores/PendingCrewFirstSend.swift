@@ -7,8 +7,10 @@ import Darwin
 @MainActor
 final class PendingCrewFirstSend {
     struct Outcome {
+        enum Delivery: Equatable { case delivered, pending }
         let crewId: String
         let workingDirectory: String
+        let delivery: Delivery
     }
 
     private(set) var sending = false
@@ -62,9 +64,21 @@ final class PendingCrewFirstSend {
             guard !crewId.isEmpty else { throw PendingCrewFirstSendError.creationFailed }
             createdCrewId = crewId
             try await attach(crewId)
-            try await post(crewId, text)
+            do {
+                try await post(crewId, text)
+            } catch {
+                if LocalWhiteboardStore.wasPreservedForRetry(error) {
+                    // The outbox owns the only copy now. Keep the crew and never
+                    // post a second copy, but do not call it delivered yet.
+                    completed = true
+                    return Outcome(crewId: crewId, workingDirectory: workdir,
+                                   delivery: .pending)
+                }
+                throw error
+            }
             completed = true
-            return Outcome(crewId: crewId, workingDirectory: workdir)
+            return Outcome(crewId: crewId, workingDirectory: workdir,
+                           delivery: .delivered)
         } catch {
             if let createdCrewId {
                 let result = rollback(createdCrewId)

@@ -170,6 +170,15 @@ final class LocalBackend: PendingCrewBackend {
         store.deleteCrew(crewId)
     }
 
+    /// Complete a spooled first message without sending a second copy.
+    func flushFirstMessageOutbox(crewId: String, text: String) throws -> Bool {
+        try whiteboard.flushSpooledMessagesReportingFailure(crewId: crewId)
+        guard !whiteboard.hasSpooledMessages(crewId: crewId) else { return false }
+        return whiteboard.list(crewId: crewId).contains {
+            $0.senderKind == "user" && $0.text == text
+        }
+    }
+
     func attachParent(crewId: String, parentCrewId: String, childKeepsBps: Int) async throws {
         // 本地 DAG 父边 —— 「家」在本地。`childKeepsBps`
         // 本地暂忽略(责任分账是后续计费的事,本次只落 DAG 边)。禁环由
