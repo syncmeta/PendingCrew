@@ -50,6 +50,21 @@ final class ExpectedLiveSessionStoreTests: XCTestCase {
             crewId: "crew", sessionId: "session", epoch: epoch()))
     }
 
+    func test_P2身份只由真实roster写入且旧行保持身份未知() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("expected-live-p2-identity-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ExpectedLiveSessionStore(directory: dir)
+        try store.activate(
+            crewId: "crew", sessionId: "captain", epoch: epoch(),
+            role: "captain", runnerKind: LocalCodingAgentKind.claudeCode.rawValue)
+
+        let record = try XCTUnwrap(store.activeRecord(
+            crewId: "crew", sessionId: "captain", epoch: epoch()))
+        XCTAssertEqual(record.role, "captain")
+        XCTAssertEqual(record.runnerKind, LocalCodingAgentKind.claudeCode.rawValue)
+    }
+
     func test_读失败必须上抛且恢复后同一告警仍可重试() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("expected-live-read-failure-\(UUID().uuidString)")
@@ -120,7 +135,7 @@ final class ExpectedLiveSessionStoreTests: XCTestCase {
                         "外部恢复完整账本后，旧 epoch 必须仍可产生人工可见告警")
     }
 
-    func test_production只把真实daemon生命周期接到live账本且不自动handoff() throws {
+    func test_production只把真实daemon生命周期接到live账本并把P2限制为硬证据() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let runner = try String(contentsOf: root.appendingPathComponent(
@@ -144,8 +159,12 @@ final class ExpectedLiveSessionStoreTests: XCTestCase {
                       "expected-live 读写失败不能被 runner 静默吞掉")
         XCTAssertTrue(host.contains("probeResult"),
                       "不能把进程读取错误冒充为已退出")
-        XCTAssertFalse(runner.contains("recoverExpectedLive"),
-                       "P1 禁止从 expected-live 自动 handoff")
+        XCTAssertTrue(daemon.contains("takeConfirmedMissingExpectedLiveRecords"),
+                      "P2 只能接收 host 已核验的旧 epoch 缺席记录")
+        XCTAssertTrue(runner.contains("CaptainAutomaticRecoveryPolicy.decide"),
+                      "自动接任必须先经过纯硬证据判定")
+        XCTAssertTrue(runner.contains("maxLaunchAttempts: 1"),
+                      "P2 自动路径不得沿用多次启动重试")
     }
 }
 #endif

@@ -17,6 +17,10 @@ final class ExpectedLiveSessionStore: @unchecked Sendable {
         var epoch: DaemonEpoch
         var generation: String
         var activatedAt: Date
+        /// P2 之后由真实 roster 写入。旧行没有这两个字段，不能借此推断它曾是
+        /// 机长或可被自动接任，仍只走 P1 的人工可见核对。
+        var role: String?
+        var runnerKind: String?
         /// 只有白板写入**和**这笔确认都落盘后才置值。它不是重启许可；若两本账
         /// 之间崩溃，宁可下次重复可见提示，也不许永久丢掉提示。
         var noticeDeliveredAt: Date?
@@ -31,6 +35,7 @@ final class ExpectedLiveSessionStore: @unchecked Sendable {
     /// 只由 daemon 的真实 run 生命周期调用。相同 owner + crew + session 的旧行被替换，
     /// 防止同一 session 再起后把前一代错误地当成仍 live。
     func activate(crewId: String, sessionId: String, epoch: DaemonEpoch,
+                  role: String? = nil, runnerKind: String? = nil,
                   now: Date = Date()) throws {
         guard !crewId.isEmpty, !sessionId.isEmpty else { return }
         try ensureDirectory()
@@ -42,6 +47,7 @@ final class ExpectedLiveSessionStore: @unchecked Sendable {
             }
             rows.append(.init(crewId: crewId, sessionId: sessionId, epoch: epoch,
                               generation: UUID().uuidString, activatedAt: now,
+                              role: role, runnerKind: runnerKind,
                               noticeDeliveredAt: nil))
             try saveLocked(rows)
         }

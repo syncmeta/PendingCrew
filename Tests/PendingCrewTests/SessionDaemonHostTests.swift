@@ -332,6 +332,38 @@ final class SessionDaemonHostTests: XCTestCase {
                      "重启后同一条旧记录不该重复提示")
     }
 
+    /// 这条没有启动 agent：pid 0 由 typed probe 明确归为 missing。P2 仅收集同时
+    /// 对得上上一 daemon epoch 的新 expected-live 机长记录；真正启动仍留给 runner
+    /// 的 claim / admission / handoff 事务，host 不会在本测试或生产这里拉起任何 session。
+    func test_P2只交出旧epoch且typedProbe确认缺席的带身份记录() throws {
+        let store = ExpectedLiveSessionStore(directory: directory)
+        let old = ExpectedLiveSessionStore.DaemonEpoch(
+            pid: 0, startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try store.activate(
+            crewId: "c1", sessionId: "captain-old", epoch: old,
+            role: "captain", runnerKind: LocalCodingAgentKind.claudeCode.rawValue)
+        let identity = SessionProcessIdentity(
+            pid: 0, pgid: 0, startTimeSeconds: 0, startTimeMicroseconds: 0,
+            command: "missing-fixture")
+        let registry = SessionProcessRegistry(
+            daemonPid: old.pid, daemonStartedAt: old.startedAt,
+            entries: [.init(sessionId: "captain-old", crewId: "c1", identity: identity)])
+        try JSONEncoder().encode(registry).write(to: paths().registry)
+
+        let host = SessionDaemonHost(paths: paths(), expectedLiveStore: store)
+        host.onCrewNotice = { _, _ in }
+        host.onExpectedLiveNotice = { _, _ in }
+        try host.start()
+        defer { host.stop() }
+
+        let records = host.takeConfirmedMissingExpectedLiveRecords()
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.sessionId, "captain-old")
+        XCTAssertEqual(records.first?.role, "captain")
+        XCTAssertTrue(host.takeConfirmedMissingExpectedLiveRecords().isEmpty,
+                      "host 的 P2 候选只能向 runner 消费一次")
+    }
+
     // MARK: -
 
     private func writeRegistry(entries: [SessionProcessRegistry.Entry]) throws {

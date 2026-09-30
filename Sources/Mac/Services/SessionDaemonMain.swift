@@ -87,6 +87,12 @@ enum SessionDaemonMain {
         let sessionHost = SessionHost(runner: runner, ownsAppUpdater: false)
         trackRoster(of: runner, into: host)
         sessionHost.start(model: model, crewStore: crewStore)
+        // host 初始化时只收集“旧 epoch + typed probe 确认 pid 缺席”的 P2 候选；
+        // runner 已就位后才交给其一次性 claim / 事务路径。没有 registry、probe 不可读、
+        // 旧 record 缺身份都不会走自动接任。
+        for record in host.takeConfirmedMissingExpectedLiveRecords() {
+            runner.recoverConfirmedMissingCaptain(record)
+        }
 
         // 排空那一行日志接到 daemon 自己那份日志文件上 —— **默认的 `NSLog` 进系统
         // 日志，落在那儿等于写了没人看**：人真会去翻的观察窗是

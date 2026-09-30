@@ -248,6 +248,9 @@ final class SessionDaemonHost {
     /// P1 only: old daemon rows are reconciled into one human-visible notice. It never starts,
     /// stops, hands off, or schedules an agent.
     private let expectedLiveStore: ExpectedLiveSessionStore?
+    /// P2 只把同时满足“旧 daemon epoch + registry typed probe = missing”的新账本行
+    /// 交给 runner。host 本身不启动 agent；runner 就位后只消费一次这份内存快照。
+    private var confirmedMissingExpectedLiveRecords: [ExpectedLiveSessionStore.Record] = []
     /// 同一轮 daemon 里白板拒写不重试、不自唤醒；下次**受控** daemon 启动才会重新
     /// 核对未确认行。两本持久账无法组成一个事务，故障方向是宁可下一轮重复可见，也
     /// 不能把提示永久吞掉。
@@ -433,6 +436,16 @@ final class SessionDaemonHost {
             pid: previous.daemonPid, startedAt: previous.daemonStartedAt)
         for entry in previous.entries {
             let probe = SessionOrphanReaper.probeResult(pid: entry.identity.pid)
+            if case .missing = probe {
+                for record in staleExpected where
+                    record.crewId == entry.crewId && record.sessionId == entry.sessionId
+                        && record.epoch == previousEpoch
+                        && !confirmedMissingExpectedLiveRecords.contains(where: {
+                            $0.generation == record.generation
+                        }) {
+                    confirmedMissingExpectedLiveRecords.append(record)
+                }
+            }
             let decision: SessionOrphanDecision?
             switch probe {
             case let .found(current):
@@ -492,6 +505,13 @@ final class SessionDaemonHost {
         // at the next controlled daemon start.
         emitUnreconciledExpectedLiveNotices(staleExpected)
         try? FileManager.default.removeItem(at: paths.registry)
+    }
+
+    /// runner 仅在已完成 daemon 初始化后调用。无法被 registry/typed probe 对齐的行从不
+    /// 出现在这里；旧账本缺 role/kind 仍由 runner 留在 P1 人工核对边界。
+    func takeConfirmedMissingExpectedLiveRecords() -> [ExpectedLiveSessionStore.Record] {
+        defer { confirmedMissingExpectedLiveRecords.removeAll() }
+        return confirmedMissingExpectedLiveRecords
     }
 
     /// No process identity to compare means "unconfirmed", never "gone". This helper has no

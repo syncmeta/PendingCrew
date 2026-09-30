@@ -72,6 +72,9 @@ final class CrewSessionRunner: ObservableObject {
     /// 只在 daemon 编排器注入。viewer / inproc 不会拿 resume ledger 冒充 live 账本。
     private let expectedLiveStore: ExpectedLiveSessionStore?
     private let expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch?
+    /// P2 的一次性自动救援资格。它必须在任何候选探测或启动之前写入持久账本，不能
+    /// 用进程内集合代替，以免 daemon 重启后重复消耗启动预算。
+    private let captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore
     /// expected-live 账本失败必须回 daemon 日志，不能静默当作已记账；它不触发任何
     /// retry、wake 或 handoff，真实 run 仍由终端生命周期本身管理。
     private let expectedLiveFailureReporter: ((String, Error) -> Void)?
@@ -322,7 +325,8 @@ final class CrewSessionRunner: ObservableObject {
          launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)? = nil,
          expectedLiveStore: ExpectedLiveSessionStore? = nil,
          expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch? = nil,
-         expectedLiveFailureReporter: ((String, Error) -> Void)? = nil) {
+         expectedLiveFailureReporter: ((String, Error) -> Void)? = nil,
+         captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore? = nil) {
         self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
         self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
         self.launchOperationOverride = launchOperationOverride
@@ -330,6 +334,8 @@ final class CrewSessionRunner: ObservableObject {
         self.expectedLiveStore = expectedLiveStore
         self.expectedLiveEpoch = expectedLiveEpoch
         self.expectedLiveFailureReporter = expectedLiveFailureReporter
+        self.captainAutomaticRecoveryClaimStore = captainAutomaticRecoveryClaimStore
+            ?? CaptainAutomaticRecoveryClaimStore()
         (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.protocolSummary
@@ -2038,7 +2044,16 @@ final class CrewSessionRunner: ObservableObject {
                 self?.lastStartError = "「\(r.displayName)」拉起失败：\(h.detail)"
             }
             run.onCaptainUnavailable = { [weak self] r, h in
-                self?.recoverUnavailableClaudeCaptain(r, health: h)
+                let trigger: CaptainAutomaticRecoveryTrigger
+                switch h.kind {
+                case .authRequired:
+                    trigger = .authenticationRequired
+                case .launchFailed:
+                    trigger = .launchFailed
+                default:
+                    return
+                }
+                self?.recoverConfirmedUnavailableCaptain(r, trigger: trigger)
             }
         // Codex turn 完成的这一拍冲刷 busy 期间的待投消息；不依赖第二条白板消息
         // 或 hub 事件来“碰醒”。Claude `isBusy` 恒 false，仍走即时投递。
@@ -2066,6 +2081,9 @@ final class CrewSessionRunner: ObservableObject {
                     crewId: crewId, sessionId: sessionId,
                     workingDirectory: workingDirectory, taskBrief: taskBrief,
                     title: title, additionalEnv: additionalEnv, role: role)
+                if r.exitReason == .failed {
+                    self?.recoverConfirmedUnavailableCaptain(r, trigger: .endedFailed)
+                }
             }
         // 本地 mention 唤醒器钉该 crew 的白板游标（在 CLI 子进程能发首条
         // post_to_crew 之前）—— 该 crew 后续定向 @ 保证被扫到。
@@ -2076,7 +2094,9 @@ final class CrewSessionRunner: ObservableObject {
             if run.status == .running, let expectedLiveStore, let expectedLiveEpoch {
                 do {
                     try expectedLiveStore.activate(
-                        crewId: crewId, sessionId: sessionId, epoch: expectedLiveEpoch)
+                        crewId: crewId, sessionId: sessionId, epoch: expectedLiveEpoch,
+                        role: role == .captain ? "captain" : "worker",
+                        runnerKind: config.kind.rawValue)
                 } catch {
                     expectedLiveFailureReporter?("启动后登记「\(sessionId)」失败", error)
                 }
@@ -2598,7 +2618,8 @@ final class CrewSessionRunner: ObservableObject {
     private func startFreshCaptain(
         detail: CrewDetail, backend: PendingCrewBackend?, openingBrief: String,
         kind: LocalCodingAgentKind, model: String?, effort: String?, title: String,
-        userInitiated: Bool
+        userInitiated: Bool,
+        maxLaunchAttempts: Int = CaptainHandoffSite.launchAttempts
     ) async throws {
         guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
         guard let ownership = CaptainHandoffOwnership.claim(isViewer: isViewer) else {
@@ -2615,44 +2636,106 @@ final class CrewSessionRunner: ObservableObject {
             openingBrief: handoffBrief,
             progressText: "将新建一位 \(kind.displayName) 机长（\(title)）；系统会先停旧机长，再以全新 conversation 启动。",
             successText: "机长交接完成：新的 \(kind.displayName) 机长已用全新 conversation 启动。",
-            userInitiated: userInitiated)
+            userInitiated: userInitiated,
+            maxLaunchAttempts: maxLaunchAttempts)
     }
 
-    /// 普通唤醒路径不像显式交接那样会 `awaitCaptainLaunchReady`：它先把 run 放进 roster，
-    /// 再由后端健康链异步报告零输出/认证失效。过去这里只留一条错误，坏掉的 Claude
-    /// 仍占着机长角色，后续任务继续投给它。这里把两条路收回同一个可回滚交接事务。
-    private func recoverUnavailableClaudeCaptain(
-        _ run: CrewSessionRun, health: CrewSessionHealth
+    /// P2 的唯一自动机长救援入口。静默、首输出迟、断链及旧 resume 记录都不会到这里；
+    /// 只有 policy 已枚举的硬失效才可尝试一次。claim 落盘失败或已消费时只留人可见
+    /// 结果，绝不以内存去重降级、绝不自唤醒或排队重试。
+    private func recoverConfirmedUnavailableCaptain(
+        _ run: CrewSessionRun, trigger: CaptainAutomaticRecoveryTrigger
     ) {
-        guard CaptainUnavailableRecovery.shouldAttempt(
-                isCaptain: run.role == .captain, kind: run.kind, health: health),
-              runs.contains(where: { $0.runID == run.runID }),
-              !captainReassignmentsInFlight.contains(run.crewId),
-              captainAutoRecoveriesInFlight.insert(run.crewId).inserted
-        else { return }
-        let crewId = run.crewId
+        requestAutomaticCaptainRecovery(
+            crewId: run.crewId,
+            sourceSessionId: run.sessionId,
+            sourceKind: run.kind,
+            isCaptain: run.role == .captain,
+            hasOtherLiveCaptain: runs.contains {
+                $0.crewId == run.crewId && $0.role == .captain
+                    && $0.status == .running && $0.runID != run.runID
+            },
+            trigger: trigger)
+    }
 
-        Task { @MainActor [weak self, weak run] in
+    /// daemon 已以 old epoch + typed probe 证明进程不存在时才调用。缺 role/kind 的旧
+    /// expected-live 行不具 P2 身份，继续停在 P1 的人工核对边界。
+    func recoverConfirmedMissingCaptain(_ record: ExpectedLiveSessionStore.Record) {
+        guard record.role == "captain",
+              let rawKind = record.runnerKind,
+              let kind = LocalCodingAgentKind(rawValue: rawKind)
+        else { return }
+        requestAutomaticCaptainRecovery(
+            crewId: record.crewId,
+            sourceSessionId: record.sessionId,
+            sourceKind: kind,
+            isCaptain: true,
+            hasOtherLiveCaptain: runs.contains {
+                $0.crewId == record.crewId && $0.role == .captain && $0.status == .running
+            },
+            trigger: .expectedLiveMissing(
+                recordIsCaptain: true,
+                recordBelongsToOldDaemonEpoch: true,
+                probe: .missing))
+    }
+
+    private func requestAutomaticCaptainRecovery(
+        crewId: String,
+        sourceSessionId: String,
+        sourceKind: LocalCodingAgentKind,
+        isCaptain: Bool,
+        hasOtherLiveCaptain: Bool,
+        trigger: CaptainAutomaticRecoveryTrigger
+    ) {
+        guard CaptainAutomaticRecoveryPolicy.decide(.init(
+                isCaptain: isCaptain, sourceKind: sourceKind,
+                hasOtherLiveCaptain: hasOtherLiveCaptain, trigger: trigger)) == .recover,
+              !captainReassignmentsInFlight.contains(crewId),
+              captainAutoRecoveriesInFlight.insert(crewId).inserted
+        else { return }
+
+        do {
+            guard try captainAutomaticRecoveryClaimStore.claim(
+                crewId: crewId, sourceSessionId: sourceSessionId
+            ) else {
+                captainAutoRecoveriesInFlight.remove(crewId)
+                return
+            }
+        } catch {
+            captainAutoRecoveriesInFlight.remove(crewId)
+            lastStartError = "机长硬失效已确认，但一次性救援资格写入失败：\(error.localizedDescription)"
+            LocalWhiteboardStore.shared.appendSessionMessage(
+                crewId: crewId, sessionId: "system",
+                text: "机长硬失效已确认，但一次性救援资格未能安全写入；不会自动接任或重试。"
+                    + "\n请由本 crew 或父 crew 机长人工执行 create_and_handoff_captain。",
+                category: "error", senderName: "系统")
+            return
+        }
+
+        Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.captainAutoRecoveriesInFlight.remove(crewId) }
-            guard let run,
-                  self.runs.contains(where: { $0.runID == run.runID }),
-                  let detail = LocalCrewStore.shared.getCrew(run.crewId)
-            else { return }
+            // claim 之后再次核对 roster，防止另一个明确交接已先产生 live captain。
+            guard !self.runs.contains(where: {
+                $0.crewId == crewId && $0.role == .captain && $0.status == .running
+                    && $0.sessionId != sourceSessionId
+            }), let detail = LocalCrewStore.shared.getCrew(crewId) else { return }
             do {
+                // executeCaptainHandoff 在停旧机长前现探候选可执行文件、认证与健康；
+                // startCaptain 仍经 #170 admission。P2 单次路径将交接启动重试上限压成 1。
                 try await self.startFreshCaptain(
                     detail: detail, backend: nil,
-                    openingBrief: "Claude 机长因认证失败或启动后无首个输出而未能接单。"
-                        + "请先在群里确认已由 Codex 接管，再从白板继续未完成任务。",
-                    kind: .codex, model: "gpt-5.6-sol", effort: "high",
-                    title: "机长", userInitiated: false)
+                    openingBrief: "Claude 机长已被确认不可用。请先在群里确认已由 Codex 接管，"
+                        + "再从白板继续未完成任务。",
+                    kind: .codex, model: nil, effort: nil,
+                    title: "机长", userInitiated: false, maxLaunchAttempts: 1)
             } catch {
-                self.lastStartError = "Claude 机长不可用，Codex 自动接任失败："
+                self.lastStartError = "Claude 机长硬失效，Codex 一次性自动接任失败："
                     + error.localizedDescription
                 LocalWhiteboardStore.shared.appendSessionMessage(
-                    crewId: run.crewId, sessionId: "system",
-                    text: "Claude 机长不可用，Codex 自动接任失败：\(error.localizedDescription)"
-                        + "\n请由本 crew 或父 crew 机长重新执行 create_and_handoff_captain。",
+                    crewId: crewId, sessionId: "system",
+                    text: "Claude 机长硬失效，Codex 一次性自动接任失败；资格已消费，不会自动重试："
+                        + "\(error.localizedDescription)\n请由本 crew 或父 crew 机长人工执行 create_and_handoff_captain。",
                     category: "error", senderName: "系统")
             }
         }
@@ -2746,7 +2829,8 @@ final class CrewSessionRunner: ObservableObject {
         resumeSessionId: String?, candidateSessionId: String?,
         model: String?, effort: String?, title: String,
         openingBrief: String, progressText: String, successText: String,
-        userInitiated: Bool
+        userInitiated: Bool,
+        maxLaunchAttempts: Int = CaptainHandoffSite.launchAttempts
     ) async throws {
         let crewId = detail.crew.id
         guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
@@ -2813,7 +2897,8 @@ final class CrewSessionRunner: ObservableObject {
                         detail: detail, backend: backend, openingBrief: openingBrief,
                         kind: kind, resumeSessionId: resumeSessionId,
                         model: model, effort: effort, title: title,
-                        userInitiated: userInitiated)
+                        userInitiated: userInitiated,
+                        maxAttempts: maxLaunchAttempts)
                 },
                 persistNew: {
                     try LocalCrewStore.shared.setCaptainAgentKindReportingFailure(
@@ -2835,7 +2920,8 @@ final class CrewSessionRunner: ObservableObject {
                         openingBrief: "刚才的机长交接失败；你已恢复为本 crew 机长。请从白板继续处理未完事项。",
                         kind: oldKind, resumeSessionId: oldResumeId,
                         model: oldModel, effort: oldEffort, title: oldTitle,
-                        userInitiated: false, admissionPriority: .emergency)
+                        userInitiated: false, admissionPriority: .emergency,
+                        maxAttempts: maxLaunchAttempts)
                 })
         } catch {
             // human UI 同样需要群聊失败回执；MCP wrapper 还会补一条最终摘要。
@@ -2857,9 +2943,11 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail, backend: PendingCrewBackend?, openingBrief: String,
         kind: LocalCodingAgentKind, resumeSessionId: String?,
         model: String?, effort: String?, title: String, userInitiated: Bool,
-        admissionPriority: AutomaticWakeAdmission.Priority = .automatic
+        admissionPriority: AutomaticWakeAdmission.Priority = .automatic,
+        maxAttempts: Int = CaptainHandoffSite.launchAttempts
     ) async throws {
-        for attempt in 0..<CaptainHandoffSite.launchAttempts {
+        precondition(maxAttempts > 0)
+        for attempt in 0..<maxAttempts {
             let collisions = runs.filter { $0.crewId == detail.crew.id && $0.role == .captain }
             try await stopAndRemoveForCaptainHandoff(collisions)
             let started = try await startCaptain(
@@ -2872,7 +2960,7 @@ final class CrewSessionRunner: ObservableObject {
                 $0.crewId == detail.crew.id && $0.role == .captain && $0.status == .running
             }
             let step = CaptainHandoffSite.step(
-                attempt: attempt, maxAttempts: CaptainHandoffSite.launchAttempts,
+                attempt: attempt, maxAttempts: maxAttempts,
                 rosterShowsRunningCaptain: started && live != nil)
             if case .confirmed = step, let live {
                 try await awaitCaptainLaunchReady(live)
@@ -2880,7 +2968,7 @@ final class CrewSessionRunner: ObservableObject {
             }
             if case .retry = step { try await Task.sleep(nanoseconds: 200_000_000) }
         }
-        throw RunnerError.captainLaunchContended(attempts: CaptainHandoffSite.launchAttempts)
+        throw RunnerError.captainLaunchContended(attempts: maxAttempts)
     }
 
     /// 交接结束（成功或失败都算）后处理被挡下的普通 @唤醒。

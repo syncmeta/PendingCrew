@@ -212,6 +212,8 @@ targets:
       - path: Sources/Stores/LocalAgentSessionStore.swift
       # daemon 的 expected-live 账本；不得由 resume / 模型记录反推。
       - path: Sources/Stores/ExpectedLiveSessionStore.swift
+      # 自动机长救援的 durable single-claim；读写异常必须 fail-closed。
+      - path: Sources/Stores/CaptainAutomaticRecoveryClaimStore.swift
       # 现有 session → 机长的可恢复交接意图。安装/重启跨进程续接，纯 Foundation。
       - path: Sources/Stores/LocalCaptainReassignmentStore.swift
       # 人类 Todo 列表 store（respond_todo 工具 + 右栏面板数据层），同自包含。
