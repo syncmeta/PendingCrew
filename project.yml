@@ -172,6 +172,7 @@ targets:
       # 待办队列的取走语义（2026-09-04：@Published 数组当队列 → 同一条命令被执行
       # 两遍）。纯 Foundation 泛型，CrewStore/SessionHost 共用。
       - path: Sources/Stores/PendingRequestQueue.swift
+      - path: Sources/Stores/PendingCrewFirstSend.swift
       # 多进程 JSON 文件 store 基座（#528：flock / 逐条 lenient / corrupt 归档），
       # 白板 + todos/approvals/wakeups 共用。自包含 Foundation。
       - path: Sources/Stores/MultiProcessJSONStore.swift

@@ -13,6 +13,180 @@ import XCTest
 /// 加新零件时的规矩：如果它是「用户能看见的东西的入口」，在下面 `wirings` 里加一行。
 final class ViewWiringTests: XCTestCase {
 
+    @MainActor
+    func testPendingFirstSendCancelAndRestartHaveNoPersistentEffects() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        defer { try? FileManager.default.removeItem(at: base) }
+        _ = PendingCrewFirstSend() // Opening a draft has no persistence operation.
+        XCTAssertTrue(ledger.listCrews().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        XCTAssertTrue(LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+            .listCrews().isEmpty)
+    }
+
+    @MainActor
+    func testPendingFirstSendRejectsMissingManualPathBeforeCreation() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        var creates = 0
+        do {
+            _ = try await PendingCrewFirstSend().commit(
+                message: "hello", selectedDirectory: base.appendingPathComponent("missing").path,
+                crewGround: root, title: "Draft", create: { _ in
+                    creates += 1
+                    return "unexpected"
+                }, attach: { _ in }, post: { _, _ in }, rollback: { _ in })
+            XCTFail("missing manual path should be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("工作目录"))
+        }
+        XCTAssertEqual(creates, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    @MainActor
+    func testPendingFirstSendPersistsOnceAndRejectsConcurrentReplay() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        let board = LocalWhiteboardStore(directory: base.appendingPathComponent("board"))
+        let backend = LocalBackend(store: ledger, whiteboard: board)
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        let sender = PendingCrewFirstSend()
+        var createCount = 0
+        var postCount = 0
+        func submit() async throws -> PendingCrewFirstSend.Outcome? {
+            try await sender.commit(message: " hello ", selectedDirectory: nil,
+                crewGround: root, title: "Draft", create: { path in
+                    createCount += 1
+                    let response = try await backend.createCrew(.make(
+                        responsibleSubjectId: LocalBackend.localSubjectId, title: "Draft",
+                        machineId: nil, workingDirectory: path, captainAgentKind: "codex",
+                        captain: .systemGenerated(templateName: nil)))
+                    return response.crewId
+                }, attach: { _ in }, post: { id, text in
+                    postCount += 1
+                    await Task.yield()
+                    _ = try await backend.postCrewMessage(crewId: id, text: text,
+                        mentions: [], replyToId: nil, localAttachments: [])
+                }, rollback: { id in _ = ledger.deleteCrew(id) })
+        }
+        let firstTask = Task { try await submit() }
+        let duplicateTask = Task { try await submit() }
+        let (a, b) = try await (firstTask.value, duplicateTask.value)
+        XCTAssertEqual([a, b].compactMap { $0 }.count, 1)
+        XCTAssertEqual(createCount, 1)
+        XCTAssertEqual(postCount, 1)
+        let crew = try XCTUnwrap(ledger.listCrews().first)
+        XCTAssertEqual(ledger.listCrews().count, 1)
+        XCTAssertEqual(LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+            .listCrews().map(\.id), [crew.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath:
+            try XCTUnwrap(ledger.getCrew(crew.id)?.crew.workingDirectory)))
+        XCTAssertEqual(board.list(crewId: crew.id).filter { $0.senderKind == "user" }.map(\.text),
+                       ["hello"])
+        let replay = try await submit()
+        XCTAssertNil(replay)
+    }
+
+    @MainActor
+    func testPendingFirstSendFailureRollsBackAndManualPathIsPreserved() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        let board = LocalWhiteboardStore(directory: base.appendingPathComponent("board"))
+        let backend = LocalBackend(store: ledger, whiteboard: board)
+        let root = base.appendingPathComponent("CrewGround", isDirectory: true)
+        let manual = base.appendingPathComponent("manual", isDirectory: true)
+        try FileManager.default.createDirectory(at: manual, withIntermediateDirectories: true)
+        let marker = manual.appendingPathComponent("keep.txt")
+        try "keep".write(to: marker, atomically: true, encoding: .utf8)
+        let defaultSender = PendingCrewFirstSend()
+        do {
+            _ = try await defaultSender.commit(message: "will fail", selectedDirectory: nil,
+                crewGround: root, title: "Draft", create: { path in
+                    let created = try await backend.createCrew(.make(
+                        responsibleSubjectId: LocalBackend.localSubjectId, title: "Draft",
+                        machineId: nil, workingDirectory: path, captainAgentKind: "codex",
+                        captain: .systemGenerated(templateName: nil)))
+                    return created.crewId
+                }, attach: { _ in }, post: { _, _ in
+                    throw PendingCrewBackendError.invalidConfig("simulated post failure")
+                }, rollback: { id in _ = ledger.deleteCrew(id) })
+            XCTFail("default post should fail")
+        } catch { }
+        XCTAssertTrue(ledger.listCrews().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        let sender = PendingCrewFirstSend()
+        var shouldFail = true
+        func submit() async throws -> PendingCrewFirstSend.Outcome? {
+            try await sender.commit(message: "retry me", selectedDirectory: manual.path,
+                crewGround: root, title: "Draft", create: { path in
+                    try await backend.createCrew(.make(
+                        responsibleSubjectId: LocalBackend.localSubjectId, title: "Draft",
+                        machineId: nil, workingDirectory: path, captainAgentKind: "codex",
+                        captain: .systemGenerated(templateName: nil))).crewId
+                }, attach: { _ in }, post: { id, text in
+                    if shouldFail {
+                        shouldFail = false
+                        throw PendingCrewBackendError.invalidConfig("simulated post failure")
+                    }
+                    _ = try await backend.postCrewMessage(crewId: id, text: text,
+                        mentions: [], replyToId: nil, localAttachments: [])
+                }, rollback: { id in _ = ledger.deleteCrew(id) })
+        }
+        do {
+            _ = try await submit()
+            XCTFail("first post should fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("simulated post failure"))
+        }
+        XCTAssertTrue(ledger.listCrews().isEmpty)
+        XCTAssertTrue(board.list(crewId: "missing").isEmpty)
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "keep")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        let retried = try await submit()
+        let outcome = try XCTUnwrap(retried)
+        let crew = try XCTUnwrap(ledger.listCrews().first)
+        XCTAssertEqual(outcome.crewId, crew.id)
+        XCTAssertEqual(ledger.getCrew(crew.id)?.crew.workingDirectory, manual.path)
+        XCTAssertEqual(board.list(crewId: crew.id).filter { $0.senderKind == "user" }.map(\.text),
+                       ["retry me"])
+    }
+
+    @MainActor
+    func testExistingLocalCreateToolKeepsItsMachineContract() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-first-send-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        let backend = LocalBackend(store: ledger, whiteboard: LocalWhiteboardStore(
+            directory: base.appendingPathComponent("board")))
+        let invalid = CreateCrewRequest.make(
+            responsibleSubjectId: LocalBackend.localSubjectId, title: "other machine",
+            machineId: "other-device", workingDirectory: base.path,
+            captainAgentKind: "codex", captain: .systemGenerated(templateName: nil))
+        do {
+            _ = try await backend.createCrew(invalid)
+            XCTFail("local backend must reject a foreign machine")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("只能用这台机器"))
+        }
+        XCTAssertTrue(ledger.listCrews().isEmpty)
+        let local = CreateCrewRequest.make(
+            responsibleSubjectId: LocalBackend.localSubjectId, title: "local tool",
+            machineId: DeviceIdentity.current, workingDirectory: base.path,
+            captainAgentKind: "codex", captain: .systemGenerated(templateName: nil))
+        let created = try await backend.createCrew(local)
+        XCTAssertNotNil(ledger.getCrew(created.crewId))
+    }
+
     /// #187: toolbar creation must enter an in-memory draft, and the first send
     /// must cross the commit boundary before either posting or starting captain.
     func testNewCrewStartsAsAnUnpersistedDraft() throws {
@@ -30,6 +204,11 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(beginBody.contains("createCrew(request"))
         XCTAssertFalse(beginBody.contains("createDirectory(at:"))
         XCTAssertFalse(beginBody.contains("postCrewMessage("))
+        XCTAssertTrue(beginBody.contains("func discardPendingCrew()"))
+        XCTAssertTrue(store.contains("if let pendingCrew, id != pendingCrew.id, !pendingCrewSending"))
+        XCTAssertTrue(store.contains("pendingFirstSend = PendingCrewFirstSend()"))
+        XCTAssertTrue(store.contains("machineId: nil,"),
+                      "Mac 本地草稿应使用本机机器，旧跨机器入口不应偷偷继承")
         let commitBody = String(store[commit.lowerBound...])
         let post = try XCTUnwrap(commitBody.range(of: "backend.postCrewMessage("))
         let start = try XCTUnwrap(commitBody.range(of: "enqueue(CaptainAutostartRequest("))

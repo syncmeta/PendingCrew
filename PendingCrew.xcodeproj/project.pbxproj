@@ -452,6 +452,7 @@
 		8E7D37A6F71551879D6BD1E9 /* Machine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D22DD7E3911B65CBC9847EB /* Machine.swift */; };
 		8EC62157A65FD8523C0F4F84 /* CrewMessageCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F00FB63CA8735D3D0923CAC /* CrewMessageCategory.swift */; };
 		8F83FDCF91A7447813D653DF /* CrewMentionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00E43DF9DE6F86E40248C41F /* CrewMentionPicker.swift */; };
+		8F86F2B3BC4B7CF23ED4D2EF /* PendingCrewFirstSend.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CD00E0EB66AD7F14044536 /* PendingCrewFirstSend.swift */; };
 		8F973B0D9E8E3141E34BA08F /* CrewDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE268DAD47EF9D09BA481621 /* CrewDirectory.swift */; };
 		8F9ABBBDC6134DE08C31A975 /* CrewHidingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E897103D805A3B2B5F32F2 /* CrewHidingTests.swift */; };
 		8FF8150E3867F28B37491DEC /* CrewMentionFilterRealWhiteboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEAB94993B551A98DDDE877C /* CrewMentionFilterRealWhiteboardTests.swift */; };
@@ -750,6 +751,7 @@
 		EB208259C8981DA12637281D /* CaptainDelegationPolicyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABA959B14709D868709A394 /* CaptainDelegationPolicyStore.swift */; };
 		EB5BDD93AAA1367E9B606B89 /* CrewMessageBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD167E62AA7A9C5365CE0D0E /* CrewMessageBatch.swift */; };
 		EB82BC6650DAEA2D09DD9785 /* PendingCrewBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3431B4DF325BB67DBBFAFA45 /* PendingCrewBackend.swift */; };
+		EBA32992ECC5366E3D5A82E5 /* PendingCrewFirstSend.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CD00E0EB66AD7F14044536 /* PendingCrewFirstSend.swift */; };
 		EBD540D2D85B3B3588E9E27F /* RemoteBackendConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F1852B21D0C3EB4BE003A0B /* RemoteBackendConfiguration.swift */; };
 		EC4F3DA5336E0AE5B890F6F8 /* SupervisionLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD015E1763DD0E6BF014EF60 /* SupervisionLease.swift */; };
 		EC862B7770804C06765F676C /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E67E96ADC228992F5A1871E8 /* ComposerView.swift */; };
@@ -1267,6 +1269,7 @@
 		D07DA70BEE572BE8E98546EA /* CrossPlatformSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPlatformSourceTests.swift; sourceTree = "<group>"; };
 		D13CB4287864AEB5C5A8FECC /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		D1A9FCA930C6487C96B9A211 /* MacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRootView.swift; sourceTree = "<group>"; };
+		D1CD00E0EB66AD7F14044536 /* PendingCrewFirstSend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCrewFirstSend.swift; sourceTree = "<group>"; };
 		D2432C5B09BB0FC752307F79 /* LocalCrewStoreOrgMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCrewStoreOrgMoveTests.swift; sourceTree = "<group>"; };
 		D32A75D450B97F384C440342 /* ProcessRoleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRoleTests.swift; sourceTree = "<group>"; };
 		D36E53A3EEA55369A75ADB82 /* McpPermissionHookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpPermissionHookTests.swift; sourceTree = "<group>"; };
@@ -2193,6 +2196,7 @@
 				E09E12D071816B5362AD7626 /* LocalWhiteboardStore.swift */,
 				3E15FE8C83DE144D94F5AE1B /* MultiProcessJSONStore.swift */,
 				267EB70067AC8947DE402A14 /* PendingCrewDataRoot.swift */,
+				D1CD00E0EB66AD7F14044536 /* PendingCrewFirstSend.swift */,
 				847C19FA2408D1E82949B72B /* PendingRequestQueue.swift */,
 				8F8AC38C7FF263C1B25B6A70 /* PermissionGrantStore.swift */,
 				161926CD9FC1B1BA4620272D /* PlaceNames.swift */,
@@ -2586,6 +2590,7 @@
 				914E165EF6B84EA90CA655B3 /* PendingCrewDataRoot.swift in Sources */,
 				F5FB1B5F727AF7F8838D05F6 /* PendingCrewDeepLinkRoute.swift in Sources */,
 				B4FBE94B9E0DB131BE3327C0 /* PendingCrewEntry.swift in Sources */,
+				EBA32992ECC5366E3D5A82E5 /* PendingCrewFirstSend.swift in Sources */,
 				3C135530D66FE140F3D2951D /* PendingCrewPlaceholderIcon.swift in Sources */,
 				3CA77DFFAB59D4AAB71CB807 /* PendingRequestQueue.swift in Sources */,
 				37D5F1DE2726AD57E59A3192 /* PermissionGrantStore.swift in Sources */,
@@ -3012,6 +3017,7 @@
 				775B015401EFF85683E86364 /* PendingCrewBackend.swift in Sources */,
 				A955E1A2D13E89EAE095EFB2 /* PendingCrewDataRoot.swift in Sources */,
 				E7143CEEEED13B7502E38E5D /* PendingCrewDataRootTests.swift in Sources */,
+				8F86F2B3BC4B7CF23ED4D2EF /* PendingCrewFirstSend.swift in Sources */,
 				37FB4CDB6399678425560797 /* PendingRequestQueue.swift in Sources */,
 				C90A8BA03E4F9ECD019C637A /* PendingRequestQueueTests.swift in Sources */,
 				BC91B5B113416EBC6EFF06D0 /* PermissionGrantStore.swift in Sources */,
