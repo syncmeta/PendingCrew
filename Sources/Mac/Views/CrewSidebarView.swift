@@ -8,7 +8,6 @@ import SwiftUI
 /// peer / fly。
 struct CrewSidebarView: View {
     @EnvironmentObject private var crewStore: CrewStore
-    @State private var showingCreateSheet = false
     @State private var showingGlobalSearch = false
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
     /// sheet 挂在侧栏顶层而不是行上：List 行会被回收，挂行上的表单可能被顶掉。
@@ -40,6 +39,14 @@ struct CrewSidebarView: View {
         VStack(spacing: 0) {
             viewModePicker
             List {
+                if let draft = crewStore.pendingCrew {
+                    Button {
+                        crewStore.selectCrew(draft.id)
+                    } label: {
+                        Label("新 crew · 待发送", systemImage: "bubble.left")
+                    }
+                    .buttonStyle(.plain)
+                }
                 if let viewer = sessionHost.viewer {
                     BackendSidebarConnectionStatus(
                         client: viewer, decision: sessionHost.orchestrationDecision)
@@ -87,7 +94,7 @@ struct CrewSidebarView: View {
                 }
                 .help("搜索所有群")
                 Button {
-                    showingCreateSheet = true
+                    crewStore.beginPendingCrew()
                 } label: {
                     Label("新建 crew", systemImage: "plus")
                 }
@@ -104,17 +111,15 @@ struct CrewSidebarView: View {
                 .disabled(crewStore.loadingList)
             }
         }
-        .sheet(isPresented: $showingCreateSheet) {
-            CreateCrewSheet()
-        }
         .sheet(isPresented: $showingGlobalSearch) {
             CrewGlobalSearchSheet()
                 .environmentObject(crewStore)
         }
-        // 行右键进来的「在这下面建子 crew」—— 与 CrewDetailInspector 那条入口同一
-        // 做法：传 parentCrewId，建完 CreateCrewSheet 自己 attachParent 挂到父之下。
-        .sheet(item: $childCrewTarget) { target in
-            CreateCrewSheet(parentCrewId: target.parentCrewId)
+        // 行右键进来的「在这下面建子 crew」走同一份内存占位，保留被右键行的父 id。
+        .onChange(of: childCrewTarget) { _, target in
+            guard let target else { return }
+            crewStore.beginPendingCrew(parentCrewId: target.parentCrewId)
+            childCrewTarget = nil
         }
         // ④ 拦住：底下还有活跃子 crew 的父不许藏（理由当场说清）。挂在侧栏顶层
         // 而不是行上 —— 同 childCrewTarget 那个 sheet，行会被 List 回收。
@@ -246,7 +251,7 @@ struct CrewSidebarView: View {
             .buttonStyle(.plain)
             Spacer(minLength: 4)
             if isLocal {
-                Button { showingCreateSheet = true } label: {
+                Button { crewStore.beginPendingCrew() } label: {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.plain)

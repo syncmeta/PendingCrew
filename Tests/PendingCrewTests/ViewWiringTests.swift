@@ -13,6 +13,30 @@ import XCTest
 /// 加新零件时的规矩：如果它是「用户能看见的东西的入口」，在下面 `wirings` 里加一行。
 final class ViewWiringTests: XCTestCase {
 
+    /// #187: toolbar creation must enter an in-memory draft, and the first send
+    /// must cross the commit boundary before either posting or starting captain.
+    func testNewCrewStartsAsAnUnpersistedDraft() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let sidebar = try String(contentsOf: root.appendingPathComponent("Sources/Mac/Views/CrewSidebarView.swift"), encoding: .utf8)
+        let center = try String(contentsOf: root.appendingPathComponent("Sources/Mac/Views/CrewCenterView.swift"), encoding: .utf8)
+        let store = try String(contentsOf: root.appendingPathComponent("Sources/Stores/CrewStore.swift"), encoding: .utf8)
+        XCTAssertTrue(sidebar.contains("crewStore.beginPendingCrew("))
+        XCTAssertTrue(center.contains("PendingCrewChatView("))
+        XCTAssertTrue(store.contains("func commitPendingCrew("))
+        let begin = try XCTUnwrap(store.range(of: "func beginPendingCrew("))
+        let commit = try XCTUnwrap(store.range(of: "func commitPendingCrew("))
+        let beginBody = String(store[begin.lowerBound..<commit.lowerBound])
+        XCTAssertFalse(beginBody.contains("createCrew(request"))
+        XCTAssertFalse(beginBody.contains("createDirectory(at:"))
+        XCTAssertFalse(beginBody.contains("postCrewMessage("))
+        let commitBody = String(store[commit.lowerBound...])
+        let post = try XCTUnwrap(commitBody.range(of: "backend.postCrewMessage("))
+        let start = try XCTUnwrap(commitBody.range(of: "enqueue(CaptainAutostartRequest("))
+        XCTAssertLessThan(post.lowerBound, start.lowerBound)
+    }
+
+
     /// (符号, 定义它的文件名, 人话说明它没接线会怎样)
     private static let wirings: [(symbol: String, definedIn: String, impact: String)] = [
         ("TodoListPresentation.newestFirst", "TodoListPresentation.swift",

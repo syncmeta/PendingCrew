@@ -1,6 +1,27 @@
 import Foundation
 import SwiftUI
 import Combine
+import Darwin
+
+struct PendingCrewDraft: Equatable {
+    let id: String
+    let title: String
+    let parentCrewId: String?
+    var workingDirectory: String?
+}
+
+private enum PendingCrewCommitError: LocalizedError {
+    case noSubject
+    case invalidWorkingDirectory
+    case creationFailed
+    var errorDescription: String? {
+        switch self {
+        case .noSubject: return "没有可代表的 subject"
+        case .invalidWorkingDirectory: return "所选工作目录已不存在或不是目录，请重新选择"
+        case .creationFailed: return "创建 crew 失败，请重试"
+        }
+    }
+}
 
 struct CrewChatSearchRequest: Identifiable, Equatable {
     let id = UUID()
@@ -30,6 +51,13 @@ final class CrewStore: ObservableObject {
     /// 本地态恒单元素 [本机]；登录态走 `GET /v1/machines`。
     @Published private(set) var machines: [Machine] = []
     @Published var selectedCrewId: String?
+    /// A new crew is only an in-memory navigation target until its first message.
+    @Published private(set) var pendingCrew: PendingCrewDraft?
+    @Published private(set) var pendingCrewSending = false
+    private var pendingCreatedCrewId: String?
+    private var pendingCommittedWorkdir: String?
+    private var pendingOwnsDirectory = false
+    private var pendingParentAttached = false
     /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
     @Published var chatSearchRequest: CrewChatSearchRequest?
     /// 点引用胶囊跳走之后**回去的那条路**（人类 Todo #132/#133）。
@@ -177,11 +205,19 @@ final class CrewStore: ObservableObject {
     // MARK: - Selection
 
     func selectCrew(_ id: String?) {
+        if let pendingCrew, id != pendingCrew.id, !pendingCrewSending {
+            self.pendingCrew = nil
+            pendingCreatedCrewId = nil
+            pendingCommittedWorkdir = nil
+            pendingOwnsDirectory = false
+            pendingParentAttached = false
+        }
         // 人自己换群 = 他走开了 —— 那条返回路作废（见 `CrewChatReturnTrail.clear`）。
         // **引用胶囊的跳转走的也是这个方法**，所以要一个显式的「这次是跳转」标记：
         // 分不开的话，第一次跳转就会把自己刚压上去的那一层清掉，返回件当场消失。
         if !navigatingByReference { chatReturnTrail.clear() }
         selectedCrewId = id
+        if id == pendingCrew?.id { return }
         guard let id else { return }
         // **记一笔「人打开过这个 crew」**（Todo #102）。在此之前 `markViewed` 全仓
         // 只有一个调用点（侧栏底部「已隐藏的群」那一行），所以「他最后一次看哪个
@@ -196,6 +232,161 @@ final class CrewStore: ObservableObject {
         // detail 进 cache 之前，先发起 fetch（不 await）。view 会按
         // `details[id]` 的 nil / 非 nil 状态切空态 / 内容态。
         Task { await refreshDetail(id) }
+    }
+
+    /// Repeated clicks keep the same draft. Nothing here touches the backend or disk.
+    func beginPendingCrew(parentCrewId: String? = nil) {
+        if let pendingCrew {
+            selectedCrewId = pendingCrew.id
+            return
+        }
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("CrewGround", isDirectory: true)
+        let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+        let name = PlaceNames.all.shuffled().first { !existing.contains($0) }
+            ?? "Crew-\(UUID().uuidString.prefix(8))"
+        let draft = PendingCrewDraft(id: "pending-\(UUID().uuidString)", title: name,
+                                     parentCrewId: parentCrewId, workingDirectory: nil)
+        pendingCrew = draft
+        selectedCrewId = draft.id
+    }
+
+    func setPendingWorkingDirectory(_ path: String?) {
+        guard var pendingCrew, !pendingCrewSending else { return }
+        pendingCrew.workingDirectory = path
+        self.pendingCrew = pendingCrew
+    }
+
+    func discardPendingCrew() {
+        guard let pendingCrew, !pendingCrewSending else { return }
+        self.pendingCrew = nil
+        pendingCreatedCrewId = nil
+        pendingCommittedWorkdir = nil
+        pendingOwnsDirectory = false
+        pendingParentAttached = false
+        if selectedCrewId == pendingCrew.id { selectedCrewId = nil }
+    }
+
+    /// The first message is the commit point. Failure rolls back this attempt;
+    /// a second click cannot overlap it or start another captain.
+    func commitPendingCrew(_ text: String, draftId: String) async throws {
+        guard let draft = pendingCrew, draft.id == draftId, !pendingCrewSending else { return }
+        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        pendingCrewSending = true
+        defer { pendingCrewSending = false }
+        guard let backend = currentBackend() else { throw PendingCrewBackendError.notAuthenticated }
+        if subjects.isEmpty { await refreshSubjects() }
+        guard pendingCrew?.id == draft.id else { throw CancellationError() }
+        guard let subjectId = subjects.first?.id else { throw PendingCrewCommitError.noSubject }
+
+        var createdDirectory: URL?
+        var createdRoot: URL?
+        let workdir: String
+        if let committed = pendingCommittedWorkdir {
+            workdir = committed
+        } else if let manual = draft.workingDirectory {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: manual, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw PendingCrewCommitError.invalidWorkingDirectory
+            }
+            workdir = manual
+        } else {
+            let root = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("CrewGround", isDirectory: true)
+            let rootExisted = FileManager.default.fileExists(atPath: root.path)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if !rootExisted { createdRoot = root }
+            var target = root.appendingPathComponent(draft.title, isDirectory: true)
+            while mkdir(target.path, 0o700) != 0 {
+                guard errno == EEXIST else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                target = root.appendingPathComponent("Crew-\(UUID().uuidString.prefix(8))", isDirectory: true)
+            }
+            createdDirectory = target
+            workdir = target.path
+        }
+        do {
+            guard pendingCrew?.id == draft.id else { throw CancellationError() }
+            let crewId: String
+            if let existing = pendingCreatedCrewId {
+                crewId = existing
+            } else {
+                let savedKind = UserDefaults.standard.string(forKey: "pendingcrew.lastCaptainAgentKind")
+                let captainKind = ["codex", "claude_code"].contains(savedKind ?? "")
+                    ? savedKind! : "codex"
+                let request = CreateCrewRequest.make(
+                    responsibleSubjectId: subjectId, title: draft.title, machineId: nil,
+                    workingDirectory: workdir, captainAgentKind: captainKind,
+                    initialTitleSource: .placeholder,
+                    captain: .systemGenerated(templateName: nil))
+                crewId = try await createCrew(request, autostartCaptain: false).crewId
+                guard !crewId.isEmpty else { throw PendingCrewCommitError.creationFailed }
+                pendingCreatedCrewId = crewId
+                pendingCommittedWorkdir = workdir
+                pendingOwnsDirectory = createdDirectory != nil
+            }
+            guard pendingCrew?.id == draft.id else { throw CancellationError() }
+            if let parent = draft.parentCrewId, !pendingParentAttached {
+                try await attachParent(crewId: crewId, parentCrewId: parent)
+                pendingParentAttached = true
+            }
+            do {
+                _ = try await backend.postCrewMessage(crewId: crewId, text: message,
+                    mentions: [], replyToId: nil, localAttachments: [])
+            } catch {
+                // The whiteboard may have durably spooled this exact message for
+                // replay. Retrying would send it twice, so that counts as committed.
+                guard LocalWhiteboardStore.wasPreservedForRetry(error) else { throw error }
+            }
+            #if os(macOS)
+            if let trust = WorkdirTrustPrompt.prompt(
+                workdir: workdir, home: URL(fileURLWithPath: NSHomeDirectory())) {
+                LocalWhiteboardStore.shared.appendSessionMessage(
+                    crewId: crewId, sessionId: "system",
+                    text: WorkdirTrustPrompt.chatMessage(trust), senderName: "系统")
+            }
+            #endif
+            let stillSelected = selectedCrewId == draft.id
+            pendingCrew = nil
+            pendingCreatedCrewId = nil
+            pendingCommittedWorkdir = nil
+            pendingOwnsDirectory = false
+            pendingParentAttached = false
+            if stillSelected { selectedCrewId = crewId }
+            enqueue(CaptainAutostartRequest(crewId: crewId,
+                childTitle: details[crewId]?.crew.title ?? draft.title), into: captainAutostartRequests)
+            RecentWorkingDirectories.record(workdir, in: .standard)
+        } catch {
+            // No first message was accepted. Roll back only the crew from this
+            // draft and our own empty directory; the user's chosen path is never
+            // removed. A retry starts fresh and cannot duplicate a captain run.
+            if let crewId = pendingCreatedCrewId {
+                _ = LocalCrewStore.shared.deleteCrew(crewId)
+                pendingCreatedCrewId = nil
+                pendingParentAttached = false
+            }
+            if pendingOwnsDirectory, let path = pendingCommittedWorkdir {
+                let url = URL(fileURLWithPath: path)
+                if (try? FileManager.default.contentsOfDirectory(atPath: path))?.isEmpty == true {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            } else if let createdDirectory,
+                      (try? FileManager.default.contentsOfDirectory(atPath: createdDirectory.path))?.isEmpty == true {
+                try? FileManager.default.removeItem(at: createdDirectory)
+            }
+            if let createdRoot,
+               (try? FileManager.default.contentsOfDirectory(atPath: createdRoot.path))?.isEmpty == true {
+                try? FileManager.default.removeItem(at: createdRoot)
+            }
+            pendingCommittedWorkdir = nil
+            pendingOwnsDirectory = false
+            if selectedCrewId != draft.id { pendingCrew = nil }
+            await refreshList()
+            throw error
+        }
     }
 
     func openChatSearchResult(_ result: CrewMessageSearchResult, query: String) {
@@ -271,7 +462,7 @@ final class CrewStore: ObservableObject {
             refreshLastWhiteboardMessages()
             // 选中项消失（比如刚被删）的话清掉。**判据在 `CrewSelectionRule`** ——
             // 「不在列表里」和「没了」不是一回事：总机组按设计永远不在列表里。
-            if CrewSelectionRule.shouldClearSelection(
+            if selectedCrewId != pendingCrew?.id && CrewSelectionRule.shouldClearSelection(
                 selected: selectedCrewId, listedIds: result.map(\.id)) {
                 selectedCrewId = nil
             }
@@ -439,6 +630,11 @@ final class CrewStore: ObservableObject {
 
     /// 清掉所有内存态（`LocalDataReset` 之类的整体重置路径用）。
     func reset() {
+        pendingCrew = nil
+        pendingCreatedCrewId = nil
+        pendingCommittedWorkdir = nil
+        pendingOwnsDirectory = false
+        pendingParentAttached = false
         crews = []
         lastWhiteboardMessages = [:]
         crewStatusCarriers = [:]

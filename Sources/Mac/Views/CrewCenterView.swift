@@ -24,7 +24,9 @@ struct CrewCenterView: View {
 
     var body: some View {
         Group {
-            if let detail = crewStore.selectedDetail {
+            if let draft = crewStore.pendingCrew, crewStore.selectedCrewId == draft.id {
+                PendingCrewChatView(draft: draft)
+            } else if let detail = crewStore.selectedDetail {
                 CrewChatView(
                     crewId: detail.crew.id,
                     crewTitle: detail.crew.title,
@@ -106,14 +108,17 @@ struct CrewCenterView: View {
         // crew 时会短暂为 nil（detail 异步加载），导致标题清空 + 工具栏项目消失再出现，
         // 表现为"切换后 toolbar 闪一下"。用 selectedCrewId（切换瞬间即非 nil）+ 列表里的
         // title 兜底，整条就稳定不抖。
-        .navigationTitle(crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? "")
+        .navigationTitle(crewStore.pendingCrew?.id == crewStore.selectedCrewId
+                         ? "新 crew"
+                         : (crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? ""))
         .searchable(text: $searchQuery, placement: .toolbar, prompt: "搜索当前群")
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
         // **不能**在这里 .toolbarBackground 刷色：那是窗口级的，会连 sidebar 那半截 toolbar
         // 一起刷白，把侧栏顶部的半透明材质盖住（"toolbar 挡住 sidebar"）。透明标题栏让
         // sidebar 透出自己的侧栏材质、detail 透出白 canvas，两边各自对，互不打架。
         .toolbar {
-            if let crewId = crewStore.selectedCrewId {
+            if let crewId = crewStore.selectedCrewId,
+               crewId != crewStore.pendingCrew?.id {
                 ToolbarItem {
                     // Todo #79 当初把它钉在最右（`.primaryAction`）；#128 人类要它挪到
                     // 那三个按钮**左侧**，所以改成普通 ToolbarItem 并**声明在最前**
@@ -241,6 +246,79 @@ struct CrewCenterView: View {
     private var placeholder: some View {
         PendingCrewPlaceholderIcon(size: 64)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The new crew has no whiteboard, directory, or sessions until Send succeeds.
+private struct PendingCrewChatView: View {
+    @EnvironmentObject private var crewStore: CrewStore
+    let draft: PendingCrewDraft
+    @State private var message = ""
+    @State private var error: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            Text("新 crew")
+                .font(.title3.weight(.semibold))
+            Text("发送第一条消息后创建")
+                .foregroundStyle(.secondary)
+            Spacer()
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                Text(draft.workingDirectory ?? "~/CrewGround/\(draft.title)")
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer()
+                if draft.workingDirectory != nil {
+                    Button("恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
+                }
+                Button("选择目录…") { chooseDirectory() }
+                    .disabled(crewStore.pendingCrewSending)
+            }
+            .font(.callout)
+            .padding(.horizontal, 18)
+            TextEditor(text: $message)
+                .frame(minHeight: 72, maxHeight: 110)
+                .padding(8)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                .padding(.horizontal, 18)
+            if let error {
+                Text(error).foregroundStyle(.red).font(.caption)
+                    .padding(.horizontal, 18)
+            }
+            HStack {
+                Button("取消") { crewStore.discardPendingCrew() }
+                Spacer()
+                Button {
+                    let text = message
+                    Task {
+                        do {
+                            try await crewStore.commitPendingCrew(text, draftId: draft.id)
+                        } catch {
+                            self.error = error.localizedDescription
+                        }
+                    }
+                } label: {
+                    if crewStore.pendingCrewSending { ProgressView().controlSize(.small) }
+                    else { Text("发送并创建") }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || crewStore.pendingCrewSending)
+            }
+            .padding(18)
+        }
+        .navigationTitle("新 crew")
+    }
+
+    private func chooseDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            crewStore.setPendingWorkingDirectory(url.path)
+        }
     }
 }
 #endif

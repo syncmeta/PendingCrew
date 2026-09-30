@@ -18,8 +18,6 @@ struct CrewDetailInspector: View {
     @State private var dagBusy = false
     @State private var dagError: String?
 
-    /// 「新建子 crew」sheet 显隐 —— 建完自动 attachParent 到本 crew 之下。
-    @State private var showingChildCrewSheet = false
     /// 「更改工作目录…」sheet（含 agent 上下文迁移，见 `ChangeWorkingDirectorySheet`）。
     @State private var showingWorkdirSheet = false
     @State private var displayedTitle = ""
@@ -45,17 +43,14 @@ struct CrewDetailInspector: View {
             ToolbarItem(placement: .principal) { Text("crew 详情").font(.headline) }
             ToolbarItem(placement: .automatic) {
                 Button {
-                    showingChildCrewSheet = true
+                    crewStore.beginPendingCrew(parentCrewId: detail.crew.id)
+                    dismiss()
                 } label: {
                     Label("新建子 crew", systemImage: "plus")
                 }
                 .help("在当前 crew 之下新建一个子 crew")
             }
             ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
-        }
-        .sheet(isPresented: $showingChildCrewSheet) {
-            CreateCrewSheet(parentCrewId: detail.crew.id)
-                .environmentObject(crewStore)
         }
         .sheet(isPresented: $showingWorkdirSheet) {
             ChangeWorkingDirectorySheet(crewId: detail.crew.id, crewTitle: detail.crew.title)
