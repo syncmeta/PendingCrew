@@ -85,16 +85,97 @@ final class TodoBlockedOnHumanTests: XCTestCase {
             agent: [Self.item(7, "卡在你身上的活",
                               status: LocalTodoItem.blockedOnHumanStatus),
                     Self.item(8, "正常在跑的活", status: "in_progress")])
-        // 顺序是**故意的**：等你回复的那几条置顶（它们各自卡着一条真在跑的活，
-        // 拖一分钟就多堵一分钟），其余按这本账原本的「新的在上面」。
-        // 两本账的 #N 各自从 1 起，混在一起按号排没有意义，所以分组排而不是全局排。
+        // 这些旧夹具没有状态转换时间，借显行回退到创建时间；同刻按来源账
+        // 稳定排序。跨账混排由下面带真实状态回应时间的用例验证。
         XCTAssertEqual(rows.map(\.item.number), [7, 3, 1],
                        """
-                       人类那本的视图没显示 agent 那本里等他回复的那条（或者没置顶）。
+                       人类那本的视图没显示 agent 那本里等他回复的那条。
                        他说的「挂到给人类的 todo 上」就是这个 —— 看不见等于没做。
                        """)
         XCTAssertEqual(rows.map(\.ledger), [.agent, .human, .human],
                        "每条必须带着它**自己那本账**的归属 —— 回应要写回原处，不能写串本")
+    }
+
+    func testHumanViewInterleavesByWhenEachItemEnteredTheHumanList() {
+        var olderAgent = LocalTodoItem(id: "agent-40", number: 40, text: "先建的 Agent 活",
+                                      status: LocalTodoItem.blockedOnHumanStatus,
+                                      createdAt: "2026-09-01T00:00:00Z")
+        olderAgent.responses = [LocalTodoResponse(id: "block-40", sessionId: "s", text: "等你拍板",
+                                                  status: LocalTodoItem.blockedOnHumanStatus,
+                                                  createdAt: "2026-09-03T00:00:00Z")]
+        var newerAgent = LocalTodoItem(id: "agent-2", number: 2, text: "后进入人类列表的 Agent 活",
+                                      status: LocalTodoItem.blockedOnHumanStatus,
+                                      createdAt: "2026-09-01T00:00:00Z")
+        newerAgent.responses = [LocalTodoResponse(id: "block-2", sessionId: "s", text: "等你回复",
+                                                  status: LocalTodoItem.blockedOnHumanStatus,
+                                                  createdAt: "2026-09-05T00:00:00Z")]
+        let human = LocalTodoItem(id: "human-1", number: 1, text: "中间新建的人类 Todo",
+                                  status: "pending", createdAt: "2026-09-04T00:00:00Z")
+
+        let rows = TodoListPresentation.rows(for: .human, human: [human], agent: [olderAgent, newerAgent])
+        XCTAssertEqual(rows.map(\.id), ["agent#2", "human#1", "agent#40"])
+        XCTAssertEqual(rows.map(\.ledger), [.agent, .human, .agent])
+    }
+
+    func testChiefHumanViewUsesTheSameEntryOrderAcrossCrews() {
+        var blocked = LocalTodoItem(id: "agent", number: 9, text: "等待人类",
+                                    status: LocalTodoItem.blockedOnHumanStatus,
+                                    createdAt: "2026-09-01T00:00:00Z")
+        blocked.responses = [LocalTodoResponse(id: "block", sessionId: "s", text: "请拍板",
+                                               status: LocalTodoItem.blockedOnHumanStatus,
+                                               createdAt: "2026-09-03T00:00:00Z")]
+        let human = LocalTodoItem(id: "human", number: 1, text: "稍后新建",
+                                  status: "pending", createdAt: "2026-09-04T00:00:00Z")
+        let rows = TodoListPresentation.chiefRows(ledger: .human, sources: [
+            .init(crewId: "a", title: "A", human: [], agent: [blocked]),
+            .init(crewId: "b", title: "B", human: [human], agent: []),
+        ])
+        XCTAssertEqual(rows.map(\.crewId), ["b", "a"])
+        XCTAssertEqual(rows.map(\.ledger), [.human, .agent])
+    }
+
+    func testLaterReplyDoesNotMoveAnAlreadyBlockedItemToTheTop() {
+        var blocked = LocalTodoItem(id: "agent", number: 9, text: "等待人类",
+                                    status: LocalTodoItem.blockedOnHumanStatus,
+                                    createdAt: "2026-09-01T00:00:00Z",
+                                    updatedAt: "2026-09-06T00:00:00Z")
+        blocked.responses = [
+            LocalTodoResponse(id: "block", sessionId: "s", text: "请拍板",
+                              status: LocalTodoItem.blockedOnHumanStatus,
+                              createdAt: "2026-09-03T00:00:00Z"),
+            LocalTodoResponse(id: "reply", sessionId: "s", text: "补充资料",
+                              createdAt: "2026-09-06T00:00:00Z"),
+        ]
+        let human = LocalTodoItem(id: "human", number: 1, text: "中间新建",
+                                  status: "pending", createdAt: "2026-09-04T00:00:00Z")
+        let rows = TodoListPresentation.rows(for: .human, human: [human], agent: [blocked])
+        XCTAssertEqual(rows.map(\.id), ["human#1", "agent#9"])
+    }
+
+    func testRepeatedBlockedStatusKeepsEntryTimeButReentryUsesNewTransition() {
+        var blocked = LocalTodoItem(id: "agent", number: 9, text: "等待人类",
+                                    status: LocalTodoItem.blockedOnHumanStatus,
+                                    createdAt: "2026-09-01T00:00:00Z")
+        let first = LocalTodoResponse(id: "first", sessionId: "s", text: "首次等待",
+                                      status: LocalTodoItem.blockedOnHumanStatus,
+                                      createdAt: "2026-09-03T00:00:00Z")
+        let repeated = LocalTodoResponse(id: "repeat", sessionId: "s", text: "仍在等待",
+                                         status: LocalTodoItem.blockedOnHumanStatus,
+                                         createdAt: "2026-09-05T00:00:00Z")
+        let human = LocalTodoItem(id: "human", number: 1, text: "中间新建",
+                                  status: "pending", createdAt: "2026-09-04T00:00:00Z")
+        blocked.responses = [first, repeated]
+        XCTAssertEqual(TodoListPresentation.rows(for: .human, human: [human], agent: [blocked])
+            .map(\.id), ["human#1", "agent#9"])
+
+        blocked.responses.append(LocalTodoResponse(id: "resume", sessionId: "s", text: "继续做",
+                                                   status: "in_progress",
+                                                   createdAt: "2026-09-06T00:00:00Z"))
+        blocked.responses.append(LocalTodoResponse(id: "reenter", sessionId: "s", text: "再次等待",
+                                                   status: LocalTodoItem.blockedOnHumanStatus,
+                                                   createdAt: "2026-09-07T00:00:00Z"))
+        XCTAssertEqual(TodoListPresentation.rows(for: .human, human: [human], agent: [blocked])
+            .map(\.id), ["agent#9", "human#1"])
     }
 
     /// 反面：**没在等他的 agent 条目不许挤进他的视图**。

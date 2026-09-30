@@ -287,10 +287,8 @@ enum TodoListPresentation {
     /// `TodoBlockedOnHumanTests.testFlippingToBlockedWritesNothingToTheHumanLedger`
     /// 量的就是这件事本身 —— 翻牌前后**人类那本的条数一个字不变**。
     ///
-    /// ## 顺序是故意的
-    ///
-    /// 等他回复的置顶（每一条都堵着一件真在跑的活），其余按这本账原本的「新的在上面」。
-    /// **不做全局按号排**：两本账的 #N 各自从 1 起，混着排没有意义。
+    /// 人类视图按进入这张列表的时间排序：人类条目看创建时间，借显行看最近一次
+    /// 翻到 blocked 的回应时间。两本账的 #N 各自从 1 起，不能跨账比较编号。
     struct Row: Identifiable, Equatable {
         /// 这条**属于哪本账** —— 回应/翻牌要写回原处。少了它就会写串本：
         /// 两本账的 #1 是两件不同的事。
@@ -325,8 +323,15 @@ enum TodoListPresentation {
                          ledger: $0.ledger, item: $0.item)
             }
         }.sorted {
-            if $0.item.createdAt != $1.item.createdAt {
-                return $0.item.createdAt > $1.item.createdAt
+            let left = ledger == .human
+                ? humanEntryDate(Row(ledger: $0.ledger, item: $0.item))
+                : CrewTimestamp.parse($0.item.createdAt)
+            let right = ledger == .human
+                ? humanEntryDate(Row(ledger: $1.ledger, item: $1.item))
+                : CrewTimestamp.parse($1.item.createdAt)
+            if left != right { return (left ?? .distantPast) > (right ?? .distantPast) }
+            if $0.ledger != $1.ledger {
+                return $0.ledger == .agent
             }
             if $0.crewId != $1.crewId { return $0.crewId < $1.crewId }
             return $0.item.number > $1.item.number
@@ -343,12 +348,32 @@ enum TodoListPresentation {
     static func humanFacingRows(
         human: [LocalTodoItem], agent: [LocalTodoItem]
     ) -> [Row] {
-        let waiting = newestFirst(agent.filter { $0.status == LocalTodoItem.blockedOnHumanStatus })
-        return waiting.map { Row(ledger: .agent, item: $0) }
-            + newestFirst(human).map { Row(ledger: .human, item: $0) }
+        let waiting = agent.filter { $0.status == LocalTodoItem.blockedOnHumanStatus }
+        return (waiting.map { Row(ledger: .agent, item: $0) }
+            + human.map { Row(ledger: .human, item: $0) }).sorted {
+                let left = humanEntryDate($0)
+                let right = humanEntryDate($1)
+                if left != right { return (left ?? .distantPast) > (right ?? .distantPast) }
+                if $0.ledger != $1.ledger { return $0.ledger == .agent }
+                return $0.item.number > $1.item.number
+            }
     }
 
-    /// 面板/详细窗口**这一屏的行** —— 药丸选哪本，就走哪条。视图只调这一个。
+    private static func humanEntryDate(_ row: Row) -> Date? {
+        var stamp = row.item.createdAt
+        if row.ledger == .agent {
+            // A repeated blocked response leaves the item on this list; only a transition
+            // away and back starts a new interval. Responses without status do neither.
+            for response in row.item.responses.reversed() {
+                guard let status = response.status else { continue }
+                guard status == LocalTodoItem.blockedOnHumanStatus else { break }
+                stamp = response.createdAt
+            }
+        }
+        return CrewTimestamp.parse(stamp)
+    }
+
+    /// 概览面板**这一屏的行** —— 药丸选哪本，就走哪条。
     static func rows(
         for ledger: TodoLedger, human: [LocalTodoItem], agent: [LocalTodoItem]
     ) -> [Row] {
