@@ -775,18 +775,47 @@ final class LocalCrewStore {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let pages = [
                 "SKILL.md": """
+                ---
+                name: welcome-crew
+                description: Answer PendingCrew usage questions from this crew's curated offline public documents; use for onboarding and crew collaboration questions.
+                ---
+
                 # PendingCrew 怎么用
 
-                先读 INDEX.md；只按当前问题检索并打开相关页，不要把整套文档注入提示词。
-                这里是离线入门资料。遇到版本差异，以当前界面和仓库最新公开文档为准。
-                不把 docs/internal、个人数据或群聊记录当作公开操作指南。
+                先读 [INDEX.md](INDEX.md)，只检索并打开当前问题相关的页，不把全文装进提示词。
+                README-source-v*.md 是公开快速开始摘录；architecture-source-v*.md 只回答架构问题。读取版本号最高的一页。
+                资料有来源和快照版本。遇到差异，以当前程序和维护中的公开文档为准；不把 docs/internal、个人数据或群聊记录当作公开指南。
                 """,
                 "INDEX.md": """
                 # 离线索引
 
-                - 入门：先列出 `guide-v*.md`，读取版本号最高的一页。当前首版是 guide-v1.md。
+                - 开始使用、建机组、布置 To Do：README-source-v*.md（公开 README 的摘录）。
+                - 为什么机组与白板能协作：architecture-source-v*.md（公开架构导览的摘录）。
+                - 本机演示 DAG：先列出 `guide-v*.md`，读取版本号最高的一页。
                 - 找一个概念：在此目录运行 `rg -n '关键词' --glob '*.md' .`，再按需打开命中的页。
-                - 文档更新：安装包增加版本化的新页面；现有文件只补缺失，不覆盖你的修改。升级后读取版本号最高的页面。
+                - 来源与更新：摘录来自仓库 README.md、docs/architecture.md 的 e427fb2 快照。维护公开文档时同步增添 v2、v3 等新版页面；已有文件只补缺失、不覆盖修改。升级后读版本号最高的页面，并核对公开原文。
+                """,
+                "README-source-v1.md": """
+                # 公开快速开始摘录
+
+                Source: README.md，`## 快速开始`；snapshot: e427fb2（2026-09-30）。这是短摘录，不是完整 README。
+
+                > 要做什么事就拉一个群（这里的一个个群，叫机组/Crew）然后在群里说你想做什么。
+
+                > 一个机组可以有父，可以有子，有机长，有 Agent 成员。
+
+                > 布置工作时，把输入框左侧的 To Do 图标点亮，就可以一条条布置工作了。
+
+                使用要求请查当前公开 README.md 的“系统要求”；安装和登录状态以本机实际情况为准。
+                """,
+                "architecture-source-v1.md": """
+                # 公开架构导览摘录
+
+                Source: docs/architecture.md，`## 0. 三十秒版本`；snapshot: e427fb2（2026-09-30）。只摘当前协作模型；原文含有带日期的历史分析，阅读时应核对其基准。
+
+                > 在你自己的机器上把 `claude` / `codex` 这两个 CLI 当**子进程**拉起来，让它们围着一块
+                > 共享的**群聊白板**协作。白板是磁盘上的一堆 JSON 文件；agent 通过一个 **MCP server**
+                > 读写它，而那个 MCP server 就是 **app 自己的二进制换个 argv 再跑一遍**。
                 """,
                 "guide-v1.md": """
                 # 入门

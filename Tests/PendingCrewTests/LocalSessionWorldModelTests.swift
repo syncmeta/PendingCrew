@@ -37,6 +37,27 @@ final class LocalSessionWorldModelTests: XCTestCase {
         XCTAssertTrue(out.contains("continue_work(note)"), "explicit one-shot continuation lease reaches agents")
     }
 
+    func testWelcomeCrewWorldModelDiscoversLocalGuideWithoutInliningIt() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("welcome-discovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "---\nname: welcome-crew\ndescription: Local PendingCrew help.\n---\nSECRET_PAGE_BODY"
+            .write(to: directory.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        var context = sampleContext()
+        context.workingDirectory = directory.path
+        for id in ["pendingcrew-welcome", "pendingcrew-welcome-demo",
+                   "pendingcrew-welcome-questions", "pendingcrew-welcome-child"] {
+            context.crewId = id
+            let output = try renderer.render(context)
+            XCTAssertTrue(output.contains("SKILL.md"))
+            XCTAssertTrue(output.contains(directory.path))
+            XCTAssertFalse(output.contains("SECRET_PAGE_BODY"), "discovery must stay a short pointer")
+        }
+        context.crewId = "local-unrelated"
+        XCTAssertFalse(try renderer.render(context).contains("SKILL.md"))
+    }
+
     func testCaptainRunnerPreferencesAndCapabilitiesReachPrompt() throws {
         var context = sampleContext()
         context.captainRunnerBlock = "Claude Code：需要登录；Codex：已登录 · 正常。以下情况中新机组机长优先用 Codex：多文件测试"

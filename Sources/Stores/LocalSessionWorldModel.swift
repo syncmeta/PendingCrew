@@ -52,7 +52,19 @@ struct LocalSessionWorldModel {
 
     /// 渲染好的世界观 markdown，可作为 `--append-system-prompt-file` 喂给 claude。
     func render(_ ctx: Context) throws -> String {
-        try loader.render(name: "session-world-model", locale: ctx.locale, vars: buildVars(ctx))
+        var markdown = try loader.render(name: "session-world-model", locale: ctx.locale, vars: buildVars(ctx))
+        // Both Claude and Codex launch through this renderer. Give only the short local
+        // entrypoint, and only to the seeded tutorial crews; never inline the guide.
+        let welcomeIds: Set<String> = ["pendingcrew-welcome", "pendingcrew-welcome-demo",
+                                       "pendingcrew-welcome-questions", "pendingcrew-welcome-child"]
+        if welcomeIds.contains(ctx.crewId), !ctx.workingDirectory.isEmpty {
+            let skill = URL(fileURLWithPath: ctx.workingDirectory).appendingPathComponent("SKILL.md")
+            if FileManager.default.fileExists(atPath: skill.path) {
+                markdown += "\n\n本机 PendingCrew 入门资料入口：`\(skill.path)`。遇到使用方法问题时先读短 SKILL.md，"
+                    + "再按 INDEX.md 检索相关公开资料；不要预载全部文档。"
+            }
+        }
+        return markdown
     }
 
     /// 暴露给单测：只测 var 映射不碰文件。

@@ -20,6 +20,8 @@ final class LocalCrewStoreTests: XCTestCase {
         let skill = URL(fileURLWithPath: workdir).appendingPathComponent("SKILL.md")
         let index = URL(fileURLWithPath: workdir).appendingPathComponent("INDEX.md")
         XCTAssertTrue(FileManager.default.fileExists(atPath: skill.path))
+        let skillText = try String(contentsOf: skill, encoding: .utf8)
+        XCTAssertTrue(skillText.hasPrefix("---\nname: welcome-crew\ndescription:"))
         let indexText = try String(contentsOf: index, encoding: .utf8)
         XCTAssertTrue(indexText.contains("rg -n"))
         XCTAssertFalse(indexText.contains("docs/internal"))
@@ -28,7 +30,35 @@ final class LocalCrewStoreTests: XCTestCase {
             .appendingPathComponent("guide-v1.md"), encoding: .utf8)
         XCTAssertTrue(guide.contains("两条父边"), "the indexed offline page must answer the DAG query")
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: workdir)),
-                       Set(["SKILL.md", "INDEX.md", "guide-v1.md"]))
+                       Set(["SKILL.md", "INDEX.md", "guide-v1.md",
+                            "README-source-v1.md", "architecture-source-v1.md"]))
+        let readmeSource = try String(contentsOf: URL(fileURLWithPath: workdir)
+            .appendingPathComponent("README-source-v1.md"), encoding: .utf8)
+        let architectureSource = try String(contentsOf: URL(fileURLWithPath: workdir)
+            .appendingPathComponent("architecture-source-v1.md"), encoding: .utf8)
+        XCTAssertTrue(readmeSource.contains("Source: README.md"))
+        XCTAssertTrue(readmeSource.contains("一个机组可以有父，可以有子"))
+        XCTAssertTrue(architectureSource.contains("Source: docs/architecture.md"))
+        XCTAssertTrue(architectureSource.contains("共享的**群聊白板**协作"))
+        XCTAssertFalse(readmeSource.contains("docs/internal/"))
+        XCTAssertFalse(architectureSource.contains("docs/internal/"))
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let publicReadme = try String(contentsOf: repository.appendingPathComponent("README.md"), encoding: .utf8)
+        let publicArchitecture = try String(contentsOf: repository.appendingPathComponent("docs/architecture.md"), encoding: .utf8)
+        XCTAssertTrue(publicReadme.contains("一个机组可以有父，可以有子，有机长，有 Agent 成员。"))
+        XCTAssertTrue(publicReadme.contains("布置工作时，把输入框左侧的 To Do 图标点亮"))
+        XCTAssertTrue(publicArchitecture.contains("共享的**群聊白板**协作。白板是磁盘上的一堆 JSON 文件"))
+        let search = Process()
+        search.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+        search.arguments = ["-R", "-n", "一个机组可以有父", workdir]
+        let results = Pipe()
+        search.standardOutput = results
+        try search.run()
+        search.waitUntilExit()
+        XCTAssertEqual(search.terminationStatus, 0)
+        let hits = String(data: results.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertTrue(hits.contains("README-source-v1.md"), "offline search must reach the public excerpt")
 
         try "user edit".write(to: index, atomically: true, encoding: .utf8)
         let existing = store.createCrew(req(title: "用户机组")).crewId
