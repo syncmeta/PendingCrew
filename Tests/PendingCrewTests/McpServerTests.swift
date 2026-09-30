@@ -15,14 +15,16 @@ final class McpServerTests: XCTestCase {
     /// 这不是假设：`ask` 改成写人类 Todo（#75 ①）之后，这个工厂因为没传 `todos:`
     /// 而在真数据目录里造出了 `c.human-todos.json`（crewId "c" 是测试 id）。
     /// **加 store 的时候顺手在这儿也加一行**，否则下一次同样静默发生。
-    private func server(_ dir: URL, isCaptain: Bool = false) -> McpServer {
+    private func server(_ dir: URL, isCaptain: Bool = false,
+                        structuredPost: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: dir),
                   control: LocalCrewControlStore(directory: dir),
                   crewId: "c", sessionId: "sess-1", isCaptain: isCaptain,
                   quotaDirectory: dir,
                   todos: LocalTodoStore(directory: dir),
                   plans: CockpitPlanStore(directory: dir),
-                  wakeups: LocalWakeupStore(directory: dir))
+                  wakeups: LocalWakeupStore(directory: dir),
+                  requiresStructuredPost: structuredPost)
     }
     private func callRenameCrew(_ s: McpServer, name: String) -> String {
         s.handleLine("""
@@ -67,6 +69,43 @@ final class McpServerTests: XCTestCase {
         XCTAssertFalse(r.contains("ERROR"), r)
         XCTAssertTrue(r.contains("category") && r.contains("note"), r)
         XCTAssertEqual(s.store.list(crewId: "c").map(\.text), ["没有分类"])
+    }
+
+    func testStructuredPostRejectsMissingCategoryWithoutWriting() {
+        let dir = tempDir()
+        let s = server(dir, structuredPost: true)
+        let r = s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"message":"new call"}}}"#) ?? ""
+        XCTAssertTrue(r.contains("ERROR") && r.contains("category"), r)
+        XCTAssertTrue(s.store.list(crewId: "c").isEmpty)
+    }
+
+    func testStructuredPostRequiresHeadlineOnlyForThreeCategories() {
+        let dir = tempDir()
+        let s = server(dir, structuredPost: true)
+        for category in ["human_todo", "question", "blocked"] {
+            let r = s.handleLine("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+              "name":"post_to_crew","arguments":{"message":"new call","category":"\(category)","headline":"  "}}}
+            """) ?? ""
+            XCTAssertTrue(r.contains("ERROR") && r.contains("headline"), "\(category): \(r)")
+        }
+        XCTAssertTrue(s.store.list(crewId: "c").isEmpty)
+        for category in ["ack", "note"] {
+            let r = s.handleLine("""
+            {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+              "name":"post_to_crew","arguments":{"message":"short","category":"\(category)"}}}
+            """) ?? ""
+            XCTAssertFalse(r.contains("ERROR"), "\(category): \(r)")
+        }
+        XCTAssertEqual(s.store.list(crewId: "c").map(\.category), ["ack", "note"])
+    }
+
+    func testStructuredBatchValidationIsAtomic() {
+        let dir = tempDir()
+        let s = server(dir, structuredPost: true)
+        let r = s.handleLine(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"messages":[{"text":"first","category":"note"},{"text":"second","category":"question"}]}}}"#) ?? ""
+        XCTAssertTrue(r.contains("ERROR") && r.contains("第 2 条") && r.contains("headline"), r)
+        XCTAssertTrue(s.store.list(crewId: "c").isEmpty)
     }
 
     func testPostSchemaRequiresCategoryInSingleAndBatch() throws {

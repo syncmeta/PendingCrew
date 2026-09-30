@@ -2,6 +2,34 @@ import XCTest
 
 
 final class SessionConfigTests: XCTestCase {
+    func testStructuredPostFlagOnlyAppearsForOptedInHelperLaunches() throws {
+        func claudeArgs(_ enabled: Bool) throws -> [String] {
+            let files = LocalSessionLaunch.prepareLocalCommsConfig(
+                crewId: "contract-probe", sessionId: UUID().uuidString,
+                structuredPost: enabled)
+            let path = try XCTUnwrap(files.mcp)
+            defer {
+                if let settings = files.settings { try? FileManager.default.removeItem(atPath: settings) }
+                try? FileManager.default.removeItem(atPath: path)
+            }
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let servers = try XCTUnwrap(root["mcpServers"] as? [String: Any])
+            let crew = try XCTUnwrap(servers["crew"] as? [String: Any])
+            return try XCTUnwrap(crew["args"] as? [String])
+        }
+        func codexArgs(_ enabled: Bool) throws -> [String] {
+            let servers = try XCTUnwrap(LocalSessionLaunch.codexMcpServers(
+                crewId: "contract-probe", sessionId: UUID().uuidString,
+                structuredPost: enabled))
+            let crew = try XCTUnwrap(servers["crew"] as? [String: Any])
+            return try XCTUnwrap(crew["args"] as? [String])
+        }
+        XCTAssertFalse(try claudeArgs(false).contains("--structured-post"))
+        XCTAssertTrue(try claudeArgs(true).contains("--structured-post"))
+        XCTAssertFalse(try codexArgs(false).contains("--structured-post"))
+        XCTAssertTrue(try codexArgs(true).contains("--structured-post"))
+    }
     func testLaunchPreferencesKeepNativeModelAndRememberSessionFastChoice() throws {
         let suiteName = UUID().uuidString
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))

@@ -58,6 +58,8 @@ public struct SessionConfig: Sendable, Equatable, Codable {
     public var wakeEntryId: String?
     /// Resume an existing agent session by id.
     public var resumeSessionId: String?
+    /// Persisted per conversation. Nil is the legacy advisory post contract.
+    public var structuredPost: Bool?
     /// 新起 session 时**由我们指定**的 agent 侧会话号 → claude `--session-id <uuid>`
     /// （Todo #28）。自己指定就能立刻记账，重启直接 `--resume` 同一个 id，不用去猜
     /// `~/.claude/projects` 里哪个日志是它的。与 `resumeSessionId` 互斥（续跑时不带）。
@@ -98,6 +100,7 @@ public struct SessionConfig: Sendable, Equatable, Codable {
         self.fastMode = fastMode
         self.initialPrompt = initialPrompt
         self.resumeSessionId = resumeSessionId
+        self.structuredPost = nil
         self.permissionMode = permissionMode
         self.isolation = isolation
         self.appendSystemPromptFile = appendSystemPromptFile

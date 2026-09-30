@@ -19,6 +19,9 @@ final class McpServer {
     /// 机长 session 标记（helper `--captain` flag 传入）—— 解锁机长专用工具
     /// `answer_decision`（chunk2 T4）。worker session 看不到也调不动。
     let isCaptain: Bool
+    /// New sessions opt in at launch. Existing helpers and resumed legacy sessions keep
+    /// the advisory contract so an upgrade cannot silently discard their messages.
+    let requiresStructuredPost: Bool
     /// 本 session 的显示 label（helper `--label` flag 传入；如「机长」/「Claude Code
     /// · abc123」）。`post_to_crew` 写白板时带上 → agent 看的白板不再裸 uuid。
     /// nil（未传 label / 旧调用）→ 渲染退回 `session:<id>`，保持兼容。
@@ -97,12 +100,14 @@ final class McpServer {
          attachmentRoot: URL? = nil,
          agentSessions: LocalAgentSessionStore? = nil,
          outputProbe: SessionOutputProbe? = nil,
-         buildWatch: HelperBuildWatch? = nil) {
+         buildWatch: HelperBuildWatch? = nil,
+         requiresStructuredPost: Bool = false) {
         self.store = store
         self.control = control
         self.crewId = crewId
         self.sessionId = sessionId
         self.isCaptain = isCaptain
+        self.requiresStructuredPost = requiresStructuredPost
         self.sessionLabel = sessionLabel
         self.quotaDirectory = quotaDirectory ?? LocalWhiteboardStore.defaultDirectory
         // **没显式传就跟着注入的白板目录走**，别静默退回真实数据根 ——
@@ -199,9 +204,15 @@ final class McpServer {
                                         "evidence": ["type": "string"],
                                     ],
                                     "required": ["text", "category"],
+                                    "allOf": requiresStructuredPost ? [[
+                                        "if": ["properties": ["category": ["enum": ["human_todo", "question", "blocked"]]]],
+                                        "then": ["required": ["headline"], "properties": ["headline": ["pattern": "\\S"]]],
+                                    ]] : [],
                                 ],
                             ],
-                            "headline": ["type": "string", "description": "`human_todo` / `question` / `blocked` 请写一句结论；当前阶段缺失或空白时消息照发，回执会提醒。`ack` / `note` 等短消息不用为此凑标题。超过 8 行的消息默认收起，给出 headline 时收起态优先显示它；没给时仍按旧消息规则从正文猜。分条发送时 headline 写在各条 `messages` 项里。"],
+                            "headline": ["type": "string", "description": requiresStructuredPost
+                                ? "`human_todo` / `question` / `blocked` 必须写非空结论；`ack` / `note` 不要求。超过 8 行的消息默认收起，给出 headline 时收起态优先显示它；没给时仍按旧消息规则从正文猜。分条发送时 headline 写在各条 `messages` 项里。"
+                                : "`human_todo` / `question` / `blocked` 请写一句结论；当前旧会话缺失或空白时消息照发，回执会提醒。`ack` / `note` 不要求。"],
                             "category": ["type": "string", "enum": CrewMessageCategory.agentSelectable.map(\.rawValue), "description": "必填。这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的也要明确选：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。旧进程直调的旧值仍由运行时兼容。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
                             "todo_reference": ["type": "object", "description": "总机组只读引用执行组已有 Todo；source_crew 填 directory 的机组短号，ledger 填 agent/human，number 填来源账本编号。会当场核实并记录来源 crew 与稳定条目 ID；不创建或更改 Todo。", "properties": [
@@ -242,6 +253,10 @@ final class McpServer {
                             ["required": ["message", "category"]],
                             ["required": ["messages"]],
                         ],
+                        "allOf": requiresStructuredPost ? [[
+                            "if": ["required": ["message"], "properties": ["category": ["enum": ["human_todo", "question", "blocked"]]]],
+                            "then": ["required": ["headline"], "properties": ["headline": ["pattern": "\\S"]]],
+                        ]] : [],
                     ],
                 ],
                 [
@@ -753,6 +768,12 @@ final class McpServer {
                 // **先全部校验，再逐条执行**：分条之后「一半成功」是新的失败形态，
                 // 而它最容易被读成「全成了」。任何一条不合法就整批拒、一条不发。
                 for e in entries {
+                    if requiresStructuredPost,
+                       let why = CrewMessageHeadline.structuredPostRefusal(
+                           category: e.args["category"] as? String,
+                           headline: e.args["headline"] as? String) {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
+                    }
                     if crewId == LocalCrew.chiefCrewId, e.args["todo"] != nil {
                         return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条："
                             + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
@@ -797,6 +818,12 @@ final class McpServer {
                 return toolResult(id: id, text: ([receipt] + missingCategoryHints)
                     .joined(separator: "\n"))
             case .single:
+                if requiresStructuredPost,
+                   let why = CrewMessageHeadline.structuredPostRefusal(
+                       category: args["category"] as? String,
+                       headline: args["headline"] as? String) {
+                    return toolResult(id: id, text: "ERROR: " + why)
+                }
                 break
             }
             let once = postToCrewOnce(args: args)

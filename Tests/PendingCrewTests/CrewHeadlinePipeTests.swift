@@ -34,14 +34,15 @@ final class CrewHeadlinePipeTests: XCTestCase {
         return Fixture(whiteboards: wb, crewId: crew)
     }
 
-    private func server(_ f: Fixture) -> McpServer {
+    private func server(_ f: Fixture, structuredPost: Bool = false) -> McpServer {
         McpServer(store: LocalWhiteboardStore(directory: f.whiteboards),
                   control: LocalCrewControlStore(directory: f.whiteboards),
                   crewId: f.crewId, sessionId: "sess-1",
                   isCaptain: true, sessionLabel: "机长",
                   quotaDirectory: f.whiteboards,
                   todos: LocalTodoStore(directory: f.whiteboards, ledger: .agent),
-                  plans: CockpitPlanStore(directory: f.whiteboards))
+                  plans: CockpitPlanStore(directory: f.whiteboards),
+                  requiresStructuredPost: structuredPost)
     }
 
     private func post(_ s: McpServer, _ arguments: String) -> String {
@@ -170,8 +171,8 @@ final class CrewHeadlinePipeTests: XCTestCase {
         wall.replacingOccurrences(of: "\n", with: "\\n")
     }
 
-    func test_当前阶段单条和分条schema不硬性要求headline() throws {
-        let raw = try XCTUnwrap(server(fixture()).handleLine(
+    func test_新版schema只对三类消息条件要求headline() throws {
+        let raw = try XCTUnwrap(server(fixture(), structuredPost: true).handleLine(
             #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
         let data = try XCTUnwrap(raw.data(using: .utf8))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -191,6 +192,31 @@ final class CrewHeadlinePipeTests: XCTestCase {
         let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
         let items = try XCTUnwrap(messages["items"] as? [String: Any])
         XCTAssertFalse((items["required"] as? [String])?.contains("headline") == true)
+        for rule in [schema, items] {
+            let conditions = try XCTUnwrap(rule["allOf"] as? [[String: Any]])
+            let condition = try XCTUnwrap(conditions.first)
+            let then = try XCTUnwrap(condition["then"] as? [String: Any])
+            XCTAssertTrue((then["required"] as? [String])?.contains("headline") == true)
+            let fields = try XCTUnwrap(then["properties"] as? [String: Any])
+            let headline = try XCTUnwrap(fields["headline"] as? [String: Any])
+            XCTAssertEqual(headline["pattern"] as? String, #"\S"#)
+        }
+    }
+
+    func test_旧会话工具表不加headline硬闸() throws {
+        let raw = try XCTUnwrap(server(fixture()).handleLine(
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+        let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+        XCTAssertTrue((schema["allOf"] as? [[String: Any]] ?? []).isEmpty)
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
+        let items = try XCTUnwrap(messages["items"] as? [String: Any])
+        XCTAssertTrue((items["allOf"] as? [[String: Any]] ?? []).isEmpty)
     }
 
     func test_长消息显式空白headline仍发送并提醒() {

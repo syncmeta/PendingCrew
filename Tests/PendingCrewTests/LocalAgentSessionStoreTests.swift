@@ -30,6 +30,20 @@ final class LocalAgentSessionStoreTests: XCTestCase {
         XCTAssertEqual(s.agentSessionId(crewId: "c", sessionId: "w1"), "thread-2")
     }
 
+    func testStructuredPostContractSurvivesResumeWhileLegacyRowStaysAdvisory() {
+        let dir = tempDir()
+        let s = LocalAgentSessionStore(directory: dir)
+        s.record(crewId: "c", sessionId: "new", kind: "codex",
+                 agentSessionId: "thread-new", structuredPost: true)
+        s.record(crewId: "c", sessionId: "old", kind: "codex",
+                 agentSessionId: "thread-old")
+        s.record(crewId: "c", sessionId: "new", kind: "codex",
+                 agentSessionId: "thread-new")
+        let reopened = LocalAgentSessionStore(directory: dir)
+        XCTAssertEqual(reopened.record(crewId: "c", sessionId: "new")?.structuredPost, true)
+        XCTAssertNil(reopened.record(crewId: "c", sessionId: "old")?.structuredPost)
+    }
+
     func testBlankIdIsIgnored() {
         let s = LocalAgentSessionStore(directory: tempDir())
         s.record(crewId: "c", sessionId: "w1", kind: "claude", agentSessionId: "  ")

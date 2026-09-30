@@ -52,6 +52,8 @@ final class LocalAgentSessionStore: @unchecked Sendable {
         /// 无效，那是另一种静默。
         var model: String?
         var effort: String?
+        /// Nil in pre-migration records. A resumed legacy conversation stays advisory.
+        var structuredPost: Bool? = nil
     }
 
     static let shared = LocalAgentSessionStore()
@@ -71,6 +73,7 @@ final class LocalAgentSessionStore: @unchecked Sendable {
     func record(crewId: String, sessionId: String, kind: String, agentSessionId: String,
                 workingDirectory: String? = nil,
                 model: String? = nil, effort: String? = nil,
+                structuredPost: Bool? = nil,
                 now: Date = Date(), onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) {
         let trimmed = agentSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -88,12 +91,14 @@ final class LocalAgentSessionStore: @unchecked Sendable {
                 // 同 workingDirectory 的规矩：传 nil = 这次不知道，**不清空已知值**。
                 if let model, !model.isEmpty { rows[i].model = model }
                 if let effort, !effort.isEmpty { rows[i].effort = effort }
+                if let structuredPost { rows[i].structuredPost = structuredPost }
             } else {
                 rows.append(Record(crewId: crewId, sessionId: sessionId, kind: kind,
                                    agentSessionId: trimmed, updatedAt: stamp,
                                    workingDirectory: (workdir?.isEmpty == false) ? workdir : nil,
                                    model: (model?.isEmpty == false) ? model : nil,
-                                   effort: (effort?.isEmpty == false) ? effort : nil))
+                                   effort: (effort?.isEmpty == false) ? effort : nil,
+                                   structuredPost: structuredPost))
             }
             MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
         }

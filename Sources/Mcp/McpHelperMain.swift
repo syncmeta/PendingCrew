@@ -44,7 +44,8 @@ enum McpHelperMain {
                                    todos: LocalTodoStore(directory: dir),
                                    plans: CockpitPlanStore(directory: dir),
                                    agentKey: agent,
-                                   buildWatch: buildWatch)
+                                   buildWatch: buildWatch,
+                                   requiresStructuredPost: args.contains("--structured-post"))
             McpHelperServeLoop(handle: { server.handleLine($0) }).run()
         } else if permHook {
             // PreToolUse hook：gate 命中的工具 → raise 待审批 + 阻塞 long-poll allow/deny，

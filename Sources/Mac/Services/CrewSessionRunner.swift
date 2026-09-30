@@ -1890,7 +1890,8 @@ final class CrewSessionRunner: ObservableObject {
                     crewId: crewId, sessionId: sessionId,
                     kind: config.kind.rawValue, agentSessionId: agentId,
                     workingDirectory: workingDirectory.path,
-                    model: explicitModel, effort: explicitEffort)
+                    model: explicitModel, effort: explicitEffort,
+                    structuredPost: config.structuredPost)
             }
             let sink = SessionBackendRouting.usesProtocolTransport
                 ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
@@ -1954,7 +1955,8 @@ final class CrewSessionRunner: ObservableObject {
                         crewId: crewId, sessionId: sessionId,
                         kind: LocalCodingAgentKind.codex.rawValue, agentSessionId: tid,
                         workingDirectory: workingDirectory.path,
-                        model: explicitModel, effort: explicitEffort)
+                        model: explicitModel, effort: explicitEffort,
+                        structuredPost: config.structuredPost)
                 },
                 // 续不回来 → 已降级新起一条 thread，如实进群说明（不静默假装恢复）。
                 notifyResumeFallback: { failedId, reason in
@@ -3207,6 +3209,11 @@ final class CrewSessionRunner: ObservableObject {
         var cfg = SessionConfig(kind: captainKind, model: model, effort: effort,
                                 initialPrompt: initialPrompt,
                                 resumeSessionId: resumeCaptainId)
+        let priorPostContract = LocalAgentSessionStore.shared.latestCaptainRecord(
+            crewId: crewId, kind: captainKind.rawValue)
+        cfg.structuredPost = resumeCaptainId == nil ||
+            (priorPostContract?.agentSessionId == resumeCaptainId &&
+             priorPostContract?.structuredPost == true)
         cfg.wakeEntryId = wakeEntryId
         // 世界观 + crew 工具按 kind 分流：claude 走文件 flag（appendSystemPromptFile +
         // settings/mcp-config），codex 走 app-server 通道（developerInstructions 字符串 +
@@ -3223,7 +3230,8 @@ final class CrewSessionRunner: ObservableObject {
                 sessionId: localSessionId, runnerKind: captainKind,
                 captainCapabilities: captainCapabilities, appendPersona: persona)
             let comms = LocalSessionLaunch.prepareLocalCommsConfig(
-                crewId: crewId, sessionId: localSessionId, captain: true, label: "机长")
+                crewId: crewId, sessionId: localSessionId, captain: true, label: "机长",
+                structuredPost: cfg.structuredPost == true)
             cfg.settingsFile = comms.settings
             cfg.mcpConfigFile = comms.mcp
         case .codex:
@@ -3232,7 +3240,8 @@ final class CrewSessionRunner: ObservableObject {
                 sessionId: localSessionId, captainCapabilities: captainCapabilities,
                 appendPersona: persona)
             codexMcpServers = LocalSessionLaunch.codexMcpServers(
-                crewId: crewId, sessionId: localSessionId, captain: true, label: "机长")
+                crewId: crewId, sessionId: localSessionId, captain: true, label: "机长",
+                structuredPost: cfg.structuredPost == true)
         case .terminal:
             throw RunnerError.terminalCannotBeAgent
         }
@@ -3488,6 +3497,9 @@ final class CrewSessionRunner: ObservableObject {
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
         var cfg = SessionConfig(kind: kind, model: model, effort: effort, initialPrompt: brief,
                                 resumeSessionId: resumeAgentSessionId)
+        cfg.structuredPost = resumeAgentSessionId == nil ||
+            (LocalAgentSessionStore.shared.record(crewId: crewId, sessionId: localSessionId)?
+                .structuredPost == true)
         cfg.wakeEntryId = wakeEntryId
         var developerInstructions: String? = nil
         var codexMcpServers: [String: Any]? = nil
@@ -3499,7 +3511,8 @@ final class CrewSessionRunner: ObservableObject {
                 sessionId: localSessionId, runnerKind: kind,
                 captainCapabilities: captainCapabilities, appendPersona: nil)
             let comms = LocalSessionLaunch.prepareLocalCommsConfig(
-                crewId: crewId, sessionId: localSessionId, captain: false, label: resolvedTitle)
+                crewId: crewId, sessionId: localSessionId, captain: false, label: resolvedTitle,
+                structuredPost: cfg.structuredPost == true)
             cfg.settingsFile = comms.settings
             cfg.mcpConfigFile = comms.mcp
         case .codex:
@@ -3508,7 +3521,8 @@ final class CrewSessionRunner: ObservableObject {
                 sessionId: localSessionId, captainCapabilities: captainCapabilities,
                 appendPersona: nil)
             codexMcpServers = LocalSessionLaunch.codexMcpServers(
-                crewId: crewId, sessionId: localSessionId, captain: false, label: resolvedTitle)
+                crewId: crewId, sessionId: localSessionId, captain: false, label: resolvedTitle,
+                structuredPost: cfg.structuredPost == true)
         case .terminal:
             throw RunnerError.terminalCannotBeAgent
         }

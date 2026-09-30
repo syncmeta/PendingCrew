@@ -347,14 +347,9 @@ enum CrewMessageTodoLink {
 /// `human_todo` / `blocked` 的落账用例。那 11 条不是测试写错了，是**这道闸的爆炸半径
 /// 的一次实测** —— 连自家用例都有这么多不带结论，在跑的 session 只会更多。
 ///
-/// 所以这里走回执提醒：**消息照发、账照落**，只在回执里补一句。收紧成拒收是第二步。
-///
-/// ## 第二步谁做、什么时候做
-///
-/// #115 的第二步至今没人做（方案 §1.3 记着），所以这里把它写死：
-/// **下一次发版之后**，由当时的机长把这个类型从「回执提醒」改成
-/// `CrewCategoryRouting.requirements` 里的一条 `Requirement`，并把上面那 11 条用例
-/// 一起改成新契约。判据是「仓库里还有没有不带 headline 的 human_todo/blocked 用例」。
+/// 第二步按会话切：新会话启动参数带 `--structured-post`，运行时先验齐字段，
+/// 旧 helper 和恢复的旧会话仍走这里的回执提醒。契约标记写进会话号记录，
+/// 因此新会话恢复后仍会执行同一条闸；旧记录没有标记就不会误收紧。
 enum CrewMessageHeadline {
 
     /// 这几类必须有人接，所以必须有一句结论。
@@ -363,6 +358,20 @@ enum CrewMessageHeadline {
         CrewMessageCategory.question.rawValue,
         CrewMessageCategory.blocked.rawValue,
     ]
+
+    /// Only helpers launched for the new contract refuse these calls. Legacy sessions
+    /// still use the receipt hint below, including when they resume after an upgrade.
+    static func structuredPostRefusal(category: String?, headline: String?) -> String? {
+        let category = (category ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !category.isEmpty else {
+            return "`category` 必填；这条消息没有发出去。请明确选 `note` / `finding` / `ack` 等类别后重发。"
+        }
+        guard mustBeReceived.contains(category),
+              (headline ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return "`\(category)` 必须给非空 `headline`；这条消息没有发出去。请写一句结论后重发。"
+    }
 
     /// 发出去之后回执里该不该补一句。`nil` = 不该。
     ///

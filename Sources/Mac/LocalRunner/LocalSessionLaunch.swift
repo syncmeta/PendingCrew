@@ -81,7 +81,8 @@ enum LocalSessionLaunch {
     /// （回执还照样回「已发到」）；`post_to_crew` 的 `category` enum 改造（人类 Todo #115）
     /// 差点按「合并即生效」去排时间点。
     static func prepareLocalCommsConfig(
-        crewId: String, sessionId: String, captain: Bool = false, label: String? = nil
+        crewId: String, sessionId: String, captain: Bool = false, label: String? = nil,
+        structuredPost: Bool = false
     ) -> (settings: String?, mcp: String?) {
         guard let helper = Bundle.main.executablePath
         else { return (nil, nil) }
@@ -97,6 +98,7 @@ enum LocalSessionLaunch {
         var serveArgs = ["--mcp-serve", "--crew", crewId, "--dir", dir, "--session", sessionId,
                          "--agent", "claude"]
         if captain { serveArgs.append("--captain") }
+        if structuredPost { serveArgs.append("--structured-post") }
         if let label, !label.isEmpty { serveArgs.append(contentsOf: ["--label", label]) }
         let mcp: [String: Any] = ["mcpServers": ["crew": [
             "command": helper,
@@ -209,12 +211,13 @@ enum LocalSessionLaunch {
     /// codex 经协议传 dict，claude 经 `--mcp-config <file>` 传文件。`captain` → 多带
     /// `--captain`，helper 端解锁机长专用 answer_decision（与 prepareLocalCommsConfig 一致）。
     static func codexMcpServers(crewId: String, sessionId: String, captain: Bool = false,
-                                label: String? = nil) -> [String: Any]? {
+                                label: String? = nil, structuredPost: Bool = false) -> [String: Any]? {
         guard let helper = Bundle.main.executablePath else { return nil }
         let dir = LocalWhiteboardStore.defaultDirectory.path
         var args = ["--mcp-serve", "--crew", crewId, "--dir", dir, "--session", sessionId,
                     "--agent", "codex"]
         if captain { args.append("--captain") }
+        if structuredPost { args.append("--structured-post") }
         if let label, !label.isEmpty { args.append(contentsOf: ["--label", label]) }
         return ["crew": ["command": helper, "args": args]]
     }
