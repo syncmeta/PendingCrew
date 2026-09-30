@@ -295,6 +295,17 @@ final class QuotaRingLayoutTests: XCTestCase {
         XCTAssertNil(QuotaRingLayout.warningBadge(snap, failure: nil, now: now))
     }
 
+    func testUnreadableQuotaIsHiddenEvenWhenStaleSnapshotExists() {
+        let now = Date(timeIntervalSince1970: 1_785_000_000)
+        let snap = AgentQuotaSnapshot(
+            agent: "codex", windows: [.init(label: "周窗", usedPercent: 42, resetsAt: nil)],
+            fetchedAt: iso(now), producedAt: iso(now))
+        XCTAssertFalse(QuotaRingLayout.shouldDisplay(nil, failure: "offline"))
+        XCTAssertFalse(QuotaRingLayout.shouldDisplay(snap, failure: "offline"))
+        XCTAssertFalse(QuotaRingLayout.shouldDisplay(nil, failure: nil))
+        XCTAssertTrue(QuotaRingLayout.shouldDisplay(snap, failure: nil))
+    }
+
     /// 「过了自己的重置时刻」比岁数阈值硬：数据可能只有几十分钟大，窗却已经翻篇，
     /// 那个百分比必然不是现状（codex 停在 87% 就是这么来的）。
     func testWarningBadgeFlagsWindowPastItsReset() {

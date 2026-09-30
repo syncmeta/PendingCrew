@@ -178,6 +178,10 @@ enum QuotaRingLayout {
         return staleBadge(snapshot, now: now)
     }
 
+    static func shouldDisplay(_ snapshot: AgentQuotaSnapshot?, failure: String?) -> Bool {
+        failure == nil && !(snapshot?.windows.isEmpty ?? true)
+    }
+
     // MARK: - 悬停提示
 
     /// 整块的 `.help()` 悬停提示：完整窗名 + 已用百分比 + 重置时刻，陈旧的那家

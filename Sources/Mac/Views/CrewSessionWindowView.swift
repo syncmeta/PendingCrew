@@ -42,7 +42,7 @@ struct CrewSessionWindowView: View {
 
     /// 本 crew 白板条目（拿来取「最新一步动作」）。
     @State private var entries: [CrewWhiteboardEntry] = []
-    /// 每个成员的 helper 跑在哪一版（#88）。nil = 还没读过一次快照。
+    /// 非 Codex 成员仍可显示 helper 版本状态。
     @State private var helperBuildTable: CrewSessionsSnapshot.HelperBuildLookupTable?
     /// 本 crew server 成员名册。
     @State private var members: [CrewMember] = []
@@ -72,9 +72,6 @@ struct CrewSessionWindowView: View {
         // 成员列表模式要的白板/roster 数据 —— 事件驱动订阅（去 3s 轮询，与中栏各订各的）。
         .task(id: crewStore.selectedDetail?.crew.id) { await subscribeRoster() }
         .task {
-            // 成员的 helper 跑在哪一版（#88）：编排者每 2 秒写进点名快照，这里 5 秒读一次。
-            // **读盘在后台**，body 里不碰磁盘（同 `latestStep` 那条教训）。
-            // 不跟白板变更走：装完新版之后群里可能一句话都没有，而成员就是在那一刻变旧的。
             while !Task.isCancelled {
                 let dir = LocalWhiteboardStore.defaultDirectory
                 let table = await Task.detached(priority: .utility) {
@@ -557,8 +554,8 @@ struct CrewSessionWindowView: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     SessionProfileReadonlyPill(run: run)
-                    // helper 跑在哪一版 / 是不是旧的（#88）。判定全在 `HelperBuildBadge.make`。
-                    if let badge = HelperBuildBadge.make(
+                    if run.kind != .codex,
+                       let badge = HelperBuildBadge.make(
                         helperBuildTable?.lookup(sessionId: run.sessionId) ?? .notInSnapshot,
                         isRunning: run.status == .running) {
                         HelperBuildBadgeLabel(badge: badge)
@@ -1388,7 +1385,8 @@ private struct SessionRunContentView: View {
                 Text("此 Codex 线程累计 \(usage.cumulativeTokens.formatted()) token；不是账号剩余额度")
                     .lineLimit(1)
             }
-            if let snapshot = quota.codex {
+            if QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError),
+               let snapshot = quota.codex {
                 let warning = QuotaRingLayout.warningBadge(
                     snapshot, failure: quota.codexError)
                 Text("账号额度：" + snapshot.windows.map {
@@ -1398,9 +1396,6 @@ private struct SessionRunContentView: View {
                     .help(QuotaRingLayout.helpText(
                         claude: nil, codex: snapshot,
                         claudeError: nil, codexError: quota.codexError) ?? "")
-            } else {
-                Text(quota.codexError == nil ? "账号额度：暂无可用数据" : "账号额度：读不到")
-                    .help(quota.codexError ?? "尚无 Codex 额度快照")
             }
             if let problem = run.codexCompactionProblem {
                 Text(problem).foregroundStyle(Theme.Palette.amber)
@@ -1550,8 +1545,8 @@ private struct CodexControlPillLabel: View {
             .foregroundStyle(Theme.Palette.inkMuted)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Theme.Palette.surfaceMuted.opacity(0.55), in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.Palette.hairline, lineWidth: 1))
+            .background(Theme.Palette.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.Palette.hairline.opacity(0.65), lineWidth: 1))
     }
 }
 
@@ -1571,19 +1566,20 @@ private struct SessionProfilePillLabel: View {
 
     var body: some View {
         // 左侧不再画 ⇅：外层 Menu(.borderlessButton) 右侧已有原生 disclosure
-        // 箭头，两个箭头冗余。`active` 仍保留（下面控制 opacity 区分可点/只读）。
+        // 箭头，两个箭头冗余。只压淡只读文字，药丸底色始终保持纯白。
         HStack(spacing: 3) {
             Text(text).lineLimit(1)
         }
         .font(Theme.Fonts.caption2)
-        .foregroundStyle(Theme.Palette.inkMuted)
+        .foregroundStyle(active ? Theme.Palette.inkMuted : Theme.Palette.inkMuted.opacity(0.6))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Theme.Palette.surfaceMuted)
+                .fill(Theme.Palette.surface)
         )
-        .opacity(active ? 1 : 0.6)
+        .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .strokeBorder(Theme.Palette.hairline.opacity(0.65), lineWidth: 1))
     }
 }
 
@@ -1591,8 +1587,6 @@ private struct SessionProfilePillLabel: View {
 /// 成员列表不做选择入口，切换在 session 详情/终端页里做）。
 /// `@ObservedObject` 观察 run —— 切换（终端页/MCP 自切）回写 `run.model` /
 /// `run.effort` 后这里即时刷新（父 view 订不到嵌套 run 的 `@Published`）。
-/// 成员行上「helper 跑在哪一版」那枚标（#88）。**只负责画**：文字、色调、悬停说明
-/// 全部来自 `HelperBuildBadge.make`（在 test bundle 里有单测），这里不做任何判断。
 private struct HelperBuildBadgeLabel: View {
     let badge: HelperBuildBadge
 
@@ -1607,7 +1601,6 @@ private struct HelperBuildBadgeLabel: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(badge.tone == .warning ? Theme.Palette.amberBg : Theme.Palette.surfaceMuted)
             )
-            // 判不了的那枚跟只读 pill 一样压暗；旧版那枚不压，它就是要被看见的。
             .opacity(badge.tone == .unknown ? 0.6 : 1)
             .help(badge.help)
     }

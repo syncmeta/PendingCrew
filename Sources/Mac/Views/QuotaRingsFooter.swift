@@ -28,37 +28,43 @@ struct QuotaRingsFooter: View {
     private var claudeRings: [QuotaRing] { QuotaRingLayout.claudeRings(quota.claude) }
     private var codexRings: [QuotaRing] { QuotaRingLayout.codexRings(quota.codex) }
 
-    /// 「这一家有话要说」——有环要画，或者虽然没数但得说一句「读不到」。
-    private var claudeWarning: String? {
-        QuotaRingLayout.warningBadge(quota.claude, failure: quota.claudeError)
+    private var showsClaudeQuota: Bool {
+        QuotaRingLayout.shouldDisplay(quota.claude, failure: quota.claudeError)
     }
-    private var codexWarning: String? {
-        QuotaRingLayout.warningBadge(quota.codex, failure: quota.codexError)
+    private var showsCodexQuota: Bool {
+        QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            agentRow(asset: "ClaudeLogomark", tint: Theme.Palette.claudeMark,
-                     brand: "Claude Code", rings: claudeRings,
-                     staleBadge: claudeWarning)
-            agentRow(asset: "OpenAILogomark", tint: Theme.Palette.openAIMark,
-                     brand: "Codex", rings: codexRings,
-                     staleBadge: codexWarning)
-            freshnessRow
+        Group {
+            if showsClaudeQuota || showsCodexQuota {
+                VStack(alignment: .leading, spacing: 2) {
+                    if showsClaudeQuota {
+                        agentRow(asset: "ClaudeLogomark", tint: Theme.Palette.claudeMark,
+                                 brand: "Claude Code", rings: claudeRings,
+                                 staleBadge: QuotaRingLayout.warningBadge(quota.claude))
+                    }
+                    if showsCodexQuota {
+                        agentRow(asset: "OpenAILogomark", tint: Theme.Palette.openAIMark,
+                                 brand: "Codex", rings: codexRings,
+                                 staleBadge: QuotaRingLayout.warningBadge(quota.codex))
+                    }
+                    freshnessRow
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .help(QuotaRingLayout.helpText(
+                    claude: showsClaudeQuota ? quota.claude : nil,
+                    codex: showsCodexQuota ? quota.codex : nil) ?? "")
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .help(QuotaRingLayout.helpText(claude: quota.claude, codex: quota.codex,
-                                       claudeError: quota.claudeError,
-                                       codexError: quota.codexError) ?? "")
     }
 
     /// 一家一行：logomark + 一排环（+ 读不到 / 窗口已翻篇 / 数据太旧时的警示标记）。
     ///
     /// 警示按**家**挂，不能靠下面那行「N 分钟前」代劳：那行取的是两家里最新的
     /// 读取时刻，claude 刚查过就会把 codex 一个多月没动的数字一起盖成「刚刚」。
-    /// 环一个都没有、只剩一句「读不到」时这行也照画 —— 整行消失等于把失败藏起来。
     private func agentRow(asset: String, tint: Color, brand: String,
                           rings: [QuotaRing], staleBadge: String?) -> some View {
         HStack(spacing: 9) {
@@ -89,7 +95,9 @@ struct QuotaRingsFooter: View {
     /// 鼠标当前停着的那个环（两家的环合起来找）。
     private var hoveredRing: QuotaRing? {
         guard let id = hoveredRingID else { return nil }
-        return (claudeRings + codexRings).first { $0.id == id }
+        let visibleRings = (showsClaudeQuota ? claudeRings : [])
+            + (showsCodexQuota ? codexRings : [])
+        return visibleRings.first { $0.id == id }
     }
 
     /// 环下面左对齐的一行：刷新按钮 + 文案。常态是「N 分钟前」（数据几时读的），
@@ -122,7 +130,8 @@ struct QuotaRingsFooter: View {
             TimelineView(.everyMinute) { ctx in
                 Text(QuotaRingLayout.footnote(
                     hovered: hoveredRing,
-                    fetchedAt: [quota.claude?.fetchedAt, quota.codex?.fetchedAt],
+                    fetchedAt: [showsClaudeQuota ? quota.claude?.fetchedAt : nil,
+                                showsCodexQuota ? quota.codex?.fetchedAt : nil],
                     now: ctx.date) ?? "—")
                     .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(.tertiary)

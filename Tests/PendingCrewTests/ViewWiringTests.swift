@@ -686,6 +686,31 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(usage.contains("Button(\"压缩上下文\""), "统计弹窗里不应重复压缩入口")
     }
 
+    func testSessionVersionBadgeRemovedAndModelPillsUseWhiteSurface() throws {
+        let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let row = try Self.requiredSection(view, "private func sessionRowContent(", "private func latestStep(")
+        XCTAssertTrue(row.contains("if run.kind != .codex,"), "Codex 行应隐藏版本标签")
+        XCTAssertTrue(row.contains("HelperBuildBadgeLabel"), "其他 runner 原有版本状态应保留")
+        let pill = try Self.requiredSection(view, "private struct CodexControlPillLabel:", "private func profileLabel(")
+        XCTAssertTrue(pill.contains(".background(Theme.Palette.surface, in: Capsule())"))
+        XCTAssertTrue(pill.contains(".overlay(Capsule().strokeBorder(Theme.Palette.hairline"))
+        let readonlyPill = try Self.requiredSection(view, "private struct SessionProfilePillLabel:", "private struct HelperBuildBadgeLabel:")
+        XCTAssertTrue(readonlyPill.contains(".fill(Theme.Palette.surface)"))
+        XCTAssertTrue(readonlyPill.contains(".strokeBorder(Theme.Palette.hairline"))
+    }
+
+    func testUnreadableQuotaViewsAreHiddenWithoutClearingErrors() throws {
+        let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
+        let footer = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/QuotaRingsFooter.swift"))
+        let usage = try Self.requiredSection(view, "private var codexUsageRow:", "private func statusBadge(")
+        XCTAssertTrue(usage.contains("QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError)"))
+        XCTAssertFalse(usage.contains("账号额度：读不到"))
+        XCTAssertTrue(footer.contains("QuotaRingLayout.shouldDisplay(quota.claude, failure: quota.claudeError)"))
+        XCTAssertTrue(footer.contains("QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError)"))
+        XCTAssertFalse(footer.contains("staleBadge: claudeWarning"))
+        XCTAssertFalse(footer.contains("staleBadge: codexWarning"))
+    }
+
     /// #166 follow-up: Codex's running-session menus must consume only the
     /// fresh app-server picker snapshot. This source contract checks the View
     /// wiring; catalog eligibility and per-model efforts need executable core
@@ -1535,6 +1560,12 @@ final class ViewWiringTests: XCTestCase {
                 return line[..<slash.lowerBound]
             }
             .joined(separator: "\n")
+    }
+
+    private static func requiredSection(_ source: String, _ start: String, _ end: String) throws -> String {
+        let a = try XCTUnwrap(source.range(of: start), "缺少 \(start)")
+        let b = try XCTUnwrap(source.range(of: end, range: a.upperBound..<source.endIndex), "缺少 \(end)")
+        return String(source[a.upperBound..<b.lowerBound])
     }
 
     private static func sourceFiles() throws -> [(URL, String)] {
