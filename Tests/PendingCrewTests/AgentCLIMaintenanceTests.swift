@@ -49,6 +49,20 @@ final class AgentCLIMaintenanceTests: XCTestCase {
                       "安装前没有第二次确认对话框")
     }
 
+    func testManagedCLIRefreshKeepsAuthenticationUnknownState() throws {
+        let testURL = URL(fileURLWithPath: #filePath)
+        let root = testURL.deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let center = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Mac/Services/AgentCLIVersionCenter.swift"))
+
+        XCTAssertTrue(center.contains("managedInstallation(for: value)"),
+                      "受管 Codex CLI 的普通 refresh 会擦掉认证未知状态")
+        XCTAssertTrue(center.contains(".installedNeedsManualSignIn"),
+                      "受管 Codex CLI 刷新后没有保留认证未知的显式状态")
+    }
+
     func testProvisioningPrepareIsOfflineAndReturnsOnlyFixedOfficialAction() throws {
         try provisioningFixture { service, fakeNpm, _, _ in
             var processCalls = 0
@@ -120,6 +134,19 @@ final class AgentCLIMaintenanceTests: XCTestCase {
             XCTAssertEqual(calls[0].2["HOME"], prepared.home.path)
             XCTAssertNil(calls[0].2["OPENAI_API_KEY"])
             XCTAssertFalse(calls.flatMap { $0.1 }.contains("login"), "安装链不得自动登录")
+
+            let inspected = AgentCLIInstallation(
+                kind: .codex,
+                executable: installed.executable,
+                resolved: installed.executable.resolvingSymlinksInPath(),
+                version: installed.version,
+                native: false,
+                rollbackReleases: [],
+                checkedAt: .now)
+            XCTAssertEqual(
+                CodexCLIProvisioningService.managedInstallation(for: inspected, root: prepared.managedRoot),
+                installed,
+                "后续普通 refresh 也必须保留受管 CLI 的认证未知状态")
         }
     }
 

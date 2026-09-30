@@ -298,6 +298,21 @@ struct CodexCLIProvisioningService {
         return executable
     }
 
+    /// 普通 refresh 只能从固定安装目标和已复验的二进制版本判断“这是我们受管的
+    /// CLI”。它特意不读取任何认证状态，因此调用方必须继续显示认证未知，而不是
+    /// 把一次成功的 `--version` 探测误报为可直接启动。
+    static func managedInstallation(
+        for installation: AgentCLIInstallation,
+        root: URL = PendingCrewDataRoot.subdirectory("managed-codex-cli")
+    ) -> ManagedCodexCLIInstallation? {
+        guard installation.kind == .codex,
+              installation.version == CodexCLIInstallGuide.officialPackageVersion,
+              let executable = managedExecutable(root: root),
+              installation.executable.standardizedFileURL == executable.standardizedFileURL
+        else { return nil }
+        return .init(executable: executable, version: installation.version)
+    }
+
     private var managedTarget: URL { Self.managedTarget(root: managedRoot) }
 
     private static func managedTarget(root: URL) -> URL {

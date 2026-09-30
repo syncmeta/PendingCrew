@@ -61,7 +61,16 @@ final class AgentCLIVersionCenter: ObservableObject {
         case let .success(value):
             installations[kind] = value
             errors[kind] = nil
-            if kind == .codex { codexProvisioningState = .ready }
+            if kind == .codex {
+                // `--version` only proves the fixed managed binary is present.  Do not
+                // erase the explicit authentication-unknown boundary on the timer's
+                // normal inspect path, and do not read cached auth to guess at it.
+                if let managed = CodexCLIProvisioningService.managedInstallation(for: value) {
+                    codexProvisioningState = .installedNeedsManualSignIn(managed)
+                } else {
+                    codexProvisioningState = .ready
+                }
+            }
         case let .failure(error):
             errors[kind] = error.localizedDescription
             if kind == .codex { codexProvisioningState = .failed(error.localizedDescription) }
