@@ -2075,13 +2075,19 @@ final class CrewSessionRunner: ObservableObject {
                     }
                 }
                 self?.discardDeferredWakes(sessionId: r.sessionId)
-                // Todo #68：claude 自己拒了这个会话号 → 不带 --resume 重起一次。
-                self?.retryWithoutResumeIfClaudeRefused(
+                // Todo #68：claude 自己拒了这个会话号 → 不带 --resume 重起一次。该
+                // fallback 一旦接管本次 terminal event，就不能并排再走 P2 的 Codex
+                // handoff；两个后端 launch 必须先在这里互斥地决出唯一所有权。
+                let resumeFallbackScheduled = self?.retryWithoutResumeIfClaudeRefused(
                     run: r, config: launchedConfig, launchedAt: launchedAt,
                     crewId: crewId, sessionId: sessionId,
                     workingDirectory: workingDirectory, taskBrief: taskBrief,
-                    title: title, additionalEnv: additionalEnv, role: role)
-                if r.exitReason == .failed {
+                    title: title, additionalEnv: additionalEnv, role: role) ?? false
+                if CaptainEndedRecoveryOwnership.decide(
+                    resumeFallbackScheduled: resumeFallbackScheduled,
+                    isCaptain: r.role == .captain,
+                    exitReason: r.exitReason
+                ) == .automaticCaptainRecovery {
                     self?.recoverConfirmedUnavailableCaptain(r, trigger: .endedFailed)
                 }
             }
@@ -2646,9 +2652,13 @@ final class CrewSessionRunner: ObservableObject {
     private func recoverConfirmedUnavailableCaptain(
         _ run: CrewSessionRun, trigger: CaptainAutomaticRecoveryTrigger
     ) {
+        // terminal callback 可能已经被 Claude resume fallback 移出 roster；那条旧 run
+        // 不能再借迟到的 health / ended 回调接管另一个 runner。
+        guard runs.contains(where: { $0.runID == run.runID }) else { return }
         requestAutomaticCaptainRecovery(
             crewId: run.crewId,
             sourceSessionId: run.sessionId,
+            sourceRunID: run.runID,
             sourceKind: run.kind,
             isCaptain: run.role == .captain,
             hasOtherLiveCaptain: runs.contains {
@@ -2668,6 +2678,7 @@ final class CrewSessionRunner: ObservableObject {
         requestAutomaticCaptainRecovery(
             crewId: record.crewId,
             sourceSessionId: record.sessionId,
+            sourceRunID: nil,
             sourceKind: kind,
             isCaptain: true,
             hasOtherLiveCaptain: runs.contains {
@@ -2682,6 +2693,9 @@ final class CrewSessionRunner: ObservableObject {
     private func requestAutomaticCaptainRecovery(
         crewId: String,
         sourceSessionId: String,
+        /// current-run failure 必须在异步 handoff 前仍属于 roster；expected-live 的
+        /// 已死来源没有本进程 run，因此显式传 nil。
+        sourceRunID: UUID?,
         sourceKind: LocalCodingAgentKind,
         isCaptain: Bool,
         hasOtherLiveCaptain: Bool,
@@ -2719,7 +2733,10 @@ final class CrewSessionRunner: ObservableObject {
             guard !self.runs.contains(where: {
                 $0.crewId == crewId && $0.role == .captain && $0.status == .running
                     && $0.sessionId != sourceSessionId
-            }), let detail = LocalCrewStore.shared.getCrew(crewId) else { return }
+            }), sourceRunID.map({ sourceRunID in
+                self.runs.contains(where: { $0.runID == sourceRunID })
+            }) ?? true,
+            let detail = LocalCrewStore.shared.getCrew(crewId) else { return }
             do {
                 // executeCaptainHandoff 在停旧机长前现探候选可执行文件、认证与健康；
                 // startCaptain 仍经 #170 admission。P2 单次路径将交接启动重试上限压成 1。
@@ -3523,7 +3540,7 @@ final class CrewSessionRunner: ObservableObject {
         run: CrewSessionRun, config: SessionConfig, launchedAt: Date,
         crewId: String, sessionId: String, workingDirectory: URL, taskBrief: String,
         title: String?, additionalEnv: [String: String], role: CrewSessionRun.Role
-    ) {
+    ) -> Bool {
         guard config.kind == .claudeCode,
               let resumedId = config.resumeSessionId, !resumedId.isEmpty,
               run.exitReason != .userStopped,
@@ -3533,7 +3550,7 @@ final class CrewSessionRunner: ObservableObject {
                   from: run.backend, maxLines: 40),
               let said = AgentSessionResume.claudeResumeRejection(
                 inScreenText: screenText, resumedId: resumedId)
-        else { return }
+        else { return false }
 
         let decision = AgentSessionResume.Decision.fresh(reason: .agentRejectedResume(
             id: resumedId, agentSaid: said,
@@ -3569,6 +3586,7 @@ final class CrewSessionRunner: ObservableObject {
                 additionalEnv: additionalEnv, role: role,
                 admissionPriority: .emergency)
         }
+        return true
     }
 
 

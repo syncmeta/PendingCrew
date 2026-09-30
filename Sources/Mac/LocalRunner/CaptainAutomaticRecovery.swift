@@ -28,6 +28,27 @@ enum CaptainAutomaticRecoveryDecision: Equatable {
     case alertOnly
 }
 
+/// 一个 terminal event 不能同时拥有两条启动责任。Claude 明确拒绝 `--resume` 时，
+/// 无 resume 降级已经是这一次结束的恢复决策；只有它没有取得所有权，且 captain
+/// 真正以 `.failed` 结束时，P2 才可继续硬失效接任。
+enum CaptainEndedRecoveryRoute: Equatable {
+    case none
+    case retryClaudeWithoutResume
+    case automaticCaptainRecovery
+}
+
+enum CaptainEndedRecoveryOwnership {
+    static func decide(
+        resumeFallbackScheduled: Bool,
+        isCaptain: Bool,
+        exitReason: SessionExitReason?
+    ) -> CaptainEndedRecoveryRoute {
+        if resumeFallbackScheduled { return .retryClaudeWithoutResume }
+        guard isCaptain, exitReason == .failed else { return .none }
+        return .automaticCaptainRecovery
+    }
+}
+
 enum CaptainAutomaticRecoveryPolicy {
     /// 自动替代的唯一资格口。它特意不接受 timeout、idle、断链或旧记录——那些最多
     /// 触发人工可见提示；只有这里的硬证据才会继续进入 durable claim。
