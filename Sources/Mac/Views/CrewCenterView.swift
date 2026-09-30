@@ -271,21 +271,28 @@ private struct PendingCrewChatView: View {
                 Spacer()
                 if draft.workingDirectory != nil {
                     Button("恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
-                        .disabled(crewStore.pendingCrewDelivery != nil)
+                        .disabled(crewStore.pendingCrewDelivery != nil
+                                  || crewStore.pendingCrewRollbackError != nil)
                 }
                 Button("选择目录…") { chooseDirectory() }
-                    .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil)
+                    .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil
+                              || crewStore.pendingCrewRollbackError != nil)
             }
             .font(.callout)
             .padding(.horizontal, 18)
             TextEditor(text: $message)
-                .disabled(crewStore.pendingCrewDelivery != nil)
+                .disabled(crewStore.pendingCrewDelivery != nil
+                          || crewStore.pendingCrewRollbackError != nil)
                 .frame(minHeight: 72, maxHeight: 110)
                 .padding(8)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                 .padding(.horizontal, 18)
             if let error {
                 Text(error).foregroundStyle(.red).font(.caption)
+                    .padding(.horizontal, 18)
+            }
+            if let rollbackError = crewStore.pendingCrewRollbackError {
+                Text(rollbackError).foregroundStyle(.red).font(.caption)
                     .padding(.horizontal, 18)
             }
             if let pending = crewStore.pendingCrewDelivery {
@@ -308,7 +315,8 @@ private struct PendingCrewChatView: View {
             }
             HStack {
                 Button("取消") { crewStore.discardPendingCrew() }
-                    .disabled(crewStore.pendingCrewDelivery != nil)
+                    .disabled(crewStore.pendingCrewDelivery != nil
+                              || crewStore.pendingCrewRollbackError != nil)
                 Spacer()
                 Button {
                     let text = message
@@ -328,7 +336,8 @@ private struct PendingCrewChatView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                           || crewStore.pendingCrewSending
-                          || crewStore.pendingCrewDelivery != nil)
+                          || crewStore.pendingCrewDelivery != nil
+                          || crewStore.pendingCrewRollbackError != nil)
             }
             .padding(18)
         }

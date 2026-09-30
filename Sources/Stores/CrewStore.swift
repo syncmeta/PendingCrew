@@ -54,7 +54,9 @@ final class CrewStore: ObservableObject {
     @Published private(set) var pendingCrew: PendingCrewDraft?
     @Published private(set) var pendingCrewSending = false
     @Published private(set) var pendingCrewDelivery: String?
+    @Published private(set) var pendingCrewRollbackError: String?
     private var pendingFirstSend = PendingCrewFirstSend()
+    private var pendingRollbackGuard = PendingCrewRollbackGuard()
     private var pendingDeliveryOutcome: PendingCrewFirstSend.Outcome?
     private var pendingDeliveryText: String?
     /// 跨群搜索结果 → 中栏当前群搜索与精确消息定位的一次性请求。
@@ -205,7 +207,7 @@ final class CrewStore: ObservableObject {
 
     func selectCrew(_ id: String?) {
         if let pendingCrew, id != pendingCrew.id, !pendingCrewSending,
-           pendingCrewDelivery == nil {
+           pendingCrewDelivery == nil && !pendingRollbackGuard.isBlocked {
             self.pendingCrew = nil
             pendingFirstSend = PendingCrewFirstSend()
         }
@@ -233,6 +235,11 @@ final class CrewStore: ObservableObject {
 
     /// Repeated clicks keep the same draft. Nothing here touches the backend or disk.
     func beginPendingCrew(parentCrewId: String? = nil) {
+        if pendingRollbackGuard.isBlocked {
+            if let pendingCrew { selectedCrewId = pendingCrew.id }
+            error = pendingCrewRollbackError
+            return
+        }
         if let pendingCrew {
             selectedCrewId = pendingCrew.id
             return
@@ -253,12 +260,14 @@ final class CrewStore: ObservableObject {
     }
 
     func setPendingWorkingDirectory(_ path: String?) {
-        guard var pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil else { return }
+        guard var pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil,
+              !pendingRollbackGuard.isBlocked else { return }
         pendingCrew.workingDirectory = path
         self.pendingCrew = pendingCrew
     }
 
     func discardPendingCrew() {
+        guard !pendingRollbackGuard.isBlocked else { return }
         guard let pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil else { return }
         self.pendingCrew = nil
         pendingFirstSend = PendingCrewFirstSend()
@@ -268,6 +277,7 @@ final class CrewStore: ObservableObject {
     /// The first message is the commit point. Failure rolls back this attempt;
     /// a second click cannot overlap it or start another captain.
     func commitPendingCrew(_ text: String, draftId: String) async throws {
+        try pendingRollbackGuard.check()
         guard let draft = pendingCrew, draft.id == draftId, !pendingCrewSending else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         pendingCrewSending = true
@@ -319,7 +329,12 @@ final class CrewStore: ObservableObject {
             }
             activatePendingCrew(draft: draft, outcome: outcome)
         } catch {
-            if selectedCrewId != draft.id { pendingCrew = nil }
+            pendingRollbackGuard.record(error)
+            if pendingRollbackGuard.isBlocked {
+                pendingCrewRollbackError = error.localizedDescription
+            } else if selectedCrewId != draft.id {
+                pendingCrew = nil
+            }
             await refreshList()
             throw error
         }
@@ -606,6 +621,8 @@ final class CrewStore: ObservableObject {
     func reset() {
         pendingCrew = nil
         pendingFirstSend = PendingCrewFirstSend()
+        pendingRollbackGuard = PendingCrewRollbackGuard()
+        pendingCrewRollbackError = nil
         pendingCrewDelivery = nil
         pendingDeliveryOutcome = nil
         pendingDeliveryText = nil

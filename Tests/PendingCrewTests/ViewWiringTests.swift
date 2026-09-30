@@ -220,6 +220,60 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
     }
 
+    /// A failed rollback must survive leaving/canceling the draft. The store,
+    /// rather than only the disposable first-send object, owns this gate.
+    func testCrewStoreKeepsUnverifiedRollbackGateAcrossDraftNavigation() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let store = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Stores/CrewStore.swift"), encoding: .utf8)
+        XCTAssertTrue(store.contains("private var pendingRollbackGuard = PendingCrewRollbackGuard()"))
+        XCTAssertTrue(store.contains("pendingRollbackGuard.record(error)"))
+        XCTAssertTrue(store.contains("if pendingRollbackGuard.isBlocked"))
+        XCTAssertTrue(store.contains("guard !pendingRollbackGuard.isBlocked else { return }"))
+        XCTAssertTrue(store.contains("pendingCrewDelivery == nil && !pendingRollbackGuard.isBlocked"))
+    }
+
+    @MainActor
+    func testRollbackGuardBlocksReplacementSenderAfterUnverifiedDeletion() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-rollback-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = LocalCrewStore(baseDirectory: base.appendingPathComponent("ledger"))
+        ledger.upsertBuiltinChiefCrew()
+        var gate = PendingCrewRollbackGuard()
+        var creates = 0
+        let first = PendingCrewFirstSend()
+        do {
+            _ = try await first.commit(message: "first", selectedDirectory: nil,
+                crewGround: base.appendingPathComponent("CrewGround"), title: "Draft",
+                create: { _ in creates += 1; return LocalCrew.chiefCrewId },
+                attach: { _ in },
+                post: { _, _ in throw PendingCrewBackendError.invalidConfig("post failed") },
+                rollback: { ledger.deleteCrew($0) })
+            XCTFail("post must fail")
+        } catch {
+            gate.record(error)
+        }
+        XCTAssertTrue(gate.isBlocked)
+        XCTAssertEqual(creates, 1)
+
+        // Simulate a draft being left/canceled and a fresh sender being allocated.
+        let replacement = PendingCrewFirstSend()
+        do {
+            try gate.check()
+            _ = try await replacement.commit(message: "second", selectedDirectory: nil,
+                crewGround: base.appendingPathComponent("CrewGround"), title: "Draft 2",
+                create: { _ in creates += 1; return "new-crew" },
+                attach: { _ in }, post: { _, _ in }, rollback: { ledger.deleteCrew($0) })
+            XCTFail("store-owned guard must reject replacement")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("回滚"))
+        }
+        XCTAssertEqual(creates, 1)
+        XCTAssertNotNil(ledger.getCrew(LocalCrew.chiefCrewId))
+    }
+
     @MainActor
     func testPendingFirstSendWithoutBackendRollbackRejectsBeforeCreate() async throws {
         let base = FileManager.default.temporaryDirectory

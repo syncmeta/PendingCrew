@@ -118,3 +118,23 @@ enum PendingCrewFirstSendError: LocalizedError {
         }
     }
 }
+
+/// Kept by CrewStore across draft navigation. A disposable send attempt cannot
+/// be the only owner of an unverified rollback decision.
+struct PendingCrewRollbackGuard {
+    private(set) var failure: LocalCrewStore.DeleteOutcome?
+
+    var isBlocked: Bool { failure != nil }
+
+    mutating func record(_ error: Error) {
+        guard let error = error as? PendingCrewFirstSendError,
+              case .rollbackUnverified(let result) = error else {
+            return
+        }
+        failure = result
+    }
+
+    func check() throws {
+        if let failure { throw PendingCrewFirstSendError.rollbackUnverified(failure) }
+    }
+}
