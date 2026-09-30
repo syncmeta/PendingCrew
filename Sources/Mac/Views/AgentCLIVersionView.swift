@@ -10,6 +10,8 @@ struct AgentCLIVersionView: View {
     @State private var pending: AgentCLIVersionCenter.Action?
     @State private var confirmedInstallation: AgentCLIInstallation?
     @State private var confirming = false
+    @State private var pendingCodexInstall: CodexCLIInstallAction?
+    @State private var confirmingCodexInstall = false
     @State private var defaultModel = ""
     @State private var defaultFastMode = false
     @ObservedObject private var catalog = ModelCatalogCenter.shared
@@ -21,6 +23,9 @@ struct AgentCLIVersionView: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             launchDefaults
+            if kind == .codex, let state = center.codexProvisioningState {
+                codexProvisioning(state)
+            }
             if let installation {
                 pathRows(installation)
                 actions(installation)
@@ -55,6 +60,18 @@ struct AgentCLIVersionView: View {
         } message: {
             Text(confirmationText)
         }
+        .confirmationDialog(
+            "确认安装官方 Codex CLI？", isPresented: $confirmingCodexInstall, titleVisibility: .visible
+        ) {
+            Button("确认安装") {
+                if let pendingCodexInstall {
+                    Task { await center.installCodex(pendingCodexInstall) }
+                }
+            }
+            Button("取消", role: .cancel) { pendingCodexInstall = nil }
+        } message: {
+            Text(codexInstallConfirmationText)
+        }
     }
 
     // MARK: - 片段
@@ -65,9 +82,45 @@ struct AgentCLIVersionView: View {
             if center.errors[kind] != nil {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
-            Text(installation?.version ?? (busy ? "检测中" : "版本未知"))
+            Text(installation?.version ?? codexVersionLabel ?? (busy ? "检测中" : "版本未知"))
                 .monospacedDigit().foregroundStyle(.secondary)
             if busy { ProgressView().controlSize(.small) }
+        }
+    }
+
+    @ViewBuilder
+    private func codexProvisioning(_ state: CodexCLIProvisioningState) -> some View {
+        switch state {
+        case .ready:
+            EmptyView()
+        case let .missing(guide):
+            VStack(alignment: .leading, spacing: 6) {
+                Text("未找到独立 Codex CLI；ChatGPT Desktop 本体不能作为 runner。")
+                    .foregroundStyle(.orange)
+                Text("官方来源：\(guide.registry) · \(guide.package)@\(guide.version)")
+                    .font(.caption).textSelection(.enabled)
+                Link("查看官方安装指引", destination: guide.documentation)
+                    .font(.caption)
+                Button("准备安装官方 Codex CLI…") {
+                    if let action = center.prepareCodexInstall() {
+                        pendingCodexInstall = action
+                        confirmingCodexInstall = true
+                    }
+                }
+                .help("首次点击只检查本机 npm 并生成固定安装计划；不会联网、安装或读取登录状态。")
+            }
+        case .awaitingSecondConfirmation:
+            Text("正在等待第二次确认；尚未开始下载安装。")
+                .foregroundStyle(.secondary).font(.caption)
+        case .installing:
+            Label("正在安装并复验受管 Codex CLI…", systemImage: "arrow.down.circle")
+                .font(.caption).foregroundStyle(.secondary)
+        case let .installedNeedsManualSignIn(installed):
+            Text("已复验 Codex CLI \(installed.version)。未读取认证状态；请由你自行完成 Codex 原生登录后再创建 session。")
+                .foregroundStyle(.secondary).font(.caption)
+        case let .failed(message):
+            Text("Codex CLI 安装未完成：\(message)")
+                .foregroundStyle(.red).font(.caption).textSelection(.enabled)
         }
     }
 
@@ -142,6 +195,24 @@ struct AgentCLIVersionView: View {
         default: action = "维护 CLI"
         }
         return "\(action)。\n执行前必须通过：① PendingCrew 所有 crew 中该 runner 的存活 session 数为 0（含空闲、启动中、等审批）；② 本机进程扫描没有该 runner。检测失败也会拒绝执行。\n维护期间禁止 PendingCrew 启动同类 session。外部终端不受锁控制，请勿同时启动。Unix 已打开的二进制不受符号链接切换影响，旧 session 不会当场崩，但新 session 会用新版，可能出现两版并存，因此要先全部停止。"
+    }
+
+    private var codexVersionLabel: String? {
+        guard kind == .codex else { return nil }
+        guard let state = center.codexProvisioningState else { return nil }
+        switch state {
+        case .missing: return "CLI 缺失"
+        case .awaitingSecondConfirmation: return "等待确认"
+        case .installing: return "安装中"
+        case let .installedNeedsManualSignIn(installed): return installed.version
+        case .failed: return "安装未完成"
+        case .ready: return nil
+        }
+    }
+
+    private var codexInstallConfirmationText: String {
+        guard let action = pendingCodexInstall else { return "没有可执行的安装计划。" }
+        return "将通过本机 npm 执行 PendingCrew 预先生成的固定官方动作。\n来源：\(action.registry)\n目标：\(action.target.path)\n参数：\(action.arguments.joined(separator: " "))\n\n不会读取认证缓存、自动登录或启动 Codex/agent。若有存活 Codex 进程、现有 CLI 或目标已出现，操作会拒绝且不会重试。"
     }
 
     private func confirm(_ action: AgentCLIVersionCenter.Action, _ installation: AgentCLIInstallation) {

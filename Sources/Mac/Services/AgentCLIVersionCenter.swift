@@ -10,10 +10,17 @@ final class AgentCLIVersionCenter: ObservableObject {
     @Published private(set) var errors: [LocalCodingAgentKind: String] = [:]
     @Published private(set) var results: [LocalCodingAgentKind: String] = [:]
     @Published private(set) var busy: Set<LocalCodingAgentKind> = []
+    /// #188 的显式缺失/安装状态。它不是登录状态：整个流不读取 token 或认证缓存。
+    @Published private(set) var codexProvisioningState: CodexCLIProvisioningState?
     private var timer: Timer?
     private let service: AgentCLIMaintenanceService
+    private let codexProvisioning: CodexCLIProvisioningService
 
-    init(service: AgentCLIMaintenanceService = .init()) { self.service = service }
+    init(service: AgentCLIMaintenanceService = .init(),
+         codexProvisioning: CodexCLIProvisioningService = .init()) {
+        self.service = service
+        self.codexProvisioning = codexProvisioning
+    }
 
     func start() {
         guard timer == nil else { return }
@@ -32,6 +39,16 @@ final class AgentCLIVersionCenter: ObservableObject {
     func refresh(_ kind: LocalCodingAgentKind) async {
         guard busy.insert(kind).inserted else { return }
         defer { busy.remove(kind) }
+        if kind == .codex {
+            let state = codexProvisioning.currentState()
+            codexProvisioningState = state
+            if case .missing = state {
+                installations[kind] = nil
+                errors[kind] = nil
+                results[kind] = nil
+                return
+            }
+        }
         let service = service
         let result = await Task.detached(priority: .utility) { () -> Result<AgentCLIInstallation, Error> in
             Result {
@@ -41,9 +58,53 @@ final class AgentCLIVersionCenter: ObservableObject {
             }
         }.value
         switch result {
-        case let .success(value): installations[kind] = value; errors[kind] = nil
-        case let .failure(error): errors[kind] = error.localizedDescription
+        case let .success(value):
+            installations[kind] = value
+            errors[kind] = nil
+            if kind == .codex { codexProvisioningState = .ready }
+        case let .failure(error):
+            errors[kind] = error.localizedDescription
+            if kind == .codex { codexProvisioningState = .failed(error.localizedDescription) }
         }
+    }
+
+    /// 第一次点击：只返回固定的、不可由 UI 文本替换字段的动作；不会启动 npm。
+    @discardableResult
+    func prepareCodexInstall() -> CodexCLIInstallAction? {
+        guard busy.insert(.codex).inserted else { return nil }
+        defer { busy.remove(.codex) }
+        errors[.codex] = nil
+        do {
+            let action = try codexProvisioning.prepareOfficialInstall()
+            codexProvisioningState = .awaitingSecondConfirmation(action)
+            return action
+        } catch {
+            errors[.codex] = error.localizedDescription
+            codexProvisioningState = .failed(error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// 仅由确认对话框的第二次点击调用。成功也只证明二进制；认证仍由用户的原生
+    /// Codex 登录流程负责，且本方法绝不启动 app-server 或 agent。
+    func installCodex(_ action: CodexCLIInstallAction) async {
+        guard busy.insert(.codex).inserted else { return }
+        errors[.codex] = nil
+        results[.codex] = nil
+        codexProvisioningState = .installing(action)
+        let provisioning = codexProvisioning
+        let result = await Task.detached(priority: .userInitiated) {
+            Result { try provisioning.installConfirmed(action) }
+        }.value
+        switch result {
+        case let .success(installed):
+            codexProvisioningState = .installedNeedsManualSignIn(installed)
+            results[.codex] = "已验证受管 Codex CLI \(installed.version)。PendingCrew 没有读取登录状态；请由你自行完成 Codex 原生登录后再创建 session。"
+        case let .failure(error):
+            codexProvisioningState = .failed(error.localizedDescription)
+            errors[.codex] = error.localizedDescription
+        }
+        busy.remove(.codex)
     }
 
     enum Action {

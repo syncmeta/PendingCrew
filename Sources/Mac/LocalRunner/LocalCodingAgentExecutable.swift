@@ -18,7 +18,21 @@ public enum LocalCodingAgentExecutable {
 
     /// 解析登录 shell PATH 中第一个可执行的同名文件。
     public static func resolve(_ kind: LocalCodingAgentKind) -> URL? {
-        resolve(kind, path: childProcessPath)
+        if let discovered = resolve(kind, path: childProcessPath) { return discovered }
+        // #188：受管安装的 fallback 只给 Codex，且只接受固定应用数据目录里已
+        // 复验过的 npm target。Desktop app bundle 永远不是候选。
+        return kind == .codex ? CodexCLIProvisioningService.managedExecutable() : nil
+    }
+
+    /// 与 agent discovery 同一条 PATH 的通用可执行文件查找；受控安装仅以此解析 npm，
+    /// 不执行 shell、alias 或消息文本。
+    static func resolveNamed(_ name: String, path: String = childProcessPath) -> URL? {
+        guard !name.isEmpty, !name.contains("/"), !name.contains("\\0") else { return nil }
+        for dir in path.split(separator: ":").map(String.init) {
+            let candidate = URL(fileURLWithPath: dir).appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+        }
+        return nil
     }
 
     /// 可注入 PATH 的纯搜索边界；测试用临时目录验证首命中顺序。

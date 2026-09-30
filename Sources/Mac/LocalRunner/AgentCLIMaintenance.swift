@@ -139,6 +139,191 @@ struct AgentCLIInstallation: Equatable {
     let checkedAt: Date
 }
 
+/// 人看得见的「Codex CLI 缺失」指引。这里的来源/版本是产品代码钉死的，绝不
+/// 从白板消息、URL 参数或任意文本拼出将要执行的命令。
+struct CodexCLIInstallGuide: Equatable {
+    static let officialRegistry = "https://registry.npmjs.org/"
+    static let officialPackage = "@openai/codex"
+    static let officialPackageVersion = "0.159.1"
+    static let documentationURL = URL(string: "https://learn.chatgpt.com/docs/codex/cli")!
+
+    let registry = officialRegistry
+    let package = officialPackage
+    let version = officialPackageVersion
+    let documentation = documentationURL
+}
+
+/// 唯一能交给安装器的动作。构造器仅限本文件，调用者无法把白板/聊天文本替换成
+/// package、registry、target 或 argv。
+struct CodexCLIInstallAction: Equatable {
+    let packageManager: URL
+    let target: URL
+    let registry: String
+    let package: String
+    let arguments: [String]
+    let requiresSecondConfirmation = true
+
+    fileprivate init(packageManager: URL, target: URL) {
+        self.packageManager = packageManager
+        self.target = target
+        self.registry = CodexCLIInstallGuide.officialRegistry
+        self.package = CodexCLIInstallGuide.officialPackage + "@" + CodexCLIInstallGuide.officialPackageVersion
+        self.arguments = [
+            "install",
+            "--prefix", target.path,
+            "--userconfig", "/dev/null",
+            "--globalconfig", "/dev/null",
+            "--registry", CodexCLIInstallGuide.officialRegistry,
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            self.package,
+        ]
+    }
+}
+
+struct ManagedCodexCLIInstallation: Equatable {
+    let executable: URL
+    let version: String
+}
+
+/// 这是 UI 的权威状态，而不是对 Desktop bundle、auth.json 或某条错误字符串的猜测。
+/// `installedNeedsManualSignIn` 不读取认证缓存；它只是明确告诉人：本轮只验证了二进制。
+enum CodexCLIProvisioningState: Equatable {
+    case ready
+    case missing(CodexCLIInstallGuide)
+    case awaitingSecondConfirmation(CodexCLIInstallAction)
+    case installing(CodexCLIInstallAction)
+    case installedNeedsManualSignIn(ManagedCodexCLIInstallation)
+    case failed(String)
+}
+
+/// #188：Codex CLI 缺失时的固定安装链。
+///
+/// - P1：`currentState`/`prepareOfficialInstall` 给 UI 一个可见、可解释的状态；准备
+///   动作本身不启动网络/包管理器。
+/// - P2：`installConfirmed` 只接受上面的受限动作，并复用跨 crew 的 CLI 独占锁。
+///   它不读认证缓存、不启动 `codex login`、不启动 app-server/agent，也不自动重试。
+struct CodexCLIProvisioningService {
+    typealias Locate = () -> URL?
+    typealias Execute = (URL, [String], TimeInterval, [String: String]) throws -> AgentCLICommandResult
+
+    var home = FileManager.default.homeDirectoryForCurrentUser
+    var managedRoot = PendingCrewDataRoot.subdirectory("managed-codex-cli")
+    var lockDirectory = LocalWhiteboardStore.defaultDirectory
+    var resolveCodex: () -> URL? = { LocalCodingAgentExecutable.resolve(.codex) }
+    var locateNpm: Locate = { LocalCodingAgentExecutable.resolveNamed("npm") }
+    var processExecute: AgentCLIMaintenanceService.Execute = AgentCLICommand.run
+    var execute: Execute = { executable, arguments, timeout, environment in
+        try AgentCLICommand.run(
+            executable, arguments, timeout,
+            directory: LocalWhiteboardStore.defaultDirectory.appendingPathComponent("cli-maintenance-logs"),
+            environment: environment)
+    }
+
+    func currentState() -> CodexCLIProvisioningState {
+        resolveCodex() == nil ? .missing(.init()) : .ready
+    }
+
+    /// 第一次点击只产生固定计划；绝不联网、绝不执行 npm。
+    func prepareOfficialInstall() throws -> CodexCLIInstallAction {
+        guard case .missing = currentState() else {
+            throw AgentCLIFailure(message: "已找到 Codex CLI；不会覆盖已有安装。")
+        }
+        guard let npm = locateNpm(), npm.lastPathComponent == "npm",
+              FileManager.default.isExecutableFile(atPath: npm.path) else {
+            throw AgentCLIFailure(message: "未找到可执行 npm；无法准备官方 Codex CLI 安装。")
+        }
+        let target = managedTarget
+        guard Self.isDescendant(target, of: managedRoot) else {
+            throw AgentCLIFailure(message: "受管 Codex CLI 目标目录无效；拒绝安装。")
+        }
+        guard !FileManager.default.fileExists(atPath: target.path) else {
+            throw AgentCLIFailure(message: "受管 Codex CLI 目标已存在；不会覆盖或自动重试，请重新检测后人工处理。")
+        }
+        return .init(packageManager: npm, target: target)
+    }
+
+    /// 只能由 UI 的第二次确认调用。动作字段逐项回验，避免未来调用点把它退化成
+    /// `String -> shell` 的自由命令入口。
+    func installConfirmed(_ action: CodexCLIInstallAction) throws -> ManagedCodexCLIInstallation {
+        guard action.requiresSecondConfirmation,
+              action.registry == CodexCLIInstallGuide.officialRegistry,
+              action.package == CodexCLIInstallGuide.officialPackage + "@" + CodexCLIInstallGuide.officialPackageVersion,
+              action.target == managedTarget,
+              action.arguments == CodexCLIInstallAction(packageManager: action.packageManager, target: managedTarget).arguments,
+              action.packageManager.lastPathComponent == "npm",
+              FileManager.default.isExecutableFile(atPath: action.packageManager.path)
+        else {
+            throw AgentCLIFailure(message: "安装计划不是 PendingCrew 生成的固定官方动作；拒绝执行。")
+        }
+
+        let lease = try AgentCLIMaintenanceLease.acquire(.codex, exclusive: true, directory: lockDirectory)
+        defer { withExtendedLifetime(lease) {} }
+        let blockers = try AgentCLIMaintenanceService.processBlockers(.codex, execute: processExecute)
+        guard blockers.isEmpty else {
+            throw AgentCLIFailure(message: "Codex 仍有存活进程，PID：\(blockers.map(String.init).joined(separator: ", "))；不会安装。")
+        }
+        guard case .missing = currentState() else {
+            throw AgentCLIFailure(message: "确认前已出现可用 Codex CLI；不会覆盖或自动重试。")
+        }
+        guard !FileManager.default.fileExists(atPath: action.target.path) else {
+            throw AgentCLIFailure(message: "确认前受管目标已出现；不会覆盖或自动重试。")
+        }
+
+        let install = try execute(action.packageManager, action.arguments, 300, environment)
+        guard install.status == 0 else {
+            throw AgentCLIFailure(message: "官方 Codex CLI 安装失败（退出码 \(install.status)）：\n\(install.output)\n日志：\(install.logURL?.path ?? "无")")
+        }
+        guard let executable = Self.managedExecutable(root: managedRoot) else {
+            throw AgentCLIFailure(message: "安装命令成功退出，但固定目标未出现可执行 Codex CLI；不会标成可用。")
+        }
+        let version = try execute(executable, ["--version"], 15, environment)
+        guard version.status == 0,
+              LocalCodingAgentExecutable.cliVersion(version.output) == CodexCLIInstallGuide.officialPackageVersion else {
+            throw AgentCLIFailure(message: "安装后 Codex CLI 版本复验失败；不会标成可用。日志：\(version.logURL?.path ?? "无")")
+        }
+        return .init(executable: executable, version: CodexCLIInstallGuide.officialPackageVersion)
+    }
+
+    /// 仅在固定受管目录下接受 npm 的 `.bin/codex`；不探测或借用 Desktop app bundle。
+    static func managedExecutable(root: URL = PendingCrewDataRoot.subdirectory("managed-codex-cli")) -> URL? {
+        let target = managedTarget(root: root)
+        let executable = target.appendingPathComponent("node_modules/.bin/codex")
+        let resolved = executable.resolvingSymlinksInPath()
+        guard isDescendant(executable, of: target),
+              isDescendant(resolved, of: target),
+              FileManager.default.isExecutableFile(atPath: executable.path)
+        else { return nil }
+        return executable
+    }
+
+    private var managedTarget: URL { Self.managedTarget(root: managedRoot) }
+
+    private static func managedTarget(root: URL) -> URL {
+        root.appendingPathComponent(CodexCLIInstallGuide.officialPackageVersion, isDirectory: true)
+    }
+
+    private var environment: [String: String] {
+        var values = [
+            "HOME": home.path,
+            "PATH": LocalCodingAgentExecutable.childProcessPath,
+            "npm_config_registry": CodexCLIInstallGuide.officialRegistry,
+            "npm_config_ignore_scripts": "true",
+            "npm_config_audit": "false",
+            "npm_config_fund": "false",
+        ]
+        if let tmp = ProcessInfo.processInfo.environment["TMPDIR"], !tmp.isEmpty { values["TMPDIR"] = tmp }
+        return values
+    }
+
+    private static func isDescendant(_ child: URL, of parent: URL) -> Bool {
+        let childPath = child.standardizedFileURL.path
+        let parentPath = parent.standardizedFileURL.path
+        return childPath.hasPrefix(parentPath + "/")
+    }
+}
+
 /// Injectable command/locator boundary: tests never call a real updater.
 struct AgentCLIMaintenanceService {
     typealias Execute = (URL, [String], TimeInterval) throws -> AgentCLICommandResult
@@ -236,9 +421,16 @@ struct AgentCLIMaintenanceService {
         return actual
     }
 
+    static func processBlockers(_ kind: LocalCodingAgentKind, execute: Execute) throws -> [Int32] {
+        let result = try execute(URL(fileURLWithPath: "/bin/ps"), ["-axo", "pid=,command=", "-ww"], 10)
+        guard result.status == 0 else {
+            throw AgentCLIFailure(message: "ps -axo pid=,command= -ww 失败（退出码 \(result.status)）：\n\(result.output)\n日志：\(result.logURL?.path ?? "无")")
+        }
+        return try AgentCLIProcessScan.blockers(result.output, kind: kind)
+    }
+
     private func requireNoProcesses(_ kind: LocalCodingAgentKind) throws {
-        let result = try checked(URL(fileURLWithPath: "/bin/ps"), ["-axo", "pid=,command=", "-ww"], 10)
-        let pids = try AgentCLIProcessScan.blockers(result.output, kind: kind)
+        let pids = try Self.processBlockers(kind, execute: execute)
         guard pids.isEmpty else { throw AgentCLIFailure(message: "\(kind.displayName) 仍有存活进程（含空闲 session / 外部终端 / 探针），PID：\(pids.map(String.init).joined(separator: ", "))。请全部停止后再试。") }
     }
 

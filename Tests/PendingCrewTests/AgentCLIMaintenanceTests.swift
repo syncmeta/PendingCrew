@@ -2,6 +2,178 @@
 import XCTest
 
 final class AgentCLIMaintenanceTests: XCTestCase {
+    /// #188：缺少 Codex CLI 不能只落成一条通用错误；必须有可见状态，并且
+    /// 安装能力只能接收我们定义的固定计划，绝不能把消息正文当命令执行。
+    ///
+    /// 这是源码接线回归：实现仍在同一个 LocalRunner 源文件中，以免新增 pbx
+    /// 文件时先把测试工程漂移问题混进功能红证。
+    func testCodexProvisioningHasVisibleStateAndTypedOfficialAction() throws {
+        let testURL = URL(fileURLWithPath: #filePath)
+        let root = testURL.deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Mac/LocalRunner/AgentCLIMaintenance.swift"))
+
+        XCTAssertTrue(source.contains("enum CodexCLIProvisioningState"),
+                      "缺 CLI 仍只有通用错误，UI 没有可靠的可见状态")
+        XCTAssertTrue(source.contains("struct CodexCLIInstallAction"),
+                      "安装动作没有类型边界，容易把消息正文误当命令")
+        XCTAssertTrue(source.contains("officialRegistry"),
+                      "安装来源不是固定的官方 registry")
+        XCTAssertTrue(source.contains("--ignore-scripts"),
+                      "npm 生命周期脚本没有被明确禁止")
+        XCTAssertTrue(source.contains("requiresSecondConfirmation"),
+                      "一键安装没有二次确认边界")
+    }
+
+    func testCodexProvisioningStateIsConnectedToSettingsUI() throws {
+        let testURL = URL(fileURLWithPath: #filePath)
+        let root = testURL.deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let center = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Mac/Services/AgentCLIVersionCenter.swift"))
+        let view = try String(contentsOf: root.appendingPathComponent(
+            "Sources/Mac/Views/AgentCLIVersionView.swift"))
+
+        XCTAssertTrue(center.contains("codexProvisioningState"),
+                      "缺失状态没有发布给设置界面")
+        XCTAssertTrue(center.contains("prepareCodexInstall"),
+                      "首次点击没有独立的零执行准备边界")
+        XCTAssertTrue(center.contains("installCodex"),
+                      "二次确认没有独立的执行入口")
+        XCTAssertTrue(view.contains("查看官方安装指引"),
+                      "CLI 缺失时设置界面没有官方指引")
+        XCTAssertTrue(view.contains("确认安装官方 Codex CLI？"),
+                      "安装前没有第二次确认对话框")
+    }
+
+    func testProvisioningPrepareIsOfflineAndReturnsOnlyFixedOfficialAction() throws {
+        try provisioningFixture { service, fakeNpm, _, _ in
+            var processCalls = 0
+            var installCalls = 0
+            var prepared = service
+            prepared.processExecute = { _, _, _ in
+                processCalls += 1
+                return .init(status: 0, output: "1 /sbin/launchd\n", logURL: nil)
+            }
+            prepared.execute = { _, _, _, _ in
+                installCalls += 1
+                return .init(status: 0, output: "", logURL: nil)
+            }
+
+            XCTAssertEqual(prepared.currentState(), .missing(.init()))
+            let action = try prepared.prepareOfficialInstall()
+            XCTAssertEqual(action.packageManager, fakeNpm)
+            XCTAssertEqual(action.registry, "https://registry.npmjs.org/")
+            XCTAssertEqual(action.package, "@openai/codex@0.159.1")
+            XCTAssertEqual(action.target.standardizedFileURL.path,
+                           prepared.managedRoot.appendingPathComponent("0.159.1", isDirectory: true).standardizedFileURL.path)
+            XCTAssertEqual(action.arguments, [
+                "install", "--prefix", action.target.path,
+                "--userconfig", "/dev/null", "--globalconfig", "/dev/null",
+                "--registry", "https://registry.npmjs.org/",
+                "--ignore-scripts", "--no-audit", "--no-fund", "@openai/codex@0.159.1",
+            ])
+            XCTAssertTrue(action.requiresSecondConfirmation)
+            XCTAssertEqual(processCalls, 0, "首次点击不得扫描/启动安装")
+            XCTAssertEqual(installCalls, 0, "首次点击不得联网或运行 npm")
+        }
+    }
+
+    func testProvisioningConfirmedActionUsesFixedNpmThenVerifiesWithoutAuth() throws {
+        try provisioningFixture { service, _, root, _ in
+            var prepared = service
+            let action = try prepared.prepareOfficialInstall()
+            var calls: [(URL, [String], [String: String])] = []
+            prepared.processExecute = { _, _, _ in
+                .init(status: 0, output: "1 /sbin/launchd\n", logURL: nil)
+            }
+            prepared.execute = { executable, arguments, _, environment in
+                calls.append((executable, arguments, environment))
+                if arguments.first == "install" {
+                    let binary = action.target.appendingPathComponent("node_modules/@openai/codex/bin/codex")
+                    try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data("fixture".utf8).write(to: binary)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
+                    let link = action.target.appendingPathComponent("node_modules/.bin/codex")
+                    try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.createSymbolicLink(atPath: link.path,
+                                                                withDestinationPath: "../@openai/codex/bin/codex")
+                    return .init(status: 0, output: "installed", logURL: root.appendingPathComponent("install.log"))
+                }
+                XCTAssertEqual(executable.path, action.target.appendingPathComponent("node_modules/.bin/codex").path)
+                XCTAssertEqual(arguments, ["--version"])
+                return .init(status: 0, output: "codex-cli 0.159.1", logURL: root.appendingPathComponent("verify.log"))
+            }
+
+            let installed = try prepared.installConfirmed(action)
+            XCTAssertEqual(installed.version, "0.159.1")
+            XCTAssertEqual(installed.executable, action.target.appendingPathComponent("node_modules/.bin/codex"))
+            XCTAssertEqual(calls.count, 2)
+            XCTAssertEqual(calls[0].0, action.packageManager)
+            XCTAssertEqual(calls[0].1, action.arguments)
+            XCTAssertEqual(calls[1].1, ["--version"])
+            XCTAssertEqual(calls[0].2["npm_config_registry"], "https://registry.npmjs.org/")
+            XCTAssertEqual(calls[0].2["npm_config_ignore_scripts"], "true")
+            XCTAssertEqual(calls[0].2["HOME"], prepared.home.path)
+            XCTAssertNil(calls[0].2["OPENAI_API_KEY"])
+            XCTAssertFalse(calls.flatMap { $0.1 }.contains("login"), "安装链不得自动登录")
+        }
+    }
+
+    func testProvisioningRefusesLiveCodexBeforeNpm() throws {
+        try provisioningFixture { service, _, _, _ in
+            var prepared = service
+            let action = try prepared.prepareOfficialInstall()
+            var npmRan = false
+            prepared.processExecute = { _, _, _ in
+                .init(status: 0, output: "24 codex app-server\n", logURL: nil)
+            }
+            prepared.execute = { _, _, _, _ in
+                npmRan = true
+                return .init(status: 0, output: "", logURL: nil)
+            }
+
+            XCTAssertThrowsError(try prepared.installConfirmed(action)) {
+                XCTAssertTrue($0.localizedDescription.contains("24"))
+            }
+            XCTAssertFalse(npmRan, "有存活 Codex 时不得启动 npm")
+        }
+    }
+
+    func testProvisioningFailedNpmNeverClaimsInstalledOrRetries() throws {
+        try provisioningFixture { service, _, _, _ in
+            var prepared = service
+            let action = try prepared.prepareOfficialInstall()
+            var calls = 0
+            prepared.processExecute = { _, _, _ in
+                .init(status: 0, output: "1 /sbin/launchd\n", logURL: nil)
+            }
+            prepared.execute = { _, _, _, _ in
+                calls += 1
+                return .init(status: 17, output: "fake package manager failed", logURL: nil)
+            }
+
+            XCTAssertThrowsError(try prepared.installConfirmed(action)) {
+                XCTAssertTrue($0.localizedDescription.contains("17"))
+                XCTAssertTrue($0.localizedDescription.contains("fake package manager failed"))
+            }
+            XCTAssertEqual(calls, 1, "失败后不自动重试或继续版本探测")
+            XCTAssertNil(CodexCLIProvisioningService.managedExecutable(root: prepared.managedRoot))
+        }
+    }
+
+    func testManagedProvisioningRejectsSymlinkEscapingItsFixedTarget() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let link = root.appendingPathComponent("0.159.1/node_modules/.bin/codex")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/bin/sh")
+        XCTAssertNil(CodexCLIProvisioningService.managedExecutable(root: root))
+    }
+
     func testBothCLIFormatsUseTheExistingNumericVersionParser() {
         XCTAssertEqual(LocalCodingAgentExecutable.cliVersion("codex-cli 0.153.4\n"), "0.153.4")
         XCTAssertEqual(LocalCodingAgentExecutable.cliVersion("2.1.263 (Claude Code)\n"), "2.1.263")
@@ -31,6 +203,25 @@ final class AgentCLIMaintenanceTests: XCTestCase {
         let otherRunner = try AgentCLIMaintenanceLease.acquire(.claudeCode, exclusive: false, directory: dir)
         withExtendedLifetime((upgrade, otherRunner)) {}
     }
+
+    private func provisioningFixture(
+        _ body: (CodexCLIProvisioningService, URL, URL, URL) throws -> Void
+    ) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fakeNpm = root.appendingPathComponent("tools/npm")
+        try FileManager.default.createDirectory(at: fakeNpm.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fixture".utf8).write(to: fakeNpm)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeNpm.path)
+        var service = CodexCLIProvisioningService()
+        service.home = root.appendingPathComponent("home")
+        service.managedRoot = root.appendingPathComponent("managed")
+        service.lockDirectory = root.appendingPathComponent("locks")
+        service.resolveCodex = { nil }
+        service.locateNpm = { fakeNpm }
+        try body(service, fakeNpm, root, service.managedRoot)
+    }
+
     private func fixture(_ body: (URL, URL, AgentCLIMaintenanceService) throws -> Void) throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
