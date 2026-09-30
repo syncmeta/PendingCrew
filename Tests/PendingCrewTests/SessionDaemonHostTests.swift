@@ -287,6 +287,51 @@ final class SessionDaemonHostTests: XCTestCase {
         XCTAssertEqual(notices, 0)
     }
 
+    /// 白板拒写时，P1 只能保留 expected-live 记录供下次 daemon 启动复核；绝不能
+    /// 先花掉唯一提示权再把失败吞掉，更不能借机自动唤醒或接任。
+    func test_expectedLive白板拒写后下一次启动仍会重试提示() throws {
+        let store = ExpectedLiveSessionStore(directory: directory)
+        let old = ExpectedLiveSessionStore.DaemonEpoch(
+            pid: 999, startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try store.activate(crewId: "c1", sessionId: "s1", epoch: old)
+
+        let rejected = SessionDaemonHost(paths: paths(), expectedLiveStore: store)
+        rejected.onExpectedLiveNotice = { _, _ in throw CocoaError(.fileWriteNoPermission) }
+        try rejected.start()
+        rejected.stop()
+
+        var delivered = 0
+        let retry = SessionDaemonHost(paths: paths(), expectedLiveStore: store)
+        retry.onExpectedLiveNotice = { _, text in
+            delivered += 1
+            XCTAssertTrue(text.contains("未证实缺席"), text)
+        }
+        try retry.start()
+        defer { retry.stop() }
+        XCTAssertEqual(delivered, 1, "白板拒写不能永久吃掉 P1 的人工可见提示")
+    }
+
+    /// 新账本留下、但 daemon 在第一次 roster rebuild 前就不在了：没有 pid 身份可核，
+    /// 所以只能一次人工可见的「未证实缺席」提示，不能启动 / handoff。
+    func test_旧expectedLive缺registry时只发一次未证实提示() throws {
+        let store = ExpectedLiveSessionStore(directory: directory)
+        let old = ExpectedLiveSessionStore.DaemonEpoch(
+            pid: 999, startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try store.activate(crewId: "c1", sessionId: "s1", epoch: old)
+
+        var notices: [(String, String)] = []
+        let host = SessionDaemonHost(paths: paths(), expectedLiveStore: store)
+        host.onExpectedLiveNotice = { notices.append(($0, $1)) }
+        try host.start()
+        defer { host.stop() }
+
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices.first?.0, "c1")
+        XCTAssertTrue(notices[0].1.contains("未证实缺席"), notices[0].1)
+        XCTAssertNil(try store.nextUndeliveredNotice(crewId: "c1", sessionId: "s1", epoch: old),
+                     "重启后同一条旧记录不该重复提示")
+    }
+
     // MARK: -
 
     private func writeRegistry(entries: [SessionProcessRegistry.Entry]) throws {

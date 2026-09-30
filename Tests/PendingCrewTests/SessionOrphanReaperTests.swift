@@ -71,6 +71,16 @@ final class SessionOrphanReaperTests: XCTestCase {
         XCTAssertFalse(identity.command.isEmpty)
     }
 
+    /// P1 的 expected-live 路不能再把「查不到」和「系统读取报错」都压成 nil；
+    /// 本测试只触本测试进程与无效 pid，不起 helper / agent。
+    func test_typedProbe保留明确缺席这个分支() {
+        XCTAssertEqual(SessionOrphanReaper.probeResult(pid: 0), .missing)
+        guard case let .found(identity) = SessionOrphanReaper.probeResult(pid: getpid()) else {
+            return XCTFail("本测试进程应有可读身份")
+        }
+        XCTAssertEqual(identity.pid, getpid())
+    }
+
     func test_probe对不存在的pid返回nil() {
         // 找一个当前肯定没被占用的 pid：从上限往下扫。
         var candidate: Int32 = 99_990

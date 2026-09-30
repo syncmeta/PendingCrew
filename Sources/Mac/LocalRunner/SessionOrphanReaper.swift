@@ -46,6 +46,14 @@ enum SessionOrphanDecision: Equatable {
     var killsSomething: Bool { self == .reap }
 }
 
+/// `nil` 会把「确实不存在」和「系统调用没法回答」揉成同一件事。回收旧孤儿时那样
+/// 勉强可留日志；expected-live 的人可见告警却不能把后一种冒充成 session 已死亡。
+enum SessionProcessProbeResult: Equatable {
+    case found(SessionProcessIdentity)
+    case missing
+    case unreadable(errno: Int32)
+}
+
 enum SessionOrphanReaper {
 
     // MARK: - 纯判定（这一半必须能单测，它是本文件的全部风险所在）
@@ -83,25 +91,32 @@ enum SessionOrphanReaper {
 
     // MARK: - 系统调用那一半
 
-    /// 读该 pid 当前的真实身份。进程不存在时返回 nil。
-    static func probe(pid: Int32) -> SessionProcessIdentity? {
-        guard pid > 0 else { return nil }
+    /// 读该 pid 当前的真实身份，并保留「不存在」和「读取失败」的差别。
+    static func probeResult(pid: Int32) -> SessionProcessProbeResult {
+        guard pid > 0 else { return .missing }
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
         let rc = sysctl(&mib, u_int(mib.count), &info, &size, nil, 0)
         // size == 0 是「调用成功但这个 pid 没有对应进程」——不是错误，别当错误处理。
-        guard rc == 0, size > 0, info.kp_proc.p_pid == pid else { return nil }
+        guard rc == 0 else { return .unreadable(errno: errno) }
+        guard size > 0, info.kp_proc.p_pid == pid else { return .missing }
         let comm = withUnsafeBytes(of: info.kp_proc.p_comm) { raw -> String in
             let bytes = raw.prefix(while: { $0 != 0 })
             return String(decoding: bytes, as: UTF8.self)
         }
-        return SessionProcessIdentity(
+        return .found(SessionProcessIdentity(
             pid: pid,
             pgid: info.kp_eproc.e_pgid,
             startTimeSeconds: Int64(info.kp_proc.p_starttime.tv_sec),
             startTimeMicroseconds: Int32(info.kp_proc.p_starttime.tv_usec),
-            command: comm)
+            command: comm))
+    }
+
+    /// 保留原有调用面的兼容包装；需要把缺席当作故障事实的代码必须改用 `probeResult`。
+    static func probe(pid: Int32) -> SessionProcessIdentity? {
+        guard case let .found(identity) = probeResult(pid: pid) else { return nil }
+        return identity
     }
 
     /// 现在就为一个**活着的**进程拍一份身份，存进 registry。

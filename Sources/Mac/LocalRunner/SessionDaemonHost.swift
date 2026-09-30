@@ -227,6 +227,14 @@ final class SessionDaemonHost {
             crewId: crewId, sessionId: "system", text: text,
             category: "progress", senderName: "系统")
     }
+    /// P1 的 expected-live 提示必须得到白板落盘结果；普通孤儿汇总保留原有 best-effort
+    /// 通道，避免扩大既有语义。失败只留日志并等待下次受控 daemon 启动复核，绝不唤醒
+    /// 或替换任何 agent。
+    var onExpectedLiveNotice: (String, String) throws -> Void = { crewId, text in
+        _ = try LocalWhiteboardStore.shared.appendSessionMessageReportingFailure(
+            crewId: crewId, sessionId: "system", text: text,
+            category: "progress", senderName: "系统")
+    }
     /// Explicit secure-listener startup can fail asynchronously (`NWListener`).  Production exits;
     /// tests inject an observer.  The host is already stopped before this callback runs.
     var onSecureListenerFailure: (SecureTransportError) -> Void = { _ in }
@@ -237,16 +245,25 @@ final class SessionDaemonHost {
     private var secureListener: SecureTCPListener?
     private var registry = SessionProcessRegistry()
     private let startedAt = Date()
+    /// P1 only: old daemon rows are reconciled into one human-visible notice. It never starts,
+    /// stops, hands off, or schedules an agent.
+    private let expectedLiveStore: ExpectedLiveSessionStore?
+    /// 同一轮 daemon 里白板拒写不重试、不自唤醒；下次**受控** daemon 启动才会重新
+    /// 核对未确认行。两本持久账无法组成一个事务，故障方向是宁可下一轮重复可见，也
+    /// 不能把提示永久吞掉。
+    private var attemptedExpectedLiveNoticeGenerations: Set<String> = []
     var processStartedAt: Date { startedAt }
 
     init(paths: PendingCrewDaemonPaths? = nil,
          capabilities: [String] = SessionDaemonHost.defaultCapabilities,
          build: String? = nil,
-         secureListener: SessionDaemonSecureListenerConfiguration? = nil) {
+         secureListener: SessionDaemonSecureListenerConfiguration? = nil,
+         expectedLiveStore: ExpectedLiveSessionStore? = nil) {
         let paths = paths ?? .standard()
         let build = build ?? SessionDaemonHost.currentBuild
         self.paths = paths
         secureListenerConfiguration = secureListener
+        self.expectedLiveStore = expectedLiveStore
         log = SessionDaemonLog(url: paths.log)
         server = SessionProtocolServer(
             capabilities: capabilities, daemonBuild: build,
@@ -389,29 +406,73 @@ final class SessionDaemonHost {
     /// **每一条都双重核对，`pidReused` 一律不动手**，并且把「我没有动它」写进日志和
     /// 受影响 crew 的白板 —— 静默留一个孤儿和静默杀一个无辜进程一样查不出来。
     private func reapOrphansFromPreviousRun() {
+        let currentEpoch = ExpectedLiveSessionStore.DaemonEpoch(
+            pid: Int32(ProcessInfo.processInfo.processIdentifier), startedAt: startedAt)
+        let staleExpected: [ExpectedLiveSessionStore.Record]
+        do {
+            staleExpected = try expectedLiveStore?.records().filter { $0.epoch != currentEpoch } ?? []
+        } catch {
+            staleExpected = []
+            log.write("expected-live 账本读取失败：\(error.localizedDescription)；未自动替换或唤醒，待下次 daemon 启动复核。")
+        }
         guard let data = try? Data(contentsOf: paths.registry),
               let previous = try? JSONDecoder().decode(SessionProcessRegistry.self, from: data),
-              !previous.entries.isEmpty else { return }
+              !previous.entries.isEmpty else {
+            // Registry can be absent when daemon died before its first roster rebuild. That is
+            // explicitly *not* proof of a dead agent, but the expected-live promise must not
+            // vanish silently. One durable, human-visible notice is the whole P1 response.
+            emitUnreconciledExpectedLiveNotices(staleExpected)
+            return
+        }
 
         log.write("上一轮 daemon（pid \(previous.daemonPid)）留下 \(previous.entries.count) 条记录，开始核对")
         var interruptedByCrew: [String: [String]] = [:]
         var unresolved: [String] = []
 
+        let previousEpoch = ExpectedLiveSessionStore.DaemonEpoch(
+            pid: previous.daemonPid, startedAt: previous.daemonStartedAt)
         for entry in previous.entries {
-            let decision = SessionOrphanReaper.decide(
-                recorded: entry.identity,
-                current: SessionOrphanReaper.probe(pid: entry.identity.pid))
-            let text = SessionOrphanReaper.describe(
-                sessionId: entry.sessionId, recorded: entry.identity, decision: decision)
-            log.write(text)
-            SessionOrphanReaper.apply(decision, recorded: entry.identity)
-            switch decision {
-            case .reap, .alreadyGone:
-                interruptedByCrew[entry.crewId, default: []].append(entry.sessionId)
-            case .pidReused:
+            let probe = SessionOrphanReaper.probeResult(pid: entry.identity.pid)
+            let decision: SessionOrphanDecision?
+            switch probe {
+            case let .found(current):
+                decision = SessionOrphanReaper.decide(recorded: entry.identity, current: current)
+            case .missing:
+                decision = .alreadyGone
+            case let .unreadable(errno):
+                decision = nil
+                let text = "「\(entry.sessionId)」的 pid \(entry.identity.pid) 身份读取失败（errno \(errno)），未回收也未确认缺席。"
+                log.write(text)
                 interruptedByCrew[entry.crewId, default: []].append(entry.sessionId)
                 unresolved.append(text)
             }
+
+            if let decision {
+                let text = SessionOrphanReaper.describe(
+                    sessionId: entry.sessionId, recorded: entry.identity, decision: decision)
+                log.write(text)
+                SessionOrphanReaper.apply(decision, recorded: entry.identity)
+                switch decision {
+                case .reap, .alreadyGone:
+                    interruptedByCrew[entry.crewId, default: []].append(entry.sessionId)
+                case .pidReused:
+                    interruptedByCrew[entry.crewId, default: []].append(entry.sessionId)
+                    unresolved.append(text)
+                }
+            }
+
+            let evidence: String
+            switch probe {
+            case .missing:
+                evidence = "已确认上一轮记录的 agent 进程不存在"
+            case .found:
+                evidence = "进程身份仍可见或已复用，未确认是无响应故障"
+            case .unreadable:
+                evidence = "无法读取进程身份，未确认缺席"
+            }
+            emitExpectedLiveNotice(
+                crewId: entry.crewId, sessionId: entry.sessionId, epoch: previousEpoch,
+                text: "上一 daemon 遗留的 expected-live session「\(entry.sessionId)」需要人工核对：\(evidence)。P1 未自动替换或重启任务。")
         }
 
         // fail loud，不静默：受影响的每个 crew 白板上都要看得见。
@@ -425,7 +486,43 @@ final class SessionDaemonHost {
             }
             onCrewNotice(crewId, text)
         }
+        // A registry row can be missing for an early launch, while an older stale expected row
+        // may predate the registry entirely. Host-local generation de-duplication prevents a
+        // same-start duplicate; a failed whiteboard or confirmation write remains retryable only
+        // at the next controlled daemon start.
+        emitUnreconciledExpectedLiveNotices(staleExpected)
         try? FileManager.default.removeItem(at: paths.registry)
+    }
+
+    /// No process identity to compare means "unconfirmed", never "gone". This helper has no
+    /// launch / retry side effect and deliberately does not touch the run or resume ledgers.
+    private func emitUnreconciledExpectedLiveNotices(
+        _ records: [ExpectedLiveSessionStore.Record]
+    ) {
+        for record in records {
+            emitExpectedLiveNotice(
+                crewId: record.crewId, sessionId: record.sessionId, epoch: record.epoch,
+                text: "上一 daemon 遗留的 expected-live session「\(record.sessionId)」缺少可核对的进程记录，未证实缺席。P1 未自动替换或重启任务。")
+        }
+    }
+
+    private func emitExpectedLiveNotice(
+        crewId: String, sessionId: String, epoch: ExpectedLiveSessionStore.DaemonEpoch, text: String
+    ) {
+        do {
+            guard let expectedLiveStore,
+                  let record = try expectedLiveStore.nextUndeliveredNotice(
+                    crewId: crewId, sessionId: sessionId, epoch: epoch),
+                  attemptedExpectedLiveNoticeGenerations.insert(record.generation).inserted
+            else { return }
+            try onExpectedLiveNotice(crewId, text)
+            guard try expectedLiveStore.markNoticeDelivered(record) else {
+                log.write("expected-live「\(sessionId)」告警确认已过期；未自动替换或唤醒。")
+                return
+            }
+        } catch {
+            log.write("expected-live「\(sessionId)」告警未完成：\(error.localizedDescription)；未自动替换或唤醒，待下次 daemon 启动复核。")
+        }
     }
 
     /// 停 daemon：先摘监听、再放锁。session 由调用方决定停不停 ——

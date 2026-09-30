@@ -32,6 +32,7 @@ enum SessionDaemonMain {
         // 没，而「更新 app 不打断在跑的 session」当场不成立。已经是会话首时
         // `setsid()` 返回 -1（EPERM），那是正常的，不是错误。
         _ = setsid()
+        let expectedLiveStore = ExpectedLiveSessionStore()
         let host: SessionDaemonHost
         do {
             // Persistent settings are the product path.  The environment variable remains only as
@@ -39,7 +40,8 @@ enum SessionDaemonMain {
             let secureListener = try SessionDaemonSecureListenerConfiguration
                 .fromPersistentSettings()
                 ?? SessionDaemonSecureListenerConfiguration.fromEnvironment()
-            host = SessionDaemonHost(secureListener: secureListener)
+            host = SessionDaemonHost(secureListener: secureListener,
+                                     expectedLiveStore: expectedLiveStore)
             host.onSecureListenerFailure = { error in
                 FileHandle.standardError.write(
                     Data(("PendingCrew daemon：安全监听失败，已停止本机 socket：\(error)\n").utf8))
@@ -74,7 +76,14 @@ enum SessionDaemonMain {
         let model = AppModel()
         let crewStore = CrewStore(appModel: model)
         let runner = CrewSessionRunner(
-            sessionPublisher: DaemonSessionPublisher(server: host.server))
+            sessionPublisher: DaemonSessionPublisher(server: host.server),
+            expectedLiveStore: expectedLiveStore,
+            expectedLiveEpoch: .init(
+                pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                startedAt: host.processStartedAt),
+            expectedLiveFailureReporter: { [weak log = host.log] action, error in
+                log?.write("expected-live \(action)：\(error.localizedDescription)；未自动替换或唤醒。")
+            })
         let sessionHost = SessionHost(runner: runner, ownsAppUpdater: false)
         trackRoster(of: runner, into: host)
         sessionHost.start(model: model, crewStore: crewStore)

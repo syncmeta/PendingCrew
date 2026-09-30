@@ -69,6 +69,12 @@ final class CrewSessionRunner: ObservableObject {
     /// inproc = 同进程桥（app 自己就是 viewer）；`--daemon` = socket 服务端。
     /// **这个类在两种模式下是同一份**，差别全收在这个协议后面。
     private let sessionPublisher: any SessionProtocolPublishing
+    /// 只在 daemon 编排器注入。viewer / inproc 不会拿 resume ledger 冒充 live 账本。
+    private let expectedLiveStore: ExpectedLiveSessionStore?
+    private let expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch?
+    /// expected-live 账本失败必须回 daemon 日志，不能静默当作已记账；它不触发任何
+    /// retry、wake 或 handoff，真实 run 仍由终端生命周期本身管理。
+    private let expectedLiveFailureReporter: ((String, Error) -> Void)?
 
     /// 「新建 session」态：inspector 显示零配置 composer 而非某个 run。由 roster /
     /// 切换条的「+」置 true，启动成功或切到某个 run 时复位。UI 选择态（与
@@ -313,11 +319,17 @@ final class CrewSessionRunner: ObservableObject {
     init(sessionPublisher: (any SessionProtocolPublishing)? = nil,
          wakeAdmission: AutomaticWakeAdmission? = nil,
          launchOperationOverride: (() async throws -> Void)? = nil,
-         launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)? = nil) {
+         launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)? = nil,
+         expectedLiveStore: ExpectedLiveSessionStore? = nil,
+         expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch? = nil,
+         expectedLiveFailureReporter: ((String, Error) -> Void)? = nil) {
         self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
         self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
         self.launchOperationOverride = launchOperationOverride
         self.launchDenialNoticeOverride = launchDenialNoticeOverride
+        self.expectedLiveStore = expectedLiveStore
+        self.expectedLiveEpoch = expectedLiveEpoch
+        self.expectedLiveFailureReporter = expectedLiveFailureReporter
         (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.protocolSummary
@@ -2036,6 +2048,17 @@ final class CrewSessionRunner: ObservableObject {
             let launchedAt = Date()
             let launchedConfig = config
             run.onEnded = { [weak self] r in
+                // completed / userStopped / hitLimit / failed 都由真实 terminal callback 清掉；
+                // 不依据静默、等待输入、限额健康或 socket 断开清理 / 代换。
+                if let self, let expectedLiveStore = self.expectedLiveStore,
+                   let expectedLiveEpoch = self.expectedLiveEpoch {
+                    do {
+                        try expectedLiveStore.clear(
+                            crewId: r.crewId, sessionId: r.sessionId, epoch: expectedLiveEpoch)
+                    } catch {
+                        self.expectedLiveFailureReporter?("结束时清理「\(r.sessionId)」失败", error)
+                    }
+                }
                 self?.discardDeferredWakes(sessionId: r.sessionId)
                 // Todo #68：claude 自己拒了这个会话号 → 不带 --resume 重起一次。
                 self?.retryWithoutResumeIfClaudeRefused(
@@ -2047,6 +2070,17 @@ final class CrewSessionRunner: ObservableObject {
         // 本地 mention 唤醒器钉该 crew 的白板游标（在 CLI 子进程能发首条
         // post_to_crew 之前）—— 该 crew 后续定向 @ 保证被扫到。
             localMentionWaker?.notifyRunStarted(crewId: crewId)
+            // live 账本的前提是 admission 已放行、真实 run 已进 roster、而且终止回调
+            // 已接好。极速退出若先发生，status 不再是 running，绝不留下假 active。
+            // 不从 LocalAgentSessionStore、session snapshot 或 UI 预填信息推断。
+            if run.status == .running, let expectedLiveStore, let expectedLiveEpoch {
+                do {
+                    try expectedLiveStore.activate(
+                        crewId: crewId, sessionId: sessionId, epoch: expectedLiveEpoch)
+                } catch {
+                    expectedLiveFailureReporter?("启动后登记「\(sessionId)」失败", error)
+                }
+            }
             persistSessionsSnapshot()   // 新成员立刻进机长的点名快照
         }
         // 本地 crew:把 worker session 登记成持久成员（成员列表/@ 名单退出后不丢）。
