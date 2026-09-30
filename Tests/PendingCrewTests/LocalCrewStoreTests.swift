@@ -2,6 +2,64 @@ import XCTest
 
 @MainActor
 final class LocalCrewStoreTests: XCTestCase {
+    func testWelcomeCrewBootstrapsAndSurvivesUpgradeAndRestart() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
+        let rows = store.listCrews()
+        let welcome = try XCTUnwrap(rows.first { $0.title == "PendingCrew怎么用" })
+        let demo = try XCTUnwrap(rows.first { $0.title == "演示" })
+        let questions = try XCTUnwrap(rows.first { $0.title == "问答" })
+        let child = try XCTUnwrap(rows.first { $0.title == "子机组" })
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(demo.parentCrewIds, [welcome.id])
+        XCTAssertEqual(questions.parentCrewIds, [welcome.id])
+        XCTAssertEqual(Set(child.parentCrewIds), Set([demo.id, questions.id]))
+
+        let workdir = try XCTUnwrap(store.workdirRows().first { $0.id == welcome.id }?.workingDirectory)
+        let skill = URL(fileURLWithPath: workdir).appendingPathComponent("SKILL.md")
+        let index = URL(fileURLWithPath: workdir).appendingPathComponent("INDEX.md")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: skill.path))
+        let indexText = try String(contentsOf: index, encoding: .utf8)
+        XCTAssertTrue(indexText.contains("rg -n"))
+        XCTAssertFalse(indexText.contains("docs/internal"))
+        XCTAssertFalse(indexText.contains("private"))
+        let guide = try String(contentsOf: URL(fileURLWithPath: workdir)
+            .appendingPathComponent("guide-v1.md"), encoding: .utf8)
+        XCTAssertTrue(guide.contains("两条父边"), "the indexed offline page must answer the DAG query")
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: workdir)),
+                       Set(["SKILL.md", "INDEX.md", "guide-v1.md"]))
+
+        try "user edit".write(to: index, atomically: true, encoding: .utf8)
+        let existing = store.createCrew(req(title: "用户机组")).crewId
+        let reopened = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
+        let settled = try Data(contentsOf: directory.appendingPathComponent("local-crews.json"))
+        _ = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("local-crews.json")), settled)
+        XCTAssertEqual(try String(contentsOf: index, encoding: .utf8), "user edit")
+        XCTAssertEqual(reopened.listCrews().count, 5)
+        XCTAssertNotNil(reopened.getCrew(existing))
+    }
+
+    func testWelcomeCrewBackfillsExistingUserWithoutChangingTheirCrew() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let oldStore = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: false)
+        let userId = oldStore.createCrew(req(title: "我的内容")).crewId
+        let oldCrew = try XCTUnwrap(oldStore.getCrew(userId)?.crew)
+        let upgraded = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
+        XCTAssertEqual(upgraded.getCrew(userId)?.crew, oldCrew)
+        XCTAssertEqual(upgraded.listCrews().count, 5)
+        let welcomeId = try XCTUnwrap(upgraded.listCrews().first { $0.title == "PendingCrew怎么用" }?.id)
+        upgraded.setTitle(welcomeId, "我改过的教程", source: .human)
+        let edited = LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true)
+        XCTAssertEqual(edited.getCrew(welcomeId)?.crew.title, "我改过的教程")
+        XCTAssertEqual(edited.listCrews().count, 5)
+        XCTAssertEqual(edited.deleteCrew(welcomeId), .deleted)
+        XCTAssertEqual(LocalCrewStore(baseDirectory: directory, installWelcomeCrew: true).listCrews().count, 4,
+                       "intentional deletion must not be resurrected")
+    }
+
     private func tempDir() -> URL {
         let d = FileManager.default.temporaryDirectory.appendingPathComponent("crewstore-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)

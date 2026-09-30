@@ -46,10 +46,12 @@ final class LocalCrewStore {
     /// 「现存最大号 + 1」：那会在删除后复用号码。与 crews 同落 `local-crews.json`
     /// （不另开号码注册表，避免两本账漂移）。
     private var nextCrewNumber: Int = 1
+    private var welcomeCrewSeeded = false
+    private let baseDirectory: URL
 
     /// `nil` baseDirectory = 默认 `Application Support/PendingCrew/`;
     /// 测试时传 tmp 目录便于隔离。
-    init(baseDirectory: URL? = nil) {
+    init(baseDirectory: URL? = nil, installWelcomeCrew: Bool? = nil) {
         let base: URL
         if let baseDirectory {
             base = baseDirectory
@@ -70,6 +72,7 @@ final class LocalCrewStore {
         }
         self.fileURL = base.appendingPathComponent("local-crews.json")
         self.lockURL = base.appendingPathComponent("local-crews.lock")
+        self.baseDirectory = base
         loadFromDisk()
         // **总机组那一层在这里被造出来**（人类 Todo #130 / #137）。
         //
@@ -82,6 +85,12 @@ final class LocalCrewStore {
         // title 和 sessionMembers —— 那两样是它真正在用的东西。
         upsertBuiltinChiefCrew()
         backfillChiefWorkingDirectoryIfMissing()
+        // Injected directories are used by existing store tests and migration probes;
+        // production's nil directory always enables onboarding.
+        if installWelcomeCrew ?? (baseDirectory == nil) {
+            seedWelcomeCrewOnce()
+            installWelcomeDocumentsIfMissing()
+        }
     }
 
     // MARK: - Public API
@@ -725,6 +734,83 @@ final class LocalCrewStore {
         return created
     }
 
+    /// First install and upgrade share this path. The marker also remembers an intentional
+    /// deletion: a later launch must never resurrect a crew the user removed.
+    private func seedWelcomeCrewOnce() {
+        mutatingCrews {
+            guard !welcomeCrewSeeded else { return false }
+            let now = ISO8601DateFormatter().string(from: Date())
+            let directory = baseDirectory.appendingPathComponent("welcome-crew", isDirectory: true).path
+            let specs: [(String, String, [String])] = [
+                ("pendingcrew-welcome", "PendingCrew怎么用", []),
+                ("pendingcrew-welcome-demo", "演示", ["pendingcrew-welcome"]),
+                ("pendingcrew-welcome-questions", "问答", ["pendingcrew-welcome"]),
+                ("pendingcrew-welcome-child", "子机组", ["pendingcrew-welcome-demo", "pendingcrew-welcome-questions"])
+            ]
+            for (id, title, parents) in specs where crews[id] == nil {
+                let number = nextCrewNumber
+                nextCrewNumber += 1
+                crews[id] = LocalCrew(
+                    id: id, title: title, titleSource: .human,
+                    responsibleSubjectId: "local-byok", runtimeLocation: "local_host",
+                    workingDirectory: directory, machineId: nil,
+                    captainBotId: "local-bot-" + UUID().uuidString.lowercased(),
+                    captainName: "机长", createdAt: now, updatedAt: now,
+                    parentCrewIds: parents, crewNumber: number,
+                    nextExtension: LocalCrew.firstWorkerExtension)
+            }
+            welcomeCrewSeeded = true
+            return true
+        }
+    }
+
+    /// Curated, offline guide. Create only absent files; user edits remain authoritative.
+    /// Future guide revisions add a new versioned page. The index directs readers to the
+    /// highest version already present; existing indexes are never replaced.
+    private func installWelcomeDocumentsIfMissing() {
+        let directory = baseDirectory.appendingPathComponent("welcome-crew", isDirectory: true)
+        guard welcomeCrewSeeded,
+              crews["pendingcrew-welcome"]?.workingDirectory == directory.path else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let pages = [
+                "SKILL.md": """
+                # PendingCrew 怎么用
+
+                先读 INDEX.md；只按当前问题检索并打开相关页，不要把整套文档注入提示词。
+                这里是离线入门资料。遇到版本差异，以当前界面和仓库最新公开文档为准。
+                不把 docs/internal、个人数据或群聊记录当作公开操作指南。
+                """,
+                "INDEX.md": """
+                # 离线索引
+
+                - 入门：先列出 `guide-v*.md`，读取版本号最高的一页。当前首版是 guide-v1.md。
+                - 找一个概念：在此目录运行 `rg -n '关键词' --glob '*.md' .`，再按需打开命中的页。
+                - 文档更新：安装包增加版本化的新页面；现有文件只补缺失，不覆盖你的修改。升级后读取版本号最高的页面。
+                """,
+                "guide-v1.md": """
+                # 入门
+
+                机组是协作空间，群聊用于给成员留可见的任务与结果。演示和问答是这个入门机组的两个子机组；子机组同时挂在两者下面，展示一个机组可有两条父边。
+
+                先在群聊写清目标、负责人和验收条件。需要更多工作空间时新建子机组；任务结束后在原群报告可核实的结果。此目录可离线检索，查具体操作时只读取命中的短页。
+                """
+            ]
+            for (name, body) in pages {
+                let url = directory.appendingPathComponent(name)
+                do {
+                    // O_EXCL semantics: another process (or the user) winning this race
+                    // keeps its file. An existence check followed by write could replace it.
+                    try Data(body.utf8).write(to: url, options: .withoutOverwriting)
+                } catch {
+                    guard (error as? CocoaError)?.code == .fileWriteFileExists else { throw error }
+                }
+            }
+        } catch {
+            NSLog("[LocalCrewStore] welcome documents unavailable: %@", error.localizedDescription)
+        }
+    }
+
     /// 总机组**没有工作目录时**补一个（人类 Todo #141 / #145 的前提）。
     ///
     /// 为什么是「补」而不是「造它的时候一起填」：**那条记录在很多机器上已经存在了**
@@ -739,7 +825,7 @@ final class LocalCrewStore {
             guard var chief = crews[LocalCrew.chiefCrewId] else { return false }
             guard (chief.workingDirectory ?? "").isEmpty else { return false }
             let candidates = crews.values
-                .filter { $0.id != LocalCrew.chiefCrewId }
+                .filter { $0.id != LocalCrew.chiefCrewId && !$0.id.hasPrefix("pendingcrew-welcome") }
                 .map(\.workingDirectory)
             guard let resolved = ChiefCrewWorkingDirectory.resolve(
                 existing: candidates,
@@ -805,6 +891,7 @@ final class LocalCrewStore {
             // 计数器同样落在这个文件里（不另开号码注册表）。缺键 = 通讯录之前的旧
             // 文件，下面回填时算出来。
             nextCrewNumber = max(1, payload.nextCrewNumber ?? 1)
+            welcomeCrewSeeded = payload.welcomeCrewSeeded ?? false
         } catch {
             // JSON 损坏 → 不直接清掉,留备份让用户 / 调试时手动救;内存里
             // 留空 store 当从 0 开始。
@@ -940,11 +1027,13 @@ final class LocalCrewStore {
         crews = Dictionary(uniqueKeysWithValues: payload.crews.map { ($0.id, $0) })
         // 号码只增不减：盘上和内存里取大的那个，别让重读把本进程刚发出去的号退回去。
         nextCrewNumber = max(nextCrewNumber, max(1, payload.nextCrewNumber ?? 1))
+        welcomeCrewSeeded = payload.welcomeCrewSeeded ?? false
     }
 
     private func persistToDiskReportingFailure() throws {
         let payload = LocalCrewFile(
-            version: 1, crews: Array(crews.values), nextCrewNumber: nextCrewNumber)
+            version: 1, crews: Array(crews.values), nextCrewNumber: nextCrewNumber,
+            welcomeCrewSeeded: welcomeCrewSeeded)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(payload)
@@ -1179,6 +1268,7 @@ struct LocalCrewFile: Codable {
     /// 全机「下一个可发的 crew 号」（通讯录）。缺键 = 通讯录之前的旧文件，
     /// 加载时按存量回填算出来（decodeIfPresent —— 旧文件照样解得开）。
     var nextCrewNumber: Int? = nil
+    var welcomeCrewSeeded: Bool? = nil
 }
 
 /// 本地 crew store 的错误。目前只覆盖 DAG 父边操作。
