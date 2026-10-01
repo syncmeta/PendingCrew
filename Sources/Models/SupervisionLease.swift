@@ -184,6 +184,7 @@ enum SupervisionLease {
 /// durable lease or admission ledger. An unknown power state remains runnable:
 /// a missed notification must not silently turn a real ledger failure green.
 struct WakeupSleepWindow {
+    enum Transition { case willSleep, didWake }
     static let wakeGrace: TimeInterval = 120
     static let sleepRetry: TimeInterval = 300
 

@@ -11,6 +11,54 @@ import XCTest
 final class CrewStartupRescueLogicTests: XCTestCase {
 
     @MainActor
+    func testRunnerScheduledAndSupervisionSleepChecksNeverReadOrConsumeLedger() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runner-sleep-\(UUID().uuidString)")
+        let store = LocalWakeupStore(directory: directory)
+        let instant = Date(timeIntervalSince1970: 1_788_000_000)
+        let scheduled = LocalWakeupStore.PendingWakeup(
+            id: "scheduled", crewId: "sleep-test", sessionId: "absent",
+            fireAt: ISO8601DateFormatter().string(from: instant), note: "sleep check")
+        let supervised = LocalWakeupStore.PendingWakeup(
+            id: "supervised", crewId: "sleep-test", sessionId: "absent",
+            fireAt: scheduled.fireAt, note: "supervision", planNumber: 1)
+        XCTAssertTrue(store.register(scheduled))
+        XCTAssertTrue(store.register(supervised))
+        let before = try Data(contentsOf: directory.appendingPathComponent("wakeups.json"))
+        var reads = 0
+        var notices = 0
+        let gate = AutomaticWakeAdmission(directory: directory, onDiagnostic: { _ in },
+                                          readData: { _ in
+            reads += 1
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EMFILE))
+        })
+        let admissionBefore = try JSONEncoder().encode(AutomaticWakeAdmission.State())
+        try admissionBefore.write(to: gate.fileURL)
+        let runner = CrewSessionRunner(
+            sessionPublisher: InProcessSessionProtocolBridge(wakeAdmission: gate),
+            wakeAdmission: gate, wakeupStore: store, observePowerNotifications: false,
+            wakeAdmissionReadFailureReporter: { _ in notices += 1 })
+        runner.receiveSystemSleepTransition(.willSleep, at: instant)
+        runner.fire(scheduled, at: instant)
+        runner.fire(supervised, at: instant)
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(notices, 0)
+        runner.receiveSystemSleepTransition(.didWake, at: instant)
+        runner.fire(scheduled, at: instant.addingTimeInterval(119))
+        runner.fire(supervised, at: instant.addingTimeInterval(119))
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(notices, 0)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("wakeups.json")), before)
+        runner.fire(scheduled, at: instant.addingTimeInterval(120))
+        runner.fire(supervised, at: instant.addingTimeInterval(120))
+        XCTAssertEqual(reads, 2, "after grace, a persistent fault must be checked again")
+        XCTAssertEqual(notices, 2, "the awake fault must remain visible")
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("wakeups.json")), before)
+        XCTAssertEqual(try Data(contentsOf: gate.fileURL), admissionBefore,
+                       "neither sleep nor unreadable admission can fabricate a receipt")
+    }
+
+    @MainActor
     func testRunnerStartRejectsAbsentCaptainAndMemberWithoutConstructingBackend() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("runner-instance-denial-\(UUID().uuidString)")

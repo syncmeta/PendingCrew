@@ -327,7 +327,10 @@ final class CrewSessionRunner: ObservableObject {
          expectedLiveStore: ExpectedLiveSessionStore? = nil,
          expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch? = nil,
          expectedLiveFailureReporter: ((String, Error) -> Void)? = nil,
-         captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore? = nil) {
+         captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore? = nil,
+         wakeupStore: LocalWakeupStore? = nil,
+         observePowerNotifications: Bool = true,
+         wakeAdmissionReadFailureReporter: ((String) -> Void)? = nil) {
         self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
         self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
         self.launchOperationOverride = launchOperationOverride
@@ -337,6 +340,8 @@ final class CrewSessionRunner: ObservableObject {
         self.expectedLiveFailureReporter = expectedLiveFailureReporter
         self.captainAutomaticRecoveryClaimStore = captainAutomaticRecoveryClaimStore
             ?? CaptainAutomaticRecoveryClaimStore()
+        self.wakeupStore = wakeupStore ?? LocalWakeupStore()
+        self.wakeAdmissionReadFailureReporter = wakeAdmissionReadFailureReporter
         (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.protocolSummary
@@ -345,7 +350,7 @@ final class CrewSessionRunner: ObservableObject {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.noteAcceptedHumanInput()
         }
-        observeSystemSleep()
+        if observePowerNotifications { observeSystemSleep() }
     }
 
     /// 切换前台 run（退出「新建」态）。
@@ -864,7 +869,8 @@ final class CrewSessionRunner: ObservableObject {
     /// fail-loud，不再静默清空全部在途约定）。
     typealias PendingWakeup = LocalWakeupStore.PendingWakeup
 
-    private let wakeupStore = LocalWakeupStore()
+    private let wakeupStore: LocalWakeupStore
+    private let wakeAdmissionReadFailureReporter: ((String) -> Void)?
     private var wakeupTimers: [String: Timer] = [:]
     private var wakeupLedgerRetries: [String: PendingWakeup] = [:]
     private var wakeupSleepWindow = WakeupSleepWindow()
@@ -873,19 +879,29 @@ final class CrewSessionRunner: ObservableObject {
     private func observeSystemSleep() {
         let notifications = NSWorkspace.shared.notificationCenter
         notifications.publisher(for: NSWorkspace.willSleepNotification)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                Task { @MainActor [weak self] in self?.wakeupSleepWindow.willSleep() }
+                MainActor.assumeIsolated {
+                    self?.receiveSystemSleepTransition(.willSleep, at: Date())
+                }
             }
             .store(in: &powerObservations)
         notifications.publisher(for: NSWorkspace.didWakeNotification)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                Task { @MainActor [weak self] in self?.resumeWakeupsAfterSleep() }
+                MainActor.assumeIsolated {
+                    self?.receiveSystemSleepTransition(.didWake, at: Date())
+                }
             }
             .store(in: &powerObservations)
     }
 
-    private func resumeWakeupsAfterSleep() {
-        wakeupSleepWindow.didWake(at: Date())
+    func receiveSystemSleepTransition(_ transition: WakeupSleepWindow.Transition, at now: Date) {
+        if case .willSleep = transition {
+            wakeupSleepWindow.willSleep()
+            return
+        }
+        wakeupSleepWindow.didWake(at: now)
         // The old hourly ledger retry may have been armed during a DarkWake.
         // Retest promptly after the grace period, without reading or advancing
         // any persistent lease merely because the machine woke up.
@@ -988,11 +1004,10 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    private func fire(_ w: PendingWakeup) {
+    func fire(_ w: PendingWakeup, at now: Date = Date()) {
         wakeupTimers[w.id]?.invalidate()
         wakeupTimers[w.id] = nil
         wakeupLedgerRetries[w.id] = nil
-        let now = Date()
         if wakeupSleepWindow.shouldDefer(at: now) {
             retryWakeupLedger(w, delay: wakeupSleepWindow.retryDelay(at: now))
             return
@@ -1130,6 +1145,10 @@ final class CrewSessionRunner: ObservableObject {
     }
 
     private func reportWakeAdmissionReadFailure(crewId: String) {
+        if let wakeAdmissionReadFailureReporter {
+            wakeAdmissionReadFailureReporter(crewId)
+            return
+        }
         guard LedgerIncidentNoticeGate.shared.shouldEmit(key: "wake-admission-read|\(crewId)")
         else { return }
         LocalWhiteboardStore.shared.appendSessionMessage(
