@@ -2625,7 +2625,8 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail, backend: PendingCrewBackend?, openingBrief: String,
         kind: LocalCodingAgentKind, model: String?, effort: String?, title: String,
         userInitiated: Bool,
-        maxLaunchAttempts: Int = CaptainHandoffSite.launchAttempts
+        maxLaunchAttempts: Int = CaptainHandoffSite.launchAttempts,
+        automaticRecoverySource: CaptainAutomaticRecoverySource? = nil
     ) async throws {
         guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
         guard let ownership = CaptainHandoffOwnership.claim(isViewer: isViewer) else {
@@ -2643,7 +2644,8 @@ final class CrewSessionRunner: ObservableObject {
             progressText: "将新建一位 \(kind.displayName) 机长（\(title)）；系统会先停旧机长，再以全新 conversation 启动。",
             successText: "机长交接完成：新的 \(kind.displayName) 机长已用全新 conversation 启动。",
             userInitiated: userInitiated,
-            maxLaunchAttempts: maxLaunchAttempts)
+            maxLaunchAttempts: maxLaunchAttempts,
+            automaticRecoverySource: automaticRecoverySource)
     }
 
     /// P2 的唯一自动机长救援入口。静默、首输出迟、断链及旧 resume 记录都不会到这里；
@@ -2745,7 +2747,9 @@ final class CrewSessionRunner: ObservableObject {
                     openingBrief: "Claude 机长已被确认不可用。请先在群里确认已由 Codex 接管，"
                         + "再从白板继续未完成任务。",
                     kind: .codex, model: nil, effort: nil,
-                    title: "机长", userInitiated: false, maxLaunchAttempts: 1)
+                    title: "机长", userInitiated: false, maxLaunchAttempts: 1,
+                    automaticRecoverySource: .init(
+                        crewId: crewId, runID: sourceRunID))
             } catch {
                 self.lastStartError = "Claude 机长硬失效，Codex 一次性自动接任失败："
                     + error.localizedDescription
@@ -2847,7 +2851,8 @@ final class CrewSessionRunner: ObservableObject {
         model: String?, effort: String?, title: String,
         openingBrief: String, progressText: String, successText: String,
         userInitiated: Bool,
-        maxLaunchAttempts: Int = CaptainHandoffSite.launchAttempts
+        maxLaunchAttempts: Int = CaptainHandoffSite.launchAttempts,
+        automaticRecoverySource: CaptainAutomaticRecoverySource? = nil
     ) async throws {
         let crewId = detail.crew.id
         guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
@@ -2857,9 +2862,17 @@ final class CrewSessionRunner: ObservableObject {
         guard LocalCodingAgentExecutable.resolve(kind) != nil else {
             throw RunnerError.toolNotInstalled(kind: kind)
         }
-        let capability = await Task.detached(priority: .utility) {
-            CaptainRunnerProbe.inspect(kind)
-        }.value
+        let capability = try await CaptainAutomaticRecoveryProbeGate.inspect(
+            source: automaticRecoverySource,
+            roster: {
+                runs.map { .init(crewId: $0.crewId, runID: $0.runID,
+                                 isRunningCaptain: $0.role == .captain && $0.status == .running) }
+            },
+            probe: {
+                await Task.detached(priority: .utility) {
+                    CaptainRunnerProbe.inspect(kind)
+                }.value
+            })
         guard capability.selectable else {
             throw RunnerError.captainRunnerUnavailable(capability.summary)
         }

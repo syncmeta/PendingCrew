@@ -104,7 +104,12 @@ enum CaptainUnavailableRecovery {
         isCaptain: Bool, kind: LocalCodingAgentKind, health: CrewSessionHealth
     ) -> Bool {
         guard isCaptain, kind == .claudeCode else { return false }
-        return health.kind == .launchFailed || health.kind == .authRequired
+        if health.kind == .authRequired { return true }
+        guard health.kind == .launchFailed else { return false }
+        switch health.launchVerdict {
+        case .spawnFailed, .diedSilently: return true
+        case .stalled, .pending, .alive, nil: return false
+        }
     }
 }
 #endif

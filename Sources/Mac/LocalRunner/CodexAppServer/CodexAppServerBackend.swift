@@ -459,7 +459,8 @@ final class CodexAppServerBackend: ObservableObject, SessionBackend {
     private func reportLaunchFailure(_ verdict: SessionLaunchVerdict, underlying: String?) {
         guard let detail = SessionLaunchProbe.failureDetail(
             verdict, kind: .codex, underlying: underlying) else { return }
-        health = CrewSessionHealth(kind: .launchFailed, detail: detail)
+        health = CrewSessionHealth(kind: .launchFailed, detail: detail,
+                                   launchVerdict: verdict)
         isWorking = false
         // stalled = 进程还在（可能正卡着握手）——不替人做主杀，状态已如实标异常。
         if verdict != .stalled { status = .exited(1) }

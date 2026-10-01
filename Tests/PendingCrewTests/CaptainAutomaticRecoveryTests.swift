@@ -78,5 +78,86 @@ final class CaptainAutomaticRecoveryTests: XCTestCase {
         XCTAssertEqual(CaptainEndedRecoveryOwnership.decide(
             resumeFallbackScheduled: false, isCaptain: false, exitReason: .failed), .none)
     }
+
+    @MainActor
+    func test_探测等待期间人工新机长接管后迟到P2必须放弃() async throws {
+        let crewId = "crew"
+        let old = CaptainAutomaticRecoveryRosterEntry(
+            crewId: crewId, runID: UUID(), isRunningCaptain: false)
+        let new = CaptainAutomaticRecoveryRosterEntry(
+            crewId: crewId, runID: UUID(), isRunningCaptain: true)
+        let source = CaptainAutomaticRecoverySource(
+            crewId: crewId, runID: old.runID)
+        let capability = CaptainRunnerCapability(
+            kind: .codex, executable: URL(fileURLWithPath: "/bin/true"),
+            authentication: .confirmed, health: .normal)
+        for sourceRunID in [source.runID, nil] {
+            var roster = sourceRunID == nil ? [] : [old]
+            var releaseProbe: CheckedContinuation<CaptainRunnerCapability, Never>?
+            let probeEntered = expectation(description: "detached probe is suspended")
+            let pending = Task {
+                try await CaptainAutomaticRecoveryProbeGate.inspect(
+                    source: .init(crewId: crewId, runID: sourceRunID),
+                    roster: { roster }, probe: {
+                        await withCheckedContinuation { continuation in
+                            releaseProbe = continuation
+                            probeEntered.fulfill()
+                        }
+                    })
+            }
+            await fulfillment(of: [probeEntered], timeout: 3)
+            roster = [new]
+            releaseProbe?.resume(returning: capability)
+            do {
+                _ = try await pending.value
+                XCTFail("stale P2 would stop the new human-selected captain")
+            } catch CaptainAutomaticRecoveryProbeGate.Error.superseded {
+                XCTAssertEqual(roster.map(\.runID), [new.runID])
+            }
+        }
+    }
+
+    @MainActor
+    func test_探测后来源仍在且没有新机长可继续() async throws {
+        let old = CaptainAutomaticRecoveryRosterEntry(
+            crewId: "crew", runID: UUID(), isRunningCaptain: false)
+        for sourceRunID in [old.runID, nil] {
+            let capability = try await CaptainAutomaticRecoveryProbeGate.inspect(
+                source: .init(crewId: "crew", runID: sourceRunID),
+                roster: { sourceRunID == nil ? [] : [old] }, probe: {
+                    .init(kind: .codex, executable: URL(fileURLWithPath: "/bin/true"),
+                          authentication: .confirmed, health: .normal)
+                })
+            XCTAssertTrue(capability.selectable)
+        }
+    }
+
+    @MainActor
+    func test_探测等待期间来源被移除即使没有新机长也须放弃() async throws {
+        let old = CaptainAutomaticRecoveryRosterEntry(
+            crewId: "crew", runID: UUID(), isRunningCaptain: false)
+        var roster = [old]
+        var releaseProbe: CheckedContinuation<CaptainRunnerCapability, Never>?
+        let probeEntered = expectation(description: "probe suspended")
+        let pending = Task {
+            try await CaptainAutomaticRecoveryProbeGate.inspect(
+                source: .init(crewId: "crew", runID: old.runID),
+                roster: { roster }, probe: {
+                    await withCheckedContinuation { continuation in
+                        releaseProbe = continuation
+                        probeEntered.fulfill()
+                    }
+                })
+        }
+        await fulfillment(of: [probeEntered], timeout: 3)
+        roster = []
+        releaseProbe?.resume(returning: .init(
+            kind: .codex, executable: URL(fileURLWithPath: "/bin/true"),
+            authentication: .confirmed, health: .normal))
+        do {
+            _ = try await pending.value
+            XCTFail("a removed source no longer owns automatic handoff")
+        } catch CaptainAutomaticRecoveryProbeGate.Error.superseded { }
+    }
 }
 #endif

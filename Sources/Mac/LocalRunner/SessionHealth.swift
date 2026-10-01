@@ -20,10 +20,8 @@ struct CrewSessionHealth: Equatable {
         /// 分开：这类 session 进程活着且已被自动应答「Stop and wait」，语义是
         /// 「限额等待中」而非「干不了活需要人管」——但同样走红点异常链路，不装空闲。
         case rateLimited
-        /// 压根没拉起来 / 起来即死 / 起来了但零输出（#541）。与上面三类的区别：
-        /// 那些是「跑起来了但干不了活」，这个是**这个 session 从来没活过**——
-        /// 派给它的活等于没派出去，机长必须立刻改派。由 `SessionLaunchProbe`
-        /// 的终局裁决翻，不走 PTY 短语扫描。
+        /// 拉起自检的终局异常：没启动、起来即死，或活着但首输出迟。
+        /// P2 自动接任必须再核对下面的 typed verdict，不能把三者混同。
         case launchFailed
         /// 派给它的**开场 brief 没送进输入框**（P5a）。与 `launchFailed` 的区别：
         /// 进程活得好好的、TUI 也画出来了，只是那条开场任务从来没到达 —— 从外面看
@@ -52,6 +50,14 @@ struct CrewSessionHealth: Equatable {
     let kind: Kind
     /// 人话说明 + 下一步动作（白板 fail-loud 消息与成员列表副行直接展示）。
     let detail: String
+    /// 只有拉起自检写这项。进程仍活着的 `.stalled` 只可见告警，不是 P2 的死亡证据。
+    let launchVerdict: SessionLaunchVerdict?
+
+    init(kind: Kind, detail: String, launchVerdict: SessionLaunchVerdict? = nil) {
+        self.kind = kind
+        self.detail = detail
+        self.launchVerdict = launchVerdict
+    }
 
     /// 额度类异常（撞墙/卡限额菜单）——hit-limit 终止识别与自动挂唤醒都认这组。
     var isQuotaRelated: Bool { kind == .usageLimit || kind == .rateLimited }

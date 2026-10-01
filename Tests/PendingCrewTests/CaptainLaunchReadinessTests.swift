@@ -155,13 +155,25 @@ final class CaptainLaunchReadinessTests: XCTestCase {
 
     func testAutomaticRecoveryOnlyTargetsUnavailableClaudeCaptains() {
         let auth = CrewSessionHealth(kind: .authRequired, detail: "logged out")
-        let stalled = CrewSessionHealth(kind: .launchFailed, detail: "no output")
+        let stalled = CrewSessionHealth(kind: .launchFailed, detail: "no output",
+                                       launchVerdict: .stalled)
         let quota = CrewSessionHealth(kind: .usageLimit, detail: "limited")
 
         XCTAssertTrue(CaptainUnavailableRecovery.shouldAttempt(
             isCaptain: true, kind: .claudeCode, health: auth))
-        XCTAssertTrue(CaptainUnavailableRecovery.shouldAttempt(
-            isCaptain: true, kind: .claudeCode, health: stalled))
+        for verdict in [SessionLaunchVerdict.spawnFailed, .diedSilently] {
+            XCTAssertTrue(CaptainUnavailableRecovery.shouldAttempt(
+                isCaptain: true, kind: .claudeCode,
+                health: CrewSessionHealth(kind: .launchFailed, detail: "gone",
+                                          launchVerdict: verdict)))
+        }
+        XCTAssertFalse(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: true, kind: .claudeCode, health: stalled),
+            "进程仍活着而首输出迟到只应告警，不能由 P2 自动停掉")
+        XCTAssertFalse(CaptainUnavailableRecovery.shouldAttempt(
+            isCaptain: true, kind: .claudeCode,
+            health: CrewSessionHealth(kind: .launchFailed, detail: "untyped")),
+            "缺少 typed 拉起结果也不能推断进程已死")
         XCTAssertFalse(CaptainUnavailableRecovery.shouldAttempt(
             isCaptain: false, kind: .claudeCode, health: auth),
             "worker 故障不能擅自改 crew 的机长 runner")

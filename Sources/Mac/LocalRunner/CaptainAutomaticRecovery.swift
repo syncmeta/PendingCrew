@@ -69,4 +69,49 @@ enum CaptainAutomaticRecoveryPolicy {
         }
     }
 }
+
+/// The source of an automatic handoff must still own the captain slot after
+/// the asynchronous capability probe. A missing expected-live source has no
+/// run ID; in that case any live captain means somebody else already took over.
+struct CaptainAutomaticRecoverySource {
+    let crewId: String
+    let runID: UUID?
+}
+
+struct CaptainAutomaticRecoveryRosterEntry {
+    let crewId: String
+    let runID: UUID
+    let isRunningCaptain: Bool
+}
+
+enum CaptainAutomaticRecoveryProbeGate {
+    enum Error: LocalizedError {
+        case superseded
+
+        var errorDescription: String? {
+            "自动救援等待候选探测期间已有其他机长接管，已放弃这次接任。"
+        }
+    }
+
+    @MainActor
+    static func inspect(
+        source: CaptainAutomaticRecoverySource?,
+        roster: () -> [CaptainAutomaticRecoveryRosterEntry],
+        probe: () async -> CaptainRunnerCapability
+    ) async throws -> CaptainRunnerCapability {
+        let capability = await probe()
+        // `probe` suspends the main actor. A human handoff may have completed
+        // while it ran, so the source identity is checked at the last safe
+        // point before executeCaptainHandoff can claim and stop any run.
+        if let source {
+            let entries = roster().filter { $0.crewId == source.crewId }
+            guard !entries.contains(where: {
+                $0.isRunningCaptain && $0.runID != source.runID
+            }), source.runID.map({ id in entries.contains { $0.runID == id } }) ?? true else {
+                throw Error.superseded
+            }
+        }
+        return capability
+    }
+}
 #endif

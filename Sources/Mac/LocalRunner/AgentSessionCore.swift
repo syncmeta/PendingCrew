@@ -647,7 +647,8 @@ final class AgentSessionCore: NSObject, TerminalDelegate, LocalProcessDelegate {
         guard let detail = SessionLaunchProbe.failureDetail(
             verdict, kind: kind, deadline: launchDeadline,
             underlying: underlying) else { return }
-        health = CrewSessionHealth(kind: .launchFailed, detail: detail)
+        health = CrewSessionHealth(kind: .launchFailed, detail: detail,
+                                   launchVerdict: verdict)
         isWorking = false
         displayIsTyping = false
         switch verdict {
