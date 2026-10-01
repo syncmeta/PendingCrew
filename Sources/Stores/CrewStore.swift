@@ -43,6 +43,16 @@ struct CrewChatSearchRequest: Identifiable, Equatable {
 /// `error = "未配置 backend"` 让 UI 显空态。
 @MainActor
 final class CrewStore: ObservableObject {
+    /// macOS keeps the existing real user home; iOS uses its app sandbox home.
+    private static var defaultCrewGroundRoot: URL {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        #else
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        #endif
+        return home.appendingPathComponent("CrewGround", isDirectory: true)
+    }
+
     @Published private(set) var crews: [CrewSummary] = []
     @Published private(set) var details: [String: CrewDetail] = [:]
     @Published private(set) var subjects: [UserSubject] = []
@@ -249,8 +259,7 @@ final class CrewStore: ObservableObject {
             selectedCrewId = pendingCrew.id
             return
         }
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("CrewGround", isDirectory: true)
+        let root = Self.defaultCrewGroundRoot
         let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
         let name = PlaceNames.all.shuffled().first { !existing.contains($0) }
             ?? "Crew-\(UUID().uuidString.prefix(8))"
@@ -304,8 +313,7 @@ final class CrewStore: ObservableObject {
         let savedKind = UserDefaults.standard.string(forKey: "pendingcrew.lastCaptainAgentKind")
         let captainKind = ["codex", "claude_code"].contains(savedKind ?? "")
             ? savedKind! : "codex"
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("CrewGround", isDirectory: true)
+        let root = Self.defaultCrewGroundRoot
         var recovery = PendingCrewRecoveryStore.Record(
             draftId: draft.id, title: draft.title, parentCrewId: draft.parentCrewId,
             selectedDirectory: draft.workingDirectory,
