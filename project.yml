@@ -210,6 +210,7 @@ targets:
       - path: Sources/Stores/SessionContinuationStore.swift
       # agent 侧会话号账本（Todo #28：重启成员时 --resume / thread/resume 回原对话），同自包含。
       - path: Sources/Stores/LocalAgentSessionStore.swift
+      - path: Sources/Stores/WorkerAssignmentStore.swift
       # daemon 的 expected-live 账本；不得由 resume / 模型记录反推。
       - path: Sources/Stores/ExpectedLiveSessionStore.swift
       # 自动机长救援的 durable single-claim；读写异常必须 fail-closed。

@@ -76,6 +76,7 @@ final class CrewSessionRunner: ObservableObject {
     /// P2 的一次性自动救援资格。它必须在任何候选探测或启动之前写入持久账本，不能
     /// 用进程内集合代替，以免 daemon 重启后重复消耗启动预算。
     private let captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore
+    private let workerAssignmentStore: WorkerAssignmentStore
     /// expected-live 账本失败必须回 daemon 日志，不能静默当作已记账；它不触发任何
     /// retry、wake 或 handoff，真实 run 仍由终端生命周期本身管理。
     private let expectedLiveFailureReporter: ((String, Error) -> Void)?
@@ -330,6 +331,7 @@ final class CrewSessionRunner: ObservableObject {
          expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch? = nil,
          expectedLiveFailureReporter: ((String, Error) -> Void)? = nil,
          captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore? = nil,
+         workerAssignmentStore: WorkerAssignmentStore? = nil,
          wakeupStore: LocalWakeupStore? = nil,
          observePowerNotifications: Bool = true,
          wakeAdmissionReadFailureReporter: ((String) -> Void)? = nil) {
@@ -343,6 +345,7 @@ final class CrewSessionRunner: ObservableObject {
         self.expectedLiveFailureReporter = expectedLiveFailureReporter
         self.captainAutomaticRecoveryClaimStore = captainAutomaticRecoveryClaimStore
             ?? CaptainAutomaticRecoveryClaimStore()
+        self.workerAssignmentStore = workerAssignmentStore ?? .shared
         self.wakeupStore = wakeupStore ?? LocalWakeupStore()
         self.wakeAdmissionReadFailureReporter = wakeAdmissionReadFailureReporter
         (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
@@ -1826,6 +1829,7 @@ final class CrewSessionRunner: ObservableObject {
         codexMcpServers: [String: Any]? = nil,
         /// captain / worker 角色标记（session 切换条展示 + captain 置顶）。
         role: CrewSessionRun.Role = .worker,
+        workerAssignmentGeneration: String? = nil,
         /// **这次启动是不是人自己点出来的**（#42）。`true` 只给「人在新建面板里填完
         /// 提交」「人在驾驶舱按派单」这两条路 —— 人就是要看它，跳过去才对。
         /// 机长 `start_session`、@ 唤醒拉起、远程排队认领一律 `false`：它们在背后起，
@@ -1953,6 +1957,11 @@ final class CrewSessionRunner: ObservableObject {
                     workingDirectory: workingDirectory.path,
                     model: explicitModel, effort: explicitEffort,
                     structuredPost: config.structuredPost)
+                if let workerAssignmentGeneration {
+                    try workerAssignmentStore.recordAgentIdentity(
+                        crewId: crewId, sessionId: sessionId,
+                        generation: workerAssignmentGeneration, agentSessionId: agentId)
+                }
             }
             let sink = SessionBackendRouting.usesProtocolTransport
                 ? sessionPublisher.terminalOutputSink(sessionId: sessionId) : nil
@@ -2010,7 +2019,7 @@ final class CrewSessionRunner: ObservableObject {
                 notifyFastModeUnknown: { [weak self] in
                     self?.runs.first(where: { $0.sessionId == sessionId })?.fastMode = nil
                 },
-                notifyThreadId: { tid in
+                notifyThreadId: { [weak self] tid in
                     // Todo #68：同 claude 那处 —— 真实 cwd 一并记下（唤醒时定进程目录用）。
                     LocalAgentSessionStore.shared.record(
                         crewId: crewId, sessionId: sessionId,
@@ -2018,6 +2027,16 @@ final class CrewSessionRunner: ObservableObject {
                         workingDirectory: workingDirectory.path,
                         model: explicitModel, effort: explicitEffort,
                         structuredPost: config.structuredPost)
+                    if let self, let workerAssignmentGeneration {
+                        do {
+                            try self.workerAssignmentStore.recordAgentIdentity(
+                                crewId: crewId, sessionId: sessionId,
+                                generation: workerAssignmentGeneration, agentSessionId: tid)
+                        } catch {
+                            self.reportWorkerAuthorityFailure(
+                                crewId: crewId, sessionId: sessionId, error: error)
+                        }
+                    }
                 },
                 // 续不回来 → 已降级新起一条 thread，如实进群说明（不静默假装恢复）。
                 notifyResumeFallback: { failedId, reason in
@@ -2137,6 +2156,17 @@ final class CrewSessionRunner: ObservableObject {
                         self.expectedLiveFailureReporter?("结束时清理「\(r.sessionId)」失败", error)
                     }
                 }
+                if let self, let workerAssignmentGeneration, let reason = r.exitReason {
+                    do {
+                        try self.workerAssignmentStore.recordTerminal(
+                            crewId: crewId, sessionId: sessionId,
+                            generation: workerAssignmentGeneration,
+                            reason: .init(reason))
+                    } catch {
+                        self.reportWorkerAuthorityFailure(
+                            crewId: crewId, sessionId: sessionId, error: error)
+                    }
+                }
                 self?.discardDeferredWakes(sessionId: r.sessionId)
                 // Todo #68：claude 自己拒了这个会话号 → 不带 --resume 重起一次。该
                 // fallback 一旦接管本次 terminal event，就不能并排再走 P2 的 Codex
@@ -2145,7 +2175,8 @@ final class CrewSessionRunner: ObservableObject {
                     run: r, config: launchedConfig, launchedAt: launchedAt,
                     crewId: crewId, sessionId: sessionId,
                     workingDirectory: workingDirectory, taskBrief: taskBrief,
-                    title: title, additionalEnv: additionalEnv, role: role) ?? false
+                    title: title, additionalEnv: additionalEnv, role: role,
+                    workerAssignmentGeneration: workerAssignmentGeneration) ?? false
                 if CaptainEndedRecoveryOwnership.decide(
                     resumeFallbackScheduled: resumeFallbackScheduled,
                     isCaptain: r.role == .captain,
@@ -3349,7 +3380,9 @@ final class CrewSessionRunner: ObservableObject {
         model: String? = nil, effort: String? = nil, title: String? = nil,
         /// 见 `start(userInitiated:)`。默认 false —— 这条路的主要来客是机长
         /// `start_session` 排队，背后起的不该抢前台（#42）。
-        userInitiated: Bool = false
+        userInitiated: Bool = false,
+        sessionIdOverride: String? = nil,
+        manualTakeoverDirectory: URL? = nil
     ) async throws {
         if isViewer {
             sendOrchestration(SessionOrchestrationOp.startSession, [
@@ -3369,15 +3402,75 @@ final class CrewSessionRunner: ObservableObject {
             throw RunnerError.captainNoWorkingDirectory
         }
         let baseDir = URL(fileURLWithPath: (wd as NSString).expandingTildeInPath)
-        let workdir = try SessionWorkspace.resolve(
+        let workdir = try manualTakeoverDirectory ?? SessionWorkspace.resolve(
             crewDirectory: baseDir, isolation: isolation, hint: brief)
-        let localSessionId = "worker-" + String(UUID().uuidString.lowercased().prefix(8))
+        let localSessionId = sessionIdOverride
+            ?? "worker-" + String(UUID().uuidString.lowercased().prefix(8))
         let kind = runnerOverride ?? LocalCodingAgentKind.captainDefault(detail.crew.captainAgentKind)
         guard kind.isAgent else { throw RunnerError.terminalCannotBeAgent }
+        let generation = UUID().uuidString.lowercased()
+        try workerAssignmentStore.recordLaunch(.init(
+            crewId: detail.crew.id, sessionId: localSessionId, generation: generation,
+            runner: kind.rawValue, brief: brief, workingDirectory: workdir.path,
+            isolation: isolation, model: model, effort: effort, title: title,
+            agentSessionId: nil, terminalReason: nil, successorSessionId: nil))
         try await launchWorker(detail: detail, backend: backend, sessionId: localSessionId,
                                brief: brief, kind: kind, workdir: workdir,
                                model: model, effort: effort, title: title,
-                               userInitiated: userInitiated)
+                               userInitiated: userInitiated,
+                               workerAssignmentGeneration: generation)
+    }
+
+    /// Explicit human handoff only. The original assignment and terminal evidence
+    /// are consumed atomically before a new local session is considered for launch.
+    /// A failed launch leaves the claim in place for human investigation; no timer,
+    /// startup scan, or old-message replay retries it.
+    func takeOverWorkerManually(
+        detail: CrewDetail, backend: PendingCrewBackend?,
+        sourceSessionId: String, sourceGeneration: String,
+        sourceAgentSessionId: String, newRunner: LocalCodingAgentKind,
+        model: String? = nil, effort: String? = nil
+    ) async throws -> String {
+        guard !isViewer else { throw WorkerManualTakeoverError.viewerUnavailable }
+        guard newRunner.isAgent else { throw WorkerManualTakeoverError.invalidRunner }
+        guard !runs.contains(where: {
+            $0.crewId == detail.crew.id && $0.sessionId == sourceSessionId
+                && $0.status == .running
+        }) else { throw WorkerManualTakeoverError.sourceStillRunning }
+        guard let original = try workerAssignmentStore.latest(
+            crewId: detail.crew.id, sessionId: sourceSessionId),
+              original.generation == sourceGeneration,
+              original.agentSessionId == sourceAgentSessionId
+        else { throw WorkerManualTakeoverError.ineligibleSource }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: original.workingDirectory, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw WorkerManualTakeoverError.sourceWorkspaceUnavailable
+        }
+        let successor = "worker-" + String(UUID().uuidString.lowercased().prefix(8))
+        guard let source = try workerAssignmentStore.claimManualTakeover(
+            crewId: detail.crew.id, sessionId: sourceSessionId,
+            generation: sourceGeneration, agentSessionId: sourceAgentSessionId,
+            successorSessionId: successor) else {
+            throw WorkerManualTakeoverError.ineligibleSource
+        }
+        try await startForBrief(
+            detail: detail, backend: backend, brief: source.brief,
+            runnerOverride: newRunner, isolation: source.isolation,
+            model: model, effort: effort, title: source.title,
+            userInitiated: true, sessionIdOverride: successor,
+            manualTakeoverDirectory: URL(fileURLWithPath: source.workingDirectory))
+        return successor
+    }
+
+    private func reportWorkerAuthorityFailure(crewId: String, sessionId: String, error: Error) {
+        let message = "worker `\(sessionId)` 的权威派工账本未能更新：\(error.localizedDescription)。"
+            + "拒绝从缺失证据推断人工接手资格。"
+        NSLog("%@", message)
+        LocalWhiteboardStore.shared.appendSessionMessage(
+            crewId: crewId, sessionId: "system", text: message,
+            category: "error", senderName: "系统")
     }
 
     /// 把上一轮在跑的那些接回来（人在恢复弹窗里点了「恢复」之后才会走到这里）。
@@ -3534,6 +3627,18 @@ final class CrewSessionRunner: ObservableObject {
         }
         var resumeId: String? = nil
         if case .resume(let id) = decision { resumeId = id }
+        var assignmentGeneration: String?
+        if let source = try workerAssignmentStore.latest(
+            crewId: detail.crew.id, sessionId: member.sessionId) {
+            let generation = UUID().uuidString.lowercased()
+            try workerAssignmentStore.recordLaunch(.init(
+                crewId: source.crewId, sessionId: source.sessionId, generation: generation,
+                runner: kind.rawValue, brief: source.brief,
+                workingDirectory: workdir.path, isolation: source.isolation,
+                model: recorded?.model, effort: recorded?.effort, title: member.displayName,
+                agentSessionId: nil, terminalReason: nil, successorSessionId: nil))
+            assignmentGeneration = generation
+        }
         try await launchWorker(detail: detail, backend: backend, sessionId: member.sessionId,
                                brief: brief, kind: kind, workdir: workdir,
                                // Todo #146：用这个 session 记下来的档位，别一律 nil ——
@@ -3543,7 +3648,8 @@ final class CrewSessionRunner: ObservableObject {
                                resumeAgentSessionId: resumeId,
                                userInitiated: userInitiated,
                                wakeEntryId: wakeEntryId,
-                               admissionPriority: admissionPriority)
+                               admissionPriority: admissionPriority,
+                               workerAssignmentGeneration: assignmentGeneration)
     }
 
     /// worker 启动共用体（startForBrief 新起 / restartMember 复用原 id 两条来路）。
@@ -3562,7 +3668,8 @@ final class CrewSessionRunner: ObservableObject {
         /// #105 ②：被 @ 醒时那条 @ 的白板 id —— 正文已经在 `brief` 里，
         /// 首轮未读注入要排除它，否则同一段话在同一份开场里出现两遍。
         wakeEntryId: String? = nil,
-        admissionPriority: AutomaticWakeAdmission.Priority = .automatic
+        admissionPriority: AutomaticWakeAdmission.Priority = .automatic,
+        workerAssignmentGeneration: String? = nil
     ) async throws {
         let crewId = detail.crew.id
         // 精简标题单一真值：显式 title 优先，否则从 brief 兜底。既当 --label 也当 run.title。
@@ -3610,6 +3717,7 @@ final class CrewSessionRunner: ObservableObject {
             developerInstructions: developerInstructions,
             codexMcpServers: codexMcpServers,
             role: .worker,
+            workerAssignmentGeneration: workerAssignmentGeneration,
             userInitiated: userInitiated,
             admissionPriority: admissionPriority
         )
@@ -3640,7 +3748,8 @@ final class CrewSessionRunner: ObservableObject {
     private func retryWithoutResumeIfClaudeRefused(
         run: CrewSessionRun, config: SessionConfig, launchedAt: Date,
         crewId: String, sessionId: String, workingDirectory: URL, taskBrief: String,
-        title: String?, additionalEnv: [String: String], role: CrewSessionRun.Role
+        title: String?, additionalEnv: [String: String], role: CrewSessionRun.Role,
+        workerAssignmentGeneration: String?
     ) -> Bool {
         guard config.kind == .claudeCode,
               let resumedId = config.resumeSessionId, !resumedId.isEmpty,
@@ -3673,6 +3782,27 @@ final class CrewSessionRunner: ObservableObject {
             brief = notice + "\n\n" + taskBrief
         }
         retry.initialPrompt = brief
+        var nextAssignmentGeneration: String?
+        if let workerAssignmentGeneration {
+            do {
+                guard let source = try workerAssignmentStore.latest(
+                    crewId: crewId, sessionId: sessionId),
+                      source.generation == workerAssignmentGeneration
+                else { return false }
+                let generation = UUID().uuidString.lowercased()
+                try workerAssignmentStore.recordLaunch(.init(
+                    crewId: source.crewId, sessionId: source.sessionId,
+                    generation: generation, runner: source.runner,
+                    brief: source.brief, workingDirectory: workingDirectory.path,
+                    isolation: source.isolation, model: source.model,
+                    effort: source.effort, title: source.title,
+                    agentSessionId: nil, terminalReason: nil, successorSessionId: nil))
+                nextAssignmentGeneration = generation
+            } catch {
+                reportWorkerAuthorityFailure(crewId: crewId, sessionId: sessionId, error: error)
+                return false
+            }
+        }
         // 刚退出的那条 run 留在列表里只会变重影 —— 同 id 的旧 run 清掉再起。
         runs.removeAll { $0.runID == run.runID }
         // `developerInstructions` / `codexMcpServers` 不带 —— 这条路只服务 claude
@@ -3685,6 +3815,7 @@ final class CrewSessionRunner: ObservableObject {
                 crewId: crewId, sessionId: sessionId, config: retry,
                 workingDirectory: workingDirectory, taskBrief: brief, title: title,
                 additionalEnv: additionalEnv, role: role,
+                workerAssignmentGeneration: nextAssignmentGeneration,
                 admissionPriority: .emergency)
         }
         return true
@@ -4394,6 +4525,17 @@ extension SessionExitReason {
         case "failed": self = .failed
         case "hitLimit": self = .hitLimit
         default: return nil
+        }
+    }
+}
+
+private extension WorkerAssignmentStore.Assignment.TerminalReason {
+    init(_ reason: SessionExitReason) {
+        switch reason {
+        case .completed: self = .completed
+        case .userStopped: self = .userStopped
+        case .failed: self = .failed
+        case .hitLimit: self = .hitLimit
         }
     }
 }
