@@ -50,6 +50,48 @@ final class LocalAgentSessionStoreTests: XCTestCase {
         XCTAssertTrue(s.list().isEmpty)
     }
 
+    func testStructuredWorkerContractSurvivesCaptainPromotion() {
+        let dir = tempDir()
+        let s = LocalAgentSessionStore(directory: dir)
+        s.record(crewId: "c", sessionId: "worker", kind: "codex",
+                 agentSessionId: "worker-thread", structuredPost: true)
+        s.record(crewId: "c", sessionId: "captain-newer", kind: "codex",
+                 agentSessionId: "different-thread")
+        let reopened = LocalAgentSessionStore(directory: dir)
+        XCTAssertTrue(reopened.requiresStructuredPost(
+            crewId: "c", kind: "codex", resumeAgentSessionId: "worker-thread"))
+    }
+
+    func testStructuredCaptainRollbackUsesExactConversationNotLatestRecord() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "captain-old", kind: "codex",
+                 agentSessionId: "old-thread", structuredPost: true,
+                 now: Date(timeIntervalSince1970: 100))
+        s.record(crewId: "c", sessionId: "captain-new", kind: "codex",
+                 agentSessionId: "failed-thread", structuredPost: true,
+                 now: Date(timeIntervalSince1970: 200))
+        XCTAssertTrue(s.requiresStructuredPost(
+            crewId: "c", kind: "codex", resumeAgentSessionId: "old-thread"))
+    }
+
+    func testLegacyAndUnknownResumeRemainAdvisory() {
+        let s = LocalAgentSessionStore(directory: tempDir())
+        s.record(crewId: "c", sessionId: "legacy", kind: "codex",
+                 agentSessionId: "legacy-thread")
+        s.record(crewId: "other", sessionId: "worker", kind: "codex",
+                 agentSessionId: "foreign-thread", structuredPost: true)
+        XCTAssertFalse(s.requiresStructuredPost(
+            crewId: "c", kind: "codex", resumeAgentSessionId: "legacy-thread"))
+        XCTAssertFalse(s.requiresStructuredPost(
+            crewId: "c", kind: "codex", resumeAgentSessionId: "unknown-thread"))
+        XCTAssertFalse(s.requiresStructuredPost(
+            crewId: "c", kind: "codex", resumeAgentSessionId: "foreign-thread"))
+        XCTAssertFalse(s.requiresStructuredPost(
+            crewId: "other", kind: "claude_code", resumeAgentSessionId: "foreign-thread"))
+        XCTAssertTrue(s.requiresStructuredPost(
+            crewId: "c", kind: "codex", resumeAgentSessionId: nil))
+    }
+
     func testSurvivesProcessRestart() {
         let dir = tempDir()
         LocalAgentSessionStore(directory: dir).record(

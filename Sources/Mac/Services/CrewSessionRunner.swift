@@ -3209,11 +3209,9 @@ final class CrewSessionRunner: ObservableObject {
         var cfg = SessionConfig(kind: captainKind, model: model, effort: effort,
                                 initialPrompt: initialPrompt,
                                 resumeSessionId: resumeCaptainId)
-        let priorPostContract = LocalAgentSessionStore.shared.latestCaptainRecord(
-            crewId: crewId, kind: captainKind.rawValue)
-        cfg.structuredPost = resumeCaptainId == nil ||
-            (priorPostContract?.agentSessionId == resumeCaptainId &&
-             priorPostContract?.structuredPost == true)
+        cfg.structuredPost = LocalAgentSessionStore.shared.requiresStructuredPost(
+            crewId: crewId, kind: captainKind.rawValue,
+            resumeAgentSessionId: resumeCaptainId)
         cfg.wakeEntryId = wakeEntryId
         // 世界观 + crew 工具按 kind 分流：claude 走文件 flag（appendSystemPromptFile +
         // settings/mcp-config），codex 走 app-server 通道（developerInstructions 字符串 +
@@ -3497,9 +3495,9 @@ final class CrewSessionRunner: ObservableObject {
         let members = (try? await backend?.listCrewMembers(crewId: crewId))?.members ?? []
         var cfg = SessionConfig(kind: kind, model: model, effort: effort, initialPrompt: brief,
                                 resumeSessionId: resumeAgentSessionId)
-        cfg.structuredPost = resumeAgentSessionId == nil ||
-            (LocalAgentSessionStore.shared.record(crewId: crewId, sessionId: localSessionId)?
-                .structuredPost == true)
+        cfg.structuredPost = LocalAgentSessionStore.shared.requiresStructuredPost(
+            crewId: crewId, kind: kind.rawValue,
+            resumeAgentSessionId: resumeAgentSessionId)
         cfg.wakeEntryId = wakeEntryId
         var developerInstructions: String? = nil
         var codexMcpServers: [String: Any]? = nil

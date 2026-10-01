@@ -108,6 +108,21 @@ final class McpServerTests: XCTestCase {
         XCTAssertTrue(s.store.list(crewId: "c").isEmpty)
     }
 
+    func testLegacyPostSchemaOmitsConditionalHeadlineKeywords() throws {
+        let raw = try XCTUnwrap(server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+        let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+        let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
+        let items = try XCTUnwrap(messages["items"] as? [String: Any])
+        XCTAssertNil(schema["allOf"], "Legacy schema must omit allOf rather than emit the invalid empty array")
+        XCTAssertNil(items["allOf"])
+    }
+
     func testPostSchemaRequiresCategoryInSingleAndBatch() throws {
         let raw = try XCTUnwrap(server(tempDir()).handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
         let data = try XCTUnwrap(raw.data(using: .utf8))

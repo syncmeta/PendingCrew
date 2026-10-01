@@ -181,6 +181,23 @@ final class LocalAgentSessionStore: @unchecked Sendable {
         }
     }
 
+    /// The contract belongs to the exact conversation, including a promoted worker or
+    /// a previous captain restored after failed handoff. Missing legacy/unknown records
+    /// stay advisory; only a genuinely new conversation opts in without a record.
+    func requiresStructuredPost(crewId: String, kind: String,
+                                resumeAgentSessionId: String?,
+                                onIncident: (MultiProcessJSONStore.LedgerIncident) -> Void = { _ in }) -> Bool {
+        guard let resumeAgentSessionId else { return true }
+        let resumedId = resumeAgentSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resumedId.isEmpty else { return false }
+        return withFileLock {
+            loadLocked(onIncident: onIncident).contains {
+                $0.crewId == crewId && $0.kind == kind
+                    && $0.agentSessionId == resumedId && $0.structuredPost == true
+            }
+        }
+    }
+
     /// 某个 crew **最近一条机长记录**（Todo #68 第 2 件：机长也要能续跑）。
     ///
     /// 机长的 localSessionId 每次启动都新造（`CrewSessionRunner.startCaptain` 里

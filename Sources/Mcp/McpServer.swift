@@ -173,6 +173,18 @@ final class McpServer {
                 "serverInfo": ["name": "pendingcrew", "version": "0.1.0"],
             ])
         case "tools/list":
+            // Omit legacy condition keywords: JSON Schema forbids an empty allOf array.
+            func headlineKeywords(singleMessage: Bool) -> [String: Any] {
+                guard requiresStructuredPost else { return [:] }
+                var condition: [String: Any] = [
+                    "properties": ["category": ["enum": ["human_todo", "question", "blocked"]]],
+                ]
+                if singleMessage { condition["required"] = ["message"] }
+                return ["allOf": [[
+                    "if": condition,
+                    "then": ["required": ["headline"], "properties": ["headline": ["pattern": "\\S"]]],
+                ]]]
+            }
             var tools: [[String: Any]] = [
                 [
                     "name": "post_to_crew",
@@ -204,11 +216,7 @@ final class McpServer {
                                         "evidence": ["type": "string"],
                                     ],
                                     "required": ["text", "category"],
-                                    "allOf": requiresStructuredPost ? [[
-                                        "if": ["properties": ["category": ["enum": ["human_todo", "question", "blocked"]]]],
-                                        "then": ["required": ["headline"], "properties": ["headline": ["pattern": "\\S"]]],
-                                    ]] : [],
-                                ],
+                                ].merging(headlineKeywords(singleMessage: false)) { _, value in value },
                             ],
                             "headline": ["type": "string", "description": requiresStructuredPost
                                 ? "`human_todo` / `question` / `blocked` 必须写非空结论；`ack` / `note` 不要求。超过 8 行的消息默认收起，给出 headline 时收起态优先显示它；没给时仍按旧消息规则从正文猜。分条发送时 headline 写在各条 `messages` 项里。"
@@ -253,11 +261,7 @@ final class McpServer {
                             ["required": ["message", "category"]],
                             ["required": ["messages"]],
                         ],
-                        "allOf": requiresStructuredPost ? [[
-                            "if": ["required": ["message"], "properties": ["category": ["enum": ["human_todo", "question", "blocked"]]]],
-                            "then": ["required": ["headline"], "properties": ["headline": ["pattern": "\\S"]]],
-                        ]] : [],
-                    ],
+                    ].merging(headlineKeywords(singleMessage: true)) { _, value in value },
                 ],
                 [
                     "name": "directory",
