@@ -21,8 +21,8 @@ final class CrewChatWindowTests: XCTestCase {
                       "回到底部后不能让浏览历史的旧锚抢跟随")
         XCTAssertTrue(view.contains("private func subscribe() async {\n        entries = []\n        topAnchorBox.id = nil"),
                       "切群时不能把上一聊天的锚带进来")
-        XCTAssertTrue(view.contains(".onChange(of: onlyMentions) { _, _ in\n                topAnchorBox.id = nil"),
-                      "切换仅看 @ 时须清旧锚")
+        XCTAssertTrue(view.contains(".onChange(of: TimelinePresentation(\n                onlyMentions: onlyMentions, communicationView: currentCommunicationView)) { _, _ in\n                topAnchorBox.id = nil"),
+                      "切换仅看 @ 或沟通视图时须清旧锚")
         XCTAssertTrue(view.contains(".onChange(of: searchText) { _, _ in\n                topAnchorBox.id = nil"),
                       "搜索筛选切换时须清旧锚")
     }
