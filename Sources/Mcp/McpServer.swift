@@ -188,7 +188,7 @@ final class McpServer {
             var tools: [[String: Any]] = [
                 [
                     "name": "post_to_crew",
-                    "description": "把关键节点发到 crew 群聊白板（只发要紧的：开始/完成/卡住/交接/重要发现，别倒 IO 日志）。可带 mentions 定向 @ 某个 session/captain/人类，或 reply_to 回复某条（自动 @ 原发送者 —— 是「广播 + 叫醒他」，不是私信他）。",
+                    "description": "把关键节点发到 crew 群聊白板（只发要紧的：开始/完成/卡住/交接/重要发现，别倒 IO 日志）。可带 mentions 定向 @ 某个 session/captain/人类，或 reply_to 回复某条（自动 @ 原发送者 —— 是「广播 + 叫醒他」，不是私信他）。给 agent 内部讨论的广播请显式填 audience: agents；它仍进完整白板，只从人类沟通视图隐藏。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
@@ -205,6 +205,7 @@ final class McpServer {
                                         "blocked_by_number": ["type": "integer"],
                                         "blocked_by_ledger": ["type": "string"],
                                         "headline": ["type": "string"],
+                                        "audience": ["type": "string", "enum": ["human", "agents"]],
                                         "todo": ["type": "integer"],
                                         "todo_reference": ["type": "object", "properties": [
                                             "source_crew": ["type": "string"],
@@ -221,6 +222,7 @@ final class McpServer {
                             "headline": ["type": "string", "description": requiresStructuredPost
                                 ? "`human_todo` / `question` / `blocked` 必须写非空结论；`ack` / `note` 不要求。超过 8 行的消息默认收起，给出 headline 时收起态优先显示它；没给时仍按旧消息规则从正文猜。分条发送时 headline 写在各条 `messages` 项里。"
                                 : "`human_todo` / `question` / `blocked` 请写一句结论；当前旧会话缺失或空白时消息照发，回执会提醒。`ack` / `note` 不要求。"],
+                            "audience": ["type": "string", "enum": ["human", "agents"], "description": "可选：`human` 显示在人类沟通视图；`agents` 只在完整记录里显示，agent 白板消费/唤醒不变。未填时定向 session/captain 且没有 broadcast/human 的消息默认 agents，广播默认 human。@human、human_todo、回复已知人类始终为 human。内部讨论若要广播给所有 agent，请显式填 agents；分条发送逐条填写。"],
                             "category": ["type": "string", "enum": CrewMessageCategory.agentSelectable.map(\.rawValue), "description": "必填。这条该落进哪本账（不是「它讲什么」）。落账的：`human_todo`(要人拍板) / `todo_response`(回应派下来的活) / `plan`(要开始做一件事) / `progress`(某条计划推进了，要 `plan` 号) / `blocked`(卡住了，要 `plan` + `blocked_by_number`) / `done`(完成了，要 `plan` 号)。不落账的也要明确选：`handoff`(交给谁了，只记录、不起进程) / `ack` / `question` / `finding` / `note`。旧进程直调的旧值仍由运行时兼容。"],
                             "todo": ["type": "integer", "description": "这条对应哪条 Agent Todo 的 #N。**给了就必须同时给 `todo_status`** —— 挂上号却不更新状态，账还是旧的。跟 `category` 正交：一条消息可以既是进度、又对应一条 Todo。"],
                             "todo_reference": ["type": "object", "description": "总机组只读引用执行组已有 Todo；source_crew 填 directory 的机组短号，ledger 填 agent/human，number 填来源账本编号。会当场核实并记录来源 crew 与稳定条目 ID；不创建或更改 Todo。", "properties": [
@@ -258,8 +260,11 @@ final class McpServer {
                             ],
                         ],
                         "oneOf": [
-                            ["required": ["message", "category"]],
-                            ["required": ["messages"]],
+                            ["required": ["message", "category"],
+                             "not": ["required": ["messages"]]],
+                            ["required": ["messages"], "not": ["anyOf": [
+                                ["required": ["message"]], ["required": ["audience"]],
+                            ]]],
                         ],
                     ].merging(headlineKeywords(singleMessage: true)) { _, value in value },
                 ],
@@ -772,6 +777,9 @@ final class McpServer {
                 // **先全部校验，再逐条执行**：分条之后「一半成功」是新的失败形态，
                 // 而它最容易被读成「全成了」。任何一条不合法就整批拒、一条不发。
                 for e in entries {
+                    if case let .refuse(why) = postAudience(e.args) {
+                        return toolResult(id: id, text: "ERROR: 第 \(e.index + 1) 条：" + why)
+                    }
                     if requiresStructuredPost,
                        let why = CrewMessageHeadline.structuredPostRefusal(
                            category: e.args["category"] as? String,
@@ -2114,6 +2122,11 @@ final class McpServer {
                 return (false, "ERROR: "
                     + ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription)
             }
+            let audience: String
+            switch postAudience(args) {
+            case let .accept(value): audience = value
+            case let .refuse(why): return (false, "ERROR: " + why)
+            }
             let message = (args["message"] as? String) ?? ""
             // Todo #48：附件（本机绝对路径）→ 收进 attachments/<crewId>/。判定与
             // 软报错文案跟人类拖入共用 `CrewFileAttachmentIntake`，不另立一套口径。
@@ -2267,7 +2280,7 @@ final class McpServer {
                     references: CrewMessageReferences.build(refs)
                         + (externalTodo.reference.map { [$0] } ?? []),
                     crewStatus: crewStatus,
-                    headline: headline)
+                    headline: headline, audience: audience)
                 // 回执如实（#577）：发出去了几张、哪几张没收下，都得说 —— 只说
                 // 「已发到」而漏掉「那张图没进去」，跟当初「写没写成都回已发到」
                 // 是同一个病：agent 以为图递过去了，接收方那边什么都没有。
@@ -2481,6 +2494,21 @@ final class McpServer {
             return LocalWhiteboardMention(kind: kind, targetId: target)
         }
         return parsed.isEmpty ? nil : parsed
+    }
+
+    /// Single posts and every batch entry use the same audience parser. Batch
+    /// preflight calls this before any entry writes; the single body calls it
+    /// before attachment intake or ledger changes.
+    private func postAudience(_ args: [String: Any]) -> CrewMessageAudience.Decision {
+        let replyTo = (args["reply_to"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let replySenderKind = replyTo.flatMap { id in
+            store.list(crewId: crewId).first(where: { $0.id == id })?.senderKind
+        }
+        return CrewMessageAudience.parse(
+            args["audience"],
+            mentionKinds: (parseMentions(args["mentions"]) ?? []).map(\.kind),
+            category: args["category"] as? String,
+            replySenderKind: replySenderKind)
     }
 
     /// `post_to_crew(reply_to:)` 的自动 @（Todo #14 ①）：把「被回复那条的发送者」

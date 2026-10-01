@@ -63,6 +63,103 @@ final class McpServerTests: XCTestCase {
         XCTAssertEqual(msgs[0].category, "progress")
     }
 
+    func testPostAudienceDefaultsAndExplicitValuesPreserveAgentWhiteboard() {
+        let s = server(tempDir())
+        let calls = [
+            #"{"message":"broadcast","category":"note"}"#,
+            #"{"message":"directed","category":"note","mentions":[{"kind":"session","target_id":"sess-2"}]}"#,
+            #"{"message":"explicit-internal","category":"note","audience":"agents"}"#,
+            #"{"message":"explicit-human","category":"note","audience":"human"}"#,
+            #"{"message":"open-directed","category":"note","mentions":[{"kind":"broadcast"},{"kind":"captain"}]}"#,
+        ]
+        for call in calls {
+            let response = callTool(s, name: "post_to_crew", argsJSON: call)
+            XCTAssertFalse(response.contains("ERROR"), response)
+        }
+        let rows = s.store.list(crewId: "c")
+        XCTAssertEqual(rows.map(\.audience), ["human", "agents", "agents", "human", "human"])
+        XCTAssertEqual(rows.map(\.text), ["broadcast", "directed", "explicit-internal",
+                                            "explicit-human", "open-directed"])
+        let agentView = callTool(s, name: "read_whiteboard")
+        XCTAssertTrue(agentView.contains("explicit-internal"), agentView)
+        XCTAssertTrue(CrewWhiteboardVisibility.isVisible(rows[2], to: "another-agent"),
+                      "audience must not narrow the agent delivery stream")
+    }
+
+    func testHumanRecipientsTodoAndReplyOverrideExplicitInternalAudience() throws {
+        let s = server(tempDir())
+        s.store.appendUserMessage(crewId: "c", text: "human original")
+        let humanID = try XCTUnwrap(s.store.list(crewId: "c").first?.id)
+        let calls = [
+            #"{"message":"mention","category":"note","audience":"agents","mentions":[{"kind":"human"}]}"#,
+            #"{"message":"todo","category":"human_todo","audience":"agents"}"#,
+            #"{"message":"reply","category":"note","audience":"agents","reply_to":"\#(humanID)"}"#,
+        ]
+        for call in calls {
+            let response = callTool(s, name: "post_to_crew", argsJSON: call)
+            XCTAssertFalse(response.contains("ERROR"), response)
+        }
+        XCTAssertEqual(s.store.list(crewId: "c").dropFirst().map(\.audience),
+                       ["human", "human", "human"])
+    }
+
+    func testInvalidAudienceRejectsSingleAndBatchBeforeAnyWrite() {
+        let s = server(tempDir())
+        let single = callTool(s, name: "post_to_crew",
+                              argsJSON: #"{"message":"one","category":"note","audience":"elsewhere"}"#)
+        XCTAssertTrue(single.contains("ERROR") && single.contains("audience"), single)
+        let batch = callTool(s, name: "post_to_crew", argsJSON: #"{"messages":[{"text":"first","category":"note","audience":"human"},{"text":"second","category":"note","audience":"elsewhere"}]}"#)
+        XCTAssertTrue(batch.contains("ERROR") && batch.contains("第 2 条")
+                      && batch.contains("audience"), batch)
+        XCTAssertTrue(s.store.list(crewId: "c").isEmpty)
+    }
+
+    func testStructuredPostKeepsAudienceOptionalAndPerEntryInBatch() {
+        let s = server(tempDir(), structuredPost: true)
+        let single = callTool(s, name: "post_to_crew",
+                              argsJSON: #"{"message":"normal","category":"note"}"#)
+        XCTAssertFalse(single.contains("ERROR"), single)
+        let batch = callTool(s, name: "post_to_crew", argsJSON: #"{"messages":[{"text":"internal","category":"note","audience":"agents"},{"text":"public","category":"note","audience":"human"}]}"#)
+        XCTAssertFalse(batch.contains("ERROR"), batch)
+        XCTAssertEqual(s.store.list(crewId: "c").map(\.audience),
+                       ["human", "agents", "human"])
+        let topLevel = callTool(s, name: "post_to_crew", argsJSON: #"{"messages":[{"text":"no","category":"note"}],"audience":"agents"}"#)
+        XCTAssertTrue(topLevel.contains("ERROR") && topLevel.contains("audience"), topLevel)
+        XCTAssertEqual(s.store.list(crewId: "c").count, 3)
+    }
+
+    func testBothPostSchemasOfferOptionalPerEntryAudience() throws {
+        for structured in [false, true] {
+            let raw = try XCTUnwrap(server(tempDir(), structuredPost: structured)
+                .handleLine(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#))
+            let data = try XCTUnwrap(raw.data(using: .utf8))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let result = try XCTUnwrap(json["result"] as? [String: Any])
+            let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
+            let post = try XCTUnwrap(tools.first { $0["name"] as? String == "post_to_crew" })
+            let schema = try XCTUnwrap(post["inputSchema"] as? [String: Any])
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let audience = try XCTUnwrap(properties["audience"] as? [String: Any])
+            XCTAssertEqual(Set(audience["enum"] as? [String] ?? []), ["human", "agents"])
+            XCTAssertFalse((schema["required"] as? [String] ?? []).contains("audience"))
+            let messages = try XCTUnwrap(properties["messages"] as? [String: Any])
+            let items = try XCTUnwrap(messages["items"] as? [String: Any])
+            let itemProperties = try XCTUnwrap(items["properties"] as? [String: Any])
+            let perEntry = try XCTUnwrap(itemProperties["audience"] as? [String: Any])
+            XCTAssertEqual(Set(perEntry["enum"] as? [String] ?? []), ["human", "agents"])
+            XCTAssertFalse((items["required"] as? [String] ?? []).contains("audience"))
+            let modes = try XCTUnwrap(schema["oneOf"] as? [[String: Any]])
+            let batchMode = try XCTUnwrap(modes.first {
+                ($0["required"] as? [String]) == ["messages"]
+            })
+            let notRule = try XCTUnwrap(batchMode["not"] as? [String: Any])
+            let forbidden = try XCTUnwrap(notRule["anyOf"] as? [[String: Any]])
+            XCTAssertTrue(forbidden.contains {
+                ($0["required"] as? [String]) == ["audience"]
+            }, "batch 顶层 audience 必须在 schema 就被拒绝")
+        }
+    }
+
     func testLegacyPostWithoutCategoryKeepsMessageAndWarns() {
         let s = server(tempDir())
         let r = s.handleLine(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"post_to_crew","arguments":{"message":"没有分类"}}}"#) ?? ""

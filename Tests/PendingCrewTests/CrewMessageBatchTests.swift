@@ -23,6 +23,29 @@ final class CrewMessageBatchTests: XCTestCase {
                        "每条要带住自己的参数 —— 分类是逐条的，不是整批一个")
     }
 
+    func test_audience只能逐条给() {
+        guard case let .refuse(message) = parse([
+            "audience": "agents",
+            "messages": [["text": "internal", "category": "note"]],
+        ]) else { return XCTFail("顶层 audience 静默丢失") }
+        XCTAssertTrue(message.contains("audience"), message)
+        XCTAssertTrue(message.contains("整批都没有发出去"), message)
+    }
+
+    func test_messageCategoryDoesNotSilentlyMakeInternalDiscussionHuman() {
+        for category in ["question", "finding", "blocked"] {
+            XCTAssertEqual(CrewMessageAudience.parse(
+                "agents", mentionKinds: [], category: category,
+                replySenderKind: nil), .accept("agents"))
+        }
+        XCTAssertEqual(CrewMessageAudience.parse(
+            nil, mentionKinds: ["session"], category: "note",
+            replySenderKind: nil), .accept("agents"))
+        XCTAssertEqual(CrewMessageAudience.parse(
+            nil, mentionKinds: ["broadcast", "session"], category: "note",
+            replySenderKind: nil), .accept("human"))
+    }
+
     /// **两个都给 = 没人知道你想发几条。**
     func test_message和messages不许同时给() {
         guard case let .refuse(msg) = parse(["message": "一条", "messages": [["text": "另一条"]]])

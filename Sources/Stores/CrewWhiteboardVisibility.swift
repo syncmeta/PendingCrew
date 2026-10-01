@@ -40,8 +40,9 @@ import Foundation
 ///     「不够宽」，不会「悄悄扩散」。
 ///   * 自己发的那条永远对自己可见（否则自己的定向 @ 在自己上下文里凭空消失）。
 ///
-/// 「看不到」只针对 agent 注入面：人类在 app 白板上仍看得到全部消息，session 想看全景
-/// 也随时能主动调 `read_whiteboard`（那是显式拉取，不是被当成派给自己的活塞进来）。
+/// 「看不到」只针对 agent 注入面：人类在 app 的「完整记录」里仍看得到全部消息，
+/// 「人类沟通」按 audience 单独投影；session 想看全景也随时能主动调
+/// `read_whiteboard`（那是显式拉取，不是被当成派给自己的活塞进来）。
 /// 与 session world-model §9 的措辞保持一致 —— 那里也已改成「@ 了**别的 session / 机长**
 /// 的部分才会被过滤掉；@ 人类的照样看得到」。
 enum CrewWhiteboardVisibility {

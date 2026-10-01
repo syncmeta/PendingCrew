@@ -1454,7 +1454,7 @@ struct CrewChatView: View {
                 Text("这个群里没有 @ 你的消息")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)
-            } else if currentCommunicationView == .human {
+            } else if currentCommunicationView == .human && !entries.isEmpty {
                 Text("还没有给你的消息")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)

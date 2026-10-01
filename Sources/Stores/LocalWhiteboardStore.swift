@@ -255,7 +255,8 @@ final class LocalWhiteboardStore: @unchecked Sendable {
             mentions: (mentions?.isEmpty == true) ? nil : mentions,
             attachments: (attachments?.isEmpty == true) ? nil : attachments,
             references: (references?.isEmpty == true) ? nil : references,
-            headline: headline))
+            headline: headline,
+            audience: "human"))
     }
 
     /// 一次写入失败是不是「读不出来、但**已存进待发件箱**、恢复后会自动补发」那种。

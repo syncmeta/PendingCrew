@@ -43,7 +43,7 @@ enum CrewMessageBatch {
     }
 
     /// 只能写在**每一条**上的参数。顶层给了就拒 —— 不是不支持，是放错地方了。
-    static let perEntryOnly = ["mentions", "reply_to", "attachments", "headline",
+    static let perEntryOnly = ["mentions", "reply_to", "attachments", "headline", "audience",
                                "todo_reference"]
 
     /// 顶层「一次一个」、但落盘时**每条都带**的参数。
@@ -132,5 +132,39 @@ enum CrewMessageBatch {
         lines.append("**存没存下来看每条自己那句** —— 写了「已存进待发件箱」的会自己补发，"
                      + "别重发；没写的才需要你重发。")
         return lines.joined(separator: "\n")
+    }
+}
+
+/// The human chat is a projection of the full whiteboard. This value never
+/// changes agent delivery, mention visibility, wakeups, or cursor consumption.
+enum CrewMessageAudience {
+    enum Decision: Equatable {
+        case accept(String)
+        case refuse(String)
+    }
+
+    static func parse(_ raw: Any?, mentionKinds: [String], category: String?,
+                      replySenderKind: String?) -> Decision {
+        let explicit: String?
+        if let raw {
+            guard let value = raw as? String, value == "human" || value == "agents" else {
+                return .refuse("audience 只能填 `human` 或 `agents`；这条消息没有发出去。")
+            }
+            explicit = value
+        } else {
+            explicit = nil
+        }
+
+        // The recipient takes precedence over an accidentally internal label.
+        if mentionKinds.contains("human") || category == "human_todo"
+            || replySenderKind == "user" || replySenderKind == "human" {
+            return .accept("human")
+        }
+        if let explicit { return .accept(explicit) }
+
+        // Only a private session/captain address is internal by default.
+        // Broadcasts and legacy calls remain visible to the human.
+        let directed = mentionKinds.contains("session") || mentionKinds.contains("captain")
+        return .accept(directed && !mentionKinds.contains("broadcast") ? "agents" : "human")
     }
 }

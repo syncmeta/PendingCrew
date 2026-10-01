@@ -26,6 +26,7 @@ final class LocalWhiteboardStoreTests: XCTestCase {
         XCTAssertEqual(entries[0].text, "hello")
         XCTAssertEqual(entries[0].senderKind, "user")
         XCTAssertEqual(entries[0].senderUserId, LocalWhiteboardStore.localUserId)
+        XCTAssertEqual(entries[0].audience, "human")
     }
 
     func testOrderedByInsertion() {
