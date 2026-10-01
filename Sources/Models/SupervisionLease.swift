@@ -179,3 +179,36 @@ enum SupervisionLease {
         return .minutes(value)
     }
 }
+
+/// A power-transition pause for in-memory wake timers. It never mutates the
+/// durable lease or admission ledger. An unknown power state remains runnable:
+/// a missed notification must not silently turn a real ledger failure green.
+struct WakeupSleepWindow {
+    static let wakeGrace: TimeInterval = 120
+    static let sleepRetry: TimeInterval = 300
+
+    private var isSleeping = false
+    private var lastWake: Date?
+
+    mutating func willSleep() {
+        isSleeping = true
+        lastWake = nil
+    }
+
+    mutating func didWake(at now: Date) {
+        isSleeping = false
+        lastWake = now
+    }
+
+    func shouldDefer(at now: Date) -> Bool {
+        if isSleeping { return true }
+        guard let lastWake else { return false }
+        return now < lastWake.addingTimeInterval(Self.wakeGrace)
+    }
+
+    func retryDelay(at now: Date) -> TimeInterval {
+        if isSleeping { return Self.sleepRetry }
+        guard let lastWake else { return 1 }
+        return max(1, lastWake.addingTimeInterval(Self.wakeGrace).timeIntervalSince(now))
+    }
+}

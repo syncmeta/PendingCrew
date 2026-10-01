@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Combine
 import Foundation
 import SwiftUI
@@ -344,6 +345,7 @@ final class CrewSessionRunner: ObservableObject {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.noteAcceptedHumanInput()
         }
+        observeSystemSleep()
     }
 
     /// 切换前台 run（退出「新建」态）。
@@ -864,6 +866,33 @@ final class CrewSessionRunner: ObservableObject {
 
     private let wakeupStore = LocalWakeupStore()
     private var wakeupTimers: [String: Timer] = [:]
+    private var wakeupLedgerRetries: [String: PendingWakeup] = [:]
+    private var wakeupSleepWindow = WakeupSleepWindow()
+    private var powerObservations: Set<AnyCancellable> = []
+
+    private func observeSystemSleep() {
+        let notifications = NSWorkspace.shared.notificationCenter
+        notifications.publisher(for: NSWorkspace.willSleepNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.wakeupSleepWindow.willSleep() }
+            }
+            .store(in: &powerObservations)
+        notifications.publisher(for: NSWorkspace.didWakeNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.resumeWakeupsAfterSleep() }
+            }
+            .store(in: &powerObservations)
+    }
+
+    private func resumeWakeupsAfterSleep() {
+        wakeupSleepWindow.didWake(at: Date())
+        // The old hourly ledger retry may have been armed during a DarkWake.
+        // Retest promptly after the grace period, without reading or advancing
+        // any persistent lease merely because the machine woke up.
+        for pending in Array(wakeupLedgerRetries.values) {
+            retryWakeupLedger(pending, delay: WakeupSleepWindow.wakeGrace)
+        }
+    }
 
     /// wakeups.json 出事 → fail-loud @机长。发到有活跃 run 的 crew；一个都没有
     /// （如刚启动）→ 发到所有 crew。
@@ -942,6 +971,7 @@ final class CrewSessionRunner: ObservableObject {
     }
 
     private func arm(_ w: PendingWakeup) {
+        wakeupLedgerRetries[w.id] = nil
         let fireAt = McpServer.parseISO(w.fireAt) ?? Date()
         let delay = max(1, fireAt.timeIntervalSinceNow)
         wakeupTimers[w.id] = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -949,9 +979,10 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    private func retryWakeupLedger(_ w: PendingWakeup) {
+    private func retryWakeupLedger(_ w: PendingWakeup, delay: TimeInterval = 3600) {
         wakeupTimers[w.id]?.invalidate()
-        wakeupTimers[w.id] = Timer.scheduledTimer(withTimeInterval: 3600, repeats: false) {
+        wakeupLedgerRetries[w.id] = w
+        wakeupTimers[w.id] = Timer.scheduledTimer(withTimeInterval: max(1, delay), repeats: false) {
             [weak self] _ in
             Task { @MainActor in self?.fire(w) }
         }
@@ -960,6 +991,12 @@ final class CrewSessionRunner: ObservableObject {
     private func fire(_ w: PendingWakeup) {
         wakeupTimers[w.id]?.invalidate()
         wakeupTimers[w.id] = nil
+        wakeupLedgerRetries[w.id] = nil
+        let now = Date()
+        if wakeupSleepWindow.shouldDefer(at: now) {
+            retryWakeupLedger(w, delay: wakeupSleepWindow.retryDelay(at: now))
+            return
+        }
         if w.planNumber != nil { fireSupervisionLease(w); return }
         let leaseKey = "scheduled:" + w.id
         switch wakeAdmission.acceptedLease(sourceKey: leaseKey) {
@@ -978,7 +1015,7 @@ final class CrewSessionRunner: ObservableObject {
             return
         case .some(false): break
         }
-        let now = ISO8601DateFormatter().string(from: Date())
+        let nowLabel = ISO8601DateFormatter().string(from: Date())
         if let run = runs.first(where: {
             $0.sessionId == w.sessionId && $0.status == .running && $0.kind.isAgent
         }) {
@@ -988,7 +1025,7 @@ final class CrewSessionRunner: ObservableObject {
             deliverOrDeferWake(sourceKey: leaseKey, to: run, text: """
             定时唤醒（你用 schedule_wakeup 约的）：
             - 备注: \(w.note)
-            - 现在: \(now)。先 get_quota 确认额度,然后按备注继续。
+            - 现在: \(nowLabel)。先 get_quota 确认额度,然后按备注继续。
             """) { [weak self] _ in
                 if w.note.hasPrefix("[auto]") { run.rearmQuotaHealth() }
                 guard let self else { return }

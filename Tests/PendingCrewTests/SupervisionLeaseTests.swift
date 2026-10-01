@@ -181,3 +181,32 @@ final class SupervisionLeaseTests: XCTestCase {
         }
     }
 }
+
+/// #190: sleep must defer the physical wake attempt without consuming its lease.
+final class WakeupSleepWindowTests: XCTestCase {
+    private let wake = Date(timeIntervalSince1970: 1_780_000_000)
+
+    func testSleepAndWakeGraceDeferButAwakeFailureRemainsVisible() {
+        var window = WakeupSleepWindow()
+        XCTAssertFalse(window.shouldDefer(at: wake), "unknown power history must fail closed")
+        window.willSleep()
+        XCTAssertTrue(window.shouldDefer(at: wake))
+        XCTAssertEqual(window.retryDelay(at: wake), 300)
+        window.didWake(at: wake)
+        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(119)))
+        XCTAssertEqual(window.retryDelay(at: wake.addingTimeInterval(119)), 1)
+        XCTAssertFalse(window.shouldDefer(at: wake.addingTimeInterval(120)),
+                       "a lasting admission fault after wake must still be reported")
+    }
+
+    func testRepeatedSleepCycleCannotConsumeTheWakeGrace() {
+        var window = WakeupSleepWindow()
+        window.willSleep()
+        window.didWake(at: wake)
+        window.willSleep()
+        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(600)))
+        window.didWake(at: wake.addingTimeInterval(600))
+        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(660)))
+        XCTAssertFalse(window.shouldDefer(at: wake.addingTimeInterval(720)))
+    }
+}
