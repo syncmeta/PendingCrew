@@ -19,6 +19,7 @@ struct CrewCenterView: View {
     /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
     /// toolbar 驱动它。切 crew 时下面显式归位（筛选状态不跨群带走）。
     @State private var onlyMentions = CrewMentionFilter.defaultOnlyMentions
+    @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
     @State private var searchQuery = ""
     @State private var searchTargetMessageId: String?
 
@@ -40,6 +41,7 @@ struct CrewCenterView: View {
                         sessionRunner.viewingTerminal = true
                     },
                     showOnlyHumanMentions: $onlyMentions,
+                    communicationView: $communicationView,
                     searchQuery: $searchQuery,
                     searchTargetMessageId: $searchTargetMessageId,
                     // 引用胶囊的跳转（人类 Todo #132/#133）。真正动 store 的那几行
@@ -120,6 +122,15 @@ struct CrewCenterView: View {
             if let crewId = crewStore.selectedCrewId,
                crewId != crewStore.pendingCrew?.id {
                 ToolbarItem {
+                    Picker("沟通视图", selection: $communicationView) {
+                        ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { view in
+                            Text(view.title).tag(view)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("人类沟通只显示给人的消息；完整记录显示所有消息")
+                }
+                ToolbarItem {
                     // Todo #79 当初把它钉在最右（`.primaryAction`）；#128 人类要它挪到
                     // 那三个按钮**左侧**，所以改成普通 ToolbarItem 并**声明在最前**
                     // —— toolbar 的排布跟声明顺序走。点亮色与发送键共用
@@ -185,6 +196,7 @@ struct CrewCenterView: View {
         // **动这里之前先确认那条出路还在**，手动打开筛选后仍需要它。
         .onChange(of: crewStore.selectedCrewId) { _, _ in
             onlyMentions = CrewMentionFilter.defaultOnlyMentions
+            communicationView = .human
             // 跨群结果的 request 会在下面紧接着重新填回查询/定位；普通切群则归零。
             if crewStore.chatSearchRequest == nil {
                 searchQuery = ""
@@ -198,6 +210,8 @@ struct CrewCenterView: View {
         }
         .onChange(of: crewStore.chatSearchRequest) { _, request in
             guard let request else { return }
+            // 每个跨群搜索/引用请求都带具体消息 id；定位时打开完整记录。
+            communicationView = .agents
             // **落到某一条消息 = 「把这条给我看」，筛选一律让路。**
             // 搜索那条老路是靠下面 `onChange(of: searchQuery)` 顺带收掉筛选的，
             // 而引用胶囊的定位 `query` 是空的 —— 走不到那一条。少了这一行，点一颗

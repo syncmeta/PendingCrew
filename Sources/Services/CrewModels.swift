@@ -97,6 +97,8 @@ struct CrewWhiteboardEntry: Codable, Identifiable, Equatable {
     var headline: String? = nil
     /// 本地群消息分类；旧记录/远端消息没有时保持 nil。
     var category: String? = nil
+    /// 仅控制人类沟通视图，不改变 agent 白板可见性/投递。旧记录缺字段仍可见。
+    var audience: String? = nil
 
     struct Payload: Codable, Equatable {
         let text: String?
@@ -120,6 +122,7 @@ struct CrewWhiteboardEntry: Codable, Identifiable, Equatable {
         case references
         case headline
         case category
+        case audience
     }
 
     /// Best display text: explicit payload text → summary → empty.

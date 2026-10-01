@@ -54,6 +54,7 @@ enum CrewLocalWhiteboardMapping {
             references: m.references,
             // #143 — 作者写的那一行结论，原样透传；没写就是 nil，渲染端退回「猜」。
             headline: m.headline,
-            category: m.category)
+            category: m.category,
+            audience: m.audience)
     }
 }

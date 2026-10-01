@@ -29,6 +29,7 @@ struct CrewChatView: View {
     /// `@State`：iOS 侧不传（nil = 恒关、不渲染任何筛选相关 UI），Mac 侧由
     /// toolbar 那一份 `@State` 驱动。判定逻辑全在 `CrewMentionFilter`。
     var showOnlyHumanMentions: Binding<Bool>? = nil
+    var communicationView: Binding<CrewTimelineFilter.CommunicationView>? = nil
     /// 当前群搜索框由 `CrewCenterView` 放在原生 toolbar；这里仅消费查询并用共享
     /// `CrewMessageSearch` 筛时间线。iOS 不传时恒为空。
     var searchQuery: Binding<String>? = nil
@@ -820,6 +821,9 @@ struct CrewChatView: View {
 
     /// 筛选开关当前是不是开着（没传 binding = 恒关）。
     private var onlyMentions: Bool { showOnlyHumanMentions?.wrappedValue ?? false }
+    private var currentCommunicationView: CrewTimelineFilter.CommunicationView {
+        communicationView?.wrappedValue ?? .human
+    }
     private var searchText: String {
         (searchQuery?.wrappedValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -860,7 +864,7 @@ struct CrewChatView: View {
         timelineFilterCache.entries(for: CrewTimelineFilter.Inputs(
             entries: entries, onlyMentions: onlyMentions, roster: mentionRoster,
             localUserId: localUserId, searchText: searchText,
-            crewId: crewId, crewTitle: crewTitle))
+            crewId: crewId, crewTitle: crewTitle, communicationView: currentCommunicationView))
     }
 
     /// 时间线的一行：消息本体 + 「它上面要不要插一条时间分隔」。
@@ -1060,7 +1064,8 @@ struct CrewChatView: View {
             // `renderLimit == pageSize`（`afterInsert` 的 `limit > pageSize` 挡掉增长）。
             // 两条路的终点都是「一页 + 贴在最新一条」，所以不依赖 SwiftUI 的 onChange
             // 触发次序。
-            .onChange(of: onlyMentions) { _, _ in
+            .onChange(of: TimelinePresentation(
+                onlyMentions: onlyMentions, communicationView: currentCommunicationView)) { _, _ in
                 topAnchorBox.id = nil
                 renderLimit = CrewChatWindow.pageSize
                 bottomPin = CrewChatBottomFollow.Pin()
@@ -1449,6 +1454,10 @@ struct CrewChatView: View {
                 Text("这个群里没有 @ 你的消息")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)
+            } else if currentCommunicationView == .human {
+                Text("还没有给你的消息")
+                    .font(Theme.Fonts.caption)
+                    .foregroundStyle(.tertiary)
             }
             // 手动打开「仅@你」后仍可能筛成空，所以空态需要一个可点的出口，否则它看起来就像
             // 这个群坏了。群本身空着时不给：点了还是空，那颗按钮只会误导。
@@ -1459,8 +1468,21 @@ struct CrewChatView: View {
                     .tint(Theme.Palette.accent)
                     .padding(.top, 2)
             }
+            if currentCommunicationView == .human && !entries.isEmpty && communicationView != nil {
+                Button("查看完整记录") {
+                    showOnlyHumanMentions?.wrappedValue = false
+                    communicationView?.wrappedValue = .agents
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private struct TimelinePresentation: Equatable {
+        let onlyMentions: Bool
+        let communicationView: CrewTimelineFilter.CommunicationView
     }
 
     private func locateSearchTarget(_ proxy: ScrollViewProxy) {

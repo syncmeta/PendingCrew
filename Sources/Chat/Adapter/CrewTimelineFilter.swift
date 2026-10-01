@@ -14,6 +14,24 @@ import Foundation
 /// 可以挂缓存的地方。
 enum CrewTimelineFilter {
 
+    enum CommunicationView: String, CaseIterable {
+        case human, agents
+
+        var title: String { self == .human ? "人类沟通" : "完整记录" }
+    }
+
+    /// 只隐藏作者明确标成内部的行；缺字段/未知字段保守可见。
+    /// 人类输入、明确 @ 人类、人类 Todo 和对人类的直接回复不能被误标隐藏。
+    static func humanEntries(_ entries: [CrewWhiteboardEntry]) -> [CrewWhiteboardEntry] {
+        let humanIDs = Set(entries.filter { ["user", "human"].contains($0.senderKind) }.map(\.id))
+        return entries.filter {
+            $0.audience != "agents" || ["user", "human"].contains($0.senderKind)
+                || $0.mentions?.contains(where: { $0.kind == "human" }) == true
+                || $0.category == "human_todo"
+                || $0.inReplyTo.map { humanIDs.contains($0) } == true
+        }
+    }
+
     /// 一次筛选的全部输入。**缓存键就是它本身**（逐字段 `==`），不是什么指纹或条数 ——
     /// 指纹那种便宜代理平时都对，只在「条数没变但内容变了」（撤回一条又来一条、
     /// 订阅重放）那一下错，而那一下正是缓存必须失效的时刻。
@@ -29,11 +47,13 @@ enum CrewTimelineFilter {
         let searchText: String
         let crewId: String
         let crewTitle: String
+        let communicationView: CommunicationView
 
         init(
             entries: [CrewWhiteboardEntry], onlyMentions: Bool,
             roster: CrewMentionFilter.Roster, localUserId: String?,
-            searchText: String, crewId: String, crewTitle: String
+            searchText: String, crewId: String, crewTitle: String,
+            communicationView: CommunicationView = .human
         ) {
             self.entries = entries
             self.onlyMentions = onlyMentions
@@ -42,16 +62,19 @@ enum CrewTimelineFilter {
             self.searchText = searchText
             self.crewId = crewId
             self.crewTitle = crewTitle
+            self.communicationView = communicationView
         }
     }
 
     /// 与抽出来之前的 `timelineEntries` **逐字等价**：先筛 @、再按搜索词回滤，保持源序。
     static func resolve(_ inputs: Inputs) -> [CrewWhiteboardEntry] {
         CrewChatCostCounters.note(.timelineFilterRun)
+        let communicationEntries = inputs.communicationView == .human
+            ? humanEntries(inputs.entries) : inputs.entries
         let mentionFiltered = inputs.onlyMentions
             ? CrewMentionFilter.onlyHumanMentions(
-                inputs.entries, roster: inputs.roster, includingFrom: inputs.localUserId)
-            : inputs.entries
+                communicationEntries, roster: inputs.roster, includingFrom: inputs.localUserId)
+            : communicationEntries
         guard !inputs.searchText.isEmpty else { return mentionFiltered }
 
         // 核心统一按「最新优先、最多 200」选出结果；聊天时间线仍按原来的时间正序
