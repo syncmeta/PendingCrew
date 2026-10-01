@@ -186,27 +186,41 @@ final class SupervisionLeaseTests: XCTestCase {
 final class WakeupSleepWindowTests: XCTestCase {
     private let wake = Date(timeIntervalSince1970: 1_780_000_000)
 
+    func testMissedWakeCannotPauseForeverButSleepingWallTimeDoesNotExpirePause() {
+        var window = WakeupSleepWindow()
+        window.willSleep(uptime: 100)
+        let longSleep = wake.addingTimeInterval(12 * 3600)
+        XCTAssertTrue(window.shouldDefer(at: longSleep, uptime: 101),
+                      "sleeping wall time must not spend the active-time allowance")
+        XCTAssertFalse(window.shouldDefer(at: longSleep, uptime: 400),
+                       "a missed wake notification must expire after bounded active time")
+        XCTAssertFalse(window.shouldDefer(at: longSleep.addingTimeInterval(3600), uptime: 401))
+        XCTAssertEqual(window.retryDelay(at: longSleep, uptime: 399), 1)
+        XCTAssertFalse(window.shouldDefer(at: longSleep, uptime: 99), "rebased uptime cannot pause forever")
+        XCTAssertFalse(window.shouldDefer(at: longSleep, uptime: .nan))
+    }
+
     func testSleepAndWakeGraceDeferButAwakeFailureRemainsVisible() {
         var window = WakeupSleepWindow()
         XCTAssertFalse(window.shouldDefer(at: wake), "unknown power history must fail closed")
-        window.willSleep()
-        XCTAssertTrue(window.shouldDefer(at: wake))
-        XCTAssertEqual(window.retryDelay(at: wake), 300)
-        window.didWake(at: wake)
-        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(119)))
-        XCTAssertEqual(window.retryDelay(at: wake.addingTimeInterval(119)), 1)
-        XCTAssertFalse(window.shouldDefer(at: wake.addingTimeInterval(120)),
+        window.willSleep(uptime: 100)
+        XCTAssertTrue(window.shouldDefer(at: wake, uptime: 100))
+        XCTAssertEqual(window.retryDelay(at: wake, uptime: 100), 300)
+        window.didWake(at: wake, uptime: 101)
+        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(119), uptime: 220))
+        XCTAssertEqual(window.retryDelay(at: wake.addingTimeInterval(119), uptime: 220), 1)
+        XCTAssertFalse(window.shouldDefer(at: wake.addingTimeInterval(120), uptime: 221),
                        "a lasting admission fault after wake must still be reported")
     }
 
     func testRepeatedSleepCycleCannotConsumeTheWakeGrace() {
         var window = WakeupSleepWindow()
-        window.willSleep()
-        window.didWake(at: wake)
-        window.willSleep()
-        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(600)))
-        window.didWake(at: wake.addingTimeInterval(600))
-        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(660)))
-        XCTAssertFalse(window.shouldDefer(at: wake.addingTimeInterval(720)))
+        window.willSleep(uptime: 100)
+        window.didWake(at: wake, uptime: 101)
+        window.willSleep(uptime: 110)
+        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(600), uptime: 111))
+        window.didWake(at: wake.addingTimeInterval(600), uptime: 112)
+        XCTAssertTrue(window.shouldDefer(at: wake.addingTimeInterval(660), uptime: 172))
+        XCTAssertFalse(window.shouldDefer(at: wake.addingTimeInterval(720), uptime: 232))
     }
 }

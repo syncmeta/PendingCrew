@@ -188,28 +188,41 @@ struct WakeupSleepWindow {
     static let wakeGrace: TimeInterval = 120
     static let sleepRetry: TimeInterval = 300
 
-    private var isSleeping = false
-    private var lastWake: Date?
+    // A missed didWake must not silence reminders forever. This policy uses
+    // system-active time, not wall time spent asleep; DarkWake can spend it.
+    private var sleepBeganAtUptime: TimeInterval?
+    private var wakeBeganAtUptime: TimeInterval?
 
-    mutating func willSleep() {
-        isSleeping = true
-        lastWake = nil
+    mutating func willSleep(uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        sleepBeganAtUptime = uptime
+        wakeBeganAtUptime = nil
     }
 
-    mutating func didWake(at now: Date) {
-        isSleeping = false
-        lastWake = now
+    mutating func didWake(at now: Date, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        sleepBeganAtUptime = nil
+        wakeBeganAtUptime = uptime
     }
 
-    func shouldDefer(at now: Date) -> Bool {
-        if isSleeping { return true }
-        guard let lastWake else { return false }
-        return now < lastWake.addingTimeInterval(Self.wakeGrace)
+    func shouldDefer(at now: Date, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        remainingPause(uptime: uptime) > 0
     }
 
-    func retryDelay(at now: Date) -> TimeInterval {
-        if isSleeping { return Self.sleepRetry }
-        guard let lastWake else { return 1 }
-        return max(1, lastWake.addingTimeInterval(Self.wakeGrace).timeIntervalSince(now))
+    func retryDelay(at now: Date, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> TimeInterval {
+        max(1, remainingPause(uptime: uptime))
+    }
+
+    private func remainingPause(uptime: TimeInterval) -> TimeInterval {
+        let start: TimeInterval
+        let limit: TimeInterval
+        if let sleeping = sleepBeganAtUptime {
+            start = sleeping
+            limit = Self.sleepRetry
+        } else if let waking = wakeBeganAtUptime {
+            start = waking
+            limit = Self.wakeGrace
+        } else { return 0 }
+        // Invalid/rebased monotonic identity cannot justify indefinite silence.
+        guard start.isFinite, uptime.isFinite, uptime >= start else { return 0 }
+        return max(0, limit - (uptime - start))
     }
 }

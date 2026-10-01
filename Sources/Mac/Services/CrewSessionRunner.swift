@@ -896,12 +896,13 @@ final class CrewSessionRunner: ObservableObject {
             .store(in: &powerObservations)
     }
 
-    func receiveSystemSleepTransition(_ transition: WakeupSleepWindow.Transition, at now: Date) {
+    func receiveSystemSleepTransition(_ transition: WakeupSleepWindow.Transition, at now: Date,
+                                     uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         if case .willSleep = transition {
-            wakeupSleepWindow.willSleep()
+            wakeupSleepWindow.willSleep(uptime: uptime)
             return
         }
-        wakeupSleepWindow.didWake(at: now)
+        wakeupSleepWindow.didWake(at: now, uptime: uptime)
         // The old hourly ledger retry may have been armed during a DarkWake.
         // Retest promptly after the grace period, without reading or advancing
         // any persistent lease merely because the machine woke up.
@@ -1004,12 +1005,13 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
-    func fire(_ w: PendingWakeup, at now: Date = Date()) {
+    func fire(_ w: PendingWakeup, at now: Date = Date(),
+              uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         wakeupTimers[w.id]?.invalidate()
         wakeupTimers[w.id] = nil
         wakeupLedgerRetries[w.id] = nil
-        if wakeupSleepWindow.shouldDefer(at: now) {
-            retryWakeupLedger(w, delay: wakeupSleepWindow.retryDelay(at: now))
+        if wakeupSleepWindow.shouldDefer(at: now, uptime: uptime) {
+            retryWakeupLedger(w, delay: wakeupSleepWindow.retryDelay(at: now, uptime: uptime))
             return
         }
         if w.planNumber != nil { fireSupervisionLease(w); return }
