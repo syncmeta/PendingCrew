@@ -33,6 +33,11 @@ struct CrewSessionWindowView: View {
     /// 成员行右键「设为机长」的待确认目标。确认后不是原地翻角色，而是续接同一
     /// agent conversation 以 captain 世界观/工具权限重新挂起。
     @State private var pendingCaptainRun: CrewSessionRun?
+    private struct ManualWorkerTarget {
+        let sessionId: String
+        let displayName: String
+    }
+    @State private var pendingWorkerTakeover: ManualWorkerTarget?
     /// composer 里给「新 worker session」选的 agent kind。初值从 crew 的
     /// `captainAgentKind` 派生（见 `.onAppear` / `.onChange`），crew 没记 → `.codex`。
     @State private var selectedKind: LocalCodingAgentKind = .codex
@@ -127,6 +132,27 @@ struct CrewSessionWindowView: View {
             Button("取消", role: .cancel) { pendingCaptainRun = nil }
         } message: { run in
             Text("当前机长会停止；这个 \(run.kind.displayName) session 会续接原 conversation，并以机长权限重新启动。")
+        }
+        .confirmationDialog(
+            pendingWorkerTakeover.map { "人工接手「\($0.displayName)」的原派工？" }
+                ?? "人工接手 worker？",
+            isPresented: Binding(
+                get: { pendingWorkerTakeover != nil },
+                set: { if !$0 { pendingWorkerTakeover = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingWorkerTakeover
+        ) { target in
+            Button("确认以 Claude Code 接手") {
+                pendingWorkerTakeover = nil
+                Task { await requestManualWorkerTakeover(target, runner: .claudeCode) }
+            }
+            Button("确认以 Codex 接手") {
+                pendingWorkerTakeover = nil
+                Task { await requestManualWorkerTakeover(target, runner: .codex) }
+            }
+            Button("取消", role: .cancel) { pendingWorkerTakeover = nil }
+        } message: { _ in
+            Text("仅明确失败或限额结束且有可信原派工的 worker 可接手。新 runner 会在原工作目录开始一轮；确认后只尝试一次，失败需人工核对。")
         }
     }
 
@@ -444,6 +470,12 @@ struct CrewSessionWindowView: View {
             .contextMenu {
                 if run.role == .worker && run.kind.isAgent {
                     Button("设为机长") { pendingCaptainRun = run }
+                    if run.status != .running {
+                        Button("由新 runner 人工接手") {
+                            pendingWorkerTakeover = .init(
+                                sessionId: run.sessionId, displayName: run.displayName)
+                        }
+                    }
                 }
             }
         } else if let member = item.persistedMember {
@@ -457,6 +489,12 @@ struct CrewSessionWindowView: View {
             .buttonStyle(.plain)
             .disabled(starting)
             .help("恢复并打开这个 session")
+            .contextMenu {
+                Button("由新 runner 人工接手") {
+                    pendingWorkerTakeover = .init(
+                        sessionId: member.sessionId, displayName: member.displayName)
+                }
+            }
         } else if item.sender.isCaptain {
             // captain 没在跑:点头像即进入它的 session —— 没在跑就当场起一个再进。
             // 用户定调:不要常驻/自动起,只要「点头像就进 session」;这条是纯点击触发,
@@ -501,6 +539,21 @@ struct CrewSessionWindowView: View {
             sessionRunner.viewingTerminal = true
         } catch {
             sessionRunner.lastStartError = "恢复 \(member.displayName) 失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func requestManualWorkerTakeover(
+        _ target: ManualWorkerTarget, runner kind: LocalCodingAgentKind
+    ) async {
+        guard let detail = crewStore.selectedDetail else { return }
+        starting = true
+        defer { starting = false }
+        do {
+            _ = try await sessionRunner.requestManualWorkerTakeover(
+                detail: detail, backend: appModel.backend,
+                sourceSessionId: target.sessionId, newRunner: kind)
+        } catch {
+            sessionRunner.lastStartError = "人工接手 \(target.displayName) 失败：\(error.localizedDescription)"
         }
     }
 

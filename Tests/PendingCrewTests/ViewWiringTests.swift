@@ -1733,6 +1733,34 @@ final class ViewWiringTests: XCTestCase {
                       "后台接到了请求却没去接回")
     }
 
+    func testManualWorkerTakeoverHasConfirmedViewerToDaemonOwnerPath() throws {
+        let view = Self.codeOnly(try Self.text(of: "CrewSessionWindowView.swift"))
+        let runner = Self.codeOnly(try Self.text(of: "CrewSessionRunner.swift"))
+        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
+        let endpoints = Self.codeOnly(try Self.text(of: "SessionProtocolEndpoints.swift"))
+        XCTAssertTrue(view.contains("pendingWorkerTakeover"), "missing explicit UI confirmation state")
+        XCTAssertTrue(view.contains("确认以 Claude Code 接手"))
+        XCTAssertTrue(view.contains("确认以 Codex 接手"))
+        XCTAssertTrue(view.contains("requestManualWorkerTakeover("), "UI does not submit the confirmed operation")
+        XCTAssertTrue(endpoints.contains("manualWorkerTakeover = \"orchestration.manualWorkerTakeover\""))
+        guard let viewer = runner.range(of: "func requestManualWorkerTakeover(") else {
+            return XCTFail("viewer has no typed forwarding entry")
+        }
+        let viewerBranch = runner[viewer.upperBound...].prefix(900)
+        XCTAssertTrue(viewerBranch.contains("SessionOrchestrationOp.manualWorkerTakeover"))
+        guard let handled = daemon.range(of: "case SessionOrchestrationOp.manualWorkerTakeover:") else {
+            return XCTFail("daemon does not handle the operation")
+        }
+        let daemonBranch = daemon[handled.upperBound...].prefix(1400)
+        XCTAssertTrue(daemonBranch.contains("backend.getCrew("),
+                      "daemon must reload detail from authoritative backend")
+        XCTAssertTrue(daemonBranch.contains("runner.takeOverWorkerManually("),
+                      "daemon must call the real runner after validation")
+        let reload = try XCTUnwrap(daemonBranch.range(of: "backend.getCrew("))
+        let execute = try XCTUnwrap(daemonBranch.range(of: "runner.takeOverWorkerManually("))
+        XCTAssertLessThan(reload.lowerBound, execute.lowerBound)
+    }
+
     /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
         let view = try Self.text(of: "CrewSessionWindowView.swift")

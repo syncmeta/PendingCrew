@@ -60,6 +60,12 @@ final class WorkerAssignmentStore: @unchecked Sendable {
               !assignment.identityUntrusted, !assignment.terminalUntrusted
         else { throw StoreError.conflictingGeneration }
         try mutate { rows in
+            // A claimed source must never acquire another generation via @, restore,
+            // or a second process that read the old generation before the claim.
+            if rows.last(where: { $0.crewId == assignment.crewId
+                && $0.sessionId == assignment.sessionId })?.successorSessionId != nil {
+                throw StoreError.conflictingGeneration
+            }
             if let existing = rows.first(where: {
                 $0.crewId == assignment.crewId && $0.sessionId == assignment.sessionId
                     && $0.generation == assignment.generation
@@ -132,8 +138,9 @@ final class WorkerAssignmentStore: @unchecked Sendable {
             rows[i].agentSessionId == agentSessionId,
             !rows[i].identityUntrusted, !rows[i].terminalUntrusted,
             rows[i].successorSessionId == nil,
-            rows[i].terminalReason == nil || rows[i].terminalReason == .failed
-                || rows[i].terminalReason == .hitLimit
+            // nil requires a future typed old-epoch registry identity and
+            // probe(.missing) certificate. Until then it has no absence proof.
+            rows[i].terminalReason == .failed || rows[i].terminalReason == .hitLimit
             else { return false }
             rows[i].successorSessionId = successorSessionId
             claimed = rows[i]
@@ -185,6 +192,7 @@ enum WorkerManualTakeoverError: LocalizedError {
     case sourceStillRunning
     case sourceWorkspaceUnavailable
     case ineligibleSource
+    case sourceAlreadyClaimed
 
     var errorDescription: String? {
         switch self {
@@ -193,6 +201,7 @@ enum WorkerManualTakeoverError: LocalizedError {
         case .sourceStillRunning: return "原 worker 仍在运行，不能并发接手同一派工"
         case .sourceWorkspaceUnavailable: return "原 worker 工作目录不存在，拒绝丢失原进度后接手"
         case .ineligibleSource: return "原 worker 缺少可信身份、代际或可接手的终止状态"
+        case .sourceAlreadyClaimed: return "原 worker 已被人工接手，旧成员不可再重启"
         }
     }
 }

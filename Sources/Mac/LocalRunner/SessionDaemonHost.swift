@@ -281,6 +281,7 @@ final class SessionDaemonHost {
     static let defaultCapabilities = [
         "codex-compaction", "launch-parameter-problem", "profile-switch", "screen-text",
         "terminal-bytes", "transcript-events", SessionRestoreRoute.capability, CrewRPC.capability,
+        WorkerManualTakeoverRequest.capability,
     ]
 
     nonisolated static var currentBuild: String {

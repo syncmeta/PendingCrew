@@ -263,6 +263,32 @@ enum SessionDaemonMain {
                     detail: detail, backend: model.backend)
                 await crewStore.refreshDetail(crewId)
             }
+        case SessionOrchestrationOp.manualWorkerTakeover:
+            guard let request = WorkerManualTakeoverRequest(wireArguments: control.arguments) else {
+                log.write("人工 worker 接手请求缺确认、身份或 runner；未执行")
+                return
+            }
+            Task { @MainActor in
+                do {
+                    guard let backend = model.backend else {
+                        throw WorkerManualTakeoverError.viewerUnavailable
+                    }
+                    // Never use a viewer cache or wire-supplied generation/agent ID.
+                    let detail = try await backend.getCrew(request.crewId)
+                    guard detail.crew.id == request.crewId else {
+                        throw WorkerManualTakeoverError.ineligibleSource
+                    }
+                    _ = try await runner.takeOverWorkerManually(
+                        detail: detail, backend: backend,
+                        sourceSessionId: request.sourceSessionId,
+                        newRunner: request.runner)
+                } catch {
+                    crewStore.postSystemNotice(
+                        crewId: request.crewId,
+                        text: "人工接手 worker `\(request.sourceSessionId)` 失败：\(error.localizedDescription)")
+                    log.write("人工 worker 接手拒绝：crew=\(request.crewId) source=\(request.sourceSessionId) \(error)")
+                }
+            }
         case SessionOrchestrationOp.restoreSessions:
             // 界面恢复弹窗里点了「接回来」，整笔转交到这里（viewer 自己拉 = 双头）。
             // 失败各自落群那一套在 `restoreSessions` 里，这里不重写。

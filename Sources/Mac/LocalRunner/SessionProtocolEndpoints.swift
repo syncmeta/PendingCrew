@@ -338,7 +338,7 @@ final class SessionProtocolServer {
             if CrewRPC.Op.isCrew(value.op) {
                 handleCrewRPC(value, on: connection)
             } else if SessionOrchestrationOp.isOrchestration(value.op) {
-                handleOrchestration(value)
+                handleOrchestration(value, on: connection)
             } else {
                 handleControl(value, on: connection)
             }
@@ -610,7 +610,12 @@ final class SessionProtocolServer {
 
     /// 不带 sessionId 的编排请求（起一个**还不存在**的 session、刷 roster）。
     /// `handleControl` 那条要求先找得到 backend，这类请求按定义找不到。
-    private func handleOrchestration(_ control: SessionControl) {
+    private func handleOrchestration(_ control: SessionControl, on connection: Connection) {
+        if control.op == SessionOrchestrationOp.manualWorkerTakeover,
+           !connection.negotiatedCapabilities.contains(WorkerManualTakeoverRequest.capability) {
+            onDiagnostic?("人工 worker 接手请求未协商能力；拒绝执行")
+            return
+        }
         onOrchestrationRequest?(control)
     }
 
@@ -1204,11 +1209,51 @@ enum SessionOrchestrationOp {
     static let restoreSessions = "orchestration.restoreSessions"
     /// Explicit UI recovery is executed and audited by the owning daemon.
     static let admissionRecovery = "orchestration.admissionRecovery"
+    static let manualWorkerTakeover = "orchestration.manualWorkerTakeover"
 
     static let all = [startSession, stopRun, removeRun, sendText, interrupt,
-                      profileChange, captainHandoff, restoreSessions, admissionRecovery]
+                      profileChange, captainHandoff, restoreSessions, admissionRecovery,
+                      manualWorkerTakeover]
 
     static func isOrchestration(_ op: String) -> Bool { op.hasPrefix("orchestration.") }
+}
+
+/// Explicit human operation. The wire carries selection and confirmation only;
+/// the daemon reads generation and agent identity from its authority ledger.
+struct WorkerManualTakeoverRequest: Equatable {
+    static let capability = "manual-worker-takeover"
+    let crewId: String
+    let sourceSessionId: String
+    let runner: LocalCodingAgentKind
+
+    init(crewId: String, sourceSessionId: String,
+         runner: LocalCodingAgentKind, confirmed: Bool) throws {
+        guard confirmed, !crewId.isEmpty, !sourceSessionId.isEmpty, runner.isAgent else {
+            throw WorkerManualTakeoverError.ineligibleSource
+        }
+        self.crewId = crewId
+        self.sourceSessionId = sourceSessionId
+        self.runner = runner
+    }
+
+    var wireArguments: [String: SessionWireJSONValue] {
+        ["crewId": .string(crewId), "sourceSessionId": .string(sourceSessionId),
+         "runner": .string(runner.rawValue), "confirmed": .bool(true)]
+    }
+
+    init?(wireArguments: [String: SessionWireJSONValue]) {
+        guard case let .string(crewId)? = wireArguments["crewId"],
+              case let .string(sourceSessionId)? = wireArguments["sourceSessionId"],
+              case let .string(rawRunner)? = wireArguments["runner"],
+              case .bool(true)? = wireArguments["confirmed"],
+              let runner = LocalCodingAgentKind(rawValue: rawRunner),
+              (try? Self(crewId: crewId, sourceSessionId: sourceSessionId,
+                         runner: runner, confirmed: true)) != nil
+        else { return nil }
+        self.crewId = crewId
+        self.sourceSessionId = sourceSessionId
+        self.runner = runner
+    }
 }
 
 #endif

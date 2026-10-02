@@ -3425,6 +3425,44 @@ final class CrewSessionRunner: ObservableObject {
     /// are consumed atomically before a new local session is considered for launch.
     /// A failed launch leaves the claim in place for human investigation; no timer,
     /// startup scan, or old-message replay retries it.
+    func requestManualWorkerTakeover(
+        detail: CrewDetail, backend: PendingCrewBackend?, sourceSessionId: String,
+        newRunner: LocalCodingAgentKind
+    ) async throws -> String? {
+        let request = try WorkerManualTakeoverRequest(
+            crewId: detail.crew.id, sourceSessionId: sourceSessionId,
+            runner: newRunner, confirmed: true)
+        if isViewer {
+            guard let viewerClient, viewerClient.isConnected,
+                  viewerClient.negotiatedCapabilities.contains(WorkerManualTakeoverRequest.capability)
+            else { throw WorkerManualTakeoverError.viewerUnavailable }
+            viewerClient.sendOrchestration(
+                op: SessionOrchestrationOp.manualWorkerTakeover,
+                arguments: request.wireArguments)
+            return nil
+        }
+        return try await takeOverWorkerManually(
+            detail: detail, backend: backend,
+            sourceSessionId: request.sourceSessionId, newRunner: request.runner)
+    }
+
+    /// The owner reloads the latest authority row after it has reloaded crew detail.
+    /// No viewer-supplied generation or agent identity is trusted.
+    func takeOverWorkerManually(
+        detail: CrewDetail, backend: PendingCrewBackend?, sourceSessionId: String,
+        newRunner: LocalCodingAgentKind
+    ) async throws -> String {
+        guard !isViewer else { throw WorkerManualTakeoverError.viewerUnavailable }
+        guard let source = try workerAssignmentStore.latest(
+            crewId: detail.crew.id, sessionId: sourceSessionId),
+              let agentSessionId = source.agentSessionId
+        else { throw WorkerManualTakeoverError.ineligibleSource }
+        return try await takeOverWorkerManually(
+            detail: detail, backend: backend, sourceSessionId: sourceSessionId,
+            sourceGeneration: source.generation, sourceAgentSessionId: agentSessionId,
+            newRunner: newRunner)
+    }
+
     func takeOverWorkerManually(
         detail: CrewDetail, backend: PendingCrewBackend?,
         sourceSessionId: String, sourceGeneration: String,
@@ -3591,6 +3629,12 @@ final class CrewSessionRunner: ObservableObject {
         guard !launchesInFlight.contains(inFlightKey) else { return }
         launchesInFlight.insert(inFlightKey)
         defer { launchesInFlight.remove(inFlightKey) }
+        // Shared @ / manual-open / restart path. Check durable claim before any
+        // removal, resume lookup, or launch. recordLaunch repeats this under lock.
+        if try workerAssignmentStore.latest(
+            crewId: detail.crew.id, sessionId: member.sessionId)?.successorSessionId != nil {
+            throw WorkerManualTakeoverError.sourceAlreadyClaimed
+        }
         // 清掉同 id 的旧已退 run —— 切换条 / 点名快照不留重影。
         runs.removeAll { $0.sessionId == member.sessionId }
         guard let wd = detail.crew.workingDirectory, !wd.isEmpty else {

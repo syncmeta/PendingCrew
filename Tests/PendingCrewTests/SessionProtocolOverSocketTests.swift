@@ -11,6 +11,81 @@ import XCTest
 final class SessionProtocolOverSocketTests: XCTestCase {
     private let capabilities = ["screen-text", "terminal-bytes", "transcript-events"]
 
+    func testConfirmedManualWorkerRequestTraversesViewerSocketWithoutLocalClaim() async throws {
+        let pair = try UnixSocketTransport.makePair()
+        defer { pair.app.close(); pair.daemon.close() }
+        let caps = capabilities + [WorkerManualTakeoverRequest.capability]
+        let server = SessionProtocolServer(capabilities: caps)
+        var received: WorkerManualTakeoverRequest?
+        server.onOrchestrationRequest = { control in
+            guard control.op == SessionOrchestrationOp.manualWorkerTakeover else { return }
+            received = WorkerManualTakeoverRequest(wireArguments: control.arguments)
+        }
+        let client = SessionProtocolClient(link: pair.app, capabilities: caps)
+        server.accept(link: pair.daemon)
+        client.connect()
+        for _ in 0..<100 where !client.negotiatedCapabilities.contains(
+            WorkerManualTakeoverRequest.capability) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(client.isConnected)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("viewer-worker-op-\(UUID().uuidString)")
+        let store = WorkerAssignmentStore(directory: dir)
+        var launches = 0
+        let runner = CrewSessionRunner(
+            launchOperationOverride: { launches += 1 }, workerAssignmentStore: store,
+            observePowerNotifications: false)
+        runner.attachViewer(client: client)
+        let detail = CrewDetail(
+            crew: .init(id: "crew", title: "Crew", responsibleSubjectId: "human",
+                        runtimeLocation: "local_host", workingDirectory: dir.path,
+                        captainBotId: nil, status: nil, createdAt: "2026-10-01T00:00:00Z",
+                        updatedAt: "2026-10-01T00:00:00Z", captainAgentKind: "codex"),
+            parents: [], children: [], shares: [], captain: nil)
+        let successor = try await runner.requestManualWorkerTakeover(
+            detail: detail, backend: nil, sourceSessionId: "worker-old", newRunner: .claudeCode)
+        XCTAssertNil(successor, "viewer forwards and never claims")
+        for _ in 0..<100 where received == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(received?.crewId, "crew")
+        XCTAssertEqual(received?.sourceSessionId, "worker-old")
+        XCTAssertEqual(received?.runner, .claudeCode)
+        XCTAssertEqual(launches, 0)
+        XCTAssertEqual(try store.records().count, 0)
+    }
+
+    func testManualWorkerRequestWithoutNegotiatedCapabilityNeverReachesOwner() async throws {
+        let pair = try UnixSocketTransport.makePair()
+        defer { pair.app.close(); pair.daemon.close() }
+        let server = SessionProtocolServer(
+            capabilities: capabilities + [WorkerManualTakeoverRequest.capability])
+        var handled = 0
+        var refused = false
+        server.onOrchestrationRequest = { _ in handled += 1 }
+        server.onDiagnostic = { line in
+            if line.contains("人工 worker 接手请求未协商能力") { refused = true }
+        }
+        let oldClient = SessionProtocolClient(link: pair.app, capabilities: capabilities)
+        server.accept(link: pair.daemon)
+        oldClient.connect()
+        for _ in 0..<100 where !oldClient.isConnected {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(oldClient.isConnected)
+        let request = try WorkerManualTakeoverRequest(
+            crewId: "crew", sourceSessionId: "worker-old",
+            runner: .codex, confirmed: true)
+        oldClient.sendOrchestration(op: SessionOrchestrationOp.manualWorkerTakeover,
+                                    arguments: request.wireArguments)
+        for _ in 0..<100 where !refused {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(refused)
+        XCTAssertEqual(handled, 0)
+    }
+
     func testSocketWakeUsesOneAuthoritativeReservationAndRejectsAtMachineCap() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("socket-wake-budget-\(UUID().uuidString)")

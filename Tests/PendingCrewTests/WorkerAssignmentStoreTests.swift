@@ -31,12 +31,18 @@ final class WorkerAssignmentStoreTests: XCTestCase {
         XCTAssertEqual(row.terminalReason, .failed)
     }
 
-    func testOnlyTrustedUnfinishedOrFailedSourceCanBeClaimedOnceAcrossReopen() throws {
+    func testOnlyTrustedFailedSourceCanBeClaimedOnceAcrossReopen() throws {
         let dir = directory()
         let store = WorkerAssignmentStore(directory: dir)
         try store.recordLaunch(source())
         try store.recordAgentIdentity(crewId: "crew", sessionId: "worker-old",
                                       generation: "epoch-1", agentSessionId: "thread-original")
+        XCTAssertNil(try store.claimManualTakeover(crewId: "crew", sessionId: "worker-old",
+                                                    generation: "epoch-1", agentSessionId: "thread-original",
+                                                    successorSessionId: "worker-nil"),
+                     "terminal=nil without typed old-epoch registry and missing-probe evidence must refuse")
+        try store.recordTerminal(crewId: "crew", sessionId: "worker-old",
+                                 generation: "epoch-1", reason: .failed)
         XCTAssertNil(try store.claimManualTakeover(crewId: "crew", sessionId: "worker-old",
                                                     generation: "stale", agentSessionId: "thread-original",
                                                     successorSessionId: "worker-new"))
@@ -100,6 +106,8 @@ final class WorkerAssignmentStoreTests: XCTestCase {
         try store.recordLaunch(source())
         try store.recordAgentIdentity(crewId: "crew", sessionId: "worker-old",
                                       generation: "epoch-1", agentSessionId: "thread-original")
+        try store.recordTerminal(crewId: "crew", sessionId: "worker-old",
+                                 generation: "epoch-1", reason: .failed)
         let bundle = Bundle(for: Self.self).bundleURL
         func launch(_ suffix: String) throws -> Process {
             let process = Process()
@@ -182,6 +190,79 @@ final class WorkerAssignmentStoreTests: XCTestCase {
         XCTAssertNil(try WorkerAssignmentStore(directory: directory()).claimManualTakeover(
             crewId: "crew", sessionId: "worker-old", generation: "epoch-1",
             agentSessionId: "thread-original", successorSessionId: "worker-new"))
+    }
+
+    func testTypedManualOperationRequiresExplicitConfirmationAndAgentRunner() throws {
+        let request = try WorkerManualTakeoverRequest(
+            crewId: "crew", sourceSessionId: "worker-old",
+            runner: .claudeCode, confirmed: true)
+        XCTAssertEqual(WorkerManualTakeoverRequest(wireArguments: request.wireArguments), request)
+        var unconfirmed = request.wireArguments
+        unconfirmed["confirmed"] = .bool(false)
+        XCTAssertNil(WorkerManualTakeoverRequest(wireArguments: unconfirmed))
+        unconfirmed.removeValue(forKey: "confirmed")
+        XCTAssertNil(WorkerManualTakeoverRequest(wireArguments: unconfirmed))
+        var terminal = request.wireArguments
+        terminal["runner"] = .string("terminal")
+        XCTAssertNil(WorkerManualTakeoverRequest(wireArguments: terminal))
+        XCTAssertThrowsError(try WorkerManualTakeoverRequest(
+            crewId: "crew", sourceSessionId: "worker-old",
+            runner: .codex, confirmed: false))
+    }
+
+    @MainActor
+    func testNilTerminalRefusesBeforeClaimAndZeroLaunch() async throws {
+        let dir = directory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = WorkerAssignmentStore(directory: dir)
+        try store.recordLaunch(source(workingDirectory: dir.path))
+        try store.recordAgentIdentity(crewId: "crew", sessionId: "worker-old",
+                                      generation: "epoch-1", agentSessionId: "thread-original")
+        let detail = CrewDetail(
+            crew: .init(id: "crew", title: "Crew", responsibleSubjectId: "human",
+                        runtimeLocation: "local_host", workingDirectory: dir.path,
+                        captainBotId: nil, status: nil, createdAt: "2026-10-01T00:00:00Z",
+                        updatedAt: "2026-10-01T00:00:00Z", captainAgentKind: "codex"),
+            parents: [], children: [], shares: [], captain: nil)
+        var launches = 0
+        let admission = AutomaticWakeAdmission(directory: dir)
+        let runner = CrewSessionRunner(
+            sessionPublisher: InProcessSessionProtocolBridge(wakeAdmission: admission),
+            wakeAdmission: admission, launchOperationOverride: { launches += 1 },
+            workerAssignmentStore: store, observePowerNotifications: false)
+        do {
+            _ = try await runner.takeOverWorkerManually(
+                detail: detail, backend: nil, sourceSessionId: "worker-old",
+                newRunner: .codex)
+            XCTFail("terminal=nil has no typed absence proof")
+        } catch WorkerManualTakeoverError.ineligibleSource { }
+        XCTAssertEqual(launches, 0)
+        XCTAssertNil(try store.latest(crewId: "crew", sessionId: "worker-old")?.successorSessionId)
+    }
+
+    @MainActor
+    func testMissingOriginalAuthorityRefusesBeforeAnyLaunch() async throws {
+        let dir = directory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = WorkerAssignmentStore(directory: dir)
+        let detail = CrewDetail(
+            crew: .init(id: "crew", title: "Crew", responsibleSubjectId: "human",
+                        runtimeLocation: "local_host", workingDirectory: dir.path,
+                        captainBotId: nil, status: nil, createdAt: "2026-10-01T00:00:00Z",
+                        updatedAt: "2026-10-01T00:00:00Z", captainAgentKind: "codex"),
+            parents: [], children: [], shares: [], captain: nil)
+        var launches = 0
+        let runner = CrewSessionRunner(
+            launchOperationOverride: { launches += 1 }, workerAssignmentStore: store,
+            observePowerNotifications: false)
+        do {
+            _ = try await runner.takeOverWorkerManually(
+                detail: detail, backend: nil, sourceSessionId: "worker-old",
+                newRunner: .claudeCode)
+            XCTFail("missing original authority must refuse")
+        } catch WorkerManualTakeoverError.ineligibleSource { }
+        XCTAssertEqual(launches, 0)
+        XCTAssertEqual(try store.records().count, 0)
     }
 
     @MainActor
@@ -272,6 +353,50 @@ final class WorkerAssignmentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testClaimedOldSourceCannotRestartThroughSharedMemberEntryAcrossReopen() async throws {
+        let dir = directory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = WorkerAssignmentStore(directory: dir)
+        try store.recordLaunch(source(workingDirectory: dir.path))
+        try store.recordAgentIdentity(crewId: "crew", sessionId: "worker-old",
+                                      generation: "epoch-1", agentSessionId: "thread-original")
+        try store.recordTerminal(crewId: "crew", sessionId: "worker-old",
+                                 generation: "epoch-1", reason: .failed)
+        XCTAssertNotNil(try store.claimManualTakeover(
+            crewId: "crew", sessionId: "worker-old", generation: "epoch-1",
+            agentSessionId: "thread-original", successorSessionId: "worker-new"))
+        let detail = CrewDetail(
+            crew: .init(id: "crew", title: "Crew", responsibleSubjectId: "human",
+                        runtimeLocation: "local_host", workingDirectory: dir.path,
+                        captainBotId: nil, status: nil, createdAt: "2026-10-01T00:00:00Z",
+                        updatedAt: "2026-10-01T00:00:00Z", captainAgentKind: "codex"),
+            parents: [], children: [], shares: [], captain: nil)
+        let member = LocalSessionMember(sessionId: "worker-old", displayName: "old worker",
+                                        createdAt: "2026-10-01T00:00:00Z")
+        var launches = 0
+        let admission = AutomaticWakeAdmission(directory: dir)
+        let runner = CrewSessionRunner(
+            sessionPublisher: InProcessSessionProtocolBridge(wakeAdmission: admission),
+            wakeAdmission: admission, launchOperationOverride: { launches += 1 },
+            workerAssignmentStore: WorkerAssignmentStore(directory: dir),
+            observePowerNotifications: false)
+        do {
+            try await runner.restartMember(detail: detail, backend: nil, member: member,
+                                           wakeText: "@ from old member", userInitiated: false)
+            XCTFail("claimed old source must not restart")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("已被人工接手"),
+                          "shared restart entry must reject the claim itself, not some later launch failure: \(error)")
+        }
+        XCTAssertEqual(launches, 0)
+        XCTAssertEqual(try store.records().count, 1,
+                       "restart must not append a new generation after successor claim")
+        XCTAssertThrowsError(try WorkerAssignmentStore(directory: dir).recordLaunch(
+            source("epoch-2", workingDirectory: dir.path)),
+            "lock-time admission must also refuse a stale restart racing the claim")
+    }
+
+    @MainActor
     func testMissingOriginalWorkspaceRefusesBeforeConsumingClaim() async throws {
         let dir = directory()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -279,6 +404,8 @@ final class WorkerAssignmentStoreTests: XCTestCase {
         try store.recordLaunch(source())
         try store.recordAgentIdentity(crewId: "crew", sessionId: "worker-old",
                                       generation: "epoch-1", agentSessionId: "thread-original")
+        try store.recordTerminal(crewId: "crew", sessionId: "worker-old",
+                                 generation: "epoch-1", reason: .failed)
         let detail = CrewDetail(
             crew: .init(id: "crew", title: "Crew", responsibleSubjectId: "human",
                         runtimeLocation: "local_host", workingDirectory: dir.path,
