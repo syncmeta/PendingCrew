@@ -1963,7 +1963,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         XCTAssertEqual(rig.renderLimit, 32)
     }
 
-    func testContinuedUserDragAfterMessageCanSelectNewTopRow() {
+    func testContinuedUserDragAfterMessageCanSelectNewTopRow() throws {
         let rig = Rig()
         let host = NSHostingView(rootView: Harness(rig: rig))
         host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
@@ -1981,6 +1981,14 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         rig.ids.append("m90")
         settle(window, rig)
         XCTAssertEqual(rig.topID, "m75")
+        XCTAssertTrue(rig.phaseBox.isTopAnchorFrozen)
+        // The offscreen host can fold layout and offset compensation into one
+        // callback; replay that first correction before the next user move.
+        let geometry = try XCTUnwrap(rig.phaseBox.geometry)
+        rig.phaseBox.observeGeometry(.init(
+            offsetY: geometry.offsetY - 10,
+            contentHeight: geometry.contentHeight,
+            isAtBottom: false))
         XCTAssertTrue(rig.phaseBox.isTopAnchorFrozen)
         let beforeContinuedDrag = rig.offset
         rig.scrollTo?("m65", .top) // deterministic continuation of the same user phase.

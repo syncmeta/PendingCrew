@@ -182,7 +182,12 @@ final class CrewChatBottomFollowTests: XCTestCase {
         phase.observeGeometry(.init(offsetY: 100, contentHeight: 648, isAtBottom: false))
         XCTAssertTrue(phase.isTopAnchorFrozen)
         phase.observeGeometry(.init(offsetY: 75, contentHeight: 648, isAtBottom: false))
+        XCTAssertTrue(phase.isTopAnchorFrozen,
+            "the first post-growth offset is layout compensation, not continued user drag")
+        XCTAssertFalse(phase.isUserAwayFromBottom)
+        phase.observeGeometry(.init(offsetY: 50, contentHeight: 648, isAtBottom: false))
         XCTAssertFalse(phase.isTopAnchorFrozen)
+        XCTAssertTrue(phase.isUserAwayFromBottom)
         XCTAssertTrue(phase.isUserScrolling)
     }
 

@@ -197,12 +197,13 @@ enum CrewChatBottomFollow {
         func observeGeometry(_ sample: GeometrySample) {
             let previous = geometry
             geometry = sample
+            var firstOffsetAfterGrowth = false
             if isUserScrolling {
                 if let previous,
                    abs(sample.contentHeight - previous.contentHeight) > 0.5 {
                     suppressNextOffsetAfterContentChange = true
                 }
-                let firstOffsetAfterGrowth = suppressNextOffsetAfterContentChange &&
+                firstOffsetAfterGrowth = suppressNextOffsetAfterContentChange &&
                     previous.map {
                         abs(sample.contentHeight - $0.contentHeight) < 0.5 &&
                         abs(sample.offsetY - $0.offsetY) > 1
@@ -225,7 +226,8 @@ enum CrewChatBottomFollow {
                 }
             } else if let previous,
                       abs(sample.contentHeight - previous.contentHeight) < 0.5,
-                      abs(sample.offsetY - previous.offsetY) > 1 {
+                      abs(sample.offsetY - previous.offsetY) > 1,
+                      !firstOffsetAfterGrowth {
                 // Layout has committed; the next movement in the same user
                 // phase belongs to the user, so visible-target updates resume.
                 isTopAnchorFrozen = false
