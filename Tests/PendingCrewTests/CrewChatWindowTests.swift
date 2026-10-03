@@ -38,6 +38,8 @@ final class CrewChatWindowTests: XCTestCase {
         XCTAssertTrue(view.contains("isUserAwayFromBottom: scrollPhaseBox.isUserAwayFromBottom)"),
             "新消息入口必须读取相位和真实几何离底判据")
         XCTAssertTrue(view.contains(".modifier(ChatScrollMotionTracker(phaseBox: scrollPhaseBox))"))
+        XCTAssertTrue(view.contains("onWheelInput: { towardTop in\n                            scrollPhaseBox.noteUserScrollInput(towardTop: towardTop)"),
+            "真实滚轮输入须进入相同的锚冻结状态机，不能只在测试里放行小位移")
         XCTAssertTrue(view.contains("else if phaseBox.isUserAwayFromBottom {"),
             "几何 false 回调不得把贴底向下拖动误认作离底")
         XCTAssertTrue(view.contains("if CrewChatBottomFollow.isUserActive(phaseKind), userDepartedBottom {"),
@@ -1694,6 +1696,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         @Published var typing = false
         @Published var filterEnabled = false
         let phaseBox = CrewChatBottomFollow.ScrollPhaseBox()
+        let wheelGestureBox = CrewChatWindow.WheelGestureBox()
         var userIsDragging: Bool { phaseBox.isUserScrolling }
         var visibleIDs: [String] {
             guard filterEnabled else { return ids }
@@ -1775,6 +1778,14 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                         .scrollTargetLayout()
                     }
                     .padding(.vertical, 10)
+                    .background {
+                        LegacyTopApproachSensor(scopeID: "chat-probe",
+                                                gestureBox: rig.wheelGestureBox,
+                                                onUserScroll: { _, _, _, _ in },
+                                                onWheelInput: { towardTop in
+                            rig.phaseBox.noteUserScrollInput(towardTop: towardTop)
+                        }).frame(width: 0, height: 0)
+                    }
                 }
                 .scrollPosition(id: Binding(get: { rig.topID }, set: {
                     if rig.userIsDragging && !rig.phaseBox.isTopAnchorFrozen {
@@ -1909,6 +1920,11 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         }
     }
 
+    private func wheelSensor(_ view: NSView) -> LegacyTopApproachSensor.WheelView? {
+        if let sensor = view as? LegacyTopApproachSensor.WheelView { return sensor }
+        return view.subviews.compactMap(wheelSensor).first
+    }
+
     func testTypingAppearanceDoesNotProgrammaticallyScrollDuringUserDrag() throws {
         let rig = Rig()
         let host = NSHostingView(rootView: Harness(rig: rig))
@@ -2006,6 +2022,45 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
             "after message layout, movement in the same gesture must update the true top row")
         rig.phaseBox.phaseChanged(to: .idle)
         XCTAssertEqual(rig.topID, "m65")
+    }
+
+    @MainActor func testOneRowContinuationAfterMessageUpdatesTopRow() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.deferPinGeometryCallback = true
+        rig.phaseBox.phaseChanged(to: .interacting)
+        rig.scrollTo?("m75", .top)
+        settle(window, rig)
+        rig.topID = "m75"
+        settle(window, rig)
+        let samplesBeforeMessage = rig.geometrySamples.count
+        rig.typing = true
+        rig.ids.append("m90")
+        settle(window, rig)
+        XCTAssertEqual(rig.topID, "m75")
+        XCTAssertTrue(rig.phaseBox.isTopAnchorFrozen)
+        let layoutSamples = Array(rig.geometrySamples.dropFirst(samplesBeforeMessage))
+        let baselineSample = try XCTUnwrap(rig.geometrySamples.prefix(samplesBeforeMessage).last)
+        XCTAssertTrue(layoutSamples.contains { $0.contentHeight > baselineSample.contentHeight &&
+            abs($0.offsetY - baselineSample.offsetY) <= 1 })
+        let beforeContinuedDrag = rig.offset
+        let sensor = try XCTUnwrap(wheelSensor(host))
+        XCTAssertTrue(sensor.isConnected)
+        sensor.receiveWheelSample(at: ProcessInfo.processInfo.systemUptime,
+                                  scrollingDeltaY: 48, nearTop: false, atBottom: false,
+                                  beginsGesture: false, isPhased: true)
+        rig.scrollTo?("m74", .top)
+        settle(window, rig)
+        XCTAssertGreaterThan(abs(rig.offset - beforeContinuedDrag), 20)
+        XCTAssertFalse(rig.phaseBox.isTopAnchorFrozen)
+        XCTAssertEqual(rig.topID, "m74")
+        rig.phaseBox.phaseChanged(to: .idle)
+        XCTAssertEqual(rig.topID, "m74")
     }
 
     func testDownwardTailGestureWithMessageKeepsFollowing() {

@@ -172,6 +172,7 @@ enum CrewChatBottomFollow {
         private(set) var geometry: GeometrySample?
         private var userDepartedBottom = false
         private var pendingLayoutHeightChange: CGFloat = 0
+        private var userInputAfterFreeze = false
         private var frozenContentHeight: CGFloat?
         private var sawContentLayout = false
 
@@ -191,7 +192,14 @@ enum CrewChatBottomFollow {
                 sawContentLayout = false
                 userDepartedBottom = false
                 pendingLayoutHeightChange = 0
+                userInputAfterFreeze = false
             }
+        }
+
+        /// An actual upward wheel event can distinguish a small continuation
+        /// from an equal-sized layout correction in the next geometry sample.
+        func noteUserScrollInput(towardTop: Bool) {
+            if towardTop && isTopAnchorFrozen { userInputAfterFreeze = true }
         }
 
         func observeGeometry(_ sample: GeometrySample) {
@@ -210,7 +218,7 @@ enum CrewChatBottomFollow {
                         ? pendingLayoutHeightChange + abs(sample.contentHeight - previous.contentHeight)
                         : 0
                 }
-                firstOffsetAfterGrowth = pendingLayoutHeightChange > 0 &&
+                firstOffsetAfterGrowth = !userInputAfterFreeze && pendingLayoutHeightChange > 0 &&
                     previous.map {
                         abs(sample.contentHeight - $0.contentHeight) < 0.5 &&
                         abs(sample.offsetY - $0.offsetY) > 1 &&
@@ -220,6 +228,7 @@ enum CrewChatBottomFollow {
                    abs(sample.contentHeight - previous.contentHeight) < 0.5,
                    abs(sample.offsetY - previous.offsetY) > 1 {
                     pendingLayoutHeightChange = 0
+                    userInputAfterFreeze = false
                 }
                 if sample.isAtBottom {
                     userDepartedBottom = false
@@ -254,6 +263,7 @@ enum CrewChatBottomFollow {
                 isTopAnchorFrozen = true
                 frozenContentHeight = geometry?.contentHeight
                 sawContentLayout = false
+                userInputAfterFreeze = false
             }
         }
     }

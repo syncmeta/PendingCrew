@@ -963,7 +963,10 @@ struct CrewChatView: View {
                         onUserScroll: { gesture, nearTop, atBottom, towardTop in
                             wheelScroll(gesture: gesture, nearTop: nearTop,
                                         atBottom: atBottom, towardTop: towardTop)
-                        }, onGeometry: legacyDiagnosticGeometry)
+                        }, onGeometry: legacyDiagnosticGeometry,
+                        onWheelInput: { towardTop in
+                            scrollPhaseBox.noteUserScrollInput(towardTop: towardTop)
+                        })
                     .frame(width: 0, height: 0)
                 }
                 #endif

@@ -339,6 +339,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
     let gestureBox: CrewChatWindow.WheelGestureBox
     let onUserScroll: (Int, Bool, Bool, Bool) -> Void
     var onGeometry: ((CGFloat, CGFloat, CGFloat) -> Void)? = nil
+    var onWheelInput: ((Bool) -> Void)? = nil
 
     func makeNSView(context: Context) -> WheelView {
         let view = WheelView()
@@ -346,12 +347,14 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
         view.gestureBox = gestureBox
         view.onUserScroll = onUserScroll
         view.onGeometry = onGeometry
+        view.onWheelInput = onWheelInput
         return view
     }
 
     func updateNSView(_ nsView: WheelView, context: Context) {
         nsView.onUserScroll = onUserScroll
         nsView.onGeometry = onGeometry
+        nsView.onWheelInput = onWheelInput
         nsView.scopeID = scopeID
         nsView.gestureBox = gestureBox
         nsView.connect()
@@ -360,6 +363,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
     @MainActor final class WheelView: NSView {
         var onUserScroll: ((Int, Bool, Bool, Bool) -> Void)?
         var onGeometry: ((CGFloat, CGFloat, CGFloat) -> Void)?
+        var onWheelInput: ((Bool) -> Void)?
         var scopeID = "" {
             didSet {
                 if oldValue != scopeID {
@@ -495,6 +499,7 @@ struct LegacyTopApproachSensor: NSViewRepresentable {
             pendingTowardTop = scrollingDeltaY > 0
             pendingOriginY = scroll.contentView.bounds.minY
             pendingAt = ProcessInfo.processInfo.systemUptime
+            onWheelInput?(pendingTowardTop)
             onUserScroll?(gesture, nearTop, atBottom, pendingTowardTop)
         }
 

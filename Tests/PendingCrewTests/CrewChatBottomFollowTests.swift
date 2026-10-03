@@ -214,6 +214,18 @@ final class CrewChatBottomFollowTests: XCTestCase {
             "small rebound after bottom-anchored growth is still layout correction")
     }
 
+    func testActualWheelInputDisambiguatesSmallContinuationAfterGrowth() {
+        let phase = CrewChatBottomFollow.ScrollPhaseBox()
+        phase.observeGeometry(.init(offsetY: 100, contentHeight: 600, isAtBottom: false))
+        phase.phaseChanged(to: .interacting)
+        phase.freezeTopAnchorForContentChange()
+        phase.observeGeometry(.init(offsetY: 100, contentHeight: 648, isAtBottom: false))
+        phase.noteUserScrollInput(towardTop: true)
+        phase.observeGeometry(.init(offsetY: 75, contentHeight: 648, isAtBottom: false))
+        XCTAssertFalse(phase.isTopAnchorFrozen)
+        XCTAssertTrue(phase.isUserAwayFromBottom)
+    }
+
     func testGeometryRequiresUpwardMovementToMarkUserDeparture() {
         let phase = CrewChatBottomFollow.ScrollPhaseBox()
         phase.observeGeometry(.init(offsetY: 100, contentHeight: 600, isAtBottom: true))
