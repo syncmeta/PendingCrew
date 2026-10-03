@@ -163,7 +163,7 @@ final class CrewChatBottomFollowTests: XCTestCase {
             isFollowing: true, isUserScrolling: false))
     }
 
-    func testContentChangeFreezesTopAnchorOnlyUntilUserPhaseEnds() {
+    func testContentChangeFreezeClearsAtUserPhaseEnd() {
         let phase = CrewChatBottomFollow.ScrollPhaseBox()
         phase.phaseChanged(to: .interacting)
         phase.freezeTopAnchorForContentChange()
@@ -172,6 +172,34 @@ final class CrewChatBottomFollowTests: XCTestCase {
         XCTAssertFalse(phase.isTopAnchorFrozen)
         phase.freezeTopAnchorForContentChange()
         XCTAssertFalse(phase.isTopAnchorFrozen)
+    }
+
+    func testContentLayoutThenSameGestureMovementUnfreezesTopAnchor() {
+        let phase = CrewChatBottomFollow.ScrollPhaseBox()
+        phase.observeGeometry(.init(offsetY: 100, contentHeight: 600, isAtBottom: false))
+        phase.phaseChanged(to: .interacting)
+        phase.freezeTopAnchorForContentChange()
+        phase.observeGeometry(.init(offsetY: 100, contentHeight: 648, isAtBottom: false))
+        XCTAssertTrue(phase.isTopAnchorFrozen)
+        phase.observeGeometry(.init(offsetY: 75, contentHeight: 648, isAtBottom: false))
+        XCTAssertFalse(phase.isTopAnchorFrozen)
+        XCTAssertTrue(phase.isUserScrolling)
+    }
+
+    func testGeometryRequiresUpwardMovementToMarkUserDeparture() {
+        let phase = CrewChatBottomFollow.ScrollPhaseBox()
+        phase.observeGeometry(.init(offsetY: 100, contentHeight: 600, isAtBottom: true))
+        phase.phaseChanged(to: .interacting)
+        phase.observeGeometry(.init(offsetY: 105, contentHeight: 600, isAtBottom: true))
+        XCTAssertFalse(phase.isUserAwayFromBottom)
+        phase.observeGeometry(.init(offsetY: 105, contentHeight: 648, isAtBottom: false))
+        XCTAssertFalse(phase.isUserAwayFromBottom, "content growth alone is not an upward drag")
+        phase.observeGeometry(.init(offsetY: 95, contentHeight: 648, isAtBottom: false))
+        XCTAssertFalse(phase.isUserAwayFromBottom, "first offset correction after growth is layout")
+        phase.observeGeometry(.init(offsetY: 75, contentHeight: 648, isAtBottom: false))
+        XCTAssertTrue(phase.isUserAwayFromBottom)
+        phase.observeGeometry(.init(offsetY: 110, contentHeight: 648, isAtBottom: true))
+        XCTAssertFalse(phase.isUserAwayFromBottom)
     }
 
     /// **本次修复的核心断言**：程序化滚动（`.animating`）收尾不是用户意图。

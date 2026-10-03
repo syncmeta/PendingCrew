@@ -1018,6 +1018,7 @@ struct CrewChatView: View {
                                             phaseBox: scrollPhaseBox))
             .modifier(ChatScrollAnchor(isFollowing: bottomPin.isFollowing))
             .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
+            .modifier(ChatScrollMotionTracker(phaseBox: scrollPhaseBox))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
             // 不会逐帧改 @State，也不改变内容高度，因此没有布局自激的反馈边。
             .modifier(BottomReachedTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
@@ -1046,7 +1047,7 @@ struct CrewChatView: View {
                 // 「调用点漏传 isFollowing」这种错）。人类 Todo #144。
                 let outcome = CrewChatNewMessages.apply(
                     added: new - old, renderLimit: renderLimit, pin: bottomPin,
-                    isUserScrolling: scrollPhaseBox.isUserScrolling)
+                    isUserAwayFromBottom: scrollPhaseBox.isUserAwayFromBottom)
                 if new > old, !outcome.pin.isFollowing {
                     topAnchorBox.pendingMessageAnchorID = topAnchorBox.id
                 }
@@ -1807,10 +1808,7 @@ private struct BottomPinTracker: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
             content.onScrollPhaseChange { oldPhase, phase, context in
-                // 先记「手在不在滚动上」—— `BottomOnContentGrowth` 靠它避开
-                // 「人正往上翻、内容一长高就被拽回底部」（Todo #54）。
                 let phaseKind = Self.kind(phase)
-                phaseBox.phaseChanged(to: phaseKind)
                 let geo = context.geometry
                 let atBottom = CrewChatBottomFollow.isAtBottom(
                     contentOffsetY: geo.contentOffset.y,
@@ -1818,16 +1816,30 @@ private struct BottomPinTracker: ViewModifier {
                     contentHeight: geo.contentSize.height,
                     insetTop: geo.contentInsets.top,
                     insetBottom: geo.contentInsets.bottom)
+                let sample = CrewChatBottomFollow.ScrollPhaseBox.GeometrySample(
+                    offsetY: geo.contentOffset.y,
+                    contentHeight: geo.contentSize.height,
+                    isAtBottom: atBottom)
+                if phase == .idle {
+                    // Preserve the outgoing gesture's direction long enough
+                    // to classify its final geometry before clearing phase.
+                    phaseBox.observeGeometry(sample)
+                } else {
+                    phaseBox.phaseChanged(to: phaseKind)
+                    phaseBox.observeGeometry(sample)
+                }
+                let userDepartedBottom = phaseBox.isUserAwayFromBottom
+                if phase == .idle { phaseBox.phaseChanged(to: .idle) }
                 // 新消息可能在手势尚未停稳时到达。只在 idle 才关跟随会留出一段竞态：
                 // 人已经离底，Pin 仍说 following，新消息把视口拽回去（Todo #89）。
-                if CrewChatBottomFollow.isUserActive(phaseKind), !atBottom {
+                if CrewChatBottomFollow.isUserActive(phaseKind), userDepartedBottom {
                     pin.leftBottomByUser()
                 }
                 guard phase == .idle else { return }
                 pin.settled(
                     atBottom: atBottom,
                     byUser: CrewChatBottomFollow.settleIsUserDriven(
-                        previous: Self.kind(oldPhase)))
+                        previous: Self.kind(oldPhase)) && userDepartedBottom)
             }
         } else {
             content
@@ -1846,6 +1858,34 @@ private struct BottomPinTracker: ViewModifier {
         // 认不出的新相位一律当「不是用户滑的」—— 与本文件的不变式同向：宁可少关一次
         // 跟随，也不要再出一次「跟随被自己关掉」。
         @unknown default: return .idle
+        }
+    }
+}
+
+/// Per-frame geometry lives in the reference box, so neither movement nor
+/// rubber-band bounce invalidates the message list's SwiftUI state.
+private struct ChatScrollMotionTracker: ViewModifier {
+    let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, iOS 18.0, *) {
+            content.onScrollGeometryChange(
+                for: CrewChatBottomFollow.ScrollPhaseBox.GeometrySample.self
+            ) { geo in
+                .init(
+                    offsetY: geo.contentOffset.y,
+                    contentHeight: geo.contentSize.height,
+                    isAtBottom: CrewChatBottomFollow.isAtBottom(
+                        contentOffsetY: geo.contentOffset.y,
+                        containerHeight: geo.containerSize.height,
+                        contentHeight: geo.contentSize.height,
+                        insetTop: geo.contentInsets.top,
+                        insetBottom: geo.contentInsets.bottom))
+            } action: { _, sample in
+                phaseBox.observeGeometry(sample)
+            }
+        } else {
+            content
         }
     }
 }
@@ -1892,7 +1932,7 @@ private struct BottomReachedTracker: ViewModifier {
             } action: { _, atBottom in
                 if atBottom {
                     pin.reachedBottom()
-                } else if phaseBox.isUserScrolling {
+                } else if phaseBox.isUserAwayFromBottom {
                     // 位置一离开底部就松开，不等 phase→idle；否则手势中途到一条新消息
                     // 仍会走 following 分支，把正在读历史的人拽回底部（Todo #89）。
                     pin.leftBottomByUser()

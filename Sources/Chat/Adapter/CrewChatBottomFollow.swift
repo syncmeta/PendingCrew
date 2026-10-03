@@ -160,9 +160,24 @@ enum CrewChatBottomFollow {
     /// 盒子里改（与 `CrewBubbleSelectionOwner` 同一套做法：`@State` 只用来拿一个跨 body
     /// 稳定的实例，从头到尾没人给那个 `@State` 赋值）。
     final class ScrollPhaseBox {
+        struct GeometrySample: Equatable {
+            let offsetY: CGFloat
+            let contentHeight: CGFloat
+            let isAtBottom: Bool
+        }
+
         private(set) var isUserScrolling = false
         private(set) var userScrollGeneration = 0
         private(set) var isTopAnchorFrozen = false
+        private(set) var geometry: GeometrySample?
+        private var userDepartedBottom = false
+        private var suppressNextOffsetAfterContentChange = false
+        private var frozenContentHeight: CGFloat?
+        private var sawContentLayout = false
+
+        var isUserAwayFromBottom: Bool {
+            isUserScrolling && userDepartedBottom
+        }
 
         init() {}
 
@@ -171,13 +186,61 @@ enum CrewChatBottomFollow {
             let userActive = CrewChatBottomFollow.isUserActive(phase)
             if userActive && !isUserScrolling { userScrollGeneration += 1 }
             isUserScrolling = userActive
-            if !userActive { isTopAnchorFrozen = false }
+            if !userActive {
+                isTopAnchorFrozen = false
+                sawContentLayout = false
+                userDepartedBottom = false
+                suppressNextOffsetAfterContentChange = false
+            }
+        }
+
+        func observeGeometry(_ sample: GeometrySample) {
+            let previous = geometry
+            geometry = sample
+            if isUserScrolling {
+                if let previous,
+                   abs(sample.contentHeight - previous.contentHeight) > 0.5 {
+                    suppressNextOffsetAfterContentChange = true
+                }
+                let firstOffsetAfterGrowth = suppressNextOffsetAfterContentChange &&
+                    previous.map {
+                        abs(sample.contentHeight - $0.contentHeight) < 0.5 &&
+                        abs(sample.offsetY - $0.offsetY) > 1
+                    } == true
+                if firstOffsetAfterGrowth { suppressNextOffsetAfterContentChange = false }
+                if sample.isAtBottom {
+                    userDepartedBottom = false
+                } else if let previous,
+                          abs(sample.contentHeight - previous.contentHeight) < 0.5,
+                          sample.offsetY < previous.offsetY - 1,
+                          !firstOffsetAfterGrowth {
+                    userDepartedBottom = true
+                }
+            }
+            guard isTopAnchorFrozen else { return }
+            if !sawContentLayout {
+                if let frozenContentHeight,
+                   abs(sample.contentHeight - frozenContentHeight) > 0.5 {
+                    sawContentLayout = true
+                }
+            } else if let previous,
+                      abs(sample.contentHeight - previous.contentHeight) < 0.5,
+                      abs(sample.offsetY - previous.offsetY) > 1 {
+                // Layout has committed; the next movement in the same user
+                // phase belongs to the user, so visible-target updates resume.
+                isTopAnchorFrozen = false
+            }
         }
 
         /// New rows can change the visible-target callback during the same
-        /// gesture. Keep its last user-selected row until this phase ends.
+        /// gesture. Hold the last user-selected row through that layout; the
+        /// next movement after content height changes resumes target updates.
         func freezeTopAnchorForContentChange() {
-            if isUserScrolling { isTopAnchorFrozen = true }
+            if isUserScrolling {
+                isTopAnchorFrozen = true
+                frozenContentHeight = geometry?.contentHeight
+                sawContentLayout = false
+            }
         }
     }
 

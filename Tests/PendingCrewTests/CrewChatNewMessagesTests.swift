@@ -14,10 +14,21 @@ import XCTest
 /// 本仓两天内第三次「建好了没接上」，所以这一层必须自己有尺子。
 final class CrewChatNewMessagesTests: XCTestCase {
 
+    func testDownwardGestureStillAtBottomDoesNotCreateUnread() {
+        // ScrollPhaseBox can be active while a rubber-band/downward gesture
+        // keeps the viewport at the tail. The old event adapter guessed away.
+        let result = CrewChatNewMessages.apply(
+            added: 1, renderLimit: CrewChatWindow.pageSize,
+            pin: CrewChatBottomFollow.Pin(), isUserAwayFromBottom: false)
+        XCTAssertTrue(result.pin.isFollowing)
+        XCTAssertEqual(result.pin.unread, 0)
+        XCTAssertTrue(result.shouldLandAtBottom)
+    }
+
     func testPendingUserDepartureBeforeGeometryCallbackKeepsHistoryAndUnread() {
         let outcome = CrewChatNewMessages.apply(
             added: 1, renderLimit: CrewChatWindow.pageSize,
-            pin: CrewChatBottomFollow.Pin(), isUserScrolling: true)
+            pin: CrewChatBottomFollow.Pin(), isUserAwayFromBottom: true)
         XCTAssertEqual(outcome.renderLimit, CrewChatWindow.pageSize + 1)
         XCTAssertFalse(outcome.pin.isFollowing)
         XCTAssertEqual(outcome.pin.unread, 1)

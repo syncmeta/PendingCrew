@@ -35,8 +35,13 @@ final class CrewChatWindowTests: XCTestCase {
             "布局造成的非手势回写不可覆盖离底视口锚")
         XCTAssertTrue(view.contains("guard phaseBox.isUserScrolling, !phaseBox.isTopAnchorFrozen,"),
             "布局造成的可见行回调不可覆盖离底视口锚")
-        XCTAssertTrue(view.contains("isUserScrolling: scrollPhaseBox.isUserScrolling)"),
-            "新消息的窗口和未读入口必须读取实时滚动相位")
+        XCTAssertTrue(view.contains("isUserAwayFromBottom: scrollPhaseBox.isUserAwayFromBottom)"),
+            "新消息入口必须读取相位和真实几何离底判据")
+        XCTAssertTrue(view.contains(".modifier(ChatScrollMotionTracker(phaseBox: scrollPhaseBox))"))
+        XCTAssertTrue(view.contains("else if phaseBox.isUserAwayFromBottom {"),
+            "几何 false 回调不得把贴底向下拖动误认作离底")
+        XCTAssertTrue(view.contains("if CrewChatBottomFollow.isUserActive(phaseKind), userDepartedBottom {"),
+            "相位回调也必须使用带方向的真实几何判据")
         XCTAssertTrue(view.contains("guard force || CrewChatBottomFollow.shouldLandAtBottom("),
             "所有非强制落底都必须经过同一相位门闩")
         XCTAssertTrue(view.contains("topAnchorBox.pendingMessageAnchorID = topAnchorBox.id"))
@@ -1705,6 +1710,9 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         var programAnchorCalls = 0
         var topAnchorCalls = 0
         var newMessageEvents = 0
+        var lastMessageFollowAtEntry: Bool?
+        var lastMessageUnreadAtEntry: Int?
+        var deferPinGeometryCallback = false
         var offset: CGFloat = .nan
         var viewport: CGFloat = .nan
         var content: CGFloat = .nan
@@ -1794,6 +1802,9 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                         insetBottom: geo.contentInsets.bottom)
                 } action: { _, atBottom in
                     if atBottom { rig.following = true; rig.topID = nil }
+                    else if !rig.deferPinGeometryCallback && rig.phaseBox.isUserAwayFromBottom {
+                        rig.following = false
+                    }
                 }
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     geo.contentSize.height
@@ -1807,6 +1818,12 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                              content: geo.contentSize.height)
                 } action: { _, g in
                     rig.offset = g.offset; rig.viewport = g.viewport; rig.content = g.content
+                    rig.phaseBox.observeGeometry(.init(
+                        offsetY: g.offset, contentHeight: g.content,
+                        isAtBottom: CrewChatBottomFollow.isAtBottom(
+                            contentOffsetY: g.offset,
+                            containerHeight: g.viewport,
+                            contentHeight: g.content)))
                 }
                 .onPreferenceChange(LastRowY.self) { rig.lastRowMaxY = $0 }
                 .onPreferenceChange(ObservedRowY.self) { rig.observedRowY = $0 }
@@ -1824,7 +1841,9 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     let outcome = CrewChatNewMessages.apply(
                         added: new - old, renderLimit: rig.renderLimit,
                         pin: CrewChatBottomFollow.Pin(isFollowing: rig.following),
-                        isUserScrolling: rig.userIsDragging)
+                        isUserAwayFromBottom: rig.phaseBox.isUserAwayFromBottom)
+                    rig.lastMessageFollowAtEntry = outcome.pin.isFollowing
+                    rig.lastMessageUnreadAtEntry = outcome.pin.unread
                     rig.renderLimit = outcome.renderLimit
                     rig.following = outcome.pin.isFollowing
                     if outcome.shouldLandAtBottom {
@@ -1907,6 +1926,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         window.contentView = host
         settle(window, rig)
         XCTAssertTrue(rig.following)
+        rig.deferPinGeometryCallback = true
         rig.phaseBox.phaseChanged(to: .interacting) // phase arrived; pin geometry is pending.
         rig.scrollTo?("m75", .top) // deterministic offscreen viewport displacement.
         settle(window, rig)
@@ -1941,6 +1961,56 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
             "releasing off bottom must keep the same visible history after another arrival")
         XCTAssertFalse(rig.following)
         XCTAssertEqual(rig.renderLimit, 32)
+    }
+
+    func testContinuedUserDragAfterMessageCanSelectNewTopRow() {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.deferPinGeometryCallback = true
+        rig.phaseBox.phaseChanged(to: .interacting)
+        rig.scrollTo?("m75", .top)
+        settle(window, rig)
+        rig.topID = "m75"
+        settle(window, rig)
+        rig.typing = true
+        rig.ids.append("m90")
+        settle(window, rig)
+        XCTAssertEqual(rig.topID, "m75")
+        XCTAssertTrue(rig.phaseBox.isTopAnchorFrozen)
+        let beforeContinuedDrag = rig.offset
+        rig.scrollTo?("m65", .top) // deterministic continuation of the same user phase.
+        settle(window, rig)
+        XCTAssertGreaterThan(abs(rig.offset - beforeContinuedDrag), 200)
+        XCTAssertFalse(rig.phaseBox.isTopAnchorFrozen)
+        XCTAssertEqual(rig.topID, "m65",
+            "after message layout, movement in the same gesture must update the true top row")
+        rig.phaseBox.phaseChanged(to: .idle)
+        XCTAssertEqual(rig.topID, "m65")
+    }
+
+    func testDownwardTailGestureWithMessageKeepsFollowing() {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        XCTAssertTrue(rig.phaseBox.geometry?.isAtBottom == true)
+        rig.phaseBox.phaseChanged(to: .interacting)
+        XCTAssertFalse(rig.phaseBox.isUserAwayFromBottom)
+        rig.typing = true
+        rig.ids.append("m90")
+        settle(window, rig)
+        XCTAssertEqual(rig.lastMessageFollowAtEntry, true)
+        XCTAssertEqual(rig.lastMessageUnreadAtEntry, 0)
+        XCTAssertTrue(rig.following)
+        rig.phaseBox.phaseChanged(to: .idle)
     }
 
     func testTypingDisappearAndMessageArrivalPreservePagedHistoryViewport() throws {

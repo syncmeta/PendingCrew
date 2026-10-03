@@ -34,12 +34,12 @@ enum CrewChatNewMessages {
     static func apply(added: Int,
                       renderLimit: Int,
                       pin: CrewChatBottomFollow.Pin,
-                      isUserScrolling: Bool = false) -> Outcome {
+                      isUserAwayFromBottom: Bool = false) -> Outcome {
         // A user gesture can leave the tail before the geometry callback updates
         // Pin. Treat that brief overlap as a departure at the event entry so the
         // old top row remains in the window and this message only adds unread.
         var pin = pin
-        if added > 0 && isUserScrolling { pin.leftBottomByUser() }
+        if added > 0 && isUserAwayFromBottom { pin.leftBottomByUser() }
         // 先按**进这一拍时**的跟随状态定窗口 —— 这个问题是「能不能剪掉最顶那条」。
         let limit = CrewChatWindow.afterInsert(
             limit: renderLimit, added: added, isFollowing: pin.isFollowing)
