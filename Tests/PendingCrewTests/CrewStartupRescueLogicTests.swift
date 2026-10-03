@@ -11,6 +11,80 @@ import XCTest
 final class CrewStartupRescueLogicTests: XCTestCase {
 
     @MainActor
+    func testMachineRecoveryReoffersOnlySelectedCrewAndPreservesOtherDebt() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runner-recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = AutomaticWakeAdmission(directory: directory)
+        let current = AutomaticWakeAdmission.PendingWhiteboard(
+            crewId: "selected", entryId: "current-message", targetId: "captain")
+        let other = AutomaticWakeAdmission.PendingWhiteboard(
+            crewId: "other", entryId: "other-message", targetId: "captain")
+        XCTAssertTrue(gate.rememberWhiteboard(current))
+        XCTAssertTrue(gate.rememberWhiteboard(other))
+        var state = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
+                                             from: Data(contentsOf: gate.fileURL))
+        state.hardStoppedMachine = true
+        try JSONEncoder().encode(state).write(to: gate.fileURL)
+        var offered: [AutomaticWakeAdmission.RecoveryScope] = []
+        let runner = CrewSessionRunner(wakeAdmission: gate,
+            admissionRecoveryReofferOverride: { offered.append($0) },
+            observePowerNotifications: false)
+        guard case .applied(.machine) = runner.requestAdmissionRecovery(
+            scope: .machine, crewId: "selected") else { return XCTFail("recovery must apply") }
+        XCTAssertEqual(offered, [.crew("selected")],
+                       "global unlock must not replay every crew into the 12/minute cap")
+        let reopened = AutomaticWakeAdmission(directory: directory)
+        XCTAssertEqual(reopened.pendingWhiteboard(crewId: "selected"), [current])
+        XCTAssertEqual(reopened.pendingWhiteboard(crewId: "other"), [other])
+        XCTAssertEqual(reopened.recoveryHistory()?.map(\.scope), [.machine],
+                       "audit records the actual unlocked scope, not the narrower replay")
+        let after = try JSONDecoder().decode(AutomaticWakeAdmission.State.self,
+                                             from: Data(contentsOf: gate.fileURL))
+        XCTAssertEqual(after.hardStoppedMachine, false)
+        XCTAssertEqual(after.attempts?.count ?? 0, 0,
+                       "recovery must not fabricate outbound acceptance")
+    }
+
+    @MainActor
+    func testNarrowRecoveryKeepsItsOriginalReplayScope() throws {
+        for scope: AutomaticWakeAdmission.RecoveryScope in [.crew("selected"), .session("member")] {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("runner-recovery-narrow-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let gate = AutomaticWakeAdmission(directory: directory)
+            var state = AutomaticWakeAdmission.State()
+            state.hardStoppedCrews = ["selected"]
+            state.hardStoppedSessions = ["member"]
+            try JSONEncoder().encode(state).write(to: gate.fileURL)
+            var offered: [AutomaticWakeAdmission.RecoveryScope] = []
+            let runner = CrewSessionRunner(wakeAdmission: gate,
+                admissionRecoveryReofferOverride: { offered.append($0) },
+                observePowerNotifications: false)
+            guard case let .applied(actual) = runner.requestAdmissionRecovery(
+                scope: scope, crewId: "selected") else { return XCTFail("scoped recovery must apply") }
+            XCTAssertEqual(actual, scope)
+            XCTAssertEqual(offered, [scope])
+        }
+    }
+
+    @MainActor
+    func testRefusedRecoveryNeverReoffersDebt() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runner-recovery-refused-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = AutomaticWakeAdmission(directory: directory)
+        var offers = 0
+        let runner = CrewSessionRunner(wakeAdmission: gate,
+            admissionRecoveryReofferOverride: { _ in offers += 1 },
+            observePowerNotifications: false)
+        guard case .failed = runner.requestAdmissionRecovery(
+            scope: .machine, crewId: "selected") else { return XCTFail("unlatched scope must refuse") }
+        XCTAssertEqual(offers, 0)
+    }
+
+    @MainActor
     func testRunnerScheduledAndSupervisionSleepChecksNeverReadOrConsumeLedger() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("runner-sleep-\(UUID().uuidString)")

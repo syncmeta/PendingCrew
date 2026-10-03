@@ -301,7 +301,7 @@ enum SessionDaemonMain {
             else { appliedScope = nil }
             let succeeded = appliedScope != nil
             let notice = succeeded
-                ? "界面请求的自动唤醒恢复已在后台执行（\(appliedScope!)），范围和时间已写入 admission 审计；待发文本按原文重试，终端回车须人工核对后重试。"
+                ? "界面请求的自动唤醒恢复已在后台执行（\(appliedScope!)），范围和时间已写入 admission 审计；仅补投当前机组，其他机组的待发消息仍保留，可逐个启动；终端回车须人工核对后重试。"
                 : "界面请求的自动唤醒恢复未执行（\(scope)）：滑窗尚未冷却、该范围未熔断，或 admission 账本不可读写。"
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system", text: notice,

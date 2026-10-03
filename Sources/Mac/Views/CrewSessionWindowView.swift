@@ -233,6 +233,12 @@ struct CrewSessionWindowView: View {
 
     private var terminalContent: some View {
         VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                admissionRecoveryMenu
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             if sessionRunner.isComposingNew {
                 // 「新建 session」态：显零配置启动面（composer 在下方）。
                 idleState
@@ -277,6 +283,12 @@ struct CrewSessionWindowView: View {
     ///（VSplitView 在 NavigationSplitView 的固定列内做垂直分割，不影响列宽协商）。
     private var memberListMode: some View {
         VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                admissionRecoveryMenu
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             if selectedKind == .codex && sessionRunner.lastStartError == nil {
                 CodexCLIProvisioningNotice(center: cliVersions)
             }
@@ -734,43 +746,7 @@ struct CrewSessionWindowView: View {
                         remove: { sessionRunner.remove(run.runID) }
                     )
                 }
-                if let detail = crewStore.selectedDetail {
-                    Menu {
-                        if let run = sessionRunner.runs.first(where: {
-                            $0.runID == sessionRunner.selectedRunId
-                                && $0.crewId == detail.crew.id
-                        }) {
-                            Button("恢复当前 session 的自动唤醒") {
-                                recoverAutomaticWakes(.session(run.sessionId), crewId: detail.crew.id)
-                            }
-                        }
-                        Button("恢复缺席机长的自动唤醒") {
-                            recoverAutomaticWakes(.session(CrewConversationKey.captain),
-                                                  crewId: detail.crew.id)
-                        }
-                        Menu("恢复缺席成员的自动唤醒") {
-                            ForEach(LocalCrewStore.shared.sessionMembers(crewId: detail.crew.id)
-                                .filter { member in
-                                    !sessionRunner.runs.contains { $0.sessionId == member.sessionId }
-                                }, id: \.sessionId) { member in
-                                Button(member.displayName) {
-                                    recoverAutomaticWakes(.session(member.sessionId),
-                                                          crewId: detail.crew.id)
-                                }
-                            }
-                        }
-                        Button("恢复此 crew 的自动唤醒") {
-                            recoverAutomaticWakes(.crew(detail.crew.id), crewId: detail.crew.id)
-                        }
-                        Button("恢复全机自动唤醒") {
-                            recoverAutomaticWakes(.machine, crewId: detail.crew.id)
-                        }
-                    } label: {
-                        Label("唤醒恢复", systemImage: "arrow.clockwise.circle")
-                            .font(.caption)
-                    }
-                    .help("仅在检查循环原因后手动恢复；范围和时间写入本机 admission 审计")
-                }
+                admissionRecoveryMenu
                 // 「+」起一个新 session（不动在跑的 run）。选中态高亮。
                 Button { sessionRunner.composeNew() } label: {
                     Label("新 session", systemImage: "plus")
@@ -787,6 +763,48 @@ struct CrewSessionWindowView: View {
         }
     }
 
+    @ViewBuilder
+    private var admissionRecoveryMenu: some View {
+        if let detail = crewStore.selectedDetail {
+            Menu {
+                if let run = sessionRunner.runs.first(where: {
+                    $0.runID == sessionRunner.selectedRunId
+                        && $0.crewId == detail.crew.id
+                }) {
+                    Button("恢复当前 session 的自动唤醒") {
+                        recoverAutomaticWakes(.session(run.sessionId), crewId: detail.crew.id)
+                    }
+                }
+                Button("恢复缺席机长的自动唤醒") {
+                    recoverAutomaticWakes(.session(CrewConversationKey.captain),
+                                          crewId: detail.crew.id)
+                }
+                Menu("恢复缺席成员的自动唤醒") {
+                    ForEach(LocalCrewStore.shared.sessionMembers(crewId: detail.crew.id)
+                        .filter { member in
+                            !sessionRunner.runs.contains { $0.sessionId == member.sessionId }
+                        }, id: \.sessionId) { member in
+                        Button(member.displayName) {
+                            recoverAutomaticWakes(.session(member.sessionId),
+                                                  crewId: detail.crew.id)
+                        }
+                    }
+                }
+                Button("恢复此 crew 的自动唤醒") {
+                    recoverAutomaticWakes(.crew(detail.crew.id), crewId: detail.crew.id)
+                }
+                Button("解除全机熔断（仅补投此机组）") {
+                    recoverAutomaticWakes(.machine, crewId: detail.crew.id)
+                }
+                .help("解除全机限制，只补投此机组的积压；其他机组可点击机长或成员逐个启动。")
+            } label: {
+                Label("唤醒恢复", systemImage: "arrow.clockwise.circle")
+                    .font(.caption)
+            }
+            .help("仅在检查循环原因后手动恢复；范围和时间写入本机 admission 审计")
+        }
+    }
+
     private func recoverAutomaticWakes(_ scope: AutomaticWakeAdmission.RecoveryScope,
                                        crewId: String) {
         switch sessionRunner.requestAdmissionRecovery(scope: scope, crewId: crewId) {
@@ -798,7 +816,7 @@ struct CrewSessionWindowView: View {
             sessionRunner.lastStartError = nil
             LocalWhiteboardStore.shared.appendSessionMessage(
                 crewId: crewId, sessionId: "system",
-                text: "人从本机界面执行了自动唤醒恢复（\(actual)）；范围和时间已写入 admission 审计。待发文本按原文重试，终端回车须人工核对后重试。",
+                text: "人从本机界面执行了自动唤醒恢复（\(actual)）；范围和时间已写入 admission 审计。仅补投当前机组，其他机组的待发消息仍保留，可逐个启动；终端回车须人工核对后重试。",
                 category: "info", senderName: "系统")
         }
     }

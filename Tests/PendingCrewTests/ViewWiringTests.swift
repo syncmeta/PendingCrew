@@ -13,6 +13,22 @@ import XCTest
 /// 加新零件时的规矩：如果它是「用户能看见的东西的入口」，在下面 `wirings` 里加一行。
 final class ViewWiringTests: XCTestCase {
 
+    func testAdmissionRecoveryIsReachableInBothInspectorModes() throws {
+        let window = try Self.text(of: "CrewSessionWindowView.swift")
+        func section(_ start: String, before end: String) throws -> String {
+            let startRange = try XCTUnwrap(window.range(of: start))
+            let rest = window[startRange.upperBound...]
+            let endRange = try XCTUnwrap(rest.range(of: end))
+            return String(rest[..<endRange.lowerBound])
+        }
+        let members = try section("private var memberListMode: some View", before: "private ")
+        let terminal = try section("private var terminalContent: some View", before: "// MARK:")
+        XCTAssertTrue(members.contains("admissionRecoveryMenu"),
+                      "an absent captain must be recoverable before any session starts")
+        XCTAssertTrue(terminal.contains("admissionRecoveryMenu"),
+                      "new-session and running-session modes must expose recovery")
+    }
+
     @MainActor
     func testPendingFirstSendCancelAndRestartHaveNoPersistentEffects() throws {
         let base = FileManager.default.temporaryDirectory

@@ -192,6 +192,7 @@ final class CrewSessionRunner: ObservableObject {
     /// Headless tests can run the real start entry without opening a CLI or terminal.
     private let launchOperationOverride: (() async throws -> Void)?
     private let launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)?
+    private let admissionRecoveryReofferOverride: ((AutomaticWakeAdmission.RecoveryScope) -> Void)?
     private var deferredWakeRetryTasks: [String: Task<Void, Never>] = [:]
 
     /// 正在拉起中的目标（`captain:<crewId>` / `member:<sessionId>`）。
@@ -324,6 +325,7 @@ final class CrewSessionRunner: ObservableObject {
          wakeAdmission: AutomaticWakeAdmission? = nil,
          launchOperationOverride: (() async throws -> Void)? = nil,
          launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)? = nil,
+         admissionRecoveryReofferOverride: ((AutomaticWakeAdmission.RecoveryScope) -> Void)? = nil,
          expectedLiveStore: ExpectedLiveSessionStore? = nil,
          expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch? = nil,
          expectedLiveFailureReporter: ((String, Error) -> Void)? = nil,
@@ -335,6 +337,7 @@ final class CrewSessionRunner: ObservableObject {
         self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
         self.launchOperationOverride = launchOperationOverride
         self.launchDenialNoticeOverride = launchDenialNoticeOverride
+        self.admissionRecoveryReofferOverride = admissionRecoveryReofferOverride
         self.expectedLiveStore = expectedLiveStore
         self.expectedLiveEpoch = expectedLiveEpoch
         self.expectedLiveFailureReporter = expectedLiveFailureReporter
@@ -2285,9 +2288,24 @@ final class CrewSessionRunner: ObservableObject {
             resolved = scope
         }
         guard wakeAdmission.recover(.directUI(scope: resolved)) else { return .failed }
-        reofferRecordedWakes(scope: resolved, crewId: crewId)
-        reofferPendingExplicitText(scope: resolved, crewId: crewId)
+        // Unlock the requested scope, but never replay every crew at once:
+        // the installed 12/minute machine budget would immediately latch again.
+        // Other crews retain their debt and can be started individually by the human.
+        let replayScope: AutomaticWakeAdmission.RecoveryScope
+        if case .machine = resolved { replayScope = .crew(crewId) }
+        else { replayScope = resolved }
+        reofferAdmissionDebt(scope: replayScope, crewId: crewId)
         return .applied(resolved)
+    }
+
+    private func reofferAdmissionDebt(scope: AutomaticWakeAdmission.RecoveryScope,
+                                     crewId: String) {
+        if let admissionRecoveryReofferOverride {
+            admissionRecoveryReofferOverride(scope)
+            return
+        }
+        reofferRecordedWakes(scope: scope, crewId: crewId)
+        reofferPendingExplicitText(scope: scope, crewId: crewId)
     }
 
     @discardableResult
@@ -2478,7 +2496,7 @@ final class CrewSessionRunner: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .automaticWakeDeferred(let reason):
-                return "自动唤醒暂缓：\(reason)。原消息仍在白板，请等额度恢复后重试。"
+                return "自动唤醒暂缓：\(reason)。原消息仍在白板；请查看右侧告警，熔断须用「唤醒恢复」手动解除。"
             case .toolNotInstalled(let kind):
                 return "未在 PATH 中找到 \(kind.binaryName)，请先安装 \(kind.displayName) CLI。"
             case .captainRunnerUnavailable(let summary):
