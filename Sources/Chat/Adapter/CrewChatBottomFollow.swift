@@ -205,6 +205,12 @@ enum CrewChatBottomFollow {
         return newHeight > oldHeight + growthEpsilon
     }
 
+    /// A typing row may appear before the position callback drops follow. It
+    /// must not turn that brief overlap into an explicit scroll to the tail.
+    static func shouldLandForTyping(isFollowing: Bool, isUserScrolling: Bool) -> Bool {
+        isFollowing && !isUserScrolling
+    }
+
     // MARK: - 跟随 + 未读
 
     /// 「跟不跟着底部走」+「攒了多少条没看的」。

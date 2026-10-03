@@ -150,6 +150,15 @@ final class CrewChatBottomFollowTests: XCTestCase {
         }
     }
 
+    func testTailEventLandingWaitsForUserScrollToEnd() {
+        XCTAssertTrue(CrewChatBottomFollow.shouldLandForTyping(
+            isFollowing: true, isUserScrolling: false))
+        XCTAssertFalse(CrewChatBottomFollow.shouldLandForTyping(
+            isFollowing: true, isUserScrolling: true))
+        XCTAssertFalse(CrewChatBottomFollow.shouldLandForTyping(
+            isFollowing: false, isUserScrolling: false))
+    }
+
     /// **本次修复的核心断言**：程序化滚动（`.animating`）收尾不是用户意图。
     /// 认成用户意图 = Todo #45 的修法把自己的保险丝烧了。
     func testProgrammaticSettleIsNotUserDriven() {

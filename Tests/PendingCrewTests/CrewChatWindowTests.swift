@@ -27,6 +27,16 @@ final class CrewChatWindowTests: XCTestCase {
                       "搜索筛选切换时须清旧锚")
     }
 
+    func testTypingTailEventsUseScrollPhaseGuardInProductionScroll() throws {
+        let view = try Self.source("Mac/Views/CrewChatView.swift")
+        XCTAssertTrue(view.contains("if CrewChatBottomFollow.shouldLandForTyping("),
+            "typing 的 onShow 经 landAtBottom 时须检查实际用户滚动相位")
+        XCTAssertTrue(view.contains("if scrollPhaseBox.isUserScrolling { topAnchorBox.id = value }"),
+            "布局造成的非手势回写不可覆盖离底视口锚")
+        XCTAssertTrue(view.contains("guard phaseBox.isUserScrolling, let first = ids.first else { return }"),
+            "布局造成的可见行回调不可覆盖离底视口锚")
+    }
+
     /// #164 macOS 14: the target visibility callback exists only on 15+.
     /// Keep a source-level gate beside the offscreen legacy-anchor probe so
     /// the tested row geometry is actually wired into the production scroll.
@@ -1669,6 +1679,16 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         @Published var following = true
         @Published var ids = (0..<90).map { "m\($0)" }
         @Published var renderLimit = 30
+        @Published var typing = false
+        @Published var filterEnabled = false
+        var userIsDragging = false
+        var visibleIDs: [String] {
+            guard filterEnabled else { return ids }
+            return ids.filter { id in
+                guard let number = Int(id.dropFirst()) else { return false }
+                return number.isMultiple(of: 2)
+            }
+        }
         var limitBeforeExcursion: Int?
         var topID: String?
         var topWrites = 0
@@ -1700,7 +1720,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                 ScrollView {
                     Group {
                         VStack(alignment: .leading, spacing: 0) {
-                            ForEach(CrewChatWindow.window(rig.ids, limit: rig.renderLimit), id: \.self) { id in
+                            ForEach(CrewChatWindow.window(rig.visibleIDs, limit: rig.renderLimit), id: \.self) { id in
                                 Color.blue.opacity(0.1)
                                     .frame(height: id == rig.ids.last ? 91 : 48)
                                     .id(id)
@@ -1713,6 +1733,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                                         }
                                     }
                             }
+                            if rig.typing { Color.orange.frame(height: 56).id("typing-probe") }
                             Color.clear.frame(height: 1).id(CrewChatBottomFollow.bottomAnchorID)
                         }
                         .scrollTargetLayout()
@@ -1720,11 +1741,11 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     .padding(.vertical, 10)
                 }
                 .scrollPosition(id: Binding(get: { rig.topID }, set: {
-                    rig.topID = $0; rig.topWrites += 1
+                    if rig.userIsDragging { rig.topID = $0; rig.topWrites += 1 }
                 }), anchor: .top)
                 .coordinateSpace(name: "crewChatViewport")
                 .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
-                    if !rig.following, let first = ids.first { rig.topID = first }
+                    if rig.userIsDragging, let first = ids.first { rig.topID = first }
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(rig.following ? .bottom : .top, for: .sizeChanges)
@@ -1766,7 +1787,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     rig.renderLimit = next.renderLimit
                     rig.limitBeforeExcursion = next.limitBeforeExcursion
                 }
-                .onChange(of: rig.ids.count) { old, new in
+                .onChange(of: rig.visibleIDs.count) { old, new in
                     rig.newMessageEvents += 1
                     let outcome = CrewChatNewMessages.apply(
                         added: new - old, renderLimit: rig.renderLimit,
@@ -1775,6 +1796,19 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     if outcome.shouldLandAtBottom {
                         proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
                     }
+                }
+                .onChange(of: rig.typing) { _, typing in
+                    if typing && CrewChatBottomFollow.shouldLandForTyping(
+                        isFollowing: rig.following, isUserScrolling: rig.userIsDragging) {
+                        rig.programAnchorCalls += 1
+                        proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
+                    }
+                }
+                .onChange(of: rig.filterEnabled) { _, _ in
+                    rig.renderLimit = CrewChatWindow.pageSize
+                    rig.following = true
+                    rig.topID = nil
+                    proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
                 }
                 .onAppear { rig.scrollTo = { id, anchor in
                     rig.programAnchorCalls += 1
@@ -1805,6 +1839,122 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
             } else { stable = 0 }
             previous = rig.offset
         }
+    }
+
+    func testTypingAppearanceDoesNotProgrammaticallyScrollDuringUserDrag() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.userIsDragging = true
+        let calls = rig.programAnchorCalls
+        rig.typing = true
+        settle(window, rig)
+        XCTAssertEqual(rig.programAnchorCalls, calls,
+            "typing 行出现在用户手势期间不应主动 scrollTo 底部")
+    }
+
+    func testTypingDisappearAndMessageArrivalPreservePagedHistoryViewport() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.scrollTo?("m75", .top)
+        settle(window, rig)
+        rig.following = false
+        rig.topID = "m75"
+        rig.renderLimit = 60 // 30 -> 60, as in the production earlier-page path.
+        settle(window, rig)
+        let before = rig.offset
+        rig.typing = true
+        settle(window, rig)
+        rig.ids.append("m90")
+        settle(window, rig)
+        rig.typing = false
+        settle(window, rig)
+        XCTAssertFalse(rig.following)
+        XCTAssertEqual(rig.renderLimit, 61)
+        XCTAssertLessThan(abs(rig.offset - before), 2,
+            "离底且已展开一页时，typing 显隐和新消息不能移动正在看的旧消息")
+    }
+
+    func testTypingDisappearanceKeepsFollowingViewportAtBottom() {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.typing = true
+        settle(window, rig)
+        let before = rig.bottomGap
+        rig.typing = false
+        settle(window, rig)
+        XCTAssertTrue(rig.following)
+        XCTAssertLessThan(abs(before), 12)
+        XCTAssertLessThan(abs(rig.bottomGap), 12,
+            "贴底时 typing 行消失也必须继续贴底")
+    }
+
+    func testTypingAndMessageArrivalRespectFilteredThirtyRowWindow() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.filterEnabled = true
+        settle(window, rig)
+        XCTAssertEqual(rig.visibleIDs.count, 45)
+        XCTAssertEqual(rig.renderLimit, CrewChatWindow.pageSize)
+        rig.scrollTo?("m60", .top)
+        settle(window, rig)
+        rig.following = false
+        rig.topID = "m60"
+        settle(window, rig)
+        let before = rig.offset
+        rig.typing = true
+        rig.ids.append("m90") // included by the filter, unlike an irrelevant arrival.
+        settle(window, rig)
+        rig.typing = false
+        settle(window, rig)
+        XCTAssertFalse(rig.following)
+        XCTAssertEqual(rig.renderLimit, CrewChatWindow.pageSize + 1)
+        XCTAssertLessThan(abs(rig.offset - before), 2,
+            "筛选后的 30 条窗口也须在 typing 显隐和消息同时到达时按住视口")
+    }
+
+    func testProgrammaticSearchJumpIsNotReplacedByOldHistoryAnchor() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        rig.following = false
+        rig.renderLimit = 60
+        rig.topID = "m75"
+        settle(window, rig)
+        let beforeJump = rig.offset
+        rig.scrollTo?("m60", .center) // #134/#147 style explicit target jump.
+        settle(window, rig)
+        let jumped = rig.offset
+        XCTAssertGreaterThan(abs(jumped - beforeJump), 100,
+            "探针必须先真的跳到另一条消息，才能验证旧锚没有夺回视口")
+        rig.typing = true
+        rig.ids.append("m90")
+        settle(window, rig)
+        XCTAssertLessThan(abs(rig.offset - jumped), 2,
+            "跳到指定消息后，旧浏览锚不能在 typing/新消息到达时把视口拉回去")
     }
 
     func testNearBottomDoesNotPrematurelyTrimHistoryWindow() throws {

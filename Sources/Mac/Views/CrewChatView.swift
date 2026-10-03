@@ -995,16 +995,25 @@ struct CrewChatView: View {
             // 为什么非这样不可，见 `expandEarlier` 的注释。`.scrollTargetLayout()` 是它的
             // 前提（上面那两个 stack 各挂了一次）：没有它 SwiftUI 不知道拿哪一层的子视图
             // 当目标。绑定一直挂着，不做条件挂载 —— 条件挂载会改视图身份，那正是这条
-            // 修法在躲的东西。
+            // 修法在躲的东西。macOS 15+ 只收用户滚动相位的回写：typing 显隐与新消息
+            // 也会让 SwiftUI 把顶行改成下一条，若照收，离底浏览会跳一整行。
             .scrollPosition(id: Binding(get: { topAnchorBox.id },
-                                        set: { topAnchorBox.id = $0 }),
+                                        set: { value in
+                if #available(macOS 15.0, iOS 18.0, *) {
+                    if scrollPhaseBox.isUserScrolling { topAnchorBox.id = value }
+                } else {
+                    topAnchorBox.id = value
+                }
+            }),
                             anchor: .top)
             .coordinateSpace(name: "crewChatViewport")
             // `.scrollPosition` 在懒窗口里可能一直不回写顶行 ID。续页后新消息到来时，
             // 缺这个锚会让可见行随估算高度调整而跳位；可见目标回调只写引用盒子，
-            // 不让滚动中的每次回调重算整条时间线。
+            // 不让滚动中的每次回调重算整条时间线。新系统仅在手势中更新，避免布局
+            // 变化把已经按住的历史锚换成下一行。
             .modifier(ChatVisibleTopTracker(anchorBox: topAnchorBox,
-                                            isFollowing: bottomPin.isFollowing))
+                                            isFollowing: bottomPin.isFollowing,
+                                            phaseBox: scrollPhaseBox))
             .modifier(ChatScrollAnchor(isFollowing: bottomPin.isFollowing))
             .modifier(BottomPinTracker(pin: $bottomPin, phaseBox: scrollPhaseBox))
             // Todo #56：未读按钮跟真实位置走。投影为 Bool，只在跨过到底阈值时写一次，
@@ -1160,7 +1169,11 @@ struct CrewChatView: View {
         // isWorking 决定显隐（父视图只管 runs 增删）；出现时滚到底让指示器可见。
         ForEach(sessionRunner.runs.filter { $0.crewId == crewId }, id: \.runID) { run in
             CrewTypingIndicatorRow(run: run, captainBotId: captainBotId) {
-                landAtBottom(proxy, animated: true)
+                if CrewChatBottomFollow.shouldLandForTyping(
+                    isFollowing: bottomPin.isFollowing,
+                    isUserScrolling: scrollPhaseBox.isUserScrolling) {
+                    landAtBottom(proxy, animated: true)
+                }
             }
         }
         #endif
@@ -1983,11 +1996,12 @@ private struct ChatLegacyVisibleRow: ViewModifier {
 private struct ChatVisibleTopTracker: ViewModifier {
     let anchorBox: ChatTopAnchorBox
     let isFollowing: Bool
+    let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
             content.onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
-                guard !isFollowing, let first = ids.first else { return }
+                guard phaseBox.isUserScrolling, let first = ids.first else { return }
                 anchorBox.id = first
             }
         } else {
