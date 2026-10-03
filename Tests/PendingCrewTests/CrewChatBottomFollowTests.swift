@@ -157,6 +157,21 @@ final class CrewChatBottomFollowTests: XCTestCase {
             isFollowing: true, isUserScrolling: true))
         XCTAssertFalse(CrewChatBottomFollow.shouldLandForTyping(
             isFollowing: false, isUserScrolling: false))
+        XCTAssertFalse(CrewChatBottomFollow.shouldLandAtBottom(
+            isFollowing: true, isUserScrolling: true))
+        XCTAssertTrue(CrewChatBottomFollow.shouldLandAtBottom(
+            isFollowing: true, isUserScrolling: false))
+    }
+
+    func testContentChangeFreezesTopAnchorOnlyUntilUserPhaseEnds() {
+        let phase = CrewChatBottomFollow.ScrollPhaseBox()
+        phase.phaseChanged(to: .interacting)
+        phase.freezeTopAnchorForContentChange()
+        XCTAssertTrue(phase.isTopAnchorFrozen)
+        phase.phaseChanged(to: .idle)
+        XCTAssertFalse(phase.isTopAnchorFrozen)
+        phase.freezeTopAnchorForContentChange()
+        XCTAssertFalse(phase.isTopAnchorFrozen)
     }
 
     /// **本次修复的核心断言**：程序化滚动（`.animating`）收尾不是用户意图。

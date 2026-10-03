@@ -1000,7 +1000,9 @@ struct CrewChatView: View {
             .scrollPosition(id: Binding(get: { topAnchorBox.id },
                                         set: { value in
                 if #available(macOS 15.0, iOS 18.0, *) {
-                    if scrollPhaseBox.isUserScrolling { topAnchorBox.id = value }
+                    if scrollPhaseBox.isUserScrolling && !scrollPhaseBox.isTopAnchorFrozen {
+                        topAnchorBox.id = value
+                    }
                 } else {
                     topAnchorBox.id = value
                 }
@@ -1037,17 +1039,30 @@ struct CrewChatView: View {
             }
             .animation(.easeOut(duration: 0.12), value: bottomPin.unread > 0)
             .onChange(of: timelineEntries.count) { old, new in
+                if new > old { scrollPhaseBox.freezeTopAnchorForContentChange() }
                 // 判定整段收在 `CrewChatNewMessages.apply` 里 —— **这个文件不进
                 // test bundle**，留在这儿写就等于真实调用路径上一条尺子都没有
                 // （`afterInsert` 和 `Pin.received` 各自有一排用例，也照样挡不住
                 // 「调用点漏传 isFollowing」这种错）。人类 Todo #144。
                 let outcome = CrewChatNewMessages.apply(
-                    added: new - old, renderLimit: renderLimit, pin: bottomPin)
+                    added: new - old, renderLimit: renderLimit, pin: bottomPin,
+                    isUserScrolling: scrollPhaseBox.isUserScrolling)
+                if new > old, !outcome.pin.isFollowing {
+                    topAnchorBox.pendingMessageAnchorID = topAnchorBox.id
+                }
                 renderLimit = outcome.renderLimit
                 bottomPin = outcome.pin
                 recordScrollDiagnostic(cause: 1, newMessages: new - old)
                 if outcome.shouldLandAtBottom { landAtBottom(proxy, animated: true) }
                 locateSearchTarget(proxy)
+            }
+            .onChange(of: renderLimit) { _, _ in
+                // The retained window grows at its top when a message arrives
+                // during history browsing. Keep the last visible message at
+                // the same on-screen Y in this render transaction.
+                guard let id = topAnchorBox.pendingMessageAnchorID else { return }
+                topAnchorBox.pendingMessageAnchorID = nil
+                proxy.scrollTo(id, anchor: .top)
             }
             // 跟随开关翻了：松开时记下窗口深度，回到底部时**只回吐这一次往上看
             // 期间涨出来的那一段**（他滑走之前就翻出来的那几页不收回去）。
@@ -1139,7 +1154,9 @@ struct CrewChatView: View {
     /// 落底 —— 只在还跟随底部时动（`force` 是「点了箭头」那条明确指令，绕过跟随开关）。
     /// 跟随开关由 `BottomPinTracker` 按**用户自己的**滚动更新。
     private func landAtBottom(_ proxy: ScrollViewProxy, animated: Bool, force: Bool = false) {
-        guard force || bottomPin.isFollowing else { return }
+        guard force || CrewChatBottomFollow.shouldLandAtBottom(
+            isFollowing: bottomPin.isFollowing,
+            isUserScrolling: scrollPhaseBox.isUserScrolling) else { return }
         if animated {
             withAnimation(.linear(duration: 0.05)) { proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom) }
         } else {
@@ -1505,6 +1522,7 @@ struct CrewChatView: View {
         renderLimit = max(renderLimit, timelineEntries.count)
         Task { @MainActor in
             await Task.yield()
+            topAnchorBox.id = nil // Explicit search navigation supersedes a history anchor.
             proxy.scrollTo(target, anchor: .center)
             searchTargetMessageId?.wrappedValue = nil
         }
@@ -1950,7 +1968,10 @@ private struct BottomOnContentGrowth: ViewModifier {
 /// tech-debt）。
 /// `.scrollPosition(id:)` 的回写落点（Todo #60）。见 `CrewChatView.topAnchorBox`。
 private final class ChatTopAnchorBox {
-    var id: String?
+    var id: String? {
+        didSet { if id == nil { pendingMessageAnchorID = nil } }
+    }
+    var pendingMessageAnchorID: String?
     var diagnosticOffset = 0.0
     var diagnosticViewport = 0.0
     var diagnosticContent = 0.0
@@ -2001,7 +2022,8 @@ private struct ChatVisibleTopTracker: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, iOS 18.0, *) {
             content.onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
-                guard phaseBox.isUserScrolling, let first = ids.first else { return }
+                guard phaseBox.isUserScrolling, !phaseBox.isTopAnchorFrozen,
+                      let first = ids.first else { return }
                 anchorBox.id = first
             }
         } else {

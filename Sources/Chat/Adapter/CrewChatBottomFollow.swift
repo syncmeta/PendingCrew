@@ -162,6 +162,7 @@ enum CrewChatBottomFollow {
     final class ScrollPhaseBox {
         private(set) var isUserScrolling = false
         private(set) var userScrollGeneration = 0
+        private(set) var isTopAnchorFrozen = false
 
         init() {}
 
@@ -170,6 +171,13 @@ enum CrewChatBottomFollow {
             let userActive = CrewChatBottomFollow.isUserActive(phase)
             if userActive && !isUserScrolling { userScrollGeneration += 1 }
             isUserScrolling = userActive
+            if !userActive { isTopAnchorFrozen = false }
+        }
+
+        /// New rows can change the visible-target callback during the same
+        /// gesture. Keep its last user-selected row until this phase ends.
+        func freezeTopAnchorForContentChange() {
+            if isUserScrolling { isTopAnchorFrozen = true }
         }
     }
 
@@ -208,6 +216,10 @@ enum CrewChatBottomFollow {
     /// A typing row may appear before the position callback drops follow. It
     /// must not turn that brief overlap into an explicit scroll to the tail.
     static func shouldLandForTyping(isFollowing: Bool, isUserScrolling: Bool) -> Bool {
+        shouldLandAtBottom(isFollowing: isFollowing, isUserScrolling: isUserScrolling)
+    }
+
+    static func shouldLandAtBottom(isFollowing: Bool, isUserScrolling: Bool) -> Bool {
         isFollowing && !isUserScrolling
     }
 

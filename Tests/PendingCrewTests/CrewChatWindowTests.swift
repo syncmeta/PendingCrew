@@ -31,10 +31,17 @@ final class CrewChatWindowTests: XCTestCase {
         let view = try Self.source("Mac/Views/CrewChatView.swift")
         XCTAssertTrue(view.contains("if CrewChatBottomFollow.shouldLandForTyping("),
             "typing 的 onShow 经 landAtBottom 时须检查实际用户滚动相位")
-        XCTAssertTrue(view.contains("if scrollPhaseBox.isUserScrolling { topAnchorBox.id = value }"),
+        XCTAssertTrue(view.contains("if scrollPhaseBox.isUserScrolling && !scrollPhaseBox.isTopAnchorFrozen"),
             "布局造成的非手势回写不可覆盖离底视口锚")
-        XCTAssertTrue(view.contains("guard phaseBox.isUserScrolling, let first = ids.first else { return }"),
+        XCTAssertTrue(view.contains("guard phaseBox.isUserScrolling, !phaseBox.isTopAnchorFrozen,"),
             "布局造成的可见行回调不可覆盖离底视口锚")
+        XCTAssertTrue(view.contains("isUserScrolling: scrollPhaseBox.isUserScrolling)"),
+            "新消息的窗口和未读入口必须读取实时滚动相位")
+        XCTAssertTrue(view.contains("guard force || CrewChatBottomFollow.shouldLandAtBottom("),
+            "所有非强制落底都必须经过同一相位门闩")
+        XCTAssertTrue(view.contains("topAnchorBox.pendingMessageAnchorID = topAnchorBox.id"))
+        XCTAssertTrue(view.contains("proxy.scrollTo(id, anchor: .top)"))
+        XCTAssertTrue(view.contains("topAnchorBox.id = nil // Explicit search navigation supersedes a history anchor."))
     }
 
     /// #164 macOS 14: the target visibility callback exists only on 15+.
@@ -1681,7 +1688,8 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         @Published var renderLimit = 30
         @Published var typing = false
         @Published var filterEnabled = false
-        var userIsDragging = false
+        let phaseBox = CrewChatBottomFollow.ScrollPhaseBox()
+        var userIsDragging: Bool { phaseBox.isUserScrolling }
         var visibleIDs: [String] {
             guard filterEnabled else { return ids }
             return ids.filter { id in
@@ -1695,17 +1703,27 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         var geometryCalls = 0
         var phaseCalls = 0
         var programAnchorCalls = 0
+        var topAnchorCalls = 0
         var newMessageEvents = 0
         var offset: CGFloat = .nan
         var viewport: CGFloat = .nan
         var content: CGFloat = .nan
         var lastRowMaxY: CGFloat = .nan
+        var observedRowY: CGFloat = .nan
         var scrollTo: ((String, UnitPoint) -> Void)?
         var lastRowGap: CGFloat { viewport - lastRowMaxY }
         var bottomGap: CGFloat { content - viewport - offset }
     }
 
     private struct LastRowY: PreferenceKey {
+        static var defaultValue: CGFloat = .nan
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            let next = nextValue()
+            if !next.isNaN { value = next }
+        }
+    }
+
+    private struct ObservedRowY: PreferenceKey {
         static var defaultValue: CGFloat = .nan
         static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
             let next = nextValue()
@@ -1732,6 +1750,14 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                                             }
                                         }
                                     }
+                                    .background {
+                                        if id == "m75" {
+                                            GeometryReader { geo in
+                                                Color.clear.preference(key: ObservedRowY.self,
+                                                    value: geo.frame(in: .named("crewChatViewport")).minY)
+                                            }
+                                        }
+                                    }
                             }
                             if rig.typing { Color.orange.frame(height: 56).id("typing-probe") }
                             Color.clear.frame(height: 1).id(CrewChatBottomFollow.bottomAnchorID)
@@ -1741,11 +1767,15 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     .padding(.vertical, 10)
                 }
                 .scrollPosition(id: Binding(get: { rig.topID }, set: {
-                    if rig.userIsDragging { rig.topID = $0; rig.topWrites += 1 }
+                    if rig.userIsDragging && !rig.phaseBox.isTopAnchorFrozen {
+                        rig.topID = $0; rig.topWrites += 1
+                    }
                 }), anchor: .top)
                 .coordinateSpace(name: "crewChatViewport")
                 .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
-                    if rig.userIsDragging, let first = ids.first { rig.topID = first }
+                    if rig.userIsDragging && !rig.phaseBox.isTopAnchorFrozen, let first = ids.first {
+                        rig.topID = first
+                    }
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(rig.following ? .bottom : .top, for: .sizeChanges)
@@ -1779,6 +1809,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     rig.offset = g.offset; rig.viewport = g.viewport; rig.content = g.content
                 }
                 .onPreferenceChange(LastRowY.self) { rig.lastRowMaxY = $0 }
+                .onPreferenceChange(ObservedRowY.self) { rig.observedRowY = $0 }
                 .onChange(of: rig.following) { _, following in
                     if following { rig.topID = nil }
                     let next = CrewChatNewMessages.followChanged(
@@ -1788,13 +1819,23 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     rig.limitBeforeExcursion = next.limitBeforeExcursion
                 }
                 .onChange(of: rig.visibleIDs.count) { old, new in
+                    if new > old { rig.phaseBox.freezeTopAnchorForContentChange() }
                     rig.newMessageEvents += 1
                     let outcome = CrewChatNewMessages.apply(
                         added: new - old, renderLimit: rig.renderLimit,
-                        pin: CrewChatBottomFollow.Pin(isFollowing: rig.following))
+                        pin: CrewChatBottomFollow.Pin(isFollowing: rig.following),
+                        isUserScrolling: rig.userIsDragging)
                     rig.renderLimit = outcome.renderLimit
+                    rig.following = outcome.pin.isFollowing
                     if outcome.shouldLandAtBottom {
+                        rig.programAnchorCalls += 1
                         proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
+                    }
+                }
+                .onChange(of: rig.renderLimit) { _, _ in
+                    if !rig.following, let id = rig.topID {
+                        rig.topAnchorCalls += 1
+                        proxy.scrollTo(id, anchor: .top)
                     }
                 }
                 .onChange(of: rig.typing) { _, typing in
@@ -1849,12 +1890,57 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                               backing: .buffered, defer: false)
         window.contentView = host
         settle(window, rig)
-        rig.userIsDragging = true
+        rig.phaseBox.phaseChanged(to: .interacting)
         let calls = rig.programAnchorCalls
         rig.typing = true
         settle(window, rig)
         XCTAssertEqual(rig.programAnchorCalls, calls,
             "typing 行出现在用户手势期间不应主动 scrollTo 底部")
+    }
+
+    func testMessageAndTypingDuringPendingDepartureDoNotStealViewport() throws {
+        let rig = Rig()
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        XCTAssertTrue(rig.following)
+        rig.phaseBox.phaseChanged(to: .interacting) // phase arrived; pin geometry is pending.
+        rig.scrollTo?("m75", .top) // deterministic offscreen viewport displacement.
+        settle(window, rig)
+        rig.topID = "m75" // visibility callback for the user-visible top row.
+        settle(window, rig)
+        XCTAssertGreaterThan(rig.bottomGap, 200)
+        XCTAssertTrue(rig.following, "the race requires the old following value")
+        let before = rig.offset
+        let rowBefore = rig.observedRowY
+        let topBefore = rig.topID
+        XCTAssertFalse(rowBefore.isNaN)
+        let calls = rig.programAnchorCalls
+        rig.typing = true
+        rig.ids.append("m90")
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        window.layoutIfNeeded()
+        let firstFrame = rig.offset
+        let rowFirst = rig.observedRowY
+        settle(window, rig)
+        let duringDrag = rig.offset
+        let rowDuringDrag = rig.observedRowY
+        rig.phaseBox.phaseChanged(to: .idle)
+        rig.typing = false
+        rig.ids.append("m91")
+        settle(window, rig)
+        print("[#193 pending pin] offset=\(before)/\(firstFrame)/\(duringDrag)/\(rig.offset) row=\(rowBefore)/\(rowFirst)/\(rowDuringDrag)/\(rig.observedRowY) top=\(String(describing: topBefore))/\(String(describing: rig.topID)) tailCalls=\(rig.programAnchorCalls - calls) topCalls=\(rig.topAnchorCalls) following=\(rig.following) limit=\(rig.renderLimit)")
+        XCTAssertEqual(rig.programAnchorCalls, calls,
+            "typing and new-message entry must not issue a bottom scroll while a user drag is active")
+        XCTAssertLessThan(abs(rowFirst - rowBefore), 2)
+        XCTAssertLessThan(abs(rowDuringDrag - rowBefore), 2)
+        XCTAssertLessThan(abs(rig.observedRowY - rowBefore), 2,
+            "releasing off bottom must keep the same visible history after another arrival")
+        XCTAssertFalse(rig.following)
+        XCTAssertEqual(rig.renderLimit, 32)
     }
 
     func testTypingDisappearAndMessageArrivalPreservePagedHistoryViewport() throws {
@@ -1945,7 +2031,8 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         rig.topID = "m75"
         settle(window, rig)
         let beforeJump = rig.offset
-        rig.scrollTo?("m60", .center) // #134/#147 style explicit target jump.
+        rig.topID = nil // #134/#147 explicit navigation clears the stale history anchor.
+        rig.scrollTo?("m60", .center)
         settle(window, rig)
         let jumped = rig.offset
         XCTAssertGreaterThan(abs(jumped - beforeJump), 100,

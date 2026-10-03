@@ -14,6 +14,16 @@ import XCTest
 /// 本仓两天内第三次「建好了没接上」，所以这一层必须自己有尺子。
 final class CrewChatNewMessagesTests: XCTestCase {
 
+    func testPendingUserDepartureBeforeGeometryCallbackKeepsHistoryAndUnread() {
+        let outcome = CrewChatNewMessages.apply(
+            added: 1, renderLimit: CrewChatWindow.pageSize,
+            pin: CrewChatBottomFollow.Pin(), isUserScrolling: true)
+        XCTAssertEqual(outcome.renderLimit, CrewChatWindow.pageSize + 1)
+        XCTAssertFalse(outcome.pin.isFollowing)
+        XCTAssertEqual(outcome.pin.unread, 1)
+        XCTAssertFalse(outcome.shouldLandAtBottom)
+    }
+
     private func msgs(_ n: Int) -> [Int] { Array(0..<n) }
 
     private func pin(following: Bool, unread: Int = 0) -> CrewChatBottomFollow.Pin {
