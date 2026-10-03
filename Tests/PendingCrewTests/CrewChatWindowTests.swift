@@ -1704,8 +1704,10 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         }
         var limitBeforeExcursion: Int?
         var topID: String?
+        var pendingMessageAnchorID: String?
         var topWrites = 0
         var geometryCalls = 0
+        var geometrySamples: [CrewChatBottomFollow.ScrollPhaseBox.GeometrySample] = []
         var phaseCalls = 0
         var programAnchorCalls = 0
         var topAnchorCalls = 0
@@ -1818,12 +1820,14 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                              content: geo.contentSize.height)
                 } action: { _, g in
                     rig.offset = g.offset; rig.viewport = g.viewport; rig.content = g.content
-                    rig.phaseBox.observeGeometry(.init(
+                    let sample = CrewChatBottomFollow.ScrollPhaseBox.GeometrySample(
                         offsetY: g.offset, contentHeight: g.content,
                         isAtBottom: CrewChatBottomFollow.isAtBottom(
                             contentOffsetY: g.offset,
                             containerHeight: g.viewport,
-                            contentHeight: g.content)))
+                            contentHeight: g.content))
+                    rig.phaseBox.observeGeometry(sample)
+                    rig.geometrySamples.append(sample)
                 }
                 .onPreferenceChange(LastRowY.self) { rig.lastRowMaxY = $0 }
                 .onPreferenceChange(ObservedRowY.self) { rig.observedRowY = $0 }
@@ -1844,18 +1848,22 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                         isUserAwayFromBottom: rig.phaseBox.isUserAwayFromBottom)
                     rig.lastMessageFollowAtEntry = outcome.pin.isFollowing
                     rig.lastMessageUnreadAtEntry = outcome.pin.unread
+                    if new > old, !outcome.pin.isFollowing {
+                        rig.pendingMessageAnchorID = rig.topID
+                    }
                     rig.renderLimit = outcome.renderLimit
                     rig.following = outcome.pin.isFollowing
-                    if outcome.shouldLandAtBottom {
+                    if outcome.shouldLandAtBottom && CrewChatBottomFollow.shouldLandAtBottom(
+                        isFollowing: outcome.pin.isFollowing, isUserScrolling: rig.phaseBox.isUserScrolling) {
                         rig.programAnchorCalls += 1
                         proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
                     }
                 }
                 .onChange(of: rig.renderLimit) { _, _ in
-                    if !rig.following, let id = rig.topID {
-                        rig.topAnchorCalls += 1
-                        proxy.scrollTo(id, anchor: .top)
-                    }
+                    guard let id = rig.pendingMessageAnchorID else { return }
+                    rig.pendingMessageAnchorID = nil
+                    rig.topAnchorCalls += 1
+                    proxy.scrollTo(id, anchor: .top)
                 }
                 .onChange(of: rig.typing) { _, typing in
                     if typing && CrewChatBottomFollow.shouldLandForTyping(
@@ -1977,19 +1985,18 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         settle(window, rig)
         rig.topID = "m75"
         settle(window, rig)
+        let samplesBeforeMessage = rig.geometrySamples.count
         rig.typing = true
         rig.ids.append("m90")
         settle(window, rig)
         XCTAssertEqual(rig.topID, "m75")
         XCTAssertTrue(rig.phaseBox.isTopAnchorFrozen)
-        // The offscreen host can fold layout and offset compensation into one
-        // callback; replay that first correction before the next user move.
-        let geometry = try XCTUnwrap(rig.phaseBox.geometry)
-        rig.phaseBox.observeGeometry(.init(
-            offsetY: geometry.offsetY - 10,
-            contentHeight: geometry.contentHeight,
-            isAtBottom: false))
-        XCTAssertTrue(rig.phaseBox.isTopAnchorFrozen)
+        XCTAssertNotNil(rig.phaseBox.geometry)
+        let layoutSamples = Array(rig.geometrySamples.dropFirst(samplesBeforeMessage))
+        let baselineSample = try XCTUnwrap(rig.geometrySamples.prefix(samplesBeforeMessage).last)
+        XCTAssertTrue(layoutSamples.contains { $0.contentHeight > baselineSample.contentHeight &&
+            abs($0.offsetY - baselineSample.offsetY) <= 1 },
+            "offscreen host must actually deliver height growth without an offset correction")
         let beforeContinuedDrag = rig.offset
         rig.scrollTo?("m65", .top) // deterministic continuation of the same user phase.
         settle(window, rig)

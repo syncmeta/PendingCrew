@@ -191,6 +191,29 @@ final class CrewChatBottomFollowTests: XCTestCase {
         XCTAssertTrue(phase.isUserScrolling)
     }
 
+    func testCoalescedGrowthAndOffsetThenSameGestureMovementUnfreezesTopAnchor() {
+        let phase = CrewChatBottomFollow.ScrollPhaseBox()
+        phase.observeGeometry(.init(offsetY: 100, contentHeight: 600, isAtBottom: false))
+        phase.phaseChanged(to: .interacting)
+        phase.freezeTopAnchorForContentChange()
+        phase.observeGeometry(.init(offsetY: 75, contentHeight: 648, isAtBottom: false))
+        XCTAssertTrue(phase.isTopAnchorFrozen, "coalesced layout offset must not unlock the anchor")
+        XCTAssertFalse(phase.isUserAwayFromBottom)
+        phase.observeGeometry(.init(offsetY: 50, contentHeight: 648, isAtBottom: false))
+        XCTAssertFalse(phase.isTopAnchorFrozen, "the next real movement must unlock the anchor")
+        XCTAssertTrue(phase.isUserAwayFromBottom)
+    }
+
+    func testBottomGrowthThenSmallOffsetReboundDoesNotCountAsUserDeparture() {
+        let phase = CrewChatBottomFollow.ScrollPhaseBox()
+        phase.observeGeometry(.init(offsetY: 1004, contentHeight: 1504, isAtBottom: true))
+        phase.phaseChanged(to: .interacting)
+        phase.observeGeometry(.init(offsetY: 1060, contentHeight: 1560, isAtBottom: true))
+        phase.observeGeometry(.init(offsetY: 1018, contentHeight: 1560, isAtBottom: false))
+        XCTAssertFalse(phase.isUserAwayFromBottom,
+            "small rebound after bottom-anchored growth is still layout correction")
+    }
+
     func testGeometryRequiresUpwardMovementToMarkUserDeparture() {
         let phase = CrewChatBottomFollow.ScrollPhaseBox()
         phase.observeGeometry(.init(offsetY: 100, contentHeight: 600, isAtBottom: true))

@@ -171,7 +171,7 @@ enum CrewChatBottomFollow {
         private(set) var isTopAnchorFrozen = false
         private(set) var geometry: GeometrySample?
         private var userDepartedBottom = false
-        private var suppressNextOffsetAfterContentChange = false
+        private var pendingLayoutHeightChange: CGFloat = 0
         private var frozenContentHeight: CGFloat?
         private var sawContentLayout = false
 
@@ -190,7 +190,7 @@ enum CrewChatBottomFollow {
                 isTopAnchorFrozen = false
                 sawContentLayout = false
                 userDepartedBottom = false
-                suppressNextOffsetAfterContentChange = false
+                pendingLayoutHeightChange = 0
             }
         }
 
@@ -201,14 +201,26 @@ enum CrewChatBottomFollow {
             if isUserScrolling {
                 if let previous,
                    abs(sample.contentHeight - previous.contentHeight) > 0.5 {
-                    suppressNextOffsetAfterContentChange = true
+                    // The layout offset may arrive with the height change or
+                    // in the next callback. Retain only the displacement
+                    // that the pending height change could plausibly cause.
+                    let mayStillCorrectOffset = abs(sample.offsetY - previous.offsetY) <= 1 ||
+                        (previous.isAtBottom && sample.isAtBottom)
+                    pendingLayoutHeightChange = mayStillCorrectOffset
+                        ? pendingLayoutHeightChange + abs(sample.contentHeight - previous.contentHeight)
+                        : 0
                 }
-                firstOffsetAfterGrowth = suppressNextOffsetAfterContentChange &&
+                firstOffsetAfterGrowth = pendingLayoutHeightChange > 0 &&
                     previous.map {
                         abs(sample.contentHeight - $0.contentHeight) < 0.5 &&
-                        abs(sample.offsetY - $0.offsetY) > 1
+                        abs(sample.offsetY - $0.offsetY) > 1 &&
+                        abs(sample.offsetY - $0.offsetY) <= pendingLayoutHeightChange + 1
                     } == true
-                if firstOffsetAfterGrowth { suppressNextOffsetAfterContentChange = false }
+                if let previous,
+                   abs(sample.contentHeight - previous.contentHeight) < 0.5,
+                   abs(sample.offsetY - previous.offsetY) > 1 {
+                    pendingLayoutHeightChange = 0
+                }
                 if sample.isAtBottom {
                     userDepartedBottom = false
                 } else if let previous,
