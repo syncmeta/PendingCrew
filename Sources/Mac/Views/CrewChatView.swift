@@ -93,12 +93,10 @@ struct CrewChatView: View {
     /// 量过：回写 30 次，被观察的接法 body 求值 30 次，这个接法 0 次
     /// （`CrewChatExpandAnchorProbeTests.test_scrollPosition的回写不许把body打成每帧重算`）。
     ///
-    /// 平时它是纯输出通道（SwiftUI 往里写「现在顶上是哪一条」）；**只有点「加载更早」
-    /// 那一下我们会主动写一笔** —— 见 `expandEarlier`，那一笔是承重的，量过：不写就偏
-    /// 680pt，写了偏 24pt。写进不被观察的盒子照样生效，因为紧接着 `renderLimit` 那一改
-    /// 会引发一次更新，SwiftUI 在那次更新里读绑定的 getter，正好读到我们刚写的值 ——
-    /// **免费写、顺路被取走**，不需要为它单独失效一次。
-    @State private var topAnchorBox = ChatTopAnchorBox()
+    /// 原生滚动回写和可见消息记录分开存。长消息可能只露出中段，把可见 ID 回灌给
+    /// 定位绑定会在离底那次 body 更新时跳到消息开头。普通滚动只保留原生回写；
+    /// 加载历史或条目数变化时才主动准备锚点，让它随内容更新在同一拍被读取。
+    @State private var topAnchorBox = CrewChatBottomFollow.TopAnchorBox()
 
     /// @-候选浮层限高用的两把尺（Todo #69）：群聊那一栏的总高、以及 composer 那
     /// 一截（回复横幅 + 输入胶囊 + 错误行）的高。两者相减 = composer 上方真正
@@ -940,7 +938,12 @@ struct CrewChatView: View {
     }
 
     private var messageScroll: some View {
-        ScrollViewReader { proxy in
+        // Freeze before the new rows reach layout. Waiting for onChange lets
+        // a visibility callback replace the history row during that update.
+        if topAnchorBox.prepareForContentCount(timelineEntries.count) {
+            scrollPhaseBox.freezeTopAnchorForContentChange()
+        }
+        return ScrollViewReader { proxy in
             ScrollView {
                 // 首屏 30 条刻意用 eager VStack 一次量完；LazyVStack 会先拿估算行高解
                 // `scrollTo(tail)`，真实高度回缩后视口可能留在内容范围外，直到用户滚一下
@@ -1000,13 +1003,14 @@ struct CrewChatView: View {
             // 当目标。绑定一直挂着，不做条件挂载 —— 条件挂载会改视图身份，那正是这条
             // 修法在躲的东西。macOS 15+ 只收用户滚动相位的回写：typing 显隐与新消息
             // 也会让 SwiftUI 把顶行改成下一条，若照收，离底浏览会跳一整行。
-            .scrollPosition(id: Binding(get: { topAnchorBox.id },
+            .scrollPosition(id: Binding(get: { topAnchorBox.scrollPositionID },
                                         set: { value in
                 if #available(macOS 15.0, iOS 18.0, *) {
                     if scrollPhaseBox.isUserScrolling && !scrollPhaseBox.isTopAnchorFrozen {
-                        topAnchorBox.id = value
+                        topAnchorBox.receiveScrollPosition(value)
                     }
                 } else {
+                    topAnchorBox.receiveScrollPosition(value)
                     topAnchorBox.id = value
                 }
             }),
@@ -1043,7 +1047,9 @@ struct CrewChatView: View {
             }
             .animation(.easeOut(duration: 0.12), value: bottomPin.unread > 0)
             .onChange(of: timelineEntries.count) { old, new in
-                if new > old { scrollPhaseBox.freezeTopAnchorForContentChange() }
+                if new > old, !scrollPhaseBox.isTopAnchorFrozen {
+                    scrollPhaseBox.freezeTopAnchorForContentChange()
+                }
                 // 判定整段收在 `CrewChatNewMessages.apply` 里 —— **这个文件不进
                 // test bundle**，留在这儿写就等于真实调用路径上一条尺子都没有
                 // （`afterInsert` 和 `Pin.received` 各自有一排用例，也照样挡不住
@@ -1402,7 +1408,7 @@ struct CrewChatView: View {
                 windowedEntries, limit: renderLimit, isFollowing: bottomPin.isFollowing)?.id
         }
         if let anchorID {
-            topAnchorBox.id = anchorID
+            topAnchorBox.pin(to: anchorID)
         }
         renderLimit = CrewChatWindow.expanded(renderLimit, total: timelineEntries.count)
         recordScrollDiagnostic(cause: 2)
@@ -2009,16 +2015,6 @@ private struct BottomOnContentGrowth: ViewModifier {
 /// 怎么对齐」绑成同一个值 —— 而这两件事在行为 3 下要求相反。角色化的那个重载是
 /// macOS 15 / iOS 18 起才有的，更老的系统退回旧写法（行为 3 在那里保证不了，已记
 /// tech-debt）。
-/// `.scrollPosition(id:)` 的回写落点（Todo #60）。见 `CrewChatView.topAnchorBox`。
-private final class ChatTopAnchorBox {
-    var id: String? {
-        didSet { if id == nil { pendingMessageAnchorID = nil } }
-    }
-    var pendingMessageAnchorID: String?
-    var diagnosticOffset = 0.0
-    var diagnosticViewport = 0.0
-    var diagnosticContent = 0.0
-}
 
 #if os(macOS)
 /// macOS 14 lacks `onScrollTargetVisibilityChange`. Only that OS measures
@@ -2058,7 +2054,7 @@ private struct ChatLegacyVisibleRow: ViewModifier {
 #endif
 
 private struct ChatVisibleTopTracker: ViewModifier {
-    let anchorBox: ChatTopAnchorBox
+    let anchorBox: CrewChatBottomFollow.TopAnchorBox
     let isFollowing: Bool
     let phaseBox: CrewChatBottomFollow.ScrollPhaseBox
 

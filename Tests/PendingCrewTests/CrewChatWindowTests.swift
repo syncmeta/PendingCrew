@@ -27,6 +27,17 @@ final class CrewChatWindowTests: XCTestCase {
                       "搜索筛选切换时须清旧锚")
     }
 
+    func testVisibleRowTrackingDoesNotBecomeAnOrdinaryScrollRequest() throws {
+        let view = try Self.source("Mac/Views/CrewChatView.swift")
+        XCTAssertTrue(view.contains("CrewChatBottomFollow.TopAnchorBox()"))
+        XCTAssertTrue(view.contains("Binding(get: { topAnchorBox.scrollPositionID }"))
+        XCTAssertTrue(view.contains("topAnchorBox.receiveScrollPosition(value)"))
+        XCTAssertTrue(view.contains("topAnchorBox.prepareForContentCount(timelineEntries.count)"))
+        XCTAssertTrue(view.contains("topAnchorBox.pin(to: anchorID)"))
+        XCTAssertFalse(view.contains("Binding(get: { topAnchorBox.id }"),
+                       "可见的长消息可能只露出中段，普通刷新不能请求把它的开头对齐顶部")
+    }
+
     func testTypingTailEventsUseScrollPhaseGuardInProductionScroll() throws {
         let view = try Self.source("Mac/Views/CrewChatView.swift")
         XCTAssertTrue(view.contains("if CrewChatBottomFollow.shouldLandForTyping("),
@@ -1695,6 +1706,11 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         @Published var renderLimit = 30
         @Published var typing = false
         @Published var filterEnabled = false
+        @Published var refreshRevision = 0
+        var rowHeights: [String: CGFloat] = [:]
+        var useWheelFollow = false
+        var useProductionStack = false
+        var reinjectVisibleID = false
         let phaseBox = CrewChatBottomFollow.ScrollPhaseBox()
         let wheelGestureBox = CrewChatWindow.WheelGestureBox()
         var userIsDragging: Bool { phaseBox.isUserScrolling }
@@ -1706,7 +1722,16 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
             }
         }
         var limitBeforeExcursion: Int?
-        var topID: String?
+        let topAnchorBox = CrewChatBottomFollow.TopAnchorBox()
+        var topID: String? {
+            get { topAnchorBox.id }
+            set { topAnchorBox.id = newValue }
+        }
+        func prepareForContentCount() {
+            if topAnchorBox.prepareForContentCount(visibleIDs.count) {
+                phaseBox.freezeTopAnchorForContentChange()
+            }
+        }
         var pendingMessageAnchorID: String?
         var topWrites = 0
         var geometryCalls = 0
@@ -1723,6 +1748,8 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         var content: CGFloat = .nan
         var lastRowMaxY: CGFloat = .nan
         var observedRowY: CGFloat = .nan
+        var observedRowID = "m75"
+        var observedRowYSamples: [CGFloat] = []
         var scrollTo: ((String, UnitPoint) -> Void)?
         var lastRowGap: CGFloat { viewport - lastRowMaxY }
         var bottomGap: CGFloat { content - viewport - offset }
@@ -1747,49 +1774,37 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
     private struct Harness: View {
         @ObservedObject var rig: Rig
         var body: some View {
-            ScrollViewReader { proxy in
+            rig.prepareForContentCount()
+            return ScrollViewReader { proxy in
                 ScrollView {
                     Group {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(CrewChatWindow.window(rig.visibleIDs, limit: rig.renderLimit), id: \.self) { id in
-                                Color.blue.opacity(0.1)
-                                    .frame(height: id == rig.ids.last ? 91 : 48)
-                                    .id(id)
-                                    .background {
-                                        if id == rig.ids.last {
-                                            GeometryReader { geo in
-                                                Color.clear.preference(key: LastRowY.self,
-                                                    value: geo.frame(in: .named("crewChatViewport")).maxY)
-                                            }
-                                        }
-                                    }
-                                    .background {
-                                        if id == "m75" {
-                                            GeometryReader { geo in
-                                                Color.clear.preference(key: ObservedRowY.self,
-                                                    value: geo.frame(in: .named("crewChatViewport")).minY)
-                                            }
-                                        }
-                                    }
-                            }
-                            if rig.typing { Color.orange.frame(height: 56).id("typing-probe") }
-                            Color.clear.frame(height: 1).id(CrewChatBottomFollow.bottomAnchorID)
+                        if rig.useProductionStack && !CrewChatWindow.usesEagerInitialLayout(limit: rig.renderLimit) {
+                            LazyVStack(alignment: .leading, spacing: 0) { rows }
+                                .scrollTargetLayout()
+                        } else {
+                            VStack(alignment: .leading, spacing: 0) { rows }
+                                .scrollTargetLayout()
                         }
-                        .scrollTargetLayout()
                     }
                     .padding(.vertical, 10)
                     .background {
                         LegacyTopApproachSensor(scopeID: "chat-probe",
                                                 gestureBox: rig.wheelGestureBox,
-                                                onUserScroll: { _, _, _, _ in },
+                                                onUserScroll: { _, _, atBottom, towardTop in
+                            guard rig.useWheelFollow else { return }
+                            rig.following = atBottom
+                        },
                                                 onWheelInput: { towardTop in
                             rig.phaseBox.noteUserScrollInput(towardTop: towardTop)
                         }).frame(width: 0, height: 0)
                     }
                 }
-                .scrollPosition(id: Binding(get: { rig.topID }, set: {
+                .scrollPosition(id: Binding(get: {
+                    rig.reinjectVisibleID ? rig.topID : rig.topAnchorBox.scrollPositionID
+                }, set: {
                     if rig.userIsDragging && !rig.phaseBox.isTopAnchorFrozen {
-                        rig.topID = $0; rig.topWrites += 1
+                        rig.topAnchorBox.receiveScrollPosition($0)
+                        rig.topWrites += 1
                     }
                 }), anchor: .top)
                 .coordinateSpace(name: "crewChatViewport")
@@ -1841,7 +1856,10 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     rig.geometrySamples.append(sample)
                 }
                 .onPreferenceChange(LastRowY.self) { rig.lastRowMaxY = $0 }
-                .onPreferenceChange(ObservedRowY.self) { rig.observedRowY = $0 }
+                .onPreferenceChange(ObservedRowY.self) {
+                    rig.observedRowY = $0
+                    if !$0.isNaN { rig.observedRowYSamples.append($0) }
+                }
                 .onChange(of: rig.following) { _, following in
                     if following { rig.topID = nil }
                     let next = CrewChatNewMessages.followChanged(
@@ -1851,7 +1869,9 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     rig.limitBeforeExcursion = next.limitBeforeExcursion
                 }
                 .onChange(of: rig.visibleIDs.count) { old, new in
-                    if new > old { rig.phaseBox.freezeTopAnchorForContentChange() }
+                    if new > old, !rig.phaseBox.isTopAnchorFrozen {
+                        rig.phaseBox.freezeTopAnchorForContentChange()
+                    }
                     rig.newMessageEvents += 1
                     let outcome = CrewChatNewMessages.apply(
                         added: new - old, renderLimit: rig.renderLimit,
@@ -1889,6 +1909,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
                     rig.topID = nil
                     proxy.scrollTo(CrewChatBottomFollow.bottomAnchorID, anchor: .bottom)
                 }
+                .onChange(of: rig.refreshRevision) { _, _ in }
                 .onAppear { rig.scrollTo = { id, anchor in
                     rig.programAnchorCalls += 1
                     proxy.scrollTo(id, anchor: anchor)
@@ -1896,6 +1917,32 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
             }
             .frame(width: 420, height: 500)
         }
+        @ViewBuilder private var rows: some View {
+            ForEach(CrewChatWindow.window(rig.visibleIDs, limit: rig.renderLimit), id: \.self) { id in
+                Color.blue.opacity(0.1)
+                    .frame(height: rig.rowHeights[id] ?? (id == rig.ids.last ? 91 : 48))
+                    .id(id)
+                    .background {
+                        if id == rig.ids.last {
+                            GeometryReader { geo in
+                                Color.clear.preference(key: LastRowY.self,
+                                    value: geo.frame(in: .named("crewChatViewport")).maxY)
+                            }
+                        }
+                    }
+                    .background {
+                        if id == rig.observedRowID {
+                            GeometryReader { geo in
+                                Color.clear.preference(key: ObservedRowY.self,
+                                    value: geo.frame(in: .named("crewChatViewport")).minY)
+                            }
+                        }
+                    }
+            }
+            if rig.typing { Color.orange.frame(height: 56).id("typing-probe") }
+            Color.clear.frame(height: 1).id(CrewChatBottomFollow.bottomAnchorID)
+        }
+
         private struct Geometry: Equatable {
             let offset: CGFloat
             let viewport: CGFloat
@@ -1923,6 +1970,104 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
     private func wheelSensor(_ view: NSView) -> LegacyTopApproachSensor.WheelView? {
         if let sensor = view as? LegacyTopApproachSensor.WheelView { return sensor }
         return view.subviews.compactMap(wheelSensor).first
+    }
+
+    @MainActor func testScrollingUpFromBottomThroughLongMessageMovesOnlyByWheelDistance() throws {
+        try assertLongMessageScroll(renderLimit: 30)
+    }
+
+    @MainActor func testPagedLazyHistoryLongMessageMovesOnlyByWheelDistance() throws {
+        try assertLongMessageScroll(renderLimit: 60)
+    }
+
+    @MainActor private func assertLongMessageScroll(renderLimit: Int) throws {
+        let rig = Rig()
+        rig.renderLimit = renderLimit
+        rig.rowHeights["m88"] = 1400
+        rig.observedRowID = "m88"
+        rig.useWheelFollow = true
+        rig.useProductionStack = true
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        let sensor = try XCTUnwrap(wheelSensor(host))
+        let scroll = try XCTUnwrap(sensor.attachedScrollView)
+        XCTAssertTrue(rig.following)
+        XCTAssertLessThan(abs(rig.bottomGap), 12)
+        rig.phaseBox.phaseChanged(to: .interacting)
+        let began = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                        wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0))
+        began.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        began.setIntegerValueField(.scrollWheelEventScrollPhase, value: 1)
+        scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: began)))
+        settle(window, rig)
+        // An offscreen NSScrollView consumes its first changed event to start
+        // tracking. Prime that local event route before measuring each step.
+        let prime = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                        wheelCount: 1, wheel1: 40, wheel2: 0, wheel3: 0))
+        prime.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        prime.setIntegerValueField(.scrollWheelEventScrollPhase, value: 2)
+        scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: prime)))
+        settle(window, rig)
+        for step in 0..<5 {
+            let before = rig.offset
+            let rowBefore = rig.observedRowY
+            let samplesBefore = rig.observedRowYSamples.count
+            sensor.receiveWheelSample(at: ProcessInfo.processInfo.systemUptime,
+                                      scrollingDeltaY: 40, nearTop: false,
+                                      atBottom: rig.bottomGap <= CrewChatBottomFollow.bottomSlack,
+                                      beginsGesture: step == 0, isPhased: true)
+            let cgWheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                              wheelCount: 1, wheel1: 40, wheel2: 0, wheel3: 0))
+            cgWheel.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            cgWheel.setIntegerValueField(.scrollWheelEventScrollPhase, value: 2)
+            let wheel = try XCTUnwrap(NSEvent(cgEvent: cgWheel))
+            XCTAssertEqual(wheel.scrollingDeltaY, 40, accuracy: 0.01)
+            scroll.scrollWheel(with: wheel) // Delivered only to this offscreen test view.
+            settle(window, rig)
+            rig.refreshRevision += 1
+            settle(window, rig)
+            print("[upward long row] limit=\(renderLimit) step=\(step) offset=\(before)->\(rig.offset) row=\(rowBefore)->\(rig.observedRowY) top=\(String(describing: rig.topID)) following=\(rig.following)")
+            XCTAssertEqual(rig.observedRowY, rowBefore + 40, accuracy: 2,
+                           "滑动 40pt 不得因锚点回写跳到长消息的开头")
+            XCTAssertTrue(rig.observedRowYSamples.dropFirst(samplesBefore).allSatisfy {
+                $0 >= rowBefore - 2 && $0 <= rowBefore + 42
+            }, "中间帧也不能先跳走再回来")
+        }
+        XCTAssertFalse(rig.following)
+        XCTAssertEqual(rig.newMessageEvents, 0)
+    }
+
+    @MainActor func testReinjectingVisibleLongMessageIDReproducesLargeJump() throws {
+        let rig = Rig()
+        rig.rowHeights["m88"] = 1400
+        rig.useWheelFollow = true
+        rig.reinjectVisibleID = true // Counterfactual: the old binding getter.
+        let host = NSHostingView(rootView: Harness(rig: rig))
+        host.frame = CGRect(x: 0, y: 0, width: 420, height: 500)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        settle(window, rig)
+        let sensor = try XCTUnwrap(wheelSensor(host))
+        let scroll = try XCTUnwrap(sensor.attachedScrollView)
+        let before = rig.offset
+        rig.phaseBox.phaseChanged(to: .interacting)
+        sensor.receiveWheelSample(at: ProcessInfo.processInfo.systemUptime,
+                                  scrollingDeltaY: 40, nearTop: false, atBottom: true,
+                                  beginsGesture: true, isPhased: true)
+        let clip = scroll.contentView
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: clip.bounds.minY - 40))
+        scroll.reflectScrolledClipView(clip)
+        settle(window, rig)
+        rig.refreshRevision += 1
+        settle(window, rig)
+        print("[old visible ID binding] delta=\(before - rig.offset)")
+        XCTAssertGreaterThan(before - rig.offset, 500,
+                             "回灌可见 ID 的对照必须再次跳远，证明尺子确实捕捉到了旧问题")
     }
 
     func testTypingAppearanceDoesNotProgrammaticallyScrollDuringUserDrag() throws {
@@ -2095,6 +2240,7 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         settle(window, rig)
         rig.following = false
         rig.topID = "m75"
+        rig.topAnchorBox.pin(to: try XCTUnwrap(rig.topID))
         rig.renderLimit = 60 // 30 -> 60, as in the production earlier-page path.
         settle(window, rig)
         let before = rig.offset

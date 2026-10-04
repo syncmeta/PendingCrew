@@ -268,6 +268,44 @@ enum CrewChatBottomFollow {
         }
     }
 
+    /// Visible history row and native scroll position use separate channels.
+    final class TopAnchorBox {
+        var id: String? {
+            didSet {
+                if id == nil {
+                    scrollPositionID = nil
+                    pendingMessageAnchorID = nil
+                }
+            }
+        }
+        /// Visibility includes partially clipped messages. Feeding their ID back
+        /// into scrollPosition turns an ordinary view update into a request to
+        /// align the message's start with the viewport, losing the reading offset.
+        /// Keep SwiftUI's own position output separate from the visibility record.
+        private(set) var scrollPositionID: String?
+        private var contentCount: Int?
+        /// Runs before constructing the changed timeline, while the visible
+        /// history ID still describes the old content. Ordinary refreshes with
+        /// the same count leave the native position, including its offset, alone.
+        func prepareForContentCount(_ count: Int) -> Bool {
+            let changed = contentCount.map { $0 != count } ?? false
+            contentCount = count
+            if changed, let id { scrollPositionID = id }
+            return changed
+        }
+        func receiveScrollPosition(_ value: String?) {
+            scrollPositionID = value
+        }
+        func pin(to value: String) {
+            scrollPositionID = value
+            id = value
+        }
+        var pendingMessageAnchorID: String?
+        var diagnosticOffset = 0.0
+        var diagnosticViewport = 0.0
+        var diagnosticContent = 0.0
+    }
+
     // MARK: - 第三个执行者：内容真实高度长出来了
 
     /// 「长高了」的判定阈值（点）。亚像素级的抖动不算长高。
