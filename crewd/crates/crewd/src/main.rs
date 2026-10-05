@@ -66,7 +66,9 @@ async fn run() -> anyhow::Result<()> {
                 .unwrap_or_else(crewd_legacy::paths::default_legacy_root);
             // 先于任何写入（建目录、开库）：数据目录绝不能落在旧数据目录里，反之亦然。
             crewd_legacy::paths::check_disjoint(&src, &dir)?;
-            std::fs::create_dir_all(&dir)?;
+            crewd_server::ensure_data_dir(&dir)?;
+            // 与 serve 同一把锁：正在服务的库不能被导入写。
+            let _lock = crewd_server::lock_data_dir(&dir)?;
             let db = dir.join("crewd.db");
             let mut store = crewd_store::Store::open(&db)?;
             // 只拒绝非空的库；上次导入失败留下的空库允许重试。

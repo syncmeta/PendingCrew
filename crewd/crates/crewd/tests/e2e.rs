@@ -145,6 +145,44 @@ fn import_into_the_legacy_dir_itself_is_refused_and_writes_nothing() {
 }
 
 #[test]
+fn import_is_refused_while_serve_holds_the_data_dir() {
+    let data = tempfile::tempdir().unwrap();
+    let _d = start(data.path());
+    let out = crewd(data.path())
+        .args(["import", "--from"])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("另一个 crewd"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let crews = rpc(data.path(), "crew.list", "null");
+    assert_eq!(crews.as_array().unwrap().len(), 0, "serve 的库没被动过");
+}
+
+#[test]
+fn fresh_data_dir_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("nested/crewd");
+    let out = crewd(&data)
+        .args(["import", "--from"])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mode = std::fs::metadata(&data).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+}
+
+#[test]
 fn rpc_error_exits_nonzero() {
     let data = tempfile::tempdir().unwrap();
     let _d = start(data.path());
