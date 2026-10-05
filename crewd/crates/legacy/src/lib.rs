@@ -14,6 +14,16 @@ mod rows;
 #[allow(dead_code)]
 mod sessions;
 
+// used from Task 8
+#[allow(dead_code)]
+mod archive;
+// used from Task 8
+#[allow(dead_code)]
+mod todos;
+// used from Task 8
+#[allow(dead_code)]
+mod whiteboard;
+
 pub use report::{ImportReport, Skipped};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -320,5 +330,125 @@ mod tests {
         assert_eq!(m.mentions[0].target_id.as_deref(), Some("worker-1"));
         assert_eq!(m.extra["audience"], "human");
         assert!(!m.extra.contains_key("text"));
+    }
+
+    fn import_parts(src: &Path, store: &crewd_store::Store) -> ImportReport {
+        let (mut r, mut c, rw) = ctx_parts(src);
+        let mut cx = Ctx {
+            src,
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        let crews = crews::import(store.conn(), &mut cx).unwrap();
+        sessions::import(store.conn(), &mut cx, &crews).unwrap();
+        for c in &crews {
+            whiteboard::import_board(store.conn(), &mut cx, &c.id).unwrap();
+            todos::import(store.conn(), &mut cx, &c.id, crewd_proto::Ledger::Agent).unwrap();
+            todos::import(store.conn(), &mut cx, &c.id, crewd_proto::Ledger::Human).unwrap();
+        }
+        whiteboard::import_outbox(store.conn(), &mut cx).unwrap();
+        archive::import_rest(store.conn(), &mut cx).unwrap();
+        r
+    }
+
+    #[test]
+    fn messages_todos_and_archive_import_from_fixture() {
+        let src = fixture();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let r = import_parts(&src, &store);
+
+        let msgs = crewd_store::messages::list(store.conn(), "local-aaaa", 0, 100).unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].text, "你好，大家 👋");
+        assert_eq!(
+            msgs[0].mentions[0].target_id.as_deref(),
+            Some("worker-2222bbbb")
+        );
+        assert_eq!(msgs[1].created_at, "2026-09-11T04:35:00.250Z");
+        assert_eq!(
+            msgs[1].in_reply_to.as_deref(),
+            Some("11111111-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            msgs[2].sender_kind, "captain",
+            "outbox 里的那条排在板上消息之后"
+        );
+        let extra: String = store
+            .conn()
+            .query_row(
+                "SELECT extra FROM messages WHERE id='11111111-0000-4000-8000-000000000001'",
+                [],
+                |x| x.get(0),
+            )
+            .unwrap();
+        assert!(extra.contains("\"audience\":\"agents\""));
+
+        let agent =
+            crewd_store::todos::list(store.conn(), "local-aaaa", crewd_proto::Ledger::Agent)
+                .unwrap();
+        assert_eq!(agent.len(), 2);
+        assert!(agent[0].deleted_at.is_some());
+        assert_eq!(agent[1].responses.len(), 1);
+        let human =
+            crewd_store::todos::list(store.conn(), "local-aaaa", crewd_proto::Ledger::Human)
+                .unwrap();
+        assert_eq!(human.len(), 1);
+
+        let paths = crewd_store::archive::list_paths(store.conn()).unwrap();
+        assert!(paths.contains(&"crew-arrangement.json".to_string()));
+        assert!(paths.contains(&"whiteboards/local-aaaa.plan.json".to_string()));
+        assert!(
+            paths.contains(&"whiteboards/local-bbbb.json".to_string()),
+            "坏文件原样归档"
+        );
+        assert!(!paths.iter().any(|p| p.ends_with("crew-sessions.json")));
+        assert!(!paths.iter().any(|p| p.ends_with(".cursor")));
+        assert!(!paths.iter().any(|p| p.starts_with("attachments/")));
+        assert!(
+            !paths.iter().any(|p| p == "whiteboards/local-aaaa.json"),
+            "已导入的不重复归档"
+        );
+
+        assert_eq!(r.counts["messages"], 3);
+        assert_eq!(r.counts["outboxMessages"], 1);
+        assert_eq!(r.counts["syntheticRowsDropped"], 1);
+        assert_eq!(r.counts["agentTodos"], 2);
+        assert_eq!(r.counts["humanTodos"], 1);
+        assert_eq!(r.counts["todoResponses"], 1);
+        assert_eq!(r.counts["attachmentPathsNotRewritten"], 1);
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.file == "whiteboards/local-aaaa.json" && s.index == Some(2))
+        );
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.file == "whiteboards/local-bbbb.json" && s.index.is_none())
+        );
+    }
+
+    #[test]
+    fn importing_same_board_twice_is_idempotent_for_messages() {
+        let src = fixture();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let (mut r, mut c, rw) = ctx_parts(&src);
+        let mut cx = Ctx {
+            src: &src,
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        crews::import(store.conn(), &mut cx).unwrap();
+        whiteboard::import_board(store.conn(), &mut cx, "local-aaaa").unwrap();
+        whiteboard::import_board(store.conn(), &mut cx, "local-aaaa").unwrap();
+        assert_eq!(
+            crewd_store::messages::list(store.conn(), "local-aaaa", 0, 100)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(r.counts["duplicateMessages"], 2);
     }
 }
