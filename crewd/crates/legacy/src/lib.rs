@@ -10,6 +10,7 @@ mod archive;
 mod todos;
 mod whiteboard;
 
+use anyhow::Context as _;
 pub use report::{ImportReport, Skipped};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -22,18 +23,30 @@ pub(crate) struct Ctx<'a> {
 }
 
 /// 只读导入整个旧数据目录到 `store`（应为空库）。全部写入在一个事务里，失败则什么都不留。
-/// 附件在事务提交后复制到 `dest_data_dir/attachments`。
+/// 附件在开事务之前复制到 `dest_data_dir/attachments`：复制失败则不提交任何东西
+/// （残留的已复制文件无害，重试会覆盖）。
 pub fn import(
     src: &Path,
     store: &mut crewd_store::Store,
     dest_data_dir: &Path,
 ) -> anyhow::Result<ImportReport> {
     anyhow::ensure!(src.is_dir(), "旧数据目录不存在: {}", src.display());
+    anyhow::ensure!(store.is_empty()?, "目标库不是空的，导入只写新库");
     let mut report = ImportReport::default();
+    let att_from = src.join("attachments");
+    let att_to = dest_data_dir.join("attachments");
+    let copied = paths::copy_dir(&att_from, &att_to).with_context(|| {
+        format!(
+            "复制附件失败: {} → {}",
+            att_from.display(),
+            att_to.display()
+        )
+    })?;
+    report.add("attachmentFiles", copied);
     let mut consumed = BTreeSet::new();
     let rewrite = paths::PathRewrite {
-        from: src.join("attachments"),
-        to: dest_data_dir.join("attachments"),
+        from: att_from,
+        to: att_to,
     };
     store.with_tx(|tx| {
         let mut cx = Ctx {
@@ -55,8 +68,6 @@ pub fn import(
         crewd_store::meta_set(tx, "importSource", &src.display().to_string())?;
         Ok(())
     })?;
-    let copied = paths::copy_dir(&src.join("attachments"), &dest_data_dir.join("attachments"))?;
-    report.add("attachmentFiles", copied);
     Ok(report)
 }
 

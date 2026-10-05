@@ -49,9 +49,45 @@ fn full_import_from_fixture() {
 }
 
 #[test]
-fn missing_source_is_an_error_and_writes_nothing() {
+fn missing_source_is_an_error() {
     let dest = tempfile::tempdir().unwrap();
     let mut store = Store::open_in_memory().unwrap();
     assert!(import(&dest.path().join("nope"), &mut store, dest.path()).is_err());
     assert!(store.is_empty().unwrap());
+}
+
+#[test]
+fn non_empty_store_is_rejected_and_nothing_is_added() {
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    import(&fixture(), &mut store, dest.path()).unwrap();
+    let count = |s: &Store| -> i64 {
+        s.conn()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages) + (SELECT COUNT(*) FROM sessions)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let before = count(&store);
+    let err = import(&fixture(), &mut store, dest.path()).unwrap_err();
+    assert!(err.to_string().contains("不是空的"), "{err}");
+    assert_eq!(count(&store), before);
+}
+
+#[test]
+fn attachment_copy_failure_commits_nothing() {
+    let dest = tempfile::tempdir().unwrap();
+    // 目标 attachments 路径被一个普通文件占住 → 复制必失败。
+    std::fs::write(dest.path().join("attachments"), "in the way").unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    let err = import(&fixture(), &mut store, dest.path()).unwrap_err();
+    assert!(err.to_string().contains("复制附件失败"), "{err}");
+    assert!(store.is_empty().unwrap(), "复制失败不能留下任何行");
+    assert!(
+        crewd_store::meta_get(store.conn(), "importedAt")
+            .unwrap()
+            .is_none()
+    );
 }
