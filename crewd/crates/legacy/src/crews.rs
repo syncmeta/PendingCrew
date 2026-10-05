@@ -28,12 +28,12 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             return Ok(vec![]);
         }
     };
+    let Some(rows) = file.get("crews").and_then(Value::as_array).cloned() else {
+        // 不标 consumed：归档会原样保存这个文件。
+        cx.report.skip(cx.src, &path, None, "缺少 crews 数组");
+        return Ok(vec![]);
+    };
     cx.consumed.insert(path.clone());
-    let rows = file
-        .get("crews")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
 
     let mut crews = Vec::new();
     let mut parents: Vec<(String, Vec<String>)> = Vec::new();
@@ -67,8 +67,10 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
         });
     }
 
-    for (id, ps) in parents {
-        let mut known = Vec::new();
+    for (id, mut ps) in parents {
+        let mut dedup = std::collections::BTreeSet::new();
+        ps.retain(|p| dedup.insert(p.clone()));
+        let mut known: Vec<String> = Vec::new();
         for p in ps {
             if crews.iter().any(|c| c.id == p) {
                 known.push(p);

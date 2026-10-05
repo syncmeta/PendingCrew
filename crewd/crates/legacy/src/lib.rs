@@ -172,11 +172,142 @@ mod tests {
         assert_eq!(r.counts["sessions"], 3);
         assert_eq!(r.counts["sessionsWithoutRecord"], 1);
         assert_eq!(r.counts["danglingParentEdges"], 1);
+        assert_eq!(r.counts["sessionRecordsSuperseded"], 1);
         assert!(
             r.skipped
                 .iter()
                 .any(|s| s.file == "local-crews.json" && s.index == Some(3))
         );
+    }
+
+    fn legacy_root(crews_json: &str, sessions_json: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("local-crews.json"), crews_json).unwrap();
+        fs::create_dir_all(dir.path().join("whiteboards")).unwrap();
+        fs::write(
+            dir.path().join("whiteboards/agent-sessions.json"),
+            sessions_json,
+        )
+        .unwrap();
+        dir
+    }
+
+    fn session_rec(session: &str, crew: &str, agent_sid: &str, updated: &str) -> String {
+        format!(
+            r#"{{"crewId":"{crew}","sessionId":"{session}","kind":"codex","agentSessionId":"{agent_sid}","updatedAt":"{updated}"}}"#
+        )
+    }
+
+    #[test]
+    fn newest_session_record_wins_by_instant_not_string() {
+        let crews = r#"{"crews":[{"id":"c1","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}]}"#;
+        let recs = [
+            // 原串比较会判 A 更新（'Z' > '.'）；按时刻 B 晚 500ms。
+            session_rec("worker-a", "c1", "old", "2026-09-01T09:00:00Z"),
+            session_rec("worker-a", "c1", "new", "2026-09-01T09:00:00.500Z"),
+            // +08:00 的 10:00 是 02:00Z，比 03:00Z 早；原串比较会反过来。
+            session_rec("worker-b", "c1", "old", "2026-09-01T10:00:00+08:00"),
+            session_rec("worker-b", "c1", "new", "2026-09-01T03:00:00Z"),
+            // 同一对，顺序反过来：后到的是更旧的那条，也不能覆盖。
+            session_rec("worker-c", "c1", "new", "2026-09-01T03:00:00Z"),
+            session_rec("worker-c", "c1", "old", "2026-09-01T10:00:00+08:00"),
+        ];
+        let src = legacy_root(crews, &format!("[{}]", recs.join(",")));
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let (mut r, mut c, rw) = ctx_parts(src.path());
+        let mut cx = Ctx {
+            src: src.path(),
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        let imported = crews::import(store.conn(), &mut cx).unwrap();
+        sessions::import(store.conn(), &mut cx, &imported).unwrap();
+
+        let ses = crewd_store::sessions::list_for_crew(store.conn(), "c1").unwrap();
+        assert_eq!(ses.len(), 3);
+        for s in &ses {
+            assert_eq!(s.agent_session_id.as_deref(), Some("new"), "{}", s.id);
+        }
+        assert_eq!(r.counts["sessionRecordsSuperseded"], 3);
+    }
+
+    #[test]
+    fn session_for_unknown_crew_is_skipped_with_reason() {
+        let crews = r#"{"crews":[{"id":"c1","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}]}"#;
+        let recs = session_rec("worker-x", "nope", "a", "2026-09-01T09:00:00Z");
+        let src = legacy_root(crews, &format!("[{recs}]"));
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let (mut r, mut c, rw) = ctx_parts(src.path());
+        let mut cx = Ctx {
+            src: src.path(),
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        let imported = crews::import(store.conn(), &mut cx).unwrap();
+        sessions::import(store.conn(), &mut cx, &imported).unwrap();
+        assert_eq!(r.counts["sessionsForUnknownCrew"], 1);
+        assert!(!r.counts.contains_key("sessions"));
+        let sk = r
+            .skipped
+            .iter()
+            .find(|s| s.file == "whiteboards/agent-sessions.json")
+            .unwrap();
+        assert_eq!(sk.index, None);
+        assert!(sk.reason.contains("worker-x") && sk.reason.contains("nope"));
+    }
+
+    #[test]
+    fn crews_file_without_crews_array_is_skipped_and_not_consumed() {
+        for body in [
+            r#"{"version":1}"#,
+            r#"{"crews":{"a":1}}"#,
+            r#"[{"id":"x"}]"#,
+        ] {
+            let src = legacy_root(body, "[]");
+            let store = crewd_store::Store::open_in_memory().unwrap();
+            let (mut r, mut c, rw) = ctx_parts(src.path());
+            let mut cx = Ctx {
+                src: src.path(),
+                report: &mut r,
+                consumed: &mut c,
+                rewrite: &rw,
+            };
+            let imported = crews::import(store.conn(), &mut cx).unwrap();
+            assert!(imported.is_empty(), "{body}");
+            assert_eq!(r.skipped.len(), 1, "{body}");
+            assert_eq!(r.skipped[0].file, "local-crews.json");
+            assert_eq!(r.skipped[0].index, None);
+            assert!(r.skipped[0].reason.contains("crews"));
+            assert!(!c.contains(&src.path().join("local-crews.json")), "{body}");
+            assert!(
+                crewd_store::crews::list(store.conn()).unwrap().is_empty(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_parent_ids_are_deduped() {
+        let crews = r#"{"crews":[
+            {"id":"p","title":"p","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"},
+            {"id":"k","title":"k","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z",
+             "parentCrewIds":["p","p","gone","gone"]}]}"#;
+        let src = legacy_root(crews, "[]");
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let (mut r, mut c, rw) = ctx_parts(src.path());
+        let mut cx = Ctx {
+            src: src.path(),
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        crews::import(store.conn(), &mut cx).unwrap();
+        let list = crewd_store::crews::list(store.conn()).unwrap();
+        let k = list.iter().find(|c| c.id == "k").unwrap();
+        assert_eq!(k.parent_ids, ["p"]);
+        assert_eq!(r.counts["danglingParentEdges"], 1);
     }
 
     #[test]
