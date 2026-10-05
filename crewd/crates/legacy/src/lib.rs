@@ -1,4 +1,7 @@
 //! 把旧 Swift 版的 JSON 数据只读地导入 crewd 的 SQLite。源目录一个字节都不改。
+// used from Task 8
+#[allow(dead_code)]
+mod crews;
 pub mod paths;
 // used from Task 6-8
 #[allow(dead_code)]
@@ -7,6 +10,9 @@ mod report;
 // used from Task 6-8
 #[allow(dead_code)]
 mod rows;
+// used from Task 8
+#[allow(dead_code)]
+mod sessions;
 
 pub use report::{ImportReport, Skipped};
 use std::collections::BTreeSet;
@@ -118,6 +124,59 @@ mod tests {
         assert_eq!(paths::copy_dir(&from, &to).unwrap(), 2);
         assert_eq!(fs::read_to_string(to.join("c1/x.txt")).unwrap(), "x");
         assert_eq!(paths::copy_dir(&dir.path().join("nope"), &to).unwrap(), 0);
+    }
+
+    fn fixture() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/basic")
+    }
+
+    #[test]
+    fn crews_and_sessions_import_from_fixture() {
+        let src = fixture();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let (mut r, mut c, rw) = ctx_parts(&src);
+        let mut cx = Ctx {
+            src: &src,
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        let crews = crews::import(store.conn(), &mut cx).unwrap();
+        sessions::import(store.conn(), &mut cx, &crews).unwrap();
+
+        let list = crewd_store::crews::list(store.conn()).unwrap();
+        let ids: Vec<_> = list.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["local-aaaa", "local-bbbb", "pendingcrew-chief"]);
+        let b = list.iter().find(|c| c.id == "local-bbbb").unwrap();
+        assert_eq!(b.parent_ids, ["local-aaaa"]);
+        let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
+        assert!(chief.builtin);
+        assert_eq!(list[0].created_at, "2026-09-01T08:00:00.000Z");
+
+        let ses = crewd_store::sessions::list_for_crew(store.conn(), "local-aaaa").unwrap();
+        assert_eq!(ses.len(), 3);
+        let cap = ses.iter().find(|s| s.id == "captain-1111aaaa").unwrap();
+        assert_eq!(cap.role, "captain");
+        assert_eq!(cap.display_name.as_deref(), Some("机长"));
+        let w = ses.iter().find(|s| s.id == "worker-2222bbbb").unwrap();
+        assert_eq!(
+            w.agent_session_id.as_deref(),
+            Some("thread-xyz"),
+            "取 updatedAt 最新的那条"
+        );
+        assert_eq!(w.model.as_deref(), Some("gpt-5.6"));
+        let old = ses.iter().find(|s| s.id == "worker-3333cccc").unwrap();
+        assert_eq!(old.agent_kind, "unknown");
+
+        assert_eq!(r.counts["crews"], 3);
+        assert_eq!(r.counts["sessions"], 3);
+        assert_eq!(r.counts["sessionsWithoutRecord"], 1);
+        assert_eq!(r.counts["danglingParentEdges"], 1);
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.file == "local-crews.json" && s.index == Some(3))
+        );
     }
 
     #[test]
