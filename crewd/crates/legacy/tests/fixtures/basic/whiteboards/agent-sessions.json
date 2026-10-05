@@ -1,0 +1,8 @@
+[
+  {"crewId":"local-aaaa","sessionId":"captain-1111aaaa","kind":"claude_code",
+   "agentSessionId":"00000000-0000-4000-8000-000000000001","updatedAt":"2026-09-01T08:00:00Z","structuredPost":true},
+  {"crewId":"local-aaaa","sessionId":"worker-2222bbbb","kind":"codex","agentSessionId":"thread-xyz",
+   "updatedAt":"2026-09-01T09:00:00Z","model":"gpt-5.6","effort":"high","workingDirectory":"/tmp/example"},
+  {"crewId":"local-aaaa","sessionId":"worker-2222bbbb","kind":"codex","agentSessionId":"thread-old",
+   "updatedAt":"2026-08-01T09:00:00Z"}
+]

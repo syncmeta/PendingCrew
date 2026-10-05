@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "nextCrewNumber": 3,
+  "crews": [
+    {"id":"pendingcrew-chief","title":"总机组","responsibleSubjectId":"s0","runtimeLocation":"local_host",
+     "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T00:00:00Z","isBuiltin":true},
+    {"id":"local-aaaa","title":"示例机组","responsibleSubjectId":"s1","runtimeLocation":"local_host",
+     "createdAt":"2026-09-01T08:00:00Z","updatedAt":"2026-09-02T08:00:00Z","crewNumber":1,
+     "workingDirectory":"/tmp/example","captainAgentKind":"claude_code","titleSource":"human",
+     "parentCrewIds":["local-gone"],
+     "sessionMembers":[
+       {"sessionId":"captain-1111aaaa","displayName":"机长","createdAt":"2026-09-01T08:00:00Z"},
+       {"sessionId":"worker-2222bbbb","displayName":"滚动修复","createdAt":"2026-09-01T09:00:00Z","extensionNumber":2},
+       {"sessionId":"worker-3333cccc","displayName":"旧成员","createdAt":"2026-09-01T10:00:00Z"}
+     ]},
+    {"id":"local-bbbb","title":"子机组","responsibleSubjectId":"s2","runtimeLocation":"local_host",
+     "createdAt":"2026-09-03T08:00:00Z","updatedAt":"2026-09-03T08:00:00Z","crewNumber":2,
+     "parentCrewIds":["local-aaaa"]},
+    {"title":"缺 id 的坏行"}
+  ]
+}

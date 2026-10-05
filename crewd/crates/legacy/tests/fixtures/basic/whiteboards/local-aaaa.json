@@ -1,0 +1,11 @@
+[
+  {"id":"11111111-0000-4000-8000-000000000001","senderKind":"user","senderUserId":"local-byok-user",
+   "text":"你好，大家 👋","createdAt":"2026-09-11T12:34:56Z",
+   "mentions":[{"kind":"session","target_id":"worker-2222bbbb"}],"audience":"agents"},
+  {"id":"11111111-0000-4000-8000-000000000002","senderKind":"session","senderSessionId":"worker-2222bbbb",
+   "senderName":"滚动修复","text":"收到","createdAt":"2026-09-11T12:35:00.250+08:00",
+   "inReplyTo":"11111111-0000-4000-8000-000000000001","category":"ack",
+   "attachments":[{"id":"att1","mime":"text/plain","size":5,"path":"/nonexistent/attachments/local-aaaa/note.txt","filename":"note.txt"}]},
+  {"id":"11111111-0000-4000-8000-000000000003","senderKind":"user","createdAt":"2026-09-11T12:36:00Z"},
+  {"id":"whiteboard-read-failure","senderKind":"pendingcrew","text":"读不出","createdAt":"2026-09-11T12:37:00Z"}
+]

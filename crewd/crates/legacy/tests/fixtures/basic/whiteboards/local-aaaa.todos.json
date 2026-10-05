@@ -1,0 +1,8 @@
+[
+  {"id":"22222222-0000-4000-8000-000000000001","number":1,"text":"已删的一条","status":"dropped",
+   "createdAt":"2026-09-05T00:00:00Z","responses":[],"deletedAt":"2026-09-06T00:00:00Z"},
+  {"id":"22222222-0000-4000-8000-000000000002","number":2,"text":"发一个新版","status":"in_progress",
+   "createdAt":"2026-09-07T00:00:00Z","updatedAt":"2026-09-07T01:00:00Z",
+   "responses":[{"id":"33333333-0000-4000-8000-000000000001","sessionId":"captain-1111aaaa",
+     "text":"我来","status":"in_progress","createdAt":"2026-09-07T00:10:00Z"}]}
+]
