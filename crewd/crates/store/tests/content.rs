@@ -186,3 +186,41 @@ fn archive_roundtrip() {
         ["whiteboards/a.plan.json"]
     );
 }
+
+#[test]
+fn todos_insert_is_atomic_when_a_response_fails() {
+    let s = store_with_crew();
+    let resp = |id: &str| TodoResponse {
+        id: id.into(),
+        session_id: "s".into(),
+        sender_name: None,
+        text: "x".into(),
+        status: None,
+        attachments: vec![],
+        created_at: "2026-10-01T00:01:00.000Z".into(),
+    };
+    let t = Todo {
+        id: "t1".into(),
+        crew_id: "a".into(),
+        ledger: Ledger::Agent,
+        number: 1,
+        text: "x".into(),
+        status: "pending".into(),
+        created_at: "2026-10-01T00:00:00.000Z".into(),
+        updated_at: None,
+        deleted_at: None,
+        attachments: vec![],
+        responses: vec![resp("dup"), resp("dup")],
+    };
+    assert!(todos::insert(s.conn(), &t, None).is_err());
+    assert!(
+        todos::list(s.conn(), "a", Ledger::Agent)
+            .unwrap()
+            .is_empty()
+    );
+    let n: i64 = s
+        .conn()
+        .query_row("SELECT COUNT(*) FROM todo_responses", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0);
+}

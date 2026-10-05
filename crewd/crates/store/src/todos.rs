@@ -3,7 +3,23 @@ use crewd_proto::{Ledger, Todo, TodoResponse};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+/// 原子写入：todo 与其 responses 要么全进，要么全不进（自带 savepoint，可嵌在外层事务里）。
+/// 失败时回滚到 savepoint 并返回原始错误。
 pub fn insert(conn: &Connection, t: &Todo, extra: Option<&Value>) -> Result<()> {
+    conn.execute_batch("SAVEPOINT todo_insert")?;
+    match insert_rows(conn, t, extra) {
+        Ok(()) => {
+            conn.execute_batch("RELEASE todo_insert")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO todo_insert; RELEASE todo_insert");
+            Err(e)
+        }
+    }
+}
+
+fn insert_rows(conn: &Connection, t: &Todo, extra: Option<&Value>) -> Result<()> {
     conn.execute(
         "INSERT INTO todos(id,crew_id,ledger,number,text,status,created_at,updated_at,deleted_at,attachments,extra)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",

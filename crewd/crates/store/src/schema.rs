@@ -81,6 +81,7 @@ CREATE TABLE todo_responses(
   attachments TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL
 );
+CREATE INDEX todo_responses_todo ON todo_responses(todo_id, ord);
 CREATE TABLE legacy_archive(
   path TEXT PRIMARY KEY,
   content BLOB NOT NULL

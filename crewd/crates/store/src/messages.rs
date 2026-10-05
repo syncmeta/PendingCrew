@@ -6,8 +6,9 @@ use serde_json::Value;
 /// 写入一条消息。id 已存在 → `Ok(None)`（幂等）；否则返回分配到的 seq。
 pub fn insert(conn: &Connection, m: &Message, extra: Option<&Value>) -> Result<Option<i64>> {
     let n = conn.execute(
-        "INSERT OR IGNORE INTO messages(id,crew_id,sender_kind,sender_session_id,sender_name,text,category,in_reply_to,mentions,attachments,created_at,extra)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        "INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,sender_name,text,category,in_reply_to,mentions,attachments,created_at,extra)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+         ON CONFLICT(id) DO NOTHING",
         params![
             m.id,
             m.crew_id,
