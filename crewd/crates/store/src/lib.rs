@@ -83,8 +83,16 @@ pub fn now_ts() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// 只认 UNIQUE（2067）与 PRIMARY KEY（1555）两种扩展码；
+/// 外键、NOT NULL、CHECK 等其他约束失败不算“已存在”。
 pub fn is_unique_violation(e: &rusqlite::Error) -> bool {
-    matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation)
+    use rusqlite::ffi::{SQLITE_CONSTRAINT_PRIMARYKEY, SQLITE_CONSTRAINT_UNIQUE};
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.extended_code == SQLITE_CONSTRAINT_UNIQUE
+                || f.extended_code == SQLITE_CONSTRAINT_PRIMARYKEY
+    )
 }
 
 /// 把一列 JSON 文本解成类型；失败转成 rusqlite 的列转换错误，便于在 query_map 里用 `?`。
@@ -224,6 +232,42 @@ mod tests {
         let list = sessions::list_for_crew(s.conn(), "a").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].display_name.as_deref(), Some("新机长"));
+    }
+
+    #[test]
+    fn is_unique_violation_only_matches_unique_and_primary_key() {
+        let s = Store::open_in_memory().unwrap();
+        crews::upsert(s.conn(), &crew("a", None), None).unwrap();
+
+        // PRIMARY KEY 冲突
+        let pk = s
+            .conn()
+            .execute(
+                "INSERT INTO crews(id,title,builtin,created_at,updated_at) VALUES('a','t',0,'x','x')",
+                [],
+            )
+            .unwrap_err();
+        assert!(is_unique_violation(&pk));
+
+        // UNIQUE 冲突（messages.id 是 UNIQUE 列）
+        let ins = "INSERT INTO messages(id,crew_id,sender_kind,text,created_at) VALUES('m1','a','human','t','x')";
+        s.conn().execute(ins, []).unwrap();
+        let uq = s.conn().execute(ins, []).unwrap_err();
+        assert!(is_unique_violation(&uq));
+
+        // FOREIGN KEY 失败不算
+        let fk = match crews::set_parents(s.conn(), "a", &["nope".to_string()]) {
+            Err(StoreError::Sql(e)) => e,
+            other => panic!("expected sql error, got {other:?}"),
+        };
+        assert!(!is_unique_violation(&fk));
+
+        // NOT NULL 失败不算
+        let nn = s
+            .conn()
+            .execute("INSERT INTO crews(id) VALUES('z')", [])
+            .unwrap_err();
+        assert!(!is_unique_violation(&nn));
     }
 
     #[test]

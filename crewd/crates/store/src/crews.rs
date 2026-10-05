@@ -46,7 +46,7 @@ pub fn exists(conn: &Connection, id: &str) -> Result<bool> {
 pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
     let mut stmt = conn.prepare(
         "SELECT id,title,number,builtin,working_directory,captain_agent_kind,hidden_at,created_at,updated_at
-         FROM crews ORDER BY number IS NULL, number, created_at",
+         FROM crews ORDER BY number IS NULL, number, created_at, id",
     )?;
     let mut crews = stmt
         .query_map([], |r| {
