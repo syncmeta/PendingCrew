@@ -40,3 +40,10 @@ Config/Local.xcconfig
 
 # 测试进程的隔离数据根（project.yml 的 scheme 环境变量指到这儿）
 .test-data-root/
+
+# 本机 wrangler 缓存（含 Cloudflare 账号信息）
+.wrangler/
+
+# 不该公开的调查记录（含生产主机/端口、其它项目细节）。仓库是公开的，
+# docs/internal/ 会被推上去；涉及真实环境的东西放这里。
+docs/private/
