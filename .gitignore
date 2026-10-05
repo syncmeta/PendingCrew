@@ -47,3 +47,6 @@ Config/Local.xcconfig
 # 不该公开的调查记录（含生产主机/端口、其它项目细节）。仓库是公开的，
 # docs/internal/ 会被推上去；涉及真实环境的东西放这里。
 docs/private/
+
+# crewd 构建产物
+crewd/target/
