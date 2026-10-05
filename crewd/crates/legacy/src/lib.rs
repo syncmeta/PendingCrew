@@ -31,6 +31,8 @@ pub fn import(
     dest_data_dir: &Path,
 ) -> anyhow::Result<ImportReport> {
     anyhow::ensure!(src.is_dir(), "旧数据目录不存在: {}", src.display());
+    // 必须在任何写入（附件复制）之前：数据目录落在旧目录里会把附件复制到自己身上。
+    paths::check_disjoint(src, dest_data_dir)?;
     anyhow::ensure!(store.is_empty()?, "目标库不是空的，导入只写新库");
     let mut report = ImportReport::default();
     let att_from = src.join("attachments");
@@ -168,6 +170,19 @@ mod tests {
         assert_eq!(paths::copy_dir(&from, &to).unwrap(), 2);
         assert_eq!(fs::read_to_string(to.join("c1/x.txt")).unwrap(), "x");
         assert_eq!(paths::copy_dir(&dir.path().join("nope"), &to).unwrap(), 0);
+    }
+
+    #[test]
+    fn copy_dir_refuses_to_copy_onto_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("a");
+        fs::create_dir_all(&from).unwrap();
+        fs::write(from.join("y.txt"), "y").unwrap();
+        assert!(paths::copy_dir(&from, &from).is_err());
+        assert!(paths::copy_dir(&from, &from.join(".")).is_err());
+        assert!(paths::copy_dir(&from, &from.join("sub")).is_err());
+        assert_eq!(fs::read_to_string(from.join("y.txt")).unwrap(), "y");
+        assert!(!from.join("sub").exists());
     }
 
     fn fixture() -> PathBuf {

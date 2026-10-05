@@ -38,11 +38,84 @@ impl PathRewrite {
     }
 }
 
-/// 递归复制，返回复制的文件数。源不存在返回 0。
+/// 解析成绝对、规范的路径；路径可以还不存在：规范化最近的已存在祖先，再把其余部分按字面接回去
+/// （`.` 丢掉，`..` 弹一级——不存在的部分不可能是符号链接，字面处理是准确的）。
+pub fn resolve_lenient(p: &Path) -> std::io::Result<PathBuf> {
+    use std::path::Component;
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(p)
+    };
+    let comps: Vec<Component> = abs.components().collect();
+    for n in (1..=comps.len()).rev() {
+        let prefix: PathBuf = comps[..n].iter().collect();
+        match prefix.canonicalize() {
+            Ok(mut out) => {
+                for c in &comps[n..] {
+                    match c {
+                        Component::ParentDir => {
+                            out.pop();
+                        }
+                        Component::Normal(s) => out.push(s),
+                        _ => {}
+                    }
+                }
+                return Ok(out);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(abs)
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+/// `inner` 是 `outer` 本身或在它里面。路径比较之外再按 inode 比一遍祖先，
+/// 挡住大小写不敏感文件系统上大小写不同的同一目录。
+fn is_within(inner: &Path, outer: &Path) -> bool {
+    inner.starts_with(outer) || inner.ancestors().any(|a| same_file(a, outer))
+}
+
+/// 旧数据目录与 crewd 数据目录必须互不包含：导入绝不往旧数据目录里写任何东西。
+pub fn check_disjoint(src: &Path, dest: &Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    let s = resolve_lenient(src).with_context(|| format!("无法解析路径 {}", src.display()))?;
+    let d = resolve_lenient(dest).with_context(|| format!("无法解析路径 {}", dest.display()))?;
+    if is_within(&d, &s) || is_within(&s, &d) {
+        anyhow::bail!(
+            "数据目录 {} 与旧数据目录 {} 重叠：导入绝不往旧数据目录里写，请换一个不在其中的数据目录",
+            d.display(),
+            s.display()
+        );
+    }
+    Ok(())
+}
+
+/// 递归复制，返回复制的文件数。源不存在返回 0。目标是源本身或在源里面时拒绝
+/// （自己复制到自己会把文件截断成空）。
 pub fn copy_dir(from: &Path, to: &Path) -> std::io::Result<usize> {
     if !from.is_dir() {
         return Ok(0);
     }
+    let (f, t) = (resolve_lenient(from)?, resolve_lenient(to)?);
+    if is_within(&t, &f) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("复制目标 {} 与源 {} 重叠", t.display(), f.display()),
+        ));
+    }
+    copy_tree(from, to)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<usize> {
     fs::create_dir_all(to)?;
     let mut n = 0;
     for e in fs::read_dir(from)? {
@@ -50,7 +123,7 @@ pub fn copy_dir(from: &Path, to: &Path) -> std::io::Result<usize> {
         let p = e.path();
         let t = to.join(e.file_name());
         if p.is_dir() {
-            n += copy_dir(&p, &t)?;
+            n += copy_tree(&p, &t)?;
         } else {
             fs::copy(&p, &t)?;
             n += 1;

@@ -90,6 +90,60 @@ fn import_then_serve_then_rpc() {
     assert!(String::from_utf8_lossy(&second.stderr).contains("另一个 crewd"));
 }
 
+/// 夹具的可写副本（共享夹具本身不许动）。
+fn fixture_copy() -> tempfile::TempDir {
+    fn cp(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let p = e.unwrap().path();
+            let t = to.join(p.file_name().unwrap());
+            if p.is_dir() {
+                cp(&p, &t);
+            } else {
+                std::fs::copy(&p, &t).unwrap();
+            }
+        }
+    }
+    let t = tempfile::tempdir().unwrap();
+    cp(&fixture(), t.path());
+    t
+}
+
+fn list_tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            out.extend(list_tree(&p));
+        } else {
+            let b = std::fs::read(&p).unwrap();
+            out.push((p, b));
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn import_into_the_legacy_dir_itself_is_refused_and_writes_nothing() {
+    let legacy = fixture_copy();
+    let before = list_tree(legacy.path());
+    let out = crewd(legacy.path())
+        .args(["import", "--from"])
+        .arg(legacy.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("重叠"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!legacy.path().join("crewd.db").exists());
+    assert!(!legacy.path().join("crewd.lock").exists());
+    assert_eq!(list_tree(legacy.path()), before, "旧目录一个字节都不能变");
+}
+
 #[test]
 fn rpc_error_exits_nonzero() {
     let data = tempfile::tempdir().unwrap();

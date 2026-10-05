@@ -64,6 +64,8 @@ async fn run() -> anyhow::Result<()> {
             let src = from
                 .clone()
                 .unwrap_or_else(crewd_legacy::paths::default_legacy_root);
+            // 先于任何写入（建目录、开库）：数据目录绝不能落在旧数据目录里，反之亦然。
+            crewd_legacy::paths::check_disjoint(&src, &dir)?;
             std::fs::create_dir_all(&dir)?;
             let db = dir.join("crewd.db");
             let mut store = crewd_store::Store::open(&db)?;

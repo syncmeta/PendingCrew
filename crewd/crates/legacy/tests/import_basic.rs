@@ -91,3 +91,70 @@ fn attachment_copy_failure_commits_nothing() {
             .is_none()
     );
 }
+
+/// 把共享夹具复制到临时目录，测试可以随便折腾副本而不碰夹具本身。
+fn fixture_copy() -> tempfile::TempDir {
+    fn cp(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let p = e.unwrap().path();
+            let t = to.join(p.file_name().unwrap());
+            if p.is_dir() {
+                cp(&p, &t);
+            } else {
+                std::fs::copy(&p, &t).unwrap();
+            }
+        }
+    }
+    let t = tempfile::tempdir().unwrap();
+    cp(&fixture(), t.path());
+    t
+}
+
+#[test]
+fn overlapping_source_and_data_dir_is_refused_before_anything_is_written() {
+    let t = fixture_copy();
+    let before = snapshot(t.path());
+    for dest in [t.path().to_path_buf(), t.path().join("crewd")] {
+        let mut store = Store::open_in_memory().unwrap();
+        let err = import(t.path(), &mut store, &dest).unwrap_err();
+        assert!(err.to_string().contains("重叠"), "{dest:?}: {err}");
+        assert!(store.is_empty().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(t.path().join("attachments/local-aaaa/note.txt")).unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            snapshot(t.path()),
+            before,
+            "{dest:?}: 源目录不能多出或改动任何文件"
+        );
+        assert!(!t.path().join("crewd").exists());
+    }
+    // 反过来：源目录在数据目录里面。
+    let mut store = Store::open_in_memory().unwrap();
+    let err = import(&t.path().join("whiteboards"), &mut store, t.path()).unwrap_err();
+    assert!(err.to_string().contains("重叠"), "{err}");
+    assert_eq!(snapshot(t.path()), before);
+}
+
+#[test]
+fn check_disjoint_resolves_dots_and_missing_paths() {
+    use crewd_legacy::paths::check_disjoint;
+    let t = tempfile::tempdir().unwrap();
+    let src = t.path().join("legacy");
+    std::fs::create_dir_all(&src).unwrap();
+    assert!(check_disjoint(&src, &t.path().join("crewd")).is_ok());
+    assert!(
+        check_disjoint(&src, &t.path().join("legacy-2")).is_ok(),
+        "前缀相同不算重叠"
+    );
+    assert!(check_disjoint(&src, &src.join("a/b/c")).is_err());
+    assert!(check_disjoint(&src, &src.join("x/..")).is_err());
+    assert!(check_disjoint(&src.join("."), &src).is_err());
+    assert!(check_disjoint(&src, t.path()).is_err());
+    // 大小写不敏感的文件系统（macOS 默认）上，换个大小写还是同一个目录。
+    if t.path().join("LEGACY").exists() {
+        assert!(check_disjoint(&src, &t.path().join("LEGACY/crewd")).is_err());
+    }
+}
