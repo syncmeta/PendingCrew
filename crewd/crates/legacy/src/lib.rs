@@ -1,40 +1,63 @@
 //! 把旧 Swift 版的 JSON 数据只读地导入 crewd 的 SQLite。源目录一个字节都不改。
-// used from Task 8
-#[allow(dead_code)]
 mod crews;
-pub mod paths;
-// used from Task 6-8
-#[allow(dead_code)]
 mod model;
+pub mod paths;
 mod report;
-// used from Task 6-8
-#[allow(dead_code)]
 mod rows;
-// used from Task 8
-#[allow(dead_code)]
 mod sessions;
 
-// used from Task 8
-#[allow(dead_code)]
 mod archive;
-// used from Task 8
-#[allow(dead_code)]
 mod todos;
-// used from Task 8
-#[allow(dead_code)]
 mod whiteboard;
 
 pub use report::{ImportReport, Skipped};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-// used from Task 6-8
-#[allow(dead_code)]
 pub(crate) struct Ctx<'a> {
     pub src: &'a Path,
     pub report: &'a mut ImportReport,
     pub consumed: &'a mut BTreeSet<PathBuf>,
     pub rewrite: &'a paths::PathRewrite,
+}
+
+/// 只读导入整个旧数据目录到 `store`（应为空库）。全部写入在一个事务里，失败则什么都不留。
+/// 附件在事务提交后复制到 `dest_data_dir/attachments`。
+pub fn import(
+    src: &Path,
+    store: &mut crewd_store::Store,
+    dest_data_dir: &Path,
+) -> anyhow::Result<ImportReport> {
+    anyhow::ensure!(src.is_dir(), "旧数据目录不存在: {}", src.display());
+    let mut report = ImportReport::default();
+    let mut consumed = BTreeSet::new();
+    let rewrite = paths::PathRewrite {
+        from: src.join("attachments"),
+        to: dest_data_dir.join("attachments"),
+    };
+    store.with_tx(|tx| {
+        let mut cx = Ctx {
+            src,
+            report: &mut report,
+            consumed: &mut consumed,
+            rewrite: &rewrite,
+        };
+        let crews = crews::import(tx, &mut cx)?;
+        sessions::import(tx, &mut cx, &crews)?;
+        for c in &crews {
+            whiteboard::import_board(tx, &mut cx, &c.id)?;
+            todos::import(tx, &mut cx, &c.id, crewd_proto::Ledger::Agent)?;
+            todos::import(tx, &mut cx, &c.id, crewd_proto::Ledger::Human)?;
+        }
+        whiteboard::import_outbox(tx, &mut cx)?;
+        archive::import_rest(tx, &mut cx)?;
+        crewd_store::meta_set(tx, "importedAt", &crewd_store::now_ts())?;
+        crewd_store::meta_set(tx, "importSource", &src.display().to_string())?;
+        Ok(())
+    })?;
+    let copied = paths::copy_dir(&src.join("attachments"), &dest_data_dir.join("attachments"))?;
+    report.add("attachmentFiles", copied);
+    Ok(report)
 }
 
 #[cfg(test)]
