@@ -51,7 +51,17 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
         tokio::select! {
             _ = &mut shutdown => break,
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+                let stream = match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(e) => {
+                        eprintln!("crewd: accept 失败: {e}");
+                        // 句柄耗尽（EMFILE/ENFILE）时别空转。
+                        if matches!(e.raw_os_error(), Some(23) | Some(24)) {
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                        continue;
+                    }
+                };
                 let st = state.clone();
                 tokio::spawn(async move {
                     if let Err(e) = conn::run(st, stream).await {

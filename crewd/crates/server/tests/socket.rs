@@ -205,3 +205,87 @@ async fn second_instance_on_same_dir_is_refused_and_stale_socket_is_ignored() {
         .unwrap_err();
     assert!(err.to_string().contains("另一个 crewd"), "{err}");
 }
+
+#[tokio::test]
+async fn invalid_utf8_gets_parse_error_and_connection_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    c.wr.write_all(&[0xff, 0xfe, b'\n']).await.unwrap();
+    match c.next().await {
+        ServerFrame::Response(r) => {
+            assert_eq!(r.id, 0);
+            assert_eq!(r.error.unwrap().code, -32700);
+        }
+        other => panic!("{other:?}"),
+    }
+    let h = c.call(1, "system.hello", Value::Null).await;
+    assert_eq!(h["apiVersion"], 1);
+}
+
+#[tokio::test]
+async fn repeated_subscribe_does_not_duplicate_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut sub = Client::connect(dir.path()).await;
+    sub.call(1, "events.subscribe", json!({"topics":["whiteboard"]}))
+        .await;
+    sub.call(2, "events.subscribe", json!({"topics":["whiteboard"]}))
+        .await;
+
+    let mut poster = Client::connect(dir.path()).await;
+    poster
+        .call(
+            1,
+            "whiteboard.post",
+            json!({"crewId":"a","text":"一次","senderKind":"user"}),
+        )
+        .await;
+
+    match sub.next().await {
+        ServerFrame::Event(e) => assert_eq!(e.data["text"], "一次"),
+        other => panic!("{other:?}"),
+    }
+    // 给可能存在的重复事件留出时间，再确认下一帧就是 hello 的响应。
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let h = sub.call(3, "system.hello", Value::Null).await;
+    assert_eq!(h["apiVersion"], 1);
+}
+
+#[tokio::test]
+async fn subscriber_of_other_topic_gets_no_whiteboard_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut sub = Client::connect(dir.path()).await;
+    sub.call(1, "events.subscribe", json!({"topics":["todo"]}))
+        .await;
+
+    let mut poster = Client::connect(dir.path()).await;
+    poster
+        .call(
+            1,
+            "whiteboard.post",
+            json!({"crewId":"a","text":"不该收到","senderKind":"user"}),
+        )
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let h = sub.call(2, "system.hello", Value::Null).await;
+    assert_eq!(h["apiVersion"], 1);
+}
+
+#[tokio::test]
+async fn subscribe_with_empty_topics_is_invalid_params() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    c.send_raw(r#"{"id":1,"method":"events.subscribe","params":{"topics":[]}}"#)
+        .await;
+    match c.next().await {
+        ServerFrame::Response(r) => {
+            assert_eq!(r.id, 1);
+            assert_eq!(r.error.unwrap().code, -32602);
+        }
+        other => panic!("{other:?}"),
+    }
+}

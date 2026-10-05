@@ -70,20 +70,20 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 attachments: vec![],
                 created_at: crewd_store::now_ts(),
             };
-            {
-                let s = state.store.lock().await;
-                if !crewd_store::crews::exists(s.conn(), &msg.crew_id).map_err(internal)? {
-                    return Err(invalid(format!("机组不存在: {}", msg.crew_id)));
-                }
-                msg.seq = crewd_store::messages::insert(s.conn(), &msg, None)
-                    .map_err(internal)?
-                    .ok_or_else(|| internal("新消息 id 冲突"))?;
+            // 持锁期间发布事件，保证事件顺序与 seq 一致。
+            let s = state.store.lock().await;
+            if !crewd_store::crews::exists(s.conn(), &msg.crew_id).map_err(internal)? {
+                return Err(invalid(format!("机组不存在: {}", msg.crew_id)));
             }
+            msg.seq = crewd_store::messages::insert(s.conn(), &msg, None)
+                .map_err(internal)?
+                .ok_or_else(|| internal("新消息 id 冲突"))?;
             let v = to_value(&msg)?;
             state.hub.publish(Event {
                 event: events::WHITEBOARD_APPENDED.into(),
                 data: v.clone(),
             });
+            drop(s);
             Ok(v)
         }
         methods::TODO_LIST => {
