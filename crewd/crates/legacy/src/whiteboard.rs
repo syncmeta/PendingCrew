@@ -13,7 +13,10 @@ pub fn import_board(tx: &Connection, cx: &mut Ctx, crew_id: &str) -> crewd_store
     let path = cx.src.join("whiteboards").join(format!("{crew_id}.json"));
     let rows: Vec<LMessage> = read_rows(cx, &path);
     for m in rows {
-        insert_one(tx, cx, crew_id, m)?;
+        if !insert_one(tx, cx, crew_id, m)? {
+            // 这行没完整进库（重复 id 或嵌套未知键）：整份文件留给归档原样保存。
+            cx.consumed.remove(&path);
+        }
     }
     Ok(())
 }
@@ -50,23 +53,27 @@ pub fn import_outbox(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<()> {
                 .skip(cx.src, &f, None, format!("所属机组 {crew_id} 不存在"));
             continue;
         }
-        cx.consumed.insert(f.clone());
         cx.report.bump("outboxMessages");
-        insert_one(tx, cx, &crew_id, m)?;
+        if insert_one(tx, cx, &crew_id, m)? {
+            cx.consumed.insert(f.clone());
+        }
     }
     Ok(())
 }
 
+/// 导入一行；返回 false 表示这行没完整进库（id 重复，或嵌套对象里有没处放的键）。
+/// 旧版合成的读失败警示行有意丢弃，算处理完。
 fn insert_one(
     tx: &Connection,
     cx: &mut Ctx,
     crew_id: &str,
     m: LMessage,
-) -> crewd_store::Result<()> {
+) -> crewd_store::Result<bool> {
     if m.id == READ_FAILURE_ID {
         cx.report.bump("syntheticRowsDropped");
-        return Ok(());
+        return Ok(true);
     }
+    let nested_extra = m.has_nested_extra();
     let created_at = norm_ts(cx, &m.created_at);
     let mut attachments = Vec::with_capacity(m.attachments.len());
     for a in m.attachments {
@@ -93,9 +100,19 @@ fn insert_one(
         attachments,
         created_at,
     };
-    match crewd_store::messages::insert(tx, &msg, Some(&Value::Object(m.extra)))? {
-        Some(_) => cx.report.bump("messages"),
-        None => cx.report.bump("duplicateMessages"),
-    }
-    Ok(())
+    Ok(
+        match crewd_store::messages::insert(tx, &msg, Some(&Value::Object(m.extra)))? {
+            Some(_) => {
+                cx.report.bump("messages");
+                if nested_extra {
+                    cx.report.bump("rowsWithUnmodeledNestedFields");
+                }
+                !nested_extra
+            }
+            None => {
+                cx.report.bump("duplicateMessages");
+                false
+            }
+        },
+    )
 }

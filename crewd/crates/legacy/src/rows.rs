@@ -50,11 +50,19 @@ pub fn read_rows_indexed<T: DeserializeOwned>(cx: &mut Ctx, path: &Path) -> Vec<
         return vec![];
     };
     let mut out = Vec::with_capacity(values.len());
+    let mut any_bad = false;
     for (i, v) in values.into_iter().enumerate() {
         match serde_json::from_value::<T>(v) {
             Ok(t) => out.push((i, t)),
-            Err(e) => cx.report.skip(cx.src, path, Some(i), e.to_string()),
+            Err(e) => {
+                any_bad = true;
+                cx.report.skip(cx.src, path, Some(i), e.to_string());
+            }
         }
+    }
+    if any_bad {
+        // 有行没进库：整份文件留给归档原样保存（解出来的行照常导入）。
+        cx.consumed.remove(path);
     }
     out
 }

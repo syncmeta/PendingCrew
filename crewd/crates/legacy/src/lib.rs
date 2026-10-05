@@ -142,8 +142,24 @@ mod tests {
         assert_eq!(r.skipped.len(), 3);
         assert_eq!(r.skipped[0].file, "good.json");
         assert_eq!(r.skipped[0].index, Some(1));
-        assert!(c.contains(&good));
+        assert!(
+            !c.contains(&good),
+            "有一行没解出来：整份文件留给归档原样保存，好行照常导入"
+        );
         assert!(!c.contains(&bad), "坏文件不算 consumed，留给归档原样保存");
+        let clean = dir.path().join("clean.json");
+        fs::write(&clean, r#"[{"id":"a","mime":"x","path":"/p"}]"#).unwrap();
+        let mut cx = Ctx {
+            src: dir.path(),
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        assert_eq!(
+            rows::read_rows::<model::LAttachment>(&mut cx, &clean).len(),
+            1
+        );
+        assert!(c.contains(&clean), "每行都进库了才算 consumed");
     }
 
     #[test]
@@ -226,6 +242,32 @@ mod tests {
         assert_eq!(w.model.as_deref(), Some("gpt-5.6"));
         let old = ses.iter().find(|s| s.id == "worker-3333cccc").unwrap();
         assert_eq!(old.agent_kind, "unknown");
+
+        let extra_of = |id: &str| -> serde_json::Value {
+            let s: Option<String> = store
+                .conn()
+                .query_row("SELECT extra FROM sessions WHERE id=?1", [id], |x| x.get(0))
+                .unwrap();
+            s.map(|s| serde_json::from_str(&s).unwrap())
+                .unwrap_or(serde_json::Value::Null)
+        };
+        let w_extra = extra_of("worker-2222bbbb");
+        assert_eq!(
+            w_extra["member"]["extensionNumber"], 2,
+            "成员表里的未知字段并进 session.extra.member：{w_extra}"
+        );
+        assert!(
+            extra_of("worker-2222bbbb")
+                .to_string()
+                .contains(r#""extensionNumber":2"#)
+        );
+        let cap_extra = extra_of("captain-1111aaaa");
+        assert_eq!(cap_extra["structuredPost"], true, "记录自己的 extra 保留");
+        assert!(cap_extra.get("member").is_none(), "成员没有多余字段就不加");
+        assert!(
+            !c.contains(&src.join("local-crews.json")),
+            "local-crews.json 总是原样归档（nextCrewNumber、成员 createdAt 等都在里面）"
+        );
 
         assert_eq!(r.counts["crews"], 3);
         assert_eq!(r.counts["sessions"], 3);
@@ -455,8 +497,31 @@ mod tests {
         assert!(!paths.iter().any(|p| p.ends_with(".cursor")));
         assert!(!paths.iter().any(|p| p.starts_with("attachments/")));
         assert!(
-            !paths.iter().any(|p| p == "whiteboards/local-aaaa.json"),
-            "已导入的不重复归档"
+            paths.contains(&"whiteboards/local-aaaa.json".to_string()),
+            "有坏行（下标 2）的白板：好行照常导入，整份文件也原样归档"
+        );
+        assert_eq!(
+            crewd_store::archive::get(store.conn(), "whiteboards/local-aaaa.json")
+                .unwrap()
+                .unwrap(),
+            fs::read(src.join("whiteboards/local-aaaa.json")).unwrap()
+        );
+        assert_eq!(
+            crewd_store::archive::get(store.conn(), "local-crews.json")
+                .unwrap()
+                .unwrap(),
+            fs::read(src.join("local-crews.json")).unwrap(),
+            "local-crews.json 总是原样归档"
+        );
+        assert!(
+            paths.contains(&"whiteboards/agent-sessions.json".to_string()),
+            "有落选（被更新记录取代）的 session 记录：整份原样归档，旧的 agentSessionId 不丢"
+        );
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p == "whiteboards/local-aaaa.todos.json"),
+            "全部进库的账本不重复归档"
         );
         assert!(
             !paths.iter().any(|p| p.starts_with("whiteboards/outbox/")),
@@ -503,6 +568,82 @@ mod tests {
             2
         );
         assert_eq!(r.counts["duplicateMessages"], 2);
+    }
+
+    #[test]
+    fn rows_that_do_not_reach_the_store_keep_their_file_for_the_archive() {
+        let crews = r#"{"crews":[{"id":"c1","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}]}"#;
+        // 一条 session 记录指向不存在的机组 → 这行进不了库。
+        let recs = session_rec("worker-x", "nope", "a", "2026-09-01T09:00:00Z");
+        let src = legacy_root(crews, &format!("[{recs}]"));
+        // 同一个 id 出现两次、内容不同 → 第二行进不了库。
+        let board = r#"[
+            {"id":"m1","senderKind":"user","text":"first","createdAt":"2026-09-01T01:00:00Z"},
+            {"id":"m1","senderKind":"user","text":"different","createdAt":"2026-09-01T02:00:00Z"}
+        ]"#;
+        fs::write(src.path().join("whiteboards/c1.json"), board).unwrap();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let r = import_parts(src.path(), &store);
+        assert_eq!(r.counts["messages"], 1);
+        assert_eq!(r.counts["duplicateMessages"], 1);
+        let paths = crewd_store::archive::list_paths(store.conn()).unwrap();
+        assert!(
+            paths.contains(&"whiteboards/c1.json".to_string()),
+            "{paths:?}"
+        );
+        assert!(
+            paths.contains(&"whiteboards/agent-sessions.json".to_string()),
+            "{paths:?}"
+        );
+        assert!(paths.contains(&"local-crews.json".to_string()), "{paths:?}");
+    }
+
+    #[test]
+    fn unmodeled_fields_inside_nested_objects_keep_their_file_for_the_archive() {
+        let crews = r#"{"crews":[{"id":"c1","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"},
+                                 {"id":"c2","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}]}"#;
+        let src = legacy_root(crews, "[]");
+        // mention / attachment 里有没建模的键：行能进库，但这些键没地方放。
+        fs::write(
+            src.path().join("whiteboards/c1.json"),
+            r#"[{"id":"m1","senderKind":"user","text":"t","createdAt":"2026-09-01T01:00:00Z",
+                 "mentions":[{"kind":"session","target_id":"w","label":"@w"}]}]"#,
+        )
+        .unwrap();
+        fs::write(
+            src.path().join("whiteboards/c2.json"),
+            r#"[{"id":"m2","senderKind":"user","text":"t","createdAt":"2026-09-01T01:00:00Z"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            src.path().join("whiteboards/c1.todos.json"),
+            r#"[{"id":"t1","number":1,"text":"x","status":"open","createdAt":"2026-09-01T01:00:00Z",
+                 "responses":[{"id":"r1","sessionId":"w","text":"ok","createdAt":"2026-09-01T02:00:00Z","reaction":"👍"}]}]"#,
+        )
+        .unwrap();
+        fs::write(
+            src.path().join("whiteboards/c2.todos.json"),
+            r#"[{"id":"t2","number":1,"text":"x","status":"open","createdAt":"2026-09-01T01:00:00Z",
+                 "attachments":[{"id":"a","mime":"x","path":"/p","width":3}]}]"#,
+        )
+        .unwrap();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let r = import_parts(src.path(), &store);
+        assert_eq!(r.counts["messages"], 2);
+        assert_eq!(r.counts["agentTodos"], 2);
+        assert_eq!(r.counts["rowsWithUnmodeledNestedFields"], 3);
+        let paths = crewd_store::archive::list_paths(store.conn()).unwrap();
+        for p in [
+            "whiteboards/c1.json",
+            "whiteboards/c1.todos.json",
+            "whiteboards/c2.todos.json",
+        ] {
+            assert!(paths.contains(&p.to_string()), "{p}: {paths:?}");
+        }
+        assert!(
+            !paths.contains(&"whiteboards/c2.json".to_string()),
+            "全建模的文件不重复归档"
+        );
     }
 
     #[test]

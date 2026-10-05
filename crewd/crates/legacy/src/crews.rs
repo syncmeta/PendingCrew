@@ -28,12 +28,12 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             return Ok(vec![]);
         }
     };
+    // 这个文件从不标 consumed：归档总会原样保存它。顶层的 nextCrewNumber、成员的 createdAt、
+    // 坏掉的机组行等没有建模的东西都还在原件里。
     let Some(rows) = file.get("crews").and_then(Value::as_array).cloned() else {
-        // 不标 consumed：归档会原样保存这个文件。
         cx.report.skip(cx.src, &path, None, "缺少 crews 数组");
         return Ok(vec![]);
     };
-    cx.consumed.insert(path.clone());
 
     let mut crews = Vec::new();
     let mut parents: Vec<(String, Vec<String>)> = Vec::new();

@@ -22,6 +22,7 @@ pub fn import(
         .join(format!("{crew_id}.{suffix}.json"));
     let rows: Vec<(usize, LTodo)> = read_rows_indexed(cx, &path);
     for (index, t) in rows {
+        let nested_extra = t.has_nested_extra();
         let mut responses = Vec::with_capacity(t.responses.len());
         for r in t.responses {
             let mut atts = Vec::with_capacity(r.attachments.len());
@@ -64,6 +65,11 @@ pub fn import(
             Ok(()) => {
                 cx.report.bump(count_key);
                 cx.report.add("todoResponses", n_resp);
+                if nested_extra {
+                    // 嵌套对象的未知键没有列可放：整份文件留给归档原样保存。
+                    cx.report.bump("rowsWithUnmodeledNestedFields");
+                    cx.consumed.remove(&path);
+                }
             }
             Err(StoreError::Sql(e)) if crewd_store::is_unique_violation(&e) => {
                 cx.report.skip(

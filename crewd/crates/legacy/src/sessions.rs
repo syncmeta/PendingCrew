@@ -1,11 +1,11 @@
 use crate::Ctx;
 use crate::crews::ImportedCrew;
-use crate::model::LAgentSession;
+use crate::model::{LAgentSession, LMember};
 use crate::rows::{norm_ts, read_rows};
 use chrono::DateTime;
 use crewd_proto::Session;
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn role_of(session_id: &str) -> String {
@@ -28,6 +28,16 @@ fn is_newer(a: &str, b: &str) -> bool {
     }
 }
 
+/// 成员表里没建模的字段（如 `extensionNumber`）放进 session extra 的 `member` 键。
+fn with_member_extra(mut extra: Map<String, Value>, m: Option<&LMember>) -> Map<String, Value> {
+    if let Some(m) = m
+        && !m.extra.is_empty()
+    {
+        extra.insert("member".into(), Value::Object(m.extra.clone()));
+    }
+    extra
+}
+
 /// session = `agent-sessions.json` 的记录（同 id 取 updatedAt 最新）+ 机组成员表里的显示名；
 /// 只在成员表里出现、没有记录的，以 agent_kind="unknown" 入库。
 pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_store::Result<()> {
@@ -37,8 +47,10 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
     let mut by_id: BTreeMap<String, LAgentSession> = BTreeMap::new();
     for r in recs {
         if let Some(old) = by_id.get(&r.session_id) {
-            // 每条落选的记录（新来的或已存的）只计一次。
+            // 每条落选的记录（新来的或已存的）只计一次。落选的记录不进库（例如旧的
+            // agentSessionId），所以整份文件留给归档原样保存。
             cx.report.bump("sessionRecordsSuperseded");
+            cx.consumed.remove(&path);
             if !is_newer(&r.updated_at, &old.updated_at) {
                 continue;
             }
@@ -46,13 +58,9 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
         by_id.insert(r.session_id.clone(), r);
     }
 
-    let names: BTreeMap<String, String> = crews
+    let members: BTreeMap<&str, &LMember> = crews
         .iter()
-        .flat_map(|c| {
-            c.members
-                .iter()
-                .map(|m| (m.session_id.clone(), m.display_name.clone()))
-        })
+        .flat_map(|c| c.members.iter().map(|m| (m.session_id.as_str(), m)))
         .collect();
     let mut seen = BTreeSet::new();
 
@@ -65,6 +73,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
                 None,
                 format!("session {} 的机组 {} 不存在", r.session_id, r.crew_id),
             );
+            cx.consumed.remove(&path);
             continue;
         }
         let s = Session {
@@ -73,13 +82,16 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
             role: role_of(&r.session_id),
             agent_kind: r.kind.clone(),
             agent_session_id: Some(r.agent_session_id.clone()),
-            display_name: names.get(&r.session_id).cloned(),
+            display_name: members
+                .get(r.session_id.as_str())
+                .map(|m| m.display_name.clone()),
             working_directory: r.working_directory.clone(),
             model: r.model.clone(),
             effort: r.effort.clone(),
             updated_at: norm_ts(cx, &r.updated_at),
         };
-        crewd_store::sessions::upsert(tx, &s, Some(&Value::Object(r.extra)))?;
+        let extra = with_member_extra(r.extra, members.get(r.session_id.as_str()).copied());
+        crewd_store::sessions::upsert(tx, &s, Some(&Value::Object(extra)))?;
         cx.report.bump("sessions");
         seen.insert(r.session_id);
     }
@@ -101,7 +113,9 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
                 effort: None,
                 updated_at: norm_ts(cx, &m.created_at),
             };
-            crewd_store::sessions::upsert(tx, &s, None)?;
+            let extra = with_member_extra(Map::new(), Some(m));
+            let extra = (!extra.is_empty()).then_some(Value::Object(extra));
+            crewd_store::sessions::upsert(tx, &s, extra.as_ref())?;
             cx.report.bump("sessions");
             cx.report.bump("sessionsWithoutRecord");
         }
