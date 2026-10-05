@@ -1,0 +1,17 @@
+[package]
+name = "crewd-server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+crewd-proto = { version = "0.1.0", path = "../proto" }
+crewd-store = { version = "0.1.0", path = "../store" }
+serde = "1.0.229"
+serde_json = "1.0.151"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+uuid = { version = "1.27.0", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

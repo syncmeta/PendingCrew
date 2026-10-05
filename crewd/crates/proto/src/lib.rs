@@ -27,6 +27,7 @@ pub mod events {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Request {
+    /// 客户端必须从 1 开始编号：0 保留给「请求无法解析」时服务端回的错误响应。
     pub id: u64,
     pub method: String,
     #[serde(default)]
