@@ -38,13 +38,21 @@ pub fn read_array(cx: &mut Ctx, path: &Path) -> Option<Vec<Value>> {
 
 /// 逐行解码；坏行记跳过（带下标），其余照收。
 pub fn read_rows<T: DeserializeOwned>(cx: &mut Ctx, path: &Path) -> Vec<T> {
+    read_rows_indexed(cx, path)
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect()
+}
+
+/// 同 `read_rows`，但每行带它在源数组里的下标，便于后续阶段按行报告。
+pub fn read_rows_indexed<T: DeserializeOwned>(cx: &mut Ctx, path: &Path) -> Vec<(usize, T)> {
     let Some(values) = read_array(cx, path) else {
         return vec![];
     };
     let mut out = Vec::with_capacity(values.len());
     for (i, v) in values.into_iter().enumerate() {
         match serde_json::from_value::<T>(v) {
-            Ok(t) => out.push(t),
+            Ok(t) => out.push((i, t)),
             Err(e) => cx.report.skip(cx.src, path, Some(i), e.to_string()),
         }
     }

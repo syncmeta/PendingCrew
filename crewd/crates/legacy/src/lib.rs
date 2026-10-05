@@ -409,6 +409,10 @@ mod tests {
             !paths.iter().any(|p| p == "whiteboards/local-aaaa.json"),
             "已导入的不重复归档"
         );
+        assert!(
+            !paths.iter().any(|p| p.starts_with("whiteboards/outbox/")),
+            "已导入的 outbox 文件不重复归档"
+        );
 
         assert_eq!(r.counts["messages"], 3);
         assert_eq!(r.counts["outboxMessages"], 1);
@@ -450,5 +454,56 @@ mod tests {
             2
         );
         assert_eq!(r.counts["duplicateMessages"], 2);
+    }
+
+    #[test]
+    fn duplicate_todo_number_is_skipped_by_index_and_ledger_file_is_archived() {
+        let crews = r#"{"crews":[{"id":"c1","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}]}"#;
+        let src = legacy_root(crews, "[]");
+        let todos_json = r#"[
+            {"id":"t-a","number":1,"text":"first","status":"open","createdAt":"2026-09-01T01:00:00Z"},
+            {"id":"t-b","number":1,"text":"same number","status":"open","createdAt":"2026-09-01T02:00:00Z",
+             "responses":[{"id":"r-b","sessionId":"worker-1","text":"done","createdAt":"2026-09-01T03:00:00Z"}]}
+        ]"#;
+        fs::write(src.path().join("whiteboards/c1.todos.json"), todos_json).unwrap();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let (mut r, mut c, rw) = ctx_parts(src.path());
+        let mut cx = Ctx {
+            src: src.path(),
+            report: &mut r,
+            consumed: &mut c,
+            rewrite: &rw,
+        };
+        let imported = crews::import(store.conn(), &mut cx).unwrap();
+        todos::import(store.conn(), &mut cx, "c1", crewd_proto::Ledger::Agent).unwrap();
+        archive::import_rest(store.conn(), &mut cx).unwrap();
+
+        let list =
+            crewd_store::todos::list(store.conn(), &imported[0].id, crewd_proto::Ledger::Agent)
+                .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "t-a");
+        assert_eq!(r.counts["agentTodos"], 1);
+        assert_eq!(r.counts.get("todoResponses").copied().unwrap_or(0), 0);
+        let sk: Vec<_> = r
+            .skipped
+            .iter()
+            .filter(|s| s.file == "whiteboards/c1.todos.json")
+            .collect();
+        assert_eq!(sk.len(), 1);
+        assert_eq!(sk[0].index, Some(1));
+        assert!(sk[0].reason.contains("#1") && sk[0].reason.contains("t-b"));
+        let orphans: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM todo_responses", [], |x| x.get(0))
+            .unwrap();
+        assert_eq!(orphans, 0, "被跳过的 todo 不留下任何 response");
+
+        let paths = crewd_store::archive::list_paths(store.conn()).unwrap();
+        assert!(paths.contains(&"whiteboards/c1.todos.json".to_string()));
+        let raw = crewd_store::archive::get(store.conn(), "whiteboards/c1.todos.json")
+            .unwrap()
+            .unwrap();
+        assert_eq!(raw, todos_json.as_bytes(), "原样归档");
     }
 }

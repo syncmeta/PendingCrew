@@ -1,6 +1,6 @@
 use crate::Ctx;
 use crate::model::LTodo;
-use crate::rows::{conv_att, norm_ts, read_rows};
+use crate::rows::{conv_att, norm_ts, read_rows_indexed};
 use crewd_proto::{Ledger, Todo, TodoResponse};
 use crewd_store::StoreError;
 use rusqlite::Connection;
@@ -20,8 +20,8 @@ pub fn import(
         .src
         .join("whiteboards")
         .join(format!("{crew_id}.{suffix}.json"));
-    let rows: Vec<LTodo> = read_rows(cx, &path);
-    for t in rows {
+    let rows: Vec<(usize, LTodo)> = read_rows_indexed(cx, &path);
+    for (index, t) in rows {
         let mut responses = Vec::with_capacity(t.responses.len());
         for r in t.responses {
             let mut atts = Vec::with_capacity(r.attachments.len());
@@ -69,9 +69,11 @@ pub fn import(
                 cx.report.skip(
                     cx.src,
                     &path,
-                    None,
-                    format!("编号 #{} 或 id 重复: {e}", todo.number),
+                    Some(index),
+                    format!("编号 #{} / id {} 重复: {e}", todo.number, todo.id),
                 );
+                // 这行没进库：别把整份文件算作已消费，让归档原样保存它。
+                cx.consumed.remove(&path);
             }
             Err(e) => return Err(e),
         }
