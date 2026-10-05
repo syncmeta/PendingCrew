@@ -183,6 +183,35 @@ fn fresh_data_dir_is_private() {
 }
 
 #[test]
+fn data_dir_is_trimmed_and_tilde_expanded() {
+    let home = tempfile::tempdir().unwrap();
+    for (how, raw, rel) in [
+        ("env", "  ~/from-env \n", "from-env"),
+        ("flag", " ~/from-flag ", "from-flag"),
+    ] {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_crewd"));
+        c.env("HOME", home.path())
+            .env_remove("PENDINGCREW_DATA_DIR");
+        if how == "env" {
+            c.env("CREWD_DATA_DIR", raw);
+        } else {
+            c.env_remove("CREWD_DATA_DIR").args(["--data-dir", raw]);
+        }
+        let out = c
+            .args(["import", "--from"])
+            .arg(fixture())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{how}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(home.path().join(rel).join("crewd.db").exists(), "{how}");
+    }
+}
+
+#[test]
 fn rpc_error_exits_nonzero() {
     let data = tempfile::tempdir().unwrap();
     let _d = start(data.path());

@@ -36,13 +36,21 @@ enum Cmd {
     Schema,
 }
 
+/// `--data-dir` / `CREWD_DATA_DIR`：与 PENDINGCREW_DATA_DIR 同规则——去首尾空白、展开 `~/`；
+/// 空的视为没给。
 fn data_dir(cli: &Cli) -> anyhow::Result<PathBuf> {
-    match &cli.data_dir {
-        Some(d) => Ok(d.clone()),
-        None => Ok(dirs::data_dir()
-            .context("无法确定用户数据目录")?
-            .join("crewd")),
+    if let Some(d) = &cli.data_dir {
+        match d.to_str() {
+            Some(s) if !s.trim().is_empty() => {
+                return Ok(crewd_legacy::paths::expand_tilde(s.trim()));
+            }
+            Some(_) => {}
+            None => return Ok(d.clone()),
+        }
     }
+    Ok(dirs::data_dir()
+        .context("无法确定用户数据目录")?
+        .join("crewd"))
 }
 
 #[tokio::main]

@@ -14,7 +14,8 @@ pub fn default_legacy_root() -> PathBuf {
         .join("PendingCrew")
 }
 
-fn expand_tilde(s: &str) -> PathBuf {
+/// 展开开头的 `~/`（其余原样）。用于环境变量里的路径：shell 不会替它们展开。
+pub fn expand_tilde(s: &str) -> PathBuf {
     if let Some(rest) = s.strip_prefix("~/")
         && let Some(home) = dirs::home_dir()
     {
