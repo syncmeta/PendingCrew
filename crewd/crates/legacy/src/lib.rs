@@ -131,12 +131,21 @@ mod tests {
             consumed: &mut c,
             rewrite: &rw,
         };
-        let rows: Vec<model::LAttachment> = rows::read_rows(&mut cx, &good);
+        let rows: Vec<model::LAttachment> = rows::read_rows(&mut cx, &good).unwrap();
         assert_eq!(rows.len(), 2);
-        assert!(rows::read_rows::<model::LAttachment>(&mut cx, &bad).is_empty());
-        assert!(rows::read_rows::<model::LAttachment>(&mut cx, &obj).is_empty());
+        assert!(
+            rows::read_rows::<model::LAttachment>(&mut cx, &bad)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            rows::read_rows::<model::LAttachment>(&mut cx, &obj)
+                .unwrap()
+                .is_empty()
+        );
         assert!(
             rows::read_rows::<model::LAttachment>(&mut cx, &dir.path().join("missing.json"))
+                .unwrap()
                 .is_empty()
         );
         assert_eq!(r.skipped.len(), 3);
@@ -156,7 +165,9 @@ mod tests {
             rewrite: &rw,
         };
         assert_eq!(
-            rows::read_rows::<model::LAttachment>(&mut cx, &clean).len(),
+            rows::read_rows::<model::LAttachment>(&mut cx, &clean)
+                .unwrap()
+                .len(),
             1
         );
         assert!(c.contains(&clean), "每行都进库了才算 consumed");

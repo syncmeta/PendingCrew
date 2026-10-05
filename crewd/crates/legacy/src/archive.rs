@@ -1,5 +1,6 @@
 //! 没被建模导入、也不是缓存的文件，原样存进 legacy_archive（键 = 相对源目录的路径）。
 use crate::Ctx;
+use crate::rows::{io_fatal, read_file};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
@@ -45,15 +46,16 @@ pub fn import_rest(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<()> {
 }
 
 fn walk(tx: &Connection, cx: &mut Ctx, dir: &Path, top: bool) -> crewd_store::Result<()> {
+    // 读不出（权限等）是致命的：中止导入、整体回滚，修好后重试；绝不悄悄少归档一个文件。
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
-        Err(e) => {
-            cx.report
-                .skip(cx.src, dir, None, format!("目录读不出: {e}"));
-            return Ok(());
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_fatal(dir, e)),
     };
-    let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    let mut entries: Vec<PathBuf> = Vec::new();
+    for e in rd {
+        entries.push(e.map_err(|e| io_fatal(dir, e))?.path());
+    }
     entries.sort();
     for p in entries {
         let name = p
@@ -70,13 +72,11 @@ fn walk(tx: &Connection, cx: &mut Ctx, dir: &Path, top: bool) -> crewd_store::Re
         if is_runtime_file(&name) || cx.consumed.contains(&p) {
             continue;
         }
-        match std::fs::read(&p) {
-            Ok(bytes) => {
-                let key = p.strip_prefix(cx.src).unwrap_or(&p).display().to_string();
-                crewd_store::archive::put(tx, &key, &bytes)?;
-                cx.report.bump("archivedFiles");
-            }
-            Err(e) => cx.report.skip(cx.src, &p, None, format!("读取失败: {e}")),
+        // 列目录之后消失的文件没有可存的内容，跳过即可。
+        if let Some(bytes) = read_file(&p)? {
+            let key = p.strip_prefix(cx.src).unwrap_or(&p).display().to_string();
+            crewd_store::archive::put(tx, &key, &bytes)?;
+            cx.report.bump("archivedFiles");
         }
     }
     Ok(())

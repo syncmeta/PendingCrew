@@ -158,3 +158,56 @@ fn check_disjoint_resolves_dots_and_missing_paths() {
         assert!(check_disjoint(&src, &t.path().join("LEGACY/crewd")).is_err());
     }
 }
+
+/// 测试结束（含 panic）时把权限改回去，临时目录才删得掉。
+struct RestoreMode(std::path::PathBuf, u32);
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(self.1));
+    }
+}
+
+#[test]
+fn unreadable_legacy_file_aborts_the_import_and_leaves_the_store_empty() {
+    use std::os::unix::fs::PermissionsExt;
+    for rel in [
+        "local-crews.json",
+        "whiteboards/agent-sessions.json",
+        "whiteboards/local-aaaa.json",
+        "whiteboards/local-aaaa.todos.json",
+        "whiteboards/outbox/local-aaaa.1757594300000.1.11111111-0000-4000-8000-000000000004.json",
+        "whiteboards/outbox",
+        "crew-arrangement.json",
+        "whiteboards",
+    ] {
+        let t = fixture_copy();
+        let target = t.path().join(rel);
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let _restore = RestoreMode(target.clone(), mode);
+        let probe = if target.is_dir() {
+            std::fs::read_dir(&target).map(|_| ())
+        } else {
+            std::fs::read(&target).map(|_| ())
+        };
+        if probe.is_ok() {
+            eprintln!("以 root 运行，权限挡不住读取：跳过");
+            return;
+        }
+        let dest = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+        let err = import(t.path(), &mut store, dest.path()).unwrap_err();
+        assert!(format!("{err:#}").contains(rel), "{rel}: {err:#}");
+        assert!(store.is_empty().unwrap(), "{rel}: I/O 失败必须整体回滚");
+        let rows: i64 = store
+            .conn()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM sessions) + (SELECT COUNT(*) FROM todos) + (SELECT COUNT(*) FROM legacy_archive) + (SELECT COUNT(*) FROM meta WHERE key LIKE 'import%')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "{rel}: 回滚后可以重试");
+    }
+}

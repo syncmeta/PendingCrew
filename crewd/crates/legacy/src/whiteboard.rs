@@ -1,6 +1,6 @@
 use crate::Ctx;
 use crate::model::LMessage;
-use crate::rows::{conv_att, norm_ts, read_rows};
+use crate::rows::{conv_att, io_fatal, norm_ts, read_file, read_rows};
 use crewd_proto::{Mention, Message};
 use rusqlite::Connection;
 use serde_json::Value;
@@ -11,7 +11,7 @@ const READ_FAILURE_ID: &str = "whiteboard-read-failure";
 
 pub fn import_board(tx: &Connection, cx: &mut Ctx, crew_id: &str) -> crewd_store::Result<()> {
     let path = cx.src.join("whiteboards").join(format!("{crew_id}.json"));
-    let rows: Vec<LMessage> = read_rows(cx, &path);
+    let rows: Vec<LMessage> = read_rows(cx, &path)?;
     for m in rows {
         if !insert_one(tx, cx, crew_id, m)? {
             // 这行没完整进库（重复 id 或嵌套未知键）：整份文件留给归档原样保存。
@@ -24,13 +24,18 @@ pub fn import_board(tx: &Connection, cx: &mut Ctx, crew_id: &str) -> crewd_store
 /// `whiteboards/outbox/<crewId>.<ts>.<seq>.<uuid>.json`：还没合并进白板的写入。按文件名排序导入。
 pub fn import_outbox(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<()> {
     let dir = cx.src.join("whiteboards").join("outbox");
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return Ok(());
+    let rd = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_fatal(&dir, e)),
     };
-    let mut files: Vec<PathBuf> = rd
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .collect();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for e in rd {
+        let p = e.map_err(|e| io_fatal(&dir, e))?.path();
+        if p.extension().is_some_and(|x| x == "json") {
+            files.push(p);
+        }
+    }
     files.sort();
     for f in files {
         let name = f
@@ -38,13 +43,14 @@ pub fn import_outbox(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<()> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let crew_id = name.split('.').next().unwrap_or_default().to_string();
-        let m: LMessage = match std::fs::read(&f)
-            .map_err(|e| e.to_string())
-            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
-        {
+        // 列目录之后被旧版合并删掉了：它已在白板里，不算丢。
+        let Some(bytes) = read_file(&f)? else {
+            continue;
+        };
+        let m: LMessage = match serde_json::from_slice(&bytes) {
             Ok(m) => m,
             Err(e) => {
-                cx.report.skip(cx.src, &f, None, e);
+                cx.report.skip(cx.src, &f, None, e.to_string());
                 continue;
             }
         };

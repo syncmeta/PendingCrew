@@ -42,7 +42,7 @@ fn with_member_extra(mut extra: Map<String, Value>, m: Option<&LMember>) -> Map<
 /// 只在成员表里出现、没有记录的，以 agent_kind="unknown" 入库。
 pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_store::Result<()> {
     let path = cx.src.join("whiteboards").join("agent-sessions.json");
-    let recs: Vec<LAgentSession> = read_rows(cx, &path);
+    let recs: Vec<LAgentSession> = read_rows(cx, &path)?;
 
     let mut by_id: BTreeMap<String, LAgentSession> = BTreeMap::new();
     for r in recs {

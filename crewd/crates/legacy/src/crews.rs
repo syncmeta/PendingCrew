@@ -1,6 +1,6 @@
 use crate::Ctx;
 use crate::model::{LCrew, LMember};
-use crate::rows::norm_ts;
+use crate::rows::{norm_ts, read_file};
 use crewd_proto::Crew;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -13,18 +13,16 @@ pub struct ImportedCrew {
 /// `local-crews.json`：旧版要求整份可解码；这里逐行宽容，坏行跳过。
 pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<ImportedCrew>> {
     let path = cx.src.join("local-crews.json");
-    if !path.exists() {
+    let Some(bytes) = read_file(&path)? else {
         cx.report
             .warn("源目录里没有 local-crews.json，没有机组可导入");
         return Ok(vec![]);
-    }
-    let file: Value = match std::fs::read(&path)
-        .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
-    {
+    };
+    let file: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(e) => {
-            cx.report.skip(cx.src, &path, None, e);
+            cx.report
+                .skip(cx.src, &path, None, format!("JSON 无效: {e}"));
             return Ok(vec![]);
         }
     };

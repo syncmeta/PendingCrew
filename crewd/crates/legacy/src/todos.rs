@@ -20,7 +20,7 @@ pub fn import(
         .src
         .join("whiteboards")
         .join(format!("{crew_id}.{suffix}.json"));
-    let rows: Vec<(usize, LTodo)> = read_rows_indexed(cx, &path);
+    let rows: Vec<(usize, LTodo)> = read_rows_indexed(cx, &path)?;
     for (index, t) in rows {
         let nested_extra = t.has_nested_extra();
         let mut responses = Vec::with_capacity(t.responses.len());
