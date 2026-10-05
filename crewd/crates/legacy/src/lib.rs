@@ -68,6 +68,8 @@ pub fn import(
         archive::import_rest(tx, &mut cx)?;
         crewd_store::meta_set(tx, "importedAt", &crewd_store::now_ts())?;
         crewd_store::meta_set(tx, "importSource", &src.display().to_string())?;
+        // 到这里所有计数都已完成：报告与数据同一个事务落库，不会出现有数据没报告。
+        crewd_store::meta_set(tx, "importReport", &serde_json::to_string(cx.report)?)?;
         Ok(())
     })?;
     Ok(report)

@@ -45,6 +45,14 @@ fn full_import_from_fixture() {
             .unwrap()
             .is_some()
     );
+    let stored: serde_json::Value = serde_json::from_str(
+        &crewd_store::meta_get(store.conn(), "importReport")
+            .unwrap()
+            .expect("导入报告存进 meta.importReport"),
+    )
+    .unwrap();
+    assert_eq!(stored["counts"]["messages"], 3);
+    assert_eq!(stored, serde_json::to_value(&r).unwrap());
     assert_eq!(snapshot(&fixture()), before, "源目录必须一个字节都不变");
 }
 
