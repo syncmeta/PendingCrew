@@ -1,7 +1,10 @@
 //! crewd 的持久化层。crewd 是数据库的唯一写者；其他进程一律经 crewd 的 API。
+pub mod archive;
 pub mod crews;
+pub mod messages;
 pub mod schema;
 pub mod sessions;
+pub mod todos;
 
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -96,7 +99,6 @@ pub fn is_unique_violation(e: &rusqlite::Error) -> bool {
 }
 
 /// 把一列 JSON 文本解成类型；失败转成 rusqlite 的列转换错误，便于在 query_map 里用 `?`。
-#[allow(dead_code)] // used from Task 3
 pub(crate) fn json_col<T: serde::de::DeserializeOwned>(
     row: &rusqlite::Row<'_>,
     idx: usize,
