@@ -29,6 +29,7 @@ final class CrewLocalMentionWaker {
     private let wakeAdmission = AutomaticWakeAdmission()
     /// 拉起缺席目标需要 crew detail —— 从 app 态现取 backend（弱化对 AppModel 的依赖）。
     private let backendProvider: () -> PendingCrewBackend?
+    private var throttledRetries: [String: Task<Void, Never>] = [:]
     private var watchers: [AnyCancellable] = []
     /// 该监听的 crew（有本地 run 的 + 本机全部）。钉不上的留在这儿等下次事件重试。
     private var watched: Set<String> = []
@@ -431,6 +432,11 @@ final class CrewLocalMentionWaker {
                 }
             } catch {
                 if let runnerError = error as? CrewSessionRunner.RunnerError,
+                   case .automaticWakeThrottled = runnerError {
+                    self.retryThrottledDebt(crewId: crewId)
+                    return
+                }
+                if let runnerError = error as? CrewSessionRunner.RunnerError,
                    case .automaticWakeDeferred = runnerError {
                     // Admission has a durable hard stop. Keep the original
                     // whiteboard entry unread; never turn it into a 30-second
@@ -447,6 +453,18 @@ final class CrewLocalMentionWaker {
             }
         }
         return true
+    }
+
+    /// Only rate backpressure retries automatically. IO failures and hard
+    /// circuits retain their debt without starting a retry loop.
+    private func retryThrottledDebt(crewId: String) {
+        guard throttledRetries[crewId] == nil else { return }
+        throttledRetries[crewId] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.throttledRetries.removeValue(forKey: crewId)
+            self.rescueBacklog(crewId, includeOrdinaryUnread: false)
+        }
     }
 }
 #endif

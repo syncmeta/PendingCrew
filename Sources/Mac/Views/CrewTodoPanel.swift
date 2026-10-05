@@ -32,6 +32,7 @@ struct CrewTodoPanel: View {
     @State private var ownRead: LocalTodoStore.LedgerRead = .rows([])
     @State private var loadedLedger: TodoLedger?
     @State private var refreshToken = 0
+    @State private var executionLines: [Int: String] = [:]
     /// agent 那本里**正卡在人类身上**的条目（人类 Todo #139）。看「人类的」那本时
     /// 借显在同一屏里 —— **借显，不是复制**：条目仍只有一条，躺在 agent 那本。
     /// 看「Agent 的」那本时用不上（那本自己就全在 `ownRead` 里），保持空。
@@ -144,10 +145,12 @@ struct CrewTodoPanel: View {
             let store = LocalTodoStore.shared(requestedLedger)
             ownRead = store.read(crewId: crewId)
             loadedLedger = requestedLedger
+            await refreshExecutionLines()
             for await _ in store.todoChanges(crewId: crewId) {
                 guard !Task.isCancelled, ledger == requestedLedger else { return }
                 ownRead = store.read(crewId: crewId)
                 loadedLedger = requestedLedger
+                await refreshExecutionLines()
             }
         }
         // 「人类的」那本还要跟着 agent 那本走 —— 那边翻成 `blocked_on_human` 时，
@@ -171,6 +174,31 @@ struct CrewTodoPanel: View {
                 refreshChiefRows(ledger: requestedLedger)
             }
         }
+    }
+
+    /// Read execution accounting off the rendering path, alongside the feed.
+    private func refreshExecutionLines() async {
+        guard ledger == .agent, crewId != LocalCrew.chiefCrewId,
+              case .rows(let items) = ownRead else { executionLines = [:]; return }
+        let id = crewId
+        let lines = await Task.detached(priority: .utility) {
+            let now = Date()
+            let confirmation = CaptainTodoSweepStore.shared.row(crewId: id).confirmation
+            let owners = CrewSessionsSnapshot.activeOwners(crewId: id,
+                directory: LocalWhiteboardStore.defaultDirectory, now: now) ?? []
+            let names = CrewSessionsSnapshot.displayNames(ofCrew: id, directory: LocalWhiteboardStore.defaultDirectory)
+            let humanOpen: Set<Int>?
+            if case .rows(let humans) = LocalTodoStore.shared(.human).read(crewId: id) {
+                humanOpen = Set(humans.filter { $0.isWaitingOnHuman(in: .human) }.map(\.number))
+            } else { humanOpen = nil }
+            return Dictionary(uniqueKeysWithValues: items.compactMap { item -> (Int, String)? in
+                guard let text = CaptainTodoSweep.progressLine(item: item, confirmation: confirmation,
+                    liveOwners: owners, now: now, ownerNames: names, humanOpen: humanOpen) else { return nil }
+                return (item.number, text)
+            })
+        }.value
+        guard !Task.isCancelled, crewId == id, ledger == .agent else { return }
+        executionLines = lines
     }
 
     /// 总机组只读来源账本；不把任何条目复制进总机组自己的 Todo 文件。
@@ -263,6 +291,14 @@ struct CrewTodoPanel: View {
                     .font(Theme.Fonts.caption2)
                     .foregroundStyle(Theme.Palette.inkMuted)
 
+                if row.ledger == .agent, source == nil, let execution = executionLines[item.number] {
+                    Text(execution)
+                        .font(Theme.Fonts.caption2)
+                        .foregroundStyle(Theme.Palette.inkMuted)
+                        .lineLimit(2)
+                        .help(execution)
+                }
+
                 // 条目带的图（Todo #52）：概览给小格子、最多 3 张，点开看大图。
                 CrewTodoAttachmentStrip(attachments: item.attachments ?? [],
                                         cell: 36, maxVisible: 3)
@@ -298,7 +334,7 @@ struct CrewTodoPanel: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(maxHeight: CGFloat(layout.cardMaxHeight), alignment: .top)
+        .frame(maxHeight: CGFloat(layout.cardMaxHeight + (row.ledger == .agent && source == nil && executionLines[item.number] != nil ? 34 : 0)), alignment: .top)
         .clipped()
         .background(cardShape.fill(CrewTodoPagePalette.card))
         .overlay(cardShape.strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))

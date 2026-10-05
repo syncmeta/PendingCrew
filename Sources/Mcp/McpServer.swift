@@ -349,10 +349,13 @@ final class McpServer {
                 ],
                 [
                     "name": "continue_work",
-                    "description": "为**当前这一轮**登记一次持久、一次性的续跑承诺。只在你准备结束本轮、但仍有明确且无需外部输入就能继续的安全工作时调用；note 写下一轮第一件事。必须作为本轮最后一个工具调用。已完成、明确阻塞、正在等人/外部系统，或只是历史 Todo/plan 仍是 in_progress 时都不要调用。turn 真正 completed 后才会起下一轮；同一承诺最多消费一次，app 重启也不丢。",
+                    "description": "为**当前这一轮**登记一次持久、一次性的续跑承诺。只在你准备结束本轮、但仍有明确且无需外部输入就能继续的安全工作时调用；note 写下一轮第一件事。必须作为本轮最后一个工具调用。已完成、明确阻塞、正在等人/外部系统，或只是历史 Todo/plan 仍是 in_progress 时都不要调用。turn 真正 completed 后才会起下一轮；同一承诺最多消费一次，app 重启也不丢。机长请提供 todo_numbers，换届后仅对仍可执行的关联任务接续。旧的无任务绑定承诺只会提醒新机长核对，确认有效后用 adopt_lease_id、当前 note 和 todo_numbers 显式接管。",
                     "inputSchema": [
                         "type": "object",
                         "properties": [
+                            "todo_numbers": ["type": "array", "items": ["type": "integer"],
+                                "description": "本次续跑关联的未完成 Agent Todo；机长换届时只接续仍可执行的这些任务。"],
+                            "adopt_lease_id": ["type": "string", "description": "机长核对旧承诺后显式接管的租约 ID；须提供当前有效的 note 和 todo_numbers。"],
                             "note": ["type": "string", "description": "下一轮第一件事与必要上下文，简短且可独立执行。"],
                         ],
                         "required": ["note"],
@@ -464,6 +467,19 @@ final class McpServer {
                                         "description": "卡在人类那边、你推不动的 #N。"],
                             "queued": ["type": "array", "items": ["type": "integer"],
                                         "description": "还没开始、排着的 #N。"],
+                            "follow_ups": ["type": "array", "items": [
+                                "type": "object", "properties": [
+                                    "number": ["type": "integer"],
+                                    "owner_session_id": ["type": "string"],
+                                    "next_action": ["type": "string"],
+                                    "stage": ["type": "string", "enum": ["queued", "running", "awaiting_review", "blocked_on_system"]],
+                                    "evidence": ["type": "string", "description": "等待验收时的产物位置；系统阻塞时的错误证据。"],
+                                    "check_at": ["type": "string", "description": "ISO8601，未来一小时内"],
+                                ], "required": ["number", "owner_session_id", "next_action", "check_at"]]],
+                            "blockers": ["type": "array", "items": [
+                                "type": "object", "properties": [
+                                    "number": ["type": "integer"], "human_todo_number": ["type": "integer"],
+                                ], "required": ["number", "human_todo_number"]]],
                             "note": ["type": "string", "description": "可选：一句话补充（不影响判定）。"],
                         ],
                     ],
@@ -755,10 +771,33 @@ final class McpServer {
             guard !note.isEmpty else {
                 return toolResult(id: id, text: "ERROR: note 不能为空；写清下一轮第一件事。")
             }
+            let todoNumbers = Self.intArray(args["todo_numbers"])
+            let adopting = args["adopt_lease_id"] as? String
+            var liveContinuationSessions = Set<String>()
+            if adopting != nil && (!isCaptain || todoNumbers.isEmpty) {
+                return toolResult(id: id, text: "ERROR: 仅机长可接管旧承诺，且必须关联当前可执行的 todo_numbers。")
+            }
+            if adopting != nil {
+                guard let live = CrewSessionsSnapshot.activeOwners(crewId: crewId,
+                    directory: sharedDirectory, now: Date(), includeUnavailable: true), live.contains(sessionId) else {
+                    return toolResult(id: id, text: "ERROR: 运行成员快照不可用或过期；没有接管旧承诺。")
+                }
+                liveContinuationSessions = live
+            }
+            if !todoNumbers.isEmpty {
+                guard case .rows(let rows) = todos.read(crewId: crewId),
+                      Set(todoNumbers).isSubset(of: Set(rows.filter {
+                        !$0.isDeleted && !$0.isSettled && $0.status != "blocked_on_human"
+                      }.map(\.number))) else {
+                    return toolResult(id: id, text: "ERROR: 关联任务已结束、阻塞或账本不可读；没有登记续跑。")
+                }
+            }
             // 「已经有一条」和「没写进去」都会让 arm 返回 false —— 两句话完全不同，
             // 所以把后者单独接出来（`onWriteFailure`）。
             var armFailure: Error?
             guard continuations.arm(crewId: crewId, sessionId: sessionId, note: note,
+                                    captainPromise: isCaptain, todoNumbers: todoNumbers, adoptingLeaseId: adopting,
+                                    liveSessionIds: liveContinuationSessions,
                                     onWriteFailure: { armFailure = $0 }) else {
                 if let armFailure {
                     return toolResult(id: id, text: WriteReceipt.notWritten(
@@ -766,7 +805,7 @@ final class McpServer {
                             "**本轮结束后不会有下一轮** —— 别指望它，要么现在把活做完，"
                             + "要么在群里说清你停在哪。"))
                 }
-                return toolResult(id: id, text: "本 session 已有一条未消费的续跑承诺；没有重复登记。")
+                return toolResult(id: id, text: "未登记：本 session 已有承诺、旧租约无效，或租约存储不可写。请核对后再处理。")
             }
             return toolResult(id: id, text: "已登记本轮一次性续跑；当前 turn 真正结束后执行，最多一次。")
         case "post_to_crew":
@@ -1402,21 +1441,44 @@ final class McpServer {
             // （「病根 2026-09-08 由『机长空闲核账』那条路暴露」）——
             // 三态读为它而建，却一直没接到它身上。2026-09-12 的 EPERM 断线里
             // 才发现这一处还在用 `list`。
-            let sweepOpen: Set<Int>
-            switch todos.read(crewId: crewId) {
-            case let .rows(rows):
-                sweepOpen = Set(rows.filter { !$0.isDeleted && !$0.isSettled }.map(\.number))
-            case .unreadable:
-                return toolResult(id: id, text:
-                    "ERROR: 这本账这次读不出来，**这次核账没有记下**（白板上有一条如实的警示）。"
-                    + "\n**这不等于「一条未完成都没有」** —— 账上可能挂着一堆，只是这一刻看不见。"
-                    + "\n提醒会继续来，这是对的：在账读得回来之前，谁也不该替它宣布没事。")
+            let sweepItems: [CaptainTodoSweep.Item]
+            let humanOpen: Set<Int>
+            guard case .rows(let rows) = todos.read(crewId: crewId),
+                  case .rows(let humans) = humanTodos.read(crewId: crewId) else {
+                return toolResult(id: id, text: "ERROR: 账本读不出来，这次确认没有记下。系统错误不能当作任务已完成，也不会周期性唤醒模型。")
             }
+            sweepItems = rows.filter { !$0.isDeleted && !$0.isSettled }.map(CaptainTodoSweep.Item.init)
+            humanOpen = Set(humans.filter { $0.isWaitingOnHuman(in: .human) }.map(\.number))
+            let now = Date()
+            guard let liveOwners = sweepItems.isEmpty ? Set([sessionId])
+                    : CrewSessionsSnapshot.activeOwners(crewId: crewId, directory: sharedDirectory, now: now),
+                  liveOwners.contains(sessionId) else {
+                return toolResult(id: id, text: "ERROR: 当前成员快照不可读、过期或机长不在线；没有把派出消息当作受理。请检查运行状态。")
+            }
+            guard let rawNext = (args["follow_ups"] ?? []) as? [[String: Any]],
+                  let rawBlockers = (args["blockers"] ?? []) as? [[String: Any]] else {
+                return toolResult(id: id, text: "ERROR: follow_ups / blockers 必须是结构化数组。")
+            }
+            let followUps = rawNext.compactMap { row -> CaptainTodoSweep.FollowUp? in
+                guard let number = row["number"] as? Int, let owner = row["owner_session_id"] as? String,
+                      let action = row["next_action"] as? String, let check = row["check_at"] as? String else { return nil }
+                return .init(number: number, ownerSessionId: owner, nextAction: action, checkAt: check,
+                    stage: row["stage"] as? String, evidence: row["evidence"] as? String)
+            }
+            let blockers = rawBlockers.compactMap { row -> CaptainTodoSweep.Blocker? in
+                guard let number = row["number"] as? Int, let human = row["human_todo_number"] as? Int else { return nil }
+                return .init(number: number, humanTodoNumber: human)
+            }
+            guard followUps.count == rawNext.count, blockers.count == rawBlockers.count else {
+                return toolResult(id: id, text: "ERROR: 检查点或阻塞记录缺少必填字段；没有记下。")
+            }
+            let sweepOpen = Set(sweepItems.map(\.number))
             let sweepResult = CaptainTodoSweep.validate(
                 running: Self.intArray(args["running"]),
                 blockedOnHuman: Self.intArray(args["blocked_on_human"]),
-                queued: Self.intArray(args["queued"]),
-                open: sweepOpen)
+                queued: Self.intArray(args["queued"]), items: sweepItems,
+                followUps: followUps, blockers: blockers, humanOpen: humanOpen,
+                liveOwners: liveOwners, now: now)
             if let refusal = sweepResult.refusal {
                 return toolResult(id: id, text: "ERROR: 这份账跟真账本对不上，没有记下。\n" + refusal.summary)
             }
@@ -1430,7 +1492,7 @@ final class McpServer {
             }
             return toolResult(id: id, text: sweepOpen.isEmpty
                 ? "记下了：这本账一条未完成都没有。空闲时不会再提醒你，直到有新条目进来。"
-                : "记下了：\(sweepOpen.count) 条未完成已逐条归桶。空闲时不再提醒你——**除非冒出没被这次覆盖过的新条目**（那时只会点名新的那几条）。")
+                : "记下了：\(sweepOpen.count) 条未完成已逐条归桶。到检查点、负责人退出、条目变更或人类阻塞解除后重新核账；排队不算已开工。")
 
         case "plan_add":
             // 机长作战板（人类 Todo #66）。门禁与其余机长工具同一道 `guard`。
@@ -2903,7 +2965,7 @@ final class McpServer {
 
     **为什么不能只说一句「都做完了」**：有过一次现场——机长一整天以为自己在推进，把账拉出来才发现 23 条未完成里 **9 条是「做完了没翻牌」**，其中两条早在两个版本前就发出去了。它自己的说法是「如果确认只需要说一句都做完了，我会毫不犹豫地说出口」。所以这里要求逐条归桶：**归不进任何桶的那一条，多半就是你早就做完了却没翻牌的那条**——去 respond_todo 把它翻掉。
 
-    三个桶的并集必须**恰好等于**当前未完成的那批，一条不多一条不少，否则整笔拒绝并告诉你差哪几条。确认之后，只要不冒出没被覆盖过的新条目，就不会再提醒你（**与过去多久无关**）。
+    三个桶的并集必须**恰好等于**当前未完成的那批，一条不多一条不少，否则整笔拒绝并告诉你差哪几条。running 必须有负责人自己的 respond_todo(in_progress) 接活回执和在线证据。running / queued 每条必须有 follow_ups（number、owner_session_id、next_action、check_at，未来一小时内）；blocked_on_human 每条必须有 blockers（number、human_todo_number），指向仍在等答复的人类 Todo。检查点到期、负责人退出、条目变更或阻塞解除后会再核账。排队不等于开工。
 
     这里没有「我知道了 / 顺延」这种动作——那种出口会让整件事退化成看一眼就算办完。
     """

@@ -29,19 +29,24 @@ enum SessionContinuationPolicy {
 /// Durable, one-shot current-turn continuation leases.
 ///
 /// The MCP helper arms a lease while the turn is running. The authoritative turn
-/// completion hook seals it as ready. The runner atomically takes (and removes) a
-/// ready lease before sending the next prompt, so repeated idle/directory events
-/// cannot duplicate it and app/store recreation does not lose it.
+/// completion hook seals it as ready. The runner retains it until the backend
+/// accepts, with a durable acceptance receipt protecting settlement failures.
+/// Task-bound captain promises can move to a successor; legacy orphans require
+/// explicit review before adoption.
 final class SessionContinuationStore: @unchecked Sendable {
     struct Lease: Codable, Equatable {
         enum Phase: String, Codable { case armed, ready }
 
         let id: String
         let crewId: String
-        let sessionId: String
+        var sessionId: String
         let note: String
         var phase: Phase
         let createdAt: String
+        var captainPromise: Bool? = nil
+        var todoNumbers: [Int]? = nil
+        var originalSessionId: String? = nil
+        var offeredToSessionId: String? = nil
     }
 
     private let directory: URL
@@ -58,19 +63,26 @@ final class SessionContinuationStore: @unchecked Sendable {
     /// "already armed" are the same `false` — and the receipt for the two must differ.
     @discardableResult
     func arm(crewId: String, sessionId: String, note: String,
+             captainPromise: Bool = false, todoNumbers: [Int] = [], adoptingLeaseId: String? = nil,
+             liveSessionIds: Set<String> = [],
              onWriteFailure: ((Error) -> Void)? = nil) -> Bool {
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        return withLock {
-            var rows = loadLocked()
-            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL) else {
-                return false
-            }
+        return withLock(fallback: false) {
+            guard var rows = loadLocked() else { return false }
             guard !rows.contains(where: { $0.sessionId == sessionId }) else { return false }
+            if let adoptingLeaseId {
+                guard captainPromise, let old = rows.firstIndex(where: {
+                    $0.id == adoptingLeaseId && $0.crewId == crewId && $0.phase == .ready
+                    && !liveSessionIds.contains($0.sessionId)
+                }), !todoNumbers.isEmpty else { return false }
+                rows.remove(at: old)
+            }
             rows.append(Lease(
                 id: UUID().uuidString.lowercased(), crewId: crewId, sessionId: sessionId,
                 note: trimmed, phase: .armed,
-                createdAt: ISO8601DateFormatter().string(from: Date())))
+                createdAt: ISO8601DateFormatter().string(from: Date()),
+                captainPromise: captainPromise, todoNumbers: Array(Set(todoNumbers)).sorted()))
             if let failure = MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) {
                 onWriteFailure?(failure)
                 return false
@@ -83,11 +95,8 @@ final class SessionContinuationStore: @unchecked Sendable {
     /// arm left in this turn; only `.continuing` promotes it to runnable.
     func finishTurn(crewId: String, sessionId: String,
                     outcome: SessionContinuationPolicy.Outcome) {
-        withLock {
-            var rows = loadLocked()
-            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL) else {
-                return
-            }
+        withLock(fallback: ()) {
+            guard var rows = loadLocked() else { return }
             guard let index = rows.firstIndex(where: {
                 $0.crewId == crewId && $0.sessionId == sessionId
             }) else { return }
@@ -106,11 +115,8 @@ final class SessionContinuationStore: @unchecked Sendable {
     /// Atomic claim: removal happens in the same file lock as the read. This is
     /// intentionally at-most-once; caller must take only after it has a live run.
     func takeReady(sessionId: String) -> Lease? {
-        withLock {
-            var rows = loadLocked()
-            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL) else {
-                return nil
-            }
+        withLock(fallback: nil) {
+            guard var rows = loadLocked() else { return nil }
             guard let index = rows.firstIndex(where: {
                 $0.sessionId == sessionId && $0.phase == .ready
             }) else { return nil }
@@ -124,35 +130,95 @@ final class SessionContinuationStore: @unchecked Sendable {
 
     /// Look without consuming. Automatic wake admission and backend submission may
     /// refuse a turn; the lease must survive either refusal and an app restart.
-    func peekReady(sessionId: String) -> Lease? {
-        withLock {
-            let rows = loadLocked()
-            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL)
-            else { return nil }
-            return rows.first { $0.sessionId == sessionId && $0.phase == .ready }
+    func peekReady(sessionId: String, eligibleTodoNumbers: Set<Int>? = nil) -> Lease? {
+        withLock(fallback: nil) {
+            guard let rows = loadLocked() else { return nil }
+            return rows.first {
+                $0.sessionId == sessionId && $0.phase == .ready
+                    && (($0.todoNumbers ?? []).isEmpty
+                        || Set($0.todoNumbers ?? []).isSubset(of: eligibleTodoNumbers ?? []))
+            }
         }
     }
 
     @discardableResult
     func acknowledgeReady(id: String) -> Bool {
-        withLock {
-            var rows = loadLocked()
-            guard !MultiProcessJSONStore.refuseEmptyRewriteIfNonEmptyFile(rows, at: fileURL),
-                  let index = rows.firstIndex(where: { $0.id == id && $0.phase == .ready })
+        withLock(fallback: false) {
+            guard var rows = loadLocked(), let index = rows.firstIndex(where: { $0.id == id && $0.phase == .ready })
             else { return false }
             rows.remove(at: index)
             return MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil
         }
     }
 
-    private var fileURL: URL { directory.appendingPathComponent("session-continuations.json") }
-
-    private func withLock<T>(_ body: () -> T) -> T {
-        MultiProcessJSONStore.withFileLock(
-            directory.appendingPathComponent("session-continuations.lock"), body)
+    /// Rebind only a task-bound captain promise, with current-task evidence and
+    /// no live source owner. Persist the binding before submitting the wake;
+    /// backend rejection leaves the same lease ready across process restart.
+    func readyForCaptain(crewId: String, sessionId: String, liveSessionIds: Set<String>,
+                         eligibleTodoNumbers: Set<Int>) -> Lease? {
+        withLock(fallback: nil) {
+            guard var rows = loadLocked(), let index = rows.firstIndex(where: {
+                $0.crewId == crewId && $0.phase == .ready && $0.sessionId != sessionId
+                    && !liveSessionIds.contains($0.sessionId) && $0.captainPromise == true
+                    && !($0.todoNumbers ?? []).isEmpty
+                    && Set($0.todoNumbers ?? []).isSubset(of: eligibleTodoNumbers)
+            }), !rows.contains(where: { $0.sessionId == sessionId }) else { return nil }
+            rows[index].originalSessionId = rows[index].originalSessionId ?? rows[index].sessionId
+            rows[index].sessionId = sessionId
+            guard MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil else { return nil }
+            return rows[index]
+        }
     }
 
-    private func loadLocked() -> [Lease] {
-        MultiProcessJSONStore.loadRowsLocked(Lease.self, at: fileURL, onIncident: { _ in })
+    /// Old unbound promises are review debt, never executable instructions.
+    func orphanedReady(crewId: String, sessionId: String, liveSessionIds: Set<String>) -> [Lease] {
+        withLock(fallback: []) {
+            guard let rows = loadLocked() else { return [] }
+            return rows.filter { $0.crewId == crewId && $0.phase == .ready
+                && $0.sessionId != sessionId && !liveSessionIds.contains($0.sessionId)
+                && $0.offeredToSessionId != sessionId }
+        }
+    }
+
+    @discardableResult
+    func acknowledgeReview(ids: Set<String>, sessionId: String) -> Bool {
+        withLock(fallback: false) {
+            guard var rows = loadLocked() else { return false }
+            for index in rows.indices where ids.contains(rows[index].id) {
+                rows[index].offeredToSessionId = sessionId
+            }
+            return MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL) == nil
+        }
+    }
+
+    /// Direct human stop is cancellation, not a crash/handoff to be replayed.
+    func cancel(sessionId: String) {
+        withLock(fallback: ()) {
+            guard var rows = loadLocked() else { return }
+            rows.removeAll { $0.sessionId == sessionId }
+            MultiProcessJSONStore.saveRowsLocked(rows, to: fileURL)
+        }
+    }
+
+    private var fileURL: URL { directory.appendingPathComponent("session-continuations.json") }
+
+    private func withLock<T>(fallback: T, _ body: () -> T) -> T {
+        let lock = directory.appendingPathComponent("session-continuations.lock")
+        let fd = open(lock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return fallback }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { return fallback }
+        defer { _ = flock(fd, LOCK_UN) }
+        return body()
+    }
+
+    private func loadLocked() -> [Lease]? {
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return try JSONDecoder().decode([Lease].self, from: data)
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain
+            && (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError) {
+            return []
+        } catch { return nil }
     }
 }

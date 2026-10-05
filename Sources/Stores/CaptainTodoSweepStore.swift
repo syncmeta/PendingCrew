@@ -41,6 +41,17 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         }
     }
 
+    static func snapshot(of read: LocalTodoStore.LedgerRead,
+                         humanRead: LocalTodoStore.LedgerRead,
+                         liveOwners: Set<String>) -> CaptainTodoSweep.LedgerSnapshot {
+        guard case .rows(let rows) = read, case .rows(let humans) = humanRead else {
+            return .unreadable
+        }
+        return .items(rows.filter { !$0.isDeleted && !$0.isSettled }.map(CaptainTodoSweep.Item.init),
+                      humanOpen: Set(humans.filter { $0.isWaitingOnHuman(in: .human) }.map(\.number)),
+                      liveOwners: liveOwners)
+    }
+
     /// Legacy simulation API kept for historical regression tests. Runtime
     /// outbound code must call `reminder` and settle with `recordReminded`
     /// only after backend acceptance.
@@ -77,17 +88,18 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     /// only after the backend accepts the wake; admission deferral leaves it due.
     func reminder(crewId: String, snapshot: CaptainTodoSweep.LedgerSnapshot,
                   now: Date) -> String? {
-        // A failed read of the sweep confirmation ledger must not turn an old
-        // confirmed batch into a fresh model turn every idle edge.
-        guard withFileLock(crewId, { !loadLocked(crewId).unreadable }) else { return nil }
-        let stored = row(crewId: crewId)
-        let decision = CaptainTodoSweep.decide(
-            open: snapshot, confirmation: stored.confirmation,
-            lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
-            unreadableStreak: stored.unreadableStreak ?? 0, now: now,
-            minimumInterval: CaptainTodoSweep.minimumRemindInterval)
-        if case let .remind(text) = decision { return text }
-        return nil
+        withFileLock(crewId, fallback: nil) {
+            let disk = loadLocked(crewId)
+            guard !disk.unreadable else { return nil }
+            let stored = effectiveRow(disk.row, crewId: crewId)
+            let decision = CaptainTodoSweep.decide(
+                open: snapshot, confirmation: stored.confirmation,
+                lastRemindedAt: stored.lastRemindedAt.flatMap(McpServer.parseISO),
+                unreadableStreak: stored.unreadableStreak ?? 0, now: now,
+                minimumInterval: CaptainTodoSweep.minimumRemindInterval)
+            if case let .remind(text) = decision { return text }
+            return nil
+        }
     }
 
     /// Stable while a reminder is pending, distinct after its accepted receipt
@@ -100,6 +112,8 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
 
     /// 测试用：清掉进程内那份退路，模拟「进程重启了」。
     static func forgetInProcessMemoryForTesting() {
+        memoryLock.lock()
+        defer { memoryLock.unlock() }
         rememberedReminded.removeAll()
     }
 
@@ -140,14 +154,18 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     /// **小**的 —— 同一时刻只有「清零」会改档位，小的那份才是后写的，而且
     /// 这个方向错了也只是多问一次，不会压住。
     func row(crewId: String) -> Row {
-        let disk = withFileLock(crewId) { loadLocked(crewId) }
+        let disk = withFileLock(crewId, fallback: (row: nil as Row?, unreadable: true)) { loadLocked(crewId) }
         // 盘上读不到：确认无从得知（保守当成没有），但提醒时刻和档位还记得。
-        var row = disk.row ?? Row()
+        return effectiveRow(disk.row, crewId: crewId)
+    }
+
+    private func effectiveRow(_ diskRow: Row?, crewId: String) -> Row {
+        var row = diskRow ?? Row()
         let onDisk = row.lastRemindedAt.map {
             Reminded(stamp: $0, unreadableStreak: row.unreadableStreak ?? 0)
         }
         let latest = Self.latest(
-            [onDisk, Self.rememberedReminded[crewId], markerReminded(crewId: crewId)]
+            [onDisk, Self.remembered(crewId), markerReminded(crewId: crewId)]
                 .compactMap { $0 })
         row.lastRemindedAt = latest?.stamp
         row.unreadableStreak = latest.map(\.unreadableStreak)
@@ -211,6 +229,17 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     /// 进程内的「上次提醒时刻」，只在盘上读不出来时顶上。
     /// `nonisolated(unsafe)` 与本 store 其余部分同一口径（靠 flock 与单进程串行）。
     nonisolated(unsafe) private static var rememberedReminded: [String: Reminded] = [:]
+    private static let memoryLock = NSLock()
+
+    private static func remembered(_ crewId: String) -> Reminded? {
+        memoryLock.lock(); defer { memoryLock.unlock() }
+        return rememberedReminded[crewId]
+    }
+
+    private static func setRemembered(_ crewId: String, _ reminded: Reminded?) {
+        memoryLock.lock(); defer { memoryLock.unlock() }
+        rememberedReminded[crewId] = reminded
+    }
 
     /// 记下一次被接受的确认。**提醒时刻一并清空** —— 确认之后重新计时，
     /// 免得「确认完又冒出新条目」时被上一次的地板间隔压着不吭声。
@@ -221,10 +250,12 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
                             _ confirmation: CaptainTodoSweep.Confirmation) -> Error? {
         // 确认之后重新计时：进程内那份和文件名标记一起清，否则「确认完又冒出新条目」
         // 会被上一次的地板间隔压着不吭声 —— 那正是这道闸最不该发生的事。
-        Self.rememberedReminded[crewId] = nil
-        clearMarkers(crewId: crewId)
-        return withFileLock(crewId) {
-            saveLocked(crewId: crewId, Row(confirmation: confirmation, lastRemindedAt: nil))
+        return withFileLock(crewId, fallback: CocoaError(.fileWriteNoPermission) as Error?) {
+            guard !loadLocked(crewId).unreadable else { return CocoaError(.fileReadNoPermission) }
+            if let error = saveLocked(crewId: crewId, Row(confirmation: confirmation, lastRemindedAt: nil)) { return error }
+            Self.setRemembered(crewId, nil)
+            clearMarkers(crewId: crewId)
+            return nil
         }
     }
 
@@ -239,10 +270,10 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
     private func remember(crewId: String, _ reminded: Reminded) -> Error? {
         // 先记进程内那份：盘上写不写得成都不影响「刚提醒过」这个事实，
         // 而地板间隔要的正是这个事实。
-        Self.rememberedReminded[crewId] = reminded
+        Self.setRemembered(crewId, reminded)
         // 再落一个文件名标记：进程重启后还认得（见 `row(crewId:)` 上的注释）。
         writeMarker(crewId: crewId, reminded)
-        return withFileLock(crewId) {
+        return withFileLock(crewId, fallback: CocoaError(.fileWriteNoPermission) as Error?) {
             let disk = loadLocked(crewId)
             // **读不出来就别整份重写**（计划 #98 顺手发现）。原来是 `loadLocked ?? Row()`
             // 再写回：写走的是 rename，故障期间照样落得了盘 —— 于是每次提醒都用一个
@@ -264,9 +295,14 @@ final class CaptainTodoSweepStore: @unchecked Sendable {
         directory.appendingPathComponent("\(crewId).todo-sweep.json")
     }
 
-    private func withFileLock<T>(_ crewId: String, _ body: () -> T) -> T {
-        MultiProcessJSONStore.withFileLock(
-            directory.appendingPathComponent("\(crewId).todo-sweep.lock"), body)
+    private func withFileLock<T>(_ crewId: String, fallback: T, _ body: () -> T) -> T {
+        let lock = directory.appendingPathComponent("\(crewId).todo-sweep.lock")
+        let fd = open(lock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return fallback }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { return fallback }
+        defer { _ = flock(fd, LOCK_UN) }
+        return body()
     }
 
     /// 读不出来 → nil。**调用方一律按「没确认过」处理，也就是照常提醒** ——

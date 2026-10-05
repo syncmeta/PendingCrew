@@ -44,22 +44,26 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
     enum Decision {
         case allowed(String)
         case deferred(String)
+        case throttled(String)
         case hardStopped(String)
 
         var isAllowed: Bool { if case .allowed = self { return true }; return false }
         var reason: String? {
             switch self {
             case .allowed: return nil
-            case let .deferred(reason), let .hardStopped(reason): return reason
+            case let .deferred(reason), let .throttled(reason), let .hardStopped(reason): return reason
             }
         }
         var recoveryHint: String {
             switch self {
             case .allowed: return ""
             case .deferred: return "请检查目标会话身份及本机 admission 账本；恢复前自动出站保持暂停。"
+            case .throttled: return "请求已排队；预算窗口释放后自动重试。"
             case .hardStopped: return "须由人从界面明确选择对应范围的恢复操作。"
             }
         }
+
+        var isThrottled: Bool { if case .throttled = self { return true }; return false }
     }
 
     enum Submission<Result> {
@@ -168,6 +172,9 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
         var lastUptime: TimeInterval = 0
         var events: [Event] = []
         var attempts: [Attempt]? = nil
+        /// Longer automatic history distinguishes a startup burst from sustained
+        /// unattended churn. Optional for ledgers written before this policy.
+        var automaticAttemptHistory: [Attempt]? = nil
         var sourceDenials: [String: Int] = [:]
         var sourceDenialAt: [String: TimeInterval] = [:]
         var sourceBlockedUntil: [String: TimeInterval] = [:]
@@ -264,6 +271,8 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             }
             state.events.removeAll { clock - $0.at >= ($0.accepted ? 3600 : 120) }
             state.attempts = (state.attempts ?? []).filter { clock - $0.at < 60 }
+            state.automaticAttemptHistory = (state.automaticAttemptHistory ?? [])
+                .filter { clock - $0.at < 900 }
             state.sourceDenialAt = state.sourceDenialAt.filter { clock - $0.value < 3600 }
             state.sourceDenials = state.sourceDenials.filter {
                 state.sourceDenialAt[$0.key] != nil
@@ -273,6 +282,19 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             let window = state.attempts ?? []
             let sameSource = state.events.contains {
                 $0.sessionId == sessionId && $0.sourceKey == sourceKey && clock - $0.at < 900
+            }
+            let replayedAcceptance = state.events.contains {
+                $0.sessionId == sessionId && $0.sourceKey == sourceKey && $0.accepted
+                    && clock - $0.at < 900
+            }
+            let sustainedChurn = (state.automaticAttemptHistory ?? []).filter {
+                $0.sessionId == sessionId && !$0.accepted
+            }.count >= 12
+            if priority == .automatic && (replayedAcceptance || sustainedChurn) {
+                state.hardStoppedSessions = (state.hardStoppedSessions ?? []).union([sessionId])
+                guard write(state) else { return .deferred("admission 账本写不进去") }
+                return .hardStopped(replayedAcceptance
+                    ? "同一已受理唤醒被重复投递" : "session 持续投递失败超过安全上限")
             }
             let reason: String?
             if window.count >= 12 { reason = "全机滑窗已满" }
@@ -286,19 +308,10 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
             }
             else { reason = nil }
             if let reason {
-                // Any exhausted window or accepted-source repetition is evidence of
-                // an automatic loop. Latch the scope on disk until the explicit
-                // scoped UI recovery is audited; waiting out a window is not recovery.
-                if window.count >= 12 {
-                    state.hardStoppedMachine = true
-                } else if sameSource || (state.sourceBlockedUntil[source] ?? 0) > clock
-                    || window.filter({ $0.sessionId == sessionId }).count >= 2 {
-                    state.hardStoppedSessions = (state.hardStoppedSessions ?? []).union([sessionId])
-                } else if window.filter({ $0.crewId == crewId }).count >= 5 {
-                    state.hardStoppedCrews = (state.hardStoppedCrews ?? []).union([crewId])
-                } else {
-                    state.hardStoppedMachine = true
-                }
+                // A full rate window is backpressure, not proof of a loop. Keep
+                // the request pending and retry after the measured window drains.
+                // Repeated *accepted* identities and sustained session churn are
+                // handled above; existing hard latches still require UI recovery.
                 let recentCount = clock - (state.sourceDenialAt[source] ?? .infinity) < 60
                     ? (state.sourceDenials[source] ?? 0) : 0
                 let count = min(8, recentCount + 1)
@@ -308,13 +321,17 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
                     state.sourceBlockedUntil[source] = clock + Double(min(900, 15 * (1 << (count - 3))))
                 }
                 guard write(state) else { return .deferred("admission 账本写不进去") }
-                return .hardStopped(reason)
+                return .throttled(reason)
             }
             let token = UUID().uuidString
             state.events.append(Event(token: token, sessionId: sessionId, crewId: crewId,
                                       sourceKey: sourceKey, at: clock, accepted: false))
             state.attempts?.append(Attempt(token: token, sessionId: sessionId,
                                             crewId: crewId, at: clock, accepted: false))
+            if priority == .automatic {
+                state.automaticAttemptHistory?.append(Attempt(token: token, sessionId: sessionId,
+                    crewId: crewId, at: clock, accepted: false))
+            }
             guard write(state) else { return .deferred("admission 账本写不进去") }
             return .allowed(token)
         } ?? .deferred("admission 锁打不开")
@@ -559,9 +576,13 @@ final class AutomaticWakeAdmission: @unchecked Sendable {
                 if let attemptIndex = state.attempts?.firstIndex(where: { $0.token == token }) {
                     state.attempts?[attemptIndex].accepted = true
                 }
+                if let historyIndex = state.automaticAttemptHistory?.firstIndex(where: { $0.token == token }) {
+                    state.automaticAttemptHistory?[historyIndex].accepted = true
+                }
                 let source = state.events[index].sessionId + "|" + state.events[index].sourceKey
                 if state.events[index].sourceKey.hasPrefix("scheduled:")
-                    || state.events[index].sourceKey.hasPrefix("supervision:") {
+                    || state.events[index].sourceKey.hasPrefix("supervision:")
+                    || state.events[index].sourceKey.hasPrefix("continue-work:") {
                     state.acceptedLeases.insert(String(
                         state.events[index].sourceKey.components(separatedBy: "|target:").first
                             ?? state.events[index].sourceKey))

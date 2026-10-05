@@ -139,17 +139,24 @@ final class SessionProtocolOverSocketTests: XCTestCase {
             XCTAssertTrue(gate.finish(token: token, accepted: false))
         }
         let blocked = await remote.submitWake("socket denied", sourceKey: "socket:denied")
-        XCTAssertEqual(blocked, .blocked)
+        XCTAssertEqual(blocked, .retry)
         let human = await remote.submitWake("original human text",
                                             sourceKey: "explicit:socket-human",
                                             explicitId: "socket-human")
-        XCTAssertEqual(human, .blocked)
+        XCTAssertEqual(human, .retry)
         XCTAssertEqual(gate.pendingExplicitText(crewId: "socket-crew")?.map(\.text),
                        ["original human text"], "denied human text stays recoverable")
         let emergency = await remote.submitWake("urgent", sourceKey: "socket:urgent",
                                                 priority: .emergency)
-        XCTAssertEqual(emergency, .blocked, "emergency still obeys the machine hard cap")
+        XCTAssertEqual(emergency, .retry, "emergency still obeys the machine hard cap")
         XCTAssertEqual(backend.submittedWakes, ["socket first", "socket second"])
+        guard case .allowed(let clockToken) = gate.reserve(sessionId: "clock", crewId: "clock",
+            sourceKey: "clock", priority: .human, now: Date().addingTimeInterval(61),
+            uptime: ProcessInfo.processInfo.systemUptime + 61) else { return XCTFail("window should drain") }
+        XCTAssertTrue(gate.finish(token: clockToken, accepted: false))
+        let retriedOriginal = await remote.submitWake("socket denied", sourceKey: "socket:denied")
+        XCTAssertEqual(retriedOriginal, .accepted, "同一待投身份在窗口释放后可经真 socket 受理")
+        XCTAssertEqual(backend.submittedWakes, ["socket first", "socket second", "socket denied"])
     }
 
     /// The production viewer uses this tracker after a local daemon link closes.

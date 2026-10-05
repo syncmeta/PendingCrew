@@ -29,6 +29,15 @@ final class CrewDeferredWakeQueueTests: XCTestCase {
         XCTAssertEqual(queue.submit(delivery(), isBusy: false), .duplicate)
     }
 
+    func testBlockedTaskBeforeSubmissionCanBeResumedWithTheSameLeaseIdentity() {
+        var queue = CrewDeferredWakeQueue()
+        let wake = delivery("continue-work:lease")
+        guard case .deliver(let first) = queue.submit(wake, isBusy: false) else { return XCTFail("setup") }
+        queue.discardUnsubmitted(first)
+        XCTAssertEqual(queue.submit(wake, isBusy: false), .deliver(wake),
+            "未提交的任务变更不能冒充 accepted，也不能永久压住相同续跑租约")
+    }
+
     func testIdleMessageDeliversImmediately() {
         var queue = CrewDeferredWakeQueue()
         XCTAssertEqual(queue.submit(delivery(), isBusy: false), .deliver(delivery()))

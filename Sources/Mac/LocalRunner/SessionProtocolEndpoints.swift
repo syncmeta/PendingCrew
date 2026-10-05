@@ -558,7 +558,8 @@ final class SessionProtocolServer {
                     }
                     if let connection {
                         self.send(.event(.init(kind: "wakeSubmitResult", requestId: requestId,
-                            fields: ["sessionId": .string(sessionId), "result": .string("blocked")])),
+                            fields: ["sessionId": .string(sessionId),
+                                     "result": .string(decision.isThrottled ? "retry" : "blocked")])),
                             on: connection)
                     }
                     return

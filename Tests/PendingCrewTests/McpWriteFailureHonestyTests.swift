@@ -80,7 +80,7 @@ final class McpWriteFailureHonestyTests: XCTestCase {
         "clear_attention": .writesSharedFile(
             args: #"{}"#, captainOnly: true),
         "confirm_todo_sweep": .writesSharedFile(
-            args: #"{"running":[1],"blocked_on_human":[],"queued":[]}"#, captainOnly: true),
+            args: #"{"running":[],"blocked_on_human":[],"queued":[1]}"#, captainOnly: true),
         "plan_add": .writesSharedFile(
             args: #"{"title":"排一条计划"}"#, captainOnly: true),
         "plan_update": .writesSharedFile(
@@ -260,6 +260,10 @@ final class McpWriteFailureHonestyTests: XCTestCase {
     /// 后面 flock 的 sidecar 才打得开（只读目录里开不了新文件）。
     private func seed(_ fx: Fixture) throws {
         let s = server(fx, captain: true)
+        var snapshot = CrewSessionsSnapshot()
+        snapshot.updatedAt = ISO8601DateFormatter().string(from: Date())
+        snapshot.crews[fx.crewId] = [.init(sessionId: "sess-1", name: "机长", role: "captain", brief: "", state: "working")]
+        try JSONEncoder().encode(snapshot).write(to: fx.whiteboards.appendingPathComponent(CrewSessionsSnapshot.fileName))
         _ = s.todos.add(crewId: fx.crewId, text: "agent 那本的一条")
         _ = s.humanTodos.add(crewId: fx.crewId, text: "人类那本的一条",
                              bySessionId: "sess-1", bySenderName: "我")
@@ -317,6 +321,13 @@ final class McpWriteFailureHonestyTests: XCTestCase {
                 return "（拿不到对方号码，contact 没量到）"
             }
             args = #"{"to":"\#(n.text)","message":"外线来电"}"#
+        }
+        if tool == "confirm_todo_sweep", var parsed = try? JSONSerialization.jsonObject(with: Data(args.utf8)) as? [String: Any] {
+            parsed["follow_ups"] = [["number": 1, "owner_session_id": "sess-1", "next_action": "修复并测试",
+                "check_at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(600))]]
+            if let data = try? JSONSerialization.data(withJSONObject: parsed) {
+                args = String(decoding: data, as: UTF8.self)
+            }
         }
         let line = """
         {"jsonrpc":"2.0","id":1,"method":"tools/call",\

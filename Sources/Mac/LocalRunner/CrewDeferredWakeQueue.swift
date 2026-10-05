@@ -77,6 +77,12 @@ struct CrewDeferredWakeQueue {
         }
     }
 
+    /// A task can become blocked before submission. Drop only the volatile
+    /// attempt, without recording acceptance or poisoning the durable lease ID.
+    mutating func discardUnsubmitted(_ delivery: Delivery) {
+        inFlight.removeValue(forKey: delivery.key)
+    }
+
     @discardableResult
     mutating func remove(sessionId: String) -> [Delivery] {
         var deliveries = pending.removeValue(forKey: sessionId) ?? []

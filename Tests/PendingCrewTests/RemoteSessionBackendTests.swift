@@ -12,7 +12,7 @@ final class RemoteSessionBackendTests: XCTestCase {
               awaitingReply: nil)
     }
 
-    func testDirectRemoteWakeCannotBypassInProcessMachineStopAcrossRestart() async {
+    func testDirectRemoteWakeKeepsMachineBackpressureAcrossRestart() async {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("direct-bridge-stop-\(UUID().uuidString)")
         let gate = AutomaticWakeAdmission(directory: directory)
@@ -27,7 +27,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         bridge.setRunSummaryProvider { [weak self] _ in self?.summary() }
         let remote = bridge.exposeAttached(sessionId: "direct-target", backend: backend)
         let first = await remote.submitWake("direct first", sourceKey: "direct:first")
-        XCTAssertEqual(first, .blocked)
+        XCTAssertEqual(first, .retry)
         XCTAssertEqual(backend.submittedWakes, [])
 
         let restartedGate = AutomaticWakeAdmission(directory: directory)
@@ -38,7 +38,7 @@ final class RemoteSessionBackendTests: XCTestCase {
                                                          backend: nextBackend)
         let second = await reconnected.submitWake("direct after restart",
                                                   sourceKey: "direct:second")
-        XCTAssertEqual(second, .blocked)
+        XCTAssertEqual(second, .retry)
         XCTAssertEqual(nextBackend.submittedWakes, [])
     }
 
@@ -89,7 +89,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         guard case let .attempted(receipt, _) = result else {
             return XCTFail("protocol server gave no refusal receipt")
         }
-        XCTAssertEqual(receipt, .blocked)
+        XCTAssertEqual(receipt, .retry)
         XCTAssertEqual(backend.submittedWakes, [],
                        "the protocol server must never forward a denied owner wake")
         XCTAssertFalse(AutomaticWakeAdmission(directory: directory).reserve(
@@ -155,7 +155,7 @@ final class RemoteSessionBackendTests: XCTestCase {
         let remote = bridge.exposeAttached(sessionId: "human-target", backend: backend)
         let result = await remote.submitWake("original human prompt", sourceKey: "explicit:id-1",
                                              explicitId: "id-1")
-        XCTAssertEqual(result, .blocked)
+        XCTAssertEqual(result, .retry)
         XCTAssertEqual(backend.submittedWakes, [])
         XCTAssertEqual(gate.pendingExplicitText(crewId: "crew-entry")?.map(\.text),
                        ["original human prompt"])
@@ -710,12 +710,14 @@ final class ProtocolTestBackend: SessionBackend, SessionProtocolTerminalControll
     var codexHistory: [CodexThreadItem] = []
     var wakeResults: [SessionWakeSubmission] = []
     var submittedWakes: [String] = []
+    var onSubmitWake: ((String) -> Void)?
 
     init(kind: LocalCodingAgentKind) { self.kind = kind }
 
     func send(_ text: String) { sent.append(text) }
     func submitWake(_ text: String) async -> SessionWakeSubmission {
         submittedWakes.append(text)
+        onSubmitWake?(text)
         return wakeResults.isEmpty ? .accepted : wakeResults.removeFirst()
     }
     func interrupt() { interruptCount += 1 }

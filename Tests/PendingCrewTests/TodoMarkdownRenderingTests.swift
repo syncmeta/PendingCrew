@@ -249,7 +249,8 @@ final class TodoMarkdownRenderingTests: XCTestCase {
         let row = String(panel[rowStart.lowerBound...])
         XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.previewMaxHeight), alignment: .top)"),
                       "限高值必须用在实际 Todo 行的内容预览")
-        XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.cardMaxHeight), alignment: .top)"),
+        XCTAssertTrue(row.contains(".frame(maxHeight: CGFloat(layout.cardMaxHeight + ")
+                        && row.contains("executionLines[item.number] != nil ? 34 : 0"),
                       "限高值必须用在实际 Todo 卡片")
         XCTAssertTrue(row.contains("Button(layout.rowDetailTitle) {\n                openDetail(ledger: row.ledger, focus: item.number, source: source)"),
                       "卡片需要真正的 Button，才能用键盘和 VoiceOver 打开全文")

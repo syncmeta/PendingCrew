@@ -93,4 +93,48 @@ final class SessionContinuationStoreTests: XCTestCase {
         XCTAssertEqual(SessionContinuationStore(directory: dir).takeReady(sessionId: "s")?.note,
                        "跑定向测试")
     }
+    func testTaskBoundCaptainPromiseTransfersDurablyAndSettlesOnlyOnAcceptance() throws {
+        let dir = tempDir()
+        let store = SessionContinuationStore(directory: dir)
+        XCTAssertTrue(store.arm(crewId: "c", sessionId: "old", note: "验收 #1", captainPromise: true, todoNumbers: [1]))
+        store.finishTurn(crewId: "c", sessionId: "old", outcome: .continuing)
+        XCTAssertNil(store.readyForCaptain(crewId: "c", sessionId: "new", liveSessionIds: ["old", "new"], eligibleTodoNumbers: [1]))
+        XCTAssertNil(store.readyForCaptain(crewId: "c", sessionId: "new", liveSessionIds: ["new"], eligibleTodoNumbers: []))
+        let claimed = try XCTUnwrap(store.readyForCaptain(crewId: "c", sessionId: "new", liveSessionIds: ["new"], eligibleTodoNumbers: [1]))
+        XCTAssertEqual(claimed.originalSessionId, "old")
+        XCTAssertNil(store.peekReady(sessionId: "old", eligibleTodoNumbers: [1]))
+        let restarted = SessionContinuationStore(directory: dir)
+        XCTAssertEqual(restarted.peekReady(sessionId: "new", eligibleTodoNumbers: [1])?.id, claimed.id)
+        XCTAssertNil(restarted.peekReady(sessionId: "new", eligibleTodoNumbers: []), "阻塞或完成后不可重放")
+        XCTAssertTrue(restarted.acknowledgeReady(id: claimed.id))
+        XCTAssertNil(store.peekReady(sessionId: "new", eligibleTodoNumbers: [1]))
+    }
+
+    func testLegacyOrphanRequiresExplicitTaskCheckedAdoptionAndHumanStopCancels() throws {
+        let store = SessionContinuationStore(directory: tempDir())
+        XCTAssertTrue(store.arm(crewId: "c", sessionId: "old", note: "旧步骤"))
+        store.finishTurn(crewId: "c", sessionId: "old", outcome: .continuing)
+        XCTAssertNil(store.readyForCaptain(crewId: "c", sessionId: "new", liveSessionIds: ["new"], eligibleTodoNumbers: [1]))
+        let old = try XCTUnwrap(store.orphanedReady(crewId: "c", sessionId: "new", liveSessionIds: ["new"]).first)
+        XCTAssertFalse(store.arm(crewId: "other", sessionId: "new", note: "新步骤", captainPromise: true, todoNumbers: [1], adoptingLeaseId: old.id))
+        XCTAssertTrue(store.arm(crewId: "c", sessionId: "new", note: "按当前状态验收", captainPromise: true, todoNumbers: [1], adoptingLeaseId: old.id))
+        XCTAssertNil(store.peekReady(sessionId: "old"))
+        store.finishTurn(crewId: "c", sessionId: "new", outcome: .continuing)
+        store.cancel(sessionId: "new")
+        XCTAssertNil(store.peekReady(sessionId: "new", eligibleTodoNumbers: [1]))
+    }
+
+    func testCorruptContinuationRowsAndLockFailurePreserveDebtWithoutArming() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("session-continuations.json")
+        let damaged = Data("[{\"id\":\"old\"}]".utf8)
+        try damaged.write(to: url)
+        let store = SessionContinuationStore(directory: dir)
+        XCTAssertFalse(store.arm(crewId: "c", sessionId: "new", note: "must not overwrite"))
+        XCTAssertEqual(try Data(contentsOf: url), damaged)
+        let locked = tempDir()
+        try FileManager.default.createDirectory(at: locked.appendingPathComponent("session-continuations.lock"), withIntermediateDirectories: true)
+        XCTAssertFalse(SessionContinuationStore(directory: locked).arm(crewId: "c", sessionId: "s", note: "must not start"))
+    }
+
 }

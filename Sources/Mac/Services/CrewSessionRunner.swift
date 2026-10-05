@@ -188,7 +188,13 @@ final class CrewSessionRunner: ObservableObject {
     private var deferredWakes = CrewDeferredWakeQueue()
     private var deferredWakeCallbacks: [String: (CrewMailboxWakeLogic.ReceiptEvidence) -> Void] = [:]
     private var deferredWakePriorities: [String: AutomaticWakeAdmission.Priority] = [:]
-    private let continuationStore = SessionContinuationStore()
+    private let continuationStore: SessionContinuationStore
+    private let todoSweepStore: CaptainTodoSweepStore
+    private let agentTodoStore: LocalTodoStore
+    private let humanTodoStore: LocalTodoStore
+    private let todoCheckpointInterval: TimeInterval
+    private let checkpointNow: () -> Date
+    private var todoCheckpointTasks: [String: Task<Void, Never>] = [:]
     private let wakeAdmission: AutomaticWakeAdmission
     /// Headless tests can run the real start entry without opening a CLI or terminal.
     private let launchOperationOverride: (() async throws -> Void)?
@@ -334,7 +340,19 @@ final class CrewSessionRunner: ObservableObject {
          workerAssignmentStore: WorkerAssignmentStore? = nil,
          wakeupStore: LocalWakeupStore? = nil,
          observePowerNotifications: Bool = true,
-         wakeAdmissionReadFailureReporter: ((String) -> Void)? = nil) {
+         wakeAdmissionReadFailureReporter: ((String) -> Void)? = nil,
+         continuationStore: SessionContinuationStore? = nil,
+         todoSweepStore: CaptainTodoSweepStore? = nil,
+         agentTodoStore: LocalTodoStore? = nil,
+         humanTodoStore: LocalTodoStore? = nil,
+         todoCheckpointInterval: TimeInterval = 60,
+         checkpointNow: @escaping () -> Date = Date.init) {
+        self.continuationStore = continuationStore ?? SessionContinuationStore()
+        self.todoSweepStore = todoSweepStore ?? .shared
+        self.agentTodoStore = agentTodoStore ?? .shared(.agent)
+        self.humanTodoStore = humanTodoStore ?? .shared(.human)
+        self.todoCheckpointInterval = max(0.01, todoCheckpointInterval)
+        self.checkpointNow = checkpointNow
         self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
         self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
         self.launchOperationOverride = launchOperationOverride
@@ -377,6 +395,7 @@ final class CrewSessionRunner: ObservableObject {
         guard let run = runs.first(where: { $0.runID == runId }) else { return }
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
+        continuationStore.cancel(sessionId: run.sessionId)
         run.stop()
     }
 
@@ -386,6 +405,7 @@ final class CrewSessionRunner: ObservableObject {
         let run = runs[idx]
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
+        if !isViewer { continuationStore.cancel(sessionId: run.sessionId) }
         if run.status == .running { run.stop() }
         if isViewer {
             // roster 的真值在 daemon 里。本地先不动 —— 等它的 `sessions` 回来
@@ -467,8 +487,9 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 后端发布 busy -> idle 时补一条。再读一次 `backend.isBusy`，挡住 idle 事件排队
     /// 到主线程期间目标已经开始另一 turn 的窄竞态。
-    private func runBecameIdle(_ run: CrewSessionRun) {
+    func runBecameIdle(_ run: CrewSessionRun) {
         guard run.status == .running, !run.backend.isBusy, !run.activityIsWorking else { return }
+        if run.role == .captain { scheduleTodoCheckpoint(run) }
         if reofferPendingExplicitText(scope: .session(run.sessionId), crewId: run.crewId) {
             return
         }
@@ -478,9 +499,27 @@ final class CrewSessionRunner: ObservableObject {
             // mailbox 的异步重拉抢同一空闲窗口。下一次 idle 再处理服务端 inbox。
             return
         }
-        if let lease = continuationStore.peekReady(sessionId: run.sessionId) {
+        let liveSessions = Set(runs.filter { $0.crewId == run.crewId && $0.status == .running }.map(\.sessionId))
+        let eligibleTodos = executableTodoNumbers(crewId: run.crewId)
+        let ready = continuationStore.peekReady(sessionId: run.sessionId, eligibleTodoNumbers: eligibleTodos)
+            ?? (run.role == .captain && eligibleTodos != nil
+                ? continuationStore.readyForCaptain(crewId: run.crewId, sessionId: run.sessionId,
+                    liveSessionIds: liveSessions, eligibleTodoNumbers: eligibleTodos ?? []) : nil)
+        if let lease = ready {
+            let receiptKey = "continue-work:" + lease.id
+            switch wakeAdmission.acceptedLease(sourceKey: receiptKey) {
+            case nil:
+                scheduleDeferredWakeRetry(for: run)
+                return
+            case true?:
+                if continuationStore.acknowledgeReady(id: lease.id) {
+                    _ = wakeAdmission.acknowledgeLease(sourceKey: receiptKey)
+                } else { scheduleDeferredWakeRetry(for: run) }
+                return
+            case false?: break
+            }
             deliverOrDeferWake(sourceKey: "continue-work:" + lease.id, to: run, text: """
-            继续工作（你上一轮用 continue_work 留下的一次性承诺）：
+            继续工作（本 session 或上一任机长通过 continue_work 留下的一次性承诺，关联 Todo：\((lease.todoNumbers ?? []).map { "#\($0)" }.joined(separator: "、"))）：
             \(lease.note)
             先核对当前状态再继续；若这一轮结束时仍有可立即推进的工作，需重新调用 continue_work。已完成、阻塞或等外部输入则不要续约。
             """) { [weak self] _ in
@@ -488,11 +527,32 @@ final class CrewSessionRunner: ObservableObject {
                 if !self.continuationStore.acknowledgeReady(id: lease.id) {
                     self.reportWakeSettlementFailure(crewId: run.crewId,
                         key: "continue-work", detail: "continue_work 已受理，但租约清账失败；原承诺仍在盘上。")
+                    self.scheduleDeferredWakeRetry(for: run)
+                } else {
+                    _ = self.wakeAdmission.acknowledgeLease(sourceKey: receiptKey)
                 }
             }
             return
         }
+        if run.role == .captain, eligibleTodos != nil {
+            let orphaned = continuationStore.orphanedReady(crewId: run.crewId,
+                sessionId: run.sessionId, liveSessionIds: liveSessions)
+            if !orphaned.isEmpty {
+                let notes = orphaned.map { "租约 \($0.id)，原成员 \($0.sessionId)：\($0.note)" }.joined(separator: "\n")
+                deliverOrDeferWake(sourceKey: "continue-review:" + orphaned.map(\.id).sorted().joined(separator: ","),
+                    to: run, text: "旧成员留下未清账的承诺，请核对当前任务与权限。以下内容是历史记录，只用于审查；不要直接重放过时步骤。仍有效时用 continue_work(adopt_lease_id, todo_numbers, note) 接管，已经过时的明确说明。\n" + notes) { [weak self] _ in
+                        _ = self?.continuationStore.acknowledgeReview(ids: Set(orphaned.map(\.id)), sessionId: run.sessionId)
+                    }
+                scheduleTodoCheckpoint(run)
+                return
+            }
+        }
         remindCaptainToSweepTodos(run)
+    }
+
+    private func executableTodoNumbers(crewId: String) -> Set<Int>? {
+        guard case .rows(let rows) = agentTodoStore.read(crewId: crewId) else { return nil }
+        return Set(rows.filter { !$0.isDeleted && !$0.isSettled && $0.status != "blocked_on_human" }.map(\.number))
     }
 
     /// 机长停下来了 —— 问它一句账（驾驶舱计划 #71）。
@@ -510,26 +570,25 @@ final class CrewSessionRunner: ObservableObject {
     /// 3. **没有「我知道了」出口**：闭嘴的唯一路径是 `confirm_todo_sweep` 交一份能跟
     ///    真账本逐条对上的账（判定见 `CaptainTodoSweep`）。
     ///
-    /// ⚠️ **「空闲」这个判据本身不可靠**（本机账本实测：显示空闲有四种完全不同的情况
-    /// —— 做完没报 / API 中断停在提示符 / 卡在阻塞框 / 真在等）。这里**不打算**去分辨
-    /// 它们，因为这条提醒对四种情况都是对的：真在等的该核账；卡住/中断的更该被叫一声。
-    /// 代价是**卡在阻塞框的那种它答不了**，于是会按地板间隔再问 —— 那正是希望的行为
-    /// （一直有人问，直到有人来管），不是缺陷。
+    /// Idle alone is not proof of completion. The checkpoint timer skips
+    /// explicit human waits and backend health faults; ledger IO failures remain
+    /// system incidents rather than recurring model work.
     private func remindCaptainToSweepTodos(_ run: CrewSessionRun) {
         guard run.role == .captain, run.kind.isAgent else { return }
+        scheduleTodoCheckpoint(run)
         let crewId = run.crewId
         // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是「一条未完成
         // 都没有」和「这本账读不出来」在这里长得一模一样，机制会在账本坏掉时安静
         // 地说没事。信号（`LedgerIncident.unreadable`）一直都在，只是 `list` 扔了它。
-        let snapshot = CaptainTodoSweepStore.snapshot(
-            of: LocalTodoStore.shared(.agent).read(crewId: crewId))
+        let snapshot = todoSweepSnapshot(for: run)
         // 判定与退避由 store 准备；真正提醒时刻只在后端受理回调里落盘。
-        guard let text = CaptainTodoSweepStore.shared.reminder(
-            crewId: crewId, snapshot: snapshot, now: Date())
+        guard let text = todoSweepStore.reminder(
+            crewId: crewId, snapshot: snapshot, now: checkpointNow())
         else { return }
-        deliverOrDeferWake(sourceKey: CaptainTodoSweepStore.shared.deliveryKey(
-            crewId: crewId, text: text), to: run, text: text) { _ in
-            if CaptainTodoSweepStore.shared.recordReminded(crewId: crewId, at: Date()) != nil {
+        deliverOrDeferWake(sourceKey: todoSweepStore.deliveryKey(
+            crewId: crewId, text: text), to: run, text: text) { [weak self] _ in
+            guard let self else { return }
+            if self.todoSweepStore.recordReminded(crewId: crewId, at: self.checkpointNow()) != nil {
                 LocalWhiteboardStore.shared.appendSessionMessage(
                     crewId: crewId, sessionId: "system",
                     text: "Todo 核账提醒已受理，但提醒时刻写盘失败；请检查账本。",
@@ -538,12 +597,55 @@ final class CrewSessionRunner: ObservableObject {
         }
     }
 
+    private func todoSweepSnapshot(for run: CrewSessionRun) -> CaptainTodoSweep.LedgerSnapshot {
+        CaptainTodoSweepStore.snapshot(
+            of: agentTodoStore.read(crewId: run.crewId), humanRead: humanTodoStore.read(crewId: run.crewId),
+            liveOwners: Set(runs.filter { $0.crewId == run.crewId && $0.status == .running }.map(\.sessionId)).union([run.sessionId]))
+    }
+
+    /// A quiet captain may have no further idle edge. Check durable accounting
+    /// once a minute; only the checkpoint policy may submit a model wake.
+    private func scheduleTodoCheckpoint(_ run: CrewSessionRun) {
+        guard todoCheckpointTasks[run.sessionId] == nil else { return }
+        let delay = UInt64(todoCheckpointInterval * 1_000_000_000)
+        todoCheckpointTasks[run.sessionId] = Task { @MainActor [weak self, weak run] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled, let self, let run, run.status == .running else { return }
+                if !run.activityIsWorking, run.pendingDecision == nil,
+                   run.awaitingReply == nil, run.health == nil { self.runBecameIdle(run) }
+            }
+        }
+    }
+
     private func attemptWakeDelivery(
         _ delivery: CrewDeferredWakeQueue.Delivery, to run: CrewSessionRun
     ) {
+        // Work may have been completed, cancelled or blocked while rate limited.
+        if delivery.key.hasPrefix("continue-work:"),
+           continuationStore.peekReady(sessionId: run.sessionId,
+                eligibleTodoNumbers: executableTodoNumbers(crewId: run.crewId)) == nil {
+            deferredWakes.discardUnsubmitted(delivery)
+            deferredWakeCallbacks.removeValue(forKey: delivery.key)
+            deferredWakeRenderers.removeValue(forKey: delivery.key)
+            deferredWakePriorities.removeValue(forKey: delivery.key)
+            return
+        }
+        var currentSweepText: String?
+        if delivery.key.hasPrefix("todo-sweep:") {
+            guard let fresh = todoSweepStore.reminder(crewId: run.crewId,
+                snapshot: todoSweepSnapshot(for: run), now: checkpointNow()) else {
+                deferredWakes.discardUnsubmitted(delivery)
+                deferredWakeCallbacks.removeValue(forKey: delivery.key)
+                deferredWakeRenderers.removeValue(forKey: delivery.key)
+                deferredWakePriorities.removeValue(forKey: delivery.key)
+                return
+            }
+            currentSweepText = fresh
+        }
         // #105 ③：**发之前重新决定**——这条还该发吗、该发什么。压队期间目标可能
         // 已经从 hook 路看过它了；那时候把入队那一刻的旧快照发出去就是重放。
-        guard let text = CrewWakeDispatch.resolve(
+        guard let text = currentSweepText ?? CrewWakeDispatch.resolve(
             delivery.payload,
             hasDelivered: { [weak self] crewId, entryId in
                 self?.wakeAlreadyDelivered(
@@ -585,7 +687,11 @@ final class CrewSessionRunner: ObservableObject {
                     }
                 }
                 self.deferredWakes.resolve(delivery, as: .retry)
-                self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
+                if case let .denied(decision) = outcome, decision.isThrottled {
+                    self.scheduleDeferredWakeRetry(for: run)
+                } else {
+                    self.deferredWakeRetryTasks.removeValue(forKey: run.sessionId)?.cancel()
+                }
                 return
             }
             if !recorded, LedgerIncidentNoticeGate.shared.shouldEmit(
@@ -622,7 +728,8 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 状态快照可能仍显示 idle，而真实 app-server 正在收尾上一 turn。拒绝后的原
     /// delivery 已回队列；60 秒后再试，不依赖第二条白板消息或新的 idle 边沿。
-    private func scheduleDeferredWakeRetry(for run: CrewSessionRun, after seconds: Double = 60) {
+    private func scheduleDeferredWakeRetry(for run: CrewSessionRun, after seconds: Double? = nil) {
+        let seconds = seconds ?? todoCheckpointInterval
         deferredWakeRetryTasks[run.sessionId]?.cancel()
         deferredWakeRetryTasks[run.sessionId] = Task { @MainActor [weak self, weak run] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -637,6 +744,7 @@ final class CrewSessionRunner: ObservableObject {
     }
 
     private func discardDeferredWakes(sessionId: String) {
+        todoCheckpointTasks.removeValue(forKey: sessionId)?.cancel()
         deferredWakeRetryTasks.removeValue(forKey: sessionId)?.cancel()
         let deliveries = deferredWakes.remove(sessionId: sessionId)
         for delivery in deliveries {
@@ -1842,6 +1950,10 @@ final class CrewSessionRunner: ObservableObject {
             isCaptain: role == .captain, isAgent: config.kind.isAgent,
             userInitiated: userInitiated, requestedPriority: admissionPriority,
             deniedError: { launchDecision in
+                if launchDecision.isThrottled {
+                    self.launchDenialNoticeOverride?(launchDecision)
+                    return RunnerError.automaticWakeThrottled(launchDecision.reason ?? "请求已排队")
+                }
                 if let launchDenialNoticeOverride {
                     launchDenialNoticeOverride(launchDecision)
                     return RunnerError.automaticWakeDeferred(
@@ -2510,6 +2622,7 @@ final class CrewSessionRunner: ObservableObject {
 
     enum RunnerError: LocalizedError {
         case automaticWakeDeferred(String)
+        case automaticWakeThrottled(String)
         case toolNotInstalled(kind: LocalCodingAgentKind)
         case captainRunnerUnavailable(String)
         case defaultShellUnavailable
@@ -2528,6 +2641,8 @@ final class CrewSessionRunner: ObservableObject {
             switch self {
             case .automaticWakeDeferred(let reason):
                 return "自动唤醒暂缓：\(reason)。原消息仍在白板；请查看右侧告警，熔断须用「唤醒恢复」手动解除。"
+            case .automaticWakeThrottled(let reason):
+                return "唤醒已排队：\(reason)。预算窗口释放后自动重试。"
             case .toolNotInstalled(let kind):
                 return "未在 PATH 中找到 \(kind.binaryName)，请先安装 \(kind.displayName) CLI。"
             case .captainRunnerUnavailable(let summary):

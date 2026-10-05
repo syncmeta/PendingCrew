@@ -1,58 +1,48 @@
 import Foundation
 
-/// 机长空闲时被提醒回头看 Todo 账，**直到它给出一份对得上的账才停**（驾驶舱计划 #71）。
-///
-/// # 人类原话，以及它推翻了什么
-///
-/// > 不要新给 todo 的时候看。如果机长休眠不干活，pendingcrew 就提醒一次看 todo，
-/// > 直到机长确认 都做完了 或者卡在人类这边 明确输出确认应该停止 再停
-///
-/// 被推翻的方案是「新 Todo 进来时顺手回头看老账」。**新活进来是最差的触发时刻** ——
-/// 那时机长最忙，会敷衍地扫一眼就过。而**空闲是对的时刻**：没有别的事跟它抢，而且
-/// 空闲本身就意味着机长以为没事干了 —— 那正是该被质问的一刻。
-///
-/// 还有一层：人类要的是**产品去提醒**，不是让机长养成习惯。机长的习惯会被下一条
-/// 消息冲掉，这一点当天就被证明过。
-///
-/// # 为什么确认必须带账
-///
-/// 现场（2026-09-08，机长自述）：它一整天以为自己在推进，直到人类问、把账拉出来，
-/// 才发现 **23 条未完成里有 9 条是「做完了没翻牌」**，其中两条早在 0.1.26 就发出去了。
-/// 它自己的结论是：**「如果确认只需要说一句『都做完了』，我今天会毫不犹豫地说出口。」**
-///
-/// 所以 `validate` 要求把**每一条未完成的 #N 都归进一个桶**，并集必须跟真账本逐个对上。
-/// **让敷衍的成本高于真查** —— 这是整个机制唯一的承重点。归不进任何桶的那一条，
-/// 正是「其实早就做完了、只是没翻牌」的那条。
-///
-/// # 跟 `SupervisionLease` 的边界（为什么不是复用它）
-///
-/// 两者**共享纪律，不共享代码**：
-///
-/// - `SupervisionLease` 的轴是**持有关系**，键是 `(crewId, planNumber)` 单条计划，
-///   触发靠 `LocalWakeupStore` 的**定时器**，解除靠把那条计划翻到 done/blocked。
-/// - 这一条的轴是**整本 Todo 账**，没有单条键，触发是**事件**（机长从忙变闲），
-///   解除靠一份能跟账本对上的结构化确认。
-///
-/// 硬塞进租约模型就得编一个假的 planNumber 和一个假的到期时间 —— 那不是复用，
-/// 是把两件事伪装成一件。**真正复用的是那条纪律**：
-/// **没有「我知道了 / 已查看 / 顺延」任何一种出口**（有测试钉着）。一旦给了那个出口，
-/// 机制必然退化成「看一眼就算办完」，那正是 `SupervisionLease` 里点名要避免的东西。
-///
-/// # 「永远在响的提醒会变成背景噪音」怎么处理
-///
-/// 机长几乎总有未完成 Todo，那是常态。所以**闭嘴的条件不是一个时长，是一个集合**：
-/// 确认覆盖的是**那一批具体条目**，只要没冒出没被覆盖过的新条目，隔多久都不再响
-/// （`decide` 用 superset 判定，不是相等）。条目变少（做完翻牌了）也不重新响 ——
-/// 否则就成了「翻牌反而挨骂」。
-///
-/// 纯 Foundation、无 IO、无 actor —— 所以上面每一条都能脱离 app 直接单测。
+/// Idle reconciliation is a checkpoint, never permanent forgiveness of open work.
+/// IO faults remain system faults and must not create recurring model turns.
 enum CaptainTodoSweep {
 
     /// 一次被接受的确认。**记下它覆盖了哪些条目** —— 下次判断「这批变没变」全靠它。
     struct Confirmation: Equatable, Codable {
-        let confirmedAt: String
+        var confirmedAt: String
         /// 确认那一刻账上所有未完成条目的 #N。
         let openNumbers: [Int]
+        var followUps: [FollowUp]? = nil
+        var blockers: [Blocker]? = nil
+        var revisions: [String: String]? = nil
+    }
+
+    struct FollowUp: Codable, Equatable {
+        let number: Int
+        let ownerSessionId: String
+        let nextAction: String
+        let checkAt: String
+        var stage: String? = nil
+        var evidence: String? = nil
+    }
+
+    struct Blocker: Codable, Equatable {
+        let number: Int
+        let humanTodoNumber: Int
+    }
+
+    struct Item: Equatable {
+        let number: Int
+        let status: String
+        let revision: String
+        let acceptedOwner: String?
+
+        init(_ row: LocalTodoItem) {
+            number = row.number
+            status = row.status
+            // Include responses as well as the item stamp: human replies and
+            // reopened tasks must invalidate an older accounting checkpoint.
+            revision = row.effectiveUpdatedAt + "|" + row.status + "|" + String(row.responses.count)
+            acceptedOwner = row.responses.last(where: { $0.status != nil })
+                .flatMap { $0.status == "in_progress" ? $0.sessionId : nil }
+        }
     }
 
     /// 账本这一眼读到了什么。**三态（有 / 真空 / 读不到），不许压成 `Set<Int>`。**
@@ -61,7 +51,8 @@ enum CaptainTodoSweep {
     /// 就**安静地说没事** —— 一条存在意义就是「不让沉默发生」的通道，自己在读失败时
     /// 沉默了。那是自我否定，不是保守失败。
     enum LedgerSnapshot: Equatable {
-        case read(Set<Int>)
+        case read(Set<Int>) // Legacy callers; confirmations have bounded grace.
+        case items([Item], humanOpen: Set<Int>, liveOwners: Set<String>)
         case unreadable
     }
 
@@ -83,9 +74,11 @@ enum CaptainTodoSweep {
         case unknown([Int])
         /// 同一条被放进了两个桶。
         case overlapping([Int])
+        case invalidCheckpoint(String)
 
         var summary: String {
             switch self {
+            case .invalidCheckpoint(let detail): return detail
             case let .missing(ns):
                 return "这几条未完成的还没被归进任何一桶：\(Self.list(ns))。"
                     + "每一条都得说清它在跑、卡人类、还是排队——**归不进去的那条，多半是你早就做完了却没翻牌**。"
@@ -121,16 +114,39 @@ enum CaptainTodoSweep {
         if case .unreadable = snapshot {
             return .silent("账本读不出来；已由系统错误通道报告，不唤醒 agent")
         }
-        guard case let .read(open) = snapshot else { return .silent("不可达") }
-        // ① 一条未完成都没有 —— 没什么可问的。**一条永远报「已知没事」的提醒会训练
-        // 人忽略整个通道**，所以这里必须真闭嘴，而不是发一条「都做完了，很好」。
+        let open: Set<Int>
+        let items: [Item]
+        let humanOpen: Set<Int>
+        let liveOwners: Set<String>
+        switch snapshot {
+        case .read(let numbers):
+            open = numbers; items = []; humanOpen = []; liveOwners = []
+        case .items(let rows, let humans, let owners):
+            open = Set(rows.map(\.number)); items = rows
+            humanOpen = humans; liveOwners = owners
+        case .unreadable: return .silent("账本读不出来")
+        }
         guard !open.isEmpty else { return .silent("这本账没有未完成条目") }
-
-        // ② 确认覆盖了当下这批 —— 闭嘴，**与过去多久无关**。
-        // 用 superset 而不是相等：条目变少是「做完翻牌了」，那是好事，
-        // 相等判定会让翻牌反而招来一次提醒。
         if let confirmation, Set(confirmation.openNumbers).isSuperset(of: open) {
-            return .silent("已确认过这批，且没有新的未完成条目")
+            if let followUps = confirmation.followUps,
+               let blockers = confirmation.blockers,
+               let revisions = confirmation.revisions, !items.isEmpty {
+                let covered = items.allSatisfy { item in
+                    guard revisions[String(item.number)] == item.revision else { return false }
+                    if let blocker = blockers.first(where: { $0.number == item.number }) {
+                        return item.status == "blocked_on_human"
+                            && humanOpen.contains(blocker.humanTodoNumber)
+                    }
+                    guard let next = followUps.first(where: { $0.number == item.number }),
+                          liveOwners.contains(next.ownerSessionId),
+                          let date = parseDate(next.checkAt) else { return false }
+                    return date > now
+                }
+                if covered { return .silent("未到检查点；负责人或人类阻塞仍有效") }
+            } else if let at = parseDate(confirmation.confirmedAt),
+                      now.timeIntervalSince(at) < minimumInterval {
+                return .silent("旧确认暂缓一次；到期重新核账")
+            }
         }
 
         // ③ 地板间隔 —— 机长在忙/闲之间抖一下不该被刷屏。
@@ -144,23 +160,15 @@ enum CaptainTodoSweep {
 
     /// 对可读且有未完成条目的账，生成给机长的一次核账提醒。
     private static func text(open: Set<Int>, uncovered: [Int]) -> String {
-        let newlyLine = uncovered.count == open.count
-            ? ""
-            : "\n- 其中**没被你上次确认覆盖过**的是：\(uncovered.map { "#\($0)" }.joined(separator: "、"))。"
+        let newlyLine = uncovered.isEmpty ? "" : "\n需要核对：" + uncovered.map { "#\($0)" }.joined(separator: "、")
         return """
         你停下来了，但这本 Todo 账上还有 \(open.count) 条没完成。\(newlyLine)
-
-        **空闲正是该核账的一刻** —— 现在没有别的事跟它抢；而「我以为没事干了」恰恰是最该被质问的那一刻。
-
-        去把这 \(open.count) 条逐条看一遍（`respond_todo` 那本，人类派给你的活），然后调 `confirm_todo_sweep`，把每一条都归进一个桶：
-        - `running`：正在跑 / 有人在做
-        - `blocked_on_human`：卡在人类那边，你推不动
-        - `queued`：还没开始，排着
-
-        **三个桶的并集必须等于这 \(open.count) 条，一条不多一条不少**，否则会被拒。
-        这不是形式：**归不进任何桶的那一条，多半是你早就做完了、只是没翻牌**（有过 23 条里 9 条是这种的先例）。
-
-        确认之前它还会再提醒你。这里没有「我知道了」「顺延」这种动作。
+        核对真实产出和负责人回执，继续推进可执行事项；做完了没翻牌的用 respond_todo 清账。
+        调 confirm_todo_sweep 把全部未完成事项归入 running、blocked_on_human 或 queued。
+        running 必须有该负责人 respond_todo(in_progress) 的受理回执和当前在线证据。
+        running / queued 每条都要 follow_ups：number、owner_session_id、next_action、check_at（ISO8601，未来一小时内）。
+        blocked_on_human 每条都要 blockers：number、human_todo_number，指向仍在等人答复的真实问题。
+        派出消息只算排队；检查点到期、负责人退出或阻塞解除后会重新核账。没有「我知道了 / 顺延」出口。
         """
     }
 
@@ -193,6 +201,98 @@ enum CaptainTodoSweep {
                 confirmedAt: ISO8601DateFormatter().string(from: Date()),
                 openNumbers: open.sorted()),
             refusal: nil)
+    }
+
+    /// Runtime validation checks receipts, live ownership and actual blockers.
+    static func validate(running: [Int], blockedOnHuman: [Int], queued: [Int],
+                         items: [Item], followUps: [FollowUp], blockers: [Blocker],
+                         humanOpen: Set<Int>, liveOwners: Set<String>, now: Date) -> ValidationResult {
+        let partition = validate(running: running, blockedOnHuman: blockedOnHuman,
+                                 queued: queued, open: Set(items.map(\.number)))
+        guard var confirmation = partition.confirmation else { return partition }
+        func reject(_ detail: String) -> ValidationResult {
+            .init(confirmation: nil, refusal: .invalidCheckpoint(detail))
+        }
+        guard Set(followUps.map(\.number)) == Set(running + queued),
+              followUps.count == running.count + queued.count,
+              Set(blockers.map(\.number)) == Set(blockedOnHuman),
+              blockers.count == blockedOnHuman.count else {
+            return reject("running / queued 每条必须有且仅有一个 follow_ups；blocked_on_human 每条必须有且仅有一个 blockers。")
+        }
+        for next in followUps {
+            let stage = next.stage ?? (running.contains(next.number) ? "running" : "queued")
+            guard ["queued", "running", "awaiting_review", "blocked_on_system"].contains(stage),
+                  !(stage == "running" && !running.contains(next.number)),
+                  !(stage == "queued" && running.contains(next.number)) else {
+                return reject("#\(next.number) stage 与归桶不符；可选 queued / running / awaiting_review / blocked_on_system。")
+            }
+            if stage == "awaiting_review" || stage == "blocked_on_system" {
+                guard !(next.evidence ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return reject("#\(next.number) 等待验收须有产物位置；系统阻塞须有错误证据。")
+                }
+            }
+            guard !next.nextAction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  liveOwners.contains(next.ownerSessionId),
+                  let check = parseDate(next.checkAt), check > now,
+                  check.timeIntervalSince(now) <= 3600 else {
+                return reject("#\(next.number) 缺少在线负责人、具体下一动作，或未来一小时内的有效检查点。未接活的 worker 应归 queued，由机长负责下一步。")
+            }
+            if running.contains(next.number),
+               !items.contains(where: { $0.number == next.number && $0.status == "in_progress"
+                    && $0.acceptedOwner == next.ownerSessionId }) {
+                return reject("#\(next.number) 没有该负责人的 respond_todo(in_progress) 受理回执；派出消息不算开工，请归 queued。")
+            }
+        }
+        for blocker in blockers {
+            guard humanOpen.contains(blocker.humanTodoNumber),
+                  items.contains(where: { $0.number == blocker.number && $0.status == "blocked_on_human" }) else {
+                return reject("#\(blocker.number) 的人类阻塞无效；请指向仍未答复的人类 Todo，或改回 queued / running 并继续。")
+            }
+        }
+        confirmation.confirmedAt = ISO8601DateFormatter().string(from: now)
+        confirmation.followUps = followUps.map { next in
+            var row = next
+            row.stage = next.stage ?? (running.contains(next.number) ? "running" : "queued")
+            return row
+        }
+        confirmation.blockers = blockers
+        confirmation.revisions = Dictionary(uniqueKeysWithValues: items.map { (String($0.number), $0.revision) })
+        return .init(confirmation: confirmation, refusal: nil)
+    }
+
+    static func progressLine(item: LocalTodoItem, confirmation: Confirmation?,
+                             liveOwners: Set<String>, now: Date,
+                             ownerNames: [String: String] = [:], humanOpen: Set<Int>? = nil) -> String? {
+        guard !item.isSettled, !item.isDeleted else { return nil }
+        guard let confirmation, confirmation.revisions?[String(item.number)] == Item(item).revision else {
+            return "待核账 · 尚无有效负责人和检查点"
+        }
+        if let blocker = confirmation.blockers?.first(where: { $0.number == item.number }) {
+            let phase = humanOpen.map { $0.contains(blocker.humanTodoNumber) ? "等人答复" : "答复已到 · 待接续" } ?? "待核对人类阻塞"
+            return "\(phase) · 人类 Todo #\(blocker.humanTodoNumber)"
+        }
+        guard let next = confirmation.followUps?.first(where: { $0.number == item.number }) else { return nil }
+        let phase: String
+        if !liveOwners.contains(next.ownerSessionId) { phase = "负责人不在线 · 待接续" }
+        else if parseDate(next.checkAt).map({ $0 <= now }) ?? true { phase = "检查点已到 · 待核账" }
+        else {
+            switch next.stage {
+            case "running": phase = "已接活 · 执行中"
+            case "awaiting_review": phase = "已有产物 · 等待验收"
+            case "blocked_on_system": phase = "系统阻塞"
+            default: phase = "排队 · 等待接活"
+            }
+        }
+        let check = parseDate(next.checkAt).map { $0.formatted(date: .omitted, time: .shortened) } ?? next.checkAt
+        let owner = ownerNames[next.ownerSessionId] ?? "待核对成员"
+        return "\(phase) · 负责人 \(owner) · 检查 \(check)\n下一步：\(next.nextAction)"
+    }
+
+    static func parseDate(_ stamp: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: stamp) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: stamp)
     }
 
     // MARK: - 读不出来时的退避（计划 #98）

@@ -61,21 +61,20 @@ final class CaptainTodoSweepTests: XCTestCase {
             confirmedAt: Self.iso(now), openNumbers: [3, 7, 12])
         let decision = CaptainTodoSweep.decide(
             open: .read([3, 7, 12]), confirmation: confirmation, lastRemindedAt: nil,
-            unreadableStreak: 0, now: now.addingTimeInterval(3600), minimumInterval: floor)
+            unreadableStreak: 0, now: now.addingTimeInterval(5), minimumInterval: floor)
         XCTAssertEqual(decision.isSilent, true,
                        "确认过、而且这批一个字没变，还在提醒 —— 那就是一条永远在响的提醒")
     }
 
-    /// 「确认之后多久不再提醒」的答案**不是一个时长，是一个集合**。
-    /// 确认覆盖的是**那一批具体条目**；只要那批没变，隔多久都不该再响。
-    func testConfirmationDoesNotExpireByTimeAlone() {
+    /// Number-only historical confirmations have bounded grace.
+    func testLegacyConfirmationExpiresWithoutNewTodoNumbers() {
         let confirmation = CaptainTodoSweep.Confirmation(
             confirmedAt: Self.iso(now), openNumbers: [3])
         let decision = CaptainTodoSweep.decide(
             open: .read([3]), confirmation: confirmation, lastRemindedAt: nil,
             unreadableStreak: 0, now: now.addingTimeInterval(30 * 86400), minimumInterval: floor)
-        XCTAssertEqual(decision.isSilent, true,
-                       "光靠时间就把确认作废了 —— 那机长每隔一阵就要重报一次一模一样的账，正是「永远在响」")
+        XCTAssertEqual(decision.isSilent, false,
+                       "相同编号的旧确认不能永久压住排队任务")
     }
 
     /// 新 Todo 进来**算重置** —— 但只因为「确认没覆盖到它」，不是因为「来了新活」。
@@ -468,8 +467,8 @@ final class CaptainTodoSweepTests: XCTestCase {
             runner.contains("remindCaptainToSweepTodos("),
             "空闲钩子里没人调这套判定 —— 零件造好了没装到车上，机长永远不会被问账")
         XCTAssertTrue(
-            runner.contains("CaptainTodoSweepStore.shared.reminder(")
-                && runner.contains("CaptainTodoSweepStore.shared.recordReminded("),
+            runner.contains("todoSweepStore.reminder(")
+                && runner.contains("todoSweepStore.recordReminded("),
             "核账须先按退避判定，后端受理后才记提醒时刻")
         XCTAssertTrue(
             runner.contains("run.role == .captain"),
@@ -795,6 +794,215 @@ final class CaptainTodoSweepTests: XCTestCase {
             try FileManager.default.setAttributes(
                 [.posixPermissions: readable ? 0o644 : 0], ofItemAtPath: todosFile.path)
         }
+    }
+
+    func testCheckpointExpiresAndSurvivesStoreRecreationWithoutNewTodo() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let todo = LocalTodoItem(id: "t", number: 1, text: "repair", status: "pending", createdAt: Self.iso(now))
+        let items = [CaptainTodoSweep.Item(todo)]
+        let next = CaptainTodoSweep.FollowUp(number: 1, ownerSessionId: "captain",
+            nextAction: "验收修复产物", checkAt: Self.iso(now.addingTimeInterval(1200)))
+        let checked = CaptainTodoSweep.validate(running: [], blockedOnHuman: [], queued: [1],
+            items: items, followUps: [next], blockers: [], humanOpen: [], liveOwners: ["captain"], now: now)
+        let confirmation = try XCTUnwrap(checked.confirmation)
+        XCTAssertNil(CaptainTodoSweepStore(directory: dir).recordConfirmation(crewId: "c", confirmation))
+        let restarted = CaptainTodoSweepStore(directory: dir)
+        let snapshot = CaptainTodoSweep.LedgerSnapshot.items(items, humanOpen: [], liveOwners: ["captain"])
+        XCTAssertNil(restarted.reminder(crewId: "c", snapshot: snapshot, now: now.addingTimeInterval(1199)))
+        XCTAssertNotNil(restarted.reminder(crewId: "c", snapshot: snapshot, now: now.addingTimeInterval(1200)),
+            "没有新消息或新编号也必须在检查点恢复核账")
+    }
+
+    func testDispatchWithoutOwnerReceiptCannotBeReportedAsRunning() {
+        let item = LocalTodoItem(id: "t", number: 1, text: "repair", status: "in_progress", createdAt: Self.iso(now))
+        let next = CaptainTodoSweep.FollowUp(number: 1, ownerSessionId: "worker",
+            nextAction: "test", checkAt: Self.iso(now.addingTimeInterval(600)))
+        XCTAssertNotNil(CaptainTodoSweep.validate(running: [1], blockedOnHuman: [], queued: [],
+            items: [.init(item)], followUps: [next], blockers: [], humanOpen: [], liveOwners: ["worker"], now: now).refusal)
+        var accepted = item
+        accepted.responses.append(.init(id: "receipt", sessionId: "worker", text: "接活并开始复现",
+            status: "in_progress", createdAt: Self.iso(now)))
+        XCTAssertNotNil(CaptainTodoSweep.validate(running: [1], blockedOnHuman: [], queued: [],
+            items: [.init(accepted)], followUps: [next], blockers: [], humanOpen: [], liveOwners: ["worker"], now: now).confirmation)
+    }
+
+    func testHumanBlockerReplyAndOwnerExitRearmAccounting() throws {
+        let blocked = LocalTodoItem(id: "t", number: 1, text: "repair", status: "blocked_on_human", createdAt: Self.iso(now))
+        let confirmed = try XCTUnwrap(CaptainTodoSweep.validate(running: [], blockedOnHuman: [1], queued: [],
+            items: [.init(blocked)], followUps: [], blockers: [.init(number: 1, humanTodoNumber: 7)],
+            humanOpen: [7], liveOwners: ["captain"], now: now).confirmation)
+        let pending = CaptainTodoSweep.LedgerSnapshot.items([.init(blocked)], humanOpen: [7], liveOwners: ["captain"])
+        XCTAssertTrue(CaptainTodoSweep.decide(open: pending, confirmation: confirmed, lastRemindedAt: nil,
+            unreadableStreak: 0, now: now.addingTimeInterval(86400), minimumInterval: floor).isSilent)
+        let answered = CaptainTodoSweep.LedgerSnapshot.items([.init(blocked)], humanOpen: [], liveOwners: ["captain"])
+        XCTAssertFalse(CaptainTodoSweep.decide(open: answered, confirmation: confirmed, lastRemindedAt: nil,
+            unreadableStreak: 0, now: now.addingTimeInterval(86400), minimumInterval: floor).isSilent)
+    }
+
+    func testMcpRejectsUnownedQueueAndPersistsStructuredCheckpoint() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let todos = LocalTodoStore(directory: dir)
+        _ = todos.add(crewId: "c", text: "repair")
+        var roster = CrewSessionsSnapshot()
+        roster.updatedAt = Self.iso(Date())
+        roster.crews["c"] = [.init(sessionId: "captain", name: "captain", role: "captain", brief: "", state: "working")]
+        try JSONEncoder().encode(roster).write(to: dir.appendingPathComponent(CrewSessionsSnapshot.fileName))
+        let server = McpServer(store: LocalWhiteboardStore(directory: dir), control: LocalCrewControlStore(directory: dir),
+            crewId: "c", sessionId: "captain", isCaptain: true, quotaDirectory: dir, todos: todos)
+        func call(_ args: [String: Any]) throws -> String {
+            let raw = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "confirm_todo_sweep", "arguments": args]])
+            return server.handleLine(String(decoding: raw, as: UTF8.self)) ?? ""
+        }
+        XCTAssertTrue(try call(["queued": [1]]).contains("ERROR"))
+        let result = try call(["queued": [1], "follow_ups": [["number": 1, "owner_session_id": "captain",
+            "next_action": "复现失败并修复", "check_at": Self.iso(Date().addingTimeInterval(600))]]])
+        XCTAssertFalse(result.contains("ERROR"), result)
+        XCTAssertEqual(CaptainTodoSweepStore(directory: dir).row(crewId: "c").confirmation?.followUps?.first?.number, 1)
+    }
+
+    #if os(macOS)
+    @MainActor
+    func testIdleCaptainCheckpointTimerWakesWithoutAnotherIdleEventOrHumanMessage() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let todos = LocalTodoStore(directory: dir)
+        let item = try XCTUnwrap(todos.add(crewId: "c", text: "repair"))
+        var clock = Date()
+        let sweeps = CaptainTodoSweepStore(directory: dir)
+        let checked = CaptainTodoSweep.validate(running: [], blockedOnHuman: [], queued: [1],
+            items: [.init(item)], followUps: [.init(number: 1, ownerSessionId: "captain",
+                nextAction: "复现并修复", checkAt: Self.iso(clock.addingTimeInterval(600)))],
+            blockers: [], humanOpen: [], liveOwners: ["captain"], now: clock)
+        XCTAssertNil(sweeps.recordConfirmation(crewId: "c", try XCTUnwrap(checked.confirmation)))
+        let runner = CrewSessionRunner(wakeAdmission: AutomaticWakeAdmission(directory: dir),
+            observePowerNotifications: false, continuationStore: SessionContinuationStore(directory: dir),
+            todoSweepStore: sweeps, agentTodoStore: todos, humanTodoStore: LocalTodoStore(directory: dir, ledger: .human),
+            todoCheckpointInterval: 0.02, checkpointNow: { clock })
+        let backend = ProtocolTestBackend(kind: .codex)
+        let run = CrewSessionRun(crewId: "c", sessionId: "captain", kind: .codex,
+            taskBrief: "test", workingDirectory: dir, backend: backend, role: .captain)
+        runner.runBecameIdle(run)
+        XCTAssertTrue(backend.submittedWakes.isEmpty)
+        clock = clock.addingTimeInterval(601)
+        for _ in 0..<100 where backend.submittedWakes.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(backend.submittedWakes.count, 1, "唯一的 idle 边沿之后必须由定时器接着推进")
+        XCTAssertTrue(backend.submittedWakes.first?.contains("confirm_todo_sweep") == true)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(backend.submittedWakes.count, 1, "受理回执和地板间隔必须防重复")
+        backend.status = .exited(0)
+    }
+
+    @MainActor
+    func testRateDeferredWakeRetriesWithoutAnotherMessageAndRetainsOriginalIdentity() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let gate = AutomaticWakeAdmission(directory: dir)
+        let epoch = Date()
+        let up = ProcessInfo.processInfo.systemUptime
+        for n in 0..<2 {
+            guard case .allowed(let token) = gate.reserve(sessionId: "worker", crewId: "c", sourceKey: "seed-\(n)", now: epoch, uptime: up) else { return XCTFail("setup") }
+            XCTAssertTrue(gate.finish(token: token, accepted: false))
+        }
+        let runner = CrewSessionRunner(wakeAdmission: gate, observePowerNotifications: false,
+            continuationStore: SessionContinuationStore(directory: dir), todoSweepStore: CaptainTodoSweepStore(directory: dir),
+            agentTodoStore: LocalTodoStore(directory: dir), humanTodoStore: LocalTodoStore(directory: dir, ledger: .human),
+            todoCheckpointInterval: 0.02)
+        let backend = ProtocolTestBackend(kind: .codex)
+        let run = CrewSessionRun(crewId: "c", sessionId: "worker", kind: .codex,
+            taskBrief: "test", workingDirectory: dir, backend: backend)
+        runner.deliverOrDeferWake(sourceKey: "original", to: run, text: "同一条原消息")
+        XCTAssertTrue(backend.submittedWakes.isEmpty)
+        guard case .allowed(let token) = gate.reserve(sessionId: "clock", crewId: "clock", sourceKey: "advance",
+            priority: .human, now: epoch.addingTimeInterval(61), uptime: up + 61) else { return XCTFail("cooldown") }
+        XCTAssertTrue(gate.finish(token: token, accepted: false))
+        for _ in 0..<100 where backend.submittedWakes.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(backend.submittedWakes, ["同一条原消息"])
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(backend.submittedWakes.count, 1)
+        backend.status = .exited(0)
+    }
+
+    @MainActor
+    func testAcceptedContinuationWithFailedSettlementIsNotReplayedAfterCaptainChange() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let todos = LocalTodoStore(directory: dir)
+        _ = todos.add(crewId: "c", text: "repair")
+        let leases = SessionContinuationStore(directory: dir)
+        XCTAssertTrue(leases.arm(crewId: "c", sessionId: "old", note: "验收产物", captainPromise: true, todoNumbers: [1]))
+        leases.finishTurn(crewId: "c", sessionId: "old", outcome: .continuing)
+        let lease = try XCTUnwrap(leases.peekReady(sessionId: "old", eligibleTodoNumbers: [1]))
+        let leaseFile = dir.appendingPathComponent("session-continuations.json")
+        let beforeFailure = try Data(contentsOf: leaseFile)
+        let gate = AutomaticWakeAdmission(directory: dir)
+        func runner() -> CrewSessionRunner {
+            CrewSessionRunner(wakeAdmission: gate, observePowerNotifications: false,
+                continuationStore: SessionContinuationStore(directory: dir), todoSweepStore: CaptainTodoSweepStore(directory: dir),
+                agentTodoStore: todos, humanTodoStore: LocalTodoStore(directory: dir, ledger: .human))
+        }
+        let firstRunner = runner()
+        let firstBackend = ProtocolTestBackend(kind: .codex)
+        firstBackend.onSubmitWake = { _ in try? Data("corrupt-after-acceptance".utf8).write(to: leaseFile) }
+        let first = CrewSessionRun(crewId: "c", sessionId: "old", kind: .codex,
+            taskBrief: "test", workingDirectory: dir, backend: firstBackend, role: .captain)
+        firstRunner.runBecameIdle(first)
+        for _ in 0..<100 where gate.acceptedLease(sourceKey: "continue-work:" + lease.id) != true {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(firstBackend.submittedWakes.count, 1)
+        firstBackend.status = .exited(0)
+        try beforeFailure.write(to: leaseFile)
+        let secondRunner = runner()
+        let secondBackend = ProtocolTestBackend(kind: .codex)
+        let second = CrewSessionRun(crewId: "c", sessionId: "new", kind: .codex,
+            taskBrief: "test", workingDirectory: dir, backend: secondBackend, role: .captain)
+        secondRunner.runBecameIdle(second)
+        XCTAssertTrue(secondBackend.submittedWakes.isEmpty, "跨机长受理回执应只清账，不再次执行原承诺")
+        XCTAssertNil(leases.peekReady(sessionId: "new", eligibleTodoNumbers: [1]))
+        secondBackend.status = .exited(0)
+    }
+
+    @MainActor
+    func testDeferredSweepRechecksLedgerAtSubmissionAndDoesNotWakeForAnIOFault() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let todos = LocalTodoStore(directory: dir)
+        _ = todos.add(crewId: "c", text: "repair")
+        let ledger = dir.appendingPathComponent("c.todos.json")
+        let healthy = try Data(contentsOf: ledger)
+        let sweeps = CaptainTodoSweepStore(directory: dir)
+        let runner = CrewSessionRunner(wakeAdmission: AutomaticWakeAdmission(directory: dir), observePowerNotifications: false,
+            continuationStore: SessionContinuationStore(directory: dir), todoSweepStore: sweeps,
+            agentTodoStore: todos, humanTodoStore: LocalTodoStore(directory: dir, ledger: .human))
+        let backend = ProtocolTestBackend(kind: .codex)
+        backend.isBusy = true
+        let run = CrewSessionRun(crewId: "c", sessionId: "captain", kind: .codex,
+            taskBrief: "test", workingDirectory: dir, backend: backend, role: .captain)
+        let key = sweeps.deliveryKey(crewId: "c", text: "old snapshot")
+        var receipts = 0
+        runner.deliverOrDeferWake(sourceKey: key, to: run, text: "old snapshot") { _ in receipts += 1 }
+        try Data("corrupt".utf8).write(to: ledger)
+        backend.isBusy = false
+        runner.runBecameIdle(run)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertTrue(backend.submittedWakes.isEmpty)
+        XCTAssertEqual(receipts, 0)
+        try healthy.write(to: ledger)
+        runner.deliverOrDeferWake(sourceKey: key, to: run, text: "old snapshot") { _ in receipts += 1 }
+        for _ in 0..<100 where backend.submittedWakes.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(receipts, 1)
+        XCTAssertTrue(backend.submittedWakes.first?.contains("confirm_todo_sweep") == true)
+        XCTAssertFalse(backend.submittedWakes.contains("old snapshot"), "出队必须现读现算，不能拿旧核账提示唤醒")
+        backend.status = .exited(0)
+    }
+    #endif
+
+    func testSweepLockFailureCannotConfirmOrWakeAndPreservesPriorRow() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("c.todo-sweep.lock"), withIntermediateDirectories: true)
+        let sweeps = CaptainTodoSweepStore(directory: dir)
+        XCTAssertNotNil(sweeps.recordConfirmation(crewId: "c", .init(confirmedAt: Self.iso(now), openNumbers: [1])))
+        XCTAssertNil(sweeps.reminder(crewId: "c", snapshot: .read([1]), now: now))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("c.todo-sweep.json").path))
     }
 
 }

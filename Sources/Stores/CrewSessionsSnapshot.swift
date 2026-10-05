@@ -45,6 +45,20 @@ struct CrewSessionsSnapshot: Codable, Equatable {
 
     static let fileName = "crew-sessions.json"
 
+    /// Execution accounting requires fresh live evidence; display names alone
+    /// deliberately allow stale snapshots and cannot prove acceptance.
+    static func activeOwners(crewId: String, directory: URL, now: Date,
+                             includeUnavailable: Bool = false) -> Set<String>? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(fileName)),
+              let snapshot = try? JSONDecoder().decode(Self.self, from: data),
+              let updated = CaptainTodoSweep.parseDate(snapshot.updatedAt),
+              abs(now.timeIntervalSince(updated)) <= 15 else { return nil }
+        return Set((snapshot.crews[crewId] ?? []).filter {
+            includeUnavailable ? ($0.state != "exited" && $0.state != "launchFailed")
+                : ($0.state == "working" || $0.state == "idle")
+        }.map(\.sessionId))
+    }
+
     /// 花名册：`sessionId → 显示名`。给注入面消歧标注
     /// （`CrewWhiteboardVisibility.directedNote`）解名字用 —— 「（发给 小王 的）」
     /// 比「（发给 session:9f2a1c 的）」有用得多。

@@ -90,15 +90,21 @@ final class McpSweepUnreadableTests: XCTestCase {
     }
 
     /// 账上有条目、也如实报上来时照常记下 —— 这条钉住「没把正常路径一起拒掉」。
-    func test_有未完成条目且报对了时照常记下() {
+    func test_有未完成条目且报对了时照常记下() throws {
         let todos = LocalTodoStore(directory: wb, ledger: .agent)
         let one = todos.add(crewId: crewId, text: "一件在跑的活")
         XCTAssertNotNil(one)
+        _ = todos.respond(crewId: crewId, number: one!.number, sessionId: "captain-x", text: "接活", newStatus: "in_progress")
+        var snapshot = CrewSessionsSnapshot()
+        snapshot.updatedAt = ISO8601DateFormatter().string(from: Date())
+        snapshot.crews[crewId] = [.init(sessionId: "captain-x", name: "机长", role: "captain", brief: "", state: "working")]
+        try JSONEncoder().encode(snapshot).write(to: wb.appendingPathComponent(CrewSessionsSnapshot.fileName))
+        let check = ISO8601DateFormatter().string(from: Date().addingTimeInterval(600))
         let s = server()
         let r = s.handleLine("""
         {"jsonrpc":"2.0","id":1,"method":"tools/call","params":\
         {"name":"confirm_todo_sweep","arguments":{"running":[\(one!.number)],\
-        "blocked_on_human":[],"queued":[]}}}
+        "blocked_on_human":[],"queued":[],"follow_ups":[{"number":\(one!.number),"owner_session_id":"captain-x","next_action":"修复并测试","check_at":"\(check)"}]}}}
         """) ?? ""
         XCTAssertFalse(r.contains("ERROR"), r)
         XCTAssertTrue(r.contains("已逐条归桶"), r)
