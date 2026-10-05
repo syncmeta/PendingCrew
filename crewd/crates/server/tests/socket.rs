@@ -253,13 +253,27 @@ async fn repeated_subscribe_does_not_duplicate_events() {
 }
 
 #[tokio::test]
-async fn subscriber_of_other_topic_gets_no_whiteboard_event() {
+async fn subscribe_with_unknown_topic_is_invalid_params_and_subscribes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
     let mut sub = Client::connect(dir.path()).await;
-    sub.call(1, "events.subscribe", json!({"topics":["todo"]}))
+    for (id, topics) in [(1, json!(["todo"])), (2, json!(["whiteboard", "nope"]))] {
+        sub.send_raw(
+            &json!({"id":id,"method":"events.subscribe","params":{"topics":topics}}).to_string(),
+        )
         .await;
+        match sub.next().await {
+            ServerFrame::Response(r) => {
+                assert_eq!(r.id, id);
+                let e = r.error.expect("未知主题必须报错");
+                assert_eq!(e.code, -32602);
+                assert!(e.message.contains("whiteboard"), "{}", e.message);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 
+    // 被拒的订阅（哪怕夹带了已知主题）不生效：之后的白板事件不会推过来。
     let mut poster = Client::connect(dir.path()).await;
     poster
         .call(

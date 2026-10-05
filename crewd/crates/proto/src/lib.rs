@@ -20,6 +20,8 @@ pub mod methods {
 }
 
 pub mod events {
+    /// `events.subscribe` 接受的主题；其他一律 -32602。
+    pub const TOPICS: &[&str] = &["whiteboard"];
     pub const WHITEBOARD_APPENDED: &str = "whiteboard.appended";
     /// 订阅者处理太慢、漏掉了事件；`data.missed` 是漏掉的条数，客户端应全量重拉。
     pub const LAGGED: &str = "events.lagged";

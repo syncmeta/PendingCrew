@@ -90,17 +90,9 @@ async fn read_loop(
             Err(e) => parse_error(&format!("无法解析请求: {e}")),
             Ok(req) if req.method == methods::SUBSCRIBE => {
                 let id = req.id;
-                let p = match parse_params::<SubscribeParams>(req.params) {
-                    Ok(p) if p.topics.is_empty() => {
-                        let frame = ServerFrame::Response(Response::err(
-                            id,
-                            RpcError::new(RpcError::INVALID_PARAMS, "topics 不能为空"),
-                        ));
-                        if tx.send(frame).await.is_err() {
-                            return Ok(());
-                        }
-                        continue;
-                    }
+                let p = match parse_params::<SubscribeParams>(req.params)
+                    .and_then(|p| check_topics(&p.topics).map(|()| p))
+                {
                     Ok(p) => p,
                     Err(e) => {
                         if tx
@@ -132,6 +124,27 @@ async fn read_loop(
             return Ok(());
         }
     }
+}
+
+/// 主题列表非空，且每个都在 `events::TOPICS` 里。
+fn check_topics(topics: &[String]) -> Result<(), RpcError> {
+    if topics.is_empty() {
+        return Err(RpcError::new(RpcError::INVALID_PARAMS, "topics 不能为空"));
+    }
+    let unknown: Vec<&String> = topics
+        .iter()
+        .filter(|t| !events::TOPICS.contains(&t.as_str()))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(RpcError::new(
+            RpcError::INVALID_PARAMS,
+            format!(
+                "未知主题 {unknown:?}；可订阅: {}",
+                events::TOPICS.join(", ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn topic_of(event: &str) -> &str {
