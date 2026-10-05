@@ -2,7 +2,7 @@
 
 > 写给实现者（Claude）看的，不是给人看的汇报。基准：`main@5fa34b7`（2026-10-05）。
 > 来源：2026-10-05 与人的设计对话。人的原话/拍板标 **[人]**，我的推断标 **[推]**，读代码读到的标 **[码 file:line]**。
-> 状态：草案已定稿，仅剩 §13 Q9（机长分工）待和人商量；Jev 中文实测需要 key。
+> 状态：定稿（2026-10-05）。Jev key 在本机钥匙串 service=`pendingcrew-jev`，2026-10-05 合成中文样例实测通过（choice 0.99，~0.95s 含网络）。
 
 ## 0. 一句话
 
@@ -53,17 +53,23 @@
 | 官方 MCP SDK | go-sdk v1.8 | rmcp 3.5 | v2.3 |
 | 外部 PSK TLS | 不支持 | 不支持 | 不支持 |
 | 分发 | 交叉编译最容易 | 需各目标工具链，体积最小 | 一机交叉编译，60–100MB |
-推荐 **Rust**：P2 最难的终端仿真只有 Rust 有久经考验的库；codex 本身 Rust，协议对齐方便；强类型对 agent 写代码是额外护栏。代价是迭代慢、tokio 异步复杂。Go 次选（P1 最快，但 P2 的终端仿真要自己兜 bug）。Bun 排除（PTY 的 ^C bug 直接打到驱动 claude）。**[人 已定 2026-10-05] Rust。**
+推荐 **Rust**：M2 最难的终端仿真只有 Rust 有久经考验的库；codex 本身 Rust，协议对齐方便；强类型对 agent 写代码是额外护栏。代价是迭代慢、tokio 异步复杂。Go 次选（协作部分最快，但终端仿真要自己兜 bug）。Bun 排除（PTY 的 ^C bug 直接打到驱动 claude）。**[人 已定 2026-10-05] Rust。**
 
 ### 3.2 进程与职责（终态）
 - `crewd`：常驻。拥有全部持久状态与调度；对客户端提供 API；对 agent 提供 MCP（`crewd mcp` 子命令作为每个 session 的 stdio MCP helper，与今天「app 二进制再跑一遍」同构）；跑会话（PTY / codex app-server）。
 - Mac app、iOS app：纯客户端，经同一 API。Mac 本机走 Unix socket，iOS 走配对后的加密直连。
 
-### 3.3 分期（绞杀式，每期结束系统可用）
-- **P1 协作平面**：crewd 接管 机组/白板/两层 Todo/人类待确认/审批台账 的读写、调度（Jev+唤醒计划+检查点）、行政处、MCP 全部工具。Swift daemon 降级为「会话执行器」：只管 PTY/codex/终端快照，经现有 SessionProtocol 接受 crewd 的 `launch / submitWake / stop / screenText`。Mac UI 改为只经 crewd API 读写（去掉直接读写 JSON）。claude 的三个 hook（PostToolUse 白板注入、PreToolUse 审批、Stop 留痕）与 MCP helper 一起改指向 `crewd` 二进制——它们今天都是「app 二进制再跑一遍」**[码 LocalSessionLaunch.swift:131-133]**，P1 不改就会出现两个写者。
-- **P2 执行平面**：会话执行器移进 crewd（终端仿真、codex 客户端、孤儿回收）。Swift daemon 删除。
-- **P3 iOS**：对接 crewd 远程 API（可与 P2 并行，依赖 P1 的 API 定型）。
-- **[推]** 为什么先协作平面：工作跟进的价值全在 P1；PTY 仿真是最大技术风险但和本需求无关；SessionProtocol 已语言中立，P1 期间 crewd→Swift 执行器的桥成本低。
+### 3.3 构建顺序（全 Rust，无过渡桥）**[人 已定 2026-10-05]**
+不做「crewd ↔ Swift 执行器」的桥（白写、双常驻进程）。crewd 独立开发到主路径对等后一次性切换；期间现有 Swift 版照用、只修 bug。
+- **M1 地基**：Rust workspace、SQLite 存储、旧 JSON 只读导入、客户端 API（Unix socket）+ 契约 schema。
+- **M2 执行器**：portable-pty + alacritty_terminal 无头终端（屏幕文本、快照、对话框识别）、claude 启动参数与 hooks、codex app-server 客户端、孤儿回收、会话恢复（--resume）。
+- **M3 协作**：机组/白板/人类待确认/审批台账、`crewd mcp` 与 `crewd hook` 子命令、唤醒投递与准入。
+- **M4 工作跟进**：两层 Todo、负责人、检查点、停下即检查、卡住拆分（§4–6、§9）。
+- **M5 Jev 调度**（§7）：先跑中文实测集定阈值。
+- **M6 行政处**（§8）。
+- **切换**：Mac 客户端改连 crewd（去掉所有直接读写 JSON 与 Swift 后台）；验收 §1 判据；Swift daemon/MCP helper 代码删除。
+- **iOS**：M3 的 API 定型后即可并行，TLS1.3 + SPKI pinning 重新配对（Q11）。
+每个 M 都以 crewd 自己的集成测试 + CLI 可驱动为完成标准，不依赖 Swift UI。
 
 ### 3.4 数据
 - 存储：**[推]** 换成单个 SQLite（crewd 独占写）。理由：多写者 JSON+flock 的历史问题（EPERM、读失败 spool、白板单向等）根源之一是多进程共享文件；crewd 成为唯一写者后，没有理由继续用文件做总线。客户端/MCP 一律经 crewd。`LocalCrewStore.swift:19` 当年拒 SQLite 的理由是多进程——前提已变。→ §13 Q6 确认。
@@ -115,7 +121,7 @@ revision, createdAt, updatedAt
 - **负责人失联**：唤醒连续 K 次（默认 2）无回报，或会话不可恢复 → 重新派（Jev，排除原负责人）+ 告知机长。**[推]** 「session 退出」≠ 失联：现在叫醒一个已退出的 session 会按会话号 `--resume` 把它拉起来，所以先尝试恢复，恢复失败才算失联（§13 Q4 已自决，留记录）。
 - **停下即检查**：session 进入 idle 时，若名下有 active 项缺 nextCheckAt，或 open 且 ready 的项无人推进 → 立即再唤醒一次，要求给每项写下一步。同一 session 连续 3 次无改善 → 停止重唤醒，交行政处（防死循环）。
 - **人回复**：人类待确认 H<n> 被回复 → 直接唤醒 blockedOn 指向它的所有工作项的负责人（不等机长）；该项自动从 blocked 回到 active 并设 nextCheckAt=now。
-- **限流**：检查点唤醒归「系统」优先级；全机并发会话数设上限（按额度，可配），超了排队。人类唤醒不应被全机限流挡（现有 bug，P1 修掉）。
+- **限流**：检查点唤醒归「系统」优先级；全机并发会话数设上限（按额度，可配），超了排队。人类唤醒不应被全机限流挡（现有 bug，M3 修掉）。
 
 ## 6. 卡住只卡那一件 **[人]**
 
@@ -142,7 +148,7 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - 无关内容降准确率 → 每个决策只给它需要的 state，名单截到最近活跃前 ~15。
 - 不懂日期/计数 → 时间、计数全由代码算，给 Jev 的是排名/区间词。
 - 会被注入带偏 → Jev 结果只驱动可撤回的「叫醒/归类/排序/派活」，不驱动任何外部副作用。
-- **中文未在文档中声明** → P1 先做实测（需要 key）。阈值（低置信度线，默认 0.5；noul 阈值）由实测定。
+- **中文未在文档中声明** → M5 先做实测。阈值（低置信度线，默认 0.5；noul 阈值）由实测定。
 
 ### 7.4 配置
 设置页：baseURL（默认官方）、key（Mac 钥匙串；crewd 跨平台后 key 存放位置 → §13 Q7）、模型名（默认 `jev-latest`）。
@@ -171,7 +177,7 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - 巡检 = 代码检查 + 一次 Jev fan-out 调用；**只有标出需要动手的事才启动行政 session**，处理完下线。
 - 行政 session 工具：读全子树账本、带证据关闭、改链接、因失联重派、写人类清单简报。没有强制指派（那是机长权力）。
 
-## 9. MCP 工具（P1，取代现有 Todo/计划/续跑相关工具）
+## 9. MCP 工具（M3–M4，取代现有 Todo/计划/续跑相关工具）
 `claim_todo(#N, items[])`、`work_item_create`、`work_item_update(id, status?, next_check_at?, evidence?, note)`、`work_item_block(id, on, can_continue_split?)`、`work_item_transfer_request/accept`、`work_item_assign`（机长）、`my_work_items`、`request_help(text)`（任何 session 发子工作项交调度层——「同事无限」的入口）**[人]**。
 删除：`continue_work`、`confirm_todo_sweep`、`plan_*`、`respond_todo` 的状态参数（保留为纯回复）。其余现有工具（群聊、目录、ask、会话管理、机组管理）在 crewd 内重实现，语义不变。
 
@@ -201,7 +207,7 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - ~~Q6~~ **[已告知人，无异议]** SQLite，crewd 唯一写者。
 - ~~Q7~~ **[自决]** macOS 用钥匙串（security-framework crate），Linux 用配置目录下 0600 文件；key 只由 crewd 读取，客户端只能写入不能读回。
 - ~~Q8~~ **[自决]** 发前做凭据正则脱敏（key/token/私钥/口令形状），脱敏命中计数进诊断日志。
-- **Q9 机长分工**（人说「等下来具体商量」）：机长自己能否动手。与 Jev 派活相关：Jev 选项里有 captain，意味着机长仍可接小事——这本身就是一个回答，需人确认。
+- ~~Q9~~ **[人 已定]** 机长可接活（Jev 派活选项保留 captain）。
 - ~~Q10~~ **[人 已定]** Rust。
 - ~~Q11~~ **[调研 已定]** Go crypto/tls、rustls、Bun 均不支持外部 PSK。改为 TLS 1.3 + 配对时交换自签证书 SPKI 指纹做双向 pinning（iOS 用 Network.framework verify block）。现有 TLS-PSK 配对作废，需重新配对。
-- ~~Q12~~ **[自决]** GUI 拉起 crewd，crewd 拉起 Swift 执行器（P1）；无登录项（维持 2026-09-07 人的决定）。升级：crewd 版本变化时只重启 crewd，执行器与会话不动——顺带补上「升级不打断会话」那个未达成的 A1 目标。
+- ~~Q12~~ **[自决]** GUI 拉起 crewd（执行器在 crewd 内）；无登录项（维持 2026-09-07 人的决定）。升级：crewd 版本变化时只重启 crewd，执行器与会话不动——顺带补上「升级不打断会话」那个未达成的 A1 目标。
