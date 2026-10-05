@@ -1,0 +1,139 @@
+//! crewd：PendingCrew 的跨平台后端。
+use anyhow::{Context, bail};
+use clap::{Parser, Subcommand};
+use crewd_proto::{Request, ServerFrame};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "crewd", version, about = "PendingCrew backend")]
+struct Cli {
+    /// 数据目录（库、socket、锁、附件都在这里）
+    #[arg(long, global = true, env = "CREWD_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// 前台运行服务
+    Serve,
+    /// 从旧版 JSON 数据只读导入到一个新库
+    Import {
+        /// 旧数据目录；缺省取 PENDINGCREW_DATA_DIR 或 ~/Library/Application Support/PendingCrew
+        #[arg(long)]
+        from: Option<PathBuf>,
+    },
+    /// 调用一个 RPC 方法并打印结果
+    Rpc {
+        method: String,
+        /// JSON 参数，缺省 null
+        params: Option<String>,
+    },
+    /// 打印 API 契约
+    Schema,
+}
+
+fn data_dir(cli: &Cli) -> anyhow::Result<PathBuf> {
+    match &cli.data_dir {
+        Some(d) => Ok(d.clone()),
+        None => Ok(dirs::data_dir()
+            .context("无法确定用户数据目录")?
+            .join("crewd")),
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
+        eprintln!("crewd: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let dir = data_dir(&cli)?;
+    match &cli.cmd {
+        Cmd::Serve => {
+            crewd_server::serve(dir, shutdown_signal()).await?;
+        }
+        Cmd::Import { from } => {
+            let src = from
+                .clone()
+                .unwrap_or_else(crewd_legacy::paths::default_legacy_root);
+            std::fs::create_dir_all(&dir)?;
+            let db = dir.join("crewd.db");
+            let mut store = crewd_store::Store::open(&db)?;
+            // 只拒绝非空的库；上次导入失败留下的空库允许重试。
+            if !store.is_empty()? {
+                bail!(
+                    "{} 已存在且非空。导入只写新库：先把它挪走再导入。",
+                    db.display()
+                );
+            }
+            let report = crewd_legacy::import(&src, &mut store, &dir)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Rpc { method, params } => {
+            let params: serde_json::Value = match params {
+                Some(p) => serde_json::from_str(p).context("PARAMS 不是合法 JSON")?,
+                None => serde_json::Value::Null,
+            };
+            let result = call(&dir, method, params)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Cmd::Schema => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crewd_proto::api_schema())?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn call(
+    dir: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let sock = dir.join("crewd.sock");
+    let mut stream = UnixStream::connect(&sock)
+        .with_context(|| format!("连不上 {}（crewd serve 在跑吗？）", sock.display()))?;
+    let req = Request {
+        id: 1,
+        method: method.to_string(),
+        params,
+    };
+    let mut line = serde_json::to_vec(&req)?;
+    line.push(b'\n');
+    stream.write_all(&line)?;
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut buf = String::new();
+        if reader.read_line(&mut buf)? == 0 {
+            bail!("crewd 在回复前关闭了连接");
+        }
+        if let ServerFrame::Response(r) = serde_json::from_str::<ServerFrame>(&buf)? {
+            if r.id != 1 {
+                continue;
+            }
+            if let Some(e) = r.error {
+                bail!("{} ({})", e.message, e.code);
+            }
+            return Ok(r.result.unwrap_or(serde_json::Value::Null));
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("无法监听 SIGTERM");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
+}

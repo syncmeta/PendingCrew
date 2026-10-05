@@ -1,0 +1,682 @@
+{
+  "apiVersion": 1,
+  "events": {
+    "events.lagged": "{ missed: number }",
+    "whiteboard.appended": "Message"
+  },
+  "methods": {
+    "crew.list": {
+      "params": null,
+      "result": "Crew[]"
+    },
+    "events.subscribe": {
+      "params": "SubscribeParams",
+      "result": "{ topics: string[] }"
+    },
+    "system.hello": {
+      "params": null,
+      "result": "Hello"
+    },
+    "todo.list": {
+      "params": "TodoListParams",
+      "result": "Todo[]"
+    },
+    "whiteboard.list": {
+      "params": "WhiteboardListParams",
+      "result": "Message[]"
+    },
+    "whiteboard.post": {
+      "params": "WhiteboardPostParams",
+      "result": "Message"
+    }
+  },
+  "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line",
+  "types": {
+    "Crew": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "builtin": {
+          "type": "boolean"
+        },
+        "captainAgentKind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "hiddenAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "number": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "parentIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "workingDirectory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "builtin",
+        "parentIds",
+        "createdAt",
+        "updatedAt"
+      ],
+      "title": "Crew",
+      "type": "object"
+    },
+    "Event": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "data": true,
+        "event": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "data"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "Hello": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "apiVersion": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "version",
+        "apiVersion"
+      ],
+      "title": "Hello",
+      "type": "object"
+    },
+    "Message": {
+      "$defs": {
+        "Attachment": {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "mime": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "size": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "mime",
+            "path"
+          ],
+          "type": "object"
+        },
+        "Mention": {
+          "properties": {
+            "kind": {
+              "description": "\"session\" | \"captain\" | \"human\" | \"broadcast\"",
+              "type": "string"
+            },
+            "targetId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "type": "array"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mentions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Mention"
+          },
+          "type": "array"
+        },
+        "senderKind": {
+          "description": "\"user\" | \"session\" | \"captain\" | \"pendingcrew\" | 旧数据里的 \"human\"",
+          "type": "string"
+        },
+        "senderName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "senderSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "全库单调递增的序号；客户端用它增量拉取。",
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "id",
+        "crewId",
+        "senderKind",
+        "text",
+        "createdAt"
+      ],
+      "title": "Message",
+      "type": "object"
+    },
+    "Request": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "id": {
+          "description": "客户端必须从 1 开始编号：0 保留给「请求无法解析」时服务端回的错误响应。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Request",
+      "type": "object"
+    },
+    "Response": {
+      "$defs": {
+        "RpcError": {
+          "properties": {
+            "code": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": true
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Response",
+      "type": "object"
+    },
+    "Session": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "agentKind": {
+          "description": "\"claude_code\" | \"codex\" | \"unknown\"",
+          "type": "string"
+        },
+        "agentSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "\"captain\" | \"worker\"",
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "workingDirectory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "role",
+        "agentKind",
+        "updatedAt"
+      ],
+      "title": "Session",
+      "type": "object"
+    },
+    "SubscribeParams": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "topics": {
+          "description": "主题 = 事件名第一个点之前的部分，例如 \"whiteboard\"。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "topics"
+      ],
+      "title": "SubscribeParams",
+      "type": "object"
+    },
+    "Todo": {
+      "$defs": {
+        "Attachment": {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "mime": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "size": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "mime",
+            "path"
+          ],
+          "type": "object"
+        },
+        "Ledger": {
+          "enum": [
+            "agent",
+            "human"
+          ],
+          "type": "string"
+        },
+        "TodoResponse": {
+          "properties": {
+            "attachments": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/Attachment"
+              },
+              "type": "array"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "senderName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "sessionId",
+            "text",
+            "createdAt"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deletedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "ledger": {
+          "$ref": "#/$defs/Ledger"
+        },
+        "number": {
+          "description": "账内编号 #N；软删除的行也占号。",
+          "format": "int64",
+          "type": "integer"
+        },
+        "responses": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TodoResponse"
+          },
+          "type": "array"
+        },
+        "status": {
+          "description": "\"pending\" | \"in_progress\" | \"completed\" | \"blocked_on_human\" | \"dropped\"",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "ledger",
+        "number",
+        "text",
+        "status",
+        "createdAt"
+      ],
+      "title": "Todo",
+      "type": "object"
+    },
+    "TodoListParams": {
+      "$defs": {
+        "Ledger": {
+          "enum": [
+            "agent",
+            "human"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "ledger": {
+          "$ref": "#/$defs/Ledger"
+        }
+      },
+      "required": [
+        "crewId",
+        "ledger"
+      ],
+      "title": "TodoListParams",
+      "type": "object"
+    },
+    "WhiteboardListParams": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "afterSeq": {
+          "default": null,
+          "description": "只返回 seq 大于它的消息；缺省 0。",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "description": "缺省 200，上限 1000。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "title": "WhiteboardListParams",
+      "type": "object"
+    },
+    "WhiteboardPostParams": {
+      "$defs": {
+        "Mention": {
+          "properties": {
+            "kind": {
+              "description": "\"session\" | \"captain\" | \"human\" | \"broadcast\"",
+              "type": "string"
+            },
+            "targetId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "inReplyTo": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mentions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Mention"
+          },
+          "type": "array"
+        },
+        "senderKind": {
+          "type": "string"
+        },
+        "senderName": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "senderSessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "text",
+        "senderKind"
+      ],
+      "title": "WhiteboardPostParams",
+      "type": "object"
+    }
+  }
+}

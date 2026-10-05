@@ -1,0 +1,10 @@
+# crewd
+
+PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`。
+
+- 检查：`scripts/check.sh`
+- 导入旧数据（只读源目录，只写新库）：`cargo run -p crewd -- import [--from DIR]`
+- 运行：`cargo run -p crewd -- serve`
+- 调用：`cargo run -p crewd -- rpc crew.list`
+- API 契约：`schema/crewd-api.schema.json`（改了线协议类型后用 `cargo run -p crewd -- schema > schema/crewd-api.schema.json` 重新生成；测试会检查它是否过期）
+- 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`
