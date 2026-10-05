@@ -212,6 +212,25 @@ fn data_dir_is_trimmed_and_tilde_expanded() {
 }
 
 #[test]
+fn existing_empty_db_does_not_block_import() {
+    let data = tempfile::tempdir().unwrap();
+    // 例如上次导入失败、或 serve 先跑过一次：库文件在，但里面什么都没有。
+    drop(crewd_store::Store::open(&data.path().join("crewd.db")).unwrap());
+    let out = crewd(data.path())
+        .args(["import", "--from"])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["counts"]["messages"], 3);
+}
+
+#[test]
 fn rpc_error_exits_nonzero() {
     let data = tempfile::tempdir().unwrap();
     let _d = start(data.path());
