@@ -1,0 +1,18 @@
+[package]
+name = "crewd-legacy"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+crewd-proto = { version = "0.1.0", path = "../proto" }
+crewd-store = { version = "0.1.0", path = "../store" }
+dirs = "7.0.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[dev-dependencies]
+tempfile = "3.27.0"
