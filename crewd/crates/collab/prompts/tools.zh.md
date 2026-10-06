@@ -410,3 +410,18 @@ claude 或 codex，必须明确选。
 
 ## r.internal
 内部错误 #{n}（详情见 crewd 日志）
+
+## inject.omitted
+「{channel}」还有 {count} 条较新的消息这次没带上（字数上限），它们仍是未读：下次工具调用后会接着给你，也可以先用 read_channel 看。
+
+## inject.truncated
+「{channel}」里 #{seq} 这条太长，只带了开头；要看全文用 read_channel。
+
+## r.lobby_label
+「{crew}」大厅
+
+## r.human_label
+「{crew}」人类群
+
+## r.dm_gone
+已解散的私聊

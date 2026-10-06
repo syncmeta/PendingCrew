@@ -2,6 +2,7 @@
 //! 给 agent 看的文字全在 `crates/collab/prompts/{tools,world-model}.*.md`；本模块的非测试代码里
 //! 不写中文字面量（`literals` 测试钉住），给开发者看的错误写英文短句。
 pub mod catalog;
+pub mod inject;
 pub mod port;
 pub mod rpc;
 pub mod runtime;

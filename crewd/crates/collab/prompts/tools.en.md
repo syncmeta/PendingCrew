@@ -410,3 +410,18 @@ Did not go through: {detail}
 
 ## r.internal
 Internal error #{n} (details are in the crewd log)
+
+## inject.omitted
+{count} newer messages in "{channel}" were left out this time (length cap); they are still unread: they will follow after your next tool call, or use read_channel to see them now.
+
+## inject.truncated
+Message #{seq} in "{channel}" is too long; only its beginning is shown. Use read_channel for the full text.
+
+## r.lobby_label
+lobby of "{crew}"
+
+## r.human_label
+human channel of "{crew}"
+
+## r.dm_gone
+dissolved direct message

@@ -132,17 +132,11 @@ async fn route(
     }
 }
 
-/// Tasks 9-11 wire the three hooks in here.
-async fn hook(
-    _state: &Arc<AppState>,
-    _me: &Identity,
-    event: HookKind,
-    _payload: Value,
-) -> HookResult {
+/// Tasks 10-11 wire the other two hooks in here.
+async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Value) -> HookResult {
     match event {
-        HookKind::PostToolUse | HookKind::PreToolUse | HookKind::Stop => {
-            HookResult { stdout: None }
-        }
+        HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
+        HookKind::PreToolUse | HookKind::Stop => HookResult { stdout: None },
     }
 }
 

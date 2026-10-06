@@ -61,6 +61,54 @@ pub fn parse_args<T: DeserializeOwned>(cx: &Ctx<'_>, v: Value) -> Result<T, Call
     decode(v).map_err(|d| cx.err("r.bad_args", &[("detail", &d)]))
 }
 
+/// How a channel is called in receipts and notes (`ChannelView` flavour of `channel_label_raw`).
+/// A dm shows the md fallback here; use `channel_label_for` where a viewer is at hand.
+pub fn channel_label(cx: &Ctx<'_>, c: &port::ChannelView) -> String {
+    channel_label_raw(cx.loc, c.kind, &c.name, &c.crew_title)
+}
+
+/// Lobby and human channels have an empty `name` (M3a convention), so they are called by their
+/// crew; a dm has no name of its own either, and its label needs a viewer (`channel_label_for`),
+/// so without one it gets the md fallback. Names go through `text::name` (M3a `safe_name`).
+pub fn channel_label_raw(
+    loc: Locale,
+    kind: crewd_proto::ChannelKind,
+    name: &str,
+    crew_title: &str,
+) -> String {
+    match kind {
+        crewd_proto::ChannelKind::Lobby => {
+            text::r(loc, "r.lobby_label", &[("crew", &text::name(crew_title))])
+        }
+        crewd_proto::ChannelKind::Human => {
+            text::r(loc, "r.human_label", &[("crew", &text::name(crew_title))])
+        }
+        crewd_proto::ChannelKind::Dm => text::r(loc, "r.dm_gone", &[]),
+        crewd_proto::ChannelKind::Topic => text::name(name),
+    }
+}
+
+/// `channel_label_raw`, but a dm shows the other party (M3a `channels::display_label`, which is
+/// empty once the peer is gone; then the md fallback applies). The dm decoration follows the
+/// CURRENT captain pointer, while sender labels follow the kind at post time.
+pub async fn channel_label_for(
+    st: &AppState,
+    viewer: &str,
+    channel: &str,
+    kind: crewd_proto::ChannelKind,
+    name: &str,
+    crew_title: &str,
+    loc: Locale,
+) -> String {
+    if kind == crewd_proto::ChannelKind::Dm
+        && let Ok(l) = port::display_label(st, viewer, channel, loc).await
+        && !l.is_empty()
+    {
+        return l;
+    }
+    channel_label_raw(loc, kind, name, crew_title)
+}
+
 pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> CallResult {
     let cx = Ctx {
         st,
