@@ -289,7 +289,7 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 
 **数据**（M3 schema v2）：`channels(id, crew_id 归属, name, kind: lobby|human|topic|dm, purpose, created_by, archived_at)`、`channel_members(channel_id, member_kind: session|human, member_id, joined_at)`、人类注视标记 `channel_watch(channel_id, since)`；`messages.channel_id` 取代 `crew_id` 作为归属（M1 导入的旧消息迁到各机组大厅）；`work_items.channel_id?`（M4）。
 
-**待 M3 设计时细化**：群内是否需要「话题/回复串」（暂用已有的 reply_to）；私有群（不在机组内公开）要不要；子机组还保留哪些用途（独立工作目录/独立机长）。
+**待 M3 设计时细化**：群内是否需要「话题/回复串」（暂用已有的 reply_to）；子机组还保留哪些用途（独立工作目录/独立机长）。
 
 ## 18. M2b 交付记录与遗留（分支 crewd-m2b，计划 `docs/superpowers/plans/2026-10-06-crewd-m2b-claude-session.md`）
 
@@ -508,7 +508,7 @@ M2c ──（可选：codex 经 M3c 的 Executor trait 接入，未合前 codex 
 - 客户端 RPC + 事件（下）；契约整理到能给 Swift 生成代码（§14 遗留：typed result / event、params `deny_unknown_fields`、枚举不再是自由字符串）。
 - `collab::render`：给 agent 看的消息渲染（注入块 / 唤醒正文）。文字放 `crates/collab/prompts/render.{zh,en}.md`，沿用 jev 的格式（`include_str!` + `## 节名`，节缺失测试钉住），代码里没有提示词字面量。
 
-非目标：不起进程、不决定谁醒（只提供入队）、不实现 MCP、不写世界观文案、不把旧人类账迁成 H 号（与 §10 迁移一起归 M4b）、不做私有群（Q3）。
+非目标：不起进程、不决定谁醒（只提供入队）、不实现 MCP、不写世界观文案、不把旧人类账迁成 H 号（与 §10 迁移一起归 M4b）。
 
 schema v3（`schema.rs` 加 `V3`，`SCHEMA_VERSION = 3`）
 ```
@@ -740,8 +740,9 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 
 ### 22.7 决定与待人拍板
 本节标 **[推]** 的都是我自己定的：v3 一次建齐；大厅用确定性 id；迁移不产生未读 / 红标；红标按游标派生；@ 在发送时解析；审批不发 H 号；helper 不带角色参数、改用 token 文件；工具文字放 md；合并投递；收听按群；人类群懒建、被收编即归档。
-- **Q1 重启后接回哪些 session**：推荐接回全部 `desired=running` 的（错开时间、受上限约束），被打断的补一条提示。另一个选项是懒接回（被叫到才 `--resume`）：省资源，但机组看上去会全停着。
-- **Q2 人在 topic 群里不 @ 任何人发言时叫谁（Jev 接入之前的规则）**：推荐群里 session 不超过 3 个就全叫；超过 3 个，叫群归属机组的机长（机长在群里时），否则叫建群者。
-- **Q3 私有群**：推荐 v1 不做。机组里的群对本机组成员和人类都可读；只有成员会被注入、被叫醒。
-- **Q4 删掉 raise_attention / clear_attention / crew_ordering_signals / arrange_crews**：推荐删，由 @人类红标和 M5 的紧急度排序取代。
-- **Q5 全机并发会话上限 max_live_sessions**：推荐默认 10，设置页可改；它只挡「拉起会话」，不挡给已在跑的会话投递。
+人的拍板（2026-10-06，取代原 Q1–Q5 的推荐）：
+- **Q1 重启后接回**：**问人**。crewd 起来后若有上次在跑（`desired=running`）的 session，发一条「是否立即恢复这 N 个 session」的询问（客户端弹出 + 人类群里一条，带名单）；人答「恢复」→ 错开时间逐个 `--resume`、被打断的补一条提示；答「先不」或没答 → 都不起，期间给它们的唤醒照常入队（持久化），人之后可整批或单个恢复。M3c 只实现「询问 + 两种答复」，不自动选。
+- **Q2 群主与叫谁**：**每个群都有群主**（`channels.owner`），默认是建群者，可转让（转让走与工作项负责人相同的「双方确认或机长强制」）。人类群、大厅的群主 = 机组机长。人在群里不 @ 任何人发言时**由 Jev 决定叫醒谁**（候选 = 群成员）；Jev 未接入（M5b 之前）或低置信 → 交给**群主**（群主在群里相当于这个群的机长）。另外 session 可以**收听**某个群（`channel_listen`），收听者在该群有新消息时也会被叫醒（与 Jev 的选择取并集，同一条消息一个 session 只叫一次）。
+- **Q3 私有群**：不做。这个问题是 §17 写作时我自己提的，没有需求来源，删掉。
+- **Q4 旧工具**：`raise_attention` / `clear_attention`（Todo #71 起已不控制任何东西，只是旧会话兼容）删；`crew_ordering_signals` / `arrange_crews`（机长给总机组侧栏排序 + 写一句摘要）删，**侧栏排序重新设计**，另起一节，不在 M3 内；M3 期间侧栏用基础序（最近有动静在上）。
+- **Q5 并发上限**：**默认不设上限**；设置里提供可选上限（默认关）。必须防的是**异常唤醒循环**（程序错误导致同一 session 被反复叫醒、两个 session 互相叫醒打转）：按「唤醒来源 → 目标」与「目标 session」两级做熔断，判据是**短时间内重复唤醒且没有新产出**（没有新消息 / 工作项变化 / 工具调用），熔断只停那一条环路并告诉人和群主，绝不按全机总量限流——大量 session 同时正常工作不受影响。阈值与判据写成一处常量，带测试（循环被截住；30 个 session 各自正常收发不被截）。
