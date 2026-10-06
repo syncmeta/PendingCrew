@@ -9,7 +9,11 @@
 //! 退出时 inflight 的那批**只在 `on_exited` 里结算**（人停 → 丢弃；crewd 停 / 撞额度 → 原样退回；自己死了 →
 //! 一次失败，C2）。投递路径（Task 8 的 `on_delivery`）收到 `Abandoned` 一律不结算 inflight、留给 `on_exited`：
 //! 判据就是 [`delivery_settles_inflight`]，别另写一份。
-use std::collections::{BTreeSet, HashMap};
+//!
+//! **写进会话的先后**：投递与 nudge 都排进 actor 自己的每会话队列 `Live::writes`（[`Write`]），按 actor 收下的先后
+//! 一个个写（[`Core::pump_writes`]）；一串键（中间要隔 `NUDGE_KEY_GAP_MS`）在派生任务里写，写完以
+//! `Input::WriteDone` 回来，队列才往下走。没有派生任务抢锁，先后不靠运行时的调度。
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,14 +23,15 @@ use crewd_exec::driver::SendError;
 use crewd_exec::health::{Health, HealthKind};
 use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, SessionEvent};
 use crewd_term::{DecisionEvent, PendingDecision};
-use crewd_wake::breaker::SYSTEM;
+use crewd_wake::breaker::{LoopBreaker, SYSTEM};
 use crewd_wake::notice::{
     self, DECISION_ESCALATE_MS, DecisionFacts, NUDGE_KEY_GAP_MS, NoticeStage, NudgePlan,
 };
+use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::policy::{self, Gate, LaunchGate};
 use crewd_wake::queue::{self, ids};
 use crewd_wake::text;
-use crewd_wake::{MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
+use crewd_wake::{LatchScope, MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
 use tokio::sync::{mpsc, oneshot};
 
 use super::OrchestraConfig;
@@ -37,9 +42,33 @@ use super::port::*;
 
 /// 这次投递回执能不能结算 inflight 的那批：只有终局、且不是 `Abandoned`（那是驱动层停掉 / 退出时的 abandon，
 /// 该批由 `on_exited` 按三种情况结算，见模块文档的绑定规则）。
-#[allow(dead_code)] // Task 8 的 `on_delivery` 调它。
 pub(crate) fn delivery_settles_inflight(outcome: &DeliveryOutcome) -> bool {
     outcome.is_final() && !matches!(outcome, DeliveryOutcome::Abandoned(_))
+}
+
+/// 协作层发来的事实（M3a 的 `CollabEvent` = `crewd_collab::Change` 由 `db.rs` 换成这个）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CollabFact {
+    MessageAppended {
+        channel: String,
+        seq: i64,
+    },
+    /// 别人（M3a 的问被回答、M3b 的 schedule_wakeup、M4b 的检查点）入了队：试着投。
+    WakeEnqueued {
+        session: String,
+    },
+    /// 问被回答（叫醒提问者的唤醒 M3a 已在同一事务里入队）；`cleared` = (工作项, 负责人)，交给 M4b。
+    AskAnswered {
+        crew: String,
+        ask: String,
+        cleared: Vec<(String, Option<String>)>,
+    },
+    /// 这个 session 有了产出（M3a `sessions::note_progress` → `Change::Progress`：工具调用 / 工作项变化；发言不算，C3）。
+    Progress {
+        session: String,
+    },
+    /// 订阅落后、漏了事件：按未读重新规划一遍（裁定 16）。
+    Lagged,
 }
 
 pub enum Input {
@@ -66,6 +95,22 @@ pub enum Input {
     },
     Tick,
     Cmd(Cmd),
+    Collab(CollabFact),
+    /// Arbiter（Jev）答完了（或超时）。
+    Arbitrated {
+        msg: MsgFacts,
+        ctx: ChannelCtx,
+        answer: Option<Vec<String>>,
+    },
+    /// 这个 session 有了产出（与 `CollabFact::Progress` 同效；测试与 `Handle::note_progress` 用）。
+    Progress {
+        session: String,
+    },
+    /// 一串 nudge 键在派生任务里写完了：这个会话的写队列往下走（[`Core::pump_writes`]）。
+    WriteDone {
+        session: String,
+        generator: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,11 +221,27 @@ pub enum Cmd {
         effort: Option<String>,
         reply: Reply<()>,
     },
+    SetCaptain {
+        crew: String,
+        session: String,
+        reply: Reply<()>,
+    },
+    Wakes {
+        session: Option<String>,
+        reply: Reply<Vec<QueuedWake>>,
+    },
+    /// 人解熔断（只有客户端能调）。
+    Recover {
+        scope: LatchScope,
+        id: String,
+        reply: Reply<()>,
+    },
 }
 
-/// 一笔还没回执的投递。`delivery` = `ExecHandle::send` 的编号（拉起时带的正文 = `BRIEF_DELIVERY_ID`）。
+/// 一笔还没回执的投递。`delivery` = `ExecHandle::send` 的编号（拉起时带的正文 = `BRIEF_DELIVERY_ID`）；
+/// `None` = 已收下、还排在写队列里没写出去（[`Write::Deliver`]）。
 pub struct Inflight {
-    pub delivery: u64,
+    pub delivery: Option<u64>,
     /// 可以是空的：只有积压的批（M3a R6）也要投，那时只有 `cursor_targets`。
     pub wakes: Vec<QueuedWake>,
     /// 投递成功后各群游标推到哪（`Rendered::cursor_targets`）；**不是**排队行里最大的 seq。
@@ -210,10 +271,19 @@ pub struct Live {
     pub stopping: bool,
     /// crewd 自己叫停的（停机等，[`Core::halt`]）：不改 desired / was_working，带着的唤醒原样退回。
     pub halting: bool,
-    /// 往这个会话里写东西的先后（预检 P4）：nudge 的一串键 / 一段文本拿着它写完才放，两次 nudge 不交错。
-    /// **Task 8 的投递（`handle.send`）也要排进来**：actor 里不能等锁——`try_lock` 拿不到 = 正有一串键在写，
-    /// 这一刻不投，等那次 nudge 写完（回执之后）再投；拿到了就在持锁时 `send`。
-    pub writes: Arc<tokio::sync::Mutex<()>>,
+    /// 往这个会话里写东西的队列（预检 P4 / 控制者裁定）：投递与 nudge 按 actor 收下的先后排进来，
+    /// 由 [`Core::pump_writes`] 一个个写；一次 nudge 的整串写完才轮到下一个，两次写不交错。
+    pub writes: VecDeque<Write>,
+    /// 一串 nudge 键正在派生任务里写（写完以 `Input::WriteDone` 回来，队列才往下走）。
+    pub writing: bool,
+}
+
+/// 写队列的一项（[`Live::writes`]）。
+pub enum Write {
+    /// 人 / agent 的 nudge：键逐个写（之间隔 `NUDGE_KEY_GAP_MS`），文本走 `send`；写完回执。
+    Nudge { plan: NudgePlan, reply: Reply<()> },
+    /// 一批唤醒的正文：轮到它时 `send`，编号记进 `Live::inflight`（收下时已占好位）。
+    Deliver { text: String, extras: Context },
 }
 
 pub struct Starting {
@@ -251,11 +321,17 @@ pub struct Core<P: Port> {
     /// 重启后等人答「恢复」的 session（§22.7 Q1）：唤醒照常入队，但不被自动拉起（人 @ 它例外，C4）。
     pub(crate) held: BTreeSet<String>,
     /// `boot` 结束时队列里最大的唤醒 id：比它新的人类消息唤醒 = 询问开出之后人 @ 的（C4）。
-    #[allow(dead_code)] // Task 8 / 9（`may_launch`、`boot`）读它。
     pub(crate) held_watermark: i64,
     /// `boot` 开的那条重启询问（M3a `restart::open` 的 id）：协作事件落后（Lagged）时据它从库里重推「答了没有」。
-    #[allow(dead_code)] // Task 9（`on_lagged`）读它。
     pub(crate) restart_prompt: Option<i64>,
+    pub(crate) breaker: LoopBreaker,
+    /// 退避 / 错开产生的「这一刻再看一次」。
+    pub(crate) timers: BTreeSet<Ms>,
+    /// 失败重试的退避：唤醒 id → 不早于。同一时刻也经 `Settle::Retry { retry_at }` 写进库里的 `not_before`
+    /// （M3a `mark_failed(.., retry_at_ms)`），重启后照样退避；内存这份只为选批时不必回读。
+    pub(crate) backoff: HashMap<i64, Ms>,
+    /// 已经看过的 `last_progress_at`（`Change::Progress` 丢了时的兜底，裁定 3）。
+    pub(crate) seen_progress: HashMap<String, Ms>,
 }
 
 impl<P: Port> Core<P> {
@@ -271,6 +347,18 @@ impl<P: Port> Core<P> {
         cfg.lang = port.locale().await?;
         // 可选并发上限（§22.7 Q5：缺省不设），存在 M3a 的 `collab::settings`。
         let gate = LaunchGate::new(port.max_live().await?, cfg.stagger_ms);
+        // M3a 的 `latches::list` 遇到坏 id / 坏行整表回 `Invalid`——fail-loud，但不能让它把编排起不来；也不能悄悄
+        // 当没有：打日志、本次不带旧熔断，坏行要人修（写进交付记录）。
+        let latches = match port.latches().await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "crewd: 编排：熔断台账读不出来（{e:#}）；本次启动不带旧熔断，wake_latches 里的坏行要人修"
+                );
+                Vec::new()
+            }
+        };
+        let loops = cfg.loops;
         Ok(Self {
             port,
             execs,
@@ -288,6 +376,10 @@ impl<P: Port> Core<P> {
             held: BTreeSet::new(),
             held_watermark: 0,
             restart_prompt: None,
+            breaker: LoopBreaker::new(loops, latches),
+            timers: BTreeSet::new(),
+            backoff: HashMap::new(),
+            seen_progress: HashMap::new(),
         })
     }
 
@@ -315,6 +407,17 @@ impl<P: Port> Core<P> {
             Input::Cmd(c) => {
                 self.on_cmd(c).await;
                 Ok(())
+            }
+            Input::Collab(f) => self.on_collab(f).await,
+            Input::Arbitrated { msg, ctx, answer } => {
+                self.enqueue_targets(&msg, &ctx, answer.as_deref()).await
+            }
+            Input::Progress { session } => {
+                self.breaker.progress(&session);
+                Ok(())
+            }
+            Input::WriteDone { session, generator } => {
+                self.on_write_done(&session, generator).await
             }
         };
         if let Err(e) = r {
@@ -355,7 +458,11 @@ impl<P: Port> Core<P> {
                 session,
                 input,
                 reply,
-            } => self.nudge(&session, &input, reply),
+            } => {
+                if let Err(e) = self.nudge(&session, &input, reply).await {
+                    eprintln!("crewd: 编排：{e:#}");
+                }
+            }
             Cmd::Handle { session, reply } => {
                 let _ = reply.send(self.live.get(&session).map(|l| l.handle.clone()));
             }
@@ -376,6 +483,26 @@ impl<P: Port> Core<P> {
                     .patch_session(&session, patch)
                     .await
                     .map_err(ControlError::internal);
+                let _ = reply.send(r);
+            }
+            Cmd::SetCaptain {
+                crew,
+                session,
+                reply,
+            } => {
+                let r = self.set_captain(&crew, &session).await;
+                let _ = reply.send(r);
+            }
+            Cmd::Wakes { session, reply } => {
+                let r = self
+                    .port
+                    .list_wakes(session.as_deref())
+                    .await
+                    .map_err(ControlError::internal);
+                let _ = reply.send(r);
+            }
+            Cmd::Recover { scope, id, reply } => {
+                let r = self.recover(scope, &id).await;
                 let _ = reply.send(r);
             }
         }
@@ -622,58 +749,109 @@ impl<P: Port> Core<P> {
     }
 
     /// nudge（`crewd_wake::notice::nudge_plan` 的契约）：空的拒绝（绝不变成一个裸回车）；键 / 数字逐个单独 `raw`、
-    /// 之间隔 `NUDGE_KEY_GAP_MS`；文本走 `send`（三拍提交）。都在派生任务里、拿着 `Live::writes` 写（不堵 actor、
-    /// 不交错；写完才回执）。
+    /// 之间隔 `NUDGE_KEY_GAP_MS`；文本走 `send`（三拍提交）。排进这个会话的写队列（[`Live::writes`]），与投递按
+    /// actor 收下的先后写，不交错；写完才回执。
     /// 待决策框的选项没有编号时拒绝数字：发了也只是把回车落在当前高亮项上。
-    fn nudge(&self, session: &str, input: &str, reply: Reply<()>) {
-        let not_running = || ControlError::NotRunning(session.into());
-        let Some(l) = self.live.get(session) else {
-            let _ = reply.send(Err(not_running()));
-            return;
+    async fn nudge(&mut self, session: &str, input: &str, reply: Reply<()>) -> anyhow::Result<()> {
+        let Some(l) = self.live.get_mut(session) else {
+            let _ = reply.send(Err(ControlError::NotRunning(session.into())));
+            return Ok(());
         };
         let Some(plan) = notice::nudge_plan(input) else {
             let why = "nudge 的输入是空的：不会替它按一个裸回车（那会选中当前高亮的那一项）";
             let _ = reply.send(Err(ControlError::Invalid(why.into())));
-            return;
+            return Ok(());
         };
         let digits = input.trim().bytes().all(|b| b.is_ascii_digit());
         if digits && l.decision.as_ref().is_some_and(|d| !d.numbered) {
             let why =
                 "这一屏的选项没有编号，发数字无效；高亮在要选的那一项上就发 enter，否则交给人";
             let _ = reply.send(Err(ControlError::Invalid(why.into())));
-            return;
+            return Ok(());
         }
-        // 写会话的先后由 `Live::writes` 排队：拿到锁才写，一次 nudge 的整串写完才放（锁是 FIFO 的，按到达顺序）。
-        let (handle, writes, session) = (l.handle.clone(), l.writes.clone(), session.to_string());
-        tokio::spawn(async move {
-            let _turn = writes.lock().await;
-            let r =
-                match plan {
-                    NudgePlan::Text(text) => handle
+        l.writes.push_back(Write::Nudge { plan, reply });
+        self.pump_writes(session).await
+    }
+
+    /// 按收下的先后写这个会话的写队列，直到队列空、或一串键交给了派生任务（它写完以 `Input::WriteDone` 回来）。
+    /// 投递（`Write::Deliver`）在 actor 里直接 `send`（不阻塞：驱动层只是收下），编号当场记进 `inflight`，
+    /// 所以它的回执不可能先于编号到达。
+    pub(crate) async fn pump_writes(&mut self, session: &str) -> anyhow::Result<()> {
+        loop {
+            let Some(l) = self.live.get_mut(session) else {
+                return Ok(());
+            };
+            if l.writing {
+                return Ok(());
+            }
+            let Some(job) = l.writes.pop_front() else {
+                return Ok(());
+            };
+            match job {
+                Write::Nudge {
+                    plan: NudgePlan::Text(text),
+                    reply,
+                } => {
+                    let r = l
+                        .handle
                         .send(text, &Context::new())
                         .map(|_| ())
                         .map_err(|e| match e {
                             ExecSendError::Send(SendError::Closed) => {
-                                ControlError::NotRunning(session)
+                                ControlError::NotRunning(session.into())
                             }
                             other => ControlError::Invalid(other.to_string()),
-                        }),
-                    NudgePlan::Keys(keys) => {
+                        });
+                    let _ = reply.send(r);
+                }
+                Write::Nudge {
+                    plan: NudgePlan::Keys(keys),
+                    reply,
+                } => {
+                    l.writing = true;
+                    let (handle, tx, generator) =
+                        (l.handle.clone(), self.inbox.clone(), l.generator);
+                    let session = session.to_string();
+                    tokio::spawn(async move {
                         let mut r = Ok(());
                         for (i, key) in keys.into_iter().enumerate() {
                             if i > 0 {
                                 tokio::time::sleep(Duration::from_millis(NUDGE_KEY_GAP_MS)).await;
                             }
                             if handle.raw(key).is_err() {
-                                r = Err(ControlError::NotRunning(session));
+                                r = Err(ControlError::NotRunning(session.clone()));
                                 break;
                             }
                         }
-                        r
+                        let _ = tx.send(Input::WriteDone { session, generator });
+                        let _ = reply.send(r);
+                    });
+                    return Ok(());
+                }
+                Write::Deliver { text, extras } => match l.handle.send(text, &extras) {
+                    Ok(id) => {
+                        if let Some(f) = l.inflight.as_mut() {
+                            f.delivery = Some(id);
+                        }
                     }
-                };
-            let _ = reply.send(r);
-        });
+                    Err(e) => {
+                        let wakes = l.inflight.take().map(|f| f.wakes).unwrap_or_default();
+                        self.fail_batch(session, wakes, &e.to_string()).await?;
+                    }
+                },
+            }
+        }
+    }
+
+    async fn on_write_done(&mut self, session: &str, generator: u64) -> anyhow::Result<()> {
+        let Some(l) = self.live.get_mut(session) else {
+            return Ok(());
+        };
+        if l.generator != generator {
+            return Ok(());
+        }
+        l.writing = false;
+        self.pump_writes(session).await
     }
 
     // —— 拉起
@@ -802,7 +980,7 @@ impl<P: Port> Core<P> {
                 }
                 let inflight =
                     (!st.wakes.is_empty() || !st.cursor_targets.is_empty()).then(|| Inflight {
-                        delivery: BRIEF_DELIVERY_ID,
+                        delivery: Some(BRIEF_DELIVERY_ID),
                         wakes: st.wakes.clone(),
                         cursor_targets: st.cursor_targets.clone(),
                     });
@@ -824,7 +1002,8 @@ impl<P: Port> Core<P> {
                         inflight,
                         stopping: st.stop_requested,
                         halting: false,
-                        writes: Arc::new(tokio::sync::Mutex::new(())),
+                        writes: VecDeque::new(),
+                        writing: false,
                     },
                 );
             }
@@ -909,12 +1088,18 @@ impl<P: Port> Core<P> {
         for w in wakes {
             let attempts = w.attempts + 1;
             let settle = match queue::after_failure(attempts, now) {
-                Some(retry_at) => Settle::Retry {
-                    attempts,
-                    error: error.into(),
-                    retry_at,
-                },
+                Some(retry_at) => {
+                    // 内存里也记一份（选批时不必回读），并在那一刻再看一次（定时拍 / 下一个 not_before）。
+                    self.backoff.insert(w.id, retry_at);
+                    self.timers.insert(retry_at);
+                    Settle::Retry {
+                        attempts,
+                        error: error.into(),
+                        retry_at,
+                    }
+                }
                 None => {
+                    self.backoff.remove(&w.id);
                     gave_up.push(w.clone());
                     Settle::Dropped {
                         error: error.into(),
@@ -992,6 +1177,9 @@ impl<P: Port> Core<P> {
                     }
                 }
                 self.port.patch_session(session, patch).await?;
+                if !on {
+                    self.on_idle(session).await?;
+                }
             }
             SessionEvent::Decision(DecisionEvent::Appeared(d)) => {
                 l.decision = Some(d.clone());
@@ -1000,8 +1188,11 @@ impl<P: Port> Core<P> {
             SessionEvent::Decision(DecisionEvent::Cleared) => {
                 l.decision = None;
                 self.decisions.remove(session);
+                self.try_deliver(session).await?;
             }
-            SessionEvent::Delivery { .. } => {}
+            SessionEvent::Delivery { id, outcome, .. } => {
+                self.on_delivery(session, id, outcome).await?
+            }
             // M2c 合进 main 后 `SessionEvent` 多了这四个（main@e66be68 起；claude 执行器不发它们，codex 发）。M3c 只接了
             // claude，先不处理；接 codex 执行器时：`TurnEnded` → `crewd_collab::turn_trace::on_turn_end`（M3b）、
             // `Notice` → 群里一条（M2c 的代拒去重是**按方法**的：同一个 MCP server 的多种拒绝要按 server 汇总再报）、
@@ -1012,9 +1203,13 @@ impl<P: Port> Core<P> {
             | SessionEvent::Profile(_) => {}
             SessionEvent::Health(h) => {
                 let quota = h.as_ref().is_some_and(|h| h.kind.is_quota());
+                let cleared = h.is_none();
                 l.health = h;
                 if quota {
                     self.schedule_quota(session).await?;
+                }
+                if cleared {
+                    self.try_deliver(session).await?;
                 }
             }
             SessionEvent::ResumeRefused { id, said } => {
@@ -1029,9 +1224,15 @@ impl<P: Port> Core<P> {
 
     /// `info` = None：事件流断了、没有退出状态（`Input::StreamEnded`），按「自己没了」处理。
     async fn on_exited(&mut self, session: &str, info: Option<ExitInfo>) -> anyhow::Result<()> {
-        let Some(l) = self.live.remove(session) else {
+        let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };
+        // 还排在写队列里的 nudge：进程没了，回执「没在跑」（投递的那批随 `inflight` 在下面结算）。
+        for job in std::mem::take(&mut l.writes) {
+            if let Write::Nudge { reply, .. } = job {
+                let _ = reply.send(Err(ControlError::NotRunning(session.into())));
+            }
+        }
         // 进程没了，它的 helper 令牌作废（M3a `TokenTable::revoke`；下次拉起重新 mint）。
         self.port.revoke_token(session);
         self.decisions.remove(session);
@@ -1090,7 +1291,8 @@ impl<P: Port> Core<P> {
             }
         }
         self.publish_live(session).await;
-        Ok(())
+        // 腾出了位置 / 错开到点：别的 session 排着的唤醒此刻可能投得出去了。
+        self.rescan().await
     }
 
     /// 续跑被拒（裁定 12）：群里一条（claude 原话 + 日志在不在盘上），给 agent 一条 system 唤醒，记 `resume_failed_at`。
@@ -1317,7 +1519,10 @@ impl<P: Port> Core<P> {
     }
 
     pub(crate) async fn on_tick(&mut self) -> anyhow::Result<()> {
-        self.escalate_decisions().await
+        let now = self.now();
+        self.timers.retain(|t| *t > now);
+        self.escalate_decisions().await?;
+        self.rescan().await
     }
 
     // —— 状态面
@@ -1360,7 +1565,7 @@ mod tests {
     use crewd_exec::health::Health;
     use crewd_exec::session::ExitStatusKind;
     use crewd_wake::notice::NUDGE_KEY_GAP_MS;
-    use crewd_wake::queue::{self, BatchLimits};
+    use crewd_wake::queue;
     use crewd_wake::{HOUR, WakeState};
 
     /// 外来文字（C12 / C20）：换行、双向控制符、帧括号——过 `safe_name` 之后一样都不能剩。
@@ -1838,8 +2043,14 @@ mod tests {
     }
 
     /// 带着一条定时唤醒把 `session` 拉起（唤醒记 inflight，开场正文 = 它），并让它开始干活。
+    /// 唤醒一小时后才到点：退回 pending 之后，Task 8 的「退出即重扫」不会当场把它重新拉起来（这几条测的是退出时
+    /// 怎么结算；停机时不再拉起是 Task 9 停机闸的事）。
     async fn launch_with_a_wake(rig: &mut Rig, session: &str) {
-        rig.port.enqueue(timer_wake(session, "t1")).await.unwrap();
+        let wake = NewWake {
+            not_before: T0.add(HOUR),
+            ..timer_wake(session, "t1")
+        };
+        rig.port.enqueue(wake).await.unwrap();
         let wakes = rig.port.pending(session).await.unwrap();
         let exec = rig.core.execs.get("claude").unwrap();
         let row = rig.port.row(session);
@@ -2044,30 +2255,18 @@ mod tests {
         );
     }
 
-    /// 把 `session` 到期的唤醒带着拉起、让它按 `die` 死掉，一直重复到没有到期的唤醒为止（每轮先等过最长的退避）。
-    /// 模拟 Task 8 的「到期就拉起」；返回拉起了几次。
+    /// 等过最长的退避（定时拍 → Task 8 的重扫把到期的唤醒带着拉起），让它按 `die` 死掉，一直重复到不再被拉起为止。
+    /// 返回拉起了几次。
     async fn relaunch_until_nothing_is_due(
         rig: &mut Rig,
         session: &str,
         die: &[SessionEvent],
     ) -> usize {
-        let exec = rig.core.execs.get("claude").unwrap();
         for _ in 0..10 {
             rig.tick(3 * MIN).await;
-            let due = queue::select_batch(
-                &rig.port.pending(session).await.unwrap(),
-                rig.clock.now(),
-                &BatchLimits::default(),
-            );
-            if due.is_empty() {
+            if rig.live(session).is_none() {
                 break;
             }
-            let row = rig.port.row(session);
-            rig.core
-                .launch(row, exec.clone(), Some("合成".into()), due, vec![])
-                .await
-                .unwrap();
-            rig.settle().await;
             for e in die {
                 rig.emit(session, e.clone()).await;
             }
@@ -2552,32 +2751,57 @@ mod tests {
         assert!(st.sends.is_empty(), "键不走 send");
     }
 
-    /// 预检 P4：同一个 session 的两次 nudge 同时来——各自的键序列不能交错（「1」「回车」「2」「回车」会答错题）。
-    #[tokio::test]
-    async fn concurrent_nudges_to_one_session_do_not_interleave() {
+    fn nudge_cmd(
+        session: &str,
+        input: &str,
+    ) -> (Input, oneshot::Receiver<Result<(), ControlError>>) {
+        let (tx, rx) = oneshot::channel();
+        let cmd = Cmd::Nudge {
+            session: session.into(),
+            input: input.into(),
+            reply: tx,
+        };
+        (Input::Cmd(cmd), rx)
+    }
+
+    /// 预检 P4 + 控制者裁定（Task 8）：写进同一个会话的东西按 actor 收下的先后写——nudge 的键序列不交错
+    /// （「1」「回车」「2」「回车」会答错题），投递排在它收下时的位置。多线程运行时：先后不靠调度运气
+    /// （旧做法是派生任务抢锁，多线程下谁先抢到不确定）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn writes_into_one_session_go_out_in_acceptance_order() {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
-        rig.run("cap").await;
-        let mut replies = Vec::new();
-        for input in ["12", "enter", "继续"] {
-            let (tx, rx) = oneshot::channel();
-            rig.core
-                .handle(Input::Cmd(Cmd::Nudge {
-                    session: "cap".into(),
-                    input: input.into(),
-                    reply: tx,
-                }))
-                .await;
-            replies.push(rx);
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        // 多线程下拉起的派生任务可能还没把 `Launched` 发回来：等到它真的在跑。
+        while rig.live("w1").is_none() {
+            let input = rig.rx.recv().await.expect("拉起要回来");
+            rig.core.handle(input).await;
         }
-        rig.settle().await;
-        for rx in replies {
-            rx.await.unwrap().unwrap();
+        let (first, r1) = nudge_cmd("w1", "12");
+        rig.core.handle(first).await;
+        // 键还在写（每两键之间隔 NUDGE_KEY_GAP_MS）时来了一条 @：投递排在它后面、下一条 nudge 前面。
+        let at = vec![crewd_wake::plan::Mention::Session("w1".into())];
+        rig.post("c1/lobby", Rig::sender("cap"), at, "合成派活甲")
+            .await;
+        let (second, r2) = nudge_cmd("w1", "enter");
+        rig.core.handle(second).await;
+        let (third, r3) = nudge_cmd("w1", "继续");
+        rig.core.handle(third).await;
+        for rx in [r1, r2, r3] {
+            rig.settle_until(rx).await.unwrap();
         }
         assert_eq!(
-            rig.exec.lock().writes["cap"],
-            ["raw:1", "raw:2", "raw:\\r", "raw:\\r", "send:继续"],
-            "按到达顺序、一次 nudge 写完再下一次"
+            rig.exec.lock().writes["w1"],
+            [
+                "raw:1",
+                "raw:2",
+                "raw:\\r",
+                "send:合成派活甲",
+                "raw:\\r",
+                "send:继续"
+            ],
+            "按收下的先后、一次 nudge 写完再下一个"
         );
     }
 

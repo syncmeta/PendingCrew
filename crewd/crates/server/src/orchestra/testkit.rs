@@ -9,14 +9,14 @@ use crewd_exec::driver::{Closed, SendError, SessionStatus};
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent};
 use crewd_term::{DecisionEvent, Snapshot};
-use crewd_wake::plan::{ChannelCtx, Listen, MsgFacts, Sender, visible_to};
+use crewd_wake::plan::{ChannelCtx, Listen, Mention, MsgFacts, Sender, visible_to};
 use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
 use tokio::sync::{mpsc, oneshot};
 
 use super::OrchestraConfig;
 use super::clock::{Clock, ManualClock};
-use super::core::{Cmd, Core, Input, Live, Origin};
+use super::core::{Cmd, CollabFact, Core, Input, Live, Origin};
 use super::exec::{
     BoxFut, Context, ExecHandle, ExecSendError, Executor, Executors, LaunchError, LaunchRequest,
     Launched, check_context,
@@ -70,6 +70,10 @@ pub struct MemState {
     pub backlog: BTreeMap<String, Vec<(String, i64)>>,
     /// `revoke_token` 调过的 session（按调用顺序）。
     pub revoked: Vec<String>,
+    /// 设了就让 `render_wake` 报错（模拟 M3a `build_batch` 遇到坏账本 fail-loud）。
+    pub render_error: Option<String>,
+    /// `render_wake` 被调了几次（量「出错不原地紧循环重试」）。
+    pub renders: usize,
 }
 
 pub struct MemPort {
@@ -546,7 +550,11 @@ impl Port for MemPort {
     }
 
     async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
-        let st = self.lock();
+        let mut st = self.lock();
+        st.renders += 1;
+        if let Some(e) = &st.render_error {
+            anyhow::bail!("{e}");
+        }
         let deferred: Vec<i64> = batch
             .iter()
             .filter(|w| st.defer.contains(&w.id))
@@ -1099,10 +1107,85 @@ impl Rig {
     }
 }
 
+impl Rig {
+    /// 往群里落一条消息（时间 = 现在），再把 `MessageAppended` 交给 actor。
+    pub async fn post(
+        &mut self,
+        channel: &str,
+        sender: Sender,
+        mentions: Vec<Mention>,
+        text: &str,
+    ) -> MessageRef {
+        let r = {
+            let mut st = self.port.lock();
+            let seq = st
+                .messages
+                .keys()
+                .filter(|(c, _)| c == channel)
+                .map(|(_, s)| *s)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let r = MessageRef {
+                channel: channel.into(),
+                seq,
+            };
+            let facts = MsgFacts {
+                id: format!("{channel}#{seq}"),
+                at: r.clone(),
+                sender,
+                mentions,
+                created_at: st.now,
+            };
+            st.messages
+                .insert((channel.into(), seq), (facts, text.into()));
+            r
+        };
+        let fact = CollabFact::MessageAppended {
+            channel: r.channel.clone(),
+            seq: r.seq,
+        };
+        self.core.handle(Input::Collab(fact)).await;
+        self.settle().await;
+        r
+    }
+
+    /// 最后一笔 send 投进去了。
+    pub async fn ack(&mut self, session: &str) {
+        let id = self.exec.last_send_id(session);
+        let e = SessionEvent::Delivery {
+            id,
+            subject: Subject::Steer,
+            outcome: DeliveryOutcome::Delivered,
+        };
+        self.emit(session, e).await;
+    }
+
+    /// 拉起时带的开场正文投进去了。
+    pub async fn ack_brief(&mut self, session: &str) {
+        let e = SessionEvent::Delivery {
+            id: BRIEF_DELIVERY_ID,
+            subject: Subject::Brief,
+            outcome: DeliveryOutcome::Delivered,
+        };
+        self.emit(session, e).await;
+    }
+
+    /// 一边处理派生任务发回来的输入（写队列的 `WriteDone`、拉起、事件），一边等这个回执。
+    /// 一串 nudge 键要真等 `NUDGE_KEY_GAP_MS`，`settle` 的几十次让步等不到它写完。
+    pub async fn settle_until<T>(&mut self, mut rx: oneshot::Receiver<T>) -> T {
+        loop {
+            tokio::select! {
+                r = &mut rx => return r.expect("要有回执"),
+                Some(input) = self.rx.recv() => self.core.handle(input).await,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod self_tests {
     use super::*;
-    use crewd_wake::plan::Mention;
     use crewd_wake::{Priority, WakeKind};
 
     fn wake(session: &str, source: &str, priority: Priority) -> NewWake {

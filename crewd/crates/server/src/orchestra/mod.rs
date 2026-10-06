@@ -2,6 +2,7 @@
 //! 一个 actor（`core::Core`）独占会话句柄与内存状态；数据只经 `port::Port`；执行器只经 `exec::Executor`。
 pub mod clock;
 pub mod core;
+pub mod deliver;
 pub mod exec;
 pub mod exec_claude;
 pub mod hooks;
