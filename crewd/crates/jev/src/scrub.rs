@@ -15,13 +15,54 @@ struct Rule {
     keep_prefix: bool,
     /// 遮完后补在后面的字面量（URL 里的 `@`）。
     suffix: &'static str,
+    /// 有的话：命中后再看（标签，值）像不像凭据，不像就原样放过、不计数（数量、计数、普通词）。
+    guard: Option<Guard>,
+}
+
+/// （第 1 组 = 标签及分隔，其后 = 值）→ 是否当凭据遮掉。
+type Guard = fn(&str, &str) -> bool;
+
+/// 值里只收 ASCII 可见字符（中文口令罕见；这样「密码学」「token 数量」这类中文行文天然不命中）。
+const VALUE: &str = r#"[^\s"',;\[\x{80}-\x{10FFFF}][^\s"',;\x{80}-\x{10FFFF}]{5,}"#;
+
+/// 口令类标签：纯数字也是真口令（「密码：12345678」），只要够 6 位就遮。
+fn password_like(label: &str) -> bool {
+    let l = label.to_ascii_lowercase();
+    ["password", "passwd", "pwd", "密码", "口令", "授权码"]
+        .iter()
+        .any(|p| l.contains(p))
+}
+
+/// 一般规则：≥6 个字符，且（口令类标签，或含字母，或 ≥12 个字符）。
+/// 「token: 4096」「key 是 2048」这种计数不遮。
+fn credential_value(label: &str, value: &str) -> bool {
+    let n = value.chars().count();
+    n >= 6 && (password_like(label) || n >= 12 || value.chars().any(|c| c.is_ascii_alphabetic()))
+}
+
+/// 英文标签后面只隔一个空白（没有 `:` `=` `是`）：英文行文里太常见（「password expired」），
+/// 要求值同时含字母和数字才遮。
+fn mixed_value(_label: &str, value: &str) -> bool {
+    value.chars().count() >= 6
+        && value.chars().any(|c| c.is_ascii_alphabetic())
+        && value.chars().any(|c| c.is_ascii_digit())
+}
+
+/// 验证码：四到八位、含数字才算码。
+fn code_like(_label: &str, value: &str) -> bool {
+    value.chars().any(|c| c.is_ascii_digit())
 }
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
-    let rule = |pattern: &str, keep_prefix: bool, suffix: &'static str| Rule {
-        re: Regex::new(pattern).expect("脱敏正则写错了"),
-        keep_prefix,
-        suffix,
+    let guarded =
+        |pattern: &str, keep_prefix: bool, suffix: &'static str, guard: Option<Guard>| Rule {
+            re: Regex::new(pattern).expect("脱敏正则写错了"),
+            keep_prefix,
+            suffix,
+            guard,
+        };
+    let rule = |pattern: &str, keep_prefix: bool, suffix: &'static str| {
+        guarded(pattern, keep_prefix, suffix, None)
     };
     vec![
         // PEM / PGP 私钥块（没有 END 的半截也遮到文本结尾）。
@@ -65,16 +106,43 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         ),
         // key=value / key: value（英文字段名）。字段名前可以带一段标识符前缀
         // （`DB_PASSWORD`、`AWS_SECRET_ACCESS_KEY`、`X-API-Key`）：`_` 是单词字符，只靠 `\b` 会漏掉它们。
-        rule(
+        guarded(
             r#"(?i)\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|apikey|secret[_-]?access[_-]?key|access[_-]?key|secret[_-]?key|client[_-]?secret|secret|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;\[][^\s"',;]{5,}"#,
             true,
             "",
+            Some(credential_value),
         ),
-        // 中文：密码是 xxx / 口令：xxx
-        rule(
-            r"((?:密码|口令|密钥|私钥|令牌)\s*(?:是|为|[:：=])\s*)[^\s，。,;；\[]{4,}",
+        // 中文标签：密码是 xxx / 口令：xxx / 我的密码 xxx（分隔可以只是空白）。
+        guarded(
+            &format!(
+                r"((?:密码|口令|密钥|秘钥|令牌|私钥|授权码)(?:\s*(?:是|为)\s*[:：=]?\s*|\s*[:：=]\s*|\s+)){VALUE}"
+            ),
             true,
             "",
+            Some(credential_value),
+        ),
+        // 英文标签 + 中文或显式分隔：api key 是 xxx / token为 xxx / key：xxx。
+        guarded(
+            &format!(
+                r"(?i)\b((?:password|passwd|token|api[ _-]?key|apikey|secret|key)(?:\s*(?:是|为)\s*[:：=]?\s*|\s*[:：=]\s*)){VALUE}"
+            ),
+            true,
+            "",
+            Some(credential_value),
+        ),
+        // 英文标签 + 只隔空白：我的 token xxx（值要同时有字母和数字）。
+        guarded(
+            &format!(r"(?i)\b((?:password|passwd|token|api[ _-]?key|apikey|secret)\s+){VALUE}"),
+            true,
+            "",
+            Some(mixed_value),
+        ),
+        // 验证码 482913：四到八位、含数字。
+        guarded(
+            r"(验证码(?:\s*(?:是|为)\s*[:：=]?\s*|\s*[:：=]\s*|\s+)?)[A-Za-z0-9]{4,8}\b",
+            true,
+            "",
+            Some(code_like),
         ),
     ]
 });
@@ -85,12 +153,19 @@ pub fn scrub_str(text: &str) -> (String, usize) {
     let mut hits = 0;
     for rule in RULES.iter() {
         let replaced = rule.re.replace_all(&out, |caps: &Captures<'_>| {
-            hits += 1;
+            let whole = caps.get(0).map_or("", |m| m.as_str());
             let prefix = if rule.keep_prefix {
                 caps.get(1).map_or("", |m| m.as_str())
             } else {
                 ""
             };
+            if let Some(guard) = rule.guard {
+                let label = caps.get(1).map_or("", |m| m.as_str());
+                if !guard(label, &whole[label.len()..]) {
+                    return whole.to_string();
+                }
+            }
+            hits += 1;
             format!("{prefix}{REDACTED}{}", rule.suffix)
         });
         out = replaced.into_owned();
@@ -365,6 +440,60 @@ mod tests {
             "ya29 是什么前缀",
             "npm_config_registry 换成镜像",
             "the secret sauce is caching",
+        ] {
+            let (out, hits) = scrub_str(text);
+            assert_eq!((out.as_str(), hits), (text, 0), "误遮了：{text}");
+        }
+    }
+
+    /// 中文标签（或英文标签 + 中文分隔）的凭据：保留标签，遮值。
+    #[test]
+    fn chinese_labelled_credentials_keep_the_label_and_hide_the_value() {
+        for (input, expected) in [
+            ("我的密码 hunter2hunter", "我的密码 [REDACTED]"),
+            ("密码：Abc123456", "密码：[REDACTED]"),
+            ("数据库密码是 p@ssw0rd99", "数据库密码是 [REDACTED]"),
+            ("api key 是 sk-xxxxxxxxxx", "api key 是 [REDACTED]"),
+            ("token为 abcdefabcdef12", "token为 [REDACTED]"),
+            ("秘钥是：AbCd1234efgh 别外传", "秘钥是：[REDACTED] 别外传"),
+            ("授权码=QwErTy7788，明天过期", "授权码=[REDACTED]，明天过期"),
+            (
+                "验证码 482913，五分钟内有效",
+                "验证码 [REDACTED]，五分钟内有效",
+            ),
+            (
+                "我的 token ghx9Kd02LmQ 你先用",
+                "我的 token [REDACTED] 你先用",
+            ),
+            // 口令类标签：纯数字也是真口令。
+            ("WiFi 密码：88886666", "WiFi 密码：[REDACTED]"),
+            ("password=12345678", "password=[REDACTED]"),
+        ] {
+            let (out, hits) = scrub_str(input);
+            assert_eq!((out.as_str(), hits), (expected, 1), "{input}");
+            assert_eq!(scrub_str(&out), (out.clone(), 0), "第二遍不该再命中：{out}");
+        }
+        // 私钥标签后面跟 PEM 块：PEM 规则先遮整块，中文规则不再二次命中。
+        let (out, hits) = scrub_str(
+            "私钥: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----",
+        );
+        assert_eq!((out.as_str(), hits), ("私钥: [REDACTED]", 1));
+    }
+
+    #[test]
+    fn chinese_prose_and_counts_stay_untouched() {
+        for text in [
+            "密码学是一门学科",
+            "请输入密码",
+            "token 数量是 4096",
+            "token 数是 4096",
+            "token: 409600",
+            "密码是多少？",
+            "验证码是多少",
+            "验证码发了吗",
+            "key insight 是先写测试",
+            "password expired 了",
+            "令牌桶限流算法",
         ] {
             let (out, hits) = scrub_str(text);
             assert_eq!((out.as_str(), hits), (text, 0), "误遮了：{text}");
