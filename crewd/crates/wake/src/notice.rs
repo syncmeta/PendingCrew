@@ -1,9 +1,12 @@
 //! 待决策通知与 nudge 键表（移植 `Sources/Mac/LocalRunner/SessionPendingDecision.swift:339-470`）。
 //! - 按法由这一屏现算：有编号说发数字；没编号说「别发数字」，可用的键从 [`NUDGE_KEYS`] 现算（一张表、一份名单）。
 //! - 选靶：worker 卡住 → @机长；机长卡住 → 直接 @人（绝不 @ 自己：@机长会触发拉起，成环，`:375`）；升级 → @人。
-//! - 键表与执行器对齐：`SessionHandle::raw` 把字节原样写进 PTY（claude），所以表里的字节就是终端收到的字节；
-//!   文本路径的去毒规则与 `crewd_exec::session::sanitize_text` 同一套（控制字符变 U+2400 控制图形、C1 变 U+FFFD），
-//!   只是这里还把换行压成空格（一条 nudge 只会提交一次）。
+//! - 键表与执行器对齐：`SessionHandle::raw` 把字节原样写进 PTY（claude），所以表里的字节就是终端收到的字节。
+//!   **但别把一段字节一次 `raw` 写出去**：claude 把一次写入的一整块当粘贴，其中的回车可能只是粘贴的结尾，
+//!   而且 `raw` 不会把输入框标成脏。所以 [`nudge_plan`] 给的是计划：键 / 数字逐个单独写、之间留 [`NUDGE_KEY_GAP_MS`]；
+//!   文本走执行器的正常 `SessionHandle::send`（三拍提交、输入框脏处理）。
+//! - 文本去毒规则（比执行器的 `sanitize_text` 更严）：制表符 → U+2409，换行 / CR → 空格，其余 C0 → U+2400 起的
+//!   控制图形，DEL → U+2421，C1 → U+FFFD。
 //!
 //! 外来文字（C20）：本 crate 不依赖 collab，所以不在这里过 `render::safe_name`。**调用方（IO 层）必须在构造入参时
 //! 把 `name` / `session` 以及 [`DecisionFacts`] 的 `prompt` / `options`（屏幕上抓来的外来文本）先过 `safe_name`**；
@@ -80,14 +83,42 @@ pub fn selection_move_keys() -> Vec<&'static str> {
         .collect()
 }
 
-/// `nudge_session` 的输入 → 写进 PTY 的字节。别名 → 表里的字节；其余 = 去毒后的文本 + 回车
-/// （控制字符换成 Unicode 控制图形，换行变空格：别让文本里藏着按键）。
-pub fn nudge_bytes(input: &str) -> Vec<u8> {
+/// 键 / 数字序列里相邻两次写之间至少隔多久（毫秒）：IO 层必须遵守，别把它们合成一次写。
+pub const NUDGE_KEY_GAP_MS: u64 = 150;
+
+/// 数字串最长几位才算「菜单序号」；再长当文本。
+const MAX_MENU_DIGITS: usize = 2;
+
+/// `nudge_session` 的输入该怎么送进会话。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NudgePlan {
+    /// 一串**各自独立**的写：每一项（一个表里的键 / 一位数字 / 最后单独一个 `\r`）是一次 `SessionHandle::raw`，
+    /// 相邻两次之间至少隔 [`NUDGE_KEY_GAP_MS`]。**绝不要把这些字节合成一次 `raw` 写**。
+    Keys(Vec<Vec<u8>>),
+    /// 去毒后的文本：必须经执行器的正常 `SessionHandle::send` 投递（它负责三拍提交与输入框脏处理），
+    /// **不要**用 `raw` 写，也不要自己补回车。
+    Text(String),
+}
+
+/// `nudge_session` 的输入 → 投递计划。空 / 全空白的输入返回 `None`（IO 层拒绝它：绝不能变成一个裸回车，
+/// 那会确认当前高亮的那一项，信任框上就是「No, exit」）。
+/// - 表里的别名 → `Keys([该键])`，不额外补回车；
+/// - 1..=[`MAX_MENU_DIGITS`] 位纯数字（编号菜单的答案）→ `Keys([每位数字…, \r])`；
+/// - 其余 → `Text(去毒后的文本)`。
+pub fn nudge_plan(input: &str) -> Option<NudgePlan> {
     let key = input.trim();
-    if let Some(b) = bytes_of(&key.to_ascii_lowercase()) {
-        return b.to_vec();
+    if key.is_empty() {
+        return None;
     }
-    let mut s: String = key
+    if let Some(b) = bytes_of(&key.to_ascii_lowercase()) {
+        return Some(NudgePlan::Keys(vec![b.to_vec()]));
+    }
+    if key.len() <= MAX_MENU_DIGITS && key.bytes().all(|b| b.is_ascii_digit()) {
+        let mut writes: Vec<Vec<u8>> = key.bytes().map(|d| vec![d]).collect();
+        writes.push(b"\r".to_vec());
+        return Some(NudgePlan::Keys(writes));
+    }
+    let text: String = key
         .chars()
         .map(|c| match c {
             '\r' | '\n' => ' ',
@@ -99,8 +130,7 @@ pub fn nudge_bytes(input: &str) -> Vec<u8> {
             c => c,
         })
         .collect();
-    s.push('\r');
-    s.into_bytes()
+    Some(NudgePlan::Text(text))
 }
 
 fn backticked(keys: &[&str]) -> String {
@@ -305,19 +335,70 @@ mod tests {
         assert_eq!(nudge_key_names(), ["enter", "esc"]);
     }
 
-    #[test]
-    fn nudge_maps_aliases_to_bytes_and_text_to_inert_text_plus_enter() {
-        assert_eq!(nudge_bytes("enter"), b"\r");
-        assert_eq!(nudge_bytes(" ESC "), b"\x1b");
-        assert_eq!(nudge_bytes("回车"), b"\r");
-        assert_eq!(nudge_bytes("2"), b"2\r");
-        assert_eq!(nudge_bytes("a\x1bb\nc"), "a\u{241b}b c\r".as_bytes());
+    fn keys(v: &[&[u8]]) -> Option<NudgePlan> {
+        Some(NudgePlan::Keys(v.iter().map(|k| k.to_vec()).collect()))
     }
 
     #[test]
-    fn c1_controls_in_nudge_text_become_replacement_chars_like_the_executor() {
-        assert_eq!(nudge_bytes("a\u{9b}b"), "a\u{fffd}b\r".as_bytes());
-        assert_eq!(nudge_bytes("x\ty"), "x\u{2409}y\r".as_bytes());
+    fn empty_or_blank_nudges_are_refused_never_a_bare_enter() {
+        for input in ["", "   ", "\n", " \r\n\t ", "\n\n  \n"] {
+            assert_eq!(nudge_plan(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn table_keys_are_one_write_each_without_an_extra_enter() {
+        assert_eq!(nudge_plan("enter"), keys(&[b"\r"]));
+        assert_eq!(nudge_plan(" ESC "), keys(&[b"\x1b"]));
+        assert_eq!(nudge_plan("\u{56de}\u{8f66}"), keys(&[b"\r"]));
+    }
+
+    #[test]
+    fn a_numbered_menu_answer_is_each_digit_then_enter_as_separate_writes() {
+        assert_eq!(nudge_plan("2"), keys(&[b"2", b"\r"]));
+        assert_eq!(nudge_plan(" 12 "), keys(&[b"1", b"2", b"\r"]));
+        // 太长的数字串不是菜单序号：当文本。
+        assert_eq!(nudge_plan("2026"), Some(NudgePlan::Text("2026".into())));
+        const { assert!(NUDGE_KEY_GAP_MS >= 100, "写与写之间要留间隔") };
+    }
+
+    #[test]
+    fn anything_else_is_inert_text_for_the_normal_send_path_with_no_enter_appended() {
+        assert_eq!(
+            nudge_plan("a\x1bb\nc"),
+            Some(NudgePlan::Text("a\u{241b}b c".into()))
+        );
+        assert_eq!(
+            nudge_plan("yes please"),
+            Some(NudgePlan::Text("yes please".into()))
+        );
+        // 去毒后不会含任何控制字符（含 ESC / CR / DEL / C1）。
+        let Some(NudgePlan::Text(t)) = nudge_plan("\x03\x1b[2J\r\u{7f}\u{9b}x") else {
+            panic!("应当是文本")
+        };
+        assert!(t.chars().all(|c| !c.is_control()), "{t:?}");
+    }
+
+    /// 文本路径的规则（比执行器的 `sanitize_text` 更严）：制表符 → U+2409，换行 / CR → 空格，
+    /// 其余 C0 → U+2400 控制图形，DEL → U+2421，C1 → U+FFFD。
+    #[test]
+    fn text_rule_is_stricter_than_the_executor_sanitizer() {
+        assert_eq!(
+            nudge_plan("x\ty"),
+            Some(NudgePlan::Text("x\u{2409}y".into()))
+        );
+        assert_eq!(
+            nudge_plan("a\u{9b}b"),
+            Some(NudgePlan::Text("a\u{fffd}b".into()))
+        );
+        assert_eq!(
+            nudge_plan("a\r\nb\nc"),
+            Some(NudgePlan::Text("a  b c".into()))
+        );
+        assert_eq!(
+            nudge_plan("a\u{7f}b"),
+            Some(NudgePlan::Text("a\u{2421}b".into()))
+        );
     }
 
     #[test]
@@ -380,16 +461,19 @@ mod tests {
         }
     }
 
-    /// 给 agent / 群看的文字只在 prompts/*.md（Global Constraints）。判定源码里出现中日韩字符只可能是漏网的文案
-    /// （键名例外，那一行带 `键名，不是文案` 标记；`expect` / `panic!` 的开发者信息例外）。注释与测试不查。
+    /// 只查「中日韩字符的文案字面量」：给 agent / 群看的文字只在 prompts/*.md（Global Constraints），判定源码里出现
+    /// 中日韩字符只可能是漏网的文案。它**抓不到**英文文案、也不抓拼出来的文字。例外：带 `键名，不是文案` 标记的行
+    /// （键名）、`.expect(` / `panic!(` 的开发者信息行；注释（`//` 开头或行尾 ` //` 之后）与 `#[cfg(test)]` 之后不查。
     #[test]
-    fn decision_sources_carry_no_prose_literals() {
+    fn decision_sources_carry_no_cjk_prose_literals() {
         let files = [
             ("plan.rs", include_str!("plan.rs")),
             ("breaker.rs", include_str!("breaker.rs")),
             ("queue.rs", include_str!("queue.rs")),
             ("policy.rs", include_str!("policy.rs")),
             ("notice.rs", include_str!("notice.rs")),
+            ("model.rs", include_str!("model.rs")),
+            ("lib.rs", include_str!("lib.rs")),
         ];
         let cjk = |c: char| matches!(c, '\u{3000}'..='\u{303f}' | '\u{4e00}'..='\u{9fff}' | '\u{ff00}'..='\u{ffef}');
         for (name, src) in files {
