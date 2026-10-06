@@ -129,8 +129,9 @@ pub async fn start_codex(
         Some(id) => Some(LiveId::claim(id)?),
         None => None,
     };
-    // token 文件：0600、放在这次启动自己的 0700 目录里；会话结束（`Task` drop）随目录一起删掉。
-    let (files, token_file) = match &start.spec.comms {
+    // token 文件：0600、放在这次启动自己的 0700 目录里（目录名带每次启动唯一的后缀：同一个 crewd
+    // session id 立刻重起时，新旧目录互不相干）。目录在 `release`（发 `Exited` 之前）里删掉。
+    let launch = match &start.spec.comms {
         Some(c) => {
             if !valid_agent_session_id(&start.session_id) {
                 return Err(StartError::Files(io::Error::new(
@@ -138,12 +139,25 @@ pub async fn start_codex(
                     format!("invalid session id {:?}", start.session_id),
                 )));
             }
-            let files =
-                LaunchFiles::create(&config.runtime_dir, &format!("codex-{}", start.session_id))
-                    .map_err(StartError::Files)?;
-            let token_file = write_token_file(files.dir(), &c.token).map_err(StartError::Files)?;
-            (Some(files), Some(token_file))
+            let name = format!(
+                "codex-{}-{}",
+                start.session_id,
+                uuid::Uuid::new_v4().simple()
+            );
+            let (runtime_dir, token) = (config.runtime_dir.clone(), c.token.clone());
+            let made = blocking(move || {
+                let files = LaunchFiles::create(&runtime_dir, &name)?;
+                let token_file = write_token_file(files.dir(), &token)?;
+                Ok((files, token_file))
+            })
+            .await
+            .map_err(StartError::Files)?;
+            Some(made)
         }
+        None => None,
+    };
+    let (files, token_file) = match launch {
+        Some((f, t)) => (Some(f), Some(t)),
         None => (None, None),
     };
     let mut env = build_env_from_process(&start.child_path, &start.spec.additional_env);
@@ -198,7 +212,10 @@ pub async fn start_codex(
     let opening = Opening {
         pid: proc.pid,
         cwd: start.spec.workdir.clone(),
-        options: thread_options(&start.spec, token_file.as_deref()),
+        options: thread_options(
+            &start.spec,
+            start.spec.comms.as_ref().zip(token_file.as_deref()),
+        ),
         recorded,
         client_version: config.client_version.clone(),
         brief: start
@@ -229,7 +246,7 @@ pub async fn start_codex(
         controls: HashMap::new(),
         next_ticket: 0,
         live,
-        _files: files,
+        files,
     }));
     match ready_rx.await {
         Ok(Ok(())) => Ok((SessionHandle::new(tx), ev_rx)),
@@ -241,15 +258,14 @@ pub async fn start_codex(
 }
 
 /// `CodexSpec` → `thread/start` 选项（MCP 指向 helper，身份只有数据目录 / session / token 文件）。
-/// 有 `comms` 就必须给 `token_file`（`start_codex` 先写好再调）。
-pub fn thread_options(spec: &CodexSpec, token_file: Option<&Path>) -> ThreadOptions {
+/// `mcp` = 通讯配置 + 已写好的 token 文件，两样一起给（没有 token 文件就没有 MCP）。
+pub fn thread_options(spec: &CodexSpec, mcp: Option<(&CommsSpec, &Path)>) -> ThreadOptions {
     ThreadOptions {
         model: spec.model.clone(),
         effort: spec.effort.clone(),
         fast: spec.fast_mode,
         developer_instructions: spec.developer_instructions.clone(),
-        mcp_servers: spec.comms.as_ref().map(|c| {
-            let token_file = token_file.expect("comms requires a token file");
+        mcp_servers: mcp.map(|(c, token_file)| {
             proto::mcp_servers(&c.helper, &HelperCommands(c).mcp_args(token_file))
         }),
     }
@@ -268,8 +284,8 @@ struct Task {
     next_ticket: u64,
     /// 占着的 thread id（本进程里同一个 thread 只能跑一个）。
     live: Option<LiveId>,
-    /// 启动临时文件（token 文件）：随 `Task` 一起 drop，目录整个删掉。
-    _files: Option<LaunchFiles>,
+    /// 启动临时文件（token 文件）：`release` 里（发 `Exited` 之前）在阻塞线程池里删掉。
+    files: Option<LaunchFiles>,
 }
 
 type RecordMsg = Result<(), String>;
@@ -359,7 +375,7 @@ fn begin_stop(t: &mut Task, stopping: &mut bool, stop_deadline: &mut Option<toki
     *stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
 }
 
-/// 进程已收尸（或启动失败、已杀掉）：整组补一刀、停掉附属任务、放开 thread id、清登记表
+/// 进程已收尸（或启动失败、已杀掉）：整组补一刀、停掉附属任务、删启动文件、放开 thread id、清登记表
 /// （按这个顺序，都在发 `Exited` 之前）。
 ///
 /// 补刀：codex 收到 SIGTERM 自己退了（或崩了），它起的工具子命令还留在组里。setsid 后
@@ -370,6 +386,9 @@ async fn release(t: &mut Task) {
     kill_group_only(t.proc.pid);
     t.proc.writer_task.abort();
     t.proc.stderr_task.abort();
+    if let Some(files) = t.files.take() {
+        let _ = tokio::task::spawn_blocking(move || drop(files)).await;
+    }
     t.live = None;
     if let Some(registry) = t.config.registry.clone() {
         let id = t.start.session_id.clone();

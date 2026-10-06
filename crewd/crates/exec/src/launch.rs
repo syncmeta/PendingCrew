@@ -108,7 +108,7 @@ pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15;
 
 /// crew 通讯（MCP + hooks）要用的 helper 与身份（spec §22.3「身份」）。
 /// 机组、角色、显示名不在这里：会话中途会变（换机长），由 serve 每次现查。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CommsSpec {
     /// helper 可执行文件（crewd 自己）。
     pub helper: PathBuf,
@@ -122,6 +122,20 @@ pub struct CommsSpec {
     pub hooks: bool,
     /// 要人审批的工具名子串（serve 配置）；空 = 不注册 PreToolUse。
     pub approval_gates: Vec<String>,
+}
+
+/// `Debug` 不打印 token（它会进日志 / panic 信息）。
+impl std::fmt::Debug for CommsSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommsSpec")
+            .field("helper", &self.helper)
+            .field("data_dir", &self.data_dir)
+            .field("session_id", &self.session_id)
+            .field("token", &"<redacted>")
+            .field("hooks", &self.hooks)
+            .field("approval_gates", &self.approval_gates)
+            .finish()
+    }
 }
 
 /// helper 命令行。子命令形状只在这里拼。
@@ -651,6 +665,13 @@ mod tests {
             gate_matcher(&["a.b".into(), "x|y".into(), "(z)".into()]).unwrap(),
             r"(a\.b|x\|y|\(z\))"
         );
+    }
+
+    #[test]
+    fn comms_debug_redacts_the_token() {
+        let shown = format!("{:?}", comms());
+        assert!(!shown.contains("tok-SECRET"), "{shown}");
+        assert!(shown.contains("worker-1"), "{shown}");
     }
 
     #[test]
