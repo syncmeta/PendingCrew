@@ -959,3 +959,75 @@ async fn a_running_thread_cannot_be_resumed_twice_but_is_free_once_exited() {
     ));
     stop(&h2, &mut rx2).await;
 }
+
+/// 启动失败也是终态：`start_codex` 返回 `Err` 时，占着的 thread id 已放开、进程已收尸——
+/// 同一个账本立刻就能再起（计划裁定 21 对启动失败同样成立）。
+#[tokio::test]
+async fn a_failed_start_releases_the_thread_id_before_it_returns() {
+    let env = Env::new();
+    let ledger = Arc::new(MemoryLedger::with(Some("thr-stale")));
+    let mut config = env.config();
+    config.core.thread_timeout = Duration::from_millis(500);
+    config.core.initialize_timeout = Duration::from_millis(500);
+    let err = start_codex(env.start("init_silent", ledger.clone(), None), config)
+        .await
+        .err()
+        .expect("必须报错");
+    assert!(matches!(err, StartError::Handshake { .. }), "{err:?}");
+    let (h, mut rx) = start_codex(env.start("", ledger, None), env.config())
+        .await
+        .expect("失败的启动返回之后，同一个账本要能立刻再起（不是 AlreadyRunning）");
+    assert!(matches!(
+        next(&mut rx).await,
+        SessionEvent::Spawned { resumed: true, .. }
+    ));
+    stop(&h, &mut rx).await;
+}
+
+/// 落账失败：返回 `Err` 的那一刻登记表已经清了（同步检查，不轮询）。
+#[tokio::test]
+async fn a_ledger_failure_has_cleared_the_registry_by_the_time_start_returns() {
+    let env = Env::new();
+    let registry = Arc::new(ProcessRegistry::load(&env.path("exec-registry.json")).unwrap());
+    let mut config = env.config();
+    config.registry = Some(registry.clone());
+    let err = start_codex(env.start("", Arc::new(BrokenLedger), None), config)
+        .await
+        .err()
+        .expect("必须报错");
+    assert!(matches!(err, StartError::Ledger(_)), "{err:?}");
+    assert!(
+        registry.entries().is_empty(),
+        "返回时登记表里还留着死进程：{:?}",
+        registry.entries()
+    );
+    gone(env.pid_in("pid")).await;
+}
+
+/// 失败后立刻用同一个 session id 重起：旧任务迟到的 `forget` 不能抹掉新进程的登记。
+#[tokio::test]
+async fn restarting_right_after_a_failed_start_keeps_the_new_registry_entry() {
+    let env = Env::new();
+    let registry = Arc::new(ProcessRegistry::load(&env.path("exec-registry.json")).unwrap());
+    let mut config = env.config();
+    config.registry = Some(registry.clone());
+    let err = start_codex(env.start("", Arc::new(BrokenLedger), None), config.clone())
+        .await
+        .err()
+        .expect("必须报错");
+    assert!(matches!(err, StartError::Ledger(_)), "{err:?}");
+    let (h, mut rx) = start_codex(
+        env.start("", Arc::new(MemoryLedger::default()), None),
+        config,
+    )
+    .await
+    .unwrap();
+    next(&mut rx).await;
+    let new_pid = env.pid_in("pid");
+    // 给旧任务足够的时间把迟到的 forget 做完（修复前它会抹掉下面这条）。
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let entries = registry.entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].1.pid, new_pid);
+    stop(&h, &mut rx).await;
+}

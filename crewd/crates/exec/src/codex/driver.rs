@@ -260,8 +260,9 @@ async fn run(mut t: Task) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let actions = t.core.take_actions();
-        if execute(&mut t, actions, &record_tx) {
-            // 启动失败：杀掉、收尸（有上限）、收拾。
+        if let Some(err) = execute(&mut t, actions, &record_tx) {
+            // 启动失败：杀掉、收尸（有上限）、收拾——**之后**才把错误交给 `start_codex`：
+            // 它返回时 thread id 已放开、登记表已清，同一个账本 / session id 立刻能重起。
             kill_group(t.proc.pid);
             if let Err(e) = reap_killed(&mut t.proc.child).await {
                 eprintln!(
@@ -270,6 +271,9 @@ async fn run(mut t: Task) {
                 );
             }
             release(&mut t).await;
+            if let Some(ready) = t.ready.take() {
+                let _ = ready.send(Err(err));
+            }
             return;
         }
         let wake = t.core.next_wakeup().map(tokio::time::Instant::from_std);
@@ -286,11 +290,11 @@ async fn run(mut t: Task) {
                 t.core.on_exit(status, &tail, Instant::now());
                 let actions = t.core.take_actions();
                 release(&mut t).await;
-                execute(&mut t, actions, &record_tx);
+                let failed = execute(&mut t, actions, &record_tx);
                 if let Some(ready) = t.ready.take() {
-                    let _ = ready.send(Err(StartError::Handshake {
+                    let _ = ready.send(Err(failed.unwrap_or_else(|| StartError::Handshake {
                         health: launch_health(LaunchVerdict::DiedSilently, "会话任务提前结束"),
-                    }));
+                    })));
                 }
                 return;
             }
@@ -375,12 +379,12 @@ async fn drain(t: &mut Task, limit: Duration) {
     let _ = tokio::time::timeout(limit, &mut t.proc.stderr_task).await;
 }
 
-/// 执行核心攒下的动作；返回 true = 启动失败（调用方杀进程收工）。
+/// 执行核心攒下的动作；返回 `Some` = 启动失败（调用方杀进程、收拾完之后再把这个错误交出去）。
 fn execute(
     t: &mut Task,
     actions: Vec<CodexAction>,
     record_tx: &mpsc::UnboundedSender<RecordMsg>,
-) -> bool {
+) -> Option<StartError> {
     for action in actions {
         match action {
             CodexAction::Write(line) => {
@@ -406,10 +410,7 @@ fn execute(
                     StartFailure::Launch(health) => StartError::Handshake { health },
                     StartFailure::Ledger(e) => StartError::Ledger(io::Error::other(e)),
                 };
-                if let Some(ready) = t.ready.take() {
-                    let _ = ready.send(Err(err));
-                }
-                return true;
+                return Some(err);
             }
             CodexAction::Event(e) => {
                 if let SessionEvent::Spawned {
@@ -431,7 +432,7 @@ fn execute(
             }
         }
     }
-    false
+    None
 }
 
 /// 处理一条命令；返回 true = 要停（由 [`begin_stop`] 去重）。
