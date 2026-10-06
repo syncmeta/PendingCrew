@@ -5,3 +5,4 @@ pub mod env;
 pub mod health;
 pub mod launch;
 pub mod pty;
+pub mod session;
