@@ -6,3 +6,7 @@ members = ["crates/*"]
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
+
+# 脱敏的性质测试（crewd-jev）在 debug 下跑几万次正则；只给 regex-lite 开优化，别的照旧。
+[profile.dev.package.regex-lite]
+opt-level = 3

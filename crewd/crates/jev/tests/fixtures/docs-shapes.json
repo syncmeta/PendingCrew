@@ -1,0 +1,23 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "route": {
+      "type": "choice",
+      "choice": "scroll-fix",
+      "probabilities": { "scroll-fix": 0.8, "captain": 0.15, "new_session": 0.05 },
+      "confidence": 0.7
+    },
+    "wake_release": {
+      "type": "noul",
+      "noul": 0.08
+    },
+    "urgency": {
+      "type": "score",
+      "score": 1.9,
+      "legend": { "0": "不急", "1": "有空看", "2": "在等人" },
+      "probabilities": { "0": 0.0, "1": 0.1, "2": 0.9 },
+      "confidence": 0.85
+    }
+  },
+  "usage": { "input_tokens": 412, "output_tokens": 57 }
+}
