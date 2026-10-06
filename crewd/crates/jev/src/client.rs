@@ -52,12 +52,18 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// 第 `failed_attempt` 次（从 1 起）失败后等多久：Retry-After 优先，否则 base × 4^(n−1)；都不超过 max_delay。
-    pub fn delay(&self, failed_attempt: u32, retry_after: Option<Duration>) -> Duration {
-        let backoff = self
-            .base_delay
-            .saturating_mul(4u32.saturating_pow(failed_attempt.saturating_sub(1)));
-        retry_after.unwrap_or(backoff).min(self.max_delay)
+    /// 第 `failed_attempt` 次（从 1 起）失败后等多久：Retry-After 优先，否则 base × 4^(n−1)（封顶 max_delay）。
+    /// 服务端要求的 Retry-After 比 max_delay 还长 → None：不提前硬重试（那只会再吃一次 429），直接放弃、交机长。
+    pub fn delay(&self, failed_attempt: u32, retry_after: Option<Duration>) -> Option<Duration> {
+        match retry_after {
+            Some(wait) if wait > self.max_delay => None,
+            Some(wait) => Some(wait),
+            None => Some(
+                self.base_delay
+                    .saturating_mul(4u32.saturating_pow(failed_attempt.saturating_sub(1)))
+                    .min(self.max_delay),
+            ),
+        }
     }
 }
 
@@ -104,6 +110,8 @@ pub struct Client {
     deadline: Duration,
 }
 
+const ENDPOINT_PATH: &str = "/v1/systemone";
+
 fn is_local(host: Option<&str>) -> bool {
     matches!(host, Some("127.0.0.1") | Some("localhost") | Some("[::1]"))
 }
@@ -126,10 +134,10 @@ pub fn endpoint_for(base_url: &str) -> Result<String, String> {
     if url.query().is_some() || url.fragment().is_some() {
         return Err("base URL 里不能带查询串或片段".into());
     }
-    Ok(format!(
-        "{}/v1/systemone",
-        url.as_str().trim_end_matches('/')
-    ))
+    // 已经填了完整端点（…/v1/systemone）的，不再拼一遍。
+    let base = url.as_str().trim_end_matches('/');
+    let base = base.strip_suffix(ENDPOINT_PATH).unwrap_or(base);
+    Ok(format!("{base}{ENDPOINT_PATH}"))
 }
 
 impl Client {
@@ -205,7 +213,10 @@ impl Client {
             match outcome {
                 Ok(response) => break Ok(response),
                 Err(e) if e.is_retryable() && attempts < self.retry.max_attempts => {
-                    let delay = self.retry.delay(attempts, retry_after);
+                    // 等不起（Retry-After 超过退避上限，或等完就过了总时限）→ 放弃，交机长。
+                    let Some(delay) = self.retry.delay(attempts, retry_after) else {
+                        break Err(e);
+                    };
                     if started.elapsed() + delay >= self.deadline {
                         break Err(e);
                     }
@@ -259,10 +270,19 @@ impl Client {
 
 fn transport_error(e: reqwest::Error) -> CallError {
     if e.is_timeout() {
-        CallError::Timeout
-    } else {
-        CallError::Transport(e.without_url().to_string())
+        return CallError::Timeout;
     }
+    // reqwest 顶层只说「error sending request」；把 source 链接上（连接被拒、DNS、TLS……）才看得出原因。
+    // 不带 URL（without_url）；key 只在请求头里，错误链里没有它。
+    let e = e.without_url();
+    let mut message = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(s) = source {
+        message.push_str(": ");
+        message.push_str(&s.to_string());
+        source = s.source();
+    }
+    CallError::Transport(message)
 }
 
 /// 只认整数秒的 Retry-After（HTTP 日期形式忽略，走退避）。
@@ -289,6 +309,20 @@ mod tests {
         );
         assert_eq!(
             endpoint_for(" https://proxy.example.com/jev/ ").unwrap(),
+            "https://proxy.example.com/jev/v1/systemone"
+        );
+        for already_full in [
+            "https://api.typesafe.ai/v1/systemone",
+            "https://api.typesafe.ai/v1/systemone/",
+        ] {
+            assert_eq!(
+                endpoint_for(already_full).unwrap(),
+                "https://api.typesafe.ai/v1/systemone",
+                "填了完整端点也不能拼成 /v1/systemone/v1/systemone"
+            );
+        }
+        assert_eq!(
+            endpoint_for("https://proxy.example.com/jev/v1/systemone").unwrap(),
             "https://proxy.example.com/jev/v1/systemone"
         );
         assert_eq!(
@@ -318,19 +352,20 @@ mod tests {
     }
 
     #[test]
-    fn backoff_grows_by_four_and_is_capped() {
+    fn backoff_grows_by_four_is_capped_and_a_long_retry_after_gives_up() {
         let p = RetryPolicy::default();
-        assert_eq!(p.delay(1, None), Duration::from_millis(300));
-        assert_eq!(p.delay(2, None), Duration::from_millis(1200));
-        assert_eq!(p.delay(3, None), Duration::from_secs(2));
-        assert_eq!(p.delay(40, None), Duration::from_secs(2), "不溢出");
+        assert_eq!(p.delay(1, None), Some(Duration::from_millis(300)));
+        assert_eq!(p.delay(2, None), Some(Duration::from_millis(1200)));
+        assert_eq!(p.delay(3, None), Some(Duration::from_secs(2)));
+        assert_eq!(p.delay(40, None), Some(Duration::from_secs(2)), "不溢出");
         assert_eq!(
             p.delay(1, Some(Duration::from_secs(1))),
-            Duration::from_secs(1)
+            Some(Duration::from_secs(1))
         );
         assert_eq!(
             p.delay(1, Some(Duration::from_secs(60))),
-            Duration::from_secs(2)
+            None,
+            "服务端要我们等的比最长退避还久：不再重试，交机长"
         );
     }
 

@@ -128,7 +128,21 @@ async fn gives_up_after_max_attempts() {
 }
 
 #[tokio::test]
-async fn retry_after_is_honoured_but_capped() {
+async fn a_short_retry_after_is_honoured() {
+    let fake = FakeJev::start(vec![
+        Reply::status(429).header("retry-after", "0"),
+        Reply::ok(choice_body("route", "zeta", 0.7)),
+    ])
+    .await;
+    let client = Client::new(config(&fake.base_url)).unwrap();
+    let (result, report) = client.evaluate(&request(json!({}))).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(report.attempts, 2);
+}
+
+/// 服务端要我们等 30s（比最长退避长）：不压成 max_delay 硬重试，直接放弃、交机长。
+#[tokio::test]
+async fn a_long_retry_after_gives_up_instead_of_retrying_early() {
     let fake = FakeJev::start(vec![
         Reply::status(429).header("retry-after", "30"),
         Reply::ok(choice_body("route", "zeta", 0.7)),
@@ -136,12 +150,30 @@ async fn retry_after_is_honoured_but_capped() {
     .await;
     let client = Client::new(config(&fake.base_url)).unwrap();
     let started = Instant::now();
-    let (result, _) = client.evaluate(&request(json!({}))).await;
-    assert!(result.is_ok());
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "Retry-After 30s 应被封顶到 max_delay"
-    );
+    let (result, report) = client.evaluate(&request(json!({}))).await;
+    assert_eq!(result.unwrap_err(), CallError::RateLimited);
+    assert_eq!(report.attempts, 1);
+    assert_eq!(fake.requests().len(), 1, "不该提前重试");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+/// Retry-After 在退避上限之内、但等完就过了总时限：也直接放弃。
+#[tokio::test]
+async fn a_retry_after_beyond_the_deadline_gives_up() {
+    let fake = FakeJev::start(vec![
+        Reply::status(503).header("retry-after", "2"),
+        Reply::ok(choice_body("route", "zeta", 0.7)),
+    ])
+    .await;
+    let mut cfg = config(&fake.base_url);
+    cfg.retry.max_delay = Duration::from_secs(10);
+    cfg.deadline = Duration::from_secs(1);
+    let client = Client::new(cfg).unwrap();
+    let started = Instant::now();
+    let (result, report) = client.evaluate(&request(json!({}))).await;
+    assert_eq!(result.unwrap_err(), CallError::Server { status: 503 });
+    assert_eq!(report.attempts, 1);
+    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 #[tokio::test]
@@ -215,6 +247,12 @@ async fn nothing_listening_is_a_transport_error_after_retries() {
     drop(listener);
     let client = Client::new(config(&format!("http://127.0.0.1:{port}"))).unwrap();
     let (result, report) = client.evaluate(&request(json!({}))).await;
-    assert!(matches!(result, Err(CallError::Transport(_))), "{result:?}");
+    match &result {
+        Err(CallError::Transport(m)) => assert!(
+            m.to_ascii_lowercase().contains("refused"),
+            "错误信息要带上底层原因（error source 链），不只是 error sending request：{m}"
+        ),
+        other => panic!("{other:?}"),
+    }
     assert_eq!(report.attempts, 3);
 }
