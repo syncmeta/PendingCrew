@@ -1,7 +1,7 @@
 //! 选批与退避（spec §22.4「队列」）。纯函数。
 //! Swift 是一次一条（`CrewDeferredWakeQueue.swift:50`）；这里到期的最高一档合并成一次投递（≤10 条，渲染后 ≤8KB 由 IO 层裁），
 //! 少转几轮空转。
-use crate::model::{MIN, Ms, Priority, QueuedWake, SEC, WakeState};
+use crate::model::{MIN, Ms, QueuedWake, SEC, WakeState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BatchLimits {
@@ -60,16 +60,17 @@ pub fn ids(batch: &[QueuedWake]) -> Vec<i64> {
     batch.iter().map(|w| w.id).collect()
 }
 
-/// 放弃时要不要在群里告警：批里有非 system 级的唤醒才告（system 级的告警本身叫不醒时不成环，
-/// 同 `CrewLocalMentionWakeLogic.swift:26-28` 的用意）。
+/// 放弃时要不要在群里告警：任何优先级的批都告（控制者裁定 C19，含没有 origin 的 timer / system 唤醒——
+/// 静默丢弃比告警更糟）；空批没有可告的。「告警自己叫不醒」的成环风险由发告警的一方保证：
+/// 告警是群里一条普通消息，不是唤醒入队。
 pub fn should_alert(batch: &[QueuedWake]) -> bool {
-    batch.iter().any(|w| w.priority != Priority::System)
+    !batch.is_empty()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::WakeKind;
+    use crate::model::{Priority, WakeKind};
 
     pub(crate) fn w(id: i64, priority: Priority, not_before: i64, created_at: i64) -> QueuedWake {
         QueuedWake {
@@ -140,8 +141,12 @@ mod tests {
     }
 
     #[test]
-    fn only_non_system_batches_alert_on_give_up() {
-        assert!(!should_alert(&[w(1, Priority::System, 0, 0)]));
+    fn every_priority_alerts_on_give_up_but_an_empty_batch_does_not() {
+        assert!(
+            should_alert(&[w(1, Priority::System, 0, 0)]),
+            "C19: system-only batches alert too"
+        );
+        assert!(!should_alert(&[]));
         assert!(should_alert(&[
             w(1, Priority::System, 0, 0),
             w(2, Priority::Auto, 0, 0)
