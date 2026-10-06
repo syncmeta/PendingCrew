@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn max_attempts_is_one_more_than_the_back_off_steps() {
         assert_eq!(MAX_ATTEMPTS as usize, RETRY_DELAYS_MS.len() + 1);
-        assert_eq!(after_failure(MAX_ATTEMPTS - 1, Ms(0)).is_some(), true);
+        assert!(after_failure(MAX_ATTEMPTS - 1, Ms(0)).is_some());
         assert_eq!(after_failure(MAX_ATTEMPTS, Ms(0)), None);
     }
 
