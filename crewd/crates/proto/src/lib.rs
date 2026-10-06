@@ -488,6 +488,7 @@ mod tests {
     use super::*;
     use schemars::schema_for;
     use serde_json::json;
+    use std::collections::BTreeSet;
 
     #[test]
     fn request_params_default_to_null() {
@@ -696,6 +697,94 @@ mod tests {
             json!(events::TOPICS),
             "{}",
             defs["SubscribeParams"]
+        );
+    }
+
+    /// 一个 schema 的形状：每个分支（oneOf；没有就是它自己）的 (kind 常量, 属性键集合, required 集合)。
+    fn shape(s: &Value) -> Vec<(Option<String>, BTreeSet<String>, BTreeSet<String>)> {
+        let keys = |v: &Value| -> BTreeSet<String> {
+            v.as_object()
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+        let strings = |v: &Value| -> BTreeSet<String> {
+            v.as_array()
+                .map(|a| a.iter().map(|x| x.as_str().unwrap().to_string()).collect())
+                .unwrap_or_default()
+        };
+        let branches: Vec<&Value> = match s["oneOf"].as_array() {
+            Some(a) => a.iter().collect(),
+            None => vec![s],
+        };
+        let mut out: Vec<_> = branches
+            .into_iter()
+            .map(|b| {
+                (
+                    b["properties"]["kind"]["const"]
+                        .as_str()
+                        .map(str::to_string),
+                    keys(&b["properties"]),
+                    strings(&b["required"]),
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// 严格的参数类型（`*Param`）与宽松的模型类型线上形状相同、不漂：满字段的模型值序列化后能被参数类型收下，
+    /// `From` 回来逐字段相等；两边 schema 的属性键与 required 逐分支相同。
+    #[test]
+    fn model_and_param_types_do_not_drift() {
+        fn round_trip<M, P>(m: M)
+        where
+            M: Serialize + PartialEq + std::fmt::Debug + From<P>,
+            P: serde::de::DeserializeOwned,
+        {
+            let wire = serde_json::to_value(&m).unwrap();
+            let p: P = serde_json::from_value(wire.clone())
+                .unwrap_or_else(|e| panic!("参数类型不收模型的线上形状 {wire}：{e}"));
+            assert_eq!(M::from(p), m, "{wire}");
+        }
+        round_trip::<Mention, MentionParam>(Mention {
+            kind: MentionKind::Captain,
+            target_id: Some("cap-a".into()),
+        });
+        round_trip::<Attachment, AttachmentParam>(Attachment {
+            id: "att-a".into(),
+            mime: "image/png".into(),
+            size: Some(42),
+            path: "/示例/附件.png".into(),
+            filename: Some("附件.png".into()),
+        });
+        round_trip::<MemberRef, MemberParam>(MemberRef::session("w-a1"));
+        round_trip::<MemberRef, MemberParam>(MemberRef::Human);
+        for (name, model, param) in [
+            (
+                "Mention",
+                json!(schema_for!(Mention)),
+                json!(schema_for!(MentionParam)),
+            ),
+            (
+                "Attachment",
+                json!(schema_for!(Attachment)),
+                json!(schema_for!(AttachmentParam)),
+            ),
+            (
+                "MemberRef",
+                json!(schema_for!(MemberRef)),
+                json!(schema_for!(MemberParam)),
+            ),
+        ] {
+            let (m, p) = (shape(&model), shape(&param));
+            assert!(!m.is_empty() && !m[0].1.is_empty(), "{name}: {model}");
+            assert_eq!(m, p, "{name}\n模型：{model}\n参数：{param}");
+        }
+        let member = shape(&json!(schema_for!(MemberRef)));
+        assert_eq!(
+            member.iter().map(|b| b.0.as_deref()).collect::<Vec<_>>(),
+            [Some("human"), Some("session")],
+            "MemberRef 两个分支，按 kind 常量对齐"
         );
     }
 
