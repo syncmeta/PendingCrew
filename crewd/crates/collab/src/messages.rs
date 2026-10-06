@@ -38,6 +38,12 @@ pub fn get(conn: &Connection, id: &str) -> Result<Message> {
         .ok_or_else(|| CollabError::NotFound(format!("没有消息 {id}")))
 }
 
+/// 按 seq（全库唯一）取一条消息；没有 → `NotFound`。
+pub fn get_by_seq(conn: &Connection, seq: i64) -> Result<Message> {
+    crewd_store::messages::get_by_seq(conn, seq)?
+        .ok_or_else(|| CollabError::NotFound(format!("没有消息 seq={seq}")))
+}
+
 pub fn list(
     conn: &Connection,
     channel: &str,
@@ -384,6 +390,18 @@ mod tests {
     }
     fn session(id: &str) -> Sender {
         Sender::Session(id.into())
+    }
+
+    #[test]
+    fn get_by_seq_finds_the_message_or_is_not_found() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            post(tx, session("w-a1"), post_text("crew-a/lobby", "按 seq 取"))
+        });
+        let got = get_by_seq(s.conn(), p.message.seq).unwrap();
+        assert_eq!(got, p.message);
+        let missing = get_by_seq(s.conn(), p.message.seq + 1000).unwrap_err();
+        assert!(matches!(missing, CollabError::NotFound(_)), "{missing:?}");
     }
 
     #[test]

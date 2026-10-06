@@ -109,6 +109,17 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<Message>> {
         .optional()?)
 }
 
+/// 按 seq（全库唯一）取一条消息。
+pub fn get_by_seq(conn: &Connection, seq: i64) -> Result<Option<Message>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {COLS} FROM messages WHERE seq=?1"),
+            [seq],
+            row,
+        )
+        .optional()?)
+}
+
 /// 群里最大的 seq；空群 0。
 pub fn max_seq(conn: &Connection, channel_id: &str) -> Result<i64> {
     Ok(conn.query_row(
