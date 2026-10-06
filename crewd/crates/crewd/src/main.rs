@@ -1,6 +1,9 @@
 //! crewd：PendingCrew 的跨平台后端。
+mod agent_client;
 mod claude_cmd;
 mod codex_cmd;
+mod hook_cmd;
+mod mcp_cmd;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
@@ -41,6 +44,10 @@ enum Cmd {
     Claude(claude_cmd::ClaudeArgs),
     /// 前台起一个 codex 会话（M2c 验收 / 调试；会话事件打到 stdout）
     Codex(codex_cmd::CodexArgs),
+    /// agent session 的 stdio MCP server（claude / codex 经 --mcp-config 拉起）
+    Mcp(mcp_cmd::McpArgs),
+    /// claude hook：读 stdin JSON，转给 crewd，打印要给 claude 的输出（永远 exit 0）
+    Hook(hook_cmd::HookArgs),
 }
 
 /// `--data-dir` / `CREWD_DATA_DIR`：与 PENDINGCREW_DATA_DIR 同规则——去首尾空白、展开 `~/`；
@@ -109,6 +116,8 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::Claude(args) => claude_cmd::run(&dir, args.clone()).await?,
         Cmd::Codex(args) => codex_cmd::run(&dir, args.clone()).await?,
+        Cmd::Mcp(args) => mcp_cmd::run(&dir, args.clone()).await?,
+        Cmd::Hook(args) => hook_cmd::run(&dir, args.clone()).await?,
         Cmd::Schema => {
             println!(
                 "{}",
