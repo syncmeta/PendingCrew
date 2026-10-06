@@ -6,6 +6,7 @@ mod hook_cmd;
 mod mcp_cmd;
 
 use anyhow::{Context, bail};
+use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use crewd_proto::{Request, ServerFrame};
 use std::io::{BufRead, BufReader, Write};
@@ -79,8 +80,35 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let dir = data_dir(&cli)?;
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(cli) => cli,
+        // `crewd hook …` 的命令行错不能 exit 2（对 Stop 是「挡住」、对 PostToolUse 会喂回给模型）：
+        // exit 0，pre-tool-use 打 deny。`--help` / `--version` 照常。
+        Err(e) if !matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
+            match hook_cmd::hook_event_from_argv(&argv) {
+                Some(event) => {
+                    eprintln!("crewd hook: bad command line: {e}");
+                    hook_cmd::fail_closed(event.as_deref());
+                    std::process::exit(0);
+                }
+                None => e.exit(),
+            }
+        }
+        Err(e) => e.exit(),
+    };
+    if let Cmd::Hook(args) = &cli.cmd {
+        hook_cmd::install_panic_guard(args.event().to_string());
+    }
+    let dir = match (data_dir(&cli), &cli.cmd) {
+        (Ok(d), _) => d,
+        (Err(e), Cmd::Hook(args)) => {
+            eprintln!("crewd hook {}: {e:#}", args.event());
+            hook_cmd::fail_closed(Some(args.event()));
+            return Ok(());
+        }
+        (Err(e), _) => return Err(e),
+    };
     match &cli.cmd {
         Cmd::Serve => {
             crewd_server::serve(dir, shutdown_signal()).await?;
@@ -117,7 +145,13 @@ async fn run() -> anyhow::Result<()> {
         Cmd::Claude(args) => claude_cmd::run(&dir, args.clone()).await?,
         Cmd::Codex(args) => codex_cmd::run(&dir, args.clone()).await?,
         Cmd::Mcp(args) => mcp_cmd::run(&dir, args.clone()).await?,
-        Cmd::Hook(args) => hook_cmd::run(&dir, args.clone()).await?,
+        Cmd::Hook(args) => {
+            // `run` 只在 bug 时返回 Err：同样 exit 0、pre-tool-use deny。
+            if let Err(e) = hook_cmd::run(&dir, args.clone()).await {
+                eprintln!("crewd hook {}: {e:#}", args.event());
+                hook_cmd::fail_closed(Some(args.event()));
+            }
+        }
         Cmd::Schema => {
             println!(
                 "{}",

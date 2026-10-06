@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use crewd_proto::agent::{AttachParams, AttachResult, methods};
 use crewd_proto::{Event, Request, Response, ServerFrame};
 use serde::de::DeserializeOwned;
@@ -30,10 +30,7 @@ impl AgentClient {
         session: &str,
         token_file: &Path,
     ) -> anyhow::Result<(AgentClient, AttachResult)> {
-        let token = std::fs::read_to_string(token_file)
-            .with_context(|| format!("cannot read token file {}", token_file.display()))?
-            .trim()
-            .to_string();
+        let token = read_token(token_file).await?;
         let sock = data_dir.join("crewd.sock");
         let stream = UnixStream::connect(&sock)
             .await
@@ -83,38 +80,82 @@ impl AgentClient {
         &self,
         method: &str,
         params: Value,
-    ) -> anyhow::Result<T> {
+    ) -> Result<T, CallError> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         match self.pending.lock().unwrap().as_mut() {
             Some(m) => {
                 m.insert(id, tx);
             }
-            None => bail!("connection to crewd is closed"),
+            None => return Err(CallError::NotSent("connection to crewd is closed".into())),
         }
         let mut line = serde_json::to_vec(&Request {
             id,
             method: method.to_string(),
             params,
-        })?;
+        })
+        .map_err(|e| CallError::NotSent(format!("cannot encode the request: {e}")))?;
         line.push(b'\n');
+        // 写失败也算「可能已送达」：半行在对端 EOF 时也可能被当成一整行读走。
         self.wr
             .lock()
             .await
             .write_all(&line)
             .await
-            .context("write to crewd")?;
+            .map_err(|e| CallError::Lost(format!("write to crewd failed: {e}")))?;
         let resp = rx
             .await
-            .map_err(|_| anyhow!("connection to crewd is closed"))?;
+            .map_err(|_| CallError::Lost("connection to crewd closed before it answered".into()))?;
         // M3a 的 `Response` 是 `{ id, outcome }`：`into_result()` 区分「成功（值可以是 null）」与错误。
-        let v = resp
-            .into_result()
-            .map_err(|e| anyhow!("{} ({})", e.message, e.code))?;
-        Ok(serde_json::from_value(v)?)
+        let v = resp.into_result().map_err(|e| CallError::Rejected {
+            code: e.code,
+            message: e.message,
+        })?;
+        serde_json::from_value(v).map_err(|e| CallError::BadReply(e.to_string()))
     }
 
     pub fn take_events(&self) -> Option<mpsc::UnboundedReceiver<Event>> {
         self.events.lock().unwrap().take()
     }
+}
+
+/// 一次调用失败在哪一步：调用方（`crewd mcp`）据此告诉 agent「没做」「被拒」还是「不知道做没做」。
+#[derive(Debug)]
+pub enum CallError {
+    /// 请求没发出去：对端一定没做。
+    NotSent(String),
+    /// crewd 回了错误：这次调用被拒。
+    Rejected { code: i32, message: String },
+    /// 请求已写出（或写到一半），之后连接断了：可能做了也可能没做。
+    Lost(String),
+    /// crewd 回了成功，但结果读不懂：已经做了。
+    BadReply(String),
+}
+
+impl std::fmt::Display for CallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotSent(m) => write!(f, "not sent: {m}"),
+            Self::Rejected { code, message } => write!(f, "{message} ({code})"),
+            Self::Lost(m) => write!(f, "{m}"),
+            Self::BadReply(m) => write!(f, "unreadable answer from crewd: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for CallError {}
+
+/// 在自己的线程里读 token 文件：路径可能是一个没人写的 FIFO、或卡住的文件系统——那会卡住
+/// 当前 tokio 工作线程，调用方的期限（hook 的 5s）也就永远到不了。线程不 join，进程退出时随之结束。
+async fn read_token(path: &Path) -> anyhow::Result<String> {
+    let p = path.to_path_buf();
+    let (tx, rx) = oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(std::fs::read_to_string(&p));
+    });
+    let raw = rx
+        .await
+        .map_err(|_| anyhow!("token reader thread ended without an answer"))?
+        .with_context(|| format!("cannot read token file {}", path.display()))?;
+    Ok(raw.trim().to_string())
 }

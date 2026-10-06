@@ -13,7 +13,7 @@ use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 
-use crate::agent_client::AgentClient;
+use crate::agent_client::{AgentClient, CallError};
 
 #[derive(clap::Args, Clone)]
 pub struct McpArgs {
@@ -23,6 +23,26 @@ pub struct McpArgs {
     /// `agent.attach` 用的 token 所在文件（0600，crewd 起会话时写）
     #[arg(long)]
     token_file: PathBuf,
+}
+
+/// 给 agent 看的失败说明（helper 的英文句子，spec §22.3 决定 1）：分清「没做」「被拒」「不知道做没做」。
+fn call_failure_text(e: &CallError) -> String {
+    match e {
+        CallError::NotSent(m) => {
+            format!("crewd is not reachable ({m}); this call was not sent and did nothing")
+        }
+        CallError::Rejected { code, message } => {
+            format!("crewd rejected this call: {message} ({code})")
+        }
+        CallError::Lost(m) => format!(
+            "the connection to crewd was lost after this call was sent ({m}); \
+             it may or may not have been done, check before retrying"
+        ),
+        CallError::BadReply(m) => format!(
+            "crewd answered but the answer could not be read ({m}); \
+             the call was probably done, check before retrying"
+        ),
+    }
 }
 
 #[derive(Clone)]
@@ -79,9 +99,7 @@ impl ServerHandler for Bridge {
             .await
         {
             Ok(r) => r,
-            Err(e) => CallResult::err(format!(
-                "crewd is not reachable ({e}); this call did nothing"
-            )),
+            Err(e) => CallResult::err(call_failure_text(&e)),
         };
         let content = vec![ContentBlock::text(r.text)];
         let result = if r.is_error {

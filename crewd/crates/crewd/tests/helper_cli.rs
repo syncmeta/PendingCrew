@@ -452,3 +452,281 @@ async fn events_that_arrive_before_the_attach_answer_are_kept() {
         }
     }
 }
+
+// ---- 控制者裁定（Task 8 review）：关掉 hook 的放行路径；mcp 失败文字分清「被拒」与「断在半路」。
+
+/// 起 `crewd <args>`（不加任何默认参数），写完 stdin 就关；返回 (退出成功?, stdout, stderr, 用时)。
+async fn run_raw(
+    args: &[&std::ffi::OsStr],
+    envs: &[(&str, &str)],
+    stdin: &str,
+) -> (bool, String, String, Duration) {
+    let started = Instant::now();
+    let mut c = Command::new(env!("CARGO_BIN_EXE_crewd"));
+    c.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (k, v) in envs {
+        c.env(k, v);
+    }
+    let mut child = c.spawn().unwrap();
+    // 子进程可能不读 stdin 就退了：写失败不算测试失败。
+    let _ = child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .await;
+    let out = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
+        .await
+        .expect("hook 不该挂住")
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+        started.elapsed(),
+    )
+}
+
+fn is_deny(out: &str) -> bool {
+    serde_json::from_str::<Value>(out.trim()).is_ok_and(|v| {
+        v["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+            && v["hookSpecificOutput"]["permissionDecision"] == "deny"
+    })
+}
+
+#[tokio::test]
+async fn hook_argv_errors_exit_zero_and_only_pre_tool_use_denies() {
+    // exit 2 对 Stop 是「挡住」、对 PostToolUse 是把 stderr 喂回给模型；命令行错一律 exit 0。
+    let f = FakeServe::start(Mode::Normal).await;
+    let d = f.data_dir().as_os_str().to_owned();
+    let t = f.token_file().into_os_string();
+    let o = |s: &'static str| std::ffi::OsStr::new(s);
+    let cases: Vec<(Vec<&std::ffi::OsStr>, bool)> = vec![
+        (
+            vec![
+                o("hook"),
+                o("pre-tool-use"),
+                o("--data-dir"),
+                &d,
+                o("--session"),
+                o(SESSION),
+                o("--token-file"),
+                &t,
+                o("--bogus"),
+            ],
+            true,
+        ),
+        (
+            vec![
+                o("hook"),
+                o("pre-tool-use"),
+                o("--data-dir"),
+                &d,
+                o("--session"),
+                o(SESSION),
+            ],
+            true,
+        ),
+        (
+            vec![
+                o("--data-dir"),
+                &d,
+                o("hook"),
+                o("--bogus"),
+                o("pre-tool-use"),
+                o("--session"),
+                o(SESSION),
+            ],
+            true,
+        ),
+        (
+            vec![
+                o("hook"),
+                o("post-tool-use"),
+                o("--data-dir"),
+                &d,
+                o("--session"),
+                o(SESSION),
+                o("--token-file"),
+                &t,
+                o("--bogus"),
+            ],
+            false,
+        ),
+        (
+            vec![
+                o("hook"),
+                o("stop"),
+                o("--data-dir"),
+                &d,
+                o("--session"),
+                o(SESSION),
+            ],
+            false,
+        ),
+        (vec![o("hook")], false),
+    ];
+    for (args, denies) in cases {
+        let (ok, out, err, _) = run_raw(&args, &[], "{\"tool_name\":\"x\"}").await;
+        assert!(ok, "{args:?}: hook 永远 exit 0 ({err})");
+        if denies {
+            assert!(is_deny(&out), "{args:?}: {out}");
+        } else {
+            assert_eq!(out, "", "{args:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn token_file_that_never_opens_is_inside_the_deadline() {
+    // FIFO 没人写：打开就卡住。读 token 也算在 5s 里。
+    let f = FakeServe::start(Mode::Normal).await;
+    let fifo = f.data_dir().join("token-fifo");
+    let st = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    for (ev, denies) in [
+        ("pre-tool-use", true),
+        ("post-tool-use", false),
+        ("stop", false),
+    ] {
+        let (out, _, took) = run_hook(f.data_dir(), ev, &[], &fifo, "{\"tool_name\":\"x\"}").await;
+        assert_eq!(is_deny(&out), denies, "{ev}: {out}");
+        if !denies {
+            assert_eq!(out, "", "{ev}");
+        }
+        assert!(took < Duration::from_secs(7), "{ev}: {took:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_panic_fails_closed_for_pre_tool_use_and_silent_for_the_others() {
+    // 注入的 panic 只在 debug 构建里存在（`CREWD_TEST_HOOK_PANIC`，见 hook_cmd）。
+    let f = FakeServe::start(Mode::Normal).await;
+    let env = [("CREWD_TEST_HOOK_PANIC", "1")];
+    for (ev, denies) in [
+        ("pre-tool-use", true),
+        ("post-tool-use", false),
+        ("stop", false),
+    ] {
+        let d = f.data_dir().as_os_str().to_owned();
+        let t = f.token_file().into_os_string();
+        let o = std::ffi::OsStr::new;
+        let args = [
+            o("hook"),
+            o(ev),
+            o("--data-dir"),
+            &d,
+            o("--session"),
+            o(SESSION),
+            o("--token-file"),
+            &t,
+        ];
+        let (ok, out, err, _) = run_raw(&args, &env, "{\"tool_name\":\"x\"}").await;
+        assert!(ok, "{ev}: panic 也 exit 0 ({err})");
+        assert!(err.contains("panic"), "{ev}: panic 写 stderr：{err}");
+        assert_eq!(is_deny(&out), denies, "{ev}: {out}");
+        if !denies {
+            assert_eq!(out, "", "{ev}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn closed_stdout_is_a_real_panic_path_and_still_exits_zero() {
+    // 不靠注入：claude 那头关了 stdout，println! 写断管会 panic。
+    let f = FakeServe::start(Mode::Normal).await;
+    let mut child = crewd(f.data_dir(), &["hook", "post-tool-use"], &f.token_file())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    child.stdin.take().unwrap().write_all(b"{}").await.unwrap();
+    let mut err = String::new();
+    let mut stderr = child.stderr.take().unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(20), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    stderr.read_to_string(&mut err).await.unwrap();
+    assert!(status.success(), "{status:?}: {err}");
+    assert!(err.contains("panic"), "这条路确实 panic 了：{err}");
+}
+
+/// 一条连接的脚本化假 serve：`reply` 返回 None = 收到这个请求后直接断开。
+fn scripted_serve(dir: &Path, reply: fn(&str, &Value, Value) -> Option<Value>) {
+    std::fs::write(dir.join("token"), TOKEN).unwrap();
+    let listener = UnixListener::bind(dir.join("crewd.sock")).unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (rd, mut wr) = stream.into_split();
+        let mut lines = BufReader::new(rd).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let id = req["id"].clone();
+            let v = match req["method"].as_str().unwrap() {
+                "agent.attach" => {
+                    json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例"}})
+                }
+                m => match reply(m, &req["params"], id) {
+                    Some(v) => v,
+                    None => return,
+                },
+            };
+            let mut l = serde_json::to_vec(&v).unwrap();
+            l.push(b'\n');
+            wr.write_all(&l).await.unwrap();
+        }
+    });
+}
+
+async fn mcp_call_text(dir: &Path) -> Value {
+    let child = crewd(dir, &["mcp"], &dir.join("token")).spawn().unwrap();
+    let mut child = child;
+    let stdin = child.stdin.take().unwrap();
+    let lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut m = Mcp {
+        _child: child,
+        stdin,
+        lines,
+    };
+    m.handshake().await;
+    let r = m
+        .request(
+            2,
+            "tools/call",
+            json!({"name": "post", "arguments": {"message": "示例"}}),
+        )
+        .await;
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    r["result"]["content"][0]["text"].clone()
+}
+
+#[tokio::test]
+async fn call_rejected_by_serve_says_what_serve_said() {
+    let dir = tempfile::tempdir().unwrap();
+    scripted_serve(dir.path(), |_, _, id| {
+        Some(json!({"id": id, "error": {"code": -32602, "message": "unknown tool: post"}}))
+    });
+    let text = mcp_call_text(dir.path()).await;
+    let text = text.as_str().unwrap();
+    assert!(text.contains("unknown tool: post"), "{text}");
+    assert!(text.contains("rejected"), "{text}");
+    assert!(!text.contains("may or may not"), "{text}");
+}
+
+#[tokio::test]
+async fn call_lost_after_it_was_sent_says_check_before_retrying() {
+    let dir = tempfile::tempdir().unwrap();
+    scripted_serve(dir.path(), |_, _, _| None);
+    let text = mcp_call_text(dir.path()).await;
+    let text = text.as_str().unwrap();
+    assert!(text.contains("may or may not"), "{text}");
+    assert!(text.contains("check"), "{text}");
+    assert!(!text.contains("rejected"), "{text}");
+}
