@@ -23,12 +23,12 @@
 - 迁移在一个事务里完成：失败 = 库保持 v2、crewd 拒绝启动并说清原因（不做半截迁移、不静默丢行）。
 - 每个任务结束跑 `./scripts/check.sh`（fmt + clippy -D warnings + test，全 workspace）全绿再提交。**永远不跑 `--ignored` 测试**（`live_claude` 等真机测试只在人点头后另跑）。**不按名字 / 模式杀进程**（不用 `pkill` / `killall` / `kill $(pgrep ..)`）；测试里起的 serve 用 oneshot / 子进程句柄关。
 - 提交：只 `git add` 该任务列出的文件（显式路径，相对 `crewd/`；spec 路径写 `../docs/...`），提交前看 `git diff --cached --stat` 行数对不对；**不 `--amend`**；提交信息末尾一行 `Co-Authored-By: Claude <noreply@anthropic.com>`（就这一行，不带模型名）。
-- 文件归属（spec §22.5）：本计划创建的 `collab/src/{worldview,turn_trace}.rs` 只放签名与最小实现，M3b 接手；`server/src/orchestra/`、`crates/wake/` 本计划不建。
+- 文件归属（spec §22.5，见「冻结」块末的先后表）：本计划创建的 `collab/src/{worldview,turn_trace}.rs` 只放签名与最小实现，M3b 接手；`server/src/agent/{mod,runtime}.rs` 与 `server/src/orchestra/mod.rs` 只放让 `AppState` 有类型的占位，分别由 M3b / M3c 接手整个目录；`crates/wake/` 本计划不建。
 - 本机 shell 是 zsh：照抄给出的命令，别把多个参数塞进一个变量再展开。
 
 ## 范围
 
-做：Db actor；schema v3 + 迁移（含 seq 高水位、sender / mention 词表归一、大厅回填、游标钉末尾、机长指针、分机号、机组号计数器）；导入器改写 v3；proto 的类型化词表与全部新线上类型；`crewd-collab`（群、成员、注视、发消息、列表与搜索、游标、未读、红标、可见性、收听、机组 DAG、编号、通讯录、session 行与其生命周期字段的写路径、人类待确认、审批、唤醒入队与队列状态、熔断台账、渲染、世界观 / 回合收尾的签名桩）；`Hub` 的内部事件通道与 `AppState::collab`；`SessionControl` trait + `FakeSessionControl` + 默认的 `NoSessions`；`TokenTable`；§22.2 表里全部客户端 RPC 与事件，删掉 `whiteboard.*`；契约整理（单一 `$defs`、类型化的方法 / 事件表、`ServerFrame`、枚举）；`crewd rpc` 驱动全部方法的端到端测试；真实数据只读演练；spec 交付记录。
+做：Db actor；schema v3 + 迁移（含 seq 高水位、sender / mention 词表归一、大厅回填、游标钉末尾、机长指针、分机号、机组号计数器）；导入器改写 v3；proto 的类型化词表与全部新线上类型；`crewd-collab`（群、成员、注视、发消息、列表与搜索、游标、未读、红标、可见性、收听、机组 DAG、编号、通讯录、session 行与其生命周期字段的写路径、人类待确认、审批与一次性放行票、Agent Todo 回应、产出信号 `note_progress`、侧栏手动序 `position` / `reorder`、唤醒入队与队列状态（含清理）、熔断台账、渲染、世界观 / 回合收尾的签名桩）；`Hub` 的内部事件通道与 `AppState::collab`（含给 M3b / M3c 的 `agent` / `orchestra` 占位字段、feature `testkit`）；`SessionControl` trait + `FakeSessionControl` + 默认的 `NoSessions`；`TokenTable`；§22.2 表里全部客户端 RPC 与事件，删掉 `whiteboard.*`；契约整理（单一 `$defs`、类型化的方法 / 事件表、`ServerFrame`、枚举）；`crewd rpc` 驱动全部方法的端到端测试；真实数据只读演练；spec 交付记录。
 
 不做（归 M3b / M3c / M4b）：起停进程、会话管理、唤醒投递与准入判定（M3c；本计划只给队列的读写函数）；`crewd mcp` / `crewd hook`、工具表、世界观正文、`turn_trace` 判定（M3b）；把旧人类 Todo 账迁成 H 号（M4b，§10）；私有群（Q3）；附件上传（`message.post` 的 `attachments` 非空一律拒，见裁定 14）；`session.changed` 事件的发送（M3c，本计划只定类型与主题）。
 
@@ -44,12 +44,12 @@
 8. **v3 在 §22.2 之外补的列**（spec 说缺字段改 v3，我补，并在交付记录里列出）：`crews.captain_session_id`（当前机长指针：旧数据里一个机组可能有多条 `captain-*` 行，没有指针就答不出「此刻的机长」；迁移取 role=captain 中 `updated_at` 最新的）、`crews.next_ext`（分机号计数器，不回收）、`sessions.ext`（worker 的分机号；机长恒为 1，不存）、`meta.nextCrewNumber`（机组号计数器，不回收；迁移取 max(旧 `local-crews.json` 归档里的 `nextCrewNumber`, max(number)+1)）。`crews.title_source` 与 `sessions.ext` 从 `extra` JSON 里取（`$.titleSource`、`$.member.extensionNumber`）；`extra` 的其余部分不解析。
 9. **游标缺行 = 第一次读时钉到末尾**：`unread_for` 碰到没有游标行的（session, 群）先写一行钉在当前末尾、本次不返回任何消息；所有入群点（注册 session、加成员、自动入群、建群、换机长）也显式钉。读永远不会把历史整段倒给 agent（#595）。人类游标缺行 = 0（新群一开始是空的；迁移已钉旧群）。
 10. **自己发的消息不算自己的未读**；人类发消息时把人类游标推进到这条（人发言 = 看过这个群到这里）。
-11. **人类可以往任何群发言、不改成员关系**（spec §17「人类可以进任何群发言」）；session 只能往自己是成员的群发，例外是根机组人类群：发言即显式入群。system 可以往任何群发。dm = 恰好两个不同成员、至多一个是人类、不能加人（spec 写「恰好两个 session」，但 `channel.create` 是人调的，人发起 dm 时一方必然是人——按「两人」解释，见 spec 问题 6）。
+11. **人类可以往任何群发言、不改成员关系**（spec §17「人类可以进任何群发言」）；session 只能往自己是成员的群发，例外是根机组人类群：发言即显式入群。system 可以往任何群发——跨机组语法糖（`contact` 到别的机组、`report_to_parent`、`message_child_crew`）因此由 M3b 以 `Sender::System` 发、正文首行署名「来自 …」（控制者裁定 C7；session 不因此成为对方大厅成员）。dm = 恰好两个不同成员、至多一个是人类、不能加人（spec 写「恰好两个 session」，但 `channel.create` 是人调的，人发起 dm 时一方必然是人——按「两人」解释，见 spec 问题 6）。
 12. **@ 在发送时解析**（spec §22.2）：`captain` 落成群归属机组此刻的 `captain_session_id`（没有机长 → 拒）；`session` 目标必须是群成员（不是 → 拒，错误里列出成员）；`reply_to` 必须是同群消息，自动追加 `broadcast` + 被回复者（session 发的 → `session`；人发的 → `human`；system 发的只追加 broadcast），去重。回执带 `unwatchedHumanMention`：mentions 含 human、群没被注视、且不是根机组人类群——文案由 M3b 渲染。
 13. **问的归属**：session 的问记在**它自己机组**的工作账本（H 号按机组发，§19 Q1），公告发到该机组的根的人类群（懒建），`ask_meta` 记公告消息 id 与 resume_note。公告的发送者是提问的 session 本人（`category = "ask"`，mentions = `[human]`），不检查它是不是人类群成员（内部投递）。回答后唤醒的 `source` 是 `'ask:<crew_id>/H<n>'`（H 号按机组，`'H<n>'` 单独不唯一；spec 写的是 `'H<n>'`，见 spec 问题 4）。
 14. **附件**：上传协议 spec 没定；`message.post` 带非空 `attachments` 一律 `-32602 附件上传尚未实现`，不接受客户端给的路径（防路径注入）。M1 导入的旧附件照常列出。
 15. **`SessionControl` 比 §22.5 多两个方法**：`resume`（M3c 的 `session.resume` RPC）与 `handoff_captain`（M3b 的交接工具「经 SessionControl」）。trait 在 M3a 的文件里，M3b / M3c 不能改它，所以现在就补齐（见 spec 问题 2）。参数一律 owned（`String`），方法返回 `BoxFuture<'_, ..>`，可做 `dyn`。
-16. **队列与 session 生命周期的写路径都在 collab**：spec §22.5 只列了 `enqueue_wake`，但 M3c 只能改 `crates/wake/` 与 `server/src/orchestra/`，而「M3b / M3c 只经 collab 写协作数据」。所以 M3a 提供 M3c / M3b 要的全部写函数：`wakes::{enqueue, due_for, mark_inflight, mark_delivered, mark_failed, mark_dropped, reset_inflight, next_due_at, sessions_with_due, recent_for, list}`、`wakes::latches::{set, clear, get, list}`、`sessions::{register, set_desired, set_working, set_resume_failed, set_awaiting_question, set_profile, note_output}`、`crews::set_captain`、`restart::*`、`channels` 的群主转让（见 spec 问题 1）。
+16. **队列与 session 生命周期的写路径都在 collab**：spec §22.5 只列了 `enqueue_wake`，但 M3c 只能改 `crates/wake/` 与 `server/src/orchestra/`，而「M3b / M3c 只经 collab 写协作数据」。所以 M3a 提供 M3c / M3b 要的全部写函数：`wakes::{enqueue, due_for, mark_inflight, mark_delivered, mark_failed, mark_dropped, reset_inflight, next_due_at, sessions_with_due, recent_for, list}`、`wakes::latches::{set, clear, get, list}`、`sessions::{register, set_desired, set_working, set_resume_failed, set_awaiting_question, set_profile, note_progress}`、`crews::{set_captain, reorder}`、`restart::*`、`channels` 的群主转让（见 spec 问题 1）；控制者裁定 C6 又补了 `wakes::{next_due_after, requeue, by_ids, prune}`、`mark_failed` 的 `retry_at_ms`、`cursors::cursor`、`todos::respond`。
 17. **`ask.answer` 的 BlockerCleared 回调点**：spec §22.6 写「M3c 在 `ask.answer` 里留一个回调点」，但 `ask.answer` 是 M3a 的 RPC、M3c 不改 dispatch。改为：`asks::answer` 产出 `Change::AskAnswered { crew_id, ask, asked_by, cleared }`（`cleared` = M4a 事件里每条 `BlockerCleared` 的 (项, 负责人)），M3c / M4b 订阅 `CollabEvent` 处理（见 spec 问题 3）。
 18. **契约版本**：`API_VERSION` 1 → 2（`whiteboard.*` 删除、`Message.crewId` → `channelId` 都是破坏性改动）。
 
@@ -62,10 +62,23 @@
 | Q1 重启后**问人**是否恢复上次在跑的 session | 表 `restart_prompts`；`collab::restart::{open, answer, pending, get}`：`open` 记名单并在每个涉及的根机组人类群各发一条 @human 公告；`answer(Resume \| Later)` 只记账、产出 `Change::RestartAnswered`，**真正的 `--resume` 由 M3c 订阅后做**；`Later` 之后还能再答 `Resume`。RPC `restart.pending` / `restart.answer`，事件 `restart.changed`。期间入队的唤醒照常落 `wakes` | Task 10（`restart.rs`）、Task 13 |
 | Q2 **每个群有群主**；人在群里不 @ 人时 Jev 选、Jev 缺席 / 低置信交群主；session 可**收听**群 | `channels.owner_kind / owner_id`（topic / dm 默认建群者；大厅、人类群存 NULL = 归属机组此刻的机长，现算）；转让 = 原群主发起 + 新群主接受，或机长 / 人强制（同工作项负责人规则）：`pending_owner_*` 三列 + `channels::{owner_of, request_owner_transfer, accept_owner_transfer, withdraw_owner_transfer, force_owner}`；RPC `channel.setOwner`（人 = 强制）。收听：`listens` 表 `until` 可空（NULL = 一直收听），`listens::{set, clear, active_for_channel, channels_of}`；收听的群进注入面（`cursors::unread_for`）。叫谁的判定本身在 M3c（候选 = 群成员 ∪ 收听者，同一条消息每个 session 只叫一次） | Task 7、Task 9、Task 13 |
 | Q3 私有群：不做 | 不建任何可读性字段；`channel.list` / `message.list` 不按成员过滤 | — |
-| Q4 删 raise / clear_attention、crew_ordering_signals、arrange_crews 及其存储；侧栏用基础序（最近有动静在上） | 不建 attention / 排序表（旧 `crew-arrangement.json` 只在 M1 的 `legacy_archive` 里，不读）；`crew.list` 按「最近动静」降序返回，并带 `lastActivityAt`（该机组自己的群里最新一条消息的时间，没有消息用 `createdAt`） | Task 6（`crews::list_by_activity`）、Task 13 |
-| Q5 **默认不设并发上限**（设置里可选）；防**异常唤醒循环**：「来源 → 目标」与「目标 session」两级熔断，判据 = 短时间内重复唤醒且没有新产出 | `collab::settings::{max_live_sessions() -> Option<u32>（缺省 None）, set_max_live_sessions(Option<u32>)}`；熔断台账 `wake_latches(scope ∈ {edge, session})`，`edge` 的 id = `'<来源 session>→<目标 session>'`；`wakes.origin`（触发这次唤醒的 session，可空）+ `WakeRequest.origin`；「新产出」的数据：`sessions.last_output_at`，由 `messages::post`（session 发言）自动写、`sessions::note_output(tx, session)` 供 M3b 的 post-tool-use hook 与 M4b 的工作项命令调用；`wakes::recent_for(conn, target, since_ms)` 给熔断判定读近期唤醒。**阈值与判据常量归 M3c 的 `crewd-wake`**（拍板要求「写成一处常量，带测试」） | Task 5（`wakes.rs`）、Task 6（`sessions.rs`）、Task 8 |
+| Q4 删 raise / clear_attention、crew_ordering_signals、arrange_crews 及其存储；**侧栏机组顺序由人手动排**（人 2026-10-06，取代「最近有动静在上」） | 不建 attention / 排序表（旧 `crew-arrangement.json` 只在 M1 的 `legacy_archive` 里，不读）；`crews.position`（同级机组里的次序）；新建 / 收编 / 转挂进来的机组排在新同级的末尾；人经 `crew.reorder {parentId?, crewIds}` 一次给出某一层的完整新顺序（只有客户端能调，agent 没有工具）；`crew.list` 按 `(position, createdAt, id)` 返回。**没有任何按动静排序的 API**（`list_by_activity` / `lastActivityAt` 删） | Task 3（列 + 回填）、Task 6（`crews::reorder`）、Task 13 |
+| Q5 **默认不设并发上限**（设置里可选）；防**异常唤醒循环**：「来源 → 目标」与「目标 session」两级熔断，判据 = 短时间内重复唤醒且没有新产出 | `collab::settings::{max_live_sessions() -> Option<u32>（缺省 None）, set_max_live_sessions(Option<u32>)}`；熔断台账 `wake_latches(scope ∈ {edge, session})`，`edge` 的 id = `'<来源 session>→<目标 session>'`；`wakes.origin`（触发这次唤醒的 session，可空）+ `WakeRequest.origin`；「新产出」的数据见下面控制者裁定 3：`sessions::note_progress(tx, session, ProgressKind)` 写 `sessions.last_progress_at` 并发 `Change::Progress`（M3b 的 post-tool-use、M4b 的工作项命令调；**发言不算**）；`sessions.last_output_at` 仍由 `messages::post` 写（只是数据，不当产出）；`wakes::recent_for(conn, target, since_ms)` 给熔断判定读近期唤醒。**阈值与判据常量归 M3c 的 `crewd-wake`**（拍板要求「写成一处常量，带测试」） | Task 5（`wakes.rs`）、Task 6（`sessions.rs`）、Task 8 |
 
 v3 的 `wake_latches.scope` 因此是 `edge|session`（§22.2 原写的 `session|crew|machine` 作废：拍板禁止按全机总量限流）。
+
+## 控制者裁定（2026-10-06，三份 M3 计划对齐时定，绑定；spec §22.7 有记录）在 M3a 的落点
+
+| 裁定 | M3a 做什么 | 落点 |
+|---|---|---|
+| C1 侧栏机组顺序手动（见上表 Q4） | `crews.position`、`crews::reorder`、RPC `crew.reorder`（变更 = 每个挪了位置的机组一条 `CrewChanged` → `crew.changed`）；删 `list_by_activity` | Task 3、6、13 |
+| C2 **审批照 Swift 驾驶舱 #75②，不阻塞**：命中闸的 PreToolUse 当场 deny 并给人开一条待确认；人同意 = 发一张**一次性放行票**，同一 session 下一次同名工具调用用掉它 | `approvals.consumed_at` 列；`approvals::gate(tx, NewApproval) -> Gate`（一个事务里：有票 → 用掉放行；同 session 同工具已有未决请求 → 只拒不再开；否则开一条 + 根机组人类群 @人公告 → 拒）；`decide(tx, id, allow, "human")` 记结果并给提问的 session 入队 `ask_answer` 唤醒（source `approval:<id>`，priority human，正文说「已同意：重跑一次」或「被拒」）。不发 H 号（不是工作卡点）；人在客户端经 `approval.list` 看到它（与 `ask.list` 并列为人的待确认）。审批只卡这一次工具调用、绝不卡 session | Task 3（列）、4（`Approval.consumedAt`）、10（`approvals`）、11（`wake.approval_*` 渲染）、13 |
+| C3 环路熔断的「产出」信号 | `sessions.last_progress_at` + `sessions::note_progress(tx, session, ProgressKind::{ToolCall, WorkItem})` → `Change::Progress { session_id, kind }`（内部通道，不发客户端事件）。发言（`messages::post`）**不**写它——回话给叫醒你的人不算产出。M3b 的 post-tool-use 调（crewd 自己的通讯类工具除外）；M4b 的工作项命令必须调；M3c 订阅 | Task 3（列）、5（`Change::Progress`）、6（`sessions.rs`） |
+| C6 补齐 M3b / M3c 列出的缺口 | M3b：G3 `todos::respond`；G-F `prompts::fill` 一遍扫描；G-S `StartRequest` 字段语义（下）；G-T `TurnEnd` 五个值；G9 `AppState.agent` 槽位（+ `AppState.orchestra`）；G11 feature `testkit`、`conn` / `dispatch::handle` 可见性。M3c：`wakes::{next_due_after, mark_failed(.., retry_at_ms), requeue, by_ids, prune}`、`cursors::cursor`、`channels::members` 含隐式成员（写明 + 测试）、`Change::Progress`；主题表加 `wake` | Task 5、6、7、10、11、12、13 |
+| C7 跨机组语法糖（`contact` 到别的机组 / `report_to_parent` / `message_child_crew`）= **system 发言 + 正文首行署名** | 群规则写明：system 可往任何群发；session 只能往自己是成员的群发；跨机组语法糖由 M3b 以 `Sender::System` 发、署名文字在 M3b 的 tools md | 裁定 11、Task 8 |
+| C7 默认方案到点 | `asks::apply_due_defaults(tx, crew)` 的定时调用方 = M3c 的定时拍（M3b 不调） | Task 10、15 |
+
+`StartRequest` 字段语义（G-S，冻结）：`executor` 必填（M3b 的 `start_session` 缺省取发起机长所在机组的 `captain_executor`，再缺省 `"claude"`）；`worktree: Option<String>` = **已存在的目录的绝对路径**，用作这个 session 的工作目录（M3 不建 git worktree；`None` = 机组工作目录）。
 
 另有一个本计划自己的默认、请人顺带确认：**语言**。渲染有 zh / en 两份；`collab::settings::locale(conn)` 读 `meta.locale`（缺省 `zh`）。M3 范围里没有设置页 RPC，要改先手工写 meta（见 spec 问题 9）。
 
@@ -103,28 +116,31 @@ crewd/crates/collab/                                                            
   src/settings.rs            locale、max_live_sessions（Option，缺省不设）
   src/restart.rs             重启后问人是否恢复（Q1）
   src/wakes.rs               WakeKind、WakePriority、WakeRequest（含 origin）、source 约定、队列读写、近期唤醒、熔断台账（edge / session）
-  src/crews.rs               root_of、captain_of、建 / 改 / 收编 / 摘出 / 删、编号、set_captain、detail
-  src/sessions.rs            register（分机号）、get / list、生命周期字段 setter
+  src/crews.rs               root_of、captain_of、建 / 改 / 收编 / 摘出 / 删、编号、set_captain、detail、position 与 reorder（C1）
+  src/sessions.rs            register（分机号）、get / list、生命周期字段 setter、note_progress（C3）
   src/directory.rs           通讯录行
   src/channels.rs            建群、成员、群主与转让、归档、注视、人类群懒建、成员判定、列表与摘要
   src/messages.rs            post（校验 + @ 解析 + 落库）、list、search、get
   src/cursors.rs             游标、unread_for、advance、mark_read、badge、visible_to、directed_targets
   src/listens.rs             收听表
   src/asks.rs                工作账本读写、open / answer / withdraw / apply_due_defaults、视图
-  src/approvals.rs           审批台账
+  src/approvals.rs           审批台账与一次性放行票（gate / decide，C2）
+  src/todos.rs               Agent Todo 的回应（respond，G3）
   src/prompts.rs             md 节解析（照 jev）
   src/render.rs              ChannelBlock、WakeBatch、injection、wake_text、build_batch、blocks_for
   src/worldview.rs           WorldCtx、context_for、render（M3b 接手）
   src/turn_trace.rs          TurnEnd、on_turn_end（M3b 接手）
   prompts/render.zh.md / render.en.md
 crewd/crates/server/
-  Cargo.toml                 + crewd-collab
-  src/lib.rs                 AppState { db, hub, sessions, tokens }、AppState::collab、serve 用 Db  (T1, T12)
+  Cargo.toml                 + crewd-collab；[features] testkit = []（G11）
+  src/lib.rs                 AppState { db, hub, sessions, tokens, agent, orchestra }、AppState::collab、serve 用 Db；pub(crate) mod conn  (T1, T12)
+  src/agent/mod.rs、src/agent/runtime.rs   占位（`AgentRuntime` 空结构，M3b 接手整个目录）     (T12)
+  src/orchestra/mod.rs       占位（`pub struct Handle;`，M3c 接手整个目录）                        (T12)
   src/hub.rs                 Hub 双通道、CollabEvent、emit                                      (T12)
   src/control.rs             SessionControl、StartRequest、Inspection、QuotaReport、ControlError、NoSessions、FakeSessionControl (T12)
   src/token.rs               TokenTable                                                        (T12)
   src/dispatch.rs            全部客户端 RPC                                                     (T1, T3, T13)
-  src/conn.rs                主题表                                                            (T13)
+  src/conn.rs                主题表（含 wake）；run 改 pub(crate)                                   (T12, T13)
   tests/socket.rs            改写成新方法                                                       (T13)
 crewd/crates/crewd/
   tests/e2e.rs               import→serve→message.*；rpc 驱动全部方法                          (T3, T14)
@@ -145,6 +161,8 @@ impl Db {
 }
 pub fn now_ms() -> i64;
 pub fn ts_from_ms(ms: i64) -> String;
+pub fn meta_get(conn, key) -> Result<Option<String>>;  pub fn meta_set(conn, key, value) -> Result<()>;   // M1 已有，M3b 的回合记账用
+channels::{lobby_id(crew) -> String /* "<crew>/lobby" */, human_id(root) -> String /* "<root>/human" */}
 
 // ── crewd-collab（全部同步；写函数第一个参数 &mut Tx，读函数 &rusqlite::Connection）──
 pub struct Tx<'a>;
@@ -158,49 +176,68 @@ pub enum Change {
     AskAnswered { crew_id: String, ask: String, asked_by: Option<String>, cleared: Vec<(String, Option<String>)> },
     ApprovalChanged { id: String }, WakeEnqueued { wake_id: i64, session_id: String },
     RestartChanged { id: i64 }, RestartAnswered { id: i64, answer: RestartAnswer, session_ids: Vec<String> },
+    Progress { session_id: String, kind: ProgressKind },   // C3：只走内部通道，M3c 的熔断消费
 }
+pub enum ProgressKind { ToolCall, WorkItem }                // 也经 `sessions::ProgressKind` 导出
 pub enum CollabError { NotFound(String), Invalid(String), Forbidden(String), Conflict(String), Work(crewd_work::Rejected), Store(StoreError) }
 pub type Result<T> = std::result::Result<T, CollabError>;
 pub enum Locale { Zh, En }
 
-messages::{post(tx, Sender, NewPost) -> Posted, list(conn, channel, after, before, limit), search(conn, &Search), get(conn, id)}
+messages::{NewPost { channel_id, text, in_reply_to, mentions, attachments, category } /* Default */, post(tx, Sender, NewPost) -> Posted,
+           list(conn, channel, after: Option<i64>, before: Option<i64>, limit: u32) /* 开区间，旧在前 */, Search { query, crew_id, channel_ids, after, before, limit },
+           search(conn, &Search), get(conn, id) -> Message /* 不存在 = NotFound */}
     // Sender::{Human, Session(String), System}；Posted { message: Message, unwatched_human_mention: bool }
-channels::{create(tx, &Sender, NewChannel) -> Channel, ensure_dm(tx, crew, a: MemberRef, b: MemberRef) -> (Channel, bool),
+channels::{create(tx, &Sender, NewChannel) -> Channel, ensure_dm(tx, crew, a: &MemberRef, b: &MemberRef) -> (Channel, bool),
            update(tx, by: &Sender, id, ChannelPatch) -> Channel, add_members(tx, by, id, &[MemberRef]) -> Channel,
            remove_member(tx, by, id, &MemberRef) -> Channel, watch(tx, id, on) -> ChannelSummary,
            ensure_human_channel(tx, root_crew) -> Channel, get(conn, id), is_member(conn, id, &MemberRef) -> bool,
-           members(conn, id) -> Vec<MemberRef>, channels_of_session(conn, session) -> Vec<Channel>,
+           members(conn, id) -> Vec<MemberRef>,   // 有效成员：大厅 = 人 + 本机组全部 session（隐式）；人类群 = 人 + 根机组机长（隐式）+ 显式行；topic / dm = 显式行
+           channels_of_session(conn, session) -> Vec<Channel>,
            list_for_crew(tx, crew) -> Vec<ChannelSummary>, summary(conn, id) -> ChannelSummary,
            owner_of(conn, id) -> Option<MemberRef>, request_owner_transfer(tx, by, id, to), accept_owner_transfer(tx, by, id),
            withdraw_owner_transfer(tx, by, id), force_owner(tx, by, id, to)}
-cursors::{unread_for(tx, session) -> Vec<(String, Vec<Message>)>, advance(tx, reader, channel, seq), mark_read(tx, channel, seq) -> Badge,
+cursors::{HUMAN, cursor(conn, reader, channel) -> Option<i64>, unread_for(tx, session) -> Vec<(String, Vec<Message>)>, advance(tx, reader, channel, seq), mark_read(tx, channel, seq) -> Badge,
           badge(conn, channel) -> Badge, visible_to(&Message, session) -> bool, directed_targets(&Message, session) -> Option<Vec<String>>}
 listens::{set(tx, session, channel, until_ms: Option<i64>, senders: Vec<String>), clear(tx, session, channel: Option<&str>),
           active_for_channel(conn, channel, now_ms) -> Vec<Listen>, channels_of(conn, session, now_ms) -> Vec<String>}
-crews::{root_of, captain_of, get, list, list_by_activity, detail, children, create, update, adopt, release, delete, set_captain}
-sessions::{register(tx, NewSession) -> Session, get, list, crew_of, role_of, running_desired, set_desired, set_working,
-           set_resume_failed, set_awaiting_question, set_profile, note_output}
+crews::{root_of, captain_of, get(conn, id) -> Crew, list /* (position, created_at, id) */, detail, parents, children /* 按 position */,
+        create(tx, NewCrew), update(tx, id, CrewPatch), adopt, release, delete, set_captain,
+        reorder(tx, parent: Option<&str>, ordered: &[String]) -> Vec<Crew>}      // C1：ordered 必须恰好是这一层现有的全部机组
+sessions::{NewSession, register(tx, NewSession) -> Session, get(conn, id) -> Session /* 不存在 = NotFound */, list(conn, crew: Option<&str>),
+           crew_of, role_of, display_name, running_desired, set_desired, set_working, set_resume_failed, set_awaiting_question,
+           set_profile, ProgressKind::{ToolCall, WorkItem}, note_progress(tx, session, ProgressKind)}   // C3；last_output_at 只由 messages::post 内部写
+todos::respond(tx, session: &str, number: i64, text: &str) -> TodoResponse        // G3：本机组 Agent 那本 Todo 追加回应，不改状态
 directory::list(conn, query: Option<&str>) -> Vec<DirectoryRow>
 asks::{open(tx, asker: &str, OpenAsk) -> Ask, answer(tx, crew, ask, text) -> Ask, withdraw(tx, by: &Sender, crew, ask, reason) -> Ask,
        apply_due_defaults(tx, crew) -> Vec<String>, get(conn, crew, ask) -> Ask, waits(conn, now_ms, root: Option<&str>) -> Vec<HumanWait>,
        with_book(tx, crew, |book: &mut WorkBook, now: Ts| -> Result<R>) -> Result<R>}      // M4b 用 with_book 跑工作项命令
-approvals::{request(tx, NewApproval) -> Approval, decide(tx, id, allow, by: &str) -> Approval, get(conn, id), list_pending(conn)}
+approvals::{NewApproval { session_id, tool_name, summary, tool_use_id }, Gate::{Allow { approval_id }, DenyPending { approval_id }, DenyFiled(Approval)},
+            gate(tx, NewApproval) -> Gate, decide(tx, id, allow, by: "human") -> Approval, get(conn, id), list_pending(conn)}   // C2
 restart::{open(tx, session_ids: Vec<String>) -> Option<RestartPrompt>, answer(tx, id, RestartAnswer) -> RestartPrompt,
           pending(conn) -> Option<RestartPrompt>, get(conn, id)}
 wakes::{WakeKind, WakePriority, WakeState, WakeRequest { session, kind, source, priority, not_before_ms, note, origin }, Enqueued, WakeRow,
-        source::{message, ask, timer, quota, restart, system}, enqueue, due_for, mark_inflight, mark_delivered, mark_failed, mark_dropped,
-        reset_inflight, next_due_at, sessions_with_due, recent_for, list}
+        source::{message /* "msg:<id>" */, ask /* "ask:<crew>/H<n>" */, approval /* "approval:<id>" */, timer, quota, restart, system},
+        enqueue, due_for, by_ids(conn, &[i64]) -> Vec<WakeRow>, mark_inflight, mark_delivered,
+        mark_failed(tx, id, error, retry_at_ms: Option<i64>) -> u32 /* attempts+1，回 pending，Some = 改 not_before */,
+        requeue(tx, &[i64]) /* inflight → pending，attempts 不变 */, mark_dropped, reset_inflight,
+        next_due_at(conn) /* 最早 pending，含已过期 */, next_due_after(conn, now_ms) /* 晚于 now 的最早 pending */,
+        sessions_with_due, recent_for, list, prune(tx, settled_before_ms) -> usize /* 删已 delivered / dropped 的旧行 */}
 wakes::latches::{Scope::{Edge { from, to }, Session(String)}, Latch, set, clear, get, list}
 render::{ChannelBlock, MsgLine, WakeBatch, WakeItem, WakeBody, blocks_for(conn, session, &[(String, Vec<Message>)]) -> Vec<ChannelBlock>,
          injection(Locale, &[ChannelBlock]) -> String, wake_text(Locale, &WakeBatch) -> String,
          build_batch(conn, session, &[WakeRow]) -> Result<WakeBatch>}
 settings::{locale(conn) -> Locale, max_live_sessions(conn) -> Option<u32>, set_max_live_sessions(tx, Option<u32>)}
+prompts::{parse, PromptFile, render_file(Locale), fill(template, &[(&str, &str)]) /* 一遍扫描，值不再展开（G-F）*/, placeholders}
 worldview::{WorldCtx, context_for(conn, session, Locale) -> Result<WorldCtx>, render(&WorldCtx) -> String}       // M3b 实现
-turn_trace::{TurnEnd, on_turn_end(tx, session, prompt_id, last_text) -> Result<TurnEnd>}                        // M3b 实现
+turn_trace::{TurnEnd::{Nothing, Posted { message_id }, AlreadyCalled, Replayed, Unknown},
+             on_turn_end(tx, session, prompt_id, last_text) -> Result<TurnEnd>}                                   // M3b 实现（G-T）
 
 // ── crewd-server ──
 pub use crewd_collab::Change as CollabEvent;                                          // hub.rs
-impl Hub { pub fn subscribe_collab(&self) -> broadcast::Receiver<CollabEvent>; pub fn emit(&self, conn: &Connection, changes: &[Change]); }
+impl Hub { pub fn publish(&self, e: Event); pub fn subscribe_collab(&self) -> broadcast::Receiver<CollabEvent>; pub fn emit(&self, conn: &Connection, changes: &[Change]); }
+pub struct AppState { pub db: Db, pub hub: Hub, pub sessions: Arc<dyn SessionControl>, pub tokens: TokenTable,
+                      pub agent: agent::AgentRuntime,                       // G9：M3a 放 `#[derive(Default)]` 占位，M3b 换掉 agent/runtime.rs 的内容
+                      pub orchestra: std::sync::OnceLock<orchestra::Handle> } // M3a 放占位 `pub struct Handle;`，M3c 换掉 orchestra/mod.rs 的内容
 impl AppState {
     pub fn new(db: Db) -> Self;                               // sessions = NoSessions，tokens 空表
     pub fn with_sessions(self, s: Arc<dyn SessionControl>) -> Self;   // M3c 在 serve 启动段换上真实现
@@ -217,14 +254,25 @@ pub trait SessionControl: Send + Sync {                  // control.rs；参数 
     fn quota(&self) -> BoxFuture<'_, Result<QuotaReport, ControlError>>;
     fn live(&self, session_id: String) -> BoxFuture<'_, Result<SessionLive, ControlError>>;
 }
-pub struct NoSessions;  pub struct FakeSessionControl;  // control.rs
+pub struct StartRequest { crew_id, role, executor: String, brief, title, model, effort, worktree: Option<String> /* 已存在目录的绝对路径 */ }
+pub struct NoSessions;  pub struct FakeSessionControl /* 非 cfg(test)，calls() -> Vec<FakeCall> */;  // control.rs
+// crewd-server 的 cargo feature `testkit`（空特性，M3b / M3c 的夹具挂在它下面）；`pub(crate) mod conn`、`pub(crate) async fn conn::run`、`pub async fn dispatch::handle`（G11）
+pub fn dispatch::collab_err(CollabError) -> RpcError;   RpcError::{FORBIDDEN = -32003, NOT_FOUND = -32004, CONFLICT = -32009}
 pub struct TokenTable;  impl TokenTable { pub fn mint(&self, session: &str) -> String; pub fn verify(&self, session: &str, token: &str) -> bool; pub fn revoke(&self, session: &str); }
 
 // ── crewd-proto（线上类型，Task 4 / Task 10 / Task 13 给出全文）──
-SenderKind, MentionKind, Mention, Role, Desired, ChannelKind, MemberRef, Channel, ChannelSummary, Badge, Crew(+v3 字段), CrewDetail,
-Session(+v3 字段), Message(channelId), Ask, AskStateView, HumanWait, Approval, DirectoryRow, SessionLive, HealthView, DecisionView,
-RestartPrompt, RestartAnswer；methods::* 与 events::* 常量
+SenderKind, MentionKind, Mention, Role, Desired, ChannelKind, MemberRef::{Session { id }, Human}, Channel, ChannelSummary, Badge,
+Crew(+v3 字段，含 position), CrewDetail, Session(+v3 字段，含 last_progress_at), Message(channelId), Ask, AskDefault, AskStateView, HumanWait,
+Approval(+consumedAt), Decision, DirectoryRow, TodoResponse, SessionLive, HealthView, HealthKindView, DecisionView, RestartPrompt, RestartAnswer；methods::* 与 events::* 常量（`events::TOPICS` 已含 `wake`，M3c 不改 conn.rs）
 ```
+
+**文件归属与先后（三份计划共用的文件，C9）**：M3a 先合 main。之后 M3b / M3c 不改 M3a 的文件，只有下面几处共享，按「后合者负责」：
+- `crates/server/src/lib.rs`：`AppState` 与 `pub mod agent; pub mod orchestra;` 归 M3a（已占位）；M3c 只改 serve 启动那一段（`ServeOptions` / `serve_with`）；M3b 不改。
+- `crates/server/src/agent/**`（M3a 只放 `mod.rs` + `runtime.rs` 两个占位）归 M3b；`crates/server/src/orchestra/**`（M3a 只放 `mod.rs` 占位）归 M3c。
+- `crates/server/src/conn.rs`：只有 M3b 改（agent 路由）。`crates/server/src/dispatch.rs`：只有 M3c 改（未知方法前转给 `orchestra::rpc::route` 那一行）。
+- `crates/proto/src/lib.rs`（M3b 加 `pub mod agent;` + `api_schema` 一行；M3c 加 `pub mod orchestra;` + 登记几行）、`crates/crewd/src/main.rs`（M3b 加 `mcp` / `hook` 子命令；M3c 加 `serve --claude` / `--claude-env`）、`Cargo.toml` / `Cargo.lock`、`schema/crewd-api.schema.json`：各改不相交的段；**后合者** rebase 时保留两边、重跑 `cargo add` / 重新生成 lock 与契约 json，不挑边。
+- `crates/exec/src/launch.rs` 的 `CommsSpec` / `HelperCommands` 归 M3b；M3c 只在 `orchestra/exec_claude.rs::comms_for` 一处填它，**后合者**改这个函数对上形状。
+- `crates/collab/src/{worldview,turn_trace}.rs`、`crates/collab/prompts/{world-model,tools}.*` 归 M3b；collab 其余文件、store、schema v3 归 M3a。M3b / M3c 缺字段 → 改 M3a 的 v3（§22.1），不在自己的计划里补表、补 SQL。
 
 `CommsSpec` 的改动归 M3b（spec §22.5），本计划不碰 `crewd-exec`。
 
@@ -979,6 +1027,16 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(one::<i64>(&c, "SELECT next_ext FROM crews WHERE id='crew-a'"), 6);
         assert_eq!(one::<i64>(&c, "SELECT next_ext FROM crews WHERE id='crew-b'"), 2);
         assert_eq!(
+            one::<i64>(&c, "SELECT COUNT(*) FROM crews WHERE position IS NULL"),
+            0,
+            "侧栏手动序的初值：每个机组都有 position（C1）"
+        );
+        assert!(
+            one::<i64>(&c, "SELECT position FROM crews WHERE id='crew-a'")
+                < one::<i64>(&c, "SELECT position FROM crews WHERE id='crew-b'"),
+            "初值按建组先后"
+        );
+        assert_eq!(
             one::<String>(&c, "SELECT title_source FROM crews WHERE id='crew-a'"),
             "human"
         );
@@ -1342,8 +1400,11 @@ CREATE TABLE approvals(
   requested_at TEXT NOT NULL,
   decision TEXT CHECK(decision IN ('allow','deny')),
   decided_at TEXT,
-  decided_by TEXT
+  decided_by TEXT,
+  consumed_at TEXT,
+  CHECK(consumed_at IS NULL OR decision='allow')
 );
+CREATE INDEX approvals_open ON approvals(session_id, tool_name) WHERE consumed_at IS NULL;
 CREATE TABLE work_books(
   crew_id TEXT PRIMARY KEY REFERENCES crews(id) ON DELETE CASCADE,
   state TEXT NOT NULL,
@@ -1369,6 +1430,7 @@ ALTER TABLE sessions ADD COLUMN desired TEXT NOT NULL DEFAULT 'stopped' CHECK(de
 ALTER TABLE sessions ADD COLUMN was_working INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN last_active_at TEXT;
 ALTER TABLE sessions ADD COLUMN last_output_at TEXT;
+ALTER TABLE sessions ADD COLUMN last_progress_at TEXT;
 ALTER TABLE sessions ADD COLUMN awaiting_question TEXT;
 ALTER TABLE sessions ADD COLUMN resume_failed_at TEXT;
 ALTER TABLE sessions ADD COLUMN worktree TEXT;
@@ -1378,6 +1440,7 @@ ALTER TABLE crews ADD COLUMN status_line TEXT;
 ALTER TABLE crews ADD COLUMN policy TEXT;
 ALTER TABLE crews ADD COLUMN captain_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;
 ALTER TABLE crews ADD COLUMN next_ext INTEGER NOT NULL DEFAULT 2;
+ALTER TABLE crews ADD COLUMN position INTEGER;
 "#;
 
 /// 旧消息搬进各机组大厅（大厅先建，外键才成立）。sender 词表在这里归一（裁定 6）。
@@ -1482,6 +1545,11 @@ UPDATE crews SET captain_session_id =
   (SELECT id FROM sessions s WHERE s.crew_id=crews.id AND s.role='captain'
     ORDER BY s.updated_at DESC, s.id DESC LIMIT 1)
  WHERE captain_session_id IS NULL;
+-- 侧栏手动序的初值（控制者裁定 C1）：按建组先后的全局名次。同级之间的相对顺序因此 = 建组先后；之后只有人改。
+UPDATE crews SET position =
+  (SELECT COUNT(*) FROM crews c2 WHERE c2.created_at < crews.created_at
+      OR (c2.created_at = crews.created_at AND c2.id < crews.id)) + 1
+ WHERE position IS NULL;
 INSERT OR IGNORE INTO read_cursors(reader,channel_id,seq,updated_at)
   SELECT s.id, s.crew_id||'/lobby',
          COALESCE((SELECT MAX(seq) FROM messages m WHERE m.channel_id=s.crew_id||'/lobby'),0),
@@ -1692,9 +1760,9 @@ Expected: 编译失败（类型不存在）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// 此刻的机长（裁定 8）。
     pub captain_session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// 本机组自己的群里最新一条消息的时间（只有 `crew.list` 填；侧栏「最近有动静在上」，§22.7 Q4）。
-    pub last_activity_at: Option<String>,
+    /// 同级机组里的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 改，新机组排在同级末尾）。
+    #[serde(default)]
+    pub position: i64,
 ```
 
 `Session` 末尾加：
@@ -1717,6 +1785,9 @@ Expected: 编译失败（类型不存在）。
     pub last_active_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_output_at: Option<String>,
+    /// 最近一次「产出」（工具调用 / 工作项变化；发言不算，控制者裁定 C3）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_question: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1938,9 +2009,12 @@ pub struct Approval {
     pub decision: Option<Decision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_at: Option<String>,
-    /// "human" | "timeout" | "unreachable"
+    /// 只有 "human"（审批不阻塞、不超时，控制者裁定 C2）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_by: Option<String>,
+    /// 同意后那张一次性放行票被用掉的时刻（None + Allow = 票还在）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2011,7 +2085,7 @@ pub struct Empty {}
 
 `crates/store/src/messages.rs` 的 `row()`：`sender_kind` 读成字符串后 `SenderKind::parse`，认不出 → `rusqlite::Error::FromSqlConversionFailure(3, Type::Text, format!("未知 senderKind {s}").into())`；`insert` 里 `m.sender_kind` → `m.sender_kind.as_str()`。
 
-`crates/store/src/crews.rs`：`upsert` 的列表加 `title_source, status_line, policy, captain_session_id`（`policy` 存 `serde_json::to_string`，`None` → NULL）；`list` 的 SELECT 加这 4 列（`policy` 用 `Option<String>` 读出再 `serde_json::from_str`，坏 JSON → 转换错误）；加：
+`crates/store/src/crews.rs`：`upsert` 的列表加 `title_source, status_line, policy, captain_session_id`（`policy` 存 `serde_json::to_string`，`None` → NULL）；**`upsert` 不写 `position`**（插入时留 NULL、冲突时不动：它只由 `backfill_v3` 的初值、`collab::crews::{create, adopt, release, reorder}` 写，导入器重跑不会打乱人排好的顺序，C1）；`list` 的 SELECT 加这 4 列与 `COALESCE(position, 0)`（`policy` 用 `Option<String>` 读出再 `serde_json::from_str`，坏 JSON → 转换错误），**排序不改**（M1 的测试按号排；侧栏顺序由 `collab::crews::list` 在内存里按 position 排）；加：
 
 ```rust
 pub fn get(conn: &Connection, id: &str) -> Result<Option<Crew>> {
@@ -2063,7 +2137,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Task 1–4（`Store`、`backfill_v3`、`ts_from_ms`、proto 类型）。
-- Produces（`crewd_collab`）：`Tx`、`run`、`Change`、`CollabError`、`Result`、`Locale`（签名见「冻结接口」）；`settings::{locale, set_locale, max_live_sessions, set_max_live_sessions}`；`wakes::{WakeKind, WakePriority, WakeState, WakeRequest, Enqueued, WakeRow, source, enqueue, due_for, sessions_with_due, next_due_at, mark_inflight, mark_delivered, mark_failed, mark_dropped, reset_inflight, recent_for, list}`、`wakes::latches::{Scope, Latch, set, clear, get, list}`；testkit（仅测试）：`NOW`、`MIN`、`store()`、`ok`、`ok_at`、`err`、`count`。
+- Produces（`crewd_collab`）：`Tx`、`run`、`Change`（含 `Progress`）、`ProgressKind`、`CollabError`、`Result`、`Locale`（签名见「冻结接口」）；`settings::{locale, set_locale, max_live_sessions, set_max_live_sessions}`；`wakes::{WakeKind, WakePriority, WakeState, WakeRequest, Enqueued, WakeRow, source, enqueue, due_for, by_ids, sessions_with_due, next_due_at, next_due_after, mark_inflight, mark_delivered, mark_failed(tx, id, error, retry_at_ms), requeue, mark_dropped, reset_inflight, recent_for, list, prune}`、`wakes::latches::{Scope, Latch, set, clear, get, list}`；testkit（仅测试）：`NOW`、`MIN`、`store()`、`ok`、`ok_at`、`err`、`count`。
 
 - [ ] **Step 1: 建 crate**
 
@@ -2128,6 +2202,17 @@ pub enum Change {
         answer: RestartAnswer,
         session_ids: Vec<String>,
     },
+    /// 这个 session 有了产出（`sessions::note_progress`，控制者裁定 C3）：只走内部通道，M3c 的环路熔断消费。
+    Progress { session_id: String, kind: ProgressKind },
+}
+
+/// 环路熔断认的「产出」（§22.7 Q5、控制者裁定 C3）。发言不是产出：回话给叫醒你的人不该让环路续命。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProgressKind {
+    /// 调了一个真正干活的工具（M3b 的 post-tool-use；crewd 自己的通讯类工具不报）。
+    ToolCall,
+    /// 名下工作项有变化（M4b 的工作项命令必须报）。
+    WorkItem,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2506,6 +2591,10 @@ pub mod source {
     pub fn ask(crew_id: &str, ask: &str) -> String {
         format!("ask:{crew_id}/{ask}")
     }
+    /// 审批有了结果（控制者裁定 C2）：kind 仍是 `ask_answer`，按 source 前缀区分。
+    pub fn approval(approval_id: &str) -> String {
+        format!("approval:{approval_id}")
+    }
     pub fn timer(token: &str) -> String {
         format!("timer:{token}")
     }
@@ -2579,6 +2668,8 @@ mod tests {
         let due: Vec<String> = due_for(s.conn(), "w-a1", NOW).unwrap().into_iter().map(|r| r.source).collect();
         assert_eq!(due, ["msg:2", "msg:3", "msg:1"]);
         assert_eq!(next_due_at(s.conn()).unwrap(), Some(NOW));
+        assert_eq!(next_due_after(s.conn(), NOW).unwrap(), Some(NOW + 10 * MIN), "已到期的不算，定时器不空转");
+        assert_eq!(next_due_after(s.conn(), NOW + 10 * MIN).unwrap(), None);
         assert_eq!(sessions_with_due(s.conn(), NOW).unwrap(), ["w-a1"]);
         let later: Vec<String> = due_for(s.conn(), "w-a1", NOW + 10 * MIN).unwrap().into_iter().map(|r| r.source).collect();
         assert_eq!(later.len(), 4);
@@ -2593,8 +2684,16 @@ mod tests {
         ok(&mut s, |tx| mark_inflight(tx, &[id]));
         assert!(due_for(s.conn(), "w-a1", NOW).unwrap().is_empty(), "inflight 不再算到期");
         assert!(matches!(err(&mut s, |tx| mark_inflight(tx, &[id])), CollabError::Conflict(_)));
-        assert_eq!(ok(&mut s, |tx| mark_failed(tx, id, "输入框没就绪")), 1);
+        assert_eq!(ok(&mut s, |tx| mark_failed(tx, id, "输入框没就绪", None)), 1);
         assert_eq!(due_for(s.conn(), "w-a1", NOW).unwrap()[0].attempts, 1, "失败回到 pending、记次数");
+        ok(&mut s, |tx| mark_inflight(tx, &[id]));
+        assert_eq!(ok(&mut s, |tx| mark_failed(tx, id, "又没就绪", Some(NOW + 2 * MIN))), 2);
+        assert!(due_for(s.conn(), "w-a1", NOW).unwrap().is_empty(), "退避：not_before 推后，持久化（重启后不会立刻重试）");
+        assert_eq!(by_ids(s.conn(), &[id]).unwrap()[0].not_before_ms, NOW + 2 * MIN);
+        ok(&mut s, |tx| mark_inflight(tx, &[id]));
+        ok(&mut s, |tx| requeue(tx, &[id]));
+        let back = &by_ids(s.conn(), &[id]).unwrap()[0];
+        assert_eq!((back.state, back.attempts), (WakeState::Pending, 2), "原样退回不记失败");
         ok(&mut s, |tx| mark_inflight(tx, &[id]));
         ok(&mut s, |tx| mark_delivered(tx, &[id]));
         let row = &list(s.conn(), None, 10).unwrap()[0];
@@ -2622,6 +2721,22 @@ mod tests {
         ok(&mut s, |tx| mark_inflight(tx, &ids));
         assert_eq!(ok(&mut s, reset_inflight), 2);
         assert_eq!(due_for(s.conn(), "w-a1", NOW).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prune_deletes_only_settled_rows_older_than_the_cutoff() {
+        let mut s = store();
+        let mut ids = Vec::new();
+        for src in ["msg:a", "msg:b", "msg:c"] {
+            if let (Enqueued::New(id), _) = ok_at(&mut s, NOW - 10 * MIN, |tx| enqueue(tx, req("w-a1", src, WakePriority::Auto))) {
+                ids.push(id);
+            }
+        }
+        ok_at(&mut s, NOW - 9 * MIN, |tx| mark_delivered(tx, &ids[..1]));
+        ok_at(&mut s, NOW - 9 * MIN, |tx| mark_dropped(tx, ids[1], "游标已越过"));
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW - 5 * MIN)), 2);
+        let left: Vec<i64> = list(s.conn(), None, 10).unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(left, [ids[2]], "pending 的不删");
     }
 
     #[test]
@@ -2861,13 +2976,32 @@ pub fn sessions_with_due(conn: &Connection, now_ms: i64) -> Result<Vec<String>> 
     Ok(st.query_map([now_ms], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
 }
 
-/// 最早的 pending 的 not_before（M3c 的单个定时器按它醒）。
+/// 最早的 pending 的 not_before（含已过期的）。
 pub fn next_due_at(conn: &Connection) -> Result<Option<i64>> {
     Ok(conn.query_row(
         "SELECT MIN(not_before) FROM wakes WHERE state='pending'",
         [],
         |r| r.get(0),
     )?)
+}
+
+/// 晚于 `now_ms` 的最早 pending 的 not_before（M3c 的单个定时器按它醒；已过期的由 idle 边沿 / 定时拍处理，不让定时器空转）。
+pub fn next_due_after(conn: &Connection, now_ms: i64) -> Result<Option<i64>> {
+    Ok(conn.query_row(
+        "SELECT MIN(not_before) FROM wakes WHERE state='pending' AND not_before>?1",
+        [now_ms],
+        |r| r.get(0),
+    )?)
+}
+
+/// 按 id 取行（M3c 渲染一批时用），按 id 升序；不存在的 id 略过。
+pub fn by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<WakeRow>> {
+    let mut out = Vec::new();
+    for id in ids {
+        out.extend(rows(conn, &format!("SELECT {COLS} FROM wakes WHERE id=?1"), [id])?);
+    }
+    out.sort_by_key(|r| r.id);
+    Ok(out)
 }
 
 fn set_state(tx: &mut Tx<'_>, ids: &[i64], from: &[&str], to: WakeState, settle: bool) -> Result<()> {
@@ -2902,12 +3036,13 @@ pub fn mark_delivered(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
     set_state(tx, ids, &["pending", "inflight"], WakeState::Delivered, true)
 }
 
-/// 投递失败：回到 pending、次数 +1、记下原因。返回累计失败次数（M3c 连续 3 次就在大厅 @机长）。
-pub fn mark_failed(tx: &mut Tx<'_>, id: i64, error: &str) -> Result<u32> {
+/// 投递失败：回到 pending、次数 +1、记下原因；`retry_at_ms` 有值 = 退避（改 `not_before`，持久化，重启不会立刻重试）。
+/// 返回累计失败次数（M3c 连续 3 次就放弃并告警）。
+pub fn mark_failed(tx: &mut Tx<'_>, id: i64, error: &str, retry_at_ms: Option<i64>) -> Result<u32> {
     set_state(tx, &[id], &["inflight"], WakeState::Pending, false)?;
     tx.conn().execute(
-        "UPDATE wakes SET attempts=attempts+1, last_error=?2 WHERE id=?1",
-        params![id, error],
+        "UPDATE wakes SET attempts=attempts+1, last_error=?2, not_before=COALESCE(?3, not_before) WHERE id=?1",
+        params![id, error, retry_at_ms],
     )?;
     Ok(tx
         .conn()
@@ -2919,6 +3054,20 @@ pub fn mark_dropped(tx: &mut Tx<'_>, id: i64, why: &str) -> Result<()> {
     tx.conn()
         .execute("UPDATE wakes SET last_error=?2 WHERE id=?1", params![id, why])?;
     Ok(())
+}
+
+/// inflight 原样退回 pending（不算失败、attempts 不变）：会话退出 / 投递被打断时 M3c 用。
+pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
+    set_state(tx, ids, &["inflight"], WakeState::Pending, false)
+}
+
+/// 清理：删掉 `settled_before_ms` 之前就已 delivered / dropped 的行（M3c 的定时拍按保留期调，缺省 7 天）。
+/// 删了之后同一 source 可以再入队——消息类有 6h 陈旧闸，带时刻 / 序号的 source 不会重复，所以安全。
+pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64) -> Result<usize> {
+    Ok(tx.conn().execute(
+        "DELETE FROM wakes WHERE state IN ('delivered','dropped') AND settled_at IS NOT NULL AND settled_at<?1",
+        [crewd_store::ts_from_ms(settled_before_ms)],
+    )?)
 }
 
 /// 启动时：上次没确认的 inflight 全部退回 pending（spec §22.4「重启时 inflight 退回 pending」）。
@@ -3054,7 +3203,7 @@ pub mod latches {
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: lib 3 + settings 3 + wakes 7 = 13 passed。
+Expected: lib 3 + settings 3 + wakes 8 = 14 passed。
 
 - [ ] **Step 6: 全量检查并提交**
 
@@ -3079,8 +3228,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 5 的 `Tx`、testkit；`crewd_store::{crews, sessions, channels, messages, meta_get, meta_set}`。
 - Produces：
-  - `crews::{get(conn, id) -> Result<Crew>, list(conn), list_by_activity(conn) -> Result<Vec<Crew>>, parents(conn, id) -> Result<Vec<String>>, children(conn, id) -> Result<Vec<String>>, is_root(conn, id) -> Result<bool>, root_of(conn, id) -> Result<String>, captain_of(conn, crew) -> Result<Option<String>>, create(tx, NewCrew) -> Result<Crew>, update(tx, id, CrewPatch) -> Result<Crew>, adopt(tx, crew, parent) -> Result<Crew>, release(tx, crew, from, to: Option<&str>) -> Result<Crew>, delete(tx, id) -> Result<()>, set_captain(tx, crew, session) -> Result<()>}`；`NewCrew { title, working_directory, parent_id: Option<String>, title_source: Option<String> }`；`CrewPatch { title, title_source, working_directory, hidden: Option<bool>, status_line: Option<String>（"" = 清掉）, policy: Option<serde_json::Value> }`（全部字段 `Option`，`Default`）。
-  - `sessions::{NewSession, register, get, list(conn, crew: Option<&str>), crew_of, role_of, display_name, running_desired, set_desired, set_working, set_resume_failed, set_awaiting_question, set_profile, note_output, valid_executor}`。
+  - `crews::{get(conn, id) -> Result<Crew>, list(conn)（按 position）, reorder(tx, parent: Option<&str>, ordered: &[String]) -> Result<Vec<Crew>>, parents(conn, id) -> Result<Vec<String>>, children(conn, id) -> Result<Vec<String>>（按 position）, is_root(conn, id) -> Result<bool>, root_of(conn, id) -> Result<String>, captain_of(conn, crew) -> Result<Option<String>>, create(tx, NewCrew) -> Result<Crew>, update(tx, id, CrewPatch) -> Result<Crew>, adopt(tx, crew, parent) -> Result<Crew>, release(tx, crew, from, to: Option<&str>) -> Result<Crew>, delete(tx, id) -> Result<()>, set_captain(tx, crew, session) -> Result<()>}`；`NewCrew { title, working_directory, parent_id: Option<String>, title_source: Option<String> }`；`CrewPatch { title, title_source, working_directory, hidden: Option<bool>, status_line: Option<String>（"" = 清掉）, policy: Option<serde_json::Value> }`（全部字段 `Option`，`Default`）。
+  - `sessions::{NewSession, register, get, list(conn, crew: Option<&str>), crew_of, role_of, display_name, running_desired, set_desired, set_working, set_resume_failed, set_awaiting_question, set_profile, ProgressKind, note_progress, valid_executor}`、`pub(crate) note_output`（只给 `messages::post` 用）。
   - `directory::list(conn, query: Option<&str>) -> Result<Vec<DirectoryRow>>`。
   - `cursors::{HUMAN = "human", cursor(conn, reader, channel) -> Result<Option<i64>>, advance(tx, reader, channel, seq) -> Result<()>, pin_to_end(tx, reader, channel) -> Result<i64>}`。
 
@@ -3260,25 +3409,48 @@ mod tests {
         assert!(matches!(err(&mut s, |tx| set_captain(tx, "crew-a", "w-b1")), CollabError::Invalid(_)), "别的机组的人");
     }
 
+    fn order(s: &crewd_store::Store, parent: Option<&str>) -> Vec<String> {
+        match parent {
+            Some(p) => children(s.conn(), p).unwrap(),
+            None => list(s.conn()).unwrap().into_iter().filter(|c| is_root(s.conn(), &c.id).unwrap()).map(|c| c.id).collect(),
+        }
+    }
+
     #[test]
-    fn list_by_activity_puts_the_most_recently_active_crew_first() {
+    fn new_crews_go_last_among_their_siblings_and_only_reorder_moves_them() {
         let mut s = store();
+        let a = ok(&mut s, |tx| create(tx, NewCrew { title: "新子甲".into(), working_directory: "/tmp/example".into(), parent_id: Some("crew-a".into()), ..Default::default() }));
+        let b = ok(&mut s, |tx| create(tx, NewCrew { title: "新子乙".into(), working_directory: "/tmp/example".into(), parent_id: Some("crew-a".into()), ..Default::default() }));
+        let kids = order(&s, Some("crew-a"));
+        assert_eq!(&kids[kids.len() - 2..], [a.id.clone(), b.id.clone()], "新建的排在同级末尾");
+        // 有新消息不改顺序（没有任何按动静排序的东西，C1）。
         crewd_store::messages::insert(
             s.conn(),
-            &crewd_proto::Message {
-                id: "m-x".into(),
-                channel_id: "crew-x/lobby".into(),
-                text: "有动静".into(),
-                created_at: "2026-09-21T00:00:00.000Z".into(),
-                ..Default::default()
-            },
+            &crewd_proto::Message { id: "m-x".into(), channel_id: format!("{}/lobby", a.id), text: "有动静".into(), created_at: "2026-09-21T00:00:00.000Z".into(), ..Default::default() },
             None,
         )
         .unwrap();
-        let ids: Vec<String> = list_by_activity(s.conn()).unwrap().into_iter().map(|c| c.id).collect();
-        assert_eq!(ids[0], "crew-x");
-        let x = list_by_activity(s.conn()).unwrap().into_iter().find(|c| c.id == "crew-x").unwrap();
-        assert_eq!(x.last_activity_at.as_deref(), Some("2026-09-21T00:00:00.000Z"));
+        assert_eq!(order(&s, Some("crew-a")), kids);
+        let mut want = kids.clone();
+        want.reverse();
+        let (got, ch) = crate::testkit::ok_at(&mut s, NOW, |tx| reorder(tx, Some("crew-a"), &want));
+        assert_eq!(got.into_iter().map(|c| c.id).collect::<Vec<_>>(), want);
+        assert_eq!(order(&s, Some("crew-a")), want);
+        assert!(ch.iter().all(|c| matches!(c, Change::CrewChanged { .. })) && !ch.is_empty());
+        let mut partial = want.clone();
+        partial.pop();
+        assert!(matches!(err(&mut s, |tx| reorder(tx, Some("crew-a"), &partial)), CollabError::Invalid(_)), "必须给出这一层的全部机组");
+        let mut dup = want.clone();
+        dup[0] = dup[1].clone();
+        assert!(matches!(err(&mut s, |tx| reorder(tx, Some("crew-a"), &dup)), CollabError::Invalid(_)));
+        // 转挂到别处 = 新同级的末尾。
+        ok(&mut s, |tx| release(tx, &a.id, "crew-a", Some("crew-x")));
+        assert_eq!(order(&s, Some("crew-x")).last(), Some(&a.id));
+        // 顶层也能排。
+        let mut roots = order(&s, None);
+        roots.rotate_left(1);
+        ok(&mut s, |tx| reorder(tx, None, &roots));
+        assert_eq!(order(&s, None), roots);
     }
 }
 ```
@@ -3379,11 +3551,14 @@ mod tests {
         ok(&mut s, |tx| set_resume_failed(tx, "w-a2", true));
         ok(&mut s, |tx| set_awaiting_question(tx, "w-a1", Some("要不要接着做 B？".into())));
         ok(&mut s, |tx| note_output(tx, "w-a1"));
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| note_progress(tx, "w-a1", ProgressKind::ToolCall));
+        assert_eq!(ch, [Change::Progress { session_id: "w-a1".into(), kind: ProgressKind::ToolCall }]);
         let a = get(s.conn(), "w-a1").unwrap();
         assert_eq!(a.desired, Desired::Running);
         assert!(a.was_working);
         assert_eq!(a.last_active_at.as_deref(), Some(crewd_store::ts_from_ms(NOW).as_str()));
         assert_eq!(a.last_output_at, a.last_active_at);
+        assert_eq!(a.last_progress_at, a.last_active_at, "产出单独一列（C3）");
         assert_eq!(a.awaiting_question.as_deref(), Some("要不要接着做 B？"));
         assert!(get(s.conn(), "w-a2").unwrap().resume_failed_at.is_some());
         ok(&mut s, |tx| set_resume_failed(tx, "w-a2", false));
@@ -3453,8 +3628,11 @@ pub fn get(conn: &Connection, id: &str) -> Result<Crew> {
     crewd_store::crews::get(conn, id)?.ok_or_else(|| not_found(id))
 }
 
+/// 侧栏顺序（C1）：position，再按建组时间、id。store 层仍按号排（M1 的测试依赖它）。
 pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
-    Ok(crewd_store::crews::list(conn)?)
+    let mut crews = crewd_store::crews::list(conn)?;
+    crews.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.created_at.cmp(&b.created_at)).then_with(|| a.id.cmp(&b.id)));
+    Ok(crews)
 }
 
 pub fn parents(conn: &Connection, id: &str) -> Result<Vec<String>> {
@@ -3468,7 +3646,7 @@ pub fn parents(conn: &Connection, id: &str) -> Result<Vec<String>> {
 pub fn children(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut st = conn.prepare(
         "SELECT p.crew_id FROM crew_parents p JOIN crews c ON c.id=p.crew_id
-          WHERE p.parent_id=?1 ORDER BY c.created_at, c.id",
+          WHERE p.parent_id=?1 ORDER BY COALESCE(c.position,0), c.created_at, c.id",
     )?;
     Ok(st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
 }
@@ -3566,6 +3744,7 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     };
     crewd_store::crews::upsert(tx.conn(), &crew, None)?;
     crewd_store::channels::ensure_lobby(tx.conn(), &crew.id, &now)?;
+    put_last(tx, &crew.id, None)?;
     tx.note(Change::CrewChanged { crew_id: crew.id.clone() });
     if let Some(p) = n.parent_id.as_deref() {
         adopt(tx, &crew.id, p)?;
@@ -3627,6 +3806,7 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
         "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
         params![crew, parent],
     )?;
+    put_last(tx, crew, Some(parent))?;
     tx.note(Change::CrewChanged { crew_id: crew.into() });
     tx.note(Change::CrewChanged { crew_id: parent.into() });
     get(tx.conn(), crew)
@@ -3651,6 +3831,9 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
         "DELETE FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
         params![crew, from],
     )?;
+    if to.is_none() && is_root(tx.conn(), crew)? {
+        put_last(tx, crew, None)?;
+    }
     tx.note(Change::CrewChanged { crew_id: crew.into() });
     tx.note(Change::CrewChanged { crew_id: from.into() });
     get(tx.conn(), crew)
@@ -3724,26 +3907,58 @@ fn cursors_pin(tx: &mut Tx<'_>, reader: &str, channel: &str) -> Result<()> {
     crate::cursors::pin_to_end(tx, reader, channel).map(|_| ())
 }
 
-/// 侧栏基础序（§22.7 Q4）：本机组自己的群里最新一条消息的时间降序；没消息的按建组时间；同时刻按号。
-pub fn list_by_activity(conn: &Connection) -> Result<Vec<Crew>> {
-    let mut crews = list(conn)?;
-    for c in &mut crews {
-        let mut st = conn.prepare("SELECT id FROM channels WHERE crew_id=?1")?;
-        let chans: Vec<String> = st.query_map([&c.id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        let mut best = 0;
-        for ch in chans {
-            best = best.max(crewd_store::messages::max_seq(conn, &ch)?);
-        }
-        if best > 0 {
-            c.last_activity_at = Some(conn.query_row("SELECT created_at FROM messages WHERE seq=?1", [best], |r| r.get(0))?);
+/// 同级：`parent` 的直系子；`None` = 全部根机组（没有父边的）。按 position。
+fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
+    match parent {
+        Some(p) => children(conn, p),
+        None => {
+            let mut out = Vec::new();
+            for c in list(conn)? {
+                if is_root(conn, &c.id)? {
+                    out.push(c.id);
+                }
+            }
+            Ok(out)
         }
     }
-    crews.sort_by(|a, b| {
-        let ka = a.last_activity_at.as_deref().unwrap_or(&a.created_at);
-        let kb = b.last_activity_at.as_deref().unwrap_or(&b.created_at);
-        kb.cmp(ka).then(a.number.cmp(&b.number)).then(a.id.cmp(&b.id))
-    });
-    Ok(crews)
+}
+
+/// 把 `crew` 放到 `parent` 这一层（`None` = 顶层）的末尾（C1：新建 / 收编 / 转挂进来的排最后）。
+/// 多父机组只有一个 position，在每个父下都按它排（少见；人再拖一次即可）。
+fn put_last(tx: &mut Tx<'_>, crew: &str, parent: Option<&str>) -> Result<()> {
+    let mut max = 0i64;
+    for c in siblings(tx.conn(), parent)? {
+        if c != crew {
+            max = max.max(tx.conn().query_row("SELECT COALESCE(position,0) FROM crews WHERE id=?1", [&c], |r| r.get(0))?);
+        }
+    }
+    tx.conn().execute("UPDATE crews SET position=?2 WHERE id=?1", params![crew, max + 1])?;
+    Ok(())
+}
+
+/// 人手动排侧栏（C1，只有客户端 `crew.reorder` 调）：`ordered` 必须恰好是这一层现有的全部机组（防客户端拿着旧列表覆盖）。
+/// 挪了位置的每个机组各发一条 `CrewChanged`。
+pub fn reorder(tx: &mut Tx<'_>, parent: Option<&str>, ordered: &[String]) -> Result<Vec<Crew>> {
+    if let Some(p) = parent {
+        get(tx.conn(), p)?;
+    }
+    let current = siblings(tx.conn(), parent)?;
+    let want: BTreeSet<&String> = ordered.iter().collect();
+    let have: BTreeSet<&String> = current.iter().collect();
+    if want.len() != ordered.len() || want != have {
+        return Err(CollabError::Invalid(format!(
+            "crewIds 必须恰好是这一层的全部机组（不重复）：现有 {current:?}"
+        )));
+    }
+    for (i, id) in ordered.iter().enumerate() {
+        let pos = i as i64 + 1;
+        let old: i64 = tx.conn().query_row("SELECT COALESCE(position,0) FROM crews WHERE id=?1", [id], |r| r.get(0))?;
+        if old != pos {
+            tx.conn().execute("UPDATE crews SET position=?2 WHERE id=?1", params![id, pos])?;
+            tx.note(Change::CrewChanged { crew_id: id.clone() });
+        }
+    }
+    ordered.iter().map(|id| get(tx.conn(), id)).collect()
 }
 ```
 
@@ -3875,11 +4090,21 @@ pub fn set_profile(tx: &mut Tx<'_>, id: &str, model: Option<String>, effort: Opt
     )
 }
 
-/// 「有新产出」（§22.7 Q5 熔断判据）：session 发言时 `messages::post` 自动调；M3b 的 post-tool-use hook、
-/// M4b 的工作项命令也调它。高频，不发变更。
-pub fn note_output(tx: &mut Tx<'_>, id: &str) -> Result<()> {
+/// 最近一次发言的时间（只是数据，**不算产出**）：只由 `messages::post` 在 session 发言时调。
+pub(crate) fn note_output(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     let now = tx.now_ts();
     update_one(tx, id, "UPDATE sessions SET last_output_at=?2 WHERE id=?1", params![id, now], false)
+}
+
+/// 类型定义在 lib.rs（`Change::Progress` 要用，Task 5 先于本文件）。
+pub use crate::ProgressKind;
+
+/// 记一次产出：写 `last_progress_at`，发 `Change::Progress`（只走内部通道，M3c 的熔断订阅）。高频，不发 `SessionChanged`。
+pub fn note_progress(tx: &mut Tx<'_>, id: &str, kind: ProgressKind) -> Result<()> {
+    let now = tx.now_ts();
+    update_one(tx, id, "UPDATE sessions SET last_progress_at=?2 WHERE id=?1", params![id, now], false)?;
+    tx.note(Change::Progress { session_id: id.into(), kind });
+    Ok(())
 }
 ```
 
@@ -3960,7 +4185,7 @@ pub fn list(conn: &Connection, query: Option<&str>) -> Result<Vec<DirectoryRow>>
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: Task 5 的 13 条 + crews 9 + sessions 5 + directory 2 = 29 passed。
+Expected: Task 5 的 14 条 + crews 9 + sessions 5 + directory 2 = 30 passed。
 
 - [ ] **Step 5: 全量检查并提交**
 
@@ -4138,7 +4363,12 @@ mod tests {
         assert!(is_member(s_.conn(), lobby, &s("w-a1")).unwrap());
         assert!(is_member(s_.conn(), lobby, &MemberRef::Human).unwrap());
         assert!(!is_member(s_.conn(), lobby, &s("w-b1")).unwrap(), "子机组的人不在父机组大厅");
+        // `members` 返回**有效**成员（含隐式），M3c 的唤醒规划只在它里面选（C6，冻结）。
+        let lm = members(s_.conn(), lobby).unwrap();
+        assert!(lm.contains(&MemberRef::Human) && lm.contains(&s("cap-a")) && lm.contains(&s("w-a1")) && lm.contains(&s("w-a2")), "{lm:?}");
+        assert!(!lm.contains(&s("w-b1")));
         let h = ok(&mut s_, |tx| ensure_human_channel(tx, "crew-a"));
+        assert_eq!(members(s_.conn(), &h.id).unwrap(), [MemberRef::Human, s("cap-a")], "人类群：人 + 根机组机长（隐式）");
         assert_eq!(h.id, "crew-a/human");
         assert_eq!(h.kind, ChannelKind::Human);
         assert!(is_member(s_.conn(), &h.id, &s("cap-a")).unwrap(), "根机组机长隐式在人类群");
@@ -4361,6 +4591,8 @@ fn explicit(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
     Ok(raw.into_iter().filter_map(|(k, i)| MemberRef::from_row(&k, &i)).collect())
 }
 
+/// **有效**成员（冻结语义，C6）：大厅 = 人 + 本机组全部 session（隐式，不写 channel_members）；
+/// 人类群 = 人 + 根机组此刻的机长（隐式）+ 显式行；topic / dm = 显式行。M3b 的注入面、M3c 的唤醒规划都只认它。
 pub fn members(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
     let ch = get(conn, id)?;
     let mut out = match ch.kind {
@@ -4789,7 +5021,7 @@ pub fn detail(tx: &mut Tx<'_>, id: &str) -> Result<crewd_proto::CrewDetail> {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: 前面 29 条 + channels 10 + cursors 1 = 40 passed。
+Expected: 前面 30 条 + channels 10 + cursors 1 = 41 passed。
 
 - [ ] **Step 5: 全量检查并提交**
 
@@ -4805,7 +5037,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 ---
 ### Task 8: 发消息（校验、@ 解析、落库、变更）、列表、搜索
 
-裁定 10–14。`post` 是所有发消息路径的唯一入口（RPC 的人、M3b 的工具、collab 自己的公告）；公告走 `post_internal`（跳过成员检查，其余规则相同）。session 发言自动 `sessions::note_output`（§22.7 Q5 的「新产出」）。
+裁定 10–14。`post` 是所有发消息路径的唯一入口（RPC 的人、M3b 的工具、collab 自己的公告）；公告走 `post_internal`（跳过成员检查，其余规则相同）。session 发言自动 `sessions::note_output`（只记 `last_output_at`；发言**不算**熔断认的产出，产出是 `note_progress`，控制者裁定 C3）。
 
 **Files:**
 - Create: `crewd/crates/collab/src/messages.rs`
@@ -5185,7 +5417,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, check_member: bool) ->
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: 40 + 9 = 49 passed。
+Expected: 41 + 9 = 50 passed。
 
 - [ ] **Step 5: 全量检查并提交**
 
@@ -5482,7 +5714,7 @@ pub fn mark_read(tx: &mut Tx<'_>, channel: &str, seq: i64) -> Result<Badge> {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: 49 + cursors 6 + listens 2 = 57 passed。
+Expected: 50 + cursors 6 + listens 2 = 58 passed。
 
 - [ ] **Step 5: 全量检查并提交**
 
@@ -5499,19 +5731,21 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 ### Task 10: 人类待确认（H 号）、审批台账、重启询问；提示词文件骨架
 
 - 问：每个机组一本 `crewd_work::WorkBook`，整份 `BookState` 存 `work_books`（M4a 定的持久化边界），每条命令在同一个 SQLite 事务里读、改、写（`with_book`）。开问在同一事务里往根机组人类群发 @human 公告、写 `ask_meta`（裁定 13）。回答：对 `open_ask` 直接开的问给提问者入队 `ask_answer` 唤醒（提问者已无法恢复 → 叫它机组的机长转达，§22.4）；产出 `Change::AskAnswered`（含 BlockerCleared 的负责人，裁定 17）。
-- 审批：同步闸，不发 H 号（§22.2）；建行 + 人类群公告；`decide` 只能一次。
+- 审批（控制者裁定 C2，照 Swift 驾驶舱 #75②）：**不阻塞**。`gate` 在一个事务里判：有票 → 用掉、放行；同 session 同工具已有未决请求 → 只拒；否则开一条（建行 + 根机组人类群 @人公告）再拒。`decide` 只能一次，只有人能决；结果给提问的 session 入队 `ask_answer` 唤醒（source `approval:<id>`）。不发 H 号。
+- Agent Todo 的回应（M3b G3）：`todos::respond` 往本机组 Agent 那本 Todo 追加一条回应，不改状态（§9）。
 - 重启询问（§22.7 Q1）：只记账与公告，`answer` 产出 `Change::RestartAnswered`，恢复动作归 M3c。
 - 公告文字在 `prompts/render.{zh,en}.md` 的 `notice.*` 节（本任务建文件与加载器；Task 11 加其余节）。
 
 **Files:**
-- Create: `crewd/crates/collab/src/asks.rs`、`crewd/crates/collab/src/approvals.rs`、`crewd/crates/collab/src/restart.rs`、`crewd/crates/collab/src/prompts.rs`、`crewd/crates/collab/prompts/render.zh.md`、`crewd/crates/collab/prompts/render.en.md`
-- Modify: `crewd/crates/collab/src/lib.rs`（`pub mod approvals; pub mod asks; pub mod prompts; pub mod restart;`）、`crewd/crates/collab/Cargo.toml`（dev：tempfile）、`crewd/Cargo.lock`
+- Create: `crewd/crates/collab/src/asks.rs`、`crewd/crates/collab/src/approvals.rs`、`crewd/crates/collab/src/restart.rs`、`crewd/crates/collab/src/todos.rs`、`crewd/crates/collab/src/prompts.rs`、`crewd/crates/collab/prompts/render.zh.md`、`crewd/crates/collab/prompts/render.en.md`
+- Modify: `crewd/crates/collab/src/lib.rs`（`pub mod approvals; pub mod asks; pub mod prompts; pub mod restart; pub mod todos;`）、`crewd/crates/collab/Cargo.toml`（dev：tempfile）、`crewd/Cargo.lock`
 
 **Interfaces:**
 - Consumes: Task 2（`withdraw_ask`）、Task 5（`wakes::enqueue`）、Task 7–8（`channels::ensure_human_channel`、`messages::post_internal`）、`settings::locale`。
 - Produces：
   - `asks::{OpenAsk { question, default: Option<AskDefault>, resume_note }, with_book<R>(tx, crew, f: impl FnOnce(&mut WorkBook, Ts) -> Result<R, Rejected>) -> Result<R>, open(tx, asker: &str, OpenAsk) -> Result<Ask>, answer(tx, crew, ask: &str, text) -> Result<Ask>, withdraw(tx, by: &Sender, crew, ask, reason) -> Result<Ask>, apply_due_defaults(tx, crew) -> Result<Vec<String>>, get(conn, crew, ask) -> Result<Ask>, waits(conn, now_ms, root: Option<&str>) -> Result<Vec<HumanWait>>}`。
-  - `approvals::{NewApproval { session_id, tool_name, summary, tool_use_id }, request(tx, NewApproval) -> Result<Approval>, decide(tx, id, allow: bool, by: &str) -> Result<Approval>, get(conn, id) -> Result<Approval>, list_pending(conn) -> Result<Vec<Approval>>}`；`by ∈ {"human", "timeout", "unreachable"}`。
+  - `approvals::{NewApproval { session_id, tool_name, summary, tool_use_id }, Gate::{Allow { approval_id }, DenyPending { approval_id }, DenyFiled(Approval)}, gate(tx, NewApproval) -> Result<Gate>, decide(tx, id, allow: bool, by: &str) -> Result<Approval>, get(conn, id) -> Result<Approval>, list_pending(conn) -> Result<Vec<Approval>>}`；`by` 只能是 `"human"`。
+  - `todos::respond(tx, session: &str, number: i64, text: &str) -> Result<TodoResponse>`。
   - `restart::{open(tx, session_ids: Vec<String>) -> Result<Option<RestartPrompt>>, answer(tx, id: i64, RestartAnswer) -> Result<RestartPrompt>, pending(conn) -> Result<Option<RestartPrompt>>, get(conn, id) -> Result<RestartPrompt>}`。
   - `prompts::{PromptFile, render_file(Locale) -> &'static PromptFile, fill(template, &[(&str, &str)]) -> String, REQUIRED: &[(&str, &[&str])]}`（`REQUIRED` = 节名 → 允许的占位符）。
 
@@ -5528,11 +5762,11 @@ cargo add --offline -p crewd-collab --dev tempfile
 每节 `## 名字`；`{占位符}` 由代码填，允许哪些见 src/prompts.rs 的 REQUIRED。
 
 ## notice.approval
-{session} 请求使用工具 {tool}：{summary}
-请在审批列表里允许或拒绝；超时会自动拒绝。
+{session} 想用工具 {tool}：{summary}
+这次已当场拒绝，它会先去干别的。在审批列表里同意 = 放行它重跑这一次（一次性）；拒绝 = 它会收到「不行」。
 
 ## notice.restart
-crewd 重新启动了。上次有 {count} 个 session 在跑，是否现在恢复它们？
+crewd 重新启动了。上次有 {count} 个 session 在跑，是否现在恢复它们？（先不恢复也行：在群里 @ 其中某一个，就只恢复它。）
 
 ## notice.restart.item
 - {name}
@@ -5545,11 +5779,11 @@ Group notices and injected text shown to people and agents (read by crewd-collab
 One `## name` per section; `{placeholders}` are filled by code; see REQUIRED in src/prompts.rs.
 
 ## notice.approval
-{session} asks to use tool {tool}: {summary}
-Allow or deny it in the approvals list; it is denied automatically on timeout.
+{session} wants to use tool {tool}: {summary}
+This call was denied on the spot; it will move on to other work. Allow it in the approvals list to let it retry once (one-time grant); deny it and it will be told no.
 
 ## notice.restart
-crewd restarted. {count} sessions were running before; resume them now?
+crewd restarted. {count} sessions were running before; resume them now? (Or not yet: @-mention one of them in a channel to resume just that one.)
 
 ## notice.restart.item
 - {name}
@@ -5632,12 +5866,34 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("notice.restart.item", &["name"]),
 ];
 
-/// 把 `{名字}` 换成值。没给的占位符原样留着（测试保证模板只用允许的占位符）。
+/// 把 `{名字}` 换成值。**一遍扫描**：只扫模板，值原样拷贝、不再被后面的变量展开（agent / 人写的正文里有
+/// `{name}` 这类花括号时不能串，M3b G-F）。没给的占位符原样留着（测试保证模板只用允许的占位符）。
 pub fn fill(template: &str, vars: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (k, v) in vars {
-        out = out.replace(&format!("{{{k}}}"), v);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('}') {
+            Some(j) => {
+                let key = &after[..j];
+                match vars.iter().find(|(k, _)| *k == key) {
+                    Some((_, v)) => out.push_str(v),
+                    None => {
+                        out.push('{');
+                        out.push_str(key);
+                        out.push('}');
+                    }
+                }
+                rest = &after[j + 1..];
+            }
+            None => {
+                out.push_str(&rest[i..]);
+                rest = "";
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -5680,6 +5936,13 @@ mod tests {
     fn fill_replaces_named_placeholders() {
         assert_eq!(fill("{a} 和 {b}", &[("a", "甲"), ("b", "乙")]), "甲 和 乙");
         assert_eq!(placeholders("x {a} y {b}"), ["a", "b"]);
+    }
+
+    #[test]
+    fn fill_does_not_expand_inside_values() {
+        // 值里的花括号是正文，不是占位符（M3b G-F）：逐个 replace 会把 {b} 再换成「乙」。
+        assert_eq!(fill("{a} / {b}", &[("a", "原文 {b}"), ("b", "乙")]), "原文 {b} / 乙");
+        assert_eq!(fill("{x} 留着，{a", &[("a", "甲")]), "{x} 留着，{a", "没给的与不闭合的原样留");
     }
 
     #[test]
@@ -5830,8 +6093,12 @@ mod tests {
 `crates/collab/src/approvals.rs`（文件头 + 类型 + 测试）：
 
 ```rust
-//! 权限审批台账（spec §22.2：同步闸，随这次工具调用失效，不发 H 号）。等待与超时在 M3b 的 pre-tool-use hook。
+//! 权限审批台账与一次性放行票（控制者裁定 C2，照 Swift 驾驶舱 #75② `McpPermissionHook` / `PermissionGrantStore`）。
+//! **不阻塞**：命中闸的工具调用当场拒，给人开一条待确认；人同意 = 一张票，同一 session 下一次同名工具调用用掉它。
+//! 「一次同意 = 一次放行」：票不是常设权限，用掉就作废。按 (session, 工具) 分：给 A 工具的同意不能被 B 用掉。
+//! 被人卡住的只有这一次调用，session 照常干别的（§6「卡住只卡那一件」）。不发 H 号：不是工作卡点。
 use crate::messages::{self, NewPost};
+use crate::wakes::{self, WakeKind, WakePriority, WakeRequest};
 use crate::{Change, CollabError, Result, Sender, Tx, channels, crews, prompts, sessions, settings};
 use crewd_proto::{Approval, Decision, Mention, MentionKind};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -5844,37 +6111,81 @@ pub struct NewApproval {
     pub tool_use_id: Option<String>,
 }
 
+/// pre-tool-use 的判定（M3b 照它输出 allow / deny）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gate {
+    /// 有一张票：已用掉，放行这一次。
+    Allow { approval_id: String },
+    /// 同一 session 同一工具已有一条没决的请求：只拒，不再开（agent 每重试一次就往人的账上灌一条是垃圾）。
+    DenyPending { approval_id: String },
+    /// 开了一条新请求（已在根机组人类群 @人）并拒绝这一次。
+    DenyFiled(Approval),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{err, ok, store};
+    use crate::testkit::{count, err, ok, store};
 
-    fn req() -> NewApproval {
-        NewApproval { session_id: "w-b1".into(), tool_name: "computer-use".into(), summary: "点击系统设置".into(), tool_use_id: Some("tu-1".into()) }
+    fn req(tool: &str) -> NewApproval {
+        NewApproval { session_id: "w-b1".into(), tool_name: tool.into(), summary: "点击系统设置".into(), tool_use_id: Some("tu-1".into()) }
+    }
+
+    fn filed(g: Gate) -> Approval {
+        match g {
+            Gate::DenyFiled(a) => a,
+            other => panic!("期望开新请求，得到 {other:?}"),
+        }
     }
 
     #[test]
-    fn request_records_and_announces_in_the_root_human_channel() {
+    fn first_call_files_and_announces_then_repeats_only_deny() {
         let mut s = store();
-        let a = ok(&mut s, |tx| request(tx, req()));
+        let a = filed(ok(&mut s, |tx| gate(tx, req("computer-use"))));
         assert!(a.id.starts_with("ap-"));
-        assert_eq!(a.crew_id, "crew-b");
-        assert_eq!(a.decision, None);
+        assert_eq!((a.crew_id.as_str(), a.decision), ("crew-b", None));
         let last = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
         assert_eq!(last.len(), 1);
         assert!(last[0].text.contains("computer-use") && last[0].text.contains("点击系统设置"));
         assert_eq!(last[0].category.as_deref(), Some("approval"));
-        assert_eq!(list_pending(s.conn()).unwrap().len(), 1);
+        assert_eq!(ok(&mut s, |tx| gate(tx, req("computer-use"))), Gate::DenyPending { approval_id: a.id.clone() });
+        assert_eq!(list_pending(s.conn()).unwrap().len(), 1, "重试不灌新条目");
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM messages WHERE channel_id='crew-a/human'"), 1);
     }
 
     #[test]
-    fn decide_once_by_a_known_decider() {
+    fn allow_issues_one_grant_for_that_session_and_tool_only() {
         let mut s = store();
-        let a = ok(&mut s, |tx| request(tx, req()));
-        assert!(matches!(err(&mut s, |tx| decide(tx, &a.id, true, "someone")), CollabError::Invalid(_)));
+        let a = filed(ok(&mut s, |tx| gate(tx, req("computer-use"))));
         let d = ok(&mut s, |tx| decide(tx, &a.id, true, "human"));
-        assert_eq!((d.decision, d.decided_by.as_deref()), (Some(Decision::Allow), Some("human")));
-        assert!(matches!(err(&mut s, |tx| decide(tx, &a.id, false, "timeout")), CollabError::Conflict(_)));
+        assert_eq!((d.decision, d.decided_by.as_deref(), d.consumed_at.as_deref()), (Some(Decision::Allow), Some("human"), None));
+        let w = crate::wakes::list(s.conn(), Some("w-b1"), 10).unwrap();
+        assert_eq!((w[0].kind, w[0].source.as_str(), w[0].priority), (WakeKind::AskAnswer, format!("approval:{}", a.id).as_str(), WakePriority::Human), "人决了 → 叫它回来重跑");
+        // 别的工具、别的 session 用不掉这张票。
+        filed(ok(&mut s, |tx| gate(tx, req("shell"))));
+        filed(ok(&mut s, |tx| gate(tx, NewApproval { session_id: "w-a1".into(), ..req("computer-use") })));
+        assert_eq!(ok(&mut s, |tx| gate(tx, req("computer-use"))), Gate::Allow { approval_id: a.id.clone() });
+        assert!(get(s.conn(), &a.id).unwrap().consumed_at.is_some());
+        filed(ok(&mut s, |tx| gate(tx, req("computer-use"))));  // 一次同意 = 一次放行：再来要再问
+    }
+
+    #[test]
+    fn deny_tells_the_asker_and_the_next_call_files_again() {
+        let mut s = store();
+        let a = filed(ok(&mut s, |tx| gate(tx, req("computer-use"))));
+        ok(&mut s, |tx| decide(tx, &a.id, false, "human"));
+        assert_eq!(crate::wakes::list(s.conn(), Some("w-b1"), 10).unwrap().len(), 1);
+        let b = filed(ok(&mut s, |tx| gate(tx, req("computer-use"))));
+        assert_ne!(a.id, b.id);
+    }
+
+    #[test]
+    fn decide_once_and_only_by_the_human() {
+        let mut s = store();
+        let a = filed(ok(&mut s, |tx| gate(tx, req("computer-use"))));
+        assert!(matches!(err(&mut s, |tx| decide(tx, &a.id, true, "timeout")), CollabError::Invalid(_)), "不阻塞就没有超时");
+        ok(&mut s, |tx| decide(tx, &a.id, true, "human"));
+        assert!(matches!(err(&mut s, |tx| decide(tx, &a.id, false, "human")), CollabError::Conflict(_)));
         assert!(list_pending(s.conn()).unwrap().is_empty());
         assert!(matches!(err(&mut s, |tx| decide(tx, "ap-nope", true, "human")), CollabError::NotFound(_)));
     }
@@ -6121,7 +6432,7 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
     get(tx.conn(), crew, ask)
 }
 
-/// 默认方案到点的问按默认办（调度层调用；谁来定时调它见 spec 问题 5）。返回办了的 H 号。
+/// 默认方案到点的问按默认办（M3c 的定时拍按机组逐个调，控制者裁定 C7）。返回办了的 H 号。
 pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
     let done: Vec<(AskId, bool)> = with_book(tx, crew, |b, now| {
         let mut out = Vec::new();
@@ -6180,8 +6491,8 @@ pub fn waits(conn: &Connection, now_ms: i64, root: Option<&str>) -> Result<Vec<H
 `approvals.rs`：
 
 ```rust
-const COLS: &str = "id,session_id,crew_id,tool_name,summary,tool_use_id,requested_at,decision,decided_at,decided_by";
-const DECIDERS: &[&str] = &["human", "timeout", "unreachable"];
+const COLS: &str = "id,session_id,crew_id,tool_name,summary,tool_use_id,requested_at,decision,decided_at,decided_by,consumed_at";
+const DECIDERS: &[&str] = &["human"];
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
     let decision: Option<String> = r.get(7)?;
@@ -6196,6 +6507,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
         decision: decision.as_deref().and_then(Decision::parse),
         decided_at: r.get(8)?,
         decided_by: r.get(9)?,
+        consumed_at: r.get(10)?,
     })
 }
 
@@ -6205,15 +6517,40 @@ pub fn get(conn: &Connection, id: &str) -> Result<Approval> {
         .ok_or_else(|| CollabError::NotFound(format!("没有审批 {id}")))
 }
 
+/// 人的待确认（客户端 `approval.list`）：还没决的。
 pub fn list_pending(conn: &Connection) -> Result<Vec<Approval>> {
     let mut st = conn.prepare(&format!("SELECT {COLS} FROM approvals WHERE decision IS NULL ORDER BY requested_at, id"))?;
     Ok(st.query_map([], row)?.collect::<rusqlite::Result<_>>()?)
 }
 
-pub fn request(tx: &mut Tx<'_>, n: NewApproval) -> Result<Approval> {
+fn first_id(conn: &Connection, sql: &str, n: &NewApproval) -> Result<Option<String>> {
+    Ok(conn.query_row(sql, params![n.session_id, n.tool_name], |r| r.get(0)).optional()?)
+}
+
+/// pre-tool-use 命中审批闸时调（M3b）。一个事务：用票 / 只拒 / 开新请求。
+pub fn gate(tx: &mut Tx<'_>, n: NewApproval) -> Result<Gate> {
     let s = sessions::get(tx.conn(), &n.session_id)?;
     if n.tool_name.trim().is_empty() {
         return Err(CollabError::Invalid("工具名不能为空".into()));
+    }
+    let grant = first_id(
+        tx.conn(),
+        "SELECT id FROM approvals WHERE session_id=?1 AND tool_name=?2 AND decision='allow' AND consumed_at IS NULL
+          ORDER BY decided_at, id LIMIT 1",
+        &n,
+    )?;
+    if let Some(id) = grant {
+        tx.conn().execute("UPDATE approvals SET consumed_at=?2 WHERE id=?1", params![id, tx.now_ts()])?;
+        tx.note(Change::ApprovalChanged { id: id.clone() });
+        return Ok(Gate::Allow { approval_id: id });
+    }
+    let open = first_id(
+        tx.conn(),
+        "SELECT id FROM approvals WHERE session_id=?1 AND tool_name=?2 AND decision IS NULL ORDER BY requested_at, id LIMIT 1",
+        &n,
+    )?;
+    if let Some(id) = open {
+        return Ok(Gate::DenyPending { approval_id: id });
     }
     let id = format!("ap-{}", uuid::Uuid::new_v4().simple());
     tx.conn().execute(
@@ -6237,9 +6574,10 @@ pub fn request(tx: &mut Tx<'_>, n: NewApproval) -> Result<Approval> {
         },
     )?;
     tx.note(Change::ApprovalChanged { id: id.clone() });
-    get(tx.conn(), &id)
+    Ok(Gate::DenyFiled(get(tx.conn(), &id)?))
 }
 
+/// 人决一条（客户端 `approval.decide`）。同意 = 一张一次性票；两种结果都叫提问的 session 回来（正文见 render 的 `wake.approval_*`）。
 pub fn decide(tx: &mut Tx<'_>, id: &str, allow: bool, by: &str) -> Result<Approval> {
     if !DECIDERS.contains(&by) {
         return Err(CollabError::Invalid(format!("decided_by 只能是 {DECIDERS:?}")));
@@ -6252,6 +6590,18 @@ pub fn decide(tx: &mut Tx<'_>, id: &str, allow: bool, by: &str) -> Result<Approv
     tx.conn().execute(
         "UPDATE approvals SET decision=?2, decided_at=?3, decided_by=?4 WHERE id=?1",
         params![id, d.as_str(), tx.now_ts(), by],
+    )?;
+    wakes::enqueue(
+        tx,
+        WakeRequest {
+            session: a.session_id.clone(),
+            kind: WakeKind::AskAnswer,
+            source: wakes::source::approval(id),
+            priority: WakePriority::Human,
+            not_before_ms: None,
+            note: None,
+            origin: None,
+        },
     )?;
     tx.note(Change::ApprovalChanged { id: id.into() });
     get(tx.conn(), id)
@@ -6359,20 +6709,99 @@ pub fn answer(tx: &mut Tx<'_>, id: i64, a: RestartAnswer) -> Result<RestartPromp
 }
 ```
 
+`crates/collab/src/todos.rs`（整个文件，M3b G3；M4b 重做 Todo 时接手）：
+
+```rust
+//! Agent 那本 Todo（人派给机组的活）的回应：追加一条，不改状态（§9：状态 / 证据参数已删）。
+//! 不发客户端事件：`todo.list` 在 M3 不变，客户端重拉即可（M4b 重做 Todo 时补事件）。
+use crate::{CollabError, Result, Tx, sessions};
+use crewd_proto::TodoResponse;
+use rusqlite::{OptionalExtension, params};
+
+/// `session` 所在机组的 Agent Todo `#number` 追加回应。删掉的、不存在的 → NotFound；空回应 → Invalid。
+pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Result<TodoResponse> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(CollabError::Invalid("回应不能为空".into()));
+    }
+    let s = sessions::get(tx.conn(), session)?;
+    let todo: Option<String> = tx
+        .conn()
+        .query_row(
+            "SELECT id FROM todos WHERE crew_id=?1 AND ledger='agent' AND number=?2 AND deleted_at IS NULL",
+            params![s.crew_id, number],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(todo) = todo else {
+        return Err(CollabError::NotFound(format!("本机组没有 Agent Todo #{number}")));
+    };
+    let ord: i64 = tx.conn().query_row(
+        "SELECT COALESCE(MAX(ord),-1)+1 FROM todo_responses WHERE todo_id=?1",
+        [&todo],
+        |r| r.get(0),
+    )?;
+    let r = TodoResponse {
+        id: format!("tr-{}", uuid::Uuid::new_v4().simple()),
+        session_id: s.id.clone(),
+        sender_name: Some(sessions::display_name(tx.conn(), &s.id)?),
+        text: text.to_string(),
+        status: None,
+        attachments: vec![],
+        created_at: tx.now_ts(),
+    };
+    tx.conn().execute(
+        "INSERT INTO todo_responses(id,todo_id,ord,session_id,sender_name,text,status,attachments,created_at)
+         VALUES(?1,?2,?3,?4,?5,?6,NULL,'[]',?7)",
+        params![r.id, todo, ord, r.session_id, r.sender_name, r.text, r.created_at],
+    )?;
+    tx.conn().execute("UPDATE todos SET updated_at=?2 WHERE id=?1", params![todo, r.created_at])?;
+    Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::{count, err, ok, store};
+
+    #[test]
+    fn respond_appends_in_order_without_touching_status() {
+        let mut s = store();
+        s.conn()
+            .execute(
+                "INSERT INTO todos(id,crew_id,ledger,number,text,status,created_at) VALUES('t1','crew-a','agent',1,'示例：补文档','pending','t')",
+                [],
+            )
+            .unwrap();
+        ok(&mut s, |tx| respond(tx, "w-a1", 1, "认领，今天做"));
+        ok(&mut s, |tx| respond(tx, "cap-a", 1, "好"));
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM todo_responses WHERE todo_id='t1'"), 2);
+        assert_eq!(count(&s, "SELECT ord FROM todo_responses WHERE text='好'"), 1);
+        let status: String = s.conn().query_row("SELECT status FROM todos WHERE id='t1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "pending", "回应不改状态（§9）");
+        assert!(matches!(err(&mut s, |tx| respond(tx, "w-a1", 99, "x")), CollabError::NotFound(_)));
+        assert!(matches!(err(&mut s, |tx| respond(tx, "w-b1", 1, "x")), CollabError::NotFound(_)), "别的机组的 Todo 不归它");
+        assert!(matches!(err(&mut s, |tx| respond(tx, "w-a1", 1, "  ")), CollabError::Invalid(_)));
+    }
+}
+```
+
+（`TodoResponse` 的字段以 M1 的 `crewd_proto::TodoResponse` 为准：`id, session_id, sender_name, text, status, attachments, created_at`。）
+
 （`restart.rs` 的测试 `a_new_restart_replaces_an_unanswered_prompt` 里 `err(&mut s, |tx| get(tx.conn(), a.id))`：`get` 是读函数，借 `tx.conn()` 调用即可。`approvals.rs` / `restart.rs` 的 `use` 里没用到的项按 clippy 删。）
 
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: 57 + prompts 3 + asks 8 + approvals 2 + restart 3 = 73 passed。
+Expected: 58 + prompts 4 + asks 8 + approvals 4 + restart 3 + todos 1 = 78 passed。
 
 - [ ] **Step 6: 全量检查并提交**
 
 ```bash
 ./scripts/check.sh
-git add crates/collab/Cargo.toml crates/collab/src/lib.rs crates/collab/src/asks.rs crates/collab/src/approvals.rs crates/collab/src/restart.rs crates/collab/src/prompts.rs crates/collab/prompts/render.zh.md crates/collab/prompts/render.en.md Cargo.lock
+git add crates/collab/Cargo.toml crates/collab/src/lib.rs crates/collab/src/asks.rs crates/collab/src/approvals.rs crates/collab/src/restart.rs crates/collab/src/todos.rs crates/collab/src/prompts.rs crates/collab/prompts/render.zh.md crates/collab/prompts/render.en.md Cargo.lock
 git diff --cached --stat
-git commit -m "crewd-collab: human asks via the work book (H numbers), approvals ledger, restart prompt; prompt files
+git commit -m "crewd-collab: human asks via the work book (H numbers), non-blocking approvals with one-time grants, restart prompt, agent todo responses; prompt files
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
@@ -6389,9 +6818,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 5–10。
 - Produces：
-  - `render::{MsgLine { seq, at, sender, text, directed_to: Option<Vec<String>>, reply_to: Option<String> }, ChannelBlock { channel_id, kind, name, crew_title, lines }, WakeBody, WakeItem { wake_ids: Vec<i64>, kind, note, body }, WakeBatch { session_id, items, unusable: Vec<(i64, String)> }, blocks_for(conn, session, &[(String, Vec<Message>)]) -> Result<Vec<ChannelBlock>>, injection(Locale, &[ChannelBlock]) -> String, wake_text(Locale, &WakeBatch) -> String, build_batch(conn, session, &[WakeRow]) -> Result<WakeBatch>}`。`WakeBody = Messages(Vec<ChannelBlock>) | Timer | AskAnswered { ask, question, answer, resume_note } | AskDefaulted { ask, question, answer, resume_note } | Restart | System | Checkpoint | StopCheck`。
+  - `render::{MsgLine { seq, at, sender, text, directed_to: Option<Vec<String>>, reply_to: Option<String> }, ChannelBlock { channel_id, kind, name, crew_title, lines }, WakeBody, WakeItem { wake_ids: Vec<i64>, kind, note, body }, WakeBatch { session_id, items, unusable: Vec<(i64, String)> }, blocks_for(conn, session, &[(String, Vec<Message>)]) -> Result<Vec<ChannelBlock>>, injection(Locale, &[ChannelBlock]) -> String, wake_text(Locale, &WakeBatch) -> String, build_batch(conn, session, &[WakeRow]) -> Result<WakeBatch>}`。`WakeBody = Messages(Vec<ChannelBlock>) | Timer | AskAnswered { ask, question, answer, resume_note } | AskDefaulted { ask, question, answer, resume_note } | Approval { tool, summary, allow } | Restart | System | Checkpoint | StopCheck`。
   - `worldview::{WorldCtx { locale, session_id, role, executor, brief, crew_id, crew_title, working_directory, captain_name, parent_titles, child_titles, channels, human_watching }, context_for(conn, session, Locale) -> Result<WorldCtx>, render(&WorldCtx) -> String}`（M3a 的 `render` 返回空串，M3b 实现）。
-  - `turn_trace::{TurnEnd { Nothing, Posted { message_id }, AlreadyCalled }, on_turn_end(tx, session, prompt_id, last_text) -> Result<TurnEnd>}`（M3a 恒返回 `Nothing`，M3b 实现）。
+  - `turn_trace::{TurnEnd { Nothing, Posted { message_id }, AlreadyCalled, Replayed, Unknown }, on_turn_end(tx, session, prompt_id, last_text) -> Result<TurnEnd>}`（M3a 恒返回 `Nothing`，M3b 实现）。
 
 - [ ] **Step 1: 加提示词节（两份都加，节名一致）**
 
@@ -6445,7 +6874,13 @@ crewd
 ## wake.ask_defaulted
 你的问题 {ask} 到时没人回复，按默认方案办：{answer}
 问题：{question}
-到点后的动作照常走权限审批；一旦弹出审批框就停下，转回人。
+到点后的动作照常过审批闸：被闸拒了就先干别的，人同意后会叫你回来重跑。
+
+## wake.approval_allowed
+人同意了你用 {tool}（{summary}）。现在重跑那一次调用会放行——只放行一次。
+
+## wake.approval_denied
+人没有同意你用 {tool}（{summary}）。换个不需要它的办法，或在群里说明为什么需要。
 
 ## wake.resume_note
 你当时留的接续说明：{note}
@@ -6516,7 +6951,13 @@ Answer: {answer}
 ## wake.ask_defaulted
 Nobody answered your question {ask} in time; going with the default: {answer}
 Question: {question}
-Actions after the deadline still go through permission approval; if an approval prompt appears, stop and hand it back to the human.
+Actions after the deadline still pass the approval gate: if a call is denied pending approval, move on; you will be woken to retry once the human allows it.
+
+## wake.approval_allowed
+The human allowed {tool} ({summary}). Retry that call now and it will go through — once.
+
+## wake.approval_denied
+The human did not allow {tool} ({summary}). Find a way that does not need it, or explain in the channel why you need it.
 
 ## wake.resume_note
 Your note on how to continue: {note}
@@ -6555,6 +6996,8 @@ Note: {note}
     ("wake.timer", &[]),
     ("wake.ask_answer", &["ask", "question", "answer"]),
     ("wake.ask_defaulted", &["ask", "question", "answer"]),
+    ("wake.approval_allowed", &["tool", "summary"]),
+    ("wake.approval_denied", &["tool", "summary"]),
     ("wake.resume_note", &["note"]),
     ("wake.restart", &[]),
     ("wake.system", &[]),
@@ -6603,6 +7046,8 @@ pub enum WakeBody {
     Timer,
     AskAnswered { ask: String, question: String, answer: String, resume_note: Option<String> },
     AskDefaulted { ask: String, question: String, answer: String, resume_note: Option<String> },
+    /// 审批有了结果（控制者裁定 C2；队列行 kind = ask_answer、source = `approval:<id>`）。
+    Approval { tool: String, summary: String, allow: bool },
     Restart,
     System,
     Checkpoint,
@@ -6663,6 +7108,7 @@ mod tests {
     fn build_batch_merges_messages_and_resolves_ask_answers() {
         let mut s = store();
         let m1 = say(&mut s, Sender::Session("w-a2".into()), "crew-a/lobby", "第一条", vec![], None);
+        say(&mut s, Sender::Human, "crew-a/lobby", "夹在中间、没叫它的一条", vec![], None);
         let m2 = say(&mut s, Sender::Session("w-a2".into()), "crew-a/lobby", "第二条", vec![], None);
         let a = ok(&mut s, |tx| crate::asks::open(tx, "w-a1", crate::asks::OpenAsk { question: "用哪家？".into(), resume_note: Some("接着接入".into()), ..Default::default() }));
         ok(&mut s, |tx| crate::asks::answer(tx, "crew-a", &a.ask, "用甲"));
@@ -6682,7 +7128,23 @@ mod tests {
         let text = wake_text(Locale::Zh, &batch);
         assert!(text.contains("答复：用甲") && text.contains("接续说明：接着接入"), "{text}");
         assert!(text.contains("第一条") && text.contains("第二条"), "{text}");
+        assert!(text.contains("夹在中间"), "游标之后到批里最大 seq 的可见消息都带上（M3c 推游标不丢消息）：{text}");
         assert_eq!(list(s.conn(), Some("w-a1"), 10).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn approval_decision_wakes_with_retry_once_or_no() {
+        let mut s = store();
+        let a = match ok(&mut s, |tx| crate::approvals::gate(tx, crate::approvals::NewApproval { session_id: "w-a1".into(), tool_name: "computer-use".into(), summary: "点设置".into(), tool_use_id: None })) {
+            crate::approvals::Gate::DenyFiled(a) => a,
+            g => panic!("{g:?}"),
+        };
+        ok(&mut s, |tx| crate::approvals::decide(tx, &a.id, true, "human"));
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        let batch = build_batch(s.conn(), "w-a1", &rows).unwrap();
+        assert!(batch.unusable.is_empty());
+        let text = wake_text(Locale::Zh, &batch);
+        assert!(text.contains("computer-use") && text.contains("只放行一次"), "{text}");
     }
 
     #[test]
@@ -6803,8 +7265,12 @@ pub enum TurnEnd {
     Nothing,
     /// 代发了一条（worker → 大厅 @机长；机长 → 根机组人类群 @人）。
     Posted { message_id: String },
-    /// 这一轮已经 @ 过能答的人，或同一 prompt_id 已代发过。
+    /// 这一轮已经 @ 过能答的人（机长 / 人）。
     AlreadyCalled,
+    /// 同一 prompt_id 已经处理过（hook 重放）。
+    Replayed,
+    /// 不知道这一轮叫没叫过人（从没记过账，如重启后第一轮）：宁可不代发（`SessionTurnTrace.swift:42-43`）。
+    Unknown,
 }
 
 pub fn on_turn_end(_tx: &mut Tx<'_>, _session: &str, _prompt_id: &str, _last_text: &str) -> Result<TurnEnd> {
@@ -6923,6 +7389,10 @@ pub fn wake_text(l: Locale, batch: &WakeBatch) -> String {
                     out.push_str(&fill(f.get("wake.resume_note"), &[("note", n)]));
                 }
             }
+            WakeBody::Approval { tool, summary, allow } => {
+                let key = if *allow { "wake.approval_allowed" } else { "wake.approval_denied" };
+                out.push_str(&fill(f.get(key), &[("tool", tool), ("summary", summary)]));
+            }
             WakeBody::Timer => out.push_str(f.get("wake.timer")),
             WakeBody::Restart => out.push_str(f.get("wake.restart")),
             WakeBody::System => out.push_str(f.get("wake.system")),
@@ -6967,6 +7437,22 @@ pub fn build_batch(conn: &Connection, session: &str, rows: &[WakeRow]) -> Result
                     }
                 }
             }
+            WakeKind::AskAnswer if r.source.starts_with("approval:") => {
+                let id = &r.source["approval:".len()..];
+                match crate::approvals::get(conn, id) {
+                    Ok(a) if a.decision.is_some() => {
+                        let allow = a.decision == Some(crewd_proto::Decision::Allow);
+                        items.push(WakeItem {
+                            wake_ids: vec![r.id],
+                            kind: r.kind,
+                            note: r.note.clone(),
+                            body: WakeBody::Approval { tool: a.tool_name, summary: a.summary, allow },
+                        });
+                    }
+                    Ok(_) => unusable.push((r.id, format!("approval {id} has no decision"))),
+                    Err(e) => unusable.push((r.id, e.to_string())),
+                }
+            }
             WakeKind::AskAnswer => {
                 let parsed = r.source.strip_prefix("ask:").and_then(|s| s.rsplit_once('/'));
                 let Some((crew, ask)) = parsed else {
@@ -7003,6 +7489,24 @@ pub fn build_batch(conn: &Connection, session: &str, rows: &[WakeRow]) -> Result
             }
         }
     }
+    // 每个群带上「它的游标之后、到批里最大 seq 为止」它看得见的全部消息（不止叫它的那几条）：M3c 投递成功后把
+    // 游标推到这个 seq，中间没叫它的消息就随这次唤醒告知过了，不会被越过而丢（M3c 计划 spec 问题 12）。
+    for (ch, v) in msgs.iter_mut() {
+        let min = v.iter().map(|m| m.seq).min().unwrap_or(1);
+        let max = v.iter().map(|m| m.seq).max().unwrap_or(0);
+        let after = cursors::cursor(conn, session, ch)?.unwrap_or(min - 1).min(min - 1);
+        let mut all: Vec<Message> = messages::list(conn, ch, Some(after), Some(max + 1), cursors::UNREAD_CAP)?
+            .into_iter()
+            .filter(|m| m.sender_session_id.as_deref() != Some(session) && cursors::visible_to(m, session))
+            .collect();
+        for q in v.iter() {
+            if !all.iter().any(|m| m.seq == q.seq) {
+                all.push(q.clone());
+            }
+        }
+        all.sort_by_key(|m| m.seq);
+        *v = all;
+    }
     if let Some(i) = msg_slot {
         items[i].body = WakeBody::Messages(blocks_for(conn, session, &msgs)?);
     }
@@ -7015,7 +7519,7 @@ pub fn build_batch(conn: &Connection, session: &str, rows: &[WakeRow]) -> Result
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p crewd-collab`
-Expected: 73 + render 3 + worldview 2 = 78 passed；`prompts::both_languages_have_every_section_with_only_allowed_placeholders` 覆盖新加的 21 节。
+Expected: 78 + render 4 + worldview 2 = 84 passed；`prompts::both_languages_have_every_section_with_only_allowed_placeholders` 覆盖新加的 23 节。
 
 - [ ] **Step 6: 变异：证明「代码里没有文案」那把尺子会红**
 
@@ -7042,12 +7546,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 裁定 2–3、15。`AppState::collab(f)` 是服务层写协作数据的唯一入口：在库线程上 `collab::run`，提交后**仍在库线程上** `hub.emit`（现读数据拼客户端事件 + 原样发 `CollabEvent`）。事件名常量本任务先加进 proto（方法常量在 Task 13）。
 
 **Files:**
-- Create: `crewd/crates/server/src/control.rs`、`crewd/crates/server/src/token.rs`
-- Modify: `crewd/crates/server/Cargo.toml`、`crewd/crates/server/src/lib.rs`、`crewd/crates/server/src/hub.rs`、`crewd/crates/proto/src/lib.rs`（`events` 模块）、`crewd/Cargo.lock`
+- Create: `crewd/crates/server/src/control.rs`、`crewd/crates/server/src/token.rs`、占位 `crewd/crates/server/src/agent/mod.rs` + `agent/runtime.rs`（M3b 接手）、占位 `crewd/crates/server/src/orchestra/mod.rs`（M3c 接手）
+- Modify: `crewd/crates/server/Cargo.toml`（`[features] testkit = []`）、`crewd/crates/server/src/lib.rs`、`crewd/crates/server/src/hub.rs`、`crewd/crates/server/src/conn.rs`（只改可见性）、`crewd/crates/proto/src/lib.rs`（`events` 模块）、`crewd/Cargo.lock`
 
 **Interfaces:**
 - Consumes: Task 1（`Db`）、Task 5–11（collab 全部）。
-- Produces：`crewd_server::hub::{Hub, CollabEvent}`（`Hub::{new, publish, subscribe, subscribe_collab, emit}`）；`AppState { db, hub, sessions: Arc<dyn SessionControl>, tokens: TokenTable }`、`AppState::{new, with_sessions, collab}`；`crewd_server::control::{BoxFuture, SessionControl, StartRequest, Inspection, QuotaReport, QuotaLine, ControlError, NoSessions, FakeSessionControl, FakeCall}`；`crewd_server::token::TokenTable`；`crewd_proto::events::{MESSAGE_APPENDED, CHANNEL_CHANGED, CREW_CHANGED, CREW_REMOVED, BADGE_CHANGED, ASK_CHANGED, APPROVAL_CHANGED, SESSION_CHANGED, RESTART_CHANGED, LAGGED, TOPICS}`。
+- Produces：`crewd_server::hub::{Hub, CollabEvent}`（`Hub::{new, publish, subscribe, subscribe_collab, emit}`）；`AppState { db, hub, sessions: Arc<dyn SessionControl>, tokens: TokenTable, agent: agent::AgentRuntime, orchestra: OnceLock<orchestra::Handle> }`、`AppState::{new, with_sessions, collab}`；feature `testkit`；`pub(crate) mod conn` + `pub(crate) async fn conn::run`；`crewd_server::control::{BoxFuture, SessionControl, StartRequest, Inspection, QuotaReport, QuotaLine, ControlError, NoSessions, FakeSessionControl, FakeCall}`；`crewd_server::token::TokenTable`；`crewd_proto::events::{MESSAGE_APPENDED, CHANNEL_CHANGED, CREW_CHANGED, CREW_REMOVED, BADGE_CHANGED, ASK_CHANGED, APPROVAL_CHANGED, SESSION_CHANGED, RESTART_CHANGED, LAGGED, TOPICS}`。
 
 - [ ] **Step 1: 依赖与 proto 事件常量**
 
@@ -7062,8 +7566,9 @@ cargo add --offline -p crewd-server thiserror
 ```rust
 pub mod events {
     /// `events.subscribe` 接受的主题（= 事件名第一个点之前的部分）；其他一律 -32602。
-    /// `session` 主题的事件由 M3c 发；`wake` 主题由 M3c 加（排障用）。
-    pub const TOPICS: &[&str] = &["message", "channel", "crew", "badge", "ask", "approval", "session", "restart", "whiteboard"];
+    /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
+    /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
+    pub const TOPICS: &[&str] = &["message", "channel", "crew", "badge", "ask", "approval", "session", "restart", "wake", "whiteboard"];
     pub const MESSAGE_APPENDED: &str = "message.appended";
     pub const CHANNEL_CHANGED: &str = "channel.changed";
     pub const CREW_CHANGED: &str = "crew.changed";
@@ -7501,12 +8006,16 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             .into_iter()
             .collect(),
         // 只走内部通道：session.changed（SessionLive）由 M3c 发；入队 / 答复 / 重启答复是给 M3c / M4b 的。
-        Change::SessionChanged { .. } | Change::WakeEnqueued { .. } | Change::AskAnswered { .. } | Change::RestartAnswered { .. } => vec![],
+        Change::SessionChanged { .. }
+        | Change::WakeEnqueued { .. }
+        | Change::AskAnswered { .. }
+        | Change::RestartAnswered { .. }
+        | Change::Progress { .. } => vec![],
     })
 }
 ```
 
-`crates/server/src/lib.rs`：模块加 `pub mod control; pub mod token;`；`AppState` 换成：
+`crates/server/src/lib.rs`：模块加 `pub mod agent; pub mod control; pub mod orchestra; pub mod token;`，`mod conn;` 改 `pub(crate) mod conn;`（`conn.rs` 里 `run` 改 `pub(crate)`；`dispatch::handle` 本来就是 `pub`）——G11：M3b 的测试夹具要从 crate 内起连接循环。`AppState` 换成：
 
 ```rust
 pub struct AppState {
@@ -7514,6 +8023,10 @@ pub struct AppState {
     pub hub: Hub,
     pub sessions: Arc<dyn control::SessionControl>,
     pub tokens: token::TokenTable,
+    /// M3b 的 agent 面运行时（配置、attach 表）。M3a 只放占位，M3b 换掉 `agent/runtime.rs` 的内容（G9）。
+    pub agent: agent::AgentRuntime,
+    /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
+    pub orchestra: std::sync::OnceLock<orchestra::Handle>,
 }
 
 impl AppState {
@@ -7523,6 +8036,8 @@ impl AppState {
             hub: Hub::new(),
             sessions: Arc::new(control::NoSessions),
             tokens: token::TokenTable::default(),
+            agent: agent::AgentRuntime::default(),
+            orchestra: std::sync::OnceLock::new(),
         }
     }
 
@@ -7551,6 +8066,37 @@ impl AppState {
 }
 ```
 
+三个占位文件（之后整目录归 M3b / M3c，M3a 不再碰）：
+
+```rust
+// crates/server/src/agent/mod.rs
+//! agent 面（M3b）。M3a 只放占位，让 `AppState.agent` 有类型；M3b 接手整个目录。
+pub mod runtime;
+pub use runtime::AgentRuntime;
+```
+
+```rust
+// crates/server/src/agent/runtime.rs
+//! 占位：M3b 换成真正的 `AgentRuntime`（必须保留 `Default`，`AppState::new` 用它）。
+#[derive(Debug, Default)]
+pub struct AgentRuntime;
+```
+
+```rust
+// crates/server/src/orchestra/mod.rs
+//! 编排（M3c）。M3a 只放占位，让 `AppState.orchestra` 有类型；M3c 接手整个目录（真 `Handle` 必须是 `Send + Sync`）。
+#[derive(Debug, Clone)]
+pub struct Handle;
+```
+
+`crates/server/Cargo.toml` 加：
+
+```toml
+[features]
+# M3b / M3c 的测试夹具（`FakeSessionControl` 本来就是 pub；夹具模块挂在这个特性下，给 crewd 的集成测试用）。
+testkit = []
+```
+
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p crewd-server`
@@ -7560,7 +8106,7 @@ Expected: 新增 token 1、control 2、lib 1 通过；原有测试照旧。
 
 ```bash
 ./scripts/check.sh
-git add crates/server/Cargo.toml crates/server/src/lib.rs crates/server/src/hub.rs crates/server/src/control.rs crates/server/src/token.rs crates/proto/src/lib.rs Cargo.lock
+git add crates/server/Cargo.toml crates/server/src/lib.rs crates/server/src/hub.rs crates/server/src/conn.rs crates/server/src/control.rs crates/server/src/token.rs crates/server/src/agent/mod.rs crates/server/src/agent/runtime.rs crates/server/src/orchestra/mod.rs crates/proto/src/lib.rs Cargo.lock
 git diff --cached --stat
 git commit -m "crewd-server: AppState::collab with ordered event emission, CollabEvent channel, SessionControl trait with fake, TokenTable
 
@@ -7583,7 +8129,8 @@ spec §22.2 的方法表 + §22.7 拍板加的 `channel.setOwner`、`restart.pen
 | 方法 | params | result |
 |---|---|---|
 | system.hello | — | Hello |
-| crew.list | — | Crew[]（最近有动静在上，带 lastActivityAt） |
+| crew.list | — | Crew[]（按 position，再按 createdAt / id；侧栏同级顺序 = 人排的，C1） |
+| crew.reorder | CrewReorderParams | Crew[]（这一层的新顺序；只有客户端，agent 没有工具） |
 | crew.get | CrewIdParams | CrewDetail |
 | crew.create | CrewCreateParams | Crew |
 | crew.update | CrewUpdateParams | Crew |
@@ -7638,6 +8185,8 @@ params!(CrewUpdateParams {
     #[serde(default)] status_line: Option<String>,
 });
 params!(CrewAdoptParams { crew_id: String, parent_id: String });
+// parentId 缺省 = 顶层（根机组）；crewIds 必须恰好是这一层现有的全部机组（C1）。
+params!(CrewReorderParams { #[serde(default)] parent_id: Option<String>, crew_ids: Vec<String> });
 params!(CrewReleaseParams { crew_id: String, from_parent_id: String, #[serde(default)] to_parent_id: Option<String> });
 params!(ChannelCreateParams {
     crew_id: String,
@@ -7710,6 +8259,7 @@ pub mod methods {
     pub const CREW_CREATE: &str = "crew.create";
     pub const CREW_UPDATE: &str = "crew.update";
     pub const CREW_ADOPT: &str = "crew.adopt";
+    pub const CREW_REORDER: &str = "crew.reorder";
     pub const CREW_RELEASE: &str = "crew.release";
     pub const CREW_DELETE: &str = "crew.delete";
     pub const CHANNEL_LIST: &str = "channel.list";
@@ -7739,7 +8289,7 @@ pub mod methods {
 
     /// 客户端可调的全部方法（契约测试与 `crewd rpc` 端到端都按它逐个核）。
     pub const ALL: &[&str] = &[
-        HELLO, CREW_LIST, CREW_GET, CREW_CREATE, CREW_UPDATE, CREW_ADOPT, CREW_RELEASE, CREW_DELETE,
+        HELLO, CREW_LIST, CREW_GET, CREW_CREATE, CREW_UPDATE, CREW_ADOPT, CREW_REORDER, CREW_RELEASE, CREW_DELETE,
         CHANNEL_LIST, CHANNEL_CREATE, CHANNEL_UPDATE, CHANNEL_ADD_MEMBERS, CHANNEL_REMOVE_MEMBER, CHANNEL_WATCH, CHANNEL_SET_OWNER,
         MESSAGE_LIST, MESSAGE_POST, MESSAGE_SEARCH, READ_MARK, SESSION_LIST, SESSION_GET,
         ASK_LIST, ASK_ANSWER, ASK_WITHDRAW, APPROVAL_LIST, APPROVAL_DECIDE, RESTART_PENDING, RESTART_ANSWER,
@@ -7831,7 +8381,7 @@ fn seed(dir: &Path) {
     crewd_store::schema::backfill_v3(s.conn()).unwrap();
     crewd_collab::run(&mut s, crewd_store::now_ms(), |tx| {
         crewd_collab::asks::open(tx, "w-a1", crewd_collab::asks::OpenAsk { question: "用哪家支付？".into(), ..Default::default() })?;
-        crewd_collab::approvals::request(tx, crewd_collab::approvals::NewApproval { session_id: "w-a1".into(), tool_name: "computer-use".into(), summary: "点击设置".into(), tool_use_id: None })?;
+        crewd_collab::approvals::gate(tx, crewd_collab::approvals::NewApproval { session_id: "w-a1".into(), tool_name: "computer-use".into(), summary: "点击设置".into(), tool_use_id: None })?;
         crewd_collab::restart::open(tx, vec!["w-a1".into()])
     })
     .unwrap();
@@ -8031,7 +8581,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::CREW_LIST => {
             parse_no_params(p)?;
-            read(state, crews::list_by_activity).await
+            read(state, crews::list).await
         }
         methods::CREW_GET => {
             let p: CrewIdParams = parse_params(p)?;
@@ -8055,6 +8605,10 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         methods::CREW_ADOPT => {
             let p: CrewAdoptParams = parse_params(p)?;
             write(state, move |tx| crews::adopt(tx, &p.crew_id, &p.parent_id)).await
+        }
+        methods::CREW_REORDER => {
+            let p: CrewReorderParams = parse_params(p)?;
+            write(state, move |tx| crews::reorder(tx, p.parent_id.as_deref(), &p.crew_ids)).await
         }
         methods::CREW_RELEASE => {
             let p: CrewReleaseParams = parse_params(p)?;
@@ -8175,7 +8729,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
 }
 ```
 
-（`crewd-server` 依赖 `crewd-work` 才能匹配 `Rejected::Forbidden`：`cargo add --offline -p crewd-server --path crates/work`，`Cargo.toml` 与 `Cargo.lock` 一并提交。`read(state, crews::list_by_activity)` 这类直接传函数名的写法若推不出生命周期，换成闭包 `|c| crews::list_by_activity(c)`。）
+（`crewd-server` 依赖 `crewd-work` 才能匹配 `Rejected::Forbidden`：`cargo add --offline -p crewd-server --path crates/work`，`Cargo.toml` 与 `Cargo.lock` 一并提交。`read(state, crews::list)` 这类直接传函数名的写法若推不出生命周期，换成闭包 `|c| crews::list(c)`。）
 
 `crates/server/src/conn.rs` 不用改（它读 `events::TOPICS`）。
 
@@ -8294,6 +8848,7 @@ fn rpc_drives_every_client_method() {
         ("crew.create", r#"{"title":"端到端","workingDirectory":"/tmp/example"}"#, Ok),
         ("crew.update", r#"{"crewId":"local-bbbb","statusLine":"跑端到端"}"#, Ok),
         ("crew.adopt", r#"{"crewId":"local-bbbb","parentId":"local-aaaa"}"#, Ok),
+        ("crew.reorder", r#"{"parentId":"local-aaaa","crewIds":["nope"]}"#, Code(-32602)),
         ("crew.release", r#"{"crewId":"local-bbbb","fromParentId":"local-aaaa","toParentId":"local-aaaa"}"#, Ok),
         ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
         ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
@@ -8408,6 +8963,7 @@ pub fn api_schema() -> Value {
         methods::CREW_CREATE: m(sub::<CrewCreateParams>(g), sub::<Crew>(g)),
         methods::CREW_UPDATE: m(sub::<CrewUpdateParams>(g), sub::<Crew>(g)),
         methods::CREW_ADOPT: m(sub::<CrewAdoptParams>(g), sub::<Crew>(g)),
+        methods::CREW_REORDER: m(sub::<CrewReorderParams>(g), many(sub::<Crew>(g))),
         methods::CREW_RELEASE: m(sub::<CrewReleaseParams>(g), sub::<Crew>(g)),
         methods::CREW_DELETE: m(sub::<CrewIdParams>(g), sub::<Empty>(g)),
         methods::CHANNEL_LIST: m(sub::<CrewIdParams>(g), many(sub::<ChannelSummary>(g))),
@@ -8573,9 +9129,9 @@ spec 末尾追加一节（节号 = 当时 spec 里最大的节号 + 1；标题 `
 
 真实数据只读演练（副本，<日期>）：v2 crewd 导入 → <N> 机组 / <N> session / <N> 消息；M3a 迁移后消息条数与 seq 集合一致（diff 空）；大厅数 = 机组数；session 未读 0、人类红标 0、唤醒 0、外键 0；再开一次各项不变；v3 直接导入同样全 0；认不出的 sender / mention：<列出或「无」>。
 
-与 spec 原文不同 / 补充的决定（理由见计划「裁定」）：CollabEvent 类型放在 collab（裁定 3）；v3 补列 crews.captain_session_id / next_ext、sessions.ext / last_output_at、meta.nextCrewNumber、restart_prompts 表、channels.owner_* / pending_owner_*（裁定 8、§22.7）；wake_latches.scope 改为 edge|session（§22.7 Q5）；ask_answer 的 source 带机组（裁定 13）；SessionControl 多了 resume / handoff_captain（裁定 15）；队列与 session 生命周期的写函数全部在 collab（裁定 16）；ask.answer 的回调点 = Change::AskAnswered（裁定 17）；附件上传未实现（裁定 14）。
+与 spec 原文不同 / 补充的决定（理由见计划「裁定」）：CollabEvent 类型放在 collab（裁定 3）；v3 补列 crews.captain_session_id / next_ext / position、sessions.ext / last_output_at / last_progress_at、approvals.consumed_at、meta.nextCrewNumber、restart_prompts 表、channels.owner_* / pending_owner_*（裁定 8、§22.7）；wake_latches.scope 改为 edge|session（§22.7 Q5）；ask_answer 的 source 带机组（裁定 13）；SessionControl 多了 resume / handoff_captain（裁定 15）；队列与 session 生命周期的写函数全部在 collab（裁定 16）；ask.answer 的回调点 = Change::AskAnswered（裁定 17）；附件上传未实现（裁定 14）；侧栏手动序 crews.position + crew.reorder（C1）；审批不阻塞、一次性放行票 approvals::gate（C2）；产出信号 sessions::note_progress + Change::Progress，发言不算（C3）；补给 M3b / M3c 的口（C6）。
 
-遗留：worldview::render 是空串（M3b 实现；M3 集成验收必须核世界观非空）；默认方案到点的 apply_due_defaults 没有定时调用方（spec 问题 5，M3c 或 M4b 认领）；语言只能手工写 meta.locale；message.search 是全表 instr 扫描（量大再加 FTS）；channels.list_for_crew 有写副作用（懒建人类群）所以走写路径。
+遗留：worldview::render 是空串（M3b 实现；M3 集成验收必须核世界观非空）；默认方案到点的 apply_due_defaults 由 M3c 的定时拍调（控制者裁定 C7，M3a 只提供函数）；语言只能手工写 meta.locale；message.search 是全表 instr 扫描（量大再加 FTS）；channels.list_for_crew 有写副作用（懒建人类群）所以走写路径。
 ```
 
 - [ ] **Step 7: 提交**
@@ -8611,8 +9167,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 | §22.6 给 M4b 的口：work_books 读改写事务、H 号唯一发号处、wakes kind checkpoint / stop_check 与渲染节、resume_failed_at、BlockerCleared 回调点 | 10（`with_book`）、5、11、6、10（`AskAnswered.cleared`） |
 | §22.7 Q1 重启问人 | 10（`restart`）、13 |
 | §22.7 Q2 群主、Jev / 群主兜底、收听 | 7（群主）、9（收听）；叫谁归 M3c |
-| §22.7 Q3 不做私有群 / Q4 删工具与侧栏基础序 | 范围；6（`list_by_activity`）、13 |
-| §22.7 Q5 不设默认上限、两级熔断的数据 | 5（`settings`、`latches`、`origin`、`recent_for`）、6（`note_output`）、8 |
+| §22.7 Q3 不做私有群 / Q4 删工具、侧栏手动排（C1） | 范围；3（`position` 初值）、6（`reorder`）、13（`crew.reorder`） |
+| §22.7 Q5 不设默认上限、两级熔断的数据 | 5（`settings`、`latches`、`origin`、`recent_for`、`Change::Progress`）、6（`note_progress`）、8 |
+| 控制者裁定 C1–C7（手动排序、审批不阻塞 + 放行票、产出信号、M3b / M3c 缺口） | 3、4、5、6、7、10、11、12、13 |
 | §17 「@人类」未注视提示的数据 | 8（`unwatched_human_mention`） |
 
 ## 自查记录

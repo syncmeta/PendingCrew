@@ -23,7 +23,7 @@
 - **测试绝不起真 claude**：helper 的端到端是测试自己照 `mcp.json` / `settings.json` 起 `crewd mcp`、用 `sh -c` 跑 hook 命令（Task 16）；真 claude 只在 `tests/live_agent.rs`（`#[ignore]` + `CREWD_LIVE_CLAUDE=1` 两道闸）。
 - **绝不按名字 / 模式杀进程**（不用 `pkill` / `killall` / `pgrep | xargs kill`）：测试里起的子进程用 `Child` 句柄自己收，`kill_on_drop(true)`；排障时只按 pid 发信号。
 - 仓库公开：测试只用合成数据（`crew-a`、`s-cap`、「示例任务」之类），不读真实数据目录、不读 `~/.claude`。
-- 文件归属（spec §22.5）：M3b 只改 `crates/crewd/src/{mcp_cmd,hook_cmd,agent_client}.rs` 与 `main.rs` 的子命令接线、`crates/server/src/agent/**`、`crates/server/src/conn.rs` 的 agent 路由（Task 7，见「与 spec 的出入」第 4 条）、`crates/server/src/lib.rs` 的 `pub mod agent;` 与 `AppState` 一个字段、`crates/collab/src/{worldview,turn_trace}.rs`、`crates/collab/prompts/{world-model,tools}.{zh,en}.md`、`crates/exec/src/launch.rs`、`crates/proto/src/agent.rs`（新）与 `proto/src/lib.rs` 的 `pub mod agent;` + `api_schema` 一行。**不动** `crates/wake/`、`server/src/orchestra/`、serve 启动那一段、store 的 schema。契约 json（`crewd/schema/crewd-api.schema.json`）由 M3b / M3c 中后合者重新生成，不挑边合并。
+- 文件归属（spec §22.5，与 M3a 计划冻结块末的先后表一致）：M3b 只改 `crates/crewd/src/{mcp_cmd,hook_cmd,agent_client}.rs` 与 `main.rs` 的子命令接线、`crates/server/src/agent/**`（`mod.rs` / `runtime.rs` 是**替换** M3a 的占位）、`crates/server/src/conn.rs` 的 agent 路由（Task 7，见「与 spec 的出入」第 4 条；M3c 不碰 conn.rs）、`crates/server/Cargo.toml` 的 `testkit` 特性那一行、`crates/collab/src/{worldview,turn_trace}.rs`、`crates/collab/prompts/{world-model,tools}.{zh,en}.md`、`crates/exec/src/launch.rs`、`crates/proto/src/agent.rs`（新）与 `proto/src/lib.rs` 的 `pub mod agent;` + `api_schema` 一行。**不动** `crates/server/src/lib.rs`（`AppState.agent` 与 `pub mod agent;` M3a 已建）、`crates/wake/`、`server/src/orchestra/`（唯一例外见本条末尾）、`dispatch.rs`、store 的 schema 与 collab 的其余文件。与 M3c 共享、各改不相交段的：`proto/src/lib.rs`、`crates/crewd/src/main.rs`、`Cargo.toml` / `Cargo.lock`、契约 json——**后合者** rebase 时保留两边、重跑 `cargo add` / 重新生成，不挑边合并。M3c 的 `orchestra/exec_claude.rs::comms_for` 填 `CommsSpec`：M3b 若后合，改那一个函数对上新形状（`token`、`approval_gates`，没有 `approval_wait_secs`）。
 - 给 agent 看的文字（工具描述、参数说明、回执、错误、注入标注、世界观、代发稿）**只**在 md 里；`server/src/agent/**` 与 `collab/src/{worldview,turn_trace}.rs` 的非测试代码里不得出现中日韩字符（Task 3 的扫描测试钉住）。给开发者看的（stderr、RPC 层错误）写英文短句。
 - 时间：`collab` 两个文件不读时钟，`now` 由调用方传；`server::agent` 用 `crate::agent::port::now()` 一处取时钟。
 
@@ -53,14 +53,17 @@
 | 侧栏排序（2026-10-06 追加） | 手动拖拽（`crews.position`），没有任何自动排序 | 不提供排序工具；世界观不提排序 |
 | 协作用群、不开子机组（2026-10-06 追加） | 话题 / 任务协作用机组里的群；子机组只表达组织结构（部门 / 团队） | 世界观「机组与群」一节、`channel_create` / `create_child_crew` / `create_parent_crew` 的描述都这么引导；Task 3 `child_crew_text_steers_collaboration_to_channels`、Task 4 `old_mechanisms_are_gone_and_new_rules_are_present` 钉住 |
 
-## 待人拍板（按推荐默认写，每条都隔离在一处）
+## 控制者裁定（2026-10-06，三份 M3 计划对齐时定，绑定；spec §22.7 有记录）与 M3b 的落点
 
-§22.7 的 Q1–Q5 人已拍板（上表）。写计划时新冒出来、按推荐默认写进去的：
+写计划时的 P1–P4 已全部定下，不再待人拍板：
 
-- **P1 审批是否阻塞**：spec §22.3 写「等结果，最多 30min，到点 deny」，Swift #75 ② 起是「当场拒 + 开人类 Todo + 一次性放行票」。推荐照 spec（阻塞；审批台在客户端，人看得见在等什么）。隔离点：`AgentConfig.approval_wait`（`agent/runtime.rs`）+ `agent/approval.rs` 一个文件；改成不阻塞 = 等待设 0 并补放行票，只动这两处。
-- **P2 hook 超时**：post-tool-use / stop 在 claude 侧 15s、helper 侧 5s 放弃。推荐值来自「一次注入是一次本机 socket 往返」；隔离点：`crewd-exec::launch::QUICK_HOOK_TIMEOUT_SECS` 与 `hook_cmd::QUICK`。
-- **P3 审批闸缺省**：`["computer-use"]`（与 Swift `--gate computer-use` 相同）。隔离点：`AgentConfig::default()`。
-- **P4 跨机组语法糖的发送者**：`contact("7")` / `report_to_parent` / `message_child_crew` 以系统身份 + 署名发（裁定 7），因为 §22.2 规定只有成员能发言。若人要「以本人身份出现在对方大厅」，需要 M3a 放开规则；隔离点：`tools/channels.rs::contact`、`tools/captain.rs` 两个函数里的 `PostSender::System`。
+| 裁定 | M3b 怎么做 |
+|---|---|
+| C2 **审批照 Swift 驾驶舱 #75②，不阻塞**（取代 §22.3 的 30 分钟长轮询；原 P1）：命中闸的 PreToolUse 当场 deny，并给人开一条待确认；人同意 = 一张一次性放行票，同 session 下一次同名工具调用用掉它。理由：人卡住的只能是那一件，绝不能卡住整个 session | `agent/approval.rs` 一次调 M3a 的 `approvals::gate`：`Allow` → 输出 allow；`DenyPending` / `DenyFiled` → 输出 deny（理由文字说「已请人审批，先干别的，人同意后会叫你回来重跑」）。没有等待、没有 `approval_wait`；三种 hook 超时都是 15s；gate matcher 与「连不上 crewd → 命中的 deny」（helper 5s 期限）保留 |
+| C3 环路熔断的「产出」信号 | post-tool-use 处理里调 M3a 的 `sessions::note_progress(tx, me, ProgressKind::ToolCall)`——**除** crewd 自己的工具（`mcp__crew__*`：发消息、读群这类通讯不算产出，回话给叫醒你的人不能让环路续命）；M4b 的工作项工具在自己的 handler 里调 `ProgressKind::WorkItem` |
+| C7 跨机组语法糖 = system 发言 + 正文首行署名（原 P4） | 照裁定 7 不变；M3a 的群规则已写明 |
+| 原 P2 hook 超时（claude 侧 15s、helper 侧 5s）、P3 审批闸缺省 `["computer-use"]` | 工程默认，照写（隔离点：`crewd-exec::launch::QUICK_HOOK_TIMEOUT_SECS`、`hook_cmd::QUICK`、`AgentConfig::default()`） |
+| C6 G 列表 | 全部由 M3a 补齐（见下一节，逐条写了落在哪） |
 
 ## M3a 对齐（取自 M3a 计划的冻结接口块；Task 1 Step 1 对着落地代码核）
 
@@ -68,8 +71,8 @@
 |---|---|---|
 | 库 | `crewd_store::Db::{spawn, call}`（`call` 返回 `crewd_store::Result<T>`）、`crewd_store::{now_ms, meta_get, meta_set}`、`crewd_store::channels::{lobby_id, human_id}` | port、testkit、turn_trace |
 | 写事务 | `AppState::collab(\|tx: &mut Tx\| …) -> collab::Result<T>`（一个事务 + 把 `Change` 发到 Hub） | port 的全部写 |
-| 事件 | `Hub::subscribe_collab() -> Receiver<Change>`；`Change::{SessionChanged, CrewChanged, ApprovalChanged { id }, …}` | 角色变化推送（Task 7）、审批等待（Task 10） |
-| 状态 | `AppState { db, hub, tokens: TokenTable, sessions: Arc<dyn SessionControl>, … }`、`AppState::new(db).with_sessions(s)` | rpc、testkit |
+| 事件 | `Hub::subscribe_collab() -> Receiver<Change>`；`Change::{SessionChanged, CrewChanged, Progress { session_id, kind }, …}` | 角色变化推送（Task 7）；测试里核 `Progress`（Task 9） |
+| 状态 | `AppState { db, hub, tokens: TokenTable, sessions: Arc<dyn SessionControl>, agent: agent::AgentRuntime, orchestra }`、`AppState::new(db).with_sessions(s)`（`agent` 字段 M3a 已占位，`new` 里 `AgentRuntime::default()`；M3b 只换 `agent/runtime.rs` 的内容，不改 `lib.rs`） | rpc、testkit |
 | 令牌 | `TokenTable::{mint, verify, revoke}` | rpc（verify）、testkit（mint） |
 | 会话控制 | `SessionControl::{start(StartRequest) -> Session, stop, nudge, inspect(id, max_lines) -> Inspection, set_profile, handoff_captain(crew, to), quota -> QuotaReport, live -> SessionLive, resume}`、`FakeSessionControl::calls() -> Vec<FakeCall>`、`ControlError` | 机长工具、`get_quota`、`set_session_profile` |
 | 错误码 | `RpcError::{FORBIDDEN = -32003, NOT_FOUND = -32004, CONFLICT = -32009}`、`dispatch::collab_err` | agent RPC |
@@ -78,31 +81,34 @@
 | 消息 | `messages::{post(tx, Sender, NewPost) -> Posted { message, unwatched_human_mention }, list, search, get}`；`message.post` 附件非空一律拒 | post / read / search / 代发 |
 | 游标与可见性 | `cursors::{unread_for(tx, s) -> Vec<(String, Vec<Message>)>, advance}`（**已滤可见性与自己发的**，`visible_to` / `directed_targets` 是 M3a 的） | 注入 |
 | 渲染 | `render::{blocks_for(conn, s, &unread) -> Vec<ChannelBlock>, injection(Locale, &[ChannelBlock]), wake_text, build_batch}`，文字在 `render.{zh,en}.md` | 注入 |
-| 提示词 | `prompts::{parse, PromptFile, fill, placeholders}`，占位符 `{名字}` | text、worldview、turn_trace |
+| 提示词 | `prompts::{parse, PromptFile, fill, placeholders}`，占位符 `{名字}`；`fill` 一遍扫描、值不再展开（G-F，M3a 已改） | text、worldview、turn_trace |
 | 收听 | `listens::{set, clear, channels_of}` | 收听工具 |
 | 机组 | `crews::{get, parents, children, root_of, captain_of, create(NewCrew), update(CrewPatch{policy: Option<Value>, status_line}), adopt, release, set_captain}` | 机长工具、testkit |
-| session | `sessions::{get, list, role_of, display_name, register(NewSession), set_awaiting_question}` | port、turn_trace、testkit |
+| session | `sessions::{get, list, role_of, display_name, register(NewSession), set_awaiting_question, note_progress(tx, s, ProgressKind::ToolCall)}` | port、turn_trace、testkit、注入（C3） |
+| Agent Todo | `todos::respond(tx, session, number, text) -> TodoResponse`（G3） | respond_todo |
 | 通讯录 | `directory::list(conn, query) -> Vec<DirectoryRow { number, kind, name, crew_id, session_id, org_path }>` | directory / contact、分机号 |
 | 人类待确认 | `asks::{open(tx, asker, OpenAsk { question, default: Option<AskDefault { text, after_minutes }>, resume_note }) -> Ask, withdraw(tx, by: &Sender, crew, ask, reason)}` | ask / withdraw_ask |
 | 唤醒 | `wakes::{enqueue, WakeRequest, WakeKind::Timer, WakePriority::System, source::timer}` | schedule_wakeup |
-| 审批 | `approvals::{request(NewApproval) -> Approval, get, decide(tx, id, allow, by)}`（`request` 自己往根机组人类群发 `notice.approval`） | pre-tool-use |
-| 由 M3b 填的 stub | `worldview::{WorldCtx, context_for, render}`、`turn_trace::{TurnEnd, on_turn_end(tx, session, prompt_id, last_text)}` | Task 4、5 |
+| 审批 | `approvals::{NewApproval, gate(tx, NewApproval) -> Gate::{Allow { approval_id }, DenyPending { approval_id }, DenyFiled(Approval)}}`（开新请求时 M3a 自己往根机组人类群发 `notice.approval`；人在客户端 `approval.decide`，同意 = 一次性票 + 叫它回来，C2） | pre-tool-use |
+| 会话控制参数 | `StartRequest { executor: String（必填）, worktree: Option<String>（已存在目录的绝对路径，M3 不建 git worktree）, .. }`（G-S） | start_session |
+| 由 M3b 填的 stub | `worldview::{WorldCtx, context_for, render}`、`turn_trace::{TurnEnd::{Nothing, Posted, AlreadyCalled, Replayed, Unknown}, on_turn_end(tx, session, prompt_id, last_text)}`（G-T） | Task 4、5 |
+| 占位文件 | M3a 建了 `server/src/agent/{mod,runtime}.rs` 的占位：M3b Task 3 / Task 6 **整文件替换**（不是新建） | Task 3、6 |
 
-## M3b 需要、M3a 冻结块里没有的（执行前由控制者确认；缺哪条就先改 M3a）
+## 写计划时列给 M3a 的缺口（控制者裁定 C6：已全部补进 M3a 计划的任务与冻结块）
 
-- **G3 Todo 回应**：Agent 那本 Todo 追加一条回应（`todo_responses` 表在，写函数不在冻结块里）。`respond_todo` 依赖它。
-- **G-F `prompts::fill` 会再展开**：M3a 的 `fill` 是逐个 `replace`，前一个值里的 `{x}` 会被后一个变量再替换（agent / 人写的文字里有花括号就会串）。要改成一遍扫描（Task 3 `fill_does_not_expand_inside_values`、Task 4 `values_with_braces_are_not_expanded` 会先红）。
-- **G-S `StartRequest.worktree: Option<String>` 的取值**：`start_session(isolation: true)` 该传什么（路径？名字？「auto」？）M3a 没定；M3b 先传 `Some("auto")`，由 M3c 定义。`executor` 是必填 `String`：M3b 在 runner 缺省时取机组的 `captain_executor`，再缺省 `"claude"`。
-- **G-T `TurnEnd` 只有三个值**：「同轮重放」「这一轮叫过人」「不知道叫没叫过（重启后第一轮）」都只能报 `AlreadyCalled`。要分开就在 M3a 合并前改枚举。
-- **G9 `AppState` 要留 `agent: AgentRuntime` 字段**（M3a 的 `AppState::new` 构造它的缺省值）。
-- **G11 测试支撑**：`FakeSessionControl` 在非 `cfg(test)` 构建里也可用（`crewd` 的集成测试经 feature `testkit` 用 server 的夹具）；`conn::run` 至少 `pub(crate)`；`dispatch::handle` 可从 crate 内调。
+- **G3 Todo 回应** → M3a Task 10 `todos::respond(tx, session, number, text)`（本机组 Agent 那本，不改状态）。
+- **G-F `prompts::fill` 再展开** → M3a Task 10 改成一遍扫描（M3a 的 `fill_does_not_expand_inside_values` 钉住；本计划 Task 3 / Task 4 的同名测试照样保留）。
+- **G-S `StartRequest` 取值** → `worktree` = 已存在目录的绝对路径（M3 不建 git worktree，M3c 只当目录用）。所以 `start_session` 不收 `isolation`，改收 `workdir?`（已存在的目录），见 Task 15。`executor`：runner 参数 → 发起机长所在机组的 `captain_executor` → `"claude"`。
+- **G-T `TurnEnd`** → 五个值 `Nothing / Posted / AlreadyCalled / Replayed / Unknown`（Task 5 用）。
+- **G9 `AppState.agent`** → M3a 已建字段与 `agent/{mod,runtime}.rs` 占位；M3b 替换这两个文件，不改 `lib.rs`。
+- **G11 测试支撑** → M3a：crewd-server feature `testkit`（空特性）、`FakeSessionControl` 非 `cfg(test)`、`pub(crate) mod conn` + `pub(crate) run`、`dispatch::handle` 是 `pub`。
 
 ## 写计划时定下的裁定（执行时照做，有异议先回报）
 
 1. **helper 哑管道**：`crewd mcp` 每次 `tools/list` 都现问 `agent.tools`、每次 `tools/call` 都转 `agent.call`，不缓存工具表；serve 推 `agent.tools_changed` 时转成 `notifications/tools/list_changed`。serve 掉线后 helper 不重连（crewd 重启时子进程跟着死，token 也只在内存里）：之后每次调用回 `isError` + 一句英文说明。
 2. **token 文件**：`CommsSpec.token` 由 `prepare_claude` 写成 `<launch dir>/agent-token`（0600，随 `LaunchFiles` 删）；helper 命令行只有 `--data-dir D --session S --token-file F`。
 3. **PreToolUse 只给命中审批闸的工具注册**（偏离 §22.3「没命中 → 不输出」的写法，结果相同）：`CommsSpec.approval_gates` 拼成 matcher `(g1|g2)`（正则转义、外面一层括号保证走正则路径、不锚定 = 子串匹配，与 Swift `toolName.contains(gate)` 同义）；空表 = 不注册 PreToolUse。理由：官方文档写明 PreToolUse 超时**不挡**工具调用，所以「连不上 crewd → 命中的 deny」只有在 helper 自己知道「我是因为命中才被叫」时才做得到；顺带省掉每次工具调用一次进程 + socket 往返。serve 收到后再按自己的配置判一次（配置改了就放行不输出）。
-4. **hook 超时写显式**：post-tool-use / stop `timeout: 15`（helper 自己 5s 连不上就放弃）——默认 600 秒会让一个卡住的 crewd 把 claude 每次工具调用都拖 10 分钟；pre-tool-use `timeout = approval_wait_secs + 60`，helper 自己的期限 = `approval_wait_secs + 30`，到期 **deny**（不能让 claude 的超时替我们「放行」）。
+4. **hook 超时写显式**：三种 hook 都是 `timeout: 15`（helper 自己 5s 连不上 / 没回话就放弃）——默认 600 秒会让一个卡住的 crewd 把 claude 每次工具调用都拖 10 分钟。审批不阻塞（C2），pre-tool-use 也是一次本机往返；helper 放弃时对命中闸的调用输出 **deny**（不能让 claude 的超时替我们「放行」）。
 5. **hook 一律 shell 形式**（`sh -c` + 单引号拼词，M2b 已测过），不用文档里的 `args` exec 形式：`args` 是哪个 claude 版本加的没核到，旧版会忽略 `args` 只跑 `command`，静默坏掉。
 6. **注入上限 9,000 字符**（`AgentConfig.inject_cap_chars`）：官方上限 10,000，超了只剩 2,000 预览。超限从最旧的消息开始省略，块头写明「较早 N 条已省略、用 read_channel 看」（Swift #105 ①：有上限就必须自报），被省略的照样推进游标（它们已「告知过」存在）。
 7. **跨机组语法糖用系统发言**：`contact("7")`、`report_to_parent`、`message_child_crew` 发到别的机组大厅——按 §22.2「只有成员能发言」，session 不是对方大厅成员。这里以 `Sender::System` 发、正文第一行是 md 里的「来自 {机组名}（{号码}）{显示名}：」，@ 对方机长；同时在自己机组大厅留一行「已联系 …」（Swift 的跨线留痕）。`7-3` 走 dm（自己是成员，以自己身份发）。
@@ -113,26 +119,28 @@
 12. **角色每次现查**：`agent.tools` 与 `agent.call` 都从库里现取（`sessions.role` 与机组 builtin），不信 attach 时的结果；attach 返回值只给 helper 打日志用。
 13. **`post` 的 `messages[≤6]`**：先整批校验，任何一条不合法整批不发、错误指名第几条；校验过了逐条发，中途落库失败如实报「前 k 条已发」（不假装原子）。
 14. **`change_workdir` 只改库里的工作目录**（预览 / `confirm: true` 两步、目录必须存在、只能动自己这棵子树）；Swift 那套「搬 claude 项目记忆与权限」不在 M3b（遗留 L3）。
-15. **语言**：serve 一个全局 `AgentConfig.locale`（缺省 zh），工具文字、回执、世界观都按它取；`zh` / `en` 两份 md 的节名集合必须一致（测试钉住）。
+15. **语言**：取库里的 `settings::locale`（M3a，缺省 zh；不在 `AgentConfig` 里），工具文字、回执、世界观都按它取；`zh` / `en` 两份 md 的节名集合必须一致（测试钉住）。
 16. **内建总机组**（`crews.builtin`）不列 `ask` / `respond_todo` / `start_session`，调用时再拒一次（`McpServer.swift:565`、`:745-753`、`:985`、`:1129`、`:1617`；spec §22.3 只写了前两个，`start_session` 照 Swift 补上）。
 
 ## 与 spec 的出入（执行时照这里，交付时写进 spec 的交付记录）
 
-1. `CommsSpec` 比 §22.5 多两个字段 `approval_gates`、`approval_wait_secs`（裁定 3、4）。
+1. `CommsSpec` 比 §22.5 多一个字段 `approval_gates`（裁定 3）。
 2. `listen(channel?, minutes?, senders?, off?)` 换成 `channel_listen` / `channel_unlisten`（§22.7 Q2）；新增 `channel_transfer` / `channel_accept`；归档权限 = 群主或机长。
 3. 回合记账（这一轮叫没叫过人、上一轮的 prompt_id）存在 collab 的 `meta` 表（键 `agent.turn.<session>`），不加迁移；M3a 冻结的 `turn_trace::on_turn_end(tx, …)` 在 collab 里实现落库（代发 + `awaiting_question`），M3c 的 codex `TurnEnded` 直接调它；新增 `turn_trace::note_post(tx, session, mentions)` 由 M3b 的工具在发消息后调。
 4. agent RPC 必须按连接记 attach 状态，所以 M3b 要改 `server/src/conn.rs`（§22.5 的文件归属没列它；M3c 不碰 conn.rs，不冲突）。
 5. 可见性（`CrewWhiteboardVisibility.swift:48`）与「发给 X 的」标注用 M3a 的 `cursors::unread_for` / `render::blocks_for`（§22.3 写的「M3b 移植可见性」由 M3a 做掉了，M3b 不另写一份）；M3b 只加注入的总字数上限与「省略了几条」的自报。M3c 给 codex 组 `additionalContext` 时调 `server::agent::inject::prepare / commit`。
-6. Swift 的权限 hook 自 #75 ② 起**不阻塞**（`McpPermissionHook.swift:69-76`：当场拒 + 开人类 Todo + 一次性放行票），§22.3 写的是**阻塞等 30 分钟**。本计划照 spec 做，等待上限放在 `AgentConfig.approval_wait`；这条要人知道（见文末「交付时要回报」）。
+6. 审批照 Swift #75②**不阻塞**（`McpPermissionHook.swift:69-76`：当场拒 + 开待确认 + 一次性放行票；控制者裁定 C2，spec §22.3 已改）。放行票、去重、公告都在 M3a 的 `approvals::gate` 一个事务里，M3b 只把结果翻成 hook 输出。
 7. `post` 暂不收 `attachments`：M3a 的 `message.post` 附件非空一律拒（M3a 计划裁定 14，附件上传不在 M3）。Swift 一直有这个参数，等 M3a 之后支持附件再加回（遗留 L8）。
 8. 机长注入面上的附加物（命名提醒、拆组信号、计划陈旧度、全机组织树、派活策略更新，`HookEmitter.swift:246-311`）不移植：计划板已删（§9），派活策略改由 `read_delegation_policy` 现读；组织树由世界观的 lineage 节 + `directory` 取代（遗留 L1）。
 9. 世界观去掉 Swift 的 `humanRoster` / `sharesBlock` / `tiebreakerBlock` / `captainRunnerBlock` 与入门机组的 SKILL.md 提示（`LocalSessionWorldModel.swift:56-70`）；人类只有一个人，runner 偏好设置 crewd 里还没有（遗留 L2）。
+10. post-tool-use 顺带报产出（控制者裁定 C3）：非 `mcp__crew__*` 的工具调用 → `sessions::note_progress(ToolCall)`；crewd 自己的通讯工具不算。
+11. `start_session` 的 `isolation`（新建 git worktree）换成 `workdir?`（已存在的目录，G-S；遗留 L6）。
 
 ## Review Focus
 
 1. crewd 卡住（库锁死 / serve 不回话）时 claude 的每次工具调用 → 不能被 hook 拖住：post-tool-use / stop 在 5s 内放弃、什么都不输出、exit 0。（Task 9 `hook_gives_up_quickly_when_crewd_hangs`）
 2. 一个 session 攒了几百条未读（离开一晚上）→ 注入块不超过 9,000 字符、块头说清省略了几条、游标照样推到末尾，下一次工具调用不重复注入。（Task 9 `huge_backlog_is_capped_and_announced`）
-3. 人在审批框前一直不答 / crewd 在等待中途停掉 → 命中的工具一定被 deny，不能因为 claude 的 hook 超时被放行。（Task 10 `crewd_gone_during_wait_means_deny`、`unanswered_approval_times_out_to_deny`）
+3. 命中审批闸的调用 → 当场 deny、session 不被卡住，人没答之前重试不往人的账上灌新条目；crewd 在处理中途停掉 → 也是 deny，不能因为 claude 的 hook 超时被放行；人同意只放行下一次同名调用一次。（Task 10 `gated_call_is_denied_at_once…`、`approval_is_a_one_time_grant…`、`crewd_gone_during_wait_means_deny`）
 4. 换机长（M3c 的 `crew.setCaptain`）发生在一个 session 正连着的时候 → 不重启：下一次 `tools/list` 就是新工具表、旧机长调机长工具当场被拒（攻击面是「helper 缓存了角色」）。（Task 7 `role_change_pushes_tools_changed_and_takes_effect_without_restart`）
 5. agent 在消息里贴了带 `{sessionId}`、`{name}` 的文本，或工具参数里有未知字段 → 世界观 / 回执的占位符替换不能被正文里的花括号触发，未知字段整条拒绝并说清是哪个字段（不静默忽略）。（Task 3 `fill_does_not_expand_inside_values`、Task 12 `unknown_argument_is_named`）
 
@@ -196,7 +204,7 @@ crewd/README.md、docs/superpowers/specs/2026-10-05-crewd-backend-and-work-track
 | C `report_to_parent`、`message_child_crew` | :667 / :2014、:676 / :2030 | 发到父 / 子机组大厅 @机长（系统代发 + 署名，裁定 7） |
 | C `adopt_crew`、`release_crew`、`create_parent_crew`、`adopt_parent`、`create_child_crew` | :688 / :2048、:699 / :2059、:711 / :2073、:721 / :2085、:732 / :2096 | DAG 写经 port；新机组的机长经 `SessionControl::start` |
 | 删 | `continue_work` :351 / :768、`confirm_todo_sweep` :459 / :1431、`plan_add` :488 / :1497、`plan_update` :500 / :1525、`plan_list` :518 / :1613 | M4 取代（§9） |
-| 删（§22.7 Q4） | `raise_attention` :534 / :1102、`clear_attention` :545 / :1117、`crew_ordering_signals` :418 / :1834、`arrange_crews` :423 / :1865 | 侧栏排序另起一节 |
+| 删（§22.7 Q4） | `raise_attention` :534 / :1102、`clear_attention` :545 / :1117、`crew_ordering_signals` :418 / :1834、`arrange_crews` :423 / :1865 | 侧栏由人手动排（M3a 的 `crew.reorder`，只有客户端能调） |
 
 hook 对照：`McpHelperMain.swift:5-10`（四种 helper 模式）→ `crewd mcp` + `crewd hook <3 种>`；PostToolUse `HookEmitter.swift:213-262`；PreToolUse `McpPermissionHook.swift:61-129`；Stop `McpTurnHook.swift:31-92` + `SessionTurnTrace.swift:44-222`。
 
@@ -486,10 +494,10 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: M2b 的 `prepare_claude`、`LaunchFiles`、`shell_quote`、`write_private`。
 - Produces:
-  - `pub struct CommsSpec { pub helper: PathBuf, pub data_dir: PathBuf, pub session_id: String, pub token: String, pub hooks: bool, pub approval_gates: Vec<String>, pub approval_wait_secs: u64 }`
-  - `pub const TOKEN_FILE: &str = "agent-token"`、`pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15`、`pub const DEFAULT_APPROVAL_WAIT_SECS: u64 = 1800`
-  - `HelperCommands::mcp_args(&self, token_file: &Path) -> Vec<String>`、`HelperCommands::hook_command(&self, event: HookEvent, token_file: &Path) -> String`（PreToolUse 多带 `--deadline-secs <approval_wait_secs + 30>`）
-  - `HookEvent::timeout_secs(self, comms: &CommsSpec) -> u64`
+  - `pub struct CommsSpec { pub helper: PathBuf, pub data_dir: PathBuf, pub session_id: String, pub token: String, pub hooks: bool, pub approval_gates: Vec<String> }`
+  - `pub const TOKEN_FILE: &str = "agent-token"`、`pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15`
+  - `HelperCommands::mcp_args(&self, token_file: &Path) -> Vec<String>`、`HelperCommands::hook_command(&self, event: HookEvent, token_file: &Path) -> String`
+  - `HookEvent::timeout_secs(self) -> u64`（三种 hook 都是 `QUICK_HOOK_TIMEOUT_SECS`：审批不阻塞，控制者裁定 C2）
   - `pub fn gate_matcher(gates: &[String]) -> Option<String>`
   - `pub fn write_token_file(dir: &Path, token: &str) -> std::io::Result<PathBuf>`（M3c / codex 驱动复用）
 
@@ -506,7 +514,6 @@ M2b 写的是 `--crew --captain --label --structured-post --agent --gate` 一串
             token: "tok-SECRET".to_string(),
             hooks: true,
             approval_gates: vec!["computer-use".to_string()],
-            approval_wait_secs: 1800,
         }
     }
 
@@ -571,13 +578,11 @@ M2b 写的是 `--crew --captain --label --structured-post --agent --gate` 一串
         assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["timeout"], 15);
         let pre = &settings["hooks"]["PreToolUse"][0];
         assert_eq!(pre["matcher"], "(computer-use)");
-        assert_eq!(pre["hooks"][0]["timeout"], 1800 + 60);
+        assert_eq!(pre["hooks"][0]["timeout"], 15, "审批不阻塞（C2）：闸也是一次本机往返");
         assert!(
+            pre["hooks"][0]["command"].as_str().unwrap().contains("'hook' 'pre-tool-use'"),
+            "{}",
             pre["hooks"][0]["command"]
-                .as_str()
-                .unwrap()
-                .ends_with("'--deadline-secs' '1830'"),
-            "helper 的期限早于 claude 的超时"
         );
     }
 
@@ -648,10 +653,9 @@ Expected: 编译失败（`no field token on type CommsSpec`、`cannot find value
 ```rust
 /// 文件名：`<launch dir>/agent-token`。helper 读它做 `agent.attach`。
 pub const TOKEN_FILE: &str = "agent-token";
-/// post-tool-use / stop 的 hook 超时（秒）。官方默认 600 秒：卡住的 crewd 会把每次工具调用拖 10 分钟。
+/// 三种 hook 的超时（秒）。官方默认 600 秒：卡住的 crewd 会把每次工具调用拖 10 分钟。
+/// 审批闸也用它：审批不阻塞（照 Swift 驾驶舱 #75②，控制者裁定 C2），一次 hook 就是一次本机 socket 往返。
 pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15;
-/// serve 等人审批的缺省上限（spec §22.3：最多 30min，到点 deny）。
-pub const DEFAULT_APPROVAL_WAIT_SECS: u64 = 1800;
 
 /// crew 通讯（MCP + hooks）要用的 helper 与身份（spec §22.3「身份」）。
 /// 机组、角色、显示名不在这里：会话中途会变（换机长），由 serve 每次现查。
@@ -669,8 +673,6 @@ pub struct CommsSpec {
     pub hooks: bool,
     /// 要人审批的工具名子串（serve 配置）；空 = 不注册 PreToolUse。
     pub approval_gates: Vec<String>,
-    /// serve 等审批的上限（秒）；PreToolUse 的 hook 超时 = 它 + 60。
-    pub approval_wait_secs: u64,
 }
 
 /// helper 命令行。子命令形状只在这里拼。
@@ -704,13 +706,6 @@ impl HelperCommands<'_> {
             event.subcommand().to_string(),
         ];
         words.extend(self.identity(token_file));
-        if event == HookEvent::PreToolUse {
-            // helper 自己的期限：serve 等审批的上限 + 30s，到点 deny（claude 的超时 = 上限 + 60s，超时会放行）。
-            words.extend([
-                "--deadline-secs".to_string(),
-                (self.0.approval_wait_secs + 30).to_string(),
-            ]);
-        }
         words
             .iter()
             .map(|w| shell_quote(w))
@@ -748,13 +743,10 @@ impl HookEvent {
         }
     }
 
-    /// 显式超时（秒）。PreToolUse 超时**不挡**工具调用（官方 hooks 文档），所以它必须比
-    /// serve 的审批等待长；helper 自己在等待上限 + 30s 时 deny。
-    pub fn timeout_secs(self, comms: &CommsSpec) -> u64 {
-        match self {
-            Self::PreToolUse => comms.approval_wait_secs + 60,
-            Self::PostToolUse | Self::Stop => QUICK_HOOK_TIMEOUT_SECS,
-        }
+    /// 显式超时（秒）。PreToolUse 超时**不挡**工具调用（官方 hooks 文档），所以 helper 自己的期限
+    /// （`hook_cmd::QUICK` = 5s）必须短于它：helper 到期 / 连不上 crewd 时对命中闸的调用输出 deny。
+    pub fn timeout_secs(self) -> u64 {
+        QUICK_HOOK_TIMEOUT_SECS
     }
 }
 
@@ -815,7 +807,7 @@ pub fn write_token_file(dir: &Path, token: &str) -> std::io::Result<PathBuf> {
                     json!([{
                         "type": "command",
                         "command": helper.hook_command(e, &token_file),
-                        "timeout": e.timeout_secs(comms),
+                        "timeout": e.timeout_secs(),
                     }]),
                 );
                 hooks.insert(
@@ -845,7 +837,7 @@ Expected: 全过（M2b 原有 10 条，删 2 加 6：`launch` 下 14 条）。
 grep -rn "mcp_args_for\|crew_id: \|structured_post\|captain: " crates/exec/src crates/exec/tests crates/crewd/src | grep -v "^crates/exec/src/launch.rs"
 ```
 
-每处 `HelperCommands(c).mcp_args_for("codex")` 改成：先 `let token_file = crate::launch::write_token_file(<该会话的启动目录>, &c.token)?;`，再 `HelperCommands(c).mcp_args(&token_file)`；codex 驱动没有现成的启动目录就照 `prepare_claude` 建 `runtime_dir.join(format!("codex-{key}"))`（0700，`LaunchFiles` 管删除），`key` 用 crewd session id。删掉 `mcp_args_for`（不留转发：无兼容垫片）。测试里的 `CommsSpec { crew_id, captain, structured_post, label, .. }` 字面量按新字段改（`token: "t".into(), approval_gates: vec![], approval_wait_secs: 0`）。grep 没输出 = M2c 还没合，跳过本步，并在提交信息里写「M2c 未合，codex 调用点留给后合者」。
+每处 `HelperCommands(c).mcp_args_for("codex")` 改成：先 `let token_file = crate::launch::write_token_file(<该会话的启动目录>, &c.token)?;`，再 `HelperCommands(c).mcp_args(&token_file)`；codex 驱动没有现成的启动目录就照 `prepare_claude` 建 `runtime_dir.join(format!("codex-{key}"))`（0700，`LaunchFiles` 管删除），`key` 用 crewd session id。删掉 `mcp_args_for`（不留转发：无兼容垫片）。测试里的 `CommsSpec { crew_id, captain, structured_post, label, .. }` 字面量按新字段改（`token: "t".into(), approval_gates: vec![]`）。grep 没输出 = M2c 还没合，跳过本步，并在提交信息里写「M2c 未合，codex 调用点留给后合者」。
 
 - [ ] **Step 7: 全量检查并提交**
 
@@ -864,8 +856,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Files:**
 - Create: `crewd/crates/collab/prompts/tools.zh.md`、`crewd/crates/collab/prompts/tools.en.md`
 - Modify: `crewd/crates/collab/src/worldview.rs`（加 `tools_file`：tools md 在整个 workspace 里唯一的加载处，collab 的 `turn_trace` 与 server 的 `agent::text` 共用；`render` / `WorldCtx` 留到 Task 4）
-- Create: `crewd/crates/server/src/agent/mod.rs`、`agent/text.rs`、`agent/catalog.rs`、`agent/literals.rs`
-- Modify: `crewd/crates/server/src/lib.rs`（`pub mod agent;`）、`crewd/crates/server/Cargo.toml`（`crewd-collab` 依赖，M3a 已加就跳过）
+- Create: `agent/text.rs`、`agent/catalog.rs`、`agent/literals.rs`
+- Modify: `crewd/crates/server/src/agent/mod.rs`（**整文件替换 M3a 的占位**；`lib.rs` 的 `pub mod agent;` 与 `AppState.agent` M3a 已有，本计划不改 `lib.rs`）、`crewd/crates/server/Cargo.toml`（`crewd-collab` 依赖，M3a 已加就跳过）
 
 **Interfaces:**
 - Consumes: Task 1 `crewd_proto::agent::ToolDef`；M3a `crewd_proto::Role`、`crewd_collab::Locale`、`crewd_collab::prompts::{parse, PromptFile, fill, placeholders}`（占位符语法是 M3a 定的 `{名字}`）。
@@ -1208,18 +1200,19 @@ pub fn tools_file(l: crate::Locale) -> &'static PromptFile {
 
 - [ ] **Step 4: 写 `agent/mod.rs`、`text.rs`、`catalog.rs`**
 
-`crates/server/src/lib.rs` 模块声明区加 `pub mod agent;`。
-
-`crates/server/src/agent/mod.rs`：
+`crates/server/src/agent/mod.rs`（整文件替换 M3a 的占位；`runtime` 两行必须留着——`AppState.agent` 的类型在那里，Task 6 才换掉 `runtime.rs` 的内容）：
 
 ```rust
 //! agent 面（spec §22.3）：`crewd mcp` / `crewd hook` 在 serve 里的另一半。
 //! 给 agent 看的文字全在 `crates/collab/prompts/{tools,world-model}.*.md`；本模块的非测试代码里
 //! 不写中文字面量（`literals` 测试钉住），给开发者看的错误写英文短句。
 pub mod catalog;
+pub mod runtime;
 pub mod text;
 
 mod literals;
+
+pub use runtime::AgentRuntime;
 
 pub use crewd_proto::Role;
 
@@ -1394,7 +1387,7 @@ pub const CATALOG: &[ToolSpec] = &[
         p("brief", Str, true),
         p("title", Str, false),
         c("runner", false, RUNNERS),
-        p("isolation", Bool, true),
+        p("workdir", Str, false),
         p("model", Str, false),
         p("effort", Str, false),
     ])),
@@ -1766,8 +1759,8 @@ true = 真执行；不填 = 只看预览。
 ## start_session.runner
 claude 或 codex；不填 = 机组默认。
 
-## start_session.isolation
-必填。false = 用机组共享目录；true = 新建独立 worktree。每次都要判断。
+## start_session.workdir
+可选。已存在目录的绝对路径，作它的工作目录（比如你事先建好的 git worktree）；不填 = 机组工作目录。crewd 不替你建 worktree。
 
 ## start_session.model
 可选模型。
@@ -2160,8 +2153,8 @@ At most 18 characters, no project name; the worker's display name.
 ## start_session.runner
 claude or codex; omitted = crew default.
 
-## start_session.isolation
-Required. false = the crew's shared directory; true = a new worktree. Decide every time.
+## start_session.workdir
+Optional. Absolute path of an existing directory to use as its working directory (e.g. a git worktree you prepared); omitted = the crew's working directory. crewd does not create worktrees for you.
 
 ## start_session.model
 Optional model.
@@ -2314,7 +2307,7 @@ Expected：catalog 6 + text 4 + literals 3 = `13 passed`。`fill_does_not_expand
 ./scripts/check.sh
 git add crates/collab/prompts/tools.zh.md crates/collab/prompts/tools.en.md crates/collab/src/worldview.rs \
   crates/server/src/agent/mod.rs crates/server/src/agent/text.rs crates/server/src/agent/catalog.rs \
-  crates/server/src/agent/literals.rs crates/server/src/lib.rs
+  crates/server/src/agent/literals.rs
 git diff --cached --stat
 git commit -m "crewd-server: agent tool catalog with md-only tool text, locale parity and literal scanner
 
@@ -2696,7 +2689,7 @@ session 世界观（spec §17、§22.3、§22.7）。由 collab::worldview::rend
 
 你跑在 runner 自己的自动权限下（claude 是 auto mode，codex 是 auto_review，都不是 bypass）。常规、可逆的操作自己做，不用逐个请示。
 
-**界面自动化必须先问人**：驱动图形界面、模拟点击或键入、请求屏幕录制或辅助功能权限、为了验证而起会开窗口的程序，都不许自己悄悄跑；先说清要干什么、为什么非它不可，等人点头。某些工具配置了审批：调用时会停下来等人在界面上批准，批不批以人为准。
+**界面自动化必须先问人**：驱动图形界面、模拟点击或键入、请求屏幕录制或辅助功能权限、为了验证而起会开窗口的程序，都不许自己悄悄跑；先说清要干什么、为什么非它不可，等人点头。某些工具配置了审批：第一次调用会被当场拒绝、并替你请人审批——别等，先去干不需要它的活；人同意后会叫你回来，那时重跑同一个调用会放行一次。批不批以人为准。
 
 自己解决不了、真要人拍板时，用 **ask**：
 
@@ -2849,7 +2842,7 @@ Every crew and session on this machine has a short number: crews are integers (7
 
 You run under your runner's own automatic permissions (claude: auto mode, codex: auto_review; neither is bypass). Do routine, reversible things yourself without asking.
 
-**GUI automation requires asking first**: driving the graphical interface, simulating clicks or typing, requesting screen recording or accessibility permissions, or launching windowed programs to verify something must never be done silently; say what and why, and wait for the human's yes. Some tools are configured to require approval: calling them pauses until the human approves in the app.
+**GUI automation requires asking first**: driving the graphical interface, simulating clicks or typing, requesting screen recording or accessibility permissions, or launching windowed programs to verify something must never be done silently; say what and why, and wait for the human's yes. Some tools are configured to require approval: the first call is denied on the spot and an approval request is filed for you — do not wait; move on to work that does not need it. You will be woken once the human allows it, and retrying that same call then goes through once.
 
 When you genuinely need the human to decide, use **ask**:
 
@@ -3049,7 +3042,7 @@ mod tests {
         assert!(text.contains("要不要接着做 B？") && text.contains("名字-w-a1"), "{text}");
         assert!(mentions.contains("captain"), "{mentions}");
         assert_eq!(awaiting(&s, "w-a1").as_deref(), Some("要不要接着做 B？"));
-        assert_eq!(turn(&mut s, "w-a1", "p1", "A 做完了。要不要接着做 B？"), TurnEnd::AlreadyCalled, "同一 prompt_id 只一次");
+        assert_eq!(turn(&mut s, "w-a1", "p1", "A 做完了。要不要接着做 B？"), TurnEnd::Replayed, "同一 prompt_id 只一次");
         assert_eq!(count_in(&s, &lobby), before + 1);
     }
 
@@ -3069,7 +3062,7 @@ mod tests {
     #[test]
     fn unknown_memo_or_calling_out_means_no_relay() {
         let mut s = store();
-        assert_eq!(turn(&mut s, "w-a1", "p1", "要不要做 B？"), TurnEnd::AlreadyCalled, "从没记过账：宁可不发");
+        assert_eq!(turn(&mut s, "w-a1", "p1", "要不要做 B？"), TurnEnd::Unknown, "从没记过账：宁可不发");
         assert_eq!(awaiting(&s, "w-a1").as_deref(), Some("要不要做 B？"), "但标红照写");
         crate::run(&mut s, 1_790_000_000_000, |tx| {
             note_post(tx, "w-a1", &[Mention { kind: MentionKind::Captain, target_id: None }])
@@ -3229,7 +3222,7 @@ pub fn on_turn_end(tx: &mut Tx<'_>, session: &str, prompt_id: &str, last_text: &
     sessions::set_awaiting_question(tx, session, question.clone())?;
     let mut memo = load(tx, session)?;
     if !prompt_id.is_empty() && memo.last_prompt_id.as_deref() == Some(prompt_id) {
-        return Ok(TurnEnd::AlreadyCalled);
+        return Ok(TurnEnd::Replayed);
     }
     let called = memo.called_out;
     if !prompt_id.is_empty() {
@@ -3238,8 +3231,10 @@ pub fn on_turn_end(tx: &mut Tx<'_>, session: &str, prompt_id: &str, last_text: &
     memo.called_out = CallOut::No;
     save(tx, session, &memo)?;
     let Some(question) = question else { return Ok(TurnEnd::Nothing) };
-    if called != CallOut::No {
-        return Ok(TurnEnd::AlreadyCalled);
+    match called {
+        CallOut::No => {}
+        CallOut::Yes => return Ok(TurnEnd::AlreadyCalled),
+        CallOut::Unknown => return Ok(TurnEnd::Unknown),
     }
     let conn = tx.conn();
     let s = sessions::get(conn, session)?;
@@ -3270,7 +3265,7 @@ pub fn on_turn_end(tx: &mut Tx<'_>, session: &str, prompt_id: &str, last_text: &
 }
 ```
 
-（`TurnEnd::AlreadyCalled` 同时用于「同轮重放」「这一轮叫过人」「不知道叫没叫过」三种不代发的情况——M3a 冻结的枚举只有三个值；要分开就在 M3a 合并前改枚举，回报控制者，不在 M3b 里加第四个。）
+（三种不代发的情况各有一个值：`Replayed`（同一 prompt_id 重放）、`AlreadyCalled`（这一轮叫过人）、`Unknown`（从没记过账，重启后第一轮）——M3a 冻结的枚举已按 G-T 补成五个值。）
 
 - [ ] **Step 4: md 加节**
 
@@ -3331,8 +3326,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 ### Task 6: 与 M3a 的唯一接口（`agent::port`）+ 运行时配置 + 测试夹具
 
 **Files:**
-- Create: `crewd/crates/server/src/agent/port.rs`、`agent/runtime.rs`、`agent/testkit.rs`
-- Modify: `crewd/crates/server/src/agent/mod.rs`（`pub mod port; pub mod runtime; #[cfg(any(test, feature = "testkit"))] pub mod testkit;`）、`crewd/crates/server/src/lib.rs`（`AppState` 加 `pub agent: agent::AgentRuntime`，`AppState::new` 里 `agent: Default::default()`——见 G9）、`crewd/crates/server/Cargo.toml`（feature `testkit`）
+- Create: `crewd/crates/server/src/agent/port.rs`、`agent/testkit.rs`
+- Modify: `crewd/crates/server/src/agent/runtime.rs`（**整文件替换 M3a 的占位**；`AgentRuntime` 必须保留 `Default`，M3a 的 `AppState::new` 用它——G9）、`crewd/crates/server/src/agent/mod.rs`（`pub mod port; #[cfg(any(test, feature = "testkit"))] pub mod testkit;`）、`crewd/crates/server/Cargo.toml`（把 M3a 的 `testkit = []` 扩成 `["dep:tempfile"]`）。**不改 `lib.rs`**（`AppState.agent`、`pub(crate) mod conn` 都是 M3a 的，G9 / G11）
 
 **Interfaces:**
 - Consumes: M3a 冻结接口（见「M3a 对齐」）；Task 3 `Identity` / `Role`。
@@ -3359,7 +3354,7 @@ pub enum NumberTarget { Crew(String), Session { crew_id: String, session_id: Str
 pub struct DirEntry { pub number: String, pub name: String, pub crew_title: String, pub detail: String }
 pub struct CrewPatch { pub title: Option<String>, pub working_directory: Option<String>, pub status_line: Option<String>, pub policy: Option<String> }
 pub struct StartReq { pub crew_id, pub role: Role, pub executor: Option<String>, pub brief: String, pub title: Option<String>,
-                      pub model: Option<String>, pub effort: Option<String>, pub worktree: bool }
+                      pub model: Option<String>, pub effort: Option<String>, pub worktree: Option<String> /* 已存在目录的绝对路径（G-S） */ }
 pub struct Posted { pub message: Message, pub unwatched_human_mention: bool }
 
 // 身份 / 设置 / 事件
@@ -3411,9 +3406,8 @@ async fn withdraw_ask(st, by: &Identity, ask, reason) -> PortResult<()>
 async fn respond_todo(st, by: &Identity, number: i64, text) -> PortResult<()>                // G3
 async fn schedule_timer(st, session, not_before_ms: i64, note) -> PortResult<()>
 // 审批
-async fn create_approval(st, by: &Identity, tool_name, summary, tool_use_id: Option<String>) -> PortResult<String>
-async fn approval_decision(st, id) -> PortResult<Option<bool>>
-async fn decide_approval(st, id, allow: bool, by: &str) -> PortResult<()>
+async fn gate_approval(st, by: &Identity, tool_name, summary, tool_use_id: Option<String>) -> PortResult<crewd_collab::approvals::Gate>   // C2：一次调用，不等
+async fn note_progress(st, session) -> PortResult<()>                       // C3：sessions::note_progress(.., ProgressKind::ToolCall)
 // 会话控制（SessionControl）
 async fn start_session(st, StartReq) -> PortResult<String>                  // executor 缺省 = 机组 captain_executor，再缺省 "claude"
 async fn stop_session(st, session, reason) -> PortResult<()>
@@ -3424,7 +3418,7 @@ async fn quota(st) -> PortResult<String>
 async fn live_state(st, session) -> PortResult<String>
 async fn handoff_captain(st, crew, session) -> PortResult<()>               // SessionControl::handoff_captain
 // agent::runtime
-pub struct AgentConfig { pub approval_gates: Vec<String>, pub approval_wait: Duration, pub inject_cap_chars: usize }
+pub struct AgentConfig { pub approval_gates: Vec<String>, pub inject_cap_chars: usize }
 pub struct AgentRuntime { pub config: AgentConfig }
 // agent::testkit（feature testkit 或 cfg(test)）
 pub struct Fixture { pub state: Arc<AppState>, pub crew: String, pub captain: String, pub worker: String, .. }
@@ -3448,7 +3442,7 @@ impl Fixture {
 
 - [ ] **Step 1: 加 feature**
 
-`crates/server/Cargo.toml`：
+`crates/server/Cargo.toml`（M3a 已有 `[features] testkit = []`，改这一行）：
 
 ```toml
 [features]
@@ -3527,15 +3521,13 @@ Expected: 编译失败（`unresolved import crate::agent::testkit`）。
 - [ ] **Step 4: 写 `runtime.rs`**
 
 ```rust
-//! serve 里 agent 面的配置（serve 启动段由 M3c 填；缺省值见 Default）。
-use std::time::Duration;
+//! serve 里 agent 面的配置（serve 启动段由 M3c 填；缺省值见 Default）。整文件替换 M3a 的占位。
 
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
     /// 要人审批的工具名子串（也写进每个 claude 的 PreToolUse matcher，见 crewd-exec `gate_matcher`）。
+    /// 审批不阻塞（控制者裁定 C2），所以没有等待上限。
     pub approval_gates: Vec<String>,
-    /// 等人审批的上限；到点 deny（spec §22.3）。
-    pub approval_wait: Duration,
     /// 一次注入的字符上限（官方 additionalContext 上限 10,000，留余量）。
     pub inject_cap_chars: usize,
 }
@@ -3544,7 +3536,6 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             approval_gates: vec!["computer-use".to_string()],
-            approval_wait: Duration::from_secs(crewd_exec::launch::DEFAULT_APPROVAL_WAIT_SECS),
             inject_cap_chars: 9_000,
         }
     }
@@ -3793,8 +3784,8 @@ pub async fn start_session(st: &AppState, r: StartReq) -> PortResult<String> {
         title: r.title,
         model: r.model,
         effort: r.effort,
-        // <M3a / M3c>：worktree 的取值约定（见 G-S）；isolation=true 先传 "auto"。
-        worktree: r.worktree.then(|| "auto".to_string()),
+        // G-S：已存在目录的绝对路径（M3 不建 git worktree）；None = 机组工作目录。
+        worktree: r.worktree,
     };
     Ok(st.sessions.start(req).await?.id)
 }
@@ -3820,9 +3811,10 @@ pub async fn start_session(st: &AppState, r: StartReq) -> PortResult<String> {
 | `directory` / `resolve_number` | `directory::list(conn, query)` → `DirEntry { number, name, crew_title: crews::get(crew_id).title, detail: org_path }`；`resolve_number` 在全表里找 `number == arg` | |
 | `open_ask` | `asks::open(tx, &by.session_id, OpenAsk { question, default: fallback.map(|(text, minutes)| AskDefault { text, after_minutes: minutes }), resume_note })` → `Ask.ask` | |
 | `withdraw_ask` | `asks::withdraw(tx, &Sender::Session(by), &by.crew_id, ask, reason)` | |
-| `respond_todo` | **G3：M3a 冻结接口里没有**（`todo_responses` 表在，写函数不在） | |
+| `respond_todo` | `todos::respond(tx, &by.session_id, number, text)`（G3，M3a Task 10） | NotFound → `Refused` |
 | `schedule_timer` | `wakes::enqueue(tx, WakeRequest { session, kind: WakeKind::Timer, source: wakes::source::timer(&uuid_v4), priority: WakePriority::System, not_before_ms, note: Some(note), origin: None })` | `origin` 的类型按 M3a |
-| `create_approval` / `approval_decision` / `decide_approval` | `approvals::request(tx, NewApproval { session_id, tool_name, summary, tool_use_id })` / `approvals::get(conn, id).decision` / `approvals::decide(tx, id, allow, by)` | `request` 自己发人类群通知 |
+| `gate_approval` | `approvals::gate(tx, NewApproval { session_id, tool_name, summary, tool_use_id })` | 一个事务：用票 / 只拒 / 开新请求（开新请求时 M3a 自己发人类群通知）；人的决定走客户端 `approval.decide`，M3b 不调 `decide` |
+| `note_progress` | `sessions::note_progress(tx, session, ProgressKind::ToolCall)` | C3 |
 | `stop_session` / `nudge` / `inspect` / `set_profile` / `quota` / `live_state` / `handoff_captain` | `st.sessions.stop(..)` / `.nudge(..)` / `.inspect(id, 40)` / `.set_profile(..)` / `.quota()` / `.live(id)` / `.handoff_captain(crew, to)` | `inspect` / `quota` / `live_state` 把结构渲染成 `key: value` 行（英文 key，不写中文） |
 
 - [ ] **Step 6: 写 `testkit.rs`**
@@ -3993,18 +3985,17 @@ impl Fixture {
 }
 ```
 
-`agent/mod.rs` 加：
+`agent/mod.rs` 加（`pub mod runtime;` Task 3 已有）：
 
 ```rust
 pub mod port;
-pub mod runtime;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
-pub use runtime::{AgentConfig, AgentRuntime};
+pub use runtime::AgentConfig;
 ```
 
-`lib.rs`：`AppState` 加字段 `pub agent: agent::AgentRuntime,`，`AppState::new` 里 `agent: agent::AgentRuntime::default(),`（G9）；`conn` 模块若还是私有，改成 `pub(crate) mod conn;`（testkit 要调 `conn::run`）。
+`lib.rs` 不改：`AppState.agent`（`AgentRuntime::default()`）与 `pub(crate) mod conn` / `pub(crate) run` 都由 M3a 建好（G9 / G11）。
 
 - [ ] **Step 7: 跑通**
 
@@ -4016,7 +4007,7 @@ Expected: `4 passed`。红了先看是哪一处 M3a 名字 / 行为与冻结块�
 ```bash
 ./scripts/check.sh
 git add crates/server/src/agent/port.rs crates/server/src/agent/runtime.rs crates/server/src/agent/testkit.rs \
-  crates/server/src/agent/mod.rs crates/server/src/lib.rs crates/server/Cargo.toml Cargo.lock
+  crates/server/src/agent/mod.rs crates/server/Cargo.toml Cargo.lock
 git diff --cached --stat
 git commit -m "crewd-server: agent port (single seam to M3a), runtime config, test fixture
 
@@ -4545,11 +4536,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Modify: `crewd/crates/crewd/src/main.rs`（两个子命令）、`crewd/crates/crewd/Cargo.toml`、`crewd/Cargo.lock`
 
 **Interfaces:**
-- Consumes: Task 1 `crewd_proto::agent::*`；Task 2 的命令行形状（`mcp|hook <event> --data-dir D --session S --token-file F [--deadline-secs N]`；`--data-dir` 是 `Cli` 已有的全局参数）。
+- Consumes: Task 1 `crewd_proto::agent::*`；Task 2 的命令行形状（`mcp|hook <event> --data-dir D --session S --token-file F`；`--data-dir` 是 `Cli` 已有的全局参数）。
 - Produces:
   - `agent_client::AgentClient::{connect(data_dir: &Path, session: &str, token_file: &Path) -> anyhow::Result<(AgentClient, AttachResult)>, call::<T>(&self, method: &str, params: Value) -> anyhow::Result<T>, take_events(&self) -> Option<mpsc::UnboundedReceiver<Event>>}`
   - `crewd mcp`：stdio MCP server；`tools/list` → `agent.tools`；`tools/call` → `agent.call`；`agent.tools_changed` → `notifications/tools/list_changed`
-  - `crewd hook <post-tool-use|pre-tool-use|stop>`：stdin JSON → `agent.hook` → 把 `stdout` 原样打印；**永远 exit 0**；post-tool-use / stop 总期限 5s，失败什么都不打；pre-tool-use 失败或到 `--deadline-secs` → 打印 deny
+  - `crewd hook <post-tool-use|pre-tool-use|stop>`：stdin JSON → `agent.hook` → 把 `stdout` 原样打印；**永远 exit 0**；三种 hook 总期限都是 5s（审批不阻塞，C2）；post-tool-use / stop 失败什么都不打；pre-tool-use 失败或到期 → 打印 deny
 
 - [ ] **Step 1: 加依赖**
 
@@ -4801,7 +4792,7 @@ async fn hook_prints_serve_stdout_verbatim() {
     assert_eq!(out.trim_end(), "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"示例未读\"}}");
     let (out, _, _) = run_hook(f.data_dir(), "stop", &[], &f.token_file(), "{}").await;
     assert_eq!(out, "", "serve 没给 stdout 就什么都不打");
-    let (out, _, _) = run_hook(f.data_dir(), "pre-tool-use", &["--deadline-secs", "5"], &f.token_file(), "{\"tool_name\":\"mcp__computer-use__click\"}").await;
+    let (out, _, _) = run_hook(f.data_dir(), "pre-tool-use", &[], &f.token_file(), "{\"tool_name\":\"mcp__computer-use__click\"}").await;
     assert_eq!(out.trim_end(), "{\"echo\":\"mcp__computer-use__click\"}");
 }
 
@@ -4816,7 +4807,7 @@ async fn hook_without_crewd_is_silent_except_pre_tool_use_which_denies() {
         assert!(!err.is_empty(), "{ev}: 失败要写 stderr");
         assert!(took < Duration::from_secs(6), "{ev}: {took:?}");
     }
-    let (out, _, _) = run_hook(empty.path(), "pre-tool-use", &["--deadline-secs", "5"], &tf, "{\"tool_name\":\"x\"}").await;
+    let (out, _, _) = run_hook(empty.path(), "pre-tool-use", &[], &tf, "{\"tool_name\":\"x\"}").await;
     let v: Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
@@ -4829,9 +4820,9 @@ async fn hook_gives_up_quickly_when_crewd_hangs() {
     let (out, _, took) = run_hook(f.data_dir(), "post-tool-use", &[], &f.token_file(), "{}").await;
     assert_eq!(out, "");
     assert!(took < Duration::from_secs(7), "{took:?}");
-    let (out, _, took) = run_hook(f.data_dir(), "pre-tool-use", &["--deadline-secs", "1"], &f.token_file(), "{}").await;
-    assert!(out.contains("\"deny\""), "到 helper 自己的期限就 deny：{out}");
-    assert!(took < Duration::from_secs(5), "{took:?}");
+    let (out, _, took) = run_hook(f.data_dir(), "pre-tool-use", &[], &f.token_file(), "{}").await;
+    assert!(out.contains("\"deny\""), "到 helper 自己的期限（5s）就 deny：{out}");
+    assert!(took < Duration::from_secs(7), "{took:?}");
 }
 
 #[tokio::test]
@@ -4840,7 +4831,7 @@ async fn bad_stdin_or_unknown_event_never_prints_garbage() {
     let (out, err, _) = run_hook(f.data_dir(), "post-tool-use", &[], &f.token_file(), "not json").await;
     assert_eq!(out, "");
     assert!(!err.is_empty());
-    let (out, _, _) = run_hook(f.data_dir(), "pre-tool-use", &["--deadline-secs", "5"], &f.token_file(), "not json").await;
+    let (out, _, _) = run_hook(f.data_dir(), "pre-tool-use", &[], &f.token_file(), "not json").await;
     assert!(out.contains("\"deny\""), "看不懂的 PreToolUse 输入：保守 deny");
     let (out, err, _) = run_hook(f.data_dir(), "user-prompt-submit", &[], &f.token_file(), "{}").await;
     assert_eq!(out, "");
@@ -5097,9 +5088,6 @@ pub struct HookArgs {
     session: String,
     #[arg(long)]
     token_file: PathBuf,
-    /// pre-tool-use：到这个秒数还没结果就 deny（比 claude 的 hook 超时短）
-    #[arg(long, default_value_t = 1830)]
-    deadline_secs: u64,
 }
 
 fn deny(reason: &str) -> String {
@@ -5130,10 +5118,9 @@ pub async fn run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
             return Ok(());
         }
     };
-    let deadline = match kind {
-        HookKind::PreToolUse => Duration::from_secs(args.deadline_secs),
-        _ => QUICK,
-    };
+    // 三种 hook 同一个期限：审批不阻塞（控制者裁定 C2），pre-tool-use 也只是一次本机往返；
+    // 它必须短于 claude 侧的 hook 超时（15s），否则 claude 的超时会替我们「放行」。
+    let deadline = QUICK;
     let work = async {
         let (client, _) = AgentClient::connect(data_dir, &args.session, &args.token_file).await?;
         client
@@ -5213,9 +5200,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: M3a `crewd_collab::cursors::{unread_for, advance}`（**可见性与「不是自己发的」已在 `unread_for` 里滤过**，移植自 `CrewWhiteboardVisibility.swift:48`，M3b 不另写一份）、`crewd_collab::render::{blocks_for, injection, ChannelBlock}`（「发给 X 的」标注与群标题由 M3a 的 `render.*.md` 出）；Task 6 `port`。
 - Produces:
-  - `inject::{Prepared, prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared>>, commit(st, me, &Prepared) -> PortResult<()>, post_tool_use(st, me) -> HookResult}`；`Prepared { pub context: Option<String>, .. }`（M3c 给 codex 组 `additionalContext` 用 `prepare` / `commit`，「与 spec 的出入」5）
+  - `inject::{Prepared, prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared>>, commit(st, me, &Prepared) -> PortResult<()>, post_tool_use(st, me, payload: &Value) -> HookResult, is_crewd_tool(tool_name) -> bool}`；`Prepared { pub context: Option<String>, .. }`（M3c 给 codex 组 `additionalContext` 用 `prepare` / `commit`，「与 spec 的出入」5；codex 的工具调用产出由 M3c 的 codex 执行器在同一处调 `sessions::note_progress`）
   - `tools::channel_label(cx, kind, name, crew_title) -> String`（大厅 / 人类群的 `name` 是空串，M3a 的约定；回执里一律经它显示）
   - port：`unread(st, session) -> PortResult<Vec<(String, Vec<Message>)>>`（`st.collab(|tx| cursors::unread_for(tx, s))`）、`blocks(st, session, Vec<(String, Vec<Message>)>) -> PortResult<Vec<ChannelBlock>>`（`st.db.call(|s| render::blocks_for(s.conn(), …))`）、`injection(loc, &[ChannelBlock]) -> String`、`advance(st, session, channel, seq)`
+
+**产出信号（控制者裁定 C3）**：注入之前，若 payload 的 `tool_name` 不是 crewd 自己的工具（`mcp__crew__*`，mcp.json 里 server 名是 `crew`），调 `port::note_progress`（M3a `sessions::note_progress(.., ToolCall)` → `Change::Progress`，M3c 的环路熔断消费）。crewd 自己的通讯工具（post / read_channel / contact …）不算产出：两个 session 互相回话打转时每轮都在调 `post`，若算产出 Q5 要截的环路永远截不住。失败只写 stderr，不影响注入。
 
 注入范围 = M3a `unread_for` 给的群（大厅 + 显式成员群 + 收听的群，每群最多 200 条）。M3b 只加一件事：**总字数上限** `inject_cap_chars`（官方 `additionalContext` 每字段 10,000 字符，超了只剩 2,000 预览）——超了从全局最旧的行开始省略，每个被省略过的群前面加一句 `inject.omitted`；被省略的照样推进游标（它们已「告知过」存在）。
 
@@ -5239,7 +5228,7 @@ mod tests {
 
     async fn ctx_of(f: &Fixture, session: &str) -> Option<String> {
         let me = f.me(session).await;
-        let out = post_tool_use(&f.state, &me).await.stdout?;
+        let out = post_tool_use(&f.state, &me, &serde_json::json!({"tool_name": "mcp__crew__read_channel"})).await.stdout?;
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PostToolUse");
         Some(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_string())
@@ -5257,6 +5246,24 @@ mod tests {
         let ctx = ctx_of(&f, &f.worker).await.expect("有未读");
         assert!(ctx.contains("示例：今天先做 A"), "{ctx}");
         assert!(ctx_of(&f, &f.worker).await.is_none(), "同一条至多注入一次");
+    }
+
+    #[tokio::test]
+    async fn real_tool_calls_report_progress_but_crewd_tools_do_not() {
+        // 控制者裁定 C3：回话给叫醒你的人（经 crewd 的 post）不算产出。
+        let f = Fixture::new().await;
+        let me = f.me(&f.worker).await;
+        let mut rx = port::subscribe_collab(&f.state);
+        post_tool_use(&f.state, &me, &serde_json::json!({"tool_name": "mcp__crew__post"})).await;
+        post_tool_use(&f.state, &me, &serde_json::json!({"tool_name": "Bash"})).await;
+        let mut progress = Vec::new();
+        while let Ok(c) = rx.try_recv() {
+            if let crewd_collab::Change::Progress { session_id, kind } = c {
+                progress.push((session_id, kind));
+            }
+        }
+        assert_eq!(progress, [(f.worker.clone(), crewd_collab::ProgressKind::ToolCall)], "只有 Bash 那一次");
+        assert!(is_crewd_tool("mcp__crew__contact") && !is_crewd_tool("mcp__computer-use__click") && !is_crewd_tool("Edit"));
     }
 
     #[tokio::test]
@@ -5351,7 +5358,7 @@ pub async fn advance(st: &AppState, session: &str, channel: &str, seq: i64) -> P
 //! 滤可见性、标「发给谁的」、渲染都是 M3a 的；这里只管总字数上限与推进游标（游标与唤醒共用：至多注入一次）。
 use crewd_collab::render::ChannelBlock;
 use crewd_proto::agent::HookResult;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::agent::port::{self, PortResult};
@@ -5423,7 +5430,21 @@ pub async fn commit(st: &AppState, me: &Identity, p: &Prepared) -> PortResult<()
 }
 
 /// `agent.hook {event: post-tool-use}`。出错写 stderr、不输出（hook 宁可漏一次）。
-pub async fn post_tool_use(st: &AppState, me: &Identity) -> HookResult {
+/// crewd 自己的 MCP 工具（mcp.json 里 server 名 `crew`，见 crewd-exec `prepare_claude`）。
+pub fn is_crewd_tool(tool_name: &str) -> bool {
+    tool_name.starts_with("mcp__crew__")
+}
+
+pub async fn post_tool_use(st: &AppState, me: &Identity, payload: &Value) -> HookResult {
+    // 产出信号（C3）：真干活的工具才算；crewd 自己的通讯工具不算。
+    match payload.get("tool_name").and_then(Value::as_str) {
+        Some(t) if !is_crewd_tool(t) => {
+            if let Err(e) = port::note_progress(st, &me.session_id).await {
+                eprintln!("crewd: progress for {}: {e}", me.session_id);
+            }
+        }
+        _ => {}
+    }
     let prepared = match prepare(st, me).await {
         Ok(Some(p)) => p,
         Ok(None) => return HookResult { stdout: None },
@@ -5461,7 +5482,7 @@ pub fn channel_label_raw(loc: Locale, kind: crewd_proto::ChannelKind, name: &str
 }
 ```
 
-`rpc.rs` 的 `hook`：`HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me).await,`。
+`rpc.rs` 的 `hook`（参数 `_payload` 改名 `payload`）：`HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,`。
 
 - [ ] **Step 5: md 加节**
 
@@ -5494,7 +5515,7 @@ human channel of "{crew}"
 - [ ] **Step 6: 跑通**
 
 Run: `cargo test -p crewd-server --lib agent::inject`
-Expected: `5 passed`。
+Expected: `6 passed`。
 
 - [ ] **Step 7: 变异核对**
 
@@ -5525,10 +5546,10 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Modify: `agent/mod.rs`（`pub mod approval;`）、`agent/rpc.rs`（PreToolUse 分支）、`crates/collab/prompts/tools.{zh,en}.md`、`crewd/crates/crewd/tests/helper_cli.rs`（加一种假 serve 模式与一条测试）
 
 **Interfaces:**
-- Consumes: Task 6 `port::{subscribe_collab, create_approval, approval_decision, decide_approval, locale}`；M3a `approvals::{request, get, decide}`（`request` 自己在根机组人类群发 @human 通知，文字是 M3a `render.*.md` 的 `notice.approval`）、`Change::ApprovalChanged { id }`；Task 3 `text`。
+- Consumes: Task 6 `port::{gate_approval, locale}`；M3a `approvals::{gate, Gate}`（一个事务：有票 → 用掉、Allow；同 session 同工具已有未决请求 → DenyPending；否则开一条、在根机组人类群发 @human 通知（文字是 M3a `render.*.md` 的 `notice.approval`）→ DenyFiled）；Task 3 `text`。
 - Produces: `approval::{gate_hit(gates: &[String], tool: &str) -> bool, pre_tool_use(st: &AppState, me: &Identity, payload: &Value) -> HookResult}`。
 
-行为（spec §22.3）：`tool_name` 子串命中 `AgentConfig.approval_gates` → `approvals::request`（不发 H 号；M3a 在同一事务里往根机组人类群发 @human 通知）→ 等 `Change::ApprovalChanged`（先订阅再建，建完先查一次防竞态）→ allow / deny；`approval_wait` 到点仍没结果 → 记 `decided_by = "timeout"` 的 deny。没命中 → 不输出。输出形状照官方文档：`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"|"deny","permissionDecisionReason":…}}`。**与 Swift 的出入**（「与 spec 的出入」6）：Swift #75 ② 起当场拒 + 开人类 Todo + 一次性放行票，不阻塞。
+行为（控制者裁定 C2，照 Swift 驾驶舱 #75② `McpPermissionHook.swift:69-76`；spec §22.3 已改）：`tool_name` 子串命中 `AgentConfig.approval_gates` → 调一次 `port::gate_approval` → `Allow` 输出 allow（人同意过、票已用掉）；`DenyFiled` / `DenyPending` 输出 deny，理由说清「已请人审批（或早已在等），先去干别的，人同意后会叫你回来重跑一次」。**不等**：人卡住的只有这一次调用，session 照常干别的。人在客户端 `approval.decide` 之后，M3a 给这个 session 入队唤醒（`wake.approval_allowed` / `wake.approval_denied`），由 M3c 投递。没命中 → 不输出。连不上 crewd → helper 自己对命中闸的调用输出 deny（Task 8）。输出形状照官方文档：`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"|"deny","permissionDecisionReason":…}}`。
 
 - [ ] **Step 1: 写失败的测试**（`approval.rs` 末尾）
 
@@ -5536,13 +5557,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 #[cfg(test)]
 mod tests {
     use crewd_proto::MentionKind;
-    use std::time::Duration;
 
     use serde_json::{Value, json};
 
     use super::*;
     use crate::agent::port;
-    use crate::agent::runtime::AgentConfig;
     use crate::agent::testkit::Fixture;
 
     #[test]
@@ -5559,19 +5578,12 @@ mod tests {
         v["hookSpecificOutput"]["permissionDecision"].as_str().unwrap().to_string()
     }
 
-    async fn pending_id(f: &Fixture) -> String {
-        for _ in 0..100 {
-            let list = f.rpc("approval.list", json!({})).await;
-            if let Some(a) = list.as_array().unwrap().iter().find(|a| a["decision"].is_null()) {
-                return a["id"].as_str().unwrap().to_string();
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("没出现待审批");
-    }
-
     fn payload(tool: &str) -> Value {
         json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": "示例命令"}, "tool_use_id": "toolu_1"})
+    }
+
+    async fn pending(f: &Fixture) -> Vec<Value> {
+        f.rpc("approval.list", json!({})).await.as_array().unwrap().clone()
     }
 
     #[tokio::test]
@@ -5583,57 +5595,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approved_by_human_allows_and_notice_goes_to_the_human_channel() {
+    async fn gated_call_is_denied_at_once_and_files_one_request_in_the_human_channel() {
+        // Review Focus 3：不等人——当场 deny，session 不被卡住。
         let f = Fixture::new().await;
         let me = f.me(&f.worker).await;
-        let st = f.state.clone();
-        let waiting = tokio::spawn(async move { pre_tool_use(&st, &me, &payload("mcp__computer-use__click")).await });
-        let id = pending_id(&f).await;
+        let out = tokio::time::timeout(std::time::Duration::from_secs(2), pre_tool_use(&f.state, &me, &payload("mcp__computer-use__click")))
+            .await
+            .expect("审批闸不能等人");
+        assert_eq!(decision(&out), "deny");
         let human = port::root_human_channel(&f.state, &f.crew).await.unwrap();
-        let notice = port::messages(&f.state, &human.id, None, 5).await.unwrap();
-        let last = notice.last().expect("人类群里有通知");
+        let last = port::messages(&f.state, &human.id, None, 5).await.unwrap().pop().expect("人类群里有通知");
         assert!(last.text.contains("mcp__computer-use__click"));
         assert!(last.mentions.iter().any(|m| m.kind == MentionKind::Human));
-        f.rpc("approval.decide", json!({"id": id, "allow": true})).await;
-        let out = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap();
-        assert_eq!(decision(&out), "allow");
+        assert_eq!(decision(&pre_tool_use(&f.state, &me, &payload("mcp__computer-use__click")).await), "deny");
+        assert_eq!(pending(&f).await.len(), 1, "重试不往人的账上灌新条目");
     }
 
     #[tokio::test]
-    async fn denied_by_human_denies() {
+    async fn approval_is_a_one_time_grant_for_the_next_identical_call() {
         let f = Fixture::new().await;
         let me = f.me(&f.worker).await;
-        let st = f.state.clone();
-        let waiting = tokio::spawn(async move { pre_tool_use(&st, &me, &payload("mcp__computer-use__type")).await });
-        let id = pending_id(&f).await;
-        f.rpc("approval.decide", json!({"id": id, "allow": false})).await;
-        let out = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap();
-        assert_eq!(decision(&out), "deny");
+        pre_tool_use(&f.state, &me, &payload("mcp__computer-use__click")).await;
+        let id = pending(&f).await[0]["id"].as_str().unwrap().to_string();
+        f.rpc("approval.decide", json!({"id": id, "allow": true})).await;
+        assert_eq!(decision(&pre_tool_use(&f.state, &me, &payload("mcp__computer-use__type")).await), "deny", "票只认同名工具");
+        assert_eq!(decision(&pre_tool_use(&f.state, &me, &payload("mcp__computer-use__click")).await), "allow");
+        assert_eq!(decision(&pre_tool_use(&f.state, &me, &payload("mcp__computer-use__click")).await), "deny", "一次同意 = 一次放行");
     }
 
     #[tokio::test]
-    async fn unanswered_approval_times_out_to_deny() {
-        // Review Focus 3
-        let f = Fixture::with_config(AgentConfig { approval_wait: Duration::from_millis(300), ..AgentConfig::default() }).await;
+    async fn denied_request_stays_denied_and_the_next_call_asks_again() {
+        let f = Fixture::new().await;
         let me = f.me(&f.worker).await;
-        let out = pre_tool_use(&f.state, &me, &payload("mcp__computer-use__click")).await;
-        assert_eq!(decision(&out), "deny");
-        let list = f.rpc("approval.list", json!({})).await;
-        let a = &list.as_array().unwrap()[0];
-        assert_eq!(a["decision"], "deny");
-        assert_eq!(a["decidedBy"], "timeout");
+        pre_tool_use(&f.state, &me, &payload("mcp__computer-use__type")).await;
+        let id = pending(&f).await[0]["id"].as_str().unwrap().to_string();
+        f.rpc("approval.decide", json!({"id": id, "allow": false})).await;
+        assert_eq!(decision(&pre_tool_use(&f.state, &me, &payload("mcp__computer-use__type")).await), "deny");
+        assert_eq!(pending(&f).await.len(), 1, "被拒之后再要 = 新开一条");
     }
 }
 ```
 
-`crates/crewd/tests/helper_cli.rs`：`enum Mode` 加 `DropOnHook`（收到 `agent.hook` 就把连接整条关掉，模拟 serve 在等待中途停掉），处理分支 `_ if mode == Mode::Hang => continue,` 下面加 `"agent.hook" if mode == Mode::DropOnHook => break,`；加测试：
+`crates/crewd/tests/helper_cli.rs`：`enum Mode` 加 `DropOnHook`（收到 `agent.hook` 就把连接整条关掉，模拟 serve 在处理中途停掉），处理分支 `_ if mode == Mode::Hang => continue,` 下面加 `"agent.hook" if mode == Mode::DropOnHook => break,`；加测试：
 
 ```rust
 #[tokio::test]
 async fn crewd_gone_during_wait_means_deny() {
-    // Review Focus 3：serve 在审批等待中途没了 → helper 当场 deny，不等到 claude 的超时（超时会放行）。
+    // Review Focus 3：serve 在处理审批闸的中途没了 → helper 当场 deny，不等到 claude 的超时（超时会放行）。
     let f = FakeServe::start(Mode::DropOnHook).await;
-    let (out, _, took) = run_hook(f.data_dir(), "pre-tool-use", &["--deadline-secs", "30"], &f.token_file(), "{\"tool_name\":\"x\"}").await;
+    let (out, _, took) = run_hook(f.data_dir(), "pre-tool-use", &[], &f.token_file(), "{\"tool_name\":\"x\"}").await;
     assert!(out.contains("\"deny\""), "{out}");
     assert!(took < Duration::from_secs(5), "{took:?}");
 }
@@ -5647,10 +5657,12 @@ Expected: 编译失败。`cargo test -p crewd --test helper_cli crewd_gone` 应�
 - [ ] **Step 3: 写实现**
 
 ```rust
-//! pre-tool-use：命中审批闸的工具先等人批（spec §22.3）。不发 H 号：审批是同步闸，随这次调用失效。
+//! pre-tool-use 审批闸（控制者裁定 C2，照 Swift 驾驶舱 #75②）：命中闸的调用当场拒、给人开一条待确认；
+//! 人同意 = 一张一次性票，同 session 下一次同名调用用掉它。不等人：人卡住的只有这一次调用。
+//! 票、去重、公告都在 M3a 的 `approvals::gate` 一个事务里；这里只把结果翻成 hook 输出。不发 H 号。
+use crewd_collab::approvals::Gate;
 use crewd_proto::agent::HookResult;
 use serde_json::{Value, json};
-use tokio::sync::broadcast::error::RecvError;
 
 use crate::AppState;
 use crate::agent::port;
@@ -5696,42 +5708,19 @@ pub async fn pre_tool_use(st: &AppState, me: &Identity, payload: &Value) -> Hook
     }
     let what = summary(tool, payload.get("tool_input").unwrap_or(&Value::Null));
     let tool_use_id = payload.get("tool_use_id").and_then(Value::as_str).map(str::to_string);
-    let mut rx = port::subscribe_collab(st);
-    let id = match port::create_approval(st, me, tool, &what, tool_use_id).await {
-        Ok(id) => id,
+    match port::gate_approval(st, me, tool, &what, tool_use_id).await {
+        Ok(Gate::Allow { .. }) => output("allow", text::r(loc, "r.approval_granted", &[("tool", tool)])),
+        Ok(Gate::DenyFiled(_)) => output("deny", text::r(loc, "r.approval_filed", &[("tool", tool)])),
+        Ok(Gate::DenyPending { .. }) => output("deny", text::r(loc, "r.approval_pending", &[("tool", tool)])),
         Err(e) => {
             eprintln!("crewd: approval for {}: {e}", me.session_id);
-            return output("deny", text::r(loc, "r.approval_unavailable", &[("tool", tool)]));
-        }
-    };
-    let deadline = tokio::time::Instant::now() + cfg.approval_wait;
-    loop {
-        match port::approval_decision(st, &id).await {
-            Ok(Some(true)) => return output("allow", text::r(loc, "r.approval_allowed", &[("tool", tool)])),
-            Ok(Some(false)) => return output("deny", text::r(loc, "r.approval_denied", &[("tool", tool)])),
-            Ok(None) => {}
-            Err(e) => eprintln!("crewd: approval {id}: {e}"),
-        }
-        let wait = tokio::time::timeout_at(deadline, async {
-            loop {
-                match rx.recv().await {
-                    Ok(crewd_collab::Change::ApprovalChanged { id: changed }) if changed == id => return,
-                    Ok(_) | Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => return,
-                }
-            }
-        })
-        .await;
-        if wait.is_err() {
-            let _ = port::decide_approval(st, &id, false, "timeout").await;
-            let minutes = (cfg.approval_wait.as_secs() / 60).max(1).to_string();
-            return output("deny", text::r(loc, "r.approval_timeout", &[("tool", tool), ("minutes", &minutes)]));
+            output("deny", text::r(loc, "r.approval_unavailable", &[("tool", tool)]))
         }
     }
 }
 ```
 
-`rpc.rs` 的 `hook`：`HookKind::PreToolUse => crate::agent::approval::pre_tool_use(state, me, &payload).await,`（参数名 `_payload` 改回 `payload`）。
+`rpc.rs` 的 `hook`：`HookKind::PreToolUse => crate::agent::approval::pre_tool_use(state, me, &payload).await,`。
 
 - [ ] **Step 4: md 加节**
 
@@ -5739,14 +5728,14 @@ pub async fn pre_tool_use(st: &AppState, me: &Identity, payload: &Value) -> Hook
 
 ```markdown
 
-## r.approval_allowed
-人类已批准 {tool}。
+## r.approval_granted
+人类已同意 {tool}，这一次放行（只此一次）。
 
-## r.approval_denied
-人类拒绝了 {tool}。换个不需要它的办法，或者用 ask 说明为什么非它不可。
+## r.approval_filed
+{tool} 需要人类同意，已请人审批，这次先拒绝。先去干不需要它的活；人同意后会叫你回来，那时重跑这一次调用就会放行。
 
-## r.approval_timeout
-{minutes} 分钟内没人审批，已拒绝 {tool}。需要的话用 ask 说明原因，人看到后再试。
+## r.approval_pending
+{tool} 还在等人类审批（已经请过了，不会再请一次）。先去干别的；人同意后会叫你回来。
 
 ## r.approval_unavailable
 现在没法发起审批，已拒绝 {tool}。
@@ -5756,14 +5745,14 @@ pub async fn pre_tool_use(st: &AppState, me: &Identity, payload: &Value) -> Hook
 
 ```markdown
 
-## r.approval_allowed
-The human approved {tool}.
+## r.approval_granted
+The human allowed {tool}; this call goes through (once).
 
-## r.approval_denied
-The human denied {tool}. Find a way that does not need it, or use ask to explain why it is required.
+## r.approval_filed
+{tool} needs the human's approval. A request was filed and this call is denied. Move on to work that does not need it; you will be woken when the human allows it, and retrying that call will then go through.
 
-## r.approval_timeout
-Nobody reviewed {tool} within {minutes} minutes, so it was denied. If you need it, explain why with ask and try again once the human has seen it.
+## r.approval_pending
+{tool} is still waiting for the human's approval (already requested; not asking again). Move on; you will be woken when the human allows it.
 
 ## r.approval_unavailable
 An approval could not be raised right now, so {tool} was denied.
@@ -5776,8 +5765,8 @@ Expected: approval `5 passed`；helper_cli `8 passed`。
 
 - [ ] **Step 6: 变异核对**
 
-1. `pre_tool_use` 的超时分支把 `"deny"` 改成 `"allow"`：Expected `unanswered_approval_times_out_to_deny` 红。
-2. 把 `let mut rx = port::subscribe_collab(st);` 挪到 `create_approval` 之后、并删掉循环开头那次 `approval_decision` 查询：`approved_by_human…` 偶发等不到（竞态）——这条不稳定地红，看到红一次即可，不要求必红。
+1. `pre_tool_use` 的 `DenyPending` 分支把 `"deny"` 改成 `"allow"`：Expected `gated_call_is_denied_at_once…` 红。
+2. 把 `Gate::Allow` 分支改成 deny：Expected `approval_is_a_one_time_grant_for_the_next_identical_call` 红。
 3. `hook_cmd.rs` 的 `Ok(Err(e))` 分支删掉 deny：Expected `crewd_gone_during_wait_means_deny` 红。
 
 逐条撤销。
@@ -5789,7 +5778,7 @@ Expected: approval `5 passed`；helper_cli `8 passed`。
 git add crates/server/src/agent/approval.rs crates/server/src/agent/mod.rs crates/server/src/agent/rpc.rs \
   crates/collab/prompts/tools.zh.md crates/collab/prompts/tools.en.md crates/crewd/tests/helper_cli.rs
 git diff --cached --stat
-git commit -m "crewd-server: pre-tool-use approval gate (notice in human channel, wait for decision, timeout denies)
+git commit -m "crewd-server: non-blocking pre-tool-use approval gate (deny now, file once, one-time grant on approval)
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
@@ -7500,7 +7489,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Task 6 `port::{open_ask, withdraw_ask, respond_todo, schedule_timer, quota, set_profile, now_ms}`（`respond_todo` 依赖 G3）；Task 11 `turn::note_post`。
-- Produces: 无新的跨任务接口。testkit：`Fixture::add_agent_todo(&self, number: i64, text: &str)`（经 M1 的 `crewd_store::todos::insert`）、`Fixture::wakes_of(&self, session: &str) -> Vec<(String /*kind*/, i64 /*not_before ms*/, String /*note*/)>`（`<M3a>` 读 `wakes` 表）。
+- Produces: 无新的跨任务接口。testkit：`Fixture::add_agent_todo(&self, number: i64, text: &str)`（经 M1 的 `crewd_store::todos::insert`）、`Fixture::wakes_of(&self, session: &str) -> Vec<(String /*kind*/, i64 /*not_before ms*/, String /*note*/)>`（经 M3a 的 `wakes::list(conn, Some(session), limit)`，不写 SQL）。
 
 `ask` 不阻塞（spec §22.3 表：`open_ask` 发 H 号）；问出去 = 这一轮叫过人（`note_post` 记 human）。`fallback_after_minutes` 与 `fallback` 必须成对，换算成 M3a 的 `AskDefault { text, after_minutes }`；spec §13 Q2：到点照常走权限审批，所以工具说明里只说「可撤回的事」，不在代码里判可撤回。`withdraw_ask` 的权限由 crewd-work 判（提问者 / 机长 / 人；还卡着活项的拒绝）。`schedule_wakeup` 入 `wakes(kind=timer, priority=system)`（spec §22.4 优先级表），`at` 按 RFC 3339 解析、必须在未来。
 
@@ -7646,7 +7635,7 @@ testkit 加：
         let rows = self
             .state
             .db
-            .call(move |s| crewd_collab::wakes::list(s.conn(), Some(&session)))
+            .call(move |s| crewd_collab::wakes::list(s.conn(), Some(&session), 100))
             .await
             .unwrap()
             .unwrap();
@@ -7974,7 +7963,9 @@ mod tests {
     #[tokio::test]
     async fn sessions_are_controlled_within_own_crew() {
         let f = Fixture::new().await;
-        assert!(!cap(&f, "start_session", json!({"brief": "补测试", "isolation": true, "runner": "claude"})).await.is_error);
+        assert!(!cap(&f, "start_session", json!({"brief": "补测试", "runner": "claude"})).await.is_error);
+        assert!(cap(&f, "start_session", json!({"brief": "补测试", "isolation": true})).await.is_error, "isolation 参数已删（G-S）");
+        assert!(cap(&f, "start_session", json!({"brief": "补测试", "workdir": "/no/such/dir-示例"})).await.is_error, "目录必须已存在");
         assert!(f.control_calls().iter().any(|c| c.starts_with("Start(") && c.contains(&f.crew)), "{:?}", f.control_calls());
         let other = f.add_crew("别的机组", None).await;
         f.add_session(&other, "s-far", Role::Worker, "外组").await;
@@ -8228,7 +8219,7 @@ struct StartArgs {
     brief: String,
     title: Option<String>,
     runner: Option<String>,
-    isolation: bool,
+    workdir: Option<String>,
     model: Option<String>,
     effort: Option<String>,
 }
@@ -8238,6 +8229,12 @@ pub async fn start_session(cx: &Ctx<'_>, v: Value) -> CallResult {
     if a.brief.trim().is_empty() {
         return cx.err("r.bad_args", &[("detail", "brief")]);
     }
+    let workdir = a.workdir.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
+    if let Some(w) = &workdir {
+        if !std::path::Path::new(w).is_absolute() || !std::path::Path::new(w).is_dir() {
+            return cx.err("r.bad_args", &[("detail", "workdir")]);
+        }
+    }
     let req = StartReq {
         crew_id: cx.me.crew_id.clone(),
         role: Role::Worker,
@@ -8246,7 +8243,7 @@ pub async fn start_session(cx: &Ctx<'_>, v: Value) -> CallResult {
         title: a.title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
         model: a.model,
         effort: a.effort,
-        worktree: a.isolation,
+        worktree: workdir,
     };
     let id = tryp!(cx, port::start_session(cx.st, req));
     cx.ok("r.session_started", &[("id", &id)])
@@ -8386,7 +8383,7 @@ pub async fn create_and_handoff_captain(cx: &Ctx<'_>, v: Value) -> CallResult {
         title: Some(title),
         model: a.model,
         effort: a.effort,
-        worktree: false,
+        worktree: None,
     };
     let id = tryp!(cx, port::start_session(cx.st, req));
     tryp!(cx, port::handoff_captain(cx.st, &crew.id, &id));
@@ -8490,7 +8487,7 @@ async fn start_captain(cx: &Ctx<'_>, crew: &CrewView, runner: Option<String>, br
         title: Some(cx.r("r.default_captain_title", &[])),
         model: None,
         effort: None,
-        worktree: false,
+        worktree: None,
     };
     port::start_session(cx.st, req).await.map_err(|e| cx.fail(e))
 }
@@ -8886,7 +8883,6 @@ use std::time::Duration;
 use crewd_exec::launch::{AgentSessionArg, ClaudeSpec, CommsSpec, prepare_claude};
 use crewd_proto::MentionKind;
 use crewd_server::agent::port;
-use crewd_server::agent::runtime::AgentConfig;
 use crewd_server::agent::testkit::Fixture;
 use crewd_server::agent::Role;
 use serde_json::{Value, json};
@@ -8907,7 +8903,6 @@ fn launch(f: &Fixture, session: &str, runtime: &Path) -> Launch {
         token: f.token(session),
         hooks: true,
         approval_gates: vec!["computer-use".into()],
-        approval_wait_secs: 2,
     };
     let spec = ClaudeSpec { comms: Some(comms), ..ClaudeSpec::default() };
     let (args, files) = prepare_claude(&spec, AgentSessionArg::New(uuid_like(session)), runtime).unwrap();
@@ -9057,27 +9052,22 @@ async fn post_via_mcp_then_injection_via_post_tool_use_hook() {
 
 #[tokio::test]
 async fn pre_tool_use_gate_end_to_end() {
-    let f = Fixture::with_config(AgentConfig { approval_wait: Duration::from_secs(2), ..AgentConfig::default() }).await;
+    // 控制者裁定 C2：当场拒 → 人同意 → 下一次同名调用放行一次。
+    let f = Fixture::new().await;
     f.spawn_socket().await;
     let rt = tempfile::tempdir().unwrap();
     let w = launch(&f, &f.worker, rt.path());
     assert!(fire(&w.settings, "PreToolUse", "Bash", json!({"tool_name": "Bash"})).await.is_none(), "matcher 不命中：hook 根本不跑");
-    let settings = w.settings.clone();
-    let pending = tokio::spawn(async move {
-        fire(&settings, "PreToolUse", "mcp__computer-use__click", json!({"hook_event_name": "PreToolUse", "tool_name": "mcp__computer-use__click", "tool_input": {}})).await
-    });
-    let id = loop {
-        let list = f.rpc("approval.list", json!({})).await;
-        if let Some(a) = list.as_array().unwrap().iter().find(|a| a["decision"].is_null()) {
-            break a["id"].as_str().unwrap().to_string();
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let click = json!({"hook_event_name": "PreToolUse", "tool_name": "mcp__computer-use__click", "tool_input": {}});
+    let out = fire(&w.settings, "PreToolUse", "mcp__computer-use__click", click.clone()).await.unwrap();
+    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny", "当场拒，不等人");
+    let list = f.rpc("approval.list", json!({})).await;
+    let id = list.as_array().unwrap()[0]["id"].as_str().unwrap().to_string();
     f.rpc("approval.decide", json!({"id": id, "allow": true})).await;
-    let out = pending.await.unwrap().unwrap();
-    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "allow");
-    let out = fire(&w.settings, "PreToolUse", "mcp__computer-use__type", json!({"tool_name": "mcp__computer-use__type"})).await.unwrap();
-    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny", "没人审批：到点拒");
+    let out = fire(&w.settings, "PreToolUse", "mcp__computer-use__click", click.clone()).await.unwrap();
+    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "allow", "票用掉");
+    let out = fire(&w.settings, "PreToolUse", "mcp__computer-use__click", click).await.unwrap();
+    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny", "一次同意 = 一次放行");
 }
 
 #[tokio::test]
@@ -9179,7 +9169,6 @@ async fn real_claude_uses_crewd_mcp_and_receives_injection() {
                 token: f.token(&f.worker),
                 hooks: true,
                 approval_gates: vec![],
-                approval_wait_secs: 0,
             }),
             ..ClaudeSpec::default()
         },
@@ -9226,7 +9215,7 @@ async fn real_claude_uses_crewd_mcp_and_receives_injection() {
 
 - [ ] **Step 5: README**
 
-`crewd/README.md` 加一节「agent 面（M3b）」：`crewd mcp` / `crewd hook` 的命令行形状（只带 `--data-dir --session --token-file`，PreToolUse 多 `--deadline-secs`）；token 文件是什么、谁写；hook 超时与失败语义（post / stop 5s 内放弃、什么都不打；命中审批闸的 pre-tool-use 失败即 deny）；工具文字与世界观在 `crates/collab/prompts/`，改工具行为同一拍改 md；真 claude 冒烟怎么跑、要人点头。
+`crewd/README.md` 加一节「agent 面（M3b）」：`crewd mcp` / `crewd hook` 的命令行形状（只带 `--data-dir --session --token-file`）；token 文件是什么、谁写；hook 超时与失败语义（post / stop 5s 内放弃、什么都不打；命中审批闸的 pre-tool-use 失败即 deny）；工具文字与世界观在 `crates/collab/prompts/`，改工具行为同一拍改 md；真 claude 冒烟怎么跑、要人点头。
 
 - [ ] **Step 6: 全量检查**
 
@@ -9267,8 +9256,8 @@ CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test live_agent -- --ignored --nocaptu
 - **L2 世界观缺 runner 偏好与能力块**（`LocalSessionLaunch.swift:264-279`）：crewd 还没有「新机长优先用哪个 runner」的设置；入门机组的 SKILL.md 提示也没带。
 - **L3 `change_workdir` 不搬 claude 的项目记忆与权限**（Swift 会搬）：回执里写明了。
 - **L4 hook 的 `args` exec 形式**没用（裁定 5）：等核到它从哪个 claude 版本起支持，再考虑换掉 shell 引号。
-- **L5 codex 的 token 文件**：M2c 的 codex 驱动要在启动目录里写 token 文件、MCP 命令行带 `--token-file`（Task 2 Step 6 只在 M2c 已合时处理）；codex 没有 hook，注入走 M3c 的 `additionalContext`（`inject::prepare / commit`），回合收尾直接调 `crewd_collab::turn_trace::on_turn_end`。
-- **L6 审批的阻塞语义与 Swift #75 ② 相反**（「与 spec 的出入」6）：要人确认 spec 的「阻塞 30 分钟」仍是想要的。
+- **L5 codex 的 token 文件**：M2c 的 codex 驱动要在启动目录里写 token 文件、MCP 命令行带 `--token-file`（Task 2 Step 6 只在 M2c 已合时处理）；codex 没有 hook，注入走 M3c 的 `additionalContext`（`inject::prepare / commit`），回合收尾直接调 `crewd_collab::turn_trace::on_turn_end`，工具调用的产出信号（C3）由 codex 执行器调 `sessions::note_progress`；codex 的审批闸另议（app-server 有自己的审批请求）。
+- **L6 `start_session` 不再能要独立 git worktree**（G-S）：M3 只收已存在的目录（`workdir`）；谁来建 worktree（crewd 还是 agent 自己）留到 M3 之后定。
 - **L7 回合记账在 `meta` 表**：键值表里的软状态，不进 schema；session 删除时没有清理（键会留着，无害）。
 - **L8 `post` 不收附件**：等 M3a 之后支持附件上传再加回参数与世界观那一条。
 - **L9 侧栏排序**：人 2026-10-06 定为手动拖拽（`crews.position`），M3b 不提供任何排序工具（`arrange_crews` 等已删）。
@@ -9276,6 +9265,6 @@ CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test live_agent -- --ignored --nocaptu
 ## 交付时要回报（给控制者 / 人）
 
 1. G3 / G-F / G-S / G-T / G9 / G11 哪些在 M3a 落地时已有、哪些是为 M3b 补的。
-2. L6：spec §22.3 的阻塞审批与 Swift 当前行为相反。
+2. L6：`start_session` 的 `isolation` 已删，只能给已存在的目录。
 3. 真 claude 冒烟（Task 16 Step 9）有没有跑、结果。
 4. rmcp 3.5.1 带进来的 lock 条目清单（Task 8 Step 1）。
