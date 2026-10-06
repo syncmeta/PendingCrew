@@ -65,3 +65,20 @@
 - 登录 shell PATH 捕获要保留（systemd user unit 也只有最小 PATH）。
 - 其它保留：`CLAUDE_CONFIG_DIR` / `~/.claude/projects` 做认证探测；`HelperProcessForensics` 的 `proc_pidpath`/`proc_pidinfo` 是 macOS 专有。
 - Foundation 特有坑（readability handler EOF 忙转、write 的 ObjC 异常）Rust 没有，但 EOF 和 EPIPE 仍要显式处理。
+
+## 9. 终端仿真库选型（2026-10-06 spike 结论）
+
+**选 `alacritty_terminal` 0.26（Apache-2.0，2026-04 发布）。** 方法：四个夹具按 64 字节分块喂给 alacritty_terminal / vt100 / avt / wezterm-term（tattoy fork），并把 SwiftTerm 本体编成 headless 对照逐步比屏幕。
+
+- 夹具期望（`ClaudeInputBoxFixtureTests` 那 13 条）：四个候选全过。
+- 与 SwiftTerm 逐步比行：alacritty/vt100/avt 在 claude/trust/ready/shell 上 117/120、18/18、42/42、160/160；那 3 处差异是 **SwiftTerm 的 bug**（64 字节边界切在 OSC 标题的 UTF-8 中间，标题残片 `个数字` 漏进网格）。所以验收标准用夹具期望，不用「与 SwiftTerm 逐字节一致」。wezterm-term 只有 30/120（越界光标不夹、末列宽字符不换行），淘汰。
+- 选 alacritty 的决定因素：**它自己回答终端查询**（DA1/DA2/DSR/CPR/DECRQM/OSC 颜色/XTWINOPS，经 `Event::PtyWrite` / `ColorRequest` / `TextAreaSizeRequest` 交给我们写回 PTY）——claude 每次启动都发 DA1、XTVERSION、OSC 11；且暴露写快照所需的一切（cell 颜色/flags、WRAPLINE、宽字符 spacer、scrollback、cursor 含 pending-wrap、TermMode 位集）；resize 会 reflow。vt100 次选（自带 `state_formatted()` 快照可往返，但不答查询、缩窄截断不 reflow、2025-07 后无发布）。
+
+已知风险与对策（写进 M2 计划）：
+1. **快照编码器手写**；读不到的：滚动区域（私有字段 → 我们自己用小解析器跟踪 `CSI t;b r` / `CSI r` / RIS）、备用屏激活时的主屏（`swap_alt()` 有破坏性，别用；claude 从不用备用屏）、`?9`/1005/1015 鼠标模式。
+2. **同步输出 `?2026`**：alacritty 默认缓冲 `?2026h` 后最多 150ms 的字节，快照会漏 → 用 no-op `Timeout`（`Processor<NoSync>`），已验证立即生效。
+3. **与 SwiftTerm 的行为差**：DA1/DA2 回复串不同；kitty `?u` 需开 `kitty_keyboard`；SwiftTerm 在 `?1004h` 时立即发 `ESC[I`，alacritty 不发 → crewd 在 FOCUS_IN_OUT 打开时自己补发；OSC 11 背景色决定 claude 明暗主题，在回调里由我们选（SwiftTerm 报的是黑 `rgb:0000/0000/0000`）；pending-wrap 时 alacritty 报 列=cols-1 + `input_needs_wrap`，SwiftTerm 报 cols，编码器要按 flag 复现。
+4. 未写过的格子在 alacritty 里是空格（不是 NUL），读屏规则相应调整。
+5. alacritty 还带 Unix PTY 启动器（`alacritty_terminal::tty`，rustix-openpty + setsid/TIOCSCTTY），可能覆盖 §8 的 PTY 坑，M2 评估。
+
+API 速记：`Term::new(Config{scrolling_history:10_000,..}, &TermSize::new(80,25), listener)`；`Processor::<NoSync>::new().advance(&mut term, &chunk)`（任意切块安全）；读行 `g=term.grid(); g[Line(r)][Column(c)]`，跳过 `Flags::WIDE_CHAR_SPACER`，`cell.c` + `cell.zerowidth()`；scrollback `g.history_size()`、`g[Line(-i)]`；软换行 `row[Column(cols-1)].flags.contains(WRAPLINE)`；光标 `g.cursor.point` / `input_needs_wrap`，可见性 `TermMode::SHOW_CURSOR`；模式 `TermMode::{ALT_SCREEN,BRACKETED_PASTE,APP_CURSOR,APP_KEYPAD,MOUSE_*,SGR_MOUSE,FOCUS_IN_OUT,LINE_WRAP,ORIGIN,INSERT}`；`term.resize(TermSize::new(c,r))`。
