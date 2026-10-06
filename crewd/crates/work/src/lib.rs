@@ -9,5 +9,6 @@ pub mod ids;
 pub mod invariants;
 pub mod model;
 pub mod perm;
+pub mod progress;
 #[cfg(test)]
 mod testkit;
