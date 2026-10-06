@@ -1,5 +1,6 @@
 //! 本机诊断日志（spec §7.1）：每次判断一行 JSON，记输入摘要（脱敏后）、答案、置信度、耗时。
 //! 不记 key，不上传。文件 0600；超过上限就把旧文件挪成 `<名字>.1`（只留一份旧的）。
+//! 只支持 unix（权限位靠 `std::os::unix`）。
 use serde::Serialize;
 use serde_json::Value;
 use std::fs::{File, OpenOptions};

@@ -364,6 +364,7 @@ dependencies = [
 name = "crewd-jev"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "regex-lite",
  "reqwest",
  "security-framework",

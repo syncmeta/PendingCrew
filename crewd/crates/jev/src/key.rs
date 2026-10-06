@@ -1,9 +1,11 @@
 //! Jev key 放哪（spec §7.4、§13 Q7）：macOS 钥匙串 service `pendingcrew-jev` account `default`；
 //! 其他平台放 crewd 配置目录下的 `jev-key`（0600，权限更宽就拒读）。key 只由 crewd 读，客户端只写。
+//! 文件后端只信「本用户自己的、普通文件、不是符号链接、0600」；缺的父目录按 0700 建。
+//! 只支持 unix（用 `std::os::unix` 的权限与属主；crate 在非 unix 上直接编译失败，见 lib.rs）。
 use crate::client::ApiKey;
 use std::fmt;
-use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 pub const KEYCHAIN_SERVICE: &str = "pendingcrew-jev";
@@ -23,6 +25,11 @@ pub enum KeyError {
         path: PathBuf,
         mode: u32,
     },
+    /// 不是本用户自己的普通文件（符号链接、属主是别人、目录……）：不读，让人处理。
+    Untrusted {
+        path: PathBuf,
+        reason: &'static str,
+    },
     /// 存的内容不是合法 key（空、带空白）。
     Invalid,
     Io(io::Error),
@@ -39,6 +46,9 @@ impl fmt::Display for KeyError {
         match self {
             KeyError::InsecurePermissions { path, mode } => {
                 write!(f, "{} 的权限是 {mode:o}，必须是 600", path.display())
+            }
+            KeyError::Untrusted { path, reason } => {
+                write!(f, "{} 不可信：{reason}", path.display())
             }
             KeyError::Invalid => write!(f, "存的 key 不合法（空或含空白）"),
             KeyError::Io(e) => write!(f, "读写 key 文件失败：{e}"),
@@ -105,25 +115,74 @@ impl KeyStore {
 }
 
 fn file_load(path: &Path) -> Result<Option<Vec<u8>>, KeyError> {
-    let meta = match std::fs::metadata(path) {
-        Ok(m) => m,
+    // 先看链接本身（不跟随）：符号链接一律不读——它可能指向别人能改的地方。
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => {
+            return Err(KeyError::Untrusted {
+                path: path.to_path_buf(),
+                reason: "是符号链接",
+            });
+        }
+        Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
-    };
-    let mode = meta.permissions().mode() & 0o777;
+    }
+    // O_NOFOLLOW 打开，再对**打开的那个文件**做检查：检查与读取之间被换成链接也读不到别处。
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    let meta = file.metadata()?;
+    vet(
+        path,
+        meta.permissions().mode(),
+        meta.uid(),
+        meta.file_type().is_file(),
+        current_uid(),
+    )?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+/// 本进程的有效 uid。
+fn current_uid() -> u32 {
+    // SAFETY: geteuid 没有前置条件、不会失败、不碰内存。
+    unsafe { libc::geteuid() }
+}
+
+/// key 文件的信任检查（纯函数，便于测试）：普通文件、属主是自己、权限不宽于 0600。
+fn vet(path: &Path, mode: u32, owner: u32, is_file: bool, me: u32) -> Result<(), KeyError> {
+    if !is_file {
+        return Err(KeyError::Untrusted {
+            path: path.to_path_buf(),
+            reason: "不是普通文件",
+        });
+    }
+    if owner != me {
+        return Err(KeyError::Untrusted {
+            path: path.to_path_buf(),
+            reason: "属主不是当前用户",
+        });
+    }
+    let mode = mode & 0o777;
     if mode & 0o077 != 0 {
         return Err(KeyError::InsecurePermissions {
             path: path.to_path_buf(),
             mode,
         });
     }
-    Ok(Some(std::fs::read(path)?))
+    Ok(())
 }
 
 /// 写到同目录的临时文件（0600、create_new）再改名：任何时刻都没有一个半截或权限宽的 key 文件。
 fn file_store(path: &Path, key: &str) -> Result<(), KeyError> {
     let dir = path.parent().ok_or(KeyError::Invalid)?;
-    std::fs::create_dir_all(dir)?;
+    // 缺的父目录按 0700 建（已存在的不动）。
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     let result = write_private(&tmp, key).and_then(|()| std::fs::rename(&tmp, path));
@@ -233,6 +292,51 @@ mod tests {
             Err(KeyError::InsecurePermissions { mode, .. }) => assert_eq!(mode, 0o644),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_symlinked_key_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("elsewhere");
+        std::fs::write(&real, "test-key").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join(KEY_FILE_NAME);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        match KeyStore::File(link).load() {
+            Err(KeyError::Untrusted { .. }) => {}
+            other => panic!("符号链接不该被当成 key 文件读：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn owner_type_and_mode_are_all_vetted() {
+        let p = Path::new("/cfg/jev-key");
+        assert!(vet(p, 0o600, 501, true, 501).is_ok());
+        assert!(matches!(
+            vet(p, 0o600, 0, true, 501),
+            Err(KeyError::Untrusted { .. })
+        ));
+        assert!(matches!(
+            vet(p, 0o600, 501, false, 501),
+            Err(KeyError::Untrusted { .. })
+        ));
+        assert!(matches!(
+            vet(p, 0o640, 501, true, 501),
+            Err(KeyError::InsecurePermissions { mode: 0o640, .. })
+        ));
+    }
+
+    #[test]
+    fn missing_parent_directories_are_created_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("cfg");
+        let store = KeyStore::File(cfg.join("sub").join(KEY_FILE_NAME));
+        store.store(&ApiKey::new("test-key-3").unwrap()).unwrap();
+        for d in [&cfg, &cfg.join("sub")] {
+            let mode = std::fs::metadata(d).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", d.display());
+        }
+        assert_eq!(store.load().unwrap().unwrap().expose(), "test-key-3");
     }
 
     #[test]
