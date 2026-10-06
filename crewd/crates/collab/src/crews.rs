@@ -692,6 +692,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn set_captain_pins_the_new_captain_to_the_end_of_an_existing_human_channel() {
+        let mut s = store();
+        let human = crewd_store::channels::human_id("crew-a");
+        s.conn()
+            .execute(
+                "INSERT INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES(?1,'crew-a','human','','system','2026-09-01T00:00:00.000Z')",
+                [&human],
+            )
+            .unwrap();
+        crewd_store::messages::insert(
+            s.conn(),
+            &crewd_proto::Message {
+                id: "m-h".into(),
+                channel_id: human.clone(),
+                text: "示例消息".into(),
+                created_at: "2026-09-21T00:00:00.000Z".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let end = crewd_store::messages::max_seq(s.conn(), &human).unwrap();
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| set_captain(tx, "crew-a", "w-a1"));
+        assert_eq!(
+            crate::cursors::cursor(s.conn(), "w-a1", &human).unwrap(),
+            Some(end),
+            "新机长不凭空多出人类群的历史未读"
+        );
+        assert!(ch.contains(&Change::ChannelChanged { channel_id: human }));
+    }
+
     fn order(s: &crewd_store::Store, parent: Option<&str>) -> Vec<String> {
         match parent {
             Some(p) => children(s.conn(), p).unwrap(),

@@ -362,6 +362,33 @@ mod tests {
     }
 
     #[test]
+    fn progress_and_output_are_separate_columns() {
+        let mut s = store();
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| note_output(tx, "w-a1"));
+        assert!(ch.is_empty(), "note_output 不发事件");
+        let a = get(s.conn(), "w-a1").unwrap();
+        assert!(a.last_output_at.is_some());
+        assert_eq!(a.last_progress_at, None, "发言不算产出（C3）");
+        let ((), _) = crate::testkit::ok_at(&mut s, NOW + 5_000, |tx| {
+            note_progress(tx, "w-a1", ProgressKind::WorkItem)
+        });
+        let b = get(s.conn(), "w-a1").unwrap();
+        assert_eq!(b.last_output_at, a.last_output_at, "产出不动发言时间");
+        assert_eq!(
+            b.last_progress_at.as_deref(),
+            Some(crewd_store::ts_from_ms(NOW + 5_000).as_str())
+        );
+        assert!(matches!(
+            err(&mut s, |tx| note_progress(
+                tx,
+                "ghost",
+                ProgressKind::ToolCall
+            )),
+            CollabError::NotFound(_)
+        ));
+    }
+
+    #[test]
     fn lifecycle_setters_write_their_columns() {
         let mut s = store();
         ok(&mut s, |tx| set_desired(tx, "w-a1", Desired::Running));
