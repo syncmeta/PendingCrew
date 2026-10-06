@@ -10,6 +10,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, Timeout};
 
+use crate::side::SideTracker;
+
 /// 屏幕参数。缺省值 = 今天 Swift 版的 PTY：80×25、回滚 10000 行、黑底白字。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScreenConfig {
@@ -176,6 +178,7 @@ pub struct Screen {
     term: Term<Replies>,
     parser: Processor<NoSync>,
     replies: Replies,
+    side: SideTracker,
 }
 
 impl Screen {
@@ -195,16 +198,27 @@ impl Screen {
             lines: config.lines,
         };
         let term = Term::new(term_config, &size, replies.clone());
+        let side = SideTracker::new(config.lines);
         Self {
             term,
             parser: Processor::new(),
             replies,
+            side,
         }
     }
 
     /// 喂一段 PTY 输出。可以在任意字节处切块（转义序列、UTF-8 中间都行）。
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+        self.side.advance(bytes);
+        let focus_requests = self.side.take_focus_requests();
+        if focus_requests > 0 {
+            let mut outbox = self.replies.lock();
+            for _ in 0..focus_requests {
+                // 我们就是「有焦点的那个窗口」：SwiftTerm 在 `?1004h` 时立刻报 focus-in。
+                outbox.bytes.extend_from_slice(b"\x1b[I");
+            }
+        }
     }
 
     /// 取走终端攒下的回复字节（调用方原样写回 PTY）。取完即空。
@@ -218,8 +232,14 @@ impl Screen {
             return false;
         }
         self.term.resize(Size { cols, lines });
+        self.side.resize(lines);
         self.replies.lock().size = window_size(cols, lines);
         true
+    }
+
+    /// 滚动区域：0 起，上界含、下界不含。整屏 = `(0, lines)`。
+    pub fn scroll_region(&self) -> (usize, usize) {
+        self.side.region()
     }
 
     pub fn cols(&self) -> usize {
@@ -430,6 +450,32 @@ mod tests {
         );
         s.feed(b"\x1b[?25l");
         assert!(!s.cursor().visible);
+    }
+
+    #[test]
+    fn focus_reporting_gets_an_immediate_focus_in() {
+        let mut s = screen();
+        s.feed(b"\x1b[?1004h");
+        assert_eq!(s.take_replies(), b"\x1b[I");
+        s.feed(b"\x1b[?1004l\x1b[c");
+        assert_eq!(s.take_replies(), b"\x1b[?6c");
+    }
+
+    /// 旁路记下的滚动区域必须和 alacritty 实际用的那个一致：在区域底部换行，
+    /// 只有区域内的行上滚，区域外的行纹丝不动。
+    #[test]
+    fn tracked_region_matches_alacritty_behaviour() {
+        let mut s = screen();
+        for n in 0..25 {
+            s.feed(format!("\x1b[{};1Hrow{n}", n + 1).as_bytes());
+        }
+        s.feed(b"\x1b[3;5r");
+        assert_eq!(s.scroll_region(), (2, 5));
+        s.feed(b"\x1b[5;1H\n");
+        let rows = s.screen_rows();
+        assert_eq!(&rows[0..6], ["row0", "row1", "row3", "row4", "", "row5"]);
+        assert!(s.resize(80, 30));
+        assert_eq!(s.scroll_region(), (0, 30));
     }
 
     // ---- 读屏口径（TerminalScreenText 移植）----
