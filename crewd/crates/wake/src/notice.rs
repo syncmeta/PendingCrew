@@ -39,7 +39,8 @@ pub struct Notice {
     pub to_human: bool,
 }
 
-/// 别名 → 发给 PTY 的字节。**不在表里的输入一律当文本发出去、并自动补一个回车**。
+/// 别名 → 发给 PTY 的字节（每个键单独一次写，不额外补回车）。不在表里的输入见 [`nudge_plan`]：1..=2 位数字逐位写、
+/// 再单独写一个回车；其余去毒后当文本经执行器的 `send` 投递（由它提交，不是 `raw` 补回车）。
 pub const NUDGE_KEYS: &[(&str, &[u8])] = &[
     ("enter", b"\r"),
     ("esc", b"\x1b"),

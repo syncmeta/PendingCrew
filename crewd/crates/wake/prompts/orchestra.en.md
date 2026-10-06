@@ -61,7 +61,7 @@ You are no longer the captain of this crew (new captain: {name}). Finish what yo
 How to answer: the options on this screen are numbered; send the matching number with nudge_session.
 
 ## decision.options.unnumbered
-How to answer: the options on this screen are not numbered. Numbers do nothing, and nudge_session only knows these bare keys: {keys}; anything else is sent as text followed by an automatic Enter — and that Enter confirms whichever option is highlighted right now, which may not be the one you want (esc does not cancel the dialog either: it makes claude exit). So do not send numbers. If the highlight is already on the option you want → send `enter`; {move}
+How to answer: the options on this screen are not numbered, and nudge_session refuses numbers on such a dialog. It knows these bare keys: {keys} (each is pressed once on its own, with no Enter added; esc does not cancel the dialog either: it makes claude exit); anything else is sent into the session as a message (typed into the input box and submitted) — and that submit also lands on whichever option is highlighted right now, which may not be the one you want. If the highlight is already on the option you want → send `enter`; {move}
 
 ## decision.move.none
 otherwise → hand it to a human.
