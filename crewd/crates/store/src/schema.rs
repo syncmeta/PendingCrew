@@ -861,7 +861,8 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
   ('c1','crew-a','session','worker-a1','给机长','[{"kind":"human"},{"kind":"captain"},{"kind":"broadcast"}]','2026-09-01T03:00:00.000Z'),
   ('c2','crew-a','session','worker-a1','带 target','[{"kind":"captain","targetId":"captain-old"}]','2026-09-01T03:01:00.000Z'),
   ('c3','crew-b','session','worker-b1','机组乙没有机长','[{"kind":"captain"}]','2026-09-02T03:00:00.000Z'),
-  ('c4','crew-n','user',NULL,'无机长机组','[{"kind":"captain"}]','2026-09-04T03:00:00.000Z');
+  ('c4','crew-n','user',NULL,'无机长机组','[{"kind":"captain"}]','2026-09-04T03:00:00.000Z'),
+  ('c5','crew-a','session','worker-a1','混合','[{"kind":"broadcast"},{"kind":"captain"},{"kind":"captain","targetId":"captain-old"},{"kind":"human"}]','2026-09-01T03:02:00.000Z');
 "#,
         )
         .unwrap();
@@ -881,6 +882,11 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(
             v(mentions("c2")),
             serde_json::json!([{"kind":"captain","targetId":"captain-old"}])
+        );
+        assert_eq!(
+            v(mentions("c5")),
+            serde_json::json!([{"kind":"broadcast"},{"kind":"captain","targetId":"captain-new"},{"kind":"captain","targetId":"captain-old"},{"kind":"human"}]),
+            "同一条里只补没 target 的，已有的不动，顺序不变"
         );
         assert_eq!(
             v(mentions("c3")),
