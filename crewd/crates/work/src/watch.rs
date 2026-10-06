@@ -3,7 +3,9 @@
 use crate::book::{Applied, Rejected, WorkBook};
 use crate::events::EventKind;
 use crate::ids::{AskId, ChannelId, EntryNo, SessionId, Ts, WorkId};
-use crate::model::{Actor, AskState, Blocker, Config, Status, StopKind, StopViolation, WaitTier};
+use crate::model::{
+    Actor, AskState, Blocker, Config, Status, StopKind, StopStreak, StopViolation, WaitTier,
+};
 use crate::perm::{Action, Ctx};
 use crate::views::{EntryStatus, LostOwner};
 use serde::{Deserialize, Serialize};
@@ -129,12 +131,27 @@ impl WorkBook {
             return StopDecision::Clean;
         }
         let limit = self.cfg.stop_check_limit;
+        let budget = self.cfg.stop_rewake_budget;
         let streak = self.state.stop_streaks.entry(session.clone()).or_default();
+        // 要再叫一次时先看预算：自上次干净以来已经叫满 `budget` 次 → 这次改为交行政处。
+        let rewake = |streak: &mut StopStreak, v: Vec<StopViolation>| {
+            if streak.rewakes >= budget {
+                streak.escalated = true;
+                StopDecision::Escalate(v)
+            } else {
+                streak.rewakes += 1;
+                StopDecision::Rewake(v)
+            }
+        };
         if streak.last != v {
             streak.last = v.clone();
             streak.unimproved = 0;
+            if streak.escalated && streak.rewakes >= budget {
+                // 预算已用完：集合变了也不再叫，保持安静直到干净（复审 P12：来回摆动）。
+                return StopDecision::Suppressed(v);
+            }
             streak.escalated = false;
-            return StopDecision::Rewake(v);
+            return rewake(streak, v);
         }
         if streak.escalated {
             return StopDecision::Suppressed(v);
@@ -144,7 +161,7 @@ impl WorkBook {
             streak.escalated = true;
             StopDecision::Escalate(v)
         } else {
-            StopDecision::Rewake(v)
+            rewake(streak, v)
         }
     }
 
@@ -242,8 +259,8 @@ impl WorkBook {
     /// 行政巡检的代码检查部分。`unrecoverable` 同 `owner_lost`；`archived` 是已经归档的群（群的状态在 M3 的群表里，
     /// 不在工作账本里），它们不再算「可归档」。
     ///
-    /// `stop_escalated` 只列此刻仍然没改善的 session：交过行政处、且此刻的违反集合还和交出去时一模一样。
-    /// 改好了（集合变了，哪怕还没再 idle 过）或名下已没有活项的 session 不再列——否则 `needs_admin_session` 会一直是 true。
+    /// `stop_escalated` 只列交过行政处、且此刻仍有没着落的项的 session（集合变多、变少都算——变了不等于改好了）。
+    /// 改干净了（哪怕还没再 idle 过）或名下已没有活项的 session 不再列——否则 `needs_admin_session` 会一直是 true。
     pub fn patrol(
         &self,
         now: Ts,
@@ -275,7 +292,9 @@ impl WorkBook {
                 .state
                 .stop_streaks
                 .iter()
-                .filter(|(sid, s)| s.escalated && self.stop_violations(sid, now) == s.last)
+                // 交过行政处、且此刻仍有没着落的项（集合变多 / 变少都算；改干净了才掉下去）。
+                // 名下已没有活项的 session 的计数在事务外壳里清掉。
+                .filter(|(sid, s)| s.escalated && !self.stop_violations(sid, now).is_empty())
                 .map(|(sid, _)| sid.clone())
                 .collect(),
             long_waits: self
@@ -627,5 +646,124 @@ mod tests {
         let p = b.patrol(T1, &none, &archived);
         assert_eq!(p.archivable_channels, Vec::<ChannelId>::new());
         assert!(!p.needs_admin_session());
+    }
+
+    fn escalate_a(b: &mut WorkBook) {
+        for _ in 0..4 {
+            b.on_idle(&sid("a"), T1);
+        }
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(b.patrol(T1, &none, &no_ch).stop_escalated, [sid("a")]);
+    }
+
+    #[test]
+    fn an_escalated_session_whose_backlog_grows_stays_on_the_patrol() {
+        // 复审 N1：交过行政处之后，违反集合变「多」了（依赖完成，多出一项没排检查的就绪项），不能就此从巡检上掉下去。
+        let mut b = book();
+        claim(&mut b, "a", &["x"]);
+        let dep = b
+            .create_item(
+                &Actor::worker("c"),
+                T1,
+                NewItem::titled("dep").owned_by("c"),
+            )
+            .unwrap()
+            .value;
+        let waits = b
+            .create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("after dep")
+                    .owned_by("a")
+                    .after(ItemRef::Id(dep)),
+            )
+            .unwrap()
+            .value;
+        escalate_a(&mut b);
+        b.mark_done(&Actor::worker("c"), T1, dep, Evidence::Text("ok".into()))
+            .unwrap();
+        assert!(
+            b.stop_violations(&sid("a"), T1)
+                .contains(&v(waits, StopKind::ReadyUnscheduled))
+        );
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        let p = b.patrol(T1, &none, &no_ch);
+        assert_eq!(p.stop_escalated, [sid("a")]);
+        assert!(p.needs_admin_session());
+    }
+
+    #[test]
+    fn an_escalated_session_with_part_of_its_backlog_moved_away_stays_on_the_patrol() {
+        // 复审 N2：机长把两项里的一项转走，剩下那项仍没着落：还要列着。
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        escalate_a(&mut b);
+        b.assign(&Actor::captain("c"), T1, ids[1], sid("b"), "y 交给 b")
+            .unwrap();
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(b.patrol(T1, &none, &no_ch).stop_escalated, [sid("a")]);
+    }
+
+    #[test]
+    fn a_session_that_keeps_shuffling_check_times_escalates_at_the_rewake_budget() {
+        // 复审 P12d：每次被叫醒只把一项往后挪 30 秒，违反集合每次都「变了」，连续未改善的计数永远攒不起来；
+        // 自上次干净以来的叫醒次数到了预算（默认 6）就照样交行政处，之后保持安静直到干净。
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        let mut t = T1.plus(1);
+        let later = |b: &mut WorkBook, w: WorkId, t: Ts| {
+            b.report(
+                &Actor::worker("a"),
+                t,
+                w,
+                Report {
+                    status: None,
+                    next_check_at: Some(t.plus(30_000)),
+                    note: "等会儿".into(),
+                },
+            )
+            .unwrap();
+        };
+        for &w in &ids {
+            later(&mut b, w, t);
+        }
+        let mut seen = Vec::new();
+        for i in 0..10 {
+            t = t.plus(MINUTE);
+            later(&mut b, ids[i % 2], t);
+            seen.push(match b.on_idle(&sid("a"), t.plus(2)) {
+                StopDecision::Clean => "clean",
+                StopDecision::Rewake(_) => "rewake",
+                StopDecision::Escalate(_) => "escalate",
+                StopDecision::Suppressed(_) => "suppressed",
+            });
+        }
+        assert_eq!(
+            seen,
+            [
+                "rewake",
+                "rewake",
+                "rewake",
+                "rewake",
+                "rewake",
+                "rewake",
+                "escalate",
+                "suppressed",
+                "suppressed",
+                "suppressed"
+            ]
+        );
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(b.patrol(t, &none, &no_ch).stop_escalated, [sid("a")]);
+        // 干净一次，预算从头算。
+        for &w in &ids {
+            activate(&mut b, "a", w, t);
+        }
+        assert_eq!(b.on_idle(&sid("a"), t), StopDecision::Clean);
+        assert!(b.state().stop_streaks.is_empty());
     }
 }

@@ -293,6 +293,8 @@ pub struct StopStreak {
     pub last: Vec<StopViolation>,
     pub unimproved: u32,
     pub escalated: bool,
+    /// 自上次「干净」以来叫了几次（不论违反集合变没变；到 `stop_rewake_budget` 就交行政处）。
+    pub rewakes: u32,
 }
 
 /// 一个机组的全部工作跟进状态。M4b 把它落库 / 读回（`WorkBook::restore` 会整份校验）。
@@ -337,6 +339,9 @@ pub struct Config {
     pub recheck_after_ms: i64,
     pub missed_checks_limit: u32,
     pub stop_check_limit: u32,
+    /// 停下即检查：自上次「干净」以来最多再叫几次（不论违反集合变没变）；超了就交行政处。
+    /// 挡住「每次只挪一项、集合每次都变」的来回摆动（复审 P12）。
+    pub stop_rewake_budget: u32,
     pub pin_after_ms: i64,
     pub still_wanted_after_ms: i64,
     pub patrol_every_messages: u32,
@@ -352,6 +357,7 @@ impl Default for Config {
             recheck_after_ms: 15 * MINUTE,
             missed_checks_limit: 2,
             stop_check_limit: 3,
+            stop_rewake_budget: 6,
             pin_after_ms: 24 * HOUR,
             still_wanted_after_ms: 72 * HOUR,
             patrol_every_messages: 10,
@@ -454,6 +460,7 @@ mod tests {
         assert_eq!(c.missed_checks_limit, 2);
         assert_eq!(c.max_clock_jump_ms, 24 * HOUR);
         assert_eq!(c.stop_check_limit, 3);
+        assert_eq!(c.stop_rewake_budget, 6);
         assert_eq!(c.pin_after_ms, 24 * HOUR);
         assert_eq!(c.still_wanted_after_ms, 72 * HOUR);
         assert_eq!(c.patrol_every_messages, 10);
