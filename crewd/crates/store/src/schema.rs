@@ -1,6 +1,6 @@
 //! 表结构与迁移。版本号存在 SQLite 的 `PRAGMA user_version`。
 use crate::{Result, StoreError};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 pub const SCHEMA_VERSION: i64 = 3;
 
@@ -397,6 +397,31 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
 /// v3 的数据回填（幂等；迁移与旧 JSON 导入共用）：每个机组有大厅；`title_source` / worker 分机号从 extra 取；
 /// `next_ext`、机长指针、`meta.nextCrewNumber`；所有 session 在自己大厅、人类在每个群的游标钉到末尾
 /// （已有游标不动）。不产生任何未读、红标、唤醒（spec §22.2）。
+/// 机长指针之外还标着 role='captain' 的行（旧数据一个机组多条 captain 行）：降为 worker，没号的按
+/// (机组, 更新时间, id) 领下一个分机号——同 `set_captain` 对旧机长的做法（终审 M2）。幂等：降过的不再命中。
+fn demote_captains_off_the_pointer(conn: &Connection) -> Result<()> {
+    let stale: Vec<(String, String, Option<i64>)> = {
+        let mut st = conn.prepare(
+            "SELECT s.id, s.crew_id, s.ext FROM sessions s JOIN crews c ON c.id=s.crew_id
+              WHERE s.role='captain' AND c.captain_session_id IS NOT s.id
+              ORDER BY s.crew_id, s.updated_at, s.id",
+        )?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (id, crew, ext) in stale {
+        if ext.is_none() {
+            conn.execute(
+                "UPDATE sessions SET ext=(SELECT next_ext FROM crews WHERE id=?2) WHERE id=?1",
+                params![id, crew],
+            )?;
+            conn.execute("UPDATE crews SET next_ext=next_ext+1 WHERE id=?1", [&crew])?;
+        }
+        conn.execute("UPDATE sessions SET role='worker' WHERE id=?1", [&id])?;
+    }
+    Ok(())
+}
+
 pub fn backfill_v3(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -457,6 +482,7 @@ INSERT OR IGNORE INTO read_cursors(reader,channel_id,seq,updated_at)
     FROM channels ch;
 "#,
     )?;
+    demote_captains_off_the_pointer(conn)?;
     let max_no: i64 = conn.query_row("SELECT COALESCE(MAX(number),0) FROM crews", [], |r| {
         r.get(0)
     })?;
@@ -724,7 +750,8 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         );
         assert_eq!(
             one::<i64>(&c, "SELECT next_ext FROM crews WHERE id='crew-a'"),
-            6
+            7,
+            "max(ext)+1 = 6，再被降级的 captain-old 领走 6（终审 M2）"
         );
         assert_eq!(
             one::<i64>(&c, "SELECT next_ext FROM crews WHERE id='crew-b'"),
@@ -752,6 +779,53 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(
             one::<String>(&c, "SELECT desired FROM sessions WHERE id='worker-a1'"),
             "stopped"
+        );
+    }
+
+    /// 终审 M2：机长指针之外的 role='captain' 行降为 worker 并领分机号（同 set_captain 对旧机长的做法）；幂等。
+    #[test]
+    fn migration_demotes_captain_rows_off_the_pointer_to_numbered_workers_once() {
+        let c = v2_db();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<String>(&c, "SELECT role FROM sessions WHERE id='captain-old'"),
+            "worker"
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT ext FROM sessions WHERE id='captain-old'"),
+            6,
+            "接着 worker-a1 的 5 往下发"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT role FROM sessions WHERE id='captain-new'"),
+            "captain"
+        );
+        assert_eq!(
+            one::<Option<i64>>(&c, "SELECT ext FROM sessions WHERE id='captain-new'"),
+            None,
+            "机长不占号"
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT next_ext FROM crews WHERE id='crew-a'"),
+            7
+        );
+        backfill_v3(&c).unwrap();
+        assert_eq!(
+            one::<i64>(&c, "SELECT ext FROM sessions WHERE id='captain-old'"),
+            6,
+            "再跑一遍不重发号"
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT next_ext FROM crews WHERE id='crew-a'"),
+            7
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sessions s JOIN crews c ON c.id=s.crew_id
+                  WHERE s.role='captain' AND c.captain_session_id IS NOT s.id"
+            ),
+            0
         );
     }
 
