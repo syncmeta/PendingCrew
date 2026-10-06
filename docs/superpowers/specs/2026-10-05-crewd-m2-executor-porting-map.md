@@ -36,7 +36,7 @@
 - 回合跟踪（:582-671）：`turn/started` 置 activeTurnId、isWorking；任何 `item/*` 也置 isWorking；匹配 id 的 `turn/completed` 清除（除非触发自动压缩：上下文 ≥70%，或 ≥45% 且消耗大，`CodexProtocol.swift:7-16`）。isBusy = activeTurnId≠nil || isCompacting（:120）。Stop hook 的对应物 = `notifyTurnEnded(lastAgentText)`。健康来自协议字段（`CodexProtocol.swift:202-260`）：`account/rateLimits/updated`、`codexErrorInfo` usageLimitExceeded/unauthorized、失败回合、「requires a newer version」。
 
 ## 5. 进程生命周期
-- stop（`AgentSessionCore.swift:882-893`）：SIGTERM，置 exited，2s 后 `killpg(pid,SIGKILL)` 退 `kill`（`LR/AgentTerminalSession.swift:165-170`）。PTY 子进程因 forkpty 的 setsid 自成会话组长。codex 用 Foundation Process，是否独立进程组**未核实**（不是则 killpg 失败只杀父进程）。
+- stop（`AgentSessionCore.swift:882-893`）：SIGTERM，置 exited，2s 后 `killpg(pid,SIGKILL)` 退 `kill`（`LR/AgentTerminalSession.swift:165-170`）。PTY 子进程因 forkpty 的 setsid 自成会话组长。codex 用 Foundation Process，不在独立进程组（Swift 的 killpg 只杀得到父进程）。crewd（M2c）里 codex 由 setsid 起、自成会话与进程组，停止与退出后都对整组 SIGKILL。
 - 启动探测（`LR/SessionLaunchProbe.swift:37-50`、`AgentSessionCore.swift:605-667`）：25s 期限、1s 轮询、`waitpid(WNOHANG)`；结论 spawnFailed / diedSilently / stalled / alive。
 - 孤儿回收（`LR/SessionOrphanReaper.swift`）：`daemon.registry.json` 存 {pid, pgid, sysctl KERN_PROC_PID 的启动时间 秒+微秒, comm}；只有启动时间精确匹配才回收（pid 复用绝不动）；daemon 启动时跑（`LR/SessionDaemonHost.swift:420-470`）。daemon 调 setsid、不二次 fork（`SessionDaemonMain.swift:34`）。
 - 重启后 resume：id 账本 `LocalAgentSessionStore`；`AgentSessionResume.decide` 只看是否记过 id（:67）；claude 拒绝从屏幕识别后去掉 `--resume` 重试一次；恢复提示 `LR/SessionRestoreOffer.swift:55-113`。
