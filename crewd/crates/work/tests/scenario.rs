@@ -56,7 +56,7 @@ fn todo_flows_from_dispatch_to_evidence_without_a_human_nudge() {
             items: vec![placeholder]
         }]
     );
-    b.record_checkpoint_wake(&Actor::System, t, &[placeholder])
+    b.record_checkpoint_wake(&Actor::System, t, &sid("a"), &[placeholder])
         .unwrap();
 
     // a 醒来，把入口整理成两项（前端依赖后端），占位项拆成它们的父项。
@@ -188,7 +188,7 @@ fn silent_owner_is_replaced_and_the_new_owner_is_due_at_once() {
     for _ in 0..2 {
         let due = b.due_checkpoints(t);
         assert_eq!(due.len(), 1);
-        b.record_checkpoint_wake(&Actor::System, t, &due[0].items)
+        b.record_checkpoint_wake(&Actor::System, t, &due[0].owner, &due[0].items)
             .unwrap();
         t = t.plus(15 * MINUTE);
     }

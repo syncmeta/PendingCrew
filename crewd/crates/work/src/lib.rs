@@ -29,6 +29,7 @@ pub use model::{
     OwnerChange, PendingTransfer, Role, Status, StopKind, StopStreak, StopViolation, WaitTier,
     WorkItem,
 };
+pub use owner::WakeResult;
 pub use perm::Action;
 pub use progress::{Progress, Report};
 pub use views::{CheckpointDue, EntryStatus, EntryView, LostCause, LostOwner, MyItem};

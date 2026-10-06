@@ -358,7 +358,8 @@ mod tests {
         activate(&mut b, "a", w, T1);
         let due = T1.plus(HOUR);
         assert_eq!(b.stop_violations(&sid("a"), due), [v(w, StopKind::Overdue)]);
-        b.record_checkpoint_wake(&Actor::System, due, &[w]).unwrap();
+        b.record_checkpoint_wake(&Actor::System, due, &sid("a"), &[w])
+            .unwrap();
         assert_eq!(
             b.stop_violations(&sid("a"), due),
             [v(w, StopKind::Unanswered)],

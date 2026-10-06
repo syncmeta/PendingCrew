@@ -326,7 +326,12 @@ fn step(r: &mut Rng, b: &mut WorkBook, now: Ts) -> (&'static str, Result<Vec<Eve
             } else {
                 any_actor(r)
             };
-            ok(b.record_checkpoint_wake(&by, now, &ids))
+            // 多数时候用第一项的负责人（就像 due_checkpoints 给出的那样），偶尔随便挑一个。
+            let owner = match b.item(ids[0]).and_then(|it| it.owner.clone()) {
+                Some(o) if !r.chance(4) => o,
+                _ => session(r),
+            };
+            ok(b.record_checkpoint_wake(&by, now, &owner, &ids))
         }
         "close_entry" => {
             let (by, e) = (any_actor(r), entry(r, b));

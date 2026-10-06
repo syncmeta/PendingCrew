@@ -146,24 +146,37 @@ impl WorkBook {
         })
     }
 
-    /// crewd 刚给负责人投递了一次检查点唤醒（列出这些项）：每项 missedChecks + 1，
+    /// crewd 刚给 `owner` 投递了一次检查点唤醒（列出这些项）：每项 missedChecks + 1，
     /// 排了检查时间的项顺延到 now + recheck_after（不超过检查上限），到时还没回报就再叫 / 判失联。
+    ///
+    /// 同一项列多次只记一次。投递和记账之间情况可能变了：已不归 `owner`、卡住了、收尾了、不存在的项
+    /// **跳过并在 `skipped` 里报回**（不整批拒绝，免得一项变化让其余项的记账也丢掉）。
     pub fn record_checkpoint_wake(
         &mut self,
         by: &Actor,
         now: Ts,
+        owner: &SessionId,
         ids: &[WorkId],
-    ) -> Result<Applied<()>, Rejected> {
+    ) -> Result<Applied<WakeResult>, Rejected> {
         let recheck = self.cfg.recheck_after_ms.min(self.cfg.max_check_horizon_ms);
         self.transact(by, now, |d| {
             let now = d.now;
             d.permit(Action::RecordWake, Ctx::default())?;
+            let mut result = WakeResult::default();
             for &id in ids {
-                let it = d.live(id)?;
-                let owner = it.owner.clone().ok_or(Rejected::NotOwned(id))?;
-                if it.status == Status::Blocked {
-                    return Err(Rejected::Invalid("blocked items are not checkpointed"));
+                if result.recorded.contains(&id) || result.skipped.contains(&id) {
+                    continue;
                 }
+                let checkpointable = d.s.items.get(&id).is_some_and(|it| {
+                    it.owner.as_ref() == Some(owner)
+                        && matches!(it.status, Status::Open | Status::Active)
+                });
+                if !checkpointable {
+                    result.skipped.push(id);
+                    continue;
+                }
+                result.recorded.push(id);
+                let owner = owner.clone();
                 let it = d.item_mut(id)?;
                 it.missed_checks += 1;
                 if it.next_check_at.is_some() {
@@ -177,9 +190,16 @@ impl WorkBook {
                     next_check_at,
                 });
             }
-            Ok(())
+            Ok(result)
         })
     }
+}
+
+/// `record_checkpoint_wake` 的结果：记了账的项与跳过的项（按传入顺序、去重）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WakeResult {
+    pub recorded: Vec<WorkId>,
+    pub skipped: Vec<WorkId>,
 }
 
 impl Draft {
@@ -438,9 +458,10 @@ mod tests {
         activate(&mut b, "a", w, T1);
         let none = BTreeSet::new();
         let due = T1.plus(HOUR);
-        b.record_checkpoint_wake(&Actor::System, due, &[w]).unwrap();
+        b.record_checkpoint_wake(&Actor::System, due, &sid("a"), &[w])
+            .unwrap();
         let again = due.plus(15 * MINUTE);
-        b.record_checkpoint_wake(&Actor::System, again, &[w])
+        b.record_checkpoint_wake(&Actor::System, again, &sid("a"), &[w])
             .unwrap();
         assert_eq!(
             b.reassign_lost(
@@ -473,10 +494,12 @@ mod tests {
         activate(&mut b, "a", w, T1);
         let due = T1.plus(HOUR);
         assert_eq!(
-            b.record_checkpoint_wake(&Actor::worker("a"), due, &[w]),
+            b.record_checkpoint_wake(&Actor::worker("a"), due, &sid("a"), &[w]),
             Err(Rejected::Forbidden(Action::RecordWake))
         );
-        let got = b.record_checkpoint_wake(&Actor::System, due, &[w]).unwrap();
+        let got = b
+            .record_checkpoint_wake(&Actor::System, due, &sid("a"), &[w])
+            .unwrap();
         assert_eq!(
             got.events[0].kind,
             EventKind::CheckpointWake {
@@ -486,7 +509,7 @@ mod tests {
                 next_check_at: Some(due.plus(15 * MINUTE))
             }
         );
-        b.record_checkpoint_wake(&Actor::System, due.plus(15 * MINUTE), &[w])
+        b.record_checkpoint_wake(&Actor::System, due.plus(15 * MINUTE), &sid("a"), &[w])
             .unwrap();
         assert_eq!(b.item(w).unwrap().missed_checks, 2);
         b.report(
@@ -520,22 +543,15 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_wake_rejects_items_that_are_not_checkpointed() {
+    fn checkpoint_wake_counts_each_item_once_and_skips_what_is_not_that_owners_checkpoint() {
+        // 评审 P8：同一项列两次只记一次；投递和记账之间换了负责人 / 卡住了 / 收尾了的项跳过并报回，不整批拒绝。
         let mut b = book();
-        let ids = claim(&mut b, "a", &["x", "y"]);
+        let ids = claim(&mut b, "a", &["x", "y", "z"]);
         let orphan = b
             .create_item(&Actor::worker("a"), T1, NewItem::titled("o"))
             .unwrap()
             .value;
-        assert_eq!(
-            b.record_checkpoint_wake(&Actor::System, T1, &[ids[0], orphan]),
-            Err(Rejected::NotOwned(orphan))
-        );
-        assert_eq!(
-            b.item(ids[0]).unwrap().missed_checks,
-            0,
-            "整批被拒，前面的也不记"
-        );
+        activate(&mut b, "a", ids[0], T1);
         b.block(
             &Actor::worker("a"),
             T1,
@@ -544,9 +560,34 @@ mod tests {
             crate::block::Continuation::Nothing,
         )
         .unwrap();
+        b.assign(&Actor::captain("c"), T1, ids[2], sid("b"), "交给 b")
+            .unwrap();
+        let got = b
+            .record_checkpoint_wake(
+                &Actor::System,
+                T1,
+                &sid("a"),
+                &[ids[0], ids[0], ids[1], ids[2], orphan, WorkId(99)],
+            )
+            .unwrap();
         assert_eq!(
-            b.record_checkpoint_wake(&Actor::System, T1, &[ids[1]]),
-            Err(Rejected::Invalid("blocked items are not checkpointed"))
+            got.value,
+            WakeResult {
+                recorded: vec![ids[0]],
+                skipped: vec![ids[1], ids[2], orphan, WorkId(99)]
+            }
         );
+        assert_eq!(kinds(&got.events), ["checkpoint_wake"]);
+        assert_eq!(b.item(ids[0]).unwrap().missed_checks, 1, "列两次只记一次");
+        assert_eq!(
+            b.item(ids[2]).unwrap().missed_checks,
+            0,
+            "换了负责人的项不记到新负责人头上"
+        );
+        let nothing = b
+            .record_checkpoint_wake(&Actor::System, T1, &sid("a"), &[ids[1]])
+            .unwrap();
+        assert!(nothing.events.is_empty());
+        assert!(nothing.value.recorded.is_empty());
     }
 }

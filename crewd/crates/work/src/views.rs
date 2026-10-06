@@ -492,12 +492,12 @@ mod tests {
         let none = BTreeSet::new();
         let t = T1.plus(HOUR);
         assert_eq!(b.due_checkpoints(t).len(), 1);
-        b.record_checkpoint_wake(&crate::model::Actor::System, t, &[w])
+        b.record_checkpoint_wake(&crate::model::Actor::System, t, &sid("a"), &[w])
             .unwrap();
         let t = t.plus(15 * MINUTE);
         assert_eq!(b.owner_lost(t, &none), []);
         assert_eq!(b.due_checkpoints(t)[0].items, [w], "第二次叫醒");
-        b.record_checkpoint_wake(&crate::model::Actor::System, t, &[w])
+        b.record_checkpoint_wake(&crate::model::Actor::System, t, &sid("a"), &[w])
             .unwrap();
         assert_eq!(b.owner_lost(t.plus(15 * MINUTE - 1), &none), []);
         let t = t.plus(15 * MINUTE);
