@@ -82,3 +82,12 @@
 5. alacritty 还带 Unix PTY 启动器（`alacritty_terminal::tty`，rustix-openpty + setsid/TIOCSCTTY），可能覆盖 §8 的 PTY 坑，M2 评估。
 
 API 速记：`Term::new(Config{scrolling_history:10_000,..}, &TermSize::new(80,25), listener)`；`Processor::<NoSync>::new().advance(&mut term, &chunk)`（任意切块安全）；读行 `g=term.grid(); g[Line(r)][Column(c)]`，跳过 `Flags::WIDE_CHAR_SPACER`，`cell.c` + `cell.zerowidth()`；scrollback `g.history_size()`、`g[Line(-i)]`；软换行 `row[Column(cols-1)].flags.contains(WRAPLINE)`；光标 `g.cursor.point` / `input_needs_wrap`，可见性 `TermMode::SHOW_CURSOR`；模式 `TermMode::{ALT_SCREEN,BRACKETED_PASTE,APP_CURSOR,APP_KEYPAD,MOUSE_*,SGR_MOUSE,FOCUS_IN_OUT,LINE_WRAP,ORIGIN,INSERT}`；`term.resize(TermSize::new(c,r))`。
+
+## 10. 业界做法对照与执行器定型（2026-10-06 调研）
+
+- **「服务端无头仿真 + attach 时序列化快照 + 实时字节」是标准做法**：VS Code ptyHost（`@xterm/headless` + serialize addon，重连发序列化 ANSI 含 scrollback）、Superset（同构，attach 回 snapshotAnsi + modes + dims；PTY 读在 1MB 积压时暂停、250KB 恢复）、ccmanager（node-pty + headless xterm + 正则判 claude 状态，就是我们的 Node 版）、shpool（Rust，vt100 内存渲染重画）、tmux/screen（服务端持网格、对客户端重画）、mosh（服务端仿真 + 差分同步）、zellij web。
+- **编排 claude 的同类**：claude-squad（Go/AGPL，tmux + capture-pane + 字符串匹配）、agent-deck（Go/MIT，tmux 控制模式 + capture-pane + Stop hook）、ccmanager（TS/MIT，同我们）、vibe-kanban（Rust/Apache，stream-json 无终端）、Sculptor、Crystal/Nimbalyst、Happy（SDK/CLI + 加密中继）。用 tmux 的那些仍然靠轮询 + 字符串匹配，tmux 没替它们解决最难的读屏。
+- **不改用 tmux 做执行器**：macOS 默认没装（要打包 C 二进制 + libevent + utf8proc）；tmux 自身协议升级时新客户端连不上老服务端，只能杀服务端（「升级不断」在 tmux 自己升级时失效）；无客户端附着时不回 OSC 11（claude 主题探测会卡）；变成 tmux/读屏/SwiftTerm 三个仿真器要对齐宽度表；读屏仍要自己做。dtach/abduco 无客户端时直接丢弃 PTY 输出，不可用。
+- **以后做「升级不中断」的方案**（M2 之后）：PTY 交接而非 tmux——A：旧 crewd `exec` 新二进制，PTY master fd 跨 exec 继承；B：一个极小且稳定的 pty-holder 进程经 SCM_RIGHTS 传 fd（类 VS Code 独立 ptyHost）。两者都用我们的快照编码器把仿真器状态带过去；交接空档的输出留在内核 PTY 缓冲（推论，未实测）。`--resume` 仍是崩溃兜底。
+- **远程查看注意**：resize 归属要定一个策略（参考 tmux `window-size largest|smallest|latest|manual`；建议「最近交互的观看者」或固定尺寸+其他观看者留边）；alacritty / SwiftTerm / xterm.js(unicode11) 宽度表要对齐并测 CJK/emoji；重放模式字节后 TUI 被杀会留下已开启的焦点/鼠标模式（Superset 有 input-mode reclaim 文档）；背压/resync 已设计。
+- **Claude 官方 Remote Control** 只同步 transcript（存 Anthropic 服务器），不同步终端，需订阅、每进程一个远程 session；可作补充，不能替代。
