@@ -619,6 +619,40 @@ mod tests {
         assert!(ctxs[1].contains("L-001 后一条"), "{}", ctxs[1]);
     }
 
+    fn block(id: &str, lines: &[(&str, i64)]) -> ChannelBlock {
+        ChannelBlock {
+            channel_id: id.into(),
+            kind: ChannelKind::Topic,
+            name: id.into(),
+            crew_title: String::new(),
+            lines: lines
+                .iter()
+                .map(|(at, seq)| crewd_collab::render::MsgLine {
+                    seq: *seq,
+                    at: at.to_string(),
+                    sender: String::new(),
+                    text: String::new(),
+                    directed_to: None,
+                    reply_to: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn removal_drops_the_globally_newest_tail_first_and_keeps_one_line() {
+        let a = block(
+            "a",
+            &[("2026-01-01T00:00:01Z", 1), ("2026-01-01T00:00:03Z", 2)],
+        );
+        let b = block(
+            "b",
+            &[("2026-01-01T00:00:02Z", 7), ("2026-01-01T00:00:04Z", 8)],
+        );
+        // b's #8 (newest), a's #2, b's #7; a's #1 (the oldest) is never dropped.
+        assert_eq!(removal_order(&[a, b]), [1, 0, 1]);
+    }
+
     #[tokio::test]
     async fn dm_and_lobby_notes_use_the_channel_label() {
         let f = Fixture::new().await;
