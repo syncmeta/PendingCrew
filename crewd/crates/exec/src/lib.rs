@@ -4,3 +4,4 @@ pub mod delivery;
 pub mod env;
 pub mod launch;
 pub mod pty;
+pub mod registry;
