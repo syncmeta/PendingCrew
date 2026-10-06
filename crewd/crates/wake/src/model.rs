@@ -74,7 +74,7 @@ str_enum!(WakeState {
 });
 
 str_enum!(
-    /// 环路熔断的两级（§22.7 Q5）：`Session` = 目标的非 session 来源全部停，`Edge` = 「来源 > 目标」这一条停。
+    /// 环路熔断的两级（§22.7 Q5）：`Session` = 目标的非 session 来源全部停，`Edge` = 「来源 → 目标」这一条停。
     LatchScope { Session = "session", Edge = "edge" }
 );
 

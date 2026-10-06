@@ -5,8 +5,11 @@
 //! - 边（来源 → 目标）：同一来源对同一目标，目标上次产出之后、窗口内已放行 `edge_max` 次，再来就熔断这条边。
 //! - 目标：系统 / 目标自己定时这类非 session 来源对同一目标合计已放行 `target_max` 次，再来就熔断目标的这类唤醒。
 //!
-//! 产出（清零目标的计数）：工具调用、工作项变化（IO 层调 [`LoopBreaker::progress`]）；目标发了一条消息、且它叫醒的
-//! 人里不含正在叫它的来源（[`LoopBreaker::on_post`]——回叫不算，否则互相 @ 的环路每轮都「有新消息」，永远截不住）。
+//! 产出（清零目标的计数）：工具调用、工作项变化（IO 层调 [`LoopBreaker::progress`]）；目标发了一条消息、且它的显式目标
+//! 非空、不含正在叫它的来源（[`LoopBreaker::on_post`]——回叫不算，否则互相 @ 的环路每轮都「有新消息」，永远截不住）。
+//!
+//! 已知边界（不是 bug）：三方环 a→b→c→a 每条边都只有 1/3 的次数，不会被截；机长（captain）的「产出」要靠
+//! M4b 工作项命令调 `note_progress`，那之前只有消息 / 工具调用两种信号。
 //! 人发起的唤醒（来源 `human`）永不计数、永不被挡。熔断只能由人解（[`LoopBreaker::recover`]）。
 use std::collections::{BTreeMap, HashMap};
 
@@ -33,7 +36,8 @@ pub const LOOP_LIMITS: LoopLimits = LoopLimits {
 pub const HUMAN: &str = "human";
 pub const SYSTEM: &str = "system";
 
-/// 一条唤醒是谁引起的。消息类 = 发送者；定时 = 目标自己；问被回答 / 重启恢复 = 人（都是人点的头）；其余 = 系统。
+/// **唯一的来源定义**（Task 8 的 IO 层调这一个，不从 `WakeTarget.priority` 或别处反推）：
+/// 一条唤醒是谁引起的。人发的消息 = `human`——哪怕它只是叫醒了一个收听者（那一档是 Auto）也一样。消息类 = 发送者；定时 = 目标自己；问被回答 / 重启恢复 = 人（都是人点的头）；其余 = 系统。
 pub fn origin_of(kind: WakeKind, sender: Option<&Sender>, target: &str) -> String {
     match kind {
         WakeKind::Message => sender.map_or(SYSTEM, Sender::key).to_string(),
@@ -67,9 +71,8 @@ pub enum Verdict {
 #[derive(Debug)]
 pub struct LoopBreaker {
     limits: LoopLimits,
-    /// 见过的最晚时间（墙钟回跳不让窗口变宽）。
-    clock: Ms,
-    /// 目标 → 上次产出之后放行的 (时间, 来源)。
+    /// 目标 → 上次产出之后放行的 (放行时的真实时间, 来源)。时间戳就是调用方给的 `now`，不做「取最大」：
+    /// 墙钟往前跳一次不能把窗口钉死；`at > now` 的条目（时钟回拨后留下的「未来」条目）直接丢弃。
     streak: HashMap<String, Vec<(Ms, String)>>,
     latches: BTreeMap<(LatchScope, String), Latch>,
 }
@@ -78,13 +81,17 @@ impl LoopBreaker {
     pub fn new(limits: LoopLimits, latches: Vec<Latch>) -> Self {
         Self {
             limits,
-            clock: Ms(i64::MIN),
             streak: HashMap::new(),
             latches: latches
                 .into_iter()
                 .map(|l| ((l.scope, l.id.clone()), l))
                 .collect(),
         }
+    }
+
+    /// 条目在窗口内：不在未来、也没出窗口。
+    fn live(at: Ms, now: Ms, window_ms: i64) -> bool {
+        at <= now && now.since(at) < window_ms
     }
 
     /// 这条来源对这个目标此刻是否被熔断挡着（人永不）。
@@ -112,11 +119,10 @@ impl LoopBreaker {
         if let Some(l) = self.held(target, origin) {
             return Verdict::Held(l.clone());
         }
-        self.clock = self.clock.max(now);
-        let (clock, window) = (self.clock, self.limits.window_ms);
+        let window = self.limits.window_ms;
         let (edge_n, target_n) = {
             let streak = self.streak.entry(target.to_string()).or_default();
-            streak.retain(|(at, _)| clock.since(*at) < window);
+            streak.retain(|(at, _)| Self::live(*at, now, window));
             (
                 streak.iter().filter(|(_, o)| o == origin).count(),
                 streak
@@ -130,6 +136,7 @@ impl LoopBreaker {
                 LatchScope::Edge,
                 edge_id(origin, target),
                 edge_n + 1,
+                now,
             ));
         }
         if !is_other_session(origin, target) && target_n >= self.limits.target_max {
@@ -137,21 +144,22 @@ impl LoopBreaker {
                 LatchScope::Session,
                 target.to_string(),
                 target_n + 1,
+                now,
             ));
         }
         self.streak
             .get_mut(target)
             .expect("上面 entry 建过")
-            .push((clock, origin.to_string()));
+            .push((now, origin.to_string()));
         Verdict::Pass
     }
 
-    fn trip(&mut self, scope: LatchScope, id: String, count: usize) -> Latch {
+    fn trip(&mut self, scope: LatchScope, id: String, count: usize, now: Ms) -> Latch {
         let latch = Latch {
             scope,
             id: id.clone(),
             reason: format!("no-progress:{count}/{}min", self.limits.window_ms / MIN),
-            at: self.clock,
+            at: now,
         };
         self.latches.insert((scope, id), latch.clone());
         latch
@@ -162,16 +170,18 @@ impl LoopBreaker {
         self.streak.remove(target);
     }
 
-    /// `poster` 发了一条消息、叫醒了 `woke`。spec §22.4 / §22.7：叫醒了「正在叫它的来源以外的人」才算产出
-    /// （回话给叫醒你的人不算——否则互相 @ 的环路每轮都「有新消息」，永远截不住）。
-    /// 逐字按 spec：`woke` 里只要有一个不是 poster 当前计数里的来源，就算（回叫的同时叫了别人也算）；
-    /// `woke` 为空 = 没有「来源以外的人」，不算。
-    pub fn on_post(&mut self, poster: &str, woke: &[String]) {
-        let reaches_beyond_callers = self
-            .streak
-            .get(poster)
-            .is_none_or(|s| woke.iter().any(|w| !s.iter().any(|(_, o)| o == w)));
-        if reaches_beyond_callers {
+    /// `poster` 发了一条消息。`woke` = 这条消息的**显式目标**（@ 到的人、Jev / 群主兜底的人），
+    /// **不含**只是因为收听才被叫醒的 session（否则 a↔b 互相 @、旁边有个收听者 c 时，环路永远截不住）。
+    /// 产出 = `woke` 非空、且其中没有任何一个是 poster 此刻正在被其叫醒的来源（窗口内、与 `now` 比）：
+    /// 回话给叫醒你的人不算（同时叫了别人也算回叫）；谁也没叫醒也不算（C13 细化，覆盖 spec §22.4 的字面读法）。
+    pub fn on_post(&mut self, poster: &str, woke: &[String], now: Ms) {
+        let window = self.limits.window_ms;
+        let Some(streak) = self.streak.get_mut(poster) else {
+            return;
+        };
+        streak.retain(|(at, _)| Self::live(*at, now, window));
+        let replies_back = woke.iter().any(|w| streak.iter().any(|(_, o)| o == w));
+        if !woke.is_empty() && !replies_back {
             self.progress(poster);
         }
     }
@@ -230,7 +240,7 @@ mod tests {
             // a 叫醒 b，b 回 @a（回叫，不算产出）；b 叫醒 a，a 回 @b ……
             for (target, origin) in [("b", "a"), ("a", "b")] {
                 match b.admit(target, origin, round(i)) {
-                    Verdict::Pass => b.on_post(target, &[origin.to_string()]),
+                    Verdict::Pass => b.on_post(target, &[origin.to_string()], round(i)),
                     Verdict::Tripped(l) => {
                         tripped.push(l);
                         break 'rounds;
@@ -270,44 +280,106 @@ mod tests {
 
     #[test]
     fn posting_to_someone_else_is_progress_replying_back_is_not() {
-        // spec §22.4：T 发的消息叫醒了「正在叫它的来源以外的人」才算产出；回话给叫醒你的人不算。
+        // C13（细化）：产出 = `woke`（只含显式目标）非空、且其中没有任何一个是正在叫它的来源。
         let mut b = lb();
         for i in 0..3 {
             b.admit("b", "a", round(i));
         }
-        b.on_post("b", &["a".to_string()]);
+        b.on_post("b", &["a".to_string()], round(3));
         assert_eq!(b.streak_len("b"), 3, "回给叫它的人不算产出");
-        b.on_post("b", &[]);
+        b.on_post("b", &[], round(3));
+        assert_eq!(b.streak_len("b"), 3, "谁也没叫醒 = 不算产出");
+        b.on_post("b", &["a".to_string(), "c".to_string()], round(3));
         assert_eq!(
             b.streak_len("b"),
             3,
-            "谁也没叫醒 = 没有「来源以外的人」，不算产出（C13，按 spec 字面）"
+            "回了 a 的同时叫了 c，仍算回叫：只要含正在叫它的来源就不算"
         );
-        b.on_post("b", &["a".to_string(), "c".to_string()]);
-        assert_eq!(
-            b.streak_len("b"),
-            0,
-            "叫醒了来源以外的 c = 算产出，哪怕同时回了 a（spec 字面）"
-        );
-        for i in 0..3 {
-            b.admit("b", "a", round(10 + i));
-        }
-        b.on_post("b", &["c".to_string()]);
+        b.on_post("b", &["c".to_string()], round(3));
         assert_eq!(b.streak_len("b"), 0, "只叫了别人 = 产出");
     }
 
     #[test]
     fn reply_back_is_judged_against_every_origin_in_the_streak() {
-        // b 被 a 和 x 都叫过：回 x 也是回叫，不算；只有叫到这两个之外的人才算。
+        // b 被 a 和 x 都叫过：回 x 也是回叫，不算；叫到这两个之外的人才算。
         let mut b = lb();
         b.admit("b", "a", round(0));
         b.admit("b", "x", round(1));
-        b.on_post("b", &["x".to_string()]);
+        b.on_post("b", &["x".to_string()], round(2));
         assert_eq!(b.streak_len("b"), 2);
-        b.on_post("b", &["a".to_string(), "x".to_string()]);
+        b.on_post("b", &["a".to_string(), "x".to_string()], round(2));
         assert_eq!(b.streak_len("b"), 2);
-        b.on_post("b", &["c".to_string()]);
+        b.on_post("b", &["c".to_string()], round(2));
         assert_eq!(b.streak_len("b"), 0);
+    }
+
+    #[test]
+    fn a_ping_pong_with_a_listener_is_still_cut() {
+        // 探针 P1：a↔b 互相 @，c 只是收听者（被唤醒但 `woke` 只含显式目标，不含收听者），
+        // 所以 b 回给 a 仍是回叫；a→b 在第 9 轮被截。
+        let mut b = lb();
+        let mut tripped = None;
+        'rounds: for i in 0..20 {
+            for (target, origin) in [("b", "a"), ("a", "b")] {
+                match b.admit(target, origin, round(i)) {
+                    Verdict::Pass => {
+                        // c 收听这条消息，被叫醒，但它什么也不回。
+                        let _ = b.admit("c", origin, round(i));
+                        b.on_post(target, &[origin.to_string()], round(i));
+                    }
+                    Verdict::Tripped(l) => {
+                        tripped = Some((i, l));
+                        break 'rounds;
+                    }
+                    Verdict::Held(l) => panic!("没熔断过却 Held：{l:?}"),
+                }
+            }
+        }
+        let (i, l) = tripped.expect("a→b 该被截");
+        assert_eq!((l.scope, l.id.as_str()), (LatchScope::Edge, "a→b"));
+        assert_eq!(i, LOOP_LIMITS.edge_max, "第 9 轮（下标 8）截住");
+    }
+
+    #[test]
+    fn a_forward_clock_glitch_does_not_freeze_the_window() {
+        // 墙钟往前跳一天一次，之后恢复正常：窗口不能被「最晚时间」钉死，慢速唤醒不熔断。
+        let mut b = lb();
+        assert_eq!(b.admit("b", "a", T0.add(24 * 60 * MIN)), Verdict::Pass);
+        for i in 0..40 {
+            assert_eq!(
+                b.admit("b", "a", T0.add(i * 2 * MIN)),
+                Verdict::Pass,
+                "第 {i} 次"
+            );
+        }
+        assert!(b.latches().is_empty());
+    }
+
+    #[test]
+    fn trip_is_stamped_with_the_real_now() {
+        let mut b = lb();
+        b.admit("b", "a", T0.add(24 * 60 * MIN));
+        for i in 0..LOOP_LIMITS.edge_max {
+            b.admit("b", "a", T0.add(i as i64 * SEC));
+        }
+        let Verdict::Tripped(l) = b.admit("b", "a", T0.add(9 * SEC)) else {
+            panic!("该熔断")
+        };
+        assert_eq!(l.at, T0.add(9 * SEC));
+    }
+
+    #[test]
+    fn on_post_judges_against_current_callers_only() {
+        // a 叫过 b，但已出窗口（之后没有任何 admit 来顺手清理）：b 此刻回 a，a 不是「正在叫它的来源」→ 算产出。
+        let mut b = lb();
+        b.admit("b", "a", T0);
+        let later = T0.add(LOOP_LIMITS.window_ms + MIN);
+        b.on_post("b", &["a".to_string()], later);
+        assert_eq!(b.streak_len("b"), 0);
+        // 反过来：回 x（当前的叫醒者）仍不算。
+        b.admit("b", "x", later);
+        b.on_post("b", &["x".to_string()], later);
+        assert_eq!(b.streak_len("b"), 1);
     }
 
     #[test]
@@ -374,18 +446,19 @@ mod tests {
         let workers: Vec<String> = (1..=30).map(|i| format!("w{i}")).collect();
         for tools_reported in [true, false] {
             let mut b = lb();
-            // 10 分钟里 3 轮：机长给每个 worker 派一件事，worker 干活、回报 @机长，机长接着派下一件。
-            // `tools_reported = false`：M3b 接上工具调用信号之前，只有消息这一种产出信号。
-            for r in 0..3 {
+            // 14 轮、每轮间隔 75 秒：任一 10 分钟窗口里同一条边最多 8 次，贴着 edge_max 但不超。
+            // 机长给每个 worker 派一件事，worker 干活、回报 @机长，机长接着派下一件。
+            // `tools_reported = false`：M3b 接上工具调用信号之前，回报给机长不算产出，计数一路累到窗口上限前。
+            for r in 0..14 {
                 for (i, w) in workers.iter().enumerate() {
-                    let now = T0.add((r * 30 + i) as i64 * 6 * SEC);
+                    let now = T0.add(r * 75 * SEC + i as i64 * 2 * SEC);
                     assert_eq!(b.admit(w, "cap", now), Verdict::Pass, "{w} 第 {r} 轮");
                     if tools_reported {
                         b.progress(w);
                     }
-                    b.on_post(w, &["cap".to_string()]);
+                    b.on_post(w, &["cap".to_string()], now);
                     assert_eq!(b.admit("cap", w, now), Verdict::Pass, "cap ← {w} 第 {r} 轮");
-                    b.on_post("cap", std::slice::from_ref(w));
+                    b.on_post("cap", std::slice::from_ref(w), now);
                 }
             }
             assert!(b.latches().is_empty());
@@ -453,6 +526,46 @@ mod tests {
         assert_eq!(origin_of(WakeKind::Restart, None, "t"), HUMAN);
         for k in [WakeKind::System, WakeKind::Checkpoint, WakeKind::StopCheck] {
             assert_eq!(origin_of(k, None, "t"), SYSTEM);
+        }
+    }
+
+    #[test]
+    fn a_human_message_is_human_origin_even_when_it_wakes_a_listener_at_auto_priority() {
+        // origin_of 是唯一的来源定义（IO 层一律调它，不从 WakeTarget.priority 反推）：
+        // 人发的消息叫醒收听者时唤醒档位是 Auto，但来源仍是人 → 永不计数、永不被挡。
+        use crate::model::{MessageRef, Priority};
+        use crate::plan::{ChannelCtx, Listen, Mention, MsgFacts, plan};
+        let now = T0;
+        let ctx = ChannelCtx {
+            session_members: vec!["cap".into(), "w1".into(), "w2".into()],
+            live_sessions: vec!["cap".into(), "w1".into(), "w2".into()],
+            owner: Some("cap".into()),
+            listens: vec![Listen {
+                session: "w2".into(),
+                until: now.add(MIN),
+                senders: None,
+            }],
+            ..ChannelCtx::default()
+        };
+        let msg = MsgFacts {
+            id: "m-1".into(),
+            at: MessageRef {
+                channel: "c1/lobby".into(),
+                seq: 1,
+            },
+            sender: Sender::Human,
+            mentions: vec![Mention::Broadcast, Mention::Session("w1".into())],
+            created_at: now,
+        };
+        let w2 = plan(&msg, &ctx, None, now)
+            .into_iter()
+            .find(|t| t.session == "w2")
+            .expect("w2 被收听叫醒");
+        assert_eq!(w2.priority, Priority::Auto);
+        assert_eq!(origin_of(WakeKind::Message, Some(&msg.sender), "w2"), HUMAN);
+        let mut b = lb();
+        for i in 0..100 {
+            assert_eq!(b.admit("w2", HUMAN, T0.add(i)), Verdict::Pass);
         }
     }
 
