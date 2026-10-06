@@ -210,6 +210,10 @@ pub struct Live {
     pub stopping: bool,
     /// crewd 自己叫停的（停机等，[`Core::halt`]）：不改 desired / was_working，带着的唤醒原样退回。
     pub halting: bool,
+    /// 往这个会话里写东西的先后（预检 P4）：nudge 的一串键 / 一段文本拿着它写完才放，两次 nudge 不交错。
+    /// **Task 8 的投递（`handle.send`）也要排进来**：actor 里不能等锁——`try_lock` 拿不到 = 正有一串键在写，
+    /// 这一刻不投，等那次 nudge 写完（回执之后）再投；拿到了就在持锁时 `send`。
+    pub writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub struct Starting {
@@ -618,7 +622,8 @@ impl<P: Port> Core<P> {
     }
 
     /// nudge（`crewd_wake::notice::nudge_plan` 的契约）：空的拒绝（绝不变成一个裸回车）；键 / 数字逐个单独 `raw`、
-    /// 之间隔 `NUDGE_KEY_GAP_MS`（在派生任务里等，不堵 actor；写完才回执）；文本走 `send`（三拍提交）。
+    /// 之间隔 `NUDGE_KEY_GAP_MS`；文本走 `send`（三拍提交）。都在派生任务里、拿着 `Live::writes` 写（不堵 actor、
+    /// 不交错；写完才回执）。
     /// 待决策框的选项没有编号时拒绝数字：发了也只是把回车落在当前高亮项上。
     fn nudge(&self, session: &str, input: &str, reply: Reply<()>) {
         let not_running = || ControlError::NotRunning(session.into());
@@ -638,35 +643,37 @@ impl<P: Port> Core<P> {
             let _ = reply.send(Err(ControlError::Invalid(why.into())));
             return;
         }
-        match plan {
-            NudgePlan::Text(text) => {
-                let r = l
-                    .handle
-                    .send(text, &Context::new())
-                    .map(|_| ())
-                    .map_err(|e| match e {
-                        ExecSendError::Send(SendError::Closed) => not_running(),
-                        other => ControlError::Invalid(other.to_string()),
-                    });
-                let _ = reply.send(r);
-            }
-            NudgePlan::Keys(keys) => {
-                let (handle, session) = (l.handle.clone(), session.to_string());
-                tokio::spawn(async move {
-                    let mut r = Ok(());
-                    for (i, key) in keys.into_iter().enumerate() {
-                        if i > 0 {
-                            tokio::time::sleep(Duration::from_millis(NUDGE_KEY_GAP_MS)).await;
+        // 写会话的先后由 `Live::writes` 排队：拿到锁才写，一次 nudge 的整串写完才放（锁是 FIFO 的，按到达顺序）。
+        let (handle, writes, session) = (l.handle.clone(), l.writes.clone(), session.to_string());
+        tokio::spawn(async move {
+            let _turn = writes.lock().await;
+            let r =
+                match plan {
+                    NudgePlan::Text(text) => handle
+                        .send(text, &Context::new())
+                        .map(|_| ())
+                        .map_err(|e| match e {
+                            ExecSendError::Send(SendError::Closed) => {
+                                ControlError::NotRunning(session)
+                            }
+                            other => ControlError::Invalid(other.to_string()),
+                        }),
+                    NudgePlan::Keys(keys) => {
+                        let mut r = Ok(());
+                        for (i, key) in keys.into_iter().enumerate() {
+                            if i > 0 {
+                                tokio::time::sleep(Duration::from_millis(NUDGE_KEY_GAP_MS)).await;
+                            }
+                            if handle.raw(key).is_err() {
+                                r = Err(ControlError::NotRunning(session));
+                                break;
+                            }
                         }
-                        if handle.raw(key).is_err() {
-                            r = Err(ControlError::NotRunning(session));
-                            break;
-                        }
+                        r
                     }
-                    let _ = reply.send(r);
-                });
-            }
-        }
+                };
+            let _ = reply.send(r);
+        });
     }
 
     // —— 拉起
@@ -817,6 +824,7 @@ impl<P: Port> Core<P> {
                         inflight,
                         stopping: st.stop_requested,
                         halting: false,
+                        writes: Arc::new(tokio::sync::Mutex::new(())),
                     },
                 );
             }
@@ -2498,6 +2506,35 @@ mod tests {
             "数字和回车分两次写、至少隔 {NUDGE_KEY_GAP_MS}ms：{gap:?}"
         );
         assert!(st.sends.is_empty(), "键不走 send");
+    }
+
+    /// 预检 P4：同一个 session 的两次 nudge 同时来——各自的键序列不能交错（「1」「回车」「2」「回车」会答错题）。
+    #[tokio::test]
+    async fn concurrent_nudges_to_one_session_do_not_interleave() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let mut replies = Vec::new();
+        for input in ["12", "enter", "继续"] {
+            let (tx, rx) = oneshot::channel();
+            rig.core
+                .handle(Input::Cmd(Cmd::Nudge {
+                    session: "cap".into(),
+                    input: input.into(),
+                    reply: tx,
+                }))
+                .await;
+            replies.push(rx);
+        }
+        rig.settle().await;
+        for rx in replies {
+            rx.await.unwrap().unwrap();
+        }
+        assert_eq!(
+            rig.exec.lock().writes["cap"],
+            ["raw:1", "raw:2", "raw:\\r", "raw:\\r", "send:继续"],
+            "按到达顺序、一次 nudge 写完再下一次"
+        );
     }
 
     #[tokio::test]

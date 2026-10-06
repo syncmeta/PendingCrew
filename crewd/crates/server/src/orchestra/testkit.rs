@@ -616,6 +616,8 @@ pub struct StandInState {
     pub raws: BTreeMap<String, Vec<Vec<u8>>>,
     /// 每次 `raw` 的时刻（与 `raws` 一一对应）：量 nudge 键之间的间隔。
     pub raw_at: BTreeMap<String, Vec<std::time::Instant>>,
+    /// 写进会话的先后（`raw:<字节>` / `send:<正文>`），按 session：量 nudge / 投递有没有交错。
+    pub writes: BTreeMap<String, Vec<String>>,
     pub stops: Vec<String>,
     pub cleared_quota: Vec<String>,
     pub events: BTreeMap<String, mpsc::UnboundedSender<SessionEvent>>,
@@ -865,6 +867,11 @@ impl ExecHandle for StandInHandle {
             .entry(self.session.clone())
             .or_default()
             .insert(id);
+        let last = s.sends[&self.session].last().map(|(_, t)| t.clone());
+        s.writes
+            .entry(self.session.clone())
+            .or_default()
+            .push(format!("send:{}", last.unwrap_or_default()));
         Ok(id)
     }
 
@@ -875,6 +882,13 @@ impl ExecHandle for StandInHandle {
             .entry(self.session.clone())
             .or_default()
             .push(std::time::Instant::now());
+        let shown = String::from_utf8_lossy(s.raws[&self.session].last().expect("刚写的"))
+            .escape_default()
+            .to_string();
+        s.writes
+            .entry(self.session.clone())
+            .or_default()
+            .push(format!("raw:{shown}"));
         Ok(())
     }
 
