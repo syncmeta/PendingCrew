@@ -34,7 +34,8 @@ impl SideTracker {
         self.parser.advance(&mut self.state, bytes);
     }
 
-    /// alacritty 的 `Term::resize` 无条件把滚动区域复位成整屏。
+    /// alacritty 的 `Term::resize` 只在尺寸真的变了时才把滚动区域复位成整屏（没变就提前返回）；
+    /// 所以这里的复位只在 `Screen::resize` 判定「尺寸变了」之后才被调用。
     pub(crate) fn resize(&mut self, lines: usize) {
         self.state.lines = lines;
         self.state.region = (0, lines);

@@ -182,7 +182,11 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub fn new(config: ScreenConfig) -> Self {
+    /// 新建终端。尺寸规则与 [`Screen::resize`] 一致：`cols < 2` 或 `lines < 1` 不 panic，
+    /// 而是钳到最小值（2 列、1 行）。
+    pub fn new(mut config: ScreenConfig) -> Self {
+        config.cols = config.cols.max(2);
+        config.lines = config.lines.max(1);
         let replies = Replies(Arc::new(Mutex::new(Outbox {
             bytes: Vec::new(),
             size: window_size(config.cols, config.lines),
@@ -329,6 +333,21 @@ mod tests {
 
     fn screen() -> Screen {
         Screen::new(ScreenConfig::default())
+    }
+
+    #[test]
+    fn new_clamps_degenerate_sizes_instead_of_panicking() {
+        let config = ScreenConfig {
+            cols: 0,
+            lines: 0,
+            ..ScreenConfig::default()
+        };
+        let mut s = Screen::new(config);
+        assert_eq!((s.cols(), s.lines()), (2, 1));
+        assert_eq!(s.scroll_region(), (0, 1));
+        s.feed(b"ab\r\ncd");
+        s.feed(b"\x1b[18t");
+        assert_eq!(s.take_replies(), b"\x1b[8;1;2t");
     }
 
     #[test]
