@@ -3,6 +3,8 @@
 pub mod breaker;
 pub mod model;
 pub mod plan;
+pub mod policy;
+pub mod queue;
 pub mod text;
 
 pub use model::*;
