@@ -288,4 +288,55 @@ mod tests {
         assert_eq!(t.poll(t0 - secs(5.0), None), None);
         assert!(t.poll(t0 + STABLE_WINDOW, None).is_some());
     }
+
+    /// 粘住：字节尾窗先认出措辞 B 的菜单并已报出，之后屏幕源也认出同一个菜单但措辞 A
+    /// （指纹不同）。选择必须继续粘在 B 上——不能因为屏幕源排在前面就换成 A、重起一轮计时、
+    /// 再报第二次 `Appeared`。
+    #[test]
+    fn sticky_fingerprint_survives_a_second_source_with_other_wording() {
+        let mut t = PendingDecisionTracker::new();
+        let mut now = Instant::now();
+        t.feed(permission_menu().as_bytes());
+        let screen_a: Vec<String> = permission_menu()
+            .replace(
+                "No, and tell Claude what to do (esc)",
+                "No, tell Claude (esc)",
+            )
+            .split('\n')
+            .map(str::to_string)
+            .collect();
+        assert_ne!(
+            blocking_dialog(&screen_a).unwrap().fingerprint(),
+            parse_menu(&permission_menu()).unwrap().fingerprint(),
+            "前提：两条来源的措辞（指纹）确实不同"
+        );
+
+        // 第一拍只有字节尾窗；稳住 STABLE_WINDOW 后报出 B。
+        let mut appeared = Vec::new();
+        let mut events =
+            |now: Instant, screen: Option<&[String]>, t: &mut PendingDecisionTracker| {
+                if let Some(e) = t.poll(now, screen) {
+                    appeared.push(e);
+                }
+            };
+        events(now, None, &mut t);
+        now += STABLE_WINDOW + secs(0.1);
+        events(now, None, &mut t);
+        // 之后屏幕源也来了（措辞 A），两条来源都稳稳挂着，至少 10 拍。
+        for _ in 0..12 {
+            now += secs(1.0);
+            events(now, Some(&screen_a), &mut t);
+        }
+        assert_eq!(appeared.len(), 1, "只该报一次，实际 {appeared:?}");
+        match &appeared[0] {
+            DecisionEvent::Appeared(d) => {
+                assert_eq!(d.options[1], "No, and tell Claude what to do (esc)");
+            }
+            other => panic!("应是 Appeared(B)，实际 {other:?}"),
+        }
+        assert_eq!(
+            t.pending().map(|d| d.options[1].as_str()),
+            Some("No, and tell Claude what to do (esc)")
+        );
+    }
 }
