@@ -34,8 +34,9 @@ fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
         None => Ok(WorkBook::new(CrewId::new(crew), Config::default())),
         Some(s) => {
             let st: BookState = serde_json::from_str(&s)?;
+            // 读回来不合法 = 服务端的错（同账本不变式，终审 M4）：映射成 -32603，细节只进日志，不给客户端。
             WorkBook::restore(st, Config::default())
-                .map_err(|v| CollabError::Invalid(format!("机组 {crew} 的工作账本读回不合法：{v}")))
+                .map_err(|v| CollabError::Work(Rejected::Invariant(v)))
         }
     }
 }
@@ -805,5 +806,37 @@ mod tests {
             })
             .collect();
         assert_eq!(asks, ["H1"], "{ch:?}");
+    }
+
+    /// 终审 M4：库里的账本读回来不合法 = 服务端的错（不变式），不是调用方的参数错（-32602 会把细节发给客户端）。
+    #[test]
+    fn a_corrupt_stored_book_is_an_invariant_error_not_invalid_params() {
+        let mut s = store();
+        ok(&mut s, |tx| open(tx, "w-a1", q("还要吗？")));
+        let raw: String = s
+            .conn()
+            .query_row(
+                "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let key = ["lastAsk", "last_ask"]
+            .into_iter()
+            .find(|k| v.get(*k).is_some())
+            .expect("账本状态里有 H 号计数器");
+        v[key] = serde_json::json!(0);
+        s.conn()
+            .execute(
+                "UPDATE work_books SET state=?1 WHERE crew_id='crew-a'",
+                [v.to_string()],
+            )
+            .unwrap();
+        let e = get(s.conn(), "crew-a", "H1").unwrap_err();
+        assert!(
+            matches!(e, CollabError::Work(Rejected::Invariant(_))),
+            "{e:?}"
+        );
     }
 }
