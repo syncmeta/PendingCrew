@@ -227,9 +227,11 @@ wakes::{WakeKind, WakePriority, WakeState, WakeRequest { session, kind, source, 
         next_due_at(conn) /* 最早 pending，含已过期 */, next_due_after(conn, now_ms) /* 晚于 now 的最早 pending */,
         sessions_with_due, recent_for, list, prune(tx, settled_before_ms) -> usize /* 删已 delivered / dropped 的旧行 */}
 wakes::latches::{Scope::{Edge { from, to }, Session(String)}, Latch, set, clear, get, list}
-render::{ChannelBlock, MsgLine, WakeBatch, WakeItem, WakeBody, blocks_for(conn, session, &[(String, Vec<Message>)]) -> Vec<ChannelBlock>,
+render::{ChannelBlock, MsgLine, WakeBatch { session_id, items, unusable, deferred /* 窗口外的消息行：留 pending，下一批带（R6）*/ },
+         WakeBatch::cursor_targets() -> Vec<(channel, seq)> /* 投递后游标推到这里：实际带上的最大 seq */, WakeItem, WakeBody,
+         blocks_for(conn, session, Locale, &[(String, Vec<Message>)]) -> Result<Vec<ChannelBlock>> /* 语言由调用方给，不读 meta */,
          injection(Locale, &[ChannelBlock]) -> String, wake_text(Locale, &WakeBatch) -> String,
-         build_batch(conn, session, &[WakeRow]) -> Result<WakeBatch>}
+         build_batch(conn, session, Locale, &[WakeRow]) -> Result<WakeBatch> /* 每行恰落 items / unusable / deferred 之一；只有查无此项进 unusable，库出错上抛 */}
 settings::{locale(conn) -> Locale, max_live_sessions(conn) -> Option<u32>, set_max_live_sessions(tx, Option<u32>)}
 prompts::{parse, PromptFile, render_file(Locale), fill(template, &[(&str, &str)]) /* 一遍扫描，值不再展开（G-F）*/, placeholders}
 worldview::{WorldCtx, context_for(conn, session, Locale) -> Result<WorldCtx>, render(&WorldCtx) -> String}       // M3b 实现
@@ -6825,7 +6827,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 5–10。
 - Produces：
-  - `render::{MsgLine { seq, at, sender, text, directed_to: Option<Vec<String>>, reply_to: Option<String> }, ChannelBlock { channel_id, kind, name, crew_title, lines }, WakeBody, WakeItem { wake_ids: Vec<i64>, kind, note, body }, WakeBatch { session_id, items, unusable: Vec<(i64, String)> }, blocks_for(conn, session, &[(String, Vec<Message>)]) -> Result<Vec<ChannelBlock>>, injection(Locale, &[ChannelBlock]) -> String, wake_text(Locale, &WakeBatch) -> String, build_batch(conn, session, &[WakeRow]) -> Result<WakeBatch>}`。`WakeBody = Messages(Vec<ChannelBlock>) | Timer | AskAnswered { ask, question, answer, resume_note } | AskDefaulted { ask, question, answer, resume_note } | Approval { tool, summary, allow } | Restart | System | Checkpoint | StopCheck`。
+  - `render::{MsgLine { seq, at, sender, text, directed_to: Option<Vec<String>>, reply_to: Option<String> }, ChannelBlock { channel_id, kind, name, crew_title, lines }, WakeBody, WakeItem { wake_ids: Vec<i64>, kind, note, body }, WakeBatch { session_id, items, unusable: Vec<(i64, String)>, deferred: Vec<i64> } + WakeBatch::cursor_targets(), blocks_for(conn, session, Locale, &[(String, Vec<Message>)]) -> Result<Vec<ChannelBlock>>, injection(Locale, &[ChannelBlock]) -> String, wake_text(Locale, &WakeBatch) -> String, build_batch(conn, session, Locale, &[WakeRow]) -> Result<WakeBatch>}`（Task 11 评审后：`Locale` 参数、`deferred` / `cursor_targets` 见冻结块）。`WakeBody = Messages(Vec<ChannelBlock>) | Timer | AskAnswered { ask, question, answer, resume_note } | AskDefaulted { ask, question, answer, resume_note } | Approval { tool, summary, allow } | Restart | System | Checkpoint | StopCheck`。
   - `worldview::{WorldCtx { locale, session_id, role, executor, brief, crew_id, crew_title, working_directory, captain_name, parent_titles, child_titles, channels, human_watching }, context_for(conn, session, Locale) -> Result<WorldCtx>, render(&WorldCtx) -> String}`（M3a 的 `render` 返回空串，M3b 实现）。
   - `turn_trace::{TurnEnd { Nothing, Posted { message_id }, AlreadyCalled, Replayed, Unknown }, on_turn_end(tx, session, prompt_id, last_text) -> Result<TurnEnd>}`（M3a 恒返回 `Nothing`，M3b 实现）。
 
