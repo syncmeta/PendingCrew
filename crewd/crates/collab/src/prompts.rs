@@ -132,17 +132,10 @@ pub fn fill(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
-/// 看不见、会把一个名字拆成「看起来一样但字节不同」的字符：比较保留标签前先去掉（终审复审 5）。
-const ZERO_WIDTH: &[char] = &['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\u{2060}'];
-
 /// 人类 / crewd 的发言者标签留给它们自己（终审 I5）：session 的标题、显示名与 topic 名不能是任一语言里的
-/// `sender.human` / `sender.system`（压换行、去零宽字符、去首尾空白后比，不分大小写），否则注入面上它的发言就像人说的。
+/// `sender.human` / `sender.system`（压换行、去掉看不见的字符（Cf / Cc / Zl / Zp，同渲染的 `safe_name`）、去首尾空白后比，不分大小写），否则注入面上它的发言就像人说的。
 pub(crate) fn refuse_sender_label(what: &str, value: &str) -> crate::Result<()> {
-    let v: String = crate::render::flat(value)
-        .chars()
-        .filter(|c| !ZERO_WIDTH.contains(c))
-        .collect();
-    let v = v.trim().to_lowercase();
+    let v = crate::render::visible(value).trim().to_lowercase();
     for l in [Locale::Zh, Locale::En] {
         let f = render_file(l);
         for label in ["sender.human", "sender.system"] {

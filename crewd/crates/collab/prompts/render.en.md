@@ -18,13 +18,13 @@ Human
 crewd
 
 ## sender.session
-[ext {ext}] {name}
+(ext {ext}) {name}
 
 ## sender.session.unnumbered
-[member] {name}
+(member) {name}
 
 ## sender.captain
-[captain] {name}
+(captain) {name}
 
 ## inject.header
 New messages in your channels (only those addressed to or visible to you):

@@ -561,6 +561,8 @@ mod tests {
             "human",
             "人\u{200B}类",
             "\u{FEFF}Hu\u{200C}m\u{200D}an\u{2060}",
+            "人\u{202E}类",
+            "\u{200E}crewd\u{200F}",
         ] {
             for n in [
                 NewSession {
