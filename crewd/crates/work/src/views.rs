@@ -2,7 +2,7 @@
 //! 不渲染文字——给 agent 看的文案归 M4b 的模板）、到期检查点（§5，同一 session 合并一条）、负责人失联候选（§5）。
 use crate::book::WorkBook;
 use crate::ids::{EntryNo, SessionId, Ts, WorkId};
-use crate::model::{Blocker, Status, WorkItem};
+use crate::model::{Blocker, Config, Status, WorkItem};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -214,19 +214,7 @@ impl WorkBook {
         let mut out = Vec::new();
         for it in self.state.items.values() {
             let Some(owner) = &it.owner else { continue };
-            if it.status.is_terminal() {
-                continue;
-            }
-            let cause = if unrecoverable.contains(owner) {
-                LostCause::Unrecoverable
-            } else if matches!(it.status, Status::Open | Status::Active)
-                && it.missed_checks >= self.cfg.missed_checks_limit
-                && it.next_check_at.is_some_and(|t| t <= now)
-            {
-                LostCause::Silent {
-                    missed: it.missed_checks,
-                }
-            } else {
+            let Some(cause) = lost_cause(it, now, &self.cfg, unrecoverable) else {
                 continue;
             };
             out.push(LostOwner {
@@ -236,6 +224,33 @@ impl WorkBook {
             });
         }
         out
+    }
+}
+
+/// 这一项的负责人算不算失联（spec §5）：恢复失败名单里有它 → Unrecoverable（含 blocked 项）；
+/// open / active 项连续 K 次叫醒没回报、且最后一次之后的复查时间也过了 → Silent。`owner_lost` 与
+/// `reassign_lost`（重派前核实）共用这一个判定。
+pub(crate) fn lost_cause(
+    it: &WorkItem,
+    now: Ts,
+    cfg: &Config,
+    unrecoverable: &BTreeSet<SessionId>,
+) -> Option<LostCause> {
+    let owner = it.owner.as_ref()?;
+    if it.status.is_terminal() {
+        return None;
+    }
+    if unrecoverable.contains(owner) {
+        Some(LostCause::Unrecoverable)
+    } else if matches!(it.status, Status::Open | Status::Active)
+        && it.missed_checks >= cfg.missed_checks_limit
+        && it.next_check_at.is_some_and(|t| t <= now)
+    {
+        Some(LostCause::Silent {
+            missed: it.missed_checks,
+        })
+    } else {
+        None
     }
 }
 

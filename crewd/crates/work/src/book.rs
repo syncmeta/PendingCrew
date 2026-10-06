@@ -31,6 +31,8 @@ pub enum Rejected {
     TransferPending(WorkId),
     NoPendingTransfer(WorkId),
     NotOwned(WorkId),
+    /// 失联重派的项，负责人并没有核实失联（不在恢复失败名单里，也没到 Silent 线）。
+    NotLost(WorkId),
     AskNotOpen(AskId),
     NoDefault(AskId),
     DefaultNotDue(AskId),

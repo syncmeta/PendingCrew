@@ -201,7 +201,7 @@ fn silent_owner_is_replaced_and_the_new_owner_is_due_at_once() {
             cause: LostCause::Silent { missed: 2 }
         }]
     );
-    b.reassign_lost(&Actor::System, t, w, sid("b"), "a 两次检查没回报")
+    b.reassign_lost(&Actor::System, t, w, sid("b"), "a 两次检查没回报", &none)
         .unwrap();
     assert_eq!(
         b.due_checkpoints(t),

@@ -5,6 +5,8 @@ use crate::events::EventKind;
 use crate::ids::{SessionId, Ts, WorkId};
 use crate::model::{Actor, HowChanged, OwnerChange, PendingTransfer, Status};
 use crate::perm::{Action, Ctx};
+use crate::views::lost_cause;
+use std::collections::BTreeSet;
 
 impl WorkBook {
     /// `work_item_transfer_request`：只有现负责人能发起；同一时刻只挂一条。
@@ -116,7 +118,9 @@ impl WorkBook {
         })
     }
 
-    /// 负责人失联后重派（spec §5：排除原负责人）。调度层 / 行政处 / 机长 / 人可做。
+    /// 负责人失联后重派（spec §5：排除原负责人）。调度层 / 行政处 / 机长 / 人可做，但只能重派**核实过失联**的项：
+    /// 负责人在 `unrecoverable`（crewd 试过 `--resume` 失败的 session）里，或按检查点记账已判 Silent
+    /// （同 `owner_lost`）。健康负责人的项拒绝（`NotLost`）——行政处没有强制指派权（§8.2 / §8.4），要换人走 `assign`。
     pub fn reassign_lost(
         &mut self,
         by: &Actor,
@@ -124,7 +128,9 @@ impl WorkBook {
         id: WorkId,
         to: SessionId,
         note: &str,
+        unrecoverable: &BTreeSet<SessionId>,
     ) -> Result<Applied<()>, Rejected> {
+        let cfg = self.cfg;
         self.transact(by, now, |d| {
             if d.live(id)?.owner.is_none() {
                 return Err(Rejected::NotOwned(id));
@@ -132,6 +138,9 @@ impl WorkBook {
             d.permit_on(Action::ReassignLost, id)?;
             if d.item(id)?.owner.as_ref() == Some(&to) {
                 return Err(Rejected::SameOwner);
+            }
+            if lost_cause(d.item(id)?, d.now, &cfg, unrecoverable).is_none() {
+                return Err(Rejected::NotLost(id));
             }
             d.change_owner(id, to, HowChanged::Lost, note.to_string(), true)
         })
@@ -372,15 +381,17 @@ mod tests {
         let w = claim(&mut b, "a", &["x"])[0];
         activate(&mut b, "a", w, T1);
         let later = T1.plus(3 * HOUR);
+        let none = BTreeSet::new();
+        let dead: BTreeSet<SessionId> = [sid("a")].into();
         assert_eq!(
-            b.reassign_lost(&Actor::System, later, w, sid("a"), "失联"),
+            b.reassign_lost(&Actor::System, later, w, sid("a"), "失联", &dead),
             Err(Rejected::SameOwner)
         );
         assert_eq!(
-            b.reassign_lost(&Actor::worker("b"), later, w, sid("b"), "失联"),
+            b.reassign_lost(&Actor::worker("b"), later, w, sid("b"), "失联", &dead),
             Err(Rejected::Forbidden(Action::ReassignLost))
         );
-        b.reassign_lost(&Actor::admin("d"), later, w, sid("b"), "a 两次没回报")
+        b.reassign_lost(&Actor::admin("d"), later, w, sid("b"), "a 恢复不了", &dead)
             .unwrap();
         let it = b.item(w).unwrap();
         assert_eq!(
@@ -393,9 +404,66 @@ mod tests {
             .unwrap()
             .value;
         assert_eq!(
-            b.reassign_lost(&Actor::System, later, orphan, sid("b"), "n"),
+            b.reassign_lost(&Actor::System, later, orphan, sid("b"), "n", &none),
             Err(Rejected::NotOwned(orphan))
         );
+    }
+
+    #[test]
+    fn reassigning_a_healthy_owner_is_not_a_lost_reassignment() {
+        // 评审 P2：行政处不能拿失联重派当强制指派用（§8.2 / §8.4），调度层也不能凭空判失联。
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        activate(&mut b, "a", w, T1);
+        let none = BTreeSet::new();
+        let someone_else: BTreeSet<SessionId> = [sid("z")].into();
+        for by in [Actor::admin("d"), Actor::System, Actor::captain("c")] {
+            assert_eq!(
+                b.reassign_lost(&by, T1, w, sid("b"), "你失联了", &none),
+                Err(Rejected::NotLost(w))
+            );
+            assert_eq!(
+                b.reassign_lost(&by, T1, w, sid("b"), "你失联了", &someone_else),
+                Err(Rejected::NotLost(w)),
+                "恢复失败名单里没有它的负责人"
+            );
+        }
+        assert_eq!(b.item(w).unwrap().owner, Some(sid("a")));
+    }
+
+    #[test]
+    fn silent_owner_may_be_reassigned_once_verified_lost() {
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        activate(&mut b, "a", w, T1);
+        let none = BTreeSet::new();
+        let due = T1.plus(HOUR);
+        b.record_checkpoint_wake(&Actor::System, due, &[w]).unwrap();
+        let again = due.plus(15 * MINUTE);
+        b.record_checkpoint_wake(&Actor::System, again, &[w])
+            .unwrap();
+        assert_eq!(
+            b.reassign_lost(
+                &Actor::admin("d"),
+                again.plus(15 * MINUTE - 1),
+                w,
+                sid("b"),
+                "n",
+                &none
+            ),
+            Err(Rejected::NotLost(w)),
+            "复查时间还没过"
+        );
+        b.reassign_lost(
+            &Actor::admin("d"),
+            again.plus(15 * MINUTE),
+            w,
+            sid("b"),
+            "a 两次没回报",
+            &none,
+        )
+        .unwrap();
+        assert_eq!(b.item(w).unwrap().owner, Some(sid("b")));
     }
 
     #[test]

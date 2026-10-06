@@ -314,7 +314,9 @@ fn step(r: &mut Rng, b: &mut WorkBook, now: Ts) -> (&'static str, Result<Vec<Eve
         }
         "reassign_lost" => {
             let (id, by, to) = (item(r, b), any_actor(r), session(r));
-            ok(b.reassign_lost(&by, now, id, to, &text(r, "lost")))
+            // 和 exercise_views 用同一份「恢复失败」名单：b 名下的项可以被核实为失联。
+            let dead: BTreeSet<SessionId> = [SessionId::new("b")].into();
+            ok(b.reassign_lost(&by, now, id, to, &text(r, "lost"), &dead))
         }
         "record_checkpoint_wake" => {
             let ids: Vec<WorkId> = (0..1 + r.below(2)).map(|_| item(r, b)).collect();
