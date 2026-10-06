@@ -1,5 +1,9 @@
 //! RPC 参数。全部 `deny_unknown_fields`（§14 遗留：客户端拼错字段要报错，不能静默忽略）。
-use crate::model::{Attachment, ChannelKind, Ledger, MemberRef, Mention, RestartAnswer};
+//! 嵌套在参数里的值（@、成员、附件）有自己的严格类型（`*Param`），经 `From` 转成模型类型：严格只管客户端输入，
+//! 共享的模型类型对库里读出来的行保持宽松（控制者裁定 c，Task 14 复审）。
+use crate::model::{
+    Attachment, ChannelKind, Ledger, MemberRef, Mention, MentionKind, RestartAnswer,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +18,87 @@ macro_rules! params {
 
 // R11（契约与解析器一致）：解析器收 `null` 的参数类型在契约里写成 `object | null`。只给只被
 // `parse_no_params` / `parse_params_or_default` 解析的类型加（proto 的测试按方法逐个核）。
+/// 客户端给的 @（`message.post`）。线上形状同 `Mention`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MentionParam {
+    pub kind: MentionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+}
+
+impl From<MentionParam> for Mention {
+    fn from(p: MentionParam) -> Mention {
+        Mention {
+            kind: p.kind,
+            target_id: p.target_id,
+        }
+    }
+}
+
+/// 客户端给的附件（`message.post`；非空一律拒，裁定 14）。线上形状同 `Attachment`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentParam {
+    pub id: String,
+    pub mime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+}
+
+impl From<AttachmentParam> for Attachment {
+    fn from(p: AttachmentParam) -> Attachment {
+        Attachment {
+            id: p.id,
+            mime: p.mime,
+            size: p.size,
+            path: p.path,
+            filename: p.filename,
+        }
+    }
+}
+
+/// 客户端给的成员 / 群主。线上形状同 `MemberRef`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum MemberParam {
+    Session {
+        id: String,
+    },
+    // `Default` 只为参数结构的 `Default`（`parse_params_or_default`）；没有业务含义。
+    #[default]
+    Human,
+}
+
+/// 手写：serde 对内部标签枚举的**单元**变体不执行 `deny_unknown_fields`（`{"kind":"human","id":"x"}` 会被静默收下），
+/// 所以经一个线上形状相同、`Human` 写成空结构变体的影子类型来解。契约（JsonSchema）仍由上面的 derive 生成。
+impl<'de> Deserialize<'de> for MemberParam {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+        enum Wire {
+            Session { id: String },
+            Human {},
+        }
+        Ok(match Wire::deserialize(d)? {
+            Wire::Session { id } => MemberParam::Session { id },
+            Wire::Human {} => MemberParam::Human,
+        })
+    }
+}
+
+impl From<MemberParam> for MemberRef {
+    fn from(p: MemberParam) -> MemberRef {
+        match p {
+            MemberParam::Session { id } => MemberRef::Session { id },
+            MemberParam::Human => MemberRef::Human,
+        }
+    }
+}
+
 params!(/// 无参数方法只收 null 或 {}。
     #[schemars(extend("type" = ["object", "null"]))]
     NoParams {});
@@ -43,7 +128,7 @@ params!(ChannelCreateParams {
     kind: ChannelKind,
     #[serde(default)] name: String,
     #[serde(default)] purpose: Option<String>,
-    #[serde(default)] members: Vec<MemberRef>,
+    #[serde(default)] members: Vec<MemberParam>,
 });
 params!(ChannelUpdateParams {
     channel_id: String,
@@ -51,10 +136,10 @@ params!(ChannelUpdateParams {
     #[serde(default)] purpose: Option<String>,
     #[serde(default)] archived: Option<bool>,
 });
-params!(ChannelMembersParams { channel_id: String, members: Vec<MemberRef> });
+params!(ChannelMembersParams { channel_id: String, members: Vec<MemberParam> });
 params!(ChannelMemberParams {
     channel_id: String,
-    member: MemberRef
+    member: MemberParam
 });
 params!(ChannelWatchParams {
     channel_id: String,
@@ -62,7 +147,7 @@ params!(ChannelWatchParams {
 });
 params!(ChannelSetOwnerParams {
     channel_id: String,
-    owner: MemberRef
+    owner: MemberParam
 });
 params!(MessageListParams {
     channel_id: String,
@@ -76,9 +161,9 @@ params!(MessagePostParams {
     text: String,
     #[serde(default)] in_reply_to: Option<String>,
     /// captain 不带 targetId（发送时解析）；session 必带。
-    #[serde(default)] mentions: Vec<Mention>,
+    #[serde(default)] mentions: Vec<MentionParam>,
     /// 非空一律拒（上传协议未定，裁定 14）。
-    #[serde(default)] attachments: Vec<Attachment>,
+    #[serde(default)] attachments: Vec<AttachmentParam>,
 });
 params!(MessageSearchParams {
     query: String,
@@ -126,6 +211,16 @@ params!(TodoListParams {
     ledger: Ledger
 });
 params!(SubscribeParams {
-    /// 主题 = 事件名第一个点之前的部分，例如 "message"。
+    /// 主题 = 事件名第一个点之前的部分，例如 "message"。契约里是封闭枚举（`events::TOPICS`）；
+    /// 服务端另有检查，认不出的主题 -32602。
+    #[schemars(schema_with = "topics_schema")]
     topics: Vec<String>,
 });
+
+fn topics_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let topics = crate::events::TOPICS;
+    schemars::json_schema!({
+        "type": "array",
+        "items": { "type": "string", "enum": topics },
+    })
+}

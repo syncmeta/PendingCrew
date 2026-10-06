@@ -274,6 +274,15 @@ async fn params_are_strict_and_errors_are_typed() {
         .await,
         -32602
     );
+    assert_eq!(
+        c.call_err(
+            15,
+            "message.post",
+            json!({"channelId":"a/lobby","text":"x","mentions":[{"kind":"human","label":"@人"}]})
+        )
+        .await,
+        -32602
+    );
     // 控制者裁定 e：不存在的父机组 = -32004。
     assert_eq!(
         c.call_err(

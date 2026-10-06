@@ -233,3 +233,21 @@ fn todos_insert_is_atomic_when_a_response_fails() {
         .unwrap();
     assert_eq!(n, 0);
 }
+
+/// 严格只管客户端参数（控制者裁定，Task 14 复审）：库里存的 @ / 附件多一个键，照样读得出来，不会让整个群列不出来。
+#[test]
+fn stored_mentions_and_attachments_with_extra_keys_still_list() {
+    let s = store_with_crew();
+    messages::insert(s.conn(), &msg("m1", "一"), None).unwrap();
+    s.conn()
+        .execute(
+            r#"UPDATE messages SET mentions='[{"kind":"human","label":"@人"}]',
+               attachments='[{"id":"f1","mime":"image/png","path":"/x/a.png","width":3}]' WHERE id='m1'"#,
+            [],
+        )
+        .unwrap();
+    let all = messages::list(s.conn(), &lobby_id("a"), 0, None, 10).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].mentions[0].kind, MentionKind::Human);
+    assert_eq!(all[0].attachments[0].path, "/x/a.png");
+}

@@ -251,8 +251,41 @@
       "type": "object"
     },
     "Attachment": {
+      "description": "模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `AttachmentParam`。",
+      "properties": {
+        "filename": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "mime",
+        "path"
+      ],
+      "type": "object"
+    },
+    "AttachmentParam": {
       "additionalProperties": false,
-      "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
+      "description": "客户端给的附件（`message.post`；非空一律拒，裁定 14）。线上形状同 `Attachment`。",
       "properties": {
         "filename": {
           "type": [
@@ -385,7 +418,7 @@
         "members": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/MemberRef"
+            "$ref": "#/$defs/MemberParam"
           },
           "type": "array"
         },
@@ -423,7 +456,7 @@
           "type": "string"
         },
         "member": {
-          "$ref": "#/$defs/MemberRef"
+          "$ref": "#/$defs/MemberParam"
         }
       },
       "required": [
@@ -440,7 +473,7 @@
         },
         "members": {
           "items": {
-            "$ref": "#/$defs/MemberRef"
+            "$ref": "#/$defs/MemberParam"
           },
           "type": "array"
         }
@@ -458,7 +491,7 @@
           "type": "string"
         },
         "owner": {
-          "$ref": "#/$defs/MemberRef"
+          "$ref": "#/$defs/MemberParam"
         }
       },
       "required": [
@@ -937,17 +970,169 @@
       "type": "object"
     },
     "Event": {
-      "properties": {
-        "data": true,
-        "event": {
-          "type": "string"
+      "description": "服务端推的事件；按 `event` 区分，`data` 的类型随之确定。",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Message"
+            },
+            "event": {
+              "const": "message.appended",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ChannelSummary"
+            },
+            "event": {
+              "const": "channel.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Crew"
+            },
+            "event": {
+              "const": "crew.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/CrewRef"
+            },
+            "event": {
+              "const": "crew.removed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Badge"
+            },
+            "event": {
+              "const": "badge.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Ask"
+            },
+            "event": {
+              "const": "ask.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Approval"
+            },
+            "event": {
+              "const": "approval.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/SessionLive"
+            },
+            "event": {
+              "const": "session.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/RestartPrompt"
+            },
+            "event": {
+              "const": "restart.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Lagged"
+            },
+            "event": {
+              "const": "events.lagged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "event",
-        "data"
-      ],
-      "type": "object"
+      ]
     },
     "HealthKindView": {
       "enum": [
@@ -1057,8 +1242,8 @@
       ],
       "type": "string"
     },
-    "MemberRef": {
-      "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
+    "MemberParam": {
+      "description": "客户端给的成员 / 群主。线上形状同 `MemberRef`。",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1092,9 +1277,41 @@
         }
       ]
     },
+    "MemberRef": {
+      "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。客户端参数用严格的 `MemberParam`。",
+      "oneOf": [
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Mention": {
-      "additionalProperties": false,
-      "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
+      "description": "模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `MentionParam`。",
       "properties": {
         "kind": {
           "$ref": "#/$defs/MentionKind"
@@ -1119,6 +1336,25 @@
         "broadcast"
       ],
       "type": "string"
+    },
+    "MentionParam": {
+      "additionalProperties": false,
+      "description": "客户端给的 @（`message.post`）。线上形状同 `Mention`。",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MentionKind"
+        },
+        "targetId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
     },
     "Message": {
       "properties": {
@@ -1237,7 +1473,7 @@
           "default": [],
           "description": "非空一律拒（上传协议未定，裁定 14）。",
           "items": {
-            "$ref": "#/$defs/Attachment"
+            "$ref": "#/$defs/AttachmentParam"
           },
           "type": "array"
         },
@@ -1255,7 +1491,7 @@
           "default": [],
           "description": "captain 不带 targetId（发送时解析）；session 必带。",
           "items": {
-            "$ref": "#/$defs/Mention"
+            "$ref": "#/$defs/MentionParam"
           },
           "type": "array"
         },
@@ -1503,7 +1739,8 @@
       "type": "string"
     },
     "ServerFrame": {
-      "anyOf": [
+      "description": "服务端发的一行：对某个请求的回复，或订阅的事件。",
+      "oneOf": [
         {
           "$ref": "#/$defs/Response"
         },
@@ -1715,8 +1952,19 @@
       "additionalProperties": false,
       "properties": {
         "topics": {
-          "description": "主题 = 事件名第一个点之前的部分，例如 \"message\"。",
+          "description": "主题 = 事件名第一个点之前的部分，例如 \"message\"。契约里是封闭枚举（`events::TOPICS`）；\n服务端另有检查，认不出的主题 -32602。",
           "items": {
+            "enum": [
+              "message",
+              "channel",
+              "crew",
+              "badge",
+              "ask",
+              "approval",
+              "session",
+              "restart",
+              "wake"
+            ],
             "type": "string"
           },
           "type": "array"
@@ -1873,6 +2121,7 @@
       "type": "string"
     }
   },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "apiVersion": 2,
   "events": {
     "approval.changed": {

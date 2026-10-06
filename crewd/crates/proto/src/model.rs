@@ -95,18 +95,18 @@ pub struct Session {
     pub resume_failed_at: Option<String>,
 }
 
-/// 也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。
+/// 模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `MentionParam`。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Mention {
     pub kind: MentionKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<String>,
 }
 
-/// 也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。
+/// 模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `AttachmentParam`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Attachment {
     pub id: String,
     pub mime: String,
@@ -240,36 +240,14 @@ closed_vocab!(HealthKindView {
 } default AuthRequired);
 closed_vocab!(RestartAnswer { Resume = "resume", Later = "later" } default Later);
 
-/// 群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+/// 群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。客户端参数用严格的 `MemberParam`。
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum MemberRef {
     Session { id: String },
     Human,
-}
-
-/// 手写：serde 对内部标签枚举的**单元**变体不执行 `deny_unknown_fields`（`{"kind":"human","id":"x"}` 会被静默收下），
-/// 所以经一个线上形状相同、`Human` 写成空结构变体的影子类型来解。契约（JsonSchema）仍由上面的 derive 生成。
-impl<'de> Deserialize<'de> for MemberRef {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-        enum Wire {
-            Session { id: String },
-            Human {},
-        }
-        Ok(match Wire::deserialize(d)? {
-            Wire::Session { id } => MemberRef::Session { id },
-            Wire::Human {} => MemberRef::Human,
-        })
-    }
-}
-
-/// 只为参数结构的 `Default`（`parse_params_or_default`）；没有业务含义。
-impl Default for MemberRef {
-    fn default() -> Self {
-        MemberRef::Human
-    }
 }
 
 impl MemberRef {

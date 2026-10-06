@@ -18,16 +18,13 @@ pub async fn handle(state: &AppState, req: Request) -> Response {
     }
 }
 
-fn internal(e: impl std::fmt::Display) -> RpcError {
-    RpcError::new(RpcError::INTERNAL, e.to_string())
-}
-
 fn to_value<T: Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
 }
 
-/// 内部错误里不该给客户端看的细节：只进日志（stderr），客户端拿到一句通用话 + 一个编号（对日志用）。
-fn hidden_internal(detail: impl std::fmt::Display) -> RpcError {
+/// 内部错误（库 / SQL / 序列化失败、账本不变式坏了）：细节只进日志（stderr），客户端拿到一句通用话 + 一个编号
+/// （对日志用）。错误原文可能带表名、SQL、数据片段，不上线（Task 14 复审裁定 5）。
+fn internal(detail: impl std::fmt::Display) -> RpcError {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     eprintln!("crewd: 内部错误 #{n}: {detail}");
@@ -63,7 +60,7 @@ pub fn collab_err(e: CollabError) -> RpcError {
         ) => RpcError::new(RpcError::CONFLICT, r.to_string()),
         // 账本自己的不变式坏了 = 服务端的错（控制者裁定 d），细节不上线。
         CollabError::Work(R::Invariant(v)) => {
-            hidden_internal(format!("work book invariant violated: {v}"))
+            internal(format!("work book invariant violated: {v}"))
         }
         CollabError::Work(r) => RpcError::new(RpcError::INVALID_PARAMS, r.to_string()),
         CollabError::Store(crewd_store::StoreError::NotFound(m)) => {
@@ -188,7 +185,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                         kind: p.kind,
                         name: p.name,
                         purpose: p.purpose,
-                        members: p.members,
+                        members: p.members.into_iter().map(Into::into).collect(),
                     },
                 )
             })
@@ -213,14 +210,15 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         methods::CHANNEL_ADD_MEMBERS => {
             let p: ChannelMembersParams = parse_params(p)?;
             write(state, move |tx| {
-                channels::add_members(tx, &Sender::Human, &p.channel_id, &p.members)
+                let members: Vec<MemberRef> = p.members.into_iter().map(Into::into).collect();
+                channels::add_members(tx, &Sender::Human, &p.channel_id, &members)
             })
             .await
         }
         methods::CHANNEL_REMOVE_MEMBER => {
             let p: ChannelMemberParams = parse_params(p)?;
             write(state, move |tx| {
-                channels::remove_member(tx, &Sender::Human, &p.channel_id, &p.member)
+                channels::remove_member(tx, &Sender::Human, &p.channel_id, &p.member.into())
             })
             .await
         }
@@ -232,7 +230,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             // 人 = 强制转让（§22.7 Q2）。
             let p: ChannelSetOwnerParams = parse_params(p)?;
             write(state, move |tx| {
-                channels::force_owner(tx, &Sender::Human, &p.channel_id, &p.owner)
+                channels::force_owner(tx, &Sender::Human, &p.channel_id, &p.owner.into())
             })
             .await
         }
@@ -259,8 +257,8 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                         channel_id: p.channel_id,
                         text: p.text,
                         in_reply_to: p.in_reply_to,
-                        mentions: p.mentions,
-                        attachments: p.attachments,
+                        mentions: p.mentions.into_iter().map(Into::into).collect(),
+                        attachments: p.attachments.into_iter().map(Into::into).collect(),
                         category: None,
                     },
                 )
@@ -389,6 +387,26 @@ mod tests {
             code(CollabError::Work(Rejected::Blank("text"))),
             RpcError::INVALID_PARAMS
         );
+    }
+
+    /// 复审裁定 5：库 / SQL 的错误原文不上线，只给通用话 + 编号（细节进 stderr）。
+    #[test]
+    fn store_errors_do_not_leak_their_text() {
+        for e in [
+            StoreError::Invalid("表 secret_table 坏了".into()),
+            StoreError::Sql(rusqlite::Error::InvalidColumnName("secret_col".into())),
+            StoreError::DbClosed,
+        ] {
+            let detail = e.to_string();
+            let r = collab_err(CollabError::Store(e));
+            assert_eq!(r.code, RpcError::INTERNAL);
+            assert!(
+                !r.message.contains(&detail) && !r.message.contains("secret"),
+                "库错误原文不上线：{}",
+                r.message
+            );
+            assert!(r.message.contains('#'), "带编号：{}", r.message);
+        }
     }
 
     /// 控制者裁定 d：store 层的「没有这一行」= -32004；账本不变式被破坏 = -32603，细节不给客户端（只给编号，对日志）。

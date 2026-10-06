@@ -207,17 +207,77 @@ impl Response {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// 服务端推的事件。`data` 的类型由 `event` 决定（见 `event_payloads`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub event: String,
     pub data: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// 每个事件名 → 它的 `data` 类型。契约的 `events` 表与 `Event` 的 schema 都从这一张表来。
+fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value)> {
+    vec![
+        (events::MESSAGE_APPENDED, sub::<Message>(g)),
+        (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
+        (events::CREW_CHANGED, sub::<Crew>(g)),
+        (events::CREW_REMOVED, sub::<CrewRef>(g)),
+        (events::BADGE_CHANGED, sub::<Badge>(g)),
+        (events::ASK_CHANGED, sub::<Ask>(g)),
+        (events::APPROVAL_CHANGED, sub::<Approval>(g)),
+        (events::SESSION_CHANGED, sub::<SessionLive>(g)),
+        (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
+        (events::LAGGED, sub::<Lagged>(g)),
+    ]
+}
+
+/// 手写：按 `event` 区分的 oneOf（每个事件一支：`event` 是常量、`data` 指向负载类型），Swift 端可直接生成
+/// 带关联值的枚举（Task 14 复审裁定 2）。
+impl JsonSchema for Event {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Event".into()
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let branches: Vec<Value> = event_payloads(g)
+            .into_iter()
+            .map(|(name, data)| {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "event": { "type": "string", "const": name },
+                        "data": data,
+                    },
+                    "required": ["event", "data"],
+                })
+            })
+            .collect();
+        schemars::json_schema!({
+            "description": "服务端推的事件；按 `event` 区分，`data` 的类型随之确定。",
+            "oneOf": branches,
+        })
+    }
+}
+
+/// 服务端发的一行：回复或事件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ServerFrame {
     Response(Response),
     Event(Event),
+}
+
+/// 手写：两者互斥（回复有 `id`、事件有 `event`），契约写成 oneOf（派生的 untagged 是 anyOf）。
+impl JsonSchema for ServerFrame {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ServerFrame".into()
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let response = sub::<Response>(g);
+        let event = sub::<Event>(g);
+        schemars::json_schema!({
+            "description": "服务端发的一行：对某个请求的回复，或订阅的事件。",
+            "oneOf": [response, event],
+        })
+    }
 }
 
 /// params 只能是对象（或 `null`，交给目标类型决定收不收）。数组必须在这里拦：serde 会把它按字段顺序读成结构体
@@ -403,26 +463,16 @@ pub fn api_schema() -> Value {
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
-    let events: serde_json::Map<String, Value> = [
-        (events::MESSAGE_APPENDED, sub::<Message>(g)),
-        (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
-        (events::CREW_CHANGED, sub::<Crew>(g)),
-        (events::CREW_REMOVED, sub::<CrewRef>(g)),
-        (events::BADGE_CHANGED, sub::<Badge>(g)),
-        (events::ASK_CHANGED, sub::<Ask>(g)),
-        (events::APPROVAL_CHANGED, sub::<Approval>(g)),
-        (events::SESSION_CHANGED, sub::<SessionLive>(g)),
-        (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
-        (events::LAGGED, sub::<Lagged>(g)),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
+    let events: serde_json::Map<String, Value> = event_payloads(g)
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
     let frames = json!({
         "Request": sub::<Request>(g),
         "ServerFrame": sub::<ServerFrame>(g),
     });
     json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "apiVersion": API_VERSION,
         "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line",
         "topics": events::TOPICS,
@@ -527,60 +577,126 @@ mod tests {
         assert!(parse_params::<CrewIdParams>(json!({"crewId":"c"})).is_ok());
     }
 
-    /// 控制者裁定 c：参数里嵌套的值（@、成员、附件）也拒未知字段；契约里写成 `additionalProperties: false`。
-    /// 只影响反序列化：线上输出不变。
+    /// 控制者裁定 c + 复审：参数里嵌套的值（@、成员、附件）拒未知字段，用的是参数专用类型
+    /// （`MentionParam` / `MemberParam` / `AttachmentParam`）；共享的模型类型对库里读出来的行保持宽松。
     #[test]
     fn nested_param_values_deny_unknown_fields() {
-        assert!(serde_json::from_value::<Mention>(json!({"kind":"human","bogus":1})).is_err());
+        assert!(serde_json::from_value::<MentionParam>(json!({"kind":"human","bogus":1})).is_err());
         assert!(
-            serde_json::from_value::<MemberRef>(json!({"kind":"session","id":"w","bogus":1}))
+            serde_json::from_value::<MemberParam>(json!({"kind":"session","id":"w","bogus":1}))
                 .is_err()
         );
-        assert!(serde_json::from_value::<MemberRef>(json!({"kind":"human","id":"x"})).is_err());
+        assert!(serde_json::from_value::<MemberParam>(json!({"kind":"human","id":"x"})).is_err());
         assert!(
-            serde_json::from_value::<Attachment>(
+            serde_json::from_value::<AttachmentParam>(
                 json!({"id":"a","mime":"x","path":"/p","width":3})
             )
             .is_err()
         );
+        for bad in [
+            json!({"channelId":"c","text":"t","mentions":[{"kind":"session","targetId":"w","label":"@w"}]}),
+            json!({"channelId":"c","text":"t","attachments":[{"id":"a","mime":"x","path":"/p","width":3}]}),
+        ] {
+            assert_eq!(
+                parse_params::<MessagePostParams>(bad.clone())
+                    .unwrap_err()
+                    .code,
+                RpcError::INVALID_PARAMS,
+                "{bad}"
+            );
+        }
         assert_eq!(
-            parse_params::<MessagePostParams>(json!({
-                "channelId":"c","text":"t","mentions":[{"kind":"session","targetId":"w","label":"@w"}]
-            }))
+            parse_params::<ChannelMemberParams>(
+                json!({"channelId":"c","member":{"kind":"human","id":"x"}})
+            )
             .unwrap_err()
             .code,
             RpcError::INVALID_PARAMS
         );
-        // 合法的照收，输出不变。
-        let m: Mention = serde_json::from_value(json!({"kind":"session","targetId":"w"})).unwrap();
+        // 合法的照收，并转成模型类型。
+        let p: MessagePostParams = parse_params(json!({
+            "channelId":"c","text":"t","mentions":[{"kind":"session","targetId":"w"}]
+        }))
+        .unwrap();
         assert_eq!(
-            serde_json::to_value(&m).unwrap(),
-            json!({"kind":"session","targetId":"w"})
+            Mention::from(p.mentions[0].clone()),
+            Mention {
+                kind: MentionKind::Session,
+                target_id: Some("w".into())
+            }
         );
         assert_eq!(
-            serde_json::from_value::<MemberRef>(json!({"kind":"human"})).unwrap(),
+            MemberRef::from(
+                serde_json::from_value::<MemberParam>(json!({"kind":"human"})).unwrap()
+            ),
             MemberRef::Human
         );
         assert_eq!(
-            serde_json::from_value::<MemberRef>(json!({"kind":"session","id":"w"})).unwrap(),
+            MemberRef::from(
+                serde_json::from_value::<MemberParam>(json!({"kind":"session","id":"w"})).unwrap()
+            ),
             MemberRef::session("w")
         );
+        // 模型类型宽松：库里存的行多一个键照样读（输出不带它）。
+        let m: Mention = serde_json::from_value(json!({"kind":"human","label":"@人"})).unwrap();
+        assert_eq!(serde_json::to_value(&m).unwrap(), json!({"kind":"human"}));
+        assert!(
+            serde_json::from_value::<Attachment>(
+                json!({"id":"a","mime":"x","path":"/p","width":3})
+            )
+            .is_ok()
+        );
+        assert!(serde_json::from_value::<MemberRef>(json!({"kind":"human","x":1})).is_ok());
+        // 契约里参数类型写成 additionalProperties: false。
         for (name, s) in [
-            ("Mention", json!(schema_for!(Mention))),
-            ("Attachment", json!(schema_for!(Attachment))),
+            ("MentionParam", json!(schema_for!(MentionParam))),
+            ("AttachmentParam", json!(schema_for!(AttachmentParam))),
         ] {
             assert_eq!(s["additionalProperties"], json!(false), "{name}: {s}");
         }
-        let member = json!(schema_for!(MemberRef));
-        let variants = member["oneOf"].as_array().expect("MemberRef 是 oneOf");
+        let member = json!(schema_for!(MemberParam));
+        let variants = member["oneOf"].as_array().expect("MemberParam 是 oneOf");
         assert_eq!(variants.len(), 2);
         for v in variants {
             assert_eq!(
                 v["additionalProperties"],
                 json!(false),
-                "MemberRef: {member}"
+                "MemberParam: {member}"
             );
         }
+    }
+
+    /// 复审裁定 2–4：帧可直接生成代码。`Event` 是按 `event` 区分的 oneOf（每个事件一支，`data` 指向负载类型）；
+    /// `ServerFrame` 是 oneOf [Response, Event]；订阅主题是封闭枚举；顶层声明 `$schema`。
+    #[test]
+    fn frames_are_discriminated_and_topics_are_an_enum() {
+        let s = api_schema();
+        assert_eq!(s["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        let defs = &s["$defs"];
+        assert_eq!(
+            defs["ServerFrame"]["oneOf"],
+            json!([{"$ref":"#/$defs/Response"},{"$ref":"#/$defs/Event"}]),
+            "{}",
+            defs["ServerFrame"]
+        );
+        let branches = defs["Event"]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("Event 不是 oneOf：{}", defs["Event"]));
+        let table = s["events"].as_object().unwrap();
+        assert_eq!(branches.len(), table.len());
+        for b in branches {
+            let name = b["properties"]["event"]["const"]
+                .as_str()
+                .unwrap_or_else(|| panic!("分支没有 event 常量：{b}"));
+            assert_eq!(b["properties"]["data"], table[name], "{name}");
+            assert_eq!(b["required"], json!(["event", "data"]), "{name}");
+        }
+        assert_eq!(
+            defs["SubscribeParams"]["properties"]["topics"]["items"]["enum"],
+            json!(events::TOPICS),
+            "{}",
+            defs["SubscribeParams"]
+        );
     }
 
     #[test]
