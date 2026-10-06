@@ -2,7 +2,8 @@
 //! 回合、每一种服务端请求、额度、超时、压缩、打断、控制、停止与进程组、stderr 灌满、超长行。
 //! 不碰真 codex（真机见 `live_codex.rs`）。
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +39,7 @@ impl Env {
     fn config(&self) -> CodexConfig {
         let mut c = CodexConfig {
             stop_grace: Duration::from_millis(500),
+            runtime_dir: self.path("run"),
             ..CodexConfig::default()
         };
         c.core.initialize_timeout = Duration::from_secs(3);
@@ -188,12 +190,10 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
     start.spec.comms = Some(CommsSpec {
         helper: PathBuf::from("/opt/crewd/bin/crewd"),
         data_dir: PathBuf::from("/data"),
-        crew_id: "c1".into(),
         session_id: "worker-1".into(),
-        captain: false,
-        structured_post: false,
-        label: None,
+        token: "t".into(),
         hooks: false,
+        approval_gates: vec![],
     });
     let (h, mut rx) = start_codex(start, env.config()).await.unwrap();
     let SessionEvent::Spawned {
@@ -244,9 +244,22 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
         .map(|a| a.as_str().unwrap())
         .collect();
     assert_eq!(args[0], "mcp");
+    assert_eq!(args.len(), 7, "{args:?}");
+    assert_eq!(
+        &args[1..5],
+        ["--data-dir", "/data", "--session", "worker-1"]
+    );
+    assert_eq!(args[5], "--token-file");
+    assert!(!args.contains(&"--agent"), "{args:?}");
+    let token_file = Path::new(args[6]);
+    assert_eq!(std::fs::read_to_string(token_file).unwrap(), "t");
+    assert_eq!(
+        std::fs::metadata(token_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     assert!(
-        args.windows(2).any(|w| w == ["--agent", "codex"]),
-        "{args:?}"
+        token_file.starts_with(env.path("run")),
+        "token file lives under CodexConfig.runtime_dir: {token_file:?}"
     );
     let turn = &env.sent("turn/start")[0]["params"];
     assert_eq!(turn["threadId"], agent_session_id.as_str());
@@ -267,6 +280,17 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
     assert!(!status.working);
     let info = stop(&h, &mut rx).await;
     assert!(info.stopped_by_user);
+    // The launch directory (with the token file) goes away with the session task.
+    for _ in 0..40 {
+        if !token_file.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !token_file.exists(),
+        "token file removed after the session ends"
+    );
 }
 
 #[tokio::test]

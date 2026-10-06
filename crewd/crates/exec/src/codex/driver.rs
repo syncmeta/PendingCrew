@@ -17,7 +17,7 @@
 //! 在起进程之前就占住，新开 thread 的号在 `Spawned` 时占住。
 use std::collections::{BTreeMap, HashMap};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,7 +38,7 @@ use crate::driver::{
 };
 use crate::env::build_env_from_process;
 use crate::health::LaunchVerdict;
-use crate::launch::{CommsSpec, HelperCommands};
+use crate::launch::{CommsSpec, HelperCommands, LaunchFiles, write_token_file};
 use crate::registry::{ProbeResult, ProcessRegistry, probe};
 use crate::resume::{AgentIdLedger, valid_agent_session_id};
 use crate::session::{BRIEF_DELIVERY_ID, ExitStatusKind, SessionEvent};
@@ -57,7 +57,7 @@ pub struct CodexSpec {
     pub initial_prompt: Option<String>,
     /// 开场任务附带的不可信上下文（首轮白板）。
     pub initial_context: UntrustedContext,
-    /// crew 通讯：挂到 `config.mcp_servers.crew`（`--agent codex`）。codex 没有 hook，`hooks` 字段不看。
+    /// crew 通讯：挂到 `config.mcp_servers.crew`。codex 没有 hook，`hooks` 与 `approval_gates` 不看。
     pub comms: Option<CommsSpec>,
     /// 额外环境变量。过白名单的禁用前缀，再剥掉 [`crate::codex::transport::BILLING_KEYS`]。
     pub additional_env: BTreeMap<String, String>,
@@ -87,6 +87,9 @@ pub struct CodexConfig {
     pub registry: Option<Arc<ProcessRegistry>>,
     /// `initialize.clientInfo.version`。
     pub client_version: String,
+    /// 启动临时文件（token 文件）的运行目录：`<runtime_dir>/codex-<session_id>/`。
+    /// 与 claude 的 `DriverConfig.runtime_dir` 同一处（M3c 起由会话给数据目录下的运行目录）。
+    pub runtime_dir: PathBuf,
 }
 
 impl Default for CodexConfig {
@@ -97,6 +100,7 @@ impl Default for CodexConfig {
             stop_grace: Duration::from_secs(2),
             registry: None,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
+            runtime_dir: std::env::temp_dir().join("crewd-codex"),
         }
     }
 }
@@ -124,6 +128,23 @@ pub async fn start_codex(
     {
         Some(id) => Some(LiveId::claim(id)?),
         None => None,
+    };
+    // token 文件：0600、放在这次启动自己的 0700 目录里；会话结束（`Task` drop）随目录一起删掉。
+    let (files, token_file) = match &start.spec.comms {
+        Some(c) => {
+            if !valid_agent_session_id(&start.session_id) {
+                return Err(StartError::Files(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid session id {:?}", start.session_id),
+                )));
+            }
+            let files =
+                LaunchFiles::create(&config.runtime_dir, &format!("codex-{}", start.session_id))
+                    .map_err(StartError::Files)?;
+            let token_file = write_token_file(files.dir(), &c.token).map_err(StartError::Files)?;
+            (Some(files), Some(token_file))
+        }
+        None => (None, None),
     };
     let mut env = build_env_from_process(&start.child_path, &start.spec.additional_env);
     strip_billing_keys(&mut env);
@@ -177,7 +198,7 @@ pub async fn start_codex(
     let opening = Opening {
         pid: proc.pid,
         cwd: start.spec.workdir.clone(),
-        options: thread_options(&start.spec),
+        options: thread_options(&start.spec, token_file.as_deref()),
         recorded,
         client_version: config.client_version.clone(),
         brief: start
@@ -208,6 +229,7 @@ pub async fn start_codex(
         controls: HashMap::new(),
         next_ticket: 0,
         live,
+        _files: files,
     }));
     match ready_rx.await {
         Ok(Ok(())) => Ok((SessionHandle::new(tx), ev_rx)),
@@ -218,17 +240,18 @@ pub async fn start_codex(
     }
 }
 
-/// `CodexSpec` → `thread/start` 选项（MCP 指向 helper，`--agent codex`）。
-pub fn thread_options(spec: &CodexSpec) -> ThreadOptions {
+/// `CodexSpec` → `thread/start` 选项（MCP 指向 helper，身份只有数据目录 / session / token 文件）。
+/// 有 `comms` 就必须给 `token_file`（`start_codex` 先写好再调）。
+pub fn thread_options(spec: &CodexSpec, token_file: Option<&Path>) -> ThreadOptions {
     ThreadOptions {
         model: spec.model.clone(),
         effort: spec.effort.clone(),
         fast: spec.fast_mode,
         developer_instructions: spec.developer_instructions.clone(),
-        mcp_servers: spec
-            .comms
-            .as_ref()
-            .map(|c| proto::mcp_servers(&c.helper, &HelperCommands(c).mcp_args_for("codex"))),
+        mcp_servers: spec.comms.as_ref().map(|c| {
+            let token_file = token_file.expect("comms requires a token file");
+            proto::mcp_servers(&c.helper, &HelperCommands(c).mcp_args(token_file))
+        }),
     }
 }
 
@@ -245,6 +268,8 @@ struct Task {
     next_ticket: u64,
     /// 占着的 thread id（本进程里同一个 thread 只能跑一个）。
     live: Option<LiveId>,
+    /// 启动临时文件（token 文件）：随 `Task` 一起 drop，目录整个删掉。
+    _files: Option<LaunchFiles>,
 }
 
 type RecordMsg = Result<(), String>;
