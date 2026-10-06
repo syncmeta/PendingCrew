@@ -15,3 +15,21 @@ pub mod progress;
 mod testkit;
 pub mod views;
 pub mod watch;
+
+pub use block::{BlockOn, BlockResult, Continuation};
+pub use book::{Applied, Rejected, WorkBook};
+pub use events::{Event, EventKind};
+pub use ids::{
+    AskId, ChannelId, CrewId, EntryNo, HOUR, MINUTE, ParseIdError, SessionId, Ts, WorkId,
+};
+pub use invariants::Violation;
+pub use model::{
+    Actor, AskState, Blocker, Body, BookState, Config, DefaultOption, DoneLevel, DropKind,
+    DropReason, EntryClosure, EntryTodo, Evidence, HowChanged, HumanAsk, ItemRef, NewItem, Note,
+    OwnerChange, PendingTransfer, Role, Status, StopKind, StopStreak, StopViolation, WaitTier,
+    WorkItem,
+};
+pub use perm::Action;
+pub use progress::{Progress, Report};
+pub use views::{CheckpointDue, EntryStatus, EntryView, LostCause, LostOwner, MyItem};
+pub use watch::{HumanWait, Patrol, StopDecision, patrol_due, wait_tier};
