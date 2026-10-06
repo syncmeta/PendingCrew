@@ -11,7 +11,7 @@
 //!   不再报 `ResumeRefused`」在结构上成立。
 //! - **每一条服务端请求都回**（[`proto::answer_server_request`]），代拒的发 `Notice`（每种方法一次）。
 //! - **回合**：一次只开一个；有回合在跑、正在压缩、或上一个 `turn/start` 还没回，正文就排队。
-//! - **健康**：只认协议字段（[`proto::health_from`]）；正常完成的回合清掉过时的额度 / 失败 / 版本 health。
+//! - **健康**：只认协议字段（[`proto::health_from`]）；正常完成的回合清掉过时的额度 / 失败 / 版本 / 登录态 health。
 //! - **每个请求都有期限**（[`Rpc::expire`]），到期按失败处理，会话不挂。
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -828,11 +828,14 @@ impl CodexCore {
                 h.kind.is_quota()
                     || matches!(
                         h.kind,
-                        HealthKind::TurnFailed | HealthKind::VersionIncompatible
+                        HealthKind::TurnFailed
+                            | HealthKind::VersionIncompatible
+                            | HealthKind::AuthRequired
                     )
             })
         {
-            // 一个后来正常完成的回合，就是「旧的额度 / 失败标记已过时」的第一手证据。
+            // 一个后来正常完成的回合，就是「旧的额度 / 失败 / 登录态标记已过时」的第一手证据
+            // （能完成回合 = 认证是好的）。
             self.set_health(None, now);
         }
         if let Some(problem) = s.compaction_problem {
@@ -1441,7 +1444,8 @@ mod tests {
             (
                 json!("e-1"),
                 "mcpServer/elicitation/request",
-                json!({ "_meta": { "codex_approval_kind": "mcp_tool_call" } }),
+                json!({ "serverName": "crew",
+                        "_meta": { "codex_approval_kind": "mcp_tool_call" } }),
             ),
             (
                 json!("e-2"),
@@ -1499,6 +1503,89 @@ mod tests {
             notices.len(),
             2,
             "表单一次、requestUserInput 一次（同种只喊一次）：{notices:?}"
+        );
+    }
+
+    #[test]
+    fn a_tool_approval_from_a_foreign_mcp_server_is_declined_and_announced_once() {
+        let mut t = T::ready(None);
+        t.take_events();
+        let before = t.sent.len();
+        for (i, id) in ["f-1", "f-2"].into_iter().enumerate() {
+            t.line(
+                json!({ "id": id, "method": "mcpServer/elicitation/request",
+                        "params": { "serverName": "github", "message": "Allow create_issue?",
+                                    "_meta": { "codex_approval_kind": "mcp_tool_call" } } }),
+                1.0 + i as f64,
+            );
+        }
+        let replies = &t.sent[before..];
+        assert_eq!(
+            replies[0],
+            json!({ "id": "f-1", "result": { "action": "decline" } })
+        );
+        assert_eq!(
+            replies[1],
+            json!({ "id": "f-2", "result": { "action": "decline" } })
+        );
+        let notices: Vec<&SessionEvent> = t
+            .events
+            .iter()
+            .filter(|e| matches!(e, SessionEvent::Notice(_)))
+            .collect();
+        assert_eq!(notices.len(), 1, "同种只喊一次：{notices:?}");
+        // 我们自己的 server 照旧放行。
+        t.line(
+            json!({ "id": "c-1", "method": "mcpServer/elicitation/request",
+                    "params": { "serverName": "crew",
+                                "_meta": { "codex_approval_kind": "mcp_tool_call" } } }),
+            3.0,
+        );
+        assert_eq!(
+            t.sent.last().unwrap(),
+            &json!({ "id": "c-1", "result": { "action": "accept" } })
+        );
+    }
+
+    #[test]
+    fn a_retryable_unauthorized_error_never_becomes_health() {
+        let mut t = T::ready(None);
+        t.take_events();
+        t.notify(
+            "error",
+            json!({ "threadId": "thr-1", "turnId": "t1", "willRetry": true,
+                    "error": { "message": "token refresh blip", "codexErrorInfo": "unauthorized" } }),
+        );
+        assert_eq!(t.core.health(), None);
+        assert_ne!(t.core.state(), DerivedState::Error);
+        assert!(
+            !t.events
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Health(_))),
+            "{:?}",
+            t.events
+        );
+    }
+
+    #[test]
+    fn auth_required_from_a_final_error_is_cleared_by_a_later_completed_turn() {
+        let mut t = T::ready(None);
+        t.notify(
+            "error",
+            json!({ "threadId": "thr-1", "turnId": "t0", "willRetry": false,
+                    "error": { "message": "401", "codexErrorInfo": "unauthorized" } }),
+        );
+        assert_eq!(t.core.health().unwrap().kind, HealthKind::AuthRequired);
+        assert_eq!(t.core.state(), DerivedState::Error);
+        t.turn("t1", "登录是好的");
+        assert_eq!(t.core.health(), None, "一个正常完成的回合证明认证没问题");
+        assert_ne!(t.core.state(), DerivedState::Error);
+        assert!(
+            t.events
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Health(None))),
+            "{:?}",
+            t.events
         );
     }
 

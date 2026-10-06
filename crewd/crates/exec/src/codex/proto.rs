@@ -108,9 +108,13 @@ pub fn fast_mode_for_tier(tier: &str) -> Option<bool> {
     }
 }
 
+/// 我们挂进 `config.mcp_servers` 的那一个 MCP server 的名字（也是 elicitation 里 `serverName`
+/// 要对上的名字）。
+pub const CREW_MCP_SERVER: &str = "crew";
+
 /// `config.mcp_servers`：`{"crew": {"command": helper, "args": [...]}}`。
 pub fn mcp_servers(helper: &Path, args: &[String]) -> Value {
-    json!({ "crew": { "command": helper.display().to_string(), "args": args } })
+    json!({ CREW_MCP_SERVER: { "command": helper.display().to_string(), "args": args } })
 }
 
 /// `turn/start`：正文是唯一的 `input` 条目；不可信上下文走 `additionalContext`
@@ -249,13 +253,16 @@ pub fn answer_server_request(method: &str, params: &Value, now_unix: i64) -> Ser
         },
         ServerRequestKind::Elicitation => {
             // codex 把「MCP 工具调用要不要批」做成一条 elicitation，`_meta.codex_approval_kind
-            // == "mcp_tool_call"`。crew 只挂我们自己的 `crew` 一个 MCP server，它的工具是 session
-            // 自己的通讯神经，必须放行（拒了它 post_to_crew 就发不出去）。真表单没有 UI 可填：拒。
+            // == "mcp_tool_call"`。只有来自我们自己挂的那一个 server（`CREW_MCP_SERVER`）的才放行：
+            // 它的工具是 session 自己的通讯神经（拒了 post_to_crew 就发不出去）。别的 server
+            // （用户 codex 配置里挂的、或 agent 自己加的）的工具调用不该被执行器替人点头：拒 + Notice。
+            // 真表单没有 UI 可填：同样拒。
             let tool_call = params
                 .pointer("/_meta/codex_approval_kind")
                 .and_then(Value::as_str)
                 == Some("mcp_tool_call");
-            if tool_call {
+            let ours = params.get("serverName").and_then(Value::as_str) == Some(CREW_MCP_SERVER);
+            if tool_call && ours {
                 ServerRequestOutcome {
                     reply: Reply::Result(json!({ "action": "accept" })),
                     notice: None,
@@ -309,7 +316,7 @@ pub fn auth_required_health() -> Health {
 /// - `account/rateLimits/updated`：`rateLimitReachedType` 非空 / `spendControlReached`
 /// - `error`（`willRetry: false`）/ 失败的 `turn/completed`：`codexErrorInfo` =
 ///   `usageLimitExceeded` / `unauthorized`；「requires a newer version of Codex」；其余失败一律
-///   `TurnFailed`（失败不能看起来像空闲）。会重试的 `error` 不算。
+///   `TurnFailed`（失败不能看起来像空闲）。`error` 只认 `willRetry: false`，其余一律不是健康问题。
 pub fn health_from(method: &str, params: &Value) -> Option<Health> {
     if method == "account/rateLimits/updated" {
         let limits = params.get("rateLimits")?;
@@ -332,10 +339,14 @@ pub fn health_from(method: &str, params: &Value) -> Option<Health> {
         return None;
     }
     let (error, terminal) = match method {
-        "error" => (
-            params.get("error"),
-            params.get("willRetry").and_then(Value::as_bool) == Some(false),
-        ),
+        "error" => {
+            // 只有明确说「不再重试」的错误才是健康问题：`willRetry: true`（或没给）的
+            // unauthorized / usageLimitExceeded / 版本文案都只是一次会自己好的抖动。
+            if params.get("willRetry").and_then(Value::as_bool) != Some(false) {
+                return None;
+            }
+            (params.get("error"), true)
+        }
         "turn/completed" => {
             let turn = params.get("turn")?;
             let failed = turn.get("status").and_then(Value::as_str) == Some("failed");
@@ -620,6 +631,32 @@ mod tests {
         assert_eq!(tool.reply, Reply::Result(json!({ "action": "accept" })));
         assert_eq!(tool.notice, None);
 
+        // 别的 server 的工具调用审批不由执行器代点：拒 + 告知。
+        let foreign = answer_server_request(
+            "mcpServer/elicitation/request",
+            &json!({ "serverName": "github", "message": "Allow create_issue?",
+                     "_meta": { "codex_approval_kind": "mcp_tool_call" } }),
+            0,
+        );
+        assert_eq!(foreign.reply, Reply::Result(json!({ "action": "decline" })));
+        assert!(
+            foreign
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Allow create_issue?")
+        );
+        let nameless = answer_server_request(
+            "mcpServer/elicitation/request",
+            &json!({ "message": "Allow it?", "_meta": { "codex_approval_kind": "mcp_tool_call" } }),
+            0,
+        );
+        assert_eq!(
+            nameless.reply,
+            Reply::Result(json!({ "action": "decline" }))
+        );
+        assert!(nameless.notice.is_some());
+
         let form = answer_server_request(
             "mcpServer/elicitation/request",
             &json!({ "serverName": "crew", "mode": "form", "message": "What is your name?",
@@ -736,6 +773,58 @@ mod tests {
             ),
             None,
             "无关的可重试错误不冒充额度"
+        );
+    }
+
+    #[test]
+    fn a_retryable_error_is_never_a_health_problem_whatever_it_says() {
+        for info in ["unauthorized", "usageLimitExceeded"] {
+            assert_eq!(
+                health_from(
+                    "error",
+                    &json!({ "error": { "message": "blip", "codexErrorInfo": info },
+                             "willRetry": true })
+                ),
+                None,
+                "{info} + willRetry:true"
+            );
+            assert_eq!(
+                health_from(
+                    "error",
+                    &json!({ "error": { "message": "blip", "codexErrorInfo": info } })
+                ),
+                None,
+                "{info} without willRetry"
+            );
+        }
+        assert_eq!(
+            health_from(
+                "error",
+                &json!({ "error": { "message": "x requires a newer version of Codex" },
+                         "willRetry": true })
+            ),
+            None
+        );
+        // 明确不再重试的照旧报。
+        assert_eq!(
+            health_from(
+                "error",
+                &json!({ "error": { "message": "weekly", "codexErrorInfo": "usageLimitExceeded" },
+                         "willRetry": false })
+            )
+            .unwrap()
+            .kind,
+            HealthKind::UsageLimit
+        );
+        assert_eq!(
+            health_from(
+                "error",
+                &json!({ "error": { "message": "x requires a newer version of Codex" },
+                         "willRetry": false })
+            )
+            .unwrap()
+            .kind,
+            HealthKind::VersionIncompatible
         );
     }
 
