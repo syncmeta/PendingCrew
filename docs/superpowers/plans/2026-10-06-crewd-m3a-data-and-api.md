@@ -213,7 +213,8 @@ todos::respond(tx, session: &str, number: i64, text: &str) -> TodoResponse      
 directory::list(conn, query: Option<&str>) -> Vec<DirectoryRow>
 asks::{open(tx, asker: &str, OpenAsk) -> Ask, answer(tx, crew, ask, text) -> Ask, withdraw(tx, by: &Sender, crew, ask, reason) -> Ask,
        apply_due_defaults(tx, crew) -> Vec<String>, get(conn, crew, ask) -> Ask, waits(conn, now_ms, root: Option<&str>) -> Vec<HumanWait>,
-       with_book(tx, crew, |book: &mut WorkBook, now: Ts| -> Result<R>) -> Result<R>}      // M4b 用 with_book 跑工作项命令
+       with_book(tx, crew, |book: &mut WorkBook, now: Ts| -> std::result::Result<R, crewd_work::Rejected>) -> Result<R>}
+           // M4b 用 with_book 跑工作项命令；闭包返回账本的 Rejected，with_book 映射成 CollabError（Unknown{Ask,Item,Entry} → NotFound，其余 → Work）
 approvals::{NewApproval { session_id, tool_name, summary, tool_use_id }, Gate::{Allow { approval_id }, DenyPending { approval_id }, DenyFiled(Approval)},
             gate(tx, NewApproval) -> Gate, decide(tx, id, allow, by: "human") -> Approval, get(conn, id), list_pending(conn)}   // C2
 restart::{open(tx, session_ids: Vec<String>) -> Option<RestartPrompt>, answer(tx, id, RestartAnswer) -> RestartPrompt,
