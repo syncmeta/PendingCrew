@@ -111,6 +111,32 @@ impl std::error::Error for StartError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closed;
 
+/// [`SessionHandle::send`] 没收下这段正文。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendError {
+    /// 会话任务已经结束。
+    Closed,
+    /// 正文是空的（或只有空白）：投进去什么也不会发生，不占投递编号。
+    EmptyText,
+}
+
+impl From<Closed> for SendError {
+    fn from(_: Closed) -> Self {
+        Self::Closed
+    }
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Closed => write!(f, "会话已经结束"),
+            Self::EmptyText => write!(f, "正文是空的"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// 某一时刻的会话状态。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionStatus {
@@ -156,12 +182,14 @@ pub struct SessionHandle {
 
 impl SessionHandle {
     /// 投一段正文（排队，回读屏幕确认提交）。返回投递编号，结果见 `SessionEvent::Delivery`。
-    pub fn send(&self, text: impl Into<String>) -> Result<u64, Closed> {
+    /// 空的 / 只有空白的正文当场拒掉（[`SendError::EmptyText`]，不占编号、不会有结果事件）。
+    pub fn send(&self, text: impl Into<String>) -> Result<u64, SendError> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Err(SendError::EmptyText);
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.cmd(Command::Send {
-            id,
-            text: text.into(),
-        })?;
+        self.cmd(Command::Send { id, text })?;
         Ok(id)
     }
 

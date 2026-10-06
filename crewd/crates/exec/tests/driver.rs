@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crewd_exec::driver::{ClaudeStart, DriverConfig, SessionHandle, StartError, start_claude};
+use crewd_exec::driver::{
+    ClaudeStart, DriverConfig, SendError, SessionHandle, StartError, start_claude,
+};
 use crewd_exec::health::{HealthKind, LaunchVerdict};
 use crewd_exec::launch::ClaudeSpec;
 use crewd_exec::registry::ProcessRegistry;
@@ -582,6 +584,34 @@ async fn raw_input_and_resize_reach_the_child() {
     assert_eq!(status.agent_session_id.len(), 36);
     h.stop().unwrap();
     until(&mut rx, |e| exited(e).is_some()).await;
+}
+
+/// 空 / 全空白的正文在句柄上就拒掉：不占投递编号，也不会有「投递结果」那条事件可等。
+#[tokio::test]
+async fn empty_text_is_rejected_at_the_handle() {
+    let env = Env::new();
+    let program = env.script("echo up; sleep 30");
+    let (h, mut rx) = start_claude(
+        env.start(program, Arc::new(MemoryLedger::default())),
+        env.config(),
+    )
+    .await
+    .unwrap();
+    next(&mut rx).await;
+    assert_eq!(h.send(""), Err(SendError::EmptyText));
+    assert_eq!(h.send(" \n\t "), Err(SendError::EmptyText));
+    let id = h.send("x").unwrap();
+    assert_eq!(id, 1, "被拒的不占编号");
+    h.stop().unwrap();
+    let events = until(&mut rx, |e| exited(e).is_some()).await;
+    let ids: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::Delivery { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, [1], "{events:?}");
 }
 
 #[tokio::test]
