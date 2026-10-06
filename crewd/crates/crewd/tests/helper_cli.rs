@@ -17,6 +17,8 @@ enum Mode {
     Normal,
     /// attach 之后什么都不回（crewd 卡住）。
     Hang,
+    /// Closes the whole connection as soon as `agent.hook` arrives (serve stopping mid-request).
+    DropOnHook,
 }
 
 struct FakeServe {
@@ -41,7 +43,8 @@ impl FakeServe {
                     Ok((stream, _)) = listener.accept() => {
                         let (rd, mut wr) = stream.into_split();
                         let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
-                        if push_tx.is_none() { push_tx = Some(tx.clone()); }
+                        // DropOnHook: the push registry must not keep the write half alive, or the "drop" never closes the socket.
+                        if push_tx.is_none() && mode != Mode::DropOnHook { push_tx = Some(tx.clone()); }
                         tokio::spawn(async move {
                             while let Some(v) = rx.recv().await {
                                 let mut l = serde_json::to_vec(&v).unwrap();
@@ -60,6 +63,7 @@ impl FakeServe {
                                         json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例"}}),
                                     "agent.attach" => json!({"id": id, "error": {"code": -32602, "message": "invalid session or token"}}),
                                     _ if mode == Mode::Hang => continue,
+                                    "agent.hook" if mode == Mode::DropOnHook => break,
                                     "agent.tools" => json!({"id": id, "result": [
                                         {"name": "post", "description": "发群", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}}},
                                         {"name": "ask", "description": "问人", "inputSchema": {"type": "object"}}
@@ -313,6 +317,23 @@ async fn hook_without_crewd_is_silent_except_pre_tool_use_which_denies() {
     let v: Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[tokio::test]
+async fn crewd_gone_during_wait_means_deny() {
+    // Review Focus 3: serve goes away in the middle of the approval gate -> the helper denies at
+    // once instead of waiting for claude's timeout (which would let the call through).
+    let f = FakeServe::start(Mode::DropOnHook).await;
+    let (out, _, took) = run_hook(
+        f.data_dir(),
+        "pre-tool-use",
+        &[],
+        &f.token_file(),
+        "{\"tool_name\":\"x\"}",
+    )
+    .await;
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
 }
 
 #[tokio::test]

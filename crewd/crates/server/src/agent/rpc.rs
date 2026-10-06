@@ -132,11 +132,12 @@ async fn route(
     }
 }
 
-/// Tasks 10-11 wire the other two hooks in here.
+/// Task 11 wires the Stop hook in here.
 async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Value) -> HookResult {
     match event {
         HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
-        HookKind::PreToolUse | HookKind::Stop => HookResult { stdout: None },
+        HookKind::PreToolUse => crate::agent::approval::pre_tool_use(state, me, &payload).await,
+        HookKind::Stop => HookResult { stdout: None },
     }
 }
 

@@ -431,3 +431,15 @@ claude 或 codex，必须明确选。
 
 ## r.dm_generic
 私聊
+
+## r.approval_granted
+人类已同意 {tool}，这一次放行（只此一次）。
+
+## r.approval_filed
+{tool} 需要人类同意，已请人审批，这次先拒绝。先去干不需要它的活；人同意后会叫你回来，那时重跑这一次调用就会放行。
+
+## r.approval_pending
+{tool} 还在等人类审批（已经请过了，不会再请一次）。先去干别的；人同意后会叫你回来。
+
+## r.approval_unavailable
+现在没法发起审批，已拒绝 {tool}。

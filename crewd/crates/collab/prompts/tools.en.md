@@ -431,3 +431,15 @@ dissolved direct message
 
 ## r.dm_generic
 direct message
+
+## r.approval_granted
+The human allowed {tool}; this call goes through (once).
+
+## r.approval_filed
+{tool} needs the human's approval. A request was filed and this call is denied. Move on to work that does not need it; you will be woken when the human allows it, and retrying that call will then go through.
+
+## r.approval_pending
+{tool} is still waiting for the human's approval (already requested; not asking again). Move on; you will be woken when the human allows it.
+
+## r.approval_unavailable
+An approval could not be raised right now, so {tool} was denied.
