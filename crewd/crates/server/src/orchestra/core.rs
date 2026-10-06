@@ -1422,6 +1422,34 @@ mod tests {
         assert_eq!(rig.port.row("w1").desired, Desired::Stopped);
     }
 
+    /// C18：人在进程起来之前就停掉了——之后到的 `Spawned` 不能把 `desired` 改回 running。
+    #[tokio::test]
+    async fn a_stop_while_starting_keeps_desired_stopped_after_spawned() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let (tx, rx) = oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Resume {
+                session: "cap".into(),
+                origin: Origin::Human,
+                reply: tx,
+            }))
+            .await;
+        let (tx, stopped) = oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: "cap".into(),
+                reply: tx,
+            }))
+            .await;
+        rig.settle().await;
+        rx.await.unwrap().unwrap();
+        stopped.await.unwrap().unwrap();
+        assert_eq!(rig.exec.lock().stops, ["cap"], "起来就叫停");
+        assert_eq!(rig.port.row("cap").desired, Desired::Stopped);
+        assert!(rig.live("cap").is_none());
+    }
+
     #[tokio::test]
     async fn start_creates_a_row_and_opens_with_the_brief() {
         let mut rig = Rig::new().await;
@@ -1865,6 +1893,28 @@ mod tests {
         let prefix = template.split('\u{0}').next().unwrap();
         assert!(posts[0].1.starts_with(prefix), "{}", posts[0].1);
         assert_neutralised(&posts[0].1, HOSTILE);
+    }
+
+    /// 拉起本身报错时带着的唤醒：同样是一次失败（退避回 pending），不能卡在 inflight 里永远不再投。
+    #[tokio::test]
+    async fn a_launch_error_backs_off_the_wakes_it_carried() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.port.enqueue(timer_wake("w1", "t1")).await.unwrap();
+        rig.exec.lock().fail_next = vec!["合成：claude 不在".into()];
+        let wakes = rig.port.pending("w1").await.unwrap();
+        let exec = rig.core.execs.get("claude").unwrap();
+        let row = rig.port.row("w1");
+        rig.core
+            .launch(row, exec, Some("合成定时".into()), wakes, vec![])
+            .await
+            .unwrap();
+        rig.settle().await;
+        let w = &rig.port.wakes_of("w1")[0];
+        assert_eq!((w.state, w.attempts), (WakeState::Pending, 1));
+        assert_eq!(w.not_before, T0.add(queue::RETRY_DELAYS_MS[0]));
+        assert_eq!(rig.port.posts().len(), 1, "只有「起不来」那一条");
     }
 
     #[tokio::test]
