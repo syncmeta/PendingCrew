@@ -1,5 +1,7 @@
 //! `crewd claude`：前台起一个 claude 会话（M2b 的验收与调试入口；M3 起由 serve 拉起会话）。
 //! 事件逐行打到 stdout；stdin 每一行当一条指令投进去；Ctrl-C / SIGTERM 停掉会话。
+//! 开场任务只从文件或 stdin 读（`--prompt-file`）：命令行参数在 `ps` 里对本机所有进程可见。
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,7 +13,8 @@ use crewd_exec::launch::ClaudeSpec;
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::SessionEvent;
 use crewd_server::ledger::StoreLedger;
-use tokio::io::AsyncBufReadExt;
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc;
 
 #[derive(clap::Args, Clone)]
 pub struct ClaudeArgs {
@@ -21,9 +24,10 @@ pub struct ClaudeArgs {
     /// crewd session id：给了就用库里的会话号账本（行必须已存在，重跑会 --resume）；不给只在内存里记
     #[arg(long)]
     session: Option<String>,
-    /// 开场任务（走 PTY 投递，绝不进 argv）
-    #[arg(long)]
-    prompt: Option<String>,
+    /// 开场任务所在的文件，`-` = 从 stdin 读到 EOF（此后 stdin 不再收指令）。末尾的空白不算正文。
+    /// 走 PTY 投递，绝不进 argv——也不收命令行上的正文：`ps` 对本机所有进程可见
+    #[arg(long, value_name = "PATH")]
+    prompt_file: Option<PathBuf>,
     #[arg(long)]
     model: Option<String>,
     #[arg(long)]
@@ -34,6 +38,38 @@ pub struct ClaudeArgs {
     /// 每次转入空闲时把当前屏幕打到 stderr
     #[arg(long)]
     screen: bool,
+}
+
+/// `--prompt-file`：文件或 stdin（`-`）。末尾的换行 / 空白去掉（文件末尾的换行不是正文的一部分）。
+async fn read_prompt(path: &Path) -> anyhow::Result<String> {
+    let text = if path == Path::new("-") {
+        tokio::task::spawn_blocking(|| {
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s).map(|_| s)
+        })
+        .await?
+        .context("从 stdin 读开场任务失败")?
+    } else {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("读不了开场任务文件 {}", path.display()))?
+    };
+    Ok(text.trim_end().to_string())
+}
+
+/// stdin 逐行读进通道：放在一条普通线程上，**不**用 tokio 的 stdin——后者占着运行时的
+/// 阻塞线程池，会话结束后运行时收尾要等它读完下一行（终端里就是「再按一次回车才退」）。
+/// 普通线程不拦退出：`main` 返回时它随进程一起结束。
+fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { return };
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    rx
 }
 
 pub async fn run(data_dir: &Path, args: ClaudeArgs) -> anyhow::Result<()> {
@@ -51,6 +87,11 @@ pub async fn run(data_dir: &Path, args: ClaudeArgs) -> anyhow::Result<()> {
         None => paths
             .resolve("claude")
             .context("登录 shell 的 PATH 里找不到 claude")?,
+    };
+    let prompt_from_stdin = args.prompt_file.as_deref() == Some(Path::new("-"));
+    let initial_prompt = match &args.prompt_file {
+        Some(path) => Some(read_prompt(path).await?),
+        None => None,
     };
     let ledger: Arc<dyn AgentIdLedger> = match &args.session {
         Some(s) => Arc::new(StoreLedger::new(data_dir.join("crewd.db"), s.clone())),
@@ -71,15 +112,23 @@ pub async fn run(data_dir: &Path, args: ClaudeArgs) -> anyhow::Result<()> {
             workdir,
             model: args.model,
             effort: args.effort,
-            initial_prompt: args.prompt,
+            initial_prompt,
             ..ClaudeSpec::default()
         },
         ledger,
     };
     let (handle, mut events) = start_claude(start, config).await?;
-    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    let mut stdin_open = true;
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // stdin 已经被开场任务读到 EOF 了就不再收指令。
+    let mut stdin_open = !prompt_from_stdin;
+    let mut lines = if stdin_open {
+        stdin_lines()
+    } else {
+        mpsc::unbounded_channel().1
+    };
+    // 信号流在循环外建好：每轮新建一个 `ctrl_c()`，两轮之间来的 Ctrl-C 没人接（处置已被
+    // tokio 换掉，信号就这么丢了）。
+    let mut term = signal(SignalKind::terminate())?;
+    let mut int = signal(SignalKind::interrupt())?;
     loop {
         tokio::select! {
             ev = events.recv() => {
@@ -95,12 +144,12 @@ pub async fn run(data_dir: &Path, args: ClaudeArgs) -> anyhow::Result<()> {
                     break;
                 }
             }
-            line = lines.next_line(), if stdin_open => match line {
-                Ok(Some(text)) if !text.is_empty() => { let _ = handle.send(text); }
-                Ok(Some(_)) => {}
-                _ => stdin_open = false,
+            line = lines.recv(), if stdin_open => match line {
+                // 空行被句柄拒掉（`SendError::EmptyText`），不用在这里挑。
+                Some(text) => { let _ = handle.send(text); }
+                None => stdin_open = false,
             },
-            _ = tokio::signal::ctrl_c() => { let _ = handle.stop(); }
+            _ = int.recv() => { let _ = handle.stop(); }
             _ = term.recv() => { let _ = handle.stop(); }
         }
     }

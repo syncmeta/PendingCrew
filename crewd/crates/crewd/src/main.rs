@@ -58,14 +58,14 @@ fn data_dir(cli: &Cli) -> anyhow::Result<PathBuf> {
 }
 
 #[tokio::main]
-async fn main() {
-    if let Err(e) = run().await {
-        eprintln!("crewd: {e:#}");
-        std::process::exit(1);
+async fn main() -> std::process::ExitCode {
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("crewd: {e:#}");
+            std::process::ExitCode::FAILURE
+        }
     }
-    // 不等 runtime 收尾：`crewd claude` 的 stdin 读取占着一条阻塞线程，终端上 Ctrl-C 之后
-    // runtime 的 drop 会一直等到用户再按一次回车。所有该清的账（锁、登记表）run() 里已经清完。
-    std::process::exit(0);
 }
 
 async fn run() -> anyhow::Result<()> {
