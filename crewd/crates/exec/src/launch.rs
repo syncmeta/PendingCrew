@@ -84,6 +84,17 @@ impl ClaudeArgs {
     }
 }
 
+/// 会话号能不能放心用：它会当目录名（`claude-<id>`，之后 `remove_dir_all`）和 argv 值。
+/// 只收 `[A-Za-z0-9_-]`、不以 `-` 开头、1..=128 个字符：UUID（claude 会话号、codex thread id）
+/// 都在内；`/`、`\`、`.`（含 `..`）、NUL、空白一概不收。
+pub fn valid_agent_session_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.starts_with('-')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 /// 生成新会话号：小写 UUID v4（claude `--session-id` 要 UUID）。
 pub fn new_agent_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -252,6 +263,12 @@ pub fn prepare_claude(
     session: AgentSessionArg,
     runtime_dir: &Path,
 ) -> std::io::Result<(ClaudeArgs, LaunchFiles)> {
+    if !valid_agent_session_id(session.id()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("非法的会话号 {:?}", session.id()),
+        ));
+    }
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -354,6 +371,51 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn agent_session_id_validation() {
+        for ok in [
+            "u-1",
+            "same",
+            "0199c1a2-7b3e-7c4d-8e5f-0123456789ab",
+            &new_agent_session_id(),
+            &"a".repeat(128),
+        ] {
+            assert!(valid_agent_session_id(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "../x",
+            "..",
+            "a/b",
+            "a\\b",
+            "x\0",
+            "x y",
+            "x\n",
+            "-rf",
+            "a.b",
+            &"a".repeat(129),
+        ] {
+            assert!(!valid_agent_session_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn prepare_refuses_invalid_ids_before_touching_the_filesystem() {
+        let rt = tempfile::tempdir().unwrap();
+        let runtime = rt.path().join("run");
+        for bad in ["../x", "", "-rf", "a/b", "x\0"] {
+            let err = prepare_claude(
+                &ClaudeSpec::default(),
+                AgentSessionArg::Resume(bad.into()),
+                &runtime,
+            )
+            .map(|_| ())
+            .unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{bad:?}");
+        }
+        assert!(!runtime.exists(), "拒绝发生在碰文件系统之前");
     }
 
     #[test]

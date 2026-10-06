@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+crewd-exec = { version = "0.1.0", path = "../exec" }
 crewd-proto = { version = "0.1.0", path = "../proto" }
 crewd-store = { version = "0.1.0", path = "../store" }
 serde = "1.0.229"

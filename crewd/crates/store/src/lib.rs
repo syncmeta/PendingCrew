@@ -18,6 +18,9 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error("{0}")]
     Invalid(String),
+    /// 要找的行不存在（调用方要能和「其它失败」分开）。
+    #[error("{0}")]
+    NotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -234,6 +237,46 @@ mod tests {
         let list = sessions::list_for_crew(s.conn(), "a").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].display_name.as_deref(), Some("新机长"));
+    }
+
+    #[test]
+    fn agent_session_id_ledger() {
+        let s = Store::open_in_memory().unwrap();
+        crews::upsert(s.conn(), &crew("a", None), None).unwrap();
+        let ses = Session {
+            id: "w-1".into(),
+            crew_id: "a".into(),
+            role: "worker".into(),
+            executor: "claude".into(),
+            agent_session_id: None,
+            display_name: None,
+            working_directory: None,
+            model: None,
+            effort: None,
+            updated_at: "2026-10-01T00:00:00.000Z".into(),
+        };
+        sessions::upsert(s.conn(), &ses, None).unwrap();
+        assert_eq!(sessions::agent_session_id(s.conn(), "w-1").unwrap(), None);
+        sessions::set_agent_session_id(s.conn(), "w-1", "uuid-9").unwrap();
+        assert_eq!(
+            sessions::agent_session_id(s.conn(), "w-1")
+                .unwrap()
+                .as_deref(),
+            Some("uuid-9")
+        );
+        let list = sessions::list_for_crew(s.conn(), "a").unwrap();
+        assert_ne!(
+            list[0].updated_at, "2026-10-01T00:00:00.000Z",
+            "落账顺带更新时间"
+        );
+        assert!(matches!(
+            sessions::agent_session_id(s.conn(), "nope"),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            sessions::set_agent_session_id(s.conn(), "nope", "x"),
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     #[test]
