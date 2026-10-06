@@ -939,6 +939,31 @@ mod tests {
     }
 
     #[test]
+    fn the_human_and_the_captain_cannot_withdraw_an_ask_that_still_blocks_a_live_item() {
+        let mut b = book();
+        let w = claim(&mut b, "w", &["接入支付"])[0];
+        let h = b
+            .block(
+                &Actor::worker("w"),
+                T1,
+                w,
+                vec![ask("用哪家支付？")],
+                Continuation::Nothing,
+            )
+            .unwrap()
+            .value
+            .asks[0];
+        let before = b.state().clone();
+        for by in [Actor::Human, Actor::captain("c")] {
+            assert_eq!(
+                b.withdraw_ask(&by, T1, h, "不问了").unwrap_err(),
+                Rejected::AskInUse(h)
+            );
+        }
+        assert_eq!(b.state(), &before, "被拒 = 原样不动");
+    }
+
+    #[test]
     fn withdrawing_needs_a_reason_and_an_existing_ask() {
         let mut b = book();
         assert_eq!(

@@ -32,7 +32,7 @@ impl Rng {
 const SESSIONS: [&str; 3] = ["a", "b", "c"];
 
 /// 命令种类与抽中的权重。
-const KINDS: [(&str, u64); 20] = [
+const KINDS: [(&str, u64); 21] = [
     ("register_entry", 1),
     ("claim_entry", 6),
     ("create_item", 5),
@@ -53,6 +53,7 @@ const KINDS: [(&str, u64); 20] = [
     ("note_escalation", 2),
     ("link_channel", 2),
     ("open_ask", 2),
+    ("withdraw_ask", 2),
 ];
 
 fn pick_kind(r: &mut Rng) -> &'static str {
@@ -363,6 +364,11 @@ fn step(r: &mut Rng, b: &mut WorkBook, now: Ts) -> (&'static str, Result<Vec<Eve
             });
             ok(b.open_ask(&by, now, &text(r, "q?"), default, about))
         }
+        "withdraw_ask" => {
+            let by = any_actor(r);
+            let h = ask(r, b);
+            ok(b.withdraw_ask(&by, now, h, &text(r, "changed my mind")))
+        }
         other => unreachable!("{other}"),
     };
     (kind, res)
@@ -426,7 +432,13 @@ fn run(seed: u64, steps: usize, wins: &mut BTreeMap<&'static str, usize>) {
                     }
                 }
             }
-            Err(_) => {
+            Err(rej) => {
+                // withdraw_ask 必须自己用 AskInUse 拒掉「还卡着活项的问」；被不变量（StaleBlocker）兜底拦下
+                // = 它漏了这道检查（别的命令暂时仍靠不变量兜底，不在此限）。
+                assert!(
+                    kind != "withdraw_ask" || !matches!(rej, Rejected::Invariant(_)),
+                    "{ctx}: 被不变量兜底拦下（命令自己没拒）：{rej}"
+                );
                 assert_eq!(b.state(), &before, "{ctx}: 被拒的命令改了账本");
                 assert_eq!(b.log().len(), log_len, "{ctx}");
             }
