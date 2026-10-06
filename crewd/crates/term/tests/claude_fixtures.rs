@@ -262,3 +262,13 @@ fn claude_never_uses_the_alternate_screen() {
     assert!(!has(b"\x1b[?1049h"), "claude 实测不进 alt 屏");
     assert!(!has(b"\x1b[?47h"));
 }
+
+/// `tui-claude-ready.bin` 里 claude 开了两次焦点上报（两个 `?1004h`），每次各答一个 `ESC[I`。
+#[test]
+fn ready_fixture_answers_each_focus_request() {
+    let mut s = screen();
+    s.feed(&fixture("tui-claude-ready.bin"));
+    let replies = s.take_replies();
+    let count = replies.windows(3).filter(|w| *w == b"\x1b[I").count();
+    assert_eq!(count, 2, "{:?}", String::from_utf8_lossy(&replies));
+}
