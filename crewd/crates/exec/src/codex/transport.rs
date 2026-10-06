@@ -45,7 +45,7 @@ pub fn strip_billing_keys(env: &mut BTreeMap<String, String>) {
 pub struct CodexProcessSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
-    /// 整份子进程环境（调用方已经过白名单、剥过计费 key）。
+    /// 整份子进程环境（调用方已经过白名单；计费 key 由 `spawn_codex` 再剥一次，不依赖调用方）。
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
 }
@@ -70,10 +70,13 @@ pub fn spawn_codex(spec: &CodexProcessSpec) -> io::Result<CodexProcess> {
             format!("工作目录 {} 不存在或不是目录", spec.cwd.display()),
         ));
     }
+    // 结构性剥计费 key：对自己的那份环境副本再剥一次，调用方漏剥也不会漏到子进程。
+    let mut env = spec.env.clone();
+    strip_billing_keys(&mut env);
     let mut cmd = tokio::process::Command::new(&spec.program);
     cmd.args(&spec.args)
         .env_clear()
-        .envs(&spec.env)
+        .envs(&env)
         .current_dir(&spec.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -315,11 +318,13 @@ mod tests {
         let mut extra = BTreeMap::new();
         extra.insert("OPENAI_API_KEY".to_string(), "sk-live".to_string());
         extra.insert("CODEX_API_KEY".to_string(), "x".to_string());
+        extra.insert("CODEX_ACCESS_TOKEN".to_string(), "t".to_string());
         extra.insert("FAKE_CODEX_MODE".to_string(), "echo".to_string());
         let mut env = crate::env::build_env([("HOME", "/h")], "/usr/bin:/bin", &extra);
         strip_billing_keys(&mut env);
         assert!(!env.contains_key("OPENAI_API_KEY"));
         assert!(!env.contains_key("CODEX_API_KEY"));
+        assert!(!env.contains_key("CODEX_ACCESS_TOKEN"));
         assert_eq!(env.get("FAKE_CODEX_MODE").map(String::as_str), Some("echo"));
         assert_eq!(env.get("HOME").map(String::as_str), Some("/h"));
     }
@@ -397,7 +402,34 @@ mod tests {
         p.child.wait().await.unwrap();
         // 对端已经退出：继续写不会把我们打死（EPIPE 只是让写任务停下）。
         let _ = p.writer.send("{\"id\":2}".into());
-        let _ = tokio::time::timeout(Duration::from_secs(2), &mut p.writer_task).await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), &mut p.writer_task)
+                .await
+                .is_ok(),
+            "写任务在对端退出后必须停下"
+        );
+    }
+
+    /// 剥计费 key 是结构性的：调用方（哪怕忘了剥）把它们放进 `spec.env`，子进程也看不到。
+    #[tokio::test]
+    async fn spawn_codex_strips_billing_keys_itself() {
+        let mut spec = sh(
+            "echo \"openai=${OPENAI_API_KEY-unset} codex=${CODEX_API_KEY-unset} \
+             token=${CODEX_ACCESS_TOKEN-unset} keep=${KEEP_ME-unset}\"",
+            std::env::temp_dir(),
+        );
+        for key in BILLING_KEYS {
+            spec.env.insert(key.to_string(), "sk-secret".to_string());
+        }
+        spec.env.insert("KEEP_ME".to_string(), "yes".to_string());
+        let mut p = spawn_codex(&spec).unwrap();
+        assert_eq!(
+            p.stdout.next_line().await.unwrap(),
+            Some(Line::Text(
+                "openai=unset codex=unset token=unset keep=yes".into()
+            ))
+        );
+        p.child.wait().await.unwrap();
     }
 
     #[tokio::test]
