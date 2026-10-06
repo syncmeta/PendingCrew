@@ -59,6 +59,11 @@ pub enum Input {
         reply: Reply<SessionRow>,
         result: Result<PathBuf, String>,
     },
+    /// 事件流结束了、却没有 `Exited`（驱动任务崩了 / 被丢了）：当作一次没有退出状态的退出（预检 P3）。
+    StreamEnded {
+        session: String,
+        generator: u64,
+    },
     Tick,
     Cmd(Cmd),
 }
@@ -298,6 +303,10 @@ impl<P: Port> Core<P> {
                 self.on_worktree_ready(req, reply, result).await;
                 Ok(())
             }
+            Input::StreamEnded { session, generator } => match self.live.get(&session) {
+                Some(l) if l.generator == generator => self.on_exited(&session, None).await,
+                _ => Ok(()),
+            },
             Input::Tick => self.on_tick().await,
             Input::Cmd(c) => {
                 self.on_cmd(c).await;
@@ -728,7 +737,9 @@ impl<P: Port> Core<P> {
                     if tx.send(launched).is_err() {
                         return;
                     }
+                    let mut exited = false;
                     while let Some(event) = events.recv().await {
+                        exited |= matches!(event, SessionEvent::Exited(_));
                         let input = Input::Exec {
                             session: task_session.clone(),
                             generator,
@@ -737,6 +748,13 @@ impl<P: Port> Core<P> {
                         if tx.send(input).is_err() {
                             return;
                         }
+                    }
+                    // 流断了却没见过 `Exited`（驱动任务没了）：照样当进程没了处理，不留僵尸 `Live`。
+                    if !exited {
+                        let _ = tx.send(Input::StreamEnded {
+                            session: task_session,
+                            generator,
+                        });
                     }
                 }
                 Err(e) => {
@@ -995,13 +1013,14 @@ impl<P: Port> Core<P> {
                 l.refused = true;
                 self.on_resume_refused(session, &id, &said).await?;
             }
-            SessionEvent::Exited(info) => return self.on_exited(session, info).await,
+            SessionEvent::Exited(info) => return self.on_exited(session, Some(info)).await,
         }
         self.publish_live(session).await;
         Ok(())
     }
 
-    async fn on_exited(&mut self, session: &str, info: ExitInfo) -> anyhow::Result<()> {
+    /// `info` = None：事件流断了、没有退出状态（`Input::StreamEnded`），按「自己没了」处理。
+    async fn on_exited(&mut self, session: &str, info: Option<ExitInfo>) -> anyhow::Result<()> {
         let Some(l) = self.live.remove(session) else {
             return Ok(());
         };
@@ -1017,7 +1036,9 @@ impl<P: Port> Core<P> {
             patch.was_working = Some(false);
         }
         self.port.patch_session(session, patch).await?;
-        if info.hit_limit {
+        let hit_limit = info.as_ref().is_some_and(|i| i.hit_limit);
+        let stopped_by_user = info.as_ref().is_some_and(|i| i.stopped_by_user);
+        if hit_limit {
             self.schedule_quota_for(session, &l.executor, &l.name, &l.crew)
                 .await?;
         }
@@ -1048,12 +1069,15 @@ impl<P: Port> Core<P> {
                     error: "stopped".into(),
                 };
                 self.port.settle(&ids(&inf.wakes), s, now).await?;
-            } else if l.halting || info.stopped_by_user || info.hit_limit {
+            } else if l.halting || stopped_by_user || hit_limit {
                 self.port
                     .settle(&ids(&inf.wakes), Settle::Requeue, now)
                     .await?;
             } else {
-                let why = format!("{:?}", info.status);
+                let why = match &info {
+                    Some(i) => format!("{:?}", i.status),
+                    None => "event stream ended without an exit status".to_string(),
+                };
                 self.fail_batch(session, inf.wakes, &why).await?;
             }
         }
@@ -1983,6 +2007,33 @@ mod tests {
             .await;
         assert_eq!(rig.exec.lock().stops, ["cap"]);
         assert!(rig.live("cap").is_none());
+    }
+
+    /// 预检 P3：事件流断了却没有 `Exited`（驱动任务没了）——按进程没了处理：不留僵尸 `Live`、不占上限名额，
+    /// 带着的唤醒算一次失败（C2）。
+    #[tokio::test]
+    async fn an_event_stream_that_ends_without_exited_is_an_exit() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        launch_with_a_wake(&mut rig, "w1").await;
+        rig.core.gate.set_max_live(Some(1));
+        rig.exec.end_stream("w1");
+        rig.settle().await;
+        assert!(rig.live("w1").is_none(), "没有僵尸 Live");
+        assert_eq!(rig.port.lock().revoked, ["w1"]);
+        let w = &rig.port.wakes_of("w1")[0];
+        assert_eq!((w.state, w.attempts), (WakeState::Pending, 1));
+        assert!(
+            rig.cmd(|reply| Cmd::Start {
+                req: start("claude"),
+                origin: Origin::Agent,
+                reply
+            })
+            .await
+            .is_ok(),
+            "名额腾出来了"
+        );
     }
 
     /// 把 `session` 到期的唤醒带着拉起、让它按 `die` 死掉，一直重复到没有到期的唤醒为止（每轮先等过最长的退避）。
