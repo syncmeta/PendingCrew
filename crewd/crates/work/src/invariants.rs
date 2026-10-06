@@ -68,6 +68,15 @@ pub enum Violation {
     /// 待接受的转交挂在终结项 / 无主项上，或转给现负责人自己。
     StrayTransfer(WorkId),
     Cycle(Vec<WorkId>),
+    /// 问 / 入口表里的键和记录自己的号不一致。
+    AskKeyMismatch(AskId),
+    EntryKeyMismatch(EntryNo),
+    /// 现负责人不是 ownerHistory 最后一条的接手人（负责人只能经由认领 / 转交 / 指派 / 失联重派换）。
+    OwnerHistoryMismatch(WorkId),
+    /// 记成「按默认方案办了」的问，却没有默认方案。
+    DefaultedWithoutDefault(AskId),
+    /// dropped 的项没有放弃理由。
+    DroppedWithoutReason(WorkId),
 }
 
 impl std::fmt::Display for Violation {
@@ -106,6 +115,16 @@ impl std::fmt::Display for Violation {
                 write!(f, "{item} is live under closed entry {entry}")
             }
             StrayTransfer(w) => write!(f, "{w} has a transfer that cannot be accepted"),
+            AskKeyMismatch(h) => write!(f, "ask stored under {h} carries a different id"),
+            EntryKeyMismatch(e) => write!(f, "entry stored under {e} carries a different number"),
+            OwnerHistoryMismatch(w) => {
+                write!(
+                    f,
+                    "{w}'s owner is not the last one recorded in its owner history"
+                )
+            }
+            DefaultedWithoutDefault(h) => write!(f, "{h} is marked defaulted but has no default"),
+            DroppedWithoutReason(w) => write!(f, "{w} is dropped without a reason"),
             Cycle(ids) => {
                 f.write_str("cycle ")?;
                 for w in ids {
@@ -132,6 +151,11 @@ pub fn check(s: &BookState) -> Result<(), Violation> {
         || s.asks.keys().next_back().is_some_and(|h| h.0 > s.last_ask)
     {
         return Err(Violation::CounterBehind);
+    }
+    for (key, e) in &s.entries {
+        if *key != e.no {
+            return Err(Violation::EntryKeyMismatch(*key));
+        }
     }
     for (key, it) in &s.items {
         let id = it.id;
@@ -257,8 +281,22 @@ pub fn check(s: &BookState) -> Result<(), Violation> {
         {
             return Err(Violation::StrayTransfer(id));
         }
+        if let Some(o) = &it.owner
+            && it.owner_history.last().map(|c| &c.to) != Some(o)
+        {
+            return Err(Violation::OwnerHistoryMismatch(id));
+        }
+        if it.status == Status::Dropped && it.drop_reason.is_none() {
+            return Err(Violation::DroppedWithoutReason(id));
+        }
     }
     for (h, ask) in &s.asks {
+        if *h != ask.id {
+            return Err(Violation::AskKeyMismatch(*h));
+        }
+        if matches!(ask.state, AskState::Defaulted { .. }) && ask.default.is_none() {
+            return Err(Violation::DefaultedWithoutDefault(*h));
+        }
         if let Some(item) = ask.item
             && !s.items.contains_key(&item)
         {
@@ -302,7 +340,8 @@ mod tests {
     use crate::ids::{CrewId, SessionId};
     use crate::model::Actor;
     use crate::model::{
-        Body, EntryClosure, EntryTodo, Evidence, HumanAsk, PendingTransfer, WaitTier, WorkItem,
+        Body, DefaultOption, DropKind, DropReason, EntryClosure, EntryTodo, Evidence, HowChanged,
+        HumanAsk, OwnerChange, PendingTransfer, WaitTier, WorkItem,
     };
 
     const NOW: Ts = Ts(1_000_000);
@@ -335,6 +374,14 @@ mod tests {
     fn owned(n: u32, status: Status) -> WorkItem {
         let mut it = item(n);
         it.owner = Some(SessionId::new("s1"));
+        it.owner_history = vec![OwnerChange {
+            from: None,
+            to: SessionId::new("s1"),
+            by: Actor::worker("s1"),
+            how: HowChanged::Claim,
+            note: String::new(),
+            at: NOW,
+        }];
         it.status = status;
         if status == Status::Active {
             it.next_check_at = Some(NOW.plus(1_000));
@@ -592,6 +639,11 @@ mod tests {
         waiting.depends_on = vec![WorkId(1)];
         let mut dropped = item(1);
         dropped.status = Status::Dropped;
+        dropped.drop_reason = Some(DropReason {
+            kind: DropKind::NotNeeded,
+            note: "n".into(),
+            evidence: None,
+        });
         assert_eq!(
             verdict(&book(vec![dropped, waiting])),
             Err(Violation::LiveOnDropped {
@@ -698,5 +750,64 @@ mod tests {
                 item: WorkId(4)
             })
         );
+    }
+
+    #[test]
+    fn restore_catches_records_that_disagree_with_themselves() {
+        // 评审 P9：读回时这些自相矛盾的记录要被拒，而不是带病运行。
+        let mut s = book(vec![owned(1, Status::Open)]);
+        ask(&mut s, 1, 1, AskState::Open);
+        let moved = s.asks.remove(&AskId(1)).unwrap();
+        s.asks.insert(AskId(2), moved);
+        s.last_ask = 2;
+        assert_eq!(verdict(&s), Err(Violation::AskKeyMismatch(AskId(2))));
+
+        let mut s = book(vec![owned(1, Status::Open)]);
+        s.entries.insert(
+            EntryNo(1),
+            EntryTodo {
+                no: EntryNo(5),
+                registered_at: NOW,
+                closed: None,
+            },
+        );
+        assert_eq!(verdict(&s), Err(Violation::EntryKeyMismatch(EntryNo(1))));
+
+        let mut stranger = owned(1, Status::Open);
+        stranger.owner = Some(SessionId::new("zzz"));
+        assert_eq!(
+            verdict(&book(vec![stranger])),
+            Err(Violation::OwnerHistoryMismatch(WorkId(1)))
+        );
+        let mut no_history = owned(1, Status::Open);
+        no_history.owner_history.clear();
+        assert_eq!(
+            verdict(&book(vec![no_history])),
+            Err(Violation::OwnerHistoryMismatch(WorkId(1)))
+        );
+
+        let mut s = book(vec![owned(1, Status::Open)]);
+        ask(&mut s, 1, 1, AskState::Defaulted { at: NOW });
+        assert_eq!(
+            verdict(&s),
+            Err(Violation::DefaultedWithoutDefault(AskId(1)))
+        );
+        s.asks.get_mut(&AskId(1)).unwrap().default = Some(DefaultOption {
+            text: "A".into(),
+            after_ms: 1,
+        });
+        assert_eq!(verdict(&s), Ok(()));
+
+        let mut dropped = owned(1, Status::Dropped);
+        assert_eq!(
+            verdict(&book(vec![dropped.clone()])),
+            Err(Violation::DroppedWithoutReason(WorkId(1)))
+        );
+        dropped.drop_reason = Some(DropReason {
+            kind: DropKind::NotNeeded,
+            note: "n".into(),
+            evidence: None,
+        });
+        assert_eq!(verdict(&book(vec![dropped])), Ok(()));
     }
 }
