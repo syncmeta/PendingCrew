@@ -262,3 +262,28 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 - M2e 起步 spike：Rust 重写普查器（initialize / new+MCP 标记 / prompt / cancel / load），先跑 codex-acp 当对照尺（证明会绿），再跑 opencode 当目标，再重测 gemini / qwen / copilot（09-09 读数已过期）。
 - 风险：世界观缺口；各家 mode id / cancel 语义不一；每 session 多一个 node 进程（并发资源未量）；各家登录态不一；v2 仍在变。
 - **ACP 可复用的社区件（2026-10-06）**：官方 Rust SDK `agent-client-protocol` 2.2（Apache-2.0）做客户端主循环；同仓库 `-polyfill`（把 MCP-over-ACP 适配成 HTTP，可能解决 MCP 挂载与 env 不继承）和 `-conductor`（代理链，可作注入世界观的模式）M2e 评估；registry（Apache-2.0）的 FORMAT.md 照着在 Rust 里实现安装/启动（binary 带 sha256 / npx / uvx），其每日 `.protocol-matrix` 普查当第二把尺子；acpx（TS/MIT）的会话持久化/排队/审批语义作设计参考；Agmente（Swift/MIT）的 `ACPClient` / `AppServerClient` 包可评估用于 Mac/iOS 的结构化会话视图（ACP 与 codex 都适用）。Zed / Toad / agent-shell 是 GPL/AGPL，只学不抄。
+
+## 17. 机组内多群（2026-10-06，人提出并拍板，归 M3）
+
+**问题**：一个机组只有一块白板 = 一个大群，什么都塞进去；想分开谈只能 `create_child_crew`，把「组织单位」和「对话空间」混成一个概念。每个 session 都收整个大群的未读，噪音大、白费上下文。
+
+**模型**：**机组 = 组织**（成员、机长、工作目录、Todo）；**群 = 对话**（一个机组可以有很多个）。
+- 每个机组有一个**大厅**（全员在，放公告与入口消息）。
+- **任何 session 都能建群、拉人**；群有名字和用途（「发版」「IP 日志」「scroll bug 排查」）。私聊 = 两人的群。
+- **跨机组拉人 [人 已定]**：群归属一个机组，成员可来自别的机组；这个群**同时显示在每个成员所在机组下**。可取代现在 `contact` 的跨组消息和一部分「为了说话而开的子机组」。
+- **只有群成员被唤醒/被注入该群消息**：session 的上下文只装它所在的群。
+- **工作项不自动建群 [人 已定]**：需要协作时负责人自己建，可把群关联到工作项；换负责人时把新负责人拉进关联群；工作项结束后行政处归档闲置群。
+
+**人类与群 [人 已定]**：
+- **每个根机组预置一个「人类群」**：人类参与，相当于以前「仅看 @人类」的过滤视图——要找人类、要人拍板的东西发这里（人类待确认清单的入口也在这里）。
+- 人类**可以进任何群发言**，但 session **不能默认人类在看**任何群。
+- 人类可以把某个群标成**「我在注视」**，让 agent 知道「找人类该发到哪」；**默认不注视**。agent 要找人类时：发到根机组人类群，或发到人类正在注视的群。
+- 世界观提示词要写清这条规则；MCP 工具提供「人类现在注视哪些群」的查询。
+
+**与其它机制的关系**：
+- Jev（§7）判「人类消息叫醒谁」时只在该群成员里选；人类在大厅随手发的消息，Jev 还可判「它属于哪个群」（判错代价低，可直接执行；具体行为在 M5 定）。
+- 行政处（§8）多一项职能：归档闲置群、提醒「这个群的事已经没人管了」。
+
+**数据**（M3 schema v2）：`channels(id, crew_id 归属, name, kind: lobby|human|topic|dm, purpose, created_by, archived_at)`、`channel_members(channel_id, member_kind: session|human, member_id, joined_at)`、人类注视标记 `channel_watch(channel_id, since)`；`messages.channel_id` 取代 `crew_id` 作为归属（M1 导入的旧消息迁到各机组大厅）；`work_items.channel_id?`（M4）。
+
+**待 M3 设计时细化**：群内是否需要「话题/回复串」（暂用已有的 reply_to）；私有群（不在机组内公开）要不要；子机组还保留哪些用途（独立工作目录/独立机长）。
