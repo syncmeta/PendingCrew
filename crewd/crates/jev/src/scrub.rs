@@ -50,9 +50,10 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             false,
             "",
         ),
-        // key=value / key: value（英文字段名）。
+        // key=value / key: value（英文字段名）。字段名前可以带一段标识符前缀
+        // （`DB_PASSWORD`、`AWS_SECRET_ACCESS_KEY`、`X-API-Key`）：`_` 是单词字符，只靠 `\b` 会漏掉它们。
         rule(
-            r#"(?i)\b((?:api[_-]?key|apikey|secret[_-]?key|client[_-]?secret|secret|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;\[][^\s"',;]{5,}"#,
+            r#"(?i)\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|apikey|secret[_-]?access[_-]?key|access[_-]?key|secret[_-]?key|client[_-]?secret|secret|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;\[][^\s"',;]{5,}"#,
             true,
             "",
         ),
@@ -219,6 +220,68 @@ mod tests {
             "https://github.com/foo/bar/pull/12",
             "session 3f9c2a7e-1b4d-4e8a-9c3f-2a7e1b4d4e8a 卡住了",
             "password reset 的邮件模板改一下",
+        ] {
+            let (out, hits) = scrub_str(text);
+            assert_eq!((out.as_str(), hits), (text, 0), "误遮了：{text}");
+        }
+    }
+
+    /// 环境变量 / 配置文件写法：字段名前面带一段标识符（`DB_`、`AWS_`、`MY_SERVICE_`），
+    /// `_` 是单词字符，字段名前不再有 `\b`，必须照样遮住。
+    #[test]
+    fn env_style_assignments_keep_the_name_and_hide_the_value() {
+        let aws = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+        for (input, secret, expected) in [
+            (
+                "DB_PASSWORD=hunter2hunter2",
+                "hunter2hunter2",
+                "DB_PASSWORD=[REDACTED]".to_string(),
+            ),
+            (
+                &*format!("export AWS_SECRET_ACCESS_KEY={aws}"),
+                aws,
+                "export AWS_SECRET_ACCESS_KEY=[REDACTED]".to_string(),
+            ),
+            (
+                &*format!("aws_secret_access_key = {aws}"),
+                aws,
+                "aws_secret_access_key = [REDACTED]".to_string(),
+            ),
+            (
+                "JWT_SECRET=supersecretvalue123",
+                "supersecretvalue123",
+                "JWT_SECRET=[REDACTED]".to_string(),
+            ),
+            (
+                "MY_SERVICE_API_KEY=abcdef1234567890",
+                "abcdef1234567890",
+                "MY_SERVICE_API_KEY=[REDACTED]".to_string(),
+            ),
+            (
+                "GITHUB_TOKEN=abcdefabcdef123456",
+                "abcdefabcdef123456",
+                "GITHUB_TOKEN=[REDACTED]".to_string(),
+            ),
+            (
+                "curl -H 'X-API-Key: abcdef0123456789abcdef'",
+                "abcdef0123456789abcdef",
+                "curl -H 'X-API-Key: [REDACTED]'".to_string(),
+            ),
+        ] {
+            let out = assert_scrubbed(input, secret, 1);
+            assert_eq!(out, expected);
+            assert_eq!(scrub_str(&out), (out.clone(), 0), "第二遍不该再命中");
+        }
+    }
+
+    #[test]
+    fn identifier_prefixes_do_not_make_ordinary_words_secrets() {
+        for text in [
+            "max_tokens=4096, tokens: 1200",
+            "MAX_TOKENS=4096",
+            "reset_password 页面的文案改一下",
+            "secret_santa 名单发群里了",
+            "token_count: 12",
         ] {
             let (out, hits) = scrub_str(text);
             assert_eq!((out.as_str(), hits), (text, 0), "误遮了：{text}");
