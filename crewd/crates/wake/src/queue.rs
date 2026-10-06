@@ -25,6 +25,7 @@ pub fn is_due(w: &QueuedWake, now: Ms) -> bool {
 }
 
 /// 到期的 pending 里只取最高一档优先级，按 `(created_at, id)`，最多 `max_items`（至少 1）条。
+/// `pending` 必须是**同一个 session** 的行：批是「一个 session 一次投递」，混进别的 session 的行会被一起选走。
 pub fn select_batch(pending: &[QueuedWake], now: Ms, limits: &BatchLimits) -> Vec<QueuedWake> {
     let Some(top) = pending
         .iter()
@@ -44,8 +45,9 @@ pub fn select_batch(pending: &[QueuedWake], now: Ms, limits: &BatchLimits) -> Ve
     tier
 }
 
-pub const MAX_ATTEMPTS: u32 = 3;
 pub const RETRY_DELAYS_MS: [i64; 2] = [30 * SEC, 2 * MIN];
+/// 总共试几次：第一次 + 每个退避间隔一次重试。从 `RETRY_DELAYS_MS` 推出来，两者不会漂。
+pub const MAX_ATTEMPTS: u32 = RETRY_DELAYS_MS.len() as u32 + 1;
 
 /// 一次投递终局失败之后：`attempts` 是算上这次的次数。`None` = 放弃（记 dropped）。
 pub fn after_failure(attempts: u32, now: Ms) -> Option<Ms> {
@@ -61,8 +63,9 @@ pub fn ids(batch: &[QueuedWake]) -> Vec<i64> {
 }
 
 /// 放弃时要不要在群里告警：任何优先级的批都告（控制者裁定 C19，含没有 origin 的 timer / system 唤醒——
-/// 静默丢弃比告警更糟）；空批没有可告的。「告警自己叫不醒」的成环风险由发告警的一方保证：
-/// 告警是群里一条普通消息，不是唤醒入队。
+/// 静默丢弃比告警更糟）；空批没有可告的。告警本身可以 @ 群主而入队一次唤醒，所以**不能**拿「告警不是唤醒」
+/// 当成环安全的理由：安全来自 Q5 熔断（边 + 目标两级；system 来源的唤醒计入目标级，人发起的才永远放行），
+/// 由发告警的一方保证它的 origin 是 system、不是人。
 pub fn should_alert(batch: &[QueuedWake]) -> bool {
     !batch.is_empty()
 }
@@ -103,6 +106,33 @@ mod tests {
             .map(|w| w.id)
             .collect();
         assert_eq!(got, [3, 2]);
+    }
+
+    #[test]
+    fn a_not_yet_due_human_row_does_not_shadow_a_due_auto_row() {
+        let pending = vec![w(1, Priority::Human, 99, 0), w(2, Priority::Auto, 0, 1)];
+        assert_eq!(
+            ids(&select_batch(&pending, Ms(10), &BatchLimits::default())),
+            [2]
+        );
+    }
+
+    #[test]
+    fn an_inflight_human_row_does_not_shadow_a_due_auto_row() {
+        let mut h = w(1, Priority::Human, 0, 0);
+        h.state = WakeState::Inflight;
+        let pending = vec![h, w(2, Priority::Auto, 0, 1)];
+        assert_eq!(
+            ids(&select_batch(&pending, Ms(10), &BatchLimits::default())),
+            [2]
+        );
+    }
+
+    #[test]
+    fn max_attempts_is_one_more_than_the_back_off_steps() {
+        assert_eq!(MAX_ATTEMPTS as usize, RETRY_DELAYS_MS.len() + 1);
+        assert_eq!(after_failure(MAX_ATTEMPTS - 1, Ms(0)).is_some(), true);
+        assert_eq!(after_failure(MAX_ATTEMPTS, Ms(0)), None);
     }
 
     #[test]

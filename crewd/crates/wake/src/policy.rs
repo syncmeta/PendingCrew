@@ -223,6 +223,51 @@ mod tests {
     }
 
     #[test]
+    fn restart_order_breaks_ties_by_session_id_and_ranks_none_below_some() {
+        let ids = |rows: Vec<RestartRow>| -> Vec<String> {
+            restart_order(rows).into_iter().map(|r| r.session).collect()
+        };
+        // 同样活跃时间 → 按 id 升序，与输入顺序无关。
+        assert_eq!(
+            ids(vec![
+                row("b", false, false, Some(5)),
+                row("a", false, false, Some(5))
+            ]),
+            ["a", "b"]
+        );
+        assert_eq!(
+            ids(vec![
+                row("a", false, false, Some(5)),
+                row("b", false, false, Some(5))
+            ]),
+            ["a", "b"]
+        );
+        // 两个都没记过活跃时间 → 同样按 id；两个机长之间也一样。
+        assert_eq!(
+            ids(vec![
+                row("z", false, false, None),
+                row("m", false, false, None)
+            ]),
+            ["m", "z"]
+        );
+        assert_eq!(
+            ids(vec![
+                row("c2", true, false, None),
+                row("c1", true, false, None)
+            ]),
+            ["c1", "c2"]
+        );
+        // None 排在任何 Some 之后（包括 Some(0)）。
+        assert_eq!(
+            ids(vec![
+                row("a", false, false, None),
+                row("b", false, false, Some(0))
+            ]),
+            ["b", "a"]
+        );
+    }
+
+    #[test]
     fn launch_gate_has_no_cap_by_default_and_staggers_launches() {
         let mut g = LaunchGate::new(None, DEFAULT_STAGGER_MS);
         assert_eq!(
