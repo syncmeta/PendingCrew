@@ -2,45 +2,49 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `crewd-exec` 里加 codex 执行器：起 `codex app-server`（stdio JSON-RPC），握手、开 / 接 thread（thread id 先落账）、开回合（白板走 `additionalContext` 不可信通道）、打断、换档位、压缩，**每一条服务端请求都回答**，健康只认协议字段，每个请求都有期限；进程自成会话、停止与退出都收掉整个进程组。对外用 **M2b 的同一个窄接口**（`driver::SessionHandle` + `session::SessionEvent`），只加几个两边都讲得通的最小口子。配一个假 app-server 测试器材做端到端、一条默认不跑的真机冒烟，和 `crewd codex` 子命令。
+**Goal:** 在 `crewd-exec` 里加 codex 执行器：起 `codex app-server`（stdio JSON-RPC），握手、开 / 接 thread（thread id 先落账）、开回合（白板走 `additionalContext` 不可信通道）、打断、换档位、压缩，**每一条服务端请求都回答**，健康只认协议字段，每个请求都有期限；进程自成会话、停止与退出都收掉整个进程组（与 M2b 终版的 claude 驱动同一套进程规矩）。对外用 **M2b 的同一个窄接口**（`driver::SessionHandle` + `session::SessionEvent`），只加几个两边都讲得通的最小口子。配一个假 app-server 测试器材做端到端、一条默认不跑的真机冒烟，和 `crewd codex` 子命令。
 
 **Architecture:** 照 M2b 的三层。**纯计算层**：`codex::rpc`（线协议编解码、我方请求表与期限）、`codex::proto`（参数构造、服务端请求答复表、协议健康判定、压缩阈值）、`codex::turns`（回合跟踪、结构化记录）、`codex::session::CodexCore`（整个会话的 sans-IO 判断：喂一行 stdout / 定时拍 / 命令 / 账本结果 / 退出 → 吐出「写哪一行」「落账」「控制结果」「事件」，时间由调用方传入）。**进程层**：`codex::transport`（setsid + 白名单环境 + 剥计费 key 起进程、stdout 有上限按行读、stderr 一直排空、写 stdin 走写任务）。**驱动层**：`codex::driver::start_codex`（一个 tokio 任务拥有子进程与 `CodexCore`，命令走 M2b 的 `driver::Command`，事件走 M2b 的 `SessionEvent`）。claude 驱动只改窄接口那几处（Task 1）。
 
 **Tech Stack:** Rust 1.94（edition 2024）、tokio 1.53（rt / macros / time / sync / process / io-util）、serde_json、rustix（setsid、killpg）、libc（测试器材与测试里的 `kill(pid, 0)`）——**全部是 crewd-exec 已有的依赖，M2c 不新增任何 crate，Cargo.toml / Cargo.lock 一行不动**。
 
-**Spec:** `docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`（§13 Q12 窄接口、§16 执行器词表 `codex` 与「屏幕文本由结构化 transcript 代替」）；移植图 `docs/superpowers/specs/2026-10-05-crewd-m2-executor-porting-map.md`（§4 codex 全部、§5 进程生命周期、§6 状态来源）；M2b 计划 `docs/superpowers/plans/2026-10-06-crewd-m2b-claude-session.md`（窄接口、`env`、`registry`、`resume`）。Swift 对照：`Sources/Mac/LocalRunner/CodexAppServer/{CodexAppServerBackend,CodexAppServerConnection,CodexProtocol,CodexRPCDispatcher,CodexRPCMessage,CodexTranscript}.swift` 与 `Tests/PendingCrewTests/{CodexProtocolTests,CodexRPCMessageTests,CodexRPCDispatcherTests,CodexTranscriptTests}.swift`。协议核对：本机 `codex-cli 0.160.1` 的 `codex app-server generate-json-schema --experimental`（2026-10-06 生成，只读）。
+**Spec:** `docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`（§13 Q12 窄接口、§16 执行器词表 `codex` 与「屏幕文本由结构化 transcript 代替」、§18 M2b 交付记录与终评修正）；移植图 `docs/superpowers/specs/2026-10-05-crewd-m2-executor-porting-map.md`（§4 codex 全部、§5 进程生命周期、§6 状态来源）；M2b 计划 `docs/superpowers/plans/2026-10-06-crewd-m2b-claude-session.md`（窄接口、`env`、`registry`、`resume`）。Swift 对照：`Sources/Mac/LocalRunner/CodexAppServer/{CodexAppServerBackend,CodexAppServerConnection,CodexProtocol,CodexRPCDispatcher,CodexRPCMessage,CodexTranscript}.swift` 与 `Tests/PendingCrewTests/{CodexProtocolTests,CodexRPCMessageTests,CodexRPCDispatcherTests,CodexTranscriptTests}.swift`。协议核对：本机 `codex-cli 0.160.1` 的 `codex app-server generate-json-schema --experimental`（2026-10-06 生成，只读）。
 
-> 写计划时已把本计划的全部代码在一个副本里按任务顺序重放：底座是 `crewd-m2b@1e35379`——M2b Task 1–10 都是**实际合入**的代码（delivery 的非终局 `Stalled`、`ResumeDecision`、带号校验的账本、`ApplyOutcome` / boot id 的登记表、`StartError::AlreadyRunning` 与 `LiveId`、`finish` 先收拾后发 `Exited`）；缺的 M2b Task 12（`crewd_server::reap_orphans`、`crewd claude`）按 M2b 计划原文补上。重放结果：每个任务结束 `fmt --check` + `clippy -D warnings` + 全量测试全绿；crewd-exec 单测**增量**依次 +1 / +8 / +15 / +10 / +24 / +9（Task 1–6，副本里 122 → 189），集成测试 `driver` +1（12 → 13），`fake_codex` 19、`live_codex` 2 ignored，crewd-server 单测 +1，`codex_cli` 2。`fake_codex` 与 `driver` 连跑 5 遍无抖动（`fake_codex` 每遍约 2.3s）。各变异步骤都真红过（红哪几条写在步骤里）。**数字以增量为准**：M2b 合入 main 时若又改了，绝对数会不同，执行时先量自己的基线（Task 1 Step 1）。**没做过的三件事**：没在 Linux 上编译；没跑过真 codex（Task 9 Step 3–4 要人点头）；官方网页文档（learn.chatgpt.com/docs/app-server）没取——协议以本机 0.160.1 生成的 schema 为准，schema 管不到的列在文末「未核实」表。
+> **本版对齐 M2b 终版（`crewd-m2b@b5a65b0`）。** 第一版写于 `crewd-m2b@1e35379`；之后 M2b 的终评修正改了窄接口与进程规矩（`send` 返回 `Result<u64, SendError>`、停止只开始一次、首进程收尸后每次都只发组信号补刀、`ResumeRefused` 后面一定跟 `Spawned`、叫停后不再报 `ResumeRefused`、`CLAUDE_CONFIG_DIR` 进白名单、`crewd claude --prompt-file`），人又拍了三件事（真 codex 冒烟可以跑、`CODEX_HOME` 进白名单、运行中插话先排队）。改动逐条列在文末「本版相对第一版的改动」。
+>
+> **重放**：本版的全部代码在一个副本里按任务顺序重放过，底座就是 `crewd-m2b@b5a65b0`（M2b 全部 12 个任务与终评修正都是实际合入的代码）；代码一律从本计划正文的代码块抽出来落盘（整文件的照抄，「原文 → 换成」的先核对原文一字不差再替换）。结果：每个任务结束 `fmt --check` + `clippy -D warnings` + 全量测试全绿；crewd-exec 单测**增量**依次 +2 / +8 / +15 / +10 / +25 / +10（Task 1–6，副本里 135 → 205），集成测试 `driver` +1（19 → 20），`fake_codex` 21、`live_codex` 2 ignored（带 `--ignored` 不设环境变量 = 2 条按第二道闸失败），crewd-server 单测 +1，`codex_cli` 5。`fake_codex` 与 `driver` 连跑 5 遍、自动压缩那条单独连跑 25 遍无抖动。各变异步骤都真红过（红哪几条写在步骤里）。`cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` 通过（只编译）。**重放时抓到的一个竞态**（第一版就有）：读数比 `turn/completed` 晚到，而这之间投进来的一条已经发了 `turn/start`，核心会在回合中间发 `thread/compact/start`；端到端测试约 1/10 红。本版核心加了闸（Task 5）、测试改成等压缩开始再投（Task 7）。**数字以增量为准**：执行时先量自己的基线（Task 1 Step 1）。**没做过的两件事**：没跑真 codex（人已同意，Task 9 Step 3–4 由执行者直接跑）；官方网页文档（learn.chatgpt.com/docs/app-server）没取——协议以本机 `codex-cli 0.160.1` 生成的 schema 为准，schema 管不到的列在文末「未核实」表。
+
 
 
 ## Global Constraints
 
 - 所有命令在 `crewd/` 目录下跑；Rust 工具链在 `/opt/homebrew/opt/rustup/bin`（找不到 `cargo` 先 `export PATH=/opt/homebrew/opt/rustup/bin:$PATH`）。
-- 在分支 `crewd-m2c` 上做：**M2b 合入 main 之后**从 main 切出（执行时用 worktree）。M2c 依赖的是 M2b **合入后的实际代码**，不是 M2b 计划原文；两者不同的地方按 Task 1 Step 1 的对齐检查处理。
+- 在分支 `crewd-m2c` 上做：**M2b 合入 main 之后**从 main 切出（执行时用 worktree）。M2c 依赖的是 M2b **合入后的实际代码**（本版对齐的是 `crewd-m2b@b5a65b0`），不是 M2b 计划原文；两者不同的地方按 Task 1 Step 1 的对齐检查处理。
 - **不新增依赖**：不跑任何 `cargo add`；`Cargo.toml`、`Cargo.lock` 不出现在任何一次提交里。
 - 依赖方向不变：`crewd-exec` 不依赖 store / server / proto（账本仍是 `resume::AgentIdLedger` trait）。
-- 窄接口仍是 M2b 的 `driver::{SessionHandle, SessionStatus, StartError, Closed}` + `session::SessionEvent`；codex 只多一个启动入口 `codex::driver::{start_codex, CodexStart, CodexSpec, CodexConfig}`。外部（server / M3）不碰 `codex::{rpc, proto, turns, session, transport}`。公开类型里不出现 tokio 子进程类型以外的实现细节。
+- 窄接口仍是 M2b 的 `driver::{SessionHandle, SessionStatus, StartError, Closed, SendError}` + `session::SessionEvent`；codex 只多一个启动入口 `codex::driver::{start_codex, CodexStart, CodexSpec, CodexConfig}`。外部（server / M3）不碰 `codex::{rpc, proto, turns, session, transport}`。公开类型里不出现 tokio 子进程类型以外的实现细节。
 - 纯计算层（`codex::rpc`、`codex::proto`、`codex::turns`、`codex::session`）不起进程、不碰 tokio、不调 `Instant::now()` / `SystemTime::now()`——时间由调用方传入（`currentTime/read` 用的 Unix 秒由驱动层在 `Opening::unix_now` 里给）。
 - **首条 prompt 与世界观绝不进 argv**：argv 只有 `app-server`；开场任务走 `turn/start`、世界观走 `thread/start.developerInstructions`，都经 stdin（`ps` 看不见）。
-- 子进程环境 = M2b 的白名单（`env::build_env_from_process`）**再剥掉** `OPENAI_API_KEY` / `CODEX_API_KEY` / `CODEX_ACCESS_TOKEN`（带着它们 codex 改走按量计费）。
+- 子进程环境 = M2b 的白名单（`env::build_env_from_process`；M2b 终版已含 `CLAUDE_CONFIG_DIR`，Task 6 再加 `CODEX_HOME`——人 2026-10-06 定）**再剥掉** `OPENAI_API_KEY` / `CODEX_API_KEY` / `CODEX_ACCESS_TOKEN`（带着它们 codex 改走按量计费）。
+- **进程规矩与 M2b 终版的 claude 驱动一致**（spec §18「终评修正」）：停止只开始一次（`stop()` 连按、句柄随后全丢都不重发 SIGTERM、不推后 SIGKILL 的期限）；首进程收尸之后**每次**都对整组补一刀 SIGKILL，且只发组信号（`kill_group_only`：过 pgid 安全闸，绝不退回去单杀一个已收尸、可能被复用的 pid）；先收拾（补刀、附属任务、会话号、登记表）后发 `Exited`；登记表与账本的文件读写走 `spawn_blocking`；杀掉之后等收尸有上限（`REAP_LIMIT`）。
 - **每一条服务端请求都必须回答**（答复表只在 `proto::answer_server_request` 一处）；**我们发出的每个请求都有期限**（`CodexCoreConfig`）。
 - 测试**只用合成数据** + 假 app-server（`src/bin/fake_codex.rs`）+ shell 脚本；不读真实 `~/.codex`、不碰真实数据目录；会起登录 shell 的测试把 `SHELL` 设成 `/usr/bin/false`。
-- 真 codex 只出现在 `tests/live_codex.rs`：`#[ignore]` + 环境变量 `CREWD_LIVE_CODEX` 两道闸；`check.sh` 不带 `--ignored`，**永远不跑它**；`=turn` 那条花额度，**跑之前要人点头**。
+- 真 codex 只出现在 `tests/live_codex.rs`：`#[ignore]` + 环境变量 `CREWD_LIVE_CODEX` 两道闸；`check.sh` 不带 `--ignored`，**永远不跑它**；带了 `--ignored` 却没设环境变量 = 测试直接失败（不静默「通过」）。**人已同意（2026-10-06）**：Task 9 Step 3（只握手）与 Step 4（一个最小回合，花几百 token）由执行者直接跑，不用再问。
 - codex 子进程由我们 setsid、自成进程组；假 app-server 起的 `sleep` 在它的组里。killpg 永远落不到跑 `cargo test` 的那一组。
 - 本机 shell 是 zsh，不做词分割：手动跑变异步骤时照抄给出的命令，别把 `--test fake_codex` 这类参数塞进一个变量再展开。
 - 每个任务结束跑 `./scripts/check.sh`（fmt + clippy -D warnings + test）全绿再提交。提交只 `git add` 该任务列出的文件（路径相对 `crewd/`），提交信息末尾加 `Co-Authored-By: Claude <noreply@anthropic.com>`（不带模型名）。变异步骤一律在提交**之后**做，改回用 `git checkout -- <那个文件>`（已提交，不会丢东西），做完 `git status` 必须干净。
 
 ## 范围
 
-做：窄接口的最小扩展（`send_with_context`、`interrupt`、`control`、`snapshot` 可空、四种新事件、两种新 health、`HealthKind::rank` 共用、`StartError::Handshake`、`--agent codex` 的 MCP 命令行）；stdio JSON-RPC 编解码（无 `jsonrpc` 字段、整数与字符串 id、两套 id 分表、配不上的回应丢弃计数）；单请求期限（Swift 没有）；握手（`initialize` → `initialized` → `thread/resume{excludeTurns}` 失败退回 `thread/start`）；`thread/start` 参数（`cwd`、`approvalPolicy: on-request`、`sandbox: workspace-write`、`approvalsReviewer: auto_review`、`developerInstructions`、`model`、`serviceTier`、`config.model_reasoning_effort`、`config.mcp_servers.crew` 指向 helper）；thread id 落账在先、`Spawned` 在后；`turn/start`（单个 text 输入 + `additionalContext` 不可信白板）；排队；`turn/interrupt`；`thread/settings/update`（fast 等回显）；`thread/compact/start` 手动与自动（阈值照 Swift）；全部 11 种服务端请求的答复；回合跟踪、干活 / 空闲边沿、`TurnEnded`；协议健康（`account/rateLimits/updated`、`usageLimitExceeded`、`unauthorized`、版本太旧、失败回合、不再重试的错误）及其清除；进程（setsid、白名单 + 剥计费 key、stderr 排空与尾巴、stdout 行上限、写任务、停止 SIGTERM → 宽限 → killpg、退出后整组补刀、孤儿登记）；thread id 账本（含账里非法号）；假 app-server 器材 + 端到端；真机冒烟（opt-in）；`crewd codex` 子命令 + 账本按执行器把关。
+做：窄接口的最小扩展（`send_with_context`、`interrupt`、`control`、`snapshot` 可空、四种新事件、两种新 health、`HealthKind::rank` 共用、`StartError::Handshake`、`--agent codex` 的 MCP 命令行）；`CODEX_HOME` 进环境白名单；stdio JSON-RPC 编解码（无 `jsonrpc` 字段、整数与字符串 id、两套 id 分表、配不上的回应丢弃计数）；单请求期限（Swift 没有）；握手（`initialize` → `initialized` → `thread/resume{excludeTurns}` 失败退回 `thread/start`）；`thread/start` 参数（`cwd`、`approvalPolicy: on-request`、`sandbox: workspace-write`、`approvalsReviewer: auto_review`、`developerInstructions`、`model`、`serviceTier`、`config.model_reasoning_effort`、`config.mcp_servers.crew` 指向 helper）；thread id 落账在先、`Spawned` 在后；`turn/start`（单个 text 输入 + `additionalContext` 不可信白板）；排队；`turn/interrupt`；`thread/settings/update`（fast 等回显）；`thread/compact/start` 手动与自动（阈值照 Swift）；全部 11 种服务端请求的答复；回合跟踪、干活 / 空闲边沿、`TurnEnded`；协议健康（`account/rateLimits/updated`、`usageLimitExceeded`、`unauthorized`、版本太旧、失败回合、不再重试的错误）及其清除；进程（setsid、白名单 + 剥计费 key、stderr 排空与尾巴、stdout 行上限、写任务、停止 SIGTERM → 宽限 → killpg 且只开始一次、退出后只发组信号补刀、孤儿登记）；thread id 账本（含账里非法号）；假 app-server 器材 + 端到端；真机冒烟（opt-in，人已同意跑）；`crewd codex` 子命令（开场任务只经 `--prompt-file`）+ 账本按执行器把关。
 
-不做：attach 协议与结构化历史回放（M2d——`SessionEvent::Item` 只负责把完成的条目发出来）；白板「未读」的取舍与去重（M3 决定每回合传什么；codex 自己按键去重）；`turn/steer`（运行中插话的语义归 M3，M2c 排队）；`model/list` / ephemeral thread 探测原生默认模型（Swift `resolveNativeDefaultModel`，唯一调用方是 M3 的显示）；推理增量的累积与 Swift transcript 的「输入回显行」（都是 UI，归 M2d / 客户端）；群通知（`Notice` 由 M3 转群）；codex 的 npm 托管回退（`AgentPaths` 只按 PATH 找）；awaitingReply（M3，挂在 `TurnEnded` 上）；serve 里的会话管理（M3）。
+不做：attach 协议与结构化历史回放（M2d——`SessionEvent::Item` 只负责把完成的条目发出来）；白板「未读」的取舍与去重（M3 决定每回合传什么；codex 自己按键去重）；`turn/steer`（人 2026-10-06 定：运行中插话先排队，M2c 不接）；`model/list` / ephemeral thread 探测原生默认模型（Swift `resolveNativeDefaultModel`，唯一调用方是 M3 的显示）；推理增量的累积与 Swift transcript 的「输入回显行」（都是 UI，归 M2d / 客户端）；群通知（`Notice` 由 M3 转群）；codex 的 npm 托管回退（`AgentPaths` 只按 PATH 找）；awaitingReply（M3，挂在 `TurnEnded` 上）；serve 里的会话管理（M3）。
 
 ## 写计划时定下的裁定（执行时照做，有异议先回报）
 
 1. **同一个窄接口，只加两边都讲得通的最小口子**（M3 不该为执行器写两套逻辑）：
-   - `SessionHandle` 不改成 trait：句柄本来就只是「命令通道 + 投递编号」，两个驱动各自解释同一套 `Command`。为此 `Command` 改 `pub(crate)`、加 `SessionHandle::new`，`kill_group` / `terminate` / `decode` 改 `pub(crate)` 给 codex 驱动共用。
-   - `send_with_context(text, UntrustedContext)`：白板是 codex 的一等参数（`additionalContext`，`kind: "untrusted"`）；claude 一侧由驱动包成 `<external_键>…</external_键>` 块放在正文前（与 codex 服务端渲染的形状一致，见「未核实」）。`send(text)` = 不带上下文。
+   - `SessionHandle` 不改成 trait：句柄本来就只是「命令通道 + 投递编号」，两个驱动各自解释同一套 `Command`。为此 `Command` 改 `pub(crate)`、加 `SessionHandle::new`，`kill_group` / `kill_group_only` / `terminate` / `decode` / `blocking` / `REAP_LIMIT` 改 `pub(crate)` 给 codex 驱动共用（`LiveId::id` 在 Task 7 用到时才加，早加了 clippy 报 dead code）。
+   - `send_with_context(text, UntrustedContext) -> Result<u64, SendError>`：白板是 codex 的一等参数（`additionalContext`，`kind: "untrusted"`）；claude 一侧由驱动包成 `<external_键>…</external_键>` 块放在正文前（与 codex 服务端渲染的形状一致，见「未核实」）。`send(text)` = 不带上下文。与 M2b 终版的 `send` 同一道闸：正文空 / 只有空白 = `SendError::EmptyText`（不占编号、没有结果事件）；**上下文不算正文**，只有白板没有正文也拒。
    - `interrupt()`：codex 没有终端，Esc 字节没意义；claude = 写一个 Esc，codex = `turn/interrupt`。`raw()` 在 codex 上只认单独一个 Esc（= 打断），其余丢弃并发 `Notice`——不静默吞。
    - `control(Control) -> ControlOutcome`：换模型 / 推理强度 / fast、压缩。claude 回 `Unsupported`（它的 `/model`、`/compact` 是屏幕驱动，归 M3），不假装做了。
    - `snapshot()` 改返回 `Option<Snapshot>`：codex 没有终端，`None` 比「空屏快照」或「Closed」诚实。M2b 里没有调用方（M2b 计划的测试与 `crewd claude` 都没调）。`screen_text()` 在 codex 上返回结构化记录的文本渲染（spec §16「屏幕文本由结构化 transcript 代替」）。
@@ -49,39 +53,42 @@
    - `StartError` 加 `Handshake { health }`：进程起来了但握手 / 开 thread 没成（已杀进程）。
    - `HelperCommands::mcp_args_for(agent)`：codex 的 MCP 命令行带 `--agent codex`；`mcp_args()` 不变（= `mcp_args_for("claude")`）。
 2. **`start_codex` 等握手与落账都完成才返回**。thread id 由服务端生成，`Spawned` 里的会话号必须是真的；第一条事件仍是 `Spawned`（就绪之前产生的事件先攒着）。**落账失败 = 启动失败**（杀进程、报 `StartError::Ledger`、一个回合都不开）——这是 M2b「账本写不进去就不起进程」在 codex 上能做到的最强形式：id 要起了进程才有。
-3. **续跑被拒**：同一个进程里退回 `thread/start`，新 id 先落账；事件顺序是 **`Spawned`（新 id，`resumed: false`）→ `ResumeRefused`（旧 id + 服务端原话）**，与 claude 的「`ResumeRefused` → 再一次 `Spawned`」顺序不同；统一约定「当前会话号永远以最近一条 `Spawned` 为准」，写进 `SessionEvent` 文档。除了「进程没了」，任何 resume 失败（含超时）都退回。账里的号 `valid_agent_session_id` 不认 = 当作没记过。续上的就是账里那条时不再写账。
+3. **续跑被拒**：同一个进程里退回 `thread/start`，新 id 先落账；**事件顺序与 claude 相同**：`Spawned { 旧 id, resumed: true }` → `ResumeRefused { 旧 id, 服务端原话 }` → `Spawned { 新 id, resumed: false }`（pid 不变）。这样 M2b 终版的两条约定同时成立——「第一条事件是 `Spawned`」与「每条 `ResumeRefused` 后面都跟一条 `Spawned`」——M3 对两个执行器一套写法；「当前会话号永远以最近一条 `Spawned` 为准」写进 `SessionEvent` 文档。`resumed` 的意思随之写清：这次是去接一个记过的号（接没接上看后面有没有 `ResumeRefused`）。三条在就绪那一刻一起发；叫停只可能发生在就绪之后（`start_codex` 返回前没有句柄），所以 M2b 的「叫停之后不再报 `ResumeRefused`」在结构上成立。（第一版是「新号的 `Spawned` → `ResumeRefused`」，与 M2b 终版的约定冲突，本版改掉。）除了「进程没了」，任何 resume 失败（含超时）都退回。账里的号 `valid_agent_session_id` 不认 = 当作没记过。续上的就是账里那条时不再写账。
 4. **「早到响应缓冲」在结构上不存在**：`Rpc::request` 先登记、后交出要写的那一行，同一个任务按顺序处理每一行输入，所以「回应比登记早」不会发生；配不上的回应只剩「超时之后迟到」与「不是我们的 id」，丢弃并计数。**服务端请求 id 支持字符串**（schema 的 `RequestId` 是 `string | int64`）——Swift 只认整数，字符串 id 的服务端请求会被分类成通知、永远不回，回合挂死。
 5. **单请求期限**（Swift 没有）：`initialize` 30s、`thread/start|resume` 60s、其余 30s。到期 = 失败：握手中 → `Stalled` 启动失败；`turn/start` → `Undelivered` + 对应 health；设置 / 压缩 → `Rejected`；迟到的回应丢弃。（Swift 的 25s 启动探针被 6MB 的 resume 回包打穿过；有了 `excludeTurns`，60s 足够——推的，没实测。）
 6. **服务端请求答复表**（0.160.1 `ServerRequest.json` 的 11 个方法全覆盖）：审批（`*/requestApproval`，加上旧式 `applyPatchApproval` / `execCommandApproval`——Swift 的 `hasSuffix("requestApproval")` 漏了这两个，落到「不支持」也回了错误，效果一样，这里显式归类）→ `-32000`；`mcpServer/elicitation/request` 带 `_meta.codex_approval_kind == "mcp_tool_call"` → `accept`，其余 → `decline` + `Notice`；`account/*` → `-32601` + `AuthRequired`；`currentTime/read`（0.160 新增）→ 照实回 Unix 秒；其余 → `-32601` + `Notice`。同一种方法的 `Notice` 只发一次。
-7. **回合排队，不用 `turn/steer`**：有回合在跑、正在压缩、或上一个 `turn/start` 还没回，正文就排队，一条一个回合；连续的排队回合之间不报空闲边沿（M3 的「停下即检查」只在真停下时触发）。
+7. **回合排队，不用 `turn/steer`**（人 2026-10-06 定：运行中插话先排队）：有回合在跑、正在压缩、或上一个 `turn/start` 还没回，正文就排队，一条一个回合；连续的排队回合之间不报空闲边沿（M3 的「停下即检查」只在真停下时触发）。
 8. **`TurnEnded` 只在回合 `completed` 且不是压缩回合时发，附本回合最后一条 agent 正文**（没有就是空串）。Swift 取的是整个 transcript 的最后一条——一个没说话的回合会把上一回合的话再报一遍（重复发群）。
 9. **健康只认协议字段**；之后一个正常完成的回合清掉「额度 / 回合失败 / 版本」三类（第一手证据：它又能干活了）；低档不盖高档（同 claude，`HealthKind::rank`）。
-10. **进程**：setsid（新会话、没有控制终端——codex 跑的工具命令碰 `/dev/tty` 立刻失败，而不是被 SIGTTIN 停住、把回合挂死；killpg 能连工具子命令一起收掉）。停止 = SIGTERM 给 codex → 宽限 2s → `killpg(SIGKILL)`；**codex 退出（任何原因）后总对整组补一刀 SIGKILL**。移植图 §5 的「codex 是否独立进程组未核实」在这里定掉：Swift 的 Foundation `Process` 不是，我们是。
-11. **环境**：剥 `OPENAI_API_KEY`（Swift 同）+ `CODEX_API_KEY` + `CODEX_ACCESS_TOKEN`（0.160.1 二进制里与 `OPENAI_API_KEY` 同组的认证环境变量：`OPENAI_API_KEYCODEX_API_KEYCODEX_ACCESS_TOKENno Codex credentials were found`）。
+10. **进程**：setsid（新会话、没有控制终端——codex 跑的工具命令碰 `/dev/tty` 立刻失败，而不是被 SIGTTIN 停住、把回合挂死；killpg 能连工具子命令一起收掉）。停止 = SIGTERM 给 codex → 宽限 2s → `killpg(SIGKILL)`，**只开始一次**（再叫停不重发 SIGTERM、不推后期限——与 M2b 终版 `begin_stop` 同）；**codex 退出（任何原因）后总对整组补一刀 SIGKILL，只发组信号**（`kill_group_only`：首进程已经收了尸，`kill_group` 组信号发不出去时退回单杀 pid 的那一步可能杀到复用了它的进程）。移植图 §5 的「codex 是否独立进程组未核实」在这里定掉：Swift 的 Foundation `Process` 不是，我们是。
+11. **环境**：剥 `OPENAI_API_KEY`（Swift 同）+ `CODEX_API_KEY` + `CODEX_ACCESS_TOKEN`（0.160.1 二进制里与 `OPENAI_API_KEY` 同组的认证环境变量：`OPENAI_API_KEYCODEX_API_KEYCODEX_ACCESS_TOKENno Codex credentials were found`）。`CODEX_HOME` 设了就透传（人 2026-10-06 定；不透传的话用了自定义目录的机器上 crewd 起的 codex 读 `~/.codex`、登录态对不上）——加进 M2b 的 `PASSTHROUGH_KEYS`，claude 也会看到它（无害）。
 12. **stderr 一直读**，只留最后 4KB 给握手失败的说明；**stdout 一行上限 64MiB**，超了整行丢弃、每次发 `Notice`（丢掉的可能正是某个请求的回应，那个请求随后按超时处理）。
 13. **`serviceTier` 不选就不传**（Swift 总传 `default`，会盖掉用户 codex 配置里的档位）——人的原话「codex 本身的默认模型是什么逻辑就用什么逻辑」；实际档位从回包读、发 `Profile`。
 14. **不订阅三种增量**：`item/agentMessage/delta`（Swift 同）+ `item/commandExecution/outputDelta` + `item/fileChange/outputDelta`（量大，`item/completed` 的条目里有全文）；推理增量留着（M2d 可能要）。
 15. `initialized` 按 schema **不带 `params`**（Swift 带 `{}`）。
 16. **fast 切换以回显为准**：`thread/settings/update` 的 `{}` 回包只是「收到」，以随后的 `thread/settings/updated` 为准；8s 没回显或回显了认不出的档位 = `NoConfirmation`（不冒充「标准」）；同一时刻只等一次。顺序处理让「回包之前到的回显」天然不算（Swift 要靠序号比较）。换模型 / effort 在回包时就算 `Applied`。
-17. **自动压缩阈值照 Swift**：上下文 ≥70%，或 ≥45% 且本回合消耗 ≥ 窗口×2；距上次压缩不足 2 个回合不压；token 读数可能比 `turn/completed` 晚到，晚到时再判；压缩中排队，压完放行。
+17. **自动压缩阈值照 Swift**：上下文 ≥70%，或 ≥45% 且本回合消耗 ≥ 窗口×2；距上次压缩不足 2 个回合不压；token 读数可能比 `turn/completed` 晚到，晚到时再判；压缩中排队，压完放行。**读数晚到时排着的下一条若已经发了 `turn/start`（或回合已开），这一轮不压**——不在回合中间压，读数还高的话下一个回合边界照样会压（重放时抓到的竞态，见文件头）。
 18. **`crewd codex --session` 只认执行器是 `codex` 的 session**（`StoreLedger::expecting("codex")`，不对就不读也不写）：拿 claude 的会话号去 `thread/resume` 必然失败，退回新 thread 时会把 claude 的号覆盖掉。
 19. 正文不过 `sanitize_text`：codex 的正文是 JSON 字符串里的数据，控制字符没有按键语义（claude 才有）。
 20. **同一个 thread 在本进程里只能跑一个**，与 claude 共用 M2b 的 `LiveId` 表（`LIVE_AGENT_IDS`）：账里记的号在起进程**之前**占住（撞了 = `StartError::AlreadyRunning`，不起进程），新开 thread 的号在 `Spawned` 时占住；`AlreadyRunning` 的说明去掉「claude」二字。
-21. **收尾顺序照 M2b 的 `finish`**：进程收尸后先停附属任务、放开 thread id、清登记表，再把 `Exited` 发出去——调用方见到 `Exited` 就能马上用同一个 thread id 重起。登记表同样只收 `pgid == pid` 的进程。
+21. **收尾顺序照 M2b 的 `finish` / `release`**：进程收尸后先把 stdout 剩下的行读完、等 stderr 读到 EOF（各最多 500ms：握手失败的说明要带 stderr 尾巴），再整组补刀、停附属任务、放开 thread id、清登记表（`spawn_blocking`），最后才把 `Exited` 发出去——调用方见到 `Exited` 就能马上用同一个 thread id 重起。登记表同样只收 `pgid == pid` 的进程，探身份与落盘都在 `spawn_blocking` 里；登记失败 = 杀掉、有上限地收尸（`REAP_LIMIT`）、报 `StartError::Registry`。
+22. **`crewd codex` 照 M2b 终版的 `crewd claude`**：开场任务只经 `--prompt-file PATH`（`-` = 从 stdin 读到 EOF），不收命令行上的正文（`ps` 对本机所有进程可见）；stdin 在普通线程上读（不占 tokio 的阻塞线程，会话结束就能退出）；SIGINT / SIGTERM 的信号流在循环外建一次；直接复用 `claude_cmd` 的 `read_prompt` / `stdin_lines`（改 `pub(crate)`），不写第二份。
 
 ## Review Focus
 
 1. 服务端请求带**字符串 id**、或是我们不认识的方法 → 必须回答，否则 codex 在那儿等、回合永远不结束（Swift「转圈不结束」的病根）。（Task 7 `every_server_request_is_answered_and_the_turn_finishes`；Task 2 `string_request_ids_are_classified_and_echoed_verbatim`；Task 5 `every_server_request_is_answered_and_each_kind_is_announced_once`）
 2. codex 往 stderr 狂写（长会话的 tracing）→ 不能卡住（没人读，64KB 管道写满它就停在写上）。（Task 6 `a_flood_on_stderr_cannot_stall_stdout_and_its_tail_is_kept`；Task 7 `a_stderr_flood_does_not_stall_the_handshake`）
 3. thread 开出来了但 thread id 落不了账（session 行被删 / 库坏）→ 一个回合都不开、进程杀掉、报 `StartError::Ledger`（起了也接不回来）。（Task 7 `ledger_failure_kills_the_process_before_any_turn`）
-4. codex 起的工具子命令（构建、`sleep`、dev server）→ 停止时、以及 codex 自己崩掉时，都不能留成孤儿。（Task 7 `stop_kills_the_whole_group_including_tool_children`、`tool_children_do_not_outlive_codex_exiting_on_its_own`）
+4. codex 起的工具子命令（构建、`sleep`、dev server）→ 停止时、以及 codex 自己崩掉时，都不能留成孤儿；补刀只发组信号，不能单杀一个已收尸的 pid。（Task 7 `stop_kills_the_whole_group_including_tool_children`、`tool_children_do_not_outlive_codex_exiting_on_its_own`）
 5. codex 不读 stdin 了（卡死 / 正忙），我们却要写一大段（几十 KB 的白板 + 任务）→ 会话不能被卡死：状态查得到、停得掉，那条正文按超时报没送到。（Task 7 `a_server_that_stops_reading_cannot_wedge_the_session`）
+6. 一个不理 SIGTERM 的 codex，调用方又在反复叫停（比宽限还勤）→ SIGTERM 只发一次、SIGKILL 的期限从第一次叫停起算，照样在宽限后杀掉（M2b 终评修正过的同一个坑）。（Task 7 `repeated_stop_neither_resends_term_nor_postpones_the_kill`）
+7. 续跑被拒 → 事件与 claude 同序（旧号的 `Spawned` → `ResumeRefused` → 新号的 `Spawned`），新号先落账；M3 对两个执行器一套写法。（Task 5 `refused_resume_falls_back_to_a_fresh_recorded_thread_in_the_same_order_as_claude`；Task 7 `a_refused_resume_falls_back_to_a_fresh_thread_and_records_it`）
 
 ## 文件结构
 
 ```
-crewd/crates/exec/src/driver.rs        Command pub(crate)、SessionHandle 新口子、Handshake、helpers pub(crate)   (T1)
-crewd/crates/exec/src/session.rs       SessionEvent 四种新事件、Profile；档位表改用 HealthKind::rank            (T1)
+crewd/crates/exec/src/driver.rs        Command pub(crate)、SessionHandle 新口子、Handshake、helpers pub(crate) (T1)；LiveId::id (T7)
+crewd/crates/exec/src/session.rs       SessionEvent 四种新事件、Profile、续跑被拒的事件顺序文档；档位表改用 HealthKind::rank (T1)
 crewd/crates/exec/src/health.rs        HealthKind::{TurnFailed, VersionIncompatible}、rank()                    (T1)
 crewd/crates/exec/src/launch.rs        HelperCommands::mcp_args_for                                            (T1)
 crewd/crates/exec/tests/driver.rs      claude 一侧：打断 / 控制 / 快照                                          (T1)
@@ -91,15 +98,17 @@ crewd/crates/exec/src/codex/rpc.rs     线协议：RequestId、parse_line、编�
 crewd/crates/exec/src/codex/proto.rs   参数构造、服务端请求答复表、协议健康、上下文读数、压缩阈值              (T3)
 crewd/crates/exec/src/codex/turns.rs   TurnTracker、Transcript、render_item                                     (T4)
 crewd/crates/exec/src/codex/session.rs CodexCore（sans-IO 会话核心）、CodexAction、launch_health              (T5)
+crewd/crates/exec/src/env.rs           PASSTHROUGH_KEYS 加 CODEX_HOME                                           (T6)
 crewd/crates/exec/src/codex/transport.rs  spawn_codex（setsid / 环境 / 三根管子）、LineReader、StderrTail   (T6)
 crewd/crates/exec/src/codex/driver.rs  start_codex、CodexStart / CodexSpec / CodexConfig、驱动任务             (T7)
 crewd/crates/exec/src/bin/fake_codex.rs   测试器材：假 codex app-server                                       (T7)
-crewd/crates/exec/tests/fake_codex.rs  端到端（19 条，含 Review Focus 1–5）                                   (T7)
+crewd/crates/exec/tests/fake_codex.rs  端到端（21 条，含 Review Focus 1–7）                                   (T7)
 crewd/crates/store/src/sessions.rs     sessions::executor                                                       (T8)
 crewd/crates/server/src/ledger.rs      StoreLedger::expecting                                                   (T8)
-crewd/crates/crewd/src/codex_cmd.rs    `crewd codex` 子命令                                                     (T8)
+crewd/crates/crewd/src/claude_cmd.rs   read_prompt / stdin_lines 改 pub(crate)（codex 子命令复用）              (T8)
+crewd/crates/crewd/src/codex_cmd.rs    `crewd codex` 子命令（--prompt-file）                                    (T8)
 crewd/crates/crewd/src/main.rs         接上子命令                                                               (T8)
-crewd/crates/crewd/tests/codex_cli.rs  库里落账 → 第二次 thread/resume；claude 的 session 被拒                 (T8)
+crewd/crates/crewd/tests/codex_cli.rs  库里落账 → 第二次 thread/resume；claude 的 session 被拒；--prompt-file；stdin 开着也退出 (T8)
 crewd/crates/exec/tests/live_codex.rs  真 codex 冒烟（#[ignore] + CREWD_LIVE_CODEX）                            (T9)
 crewd/README.md、docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md、docs/superpowers/specs/2026-10-05-crewd-m2-executor-porting-map.md  (T9)
 ```
@@ -115,13 +124,13 @@ pub async fn start_codex(start: CodexStart, config: CodexConfig)
     -> Result<(SessionHandle, mpsc::UnboundedReceiver<SessionEvent>), StartError>;
 
 impl SessionHandle {            // 两个执行器同一个类型；Clone；全部 drop = 停掉会话
-    pub fn send(&self, text) -> Result<u64, Closed>;
-    pub fn send_with_context(&self, text, context: UntrustedContext) -> Result<u64, Closed>;   // M2c
+    pub fn send(&self, text) -> Result<u64, SendError>;      // 空 / 全空白 = EmptyText（M2b 终版）
+    pub fn send_with_context(&self, text, context: UntrustedContext) -> Result<u64, SendError>;   // M2c
     pub fn raw(&self, bytes) -> Result<(), Closed>;          // codex：只认单独一个 Esc
     pub fn interrupt(&self) -> Result<(), Closed>;           // M2c：claude 写 Esc / codex turn/interrupt
     pub async fn control(&self, op: Control) -> Result<ControlOutcome, Closed>;   // M2c：claude 回 Unsupported
     pub fn resize(&self, cols, lines) -> Result<(), Closed>; // codex：无操作
-    pub fn stop(&self) -> Result<(), Closed>;
+    pub fn stop(&self) -> Result<(), Closed>;               // 只开始一次（连按不重发 TERM、不推后 KILL）
     pub fn clear_quota_health(&self) -> Result<(), Closed>;
     pub async fn screen_text(&self, max_lines) -> Result<String, Closed>;   // codex：结构化记录的文本
     pub async fn snapshot(&self) -> Result<Option<Snapshot>, Closed>;       // M2c 改：codex 为 None
@@ -129,12 +138,12 @@ impl SessionHandle {            // 两个执行器同一个类型；Clone；全�
 }
 
 pub enum SessionEvent {         // 第一条一定是 Spawned；当前会话号以最近一条 Spawned 为准
-    Spawned { pid, agent_session_id, resumed },
+    Spawned { pid, agent_session_id, resumed },   // resumed = 去接记过的号（接没接上看后面）
     Working(bool),              // false = idle 边沿
     Decision(DecisionEvent),    // 只有 claude
     Delivery { id, subject, outcome },
     Health(Option<Health>),     // + TurnFailed / VersionIncompatible（M2c）
-    ResumeRefused { id, said }, // codex：跟在新 thread 的 Spawned 之后
+    ResumeRefused { id, said }, // 两个执行器同序：Spawned{旧} → ResumeRefused → Spawned{新}；叫停后不报
     Item { turn_id, item },             // M2c，只有 codex
     TurnEnded { last_agent_message },   // M2c，只有 codex
     Notice(String),                     // M2c
@@ -147,15 +156,15 @@ pub enum SessionEvent {         // 第一条一定是 Spawned；当前会话号�
 
 ### Task 1: 窄接口的最小扩展（claude 一侧）
 
-把 M3 要「两个执行器一个写法」的那几个口子加到 M2b 的驱动上，claude 一侧给出各自的含义（裁定 1）。codex 一侧在 Task 5 / 7 实现。这一步动的全是 M2b 已合入的文件：下面的「原文」取自 `crewd-m2b@1e35379` 的实际代码；M2b 合入 main 时若又改了字面（换了名、多了字段、多了分支），按同样的语义改，并在任务回报里写明差异。
+把 M3 要「两个执行器一个写法」的那几个口子加到 M2b 的驱动上，claude 一侧给出各自的含义（裁定 1）。codex 一侧在 Task 5 / 7 实现。这一步动的全是 M2b 已合入的文件：下面的「原文」取自 `crewd-m2b@b5a65b0`（M2b 终版，含终评修正）的实际代码；合入 main 时若又改了字面（换了名、多了字段、多了分支），按同样的语义改，并在任务回报里写明差异。
 
 **Files:**
 - Modify: `crewd/crates/exec/src/driver.rs`、`crewd/crates/exec/src/session.rs`、`crewd/crates/exec/src/health.rs`、`crewd/crates/exec/src/launch.rs`、`crewd/crates/exec/tests/driver.rs`
 
 **Interfaces:**
-- Consumes: M2b 的 `driver`、`session`、`health`、`launch`（合入版）。
+- Consumes: M2b 的 `driver`（含 `SendError`、`LiveId`、`kill_group_only`、`blocking`、`REAP_LIMIT`）、`session`、`health`、`launch`（终版）。
 - Produces:
-  - `crewd_exec::driver`：`pub type UntrustedContext = BTreeMap<String, String>`；`pub enum Control { Model(String), Effort(String), Fast(bool), Compact }`；`pub enum ControlOutcome { Applied(String), NoConfirmation(String), Rejected(String), Unsupported(String) }`；`pub fn with_untrusted_context(&UntrustedContext, &str) -> String`；`pub(crate) enum Command { Send { id: u64, text: String, context: UntrustedContext }, Raw(Vec<u8>), Interrupt, Resize { cols: u16, lines: u16 }, Stop, ClearQuotaHealth, ScreenText { max_lines: usize, reply: oneshot::Sender<String> }, Snapshot { reply: oneshot::Sender<Option<Snapshot>> }, Status { reply: oneshot::Sender<SessionStatus> }, Control { op: Control, reply: oneshot::Sender<ControlOutcome> } }`；`SessionHandle::new(tx: mpsc::UnboundedSender<Command>) -> Self`（`pub(crate)`）、`send_with_context(&self, impl Into<String>, UntrustedContext) -> Result<u64, Closed>`、`interrupt(&self) -> Result<(), Closed>`、`async control(&self, Control) -> Result<ControlOutcome, Closed>`、`async snapshot(&self) -> Result<Option<Snapshot>, Closed>`；`StartError::Handshake { health: Health }`；`pub(crate) fn kill_group(u32)`、`pub(crate) fn terminate(u32)`、`pub(crate) fn decode(io::Result<std::process::ExitStatus>) -> ExitStatusKind`
+  - `crewd_exec::driver`：`pub type UntrustedContext = BTreeMap<String, String>`；`pub enum Control { Model(String), Effort(String), Fast(bool), Compact }`；`pub enum ControlOutcome { Applied(String), NoConfirmation(String), Rejected(String), Unsupported(String) }`；`pub fn with_untrusted_context(&UntrustedContext, &str) -> String`；`pub(crate) enum Command { Send { id: u64, text: String, context: UntrustedContext }, Raw(Vec<u8>), Interrupt, Resize { cols: u16, lines: u16 }, Stop, ClearQuotaHealth, ScreenText { max_lines: usize, reply: oneshot::Sender<String> }, Snapshot { reply: oneshot::Sender<Option<Snapshot>> }, Status { reply: oneshot::Sender<SessionStatus> }, Control { op: Control, reply: oneshot::Sender<ControlOutcome> } }`；`SessionHandle::new(tx: mpsc::UnboundedSender<Command>) -> Self`（`pub(crate)`）、`send(&self, impl Into<String>) -> Result<u64, SendError>`（不变）、`send_with_context(&self, impl Into<String>, UntrustedContext) -> Result<u64, SendError>`、`interrupt(&self) -> Result<(), Closed>`、`async control(&self, Control) -> Result<ControlOutcome, Closed>`、`async snapshot(&self) -> Result<Option<Snapshot>, Closed>`；`StartError::Handshake { health: Health }`；`pub(crate)`：`kill_group(u32)`、`kill_group_only(u32) -> bool`、`terminate(u32)`、`decode(io::Result<std::process::ExitStatus>) -> ExitStatusKind`、`async blocking(…)`、`REAP_LIMIT`、`struct LiveId` 与 `LiveId::claim`
   - `crewd_exec::session`：`SessionEvent::{Item { turn_id: String, item: serde_json::Value }, TurnEnded { last_agent_message: String }, Notice(String), Profile(Profile)}`；`#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct Profile { pub model: Option<String>, pub effort: Option<String>, pub fast: Option<bool> }`
   - `crewd_exec::health`：`HealthKind::{TurnFailed, VersionIncompatible}`、`HealthKind::rank(self) -> u8`
   - `crewd_exec::launch`：`HelperCommands::mcp_args_for(&self, agent: &str) -> Vec<String>`
@@ -163,19 +172,21 @@ pub enum SessionEvent {         // 第一条一定是 Spawned；当前会话号�
 - [ ] **Step 1: 对齐检查与基线**
 
 ```bash
-grep -n "^enum Command\|^fn handle(\|^fn dispatch(\|^fn finish(\|^fn kill_group\|^fn terminate\|^fn decode\|pub async fn snapshot\|AlreadyRunning(String)\|^struct LiveId\|fn claim(" crates/exec/src/driver.rs
+grep -n "^enum Command\|^fn handle(\|^fn dispatch(\|^async fn finish(\|^fn begin_stop(\|^fn kill_group(\|^fn kill_group_only\|^fn terminate\|^fn decode\|^async fn blocking\|^const REAP_LIMIT\|pub async fn snapshot\|AlreadyRunning(String)\|^pub enum SendError\|^struct LiveId\|fn claim(" crates/exec/src/driver.rs
 grep -n "pub enum SessionEvent\|fn health_rank\|pub fn preview\|pub const BRIEF_DELIVERY_ID\|pub enum DerivedState" crates/exec/src/session.rs
 grep -n "pub enum HealthKind\|pub fn is_quota" crates/exec/src/health.rs
 grep -n "pub fn mcp_args\|pub fn valid_agent_session_id" crates/exec/src/launch.rs
-grep -n "pub fn check_agent_session_id\|pub struct MemoryLedger" crates/exec/src/resume.rs
-grep -n "pub fn reap_orphans\|PROCESS_REGISTRY_FILE\|pub fn lock_data_dir\|pub fn ensure_data_dir" crates/server/src/lib.rs
+grep -n "pub fn check_agent_session_id\|pub struct MemoryLedger\|pub use crate::launch::valid_agent_session_id" crates/exec/src/resume.rs
+grep -n "pub const PASSTHROUGH_KEYS\|\"CLAUDE_CONFIG_DIR\"," crates/exec/src/env.rs
+grep -n "pub fn group_signal_refused" crates/exec/src/registry.rs
+grep -n "pub fn reap_orphans\|pub fn log_reap_reports\|pub const PROCESS_REGISTRY_FILE\|pub fn lock_data_dir\|pub fn ensure_data_dir" crates/server/src/lib.rs
 grep -n "pub struct StoreLedger\|fn open(&self)\|fn to_io" crates/server/src/ledger.rs
-ls crates/crewd/src/claude_cmd.rs
+grep -n "async fn read_prompt\|fn stdin_lines\|prompt_file" crates/crewd/src/claude_cmd.rs
 cargo test -p crewd-exec --lib 2>&1 | grep "test result"
 cargo test -p crewd-exec --test driver 2>&1 | grep "test result"
 ```
 
-Expected：每一行都有命中（`fn health_rank` 是合入版 claude 核心里的私有档位表）。记下两个 `passed` 数作为本计划的基线（写计划时 `crewd-m2b@1e35379` 是 122 / 12）。**任何一行没命中就停下回报**——M2c 的接线点在 M2b 里被改掉了。
+Expected：每一行都有命中（`fn health_rank` 是终版 claude 核心里的私有档位表；`finish` 是 `async fn`；`kill_group_only` / `begin_stop` 是终评修正加的）。记下两个 `passed` 数作为本计划的基线（`crewd-m2b@b5a65b0` 是 135 / 19）。**任何一行没命中就停下回报**——M2c 的接线点在 M2b 里被改掉了。（`env::tests::login_shell_runs_as_leader_of_a_new_session` 在冷编译满载时偶发红过一次，重跑即绿，是 M2b 的已知小问题「登录 shell 测试用 1s 捕获超时」；红的若是它，重跑一遍再判。）
 
 - [ ] **Step 2: 写失败的测试**
 
@@ -183,7 +194,8 @@ Expected：每一行都有命中（`fn health_rank` 是合入版 claude 核心�
 
 ```rust
 use crewd_exec::driver::{
-    ClaudeStart, Control, ControlOutcome, DriverConfig, SessionHandle, StartError, start_claude,
+    ClaudeStart, Control, ControlOutcome, DriverConfig, SendError, SessionHandle, StartError,
+    start_claude,
 };
 ```
 
@@ -241,6 +253,22 @@ mod context_tests {
             "开工"
         );
     }
+
+    /// 上下文不算正文：只有白板、没有正文的一条照样当场拒掉，不占编号、不进命令通道。
+    #[test]
+    fn context_without_text_is_refused_like_an_empty_send() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let h = SessionHandle::new(tx);
+        let ctx: UntrustedContext = [("crew_whiteboard".to_string(), "A: 早".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            h.send_with_context(" \n", ctx.clone()),
+            Err(SendError::EmptyText)
+        );
+        assert!(rx.try_recv().is_err(), "拒掉的不进命令通道");
+        assert_eq!(h.send_with_context("开工", ctx), Ok(BRIEF_DELIVERY_ID + 1));
+    }
 }
 ```
 
@@ -260,7 +288,7 @@ Expected: 编译失败，报 `no method named \`interrupt\`` 与找不到 `Contr
     VersionIncompatible,
 ```
 
-`impl HealthKind {` 里、`is_quota` 之前加：
+`impl HealthKind {` 里、`is_quota` 的文档注释之前加：
 
 ```rust
     /// health 那一格的档位：拉起失败 > 额度 / 限流 > 认证 / 版本不兼容 > 投递报告 / 回合失败。
@@ -274,9 +302,25 @@ Expected: 编译失败，报 `no method named \`interrupt\`` 与找不到 `Contr
             Self::BriefUndelivered | Self::PromptUndelivered | Self::TurnFailed => 1,
         }
     }
+
 ```
 
-`crates/exec/src/session.rs`：删掉私有的 `fn health_rank(kind: HealthKind) -> u8 { … }` 连同它的文档注释（内容已挪进上面的 `rank()`），唯一的调用处
+`crates/exec/src/session.rs`：删掉私有的档位表连同它后面的空行（内容已挪进上面的 `rank()`），原文：
+
+```rust
+/// health 那一格的档位：拉起失败 > 额度 / 限流 > 认证 > 投递报告。额度类只由它自己的恢复
+/// 路径清掉：认证探测的来回（要登录 → 已登录）既不能盖掉它，也不能借「清掉认证」把它清掉。
+fn health_rank(kind: HealthKind) -> u8 {
+    match kind {
+        HealthKind::LaunchFailed => 4,
+        HealthKind::UsageLimit | HealthKind::RateLimited => 3,
+        HealthKind::AuthRequired => 2,
+        HealthKind::BriefUndelivered | HealthKind::PromptUndelivered => 1,
+    }
+}
+```
+
+唯一的调用处
 
 ```rust
                 .is_some_and(|cur| health_rank(cur.kind) > health_rank(h.kind))
@@ -288,11 +332,38 @@ Expected: 编译失败，报 `no method named \`interrupt\`` 与找不到 `Contr
                 .is_some_and(|cur| cur.kind.rank() > h.kind.rank())
 ```
 
-同一文件 `SessionEvent` 里，`ResumeRefused` 及其文档注释（「claude 拒绝 `--resume <id>`，原话 `said`。」）连同后面的 `Exited(ExitInfo),\n}` 换成下面这段（`Profile` 结构体紧跟在枚举后面）：
+同一文件 `SessionEvent` 里，`Spawned` 的文档注释
 
 ```rust
-    /// 续跑被拒：`id` 接不回来了，原话 `said`。claude 随后换新号重起、再发一次 `Spawned`；
-    /// codex 在同一个进程里新开一条 thread，这条事件跟在 `Spawned` **之后**发。
+    /// 进程起来了（驱动层发；续跑被拒重起后会再发一次）。`resumed` = 用了 `--resume`。
+```
+
+换成
+
+```rust
+    /// 进程起来了（驱动层发；续跑被拒重起后会再发一次）。`resumed` = 这次是去接一个记过的号
+    /// （claude `--resume`、codex `thread/resume`），接没接上看后面有没有 `ResumeRefused`。
+```
+
+从 `ResumeRefused` 的文档注释起到枚举结束（原文）：
+
+```rust
+    /// claude 拒绝 `--resume <id>`，原话 `said`。
+    ResumeRefused {
+        id: String,
+        said: String,
+    },
+    Exited(ExitInfo),
+}
+```
+
+换成（`Profile` 结构体紧跟在枚举后面；续跑被拒的事件顺序两个执行器相同，见裁定 3）：
+
+```rust
+    /// 续跑被拒：`id` 接不回来了，原话 `said`。后面一定跟一条换了新号的 `Spawned`（换新号
+    /// 重起失败时例外：跟的是 LaunchFailed 与 `Exited`）。两个执行器顺序相同：
+    /// `Spawned { 旧号, resumed: true }` → `ResumeRefused` → `Spawned { 新号, resumed: false }`。
+    /// claude 换一个新进程；codex 在同一个进程里新开一条 thread（pid 不变）。叫停之后不再报。
     /// 当前会话号永远以最近一条 `Spawned` 为准。
     ResumeRefused {
         id: String,
@@ -354,15 +425,35 @@ pub struct Profile {
 
 (a) `use std::collections::BTreeSet;` 换成 `use std::collections::{BTreeMap, BTreeSet};`。
 
-(b) `StartError` 的 `AlreadyRunning(String),` 之后加：
+(b) `StartError` 里 `AlreadyRunning` 的文档注释与变体
 
 ```rust
+    /// 这个 claude 会话号已经在本进程里跑着：再起一次会删掉它的启动目录、两个进程写同一份对话。
+    AlreadyRunning(String),
+}
+```
+
+换成（codex 的 thread id 也走这张表，裁定 20；加 `Handshake`）：
+
+```rust
+    /// 这个会话号（claude 会话号 / codex thread id）已经在本进程里跑着：再起一次会删掉它的
+    /// 启动目录、两个进程写同一份对话。
+    AlreadyRunning(String),
     /// 进程起来了但握手没完成（codex：`initialize` / `thread/start` 失败、超时或进程中途退出）。
     /// 已杀掉进程。`health` 是给人看的拉起失败。
     Handshake { health: Health },
+}
 ```
 
-`Display` 里 `AlreadyRunning` 那一臂连同之后改成（去掉「claude」——codex 的 thread id 也走这张表，裁定 20）：
+`Display` 里 `AlreadyRunning` 那一臂
+
+```rust
+            Self::AlreadyRunning(id) => {
+                write!(f, "claude 会话 {id} 已经在跑，不能同时再起一个")
+            }
+```
+
+换成（去掉「claude」）：
 
 ```rust
             Self::AlreadyRunning(id) => {
@@ -371,7 +462,7 @@ pub struct Profile {
             Self::Handshake { health } => write!(f, "{}", health.detail),
 ```
 
-(c) 从 `enum Command {` 起、到 `SessionHandle::raw` 方法结束为止的这一段（原文）：
+(c) 从 `enum Command {` 起、到 `SessionHandle::resize` 之前为止的这一段（原文；`send` 是终版带 `SendError::EmptyText` 的那一个）：
 
 ```rust
 enum Command {
@@ -408,12 +499,14 @@ pub struct SessionHandle {
 
 impl SessionHandle {
     /// 投一段正文（排队，回读屏幕确认提交）。返回投递编号，结果见 `SessionEvent::Delivery`。
-    pub fn send(&self, text: impl Into<String>) -> Result<u64, Closed> {
+    /// 空的 / 只有空白的正文当场拒掉（[`SendError::EmptyText`]，不占编号、不会有结果事件）。
+    pub fn send(&self, text: impl Into<String>) -> Result<u64, SendError> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Err(SendError::EmptyText);
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.cmd(Command::Send {
-            id,
-            text: text.into(),
-        })?;
+        self.cmd(Command::Send { id, text })?;
         Ok(id)
     }
 
@@ -423,7 +516,7 @@ impl SessionHandle {
     }
 ```
 
-整段换成：
+整段换成（`send` 的空正文闸挪进 `send_with_context`，两个入口同一道闸）：
 
 ```rust
 /// 附在一条正文前面的「不可信上下文」：键 = 来源（如 `crew_whiteboard`），值 = 原文。
@@ -519,22 +612,24 @@ impl SessionHandle {
     }
 
     /// 投一段正文（排队）。返回投递编号，结果见 `SessionEvent::Delivery`。
-    pub fn send(&self, text: impl Into<String>) -> Result<u64, Closed> {
+    /// 空的 / 只有空白的正文当场拒掉（[`SendError::EmptyText`]，不占编号、不会有结果事件）。
+    pub fn send(&self, text: impl Into<String>) -> Result<u64, SendError> {
         self.send_with_context(text, UntrustedContext::new())
     }
 
     /// 投一段正文，附带不可信上下文（白板未读等）。见 [`UntrustedContext`]。
+    /// 上下文不算正文：正文空 / 只有空白照样 [`SendError::EmptyText`]。
     pub fn send_with_context(
         &self,
         text: impl Into<String>,
         context: UntrustedContext,
-    ) -> Result<u64, Closed> {
+    ) -> Result<u64, SendError> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Err(SendError::EmptyText);
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.cmd(Command::Send {
-            id,
-            text: text.into(),
-            context,
-        })?;
+        self.cmd(Command::Send { id, text, context })?;
         Ok(id)
     }
 
@@ -588,9 +683,22 @@ impl SessionHandle {
     Ok((SessionHandle::new(tx), ev_rx))
 ```
 
-(f) `fn kill_group`、`fn terminate`、`fn decode` 三个函数前加 `pub(crate) `（codex 驱动共用）。
+(f) `fn kill_group`、`fn kill_group_only`、`fn terminate`、`fn decode`、`async fn blocking`、`const REAP_LIMIT` 前加 `pub(crate) `（codex 驱动共用：停止升级用 `kill_group`，收尸后补刀用 `kill_group_only`，文件 IO 走 `blocking`，收尸上限用 `REAP_LIMIT`）。
 
-(g) 会话号占用表给 codex 共用（裁定 20）：`LIVE_AGENT_IDS` 的文档注释与 `LiveId` 换成
+(g) 会话号占用表给 codex 共用（裁定 20）：
+
+```rust
+/// 本进程里正在跑的 claude 会话号。
+static LIVE_AGENT_IDS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// 占着一个会话号；drop 时放开。
+struct LiveId(String);
+
+impl LiveId {
+    fn claim(id: &str) -> Result<Self, StartError> {
+```
+
+换成
 
 ```rust
 /// 本进程里正在跑的 agent 会话号（claude 会话号与 codex thread id 共用一张表）。
@@ -598,16 +706,12 @@ static LIVE_AGENT_IDS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// 占着一个会话号；drop 时放开。
 pub(crate) struct LiveId(String);
+
+impl LiveId {
+    pub(crate) fn claim(id: &str) -> Result<Self, StartError> {
 ```
 
-`impl LiveId` 里 `fn claim` 改成 `pub(crate) fn claim`，并在它之前加
-
-```rust
-    pub(crate) fn id(&self) -> &str {
-        &self.0
-    }
-
-```
+（`LiveId::id` 在 Task 7 用到时才加：这里加了没人调，`clippy -D warnings` 报 dead code。）
 
 (h) `fn handle` 里：
 
@@ -627,13 +731,14 @@ pub(crate) struct LiveId(String);
         Command::Interrupt => t.core.raw(&[0x1b]),
 ```
 
+以及
+
 ```rust
-        Command::Snapshot { reply } => {
             let _ = reply.send(t.core.snapshot());
         }
 ```
 
-换成
+换成（这段的第一行之前保留 `Command::Snapshot { reply } => {`）：
 
 ```rust
             let _ = reply.send(Some(t.core.snapshot()));
@@ -645,12 +750,10 @@ pub(crate) struct LiveId(String);
         }
 ```
 
-（上面这段的第一行之前保留 `Command::Snapshot { reply } => {`。）
-
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p crewd-exec --test driver`（连跑三遍）
-Expected: 比基线多 1 条，全过。`cargo test -p crewd-exec --lib` 比基线多 1 条（`untrusted_context_is_wrapped_in_key_order_before_the_text`）。
+Expected: 比基线多 1 条，全过。`cargo test -p crewd-exec --lib` 比基线多 2 条（`untrusted_context_is_wrapped_in_key_order_before_the_text`、`context_without_text_is_refused_like_an_empty_send`）。
 
 - [ ] **Step 6: 全量检查并提交**
 
@@ -663,9 +766,13 @@ git commit -m "crewd-exec: narrow interface grows send_with_context, interrupt, 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 7: 验这把尺子会红**
+- [ ] **Step 7: 验这两把尺子会红**
 
-`fn handle` 里 `Command::Interrupt => t.core.raw(&[0x1b]),` 临时改成 `Command::Interrupt => t.core.raw(&[]),` → `cargo test -p crewd-exec --test driver` → 红 1 条：`interrupt_is_a_lone_escape_and_control_is_unsupported_on_claude`（约 5s，等屏上出现 `byte:1b` 超时）。`git checkout -- crates/exec/src/driver.rs` 改回，`git status` 干净。
+每刀单独做，做完 `git checkout -- crates/exec/src/driver.rs` 改回：
+1. `fn handle` 里 `Command::Interrupt => t.core.raw(&[0x1b]),` 临时改成 `Command::Interrupt => t.core.raw(&[]),` → `cargo test -p crewd-exec --test driver` → 红 1 条：`interrupt_is_a_lone_escape_and_control_is_unsupported_on_claude`（约 5s，等屏上出现 `byte:1b` 超时）。
+2. `send_with_context` 里删掉 `if text.trim().is_empty() { return Err(SendError::EmptyText); }` 那三行 → `cargo test -p crewd-exec --lib driver` 红 1 条：`context_without_text_is_refused_like_an_empty_send`；`cargo test -p crewd-exec --test driver` 红 1 条：`empty_text_is_rejected_at_the_handle`（M2b 的那条，证明闸挪进 `send_with_context` 后 `send` 仍然经过它）。
+
+`git status` 干净。
 
 ---
 
@@ -2692,7 +2799,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ### Task 5: 会话核心（`codex::session::CodexCore`，sans-IO）
 
-一个 codex 会话的全部判断，不碰 IO，形状与 M2b 的 `session::Core` 一样：`on_line` / `on_tick` / `on_recorded` / `send` / `interrupt` / `raw` / `control` / `clear_quota_health` / `stop` / `on_exit`，吐出按顺序执行的 `CodexAction`。所以握手、续跑退回、落账先于 `Spawned`、服务端请求、排队、期限、压缩、fast 回显、健康档位、退出收尾，全能用合成 JSON 和合成时间单测（裁定 2–9、16、17）。
+一个 codex 会话的全部判断，不碰 IO，形状与 M2b 的 `session::Core` 一样：`on_line` / `on_tick` / `on_recorded` / `send` / `interrupt` / `raw` / `control` / `clear_quota_health` / `stop` / `on_exit`，吐出按顺序执行的 `CodexAction`。所以握手、续跑退回（事件与 claude 同序）、落账先于 `Spawned`、服务端请求、排队、期限、压缩（含「读数晚到时不在回合中间压」）、fast 回显、健康档位、退出收尸，全能用合成 JSON 和合成时间单测（裁定 2–9、16、17）。
 
 测试器材 `T` 是一个合成的 app-server：核心发出的每一行都解析回 JSON 记下来，回应按方法名配上 id。`T::ready` 走完「initialize → thread/start（回 `thr-1`）→ 落账成功」。
 
@@ -2965,14 +3072,17 @@ mod tests {
         assert_eq!(t.count("thread/start"), 0);
     }
 
+    /// 续跑被拒：新 thread 先落账；事件与 claude 同序（旧号的 Spawned → ResumeRefused → 新号的
+    /// Spawned），每条 ResumeRefused 后面都跟一条 Spawned。
     #[test]
-    fn refused_resume_falls_back_to_a_fresh_recorded_thread_and_says_so_after_spawned() {
+    fn refused_resume_falls_back_to_a_fresh_recorded_thread_in_the_same_order_as_claude() {
         let mut t = T::new(Some("thr-gone"), Some("接着干"));
         t.reply("initialize", json!({}));
         t.reply_err("thread/resume", "no rollout found for thread id thr-gone");
         assert_eq!(t.count("thread/start"), 1);
         t.reply("thread/start", json!({ "thread": { "id": "thr-new" } }));
         assert_eq!(t.take_other(), vec![CodexAction::Record("thr-new".into())]);
+        assert!(t.events.is_empty(), "落账之前不发任何事件");
         t.core.on_recorded(Ok(()), t.at(0.3));
         t.pump();
         let ev = t.take_events();
@@ -2980,8 +3090,8 @@ mod tests {
             ev[0],
             SessionEvent::Spawned {
                 pid: PID,
-                agent_session_id: "thr-new".into(),
-                resumed: false,
+                agent_session_id: "thr-gone".into(),
+                resumed: true,
             }
         );
         let SessionEvent::ResumeRefused { id, said } = &ev[1] else {
@@ -2989,6 +3099,15 @@ mod tests {
         };
         assert_eq!(id, "thr-gone");
         assert!(said.contains("no rollout found"), "{said}");
+        assert_eq!(
+            ev[2],
+            SessionEvent::Spawned {
+                pid: PID,
+                agent_session_id: "thr-new".into(),
+                resumed: false,
+            }
+        );
+        assert_eq!(t.core.thread_id(), Some("thr-new"));
         assert_eq!(t.last("turn/start")["params"]["threadId"], "thr-new");
     }
 
@@ -3331,6 +3450,30 @@ mod tests {
         assert_eq!(t.count("thread/compact/start"), 1);
     }
 
+    /// 读数比 `turn/completed` 晚到，而这之间来的一条已经开了回合（`turn/start` 在路上）：
+    /// 不在回合中间压缩，等下一个回合边界。
+    #[test]
+    fn a_late_reading_does_not_compact_under_a_turn_that_is_starting() {
+        let mut t = T::ready(Some("干活"));
+        t.reply("turn/start", json!({ "turn": { "id": "work" } }));
+        t.turn("work", "干完了");
+        t.core
+            .send(1, "紧接着来的", UntrustedContext::new(), t.at(2.0));
+        t.pump();
+        assert_eq!(t.count("turn/start"), 2, "前提：空闲，马上开回合");
+        t.notify(
+            "thread/tokenUsage/updated",
+            json!({ "threadId": "thr-1", "turnId": "work", "tokenUsage": {
+                "last": { "totalTokens": 190_000 }, "total": { "totalTokens": 500_000 },
+                "modelContextWindow": 258_400 } }),
+        );
+        assert_eq!(t.count("thread/compact/start"), 0, "回合在路上，不压");
+        // 这一回合照常跑完，排队与回合结束不受影响。
+        t.reply("turn/start", json!({ "turn": { "id": "t2" } }));
+        t.turn("t2", "也干完了");
+        assert!(!t.core.is_working());
+    }
+
     #[test]
     fn a_compaction_that_cannot_start_releases_the_queue_and_says_why() {
         let mut t = T::ready(None);
@@ -3611,9 +3754,12 @@ Expected: 编译失败，报找不到 `CodexCore` / `Opening` / `CodexAction` �
 //! [`CodexAction`]。时间由调用方传入。
 //!
 //! - **握手**：`initialize` → `initialized` → 记过 thread 就 `thread/resume`（`excludeTurns`），
-//!   失败退回 `thread/start` 并在 `Spawned` 之后补一条 `ResumeRefused`；拿到 thread id 先落账
-//!   （[`CodexAction::Record`]），落账成功才发 `Spawned`、才放第一个回合。落账失败 = 启动失败。
-//!   就绪之前产生的事件先攒着，保证第一条事件是 `Spawned`。
+//!   失败退回 `thread/start`；拿到 thread id 先落账（[`CodexAction::Record`]），落账成功才发
+//!   `Spawned`、才放第一个回合。落账失败 = 启动失败。就绪之前产生的事件先攒着，保证第一条事件
+//!   是 `Spawned`。续跑被拒时的事件与 claude 同序：`Spawned { 旧号, resumed: true }` →
+//!   `ResumeRefused` → `Spawned { 新号, resumed: false }`（同一个 pid）——每条 `ResumeRefused`
+//!   后面都跟一条 `Spawned`。三条在就绪那一刻一起发，叫停只可能发生在就绪之后，所以「叫停之后
+//!   不再报 `ResumeRefused`」在结构上成立。
 //! - **每一条服务端请求都回**（[`proto::answer_server_request`]），代拒的发 `Notice`（每种方法一次）。
 //! - **回合**：一次只开一个；有回合在跑、正在压缩、或上一个 `turn/start` 还没回，正文就排队。
 //! - **健康**：只认协议字段（[`proto::health_from`]）；正常完成的回合清掉过时的额度 / 失败 / 版本 health。
@@ -3987,8 +4133,9 @@ impl CodexCore {
     }
 
     /// 投一段正文：排队，空闲时开一个回合。会话已经不在了就当场报没送到。
+    /// 空正文由句柄当场拒掉（`SendError::EmptyText`），到不了这里；这里再挡一道。
     pub fn send(&mut self, id: u64, text: &str, context: UntrustedContext, now: Instant) {
-        if text.is_empty() {
+        if text.trim().is_empty() {
             return;
         }
         let pending = PendingTurn {
@@ -4225,16 +4372,22 @@ impl CodexCore {
 
     fn become_ready(&mut self, now: Instant) {
         self.phase = Phase::Ready;
+        if let Some((id, said)) = self.fallback.clone() {
+            // 与 claude 同序：先报「去接了旧号」，再报接不回来，最后是新号。
+            self.actions.push(CodexAction::Event(SessionEvent::Spawned {
+                pid: self.pid,
+                agent_session_id: id.clone(),
+                resumed: true,
+            }));
+            self.actions
+                .push(CodexAction::Event(SessionEvent::ResumeRefused { id, said }));
+        }
         let thread = self.thread_id.clone().unwrap_or_default();
         self.actions.push(CodexAction::Event(SessionEvent::Spawned {
             pid: self.pid,
             agent_session_id: thread,
             resumed: self.resumed,
         }));
-        if let Some((id, said)) = self.fallback.clone() {
-            self.actions
-                .push(CodexAction::Event(SessionEvent::ResumeRefused { id, said }));
-        }
         let profile = self.opened_profile.clone();
         if profile != Profile::default() {
             self.actions
@@ -4423,7 +4576,11 @@ impl CodexCore {
         if let Some(problem) = s.compaction_problem {
             self.event(SessionEvent::Notice(problem));
         }
+        // 读数晚到（回合已经结束）时，排着的下一条可能已经发了 `turn/start`：那就不在它中间压，
+        // 等下一个回合边界再判（读数还高，到时照样会压）。
         if s.compact
+            && !self.in_flight
+            && !self.tracker.is_busy()
             && let Some(thread) = self.thread_id.clone()
         {
             let params = proto::compact_params(&thread);
@@ -4628,7 +4785,7 @@ pub fn launch_health(verdict: LaunchVerdict, underlying: &str) -> Health {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-exec --lib codex::session`
-Expected: `24 passed`。
+Expected: `25 passed`。
 
 - [ ] **Step 5: 全量检查并提交**
 
@@ -4643,9 +4800,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 6: 验这几把尺子会红**
 
-每刀单独做、做完 `git checkout -- crates/exec/src/codex/session.rs` 改回：
-1. `set_health` 里 `.is_some_and(|cur| cur.kind.rank() > h.kind.rank())` 临时改成 `.is_some_and(|cur| cur.kind.rank() > 99)` → `cargo test -p crewd-exec --lib codex::session` → 红 1 条：`a_lower_ranked_health_does_not_hide_a_quota_problem`。
-2. `opened` 里 `self.actions.push(CodexAction::Record(thread));` 之后加一行 `self.become_ready(now);` → 红 2 条：`fresh_start_records_the_thread_before_spawned_and_before_the_first_turn`、`ledger_failure_fails_the_start_and_no_turn_is_opened`（落账之前就就绪）。
+每刀单独做、跑 `cargo test -p crewd-exec --lib codex::session`、做完 `git checkout -- crates/exec/src/codex/session.rs` 改回：
+1. `set_health` 里 `.is_some_and(|cur| cur.kind.rank() > h.kind.rank())` 临时改成 `.is_some_and(|cur| cur.kind.rank() > 99)` → 红 1 条：`a_lower_ranked_health_does_not_hide_a_quota_problem`。
+2. `opened` 里 `self.actions.push(CodexAction::Record(thread));` 之后加一行 `self.become_ready(now);` → 红 3 条：`fresh_start_records_the_thread_before_spawned_and_before_the_first_turn`、`ledger_failure_fails_the_start_and_no_turn_is_opened`、`refused_resume_falls_back_to_a_fresh_recorded_thread_in_the_same_order_as_claude`（落账之前就就绪）。
+3. `become_ready` 里删掉旧号那条 `Spawned`（`if let Some((id, said))` 块里 `ResumeRefused` 之前的那个 `push`）→ 红 1 条：`refused_resume_falls_back_to_a_fresh_recorded_thread_in_the_same_order_as_claude`（回到第一版的顺序：`ResumeRefused` 成了第一条事件之后的孤儿）。
+4. `on_notification` 里自动压缩的条件删掉 `&& !self.in_flight` 与 `&& !self.tracker.is_busy()` 两行 → 红 1 条：`a_late_reading_does_not_compact_under_a_turn_that_is_starting`。
 
 `git status` 干净。
 
@@ -4653,14 +4812,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ### Task 6: 起进程与管道（`codex::transport`）
 
-setsid、白名单环境再剥计费 key、工作目录不存在即失败、三根管子：stdout 有上限按行读（取消安全，能放进 `select!`）、stderr 一直排空只留尾巴、stdin 走写任务（裁定 10–12）。
+setsid、白名单环境（`CODEX_HOME` 加进白名单）再剥计费 key、工作目录不存在即失败、三根管子：stdout 有上限按行读（取消安全，能放进 `select!`）、stderr 一直排空只留尾巴、stdin 走写任务（裁定 10–12）。
 
 **Files:**
 - Create: `crewd/crates/exec/src/codex/transport.rs`
-- Modify: `crewd/crates/exec/src/codex/mod.rs`
+- Modify: `crewd/crates/exec/src/codex/mod.rs`、`crewd/crates/exec/src/env.rs`
 
 **Interfaces:**
-- Consumes: M2b `env::build_env`（只在测试里）；rustix `setsid`。
+- Consumes: M2b `env::build_env`（只在测试里）、`env::PASSTHROUGH_KEYS`；rustix `setsid`。
+- Produces（`crewd_exec::env`）：`PASSTHROUGH_KEYS: [&str; 8]`（加 `CODEX_HOME`）。
 - Produces（`crewd_exec::codex::transport`）:
   - 常量 `BILLING_KEYS: [&str; 3]`、`MAX_LINE_BYTES: usize`（64MiB）、`STDERR_TAIL_BYTES: usize`（4096）；`pub fn strip_billing_keys(&mut BTreeMap<String, String>)`
   - `#[derive(Clone, Debug)] pub struct CodexProcessSpec { pub program: PathBuf, pub args: Vec<String>, pub env: BTreeMap<String, String>, pub cwd: PathBuf }`
@@ -4671,6 +4831,27 @@ setsid、白名单环境再剥计费 key、工作目录不存在即失败、三�
 - [ ] **Step 1: 写失败的测试**
 
 `crates/exec/src/codex/mod.rs`：`pub mod session;` 之后加 `pub mod transport;`。
+
+`crates/exec/src/env.rs` 测试模块里，`claude_config_dir_is_passed_through_when_set` 之后加：
+
+```rust
+    /// codex 的登录态与配置在 `CODEX_HOME` 下：设了就原样带给子进程，没设就不出现（codex 自己
+    /// 落到 `~/.codex`）。
+    #[test]
+    fn codex_home_is_passed_through_when_set() {
+        let env = build_env(
+            [("HOME", "/home/u"), ("CODEX_HOME", "/codex-home")],
+            "/p",
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            env.get("CODEX_HOME").map(String::as_str),
+            Some("/codex-home")
+        );
+        let env = build_env([("HOME", "/home/u")], "/p", &BTreeMap::new());
+        assert!(!env.contains_key("CODEX_HOME"), "没设就不出现");
+    }
+```
 
 `crates/exec/src/codex/transport.rs`：先只放测试模块（Review Focus 2 的单元一半在这里）：
 
@@ -4863,11 +5044,46 @@ mod tests {
 - [ ] **Step 2: 跑测试确认失败**
 
 Run: `cargo test -p crewd-exec --lib codex::transport`
-Expected: 编译失败，报找不到 `LineReader` / `spawn_codex` / `strip_billing_keys` 等。
+Expected: 编译失败，报找不到 `LineReader` / `spawn_codex` / `strip_billing_keys` 等（同一个测试二进制，`codex_home_is_passed_through_when_set` 也跟着跑不起来；它的红见 Step 6 第 2 刀）。
 
 - [ ] **Step 3: 实现**
 
-写在测试模块之前：
+`crates/exec/src/env.rs` 的白名单（原文）：
+
+```rust
+/// `CLAUDE_CONFIG_DIR`：设了才有；claude 按它放会话日志，认证探测
+/// （`AuthProbe::projects_dir_for`）按 crewd 自己的环境找日志——两边要看到同一个值。
+pub const PASSTHROUGH_KEYS: [&str; 7] = [
+    "HOME",
+    "SHELL",
+    "LANG",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "CLAUDE_CONFIG_DIR",
+];
+```
+
+换成：
+
+```rust
+/// `CLAUDE_CONFIG_DIR`：设了才有；claude 按它放会话日志，认证探测
+/// （`AuthProbe::projects_dir_for`）按 crewd 自己的环境找日志——两边要看到同一个值。
+/// `CODEX_HOME`：设了才有；codex 的登录态、配置、thread 记录都在它下面（缺省 `~/.codex`），
+/// 不透传的话用了自定义目录的机器上 crewd 起的 codex 读错地方、登录态对不上（人 2026-10-06 定）。
+pub const PASSTHROUGH_KEYS: [&str; 8] = [
+    "HOME",
+    "SHELL",
+    "LANG",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+];
+```
+
+`crates/exec/src/codex/transport.rs`，写在测试模块之前：
 
 ```rust
 //! 起 `codex app-server` 子进程并接好三根管子（Swift `CodexAppServerConnection` 的移植）。
@@ -5102,44 +5318,49 @@ impl<R: AsyncBufRead + Unpin> LineReader<R> {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-exec --lib codex::transport`（连跑三遍）
-Expected: `9 passed`，每遍 0.2s 内。
+Expected: `9 passed`，每遍 0.2s 内。`cargo test -p crewd-exec --lib env::` 全过（比基线多 1 条）。
 
 - [ ] **Step 5: 全量检查并提交**
 
 Run: `./scripts/check.sh` → 0。
 
 ```bash
-git add crates/exec/src/codex/mod.rs crates/exec/src/codex/transport.rs
-git commit -m "crewd-exec: codex app-server process in its own session, bounded stdout lines, drained stderr
+git add crates/exec/src/codex/mod.rs crates/exec/src/codex/transport.rs crates/exec/src/env.rs
+git commit -m "crewd-exec: codex app-server process in its own session, bounded stdout lines, drained stderr; CODEX_HOME passes the env whitelist
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: 验这把尺子会红**
+- [ ] **Step 6: 验这两把尺子会红**
 
-`spawn_codex` 的 stderr 任务里 `while let Ok(n) = stderr.read(&mut buf).await {` 之前临时插一行 `std::future::pending::<()>().await;`（攥着管道但不读）→ `cargo test -p crewd-exec --lib codex::transport` → 红 1 条：`a_flood_on_stderr_cannot_stall_stdout_and_its_tail_is_kept`（10s 超时）。改回（`git checkout -- crates/exec/src/codex/transport.rs`），`git status` 干净。
+每刀单独做，做完 `git checkout -- <那个文件>` 改回：
+1. `spawn_codex` 的 stderr 任务里 `while let Ok(n) = stderr.read(&mut buf).await {` 之前临时插一行 `std::future::pending::<()>().await;`（攥着管道但不读）→ `cargo test -p crewd-exec --lib codex::transport` → 红 1 条：`a_flood_on_stderr_cannot_stall_stdout_and_its_tail_is_kept`（10s 超时）。
+2. `env.rs` 的白名单删掉 `"CODEX_HOME",`（长度改回 7）→ `cargo test -p crewd-exec --lib env::` → 红 1 条：`codex_home_is_passed_through_when_set`。
+
+`git status` 干净。
 
 ---
 
 ### Task 7: 驱动层 `start_codex` + 假 app-server + 端到端
 
-一个会话 = 一个 tokio 任务。`start_codex`：读账本 → 账里记的号先占住（`LiveId::claim`，撞了 = `AlreadyRunning`，不起进程）→ 白名单环境剥计费 key → `spawn_codex`（失败即 `StartError::Spawn`）→ 登记表记一笔（只收 `pgid == pid`；写不进去就杀掉、报错）→ 建 `CodexCore`（它在构造时就发出 `initialize`）→ 起任务 → **等任务报「就绪」（`Spawned` 已进事件流）或「失败」**（`StartError::Handshake` / `Ledger`，进程已杀）。任务主循环 `select!`：stdout 一行、子进程退出（先把剩下的行读完，最多 500ms，**再对整组补一刀 SIGKILL**，然后照 M2b `finish` 的顺序先收拾——附属任务、thread id、登记表——再发 `Exited`）、命令、0.6s 节拍、`next_wakeup`（请求期限）、停止宽限到点（`killpg(SIGKILL)`）、落账结果（`spawn_blocking` 里调账本）。
+一个会话 = 一个 tokio 任务。`start_codex`：读账本 → 账里记的号先占住（`LiveId::claim`，撞了 = `AlreadyRunning`，不起进程）→ 白名单环境剥计费 key → `spawn_codex`（失败即 `StartError::Spawn`）→ 登记表记一笔（`spawn_blocking` 里探身份、只收 `pgid == pid`；写不进去就杀掉、有上限地收尸、报 `StartError::Registry`）→ 建 `CodexCore`（它在构造时就发出 `initialize`）→ 起任务 → **等任务报「就绪」（`Spawned` 已进事件流）或「失败」**（`StartError::Handshake` / `Ledger`，进程已杀）。任务主循环 `select!`：stdout 一行、子进程退出（先把 stdout 剩下的行读完、等 stderr 读到 EOF，各最多 500ms；然后照 M2b 终版 `finish` / `release` 的顺序**先收拾**——整组补一刀 SIGKILL（`kill_group_only`）、附属任务、thread id、登记表——**再发 `Exited`**）、命令（叫停走 `begin_stop`：只开始一次）、0.6s 节拍、`next_wakeup`（请求期限）、停止宽限到点（`kill_group`）、落账结果（`spawn_blocking` 里调账本）。进程规矩逐条对着 M2b 的 claude 驱动写（Global Constraints），不另起一套。
 
-假 app-server（`src/bin/fake_codex.rs`，cargo 给集成测试 `CARGO_BIN_EXE_fake_codex`）讲真 codex 的协议形状——一行一个 JSON、没有 `jsonrpc`、服务端请求的 id 有整数也有字符串、发出服务端请求后**阻塞等回应**（真 codex 就是这样挂死回合的）——行为由环境变量控制。执行器只放行调用方显式给的变量，所以测试经 `CodexSpec::additional_env` 传；测试同时塞一个 `OPENAI_API_KEY` 进去，验证它被剥掉。Review Focus 1–5 的端到端测试都在这里。
+假 app-server（`src/bin/fake_codex.rs`，cargo 给集成测试 `CARGO_BIN_EXE_fake_codex`）讲真 codex 的协议形状——一行一个 JSON、没有 `jsonrpc`、服务端请求的 id 有整数也有字符串、发出服务端请求后**阻塞等回应**（真 codex 就是这样挂死回合的）——行为由环境变量控制。执行器只放行调用方显式给的变量，所以测试经 `CodexSpec::additional_env` 传；测试同时塞一个 `OPENAI_API_KEY` 进去，验证它被剥掉。`count_term` 模式数 SIGTERM 来了几次（处理函数只调 async-signal-safe 的 `write(2)`）。压缩回合故意拖 300ms 才完成：「压缩中投进来的正文排队」那条端到端测试靠它。Review Focus 1–7 的端到端测试都在这里。
 
 **Files:**
 - Create: `crewd/crates/exec/src/codex/driver.rs`、`crewd/crates/exec/src/bin/fake_codex.rs`、`crewd/crates/exec/tests/fake_codex.rs`
-- Modify: `crewd/crates/exec/src/codex/mod.rs`
+- Modify: `crewd/crates/exec/src/codex/mod.rs`、`crewd/crates/exec/src/driver.rs`（`LiveId::id`）
 
 **Interfaces:**
-- Consumes: Task 1 `driver::{Command, ControlOutcome, LiveId, SessionHandle, SessionStatus, StartError, UntrustedContext, decode, kill_group, terminate}`、`resume::valid_agent_session_id`、`launch::{CommsSpec, HelperCommands}`；M2b `env::build_env_from_process`、`registry::{ProbeResult, ProcessRegistry, probe}`、`resume::AgentIdLedger`、`session::{BRIEF_DELIVERY_ID, SessionEvent}`、`delivery::Subject`、`health::LaunchVerdict`；Task 3 `proto::{self, ThreadOptions}`；Task 5 `session::{CodexAction, CodexCore, CodexCoreConfig, Opening, PendingTurn, StartFailure, launch_health}`；Task 6 `transport::{CodexProcess, CodexProcessSpec, Line, spawn_codex, strip_billing_keys}`。
+- Consumes: Task 1 `driver::{Command, ControlOutcome, LiveId, REAP_LIMIT, SessionHandle, SessionStatus, StartError, UntrustedContext, blocking, decode, kill_group, kill_group_only, terminate}`、`resume::valid_agent_session_id`、`launch::{CommsSpec, HelperCommands}`；M2b `env::build_env_from_process`、`registry::{ProbeResult, ProcessRegistry, probe}`、`resume::AgentIdLedger`、`session::{BRIEF_DELIVERY_ID, ExitStatusKind, SessionEvent}`、`delivery::Subject`、`health::LaunchVerdict`；Task 3 `proto::{self, ThreadOptions}`；Task 5 `session::{CodexAction, CodexCore, CodexCoreConfig, Opening, PendingTurn, StartFailure, launch_health}`；Task 6 `transport::{CodexProcess, CodexProcessSpec, Line, spawn_codex, strip_billing_keys}`。
 - Produces（`crewd_exec::codex::driver`）:
   - `#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct CodexSpec { pub workdir: PathBuf, pub model: Option<String>, pub effort: Option<String>, pub fast_mode: Option<bool>, pub developer_instructions: Option<String>, pub initial_prompt: Option<String>, pub initial_context: UntrustedContext, pub comms: Option<CommsSpec>, pub additional_env: BTreeMap<String, String> }`
   - `pub struct CodexStart { pub session_id: String, pub program: PathBuf, pub child_path: String, pub spec: CodexSpec, pub ledger: Arc<dyn AgentIdLedger> }`
   - `#[derive(Clone, Debug)] pub struct CodexConfig { pub core: CodexCoreConfig, pub tick: Duration, pub stop_grace: Duration, pub registry: Option<Arc<ProcessRegistry>>, pub client_version: String }`（`Default` = 0.6s 节拍、2s 宽限、不登记、`CARGO_PKG_VERSION`）
   - `pub fn codex_argv() -> Vec<String>`（`["app-server"]`）、`pub fn thread_options(&CodexSpec) -> ThreadOptions`
   - `pub async fn start_codex(CodexStart, CodexConfig) -> Result<(SessionHandle, mpsc::UnboundedReceiver<SessionEvent>), StartError>`（`Ledger` / `AlreadyRunning` / `Spawn` / `Registry` / `Handshake`）
-  - 二进制 `fake_codex`（只给测试用；环境变量见文件头：`FAKE_CODEX_MODE`、`FAKE_CODEX_LOG`、`FAKE_CODEX_ENV_LOG`、`FAKE_CODEX_PID`、`FAKE_CODEX_CHILD_PID`）
+  - `crewd_exec::driver`：`LiveId::id(&self) -> &str`（`pub(crate)`）
+  - 二进制 `fake_codex`（只给测试用；环境变量见文件头：`FAKE_CODEX_MODE`、`FAKE_CODEX_LOG`、`FAKE_CODEX_ENV_LOG`、`FAKE_CODEX_PID`、`FAKE_CODEX_CHILD_PID`、`FAKE_CODEX_TERM_LOG`）
 
 - [ ] **Step 1: 写测试器材与失败的测试**
 
@@ -5156,6 +5377,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 //! - `FAKE_CODEX_ENV_LOG`：启动时把自己环境变量的**名字**（排序）写到这个文件。
 //! - `FAKE_CODEX_PID`：启动时把自己的 pid 写到这个文件。
 //! - `FAKE_CODEX_CHILD_PID`：`spawn_child` 模式下把起的 `sleep` 的 pid 写到这个文件。
+//! - `FAKE_CODEX_TERM_LOG`：`count_term` 模式下每收到一次 SIGTERM 往这个文件追加一个 `T`。
 //! - `FAKE_CODEX_MODE`：逗号分隔的开关：
 //!   `die_on_init`（收到 initialize 就往 stderr 写一句、exit 3）、`init_silent`（不回 initialize）、
 //!   `stderr_flood`（回 initialize 之前往 stderr 灌 1 MiB）、`resume_fails`、`turn_hangs`（不回
@@ -5163,12 +5385,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 //!   服务端请求，每条都等到回应才继续）、`usage_limit`、`big_context`（回合后上下文 190k/258k，
 //!   等压缩）、`spawn_child`（回合里起一个 `sleep 600`）、`deaf`（thread/start 之后再也不读 stdin）、
 //!   `huge_item`（回合里发一条 3 MB 的 agent 正文）、`exit_after_turn`（第一个回合结束就自己
-//!   退出）、`ignore_term`（忽略 SIGTERM）。
+//!   退出）、`ignore_term`（忽略 SIGTERM）、`count_term`（不退，每次 SIGTERM 记一笔）。
 //!
 //! 缺省回合：回 `turn/start`、`turn/started`、userMessage 条目、`GOT: <正文>` 的 agentMessage
 //! 条目、小额 token 读数、`turn/completed`。
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
+use std::os::fd::IntoRawFd;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use serde_json::{Value, json};
 
@@ -5482,6 +5706,8 @@ impl Fake {
                         json!({ "id": "compact-item", "type": "contextCompaction" }),
                     );
                     self.usage("compact", 28_000, 525_000);
+                    // 压缩要一点时间：这期间投进来的正文必须排队（端到端测试靠它）。
+                    std::thread::sleep(std::time::Duration::from_millis(300));
                     self.complete("compact", "completed", Value::Null);
                 }
                 other => {
@@ -5489,6 +5715,19 @@ impl Fake {
                         "code": -32601, "message": format!("fake codex does not implement {other}") } }));
                 }
             }
+        }
+    }
+}
+
+/// `count_term`：SIGTERM 处理函数往这个 fd 写一个字节（-1 = 没开）。
+static TERM_LOG_FD: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn on_term(_: libc::c_int) {
+    let fd = TERM_LOG_FD.load(Ordering::Relaxed);
+    if fd >= 0 {
+        // SAFETY: write(2) 是 async-signal-safe 的；fd 在装处理函数之前就打开、从不关闭。
+        unsafe {
+            libc::write(fd, b"T".as_ptr().cast(), 1);
         }
     }
 }
@@ -5504,6 +5743,19 @@ fn main() {
         // SAFETY: 进程启动时、还没有别的线程；只把 SIGTERM 设成忽略。
         unsafe {
             libc::signal(libc::SIGTERM, libc::SIG_IGN);
+        }
+    }
+    if modes.iter().any(|m| m == "count_term") {
+        let path = std::env::var("FAKE_CODEX_TERM_LOG").expect("count_term 要 FAKE_CODEX_TERM_LOG");
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        TERM_LOG_FD.store(f.into_raw_fd(), Ordering::Relaxed);
+        // SAFETY: 进程启动时、还没有别的线程；处理函数只调 async-signal-safe 的 write(2)。
+        unsafe {
+            libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t);
         }
     }
     if let Ok(path) = std::env::var("FAKE_CODEX_PID") {
@@ -5603,6 +5855,10 @@ impl Env {
             (
                 "FAKE_CODEX_CHILD_PID",
                 self.path("child.pid").display().to_string(),
+            ),
+            (
+                "FAKE_CODEX_TERM_LOG",
+                self.path("term.log").display().to_string(),
             ),
         ]
         .into_iter()
@@ -5828,6 +6084,8 @@ async fn a_recorded_thread_is_resumed_without_its_turns() {
     stop(&h, &mut rx).await;
 }
 
+/// 续跑被拒：同一个进程里退回新 thread、新号先落账；事件与 claude 同序——旧号的 `Spawned`、
+/// `ResumeRefused`、新号的 `Spawned`（每条 `ResumeRefused` 后面都跟一条 `Spawned`）。
 #[tokio::test]
 async fn a_refused_resume_falls_back_to_a_fresh_thread_and_records_it() {
     let env = Env::new();
@@ -5838,21 +6096,33 @@ async fn a_refused_resume_falls_back_to_a_fresh_thread_and_records_it() {
     )
     .await
     .unwrap();
-    let SessionEvent::Spawned {
-        agent_session_id,
-        resumed: false,
-        ..
-    } = next(&mut rx).await
-    else {
-        panic!("第一条事件必须是 Spawned（新 thread）");
-    };
-    assert_ne!(agent_session_id, "thr-gone");
-    assert_eq!(ledger.current(), Some(agent_session_id.clone()));
+    let pid = env.pid_in("pid") as u32;
+    assert_eq!(
+        next(&mut rx).await,
+        SessionEvent::Spawned {
+            pid,
+            agent_session_id: "thr-gone".into(),
+            resumed: true,
+        },
+        "第一条事件必须是 Spawned（去接旧号）"
+    );
     let SessionEvent::ResumeRefused { id, said } = next(&mut rx).await else {
         panic!("紧跟着说清楚原 thread 接不回来");
     };
     assert_eq!(id, "thr-gone");
     assert!(said.contains("no rollout found"), "{said}");
+    let SessionEvent::Spawned {
+        agent_session_id,
+        resumed: false,
+        pid: same_pid,
+    } = next(&mut rx).await
+    else {
+        panic!("ResumeRefused 后面必须跟一条新号的 Spawned");
+    };
+    assert_eq!(same_pid, pid, "codex 在同一个进程里新开 thread");
+    assert_ne!(agent_session_id, "thr-gone");
+    assert_eq!(ledger.current(), Some(agent_session_id.clone()));
+    assert_eq!(h.status().await.unwrap().agent_session_id, agent_session_id);
     until(&mut rx, is_idle_edge).await;
     assert_eq!(
         env.sent("turn/start")[0]["params"]["threadId"],
@@ -6080,6 +6350,78 @@ async fn stop_kills_the_whole_group_including_tool_children() {
     gone(child).await;
 }
 
+/// 反复叫停（比 `stop_grace` 还勤）：SIGTERM 只发一次，SIGKILL 的期限也不往后推——
+/// 否则每次 `stop()` 都把升级重新计时，一个不理 SIGTERM 的 codex 就永远杀不掉（与 claude 驱动同一条）。
+#[tokio::test]
+async fn repeated_stop_neither_resends_term_nor_postpones_the_kill() {
+    let env = Env::new();
+    let mut config = env.config();
+    config.stop_grace = Duration::from_secs(1);
+    let (h, mut rx) = start_codex(
+        env.start("count_term", Arc::new(MemoryLedger::default()), None),
+        config,
+    )
+    .await
+    .unwrap();
+    next(&mut rx).await;
+    let t0 = std::time::Instant::now();
+    for _ in 0..3 {
+        h.stop().unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let info = loop {
+        tokio::select! {
+            e = next(&mut rx) => if let SessionEvent::Exited(info) = e { break info },
+            _ = tokio::time::sleep(Duration::from_millis(400)) => { let _ = h.stop(); }
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "一直在叫停也要在 grace 后被 SIGKILL"
+        );
+    };
+    let took = t0.elapsed();
+    assert_eq!(info.status, ExitStatusKind::Signal(9), "{info:?}");
+    assert!(
+        took < Duration::from_millis(2500),
+        "期限从第一次 stop 起算（grace 1s），实际 {took:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(env.path("term.log")).unwrap(),
+        "T",
+        "SIGTERM 只发一次"
+    );
+}
+
+/// 登记表写不进去（孤儿兜底失效）：杀掉刚起的进程、报 `StartError::Registry`，不挂住。
+#[tokio::test]
+async fn a_registry_that_cannot_be_written_kills_the_process() {
+    let env = Env::new();
+    // 父目录不存在：load 当空表，record 落盘失败。
+    let registry = Arc::new(ProcessRegistry::load(&env.path("missing").join("r.json")).unwrap());
+    let mut config = env.config();
+    config.registry = Some(registry.clone());
+    let err = tokio::time::timeout(
+        Duration::from_secs(10),
+        start_codex(
+            env.start("", Arc::new(MemoryLedger::default()), None),
+            config,
+        ),
+    )
+    .await
+    .expect("登记表失败后 10s 内要返回（收尸不能挂住）")
+    .err()
+    .expect("必须报错");
+    assert!(matches!(err, StartError::Registry(_)), "{err:?}");
+    // 不杀的话 5s 收尸上限到点才回来，说明里带着「没能收尸」。
+    assert!(!err.to_string().contains("没能收尸"), "{err}");
+    assert!(registry.entries().is_empty());
+    // 进程可能在写下 pid 文件之前就被杀了；写下了就必须已经不在。
+    if env.path("pid").exists() {
+        gone(env.pid_in("pid")).await;
+    }
+    assert!(env.sent("initialize").is_empty(), "登记失败后不该握手");
+}
+
 /// codex 自己退出时（崩溃 / 被人在外面杀掉），它起的工具子命令也不能变成孤儿。
 #[tokio::test]
 async fn tool_children_do_not_outlive_codex_exiting_on_its_own() {
@@ -6115,6 +6457,9 @@ async fn high_context_triggers_one_compaction_and_a_send_waits_for_it() {
     .await
     .unwrap();
     until(&mut rx, |e| matches!(e, SessionEvent::TurnEnded { .. })).await;
+    // 回合结束后的空闲边沿之后，下一次「干活」只可能是自动压缩（token 读数晚于完成到达）。
+    // 等它开始了再投：投早了会赶在读数之前开回合，那一轮就不压（见核心的测试）。
+    until(&mut rx, |e| *e == SessionEvent::Working(true)).await;
     let id = h.send("压缩之后").unwrap();
     until(
         &mut rx,
@@ -6359,6 +6704,15 @@ Expected: 编译失败，报 ``could not find `driver` in `codex` ``。
 
 `crates/exec/src/codex/mod.rs`：`pub mod proto;` 之前加 `pub mod driver;`。
 
+`crates/exec/src/driver.rs`：`impl LiveId {` 里 `pub(crate) fn claim` 之前加（codex 驱动要比对占着的是不是同一个号）：
+
+```rust
+    pub(crate) fn id(&self) -> &str {
+        &self.0
+    }
+
+```
+
 `crates/exec/src/codex/driver.rs`（整个文件）：
 
 ```rust
@@ -6367,10 +6721,15 @@ Expected: 编译失败，报 ``could not find `driver` in `codex` ``。
 //!
 //! `start_codex` 等到握手完成、thread id 落账（第一条事件 `Spawned` 已排进事件流）才返回；
 //! 握手失败 / 超时 / 落账失败都在这里变成 `StartError`，进程已杀掉。之后的节拍：每行 stdout、
-//! 0.6s 定时、`CodexCore::next_wakeup`（请求期限）到点。进程退出后先把 stdout 剩下的行读完
-//! （最多 500ms），再对整个进程组补一刀 SIGKILL——codex 起的工具子命令不留成孤儿；然后先收拾
-//! （登记表、占着的会话号）再把 `Exited` 发出去，与 claude 驱动同一个顺序：调用方见到 `Exited`
-//! 就能马上用同一个 thread id 重起。
+//! 0.6s 定时、`CodexCore::next_wakeup`（请求期限）到点。
+//!
+//! 与 claude 驱动（`crate::driver`）同一套进程规矩：
+//! - 停止只开始一次（`stop()` 连按、句柄随后全丢都不重发 SIGTERM、不推后 SIGKILL 的期限）。
+//! - 进程退出（任何原因）后先把 stdout 剩下的行读完（最多 500ms）、等 stderr 读完（最多 500ms，
+//!   握手失败的说明要带上它的尾巴），然后**先收拾再发 `Exited`**：整组补一刀 SIGKILL（只发组信号，
+//!   过 pgid 安全闸）、停附属任务、放开 thread id、清登记表——codex 起的工具子命令不留成孤儿，
+//!   调用方见到 `Exited` 就能马上用同一个 thread id 重起。
+//! - 登记表、账本的文件读写都在阻塞线程池里做；杀掉之后等收尸有上限。
 //!
 //! 同一个 thread id 在本进程里只能跑一个（与 claude 共用 `driver::LiveId` 那张表）：账里记的号
 //! 在起进程之前就占住，新开 thread 的号在 `Spawned` 时占住。
@@ -6380,6 +6739,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::codex::proto::{self, ThreadOptions};
@@ -6391,15 +6751,15 @@ use crate::codex::transport::{
 };
 use crate::delivery::Subject;
 use crate::driver::{
-    Command, ControlOutcome, LiveId, SessionHandle, SessionStatus, StartError, UntrustedContext,
-    decode, kill_group, terminate,
+    Command, ControlOutcome, LiveId, REAP_LIMIT, SessionHandle, SessionStatus, StartError,
+    UntrustedContext, blocking, decode, kill_group, kill_group_only, terminate,
 };
 use crate::env::build_env_from_process;
 use crate::health::LaunchVerdict;
 use crate::launch::{CommsSpec, HelperCommands};
 use crate::registry::{ProbeResult, ProcessRegistry, probe};
 use crate::resume::{AgentIdLedger, valid_agent_session_id};
-use crate::session::{BRIEF_DELIVERY_ID, SessionEvent};
+use crate::session::{BRIEF_DELIVERY_ID, ExitStatusKind, SessionEvent};
 
 /// 一次 codex 启动要的全部输入（调用方给的）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -6499,20 +6859,32 @@ pub async fn start_codex(
         source,
     })?;
     if let Some(registry) = &config.registry {
-        // 只登记自成进程组的（setsid 后 pgid == pid）：回收时按组杀，组号不对会杀错人。
-        let recorded = match probe(proc.pid as i32) {
-            ProbeResult::Found(identity) if identity.pgid == proc.pid as i32 => {
-                registry.record(&start.session_id, identity)
+        let (registry, session_id, pid) = (registry.clone(), start.session_id.clone(), proc.pid);
+        let recorded = blocking(move || {
+            // 只登记自成进程组的（setsid 后 pgid == pid）：回收时按组杀，组号不对会杀错人。
+            let r = match probe(pid as i32) {
+                ProbeResult::Found(identity) if identity.pgid == pid as i32 => {
+                    registry.record(&session_id, identity)
+                }
+                ProbeResult::Found(identity) => Err(io::Error::other(format!(
+                    "刚起的进程 {pid} 不是自己进程组的组长（pgid {}），不登记",
+                    identity.pgid
+                ))),
+                other => Err(io::Error::other(format!("读不到刚起的进程身份：{other:?}"))),
+            };
+            if r.is_err() {
+                // `record` 落盘失败时内存里已经记上了：抹掉，免得下次落盘把一个死 pid 带进去。
+                let _ = registry.forget(&session_id);
             }
-            ProbeResult::Found(identity) => Err(io::Error::other(format!(
-                "刚起的进程 {} 不是自己进程组的组长（pgid {}），不登记",
-                proc.pid, identity.pgid
-            ))),
-            other => Err(io::Error::other(format!("读不到刚起的进程身份：{other:?}"))),
-        };
+            r
+        })
+        .await;
         if let Err(e) = recorded {
             kill_group(proc.pid);
-            let _ = proc.child.wait().await;
+            let e = match reap_killed(&mut proc.child).await {
+                Ok(_) => e,
+                Err(reap) => io::Error::other(format!("{e}；杀掉刚起的进程后{reap}")),
+            };
             return Err(StartError::Registry(e));
         }
     }
@@ -6600,15 +6972,22 @@ async fn run(mut t: Task) {
     let mut reading = true;
     let mut commands_open = true;
     let mut stop_deadline: Option<tokio::time::Instant> = None;
+    // 已经在停：见 [`begin_stop`]。
+    let mut stopping = false;
     let mut tick = tokio::time::interval(t.config.tick);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let actions = t.core.take_actions();
         if execute(&mut t, actions, &record_tx) {
-            // 启动失败：杀掉、收尸、收拾。
+            // 启动失败：杀掉、收尸（有上限）、收拾。
             kill_group(t.proc.pid);
-            let _ = t.proc.child.wait().await;
-            release(&mut t);
+            if let Err(e) = reap_killed(&mut t.proc.child).await {
+                eprintln!(
+                    "crewd: session {}: 启动失败后杀掉的 codex 进程 {} {e}",
+                    t.start.session_id, t.proc.pid
+                );
+            }
+            release(&mut t).await;
             return;
         }
         let wake = t.core.next_wakeup().map(tokio::time::Instant::from_std);
@@ -6621,11 +7000,10 @@ async fn run(mut t: Task) {
             status = t.proc.child.wait() => {
                 let status = decode(status);
                 drain(&mut t, Duration::from_millis(500)).await;
-                kill_group(t.proc.pid);
                 let tail = t.proc.stderr.text();
                 t.core.on_exit(status, &tail, Instant::now());
                 let actions = t.core.take_actions();
-                release(&mut t);
+                release(&mut t).await;
                 execute(&mut t, actions, &record_tx);
                 if let Some(ready) = t.ready.take() {
                     let _ = ready.send(Err(StartError::Handshake {
@@ -6637,14 +7015,12 @@ async fn run(mut t: Task) {
             cmd = t.cmd_rx.recv(), if commands_open => match cmd {
                 Some(c) => {
                     if handle(&mut t, c) {
-                        stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
+                        begin_stop(&mut t, &mut stopping, &mut stop_deadline);
                     }
                 }
                 None => {
                     commands_open = false;
-                    t.core.stop(Instant::now());
-                    terminate(t.proc.pid);
-                    stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
+                    begin_stop(&mut t, &mut stopping, &mut stop_deadline);
                 }
             },
             _ = tick.tick() => t.core.on_tick(Instant::now()),
@@ -6660,17 +7036,51 @@ async fn run(mut t: Task) {
     }
 }
 
-/// 进程已收尸：停掉附属任务、放开 thread id、清登记表（都在发 `Exited` 之前）。
-fn release(t: &mut Task) {
+/// 开始停：只做一次。再叫停（`stop()` 连按、句柄随后全丢）既不重发 SIGTERM，也不把
+/// SIGKILL 的期限往后推——否则叫停比 `stop_grace` 还勤时，忽略 SIGTERM 的进程永远杀不掉。
+fn begin_stop(t: &mut Task, stopping: &mut bool, stop_deadline: &mut Option<tokio::time::Instant>) {
+    if *stopping {
+        return;
+    }
+    *stopping = true;
+    t.core.stop(Instant::now());
+    terminate(t.proc.pid);
+    *stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
+}
+
+/// 进程已收尸（或启动失败、已杀掉）：整组补一刀、停掉附属任务、放开 thread id、清登记表
+/// （按这个顺序，都在发 `Exited` 之前）。
+///
+/// 补刀：codex 收到 SIGTERM 自己退了（或崩了），它起的工具子命令还留在组里。setsid 后
+/// pgid == pid；组里还有成员时这个号不会被别的进程拿去当 pid，组空了 killpg 只会得到 ESRCH。
+/// **只发组信号**（`kill_group_only`，过 pgid 安全闸）：首进程已经收了尸，退回去单杀这个 pid
+/// 可能杀到复用了它的进程。
+async fn release(t: &mut Task) {
+    kill_group_only(t.proc.pid);
     t.proc.writer_task.abort();
     t.proc.stderr_task.abort();
     t.live = None;
-    if let Some(registry) = &t.config.registry {
-        let _ = registry.forget(&t.start.session_id);
+    if let Some(registry) = t.config.registry.clone() {
+        let id = t.start.session_id.clone();
+        let _ = blocking(move || registry.forget(&id)).await;
     }
 }
 
-/// 进程退出后把 stdout 剩下的行读完（最多 `limit`）。
+/// 收一个**已经发过 SIGKILL** 的进程，最多等 [`REAP_LIMIT`]：超了报错、不挂住（丢下的 `Child`
+/// 由 tokio 之后收尸）。没有 PTY：stdout / stderr 是管道，进程退出不等它们被读走。
+async fn reap_killed(child: &mut Child) -> io::Result<ExitStatusKind> {
+    match tokio::time::timeout(REAP_LIMIT, child.wait()).await {
+        Ok(status) => Ok(decode(status)),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("{}ms 内没能收尸", REAP_LIMIT.as_millis()),
+        )),
+    }
+}
+
+/// 进程退出后把 stdout 剩下的行读完（最多 `limit`），再等 stderr 读到 EOF（同样最多 `limit`：
+/// 握手失败的说明要带上 stderr 的尾巴，而它和 `Child::wait` 谁先到不一定）。工具子命令继承了
+/// 管道、一直开着时，两步各自到点就走。
 async fn drain(t: &mut Task, limit: Duration) {
     let deadline = tokio::time::Instant::now() + limit;
     while let Ok(Ok(Some(line))) =
@@ -6680,6 +7090,7 @@ async fn drain(t: &mut Task, limit: Duration) {
             t.core.on_line(&l, Instant::now());
         }
     }
+    let _ = tokio::time::timeout(limit, &mut t.proc.stderr_task).await;
 }
 
 /// 执行核心攒下的动作；返回 true = 启动失败（调用方杀进程收工）。
@@ -6741,7 +7152,7 @@ fn execute(
     false
 }
 
-/// 处理一条命令；返回 true = 开始停止（要起 grace 计时）。
+/// 处理一条命令；返回 true = 要停（由 [`begin_stop`] 去重）。
 fn handle(t: &mut Task, cmd: Command) -> bool {
     let now = Instant::now();
     match cmd {
@@ -6750,13 +7161,7 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         Command::Interrupt => t.core.interrupt(now),
         // 没有终端，尺寸无意义。
         Command::Resize { .. } => {}
-        Command::Stop => {
-            if t.core.is_running() {
-                t.core.stop(now);
-                terminate(t.proc.pid);
-                return true;
-            }
-        }
+        Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.transcript_text(max_lines));
@@ -6788,14 +7193,14 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cargo test -p crewd-exec --test fake_codex`（连跑三遍）
-Expected: `19 passed`，每遍 2–3s（最慢的是「停不掉要升级 SIGKILL」与两条超时）。
+Expected: `21 passed`，每遍 2–3s（最慢的是「停不掉要升级 SIGKILL」、反复叫停与两条超时）。再单独连跑 `cargo test -p crewd-exec --test fake_codex high_context` 20 遍，全绿（第一版这条约 1/10 红：投早了会赶在晚到的 token 读数之前开回合，见 Task 5 的闸与这条测试里「等压缩开始再投」）。
 
 - [ ] **Step 5: 全量检查并提交**
 
 Run: `./scripts/check.sh` → 0。
 
 ```bash
-git add crates/exec/src/codex/mod.rs crates/exec/src/codex/driver.rs crates/exec/src/bin/fake_codex.rs crates/exec/tests/fake_codex.rs
+git add crates/exec/src/codex/mod.rs crates/exec/src/codex/driver.rs crates/exec/src/driver.rs crates/exec/src/bin/fake_codex.rs crates/exec/tests/fake_codex.rs
 git commit -m "crewd-exec: start_codex drives codex app-server behind the shared SessionHandle; fake app-server end-to-end
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
@@ -6804,7 +7209,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - [ ] **Step 6: 验这几把尺子会红**
 
 每刀单独做，跑 `cargo test -p crewd-exec --test fake_codex`，做完 `git checkout -- <那个文件>` 改回：
-1. `codex/driver.rs` 子进程退出那一臂里删掉 `drain(…).await;` 之后的 `kill_group(t.proc.pid);` → 红 1 条：`tool_children_do_not_outlive_codex_exiting_on_its_own`。
+1. `codex/driver.rs` 的 `release` 里删掉第一行 `kill_group_only(t.proc.pid);` → 红 1 条：`tool_children_do_not_outlive_codex_exiting_on_its_own`。
 2. `codex/transport.rs` stderr 任务的 `while` 之前插 `std::future::pending::<()>().await;` → 红 2 条：`a_stderr_flood_does_not_stall_the_handshake`、`handshake_failures_are_start_errors_and_leave_no_process`（stderr 尾巴没了，「not logged in」不在说明里）。
 3. `codex/driver.rs` 删掉 `strip_billing_keys(&mut env);` → 红 1 条：`fresh_start_records_the_thread_and_runs_the_brief_with_its_context`。
 4. `codex/session.rs` 的 `on_line` 里 `self.actions.push(CodexAction::Write(reply));` 改成只在 `outcome.notice.is_none()` 时写 → 红 1 条：`every_server_request_is_answered_and_the_turn_finishes`（回合挂死，10s 超时）。
@@ -6812,6 +7217,10 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 6. `codex/session.rs` 的 `opened` 里 `Record` 之后加 `self.become_ready(now);` → 红 3 条：`fresh_start_records_the_thread_and_runs_the_brief_with_its_context`、`a_refused_resume_falls_back_to_a_fresh_thread_and_records_it`、`ledger_failure_kills_the_process_before_any_turn`。
 7. `codex/driver.rs` 的 `execute` 里 `CodexAction::Write(line) => {` 那一臂在 `send` 之后加 `std::thread::sleep(Duration::from_secs(3));`（模拟写阻塞了驱动循环）→ `cargo test -p crewd-exec --test fake_codex wedge` → 红 1 条：`a_server_that_stops_reading_cannot_wedge_the_session`。
 8. `codex/driver.rs` 的 `start_codex` 里 `Some(id) => Some(LiveId::claim(id)?),` 改成 `Some(_) => None,` → 红 1 条：`a_running_thread_cannot_be_resumed_twice_but_is_free_once_exited`。
+9. `codex/driver.rs` 的 `begin_stop` 里删掉 `if *stopping { return; }` 那三行（每次叫停都重发 SIGTERM、重新计时）→ 红 1 条：`repeated_stop_neither_resends_term_nor_postpones_the_kill`。
+10. `codex/driver.rs` 的 `start_codex` 里登记失败那一支删掉 `kill_group(proc.pid);` → 红 1 条：`a_registry_that_cannot_be_written_kills_the_process`（不杀就等满 5s 收尸上限，说明里带「没能收尸」）。
+
+`drain` 末尾「等 stderr 读到 EOF」那一步没有能稳定变红的测试：它防的是 `Child::wait` 先于 stderr 最后一块到达的竞态，副本里删掉它连跑 10 遍 `handshake_failures…` 都绿——按结构保证，不列成变异步骤。
 
 `git status` 干净。
 
@@ -6819,32 +7228,35 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ### Task 8: `crewd codex` 子命令与按执行器把关的账本
 
-把 codex 执行器接到 crewd 上：`crewd codex` 前台起一个 codex 会话（拿数据目录锁、回收孤儿、`AgentPaths::discover` 找 codex、给了 `--session` 就用库里的账本，重跑 `thread/resume`），事件逐行打到 stdout（`Item` 只打类型与 id），stdin 每一行当一条指令（`/interrupt` 打断、`/compact` 压缩），Ctrl-C / SIGTERM 停掉，`--transcript` 时每次转入空闲把结构化记录打到 stderr。账本加 `expecting("codex")`（裁定 18）。这是 spec §3.3「每个 M 都以集成测试 + CLI 可驱动为完成标准」的 M2c 那一半。
+把 codex 执行器接到 crewd 上：`crewd codex` 前台起一个 codex 会话（拿数据目录锁、回收孤儿并如实报告、`AgentPaths::discover` 找 codex、给了 `--session` 就用库里的账本，重跑 `thread/resume`），事件逐行打到 stdout（`Item` 只打类型与 id），stdin 每一行当一条指令（`/interrupt` 打断、`/compact` 压缩），Ctrl-C / SIGTERM 停掉，`--transcript` 时每次转入空闲把结构化记录打到 stderr。开场任务只经 `--prompt-file`（裁定 22）；stdin 读法、信号流、回收报告都照 M2b 终版的 `crewd claude`，直接复用它的 `read_prompt` / `stdin_lines`。账本加 `expecting("codex")`（裁定 18）。这是 spec §3.3「每个 M 都以集成测试 + CLI 可驱动为完成标准」的 M2c 那一半。
 
-测试里的「codex app-server」用 shell 脚本顶替：我们的请求 id 是确定的（`initialize` 0 号、`thread/start|resume` 1 号），脚本按顺序回包后退出。
+测试里的「codex app-server」用 shell 脚本顶替：我们的请求 id 是确定的（`initialize` 0 号、`thread/start|resume` 1 号、第一个 `turn/start` 2 号），脚本按顺序回包后退出。
 
 **Files:**
 - Create: `crewd/crates/crewd/src/codex_cmd.rs`、`crewd/crates/crewd/tests/codex_cli.rs`
-- Modify: `crewd/crates/store/src/sessions.rs`、`crewd/crates/server/src/ledger.rs`、`crewd/crates/crewd/src/main.rs`
+- Modify: `crewd/crates/store/src/sessions.rs`、`crewd/crates/server/src/ledger.rs`、`crewd/crates/crewd/src/claude_cmd.rs`、`crewd/crates/crewd/src/main.rs`
 
 **Interfaces:**
-- Consumes: Task 7 `codex::driver::{CodexConfig, CodexSpec, CodexStart, start_codex}`；Task 1 `driver::Control`；M2b `env::AgentPaths`、`resume::{AgentIdLedger, MemoryLedger}`、`crewd_server::{ensure_data_dir, lock_data_dir}`、M2b Task 12 的 `crewd_server::reap_orphans` 与 `crewd claude`（写计划时还没合入；Task 1 Step 1 的 grep 会提前暴露）、`crewd_server::ledger::StoreLedger`（合入版：`open()`、`to_io`）。
+- Consumes: Task 7 `codex::driver::{CodexConfig, CodexSpec, CodexStart, start_codex}`；Task 1 `driver::Control`；M2b `env::AgentPaths`、`resume::{AgentIdLedger, MemoryLedger}`、`crewd_server::{ensure_data_dir, lock_data_dir, reap_orphans, log_reap_reports}`、`crewd_server::ledger::StoreLedger`（终版：`open()`、`to_io`）、`claude_cmd::{read_prompt, stdin_lines}`（终版，本任务改 `pub(crate)`）。
 - Produces:
   - `crewd_store::sessions::executor(conn: &Connection, session_id: &str) -> Result<String>`（session 不存在 = `StoreError::NotFound`）
   - `crewd_server::ledger::StoreLedger::expecting(self, executor: impl Into<String>) -> Self`（行里的 `executor` 不符 → `recorded` / `record` 都报 `InvalidInput`）
-  - 子命令 `crewd codex --workdir DIR [--session SID] [--prompt TEXT] [--model M] [--effort E] [--fast] [--codex PATH] [--transcript]`
+  - 子命令 `crewd codex --workdir DIR [--session SID] [--prompt-file PATH|-] [--model M] [--effort E] [--fast] [--codex PATH] [--transcript]`
 
 - [ ] **Step 1: 写失败的测试**
 
 `crates/crewd/tests/codex_cli.rs`（整个文件）：
 
 ```rust
-//! `crewd codex` 的胶水：库里的 thread 账本 → 第一次新开、第二次 `thread/resume` 同一条。
+//! `crewd codex` 的胶水：库里的 thread 账本 → 第一次新开、第二次 `thread/resume` 同一条；
+//! 执行器不是 codex 的 session 被拒；开场任务的来路（`--prompt-file`）；stdin 一直开着时的退出。
 //! 「codex app-server」用 shell 脚本顶替：按我们固定的请求顺序（initialize 是 0 号、
-//! thread/start|resume 是 1 号）回包，然后退出。
+//! thread/start|resume 是 1 号、第一个 turn/start 是 2 号）回包，然后退出。
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crewd_proto::{Crew, Session};
 use crewd_store::{Store, crews, sessions};
@@ -6977,6 +7389,136 @@ fn a_claude_session_is_refused_and_its_resume_id_is_left_alone() {
         Some("claude-uuid")
     );
 }
+
+/// 收一个回合的「codex」：参数记到 `<dir>/args.log`，第 4 行（`turn/start`）原样记到
+/// `<dir>/turn.log`，回了它之后退出。
+const FAKE_WITH_TURN: &str = r#"#!/bin/sh
+d=$(dirname "$0")
+printf '%s\n' "$*" > "$d/args.log"
+read l
+echo '{"id":0,"result":{}}'
+read l
+read l
+echo '{"id":1,"result":{"thread":{"id":"thr-cli-1"}}}'
+read l
+printf '%s\n' "$l" > "$d/turn.log"
+echo '{"id":2,"result":{"turn":{"id":"t1"}}}'
+sleep 0.3
+"#;
+
+fn crewd(data: &Path, fake: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_crewd"));
+    cmd.env("CREWD_DATA_DIR", data)
+        .env("SHELL", "/usr/bin/false")
+        .args(["codex", "--workdir"])
+        .arg(data)
+        .arg("--codex")
+        .arg(fake);
+    cmd
+}
+
+/// 等子进程退出，最多 `limit`；超时就杀掉再报错（不留下挂住的 crewd）。
+fn wait_with_limit(child: &mut std::process::Child, limit: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("crewd {limit:?} 内没退出");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `--prompt-file -`：开场任务从 stdin 读到 EOF，经 `turn/start` 送给 codex（走它的 stdin）——
+/// crewd 与 codex 的 argv 里都没有它（`ps` 对本机所有进程可见）。
+#[test]
+fn the_brief_is_read_from_stdin_and_sent_by_turn_start_not_argv() {
+    let data = tempfile::tempdir().unwrap();
+    let fake = data.path().join("fake-codex-turn");
+    std::fs::write(&fake, FAKE_WITH_TURN).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut child = crewd(data.path(), &fake)
+        .args(["--prompt-file", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all("从 stdin 来的开场任务\n\n".as_bytes())
+        .unwrap();
+    let status = wait_with_limit(&mut child, Duration::from_secs(20));
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(status.success(), "{stdout}{stderr}");
+    let turn: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data.path().join("turn.log")).unwrap())
+            .unwrap();
+    assert_eq!(turn["method"], "turn/start");
+    assert_eq!(turn["params"]["input"][0]["text"], "从 stdin 来的开场任务");
+    assert!(stdout.contains("outcome: Delivered"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(data.path().join("args.log")).unwrap(),
+        "app-server\n",
+        "codex 的 argv 只有 app-server"
+    );
+}
+
+/// 开场任务不能从命令行参数给（会出现在 `ps` 里）。一定带 `--codex <假的>`：万一参数又被
+/// 接受了，起来的也只是个脚本，绝不会去 PATH 里找真 codex。
+#[test]
+fn prompt_text_on_the_command_line_is_refused() {
+    let data = tempfile::tempdir().unwrap();
+    let out = crewd(data.path(), &fake(data.path()))
+        .args(["--prompt", "秘密任务"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("--prompt"), "{stderr}");
+}
+
+/// 会话自己结束了、stdin 却一直开着：crewd 照样马上退出（读 stdin 的那条线程不能拖住退出）。
+#[test]
+fn exits_when_the_session_ends_even_if_stdin_stays_open() {
+    let data = tempfile::tempdir().unwrap();
+    let mut child = crewd(data.path(), &fake(data.path()))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _keep_stdin_open = child.stdin.take().unwrap();
+    let status = wait_with_limit(&mut child, Duration::from_secs(15));
+    assert!(status.success());
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    assert!(stdout.contains("Exited("), "{stdout}");
+}
 ```
 
 `crates/server/src/ledger.rs` 测试模块末尾（最后一个 `}` 之前）加：
@@ -7009,7 +7551,7 @@ fn a_claude_session_is_refused_and_its_resume_id_is_left_alone() {
     }
 ```
 
-测试模块里的 `seeded()` 建的 session 执行器是 `claude`——合入版里不是的话，按合入版的写法造一个 `executor: "claude"` 的行。
+测试模块里的 `seeded()` 建的 session 执行器是 `claude`（终版里就是；合入 main 后若不是，按那时的写法造一个 `executor: "claude"` 的行）。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -7092,12 +7634,15 @@ Expected: 比原来多 1 条，全过。
 
 - [ ] **Step 4: `crewd codex`**
 
+`crates/crewd/src/claude_cmd.rs` 两处：`async fn read_prompt(path: &Path)` 与 `fn stdin_lines()` 前各加 `pub(crate) `（codex 子命令复用，不写第二份）。
+
 `crates/crewd/src/codex_cmd.rs`（整个文件）：
 
 ```rust
 //! `crewd codex`：前台起一个 codex 会话（M2c 的验收与调试入口；M3 起由 serve 拉起会话）。
 //! 事件逐行打到 stdout；stdin 每一行当一条指令投进去（`/interrupt` 打断、`/compact` 压缩）；
-//! Ctrl-C / SIGTERM 停掉会话。
+//! Ctrl-C / SIGTERM 停掉会话。开场任务只从文件或 stdin 读（`--prompt-file`，与 `crewd claude`
+//! 同一套读法）：命令行参数在 `ps` 里对本机所有进程可见。
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -7108,7 +7653,10 @@ use crewd_exec::env::AgentPaths;
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::SessionEvent;
 use crewd_server::ledger::StoreLedger;
-use tokio::io::AsyncBufReadExt;
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc;
+
+use crate::claude_cmd::{read_prompt, stdin_lines};
 
 #[derive(clap::Args, Clone)]
 pub struct CodexArgs {
@@ -7118,9 +7666,10 @@ pub struct CodexArgs {
     /// crewd session id：给了就用库里的 thread 账本（行必须已存在且执行器是 codex，重跑会 thread/resume）；不给只在内存里记
     #[arg(long)]
     session: Option<String>,
-    /// 开场任务（走 turn/start，经 stdin 发给 codex，绝不进 argv）
-    #[arg(long)]
-    prompt: Option<String>,
+    /// 开场任务所在的文件，`-` = 从 stdin 读到 EOF（此后 stdin 不再收指令）。末尾的空白不算正文。
+    /// 走 turn/start（经 codex 的 stdin），绝不进 argv——也不收命令行上的正文：`ps` 对本机所有进程可见
+    #[arg(long, value_name = "PATH")]
+    prompt_file: Option<PathBuf>,
     #[arg(long)]
     model: Option<String>,
     #[arg(long)]
@@ -7141,9 +7690,8 @@ pub async fn run(data_dir: &Path, args: CodexArgs) -> anyhow::Result<()> {
     // 与 serve / import / claude 同一把锁：账本写库、回收孤儿都要求没有别的 crewd 活着。
     let _lock = crewd_server::lock_data_dir(data_dir)?;
     let (registry, reports) = crewd_server::reap_orphans(data_dir)?;
-    for r in reports {
-        eprintln!("crewd: {}", r.message);
-    }
+    crewd_server::log_reap_reports(&reports);
+    // thread/start 的 cwd 由 codex 解析：相对路径先在这里转成绝对路径。
     let workdir = std::fs::canonicalize(&args.workdir)
         .with_context(|| format!("工作目录 {} 不可用", args.workdir.display()))?;
     let paths = AgentPaths::discover().await;
@@ -7152,6 +7700,11 @@ pub async fn run(data_dir: &Path, args: CodexArgs) -> anyhow::Result<()> {
         None => paths
             .resolve("codex")
             .context("登录 shell 的 PATH 里找不到 codex")?,
+    };
+    let prompt_from_stdin = args.prompt_file.as_deref() == Some(Path::new("-"));
+    let initial_prompt = match &args.prompt_file {
+        Some(path) => Some(read_prompt(path).await?),
+        None => None,
     };
     let ledger: Arc<dyn AgentIdLedger> = match &args.session {
         Some(s) => {
@@ -7172,15 +7725,22 @@ pub async fn run(data_dir: &Path, args: CodexArgs) -> anyhow::Result<()> {
             model: args.model,
             effort: args.effort,
             fast_mode: args.fast.then_some(true),
-            initial_prompt: args.prompt,
+            initial_prompt,
             ..CodexSpec::default()
         },
         ledger,
     };
     let (handle, mut events) = start_codex(start, config).await?;
-    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    let mut stdin_open = true;
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // stdin 已经被开场任务读到 EOF 了就不再收指令。stdin 在普通线程上读（见 `stdin_lines`）。
+    let mut stdin_open = !prompt_from_stdin;
+    let mut lines = if stdin_open {
+        stdin_lines()
+    } else {
+        mpsc::unbounded_channel().1
+    };
+    // 信号流在循环外建好：每轮新建一个 `ctrl_c()`，两轮之间来的 Ctrl-C 没人接。
+    let mut term = signal(SignalKind::terminate())?;
+    let mut int = signal(SignalKind::interrupt())?;
     loop {
         tokio::select! {
             ev = events.recv() => {
@@ -7203,18 +7763,18 @@ pub async fn run(data_dir: &Path, args: CodexArgs) -> anyhow::Result<()> {
                     break;
                 }
             }
-            line = lines.next_line(), if stdin_open => match line {
-                Ok(Some(text)) if text == "/interrupt" => { let _ = handle.interrupt(); }
-                Ok(Some(text)) if text == "/compact" => {
+            line = lines.recv(), if stdin_open => match line {
+                Some(text) if text.trim() == "/interrupt" => { let _ = handle.interrupt(); }
+                Some(text) if text.trim() == "/compact" => {
                     if let Ok(outcome) = handle.control(Control::Compact).await {
                         println!("{outcome:?}");
                     }
                 }
-                Ok(Some(text)) if !text.is_empty() => { let _ = handle.send(text); }
-                Ok(Some(_)) => {}
-                _ => stdin_open = false,
+                // 空行被句柄拒掉（`SendError::EmptyText`），不用在这里挑。
+                Some(text) => { let _ = handle.send(text); }
+                None => stdin_open = false,
             },
-            _ = tokio::signal::ctrl_c() => { let _ = handle.stop(); }
+            _ = int.recv() => { let _ = handle.stop(); }
             _ = term.recv() => { let _ = handle.stop(); }
         }
     }
@@ -7238,17 +7798,17 @@ pub async fn run(data_dir: &Path, args: CodexArgs) -> anyhow::Result<()> {
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p crewd --test codex_cli`
-Expected: `2 passed`（约 1.5s）。
+Expected: `5 passed`（约 1.5s）。
 
 Run: `cargo run -p crewd -- codex --help`
-Expected: 列出 `--workdir`（必填）、`--session`、`--prompt`、`--model`、`--effort`、`--fast`、`--codex`、`--transcript`。
+Expected: 列出 `--workdir`（必填）、`--session`、`--prompt-file <PATH>`、`--model`、`--effort`、`--fast`、`--codex`、`--transcript`；没有 `--prompt`。
 
 - [ ] **Step 6: 全量检查并提交**
 
 Run: `./scripts/check.sh` → 0。
 
 ```bash
-git add crates/store/src/sessions.rs crates/server/src/ledger.rs crates/crewd/src/codex_cmd.rs crates/crewd/src/main.rs crates/crewd/tests/codex_cli.rs
+git add crates/store/src/sessions.rs crates/server/src/ledger.rs crates/crewd/src/claude_cmd.rs crates/crewd/src/codex_cmd.rs crates/crewd/src/main.rs crates/crewd/tests/codex_cli.rs
 git commit -m "crewd: codex subcommand drives one codex session from the CLI; ledger refuses a session of another executor
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
@@ -7262,17 +7822,19 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ```bash
 cargo build -p crewd-exec --bin fake_codex
+cargo build -p crewd
 D=$(mktemp -d)
-printf '第二条指令\n' | FAKE_CODEX_MODE= cargo run -q -p crewd -- --data-dir "$D/data" codex --workdir "$D" --codex target/debug/fake_codex --prompt "第一条" --transcript
+printf '第一条\n' > "$D/brief.txt"
+printf '第二条指令\n' | ./target/debug/crewd --data-dir "$D/data" codex --workdir "$D" --codex target/debug/fake_codex --prompt-file "$D/brief.txt" --transcript
 ```
 
-Expected：stdout 依次出现 `Spawned { … resumed: false }`、`Profile(…)`、`Delivery { id: 0, … outcome: Delivered }`、`TurnEnded { last_agent_message: "GOT: 第一条" }`、`Delivery { id: 1, … }`、`TurnEnded { … "GOT: 第二条指令" }`；stderr 的 transcript 块里有 `› 第二条指令` 与 `GOT: 第二条指令`。stdin 读完后会话不退出——按 Ctrl-C，应看到 `Exited(ExitInfo { … stopped_by_user: true … })` 后进程结束。（`FAKE_CODEX_MODE` 传不到子进程——执行器只放行显式给的变量——这里写出来只是提醒：`crewd codex` 不转发环境，假 app-server 走缺省行为。）
+Expected：stdout 依次出现 `Spawned { … resumed: false }`、`Profile(…)`、`Working(true)`、`Delivery { id: 0, subject: Brief, outcome: Delivered }`、两条 `Item { … type: "userMessage" … }` / `"agentMessage"`、`TurnEnded { last_agent_message: "GOT: 第一条" }`、`Delivery { id: 1, subject: Steer, … Delivered }`、`TurnEnded { … "GOT: 第二条指令" }`、`Working(false)`；第二条若在第一个回合结束之后才从 stdin 到，两个回合之间会多一对 `Working(false)` / `Working(true)`（副本里就是这样）。stderr 的 transcript 块里有 `› 第二条指令` 与 `GOT: 第二条指令`。stdin 读完后会话不退出——按 Ctrl-C，应看到 `Exited(ExitInfo { status: Signal(15), stopped_by_user: true, … })` 后进程马上结束（不用再按回车）。（`FAKE_CODEX_MODE` 之类的变量传不到子进程——执行器只放行显式给的变量——`crewd codex` 不转发环境，假 app-server 走缺省行为。）
 
 ---
 
 ### Task 9: 真机冒烟（opt-in）与交付记录
 
-两条真 codex 冒烟，都是 `#[ignore]` + `CREWD_LIVE_CODEX`：`=1` 只握手开 thread（不开回合、不花额度），验 schema 核不到的那几件（不带 params 的 `initialized`、`optOutNotificationMethods`、`config.mcp_servers` 与 `developerInstructions` 被接受）；`=turn` 跑一个最小回合，验 Swift 一直没真机验过的「`additionalContext` 真的被模型看见」。然后写交付记录。
+两条真 codex 冒烟，都是 `#[ignore]` + `CREWD_LIVE_CODEX`：`=1` 只握手开 thread（不开回合、不花额度），验 schema 核不到的那几件（不带 params 的 `initialized`、`optOutNotificationMethods`、`config.mcp_servers` 与 `developerInstructions` 被接受）；`=turn` 跑一个最小回合，验 Swift 一直没真机验过的「`additionalContext` 真的被模型看见」。**人已同意（2026-10-06）两条都跑、回合那条可以花额度**：Step 3–4 由执行者直接跑，不用再问；闸照旧（`#[ignore]` + 环境变量，`check.sh` 永远不带 `--ignored`）。测试的写法照 M2b 终版的 `live_claude.rs`：带 `--ignored` 却没设环境变量 = 直接失败；等事件的循环里不 panic，先停掉 codex、等 `Exited`（最多 10s）再断言。然后写交付记录。
 
 **Files:**
 - Create: `crewd/crates/exec/tests/live_codex.rs`
@@ -7287,45 +7849,60 @@ Expected：stdout 依次出现 `Spawned { … resumed: false }`、`Profile(…)`
 `crates/exec/tests/live_codex.rs`（整个文件）：
 
 ```rust
-//! 真 codex 冒烟。两道闸：`#[ignore]` + 环境变量；`check.sh` 不带 `--ignored`，永远不跑。
+//! 真 codex 冒烟。两道闸，缺一不跑：`#[ignore]`（`check.sh` 不带 `--ignored`，永远不跑它）+
+//! 环境变量 `CREWD_LIVE_CODEX`。带了 `--ignored` 却没设（或设得不对）= 直接失败并说明原因
+//! （不静默「通过」：那样看不出它根本没跑）。人已同意跑这两条（2026-10-06，回合那条会花额度）。
 //!
 //! - `CREWD_LIVE_CODEX=1`：只握手——initialize、thread/start、拿到 thread id，**不开回合**
 //!   （不花额度）。验的是 schema 上核不到的那些：0.160 的 app-server 认不认我们的
 //!   `initialize`（不带 params 的 `initialized`、`optOutNotificationMethods`）、`thread/start`
 //!   带 `config.mcp_servers`（指向 `/usr/bin/true`：MCP 起不来，推测不挡握手，未核实）与
 //!   `developerInstructions`。
-//!   注意：thread/start 可能在 `~/.codex/sessions` 下留一条空 thread 的记录（未核实）。
-//! - `CREWD_LIVE_CODEX=turn`：再跑一个最小回合（花几百个 token）：白板经
+//!   注意：thread/start 可能在 `$CODEX_HOME/sessions`（缺省 `~/.codex/sessions`）下留一条空
+//!   thread 的记录（未核实）。
+//! - `CREWD_LIVE_CODEX=turn`：两条都跑；回合那条再跑一个最小回合（花几百个 token）：白板经
 //!   `additionalContext`（`kind: "untrusted"`）送进去，问它暗号——验 Swift 一直没真机验过的
-//!   「additionalContext 真的被模型看见」。**跑之前要人点头。**
+//!   「additionalContext 真的被模型看见」。
 //!
-//! 工作目录取 `CREWD_LIVE_CODEX_WORKDIR`，缺省是一个临时目录。
-//! 跑法：`CREWD_LIVE_CODEX=1 cargo test -p crewd-exec --test live_codex -- --ignored --nocapture`
+//! 工作目录取 `CREWD_LIVE_CODEX_WORKDIR`，缺省是一个现建、跑完即删的临时目录。
+//! 等事件的循环里不 panic：先停掉 codex、等它退出（有上限），再断言——panic 会直接拆掉运行时，
+//! codex 起的子进程没人收、留成孤儿。
+//! 跑法（`=1` 时要带名字只跑握手那条，否则回合那条按第二道闸算失败）：
+//! - `CREWD_LIVE_CODEX=1 cargo test -p crewd-exec --test live_codex live_codex_handshakes -- --ignored --nocapture`
+//! - `CREWD_LIVE_CODEX=turn cargo test -p crewd-exec --test live_codex -- --ignored --nocapture`
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crewd_exec::codex::driver::{CodexConfig, CodexSpec, CodexStart, start_codex};
+use crewd_exec::driver::SessionHandle;
 use crewd_exec::env::AgentPaths;
 use crewd_exec::launch::CommsSpec;
 use crewd_exec::resume::MemoryLedger;
 use crewd_exec::session::{DerivedState, SessionEvent};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-fn gate() -> Option<String> {
-    match std::env::var("CREWD_LIVE_CODEX") {
-        Ok(v) if v == "1" || v == "turn" => Some(v),
-        _ => {
-            eprintln!("跳过：没设 CREWD_LIVE_CODEX=1（或 =turn）");
-            None
-        }
-    }
+/// 第二道闸。`want_turn` = 这条要花额度，只认 `turn`。
+fn gate(want_turn: bool) {
+    let v = std::env::var("CREWD_LIVE_CODEX").unwrap_or_default();
+    let ok = if want_turn {
+        v == "turn"
+    } else {
+        v == "1" || v == "turn"
+    };
+    assert!(
+        ok,
+        "这条测试会起真 codex：带了 --ignored 还得设 CREWD_LIVE_CODEX={}（第二道闸；现在是 {v:?}）。\
+         没设就算失败，免得一个根本没跑的「通过」被当成冒烟过了。",
+        if want_turn { "turn" } else { "1 或 turn" }
+    );
 }
 
 async fn start(
     brief: Option<&str>,
 ) -> (
-    crewd_exec::driver::SessionHandle,
-    tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+    SessionHandle,
+    UnboundedReceiver<SessionEvent>,
     tempfile::TempDir,
 ) {
     let tmp = tempfile::tempdir().unwrap();
@@ -7371,63 +7948,75 @@ async fn start(
     (h, rx, tmp)
 }
 
+/// 停掉并等 `Exited`（最多 10s：stop 之后 2s 宽限到点会 killpg，10s 还没有就是驱动层的毛病）。
+async fn stop_and_wait(h: &SessionHandle, rx: &mut UnboundedReceiver<SessionEvent>) -> bool {
+    let _ = h.stop();
+    let exited = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(e) = rx.recv().await {
+            eprintln!("{e:?}");
+            if let SessionEvent::Exited(info) = e {
+                return info.stopped_by_user;
+            }
+        }
+        false
+    })
+    .await;
+    matches!(exited, Ok(true))
+}
+
 #[tokio::test]
-#[ignore = "真 codex：CREWD_LIVE_CODEX=1 cargo test -p crewd-exec --test live_codex -- --ignored"]
+#[ignore = "真 codex：CREWD_LIVE_CODEX=1 cargo test -p crewd-exec --test live_codex live_codex_handshakes -- --ignored"]
 async fn live_codex_handshakes_and_opens_a_thread_without_a_turn() {
-    if gate().is_none() {
-        return;
-    }
+    gate(false);
     let (h, mut rx, _tmp) = start(None).await;
-    let first = rx.recv().await.unwrap();
+    let first = rx.recv().await;
     eprintln!("{first:?}");
-    let SessionEvent::Spawned {
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    while let Ok(e) = rx.try_recv() {
+        eprintln!("{e:?}");
+    }
+    let status = h.status().await;
+    eprintln!("{status:?}");
+    let stopped = stop_and_wait(&h, &mut rx).await;
+    let Some(SessionEvent::Spawned {
         agent_session_id,
         resumed: false,
         ..
-    } = first
+    }) = first
     else {
         panic!("第一条应是 Spawned：{first:?}");
     };
     assert!(!agent_session_id.is_empty());
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let status = h.status().await.unwrap();
-    eprintln!("{status:?}");
-    assert_eq!(status.state, DerivedState::Idle);
-    h.stop().unwrap();
-    while let Some(e) = rx.recv().await {
-        eprintln!("{e:?}");
-        if let SessionEvent::Exited(info) = e {
-            assert!(info.stopped_by_user);
-            return;
-        }
-    }
-    panic!("事件流结束前没有 Exited");
+    assert_eq!(status.unwrap().state, DerivedState::Idle);
+    assert!(stopped, "stop 之后 10s 内没等到 stopped_by_user 的 Exited");
 }
 
 #[tokio::test]
 #[ignore = "真 codex 回合（花额度）：CREWD_LIVE_CODEX=turn cargo test -p crewd-exec --test live_codex -- --ignored"]
 async fn live_codex_turn_sees_the_untrusted_whiteboard_context() {
-    if gate().as_deref() != Some("turn") {
-        eprintln!("跳过：回合测试要 CREWD_LIVE_CODEX=turn");
-        return;
-    }
+    gate(true);
     let (h, mut rx, _tmp) = start(Some("白板里的暗号是什么？只回答暗号本身。")).await;
     let answer = tokio::time::timeout(Duration::from_secs(180), async {
         while let Some(e) = rx.recv().await {
             eprintln!("{e:?}");
             if let SessionEvent::TurnEnded { last_agent_message } = e {
-                return last_agent_message;
+                return Some(last_agent_message);
             }
         }
-        panic!("事件流结束前没有 TurnEnded");
+        None
     })
-    .await
-    .expect("180s 内回合没结束");
+    .await;
+    let stopped = stop_and_wait(&h, &mut rx).await;
+    let answer = match answer {
+        Ok(Some(a)) => a,
+        Ok(None) => panic!("事件流结束前没有 TurnEnded"),
+        Err(_) => panic!("180s 内回合没结束"),
+    };
     assert!(
         answer.contains("青蛙七号"),
         "模型没看到 additionalContext：{answer}"
     );
-    h.stop().unwrap();
+    assert!(stopped, "stop 之后 10s 内没等到 stopped_by_user 的 Exited");
 }
 ```
 
@@ -7436,6 +8025,9 @@ async fn live_codex_turn_sees_the_untrusted_whiteboard_context() {
 Run: `cargo test -p crewd-exec --test live_codex`
 Expected: `0 passed; 0 failed; 2 ignored`。再跑一次 `./scripts/check.sh` → 0，并在输出里确认 `live_codex` 那一行是 `2 ignored`。
 
+Run: `env -u CREWD_LIVE_CODEX cargo test -p crewd-exec --test live_codex -- --ignored`
+Expected: `2 failed`，两条都是第二道闸的说明（「带了 --ignored 还得设 CREWD_LIVE_CODEX=…」），不起 codex。
+
 ```bash
 git add crates/exec/tests/live_codex.rs
 git commit -m "crewd-exec: opt-in live codex smoke tests (handshake only, and one turn reading untrusted context)
@@ -7443,20 +8035,20 @@ git commit -m "crewd-exec: opt-in live codex smoke tests (handshake only, and on
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 3: 真机握手（要人点头才跑）**
+- [ ] **Step 3: 真机握手（人已同意，直接跑）**
 
-先问人：「要在本机起一次真 codex app-server、开一个空 thread（不开回合、不花额度；可能在 `~/.codex/sessions` 下留一条空 thread 的记录），可以吗？」得到同意才跑：
+会在本机起一次真 codex app-server、开一个空 thread（不开回合、不花额度；可能在 `$CODEX_HOME/sessions`，缺省 `~/.codex/sessions`，下留一条空 thread 的记录）。
 
 ```bash
 codex --version
 CREWD_LIVE_CODEX=1 cargo test -p crewd-exec --test live_codex live_codex_handshakes -- --ignored --nocapture
 ```
 
-Expected：`1 passed`，输出里有 `Spawned { … resumed: false }`、`Profile(…)`（codex 自己解析出的模型）、`Idle`、`Exited(… stopped_by_user: true …)`。失败时把完整输出贴进交付记录，按「未核实」表逐条对：多半是某个字段 0.160 不认。
+Expected：`1 passed`，输出里有 `Spawned { … resumed: false }`、`Profile(…)`（codex 自己解析出的模型）、状态 `Idle`、`Exited(… stopped_by_user: true …)`。失败时把完整输出贴进交付记录，按「未核实」表逐条对：多半是某个字段 0.160 不认（握手报错的原话在 `StartError::Handshake` 的说明里，含 stderr 尾巴）。修了代码就补一条假 app-server 上的测试钉住，再重跑这一步。
 
-- [ ] **Step 4: 真机回合（花额度，要人单独点头）**
+- [ ] **Step 4: 真机回合（人已同意花额度，直接跑）**
 
-再问人：「要跑一个最小的真回合（几百 token），验证白板经 additionalContext 真的被模型看见，可以吗？」同意才跑：
+一个最小的真回合（几百 token），验证白板经 `additionalContext` 真的被模型看见。
 
 ```bash
 CREWD_LIVE_CODEX=turn cargo test -p crewd-exec --test live_codex live_codex_turn -- --ignored --nocapture
@@ -7464,13 +8056,21 @@ CREWD_LIVE_CODEX=turn cargo test -p crewd-exec --test live_codex live_codex_turn
 
 Expected：`1 passed`，`TurnEnded` 的正文里有「青蛙七号」。不通过说明 `additionalContext` 没被渲染进上下文（Swift 的 tech-debt 一直挂着这条）——记进交付记录，**不要**改成把白板拼进正文来让它过（那会丢掉「不可信」包装，是 spec §16 不走 codex-acp 的理由之一）。
 
-- [ ] **Step 5: 交付记录**
+再跑一次 Linux 编译（照 M2b；工具链 1.94.0 已装该 target，只编译不跑）：
+
+```bash
+cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
+```
+
+Expected：通过（写计划时的副本里通过）。`-p crewd` 带 rusqlite 的 C 代码，没有 Linux 交叉编译器编不了，不跑。
+
+- [ ] **Step 5: 交付记录**- [ ] **Step 5: 交付记录**
 
 `crewd/README.md`：在 M2b 加的「前台起一个 claude 会话」那一行之后加两行：
 
 ```markdown
 - codex 执行器：`crates/exec/src/codex`（`codex app-server` 客户端：握手、thread 落账与续跑、回合、服务端请求全答、协议健康、进程组；对外仍是 `driver::SessionHandle` + 事件流）
-- 前台起一个 codex 会话：`cargo run -p crewd -- codex --workdir DIR [--session SID] [--prompt TEXT] [--transcript]`（给了 `--session` 则 thread id 记在库里那一行上，重跑自动 `thread/resume`；那一行的执行器必须是 `codex`；会拿数据目录锁，不能与 serve 同时跑）
+- 前台起一个 codex 会话：`cargo run -p crewd -- codex --workdir DIR [--session SID] [--prompt-file PATH|-] [--transcript]`（开场任务从文件或 stdin（`-`）读，绝不放命令行参数；给了 `--session` 则 thread id 记在库里那一行上，重跑自动 `thread/resume`；那一行的执行器必须是 `codex`；会拿数据目录锁，不能与 serve 同时跑）
 ```
 
 移植图 `docs/superpowers/specs/2026-10-05-crewd-m2-executor-porting-map.md` §5 第一条里的
@@ -7485,33 +8085,34 @@ codex 用 Foundation Process，是否独立进程组**未核实**（不是则 ki
 codex 用 Foundation Process，不在独立进程组（Swift 的 killpg 只杀得到父进程）。crewd（M2c）里 codex 由 setsid 起、自成会话与进程组，停止与退出后都对整组 SIGKILL。
 ```
 
-spec `docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md` 末尾追加一节，**编号 = 现有最大节号 + 1**（写计划时最大是 §17「机组内多群」，M2b 的交付记录也会追加一节，以执行时为准），并按 Step 3 / Step 4 的实际结果把两处「二选一」改成一句真话（版本号照实填；没跑就留「未跑」那句）：
+spec `docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md` 加一节，**编号固定 §21**（§17 机组内多群、§18 M2b、§19 M4a、§20 M5a、§22 M3 细分都已占用；§21 留给 M2c——插在 §20 与 §22 之间，不追加在末尾），并按 Step 3 / Step 4 与 Linux 编译的实际结果把三处「二选一」改成一句真话（版本号、耗时照实填）：
 
 ```markdown
-## N. M2c 交付记录与遗留（分支 crewd-m2c，计划 `docs/superpowers/plans/2026-10-06-crewd-m2c-codex-session.md`）
+## 21. M2c 交付记录与遗留（分支 crewd-m2c，计划 `docs/superpowers/plans/2026-10-06-crewd-m2c-codex-session.md`）
 
-已交付：`crewd/crates/exec/src/codex`——线协议（无 `jsonrpc`、整数与字符串 id、两套 id 分表、单请求期限）、参数构造与服务端请求答复表（0.160.1 的 11 个方法全覆盖）、协议健康、回合跟踪与自动压缩、sans-IO 会话核心 `CodexCore`、进程（setsid、白名单环境剥计费 key、stderr 排空、stdout 行上限、写任务）、驱动 `start_codex`（握手 + thread id 落账完成才返回）。窄接口的最小扩展：`send_with_context`、`interrupt`、`control`、`snapshot` 可空、`SessionEvent::{Item, TurnEnded, Notice, Profile}`、`HealthKind::{TurnFailed, VersionIncompatible}` 与共用的 `HealthKind::rank`、`StartError::Handshake`。`crewd codex` 子命令；`StoreLedger::expecting`。验收：假 app-server 上的端到端 19 条（握手、落账先于就绪、续跑与退回、每一种服务端请求、额度、请求超时、stderr 灌满、落账失败、停止与工具子命令、codex 自己退出后的子命令、自动压缩与排队、打断、不读 stdin、3MB 条目、控制、登记表、句柄全丢、同一 thread 不能同时跑两个）；`crewd codex` 两次运行之间经库续跑、claude 的 session 被拒。
+已交付：`crewd/crates/exec/src/codex`——线协议（无 `jsonrpc`、整数与字符串 id、两套 id 分表、单请求期限）、参数构造与服务端请求答复表（0.160.1 的 11 个方法全覆盖）、协议健康、回合跟踪与自动压缩、sans-IO 会话核心 `CodexCore`、进程（setsid、白名单环境剥计费 key、stderr 排空、stdout 行上限、写任务）、驱动 `start_codex`（握手 + thread id 落账完成才返回；进程规矩与 M2b 终版的 claude 驱动一致：停止只开始一次、收尸后只发组信号补刀、先收拾后发 `Exited`、文件 IO 走阻塞线程池、收尸有上限）。窄接口的最小扩展：`send_with_context`（与 `send` 同一道空正文闸）、`interrupt`、`control`、`snapshot` 可空、`SessionEvent::{Item, TurnEnded, Notice, Profile}`、`HealthKind::{TurnFailed, VersionIncompatible}` 与共用的 `HealthKind::rank`、`StartError::Handshake`。`CODEX_HOME` 进环境白名单。`crewd codex` 子命令（开场任务只经 `--prompt-file`）；`StoreLedger::expecting`。验收：假 app-server 上的端到端 21 条（握手、落账先于就绪、续跑与退回且事件与 claude 同序、每一种服务端请求、额度、请求超时、stderr 灌满、落账失败、登记表写不进去、停止与工具子命令、反复叫停、codex 自己退出后的子命令、自动压缩与排队、打断、不读 stdin、3MB 条目、控制、登记表、句柄全丢、同一 thread 不能同时跑两个）；`crewd codex` 两次运行之间经库续跑、claude 的 session 被拒、开场任务经 stdin 读入走 `turn/start`、命令行上的 `--prompt` 被拒、stdin 开着也随会话退出。
 
 与 Swift 不同的决定（理由见计划「裁定」）：
 - 服务端请求 id 支持字符串；`applyPatchApproval` / `execCommandApproval` 显式按审批拒；`currentTime/read` 照实回。
 - 单请求期限（initialize 30s、thread 60s、其余 30s）；「早到响应缓冲」由「先登记后写 + 单任务顺序处理」在结构上消掉。
-- 回合排队、不用 `turn/steer`；`TurnEnded` 只带本回合的最后一条 agent 正文。
+- 回合排队、不用 `turn/steer`（人 2026-10-06 定）；`TurnEnded` 只带本回合的最后一条 agent 正文；读数晚到时不在回合中间压缩。
 - `serviceTier` 不选不传；`initialized` 不带 params；多订阅退两种输出增量。
-- setsid + 退出后整组 SIGKILL；剥 `OPENAI_API_KEY` 之外再剥 `CODEX_API_KEY`、`CODEX_ACCESS_TOKEN`。
+- setsid + 退出后整组 SIGKILL；剥 `OPENAI_API_KEY` 之外再剥 `CODEX_API_KEY`、`CODEX_ACCESS_TOKEN`；`CODEX_HOME` 透传。
 - thread id 落账失败 = 启动失败（Swift 只回调、不拦）。
+- 续跑被拒的事件与 claude 同序（`Spawned{旧号}` → `ResumeRefused` → `Spawned{新号}`，pid 不变）。
 
-真机核对：
-- 【执行 Task 9 Step 3 后二选一，删掉另一条】已跑握手：codex-cli <版本>，`CREWD_LIVE_CODEX=1 … live_codex_handshakes … --ignored` 通过。/ 未跑：握手只在假 app-server 上验过；跑法见 `crewd/crates/exec/tests/live_codex.rs` 文件头。
-- 【执行 Task 9 Step 4 后二选一，删掉另一条】已跑回合：模型答出了白板里的暗号，`additionalContext`（`kind: untrusted`）被看见。/ 未跑：`additionalContext` 是否真的进了模型上下文仍未真机验证（Swift 起就挂着）。
+真机核对（人 2026-10-06 同意跑，含花额度的回合）：
+- 【执行 Task 9 Step 3 后二选一，删掉另一条】已跑握手：codex-cli <版本>，`CREWD_LIVE_CODEX=1 … live_codex_handshakes … --ignored` 通过（<耗时>）。/ 握手没过：<原话与对应的「未核实」条目、怎么修的>。
+- 【执行 Task 9 Step 4 后二选一，删掉另一条】已跑回合：模型答出了白板里的暗号，`additionalContext`（`kind: untrusted`）被看见。/ 回合没过：<原话>；`additionalContext` 是否进了模型上下文仍未证实（Swift 起就挂着）。
+- 【二选一】Linux：`cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` 通过（只编译，没在 Linux 上跑测试）。/ 没过：<原话>。
 
 遗留：
-- `turn/steer`（运行中插话）没接，M3 定语义后再说；现在一律排队。
+- `turn/steer`（运行中插话）没接，现在一律排队（人 2026-10-06 定）；M3 若要插话再说。
 - 白板「未读」的取舍与去重归 M3；codex 自己按 key 去重（值没变就不再注入），claude 一侧每次都包。
 - `Item` 事件只发不存（结构化记录只在内存里留最近 200 条）；attach 回放、背压归 M2d。
 - `Notice` 只发事件；转群（Swift Todo #6 的群通知）归 M3。
 - 原生默认模型探测（ephemeral `thread/start`）、codex 的 npm 托管回退没做。
-- `CODEX_HOME` 不在环境白名单里：用了自定义 `CODEX_HOME` 的机器上，crewd 起的 codex 读的是 `~/.codex`（见计划「待人拍板」）。
-- 没在 Linux 上编译过。
+- 「进程退出后等 stderr 读到 EOF」没有能稳定变红的测试（竞态），按结构保证。
 ```
 
 - [ ] **Step 6: 提交文档**
@@ -7534,7 +8135,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 | 单请求期限（Swift 没有） | 2、5、7 |
 | stderr 排空（移植图 §4） | 6、7 |
 | 握手 `initialize` / `initialized`（移植图 §4） | 3、5 |
-| `thread/resume{excludeTurns}` 失败退回 `thread/start` 并公告（移植图 §4） | 3、5、7 |
+| `thread/resume{excludeTurns}` 失败退回 `thread/start` 并公告；事件与 claude 同序（移植图 §4、spec §18） | 3、5、7 |
 | `thread/start` 参数：cwd、on-request、workspace-write、auto_review、developerInstructions、model、effort、serviceTier、MCP 指向 helper（移植图 §4、§1） | 3、7 |
 | `turn/start` + `additionalContext` 不可信白板（移植图 §4、spec §2） | 3、5、7、9 |
 | `turn/interrupt`、`thread/settings/update`（fast 等回显）、`thread/compact/start` + 自动压缩阈值（移植图 §4） | 3、4、5、7 |
@@ -7542,13 +8143,13 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 | 回合跟踪、isBusy、idle 边沿、Stop hook 对应物（移植图 §4、§2） | 4、5、7 |
 | 协议健康：限流快照、usageLimitExceeded、unauthorized、版本太旧、失败回合（移植图 §4、§6） | 3、5、7 |
 | 退出原因 hitLimit（移植图 §6） | 5、7 |
-| 剥 `OPENAI_API_KEY`（移植图 §1） | 6、7 |
-| 进程组与停止语义（移植图 §5） | 6、7 |
+| 剥 `OPENAI_API_KEY`（移植图 §1）；`CODEX_HOME` 透传（人 2026-10-06） | 6、7 |
+| 进程组与停止语义（移植图 §5）；与 M2b 终版一致：停止只开始一次、收尸后只发组信号补刀、先收拾后 `Exited`、文件 IO 走阻塞线程池、收尸有上限（spec §18） | 6、7 |
 | thread id 进会话号账本、重启续跑（spec §13 Q12、移植图 §5） | 5、7、8 |
 | 孤儿登记（移植图 §5） | 7 |
 | 假 app-server 器材 + 端到端 | 7 |
-| 真机冒烟 opt-in、不进 check.sh | 9 |
-| CLI 可驱动（spec §3.3） | 8 |
+| 真机冒烟 opt-in、不进 check.sh；人已同意跑 | 9 |
+| CLI 可驱动（spec §3.3）；开场任务只经 `--prompt-file`（照 M2b 终版） | 8 |
 
 ## 未核实（写计划时核不到的字段与行为）
 
@@ -7564,12 +8165,28 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 | `optOutNotificationMethods` 里两种输出增量真的被退订 | 少收大流量 | 方法名在 schema 的通知表里；退订效果没验 | 真回合跑个长命令，看有没有 outputDelta |
 | `additionalContext`（`kind: untrusted`）被渲染成 `<external_键>` 并进入模型上下文 | 白板通道；claude 一侧的包装照这个形状 | schema 有字段与 `untrusted` / `application` 两个值；渲染形状来自 Swift 注释（读 codex 源码所得），Swift 自己标了「需真机确认」 | Task 9 Step 4 |
 | 回合进行中再发 `turn/start` 的行为 | 不发（排队，裁定 7） | 未知 | 不需要 |
-| `thread/start` 不开回合是否落盘、只开过 thread 的 id 能否 `thread/resume` | 握手后即落账 | 未知；接不上时退回新 thread（裁定 3） | 真机：握手后停、再用同号起 |
+| `thread/start` 不开回合是否落盘、只开过 thread 的 id 能否 `thread/resume` | 握手后即落账 | 未知；接不上时退回新 thread（裁定 3） | 真机：握手后停、再用同号起（Task 9 没做这一步） |
+| 工作目录不是 git 仓库时 app-server 收不收 `thread/start` | 冒烟默认用临时空目录 | 未知（`codex exec` 有 git 检查，app-server 未核实） | Task 9 Step 3 自然会撞上；撞了就把 `CREWD_LIVE_CODEX_WORKDIR` 设成一个 git 仓库再跑，并记进交付记录 |
 | app-server 收到 SIGTERM 是否干净退出、是否带走工具子进程 | 停止先 TERM 后整组 KILL | 未知；我们总补刀 | 不需要 |
 | `currentTime/read` 回 `currentTimeAt`（Unix 秒） | 照实回 | schema（CurrentTimeReadResponse） | 只能等它真来 |
 
-## 待人拍板（不影响执行；执行时按「当前做法」做）
+## 人已拍板（2026-10-06，执行时照做，不用再问）
 
-1. **运行中插话**：现在一律排队到回合结束（裁定 7）。要不要在 M3 用 `turn/steer` 让人 / 机长的话插进正在跑的回合？
-2. **`CODEX_HOME`**：环境白名单不含它（M2b 定的白名单），用了自定义 `CODEX_HOME` 的机器上 crewd 起的 codex 会读 `~/.codex`、登录态对不上。当前做法：不透传；要的话调用方经 `additional_env` 传。是否把它加进白名单？
-3. **真机冒烟**：Task 9 Step 3（只握手）与 Step 4（花几百 token）各要一次点头。
+1. **运行中插话**：一律排队到回合结束（裁定 7），不接 `turn/steer`。
+2. **`CODEX_HOME`**：进环境白名单（Task 6），设了就透传。
+3. **真机冒烟**：Task 9 Step 3（只握手）与 Step 4（一个最小回合，花几百 token）都可以跑，执行者直接跑；仍是两道闸、永远不进 `check.sh`。
+
+## 已裁定（原「待人拍板」；controller 2026-10-06：属实现细节，不交人）
+
+1. **续跑被拒的事件顺序**（controller 裁定：采纳三条同序；消费方——M3c——以 `ResumeRefused` 之后那条 `Spawned` 为准，第一条 `Spawned` 的号视作「尝试续跑的号」）（裁定 3）：本版改成与 claude 同序——`Spawned{旧号, resumed: true}` → `ResumeRefused` → `Spawned{新号, resumed: false}`（codex 三条同一个 pid、在就绪时一起发）——让 M2b 终版的「第一条是 `Spawned`」「每条 `ResumeRefused` 后面跟一条 `Spawned`」同时成立。代价：codex 的第一条 `Spawned` 报的是一个其实没接上的号（`resumed` 的意思随之写成「去接了」）。另一种是两条（`ResumeRefused` → `Spawned{新号}`），但那样第一条事件不再总是 `Spawned`。当前做法：三条。
+
+## 本版相对第一版的改动（对齐 `crewd-m2b@b5a65b0`）
+
+- 窄接口：`send` / `send_with_context` 返回 `Result<u64, SendError>`，空正文闸挪进 `send_with_context`（上下文不算正文），加一条单测与一刀变异（Task 1）。Task 1 的「原文」全部换成终版代码，对齐检查的 grep 跟着改（`async fn finish`、`kill_group_only`、`begin_stop`、`SendError`、`log_reap_reports`、`--prompt-file`），基线 135 / 19。`kill_group_only` / `blocking` / `REAP_LIMIT` 一并 `pub(crate)`；`LiveId::id` 挪到 Task 7（照第一版放在 Task 1，副本里 `check.sh` 在这一步报 dead code、过不了 `-D warnings`）。
+- 续跑被拒的事件顺序改成与 claude 同序（裁定 3、Task 1 的 `SessionEvent` 文档、Task 5 核心与测试、Task 7 端到端）。
+- 进程规矩照 M2b 终版：`begin_stop` 只开始一次；收尸后的补刀从 `kill_group` 换成 `kill_group_only`（`kill_group` 组信号发不出去时会退回单杀一个已收尸、可能被复用的 pid）；`release` 变 async、登记表 `forget` 与启动时的 `probe` / `record` 进 `spawn_blocking`；启动失败与登记失败后的收尸有 `REAP_LIMIT` 上限；进程退出后等 stderr 读到 EOF（最多 500ms）再取尾巴（Task 7，加 `repeated_stop_neither_resends_term_nor_postpones_the_kill`、`a_registry_that_cannot_be_written_kills_the_process` 两条端到端与对应变异，假 app-server 加 `count_term`）。
+- 自动压缩：读数晚到而下一条已经在开回合时不压（Task 5 闸 + 单测 + 变异）；端到端测试改成等压缩开始再投、假 app-server 的压缩回合拖 300ms（第一版这条约 1/10 红）。
+- `CODEX_HOME` 进白名单（Task 6，单测 + 变异）；原「待人拍板」三条按人的决定改成「人已拍板」，遗留里删掉 `CODEX_HOME` 与「没在 Linux 上编译过」。
+- `crewd codex`：`--prompt` → `--prompt-file PATH|-`，复用 `claude_cmd` 的 `read_prompt` / `stdin_lines`（普通线程读 stdin），信号流建一次，回收报告走 `log_reap_reports`；`codex_cli` 加三条（stdin 读开场任务且不进 argv、`--prompt` 被拒、stdin 开着也随会话退出），共 5 条（Task 8）。
+- 真机冒烟：人已同意，Step 3–4 直接跑；测试照 `live_claude.rs` 终版的写法（没设环境变量直接失败、循环里不 panic、等 `Exited` 有上限）；加 Linux 交叉编译一步（Task 9）。
+- 交付记录固定写进 spec §21。
