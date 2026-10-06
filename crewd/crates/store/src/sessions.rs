@@ -1,6 +1,6 @@
-use crate::Result;
+use crate::{Result, StoreError};
 use crewd_proto::Session;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 pub fn upsert(conn: &Connection, s: &Session, extra: Option<&Value>) -> Result<()> {
@@ -50,4 +50,31 @@ pub fn list_for_crew(conn: &Connection, crew_id: &str) -> Result<Vec<Session>> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// 这个 session 记下的 agent 会话号（重启时 `--resume` 用）。session 不存在是错误。
+pub fn agent_session_id(conn: &Connection, session_id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT agent_session_id FROM sessions WHERE id=?1",
+        [session_id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| StoreError::Invalid(format!("没有 session {session_id}")))
+}
+
+/// 落账：起 agent 进程之前写下它将用的会话号。session 不存在是错误。
+pub fn set_agent_session_id(
+    conn: &Connection,
+    session_id: &str,
+    agent_session_id: &str,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE sessions SET agent_session_id=?2, updated_at=?3 WHERE id=?1",
+        params![session_id, agent_session_id, crate::now_ts()],
+    )?;
+    if n == 0 {
+        return Err(StoreError::Invalid(format!("没有 session {session_id}")));
+    }
+    Ok(())
 }

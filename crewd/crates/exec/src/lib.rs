@@ -6,4 +6,5 @@ pub mod health;
 pub mod launch;
 pub mod pty;
 pub mod registry;
+pub mod resume;
 pub mod session;

@@ -2,6 +2,7 @@
 mod conn;
 pub mod dispatch;
 pub mod hub;
+pub mod ledger;
 
 use crewd_store::Store;
 pub use hub::Hub;

@@ -293,6 +293,7 @@ name = "crewd-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crewd-exec",
  "crewd-proto",
  "crewd-store",
  "serde",
