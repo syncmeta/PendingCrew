@@ -3,6 +3,7 @@
 mod model;
 mod params;
 
+pub mod agent;
 pub use model::*;
 pub use params::*;
 use schemars::JsonSchema;
@@ -474,6 +475,7 @@ pub fn api_schema() -> Value {
         "Request": sub::<Request>(g),
         "ServerFrame": sub::<ServerFrame>(g),
     });
+    let agent = agent::schema(g);
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "apiVersion": API_VERSION,
@@ -482,6 +484,7 @@ pub fn api_schema() -> Value {
         "frames": frames,
         "methods": methods,
         "events": events,
+        "agent": agent,
         "$defs": generator.take_definitions(true),
     })
 }

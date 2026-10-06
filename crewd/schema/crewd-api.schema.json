@@ -250,6 +250,42 @@
       ],
       "type": "object"
     },
+    "AttachParams": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "token"
+      ],
+      "type": "object"
+    },
+    "AttachResult": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/Role",
+          "description": "M3a 的 `crewd_proto::Role`（线上 \"captain\" / \"worker\"）。"
+        }
+      },
+      "required": [
+        "role",
+        "crewId",
+        "label"
+      ],
+      "type": "object"
+    },
     "Attachment": {
       "description": "模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `AttachmentParam`。",
       "properties": {
@@ -335,6 +371,36 @@
         "channelId",
         "unreadForHuman",
         "humanMentions"
+      ],
+      "type": "object"
+    },
+    "CallParams": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "default": null
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "type": "object"
+    },
+    "CallResult": {
+      "properties": {
+        "isError": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "isError"
       ],
       "type": "object"
     },
@@ -1209,6 +1275,42 @@
         "version",
         "apiVersion"
       ],
+      "type": "object"
+    },
+    "HookKind": {
+      "enum": [
+        "post-tool-use",
+        "pre-tool-use",
+        "stop"
+      ],
+      "type": "string"
+    },
+    "HookParams": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/HookKind"
+        },
+        "payload": {
+          "description": "claude 喂给 hook 的 stdin JSON，原样转来。"
+        }
+      },
+      "required": [
+        "event",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "HookResult": {
+      "properties": {
+        "stdout": {
+          "description": "helper 原样打到 stdout 的内容；None = 什么都不打。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "HumanWait": {
@@ -2142,6 +2244,23 @@
       ],
       "type": "object"
     },
+    "ToolDef": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "inputSchema"
+      ],
+      "type": "object"
+    },
     "WaitTierView": {
       "enum": [
         "fresh",
@@ -2152,6 +2271,58 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "agent": {
+    "methods": {
+      "agent.attach": {
+        "params": {
+          "$ref": "#/$defs/AttachParams"
+        },
+        "result": {
+          "$ref": "#/$defs/AttachResult"
+        }
+      },
+      "agent.call": {
+        "params": {
+          "$ref": "#/$defs/CallParams"
+        },
+        "result": {
+          "$ref": "#/$defs/CallResult"
+        }
+      },
+      "agent.hook": {
+        "params": {
+          "$ref": "#/$defs/HookParams"
+        },
+        "result": {
+          "$ref": "#/$defs/HookResult"
+        }
+      },
+      "agent.tools": {
+        "params": {
+          "type": "null"
+        },
+        "result": {
+          "items": {
+            "$ref": "#/$defs/ToolDef"
+          },
+          "type": "array"
+        }
+      }
+    },
+    "push": {
+      "agent.tools_changed": {
+        "properties": {
+          "role": {
+            "$ref": "#/$defs/Role"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      }
+    }
+  },
   "apiVersion": 2,
   "events": {
     "approval.changed": {
