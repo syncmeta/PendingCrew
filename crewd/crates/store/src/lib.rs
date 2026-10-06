@@ -137,7 +137,7 @@ pub(crate) fn json_col<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crewd_proto::{Crew, Session};
+    use crewd_proto::{Crew, Role, Session};
     use serde_json::json;
 
     fn crew(id: &str, n: Option<i64>) -> Crew {
@@ -152,6 +152,7 @@ mod tests {
             hidden_at: None,
             created_at: "2026-10-01T00:00:00.000Z".into(),
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         }
     }
 
@@ -244,7 +245,7 @@ mod tests {
         let mut ses = Session {
             id: "captain-1".into(),
             crew_id: "a".into(),
-            role: "captain".into(),
+            role: Role::Captain,
             executor: "claude".into(),
             agent_session_id: Some("uuid-1".into()),
             display_name: Some("机长".into()),
@@ -252,6 +253,7 @@ mod tests {
             model: None,
             effort: None,
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         };
         sessions::upsert(s.conn(), &ses, None).unwrap();
         ses.display_name = Some("新机长".into());
@@ -262,13 +264,78 @@ mod tests {
     }
 
     #[test]
+    fn crew_and_session_v3_columns_roundtrip() {
+        let s = Store::open_in_memory().unwrap();
+        let mut c = crew("crew-a", Some(1));
+        c.title_source = Some("captain".into());
+        c.status_line = Some("示例状态".into());
+        c.policy = Some(json!({"mode":"ask","n":2}));
+        crews::upsert(s.conn(), &c, None).unwrap();
+        let ses = Session {
+            id: "w-a1".into(),
+            crew_id: "crew-a".into(),
+            role: Role::Worker,
+            executor: "claude".into(),
+            updated_at: "2026-10-01T00:00:00.000Z".into(),
+            title: Some("示例标题".into()),
+            brief: Some("示例任务".into()),
+            desired: crewd_proto::Desired::Running,
+            ext: Some(3),
+            worktree: Some("/tmp/wt".into()),
+            was_working: true,
+            last_active_at: Some("2026-10-01T00:00:01.000Z".into()),
+            last_output_at: Some("2026-10-01T00:00:02.000Z".into()),
+            last_progress_at: Some("2026-10-01T00:00:03.000Z".into()),
+            awaiting_question: Some("示例问题".into()),
+            resume_failed_at: Some("2026-10-01T00:00:04.000Z".into()),
+            ..Default::default()
+        };
+        sessions::upsert(s.conn(), &ses, None).unwrap();
+        // 机长指针有外键：session 在了才能指过去。upsert 写它，但从不写 position（只由回填 / collab 写）。
+        s.conn()
+            .execute("UPDATE crews SET position=7 WHERE id='crew-a'", [])
+            .unwrap();
+        c.captain_session_id = Some("w-a1".into());
+        c.position = 99;
+        crews::upsert(s.conn(), &c, None).unwrap();
+        let got = crews::get(s.conn(), "crew-a").unwrap().unwrap();
+        assert_eq!(got.captain_session_id.as_deref(), Some("w-a1"));
+        assert_eq!(got.title_source.as_deref(), Some("captain"));
+        assert_eq!(got.status_line.as_deref(), Some("示例状态"));
+        assert_eq!(got.policy, Some(json!({"mode":"ask","n":2})));
+        assert_eq!(got.position, 7, "upsert 不动 position");
+        assert!(crews::get(s.conn(), "nope").unwrap().is_none());
+        assert_eq!(sessions::get(s.conn(), "w-a1").unwrap().unwrap(), ses);
+        assert!(sessions::get(s.conn(), "nope").unwrap().is_none());
+        assert_eq!(sessions::list_all(s.conn()).unwrap(), vec![ses.clone()]);
+        assert_eq!(
+            sessions::list_for_crew(s.conn(), "crew-a").unwrap(),
+            vec![ses]
+        );
+    }
+
+    #[test]
+    fn unknown_stored_vocabulary_is_a_read_error_not_a_default() {
+        let s = Store::open_in_memory().unwrap();
+        crews::upsert(s.conn(), &crew("crew-a", None), None).unwrap();
+        s.conn()
+            .execute(
+                "INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('w-x','crew-a','chief','claude','t')",
+                [],
+            )
+            .unwrap();
+        assert!(sessions::get(s.conn(), "w-x").is_err());
+        assert!(sessions::list_all(s.conn()).is_err());
+    }
+
+    #[test]
     fn agent_session_id_ledger() {
         let s = Store::open_in_memory().unwrap();
         crews::upsert(s.conn(), &crew("a", None), None).unwrap();
         let ses = Session {
             id: "w-1".into(),
             crew_id: "a".into(),
-            role: "worker".into(),
+            role: Role::Worker,
             executor: "claude".into(),
             agent_session_id: None,
             display_name: None,
@@ -276,6 +343,7 @@ mod tests {
             model: None,
             effort: None,
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         };
         sessions::upsert(s.conn(), &ses, None).unwrap();
         assert_eq!(sessions::agent_session_id(s.conn(), "w-1").unwrap(), None);

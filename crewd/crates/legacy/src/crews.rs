@@ -58,6 +58,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             hidden_at,
             created_at: norm_ts(cx, &c.created_at),
             updated_at: norm_ts(cx, &c.updated_at),
+            ..Default::default()
         };
         crewd_store::crews::upsert(tx, &crew, Some(&Value::Object(c.extra)))?;
         crewd_store::channels::ensure_lobby(tx, &crew.id, &crew.created_at)?;

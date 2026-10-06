@@ -1,7 +1,7 @@
 use crate::Ctx;
 use crate::model::LMessage;
 use crate::rows::{conv_att, io_fatal, norm_ts, read_file, read_rows_indexed};
-use crewd_proto::{Mention, Message};
+use crewd_proto::{Mention, MentionKind, Message, SenderKind};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -116,7 +116,8 @@ fn insert_one(
         seq: 0,
         id: m.id,
         channel_id: crewd_store::channels::lobby_id(crew_id),
-        sender_kind: sender_kind.to_string(),
+        sender_kind: SenderKind::parse(sender_kind)
+            .expect("normalize_sender_kind 只返回词表内的值"),
         sender_session_id: m.sender_session_id,
         sender_name: m.sender_name,
         text: m.text,
@@ -126,7 +127,7 @@ fn insert_one(
             .mentions
             .into_iter()
             .map(|x| Mention {
-                kind: x.kind,
+                kind: MentionKind::parse(&x.kind).expect("上面已检查"),
                 target_id: x.target_id,
             })
             .collect(),

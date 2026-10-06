@@ -3,18 +3,17 @@ use crate::crews::ImportedCrew;
 use crate::model::{LAgentSession, LMember};
 use crate::rows::{norm_ts, read_rows};
 use chrono::DateTime;
-use crewd_proto::Session;
+use crewd_proto::{Role, Session};
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn role_of(session_id: &str) -> String {
+fn role_of(session_id: &str) -> Role {
     if session_id.starts_with("captain-") {
-        "captain"
+        Role::Captain
     } else {
-        "worker"
+        Role::Worker
     }
-    .to_string()
 }
 
 /// `a` 严格晚于 `b`。两边都能解析就比时刻（时区偏移、毫秒都算数）；任一边解析不了，退回原串比较。
@@ -98,6 +97,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
             model: r.model.clone(),
             effort: r.effort.clone(),
             updated_at: norm_ts(cx, &r.updated_at),
+            ..Default::default()
         };
         let extra = with_member_extra(r.extra, members.get(r.session_id.as_str()).copied());
         crewd_store::sessions::upsert(tx, &s, Some(&Value::Object(extra)))?;
@@ -121,6 +121,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
                 model: None,
                 effort: None,
                 updated_at: norm_ts(cx, &m.created_at),
+                ..Default::default()
             };
             let extra = with_member_extra(Map::new(), Some(m));
             let extra = (!extra.is_empty()).then_some(Value::Object(extra));

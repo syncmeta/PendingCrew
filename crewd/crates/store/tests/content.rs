@@ -1,4 +1,6 @@
-use crewd_proto::{Attachment, Crew, Ledger, Mention, Message, Todo, TodoResponse};
+use crewd_proto::{
+    Attachment, Crew, Ledger, Mention, MentionKind, Message, SenderKind, Todo, TodoResponse,
+};
 use crewd_store::channels::{ensure_lobby, lobby_id};
 use crewd_store::{Store, archive, crews, messages, todos};
 
@@ -17,6 +19,7 @@ fn store_with_crew() -> Store {
             hidden_at: None,
             created_at: "2026-10-01T00:00:00.000Z".into(),
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         },
         None,
     )
@@ -30,14 +33,14 @@ fn msg(id: &str, text: &str) -> Message {
         seq: 0,
         id: id.into(),
         channel_id: lobby_id("a"),
-        sender_kind: "human".into(),
+        sender_kind: SenderKind::Human,
         sender_session_id: None,
         sender_name: Some("我".into()),
         text: text.into(),
         category: None,
         in_reply_to: None,
         mentions: vec![Mention {
-            kind: "broadcast".into(),
+            kind: MentionKind::Broadcast,
             target_id: None,
         }],
         attachments: vec![Attachment {
@@ -80,7 +83,7 @@ fn messages_list_after_seq_with_limit_roundtrips_unicode() {
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].text, text);
     assert_eq!(all[0].seq, first);
-    assert_eq!(all[0].mentions[0].kind, "broadcast");
+    assert_eq!(all[0].mentions[0].kind, MentionKind::Broadcast);
     assert_eq!(all[0].attachments[0].size, Some(3));
     let tail = messages::list(s.conn(), &lobby_id("a"), first, None, 1).unwrap();
     assert_eq!(tail.len(), 1);

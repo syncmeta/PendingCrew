@@ -582,7 +582,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         let m = crewd_proto::Message {
             id: "m5".into(),
             channel_id: "crew-a/lobby".into(),
-            sender_kind: "human".into(),
+            sender_kind: crewd_proto::SenderKind::Human,
             text: "迁移后的新消息".into(),
             created_at: "2026-10-01T00:00:00.000Z".into(),
             ..Default::default()

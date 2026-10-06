@@ -167,14 +167,14 @@ mod tests {
             seq: 5,
             id: "m1".into(),
             channel_id: "local-a/lobby".into(),
-            sender_kind: "user".into(),
+            sender_kind: SenderKind::Human,
             sender_session_id: None,
             sender_name: None,
             text: "你好 👋".into(),
             category: None,
             in_reply_to: Some("m0".into()),
             mentions: vec![Mention {
-                kind: "session".into(),
+                kind: MentionKind::Session,
                 target_id: Some("worker-1".into()),
             }],
             attachments: vec![],
@@ -197,6 +197,63 @@ mod tests {
     fn ledger_serializes_lowercase() {
         assert_eq!(serde_json::to_value(Ledger::Human).unwrap(), json!("human"));
         assert_eq!(Ledger::Agent.as_str(), "agent");
+    }
+
+    #[test]
+    fn vocabularies_are_closed_enums_on_the_wire() {
+        assert_eq!(
+            serde_json::to_value(SenderKind::System).unwrap(),
+            json!("system")
+        );
+        assert!(
+            serde_json::from_value::<SenderKind>(json!("user")).is_err(),
+            "旧词只在迁移 / 导入里归一"
+        );
+        assert_eq!(
+            serde_json::to_value(MentionKind::Broadcast).unwrap(),
+            json!("broadcast")
+        );
+        assert_eq!(serde_json::to_value(ChannelKind::Dm).unwrap(), json!("dm"));
+        assert_eq!(
+            serde_json::to_value(MemberRef::Session { id: "w-1".into() }).unwrap(),
+            json!({"kind":"session","id":"w-1"})
+        );
+        assert_eq!(
+            serde_json::to_value(MemberRef::Human).unwrap(),
+            json!({"kind":"human"})
+        );
+        assert_eq!(
+            serde_json::to_value(WaitTierView::StillWanted).unwrap(),
+            json!("still_wanted")
+        );
+        assert_eq!(
+            serde_json::to_value(RestartAnswer::Later).unwrap(),
+            json!("later")
+        );
+        assert_eq!(SenderKind::parse("captain"), Some(SenderKind::Captain));
+        assert_eq!(Role::parse("captain"), Some(Role::Captain));
+        assert_eq!(Role::parse("admin"), Some(Role::Admin));
+        assert_eq!(Role::parse("chief"), None);
+    }
+
+    #[test]
+    fn session_and_crew_carry_v3_fields_with_defaults() {
+        let s: Session = serde_json::from_value(json!({
+            "id":"w-1","crewId":"c","role":"worker","executor":"claude","updatedAt":"t"
+        }))
+        .unwrap();
+        assert_eq!(s.desired, Desired::Stopped);
+        assert!(!s.was_working);
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["desired"], "stopped");
+        assert!(v.get("title").is_none(), "None 不上线");
+        let c = Crew {
+            id: "c".into(),
+            captain_session_id: Some("cap".into()),
+            ..Default::default()
+        };
+        assert_eq!(serde_json::to_value(&c).unwrap()["captainSessionId"], "cap");
+        assert_eq!(serde_json::to_value(&c).unwrap()["position"], 0);
     }
 
     #[test]

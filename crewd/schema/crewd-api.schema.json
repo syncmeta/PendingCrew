@@ -45,6 +45,13 @@
             "null"
           ]
         },
+        "captainSessionId": {
+          "description": "此刻的机长（裁定 8）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "createdAt": {
           "type": "string"
         },
@@ -70,8 +77,31 @@
           },
           "type": "array"
         },
+        "policy": {
+          "description": "委派策略（M3b 的 read / update_delegation_policy），自由 JSON。"
+        },
+        "position": {
+          "default": 0,
+          "description": "同级机组里的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 改，新机组排在同级末尾）。",
+          "format": "int64",
+          "type": "integer"
+        },
+        "statusLine": {
+          "description": "机长写的一句状态（`set_crew_status`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "title": {
           "type": "string"
+        },
+        "titleSource": {
+          "description": "\"human\" | \"captain\" | \"auto\"（谁起的名；旧数据从 extra 回填）。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "updatedAt": {
           "type": "string"
@@ -169,8 +199,7 @@
         "Mention": {
           "properties": {
             "kind": {
-              "description": "\"session\" | \"captain\" | \"human\" | \"broadcast\"",
-              "type": "string"
+              "$ref": "#/$defs/MentionKind"
             },
             "targetId": {
               "type": [
@@ -183,6 +212,24 @@
             "kind"
           ],
           "type": "object"
+        },
+        "MentionKind": {
+          "enum": [
+            "session",
+            "captain",
+            "human",
+            "broadcast"
+          ],
+          "type": "string"
+        },
+        "SenderKind": {
+          "enum": [
+            "human",
+            "session",
+            "captain",
+            "system"
+          ],
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -224,8 +271,7 @@
           "type": "array"
         },
         "senderKind": {
-          "description": "\"human\" | \"session\" | \"captain\" | \"system\"（v3 归一后的词表；Task 4 换成枚举）",
-          "type": "string"
+          "$ref": "#/$defs/SenderKind"
         },
         "senderName": {
           "type": [
@@ -327,6 +373,23 @@
       "type": "object"
     },
     "Session": {
+      "$defs": {
+        "Desired": {
+          "enum": [
+            "running",
+            "stopped"
+          ],
+          "type": "string"
+        },
+        "Role": {
+          "enum": [
+            "captain",
+            "worker",
+            "admin"
+          ],
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "agentSessionId": {
@@ -335,8 +398,24 @@
             "null"
           ]
         },
+        "awaitingQuestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "brief": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "crewId": {
           "type": "string"
+        },
+        "desired": {
+          "$ref": "#/$defs/Desired",
+          "default": "stopped"
         },
         "displayName": {
           "type": [
@@ -354,8 +433,35 @@
           "description": "执行器类型：\"claude\" | \"codex\" | \"acp:<registry-id>\"；旧数据导入的还可能是 \"terminal\" | \"unknown\"。",
           "type": "string"
         },
+        "ext": {
+          "description": "分机号（机长恒为 1，不存；没号的旧成员为 None）。",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
+        },
+        "lastActiveAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastOutputAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastProgressAt": {
+          "description": "最近一次「产出」（工具调用 / 工作项变化；发言不算，控制者裁定 C3）。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "model": {
           "type": [
@@ -363,14 +469,36 @@
             "null"
           ]
         },
+        "resumeFailedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "role": {
-          "description": "\"captain\" | \"worker\"",
-          "type": "string"
+          "$ref": "#/$defs/Role"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "updatedAt": {
           "type": "string"
         },
+        "wasWorking": {
+          "default": false,
+          "type": "boolean"
+        },
         "workingDirectory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktree": {
+          "description": "crewd 为它新建的 git worktree 的绝对路径（控制者裁定 C8，`isolation: true`）；None = 共享机组目录。",
           "type": [
             "string",
             "null"
@@ -616,8 +744,7 @@
         "Mention": {
           "properties": {
             "kind": {
-              "description": "\"session\" | \"captain\" | \"human\" | \"broadcast\"",
-              "type": "string"
+              "$ref": "#/$defs/MentionKind"
             },
             "targetId": {
               "type": [
@@ -630,6 +757,15 @@
             "kind"
           ],
           "type": "object"
+        },
+        "MentionKind": {
+          "enum": [
+            "session",
+            "captain",
+            "human",
+            "broadcast"
+          ],
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",

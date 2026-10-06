@@ -251,7 +251,7 @@ mod tests {
         let ses = crewd_store::sessions::list_for_crew(store.conn(), "local-aaaa").unwrap();
         assert_eq!(ses.len(), 3);
         let cap = ses.iter().find(|s| s.id == "captain-1111aaaa").unwrap();
-        assert_eq!(cap.role, "captain");
+        assert_eq!(cap.role, crewd_proto::Role::Captain);
         assert_eq!(cap.display_name.as_deref(), Some("机长"));
         let w = ses.iter().find(|s| s.id == "worker-2222bbbb").unwrap();
         assert_eq!(
@@ -494,7 +494,8 @@ mod tests {
             Some("11111111-0000-4000-8000-000000000001")
         );
         assert_eq!(
-            msgs[2].sender_kind, "captain",
+            msgs[2].sender_kind,
+            crewd_proto::SenderKind::Captain,
             "outbox 里的那条排在板上消息之后"
         );
         let extra: String = store

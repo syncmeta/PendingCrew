@@ -1,5 +1,5 @@
 use crate::{Result, json_col};
-use crewd_proto::Message;
+use crewd_proto::{Message, SenderKind};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -20,11 +20,19 @@ pub const MENTION_KINDS: &[&str] = &["session", "captain", "human", "broadcast"]
 const COLS: &str = "seq,id,channel_id,sender_kind,sender_session_id,sender_name,text,category,in_reply_to,mentions,attachments,created_at";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+    let sender_kind: String = r.get(3)?;
+    let sender_kind = SenderKind::parse(&sender_kind).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            format!("未知 senderKind {sender_kind}").into(),
+        )
+    })?;
     Ok(Message {
         seq: r.get(0)?,
         id: r.get(1)?,
         channel_id: r.get(2)?,
-        sender_kind: r.get(3)?,
+        sender_kind,
         sender_session_id: r.get(4)?,
         sender_name: r.get(5)?,
         text: r.get(6)?,
@@ -45,7 +53,7 @@ pub fn insert(conn: &Connection, m: &Message, extra: Option<&Value>) -> Result<O
         params![
             m.id,
             m.channel_id,
-            m.sender_kind,
+            m.sender_kind.as_str(),
             m.sender_session_id,
             m.sender_name,
             m.text,

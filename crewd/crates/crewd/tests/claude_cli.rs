@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crewd_proto::{Crew, Session};
+use crewd_proto::{Crew, Role, Session};
 use crewd_store::{Store, crews, sessions};
 
 fn seed(data: &Path) {
@@ -25,6 +25,7 @@ fn seed(data: &Path) {
             hidden_at: None,
             created_at: "2026-10-01T00:00:00.000Z".into(),
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         },
         None,
     )
@@ -34,7 +35,7 @@ fn seed(data: &Path) {
         &Session {
             id: "w-1".into(),
             crew_id: "c".into(),
-            role: "worker".into(),
+            role: Role::Worker,
             executor: "claude".into(),
             agent_session_id: None,
             display_name: None,
@@ -42,6 +43,7 @@ fn seed(data: &Path) {
             model: None,
             effort: None,
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         },
         None,
     )

@@ -59,7 +59,7 @@ impl AgentIdLedger for StoreLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crewd_proto::{Crew, Session};
+    use crewd_proto::{Crew, Role, Session};
     use crewd_store::crews;
 
     fn seeded(dir: &std::path::Path) -> PathBuf {
@@ -76,12 +76,13 @@ mod tests {
             hidden_at: None,
             created_at: "2026-10-01T00:00:00.000Z".into(),
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         };
         crews::upsert(s.conn(), &crew, None).unwrap();
         let ses = Session {
             id: "w-1".into(),
             crew_id: "c".into(),
-            role: "worker".into(),
+            role: Role::Worker,
             executor: "claude".into(),
             agent_session_id: None,
             display_name: None,
@@ -89,6 +90,7 @@ mod tests {
             model: None,
             effort: None,
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         };
         sessions::upsert(s.conn(), &ses, None).unwrap();
         db

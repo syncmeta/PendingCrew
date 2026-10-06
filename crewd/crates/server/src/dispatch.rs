@@ -1,6 +1,6 @@
 use crate::AppState;
 use crewd_proto::{
-    API_VERSION, Event, Hello, Message, Request, Response, RpcError, TodoListParams,
+    API_VERSION, Event, Hello, Message, Request, Response, RpcError, SenderKind, TodoListParams,
     WhiteboardListParams, WhiteboardPostParams, events, methods, parse_params,
 };
 use serde::Serialize;
@@ -71,7 +71,8 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 seq: 0,
                 id: uuid::Uuid::new_v4().to_string(),
                 channel_id: crewd_store::channels::lobby_id(&crew_id),
-                sender_kind: kind.into(),
+                sender_kind: SenderKind::parse(kind)
+                    .expect("normalize_sender_kind 只返回词表内的值"),
                 sender_session_id: p.sender_session_id,
                 sender_name: p.sender_name,
                 text: p.text,
