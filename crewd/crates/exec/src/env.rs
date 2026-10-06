@@ -69,9 +69,13 @@ fn default_shell() -> &'static str {
 /// 起 `shell -lic "printf '<哨兵>%s<哨兵>' "$PATH""`，取哨兵之间那段。
 /// 超时、退出码非 0、没有哨兵、哨兵之间为空 → `None`。
 ///
-/// shell 自成一个进程组；读到收尾哨兵就不再等 EOF（rc 文件留下的后台任务会一直攥着
-/// stdout 管道），等 shell 自己退出拿退出码。无论成败、超时，最后都对整个进程组
-/// SIGKILL 再收尸，rc 文件起的后代一个不留。
+/// shell 在**新会话**里跑（setsid：自成会话、自成进程组、没有控制终端）；读到收尾哨兵
+/// 就不再等 EOF（rc 文件留下的后台任务会一直攥着 stdout 管道），等 shell 自己退出拿退出码。
+/// 无论成败、超时，最后都对整个进程组 SIGKILL 再收尸，rc 文件起的后代一个不留。
+///
+/// 为什么是 setsid 而不是 `process_group(0)`：crewd 从终端里起时有控制终端，交互式 zsh
+/// 落在同一会话的后台进程组里，一碰 tty 就被 SIGTTIN/SIGTTOU 停住，抓 PATH 超时丢失。
+/// 新会话没有控制终端，交互 shell 照常跑完（daemon 场景本来就没有 tty，两种路径一致）。
 pub async fn login_shell_path(shell: &Path, timeout: Duration) -> Option<String> {
     use tokio::io::AsyncReadExt;
 
@@ -81,13 +85,23 @@ pub async fn login_shell_path(shell: &Path, timeout: Duration) -> Option<String>
             "/usr/bin/printf '{PATH_SENTINEL_OPEN}%s{PATH_SENTINEL_CLOSE}' \"$PATH\""
         ))
         .current_dir(std::env::temp_dir())
-        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    // SAFETY: pre_exec 在 fork 之后、exec 之前运行，只调 async-signal-safe 的 setsid(2)，
+    // 不分配内存、不拿锁。
+    unsafe {
+        cmd.pre_exec(|| {
+            rustix::process::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
+        });
+    }
     let mut child = cmd.spawn().ok()?;
-    // 组长的 pid 就是 pgid。在收尸之前 killpg，这个 pid 不会被别人复用。
+    // 会话组长的 pid 就是 pgid。超时路径上 shell 还没被收尸，killpg 时这个 pid 不会被复用；
+    // 成功 / 失败路径上 shell 已先被收尸，只要它的后代还在，进程组就还在、pgid 就不会被复用；
+    // 后代都没了则 killpg 得 ESRCH，无害（pid 恰好被新进程占用并自成一组的窗口可忽略）。
     let pgid = child
         .id()
         .and_then(|id| rustix::process::Pid::from_raw(id as i32));
@@ -272,6 +286,42 @@ mod tests {
         let got = login_shell_path(&shell, Duration::from_secs(1)).await;
         assert_eq!(got, None);
         assert!(started.elapsed() < Duration::from_secs(5), "超时必须生效");
+        assert_group_gone(&pidfile);
+    }
+
+    /// 登录 shell 必须是自己会话的组长（getsid(pid) == pid、且不等于我们的会话）：
+    /// 这样它没有控制终端，从终端里起的 crewd 不会让交互 zsh 落进后台进程组被 SIGTTIN 停住。
+    /// 测试进程本身未必有控制终端，所以断言会话归属而不是「碰 tty 不会卡」。
+    #[tokio::test]
+    async fn login_shell_runs_as_leader_of_a_new_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let shell = script(
+            dir.path(),
+            "slow-shell",
+            &format!("echo $$ > {}; sleep 30", pidfile.display()),
+        );
+        let inspect = async {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let pid = loop {
+                if let Ok(text) = std::fs::read_to_string(&pidfile)
+                    && let Ok(raw) = text.trim().parse::<i32>()
+                {
+                    break rustix::process::Pid::from_raw(raw).unwrap();
+                }
+                assert!(Instant::now() < deadline, "脚本没写 pidfile");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            let session = rustix::process::getsid(Some(pid)).unwrap();
+            assert_eq!(session, pid, "shell 应是自己会话的组长");
+            assert_ne!(
+                session,
+                rustix::process::getsid(None).unwrap(),
+                "不能和 crewd 同一会话"
+            );
+        };
+        let (got, ()) = tokio::join!(login_shell_path(&shell, Duration::from_secs(1)), inspect);
+        assert_eq!(got, None);
         assert_group_gone(&pidfile);
     }
 
