@@ -71,6 +71,8 @@ impl AskAnsweredHook for NoAskHook {
 }
 
 pub trait QuotaSource: Send + Sync {
+    /// **必须便宜**：Core 在 actor 里直接 await 它（额度 health / 撞额度退出时），这段时间别的会话事件都在排队。
+    /// 要联网 / 读大文件的实现自己先算好缓存着，或在内部派生任务、限时返回（拿不到 = None → 45 分钟退避）。
     fn reset_at<'a>(&'a self, executor: &'a str, now: Ms) -> BoxFut<'a, Option<Ms>>;
 }
 

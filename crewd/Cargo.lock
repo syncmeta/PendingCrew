@@ -427,6 +427,7 @@ dependencies = [
  "crewd-term",
  "crewd-wake",
  "crewd-work",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

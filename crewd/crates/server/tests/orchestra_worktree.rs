@@ -143,13 +143,13 @@ fn fake_git(dir: &Path, body: &str) -> PathBuf {
     p
 }
 
-/// Task 6 评审 (2)：git 永不在终端上问凭据（`GIT_TERMINAL_PROMPT=0`），stdin 也不接。
+/// Task 6 评审 (2)：git 永不在终端上问凭据（`GIT_TERMINAL_PROMPT=0`；ssh 走 BatchMode），stdin 也不接。
 #[tokio::test]
 async fn git_runs_with_terminal_prompts_disabled_and_no_stdin() {
     let t = tempfile::tempdir().unwrap();
     let seen = t.path().join("seen");
     let body = format!(
-        "printf '%s|' \"$GIT_TERMINAL_PROMPT\" > '{0}'; if read -r line; then echo got-stdin >> '{0}'; fi; exit 1",
+        "printf '%s|%s|' \"$GIT_TERMINAL_PROMPT\" \"$GIT_SSH_COMMAND\" > '{0}'; if read -r line; then echo got-stdin >> '{0}'; fi; exit 1",
         seen.display()
     );
     let wt = GitWorktrees {
@@ -158,7 +158,10 @@ async fn git_runs_with_terminal_prompts_disabled_and_no_stdin() {
     };
     let e = wt.create(t.path(), "x").await.unwrap_err();
     assert!(e.contains("不是 git 仓库"), "{e}");
-    assert_eq!(std::fs::read_to_string(&seen).unwrap(), "0|");
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap(),
+        "0|ssh -oBatchMode=yes|"
+    );
 }
 
 /// Task 6 评审 (2)：卡住的 git（hook 挂住、网络盘）有期限：到点杀掉、回一个说得清的错，不无限等。
@@ -177,4 +180,36 @@ async fn a_hung_git_is_killed_at_the_deadline() {
         started.elapsed()
     );
     assert!(e.contains("超时"), "{e}");
+}
+
+/// 到点杀的是整个进程组：git 起的 hook / 子进程（这里是后台的 `sleep`）也一起没了，不留下拿着管道的孤儿。
+#[tokio::test]
+async fn the_deadline_kills_the_whole_process_group() {
+    let t = tempfile::tempdir().unwrap();
+    let pidfile = t.path().join("child.pid");
+    let body = format!(
+        "sleep 30 & echo $! > '{}'; exec sleep 30",
+        pidfile.display()
+    );
+    let wt = GitWorktrees {
+        program: fake_git(t.path(), &body),
+        timeout: Duration::from_millis(300),
+    };
+    let e = wt.create(t.path(), "x").await.unwrap_err();
+    assert!(e.contains("超时"), "{e}");
+    let pid: i32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // 被杀的孙进程由 init / launchd 收尸；收之前 kill(pid, 0) 仍会成功，所以等一会儿。
+    let gone = (0..200).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        !Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    });
+    assert!(gone, "后台子进程 {pid} 还活着");
 }

@@ -1,5 +1,6 @@
 //! 为 `isolation: true` 的 session 新建 git worktree（控制者裁定 C8，照 Swift 的 `SessionWorkspace` / `GitWorktreeService`）。
 //! 只建、永不删：删除是人的动作（crewd 不碰 `git worktree remove`，也不删分支）。
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -81,8 +82,11 @@ impl Git {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
-            // 要凭据（https 远端、子模块）时别在 serve 的终端上等人输入：直接失败。
+            // 要凭据（https 远端、子模块）时别在 serve 的终端上等人输入：直接失败。ssh 同理（不问口令 / 主机指纹）。
             .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+            // 自己一个进程组：到点连 git 起的 hook / ssh 一起杀，不留拿着管道的孤儿。
+            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -114,6 +118,7 @@ impl Git {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) if Instant::now() >= self.deadline => {
+                    kill_group(child.id());
                     let _ = child.kill();
                     let _ = child.wait();
                     // 读线程不等：git 的孙进程（hook）可能还拿着管道，等它们会把期限白费掉。
@@ -132,6 +137,23 @@ impl Git {
             stdout: out.join().unwrap_or_default(),
             stderr: err.join().unwrap_or_default(),
         })
+    }
+}
+
+/// 给 `process_group(0)` 起的那一组发 SIGKILL（pgid == 子进程 pid）。过一道闸：pgid <= 1 或就是 crewd 自己那一组，
+/// 一个信号都不发（同 M2b `kill_group_only`）。
+fn kill_group(pid: u32) {
+    let Ok(pgid) = i32::try_from(pid) else {
+        return;
+    };
+    // SAFETY: getpgrp / kill 只读写信号，不碰内存。
+    let own = unsafe { libc::getpgrp() };
+    if pgid <= 1 || pgid == own {
+        return;
+    }
+    // SAFETY: 同上；负的 pid = 发给整个进程组。
+    unsafe {
+        libc::kill(-pgid, libc::SIGKILL);
     }
 }
 
