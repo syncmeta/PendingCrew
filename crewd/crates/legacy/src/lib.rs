@@ -239,6 +239,11 @@ mod tests {
         assert_eq!(b.parent_ids, ["local-aaaa"]);
         let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
         assert!(chief.builtin);
+        assert_eq!(
+            list[0].captain_executor.as_deref(),
+            Some("claude"),
+            "captainAgentKind claude_code 导入为 captain_executor claude"
+        );
         assert_eq!(list[0].created_at, "2026-09-01T08:00:00.000Z");
 
         let ses = crewd_store::sessions::list_for_crew(store.conn(), "local-aaaa").unwrap();
@@ -254,7 +259,12 @@ mod tests {
         );
         assert_eq!(w.model.as_deref(), Some("gpt-5.6"));
         let old = ses.iter().find(|s| s.id == "worker-3333cccc").unwrap();
-        assert_eq!(old.agent_kind, "unknown");
+        assert_eq!(old.executor, "unknown");
+        assert_eq!(
+            cap.executor, "claude",
+            "claude_code 改名为 claude（spec §16）"
+        );
+        assert_eq!(w.executor, "codex");
 
         let extra_of = |id: &str| -> serde_json::Value {
             let s: Option<String> = store

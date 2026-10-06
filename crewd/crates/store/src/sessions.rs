@@ -5,9 +5,9 @@ use serde_json::Value;
 
 pub fn upsert(conn: &Connection, s: &Session, extra: Option<&Value>) -> Result<()> {
     conn.execute(
-        "INSERT INTO sessions(id,crew_id,role,agent_kind,agent_session_id,display_name,working_directory,model,effort,updated_at,extra)
+        "INSERT INTO sessions(id,crew_id,role,executor,agent_session_id,display_name,working_directory,model,effort,updated_at,extra)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
-         ON CONFLICT(id) DO UPDATE SET crew_id=excluded.crew_id, role=excluded.role, agent_kind=excluded.agent_kind,
+         ON CONFLICT(id) DO UPDATE SET crew_id=excluded.crew_id, role=excluded.role, executor=excluded.executor,
            agent_session_id=excluded.agent_session_id, display_name=excluded.display_name,
            working_directory=excluded.working_directory, model=excluded.model, effort=excluded.effort,
            updated_at=excluded.updated_at, extra=excluded.extra",
@@ -15,7 +15,7 @@ pub fn upsert(conn: &Connection, s: &Session, extra: Option<&Value>) -> Result<(
             s.id,
             s.crew_id,
             s.role,
-            s.agent_kind,
+            s.executor,
             s.agent_session_id,
             s.display_name,
             s.working_directory,
@@ -30,7 +30,7 @@ pub fn upsert(conn: &Connection, s: &Session, extra: Option<&Value>) -> Result<(
 
 pub fn list_for_crew(conn: &Connection, crew_id: &str) -> Result<Vec<Session>> {
     let mut stmt = conn.prepare(
-        "SELECT id,crew_id,role,agent_kind,agent_session_id,display_name,working_directory,model,effort,updated_at
+        "SELECT id,crew_id,role,executor,agent_session_id,display_name,working_directory,model,effort,updated_at
          FROM sessions WHERE crew_id=?1 ORDER BY id",
     )?;
     let rows = stmt
@@ -39,7 +39,7 @@ pub fn list_for_crew(conn: &Connection, crew_id: &str) -> Result<Vec<Session>> {
                 id: r.get(0)?,
                 crew_id: r.get(1)?,
                 role: r.get(2)?,
-                agent_kind: r.get(3)?,
+                executor: r.get(3)?,
                 agent_session_id: r.get(4)?,
                 display_name: r.get(5)?,
                 working_directory: r.get(6)?,

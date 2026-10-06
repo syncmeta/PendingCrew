@@ -5,10 +5,10 @@ use serde_json::Value;
 
 pub fn upsert(conn: &Connection, c: &Crew, extra: Option<&Value>) -> Result<()> {
     conn.execute(
-        "INSERT INTO crews(id,title,number,builtin,working_directory,captain_agent_kind,hidden_at,created_at,updated_at,extra)
+        "INSERT INTO crews(id,title,number,builtin,working_directory,captain_executor,hidden_at,created_at,updated_at,extra)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, number=excluded.number, builtin=excluded.builtin,
-           working_directory=excluded.working_directory, captain_agent_kind=excluded.captain_agent_kind,
+           working_directory=excluded.working_directory, captain_executor=excluded.captain_executor,
            hidden_at=excluded.hidden_at, updated_at=excluded.updated_at, extra=excluded.extra",
         params![
             c.id,
@@ -16,7 +16,7 @@ pub fn upsert(conn: &Connection, c: &Crew, extra: Option<&Value>) -> Result<()> 
             c.number,
             c.builtin,
             c.working_directory,
-            c.captain_agent_kind,
+            c.captain_executor,
             c.hidden_at,
             c.created_at,
             c.updated_at,
@@ -45,7 +45,7 @@ pub fn exists(conn: &Connection, id: &str) -> Result<bool> {
 /// 按编号升序（无编号的排最后），同号按创建时间。
 pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
     let mut stmt = conn.prepare(
-        "SELECT id,title,number,builtin,working_directory,captain_agent_kind,hidden_at,created_at,updated_at
+        "SELECT id,title,number,builtin,working_directory,captain_executor,hidden_at,created_at,updated_at
          FROM crews ORDER BY number IS NULL, number, created_at, id",
     )?;
     let mut crews = stmt
@@ -57,7 +57,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
                 builtin: r.get(3)?,
                 parent_ids: vec![],
                 working_directory: r.get(4)?,
-                captain_agent_kind: r.get(5)?,
+                captain_executor: r.get(5)?,
                 hidden_at: r.get(6)?,
                 created_at: r.get(7)?,
                 updated_at: r.get(8)?,

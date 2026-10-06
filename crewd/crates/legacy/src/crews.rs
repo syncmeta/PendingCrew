@@ -51,7 +51,10 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             builtin: c.is_builtin,
             parent_ids: vec![],
             working_directory: c.working_directory.clone(),
-            captain_agent_kind: c.captain_agent_kind.clone(),
+            captain_executor: c
+                .captain_agent_kind
+                .as_deref()
+                .map(crate::sessions::executor_of),
             hidden_at,
             created_at: norm_ts(cx, &c.created_at),
             updated_at: norm_ts(cx, &c.updated_at),

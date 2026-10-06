@@ -38,8 +38,17 @@ fn with_member_extra(mut extra: Map<String, Value>, m: Option<&LMember>) -> Map<
     extra
 }
 
+/// 旧版 runner 种类 → 执行器类型（spec §16）。只有 `claude_code` 改名；`codex`、`terminal`
+/// 以及认不出的原样保留。
+pub fn executor_of(kind: &str) -> String {
+    match kind {
+        "claude_code" => "claude".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// session = `agent-sessions.json` 的记录（同 id 取 updatedAt 最新）+ 机组成员表里的显示名；
-/// 只在成员表里出现、没有记录的，以 agent_kind="unknown" 入库。
+/// 只在成员表里出现、没有记录的，以 executor="unknown" 入库。
 pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_store::Result<()> {
     let path = cx.src.join("whiteboards").join("agent-sessions.json");
     let recs: Vec<LAgentSession> = read_rows(cx, &path)?;
@@ -80,7 +89,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
             id: r.session_id.clone(),
             crew_id: r.crew_id.clone(),
             role: role_of(&r.session_id),
-            agent_kind: r.kind.clone(),
+            executor: executor_of(&r.kind),
             agent_session_id: Some(r.agent_session_id.clone()),
             display_name: members
                 .get(r.session_id.as_str())
@@ -105,7 +114,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx, crews: &[ImportedCrew]) -> crewd_st
                 id: m.session_id.clone(),
                 crew_id: c.id.clone(),
                 role: role_of(&m.session_id),
-                agent_kind: "unknown".into(),
+                executor: "unknown".into(),
                 agent_session_id: None,
                 display_name: Some(m.display_name.clone()),
                 working_directory: None,
