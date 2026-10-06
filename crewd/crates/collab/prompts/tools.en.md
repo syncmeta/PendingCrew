@@ -390,11 +390,14 @@ There is no tool named {name}.
 Invalid arguments: {detail}
 
 ## trace.worker
-"{label}" stopped this turn on a question and is waiting for an answer:
+{label} stopped this turn on a question and is waiting for an answer:
 {question}
 Captain: inspect_session to see the state, nudge_session to answer for it; if you cannot decide, ask the human. (session: {session})
 
 ## trace.captain
-Captain "{label}" stopped this turn on a question and is waiting for your answer:
+{label} of {crew} stopped this turn on a question and is waiting for your answer:
 {question}
 Please open this session's terminal and reply. (session: {session})
+
+## trace.crew
+{title} (crew {number})
