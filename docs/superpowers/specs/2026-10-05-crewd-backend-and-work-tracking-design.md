@@ -63,7 +63,7 @@
 不做「crewd ↔ Swift 执行器」的桥（白写、双常驻进程）。crewd 独立开发到主路径对等后一次性切换；期间现有 Swift 版照用、只修 bug。
 - **M1 地基**：Rust workspace、SQLite 存储、旧 JSON 只读导入、客户端 API（Unix socket）+ 契约 schema。
 - **M2 执行器**：PTY（rustix-openpty 手写 + tokio，选型见 §18）+ alacritty_terminal 无头终端（屏幕文本、快照、对话框识别）、claude 启动参数与 hooks、codex app-server 客户端、孤儿回收、会话恢复（--resume）。
-- **M3 协作**：机组/白板/人类待确认/审批台账、`crewd mcp` 与 `crewd hook` 子命令、唤醒投递与准入。
+- **M3 协作**：机组/白板/人类待确认/审批台账、`crewd mcp` 与 `crewd hook` 子命令、唤醒投递与准入。细分见 §22（M3a 数据与 API → M3b agent 面 ∥ M3c 编排 → M4b）。
 - **M4 工作跟进**：两层 Todo、负责人、检查点、停下即检查、卡住拆分（§4–6、§9）。
 - **M5 Jev 调度**（§7）：先跑中文实测集定阈值。
 - **M6 行政处**（§8）。
@@ -389,3 +389,264 @@ PTY（Task 3）：
 - 真机冒烟测试的缺省目录、闸与退出等待（见上「真机核对」）；假 claude 限流用例的轮询窗口 2s → 10s（满载时更稳）。
 - 过期的文档注释（`Delivery::is_finished` / `submit_aborted`、`Core::flush_due_keys`）。
 - 修这一轮时的一次事故：`--prompt` 被拒的那条 CLI 测试第一版没带 `--claude <假的>`，在修之前的代码上跑时 crewd 接受了参数、去 PATH 里找到了真 claude、在临时目录（`/var/folders/…`，未被信任）里起了约 5 分钟，带着开场任务「秘密任务」等在信任框前；按 pid 给 crewd 发 SIGTERM 正常停掉。`~/.claude/projects` 里没有那个会话号的日志（正文没被提交）；claude 可能在 `~/.claude.json` 里给那个临时路径记了一条 project 记录，未动。该测试已改为一定带假 claude。
+
+## 22. M3 细分：M3a 数据与 API → M3b agent 面 ∥ M3c 编排（2026-10-06 设计，未实现）
+
+> 基准：`crewd-m2b@b5a65b0`。M4a 读自 worktree 分支 `worktree-agent-ae8cbb53a573831e1`（其 §19），M5a 读自 `agent-a71a65945df7d496b`（其 §20）；本文件里 §19–§21 暂缺，合并后补上。Swift 路径相对仓库根。
+
+### 22.1 切分与次序
+```
+M2b ─┐
+M4a ─┴─> M3a 数据与 API ─┬─> M3b agent 面（crewd mcp / crewd hook / 工具 / 世界观）─┐
+                         └─> M3c 编排（会话管理 / 唤醒 / 准入 / 重启恢复）─────────┴─> M3 集成验收 ─> M4b
+M2c ──（可选：codex 经 M3c 的 Executor trait 接入，未合前 codex 起不来）
+```
+- M3a 先独立落 main，把 M3b / M3c 共享的类型、表、trait 定死（§22.5）。之后两者各开 worktree 并行，按 §22.5 的文件归属互不改对方文件。
+- **v3 是 M3 唯一一次迁移**：M3a 一次建齐 M3b / M3c 要的表。M3b / M3c 不加迁移；缺字段 → 改 M3a 的 v3（M3 合并前 v3 未发布，可改），后合者重跑迁移测试。
+- M4a（纯 crate，无冲突）必须先合 main：M3 的人类待确认用它的 `open_ask` 发 H 号（§19 Q1：工作账本是唯一发号处）。§17 末段写的「M3 schema v2」作废——v2 已被 M2b 用掉，群相关表进 v3。
+
+### 22.2 M3a 数据与 API
+
+目标
+- schema v3（下）+ 迁移；store 搬到专用线程的 `Db` actor（§14 / §18 遗留：RPC 在 tokio 线程上同步调 SQLite）。
+- 新 crate `crewd-collab`（同步、不碰 tokio、时间由调用方传）：群、成员、发消息（校验 + 解析 @ + 落库 + 发事件）、游标、红标、机组 DAG、人类待确认（经 crewd-work）、审批台账、唤醒入队。M3b / M3c 只经它写协作数据。
+- 客户端 RPC + 事件（下）；契约整理到能给 Swift 生成代码（§14 遗留：typed result / event、params `deny_unknown_fields`、枚举不再是自由字符串）。
+- `collab::render`：给 agent 看的消息渲染（注入块 / 唤醒正文）。文字放 `crates/collab/prompts/render.{zh,en}.md`，沿用 jev 的格式（`include_str!` + `## 节名`，节缺失测试钉住），代码里没有提示词字面量。
+
+非目标：不起进程、不决定谁醒（只提供入队）、不实现 MCP、不写世界观文案、不把旧人类账迁成 H 号（与 §10 迁移一起归 M4b）、不做私有群（Q3）。
+
+schema v3（`schema.rs` 加 `V3`，`SCHEMA_VERSION = 3`）
+```
+channels(id TEXT PK, crew_id → crews, kind CHECK(lobby|human|topic|dm), name, purpose,
+         created_by TEXT('human'|'system'|<session id>), created_at, archived_at)
+  UNIQUE INDEX ON channels(crew_id) WHERE kind='lobby'；human 同样一机组至多一个
+channel_members(channel_id → channels, member_kind CHECK(session|human), member_id,
+         joined_at, left_at, PK(channel_id, member_kind, member_id))
+channel_watch(channel_id PK → channels, since)                  -- 人类「我在注视」
+messages   重建：v2 全部列，crew_id 换成 channel_id → channels；seq / id 原样搬；INDEX(channel_id, seq)
+read_cursors(reader TEXT('human' | <session id>), channel_id, seq, updated_at, PK(reader, channel_id))
+listens(session_id, channel_id, until, senders JSON, PK(session_id, channel_id))
+wakes(id INTEGER PK, session_id, kind CHECK(message|timer|ask_answer|restart|system|checkpoint|stop_check),
+      source TEXT, priority CHECK(human|system|auto), not_before, note,
+      state CHECK(pending|inflight|delivered|dropped), attempts, last_error, created_at, settled_at,
+      UNIQUE(session_id, kind, source))
+wake_latches(scope CHECK(session|crew|machine), id, reason, at, PK(scope, id))
+approvals(id PK, session_id, crew_id, tool_name, summary, tool_use_id, requested_at,
+          decision CHECK(allow|deny) NULL, decided_at, decided_by)
+work_books(crew_id PK → crews, state JSON, updated_at)          -- crewd-work 的整份 BookState
+ask_meta(crew_id, ask TEXT('H<n>'), resume_note, message_id, PK(crew_id, ask))
+sessions += title, brief, desired CHECK(running|stopped) DEFAULT 'stopped', was_working INTEGER,
+            last_active_at, awaiting_question, resume_failed_at, worktree
+crews    += title_source, status_line, policy
+```
+`checkpoint` / `stop_check` 两种 kind 是给 M4b 留的，M3 里没有写者。
+
+迁移
+- 每个机组建大厅，`id = '<crew_id>/lobby'`（确定性，测试可断言）；旧消息全部归到所属机组大厅。
+- 人类群**懒建**：`'<root_crew_id>/human'`，在第一次有人往根机组人类群发言、或客户端 `channel.list` 列到根机组时建。
+- 游标全部钉在迁移那一刻各群的末尾（每个 session 钉自己机组的大厅，human 钉每个群）：**迁移不产生任何未读、红标或唤醒**（#595 全机重放的教训）。代价是旧的 @人类 不再亮，接受。
+- 导入的 session 一律 `desired='stopped'`；`extra` JSON 不解析。
+
+群规则 [推]
+- 大厅成员 = 本机组全部 session + 人类，**隐式**，不写 channel_members。人类群成员 = 人类 + 根机组机长（隐式）+ 显式行。topic / dm 全部显式。
+- 只有成员能发言。例外：往根机组人类群发言自动入群（人回话时它才在群里）。dm 恰好两个 session、不能加人，归属发起者的机组。
+- 跨机组成员：`channel.list(crewId)` 返回归属该机组的群 ∪ 有成员 session 属于该机组的群（§17「同时显示在每个成员所在机组下」）。
+- 已归档的群拒收消息，可以解档。
+- @ 在发送时解析成具体目标落库：`captain` → 群归属机组当时的机长 session id（写进 targetId，事后换机长不改历史）；`reply_to` 自动追加 `[broadcast, 被回复者]`（同 main 7af98b6）；目标不是群成员 → 拒，回执列出成员。
+- §17 的待细化项：不做话题 / 回复串，用 `in_reply_to`；子机组保留，只剩「独立工作目录 / 独立机长」两个用途。
+
+红标与未读 [推]：不建表，按游标派生。某群 @人类红标数 = 该群 `seq > human 游标` 且 mentions 含 human 的消息数；`read.mark` 推进 human 游标，红标就消。Mac / iOS 共用同一个 human 游标。
+
+根机组：`collab::root_of(crew)` = 没有父边的祖先里 created_at 最早的（§13 Q1）。根机组被收编后，它的人类群自动归档（消息保留）；它账本上的 H 号不动，改在新根的人类群里展示 [推]。
+
+机组 DAG（移植 `LocalCrewStore.swift:356 attachParent`、`:501 adopt`、`:526 release`）：禁环（含自己挂自己）；内建机组（`builtin`）既不能被收编也不能收编别人；只能 release 直系子；release 带 `to` 时先挂新边、再摘旧边，失败不留副作用；能新建子机组、父机组；只能删非内建、且没有 `desired=running` session 的机组。号码规则照 `CrewDirectory.swift:8-13`（终身不变、不回收、分机 1 = 机长）。
+
+人类待确认（H 号）
+- `collab::asks`：每个机组一本 `crewd_work::WorkBook`，整份 `BookState` 存 `work_books`（M4a 定的持久化边界），每条命令在一个 SQLite 事务里读、改、写。M3 只用 `open_ask / answer_ask / apply_default`，外加 M3a 给 crewd-work 补的 `withdraw_ask(by, now, ask, reason)`（提问者 / 机长 / 人可撤；`AskState::Withdrawn{reason, at}`；问还卡着活项时拒绝）。
+- 开问时在同一事务里往根机组人类群发一条 @human 消息，`ask_meta` 记下这条消息的 id 和 resume_note。
+- 权限审批不发 H 号 [推]：它是同步闸，随这次工具调用失效，不是工作卡点。写进 `approvals`，并在人类群发一条通知。
+
+客户端 RPC（`crewd_proto::methods`；`whiteboard.*` 直接删，不留别名）
+| 方法 | params | result |
+|---|---|---|
+| crew.list / crew.get | — / {crewId} | Crew[] / CrewDetail（含 channels、sessions、rootId）|
+| crew.create | {title, workingDirectory, parentId?} | Crew |
+| crew.update | {crewId, title?, workingDirectory?, hidden?, statusLine?} | Crew |
+| crew.adopt / crew.release / crew.delete | {crewId, parentId} / {crewId, fromParentId, toParentId?} / {crewId} | Crew / Crew / {} |
+| channel.list | {crewId} | ChannelSummary[]（群 + 成员 + watched + unreadForHuman + humanMentions）|
+| channel.create | {crewId, kind: topic 或 dm, name, purpose?, members: MemberRef[]} | Channel |
+| channel.update | {channelId, name?, purpose?, archived?} | Channel |
+| channel.addMembers / channel.removeMember | {channelId, members} / {channelId, member} | Channel |
+| channel.watch | {channelId, on} | ChannelSummary |
+| message.list | {channelId, afterSeq?, beforeSeq?, limit?} | Message[] |
+| message.post | {channelId, text, inReplyTo?, mentions?, attachments?} | Message（发送者 = 人）|
+| message.search | {query, crewId?, channelIds?, after?, before?, limit?} | Message[] |
+| read.mark | {channelId, seq} | ChannelSummary |
+| session.list / session.get | {crewId?} / {sessionId} | Session[] / Session |
+| ask.list / ask.answer / ask.withdraw | {rootCrewId?} / {crewId, ask, text} / {crewId, ask, reason} | HumanWait[] / Ask / Ask |
+| approval.list / approval.decide | {} / {id, allow} | Approval[] / Approval |
+| directory.list | {query?} | DirectoryRow[] |
+| todo.list | 不变 | 不变 |
+
+事件（主题 = 事件名第一段）：`message.appended`(Message)、`channel.changed`(ChannelSummary)、`crew.changed`(Crew)、`crew.removed`({crewId})、`badge.changed`({channelId, unreadForHuman, humanMentions})、`ask.changed`(Ask)、`approval.changed`(Approval)、`session.changed`(SessionLive，由 M3c 发)、`events.lagged`。`Message.crewId` 换成 `channelId`，不保留两个字段。M2d 与 iOS 只用这一套；iOS 的远程传输仍按 Q11。
+
+验收
+- 真实数据只读演练（照 M1 的做法，在副本上跑）：v2→v3 前后消息条数与 seq 集合一致；每个机组恰好一个大厅；迁移后 human 红标为 0、每个 session 未读为 0；再跑一遍迁移没有变化。
+- 群规则每条一个测试：成员资格、dm 只能两人、归档后拒收、人类群自动入群、captain 解析落库、reply_to 追加、跨机组显示。
+- DAG：成环 / 自挂 / 内建 / release 非直系子 / release-to 失败不留副作用，每条先写会红的测试。
+- H 号：开问后重开库仍在、号连续；与 M4b 将来 block 开的问共用一个计数（直接断言 `WorkBook` 状态）；只有不卡活项时才能撤回。
+- 契约：`crewd schema` 漂移测试；全部 params `deny_unknown_fields`；`crewd rpc` 能驱动全部方法。
+- Db 线程：一条慢查询进行中，另一个连接的 `system.hello` 照常返回（有测试）。
+
+### 22.3 M3b agent 面
+
+目标
+- `crewd mcp`：stdio MCP server，用官方 Rust SDK **rmcp 3.5.x**（2026-10-06 查 crates.io：最新 3.5.1，2026-10-05 发布，仓库 modelcontextprotocol/rust-sdk；features 用 `server` + `transport-io`，入口 `rmcp::transport::io::stdio()`）。工具表来自 crewd，所以**不用 `#[tool]` 宏**，手写 `ServerHandler::list_tools / call_tool`。helper 只是一根哑管道：连 `crewd.sock` → `agent.attach` → 原样转发。业务全在 serve 里（唯一写者，角色是当下的事实）。
+- `crewd hook <post-tool-use|pre-tool-use|stop>`：读 stdin JSON → `agent.hook` → 把返回的 stdout 原样打印，exit 0。
+- 工具实现在 serve 的 `server::agent::*`；描述文字在 `crates/collab/prompts/tools.{zh,en}.md`，每个工具一节。
+- 世界观：`crates/collab/prompts/world-model.{zh,en}.md`，由 `collab::worldview::render(&WorldCtx) -> String` 渲染（变量照 `LocalSessionWorldModel.swift:73-90`）。claude 走 `--append-system-prompt-file`（M2b 已有通路），codex 走 `developerInstructions`（M2c）。内容按 §17 重写：机组与群的模型；只装自己所在群的消息；不能默认人类在看；注视规则；在没人注视的群 @人类 = 对方开着免打扰时叫他；删掉 plan / continue_work / sweep 那几段。
+- `collab::turn_trace`：移植 `SessionTurnTrace.swift`。Stop 时停在一个没叫到人的问句上 → 代发一条：worker 在所在机组大厅 @机长，机长在根机组人类群 @人（`:21-26`，绝不 @ 自己）；按 prompt_id 去重；**永不阻塞**（`McpTurnHook.swift:13`）。同时写 `sessions.awaiting_question`。
+
+非目标：不起 / 停进程（经 `SessionControl` 调 M3c）；不决定谁醒（只入队，交 M3c）；不加 UserPromptSubmit（M4b）；不接 Jev。
+
+身份 [推]
+- helper 命令行只留 `--data-dir D --session S --token-file F`。去掉 `--crew --captain --label --structured-post --agent --gate`：机组、角色、显示名在会话中途会变（换机长），写死在 argv 里会过期，改成每次调用时 serve 现查。
+- token：M3c 起会话时用 `TokenTable::mint(session)` 生成，经 `CommsSpec.token` 交给 `prepare_claude`，写成 `<launch dir>/agent-token`（0600，随 LaunchFiles 一起删）；helper 读这个文件、`agent.attach{sessionId, token}`。用途是防串号（配错、复用旧配置），不是挡 agent 本身。token 只存在内存里：crewd 重启时旧进程已经跟着死了。
+- 改 `crewd-exec::launch`：`CommsSpec { helper, data_dir, session_id, token, hooks }`，`HelperCommands` 按上面拼，hooks 默认开。pre-tool-use 那条 hook 写显式 `timeout`（比审批等待上限长）。**实现前查官方 hooks 文档，核对字段名与默认超时。**
+
+agent RPC（只有 attach 过的连接能调；没 attach 的调 → -32601）
+- `agent.attach {sessionId, token}` → `{role, crewId, label}`
+- `agent.tools {}` → `ToolDef[]`（按当下角色给）
+- `agent.call {tool, args}` → `{text, isError}`（每次现查角色；越权 → isError 并说明原因，不看工具表）
+- `agent.hook {event, payload}` → `{stdout?}`（pre-tool-use 可以长轮询到审批有结果）
+- 角色变了：serve 在 attach 的连接上推 `agent.tools_changed`，helper 转成 `notifications/tools/list_changed`。客户端不理会也没关系，调用时还会现查。
+
+hook 行为
+- post-tool-use：把本 session 所在的群（大厅 + 显式成员群 + 正在收听的群）里游标之后的未读渲染成 `hookSpecificOutput.additionalContext`。可见性移植 `CrewWhiteboardVisibility.swift:48`：只有 session / captain 收窄可见范围，human 不收窄，broadcast 放宽，自己发的永远可见。注入后推进游标；这个游标与唤醒共用，一条消息对一个 session 至多注入一次（`HookEmitter.swift:166-221`）。
+- pre-tool-use：tool_name 命中 `approval_gates`（serve 的配置，默认 `["computer-use"]`）→ 建审批、在人类群发通知、等结果（最多 30min，到点 deny）；没命中 → 不输出。连不上 crewd 时：命中的 **deny**，没命中的照常。
+- stop：调 `turn_trace`；连不上 crewd → 什么都不做（宁可漏一次）。
+- 任何失败都写 stderr，绝不输出坏 JSON。
+
+工具表（Swift 源：`Sources/Mcp/McpServer.swift:190-740`；C = 机长专用）
+| crewd 工具 | 来源 | 变化 |
+|---|---|---|
+| post(channel?, message 或 messages[≤6], mentions?, reply_to?, category?) | post_to_crew | 加 channel（缺省：有 reply_to 就发到那条所在的群，否则发本机组大厅）；删 plan / todo / todo_status / todo_reference / evidence* / headline / audience / crew_status；在没人注视的群 @人类 时，回执写明 §17 那句免打扰提示 |
+| read_channel(channel?, limit?, before?) | read_whiteboard | 读到最新一条时推进游标 |
+| search(query, channel?, after?, before?, limit?) | search_whiteboard | 范围限自己是成员的群 |
+| list_channels() / human_watching() | 新 | 后者返回人类正在注视的群 + 根机组人类群 |
+| channel_create(name, purpose, members[], kind?) / channel_invite(channel, members[]) / channel_leave(channel) / channel_archive(channel) | 新 | 归档：建群者或机长 |
+| directory(query?) | directory | 加上群 |
+| contact(to, message) | contact | 语法糖：`7` → 7 号机组大厅 @它的机长；`7-3` → 与该 session 的 dm（没有就建） |
+| ask(question, resume_note?, fallback_after_minutes?, fallback?) | ask + add_human_todo | 用 open_ask 发 H 号，不阻塞；fallback → DefaultOption |
+| withdraw_ask(ask, reason) | withdraw_human_todo | 原来的 supersedes = 撤旧问 + 开新问 |
+| respond_todo(number, response) | respond_todo | 去掉 status / evidence（§9）|
+| get_quota / schedule_wakeup(after_minutes 或 at, note) / listen(channel?, minutes?, senders?, off?) / set_session_profile(model?, effort?) | 同名 | schedule_wakeup 入 `wakes(kind=timer)`，持久化；listen 按群 |
+| C rename_crew / change_workdir / set_crew_status(text) / read_delegation_policy / update_delegation_policy | 同名；set_crew_status 是从 post 的 crew_status 拆出来的 | |
+| C start_session / stop_session / inspect_session / nudge_session / list_sessions / handoff_captain_to_session / create_and_handoff_captain | 同名 | 经 `SessionControl` |
+| C report_to_parent / message_child_crew | 同名 | 语法糖：发到父 / 子机组大厅并 @它的机长 |
+| C adopt_crew / release_crew / create_parent_crew / adopt_parent / create_child_crew | 同名 | create_child_crew = collab 建组 + `SessionControl::start` 起子机长 |
+| 删 | continue_work / confirm_todo_sweep / plan_add / plan_update / plan_list | 由 M4 取代（§9）|
+| 删（Q4） | raise_attention / clear_attention / crew_ordering_signals / arrange_crews | 由 @人类红标与 M5 紧急度排序取代 |
+
+内建总机组上不列 ask / respond_todo（同 `McpServer.swift:745-753`），调用时再拒一次。
+
+验收
+- 假 claude（真 PTY）+ 真 helper：机长和 worker 拿到的工具表不同；worker 调机长专用工具被拒；中途换机长后不用重启就生效。
+- 注入：@ 了别人的不进，@人类的进，broadcast 放宽，非成员群的不进；hook 与唤醒交错时每条消息至多一次。
+- pre-tool-use：命中 → 出现审批，`approval.decide` 之后放行或拒绝；serve 停掉时命中的工具被 deny。
+- stop：同一个 prompt_id 只代发一次；已经 @ 过机长 / 人的不代发。
+- token 错或没 attach 时调 agent.* → 拒绝。
+- 提示词：测试断言 `server::agent` 与 `collab` 的源码里没有工具描述 / 世界观字面量（照 jev 的节齐全测试），zh / en 两份的节名集合一致。
+- 真 claude 冒烟一次（人点头后跑）：rmcp 握手、tools/list、一次 post、一次 PostToolUse 注入。
+
+### 22.4 M3c 编排
+
+目标：serve 里的会话管理 + 唤醒。跟时间有关的判定写成 sans-IO（新 crate `crewd-wake`：规划、准入、队列选取，时间由调用方传，同 M4a 的风格）；IO 部分在 `server::orchestra`。
+
+会话管理 `server::orchestra::Sessions`（实现 M3a 定的 `SessionControl`）
+- 持有全部会话句柄与 `ProcessRegistry`。**一个 crewd session 同时只能有一个进程**（§18 遗留：按 session id 加锁，第二次 start 回 `AlreadyRunning`）；登记表同号覆盖的问题一并解决。
+- 执行器抽象：`trait Executor`（启动返回 `(Box<dyn ExecHandle>, 事件流)`），`ExecHandle` = §13 Q12 的窄接口（send / raw / stop / status / screen_text / snapshot）。claude 用 M2b 的实现；codex 等 M2c，合进来之前 `start` 对 codex 回 `Unsupported`。
+- 起会话：渲染世界观（`collab::worldview::render`）、mint token、填 `CommsSpec`、写 sessions 行（保留 agent_session_id，§18 遗留）、`desired='running'`。
+- 会话事件 → `session.changed`：Spawned / Working / Health / Decision / Exited；同时落 `last_active_at`、`was_working`。Decision 在群里渲染（§15：「SessionDecisionNotice 归 M3」，按 numbered 分叉，不编造编号）。ResumeRefused → 群里发系统消息（§18 遗留的诊断文案）。
+- 额度用尽：按 health 给的重置时刻入队 `wakes(kind=system, source='quota:<ts>')`，到点先 `clear_quota_health` 再投递。
+- 全机并发上限 `max_live_sessions`（Q5）：超了，需要拉起会话的唤醒留在 pending。
+
+唤醒规划：`crewd_wake::plan(msg, ctx) -> Vec<WakeTarget>`（纯函数；ctx = 群成员、各成员角色、收听表、now）
+- 只在群成员里选（§17）。自己发的不叫自己。超过 6h 的消息不叫（`CrewLocalMentionWakeLogic.swift:53`）。
+- @session / @captain（发送时已解析成 session id）→ 叫目标。broadcast / human 不叫任何人（`:74`）。
+- 人发、没有 @：先问 `Arbiter`（M5b 挂 Jev；M3 的默认实现返回 None）；None 时按规则：大厅 / 人类群 → 机长；dm → 另一方；topic → Q2。
+- 正在收听的 session：在 listen 窗口内、发送者匹配 → 叫。
+- system 发的消息照样参与唤醒，但不做回执判定。
+- 优先级：人发的 → human；system 发的与计时 → system；session 发的 → auto。
+
+队列 `wakes`（持久化，取代只在内存里的 `CrewDeferredWakeQueue`）
+- 入队存来源身份，不存渲染好的正文（`CrewDeferredWakeQueue.swift:13`），出队时现渲染；靠 `UNIQUE(session, kind, source)` 去重。
+- 在 idle 边沿（`SessionEvent::Working(false)`）和计时到点时调度：取该 session 已到期的 pending，**只取最高一档优先级、合并成一次投递**（上限 10 条 / 8KB，剩下的等下一个 idle）[推]。Swift 是一次一条（`:50`）；合并能少转几轮空转，也减轻限流压力。
+- 投递前过滤掉已注入的：消息类唤醒若游标已越过它（目标忙时 hook 已经注入过）→ 直接记 `delivered`（`CrewSessionRunner.swift:479`）。
+- 目标在干活 → 不投，等 idle（claude 忙时 hook 会把未读带进去）。目标没在跑 → 用 `--resume` 拉起，以唤醒正文开场（`CrewLocalMentionWaker.swift:20-21`），受 max_live 约束。
+- 投出去记 `inflight`；收到 `Delivery::Delivered` 才记 `delivered` 并推进游标。失败退避重试，连续 3 次失败 → 在本机组大厅发系统消息 @机长。
+- 重启时 `inflight` 退回 `pending`；消息类重投前先查游标，防重放。
+
+准入 `crewd_wake::Admission`（移植 `AutomaticWakeAdmission.swift:247-330`；滑窗放内存，熔断落 `wake_latches`）
+- auto：全机 12 次/分、单 session 2 次/分、单机组 5 次/分；同源冷却；持续失败或已受理的唤醒被重放 → 熔断该 session（只有人能从客户端用 `admission.recover` 解）。
+- system：只受全机滑窗约束。
+- **human：永不拒绝、永不排队、不受熔断**，但计入滑窗。这修掉 `:300` 那个 bug：全机滑窗满了连人类唤醒也被挡。
+- 被拒 = 留在 pending（背压），不是丢掉。
+
+idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺序：
+1. 到期唤醒合并投递（见上）；投了就结束这次边沿。
+2. `IdleHook::on_idle(session, now) -> Option<WakeRequest>`：M4b 的「停下即检查」挂在这里；M3 的默认实现返回 None。
+3. 到此为止。删掉：机长 60s 检查点定时器（`:608`）、continue_work 租约、孤儿租约复核、Todo sweep 提醒（`:576`）——都由 M4a 取代。
+
+重启恢复
+- serve 启动：回收孤儿 → 把 `desired='running'` 的 session 依次 `--resume`（错开时间，受上限约束，见 Q1）；`was_working=1` 的再补一条 system 唤醒：「crewd 重启打断了上一轮，先核对状态再继续」。
+- resume 失败（续跑被拒、换新号也起不来，或根本起不来）→ 写 `resume_failed_at`，并在大厅 @机长。M4b 的 `reassign_lost(unrecoverable)` 只认这一列（§19：这份名单只能来自 crewd 自己的恢复失败记录）。
+- 计时类唤醒（schedule_wakeup、额度重置）都存在 `wakes.not_before` 里，重启不会丢；serve 只用一个定时任务，按最早的 not_before 醒。
+
+问被回答：`ask.answer` 回答的是 `open_ask` 直接开的问 → 给提问者入队 `wakes(kind=ask_answer, source='H<n>', priority=human)`，正文带上问题、答复和 resume_note（§19 留给 M4b 的这一条，M3 里就做）。提问者已无法恢复 → 叫它所在机组的机长转达。卡住类问被回答后的叫醒（BlockerCleared）归 M4b。
+
+客户端 RPC（M3c 新增）：`session.start {crewId, role, executor, brief, title?, model?, effort?, worktree?}`、`session.stop {sessionId, reason}`、`session.resume {sessionId}`、`session.live {sessionId}` → SessionLive（working / health / pendingDecision / awaitingQuestion）、`crew.setCaptain {crewId, sessionId}`、`wake.list {sessionId?}`（排障用）、`admission.recover {scope, id}`（只有客户端能调，agent 没有这个入口）。事件：`session.changed`、`wake.changed`（主题 wake，排障用）。
+
+验收
+- `crewd-wake` 纯测试：plan 表驱动，上面每条规则一例；admission：全机滑窗满时 human 照放、auto 留 pending 且窗口过后放行、熔断不挡 human；合并时只取最高一档。
+- 假 claude 端到端：机长 @worker → worker 醒，回 @机长 → 机长醒；worker 忙时 @它 → hook 注入，idle 后不重投；@ 一个已停的 session → 它被 `--resume` 拉起。
+- kill -9 serve：重启后 pending / inflight 的唤醒和 schedule_wakeup 各恰好投一次；`desired=running` 的 session 被接回；`was_working` 的收到被打断的提示。
+- 对同一 session 并发 `session.start` → 第二个被拒，只有一个进程。
+- `ask.answer` → 提问者被叫醒，正文里有 resume_note。
+
+### 22.5 M3a 定死、M3b / M3c 共享的接口
+| 接口 | 定义处（M3a 落地） | 写者 | 读者 |
+|---|---|---|---|
+| schema v3 全部表 | `crewd-store` | M3a | 全部 |
+| `Db`：专用线程 actor，`db.call(\|s: &mut Store\| ..).await` | `crewd-store` | M3a | 全部 |
+| `Collab`：post_message / channels / members / 游标（`unread_for(session) -> Vec<(ChannelId, Vec<Message>)>`、`advance(session, channel, seq)`）/ 机组 DAG / asks / approvals / `enqueue_wake(WakeRequest)` | `crewd-collab` | M3a | M3b、M3c |
+| `render::injection(..)`、`render::wake_text(&WakeBatch)`（文字在 prompts/render.*.md） | `crewd-collab` | M3a | M3b（hook）、M3c（唤醒、codex additionalContext） |
+| `CollabEvent`（`MessageAppended{seq, channel_id}`、`AskAnswered{crew, ask}` …），经 `Hub` 发出 | `crewd-server::hub` | M3a | M3c 订阅 |
+| `WakeRequest{session, kind, source, priority, not_before, note}` | `crewd-collab` | M3b（timer）、M3a（ask_answer）、M4b（checkpoint / stop_check） | M3c |
+| `TokenTable{mint, verify}` | `crewd-server` | M3c（mint） | M3b（verify） |
+| `trait SessionControl`（start / stop / nudge / inspect / set_profile / quota / live；方法返回 `BoxFuture`，可做 dyn）+ `FakeSessionControl` | `crewd-server` | M3c 实现 | M3b 的工具、M3a 的 RPC |
+| `CommsSpec{helper, data_dir, session_id, token, hooks}` | `crewd-exec::launch` | M3b 改 | M3c 填 |
+| `worldview::render(&WorldCtx) -> String`、`turn_trace::on_turn_end(session, prompt_id, last_text)` 的签名 | `crewd-collab`（M3a 先放 stub） | M3b 实现 | M3c 调 |
+
+文件归属：M3b 只改 `crates/crewd/src/{mcp_cmd,hook_cmd}.rs`、`server/src/agent/`、`collab/src/{worldview,turn_trace}.rs`、`collab/prompts/{world-model,tools}.*`、`exec/src/launch.rs` 的 `CommsSpec` / `HelperCommands`。M3c 只改 `crates/wake/`、`server/src/orchestra/`，以及 `server/src/lib.rs` 里 serve 启动那一段。两边都要加的 `proto` 方法常量各写在自己的 `mod` 段；契约 json 由后合者重新生成，不挑边合并（pbxproj 的教训）。
+
+### 22.6 M4b 的位置与 M3 留的口
+M4b 在 M3b 与 M3c 都合进 main、M3 集成验收通过后再开工。M3 交付时必须已经有：
+- `work_books` 表与按机组读、改、写 BookState 的事务（M3a）；M4b 只需加事件日志表（v4）和工作项命令。
+- H 号的唯一发号处已经是 `open_ask`（M3 的 ask 在用）；M4b 的 `work_item_block` 开新问时共用它。
+- `agent.call` 的分发与 `prompts/tools.*.md`：M4b 加 §9 的工具，只需加节和 handler。
+- `crewd hook` 的子命令表留了扩展位：M4b 加 `user-prompt-submit`（§4.3），`HookEvent` 加一个枚举值。
+- `IdleHook`（停下即检查）、`WakeKind::{checkpoint, stop_check}` 与对应的渲染节、按 `not_before` 触发的计时器（检查点不另起定时器）。
+- `ContextExtras` 口：codex 的 `additionalContext` 按 key 组装（M3c 做），M4b 在这里注册 `my_work_items`。
+- `sessions.resume_failed_at`：`reassign_lost` 唯一的名单来源。
+- 卡住类问被回答后的 BlockerCleared 叫醒：M3c 在 `ask.answer` 里留一个回调点，M4b 在那里按事件叫醒负责人。
+
+M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §20）。
+
+### 22.7 决定与待人拍板
+本节标 **[推]** 的都是我自己定的：v3 一次建齐；大厅用确定性 id；迁移不产生未读 / 红标；红标按游标派生；@ 在发送时解析；审批不发 H 号；helper 不带角色参数、改用 token 文件；工具文字放 md；合并投递；收听按群；人类群懒建、被收编即归档。
+- **Q1 重启后接回哪些 session**：推荐接回全部 `desired=running` 的（错开时间、受上限约束），被打断的补一条提示。另一个选项是懒接回（被叫到才 `--resume`）：省资源，但机组看上去会全停着。
+- **Q2 人在 topic 群里不 @ 任何人发言时叫谁（Jev 接入之前的规则）**：推荐群里 session 不超过 3 个就全叫；超过 3 个，叫群归属机组的机长（机长在群里时），否则叫建群者。
+- **Q3 私有群**：推荐 v1 不做。机组里的群对本机组成员和人类都可读；只有成员会被注入、被叫醒。
+- **Q4 删掉 raise_attention / clear_attention / crew_ordering_signals / arrange_crews**：推荐删，由 @人类红标和 M5 的紧急度排序取代。
+- **Q5 全机并发会话上限 max_live_sessions**：推荐默认 10，设置页可改；它只挡「拉起会话」，不挡给已在跑的会话投递。
