@@ -3,7 +3,7 @@
 use crate::prompts::{fill, render_file};
 use crate::wakes::{WakeKind, WakeRow};
 use crate::{CollabError, Locale, Result, asks, channels, crews, cursors, sessions};
-use crewd_proto::{AskStateView, ChannelKind, Message, SenderKind};
+use crewd_proto::{AskStateView, ChannelKind, MemberRef, Message, SenderKind};
 use rusqlite::Connection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +148,14 @@ fn target_label(conn: &Connection, l: Locale, id: &str) -> Result<String> {
             session_label(l, captain, &sessions::name_of(&s), s.ext)
         }
         None => session_label(l, false, id, None),
+    })
+}
+
+/// 一个群成员的标签：人 = 人类标签，session = `target_label`（同发言者标签的规则；机长按此刻的机长指针）。
+pub(crate) fn member_label(conn: &Connection, l: Locale, m: &MemberRef) -> Result<String> {
+    Ok(match m {
+        MemberRef::Human => render_file(l).get("sender.human").to_string(),
+        MemberRef::Session { id } => target_label(conn, l, id)?,
     })
 }
 

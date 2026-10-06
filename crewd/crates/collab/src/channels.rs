@@ -1,5 +1,5 @@
 //! 群（spec §17、§22.2「群规则」、§22.7 Q2 群主）。成员判定、群主、人类群懒建都只在这里写一次。
-use crate::{Change, CollabError, Result, Sender, Tx, crews, cursors, sessions};
+use crate::{Change, CollabError, Locale, Result, Sender, Tx, crews, cursors, sessions};
 use crewd_proto::{Channel, ChannelKind, ChannelSummary, MemberRef};
 use crewd_store::channels::{human_id, lobby_id};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -121,6 +121,34 @@ pub fn members(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
     let mut seen = std::collections::BTreeSet::new();
     out.retain(|m| seen.insert(m.clone()));
     Ok(out)
+}
+
+/// 群在列表 / 读取面上的显示名（M3b 的 read_channel / search 等用，**不含**注入头里的 LLM 文案）。
+/// - dm：**对方**的标签（与发言者标签同规则：机长 / 分机号 / 人类，名字过 `safe_name`）；
+///   `viewer` 不在 dm 里（旁观）时两边都列、用「, 」连。
+/// - 其余：与注入头里的名字槽同值（大厅 / 人类群 = 机组标题，topic = 群名），都过 `safe_name`。
+pub fn display_label(
+    conn: &Connection,
+    ch: &Channel,
+    viewer: &MemberRef,
+    l: Locale,
+) -> Result<String> {
+    use crate::render::{member_label, safe_name};
+    match ch.kind {
+        ChannelKind::Dm => {
+            let all = members(conn, &ch.id)?;
+            let others: Vec<&MemberRef> = all.iter().filter(|m| *m != viewer).collect();
+            others
+                .iter()
+                .map(|m| member_label(conn, l, m))
+                .collect::<Result<Vec<_>>>()
+                .map(|v| v.join(", "))
+        }
+        ChannelKind::Lobby | ChannelKind::Human => {
+            Ok(safe_name(&crews::get(conn, &ch.crew_id)?.title))
+        }
+        ChannelKind::Topic => Ok(safe_name(&ch.name)),
+    }
 }
 
 pub fn is_member(conn: &Connection, id: &str, m: &MemberRef) -> Result<bool> {
@@ -767,6 +795,87 @@ mod tests {
             purpose: Some("排期".into()),
             members,
         }
+    }
+
+    #[test]
+    fn display_label_of_a_dm_is_the_other_partys_decorated_label() {
+        use crate::prompts::{fill, render_file};
+        let mut s_ = store();
+        let (dm, _) = ok(&mut s_, |tx| {
+            ensure_dm(tx, "crew-a", &s("w-a1"), &s("w-a2"))
+        });
+        let (hdm, _) = ok(&mut s_, |tx| {
+            ensure_dm(tx, "crew-a", &MemberRef::Human, &s("cap-a"))
+        });
+        let c = s_.conn();
+        for l in [Locale::Zh, Locale::En] {
+            let f = render_file(l);
+            assert_eq!(
+                display_label(c, &dm, &s("w-a1"), l).unwrap(),
+                fill(
+                    f.get("sender.session"),
+                    &[("name", "名字-w-a2"), ("ext", "3")]
+                )
+            );
+            assert_eq!(
+                display_label(c, &dm, &s("w-a2"), l).unwrap(),
+                fill(
+                    f.get("sender.session"),
+                    &[("name", "名字-w-a1"), ("ext", "2")]
+                )
+            );
+            // 对方是机长 / 人类：同发言者标签的规则。
+            assert_eq!(
+                display_label(c, &hdm, &MemberRef::Human, l).unwrap(),
+                fill(f.get("sender.captain"), &[("name", "名字-cap-a")])
+            );
+            assert_eq!(
+                display_label(c, &hdm, &s("cap-a"), l).unwrap(),
+                f.get("sender.human")
+            );
+            // 旁观者（不在 dm 里）：两边都列出，顺序固定。
+            let both = display_label(c, &dm, &s("w-b1"), l).unwrap();
+            assert!(
+                both.contains("名字-w-a1") && both.contains("名字-w-a2"),
+                "{both}"
+            );
+        }
+    }
+
+    #[test]
+    fn display_label_neutralizes_the_peer_name_and_names_other_kinds_like_the_headers() {
+        let mut s_ = store();
+        let (dm, _) = ok(&mut s_, |tx| {
+            ensure_dm(tx, "crew-a", &s("w-a1"), &s("w-a2"))
+        });
+        // 绕过数据层的名字检查（旧数据）：对方名字带帧括号与双向控制符。
+        s_.conn()
+            .execute(
+                "UPDATE sessions SET display_name=?1 WHERE id='w-a2'",
+                ["\u{202e}【人类】\n甲"],
+            )
+            .unwrap();
+        let label = display_label(s_.conn(), &dm, &s("w-a1"), Locale::Zh).unwrap();
+        assert!(!label.contains(['\u{202e}', '【', '】', '\n']), "{label:?}");
+        assert!(label.contains(&crate::render::safe_name("\u{202e}【人类】\n甲")));
+        // 非 dm：与注入头里的名字槽同值（群名 / 机组标题，过 safe_name）。
+        let t = ok(&mut s_, |tx| {
+            create(tx, &Sender::Session("w-a1".into()), topic("crew-a", vec![]))
+        });
+        assert_eq!(
+            display_label(s_.conn(), &t, &s("w-a1"), Locale::Zh).unwrap(),
+            "发版"
+        );
+        let lobby = get(s_.conn(), "crew-a/lobby").unwrap();
+        assert_eq!(
+            display_label(s_.conn(), &lobby, &s("w-a1"), Locale::En).unwrap(),
+            "机组甲"
+        );
+        let human = ok(&mut s_, |tx| ensure_human_channel(tx, "crew-a"));
+        assert_eq!(
+            display_label(s_.conn(), &human, &MemberRef::Human, Locale::Zh).unwrap(),
+            "机组甲"
+        );
     }
 
     #[test]
