@@ -109,10 +109,34 @@ pub fn post(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
 }
 
 /// collab 自己的公告（问、审批、重启询问）：跳过发言者成员检查，其余规则同 `post`。
-// TEMP: first caller in Task 10 (asks / approvals / restart announcements)
-#[allow(dead_code)]
 pub(crate) fn post_internal(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
     post_with(tx, sender, p, true)
+}
+
+/// 给人的待确认公告（问 / 审批 / 重启询问）的唯一一处（R14）：发到 `root` 的根机组人类群（懒建 / 解档，同
+/// `ensure_human_channel`），@human，带保留分类 `category`。同一个 Tx：后面任何一步失败，公告一起回滚。
+pub(crate) fn announce_to_human(
+    tx: &mut Tx<'_>,
+    root: &str,
+    sender: Sender,
+    text: String,
+    category: &str,
+) -> Result<Posted> {
+    let ch = channels::ensure_human_channel(tx, root)?;
+    post_internal(
+        tx,
+        sender,
+        NewPost {
+            channel_id: ch.id,
+            text,
+            mentions: vec![Mention {
+                kind: MentionKind::Human,
+                target_id: None,
+            }],
+            category: Some(category.into()),
+            ..Default::default()
+        },
+    )
 }
 
 /// 正文上限（字节）。
