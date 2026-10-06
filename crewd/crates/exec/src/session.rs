@@ -1623,6 +1623,17 @@ mod tests {
         let next = t.core.next_wakeup().expect("排着回车");
         assert!(next > t.at(0.85), "不许给过去的时刻");
         assert_eq!(next, t.at(1.1));
+
+        // 投递机的期限（not_before = 0.8）还在将来、早于排着的回车（0.95）：冻住时它到点也
+        // 推进不了，不该为它白醒一次——按键排着时只认按键与非投递的定时。
+        let mut t = T::new(brief("x"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        assert_eq!(
+            writes(&t.output(&rate_limit_menu(), 0.7)),
+            vec![b"1".to_vec()]
+        );
+        assert_eq!(t.core.next_wakeup(), Some(t.at(0.95)));
     }
 
     /// 用光标定位摆词画的限流菜单：屏上是整句，字节尾窗里词与词之间没有空格
