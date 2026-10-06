@@ -5,7 +5,7 @@ pub mod hub;
 pub mod ledger;
 
 use crewd_exec::registry::{ApplyOutcome, OrphanDecision, OrphanReport, ProcessRegistry};
-use crewd_store::Store;
+use crewd_store::{Db, Store};
 pub use hub::Hub;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -13,14 +13,14 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 
 pub struct AppState {
-    pub store: tokio::sync::Mutex<Store>,
+    pub db: Db,
     pub hub: Hub,
 }
 
 impl AppState {
-    pub fn new(store: Store) -> Self {
+    pub fn new(db: Db) -> Self {
         Self {
-            store: tokio::sync::Mutex::new(store),
+            db,
             hub: Hub::new(),
         }
     }
@@ -111,7 +111,8 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     let _ = std::fs::remove_file(&sock);
 
     let store = Store::open(&data_dir.join("crewd.db"))?;
-    let state = Arc::new(AppState::new(store));
+    let db = Db::spawn(store)?;
+    let state = Arc::new(AppState::new(db));
     let listener = UnixListener::bind(&sock)?;
 
     tokio::pin!(shutdown);
@@ -148,6 +149,38 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hello_answers_while_a_slow_db_job_runs() {
+        use crewd_proto::{Request, methods};
+        let db = crewd_store::Db::spawn(Store::open_in_memory().unwrap()).unwrap();
+        let state = Arc::new(AppState::new(db.clone()));
+        let slow = tokio::spawn(async move {
+            db.call(|_| std::thread::sleep(std::time::Duration::from_millis(500)))
+                .await
+        });
+        tokio::task::yield_now().await;
+        let req = Request {
+            id: 1,
+            method: methods::HELLO.into(),
+            params: serde_json::Value::Null,
+        };
+        let r = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            dispatch::handle(&state, req),
+        )
+        .await
+        .expect("慢查询进行中 system.hello 也要马上回");
+        assert!(r.error.is_none());
+        let req = Request {
+            id: 2,
+            method: methods::CREW_LIST.into(),
+            params: serde_json::Value::Null,
+        };
+        let r = dispatch::handle(&state, req).await;
+        assert!(r.error.is_none(), "{r:?}");
+        slow.await.unwrap().unwrap();
+    }
 
     #[test]
     fn fresh_data_dir_is_0700_and_existing_dir_is_left_alone() {

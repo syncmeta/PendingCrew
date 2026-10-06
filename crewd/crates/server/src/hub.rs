@@ -2,6 +2,7 @@ use crewd_proto::Event;
 use tokio::sync::broadcast;
 
 /// 进程内事件总线。订阅者处理太慢会收到 Lagged，由连接层转成 `events.lagged`。
+#[derive(Clone)]
 pub struct Hub {
     tx: broadcast::Sender<Event>,
 }

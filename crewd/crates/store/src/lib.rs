@@ -1,10 +1,13 @@
 //! crewd 的持久化层。crewd 是数据库的唯一写者；其他进程一律经 crewd 的 API。
 pub mod archive;
 pub mod crews;
+pub mod db;
 pub mod messages;
 pub mod schema;
 pub mod sessions;
 pub mod todos;
+
+pub use db::Db;
 
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -21,6 +24,12 @@ pub enum StoreError {
     /// 要找的行不存在（调用方要能和「其它失败」分开）。
     #[error("{0}")]
     NotFound(String),
+    /// 库线程已经不在了（进程正在退出）。
+    #[error("数据库线程已退出")]
+    DbClosed,
+    /// 交给库线程的闭包 panic 了；该闭包里的事务已回滚，线程照常服务。
+    #[error("数据库任务 panic，已回滚")]
+    DbJobPanicked,
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
