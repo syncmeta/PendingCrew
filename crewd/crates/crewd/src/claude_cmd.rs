@@ -41,7 +41,7 @@ pub struct ClaudeArgs {
 }
 
 /// `--prompt-file`：文件或 stdin（`-`）。末尾的换行 / 空白去掉（文件末尾的换行不是正文的一部分）。
-async fn read_prompt(path: &Path) -> anyhow::Result<String> {
+pub(crate) async fn read_prompt(path: &Path) -> anyhow::Result<String> {
     let text = if path == Path::new("-") {
         tokio::task::spawn_blocking(|| {
             let mut s = String::new();
@@ -59,7 +59,7 @@ async fn read_prompt(path: &Path) -> anyhow::Result<String> {
 /// stdin 逐行读进通道：放在一条普通线程上，**不**用 tokio 的 stdin——后者占着运行时的
 /// 阻塞线程池，会话结束后运行时收尾要等它读完下一行（终端里就是「再按一次回车才退」）。
 /// 普通线程不拦退出：`main` 返回时它随进程一起结束。
-fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
+pub(crate) fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
     let (tx, rx) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {

@@ -137,3 +137,14 @@ pub fn set_agent_session_id(
     }
     Ok(())
 }
+
+/// 这个 session 的执行器类型（`claude` / `codex` / `acp:<id>` …）。session 不存在是错误。
+pub fn executor(conn: &Connection, session_id: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT executor FROM sessions WHERE id=?1",
+        [session_id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| StoreError::NotFound(format!("没有 session {session_id}")))
+}

@@ -1,5 +1,6 @@
 //! crewd：PendingCrew 的跨平台后端。
 mod claude_cmd;
+mod codex_cmd;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
@@ -38,6 +39,8 @@ enum Cmd {
     Schema,
     /// 前台起一个 claude 会话（M2b 验收 / 调试；会话事件打到 stdout）
     Claude(claude_cmd::ClaudeArgs),
+    /// 前台起一个 codex 会话（M2c 验收 / 调试；会话事件打到 stdout）
+    Codex(codex_cmd::CodexArgs),
 }
 
 /// `--data-dir` / `CREWD_DATA_DIR`：与 PENDINGCREW_DATA_DIR 同规则——去首尾空白、展开 `~/`；
@@ -105,6 +108,7 @@ async fn run() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Claude(args) => claude_cmd::run(&dir, args.clone()).await?,
+        Cmd::Codex(args) => codex_cmd::run(&dir, args.clone()).await?,
         Cmd::Schema => {
             println!(
                 "{}",

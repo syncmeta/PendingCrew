@@ -108,7 +108,8 @@ pub struct ExitInfo {
 /// 驱动层往外发的事件（窄接口的状态面）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
-    /// 进程起来了（驱动层发；续跑被拒重起后会再发一次）。`resumed` = 用了 `--resume`。
+    /// 进程起来了（驱动层发；续跑被拒重起后会再发一次）。`resumed` = 这次是去接一个记过的号
+    /// （claude `--resume`、codex `thread/resume`），接没接上看后面有没有 `ResumeRefused`。
     Spawned {
         pid: u32,
         agent_session_id: String,
@@ -124,12 +125,39 @@ pub enum SessionEvent {
     },
     /// health 变了（`None` = 恢复正常）。
     Health(Option<Health>),
-    /// claude 拒绝 `--resume <id>`，原话 `said`。
+    /// 续跑被拒：`id` 接不回来了，原话 `said`。后面一定跟一条换了新号的 `Spawned`（换新号
+    /// 重起失败时例外：跟的是 LaunchFailed 与 `Exited`）。两个执行器顺序相同：
+    /// `Spawned { 旧号, resumed: true }` → `ResumeRefused` → `Spawned { 新号, resumed: false }`。
+    /// claude 换一个新进程；codex 在同一个进程里新开一条 thread（pid 不变）。叫停之后不再报。
+    /// 当前会话号永远以最近一条 `Spawned` 为准。
     ResumeRefused {
         id: String,
         said: String,
     },
+    /// codex：一个完成了的结构化条目（`item/completed` 的 `item` 原样）。claude 不发——它的
+    /// 记录就是屏幕。M2d 拿它给 attach 的客户端回放。
+    Item {
+        turn_id: String,
+        item: serde_json::Value,
+    },
+    /// codex：一个回合正常结束，附本回合最后一条 agent 正文（没有就是空串）。
+    /// claude 的对应物是 Stop hook（M3 经 helper 送进来），不走执行器。
+    TurnEnded {
+        last_agent_message: String,
+    },
+    /// 执行器替 agent 做了一个人应该知道的决定（代拒了一个表单、丢了一段原始按键……）。
+    Notice(String),
+    /// codex：服务端确认的实际模型 / 推理强度 / fast 档（握手回包、设置回显）。
+    Profile(Profile),
     Exited(ExitInfo),
+}
+
+/// 服务端确认的会话档位。`None` = 服务端没说（不是「关」）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Profile {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub fast: Option<bool>,
 }
 
 /// 交给驱动层执行的动作，按顺序执行。
@@ -558,7 +586,7 @@ impl Core {
             if self
                 .health
                 .as_ref()
-                .is_some_and(|cur| health_rank(cur.kind) > health_rank(h.kind))
+                .is_some_and(|cur| cur.kind.rank() > h.kind.rank())
             {
                 return;
             }
@@ -840,17 +868,6 @@ impl Core {
         if self.working {
             self.set_working(false, now);
         }
-    }
-}
-
-/// health 那一格的档位：拉起失败 > 额度 / 限流 > 认证 > 投递报告。额度类只由它自己的恢复
-/// 路径清掉：认证探测的来回（要登录 → 已登录）既不能盖掉它，也不能借「清掉认证」把它清掉。
-fn health_rank(kind: HealthKind) -> u8 {
-    match kind {
-        HealthKind::LaunchFailed => 4,
-        HealthKind::UsageLimit | HealthKind::RateLimited => 3,
-        HealthKind::AuthRequired => 2,
-        HealthKind::BriefUndelivered | HealthKind::PromptUndelivered => 1,
     }
 }
 

@@ -27,9 +27,25 @@ pub enum HealthKind {
     BriefUndelivered,
     /// 运行中的一条指令没送进输入框。
     PromptUndelivered,
+    /// codex：回合失败（协议里的失败回合 / 不再重试的错误），不能当成空闲。
+    TurnFailed,
+    /// codex：本机 CLI 太旧，服务端要求新版本。
+    VersionIncompatible,
 }
 
 impl HealthKind {
+    /// health 那一格的档位：拉起失败 > 额度 / 限流 > 认证 / 版本不兼容 > 投递报告 / 回合失败。
+    /// 低档不能盖掉高档（额度类只由它自己的恢复路径清掉：认证探测的来回既不能盖掉它，也不能借
+    /// 「清掉认证」把它清掉）。claude 与 codex 两个核心共用这一张表。
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::LaunchFailed => 4,
+            Self::UsageLimit | Self::RateLimited => 3,
+            Self::AuthRequired | Self::VersionIncompatible => 2,
+            Self::BriefUndelivered | Self::PromptUndelivered | Self::TurnFailed => 1,
+        }
+    }
+
     /// 额度类：退出原因「撞额度」与额度重置唤醒都认这组。
     pub fn is_quota(self) -> bool {
         matches!(self, Self::UsageLimit | Self::RateLimited)

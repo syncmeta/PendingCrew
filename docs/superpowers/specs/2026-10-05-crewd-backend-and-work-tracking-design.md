@@ -15,7 +15,7 @@
 - G2 卡在人身上只卡那一件，不卡 session **[人]**。
 - G3 高频小判断（派给谁、谁收消息、归到哪条、侧边栏排序）由 Jev 做，机长只接低置信度 **[人]**。
 - G4 前后端解耦，后端跨平台，Mac 与 iOS 平等地是客户端 **[人]**。
-- G5 iOS 正式重启（08-23 的「当没有 iOS」作废）**[人]**。
+- G5 iOS 正式重启（08-23 的「当没有 iOS」作废），与 iPadOS 一起做 **[人]**。
 
 非目标
 - 不做云端账号/中继（2026-08-24「不登录到任何地方」仍有效）。Jev 是唯一新增外发，用户可关。
@@ -68,7 +68,7 @@
 - **M5 Jev 调度**（§7）：**M5a** 客户端 + 中文实测（已交付，§20）→ **M5b** 接进调度（依赖 M3 的群与成员、M4 的工作项）。
 - **M6 行政处**（§8）。
 - **切换**：Mac 客户端改连 crewd（去掉所有直接读写 JSON 与 Swift 后台）；验收 §1 判据；Swift daemon/MCP helper 代码删除。
-- **iOS**：M3 的 API 定型后即可并行，TLS1.3 + SPKI pinning 重新配对（Q11）。
+- **iOS + iPadOS**（人 2026-10-06：两端一起做，同一个 app、同一套客户端代码，iPad 按大屏布局适配——分栏 / 多窗口，不是放大的手机）：M3 的 API 定型后即可并行，TLS1.3 + SPKI pinning 重新配对（Q11）；验收在 iPhone 与 iPad 真机各跑一遍。
 每个 M 都以 crewd 自己的集成测试 + CLI 可驱动为完成标准，不依赖 Swift UI。
 
 ### 3.4 数据
@@ -485,9 +485,63 @@ M4 拆为 **M4a** 工作跟进核心（纯计算，本节）→ **M4b** 持久�
 
 留给 M5b：上面的别名层与不透明 key 重测；叫醒集合的大小上限（一条消息叫醒过多成员时交机长）；侧边栏紧急度的调用缓存（机组状态没变就不重问）。
 
+## 21. M2c 交付记录与遗留（分支 crewd-m2c，计划 `docs/superpowers/plans/2026-10-06-crewd-m2c-codex-session.md`）
+
+已交付：`crewd/crates/exec/src/codex`——线协议（无 `jsonrpc`、整数与字符串 id、两套 id 分表、单请求期限）、参数构造与服务端请求答复表（0.160.1 的 11 个方法全覆盖）、协议健康、回合跟踪与自动压缩、sans-IO 会话核心 `CodexCore`、进程（setsid、白名单环境、stderr 排空、stdout 行上限、写任务）、驱动 `start_codex`（握手 + thread id 落账完成才返回；进程规矩与 M2b 终版的 claude 驱动一致：停止只开始一次、收尸后只发组信号补刀、先收拾后发 `Exited`、文件 IO 走阻塞线程池、收尸有上限）。窄接口的最小扩展：`send_with_context`（与 `send` 同一道空正文闸）、`interrupt`、`control`、`snapshot` 可空、`SessionEvent::{Item, TurnEnded, Notice, Profile}`、`HealthKind::{TurnFailed, VersionIncompatible}` 与共用的 `HealthKind::rank`、`StartError::Handshake`。`CODEX_HOME` 进环境白名单。`crewd codex` 子命令（开场任务只经 `--prompt-file`）；`StoreLedger::expecting`。
+
+验收：假 app-server（`src/bin/fake_codex.rs`）上的端到端 26 条（握手、落账先于就绪、续跑与退回且事件与 claude 同序、每一种服务端请求、额度、请求超时、stderr 灌满、落账失败、登记表写不进去、停止与工具子命令、反复叫停、codex 自己退出后的子命令、工具子命令攥着管道不放、自动压缩与排队、打断、不读 stdin、3MB 条目、控制、登记表、句柄全丢、同一 thread 不能同时跑两个、启动失败后 thread id 与登记表已放开）；`crewd codex` 5 条（两次运行之间经库续跑、claude 的 session 被拒、开场任务经 stdin 读入走 `turn/start`、命令行上的 `--prompt` 被拒、stdin 开着也随会话退出）。`./scripts/check.sh` 全绿（工作区 710 passed、0 failed、4 ignored（终评修正后；交付时 703）：三条真机冒烟 + jev 一条）。
+
+逐任务评审后 controller 追加的修正（都已落地并有测试钉住）：
+- 回合跟踪：别的回合的 agent 正文不当作本回合的 `TurnEnded` 正文；重复的完成通知不重发 `turn_ended`、不提前结束压缩。
+- 核心：stop 之后 `send` / `control` 不再开回合、不报 Delivered；空白开场任务不开回合。
+- 传输层：`spawn_codex` 自己剥 `OPENAI_API_KEY` / `CODEX_API_KEY` / `CODEX_ACCESS_TOKEN`（结构上保证，不靠调用方）。
+- 终评后追加的修正（分支 crewd-m2c 最后一轮，都有先红后绿的测试）：
+  - `mcpServer/elicitation/request` 的 `mcp_tool_call` 只在 `serverName` 是我们挂的那个 server（常量 `proto::CREW_MCP_SERVER`，与 `config.mcp_servers` 的键同一处）时 accept；别的 server 的工具调用审批一律 decline + `Notice`（同种只喊一次）。`crewd codex` 不挂 crew server（`comms: None`），那里每一条工具审批都被拒，是对的。
+  - `health_from` 对 `error` 通知只认 `willRetry: false`；`willRetry: true`（或没给）的 `unauthorized` / `usageLimitExceeded` / 版本文案不再变成 health。一个正常完成的回合现在也清掉 `AuthRequired`（连同额度 / 回合失败 / 版本）。
+  - 带 `threadId` 且不是本 thread 的通知整条丢弃（不喂回合跟踪、不进健康）；服务端请求照旧一律回答。
+  - 回合跟踪：只有属于进行中回合（或没带回合 id）的条目才把「干活中」立起来，已完成回合的迟到条目不再让它粘在 true；条目仍照常进结构化记录。
+  - `parse_line`：有 `method` 键但不是字符串的对象归 Unclassifiable，不再落进 Response 分支。
+- 驱动：启动失败（握手超时、落账失败）等整组杀掉、收尸、放开 thread id、清登记表之后才报——调用方见到失败即可同号重起，晚到的 `forget` 不会抹掉新进程的登记。
+- 假 app-server 多了 `spawn_child_inherit` 模式（工具子命令继承管道），多两条相应的端到端；一条原变异步骤（删驱动里那处剥 key）因上一条已作废，改成同时删两处。
+
+与 Swift 不同的决定（理由见计划「裁定」）：
+- 服务端请求 id 支持字符串；`applyPatchApproval` / `execCommandApproval` 显式按审批拒；`currentTime/read` 照实回。
+- 单请求期限（initialize 30s、thread 60s、其余 30s）；「早到响应缓冲」由「先登记后写 + 单任务顺序处理」在结构上消掉。
+- 回合排队、不用 `turn/steer`（人 2026-10-06 定）；`TurnEnded` 只带本回合的最后一条 agent 正文；读数晚到时不在回合中间压缩。
+- `serviceTier` 不选不传；`initialized` 不带 params；多订阅退两种输出增量。
+- setsid + 退出后整组 SIGKILL；剥 `OPENAI_API_KEY` 之外再剥 `CODEX_API_KEY`、`CODEX_ACCESS_TOKEN`；`CODEX_HOME` 透传。
+- thread id 落账失败 = 启动失败（Swift 只回调、不拦）。
+- 续跑被拒的事件与 claude 同序（`Spawned{旧号}` → `ResumeRefused` → `Spawned{新号}`，pid 不变）；消费方以 `ResumeRefused` 之后那条 `Spawned` 的号为准。
+
+真机核对（人 2026-10-06 同意跑，含花额度的回合；codex-cli 0.160.1，本机登录态，默认的非 git 临时空目录）：
+- 握手通过：`CREWD_LIVE_CODEX=1 … live_codex_handshakes … --ignored`，2.2s。收到 `Spawned{resumed:false}`、`Profile`（codex 自己解析出模型、推理强度、fast=false）、状态 `Idle`、`Exited{Code(0), stopped_by_user}`。逐条对「未核实」表：`initialized` 不带 `params` 被接受 —— 证实；`thread/start.config.mcp_servers`（指向 `/usr/bin/true`，MCP 起不来）与 `developerInstructions` 被接受、不挡握手 —— 证实（MCP 真挂上要等 M3 的 `crewd mcp`）；`optOutNotificationMethods` 被接受 —— 证实（退订效果仍没验）；`serviceTier` 读数 —— `Profile.fast` 取到 `false`；工作目录不是 git 仓库时 `thread/start` 照收 —— 证实（无需 `CREWD_LIVE_CODEX_WORKDIR`）；SIGTERM 后 codex 干净退出码 0 —— 本次所见。
+- 回合通过：`CREWD_LIVE_CODEX=turn … live_codex_turn … --ignored`，6.4s，一个最小回合。`TurnEnded` 的正文是白板里的暗号，说明经 `additionalContext`（`kind: untrusted`）送入的白板真的被模型看见（Swift 起就挂着的这条「需真机确认」落地）；`Delivery{Delivered}`、`Item`（userMessage、agentMessage）、`Working(true→false)` 的顺序符合预期。
+- Linux：`cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` 通过（只编译，没在 Linux 上跑测试）。
+- 副作用：两次 `thread/start` 各在 codex 自己的 sessions 目录留了一条 thread 记录（握手那条应当没有回合——没有去翻 sessions 目录核对，未核实）。
+
+仍未核实（真机没覆盖）：`_meta.codex_approval_kind` 的 elicitation 分界（要真调 crew 工具，M3）；`optOutNotificationMethods` 的退订效果；握手后即停、再用同号 `thread/resume` 能否接上（接不上按裁定 3 退回新 thread）；「requires a newer version of Codex」的原话。
+
+已按 schema 核对、不再算未核实：`thread/settings/updated` 的 `threadSettings.effort`（0.160.1 `ServerNotification` schema 里有此字段，`Profile.effort` 读的就是它；schema 层核对，真机回显里它的取值没单独对过）。
+
+遗留：
+- `turn/steer`（运行中插话）没接，现在一律排队（人 2026-10-06 定）；M3 若要插话再说。
+- 白板「未读」的取舍与去重归 M3；codex 自己按 key 去重（值没变就不再注入），claude 一侧每次都包。
+- `Item` 事件只发不存（结构化记录只在内存里留最近 200 条）；attach 回放、背压归 M2d。
+- `Notice` 只发事件；转群（Swift Todo #6 的群通知）归 M3。
+- 原生默认模型探测（ephemeral `thread/start`）、codex 的 npm 托管回退没做。
+- 「进程退出后等 stderr 读到 EOF」没有能稳定变红的测试（竞态），按结构保证。
+- 评审里记下、没修的小项（都不影响正确性主线，酌情清）：
+  - 值得修（上一轮列出的 elicitation 放行范围、`willRetry` 与 `AuthRequired`、`parse_line`、迟到 item 粘 working、threadId 过滤已在终评后修掉，见上）：还缺一条「服务端错误原样透传」的测试。
+  - 回合跟踪：丢了 `turn/started` 会漏掉压缩相关的复位；idle 时的陈旧 foreign agentMessage 可能留进只经 `on_turn_accepted` 得知的回合；条目类型比较区分大小写。
+  - 核心与驱动：`turn/start` 在途时 `interrupt` 是静默空操作，stop 宽限期内的 `interrupt` 仍会发 `turn/interrupt`（无害）；账本失败时状态是 Exited 而非 LaunchFailed；退回路径上 start 失败会丢掉续跑被拒的说明；压缩没有回合级期限（Swift 同）；`Phase::Recording` 无期限（账本卡死则 `start_codex` 不返回）；排空阶段忽略超长行（无 `Notice`）；登记表 `forget` 只按 session id（沿用 M2b）；e2e 只在 current_thread 运行时上跑。
+  - 传输：`StderrTail::text` 遇多字节截断可能略超 4096 字节；写任务的 EPIPE 行为借用了 Rust 标准库二进制里忽略 SIGPIPE 的保证；为 codex 设了 `TERM=xterm-256color`。
+  - `crewd codex`：`/compact` 在 `select!` 里等最多 30s，Ctrl-C 晚被察觉；`/interrupt`、`/compact`、`--transcript`、信号停止、缺 `--session` 行无自动化测试；`start_codex` 返回前（信号流还没建）收到 SIGINT 会杀掉 crewd 而把 codex 留到下次回收（`crewd claude` 同）。
+  - M3c 要先面对的（没修，记在这里免得漏）：`ClaudeSpec` 没有 `initial_context`——M3c 要么把 claude 的开场任务自己先包好（`<external_键>…</external_键>`），要么给 `ClaudeSpec` 加这个字段；codex 一侧有 `initial_context`。
+  - M2b 窄接口一侧：claude 侧 `Command::Send{context}` → `with_untrusted_context` 没有端到端测试；该函数不转义值里的闭合标签、不校验 key（**M3c 入口条件：在任何调用方把队友写的文本传进来之前，要先转义闭合标签并校验 key**）、全空白值产出空块；投递失败的预览显示包装而不是指令正文；`control` 的 `Unsupported` 用 `{op:?}` 的 Debug 文本。
+
 ## 22. M3 细分：M3a 数据与 API → M3b agent 面 ∥ M3c 编排（2026-10-06 设计，未实现）
 
-> 基准：`crewd-m2b@b5a65b0`。M4a 读自 worktree 分支 `worktree-agent-ae8cbb53a573831e1`（其 §19），M5a 读自 `agent-a71a65945df7d496b`（其 §20）；本文件里 §19–§21 暂缺，合并后补上。Swift 路径相对仓库根。
+> 基准：`crewd-m2b@b5a65b0`。M4a 读自 worktree 分支 `worktree-agent-ae8cbb53a573831e1`（其 §19），M5a 读自 `agent-a71a65945df7d496b`（其 §20）。Swift 路径相对仓库根。
 
 ### 22.1 切分与次序
 ```
