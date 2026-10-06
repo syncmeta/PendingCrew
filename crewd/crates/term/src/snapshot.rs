@@ -5,9 +5,8 @@
 //! 为什么不录原始字节重放：TUI 靠整屏重绘刷新，几 MB 原始字节里绝大部分是覆盖同一块
 //! 屏幕的重绘，换不来 10000 行历史；环形缓冲区的头还会切在转义序列中间。
 //!
-//! 已知不还原（claude 都用不到，记在计划的遗留里）：处在 alt 屏时的主屏内容
-//! （alacritty 不公开非活动缓冲区）、DECSC 存的光标、自定义制表位、G0–G3 字符集、
-//! 窗口标题、kitty 键盘模式栈。
+//! 已知不还原的东西与未验证的点，单一事实源见设计 spec §15
+//! （`docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`），这里不再重复列。
 use std::fmt::Write as _;
 
 use alacritty_terminal::grid::Dimensions;
