@@ -34,6 +34,25 @@ mod tests {
     }
 
     #[test]
+    fn r_sections_use_the_same_placeholders_in_both_locales() {
+        let norm = |loc, k: &str| {
+            let mut v = crewd_collab::prompts::placeholders(get(loc, k));
+            v.sort();
+            v.dedup();
+            v
+        };
+        let mut seen = 0;
+        for k in section_names(Locale::Zh)
+            .into_iter()
+            .filter(|k| k.starts_with("r."))
+        {
+            assert_eq!(norm(Locale::Zh, k), norm(Locale::En, k), "{k}");
+            seen += 1;
+        }
+        assert!(seen >= 4, "r.* sections expected, saw {seen}");
+    }
+
+    #[test]
     fn r_fills_placeholders() {
         // r.unknown_tool 是 Task 3 就有的节：「没有 {name} 这个工具。」
         let s = r(Locale::Zh, "r.unknown_tool", &[("name", "nope")]);

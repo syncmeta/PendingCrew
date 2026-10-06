@@ -7,7 +7,8 @@ Placeholders {name} are filled by code (M3a's prompts::fill). zh and en must hav
 ## post
 Post key moments to a channel: started, done, blocked, handing off, important findings. Keep terminal detail (what you read or ran) out of channels.
 Without channel: if reply_to is given the post goes to that message's channel, otherwise to your crew's lobby.
-Mentions: @session / @captain narrow visibility — only the named agents see it in their injected context and get woken; add @broadcast to make it "everyone sees, only the named wake"; @human does not narrow, it only flags the message for the human. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in the root crew's human channel or use ask.
+Mentions: @session / @captain narrow visibility — only the named agents see it in their injected context and get woken; add @broadcast to make it "all channel members see it, only the named wake"; @human does not narrow, it only flags the message for the human. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in the root crew's human channel or use ask.
+A message body is at most 256 KiB.
 
 ## post.channel
 Channel id, or a channel name that is unique among channels you are in. See the tool text when omitted.
@@ -19,17 +20,17 @@ Use for a single message. Mutually exclusive with messages.
 Several messages at once (at most 6), one bubble each with its own category. If any item is invalid nothing is posted and the error names the item.
 
 ## post.mentions
-Directed mentions: {kind:"session", target_id:"<session id>"} / {kind:"captain"} / {kind:"human"} / {kind:"broadcast"}. Omit for everyone in the channel. A mentioned session must be a member of the channel.
+Directed mentions: {kind:"session", target_id:"<session id>"} / {kind:"captain"} / {kind:"human"} / {kind:"broadcast"}. Omit for everyone in the channel. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
 
 ## post.reply_to
-The message you are replying to: its number (#128 or 128) or its id. The original sender is mentioned automatically as [broadcast, sender]: everyone still sees it, the sender is woken.
+The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically as [broadcast, sender]: all channel members still see it, the sender is woken; replying to your own message adds no mention; replying to a system message adds broadcast only.
 
 ## post.category
 What this is: progress / done / blocked / question / finding / handoff / ack / note.
 
 
 ## read_channel
-Read a channel page by page (oldest first). Reading up to the newest message marks the channel read for you; those messages will not be injected again. The #number before each message can go into reply_to.
+Read a channel page by page (oldest first). Reading up to the newest message marks the channel read for you, so those messages are not injected again — only for channels you are in or listen to (reading other channels does not move your read position). The #number before each message can go into reply_to.
 
 ## read_channel.channel
 Channel id or name; omitted = your crew's lobby. Any channel of your crew is readable, membership not required.
@@ -41,10 +42,10 @@ Number of messages, 1–200, default 50.
 Only messages before this one (number or id). Omitted = newest page.
 
 ## search
-Search messages in channels you are in or listening to. All whitespace-separated terms must match; newest first.
+Search messages in channels you are in or listening to. The whole trimmed query is matched as ONE case-insensitive substring (ASCII case folding only), not split into terms; newest first.
 
 ## search.query
-Terms, whitespace-separated, all must match.
+The text to find: trimmed, then matched as one substring (ASCII case-insensitive).
 
 ## search.channel
 Search only this channel (id or name).
@@ -53,7 +54,7 @@ Search only this channel (id or name).
 Only at or after this time (ISO8601).
 
 ## search.before
-Only at or before this time (ISO8601).
+Only strictly before this time (ISO8601, exclusive: created_at < before).
 
 ## search.limit
 Maximum results, 1–200, default 50.
@@ -65,7 +66,7 @@ List channels you are in (lobby, joined channels, channels you listen to) and th
 Where the human is now: channels marked "watching", plus the root crew's human channel. Post there when you need the human to see or decide; @human elsewhere may be seen much later.
 
 ## channel_create
-Create a channel (topic channel or two-person dm). Use it whenever you need to collaborate with someone on something or discuss a topic separately — do not create a child crew for that. You become the owner and a member. Give it a name and a purpose, e.g. "release", "scroll bug".
+Create a channel (topic channel or two-person dm). Use it whenever you need to collaborate with someone on something or discuss a topic separately — do not create a child crew for that. You become the owner and a member. Give it a name and a purpose, e.g. "release", "scroll bug". A name equal to the human labels (人类 / Human) or to crewd's own system labels is rejected.
 
 ## channel_create.name
 Short channel name.
@@ -77,10 +78,10 @@ One sentence: what the channel is for.
 Members to add: session ids, directory numbers (like 7-3), or human.
 
 ## channel_create.kind
-topic (default) or dm (exactly two sessions).
+topic (default) or dm (exactly two members, at most one of them the human; if a dm for the same pair already exists it is reused, not created again).
 
 ## channel_invite
-Add members to a channel.
+Add members to a channel. You must be a member yourself; the lobby and a dm cannot take invites.
 
 ## channel_invite.channel
 Channel id or name.
@@ -89,13 +90,13 @@ Channel id or name.
 Session ids, directory numbers (like 7-3), or human.
 
 ## channel_leave
-Leave a channel. You cannot leave the lobby.
+Leave a channel. You cannot leave the lobby; a dm cannot be left (archive it instead); the owner of a topic channel must transfer ownership first.
 
 ## channel_leave.channel
 Channel id or name.
 
 ## channel_archive
-Archive a channel (messages kept, no new posts; the human can unarchive). Only the owner or the captain can archive.
+Archive a channel (messages kept, no new posts; the human can unarchive). Only the owner or the captain can archive; the lobby and the human channel cannot be archived.
 
 ## channel_archive.channel
 Channel id or name.
@@ -128,7 +129,7 @@ Channel id or name.
 How long (minutes, 1–480). Omitted = until channel_unlisten.
 
 ## channel_listen.senders
-Only these senders: human, captain, or session ids. Omitted = everyone.
+Only these senders: human, captain, or session ids. This only filters whose messages wake you; everything visible in the channel is still injected. Omitted = everyone.
 
 ## channel_unlisten
 Stop listening to a channel.
@@ -137,7 +138,7 @@ Stop listening to a channel.
 Channel id or name.
 
 ## directory
-Look up the directory: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), and -1 is always that crew's captain. Returns numbers, names, crews, current work, online state, and the channels you are in plus each crew's channels. The human has no number; use ask.
+Look up the directory: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), and -1 is always that crew's captain. Each entry returns: number, kind (crew or member), name, crew / org path, session id; plus the channels you are in. The human has no number; use ask.
 
 ## directory.query
 Filter by number prefix, name or keyword; omitted = everything.

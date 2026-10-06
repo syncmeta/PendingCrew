@@ -32,9 +32,27 @@ fn sources() -> Vec<PathBuf> {
     out
 }
 
-/// 非测试部分：第一个 `#[cfg(test)]` 之前（各文件的测试模块都放在末尾）。
-fn non_test(src: &str) -> &str {
-    src.find("#[cfg(test)]").map_or(src, |i| &src[..i])
+/// 非测试部分：第一个 `#[cfg(test)]` 之前。只认一种写法：行首的 `#[cfg(test)]`，紧跟（跳过空行）`mod tests`；
+/// 别的位置、别的形状（缩进的、后面跟的不是 `mod tests`）一律报错，免得把非测试代码误当成测试代码跳过。
+fn non_test(src: &str) -> Result<&str, String> {
+    let mut offset = 0;
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("#[cfg(test)]") {
+            let next = lines[i + 1..].iter().find(|l| !l.trim().is_empty());
+            let ok = line.starts_with("#[cfg(test)]")
+                && next.is_some_and(|l| l.starts_with("mod tests"));
+            if !ok {
+                return Err(format!(
+                    "cfg(test) placement the scanner can't reason about: line {}",
+                    i + 1
+                ));
+            }
+            return Ok(&src[..offset]);
+        }
+        offset += line.len();
+    }
+    Ok(src)
 }
 
 /// 取出全部字符串字面量的内容（普通 / 原始 / 字节串），跳过行注释、块注释与字符字面量。
@@ -128,10 +146,30 @@ fn tokenizer_sees_strings_not_comments() {
 }
 
 #[test]
+fn cut_point_accepts_only_a_trailing_tests_module() {
+    let good = "fn a() {}\n#[cfg(test)]\n\nmod tests {\n}\n";
+    assert_eq!(non_test(good).unwrap(), "fn a() {}\n");
+    assert_eq!(non_test("fn a() {}\n").unwrap(), "fn a() {}\n");
+    for bad in [
+        "fn a() {}\n#[cfg(test)]\nfn helper() {}\n",
+        "fn a() {}\n    #[cfg(test)]\n    mod tests {}\n",
+        "fn a() {}\n#[cfg(test)]\n",
+        "#[cfg(test)]\nmod testkit;\n",
+    ] {
+        let e = non_test(bad).unwrap_err();
+        assert!(
+            e.contains("cfg(test) placement the scanner can't reason about"),
+            "{e}"
+        );
+    }
+}
+
+#[test]
 fn no_agent_facing_literals_in_source() {
     for f in sources() {
         let src = std::fs::read_to_string(&f).unwrap();
-        for lit in string_literals(non_test(&src)) {
+        let code = non_test(&src).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+        for lit in string_literals(code) {
             assert!(
                 !lit.chars().any(is_cjk),
                 "{} 的字符串字面量里有给人看的文字（应放进 prompts/*.md）：{lit:?}",
@@ -141,14 +179,22 @@ fn no_agent_facing_literals_in_source() {
     }
 }
 
-#[test]
-fn every_text_key_used_in_source_exists_in_both_locales() {
-    let prefixes = ["r.", "trace.", "inject."];
+const PREFIXES: [&str; 3] = ["r.", "trace.", "inject."];
+
+/// 这些 `r.*` 节已写进 md，但调用它们的代码要到 Task 7（`tools::call`）才有；到那时代码一用上它们，
+/// 下面 `md_sections_are_all_used_or_allow_listed` 里「清单里的节不许已被用到」那条就会红，提醒把它从清单删掉。
+const UNUSED_UNTIL_TASK_7: &[&str] = &["r.captain_only", "r.not_on_builtin", "r.bad_args"];
+
+fn used_keys() -> std::collections::BTreeSet<String> {
     let mut used = std::collections::BTreeSet::new();
     for f in sources() {
         let src = std::fs::read_to_string(&f).unwrap();
         for lit in string_literals(&src) {
-            if prefixes.iter().any(|p| lit.starts_with(p))
+            // 光是前缀（`"r."`）不是键：别的测试里拿它做过滤。
+            if PREFIXES
+                .iter()
+                .any(|p| lit.starts_with(p) && lit.len() > p.len())
+                && !lit.ends_with('.')
                 && lit
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
@@ -157,6 +203,12 @@ fn every_text_key_used_in_source_exists_in_both_locales() {
             }
         }
     }
+    used
+}
+
+#[test]
+fn every_text_key_used_in_source_exists_in_both_locales() {
+    let used = used_keys();
     assert!(
         used.contains("r.unknown_tool"),
         "尺子没扫到已知的键：{used:?}"
@@ -165,6 +217,31 @@ fn every_text_key_used_in_source_exists_in_both_locales() {
         let have = crate::agent::text::section_names(loc);
         for k in &used {
             assert!(have.iter().any(|h| h == k), "{loc:?} 的 tools md 缺 ## {k}");
+        }
+    }
+}
+
+/// 反方向：md 里的 `r.` / `trace.` / `inject.` 节必须有代码在用，或明确列在 `UNUSED_UNTIL_TASK_7`。
+#[test]
+fn md_sections_are_all_used_or_allow_listed() {
+    let used = used_keys();
+    for loc in [Locale::Zh, Locale::En] {
+        let have = crate::agent::text::section_names(loc);
+        for k in UNUSED_UNTIL_TASK_7 {
+            assert!(have.contains(k), "{loc:?} 清单里的 {k} 不在 md 里");
+            assert!(
+                !used.contains(*k),
+                "{k} 已被代码用到，从 UNUSED_UNTIL_TASK_7 里删掉它"
+            );
+        }
+        for h in have
+            .iter()
+            .filter(|h| PREFIXES.iter().any(|p| h.starts_with(p)))
+        {
+            assert!(
+                used.contains(*h) || UNUSED_UNTIL_TASK_7.contains(h),
+                "{loc:?} 的 ## {h} 没有代码在用（孤儿节）"
+            );
         }
     }
 }

@@ -32,6 +32,8 @@ pub struct Param {
     pub ty: Ty,
     pub required: bool,
     pub choices: &'static [&'static str],
+    /// 整数参数的闭区间（md 里写的范围；schema 的 minimum / maximum）。
+    pub bounds: Option<(i64, i64)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +58,7 @@ const fn p(name: &'static str, ty: Ty, required: bool) -> Param {
         ty,
         required,
         choices: &[],
+        bounds: None,
     }
 }
 const fn c(name: &'static str, required: bool, choices: &'static [&'static str]) -> Param {
@@ -64,6 +67,16 @@ const fn c(name: &'static str, required: bool, choices: &'static [&'static str])
         ty: Ty::Str,
         required,
         choices,
+        bounds: None,
+    }
+}
+const fn int(name: &'static str, min: i64, max: i64) -> Param {
+    Param {
+        name,
+        ty: Ty::Int,
+        required: false,
+        choices: &[],
+        bounds: Some((min, max)),
     }
 }
 const fn all(name: &'static str, params: &'static [Param]) -> ToolSpec {
@@ -107,7 +120,7 @@ pub const CATALOG: &[ToolSpec] = &[
         "read_channel",
         &[
             p("channel", Str, false),
-            p("limit", Int, false),
+            int("limit", 1, 200),
             p("before", Ref, false),
         ],
     ),
@@ -118,7 +131,7 @@ pub const CATALOG: &[ToolSpec] = &[
             p("channel", Str, false),
             p("after", Str, false),
             p("before", Str, false),
-            p("limit", Int, false),
+            int("limit", 1, 200),
         ],
     ),
     all("list_channels", &[]),
@@ -151,7 +164,7 @@ pub const CATALOG: &[ToolSpec] = &[
         "channel_listen",
         &[
             p("channel", Str, true),
-            p("minutes", Num, false),
+            int("minutes", 1, 480),
             p("senders", StrList, false),
         ],
     ),
@@ -179,7 +192,7 @@ pub const CATALOG: &[ToolSpec] = &[
     all(
         "schedule_wakeup",
         &[
-            p("after_minutes", Num, false),
+            int("after_minutes", 1, 1440),
             p("at", Str, false),
             p("note", Str, true),
         ],
@@ -327,6 +340,10 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
                 "additionalProperties": false,
             }}),
         };
+        if let Some((lo, hi)) = prm.bounds {
+            s["minimum"] = json!(lo);
+            s["maximum"] = json!(hi);
+        }
         if !prm.choices.is_empty() {
             s["enum"] = json!(prm.choices);
         }
@@ -453,6 +470,109 @@ mod tests {
                     assert!(have.iter().any(|h| *h == key), "{loc:?} 缺 ## {key}");
                 }
             }
+        }
+    }
+
+    /// 递归检查：每一层 object 都 `additionalProperties:false`，`required` 的名字都在 `properties` 里，`enum` 非空。
+    fn check_schema(path: &str, v: &serde_json::Value) {
+        if let Some(obj) = v.as_object() {
+            if obj.get("type") == Some(&serde_json::json!("object")) {
+                assert_eq!(
+                    obj.get("additionalProperties"),
+                    Some(&serde_json::json!(false)),
+                    "{path}"
+                );
+                let props = obj
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                    .unwrap_or_else(|| panic!("{path} has no properties"));
+                for r in obj
+                    .get("required")
+                    .and_then(|r| r.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    let r = r.as_str().unwrap();
+                    assert!(
+                        props.contains_key(r),
+                        "{path}: required {r} not in properties"
+                    );
+                }
+            }
+            if let Some(e) = obj.get("enum") {
+                assert!(
+                    e.as_array().is_some_and(|a| !a.is_empty()),
+                    "{path}: empty enum"
+                );
+            }
+            for (k, child) in obj {
+                check_schema(&format!("{path}.{k}"), child);
+            }
+        } else if let Some(arr) = v.as_array() {
+            for (i, child) in arr.iter().enumerate() {
+                check_schema(&format!("{path}[{i}]"), child);
+            }
+        }
+    }
+
+    #[test]
+    fn every_schema_is_strict_at_every_object_level() {
+        for loc in [Locale::Zh, Locale::En] {
+            for t in CATALOG {
+                check_schema(t.name, &input_schema(t, loc));
+            }
+        }
+    }
+
+    #[test]
+    fn admin_sees_exactly_the_worker_set() {
+        for builtin in [false, true] {
+            assert_eq!(
+                names(&who(Role::Admin, builtin)),
+                names(&who(Role::Worker, builtin)),
+                "builtin={builtin}"
+            );
+        }
+    }
+
+    #[test]
+    fn md_has_no_orphan_tool_or_param_sections() {
+        for loc in [Locale::Zh, Locale::En] {
+            for h in crate::agent::text::section_names(loc) {
+                if ["r.", "trace.", "inject."].iter().any(|p| h.starts_with(p)) {
+                    continue;
+                }
+                let (tool, param) = match h.split_once('.') {
+                    Some((t, p)) => (t, Some(p)),
+                    None => (h, None),
+                };
+                let spec =
+                    find(tool).unwrap_or_else(|| panic!("{loc:?}: ## {h} has no tool in CATALOG"));
+                if let Some(p) = param {
+                    assert!(
+                        spec.params.iter().any(|x| x.name == p),
+                        "{loc:?}: ## {h} has no param in CATALOG"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_bounds_match_the_md() {
+        let prop = |tool: &str, param: &str| {
+            input_schema(find(tool).unwrap(), Locale::Zh)["properties"][param].clone()
+        };
+        for (tool, param, max) in [
+            ("read_channel", "limit", 200),
+            ("search", "limit", 200),
+            ("channel_listen", "minutes", 480),
+            ("schedule_wakeup", "after_minutes", 1440),
+        ] {
+            let s = prop(tool, param);
+            assert_eq!(s["type"], "integer", "{tool}.{param}");
+            assert_eq!(s["minimum"], 1, "{tool}.{param}");
+            assert_eq!(s["maximum"], max, "{tool}.{param}");
         }
     }
 }
