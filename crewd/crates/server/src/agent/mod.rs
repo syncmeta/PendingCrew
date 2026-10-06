@@ -3,10 +3,12 @@
 //! 不写中文字面量（`literals` 测试钉住），给开发者看的错误写英文短句。
 pub mod catalog;
 pub mod port;
+pub mod rpc;
 pub mod runtime;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod text;
+pub mod tools;
 
 mod literals;
 

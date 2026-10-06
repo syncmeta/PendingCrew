@@ -22,12 +22,18 @@ fn to_value<T: Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
 }
 
-/// 内部错误（库 / SQL / 序列化失败、账本不变式坏了）：细节只进日志（stderr），客户端拿到一句通用话 + 一个编号
-/// （对日志用）。错误原文可能带表名、SQL、数据片段，不上线（Task 14 复审裁定 5）。
-fn internal(detail: impl std::fmt::Display) -> RpcError {
+/// 把内部错误细节写进日志，返回对日志用的编号（agent 工具回执也用它：只给编号，不给细节）。
+pub(crate) fn log_internal(detail: impl std::fmt::Display) -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     eprintln!("crewd: 内部错误 #{n}: {detail}");
+    n
+}
+
+/// 内部错误（库 / SQL / 序列化失败、账本不变式坏了）：细节只进日志（stderr），客户端拿到一句通用话 + 一个编号
+/// （对日志用）。错误原文可能带表名、SQL、数据片段，不上线（Task 14 复审裁定 5）。
+pub(crate) fn internal(detail: impl std::fmt::Display) -> RpcError {
+    let n = log_internal(detail);
     RpcError::new(
         RpcError::INTERNAL,
         format!("内部错误 #{n}（详情见 crewd 日志）"),

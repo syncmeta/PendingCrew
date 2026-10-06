@@ -181,9 +181,9 @@ fn no_agent_facing_literals_in_source() {
 
 const PREFIXES: [&str; 3] = ["r.", "trace.", "inject."];
 
-/// 这些 `r.*` 节已写进 md，但调用它们的代码要到 Task 7（`tools::call`）才有；到那时代码一用上它们，
-/// 下面 `md_sections_are_all_used_or_allow_listed` 里「清单里的节不许已被用到」那条就会红，提醒把它从清单删掉。
-const UNUSED_UNTIL_TASK_7: &[&str] = &["r.captain_only", "r.not_on_builtin", "r.bad_args"];
+/// md 里已写好、但调用它们的代码还没有的节（Task 7 起空了：`r.captain_only` / `r.not_on_builtin` / `r.bad_args`
+/// 已被 `tools::call` / `parse_args` 用上）。清单里的节一旦被代码用到，下面的测试就红，提醒把它删掉。
+const UNUSED_UNTIL_TASK_7: &[&str] = &[];
 
 fn used_keys() -> std::collections::BTreeSet<String> {
     let mut used = std::collections::BTreeSet::new();

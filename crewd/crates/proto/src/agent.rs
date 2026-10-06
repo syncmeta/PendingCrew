@@ -12,8 +12,15 @@ pub mod methods {
     pub const HOOK: &str = "agent.hook";
 }
 
-/// serve → helper 的推送：角色变了，工具表要重取。`data = { "role": Role }`。
+/// serve → helper 的推送：角色变了，工具表要重取。`data` 是 [`ToolsChanged`]。
 pub const TOOLS_CHANGED: &str = "agent.tools_changed";
+
+/// `agent.tools_changed` 的 `data`：此刻的角色（线上 `{"role": "captain" | "worker"}`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolsChanged {
+    pub role: crate::Role,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -137,14 +144,7 @@ pub(crate) fn schema(g: &mut schemars::SchemaGenerator) -> Value {
     // HookKind 只出现在 HookParams 里，`sub::<HookParams>` 已把它放进 `$defs`；这里再取一次保证它有名字。
     let _ = crate::sub::<HookKind>(g);
     let mut push = serde_json::Map::new();
-    push.insert(
-        TOOLS_CHANGED.into(),
-        json!({
-            "type": "object",
-            "properties": { "role": crate::sub::<crate::Role>(g) },
-            "required": ["role"],
-        }),
-    );
+    push.insert(TOOLS_CHANGED.into(), crate::sub::<ToolsChanged>(g));
     json!({ "methods": methods, "push": push })
 }
 
@@ -186,6 +186,23 @@ mod tests {
         let r = serde_json::to_value(CallResult::err("x".into())).unwrap();
         assert_eq!(r, json!({"text": "x", "isError": true}));
         assert!(!CallResult::ok("y".into()).is_error);
+    }
+
+    #[test]
+    fn tools_changed_is_one_role_field() {
+        let v = serde_json::to_value(ToolsChanged {
+            role: crate::Role::Captain,
+        })
+        .unwrap();
+        assert_eq!(v, json!({"role": "captain"}));
+        let back: ToolsChanged = serde_json::from_value(v).unwrap();
+        assert_eq!(back.role, crate::Role::Captain);
+        assert!(serde_json::from_value::<ToolsChanged>(json!({"role": "worker", "x": 1})).is_err());
+        let api = crate::api_schema();
+        assert!(
+            api["$defs"]["ToolsChanged"].is_object(),
+            "顶层 $defs 缺 ToolsChanged"
+        );
     }
 
     #[test]

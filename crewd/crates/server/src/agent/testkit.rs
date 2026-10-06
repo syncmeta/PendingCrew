@@ -110,6 +110,21 @@ impl Fixture {
             .id
     }
 
+    /// 换机长（M3a `crews::set_captain`，经 `AppState::collab` 发 CrewChanged / SessionChanged）。
+    /// `Role::Worker` = 把机长还给夹具原来的机长。
+    pub async fn set_role(&self, session: &str, role: Role) {
+        let crew = self.me(session).await.crew_id;
+        let to = if role == Role::Captain {
+            session.to_string()
+        } else {
+            self.captain.clone()
+        };
+        self.state
+            .collab(move |tx| crewd_collab::crews::set_captain(tx, &crew, &to))
+            .await
+            .unwrap();
+    }
+
     pub fn token(&self, session: &str) -> String {
         self.state.tokens.mint(session)
     }
@@ -202,5 +217,74 @@ impl Fixture {
             .iter()
             .map(|c| format!("{c:?}"))
             .collect()
+    }
+}
+
+/// 测试用的 NDJSON 客户端：一条连接，回应按 id 取，事件先攒着。
+pub struct RpcClient {
+    rd: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+    wr: tokio::net::unix::OwnedWriteHalf,
+    next: u64,
+    events: std::collections::VecDeque<crewd_proto::Event>,
+}
+
+impl RpcClient {
+    pub async fn connect(sock: &Path) -> Self {
+        let (rd, wr) = tokio::net::UnixStream::connect(sock)
+            .await
+            .unwrap()
+            .into_split();
+        Self {
+            rd: tokio::io::BufReader::new(rd),
+            wr,
+            next: 1,
+            events: Default::default(),
+        }
+    }
+
+    async fn frame(&mut self) -> crewd_proto::ServerFrame {
+        use tokio::io::AsyncBufReadExt;
+        let mut line = String::new();
+        let n = self.rd.read_line(&mut line).await.unwrap();
+        assert!(n > 0, "crewd closed the connection");
+        serde_json::from_str(&line).unwrap()
+    }
+
+    pub async fn call(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, (i32, String)> {
+        use tokio::io::AsyncWriteExt;
+        let id = self.next;
+        self.next += 1;
+        let mut line = serde_json::to_vec(&crewd_proto::Request {
+            id,
+            method: method.into(),
+            params,
+        })
+        .unwrap();
+        line.push(b'\n');
+        self.wr.write_all(&line).await.unwrap();
+        loop {
+            match self.frame().await {
+                crewd_proto::ServerFrame::Event(e) => self.events.push_back(e),
+                crewd_proto::ServerFrame::Response(r) if r.id == id => {
+                    // `"result": null` 是成功、值为 null（M3a 的 `Outcome::Result(Value::Null)`）。
+                    return r.into_result().map_err(|e| (e.code, e.message));
+                }
+                crewd_proto::ServerFrame::Response(_) => {}
+            }
+        }
+    }
+
+    pub async fn next_event(&mut self, within: std::time::Duration) -> Option<crewd_proto::Event> {
+        if let Some(e) = self.events.pop_front() {
+            return Some(e);
+        }
+        match tokio::time::timeout(within, self.frame()).await {
+            Ok(crewd_proto::ServerFrame::Event(e)) => Some(e),
+            _ => None,
+        }
     }
 }

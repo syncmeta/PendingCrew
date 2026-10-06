@@ -401,3 +401,9 @@ Please open this session's terminal and reply. (session: {session})
 
 ## trace.crew
 {title} (crew {number})
+
+## r.failed
+Did not go through: {detail}
+
+## r.no_handler
+{name} is not implemented yet.

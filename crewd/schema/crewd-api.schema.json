@@ -2261,6 +2261,19 @@
       ],
       "type": "object"
     },
+    "ToolsChanged": {
+      "additionalProperties": false,
+      "description": "`agent.tools_changed` 的 `data`：此刻的角色（线上 `{\"role\": \"captain\" | \"worker\"}`）。",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/Role"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
     "WaitTierView": {
       "enum": [
         "fresh",
@@ -2311,15 +2324,7 @@
     },
     "push": {
       "agent.tools_changed": {
-        "properties": {
-          "role": {
-            "$ref": "#/$defs/Role"
-          }
-        },
-        "required": [
-          "role"
-        ],
-        "type": "object"
+        "$ref": "#/$defs/ToolsChanged"
       }
     }
   },

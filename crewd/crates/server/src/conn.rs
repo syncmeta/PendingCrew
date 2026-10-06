@@ -47,13 +47,15 @@ fn parse_error(msg: &str) -> ServerFrame {
 }
 
 async fn read_loop(
-    state: &AppState,
+    state: &Arc<AppState>,
     rd: OwnedReadHalf,
     tx: &mpsc::Sender<ServerFrame>,
     forwarder: &mut Option<JoinHandle<()>>,
 ) -> anyhow::Result<()> {
     let mut rd = BufReader::new(rd);
     let mut buf: Vec<u8> = Vec::new();
+    // 同一条连接上的 agent.* 请求共享一份状态（attach 过没有、推送任务）；连接结束时随之 drop。
+    let mut agent = crate::agent::rpc::AgentConn::default();
     loop {
         buf.clear();
         let n = (&mut rd)
@@ -123,6 +125,9 @@ async fn read_loop(
                 }
                 *forwarder = Some(spawn_forwarder(rx, p.topics, tx.clone()));
                 continue;
+            }
+            Ok(req) if req.method.starts_with("agent.") => {
+                ServerFrame::Response(crate::agent::rpc::handle(state, &mut agent, req, tx).await)
             }
             Ok(req) => ServerFrame::Response(crate::dispatch::handle(state, req).await),
         };

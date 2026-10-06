@@ -401,3 +401,9 @@ claude 或 codex，必须明确选。
 
 ## trace.crew
 {title}（{number}号机组）
+
+## r.failed
+没成：{detail}
+
+## r.no_handler
+{name} 还没有实现。
