@@ -366,8 +366,10 @@ version = "0.1.0"
 dependencies = [
  "regex-lite",
  "reqwest",
+ "security-framework",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

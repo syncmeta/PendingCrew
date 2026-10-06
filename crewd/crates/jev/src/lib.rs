@@ -2,5 +2,6 @@
 //! 置信度够 → `Outcome::Act` 直接执行；不够 / 没配置 / 出错 → `Outcome::Defer` 交机长。
 pub mod client;
 pub mod error;
+pub mod key;
 pub mod model;
 pub mod scrub;
