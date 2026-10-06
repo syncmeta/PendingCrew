@@ -5,6 +5,7 @@ mod menu;
 mod screen;
 mod side;
 mod tail;
+mod tracker;
 
 pub use alacritty_terminal::vte::ansi::Rgb;
 pub use input_box::{
@@ -16,3 +17,4 @@ pub use menu::{
 };
 pub use screen::{CursorPos, Screen, ScreenConfig};
 pub use tail::AnsiPlainTextTail;
+pub use tracker::{DecisionEvent, PendingDecisionTracker, STABLE_WINDOW};
