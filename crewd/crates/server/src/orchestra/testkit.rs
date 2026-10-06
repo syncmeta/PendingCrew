@@ -13,7 +13,10 @@ use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
 use tokio::sync::mpsc;
 
-use super::exec::{BoxFut, Context, ExecHandle, Executor, LaunchError, LaunchRequest, Launched};
+use super::exec::{
+    BoxFut, Context, ExecHandle, ExecSendError, Executor, LaunchError, LaunchRequest, Launched,
+    check_context,
+};
 use super::port::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -689,10 +692,10 @@ impl StandInHandle {
 }
 
 impl ExecHandle for StandInHandle {
-    fn send(&self, text: String, context: &Context) -> Result<u64, SendError> {
-        assert!(context.is_empty());
+    fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
+        check_context(self.accepts_context(), context)?;
         if text.trim().is_empty() {
-            return Err(SendError::EmptyText);
+            return Err(SendError::EmptyText.into());
         }
         let mut s = self.lock();
         s.next_id += 1;
@@ -779,6 +782,33 @@ mod self_tests {
         assert!(p.pending("a").await.unwrap().is_empty());
         assert_eq!(p.requeue_inflight().await.unwrap(), 1);
         assert_eq!(p.pending("a").await.unwrap().len(), 1);
+    }
+
+    /// 顶替句柄与 claude 句柄同一条规矩：不收 context，给了就回错误（不 panic）。
+    #[tokio::test]
+    async fn stand_in_handle_refuses_context_with_an_error() {
+        let exec = StandIn::default();
+        let (h, _rx) = exec
+            .launch(LaunchRequest {
+                session_id: "s1".into(),
+                crew_id: "c1".into(),
+                workdir: PathBuf::from("/nonexistent/wd"),
+                model: None,
+                effort: None,
+                system_prompt: None,
+                initial_prompt: None,
+                token: "tok".into(),
+                ledger: Arc::new(MemoryLedger::default()),
+            })
+            .await
+            .unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("k".into(), "v".into());
+        assert_eq!(
+            h.send("合成".into(), &ctx),
+            Err(ExecSendError::ContextUnsupported)
+        );
+        assert!(exec.sent("s1").is_empty());
     }
 
     /// 控制者裁定 C22 的填法在 MemPort 上同样成立：有 session 时 `live_sessions` 不空（含不在群里的），

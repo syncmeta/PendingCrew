@@ -68,10 +68,44 @@ pub trait Executor: Send + Sync {
     }
 }
 
+/// `ExecHandle::send` 没收下：执行器自己的原因，或调用方给了这个执行器不收的 `context`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecSendError {
+    Send(SendError),
+    /// `context` 非空、但这个执行器不收 additionalContext（调用方该先看 `accepts_context()`）。
+    ContextUnsupported,
+}
+
+impl From<SendError> for ExecSendError {
+    fn from(e: SendError) -> Self {
+        Self::Send(e)
+    }
+}
+
+impl std::fmt::Display for ExecSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Send(e) => write!(f, "{e}"),
+            Self::ContextUnsupported => write!(f, "这个执行器不收 additionalContext"),
+        }
+    }
+}
+
+impl std::error::Error for ExecSendError {}
+
+/// 不收 context 的执行器拿到非空 context → 错误（不 panic：actor 里的 panic 会停掉全部会话）。
+pub fn check_context(accepts: bool, context: &Context) -> Result<(), ExecSendError> {
+    if accepts || context.is_empty() {
+        Ok(())
+    } else {
+        Err(ExecSendError::ContextUnsupported)
+    }
+}
+
 /// §13 Q12 的窄接口（启动之外）。
 pub trait ExecHandle: Send + Sync {
-    /// `context` 只能在 `accepts_context()` 为真时非空。
-    fn send(&self, text: String, context: &Context) -> Result<u64, SendError>;
+    /// `context` 只能在 `accepts_context()` 为真时非空，否则回 `ContextUnsupported`（见 [`check_context`]）。
+    fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError>;
     fn accepts_context(&self) -> bool {
         false
     }
@@ -85,12 +119,9 @@ pub trait ExecHandle: Send + Sync {
 
 /// claude（M2b）。上下文由 hook 注入（M3b），不收 additionalContext。
 impl ExecHandle for SessionHandle {
-    fn send(&self, text: String, context: &Context) -> Result<u64, SendError> {
-        assert!(
-            context.is_empty(),
-            "claude 不收 additionalContext：调用方必须先看 accepts_context()"
-        );
-        SessionHandle::send(self, text)
+    fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
+        check_context(self.accepts_context(), context)?;
+        Ok(SessionHandle::send(self, text)?)
     }
 
     fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed> {
@@ -144,6 +175,27 @@ impl Executors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Task 6 评审 (4)：带了 context 却发给不收它的执行器 = 调用方的错，回错误、不 panic（actor 里一个 panic 会停掉全部会话）。
+    #[test]
+    fn non_empty_context_to_a_handle_that_refuses_it_is_an_error_not_a_panic() {
+        let mut ctx = Context::new();
+        ctx.insert("my_work_items".into(), "合成".into());
+        assert_eq!(
+            check_context(false, &ctx),
+            Err(ExecSendError::ContextUnsupported)
+        );
+        assert_eq!(check_context(false, &Context::new()), Ok(()));
+        assert_eq!(check_context(true, &ctx), Ok(()));
+        assert!(
+            !ExecSendError::ContextUnsupported.to_string().is_empty(),
+            "给人看的原因"
+        );
+        assert_eq!(
+            ExecSendError::from(SendError::EmptyText).to_string(),
+            SendError::EmptyText.to_string()
+        );
+    }
 
     #[test]
     fn executors_reject_kinds_that_are_not_wired_in() {
