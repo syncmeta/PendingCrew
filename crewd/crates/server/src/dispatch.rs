@@ -26,17 +26,49 @@ fn to_value<T: Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
 }
 
+/// 内部错误里不该给客户端看的细节：只进日志（stderr），客户端拿到一句通用话 + 一个编号（对日志用）。
+fn hidden_internal(detail: impl std::fmt::Display) -> RpcError {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    eprintln!("crewd: 内部错误 #{n}: {detail}");
+    RpcError::new(
+        RpcError::INTERNAL,
+        format!("内部错误 #{n}（详情见 crewd 日志）"),
+    )
+}
+
 /// collab 错误 → RPC 错误码（M3b 的 agent RPC 复用同一张表）。
 pub fn collab_err(e: CollabError) -> RpcError {
+    use crewd_work::Rejected as R;
     match e {
         CollabError::NotFound(m) => RpcError::new(RpcError::NOT_FOUND, m),
         CollabError::Invalid(m) => RpcError::new(RpcError::INVALID_PARAMS, m),
         CollabError::Forbidden(m) => RpcError::new(RpcError::FORBIDDEN, m),
         CollabError::Conflict(m) => RpcError::new(RpcError::CONFLICT, m),
-        CollabError::Work(crewd_work::Rejected::Forbidden(a)) => {
+        CollabError::Work(R::Forbidden(a)) => {
             RpcError::new(RpcError::FORBIDDEN, format!("not allowed: {a}"))
         }
+        // 号码格式对、账本里没有（R11；`asks::with_book` 已先映射成 NotFound，这里兜底同一个码）。
+        CollabError::Work(r @ (R::UnknownAsk(_) | R::UnknownItem(_) | R::UnknownEntry(_))) => {
+            RpcError::new(RpcError::NOT_FOUND, r.to_string())
+        }
+        // 与当前状态冲突（控制者裁定 a）：换个时机就不一样，不是参数写错。
+        CollabError::Work(
+            r @ (R::AskNotOpen(_)
+            | R::TransferPending(_)
+            | R::NoPendingTransfer(_)
+            | R::EntryClosed(_)
+            | R::Terminal(_)
+            | R::AskInUse(_)),
+        ) => RpcError::new(RpcError::CONFLICT, r.to_string()),
+        // 账本自己的不变式坏了 = 服务端的错（控制者裁定 d），细节不上线。
+        CollabError::Work(R::Invariant(v)) => {
+            hidden_internal(format!("work book invariant violated: {v}"))
+        }
         CollabError::Work(r) => RpcError::new(RpcError::INVALID_PARAMS, r.to_string()),
+        CollabError::Store(crewd_store::StoreError::NotFound(m)) => {
+            RpcError::new(RpcError::NOT_FOUND, m)
+        }
         CollabError::Store(e) => internal(e),
     }
 }
@@ -325,5 +357,68 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             RpcError::METHOD_NOT_FOUND,
             format!("未知方法: {other}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crewd_store::StoreError;
+    use crewd_work::{AskId, EntryNo, Rejected, Violation, WorkId};
+
+    fn code(e: CollabError) -> i32 {
+        collab_err(e).code
+    }
+
+    /// 控制者裁定 a：与当前状态冲突（问已经答过 / 撤过、转交已在途 / 没有在途、入口已关、项已结、问还卡着活项）
+    /// = -32009，与「审批已经决过」同一个码（Mac 与 iOS 同时答同一条问，后到的要看到「已经答了」，不是「参数错」）。
+    #[test]
+    fn state_conflicts_are_conflict_not_invalid_params() {
+        for r in [
+            Rejected::AskNotOpen(AskId(1)),
+            Rejected::TransferPending(WorkId(1)),
+            Rejected::NoPendingTransfer(WorkId(1)),
+            Rejected::EntryClosed(EntryNo(1)),
+            Rejected::Terminal(WorkId(1)),
+            Rejected::AskInUse(AskId(1)),
+        ] {
+            let what = r.to_string();
+            assert_eq!(code(CollabError::Work(r)), RpcError::CONFLICT, "{what}");
+        }
+        assert_eq!(
+            code(CollabError::Work(Rejected::Blank("text"))),
+            RpcError::INVALID_PARAMS
+        );
+    }
+
+    /// 控制者裁定 d：store 层的「没有这一行」= -32004；账本不变式被破坏 = -32603，细节不给客户端（只给编号，对日志）。
+    #[test]
+    fn store_not_found_and_invariants_map_to_their_codes() {
+        assert_eq!(
+            code(CollabError::Store(StoreError::NotFound("没有 x".into()))),
+            RpcError::NOT_FOUND
+        );
+        for r in [
+            Rejected::UnknownAsk(AskId(9)),
+            Rejected::UnknownItem(WorkId(9)),
+            Rejected::UnknownEntry(EntryNo(9)),
+        ] {
+            let what = r.to_string();
+            assert_eq!(code(CollabError::Work(r)), RpcError::NOT_FOUND, "{what}");
+        }
+        let v = Violation::BlankTitle(WorkId(77));
+        let detail = v.to_string();
+        let e = collab_err(CollabError::Work(Rejected::Invariant(v)));
+        assert_eq!(e.code, RpcError::INTERNAL);
+        assert!(
+            !e.message.contains("W77") && !e.message.contains(&detail),
+            "不变式的细节不上线：{}",
+            e.message
+        );
+        assert!(
+            e.message.contains('#'),
+            "带一个对日志用的编号：{}",
+            e.message
+        );
     }
 }

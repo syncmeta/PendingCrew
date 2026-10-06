@@ -180,7 +180,15 @@ pub enum ServerFrame {
     Event(Event),
 }
 
+/// params 只能是对象（或 `null`，交给目标类型决定收不收）。数组必须在这里拦：serde 会把它按字段顺序读成结构体
+/// （`["c"]` → `{crewId:"c"}`），契约里没有这种写法（控制者裁定 b）。
 pub fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, RpcError> {
+    if !(params.is_object() || params.is_null()) {
+        return Err(RpcError::new(
+            RpcError::INVALID_PARAMS,
+            "参数无效: params 必须是对象或 null",
+        ));
+    }
     serde_json::from_value(params)
         .map_err(|e| RpcError::new(RpcError::INVALID_PARAMS, format!("参数无效: {e}")))
 }
@@ -450,6 +458,84 @@ mod tests {
         assert!(parse_no_params(json!({"x":1})).is_err());
         let p: SessionListParams = parse_params_or_default(Value::Null).unwrap();
         assert_eq!(p.crew_id, None);
+    }
+
+    /// 控制者裁定 b：params 只能是对象或 null。serde 会把数组按字段顺序读成结构体（`["c"]` → `{crewId:"c"}`），
+    /// 所以这一条必须在解析前拦，不能指望字段类型不对。
+    #[test]
+    fn params_must_be_an_object_or_null() {
+        for bad in [json!(["c"]), json!([]), json!(1), json!("c"), json!(true)] {
+            assert_eq!(
+                parse_params::<CrewIdParams>(bad.clone()).unwrap_err().code,
+                RpcError::INVALID_PARAMS,
+                "{bad}"
+            );
+            assert_eq!(
+                parse_params_or_default::<SessionListParams>(bad.clone())
+                    .unwrap_err()
+                    .code,
+                RpcError::INVALID_PARAMS,
+                "{bad}"
+            );
+            assert!(parse_no_params(bad.clone()).is_err(), "{bad}");
+        }
+        assert!(parse_params::<CrewIdParams>(json!({"crewId":"c"})).is_ok());
+    }
+
+    /// 控制者裁定 c：参数里嵌套的值（@、成员、附件）也拒未知字段；契约里写成 `additionalProperties: false`。
+    /// 只影响反序列化：线上输出不变。
+    #[test]
+    fn nested_param_values_deny_unknown_fields() {
+        assert!(serde_json::from_value::<Mention>(json!({"kind":"human","bogus":1})).is_err());
+        assert!(
+            serde_json::from_value::<MemberRef>(json!({"kind":"session","id":"w","bogus":1}))
+                .is_err()
+        );
+        assert!(serde_json::from_value::<MemberRef>(json!({"kind":"human","id":"x"})).is_err());
+        assert!(
+            serde_json::from_value::<Attachment>(
+                json!({"id":"a","mime":"x","path":"/p","width":3})
+            )
+            .is_err()
+        );
+        assert_eq!(
+            parse_params::<MessagePostParams>(json!({
+                "channelId":"c","text":"t","mentions":[{"kind":"session","targetId":"w","label":"@w"}]
+            }))
+            .unwrap_err()
+            .code,
+            RpcError::INVALID_PARAMS
+        );
+        // 合法的照收，输出不变。
+        let m: Mention = serde_json::from_value(json!({"kind":"session","targetId":"w"})).unwrap();
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            json!({"kind":"session","targetId":"w"})
+        );
+        assert_eq!(
+            serde_json::from_value::<MemberRef>(json!({"kind":"human"})).unwrap(),
+            MemberRef::Human
+        );
+        assert_eq!(
+            serde_json::from_value::<MemberRef>(json!({"kind":"session","id":"w"})).unwrap(),
+            MemberRef::session("w")
+        );
+        for (name, s) in [
+            ("Mention", json!(schema_for!(Mention))),
+            ("Attachment", json!(schema_for!(Attachment))),
+        ] {
+            assert_eq!(s["additionalProperties"], json!(false), "{name}: {s}");
+        }
+        let member = json!(schema_for!(MemberRef));
+        let variants = member["oneOf"].as_array().expect("MemberRef 是 oneOf");
+        assert_eq!(variants.len(), 2);
+        for v in variants {
+            assert_eq!(
+                v["additionalProperties"],
+                json!(false),
+                "MemberRef: {member}"
+            );
+        }
     }
 
     #[test]

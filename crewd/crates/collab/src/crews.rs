@@ -302,6 +302,8 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     ids.extend(to);
     refuse_builtin(tx.conn(), &ids)?;
     get(tx.conn(), crew)?;
+    // 不存在的父 = NotFound（控制者裁定 e），与「存在但不是直系父」（Invalid）分开。
+    get(tx.conn(), from)?;
     if !parents(tx.conn(), crew)?.iter().any(|p| p == from) {
         return Err(CollabError::Invalid(format!(
             "{crew} 不是 {from} 的直系子机组"
@@ -612,6 +614,11 @@ mod tests {
         assert!(matches!(
             err(&mut s, |tx| release(tx, "crew-b", "chief", None)),
             CollabError::Forbidden(_)
+        ));
+        // 控制者裁定 e：不存在的父 = NotFound（-32004），不是「不是直系子机组」（-32602）。
+        assert!(matches!(
+            err(&mut s, |tx| release(tx, "crew-b", "nope", None)),
+            CollabError::NotFound(_)
         ));
         ok(&mut s, |tx| release(tx, "crew-b", "crew-a", None));
         assert!(edges(&s, "crew-b").is_empty());

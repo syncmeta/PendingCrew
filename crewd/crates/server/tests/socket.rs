@@ -261,6 +261,29 @@ async fn params_are_strict_and_errors_are_typed() {
             .await,
         -32004
     );
+    // 控制者裁定 b：params 是数组 = -32602（serde 本会把它按字段顺序读成结构体）。
+    assert_eq!(c.call_err(11, "crew.get", json!(["a"])).await, -32602);
+    assert_eq!(c.call_err(12, "crew.list", json!([])).await, -32602);
+    // 控制者裁定 c：嵌套的成员 / @ 也拒未知字段。
+    assert_eq!(
+        c.call_err(
+            13,
+            "channel.addMembers",
+            json!({"channelId":"a/lobby","members":[{"kind":"human","id":"x"}]})
+        )
+        .await,
+        -32602
+    );
+    // 控制者裁定 e：不存在的父机组 = -32004。
+    assert_eq!(
+        c.call_err(
+            14,
+            "crew.release",
+            json!({"crewId":"a","fromParentId":"nope"})
+        )
+        .await,
+        -32004
+    );
     // 连接还活着
     assert_eq!(
         c.call(8, "system.hello", Value::Null).await["server"],
@@ -367,7 +390,8 @@ async fn asks_approvals_and_restart_round_trip() {
             json!({"crewId":"a","ask":"H1","text":"再答"})
         )
         .await,
-        -32602
+        -32009,
+        "控制者裁定 a：已经答过 = 与当前状态冲突（同审批再决），不是参数错"
     );
     let aps = c.call(5, "approval.list", Value::Null).await;
     // C10：客户端把 ask 与 approval 合并成一张「等你拍板」清单，两边都必须带机组与创建时间。
@@ -688,4 +712,106 @@ async fn subscribe_with_unknown_topic_is_invalid_params_and_subscribes_nothing()
     tokio::time::sleep(Duration::from_millis(100)).await;
     let h = sub.call(2, "system.hello", Value::Null).await;
     assert_eq!(h["apiVersion"], 2);
+}
+
+/// 控制者裁定 a：再撤一次 / 撤了再答 = -32009（状态冲突），与审批再决同码。
+#[tokio::test]
+async fn re_withdrawing_or_answering_a_withdrawn_ask_is_a_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let a = c
+        .call(
+            1,
+            "ask.withdraw",
+            json!({"crewId":"a","ask":"H1","reason":"不用了"}),
+        )
+        .await;
+    assert_eq!(a["state"], "withdrawn");
+    assert_eq!(
+        c.call_err(
+            2,
+            "ask.withdraw",
+            json!({"crewId":"a","ask":"H1","reason":"再撤"})
+        )
+        .await,
+        -32009
+    );
+    assert_eq!(
+        c.call_err(
+            3,
+            "ask.answer",
+            json!({"crewId":"a","ask":"H1","text":"晚了"})
+        )
+        .await,
+        -32009
+    );
+}
+
+/// 订阅者收齐 `until` 之前的全部事件名（`until` 是一次 hello 调用：它的回执之前到的都算）。
+async fn events_until_hello(sub: &mut Client, id: u64) -> Vec<String> {
+    // 给转发任务留出时间：事件在写操作回执前已发布，但转发到这条连接是另一个任务。
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    sub.send_raw(&json!({"id":id,"method":"system.hello"}).to_string())
+        .await;
+    let mut names = Vec::new();
+    loop {
+        match sub.next().await {
+            ServerFrame::Event(e) => names.push(e.event),
+            ServerFrame::Response(r) => {
+                assert_eq!(r.id, id);
+                return names;
+            }
+        }
+    }
+}
+
+/// 控制者裁定 f：问、审批、重启询问、群、机组的变更各自推到自己的主题，恰好一次。
+#[tokio::test]
+async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut sub = Client::connect(dir.path()).await;
+    sub.call(
+        1,
+        "events.subscribe",
+        json!({"topics":["ask","approval","restart","channel","crew"]}),
+    )
+    .await;
+    let mut c = Client::connect(dir.path()).await;
+
+    let a = c
+        .call(
+            1,
+            "ask.answer",
+            json!({"crewId":"a","ask":"H1","text":"用甲"}),
+        )
+        .await;
+    assert_eq!(a["state"], "answered");
+    assert_eq!(events_until_hello(&mut sub, 101).await, ["ask.changed"]);
+
+    let id = c.call(2, "approval.list", Value::Null).await[0]["id"].clone();
+    c.call(3, "approval.decide", json!({"id":id,"allow":false}))
+        .await;
+    assert_eq!(
+        events_until_hello(&mut sub, 102).await,
+        ["approval.changed"]
+    );
+
+    let rid = c.call(4, "restart.pending", Value::Null).await["id"].clone();
+    c.call(5, "restart.answer", json!({"id":rid,"answer":"later"}))
+        .await;
+    assert_eq!(events_until_hello(&mut sub, 103).await, ["restart.changed"]);
+
+    c.call(
+        6,
+        "channel.update",
+        json!({"channelId":"a/lobby","purpose":"日常"}),
+    )
+    .await;
+    assert_eq!(events_until_hello(&mut sub, 104).await, ["channel.changed"]);
+
+    c.call(7, "crew.update", json!({"crewId":"a","statusLine":"在跑"}))
+        .await;
+    assert_eq!(events_until_hello(&mut sub, 105).await, ["crew.changed"]);
 }

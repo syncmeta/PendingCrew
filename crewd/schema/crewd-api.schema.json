@@ -448,9 +448,10 @@
           "type": "string"
         },
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -467,6 +468,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -561,9 +563,10 @@
           "type": "string"
         },
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -580,6 +583,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -633,9 +637,10 @@
     "ChannelMemberParams": {
       "$defs": {
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -652,6 +657,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -686,9 +692,10 @@
     "ChannelMembersParams": {
       "$defs": {
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -705,6 +712,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -742,9 +750,10 @@
     "ChannelSetOwnerParams": {
       "$defs": {
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -761,6 +770,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -871,9 +881,10 @@
           "type": "string"
         },
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -890,6 +901,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -1353,9 +1365,10 @@
           "type": "string"
         },
         "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。",
+          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
           "oneOf": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "type": "string"
@@ -1372,6 +1385,7 @@
               "type": "object"
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "kind": {
                   "const": "human",
@@ -1934,6 +1948,8 @@
     "Message": {
       "$defs": {
         "Attachment": {
+          "additionalProperties": false,
+          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
             "filename": {
               "type": [
@@ -1966,6 +1982,8 @@
           "type": "object"
         },
         "Mention": {
+          "additionalProperties": false,
+          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
             "kind": {
               "$ref": "#/$defs/MentionKind"
@@ -2117,6 +2135,8 @@
     "MessagePostParams": {
       "$defs": {
         "Attachment": {
+          "additionalProperties": false,
+          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
             "filename": {
               "type": [
@@ -2149,6 +2169,8 @@
           "type": "object"
         },
         "Mention": {
+          "additionalProperties": false,
+          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
             "kind": {
               "$ref": "#/$defs/MentionKind"
@@ -2734,6 +2756,8 @@
     "Todo": {
       "$defs": {
         "Attachment": {
+          "additionalProperties": false,
+          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
             "filename": {
               "type": [
