@@ -178,6 +178,15 @@ async fn refused_resume_restarts_once_with_a_fresh_recorded_id() {
         !events.iter().any(|e| exited(e).is_some()),
         "被拒的那次不算退出：{events:?}"
     );
+    let last_working = events.iter().rev().find_map(|e| match e {
+        SessionEvent::Working(w) => Some(*w),
+        _ => None,
+    });
+    assert_eq!(
+        last_working,
+        Some(false),
+        "被拒的那个进程吐过字（Working(true)），重起前要补一个 Working(false)：{events:?}"
+    );
     let SessionEvent::Spawned {
         agent_session_id, ..
     } = events.last().unwrap()
@@ -193,6 +202,93 @@ async fn refused_resume_restarts_once_with_a_fresh_recorded_id() {
     screen_contains(&h, "FRESH --session-id").await;
     h.stop().unwrap();
     until(&mut rx, |e| exited(e).is_some()).await;
+}
+
+/// 被拒之后进程没退、还在吐字：驱动层杀掉它再收尸。macOS 上被杀的会话首进程要等 PTY 里的
+/// 输出被读走才收得了尸——收尸时不读主端，会话任务就永远挂住（号也一直占着）。
+#[tokio::test]
+async fn refused_resume_with_trailing_output_still_restarts() {
+    let env = Env::new();
+    let ledger = Arc::new(MemoryLedger::with(Some("noisy-id")));
+    let program = env.script(
+        "case \"$*\" in\n\
+         *--resume*) echo \"No conversation found with session ID: noisy-id\"; \
+         i=0; while [ $i -lt 2000 ]; do printf 'x\\n'; i=$((i+1)); done; sleep 30;;\n\
+         *) echo \"FRESH $*\"; sleep 30;;\n\
+         esac",
+    );
+    let (h, mut rx) = start_claude(env.start(program, ledger.clone()), env.config())
+        .await
+        .unwrap();
+    until(&mut rx, |e| {
+        matches!(e, SessionEvent::Spawned { resumed: false, .. })
+    })
+    .await;
+    screen_contains(&h, "FRESH --session-id").await;
+    h.stop().unwrap();
+    until(&mut rx, |e| exited(e).is_some()).await;
+}
+
+/// 已经在停（`stop()` / 句柄全丢）之后才认出续跑被拒：照常退出，不重起、不动账本。
+/// `stop` 返回要留着的句柄（`stop()` 那条不能顺带丢句柄，否则两条测成一条）。
+async fn refusal_while_stopping(
+    id: &str,
+    stop: impl FnOnce(SessionHandle) -> Option<SessionHandle>,
+) {
+    let env = Env::new();
+    let ledger = Arc::new(MemoryLedger::with(Some(id)));
+    // 忽略 TERM：停的时候它还活着，被拒的原话在 SIGTERM 之后、SIGKILL 之前才出来。
+    let program = env.script(&format!(
+        "trap '' TERM\n\
+         echo armed\n\
+         case \"$*\" in\n\
+         *--resume*) sleep 0.8; echo \"No conversation found with session ID: {id}\"; sleep 30;;\n\
+         *) echo FRESH; sleep 30;;\n\
+         esac"
+    ));
+    let mut config = env.config();
+    config.stop_grace = Duration::from_millis(1500);
+    let (h, mut rx) = start_claude(env.start(program, ledger.clone()), config)
+        .await
+        .unwrap();
+    next(&mut rx).await;
+    // 等 trap 装好再停（冷启动时 sh 可能还没执行到 trap，SIGTERM 会直接把它带走）。
+    screen_contains(&h, "armed").await;
+    let _keep = stop(h);
+    let events = until(&mut rx, |e| exited(e).is_some()).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::ResumeRefused { .. })),
+        "前提：停的过程中认出了被拒：{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Spawned { .. })),
+        "在停就不能重起：{events:?}"
+    );
+    let info = exited(events.last().unwrap()).unwrap();
+    assert!(info.stopped_by_user, "{info:?}");
+    assert_eq!(ledger.current().as_deref(), Some(id), "账本不能被改写");
+}
+
+#[tokio::test]
+async fn refusal_after_stop_does_not_restart() {
+    refusal_while_stopping("stopped-id", |h| {
+        h.stop().unwrap();
+        Some(h)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn refusal_after_every_handle_dropped_does_not_restart() {
+    refusal_while_stopping("dropped-id", |h| {
+        drop(h);
+        None
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -289,14 +385,38 @@ async fn registry_holds_the_live_process_and_is_cleared_on_exit() {
     );
     h.stop().unwrap();
     until(&mut rx, |e| exited(e).is_some()).await;
-    // 任务在发出 Exited 之后才清账，给它一拍。
-    for _ in 0..50 {
-        if registry.entries().is_empty() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("退出后登记表没清：{:?}", registry.entries());
+    // 先清账、后发 Exited：见到 Exited 时登记表必须已经是空的。
+    assert!(
+        registry.entries().is_empty(),
+        "Exited 发出时登记表没清：{:?}",
+        registry.entries()
+    );
+}
+
+/// 登记表写不进去：杀掉刚起的进程并报错。进程一起来就狂吐输出——macOS 上没人读主端时
+/// 被 SIGKILL 的会话首进程收不了尸（关从端要等输出被读走），收尸时必须同时读掉主端。
+#[tokio::test]
+async fn registry_failure_kills_the_child_even_if_it_floods_the_pty() {
+    let env = Env::new();
+    // 父目录不存在：load 当空表，record 落盘失败。
+    let registry =
+        Arc::new(ProcessRegistry::load(&env.dir.path().join("missing").join("r.json")).unwrap());
+    let mut config = env.config();
+    config.registry = Some(registry.clone());
+    let program = env.script("while :; do echo flood-flood-flood-flood; done");
+    let err = tokio::time::timeout(
+        Duration::from_secs(10),
+        start_claude(
+            env.start(program, Arc::new(MemoryLedger::default())),
+            config,
+        ),
+    )
+    .await
+    .expect("登记表失败后 10s 内要返回（收尸不能挂住）")
+    .err()
+    .expect("必须报错");
+    assert!(matches!(err, StartError::Registry(_)), "{err:?}");
+    assert!(registry.entries().is_empty());
 }
 
 fn write_auth_failure(projects: &Path, id: &str) {

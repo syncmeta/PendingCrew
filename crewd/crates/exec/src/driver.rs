@@ -322,9 +322,11 @@ impl Running {
     }
 
     /// 进程已收尸：停掉附属任务、删启动文件、放开会话号（按这个顺序）。
-    fn release(&mut self) {
+    async fn release(&mut self) {
         self.shutdown_helpers();
-        self.files = None;
+        if let Some(files) = self.files.take() {
+            let _ = tokio::task::spawn_blocking(move || drop(files)).await;
+        }
         self.live = None;
     }
 }
@@ -341,12 +343,17 @@ async fn launch(
     let live = LiveId::claim(agent.id())?;
     if let AgentSessionArg::New(id) = &agent {
         let (ledger, id) = (start.ledger.clone(), id.clone());
-        tokio::task::spawn_blocking(move || ledger.record(&id))
+        blocking(move || ledger.record(&id))
             .await
-            .map_err(|e| StartError::Ledger(io::Error::other(e)))?
             .map_err(StartError::Ledger)?;
     }
-    let (args, files) = prepare_claude(&start.spec, agent.clone(), &config.runtime_dir)
+    let (spec, a, dir) = (
+        start.spec.clone(),
+        agent.clone(),
+        config.runtime_dir.clone(),
+    );
+    let (args, files) = blocking(move || prepare_claude(&spec, a, &dir))
+        .await
         .map_err(StartError::Files)?;
     let env = build_env_from_process(&start.child_path, &start.spec.additional_env);
     let since = SystemTime::now();
@@ -371,20 +378,32 @@ async fn launch(
     let master = Arc::new(proc.master);
     let mut child = proc.child;
     if let Some(registry) = &config.registry {
-        // 只登记自成进程组的（setsid 后 pgid == pid）：回收时按组杀，组号不对会杀错人。
-        let recorded = match probe(proc.pid as i32) {
-            ProbeResult::Found(identity) if identity.pgid == proc.pid as i32 => {
-                registry.record(&start.session_id, identity)
+        let (registry, session_id, pid) = (registry.clone(), start.session_id.clone(), proc.pid);
+        let recorded = blocking(move || {
+            // 只登记自成进程组的（setsid 后 pgid == pid）：回收时按组杀，组号不对会杀错人。
+            let r = match probe(pid as i32) {
+                ProbeResult::Found(identity) if identity.pgid == pid as i32 => {
+                    registry.record(&session_id, identity)
+                }
+                ProbeResult::Found(identity) => Err(io::Error::other(format!(
+                    "刚起的进程 {pid} 不是自己进程组的组长（pgid {}），不登记",
+                    identity.pgid
+                ))),
+                other => Err(io::Error::other(format!("读不到刚起的进程身份：{other:?}"))),
+            };
+            if r.is_err() {
+                // `record` 落盘失败时内存里已经记上了：抹掉，免得下次落盘把一个死 pid 带进去。
+                let _ = registry.forget(&session_id);
             }
-            ProbeResult::Found(identity) => Err(io::Error::other(format!(
-                "刚起的进程 {} 不是自己进程组的组长（pgid {}），不登记",
-                proc.pid, identity.pgid
-            ))),
-            other => Err(io::Error::other(format!("读不到刚起的进程身份：{other:?}"))),
-        };
+            r
+        })
+        .await;
         if let Err(e) = recorded {
             kill_group(proc.pid);
-            let _ = child.wait().await;
+            let e = match reap_killed(&mut child, &master, REAP_LIMIT).await {
+                Ok(_) => e,
+                Err(reap) => io::Error::other(format!("{e}；杀掉刚起的进程后{reap}")),
+            };
             return Err(StartError::Registry(e));
         }
     }
@@ -457,6 +476,47 @@ fn terminate(pid: u32) {
     }
 }
 
+/// 在阻塞线程池里跑一段文件 IO（账本、启动文件、登记表），不占 tokio 工作线程。
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(io::Error::other)?
+}
+
+/// [`reap_killed`] 的上限。
+const REAP_LIMIT: Duration = Duration::from_secs(5);
+
+/// 收一个**已经发过 SIGKILL** 的进程，同时把主端的输出读掉扔掉：macOS 上会话首进程退出时
+/// 要等 PTY 里的输出被读走（`ttywait`），没人读主端它就永远收不了尸。超过 `limit` 报错，不挂住
+/// （丢下的 `Child` 由 tokio 之后收尸）。
+async fn reap_killed(
+    child: &mut tokio::process::Child,
+    master: &PtyMaster,
+    limit: Duration,
+) -> io::Result<ExitStatusKind> {
+    let deadline = tokio::time::Instant::now() + limit;
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut reading = true;
+    loop {
+        tokio::select! {
+            status = child.wait() => return Ok(decode(status)),
+            r = master.read(&mut buf), if reading => {
+                if !matches!(r, Ok(n) if n > 0) {
+                    reading = false;
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("{}ms 内没能收尸", limit.as_millis()),
+                ));
+            }
+        }
+    }
+}
+
 fn decode(status: io::Result<std::process::ExitStatus>) -> ExitStatusKind {
     use std::os::unix::process::ExitStatusExt;
     match status {
@@ -486,6 +546,8 @@ async fn run(mut t: Task) {
     let mut reading = true;
     let mut commands_open = true;
     let mut stop_deadline: Option<tokio::time::Instant> = None;
+    // 已经在停（`stop()`、句柄全丢）：此后认出续跑被拒也不重起——那是我们要它停的。
+    let mut stopping = false;
     let mut retried = false;
     let mut tick = tokio::time::interval(t.config.tick);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -501,11 +563,13 @@ async fn run(mut t: Task) {
             cmd = t.cmd_rx.recv(), if commands_open => match cmd {
                 Some(c) => {
                     if handle(&mut t, c) {
+                        stopping = true;
                         stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
                     }
                 }
                 None => {
                     commands_open = false;
+                    stopping = true;
                     t.core.stop(Instant::now());
                     terminate(t.running.pid);
                     stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
@@ -530,14 +594,24 @@ async fn run(mut t: Task) {
         }
         let actions = t.core.take_actions();
         let refused = dispatch(&mut t, actions);
-        if refused && !retried {
+        if refused && !retried && !stopping {
             retried = true;
-            // 被拒的那个进程：已经自己退了就用它的退出状态，还活着就杀掉收尸。
+            // 被拒的那个进程：已经自己退了就用它的退出状态，还活着就杀掉收尸（边读边等）。
             let old_status = match exit.take() {
                 Some(status) => status,
                 None => {
                     kill_group(t.running.pid);
-                    decode(t.running.child.wait().await)
+                    let r = &mut t.running;
+                    match reap_killed(&mut r.child, &r.master, REAP_LIMIT).await {
+                        Ok(status) => status,
+                        Err(e) => {
+                            eprintln!(
+                                "crewd: session {}: 续跑被拒的进程 {} {e}，照样换新号重起",
+                                t.start.session_id, r.pid
+                            );
+                            ExitStatusKind::Signal(9)
+                        }
+                    }
                 }
             };
             match respawn(&mut t).await {
@@ -551,13 +625,13 @@ async fn run(mut t: Task) {
                         other => Health::new(HealthKind::LaunchFailed, other.to_string()),
                     };
                     let _ = t.ev_tx.send(SessionEvent::Health(Some(health)));
-                    finish(&mut t, old_status);
+                    finish(&mut t, old_status).await;
                     return;
                 }
             }
         }
         if let Some(status) = exit {
-            finish(&mut t, status);
+            finish(&mut t, status).await;
             return;
         }
     }
@@ -566,12 +640,13 @@ async fn run(mut t: Task) {
 /// 进程已收尸（退出由 `Child::wait` 决定，不看主端 EOF：主端/从端漏进别的进程时 EOF 可能
 /// 永远不来）。先收拾——登记表、启动文件、会话号——再把 `Core` 最后的事件（`Exited` 在末尾）
 /// 发出去：调用方见到 `Exited` 就能马上用同一个会话号重起。
-fn finish(t: &mut Task, status: ExitStatusKind) {
+async fn finish(t: &mut Task, status: ExitStatusKind) {
     t.core.on_exit(status, Instant::now());
     let actions = t.core.take_actions();
-    t.running.release();
-    if let Some(registry) = &t.config.registry {
-        let _ = registry.forget(&t.start.session_id);
+    t.running.release().await;
+    if let Some(registry) = t.config.registry.clone() {
+        let id = t.start.session_id.clone();
+        let _ = blocking(move || registry.forget(&id)).await;
     }
     dispatch(t, actions);
 }
@@ -637,7 +712,11 @@ async fn respawn(t: &mut Task) -> Result<(), StartError> {
     let agent = AgentSessionArg::New(new_agent_session_id());
     let running = launch(&t.start, &t.config, agent, &t.auth_tx).await?;
     let mut old = std::mem::replace(&mut t.running, running);
-    old.shutdown_helpers();
+    old.release().await;
+    if t.core.is_working() {
+        // 被拒的那个进程吐过字：补上它的 idle 边沿，免得外面以为还在干活。
+        let _ = t.ev_tx.send(SessionEvent::Working(false));
+    }
     t.core = Core::new(
         t.config.core,
         t.config.screen,
