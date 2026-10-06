@@ -1,0 +1,353 @@
+printf '\033[1;31mred\033[0m \033[4:3munder\033[0m \033[48;5;27mbg\033[0m\n'
+[?1034hStarship:T hey$ printf '\033[1;31mred\033[0m \033[4:3munder\033[0m \033[48;5;27m bg\033[0m\n'
+[1;31mred[0m [4:3munder[0m [48;5;27mbg[0m
+Starship:T hey$ ls -laG /usr/bin | head -40
+total 172192
+drwxr-xr-x  926 root   wheel     29632 Aug  2 07:15 [34m.[39;49m[0m
+drwxr-xr-x@  11 root   wheel       352 Aug  2 07:15 [34m..[39;49m[0m
+-rwxr-xr-x    1 root   wheel    171472 Aug  2 07:15 [31mAssetCacheLocatorUtil[39;49m[0m
+-rwxr-xr-x    1 root   wheel    227120 Aug  2 07:15 [31mAssetCacheManagerUtil[39;49m[0m
+-rwxr-xr-x    1 root   wheel    172560 Aug  2 07:15 [31mAssetCacheTetheratorUtil[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mDeRez[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mGetFileInfo[39;49m[0m
+-rwxr-xr-x    1 root   wheel    240160 Aug  2 07:15 [31mIOAccelMemory[39;49m[0m
+-rwxr-xr-x    1 root   wheel    260272 Aug  2 07:15 [31mIOMFB_FDR_Loader[39;49m[0m
+-rwxr-xr-x    1 root   wheel    170032 Aug  2 07:15 [31mIOSDebug[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mResMerger[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mRez[39;49m[0m
+-rwxr-xr-x    1 root   wheel    135760 Aug  2 07:15 [31mSafeEjectGPU[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mSetFile[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mSplitForks[39;49m[0m
+-rwxr-xr-x    1 root   wheel    346976 Aug  2 07:15 [31maa[39;49m[0m
+-rwxr-xr-x   16 root   wheel    135200 Aug  2 07:15 [31mactool[39;49m[0m
+-rwxr-xr-x    1 root   wheel    222304 Aug  2 07:15 [31maea[39;49m[0m
+-rwxr-xr-x    1 root   wheel    170864 Aug  2 07:15 [31mafclip[39;49m[0m
+-rwxr-xr-x    1 root   wheel    360864 Aug  2 07:15 [31mafconvert[39;49m[0m
+-rwxr-xr-x    1 root   wheel    135712 Aug  2 07:15 [31mafhash[39;49m[0m
+-rwxr-xr-x    1 root   wheel    219616 Aug  2 07:15 [31mafida[39;49m[0m
+-rwxr-xr-x    1 root   wheel    225664 Aug  2 07:15 [31mafinfo[39;49m[0m
+-rwxr-xr-x    1 root   wheel    227328 Aug  2 07:15 [31mafktool[39;49m[0m
+-rwxr-xr-x    1 root   wheel    173312 Aug  2 07:15 [31mafplay[39;49m[0m
+-rwxr-xr-x    1 root   wheel    596144 Aug  2 07:15 [31mafscexpand[39;49m[0m
+-rwxr-xr-x    1 root   wheel    120736 Aug  2 07:15 [31magentxtrap[39;49m[0m
+-rwxr-xr-x   16 root   wheel    135200 Aug  2 07:15 [31magvtool[39;49m[0m
+-rwxr-xr-x   15 root   wheel       120 Aug  2 07:15 [31malias[39;49m[0m
+-rwxr-xr-x    1 root   wheel    173072 Aug  2 07:15 [31mapp-sso[39;49m[0m
+-rwxr-xr-x    1 root   wheel    168848 Aug  2 07:15 [31mapplesingle[39;49m[0m
+-rwxr-xr-x    1 root   wheel    102208 Aug  2 07:15 [31mapply[39;49m[0m
+-r-xr-xr-x    4 root   wheel     32136 Aug  2 07:15 [31mapropos[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mar[39;49m[0m
+-rwxr-xr-x    2 root   wheel    120992 Aug  2 07:15 [31march[39;49m[0m
+-rwxr-xr-x    1 root   wheel    205104 Aug  2 07:15 [31marchiveutil[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31mas[39;49m[0m
+-rwxr-xr-x   78 root   wheel    118640 Aug  2 07:15 [31masa[39;49m[0m
+-rwxr-xr-x    1 root   wheel   4022880 Aug  2 07:15 [31massetutil[39;49m[0m
+Starship:T hey$ printf '[7P(arg: 1) printf '(arg: 8) printf '[7@Starship:T hey$ printf '[7P(arg: 8) printf '[7@Starship:T hey$ printf '---------40[7P(arg: 1) printf '---------40(arg: [1@-1) printf '---------40[6@Starship:T hey$ printf '---------40 \u00e9\u0301 [K\n'
+sh: printf: --: invalid option
+printf: usage: printf [-v var] format [arguments]
+Starship:T hey$ for i in $(seq 1 300); do echo "scrollback line $i"; done
+scrollback line 1
+scrollback line 2
+scrollback line 3
+scrollback line 4
+scrollback line 5
+scrollback line 6
+scrollback line 7
+scrollback line 8
+scrollback line 9
+scrollback line 10
+scrollback line 11
+scrollback line 12
+scrollback line 13
+scrollback line 14
+scrollback line 15
+scrollback line 16
+scrollback line 17
+scrollback line 18
+scrollback line 19
+scrollback line 20
+scrollback line 21
+scrollback line 22
+scrollback line 23
+scrollback line 24
+scrollback line 25
+scrollback line 26
+scrollback line 27
+scrollback line 28
+scrollback line 29
+scrollback line 30
+scrollback line 31
+scrollback line 32
+scrollback line 33
+scrollback line 34
+scrollback line 35
+scrollback line 36
+scrollback line 37
+scrollback line 38
+scrollback line 39
+scrollback line 40
+scrollback line 41
+scrollback line 42
+scrollback line 43
+scrollback line 44
+scrollback line 45
+scrollback line 46
+scrollback line 47
+scrollback line 48
+scrollback line 49
+scrollback line 50
+scrollback line 51
+scrollback line 52
+scrollback line 53
+scrollback line 54
+scrollback line 55
+scrollback line 56
+scrollback line 57
+scrollback line 58
+scrollback line 59
+scrollback line 60
+scrollback line 61
+scrollback line 62
+scrollback line 63
+scrollback line 64
+scrollback line 65
+scrollback line 66
+scrollback line 67
+scrollback line 68
+scrollback line 69
+scrollback line 70
+scrollback line 71
+scrollback line 72
+scrollback line 73
+scrollback line 74
+scrollback line 75
+scrollback line 76
+scrollback line 77
+scrollback line 78
+scrollback line 79
+scrollback line 80
+scrollback line 81
+scrollback line 82
+scrollback line 83
+scrollback line 84
+scrollback line 85
+scrollback line 86
+scrollback line 87
+scrollback line 88
+scrollback line 89
+scrollback line 90
+scrollback line 91
+scrollback line 92
+scrollback line 93
+scrollback line 94
+scrollback line 95
+scrollback line 96
+scrollback line 97
+scrollback line 98
+scrollback line 99
+scrollback line 100
+scrollback line 101
+scrollback line 102
+scrollback line 103
+scrollback line 104
+scrollback line 105
+scrollback line 106
+scrollback line 107
+scrollback line 108
+scrollback line 109
+scrollback line 110
+scrollback line 111
+scrollback line 112
+scrollback line 113
+scrollback line 114
+scrollback line 115
+scrollback line 116
+scrollback line 117
+scrollback line 118
+scrollback line 119
+scrollback line 120
+scrollback line 121
+scrollback line 122
+scrollback line 123
+scrollback line 124
+scrollback line 125
+scrollback line 126
+scrollback line 127
+scrollback line 128
+scrollback line 129
+scrollback line 130
+scrollback line 131
+scrollback line 132
+scrollback line 133
+scrollback line 134
+scrollback line 135
+scrollback line 136
+scrollback line 137
+scrollback line 138
+scrollback line 139
+scrollback line 140
+scrollback line 141
+scrollback line 142
+scrollback line 143
+scrollback line 144
+scrollback line 145
+scrollback line 146
+scrollback line 147
+scrollback line 148
+scrollback line 149
+scrollback line 150
+scrollback line 151
+scrollback line 152
+scrollback line 153
+scrollback line 154
+scrollback line 155
+scrollback line 156
+scrollback line 157
+scrollback line 158
+scrollback line 159
+scrollback line 160
+scrollback line 161
+scrollback line 162
+scrollback line 163
+scrollback line 164
+scrollback line 165
+scrollback line 166
+scrollback line 167
+scrollback line 168
+scrollback line 169
+scrollback line 170
+scrollback line 171
+scrollback line 172
+scrollback line 173
+scrollback line 174
+scrollback line 175
+scrollback line 176
+scrollback line 177
+scrollback line 178
+scrollback line 179
+scrollback line 180
+scrollback line 181
+scrollback line 182
+scrollback line 183
+scrollback line 184
+scrollback line 185
+scrollback line 186
+scrollback line 187
+scrollback line 188
+scrollback line 189
+scrollback line 190
+scrollback line 191
+scrollback line 192
+scrollback line 193
+scrollback line 194
+scrollback line 195
+scrollback line 196
+scrollback line 197
+scrollback line 198
+scrollback line 199
+scrollback line 200
+scrollback line 201
+scrollback line 202
+scrollback line 203
+scrollback line 204
+scrollback line 205
+scrollback line 206
+scrollback line 207
+scrollback line 208
+scrollback line 209
+scrollback line 210
+scrollback line 211
+scrollback line 212
+scrollback line 213
+scrollback line 214
+scrollback line 215
+scrollback line 216
+scrollback line 217
+scrollback line 218
+scrollback line 219
+scrollback line 220
+scrollback line 221
+scrollback line 222
+scrollback line 223
+scrollback line 224
+scrollback line 225
+scrollback line 226
+scrollback line 227
+scrollback line 228
+scrollback line 229
+scrollback line 230
+scrollback line 231
+scrollback line 232
+scrollback line 233
+scrollback line 234
+scrollback line 235
+scrollback line 236
+scrollback line 237
+scrollback line 238
+scrollback line 239
+scrollback line 240
+scrollback line 241
+scrollback line 242
+scrollback line 243
+scrollback line 244
+scrollback line 245
+scrollback line 246
+scrollback line 247
+scrollback line 248
+scrollback line 249
+scrollback line 250
+scrollback line 251
+scrollback line 252
+scrollback line 253
+scrollback line 254
+scrollback line 255
+scrollback line 256
+scrollback line 257
+scrollback line 258
+scrollback line 259
+scrollback line 260
+scrollback line 261
+scrollback line 262
+scrollback line 263
+scrollback line 264
+scrollback line 265
+scrollback line 266
+scrollback line 267
+scrollback line 268
+scrollback line 269
+scrollback line 270
+scrollback line 271
+scrollback line 272
+scrollback line 273
+scrollback line 274
+scrollback line 275
+scrollback line 276
+scrollback line 277
+scrollback line 278
+scrollback line 279
+scrollback line 280
+scrollback line 281
+scrollback line 282
+scrollback line 283
+scrollback line 284
+scrollback line 285
+scrollback line 286
+scrollback line 287
+scrollback line 288
+scrollback line 289
+scrollback line 290
+scrollback line 291
+scrollback line 292
+scrollback line 293
+scrollback line 294
+scrollback line 295
+scrollback line 296
+scrollback line 297
+scrollback line 298
+scrollback line 299
+scrollback line 300
+Starship:T hey$ printf '\033[2J\033[HAFTER CLEAR\n'
+[2J[HAFTER CLEAR
+Starship:T hey$ [KStarship:T hey$ echo AFTER_RESIZE
+AFTER_RESIZE
+Starship:T hey$ 
