@@ -1,0 +1,769 @@
+//! 督办的纯判定：停下即检查与防死循环（spec §5）、等人超时升级与默认方案到点（§6）、
+//! 行政巡检的代码检查部分（§8.4；Jev fan-out 与起行政 session 归 M6）。
+use crate::book::{Applied, Rejected, WorkBook};
+use crate::events::EventKind;
+use crate::ids::{AskId, ChannelId, EntryNo, SessionId, Ts, WorkId};
+use crate::model::{
+    Actor, AskState, Blocker, Config, Status, StopKind, StopStreak, StopViolation, WaitTier,
+};
+use crate::perm::{Action, Ctx};
+use crate::views::{EntryStatus, LostOwner};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", content = "violations", rename_all = "snake_case")]
+pub enum StopDecision {
+    /// 名下都有着落，不用叫。
+    Clean,
+    /// 立刻再唤醒一次，要求给这些项写下一步。
+    Rewake(Vec<StopViolation>),
+    /// 连续 `stop_check_limit` 次没改善：不再叫，交行政处。
+    Escalate(Vec<StopViolation>),
+    /// 已经交过行政处、仍没改善：保持安静。
+    Suppressed(Vec<StopViolation>),
+}
+
+/// 人的待确认清单一行（spec §11：按紧急度排，显示已等时长）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanWait {
+    pub ask: AskId,
+    /// 此刻卡在这条问上的活着的项。
+    pub items: Vec<WorkId>,
+    pub owners: Vec<SessionId>,
+    pub waited_ms: i64,
+    pub tier: WaitTier,
+    pub default_due_at: Option<Ts>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Patrol {
+    pub unowned_items: Vec<WorkId>,
+    pub unclaimed_entries: Vec<EntryNo>,
+    pub needs_ruling: Vec<EntryNo>,
+    pub lost: Vec<LostOwner>,
+    pub stop_escalated: Vec<SessionId>,
+    /// 等了 ≥ 24h 的问。
+    pub long_waits: Vec<AskId>,
+    /// 关联的工作项全部终结的群（候选；「闲置」还要看消息，M6 判）。
+    pub archivable_channels: Vec<ChannelId>,
+}
+
+impl Patrol {
+    /// 只有标出需要动手的事才启动行政 session（spec §8.4）：停下即检查交过来的 session、可归档的群。
+    /// 失联重派、待认领、入口派活由调度层直接做；入口裁定归机长 / 人。
+    pub fn needs_admin_session(&self) -> bool {
+        !self.stop_escalated.is_empty() || !self.archivable_channels.is_empty()
+    }
+}
+
+pub fn wait_tier(waited_ms: i64, cfg: &Config) -> WaitTier {
+    if waited_ms >= cfg.still_wanted_after_ms {
+        WaitTier::StillWanted
+    } else if waited_ms >= cfg.pin_after_ms {
+        WaitTier::Pinned
+    } else {
+        WaitTier::Fresh
+    }
+}
+
+/// 巡检触发（spec §8.4）：从没巡过、子树内攒够 N 条消息、或距上次超过间隔。人手动按钮不经过这里。
+pub fn patrol_due(
+    messages_since_last: u32,
+    last_patrol_at: Option<Ts>,
+    now: Ts,
+    cfg: &Config,
+) -> bool {
+    match last_patrol_at {
+        None => true,
+        Some(last) => {
+            messages_since_last >= cfg.patrol_every_messages
+                || now.since(last) >= cfg.patrol_interval_ms
+        }
+    }
+}
+
+impl WorkBook {
+    /// session 进入 idle 时它名下没着落的项（按 W 号、再按种类）。
+    pub fn stop_violations(&self, session: &SessionId, now: Ts) -> Vec<StopViolation> {
+        let now = self.view_now(now);
+        let mut out = Vec::new();
+        for it in self.state.items.values() {
+            if it.owner.as_ref() != Some(session)
+                || !matches!(it.status, Status::Open | Status::Active)
+            {
+                continue;
+            }
+            if it.missed_checks > 0 {
+                out.push(StopViolation {
+                    item: it.id,
+                    kind: StopKind::Unanswered,
+                });
+            }
+            if it.next_check_at.is_some_and(|t| t <= now) {
+                out.push(StopViolation {
+                    item: it.id,
+                    kind: StopKind::Overdue,
+                });
+            }
+            let deps_done = it
+                .depends_on
+                .iter()
+                .all(|d| self.state.items[d].status == Status::Done);
+            if it.status == Status::Open && it.next_check_at.is_none() && deps_done {
+                out.push(StopViolation {
+                    item: it.id,
+                    kind: StopKind::ReadyUnscheduled,
+                });
+            }
+        }
+        out
+    }
+
+    /// idle 边沿（spec §5「停下即检查」）。走 idle 边沿重新唤醒，不是 Stop hook 阻塞（spec §2）。
+    /// 违反集合跟上次一模一样 = 没改善；连续 `stop_check_limit` 次没改善 → 交行政处，之后保持安静，直到集合变化。
+    /// 只动软状态（连续计数），不产出事件。
+    pub fn on_idle(&mut self, session: &SessionId, now: Ts) -> StopDecision {
+        let now = now.max(self.state.clock);
+        let v = self.stop_violations(session, now);
+        if v.is_empty() {
+            self.state.stop_streaks.remove(session);
+            return StopDecision::Clean;
+        }
+        let limit = self.cfg.stop_check_limit;
+        let budget = self.cfg.stop_rewake_budget;
+        let streak = self.state.stop_streaks.entry(session.clone()).or_default();
+        // 要再叫一次时先看预算：自上次干净以来已经叫满 `budget` 次 → 这次改为交行政处。
+        let rewake = |streak: &mut StopStreak, v: Vec<StopViolation>| {
+            if streak.rewakes >= budget {
+                streak.escalated = true;
+                StopDecision::Escalate(v)
+            } else {
+                streak.rewakes += 1;
+                StopDecision::Rewake(v)
+            }
+        };
+        if streak.last != v {
+            streak.last = v.clone();
+            streak.unimproved = 0;
+            if streak.escalated && streak.rewakes >= budget {
+                // 预算已用完：集合变了也不再叫，保持安静直到干净（复审 P12：来回摆动）。
+                return StopDecision::Suppressed(v);
+            }
+            streak.escalated = false;
+            return rewake(streak, v);
+        }
+        if streak.escalated {
+            return StopDecision::Suppressed(v);
+        }
+        streak.unimproved += 1;
+        if streak.unimproved >= limit {
+            streak.escalated = true;
+            StopDecision::Escalate(v)
+        } else {
+            rewake(streak, v)
+        }
+    }
+
+    /// 人的待确认清单：还开着、且此刻卡着至少一个活着的项的问（没人等的问不打扰人）。等得最久的在前。
+    pub fn human_waits(&self, now: Ts) -> Vec<HumanWait> {
+        let now = self.view_now(now);
+        let mut waiting: BTreeMap<AskId, (Vec<WorkId>, BTreeSet<SessionId>)> = BTreeMap::new();
+        for it in self.state.items.values() {
+            if it.status.is_terminal() {
+                continue;
+            }
+            for b in &it.blocked_on {
+                if let Blocker::Human(h) = b {
+                    let entry = waiting.entry(*h).or_default();
+                    entry.0.push(it.id);
+                    entry.1.extend(it.owner.clone());
+                }
+            }
+        }
+        // `open_ask` 开的问：还开着、关于的项还活着（或不关于任何项）就在清单里，提问的 session 算在等。
+        for ask in self.state.asks.values() {
+            let about_live = ask
+                .item
+                .is_none_or(|w| self.state.items[&w].status.is_live());
+            if ask.standalone && ask.state == AskState::Open && about_live {
+                let entry = waiting.entry(ask.id).or_default();
+                entry.1.extend(ask.asked_by.session().cloned());
+            }
+        }
+        let mut out: Vec<HumanWait> = waiting
+            .into_iter()
+            .filter_map(|(h, (items, owners))| {
+                let ask = &self.state.asks[&h];
+                if ask.state != AskState::Open {
+                    return None;
+                }
+                let waited_ms = now.since(ask.asked_at).max(0);
+                Some(HumanWait {
+                    ask: h,
+                    items,
+                    owners: owners.into_iter().collect(),
+                    waited_ms,
+                    tier: wait_tier(waited_ms, &self.cfg),
+                    default_due_at: ask.default.as_ref().map(|d| ask.asked_at.plus(d.after_ms)),
+                })
+            })
+            .collect();
+        out.sort_by_key(|w| (std::cmp::Reverse(w.waited_ms), w.ask));
+        out
+    }
+
+    /// 升到了更高一档、还没通知过的问（24h 置顶到人的清单；72h 问「还要吗」）。
+    pub fn escalations_due(&self, now: Ts) -> Vec<(AskId, WaitTier)> {
+        let now = self.view_now(now);
+        self.human_waits(now)
+            .into_iter()
+            .filter(|w| w.tier > self.state.asks[&w.ask].escalated)
+            .map(|w| (w.ask, w.tier))
+            .collect()
+    }
+
+    /// 记下「这一档已经通知过了」。档位只升不降。
+    pub fn note_escalation(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        ask: AskId,
+        tier: WaitTier,
+    ) -> Result<Applied<()>, Rejected> {
+        self.transact(by, now, |d| {
+            d.permit(Action::NoteEscalation, Ctx::default())?;
+            let a = d.s.asks.get_mut(&ask).ok_or(Rejected::UnknownAsk(ask))?;
+            if a.state != AskState::Open {
+                return Err(Rejected::AskNotOpen(ask));
+            }
+            if tier <= a.escalated {
+                return Err(Rejected::Invalid("escalation tiers only go up"));
+            }
+            a.escalated = tier;
+            d.emit(EventKind::EscalationNoted { ask, tier });
+            Ok(())
+        })
+    }
+
+    /// 默认方案已到点、可以 `apply_default` 的问（只算还卡着活项的）。
+    pub fn defaults_due(&self, now: Ts) -> Vec<AskId> {
+        let now = self.view_now(now);
+        self.human_waits(now)
+            .into_iter()
+            .filter(|w| w.default_due_at.is_some_and(|t| t <= now))
+            .map(|w| w.ask)
+            .collect()
+    }
+
+    /// 行政巡检的代码检查部分。`unrecoverable` 同 `owner_lost`；`archived` 是已经归档的群（群的状态在 M3 的群表里，
+    /// 不在工作账本里），它们不再算「可归档」。
+    ///
+    /// `stop_escalated` 只列交过行政处、且此刻仍有没着落的项的 session（集合变多、变少都算——变了不等于改好了）。
+    /// 改干净了（哪怕还没再 idle 过）或名下已没有活项的 session 不再列——否则 `needs_admin_session` 会一直是 true。
+    pub fn patrol(
+        &self,
+        now: Ts,
+        unrecoverable: &BTreeSet<SessionId>,
+        archived: &BTreeSet<ChannelId>,
+    ) -> Patrol {
+        let now = self.view_now(now);
+        let views = self.entry_views();
+        let mut channel_live: BTreeMap<ChannelId, bool> = BTreeMap::new();
+        for it in self.state.items.values() {
+            if let Some(ch) = &it.channel {
+                *channel_live.entry(ch.clone()).or_default() |= it.status.is_live();
+            }
+        }
+        Patrol {
+            unowned_items: self.unowned_items(),
+            unclaimed_entries: views
+                .iter()
+                .filter(|v| v.status == EntryStatus::Unclaimed)
+                .map(|v| v.no)
+                .collect(),
+            needs_ruling: views
+                .iter()
+                .filter(|v| v.status == EntryStatus::NeedsRuling)
+                .map(|v| v.no)
+                .collect(),
+            lost: self.owner_lost(now, unrecoverable),
+            stop_escalated: self
+                .state
+                .stop_streaks
+                .iter()
+                // 交过行政处、且此刻仍有没着落的项（集合变多 / 变少都算；改干净了才掉下去）。
+                // 名下已没有活项的 session 的计数在事务外壳里清掉。
+                .filter(|(sid, s)| s.escalated && !self.stop_violations(sid, now).is_empty())
+                .map(|(sid, _)| sid.clone())
+                .collect(),
+            long_waits: self
+                .human_waits(now)
+                .into_iter()
+                .filter(|w| w.tier >= WaitTier::Pinned)
+                .map(|w| w.ask)
+                .collect(),
+            archivable_channels: channel_live
+                .into_iter()
+                .filter(|(ch, live)| !live && !archived.contains(ch))
+                .map(|(ch, _)| ch)
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::{BlockOn, Continuation};
+    use crate::ids::{HOUR, MINUTE};
+    use crate::model::{DefaultOption, DropKind, DropReason, Evidence, ItemRef, NewItem};
+    use crate::progress::{Progress, Report};
+    use crate::testkit::*;
+
+    fn v(item: WorkId, kind: StopKind) -> StopViolation {
+        StopViolation { item, kind }
+    }
+
+    fn block_on_new_ask(
+        b: &mut WorkBook,
+        who: &str,
+        id: WorkId,
+        at: Ts,
+        default: Option<DefaultOption>,
+    ) {
+        b.block(
+            &Actor::worker(who),
+            at,
+            id,
+            vec![BlockOn::NewAsk {
+                question: "q".into(),
+                default,
+            }],
+            Continuation::Nothing,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn idle_session_with_unscheduled_ready_work_is_rewoken() {
+        let mut b = book();
+        let ids = b
+            .claim_entry(
+                &Actor::worker("a"),
+                T1,
+                EntryNo(1),
+                vec![
+                    NewItem::titled("ready"),
+                    NewItem::titled("waits").after(ItemRef::Batch(0)),
+                ],
+            )
+            .unwrap()
+            .value;
+        assert_eq!(
+            b.stop_violations(&sid("a"), T1),
+            [v(ids[0], StopKind::ReadyUnscheduled)],
+            "依赖没齐的不算"
+        );
+        assert_eq!(b.on_idle(&sid("b"), T1), StopDecision::Clean);
+        activate(&mut b, "a", ids[0], T1);
+        assert_eq!(b.on_idle(&sid("a"), T1), StopDecision::Clean);
+    }
+
+    #[test]
+    fn overdue_and_unanswered_checks_are_violations() {
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        activate(&mut b, "a", w, T1);
+        let due = T1.plus(HOUR);
+        assert_eq!(b.stop_violations(&sid("a"), due), [v(w, StopKind::Overdue)]);
+        b.record_checkpoint_wake(&Actor::System, due, &sid("a"), &[w])
+            .unwrap();
+        assert_eq!(
+            b.stop_violations(&sid("a"), due),
+            [v(w, StopKind::Unanswered)],
+            "叫醒后检查时间顺延了，但它还欠一次回报"
+        );
+    }
+
+    #[test]
+    fn blocked_items_never_trigger_stop_check() {
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        block_on_new_ask(&mut b, "a", w, T1, None);
+        assert_eq!(
+            b.on_idle(&sid("a"), T1.plus(10 * HOUR)),
+            StopDecision::Clean
+        );
+    }
+
+    #[test]
+    fn three_unimproved_rewakes_then_escalate_then_silence() {
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        let a = sid("a");
+        let expect = vec![v(w, StopKind::ReadyUnscheduled)];
+        assert_eq!(b.on_idle(&a, T1), StopDecision::Rewake(expect.clone()));
+        assert_eq!(b.on_idle(&a, T1), StopDecision::Rewake(expect.clone()));
+        assert_eq!(b.on_idle(&a, T1), StopDecision::Rewake(expect.clone()));
+        assert_eq!(b.on_idle(&a, T1), StopDecision::Escalate(expect.clone()));
+        assert_eq!(b.on_idle(&a, T1), StopDecision::Suppressed(expect.clone()));
+        assert_eq!(
+            b.patrol(T1, &BTreeSet::new(), &BTreeSet::new())
+                .stop_escalated,
+            vec![a.clone()]
+        );
+        // 有变化（新领了一项）= 有动作，重新计数。
+        let w2 = b
+            .create_item(&Actor::worker("a"), T1, NewItem::titled("y").owned_by("a"))
+            .unwrap()
+            .value;
+        assert_eq!(
+            b.on_idle(&a, T1),
+            StopDecision::Rewake(vec![
+                v(w, StopKind::ReadyUnscheduled),
+                v(w2, StopKind::ReadyUnscheduled)
+            ])
+        );
+        activate(&mut b, "a", w, T1);
+        activate(&mut b, "a", w2, T1);
+        assert_eq!(b.on_idle(&a, T1), StopDecision::Clean);
+        assert!(b.state().stop_streaks.is_empty(), "干净了就清掉计数");
+    }
+
+    #[test]
+    fn human_wait_tiers_at_24h_and_72h() {
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        block_on_new_ask(&mut b, "a", ids[0], T1, None);
+        b.block(
+            &Actor::worker("a"),
+            T1.plus(HOUR),
+            ids[1],
+            vec![BlockOn::Ask(crate::ids::AskId(1))],
+            Continuation::Nothing,
+        )
+        .unwrap();
+        let at = |h: i64| T1.plus(h * HOUR);
+        let waits = b.human_waits(at(23));
+        assert_eq!(waits.len(), 1);
+        assert_eq!(waits[0].items, ids);
+        assert_eq!(waits[0].owners, [sid("a")]);
+        assert_eq!(waits[0].tier, WaitTier::Fresh);
+        assert_eq!(b.escalations_due(at(23)), []);
+        assert_eq!(b.escalations_due(at(24)), [(AskId(1), WaitTier::Pinned)]);
+        b.note_escalation(&Actor::System, at(24), AskId(1), WaitTier::Pinned)
+            .unwrap();
+        assert_eq!(b.escalations_due(at(48)), [], "同一档只通知一次");
+        assert_eq!(
+            b.note_escalation(&Actor::System, at(48), AskId(1), WaitTier::Pinned),
+            Err(Rejected::Invalid("escalation tiers only go up"))
+        );
+        assert_eq!(
+            b.escalations_due(at(72)),
+            [(AskId(1), WaitTier::StillWanted)]
+        );
+        assert_eq!(
+            b.note_escalation(&Actor::worker("a"), at(72), AskId(1), WaitTier::StillWanted),
+            Err(Rejected::Forbidden(Action::NoteEscalation))
+        );
+    }
+
+    #[test]
+    fn asks_nobody_waits_on_any_more_leave_the_human_list() {
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        block_on_new_ask(&mut b, "a", w, T1, None);
+        b.report(
+            &Actor::worker("a"),
+            T1,
+            w,
+            Report {
+                status: Some(Progress::Active),
+                next_check_at: Some(T1.plus(HOUR)),
+                note: "不等了".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(b.human_waits(T1.plus(30 * HOUR)), []);
+        assert_eq!(b.escalations_due(T1.plus(30 * HOUR)), []);
+    }
+
+    #[test]
+    fn longest_wait_comes_first() {
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        block_on_new_ask(&mut b, "a", ids[0], T1.plus(HOUR), None);
+        block_on_new_ask(&mut b, "a", ids[1], T1.plus(2 * HOUR), None);
+        let order: Vec<AskId> = b
+            .human_waits(T1.plus(3 * HOUR))
+            .iter()
+            .map(|w| w.ask)
+            .collect();
+        assert_eq!(order, [AskId(1), AskId(2)]);
+    }
+
+    #[test]
+    fn default_options_come_due() {
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        block_on_new_ask(
+            &mut b,
+            "a",
+            w,
+            T1,
+            Some(DefaultOption {
+                text: "按 A 办".into(),
+                after_ms: 4 * HOUR,
+            }),
+        );
+        assert_eq!(b.human_waits(T1)[0].default_due_at, Some(T1.plus(4 * HOUR)));
+        assert_eq!(b.defaults_due(T1.plus(4 * HOUR - 1)), []);
+        assert_eq!(b.defaults_due(T1.plus(4 * HOUR)), [AskId(1)]);
+        b.apply_default(&Actor::System, T1.plus(4 * HOUR), AskId(1))
+            .unwrap();
+        assert_eq!(b.defaults_due(T1.plus(5 * HOUR)), []);
+    }
+
+    #[test]
+    fn patrol_collects_what_needs_hands() {
+        let mut b = book();
+        b.register_entry(T1, EntryNo(2)).unwrap();
+        b.register_entry(T1, EntryNo(3)).unwrap();
+        let w = claim(&mut b, "a", &["x"])[0];
+        let ch = ChannelId::new("ch-x");
+        b.link_channel(&Actor::worker("a"), T1, w, Some(ch.clone()))
+            .unwrap();
+        let orphan = b
+            .create_item(&Actor::worker("a"), T1, NewItem::titled("help"))
+            .unwrap()
+            .value;
+        let dropped = b
+            .claim_entry(
+                &Actor::worker("b"),
+                T1,
+                EntryNo(3),
+                vec![NewItem::titled("z")],
+            )
+            .unwrap()
+            .value[0];
+        b.drop_item(
+            &Actor::worker("b"),
+            T1,
+            dropped,
+            DropReason {
+                kind: DropKind::NotNeeded,
+                note: "n".into(),
+                evidence: None,
+            },
+        )
+        .unwrap();
+        let p = b.patrol(T1, &BTreeSet::new(), &BTreeSet::new());
+        assert_eq!(p.unowned_items, [orphan]);
+        assert_eq!(p.unclaimed_entries, [EntryNo(2)]);
+        assert_eq!(p.needs_ruling, [EntryNo(3)]);
+        assert_eq!(p.archivable_channels, Vec::<ChannelId>::new());
+        assert!(!p.needs_admin_session());
+        b.mark_done(&Actor::worker("a"), T1, w, Evidence::Text("ok".into()))
+            .unwrap();
+        let p = b.patrol(T1, &BTreeSet::new(), &BTreeSet::new());
+        assert_eq!(p.archivable_channels, [ch]);
+        assert!(p.needs_admin_session());
+    }
+
+    #[test]
+    fn patrol_cadence() {
+        let cfg = Config::default();
+        assert!(patrol_due(0, None, T1, &cfg));
+        assert!(!patrol_due(9, Some(T1), T1.plus(29 * MINUTE), &cfg));
+        assert!(patrol_due(10, Some(T1), T1.plus(MINUTE), &cfg));
+        assert!(patrol_due(0, Some(T1), T1.plus(30 * MINUTE), &cfg));
+    }
+
+    #[test]
+    fn wait_tier_boundaries() {
+        let cfg = Config::default();
+        assert_eq!(wait_tier(24 * HOUR - 1, &cfg), WaitTier::Fresh);
+        assert_eq!(wait_tier(24 * HOUR, &cfg), WaitTier::Pinned);
+        assert_eq!(wait_tier(72 * HOUR, &cfg), WaitTier::StillWanted);
+        assert_eq!(wait_tier(-5, &cfg), WaitTier::Fresh);
+    }
+
+    #[test]
+    fn an_escalated_session_drops_off_once_it_owns_nothing_or_improved() {
+        // 评审 P6：交过行政处的 session 后来不管事了 / 已经改好了，巡检不能一直判「需要起行政 session」。
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        let escalate = |b: &mut WorkBook| {
+            for _ in 0..4 {
+                b.on_idle(&sid("a"), T1);
+            }
+            assert_eq!(b.patrol(T1, &none, &no_ch).stop_escalated, [sid("a")]);
+        };
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        escalate(&mut b);
+        b.assign(&Actor::captain("c"), T1, w, sid("b"), "a 不在了，交给 b")
+            .unwrap();
+        let p = b.patrol(T1, &none, &no_ch);
+        assert_eq!(p.stop_escalated, Vec::<SessionId>::new());
+        assert!(!p.needs_admin_session());
+        assert!(
+            !b.state().stop_streaks.contains_key(&sid("a")),
+            "名下没有活项的 session 的连续计数被清掉"
+        );
+
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        escalate(&mut b);
+        activate(&mut b, "a", w, T1);
+        let p = b.patrol(T1, &none, &no_ch);
+        assert_eq!(
+            p.stop_escalated,
+            Vec::<SessionId>::new(),
+            "违反集合已经变了（改好了），哪怕它还没再 idle 过"
+        );
+        assert!(!p.needs_admin_session());
+    }
+
+    #[test]
+    fn archived_channels_leave_the_patrol() {
+        // 评审 P7：行政处归档过的群不能永远挂在「可归档」里、把 needs_admin_session 钉成 true。
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        let ch = ChannelId::new("ch");
+        b.link_channel(&Actor::worker("a"), T1, w, Some(ch.clone()))
+            .unwrap();
+        b.mark_done(&Actor::worker("a"), T1, w, Evidence::Text("ok".into()))
+            .unwrap();
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(
+            b.patrol(T1, &none, &no_ch).archivable_channels,
+            std::slice::from_ref(&ch)
+        );
+        let archived: BTreeSet<ChannelId> = [ch].into();
+        let p = b.patrol(T1, &none, &archived);
+        assert_eq!(p.archivable_channels, Vec::<ChannelId>::new());
+        assert!(!p.needs_admin_session());
+    }
+
+    fn escalate_a(b: &mut WorkBook) {
+        for _ in 0..4 {
+            b.on_idle(&sid("a"), T1);
+        }
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(b.patrol(T1, &none, &no_ch).stop_escalated, [sid("a")]);
+    }
+
+    #[test]
+    fn an_escalated_session_whose_backlog_grows_stays_on_the_patrol() {
+        // 复审 N1：交过行政处之后，违反集合变「多」了（依赖完成，多出一项没排检查的就绪项），不能就此从巡检上掉下去。
+        let mut b = book();
+        claim(&mut b, "a", &["x"]);
+        let dep = b
+            .create_item(
+                &Actor::worker("c"),
+                T1,
+                NewItem::titled("dep").owned_by("c"),
+            )
+            .unwrap()
+            .value;
+        let waits = b
+            .create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("after dep")
+                    .owned_by("a")
+                    .after(ItemRef::Id(dep)),
+            )
+            .unwrap()
+            .value;
+        escalate_a(&mut b);
+        b.mark_done(&Actor::worker("c"), T1, dep, Evidence::Text("ok".into()))
+            .unwrap();
+        assert!(
+            b.stop_violations(&sid("a"), T1)
+                .contains(&v(waits, StopKind::ReadyUnscheduled))
+        );
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        let p = b.patrol(T1, &none, &no_ch);
+        assert_eq!(p.stop_escalated, [sid("a")]);
+        assert!(p.needs_admin_session());
+    }
+
+    #[test]
+    fn an_escalated_session_with_part_of_its_backlog_moved_away_stays_on_the_patrol() {
+        // 复审 N2：机长把两项里的一项转走，剩下那项仍没着落：还要列着。
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        escalate_a(&mut b);
+        b.assign(&Actor::captain("c"), T1, ids[1], sid("b"), "y 交给 b")
+            .unwrap();
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(b.patrol(T1, &none, &no_ch).stop_escalated, [sid("a")]);
+    }
+
+    #[test]
+    fn a_session_that_keeps_shuffling_check_times_escalates_at_the_rewake_budget() {
+        // 复审 P12d：每次被叫醒只把一项往后挪 30 秒，违反集合每次都「变了」，连续未改善的计数永远攒不起来；
+        // 自上次干净以来的叫醒次数到了预算（默认 6）就照样交行政处，之后保持安静直到干净。
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        let mut t = T1.plus(1);
+        let later = |b: &mut WorkBook, w: WorkId, t: Ts| {
+            b.report(
+                &Actor::worker("a"),
+                t,
+                w,
+                Report {
+                    status: None,
+                    next_check_at: Some(t.plus(30_000)),
+                    note: "等会儿".into(),
+                },
+            )
+            .unwrap();
+        };
+        for &w in &ids {
+            later(&mut b, w, t);
+        }
+        let mut seen = Vec::new();
+        for i in 0..10 {
+            t = t.plus(MINUTE);
+            later(&mut b, ids[i % 2], t);
+            seen.push(match b.on_idle(&sid("a"), t.plus(2)) {
+                StopDecision::Clean => "clean",
+                StopDecision::Rewake(_) => "rewake",
+                StopDecision::Escalate(_) => "escalate",
+                StopDecision::Suppressed(_) => "suppressed",
+            });
+        }
+        assert_eq!(
+            seen,
+            [
+                "rewake",
+                "rewake",
+                "rewake",
+                "rewake",
+                "rewake",
+                "rewake",
+                "escalate",
+                "suppressed",
+                "suppressed",
+                "suppressed"
+            ]
+        );
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(b.patrol(t, &none, &no_ch).stop_escalated, [sid("a")]);
+        // 干净一次，预算从头算。
+        for &w in &ids {
+            activate(&mut b, "a", w, t);
+        }
+        assert_eq!(b.on_idle(&sid("a"), t), StopDecision::Clean);
+        assert!(b.state().stop_streaks.is_empty());
+    }
+}
