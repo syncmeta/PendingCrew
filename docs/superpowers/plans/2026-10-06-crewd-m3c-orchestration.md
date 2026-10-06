@@ -17,6 +17,7 @@
 - **M3a 已合入 main**（§22.1：M3a 先独立落 main），本计划在从 main 切出的 `crewd-m3c` worktree 上做。M3b 与本计划并行；两边按 §22.5 的文件归属不改对方文件。
 - **以 M3a 计划的「冻结给 M3b / M3c 的接口」为准**（`docs/superpowers/plans/2026-10-06-crewd-m3a-data-and-api.md`，与 §22.5 不同处以它为准）。它已包含 §22.7 拍板要的 `channels.owner_*`、`wake_latches.scope ∈ {edge, session}`、`wakes.origin`、`restart_prompts`、`settings::max_live_sessions`，以及控制者裁定补的 `sessions.last_progress_at` + `Change::Progress`（C3）、`wakes::{next_due_after, requeue, by_ids, prune}`、`mark_failed(.., retry_at_ms)`、`cursors::cursor`、`channels::members` 含隐式成员（C6）。M3c 不加迁移、不建表、不读写任何 SQL。
 - 用到的 M3a 接口（只在 `db.rs` / `control.rs` / `rpc.rs` 与 serve 启动段里调用；名字与签名逐条见 M3a 计划冻结块）：`Db::{spawn, call}`；`crewd_collab::{run, Tx, Change（含 Progress）, ProgressKind, Sender, Locale, messages::{get, list, post, NewPost}, channels::{get, members（有效成员，含大厅 / 人类群的隐式成员）, owner_of, ensure_human_channel}, cursors::{cursor, unread_for, advance}, listens::active_for_channel, crews::{get, list, captain_of, root_of, set_captain}, sessions::{get, list, register, NewSession, running_desired, set_desired, set_working, set_resume_failed, set_profile}, asks::apply_due_defaults, restart::open, settings::{locale, max_live_sessions, set_max_live_sessions}, wakes::{enqueue, due_for, by_ids, list, mark_inflight, mark_delivered, mark_failed(.., retry_at_ms), requeue, mark_dropped, reset_inflight, sessions_with_due, next_due_after, prune, WakeRequest, WakeRow, Enqueued, source}, wakes::latches::{Scope, Latch, set, clear, list}, render::{build_batch, wake_text}, worldview::{context_for, render}}`；`crewd_store::channels::lobby_id`；`crewd_server::{AppState::{collab, db, hub, tokens, orchestra}, hub::CollabEvent, Hub::{subscribe_collab, publish}, control::{SessionControl, StartRequest, Inspection, QuotaReport, ControlError}, TokenTable::mint}`；`crewd_proto::{Session, SessionLive, HealthView, HealthKindView, DecisionView, Role, RestartAnswer, MemberRef, events::SESSION_CHANGED}`。控制者裁定 C6 之后 M3c **不写任何 SQL**（原「spec 问题」5 的缺口全部由 M3a 补了函数）。
+- **M3a 与 M2c 都已合进 main（2026-10-07 对着 main 的代码核过；下面这些本计划已改好，执行时别照旧的冻结块改回去）**：`render::build_batch(conn, session, Locale, rows)` 带语言，返回的 `WakeBatch` 多了 `deferred`（窗口外的排队行，留 pending、绝不 dropped）与 `cursor_targets()`（投递成功后游标推到哪，R6）——`Rendered` / `Inflight` / `Starting` 都带上它（裁定 8、9）；`sessions::register` 对已有机长的机组再起机长回 `Conflict`（Core 先查，`ControlError::CaptainTaken`）；`sessions::set_profile` 是 `COALESCE`（清不掉，`SessionPatch.model / effort` 因此是 `Option<String>`）；只写 `last_active_at` 没有 M3a 写函数（不静默，记遗留）；`listens::active_for_channel(conn, ch, now_ms)` 要真实的 now；`wakes::latches::{get, clear, list}` 遇坏 id / 坏行回 `Invalid`（启动时容忍并告警）；`wakes::reset_inflight` 至少一次、只在启动时调；`Db` 没有 JoinHandle（停机次序最后一步做不到，报 M3a）；`CollabEvent` 落后时要从库里重推状态（`on_lagged`），停掉的进程要 `TokenTable::revoke`；契约 `api_schema()` 只有一个生成器、单一 `$defs`（`orchestra::schema_entries(g)` 用 `crate::sub`）；显式 @机长 + 回复机长 = `Captain(x)` + `Session(x)` 两条 mention（同一条消息一个 session 只叫一次）；`UNREAD_CAP` 按群计、各群游标独立推进。M2c 加了 `SessionEvent::{Item, TurnEnded, Notice, Profile}`、`HealthKind::{TurnFailed, VersionIncompatible}`（M3a 的 `HealthKindView` 还没有对应词）、`SessionHandle::{snapshot -> Option, send_with_context}`；`driver::with_untrusted_context` 不转义 `</external_…>`、不校验键——**M3c 只用 `send(text)`，正文是 M3a 已中和过的唤醒渲染，绝不把队友文字放进 context**，谁要用它先补中和；`ClaudeSpec` 没有 `initial_context`（开场正文只走 `initial_prompt`）；codex 驱动的 MCP 命令行由 M3b Task 2 Step 6 改成 token 文件（`CodexConfig.runtime_dir` 由起会话的一方给）。codex 执行器仍不在 M3c 范围（见「不做」），接进来时还要：`Notice` 的代拒去重是按方法的，进群前按 MCP server 汇总。
 - 用到的 M2b 执行器接口（`crewd/crates/exec`，已读过实际代码）：`driver::{start_claude, ClaudeStart, DriverConfig, SessionHandle, SessionStatus, StartError, SendError, Closed}`、`session::{SessionEvent, ExitInfo, ExitStatusKind, DeliveryOutcome, BRIEF_DELIVERY_ID}`、`delivery::Subject`、`health::{Health, HealthKind}`、`launch::{ClaudeSpec, CommsSpec}`、`env::{compose_child_path, AgentPaths}`、`resume::{AgentIdLedger, MemoryLedger}`、`registry::ProcessRegistry`；`crewd_term::{DecisionEvent, PendingDecision, Snapshot}`；`crewd_server::{reap_orphans, ledger::StoreLedger}`。
 
 ## Global Constraints
@@ -58,8 +59,8 @@
 5. **启动闸**：没有默认上限（Q5）；`orchestra.settings.set{maxLiveSessions}` 可设，存在 M3a 的 `collab::settings::{max_live_sessions, set_max_live_sessions}`（M3c 不自己写 meta 键）。上限只挡**自动**拉起（唤醒拉起、agent 的 `start_session`）；人从客户端起 / 恢复、以及人类唤醒拉起不受上限（§5「人类唤醒不应被全机限流挡」；控制者裁定 C5）。所有拉起之间错开 2s（Q1「错开时间逐个」），客户端单个起 / 恢复不错开。
 6. **一个 actor**：`Core` 独占 `live` / `starting` 表，命令与事件串行处理，所以「同一 session 并发 start → 第二个 `AlreadyRunning`」是结构性的（§18 遗留：M2b 只按 claude 会话号挡）。拉起本身（`start_claude` 要落账、写文件、起 PTY，可能几秒）放在派生任务里，结果以 `Input::Launched` 回到 actor；事件泵在同一个任务里、在 `Launched` 之后才开始转发，保证顺序。每次拉起一个 `gen`，旧进程迟到的事件按 gen 丢掉。
 7. **投递只在三种时刻发生**：入队当下（目标空闲）、idle 边沿（`SessionEvent::Working(false)`）、定时拍（到点 / 有会话退出腾出位置）。目标在干活、正卡在待决策框、有未结的投递、额度 / 认证类 health 在身 → 不投。额度类 health 在身时只有「额度重置唤醒」到点才先 `clear_quota_health()` 再投（§22.4）。
-8. **选批**：只取到期的最高一档优先级（human > system > auto），按 `(created_at, id)`，≤10 条；渲染后超过 8KB 就从尾部减到放得下（至少 1 条）。消息类唤醒若目标游标已越过它（忙时 hook 注入过）→ 直接记 `delivered`、不重投（§22.4、`CrewSessionRunner.swift:479`）。
-9. **回执**：投出去记 `inflight`；只有 `Delivery{Delivered}` 才记 `delivered` 并推进消息类唤醒的游标（每个群推到批里最大的 seq，只往前推）。非终局的 `Blocked` / `NotReady` / `Stalled` 不动；终局失败 → `attempts+1`，按 30s / 2min 退避回 pending（退避时刻经 M3a `mark_failed(.., retry_at_ms)` 写进 `not_before`，重启后照样退避），第 3 次放弃记 `dropped`；放弃的批里只要有非 system 优先级的唤醒，就在本机组大厅 @群主（目标自己就是机长时改发根机组人类群 @人）——system 级唤醒失败不告警，免得「告警本身叫不醒」成环（同 `CrewLocalMentionWakeLogic.swift:26-28` 的用意）。
+8. **选批**：只取到期的最高一档优先级（human > system > auto），按 `(created_at, id)`，≤10 条；渲染后超过 8KB 就从尾部减**非消息**的唤醒（至少 1 条）。消息项的 8KB 只是建议值：M3a 的 `build_batch` 给每个群带「游标之后、最旧的至多 `UNREAD_CAP`（200）条」的连续窗口（R6），减掉一条排队行改变不了窗口、也不能截半个窗口（游标要推到窗口末尾），所以只剩消息项时照原样投。窗口外的被叫消息行是 `deferred`：拿出这一批、**状态不动**（仍 pending，绝不 dropped），下一批带上。消息类唤醒若目标游标已越过它（忙时 hook 注入过）→ 直接记 `delivered`、不重投（§22.4、`CrewSessionRunner.swift:479`）。
+9. **回执**：投出去记 `inflight`（deferred 行不记）；只有 `Delivery{Delivered}` 才记 `delivered` 并推进游标——推到渲染时 M3a 报回的 `WakeBatch::cursor_targets()`（每个群推到这批**实际带上**的最大 seq，只往前推），**不是**排队行里最大的 seq（那会越过 deferred 的那几条，永远不投）。`Inflight` / `Starting` 带着 `cursor_targets`；只有积压、`wake_ids` 为空的批（窗口里全是比被叫消息更旧的未读）也照样投、照样推游标。非终局的 `Blocked` / `NotReady` / `Stalled` 不动；终局失败 → `attempts+1`，按 30s / 2min 退避回 pending（退避时刻经 M3a `mark_failed(.., retry_at_ms)` 写进 `not_before`，重启后照样退避），第 3 次放弃记 `dropped`；放弃的批里只要有非 system 优先级的唤醒，就在本机组大厅 @群主（目标自己就是机长时改发根机组人类群 @人）——system 级唤醒失败不告警，免得「告警本身叫不醒」成环（同 `CrewLocalMentionWakeLogic.swift:26-28` 的用意）。
 10. **人从客户端停掉一个 session**：`desired=stopped`，并把它此刻还在 pending 的唤醒记 `dropped`（`stopped`）——否则退出事件一到，「腾出位置」的那次定时拍就会被这些旧唤醒立刻拉起它。之后新来的 @ 照样会把它拉起（§22.4「@ 一个已停的 session → 它被 `--resume` 拉起」）。消息本身还在群里，下次醒来照样看得到。
 11. **`resume_failed_at` = 「crewd 没能把这个 session 的原对话接回来」**（M4b 的 `reassign_lost` 只认这一列，§19）。写：①拉起报错，或进程在「从没干过活」时带着 `LaunchFailed` 退出（起不来）——告警一次（已经写过就不重复告警）；②`ResumeRefused`（原对话丢了，即使驱动层换新号起来了也算；不另发「起不来」告警，续跑被拒的群通知已经说了）。清：某次拉起**没有**经历续跑被拒、且之后 `Working(true)`（这一次真的接上并干上活了）。
 12. **续跑被拒**：事件顺序是 `Spawned{旧号, resumed:true}` → `ResumeRefused{旧号}` → `Spawned{新号, resumed:false}`（M2b 实际代码如此；M2c 计划 2026-10-06 改成 claude / codex 一致）。**以最后一条 `Spawned` 为准**：`Live.agent_session_id` 每条 `Spawned` 都覆盖，`Live.refused` 一旦置上本次进程内不再清。M2b 驱动层已经自动换新号重起、把没投出去的正文搬过去；M3c 补 Swift `AgentSessionResume.swift:223-250` 的两句：群里一条（含 claude 原话与「日志在不在盘上」的诊断），给 agent 一条 system 唤醒（「这是新开的一轮，别假装记得」）；并按裁定 11 写 `resume_failed_at`。
@@ -958,6 +959,15 @@ mod tests {
     }
 
     #[test]
+    fn captain_mention_plus_reply_to_the_captain_wakes_it_once() {
+        // M3a：显式 @机长 + 回复机长 = 消息上有 `Captain(cap)` 与 `Session(cap)` 两条 mention（db.rs 都换成
+        // `Mention::Session("cap")`）；同一条消息一个 session 只叫一次。
+        let c = ctx(&["cap", "w1"], Some("cap"));
+        let t = plan(&msg(s("w1"), vec![at("cap"), at("cap")]), &c, None, NOW);
+        assert_eq!(who(&t), ["cap"]);
+    }
+
+    #[test]
     fn never_wakes_the_sender_or_a_non_member() {
         let c = ctx(&["cap", "w1"], Some("cap"));
         assert!(plan(&msg(s("w1"), vec![at("w1")]), &c, None, NOW).is_empty());
@@ -1200,7 +1210,7 @@ pub fn plan(msg: &MsgFacts, ctx: &ChannelCtx, arbiter: Option<&[String]>, now: M
 ```
 
 Run: `cargo test -p crewd-wake plan`
-Expected: PASS（10 passed）。
+Expected: PASS（11 passed）。
 
 - [ ] **Step 3: 变异自证（提交前做，改完用编辑器改回，不用 git checkout）**
 
@@ -2013,7 +2023,7 @@ impl LaunchGate {
 ```
 
 Run: `cargo test -p crewd-wake`
-Expected: PASS（全部 crewd-wake 测试，41 passed）。
+Expected: PASS（全部 crewd-wake 测试，42 passed）。
 
 - [ ] **Step 5: 门禁与提交**
 
@@ -2311,7 +2321,7 @@ pub fn decision_notice(
 ```
 
 Run: `cargo test -p crewd-wake`
-Expected: PASS（48 passed）。
+Expected: PASS（49 passed）。
 
 - [ ] **Step 3: 变异自证（提交前做，改完手工改回）**
 
@@ -2692,7 +2702,8 @@ impl Clock for ManualClock {
 ```rust
 //! 执行器抽象（spec §22.4「执行器抽象」；§13 Q12 的窄接口）。claude = M2b 的 `start_claude` + `SessionHandle`；
 //! codex（M2c）/ ACP（M2e）合入时各加一个 `Executor` 实现，`Executors` 里登记一行。
-//! 事件流直接用 crewd-exec 的 `SessionEvent`：M2c 给它加变体时，`core.rs` 的 match 会编不过——那正是要逐个决定怎么处理的地方。
+//! 事件流直接用 crewd-exec 的 `SessionEvent`：M2c 已合（main@e66be68），加了 `Item` / `TurnEnded` / `Notice` / `Profile`，
+//! `core.rs` 的 match 显式列出它们（claude 不发，接 codex 执行器时逐个决定怎么处理）。
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
@@ -2798,8 +2809,8 @@ impl ExecHandle for SessionHandle {
     }
 
     fn snapshot(&self) -> BoxFut<'_, Result<Option<Snapshot>, Closed>> {
-        // M2c 合入后 `SessionHandle::snapshot` 自己返回 Option：去掉这里的 `.map(Some)`。
-        Box::pin(async move { SessionHandle::snapshot(self).await.map(Some) })
+        // M2c 已合（main@e66be68）：`SessionHandle::snapshot` 自己返回 `Result<Option<Snapshot>, Closed>`。
+        Box::pin(SessionHandle::snapshot(self))
     }
 
     fn status(&self) -> BoxFut<'_, Result<SessionStatus, Closed>> {
@@ -3384,8 +3395,10 @@ pub struct SessionPatch {
     pub was_working: Option<bool>,
     pub last_active_at: Option<Ms>,
     pub resume_failed_at: Option<Option<Ms>>,
-    pub model: Option<Option<String>>,
-    pub effort: Option<Option<String>>,
+    /// None = 不改。**清不掉**：M3a 的 `sessions::set_profile` 是 `COALESCE(?, model)`，传 None 保留旧值，
+    /// 所以这里没有「清掉」这一态（与 `SessionControl::set_profile(model?, effort?)` 的「没给 = 不改」同义）。
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3423,6 +3436,12 @@ pub struct Rendered {
     pub text: String,
     /// 渲染不出来、已被记 dropped 的唤醒 id。
     pub dropped: Vec<i64>,
+    /// M3a R6：消息行里、消息落在这批窗口之外的（一个群一批只带最旧的 `UNREAD_CAP` 条）。**不进正文、不 settle**
+    /// （仍是 pending，绝不 `mark_dropped`），投递成功、按 `cursor_targets` 推完游标后下一批带上（`WakeBatch.deferred`）。
+    pub deferred: Vec<i64>,
+    /// 投递成功后每个群的游标推到哪（M3a `WakeBatch::cursor_targets()` = 批里**实际带上**的最大 seq）。
+    /// 可能在没有任何 `wake_ids` 的时候非空（只有积压的窗口），这样的批照样要投。
+    pub cursor_targets: Vec<(String, i64)>,
 }
 
 /// M3c 自己发的事件（M3a 的协作事件由 collab 发）。
@@ -3448,6 +3467,8 @@ pub trait Port: Send + Sync + 'static {
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger>;
     fn worldview(&self, session: &str) -> impl Future<Output = Result<String>> + Send;
     fn mint_token(&self, session: &str) -> String;
+    /// 进程退出（含人停掉）后作废它的 helper 令牌（M3a `TokenTable::revoke`）：旧配置文件里的 token 不能再 attach。
+    fn revoke_token(&self, session: &str);
     // —— 唤醒队列与熔断
     /// 插入成功 = true；`UNIQUE(session, kind, source)` 撞了 = false。
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<bool>> + Send;
@@ -3471,6 +3492,8 @@ pub trait Port: Send + Sync + 'static {
     // —— 重启询问与默认方案（M3a `collab::restart` / `collab::asks`）
     /// 开一次「是否恢复这些 session」的询问（M3a 在相关根机组人类群各发一条 @人）。返回询问 id；名单空 = None。
     fn open_restart(&self, session_ids: Vec<String>) -> impl Future<Output = Result<Option<i64>>> + Send;
+    /// 这条重启询问此刻的答复（M3a `restart::get(conn, id).answer`）：`Some(true)` = 恢复、`Some(false)` = 先不、None = 没答。
+    fn restart_answer(&self, id: i64) -> impl Future<Output = Result<Option<bool>>> + Send;
     /// 各机组到点的默认方案按默认办（M3a `asks::apply_due_defaults`；控制者裁定由 M3c 的定时拍调）。
     fn apply_due_defaults(&self) -> impl Future<Output = Result<()>> + Send;
     /// 删掉 `before` 之前就已 delivered / dropped 的队列行（M3a `wakes::prune`；控制者裁定 C6：清理归 M3c 的定时拍）。
@@ -3478,7 +3501,8 @@ pub trait Port: Send + Sync + 'static {
     // —— 协作数据（M3a 的 Collab）
     /// 消息的规划要素 + 正文（正文只给 Arbiter）。
     fn message(&self, r: &MessageRef) -> impl Future<Output = Result<Option<(MsgFacts, String)>>> + Send;
-    fn channel_ctx(&self, channel: &str) -> impl Future<Output = Result<Option<ChannelCtx>>> + Send;
+    /// `now` 来自注入的 `Clock`：只取此刻还有效的收听（M3a `listens::active_for_channel(conn, ch, now_ms)` 按它滤）。
+    fn channel_ctx(&self, channel: &str, now: Ms) -> impl Future<Output = Result<Option<ChannelCtx>>> + Send;
     /// 该 session 所在各群里游标之后的消息。
     fn unread(&self, session: &str) -> impl Future<Output = Result<Vec<MsgFacts>>> + Send;
     fn cursor(&self, session: &str, channel: &str) -> impl Future<Output = Result<i64>> + Send;
@@ -3486,7 +3510,8 @@ pub trait Port: Send + Sync + 'static {
     fn advance(&self, session: &str, channel: &str, seq: i64) -> impl Future<Output = Result<()>> + Send;
     fn post_system(&self, to: Audience, text: String) -> impl Future<Output = Result<()>> + Send;
     /// 唤醒正文（`collab::render::{build_batch, wake_text}`）。渲染不出来的行（消息已删、问已撤回）由实现记 dropped，
-    /// 不出现在正文里，并在 `Rendered::dropped` 里报回（调用方把它们从这一批里拿掉）。
+    /// 不出现在正文里，并在 `Rendered::dropped` 里报回（调用方把它们从这一批里拿掉）；窗口外的消息行报在
+    /// `Rendered::deferred`（调用方也拿掉、但**不碰**它们的状态）；游标推进点在 `Rendered::cursor_targets`。
     fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> impl Future<Output = Result<Rendered>> + Send;
     fn publish(&self, e: OrchestraEvent);
 }
@@ -3497,7 +3522,7 @@ pub trait Port: Send + Sync + 'static {
 ```rust
 //! 测试器材：内存里的 Port 与顶替执行器。只在 `cargo test` 里编译。
 #![allow(dead_code)]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -3542,6 +3567,8 @@ pub struct MemState {
     pub events: Vec<OrchestraEvent>,
     pub max_live: Option<usize>,
     pub restarts: Vec<Vec<String>>,
+    /// 重启询问 id → 答复（`true` = 恢复）；测试里直接写，模拟「人答了但 `RestartAnswered` 事件丢了」。
+    pub restart_answers: BTreeMap<i64, bool>,
     pub defaults_applied: usize,
     pub prunes: usize,
     pub ledgers: BTreeMap<String, Arc<MemoryLedger>>,
@@ -3551,6 +3578,12 @@ pub struct MemState {
     pub next_session: u64,
     /// 测试里的「现在」（入队时间）。
     pub now: Ms,
+    /// 模拟 M3a R6 的窗口：列在这里的唤醒 id 由 `render_wake` 报成 deferred（不进正文）。
+    pub defer: BTreeSet<i64>,
+    /// 模拟窗口里比被叫消息更旧的积压：session → [(群, seq)]，进正文、并入 `cursor_targets`。
+    pub backlog: BTreeMap<String, Vec<(String, i64)>>,
+    /// `revoke_token` 调过的 session（按调用顺序）。
+    pub revoked: Vec<String>,
 }
 
 pub struct MemPort {
@@ -3665,10 +3698,10 @@ impl Port for MemPort {
             row.resume_failed_at = v;
         }
         if let Some(v) = p.model {
-            row.model = v;
+            row.model = Some(v);
         }
         if let Some(v) = p.effort {
-            row.effort = v;
+            row.effort = Some(v);
         }
         Ok(())
     }
@@ -3696,6 +3729,10 @@ impl Port for MemPort {
 
     fn mint_token(&self, session: &str) -> String {
         format!("tok-{session}")
+    }
+
+    fn revoke_token(&self, session: &str) {
+        self.lock().revoked.push(session.to_string());
     }
 
     async fn enqueue(&self, w: NewWake) -> Result<bool> {
@@ -3833,6 +3870,10 @@ impl Port for MemPort {
         Ok(Some(st.restarts.len() as i64))
     }
 
+    async fn restart_answer(&self, id: i64) -> Result<Option<bool>> {
+        Ok(self.lock().restart_answers.get(&id).copied())
+    }
+
     async fn apply_due_defaults(&self) -> Result<()> {
         self.lock().defaults_applied += 1;
         Ok(())
@@ -3848,7 +3889,8 @@ impl Port for MemPort {
         Ok(self.lock().messages.get(&(r.channel.clone(), r.seq)).cloned())
     }
 
-    async fn channel_ctx(&self, channel: &str) -> Result<Option<ChannelCtx>> {
+    async fn channel_ctx(&self, channel: &str, _now: Ms) -> Result<Option<ChannelCtx>> {
+        // MemPort 原样给全部收听；过期的由 `plan` 按 `until > now` 再滤一次（与 DbPort 结果一致）。
         Ok(Self::ctx_of(&self.lock(), channel))
     }
 
@@ -3883,20 +3925,28 @@ impl Port for MemPort {
         Ok(())
     }
 
-    async fn render_wake(&self, _session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
+    async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
         let st = self.lock();
-        let parts: Vec<String> = batch
-            .iter()
-            .filter_map(|w| match w.kind {
-                WakeKind::Message => w
-                    .msg
-                    .as_ref()
-                    .and_then(|r| st.messages.get(&(r.channel.clone(), r.seq)))
-                    .map(|(_, text)| text.clone()),
-                _ => Some(w.note.clone().unwrap_or_else(|| format!("{}:{}", w.kind, w.source))),
-            })
-            .collect();
-        Ok(Rendered { text: parts.join("\n---\n"), dropped: vec![] })
+        let deferred: Vec<i64> = batch.iter().filter(|w| st.defer.contains(&w.id)).map(|w| w.id).collect();
+        let shown: Vec<&QueuedWake> = batch.iter().filter(|w| !st.defer.contains(&w.id)).collect();
+        let backlog = st.backlog.get(session).cloned().unwrap_or_default();
+        let mut parts: Vec<String> = backlog.iter().map(|(ch, seq)| format!("backlog {ch}#{seq}")).collect();
+        parts.extend(shown.iter().filter_map(|w| match w.kind {
+            WakeKind::Message => w
+                .msg
+                .as_ref()
+                .and_then(|r| st.messages.get(&(r.channel.clone(), r.seq)))
+                .map(|(_, text)| text.clone()),
+            _ => Some(w.note.clone().unwrap_or_else(|| format!("{}:{}", w.kind, w.source))),
+        }));
+        // 与 M3a `cursor_targets()` 同义：每群推到正文里实际带上的最大 seq。
+        let mut tops: BTreeMap<String, i64> = BTreeMap::new();
+        let shown_msgs = shown.iter().filter(|w| w.kind == WakeKind::Message).filter_map(|w| w.msg.as_ref());
+        for (ch, seq) in backlog.into_iter().chain(shown_msgs.map(|r| (r.channel.clone(), r.seq))) {
+            let top = tops.entry(ch).or_insert(seq);
+            *top = (*top).max(seq);
+        }
+        Ok(Rendered { text: parts.join("\n---\n"), dropped: vec![], deferred, cursor_targets: tops.into_iter().collect() })
     }
 
     fn publish(&self, e: OrchestraEvent) {
@@ -4383,6 +4433,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn starting_a_second_captain_is_refused_clearly_and_creates_nothing() {
+        // M3a 的 register 对此回 Conflict；Core 先查机长指针，回 CaptainTaken（map_error → Invalid），不是 Internal。
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let req = StartSession { captain: true, isolation: true, ..start("claude") };
+        let err = rig.cmd(|reply| Cmd::Start { req, origin: Origin::Human, reply }).await.unwrap_err();
+        assert_eq!(err, ControlError::CaptainTaken("c1".into()));
+        assert!(rig.worktrees.calls().is_empty(), "没建 worktree");
+        assert_eq!(rig.port.lock().sessions.len(), 1, "没建行");
+    }
+
+    #[tokio::test]
     async fn optional_cap_refuses_agent_starts_but_never_human_ones() {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
@@ -4666,6 +4728,8 @@ pub enum ControlError {
     NoWorkdir(String),
     /// 建 worktree 失败（C8）：原因给人看；什么都没留下、没起、没退回共享目录。
     Worktree(String),
+    /// 要起机长、但机组已有机长（M3a 的 `sessions::register` 对此回 `Conflict`）。换机长走 `crew.setCaptain` / handoff。
+    CaptainTaken(String),
     Internal(String),
 }
 
@@ -4684,6 +4748,7 @@ impl std::fmt::Display for ControlError {
             Self::AtCap { max } => write!(f, "已达设置里的并发会话上限 {max}"),
             Self::Unsupported(why) | Self::Internal(why) | Self::Worktree(why) => write!(f, "{why}"),
             Self::NoWorkdir(id) => write!(f, "session {id} 没有可用的工作目录"),
+            Self::CaptainTaken(crew) => write!(f, "机组 {crew} 已有机长；换机长用 crew.setCaptain"),
         }
     }
 }
@@ -4705,7 +4770,10 @@ pub enum Cmd {
 /// 一笔还没回执的投递。`delivery` = `ExecHandle::send` 的编号（拉起时带的正文 = `BRIEF_DELIVERY_ID`）。
 pub struct Inflight {
     pub delivery: u64,
+    /// 可以是空的：只有积压的批（M3a R6）也要投，那时只有 `cursor_targets`。
     pub wakes: Vec<QueuedWake>,
+    /// 投递成功后各群游标推到哪（`Rendered::cursor_targets`）；**不是**排队行里最大的 seq。
+    pub cursor_targets: Vec<(String, i64)>,
 }
 
 pub struct Live {
@@ -4734,6 +4802,8 @@ pub struct Starting {
     pub row: SessionRow,
     /// 随开场正文一起送的唤醒（非空时一定有正文）。
     pub wakes: Vec<QueuedWake>,
+    /// 开场正文送达后各群游标推到哪（同 `Inflight::cursor_targets`；只有积压时 `wakes` 可以为空而它非空）。
+    pub cursor_targets: Vec<(String, i64)>,
     pub stop_requested: bool,
 }
 
@@ -4759,6 +4829,8 @@ pub struct Core<P: Port> {
     pub(crate) held: BTreeSet<String>,
     /// `boot` 结束时队列里最大的唤醒 id：比它新的人类消息唤醒 = 询问开出之后人 @ 的（C4）。
     pub(crate) held_watermark: i64,
+    /// `boot` 开的那条重启询问（M3a `restart::open` 的 id）：协作事件落后（Lagged）时据它从库里重推「答了没有」。
+    pub(crate) restart_prompt: Option<i64>,
 }
 
 impl<P: Port> Core<P> {
@@ -4788,6 +4860,7 @@ impl<P: Port> Core<P> {
             decisions: HashMap::new(),
             held: BTreeSet::new(),
             held_watermark: 0,
+            restart_prompt: None,
         })
     }
 
@@ -4848,7 +4921,8 @@ impl<P: Port> Core<P> {
                 let _ = reply.send(self.live.get(&session).map(|l| l.handle.clone()));
             }
             Cmd::SetProfile { session, model, effort, reply } => {
-                let patch = SessionPatch { model: Some(model), effort: Some(effort), ..Default::default() };
+                // 没给的 = 不改（M3a `set_profile` 是 COALESCE，清不掉）。
+                let patch = SessionPatch { model, effort, ..Default::default() };
                 let r = self.port.patch_session(&session, patch).await.map_err(ControlError::internal);
                 let _ = reply.send(r);
             }
@@ -4867,6 +4941,11 @@ impl<P: Port> Core<P> {
     async fn start_new(&mut self, req: StartSession, origin: Origin) -> Result<SessionRow, ControlError> {
         let exec = self.execs.get(&req.executor).map_err(|e| ControlError::Unsupported(e.to_string()))?;
         self.check_cap(origin)?;
+        // M3a 的 `sessions::register` 对「机组已有机长、又要起一个机长」回 `Conflict`：先查，给一个说得清的错
+        // （不然它会在 worktree 建好之后才冒出来，还被包成 Internal）。不建 worktree、不写行、不起进程。
+        if req.captain && self.port.captain(&req.crew_id).await.map_err(ControlError::internal)?.is_some() {
+            return Err(ControlError::CaptainTaken(req.crew_id));
+        }
         // 控制者裁定 C8：isolation=true → 先建 worktree（写行之前；失败 = 什么都不留、不起、不退回共享目录）。
         let worktree = if req.isolation {
             let base = self
@@ -4902,7 +4981,7 @@ impl<P: Port> Core<P> {
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
-        self.launch(row.clone(), exec, brief, vec![]).await.map_err(ControlError::internal)?;
+        self.launch(row.clone(), exec, brief, vec![], vec![]).await.map_err(ControlError::internal)?;
         Ok(row)
     }
 
@@ -4924,7 +5003,7 @@ impl<P: Port> Core<P> {
         // 单个恢复一个等人答复的 session（§22.7 Q1）：上次停在干活中途的，开场补一句「被打断」。
         let interrupted = self.held.remove(session) && row.was_working;
         let text = interrupted.then(|| text::get(self.lang(), "restart.interrupted").to_string());
-        self.launch(row, exec, text, vec![]).await.map_err(ControlError::internal)
+        self.launch(row, exec, text, vec![], vec![]).await.map_err(ControlError::internal)
     }
 
     /// 人停掉（裁定 10）：desired=stopped，丢掉此刻 pending 的唤醒，叫停进程。
@@ -4963,6 +5042,7 @@ impl<P: Port> Core<P> {
         exec: Arc<dyn Executor>,
         text: Option<String>,
         wakes: Vec<QueuedWake>,
+        cursor_targets: Vec<(String, i64)>,
     ) -> anyhow::Result<()> {
         let now = self.now();
         let workdir = row
@@ -4993,7 +5073,7 @@ impl<P: Port> Core<P> {
         };
         self.starting.insert(
             session.clone(),
-            Starting { gen, row, wakes, stop_requested: false },
+            Starting { gen, row, wakes, cursor_targets, stop_requested: false },
         );
         let tx = self.inbox.clone();
         let task_session = session.clone();
@@ -5035,8 +5115,11 @@ impl<P: Port> Core<P> {
                 if st.stop_requested {
                     let _ = handle.stop();
                 }
-                let inflight = (!st.wakes.is_empty())
-                    .then(|| Inflight { delivery: BRIEF_DELIVERY_ID, wakes: st.wakes.clone() });
+                let inflight = (!st.wakes.is_empty() || !st.cursor_targets.is_empty()).then(|| Inflight {
+                    delivery: BRIEF_DELIVERY_ID,
+                    wakes: st.wakes.clone(),
+                    cursor_targets: st.cursor_targets.clone(),
+                });
                 self.live.insert(
                     session.to_string(),
                     Live {
@@ -5118,6 +5201,11 @@ impl<P: Port> Core<P> {
                 self.decisions.remove(session);
             }
             SessionEvent::Delivery { .. } => {}
+            // M2c 合进 main 后 `SessionEvent` 多了这四个（main@e66be68 起；claude 执行器不发它们，codex 发）。M3c 只接了
+            // claude，先不处理；接 codex 执行器时：`TurnEnded` → `crewd_collab::turn_trace::on_turn_end`（M3b）、
+            // `Notice` → 群里一条（M2c 的代拒去重是**按方法**的：同一个 MCP server 的多种拒绝要按 server 汇总再报）、
+            // `Profile` → 落库、`Item` → M2d 回放。
+            SessionEvent::Item { .. } | SessionEvent::TurnEnded { .. } | SessionEvent::Notice(_) | SessionEvent::Profile(_) => {}
             SessionEvent::Health(h) => {
                 let quota = h.as_ref().is_some_and(|h| h.kind.is_quota());
                 l.health = h;
@@ -5137,6 +5225,8 @@ impl<P: Port> Core<P> {
 
     async fn on_exited(&mut self, session: &str, info: ExitInfo) -> anyhow::Result<()> {
         let Some(l) = self.live.remove(session) else { return Ok(()) };
+        // 进程没了，它的 helper 令牌作废（M3a `TokenTable::revoke`；下次拉起重新 mint）。
+        self.port.revoke_token(session);
         self.decisions.remove(session);
         let now = self.now();
         if let Some(inf) = &l.inflight {
@@ -5397,7 +5487,19 @@ pub enum CollabFact {
     pub(crate) seen_progress: HashMap<String, Ms>,
 ```
 
-`Core::new` 里在 `Ok(Self { … })` 之前加 `let latches = port.latches().await?;`，构造时加 `breaker: LoopBreaker::new(cfg.loops, latches), timers: BTreeSet::new(), backoff: HashMap::new(), seen_progress: HashMap::new(),`（`cfg.loops` 是 `Copy`，先 `let loops = cfg.loops;` 再 move `cfg`）。
+`Core::new` 里在 `Ok(Self { … })` 之前加（M3a 的 `latches::list` 遇到坏 id / 坏行整表回 `Invalid`——fail-loud，不能让它把编排起不来；也不能悄悄当没有：打日志、本次不带旧熔断，坏行写进交付记录要人修）：
+
+```rust
+        let latches = match port.latches().await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("crewd: 编排：熔断台账读不出来（{e:#}）；本次启动不带旧熔断，wake_latches 里的坏行要人修");
+                Vec::new()
+            }
+        };
+```
+
+构造时加 `breaker: LoopBreaker::new(cfg.loops, latches), timers: BTreeSet::new(), backoff: HashMap::new(), seen_progress: HashMap::new(),`（`cfg.loops` 是 `Copy`，先 `let loops = cfg.loops;` 再 move `cfg`）。
 
 6. `handle` 的 match 加：
 
@@ -5579,6 +5681,39 @@ mod tests {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
         let r = rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲").await;
+        rig.ack("w1").await;
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Delivered);
+        assert_eq!(rig.port.cursor("w1", LOBBY).await.unwrap(), r.seq);
+    }
+
+    #[tokio::test]
+    async fn deferred_rows_stay_pending_and_a_backlog_only_batch_still_goes_out() {
+        // M3a R6：一个群一批只带最旧的 UNREAD_CAP 条。被叫的消息落在窗口外 = deferred：不进正文、不 settle、绝不 dropped；
+        // 窗口里只有更旧的积压时 wake_ids 为空、cursor_targets 非空——照样投；投完游标推到 cursor_targets，不是排队的最大 seq。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let r = rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲").await;
+        let id = rig.port.wakes_of("w1")[0].id;
+        {
+            let mut st = rig.port.lock();
+            st.defer.insert(id);
+            st.backlog.insert("w1".into(), vec![(LOBBY.into(), r.seq - 1)]);
+        }
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(rig.exec.sent("w1").len(), 1, "只有积压也投");
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Pending, "deferred 不进 inflight");
+        rig.ack("w1").await;
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Pending, "deferred 留在队列里");
+        assert!(rig.port.cursor("w1", LOBBY).await.unwrap() < r.seq, "游标没越过被叫的那条");
+        {
+            let mut st = rig.port.lock();
+            st.defer.clear();
+            st.backlog.clear();
+        }
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(rig.exec.sent("w1").len(), 2, "下一个 idle 边沿轮到被叫的那条");
         rig.ack("w1").await;
         assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Delivered);
         assert_eq!(rig.port.cursor("w1", LOBBY).await.unwrap(), r.seq);
@@ -5965,13 +6100,13 @@ impl<P: Port> Core<P> {
                 self.breaker.progress(&session);
                 Ok(())
             }
-            CollabFact::Lagged => self.rescue_backlog().await,
+            CollabFact::Lagged => self.on_lagged().await,
         }
     }
 
     async fn on_message(&mut self, r: MessageRef) -> anyhow::Result<()> {
         let Some((msg, text)) = self.port.message(&r).await? else { return Ok(()) };
-        let Some(ctx) = self.port.channel_ctx(&r.channel).await? else { return Ok(()) };
+        let Some(ctx) = self.port.channel_ctx(&r.channel, self.now()).await? else { return Ok(()) };
         if plan::needs_arbiter(&msg, self.now()) {
             // Jev 要联网：放到派生任务里问，答案（或超时）以 `Input::Arbitrated` 回来，不卡 actor。
             let (arbiter, tx, limit) = (self.hooks.arbiter.clone(), self.inbox.clone(), self.cfg.arbiter_timeout);
@@ -6199,15 +6334,26 @@ impl<P: Port> Core<P> {
         self.port.post_system(to, owner).await
     }
 
-    /// 渲染；超过 8KB 就从尾部减条数（至少留 1 条；减下的留在 pending）。渲染不出来的（Port 已记 dropped）拿掉。
-    async fn render_fitted(&self, session: &str, mut batch: Vec<QueuedWake>) -> anyhow::Result<(Vec<QueuedWake>, String)> {
+    /// 渲染。渲染不出来的（Port 已记 dropped）拿掉；窗口外的（`deferred`，M3a R6）也拿掉，但**不碰**它们的状态——
+    /// 它们仍是 pending，下一批带上，绝不 settle / dropped。超过 8KB 就从尾部减**非消息**的唤醒（减下的留在 pending）；
+    /// 消息项的 8KB 只是建议值：它是一个群「游标之后、最旧的至多 `UNREAD_CAP` 条」的连续窗口，减一条消息行改变不了
+    /// 窗口（会被重新算进来），也不能截一半（游标要推到窗口末尾），所以只剩消息项时照原样投。
+    /// 返回 (这批真正投出去的唤醒, 正文, 投递成功后各群游标推到哪)。
+    async fn render_fitted(
+        &self,
+        session: &str,
+        mut batch: Vec<QueuedWake>,
+    ) -> anyhow::Result<(Vec<QueuedWake>, String, Vec<(String, i64)>)> {
         loop {
             let r = self.port.render_wake(session, &batch).await?;
-            batch.retain(|w| !r.dropped.contains(&w.id));
-            if r.text.len() <= self.cfg.batch.max_bytes || batch.len() <= 1 {
-                return Ok((batch, r.text));
+            batch.retain(|w| !r.dropped.contains(&w.id) && !r.deferred.contains(&w.id));
+            let trim = batch.iter().rposition(|w| w.kind != WakeKind::Message);
+            match trim {
+                Some(i) if r.text.len() > self.cfg.batch.max_bytes && batch.len() > 1 => {
+                    batch.remove(i);
+                }
+                _ => return Ok((batch, r.text, r.cursor_targets)),
             }
-            batch.pop();
         }
     }
 
@@ -6221,21 +6367,27 @@ impl<P: Port> Core<P> {
         if speak.is_empty() {
             return Ok(true);
         }
-        let (batch, text) = self.render_fitted(session, speak).await?;
-        if batch.is_empty() {
+        let (batch, text, cursor_targets) = self.render_fitted(session, speak).await?;
+        // 只有积压（M3a R6：窗口里全是比被叫消息更旧的未读，被叫的那几行 deferred）：`batch` 空而 `cursor_targets`
+        // 非空——照样投，投完游标前进，下一批就轮到被叫的那几条。两样都空才是真没东西可投。
+        if batch.is_empty() && cursor_targets.is_empty() {
             return Ok(false);
         }
         let batch_ids = ids(&batch);
         let accepts = self.live.get(session).is_some_and(|l| l.handle.accepts_context());
         let extras = if accepts { self.hooks.extras.extras(session).await } else { Context::new() };
-        self.port.settle(&batch_ids, Settle::Inflight, now).await?;
+        if !batch_ids.is_empty() {
+            self.port.settle(&batch_ids, Settle::Inflight, now).await?;
+        }
         let Some(l) = self.live.get_mut(session) else {
-            self.port.settle(&batch_ids, Settle::Requeue, now).await?;
+            if !batch_ids.is_empty() {
+                self.port.settle(&batch_ids, Settle::Requeue, now).await?;
+            }
             return Ok(false);
         };
         match l.handle.send(text, &extras) {
             Ok(delivery) => {
-                l.inflight = Some(Inflight { delivery, wakes: batch });
+                l.inflight = Some(Inflight { delivery, wakes: batch, cursor_targets });
                 self.port.publish(OrchestraEvent::WakeChanged { session: session.into() });
                 Ok(true)
             }
@@ -6274,18 +6426,18 @@ impl<P: Port> Core<P> {
             self.port.settle(&ids(&silent), Settle::Delivered, now).await?;
         }
         if speak.is_empty() {
-            self.launch(row, exec, interrupted, vec![]).await?;
+            self.launch(row, exec, interrupted, vec![], vec![]).await?;
             return Ok(true);
         }
-        let (batch, text) = self.render_fitted(session, speak).await?;
-        if batch.is_empty() {
+        let (batch, text, cursor_targets) = self.render_fitted(session, speak).await?;
+        if batch.is_empty() && cursor_targets.is_empty() {
             return Ok(false);
         }
         let text = match interrupted {
             Some(note) => format!("{note}\n\n{text}"),
             None => text,
         };
-        self.launch(row, exec, Some(text), batch).await?;
+        self.launch(row, exec, Some(text), batch, cursor_targets).await?;
         Ok(true)
     }
 
@@ -6301,14 +6453,13 @@ impl<P: Port> Core<P> {
         let now = self.now();
         if outcome == DeliveryOutcome::Delivered {
             l.worked = true;
-            self.port.settle(&ids(&inf.wakes), Settle::Delivered, now).await?;
-            let mut tops: BTreeMap<String, i64> = BTreeMap::new();
-            for r in inf.wakes.iter().filter(|w| w.kind == WakeKind::Message).filter_map(|w| w.msg.as_ref()) {
-                let top = tops.entry(r.channel.clone()).or_insert(r.seq);
-                *top = (*top).max(r.seq);
+            if !inf.wakes.is_empty() {
+                self.port.settle(&ids(&inf.wakes), Settle::Delivered, now).await?;
             }
-            for (channel, seq) in tops {
-                self.port.advance(session, &channel, seq).await?;
+            // M3a R6：推到渲染时报回的 `cursor_targets`（批里实际带上的最大 seq），**不是**排队行里最大的 seq——
+            // deferred 的那几条比它新，推过去就把它们越过、永远不投了。`advance` 只往前推。
+            for (channel, seq) in &inf.cursor_targets {
+                self.port.advance(session, channel, *seq).await?;
             }
             self.port.publish(OrchestraEvent::WakeChanged { session: session.into() });
         } else {
@@ -6375,9 +6526,31 @@ impl<P: Port> Core<P> {
     pub(crate) async fn rescan(&mut self) -> anyhow::Result<()> {
         let now = self.now();
         for s in self.port.due_sessions(now).await? {
-            self.try_deliver(&s).await?;
+            // 一个 session 出错（例如 M3a `build_batch` 遇到坏账本 fail-loud）只记日志、不连累别人；它的唤醒留在
+            // pending，下一次定时拍 / idle 边沿再试——不在这里原地重试（不紧循环：过期的 not_before 不会让定时器立刻再响，
+            // 只剩 30s 心跳）。
+            if let Err(e) = self.try_deliver(&s).await {
+                eprintln!("crewd: 编排：给 {s} 投递失败（留在队列里）：{e:#}");
+            }
         }
         Ok(())
+    }
+
+    /// 协作事件落后（`Lagged`）：漏掉的不只是消息，从库里重推状态，不只重排未读——
+    /// ① 重启询问答没答（漏了 `RestartAnswered` = 名单永远等着）；② 未读重新规划（裁定 16）；③ 到期的唤醒重扫
+    /// （漏了 `WakeEnqueued` 的 ask_answer / 审批结果 / timer 都在库里排着）。漏掉的 `Progress` 由 `observe_progress`
+    /// 的 `last_progress_at` 兜底。漏掉的 `AskAnswered.cleared` 无从重推（M3a 没有「某时刻之后答过的问」的查询）：
+    /// `AskAnsweredHook` 的实现（M4b）必须容忍漏调、自己能从账本重推（写进交付记录）。
+    pub(crate) async fn on_lagged(&mut self) -> anyhow::Result<()> {
+        if let Some(id) = self.restart_prompt
+            && !self.held.is_empty()
+            && self.port.restart_answer(id).await? == Some(true)
+        {
+            let held: Vec<String> = self.held.iter().cloned().collect();
+            self.on_restart_answered(id, true, held).await?;
+        }
+        self.rescue_backlog().await?;
+        self.rescan().await
     }
 
     /// 积压补救（裁定 16）：每个 session 的未读重新规划一遍（不问 Arbiter；6h 陈旧闸照旧；UNIQUE 去重）。
@@ -6387,7 +6560,7 @@ impl<P: Port> Core<P> {
         for s in self.port.all_session_ids().await? {
             for msg in self.port.unread(&s).await? {
                 if !ctxs.contains_key(&msg.at.channel) {
-                    let ctx = self.port.channel_ctx(&msg.at.channel).await?;
+                    let ctx = self.port.channel_ctx(&msg.at.channel, now).await?;
                     ctxs.insert(msg.at.channel.clone(), ctx);
                 }
                 let Some(Some(ctx)) = ctxs.get(&msg.at.channel) else { continue };
@@ -6659,6 +6832,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_resume_answer_lost_to_lag_is_recovered_from_the_db() {
+        // 人答了「恢复」，但 `RestartAnswered` 在订阅落后时丢了：Lagged 时从库里重推，名单不会永远等着。
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        desired_running(&rig, "cap", false);
+        rig.core.boot().await.unwrap();
+        assert!(rig.exec.launches("cap").is_empty());
+        rig.port.lock().restart_answers.insert(1, true);
+        rig.core.handle(Input::Collab(CollabFact::Lagged)).await;
+        rig.settle().await;
+        assert_eq!(rig.exec.launches("cap").len(), 1);
+    }
+
+    #[tokio::test]
     async fn answering_resume_starts_them_staggered_with_the_interrupted_note() {
         let cfg = OrchestraConfig { stagger_ms: 2 * SEC, ..OrchestraConfig::for_tests() };
         let mut rig = Rig::with_cfg(cfg, Hooks::default()).await;
@@ -6889,13 +7076,14 @@ impl<P: Port> Core<P> {
     /// ② 上次在跑的（`desired=running`）一个都不起，进「待恢复」名单，开一次询问（M3a 发人类群公告、客户端弹窗）；
     /// ③ 积压补救（裁定 16）；④ 能投的投出去（待恢复的不会被拉起）。
     pub(crate) async fn boot(&mut self) -> anyhow::Result<()> {
+        // M3a `reset_inflight`：至少一次、**只在启动时**调（运行中调会把正在投的批退回去重投）。
         let requeued = self.port.requeue_inflight().await?;
         if requeued > 0 {
             eprintln!("crewd: 编排：{requeued} 条投递中的唤醒退回待投");
         }
         let rows = policy::restart_order(self.port.sessions_desired_running().await?.iter().map(restart_row).collect());
         self.held = rows.iter().map(|r| r.session.clone()).collect();
-        self.port.open_restart(rows.into_iter().map(|r| r.session).collect()).await?;
+        self.restart_prompt = self.port.open_restart(rows.into_iter().map(|r| r.session).collect()).await?;
         self.rescue_backlog().await?;
         // C4 的水位：到此为止排着的（含积压补救刚补的旧 @）都不算「询问之后人新 @ 的」。
         self.held_watermark = self.port.list_wakes(None).await?.iter().map(|w| w.id).max().unwrap_or(0);
@@ -7163,7 +7351,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes（M3a，冻结）：`crewd_store::{Db, Store, now_ms, ts_from_ms, channels::lobby_id}`；`crewd_collab::{Tx, Change, Sender as CollabSender, messages, channels, cursors, listens, crews, sessions, asks, restart, settings, wakes, wakes::latches, render, worldview}`；`crewd_server::{AppState::{collab, db, hub, tokens, sessions}, hub::CollabEvent, Hub::{subscribe_collab, publish}, control::{SessionControl, StartRequest, Inspection, QuotaReport, ControlError as M3aControlError}, ledger::StoreLedger}`；`crewd_proto::{Session, SessionLive, HealthView, HealthKindView, DecisionView, Role, Message, Mention, MentionKind, SenderKind, MemberRef, RpcError, Event}`。
-- Produces：`orchestra::db::{DbPort, fact_of, forward_collab(rx, handle)}`、`orchestra::control::{OrchestraControl::new(Arc<OnceLock<Handle>>, Db), live_to_proto, map_error}`、`orchestra::rpc::route`、`crewd_proto::orchestra::{methods, events, SessionStartParams, SessionStopParams, SessionIdParams, CrewSetCaptainParams, WakeListParams, AdmissionRecoverParams, LatchScopeView, OrchestraSettings, WakeView, schema_entries}`；用 M3a 已建的 `AppState::orchestra: std::sync::OnceLock<orchestra::Handle>`。
+- Produces：`orchestra::db::{DbPort, fact_of, forward_collab(rx, handle)}`、`orchestra::control::{OrchestraControl::new(Arc<OnceLock<Handle>>, Db), live_to_proto, map_error}`、`orchestra::rpc::route`、`crewd_proto::orchestra::{methods, events, SessionStartParams, SessionStopParams, SessionIdParams, CrewSetCaptainParams, WakeListParams, AdmissionRecoverParams, LatchScopeView, OrchestraSettings, WakeView, WakeChanged, schema_entries(g)}`；用 M3a 已建的 `AppState::orchestra: std::sync::OnceLock<orchestra::Handle>`。
 
 - [ ] **Step 1: 对齐 M3a 的实际代码（只读，先做）**
 
@@ -7173,14 +7361,14 @@ M3a 合入 main 后，逐项打开实际签名（`rg -n 'pub fn <名字>' crates
 |---|---|---|
 | `crewd_collab::sessions::get(conn, id) -> Result<Session>`（不存在 = `CollabError::NotFound`，`db.rs::opt` 把它变成 `None`） | `session` | `Session` 的 v3 字段名：`desired`、`was_working`、`last_active_at`、`resume_failed_at`、`awaiting_question`、`last_progress_at`、`worktree`、`working_directory`、`role`、`executor`、`agent_session_id`、`display_name`、`model`、`effort`、`brief`（时间是 RFC 3339 TEXT） |
 | `crewd_collab::crews::{get, captain_of, root_of, set_captain, list}` | 工作目录、机长、根、换机长、默认方案 | `set_captain(tx, crew, session) -> Result<()>`；`get` 返回的 `Crew.working_directory` |
-| `crewd_collab::sessions::{register, NewSession, running_desired, set_desired, set_working, set_resume_failed, set_profile}` | `insert_session` / `sessions_desired_running` / `patch_session` | `NewSession { crew_id, role, executor, title, brief, display_name, working_directory, model, effort, worktree }`（`Default`） |
+| `crewd_collab::sessions::{register, NewSession, running_desired, set_desired, set_working, set_resume_failed, set_profile}` | `insert_session` / `sessions_desired_running` / `patch_session` | `NewSession { crew_id, role, executor, title, brief, display_name, working_directory, model, effort, worktree }`（`Default`）。**已核（main）**：`register(role = Captain)` 在机组已有机长时回 `Conflict`（Core 先查）；标题 / 显示名等于「人类 / Human / crewd」被拒；`set_profile` 是 `COALESCE`（None 保留旧值、清不掉）；没有只写 `last_active_at` 的函数 |
 | `crewd_collab::wakes::{enqueue, due_for, by_ids, mark_inflight, mark_delivered, mark_failed(tx, id, error, retry_at_ms), requeue, mark_dropped, reset_inflight, sessions_with_due, next_due_after, list, prune}`、`WakeRequest`、`WakeRow`、`Enqueued` | 队列 | M3a 计划 Task 5 全文 |
-| `crewd_collab::wakes::latches::{Scope, Latch, set(tx, &Scope, reason), clear(tx, &Scope), list}` | 熔断台账 | 库里 edge 的 id 是 `from→to`（M3a 拼）；M3c 自己的 `edge_id` 是 `from>to`，只在 `db.rs` 互转 |
+| `crewd_collab::wakes::latches::{Scope, Latch, set(tx, &Scope, reason), clear(tx, &Scope) -> bool, get, list}` | 熔断台账 | 库里 edge 的 id 是 `from→to`（M3a 拼；id 里带 `→` 或为空 = `Invalid`）；M3c 自己的 `edge_id` 是 `from>to`，只在 `db.rs` 互转；`list` 遇坏行整表回 `Invalid`（`Core::new` 容忍并告警） |
 | `crewd_collab::messages::{get, list(conn, channel, after: Option<i64>, before: Option<i64>, limit: u32), post}`、`NewPost`、`Message.{id, channel_id, seq, sender_kind, sender_session_id, mentions, created_at}` | 消息要素、系统消息 | after / before 是开区间 |
 | `crewd_collab::channels::{get, members, owner_of, ensure_human_channel}` | 群成员与群主 | `members` = **有效**成员（大厅含本机组全部 session，人类群含根机组机长；M3a 冻结并有测试） |
-| `crewd_collab::listens::active_for_channel(conn, channel, now_ms)` | 收听 | `Listen { session, channel, until_ms: Option<i64>, senders: Vec<String> }` |
+| `crewd_collab::listens::active_for_channel(conn, channel, now_ms)` | 收听 | `Listen { session, channel, until_ms: Option<i64>, senders: Vec<String> }`；传真实的 now（`Port::channel_ctx(channel, now)`） |
 | `crewd_collab::cursors::{cursor(conn, reader, channel) -> Option<i64>, unread_for, advance}` | 已注入判定、未读、推游标 | |
-| `crewd_collab::render::{build_batch, wake_text}`、`settings::{locale, max_live_sessions, set_max_live_sessions}`、`worldview::{context_for, render}` | 渲染、设置、世界观 | `Locale` ↔ `crewd_wake::text::Lang` |
+| `crewd_collab::render::{build_batch(conn, session, Locale, rows) -> WakeBatch { items, unusable, deferred }, WakeBatch::cursor_targets(), wake_text(Locale, &batch)}`、`settings::{locale, max_live_sessions, set_max_live_sessions}`、`worldview::{context_for, render}` | 渲染、设置、世界观 | `Locale` ↔ `crewd_wake::text::Lang`；**已核（main）**：`build_batch` 带 `Locale`、`deferred` 留 pending、游标推到 `cursor_targets()`、报错是 fail-loud（不紧循环重试） |
 | `crewd_collab::restart::open(tx, ids) -> Result<Option<RestartPrompt>>`、`asks::apply_due_defaults(tx, crew)` | 重启询问、默认方案 | `RestartPrompt.id: i64` |
 | `crewd_server::hub::{CollabEvent, Hub::subscribe_collab}`、`Hub::publish(Event)` | 订阅 / 发事件 | |
 | `SessionControl`、`StartRequest`、`Inspection`、`QuotaReport`、`ControlError` | `control.rs` | M3a 计划 Task 12 全文 |
@@ -7348,18 +7536,35 @@ pub enum WakeStateView {
     Dropped,
 }
 
-/// 给 `api_schema()` 登记的类型（M3a 的登记方式见 Step 1 对齐表）。
-pub fn schema_entries() -> Vec<(&'static str, schemars::Schema)> {
-    vec![
-        ("SessionStartParams", schemars::schema_for!(SessionStartParams)),
-        ("SessionStopParams", schemars::schema_for!(SessionStopParams)),
-        ("SessionIdParams", schemars::schema_for!(SessionIdParams)),
-        ("CrewSetCaptainParams", schemars::schema_for!(CrewSetCaptainParams)),
-        ("WakeListParams", schemars::schema_for!(WakeListParams)),
-        ("AdmissionRecoverParams", schemars::schema_for!(AdmissionRecoverParams)),
-        ("OrchestraSettings", schemars::schema_for!(OrchestraSettings)),
-        ("WakeView", schemars::schema_for!(WakeView)),
-    ]
+/// `wake.changed` 的数据。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeChanged {
+    pub session_id: String,
+}
+
+/// 登记进 `api_schema()` 的方法与事件：**用 `api_schema` 的同一个 `SchemaGenerator`**（`crate::sub::<T>(g)`，父模块的
+/// 私有函数子模块看得见），类型只进顶层 `$defs`、这里全是 `$ref`。`schema_for!` 会给每个类型自带一份 `$defs`，
+/// M3a 的 `every_ref_resolves_to_a_single_top_level_def` 会红。返回 (方法 → {params, result}, 事件 → 负载)。
+pub(crate) fn schema_entries(
+    g: &mut schemars::SchemaGenerator,
+) -> (Vec<(&'static str, serde_json::Value)>, Vec<(&'static str, serde_json::Value)>) {
+    use crate::sub;
+    let m = |params: serde_json::Value, result: serde_json::Value| serde_json::json!({ "params": params, "result": result });
+    let many = |v: serde_json::Value| serde_json::json!({ "type": "array", "items": v });
+    let methods = vec![
+        (methods::SESSION_START, m(sub::<SessionStartParams>(g), sub::<crate::Session>(g))),
+        (methods::SESSION_STOP, m(sub::<SessionStopParams>(g), sub::<crate::Empty>(g))),
+        (methods::SESSION_RESUME, m(sub::<SessionIdParams>(g), sub::<crate::Empty>(g))),
+        (methods::SESSION_LIVE, m(sub::<SessionIdParams>(g), sub::<crate::SessionLive>(g))),
+        (methods::CREW_SET_CAPTAIN, m(sub::<CrewSetCaptainParams>(g), sub::<crate::Empty>(g))),
+        (methods::WAKE_LIST, m(sub::<WakeListParams>(g), many(sub::<WakeView>(g)))),
+        (methods::ADMISSION_RECOVER, m(sub::<AdmissionRecoverParams>(g), sub::<crate::Empty>(g))),
+        (methods::SETTINGS_GET, m(sub::<crate::NoParams>(g), sub::<OrchestraSettings>(g))),
+        (methods::SETTINGS_SET, m(sub::<OrchestraSettings>(g), sub::<OrchestraSettings>(g))),
+    ];
+    let events = vec![(events::WAKE_CHANGED, sub::<WakeChanged>(g))];
+    (methods, events)
 }
 
 #[cfg(test)]
@@ -7388,7 +7593,11 @@ mod tests {
 }
 ```
 
-`crates/proto/src/lib.rs` 加 `pub mod orchestra;`；在 M3a 的 `api_schema()` 里按它的登记方式把 `orchestra::schema_entries()` 与 `orchestra::methods::ALL` 登记进去（一处，几行）。
+`crates/proto/src/lib.rs` 加 `pub mod orchestra;`，并在 M3a 的契约里登记（M3a 落地的形状：`api_schema()` 用一个生成器 `g`，`methods` 是 `(名, m(params, result))` 收成的 Map，事件表来自 `event_payloads(g)`，最后 `"$defs": generator.take_definitions(true)`）：
+- `api_schema()`：在收 `methods` 的那张表后面（`take_definitions` 之前）`let (orch_methods, _) = orchestra::schema_entries(g);`，逐个 `insert` 进 `methods` Map——方法与 M3a 的放在同一个 `methods` 对象里（客户端只看一张方法表）。
+- `event_payloads(g)`：末尾 `.chain(orchestra::schema_entries(g).1)`（或直接加一行 `(orchestra::events::WAKE_CHANGED, sub::<orchestra::WakeChanged>(g))`），`Event` 的 oneOf 与 `events` 表就都有 `wake.changed`（主题 `wake` M3a 已在 `TOPICS` 里）。
+- M3a 的 `schema_lists_exactly_the_client_methods` 拿 `methods::ALL` 比 `api_schema()["methods"]` 的键：改成比 `methods::ALL ∪ orchestra::methods::ALL`（一行 `chain`）。`methods::ALL` 本身不动（`crewd rpc` 端到端按它逐个驱动；M3c 的方法要起会话，由 Task 11 的端到端覆盖）。
+`db.rs` 的 `publish` 里 `wake.changed` 的数据改用 `WakeChanged { session_id }` 序列化（与契约同形）。
 
 - [ ] **Step 4: 写 `db.rs` 的测试（真库）**
 
@@ -7517,7 +7726,7 @@ mod tests {
     #[tokio::test]
     async fn lobby_context_has_every_crew_session_and_the_captain_as_owner() {
         let (_s, port, _d) = seeded().await;
-        let ctx = port.channel_ctx("c1/lobby").await.unwrap().unwrap();
+        let ctx = port.channel_ctx("c1/lobby", Ms(crewd_store::now_ms())).await.unwrap().unwrap();
         let mut m = ctx.session_members.clone();
         m.sort();
         assert_eq!(m, ["cap", "w1"]);
@@ -7808,15 +8017,20 @@ impl Port for DbPort {
                 let d = if d == Desired::Running { crewd_proto::Desired::Running } else { crewd_proto::Desired::Stopped };
                 collab::sessions::set_desired(tx, &id, d)?;
             }
-            // `set_working` 同时写 last_active_at；只给 last_active_at 的（退出时）没有对应的 M3a 写函数，略过。
+            // `set_working` 同时写 last_active_at。**只给 last_active_at 的（退出时，`on_exited` 非 stopping 分支）
+            // M3a 没有写函数**：这一次的时间丢了，库里留的是最后一个 Working 边沿的时间（`restart_order` 的「最近活跃」
+            // 因此可能偏早）。不静默：打一行日志，缺口写进交付记录的遗留（要 M3a 补 `sessions::touch_active` 之类的写函数）；MemPort 照写，所以 Core 的单元测试看不出这个差异。
             if let Some(w) = p.was_working {
                 collab::sessions::set_working(tx, &id, w)?;
+            } else if p.last_active_at.is_some() {
+                eprintln!("crewd: last_active_at for {id} not persisted (M3a has no writer for it alone)");
             }
             if let Some(f) = p.resume_failed_at {
                 collab::sessions::set_resume_failed(tx, &id, f.is_some())?;
             }
             if p.model.is_some() || p.effort.is_some() {
-                collab::sessions::set_profile(tx, &id, p.model.flatten(), p.effort.flatten())?;
+                // M3a：COALESCE，None = 保留旧值。
+                collab::sessions::set_profile(tx, &id, p.model, p.effort)?;
             }
             Ok(())
         })
@@ -7853,6 +8067,10 @@ impl Port for DbPort {
 
     fn mint_token(&self, session: &str) -> String {
         self.state.tokens.mint(session)
+    }
+
+    fn revoke_token(&self, session: &str) {
+        self.state.tokens.revoke(session);
     }
 
     async fn enqueue(&self, w: NewWake) -> Result<bool> {
@@ -7971,6 +8189,11 @@ impl Port for DbPort {
         self.write(move |tx| Ok(collab::restart::open(tx, session_ids)?.map(|p| p.id))).await
     }
 
+    async fn restart_answer(&self, id: i64) -> Result<Option<bool>> {
+        self.read(move |c| Ok(opt(collab::restart::get(c, id))?.and_then(|p| p.answer).map(|a| a == RestartAnswer::Resume)))
+            .await
+    }
+
     async fn prune_wakes(&self, before: Ms) -> Result<usize> {
         self.write(move |tx| cw::prune(tx, before.0)).await
     }
@@ -7995,7 +8218,7 @@ impl Port for DbPort {
         .await
     }
 
-    async fn channel_ctx(&self, channel: &str) -> Result<Option<ChannelCtx>> {
+    async fn channel_ctx(&self, channel: &str, now: Ms) -> Result<Option<ChannelCtx>> {
         let channel = channel.to_string();
         self.read(move |c| {
             if collab::channels::get(c, &channel).is_err() {
@@ -8013,7 +8236,8 @@ impl Port for DbPort {
                 Some(MemberRef::Session { id }) => Some(id),
                 _ => None,
             };
-            let listens = collab::listens::active_for_channel(c, &channel, 0)?
+            // 传真实的 now（不是 0）：0 会把已过期的收听也读回来。
+            let listens = collab::listens::active_for_channel(c, &channel, now.0)?
                 .into_iter()
                 .map(|l| Listen {
                     session: l.session,
@@ -8067,12 +8291,16 @@ impl Port for DbPort {
 
     async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
         let (session, ids): (String, Vec<i64>) = (session.to_string(), batch.iter().map(|w| w.id).collect());
-        let (text, dropped) = self
+        let (text, dropped, deferred, cursor_targets) = self
             .read(move |c| {
                 let rows: Vec<WakeRow> = cw::by_ids(c, &ids)?;
-                let b = collab::render::build_batch(c, &session, &rows)?;
-                let text = collab::render::wake_text(collab::settings::locale(c)?, &b);
-                Ok((text, b.unusable))
+                // M3a：`build_batch(conn, session, Locale, rows)`——发言者标签按这个语言渲染。
+                let locale = collab::settings::locale(c)?;
+                // 报错（如账本坏了）是 fail-loud：原样上抛，Core 记日志、这批留在 pending，不在这里重试。
+                let b = collab::render::build_batch(c, &session, locale, &rows)?;
+                let text = collab::render::wake_text(locale, &b);
+                // R6：`deferred` 留在 pending（下一批带），`cursor_targets()` 是投递成功后游标该推到的位置。
+                Ok((text, b.unusable.clone(), b.deferred.clone(), b.cursor_targets()))
             })
             .await?;
         let dropped_ids: Vec<i64> = dropped.iter().map(|(id, _)| *id).collect();
@@ -8085,7 +8313,7 @@ impl Port for DbPort {
             })
             .await?;
         }
-        Ok(Rendered { text, dropped: dropped_ids })
+        Ok(Rendered { text, dropped: dropped_ids, deferred, cursor_targets })
     }
 
     fn publish(&self, e: OrchestraEvent) {
@@ -8096,7 +8324,7 @@ impl Port for DbPort {
             },
             OrchestraEvent::WakeChanged { session } => crewd_proto::Event {
                 event: crewd_proto::orchestra::events::WAKE_CHANGED.into(),
-                data: serde_json::json!({ "sessionId": session }),
+                data: serde_json::to_value(crewd_proto::orchestra::WakeChanged { session_id: session }).unwrap_or_default(),
             },
         };
         self.state.hub.publish(event);
@@ -8195,7 +8423,9 @@ pub fn map_error(e: ControlError) -> M3aError {
         ControlError::NotFound(s) => M3aError::NotFound(s),
         ControlError::AlreadyRunning(s) => M3aError::AlreadyRunning(s),
         ControlError::Unsupported(s) => M3aError::Unsupported(s),
-        e @ (ControlError::NotRunning(_) | ControlError::NoWorkdir(_)) => M3aError::Invalid(e.to_string()),
+        e @ (ControlError::NotRunning(_) | ControlError::NoWorkdir(_) | ControlError::CaptainTaken(_)) => {
+            M3aError::Invalid(e.to_string())
+        }
         // 建 worktree 失败（C8）带原因原样给调用方（M3b 的 `start_session` 回执 = `r.failed` + 这段原因）。
         e @ (ControlError::AtCap { .. } | ControlError::Internal(_) | ControlError::Worktree(_)) => M3aError::Failed(e.to_string()),
     }
@@ -8214,6 +8444,10 @@ pub fn live_to_proto(v: &LiveView) -> SessionLive {
                 HealthKind::LaunchFailed => HealthKindView::LaunchFailed,
                 HealthKind::BriefUndelivered => HealthKindView::BriefUndelivered,
                 HealthKind::PromptUndelivered => HealthKindView::PromptUndelivered,
+                // M2c 加的两种（只有 codex 报）：M3a 的 `HealthKindView` 还没有对应的词（缺口，回报控制者补词表）。
+                // 补上之前就近映射、`detail` 原样带上，客户端不会把它们当成正常。
+                HealthKind::TurnFailed => HealthKindView::PromptUndelivered,
+                HealthKind::VersionIncompatible => HealthKindView::LaunchFailed,
             },
             detail: h.detail.clone(),
         }),
@@ -8315,7 +8549,7 @@ mod tests {
 }
 ```
 
-（M2c 合入后 `HealthKind` 多两个变体，`live_to_proto` 的 match 会编不过——在 M3a 的 `HealthKindView` 里有对应项就映射，没有就报回。）
+（M2c 已合：`HealthKind` 多了 `TurnFailed` / `VersionIncompatible`，M3a 的 `HealthKindView` 没有对应项——上面先就近映射并带 `detail`，缺的词报回控制者，由 M3a / proto 的主人补。）
 
 - [ ] **Step 7: `rpc.rs`（M3c 的客户端 RPC）+ dispatch / AppState 接线**
 
@@ -8337,7 +8571,7 @@ use super::core::{ControlError, Origin, StartSession};
 fn rpc_err(e: ControlError) -> RpcError {
     let code = match e {
         ControlError::NotFound(_) => -32004,
-        ControlError::AlreadyRunning(_) => -32009,
+        ControlError::AlreadyRunning(_) | ControlError::CaptainTaken(_) => -32009,
         _ => RpcError::INVALID_PARAMS,
     };
     RpcError::new(code, e.to_string())
@@ -8617,24 +8851,36 @@ pub async fn serve_with(data_dir: PathBuf, opts: ServeOptions, shutdown: impl Fu
     orchestra::db::forward_collab(collab_rx, handle.clone());
 
     let listener = UnixListener::bind(&sock)?;
+    // 连接任务收进 JoinSet（M3a 的 accept 分支是裸 `tokio::spawn`）：停机时要能收完 / 中止它们，才能放掉 AppState。
+    let mut conns = tokio::task::JoinSet::new();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
             accepted = listener.accept() => {
-                // ……M3a 的 accept 分支原样保留……
+                // ……M3a 的 accept 分支原样保留，只把 `tokio::spawn(async move { conn::run(st, stream) … })`
+                // 换成 `conns.spawn(…)`……
             }
         }
     }
-    // 叫停全部会话（不改 desired / was_working：下次启动问人时要知道谁在跑、谁被打断）。
+    // 停机次序（spec §23 给 M3c 的注意）：① 停止接入 → ② 叫停会话 → ③ 收完 / 中止连接任务 → ④ 丢 AppState → ⑤ join Db 线程。
+    drop(listener); // ①
+    // ② 叫停全部会话（不改 desired / was_working：下次启动问人时要知道谁在跑、谁被打断）。
     handle.shutdown(std::time::Duration::from_secs(5)).await;
+    conns.abort_all(); // ③ 连接任务里持有 AppState 的克隆
+    while conns.join_next().await.is_some() {}
+    drop(handle); // ④ 编排 actor 退出后它的 DbPort（持有 AppState）随之释放
+    drop(state);
+    // ⑤ M3a 的 `Db` 没有 JoinHandle（`Db::spawn` 不交回线程句柄）：最后一个 `Db` 克隆 drop 后线程自己退出，但这里**等不到**
+    // 它把手上的活做完——这是 M3a 的缺口（`Db::shutdown` / `join`），回报控制者补；补上之前这一步只能 drop。
+    drop(db);
     let _ = std::fs::remove_file(&sock);
     drop(lock);
     Ok(())
 }
 ```
 
-（accept 分支按 M3a 合入后的原文保留，不重写；这里只是把它包进 `serve_with`。）
+（accept 分支按 M3a 合入后的原文保留，只把 spawn 换进 `conns`；这里是把它包进 `serve_with`。）
 
 - [ ] **Step 3: `crewd serve --claude`（`crates/crewd/src/main.rs`）**
 
@@ -9086,7 +9332,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 ### Task 12: 交付记录
 
 **Files:**
-- Modify: `crewd/README.md`（一段）、`docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`（在 §22 之后追加「M3c 交付记录与遗留」一节；不改 §22 正文）
+- Modify: `crewd/README.md`（一段）、`docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`（在末尾追加「M3c 交付记录与遗留」一节——§23 已是 M3a 的交付记录，用当时末尾的下一个号，M3b 先合就再顺延；不改 §22 正文）
 
 - [ ] **Step 1: README**
 
@@ -9094,7 +9340,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 2: spec 交付记录**
 
-照 §18 / §19 / §20 的写法：已交付（按 crate / 模块一句）、与 spec / M3a 计划不同的决定（本计划「裁定」逐条一句）、给 M3b / M4b / M5b 的口（产出信号 = M3a `sessions::note_progress`，M4b 的工作项命令必须调；`IdleHook`、`AskAnsweredHook`、`Arbiter`、`ContextExtras`、`QuotaSource`）、遗留（本计划文末「spec 问题」里仍开着的 2 / 15、`set_profile` 只落库、worktree 只建不删（C8，删除归人）、非消息类唤醒至少一次）。读数写实测到的（测试条数、`check.sh` 连跑次数），推出来的标 [推]。
+照 §18 / §19 / §20 的写法：已交付（按 crate / 模块一句）、与 spec / M3a 计划不同的决定（本计划「裁定」逐条一句）、给 M3b / M4b / M5b 的口（产出信号 = M3a `sessions::note_progress`，M4b 的工作项命令必须调；`IdleHook`、`AskAnsweredHook`、`Arbiter`、`ContextExtras`、`QuotaSource`）、遗留（本计划文末「spec 问题」里仍开着的 2 / 15、`set_profile` 只落库且清不掉 model / effort（M3a COALESCE）、worktree 只建不删（C8，删除归人）、非消息类唤醒至少一次；对着 M3a / M2c 落地代码发现、要别人补的：只写 `last_active_at` 没有写函数（退出时的时刻丢了）、`Db` 没有 JoinHandle（停机等不到库线程）、`HealthKindView` 缺 `turn_failed` / `version_incompatible`、`Lagged` 时漏掉的 `AskAnswered.cleared` 无从重推（`AskAnsweredHook` 必须容忍漏调）、`wake_latches` 坏行只告警不修）；并逐条写明 spec §23 末尾「给 M3c 的跨计划注意」在本计划哪一处吸收了。读数写实测到的（测试条数、`check.sh` 连跑次数），推出来的标 [推]。
 
 - [ ] **Step 3: 提交**
 
@@ -9123,7 +9369,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 9. **待恢复名单与「@ 一个已停的 session 会拉起它」的交界**。→ **已解决（控制者裁定 C4）**：询问开出之后人 @ 名单里的某一个 = 只恢复它（算单个 resume），其余照旧等；启动前就排着的人类唤醒不算。
 10. **人类唤醒与可选并发上限**。→ **已解决（控制者裁定 C5）**：人类唤醒绕过可选上限。
 11. **`set_profile` 与 `session.start.worktree` 的归属**。→ **已解决（控制者裁定 C5、C8）**：`set_profile` 只落库、下次启动生效；**已被控制者裁定 C8 改写**：不再是「已存在目录」；`StartRequest` / `session.start` 带必填 `isolation: bool`，`true` 时会话管理器照 Swift 新建 git worktree（裁定 20）；M3b 的 `start_session` 保留 `isolation`。
-12. **消息唤醒推进游标的前提**：Delivered 后把游标推到批里最大的 seq，前提是 `render::wake_text` 把该群这一 seq 之前的未读都带进了正文。→ **已解决**：M3a 的 `build_batch` 改为每个群带上「游标之后、到批里最大 seq 为止」它看得见的全部消息（M3a Task 11 测试钉住），所以投递成功后推游标不会越过没告知的消息。
+12. **消息唤醒推进游标的前提**：Delivered 后推游标，前提是正文把该群游标之后、推到的那个 seq 之前它看得见的未读都带上了。→ **已解决（M3a 落地，R6）**：`build_batch` 每个群带「游标之后」它看得见的最旧的至多 `UNREAD_CAP` 条（连续窗口），窗口外的被叫行进 `WakeBatch.deferred`（留 pending）；投递成功后游标推到 `WakeBatch::cursor_targets()`（批里实际带上的最大 seq），**不是**排队行里最大的 seq。M3c：`Rendered` 带 `deferred` + `cursor_targets`，`render_fitted` 拿掉 deferred 且不碰它们的状态，`Inflight` / `Starting` 带 `cursor_targets`、`on_delivery` 推到它；只有积压、`wake_ids` 为空的批也投（Task 8 `deferred_rows_stay_pending_and_a_backlog_only_batch_still_goes_out`）。8KB 对消息项只是建议值（裁定 8）。
 13. **M2c 的事件顺序**。→ 不变（裁定 12）。
 14. **`delivered` 行不清理**。→ **已解决（控制者裁定 C6）**：M3a `wakes::prune`；M3c 的定时拍每小时清一次 7 天前已结的行。
 15. **默认方案到点的精度**：只能按心跳（30s）扫全部机组。→ **仍开着（可接受）**：精度 = 心跳；量大了再让 M3a 给「最早的默认方案到点时刻」。

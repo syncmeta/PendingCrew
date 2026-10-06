@@ -26,6 +26,7 @@
 - 文件归属（spec §22.5，与 M3a 计划冻结块末的先后表一致）：M3b 只改 `crates/crewd/src/{mcp_cmd,hook_cmd,agent_client}.rs` 与 `main.rs` 的子命令接线、`crates/server/src/agent/**`（`mod.rs` / `runtime.rs` 是**替换** M3a 的占位）、`crates/server/src/conn.rs` 的 agent 路由（Task 7，见「与 spec 的出入」第 4 条；M3c 不碰 conn.rs）、`crates/server/Cargo.toml` 的 `testkit` 特性那一行、`crates/collab/src/{worldview,turn_trace}.rs`、`crates/collab/prompts/{world-model,tools}.{zh,en}.md`、`crates/exec/src/launch.rs`、`crates/proto/src/agent.rs`（新）与 `proto/src/lib.rs` 的 `pub mod agent;` + `api_schema` 一行。**不动** `crates/server/src/lib.rs`（`AppState.agent` 与 `pub mod agent;` M3a 已建）、`crates/wake/`、`server/src/orchestra/`（唯一例外见本条末尾）、`dispatch.rs`、store 的 schema 与 collab 的其余文件。与 M3c 共享、各改不相交段的：`proto/src/lib.rs`、`crates/crewd/src/main.rs`、`Cargo.toml` / `Cargo.lock`、契约 json——**后合者** rebase 时保留两边、重跑 `cargo add` / 重新生成，不挑边合并。M3c 的 `orchestra/exec_claude.rs::comms_for` 填 `CommsSpec`：M3b 若后合，改那一个函数对上新形状（`token`、`approval_gates`，没有 `approval_wait_secs`）。
 - 给 agent 看的文字（工具描述、参数说明、回执、错误、注入标注、世界观、代发稿）**只**在 md 里；`server/src/agent/**` 与 `collab/src/{worldview,turn_trace}.rs` 的非测试代码里不得出现中日韩字符（Task 3 的扫描测试钉住）。给开发者看的（stderr、RPC 层错误）写英文短句。
 - 时间：`collab` 两个文件不读时钟，`now` 由调用方传；`server::agent` 用 `crate::agent::port::now()` 一处取时钟。
+- **名字一律过 `safe_name`**（M3a 终审复审 5，spec §23）：插进世界观 / 回执 / 代发稿 / 目录文字的每个名字（session 显示名、机组名、群名、通讯录里的名字、`captain_name`）都先过 M3a 的 `render::safe_name`——collab 里直接用、server 里用 `agent::text::name`（M3a 的函数是 `pub(crate)`，Task 3 在 M3b 拥有的 `worldview.rs` 包一层 `pub fn safe_name`）。正文（消息、brief、问题、附言）不是名字，不过它。另：M3a 落地后 session 在注入面上的发言者标签**带前缀修饰**（`（N号）名字` / `(ext N) name`、机长另有修饰，见 `render.*.md` 的 `sender.*`），名字等于「人类 / Human / crewd」等保留标签的 session 在 `register` / 改名时被拒——测试里的显示名别撞这些标签。
 
 ## 查过的官方文档（2026-10-06）
 
@@ -50,7 +51,7 @@
 | Q3 私有群 | 不做 | 不提供私有选项；`read_channel` 可读本机组 `channel.list` 列出的任何群，注入 / `search` 只看自己在的群与收听的群 |
 | Q4 旧工具 | `raise_attention` / `clear_attention` / `crew_ordering_signals` / `arrange_crews` 删 | 工具表里没有；`catalog` 测试断言它们不存在 |
 | Q5 并发上限 | 默认不设上限，防异常唤醒循环（M3c） | `start_session` 回执不提排队；不在 M3b 里做任何限流 |
-| 侧栏排序（2026-10-06 追加） | 手动拖拽（`crews.position`），没有任何自动排序 | 不提供排序工具；世界观不提排序 |
+| 侧栏排序（2026-10-06 追加） | 手动拖拽（M3a 落地为顶层 `crews.position` + 每条父子边 `crew_parents.position`），没有任何自动排序 | 不提供排序工具；世界观不提排序 |
 | 协作用群、不开子机组（2026-10-06 追加） | 话题 / 任务协作用机组里的群；子机组只表达组织结构（部门 / 团队） | 世界观「机组与群」一节、`channel_create` / `create_child_crew` / `create_parent_crew` 的描述都这么引导；Task 3 `child_crew_text_steers_collaboration_to_channels`、Task 4 `old_mechanisms_are_gone_and_new_rules_are_present` 钉住 |
 
 ## 控制者裁定（2026-10-06，三份 M3 计划对齐时定，绑定；spec §22.7 有记录）与 M3b 的落点
@@ -71,19 +72,19 @@
 |---|---|---|
 | 库 | `crewd_store::Db::{spawn, call}`（`call` 返回 `crewd_store::Result<T>`）、`crewd_store::{now_ms, meta_get, meta_set}`、`crewd_store::channels::{lobby_id, human_id}` | port、testkit、turn_trace |
 | 写事务 | `AppState::collab(\|tx: &mut Tx\| …) -> collab::Result<T>`（一个事务 + 把 `Change` 发到 Hub） | port 的全部写 |
-| 事件 | `Hub::subscribe_collab() -> Receiver<Change>`；`Change::{SessionChanged, CrewChanged, Progress { session_id, kind }, …}` | 角色变化推送（Task 7）；测试里核 `Progress`（Task 9） |
+| 事件 | `Hub::subscribe_collab() -> Receiver<Change>`；`Change::{SessionChanged, CrewChanged, CrewRemoved, ChannelRemoved（群随机组删除被级联删掉，客户端事件 `channel.removed`）, Progress { session_id, kind }, …}` | 角色变化推送（Task 7）；测试里核 `Progress`（Task 9） |
 | 状态 | `AppState { db, hub, tokens: TokenTable, sessions: Arc<dyn SessionControl>, agent: agent::AgentRuntime, orchestra }`、`AppState::new(db).with_sessions(s)`（`agent` 字段 M3a 已占位，`new` 里 `AgentRuntime::default()`；M3b 只换 `agent/runtime.rs` 的内容，不改 `lib.rs`） | rpc、testkit |
 | 令牌 | `TokenTable::{mint, verify, revoke}` | rpc（verify）、testkit（mint） |
 | 会话控制 | `SessionControl::{start(StartRequest) -> Session, stop, nudge, inspect(id, max_lines) -> Inspection, set_profile, handoff_captain(crew, to), quota -> QuotaReport, live -> SessionLive, resume}`、`FakeSessionControl::calls() -> Vec<FakeCall>`、`ControlError` | 机长工具、`get_quota`、`set_session_profile` |
 | 错误码 | `RpcError::{FORBIDDEN = -32003, NOT_FOUND = -32004, CONFLICT = -32009}`、`dispatch::collab_err` | agent RPC |
 | 词表 | `crewd_proto::{Role, ChannelKind, MentionKind, SenderKind, MemberRef, Mention, Message(channel_id)}`、`crewd_collab::Locale`、`settings::locale(conn)` | 全部 |
-| 群 | `channels::{create, ensure_dm, update, add_members, remove_member, ensure_human_channel, channels_of_session, list_for_crew, summary, request_owner_transfer, accept_owner_transfer, force_owner}`（**群权限由它们按 `by: &Sender` 判**） | 群工具 |
-| 消息 | `messages::{post(tx, Sender, NewPost) -> Posted { message, unwatched_human_mention }, list, search, get}`；`message.post` 附件非空一律拒 | post / read / search / 代发 |
+| 群 | `channels::{create, ensure_dm, update, add_members, remove_member, ensure_human_channel, channels_of_session, list_for_crew, summary, request_owner_transfer, accept_owner_transfer, force_owner}`（**群权限由它们按 `by: &Sender` 判**；`ensure_dm(tx, crew, a, b)` 复用已有 dm 时**不看 `crew`**——对方从自己机组发起也拿到同一个，`crew` 只决定新建时归哪个机组；topic 名 / session 名不能等于「人类 / Human / crewd」这些发言者标签，M3a 拒） | 群工具 |
+| 消息 | `messages::{post(tx, Sender, NewPost) -> Posted { message, unwatched_human_mention }, list(conn, ch, after, before, limit), search, get(conn, id)}`；`message.post` 附件非空一律拒；`@captain` 在机长不是成员的群里 = `Invalid`（列出成员）；**`list` 的 `before = None` 是 `after` 之后最旧的一页**，要最新一页传 `before: Some(i64::MAX)`；没有按 seq 取消息的函数（G-Q） | post / read / search / 代发 |
 | 游标与可见性 | `cursors::{unread_for(tx, s) -> Vec<(String, Vec<Message>)>, advance}`（**已滤可见性与自己发的**，`visible_to` / `directed_targets` 是 M3a 的） | 注入 |
-| 渲染 | `render::{blocks_for(conn, s, &unread) -> Vec<ChannelBlock>, injection(Locale, &[ChannelBlock]), wake_text, build_batch}`，文字在 `render.{zh,en}.md` | 注入 |
+| 渲染 | `render::{blocks_for(conn, s, Locale, &unread) -> Result<Vec<ChannelBlock>>, injection(Locale, &[ChannelBlock]), wake_text, build_batch(conn, s, Locale, &rows)}`（发言者 / 目标标签按调用方给的语言渲染，带机长 / 分机号前缀修饰）；`render::safe_name` 是 `pub(crate)`——M3b 经 `worldview::safe_name`（Task 3 加的包装）用它，文字在 `render.{zh,en}.md` | 注入 |
 | 提示词 | `prompts::{parse, PromptFile, fill, placeholders}`，占位符 `{名字}`；`fill` 一遍扫描、值不再展开（G-F，M3a 已改） | text、worldview、turn_trace |
-| 收听 | `listens::{set, clear, channels_of}` | 收听工具 |
-| 机组 | `crews::{get, parents, children, root_of, captain_of, create(NewCrew), update(CrewPatch{policy: Option<Value>, status_line}), adopt, release, set_captain}` | 机长工具、testkit |
+| 收听 | `listens::{set, clear -> Result<usize>（删了几行）, channels_of(conn, s, now_ms)}` | 收听工具 |
+| 机组 | `crews::{get, parents, children, root_of, captain_of, create(NewCrew { title: String, working_directory: String, parent_id, title_source }), update(CrewPatch{policy: Option<Value>, status_line}), adopt, release, set_captain}`（`create` 对空标题 / 空目录回 `Invalid`；侧栏次序在父子边上，`Crew.childIds`） | 机长工具、testkit |
 | session | `sessions::{get, list, role_of, display_name, register(NewSession), set_awaiting_question, note_progress(tx, s, ProgressKind::ToolCall)}` | port、turn_trace、testkit、注入（C3） |
 | Agent Todo | `todos::respond(tx, session, number, text) -> TodoResponse`（G3） | respond_todo |
 | 通讯录 | `directory::list(conn, query) -> Vec<DirectoryRow { number, kind, name, crew_id, session_id, org_path }>` | directory / contact、分机号 |
@@ -135,6 +136,8 @@
 9. 世界观去掉 Swift 的 `humanRoster` / `sharesBlock` / `tiebreakerBlock` / `captainRunnerBlock` 与入门机组的 SKILL.md 提示（`LocalSessionWorldModel.swift:56-70`）；人类只有一个人，runner 偏好设置 crewd 里还没有（遗留 L2）。
 10. post-tool-use 顺带报产出（控制者裁定 C3）：非 `mcp__crew__*` 的工具调用 → `sessions::note_progress(ToolCall)`；crewd 自己的通讯工具不算。
 11. `start_session` 保留 `isolation`（必填 bool，机长逐次定；控制者裁定 C8）：`true` = crewd（M3c）在机组工作目录里新建 git worktree，`false` = 机组共享目录；建失败 = 回 `r.failed`、什么都不起，不静默退回共享目录；crewd 不删 worktree。没有 `workdir` 参数（Swift 没有）。
+12. `create_parent_crew` / `create_child_crew` 不填标题时用 md 模板（Swift 取地名，遗留 L10）；新机组继承发起机长所在机组的工作目录，那个机组没有工作目录就拒（M3a 的 `crews::create` 拒空标题 / 空目录）。
+13. 消息按 seq 引用（`reply_to` / `before`）：M3a 没有按 seq 取消息的函数（G-Q），port 在调用者看得见的群里逐个找；M3a 补上后换成一次查询。
 
 ## Review Focus
 
@@ -240,15 +243,15 @@ grep -n "pub trait SessionControl" -A12 crates/server/src/control.rs
 grep -n "pub struct FakeSessionControl\|pub fn calls" crates/server/src/control.rs
 grep -n "FORBIDDEN\|NOT_FOUND\|CONFLICT" crates/proto/src/lib.rs
 grep -n "pub fn unread_for\|pub fn advance" crates/collab/src/cursors.rs
-grep -n "pub fn blocks_for\|pub fn injection" crates/collab/src/render.rs
+grep -n "pub fn blocks_for\|pub fn injection\|fn safe_name" crates/collab/src/render.rs   # blocks_for 带 Locale；safe_name 是 pub(crate)
 grep -n "pub fn fill\|pub fn placeholders\|pub fn parse" crates/collab/src/prompts.rs
 grep -n "pub struct WorldCtx\|pub fn context_for\|pub fn render" crates/collab/src/worldview.rs
 grep -n "pub enum TurnEnd\|pub fn on_turn_end" crates/collab/src/turn_trace.rs
 grep -n "pub fn post\|pub struct Posted\|unwatched_human_mention" crates/collab/src/messages.rs
 grep -n "pub fn ensure_dm\|pub fn force_owner\|pub fn request_owner_transfer" crates/collab/src/channels.rs
-grep -n "pub fn set\|pub fn clear\|pub fn channels_of" crates/collab/src/listens.rs
+grep -n "pub fn set\|pub fn clear\|pub fn channels_of" crates/collab/src/listens.rs   # clear -> Result<usize>
 grep -n "pub fn open\|pub fn withdraw\|pub struct OpenAsk\|pub struct AskDefault" crates/collab/src/asks.rs crates/proto/src/*.rs
-grep -n "pub fn request\|pub fn decide" crates/collab/src/approvals.rs
+grep -n "pub fn gate\|pub fn decide" crates/collab/src/approvals.rs
 grep -n "pub fn enqueue\|pub fn timer" crates/collab/src/wakes.rs
 grep -n "pub fn register\|pub fn set_awaiting_question\|pub fn display_name" crates/collab/src/sessions.rs
 grep -rn "todo_responses" crates/collab/src/ | head -3          # G3：空 = 缺
@@ -256,7 +259,7 @@ grep -n "replace(&format" crates/collab/src/prompts.rs           # G-F：有输�
 grep -n "pub agent" crates/server/src/lib.rs                     # G9
 ```
 
-Expected：除 G3 / G-F 两行外每条都有输出；`port.rs`（Task 6）里的调用照这里查到的真实签名写。
+Expected（2026-10-07 对着 main 核过）：G3 那行**有**输出（`todo_responses` 在 `todos.rs`）、G-F 那行**没有**输出（`fill` 已是一遍扫描），其余每条都有输出；`port.rs`（Task 6）里的调用照这里查到的真实签名写。已知与 M3a 计划冻结块不同的（本计划已改好）：`Response` 是 `{ id, outcome }` + `into_result()`；`blocks_for` / `build_batch` 带 `Locale`；`messages::list(.., before = None, ..)` 是从 `after` 往后的最旧一页；`listens::clear -> Result<usize>`；`ensure_dm` 复用时不看 `crew`；`crews::create` 拒空标题 / 空目录；`render::safe_name` 是 `pub(crate)`；`Locale` 用 `crewd_collab::Locale`（`worldview.rs` 里是私有 `use`，`crewd_collab::worldview::Locale` 不可见）；没有按 seq 取消息的函数（G-Q）。
 
 - [ ] **Step 2: 写失败的测试**
 
@@ -312,12 +315,19 @@ mod tests {
     }
 
     #[test]
-    fn schema_lists_the_four_methods() {
-        let s = schema();
+    fn schema_lists_the_four_methods_with_top_level_refs() {
+        // 走整份契约：agent 段用 api_schema 的同一个生成器，类型只进顶层 `$defs`
+        // （M3a 的 `every_ref_resolves_to_a_single_top_level_def` 管全份；这里核 agent 段自己）。
+        let api = crate::api_schema();
+        let s = &api["agent"];
         for m in [methods::ATTACH, methods::TOOLS, methods::CALL, methods::HOOK] {
-            assert!(s["methods"][m].is_object(), "{m}");
+            assert!(s["methods"][m]["params"].is_object(), "{m}");
+            assert!(s["methods"][m]["result"].is_object(), "{m}");
         }
-        assert!(s["types"]["ToolDef"].is_object());
+        assert!(s.get("$defs").is_none() && s.get("types").is_none(), "不许自带一份类型表");
+        for t in ["AttachParams", "AttachResult", "ToolDef", "CallParams", "CallResult", "HookKind", "HookParams", "HookResult"] {
+            assert!(api["$defs"][t].is_object(), "顶层 $defs 缺 {t}");
+        }
     }
 }
 ```
@@ -333,7 +343,7 @@ Expected: 编译失败，`cannot find type `AttachParams``。
 //! agent 面（spec §22.3）：`crewd mcp` / `crewd hook` 与 serve 之间的 RPC。
 //! 只有 `agent.attach` 成功过的连接能调其余三个；`agent.tools_changed` 只推给 attach 过的那条连接，
 //! 不是 `events.subscribe` 的主题。
-use schemars::{JsonSchema, schema_for};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -435,31 +445,44 @@ pub struct HookResult {
     pub stdout: Option<String>,
 }
 
-/// 契约里 agent 那一段（`api_schema()["agent"]`）。
-pub fn schema() -> Value {
-    json!({
-        "methods": {
-            methods::ATTACH: { "params": "AttachParams", "result": "AttachResult" },
-            methods::TOOLS: { "params": null, "result": "ToolDef[]" },
-            methods::CALL: { "params": "CallParams", "result": "CallResult" },
-            methods::HOOK: { "params": "HookParams", "result": "HookResult" },
-        },
-        "push": { TOOLS_CHANGED: "{ role: Role }" },
-        "types": {
-            "AttachParams": schema_for!(AttachParams),
-            "AttachResult": schema_for!(AttachResult),
-            "ToolDef": schema_for!(ToolDef),
-            "CallParams": schema_for!(CallParams),
-            "CallResult": schema_for!(CallResult),
-            "HookKind": schema_for!(HookKind),
-            "HookParams": schema_for!(HookParams),
-            "HookResult": schema_for!(HookResult),
-        }
-    })
+/// 契约里 agent 那一段（`api_schema()["agent"]`）。**必须用 `api_schema` 的同一个 `SchemaGenerator`**
+/// （`crate::sub::<T>(g)`，父模块的私有函数子模块看得见）：类型只进顶层 `$defs`、这里全是 `$ref`。
+/// 用 `schema_for!` 会给每个类型自带一份 `$defs`，M3a 的 `every_ref_resolves_to_a_single_top_level_def` 会红。
+pub(crate) fn schema(g: &mut schemars::SchemaGenerator) -> Value {
+    let method = |params: Value, result: Value| json!({ "params": params, "result": result });
+    let mut methods = serde_json::Map::new();
+    methods.insert(
+        methods::ATTACH.into(),
+        method(crate::sub::<AttachParams>(g), crate::sub::<AttachResult>(g)),
+    );
+    methods.insert(
+        methods::TOOLS.into(),
+        method(json!({ "type": "null" }), json!({ "type": "array", "items": crate::sub::<ToolDef>(g) })),
+    );
+    methods.insert(
+        methods::CALL.into(),
+        method(crate::sub::<CallParams>(g), crate::sub::<CallResult>(g)),
+    );
+    methods.insert(
+        methods::HOOK.into(),
+        method(crate::sub::<HookParams>(g), crate::sub::<HookResult>(g)),
+    );
+    // HookKind 只出现在 HookParams 里，`sub::<HookParams>` 已把它放进 `$defs`；这里再取一次保证它有名字。
+    let _ = crate::sub::<HookKind>(g);
+    let mut push = serde_json::Map::new();
+    push.insert(
+        TOOLS_CHANGED.into(),
+        json!({
+            "type": "object",
+            "properties": { "role": crate::sub::<crate::Role>(g) },
+            "required": ["role"],
+        }),
+    );
+    json!({ "methods": methods, "push": push })
 }
 ```
 
-`crates/proto/src/lib.rs`：模块声明区加 `pub mod agent;`；`api_schema()` 返回的对象顶层加一项 `"agent": agent::schema(),`（M3a 把 `api_schema` 改成什么形状都行，只加这一个键）。
+`crates/proto/src/lib.rs`：模块声明区加 `pub mod agent;`；`api_schema()` 里在最后那个 `json!` **之前**（`generator.take_definitions(true)` 之前、`g` 还活着的时候）加 `let agent = agent::schema(g);`，返回对象顶层加一项 `"agent": agent,`。只加这两行，不动别的键；`schema_lists_exactly_the_client_methods` 只看 `methods`，agent 段不在里面、不用改它。
 
 - [ ] **Step 5: 跑通 + 重新生成契约**
 
@@ -489,7 +512,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `crewd/crates/exec/src/launch.rs`（`CommsSpec`、`HelperCommands`、`HookEvent`、`prepare_claude` 的 comms 段、测试模块）
-- Modify（**仅当** M2c 已合进 main，Step 6）：codex 驱动里拼 MCP 命令行的地方与它测试里的 `CommsSpec { .. }` 字面量
+- Modify（Step 6，M2c 已合进 main@e66be68，**必做**）：`crates/exec/src/codex/driver.rs`（`thread_options` 里的 `HelperCommands(c).mcp_args_for("codex")`、`CodexConfig`、`start_codex`）、`crates/exec/tests/{fake_codex,live_codex}.rs` 里的 `CommsSpec { .. }` 字面量
 
 **Interfaces:**
 - Consumes: M2b 的 `prepare_claude`、`LaunchFiles`、`shell_quote`、`write_private`。
@@ -831,19 +854,24 @@ Expected: 全过（M2b 原有 10 条，删 2 加 6：`launch` 下 14 条）。
 
 把 `gate_matcher` 末尾的 `format!("({})", ..)` 改成 `parts.join("|")`：Expected `gate_matcher_escapes_and_forces_the_regex_path`、`hooks_are_quoted_shell_strings_with_explicit_timeouts` 红。用编辑器撤销（**不要** `git checkout -- <file>`，会丢掉未提交的实现），再跑回全绿。
 
-- [ ] **Step 6（仅当 M2c 已在 main 上）: codex 调用点**
+- [ ] **Step 6: codex 调用点**（M2c 已合进 main@e66be68；落地的 M2c 代码核过 2026-10-07）
 
 ```bash
 grep -rn "mcp_args_for\|crew_id: \|structured_post\|captain: " crates/exec/src crates/exec/tests crates/crewd/src | grep -v "^crates/exec/src/launch.rs"
 ```
 
-每处 `HelperCommands(c).mcp_args_for("codex")` 改成：先 `let token_file = crate::launch::write_token_file(<该会话的启动目录>, &c.token)?;`，再 `HelperCommands(c).mcp_args(&token_file)`；codex 驱动没有现成的启动目录就照 `prepare_claude` 建 `runtime_dir.join(format!("codex-{key}"))`（0700，`LaunchFiles` 管删除），`key` 用 crewd session id。删掉 `mcp_args_for`（不留转发：无兼容垫片）。测试里的 `CommsSpec { crew_id, captain, structured_post, label, .. }` 字面量按新字段改（`token: "t".into(), approval_gates: vec![]`）。grep 没输出 = M2c 还没合，跳过本步，并在提交信息里写「M2c 未合，codex 调用点留给后合者」。
+Expected（当前 main）：`exec/src/codex/driver.rs:231`（`thread_options` 里 `HelperCommands(c).mcp_args_for("codex")`，会带出 M3b 的 `crewd mcp` 不认的 `--crew --captain --agent codex …`）与 `exec/tests/fake_codex.rs:188`、`exec/tests/live_codex.rs:80` 两处 `CommsSpec { crew_id, captain, structured_post, label, .. }` 字面量。
+
+- `thread_options(spec)` 是纯函数、`CodexConfig` 里**没有** `runtime_dir`（M2c 落地如此），token 文件无处可写：`CodexConfig` 加 `pub runtime_dir: PathBuf`（`Default` 取 `std::env::temp_dir().join("crewd-codex")`，M3c 起会话时给数据目录下的运行目录，与 claude 的 `DriverConfig.runtime_dir` 同一处）；`launch.rs` 加 `LaunchFiles::create(runtime_dir: &Path, name: &str) -> io::Result<LaunchFiles>`（照 `prepare_claude` 建 0700 目录、已存在先清，`prepare_claude` 改成调它）。
+- `start_codex` 在 spawn 之前：有 `comms` 就 `let files = LaunchFiles::create(&config.runtime_dir, &format!("codex-{}", start.session_id))?; let token_file = write_token_file(files.dir(), &c.token)?;`，`files` 放进 `Task`（会话结束随 drop 删掉）；`thread_options(spec, token_file: Option<&Path>)` 里改成 `HelperCommands(c).mcp_args(token_file)`。
+- 删掉 `mcp_args_for`（不留转发：无兼容垫片）；`proto::mcp_servers` 不动。
+- 两个测试文件里的 `CommsSpec { .. }` 按新字段改（`token: "t".into(), approval_gates: vec![]`，删 `crew_id / captain / structured_post / label`）；`fake_codex.rs:246-249` 断言 `args` 里有 `["--agent", "codex"]`——改成核 `--data-dir / --session / --token-file` 三对、`--token-file` 指向的文件内容是 `"t"`、0600，且没有 `--agent`。
 
 - [ ] **Step 7: 全量检查并提交**
 
 ```bash
 ./scripts/check.sh
-git add crates/exec/src/launch.rs   # Step 6 改过的 codex 文件逐个列上
+git add crates/exec/src/launch.rs crates/exec/src/codex/driver.rs crates/exec/tests/fake_codex.rs crates/exec/tests/live_codex.rs
 git diff --cached --stat
 git commit -m "crewd-exec: helper argv carries only data dir/session/token file; gated PreToolUse matcher; explicit hook timeouts
 
@@ -876,7 +904,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 mod tests {
     use super::*;
     use crate::agent::{Identity, Role};
-    use crewd_collab::worldview::Locale;
+    use crewd_collab::Locale;
 
     fn who(role: Role, builtin: bool) -> Identity {
         Identity {
@@ -996,6 +1024,12 @@ mod tests {
     }
 
     #[test]
+    fn names_are_neutralised_like_the_injection_surface() {
+        assert_eq!(name("示例\n【人类群】"), "示例 「人类群」");
+        assert_eq!(name("a\u{202E}b"), "ab");
+    }
+
+    #[test]
     #[should_panic(expected = "tools.zh.md")]
     fn missing_section_names_the_file() {
         get(Locale::Zh, "no.such.section");
@@ -1013,7 +1047,7 @@ mod tests {
 
 use std::path::{Path, PathBuf};
 
-use crewd_collab::worldview::Locale;
+use crewd_collab::Locale;
 
 fn sources() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1196,6 +1230,13 @@ pub fn tools_file(l: crate::Locale) -> &'static PromptFile {
         crate::Locale::En => &TOOLS_EN,
     }
 }
+
+/// M3a 的 `render::safe_name` 是 `pub(crate)`（`pub use` 不出去）：M3b 在自己拥有的文件里包一层给 server 用。
+/// 插进 agent 看的文字里的每个**名字**（session 显示名、机组名、群名、号码对应的名字）都先过它；
+/// 正文（消息、brief、问题）不是名字，不过它。
+pub fn safe_name(s: &str) -> String {
+    crate::render::safe_name(s)
+}
 ```
 
 - [ ] **Step 4: 写 `agent/mod.rs`、`text.rs`、`catalog.rs`**
@@ -1250,6 +1291,12 @@ pub fn r(loc: Locale, key: &str, vars: &[(&str, &str)]) -> String {
 
 pub fn section_names(loc: Locale) -> Vec<&'static str> {
     tools_file(loc).section_names()
+}
+
+/// 插进回执 / 代发稿的**名字**（session 显示名、机组名、群名、通讯录里的名字）一律先过这里：
+/// = M3a 的 `render::safe_name`（经 `worldview::safe_name` 包出来），与注入面同一种中和。正文不过它。
+pub fn name(s: &str) -> String {
+    crewd_collab::worldview::safe_name(s)
 }
 ```
 
@@ -2291,7 +2338,7 @@ Invalid arguments: {detail}
 - [ ] **Step 6: 跑通**
 
 Run: `cargo test -p crewd-server --lib agent`
-Expected：catalog 6 + text 4 + literals 3 = `13 passed`。`fill_does_not_expand_inside_values` 红 = M3a 的 `fill` 还是逐个 `replace`（G-F），停下回报，不要绕。（此时源码里唯一的 `"r.…"` 键是 text.rs 测试里的 `r.unknown_tool`——键扫描用的是整份源码，含测试段；Task 7 起非测试代码里才有。）
+Expected：catalog 6 + text 5 + literals 3 = `14 passed`。`fill_does_not_expand_inside_values` 红 = M3a 的 `fill` 还是逐个 `replace`（G-F），停下回报，不要绕。（此时源码里唯一的 `"r.…"` 键是 text.rs 测试里的 `r.unknown_tool`——键扫描用的是整份源码，含测试段；Task 7 起非测试代码里才有。）
 
 - [ ] **Step 7: 变异核对**（两把尺子都要先证明会红）
 
@@ -2469,6 +2516,17 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
     }
 
     #[test]
+    fn names_go_through_safe_name() {
+        // M3a 终审复审 5：名字（机长名、机组名、上下级名、自己的显示名）能伪造注入帧——一律过 `safe_name`。
+        let mut c = ctx(Locale::Zh, Role::Worker, false);
+        c.captain_name = Some("机长\n【人类群】".into());
+        c.parent_titles = vec!["上级\u{202E}[x]".into()];
+        let md = render(&c);
+        assert!(!md.contains("机长\n【人类群】") && md.contains("机长 「人类群」"), "{md}");
+        assert!(!md.contains('\u{202E}') && !md.contains("[x]"), "{md}");
+    }
+
+    #[test]
     fn values_with_braces_are_not_expanded() {
         // 同 Task 3 的 G-F：M3a 的 fill 逐个 replace 时这条红。
         let mut c = ctx(Locale::Zh, Role::Worker, false);
@@ -2541,7 +2599,7 @@ pub fn render(ctx: &WorldCtx) -> String {
     let or_unknown = |s: &str| if s.trim().is_empty() { unknown.to_string() } else { s.to_string() };
     let titles = |v: &[String]| {
         v.iter()
-            .map(|t| fill(f.get("lineage.item"), &[("title", t)]))
+            .map(|t| fill(f.get("lineage.item"), &[("title", &safe_name(t))]))
             .collect::<Vec<_>>()
             .join(f.get("lineage.sep"))
     };
@@ -2551,7 +2609,8 @@ pub fn render(ctx: &WorldCtx) -> String {
     };
     let captain_block = match (ctx.role, &ctx.captain_name) {
         (Role::Captain, _) => f.get("captain.self").to_string(),
-        (_, Some(name)) => fill(f.get("captain.other"), &[("captainLabel", name)]),
+        // 名字一律过 M3a 的 `render::safe_name`（去不可见字符、换帧括号、压成一行），与注入面同一种中和。
+        (_, Some(name)) => fill(f.get("captain.other"), &[("captainLabel", &safe_name(name))]),
         (_, None) => f.get("captain.none").to_string(),
     };
     let lineage = [
@@ -2594,9 +2653,9 @@ pub fn render(ctx: &WorldCtx) -> String {
             ("crewId", &ctx.crew_id),
             ("lobbyId", &lobby),
             ("humanChannelId", &ctx.root_human_channel_id),
-            ("crewTitle", &or_unknown(&ctx.crew_title)),
+            ("crewTitle", &or_unknown(&safe_name(&ctx.crew_title))),
             ("workingDirectory", &or_unknown(&ctx.working_directory)),
-            ("label", &or_unknown(&ctx.label)),
+            ("label", &or_unknown(&safe_name(&ctx.label))),
             ("brief", &or_unknown(&ctx.brief)),
         ],
     )
@@ -2920,7 +2979,7 @@ Detected subscription tiers: Claude Code: {claude}; Codex: {codex}. Tiers only i
 - [ ] **Step 6: 跑通**
 
 Run: `cargo test -p crewd-collab worldview`
-Expected: `11 passed`（M3a 的 1 条 + 本任务 10 条）。`values_with_braces_are_not_expanded` 红 = G-F 未修，停下回报。
+Expected: `12 passed`（M3a 的 1 条 + 本任务 11 条）。`values_with_braces_are_not_expanded` 红 = G-F 未修，停下回报。
 
 - [ ] **Step 7: 变异核对**
 
@@ -3238,7 +3297,8 @@ pub fn on_turn_end(tx: &mut Tx<'_>, session: &str, prompt_id: &str, last_text: &
     }
     let conn = tx.conn();
     let s = sessions::get(conn, session)?;
-    let label = sessions::display_name(conn, session)?;
+    // 名字过 M3a 的 `render::safe_name`（Task 3 的 `worldview::safe_name`）：显示名能伪造注入帧。
+    let label = crate::worldview::safe_name(&sessions::display_name(conn, session)?);
     let captain = sessions::role_of(conn, session)? == Role::Captain;
     let l = settings::locale(conn)?;
     let f = crate::worldview::tools_file(l);
@@ -3369,7 +3429,7 @@ async fn resolve_crew(st, arg) -> PortResult<Option<CrewView>>               // 
 async fn update_crew(st, id, CrewPatch) -> PortResult<()>
 async fn attach_parent(st, by: &Identity, child, parent) -> PortResult<()>   // crews::adopt(tx, child, parent)
 async fn detach_parent(st, by: &Identity, parent, child, to: Option<String>) -> PortResult<()>   // crews::release(tx, child, parent, to)
-async fn create_crew(st, by: &Identity, title: Option<String>, workdir: Option<String>, parent: Option<String>) -> PortResult<CrewView>
+async fn create_crew(st, by: &Identity, title: String, workdir: String, parent: Option<String>) -> PortResult<CrewView>   // 缺省由调用方补齐：M3a 的 crews::create 拒空标题 / 空目录
 // 群
 async fn channel(st, id) -> PortResult<Option<ChannelView>>
 async fn my_channels(st, session) -> PortResult<Vec<ChannelView>>            // channels_of_session + listens::channels_of（listening = true）
@@ -3386,15 +3446,15 @@ async fn request_owner_transfer(st, by: &Identity, channel, to) -> PortResult<()
 async fn accept_owner_transfer(st, by: &Identity, channel) -> PortResult<()>
 async fn force_owner(st, by: &Identity, channel, to) -> PortResult<()>
 async fn set_listen(st, session, channel, until_ms: Option<i64>, senders: Vec<String>) -> PortResult<()>
-async fn clear_listen(st, session, channel) -> PortResult<()>
+async fn clear_listen(st, session, channel) -> PortResult<usize>                // 删掉的收听行数（M3a 返回 Result<usize>）
 // 消息
 async fn post(st, PostReq) -> PortResult<Posted>                            // messages::post
-async fn messages(st, channel, before_seq: Option<i64>, limit: u32) -> PortResult<Vec<Message>>   // 旧在前
-async fn message(st, MsgRef) -> PortResult<Option<Message>>
+async fn messages(st, channel, before_seq: Option<i64>, limit: u32) -> PortResult<Vec<Message>>   // 旧在前；before_seq = None = 最新的一页（传 Some(i64::MAX)，见对照表）
+async fn message(st, me: &Identity, MsgRef) -> PortResult<Option<Message>>   // Seq 只在 me 看得见的群里找（M3a 没有按 seq 取消息的函数，见对照表）
 async fn latest_seq(st, channel) -> PortResult<Option<i64>>
 async fn search(st, query, channel_ids: Vec<String>, after: Option<String>, before: Option<String>, limit: u32) -> PortResult<Vec<Message>>
 async fn unread(st, session) -> PortResult<Vec<(String, Vec<Message>)>>      // 全文见 Task 9 Step 3，本任务写
-async fn blocks(st, session, Vec<(String, Vec<Message>)>) -> PortResult<Vec<ChannelBlock>>
+async fn blocks(st, session, Locale, Vec<(String, Vec<Message>)>) -> PortResult<Vec<ChannelBlock>>   // render::blocks_for(conn, s, loc, &unread)
 fn injection(Locale, &[ChannelBlock]) -> String
 async fn advance(st, session, channel, seq) -> PortResult<()>
 // 通讯录
@@ -3488,7 +3548,9 @@ mod tests {
         assert_eq!(msgs.last().unwrap().id, m.id);
         advance(&f.state, &f.worker, &lobby.id, m.seq).await.unwrap();
         assert!(unread(&f.state, &f.worker).await.unwrap().iter().all(|(_, v)| v.is_empty()));
-        assert_eq!(message(&f.state, MsgRef::Seq(m.seq)).await.unwrap().unwrap().id, m.id);
+        let me = f.me(&f.worker).await;
+        assert_eq!(message(&f.state, &me, MsgRef::Seq(m.seq)).await.unwrap().unwrap().id, m.id);
+        assert_eq!(messages(&f.state, &lobby.id, None, 1).await.unwrap()[0].id, m.id, "None = 最新一页");
     }
 
     #[tokio::test]
@@ -3798,16 +3860,16 @@ pub async fn start_session(st: &AppState, r: StartReq) -> PortResult<String> {
 | `sessions_of` | `sessions::list(conn, Some(crew))` + `role_of` + `display_name`；分机号取 `directory::list` 里 `session_id` 相等那一行的 `number` | |
 | `crew` / `resolve_crew` | `crews::get` + `crews::parents` + `crews::children` + `crews::captain_of`；`policy` 是 `serde_json::Value`：`String(s)` → s，其余 `to_string()` | `resolve_crew`：id 命中 → 号码（全数字，比 `Crew.number`）→ 标题恰好一个 |
 | `update_crew` | `crews::update(tx, id, collab::crews::CrewPatch { title, working_directory, status_line, policy: policy.map(Value::String), ..Default::default() })` | |
-| `attach_parent` / `detach_parent` / `create_crew` | `crews::adopt(tx, child, parent)` / `crews::release(tx, child, parent, to.as_deref())` / `crews::create(tx, NewCrew { title: title.unwrap_or_default(), working_directory, parent_id, title_source: None })` | 成环、内建、非直系子由 M3a 回 `Refused` |
+| `attach_parent` / `detach_parent` / `create_crew` | `crews::adopt(tx, child, parent)` / `crews::release(tx, child, parent, to.as_deref())` / `crews::create(tx, NewCrew { title, working_directory: workdir, parent_id, title_source: None })` | 成环、内建、非直系子由 M3a 回 `Refused`。**M3a 的 `NewCrew.working_directory` 是 `String`，`crews::create` 对空标题 / 空目录回 `Invalid`**：port 不补缺省，两个调用方（Task 15 `create_parent_crew` / `create_child_crew`）先补——标题缺省取 md 的 `r.default_parent_title`（`{child}`）/ `r.default_child_title`（`{parent}`），目录取发起机长所在机组的 `working_directory`，没有就回 `r.no_workdir`（Swift「不填自动取地名」的地名池 crewd 没有，遗留 L10） |
 | `channel` / `crew_channels` / `lobby_of` / `watched_channels` | `channels::summary(conn, id)` / `channels::list_for_crew(tx, crew)` / `summary(lobby_id(crew))` / `list_for_crew` 全部机组里 `watched` 的 | 都经 `ChannelView::from_summary` |
 | `my_channels` | `channels::channels_of_session(conn, s)` ∪ `listens::channels_of(conn, s, now)`（后者 `listening = true`） | |
 | `root_human_channel` | `channels::ensure_human_channel(tx, &crews::root_of(conn, crew)?)` | |
 | `create_channel` | `channels::create(tx, &Sender::Session(by), NewChannel { crew_id: by.crew_id, kind, name, purpose, members })` | 建群者自动入群 |
-| `ensure_dm` | `channels::ensure_dm(tx, &by.crew_id, &session(by), &session(other))` | 同一对 session 只有一个 dm |
+| `ensure_dm` | `channels::ensure_dm(tx, &by.crew_id, &session(by), &session(other))` | 同一对 session 只有一个 dm；M3a 复用时不看 `crew`（谁发起、从哪个机组发起都拿到同一个），`by.crew_id` 只决定新建时归属 |
 | `add_members` / `remove_member` / `archive_channel` | `channels::add_members(tx, &Sender::Session(by), id, &ms)` / `remove_member` / `update(.., ChannelPatch { archived: Some(true), .. })` | **权限由 M3a 按 `by` 判**（群主 / 机长 / 人），M3b 不重复判 |
 | `request_owner_transfer` / `accept_owner_transfer` / `force_owner` | 同名（`force_owner` 用机长身份的 `Sender::Session`） | |
-| `set_listen` / `clear_listen` | `listens::set(tx, s, ch, until_ms, senders)` / `listens::clear(tx, s, Some(ch))` | |
-| `messages` / `latest_seq` / `message` / `search` | `messages::list(conn, ch, None, before, limit)` / 同上取 1 条 / `messages::get(conn, id)`（`Seq` 用 `list` 的 `after = seq-1, limit 1` 再核 seq）/ `messages::search(conn, &Search { query, channel_ids: Some(ids), after, before, limit, crew_id: None })` | |
+| `set_listen` / `clear_listen` | `listens::set(tx, s, ch, until_ms, senders)` / `listens::clear(tx, s, Some(ch))` | `clear` 返回 `Result<usize>`（删了几行；0 = 本来就没在收听），port 原样交回 |
+| `messages` / `latest_seq` / `message` / `search` | `messages::list(conn, ch, None, Some(before.unwrap_or(i64::MAX)), limit)` / `messages::list(conn, ch, None, Some(i64::MAX), 1)` 取最后那条的 seq / `Id` → `messages::get(conn, id)`（NotFound → `None`）；`Seq(n)` → 在 `channels::list_for_crew(tx, &me.crew_id)` ∪ `listens::channels_of(conn, &me.session_id, now)` 的每个群里 `messages::list(conn, ch, Some(n - 1), Some(n + 1), 1)`，第一个命中的 / `messages::search(conn, &Search { query, channel_ids: Some(ids), after, before, limit, crew_id: None })` | **M3a `messages::list` 的 `before = None` 是从游标 `after` 往后数的最旧一页（升序）**，所以「最新一页」必须传 `before: Some(i64::MAX)`（给了 `before` 才取紧挨着它的最后 `limit` 条，仍升序返回）；port 的 `None` 就是这个意思，调用方不用管。M3a 没有按 seq（全库唯一）取消息的函数：`messages::get` 只收 id、`list` 必须给群——这是一个缺口（G-Q，§22.1「缺 → 改 M3a」回报控制者）；在 M3a 补 `get_by_seq` 之前按上面那样逐群扫（只扫 me 看得见的群，本来也只该引用这些群里的消息） |
 | `directory` / `resolve_number` | `directory::list(conn, query)` → `DirEntry { number, name, crew_title: crews::get(crew_id).title, detail: org_path }`；`resolve_number` 在全表里找 `number == arg` | |
 | `open_ask` | `asks::open(tx, &by.session_id, OpenAsk { question, default: fallback.map(|(text, minutes)| AskDefault { text, after_minutes: minutes }), resume_note })` → `Ask.ask` | |
 | `withdraw_ask` | `asks::withdraw(tx, &Sender::Session(by), &by.crew_id, ask, reason)` | |
@@ -3922,10 +3984,11 @@ impl Fixture {
             crewd_proto::Request { id: 1, method: method.into(), params },
         )
         .await;
-        if let Some(e) = resp.error {
-            panic!("{method}: {}", e.message);
+        // M3a 的 `Response` 是 `{ id, outcome }`（`Outcome::Result | Error`），用 `into_result()` 取。
+        match resp.into_result() {
+            Ok(v) => v,
+            Err(e) => panic!("{method}: {}", e.message),
         }
-        resp.result.unwrap()
     }
 
     /// 人在某个群里发言（客户端 `message.post`）。
@@ -4212,6 +4275,10 @@ impl Ctx<'_> {
     pub fn r(&self, key: &str, vars: &[(&str, &str)]) -> String {
         text::r(self.loc, key, vars)
     }
+    /// 名字（显示名、机组名、群名）填进回执前过 M3a 的 `safe_name`（见 Global Constraints）。
+    pub fn name(&self, s: &str) -> String {
+        text::name(s)
+    }
     pub fn ok(&self, key: &str, vars: &[(&str, &str)]) -> CallResult {
         CallResult::ok(self.r(key, vars))
     }
@@ -4469,10 +4536,8 @@ impl RpcClient {
             match self.frame().await {
                 crewd_proto::ServerFrame::Event(e) => self.events.push_back(e),
                 crewd_proto::ServerFrame::Response(r) if r.id == id => {
-                    return match r.error {
-                        Some(e) => Err((e.code, e.message)),
-                        None => Ok(r.result.unwrap_or(serde_json::Value::Null)),
-                    };
+                    // `"result": null` 是成功、值为 null（M3a 的 `Outcome::Result(Value::Null)`）。
+                    return r.into_result().map_err(|e| (e.code, e.message));
                 }
                 crewd_proto::ServerFrame::Response(_) => {}
             }
@@ -4940,10 +5005,9 @@ impl AgentClient {
         line.push(b'\n');
         self.wr.lock().await.write_all(&line).await.context("write to crewd")?;
         let resp = rx.await.map_err(|_| anyhow!("connection to crewd is closed"))?;
-        if let Some(e) = resp.error {
-            bail!("{} ({})", e.message, e.code);
-        }
-        Ok(serde_json::from_value(resp.result.unwrap_or(Value::Null))?)
+        // M3a 的 `Response` 是 `{ id, outcome }`：`into_result()` 区分「成功（值可以是 null）」与错误。
+        let v = resp.into_result().map_err(|e| anyhow!("{} ({})", e.message, e.code))?;
+        Ok(serde_json::from_value(v)?)
     }
 
     pub fn take_events(&self) -> Option<mpsc::UnboundedReceiver<Event>> {
@@ -5202,7 +5266,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Produces:
   - `inject::{Prepared, prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared>>, commit(st, me, &Prepared) -> PortResult<()>, post_tool_use(st, me, payload: &Value) -> HookResult, is_crewd_tool(tool_name) -> bool}`；`Prepared { pub context: Option<String>, .. }`（M3c 给 codex 组 `additionalContext` 用 `prepare` / `commit`，「与 spec 的出入」5；codex 的工具调用产出由 M3c 的 codex 执行器在同一处调 `sessions::note_progress`）
   - `tools::channel_label(cx, kind, name, crew_title) -> String`（大厅 / 人类群的 `name` 是空串，M3a 的约定；回执里一律经它显示）
-  - port：`unread(st, session) -> PortResult<Vec<(String, Vec<Message>)>>`（`st.collab(|tx| cursors::unread_for(tx, s))`）、`blocks(st, session, Vec<(String, Vec<Message>)>) -> PortResult<Vec<ChannelBlock>>`（`st.db.call(|s| render::blocks_for(s.conn(), …))`）、`injection(loc, &[ChannelBlock]) -> String`、`advance(st, session, channel, seq)`
+  - port：`unread(st, session) -> PortResult<Vec<(String, Vec<Message>)>>`（`st.collab(|tx| cursors::unread_for(tx, s))`）、`blocks(st, session, loc, Vec<(String, Vec<Message>)>) -> PortResult<Vec<ChannelBlock>>`（`st.db.call(|s| render::blocks_for(s.conn(), &session, loc, &unread))`——M3a 的 `blocks_for` 要语言参数）、`injection(loc, &[ChannelBlock]) -> String`、`advance(st, session, channel, seq)`
 
 **产出信号（控制者裁定 C3）**：注入之前，若 payload 的 `tool_name` 不是 crewd 自己的工具（`mcp__crew__*`，mcp.json 里 server 名是 `crew`），调 `port::note_progress`（M3a `sessions::note_progress(.., ToolCall)` → `Change::Progress`，M3c 的环路熔断消费）。crewd 自己的通讯工具（post / read_channel / contact …）不算产出：两个 session 互相回话打转时每轮都在调 `post`，若算产出 Q5 要截的环路永远截不住。失败只写 stderr，不影响注入。
 
@@ -5335,10 +5399,12 @@ pub async fn unread(st: &AppState, session: &str) -> PortResult<Vec<(String, Vec
 pub async fn blocks(
     st: &AppState,
     session: &str,
+    loc: crewd_collab::Locale,
     unread: Vec<(String, Vec<Message>)>,
 ) -> PortResult<Vec<crewd_collab::render::ChannelBlock>> {
     let s = session.to_string();
-    Ok(st.db.call(move |db| crewd_collab::render::blocks_for(db.conn(), &s, &unread)).await??)
+    // 发言者 / 「发给谁」的标签按这个语言渲染（M3a：`blocks_for(conn, session, Locale, &unread)`）。
+    Ok(st.db.call(move |db| crewd_collab::render::blocks_for(db.conn(), &s, loc, &unread)).await??)
 }
 
 pub fn injection(loc: crewd_collab::Locale, blocks: &[crewd_collab::render::ChannelBlock]) -> String {
@@ -5381,7 +5447,7 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
     if advance_to.is_empty() {
         return Ok(None);
     }
-    let mut blocks = port::blocks(st, &me.session_id, unread).await?;
+    let mut blocks = port::blocks(st, &me.session_id, loc, unread).await?;
     let mut omitted = vec![0usize; blocks.len()];
     loop {
         let context = render(loc, &blocks, &omitted);
@@ -5474,10 +5540,11 @@ pub fn channel_label(cx: &Ctx<'_>, c: &port::ChannelView) -> String {
 
 /// 群在回执里怎么叫：大厅 / 人类群的 `name` 是空串（M3a 约定），按机组名说。
 pub fn channel_label_raw(loc: Locale, kind: crewd_proto::ChannelKind, name: &str, crew_title: &str) -> String {
+    // 群名、机组名都是名字：过 `text::name`（M3a `safe_name`）。
     match kind {
-        crewd_proto::ChannelKind::Lobby => text::r(loc, "r.lobby_label", &[("crew", crew_title)]),
-        crewd_proto::ChannelKind::Human => text::r(loc, "r.human_label", &[("crew", crew_title)]),
-        _ => name.to_string(),
+        crewd_proto::ChannelKind::Lobby => text::r(loc, "r.lobby_label", &[("crew", &text::name(crew_title))]),
+        crewd_proto::ChannelKind::Human => text::r(loc, "r.human_label", &[("crew", &text::name(crew_title))]),
+        _ => text::name(name),
     }
 }
 ```
@@ -6159,8 +6226,8 @@ pub fn render_line(cx: &Ctx<'_>, m: &Message) -> String {
     let who = match (m.sender_kind, &m.sender_name, &m.sender_session_id) {
         (SenderKind::Human, _, _) => cx.r("r.who_human", &[]),
         (SenderKind::System, _, _) => cx.r("r.who_system", &[]),
-        (_, Some(n), _) if !n.is_empty() => n.clone(),
-        (_, _, Some(s)) => s.clone(),
+        (_, Some(n), _) if !n.is_empty() => cx.name(n),
+        (_, _, Some(s)) => cx.name(s),
         _ => cx.r("r.who_system", &[]),
     };
     let mut line = cx.r(
@@ -6275,7 +6342,7 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
     }
     let reply = match &a.reply_to {
         None => None,
-        Some(r) => match port::message(cx.st, msg_ref(r)).await {
+        Some(r) => match port::message(cx.st, cx.me, msg_ref(r)).await {
             Ok(Some(m)) => Some(m),
             Ok(None) => return cx.err("r.no_message", &[("ref", &super::ref_text(r))]),
             Err(e) => return cx.fail(e),
@@ -6356,7 +6423,7 @@ pub async fn read_channel(cx: &Ctx<'_>, args: Value) -> CallResult {
     let limit = a.limit.unwrap_or(50).clamp(1, 200);
     let before = match &a.before {
         None => None,
-        Some(r) => match port::message(cx.st, msg_ref(r)).await {
+        Some(r) => match port::message(cx.st, cx.me, msg_ref(r)).await {
             Ok(Some(m)) => Some(m.seq),
             Ok(None) => return cx.err("r.no_message", &[("ref", &super::ref_text(r))]),
             Err(e) => return cx.fail(e),
@@ -6450,7 +6517,7 @@ pub async fn list_channels(cx: &Ctx<'_>) -> CallResult {
             flags.push(cx.r("r.flag_archived", &[]));
         }
         let owner = match &c.owner {
-            Some(o) => port::identity(cx.st, o).await.ok().flatten().map(|i| i.label).unwrap_or(o.clone()),
+            Some(o) => cx.name(&port::identity(cx.st, o).await.ok().flatten().map(|i| i.label).unwrap_or(o.clone())),
             None => cx.r("r.owner_none", &[]),
         };
         let kind = cx.r(&format!("r.kind_{}", kind_key(c.kind)), &[]);
@@ -6911,6 +6978,9 @@ mod tests {
         }
         let (dm, created) = port::ensure_dm(&f.state, &f.me(&f.worker).await, &x).await.unwrap();
         assert!(!created, "两次 contact 用的是同一个私聊");
+        // M3a 终审：复用不看 crew——对方从自己机组发起也拿到同一个 dm（旧行为是拒）。
+        let (back, created_back) = port::ensure_dm(&f.state, &f.me(&x).await, &f.worker).await.unwrap();
+        assert!(!created_back && back.id == dm.id, "反方向也是同一个私聊");
         assert_eq!(port::messages(&f.state, &dm.id, None, 10).await.unwrap().len(), 2);
         assert!(port::my_channels(&f.state, &x).await.unwrap().iter().any(|c| c.id == dm.id));
     }
@@ -7139,7 +7209,7 @@ pub async fn transfer(cx: &Ctx<'_>, v: Value) -> CallResult {
     }
     // 只有群主能发起：M3a 的 `request_owner_transfer` 判（Forbidden → r.failed）。
     tryp!(cx, port::request_owner_transfer(cx.st, cx.me, &ch.id, &to));
-    let notice = cx.r("r.transfer_notice", &[("from", &cx.me.label), ("channel", &super::channel_label(cx, &ch))]);
+    let notice = cx.r("r.transfer_notice", &[("from", &cx.name(&cx.me.label)), ("channel", &super::channel_label(cx, &ch))]);
     let mention = Mention { kind: MentionKind::Session, target_id: Some(to.clone()) };
     if let Err(e) = post_as(cx, &ch, notice, vec![mention], None, None, PostSender::System).await {
         return e;
@@ -7182,7 +7252,8 @@ pub async fn listen(cx: &Ctx<'_>, v: Value) -> CallResult {
 pub async fn unlisten(cx: &Ctx<'_>, v: Value) -> CallResult {
     let a: ChannelArg = args!(cx, v);
     let ch = channel!(cx, &a.channel);
-    tryp!(cx, port::clear_listen(cx.st, &cx.me.session_id, &ch.id));
+    // 返回删掉的行数：0 = 本来就没在收听，回执照样说「已停止」（幂等）。
+    let _removed = tryp!(cx, port::clear_listen(cx.st, &cx.me.session_id, &ch.id));
     cx.ok("r.unlistened", &[("channel", &super::channel_label(cx, &ch))])
 }
 
@@ -7202,7 +7273,7 @@ pub async fn directory(cx: &Ctx<'_>, v: Value) -> CallResult {
         .unwrap_or_default();
     let mut out = vec![cx.r("r.dir_header", &[("me", &mine)])];
     out.extend(rows.iter().map(|r| {
-        cx.r("r.dir_line", &[("number", &r.number), ("name", &r.name), ("crew", &r.crew_title), ("detail", &r.detail)])
+        cx.r("r.dir_line", &[("number", &r.number), ("name", &cx.name(&r.name)), ("crew", &cx.name(&r.crew_title)), ("detail", &r.detail)])
     }));
     if rows.is_empty() {
         out.push(cx.r("r.dir_empty", &[]));
@@ -7238,7 +7309,7 @@ pub async fn contact(cx: &Ctx<'_>, v: Value) -> CallResult {
             target_name = tryp!(cx, port::crew(cx.st, &crew_id)).map(|c| c.title).unwrap_or(crew_id);
             let body = cx.r(
                 "r.contact_from",
-                &[("crew", &my_crew_title), ("number", &my_number), ("label", &cx.me.label), ("message", a.message.trim())],
+                &[("crew", &cx.name(&my_crew_title)), ("number", &my_number), ("label", &cx.name(&cx.me.label)), ("message", a.message.trim())],
             );
             let mention = Mention { kind: MentionKind::Captain, target_id: None };
             if let Err(e) = post_as(cx, &lobby, body, vec![mention], None, None, PostSender::System).await {
@@ -7261,11 +7332,11 @@ pub async fn contact(cx: &Ctx<'_>, v: Value) -> CallResult {
     }
     let lobby = tryp!(cx, port::lobby_of(cx.st, &cx.me.crew_id));
     let snippet: String = a.message.trim().chars().take(40).collect();
-    let trace = cx.r("r.contact_trace", &[("label", &cx.me.label), ("to", &a.to), ("target", &target_name), ("snippet", &snippet)]);
+    let trace = cx.r("r.contact_trace", &[("label", &cx.name(&cx.me.label)), ("to", &a.to), ("target", &cx.name(&target_name)), ("snippet", &snippet)]);
     if let Err(e) = post_as(cx, &lobby, trace, vec![], None, None, PostSender::System).await {
         return e;
     }
-    cx.ok("r.contacted", &[("to", &a.to), ("target", &target_name)])
+    cx.ok("r.contacted", &[("to", &a.to), ("target", &cx.name(&target_name))])
 }
 ```
 
@@ -8032,6 +8103,13 @@ mod tests {
         assert!(port::crew(&f.state, &other).await.unwrap().unwrap().parent_ids.is_empty());
         assert!(!cap(&f, "create_parent_crew", json!({"title": "总部"})).await.is_error);
         assert_eq!(port::crew(&f.state, &f.crew).await.unwrap().unwrap().parent_ids.len(), 1);
+        // M3a 的 crews::create 拒空标题：不填标题时用 md 模板补上，目录继承本机组的。
+        let r = cap(&f, "create_child_crew", json!({"brief": "不填标题的子组"})).await;
+        assert!(!r.is_error, "{}", r.text);
+        let kids = port::crew(&f.state, &f.crew).await.unwrap().unwrap().child_ids;
+        let last = port::crew(&f.state, kids.last().unwrap()).await.unwrap().unwrap();
+        assert!(!last.title.trim().is_empty());
+        assert_eq!(last.working_directory, me.working_directory, "子机组继承本机组的工作目录");
     }
 }
 ```
@@ -8158,7 +8236,7 @@ pub async fn change_workdir(cx: &Ctx<'_>, v: Value) -> CallResult {
         Some(arg) => ok_or_return!(find_crew(cx, arg).await),
     };
     if !allowed.iter().any(|c| c.id == target.id) {
-        return cx.err("r.not_my_subtree", &[("crew", &target.title)]);
+        return cx.err("r.not_my_subtree", &[("crew", &cx.name(&target.title))]);
     }
     let affected = if a.include_children.unwrap_or(true) {
         ok_or_return!(subtree(cx, &target).await)
@@ -8275,10 +8353,10 @@ pub async fn stop_session(cx: &Ctx<'_>, v: Value) -> CallResult {
         return cx.err("r.stop_self", &[]);
     }
     let lobby = tryp!(cx, port::lobby_of(cx.st, &cx.me.crew_id));
-    let notice = cx.r("r.stop_notice", &[("captain", &cx.me.label), ("target", &who.label), ("reason", a.reason.trim())]);
+    let notice = cx.r("r.stop_notice", &[("captain", &cx.name(&cx.me.label)), ("target", &cx.name(&who.label)), ("reason", a.reason.trim())]);
     ok_or_return!(post_as(cx, &lobby, notice, vec![], None, None, PostSender::Session(cx.me.session_id.clone())).await);
     tryp!(cx, port::stop_session(cx.st, &who.session_id, a.reason.trim()));
-    cx.ok("r.session_stopped", &[("target", &who.label)])
+    cx.ok("r.session_stopped", &[("target", &cx.name(&who.label))])
 }
 
 #[derive(Deserialize)]
@@ -8291,7 +8369,7 @@ pub async fn inspect_session(cx: &Ctx<'_>, v: Value) -> CallResult {
     let a: SessionArg = args!(cx, v);
     let who = ok_or_return!(own_session(cx, &a.session_id).await);
     let report = tryp!(cx, port::inspect(cx.st, &who.session_id));
-    cx.ok("r.inspect", &[("target", &who.label), ("report", &report)])
+    cx.ok("r.inspect", &[("target", &cx.name(&who.label)), ("report", &report)])
 }
 
 #[derive(Deserialize)]
@@ -8308,7 +8386,7 @@ pub async fn nudge_session(cx: &Ctx<'_>, v: Value) -> CallResult {
     }
     let who = ok_or_return!(own_session(cx, &a.session_id).await);
     tryp!(cx, port::nudge(cx.st, &who.session_id, &a.input));
-    cx.ok("r.nudged", &[("target", &who.label)])
+    cx.ok("r.nudged", &[("target", &cx.name(&who.label))])
 }
 
 pub async fn list_sessions(cx: &Ctx<'_>) -> CallResult {
@@ -8319,7 +8397,7 @@ pub async fn list_sessions(cx: &Ctx<'_>) -> CallResult {
         let role = cx.r(if s.role == Role::Captain { "r.role_captain" } else { "r.role_worker" }, &[]);
         out.push(cx.r(
             "r.session_line",
-            &[("id", &s.id), ("ext", s.extension.as_deref().unwrap_or("")), ("label", &s.label), ("role", &role), ("state", &state)],
+            &[("id", &s.id), ("ext", s.extension.as_deref().unwrap_or("")), ("label", &cx.name(&s.label)), ("role", &role), ("state", &state)],
         ));
     }
     CallResult::ok(out.join("\n"))
@@ -8347,11 +8425,11 @@ pub async fn handoff_captain_to_session(cx: &Ctx<'_>, v: Value) -> CallResult {
     let crew = ok_or_return!(handoff_target(cx, a.target_crew_id.as_deref()).await);
     let who = match port::identity(cx.st, a.session_id.trim()).await {
         Ok(Some(w)) if w.crew_id == crew.id => w,
-        Ok(_) => return cx.err("r.successor_not_in_crew", &[("id", &a.session_id), ("crew", &crew.title)]),
+        Ok(_) => return cx.err("r.successor_not_in_crew", &[("id", &a.session_id), ("crew", &cx.name(&crew.title))]),
         Err(e) => return cx.fail(e),
     };
     tryp!(cx, port::handoff_captain(cx.st, &crew.id, &who.session_id));
-    cx.ok("r.handoff_done", &[("crew", &crew.title), ("target", &who.label)])
+    cx.ok("r.handoff_done", &[("crew", &cx.name(&crew.title)), ("target", &cx.name(&who.label))])
 }
 
 #[derive(Deserialize)]
@@ -8387,7 +8465,7 @@ pub async fn create_and_handoff_captain(cx: &Ctx<'_>, v: Value) -> CallResult {
     };
     let id = tryp!(cx, port::start_session(cx.st, req));
     tryp!(cx, port::handoff_captain(cx.st, &crew.id, &id));
-    cx.ok("r.handoff_new", &[("crew", &crew.title), ("id", &id)])
+    cx.ok("r.handoff_new", &[("crew", &cx.name(&crew.title)), ("id", &id)])
 }
 
 #[derive(Deserialize)]
@@ -8405,7 +8483,7 @@ pub async fn report_to_parent(cx: &Ctx<'_>, v: Value) -> CallResult {
     if mine.parent_ids.is_empty() {
         return cx.err("r.no_parent", &[]);
     }
-    let body = cx.r("r.report_from", &[("crew", &mine.title), ("label", &cx.me.label), ("message", a.message.trim())]);
+    let body = cx.r("r.report_from", &[("crew", &cx.name(&mine.title)), ("label", &cx.name(&cx.me.label)), ("message", a.message.trim())]);
     for p in &mine.parent_ids {
         let lobby = tryp!(cx, port::lobby_of(cx.st, p));
         ok_or_return!(post_as(cx, &lobby, body.clone(), captain_mention(), None, None, PostSender::System).await);
@@ -8431,9 +8509,9 @@ pub async fn message_child_crew(cx: &Ctx<'_>, v: Value) -> CallResult {
         return cx.err("r.not_direct_child", &[("crew", &a.crew)]);
     }
     let lobby = tryp!(cx, port::lobby_of(cx.st, &target.id));
-    let body = cx.r("r.order_from", &[("crew", &mine.title), ("label", &cx.me.label), ("message", a.message.trim())]);
+    let body = cx.r("r.order_from", &[("crew", &cx.name(&mine.title)), ("label", &cx.name(&cx.me.label)), ("message", a.message.trim())]);
     ok_or_return!(post_as(cx, &lobby, body, captain_mention(), None, None, PostSender::System).await);
-    cx.ok("r.messaged", &[("crew", &target.title)])
+    cx.ok("r.messaged", &[("crew", &cx.name(&target.title))])
 }
 
 #[derive(Deserialize)]
@@ -8446,7 +8524,7 @@ pub async fn adopt_crew(cx: &Ctx<'_>, v: Value) -> CallResult {
     let a: CrewArg = args!(cx, v);
     let target = ok_or_return!(find_crew(cx, &a.crew).await);
     tryp!(cx, port::attach_parent(cx.st, cx.me, &target.id, &cx.me.crew_id));
-    cx.ok("r.adopted", &[("crew", &target.title)])
+    cx.ok("r.adopted", &[("crew", &cx.name(&target.title))])
 }
 
 #[derive(Deserialize)]
@@ -8474,7 +8552,7 @@ pub async fn release_crew(cx: &Ctx<'_>, v: Value) -> CallResult {
         }
     };
     tryp!(cx, port::detach_parent(cx.st, cx.me, &mine.id, &target.id, to));
-    cx.ok("r.released", &[("crew", &target.title)])
+    cx.ok("r.released", &[("crew", &cx.name(&target.title))])
 }
 
 /// 新机组（还没有机长）起机长：start(role = captain)。
@@ -8501,18 +8579,27 @@ struct TitleArg {
 pub async fn create_parent_crew(cx: &Ctx<'_>, v: Value) -> CallResult {
     let a: TitleArg = args!(cx, v);
     let mine = ok_or_return!(my_crew(cx).await);
-    let parent = tryp!(cx, port::create_crew(cx.st, cx.me, a.title.filter(|t| !t.trim().is_empty()), mine.working_directory.clone(), None));
+    // M3a 的 crews::create 拒空标题 / 空目录：缺省在这里补（目录 = 本机组的，标题 = md 模板）。
+    let Some(workdir) = mine.working_directory.clone().filter(|w| !w.trim().is_empty()) else {
+        return cx.err("r.no_workdir", &[]);
+    };
+    let title = a
+        .title
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| cx.r("r.default_parent_title", &[("child", &cx.name(&mine.title))]));
+    let parent = tryp!(cx, port::create_crew(cx.st, cx.me, title, workdir, None));
     tryp!(cx, port::attach_parent(cx.st, cx.me, &mine.id, &parent.id));
-    let brief = cx.r("r.parent_brief", &[("child", &mine.title)]);
+    let brief = cx.r("r.parent_brief", &[("child", &cx.name(&mine.title))]);
     ok_or_return!(start_captain(cx, &parent, None, brief).await);
-    cx.ok("r.parent_created", &[("crew", &parent.title)])
+    cx.ok("r.parent_created", &[("crew", &cx.name(&parent.title))])
 }
 
 pub async fn adopt_parent(cx: &Ctx<'_>, v: Value) -> CallResult {
     let a: CrewArg = args!(cx, v);
     let target = ok_or_return!(find_crew(cx, &a.crew).await);
     tryp!(cx, port::attach_parent(cx.st, cx.me, &cx.me.crew_id, &target.id));
-    cx.ok("r.parent_adopted", &[("crew", &target.title)])
+    cx.ok("r.parent_adopted", &[("crew", &cx.name(&target.title))])
 }
 
 #[derive(Deserialize)]
@@ -8529,9 +8616,18 @@ pub async fn create_child_crew(cx: &Ctx<'_>, v: Value) -> CallResult {
         return cx.err("r.bad_args", &[("detail", "brief")]);
     }
     let mine = ok_or_return!(my_crew(cx).await);
-    let child = tryp!(cx, port::create_crew(cx.st, cx.me, a.title.filter(|t| !t.trim().is_empty()), mine.working_directory.clone(), Some(mine.id.clone())));
+    // 同 create_parent_crew：没有 workdir 参数，子机组继承本机组的目录；标题缺省取 md 模板。
+    let Some(workdir) = mine.working_directory.clone().filter(|w| !w.trim().is_empty()) else {
+        return cx.err("r.no_workdir", &[]);
+    };
+    let title = a
+        .title
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| cx.r("r.default_child_title", &[("parent", &cx.name(&mine.title))]));
+    let child = tryp!(cx, port::create_crew(cx.st, cx.me, title, workdir, Some(mine.id.clone())));
     ok_or_return!(start_captain(cx, &child, a.runner, a.brief.trim().to_string()).await);
-    cx.ok("r.child_created", &[("crew", &child.title)])
+    cx.ok("r.child_created", &[("crew", &cx.name(&child.title))])
 }
 ```
 
@@ -8689,6 +8785,15 @@ worker
 ## r.parent_created
 已建父机组「{crew}」并起了父机长。
 
+## r.default_parent_title
+{child} 的上级
+
+## r.default_child_title
+{parent} 的下级
+
+## r.no_workdir
+本机组没有工作目录，新机组无从继承：先用 change_workdir 设一个。
+
 ## r.parent_adopted
 已认「{crew}」为上级机组。
 
@@ -8819,6 +8924,15 @@ You are the captain of a newly created parent crew; "{child}" is your first chil
 
 ## r.parent_created
 Created parent crew "{crew}" with its own captain.
+
+## r.default_parent_title
+Above {child}
+
+## r.default_child_title
+Under {parent}
+
+## r.no_workdir
+This crew has no working directory for the new crew to inherit: set one with change_workdir first.
 
 ## r.parent_adopted
 "{crew}" is now your parent crew.
@@ -9227,7 +9341,7 @@ Expected：全绿。连跑 3 次（`for i in 1 2 3; do ./scripts/check.sh || bre
 
 - [ ] **Step 7: spec 交付记录**
 
-在 spec 末尾加一节「§23 M3b 交付记录与遗留（计划 `docs/superpowers/plans/2026-10-06-crewd-m3b-agent-surface.md`）」，写：已交付（对照本计划文件结构，一行一项）；本计划「与 spec 的出入」1–9 原样搬过去；Task 1 Step 1 查到的 M3a 实际名字与推定不同的地方；G3 / G-F / G-S / G-T / G9 / G11 各自最后由谁、怎么补的；真 claude 冒烟跑没跑、结果；下面的「遗留」。
+在 spec 末尾加一节「§N M3b 交付记录与遗留（计划 `docs/superpowers/plans/2026-10-06-crewd-m3b-agent-surface.md`）」（§23 已是 M3a 的交付记录；N = 当时末尾的下一个号，M3c 先合就顺延；§23 末尾「给 M3b 的跨计划注意」逐条写明本计划在哪一处吸收了），写：已交付（对照本计划文件结构，一行一项）；本计划「与 spec 的出入」1–9 原样搬过去；Task 1 Step 1 查到的 M3a 实际名字与推定不同的地方；G3 / G-F / G-S / G-T / G9 / G11 各自最后由谁、怎么补的；真 claude 冒烟跑没跑、结果；下面的「遗留」。
 
 - [ ] **Step 8: 提交**
 
@@ -9256,11 +9370,12 @@ CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test live_agent -- --ignored --nocaptu
 - **L2 世界观缺 runner 偏好与能力块**（`LocalSessionLaunch.swift:264-279`）：crewd 还没有「新机长优先用哪个 runner」的设置；入门机组的 SKILL.md 提示也没带。
 - **L3 `change_workdir` 不搬 claude 的项目记忆与权限**（Swift 会搬）：回执里写明了。
 - **L4 hook 的 `args` exec 形式**没用（裁定 5）：等核到它从哪个 claude 版本起支持，再考虑换掉 shell 引号。
-- **L5 codex 的 token 文件**：M2c 的 codex 驱动要在启动目录里写 token 文件、MCP 命令行带 `--token-file`（Task 2 Step 6 只在 M2c 已合时处理）；codex 没有 hook，注入走 M3c 的 `additionalContext`（`inject::prepare / commit`），回合收尾直接调 `crewd_collab::turn_trace::on_turn_end`，工具调用的产出信号（C3）由 codex 执行器调 `sessions::note_progress`；codex 的审批闸另议（app-server 有自己的审批请求）。
+- **L5 codex 的 token 文件**：M2c 的 codex 驱动在启动目录里写 token 文件、MCP 命令行带 `--token-file`（M2c 已合，Task 2 Step 6 做掉；`CodexConfig.runtime_dir` 由 M3c 给）；codex 没有 hook，注入走 M3c 的 `additionalContext`（`inject::prepare / commit`），回合收尾直接调 `crewd_collab::turn_trace::on_turn_end`，工具调用的产出信号（C3）由 codex 执行器调 `sessions::note_progress`；codex 的审批闸另议（app-server 有自己的审批请求）。
 - **L6 `start_session` 的 `isolation` 保留**（控制者裁定 C8，取代原「只收 `workdir`」）：worktree 由 M3c 的会话管理器建，位置 / 分支照 Swift；crewd 不删 worktree，删除是人的动作。
 - **L7 回合记账在 `meta` 表**：键值表里的软状态，不进 schema；session 删除时没有清理（键会留着，无害）。
 - **L8 `post` 不收附件**：等 M3a 之后支持附件上传再加回参数与世界观那一条。
-- **L9 侧栏排序**：人 2026-10-06 定为手动拖拽（`crews.position`），M3b 不提供任何排序工具（`arrange_crews` 等已删）。
+- **L9 侧栏排序**：人 2026-10-06 定为手动拖拽（M3a 落地：顶层次序在 `crews.position`，子机组在某个父下的次序在边上 `crew_parents.position`、对外是父的 `Crew.childIds`；`crew.reorder {parentId?}` 只有客户端能调），M3b 不提供任何排序工具（`arrange_crews` 等已删）。
+- **L10 新机组的缺省标题**：Swift 不填标题时「自动取地名」（`PlaceNames.swift`），crewd 没有地名池；`create_parent_crew` / `create_child_crew` 不填标题时用 md 模板（`r.default_parent_title` / `r.default_child_title`），新机长可以 `rename_crew`。
 
 ## 交付时要回报（给控制者 / 人）
 
