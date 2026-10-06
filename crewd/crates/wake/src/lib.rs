@@ -2,6 +2,7 @@
 //! sans-IO：不起进程、不碰 tokio / 文件 / 数据库、不读时钟——时间由调用方传入（同 crewd-work）。
 pub mod breaker;
 pub mod model;
+pub mod notice;
 pub mod plan;
 pub mod policy;
 pub mod queue;
