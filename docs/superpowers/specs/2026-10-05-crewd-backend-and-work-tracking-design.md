@@ -62,7 +62,7 @@
 ### 3.3 构建顺序（全 Rust，无过渡桥）**[人 已定 2026-10-05]**
 不做「crewd ↔ Swift 执行器」的桥（白写、双常驻进程）。crewd 独立开发到主路径对等后一次性切换；期间现有 Swift 版照用、只修 bug。
 - **M1 地基**：Rust workspace、SQLite 存储、旧 JSON 只读导入、客户端 API（Unix socket）+ 契约 schema。
-- **M2 执行器**：portable-pty + alacritty_terminal 无头终端（屏幕文本、快照、对话框识别）、claude 启动参数与 hooks、codex app-server 客户端、孤儿回收、会话恢复（--resume）。
+- **M2 执行器**：PTY（rustix-openpty 手写 + tokio，选型见 §18）+ alacritty_terminal 无头终端（屏幕文本、快照、对话框识别）、claude 启动参数与 hooks、codex app-server 客户端、孤儿回收、会话恢复（--resume）。
 - **M3 协作**：机组/白板/人类待确认/审批台账、`crewd mcp` 与 `crewd hook` 子命令、唤醒投递与准入。
 - **M4 工作跟进**：两层 Todo、负责人、检查点、停下即检查、卡住拆分（§4–6、§9）。
 - **M5 Jev 调度**（§7）：先跑中文实测集定阈值。
@@ -289,3 +289,86 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 **数据**（M3 schema v2）：`channels(id, crew_id 归属, name, kind: lobby|human|topic|dm, purpose, created_by, archived_at)`、`channel_members(channel_id, member_kind: session|human, member_id, joined_at)`、人类注视标记 `channel_watch(channel_id, since)`；`messages.channel_id` 取代 `crew_id` 作为归属（M1 导入的旧消息迁到各机组大厅）；`work_items.channel_id?`（M4）。
 
 **待 M3 设计时细化**：群内是否需要「话题/回复串」（暂用已有的 reply_to）；私有群（不在机组内公开）要不要；子机组还保留哪些用途（独立工作目录/独立机长）。
+
+## 18. M2b 交付记录与遗留（分支 crewd-m2b，计划 `docs/superpowers/plans/2026-10-06-crewd-m2b-claude-session.md`）
+
+（编号说明：计划写成时本节叫 §17；§17 后来被「机组内多群」占用，§19 / §20 是别的分支的 M4a / M5a 记录。计划正文与代码注释里的「spec §17」一律读作 §18。）
+
+已交付：`crewd/crates/exec`（crewd-exec）——找 claude（登录 shell PATH + 哨兵 + 5s 超时、childProcessPath、白名单环境）、argv 与 0600 启动文件（首条 prompt 绝不进 argv）、hooks / MCP 命令行指向可配置 helper（`HelperCommands` 一处拼；hooks 可关，等 M3 的 `crewd hook`）、手写 PTY（rustix-openpty + tokio `AsyncFd`，setsid / TIOCSCTTY / env_clear）、sans-IO 会话核心 `session::Core`（投递状态机、健康、待决策、退出，时间注入）、驱动任务与窄接口 `driver::SessionHandle` + `SessionEvent`（含 `StartError::AlreadyRunning`：同一个 claude 会话号不能在本进程里同时起两个）、孤儿登记与启动时刻核对的回收（macOS / Linux；身份含开机标识 `boot_id`，核对启动时刻 + 进程组 + boot_id）、会话号账本 trait + `crewd_server::ledger::StoreLedger`（会话号入库前校验字符集与长度）、续跑被拒换新号重起一次。`crewd claude` 子命令（前台起一个会话，事件打到 stdout；`--session` 走库里的账本、重跑自动 `--resume`，不给走内存账本）；`crewd serve` 与 `crewd claude` 拿到数据目录锁后都先回收孤儿（`crewd_server::reap_orphans`），结果逐条打到 stderr，且如实：杀成功 / 已不在 / pid 被复用没动 / 读不到身份没动 / 判定该回收但被拒绝（pgid ≤ 1 或是自己所在的组）/ 发信号失败——后四种登记仍留在 `exec-registry.json` 里，并补一行「有 N 条没能处理」，不会被「回收完成」盖住。schema v2：`sessions.agent_kind` → `executor`、`crews.captain_agent_kind` → `captain_executor`（词表都是 `claude` / `codex` / `acp:<registry-id>`，旧数据的 `terminal` / `unknown` 原样）；线上 JSON、契约文件、导入器同步。验收：假 claude（真 PTY）上的端到端——慢首屏、粘贴折叠、排队、粘贴陷阱、永不回显、真录制信任框回放后代答补投、限流菜单自动应答、额度用尽退出、子进程不读输入、70KB 开场任务；shell 脚本顶替 claude 的驱动层测试——落账、续跑、被拒重起、停止升级 killpg、拉起失败、登记表、认证探测、账本失败不起进程；`crewd claude` 两次运行之间经库续跑（`tests/claude_cli.rs`）。手动用假 claude 从命令行驱动过一遍（stdin 投第二条指令、`--screen` 在 stderr 看到 `GOT: 第二条指令`、SIGINT 后 `Exited(… stopped_by_user: true …)`）；这一遍抓到一个只有交互终端才会撞上的毛病：`crewd claude` 的 stdin 读取占着 tokio 阻塞线程，Ctrl-C 之后 runtime 收尾会等到用户再按一次回车——`main` 在 `run()` 成功后直接 `exit(0)`（锁与登记表都已在 `run()` 里清完）。
+
+与 Swift / 本 spec 原文不同的决定（理由见计划「裁定」）：
+- PTY 手写，不用 portable-pty（§3.3 原写法，已改）也不用 `alacritty_terminal::tty`（继承父环境且加 `ALACRITTY_WINDOW_ID`、cwd 失败静默、Drop 里阻塞 wait）。
+- §15 的 CRLF 问题：字节尾窗不改；执行器判待决策只看屏幕（不喂跟踪器的尾窗）。折掉 CRLF 会让答完的菜单在尾窗里挂着，把「已清除」拖住。额度 / 限流 / 续跑被拒这些单行短语仍用尾窗。
+- 输入行连续在屏 300ms 才算就绪（且行文本要稳定）：`tui-claude-trust.bin` 按 64 字节喂，第 1024 字节处信任框半帧里 `❯  No, exit` 被认成输入行。
+- 被对话框挡住 / 等不到输入框只报不终止，答完自己补投（Swift 驱动层把这两种当终局、丢了开场任务——与它自己状态机的测试矛盾）。
+- 提交三拍发完才回读（粘贴占位符会把那个空格算成多一行）；正文里的 CR 变 LF、其余控制字符变 Unicode 控制图形；TERM 固定 `xterm-256color`；额外环境变量多拒一个 `CREWD_` 前缀。
+- 续跑被拒同时看屏幕和字节尾窗（窄屏时那行原话会折行）。
+- 孤儿启动时刻在 macOS 上取 `proc_pidinfo(PROC_PIDTBSDINFO)`（与 sysctl `KERN_PROC` 同一个内核字段；libc 没给 macOS 导出 `kinfo_proc`）。
+
+控制器裁定（执行中定的，覆盖或补充计划；每条一句）：
+- 计划里的「spec §17」一律改 §18（§17 在计划写成后被占用）。
+- 把 `crews.captain_agent_kind` 一并改名 `captain_executor`、同一次 schema v2 迁移、同样的值映射——crews 与 sessions 共用一套词表，免第二次迁移；取代计划「遗留」里「captain_agent_kind 不动」那条。
+- 最初裁定「不跑真 claude 冒烟、不跑 Linux 编译（要人点头 / 装工具链）」，之后人点头（2026-10-06），两件都跑了，结果见下。
+- Task 1：登录 shell 抓 PATH 放进自己的进程组、读到收尾哨兵就停、成功 / 超时都 killpg（计划等 EOF：约 1/135 次挂住，且 rc 留下后台作业时丢 PATH）。
+- Task 1：登录 shell 再进一步放进新 session（`setsid`），只换进程组在有控制终端时会让交互 zsh 卡住。
+- Task 4：`next_deadline` 永不早于上次的 now；输入行过了期限还没出现就一次性报「卡住」并设 90s 终止上限；`ready_settle` 要求行文本稳定；截止时间运算全部饱和（计划自带的缺陷）。
+- Task 5（对 Task 6 的裁定）：限流自动应答必须以「屏幕当下显示限流菜单且光标在『Stop and wait』上」为闸——只靠字节尾窗的短语会在冷却后过期、或匹配到回显 / 别的菜单，把「1」+ 回车敲进不该敲的地方。
+- Task 6：排好的提交优先于丢弃（对话框出现 / 输入行消失时）；限流回车只在菜单仍在屏上时发；正文去毒一次、回读对着去毒后的文本；有排好的按键时 `next_wakeup` 不得落在过去；限流菜单在屏上就应答 + 冷却；健康优先级 LaunchFailed > 额度 / 限流 > 投递，`quota_at` 独立；停止后再 `send` 记 Abandoned（计划自带的缺陷，其中一条会替人批准权限提示）。
+- Task 6：未确认的扫描器命中在一个冷却内仍有效（实现者疑虑 1，评审认可；安全靠屏幕闸）。
+- Task 6（第二轮）：被中止的提交通知 Delivery（重发、计入重试）；有对话框时不进 Submit 步；`via_body` 的拍子有测试；额度类健康不被认证状态转换清掉。
+- Task 7：回收器必须核对活进程的 pgid 与登记一致、拒绝 pgid ≤ 1 与自己所在的组（计划的 `apply` 可能 `kill(-1)`）；Linux 身份含 boot_id（重启后时钟滴答会撞）；杀失败的条目留在表里。
+- Task 9：会话号校验（非空、`[A-Za-z0-9_-]`、不以 `-` 开头、≤128）在账本写入、`decide_resume`（非法 → 新号 + 说明）、`prepare_claude` 三处强制——库里读出的号会当路径段和 argv 用。
+- Task 10：杀进程后等待退出必须同时排空 PTY（macOS 上量到过挂死）；停止 / 句柄全丢之后不再重起；文件 I/O 走 `spawn_blocking`。
+- 时序抖动：`env::tests::background_job_holding_stdout_does_not_delay_or_survive` 断言墙钟 < 1s，在 `check.sh` 并行满载时偶发失败（早先那次「87/88」不明原因的红就是它）；上限放宽到 3s。修后 `check.sh` 连跑 5 次全绿。
+
+真机核对（§15 遗留的 DA1 一条）：
+- 已跑（人 2026-10-06 点头，只跑这一条被忽略的测试）：claude 2.1.291，`CREWD_LIVE_CLAUDE=1 CREWD_LIVE_CLAUDE_WORKDIR=<$HOME 下 mktemp 的空目录> cargo test -p crewd-exec --test live_claude -- --ignored --nocapture --exact real_claude_starts_up_to_the_input_box`，**通过**（3.03s）。约 1.5s 后画出输入框 `❯ Try "how do I log an error?"`；**没有**弹信任框——工作目录特意放在 `$HOME` 下的临时空目录（`$HOME` 已被信任，claude 继承上级目录的信任），**没有用计划默认的仓库根目录**；放在 `/tmp` 下没有受信任的祖先目录，会弹信任框让测试失败、看不出输入框能不能画出来。alacritty 的 DA1 / OSC 11 回答被真 claude 接受（首屏完整画出、没有转义残留；从外面看不到 claude 发了哪几条查询，没有逐条日志）。停止时 claude 自己在 2s 宽限内退出（`Code(143)`，`stopped_by_user: true`）。没发过任何 prompt。副作用：claude 在 `~/.claude.json` 里给那个临时路径加了一条它自己的 project 记录，未改。
+- 实测给计划里测试的改动：循环里不再 `assert!`（真 claude 运行时 panic 会让 runtime 在没回收子进程的情况下 drop，留下孤儿），改为跳出并带原因、先停 claude 等 `Exited` 再 panic。
+
+遗留：
+- 提交三拍与正文验证窗口都从「排进写任务」起算，不是「真正写进 PTY」：子进程长时间不读输入时，空格 / 退格 / 回车可能挤进同一次 read 被当成粘贴，超长正文也可能在窗口内没写完而被 Ctrl-U 重投。假 claude 上 70KB 开场任务没出过事；真遇到了就让写任务回报「写完了」再排下一拍。
+- 只在启动时回收孤儿；登记表交给会话管理、serve 拉起会话是 M3。`crewd claude` 拿数据目录锁，不能与 serve 同时跑。
+- 登记表一个 session_id 一个槽位：同号再登记会覆盖留下的（被拒 / 杀失败 / 读不到身份的）孤儿条目；M3 把登记表交给会话管理时要处理。
+- server 的 RPC 仍在 tokio 线程上同步调 SQLite（§14 遗留）；M2b 的账本另开连接、在 `spawn_blocking` 里跑，没加重它。M3 把会话放进 serve 之前处理。
+- 续跑被拒只做了判定；Swift 那套诊断文案（日志在不在盘上）与「新开一轮」的群通知归 M3。
+- `/model` 中途切换（`SessionProfileSwitch`）、启动参数回显扫描、awaitingReply 归 M3。
+- `sessions::upsert` 传 `agent_session_id = None` 会抹掉库里已记的会话号——M3 写 session 行时必须保留它。
+- `TIOCSCTTY` 与「退出后读干净」只在 Linux 上有可观测差别，macOS 上的测试证明不了它们（计划 Task 3 / Task 10 有说明）。
+- Linux：`cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` 通过（人 2026-10-06 点头，工具链 1.94.0 已装该 target；只编译，没在 Linux 上跑测试；覆盖 `#[cfg(not(target_os = "macos"))]` 的 `/proc` 读法与 Linux 才编译的驱动层测试）。
+
+已知小问题（评审时记下、未修；每条一行，按模块分组。标「终评优先」的建议在整支分支的终评里先处理）：
+
+启动与环境（Task 1、2）：
+- 相对路径的 PATH 项按当前目录解析。
+- `AgentPaths::discover` / `resolve` / `build_env_from_process` 没有直接的测试。
+- 额外环境变量可以覆盖 PATH / TERM（留给调用方决定）。
+- 登录 shell 测试用 1s 捕获超时，冷启动超过 1s 仍可能偶发（「脚本没写 pidfile」）——终评时留意。
+- 非 UTF-8 路径会有损转换。
+- 「开场任务不进文件」没有断言。
+- 文档里指向 `crate::delivery` 的链接在当时悬空。
+
+PTY（Task 3）：
+- 终评优先：`spawn_pty` 在 `fionbio` / `AsyncFd` 设置失败时子进程已起、没人管——应把这些设置挪到 spawn 之前。
+- 背压与 SIGWINCH 没有提交的测试；并行测试里有 `set_var`。
+
+投递状态机与会话核心（Task 4、6）：
+- 终评优先：输入行文本一直在变时永远稳定不下来、也不报 NotReady（静默挂住，settle 修复引入）——`readiness_deadline` 应同样约束 settle 等待。
+- Stalled 没有宽限（期限那一刻缺一帧就用掉唯一一次报告）；Stalled 的 Undelivered 文案与 `lost_tail()` 的建议矛盾（可能导致重复投）。
+- 对话框在屏与否不影响 Writing / Submitting 的放弃计时。
+- 终评优先：对话框一直没答时 Writing / Resubmit 在 90s 后终结，正文留在输入框里，下一条排队项的第一次写入不发 Ctrl-U，两段文字会拼在一起；停滞 / 上限的提示说「已发 CR」但其实没发。
+- 过期的文档注释（`is_finished`、`flush_due_keys`）。
+- 扫描器仍在喂但已不再起决定作用（以后删）；额度恢复后被拒的投递报告不会再次抛出；`last_now` 不被 `send` / `stop` / `on_exit` 更新。
+
+健康（Task 5）：
+- 额度扫描器对「you've reached your goal」之类句子会误报（6s 连续干活后自愈）。
+- 每次节拍都 stat 一遍 `projects/*`；单条超过 256KB 的记录没有测试。
+
+登记表与回收（Task 7、10）：
+- 改名后没有 fsync 父目录；落盘失败时内存表与磁盘分叉；领头进程已死时组内其余成员不会被回收。
+- `PidReused` 的说明只显示启动时刻。
+- 经登记表那条回收路径没有测试钉住；`REAP_LIMIT` 是常量。
+- Core 在停止期间仍会发 `ResumeRefused`（驱动层忽略）。
+
+库与账本（Task 8、9）：
+- 迁移里 serde 属性后的文档注释位置、`foreign_keys` 关闭时的迁移测试、`execute_batch BEGIN` 写法。
+- `StoreLedger` 的 `exists()` 有 TOCTOU、EACCES 被当成 NotFound（用不带 CREATE 的 `Store::open_existing` 可封住）。
