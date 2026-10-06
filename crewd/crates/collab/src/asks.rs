@@ -53,7 +53,8 @@ fn rejected(crew: &str, r: Rejected) -> CollabError {
 
 /// 在同一个事务里读整本账、跑一条命令、整份写回（M4a 的持久化边界）。M4b 的工作项命令也走这里。
 /// 闭包返回账本自己的 `Result<R, Rejected>`；这里把 `Rejected` 映射成 collab 的错误（R5，见 `rejected`）。
-/// 被拒 = 不写回（账本原样）。事件日志此时丢弃（M4b 加 v4 的事件表再落）。
+/// 被拒 = 不写回（账本原样）；命令没改动账本（只读、到点的拍子没事可办）也不写回——不改 `updated_at`，
+/// 没账本的机组也不因此建出一行。事件日志此时丢弃（M4b 加 v4 的事件表再落）。
 pub fn with_book<R>(
     tx: &mut Tx<'_>,
     crew: &str,
@@ -61,8 +62,12 @@ pub fn with_book<R>(
 ) -> Result<R> {
     crews::get(tx.conn(), crew)?;
     let mut book = load(tx.conn(), crew)?;
+    let before = book.state().clone();
     let r = f(&mut book, Ts(tx.now_ms())).map_err(|e| rejected(crew, e))?;
     let _ = book.take_log();
+    if *book.state() == before {
+        return Ok(r);
+    }
     tx.conn().execute(
         "INSERT INTO work_books(crew_id,state,updated_at) VALUES(?1,?2,?3)
          ON CONFLICT(crew_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
@@ -175,15 +180,29 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     get(tx.conn(), &crew.id, &h.to_string())
 }
 
-/// 直接开的问被答 / 按默认办了：叫醒提问者；它已无法恢复（或已不在）→ 叫它机组的机长转达（§22.4）。
+/// session 还在、且没被标恢复失败：叫醒它它就能接着干。
+fn available(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(matches!(crewd_store::sessions::get(conn, id)?, Some(s) if s.resume_failed_at.is_none()))
+}
+
+/// 直接开的问被答 / 按默认办了：叫醒能接着干的第一位（§22.4）。依次：提问者 → 问所在机组此刻的机长（转达）
+/// → 根机组此刻的机长。三位都不能接（例如根机组机长自己提问、之后恢复失败）→ 不叫任何人：
+/// 答复照样记在账上，人在 `ask.list` 里看得到，下次有人接手时读得到。
 fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     let Some(asker) = &a.asked_by else {
         return Ok(());
     };
-    let target = match crewd_store::sessions::get(tx.conn(), asker)? {
-        Some(s) if s.resume_failed_at.is_none() => Some(s.id),
-        _ => crews::captain_of(tx.conn(), crew)?.filter(|c| c != asker),
-    };
+    let conn = tx.conn();
+    let mut candidates = vec![asker.clone()];
+    candidates.extend(crews::captain_of(conn, crew)?);
+    candidates.extend(crews::captain_of(conn, &crews::root_of(conn, crew)?)?);
+    let mut target = None;
+    for c in candidates {
+        if available(conn, &c)? {
+            target = Some(c);
+            break;
+        }
+    }
     if let Some(t) = target {
         wakes::enqueue(
             tx,
@@ -201,15 +220,16 @@ fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     Ok(())
 }
 
-pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask> {
-    let h = parse_ask(ask)?;
-    let (applied, standalone) = with_book(tx, crew, |b, now| {
-        let standalone = b.ask(h).map(|a| a.standalone).unwrap_or(false);
-        b.answer_ask(&Actor::Human, now, h, text)
-            .map(|ap| (ap, standalone))
-    })?;
-    let cleared: Vec<(String, Option<String>)> = applied
-        .events
+/// 一条问被答 / 按默认办之后的收尾（`answer` 与 `apply_due_defaults` 共用）：直接开的问叫醒提问者；
+/// 记 `AskChanged` 与 `AskAnswered`（`cleared` = 账本事件里每条 `BlockerCleared` 的 (项, 负责人)，裁定 17）。
+fn closed(
+    tx: &mut Tx<'_>,
+    crew: &str,
+    h: AskId,
+    standalone: bool,
+    events: &[crewd_work::Event],
+) -> Result<Ask> {
+    let cleared: Vec<(String, Option<String>)> = events
         .iter()
         .filter_map(|e| match &e.kind {
             EventKind::BlockerCleared { id, owner, .. } => {
@@ -218,7 +238,7 @@ pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask>
             _ => None,
         })
         .collect();
-    let a = get(tx.conn(), crew, ask)?;
+    let a = get(tx.conn(), crew, &h.to_string())?;
     if standalone {
         wake_asker(tx, crew, &a)?;
     }
@@ -235,11 +255,24 @@ pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask>
     Ok(a)
 }
 
+pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask> {
+    let h = parse_ask(ask)?;
+    let (applied, standalone) = with_book(tx, crew, |b, now| {
+        let standalone = b.ask(h).map(|a| a.standalone).unwrap_or(false);
+        b.answer_ask(&Actor::Human, now, h, text)
+            .map(|ap| (ap, standalone))
+    })?;
+    closed(tx, crew, h, standalone, &applied.events)
+}
+
+/// 撤回一条问。人随时可以；session 只能是提问者本人，或**问所在机组**此刻的机长——
+/// 别的机组的机长（另一棵树的、子机组的）在这本账上只算普通 session（账本按提问者放行）。
 pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &str) -> Result<Ask> {
     let h = parse_ask(ask)?;
     let actor = match by {
         Sender::Human => Actor::Human,
-        Sender::Session(s) => actor_of(tx.conn(), s)?,
+        Sender::Session(s) if sessions::crew_of(tx.conn(), s)? == crew => actor_of(tx.conn(), s)?,
+        Sender::Session(s) => Actor::worker(s),
         Sender::System => return Err(CollabError::Forbidden("系统不撤回问".into())),
     };
     with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))?;
@@ -252,26 +285,18 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
 
 /// 默认方案到点的问按默认办（M3c 的定时拍按机组逐个调，控制者裁定 C7）。返回办了的 H 号。
 pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
-    let done: Vec<(AskId, bool)> = with_book(tx, crew, |b, now| {
+    let done: Vec<(AskId, bool, Vec<crewd_work::Event>)> = with_book(tx, crew, |b, now| {
         let mut out = Vec::new();
         for h in b.defaults_due(now) {
             let standalone = b.ask(h).map(|a| a.standalone).unwrap_or(false);
-            b.apply_default(&Actor::System, now, h)?;
-            out.push((h, standalone));
+            let applied = b.apply_default(&Actor::System, now, h)?;
+            out.push((h, standalone, applied.events));
         }
         Ok(out)
     })?;
     let mut ids = Vec::new();
-    for (h, standalone) in done {
-        let a = get(tx.conn(), crew, &h.to_string())?;
-        if standalone {
-            wake_asker(tx, crew, &a)?;
-        }
-        tx.note(Change::AskChanged {
-            crew_id: crew.into(),
-            ask: a.ask.clone(),
-        });
-        ids.push(a.ask);
+    for (h, standalone, events) in done {
+        ids.push(closed(tx, crew, h, standalone, &events)?.ask);
     }
     Ok(ids)
 }
@@ -372,6 +397,8 @@ mod tests {
     #[test]
     fn failed_ask_consumes_no_h_number_and_emits_nothing() {
         let mut s = store();
+        let channels_before = count(&s, "SELECT COUNT(*) FROM channels");
+        let wakes_before = count(&s, "SELECT COUNT(*) FROM wakes");
         s.conn()
             .execute(
                 "INSERT INTO ask_meta(crew_id,ask) VALUES('crew-a','H1')",
@@ -383,6 +410,12 @@ mod tests {
         assert!(matches!(e, CollabError::Store(_)), "{e:?}");
         assert_eq!(count(&s, "SELECT COUNT(*) FROM work_books"), 0);
         assert_eq!(count(&s, "SELECT COUNT(*) FROM messages"), 0);
+        assert_eq!(
+            count(&s, "SELECT COUNT(*) FROM channels"),
+            channels_before,
+            "懒建的人类群一起回滚"
+        );
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM wakes"), wakes_before);
         s.conn().execute("DELETE FROM ask_meta", []).unwrap();
         assert_eq!(ok(&mut s, |tx| open(tx, "w-a1", q("这次能成？"))).ask, "H1");
     }
@@ -585,5 +618,172 @@ mod tests {
             err(&mut s, |tx| open(tx, "chief-1", q("?"))),
             CollabError::Forbidden(_)
         ));
+    }
+
+    #[test]
+    fn only_the_asker_or_the_ask_crews_captain_may_withdraw() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| open(tx, "w-a1", q("谁能撤？")));
+        for other in ["cap-x", "cap-b"] {
+            assert!(
+                matches!(
+                    err(&mut s, |tx| withdraw(
+                        tx,
+                        &Sender::Session(other.into()),
+                        "crew-a",
+                        &a.ask,
+                        "不是你的"
+                    )),
+                    CollabError::Work(Rejected::Forbidden(_))
+                ),
+                "{other} 是别的机组的机长，不能撤 crew-a 的问"
+            );
+        }
+        let w = ok(&mut s, |tx| {
+            withdraw(
+                tx,
+                &Sender::Session("w-a1".into()),
+                "crew-a",
+                &a.ask,
+                "自己撤",
+            )
+        });
+        assert_eq!(w.state, AskStateView::Withdrawn);
+        let b = ok(&mut s, |tx| open(tx, "w-a1", q("人能撤吗？")));
+        let h = ok(&mut s, |tx| {
+            withdraw(tx, &Sender::Human, "crew-a", &b.ask, "人撤")
+        });
+        assert_eq!(h.state, AskStateView::Withdrawn);
+    }
+
+    /// crew-a 里 w-a1 名下的一项卡在一条带默认方案（30 分钟）的新问上，返回 H 号。
+    fn blocked_item_with_default(s: &mut crewd_store::Store) -> String {
+        ok(s, |tx| {
+            with_book(tx, "crew-a", |b, now| {
+                let w = b
+                    .create_item(
+                        &Actor::worker("w-a1"),
+                        now,
+                        crewd_work::NewItem::titled("示例项").owned_by("w-a1"),
+                    )?
+                    .value;
+                let r = b.block(
+                    &Actor::worker("w-a1"),
+                    now,
+                    w,
+                    vec![crewd_work::BlockOn::NewAsk {
+                        question: "用哪个格式？".into(),
+                        default: Some(DefaultOption {
+                            text: "旧格式".into(),
+                            after_ms: 30 * MIN,
+                        }),
+                    }],
+                    crewd_work::Continuation::Nothing,
+                )?;
+                Ok(r.value.asks[0].to_string())
+            })
+        })
+    }
+
+    #[test]
+    fn a_due_default_reports_the_cleared_blockers_like_an_answer() {
+        let mut s = store();
+        let h = blocked_item_with_default(&mut s);
+        let (done, ch) = ok_at(&mut s, NOW + 31 * MIN, |tx| {
+            apply_due_defaults(tx, "crew-a")
+        });
+        assert_eq!(done, std::slice::from_ref(&h));
+        assert!(
+            ch.contains(&Change::AskAnswered {
+                crew_id: "crew-a".into(),
+                ask: h.clone(),
+                asked_by: Some("w-a1".into()),
+                cleared: vec![("W1".into(), Some("w-a1".into()))],
+            }),
+            "{ch:?}"
+        );
+    }
+
+    #[test]
+    fn a_tick_with_nothing_due_rewrites_and_creates_no_book() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            open(
+                tx,
+                "w-a1",
+                OpenAsk {
+                    default: Some(AskDefault {
+                        text: "按周三".into(),
+                        after_minutes: 30,
+                    }),
+                    ..q("周几？")
+                },
+            )
+        });
+        let before: Vec<(String, String)> = {
+            let mut st = s
+                .conn()
+                .prepare("SELECT crew_id, updated_at FROM work_books ORDER BY crew_id")
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(before.len(), 1);
+        let (_, ch) = ok_at(&mut s, NOW + 5 * MIN, |tx| {
+            for crew in ["crew-a", "crew-b", "crew-x", "chief"] {
+                assert!(apply_due_defaults(tx, crew)?.is_empty());
+            }
+            Ok(())
+        });
+        let after: Vec<(String, String)> = {
+            let mut st = s
+                .conn()
+                .prepare("SELECT crew_id, updated_at FROM work_books ORDER BY crew_id")
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(
+            after, before,
+            "没到点的拍子不改写账本、不给没账本的机组建账本"
+        );
+        assert!(ch.is_empty(), "{ch:?}");
+    }
+
+    #[test]
+    fn an_unavailable_captain_asker_falls_back_to_the_root_captain() {
+        let mut s = store();
+        // cap-b 在 crew-b 提问后恢复失败：crew-b 的机长就是它自己 → 叫根机组 crew-a 的机长。
+        let a = ok(&mut s, |tx| open(tx, "cap-b", q("要不要上线？")));
+        ok(&mut s, |tx| {
+            crate::sessions::set_resume_failed(tx, "cap-b", true)
+        });
+        ok(&mut s, |tx| answer(tx, "crew-b", &a.ask, "上"));
+        assert!(
+            crate::wakes::list(s.conn(), Some("cap-b"), 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            crate::wakes::list(s.conn(), Some("cap-a"), 10).unwrap()[0].source,
+            "ask:crew-b/H1"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_root_captain_asker_wakes_nobody() {
+        let mut s = store();
+        // cap-a 是根机组的机长：本机组机长与根机组机长都是它自己 → 没人可转达（答复仍在 ask.list 里可见）。
+        let a = ok(&mut s, |tx| open(tx, "cap-a", q("要不要回滚？")));
+        ok(&mut s, |tx| {
+            crate::sessions::set_resume_failed(tx, "cap-a", true)
+        });
+        let (_, ch) = ok_at(&mut s, NOW + MIN, |tx| answer(tx, "crew-a", &a.ask, "回滚"));
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM wakes"), 0);
+        assert!(!ch.iter().any(|c| matches!(c, Change::WakeEnqueued { .. })));
     }
 }
