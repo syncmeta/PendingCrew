@@ -4,7 +4,8 @@
 //! 环境变量（执行器只放行调用方显式给的变量，所以测试经 `ClaudeSpec::additional_env` 传）：
 //! - `FAKE_CLAUDE_MODE`：`ready`（缺省）/ `deaf`（画框但永不回显）/ `noread`（画框后再也不读
 //!   stdin，PTY 输入缓冲会被写满）/ `trust`（先过信任框）/ `ratelimit`（第一次提交弹限流菜单）/
-//!   `usage`（第一次提交报额度用尽并退出）。
+//!   `usage`（第一次提交报额度用尽并退出）/ `refuse`（带 `--resume` 起时照真 claude 打印
+//!   「No conversation found with session ID: <id>」后 exit 1；不带则同 `ready`）。
 //! - `FAKE_CLAUDE_READY_DELAY_MS`：先只画横幅，这段时间收到的按键全部吞掉（真 claude 首屏重绘就这样吞字）。
 //! - `FAKE_CLAUDE_REPLAY`：开场先原样回放这份录制字节（如 `tui-claude-trust.bin`）。
 //! - `FAKE_CLAUDE_LOG`：每次提交往这个文件追加一行（正文里的换行写成 `\n`）。
@@ -108,6 +109,15 @@ fn main() {
         submits: 0,
         pasting: false,
     };
+
+    if fake.mode == "refuse" && fake.resumed {
+        out(format!(
+            "No conversation found with session ID: {}\r\n",
+            fake.session
+        )
+        .as_bytes());
+        std::process::exit(1);
+    }
 
     let stdin = rustix::stdio::stdin();
     if let Ok(mut t) = rustix::termios::tcgetattr(stdin) {

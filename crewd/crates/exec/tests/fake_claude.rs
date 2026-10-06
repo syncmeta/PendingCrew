@@ -40,6 +40,10 @@ fn next_session_id() -> String {
 }
 
 async fn start(fake_env: &[(&str, &str)], brief: Option<&str>) -> Run {
+    start_with(fake_env, brief, MemoryLedger::default()).await
+}
+
+async fn start_with(fake_env: &[(&str, &str)], brief: Option<&str>, ledger: MemoryLedger) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("submitted.log");
     let mut additional_env: BTreeMap<String, String> = fake_env
@@ -62,7 +66,7 @@ async fn start(fake_env: &[(&str, &str)], brief: Option<&str>) -> Run {
             additional_env,
             ..ClaudeSpec::default()
         },
-        ledger: Arc::new(MemoryLedger::default()),
+        ledger: Arc::new(ledger),
     };
     let (h, rx) = start_claude(start, config).await.unwrap();
     Run {
@@ -241,10 +245,9 @@ async fn rate_limit_menu_is_answered_automatically() {
     r.h.send("触发限流").unwrap();
     r.until(|e| matches!(e, SessionEvent::Health(Some(h)) if h.kind == HealthKind::RateLimited))
         .await;
-    for _ in 0..100 {
-        if r.submitted().len() == 2 {
-            break;
-        }
+    // 最多等 10s：满载的 check.sh 里「1」与回车之间、假 claude 落日志都可能慢。
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while r.submitted().len() < 2 && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(r.submitted(), ["触发限流", "RATE-ANSWER:1"]);
@@ -296,5 +299,57 @@ async fn huge_brief_is_submitted_exactly_once() {
     }))
     .await;
     assert_eq!(r.submitted(), [brief.replace('\n', "\\n")]);
+    r.stop().await;
+}
+
+/// 续跑被拒（claude 打印原话后退出）：换新号重起，开场任务搬到新进程、只提交一次，
+/// 一路上不报「被丢下」（Abandoned）。
+#[tokio::test]
+async fn brief_carries_over_to_the_fresh_session_after_a_refused_resume() {
+    let mut r = start_with(
+        &[("FAKE_CLAUDE_MODE", "refuse")],
+        Some("续跑被拒也要送到"),
+        MemoryLedger::with(Some("gone-id")),
+    )
+    .await;
+    let seen = r
+        .until(outcome(BRIEF_DELIVERY_ID, |o| {
+            *o == DeliveryOutcome::Delivered
+        }))
+        .await;
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, SessionEvent::ResumeRefused { id, .. } if id == "gone-id")),
+        "前提：续跑被拒：{seen:?}"
+    );
+    let fresh = seen
+        .iter()
+        .find_map(|e| match e {
+            SessionEvent::Spawned {
+                agent_session_id,
+                resumed: false,
+                ..
+            } => Some(agent_session_id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("没有换新号重起：{seen:?}"));
+    assert_ne!(fresh, "gone-id");
+    assert!(
+        !seen.iter().any(|e| matches!(
+            e,
+            SessionEvent::Delivery {
+                outcome: DeliveryOutcome::Abandoned(_),
+                ..
+            }
+        )),
+        "开场任务不能在被拒的进程上被丢下：{seen:?}"
+    );
+    assert_eq!(r.submitted(), ["续跑被拒也要送到"], "只提交一次");
+    let screen = r.h.screen_text(25).await.unwrap();
+    assert!(
+        screen.contains(&format!("session {fresh} resumed=false"))
+            && screen.contains("GOT: 续跑被拒也要送到"),
+        "投进的是新号那个进程：{screen}"
+    );
     r.stop().await;
 }
