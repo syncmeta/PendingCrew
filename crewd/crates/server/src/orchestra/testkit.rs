@@ -8,7 +8,7 @@ use crewd_exec::driver::{Closed, SendError, SessionStatus};
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::SessionEvent;
 use crewd_term::Snapshot;
-use crewd_wake::plan::{ChannelCtx, Listen, MsgFacts};
+use crewd_wake::plan::{ChannelCtx, Listen, MsgFacts, visible_to};
 use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
 use tokio::sync::mpsc;
@@ -104,8 +104,13 @@ impl MemPort {
                 captain.clone(),
             ),
             MemKind::Human => {
+                // 机长 + 显式成员，去重（机长同时是显式成员时只算一次，同 M3a `channels::members`）。
                 let mut m: Vec<String> = captain.iter().cloned().collect();
-                m.extend(ch.members.iter().cloned());
+                for s in &ch.members {
+                    if !m.contains(s) {
+                        m.push(s.clone());
+                    }
+                }
                 (m, captain.clone())
             }
             MemKind::Other => (ch.members.clone(), ch.owner.clone()),
@@ -118,6 +123,24 @@ impl MemPort {
             crew_captain: captain,
             listens: st.listens.get(channel).cloned().unwrap_or_default(),
         })
+    }
+
+    /// 群里最大的 seq（空群 = 0）。
+    fn end_of(st: &MemState, channel: &str) -> i64 {
+        st.messages
+            .range((channel.to_string(), i64::MIN)..=(channel.to_string(), i64::MAX))
+            .map(|((_, seq), _)| *seq)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// 入群点（M3a 裁定 9）：没有游标行就把它钉到群的当前末尾；已有的不动。
+    pub fn join(&self, session: &str, channel: &str) {
+        let mut st = self.lock();
+        let end = Self::end_of(&st, channel);
+        st.cursors
+            .entry((session.to_string(), channel.to_string()))
+            .or_insert(end);
     }
 
     pub fn wakes_of(&self, session: &str) -> Vec<QueuedWake> {
@@ -192,6 +215,20 @@ impl Port for MemPort {
             awaiting_question: None,
             last_progress_at: None,
         };
+        // 同 M3a `sessions::register`：新 session 的大厅游标钉在当前末尾（机长另加人类群，同 `point_captain_at`）。
+        let joined: Vec<String> = st
+            .channels
+            .iter()
+            .filter(|(_, c)| {
+                c.crew == row.crew_id
+                    && (c.kind == MemKind::Lobby || (row.captain && c.kind == MemKind::Human))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for ch in joined {
+            let end = Self::end_of(&st, &ch);
+            st.cursors.insert((row.id.clone(), ch), end);
+        }
         st.sessions.insert(row.id.clone(), row.clone());
         Ok(row)
     }
@@ -440,23 +477,43 @@ impl Port for MemPort {
         Ok(Self::ctx_of(&self.lock(), channel))
     }
 
+    /// 同 M3a `cursors::unread_for`：所在的群 + 此刻还在收听的群；游标之后、对它可见（`plan::visible_to`）、
+    /// 不是它自己发的。没有游标行的群 = 入群点没记：先钉到群末尾、本次不返回（M3a 在入群时钉，`Rig` 也是）。
+    /// 不模拟的：`UNREAD_CAP` 窗口与「开头一段不可投递的消息让游标跳过」（只影响游标，不影响返回什么）。
     async fn unread(&self, session: &str) -> Result<Vec<MsgFacts>> {
-        let st = self.lock();
-        Ok(st
-            .messages
-            .values()
-            .filter(|(m, _)| {
-                let ctx = Self::ctx_of(&st, &m.at.channel);
-                let member = ctx.is_some_and(|c| c.session_members.iter().any(|s| s == session));
-                let cursor = st
-                    .cursors
-                    .get(&(session.to_string(), m.at.channel.clone()))
-                    .copied()
-                    .unwrap_or(0);
-                member && m.at.seq > cursor
+        let mut st = self.lock();
+        let now = st.now;
+        let mut chans: Vec<String> = st
+            .channels
+            .keys()
+            .filter(|ch| {
+                Self::ctx_of(&st, ch)
+                    .is_some_and(|c| c.session_members.iter().any(|s| s == session))
             })
-            .map(|(m, _)| m.clone())
-            .collect())
+            .cloned()
+            .collect();
+        for (ch, ls) in &st.listens {
+            if ls.iter().any(|l| l.session == session && l.until > now) && !chans.contains(ch) {
+                chans.push(ch.clone());
+            }
+        }
+        let mut out = Vec::new();
+        for ch in chans {
+            let key = (session.to_string(), ch.clone());
+            let Some(after) = st.cursors.get(&key).copied() else {
+                let end = Self::end_of(&st, &ch);
+                st.cursors.insert(key, end);
+                continue;
+            };
+            out.extend(
+                st.messages
+                    .range((ch.clone(), after + 1)..=(ch.clone(), i64::MAX))
+                    .map(|(_, (m, _))| m)
+                    .filter(|m| m.sender.session_id() != Some(session) && visible_to(m, session))
+                    .cloned(),
+            );
+        }
+        Ok(out)
     }
 
     async fn cursor(&self, session: &str, channel: &str) -> Result<i64> {
@@ -752,6 +809,7 @@ impl ExecHandle for StandInHandle {
 #[cfg(test)]
 mod self_tests {
     use super::*;
+    use crewd_wake::plan::{Mention, Sender};
     use crewd_wake::{Priority, WakeKind};
 
     fn wake(session: &str, source: &str, priority: Priority) -> NewWake {
@@ -782,6 +840,181 @@ mod self_tests {
         assert!(p.pending("a").await.unwrap().is_empty());
         assert_eq!(p.requeue_inflight().await.unwrap(), 1);
         assert_eq!(p.pending("a").await.unwrap().len(), 1);
+    }
+
+    fn msg(st: &mut MemState, ch: &str, seq: i64, sender: Sender, mentions: Vec<Mention>) {
+        let facts = MsgFacts {
+            id: format!("{ch}#{seq}"),
+            at: MessageRef {
+                channel: ch.into(),
+                seq,
+            },
+            sender,
+            mentions,
+            created_at: Ms(0),
+        };
+        st.messages
+            .insert((ch.into(), seq), (facts, format!("合成 {ch}#{seq}")));
+    }
+
+    fn ids_of(v: &[MsgFacts]) -> Vec<String> {
+        v.iter().map(|m| m.id.clone()).collect()
+    }
+
+    /// Task 6 评审 (5)：MemPort 的 `unread` 与 M3a `cursors::unread_for` 同义——所在群 + 收听中的群、
+    /// 游标之后、对它可见、不是它自己发的；没有游标行的群先钉到末尾、本次不返回。
+    #[tokio::test]
+    async fn mem_port_unread_mirrors_collab_unread_for() {
+        let p = MemPort::new();
+        let w1 = Sender::Session {
+            id: "w1".into(),
+            captain: false,
+        };
+        let cap = Sender::Session {
+            id: "cap".into(),
+            captain: true,
+        };
+        {
+            let mut st = p.lock();
+            st.now = Ms(100);
+            for (id, captain) in [("cap", true), ("w1", false)] {
+                st.sessions.insert(
+                    id.into(),
+                    SessionRow {
+                        id: id.into(),
+                        crew_id: "c1".into(),
+                        captain,
+                        executor: "claude".into(),
+                        display_name: None,
+                        agent_session_id: None,
+                        workdir: None,
+                        model: None,
+                        effort: None,
+                        brief: None,
+                        desired: Desired::Stopped,
+                        was_working: false,
+                        last_active_at: None,
+                        resume_failed_at: None,
+                        awaiting_question: None,
+                        last_progress_at: None,
+                    },
+                );
+            }
+            let other = |members: Vec<String>| MemChannel {
+                crew: "c1".into(),
+                kind: MemKind::Other,
+                owner: None,
+                members,
+            };
+            st.channels.insert(
+                "c1/lobby".into(),
+                MemChannel {
+                    crew: "c1".into(),
+                    kind: MemKind::Lobby,
+                    owner: None,
+                    members: vec![],
+                },
+            );
+            st.channels.insert("c1/heard".into(), other(vec![]));
+            st.channels.insert("c1/expired".into(), other(vec![]));
+            st.channels
+                .insert("c1/fresh".into(), other(vec!["w1".into()]));
+            for ch in ["c1/lobby", "c1/heard", "c1/expired"] {
+                st.cursors.insert(("w1".into(), ch.into()), 1);
+            }
+            let listen = |until| Listen {
+                session: "w1".into(),
+                until: Ms(until),
+                senders: None,
+            };
+            st.listens.insert("c1/heard".into(), vec![listen(200)]);
+            st.listens.insert("c1/expired".into(), vec![listen(100)]);
+            msg(&mut st, "c1/lobby", 1, cap.clone(), vec![]); // 游标上（已读）
+            msg(&mut st, "c1/lobby", 2, cap.clone(), vec![]); // 看得见
+            msg(&mut st, "c1/lobby", 3, w1.clone(), vec![]); // 自己发的
+            let to_cap = vec![Mention::Session("cap".into())];
+            msg(&mut st, "c1/lobby", 4, Sender::Human, to_cap); // 收窄给别人
+            let all = vec![Mention::Session("cap".into()), Mention::Broadcast];
+            msg(&mut st, "c1/lobby", 5, Sender::Human, all); // broadcast 人人可见
+            msg(&mut st, "c1/heard", 2, cap.clone(), vec![]); // 不在群里、但在收听
+            msg(&mut st, "c1/expired", 2, cap.clone(), vec![]); // 收听已过期
+            msg(&mut st, "c1/fresh", 1, cap.clone(), vec![]); // 没有游标行
+        }
+        let got = p.unread("w1").await.unwrap();
+        // 顺序同 M3a：先所在的群（按 id），再收听中的群。
+        assert_eq!(ids_of(&got), ["c1/lobby#2", "c1/lobby#5", "c1/heard#2"]);
+        assert_eq!(
+            p.lock().cursors.get(&("w1".into(), "c1/fresh".into())),
+            Some(&1),
+            "没有游标行 = 入群点：钉到末尾"
+        );
+        msg(&mut p.lock(), "c1/fresh", 2, cap, vec![]);
+        let got = p.unread("w1").await.unwrap();
+        assert!(ids_of(&got).contains(&"c1/fresh#2".to_string()), "{got:?}");
+    }
+
+    /// 同 M3a `sessions::register`：新 session 的大厅游标钉在当前末尾——入群之前的消息不算它的未读。
+    #[tokio::test]
+    async fn mem_port_insert_session_pins_its_lobby_like_register() {
+        let p = MemPort::new();
+        {
+            let mut st = p.lock();
+            st.channels.insert(
+                "c1/lobby".into(),
+                MemChannel {
+                    crew: "c1".into(),
+                    kind: MemKind::Lobby,
+                    owner: None,
+                    members: vec![],
+                },
+            );
+            msg(&mut st, "c1/lobby", 1, Sender::Human, vec![]);
+        }
+        let row = p
+            .insert_session(NewSession {
+                crew_id: "c1".into(),
+                captain: false,
+                executor: "claude".into(),
+                brief: "合成任务甲".into(),
+                title: None,
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(p.cursor(&row.id, "c1/lobby").await.unwrap(), 1);
+        msg(&mut p.lock(), "c1/lobby", 2, Sender::Human, vec![]);
+        assert_eq!(ids_of(&p.unread(&row.id).await.unwrap()), ["c1/lobby#2"]);
+    }
+
+    /// 人类群的成员 = 机长 + 显式成员；机长同时是显式成员时只算一次（同 M3a `channels::members`）。
+    #[tokio::test]
+    async fn mem_port_human_channel_members_are_deduped() {
+        let p = MemPort::new();
+        let new = |captain: bool, title: &str| NewSession {
+            crew_id: "c1".into(),
+            captain,
+            executor: "claude".into(),
+            brief: "合成任务甲".into(),
+            title: Some(title.into()),
+            model: None,
+            effort: None,
+            worktree: None,
+        };
+        let cap = p.insert_session(new(true, "cap")).await.unwrap();
+        let w1 = p.insert_session(new(false, "w1")).await.unwrap();
+        p.lock().channels.insert(
+            "c1/human".into(),
+            MemChannel {
+                crew: "c1".into(),
+                kind: MemKind::Human,
+                owner: None,
+                members: vec![cap.id.clone(), w1.id.clone()],
+            },
+        );
+        let ctx = p.channel_ctx("c1/human", Ms(0)).await.unwrap().unwrap();
+        assert_eq!(ctx.session_members, [cap.id.clone(), w1.id.clone()]);
     }
 
     /// 顶替句柄与 claude 句柄同一条规矩：不收 context，给了就回错误（不 panic）。
