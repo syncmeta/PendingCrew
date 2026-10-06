@@ -325,6 +325,8 @@ pub struct Config {
     pub still_wanted_after_ms: i64,
     pub patrol_every_messages: u32,
     pub patrol_interval_ms: i64,
+    /// 调用方的 now 比账本时间超前多少算「可疑前跳」（`WorkBook::clock_jump` 报给 M4b；命令照常执行）。
+    pub max_clock_jump_ms: i64,
 }
 
 impl Default for Config {
@@ -338,6 +340,7 @@ impl Default for Config {
             still_wanted_after_ms: 72 * HOUR,
             patrol_every_messages: 10,
             patrol_interval_ms: 30 * MINUTE,
+            max_clock_jump_ms: 24 * HOUR,
         }
     }
 }
@@ -433,6 +436,7 @@ mod tests {
             "裁定 Q3：15 分钟 × K=2 ≈ 30 分钟判失联"
         );
         assert_eq!(c.missed_checks_limit, 2);
+        assert_eq!(c.max_clock_jump_ms, 24 * HOUR);
         assert_eq!(c.stop_check_limit, 3);
         assert_eq!(c.pin_after_ms, 24 * HOUR);
         assert_eq!(c.still_wanted_after_ms, 72 * HOUR);

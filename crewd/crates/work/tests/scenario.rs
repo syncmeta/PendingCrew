@@ -246,12 +246,7 @@ fn restart_loses_no_due_check_or_open_question() {
     // 「落库」= 序列化整份状态；「重启」= 读回。
     let saved = serde_json::to_string(b.state()).unwrap();
     let later = T0.plus(3 * HOUR);
-    let back = WorkBook::restore(
-        serde_json::from_str(&saved).unwrap(),
-        Config::default(),
-        later,
-    )
-    .unwrap();
+    let back = WorkBook::restore(serde_json::from_str(&saved).unwrap(), Config::default()).unwrap();
     assert_eq!(back.due_checkpoints(later), b.due_checkpoints(later));
     assert_eq!(back.due_checkpoints(later)[0].items, [ids[0]]);
     assert_eq!(back.defaults_due(later), [AskId(1)]);

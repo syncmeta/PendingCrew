@@ -84,6 +84,7 @@ pub fn patrol_due(
 impl WorkBook {
     /// session 进入 idle 时它名下没着落的项（按 W 号、再按种类）。
     pub fn stop_violations(&self, session: &SessionId, now: Ts) -> Vec<StopViolation> {
+        let now = self.view_now(now);
         let mut out = Vec::new();
         for it in self.state.items.values() {
             if it.owner.as_ref() != Some(session)
@@ -149,6 +150,7 @@ impl WorkBook {
 
     /// 人的待确认清单：还开着、且此刻卡着至少一个活着的项的问（没人等的问不打扰人）。等得最久的在前。
     pub fn human_waits(&self, now: Ts) -> Vec<HumanWait> {
+        let now = self.view_now(now);
         let mut waiting: BTreeMap<AskId, (Vec<WorkId>, BTreeSet<SessionId>)> = BTreeMap::new();
         for it in self.state.items.values() {
             if it.status.is_terminal() {
@@ -186,6 +188,7 @@ impl WorkBook {
 
     /// 升到了更高一档、还没通知过的问（24h 置顶到人的清单；72h 问「还要吗」）。
     pub fn escalations_due(&self, now: Ts) -> Vec<(AskId, WaitTier)> {
+        let now = self.view_now(now);
         self.human_waits(now)
             .into_iter()
             .filter(|w| w.tier > self.state.asks[&w.ask].escalated)
@@ -218,6 +221,7 @@ impl WorkBook {
 
     /// 默认方案已到点、可以 `apply_default` 的问（只算还卡着活项的）。
     pub fn defaults_due(&self, now: Ts) -> Vec<AskId> {
+        let now = self.view_now(now);
         self.human_waits(now)
             .into_iter()
             .filter(|w| w.default_due_at.is_some_and(|t| t <= now))
@@ -227,6 +231,7 @@ impl WorkBook {
 
     /// 行政巡检的代码检查部分。`unrecoverable` 同 `owner_lost`。
     pub fn patrol(&self, now: Ts, unrecoverable: &BTreeSet<SessionId>) -> Patrol {
+        let now = self.view_now(now);
         let views = self.entry_views();
         let mut channel_live: BTreeMap<ChannelId, bool> = BTreeMap::new();
         for it in self.state.items.values() {

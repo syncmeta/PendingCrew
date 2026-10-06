@@ -192,6 +192,7 @@ impl WorkBook {
     /// 到期检查点：有负责人的 open / active 项，nextCheckAt ≤ now，且还没到失联线（missed < K）。
     /// 同一负责人合并成一条（spec §5「同一 session 同一时刻合并为一条」）。
     pub fn due_checkpoints(&self, now: Ts) -> Vec<CheckpointDue> {
+        let now = self.view_now(now);
         let mut by_owner: BTreeMap<SessionId, Vec<WorkId>> = BTreeMap::new();
         for it in self.state.items.values() {
             let Some(owner) = &it.owner else { continue };
@@ -211,6 +212,7 @@ impl WorkBook {
     /// 负责人失联候选（spec §5）：`unrecoverable` 是 crewd 试过恢复失败的 session（退出 ≠ 失联，先 resume）。
     /// 由调度层（排除原负责人）重派 + 告知机长。
     pub fn owner_lost(&self, now: Ts, unrecoverable: &BTreeSet<SessionId>) -> Vec<LostOwner> {
+        let now = self.view_now(now);
         let mut out = Vec::new();
         for it in self.state.items.values() {
             let Some(owner) = &it.owner else { continue };
@@ -542,6 +544,108 @@ mod tests {
                 (ids[1], LostCause::Unrecoverable)
             ],
             "blocked 的也要换人，否则人回复了没人接"
+        );
+    }
+
+    #[test]
+    fn commands_and_views_share_the_book_clock_when_the_caller_is_behind() {
+        // 评审 P5：墙钟往回跳（调用方的 now 落后于账本时间）时，视图与命令用同一个时间基准 max(now, clock)。
+        let mut b = book();
+        let w0 = claim(&mut b, "a", &["等人"])[0];
+        b.block(
+            &Actor::worker("a"),
+            T1,
+            w0,
+            vec![BlockOn::NewAsk {
+                question: "q".into(),
+                default: Some(crate::model::DefaultOption {
+                    text: "按 A".into(),
+                    after_ms: 30 * MINUTE,
+                }),
+            }],
+            Continuation::Nothing,
+        )
+        .unwrap();
+        let ahead = T1.plus(HOUR);
+        b.register_entry(ahead, EntryNo(2)).unwrap();
+        assert_eq!(b.state().clock, ahead);
+        // 迁移 / 派活占位「现在就查」按调用方自己的 now 写；账本时间更晚也收，记成账本的「现在」。
+        let w = b
+            .claim_entry(
+                &Actor::System,
+                T1,
+                EntryNo(1),
+                vec![NewItem::titled("占位").owned_by("a").check_at(T1)],
+            )
+            .unwrap()
+            .value[0];
+        assert_eq!(b.item(w).unwrap().next_check_at, Some(ahead));
+        assert_eq!(
+            b.create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("y").owned_by("a").check_at(T1.plus(MINUTE))
+            ),
+            Err(crate::book::Rejected::NextCheckNotFuture),
+            "不是占位、又不晚于账本时间的检查时间仍然拒"
+        );
+        assert_eq!(
+            b.report(
+                &Actor::worker("a"),
+                T1,
+                w,
+                Report {
+                    status: None,
+                    next_check_at: Some(T1.plus(30 * MINUTE)),
+                    note: "n".into(),
+                }
+            ),
+            Err(crate::book::Rejected::NextCheckNotFuture),
+            "回报的下次检查要晚于账本时间"
+        );
+        // 视图按账本时间看：用落后的 now 查，到期项、到点的默认方案一个不少。
+        assert_eq!(
+            b.due_checkpoints(T1),
+            [CheckpointDue {
+                owner: sid("a"),
+                items: vec![w]
+            }]
+        );
+        assert_eq!(b.defaults_due(T1), [crate::ids::AskId(1)]);
+        assert_eq!(b.human_waits(T1)[0].waited_ms, HOUR);
+        assert_eq!(b.stop_violations(&sid("a"), T1).len(), 1);
+    }
+
+    #[test]
+    fn a_forward_jump_ratchets_the_clock_and_is_reported() {
+        // 评审 P4：调用方的 now 一下子跑到账本时间前面很远（坏的 NTP 校时）。命令照常做、账本时间跟上（棘轮），
+        // 超过 `max_clock_jump_ms` 的前跳由 `clock_jump` 报出来给 M4b（落库前记日志 / 告警）。
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        activate(&mut b, "a", w, T1);
+        assert_eq!(b.clock_jump(T1.plus(HOUR)), None);
+        assert_eq!(b.clock_jump(T1.plus(24 * HOUR)), None, "正好 24h 不报");
+        let jump = T1.plus(25 * HOUR);
+        assert_eq!(b.clock_jump(jump), Some(25 * HOUR));
+        b.register_entry(jump, EntryNo(2)).unwrap();
+        assert_eq!(b.state().clock, jump);
+        assert_eq!(b.clock_jump(jump), None);
+        // 墙钟回到真实时间：视图仍按账本时间看，w 的检查早已过期。
+        let real = T1.plus(2 * MINUTE);
+        assert_eq!(b.due_checkpoints(real)[0].items, [w]);
+        // 已知风险（交 M4b）：按真实时间写的「30 分钟后再查」早于账本时间，被拒；要按账本时间写。
+        let next = |t: Ts| Report {
+            status: None,
+            next_check_at: Some(t),
+            note: "n".into(),
+        };
+        assert_eq!(
+            b.report(&Actor::worker("a"), real, w, next(real.plus(30 * MINUTE))),
+            Err(crate::book::Rejected::NextCheckNotFuture)
+        );
+        assert!(
+            b.report(&Actor::worker("a"), real, w, next(jump.plus(30 * MINUTE)))
+                .is_ok()
         );
     }
 }

@@ -394,7 +394,7 @@ fn run(seed: u64, steps: usize, wins: &mut BTreeMap<&'static str, usize>) {
             Ok(events) => {
                 *wins.entry(kind).or_default() += 1;
                 let after = b.state();
-                assert_eq!(check(after, b.config(), after.clock), Ok(()), "{ctx}");
+                assert_eq!(check(after), Ok(()), "{ctx}");
                 let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
                 let expect: Vec<u64> = (before.last_seq + 1..=after.last_seq).collect();
                 assert_eq!(seqs, expect, "{ctx}: 序号连续");
@@ -420,7 +420,7 @@ fn run(seed: u64, steps: usize, wins: &mut BTreeMap<&'static str, usize>) {
             let s = session(&mut r);
             let _ = b.on_idle(&s, now);
             let st = b.state();
-            assert_eq!(check(st, b.config(), st.clock), Ok(()), "{ctx}: on_idle");
+            assert_eq!(check(st), Ok(()), "{ctx}: on_idle");
         }
         exercise_views(&b, now);
     }

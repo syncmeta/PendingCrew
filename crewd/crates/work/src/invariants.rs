@@ -70,7 +70,9 @@ pub enum Violation {
     Cycle(Vec<WorkId>),
 }
 
-pub fn check(s: &BookState, cfg: &Config, now: Ts) -> Result<(), Violation> {
+/// 结构不变量（与时间无关）：每条命令改完后、`WorkBook::restore` 读回时都跑。检查时间的上限不在这里——
+/// 它只约束这一次写入的值（见 `check_written`），所以调低上限不会让旧账本读不回来。
+pub fn check(s: &BookState) -> Result<(), Violation> {
     if s.items
         .keys()
         .next_back()
@@ -79,7 +81,6 @@ pub fn check(s: &BookState, cfg: &Config, now: Ts) -> Result<(), Violation> {
     {
         return Err(Violation::CounterBehind);
     }
-    let horizon = now.plus(cfg.max_check_horizon_ms);
     for (key, it) in &s.items {
         let id = it.id;
         if *key != id {
@@ -140,13 +141,6 @@ pub fn check(s: &BookState, cfg: &Config, now: Ts) -> Result<(), Violation> {
                 if it.owner.is_none() || !matches!(it.status, Status::Open | Status::Active) =>
             {
                 return Err(Violation::CheckNotAllowed(id));
-            }
-            Some(at) if at > horizon => {
-                return Err(Violation::CheckTooFar {
-                    item: id,
-                    at,
-                    limit: horizon,
-                });
             }
             _ => {}
         }
@@ -226,6 +220,31 @@ pub fn check(s: &BookState, cfg: &Config, now: Ts) -> Result<(), Violation> {
     }
 }
 
+/// 检查上限（spec §4.2「nextCheckAt ≤ now + 上限」，写入时强制）：只看这一次命令**写入**的检查时间
+/// （新建项，或值和 `before` 里不同的项）。`now` 是命令的时间（max(调用方的 now, 账本时间)）。
+pub fn check_written(
+    before: &BookState,
+    after: &BookState,
+    cfg: &Config,
+    now: Ts,
+) -> Result<(), Violation> {
+    let limit = now.plus(cfg.max_check_horizon_ms);
+    for it in after.items.values() {
+        let Some(at) = it.next_check_at else { continue };
+        let unchanged = before
+            .items
+            .get(&it.id)
+            .is_some_and(|old| old.next_check_at == Some(at));
+        if !unchanged && at > limit {
+            return Err(Violation::CheckTooFar {
+                item: it.id,
+                at,
+                limit,
+            });
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,7 +321,7 @@ mod tests {
     }
 
     fn verdict(s: &BookState) -> Result<(), Violation> {
-        check(s, &Config::default(), NOW)
+        check(s)
     }
 
     #[test]
@@ -371,20 +390,34 @@ mod tests {
             Err(Violation::ActiveWithoutCheck(WorkId(1)))
         );
 
+        // 检查上限只管这一次写入的值（spec「写入时强制」）：存量值不按上限判，调低上限后读回不会失败。
         let mut far = owned(1, Status::Active);
         far.next_check_at = Some(NOW.plus(2 * crate::ids::HOUR + 1));
+        let stored = book(vec![far]);
+        assert_eq!(verdict(&stored), Ok(()), "存量的检查时间不按上限判");
+        let before = book(vec![owned(1, Status::Active)]);
+        let cfg = Config::default();
         assert_eq!(
-            verdict(&book(vec![far])),
+            check_written(&before, &stored, &cfg, NOW),
             Err(Violation::CheckTooFar {
                 item: WorkId(1),
                 at: NOW.plus(2 * crate::ids::HOUR + 1),
                 limit: NOW.plus(2 * crate::ids::HOUR),
             })
         );
+        assert_eq!(
+            check_written(&stored, &stored, &cfg, NOW),
+            Ok(()),
+            "这次没写的值不再判"
+        );
 
         let mut edge = owned(1, Status::Active);
         edge.next_check_at = Some(NOW.plus(2 * crate::ids::HOUR));
-        assert_eq!(verdict(&book(vec![edge])), Ok(()), "上限本身可以");
+        assert_eq!(
+            check_written(&before, &book(vec![edge]), &cfg, NOW),
+            Ok(()),
+            "上限本身可以"
+        );
 
         let mut early = owned(1, Status::Active);
         early.depends_on = vec![WorkId(2)];

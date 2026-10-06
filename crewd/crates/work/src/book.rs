@@ -58,6 +58,8 @@ pub struct WorkBook {
 pub(crate) struct Draft {
     pub(crate) s: BookState,
     pub(crate) now: Ts,
+    /// 调用方传进来的原始 now（只用于认出「现在就查」的占位）。
+    raw_now: Ts,
     pub(crate) by: Actor,
     events: Vec<EventKind>,
 }
@@ -71,9 +73,10 @@ impl WorkBook {
         }
     }
 
-    /// 从持久化读回（M4b）。整份跑一遍不变量，不合法就拒绝，不做任何修补。
-    pub fn restore(state: BookState, cfg: Config, now: Ts) -> Result<WorkBook, Violation> {
-        invariants::check(&state, &cfg, now.max(state.clock))?;
+    /// 从持久化读回（M4b）。整份跑一遍结构不变量，不合法就拒绝，不做任何修补。检查上限只管写入，
+    /// 所以调低 `max_check_horizon_ms` 后读回旧账本不会失败。
+    pub fn restore(state: BookState, cfg: Config) -> Result<WorkBook, Violation> {
+        invariants::check(&state)?;
         Ok(WorkBook {
             state,
             cfg,
@@ -99,6 +102,21 @@ impl WorkBook {
     pub fn entry(&self, no: EntryNo) -> Option<&EntryTodo> {
         self.state.entries.get(&no)
     }
+    /// 视图与命令共用的时间基准：max(调用方的 now, 账本见过的最晚时间)（裁定 10）。
+    pub(crate) fn view_now(&self, now: Ts) -> Ts {
+        now.max(self.state.clock)
+    }
+
+    /// 调用方的 `now` 比账本时间超前了多少（超过 `max_clock_jump_ms` 才返回）。
+    ///
+    /// 命令不因此被拒：账本时间是棘轮，下一条命令就跟到 `now`。风险（交 M4b）：若这是一次错误的前跳
+    /// （坏的 NTP 校时），墙钟回来后账本时间仍停在跳过去的位置，此后「下次检查」必须晚于那个时间、
+    /// 检查点与升级都按那个时间算。M4b 应在落库前调用它，超限就记日志 / 告警，必要时先不执行命令、交人确认。
+    pub fn clock_jump(&self, now: Ts) -> Option<i64> {
+        let ahead = now.since(self.state.clock);
+        (ahead > self.cfg.max_clock_jump_ms).then_some(ahead)
+    }
+
     /// 自上次 `take_log` 以来的全部事件（按序号）。
     pub fn log(&self) -> &[Event] {
         &self.log
@@ -114,11 +132,13 @@ impl WorkBook {
         now: Ts,
         f: impl FnOnce(&mut Draft) -> Result<T, Rejected>,
     ) -> Result<Applied<T>, Rejected> {
-        // 命令一律用 d.now（= max(now, clock)），不用调用方传进来的原值。
+        // 命令一律用 d.now（= max(now, clock)），不用调用方传进来的原值（占位「现在就查」见 insert_batch）。
+        let raw_now = now;
         let now = now.max(self.state.clock);
         let mut d = Draft {
             s: self.state.clone(),
             now,
+            raw_now,
             by: by.clone(),
             events: Vec::new(),
         };
@@ -144,7 +164,9 @@ impl WorkBook {
                 }
             }
         }
-        invariants::check(&d.s, &self.cfg, now).map_err(Rejected::Invariant)?;
+        invariants::check(&d.s).map_err(Rejected::Invariant)?;
+        invariants::check_written(&self.state, &d.s, &self.cfg, now)
+            .map_err(Rejected::Invariant)?;
         let mut events = Vec::with_capacity(d.events.len());
         for kind in d.events {
             d.s.last_seq += 1;
@@ -350,9 +372,13 @@ impl Draft {
                     },
                 )?;
             }
-            if n.next_check_at.is_some_and(|t| t < self.now) {
-                return Err(Rejected::NextCheckNotFuture);
-            }
+            // 检查时间不能早于账本时间；例外是占位「现在就查」（迁移 / 派活按调用方自己的 now 写 check_at(now)），
+            // 墙钟落后于账本时也照收，记成账本的「现在」。
+            let next_check_at = match n.next_check_at {
+                Some(t) if t < self.now && t == self.raw_now => Some(self.now),
+                Some(t) if t < self.now => return Err(Rejected::NextCheckNotFuture),
+                other => other,
+            };
             self.s.last_item += 1;
             let id = WorkId(self.s.last_item);
             let how = if self.by.session() == owner.as_ref() {
@@ -384,7 +410,7 @@ impl Draft {
                     owner_history,
                     status: Status::Open,
                     blocked_on: Vec::new(),
-                    next_check_at: n.next_check_at,
+                    next_check_at,
                     missed_checks: 0,
                     evidence: None,
                     drop_reason: None,
@@ -561,7 +587,7 @@ mod tests {
             evidence: None,
             at: T0,
         });
-        let mut closed = WorkBook::restore(state, Config::default(), T1).unwrap();
+        let mut closed = WorkBook::restore(state, Config::default()).unwrap();
         assert_eq!(
             closed.claim_entry(
                 &Actor::worker("a"),
@@ -741,7 +767,7 @@ mod tests {
         let json = serde_json::to_string(b.state()).unwrap();
         let state: BookState = serde_json::from_str(&json).unwrap();
         assert_eq!(&state, b.state(), "JSON 往返不丢字段");
-        let mut back = WorkBook::restore(state.clone(), Config::default(), T1).unwrap();
+        let mut back = WorkBook::restore(state.clone(), Config::default()).unwrap();
         let next = back
             .create_item(&Actor::worker("a"), T1, NewItem::titled("z"))
             .unwrap();
@@ -755,7 +781,7 @@ mod tests {
         let mut broken = state;
         broken.items.get_mut(&WorkId(1)).unwrap().status = Status::Active;
         assert_eq!(
-            WorkBook::restore(broken, Config::default(), T1).unwrap_err(),
+            WorkBook::restore(broken, Config::default()).unwrap_err(),
             Violation::ActiveWithoutCheck(WorkId(1))
         );
     }
@@ -810,7 +836,7 @@ mod tests {
         assert_eq!(got.events[0].at, T1, "按账本见过的最晚时间算");
         assert_eq!(b.item(got.value).unwrap().created_at, T1);
         assert_eq!(b.state().clock, T1);
-        assert!(WorkBook::restore(b.state().clone(), Config::default(), back).is_ok());
+        assert!(WorkBook::restore(b.state().clone(), Config::default()).is_ok());
     }
 
     #[test]
@@ -848,6 +874,47 @@ mod tests {
                 vec![NewItem::titled("x").owned_by("b")]
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn lowering_the_horizon_does_not_brick_restore() {
+        // 评审 P3：上限调低后，旧账本里排得比新上限远的检查时间照样读得回、照样能继续记账；
+        // 新写入的检查时间才按新上限判。
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["x", "y"]);
+        b.create_item(
+            &Actor::worker("a"),
+            T1,
+            NewItem::titled("z")
+                .owned_by("a")
+                .check_at(T1.plus(2 * HOUR)),
+        )
+        .unwrap();
+        let cfg = Config {
+            max_check_horizon_ms: HOUR,
+            ..Config::default()
+        };
+        let mut back = WorkBook::restore(b.state().clone(), cfg).unwrap();
+        assert!(
+            back.link_channel(&Actor::worker("a"), T1, ids[0], Some(ChannelId::new("ch")))
+                .is_ok(),
+            "不碰那一项的命令照常"
+        );
+        assert_eq!(
+            back.create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("w")
+                    .owned_by("a")
+                    .check_at(T1.plus(2 * HOUR))
+            ),
+            Err(Rejected::Invariant(Violation::CheckTooFar {
+                item: WorkId(4),
+                at: T1.plus(2 * HOUR),
+                limit: T1.plus(HOUR)
+            })),
+            "新写入的值按新上限"
         );
     }
 }
