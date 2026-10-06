@@ -8,6 +8,7 @@ pub mod graph;
 pub mod ids;
 pub mod invariants;
 pub mod model;
+pub mod owner;
 pub mod perm;
 pub mod progress;
 #[cfg(test)]
