@@ -4,6 +4,7 @@ pub mod client;
 pub mod decisions;
 pub mod diag;
 pub mod error;
+pub mod eval;
 pub mod jev;
 pub mod key;
 pub mod model;
