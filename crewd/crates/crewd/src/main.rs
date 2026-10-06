@@ -1,4 +1,6 @@
 //! crewd：PendingCrew 的跨平台后端。
+mod claude_cmd;
+
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use crewd_proto::{Request, ServerFrame};
@@ -34,6 +36,8 @@ enum Cmd {
     },
     /// 打印 API 契约
     Schema,
+    /// 前台起一个 claude 会话（M2b 验收 / 调试；会话事件打到 stdout）
+    Claude(claude_cmd::ClaudeArgs),
 }
 
 /// `--data-dir` / `CREWD_DATA_DIR`：与 PENDINGCREW_DATA_DIR 同规则——去首尾空白、展开 `~/`；
@@ -59,6 +63,9 @@ async fn main() {
         eprintln!("crewd: {e:#}");
         std::process::exit(1);
     }
+    // 不等 runtime 收尾：`crewd claude` 的 stdin 读取占着一条阻塞线程，终端上 Ctrl-C 之后
+    // runtime 的 drop 会一直等到用户再按一次回车。所有该清的账（锁、登记表）run() 里已经清完。
+    std::process::exit(0);
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -97,6 +104,7 @@ async fn run() -> anyhow::Result<()> {
             let result = call(&dir, method, params)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        Cmd::Claude(args) => claude_cmd::run(&dir, args.clone()).await?,
         Cmd::Schema => {
             println!(
                 "{}",
