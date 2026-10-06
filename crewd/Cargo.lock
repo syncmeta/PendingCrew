@@ -420,12 +420,15 @@ name = "crewd-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crewd-collab",
  "crewd-exec",
  "crewd-proto",
  "crewd-store",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "uuid",
 ]

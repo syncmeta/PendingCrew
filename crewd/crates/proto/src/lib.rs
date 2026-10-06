@@ -20,8 +20,32 @@ pub mod methods {
 }
 
 pub mod events {
-    /// `events.subscribe` 接受的主题；其他一律 -32602。
-    pub const TOPICS: &[&str] = &["whiteboard"];
+    /// `events.subscribe` 接受的主题（= 事件名第一个点之前的部分）；其他一律 -32602。
+    /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
+    /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
+    pub const TOPICS: &[&str] = &[
+        "message",
+        "channel",
+        "crew",
+        "badge",
+        "ask",
+        "approval",
+        "session",
+        "restart",
+        "wake",
+        "whiteboard",
+    ];
+    pub const MESSAGE_APPENDED: &str = "message.appended";
+    pub const CHANNEL_CHANGED: &str = "channel.changed";
+    pub const CREW_CHANGED: &str = "crew.changed";
+    pub const CREW_REMOVED: &str = "crew.removed";
+    pub const BADGE_CHANGED: &str = "badge.changed";
+    pub const ASK_CHANGED: &str = "ask.changed";
+    pub const APPROVAL_CHANGED: &str = "approval.changed";
+    /// `SessionLive`，M3c 发。
+    pub const SESSION_CHANGED: &str = "session.changed";
+    pub const RESTART_CHANGED: &str = "restart.changed";
+    /// 旧事件，Task 13 删。
     pub const WHITEBOARD_APPENDED: &str = "whiteboard.appended";
     /// 订阅者处理太慢、漏掉了事件；`data.missed` 是漏掉的条数，客户端应全量重拉。
     pub const LAGGED: &str = "events.lagged";

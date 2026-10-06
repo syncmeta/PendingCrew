@@ -6,13 +6,20 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+crewd-collab = { version = "0.1.0", path = "../collab" }
 crewd-exec = { version = "0.1.0", path = "../exec" }
 crewd-proto = { version = "0.1.0", path = "../proto" }
 crewd-store = { version = "0.1.0", path = "../store" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = "1.0.229"
 serde_json = "1.0.151"
+thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
 uuid = { version = "1.27.0", features = ["v4"] }
+
+[features]
+# M3b / M3c 的测试夹具（`FakeSessionControl` 本来就是 pub；夹具模块挂在这个特性下，给 crewd 的集成测试用）。
+testkit = []
 
 [dev-dependencies]
 tempfile = "3.27.0"

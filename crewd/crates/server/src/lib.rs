@@ -1,8 +1,12 @@
 //! crewd 服务端：Unix socket 上的 NDJSON RPC。
-mod conn;
+pub mod agent;
+pub(crate) mod conn;
+pub mod control;
 pub mod dispatch;
 pub mod hub;
 pub mod ledger;
+pub mod orchestra;
+pub mod token;
 
 use crewd_exec::registry::{ApplyOutcome, OrphanDecision, OrphanReport, ProcessRegistry};
 use crewd_store::{Db, Store};
@@ -15,6 +19,12 @@ use tokio::net::UnixListener;
 pub struct AppState {
     pub db: Db,
     pub hub: Hub,
+    pub sessions: Arc<dyn control::SessionControl>,
+    pub tokens: token::TokenTable,
+    /// M3b 的 agent 面运行时（配置、attach 表）。M3a 只放占位，M3b 换掉 `agent/runtime.rs` 的内容（G9）。
+    pub agent: agent::AgentRuntime,
+    /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
+    pub orchestra: std::sync::OnceLock<orchestra::Handle>,
 }
 
 impl AppState {
@@ -22,7 +32,34 @@ impl AppState {
         Self {
             db,
             hub: Hub::new(),
+            sessions: Arc::new(control::NoSessions),
+            tokens: token::TokenTable::default(),
+            agent: agent::AgentRuntime::default(),
+            orchestra: std::sync::OnceLock::new(),
         }
+    }
+
+    /// M3c 在 serve 启动段换上真实现。
+    pub fn with_sessions(mut self, s: Arc<dyn control::SessionControl>) -> Self {
+        self.sessions = s;
+        self
+    }
+
+    /// 写协作数据的唯一入口：库线程上跑 `collab::run`，提交后在同一线程上 `hub.emit`（事件顺序 = 提交顺序）。
+    pub async fn collab<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
+    ) -> crewd_collab::Result<T> {
+        let hub = self.hub.clone();
+        let now = crewd_store::now_ms();
+        self.db
+            .call(move |s| {
+                let (v, changes) = crewd_collab::run(s, now, f)?;
+                hub.emit(s.conn(), &changes);
+                Ok(v)
+            })
+            .await
+            .map_err(crewd_collab::CollabError::from)?
     }
 }
 
@@ -148,7 +185,75 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hub::CollabEvent;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn collab_commits_then_publishes_client_and_internal_events() {
+        use crewd_proto::{Crew, events};
+        let store = Store::open_in_memory().unwrap();
+        crewd_store::crews::upsert(
+            store.conn(),
+            &Crew {
+                id: "crew-a".into(),
+                title: "机组甲".into(),
+                created_at: "t".into(),
+                updated_at: "t".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        crewd_store::schema::backfill_v3(store.conn()).unwrap();
+        let state = AppState::new(crewd_store::Db::spawn(store).unwrap());
+        let mut client = state.hub.subscribe();
+        let mut internal = state.hub.subscribe_collab();
+        let m = state
+            .collab(|tx| {
+                crewd_collab::messages::post(
+                    tx,
+                    crewd_collab::Sender::Human,
+                    crewd_collab::messages::NewPost {
+                        channel_id: "crew-a/lobby".into(),
+                        text: "大家好".into(),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        let e1 = client.recv().await.unwrap();
+        assert_eq!(e1.event, events::MESSAGE_APPENDED);
+        assert_eq!(e1.data["seq"], m.message.seq);
+        assert_eq!(client.recv().await.unwrap().event, events::BADGE_CHANGED);
+        assert!(matches!(
+            internal.recv().await.unwrap(),
+            CollabEvent::MessageAppended { .. }
+        ));
+
+        let r: crewd_collab::Result<()> = state
+            .collab(|tx| {
+                crewd_collab::messages::post(
+                    tx,
+                    crewd_collab::Sender::Human,
+                    crewd_collab::messages::NewPost {
+                        channel_id: "crew-a/lobby".into(),
+                        text: "会回滚".into(),
+                        ..Default::default()
+                    },
+                )?;
+                Err(crewd_collab::CollabError::Invalid("中途失败".into()))
+            })
+            .await;
+        assert!(r.is_err());
+        assert!(
+            matches!(
+                client.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "回滚 = 不发事件"
+        );
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn hello_answers_while_a_slow_db_job_runs() {

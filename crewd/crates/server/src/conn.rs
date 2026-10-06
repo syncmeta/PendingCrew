@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 /// 一条连接：读一行请求 → 回一行响应；订阅的事件由独立任务推到同一个写通道。
-pub async fn run(state: Arc<AppState>, stream: UnixStream) -> anyhow::Result<()> {
+pub(crate) async fn run(state: Arc<AppState>, stream: UnixStream) -> anyhow::Result<()> {
     let (rd, mut wr) = stream.into_split();
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
     let writer = tokio::spawn(async move {
