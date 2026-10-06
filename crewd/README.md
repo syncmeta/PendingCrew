@@ -3,6 +3,7 @@
 PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md`。
 
 - 检查：`scripts/check.sh`
+- 终端核心：`crates/term`（alacritty_terminal 无头终端：读屏、claude 对话框/输入框识别、待决策跟踪、快照；纯计算，不起进程、不用 tokio）
 - 导入旧数据（只读源目录，只写新库）：`cargo run -p crewd -- import [--from DIR]`
 - 运行：`cargo run -p crewd -- serve`
 - 调用：`cargo run -p crewd -- rpc crew.list`

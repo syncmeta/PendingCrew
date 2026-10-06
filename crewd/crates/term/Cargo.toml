@@ -1,0 +1,8 @@
+[package]
+name = "crewd-term"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
