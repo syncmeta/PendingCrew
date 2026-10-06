@@ -172,6 +172,54 @@ impl WorkBook {
             Ok(d.release(Blocker::Human(ask)))
         })
     }
+
+    /// 撤回一条还开着的问（spec §22.2；提问者 / 机长 / 人）。还卡着活项的问不能撤——
+    /// 先让负责人改道（report 回 open / active 会清空卡点），否则那一项会卡在一条没人会答的问上。
+    pub fn withdraw_ask(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        ask: AskId,
+        reason: &str,
+    ) -> Result<Applied<()>, Rejected> {
+        let asker = self
+            .state
+            .asks
+            .get(&ask)
+            .and_then(|a| a.asked_by.session().cloned());
+        self.transact(by, now, |d| {
+            let now = d.now;
+            let a = d.s.asks.get(&ask).ok_or(Rejected::UnknownAsk(ask))?;
+            let open = a.state == AskState::Open;
+            d.permit(
+                Action::WithdrawAsk,
+                Ctx {
+                    asker: asker.as_ref(),
+                    ..Ctx::default()
+                },
+            )?;
+            let reason = reason.trim().to_string();
+            if reason.is_empty() {
+                return Err(Rejected::Blank("reason"));
+            }
+            if !open {
+                return Err(Rejected::AskNotOpen(ask));
+            }
+            let in_use =
+                d.s.items
+                    .values()
+                    .any(|it| it.status.is_live() && it.blocked_on.contains(&Blocker::Human(ask)));
+            if in_use {
+                return Err(Rejected::AskInUse(ask));
+            }
+            d.s.asks.get_mut(&ask).expect("checked above").state = AskState::Withdrawn {
+                reason: reason.clone(),
+                at: now,
+            };
+            d.emit(EventKind::AskWithdrawn { ask, reason });
+            Ok(())
+        })
+    }
 }
 
 impl Draft {
@@ -265,6 +313,7 @@ mod tests {
     use crate::ids::{EntryNo, HOUR};
     use crate::invariants::Violation;
     use crate::model::ItemRef;
+    use crate::progress::{Progress, Report};
     use crate::testkit::*;
 
     fn ask(q: &str) -> BlockOn {
@@ -794,5 +843,117 @@ mod tests {
             Err(Rejected::Invalid("a default option needs a positive delay"))
         );
         assert_eq!(b.state().last_ask, 3, "被拒的不消耗 H 号");
+    }
+
+    #[test]
+    fn withdraw_ask_closes_a_standalone_question() {
+        let mut b = book();
+        let h = b
+            .open_ask(&Actor::worker("w"), T1, "发版窗口定在周几？", None, None)
+            .unwrap()
+            .value;
+        let r = b
+            .withdraw_ask(&Actor::worker("w"), T1, h, "已经自己查到了")
+            .unwrap();
+        assert_eq!(kinds(&r.events), ["ask_withdrawn"]);
+        assert!(matches!(
+            b.ask(h).unwrap().state,
+            AskState::Withdrawn { ref reason, .. } if reason == "已经自己查到了"
+        ));
+        assert!(b.human_waits(T1).is_empty(), "撤回的问不再进人的清单");
+        assert_eq!(
+            b.answer_ask(&Actor::Human, T1, h, "周三").unwrap_err(),
+            Rejected::AskNotOpen(h)
+        );
+        assert_eq!(
+            b.withdraw_ask(&Actor::worker("w"), T1, h, "再撤一次")
+                .unwrap_err(),
+            Rejected::AskNotOpen(h)
+        );
+    }
+
+    #[test]
+    fn only_the_asker_the_captain_or_the_human_may_withdraw() {
+        let mut b = book();
+        let h = b
+            .open_ask(&Actor::worker("w"), T1, "要不要升级依赖？", None, None)
+            .unwrap()
+            .value;
+        assert_eq!(
+            b.withdraw_ask(&Actor::worker("x"), T1, h, "不是我的问")
+                .unwrap_err(),
+            Rejected::Forbidden(Action::WithdrawAsk)
+        );
+        assert_eq!(
+            b.withdraw_ask(&Actor::System, T1, h, "调度层不撤")
+                .unwrap_err(),
+            Rejected::Forbidden(Action::WithdrawAsk)
+        );
+        b.withdraw_ask(&Actor::captain("c"), T1, h, "机长撤")
+            .unwrap();
+        let h2 = b
+            .open_ask(&Actor::worker("w"), T1, "第二个问题？", None, None)
+            .unwrap()
+            .value;
+        b.withdraw_ask(&Actor::Human, T1, h2, "人撤").unwrap();
+    }
+
+    #[test]
+    fn an_ask_that_still_blocks_a_live_item_cannot_be_withdrawn() {
+        let mut b = book();
+        let w = claim(&mut b, "w", &["接入支付"])[0];
+        let r = b
+            .block(
+                &Actor::worker("w"),
+                T1,
+                w,
+                vec![BlockOn::NewAsk {
+                    question: "用哪家支付？".into(),
+                    default: None,
+                }],
+                Continuation::Nothing,
+            )
+            .unwrap();
+        let h = r.value.asks[0];
+        let before = b.state().clone();
+        assert_eq!(
+            b.withdraw_ask(&Actor::worker("w"), T1, h, "不问了")
+                .unwrap_err(),
+            Rejected::AskInUse(h)
+        );
+        assert_eq!(b.state(), &before, "被拒 = 原样不动");
+        // 负责人不等了（report 回 active 会清空卡点），之后可以撤。
+        b.report(
+            &Actor::worker("w"),
+            T1,
+            w,
+            Report {
+                status: Some(Progress::Active),
+                next_check_at: Some(T1.plus(HOUR)),
+                note: "先用默认的".into(),
+            },
+        )
+        .unwrap();
+        b.withdraw_ask(&Actor::worker("w"), T1, h, "不问了")
+            .unwrap();
+    }
+
+    #[test]
+    fn withdrawing_needs_a_reason_and_an_existing_ask() {
+        let mut b = book();
+        assert_eq!(
+            b.withdraw_ask(&Actor::Human, T1, AskId(9), "x")
+                .unwrap_err(),
+            Rejected::UnknownAsk(AskId(9))
+        );
+        let h = b
+            .open_ask(&Actor::worker("w"), T1, "问题？", None, None)
+            .unwrap()
+            .value;
+        assert_eq!(
+            b.withdraw_ask(&Actor::worker("w"), T1, h, "  ")
+                .unwrap_err(),
+            Rejected::Blank("reason")
+        );
     }
 }

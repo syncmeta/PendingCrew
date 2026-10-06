@@ -36,6 +36,8 @@ pub enum Rejected {
     AskNotOpen(AskId),
     NoDefault(AskId),
     DefaultNotDue(AskId),
+    /// 这条问还卡着活项。
+    AskInUse(AskId),
     Invalid(&'static str),
     Invariant(Violation),
 }
@@ -64,6 +66,7 @@ impl std::fmt::Display for Rejected {
             Rejected::AskNotOpen(h) => write!(f, "{h} is no longer open"),
             Rejected::NoDefault(h) => write!(f, "{h} has no default option"),
             Rejected::DefaultNotDue(h) => write!(f, "{h}'s default option is not due yet"),
+            Rejected::AskInUse(h) => write!(f, "{h} still blocks a live item"),
             Rejected::Invalid(why) => f.write_str(why),
             Rejected::Invariant(v) => write!(f, "invariant violated: {v}"),
         }
@@ -361,6 +364,7 @@ impl Draft {
                 transfer_to: it.pending_transfer.as_ref().map(|t| &t.to),
                 assignee: None,
                 creator: it.created_by.as_ref(),
+                asker: None,
             },
         )
     }

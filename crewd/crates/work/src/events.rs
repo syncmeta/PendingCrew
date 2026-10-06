@@ -61,6 +61,10 @@ pub enum EventKind {
         ask: AskId,
         text: String,
     },
+    AskWithdrawn {
+        ask: AskId,
+        reason: String,
+    },
     /// 某项的一个卡点消失了（人回复了 / 默认方案到点 / 卡它的项完成了）。
     /// `owner` 要被直接叫醒（spec §5「人回复」），不论这一项是否还卡在别处。
     BlockerCleared {

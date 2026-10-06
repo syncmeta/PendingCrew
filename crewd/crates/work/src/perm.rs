@@ -30,6 +30,8 @@ pub enum Action {
     OpenAsk,
     AnswerAsk,
     ApplyDefault,
+    /// 撤回一条还开着的问（ctx.asker = 提问的 session）。
+    WithdrawAsk,
     RecordWake,
     NoteEscalation,
     CloseEntryDecision,
@@ -37,7 +39,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 23] = [
         Action::ClaimEntry,
         Action::CreateItem,
         Action::CreateChild,
@@ -56,6 +58,7 @@ impl Action {
         Action::OpenAsk,
         Action::AnswerAsk,
         Action::ApplyDefault,
+        Action::WithdrawAsk,
         Action::RecordWake,
         Action::NoteEscalation,
         Action::CloseEntryDecision,
@@ -90,6 +93,8 @@ pub struct Ctx<'a> {
     pub assignee: Option<&'a SessionId>,
     /// 建这一项的 session（无主的 request_help 项可由它撤回）。
     pub creator: Option<&'a SessionId>,
+    /// 提这条问的 session（撤回 H 号用）。
+    pub asker: Option<&'a SessionId>,
 }
 
 pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
@@ -118,6 +123,7 @@ pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
                 TransferAccept => ctx.transfer_to == Some(id),
                 TransferWithdraw => owns || ctx.transfer_to == Some(id) || *role == Role::Captain,
                 OpenAsk => true,
+                WithdrawAsk => *role == Role::Captain || ctx.asker == Some(id),
                 AnswerAsk | ApplyDefault | RecordWake | NoteEscalation => false,
                 _ => match role {
                     Role::Captain => true,
@@ -360,5 +366,20 @@ mod tests {
             ..Ctx::default()
         };
         assert!(!allowed(&Actor::worker("w"), DropDecision, taken));
+    }
+
+    #[test]
+    fn withdraw_ask_is_for_the_asker_captain_and_human() {
+        let me = sid("w");
+        let mine = Ctx {
+            asker: Some(&me),
+            ..Ctx::default()
+        };
+        assert!(allowed(&Actor::worker("w"), WithdrawAsk, mine));
+        assert!(!allowed(&Actor::worker("x"), WithdrawAsk, mine));
+        assert!(!allowed(&Actor::admin("a"), WithdrawAsk, Ctx::default()));
+        assert!(allowed(&Actor::captain("c"), WithdrawAsk, Ctx::default()));
+        assert!(allowed(&Actor::Human, WithdrawAsk, Ctx::default()));
+        assert!(!allowed(&Actor::System, WithdrawAsk, Ctx::default()));
     }
 }

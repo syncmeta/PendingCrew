@@ -236,8 +236,18 @@ pub struct DefaultOption {
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum AskState {
     Open,
-    Answered { text: String, at: Ts },
-    Defaulted { at: Ts },
+    Answered {
+        text: String,
+        at: Ts,
+    },
+    Defaulted {
+        at: Ts,
+    },
+    /// 提问者 / 机长 / 人撤回了（问没被回答就不要了）。
+    Withdrawn {
+        reason: String,
+        at: Ts,
+    },
 }
 
 /// 等人的升级档（spec §6：24h 置顶、72h 问「还要吗」）。
