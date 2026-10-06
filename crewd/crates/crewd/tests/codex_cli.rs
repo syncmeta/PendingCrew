@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crewd_proto::{Crew, Session};
+use crewd_proto::{Crew, Role, Session};
 use crewd_store::{Store, crews, sessions};
 
 const FAKE_APP_SERVER: &str = r#"#!/bin/sh
@@ -41,6 +41,7 @@ fn seed(data: &Path, executor: &str) {
             hidden_at: None,
             created_at: "2026-10-01T00:00:00.000Z".into(),
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         },
         None,
     )
@@ -50,7 +51,7 @@ fn seed(data: &Path, executor: &str) {
         &Session {
             id: "w-1".into(),
             crew_id: "c".into(),
-            role: "worker".into(),
+            role: Role::Worker,
             executor: executor.into(),
             agent_session_id: None,
             display_name: None,
@@ -58,6 +59,7 @@ fn seed(data: &Path, executor: &str) {
             model: None,
             effort: None,
             updated_at: "2026-10-01T00:00:00.000Z".into(),
+            ..Default::default()
         },
         None,
     )
