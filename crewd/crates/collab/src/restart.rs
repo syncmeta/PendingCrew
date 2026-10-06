@@ -94,7 +94,11 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
             text.push('\n');
             text.push_str(&prompts::fill(
                 f.get("notice.restart.item"),
-                &[("name", &sessions::display_name(tx.conn(), sid)?)],
+                // 名字同注入面一样过 `safe_name`（终审复审 5）。
+                &[(
+                    "name",
+                    &crate::render::safe_name(&sessions::display_name(tx.conn(), sid)?),
+                )],
             ));
         }
         messages::announce_to_human(tx, &root, Sender::System, text, "restart")?;
