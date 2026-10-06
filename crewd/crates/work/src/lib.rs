@@ -14,3 +14,4 @@ pub mod progress;
 #[cfg(test)]
 mod testkit;
 pub mod views;
+pub mod watch;
