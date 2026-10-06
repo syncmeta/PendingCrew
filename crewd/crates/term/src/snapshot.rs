@@ -184,9 +184,12 @@ impl Screen {
         if mode.contains(TermMode::LINE_FEED_NEW_LINE) {
             out.raw("\x1b[20h");
         }
-        if !cursor.visible {
-            out.raw("\x1b[?25l");
-        }
+        // 显隐一律显式写（SwiftTerm 的 RIS 不复位 cursorHidden）。
+        out.raw(if cursor.visible {
+            "\x1b[?25h"
+        } else {
+            "\x1b[?25l"
+        });
 
         // 6. 当前画笔：快照之后程序接着写的字要跟原来一个颜色。
         out.set_pen(&Pen::of(&grid.cursor.template));
@@ -230,6 +233,8 @@ impl Encoder {
         if continuation && end == 0 {
             end = 1;
         }
+        // 终端光标在本行的列：和源格子的列对不上时（宽字符后半被擦/删）补 CHA 对齐。
+        let mut cur = 0usize;
         for col in 0..end {
             let cell = &row[Column(col)];
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -243,6 +248,9 @@ impl Encoder {
             {
                 continue;
             }
+            if cur != col {
+                self.raw(&format!("\x1b[{}G", col + 1));
+            }
             if cell.c == '\t' {
                 // 制表符在 alacritty 里存成格子里的 '\t'（空白格上才会写）。先按属性写个
                 // 空格，回到这一格补一个 HT 让它记成 '\t'，再把光标挪回下一格。
@@ -251,9 +259,38 @@ impl Encoder {
                 if col + 1 < cols {
                     self.raw(&format!("\x1b[{}G", col + 2));
                 }
+                cur = col + 1;
                 continue;
             }
             self.cell(cell);
+            cur = col + 1;
+            if cell.flags.contains(Flags::WIDE_CHAR) {
+                cur = col + 2;
+                if col + 1 < cols && !row[Column(col + 1)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    // 宽字符的后半格被 ECH/DCH 动过：写宽字符会自带一个后半格，得把它擦回去
+                    // （直接往上写会连宽字符一起清掉）。擦除要用默认底色，后面该写的格子自己会写。
+                    self.default_background();
+                    self.raw(&format!("\x1b[{}G\x1b[X", col + 2));
+                    cur = col + 1;
+                }
+            }
+        }
+        if continuation && end < cols {
+            // 续行第一格触发的折行上滚会把整行填成那一格的底色：行尾没写到的格子擦回默认。
+            self.default_background();
+            self.raw("\x1b[K");
+        }
+        // 行尾关掉超链接：下一行（或下一次折行）再按需重开。
+        if self.pen.link.is_some() {
+            self.raw("\x1b]8;;\x1b\\");
+            self.pen.link = None;
+        }
+    }
+
+    fn default_background(&mut self) {
+        if self.pen.bg != Color::Named(NamedColor::Background) {
+            self.raw("\x1b[49m");
+            self.pen.bg = Color::Named(NamedColor::Background);
         }
     }
 
@@ -285,6 +322,10 @@ impl Encoder {
         if pen.link != self.pen.link {
             match &pen.link {
                 Some(link) => {
+                    if self.pen.link.is_some() {
+                        // SwiftTerm 只在关闭时才应用链接、且新开会顶掉未关的：先显式关。
+                        self.raw("\x1b]8;;\x1b\\");
+                    }
                     let osc = format!("\x1b]8;id={};{}\x1b\\", link.id(), link.uri());
                     self.raw(&osc);
                 }
@@ -583,5 +624,66 @@ pub(crate) mod tests {
         let before = s.snapshot();
         let again = s.snapshot();
         assert_eq!(before, again);
+    }
+
+    fn text_of(s: &Screen) -> String {
+        String::from_utf8_lossy(&s.snapshot().bytes).into_owned()
+    }
+
+    #[test]
+    fn wrap_scroll_during_replay_does_not_bleed_the_trigger_background() {
+        // 回放到屏底时，续行的第一格触发折行上滚；新行会被触发格的底色（BCE）填满。
+        let mut bytes = String::new();
+        for n in 0..40 {
+            bytes.push_str(&format!("line {n}\r\n"));
+        }
+        bytes.push_str("\x1b[10;1H");
+        bytes.push_str(&"x".repeat(80));
+        bytes.push_str("\x1b[41m z\x1b[0m");
+        assert_round_trip(&fed(80, 25, bytes.as_bytes()), "折行上滚不带底色");
+    }
+
+    #[test]
+    fn wide_char_whose_spacer_was_erased_does_not_shift_the_row() {
+        assert_round_trip(
+            &fed(80, 25, "中abc\x1b[2G\x1b[P".as_bytes()),
+            "宽字符后半被 DCH 删掉",
+        );
+        assert_round_trip(
+            &fed(80, 25, "中abc\x1b[2G\x1b[X".as_bytes()),
+            "宽字符后半被 ECH 擦掉",
+        );
+        assert_round_trip(
+            &fed(80, 25, "x中\x1b[41m\x1b[3G\x1b[X".as_bytes()),
+            "擦掉后半且带底色，行尾",
+        );
+    }
+
+    #[test]
+    fn cursor_visibility_is_always_explicit() {
+        assert!(text_of(&fed(80, 25, b"hi")).contains("\x1b[?25h"));
+        let hidden = text_of(&fed(80, 25, b"hi\x1b[?25l"));
+        assert!(hidden.contains("\x1b[?25l"));
+        assert!(!hidden.contains("\x1b[?25h"));
+        assert_round_trip(&fed(80, 25, b"hi\x1b[?25l"), "隐藏光标");
+    }
+
+    #[test]
+    fn hyperlinks_are_closed_before_switching_and_at_row_end() {
+        let s = fed(
+            80,
+            25,
+            b"\x1b]8;id=a;https://a\x1b\\A\x1b]8;id=b;https://b\x1b\\B\x1b]8;;\x1b\\",
+        );
+        let text = text_of(&s);
+        assert!(
+            text.contains("\x1b]8;;\x1b\\\x1b]8;id=b;https://b"),
+            "{text:?}"
+        );
+        assert_round_trip(&s, "切换超链接");
+        let s = fed(80, 25, b"\x1b]8;id=a;https://a\x1b\\link\r\nnext");
+        let text = text_of(&s);
+        assert!(text.contains("link\x1b]8;;\x1b\\\r\n"), "{text:?}");
+        assert_round_trip(&s, "行尾关闭超链接");
     }
 }
