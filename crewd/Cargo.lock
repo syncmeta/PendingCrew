@@ -252,6 +252,7 @@ dependencies = [
 name = "crewd-exec"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "crewd-term",
  "libc",
  "rustix",

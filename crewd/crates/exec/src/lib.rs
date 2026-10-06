@@ -2,5 +2,6 @@
 //! 其余部分只经 `driver::SessionHandle` 这一个窄接口与它交互（spec §13 Q12）。
 pub mod delivery;
 pub mod env;
+pub mod health;
 pub mod launch;
 pub mod pty;
