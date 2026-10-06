@@ -732,7 +732,8 @@ idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺
 | `worldview::render(&WorldCtx) -> String`、`turn_trace::on_turn_end(tx, session, prompt_id, last_text) -> TurnEnd`（5 个值）的签名 | `crewd-collab`（M3a 先放 stub） | M3b 实现 | M3c 调 |
 
 文件归属（M3a 先合 main，之后不改 M3a 的文件）：
-- M3b：`crates/crewd/src/{mcp_cmd,hook_cmd,agent_client}.rs`、`server/src/agent/**`（替换 M3a 的占位）、`server/src/conn.rs` 的 agent 路由、`server/Cargo.toml` 的 `testkit` 特性、`collab/src/{worldview,turn_trace}.rs`、`collab/prompts/{world-model,tools}.*`、`exec/src/launch.rs`、`proto/src/agent.rs`。
+- M3a：`server/Cargo.toml` 的 `testkit` 特性（控制者裁定 C6 的 G11，M3a 已建；M3b / M3c 只用、不改）。
+- M3b：`crates/crewd/src/{mcp_cmd,hook_cmd,agent_client}.rs`、`server/src/agent/**`（替换 M3a 的占位）、`server/src/conn.rs` 的 agent 路由、`collab/src/{worldview,turn_trace}.rs`、`collab/prompts/{world-model,tools}.*`、`exec/src/launch.rs`、`proto/src/agent.rs`。
 - M3c：`crates/wake/`、`server/src/orchestra/**`（替换 M3a 的占位）、`server/src/dispatch.rs` 一行、`server/src/lib.rs` 的 serve 启动段、`proto/src/orchestra.rs`、`crates/crewd/tests/e2e.rs`。
 - 共享、各改不相交段，**后合者**保留两边并重新生成（不挑边，pbxproj 的教训）：`proto/src/lib.rs`、`crates/crewd/src/main.rs`、`Cargo.toml` / `Cargo.lock`、契约 json；`orchestra/exec_claude.rs::comms_for` 由后合者对上 `CommsSpec` 的形状。
 
@@ -769,3 +770,40 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - **C8 `start_session` 保留 Swift 的 `isolation`**（必填 bool，机长逐次定，取代 C5 里「`worktree` = 已存在目录」）：`true` = M3c 的会话管理器在机组工作目录里新建 git worktree（位置、分支名、slug 照 Swift，见 §22.4），记进 `sessions.worktree`，session 在那里起；`false` = 机组共享目录；建失败 = start 失败并带原因、不写行、不起进程、不退回共享目录；crewd 永不删 worktree（删除是人的动作）。落点：M3a `StartRequest.isolation` 与列注释，M3b `start_session` 工具，M3c `orchestra/worktree.rs` + `Core::start_new`。测试一律用临时 git 仓库（合成），不碰真仓库。
 - **C9 一次性放行票的范围 = (session, tool)**（照原计划，对 C2 的补记）：人同意一条审批 = 只放行「同一个 session 的下一次同名工具调用」，不跨 session、不按工具名全局放行。
 - **C10 审批仍是独立的表 / 清单，客户端「等你拍板」视图把 ask 与 approval 合并显示**（红标、侧栏顶层）：合并在客户端做；M3a 的 `Ask`（`crewId`、`askedAt`）与 `Approval`（`crewId`、`requestedAt`）都带机组与创建时间，人类群 = `<根机组>/human`（`crew.list` 的父链推得），`ask.changed` / `approval.changed` 负载就是整条，足够客户端合并、排序、计徽标；不把审批并进 `ask.list`（H 号只给工作卡点，C2）。
+
+## 23. M3a 交付记录与遗留（计划 `docs/superpowers/plans/2026-10-06-crewd-m3a-data-and-api.md`，分支 crewd-m3a）
+
+已交付：schema v3 + v2→v3 迁移（一个事务；seq 高水位、sender / mention / role 词表归一且认不出即中止、大厅回填、游标钉末尾、机长指针、分机号、机组号计数器、旧的无 target @机长 一次性落成迁移时的机长）；Db actor（专用线程）；crewd-collab（channels / messages / cursors / listens / crews（DAG、编号、`reorder`）/ sessions（`note_progress`）/ directory / asks / approvals / todos / wakes + latches / restart / settings / render + prompts，worldview 与 turn_trace 为签名桩）；`Hub` 内部事件通道与 `AppState::collab`（库线程上提交后按序发布）、`SessionControl` + `FakeSessionControl` + `NoSessions`、`TokenTable`、feature `testkit`；客户端 RPC 32 个方法（system.hello、crew.{list,get,create,update,adopt,reorder,release,delete}、channel.{list,create,update,addMembers,removeMember,watch,setOwner}、message.{list,post,search}、read.mark、session.{list,get}、ask.{list,answer,withdraw}、approval.{list,decide}、restart.{pending,answer}、directory.list、todo.list、events.subscribe）与 10 个事件，删 `whiteboard.*`；契约 v2（`API_VERSION` 2、单一 `$defs`、类型化方法 / 事件表、`Event` 与 `ServerFrame` 判别 oneOf、topics 枚举、`$schema` 2020-12）；`crewd rpc` 端到端驱动全部客户端方法。
+
+真实数据只读演练（副本，2026-10-06；只记计数）：
+- 做法：源目录只读复制到会话 scratchpad；v2 crewd（M3a 开工前的 083398c）导入副本；迁移由一个只调 `crewd_store::Store::open` 的临时程序触发（与 serve 启动时开库是同一个调用），**没跑 serve / hello**（真实数据规则：不在真实数据上起 serve，副本也算）；也没在 crew 群里预告（只读计数，不往人的 app 里发东西）。副本与产出在记下计数后删除。
+- v2 导入：62 机组 / 1014 session / 367066 消息（seq 高水位 367066）；导入报告 skipped 0、warnings 0。
+- M3a 迁移后：`user_version` 3；消息 367066 条，seq 集合与迁移前 diff 为空，高水位 367066；大厅 62 = 机组 62；session 大厅未读 0、人类未读群 0、唤醒 0、外键不成立 0、`integrity_check` ok；sender 归一 user 1412 → human、pendingcrew 348932 → system，captain 8105 / session 8617 不变；mention 全在词表内（broadcast 934 / captain 4273 / human 3029 / session 1646）；无 target 的 @机长 4268 → 0（全部落成当时的机长）；游标 1076 行、`nextCrewNumber` 62。
+- 再开一次：channels 62 / read_cursors 1076 / nextCrewNumber 62 等十项读数逐项相等，整库 `.dump` 的哈希相同。
+- v3 直接导入：报告计数与 v2 导入逐项相同（skipped 0、warnings 0、无 `messagesWithUnknownSender` / `messagesWithUnknownMention`）；同一组 SQL 全 0；19 张表的行数与迁移出的库逐表相同。
+- 认不出的 sender / mention / role：无。
+
+与 spec 原文不同 / 补充的决定（理由见计划「裁定」与本节的控制者裁定）：
+- 计划裁定：`CollabEvent` 类型放在 collab（裁定 3）；v3 补列 `crews.captain_session_id` / `next_ext` / `position`、`sessions.ext` / `last_output_at` / `last_progress_at`、`approvals.consumed_at`、`meta.nextCrewNumber`、`restart_prompts` 表、`channels.owner_*` / `pending_owner_*`（裁定 8、§22.7）；`wake_latches.scope` 为 `edge|session`（§22.7 Q5）；ask_answer 的 source 带机组（裁定 13）；`SessionControl` 多 `resume` / `handoff_captain`（裁定 15）；队列与 session 生命周期的写函数全在 collab（裁定 16）；`ask.answer` 的回调点 = `Change::AskAnswered{cleared}`（裁定 17）；附件上传未实现（裁定 14）；审批不阻塞、一次性放行票 `approvals::gate`（C2）；产出信号 `note_progress` + `Change::Progress`，发言不算（C3）；补给 M3b / M3c 的口（C6）。
+- R9：迁移有意从 `extra` 里解析两个键（`$.titleSource`、`$.member.extensionNumber`），违背 §22.2「extra 不解析」，否则丢数据；其余不解析。
+- C1 按父边排序：次序存在 `crew_parents.position`（每条父边一份，多父机组在每个父下各有次序），线上 `Crew.childIds` 是该父下的有序子列表；`crews.position` 只管根层；`crew.reorder {parentId?, crewIds}` 一次排一层。
+- R6 一个窗口规则：`unread_for` 与 `build_batch` 每群都取**最旧**的至多 200 条；游标只推进到实际投递的最大 seq。`WakeBatch.deferred`（窗口外的排队行，留待下一批）+ `cursor_targets()`（每群推进到哪）；开头一段对该 session 不可投递的消息自动越过，不会永久卡住。
+- 帧伪造中和：渲染时正文续行缩进、名字压成一行，消息正文冒充不了注入帧的头（人 / 系统）。
+- 群规则补充：R1 根机组人类群由第一条发言建；R10 dm 归发起方 session 的机组；session 只能往自己树内的根人类群发（跨树走 C7 的 System）；正文上限 256 KiB、纯零宽正文拒收、保留 category（ask / approval / restart）只经 `post_internal`；内建总机组也有自己的人类群；R3 role 词表含 admin（M3 无行政行为）。
+- 问 / 审批 / 重启：新的重启询问取代全部未决的旧询问（各发一条 `restart.changed`）；撤回限提问者、问所在机组的机长与人（祖先机组的机长不行）；`apply_due_defaults` 也发 `AskAnswered{cleared}`；叫提问者回退链 提问者 → 机组机长 → 根机长；`with_book` 不改账本的命令不写库。
+- 错误码：-32602 参数错（含数组参数、未知字段）；-32004 不存在（含未知 H 号，R11；`crew.release` 的未知父边）；-32009 状态冲突（问已不开放、转让进行中 / 没有、条目已关、终态、问被占用、审批重复裁决——Mac 与 iOS 同时答同一个问看到的是「已答」）；-32603 内部错（`Rejected::Invariant`；不把 SQL 文本给客户端）。
+- 严格参数类型：嵌套在参数里的 @ / 附件 / 成员用 `MentionParam` / `AttachmentParam` / `MemberParam`（`deny_unknown_fields`，经 `From` 转模型类型）；模型类型对库里读出的行保持宽松；两边的形状由漂移测试钉住。R11：解析器收 `null` 的参数在契约里写成 `object | null`。`Response` 线上为 `{id, outcome}`，调用方用 `into_result()`。
+- 迁移外键不成立时的报错列出每个 (表, 父表) 与至多 5 个 rowid；store 的字符串词表（`normalize_sender_kind`、`MENTION_KINDS`、迁移 SQL）与 proto 的封闭枚举由测试钉住。
+
+遗留：
+- `worldview::render` 是空串（M3b 实现；M3 集成验收必须核世界观非空）。
+- 默认方案到点的 `asks::apply_due_defaults` 由 M3c 的定时拍调（C7，M3a 只提供函数）。
+- 语言没有设置 RPC（R13），只能写 `meta.locale`（`collab::settings::set_locale`），缺省 zh。
+- `message.search` 是全表 `instr(lower(..))` 扫描，只折 ASCII 大小写（量大再加 FTS）。
+- `channel.list` 经 `channels::list_for_crew` 懒建人类群，有写副作用，所以走写路径。
+- 小项：Db 线程在 serve 关闭时没被 join（关闭次序归 M3c）；`register(Admin)` 不分分机号、不进通讯录；`with_book` 每条命令克隆一次状态；熔断台账的 set / clear 不发 Change；`Crew.titleSource` / `Todo.status` 仍是自由字符串（旧数据）；`crews::delete` 后变成根的孤儿机组，其归档的人类群到下次 `ensure_human_channel` 才解档。
+
+给 M3b / M3c 的跨计划注意（执行前要并进各自计划）：
+- M3c：排队的 `deferred` 行留着不动、绝不 `mark_dropped`；游标只推进到 `cursor_targets()`（不是排队的最大 seq），`Inflight` 带着它、`on_delivery` 用它；只有积压、`wake_ids` 为空的批也要投；`render_fitted` 不含 deferred；`UNREAD_CAP` 按群计、各群游标独立推进；`build_batch` 报错（账本坏）是 fail-loud，不能紧循环重试；游标后面的排队行会重渲已读消息，先过滤；显式 @机长 + 回复机长会得到 `Captain(x)` + `Session(x)` 两条 mention，同一条消息每个 session 只叫一次；latches 的 get / clear / list 遇坏 id / 坏行回 `Invalid`，启动要处理；`reset_inflight` 至少一次、只在启动时调；serve 关闭次序 = 停止接入 → 收完 / 中止连接任务 → 丢 `AppState` → join Db 线程（`Db` 要有 JoinHandle）；`CollabEvent` 落后（Lagged）时从库重推状态（`restart::pending`、问的 cleared），不只重排未读；停 session 时 `TokenTable::revoke`；`orchestra::schema_entries` 用共享的 `SchemaGenerator`，要么自成一节要么扩 `schema_lists_exactly_the_client_methods`；`blocks_for` / `build_batch` 要传 `Locale`。
+- M3b：调用点改 `Response::into_result()`；`agent::schema()` 用共享的 `SchemaGenerator`（`sub::<T>(g)`）后再 `take_definitions`，不嵌套 `$defs`；`blocks_for` / `build_batch` 传 `Locale`。
+- M2c → M3c：`driver::with_untrusted_context` 需要同样的帧伪造中和（转义闭合标签 / 校验键）后才能塞队友文字；`ClaudeSpec` 没有 `initial_context`；codex 的 Notice 拒绝要按 MCP server 报；`CommsSpec` / `mcp_args_for` 用 M2c 合进 main 的接口。
