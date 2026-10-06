@@ -2,6 +2,10 @@
 //! 同步、不碰 tokio、不读时钟：每个写操作是 `fn(&mut Tx, ..) -> Result<T>`，时间是 `Tx` 里调用方给的
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
+pub mod crews;
+pub mod cursors;
+pub mod directory;
+pub mod sessions;
 pub mod settings;
 #[cfg(test)]
 mod testkit;

@@ -1,0 +1,410 @@
+//! session 行：注册（分机号）与 M3c / M3b 要写的生命周期字段（裁定 16）。
+use crate::{Change, CollabError, Result, Tx, crews, cursors};
+use crewd_proto::{Desired, Role, Session};
+use rusqlite::{Connection, params};
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewSession {
+    pub crew_id: String,
+    pub role: Role,
+    /// "claude" | "codex" | "acp:<registry-id>"（spec §16）。
+    pub executor: String,
+    pub title: Option<String>,
+    pub brief: Option<String>,
+    pub display_name: Option<String>,
+    /// 缺省 = 机组的工作目录。
+    pub working_directory: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// C8：M3c 建好 worktree 后把绝对路径放这里再 `register`；`None` = 共享机组目录。
+    pub worktree: Option<String>,
+}
+
+pub fn valid_executor(e: &str) -> bool {
+    e == "claude"
+        || e == "codex"
+        || e.strip_prefix("acp:").is_some_and(|id| {
+            !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+                && !id.contains("..")
+        })
+}
+
+pub fn get(conn: &Connection, id: &str) -> Result<Session> {
+    crewd_store::sessions::get(conn, id)?
+        .ok_or_else(|| CollabError::NotFound(format!("没有 session {id}")))
+}
+
+pub fn list(conn: &Connection, crew: Option<&str>) -> Result<Vec<Session>> {
+    Ok(match crew {
+        Some(c) => crewd_store::sessions::list_for_crew(conn, c)?,
+        None => crewd_store::sessions::list_all(conn)?,
+    })
+}
+
+pub fn crew_of(conn: &Connection, id: &str) -> Result<String> {
+    Ok(get(conn, id)?.crew_id)
+}
+
+/// 此刻的角色：以机组的机长指针为准（不看 role 列，防两者漂移时说错话）。
+pub fn role_of(conn: &Connection, id: &str) -> Result<Role> {
+    let crew = crew_of(conn, id)?;
+    Ok(if crews::captain_of(conn, &crew)?.as_deref() == Some(id) {
+        Role::Captain
+    } else {
+        Role::Worker
+    })
+}
+
+/// 给人 / agent 看的名字：显示名 → 标题 → id。
+pub fn display_name(conn: &Connection, id: &str) -> Result<String> {
+    Ok(name_of(&get(conn, id)?))
+}
+
+/// 显示名的回退链（显示名 → 标题 → id）的唯一一处；`directory` 也用它。
+pub(crate) fn name_of(s: &Session) -> String {
+    s.display_name
+        .clone()
+        .or_else(|| s.title.clone())
+        .unwrap_or_else(|| s.id.clone())
+}
+
+pub fn running_desired(conn: &Connection) -> Result<Vec<Session>> {
+    Ok(list(conn, None)?
+        .into_iter()
+        .filter(|s| s.desired == Desired::Running)
+        .collect())
+}
+
+pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
+    let crew = crews::get(tx.conn(), &n.crew_id)?;
+    if !valid_executor(&n.executor) {
+        return Err(CollabError::Invalid(format!(
+            "执行器 {:?} 不认识（claude / codex / acp:<id>）",
+            n.executor
+        )));
+    }
+    if n.role == Role::Captain && crews::captain_of(tx.conn(), &crew.id)?.is_some() {
+        return Err(CollabError::Conflict(format!(
+            "机组 {} 已有机长；换机长用 set_captain",
+            crew.id
+        )));
+    }
+    let conn = tx.conn();
+    let ext = if n.role == Role::Worker {
+        Some(crews::alloc_ext(conn, &crew.id)?)
+    } else {
+        None
+    };
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
+    let s = Session {
+        id: format!("{}-{}", n.role.as_str(), &uuid[..12]),
+        crew_id: crew.id.clone(),
+        role: n.role,
+        executor: n.executor,
+        display_name: n.display_name,
+        working_directory: n.working_directory.or(crew.working_directory.clone()),
+        model: n.model,
+        effort: n.effort,
+        updated_at: tx.now_ts(),
+        title: n.title,
+        brief: n.brief,
+        desired: Desired::Stopped,
+        ext,
+        worktree: n.worktree,
+        ..Default::default()
+    };
+    crewd_store::sessions::upsert(conn, &s, None)?;
+    if n.role == Role::Captain {
+        conn.execute(
+            "UPDATE crews SET captain_session_id=?2 WHERE id=?1",
+            params![crew.id, s.id],
+        )?;
+    }
+    cursors::pin_to_end(tx, &s.id, &crewd_store::channels::lobby_id(&crew.id))?;
+    tx.note(Change::SessionChanged {
+        session_id: s.id.clone(),
+    });
+    tx.note(Change::CrewChanged { crew_id: crew.id });
+    get(tx.conn(), &s.id)
+}
+
+fn update_one(
+    tx: &mut Tx<'_>,
+    id: &str,
+    sql: &str,
+    p: impl rusqlite::Params,
+    notify: bool,
+) -> Result<()> {
+    if tx.conn().execute(sql, p)? == 0 {
+        return Err(CollabError::NotFound(format!("没有 session {id}")));
+    }
+    if notify {
+        tx.note(Change::SessionChanged {
+            session_id: id.into(),
+        });
+    }
+    Ok(())
+}
+
+pub fn set_desired(tx: &mut Tx<'_>, id: &str, d: Desired) -> Result<()> {
+    let now = tx.now_ts();
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET desired=?2, updated_at=?3 WHERE id=?1",
+        params![id, d.as_str(), now],
+        true,
+    )
+}
+
+/// 干活 / 空闲边沿（M3c 收到 `SessionEvent::Working` 时调）：记 was_working 与最后活跃时间。
+pub fn set_working(tx: &mut Tx<'_>, id: &str, working: bool) -> Result<()> {
+    let now = tx.now_ts();
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET was_working=?2, last_active_at=?3 WHERE id=?1",
+        params![id, working, now],
+        true,
+    )
+}
+
+/// 恢复失败（M4b 的 `reassign_lost` 只认这一列，§19）；`false` = 清掉。
+pub fn set_resume_failed(tx: &mut Tx<'_>, id: &str, failed: bool) -> Result<()> {
+    let at = failed.then(|| tx.now_ts());
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET resume_failed_at=?2 WHERE id=?1",
+        params![id, at],
+        true,
+    )
+}
+
+pub fn set_awaiting_question(tx: &mut Tx<'_>, id: &str, q: Option<String>) -> Result<()> {
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET awaiting_question=?2 WHERE id=?1",
+        params![id, q],
+        true,
+    )
+}
+
+pub fn set_profile(
+    tx: &mut Tx<'_>,
+    id: &str,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<()> {
+    let now = tx.now_ts();
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET model=COALESCE(?2, model), effort=COALESCE(?3, effort), updated_at=?4 WHERE id=?1",
+        params![id, model, effort, now],
+        true,
+    )
+}
+
+/// 最近一次发言的时间（只是数据，**不算产出**）：只由 `messages::post` 在 session 发言时调。
+#[allow(dead_code)] // TEMP: first caller in Task 8
+pub(crate) fn note_output(tx: &mut Tx<'_>, id: &str) -> Result<()> {
+    let now = tx.now_ts();
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET last_output_at=?2 WHERE id=?1",
+        params![id, now],
+        false,
+    )
+}
+
+/// 类型定义在 lib.rs（`Change::Progress` 要用，Task 5 先于本文件）。
+pub use crate::ProgressKind;
+
+/// 记一次产出：写 `last_progress_at`，发 `Change::Progress`（只走内部通道，M3c 的熔断订阅）。高频，不发 `SessionChanged`。
+pub fn note_progress(tx: &mut Tx<'_>, id: &str, kind: ProgressKind) -> Result<()> {
+    let now = tx.now_ts();
+    update_one(
+        tx,
+        id,
+        "UPDATE sessions SET last_progress_at=?2 WHERE id=?1",
+        params![id, now],
+        false,
+    )?;
+    tx.note(Change::Progress {
+        session_id: id.into(),
+        kind,
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::{NOW, count, err, ok, store};
+
+    fn worker(crew: &str) -> NewSession {
+        NewSession {
+            crew_id: crew.into(),
+            role: Role::Worker,
+            executor: "claude".into(),
+            title: Some("修滚动".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn register_assigns_extensions_that_are_never_reused() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| register(tx, worker("crew-a")));
+        assert_eq!(a.ext, Some(4));
+        assert_eq!(a.desired, Desired::Stopped);
+        assert_eq!(a.working_directory.as_deref(), Some("/tmp/example"));
+        s.conn()
+            .execute("DELETE FROM sessions WHERE id=?1", [&a.id])
+            .unwrap();
+        let b = ok(&mut s, |tx| register(tx, worker("crew-a")));
+        assert_eq!(b.ext, Some(5));
+        assert!(b.id.starts_with("worker-"));
+    }
+
+    #[test]
+    fn a_crew_has_at_most_one_captain_via_register() {
+        let mut s = store();
+        let e = err(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    role: Role::Captain,
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert!(matches!(e, CollabError::Conflict(_)), "{e}");
+        let c = ok(&mut s, |tx| {
+            let crew = crate::crews::create(
+                tx,
+                crate::crews::NewCrew {
+                    title: "空机组".into(),
+                    working_directory: "/tmp/example".into(),
+                    ..Default::default()
+                },
+            )?;
+            register(
+                tx,
+                NewSession {
+                    role: Role::Captain,
+                    ..worker(&crew.id)
+                },
+            )
+        });
+        assert_eq!(c.ext, None, "机长分机恒为 1，不存");
+        assert_eq!(
+            crate::crews::captain_of(s.conn(), &c.crew_id)
+                .unwrap()
+                .as_deref(),
+            Some(c.id.as_str())
+        );
+    }
+
+    #[test]
+    fn executor_vocabulary_is_checked() {
+        let mut s = store();
+        assert!(matches!(
+            err(&mut s, |tx| register(
+                tx,
+                NewSession {
+                    executor: "terminal".into(),
+                    ..worker("crew-a")
+                }
+            )),
+            CollabError::Invalid(_)
+        ));
+        ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    executor: "acp:opencode".into(),
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert!(!valid_executor("acp:"));
+        assert!(!valid_executor("acp:../x"));
+    }
+
+    #[test]
+    fn a_new_session_starts_with_no_unread() {
+        let mut s = store();
+        crewd_store::messages::insert(
+            s.conn(),
+            &crewd_proto::Message {
+                id: "old".into(),
+                channel_id: "crew-a/lobby".into(),
+                text: "历史".into(),
+                created_at: "t".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let a = ok(&mut s, |tx| register(tx, worker("crew-a")));
+        let max = count(&s, "SELECT MAX(seq) FROM messages");
+        assert_eq!(
+            crate::cursors::cursor(s.conn(), &a.id, "crew-a/lobby").unwrap(),
+            Some(max)
+        );
+    }
+
+    #[test]
+    fn lifecycle_setters_write_their_columns() {
+        let mut s = store();
+        ok(&mut s, |tx| set_desired(tx, "w-a1", Desired::Running));
+        ok(&mut s, |tx| set_working(tx, "w-a1", true));
+        ok(&mut s, |tx| set_resume_failed(tx, "w-a2", true));
+        ok(&mut s, |tx| {
+            set_awaiting_question(tx, "w-a1", Some("要不要接着做 B？".into()))
+        });
+        ok(&mut s, |tx| note_output(tx, "w-a1"));
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| {
+            note_progress(tx, "w-a1", ProgressKind::ToolCall)
+        });
+        assert_eq!(
+            ch,
+            [Change::Progress {
+                session_id: "w-a1".into(),
+                kind: ProgressKind::ToolCall
+            }]
+        );
+        let a = get(s.conn(), "w-a1").unwrap();
+        assert_eq!(a.desired, Desired::Running);
+        assert!(a.was_working);
+        assert_eq!(
+            a.last_active_at.as_deref(),
+            Some(crewd_store::ts_from_ms(NOW).as_str())
+        );
+        assert_eq!(a.last_output_at, a.last_active_at);
+        assert_eq!(a.last_progress_at, a.last_active_at, "产出单独一列（C3）");
+        assert_eq!(a.awaiting_question.as_deref(), Some("要不要接着做 B？"));
+        assert!(get(s.conn(), "w-a2").unwrap().resume_failed_at.is_some());
+        ok(&mut s, |tx| set_resume_failed(tx, "w-a2", false));
+        assert!(get(s.conn(), "w-a2").unwrap().resume_failed_at.is_none());
+        assert_eq!(
+            running_desired(s.conn())
+                .unwrap()
+                .into_iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>(),
+            ["w-a1"]
+        );
+        assert!(matches!(
+            err(&mut s, |tx| set_desired(tx, "ghost", Desired::Running)),
+            CollabError::NotFound(_)
+        ));
+    }
+}
