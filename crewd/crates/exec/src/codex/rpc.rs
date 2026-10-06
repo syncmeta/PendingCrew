@@ -108,6 +108,11 @@ pub fn parse_line(line: &str) -> Result<Incoming, ParseError> {
     };
     let params = obj.remove("params").unwrap_or(Value::Null);
     let id = obj.get("id");
+    // 有 `method` 键就是请求 / 通知，哪怕它不是字符串：那样的行认不出，绝不能落进「回应」分支
+    // （一个畸形的 `{"id":1,"method":5,"result":..}` 会把我们的某个在途请求配成「成功」）。
+    if obj.get("method").is_some_and(|m| !m.is_string()) {
+        return Err(ParseError::Unclassifiable(clip(line, 200)));
+    }
     match obj.get("method").and_then(Value::as_str) {
         Some(method) => match id {
             None => Ok(Incoming::Notification {
@@ -330,6 +335,21 @@ mod tests {
                 params: json!({ "turn": { "id": "t" } }),
             }
         );
+    }
+
+    #[test]
+    fn a_non_string_method_is_never_mistaken_for_a_response() {
+        for line in [
+            r#"{"id":1,"method":5,"result":{}}"#,
+            r#"{"id":"a","method":null,"result":{}}"#,
+            r#"{"id":2,"method":{"x":1}}"#,
+            r#"{"method":7,"params":{}}"#,
+        ] {
+            assert!(
+                matches!(parse_line(line), Err(ParseError::Unclassifiable(_))),
+                "{line}"
+            );
+        }
     }
 
     #[test]
