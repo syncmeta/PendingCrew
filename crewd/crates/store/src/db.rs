@@ -26,7 +26,8 @@ impl Db {
         Ok(Db { tx })
     }
 
-    /// 在库线程上跑 `f`（与其它调用串行，按提交顺序）。
+    /// 在库线程上跑 `f`（与其它调用串行）。`call` 是惰性的：任务在返回的 future
+    /// **第一次被轮询**时才入队，所以执行顺序 = 各 future 第一次被轮询的顺序。
     pub async fn call<T, F>(&self, f: F) -> Result<T>
     where
         T: Send + 'static,
@@ -90,8 +91,9 @@ mod tests {
                     .await
             })
         };
-        tokio::task::yield_now().await;
+        // 计时必须在 yield 之前开始：若任务被内联跑在 runtime 线程上，卡顿就发生在 yield 里。
         let t = Instant::now();
+        tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(
             t.elapsed() < Duration::from_millis(200),

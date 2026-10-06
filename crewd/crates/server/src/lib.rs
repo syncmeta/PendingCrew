@@ -159,19 +159,21 @@ mod tests {
             db.call(|_| std::thread::sleep(std::time::Duration::from_millis(500)))
                 .await
         });
+        // 计时必须在 yield 之前开始：若库任务被内联跑在 runtime 线程上，卡顿就发生在 yield 里。
+        let t = std::time::Instant::now();
         tokio::task::yield_now().await;
         let req = Request {
             id: 1,
             method: methods::HELLO.into(),
             params: serde_json::Value::Null,
         };
-        let r = tokio::time::timeout(
-            std::time::Duration::from_millis(150),
-            dispatch::handle(&state, req),
-        )
-        .await
-        .expect("慢查询进行中 system.hello 也要马上回");
+        let r = dispatch::handle(&state, req).await;
         assert!(r.error.is_none());
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(150),
+            "慢查询进行中 system.hello 也要马上回：{:?}",
+            t.elapsed()
+        );
         let req = Request {
             id: 2,
             method: methods::CREW_LIST.into(),
