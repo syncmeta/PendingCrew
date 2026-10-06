@@ -23,6 +23,9 @@ pub struct ProcessIdentity {
     pub pgid: i32,
     /// 这把锁：macOS = 微秒时间戳，Linux = 开机以来的时钟滴答。
     pub start_time: u64,
+    /// Linux：开机标识（`/proc/sys/kernel/random/boot_id`）。`start_time` 是开机以来的滴答，
+    /// 换一次开机就可能碰巧相同，必须连开机标识一起对。macOS 的启动时刻是绝对时间，留空。
+    pub boot_id: String,
     /// 进程短名。只给人看，不参与判定（会截断、会重名）。
     pub command: String,
 }
@@ -36,6 +39,10 @@ pub enum ProbeResult {
 }
 
 /// 读 `pid` 当前的身份。
+///
+/// 固有的竞态：从这里读到身份到后面 `apply` 发信号之间，进程可能退出、pid 可能被复用
+/// （窗口是微秒级，且要求内核在这段时间里恰好把同一个 pid 分给别人）。没有 pidfd 之类的
+/// 句柄就无法消除；我们靠「启动时刻 + 进程组 + 开机标识」三者全对才动手把它压到最小。
 pub fn probe(pid: i32) -> ProbeResult {
     if pid <= 0 {
         return ProbeResult::Missing;
@@ -77,18 +84,24 @@ fn os_probe(pid: i32) -> ProbeResult {
         pid,
         pgid: info.pbi_pgid as i32,
         start_time: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+        boot_id: String::new(),
         command: String::from_utf8_lossy(&comm).into_owned(),
     })
 }
 
 #[cfg(not(target_os = "macos"))]
 fn os_probe(pid: i32) -> ProbeResult {
+    let boot_id = match std::fs::read_to_string("/proc/sys/kernel/random/boot_id") {
+        Ok(id) => id.trim().to_string(),
+        Err(e) => return ProbeResult::Unreadable(e.raw_os_error().unwrap_or(0)),
+    };
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => match parse_proc_stat(&content) {
             Some((pgid, start_time, command)) => ProbeResult::Found(ProcessIdentity {
                 pid,
                 pgid,
                 start_time,
+                boot_id,
                 command,
             }),
             None => ProbeResult::Unreadable(0),
@@ -127,7 +140,14 @@ pub fn decide(recorded: &ProcessIdentity, current: &ProbeResult) -> OrphanDecisi
     match current {
         ProbeResult::Missing => OrphanDecision::AlreadyGone,
         ProbeResult::Unreadable(errno) => OrphanDecision::Unreadable(*errno),
-        ProbeResult::Found(now) if now.start_time == recorded.start_time => OrphanDecision::Reap,
+        // 启动时刻、进程组、开机标识三者全对才算「我们的孤儿」；任何一项对不上都当 pid 复用。
+        ProbeResult::Found(now)
+            if now.start_time == recorded.start_time
+                && now.pgid == recorded.pgid
+                && now.boot_id == recorded.boot_id =>
+        {
+            OrphanDecision::Reap
+        }
         ProbeResult::Found(now) => OrphanDecision::PidReused(now.clone()),
     }
 }
@@ -153,22 +173,80 @@ pub fn describe(session_id: &str, recorded: &ProcessIdentity, decision: &OrphanD
     }
 }
 
-/// 执行处置：只有 `Reap` 发信号（先 killpg，失败再单杀）。返回是否发了信号。
-pub fn apply(decision: &OrphanDecision, recorded: &ProcessIdentity) -> bool {
+/// 要发信号的对象。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KillTarget {
+    Group(i32),
+    Process(i32),
+}
+
+/// 执行处置的真实结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    /// 不是 `Reap`，没发信号。
+    NotAttempted,
+    /// 信号发出了（或目标在发之前恰好已经没了）。
+    Killed,
+    /// 判定是 `Reap`，但目标太危险（见 `apply_with`），一个信号都没发。
+    Refused(String),
+    /// 进程组和单杀都失败了（errno）。
+    Failed(i32),
+}
+
+/// 执行处置：只有 `Reap` 发信号（先 killpg，失败再单杀）。
+pub fn apply(decision: &OrphanDecision, recorded: &ProcessIdentity) -> ApplyOutcome {
+    let own_pid = std::process::id() as i32;
+    let own_pgid = rustix::process::getpgrp().as_raw_nonzero().get();
+    apply_with(decision, recorded, own_pid, own_pgid, &mut |target| {
+        let kill = rustix::process::Signal::KILL;
+        match target {
+            KillTarget::Group(g) => rustix::process::Pid::from_raw(g)
+                .ok_or(libc::EINVAL)
+                .and_then(|g| {
+                    rustix::process::kill_process_group(g, kill).map_err(|e| e.raw_os_error())
+                }),
+            KillTarget::Process(p) => rustix::process::Pid::from_raw(p)
+                .ok_or(libc::EINVAL)
+                .and_then(|p| rustix::process::kill_process(p, kill).map_err(|e| e.raw_os_error())),
+        }
+    })
+}
+
+/// `apply` 的可测内核：信号经 `kill` 闭包发出，测试里换成记录器，不会真发。
+///
+/// 安全闸：即使判定是 `Reap`，登记的 pgid <= 1（`kill(-1, …)` 会杀掉当前用户的全部进程，
+/// pgid 0 / 1 同样危险）、pgid 是 crewd 自己所在的组、或 pid 就是 crewd 自己，也一律
+/// **什么都不做并报告**（`Refused`）——比单杀那个 pid 更保守：这种登记本身就不对劲，留给人看。
+pub fn apply_with(
+    decision: &OrphanDecision,
+    recorded: &ProcessIdentity,
+    own_pid: i32,
+    own_pgid: i32,
+    kill: &mut dyn FnMut(KillTarget) -> Result<(), i32>,
+) -> ApplyOutcome {
     if *decision != OrphanDecision::Reap {
-        return false;
+        return ApplyOutcome::NotAttempted;
     }
-    let kill = rustix::process::Signal::KILL;
-    let group = rustix::process::Pid::from_raw(if recorded.pgid > 0 {
-        recorded.pgid
-    } else {
-        recorded.pid
-    });
-    let sent = group.is_some_and(|g| rustix::process::kill_process_group(g, kill).is_ok());
-    if !sent && let Some(p) = rustix::process::Pid::from_raw(recorded.pid) {
-        let _ = rustix::process::kill_process(p, kill);
+    if recorded.pid <= 1 || recorded.pid == own_pid {
+        return ApplyOutcome::Refused(format!("pid {} 不能回收", recorded.pid));
     }
-    true
+    if recorded.pgid <= 1 || recorded.pgid == own_pgid {
+        return ApplyOutcome::Refused(format!(
+            "进程组 {} 不能整组回收（<=1 或就是 crewd 自己那一组）",
+            recorded.pgid
+        ));
+    }
+    // ESRCH = 目标在这一瞬间已经没了，等同成功。
+    let done = |r: &Result<(), i32>| matches!(r, Ok(()) | Err(libc::ESRCH));
+    let group = kill(KillTarget::Group(recorded.pgid));
+    if done(&group) {
+        return ApplyOutcome::Killed;
+    }
+    let single = kill(KillTarget::Process(recorded.pid));
+    if done(&single) {
+        return ApplyOutcome::Killed;
+    }
+    ApplyOutcome::Failed(single.err().unwrap_or(0))
 }
 
 /// 「如果我下一秒崩了，回来之后该去看哪些 pid」。JSON 文件，0600，整份原子替换。
@@ -239,27 +317,61 @@ impl ProcessRegistry {
 pub struct OrphanReport {
     pub session_id: String,
     pub decision: OrphanDecision,
+    pub outcome: ApplyOutcome,
     pub message: String,
 }
 
+/// 给人看的、带真实结果的一句话。
+pub fn describe_outcome(
+    session_id: &str,
+    recorded: &ProcessIdentity,
+    decision: &OrphanDecision,
+    outcome: &ApplyOutcome,
+) -> String {
+    match outcome {
+        ApplyOutcome::Refused(why) => format!(
+            "「{session_id}」的进程（pid {}）判定应回收，但{why}，我没有动它；登记留着，请人来定。",
+            recorded.pid
+        ),
+        ApplyOutcome::Failed(errno) => format!(
+            "「{session_id}」的进程（pid {}）判定应回收，但发信号失败（errno {errno}），没有杀掉；登记留着，下次再试。",
+            recorded.pid
+        ),
+        _ => describe(session_id, recorded, decision),
+    }
+}
+
 /// 启动时调用（必须持有数据目录锁，确认没有别的 crewd 活着）：逐条判定、执行、清账。
-/// 读不到身份的那条留在表里，下次再看。
+/// 读不到身份的、拒绝执行的、杀失败的，都留在表里，下次再看。
 pub fn reap_orphans(registry: &ProcessRegistry) -> io::Result<Vec<OrphanReport>> {
+    reap_orphans_with(registry, &probe, &mut |rec, dec| apply(dec, rec))
+}
+
+/// `reap_orphans` 的可测内核：探测与执行都可换。
+pub fn reap_orphans_with(
+    registry: &ProcessRegistry,
+    probe: &dyn Fn(i32) -> ProbeResult,
+    apply: &mut dyn FnMut(&ProcessIdentity, &OrphanDecision) -> ApplyOutcome,
+) -> io::Result<Vec<OrphanReport>> {
     let mut reports = Vec::new();
     for (session_id, recorded) in registry.entries() {
         let decision = decide(&recorded, &probe(recorded.pid));
-        apply(&decision, &recorded);
-        if !matches!(decision, OrphanDecision::Unreadable(_)) {
+        let outcome = apply(&recorded, &decision);
+        let keep = matches!(decision, OrphanDecision::Unreadable(_))
+            || matches!(outcome, ApplyOutcome::Refused(_) | ApplyOutcome::Failed(_));
+        if !keep {
             registry.forget(&session_id)?;
         }
         reports.push(OrphanReport {
-            message: describe(&session_id, &recorded, &decision),
+            message: describe_outcome(&session_id, &recorded, &decision, &outcome),
             session_id,
             decision,
+            outcome,
         });
     }
     Ok(reports)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,8 +383,182 @@ mod tests {
             pid,
             pgid: pid,
             start_time: start,
+            boot_id: String::new(),
             command: "claude".to_string(),
         }
+    }
+
+    /// 记下每次「发信号」调用、从不真发的杀手。
+    fn recorder(
+        calls: &std::cell::RefCell<Vec<KillTarget>>,
+    ) -> impl FnMut(KillTarget) -> Result<(), i32> + '_ {
+        move |t| {
+            calls.borrow_mut().push(t);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn decision_also_requires_same_pgid_and_same_boot() {
+        let mut rec = identity(4242, 5);
+        rec.boot_id = "boot-a".to_string();
+        let mut now = rec.clone();
+        assert_eq!(
+            decide(&rec, &ProbeResult::Found(now.clone())),
+            OrphanDecision::Reap
+        );
+        now.pgid = 1;
+        assert_eq!(
+            decide(&rec, &ProbeResult::Found(now.clone())),
+            OrphanDecision::PidReused(now.clone()),
+            "进程组变了就不是我们起的那个"
+        );
+        let mut rebooted = rec.clone();
+        rebooted.boot_id = "boot-b".to_string();
+        assert_eq!(
+            decide(&rec, &ProbeResult::Found(rebooted.clone())),
+            OrphanDecision::PidReused(rebooted),
+            "换了一次开机：启动时刻（滴答）可能碰巧相同，也不能动手"
+        );
+    }
+
+    #[test]
+    fn apply_refuses_dangerous_process_groups() {
+        let own_pid = 5000;
+        let own_pgid = 4999;
+        for (pid, pgid) in [
+            (4242, 1),
+            (4242, 0),
+            (4242, -1),
+            (4242, own_pgid),
+            (1, 1),
+            (own_pid, 7777),
+        ] {
+            let rec = ProcessIdentity {
+                pid,
+                pgid,
+                ..identity(pid, 1)
+            };
+            let calls = std::cell::RefCell::new(Vec::new());
+            let outcome = apply_with(
+                &OrphanDecision::Reap,
+                &rec,
+                own_pid,
+                own_pgid,
+                &mut recorder(&calls),
+            );
+            assert!(
+                matches!(outcome, ApplyOutcome::Refused(_)),
+                "pid {pid} pgid {pgid}: {outcome:?}"
+            );
+            assert!(
+                calls.borrow().is_empty(),
+                "pid {pid} pgid {pgid} 不能发任何信号"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_kills_the_group_and_reports_failure_honestly() {
+        let rec = ProcessIdentity {
+            pid: 4242,
+            pgid: 4242,
+            ..identity(4242, 1)
+        };
+        let calls = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            apply_with(
+                &OrphanDecision::Reap,
+                &rec,
+                5000,
+                4999,
+                &mut recorder(&calls)
+            ),
+            ApplyOutcome::Killed
+        );
+        assert_eq!(*calls.borrow(), vec![KillTarget::Group(4242)]);
+        // 进程组杀失败 → 退而单杀；都失败 = Failed，不能谎称已回收。
+        let mut seen = Vec::new();
+        let outcome = apply_with(&OrphanDecision::Reap, &rec, 5000, 4999, &mut |t| {
+            seen.push(t);
+            Err(libc::EPERM)
+        });
+        assert_eq!(outcome, ApplyOutcome::Failed(libc::EPERM));
+        assert_eq!(
+            seen,
+            vec![KillTarget::Group(4242), KillTarget::Process(4242)]
+        );
+        // ESRCH = 已经没了，算成了。
+        let outcome = apply_with(&OrphanDecision::Reap, &rec, 5000, 4999, &mut |_| {
+            Err(libc::ESRCH)
+        });
+        assert_eq!(outcome, ApplyOutcome::Killed);
+        // 非 Reap 一律不动。
+        let calls = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            apply_with(
+                &OrphanDecision::Unreadable(1),
+                &rec,
+                5000,
+                4999,
+                &mut recorder(&calls)
+            ),
+            ApplyOutcome::NotAttempted
+        );
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn unreadable_failed_and_refused_entries_stay_in_the_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = ProcessRegistry::load(&dir.path().join("registry.json")).unwrap();
+        reg.record("unreadable", identity(100, 1)).unwrap();
+        reg.record("failed", identity(101, 1)).unwrap();
+        reg.record("refused", identity(102, 1)).unwrap();
+        reg.record("killed", identity(103, 1)).unwrap();
+        reg.record("gone", identity(104, 1)).unwrap();
+        let reports = reap_orphans_with(
+            &reg,
+            &|pid| match pid {
+                100 => ProbeResult::Unreadable(libc::EPERM),
+                104 => ProbeResult::Missing,
+                _ => ProbeResult::Found(identity(pid, 1)),
+            },
+            &mut |rec: &ProcessIdentity, decision: &OrphanDecision| match rec.pid {
+                101 => ApplyOutcome::Failed(libc::EPERM),
+                102 => ApplyOutcome::Refused("test".to_string()),
+                _ if *decision == OrphanDecision::Reap => ApplyOutcome::Killed,
+                _ => ApplyOutcome::NotAttempted,
+            },
+        )
+        .unwrap();
+        assert_eq!(reports.len(), 5);
+        let kept: Vec<String> = reg.entries().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(kept, vec!["failed", "refused", "unreadable"]);
+        let failed = reports.iter().find(|r| r.session_id == "failed").unwrap();
+        assert!(!failed.message.contains("已回收"), "{}", failed.message);
+        assert!(failed.message.contains("没有杀掉"), "{}", failed.message);
+        let killed = reports.iter().find(|r| r.session_id == "killed").unwrap();
+        assert!(killed.message.contains("已回收"), "{}", killed.message);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn real_unreadable_pid_is_kept_by_the_reaper() {
+        // 非 root 的 macOS 上读不到 launchd(pid 1) 的身份（EPERM）。root 能读到：那时
+        // 启动时刻对不上，判复用、不动手——这条断言只在读不到时才有意义，所以 root 下直接返回。
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let ProbeResult::Unreadable(_) = probe(1) else {
+            panic!("非 root 下 probe(1) 应当 Unreadable：{:?}", probe(1));
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let reg = ProcessRegistry::load(&dir.path().join("registry.json")).unwrap();
+        reg.record("launchd", identity(1, 1)).unwrap();
+        let reports = reap_orphans(&reg).unwrap();
+        assert!(matches!(reports[0].decision, OrphanDecision::Unreadable(_)));
+        assert_eq!(reg.entries().len(), 1, "读不到身份的那条留着");
     }
 
     #[test]
@@ -301,12 +587,13 @@ mod tests {
     #[test]
     fn only_reap_sends_a_signal_and_reuse_says_hands_off() {
         let rec = identity(i32::MAX, 1);
-        assert!(!apply(&OrphanDecision::AlreadyGone, &rec));
-        assert!(!apply(
-            &OrphanDecision::PidReused(identity(i32::MAX, 2)),
-            &rec
-        ));
-        assert!(!apply(&OrphanDecision::Unreadable(1), &rec));
+        let none = ApplyOutcome::NotAttempted;
+        assert_eq!(apply(&OrphanDecision::AlreadyGone, &rec), none);
+        assert_eq!(
+            apply(&OrphanDecision::PidReused(identity(i32::MAX, 2)), &rec),
+            none
+        );
+        assert_eq!(apply(&OrphanDecision::Unreadable(1), &rec), none);
         let msg = describe(
             "w-1",
             &rec,
@@ -414,6 +701,7 @@ mod tests {
         assert_eq!(again.entries(), vec![("b".to_string(), identity(11, 2))]);
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("startTime"), "camelCase：{raw}");
+        assert!(raw.contains("bootId"), "camelCase：{raw}");
         std::fs::write(&path, b"{not json").unwrap();
         assert!(
             ProcessRegistry::load(&path).is_err(),
