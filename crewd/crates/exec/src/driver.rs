@@ -398,6 +398,10 @@ static LIVE_AGENT_IDS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 pub(crate) struct LiveId(String);
 
 impl LiveId {
+    pub(crate) fn id(&self) -> &str {
+        &self.0
+    }
+
     pub(crate) fn claim(id: &str) -> Result<Self, StartError> {
         let mut live = LIVE_AGENT_IDS.lock().expect("会话号表锁中毒");
         if !live.insert(id.to_string()) {
