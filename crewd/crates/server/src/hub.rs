@@ -1,9 +1,8 @@
 //! 进程内事件总线：客户端事件（`Event`，连接层按主题转发）与内部协作事件（`CollabEvent`，M3c / M4b 订阅）。
 use crewd_collab::{Change, CollabError};
-use crewd_proto::{Event, events};
+use crewd_proto::{CrewRef, Event, events};
 use rusqlite::Connection;
 use serde::Serialize;
-use serde_json::json;
 use tokio::sync::broadcast;
 
 /// spec §22.5 的 `CollabEvent`：类型定义在 crewd-collab（裁定 3），这里是它在服务层的名字。
@@ -91,10 +90,12 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             .transpose()?
             .into_iter()
             .collect(),
-        Change::CrewRemoved { crew_id } => vec![Event {
-            event: events::CREW_REMOVED.into(),
-            data: json!({ "crewId": crew_id }),
-        }],
+        Change::CrewRemoved { crew_id } => vec![ev(
+            events::CREW_REMOVED,
+            &CrewRef {
+                crew_id: crew_id.clone(),
+            },
+        )?],
         Change::AskChanged { crew_id, ask } => gone(asks::get(conn, crew_id, ask))?
             .map(|a| ev(events::ASK_CHANGED, &a))
             .transpose()?

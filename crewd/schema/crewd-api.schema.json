@@ -1,160 +1,6 @@
 {
-  "apiVersion": 2,
-  "events": {
-    "approval.changed": "Approval",
-    "ask.changed": "Ask",
-    "badge.changed": "Badge",
-    "channel.changed": "ChannelSummary",
-    "crew.changed": "Crew",
-    "crew.removed": "{ crewId: string }",
-    "events.lagged": "{ missed: number }",
-    "message.appended": "Message",
-    "restart.changed": "RestartPrompt",
-    "session.changed": "SessionLive"
-  },
-  "methods": {
-    "approval.decide": {
-      "params": "ApprovalDecideParams",
-      "result": "Approval"
-    },
-    "approval.list": {
-      "params": "NoParams | null",
-      "result": "Approval[]"
-    },
-    "ask.answer": {
-      "params": "AskAnswerParams",
-      "result": "Ask"
-    },
-    "ask.list": {
-      "params": "AskListParams | null",
-      "result": "HumanWait[]"
-    },
-    "ask.withdraw": {
-      "params": "AskWithdrawParams",
-      "result": "Ask"
-    },
-    "channel.addMembers": {
-      "params": "ChannelMembersParams",
-      "result": "Channel"
-    },
-    "channel.create": {
-      "params": "ChannelCreateParams",
-      "result": "Channel"
-    },
-    "channel.list": {
-      "params": "CrewIdParams",
-      "result": "ChannelSummary[]"
-    },
-    "channel.removeMember": {
-      "params": "ChannelMemberParams",
-      "result": "Channel"
-    },
-    "channel.setOwner": {
-      "params": "ChannelSetOwnerParams",
-      "result": "Channel"
-    },
-    "channel.update": {
-      "params": "ChannelUpdateParams",
-      "result": "Channel"
-    },
-    "channel.watch": {
-      "params": "ChannelWatchParams",
-      "result": "ChannelSummary"
-    },
-    "crew.adopt": {
-      "params": "CrewAdoptParams",
-      "result": "Crew"
-    },
-    "crew.create": {
-      "params": "CrewCreateParams",
-      "result": "Crew"
-    },
-    "crew.delete": {
-      "params": "CrewIdParams",
-      "result": "Empty"
-    },
-    "crew.get": {
-      "params": "CrewIdParams",
-      "result": "CrewDetail"
-    },
-    "crew.list": {
-      "params": "NoParams | null",
-      "result": "Crew[]"
-    },
-    "crew.release": {
-      "params": "CrewReleaseParams",
-      "result": "Crew"
-    },
-    "crew.reorder": {
-      "params": "CrewReorderParams",
-      "result": "Crew[]"
-    },
-    "crew.update": {
-      "params": "CrewUpdateParams",
-      "result": "Crew"
-    },
-    "directory.list": {
-      "params": "DirectoryListParams | null",
-      "result": "DirectoryRow[]"
-    },
-    "events.subscribe": {
-      "params": "SubscribeParams",
-      "result": "{ topics: string[] }"
-    },
-    "message.list": {
-      "params": "MessageListParams",
-      "result": "Message[]"
-    },
-    "message.post": {
-      "params": "MessagePostParams",
-      "result": "Message"
-    },
-    "message.search": {
-      "params": "MessageSearchParams",
-      "result": "Message[]"
-    },
-    "read.mark": {
-      "params": "ReadMarkParams",
-      "result": "ChannelSummary"
-    },
-    "restart.answer": {
-      "params": "RestartAnswerParams",
-      "result": "RestartPrompt"
-    },
-    "restart.pending": {
-      "params": "NoParams | null",
-      "result": "RestartPrompt | null"
-    },
-    "session.get": {
-      "params": "SessionGetParams",
-      "result": "Session"
-    },
-    "session.list": {
-      "params": "SessionListParams | null",
-      "result": "Session[]"
-    },
-    "system.hello": {
-      "params": "NoParams | null",
-      "result": "Hello"
-    },
-    "todo.list": {
-      "params": "TodoListParams",
-      "result": "Todo[]"
-    }
-  },
-  "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line",
-  "types": {
+  "$defs": {
     "Approval": {
-      "$defs": {
-        "Decision": {
-          "enum": [
-            "allow",
-            "deny"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "consumedAt": {
           "description": "同意后那张一次性放行票被用掉的时刻（None + Allow = 票还在）。",
@@ -219,11 +65,9 @@
         "summary",
         "requestedAt"
       ],
-      "title": "Approval",
       "type": "object"
     },
     "ApprovalDecideParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "allow": {
@@ -237,38 +81,9 @@
         "id",
         "allow"
       ],
-      "title": "ApprovalDecideParams",
       "type": "object"
     },
     "Ask": {
-      "$defs": {
-        "AskDefault": {
-          "properties": {
-            "afterMinutes": {
-              "format": "int64",
-              "type": "integer"
-            },
-            "text": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "afterMinutes"
-          ],
-          "type": "object"
-        },
-        "AskStateView": {
-          "enum": [
-            "open",
-            "answered",
-            "defaulted",
-            "withdrawn"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "description": "一条人类待确认（H 号按机组发，§19 Q1）。",
       "properties": {
         "answer": {
@@ -351,11 +166,9 @@
         "askedAt",
         "state"
       ],
-      "title": "Ask",
       "type": "object"
     },
     "AskAnswerParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "ask": {
@@ -373,12 +186,27 @@
         "ask",
         "text"
       ],
-      "title": "AskAnswerParams",
+      "type": "object"
+    },
+    "AskDefault": {
+      "properties": {
+        "afterMinutes": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "afterMinutes"
+      ],
       "type": "object"
     },
     "AskListParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`。",
       "properties": {
         "rootCrewId": {
           "default": null,
@@ -388,11 +216,21 @@
           ]
         }
       },
-      "title": "AskListParams",
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AskStateView": {
+      "enum": [
+        "open",
+        "answered",
+        "defaulted",
+        "withdrawn"
+      ],
+      "type": "string"
     },
     "AskWithdrawParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "ask": {
@@ -410,11 +248,43 @@
         "ask",
         "reason"
       ],
-      "title": "AskWithdrawParams",
+      "type": "object"
+    },
+    "Attachment": {
+      "additionalProperties": false,
+      "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
+      "properties": {
+        "filename": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "mime",
+        "path"
+      ],
       "type": "object"
     },
     "Badge": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "channelId": {
           "type": "string"
@@ -433,57 +303,9 @@
         "unreadForHuman",
         "humanMentions"
       ],
-      "title": "Badge",
       "type": "object"
     },
     "Channel": {
-      "$defs": {
-        "ChannelKind": {
-          "enum": [
-            "lobby",
-            "human",
-            "topic",
-            "dm"
-          ],
-          "type": "string"
-        },
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "archivedAt": {
           "type": [
@@ -548,57 +370,9 @@
         "createdBy",
         "createdAt"
       ],
-      "title": "Channel",
       "type": "object"
     },
     "ChannelCreateParams": {
-      "$defs": {
-        "ChannelKind": {
-          "enum": [
-            "lobby",
-            "human",
-            "topic",
-            "dm"
-          ],
-          "type": "string"
-        },
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -631,48 +405,18 @@
         "crewId",
         "kind"
       ],
-      "title": "ChannelCreateParams",
       "type": "object"
     },
+    "ChannelKind": {
+      "enum": [
+        "lobby",
+        "human",
+        "topic",
+        "dm"
+      ],
+      "type": "string"
+    },
     "ChannelMemberParams": {
-      "$defs": {
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "channelId": {
@@ -686,48 +430,9 @@
         "channelId",
         "member"
       ],
-      "title": "ChannelMemberParams",
       "type": "object"
     },
     "ChannelMembersParams": {
-      "$defs": {
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "channelId": {
@@ -744,48 +449,9 @@
         "channelId",
         "members"
       ],
-      "title": "ChannelMembersParams",
       "type": "object"
     },
     "ChannelSetOwnerParams": {
-      "$defs": {
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "channelId": {
@@ -799,124 +465,9 @@
         "channelId",
         "owner"
       ],
-      "title": "ChannelSetOwnerParams",
       "type": "object"
     },
     "ChannelSummary": {
-      "$defs": {
-        "Channel": {
-          "properties": {
-            "archivedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "createdAt": {
-              "type": "string"
-            },
-            "createdBy": {
-              "description": "\"human\" | \"system\" | session id。",
-              "type": "string"
-            },
-            "crewId": {
-              "type": "string"
-            },
-            "id": {
-              "type": "string"
-            },
-            "kind": {
-              "$ref": "#/$defs/ChannelKind"
-            },
-            "name": {
-              "description": "大厅 / 人类群是空串（客户端按 kind 显示）。",
-              "type": "string"
-            },
-            "owner": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/MemberRef"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "群主（§22.7 Q2）。大厅 / 人类群 = 归属机组此刻的机长（现算；没有机长时 None）。"
-            },
-            "pendingOwner": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/MemberRef"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "待接受的群主转让对象。"
-            },
-            "purpose": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "id",
-            "crewId",
-            "kind",
-            "name",
-            "createdBy",
-            "createdAt"
-          ],
-          "type": "object"
-        },
-        "ChannelKind": {
-          "enum": [
-            "lobby",
-            "human",
-            "topic",
-            "dm"
-          ],
-          "type": "string"
-        },
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "channel": {
           "$ref": "#/$defs/Channel"
@@ -948,11 +499,9 @@
         "unreadForHuman",
         "humanMentions"
       ],
-      "title": "ChannelSummary",
       "type": "object"
     },
     "ChannelUpdateParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "archived": {
@@ -983,11 +532,9 @@
       "required": [
         "channelId"
       ],
-      "title": "ChannelUpdateParams",
       "type": "object"
     },
     "ChannelWatchParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "channelId": {
@@ -1001,11 +548,9 @@
         "channelId",
         "on"
       ],
-      "title": "ChannelWatchParams",
       "type": "object"
     },
     "Crew": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "builtin": {
           "type": "boolean"
@@ -1101,11 +646,9 @@
         "createdAt",
         "updatedAt"
       ],
-      "title": "Crew",
       "type": "object"
     },
     "CrewAdoptParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -1119,11 +662,9 @@
         "crewId",
         "parentId"
       ],
-      "title": "CrewAdoptParams",
       "type": "object"
     },
     "CrewCreateParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "parentId": {
@@ -1144,395 +685,9 @@
         "title",
         "workingDirectory"
       ],
-      "title": "CrewCreateParams",
       "type": "object"
     },
     "CrewDetail": {
-      "$defs": {
-        "Channel": {
-          "properties": {
-            "archivedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "createdAt": {
-              "type": "string"
-            },
-            "createdBy": {
-              "description": "\"human\" | \"system\" | session id。",
-              "type": "string"
-            },
-            "crewId": {
-              "type": "string"
-            },
-            "id": {
-              "type": "string"
-            },
-            "kind": {
-              "$ref": "#/$defs/ChannelKind"
-            },
-            "name": {
-              "description": "大厅 / 人类群是空串（客户端按 kind 显示）。",
-              "type": "string"
-            },
-            "owner": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/MemberRef"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "群主（§22.7 Q2）。大厅 / 人类群 = 归属机组此刻的机长（现算；没有机长时 None）。"
-            },
-            "pendingOwner": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/MemberRef"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "待接受的群主转让对象。"
-            },
-            "purpose": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "id",
-            "crewId",
-            "kind",
-            "name",
-            "createdBy",
-            "createdAt"
-          ],
-          "type": "object"
-        },
-        "ChannelKind": {
-          "enum": [
-            "lobby",
-            "human",
-            "topic",
-            "dm"
-          ],
-          "type": "string"
-        },
-        "ChannelSummary": {
-          "properties": {
-            "channel": {
-              "$ref": "#/$defs/Channel"
-            },
-            "humanMentions": {
-              "description": "未读里 @人类 的条数（红色「叫你」标记，§17）。",
-              "format": "int64",
-              "type": "integer"
-            },
-            "members": {
-              "items": {
-                "$ref": "#/$defs/MemberRef"
-              },
-              "type": "array"
-            },
-            "unreadForHuman": {
-              "format": "int64",
-              "type": "integer"
-            },
-            "watched": {
-              "description": "人类标了「我在注视」。",
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "channel",
-            "members",
-            "watched",
-            "unreadForHuman",
-            "humanMentions"
-          ],
-          "type": "object"
-        },
-        "Crew": {
-          "properties": {
-            "builtin": {
-              "type": "boolean"
-            },
-            "captainExecutor": {
-              "description": "机长的执行器类型，词表同 `Session.executor`。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "captainSessionId": {
-              "description": "此刻的机长（裁定 8）。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "childIds": {
-              "default": [],
-              "description": "这个机组的直系子机组，按侧栏顺序（每个父下各自一套次序，控制者裁定 C1；`crew.reorder {parentId}` 改它）。",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "createdAt": {
-              "type": "string"
-            },
-            "hiddenAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "type": "string"
-            },
-            "number": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "parentIds": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "policy": {
-              "description": "委派策略（M3b 的 read / update_delegation_policy），自由 JSON。"
-            },
-            "position": {
-              "default": 0,
-              "description": "只在**顶层**（根机组之间）有意义的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 不带 parentId 时改它，\n新根排在末尾）。子机组在某个父下的次序不在这里：看父的 `childIds`（多父机组在每个父下各有自己的次序）。",
-              "format": "int64",
-              "type": "integer"
-            },
-            "statusLine": {
-              "description": "机长写的一句状态（`set_crew_status`）。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "title": {
-              "type": "string"
-            },
-            "titleSource": {
-              "description": "\"human\" | \"captain\" | \"auto\"（谁起的名；旧数据从 extra 回填）。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "updatedAt": {
-              "type": "string"
-            },
-            "workingDirectory": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "id",
-            "title",
-            "builtin",
-            "parentIds",
-            "createdAt",
-            "updatedAt"
-          ],
-          "type": "object"
-        },
-        "Desired": {
-          "enum": [
-            "running",
-            "stopped"
-          ],
-          "type": "string"
-        },
-        "MemberRef": {
-          "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "session",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "id"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "human",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        },
-        "Role": {
-          "enum": [
-            "captain",
-            "worker",
-            "admin"
-          ],
-          "type": "string"
-        },
-        "Session": {
-          "properties": {
-            "agentSessionId": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "awaitingQuestion": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "brief": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "crewId": {
-              "type": "string"
-            },
-            "desired": {
-              "$ref": "#/$defs/Desired",
-              "default": "stopped"
-            },
-            "displayName": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "effort": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "executor": {
-              "description": "执行器类型：\"claude\" | \"codex\" | \"acp:<registry-id>\"；旧数据导入的还可能是 \"terminal\" | \"unknown\"。",
-              "type": "string"
-            },
-            "ext": {
-              "description": "分机号（机长恒为 1，不存；没号的旧成员为 None）。",
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "id": {
-              "type": "string"
-            },
-            "lastActiveAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "lastOutputAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "lastProgressAt": {
-              "description": "最近一次「产出」（工具调用 / 工作项变化；发言不算，控制者裁定 C3）。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "model": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "resumeFailedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "role": {
-              "$ref": "#/$defs/Role"
-            },
-            "title": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "updatedAt": {
-              "type": "string"
-            },
-            "wasWorking": {
-              "default": false,
-              "type": "boolean"
-            },
-            "workingDirectory": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "worktree": {
-              "description": "crewd 为它新建的 git worktree 的绝对路径（控制者裁定 C8，`isolation: true`）；None = 共享机组目录。",
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "id",
-            "crewId",
-            "role",
-            "executor",
-            "updatedAt"
-          ],
-          "type": "object"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "channels": {
           "items": {
@@ -1567,11 +722,9 @@
         "channels",
         "sessions"
       ],
-      "title": "CrewDetail",
       "type": "object"
     },
     "CrewIdParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -1581,11 +734,21 @@
       "required": [
         "crewId"
       ],
-      "title": "CrewIdParams",
+      "type": "object"
+    },
+    "CrewRef": {
+      "description": "`crew.removed` 的数据。",
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
       "type": "object"
     },
     "CrewReleaseParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -1606,11 +769,9 @@
         "crewId",
         "fromParentId"
       ],
-      "title": "CrewReleaseParams",
       "type": "object"
     },
     "CrewReorderParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "description": "侧栏次序按父边分层（控制者裁定 C1）：一次只排**一层**。\n`parentId` 给了 = 排这个父名下的直系子机组（写的是这条父边上的次序，读回来是父的 `Crew.childIds`；\n多父机组在别的父下的次序不受影响）；缺省 = 排顶层的根机组（写 `Crew.position`；内建机组不参与顶层排序、不能出现在名单里）。\n`crewIds` 必须恰好是这一层现有的全部机组（不重复、不缺、不多），否则 -32602。",
       "properties": {
@@ -1631,11 +792,9 @@
       "required": [
         "crewIds"
       ],
-      "title": "CrewReorderParams",
       "type": "object"
     },
     "CrewUpdateParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -1674,12 +833,55 @@
       "required": [
         "crewId"
       ],
-      "title": "CrewUpdateParams",
       "type": "object"
     },
+    "Decision": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "DecisionView": {
+      "properties": {
+        "numbered": {
+          "description": "选项带编号（按编号答）；false = 光标式菜单（绝不编造编号，§15）。",
+          "type": "boolean"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "options",
+        "numbered"
+      ],
+      "type": "object"
+    },
+    "Desired": {
+      "enum": [
+        "running",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "DirectoryKind": {
+      "enum": [
+        "crew",
+        "session"
+      ],
+      "type": "string"
+    },
     "DirectoryListParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`。",
       "properties": {
         "query": {
           "default": null,
@@ -1689,20 +891,12 @@
           ]
         }
       },
-      "title": "DirectoryListParams",
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "DirectoryRow": {
-      "$defs": {
-        "DirectoryKind": {
-          "enum": [
-            "crew",
-            "session"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "crewId": {
           "type": "string"
@@ -1735,18 +929,14 @@
         "crewId",
         "orgPath"
       ],
-      "title": "DirectoryRow",
       "type": "object"
     },
     "Empty": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "description": "空结果（`crew.delete` 等）。",
-      "title": "Empty",
       "type": "object"
     },
     "Event": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "data": true,
         "event": {
@@ -1757,11 +947,35 @@
         "event",
         "data"
       ],
-      "title": "Event",
+      "type": "object"
+    },
+    "HealthKindView": {
+      "enum": [
+        "auth_required",
+        "usage_limit",
+        "rate_limited",
+        "launch_failed",
+        "brief_undelivered",
+        "prompt_undelivered"
+      ],
+      "type": "string"
+    },
+    "HealthView": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/HealthKindView"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
       "type": "object"
     },
     "Hello": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "apiVersion": {
           "format": "uint32",
@@ -1780,131 +994,9 @@
         "version",
         "apiVersion"
       ],
-      "title": "Hello",
       "type": "object"
     },
     "HumanWait": {
-      "$defs": {
-        "Ask": {
-          "description": "一条人类待确认（H 号按机组发，§19 Q1）。",
-          "properties": {
-            "answer": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "ask": {
-              "description": "\"H3\"",
-              "type": "string"
-            },
-            "askedAt": {
-              "type": "string"
-            },
-            "askedBy": {
-              "description": "提问的 session；None = 系统 / 人。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "closedAt": {
-              "description": "回答 / 按默认办 / 撤回的时间。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "crewId": {
-              "type": "string"
-            },
-            "default": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/AskDefault"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "item": {
-              "description": "关于哪个工作项（\"W2\"）。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "messageId": {
-              "description": "人类群里那条公告。",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "question": {
-              "type": "string"
-            },
-            "resumeNote": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "state": {
-              "$ref": "#/$defs/AskStateView"
-            },
-            "withdrawReason": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "crewId",
-            "ask",
-            "question",
-            "askedAt",
-            "state"
-          ],
-          "type": "object"
-        },
-        "AskDefault": {
-          "properties": {
-            "afterMinutes": {
-              "format": "int64",
-              "type": "integer"
-            },
-            "text": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "afterMinutes"
-          ],
-          "type": "object"
-        },
-        "AskStateView": {
-          "enum": [
-            "open",
-            "answered",
-            "defaulted",
-            "withdrawn"
-          ],
-          "type": "string"
-        },
-        "WaitTierView": {
-          "enum": [
-            "fresh",
-            "pinned",
-            "still_wanted"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "ask": {
           "$ref": "#/$defs/Ask"
@@ -1942,84 +1034,93 @@
         "waitedMs",
         "tier"
       ],
-      "title": "HumanWait",
       "type": "object"
     },
-    "Message": {
-      "$defs": {
-        "Attachment": {
+    "Lagged": {
+      "description": "`events.lagged`：漏掉的事件条数，客户端应全量重拉。",
+      "properties": {
+        "missed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "missed"
+      ],
+      "type": "object"
+    },
+    "Ledger": {
+      "enum": [
+        "agent",
+        "human"
+      ],
+      "type": "string"
+    },
+    "MemberRef": {
+      "description": "群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。未知字段拒（控制者裁定 c；只影响反序列化）。",
+      "oneOf": [
+        {
           "additionalProperties": false,
-          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
-            "filename": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "id": {
               "type": "string"
             },
-            "mime": {
+            "kind": {
+              "const": "session",
               "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "size": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
             }
           },
           "required": [
-            "id",
-            "mime",
-            "path"
+            "kind",
+            "id"
           ],
           "type": "object"
         },
-        "Mention": {
+        {
           "additionalProperties": false,
-          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
           "properties": {
             "kind": {
-              "$ref": "#/$defs/MentionKind"
-            },
-            "targetId": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "const": "human",
+              "type": "string"
             }
           },
           "required": [
             "kind"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Mention": {
+      "additionalProperties": false,
+      "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MentionKind"
         },
-        "MentionKind": {
-          "enum": [
-            "session",
-            "captain",
-            "human",
-            "broadcast"
-          ],
-          "type": "string"
-        },
-        "SenderKind": {
-          "enum": [
-            "human",
-            "session",
-            "captain",
-            "system"
-          ],
-          "type": "string"
+        "targetId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "MentionKind": {
+      "enum": [
+        "session",
+        "captain",
+        "human",
+        "broadcast"
+      ],
+      "type": "string"
+    },
+    "Message": {
       "properties": {
         "attachments": {
           "default": [],
@@ -2089,11 +1190,9 @@
         "text",
         "createdAt"
       ],
-      "title": "Message",
       "type": "object"
     },
     "MessageListParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "afterSeq": {
@@ -2129,75 +1228,9 @@
       "required": [
         "channelId"
       ],
-      "title": "MessageListParams",
       "type": "object"
     },
     "MessagePostParams": {
-      "$defs": {
-        "Attachment": {
-          "additionalProperties": false,
-          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "properties": {
-            "filename": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "type": "string"
-            },
-            "mime": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "size": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "id",
-            "mime",
-            "path"
-          ],
-          "type": "object"
-        },
-        "Mention": {
-          "additionalProperties": false,
-          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "properties": {
-            "kind": {
-              "$ref": "#/$defs/MentionKind"
-            },
-            "targetId": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        "MentionKind": {
-          "enum": [
-            "session",
-            "captain",
-            "human",
-            "broadcast"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "attachments": {
@@ -2234,11 +1267,9 @@
         "channelId",
         "text"
       ],
-      "title": "MessagePostParams",
       "type": "object"
     },
     "MessageSearchParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "after": {
@@ -2289,18 +1320,17 @@
       "required": [
         "query"
       ],
-      "title": "MessageSearchParams",
       "type": "object"
     },
     "NoParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "description": "无参数方法只收 null 或 {}。",
-      "title": "NoParams",
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "ReadMarkParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "channelId": {
@@ -2315,11 +1345,9 @@
         "channelId",
         "seq"
       ],
-      "title": "ReadMarkParams",
       "type": "object"
     },
     "Request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "id": {
           "description": "客户端必须从 1 开始编号：0 保留给「请求无法解析」时服务端回的错误响应。",
@@ -2338,64 +1366,53 @@
         "id",
         "method"
       ],
-      "title": "Request",
       "type": "object"
     },
     "Response": {
-      "$defs": {
-        "RpcError": {
+      "description": "对一条请求的回复：恰好带 `result` 或 `error` 之一（控制者裁定 g）。`\"result\": null` 是「成功、值为 null」\n（例如 `restart.pending` 没有待答询问），与「没有 result」不同；两样都没有 / 都有的帧解析失败。",
+      "oneOf": [
+        {
+          "description": "成功；类型见方法表里这个方法的 `result`（可以是 null）。",
           "properties": {
-            "code": {
-              "format": "int32",
-              "type": "integer"
-            },
-            "message": {
-              "type": "string"
+            "result": true
+          },
+          "required": [
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/RpcError"
             }
           },
           "required": [
-            "code",
-            "message"
+            "error"
           ],
           "type": "object"
         }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      ],
       "properties": {
-        "error": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RpcError"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "id": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
-        },
-        "result": true
+        }
       },
       "required": [
         "id"
       ],
-      "title": "Response",
       "type": "object"
     },
+    "RestartAnswer": {
+      "enum": [
+        "resume",
+        "later"
+      ],
+      "type": "string"
+    },
     "RestartAnswerParams": {
-      "$defs": {
-        "RestartAnswer": {
-          "enum": [
-            "resume",
-            "later"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "answer": {
@@ -2410,20 +1427,9 @@
         "id",
         "answer"
       ],
-      "title": "RestartAnswerParams",
       "type": "object"
     },
     "RestartPrompt": {
-      "$defs": {
-        "RestartAnswer": {
-          "enum": [
-            "resume",
-            "later"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "description": "重启后「是否立即恢复这 N 个 session」（§22.7 Q1）。",
       "properties": {
         "answer": {
@@ -2461,28 +1467,52 @@
         "createdAt",
         "sessionIds"
       ],
-      "title": "RestartPrompt",
       "type": "object"
     },
-    "Session": {
-      "$defs": {
-        "Desired": {
-          "enum": [
-            "running",
-            "stopped"
-          ],
-          "type": "string"
+    "Role": {
+      "enum": [
+        "captain",
+        "worker",
+        "admin"
+      ],
+      "type": "string"
+    },
+    "RpcError": {
+      "properties": {
+        "code": {
+          "format": "int32",
+          "type": "integer"
         },
-        "Role": {
-          "enum": [
-            "captain",
-            "worker",
-            "admin"
-          ],
+        "message": {
           "type": "string"
         }
       },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "SenderKind": {
+      "enum": [
+        "human",
+        "session",
+        "captain",
+        "system"
+      ],
+      "type": "string"
+    },
+    "ServerFrame": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Response"
+        },
+        {
+          "$ref": "#/$defs/Event"
+        }
+      ]
+    },
+    "Session": {
       "properties": {
         "agentSessionId": {
           "type": [
@@ -2604,11 +1634,9 @@
         "executor",
         "updatedAt"
       ],
-      "title": "Session",
       "type": "object"
     },
     "SessionGetParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "sessionId": {
@@ -2618,12 +1646,11 @@
       "required": [
         "sessionId"
       ],
-      "title": "SessionGetParams",
       "type": "object"
     },
     "SessionListParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`。",
       "properties": {
         "crewId": {
           "default": null,
@@ -2633,62 +1660,12 @@
           ]
         }
       },
-      "title": "SessionListParams",
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "SessionLive": {
-      "$defs": {
-        "DecisionView": {
-          "properties": {
-            "numbered": {
-              "description": "选项带编号（按编号答）；false = 光标式菜单（绝不编造编号，§15）。",
-              "type": "boolean"
-            },
-            "options": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "summary": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "summary",
-            "options",
-            "numbered"
-          ],
-          "type": "object"
-        },
-        "HealthKindView": {
-          "enum": [
-            "auth_required",
-            "usage_limit",
-            "rate_limited",
-            "launch_failed",
-            "brief_undelivered",
-            "prompt_undelivered"
-          ],
-          "type": "string"
-        },
-        "HealthView": {
-          "properties": {
-            "detail": {
-              "type": "string"
-            },
-            "kind": {
-              "$ref": "#/$defs/HealthKindView"
-            }
-          },
-          "required": [
-            "kind",
-            "detail"
-          ],
-          "type": "object"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "description": "会话的实时状态（`session.live` / `session.changed`，由 M3c 填）。",
       "properties": {
         "awaitingQuestion": {
@@ -2732,11 +1709,9 @@
         "running",
         "working"
       ],
-      "title": "SessionLive",
       "type": "object"
     },
     "SubscribeParams": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "topics": {
@@ -2750,96 +1725,24 @@
       "required": [
         "topics"
       ],
-      "title": "SubscribeParams",
+      "type": "object"
+    },
+    "Subscribed": {
+      "description": "`events.subscribe` 的回执。",
+      "properties": {
+        "topics": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "topics"
+      ],
       "type": "object"
     },
     "Todo": {
-      "$defs": {
-        "Attachment": {
-          "additionalProperties": false,
-          "description": "也出现在参数里：未知字段拒（控制者裁定 c；只影响反序列化）。",
-          "properties": {
-            "filename": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "type": "string"
-            },
-            "mime": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "size": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "id",
-            "mime",
-            "path"
-          ],
-          "type": "object"
-        },
-        "Ledger": {
-          "enum": [
-            "agent",
-            "human"
-          ],
-          "type": "string"
-        },
-        "TodoResponse": {
-          "properties": {
-            "attachments": {
-              "default": [],
-              "items": {
-                "$ref": "#/$defs/Attachment"
-              },
-              "type": "array"
-            },
-            "createdAt": {
-              "type": "string"
-            },
-            "id": {
-              "type": "string"
-            },
-            "senderName": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "sessionId": {
-              "type": "string"
-            },
-            "status": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "text": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "sessionId",
-            "text",
-            "createdAt"
-          ],
-          "type": "object"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "attachments": {
           "default": [],
@@ -2901,20 +1804,9 @@
         "status",
         "createdAt"
       ],
-      "title": "Todo",
       "type": "object"
     },
     "TodoListParams": {
-      "$defs": {
-        "Ledger": {
-          "enum": [
-            "agent",
-            "human"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -2928,8 +1820,405 @@
         "crewId",
         "ledger"
       ],
-      "title": "TodoListParams",
       "type": "object"
+    },
+    "TodoResponse": {
+      "properties": {
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "senderName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "text",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "WaitTierView": {
+      "enum": [
+        "fresh",
+        "pinned",
+        "still_wanted"
+      ],
+      "type": "string"
     }
-  }
+  },
+  "apiVersion": 2,
+  "events": {
+    "approval.changed": {
+      "$ref": "#/$defs/Approval"
+    },
+    "ask.changed": {
+      "$ref": "#/$defs/Ask"
+    },
+    "badge.changed": {
+      "$ref": "#/$defs/Badge"
+    },
+    "channel.changed": {
+      "$ref": "#/$defs/ChannelSummary"
+    },
+    "crew.changed": {
+      "$ref": "#/$defs/Crew"
+    },
+    "crew.removed": {
+      "$ref": "#/$defs/CrewRef"
+    },
+    "events.lagged": {
+      "$ref": "#/$defs/Lagged"
+    },
+    "message.appended": {
+      "$ref": "#/$defs/Message"
+    },
+    "restart.changed": {
+      "$ref": "#/$defs/RestartPrompt"
+    },
+    "session.changed": {
+      "$ref": "#/$defs/SessionLive"
+    }
+  },
+  "frames": {
+    "Request": {
+      "$ref": "#/$defs/Request"
+    },
+    "ServerFrame": {
+      "$ref": "#/$defs/ServerFrame"
+    }
+  },
+  "methods": {
+    "approval.decide": {
+      "params": {
+        "$ref": "#/$defs/ApprovalDecideParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Approval"
+      }
+    },
+    "approval.list": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Approval"
+        },
+        "type": "array"
+      }
+    },
+    "ask.answer": {
+      "params": {
+        "$ref": "#/$defs/AskAnswerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ask"
+      }
+    },
+    "ask.list": {
+      "params": {
+        "$ref": "#/$defs/AskListParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/HumanWait"
+        },
+        "type": "array"
+      }
+    },
+    "ask.withdraw": {
+      "params": {
+        "$ref": "#/$defs/AskWithdrawParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ask"
+      }
+    },
+    "channel.addMembers": {
+      "params": {
+        "$ref": "#/$defs/ChannelMembersParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Channel"
+      }
+    },
+    "channel.create": {
+      "params": {
+        "$ref": "#/$defs/ChannelCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Channel"
+      }
+    },
+    "channel.list": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/ChannelSummary"
+        },
+        "type": "array"
+      }
+    },
+    "channel.removeMember": {
+      "params": {
+        "$ref": "#/$defs/ChannelMemberParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Channel"
+      }
+    },
+    "channel.setOwner": {
+      "params": {
+        "$ref": "#/$defs/ChannelSetOwnerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Channel"
+      }
+    },
+    "channel.update": {
+      "params": {
+        "$ref": "#/$defs/ChannelUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Channel"
+      }
+    },
+    "channel.watch": {
+      "params": {
+        "$ref": "#/$defs/ChannelWatchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelSummary"
+      }
+    },
+    "crew.adopt": {
+      "params": {
+        "$ref": "#/$defs/CrewAdoptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
+      }
+    },
+    "crew.create": {
+      "params": {
+        "$ref": "#/$defs/CrewCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
+      }
+    },
+    "crew.delete": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "crew.get": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CrewDetail"
+      }
+    },
+    "crew.list": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Crew"
+        },
+        "type": "array"
+      }
+    },
+    "crew.release": {
+      "params": {
+        "$ref": "#/$defs/CrewReleaseParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
+      }
+    },
+    "crew.reorder": {
+      "params": {
+        "$ref": "#/$defs/CrewReorderParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Crew"
+        },
+        "type": "array"
+      }
+    },
+    "crew.update": {
+      "params": {
+        "$ref": "#/$defs/CrewUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
+      }
+    },
+    "directory.list": {
+      "params": {
+        "$ref": "#/$defs/DirectoryListParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/DirectoryRow"
+        },
+        "type": "array"
+      }
+    },
+    "events.subscribe": {
+      "params": {
+        "$ref": "#/$defs/SubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Subscribed"
+      }
+    },
+    "message.list": {
+      "params": {
+        "$ref": "#/$defs/MessageListParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Message"
+        },
+        "type": "array"
+      }
+    },
+    "message.post": {
+      "params": {
+        "$ref": "#/$defs/MessagePostParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Message"
+      }
+    },
+    "message.search": {
+      "params": {
+        "$ref": "#/$defs/MessageSearchParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Message"
+        },
+        "type": "array"
+      }
+    },
+    "read.mark": {
+      "params": {
+        "$ref": "#/$defs/ReadMarkParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelSummary"
+      }
+    },
+    "restart.answer": {
+      "params": {
+        "$ref": "#/$defs/RestartAnswerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RestartPrompt"
+      }
+    },
+    "restart.pending": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RestartPrompt"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "session.get": {
+      "params": {
+        "$ref": "#/$defs/SessionGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Session"
+      }
+    },
+    "session.list": {
+      "params": {
+        "$ref": "#/$defs/SessionListParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Session"
+        },
+        "type": "array"
+      }
+    },
+    "system.hello": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Hello"
+      }
+    },
+    "todo.list": {
+      "params": {
+        "$ref": "#/$defs/TodoListParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Todo"
+        },
+        "type": "array"
+      }
+    }
+  },
+  "topics": [
+    "message",
+    "channel",
+    "crew",
+    "badge",
+    "ask",
+    "approval",
+    "session",
+    "restart",
+    "wake"
+  ],
+  "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

@@ -5,7 +5,7 @@ mod params;
 
 pub use model::*;
 pub use params::*;
-use schemars::{JsonSchema, schema_for};
+use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -141,28 +141,68 @@ impl RpcError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// 对一条请求的回复：恰好带 `result` 或 `error` 之一（控制者裁定 g）。`"result": null` 是「成功、值为 null」
+/// （例如 `restart.pending` 没有待答询问），与「没有 result」不同；两样都没有 / 都有的帧解析失败。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Response {
     pub id: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<RpcError>,
+    #[serde(flatten)]
+    pub outcome: Outcome,
+}
+
+/// 回复的内容：线上是 `"result": <值>` 或 `"error": {code, message}` 这一个键。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum Outcome {
+    /// 成功；类型见方法表里这个方法的 `result`（可以是 null）。
+    Result(Value),
+    Error(RpcError),
+}
+
+/// 手写：派生的反序列化会把 `"result": null` 读成「没有 result」，也查不出「两样都没有 / 都有」。
+impl<'de> Deserialize<'de> for Response {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        /// 键在 = Some（哪怕值是 null）；键不在 = None（`#[serde(default)]`）。
+        fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+            Value::deserialize(d).map(Some)
+        }
+        #[derive(Deserialize)]
+        struct Wire {
+            id: u64,
+            #[serde(default, deserialize_with = "present")]
+            result: Option<Value>,
+            #[serde(default)]
+            error: Option<RpcError>,
+        }
+        let w = Wire::deserialize(d)?;
+        let outcome = match (w.result, w.error) {
+            (Some(v), None) => Outcome::Result(v),
+            (None, Some(e)) => Outcome::Error(e),
+            (None, None) => return Err(D::Error::custom("回复既没有 result 也没有 error")),
+            (Some(_), Some(_)) => return Err(D::Error::custom("回复同时带了 result 和 error")),
+        };
+        Ok(Response { id: w.id, outcome })
+    }
 }
 
 impl Response {
     pub fn ok(id: u64, result: Value) -> Self {
         Self {
             id,
-            result: Some(result),
-            error: None,
+            outcome: Outcome::Result(result),
         }
     }
     pub fn err(id: u64, error: RpcError) -> Self {
         Self {
             id,
-            result: None,
-            error: Some(error),
+            outcome: Outcome::Error(error),
+        }
+    }
+    pub fn into_result(self) -> Result<Value, RpcError> {
+        match self.outcome {
+            Outcome::Result(v) => Ok(v),
+            Outcome::Error(e) => Err(e),
         }
     }
 }
@@ -209,189 +249,194 @@ pub fn parse_no_params(params: Value) -> Result<(), RpcError> {
     parse_params_or_default::<NoParams>(params).map(|_| ())
 }
 
-/// 整份 API 契约。`crewd schema` 打印它；仓库里提交一份，测试保证两者一致。
+fn sub<T: JsonSchema>(g: &mut schemars::SchemaGenerator) -> Value {
+    serde_json::to_value(g.subschema_for::<T>()).expect("schema 可序列化")
+}
+
+fn many(v: Value) -> Value {
+    json!({ "type": "array", "items": v })
+}
+
+fn nullable(v: Value) -> Value {
+    json!({ "anyOf": [v, { "type": "null" }] })
+}
+
+fn m(params: Value, result: Value) -> Value {
+    json!({ "params": params, "result": result })
+}
+
+/// 整份 API 契约（`crewd schema` 打印它；仓库里提交一份，测试保证两者一致）。
+/// 全部类型只在顶层 `$defs` 出现一次；方法 / 事件 / 帧都是 `$ref`，Swift 端可以直接据此生成代码。
+/// 参数类型是 `object | null` 的方法 = 解析器也收 `null`（R11：契约与解析器一致，见 params.rs）。
 pub fn api_schema() -> Value {
-    // 方法表此刻是类型名字符串（Task 14 整体改成 `$ref`）。`X | null` = 解析器也收 `null`（R11：契约与解析器一致）：
-    // 无参数方法收 `null` 或 `{}`，全可选参数的方法 `null` 当 `{}`。
-    // json! 一次展开这么多会撞宏递归上限：方法 / 事件 / 类型各用一张表拼。
+    // R8：`gen` 在 edition 2024 是保留字。
+    let mut generator = schemars::SchemaGenerator::default();
+    let g = &mut generator;
+    // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
-        (methods::HELLO, "NoParams | null", "Hello"),
-        (methods::CREW_LIST, "NoParams | null", "Crew[]"),
-        (methods::CREW_GET, "CrewIdParams", "CrewDetail"),
-        (methods::CREW_CREATE, "CrewCreateParams", "Crew"),
-        (methods::CREW_UPDATE, "CrewUpdateParams", "Crew"),
-        (methods::CREW_ADOPT, "CrewAdoptParams", "Crew"),
-        (methods::CREW_REORDER, "CrewReorderParams", "Crew[]"),
-        (methods::CREW_RELEASE, "CrewReleaseParams", "Crew"),
-        (methods::CREW_DELETE, "CrewIdParams", "Empty"),
-        (methods::CHANNEL_LIST, "CrewIdParams", "ChannelSummary[]"),
-        (methods::CHANNEL_CREATE, "ChannelCreateParams", "Channel"),
-        (methods::CHANNEL_UPDATE, "ChannelUpdateParams", "Channel"),
+        (methods::HELLO, m(sub::<NoParams>(g), sub::<Hello>(g))),
+        (
+            methods::CREW_LIST,
+            m(sub::<NoParams>(g), many(sub::<Crew>(g))),
+        ),
+        (
+            methods::CREW_GET,
+            m(sub::<CrewIdParams>(g), sub::<CrewDetail>(g)),
+        ),
+        (
+            methods::CREW_CREATE,
+            m(sub::<CrewCreateParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_UPDATE,
+            m(sub::<CrewUpdateParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_ADOPT,
+            m(sub::<CrewAdoptParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_REORDER,
+            m(sub::<CrewReorderParams>(g), many(sub::<Crew>(g))),
+        ),
+        (
+            methods::CREW_RELEASE,
+            m(sub::<CrewReleaseParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_DELETE,
+            m(sub::<CrewIdParams>(g), sub::<Empty>(g)),
+        ),
+        (
+            methods::CHANNEL_LIST,
+            m(sub::<CrewIdParams>(g), many(sub::<ChannelSummary>(g))),
+        ),
+        (
+            methods::CHANNEL_CREATE,
+            m(sub::<ChannelCreateParams>(g), sub::<Channel>(g)),
+        ),
+        (
+            methods::CHANNEL_UPDATE,
+            m(sub::<ChannelUpdateParams>(g), sub::<Channel>(g)),
+        ),
         (
             methods::CHANNEL_ADD_MEMBERS,
-            "ChannelMembersParams",
-            "Channel",
+            m(sub::<ChannelMembersParams>(g), sub::<Channel>(g)),
         ),
         (
             methods::CHANNEL_REMOVE_MEMBER,
-            "ChannelMemberParams",
-            "Channel",
+            m(sub::<ChannelMemberParams>(g), sub::<Channel>(g)),
         ),
         (
             methods::CHANNEL_WATCH,
-            "ChannelWatchParams",
-            "ChannelSummary",
+            m(sub::<ChannelWatchParams>(g), sub::<ChannelSummary>(g)),
         ),
         (
             methods::CHANNEL_SET_OWNER,
-            "ChannelSetOwnerParams",
-            "Channel",
+            m(sub::<ChannelSetOwnerParams>(g), sub::<Channel>(g)),
         ),
-        (methods::MESSAGE_LIST, "MessageListParams", "Message[]"),
-        (methods::MESSAGE_POST, "MessagePostParams", "Message"),
-        (methods::MESSAGE_SEARCH, "MessageSearchParams", "Message[]"),
-        (methods::READ_MARK, "ReadMarkParams", "ChannelSummary"),
+        (
+            methods::MESSAGE_LIST,
+            m(sub::<MessageListParams>(g), many(sub::<Message>(g))),
+        ),
+        (
+            methods::MESSAGE_POST,
+            m(sub::<MessagePostParams>(g), sub::<Message>(g)),
+        ),
+        (
+            methods::MESSAGE_SEARCH,
+            m(sub::<MessageSearchParams>(g), many(sub::<Message>(g))),
+        ),
+        (
+            methods::READ_MARK,
+            m(sub::<ReadMarkParams>(g), sub::<ChannelSummary>(g)),
+        ),
         (
             methods::SESSION_LIST,
-            "SessionListParams | null",
-            "Session[]",
+            m(sub::<SessionListParams>(g), many(sub::<Session>(g))),
         ),
-        (methods::SESSION_GET, "SessionGetParams", "Session"),
-        (methods::ASK_LIST, "AskListParams | null", "HumanWait[]"),
-        (methods::ASK_ANSWER, "AskAnswerParams", "Ask"),
-        (methods::ASK_WITHDRAW, "AskWithdrawParams", "Ask"),
-        (methods::APPROVAL_LIST, "NoParams | null", "Approval[]"),
-        (methods::APPROVAL_DECIDE, "ApprovalDecideParams", "Approval"),
+        (
+            methods::SESSION_GET,
+            m(sub::<SessionGetParams>(g), sub::<Session>(g)),
+        ),
+        (
+            methods::ASK_LIST,
+            m(sub::<AskListParams>(g), many(sub::<HumanWait>(g))),
+        ),
+        (
+            methods::ASK_ANSWER,
+            m(sub::<AskAnswerParams>(g), sub::<Ask>(g)),
+        ),
+        (
+            methods::ASK_WITHDRAW,
+            m(sub::<AskWithdrawParams>(g), sub::<Ask>(g)),
+        ),
+        (
+            methods::APPROVAL_LIST,
+            m(sub::<NoParams>(g), many(sub::<Approval>(g))),
+        ),
+        (
+            methods::APPROVAL_DECIDE,
+            m(sub::<ApprovalDecideParams>(g), sub::<Approval>(g)),
+        ),
         (
             methods::RESTART_PENDING,
-            "NoParams | null",
-            "RestartPrompt | null",
+            m(sub::<NoParams>(g), nullable(sub::<RestartPrompt>(g))),
         ),
         (
             methods::RESTART_ANSWER,
-            "RestartAnswerParams",
-            "RestartPrompt",
+            m(sub::<RestartAnswerParams>(g), sub::<RestartPrompt>(g)),
         ),
         (
             methods::DIRECTORY_LIST,
-            "DirectoryListParams | null",
-            "DirectoryRow[]",
+            m(sub::<DirectoryListParams>(g), many(sub::<DirectoryRow>(g))),
         ),
-        (methods::TODO_LIST, "TodoListParams", "Todo[]"),
+        (
+            methods::TODO_LIST,
+            m(sub::<TodoListParams>(g), many(sub::<Todo>(g))),
+        ),
         (
             methods::SUBSCRIBE,
-            "SubscribeParams",
-            "{ topics: string[] }",
+            m(sub::<SubscribeParams>(g), sub::<Subscribed>(g)),
         ),
     ]
     .into_iter()
-    .map(|(m, p, r)| (m.to_string(), json!({ "params": p, "result": r })))
+    .map(|(k, v)| (k.to_string(), v))
     .collect();
     let events: serde_json::Map<String, Value> = [
-        (events::MESSAGE_APPENDED, "Message"),
-        (events::CHANNEL_CHANGED, "ChannelSummary"),
-        (events::CREW_CHANGED, "Crew"),
-        (events::CREW_REMOVED, "{ crewId: string }"),
-        (events::BADGE_CHANGED, "Badge"),
-        (events::ASK_CHANGED, "Ask"),
-        (events::APPROVAL_CHANGED, "Approval"),
-        (events::SESSION_CHANGED, "SessionLive"),
-        (events::RESTART_CHANGED, "RestartPrompt"),
-        (events::LAGGED, "{ missed: number }"),
+        (events::MESSAGE_APPENDED, sub::<Message>(g)),
+        (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
+        (events::CREW_CHANGED, sub::<Crew>(g)),
+        (events::CREW_REMOVED, sub::<CrewRef>(g)),
+        (events::BADGE_CHANGED, sub::<Badge>(g)),
+        (events::ASK_CHANGED, sub::<Ask>(g)),
+        (events::APPROVAL_CHANGED, sub::<Approval>(g)),
+        (events::SESSION_CHANGED, sub::<SessionLive>(g)),
+        (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
+        (events::LAGGED, sub::<Lagged>(g)),
     ]
     .into_iter()
-    .map(|(e, d)| (e.to_string(), json!(d)))
+    .map(|(k, v)| (k.to_string(), v))
     .collect();
-    let types: serde_json::Map<String, Value> = [
-        ("Request", json!(schema_for!(Request))),
-        ("Response", json!(schema_for!(Response))),
-        ("Event", json!(schema_for!(Event))),
-        ("Hello", json!(schema_for!(Hello))),
-        ("Crew", json!(schema_for!(Crew))),
-        ("CrewDetail", json!(schema_for!(CrewDetail))),
-        ("Session", json!(schema_for!(Session))),
-        ("SessionLive", json!(schema_for!(SessionLive))),
-        ("Message", json!(schema_for!(Message))),
-        ("Channel", json!(schema_for!(Channel))),
-        ("ChannelSummary", json!(schema_for!(ChannelSummary))),
-        ("Badge", json!(schema_for!(Badge))),
-        ("Ask", json!(schema_for!(Ask))),
-        ("HumanWait", json!(schema_for!(HumanWait))),
-        ("Approval", json!(schema_for!(Approval))),
-        ("RestartPrompt", json!(schema_for!(RestartPrompt))),
-        ("DirectoryRow", json!(schema_for!(DirectoryRow))),
-        ("Todo", json!(schema_for!(Todo))),
-        ("Empty", json!(schema_for!(Empty))),
-        ("NoParams", json!(schema_for!(NoParams))),
-        ("CrewIdParams", json!(schema_for!(CrewIdParams))),
-        ("CrewCreateParams", json!(schema_for!(CrewCreateParams))),
-        ("CrewUpdateParams", json!(schema_for!(CrewUpdateParams))),
-        ("CrewAdoptParams", json!(schema_for!(CrewAdoptParams))),
-        ("CrewReorderParams", json!(schema_for!(CrewReorderParams))),
-        ("CrewReleaseParams", json!(schema_for!(CrewReleaseParams))),
-        (
-            "ChannelCreateParams",
-            json!(schema_for!(ChannelCreateParams)),
-        ),
-        (
-            "ChannelUpdateParams",
-            json!(schema_for!(ChannelUpdateParams)),
-        ),
-        (
-            "ChannelMembersParams",
-            json!(schema_for!(ChannelMembersParams)),
-        ),
-        (
-            "ChannelMemberParams",
-            json!(schema_for!(ChannelMemberParams)),
-        ),
-        ("ChannelWatchParams", json!(schema_for!(ChannelWatchParams))),
-        (
-            "ChannelSetOwnerParams",
-            json!(schema_for!(ChannelSetOwnerParams)),
-        ),
-        ("MessageListParams", json!(schema_for!(MessageListParams))),
-        ("MessagePostParams", json!(schema_for!(MessagePostParams))),
-        (
-            "MessageSearchParams",
-            json!(schema_for!(MessageSearchParams)),
-        ),
-        ("ReadMarkParams", json!(schema_for!(ReadMarkParams))),
-        ("SessionListParams", json!(schema_for!(SessionListParams))),
-        ("SessionGetParams", json!(schema_for!(SessionGetParams))),
-        ("AskListParams", json!(schema_for!(AskListParams))),
-        ("AskAnswerParams", json!(schema_for!(AskAnswerParams))),
-        ("AskWithdrawParams", json!(schema_for!(AskWithdrawParams))),
-        (
-            "ApprovalDecideParams",
-            json!(schema_for!(ApprovalDecideParams)),
-        ),
-        (
-            "RestartAnswerParams",
-            json!(schema_for!(RestartAnswerParams)),
-        ),
-        (
-            "DirectoryListParams",
-            json!(schema_for!(DirectoryListParams)),
-        ),
-        ("TodoListParams", json!(schema_for!(TodoListParams))),
-        ("SubscribeParams", json!(schema_for!(SubscribeParams))),
-    ]
-    .into_iter()
-    .map(|(n, t)| (n.to_string(), t))
-    .collect();
+    let frames = json!({
+        "Request": sub::<Request>(g),
+        "ServerFrame": sub::<ServerFrame>(g),
+    });
     json!({
         "apiVersion": API_VERSION,
         "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line",
+        "topics": events::TOPICS,
+        "frames": frames,
         "methods": methods,
         "events": events,
-        "types": types,
+        "$defs": generator.take_definitions(true),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use schemars::schema_for;
     use serde_json::json;
 
     #[test]
@@ -603,11 +648,182 @@ mod tests {
         assert_eq!(serde_json::to_value(&c).unwrap()["position"], 0);
     }
 
+    fn walk_refs(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(Value::String(r)) = m.get("$ref") {
+                    out.push(r.clone());
+                }
+                m.values().for_each(|x| walk_refs(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk_refs(x, out)),
+            _ => {}
+        }
+    }
+
     #[test]
-    fn api_schema_lists_methods_and_types() {
+    fn schema_lists_exactly_the_client_methods() {
         let s = api_schema();
+        let mut listed: Vec<&str> = s["methods"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        listed.sort();
+        let mut all: Vec<&str> = methods::ALL.to_vec();
+        all.sort();
+        assert_eq!(listed, all);
         assert_eq!(s["apiVersion"], 2);
-        assert!(s["methods"]["message.post"].is_object());
-        assert!(s["types"]["Message"].is_object());
+    }
+
+    #[test]
+    fn every_ref_resolves_to_a_single_top_level_def() {
+        let s = api_schema();
+        let defs = s["$defs"].as_object().unwrap();
+        let mut refs = Vec::new();
+        walk_refs(&s, &mut refs);
+        assert!(!refs.is_empty());
+        for r in refs {
+            let name = r
+                .strip_prefix("#/$defs/")
+                .unwrap_or_else(|| panic!("不是顶层 $defs 引用：{r}"));
+            assert!(defs.contains_key(name), "悬空引用 {r}");
+        }
+        for (name, d) in defs {
+            assert!(d.get("$defs").is_none(), "{name} 自带了一份 $defs");
+        }
+    }
+
+    #[test]
+    fn every_params_type_denies_unknown_fields_and_vocabularies_are_enums() {
+        let s = api_schema();
+        let defs = s["$defs"].as_object().unwrap();
+        for (m, spec) in s["methods"].as_object().unwrap() {
+            let r = spec["params"]["$ref"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{m} 的 params 不是 $ref"));
+            let def = &defs[r.trim_start_matches("#/$defs/")];
+            assert_eq!(
+                def["additionalProperties"],
+                json!(false),
+                "{m} 的参数没有 deny_unknown_fields"
+            );
+        }
+        for e in [
+            "SenderKind",
+            "MentionKind",
+            "Role",
+            "ChannelKind",
+            "Desired",
+            "AskStateView",
+            "RestartAnswer",
+        ] {
+            assert!(
+                defs[e].get("enum").is_some() || defs[e].get("oneOf").is_some(),
+                "{e} 不是封闭枚举：{}",
+                defs[e]
+            );
+        }
+        for e in [
+            events::MESSAGE_APPENDED,
+            events::SESSION_CHANGED,
+            events::LAGGED,
+        ] {
+            assert!(s["events"][e].is_object(), "缺事件 {e}");
+        }
+    }
+
+    /// R11：契约与解析器一致。解析器收 `null` 的方法（无参 / 全可选参数），参数类型在契约里写成 `object | null`；
+    /// 其余的不收 null。`restart.pending` 的结果可以是 null。
+    #[test]
+    fn methods_whose_parser_accepts_null_say_so_in_the_contract() {
+        let s = api_schema();
+        let defs = s["$defs"].as_object().unwrap();
+        let null_ok = [
+            methods::HELLO,
+            methods::CREW_LIST,
+            methods::APPROVAL_LIST,
+            methods::RESTART_PENDING,
+            methods::SESSION_LIST,
+            methods::ASK_LIST,
+            methods::DIRECTORY_LIST,
+        ];
+        for (m, spec) in s["methods"].as_object().unwrap() {
+            let r = spec["params"]["$ref"].as_str().unwrap();
+            let def = &defs[r.trim_start_matches("#/$defs/")];
+            let takes_null = def["type"]
+                .as_array()
+                .is_some_and(|t| t.contains(&json!("null")));
+            assert_eq!(takes_null, null_ok.contains(&m.as_str()), "{m}: 契约 {def}");
+        }
+        let pending = &s["methods"][methods::RESTART_PENDING]["result"];
+        assert!(
+            pending["anyOf"]
+                .as_array()
+                .is_some_and(|a| a.contains(&json!({"type":"null"}))),
+            "{pending}"
+        );
+    }
+
+    /// `crew.removed` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
+    #[test]
+    fn small_event_and_ack_payloads_keep_their_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(CrewRef {
+                crew_id: "crew-a".into()
+            })
+            .unwrap(),
+            json!({"crewId":"crew-a"})
+        );
+        assert_eq!(
+            serde_json::to_value(Lagged { missed: 3 }).unwrap(),
+            json!({"missed":3})
+        );
+        assert_eq!(
+            serde_json::to_value(Subscribed {
+                topics: vec!["message".into()]
+            })
+            .unwrap(),
+            json!({"topics":["message"]})
+        );
+    }
+
+    /// 控制者裁定 g：`"result": null`（成功、值是 null）与「没有 result」是两回事；一条回复恰好带 result 或 error 之一。
+    #[test]
+    fn a_null_result_is_not_an_absent_result() {
+        let f: ServerFrame = serde_json::from_str(r#"{"id":4,"result":null}"#).unwrap();
+        match f {
+            ServerFrame::Response(r) => assert_eq!(r.into_result(), Ok(Value::Null)),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_value(Response::ok(4, Value::Null)).unwrap(),
+            json!({"id":4,"result":null})
+        );
+        let f: ServerFrame =
+            serde_json::from_str(r#"{"id":5,"error":{"code":-32004,"message":"没有"}}"#).unwrap();
+        match f {
+            ServerFrame::Response(r) => assert_eq!(r.into_result().unwrap_err().code, -32004),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            serde_json::from_str::<ServerFrame>(r#"{"id":4}"#).is_err(),
+            "既没有 result 也没有 error 不是合法的帧"
+        );
+        assert!(
+            serde_json::from_str::<ServerFrame>(
+                r#"{"id":4,"result":1,"error":{"code":-32603,"message":"x"}}"#
+            )
+            .is_err(),
+            "两样都带也不是"
+        );
+        // 契约里也是「恰好一个」。
+        let s = api_schema();
+        let resp = &s["$defs"]["Response"];
+        let one_of = resp["oneOf"].as_array().unwrap_or_else(|| panic!("{resp}"));
+        let required: Vec<&Value> = one_of.iter().map(|b| &b["required"]).collect();
+        assert_eq!(required, [&json!(["result"]), &json!(["error"])], "{resp}");
+        assert!(s["frames"]["ServerFrame"]["$ref"].is_string());
     }
 }

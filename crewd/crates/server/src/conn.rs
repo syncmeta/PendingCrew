@@ -1,8 +1,8 @@
 use crate::AppState;
 use crewd_proto::{
-    Event, Request, Response, RpcError, ServerFrame, SubscribeParams, events, methods, parse_params,
+    Event, Lagged, Request, Response, RpcError, ServerFrame, SubscribeParams, Subscribed, events,
+    methods, parse_params,
 };
-use serde_json::json;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -108,7 +108,13 @@ async fn read_loop(
                 // 先订阅，再排队 ack，最后才起转发任务：事件不会抢在 ack 前面，
                 // 也不会丢（接收端会缓冲）。重复订阅替换旧的转发任务。
                 let rx = state.hub.subscribe();
-                let ack = ServerFrame::Response(Response::ok(id, json!({ "topics": p.topics })));
+                let ack = ServerFrame::Response(Response::ok(
+                    id,
+                    serde_json::to_value(Subscribed {
+                        topics: p.topics.clone(),
+                    })
+                    .unwrap(),
+                ));
                 if tx.send(ack).await.is_err() {
                     return Ok(());
                 }
@@ -163,7 +169,7 @@ fn spawn_forwarder(
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(n)) => ServerFrame::Event(Event {
                     event: events::LAGGED.into(),
-                    data: json!({ "missed": n }),
+                    data: serde_json::to_value(Lagged { missed: n }).unwrap(),
                 }),
                 Err(broadcast::error::RecvError::Closed) => break,
             };

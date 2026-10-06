@@ -482,3 +482,24 @@ pub struct RestartPrompt {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
+
+/// `crew.removed` 的数据。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CrewRef {
+    pub crew_id: String,
+}
+
+/// `events.lagged`：漏掉的事件条数，客户端应全量重拉。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Lagged {
+    pub missed: u64,
+}
+
+/// `events.subscribe` 的回执。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Subscribed {
+    pub topics: Vec<String>,
+}

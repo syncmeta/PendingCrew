@@ -5,14 +5,17 @@ use serde::{Deserialize, Serialize};
 
 macro_rules! params {
     ($(#[$m:meta])* $name:ident { $($(#[$fm:meta])* $f:ident : $t:ty),* $(,)? }) => {
-        $(#[$m])*
         #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+        $(#[$m])*
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         pub struct $name { $($(#[$fm])* pub $f: $t,)* }
     };
 }
 
+// R11（契约与解析器一致）：解析器收 `null` 的参数类型在契约里写成 `object | null`。只给只被
+// `parse_no_params` / `parse_params_or_default` 解析的类型加（proto 的测试按方法逐个核）。
 params!(/// 无参数方法只收 null 或 {}。
+    #[schemars(extend("type" = ["object", "null"]))]
     NoParams {});
 params!(CrewIdParams { crew_id: String });
 params!(CrewCreateParams { title: String, working_directory: String, #[serde(default)] parent_id: Option<String> });
@@ -90,9 +93,13 @@ params!(ReadMarkParams {
     channel_id: String,
     seq: i64
 });
-params!(SessionListParams { #[serde(default)] crew_id: Option<String> });
+params!(/// 全可选：`null` 当 `{}`。
+    #[schemars(extend("type" = ["object", "null"]))]
+    SessionListParams { #[serde(default)] crew_id: Option<String> });
 params!(SessionGetParams { session_id: String });
-params!(AskListParams { #[serde(default)] root_crew_id: Option<String> });
+params!(/// 全可选：`null` 当 `{}`。
+    #[schemars(extend("type" = ["object", "null"]))]
+    AskListParams { #[serde(default)] root_crew_id: Option<String> });
 params!(AskAnswerParams {
     crew_id: String,
     ask: String,
@@ -111,7 +118,9 @@ params!(RestartAnswerParams {
     id: i64,
     answer: RestartAnswer
 });
-params!(DirectoryListParams { #[serde(default)] query: Option<String> });
+params!(/// 全可选：`null` 当 `{}`。
+    #[schemars(extend("type" = ["object", "null"]))]
+    DirectoryListParams { #[serde(default)] query: Option<String> });
 params!(TodoListParams {
     crew_id: String,
     ledger: Ledger

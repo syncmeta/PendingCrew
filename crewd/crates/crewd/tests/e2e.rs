@@ -270,3 +270,155 @@ fn committed_schema_matches_generated() {
         "API 契约变了：重新生成 schema/crewd-api.schema.json 并提交"
     );
 }
+
+/// 每个客户端方法都能经 `crewd rpc` 走到处理函数（不是 -32601）：能成功的就要求成功；需要 agent 先造数据的
+/// （回答问、审批、重启询问）用不存在的号，要求得到「不存在 / 规则不过」而不是「没有这个方法」。
+#[test]
+fn rpc_drives_every_client_method() {
+    let data = tempfile::tempdir().unwrap();
+    let out = crewd(data.path())
+        .args(["import", "--from"])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _d = start(data.path());
+    enum Want {
+        Ok,
+        Code(i32),
+    }
+    use Want::*;
+    let cases: Vec<(&str, &str, Want)> = vec![
+        ("system.hello", "null", Ok),
+        ("crew.list", "null", Ok),
+        ("crew.get", r#"{"crewId":"local-aaaa"}"#, Ok),
+        (
+            "crew.create",
+            r#"{"title":"端到端","workingDirectory":"/tmp/example"}"#,
+            Ok,
+        ),
+        (
+            "crew.update",
+            r#"{"crewId":"local-bbbb","statusLine":"跑端到端"}"#,
+            Ok,
+        ),
+        (
+            "crew.adopt",
+            r#"{"crewId":"local-bbbb","parentId":"local-aaaa"}"#,
+            Ok,
+        ),
+        (
+            "crew.reorder",
+            r#"{"parentId":"local-aaaa","crewIds":["nope"]}"#,
+            Code(-32602),
+        ),
+        (
+            "crew.release",
+            r#"{"crewId":"local-bbbb","fromParentId":"local-aaaa","toParentId":"local-aaaa"}"#,
+            Ok,
+        ),
+        ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        (
+            "channel.create",
+            r#"{"crewId":"local-aaaa","kind":"topic","name":"端到端群"}"#,
+            Ok,
+        ),
+        (
+            "channel.update",
+            r#"{"channelId":"local-aaaa/human","purpose":"找人"}"#,
+            Ok,
+        ),
+        (
+            "channel.addMembers",
+            r#"{"channelId":"local-aaaa/human","members":[{"kind":"session","id":"worker-2222bbbb"}]}"#,
+            Ok,
+        ),
+        (
+            "channel.removeMember",
+            r#"{"channelId":"local-aaaa/human","member":{"kind":"session","id":"worker-2222bbbb"}}"#,
+            Ok,
+        ),
+        (
+            "channel.watch",
+            r#"{"channelId":"local-aaaa/lobby","on":true}"#,
+            Ok,
+        ),
+        (
+            "channel.setOwner",
+            r#"{"channelId":"local-aaaa/lobby","owner":{"kind":"human"}}"#,
+            Code(-32602),
+        ),
+        ("message.list", r#"{"channelId":"local-aaaa/lobby"}"#, Ok),
+        (
+            "message.post",
+            r#"{"channelId":"local-aaaa/lobby","text":"切换后第一条 ✅"}"#,
+            Ok,
+        ),
+        ("message.search", r#"{"query":"切换后"}"#, Ok),
+        (
+            "read.mark",
+            r#"{"channelId":"local-aaaa/lobby","seq":1}"#,
+            Ok,
+        ),
+        ("session.list", "null", Ok),
+        ("session.get", r#"{"sessionId":"captain-1111aaaa"}"#, Ok),
+        ("ask.list", "null", Ok),
+        // R11（控制者裁定 h）：号码格式对、夹具的账本里没有 = 不存在（-32004），不是参数错。
+        (
+            "ask.answer",
+            r#"{"crewId":"local-aaaa","ask":"H1","text":"x"}"#,
+            Code(-32004),
+        ),
+        (
+            "ask.withdraw",
+            r#"{"crewId":"local-aaaa","ask":"H1","reason":"x"}"#,
+            Code(-32004),
+        ),
+        ("approval.list", "null", Ok),
+        (
+            "approval.decide",
+            r#"{"id":"ap-none","allow":true}"#,
+            Code(-32004),
+        ),
+        ("restart.pending", "null", Ok),
+        (
+            "restart.answer",
+            r#"{"id":99,"answer":"later"}"#,
+            Code(-32004),
+        ),
+        ("directory.list", "null", Ok),
+        (
+            "todo.list",
+            r#"{"crewId":"local-aaaa","ledger":"agent"}"#,
+            Ok,
+        ),
+        ("events.subscribe", r#"{"topics":["message"]}"#, Ok),
+    ];
+    let mut covered: Vec<&str> = cases.iter().map(|c| c.0).collect();
+    covered.sort();
+    let mut all = crewd_proto::methods::ALL.to_vec();
+    all.sort();
+    assert_eq!(covered, all, "加了新方法就在这里加一条");
+    for (method, params, want) in cases {
+        let out: Output = crewd(data.path())
+            .args(["rpc", method, params])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        match want {
+            Ok => assert!(out.status.success(), "{method}: {err}"),
+            Code(c) => {
+                assert!(!out.status.success(), "{method} 应当失败");
+                assert!(
+                    err.contains(&format!("({c})")),
+                    "{method}: 期望 {c}，实际 {err}"
+                );
+            }
+        }
+    }
+}

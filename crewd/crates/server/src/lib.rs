@@ -293,7 +293,7 @@ mod tests {
             params: serde_json::Value::Null,
         };
         let r = dispatch::handle(&state, req).await;
-        assert!(r.error.is_none());
+        assert!(r.into_result().is_ok());
         assert!(
             t.elapsed() < std::time::Duration::from_millis(150),
             "慢查询进行中 system.hello 也要马上回：{:?}",
@@ -305,7 +305,7 @@ mod tests {
             params: serde_json::Value::Null,
         };
         let r = dispatch::handle(&state, req).await;
-        assert!(r.error.is_none(), "{r:?}");
+        assert!(r.clone().into_result().is_ok(), "{r:?}");
         slow.await.unwrap().unwrap();
     }
 

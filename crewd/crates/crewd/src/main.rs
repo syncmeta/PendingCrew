@@ -141,10 +141,10 @@ fn call(
             if r.id != 1 {
                 continue;
             }
-            if let Some(e) = r.error {
-                bail!("{} ({})", e.message, e.code);
-            }
-            return Ok(r.result.unwrap_or(serde_json::Value::Null));
+            // `"result": null` 是成功（值为 null）；错误带码打出来，`crewd rpc` 非 0 退出。
+            return r
+                .into_result()
+                .map_err(|e| anyhow::anyhow!("{} ({})", e.message, e.code));
         }
     }
 }

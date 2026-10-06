@@ -60,11 +60,12 @@ impl Client {
         match self.next().await {
             ServerFrame::Response(r) => {
                 assert_eq!(r.id, id);
-                if let Some(e) = r.error {
-                    panic!("{method} 出错: {}", e.message);
+                // `"result": null`（如 restart.pending 没有待答询问）读成 Ok(Null)；既无 result 也无 error 的帧在
+                // `next()` 里就解析失败（控制者裁定 g）。
+                match r.into_result() {
+                    Ok(v) => v,
+                    Err(e) => panic!("{method} 出错: {}", e.message),
                 }
-                // 线上是 `"result":null`（如 restart.pending 没有待答询问）；`Option<Value>` 把 JSON null 读成 None。
-                r.result.unwrap_or(Value::Null)
             }
             ServerFrame::Event(e) => panic!("意外的事件 {e:?}"),
         }
@@ -73,11 +74,10 @@ impl Client {
         self.send_raw(&json!({"id":id,"method":method,"params":params}).to_string())
             .await;
         match self.next().await {
-            ServerFrame::Response(r) => {
-                r.error
-                    .unwrap_or_else(|| panic!("{method} 应当失败，却返回 {:?}", r.result))
-                    .code
-            }
+            ServerFrame::Response(r) => match r.into_result() {
+                Err(e) => e.code,
+                Ok(v) => panic!("{method} 应当失败，却返回 {v}"),
+            },
             ServerFrame::Event(e) => panic!("意外的事件 {e:?}"),
         }
     }
@@ -217,7 +217,7 @@ async fn params_are_strict_and_errors_are_typed() {
     match c.next().await {
         ServerFrame::Response(r) => {
             assert_eq!(r.id, 0);
-            assert_eq!(r.error.unwrap().code, -32700);
+            assert_eq!(r.into_result().unwrap_err().code, -32700);
         }
         other => panic!("{other:?}"),
     }
@@ -636,7 +636,7 @@ async fn invalid_utf8_gets_parse_error_and_connection_survives() {
     match c.next().await {
         ServerFrame::Response(r) => {
             assert_eq!(r.id, 0);
-            assert_eq!(r.error.unwrap().code, -32700);
+            assert_eq!(r.into_result().unwrap_err().code, -32700);
         }
         other => panic!("{other:?}"),
     }
@@ -691,7 +691,7 @@ async fn subscribe_with_unknown_topic_is_invalid_params_and_subscribes_nothing()
         match sub.next().await {
             ServerFrame::Response(r) => {
                 assert_eq!(r.id, id);
-                let e = r.error.expect("未知主题必须报错");
+                let e = r.into_result().expect_err("未知主题必须报错");
                 assert_eq!(e.code, -32602);
                 assert!(e.message.contains("message"), "{}", e.message);
             }
@@ -748,22 +748,30 @@ async fn re_withdrawing_or_answering_a_withdrawn_ask_is_a_conflict() {
     );
 }
 
-/// 订阅者收齐 `until` 之前的全部事件名（`until` 是一次 hello 调用：它的回执之前到的都算）。
-async fn events_until_hello(sub: &mut Client, id: u64) -> Vec<String> {
+/// 订阅者收齐一次 hello 调用的回执之前到的全部事件。
+async fn frames_until_hello(sub: &mut Client, id: u64) -> Vec<crewd_proto::Event> {
     // 给转发任务留出时间：事件在写操作回执前已发布，但转发到这条连接是另一个任务。
     tokio::time::sleep(Duration::from_millis(100)).await;
     sub.send_raw(&json!({"id":id,"method":"system.hello"}).to_string())
         .await;
-    let mut names = Vec::new();
+    let mut evs = Vec::new();
     loop {
         match sub.next().await {
-            ServerFrame::Event(e) => names.push(e.event),
+            ServerFrame::Event(e) => evs.push(e),
             ServerFrame::Response(r) => {
                 assert_eq!(r.id, id);
-                return names;
+                return evs;
             }
         }
     }
+}
+
+async fn events_until_hello(sub: &mut Client, id: u64) -> Vec<String> {
+    frames_until_hello(sub, id)
+        .await
+        .into_iter()
+        .map(|e| e.event)
+        .collect()
 }
 
 /// 控制者裁定 f：问、审批、重启询问、群、机组的变更各自推到自己的主题，恰好一次。
@@ -814,4 +822,23 @@ async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once()
     c.call(7, "crew.update", json!({"crewId":"a","statusLine":"在跑"}))
         .await;
     assert_eq!(events_until_hello(&mut sub, 105).await, ["crew.changed"]);
+
+    // crew.removed 的负载有了类型（CrewRef），线上形状不变：{"crewId": …}。
+    let made = c
+        .call(
+            8,
+            "crew.create",
+            json!({"title":"临时","workingDirectory":"/tmp/example"}),
+        )
+        .await["id"]
+        .clone();
+    assert_eq!(events_until_hello(&mut sub, 106).await, ["crew.changed"]);
+    c.call(9, "crew.delete", json!({"crewId":made})).await;
+    let evs = frames_until_hello(&mut sub, 107).await;
+    let removed: Vec<&Value> = evs
+        .iter()
+        .filter(|e| e.event == "crew.removed")
+        .map(|e| &e.data)
+        .collect();
+    assert_eq!(removed, [&json!({"crewId":made})], "{evs:?}");
 }
