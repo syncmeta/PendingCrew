@@ -212,6 +212,12 @@ pub fn apply(decision: &OrphanDecision, recorded: &ProcessIdentity) -> ApplyOutc
     })
 }
 
+/// 整组发信号的安全闸（回收孤儿与驱动层停会话共用）：pgid <= 1（`kill(-1, …)` 会杀掉当前用户的
+/// 全部进程，0 / 1 同样危险）或就是 crewd 自己所在的组，一律不发。
+pub fn group_signal_refused(pgid: i32, own_pgid: i32) -> bool {
+    pgid <= 1 || pgid == own_pgid
+}
+
 /// `apply` 的可测内核：信号经 `kill` 闭包发出，测试里换成记录器，不会真发。
 ///
 /// 安全闸：即使判定是 `Reap`，登记的 pgid <= 1（`kill(-1, …)` 会杀掉当前用户的全部进程，
@@ -230,7 +236,7 @@ pub fn apply_with(
     if recorded.pid <= 1 || recorded.pid == own_pid {
         return ApplyOutcome::Refused(format!("pid {} 不能回收", recorded.pid));
     }
-    if recorded.pgid <= 1 || recorded.pgid == own_pgid {
+    if group_signal_refused(recorded.pgid, own_pgid) {
         return ApplyOutcome::Refused(format!(
             "进程组 {} 不能整组回收（<=1 或就是 crewd 自己那一组）",
             recorded.pgid

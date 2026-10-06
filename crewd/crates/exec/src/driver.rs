@@ -25,7 +25,7 @@ use crate::launch::{
     AgentSessionArg, ClaudeSpec, LaunchFiles, new_agent_session_id, prepare_claude,
 };
 use crate::pty::{PtyMaster, SpawnSpec, spawn_pty};
-use crate::registry::{ProbeResult, ProcessRegistry, probe};
+use crate::registry::{ProbeResult, ProcessRegistry, group_signal_refused, probe};
 use crate::resume::{AgentIdLedger, decide_resume};
 use crate::session::{
     Action, BRIEF_DELIVERY_ID, Core, CoreConfig, DerivedState, ExitStatusKind, PendingText,
@@ -321,8 +321,13 @@ impl Running {
         self.writer_task.abort();
     }
 
-    /// 进程已收尸：停掉附属任务、删启动文件、放开会话号（按这个顺序）。
+    /// 进程已收尸：整组补一刀、停掉附属任务、删启动文件、放开会话号（按这个顺序）。
+    ///
+    /// 补刀：会话首进程（claude）收到 SIGTERM 自己退了，它起的子进程（工具调用、后台命令）
+    /// 还留在组里——忽略 HUP 的就成了孤儿。setsid 后 pgid == pid；组里还有成员时这个号
+    /// 不会被别的进程拿去当 pid，组空了 killpg 只会得到 ESRCH（无害）。
     async fn release(&mut self) {
+        kill_group_only(self.pid);
         self.shutdown_helpers();
         if let Some(files) = self.files.take() {
             let _ = tokio::task::spawn_blocking(move || drop(files)).await;
@@ -460,12 +465,33 @@ struct Task {
     auth_rx: mpsc::UnboundedReceiver<AuthMsg>,
 }
 
+/// 整组 SIGKILL，组发不出去再单杀会话首进程。
 fn kill_group(pid: u32) {
-    use rustix::process::{Pid, Signal, kill_process, kill_process_group};
-    if let Some(p) = Pid::from_raw(pid as i32)
-        && kill_process_group(p, Signal::KILL).is_err()
+    use rustix::process::{Pid, Signal, kill_process};
+    if !kill_group_only(pid)
+        && let Some(p) = Pid::from_raw(pid as i32)
     {
         let _ = kill_process(p, Signal::KILL);
+    }
+}
+
+/// 只对进程组 `pid`（setsid 后 pgid == pid）发 SIGKILL；返回是否发出去了（ESRCH 也算：组里
+/// 已经没人了）。过登记表同一道闸：pgid <= 1 或就是 crewd 自己那一组，一个信号都不发。
+fn kill_group_only(pid: u32) -> bool {
+    use rustix::process::{Pid, Signal, getpgrp, kill_process_group};
+    let own_pgid = getpgrp().as_raw_nonzero().get();
+    let Ok(pgid) = i32::try_from(pid) else {
+        return false;
+    };
+    if group_signal_refused(pgid, own_pgid) {
+        return false;
+    }
+    let Some(group) = Pid::from_raw(pgid) else {
+        return false;
+    };
+    match kill_process_group(group, Signal::KILL) {
+        Ok(()) => true,
+        Err(e) => e == rustix::io::Errno::SRCH,
     }
 }
 
@@ -546,7 +572,8 @@ async fn run(mut t: Task) {
     let mut reading = true;
     let mut commands_open = true;
     let mut stop_deadline: Option<tokio::time::Instant> = None;
-    // 已经在停（`stop()`、句柄全丢）：此后认出续跑被拒也不重起——那是我们要它停的。
+    // 已经在停（`stop()`、句柄全丢）：不重起——那是我们要它停的。`Core::stop` 之后本来就不再报
+    // `ResumeRefused`；这里再挡一道，免得两边的判断哪天走散。
     let mut stopping = false;
     let mut retried = false;
     let mut tick = tokio::time::interval(t.config.tick);
@@ -563,16 +590,12 @@ async fn run(mut t: Task) {
             cmd = t.cmd_rx.recv(), if commands_open => match cmd {
                 Some(c) => {
                     if handle(&mut t, c) {
-                        stopping = true;
-                        stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
+                        begin_stop(&mut t, &mut stopping, &mut stop_deadline);
                     }
                 }
                 None => {
                     commands_open = false;
-                    stopping = true;
-                    t.core.stop(Instant::now());
-                    terminate(t.running.pid);
-                    stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
+                    begin_stop(&mut t, &mut stopping, &mut stop_deadline);
                 }
             },
             _ = tick.tick() => t.core.on_tick(Instant::now()),
@@ -651,20 +674,26 @@ async fn finish(t: &mut Task, status: ExitStatusKind) {
     dispatch(t, actions);
 }
 
-/// 处理一条命令；返回 true = 开始停止（要起 grace 计时）。
+/// 开始停：只做一次。再叫停（`stop()` 连按、句柄随后全丢）既不重发 SIGTERM，也不把
+/// SIGKILL 的期限往后推——否则叫停比 `stop_grace` 还勤时，忽略 SIGTERM 的进程永远杀不掉。
+fn begin_stop(t: &mut Task, stopping: &mut bool, stop_deadline: &mut Option<tokio::time::Instant>) {
+    if *stopping {
+        return;
+    }
+    *stopping = true;
+    t.core.stop(Instant::now());
+    terminate(t.running.pid);
+    *stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
+}
+
+/// 处理一条命令；返回 true = 要停（由 [`begin_stop`] 去重）。
 fn handle(t: &mut Task, cmd: Command) -> bool {
     let now = Instant::now();
     match cmd {
         Command::Send { id, text } => t.core.send(id, &text, now),
         Command::Raw(bytes) => t.core.raw(&bytes),
         Command::Resize { cols, lines } => t.core.resize(cols, lines),
-        Command::Stop => {
-            if t.core.is_running() {
-                t.core.stop(now);
-                terminate(t.running.pid);
-                return true;
-            }
-        }
+        Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.screen_text(max_lines));

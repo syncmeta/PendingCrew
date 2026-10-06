@@ -229,7 +229,8 @@ async fn refused_resume_with_trailing_output_still_restarts() {
     until(&mut rx, |e| exited(e).is_some()).await;
 }
 
-/// 已经在停（`stop()` / 句柄全丢）之后才认出续跑被拒：照常退出，不重起、不动账本。
+/// 已经在停（`stop()` / 句柄全丢）之后才出现续跑被拒的原话：照常退出，不重起、不动账本，
+/// 也不发 `ResumeRefused`（每条 `ResumeRefused` 后面都该跟一条 `Spawned`；是我们要它停的）。
 /// `stop` 返回要留着的句柄（`stop()` 那条不能顺带丢句柄，否则两条测成一条）。
 async fn refusal_while_stopping(
     id: &str,
@@ -237,14 +238,17 @@ async fn refusal_while_stopping(
 ) {
     let env = Env::new();
     let ledger = Arc::new(MemoryLedger::with(Some(id)));
-    // 忽略 TERM：停的时候它还活着，被拒的原话在 SIGTERM 之后、SIGKILL 之前才出来。
+    let printed = env.dir.path().join("refusal-printed");
+    // 忽略 TERM：停的时候它还活着，被拒的原话在 SIGTERM 之后、SIGKILL 之前才出来；
+    // 打完原话再落一个标记文件，证明那行字确实是在停的过程中吐出来的。
     let program = env.script(&format!(
         "trap '' TERM\n\
          echo armed\n\
          case \"$*\" in\n\
-         *--resume*) sleep 0.8; echo \"No conversation found with session ID: {id}\"; sleep 30;;\n\
+         *--resume*) sleep 0.8; echo \"No conversation found with session ID: {id}\"; touch '{}'; sleep 30;;\n\
          *) echo FRESH; sleep 30;;\n\
-         esac"
+         esac",
+        printed.display()
     ));
     let mut config = env.config();
     config.stop_grace = Duration::from_millis(1500);
@@ -257,10 +261,14 @@ async fn refusal_while_stopping(
     let _keep = stop(h);
     let events = until(&mut rx, |e| exited(e).is_some()).await;
     assert!(
-        events
+        printed.exists(),
+        "前提：被拒的原话在退出之前（停的过程中）已经吐出来了：{events:?}"
+    );
+    assert!(
+        !events
             .iter()
             .any(|e| matches!(e, SessionEvent::ResumeRefused { .. })),
-        "前提：停的过程中认出了被拒：{events:?}"
+        "在停就不报续跑被拒：{events:?}"
     );
     assert!(
         !events
@@ -319,6 +327,98 @@ async fn stop_escalates_to_killing_the_process_group() {
     let gone =
         rustix::process::test_kill_process(rustix::process::Pid::from_raw(grandchild).unwrap());
     assert!(gone.is_err(), "同组的孙进程也要一起收掉");
+}
+
+/// 反复叫停（比 `stop_grace` 还勤）：SIGTERM 只发一次，SIGKILL 的期限也不往后推——
+/// 否则每次 `stop()` 都把升级重新计时，一个忽略 SIGTERM 的进程就永远杀不掉。
+#[tokio::test]
+async fn repeated_stop_neither_resends_term_nor_postpones_the_kill() {
+    let env = Env::new();
+    // 收到 TERM 只打一行、不退：看得出 TERM 来了几次。
+    let program = env.script("trap 'echo GOT-TERM' TERM; echo armed; while :; do sleep 0.1; done");
+    let mut config = env.config();
+    config.stop_grace = Duration::from_secs(1);
+    let (h, mut rx) = start_claude(
+        env.start(program, Arc::new(MemoryLedger::default())),
+        config,
+    )
+    .await
+    .unwrap();
+    screen_contains(&h, "armed").await;
+    let t0 = std::time::Instant::now();
+    for _ in 0..3 {
+        h.stop().unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    // 三次 stop 都发出去了（0 / 300 / 600ms），trap 每 0.1s 有机会跑一次。
+    let text = h.screen_text(100).await.unwrap();
+    assert_eq!(
+        text.matches("GOT-TERM").count(),
+        1,
+        "SIGTERM 只发一次：{text}"
+    );
+    let info = loop {
+        tokio::select! {
+            e = next(&mut rx) => if let SessionEvent::Exited(info) = e { break info },
+            _ = tokio::time::sleep(Duration::from_millis(400)) => { let _ = h.stop(); }
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "一直在叫停也要在 grace 后被 SIGKILL"
+        );
+    };
+    let took = t0.elapsed();
+    assert_eq!(info.status, ExitStatusKind::Signal(9), "{info:?}");
+    assert!(
+        took < Duration::from_millis(2500),
+        "期限从第一次 stop 起算（grace 1s），实际 {took:?}"
+    );
+}
+
+/// 会话首进程收到 SIGTERM 就乖乖退了，但它留下的子进程连 HUP / TERM 都忽略：
+/// 退出后也要整组补一刀，不能留下孤儿。
+#[tokio::test]
+async fn graceful_exit_still_kills_the_rest_of_the_group() {
+    let env = Env::new();
+    let program = env.script(
+        "(trap '' HUP TERM; exec sleep 30) & echo \"CHILD $!\"\n\
+         trap 'exit 0' TERM\n\
+         while :; do sleep 0.1; done",
+    );
+    let (h, mut rx) = start_claude(
+        env.start(program, Arc::new(MemoryLedger::default())),
+        env.config(),
+    )
+    .await
+    .unwrap();
+    let text = screen_contains(&h, "CHILD ").await;
+    let grandchild: i32 = text
+        .split("CHILD ")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .expect("没读到孙进程 pid");
+    h.stop().unwrap();
+    let events = until(&mut rx, |e| exited(e).is_some()).await;
+    assert_eq!(
+        exited(events.last().unwrap()).map(|i| i.status.clone()),
+        Some(ExitStatusKind::Code(0)),
+        "前提：首进程自己在 grace 内退了（没走 SIGKILL 升级）"
+    );
+    let pid = rustix::process::Pid::from_raw(grandchild).unwrap();
+    // 被杀的孙进程要等 init 收尸，僵尸期间 kill(pid, 0) 仍成功：给它一点时间。
+    let mut gone = false;
+    for _ in 0..60 {
+        if rustix::process::test_kill_process(pid).is_err() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if !gone {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+    }
+    assert!(gone, "首进程退出后同组的孙进程 {grandchild} 还活着");
 }
 
 #[tokio::test]

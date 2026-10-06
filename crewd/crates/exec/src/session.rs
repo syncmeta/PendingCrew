@@ -473,12 +473,14 @@ impl Core {
     }
 
     /// 我们要停它了（驱动层随后发信号）。没投出去的不报 health——是人叫停的。
+    /// 此后也不再认续跑被拒：`ResumeRefused` 的意思是「换新号重起」，停下来的会话不重起。
     pub fn stop(&mut self, now: Instant) {
         if !self.running {
             return;
         }
         self.stopped_by_user = true;
         self.launch_settled = true;
+        self.resume_watch = None;
         self.abandon("session 被停掉", false, now);
     }
 
@@ -1332,6 +1334,24 @@ mod tests {
             !ev.iter()
                 .any(|e| matches!(e, SessionEvent::ResumeRefused { .. })),
             "没续跑就不看"
+        );
+    }
+
+    /// 人已经叫停之后才出现的拒绝原话不再报：`ResumeRefused` 的意思是「要换新号重起」，
+    /// 而停下来的会话不会重起（每条 `ResumeRefused` 后面都该跟一条 `Spawned`）。
+    #[test]
+    fn resume_refusal_after_stop_is_not_reported() {
+        let said = format!("{NO_CONVERSATION_MARKER}: abc-123");
+        let mut t = T::with(vec![], Some("abc-123"));
+        t.output(b"starting", 0.1);
+        t.core.stop(t.at(0.5));
+        let mut ev = events(&t.core.take_actions());
+        ev.extend(events(&t.output(said.as_bytes(), 1.0)));
+        ev.extend(events(&t.tick(1.2)));
+        assert!(
+            !ev.iter()
+                .any(|e| matches!(e, SessionEvent::ResumeRefused { .. })),
+            "{ev:?}"
         );
     }
 
