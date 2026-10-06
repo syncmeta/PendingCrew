@@ -231,8 +231,12 @@ impl Screen {
         if cols < 2 || lines < 1 {
             return false;
         }
+        // alacritty 的 `Term::resize` 在尺寸没变时提前返回、保留滚动区域；旁路要同样处理。
+        let changed = cols != self.term.columns() || lines != self.term.screen_lines();
         self.term.resize(Size { cols, lines });
-        self.side.resize(lines);
+        if changed {
+            self.side.resize(lines);
+        }
         self.replies.lock().size = window_size(cols, lines);
         true
     }
@@ -476,6 +480,49 @@ mod tests {
         assert_eq!(&rows[0..6], ["row0", "row1", "row3", "row4", "", "row5"]);
         assert!(s.resize(80, 30));
         assert_eq!(s.scroll_region(), (0, 30));
+    }
+
+    #[test]
+    fn focus_request_split_across_feeds_answers_once() {
+        let mut s = screen();
+        s.feed(b"\x1b[?10");
+        assert_eq!(s.take_replies(), b"");
+        s.feed(b"04h");
+        assert_eq!(s.take_replies(), b"\x1b[I");
+    }
+
+    fn fill_rows(s: &mut Screen) {
+        for n in 0..25 {
+            s.feed(format!("\x1b[{};1Hrow{n}", n + 1).as_bytes());
+        }
+    }
+
+    #[test]
+    fn same_size_resize_keeps_the_region() {
+        let mut s = screen();
+        fill_rows(&mut s);
+        s.feed(b"\x1b[3;5r");
+        assert!(s.resize(80, 25));
+        assert_eq!(s.scroll_region(), (2, 5));
+        s.feed(b"\x1b[5;1H\n");
+        let rows = s.screen_rows();
+        assert_eq!(&rows[0..6], ["row0", "row1", "row3", "row4", "", "row5"]);
+    }
+
+    #[test]
+    fn deccolm_resets_the_region_like_alacritty() {
+        let mut s = screen();
+        fill_rows(&mut s);
+        s.feed(b"\x1b[3;5r\x1b[?3h");
+        assert_eq!(s.scroll_region(), (0, 25));
+        // deccolm 清屏；重画后在最底行换行，应整屏上滚。
+        fill_rows(&mut s);
+        s.feed(b"\x1b[25;1H\n");
+        let rows = s.screen_rows();
+        assert_eq!(&rows[0..2], ["row1", "row2"]);
+        // 末尾空行被读屏口径丢掉：row24 在第 24 行（下标 23），其后只剩空白。
+        assert_eq!(rows.len(), 24);
+        assert_eq!(rows[23], "row24");
     }
 
     // ---- 读屏口径（TerminalScreenText 移植）----

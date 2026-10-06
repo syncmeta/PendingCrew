@@ -73,10 +73,15 @@ impl Perform for SideState {
                 }
                 self.region = ((top - 1).min(self.lines), bottom.min(self.lines));
             }
-            ('h', [b'?']) => {
+            ('h', [b'?']) | ('l', [b'?']) => {
                 for param in params.iter() {
-                    if param[0] == 1004 {
-                        self.focus_requests += 1;
+                    match (action, param[0]) {
+                        (_, 3) => {
+                            // DECCOLM（`?3h` / `?3l`）：alacritty 的 `deccolm` 把滚动区域复位成整屏。
+                            self.region = (0, self.lines);
+                        }
+                        ('h', 1004) => self.focus_requests += 1,
+                        _ => {}
                     }
                 }
             }
@@ -133,6 +138,19 @@ mod tests {
         let mut t = tracked(b"\x1b[3;20r");
         t.resize(40);
         assert_eq!(t.region(), (0, 40));
+    }
+
+    #[test]
+    fn deccolm_resets_region_both_ways() {
+        assert_eq!(tracked(b"\x1b[3;20r\x1b[?3h").region(), (0, 25));
+        assert_eq!(tracked(b"\x1b[3;20r\x1b[?3l").region(), (0, 25));
+        assert_eq!(tracked(b"\x1b[3;20r\x1b[?1;3h").region(), (0, 25));
+        // 非私有的 `CSI 3 h`（IRM 之外的标准模式）不算。
+        assert_eq!(tracked(b"\x1b[3;20r\x1b[3h").region(), (2, 20));
+        // `?3` 之外的私有模式不动区域，`?1004l` 也不计焦点请求。
+        let mut t = tracked(b"\x1b[3;20r\x1b[?25l\x1b[?1004l");
+        assert_eq!(t.region(), (2, 20));
+        assert_eq!(t.take_focus_requests(), 0);
     }
 
     #[test]
