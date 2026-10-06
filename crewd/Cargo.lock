@@ -346,6 +346,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewd-collab"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crewd-proto",
+ "crewd-store",
+ "crewd-work",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "crewd-exec"
 version = "0.1.0"
 dependencies = [
