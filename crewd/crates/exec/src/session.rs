@@ -154,7 +154,25 @@ pub enum DerivedState {
 
 struct InFlight {
     pending: PendingText,
+    /// 去毒后的正文：写进去的是它，回读比对的也是它（屏上回显的是去毒后的样子）。
+    body: String,
     machine: Delivery,
+}
+
+/// 排好的按键是干什么的：到点发之前按用途再看一眼屏幕。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyPurpose {
+    /// 提交三拍里的退格 / 回车。`via_body`：这一轮提交是凭「正文尾巴在屏上」起的
+    /// （长正文把提示符滚出了屏），没有输入行可看。
+    SubmitBeat { via_body: bool },
+    /// 限流菜单自动应答「1」之后的回车。
+    RateLimitAnswer,
+}
+
+struct Key {
+    at: Instant,
+    bytes: Vec<u8>,
+    purpose: KeyPurpose,
 }
 
 pub struct Core {
@@ -163,8 +181,10 @@ pub struct Core {
     tracker: PendingDecisionTracker,
     quota: QuotaScanner,
     rate_limit: RateLimitScanner,
-    /// 限流扫描器上次触发、还没在屏上兑现的时刻（兑现 = 屏上真摆着限流菜单）。
-    rate_limit_fired_at: Option<Instant>,
+    /// 上一次自动应答限流菜单的时刻（冷却期内不再答）。
+    rate_limit_answered_at: Option<Instant>,
+    /// 最近一次 `on_output` / `on_tick` 的 `now`：`next_wakeup` 不给不晚于它的时刻。
+    last_now: Instant,
     started_at: Instant,
     running: bool,
     stopped_by_user: bool,
@@ -180,7 +200,7 @@ pub struct Core {
     pending_decision: Option<PendingDecision>,
     in_flight: Option<InFlight>,
     queue: VecDeque<PendingText>,
-    keys: VecDeque<(Instant, Vec<u8>)>,
+    keys: VecDeque<Key>,
     actions: Vec<Action>,
 }
 
@@ -199,7 +219,8 @@ impl Core {
             tracker: PendingDecisionTracker::new(),
             quota: QuotaScanner::default(),
             rate_limit: RateLimitScanner::default(),
-            rate_limit_fired_at: None,
+            rate_limit_answered_at: None,
+            last_now: now,
             started_at: now,
             running: true,
             stopped_by_user: false,
@@ -226,14 +247,36 @@ impl Core {
         std::mem::take(&mut self.actions)
     }
 
-    /// 最早什么时候需要再拍一次（排好的按键、投递的期限）。0.6s 节拍之外的精确唤醒。
+    /// 最早什么时候需要再拍一次（排好的按键、投递的期限、拉起自检、空闲边沿）。0.6s 节拍
+    /// 之外的精确唤醒。永远晚于上一次 `on_output` / `on_tick` 的 `now`（驱动层不会空转）。
     pub fn next_wakeup(&self) -> Option<Instant> {
-        let key = self.keys.front().map(|(at, _)| *at);
-        let delivery = self
-            .in_flight
-            .as_ref()
-            .and_then(|f| f.machine.next_deadline());
-        [key, delivery].into_iter().flatten().min()
+        if !self.running {
+            return None;
+        }
+        let key = self.keys.front().map(|k| k.at);
+        // 排着按键时投递机是冻住的（`step_delivery` 不推进），它的期限可能早已过去——不算。
+        let delivery = if self.keys.is_empty() {
+            self.in_flight
+                .as_ref()
+                .and_then(|f| f.machine.next_deadline())
+        } else {
+            None
+        };
+        let launch = (!self.launch_settled)
+            .then(|| self.started_at.checked_add(self.config.launch_deadline))
+            .flatten();
+        let idle = self
+            .working
+            .then(|| {
+                self.last_output_at
+                    .and_then(|at| at.checked_add(self.config.working_quiet))
+            })
+            .flatten();
+        [key, delivery, launch, idle]
+            .into_iter()
+            .flatten()
+            .filter(|t| *t > self.last_now)
+            .min()
     }
 
     pub fn is_running(&self) -> bool {
@@ -305,6 +348,7 @@ impl Core {
         if !self.running {
             return;
         }
+        self.last_now = self.last_now.max(now);
         self.screen.feed(bytes);
         let replies = self.screen.take_replies();
         if !replies.is_empty() {
@@ -318,10 +362,11 @@ impl Core {
         if let Some(h) = self.quota.feed(bytes) {
             self.set_health(Some(h), now);
         }
-        if self.rate_limit.feed(bytes, now) {
-            self.rate_limit_fired_at = Some(now);
-        }
-        self.confirm_rate_limit_menu(now);
+        self.flush_due_keys(now);
+        // 扫描器只是附加触发：它触发与否，按键前都要看屏幕；而屏幕每块输出、每拍都看，
+        // 所以它的结果不改变判定（扫描器没认出的菜单——光标定位摆的词——照样会答）。
+        let _scanner_fired = self.rate_limit.feed(bytes, now);
+        self.answer_rate_limit_menu_if_shown(now);
         if self.resume_watch.is_some() {
             self.resume_tail.feed(bytes);
         }
@@ -334,11 +379,9 @@ impl Core {
         if !self.running {
             return;
         }
-        while self.keys.front().is_some_and(|(at, _)| *at <= now) {
-            let (_, bytes) = self.keys.pop_front().expect("刚看过非空");
-            self.actions.push(Action::Write(bytes));
-        }
-        self.confirm_rate_limit_menu(now);
+        self.last_now = self.last_now.max(now);
+        self.flush_due_keys(now);
+        self.answer_rate_limit_menu_if_shown(now);
         let working = self
             .last_output_at
             .is_some_and(|at| now.saturating_duration_since(at) < self.config.working_quiet);
@@ -380,6 +423,15 @@ impl Core {
             self.finish(pending, DeliveryOutcome::Abandoned(detail.clone()), now);
             self.set_health(
                 Some(Health::new(HealthKind::PromptUndelivered, detail)),
+                now,
+            );
+            return;
+        }
+        if self.stopped_by_user {
+            // 已经叫停、还在等退出状态：不排队（排了也只会在退出时被丢）。是人叫停的，不留 health。
+            self.finish(
+                pending,
+                DeliveryOutcome::Abandoned("session 正在被停掉".to_string()),
                 now,
             );
             return;
@@ -479,14 +531,22 @@ impl Core {
         self.event(SessionEvent::Working(working));
     }
 
+    /// health 只有一格：拉起失败 > 额度 / 限流 / 认证 > 投递报告。低档的不盖高档的
+    /// （清掉 = `None` 由各调用方只对自己那一类做）。`quota_at` 与这一格无关：撞过额度
+    /// 就记下时刻，health 被盖、被清都不抹它（`hit_limit` 看的是它）。
     fn set_health(&mut self, health: Option<Health>, now: Instant) {
-        match &health {
-            Some(h) if h.kind.is_quota() => {
+        if let Some(h) = &health {
+            if h.kind.is_quota() {
                 self.quota_at = Some(now);
                 self.working_since = None;
             }
-            None => self.quota_at = None,
-            Some(_) => {}
+            if self
+                .health
+                .as_ref()
+                .is_some_and(|cur| health_rank(cur.kind) > health_rank(h.kind))
+            {
+                return;
+            }
         }
         self.health = health.clone();
         self.event(SessionEvent::Health(health));
@@ -498,29 +558,64 @@ impl Core {
         }
     }
 
-    /// 扫描器触发只是「尾窗里出现过限流短语」：真按键之前，**当前屏幕**上必须摆着限流菜单、
-    /// 光标停在「Stop and wait」（第一项）上（控制器裁定）。尾窗会留着冷却期里没触发的旧短语、
-    /// 也会收到对话里回显的短语——那时屏上可能是权限菜单，按「1」就替人批了权限。
+    /// 限流菜单的自动应答只认**当前屏幕**：摆着限流菜单、光标停在「Stop and wait」（第一项）
+    /// 上（控制器裁定）。字节尾窗不作数——它会留着旧短语、也会收到对话里回显的短语，
+    /// 那时屏上可能是权限菜单，按「1」就替人批了权限。
     ///
-    /// 一次触发在一个冷却期内有效：`/rate-limit-options` 常比菜单早一块到，而扫描器触发后
-    /// 进冷却、清尾窗，菜单那一块不会再触发它；过了冷却期还没兑现就作废，等它下一次触发。
-    fn confirm_rate_limit_menu(&mut self, now: Instant) {
-        let Some(fired_at) = self.rate_limit_fired_at else {
-            return;
-        };
-        if now.saturating_duration_since(fired_at) >= RATE_LIMIT_COOLDOWN {
-            self.rate_limit_fired_at = None;
+    /// 冷却：上一次应答之后 `RATE_LIMIT_COOLDOWN`（30s）内不再答——答完菜单常会再画一两帧，
+    /// 连按会把多余的「1」敲进输入框。冷却期里菜单真的又弹出来，要等冷却过后下一块输出 /
+    /// 下一拍才答（最多晚 30s；比连按的风险小）。
+    fn answer_rate_limit_menu_if_shown(&mut self, now: Instant) {
+        if self
+            .rate_limit_answered_at
+            .is_some_and(|at| now.saturating_duration_since(at) < RATE_LIMIT_COOLDOWN)
+        {
             return;
         }
         if rate_limit_menu_on_screen(&self.screen.screen_rows()) {
-            self.rate_limit_fired_at = None;
+            self.rate_limit_answered_at = Some(now);
             self.answer_rate_limit_menu(now);
+        }
+    }
+
+    /// 发到点的排队按键。发之前按用途再看一眼当前屏幕：
+    /// - 提交拍：屏上弹了对话框、或输入行没了（凭正文尾巴起的提交：尾巴没了）——这一轮剩下的
+    ///   提交拍全丢掉（回车会替人选中对话框的第一项）。投递机还在「提交」阶段，输入行回来、
+    ///   期限到了会自己重发一轮。
+    /// - 限流应答的回车：菜单不在了就不发（「1」可能已经直接选中关掉了它）。
+    fn flush_due_keys(&mut self, now: Instant) {
+        while self.keys.front().is_some_and(|k| k.at <= now) {
+            let key = self.keys.pop_front().expect("刚看过非空");
+            let rows = self.screen.screen_rows();
+            let safe = match key.purpose {
+                KeyPurpose::SubmitBeat { via_body } => {
+                    blocking_dialog(&rows).is_none()
+                        && if via_body {
+                            self.in_flight
+                                .as_ref()
+                                .is_some_and(|f| body_tail_visible(&f.body, &rows))
+                        } else {
+                            input_row(&rows).is_some()
+                        }
+                }
+                KeyPurpose::RateLimitAnswer => rate_limit_menu_on_screen(&rows),
+            };
+            if safe {
+                self.actions.push(Action::Write(key.bytes));
+            } else if let KeyPurpose::SubmitBeat { .. } = key.purpose {
+                self.keys
+                    .retain(|k| !matches!(k.purpose, KeyPurpose::SubmitBeat { .. }));
+            }
         }
     }
 
     fn answer_rate_limit_menu(&mut self, now: Instant) {
         self.actions.push(Action::Write(b"1".to_vec()));
-        self.schedule(now + self.config.rate_limit_answer_gap, b"\r".to_vec());
+        self.schedule(
+            now + self.config.rate_limit_answer_gap,
+            b"\r".to_vec(),
+            KeyPurpose::RateLimitAnswer,
+        );
         if self.health.as_ref().map(|h| h.kind) != Some(HealthKind::RateLimited) {
             self.set_health(
                 Some(Health::new(
@@ -532,9 +627,9 @@ impl Core {
         }
     }
 
-    fn schedule(&mut self, at: Instant, bytes: Vec<u8>) {
-        let pos = self.keys.partition_point(|(t, _)| *t <= at);
-        self.keys.insert(pos, (at, bytes));
+    fn schedule(&mut self, at: Instant, bytes: Vec<u8>, purpose: KeyPurpose) {
+        let pos = self.keys.partition_point(|k| k.at <= at);
+        self.keys.insert(pos, Key { at, bytes, purpose });
     }
 
     fn check_launch(&mut self, now: Instant) {
@@ -584,7 +679,12 @@ impl Core {
         }
         if let Some(pending) = self.queue.pop_front() {
             let machine = Delivery::new(self.config.delivery, pending.subject, now);
-            self.in_flight = Some(InFlight { pending, machine });
+            let body = sanitize_text(&pending.text);
+            self.in_flight = Some(InFlight {
+                pending,
+                body,
+                machine,
+            });
             self.step_delivery(now);
         }
     }
@@ -601,7 +701,7 @@ impl Core {
         let row = input_row(&rows);
         let step = flight.machine.step(Observation {
             input_row: row.as_deref(),
-            body_visible: body_tail_visible(&flight.pending.text, &rows),
+            body_visible: body_tail_visible(&flight.body, &rows),
             dialog_present: blocking_dialog(&rows).is_some(),
             now,
         });
@@ -613,7 +713,7 @@ impl Core {
                     // 重投前清掉输入行：上一笔若落了一半，两笔会叠成乱码。
                     bytes.push(0x15);
                 }
-                bytes.extend_from_slice(sanitize_text(&flight.pending.text).as_bytes());
+                bytes.extend_from_slice(flight.body.as_bytes());
                 self.actions.push(Action::Write(bytes));
             }
             Step::Submit { .. } => {
@@ -621,8 +721,11 @@ impl Core {
                 // 先补一个空格再删掉（输入行判据 trim，不影响判定），隔拍再回车。
                 self.actions.push(Action::Write(b" ".to_vec()));
                 let gap = self.config.submit_key_gap;
-                self.schedule(now + gap, vec![0x7f]);
-                self.schedule(now + gap * 2, b"\r".to_vec());
+                let purpose = KeyPurpose::SubmitBeat {
+                    via_body: row.is_none(),
+                };
+                self.schedule(now + gap, vec![0x7f], purpose);
+                self.schedule(now + gap * 2, b"\r".to_vec(), purpose);
             }
             Step::BlockedByDialog(detail) => self.report(DeliveryOutcome::Blocked(detail), now),
             Step::NotReady(detail) => self.report(DeliveryOutcome::NotReady(detail), now),
@@ -709,6 +812,15 @@ impl Core {
         if self.working {
             self.set_working(false, now);
         }
+    }
+}
+
+/// health 那一格的档位：拉起失败 > 额度 / 限流 / 认证 > 投递报告。
+fn health_rank(kind: HealthKind) -> u8 {
+    match kind {
+        HealthKind::LaunchFailed => 3,
+        HealthKind::UsageLimit | HealthKind::RateLimited | HealthKind::AuthRequired => 2,
+        HealthKind::BriefUndelivered | HealthKind::PromptUndelivered => 1,
     }
 }
 
@@ -1440,6 +1552,224 @@ mod tests {
     fn preview_is_short_and_single_line() {
         assert_eq!(preview("a\nb"), "a b");
         assert_eq!(preview(&"字".repeat(50)).chars().count(), 41);
+    }
+
+    fn permission_menu() -> Vec<u8> {
+        "\x1b[2J\x1b[HBash(rm -rf build)\r\n\r\nDo you want to proceed?\r\n\u{276f} 1. Yes\r\n  2. No\r\n"
+            .as_bytes()
+            .to_vec()
+    }
+
+    /// 修正 1：空格发出后、退格 / 回车到点前，屏上弹出权限框——排好的提交拍不许照发
+    /// （回车会替人选中「1. Yes」）。
+    #[test]
+    fn queued_submit_beats_are_dropped_when_a_dialog_appears() {
+        let mut t = T::new(vec![]);
+        t.core.send(1, "甲", t.at(0.0));
+        t.output(&input_box(""), 0.0);
+        assert_eq!(writes(&t.tick(0.3)), vec!["甲".as_bytes().to_vec()]);
+        let space = t.output(&input_box("甲"), 0.9);
+        assert_eq!(writes(&space), vec![b" ".to_vec()]);
+        let mut after = t.output(&permission_menu(), 0.95);
+        for s in [1.0, 1.1, 1.2, 1.5] {
+            after.extend(t.tick(s));
+        }
+        let sent = writes(&after).concat();
+        assert!(
+            !sent.contains(&0x7f) && !sent.contains(&b'\r'),
+            "权限框上不许发退格 / 回车：{after:?}"
+        );
+    }
+
+    /// 修正 1：限流应答的回车到点时菜单已经不在（比如「1」直接选中关掉了它、或换成了权限框）——不发。
+    #[test]
+    fn rate_limit_carriage_return_is_dropped_when_the_menu_is_gone() {
+        let mut t = T::new(vec![]);
+        assert_eq!(
+            writes(&t.output(&rate_limit_menu(), 0.0)),
+            vec![b"1".to_vec()]
+        );
+        t.output(&permission_menu(), 0.1);
+        let mut after = t.tick(0.25);
+        after.extend(t.tick(0.6));
+        assert!(writes(&after).is_empty(), "{after:?}");
+    }
+
+    /// 修正 2：正文去毒后才写进去，屏上回显的是去毒后的样子——回读（长正文、提示符滚出屏）
+    /// 必须拿去毒后的那份比对。
+    #[test]
+    fn read_back_compares_the_sanitised_body() {
+        let mut t = T::new(brief("红色的字\x1b[0m"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        // 提示符滚出了屏，屏上只剩正文的尾巴（claude 回显的是写进去的、去毒后的字）。
+        let screen = format!("\x1b[2J\x1b[H{}\r\n", sanitize_text("红色的字\x1b[0m"));
+        let submit = t.output(screen.as_bytes(), 0.9);
+        assert_eq!(writes(&submit), vec![b" ".to_vec()], "{submit:?}");
+    }
+
+    /// 修正 3：排着按键时投递机冻住，它的期限可能早已过去；`next_wakeup` 不能给一个
+    /// ≤ 上一次 `now` 的时刻（驱动层会空转）。
+    #[test]
+    fn next_wakeup_is_never_in_the_past_while_keys_are_queued() {
+        let mut t = T::new(brief("x"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        // 正文写了（not_before = 0.8），0.85 撞上限流菜单：排了 1.1 的回车，投递冻住。
+        assert_eq!(
+            writes(&t.output(&rate_limit_menu(), 0.85)),
+            vec![b"1".to_vec()]
+        );
+        let next = t.core.next_wakeup().expect("排着回车");
+        assert!(next > t.at(0.85), "不许给过去的时刻");
+        assert_eq!(next, t.at(1.1));
+    }
+
+    /// 用光标定位摆词画的限流菜单：屏上是整句，字节尾窗里词与词之间没有空格
+    /// （`Stopandwaitfor…`），扫描器认不出。
+    fn rate_limit_menu_positioned() -> Vec<u8> {
+        "\x1b[2J\x1b[1;1HWhat\x1b[1;6Hdo\x1b[1;9Hyou\x1b[1;13Hwant\x1b[1;18Hto\x1b[1;21Hdo?\x1b[2;1H\u{276f}\x1b[2;3H1.\x1b[2;6HStop\x1b[2;11Hand\x1b[2;15Hwait\x1b[2;20Hfor\x1b[2;24Hlimit\x1b[2;30Hto\x1b[2;33Hreset\x1b[3;3H2.\x1b[3;6HUpgrade"
+            .as_bytes()
+            .to_vec()
+    }
+
+    /// 修正 4：限流菜单答完消失、冷却期里又出现——不答（30s 内答过就不再按，防止连按
+    /// 打乱它的菜单）；冷却过后再出现——再答，哪怕扫描器这次没触发（屏幕才是判据，
+    /// 扫描器只是附加触发，不是前提）。
+    #[test]
+    fn rate_limit_menu_reshown_is_answered_again_only_after_the_cooldown() {
+        let mut probe = RateLimitScanner::default();
+        assert!(
+            !probe.feed(&rate_limit_menu_positioned(), Instant::now()),
+            "前提：扫描器认不出光标定位画的菜单"
+        );
+        let mut t = T::new(vec![]);
+        assert_eq!(
+            writes(&t.output(&rate_limit_menu(), 0.0)),
+            vec![b"1".to_vec()]
+        );
+        t.tick(0.25);
+        t.output("\x1b[2J\x1b[H\u{23fa} waiting\r\n".as_bytes(), 1.0);
+        let within = t.output(&rate_limit_menu_positioned(), 10.0);
+        let mut within_all = within.clone();
+        within_all.extend(t.tick(10.6));
+        assert!(
+            writes(&within_all).is_empty(),
+            "冷却期内不答：{within_all:?}"
+        );
+        t.output("\x1b[2J\x1b[H\u{23fa} waiting\r\n".as_bytes(), 11.0);
+        let again = t.output(&rate_limit_menu_positioned(), 31.0);
+        assert_eq!(writes(&again), vec![b"1".to_vec()], "{again:?}");
+    }
+
+    /// 修正 5a：撞额度之后，投递的报告（被对话框挡住）不能把额度 health 盖掉；
+    /// 投递成功也不能把「撞过额度」抹掉。
+    #[test]
+    fn delivery_reports_do_not_overwrite_quota_health_or_its_timestamp() {
+        let mut t = T::new(brief("开场"));
+        t.output(b"You've reached your usage limit", 0.0);
+        let mut all = t.output(&trust_dialog(), 0.1);
+        for s in 1..=4 {
+            all.extend(t.tick(s as f64));
+        }
+        assert!(events(&all).iter().any(|e| matches!(
+            e,
+            SessionEvent::Delivery {
+                outcome: DeliveryOutcome::Blocked(_),
+                ..
+            }
+        )));
+        assert_eq!(
+            t.core.health().map(|h| h.kind),
+            Some(HealthKind::UsageLimit)
+        );
+        let after = drive_one(&mut t, "开场", 5.0);
+        assert!(delivered(&after, BRIEF_DELIVERY_ID), "{after:?}");
+        assert_eq!(
+            t.core.health().map(|h| h.kind),
+            Some(HealthKind::UsageLimit)
+        );
+        t.core.on_exit(ExitStatusKind::Code(1), t.at(30.0));
+        assert!(events(&t.core.take_actions()).iter().any(|e| matches!(
+            e,
+            SessionEvent::Exited(ExitInfo {
+                hit_limit: true,
+                ..
+            })
+        )));
+    }
+
+    /// 修正 5b：额度 health 被清掉（重置唤醒到点）之后 600s 内退出，仍记「撞过额度」。
+    #[test]
+    fn hit_limit_survives_clearing_the_quota_health() {
+        let mut t = T::new(vec![]);
+        t.output(b"You've reached your usage limit", 0.0);
+        t.core.clear_quota_health(t.at(10.0));
+        assert_eq!(t.core.health(), None);
+        t.core.on_exit(ExitStatusKind::Code(1), t.at(20.0));
+        assert!(events(&t.core.take_actions()).iter().any(|e| matches!(
+            e,
+            SessionEvent::Exited(ExitInfo {
+                hit_limit: true,
+                ..
+            })
+        )),);
+    }
+
+    /// 修正 5c：起来即死时手上有指令——health 是拉起失败，不能被「指令没送到」盖掉。
+    #[test]
+    fn launch_failure_on_exit_is_not_overwritten_by_lost_steers() {
+        let mut t = T::new(vec![]);
+        t.core.send(1, "第一条", t.at(0.1));
+        t.core.on_exit(ExitStatusKind::Code(1), t.at(0.5));
+        let ev = events(&t.core.take_actions());
+        assert!(ev.iter().any(|e| matches!(
+            e,
+            SessionEvent::Delivery {
+                id: 1,
+                outcome: DeliveryOutcome::Abandoned(_),
+                ..
+            }
+        )));
+        let h = t.core.health().unwrap();
+        assert_eq!(
+            (h.kind, h.launch_verdict),
+            (HealthKind::LaunchFailed, Some(LaunchVerdict::DiedSilently))
+        );
+    }
+
+    /// 修正 6：已经叫停、还没收到退出状态时来的指令——当场报没送到，不排队。
+    #[test]
+    fn send_after_stop_is_abandoned_at_once() {
+        let mut t = T::new(vec![]);
+        t.output(b"busy", 0.0);
+        t.core.stop(t.at(0.2));
+        t.core.take_actions();
+        t.core.send(9, "晚到的", t.at(0.3));
+        let ev = events(&t.core.take_actions());
+        assert!(
+            ev.iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    id: 9,
+                    outcome: DeliveryOutcome::Abandoned(_),
+                    ..
+                }
+            )),
+            "{ev:?}"
+        );
+        assert_eq!(t.core.health(), None, "是人叫停的，不留 health");
+        let mut later = t.output(&input_box(""), 0.4);
+        later.extend(t.tick(1.0));
+        t.core.on_exit(ExitStatusKind::Signal(15), t.at(1.1));
+        later.extend(t.core.take_actions());
+        assert!(writes(&later).is_empty(), "{later:?}");
+        assert!(
+            !events(&later)
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Delivery { id: 9, .. })),
+            "不再报第二次：{later:?}"
+        );
     }
 
     fn fixture(name: &str) -> Vec<u8> {
