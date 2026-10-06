@@ -74,6 +74,9 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("notice.restart.item", &["name"]),
     ("sender.human", &[]),
     ("sender.system", &[]),
+    ("sender.session", &["name", "ext"]),
+    ("sender.session.unnumbered", &["name"]),
+    ("sender.captain", &["name"]),
     ("inject.header", &[]),
     ("inject.channel.lobby", &["crew"]),
     ("inject.channel.human", &["crew"]),
@@ -127,6 +130,24 @@ pub fn fill(template: &str, vars: &[(&str, &str)]) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// 人类 / crewd 的发言者标签留给它们自己（终审 I5）：session 的标题、显示名与 topic 名不能是任一语言里的
+/// `sender.human` / `sender.system`（去首尾空白、压换行后比，不分大小写），否则注入面上它的发言就像人说的。
+pub(crate) fn refuse_sender_label(what: &str, value: &str) -> crate::Result<()> {
+    let v = crate::render::flat(value).trim().to_lowercase();
+    for l in [Locale::Zh, Locale::En] {
+        let f = render_file(l);
+        for label in ["sender.human", "sender.system"] {
+            if v == f.get(label).to_lowercase() {
+                return Err(crate::CollabError::Invalid(format!(
+                    "{what} {value:?} 与发言者标签 {:?} 相同，会被当成人类 / crewd 的发言",
+                    f.get(label)
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 模板里出现的全部 `{名字}`。

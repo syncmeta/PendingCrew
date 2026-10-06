@@ -17,6 +17,15 @@ crewd 重新启动了。上次有 {count} 个 session 在跑，是否现在恢�
 ## sender.system
 crewd
 
+## sender.session
+{name}（{ext}号）
+
+## sender.session.unnumbered
+{name}（成员）
+
+## sender.captain
+{name}（机长）
+
 ## inject.header
 以下是你所在的群里的新消息（只含与你相关、你看得见的）：
 

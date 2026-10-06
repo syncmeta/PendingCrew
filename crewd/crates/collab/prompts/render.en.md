@@ -17,6 +17,15 @@ Human
 ## sender.system
 crewd
 
+## sender.session
+{name} (ext {ext})
+
+## sender.session.unnumbered
+{name} (member)
+
+## sender.captain
+{name} (captain)
+
 ## inject.header
 New messages in your channels (only those addressed to or visible to you):
 

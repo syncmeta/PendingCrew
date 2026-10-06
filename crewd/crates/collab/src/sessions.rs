@@ -90,6 +90,11 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
             n.executor
         )));
     }
+    for (what, v) in [("标题", &n.title), ("显示名", &n.display_name)] {
+        if let Some(v) = v {
+            crate::prompts::refuse_sender_label(what, v)?;
+        }
+    }
     if n.role == Role::Captain && crews::captain_of(tx.conn(), &crew.id)?.is_some() {
         return Err(CollabError::Conflict(format!(
             "机组 {} 已有机长；换机长用 set_captain",
@@ -540,5 +545,37 @@ mod tests {
             err(&mut s, |tx| set_profile(tx, "ghost", None, None)),
             CollabError::NotFound(_)
         ));
+    }
+
+    /// 终审 I5：session 的标题 / 显示名不能是「人类」「crewd」这类发言者标签（任一语言，去空白、压换行后比）。
+    #[test]
+    fn a_session_cannot_be_named_like_the_human_or_crewd() {
+        let mut s = store();
+        for bad in ["人类", " Human\n", "crewd", "human"] {
+            for n in [
+                NewSession {
+                    title: Some(bad.into()),
+                    ..worker("crew-a")
+                },
+                NewSession {
+                    display_name: Some(bad.into()),
+                    ..worker("crew-a")
+                },
+            ] {
+                assert!(
+                    matches!(err(&mut s, |tx| register(tx, n)), CollabError::Invalid(_)),
+                    "{bad:?} 不能当 session 名"
+                );
+            }
+        }
+        ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    display_name: Some("人类学家".into()),
+                    ..worker("crew-a")
+                },
+            )
+        });
     }
 }

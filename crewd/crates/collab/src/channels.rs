@@ -197,6 +197,7 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
     if n.kind == ChannelKind::Topic && name.is_empty() {
         return Err(CollabError::Invalid("群名不能为空".into()));
     }
+    crate::prompts::refuse_sender_label("群名", &name)?;
     if n.kind == ChannelKind::Dm {
         let humans = all.iter().filter(|m| **m == MemberRef::Human).count();
         if all.len() != 2 || humans > 1 {
@@ -303,6 +304,7 @@ pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result
         if name.is_empty() && ch.kind == ChannelKind::Topic {
             return Err(CollabError::Invalid("群名不能为空".into()));
         }
+        crate::prompts::refuse_sender_label("群名", &name)?;
         tx.conn()
             .execute("UPDATE channels SET name=?2 WHERE id=?1", params![id, name])?;
     }
@@ -788,6 +790,42 @@ mod tests {
                 topic("crew-a", vec![s("ghost")])
             )),
             CollabError::NotFound(_)
+        ));
+    }
+
+    /// 终审 I5：topic 名不能是「人类」「crewd」这类发言者标签（任一语言）。
+    #[test]
+    fn a_topic_cannot_be_named_like_the_human_or_crewd() {
+        let mut s_ = store();
+        let w1 = Sender::Session("w-a1".into());
+        for bad in ["人类", "Human", "  crewd\n"] {
+            assert!(
+                matches!(
+                    err(&mut s_, |tx| create(
+                        tx,
+                        &w1,
+                        NewChannel {
+                            name: bad.into(),
+                            ..topic("crew-a", vec![])
+                        }
+                    )),
+                    CollabError::Invalid(_)
+                ),
+                "{bad:?}"
+            );
+        }
+        let ch = ok(&mut s_, |tx| create(tx, &w1, topic("crew-a", vec![])));
+        assert!(matches!(
+            err(&mut s_, |tx| update(
+                tx,
+                &w1,
+                &ch.id,
+                ChannelPatch {
+                    name: Some("人类".into()),
+                    ..Default::default()
+                }
+            )),
+            CollabError::Invalid(_)
         ));
     }
 
