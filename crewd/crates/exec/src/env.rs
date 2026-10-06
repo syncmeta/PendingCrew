@@ -340,8 +340,10 @@ mod tests {
         let started = Instant::now();
         let got = login_shell_path(&shell, Duration::from_secs(5)).await;
         assert_eq!(got.as_deref(), Some("/x/bin"));
+        // 要证明的是没等管道 EOF：后台 sleep 8s、超时 5s，只要明显早于 5s 就判得出来。
+        // 界限放宽到 3s 是为了并行测试负载下脚本冷启动可能超过 1s。
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(3),
             "不能为后台任务攥着的管道等到 EOF"
         );
         assert_group_gone(&pidfile);
