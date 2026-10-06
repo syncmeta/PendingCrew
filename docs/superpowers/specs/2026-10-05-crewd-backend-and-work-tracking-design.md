@@ -317,7 +317,8 @@ M4 拆为 **M4a** 工作跟进核心（纯计算，本节）→ **M4b** 持久�
 - **失联重派要核实**：`reassign_lost(.., unrecoverable)` 只接受核实过失联的项——负责人在调用方给的「恢复失败」名单里，或按检查点记账已到 Silent 线（missed ≥ K 且复查时间已过，与 `owner_lost` 同一个判定）；否则 `NotLost`。行政处因此不能拿它当强制指派（§8.2 / §8.4）。
 - **一个时间基准**：检查上限（≤ now + 2h）只约束这一次命令**写入**的检查时间（spec「写入时强制」）；`invariants::check` 不再含时间，`WorkBook::restore(state, cfg)` 不再带 now，调低上限后旧账本照样读得回。所有视图（到期检查点、失联候选、停下即检查、人的待确认、升级、默认方案到点、巡检）都按 max(调用方的 now, 账本时间) 算，与命令一致。「下次检查必须晚于 now」也按这个时间比；例外是迁移 / 派活的占位 `check_at(now)`——等于调用方自己的 now 就收，记成账本的「现在」。
 - **前跳的风险（交 M4b）**：调用方的 now 超前账本时间时命令照常执行、账本时间跟上（棘轮）。若那是一次错误的前跳（坏的 NTP 校时），墙钟回来后账本时间仍停在跳过去的位置：「下次检查」必须晚于那个时间，检查点与升级都按那个时间算。`Config::max_clock_jump_ms`（默认 24h）+ `WorkBook::clock_jump(now)` 把超限的前跳报出来，M4b 应在执行命令前调用、超限就记日志 / 告警，必要时先交人确认。
-- **巡检不粘住**：`patrol(now, unrecoverable, archived)`：`stop_escalated` 只列此刻违反集合仍与交出时相同的 session；名下已没有活项的 session 的连续计数在事务里清掉；已归档的群（`archived`，群状态在 M3 的群表）不再算可归档。`needs_admin_session` 因此会回到 false。
+- **巡检不粘住**：`patrol(now, unrecoverable, archived)`：`stop_escalated` 列交过行政处、且此刻仍有没着落的项的 session（复审 I1：集合变多 / 变少都算，改干净才掉下去）；名下已没有活项的 session 的连续计数在事务里清掉；已归档的群（`archived`，群状态在 M3 的群表）不再算可归档。`needs_admin_session` 因此会回到 false。
+- **停下即检查的叫醒预算**（复审 P12）：除了「连续 3 次集合不变」，自上次干净以来累计叫满 `Config::stop_rewake_budget`（默认 6）次也交行政处，不论集合变没变；之后保持安静直到干净。挡住「每次只挪一项」的来回摆动。
 - **H 号可以不挂工作项**：`open_ask(by, now, question, default, item?)`，见上面 Q1；`HumanAsk.item` 可空，新增权限 `OpenAsk`（任何 session 与调度层，人不需要给自己提问）。
 - **检查点记账按负责人、去重、跳过**：`record_checkpoint_wake(by, now, owner, ids) -> WakeResult { recorded, skipped }`：同一项列多次只记一次；投递与记账之间已不归该负责人 / 卡住 / 收尾 / 不存在的项跳过并报回，不整批拒绝。
 - 小修：`Rejected` / `Violation` 实现 `Display` 与 `std::error::Error`（开发者向的英文短句；给 agent / 人的文案仍归 M4b）；`Config` 每个字段可单独缺省（`#[serde(default)]`）；读回时额外拒绝：问 / 入口的键与记录号不一致、现负责人不是 ownerHistory 最后一条的接手人、记成按默认方案办却没有默认方案的问、没有理由的 dropped 项；事实性放弃（重复 / 被取代）像完成一样放行卡在它上面的项并叫醒其负责人（业务放弃仍被拒）；工作项记下 `created_by`，发起 request_help 的 worker 在没人接之前可以自己撤回（业务放弃）。
@@ -326,6 +327,12 @@ M4 拆为 **M4a** 工作跟进核心（纯计算，本节）→ **M4b** 持久�
 - **依赖未齐也能 done**：`mark_done` 只要求证据与子项终结，不要求依赖已齐（依赖只约束 active）。要不要禁止「先于依赖完成」待定。
 - **拆出的子项总是有负责人**：卡住时拆分，子项缺省归原项负责人，没有「拆出来交调度层派」的无主形态。
 - **事件覆盖**：停下即检查的连续计数（软状态）不产出事件；重复的 `register_entry` 也不产出事件。M4b 若只按事件增量落库，要整份落 `BookState` 或另记这两类。
+- **回报清不掉下次检查时间**（P13）：`report` 的 `next_check_at` 只能改不能清。在等依赖的项应 `block(Item(dep))`（依赖完成时自动放行），M4b 的工具说明要写明这一点。
+- **僵尸负责人刷新 missedChecks**：负责人对自己项的任何成功操作都清零失联计数，包括来回挂 / 解关联群这类不推进工作的操作。是否只认「回报 / 状态变化」待定。
+- **从没排过检查的项也被记账**：`record_checkpoint_wake` 会给 `nextCheckAt` 为空的 open 项也加 missedChecks（只是不顺延时间）；这种项不进 `due_checkpoints`，只在调用方自己列进来时发生。
+- **`reassign_lost` 信任调用方给的恢复失败名单**：M4b 只能用 crewd 自己 `--resume` 失败的记录来填，绝不能来自 MCP 参数或行政处输入，否则又成了强制指派。
+- **24h 以内的前跳**：`clock_jump` 只报超过 24h 的前跳；更小的错误前跳同样让按真实时间写的「下次检查」被拒（要晚于账本时间）。M4b 的工具应接受相对时长（「30 分钟后」），按 max(now, clock) 换算。
+- **直接开的问被回答后要叫醒提问人**：`open_ask` 的问不卡任何项，回答 / 默认方案到点不产出 `BlockerCleared`；M4b 要按问的记录（`asked_by`）叫醒提问的 session。
 - worker 用 `create_item(..from_entry(#N))` 建一个无主项，会让该入口显示为「进行中」、不再算待认领（负责人列表为空）。是否要求挂入口的项必须有负责人待定。
 
 遗留（M4b 起处理）：
