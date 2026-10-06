@@ -1634,6 +1634,12 @@ mod tests {
             vec![b"1".to_vec()]
         );
         assert_eq!(t.core.next_wakeup(), Some(t.at(0.95)));
+
+        // 别的定时同样不给过去的时刻：只来过输出、一拍都没打过，拉起自检（25s）没结算——
+        // 30s 时它已过期，下一次唤醒是空闲边沿（31s）。
+        let mut t = T::new(vec![]);
+        t.output(b"x", 30.0);
+        assert_eq!(t.core.next_wakeup(), Some(t.at(31.0)));
     }
 
     /// 用光标定位摆词画的限流菜单：屏上是整句，字节尾窗里词与词之间没有空格
