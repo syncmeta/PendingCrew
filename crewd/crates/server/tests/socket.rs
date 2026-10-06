@@ -19,7 +19,7 @@ async fn start(dir: &Path) -> oneshot::Sender<()> {
                 builtin: false,
                 parent_ids: vec![],
                 working_directory: None,
-                captain_agent_kind: None,
+                captain_executor: None,
                 hidden_at: None,
                 created_at: "2026-10-01T00:00:00.000Z".into(),
                 updated_at: "2026-10-01T00:00:00.000Z".into(),

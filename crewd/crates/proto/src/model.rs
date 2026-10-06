@@ -22,7 +22,8 @@ pub struct Crew {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub captain_agent_kind: Option<String>,
+    /// 机长的执行器类型，词表同 `Session.executor`。
+    pub captain_executor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden_at: Option<String>,
     pub created_at: String,
@@ -36,8 +37,8 @@ pub struct Session {
     pub crew_id: String,
     /// "captain" | "worker"
     pub role: String,
-    /// "claude_code" | "codex" | "unknown"
-    pub agent_kind: String,
+    /// 执行器类型："claude" | "codex" | "acp:<registry-id>"；旧数据导入的还可能是 "terminal" | "unknown"。
+    pub executor: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -38,7 +38,8 @@
         "builtin": {
           "type": "boolean"
         },
-        "captainAgentKind": {
+        "captainExecutor": {
+          "description": "机长的执行器类型，词表同 `Session.executor`。",
           "type": [
             "string",
             "null"
@@ -327,10 +328,6 @@
     "Session": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
-        "agentKind": {
-          "description": "\"claude_code\" | \"codex\" | \"unknown\"",
-          "type": "string"
-        },
         "agentSessionId": {
           "type": [
             "string",
@@ -351,6 +348,10 @@
             "string",
             "null"
           ]
+        },
+        "executor": {
+          "description": "执行器类型：\"claude\" | \"codex\" | \"acp:<registry-id>\"；旧数据导入的还可能是 \"terminal\" | \"unknown\"。",
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -379,7 +380,7 @@
         "id",
         "crewId",
         "role",
-        "agentKind",
+        "executor",
         "updatedAt"
       ],
       "title": "Session",
