@@ -554,7 +554,14 @@ mod tests {
     #[test]
     fn a_session_cannot_be_named_like_the_human_or_crewd() {
         let mut s = store();
-        for bad in ["人类", " Human\n", "crewd", "human"] {
+        for bad in [
+            "人类",
+            " Human\n",
+            "crewd",
+            "human",
+            "人\u{200B}类",
+            "\u{FEFF}Hu\u{200C}m\u{200D}an\u{2060}",
+        ] {
             for n in [
                 NewSession {
                     title: Some(bad.into()),
