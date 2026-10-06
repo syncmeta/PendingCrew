@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crewd_exec::driver::{
-    ClaudeStart, DriverConfig, SendError, SessionHandle, StartError, start_claude,
+    ClaudeStart, Control, ControlOutcome, DriverConfig, SendError, SessionHandle, StartError,
+    start_claude,
 };
 use crewd_exec::health::{HealthKind, LaunchVerdict};
 use crewd_exec::launch::ClaudeSpec;
@@ -706,6 +707,33 @@ async fn a_live_agent_session_id_cannot_be_started_twice_but_is_free_once_exited
         .await
         .expect("见到 Exited 之后同一个号可以马上重起");
     next(&mut rx).await;
+    h.stop().unwrap();
+    until(&mut rx, |e| exited(e).is_some()).await;
+}
+
+/// M2c 给窄接口加的三个口子在 claude 一侧：打断 = 写一个 Esc；控制一律 `Unsupported`
+/// （claude 的 /model、/compact 归 M3 用屏幕驱动）；快照是 `Some`。
+#[tokio::test]
+async fn interrupt_is_a_lone_escape_and_control_is_unsupported_on_claude() {
+    let env = Env::new();
+    let program = env.script(
+        "stty raw -echo; echo ready; b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
+         stty sane; echo \"byte:$b\"; sleep 30",
+    );
+    let (h, mut rx) = start_claude(
+        env.start(program, Arc::new(MemoryLedger::default())),
+        env.config(),
+    )
+    .await
+    .unwrap();
+    screen_contains(&h, "ready").await;
+    h.interrupt().unwrap();
+    screen_contains(&h, "byte:1b").await;
+    assert!(matches!(
+        h.control(Control::Model("opus".into())).await.unwrap(),
+        ControlOutcome::Unsupported(_)
+    ));
+    assert!(h.snapshot().await.unwrap().is_some());
     h.stop().unwrap();
     until(&mut rx, |e| exited(e).is_some()).await;
 }

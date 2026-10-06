@@ -135,10 +135,15 @@ impl HelperCommands<'_> {
 
     /// MCP server：exec 形式（claude 直接 spawn，不过 shell），所以不加引号。
     pub fn mcp_args(&self) -> Vec<String> {
+        self.mcp_args_for("claude")
+    }
+
+    /// 同 [`Self::mcp_args`]，`--agent` 由调用方给（codex 驱动传 `"codex"`）。
+    pub fn mcp_args_for(&self, agent: &str) -> Vec<String> {
         let c = self.0;
         let mut a = vec!["mcp".to_string()];
         a.extend(self.identity());
-        a.extend(["--agent".to_string(), "claude".to_string()]);
+        a.extend(["--agent".to_string(), agent.to_string()]);
         if c.captain {
             a.push("--captain".to_string());
         }
