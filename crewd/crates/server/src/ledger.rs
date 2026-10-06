@@ -9,6 +9,7 @@ use crewd_store::{Store, StoreError, sessions};
 pub struct StoreLedger {
     db: PathBuf,
     session_id: String,
+    expected_executor: Option<String>,
 }
 
 impl StoreLedger {
@@ -17,7 +18,15 @@ impl StoreLedger {
         Self {
             db,
             session_id: session_id.into(),
+            expected_executor: None,
         }
+    }
+
+    /// 只认这种执行器的 session：行里的 `executor` 不是它就报 `InvalidInput`，不读也不写。
+    /// （拿 claude 的会话号去 `thread/resume` 必然失败，退回新 thread 时还会把 claude 的号覆盖掉。）
+    pub fn expecting(mut self, executor: impl Into<String>) -> Self {
+        self.expected_executor = Some(executor.into());
+        self
     }
 }
 
@@ -40,17 +49,36 @@ impl StoreLedger {
         }
         Store::open(&self.db).map_err(to_io)
     }
+
+    fn check_executor(&self, store: &Store) -> io::Result<()> {
+        let Some(want) = &self.expected_executor else {
+            return Ok(());
+        };
+        let actual = sessions::executor(store.conn(), &self.session_id).map_err(to_io)?;
+        if &actual != want {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "session {} 的执行器是 {actual}，不是 {want}",
+                    self.session_id
+                ),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl AgentIdLedger for StoreLedger {
     fn recorded(&self) -> io::Result<Option<String>> {
         let store = self.open()?;
+        self.check_executor(&store)?;
         sessions::agent_session_id(store.conn(), &self.session_id).map_err(to_io)
     }
 
     fn record(&self, agent_session_id: &str) -> io::Result<()> {
         check_agent_session_id(agent_session_id)?;
         let store = self.open()?;
+        self.check_executor(&store)?;
         sessions::set_agent_session_id(store.conn(), &self.session_id, agent_session_id)
             .map_err(to_io)
     }
@@ -152,5 +180,31 @@ mod tests {
             io::ErrorKind::NotFound
         );
         assert!(!db.exists(), "不能留下一个空库");
+    }
+
+    #[test]
+    fn a_ledger_expecting_codex_refuses_a_claude_session_without_touching_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = seeded(dir.path());
+        StoreLedger::new(db.clone(), "w-1")
+            .record("claude-uuid")
+            .unwrap();
+        let codex = StoreLedger::new(db.clone(), "w-1").expecting("codex");
+        let err = codex.recorded().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("claude"), "{err}");
+        assert_eq!(
+            codex.record("thr-1").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            StoreLedger::new(db.clone(), "w-1")
+                .expecting("claude")
+                .recorded()
+                .unwrap()
+                .as_deref(),
+            Some("claude-uuid"),
+            "claude 的会话号原样留着"
+        );
     }
 }

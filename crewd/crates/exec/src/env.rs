@@ -20,7 +20,9 @@ pub const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 /// 从父进程透传的环境变量（另加全部 `LC_*`）。PATH 与 TERM 不透传，见 [`build_env`]。
 /// `CLAUDE_CONFIG_DIR`：设了才有；claude 按它放会话日志，认证探测
 /// （`AuthProbe::projects_dir_for`）按 crewd 自己的环境找日志——两边要看到同一个值。
-pub const PASSTHROUGH_KEYS: [&str; 7] = [
+/// `CODEX_HOME`：设了才有；codex 的登录态、配置、thread 记录都在它下面（缺省 `~/.codex`），
+/// 不透传的话用了自定义目录的机器上 crewd 起的 codex 读错地方、登录态对不上（人 2026-10-06 定）。
+pub const PASSTHROUGH_KEYS: [&str; 8] = [
     "HOME",
     "SHELL",
     "LANG",
@@ -28,6 +30,7 @@ pub const PASSTHROUGH_KEYS: [&str; 7] = [
     "LOGNAME",
     "TMPDIR",
     "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
 ];
 /// 调用方给的额外变量里绝不放行的前缀（大小写不敏感）：我们自己的凭据与配置。
 pub const FORBIDDEN_PREFIXES: [&str; 4] = ["PENDINGBOT_", "PENDINGCREW_", "SUPABASE_", "CREWD_"];
@@ -462,6 +465,23 @@ mod tests {
         );
         let env = build_env([("HOME", "/home/u")], "/p", &BTreeMap::new());
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "没设就不出现");
+    }
+
+    /// codex 的登录态与配置在 `CODEX_HOME` 下：设了就原样带给子进程，没设就不出现（codex 自己
+    /// 落到 `~/.codex`）。
+    #[test]
+    fn codex_home_is_passed_through_when_set() {
+        let env = build_env(
+            [("HOME", "/home/u"), ("CODEX_HOME", "/codex-home")],
+            "/p",
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            env.get("CODEX_HOME").map(String::as_str),
+            Some("/codex-home")
+        );
+        let env = build_env([("HOME", "/home/u")], "/p", &BTreeMap::new());
+        assert!(!env.contains_key("CODEX_HOME"), "没设就不出现");
     }
 
     #[test]

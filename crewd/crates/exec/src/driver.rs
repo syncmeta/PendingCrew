@@ -5,7 +5,7 @@
 //! 写 PTY 走单独的写任务：子进程不读输入时写会阻塞，不能卡住读（否则双方互等）。
 //!
 //! 以后执行器拆成独立进程，只把 `SessionHandle` 的命令与事件换成线协议。
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,8 +87,12 @@ pub enum StartError {
     Spawn { health: Health, source: io::Error },
     /// 登记表写不进去（孤儿兜底失效）：已杀掉刚起的进程。
     Registry(io::Error),
-    /// 这个 claude 会话号已经在本进程里跑着：再起一次会删掉它的启动目录、两个进程写同一份对话。
+    /// 这个会话号（claude 会话号 / codex thread id）已经在本进程里跑着：再起一次会删掉它的
+    /// 启动目录、两个进程写同一份对话。
     AlreadyRunning(String),
+    /// 进程起来了但握手没完成（codex：`initialize` / `thread/start` 失败、超时或进程中途退出）。
+    /// 已杀掉进程。`health` 是给人看的拉起失败。
+    Handshake { health: Health },
 }
 
 impl std::fmt::Display for StartError {
@@ -99,8 +103,9 @@ impl std::fmt::Display for StartError {
             Self::Spawn { health, .. } => write!(f, "{}", health.detail),
             Self::Registry(e) => write!(f, "进程登记表写不进去：{e}"),
             Self::AlreadyRunning(id) => {
-                write!(f, "claude 会话 {id} 已经在跑，不能同时再起一个")
+                write!(f, "会话 {id} 已经在跑，不能同时再起一个")
             }
+            Self::Handshake { health } => write!(f, "{}", health.detail),
         }
     }
 }
@@ -148,12 +153,59 @@ pub struct SessionStatus {
     pub agent_session_id: String,
 }
 
-enum Command {
+/// 附在一条正文前面的「不可信上下文」：键 = 来源（如 `crew_whiteboard`），值 = 原文。
+/// 是数据不是指令——codex 走 `turn/start.additionalContext`（`kind: "untrusted"`），
+/// claude 由驱动层包成 `<external_键>…</external_键>` 放在正文前面（[`with_untrusted_context`]）。
+pub type UntrustedContext = BTreeMap<String, String>;
+
+/// 只有部分执行器支持的会话控制。不支持的一方回 [`ControlOutcome::Unsupported`]，不假装做了。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Control {
+    /// 之后的回合换模型。
+    Model(String),
+    /// 之后的回合换推理强度。
+    Effort(String),
+    /// fast 档开 / 关。
+    Fast(bool),
+    /// 压缩上下文（只在空闲时接受）。
+    Compact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ControlOutcome {
+    /// 已生效（附说明）。
+    Applied(String),
+    /// 请求被接受了，但没等到权威回显——实际状态未知。
+    NoConfirmation(String),
+    /// 被拒（附原因）。
+    Rejected(String),
+    /// 这个执行器不支持这项控制。
+    Unsupported(String),
+}
+
+/// claude 一侧的「不可信上下文」：按键序包成 `<external_键>` 块放在正文前面，与 codex
+/// 服务端渲染 `additionalContext` 的形状一致。没有上下文就原样返回正文。
+pub fn with_untrusted_context(context: &UntrustedContext, text: &str) -> String {
+    let mut out = String::new();
+    for (key, value) in context {
+        if value.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("<external_{key}>\n{value}\n</external_{key}>\n\n"));
+    }
+    out.push_str(text);
+    out
+}
+
+/// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
+pub(crate) enum Command {
     Send {
         id: u64,
         text: String,
+        context: UntrustedContext,
     },
     Raw(Vec<u8>),
+    Interrupt,
     Resize {
         cols: u16,
         lines: u16,
@@ -165,15 +217,19 @@ enum Command {
         reply: oneshot::Sender<String>,
     },
     Snapshot {
-        reply: oneshot::Sender<Snapshot>,
+        reply: oneshot::Sender<Option<Snapshot>>,
     },
     Status {
         reply: oneshot::Sender<SessionStatus>,
     },
+    Control {
+        op: Control,
+        reply: oneshot::Sender<ControlOutcome>,
+    },
 }
 
-/// 窄接口：启动之外的一切（输入 / 停止 / 状态 / 屏幕文本 / 快照）。
-/// 可克隆；**所有句柄都 drop 了 = 停掉会话**（没人能再控制它）。
+/// 窄接口：启动之外的一切（输入 / 打断 / 停止 / 状态 / 屏幕文本 / 快照 / 控制）。
+/// claude 与 codex 用同一个句柄类型。可克隆；**所有句柄都 drop 了 = 停掉会话**。
 #[derive(Clone)]
 pub struct SessionHandle {
     tx: mpsc::UnboundedSender<Command>,
@@ -181,21 +237,52 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    /// 投一段正文（排队，回读屏幕确认提交）。返回投递编号，结果见 `SessionEvent::Delivery`。
+    /// 驱动层建句柄（投递编号从 `BRIEF_DELIVERY_ID + 1` 起，0 留给开场任务）。
+    pub(crate) fn new(tx: mpsc::UnboundedSender<Command>) -> Self {
+        Self {
+            tx,
+            next_id: Arc::new(AtomicU64::new(BRIEF_DELIVERY_ID + 1)),
+        }
+    }
+
+    /// 投一段正文（排队）。返回投递编号，结果见 `SessionEvent::Delivery`。
     /// 空的 / 只有空白的正文当场拒掉（[`SendError::EmptyText`]，不占编号、不会有结果事件）。
     pub fn send(&self, text: impl Into<String>) -> Result<u64, SendError> {
+        self.send_with_context(text, UntrustedContext::new())
+    }
+
+    /// 投一段正文，附带不可信上下文（白板未读等）。见 [`UntrustedContext`]。
+    /// 上下文不算正文：正文空 / 只有空白照样 [`SendError::EmptyText`]。
+    pub fn send_with_context(
+        &self,
+        text: impl Into<String>,
+        context: UntrustedContext,
+    ) -> Result<u64, SendError> {
         let text = text.into();
         if text.trim().is_empty() {
             return Err(SendError::EmptyText);
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.cmd(Command::Send { id, text })?;
+        self.cmd(Command::Send { id, text, context })?;
         Ok(id)
     }
 
-    /// 原样写字节（菜单按键、Esc 打断）。
+    /// 原样写字节（菜单按键）。codex 没有终端：只认单独一个 Esc（= [`Self::interrupt`]），
+    /// 其余丢弃并发一条 `Notice`。
     pub fn raw(&self, bytes: impl Into<Vec<u8>>) -> Result<(), Closed> {
         self.cmd(Command::Raw(bytes.into()))
+    }
+
+    /// 打断当前回合：claude 写一个 Esc，codex 发 `turn/interrupt`（没有进行中的回合就什么都不做）。
+    pub fn interrupt(&self) -> Result<(), Closed> {
+        self.cmd(Command::Interrupt)
+    }
+
+    /// 会话控制（换模型 / 推理强度 / fast、压缩）。不支持的执行器回 `Unsupported`。
+    pub async fn control(&self, op: Control) -> Result<ControlOutcome, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::Control { op, reply })?;
+        rx.await.map_err(|_| Closed)
     }
 
     pub fn resize(&self, cols: u16, lines: u16) -> Result<(), Closed> {
@@ -218,7 +305,8 @@ impl SessionHandle {
         rx.await.map_err(|_| Closed)
     }
 
-    pub async fn snapshot(&self) -> Result<Snapshot, Closed> {
+    /// 终端快照；`None` = 这个执行器没有终端（codex：用 `screen_text` 读结构化记录的文本）。
+    pub async fn snapshot(&self) -> Result<Option<Snapshot>, Closed> {
         let (reply, rx) = oneshot::channel();
         self.cmd(Command::Snapshot { reply })?;
         rx.await.map_err(|_| Closed)
@@ -285,13 +373,7 @@ pub async fn start_claude(
         auth_tx,
         auth_rx,
     }));
-    Ok((
-        SessionHandle {
-            tx,
-            next_id: Arc::new(AtomicU64::new(BRIEF_DELIVERY_ID + 1)),
-        },
-        ev_rx,
-    ))
+    Ok((SessionHandle::new(tx), ev_rx))
 }
 
 /// 一个起好的进程及其附属物。
@@ -309,14 +391,18 @@ struct Running {
     live: Option<LiveId>,
 }
 
-/// 本进程里正在跑的 claude 会话号。
+/// 本进程里正在跑的 agent 会话号（claude 会话号与 codex thread id 共用一张表）。
 static LIVE_AGENT_IDS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// 占着一个会话号；drop 时放开。
-struct LiveId(String);
+pub(crate) struct LiveId(String);
 
 impl LiveId {
-    fn claim(id: &str) -> Result<Self, StartError> {
+    pub(crate) fn id(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn claim(id: &str) -> Result<Self, StartError> {
         let mut live = LIVE_AGENT_IDS.lock().expect("会话号表锁中毒");
         if !live.insert(id.to_string()) {
             return Err(StartError::AlreadyRunning(id.to_string()));
@@ -494,7 +580,7 @@ struct Task {
 }
 
 /// 整组 SIGKILL，组发不出去再单杀会话首进程。
-fn kill_group(pid: u32) {
+pub(crate) fn kill_group(pid: u32) {
     use rustix::process::{Pid, Signal, kill_process};
     if !kill_group_only(pid)
         && let Some(p) = Pid::from_raw(pid as i32)
@@ -505,7 +591,7 @@ fn kill_group(pid: u32) {
 
 /// 只对进程组 `pid`（setsid 后 pgid == pid）发 SIGKILL；返回是否发出去了（ESRCH 也算：组里
 /// 已经没人了）。过登记表同一道闸：pgid <= 1 或就是 crewd 自己那一组，一个信号都不发。
-fn kill_group_only(pid: u32) -> bool {
+pub(crate) fn kill_group_only(pid: u32) -> bool {
     use rustix::process::{Pid, Signal, getpgrp, kill_process_group};
     let own_pgid = getpgrp().as_raw_nonzero().get();
     let Ok(pgid) = i32::try_from(pid) else {
@@ -523,7 +609,7 @@ fn kill_group_only(pid: u32) -> bool {
     }
 }
 
-fn terminate(pid: u32) {
+pub(crate) fn terminate(pid: u32) {
     use rustix::process::{Pid, Signal, kill_process};
     if let Some(p) = Pid::from_raw(pid as i32) {
         let _ = kill_process(p, Signal::TERM);
@@ -531,7 +617,7 @@ fn terminate(pid: u32) {
 }
 
 /// 在阻塞线程池里跑一段文件 IO（账本、启动文件、登记表），不占 tokio 工作线程。
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> io::Result<T> + Send + 'static,
 ) -> io::Result<T> {
     tokio::task::spawn_blocking(f)
@@ -540,7 +626,7 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// [`reap_killed`] 的上限。
-const REAP_LIMIT: Duration = Duration::from_secs(5);
+pub(crate) const REAP_LIMIT: Duration = Duration::from_secs(5);
 
 /// 收一个**已经发过 SIGKILL** 的进程，同时把主端的输出读掉扔掉：macOS 上会话首进程退出时
 /// 要等 PTY 里的输出被读走（`ttywait`），没人读主端它就永远收不了尸。超过 `limit` 报错，不挂住
@@ -571,7 +657,7 @@ async fn reap_killed(
     }
 }
 
-fn decode(status: io::Result<std::process::ExitStatus>) -> ExitStatusKind {
+pub(crate) fn decode(status: io::Result<std::process::ExitStatus>) -> ExitStatusKind {
     use std::os::unix::process::ExitStatusExt;
     match status {
         Ok(s) => match (s.code(), s.signal()) {
@@ -718,8 +804,12 @@ fn begin_stop(t: &mut Task, stopping: &mut bool, stop_deadline: &mut Option<toki
 fn handle(t: &mut Task, cmd: Command) -> bool {
     let now = Instant::now();
     match cmd {
-        Command::Send { id, text } => t.core.send(id, &text, now),
+        Command::Send { id, text, context } => {
+            t.core
+                .send(id, &with_untrusted_context(&context, &text), now)
+        }
         Command::Raw(bytes) => t.core.raw(&bytes),
+        Command::Interrupt => t.core.raw(&[0x1b]),
         Command::Resize { cols, lines } => t.core.resize(cols, lines),
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
@@ -727,7 +817,12 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
             let _ = reply.send(t.core.screen_text(max_lines));
         }
         Command::Snapshot { reply } => {
-            let _ = reply.send(t.core.snapshot());
+            let _ = reply.send(Some(t.core.snapshot()));
+        }
+        Command::Control { op, reply } => {
+            let _ = reply.send(ControlOutcome::Unsupported(format!(
+                "claude 会话的 {op:?} 由屏幕驱动（M3 的 /model、/compact），执行器不直接支持"
+            )));
         }
         Command::Status { reply } => {
             let _ = reply.send(SessionStatus {
@@ -816,5 +911,43 @@ mod tests {
         );
         drain(&p.master, &mut core, Duration::from_millis(500)).await;
         assert!(core.screen_text(25).contains("last-words"));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn untrusted_context_is_wrapped_in_key_order_before_the_text() {
+        let mut ctx = UntrustedContext::new();
+        ctx.insert("crew_whiteboard".into(), "A: 我改完了".into());
+        ctx.insert("aa_first".into(), "x".into());
+        ctx.insert("empty".into(), String::new());
+        assert_eq!(
+            with_untrusted_context(&ctx, "开工"),
+            "<external_aa_first>\nx\n</external_aa_first>\n\n\
+             <external_crew_whiteboard>\nA: 我改完了\n</external_crew_whiteboard>\n\n开工"
+        );
+        assert_eq!(
+            with_untrusted_context(&UntrustedContext::new(), "开工"),
+            "开工"
+        );
+    }
+
+    /// 上下文不算正文：只有白板、没有正文的一条照样当场拒掉，不占编号、不进命令通道。
+    #[test]
+    fn context_without_text_is_refused_like_an_empty_send() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let h = SessionHandle::new(tx);
+        let ctx: UntrustedContext = [("crew_whiteboard".to_string(), "A: 早".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            h.send_with_context(" \n", ctx.clone()),
+            Err(SendError::EmptyText)
+        );
+        assert!(rx.try_recv().is_err(), "拒掉的不进命令通道");
+        assert_eq!(h.send_with_context("开工", ctx), Ok(BRIEF_DELIVERY_ID + 1));
     }
 }
