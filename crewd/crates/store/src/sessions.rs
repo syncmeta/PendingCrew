@@ -60,7 +60,7 @@ pub fn agent_session_id(conn: &Connection, session_id: &str) -> Result<Option<St
         |r| r.get(0),
     )
     .optional()?
-    .ok_or_else(|| StoreError::Invalid(format!("没有 session {session_id}")))
+    .ok_or_else(|| StoreError::NotFound(format!("没有 session {session_id}")))
 }
 
 /// 落账：起 agent 进程之前写下它将用的会话号。session 不存在是错误。
@@ -74,7 +74,7 @@ pub fn set_agent_session_id(
         params![session_id, agent_session_id, crate::now_ts()],
     )?;
     if n == 0 {
-        return Err(StoreError::Invalid(format!("没有 session {session_id}")));
+        return Err(StoreError::NotFound(format!("没有 session {session_id}")));
     }
     Ok(())
 }

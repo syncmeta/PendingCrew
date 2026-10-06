@@ -18,6 +18,9 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error("{0}")]
     Invalid(String),
+    /// 要找的行不存在（调用方要能和「其它失败」分开）。
+    #[error("{0}")]
+    NotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -266,8 +269,14 @@ mod tests {
             list[0].updated_at, "2026-10-01T00:00:00.000Z",
             "落账顺带更新时间"
         );
-        assert!(sessions::agent_session_id(s.conn(), "nope").is_err());
-        assert!(sessions::set_agent_session_id(s.conn(), "nope", "x").is_err());
+        assert!(matches!(
+            sessions::agent_session_id(s.conn(), "nope"),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            sessions::set_agent_session_id(s.conn(), "nope", "x"),
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     #[test]
