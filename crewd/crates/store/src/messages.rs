@@ -117,3 +117,32 @@ pub fn max_seq(conn: &Connection, channel_id: &str) -> Result<i64> {
         |r| r.get(0),
     )?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crewd_proto::MentionKind;
+
+    /// proto 的封闭词表与 store 的字符串词表不能漂：每个 `SenderKind` 都被归一成它自己，归一的每个结果都是
+    /// `SenderKind`（导入器对结果 `.expect` 能 parse）。
+    #[test]
+    fn sender_vocab_matches_proto_enum() {
+        for k in SenderKind::ALL {
+            assert_eq!(normalize_sender_kind(k.as_str()), Some(k.as_str()), "{k}");
+        }
+        for legacy in ["user", "pendingcrew"] {
+            let n = normalize_sender_kind(legacy).unwrap();
+            assert!(SenderKind::parse(n).is_some(), "{legacy} → {n}");
+        }
+    }
+
+    /// `MENTION_KINDS` 与 `MentionKind::ALL` 是同一个集合（两个方向都查）。
+    #[test]
+    fn mention_vocab_matches_proto_enum() {
+        let mut store: Vec<&str> = MENTION_KINDS.to_vec();
+        let mut proto: Vec<&str> = MentionKind::ALL.iter().map(|k| k.as_str()).collect();
+        store.sort_unstable();
+        proto.sort_unstable();
+        assert_eq!(store, proto);
+    }
+}

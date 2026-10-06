@@ -826,6 +826,36 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(one::<i64>(&ok, "PRAGMA user_version"), 3);
     }
 
+    /// 迁移前的词表检查（SQL 里的字面量）接受 proto 封闭词表里的每一个值：sender / mention / role 都不漂。
+    #[test]
+    fn migration_vocabulary_check_accepts_every_proto_value() {
+        use crewd_proto::{MentionKind, Role, SenderKind};
+        let c = v2_db();
+        for (i, k) in SenderKind::ALL.iter().enumerate() {
+            c.execute(
+                "INSERT INTO messages(id,crew_id,sender_kind,text,created_at) VALUES(?1,'crew-a',?2,'示例','2026-09-03T00:00:00.000Z')",
+                [format!("vs{i}"), k.as_str().to_string()],
+            )
+            .unwrap();
+        }
+        for (i, k) in MentionKind::ALL.iter().enumerate() {
+            c.execute(
+                "INSERT INTO messages(id,crew_id,sender_kind,text,mentions,created_at) VALUES(?1,'crew-a','human','示例',?2,'2026-09-03T00:00:00.000Z')",
+                [format!("vm{i}"), format!(r#"[{{"kind":"{}"}}]"#, k.as_str())],
+            )
+            .unwrap();
+        }
+        for (i, r) in Role::ALL.iter().enumerate() {
+            c.execute(
+                "INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES(?1,'crew-b',?2,'claude','2026-09-03T00:00:00.000Z')",
+                [format!("vr{i}"), r.as_str().to_string()],
+            )
+            .unwrap();
+        }
+        migrate(&c).unwrap();
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+    }
+
     /// 外键不成立时中止的报错要让人找得到行：列出每个 (表, 父表) 及至多 5 个 rowid，库保持 v2。
     #[test]
     fn foreign_key_abort_lists_table_parent_pairs_and_rowids() {
