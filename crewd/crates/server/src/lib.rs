@@ -51,9 +51,10 @@ impl AppState {
         f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
     ) -> crewd_collab::Result<T> {
         let hub = self.hub.clone();
-        let now = crewd_store::now_ms();
         self.db
             .call(move |s| {
+                // 在库线程上取时间：库线程串行执行，时间戳顺序 = 提交顺序（排队期间不会被后来者超过）。
+                let now = crewd_store::now_ms();
                 let (v, changes) = crewd_collab::run(s, now, f)?;
                 hub.emit(s.conn(), &changes);
                 Ok(v)
@@ -206,6 +207,12 @@ mod tests {
         .unwrap();
         crewd_store::schema::backfill_v3(store.conn()).unwrap();
         let state = AppState::new(crewd_store::Db::spawn(store).unwrap());
+        // 等事件一律带超时：发事件的路径被删掉时测试要红，不能挂死。
+        async fn within<F: std::future::Future>(f: F) -> F::Output {
+            tokio::time::timeout(std::time::Duration::from_secs(5), f)
+                .await
+                .expect("等事件超时")
+        }
         let mut client = state.hub.subscribe();
         let mut internal = state.hub.subscribe_collab();
         let m = state
@@ -222,14 +229,20 @@ mod tests {
             })
             .await
             .unwrap();
-        let e1 = client.recv().await.unwrap();
+        let e1 = within(client.recv()).await.unwrap();
         assert_eq!(e1.event, events::MESSAGE_APPENDED);
         assert_eq!(e1.data["seq"], m.message.seq);
-        assert_eq!(client.recv().await.unwrap().event, events::BADGE_CHANGED);
+        assert_eq!(
+            within(client.recv()).await.unwrap().event,
+            events::BADGE_CHANGED
+        );
         assert!(matches!(
-            internal.recv().await.unwrap(),
+            within(internal.recv()).await.unwrap(),
             CollabEvent::MessageAppended { .. }
         ));
+
+        // 回滚那一次之前另开一个内部订阅：上面那次成功调用留下的内部事件不会混进来。
+        let mut internal_fresh = state.hub.subscribe_collab();
 
         let r: crewd_collab::Result<()> = state
             .collab(|tx| {
@@ -252,6 +265,13 @@ mod tests {
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ),
             "回滚 = 不发事件"
+        );
+        assert!(
+            matches!(
+                internal_fresh.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "回滚 = 内部通道也不发"
         );
     }
 

@@ -75,14 +75,22 @@ fn import_then_serve_then_rpc() {
     let _d = start(data.path());
     let crews = rpc(data.path(), "crew.list", "null");
     assert_eq!(crews.as_array().unwrap().len(), 3);
-    let before = rpc(data.path(), "whiteboard.list", r#"{"crewId":"local-aaaa"}"#);
+    let before = rpc(
+        data.path(),
+        "message.list",
+        r#"{"channelId":"local-aaaa/lobby"}"#,
+    );
     assert_eq!(before.as_array().unwrap().len(), 3);
     rpc(
         data.path(),
-        "whiteboard.post",
-        r#"{"crewId":"local-aaaa","text":"切换后第一条 ✅","senderKind":"user"}"#,
+        "message.post",
+        r#"{"channelId":"local-aaaa/lobby","text":"切换后第一条 ✅"}"#,
     );
-    let after = rpc(data.path(), "whiteboard.list", r#"{"crewId":"local-aaaa"}"#);
+    let after = rpc(
+        data.path(),
+        "message.list",
+        r#"{"channelId":"local-aaaa/lobby"}"#,
+    );
     assert_eq!(after[3]["text"], "切换后第一条 ✅");
     assert_eq!(after[3]["channelId"], "local-aaaa/lobby");
     assert_eq!(after[3]["senderKind"], "human");

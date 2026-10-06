@@ -140,9 +140,10 @@ pub struct Message {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Ledger {
+    #[default]
     Agent,
     Human,
 }
@@ -191,48 +192,6 @@ pub struct Todo {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub responses: Vec<TodoResponse>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WhiteboardListParams {
-    pub crew_id: String,
-    /// 只返回 seq 大于它的消息；缺省 0。
-    #[serde(default)]
-    pub after_seq: Option<i64>,
-    /// 缺省 200，上限 1000。
-    #[serde(default)]
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WhiteboardPostParams {
-    pub crew_id: String,
-    pub text: String,
-    pub sender_kind: String,
-    #[serde(default)]
-    pub sender_session_id: Option<String>,
-    #[serde(default)]
-    pub sender_name: Option<String>,
-    #[serde(default)]
-    pub in_reply_to: Option<String>,
-    #[serde(default)]
-    pub mentions: Vec<Mention>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TodoListParams {
-    pub crew_id: String,
-    pub ledger: Ledger,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscribeParams {
-    /// 主题 = 事件名第一个点之前的部分，例如 "whiteboard"。
-    pub topics: Vec<String>,
 }
 
 /// 封闭词表：线上是固定字符串，`parse` 认不出就是 None（不猜）。
@@ -287,6 +246,13 @@ closed_vocab!(RestartAnswer { Resume = "resume", Later = "later" } default Later
 pub enum MemberRef {
     Session { id: String },
     Human,
+}
+
+/// 只为参数结构的 `Default`（`parse_params_or_default`）；没有业务含义。
+impl Default for MemberRef {
+    fn default() -> Self {
+        MemberRef::Human
+    }
 }
 
 impl MemberRef {
