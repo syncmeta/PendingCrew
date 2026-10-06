@@ -580,8 +580,9 @@ fn set_owner(tx: &mut Tx<'_>, id: &str, to: &MemberRef) -> Result<Channel> {
 }
 
 /// 机组 `crew` 要被删掉（`crews::delete` 在级联之前调，终审 I4）：它的 session 会随级联消失，
-/// 先把它们从**别的机组**的群里摘干净——显式成员行记 `left_at`；它们当群主的 topic / dm 交给群所属机组
-/// 此刻的机长（没有机长就交给人）；转给它们的待接受转让作废。每个受影响、活下来的群发 ChannelChanged。
+/// 先把它们从**别的机组**的群里摘干净——显式成员行记 `left_at`；它们当群主的 topic 交给群所属机组
+/// 此刻的机长（机长随之入群），没有机长（或是 dm）交给剩下的成员里最早入群的，一个不剩群主留空；
+/// 转给它们的待接受转让作废。每个受影响、活下来的群发 ChannelChanged。
 /// 本机组自己的群随级联消失，这里不动，返回它们的 id（调用方在 DELETE 之后发 ChannelRemoved）。
 pub(crate) fn release_sessions_of_doomed_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
     const DOOMED: &str = "SELECT id FROM sessions WHERE crew_id=?1";
@@ -620,12 +621,36 @@ pub(crate) fn release_sessions_of_doomed_crew(tx: &mut Tx<'_>, crew: &str) -> Re
              ORDER BY id"
         ),
     )?;
+    // 群主永远是成员（终审复审 A）：topic 交给群所属机组此刻的机长并让它入群（游标钉末尾）；没有机长、或是 dm
+    // （恰好两人，不能加人）就交给剩下的成员里最早入群的；一个都不剩才留空（存 NULL）。
     for id in owned {
-        let ch_crew = get(tx.conn(), &id)?.crew_id;
-        let to = crews::captain_of(tx.conn(), &ch_crew)?
-            .map(MemberRef::session)
-            .unwrap_or(MemberRef::Human);
-        set_owner(tx, &id, &to)?;
+        let ch = get(tx.conn(), &id)?;
+        let captain = match ch.kind {
+            ChannelKind::Topic => {
+                crews::captain_of(tx.conn(), &ch.crew_id)?.map(MemberRef::session)
+            }
+            _ => None,
+        };
+        let to = match captain {
+            Some(c) => {
+                join(tx, &id, &c)?;
+                Some(c)
+            }
+            None => explicit(tx.conn(), &id)?.into_iter().next(),
+        };
+        match to {
+            Some(m) => {
+                set_owner(tx, &id, &m)?;
+            }
+            None => {
+                tx.conn().execute(
+                    "UPDATE channels SET owner_kind=NULL, owner_id=NULL WHERE id=?1",
+                    [&id],
+                )?;
+                set_pending(tx, &id, None)?;
+                tx.note(Change::ChannelChanged { channel_id: id });
+            }
+        }
     }
     let pending = ids(
         tx,

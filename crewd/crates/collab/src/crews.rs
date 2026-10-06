@@ -796,7 +796,19 @@ mod tests {
                 topic("crew-a", "乙", vec![MemberRef::session("w-a2")]),
             )
         });
-        // crew-b 的群：cap-x 是群主，crew-b 没有机长 → 交给人。
+        // 删之前乙群里已有一条消息：机长入群的游标钉在它上面（不凭空多出一屏未读）。
+        let before = ok(&mut s, |tx| {
+            crate::messages::post(
+                tx,
+                as_("w-a2"),
+                crate::messages::NewPost {
+                    channel_id: owned.id.clone(),
+                    text: "删之前的一条".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        // crew-b 的群：cap-x 是群主，crew-b 没有机长 → 交给剩下的成员里最早入群的。
         let owned_no_captain = ok(&mut s, |tx| {
             channels::create(
                 tx,
@@ -804,6 +816,25 @@ mod tests {
                 topic("crew-b", "丙", vec![MemberRef::session("w-b1")]),
             )
         });
+        // crew-b 的群：只有 cap-x 一个人，crew-b 没有机长 → 一个成员都不剩，群主留空。
+        let owned_alone = ok(&mut s, |tx| {
+            channels::create(tx, &as_("cap-x"), topic("crew-b", "戊", vec![]))
+        });
+        // crew-a 的私聊（w-a1 ↔ cap-x），群主被改成 cap-x（API 造不出，直接写库）：私聊不能加人，交给剩下那一方。
+        let (dm, _) = ok(&mut s, |tx| {
+            channels::ensure_dm(
+                tx,
+                "crew-a",
+                &MemberRef::session("w-a1"),
+                &MemberRef::session("cap-x"),
+            )
+        });
+        s.conn()
+            .execute(
+                "UPDATE channels SET owner_kind='session', owner_id='cap-x' WHERE id=?1",
+                [&dm.id],
+            )
+            .unwrap();
         s.conn()
             .execute(
                 "UPDATE crews SET captain_session_id=NULL WHERE id='crew-b'",
@@ -864,8 +895,39 @@ mod tests {
         );
         assert_eq!(
             get(&owned_no_captain.id).owner,
-            Some(MemberRef::Human),
-            "没机长就交给人"
+            Some(MemberRef::session("w-b1")),
+            "没机长就交给剩下的成员里最早入群的"
+        );
+        assert_eq!(get(&owned_alone.id).owner, None, "一个成员都不剩：群主留空");
+        assert_eq!(
+            get(&dm.id).owner,
+            Some(MemberRef::session("w-a1")),
+            "私聊交给剩下那一方"
+        );
+        assert_eq!(
+            channels::members(s.conn(), &dm.id).unwrap(),
+            [MemberRef::session("w-a1")],
+            "私聊不因交接多出第三个人"
+        );
+        // 群主永远是成员（终审复审 A）。
+        for id in [
+            &member_only.id,
+            &owned.id,
+            &owned_no_captain.id,
+            &owned_alone.id,
+            &dm.id,
+        ] {
+            if let Some(o) = get(id).owner {
+                assert!(
+                    channels::members(s.conn(), id).unwrap().contains(&o),
+                    "{id} 的群主 {o:?} 不在群里"
+                );
+            }
+        }
+        assert_eq!(
+            crate::cursors::cursor(s.conn(), "cap-a", &owned.id).unwrap(),
+            Some(before.message.seq),
+            "接手的机长入群：游标钉在群的末尾"
         );
         assert_eq!(
             get(&member_only.id).owner,
@@ -889,6 +951,23 @@ mod tests {
             !ch.iter().any(|c| matches!(c, Change::ChannelRemoved { channel_id } if !channel_id.starts_with("crew-x/") && *channel_id != doomed.id)),
             "只报被删掉的群：{ch:?}"
         );
+        // 机长在群里了，@机长 照常解析。
+        let p = ok(&mut s, |tx| {
+            crate::messages::post(
+                tx,
+                as_("w-a2"),
+                crate::messages::NewPost {
+                    channel_id: owned.id.clone(),
+                    text: "@机长 接一下".into(),
+                    mentions: vec![crewd_proto::Mention {
+                        kind: crewd_proto::MentionKind::Captain,
+                        target_id: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(p.message.mentions[0].target_id.as_deref(), Some("cap-a"));
     }
 
     /// 终审 M1：大厅的群主是算出来的（= 机长），换机长 = 大厅变了。

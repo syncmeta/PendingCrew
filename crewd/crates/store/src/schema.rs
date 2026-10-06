@@ -121,7 +121,7 @@ CREATE TABLE channels(
   pending_owner_at TEXT,
   created_at TEXT NOT NULL,
   archived_at TEXT,
-  CHECK((kind IN ('lobby','human')) = (owner_kind IS NULL))
+  CHECK(kind NOT IN ('lobby','human') OR owner_kind IS NULL)
 );
 CREATE UNIQUE INDEX channels_one_lobby ON channels(crew_id) WHERE kind='lobby';
 CREATE UNIQUE INDEX channels_one_human ON channels(crew_id) WHERE kind='human';
