@@ -5,4 +5,5 @@
 pub mod proto;
 pub mod rpc;
 pub mod session;
+pub mod transport;
 pub mod turns;
