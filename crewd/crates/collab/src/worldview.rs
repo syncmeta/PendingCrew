@@ -3,6 +3,25 @@
 use crate::{Locale, Result, channels, crews, sessions};
 use crewd_proto::Role;
 use rusqlite::Connection;
+use std::sync::LazyLock;
+
+use crate::prompts::{PromptFile, parse};
+
+static TOOLS_ZH: LazyLock<PromptFile> = LazyLock::new(|| {
+    parse("tools.zh", include_str!("../prompts/tools.zh.md")).unwrap_or_else(|e| panic!("{e}"))
+});
+static TOOLS_EN: LazyLock<PromptFile> = LazyLock::new(|| {
+    parse("tools.en", include_str!("../prompts/tools.en.md")).unwrap_or_else(|e| panic!("{e}"))
+});
+
+/// `prompts/tools.{zh,en}.md`：工具描述、参数说明、回执、代发稿。整个 workspace 只在这里加载一次
+/// （collab 的 `turn_trace` 取 `trace.*`，server 的 `agent::text` 取其余）。
+pub fn tools_file(l: Locale) -> &'static PromptFile {
+    match l {
+        Locale::Zh => &TOOLS_ZH,
+        Locale::En => &TOOLS_EN,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldCtx {
