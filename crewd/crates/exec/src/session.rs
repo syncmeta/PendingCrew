@@ -1350,6 +1350,21 @@ mod tests {
         );
     }
 
+    /// 扫描器因为一句回显触发了，同一块里屏幕翻成了别的菜单——光标也停在「Stop and wait…」上，
+    /// 但屏上没有任何限流短语：不是限流菜单，不按。
+    #[test]
+    fn lookalike_menu_without_a_rate_limit_phrase_on_screen_types_nothing() {
+        let mut t = T::new(vec![]);
+        let bytes = "\u{23fa} about /rate-limit-options\r\n\x1b[2J\x1b[HWhat next?\r\n\u{276f} 1. Stop and wait for the build\r\n  2. Keep going\r\n";
+        let mut probe = RateLimitScanner::default();
+        assert!(probe.feed(bytes.as_bytes(), t.at(0.0)), "前提：扫描器触发");
+        let mut all = t.output(bytes.as_bytes(), 0.0);
+        for s in [0.25, 0.6, 1.2] {
+            all.extend(t.tick(s));
+        }
+        assert!(writes(&all).is_empty(), "{all:?}");
+    }
+
     /// 短语先到（`/rate-limit-options` 回显）、菜单下一块才画完：扫描器已经在冷却里，
     /// 但这次触发还没兑现——菜单一上屏就答，且只答一次。
     #[test]
