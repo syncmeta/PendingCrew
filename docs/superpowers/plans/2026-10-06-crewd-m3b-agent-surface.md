@@ -90,7 +90,7 @@
 | 人类待确认 | `asks::{open(tx, asker, OpenAsk { question, default: Option<AskDefault { text, after_minutes }>, resume_note }) -> Ask, withdraw(tx, by: &Sender, crew, ask, reason)}` | ask / withdraw_ask |
 | 唤醒 | `wakes::{enqueue, WakeRequest, WakeKind::Timer, WakePriority::System, source::timer}` | schedule_wakeup |
 | 审批 | `approvals::{NewApproval, gate(tx, NewApproval) -> Gate::{Allow { approval_id }, DenyPending { approval_id }, DenyFiled(Approval)}}`（开新请求时 M3a 自己往根机组人类群发 `notice.approval`；人在客户端 `approval.decide`，同意 = 一次性票 + 叫它回来，C2） | pre-tool-use |
-| 会话控制参数 | `StartRequest { executor: String（必填）, worktree: Option<String>（已存在目录的绝对路径，M3 不建 git worktree）, .. }`（G-S） | start_session |
+| 会话控制参数 | `StartRequest { executor: String（必填）, isolation: bool（必填语义；true = M3c 新建 git worktree，false = 机组共享目录，控制者裁定 C8）, .. }`（G-S） | start_session |
 | 由 M3b 填的 stub | `worldview::{WorldCtx, context_for, render}`、`turn_trace::{TurnEnd::{Nothing, Posted, AlreadyCalled, Replayed, Unknown}, on_turn_end(tx, session, prompt_id, last_text)}`（G-T） | Task 4、5 |
 | 占位文件 | M3a 建了 `server/src/agent/{mod,runtime}.rs` 的占位：M3b Task 3 / Task 6 **整文件替换**（不是新建） | Task 3、6 |
 
@@ -98,7 +98,7 @@
 
 - **G3 Todo 回应** → M3a Task 10 `todos::respond(tx, session, number, text)`（本机组 Agent 那本，不改状态）。
 - **G-F `prompts::fill` 再展开** → M3a Task 10 改成一遍扫描（M3a 的 `fill_does_not_expand_inside_values` 钉住；本计划 Task 3 / Task 4 的同名测试照样保留）。
-- **G-S `StartRequest` 取值** → `worktree` = 已存在目录的绝对路径（M3 不建 git worktree，M3c 只当目录用）。所以 `start_session` 不收 `isolation`，改收 `workdir?`（已存在的目录），见 Task 15。`executor`：runner 参数 → 发起机长所在机组的 `captain_executor` → `"claude"`。
+- **G-S `StartRequest` 取值** → 控制者裁定 C8：`isolation: bool`（没有路径字段）。`start_session` 保留 Swift 的 `isolation` 必填布尔（`McpServer.swift:576`、`:1141`），由机长逐次定，见 Task 15；worktree 由 M3c 的会话管理器建，M3b 不碰 git。`executor`：runner 参数 → 发起机长所在机组的 `captain_executor` → `"claude"`。
 - **G-T `TurnEnd`** → 五个值 `Nothing / Posted / AlreadyCalled / Replayed / Unknown`（Task 5 用）。
 - **G9 `AppState.agent`** → M3a 已建字段与 `agent/{mod,runtime}.rs` 占位；M3b 替换这两个文件，不改 `lib.rs`。
 - **G11 测试支撑** → M3a：crewd-server feature `testkit`（空特性）、`FakeSessionControl` 非 `cfg(test)`、`pub(crate) mod conn` + `pub(crate) run`、`dispatch::handle` 是 `pub`。
@@ -134,7 +134,7 @@
 8. 机长注入面上的附加物（命名提醒、拆组信号、计划陈旧度、全机组织树、派活策略更新，`HookEmitter.swift:246-311`）不移植：计划板已删（§9），派活策略改由 `read_delegation_policy` 现读；组织树由世界观的 lineage 节 + `directory` 取代（遗留 L1）。
 9. 世界观去掉 Swift 的 `humanRoster` / `sharesBlock` / `tiebreakerBlock` / `captainRunnerBlock` 与入门机组的 SKILL.md 提示（`LocalSessionWorldModel.swift:56-70`）；人类只有一个人，runner 偏好设置 crewd 里还没有（遗留 L2）。
 10. post-tool-use 顺带报产出（控制者裁定 C3）：非 `mcp__crew__*` 的工具调用 → `sessions::note_progress(ToolCall)`；crewd 自己的通讯工具不算。
-11. `start_session` 的 `isolation`（新建 git worktree）换成 `workdir?`（已存在的目录，G-S；遗留 L6）。
+11. `start_session` 保留 `isolation`（必填 bool，机长逐次定；控制者裁定 C8）：`true` = crewd（M3c）在机组工作目录里新建 git worktree，`false` = 机组共享目录；建失败 = 回 `r.failed`、什么都不起，不静默退回共享目录；crewd 不删 worktree。没有 `workdir` 参数（Swift 没有）。
 
 ## Review Focus
 
@@ -1387,7 +1387,7 @@ pub const CATALOG: &[ToolSpec] = &[
         p("brief", Str, true),
         p("title", Str, false),
         c("runner", false, RUNNERS),
-        p("workdir", Str, false),
+        p("isolation", Bool, true),
         p("model", Str, false),
         p("effort", Str, false),
     ])),
@@ -1759,8 +1759,8 @@ true = 真执行；不填 = 只看预览。
 ## start_session.runner
 claude 或 codex；不填 = 机组默认。
 
-## start_session.workdir
-可选。已存在目录的绝对路径，作它的工作目录（比如你事先建好的 git worktree）；不填 = 机组工作目录。crewd 不替你建 worktree。
+## start_session.isolation
+必填。false = 用机组共享目录；true = 为它新建独立 git worktree。按并行冲突、改动范围、任务之间的关系逐次判断；创建失败会直接报错，不会偷偷退回共享目录。
 
 ## start_session.model
 可选模型。
@@ -2153,8 +2153,8 @@ At most 18 characters, no project name; the worker's display name.
 ## start_session.runner
 claude or codex; omitted = crew default.
 
-## start_session.workdir
-Optional. Absolute path of an existing directory to use as its working directory (e.g. a git worktree you prepared); omitted = the crew's working directory. crewd does not create worktrees for you.
+## start_session.isolation
+Required. false = use the crew's shared directory; true = create a separate git worktree for it. Decide per call from parallel conflicts, change scope and how the tasks relate; if creation fails you get an error, never a silent fallback to the shared directory.
 
 ## start_session.model
 Optional model.
@@ -3354,7 +3354,7 @@ pub enum NumberTarget { Crew(String), Session { crew_id: String, session_id: Str
 pub struct DirEntry { pub number: String, pub name: String, pub crew_title: String, pub detail: String }
 pub struct CrewPatch { pub title: Option<String>, pub working_directory: Option<String>, pub status_line: Option<String>, pub policy: Option<String> }
 pub struct StartReq { pub crew_id, pub role: Role, pub executor: Option<String>, pub brief: String, pub title: Option<String>,
-                      pub model: Option<String>, pub effort: Option<String>, pub worktree: Option<String> /* 已存在目录的绝对路径（G-S） */ }
+                      pub model: Option<String>, pub effort: Option<String>, pub isolation: bool /* C8：true = 新建 git worktree；false = 共享机组目录 */ }
 pub struct Posted { pub message: Message, pub unwatched_human_mention: bool }
 
 // 身份 / 设置 / 事件
@@ -3784,8 +3784,8 @@ pub async fn start_session(st: &AppState, r: StartReq) -> PortResult<String> {
         title: r.title,
         model: r.model,
         effort: r.effort,
-        // G-S：已存在目录的绝对路径（M3 不建 git worktree）；None = 机组工作目录。
-        worktree: r.worktree,
+        // C8：true = M3c 新建 git worktree；false = 共享机组目录。
+        isolation: r.isolation,
     };
     Ok(st.sessions.start(req).await?.id)
 }
@@ -7963,9 +7963,13 @@ mod tests {
     #[tokio::test]
     async fn sessions_are_controlled_within_own_crew() {
         let f = Fixture::new().await;
-        assert!(!cap(&f, "start_session", json!({"brief": "补测试", "runner": "claude"})).await.is_error);
-        assert!(cap(&f, "start_session", json!({"brief": "补测试", "isolation": true})).await.is_error, "isolation 参数已删（G-S）");
-        assert!(cap(&f, "start_session", json!({"brief": "补测试", "workdir": "/no/such/dir-示例"})).await.is_error, "目录必须已存在");
+        assert!(!cap(&f, "start_session", json!({"brief": "补测试", "runner": "claude", "isolation": false})).await.is_error);
+        assert!(cap(&f, "start_session", json!({"brief": "补测试", "runner": "claude"})).await.is_error, "isolation 必填（C8，照 Swift McpServer.swift:1141）");
+        assert!(cap(&f, "start_session", json!({"brief": "补测试", "isolation": "yes"})).await.is_error, "isolation 必须是布尔");
+        assert!(cap(&f, "start_session", json!({"brief": "补测试", "isolation": false, "workdir": "/tmp"})).await.is_error, "没有 workdir 参数");
+        assert!(!cap(&f, "start_session", json!({"brief": "补测试", "isolation": true})).await.is_error);
+        let calls = f.control_calls();
+        assert!(calls.iter().any(|c| c.starts_with("Start(") && c.contains("isolation: true")) && calls.iter().any(|c| c.starts_with("Start(") && c.contains("isolation: false")), "两个取值都原样交给 SessionControl：{calls:?}");
         assert!(f.control_calls().iter().any(|c| c.starts_with("Start(") && c.contains(&f.crew)), "{:?}", f.control_calls());
         let other = f.add_crew("别的机组", None).await;
         f.add_session(&other, "s-far", Role::Worker, "外组").await;
@@ -8219,7 +8223,8 @@ struct StartArgs {
     brief: String,
     title: Option<String>,
     runner: Option<String>,
-    workdir: Option<String>,
+    /// 必填（C8）：缺了 / 不是布尔 → `parse_args` 回 `r.bad_args`，detail 里带字段名。
+    isolation: bool,
     model: Option<String>,
     effort: Option<String>,
 }
@@ -8229,12 +8234,6 @@ pub async fn start_session(cx: &Ctx<'_>, v: Value) -> CallResult {
     if a.brief.trim().is_empty() {
         return cx.err("r.bad_args", &[("detail", "brief")]);
     }
-    let workdir = a.workdir.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
-    if let Some(w) = &workdir {
-        if !std::path::Path::new(w).is_absolute() || !std::path::Path::new(w).is_dir() {
-            return cx.err("r.bad_args", &[("detail", "workdir")]);
-        }
-    }
     let req = StartReq {
         crew_id: cx.me.crew_id.clone(),
         role: Role::Worker,
@@ -8243,8 +8242,9 @@ pub async fn start_session(cx: &Ctx<'_>, v: Value) -> CallResult {
         title: a.title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
         model: a.model,
         effort: a.effort,
-        worktree: workdir,
+        isolation: a.isolation,
     };
+    // 建 worktree 失败 = SessionControl 回 Failed → `r.failed`（带原因）；什么都没起，也不退回共享目录。
     let id = tryp!(cx, port::start_session(cx.st, req));
     cx.ok("r.session_started", &[("id", &id)])
 }
@@ -8383,7 +8383,7 @@ pub async fn create_and_handoff_captain(cx: &Ctx<'_>, v: Value) -> CallResult {
         title: Some(title),
         model: a.model,
         effort: a.effort,
-        worktree: None,
+        isolation: false, // 新机长 = 新机组的共享目录
     };
     let id = tryp!(cx, port::start_session(cx.st, req));
     tryp!(cx, port::handoff_captain(cx.st, &crew.id, &id));
@@ -8487,7 +8487,7 @@ async fn start_captain(cx: &Ctx<'_>, crew: &CrewView, runner: Option<String>, br
         title: Some(cx.r("r.default_captain_title", &[])),
         model: None,
         effort: None,
-        worktree: None,
+        isolation: false, // 子机长用子机组的共享目录
     };
     port::start_session(cx.st, req).await.map_err(|e| cx.fail(e))
 }
@@ -9257,7 +9257,7 @@ CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test live_agent -- --ignored --nocaptu
 - **L3 `change_workdir` 不搬 claude 的项目记忆与权限**（Swift 会搬）：回执里写明了。
 - **L4 hook 的 `args` exec 形式**没用（裁定 5）：等核到它从哪个 claude 版本起支持，再考虑换掉 shell 引号。
 - **L5 codex 的 token 文件**：M2c 的 codex 驱动要在启动目录里写 token 文件、MCP 命令行带 `--token-file`（Task 2 Step 6 只在 M2c 已合时处理）；codex 没有 hook，注入走 M3c 的 `additionalContext`（`inject::prepare / commit`），回合收尾直接调 `crewd_collab::turn_trace::on_turn_end`，工具调用的产出信号（C3）由 codex 执行器调 `sessions::note_progress`；codex 的审批闸另议（app-server 有自己的审批请求）。
-- **L6 `start_session` 不再能要独立 git worktree**（G-S）：M3 只收已存在的目录（`workdir`）；谁来建 worktree（crewd 还是 agent 自己）留到 M3 之后定。
+- **L6 `start_session` 的 `isolation` 保留**（控制者裁定 C8，取代原「只收 `workdir`」）：worktree 由 M3c 的会话管理器建，位置 / 分支照 Swift；crewd 不删 worktree，删除是人的动作。
 - **L7 回合记账在 `meta` 表**：键值表里的软状态，不进 schema；session 删除时没有清理（键会留着，无害）。
 - **L8 `post` 不收附件**：等 M3a 之后支持附件上传再加回参数与世界观那一条。
 - **L9 侧栏排序**：人 2026-10-06 定为手动拖拽（`crews.position`），M3b 不提供任何排序工具（`arrange_crews` 等已删）。
@@ -9265,6 +9265,6 @@ CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test live_agent -- --ignored --nocaptu
 ## 交付时要回报（给控制者 / 人）
 
 1. G3 / G-F / G-S / G-T / G9 / G11 哪些在 M3a 落地时已有、哪些是为 M3b 补的。
-2. L6：`start_session` 的 `isolation` 已删，只能给已存在的目录。
+2. L6：`start_session` 的 `isolation`（必填 bool）已按 C8 保留，有没有被 M3c 的 worktree 创建接上（Task 15 的测试只验到 `StartRequest.isolation`）。
 3. 真 claude 冒烟（Task 16 Step 9）有没有跑、结果。
 4. rmcp 3.5.1 带进来的 lock 条目清单（Task 8 Step 1）。

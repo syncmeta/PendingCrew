@@ -45,7 +45,7 @@
 - codex / ACP 的执行器实现（M2c / M2e 各加一个 `Executor`；codex 会话在 M3c 里 `start` 回 `Unsupported`）。
 - `crewd mcp` / `crewd hook`、工具、世界观文案、turn_trace（M3b）；hook 的未读注入（M3b；M3c 只依赖「hook 注入后推进同一个游标」）。
 - 中途换模型（`/model` 屏幕驱动，§18 遗留的 `SessionProfileSwitch`）：`SessionControl::set_profile` 只落库、下次启动生效，回执照实说（控制者裁定 C5）。
-- 建 git worktree：`session.start.worktree` 只当「已存在的目录」用作工作目录。
+- 删 git worktree / 删分支：crewd 只建（`isolation: true`，控制者裁定 C8）、永不删，删除是人的动作。
 - 侧栏排序（§22.7 Q4 + 控制者裁定 C1：人手动排，`crews.position` / `crew.reorder` 归 M3a，M3c 不碰）；Jev 实现（M5b）；检查点 / 停下即检查 / BlockerCleared 的业务（M4b，只留口）。
 - 删 Swift 代码（切换时做）。
 
@@ -70,6 +70,7 @@
 17. **非消息类唤醒是至少一次**：kill -9 时正处在 `inflight` 的定时 / 系统唤醒，重启后退回 pending 再投一次（可能重复）；消息类靠游标做到恰好一次。宁可重投不丢（Swift `CrewSessionRunner.swift` `confirmWake` 注释里的论证）。
 18. **CommsSpec 只在 `orchestra/exec_claude.rs::comms_for` 一处拼**：M3b 并行改它的形状（加 `token`、去 `crew_id/captain/label/structured_post`）；后合者只改这一个函数。M3b 未合入时 `hooks: false`（helper 还没有 `hook` 子命令）。
 19. **测试的确定性**：Core 的单元测试不跑 actor 循环，直接 `core.handle(input)`，时间用 `ManualClock`；派生任务（拉起、事件泵、Arbiter）在 current_thread 运行时上靠 `Rig::settle()`（反复 `yield_now` + 排空收件箱，连续 50 次空才停）推进——不 sleep、不看墙钟。只有 Arbiter 超时那一条用 50ms 真超时。
+20. **`isolation: true` 的 worktree 由会话管理器建（控制者裁定 C8，取代 C5 里「`worktree` = 已存在目录」）**：`StartRequest` / `StartSession` / `session.start` 都带显式 `isolation: bool`（不再有路径字符串）。`Core::start_new` 在写 session 行**之前**建：机组工作目录（`Port::crew_workdir`）→ `Worktrees::create`（`orchestra/worktree.rs`，位置 / 分支名 / slug 逐条照 Swift，见 Task 6 Step 6b）→ 路径填进 `NewSession.worktree`（落 `sessions.worktree`）→ session 在那里起；`isolation: false` = 机组共享目录。建失败（不是仓库、detached HEAD、机组没工作目录、git 出错）= `ControlError::Worktree(原因)`：不写行、不起进程、不退回共享目录。之后被 `--resume` 拉起时直接用库里的 `worktree`；目录被人删掉了 = 走既有的「工作目录没了」起不来路径（Review Focus 5），不重建。crewd 永不删 worktree / 分支。
 
 ## 人已拍板（§22.7）与控制者裁定（2026-10-06）→ 在哪一处
 
@@ -80,12 +81,13 @@
 | Q5 不设默认上限、可选上限默认关；按「来源 → 目标」与「目标」两级熔断无产出环路；只停那一条、告诉人和群主；阈值一处常量 | 裁定 2、3、5；Task 3、Task 8 | `crewd_wake::breaker::LOOP_LIMITS`；上限 = `orchestra.settings.set` |
 | C3 产出信号 = M3a `sessions::note_progress` → `Change::Progress`（工具调用 / 工作项变化；发言不算） | 裁定 3；Task 8（`CollabFact::Progress`）、Task 10（`fact_of`） | `deliver.rs::observe_progress`、`db.rs::fact_of` |
 | C4 等重启答复期间，人 @ 名单里的某一个 = 只恢复它（算对它单个 resume）；其余照旧等 | 裁定 4；Task 8 `may_launch` / `launch_for_wakes`、Task 9 `boot`（水位） | `deliver.rs::may_launch` 里 `held` 那几行 |
-| C5 人类唤醒绕过可选上限；其余默认照写：环路窗口 10 分钟 / 8 次、人停 session 丢弃它 pending 的唤醒、`set_profile` 只落库下次启动生效、`worktree` = 已存在目录、人的唤醒在额度未恢复时也拉起 | 裁定 3、5、10；Task 3、7、8 | `LOOP_LIMITS`、`LaunchGate::check` 的 `bypass_cap`、`core.rs::stop`、`control.rs`、`deliver.rs::may_launch` |
+| C5 人类唤醒绕过可选上限；其余默认照写：环路窗口 10 分钟 / 8 次、人停 session 丢弃它 pending 的唤醒、`set_profile` 只落库下次启动生效、人的唤醒在额度未恢复时也拉起 | 裁定 3、5、10；Task 3、7、8 | `LOOP_LIMITS`、`LaunchGate::check` 的 `bypass_cap`、`core.rs::stop`、`control.rs`、`deliver.rs::may_launch` |
 | C7 默认方案到点：M3c 的定时拍调 `asks::apply_due_defaults` | 裁定 15；Task 9 | `on_tick` |
+| C8 `start_session` 保留 `isolation`（必填 bool）：`true` = 会话管理器在机组工作目录里新建 git worktree（照 Swift 的位置 / 分支名），记进 `sessions.worktree` 并在那里起；失败 = 起不来、不退回共享目录；crewd 不删 worktree | 裁定 20；Task 6 Step 6b、Task 7、Task 10 | `orchestra/worktree.rs`、`core.rs::start_new` |
 
 ## 原「仍待人拍板」1–6 的去向
 
-全部由控制者裁定定下（上表 C4 / C5），不再待人拍板：1 环路判据（10 分钟 / 8 次、回叫不算产出）照写；2 人类唤醒不受可选上限照写；**3 改了**：等重启答复期间人 @ 某一个 = 只恢复它（C4）；4 人停 session 丢弃 pending 唤醒照写；5 人的唤醒在额度未恢复时照样拉起照写；6 `set_profile` 只落库下次生效、`worktree` 只当已有目录照写。每条仍只在一处可改（见上表「改的话只改」）。
+全部由控制者裁定定下（上表 C4 / C5），不再待人拍板：1 环路判据（10 分钟 / 8 次、回叫不算产出）照写；2 人类唤醒不受可选上限照写；**3 改了**：等重启答复期间人 @ 某一个 = 只恢复它（C4）；4 人停 session 丢弃 pending 唤醒照写；5 人的唤醒在额度未恢复时照样拉起照写；6 `set_profile` 只落库下次生效照写（`worktree` 一条已被控制者裁定 C8 取代：`isolation: bool`，由会话管理器建 worktree，见裁定 20）。每条仍只在一处可改（见上表「改的话只改」）。
 
 ## Review Focus
 
@@ -94,6 +96,7 @@
 3. worker 忙时被 @，hook 已把那条注入进上下文（游标越过）——idle 边沿、以及 kill -9 重启之后，都不能再投一遍。（Task 8 `already_injected_message_is_settled_not_resent`；Task 9 `boot_requeues_inflight_and_skips_injected_messages`）
 4. 目标正卡在对话框（信任框 / 权限菜单）时来了唤醒——绝不能把正文敲进对话框；框答掉之后再投。（Task 8 `pending_decision_holds_delivery_until_cleared`）
 5. 目标根本起不来（claude 不在 / codex 会话 / 工作目录没了）——唤醒不能无限重试：3 次后放弃、只告警一次、`resume_failed_at` 只写一次。（Task 8 `launch_failures_back_off_then_drop_with_one_alert`）
+6. `isolation: true` 建 worktree 失败（不是仓库、detached HEAD、机组没工作目录）时，不留 session 行、不起进程、也不悄悄退回共享目录（控制者裁定 C8）。（Task 7 `worktree_failure_fails_the_start_with_the_reason_and_creates_nothing`；Task 11 `isolated_start_creates_a_worktree_in_the_crew_repo_and_a_failed_one_leaves_nothing`）
 
 ## 文件结构
 
@@ -119,6 +122,7 @@ crewd/crates/server/
   src/orchestra/exec_claude.rs ClaudeExecutor、ClaudeProgram、comms_for        (T6)
   src/orchestra/hooks.rs      Arbiter（M5b 桩）/ IdleHook / AskAnsweredHook / QuotaSource / ContextExtras (T6)
   src/orchestra/port.rs       Port trait 与它的数据类型                        (T6)
+  src/orchestra/worktree.rs   Worktrees trait + GitWorktrees（isolation=true 时建 git worktree，C8） (T6)
   src/orchestra/testkit.rs    #[cfg(test)] MemPort、StandIn、Rig              (T6)
   src/orchestra/core.rs       Core：输入分发、会话生命周期、会话事件            (T7, T8)
   src/orchestra/deliver.rs    唤醒入队、选批投递、回执、退避、idle、问被回答     (T8)
@@ -2332,7 +2336,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `crewd/crates/server/Cargo.toml`、`crewd/Cargo.lock`、`crewd/crates/server/src/orchestra/mod.rs`（**整文件替换 M3a 的占位**；`lib.rs` 的 `pub mod orchestra;` 与 `AppState.orchestra: OnceLock<orchestra::Handle>` M3a 已有，本计划不改 `AppState`）
-- Create: `crewd/crates/server/src/orchestra/{clock,exec,exec_claude,hooks,port,testkit}.rs`
+- Create: `crewd/crates/server/src/orchestra/{clock,exec,exec_claude,hooks,port,worktree,testkit}.rs`
 
 **Interfaces:**
 - Consumes: Task 1–5 全部；M2b `crewd_exec::{driver::*, session::SessionEvent, launch::{ClaudeSpec, CommsSpec}, env::{AgentPaths, compose_child_path}, resume::{AgentIdLedger, MemoryLedger, valid_agent_session_id}, registry::ProcessRegistry}`、`crewd_term::{PendingDecision, Snapshot}`。
@@ -2341,9 +2345,10 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
   - `clock::{Clock, SystemClock, ManualClock}`（`ManualClock::new(Ms)`、`set(Ms)`、`advance(i64)`）
   - `exec::{BoxFut, Context, LaunchRequest, LaunchError, Launched, Executor, ExecHandle, Executors}`
   - `exec_claude::{ClaudeProgram, ClaudeExecutor, ClaudeExecutorConfig, comms_for}`
-  - `hooks::{ArbiterQuestion, Arbiter, NoArbiter, IdleHook, NoIdleHook, AskAnsweredHook, NoAskHook, QuotaSource, NoQuotaSource, ContextExtras, NoExtras, Hooks}`
+  - `hooks::{ArbiterQuestion, Arbiter, NoArbiter, IdleHook, NoIdleHook, AskAnsweredHook, NoAskHook, QuotaSource, NoQuotaSource, ContextExtras, NoExtras, Hooks}`（`Hooks` 多一个 `worktrees: Arc<dyn Worktrees>`，默认真实现）
+  - `worktree::{Worktrees, GitWorktrees, real}`（C8）
   - `port::{Result, Desired, SessionRow, NewSession, SessionPatch, Settle, Audience, LiveView, Rendered, OrchestraEvent, Port}`
-  - `testkit::{MemPort, MemChannel, MemKind, StandIn, LaunchRecord}`（`#[cfg(test)]`）
+  - `testkit::{MemPort, MemChannel, MemKind, StandIn, StandInWorktrees, LaunchRecord}`（`#[cfg(test)]`）
 
 - [ ] **Step 1: 依赖**
 
@@ -2367,6 +2372,7 @@ pub mod exec;
 pub mod exec_claude;
 pub mod hooks;
 pub mod port;
+pub mod worktree;
 #[cfg(test)]
 mod testkit;
 
@@ -3010,6 +3016,7 @@ use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::{Ms, NewWake};
 
 use super::exec::{BoxFut, Context};
+use super::worktree::{self, Worktrees};
 
 pub struct ArbiterQuestion {
     pub message: MsgFacts,
@@ -3097,6 +3104,8 @@ pub struct Hooks {
     pub ask: Arc<dyn AskAnsweredHook>,
     pub quota: Arc<dyn QuotaSource>,
     pub extras: Arc<dyn ContextExtras>,
+    /// `isolation: true` 时建 git worktree（控制者裁定 C8）；默认真 git，测试换 `StandInWorktrees`。
+    pub worktrees: Arc<dyn Worktrees>,
 }
 
 impl Default for Hooks {
@@ -3107,10 +3116,198 @@ impl Default for Hooks {
             ask: Arc::new(NoAskHook),
             quota: Arc::new(NoQuotaSource),
             extras: Arc::new(NoExtras),
+            worktrees: worktree::real(),
         }
     }
 }
 ```
+
+- [ ] **Step 6b: 实现 `worktree.rs`（控制者裁定 C8：`isolation: true` 时新建 git worktree；crewd 只建、永不删）**
+
+照 Swift：`Sources/Mac/LocalRunner/SessionWorkspace.swift:20-34`（流程与分支名）、`GitWorktreeService.swift:124-158`（位置与目录名）、`:166-185`（`.git/info/exclude`）、`:197-220`（slug）。逐条：机组目录必须是 git 仓库（`rev-parse --is-inside-work-tree` 为 `true`），否则报错；当前分支取 `symbolic-ref --quiet --short HEAD`，detached HEAD 报错；目录 = `<repo 根>/.pendingcrew/worktrees/<slug>-<8 位 hex>`（repo 根 = `rev-parse --show-toplevel`；slug = `hint` 里 `[A-Za-z0-9_-]` 以外的字符换成 `-`、连续 `-` 合一、头尾去 `-`、截 32 字符、空则 `crew`；`hint` = 开场 brief，空串则 `session`）；新分支 `pendingcrew/session-<6 位 hex>`，从机组目录的当前分支起：`git worktree add -b <新分支> <目录> <当前分支>`，在 repo 根里跑；容器目录 `mkdir -p`，并把 `/.pendingcrew/` 追加进 `<repo 根>/.git/info/exclude`（文件存在且还没有这一行才写；本地、不污染仓库）。任何一步失败都回 `Err(原因)`，**绝不退回共享目录**（Swift `SessionWorkspace.swift:7-9`、`McpServer.swift:568` 的同一条原则）。
+
+```rust
+//! 为 `isolation: true` 的 session 新建 git worktree（控制者裁定 C8，照 Swift 的 `SessionWorkspace` / `GitWorktreeService`）。
+//! 只建、永不删：删除是人的动作（crewd 不碰 `git worktree remove`，也不删分支）。
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+
+use super::exec::BoxFut;
+
+pub trait Worktrees: Send + Sync {
+    /// 在 `crew_dir`（机组工作目录）所在的仓库里新建 worktree；`hint` = 目录名前缀（开场 brief，空串则 `session`）。
+    /// 返回新目录的绝对路径。失败 = `Err(给人看的原因)`，什么都不该留下来要人收拾的（除了 git 自己在 `worktree add` 中途失败时的残留，那归 git）。
+    fn create<'a>(&'a self, crew_dir: &'a Path, hint: &'a str) -> BoxFut<'a, Result<PathBuf, String>>;
+}
+
+/// 生产实现：shell 出 `git`。同步的 `Command` 放进 `spawn_blocking`，不堵 actor。
+pub struct GitWorktrees;
+
+impl Worktrees for GitWorktrees {
+    fn create<'a>(&'a self, crew_dir: &'a Path, hint: &'a str) -> BoxFut<'a, Result<PathBuf, String>> {
+        let (dir, hint) = (crew_dir.to_path_buf(), hint.to_string());
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || create_blocking(&dir, &hint))
+                .await
+                .map_err(|e| format!("新建 worktree 的任务崩了：{e}"))?
+        })
+    }
+}
+
+struct Out {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+}
+
+fn git(cwd: &Path, args: &[&str]) -> Result<Out, String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        // 从 git hook / 别的仓库里被调起时，这几个会把 git 指到错的仓库。
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .map_err(|e| format!("跑不了 git（{e}）；请确认 git 在 PATH 上"))?;
+    Ok(Out {
+        ok: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+    })
+}
+
+fn create_blocking(crew_dir: &Path, hint: &str) -> Result<PathBuf, String> {
+    let shown = crew_dir.display();
+    let inside = git(crew_dir, &["rev-parse", "--is-inside-work-tree"])?;
+    if !(inside.ok && inside.stdout == "true") {
+        return Err(format!("无法为 session 新建 worktree：{shown} 不是 git 仓库"));
+    }
+    let head = git(crew_dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    if !head.ok || head.stdout.is_empty() {
+        return Err(format!("无法为 session 新建 worktree：{shown} 当前是 detached HEAD"));
+    }
+    let top = git(crew_dir, &["rev-parse", "--show-toplevel"])?;
+    if !top.ok || top.stdout.is_empty() {
+        return Err(format!("无法为 session 新建 worktree：查不到 {shown} 的仓库根（{}）", top.stderr));
+    }
+    let root = PathBuf::from(top.stdout);
+    let container = root.join(".pendingcrew").join("worktrees");
+    std::fs::create_dir_all(&container).map_err(|e| format!("建不了 {}：{e}", container.display()))?;
+    ensure_local_exclude(&root);
+    let hex = |n: usize| uuid::Uuid::new_v4().simple().to_string()[..n].to_string();
+    let hint = if hint.is_empty() { "session" } else { hint };
+    let target = container.join(format!("{}-{}", slug(hint), hex(8)));
+    let branch = format!("pendingcrew/session-{}", hex(6));
+    let add = git(&root, &["worktree", "add", "-b", &branch, &target.display().to_string(), &head.stdout])?;
+    if !add.ok {
+        return Err(format!("git worktree add 失败：{}", add.stderr));
+    }
+    Ok(target)
+}
+
+/// 把 `/.pendingcrew/` 记进仓库本地的 exclude（Swift `ensureLocalGitignore`：文件不存在就跳过，不冒险写错地方）。
+fn ensure_local_exclude(root: &Path) {
+    use std::io::Write;
+    let exclude = root.join(".git").join("info").join("exclude");
+    let needle = "/.pendingcrew/";
+    if !exclude.is_file() || std::fs::read_to_string(&exclude).map(|c| c.contains(needle)).unwrap_or(false) {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&exclude) {
+        let _ = f.write_all(format!("\n# Added by crewd — worktree scratch dir.\n{needle}\n").as_bytes());
+    }
+}
+
+fn slug(raw: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            out.push(ch);
+            last_dash = ch == '-';
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let s: String = out.trim_matches('-').chars().take(32).collect();
+    if s.is_empty() { "crew".into() } else { s }
+}
+
+/// 默认挂真实现（`Hooks::default()`）。
+pub fn real() -> Arc<dyn Worktrees> {
+    Arc::new(GitWorktrees)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 合成仓库：临时目录里 `git init` + 一次空提交；绝不碰真仓库。
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let o = git(dir.path(), args).unwrap();
+            assert!(o.ok, "git {args:?}：{}", o.stderr);
+        };
+        run(&["init", "-b", "main"]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "init"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn creates_a_worktree_on_a_new_branch_under_dot_pendingcrew() {
+        let r = repo();
+        let root = r.path().canonicalize().unwrap(); // macOS：/var → /private/var，git 报的是真路径
+        let p = GitWorktrees.create(&root, "fix scroll 补测试").await.unwrap();
+        assert!(p.starts_with(root.join(".pendingcrew").join("worktrees")), "{p:?}");
+        assert!(p.file_name().unwrap().to_string_lossy().starts_with("fix-scroll-"), "{p:?}");
+        assert!(p.is_dir());
+        let b = git(&p, &["symbolic-ref", "--short", "HEAD"]).unwrap().stdout;
+        assert!(b.starts_with("pendingcrew/session-") && b.len() == "pendingcrew/session-".len() + 6, "{b}");
+        assert!(std::fs::read_to_string(root.join(".git/info/exclude")).unwrap().contains("/.pendingcrew/"));
+        let again = GitWorktrees.create(&root, "fix scroll 补测试").await.unwrap();
+        assert_ne!(p, again, "目录名带随机后缀，不撞");
+        assert_eq!(git(&root, &["status", "--porcelain"]).unwrap().stdout, "", "exclude 生效：主工作区不脏");
+    }
+
+    #[tokio::test]
+    async fn starts_from_a_subdirectory_of_the_repo() {
+        let r = repo();
+        let root = r.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let p = GitWorktrees.create(&root.join("sub"), "").await.unwrap();
+        assert!(p.starts_with(root.join(".pendingcrew/worktrees")) && p.file_name().unwrap().to_string_lossy().starts_with("session-"), "{p:?}");
+    }
+
+    #[tokio::test]
+    async fn refuses_non_repos_and_detached_head_and_never_falls_back() {
+        let plain = tempfile::tempdir().unwrap();
+        let e = GitWorktrees.create(plain.path(), "x").await.unwrap_err();
+        assert!(e.contains("不是 git 仓库"), "{e}");
+        assert!(!plain.path().join(".pendingcrew").exists());
+        let r = repo();
+        let root = r.path().canonicalize().unwrap();
+        assert!(git(&root, &["checkout", "--detach"]).unwrap().ok);
+        let e = GitWorktrees.create(&root, "x").await.unwrap_err();
+        assert!(e.contains("detached HEAD"), "{e}");
+        assert!(!root.join(".pendingcrew").exists(), "失败不留半成品");
+    }
+
+    #[test]
+    fn slug_follows_the_swift_rules() {
+        assert_eq!(slug("fix scroll 补测试"), "fix-scroll");
+        assert_eq!(slug("补测试"), "crew");
+        assert_eq!(slug("--a__b--"), "a__b");
+        assert_eq!(slug(&"a".repeat(40)).len(), 32);
+        assert_eq!(slug("a   b"), "a-b");
+    }
+}
+```
+
+`Cargo.toml`：`uuid`（`v4`）已在 `crewd-server` 依赖里则不动；没有就 `cargo add --offline -p crewd-server uuid -F v4`（锁里已有该 crate，M3a collab 在用）；`tempfile` 已是 dev 依赖（M3a）。`GitWorktrees` 的测试要求 `git` 在 PATH 上。
 
 - [ ] **Step 7: 实现 `port.rs`**
 
@@ -3176,7 +3373,7 @@ pub struct NewSession {
     pub title: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// 已存在的目录（M3c 不建 git worktree）。
+    /// crewd 为它新建的 git worktree 的绝对路径（`isolation: true`，控制者裁定 C8；`Core::start_new` 建好后填）；None = 共享机组目录。
     pub worktree: Option<PathBuf>,
 }
 
@@ -3241,6 +3438,8 @@ pub trait Port: Send + Sync + 'static {
     fn sessions_desired_running(&self) -> impl Future<Output = Result<Vec<SessionRow>>> + Send;
     fn all_session_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn insert_session(&self, s: NewSession) -> impl Future<Output = Result<SessionRow>> + Send;
+    /// 机组的工作目录（`isolation: true` 建 worktree 的起点，C8）；没有 = None。
+    fn crew_workdir(&self, crew: &str) -> impl Future<Output = Result<Option<PathBuf>>> + Send;
     fn patch_session(&self, id: &str, p: SessionPatch) -> impl Future<Output = Result<()>> + Send;
     /// 换机长；返回原机长（没有 / 就是它 → None）。
     fn set_captain(&self, crew: &str, session: &str) -> impl Future<Output = Result<Option<String>>> + Send;
@@ -3346,6 +3545,8 @@ pub struct MemState {
     pub defaults_applied: usize,
     pub prunes: usize,
     pub ledgers: BTreeMap<String, Arc<MemoryLedger>>,
+    /// 机组 → 工作目录（`Port::crew_workdir`）。
+    pub crew_dirs: BTreeMap<String, PathBuf>,
     pub next_wake: i64,
     pub next_session: u64,
     /// 测试里的「现在」（入队时间）。
@@ -3417,9 +3618,14 @@ impl Port for MemPort {
         Ok(self.lock().sessions.keys().cloned().collect())
     }
 
+    async fn crew_workdir(&self, crew: &str) -> Result<Option<PathBuf>> {
+        Ok(self.lock().crew_dirs.get(crew).cloned())
+    }
+
     async fn insert_session(&self, s: NewSession) -> Result<SessionRow> {
         let mut st = self.lock();
         st.next_session += 1;
+        let shared = st.crew_dirs.get(&s.crew_id).cloned();
         let row = SessionRow {
             id: format!("new-{}", st.next_session),
             crew_id: s.crew_id,
@@ -3427,7 +3633,8 @@ impl Port for MemPort {
             executor: s.executor,
             display_name: s.title,
             agent_session_id: None,
-            workdir: Some(s.worktree.unwrap_or_else(|| PathBuf::from("/nonexistent/wd"))),
+            // worktree（isolation=true 建好的）→ 机组共享目录。
+            workdir: Some(s.worktree.or(shared).unwrap_or_else(|| PathBuf::from("/nonexistent/wd"))),
             model: s.model,
             effort: s.effort,
             brief: Some(s.brief),
@@ -3700,6 +3907,7 @@ impl Port for MemPort {
 #[derive(Clone, Debug)]
 pub struct LaunchRecord {
     pub session: String,
+    pub workdir: PathBuf,
     pub initial: Option<String>,
     pub system_prompt: Option<String>,
     pub token: String,
@@ -3746,6 +3954,39 @@ impl StandIn {
     }
 }
 
+/// 顶替 `Worktrees`：不碰 git，记下调用；可让下一次失败。
+#[derive(Clone, Default)]
+pub struct StandInWorktrees(pub Arc<Mutex<StandInWtState>>);
+
+#[derive(Default)]
+pub struct StandInWtState {
+    pub calls: Vec<(PathBuf, String)>,
+    pub fail_next: Option<String>,
+}
+
+impl StandInWorktrees {
+    pub fn calls(&self) -> Vec<(PathBuf, String)> {
+        self.0.lock().expect("测试器材锁中毒").calls.clone()
+    }
+
+    pub fn fail_next(&self, why: &str) {
+        self.0.lock().expect("测试器材锁中毒").fail_next = Some(why.into());
+    }
+}
+
+impl super::worktree::Worktrees for StandInWorktrees {
+    fn create<'a>(&'a self, crew_dir: &'a std::path::Path, hint: &'a str) -> BoxFut<'a, Result<PathBuf, String>> {
+        let mut st = self.0.lock().expect("测试器材锁中毒");
+        st.calls.push((crew_dir.to_path_buf(), hint.to_string()));
+        let n = st.calls.len();
+        let r = match st.fail_next.take() {
+            Some(why) => Err(why),
+            None => Ok(PathBuf::from(format!("/nonexistent/worktrees/w-{n}"))),
+        };
+        Box::pin(async move { r })
+    }
+}
+
 impl Executor for StandIn {
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         let st = self.0.clone();
@@ -3757,6 +3998,7 @@ impl Executor for StandIn {
             }
             s.launches.push(LaunchRecord {
                 session: req.session_id.clone(),
+                workdir: req.workdir.clone(),
                 initial: req.initial_prompt.clone(),
                 system_prompt: req.system_prompt.clone(),
                 token: req.token.clone(),
@@ -3854,7 +4096,7 @@ Run: `./scripts/check.sh`
 Expected: 全绿。
 
 ```bash
-git add crates/server/Cargo.toml Cargo.lock crates/server/src/orchestra/mod.rs crates/server/src/orchestra/clock.rs crates/server/src/orchestra/exec.rs crates/server/src/orchestra/exec_claude.rs crates/server/src/orchestra/hooks.rs crates/server/src/orchestra/port.rs crates/server/src/orchestra/testkit.rs
+git add crates/server/Cargo.toml Cargo.lock crates/server/src/orchestra/mod.rs crates/server/src/orchestra/clock.rs crates/server/src/orchestra/exec.rs crates/server/src/orchestra/exec_claude.rs crates/server/src/orchestra/hooks.rs crates/server/src/orchestra/port.rs crates/server/src/orchestra/worktree.rs crates/server/src/orchestra/testkit.rs
 git diff --cached --stat
 git commit -m "crewd-server: orchestra skeleton — clock, executor trait with claude impl, hook points incl. Arbiter stub, Port and test kit
 
@@ -3874,7 +4116,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 6 全部；Task 4 `policy::{quota_plan, quota_pending, Gate, LaunchGate}`、`queue::ids`；Task 5 `notice::*`；Task 1 `text`。
 - Produces:
-  - `core::{Input, Origin, StartSession, ControlError, Reply, Cmd, Inflight, Live, Starting, Raised, Core}`
+  - `core::{Input, Origin, StartSession（带 isolation: bool，C8）, ControlError（含 Worktree(String)）, Reply, Cmd, Inflight, Live, Starting, Raised, Core}`
   - `Core::new(port: Arc<P>, execs: Executors, hooks: Hooks, clock: Arc<dyn Clock>, cfg: OrchestraConfig, inbox: mpsc::UnboundedSender<Input>) -> anyhow::Result<Core<P>>`、`Core::handle(&mut self, Input)`、`pub(crate)`：`resume`、`launch(row, exec, text, wakes)`、`launch_failed(&row, detail)`、`alert_audience(crew, is_captain)`、`live_view`、`publish_live`、`on_tick`、`schedule_quota_for`
   - `testkit::Rig { core, port, exec, clock, rx }`：`new()`、`with(Hooks)`、`crew(crew, captain)`、`worker(crew, id)`、`channel(id, crew, owner, members)`、`settle()`、`cmd(make)`、`run(session)`、`emit(session, event)`、`tick(ms)`、`live(session)`
 
@@ -3897,6 +4139,7 @@ pub struct Rig {
     pub port: Arc<MemPort>,
     pub exec: StandIn,
     pub clock: Arc<ManualClock>,
+    pub worktrees: StandInWorktrees,
     pub rx: mpsc::UnboundedReceiver<Input>,
 }
 
@@ -3905,9 +4148,11 @@ impl Rig {
         Self::with(Hooks::default()).await
     }
 
-    pub async fn with(hooks: Hooks) -> Self {
+    pub async fn with(mut hooks: Hooks) -> Self {
         let port = Arc::new(MemPort::new());
         let exec = StandIn::default();
+        let worktrees = StandInWorktrees::default();
+        hooks.worktrees = Arc::new(worktrees.clone());
         let clock = Arc::new(ManualClock::new(T0));
         port.lock().now = T0;
         let (tx, rx) = mpsc::unbounded_channel();
@@ -3915,7 +4160,7 @@ impl Rig {
         let core = Core::new(port.clone(), execs, hooks, clock.clone(), OrchestraConfig::for_tests(), tx)
             .await
             .expect("内存 Port 不会失败");
-        Self { core, port, exec, clock, rx }
+        Self { core, port, exec, clock, worktrees, rx }
     }
 
     fn row(id: &str, crew: &str, captain: bool) -> SessionRow {
@@ -3943,6 +4188,7 @@ impl Rig {
     pub fn crew(&self, crew: &str, captain: &str) {
         let mut st = self.port.lock();
         st.sessions.insert(captain.into(), Self::row(captain, crew, true));
+        st.crew_dirs.insert(crew.into(), PathBuf::from("/nonexistent/wd"));
         for (suffix, kind) in [("lobby", MemKind::Lobby), ("human", MemKind::Human)] {
             st.channels.insert(
                 format!("{crew}/{suffix}"),
@@ -4049,7 +4295,7 @@ mod tests {
             title: Some("w-new".into()),
             model: None,
             effort: None,
-            worktree: None,
+            isolation: false,
         }
     }
 
@@ -4080,6 +4326,51 @@ mod tests {
         let row = rig.cmd(|reply| Cmd::Start { req: start("claude"), origin: Origin::Human, reply }).await.unwrap();
         assert_eq!(rig.exec.launches(&row.id)[0].initial.as_deref(), Some("合成任务甲"));
         assert!(rig.live(&row.id).is_some());
+    }
+
+    #[tokio::test]
+    async fn isolation_false_uses_the_shared_crew_directory_and_never_touches_git() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let row = rig.cmd(|reply| Cmd::Start { req: start("claude"), origin: Origin::Human, reply }).await.unwrap();
+        assert!(rig.worktrees.calls().is_empty());
+        assert_eq!(rig.exec.launches(&row.id)[0].workdir, PathBuf::from("/nonexistent/wd"), "机组共享目录");
+    }
+
+    #[tokio::test]
+    async fn isolation_true_creates_the_worktree_before_the_row_and_launches_there() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let req = StartSession { isolation: true, ..start("claude") };
+        let row = rig.cmd(|reply| Cmd::Start { req, origin: Origin::Agent, reply }).await.unwrap();
+        // 在机组工作目录里建，hint = 开场 brief（Swift `SessionWorkspace.resolve(hint: brief)`）。
+        assert_eq!(rig.worktrees.calls(), vec![(PathBuf::from("/nonexistent/wd"), "合成任务甲".to_string())]);
+        assert_eq!(row.workdir, Some(PathBuf::from("/nonexistent/worktrees/w-1")));
+        assert_eq!(rig.exec.launches(&row.id)[0].workdir, PathBuf::from("/nonexistent/worktrees/w-1"), "进程在 worktree 里起");
+    }
+
+    #[tokio::test]
+    async fn worktree_failure_fails_the_start_with_the_reason_and_creates_nothing() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worktrees.fail_next("无法为 session 新建 worktree：/x 当前是 detached HEAD");
+        let req = StartSession { isolation: true, ..start("claude") };
+        let err = rig.cmd(|reply| Cmd::Start { req, origin: Origin::Agent, reply }).await.unwrap_err();
+        assert_eq!(err, ControlError::Worktree("无法为 session 新建 worktree：/x 当前是 detached HEAD".into()));
+        assert_eq!(rig.port.lock().sessions.len(), 1, "没写 session 行（只有 cap）");
+        assert!(rig.exec.lock().launches.is_empty(), "什么都没起，也没退回共享目录");
+    }
+
+    #[tokio::test]
+    async fn isolation_without_a_crew_directory_is_a_worktree_error_not_a_silent_fallback() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.port.lock().crew_dirs.remove("c1");
+        let req = StartSession { isolation: true, ..start("claude") };
+        let err = rig.cmd(|reply| Cmd::Start { req, origin: Origin::Human, reply }).await.unwrap_err();
+        assert!(matches!(err, ControlError::Worktree(_)), "{err}");
+        assert!(rig.worktrees.calls().is_empty());
+        assert_eq!(rig.port.lock().sessions.len(), 1);
     }
 
     #[tokio::test]
@@ -4361,7 +4652,8 @@ pub struct StartSession {
     pub title: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    pub worktree: Option<PathBuf>,
+    /// 控制者裁定 C8：true = 在机组工作目录里新建 git worktree 并在那里起；false = 机组共享目录。
+    pub isolation: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4372,6 +4664,8 @@ pub enum ControlError {
     AtCap { max: usize },
     Unsupported(String),
     NoWorkdir(String),
+    /// 建 worktree 失败（C8）：原因给人看；什么都没留下、没起、没退回共享目录。
+    Worktree(String),
     Internal(String),
 }
 
@@ -4388,7 +4682,7 @@ impl std::fmt::Display for ControlError {
             Self::AlreadyRunning(id) => write!(f, "session {id} 已经在跑或正在起"),
             Self::NotRunning(id) => write!(f, "session {id} 没在跑"),
             Self::AtCap { max } => write!(f, "已达设置里的并发会话上限 {max}"),
-            Self::Unsupported(why) | Self::Internal(why) => write!(f, "{why}"),
+            Self::Unsupported(why) | Self::Internal(why) | Self::Worktree(why) => write!(f, "{why}"),
             Self::NoWorkdir(id) => write!(f, "session {id} 没有可用的工作目录"),
         }
     }
@@ -4573,6 +4867,19 @@ impl<P: Port> Core<P> {
     async fn start_new(&mut self, req: StartSession, origin: Origin) -> Result<SessionRow, ControlError> {
         let exec = self.execs.get(&req.executor).map_err(|e| ControlError::Unsupported(e.to_string()))?;
         self.check_cap(origin)?;
+        // 控制者裁定 C8：isolation=true → 先建 worktree（写行之前；失败 = 什么都不留、不起、不退回共享目录）。
+        let worktree = if req.isolation {
+            let base = self
+                .port
+                .crew_workdir(&req.crew_id)
+                .await
+                .map_err(ControlError::internal)?
+                .ok_or_else(|| ControlError::Worktree(format!("机组 {} 没有工作目录，无法为 session 新建 worktree", req.crew_id)))?;
+            let hint = req.brief.as_str();
+            Some(self.hooks.worktrees.create(&base, hint).await.map_err(ControlError::Worktree)?)
+        } else {
+            None
+        };
         let brief = Some(req.brief.clone()).filter(|b| !b.trim().is_empty());
         let row = self
             .port
@@ -4584,10 +4891,14 @@ impl<P: Port> Core<P> {
                 title: req.title,
                 model: req.model,
                 effort: req.effort,
-                worktree: req.worktree,
+                worktree: worktree.clone(),
             })
             .await
-            .map_err(ControlError::internal)?;
+            .map_err(|e| match &worktree {
+                // 行没写成但 worktree 已经建好：crewd 不删它，把路径告诉人去收。
+                Some(p) => ControlError::internal(format!("{e}（已建好的 worktree {} 不会被自动删除）", p.display())),
+                None => ControlError::internal(e),
+            })?;
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
@@ -6933,9 +7244,8 @@ pub struct SessionStartParams {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
-    /// 已存在的目录（M3c 不建 git worktree）。
-    #[serde(default)]
-    pub worktree: Option<String>,
+    /// 必填（控制者裁定 C8）：true = 在机组工作目录里新建 git worktree 并在那里起；false = 机组共享目录。缺了 = 参数错。
+    pub isolation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -7464,6 +7774,11 @@ impl Port for DbPort {
         self.read(|c| Ok(collab::sessions::list(c, None)?.into_iter().map(|s| s.id).collect())).await
     }
 
+    async fn crew_workdir(&self, crew: &str) -> Result<Option<PathBuf>> {
+        let crew = crew.to_string();
+        self.read(move |c| Ok(collab::crews::get(c, &crew)?.working_directory.filter(|w| !w.is_empty()).map(PathBuf::from))).await
+    }
+
     async fn insert_session(&self, s: NewSession) -> Result<SessionRow> {
         let session = self
             .write(move |tx| {
@@ -7881,7 +8196,8 @@ pub fn map_error(e: ControlError) -> M3aError {
         ControlError::AlreadyRunning(s) => M3aError::AlreadyRunning(s),
         ControlError::Unsupported(s) => M3aError::Unsupported(s),
         e @ (ControlError::NotRunning(_) | ControlError::NoWorkdir(_)) => M3aError::Invalid(e.to_string()),
-        e @ (ControlError::AtCap { .. } | ControlError::Internal(_)) => M3aError::Failed(e.to_string()),
+        // 建 worktree 失败（C8）带原因原样给调用方（M3b 的 `start_session` 回执 = `r.failed` + 这段原因）。
+        e @ (ControlError::AtCap { .. } | ControlError::Internal(_) | ControlError::Worktree(_)) => M3aError::Failed(e.to_string()),
     }
 }
 
@@ -7921,7 +8237,7 @@ impl SessionControl for OrchestraControl {
                 title: req.title,
                 model: req.model,
                 effort: req.effort,
-                worktree: req.worktree.map(PathBuf::from),
+                isolation: req.isolation,
             };
             let row = self.h()?.start(start, Origin::Agent).await.map_err(map_error)?;
             self.session(row.id).await
@@ -8080,7 +8396,7 @@ async fn call(h: &Handle, db: &crewd_store::Db, method: &str, params: Value) -> 
                 title: p.title,
                 model: p.model,
                 effort: p.effort,
-                worktree: p.worktree.map(Into::into),
+                isolation: p.isolation,
             };
             let row = h.start(req, Origin::Human).await.map_err(rpc_err)?;
             let s = db
@@ -8458,11 +8774,11 @@ async fn sessions_start_wake_resume_and_stop_through_the_real_driver() {
     let crew = c.call("crew.create", json!({"title":"合成机组","workingDirectory": work})).await.unwrap();
     let crew_id = crew["id"].as_str().unwrap().to_string();
     let cap = c
-        .call("session.start", json!({"crewId": crew_id, "role":"captain", "executor":"claude", "brief":"合成开场甲"}))
+        .call("session.start", json!({"crewId": crew_id, "role":"captain", "executor":"claude", "brief":"合成开场甲", "isolation": false}))
         .await
         .unwrap();
     let w1 = c
-        .call("session.start", json!({"crewId": crew_id, "role":"worker", "executor":"claude", "brief":"合成开场乙"}))
+        .call("session.start", json!({"crewId": crew_id, "role":"worker", "executor":"claude", "brief":"合成开场乙", "isolation": false}))
         .await
         .unwrap();
     let (cap_id, w1_id) = (cap["id"].as_str().unwrap().to_string(), w1["id"].as_str().unwrap().to_string());
@@ -8511,6 +8827,69 @@ async fn sessions_start_wake_resume_and_stop_through_the_real_driver() {
     tokio::time::timeout(Duration::from_secs(15), server).await.unwrap().unwrap().unwrap();
     let reg = std::fs::read_to_string(data.join("exec-registry.json")).unwrap_or_default();
     assert!(!reg.contains(&cap_id) && !reg.contains(&w1_id), "停机后登记表里不该还有会话：{reg}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn isolated_start_creates_a_worktree_in_the_crew_repo_and_a_failed_one_leaves_nothing() {
+    // 合成仓库（临时目录里 git init），绝不碰真仓库。
+    let dir = tempfile::tempdir().unwrap();
+    let (data, log) = (dir.path().join("data"), dir.path().join("submitted.log"));
+    let repo = dir.path().join("repo");
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&plain).unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git").args(args).current_dir(&repo).output().unwrap();
+        assert!(o.status.success(), "git {args:?}：{}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-b", "main"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-m", "init"]);
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("FAKE_CLAUDE_LOG".to_string(), log.display().to_string());
+    let opts = crewd_server::ServeOptions {
+        claude: crewd_server::orchestra::exec_claude::ClaudeProgram::Path(fake_claude()),
+        claude_env: env,
+        ..Default::default()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crewd_server::serve_with(data.clone(), opts, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = Client::connect(&data.join("crewd.sock")).await;
+
+    let crew = c.call("crew.create", json!({"title":"合成机组甲","workingDirectory": repo})).await.unwrap();
+    let crew_id = crew["id"].as_str().unwrap().to_string();
+    let shared = c
+        .call("session.start", json!({"crewId": crew_id, "role":"worker", "executor":"claude", "brief":"合成共享任务", "isolation": false}))
+        .await
+        .unwrap();
+    assert!(shared.get("worktree").map_or(true, |w| w.is_null()), "isolation=false 不记 worktree：{shared}");
+    let iso = c
+        .call("session.start", json!({"crewId": crew_id, "role":"worker", "executor":"claude", "brief":"merge-task 合成独立任务", "isolation": true}))
+        .await
+        .unwrap();
+    let wt = std::path::PathBuf::from(iso["worktree"].as_str().expect("isolation=true 要记下 worktree 路径"));
+    assert!(wt.is_dir() && wt.to_string_lossy().contains("/.pendingcrew/worktrees/merge-task-"), "{wt:?}");
+    wait_for("独立 session 提交了开场任务", || log_count(&log, "合成独立任务") == 1).await;
+    // 缺 isolation = 参数错（C8：必填，不替机长默认）。
+    assert_eq!(
+        c.call("session.start", json!({"crewId": crew_id, "role":"worker", "executor":"claude", "brief":"合成缺参"})).await,
+        Err(-32602)
+    );
+    // 机组目录不是 git 仓库：isolation=true 起不来，不写行、不起进程、不退回共享目录。
+    let crew2 = c.call("crew.create", json!({"title":"合成机组乙","workingDirectory": plain})).await.unwrap();
+    let crew2_id = crew2["id"].as_str().unwrap().to_string();
+    let before = c.call("session.list", json!({"crewId": crew2_id})).await.unwrap().as_array().unwrap().len();
+    assert!(c
+        .call("session.start", json!({"crewId": crew2_id, "role":"worker", "executor":"claude", "brief":"合成失败任务", "isolation": true}))
+        .await
+        .is_err());
+    assert_eq!(c.call("session.list", json!({"crewId": crew2_id})).await.unwrap().as_array().unwrap().len(), before, "失败不留 session 行");
+    assert_eq!(log_count(&log, "合成失败任务"), 0, "没有任何进程被起来");
+    assert!(!plain.join(".pendingcrew").exists());
+
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server).await.unwrap().unwrap().unwrap();
 }
 ```
 
@@ -8621,7 +9000,7 @@ fn kill_dash_nine_then_restart_asks_first_and_delivers_each_wake_once() {
     let crew = rpc(&data, "crew.create", &format!(r#"{{"title":"合成机组","workingDirectory":"{}"}}"#, work.display())).unwrap();
     let crew_id = crew["id"].as_str().unwrap().to_string();
     let start = |role: &str, brief: &str| {
-        rpc(&data, "session.start", &format!(r#"{{"crewId":"{crew_id}","role":"{role}","executor":"claude","brief":"{brief}"}}"#))
+        rpc(&data, "session.start", &format!(r#"{{"crewId":"{crew_id}","role":"{role}","executor":"claude","brief":"{brief}","isolation":false}}"#))
             .unwrap()["id"]
             .as_str()
             .unwrap()
@@ -8715,7 +9094,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 2: spec 交付记录**
 
-照 §18 / §19 / §20 的写法：已交付（按 crate / 模块一句）、与 spec / M3a 计划不同的决定（本计划「裁定」逐条一句）、给 M3b / M4b / M5b 的口（产出信号 = M3a `sessions::note_progress`，M4b 的工作项命令必须调；`IdleHook`、`AskAnsweredHook`、`Arbiter`、`ContextExtras`、`QuotaSource`）、遗留（本计划文末「spec 问题」里仍开着的 2 / 15、`set_profile` 只落库、`worktree` 只当目录、非消息类唤醒至少一次）。读数写实测到的（测试条数、`check.sh` 连跑次数），推出来的标 [推]。
+照 §18 / §19 / §20 的写法：已交付（按 crate / 模块一句）、与 spec / M3a 计划不同的决定（本计划「裁定」逐条一句）、给 M3b / M4b / M5b 的口（产出信号 = M3a `sessions::note_progress`，M4b 的工作项命令必须调；`IdleHook`、`AskAnsweredHook`、`Arbiter`、`ContextExtras`、`QuotaSource`）、遗留（本计划文末「spec 问题」里仍开着的 2 / 15、`set_profile` 只落库、worktree 只建不删（C8，删除归人）、非消息类唤醒至少一次）。读数写实测到的（测试条数、`check.sh` 连跑次数），推出来的标 [推]。
 
 - [ ] **Step 3: 提交**
 
@@ -8743,7 +9122,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 8. **「kill -9 后各恰好投一次」**：非消息类只能至少一次。→ 照裁定 17（不变），验收只对崩溃前 pending 的定时唤醒断言恰好一次。
 9. **待恢复名单与「@ 一个已停的 session 会拉起它」的交界**。→ **已解决（控制者裁定 C4）**：询问开出之后人 @ 名单里的某一个 = 只恢复它（算单个 resume），其余照旧等；启动前就排着的人类唤醒不算。
 10. **人类唤醒与可选并发上限**。→ **已解决（控制者裁定 C5）**：人类唤醒绕过可选上限。
-11. **`set_profile` 与 `session.start.worktree` 的归属**。→ **已解决（控制者裁定 C5）**：`set_profile` 只落库、下次启动生效；`worktree` = 已存在目录的绝对路径（M3 不建 git worktree；M3b 的 `start_session` 相应地收 `workdir?`、不收 `isolation`）。
+11. **`set_profile` 与 `session.start.worktree` 的归属**。→ **已解决（控制者裁定 C5、C8）**：`set_profile` 只落库、下次启动生效；**已被控制者裁定 C8 改写**：不再是「已存在目录」；`StartRequest` / `session.start` 带必填 `isolation: bool`，`true` 时会话管理器照 Swift 新建 git worktree（裁定 20）；M3b 的 `start_session` 保留 `isolation`。
 12. **消息唤醒推进游标的前提**：Delivered 后把游标推到批里最大的 seq，前提是 `render::wake_text` 把该群这一 seq 之前的未读都带进了正文。→ **已解决**：M3a 的 `build_batch` 改为每个群带上「游标之后、到批里最大 seq 为止」它看得见的全部消息（M3a Task 11 测试钉住），所以投递成功后推游标不会越过没告知的消息。
 13. **M2c 的事件顺序**。→ 不变（裁定 12）。
 14. **`delivered` 行不清理**。→ **已解决（控制者裁定 C6）**：M3a `wakes::prune`；M3c 的定时拍每小时清一次 7 天前已结的行。

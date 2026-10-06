@@ -534,7 +534,7 @@ work_books(crew_id PK → crews, state JSON, updated_at)          -- crewd-work 
 ask_meta(crew_id, ask TEXT('H<n>'), resume_note, message_id, PK(crew_id, ask))
 sessions += title, brief, desired CHECK(running|stopped) DEFAULT 'stopped', was_working INTEGER, ext（分机号）,
             last_active_at, last_output_at（发言）, last_progress_at（产出：工具调用 / 工作项）, awaiting_question,
-            resume_failed_at, worktree
+            resume_failed_at, worktree（crewd 为它新建的 git worktree 的绝对路径，C8；NULL = 共享机组目录）
 crews    += title_source, status_line, policy, captain_session_id, next_ext, position（同级里的次序，人手动排）
 ```
 `checkpoint` / `stop_check` 两种 kind 是给 M4b 留的，M3 里没有写者。
@@ -644,7 +644,7 @@ hook 行为
 | respond_todo(number, response) | respond_todo | 去掉 status / evidence（§9）|
 | get_quota / schedule_wakeup(after_minutes 或 at, note) / set_session_profile(model?, effort?) | 同名 | schedule_wakeup 入 `wakes(kind=timer)`，持久化；set_session_profile 下次启动生效 |
 | C rename_crew / change_workdir / set_crew_status(text) / read_delegation_policy / update_delegation_policy | 同名；set_crew_status 是从 post 的 crew_status 拆出来的 | |
-| C start_session / stop_session / inspect_session / nudge_session / list_sessions / handoff_captain_to_session / create_and_handoff_captain | 同名 | 经 `SessionControl`；start_session 去掉 isolation、改收 `workdir?`（已存在的目录，M3 不建 git worktree） |
+| C start_session / stop_session / inspect_session / nudge_session / list_sessions / handoff_captain_to_session / create_and_handoff_captain | 同名 | 经 `SessionControl`；start_session 保留 Swift 的 `isolation`（必填 bool，机长逐次定，`McpServer.swift:576`、`:1141`；C8）：`true` = crewd 新建 git worktree，`false` = 机组共享目录；建失败直接报错、不退回共享目录 |
 | C report_to_parent / message_child_crew | 同名 | 语法糖：发到父 / 子机组大厅并 @它的机长（system 发言 + 署名） |
 | C adopt_crew / release_crew / create_parent_crew / adopt_parent / create_child_crew | 同名 | create_child_crew = collab 建组 + `SessionControl::start` 起子机长 |
 | 删 | continue_work / confirm_todo_sweep / plan_add / plan_update / plan_list | 由 M4 取代（§9）|
@@ -668,7 +668,7 @@ hook 行为
 会话管理 `server::orchestra::Sessions`（实现 M3a 定的 `SessionControl`）
 - 持有全部会话句柄与 `ProcessRegistry`。**一个 crewd session 同时只能有一个进程**（§18 遗留：按 session id 加锁，第二次 start 回 `AlreadyRunning`）；登记表同号覆盖的问题一并解决。
 - 执行器抽象：`trait Executor`（启动返回 `(Box<dyn ExecHandle>, 事件流)`），`ExecHandle` = §13 Q12 的窄接口（send / raw / stop / status / screen_text / snapshot）。claude 用 M2b 的实现；codex 等 M2c，合进来之前 `start` 对 codex 回 `Unsupported`。
-- 起会话：渲染世界观（`collab::worldview::render`）、mint token、填 `CommsSpec`、写 sessions 行（保留 agent_session_id，§18 遗留）、`desired='running'`。`worktree` = 已存在的目录（不建 git worktree）；`set_profile` 只落库、下次启动生效。
+- 起会话：渲染世界观（`collab::worldview::render`）、mint token、填 `CommsSpec`、写 sessions 行（保留 agent_session_id，§18 遗留）、`desired='running'`。`isolation: true` 时先在机组工作目录里新建 git worktree（位置 `<repo 根>/.pendingcrew/worktrees/<slug>-<8 位 hex>`、新分支 `pendingcrew/session-<6 位 hex>` 从当前分支起；照 Swift `SessionWorkspace.swift:20-34`、`GitWorktreeService.swift:124-158`；失败 = 起不来、不写行、不退回共享目录），路径记进 `sessions.worktree`、session 在那里起；crewd 永不删 worktree（删除是人的动作）。`set_profile` 只落库、下次启动生效。
 - 会话事件 → `session.changed`：Spawned / Working / Health / Decision / Exited；同时落 `last_active_at`、`was_working`。Decision 在群里渲染（§15：「SessionDecisionNotice 归 M3」，按 numbered 分叉，不编造编号）。ResumeRefused → 群里发系统消息（§18 遗留的诊断文案）。
 - 额度用尽：按重置时刻入队 `wakes(kind=system, source='quota:<ts>')`，到点先 `clear_quota_health` 再投递（M2b 的 health 没有重置时刻 → 留 `QuotaSource` 口，缺省 45 分钟退避并在群里说明）。
 - 并发上限（§22.7 Q5）：**默认不设**；设置里可选（`orchestra.settings.set`）。只挡自动拉起，超了留 pending；人起 / 恢复、人类唤醒拉起都不受它挡。
@@ -706,7 +706,7 @@ idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺
 
 问被回答：M3a 的 `asks::answer` 在同一事务里给提问者入队 `wakes(kind=ask_answer, source='ask:<crew>/H<n>', priority=human)`（H 号按机组发，单独的 `H<n>` 不唯一），正文出队时现渲染（问题、答复、resume_note）；提问者已无法恢复 → 叫它所在机组的机长转达。M3c 只投递，并把 `Change::AskAnswered.cleared` 交给 `AskAnsweredHook`（M4b 的 BlockerCleared 叫醒负责人）。审批有结果的唤醒同理（source `approval:<id>`）。
 
-客户端 RPC（M3c 新增）：`session.start {crewId, role, executor, brief, title?, model?, effort?, worktree?}`、`session.stop {sessionId, reason}`、`session.resume {sessionId}`、`session.live {sessionId}` → SessionLive（working / health / pendingDecision / awaitingQuestion）、`crew.setCaptain {crewId, sessionId}`、`wake.list {sessionId?}`（排障用）、`admission.recover {scope: edge|session, targetSessionId, from?}`（只有客户端能调，agent 没有这个入口）、`orchestra.settings.get / set {maxLiveSessions?}`。事件：`session.changed`、`wake.changed`（主题 wake，排障用）。重启询问的 `restart.pending / restart.answer` 是 M3a 的。
+客户端 RPC（M3c 新增）：`session.start {crewId, role, executor, brief, title?, model?, effort?, isolation}`（`isolation` 必填，C8）、`session.stop {sessionId, reason}`、`session.resume {sessionId}`、`session.live {sessionId}` → SessionLive（working / health / pendingDecision / awaitingQuestion）、`crew.setCaptain {crewId, sessionId}`、`wake.list {sessionId?}`（排障用）、`admission.recover {scope: edge|session, targetSessionId, from?}`（只有客户端能调，agent 没有这个入口）、`orchestra.settings.get / set {maxLiveSessions?}`。事件：`session.changed`、`wake.changed`（主题 wake，排障用）。重启询问的 `restart.pending / restart.answer` 是 M3a 的。
 
 验收
 - `crewd-wake` 纯测试：plan 表驱动，上面每条规则一例；breaker：互相 @ 的环路在一条边上被截、30 个 session 正常收发不被截、熔断不挡 human、回叫不算产出；合并时只取最高一档。
@@ -726,7 +726,7 @@ idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺
 | `CollabEvent` = `crewd_collab::Change`（`MessageAppended`、`WakeEnqueued`、`AskAnswered{cleared}`、`RestartAnswered`、`Progress` …），经 `Hub` 发出 | 类型在 collab，`crewd-server::hub` 重导出 | M3a | M3c、M3b 订阅 |
 | `WakeRequest{session, kind, source, priority, not_before_ms, note, origin}` | `crewd-collab` | M3b（timer）、M3a（ask_answer / 审批结果）、M4b（checkpoint / stop_check） | M3c |
 | `TokenTable{mint, verify, revoke}` | `crewd-server` | M3c（mint） | M3b（verify） |
-| `trait SessionControl`（start / resume / stop / nudge / inspect / set_profile / handoff_captain / quota / live；`BoxFuture`，可做 dyn）+ `FakeSessionControl`；`StartRequest.worktree` = 已存在目录 | `crewd-server` | M3c 实现 | M3b 的工具、M3a 的 RPC |
+| `trait SessionControl`（start / resume / stop / nudge / inspect / set_profile / handoff_captain / quota / live；`BoxFuture`，可做 dyn）+ `FakeSessionControl`；`StartRequest.isolation: bool`（C8；没有路径字段） | `crewd-server` | M3c 实现 | M3b 的工具、M3a 的 RPC |
 | `AppState { db, hub, sessions, tokens, agent, orchestra }`（后两个 M3a 放占位类型） | `crewd-server` | M3a | M3b、M3c |
 | `CommsSpec{helper, data_dir, session_id, token, hooks, approval_gates}` | `crewd-exec::launch` | M3b 改 | M3c 填 |
 | `worldview::render(&WorldCtx) -> String`、`turn_trace::on_turn_end(tx, session, prompt_id, last_text) -> TurnEnd`（5 个值）的签名 | `crewd-collab`（M3a 先放 stub） | M3b 实现 | M3c 调 |
@@ -763,6 +763,9 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - **C2 审批照 Swift 驾驶舱 #75②，不阻塞**（取代原 §22.3 的「等 30 分钟」）：命中闸的 PreToolUse 当场 deny 并给人开一条待确认；人同意 = 一次性放行票，同一 session 下一次同名工具调用用掉它。理由：人卡住的只能是那一件，绝不能卡住整个 session。闸的 matcher 与「连不上 crewd → deny」保留。
 - **C3 产出信号**：M3a 的 `sessions::note_progress(ToolCall | WorkItem)` 写 `last_progress_at` 并发 `Change::Progress`，与 `last_output_at`（发言）分开；回话给叫醒你的人不算产出。M3b 的 post-tool-use 对非 crewd 工具调它，M4b 的工作项命令必须调它，M3c 的熔断消费它。
 - **C4 重启询问 vs 人 @**：等答复期间，人在群里 @ 了名单里的某一个 → 只恢复它（算它单个 resume），其余照旧等；启动前就排着的人类唤醒不算。
-- **C5** 人类唤醒绕过可选并发上限；其余照 M3c 的默认：环路窗口 10 分钟 / 8 次、人停 session 丢弃它 pending 的唤醒、`set_profile` 下次启动生效、`worktree` = 已存在的目录（`start_session` 改收 `workdir?`）。
+- **C5** 人类唤醒绕过可选并发上限；其余照 M3c 的默认：环路窗口 10 分钟 / 8 次、人停 session 丢弃它 pending 的唤醒、`set_profile` 下次启动生效。（原写的「`worktree` = 已存在的目录、`start_session` 改收 `workdir?`」已被 C8 取代。）
 - **C6** M3b / M3c 要的读写口全部由 M3a 提供并冻结（M3b 的 G3 / G-F / G-S / G-T / G9 / G11；M3c 的 `next_due_after`、`cursor`、`mark_failed` 带退避时刻、`requeue`、`by_ids`、`prune`、`members` 含隐式成员）；任何计划都不往别的计划的表里写 SQL。
 - **C7** 默认方案到点由 M3c 的定时拍调 `asks::apply_due_defaults`；ask 唤醒的 source 一律 `ask:<crew>/H<n>`；跨机组语法糖（`contact` 到别的机组 / `report_to_parent` / `message_child_crew`）= system 发言 + 正文首行署名。
+- **C8 `start_session` 保留 Swift 的 `isolation`**（必填 bool，机长逐次定，取代 C5 里「`worktree` = 已存在目录」）：`true` = M3c 的会话管理器在机组工作目录里新建 git worktree（位置、分支名、slug 照 Swift，见 §22.4），记进 `sessions.worktree`，session 在那里起；`false` = 机组共享目录；建失败 = start 失败并带原因、不写行、不起进程、不退回共享目录；crewd 永不删 worktree（删除是人的动作）。落点：M3a `StartRequest.isolation` 与列注释，M3b `start_session` 工具，M3c `orchestra/worktree.rs` + `Core::start_new`。测试一律用临时 git 仓库（合成），不碰真仓库。
+- **C9 一次性放行票的范围 = (session, tool)**（照原计划，对 C2 的补记）：人同意一条审批 = 只放行「同一个 session 的下一次同名工具调用」，不跨 session、不按工具名全局放行。
+- **C10 审批仍是独立的表 / 清单，客户端「等你拍板」视图把 ask 与 approval 合并显示**（红标、侧栏顶层）：合并在客户端做；M3a 的 `Ask`（`crewId`、`askedAt`）与 `Approval`（`crewId`、`requestedAt`）都带机组与创建时间，人类群 = `<根机组>/human`（`crew.list` 的父链推得），`ask.changed` / `approval.changed` 负载就是整条，足够客户端合并、排序、计徽标；不把审批并进 `ask.list`（H 号只给工作卡点，C2）。

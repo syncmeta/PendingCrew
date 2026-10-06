@@ -77,8 +77,11 @@ v3 的 `wake_latches.scope` 因此是 `edge|session`（§22.2 原写的 `session
 | C6 补齐 M3b / M3c 列出的缺口 | M3b：G3 `todos::respond`；G-F `prompts::fill` 一遍扫描；G-S `StartRequest` 字段语义（下）；G-T `TurnEnd` 五个值；G9 `AppState.agent` 槽位（+ `AppState.orchestra`）；G11 feature `testkit`、`conn` / `dispatch::handle` 可见性。M3c：`wakes::{next_due_after, mark_failed(.., retry_at_ms), requeue, by_ids, prune}`、`cursors::cursor`、`channels::members` 含隐式成员（写明 + 测试）、`Change::Progress`；主题表加 `wake` | Task 5、6、7、10、11、12、13 |
 | C7 跨机组语法糖（`contact` 到别的机组 / `report_to_parent` / `message_child_crew`）= **system 发言 + 正文首行署名** | 群规则写明：system 可往任何群发；session 只能往自己是成员的群发；跨机组语法糖由 M3b 以 `Sender::System` 发、署名文字在 M3b 的 tools md | 裁定 11、Task 8 |
 | C7 默认方案到点 | `asks::apply_due_defaults(tx, crew)` 的定时调用方 = M3c 的定时拍（M3b 不调） | Task 10、15 |
+| C8 **`start_session` 保留 Swift 的 `isolation`（必填 bool，机长逐次定）**（取代 C5 里「`worktree` = 已存在目录」） | `StartRequest.isolation: bool`（不再有 `worktree` 字符串）；`sessions.worktree` 列（v3 本就加）语义定为「crewd 为它建的 worktree 绝对路径」；`NewSession.worktree` 由 M3c 建好后填；Fake 在 `isolation=true` 时给假路径；建失败 = `ControlError::Failed`，不起、不写行 | Task 3（列注释）、4（字段注释）、6（`NewSession`）、12（`StartRequest`、Fake） |
+| C9 一次性放行票的范围 = (session, tool)，照原计划 | `approvals::gate` 找票按 `(session_id, tool_name)`（C2 已是此写法；只是补记为裁定，不改代码） | Task 10 |
+| C10 审批仍是独立的表 / 清单；客户端「等你拍板」视图（红标、侧栏顶层）把 ask 与 approval **合并**显示 | 合并所需的数据已齐：`Ask`（`crewId`、`askedAt`、`message_id` 在人类群）与 `Approval`（`crewId`、`requestedAt`）都带机组和创建时间，人类群 = `channels::human_id(root_of(crewId))`（客户端用 `crew.list` 的父链推；不另加字段）；两者变更各自走 `ask.changed` / `approval.changed`（负载就是整条）；合并、排序、徽标计数全在客户端。**不**把审批并进 `ask.list`（H 号只给工作卡点，C2）。Task 13 的 RPC 测试断言两种负载都带这几个字段 | Task 4、13 |
 
-`StartRequest` 字段语义（G-S，冻结）：`executor` 必填（M3b 的 `start_session` 缺省取发起机长所在机组的 `captain_executor`，再缺省 `"claude"`）；`worktree: Option<String>` = **已存在的目录的绝对路径**，用作这个 session 的工作目录（M3 不建 git worktree；`None` = 机组工作目录）。
+`StartRequest` 字段语义（G-S，冻结）：`executor` 必填（M3b 的 `start_session` 缺省取发起机长所在机组的 `captain_executor`，再缺省 `"claude"`）；`isolation: bool`（必填语义，无缺省值：`Default` 只给测试夹具用，M3b 的 `start_session` 校验必填）= 控制者裁定 C8：`true` = M3c 的 session 管理器为它在机组工作目录里新建一个 git worktree（位置与分支名照 Swift，见 spec §22.7 C8）并把绝对路径记进 `sessions.worktree`、session 在那里起；`false` = 机组共享目录。建 worktree 失败 = `start` 回 `ControlError::Failed(原因，写明是哪一步)`、什么都不起、不写 session 行、不退回共享目录。crewd 自己永不删 worktree（删除是人的动作）。`StartRequest` 没有「已存在目录」之类的路径字段。
 
 另有一个本计划自己的默认、请人顺带确认：**语言**。渲染有 zh / en 两份；`collab::settings::locale(conn)` 读 `meta.locale`（缺省 `zh`）。M3 范围里没有设置页 RPC，要改先手工写 meta（见 spec 问题 9）。
 
@@ -254,7 +257,7 @@ pub trait SessionControl: Send + Sync {                  // control.rs；参数 
     fn quota(&self) -> BoxFuture<'_, Result<QuotaReport, ControlError>>;
     fn live(&self, session_id: String) -> BoxFuture<'_, Result<SessionLive, ControlError>>;
 }
-pub struct StartRequest { crew_id, role, executor: String, brief, title, model, effort, worktree: Option<String> /* 已存在目录的绝对路径 */ }
+pub struct StartRequest { crew_id, role, executor: String, brief, title, model, effort, isolation: bool /* C8：true = crewd 为它新建 git worktree；false = 机组共享目录 */ }
 pub struct NoSessions;  pub struct FakeSessionControl /* 非 cfg(test)，calls() -> Vec<FakeCall> */;  // control.rs
 // crewd-server 的 cargo feature `testkit`（空特性，M3b / M3c 的夹具挂在它下面）；`pub(crate) mod conn`、`pub(crate) async fn conn::run`、`pub async fn dispatch::handle`（G11）
 pub fn dispatch::collab_err(CollabError) -> RpcError;   RpcError::{FORBIDDEN = -32003, NOT_FOUND = -32004, CONFLICT = -32009}
@@ -266,7 +269,7 @@ Crew(+v3 字段，含 position), CrewDetail, Session(+v3 字段，含 last_progr
 Approval(+consumedAt), Decision, DirectoryRow, TodoResponse, SessionLive, HealthView, HealthKindView, DecisionView, RestartPrompt, RestartAnswer；methods::* 与 events::* 常量（`events::TOPICS` 已含 `wake`，M3c 不改 conn.rs）
 ```
 
-**文件归属与先后（三份计划共用的文件，C9）**：M3a 先合 main。之后 M3b / M3c 不改 M3a 的文件，只有下面几处共享，按「后合者负责」：
+**文件归属与先后（三份计划共用的文件）**：M3a 先合 main。之后 M3b / M3c 不改 M3a 的文件，只有下面几处共享，按「后合者负责」：
 - `crates/server/src/lib.rs`：`AppState` 与 `pub mod agent; pub mod orchestra;` 归 M3a（已占位）；M3c 只改 serve 启动那一段（`ServeOptions` / `serve_with`）；M3b 不改。
 - `crates/server/src/agent/**`（M3a 只放 `mod.rs` + `runtime.rs` 两个占位）归 M3b；`crates/server/src/orchestra/**`（M3a 只放 `mod.rs` 占位）归 M3c。
 - `crates/server/src/conn.rs`：只有 M3b 改（agent 路由）。`crates/server/src/dispatch.rs`：只有 M3c 改（未知方法前转给 `orchestra::rpc::route` 那一行）。
@@ -1433,6 +1436,7 @@ ALTER TABLE sessions ADD COLUMN last_output_at TEXT;
 ALTER TABLE sessions ADD COLUMN last_progress_at TEXT;
 ALTER TABLE sessions ADD COLUMN awaiting_question TEXT;
 ALTER TABLE sessions ADD COLUMN resume_failed_at TEXT;
+-- crewd 为这个 session 新建的 git worktree 的绝对路径（控制者裁定 C8，`isolation: true` 才有）；NULL = 用机组共享目录。crewd 不删它。
 ALTER TABLE sessions ADD COLUMN worktree TEXT;
 ALTER TABLE sessions ADD COLUMN ext INTEGER;
 ALTER TABLE crews ADD COLUMN title_source TEXT;
@@ -1777,6 +1781,7 @@ Expected: 编译失败（类型不存在）。
     /// 分机号（机长恒为 1，不存；没号的旧成员为 None）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ext: Option<i64>,
+    /// crewd 为它新建的 git worktree 的绝对路径（控制者裁定 C8，`isolation: true`）；None = 共享机组目录。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
     #[serde(default)]
@@ -3476,6 +3481,7 @@ pub struct NewSession {
     pub working_directory: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// C8：M3c 建好 worktree 后把绝对路径放这里再 `register`；`None` = 共享机组目录。
     pub worktree: Option<String>,
 }
 
@@ -7669,7 +7675,8 @@ pub struct StartRequest {
     pub title: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    pub worktree: Option<String>,
+    /// 控制者裁定 C8：true = 在机组工作目录里新建 git worktree（M3c 建）；false = 机组共享目录。
+    pub isolation: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -7795,6 +7802,8 @@ impl SessionControl for FakeSessionControl {
             title: req.title.clone(),
             brief: Some(req.brief.clone()),
             desired: crewd_proto::Desired::Running,
+            // C8：假实现不建真 worktree，只给个可断言的假路径。
+            worktree: req.isolation.then(|| format!("/fake/worktree-{n}")),
             ..Default::default()
         };
         self.record(FakeCall::Start(req), s)
@@ -7831,13 +7840,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(s.crew_id, "crew-a");
+        assert!(s.worktree.is_none(), "isolation=false → 共享机组目录");
+        let iso = dynamic
+            .start(StartRequest { crew_id: "crew-a".into(), executor: "claude".into(), brief: "独立改".into(), isolation: true, ..Default::default() })
+            .await
+            .unwrap();
+        assert!(iso.worktree.is_some(), "isolation=true → session 行带 worktree 路径");
         fake.fail_next(ControlError::AlreadyRunning("w-1".into()));
         assert_eq!(dynamic.resume("w-1".into()).await, Err(ControlError::AlreadyRunning("w-1".into())));
         dynamic.resume("w-1".into()).await.unwrap();
         fake.set_live(SessionLive { session_id: "w-1".into(), running: true, ..Default::default() });
         assert!(dynamic.live("w-1".into()).await.unwrap().running);
-        assert_eq!(fake.calls().len(), 4);
-        assert!(matches!(fake.calls()[1], FakeCall::Resume(ref id) if id == "w-1"));
+        assert_eq!(fake.calls().len(), 5);
+        assert!(matches!(fake.calls()[2], FakeCall::Resume(ref id) if id == "w-1"));
     }
 
     #[tokio::test]
@@ -8461,6 +8476,9 @@ async fn asks_approvals_and_restart_round_trip() {
     assert_eq!(c.call(3, "ask.list", json!({"rootCrewId":"a"})).await, json!([]));
     assert_eq!(c.call_err(4, "ask.answer", json!({"crewId":"a","ask":"H1","text":"再答"})).await, -32602);
     let aps = c.call(5, "approval.list", Value::Null).await;
+    // C10：客户端把 ask 与 approval 合并成一张「等你拍板」清单，两边都必须带机组与创建时间。
+    assert!(aps[0]["crewId"].is_string() && aps[0]["requestedAt"].is_string(), "approval 带 crewId / requestedAt");
+    assert!(waits[0]["ask"]["crewId"].is_string() && waits[0]["ask"]["askedAt"].is_string(), "ask 带 crewId / askedAt");
     let id = aps[0]["id"].as_str().unwrap().to_string();
     assert_eq!(c.call(6, "approval.decide", json!({"id":id,"allow":true})).await["decision"], "allow");
     assert_eq!(c.call_err(7, "approval.decide", json!({"id":id,"allow":false})).await, -32009);
