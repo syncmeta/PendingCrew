@@ -2259,6 +2259,50 @@ mod tests {
         assert_neutralised(&note, HOSTILE);
     }
 
+    /// 日志在盘上找不到时，群里那条诊断说「找不到」（`resume.refused.diag.missing`）。
+    #[tokio::test]
+    async fn a_refused_resume_without_a_transcript_says_it_is_missing() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        rig.emit(
+            "w1",
+            SessionEvent::ResumeRefused {
+                id: "old-2".into(),
+                said: "No conversation found".into(),
+            },
+        )
+        .await;
+        let text = rig.port.posts()[0].1.clone();
+        assert!(
+            text.ends_with(&format!(
+                "\n{}",
+                text::get(text::Lang::Zh, "resume.refused.diag.missing")
+            )),
+            "{text}"
+        );
+    }
+
+    /// 单个恢复一个等重启答复的 session（§22.7 Q1）：上次停在干活中途的开场补「被打断」；没在干活的不补。
+    #[tokio::test]
+    async fn resuming_a_held_session_that_was_working_opens_with_the_interrupted_note() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.port.lock().sessions.get_mut("w1").unwrap().was_working = true;
+        rig.core.held.insert("w1".into());
+        rig.core.held.insert("cap".into());
+        rig.run("w1").await;
+        rig.run("cap").await;
+        assert_eq!(
+            rig.exec.launches("w1")[0].initial.as_deref(),
+            Some(text::get(text::Lang::Zh, "restart.interrupted"))
+        );
+        assert_eq!(rig.exec.launches("cap")[0].initial, None, "没在干活：不补");
+        assert!(rig.core.held.is_empty());
+    }
+
     #[tokio::test]
     async fn launch_error_marks_resume_failed_and_alerts_the_owner_once() {
         let mut rig = Rig::new().await;
