@@ -1033,6 +1033,22 @@ pub fn injection(loc: Locale, blocks: &[ChannelBlock]) -> String {
     crewd_collab::render::injection(loc, blocks)
 }
 
+/// Several cursors in ONE write transaction: a failure part-way advances none of them.
+pub async fn advance_all(
+    st: &AppState,
+    session: &str,
+    targets: Vec<(String, i64)>,
+) -> PortResult<()> {
+    let s = session.to_string();
+    write(st, move |tx| {
+        for (ch, seq) in &targets {
+            crewd_collab::cursors::advance(tx, &s, ch, *seq)?;
+        }
+        Ok(())
+    })
+    .await
+}
+
 pub async fn advance(st: &AppState, session: &str, channel: &str, seq: i64) -> PortResult<()> {
     let (s, ch) = (session.to_string(), channel.to_string());
     write(st, move |tx| {

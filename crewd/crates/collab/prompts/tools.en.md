@@ -412,10 +412,13 @@ Did not go through: {detail}
 Internal error #{n} (details are in the crewd log)
 
 ## inject.omitted
-{count} newer messages in "{channel}" were left out this time (length cap); they are still unread: they will follow after your next tool call, or use read_channel to see them now.
+{count} newer messages in {channel} were left out this time (length cap); they are still unread: they will follow after your next tool call, or use read_channel to see them now.
+
+## inject.omitted_at_least
+At least {count} newer messages in {channel} were left out this time (length cap; the unread run is long, there may be more); they are still unread: they will follow after your next tool call, or use read_channel to see them now.
 
 ## inject.truncated
-Message #{seq} in "{channel}" is too long; only its beginning is shown. Use read_channel for the full text.
+Message #{seq} in {channel} is too long; only its beginning is shown. For the full text: read_channel(channel="{id}", before={next}, limit=1).
 
 ## r.lobby_label
 lobby of "{crew}"
@@ -425,3 +428,6 @@ human channel of "{crew}"
 
 ## r.dm_gone
 dissolved direct message
+
+## r.dm_generic
+direct message

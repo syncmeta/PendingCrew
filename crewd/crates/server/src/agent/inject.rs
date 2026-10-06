@@ -7,7 +7,11 @@
 //! The cap (R6): what does not fit is left out from the NEWEST end, so what is injected is a
 //! contiguous prefix of each channel's unread run. Cursors move only to the highest seq actually
 //! injected; omitted messages stay unread and arrive with the next call. The omission note never
-//! marks anything read.
+//! marks anything read. Nothing is marked read that was not shown: the cursors move in ONE write
+//! transaction, and not at all when the hook is already past its deadline (the helper has given up
+//! and printed nothing).
+use std::time::{Duration, Instant};
+
 use crewd_collab::render::ChannelBlock;
 use crewd_proto::agent::HookResult;
 use serde_json::{Value, json};
@@ -20,6 +24,10 @@ use crate::agent::tools::channel_label_for;
 
 /// The MCP server name in `mcp.json` is `crew` (see crewd-exec `prepare_claude`).
 const CREWD_TOOL_PREFIX: &str = "mcp__crew__";
+
+/// Past this since the hook call arrived, the cursors are not moved and nothing is printed: the
+/// helper's own limit is 5 s (`hook_cmd::QUICK`) and claude's 15 s, after which the output is lost.
+const COMMIT_DEADLINE: Duration = Duration::from_secs(3);
 
 /// crewd's own tools that only talk or read (B14). A session answering another session through
 /// `post` is not output: two sessions replying to each other would otherwise keep the loop breaker
@@ -36,6 +44,11 @@ const PASSIVE_CREW_TOOLS: &[&str] = &[
     "contact",
     "channel_listen",
     "channel_unlisten",
+    // Pure reads.
+    "get_quota",
+    "read_delegation_policy",
+    "inspect_session",
+    "list_sessions",
 ];
 
 pub fn is_crewd_tool(tool_name: &str) -> bool {
@@ -130,10 +143,13 @@ fn trimmed(blocks: &[ChannelBlock], order: &[usize]) -> (Vec<ChannelBlock>, Vec<
     (out, omitted)
 }
 
+/// `full[i]`: block `i` came back with a full unread window (`UNREAD_CAP` lines), so more unread
+/// messages may exist beyond it and an omitted count is only a lower bound.
 fn render(
     loc: Locale,
     blocks: &[ChannelBlock],
     labels: &[String],
+    full: &[bool],
     omitted: &[usize],
     cut: Option<(usize, i64)>,
 ) -> String {
@@ -143,13 +159,23 @@ fn render(
         notes.push(text::r(
             loc,
             "inject.truncated",
-            &[("channel", &labels[bi]), ("seq", &seq.to_string())],
+            &[
+                ("channel", &labels[bi]),
+                ("id", &blocks[bi].channel_id),
+                ("seq", &seq.to_string()),
+                ("next", &(seq + 1).to_string()),
+            ],
         ));
     }
     for (bi, n) in omitted.iter().enumerate().filter(|(_, n)| **n > 0) {
+        let key = if full[bi] {
+            "inject.omitted_at_least"
+        } else {
+            "inject.omitted"
+        };
         notes.push(text::r(
             loc,
-            "inject.omitted",
+            key,
             &[("channel", &labels[bi]), ("count", &n.to_string())],
         ));
     }
@@ -162,11 +188,13 @@ fn render(
     format!("{body}\n\n{}", notes.join("\n"))
 }
 
-fn chars(s: &str) -> usize {
-    s.chars().count()
+/// Claude Code's 10,000 limit is a JS string length: UTF-16 code units, not chars or bytes.
+fn units(s: &str) -> usize {
+    s.encode_utf16().count()
 }
 
-/// Smallest `k` in `(lo, hi]` for which `fits(k)`, given that `fits(hi)` and size shrinks as `k` grows.
+/// Smallest `k` in `(lo, hi]` for which `fits(k)`, given that `fits(hi)`, `!fits(lo)` and that
+/// `fits` is monotone (once true, true for every larger `k`).
 fn first_fit(mut lo: usize, mut hi: usize, fits: impl Fn(usize) -> bool) -> usize {
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
@@ -180,26 +208,39 @@ fn first_fit(mut lo: usize, mut hi: usize, fits: impl Fn(usize) -> bool) -> usiz
 }
 
 fn fit(loc: Locale, blocks: Vec<ChannelBlock>, labels: &[String], cap: usize) -> Fitted {
+    let full: Vec<bool> = blocks
+        .iter()
+        .map(|b| b.lines.len() >= crewd_collab::cursors::UNREAD_CAP as usize)
+        .collect();
     let order = removal_order(&blocks);
-    let size_at = |k: usize| {
-        let (b, o) = trimmed(&blocks, &order[..k]);
-        chars(&render(loc, &b, labels, &o, None))
-    };
     let n = order.len();
-    let k = if size_at(0) <= cap {
-        Some(0)
-    } else if size_at(n) <= cap {
-        Some(first_fit(0, n, |k| size_at(k) <= cap))
-    } else {
-        None
+    // The text with all its notes is NOT monotone in `k` (the first drop in a channel adds a
+    // note), so a plain binary search could skip a fitting `k`. The body alone is monotone and
+    // the notes only add to it: no `k` below the body's own fit can fit; from there on, take the
+    // first `k` that fits with its notes (a few steps: the notes are short).
+    let body = |k: usize| {
+        let (b, _) = trimmed(&blocks, &order[..k]);
+        units(&port::injection(loc, &b))
     };
-    if let Some(k) = k {
+    let size = |k: usize| {
+        let (b, o) = trimmed(&blocks, &order[..k]);
+        units(&render(loc, &b, labels, &full, &o, None))
+    };
+    let k_body = if body(n) > cap {
+        None
+    } else if body(0) <= cap {
+        Some(0)
+    } else {
+        Some(first_fit(0, n, |k| body(k) <= cap))
+    };
+    if let Some(k) = k_body.and_then(|k0| (k0..=n).find(|k| size(*k) <= cap)) {
         let (blocks, omitted) = trimmed(&blocks, &order[..k]);
-        let context = render(loc, &blocks, labels, &omitted, None);
+        let context = render(loc, &blocks, labels, &full, &omitted, None);
         return Fitted { blocks, context };
     }
-    // Even one line does not fit: cut its text (it is then injected, so the cursor may pass it;
-    // the note says how to read the rest). Otherwise this message would block the channel forever.
+    // No `k` fits: even one line does not. Cut its text (it is then injected, so the cursor may
+    // pass it; the note says how to read it in full). Otherwise this message would block its
+    // channel forever.
     let (mut blocks, omitted) = trimmed(&blocks, &order);
     let Some(bi) = blocks.iter().position(|b| !b.lines.is_empty()) else {
         return Fitted {
@@ -207,18 +248,18 @@ fn fit(loc: Locale, blocks: Vec<ChannelBlock>, labels: &[String], cap: usize) ->
             blocks,
         };
     };
-    let full = blocks[bi].lines[0].text.clone();
+    let whole = blocks[bi].lines[0].text.clone();
     let seq = blocks[bi].lines[0].seq;
     let with_cut = |t: usize, blocks: &mut Vec<ChannelBlock>| {
-        let mut s: String = full.chars().take(t).collect();
+        let mut s: String = whole.chars().take(t).collect();
         s.push('\u{2026}');
         blocks[bi].lines[0].text = s;
-        render(loc, blocks, labels, &omitted, Some((bi, seq)))
+        render(loc, blocks, labels, &full, &omitted, Some((bi, seq)))
     };
-    let fits = |t: usize| chars(&with_cut(t, &mut blocks.clone())) <= cap;
+    let fits = |t: usize| units(&with_cut(t, &mut blocks.clone())) <= cap;
     // A cap too small for even the notes cannot be honoured; cut to nothing then.
     let t = if fits(0) {
-        longest_fitting(chars(&full), fits)
+        longest_fitting(whole.chars().count(), fits)
     } else {
         0
     };
@@ -240,22 +281,34 @@ fn longest_fitting(max: usize, fits: impl Fn(usize) -> bool) -> usize {
     lo
 }
 
+/// All cursors of one injection in one transaction.
 pub async fn commit(st: &AppState, me: &Identity, p: &Prepared) -> PortResult<()> {
-    for (ch, seq) in &p.advance_to {
-        port::advance(st, &me.session_id, ch, *seq).await?;
-    }
-    Ok(())
+    port::advance_all(st, &me.session_id, p.advance_to.clone()).await
 }
 
-/// `agent.hook {event: post-tool-use}`. Errors go to stderr and produce no output (a hook would
-/// rather miss once than break the turn).
+/// `agent.hook {event: post-tool-use}`; also serves `PostToolUseFailure` (same helper command,
+/// same handler; the event name in the payload picks the `hookEventName` of the output). Errors go
+/// to stderr and produce no output (a hook would rather miss once than break the turn).
 pub async fn post_tool_use(st: &AppState, me: &Identity, payload: &Value) -> HookResult {
+    post_tool_use_since(st, me, payload, Instant::now()).await
+}
+
+async fn post_tool_use_since(
+    st: &AppState,
+    me: &Identity,
+    payload: &Value,
+    started: Instant,
+) -> HookResult {
     if let Some(t) = payload.get("tool_name").and_then(Value::as_str)
         && counts_as_progress(t)
         && let Err(e) = port::note_progress(st, &me.session_id).await
     {
         eprintln!("crewd: progress for {}: {e}", me.session_id);
     }
+    // Parallel tool calls fire parallel hooks: one at a time per session, or both would read the
+    // same unread messages.
+    let lock = st.agent.session_lock(&me.session_id);
+    let _held = lock.lock().await;
     let prepared = match prepare(st, me).await {
         Ok(Some(p)) => p,
         Ok(None) => return HookResult { stdout: None },
@@ -264,13 +317,23 @@ pub async fn post_tool_use(st: &AppState, me: &Identity, payload: &Value) -> Hoo
             return HookResult { stdout: None };
         }
     };
+    if started.elapsed() > COMMIT_DEADLINE {
+        eprintln!(
+            "crewd: post-tool-use for {} took too long; nothing injected, cursors kept",
+            me.session_id
+        );
+        return HookResult { stdout: None };
+    }
     if let Err(e) = commit(st, me, &prepared).await {
         eprintln!("crewd: post-tool-use cursor for {}: {e}", me.session_id);
         return HookResult { stdout: None };
     }
+    let event = match payload.get("hook_event_name").and_then(Value::as_str) {
+        Some("PostToolUseFailure") => "PostToolUseFailure",
+        _ => "PostToolUse",
+    };
     let stdout = prepared.context.map(|c| {
-        json!({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": c}})
-            .to_string()
+        json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": c}}).to_string()
     });
     HookResult { stdout }
 }
@@ -316,7 +379,8 @@ mod tests {
     async fn drain(f: &Fixture, session: &str, cap: usize) -> Vec<String> {
         let mut out = Vec::new();
         while let Some(c) = ctx_of(f, session).await {
-            assert!(c.chars().count() <= cap, "{} > {cap}", c.chars().count());
+            let units = c.encode_utf16().count();
+            assert!(units <= cap, "{units} > {cap} UTF-16 units");
             out.push(c);
             assert!(out.len() < 500, "injection does not drain");
         }
@@ -394,6 +458,10 @@ mod tests {
             "contact",
             "channel_listen",
             "channel_unlisten",
+            "get_quota",
+            "read_delegation_policy",
+            "inspect_session",
+            "list_sessions",
         ];
         let tools: Vec<String> = passive.iter().map(|t| format!("mcp__crew__{t}")).collect();
         let tools: Vec<&str> = tools.iter().map(String::as_str).collect();
@@ -543,6 +611,13 @@ mod tests {
         assert!(markers(&ctxs[0], "L").first() == Some(&0), "最旧的先给");
         assert!(!ctxs[0].contains("L-119"), "最新的这次没带上");
         assert!(ctxs[0].contains("read_channel"), "省略要自报：{}", ctxs[0]);
+        let (pre, _) = text::get(crewd_collab::Locale::Zh, "inject.omitted_at_least")
+            .split_once("{count}")
+            .unwrap();
+        assert!(
+            !ctxs[0].contains(pre.split_once("{channel}").unwrap().1),
+            "窗口没满，不说「至少」"
+        );
         let all: Vec<usize> = ctxs.iter().flat_map(|c| markers(c, "L")).collect();
         assert_eq!(all, (0..120).collect::<Vec<_>>(), "一条不丢、不重、不乱序");
         assert!(
@@ -605,16 +680,19 @@ mod tests {
         })
         .await;
         let l = lobby(&f).await;
-        f.human_post(&l, &format!("L-000 {}", "很长".repeat(10_000)), vec![])
+        let m0 = f
+            .human_post(&l, &format!("L-000 {}", "很长".repeat(10_000)), vec![])
             .await;
         f.human_post(&l, "L-001 后一条", vec![]).await;
         let ctxs = drain(&f, &f.worker, 2_000).await;
         assert_eq!(ctxs.len(), 2, "{ctxs:?}");
-        assert!(
-            ctxs[0].contains("L-000") && ctxs[0].contains("read_channel"),
-            "{}",
-            ctxs[0]
+        assert!(ctxs[0].contains("L-000"), "{}", ctxs[0]);
+        // The note names the channel and the exact call that returns this message in full.
+        let hint = format!(
+            "read_channel(channel=\"{l}\", before={}, limit=1)",
+            m0.seq + 1
         );
+        assert!(ctxs[0].contains(&hint), "{hint}\n{}", ctxs[0]);
         assert!(!ctxs[0].contains("L-001"));
         assert!(ctxs[1].contains("L-001 后一条"), "{}", ctxs[1]);
     }
@@ -654,6 +732,248 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_late_commit_is_skipped_and_nothing_is_marked_read() {
+        // Nothing may be marked read without having been shown: past the deadline the hook prints
+        // nothing, so the cursor must stay.
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        f.human_post(&l, "示例：迟到的一条", vec![]).await;
+        let me = f.me(&f.worker).await;
+        let late = Instant::now()
+            .checked_sub(COMMIT_DEADLINE + Duration::from_secs(1))
+            .expect("monotonic clock far enough from its origin");
+        let r = post_tool_use_since(&f.state, &me, &json!({"tool_name": "Bash"}), late).await;
+        assert!(r.stdout.is_none());
+        let ctx = ctx_of(&f, &f.worker).await.expect("still unread");
+        assert!(ctx.contains("示例：迟到的一条"), "{ctx}");
+    }
+
+    #[tokio::test]
+    async fn cursor_advances_are_one_transaction() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        let m = f.human_post(&l, "示例：原子", vec![]).await;
+        let me = f.me(&f.worker).await;
+        let p = Prepared {
+            context: None,
+            advance_to: vec![(l.clone(), m.seq), ("no-such-channel".into(), 1)],
+        };
+        let err = commit(&f.state, &me, &p).await;
+        assert!(err.is_err(), "a bad target fails the commit");
+        let ctx = ctx_of(&f, &f.worker)
+            .await
+            .expect("the good cursor did not move either");
+        assert!(ctx.contains("示例：原子"), "{ctx}");
+    }
+
+    #[tokio::test]
+    async fn parallel_hooks_do_not_inject_the_same_messages_twice() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        for i in 0..5 {
+            f.human_post(&l, &format!("L-{i:03}"), vec![]).await;
+        }
+        let (a, b, c) = tokio::join!(
+            ctx_of(&f, &f.worker),
+            ctx_of(&f, &f.worker),
+            ctx_of(&f, &f.worker)
+        );
+        let got: Vec<String> = [a, b, c].into_iter().flatten().collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(markers(&got[0], "L"), [0, 1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn the_cap_counts_utf16_units() {
+        // Claude Code's limit is a JS string length: an astral character is two units.
+        let f = Fixture::with_config(AgentConfig {
+            inject_cap_chars: 2_000,
+            ..AgentConfig::default()
+        })
+        .await;
+        let l = lobby(&f).await;
+        f.human_post(&l, &format!("L-000 {}", "😀".repeat(5_000)), vec![])
+            .await;
+        f.human_post(&l, &format!("L-001 {}", "😀".repeat(300)), vec![])
+            .await;
+        let ctxs = drain(&f, &f.worker, 2_000).await; // asserts UTF-16 length per batch
+        assert!(ctxs.len() >= 2, "{}", ctxs.len());
+        assert!(ctxs.iter().any(|c| c.contains("L-001")));
+    }
+
+    #[tokio::test]
+    async fn a_full_window_says_at_least() {
+        let f = Fixture::with_config(AgentConfig {
+            inject_cap_chars: 3_000,
+            ..AgentConfig::default()
+        })
+        .await;
+        let l = lobby(&f).await;
+        for i in 0..(crewd_collab::cursors::UNREAD_CAP as usize + 5) {
+            f.human_post(&l, &format!("L-{:03}", i % 1000), vec![])
+                .await;
+        }
+        let first = ctx_of(&f, &f.worker).await.unwrap();
+        let (_, tail) = text::get(crewd_collab::Locale::Zh, "inject.omitted_at_least")
+            .split_once("{count}")
+            .unwrap();
+        assert!(first.contains(tail.lines().next().unwrap()), "{first}");
+        assert!(first.contains("至少"), "{first}");
+    }
+
+    #[test]
+    fn notes_do_not_stack_quotes_on_the_label() {
+        for loc in [crewd_collab::Locale::Zh, crewd_collab::Locale::En] {
+            let label =
+                crate::agent::tools::channel_label_raw(loc, ChannelKind::Lobby, "", "示例机组");
+            for key in [
+                "inject.omitted",
+                "inject.omitted_at_least",
+                "inject.truncated",
+            ] {
+                let note = text::r(
+                    loc,
+                    key,
+                    &[
+                        ("channel", &label),
+                        ("count", "3"),
+                        ("seq", "7"),
+                        ("next", "8"),
+                        ("id", "c1"),
+                    ],
+                );
+                assert!(
+                    !note.contains("「「") && !note.contains("\"\"") && !note.contains("\"lobby"),
+                    "{loc:?} {key}: {note}"
+                );
+            }
+        }
+    }
+
+    /// Sizes are not monotone in the number of dropped lines: the first drop in a channel adds a
+    /// note. Binary search over `k` would then skip a fitting `k`.
+    #[test]
+    fn probe_nonmonotone_fit() {
+        let big = "很长的说明".repeat(40);
+        let mut a = block(
+            "a",
+            &[("2026-01-01T00:00:01Z", 1), ("2026-01-01T00:00:08Z", 2)],
+        );
+        let mut b = block(
+            "b",
+            &[
+                ("2026-01-01T00:00:06Z", 7),
+                ("2026-01-01T00:00:07Z", 8),
+                ("2026-01-01T00:00:09Z", 9),
+            ],
+        );
+        for l in &mut b.lines {
+            l.text = big.clone();
+        }
+        a.name = "示例话题甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲".into();
+        b.name = "示例话题乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙".into();
+        let blocks = vec![a, b];
+        let labels = vec![a_label(&blocks[0]), a_label(&blocks[1])];
+        let loc = crewd_collab::Locale::Zh;
+        let order = removal_order(&blocks);
+        assert_eq!(order, [1, 0, 1, 1]);
+        let size = |k: usize| {
+            let (b, o) = trimmed(&blocks, &order[..k]);
+            units(&render(loc, &b, &labels, &[false, false], &o, None))
+        };
+        let cap = size(1);
+        assert!(
+            size(0) > cap && size(2) > cap,
+            "{} {} {}",
+            size(0),
+            cap,
+            size(2)
+        );
+        assert!(
+            size(3) <= cap || size(4) <= cap,
+            "binary search would settle here"
+        );
+        let fitted = fit(loc, blocks.clone(), &labels, cap);
+        let kept: usize = fitted.blocks.iter().map(|b| b.lines.len()).sum();
+        assert_eq!(kept, 4, "the smallest fitting k keeps the most lines");
+    }
+
+    fn a_label(b: &ChannelBlock) -> String {
+        b.name.clone()
+    }
+
+    #[tokio::test]
+    async fn a_failure_event_injects_and_counts_like_post_tool_use() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        f.human_post(&l, "示例：失败时也带上", vec![]).await;
+        let me = f.me(&f.worker).await;
+        let mut rx = port::subscribe_collab(&f.state);
+        let out = post_tool_use(
+            &f.state,
+            &me,
+            &json!({"tool_name": "Bash", "hook_event_name": "PostToolUseFailure", "error": "x"}),
+        )
+        .await
+        .stdout
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"],
+            "PostToolUseFailure"
+        );
+        assert!(
+            v["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .contains("示例：失败时也带上")
+        );
+        assert!(
+            std::iter::from_fn(|| rx.try_recv().ok())
+                .any(|c| matches!(c, crewd_collab::Change::Progress { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_dm_is_called_by_its_peer_and_only_a_gone_peer_is_dissolved() {
+        let f = Fixture::new().await;
+        let w = f.me(&f.worker).await;
+        let (dm, _) = port::ensure_dm(&f.state, &w, &f.captain).await.unwrap();
+        let loc = crewd_collab::Locale::Zh;
+        let label = crate::agent::tools::channel_label_for(
+            &f.state,
+            &f.worker,
+            &dm.id,
+            ChannelKind::Dm,
+            "",
+            "示例机组",
+            loc,
+        )
+        .await;
+        assert!(label.contains("示例机长"), "{label}");
+        let gone = text::r(loc, "r.dm_gone", &[]);
+        let generic = text::r(loc, "r.dm_generic", &[]);
+        assert_ne!(gone, generic);
+        assert_eq!(
+            crate::agent::tools::channel_label_raw(loc, ChannelKind::Dm, "", "x"),
+            generic,
+            "no viewer, no DB: neutral label, not 'dissolved'"
+        );
+        // A DB error is not a gone peer: unknown channel id -> display_label errors -> generic.
+        let err_label = crate::agent::tools::channel_label_for(
+            &f.state,
+            &f.worker,
+            "no-such-channel",
+            ChannelKind::Dm,
+            "",
+            "x",
+            loc,
+        )
+        .await;
+        assert_eq!(err_label, generic);
+    }
+
+    #[tokio::test]
     async fn dm_and_lobby_notes_use_the_channel_label() {
         let f = Fixture::new().await;
         let l = lobby(&f).await;
@@ -683,7 +1003,7 @@ mod tests {
         );
         assert_eq!(
             gone,
-            crate::agent::text::r(crewd_collab::Locale::En, "r.dm_gone", &[])
+            crate::agent::text::r(crewd_collab::Locale::En, "r.dm_generic", &[])
         );
     }
 }

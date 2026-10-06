@@ -102,7 +102,7 @@ pub fn new_agent_session_id() -> String {
 
 /// 文件名：`<launch dir>/agent-token`。helper 读它做 `agent.attach`。
 pub const TOKEN_FILE: &str = "agent-token";
-/// 三种 hook 的超时（秒）。官方默认 600 秒：卡住的 crewd 会把每次工具调用拖 10 分钟。
+/// 各 hook 的超时（秒）。官方默认 600 秒：卡住的 crewd 会把每次工具调用拖 10 分钟。
 /// 审批闸也用它：审批不阻塞（照 Swift 驾驶舱 #75②，控制者裁定 C2），一次 hook 就是一次本机 socket 往返。
 pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15;
 
@@ -181,26 +181,36 @@ impl HelperCommands<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookEvent {
     PostToolUse,
+    /// Fires instead of `PostToolUse` when the tool call failed (official hooks docs); handled by
+    /// the same `crewd hook post-tool-use` command.
+    PostToolUseFailure,
     PreToolUse,
     Stop,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 3] = [Self::PostToolUse, Self::PreToolUse, Self::Stop];
+    pub const ALL: [HookEvent; 4] = [
+        Self::PostToolUse,
+        Self::PostToolUseFailure,
+        Self::PreToolUse,
+        Self::Stop,
+    ];
 
     /// claude settings.json 里的事件名。
     pub fn settings_key(self) -> &'static str {
         match self {
             Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
             Self::PreToolUse => "PreToolUse",
             Self::Stop => "Stop",
         }
     }
 
-    /// `crewd hook <它>`；与 `crewd_proto::agent::HookKind` 的线上名一致。
+    /// `crewd hook <它>`；与 `crewd_proto::agent::HookKind` 的线上名一致（PostToolUseFailure 与 PostToolUse 共用
+    /// `post-tool-use`：serve 按 payload 里的 `hook_event_name` 区分）。
     pub fn subcommand(self) -> &'static str {
         match self {
-            Self::PostToolUse => "post-tool-use",
+            Self::PostToolUse | Self::PostToolUseFailure => "post-tool-use",
             Self::PreToolUse => "pre-tool-use",
             Self::Stop => "stop",
         }
@@ -603,6 +613,11 @@ mod tests {
         );
         assert_eq!(post["hooks"][0]["type"], "command");
         assert_eq!(post["hooks"][0]["timeout"], 15);
+        // PostToolUseFailure (official hooks docs: fires instead of PostToolUse when the tool
+        // fails) runs the very same helper command with the same timeout.
+        let failed = &settings["hooks"]["PostToolUseFailure"][0];
+        assert!(failed.get("matcher").is_none());
+        assert_eq!(failed["hooks"][0], post["hooks"][0]);
         assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["timeout"], 15);
         let pre = &settings["hooks"]["PreToolUse"][0];
         assert_eq!(pre["matcher"], "(computer-use)");

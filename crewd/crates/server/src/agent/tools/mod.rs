@@ -61,15 +61,24 @@ pub fn parse_args<T: DeserializeOwned>(cx: &Ctx<'_>, v: Value) -> Result<T, Call
     decode(v).map_err(|d| cx.err("r.bad_args", &[("detail", &d)]))
 }
 
-/// How a channel is called in receipts and notes (`ChannelView` flavour of `channel_label_raw`).
-/// A dm shows the md fallback here; use `channel_label_for` where a viewer is at hand.
-pub fn channel_label(cx: &Ctx<'_>, c: &port::ChannelView) -> String {
-    channel_label_raw(cx.loc, c.kind, &c.name, &c.crew_title)
+/// How a channel is called in receipts and notes, as seen by the calling session: a live dm shows
+/// its peer (async because of that lookup).
+pub async fn channel_label(cx: &Ctx<'_>, c: &port::ChannelView) -> String {
+    channel_label_for(
+        cx.st,
+        &cx.me.session_id,
+        &c.id,
+        c.kind,
+        &c.name,
+        &c.crew_title,
+        cx.loc,
+    )
+    .await
 }
 
 /// Lobby and human channels have an empty `name` (M3a convention), so they are called by their
 /// crew; a dm has no name of its own either, and its label needs a viewer (`channel_label_for`),
-/// so without one it gets the md fallback. Names go through `text::name` (M3a `safe_name`).
+/// so without one it gets a neutral generic label. Names go through `text::name` (M3a `safe_name`).
 pub fn channel_label_raw(
     loc: Locale,
     kind: crewd_proto::ChannelKind,
@@ -83,14 +92,15 @@ pub fn channel_label_raw(
         crewd_proto::ChannelKind::Human => {
             text::r(loc, "r.human_label", &[("crew", &text::name(crew_title))])
         }
-        crewd_proto::ChannelKind::Dm => text::r(loc, "r.dm_gone", &[]),
+        crewd_proto::ChannelKind::Dm => text::r(loc, "r.dm_generic", &[]),
         crewd_proto::ChannelKind::Topic => text::name(name),
     }
 }
 
-/// `channel_label_raw`, but a dm shows the other party (M3a `channels::display_label`, which is
-/// empty once the peer is gone; then the md fallback applies). The dm decoration follows the
-/// CURRENT captain pointer, while sender labels follow the kind at post time.
+/// `channel_label_raw`, but a dm shows the other party (M3a `channels::display_label`). Only an
+/// empty answer (the peer is gone) is called dissolved; a lookup error gets the neutral generic
+/// label. The dm decoration follows the CURRENT captain pointer, while sender labels follow the
+/// kind at post time.
 pub async fn channel_label_for(
     st: &AppState,
     viewer: &str,
@@ -100,11 +110,12 @@ pub async fn channel_label_for(
     crew_title: &str,
     loc: Locale,
 ) -> String {
-    if kind == crewd_proto::ChannelKind::Dm
-        && let Ok(l) = port::display_label(st, viewer, channel, loc).await
-        && !l.is_empty()
-    {
-        return l;
+    if kind == crewd_proto::ChannelKind::Dm {
+        return match port::display_label(st, viewer, channel, loc).await {
+            Ok(l) if !l.is_empty() => l,
+            Ok(_) => text::r(loc, "r.dm_gone", &[]),
+            Err(_) => channel_label_raw(loc, kind, name, crew_title),
+        };
     }
     channel_label_raw(loc, kind, name, crew_title)
 }

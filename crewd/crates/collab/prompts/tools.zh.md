@@ -412,10 +412,13 @@ claude 或 codex，必须明确选。
 内部错误 #{n}（详情见 crewd 日志）
 
 ## inject.omitted
-「{channel}」还有 {count} 条较新的消息这次没带上（字数上限），它们仍是未读：下次工具调用后会接着给你，也可以先用 read_channel 看。
+{channel} 还有 {count} 条较新的消息这次没带上（字数上限），它们仍是未读：下次工具调用后会接着给你，也可以先用 read_channel 看。
+
+## inject.omitted_at_least
+{channel} 还有至少 {count} 条较新的消息这次没带上（字数上限；未读很多，实际可能更多），它们仍是未读：下次工具调用后会接着给你，也可以先用 read_channel 看。
 
 ## inject.truncated
-「{channel}」里 #{seq} 这条太长，只带了开头；要看全文用 read_channel。
+{channel} 里 #{seq} 这条太长，只带了开头；要看全文：read_channel(channel="{id}", before={next}, limit=1)。
 
 ## r.lobby_label
 「{crew}」大厅
@@ -425,3 +428,6 @@ claude 或 codex，必须明确选。
 
 ## r.dm_gone
 已解散的私聊
+
+## r.dm_generic
+私聊
