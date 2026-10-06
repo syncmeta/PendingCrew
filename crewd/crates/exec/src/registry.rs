@@ -269,7 +269,12 @@ impl ProcessRegistry {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("{}: {e}", path.display()),
+                    format!(
+                        "进程登记表 {} 坏了（{e}）。crewd 拒绝启动，而不是冒险按一张读不懂的表\
+                         去杀进程（可能杀到不相干的进程）。处理办法：把这个文件挪到别处（比如改名加 \
+                         .bad）再启动；上次留下的 claude 进程若还活着，需要人自己看一眼、手动结束。",
+                        path.display()
+                    ),
                 )
             })?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
@@ -709,9 +714,11 @@ mod tests {
         assert!(raw.contains("startTime"), "camelCase：{raw}");
         assert!(raw.contains("bootId"), "camelCase：{raw}");
         std::fs::write(&path, b"{not json").unwrap();
-        assert!(
-            ProcessRegistry::load(&path).is_err(),
-            "坏掉的登记表不能当空表"
-        );
+        let err = ProcessRegistry::load(&path).expect_err("坏掉的登记表不能当空表");
+        let msg = err.to_string();
+        // 人看到这条报错要知道怎么办：挪开它再启动；以及为什么不自己处理掉。
+        assert!(msg.contains(&path.display().to_string()), "{msg}");
+        assert!(msg.contains("挪"), "要告诉人怎么办：{msg}");
+        assert!(msg.contains("不相干的进程"), "要说清为什么拒绝启动：{msg}");
     }
 }

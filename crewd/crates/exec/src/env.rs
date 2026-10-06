@@ -18,7 +18,17 @@ pub const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 /// 任何 PATH 都必须带上的系统目录（`env` / `sh` / `git` 在这里）。
 pub const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 /// 从父进程透传的环境变量（另加全部 `LC_*`）。PATH 与 TERM 不透传，见 [`build_env`]。
-pub const PASSTHROUGH_KEYS: [&str; 6] = ["HOME", "SHELL", "LANG", "USER", "LOGNAME", "TMPDIR"];
+/// `CLAUDE_CONFIG_DIR`：设了才有；claude 按它放会话日志，认证探测
+/// （`AuthProbe::projects_dir_for`）按 crewd 自己的环境找日志——两边要看到同一个值。
+pub const PASSTHROUGH_KEYS: [&str; 7] = [
+    "HOME",
+    "SHELL",
+    "LANG",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "CLAUDE_CONFIG_DIR",
+];
 /// 调用方给的额外变量里绝不放行的前缀（大小写不敏感）：我们自己的凭据与配置。
 pub const FORBIDDEN_PREFIXES: [&str; 4] = ["PENDINGBOT_", "PENDINGCREW_", "SUPABASE_", "CREWD_"];
 /// 子进程的 TERM。终端是我们的 `crewd_term::Screen`（xterm 系），不是 crewd 自己所在的终端。
@@ -435,6 +445,23 @@ mod tests {
             env["TERM"], CHILD_TERM,
             "终端是我们的 Screen，不透传 crewd 所在终端的 TERM"
         );
+    }
+
+    /// claude 用 `CLAUDE_CONFIG_DIR` 定会话日志在哪；认证探测按 crewd 自己的环境找日志——
+    /// 两边必须看到同一个值，否则探测永远在错的目录里找、什么都读不到。
+    #[test]
+    fn claude_config_dir_is_passed_through_when_set() {
+        let env = build_env(
+            [("HOME", "/home/u"), ("CLAUDE_CONFIG_DIR", "/cfg")],
+            "/p",
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some("/cfg")
+        );
+        let env = build_env([("HOME", "/home/u")], "/p", &BTreeMap::new());
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "没设就不出现");
     }
 
     #[test]

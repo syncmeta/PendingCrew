@@ -61,6 +61,11 @@ pub fn spawn_pty(spec: &SpawnSpec) -> io::Result<PtyProcess> {
         let _ = rustix::termios::tcsetattr(&master, rustix::termios::OptionalActions::Now, &t);
     }
 
+    // 主端的非阻塞与 reactor 注册放在起子进程之前：这两步失败时还没有子进程，不会留下一个
+    // 没人管、没人收尸的进程。（O_NONBLOCK 在主端那份打开文件上，不影响子进程拿到的从端。）
+    rustix::io::ioctl_fionbio(&master, true)?;
+    let fd = AsyncFd::with_interest(master, Interest::READABLE | Interest::WRITABLE)?;
+
     let mut cmd = tokio::process::Command::new(&spec.program);
     cmd.args(&spec.args)
         .env_clear()
@@ -83,8 +88,6 @@ pub fn spawn_pty(spec: &SpawnSpec) -> io::Result<PtyProcess> {
     let pid = child
         .id()
         .ok_or_else(|| io::Error::other("子进程刚起就已被回收"))?;
-    rustix::io::ioctl_fionbio(&master, true)?;
-    let fd = AsyncFd::with_interest(master, Interest::READABLE | Interest::WRITABLE)?;
     Ok(PtyProcess {
         child,
         pid,
@@ -237,6 +240,54 @@ mod tests {
         assert!(out.contains("got:ping"), "{out:?}");
         assert!(out.contains("33 101"), "resize 后：{out:?}");
         p.child.wait().await.unwrap();
+    }
+
+    /// 下一条测试的探针，在单独的测试进程里跑（只在设了环境变量时干活）。整个进程忽略
+    /// SIGHUP：panic 展开时主端被 drop，内核给会话首进程发挂断信号——不挡住它，漏出去的
+    /// 子进程在干活之前就被带走了，看起来像「没起过」。
+    #[test]
+    fn master_setup_failure_probe() {
+        let Some(marker) = std::env::var_os("CREWD_EXEC_PTY_SETUP_PROBE") else {
+            return;
+        };
+        // SAFETY: 单独的探针进程，只此一条测试在跑；改信号处置不影响别的测试。
+        unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+        let spec = sh(&format!(
+            "touch '{}'",
+            std::path::Path::new(&marker).display()
+        ));
+        // 运行时之外调：`AsyncFd` 注册 panic（tokio 的子进程收尸注册同样会 panic，但在 fork 之后）。
+        let r = std::panic::catch_unwind(|| spawn_pty(&spec).map(|p| p.pid));
+        assert!(!matches!(r, Ok(Ok(_))), "前提：运行时之外起不来");
+        std::thread::sleep(Duration::from_millis(500));
+        println!("PTY-SETUP-PROBE-RAN");
+    }
+
+    /// 主端的非阻塞 / reactor 注册失败时子进程不能已经起来了（没人管它、也没人收尸）：
+    /// 这些设置都在 spawn 之前做。
+    #[test]
+    fn master_setup_failure_leaves_no_child_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran");
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "pty::tests::master_setup_failure_probe",
+                "--nocapture",
+                "--test-threads",
+                "1",
+            ])
+            .env("CREWD_EXEC_PTY_SETUP_PROBE", &marker)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("PTY-SETUP-PROBE-RAN"),
+            "前提：探针跑完了：{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!marker.exists(), "设置失败了，子进程却已经起来跑过了");
     }
 
     #[tokio::test]
