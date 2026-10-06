@@ -2,12 +2,15 @@
 //! 给 agent 看的文字全在 `crates/collab/prompts/{tools,world-model}.*.md`；本模块的非测试代码里
 //! 不写中文字面量（`literals` 测试钉住），给开发者看的错误写英文短句。
 pub mod catalog;
+pub mod port;
 pub mod runtime;
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 pub mod text;
 
 mod literals;
 
-pub use runtime::AgentRuntime;
+pub use runtime::{AgentConfig, AgentRuntime};
 
 pub use crewd_proto::Role;
 

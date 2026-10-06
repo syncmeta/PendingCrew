@@ -1,5 +1,30 @@
-//! 占位：M3b 换成真正的 `AgentRuntime`（必须保留 `Default`，`AppState::new` 用它）。
-/// 花括号空结构而不是单元结构：`AppState::new` 写 `AgentRuntime::default()`（M3b 的真类型照用），
-/// 单元结构会被 clippy 的 `default_constructed_unit_structs` 拦下。
+//! serve 里 agent 面的配置（serve 启动段由 M3c 填；缺省值见 Default）。整文件替换 M3a 的占位。
+
+#[derive(Clone, Debug)]
+pub struct AgentConfig {
+    /// 要人审批的工具名子串（也写进每个 claude 的 PreToolUse matcher，见 crewd-exec `gate_matcher`）。
+    /// 审批不阻塞（控制者裁定 C2），所以没有等待上限。
+    pub approval_gates: Vec<String>,
+    /// 一次注入的字符上限（官方 additionalContext 上限 10,000，留余量）。
+    pub inject_cap_chars: usize,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            approval_gates: vec!["computer-use".to_string()],
+            inject_cap_chars: 9_000,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
-pub struct AgentRuntime {}
+pub struct AgentRuntime {
+    pub config: AgentConfig,
+}
+
+impl AgentRuntime {
+    pub fn new(config: AgentConfig) -> Self {
+        Self { config }
+    }
+}
