@@ -342,9 +342,12 @@ mod tests {
 
     #[test]
     fn a_forward_clock_glitch_does_not_freeze_the_window() {
-        // 墙钟往前跳一天一次，之后恢复正常：窗口不能被「最晚时间」钉死，慢速唤醒不熔断。
+        // 墙钟往前跳一天（期间有若干次唤醒），之后恢复正常：窗口不能被「最晚时间」钉死，慢速唤醒不熔断。
         let mut b = lb();
-        assert_eq!(b.admit("b", "a", T0.add(24 * 60 * MIN)), Verdict::Pass);
+        // 「未来」的条目一旦留着就会算进窗口：7 条挨着 edge_max，再混进几次慢速唤醒就会误熔断。
+        for i in 0..7 {
+            assert_eq!(b.admit("b", "a", T0.add(24 * 60 * MIN + i)), Verdict::Pass);
+        }
         for i in 0..40 {
             assert_eq!(
                 b.admit("b", "a", T0.add(i * 2 * MIN)),
