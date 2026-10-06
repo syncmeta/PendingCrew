@@ -1,7 +1,8 @@
 //! codex 回合跟踪与结构化记录（Swift `CodexAppServerBackend.trackTurn` / `CodexTranscript`
 //! 的移植）。纯计算：喂通知，吐「发生了什么」，不碰 IO、不看钟。
 //!
-//! - 回合：`turn/started` 置当前回合并开始干活；任何 `item/*` 也算在干活（补丢了的开始边沿）；
+//! - 回合：`turn/started` 置当前回合并开始干活；属于当前回合（或没带回合 id）的 `item/*` 也算在干活
+//!   （补丢了的开始边沿；已完成回合的迟到条目不算）；
 //!   **id 对得上**的 `turn/completed` 才结束（旧回合迟到的完成不能清掉新回合）。
 //! - 回合正常结束且不是压缩回合 → 报「回合结束」，附**本回合**最后一条 agent 正文。
 //! - 自动压缩：回合结束时上下文压力够（[`proto::should_compact`]）→ 报「该压缩了」；
@@ -133,7 +134,7 @@ impl TurnTracker {
             }
             "turn/completed" => self.on_completed(params, &mut s),
             "item/completed" => {
-                self.working = true;
+                self.note_item_activity(params);
                 if let Some(item) = params.get("item") {
                     match item.get("type").and_then(Value::as_str) {
                         Some("contextCompaction") => {
@@ -159,10 +160,20 @@ impl TurnTracker {
                     s.item = Some((turn, item.clone()));
                 }
             }
-            m if m.starts_with("item/") => self.working = true,
+            m if m.starts_with("item/") => self.note_item_activity(params),
             _ => {}
         }
         s
+    }
+
+    /// 条目通知算「在干活」，但只认属于进行中回合的条目：带着回合 id 的，必须就是当前回合
+    /// （完成之后才到的旧条目不能把「干活中」重新立起来、永远等不到收尾）；没带回合 id 的
+    /// 仍当作干活的证据，补丢了的开始边沿。
+    fn note_item_activity(&mut self, params: &Value) {
+        match params.get("turnId").and_then(Value::as_str) {
+            Some(turn) if self.active_turn.as_deref() != Some(turn) => {}
+            _ => self.working = true,
+        }
     }
 
     /// 通知带着回合 id、而且不是当前进行中的回合：别的回合迟到的条目。
@@ -428,6 +439,31 @@ mod tests {
         assert!(t.is_working());
         assert!(!t.is_busy(), "没有回合 id 就不算占着回合");
         t.on_notification("turn/completed", &completed("x", "completed"));
+        assert!(!t.is_working());
+    }
+
+    #[test]
+    fn a_late_item_of_a_finished_turn_does_not_make_the_session_look_busy() {
+        let mut t = TurnTracker::new("thr");
+        t.on_notification("turn/started", &started("t1"));
+        t.on_notification("turn/completed", &completed("t1", "completed"));
+        assert!(!t.is_working());
+        // 完成通知之后才到的 t1 的条目：照样记进结构化记录，但不能把「干活中」立起来。
+        let s = t.on_notification("item/completed", &agent("t1", "迟到的话"));
+        assert!(s.item.is_some());
+        assert!(!t.is_working(), "迟到的条目不属于任何进行中的回合");
+        t.on_notification(
+            "item/started",
+            &json!({ "threadId": "thr", "turnId": "t1", "item": { "type": "reasoning" } }),
+        );
+        assert!(!t.is_working());
+        // 正在跑的回合里别的回合的条目同样不算。
+        t.on_notification("turn/started", &started("t2"));
+        t.on_notification("turn/completed", &completed("t2", "completed"));
+        t.on_notification("turn/started", &started("t3"));
+        assert!(t.is_working());
+        t.on_notification("turn/completed", &completed("t3", "completed"));
+        t.on_notification("item/completed", &agent("t2", "更老的"));
         assert!(!t.is_working());
     }
 

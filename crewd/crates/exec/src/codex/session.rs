@@ -802,6 +802,16 @@ impl CodexCore {
     }
 
     fn on_notification(&mut self, method: &str, params: &Value, now: Instant) {
+        // 一条 stdout 可能夹着别的 thread 的通知（0.160.1 schema 里 turn/started、turn/completed、
+        // item/completed、error 都必带 threadId）：带了且不是我们的就整条不看，不喂回合跟踪也不进
+        // 健康。没带 threadId（如 account/rateLimits/updated）的是账号级通知，照常处理。
+        if let (Some(theirs), Some(ours)) = (
+            params.get("threadId").and_then(Value::as_str),
+            self.thread_id.as_deref(),
+        ) && theirs != ours
+        {
+            return;
+        }
         if let Some(h) = proto::health_from(method, params)
             && self.health.as_ref() != Some(&h)
         {
@@ -1590,6 +1600,62 @@ mod tests {
     }
 
     #[test]
+    fn another_threads_notifications_do_not_touch_our_turn_or_health() {
+        let mut t = T::ready(Some("干活"));
+        t.reply("turn/start", json!({ "turn": { "id": "mine" } }));
+        t.notify(
+            "turn/started",
+            json!({ "threadId": "thr-1", "turn": { "id": "mine" } }),
+        );
+        t.take_events();
+        // 别的 thread 的一整个回合插进我们的回合中间（同一条 stdout 上的多路复用）。
+        t.notify(
+            "turn/started",
+            json!({ "threadId": "other", "turn": { "id": "theirs" } }),
+        );
+        t.notify(
+            "item/completed",
+            json!({ "threadId": "other", "turnId": "theirs", "completedAtMs": 0,
+                    "item": { "id": "x", "type": "agentMessage", "text": "别人的话" } }),
+        );
+        t.notify(
+            "error",
+            json!({ "threadId": "other", "turnId": "theirs", "willRetry": false,
+                    "error": { "message": "他们的错" } }),
+        );
+        t.notify(
+            "turn/completed",
+            json!({ "threadId": "other", "turn": { "id": "theirs", "status": "failed" } }),
+        );
+        assert!(
+            t.events.is_empty(),
+            "别的 thread 不产生任何事件：{:?}",
+            t.events
+        );
+        assert!(t.core.is_working(), "我们的回合还在跑");
+        assert_eq!(t.core.health(), None);
+        // 我们自己的回合照常结束，且只报我们的话。
+        t.notify(
+            "item/completed",
+            json!({ "threadId": "thr-1", "turnId": "mine", "completedAtMs": 0,
+                    "item": { "id": "m", "type": "agentMessage", "text": "我的话" } }),
+        );
+        t.notify(
+            "turn/completed",
+            json!({ "threadId": "thr-1", "turn": { "id": "mine", "status": "completed" } }),
+        );
+        let ended: Vec<_> = t
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                SessionEvent::TurnEnded { last_agent_message } => Some(last_agent_message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ended, vec!["我的话".to_string()]);
+    }
+
+    #[test]
     fn sends_queue_behind_a_running_turn_and_each_gets_its_own_turn() {
         let mut t = T::ready(Some("开场"));
         t.reply("turn/start", json!({ "turn": { "id": "t1" } }));
@@ -2055,8 +2121,8 @@ mod tests {
         );
         let ev = t.take_events();
         assert!(
-            ev.contains(&SessionEvent::Working(true)),
-            "条目活动也算在干活：{ev:?}"
+            !ev.contains(&SessionEvent::Working(true)),
+            "没有进行中的回合时，带回合 id 的条目不算在干活（迟到的旧条目）：{ev:?}"
         );
         assert!(ev.iter().any(|e| matches!(e, SessionEvent::Item { turn_id, item } if turn_id == "t1" && item["command"] == "ls")));
         assert_eq!(t.core.transcript_text(5), "$ ls（exit 0）");
