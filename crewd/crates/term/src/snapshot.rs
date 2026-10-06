@@ -102,6 +102,36 @@ impl Screen {
             prev_wrapped = wrapped;
         }
 
+        // 2b. 最底一行带 WRAPLINE 却没有下一行（竖向缩小后常见）：直接写只能停在
+        //     pending-wrap，标志要靠真的折下去才有。在第 2..lines 行的滚动区域里折一次
+        //     （区域不含第 0 行 → 上滚的行不进回滚），SD 滚回来，再补写被挤掉的第 1 行。
+        //     少于 3 行时做不到（区域至少两行），留作已知缺口。
+        let bottom_row = &grid[Line(last)];
+        if lines >= 3 && bottom_row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+            let col = if bottom_row[Column(cols - 1)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+            {
+                cols - 2
+            } else {
+                cols - 1
+            };
+            out.set_pen(&Pen::reset());
+            out.raw(&format!("\x1b[2;{lines}r\x1b[{lines};{}H", col + 1));
+            out.cell(&bottom_row[Column(col)]);
+            out.set_pen(&Pen::reset());
+            out.raw(" \x1b[T\x1b[r\x1b[2;1H");
+            let row1 = &grid[Line(1)];
+            let wrapped1 = row1[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
+            let row2 = &grid[Line(2)];
+            let row2_wide = row2[Column(0)].flags.contains(Flags::WIDE_CHAR);
+            out.row(row1, cols, wrapped1, false, row2_wide);
+            if wrapped1 {
+                // 再写一次第 2 行行首那格（内容不变），触发第 1 行的折行标志。
+                out.cell(&row2[Column(0)]);
+            }
+        }
+
         // 3. 滚动区域（DECSTBM 会把光标拉回原点，所以排在内容之后、定位之前）。
         let (top, bottom) = self.scroll_region();
         if (top, bottom) != (0, lines) {
@@ -533,6 +563,30 @@ pub(crate) mod tests {
                 .contains(Flags::LEADING_WIDE_CHAR_SPACER)
         );
         assert_round_trip(&s, "行尾放不下的宽字符");
+    }
+
+    #[test]
+    fn dangling_wrap_on_the_bottom_row_survives() {
+        // 竖向缩小后，最底一行的 WRAPLINE 指向一行已经不在屏上的续行。
+        let text = format!("top\r\nmid\r\n{}", "a".repeat(85));
+        let mut s = fed(80, 25, text.as_bytes());
+        s.feed(b"\x1b[1;1H");
+        assert!(s.resize(80, 3));
+        let bottom = &s.term().grid()[Line(2)];
+        assert!(
+            bottom[Column(79)].flags.contains(Flags::WRAPLINE),
+            "前置条件：底行悬空折行"
+        );
+        assert_round_trip(&s, "底行悬空折行");
+
+        // 第 1 行自己也折进底行：补写第 1 行时要把它的折行标志一并造回来。
+        let mut s = fed(80, 25, format!("top\r\n{}", "a".repeat(250)).as_bytes());
+        s.feed(b"\x1b[1;1H");
+        assert!(s.resize(80, 3));
+        let grid = s.term().grid();
+        assert!(grid[Line(1)][Column(79)].flags.contains(Flags::WRAPLINE));
+        assert!(grid[Line(2)][Column(79)].flags.contains(Flags::WRAPLINE));
+        assert_round_trip(&s, "第 1 行与底行都折行");
     }
 
     #[test]

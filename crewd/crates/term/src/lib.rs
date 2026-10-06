@@ -5,6 +5,8 @@ mod menu;
 mod screen;
 mod side;
 mod snapshot;
+#[cfg(test)]
+mod snapshot_fixtures;
 mod tail;
 mod tracker;
 

@@ -223,3 +223,23 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - `crewd serve` 不做源/目标重叠检查；悬空符号链接数据目录报错信息不友好；归档遍历会跟随符号链接目录、遇 FIFO 会阻塞。
 - 订阅重订窗口可能重复投递一条事件；对端不读时连接任务可能挂住；`crewd rpc` 无超时。
 - 其余小项见各任务评审（upsert 以 None 覆盖 extra、chrono 默认特性等），不影响正确性。
+
+## 15. M2a 交付记录与遗留（分支 crewd-m2a，计划 `docs/superpowers/plans/2026-10-06-crewd-m2a-terminal-core.md`）
+
+已交付：`crewd/crates/term`（crewd-term，纯计算，不起进程、不用 tokio）——alacritty_terminal 0.26 无头终端（`Processor<NoSync>`、终端回复发件箱、OSC 10/11 用配置色、每个 `?1004h` 补 `ESC[I`、旁路跟踪滚动区域）、TerminalScreenText 口径读屏、AnsiPlainTextTail（UTF-8 跨块拼接）、菜单解析（编号式 + 光标列表式）、输入框判据、PendingDecisionTracker（3s、按指纹粘住、时间由调用方传入）、快照编码器（逐格往返：回滚 + 屏、SGR + OSC 8、软换行含竖向缩小后的悬空底行、宽字符、制表符、滚动区域、模式、光标含 pending-wrap、当前画笔）。验收：4 个夹具上的 13 条期望；夹具每批往返、resize 往返、快照后接着喂两边一致。
+
+评审修复轮带来的、计划原文里没有的改动：
+- Task 2：同尺寸 `resize` 不重置旁路跟踪的滚动区域（与 alacritty `Term::resize` 提前返回一致）；DECCOLM（`?3h/l`）按 alacritty 把滚动区域复位；`?1004h` 被切在两次 `feed` 之间时仍恰好答一次 `ESC[I`。
+- Task 7（快照编码器）：软换行续行若在 `cols` 之前结束，行尾补默认底色 + `ESC[K`（折行上滚会把整行刷成触发那一格的底色，BCE）；`row()` 跟踪终端光标应在的列，和源格子的列对不上时补 CHA；缺后半格的 WIDE_CHAR 之后用默认底色、`CHA col+2`、`ESC[X` 把自带的后半格擦回去；光标显隐一律显式写 `?25h` / `?25l`；OSC 8 超链接在切换到另一条链接之前先关、每行末尾也关。
+
+遗留（M2b–M2d 处理）：
+- 快照带不走解析器的半截状态：PTY 块切在 UTF-8 字符或转义序列中间时拍快照，接在后面的实时字节在客户端会坏掉一个字符或一个序列。M2d 定 attach 协议时二选一：只在解析器处于 ground 状态时取快照，或把半截字节随快照一起交给客户端。
+- `Snapshot` 没带回滚行数（`history_size`）：消费方要自己从 `bytes` 推，或 M2d 在帧里补这个字段。
+- 快照不还原：处在 alt 屏时的主屏（alacritty 不公开非活动缓冲区；测试钉成显式断言）、DECSC 存的光标、自定义制表位、G0–G3 字符集、窗口标题、kitty 键盘模式栈；不足 3 行时的悬空底行折行（区域至少要两行）；reflow 后行尾 `LEADING_WIDE_CHAR_SPACER` 而下一行不以宽字符开头时的该标志。夹具里只有 claude 启动最开头的一对 DECSC/DECRC（字节 0–5），其余几项都没出现。
+- 宽字符与折行的几处已知缺口（夹具里都没出现，合成测试之外没验）：
+  - 最后一列放着没有后半格的 WIDE_CHAR（ICH 挤出来的）：回放里它再也放不进去，会把后面整行错位一行；
+  - 软换行行的最后一列是孤立的 WIDE_CHAR_SPACER：这一行的软换行标志丢失；
+  - 软换行行的最后一列是制表符（reflow 之后才会出现）：同样丢软换行；
+  - 制表符格上挂的零宽字符被丢弃。
+- DA1/DA2 的回答串与 SwiftTerm 不同（alacritty 回 `ESC[?6c`）。这只在录制字节上验过，没有和真 claude 交互过——M2b 接上 PTY 后真机核一次 claude 的启动与主题选择。
+- 群消息渲染（`SessionDecisionNotice`，按 `numbered` 分叉、绝不编造编号）归 M3。
