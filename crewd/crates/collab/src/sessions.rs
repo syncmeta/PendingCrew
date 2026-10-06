@@ -129,7 +129,10 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
     if n.role == Role::Captain {
         crews::point_captain_at(tx, &crew.id, &s.id)?;
     }
-    cursors::pin_to_end(tx, &s.id, &crewd_store::channels::lobby_id(&crew.id))?;
+    let lobby = crewd_store::channels::lobby_id(&crew.id);
+    cursors::pin_to_end(tx, &s.id, &lobby)?;
+    // 大厅的成员是隐式的（= 本机组全体 session）：多了一个人，大厅就变了（终审 M1）。
+    tx.note(Change::ChannelChanged { channel_id: lobby });
     tx.note(Change::SessionChanged {
         session_id: s.id.clone(),
     });
@@ -577,5 +580,18 @@ mod tests {
                 },
             )
         });
+    }
+
+    /// 终审 M1：注册 = 大厅多了一个隐式成员，大厅要发 ChannelChanged（客户端的成员列表才会刷新）。
+    #[test]
+    fn registering_notes_the_lobby_whose_implicit_members_changed() {
+        let mut s = store();
+        let (_, ch) = crate::testkit::ok_at(&mut s, NOW, |tx| register(tx, worker("crew-a")));
+        assert!(
+            ch.contains(&Change::ChannelChanged {
+                channel_id: "crew-a/lobby".into()
+            }),
+            "{ch:?}"
+        );
     }
 }

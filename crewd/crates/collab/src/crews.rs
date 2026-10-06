@@ -419,14 +419,18 @@ pub fn set_captain(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
     Ok(())
 }
 
-/// 「成为机长」的公共一处（`set_captain` 与 `sessions::register(Role::Captain)` 共用）：机长指针指向 `session`；
-/// 根机组且人类群已存在时，把新机长的游标钉到人类群末尾（不凭空多出一屏历史未读，裁定 9）。
+/// 「成为机长」的公共一处（`set_captain` 与 `sessions::register(Role::Captain)` 共用）：机长指针指向 `session`，
+/// 大厅发 ChannelChanged（群主随机长算）；根机组且人类群已存在时，把新机长的游标钉到人类群末尾（不凭空多出一屏历史未读，裁定 9）。
 /// 调用方负责 session 行的 role 与分机号。
 pub(crate) fn point_captain_at(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
     tx.conn().execute(
         "UPDATE crews SET captain_session_id=?2 WHERE id=?1",
         params![crew, session],
     )?;
+    // 大厅的群主是算出来的（= 机长）：指针一动，大厅就变了（终审 M1）。
+    tx.note(Change::ChannelChanged {
+        channel_id: crewd_store::channels::lobby_id(crew),
+    });
     if is_root(tx.conn(), crew)? {
         let human = crewd_store::channels::human_id(crew);
         let exists = crate::channels::human_channel_exists(tx.conn(), crew)?;
@@ -884,6 +888,19 @@ mod tests {
         assert!(
             !ch.iter().any(|c| matches!(c, Change::ChannelRemoved { channel_id } if !channel_id.starts_with("crew-x/") && *channel_id != doomed.id)),
             "只报被删掉的群：{ch:?}"
+        );
+    }
+
+    /// 终审 M1：大厅的群主是算出来的（= 机长），换机长 = 大厅变了。
+    #[test]
+    fn changing_the_captain_notes_the_lobby_whose_owner_is_computed() {
+        let mut s = store();
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| set_captain(tx, "crew-a", "w-a1"));
+        assert!(
+            ch.contains(&Change::ChannelChanged {
+                channel_id: "crew-a/lobby".into()
+            }),
+            "{ch:?}"
         );
     }
 
