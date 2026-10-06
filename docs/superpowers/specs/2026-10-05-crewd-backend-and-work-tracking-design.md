@@ -210,14 +210,14 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - ~~Q9~~ **[人 已定]** 机长可接活（Jev 派活选项保留 captain）。
 - ~~Q10~~ **[人 已定]** Rust。
 - ~~Q11~~ **[调研 已定]** Go crypto/tls、rustls、Bun 均不支持外部 PSK。改为 TLS 1.3 + 配对时交换自签证书 SPKI 指纹做双向 pinning（iOS 用 Network.framework verify block）。现有 TLS-PSK 配对作废，需重新配对。
-- ~~Q12~~ **[自决]** GUI 拉起 crewd（执行器在 crewd 内）；无登录项（维持 2026-09-07 人的决定）。升级：crewd 版本变化时只重启 crewd，执行器与会话不动——顺带补上「升级不打断会话」那个未达成的 A1 目标。
+- ~~Q12~~ **[自决]** GUI 拉起 crewd（执行器在 crewd 内）；无登录项（维持 2026-09-07 人的决定）。升级 **[人 已定 2026-10-06]**：重启/升级打断会话是预期内的，要求只是**能恢复**（claude `--resume`、codex `thread/resume` 自动接回）。「升级不中断」是加分项、后做：M2 执行器在 crewd 进程内，但只经一个窄接口（启动/输入/停止/状态订阅/屏幕文本）与其余部分交互，以后把它拆成独立常驻子进程时只换接口的传输层。
 
 ## 14. M1 交付记录与遗留（2026-10-05，分支 crewd-m1）
 
 已交付：Rust workspace（proto/store/legacy/server/crewd）、SQLite schema v1、旧 JSON 只读导入（单事务；附件先拷后提交；源/目标重叠拒绝；I/O 错误致命可重试；解析不了或没落库的文件原样归档；报告存 meta.importReport）、Unix socket NDJSON RPC（hello/crew.list/whiteboard.list/post/todo.list/events.subscribe）、单实例锁（serve 与 import 共用）、数据目录 0700、契约文件 `crewd/schema/crewd-api.schema.json` + 漂移测试。真实数据只读演练：62 机组 / 1009 session / 366764 消息 / 500 Todo，0 跳过。
 
 遗留（M2 起处理）：
-- **Q12 自相矛盾，需重定**：执行器已并入 crewd，「升级只重启 crewd、会话不动」不再成立。M2 设计时决定：执行器拆成独立常驻子进程（crewd 升级不动它），或 PTY fd 交接。
+- ~~Q12 自相矛盾~~ **[人 已定 2026-10-06]** 见 §13 Q12：先保证可恢复，不中断后做。
 - 契约还不能直接给 Swift 生成代码：结果/事件类型是字符串描述、缺 ServerFrame、每个类型各自一份 `$defs`、参数结构没 deny_unknown_fields、枚举是字符串。iOS/Mac 客户端接入前做一轮契约整理。
 - store 的 SQLite 调用在 tokio 线程上同步执行（M2 PTY 进来前改成专用线程/actor）。
 - `crewd serve` 不做源/目标重叠检查；悬空符号链接数据目录报错信息不友好；归档遍历会跟随符号链接目录、遇 FIFO 会阻塞。
