@@ -8,15 +8,19 @@ use crewd_exec::driver::{Closed, SendError, SessionStatus};
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::SessionEvent;
 use crewd_term::Snapshot;
-use crewd_wake::plan::{ChannelCtx, Listen, MsgFacts, visible_to};
+use crewd_wake::plan::{ChannelCtx, Listen, MsgFacts, Sender, visible_to};
 use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
+use super::OrchestraConfig;
+use super::clock::{Clock, ManualClock};
+use super::core::{Cmd, Core, Input, Live, Origin};
 use super::exec::{
-    BoxFut, Context, ExecHandle, ExecSendError, Executor, LaunchError, LaunchRequest, Launched,
-    check_context,
+    BoxFut, Context, ExecHandle, ExecSendError, Executor, Executors, LaunchError, LaunchRequest,
+    Launched, check_context,
 };
+use super::hooks::Hooks;
 use super::port::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -609,6 +613,8 @@ pub struct StandInState {
     pub fail_next: Vec<String>,
     pub sends: BTreeMap<String, Vec<(u64, String)>>,
     pub raws: BTreeMap<String, Vec<Vec<u8>>>,
+    /// 每次 `raw` 的时刻（与 `raws` 一一对应）：量 nudge 键之间的间隔。
+    pub raw_at: BTreeMap<String, Vec<std::time::Instant>>,
     pub stops: Vec<String>,
     pub cleared_quota: Vec<String>,
     pub events: BTreeMap<String, mpsc::UnboundedSender<SessionEvent>>,
@@ -670,6 +676,8 @@ pub struct StandInWorktrees(pub Arc<Mutex<StandInWtState>>);
 pub struct StandInWtState {
     pub calls: Vec<(PathBuf, String)>,
     pub fail_next: Option<String>,
+    /// 下一次 `create` 等这个信号才返回（模拟慢的 `git worktree add`）。
+    pub hold: Option<oneshot::Receiver<()>>,
 }
 
 impl StandInWorktrees {
@@ -679,6 +687,13 @@ impl StandInWorktrees {
 
     pub fn fail_next(&self, why: &str) {
         self.0.lock().expect("测试器材锁中毒").fail_next = Some(why.into());
+    }
+
+    /// 让下一次 `create` 卡住，直到返回的发送端被触发（或丢掉）。
+    pub fn hold_next(&self) -> oneshot::Sender<()> {
+        let (tx, rx) = oneshot::channel();
+        self.0.lock().expect("测试器材锁中毒").hold = Some(rx);
+        tx
     }
 }
 
@@ -695,7 +710,13 @@ impl super::worktree::Worktrees for StandInWorktrees {
             Some(why) => Err(why),
             None => Ok(PathBuf::from(format!("/nonexistent/worktrees/w-{n}"))),
         };
-        Box::pin(async move { r })
+        let hold = st.hold.take();
+        Box::pin(async move {
+            if let Some(h) = hold {
+                let _ = h.await;
+            }
+            r
+        })
     }
 }
 
@@ -765,11 +786,12 @@ impl ExecHandle for StandInHandle {
     }
 
     fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed> {
-        self.lock()
-            .raws
+        let mut s = self.lock();
+        s.raws.entry(self.session.clone()).or_default().push(bytes);
+        s.raw_at
             .entry(self.session.clone())
             .or_default()
-            .push(bytes);
+            .push(std::time::Instant::now());
         Ok(())
     }
 
@@ -806,10 +828,182 @@ impl ExecHandle for StandInHandle {
     }
 }
 
+pub const T0: Ms = Ms(1_000_000_000);
+
+/// Core 的测试台：内存 Port、顶替执行器、手动时钟、顶替 worktree；不跑 actor 循环，测试直接 `core.handle(..)`。
+pub struct Rig {
+    pub core: Core<MemPort>,
+    pub port: Arc<MemPort>,
+    pub exec: StandIn,
+    pub clock: Arc<ManualClock>,
+    pub worktrees: StandInWorktrees,
+    pub rx: mpsc::UnboundedReceiver<Input>,
+}
+
+impl Rig {
+    pub async fn new() -> Self {
+        Self::with(Hooks::default()).await
+    }
+
+    pub async fn with(hooks: Hooks) -> Self {
+        Self::with_cfg(hooks, OrchestraConfig::for_tests()).await
+    }
+
+    /// 控制者裁定 C7：不管调用方给什么 `Hooks`，worktree 一律换成顶替的——单元测试永不调真 git。
+    pub async fn with_cfg(mut hooks: Hooks, cfg: OrchestraConfig) -> Self {
+        let port = Arc::new(MemPort::new());
+        let exec = StandIn::default();
+        let worktrees = StandInWorktrees::default();
+        hooks.worktrees = Arc::new(worktrees.clone());
+        let clock = Arc::new(ManualClock::new(T0));
+        port.lock().now = T0;
+        let (tx, rx) = mpsc::unbounded_channel();
+        let execs = Executors::new().with("claude", Arc::new(exec.clone()));
+        let core = Core::new(port.clone(), execs, hooks, clock.clone(), cfg, tx)
+            .await
+            .expect("内存 Port 不会失败");
+        Self {
+            core,
+            port,
+            exec,
+            clock,
+            worktrees,
+            rx,
+        }
+    }
+
+    fn row(id: &str, crew: &str, captain: bool) -> SessionRow {
+        SessionRow {
+            id: id.into(),
+            crew_id: crew.into(),
+            captain,
+            executor: "claude".into(),
+            display_name: Some(id.into()),
+            agent_session_id: None,
+            workdir: Some(PathBuf::from("/nonexistent/wd")),
+            model: None,
+            effort: None,
+            brief: None,
+            desired: Desired::Stopped,
+            was_working: false,
+            last_active_at: None,
+            resume_failed_at: None,
+            awaiting_question: None,
+            last_progress_at: None,
+        }
+    }
+
+    /// 机组 + 机长 + 大厅 `<crew>/lobby` + 人类群 `<crew>/human`。session 都没在跑、desired=stopped。
+    /// 入群点照 M3a：机长的大厅 / 人类群游标钉在当前末尾。
+    pub fn crew(&self, crew: &str, captain: &str) {
+        {
+            let mut st = self.port.lock();
+            st.sessions
+                .insert(captain.into(), Self::row(captain, crew, true));
+            st.crew_dirs
+                .insert(crew.into(), PathBuf::from("/nonexistent/wd"));
+            for (suffix, kind) in [("lobby", MemKind::Lobby), ("human", MemKind::Human)] {
+                st.channels.insert(
+                    format!("{crew}/{suffix}"),
+                    MemChannel {
+                        crew: crew.into(),
+                        kind,
+                        owner: None,
+                        members: vec![],
+                    },
+                );
+            }
+        }
+        self.port.join(captain, &format!("{crew}/lobby"));
+        self.port.join(captain, &format!("{crew}/human"));
+    }
+
+    pub fn worker(&self, crew: &str, id: &str) {
+        self.port
+            .lock()
+            .sessions
+            .insert(id.into(), Self::row(id, crew, false));
+        self.port.join(id, &format!("{crew}/lobby"));
+    }
+
+    pub fn channel(&self, id: &str, crew: &str, owner: Option<&str>, members: &[&str]) {
+        self.port.lock().channels.insert(
+            id.into(),
+            MemChannel {
+                crew: crew.into(),
+                kind: MemKind::Other,
+                owner: owner.map(str::to_string),
+                members: members.iter().map(|s| s.to_string()).collect(),
+            },
+        );
+        for m in members {
+            self.port.join(m, id);
+        }
+    }
+
+    /// 推进派生任务（拉起、事件泵、Arbiter、建 worktree）并处理它们发回来的输入，直到连续 50 次让步都没有新输入。
+    pub async fn settle(&mut self) {
+        let mut quiet = 0;
+        while quiet < 50 {
+            tokio::task::yield_now().await;
+            match self.rx.try_recv() {
+                Ok(input) => {
+                    self.core.handle(input).await;
+                    quiet = 0;
+                }
+                Err(_) => quiet += 1,
+            }
+        }
+    }
+
+    pub async fn cmd<T>(&mut self, make: impl FnOnce(oneshot::Sender<T>) -> Cmd) -> T {
+        let (tx, rx) = oneshot::channel();
+        self.core.handle(Input::Cmd(make(tx))).await;
+        self.settle().await;
+        rx.await.expect("命令要有回执")
+    }
+
+    /// 人从客户端把它起起来（不错开、不受上限），并等到 `Spawned` 处理完。
+    pub async fn run(&mut self, session: &str) {
+        let s = session.to_string();
+        self.cmd(|reply| Cmd::Resume {
+            session: s,
+            origin: Origin::Human,
+            reply,
+        })
+        .await
+        .expect("起得来");
+    }
+
+    pub async fn emit(&mut self, session: &str, e: SessionEvent) {
+        self.exec.emit(session, e);
+        self.settle().await;
+    }
+
+    pub async fn tick(&mut self, advance_ms: i64) {
+        self.clock.advance(advance_ms);
+        self.port.lock().now = self.clock.now();
+        self.core.handle(Input::Tick).await;
+        self.settle().await;
+    }
+
+    pub fn live(&self, session: &str) -> Option<&Live> {
+        self.core.live.get(session)
+    }
+
+    /// 以 session `id` 的身份发言（发帖时不是机长；要「以机长身份」的测试自己构造 `Sender::Session`）。
+    pub fn sender(id: &str) -> Sender {
+        Sender::Session {
+            id: id.into(),
+            captain: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod self_tests {
     use super::*;
-    use crewd_wake::plan::{Mention, Sender};
+    use crewd_wake::plan::Mention;
     use crewd_wake::{Priority, WakeKind};
 
     fn wake(session: &str, source: &str, priority: Priority) -> NewWake {

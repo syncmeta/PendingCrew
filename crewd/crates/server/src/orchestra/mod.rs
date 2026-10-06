@@ -1,6 +1,7 @@
 //! serve 里的编排：会话管理 + 唤醒（spec §22.4、§22.7）。判定在 crewd-wake，这里只做 IO：
 //! 一个 actor（`core::Core`）独占会话句柄与内存状态；数据只经 `port::Port`；执行器只经 `exec::Executor`。
 pub mod clock;
+pub mod core;
 pub mod exec;
 pub mod exec_claude;
 pub mod hooks;
@@ -47,7 +48,6 @@ impl Default for OrchestraConfig {
 
 impl OrchestraConfig {
     #[cfg(test)]
-    #[allow(dead_code)] // Task 7 的 `Rig` 起用；在那之前 lib 测试里没人调。
     pub(crate) fn for_tests() -> Self {
         Self {
             stagger_ms: 0,
