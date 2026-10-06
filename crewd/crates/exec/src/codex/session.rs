@@ -183,7 +183,7 @@ impl CodexCore {
     /// 建核心并发出 `initialize`。
     pub fn new(opening: Opening, config: CodexCoreConfig, now: Instant) -> Self {
         let mut queue = VecDeque::new();
-        if let Some(brief) = opening.brief.filter(|b| !b.text.is_empty()) {
+        if let Some(brief) = opening.brief.filter(|b| !b.text.trim().is_empty()) {
             queue.push_back(brief);
         }
         let mut core = Self {
@@ -361,8 +361,7 @@ impl CodexCore {
 
     /// 定时拍：请求到期、fast 回显到期。
     pub fn on_tick(&mut self, now: Instant) {
-        for (tag, method, failure) in self.rpc.expire(now) {
-            let _ = method;
+        for (tag, _, failure) in self.rpc.expire(now) {
             self.on_result(tag, Err(failure), now);
         }
         if let Some(e) = &self.echo
@@ -405,6 +404,15 @@ impl CodexCore {
             );
             return;
         }
+        if self.stopped_by_user {
+            // 已经叫停、还在等退出（SIGTERM 宽限期）：不排队、不开回合——开了也只会被杀，
+            // 还可能报出一个假的「已送达」。是人叫停的，不留 health（与 claude 核心同）。
+            self.delivery(
+                &pending,
+                DeliveryOutcome::Abandoned("session 正在被停掉".to_string()),
+            );
+            return;
+        }
         self.queue.push_back(pending);
         self.after_input(now);
     }
@@ -442,6 +450,11 @@ impl CodexCore {
             ticket,
             outcome: ControlOutcome::Rejected(why.to_string()),
         };
+        if self.stopped_by_user {
+            self.actions
+                .push(reject("session 正在被停掉，不再接受控制"));
+            return;
+        }
         let Some(thread) = self
             .thread_id
             .clone()
@@ -1144,6 +1157,22 @@ mod tests {
             self.line(json!({ "method": method, "params": params }), 0.2);
         }
 
+        /// 与 `reply` 同，但指定到达时刻（期限边界要靠它钉住）。
+        fn reply_at(&mut self, method: &str, result: Value, secs: f64) {
+            let id = self.last(method)["id"].clone();
+            self.line(json!({ "id": id, "result": result }), secs);
+        }
+
+        fn notify_at(&mut self, method: &str, params: Value, secs: f64) {
+            self.line(json!({ "method": method, "params": params }), secs);
+        }
+
+        fn tick(&mut self, secs: f64) {
+            let now = self.at(secs);
+            self.core.on_tick(now);
+            self.pump();
+        }
+
         fn take_events(&mut self) -> Vec<SessionEvent> {
             std::mem::take(&mut self.events)
         }
@@ -1208,6 +1237,10 @@ mod tests {
             vec!["initialize", "initialized", "thread/start"]
         );
         assert!(t.sent[1].get("id").is_none(), "initialized 是通知");
+        assert!(
+            t.sent[1].get("params").is_none(),
+            "initialized 按 schema 不带 params"
+        );
         let start = t.last("thread/start");
         assert_eq!(start["params"]["developerInstructions"], "世界观");
         assert_eq!(start["params"]["approvalsReviewer"], "auto_review");
@@ -1940,5 +1973,206 @@ mod tests {
         );
         assert!(ev.iter().any(|e| matches!(e, SessionEvent::Item { turn_id, item } if turn_id == "t1" && item["command"] == "ls")));
         assert_eq!(t.core.transcript_text(5), "$ ls（exit 0）");
+    }
+
+    #[test]
+    fn send_after_stop_is_abandoned_at_once_and_opens_no_turn() {
+        let mut t = T::ready(None);
+        t.take_events();
+        t.core.stop(t.at(1.0));
+        t.core
+            .send(1, "叫停之后来的", UntrustedContext::new(), t.at(1.1));
+        t.pump();
+        assert_eq!(t.count("turn/start"), 0, "SIGTERM 宽限期里不能再开回合");
+        let ev = t.take_events();
+        assert!(
+            matches!(&deliveries(&ev)[..], [(1, DeliveryOutcome::Abandoned(m))] if m.contains("正在被停掉")),
+            "{ev:?}"
+        );
+        assert!(
+            !ev.iter()
+                .any(|e| matches!(e, SessionEvent::Health(Some(_)))),
+            "人叫停的不留 health：{ev:?}"
+        );
+        assert_eq!(t.core.health(), None);
+    }
+
+    #[test]
+    fn control_after_stop_is_rejected_and_writes_nothing() {
+        let mut t = T::ready(None);
+        let before = t.sent.len();
+        t.core.stop(t.at(1.0));
+        t.core.control(1, Control::Model("o5".into()), t.at(1.1));
+        t.core.control(2, Control::Fast(true), t.at(1.2));
+        t.core.control(3, Control::Compact, t.at(1.3));
+        t.pump();
+        assert_eq!(t.sent.len(), before, "叫停之后不写任何请求");
+        let outs: Vec<_> = t
+            .take_other()
+            .into_iter()
+            .map(|a| match a {
+                CodexAction::ControlDone { ticket, outcome } => (ticket, outcome),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(outs.len(), 3);
+        for (i, (ticket, outcome)) in outs.iter().enumerate() {
+            assert_eq!(*ticket, i as u64 + 1);
+            assert!(
+                matches!(outcome, ControlOutcome::Rejected(m) if m.contains("停")),
+                "{outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_whitespace_only_brief_opens_no_turn() {
+        let mut t = T::ready(Some("  \n\t "));
+        assert_eq!(t.count("turn/start"), 0);
+        assert!(!t.core.is_working());
+        t.take_events();
+        t.core
+            .send(1, "正常来的", UntrustedContext::new(), t.at(1.0));
+        t.pump();
+        assert_eq!(t.count("turn/start"), 1);
+    }
+
+    #[test]
+    fn a_resume_that_times_out_falls_back_to_a_fresh_thread() {
+        let mut t = T::new(Some("thr-old"), None);
+        t.reply_at("initialize", json!({}), 0.0);
+        assert_eq!(t.core.next_wakeup(), Some(t.at(60.0)));
+        t.tick(59.9);
+        assert_eq!(t.count("thread/start"), 0, "期限没到");
+        t.tick(60.0);
+        assert_eq!(t.count("thread/start"), 1, "超时也退回新 thread");
+        t.reply_at(
+            "thread/start",
+            json!({ "thread": { "id": "thr-new" } }),
+            61.0,
+        );
+        assert_eq!(t.take_other(), vec![CodexAction::Record("thr-new".into())]);
+        t.core.on_recorded(Ok(()), t.at(61.1));
+        t.pump();
+        let ev = t.take_events();
+        assert!(
+            matches!(&ev[1], SessionEvent::ResumeRefused { id, said } if id == "thr-old" && said.contains("没有回应")),
+            "{ev:?}"
+        );
+        assert!(
+            matches!(&ev[2], SessionEvent::Spawned { agent_session_id, resumed: false, .. } if agent_session_id == "thr-new")
+        );
+    }
+
+    #[test]
+    fn a_thread_start_that_times_out_is_a_stalled_launch() {
+        let mut t = T::new(None, None);
+        t.reply_at("initialize", json!({}), 0.0);
+        t.tick(59.9);
+        assert!(t.other.is_empty());
+        t.tick(60.0);
+        let other = t.take_other();
+        let [CodexAction::Failed(StartFailure::Launch(h))] = other.as_slice() else {
+            panic!("应当启动失败：{other:?}");
+        };
+        assert_eq!(h.launch_verdict, Some(LaunchVerdict::Stalled));
+        assert!(h.detail.contains("thread/start"), "{}", h.detail);
+        assert!(!t.core.is_running());
+    }
+
+    #[test]
+    fn a_settings_update_that_times_out_is_rejected_and_fast_can_be_retried() {
+        let mut t = T::ready(None);
+        t.core.control(1, Control::Fast(true), t.at(1.0));
+        t.pump();
+        t.tick(30.9);
+        assert!(t.other.is_empty(), "期限没到");
+        t.tick(31.0);
+        assert!(
+            matches!(
+                &t.take_other()[..],
+                [CodexAction::ControlDone {
+                    ticket: 1,
+                    outcome: ControlOutcome::Rejected(m)
+                }] if m.contains("没有回应")
+            ),
+            "超时 = 被拒"
+        );
+        // 迟到的回包丢弃；fast 的「同时只等一次」标记已清，可以再试。
+        t.reply_at("thread/settings/update", json!({}), 31.5);
+        assert!(t.other.is_empty());
+        t.core.control(2, Control::Fast(true), t.at(32.0));
+        t.pump();
+        assert_eq!(t.count("thread/settings/update"), 2);
+        assert!(t.other.is_empty(), "第二次不该被当场拒掉");
+    }
+
+    #[test]
+    fn a_compaction_that_times_out_is_rejected_and_releases_the_queue() {
+        let mut t = T::ready(Some("干活"));
+        t.reply("turn/start", json!({ "turn": { "id": "t1" } }));
+        t.turn("t1", "好了");
+        t.core.control(2, Control::Compact, t.at(2.0));
+        t.core.send(1, "排着", UntrustedContext::new(), t.at(2.1));
+        t.pump();
+        assert_eq!(t.count("turn/start"), 1, "压缩中排队");
+        t.tick(31.9);
+        assert_eq!(t.count("turn/start"), 1, "期限没到");
+        t.take_other();
+        t.take_events();
+        t.tick(32.0);
+        let other = t.take_other();
+        assert!(
+            matches!(&other[..], [CodexAction::ControlDone { ticket: 2, outcome: ControlOutcome::Rejected(m) }] if m.contains("没有回应")),
+            "{other:?}"
+        );
+        assert!(
+            t.events
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Notice(n) if n.contains("压缩没启动")))
+        );
+        assert_eq!(t.count("turn/start"), 2, "压缩放弃了，排着的放行");
+        assert_eq!(t.last("turn/start")["params"]["input"][0]["text"], "排着");
+    }
+
+    #[test]
+    fn the_fast_echo_window_is_eight_seconds_from_the_ack() {
+        // 回显在窗口里到：生效。
+        let mut t = T::ready(None);
+        t.core.control(1, Control::Fast(true), t.at(1.0));
+        t.pump();
+        t.reply_at("thread/settings/update", json!({}), 1.0);
+        assert_eq!(t.core.next_wakeup(), Some(t.at(9.0)));
+        t.tick(8.9);
+        assert!(t.other.is_empty(), "窗口没过");
+        t.notify_at(
+            "thread/settings/updated",
+            json!({ "threadId": "thr-1", "threadSettings": { "serviceTier": "fast" } }),
+            8.95,
+        );
+        assert!(matches!(
+            &t.take_other()[..],
+            [CodexAction::ControlDone {
+                ticket: 1,
+                outcome: ControlOutcome::Applied(_)
+            }]
+        ));
+        assert_eq!(t.core.next_wakeup(), None, "回显到了，期限作废");
+
+        // 窗口里没来：到点才是「无确认」。
+        let mut t = T::ready(None);
+        t.core.control(1, Control::Fast(true), t.at(1.0));
+        t.pump();
+        t.reply_at("thread/settings/update", json!({}), 1.0);
+        t.tick(8.9);
+        assert!(t.other.is_empty());
+        t.tick(9.0);
+        assert!(matches!(
+            &t.take_other()[..],
+            [CodexAction::ControlDone {
+                ticket: 1,
+                outcome: ControlOutcome::NoConfirmation(_)
+            }]
+        ));
     }
 }
