@@ -53,14 +53,9 @@ pub fn parents(conn: &Connection, id: &str) -> Result<Vec<String>> {
         .collect::<rusqlite::Result<Vec<String>>>()?)
 }
 
+/// 直系子机组，按侧栏顺序（边上的 position，再按建组时间、id）。与 `Crew.child_ids` 同一处定义。
 pub fn children(conn: &Connection, id: &str) -> Result<Vec<String>> {
-    let mut st = conn.prepare(
-        "SELECT p.crew_id FROM crew_parents p JOIN crews c ON c.id=p.crew_id
-          WHERE p.parent_id=?1 ORDER BY COALESCE(c.position,0), c.created_at, c.id",
-    )?;
-    Ok(st
-        .query_map([id], |r| r.get(0))?
-        .collect::<rusqlite::Result<Vec<String>>>()?)
+    Ok(crewd_store::crews::children_of(conn, id)?)
 }
 
 pub fn is_root(conn: &Connection, id: &str) -> Result<bool> {
@@ -191,12 +186,20 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     };
     crewd_store::crews::upsert(tx.conn(), &crew, None)?;
     crewd_store::channels::ensure_lobby(tx.conn(), &crew.id, &now)?;
-    put_last(tx, &crew.id, None)?;
-    tx.note(Change::CrewChanged {
-        crew_id: crew.id.clone(),
-    });
-    if let Some(p) = n.parent_id.as_deref() {
-        adopt(tx, &crew.id, p)?;
+    match n.parent_id.as_deref() {
+        // 有父的直接排在父下的末尾（adopt 做），不占顶层的次序。
+        Some(p) => {
+            tx.note(Change::CrewChanged {
+                crew_id: crew.id.clone(),
+            });
+            adopt(tx, &crew.id, p)?;
+        }
+        None => {
+            put_last(tx, &crew.id, None)?;
+            tx.note(Change::CrewChanged {
+                crew_id: crew.id.clone(),
+            });
+        }
     }
     get(tx.conn(), &crew.id)
 }
@@ -213,9 +216,13 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
         if crew.builtin {
             return Err(CollabError::Forbidden("内建机组不能改名".into()));
         }
+        conn.execute("UPDATE crews SET title=?2 WHERE id=?1", params![id, t])?;
+    }
+    // 谁起的名与改不改名无关：只给 titleSource 也要落（不能悄悄丢）。
+    if let Some(ts) = p.title_source {
         conn.execute(
-            "UPDATE crews SET title=?2, title_source=COALESCE(?3, title_source) WHERE id=?1",
-            params![id, t, p.title_source],
+            "UPDATE crews SET title_source=?2 WHERE id=?1",
+            params![id, ts],
         )?;
     }
     if let Some(wd) = p.working_directory {
@@ -334,11 +341,19 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
             "机组 {id} 还有 {running} 个在跑的 session，先停掉"
         )));
     }
-    let around: Vec<String> = parents(tx.conn(), id)?
-        .into_iter()
-        .chain(children(tx.conn(), id)?)
-        .collect();
+    let kids = children(tx.conn(), id)?;
+    // 只有这一个父的子机组删后变成根：按原先的次序排到顶层末尾（C1）。
+    let mut orphans = Vec::new();
+    for k in &kids {
+        if parents(tx.conn(), k)? == [id] {
+            orphans.push(k.clone());
+        }
+    }
+    let around: Vec<String> = parents(tx.conn(), id)?.into_iter().chain(kids).collect();
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
+    for k in &orphans {
+        put_last(tx, k, None)?;
+    }
     tx.note(Change::CrewRemoved { crew_id: id.into() });
     for c in around {
         tx.note(Change::CrewChanged { crew_id: c });
@@ -370,21 +385,7 @@ pub fn set_captain(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
         conn.execute("UPDATE sessions SET role='worker' WHERE id=?1", [o])?;
     }
     conn.execute("UPDATE sessions SET role='captain' WHERE id=?1", [session])?;
-    conn.execute(
-        "UPDATE crews SET captain_session_id=?2 WHERE id=?1",
-        params![crew, session],
-    )?;
-    if is_root(conn, crew)? {
-        let human = crewd_store::channels::human_id(crew);
-        let exists: bool =
-            conn.query_row("SELECT COUNT(*) FROM channels WHERE id=?1", [&human], |r| {
-                r.get::<_, i64>(0)
-            })? > 0;
-        if exists {
-            cursors_pin(tx, session, &human)?;
-            tx.note(Change::ChannelChanged { channel_id: human });
-        }
-    }
+    point_captain_at(tx, crew, session)?;
     tx.note(Change::CrewChanged {
         crew_id: crew.into(),
     });
@@ -397,18 +398,39 @@ pub fn set_captain(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
     Ok(())
 }
 
-fn cursors_pin(tx: &mut Tx<'_>, reader: &str, channel: &str) -> Result<()> {
-    crate::cursors::pin_to_end(tx, reader, channel).map(|_| ())
+/// 「成为机长」的公共一处（`set_captain` 与 `sessions::register(Role::Captain)` 共用）：机长指针指向 `session`；
+/// 根机组且人类群已存在时，把新机长的游标钉到人类群末尾（不凭空多出一屏历史未读，裁定 9）。
+/// 调用方负责 session 行的 role 与分机号。
+pub(crate) fn point_captain_at(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
+    tx.conn().execute(
+        "UPDATE crews SET captain_session_id=?2 WHERE id=?1",
+        params![crew, session],
+    )?;
+    if is_root(tx.conn(), crew)? {
+        let human = crewd_store::channels::human_id(crew);
+        let exists: bool =
+            tx.conn()
+                .query_row("SELECT COUNT(*) FROM channels WHERE id=?1", [&human], |r| {
+                    r.get::<_, i64>(0)
+                })?
+                > 0;
+        if exists {
+            crate::cursors::pin_to_end(tx, session, &human)?;
+            tx.note(Change::ChannelChanged { channel_id: human });
+        }
+    }
+    Ok(())
 }
 
-/// 同级：`parent` 的直系子；`None` = 全部根机组（没有父边的）。按 position。
+/// 同级：`parent` 的直系子（按它们在这个父下的边次序）；`None` = 顶层的可见根机组（没有父边、非内建；
+/// 内建机组不参与排序，客户端给的顶层名单里也没有它），按 `crews.position`。
 fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
     match parent {
         Some(p) => children(conn, p),
         None => {
             let mut out = Vec::new();
             for c in list(conn)? {
-                if is_root(conn, &c.id)? {
+                if !c.builtin && is_root(conn, &c.id)? {
                     out.push(c.id);
                 }
             }
@@ -418,23 +440,41 @@ fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
 }
 
 /// 把 `crew` 放到 `parent` 这一层（`None` = 顶层）的末尾（C1：新建 / 收编 / 转挂进来的排最后）。
-/// 多父机组只有一个 position，在每个父下都按它排（少见；人再拖一次即可）。
+/// `Some(p)` 读写 (crew, p) 这条边的 position，只和 p 的其它边比；多父机组在每个父下各有自己的次序，互不影响。
+/// 调用时边必须已经存在。`None` 写 `crews.position`（只管顶层）。
 fn put_last(tx: &mut Tx<'_>, crew: &str, parent: Option<&str>) -> Result<()> {
-    let mut max = 0i64;
-    for c in siblings(tx.conn(), parent)? {
-        if c != crew {
-            max = max.max(position_of(tx.conn(), &c)?);
+    match parent {
+        Some(p) => {
+            let max: i64 = tx.conn().query_row(
+                "SELECT COALESCE(MAX(position),0) FROM crew_parents WHERE parent_id=?1 AND crew_id<>?2",
+                params![p, crew],
+                |r| r.get(0),
+            )?;
+            let n = tx.conn().execute(
+                "UPDATE crew_parents SET position=?3 WHERE crew_id=?1 AND parent_id=?2",
+                params![crew, p, max + 1],
+            )?;
+            debug_assert_eq!(n, 1, "put_last 要求边已存在");
+        }
+        None => {
+            let mut max = 0i64;
+            for c in siblings(tx.conn(), None)? {
+                if c != crew {
+                    max = max.max(position_of(tx.conn(), &c)?);
+                }
+            }
+            tx.conn().execute(
+                "UPDATE crews SET position=?2 WHERE id=?1",
+                params![crew, max + 1],
+            )?;
         }
     }
-    tx.conn().execute(
-        "UPDATE crews SET position=?2 WHERE id=?1",
-        params![crew, max + 1],
-    )?;
     Ok(())
 }
 
 /// 人手动排侧栏（C1，只有客户端 `crew.reorder` 调）：`ordered` 必须恰好是这一层现有的全部机组（防客户端拿着旧列表覆盖）。
-/// 挪了位置的每个机组各发一条 `CrewChanged`。
+/// `Some(p)` 只改 p 名下各条边的次序（同一机组在别的父下的次序不动）并给 p 发一条 `CrewChanged`（它的 `childIds` 变了）；
+/// `None` 改顶层的 `crews.position`。挪了位置的每个机组各发一条 `CrewChanged`。
 pub fn reorder(tx: &mut Tx<'_>, parent: Option<&str>, ordered: &[String]) -> Result<Vec<Crew>> {
     if let Some(p) = parent {
         get(tx.conn(), p)?;
@@ -447,16 +487,36 @@ pub fn reorder(tx: &mut Tx<'_>, parent: Option<&str>, ordered: &[String]) -> Res
             "crewIds 必须恰好是这一层的全部机组（不重复）：现有 {current:?}"
         )));
     }
+    let mut moved = false;
     for (i, id) in ordered.iter().enumerate() {
         let pos = i as i64 + 1;
-        let old = position_of(tx.conn(), id)?;
-        if old != pos {
-            tx.conn()
-                .execute("UPDATE crews SET position=?2 WHERE id=?1", params![id, pos])?;
-            tx.note(Change::CrewChanged {
-                crew_id: id.clone(),
-            });
+        let old: i64 = match parent {
+            Some(p) => tx.conn().query_row(
+                "SELECT position FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
+                params![id, p],
+                |r| r.get(0),
+            )?,
+            None => position_of(tx.conn(), id)?,
+        };
+        if old == pos {
+            continue;
         }
+        match parent {
+            Some(p) => tx.conn().execute(
+                "UPDATE crew_parents SET position=?3 WHERE crew_id=?1 AND parent_id=?2",
+                params![id, p, pos],
+            )?,
+            None => tx
+                .conn()
+                .execute("UPDATE crews SET position=?2 WHERE id=?1", params![id, pos])?,
+        };
+        tx.note(Change::CrewChanged {
+            crew_id: id.clone(),
+        });
+        moved = true;
+    }
+    if let (Some(p), true) = (parent, moved) {
+        tx.note(Change::CrewChanged { crew_id: p.into() });
     }
     ordered.iter().map(|id| get(tx.conn(), id)).collect()
 }
@@ -730,10 +790,24 @@ mod tests {
             None => list(s.conn())
                 .unwrap()
                 .into_iter()
-                .filter(|c| is_root(s.conn(), &c.id).unwrap())
+                .filter(|c| !c.builtin && is_root(s.conn(), &c.id).unwrap())
                 .map(|c| c.id)
                 .collect(),
         }
+    }
+
+    fn kid(s: &mut crewd_store::Store, title: &str, parent: &str) -> Crew {
+        ok(s, |tx| {
+            create(
+                tx,
+                NewCrew {
+                    title: title.into(),
+                    working_directory: "/tmp/example".into(),
+                    parent_id: Some(parent.into()),
+                    ..Default::default()
+                },
+            )
+        })
     }
 
     #[test]
@@ -836,5 +910,187 @@ mod tests {
         roots.rotate_left(1);
         ok(&mut s, |tx| reorder(tx, None, &roots));
         assert_eq!(order(&s, None), roots);
+    }
+
+    #[test]
+    fn reordering_under_one_parent_leaves_the_order_under_another_parent_alone() {
+        let mut s = store();
+        let k1 = kid(&mut s, "甲1", "crew-a");
+        let k2 = kid(&mut s, "甲2", "crew-a");
+        let m1 = kid(&mut s, "丙1", "crew-x");
+        ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x")); // crew-b 有两个父
+        let under_a = vec!["crew-b".to_string(), k1.id.clone(), k2.id.clone()];
+        assert_eq!(order(&s, Some("crew-a")), under_a);
+        assert_eq!(
+            order(&s, Some("crew-x")),
+            vec![m1.id.clone(), "crew-b".to_string()]
+        );
+        let want_x = vec!["crew-b".to_string(), m1.id.clone()];
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| {
+            reorder(tx, Some("crew-x"), &want_x).map(|_| ())
+        });
+        assert_eq!(order(&s, Some("crew-x")), want_x);
+        assert_eq!(
+            order(&s, Some("crew-a")),
+            under_a,
+            "crew-a 下的顺序不受影响"
+        );
+        assert!(
+            ch.contains(&Change::CrewChanged {
+                crew_id: "crew-x".into()
+            }),
+            "父的 childIds 变了"
+        );
+        let want_a = vec![k2.id.clone(), k1.id.clone(), "crew-b".to_string()];
+        ok(&mut s, |tx| reorder(tx, Some("crew-a"), &want_a));
+        assert_eq!(order(&s, Some("crew-x")), want_x, "反过来也一样");
+        assert_eq!(
+            get(s.conn(), "crew-a").unwrap().child_ids,
+            want_a,
+            "线上带 childIds，按侧栏顺序"
+        );
+        assert_eq!(get(s.conn(), "crew-x").unwrap().child_ids, want_x);
+    }
+
+    #[test]
+    fn adopting_under_a_busy_parent_does_not_reorder_the_other_parents() {
+        let mut s = store();
+        let ks: Vec<String> = ["a1", "a2", "a3"]
+            .iter()
+            .map(|t| kid(&mut s, t, "crew-a").id)
+            .collect();
+        let xs: Vec<String> = (1..=7)
+            .map(|i| kid(&mut s, &format!("x{i}"), "crew-x").id)
+            .collect();
+        let under_a: Vec<String> = std::iter::once("crew-b".to_string()).chain(ks).collect();
+        assert_eq!(order(&s, Some("crew-a")), under_a);
+        ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
+        assert_eq!(
+            order(&s, Some("crew-a")),
+            under_a,
+            "收编进别的父不改 crew-a 下的顺序"
+        );
+        let mut want_x = xs;
+        want_x.push("crew-b".to_string());
+        assert_eq!(order(&s, Some("crew-x")), want_x, "排在新父的末尾");
+    }
+
+    #[test]
+    fn the_top_level_order_leaves_out_builtin_crews() {
+        let mut s = store();
+        let roots = order(&s, None);
+        assert!(!roots.contains(&"chief".to_string()));
+        let mut rotated = roots.clone();
+        rotated.rotate_left(1);
+        ok(&mut s, |tx| reorder(tx, None, &rotated));
+        assert_eq!(order(&s, None), rotated);
+        let mut with_chief = roots.clone();
+        with_chief.push("chief".into());
+        assert!(
+            matches!(
+                err(&mut s, |tx| reorder(tx, None, &with_chief)),
+                CollabError::Invalid(_)
+            ),
+            "客户端只会给可见的顶层"
+        );
+    }
+
+    #[test]
+    fn delete_puts_orphaned_children_last_at_the_top_level() {
+        let mut s = store();
+        let solo = kid(&mut s, "只有一个父", "crew-a");
+        let shared = kid(&mut s, "另有父", "crew-a");
+        ok(&mut s, |tx| adopt(tx, &shared.id, "crew-x")); // 另有父 crew-x，不会变根
+        let roots_before = order(&s, None);
+        ok(&mut s, |tx| delete(tx, "crew-a"));
+        let roots = order(&s, None);
+        let mut want: Vec<String> = roots_before.into_iter().filter(|c| c != "crew-a").collect();
+        want.extend(["crew-b".to_string(), solo.id.clone()]);
+        assert_eq!(
+            roots, want,
+            "变成根的（按原先的次序）排在顶层末尾，原有的根不动"
+        );
+        assert!(!roots.contains(&shared.id));
+        assert_eq!(edges(&s, &shared.id), ["crew-x"]);
+    }
+
+    #[test]
+    fn a_failure_after_earlier_writes_rolls_all_of_them_back() {
+        let mut s = store();
+        let crews_before = count(&s, "SELECT COUNT(*) FROM crews");
+        let chans_before = count(&s, "SELECT COUNT(*) FROM channels");
+        // create 先发号、写机组、建大厅，最后挂到内建父下才失败。
+        let e = err(&mut s, |tx| {
+            create(
+                tx,
+                NewCrew {
+                    title: "半截".into(),
+                    working_directory: "/tmp/example".into(),
+                    parent_id: Some("chief".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(matches!(e, CollabError::Forbidden(_)));
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM crews"), crews_before);
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM channels"), chans_before);
+        let next = ok(&mut s, |tx| {
+            create(
+                tx,
+                NewCrew {
+                    title: "接着建".into(),
+                    working_directory: "/tmp/example".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(next.number, Some(4), "失败那次没有消耗机组号");
+    }
+
+    #[test]
+    fn update_applies_title_source_even_without_a_title() {
+        let mut s = store();
+        let c = ok(&mut s, |tx| {
+            update(
+                tx,
+                "crew-a",
+                CrewPatch {
+                    title_source: Some("captain".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(c.title_source.as_deref(), Some("captain"));
+        assert_eq!(c.title, "机组甲", "标题不动");
+        let c = ok(&mut s, |tx| {
+            update(
+                tx,
+                "crew-a",
+                CrewPatch {
+                    title: Some("新名字".into()),
+                    title_source: Some("human".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(
+            (c.title.as_str(), c.title_source.as_deref()),
+            ("新名字", Some("human"))
+        );
+        let c = ok(&mut s, |tx| {
+            update(
+                tx,
+                "crew-a",
+                CrewPatch {
+                    title: Some("再改".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(
+            c.title_source.as_deref(),
+            Some("human"),
+            "没给 titleSource = 不动"
+        );
     }
 }

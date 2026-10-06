@@ -19,6 +19,9 @@ pub struct Crew {
     pub number: Option<i64>,
     pub builtin: bool,
     pub parent_ids: Vec<String>,
+    /// 这个机组的直系子机组，按侧栏顺序（每个父下各自一套次序，控制者裁定 C1；`crew.reorder {parentId}` 改它）。
+    #[serde(default)]
+    pub child_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +43,8 @@ pub struct Crew {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// 此刻的机长（裁定 8）。
     pub captain_session_id: Option<String>,
-    /// 同级机组里的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 改，新机组排在同级末尾）。
+    /// 只在**顶层**（根机组之间）有意义的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 不带 parentId 时改它，
+    /// 新根排在末尾）。子机组在某个父下的次序不在这里：看父的 `childIds`（多父机组在每个父下各有自己的次序）。
     #[serde(default)]
     pub position: i64,
 }

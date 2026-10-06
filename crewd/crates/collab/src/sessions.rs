@@ -48,14 +48,18 @@ pub fn crew_of(conn: &Connection, id: &str) -> Result<String> {
     Ok(get(conn, id)?.crew_id)
 }
 
-/// 此刻的角色：以机组的机长指针为准（不看 role 列，防两者漂移时说错话）。
+/// 此刻的角色：机长以机组的机长指针为准（role 列漂移时不说错话）；指针之外，admin 如实报 admin，其余都是 worker。
 pub fn role_of(conn: &Connection, id: &str) -> Result<Role> {
-    let crew = crew_of(conn, id)?;
-    Ok(if crews::captain_of(conn, &crew)?.as_deref() == Some(id) {
-        Role::Captain
-    } else {
-        Role::Worker
-    })
+    let s = get(conn, id)?;
+    Ok(
+        if crews::captain_of(conn, &s.crew_id)?.as_deref() == Some(id) {
+            Role::Captain
+        } else if s.role == Role::Admin {
+            Role::Admin
+        } else {
+            Role::Worker
+        },
+    )
 }
 
 /// 给人 / agent 看的名字：显示名 → 标题 → id。
@@ -118,10 +122,7 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
     };
     crewd_store::sessions::upsert(conn, &s, None)?;
     if n.role == Role::Captain {
-        conn.execute(
-            "UPDATE crews SET captain_session_id=?2 WHERE id=?1",
-            params![crew.id, s.id],
-        )?;
+        crews::point_captain_at(tx, &crew.id, &s.id)?;
     }
     cursors::pin_to_end(tx, &s.id, &crewd_store::channels::lobby_id(&crew.id))?;
     tx.note(Change::SessionChanged {
@@ -431,6 +432,113 @@ mod tests {
         );
         assert!(matches!(
             err(&mut s, |tx| set_desired(tx, "ghost", Desired::Running)),
+            CollabError::NotFound(_)
+        ));
+    }
+
+    #[test]
+    fn registering_a_captain_pins_the_root_human_channel_like_set_captain() {
+        let mut s = store();
+        let crew = ok(&mut s, |tx| {
+            crate::crews::create(
+                tx,
+                crate::crews::NewCrew {
+                    title: "空机组".into(),
+                    working_directory: "/tmp/example".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let human = crewd_store::channels::human_id(&crew.id);
+        s.conn()
+            .execute(
+                "INSERT INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES(?1,?2,'human','','system','2026-09-01T00:00:00.000Z')",
+                [&human, &crew.id],
+            )
+            .unwrap();
+        crewd_store::messages::insert(
+            s.conn(),
+            &crewd_proto::Message {
+                id: "m-h".into(),
+                channel_id: human.clone(),
+                text: "示例消息".into(),
+                created_at: "2026-09-21T00:00:00.000Z".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let end = crewd_store::messages::max_seq(s.conn(), &human).unwrap();
+        let (c, ch) = crate::testkit::ok_at(&mut s, NOW, |tx| {
+            register(
+                tx,
+                NewSession {
+                    role: Role::Captain,
+                    ..worker(&crew.id)
+                },
+            )
+        });
+        assert_eq!(
+            crate::cursors::cursor(s.conn(), &c.id, &human).unwrap(),
+            Some(end)
+        );
+        assert!(ch.contains(&Change::ChannelChanged { channel_id: human }));
+    }
+
+    #[test]
+    fn role_of_reports_admin_and_follows_the_captain_pointer() {
+        let mut s = store();
+        let admin = ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    role: Role::Admin,
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert_eq!(role_of(s.conn(), &admin.id).unwrap(), Role::Admin);
+        assert_eq!(role_of(s.conn(), "cap-a").unwrap(), Role::Captain);
+        assert_eq!(role_of(s.conn(), "w-a1").unwrap(), Role::Worker);
+        // role 列漂移（还写着 captain 但指针不指向它）时以指针为准。
+        s.conn()
+            .execute("UPDATE sessions SET role='captain' WHERE id='w-a1'", [])
+            .unwrap();
+        assert_eq!(role_of(s.conn(), "w-a1").unwrap(), Role::Worker);
+    }
+
+    #[test]
+    fn set_profile_updates_given_fields_and_keeps_the_rest() {
+        let mut s = store();
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| {
+            set_profile(tx, "w-a1", Some("model-a".into()), Some("high".into()))
+        });
+        assert_eq!(
+            ch,
+            [Change::SessionChanged {
+                session_id: "w-a1".into()
+            }]
+        );
+        ok(&mut s, |tx| {
+            set_profile(tx, "w-a1", None, Some("low".into()))
+        });
+        let a = get(s.conn(), "w-a1").unwrap();
+        assert_eq!(
+            (a.model.as_deref(), a.effort.as_deref()),
+            (Some("model-a"), Some("low")),
+            "None = 保留旧值"
+        );
+        ok(&mut s, |tx| {
+            set_profile(tx, "w-a1", Some("model-b".into()), None)
+        });
+        let a = get(s.conn(), "w-a1").unwrap();
+        assert_eq!(
+            (a.model.as_deref(), a.effort.as_deref()),
+            (Some("model-b"), Some("low"))
+        );
+        assert_eq!(a.updated_at, crewd_store::ts_from_ms(NOW));
+        assert!(matches!(
+            err(&mut s, |tx| set_profile(tx, "ghost", None, None)),
             CollabError::NotFound(_)
         ));
     }

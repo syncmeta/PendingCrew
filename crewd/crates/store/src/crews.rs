@@ -64,6 +64,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
                 number: r.get(2)?,
                 builtin: r.get(3)?,
                 parent_ids: vec![],
+                child_ids: vec![],
                 working_directory: r.get(4)?,
                 captain_executor: r.get(5)?,
                 hidden_at: r.get(6)?,
@@ -83,8 +84,21 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
         c.parent_ids = pstmt
             .query_map([&c.id], |r| r.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
+        c.child_ids = children_of(conn, &c.id)?;
     }
     Ok(crews)
+}
+
+/// `parent` 的直系子机组，按侧栏顺序：边上的 `position`，再按建组时间、id（控制者裁定 C1）。
+/// `Crew.child_ids` 与 collab 的 `crews::children` 共用这一处。
+pub fn children_of(conn: &Connection, parent: &str) -> Result<Vec<String>> {
+    let mut st = conn.prepare(
+        "SELECT p.crew_id FROM crew_parents p JOIN crews c ON c.id=p.crew_id
+          WHERE p.parent_id=?1 ORDER BY p.position, c.created_at, c.id",
+    )?;
+    Ok(st
+        .query_map([parent], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?)
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<Option<Crew>> {

@@ -250,8 +250,10 @@ mod tests {
         let c = Crew {
             id: "c".into(),
             captain_session_id: Some("cap".into()),
+            child_ids: vec!["k1".into(), "k2".into()],
             ..Default::default()
         };
+        assert_eq!(serde_json::to_value(&c).unwrap()["childIds"][1], "k2");
         assert_eq!(serde_json::to_value(&c).unwrap()["captainSessionId"], "cap");
         assert_eq!(serde_json::to_value(&c).unwrap()["position"], 0);
     }

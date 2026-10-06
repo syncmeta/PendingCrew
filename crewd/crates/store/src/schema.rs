@@ -243,7 +243,10 @@ ALTER TABLE crews ADD COLUMN status_line TEXT;
 ALTER TABLE crews ADD COLUMN policy TEXT;
 ALTER TABLE crews ADD COLUMN captain_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;
 ALTER TABLE crews ADD COLUMN next_ext INTEGER NOT NULL DEFAULT 2;
+-- 侧栏手动序（控制者裁定 C1）。`crews.position` 只管顶层（根机组之间）的次序；子机组在某个父下的次序在边上：
+-- `crew_parents.position`（0 = 还没排，回填 / `crews::put_last` 给出 >= 1 的值）。多父机组在每个父下各有自己的次序。
 ALTER TABLE crews ADD COLUMN position INTEGER;
+ALTER TABLE crew_parents ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// 旧消息搬进各机组大厅（大厅先建，外键才成立）。sender 词表在这里归一（裁定 6）。
@@ -361,11 +364,19 @@ UPDATE crews SET captain_session_id =
   (SELECT id FROM sessions s WHERE s.crew_id=crews.id AND s.role='captain'
     ORDER BY s.updated_at DESC, s.id DESC LIMIT 1)
  WHERE captain_session_id IS NULL;
--- 侧栏手动序的初值（控制者裁定 C1）：按建组先后的全局名次。同级之间的相对顺序因此 = 建组先后；之后只有人改。
+-- 侧栏手动序的初值（控制者裁定 C1）：按建组先后的全局名次（只有顶层的相对次序有意义）。
 UPDATE crews SET position =
   (SELECT COUNT(*) FROM crews c2 WHERE c2.created_at < crews.created_at
       OR (c2.created_at = crews.created_at AND c2.id < crews.id)) + 1
  WHERE position IS NULL;
+-- 每个父下子机组的初值：按子的建组先后（再按 id）排 1..n，每个父各排各的。只填还是 0 的边：人排过的不重算（幂等）。
+UPDATE crew_parents SET position =
+  (SELECT COUNT(*) FROM crew_parents e2
+     JOIN crews c2 ON c2.id = e2.crew_id
+     JOIN crews c ON c.id = crew_parents.crew_id
+    WHERE e2.parent_id = crew_parents.parent_id
+      AND (c2.created_at < c.created_at OR (c2.created_at = c.created_at AND c2.id < c.id))) + 1
+ WHERE position = 0;
 INSERT OR IGNORE INTO read_cursors(reader,channel_id,seq,updated_at)
   SELECT s.id, s.crew_id||'/lobby',
          COALESCE((SELECT MAX(seq) FROM messages m WHERE m.channel_id=s.crew_id||'/lobby'),0),
@@ -772,5 +783,50 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
         assert_eq!(one::<i64>(&c, "SELECT COUNT(*) FROM channels"), 0);
         assert_eq!(channels::lobby_id("x"), "x/lobby");
+    }
+
+    #[test]
+    fn migration_orders_children_per_parent_by_creation_and_backfill_keeps_human_order() {
+        let c = v2_db();
+        c.execute_batch(
+            r#"
+INSERT INTO crews(id,title,number,builtin,created_at,updated_at,extra) VALUES
+  ('crew-c','后建的',3,0,'2026-09-03T00:00:00.000Z','2026-09-03T00:00:00.000Z',NULL),
+  ('crew-d','中间建的',4,0,'2026-09-02T12:00:00.000Z','2026-09-02T12:00:00.000Z',NULL);
+INSERT INTO crew_parents(crew_id,parent_id) VALUES('crew-c','crew-a'),('crew-d','crew-a'),('crew-c','crew-b');
+"#,
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        let pos = |crew: &str, parent: &str| -> i64 {
+            one(
+                &c,
+                &format!(
+                    "SELECT position FROM crew_parents WHERE crew_id='{crew}' AND parent_id='{parent}'"
+                ),
+            )
+        };
+        assert_eq!(
+            (
+                pos("crew-b", "crew-a"),
+                pos("crew-d", "crew-a"),
+                pos("crew-c", "crew-a")
+            ),
+            (1, 2, 3),
+            "每个父下按子的建组先后排"
+        );
+        assert_eq!(
+            pos("crew-c", "crew-b"),
+            1,
+            "同一个子在另一个父下有自己的次序"
+        );
+        c.execute(
+            "UPDATE crew_parents SET position=9 WHERE crew_id='crew-d' AND parent_id='crew-a'",
+            [],
+        )
+        .unwrap();
+        backfill_v3(&c).unwrap();
+        assert_eq!(pos("crew-d", "crew-a"), 9, "回填幂等：人排过的不重算");
+        assert_eq!(pos("crew-b", "crew-a"), 1);
     }
 }
