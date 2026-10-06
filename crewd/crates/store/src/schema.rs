@@ -302,6 +302,60 @@ fn check_v3_vocabulary(conn: &Connection) -> Result<()> {
     )))
 }
 
+/// 外键检查的报告：每个 (表, 父表) 一段「表 → 父表：N 条，rowid a, b, …」，每对至多列 5 个 rowid，
+/// 让人能按 rowid 找到那些行。没有不成立的外键 → None。
+fn foreign_key_violations(conn: &Connection) -> Result<Option<String>> {
+    const SHOWN: usize = 5;
+    let mut st = conn.prepare(
+        r#"SELECT "table", parent, rowid FROM pragma_foreign_key_check ORDER BY 1, 2, 3"#,
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+        ))
+    })?;
+    // (表, 父表, 总条数, 前几个 rowid)
+    let mut groups: Vec<(String, String, usize, Vec<i64>)> = Vec::new();
+    for row in rows {
+        let (table, parent, rowid) = row?;
+        match groups.last_mut() {
+            Some(g) if g.0 == table && g.1 == parent => {
+                g.2 += 1;
+                if let (Some(id), true) = (rowid, g.3.len() < SHOWN) {
+                    g.3.push(id);
+                }
+            }
+            _ => groups.push((table, parent, 1, rowid.into_iter().collect())),
+        }
+    }
+    if groups.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<String> = groups
+        .into_iter()
+        .map(|(table, parent, n, ids)| {
+            let ids_text = if ids.is_empty() {
+                "无 rowid".to_string()
+            } else {
+                let listed = ids
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if n > ids.len() {
+                    format!("rowid {listed} …")
+                } else {
+                    format!("rowid {listed}")
+                }
+            };
+            format!("{table} → {parent}：{n} 条，{ids_text}")
+        })
+        .collect();
+    Ok(Some(parts.join("；")))
+}
+
 fn migrate_v3(conn: &Connection) -> Result<()> {
     check_v3_vocabulary(conn)?;
     // 重建表期间关外键（SQLite 官方的改表步骤）；事务里不能改这个 pragma，所以在事务外开关。
@@ -327,13 +381,9 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
             )?;
         }
         backfill_v3(&tx)?;
-        let broken: i64 =
-            tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
-                r.get(0)
-            })?;
-        if broken > 0 {
+        if let Some(report) = foreign_key_violations(&tx)? {
             return Err(StoreError::Invalid(format!(
-                "v3 迁移后有 {broken} 条外键不成立，已回滚（库保持 v2）"
+                "v3 迁移后外键不成立，已回滚（库保持 v2）：{report}"
             )));
         }
         tx.execute_batch("PRAGMA user_version = 3")?;
@@ -774,6 +824,63 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         .unwrap();
         migrate(&ok).unwrap();
         assert_eq!(one::<i64>(&ok, "PRAGMA user_version"), 3);
+    }
+
+    /// 外键不成立时中止的报错要让人找得到行：列出每个 (表, 父表) 及至多 5 个 rowid，库保持 v2。
+    #[test]
+    fn foreign_key_abort_lists_table_parent_pairs_and_rowids() {
+        let c = v2_db();
+        // 关外键才写得进孤儿行（合成数据）：7 条 session、1 条 todo 指向不存在的机组。
+        c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        for i in 0..7 {
+            c.execute(
+                "INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES(?1,'ghost-crew','worker','claude','2026-09-03T00:00:00.000Z')",
+                [format!("orphan-{i}")],
+            )
+            .unwrap();
+        }
+        c.execute(
+            "INSERT INTO todos(id,crew_id,ledger,number,text,status,created_at) VALUES('t-orphan','ghost-crew','agent',1,'示例','open','2026-09-03T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        let session_rowids: Vec<i64> = {
+            let mut st = c
+                .prepare("SELECT rowid FROM sessions WHERE crew_id='ghost-crew' ORDER BY rowid")
+                .unwrap();
+            st.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        let todo_rowid: i64 = one(&c, "SELECT rowid FROM todos WHERE id='t-orphan'");
+        let err = migrate(&c).unwrap_err().to_string();
+        let first5 = session_rowids[..5]
+            .iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            err.contains(&format!("sessions → crews：7 条，rowid {first5} …")),
+            "{err}"
+        );
+        assert!(
+            !err.contains(&format!("{}, {}", session_rowids[4], session_rowids[5])),
+            "每对至多列 5 个 rowid：{err}"
+        );
+        assert!(
+            err.contains(&format!("todos → crews：1 条，rowid {todo_rowid}；"))
+                || err.ends_with(&format!("todos → crews：1 条，rowid {todo_rowid}")),
+            "{err}"
+        );
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 2, "库保持 v2");
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='channels'"
+            ),
+            0
+        );
     }
 
     #[test]
