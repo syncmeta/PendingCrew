@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crewd_exec::delivery::Subject;
 use crewd_exec::driver::{Closed, SendError, SessionStatus};
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
-use crewd_exec::session::SessionEvent;
-use crewd_term::Snapshot;
+use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent};
+use crewd_term::{DecisionEvent, Snapshot};
 use crewd_wake::plan::{ChannelCtx, Listen, MsgFacts, Sender, visible_to};
 use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
@@ -620,6 +621,74 @@ pub struct StandInState {
     pub events: BTreeMap<String, mpsc::UnboundedSender<SessionEvent>>,
     pub transcripts: BTreeMap<String, PathBuf>,
     pub next_id: u64,
+    /// 驱动层的影子状态（同 M2b `session.rs` 的 tracker）：还没终局的投递号（含开场正文 `BRIEF_DELIVERY_ID`）、
+    /// 在不在干活、有没有待决策框、进程在不在。停掉 / 退出时据它补发 `abandon()` 的那串事件。
+    pub outstanding: BTreeMap<String, BTreeSet<u64>>,
+    pub working: BTreeSet<String>,
+    pub deciding: BTreeSet<String>,
+    pub running: BTreeSet<String>,
+}
+
+impl StandInState {
+    /// 推一条事件给 Core，顺带更新影子状态。`Exited` 之前先补 `abandon("进程退出")`（同 M2b `on_exit`）。
+    fn push(&mut self, session: &str, e: SessionEvent) {
+        match &e {
+            SessionEvent::Working(on) => {
+                if *on {
+                    self.working.insert(session.to_string());
+                } else {
+                    self.working.remove(session);
+                }
+            }
+            SessionEvent::Decision(DecisionEvent::Appeared(_)) => {
+                self.deciding.insert(session.to_string());
+            }
+            SessionEvent::Decision(DecisionEvent::Cleared) => {
+                self.deciding.remove(session);
+            }
+            SessionEvent::Delivery { id, outcome, .. } if outcome.is_final() => {
+                if let Some(o) = self.outstanding.get_mut(session) {
+                    o.remove(id);
+                }
+            }
+            SessionEvent::Exited(_) => {
+                if self.running.remove(session) {
+                    self.abandon(session, "进程退出");
+                }
+            }
+            _ => {}
+        }
+        if let Some(tx) = self.events.get(session) {
+            let _ = tx.send(e);
+        }
+    }
+
+    /// 同 M2b `abandon()`：每笔没终局的投递一条 `Delivery{Abandoned}`，待决策框清掉，在干活的发 `Working(false)`。
+    fn abandon(&mut self, session: &str, reason: &str) {
+        let lost = self.outstanding.remove(session).unwrap_or_default();
+        for id in lost {
+            let subject = if id == BRIEF_DELIVERY_ID {
+                Subject::Brief
+            } else {
+                Subject::Steer
+            };
+            let outcome = DeliveryOutcome::Abandoned(reason.into());
+            self.push(
+                session,
+                SessionEvent::Delivery {
+                    id,
+                    subject,
+                    outcome,
+                },
+            );
+        }
+        if self.deciding.contains(session) {
+            self.push(session, SessionEvent::Decision(DecisionEvent::Cleared));
+        }
+        if self.working.contains(session) {
+            self.push(session, SessionEvent::Working(false));
+        }
+    }
 }
 
 /// 顶替执行器：记下收到的一切；事件由测试经 [`StandIn::emit`] 推。launch 成功时自带一条 `Spawned`。
@@ -631,14 +700,18 @@ impl StandIn {
         self.0.lock().expect("测试器材锁中毒")
     }
 
+    /// 以驱动层的身份推一条事件（`Exited` 之前自动补 `abandon` 的那串事件，同真驱动）。
     pub fn emit(&self, session: &str, e: SessionEvent) {
-        let tx = self
-            .lock()
-            .events
-            .get(session)
-            .cloned()
-            .expect("先 launch 再推事件");
-        tx.send(e).expect("事件泵还在");
+        let mut st = self.lock();
+        assert!(st.events.contains_key(session), "先 launch 再推事件");
+        st.push(session, e);
+    }
+
+    /// 事件流断了、没有 `Exited`（驱动任务没了）：丢掉发送端。
+    pub fn end_stream(&self, session: &str) {
+        let mut st = self.lock();
+        st.events.remove(session);
+        st.running.remove(session);
     }
 
     pub fn sent(&self, session: &str) -> Vec<String> {
@@ -744,6 +817,12 @@ impl Executor for StandIn {
             })
             .expect("刚建的通道");
             s.events.insert(req.session_id.clone(), tx);
+            s.running.insert(req.session_id.clone());
+            let outstanding = s.outstanding.entry(req.session_id.clone()).or_default();
+            outstanding.clear();
+            if req.initial_prompt.is_some() {
+                outstanding.insert(BRIEF_DELIVERY_ID);
+            }
             drop(s);
             let handle = StandInHandle {
                 session: req.session_id,
@@ -782,6 +861,10 @@ impl ExecHandle for StandInHandle {
             .entry(self.session.clone())
             .or_default()
             .push((id, text));
+        s.outstanding
+            .entry(self.session.clone())
+            .or_default()
+            .insert(id);
         Ok(id)
     }
 
@@ -795,17 +878,19 @@ impl ExecHandle for StandInHandle {
         Ok(())
     }
 
-    /// 像真驱动层一样：叫停之后发一条 `Exited { stopped_by_user: true }`。
+    /// 像真驱动层一样（M2b `stop` + `on_exit`）：先 `abandon("session 被停掉")`（没终局的投递 → Abandoned、
+    /// 待决策框清掉、`Working(false)`），再 `Exited { stopped_by_user: true }`。
     fn stop(&self) -> Result<(), Closed> {
         let mut s = self.lock();
         s.stops.push(self.session.clone());
-        if let Some(tx) = s.events.get(&self.session) {
+        if s.running.remove(&self.session) {
+            s.abandon(&self.session, "session 被停掉");
             let info = crewd_exec::session::ExitInfo {
                 status: crewd_exec::session::ExitStatusKind::Signal(15),
                 stopped_by_user: true,
                 hit_limit: false,
             };
-            let _ = tx.send(SessionEvent::Exited(info));
+            s.push(&self.session, SessionEvent::Exited(info));
         }
         Ok(())
     }
@@ -1209,6 +1294,93 @@ mod self_tests {
         );
         let ctx = p.channel_ctx("c1/human", Ms(0)).await.unwrap().unwrap();
         assert_eq!(ctx.session_members, [cap.id.clone(), w1.id.clone()]);
+    }
+
+    fn launch_req(session: &str, initial: Option<&str>) -> LaunchRequest {
+        LaunchRequest {
+            session_id: session.into(),
+            crew_id: "c1".into(),
+            workdir: PathBuf::from("/nonexistent/wd"),
+            model: None,
+            effort: None,
+            system_prompt: None,
+            initial_prompt: initial.map(str::to_string),
+            token: "tok".into(),
+            ledger: Arc::new(MemoryLedger::default()),
+        }
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<SessionEvent>) -> Vec<SessionEvent> {
+        let mut v = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            v.push(e);
+        }
+        v
+    }
+
+    fn abandoned(id: u64, subject: Subject, reason: &str) -> SessionEvent {
+        SessionEvent::Delivery {
+            id,
+            subject,
+            outcome: DeliveryOutcome::Abandoned(reason.into()),
+        }
+    }
+
+    /// 顶替执行器照 M2b `abandon()` 的次序：停掉 / 退出时，没终局的投递（含开场正文）各一条 Abandoned、
+    /// 待决策框清掉、在干活的 `Working(false)`，最后才是 `Exited`。
+    #[tokio::test]
+    async fn stand_in_abandons_outstanding_work_before_exited_like_the_driver() {
+        let exec = StandIn::default();
+        let (h, mut rx) = exec.launch(launch_req("s1", Some("开场"))).await.unwrap();
+        let id = h.send("合成".into(), &Context::new()).unwrap();
+        exec.emit("s1", SessionEvent::Working(true));
+        exec.emit(
+            "s1",
+            SessionEvent::Decision(DecisionEvent::Appeared(crewd_term::PendingDecision {
+                prompt: "p".into(),
+                options: vec![],
+                numbered: false,
+            })),
+        );
+        drain(&mut rx);
+        h.stop().unwrap();
+        let got = drain(&mut rx);
+        let reason = "session 被停掉";
+        assert_eq!(got.len(), 5, "{got:?}");
+        assert_eq!(got[0], abandoned(BRIEF_DELIVERY_ID, Subject::Brief, reason));
+        assert_eq!(got[1], abandoned(id, Subject::Steer, reason));
+        assert_eq!(got[2], SessionEvent::Decision(DecisionEvent::Cleared));
+        assert_eq!(got[3], SessionEvent::Working(false));
+        assert!(
+            matches!(&got[4], SessionEvent::Exited(i) if i.stopped_by_user),
+            "{got:?}"
+        );
+        h.stop().unwrap();
+        assert!(drain(&mut rx).is_empty(), "停过一次就不再有事件");
+
+        let (_h, mut rx) = exec.launch(launch_req("s2", Some("开场"))).await.unwrap();
+        exec.emit(
+            "s2",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        exec.emit("s2", SessionEvent::Working(true));
+        drain(&mut rx);
+        let info = crewd_exec::session::ExitInfo {
+            status: crewd_exec::session::ExitStatusKind::Code(1),
+            stopped_by_user: false,
+            hit_limit: false,
+        };
+        exec.emit("s2", SessionEvent::Exited(info.clone()));
+        let got = drain(&mut rx);
+        assert_eq!(
+            got,
+            [SessionEvent::Working(false), SessionEvent::Exited(info)],
+            "投进去了的不再 Abandoned"
+        );
     }
 
     /// 顶替句柄与 claude 句柄同一条规矩：不收 context，给了就回错误（不 panic）。

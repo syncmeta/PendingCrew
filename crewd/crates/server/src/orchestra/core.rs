@@ -3,6 +3,12 @@
 //!
 //! 外来文字（session 名、claude 的原话、屏幕上抓来的提示 / 选项、错误原因、路径）插进群通知或唤醒附言之前
 //! 一律过 `crewd_collab::render::safe_name`（控制者裁定 C12 / C20）：压成一行、去掉双向 / 零宽字符、换掉帧括号。
+//!
+//! **绑定规则（退出时的 inflight 批）**：驱动层停掉 / 退出时先 `abandon()`——每笔没终局的投递（含开场正文
+//! `BRIEF_DELIVERY_ID`）一条 `Delivery{Abandoned}`、在干活的一条 `Working(false)`——最后才是 `Exited`。
+//! 退出时 inflight 的那批**只在 `on_exited` 里结算**（人停 → 丢弃；crewd 停 / 撞额度 → 原样退回；自己死了 →
+//! 一次失败，C2）。投递路径（Task 8 的 `on_delivery`）收到 `Abandoned` 一律不结算 inflight、留给 `on_exited`：
+//! 判据就是 [`delivery_settles_inflight`]，别另写一份。
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +17,7 @@ use std::time::Duration;
 use crewd_collab::render::safe_name;
 use crewd_exec::driver::SendError;
 use crewd_exec::health::{Health, HealthKind};
-use crewd_exec::session::{BRIEF_DELIVERY_ID, ExitInfo, SessionEvent};
+use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, SessionEvent};
 use crewd_term::{DecisionEvent, PendingDecision};
 use crewd_wake::breaker::SYSTEM;
 use crewd_wake::notice::{
@@ -28,6 +34,13 @@ use super::clock::Clock;
 use super::exec::{Context, ExecHandle, ExecSendError, Executor, Executors, LaunchRequest};
 use super::hooks::Hooks;
 use super::port::*;
+
+/// 这次投递回执能不能结算 inflight 的那批：只有终局、且不是 `Abandoned`（那是驱动层停掉 / 退出时的 abandon，
+/// 该批由 `on_exited` 按三种情况结算，见模块文档的绑定规则）。
+#[allow(dead_code)] // Task 8 的 `on_delivery` 调它。
+pub(crate) fn delivery_settles_inflight(outcome: &DeliveryOutcome) -> bool {
+    outcome.is_final() && !matches!(outcome, DeliveryOutcome::Abandoned(_))
+}
 
 pub enum Input {
     Exec {
@@ -185,6 +198,8 @@ pub struct Live {
     pub inflight: Option<Inflight>,
     /// 人从客户端叫停的（不是停机）。
     pub stopping: bool,
+    /// crewd 自己叫停的（停机等，[`Core::halt`]）：不改 desired / was_working，带着的唤醒原样退回。
+    pub halting: bool,
 }
 
 pub struct Starting {
@@ -578,6 +593,16 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
+    /// crewd 自己叫停一个在跑的 session（停机用，Task 9）：不改 desired，也不让驱动层 abandon 发来的
+    /// `Working(false)` 抹掉 `was_working`——下次启动问人时要知道它是被打断的。带着的唤醒退出时原样退回 pending。
+    #[allow(dead_code)] // Task 9 的停机调它。
+    pub(crate) fn halt(&mut self, session: &str) {
+        if let Some(l) = self.live.get_mut(session) {
+            l.halting = true;
+            let _ = l.handle.stop();
+        }
+    }
+
     /// nudge（`crewd_wake::notice::nudge_plan` 的契约）：空的拒绝（绝不变成一个裸回车）；键 / 数字逐个单独 `raw`、
     /// 之间隔 `NUDGE_KEY_GAP_MS`（在派生任务里等，不堵 actor；写完才回执）；文本走 `send`（三拍提交）。
     /// 待决策框的选项没有编号时拒绝数字：发了也只是把回车落在当前高亮项上。
@@ -760,6 +785,7 @@ impl<P: Port> Core<P> {
                         decision: None,
                         inflight,
                         stopping: st.stop_requested,
+                        halting: false,
                     },
                 );
             }
@@ -906,7 +932,8 @@ impl<P: Port> Core<P> {
             SessionEvent::Working(on) => {
                 l.working = on;
                 let mut patch = SessionPatch {
-                    was_working: Some(on),
+                    // crewd 叫停时驱动层 abandon 发的 Working(false) 不落库：was_working 留着「被打断」。
+                    was_working: (on || !l.halting).then_some(on),
                     last_active_at: Some(now),
                     ..Default::default()
                 };
@@ -988,8 +1015,9 @@ impl<P: Port> Core<P> {
                 .unwrap_or_default();
             self.launch_failed(&row, &detail).await?;
         }
-        // 还没投进去的唤醒：人停的 → 跟 pending 的一样丢掉（裁定 10）；crewd 自己叫停的（停机）→ 原样退回 pending
-        // （裁定 17 至少一次）；进程自己没了 → 一次失败的投递，退避、有限次后放弃（控制者裁定 C2）。
+        // 还没投进去的唤醒（绑定规则：只在这里结算，见模块文档）：人停的 → 跟 pending 的一样丢掉（裁定 10）；
+        // crewd 自己叫停的（停机）或撞额度退出 → 原样退回 pending（裁定 17 至少一次；额度唤醒另挂）；
+        // 进程自己没了 → 一次失败的投递，退避、有限次后放弃（控制者裁定 C2）。
         if let Some(inf) = l.inflight
             && !inf.wakes.is_empty()
         {
@@ -998,7 +1026,7 @@ impl<P: Port> Core<P> {
                     error: "stopped".into(),
                 };
                 self.port.settle(&ids(&inf.wakes), s, now).await?;
-            } else if info.stopped_by_user {
+            } else if l.halting || info.stopped_by_user || info.hit_limit {
                 self.port
                     .settle(&ids(&inf.wakes), Settle::Requeue, now)
                     .await?;
@@ -1755,23 +1783,30 @@ mod tests {
         assert_eq!(rig.exec.lock().stops, ["cap"]);
     }
 
-    /// 起会话时带着唤醒（inflight），人在它投进去之前就停掉了：那些唤醒跟 pending 的一样丢掉（裁定 10），
-    /// 不能退回 pending——否则「腾出位置」那一拍就把它重新拉起来。
-    #[tokio::test]
-    async fn stopping_before_delivery_drops_the_inflight_wakes_too() {
-        let mut rig = Rig::new().await;
-        rig.crew("c1", "cap");
-        rig.worker("c1", "w1");
-        rig.port.enqueue(timer_wake("w1", "t1")).await.unwrap();
-        let wakes = rig.port.pending("w1").await.unwrap();
+    /// 带着一条定时唤醒把 `session` 拉起（唤醒记 inflight，开场正文 = 它），并让它开始干活。
+    async fn launch_with_a_wake(rig: &mut Rig, session: &str) {
+        rig.port.enqueue(timer_wake(session, "t1")).await.unwrap();
+        let wakes = rig.port.pending(session).await.unwrap();
         let exec = rig.core.execs.get("claude").unwrap();
-        let row = rig.port.row("w1");
+        let row = rig.port.row(session);
         rig.core
             .launch(row, exec, Some("合成定时".into()), wakes, vec![])
             .await
             .unwrap();
         rig.settle().await;
-        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Inflight);
+        assert_eq!(rig.port.wakes_of(session)[0].state, WakeState::Inflight);
+        rig.emit(session, SessionEvent::Working(true)).await;
+        assert!(rig.port.row(session).was_working);
+    }
+
+    /// 起会话时带着唤醒（inflight），人在它投进去之前就停掉了：那些唤醒跟 pending 的一样丢掉（裁定 10），
+    /// 不能退回 pending——否则「腾出位置」那一拍就把它重新拉起来。驱动层的次序是 Abandoned → Working(false) → Exited。
+    #[tokio::test]
+    async fn stopping_before_delivery_drops_the_inflight_wakes_too() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        launch_with_a_wake(&mut rig, "w1").await;
         rig.cmd(|reply| Cmd::Stop {
             session: "w1".into(),
             reply,
@@ -1781,32 +1816,58 @@ mod tests {
         assert!(rig.live("w1").is_none());
         let w = &rig.port.wakes_of("w1")[0];
         assert_eq!((w.state, w.attempts), (WakeState::Dropped, 0));
+        assert!(!rig.port.row("w1").was_working, "人停的：不算被打断");
+        assert!(rig.port.posts().is_empty());
     }
 
-    /// crewd 自己叫停的（停机等，不是人停的）：没投进去的唤醒退回 pending、次数不变（裁定 17：至少一次）。
+    /// crewd 自己叫停的（停机等，不是人停的）：没投进去的唤醒退回 pending、次数不变（裁定 17：至少一次）；
+    /// 驱动层 abandon 发的 `Working(false)` 不能抹掉 `was_working`——下次启动问人时要知道它是被打断的。
     #[tokio::test]
-    async fn a_stop_crewd_asked_for_requeues_the_inflight_wakes_unchanged() {
+    async fn a_stop_crewd_asked_for_requeues_the_inflight_wakes_and_keeps_was_working() {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         rig.worker("c1", "w1");
-        rig.port.enqueue(timer_wake("w1", "t1")).await.unwrap();
-        let wakes = rig.port.pending("w1").await.unwrap();
-        let exec = rig.core.execs.get("claude").unwrap();
-        let row = rig.port.row("w1");
-        rig.core
-            .launch(row, exec, Some("合成定时".into()), wakes, vec![])
-            .await
-            .unwrap();
+        launch_with_a_wake(&mut rig, "w1").await;
+        rig.core.halt("w1");
         rig.settle().await;
-        let info = ExitInfo {
-            status: ExitStatusKind::Signal(15),
-            stopped_by_user: true,
-            hit_limit: false,
-        };
-        rig.emit("w1", SessionEvent::Exited(info)).await;
+        assert!(rig.live("w1").is_none());
+        assert_eq!(rig.exec.lock().stops, ["w1"]);
         let w = &rig.port.wakes_of("w1")[0];
         assert_eq!((w.state, w.attempts), (WakeState::Pending, 0));
+        let row = rig.port.row("w1");
+        assert!(row.was_working, "被 crewd 打断的仍记着在干活");
+        assert_eq!(row.desired, Desired::Running, "crewd 停的不改 desired");
         assert!(rig.port.posts().is_empty());
+    }
+
+    /// 撞额度退出不是「投递失败」：带着的唤醒原样退回 pending（额度唤醒另挂），不吃重试次数。
+    #[tokio::test]
+    async fn a_death_by_usage_limit_requeues_the_inflight_wakes() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        launch_with_a_wake(&mut rig, "w1").await;
+        rig.emit("w1", exited(true)).await;
+        let w = rig.port.wakes_of("w1");
+        assert_eq!((w[0].state, w[0].attempts), (WakeState::Pending, 0));
+        assert!(
+            w[1].source.starts_with(policy::QUOTA_SOURCE_PREFIX),
+            "{w:?}"
+        );
+    }
+
+    /// 绑定规则：退出时 inflight 的批只在 `on_exited` 里结算；驱动层 abandon 发来的 Abandoned 投递不结算它。
+    #[test]
+    fn abandoned_deliveries_never_settle_an_inflight_batch() {
+        use crewd_exec::session::DeliveryOutcome as O;
+        assert!(delivery_settles_inflight(&O::Delivered));
+        assert!(delivery_settles_inflight(&O::Undelivered("x".into())));
+        assert!(delivery_settles_inflight(&O::Unsubmitted("x".into())));
+        assert!(!delivery_settles_inflight(&O::Abandoned("进程退出".into())));
+        assert!(
+            !delivery_settles_inflight(&O::Blocked("x".into())),
+            "非终局"
+        );
     }
 
     /// 把 `session` 到期的唤醒带着拉起、让它按 `die` 死掉，一直重复到没有到期的唤醒为止（每轮先等过最长的退避）。
