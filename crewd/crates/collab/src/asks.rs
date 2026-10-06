@@ -276,9 +276,10 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
         Sender::System => return Err(CollabError::Forbidden("系统不撤回问".into())),
     };
     with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))?;
+    // 规范写法（"H1"），不是调用方原样给的（"h1"）：客户端按它对号（终审 M3）。
     tx.note(Change::AskChanged {
         crew_id: crew.into(),
-        ask: ask.into(),
+        ask: h.to_string(),
     });
     get(tx.conn(), crew, ask)
 }
@@ -785,5 +786,24 @@ mod tests {
         let (_, ch) = ok_at(&mut s, NOW + MIN, |tx| answer(tx, "crew-a", &a.ask, "回滚"));
         assert_eq!(count(&s, "SELECT COUNT(*) FROM wakes"), 0);
         assert!(!ch.iter().any(|c| matches!(c, Change::WakeEnqueued { .. })));
+    }
+
+    /// 终审 M3：撤回时事件里的 H 号是规范写法（"H1"），不是调用方原样给的（"h1"）——客户端按它对号。
+    #[test]
+    fn withdraw_reports_the_canonical_h_number() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| open(tx, "w-a1", q("还要吗？")));
+        assert_eq!(a.ask, "H1");
+        let (_, ch) = crate::testkit::ok_at(&mut s, NOW, |tx| {
+            withdraw(tx, &Sender::Human, "crew-a", "h1", "不需要了")
+        });
+        let asks: Vec<&str> = ch
+            .iter()
+            .filter_map(|c| match c {
+                Change::AskChanged { ask, .. } => Some(ask.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asks, ["H1"], "{ch:?}");
     }
 }
