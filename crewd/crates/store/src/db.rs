@@ -1,29 +1,52 @@
 //! 专用线程上的数据库 actor（spec §22.2；§14 / §18 遗留：RPC 不在 tokio 线程上同步调 SQLite）。
 //! 一条名为 `crewd-db` 的线程独占 `Store`；`call` 按提交顺序串行执行闭包。
 use crate::{Result, Store, StoreError};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
 
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
 
-/// 可克隆的句柄。所有句柄都 drop 之后线程退出、库关闭。
+enum Msg {
+    Job(Job),
+    /// 在它之前入队的任务跑完后线程退出（接收端随之关闭，之后的 `call` 得 `DbClosed`）。
+    Stop,
+}
+
+/// 可克隆的句柄。所有句柄都 drop 之后线程退出、库关闭；也可显式 `shutdown`。
 #[derive(Clone)]
 pub struct Db {
-    tx: mpsc::Sender<Job>,
+    tx: mpsc::Sender<Msg>,
+    /// 线程句柄由所有克隆共享；`shutdown` 取走它来 join。
+    thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl Db {
     /// 把 `store` 交给库线程；之后只能经 `call` 用它。
     pub fn spawn(store: Store) -> std::io::Result<Db> {
-        let (tx, rx) = mpsc::channel::<Job>();
-        std::thread::Builder::new()
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let handle = std::thread::Builder::new()
             .name("crewd-db".into())
             .spawn(move || {
                 let mut store = store;
-                while let Ok(job) = rx.recv() {
+                while let Ok(Msg::Job(job)) = rx.recv() {
                     job(&mut store);
                 }
             })?;
-        Ok(Db { tx })
+        Ok(Db {
+            tx,
+            thread: Arc::new(Mutex::new(Some(handle))),
+        })
+    }
+
+    /// 关库：已入队的任务先跑完，然后线程退出并被 join（库连接随之关闭）。其它克隆此后的 `call` 得
+    /// `DbClosed`。**阻塞**调用线程直到库线程退出：在 async 里用 `spawn_blocking` 包一层；
+    /// 不要在库线程自己的任务里调（会等自己）。重复调用（任一克隆）无害。
+    pub fn shutdown(self) {
+        let _ = self.tx.send(Msg::Stop);
+        let handle = self.thread.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(h) = handle {
+            let _ = h.join();
+        }
     }
 
     /// 在库线程上跑 `f`（与其它调用串行）。`call` 是惰性的：任务在返回的 future
@@ -38,7 +61,9 @@ impl Db {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(s)));
             let _ = done.send(r.map_err(|_| StoreError::DbJobPanicked));
         });
-        self.tx.send(job).map_err(|_| StoreError::DbClosed)?;
+        self.tx
+            .send(Msg::Job(job))
+            .map_err(|_| StoreError::DbClosed)?;
         wait.await.map_err(|_| StoreError::DbClosed)?
     }
 }
@@ -79,6 +104,42 @@ mod tests {
         })
         .await;
         out.into_iter().map(|v| v.unwrap()).collect()
+    }
+
+    #[tokio::test]
+    async fn shutdown_lets_queued_jobs_finish_then_joins_the_thread() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let db = db();
+        let clone = db.clone();
+        let (a, b) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let (a2, b2) = (a.clone(), b.clone());
+        // 直接入队两个任务（第一个慢），再 shutdown：返回时两个都必须已跑完。
+        db.tx
+            .send(Msg::Job(Box::new(move |_| {
+                std::thread::sleep(Duration::from_millis(150));
+                a2.store(true, Ordering::SeqCst);
+            })))
+            .unwrap();
+        db.tx
+            .send(Msg::Job(Box::new(move |_| {
+                b2.store(true, Ordering::SeqCst)
+            })))
+            .unwrap();
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        assert!(a.load(Ordering::SeqCst) && b.load(Ordering::SeqCst));
+        // 其它克隆此后调用 = 库已关。
+        let r: Result<()> = clone.call(|_| ()).await;
+        assert!(matches!(r, Err(StoreError::DbClosed)), "{r:?}");
+        // 再 shutdown 一次（克隆上）也不挂、不 panic。
+        tokio::task::spawn_blocking(move || clone.shutdown())
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
