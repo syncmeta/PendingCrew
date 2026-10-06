@@ -63,7 +63,8 @@ impl Fixture {
         v["id"].as_str().unwrap().to_string()
     }
 
-    /// 固定 id 的 session。与 `sessions::register` 同样的效果（行、机长指针、大厅游标钉在末尾），
+    /// 固定 id 的 session。**这样加的 session 没有分机号**（`ext` 空，通讯录里没有它的号，机长除外）；
+    /// 测试要用号时改用 `Fixture::register`。与 `sessions::register` 同样的效果（行、机长指针、大厅游标钉在末尾），
     /// 只是 id 由调用方定、没有分机号：测试在登记**之后**发的消息才是它的未读，与生产一致。
     pub async fn add_session(&self, crew: &str, id: &str, role: Role, label: &str) {
         let row = crewd_proto::Session {
