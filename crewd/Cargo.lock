@@ -265,6 +265,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewd-jev"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "crewd-legacy"
 version = "0.1.0"
 dependencies = [
