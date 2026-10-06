@@ -1,4 +1,5 @@
-//! 人类消息叫醒谁（spec §7.2、§17）：群里每个成员一道 noul（题号 = 成员 key，题号不发给模型）。
+//! 人类消息叫醒谁（spec §7.2、§17）：群里每个成员一道 noul（题号 = 成员 key）。
+//! 题号是请求体 `questions` 的键，**会随请求发出**——成员 key 和选项名一样对外可见，只能是不含信息的 slug。
 //! 叫醒集合 = p ≥ wake_yes 的成员；空集 → 交机长。调用方只能传**这个群的成员**（§17：只在群成员里选）。
 use super::{
     Built, DecisionKind, DeferReason, MAX_RECENT, MAX_SUMMARY_CHARS, MAX_WAKE_MEMBERS, Member,
