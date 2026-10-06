@@ -294,7 +294,7 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 
 （编号说明：计划写成时本节叫 §17；§17 后来被「机组内多群」占用，§19 / §20 是别的分支的 M4a / M5a 记录。计划正文与代码注释里的「spec §17」一律读作 §18。）
 
-已交付：`crewd/crates/exec`（crewd-exec）——找 claude（登录 shell PATH + 哨兵 + 5s 超时、childProcessPath、白名单环境）、argv 与 0600 启动文件（首条 prompt 绝不进 argv）、hooks / MCP 命令行指向可配置 helper（`HelperCommands` 一处拼；hooks 可关，等 M3 的 `crewd hook`）、手写 PTY（rustix-openpty + tokio `AsyncFd`，setsid / TIOCSCTTY / env_clear）、sans-IO 会话核心 `session::Core`（投递状态机、健康、待决策、退出，时间注入）、驱动任务与窄接口 `driver::SessionHandle` + `SessionEvent`（含 `StartError::AlreadyRunning`：同一个 claude 会话号不能在本进程里同时起两个）、孤儿登记与启动时刻核对的回收（macOS / Linux；身份含开机标识 `boot_id`，核对启动时刻 + 进程组 + boot_id）、会话号账本 trait + `crewd_server::ledger::StoreLedger`（会话号入库前校验字符集与长度）、续跑被拒换新号重起一次。`crewd claude` 子命令（前台起一个会话，事件打到 stdout；`--session` 走库里的账本、重跑自动 `--resume`，不给走内存账本）；`crewd serve` 与 `crewd claude` 拿到数据目录锁后都先回收孤儿（`crewd_server::reap_orphans`），结果逐条打到 stderr，且如实：杀成功 / 已不在 / pid 被复用没动 / 读不到身份没动 / 判定该回收但被拒绝（pgid ≤ 1 或是自己所在的组）/ 发信号失败——后四种登记仍留在 `exec-registry.json` 里，并补一行「有 N 条没能处理」，不会被「回收完成」盖住。schema v2：`sessions.agent_kind` → `executor`、`crews.captain_agent_kind` → `captain_executor`（词表都是 `claude` / `codex` / `acp:<registry-id>`，旧数据的 `terminal` / `unknown` 原样）；线上 JSON、契约文件、导入器同步。验收：假 claude（真 PTY）上的端到端——慢首屏、粘贴折叠、排队、粘贴陷阱、永不回显、真录制信任框回放后代答补投、限流菜单自动应答、额度用尽退出、子进程不读输入、70KB 开场任务；shell 脚本顶替 claude 的驱动层测试——落账、续跑、被拒重起、停止升级 killpg、拉起失败、登记表、认证探测、账本失败不起进程；`crewd claude` 两次运行之间经库续跑（`tests/claude_cli.rs`）。手动用假 claude 从命令行驱动过一遍（stdin 投第二条指令、`--screen` 在 stderr 看到 `GOT: 第二条指令`、SIGINT 后 `Exited(… stopped_by_user: true …)`）；这一遍抓到一个只有交互终端才会撞上的毛病：`crewd claude` 的 stdin 读取占着 tokio 阻塞线程，Ctrl-C 之后 runtime 收尾会等到用户再按一次回车——`main` 在 `run()` 成功后直接 `exit(0)`（锁与登记表都已在 `run()` 里清完）。
+已交付：`crewd/crates/exec`（crewd-exec）——找 claude（登录 shell PATH + 哨兵 + 5s 超时、childProcessPath、白名单环境）、argv 与 0600 启动文件（首条 prompt 绝不进 argv）、hooks / MCP 命令行指向可配置 helper（`HelperCommands` 一处拼；hooks 可关，等 M3 的 `crewd hook`）、手写 PTY（rustix-openpty + tokio `AsyncFd`，setsid / TIOCSCTTY / env_clear）、sans-IO 会话核心 `session::Core`（投递状态机、健康、待决策、退出，时间注入）、驱动任务与窄接口 `driver::SessionHandle` + `SessionEvent`（含 `StartError::AlreadyRunning`：同一个 claude 会话号不能在本进程里同时起两个）、孤儿登记与启动时刻核对的回收（macOS / Linux；身份含开机标识 `boot_id`，核对启动时刻 + 进程组 + boot_id）、会话号账本 trait + `crewd_server::ledger::StoreLedger`（会话号入库前校验字符集与长度）、续跑被拒换新号重起一次。`crewd claude` 子命令（前台起一个会话，事件打到 stdout；`--session` 走库里的账本、重跑自动 `--resume`，不给走内存账本；开场任务只经 `--prompt-file PATH`（`-` = 从 stdin 读到 EOF）给，不收命令行上的正文——`ps` 对本机所有进程可见）；`crewd serve` 与 `crewd claude` 拿到数据目录锁后都先回收孤儿（`crewd_server::reap_orphans`），结果逐条打到 stderr，且如实：杀成功 / 已不在 / pid 被复用没动（登记作废、删掉）/ 读不到身份没动 / 判定该回收但被拒绝（pgid ≤ 1 或是自己所在的组）/ 发信号失败——后三种登记仍留在 `exec-registry.json` 里，并补一行「有 N 条没能处理」，不会被「回收完成」盖住。schema v2：`sessions.agent_kind` → `executor`、`crews.captain_agent_kind` → `captain_executor`（词表都是 `claude` / `codex` / `acp:<registry-id>`，旧数据的 `terminal` / `unknown` 原样）；线上 JSON、契约文件、导入器同步。验收：假 claude（真 PTY）上的端到端——慢首屏、粘贴折叠、排队、粘贴陷阱、永不回显、真录制信任框回放后代答补投、限流菜单自动应答、额度用尽退出、子进程不读输入、70KB 开场任务；shell 脚本顶替 claude 的驱动层测试——落账、续跑、被拒重起、停止升级 killpg、拉起失败、登记表、认证探测、账本失败不起进程；`crewd claude` 两次运行之间经库续跑（`tests/claude_cli.rs`）。手动用假 claude 从命令行驱动过一遍（stdin 投第二条指令、`--screen` 在 stderr 看到 `GOT: 第二条指令`、SIGINT 后 `Exited(… stopped_by_user: true …)`）；这一遍抓到一个只有交互终端才会撞上的毛病：`crewd claude` 的 stdin 读取占着 tokio 阻塞线程，Ctrl-C 之后 runtime 收尾会等到用户再按一次回车。最初的修法是 `main` 在 `run()` 成功后直接 `exit(0)`（对所有子命令生效）；终评修正里换成在一条普通线程上读 stdin、经通道交给会话循环，`main` 正常返回退出码（`tests/claude_cli.rs` 钉住「会话结束、stdin 一直开着也马上退出」）。
 
 与 Swift / 本 spec 原文不同的决定（理由见计划「裁定」）：
 - PTY 手写，不用 portable-pty（§3.3 原写法，已改）也不用 `alacritty_terminal::tty`（继承父环境且加 `ALACRITTY_WINDOW_ID`、cwd 失败静默、Drop 里阻塞 wait）。
@@ -322,19 +322,20 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 - 时序抖动：`env::tests::background_job_holding_stdout_does_not_delay_or_survive` 断言墙钟 < 1s，在 `check.sh` 并行满载时偶发失败（早先那次「87/88」不明原因的红就是它）；上限放宽到 3s。修后 `check.sh` 连跑 5 次全绿。
 
 真机核对（§15 遗留的 DA1 一条）：
-- 已跑（人 2026-10-06 点头，只跑这一条被忽略的测试）：claude 2.1.291，`CREWD_LIVE_CLAUDE=1 CREWD_LIVE_CLAUDE_WORKDIR=<$HOME 下 mktemp 的空目录> cargo test -p crewd-exec --test live_claude -- --ignored --nocapture --exact real_claude_starts_up_to_the_input_box`，**通过**（3.03s）。约 1.5s 后画出输入框 `❯ Try "how do I log an error?"`；**没有**弹信任框——工作目录特意放在 `$HOME` 下的临时空目录（`$HOME` 已被信任，claude 继承上级目录的信任），**没有用计划默认的仓库根目录**；放在 `/tmp` 下没有受信任的祖先目录，会弹信任框让测试失败、看不出输入框能不能画出来。alacritty 的 DA1 / OSC 11 回答被真 claude 接受（首屏完整画出、没有转义残留；从外面看不到 claude 发了哪几条查询，没有逐条日志）。停止时 claude 自己在 2s 宽限内退出（`Code(143)`，`stopped_by_user: true`）。没发过任何 prompt。副作用：claude 在 `~/.claude.json` 里给那个临时路径加了一条它自己的 project 记录，未改。
+- 已跑（人 2026-10-06 点头，只跑这一条被忽略的测试）：claude 2.1.291，`CREWD_LIVE_CLAUDE=1 CREWD_LIVE_CLAUDE_WORKDIR=<$HOME 下 mktemp 的空目录> cargo test -p crewd-exec --test live_claude -- --ignored --nocapture --exact real_claude_starts_up_to_the_input_box`，**通过**（3.03s）。约 1.5s 后画出输入框 `❯ Try "how do I log an error?"`；**没有**弹信任框——工作目录特意放在 `$HOME` 下的临时空目录（`$HOME` 已被信任，claude 继承上级目录的信任），**没有用计划默认的仓库根目录**；放在 `/tmp` 下没有受信任的祖先目录，会弹信任框让测试失败、看不出输入框能不能画出来。终评修正把测试的缺省工作目录改成了 `$HOME` 下现建、跑完即删的临时目录（`CREWD_LIVE_CLAUDE_WORKDIR` 仍可覆盖，弹信任框时的报错会提示把它设成已信任的目录）；带 `--ignored` 却没设 `CREWD_LIVE_CLAUDE=1` 改为直接失败并说明原因；停止后等 `Exited` 加了 10s 上限。改后没有再跑真 claude。alacritty 的 DA1 / OSC 11 回答被真 claude 接受（首屏完整画出、没有转义残留；从外面看不到 claude 发了哪几条查询，没有逐条日志）。停止时 claude 自己在 2s 宽限内退出（`Code(143)`，`stopped_by_user: true`）。没发过任何 prompt。副作用：claude 在 `~/.claude.json` 里给那个临时路径加了一条它自己的 project 记录，未改。
 - 实测给计划里测试的改动：循环里不再 `assert!`（真 claude 运行时 panic 会让 runtime 在没回收子进程的情况下 drop，留下孤儿），改为跳出并带原因、先停 claude 等 `Exited` 再 panic。
 
 遗留：
 - 提交三拍与正文验证窗口都从「排进写任务」起算，不是「真正写进 PTY」：子进程长时间不读输入时，空格 / 退格 / 回车可能挤进同一次 read 被当成粘贴，超长正文也可能在窗口内没写完而被 Ctrl-U 重投。假 claude 上 70KB 开场任务没出过事；真遇到了就让写任务回报「写完了」再排下一拍。
 - 只在启动时回收孤儿；登记表交给会话管理、serve 拉起会话是 M3。`crewd claude` 拿数据目录锁，不能与 serve 同时跑。
 - 登记表一个 session_id 一个槽位：同号再登记会覆盖留下的（被拒 / 杀失败 / 读不到身份的）孤儿条目；M3 把登记表交给会话管理时要处理。
+- 同一个 crewd session id 并发起两次没有挡：`StartError::AlreadyRunning` 只按 claude 会话号挡（同一个 `--resume` 号起不了两份），而账本里还没记号时两次启动会各自生成新号、后落账的覆盖先落账的，登记表的同一个槽位也互相覆盖。M3 的会话管理负责「一个 session 同时只有一个进程」。
 - server 的 RPC 仍在 tokio 线程上同步调 SQLite（§14 遗留）；M2b 的账本另开连接、在 `spawn_blocking` 里跑，没加重它。M3 把会话放进 serve 之前处理。
 - 续跑被拒只做了判定；Swift 那套诊断文案（日志在不在盘上）与「新开一轮」的群通知归 M3。
 - `/model` 中途切换（`SessionProfileSwitch`）、启动参数回显扫描、awaitingReply 归 M3。
 - `sessions::upsert` 传 `agent_session_id = None` 会抹掉库里已记的会话号——M3 写 session 行时必须保留它。
 - `TIOCSCTTY` 与「退出后读干净」只在 Linux 上有可观测差别，macOS 上的测试证明不了它们（计划 Task 3 / Task 10 有说明）。
-- Linux：`cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` 通过（人 2026-10-06 点头，工具链 1.94.0 已装该 target；只编译，没在 Linux 上跑测试；覆盖 `#[cfg(not(target_os = "macos"))]` 的 `/proc` 读法与 Linux 才编译的驱动层测试）。
+- Linux：`cargo clippy -p crewd-exec --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` 通过（人 2026-10-06 点头，工具链 1.94.0 已装该 target；只编译，没在 Linux 上跑测试；覆盖 `#[cfg(not(target_os = "macos"))]` 的 `/proc` 读法与 Linux 才编译的驱动层测试）。终评修正之后重跑，仍通过。
 
 已知小问题（评审时记下、未修；每条一行，按模块分组。标「终评优先」的建议在整支分支的终评里先处理）：
 
@@ -348,15 +349,13 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 - 文档里指向 `crate::delivery` 的链接在当时悬空。
 
 PTY（Task 3）：
-- 终评优先：`spawn_pty` 在 `fionbio` / `AsyncFd` 设置失败时子进程已起、没人管——应把这些设置挪到 spawn 之前。
+- ~~终评优先：`spawn_pty` 在 `fionbio` / `AsyncFd` 设置失败时子进程已起、没人管~~（终评修正：已挪到 spawn 之前）。
 - 背压与 SIGWINCH 没有提交的测试；并行测试里有 `set_var`。
 
 投递状态机与会话核心（Task 4、6）：
-- 终评优先：输入行文本一直在变时永远稳定不下来、也不报 NotReady（静默挂住，settle 修复引入）——`readiness_deadline` 应同样约束 settle 等待。
-- Stalled 没有宽限（期限那一刻缺一帧就用掉唯一一次报告）；Stalled 的 Undelivered 文案与 `lost_tail()` 的建议矛盾（可能导致重复投）。
-- 对话框在屏与否不影响 Writing / Submitting 的放弃计时。
-- 终评优先：对话框一直没答时 Writing / Resubmit 在 90s 后终结，正文留在输入框里，下一条排队项的第一次写入不发 Ctrl-U，两段文字会拼在一起；停滞 / 上限的提示说「已发 CR」但其实没发。
-- 过期的文档注释（`is_finished`、`flush_due_keys`）。
+- ~~终评优先：输入行文本一直在变时永远稳定不下来、也不报 NotReady~~（终评修正：`readiness_deadline` 同样约束 settle 等待）。
+- Stalled 没有宽限（期限那一刻缺一帧就用掉唯一一次报告）。~~Stalled 的 Undelivered 文案与 `lost_tail()` 的建议矛盾~~（终评修正：改成「没法确认、重发前先看一眼」）。
+- ~~对话框在屏与否不影响 Writing / Submitting 的放弃计时~~、~~对话框一直没答时 90s 后终结、下一条拼在后面；提示说「已发 CR」但其实没发~~、~~过期的文档注释~~（终评修正，见下）。
 - 扫描器仍在喂但已不再起决定作用（以后删）；额度恢复后被拒的投递报告不会再次抛出；`last_now` 不被 `send` / `stop` / `on_exit` 更新。
 
 健康（Task 5）：
@@ -364,11 +363,29 @@ PTY（Task 3）：
 - 每次节拍都 stat 一遍 `projects/*`；单条超过 256KB 的记录没有测试。
 
 登记表与回收（Task 7、10）：
-- 改名后没有 fsync 父目录；落盘失败时内存表与磁盘分叉；领头进程已死时组内其余成员不会被回收。
+- 改名后没有 fsync 父目录；落盘失败时内存表与磁盘分叉；领头进程已死时组内其余成员不会被（孤儿回收）回收——驱动层自己起的会话已在退出后整组补刀（见下「终评修正」）。
 - `PidReused` 的说明只显示启动时刻。
 - 经登记表那条回收路径没有测试钉住；`REAP_LIMIT` 是常量。
-- Core 在停止期间仍会发 `ResumeRefused`（驱动层忽略）。
+- 登记表只收自成进程组的进程（pgid == pid）：回收按组杀，组号不对会杀错人。这条由调用方保证——`driver.rs` 的 `launch` 登记前探一次身份、`identity.pgid == pid` 才登记，否则当登记失败处理（杀掉刚起的进程、不起会话）；`apply_with` 本身不查 `pgid == pid`。
+
+假 claude 器材（Task 11）：
+- 限流菜单与额度用尽的文案是照着 Swift 版合成的，不是真 claude 录下来的字节。
+- `ready` / `deaf` / `noread` 模式不发终端查询（DA1 / OSC 11…），这一路只有真机冒烟和回放的录制字节覆盖。
+- `fake_claude` 是 crewd-exec 的一个 bin，随这个包一起编译（`cargo install` 之类的场合会多出它）。
 
 库与账本（Task 8、9）：
 - 迁移里 serde 属性后的文档注释位置、`foreign_keys` 关闭时的迁移测试、`execute_batch BEGIN` 写法。
 - `StoreLedger` 的 `exists()` 有 TOCTOU、EACCES 被当成 NotFound（用不带 CREATE 的 `Store::open_existing` 可封住）。
+
+终评修正（整支分支终评之后，一轮修完；每条都有先红后绿的测试，除非另注）：
+- 停止：反复 `stop()`（或叫停后句柄全丢）只发一次 SIGTERM、SIGKILL 的期限不往后推（以前每次 `stop()` 都重新计时，叫停比 `stop_grace` 还勤时忽略 SIGTERM 的进程永远杀不掉）。会话首进程收尸之后整组补一刀 SIGKILL（与孤儿回收同一道闸：pgid ≤ 1 或 crewd 自己那一组不发；组空了 ESRCH 无害），首进程乖乖退出时它留下的、忽略 HUP / TERM 的子进程不再成孤儿——每次退出都补，不只叫停时。叫停之后 `Core` 不再报 `ResumeRefused`（每条 `ResumeRefused` 后面都跟一条 `Spawned`，只有换新号重起失败时例外：那时跟的是 LaunchFailed 与 `Exited`）。
+- 投递：写入 / 提交 / 等重发阶段屏上摆着要人回答的对话框时，放弃计时停走（框答掉后本轮窗口与 stall 上限重新给满）——人没答就不终结，正文不会留在输入框里；一笔以非「已投递」的终局收场、而正文写进过输入框，下一笔的第一次写入先发 Ctrl-U；终局与 stall 的文案按「回车实际发出几次 / 几次在按下前被撤回」说实话；输入框一直不回来的终局不再说「一个字都没收到」（改成没法确认、重发前先看一眼，免得投两遍）；输入行文本一直在变也受 `readiness_deadline` 约束、报一次 NotReady；拉起报过「卡住」（LaunchFailed / Stalled）后终于有输出就撤掉那条 health。
+- 窄接口：`SessionHandle::send` 对空 / 全空白的正文返回 `SendError::EmptyText`（不占投递编号；以前给一个永远等不到结果的编号）。
+- 续跑被拒时没投出去的开场任务搬到新进程：以前没有测试钉住——假 claude 加 `refuse` 模式（带 `--resume` 起时打印 claude 的原话后 exit 1），端到端测开场任务只提交一次、投给新号、不报 Abandoned；把 `respawn` 里的 `take_pending()` 换成空表这条测试会红（变异验证过）。
+- 环境：`CLAUDE_CONFIG_DIR` 设了就透传（claude 按它放会话日志，认证探测按 crewd 自己的环境找——两边要一致）。
+- 登记表坏了（解析失败）的报错说清怎么办（把文件挪开再启动）与为什么拒绝启动（不冒险按读不懂的表杀进程）。
+- PTY：主端的非阻塞与 reactor 注册挪到起子进程之前（测试：在运行时之外调用，注册失败时不能有子进程跑起来过）。
+- `crewd claude`：`--prompt TEXT` 换成 `--prompt-file PATH`（`-` = stdin）；stdin 在普通线程上读、`main` 去掉全局 `exit(0)`；SIGINT 的信号流在循环外建一次（以前每轮新建 `ctrl_c()`，两轮之间来的 Ctrl-C 会丢——这条没有确定性的测试，靠结构保证）。
+- 真机冒烟测试的缺省目录、闸与退出等待（见上「真机核对」）；假 claude 限流用例的轮询窗口 2s → 10s（满载时更稳）。
+- 过期的文档注释（`Delivery::is_finished` / `submit_aborted`、`Core::flush_due_keys`）。
+- 修这一轮时的一次事故：`--prompt` 被拒的那条 CLI 测试第一版没带 `--claude <假的>`，在修之前的代码上跑时 crewd 接受了参数、去 PATH 里找到了真 claude、在临时目录（`/var/folders/…`，未被信任）里起了约 5 分钟，带着开场任务「秘密任务」等在信任框前；按 pid 给 crewd 发 SIGTERM 正常停掉。`~/.claude/projects` 里没有那个会话号的日志（正文没被提交）；claude 可能在 `~/.claude.json` 里给那个临时路径记了一条 project 记录，未动。该测试已改为一定带假 claude。
