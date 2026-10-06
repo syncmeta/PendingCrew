@@ -388,3 +388,13 @@ claude 或 codex，必须明确选。
 
 ## r.bad_args
 参数不对：{detail}
+
+## trace.worker
+「{label}」这一轮停在一个问题上，在等回复：
+{question}
+机长可以 inspect_session 看现场、nudge_session 代答；拍不了板就问人。（session：{session}）
+
+## trace.captain
+机长「{label}」这一轮停在一个问题上，在等你回复：
+{question}
+需要你打开这个 session 的终端回它一句。（session：{session}）
