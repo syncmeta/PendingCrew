@@ -76,6 +76,10 @@ pub struct WakeRow {
 }
 
 /// source 的拼法，一处定死（裁定 13）。
+///
+/// 去重键 `(session, kind, source)` 在**所有状态**里都生效（delivered / dropped 也算），直到 `prune` 清掉那一行：
+/// 所以会重复发生的唤醒（`timer`、`system`、`quota` 等）的 source 必须每次出现都唯一（带时刻 / 序号 / token）；
+/// 同一 source 再入队只会得到 `Enqueued::Duplicate`，不会升级优先级、也不会改 `not_before`。
 pub mod source {
     pub fn message(message_id: &str) -> String {
         format!("msg:{message_id}")
@@ -208,6 +212,8 @@ fn rows(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Wa
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// 入队。去重键 `(session, kind, source)` 跨所有状态（见 `source`）直到 `prune`；
+/// 命中已有行返回 `Duplicate`，**不**改它的优先级、`not_before`、`note`，也不发变更。
 pub fn enqueue(tx: &mut Tx<'_>, r: WakeRequest) -> Result<Enqueued> {
     if r.source.trim().is_empty() {
         return Err(CollabError::Invalid("唤醒的 source 不能为空".into()));
@@ -258,10 +264,13 @@ pub fn due_for(conn: &Connection, session: &str, now_ms: i64) -> Result<Vec<Wake
     )
 }
 
+/// 有已到期 pending 的 session。顺序：该 session 最高的 pending 优先级在前（human > system > auto），
+/// 同档按它最老的那条唤醒（`MIN(id)`）；不按 session id，这样有并发上限时人的唤醒不会被饿死。
 pub fn sessions_with_due(conn: &Connection, now_ms: i64) -> Result<Vec<String>> {
-    let mut st = conn.prepare(
-        "SELECT DISTINCT session_id FROM wakes WHERE state='pending' AND not_before<=?1 ORDER BY session_id",
-    )?;
+    let mut st = conn.prepare(&format!(
+        "SELECT session_id FROM wakes WHERE state='pending' AND not_before<=?1
+         GROUP BY session_id ORDER BY MAX({RANK}) DESC, MIN(id)"
+    ))?;
     Ok(st
         .query_map([now_ms], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?)
@@ -386,6 +395,8 @@ pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64) -> Result<usize> {
 }
 
 /// 启动时：上次没确认的 inflight 全部退回 pending（spec §22.4「重启时 inflight 退回 pending」）。
+/// 只在启动时调（不是运行期的重试路径，那是 `requeue` / `mark_failed`）。语义是至少一次：上次可能已经
+/// 投出去只是没来得及记，所以会再投一遍；这不算一次失败尝试，`attempts` 不变。delivered / dropped 不动。
 pub fn reset_inflight(tx: &mut Tx<'_>) -> Result<usize> {
     Ok(tx.conn().execute(
         "UPDATE wakes SET state='pending' WHERE state='inflight'",
@@ -421,7 +432,7 @@ pub fn list(conn: &Connection, session: Option<&str>, limit: u32) -> Result<Vec<
 /// 熔断台账（§22.7 Q5：「来源 → 目标」与「目标 session」两级；绝不按全机总量）。
 /// 只有人能从客户端解（M3c 的 `admission.recover`）。
 pub mod latches {
-    use crate::{Result, Tx};
+    use crate::{CollabError, Result, Tx};
     use rusqlite::{Connection, OptionalExtension, params};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -431,21 +442,31 @@ pub mod latches {
     }
 
     impl Scope {
-        fn key(&self) -> (&'static str, String) {
+        /// 台账键。空 id、或 id 里带分隔符 `→`（会让 edge 的键有歧义）一律拒。
+        fn key(&self) -> Result<(&'static str, String)> {
+            let ok = |id: &str| !id.is_empty() && !id.contains('→');
             match self {
-                Scope::Edge { from, to } => ("edge", format!("{from}→{to}")),
-                Scope::Session(s) => ("session", s.clone()),
+                Scope::Edge { from, to } if ok(from) && ok(to) => {
+                    Ok(("edge", format!("{from}→{to}")))
+                }
+                Scope::Session(s) if ok(s) => Ok(("session", s.clone())),
+                _ => Err(CollabError::Invalid(format!(
+                    "熔断台账的 id 不能为空、也不能含「→」：{self:?}"
+                ))),
             }
         }
         fn from_key(scope: &str, id: &str) -> Option<Scope> {
-            match scope {
+            let parsed = match scope {
                 "edge" => id.split_once('→').map(|(f, t)| Scope::Edge {
                     from: f.to_string(),
                     to: t.to_string(),
                 }),
                 "session" => Some(Scope::Session(id.to_string())),
                 _ => None,
-            }
+            }?;
+            // 往返一致才算认得出（空段、多个箭头都不是我们写的）。
+            let (s, k) = parsed.key().ok()?;
+            (s == scope && k == id).then_some(parsed)
         }
     }
 
@@ -457,7 +478,7 @@ pub mod latches {
     }
 
     pub fn set(tx: &mut Tx<'_>, scope: &Scope, reason: &str) -> Result<()> {
-        let (s, id) = scope.key();
+        let (s, id) = scope.key()?;
         tx.conn().execute(
             "INSERT INTO wake_latches(scope,id,reason,at) VALUES(?1,?2,?3,?4)
              ON CONFLICT(scope,id) DO UPDATE SET reason=excluded.reason, at=excluded.at",
@@ -468,7 +489,7 @@ pub mod latches {
 
     /// 返回是否真的清掉了一条。
     pub fn clear(tx: &mut Tx<'_>, scope: &Scope) -> Result<bool> {
-        let (s, id) = scope.key();
+        let (s, id) = scope.key()?;
         Ok(tx.conn().execute(
             "DELETE FROM wake_latches WHERE scope=?1 AND id=?2",
             params![s, id],
@@ -476,7 +497,7 @@ pub mod latches {
     }
 
     pub fn get(conn: &Connection, scope: &Scope) -> Result<Option<Latch>> {
-        let (s, id) = scope.key();
+        let (s, id) = scope.key()?;
         Ok(conn
             .query_row(
                 "SELECT reason, at FROM wake_latches WHERE scope=?1 AND id=?2",
@@ -505,12 +526,17 @@ pub mod latches {
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(raw
-            .into_iter()
-            .filter_map(|(s, id, reason, at)| {
-                Scope::from_key(&s, &id).map(|scope| Latch { scope, reason, at })
+        raw.into_iter()
+            .map(|(s, id, reason, at)| {
+                Scope::from_key(&s, &id)
+                    .map(|scope| Latch { scope, reason, at })
+                    .ok_or_else(|| {
+                        CollabError::Invalid(format!(
+                            "wake_latches 里有认不出的行：scope={s:?} id={id:?}"
+                        ))
+                    })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -762,5 +788,171 @@ mod tests {
             "再清一次 = 本来就没有"
         );
         assert!(latches::get(s.conn(), &edge).unwrap().is_none());
+    }
+
+    #[test]
+    fn reset_inflight_leaves_settled_rows_and_does_not_count_an_attempt() {
+        let mut s = store();
+        let mut ids = Vec::new();
+        for src in ["msg:1", "msg:2", "msg:3"] {
+            if let Enqueued::New(id) = ok(&mut s, |tx| {
+                enqueue(tx, req("w-a1", src, WakePriority::Auto))
+            }) {
+                ids.push(id);
+            }
+        }
+        ok(&mut s, |tx| mark_inflight(tx, &ids[..1]));
+        ok(&mut s, |tx| mark_failed(tx, ids[0], "没就绪", None));
+        ok(&mut s, |tx| mark_inflight(tx, &ids[..1]));
+        ok(&mut s, |tx| mark_delivered(tx, &ids[1..2]));
+        ok(&mut s, |tx| mark_dropped(tx, ids[2], "游标已越过"));
+        let before = by_ids(s.conn(), &ids).unwrap();
+        assert_eq!(ok(&mut s, reset_inflight), 1, "只动 inflight 那一条");
+        let after = by_ids(s.conn(), &ids).unwrap();
+        assert_eq!(after[0].state, WakeState::Pending);
+        assert_eq!(after[0].attempts, 1, "重启退回不算一次尝试");
+        assert_eq!(after[1], before[1], "delivered 原样");
+        assert_eq!(after[2], before[2], "dropped 原样");
+    }
+
+    #[test]
+    fn prune_keeps_rows_settled_after_the_cutoff() {
+        let mut s = store();
+        let mut ids = Vec::new();
+        for src in ["msg:a", "msg:b"] {
+            if let (Enqueued::New(id), _) = ok_at(&mut s, NOW - 10 * MIN, |tx| {
+                enqueue(tx, req("w-a1", src, WakePriority::Auto))
+            }) {
+                ids.push(id);
+            }
+        }
+        ok_at(&mut s, NOW - 9 * MIN, |tx| mark_delivered(tx, &ids[..1]));
+        ok_at(&mut s, NOW - MIN, |tx| mark_delivered(tx, &ids[1..]));
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW - 5 * MIN)), 1);
+        let left: Vec<i64> = list(s.conn(), None, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(left, [ids[1]], "截止之后才结算的不删");
+    }
+
+    #[test]
+    fn due_for_and_sessions_with_due_are_scoped_per_session_and_time() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            enqueue(tx, req("w-a1", "msg:1", WakePriority::Auto))?;
+            enqueue(tx, req("w-a2", "msg:2", WakePriority::Auto))?;
+            enqueue(
+                tx,
+                WakeRequest {
+                    not_before_ms: Some(NOW + 10 * MIN),
+                    ..req("w-b1", "timer:t", WakePriority::Human)
+                },
+            )
+        });
+        let a1: Vec<String> = due_for(s.conn(), "w-a1", NOW)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.source)
+            .collect();
+        assert_eq!(a1, ["msg:1"], "别的 session 的唤醒不混进来");
+        assert_eq!(
+            sessions_with_due(s.conn(), NOW).unwrap(),
+            ["w-a1", "w-a2"],
+            "全在未来的 session 不算到期"
+        );
+    }
+
+    #[test]
+    fn sessions_with_due_orders_by_highest_priority_then_oldest_wake() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            enqueue(tx, req("w-a1", "msg:1", WakePriority::Auto))?;
+            enqueue(tx, req("w-a2", "msg:2", WakePriority::Auto))?;
+            enqueue(tx, req("w-b1", "msg:3", WakePriority::Human))?;
+            enqueue(tx, req("cap-a", "msg:4", WakePriority::System))
+        });
+        assert_eq!(
+            sessions_with_due(s.conn(), NOW).unwrap(),
+            ["w-b1", "cap-a", "w-a1", "w-a2"],
+            "人的先、同档按最老的唤醒；不按 session id（有并发上限时不饿死人的唤醒）"
+        );
+    }
+
+    #[test]
+    fn recent_for_boundary_is_inclusive() {
+        let mut s = store();
+        ok_at(&mut s, NOW - MIN, |tx| {
+            enqueue(tx, req("w-a1", "msg:edge", WakePriority::Auto))
+        });
+        let got = recent_for(s.conn(), "w-a1", NOW - MIN).unwrap();
+        assert_eq!(got.len(), 1, "恰好等于 since 的算在内");
+        assert!(
+            recent_for(s.conn(), "w-a1", NOW - MIN + 1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn latch_rows_use_the_documented_key_and_list_reads_them_back() {
+        let mut s = store();
+        let edge = latches::Scope::Edge {
+            from: "w-a1".into(),
+            to: "w-a2".into(),
+        };
+        ok(&mut s, |tx| latches::set(tx, &edge, "原因"));
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM wake_latches WHERE scope='edge' AND id='w-a1→w-a2'"
+            ),
+            1
+        );
+        let all = latches::list(s.conn()).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].scope, edge);
+        assert_eq!(all[0].reason, "原因");
+    }
+
+    #[test]
+    fn latches_reject_ambiguous_ids_and_list_reports_corrupt_rows() {
+        let mut s = store();
+        for bad in [
+            latches::Scope::Session(String::new()),
+            latches::Scope::Session("w-a1→w-a2".into()),
+            latches::Scope::Edge {
+                from: String::new(),
+                to: "w-a2".into(),
+            },
+            latches::Scope::Edge {
+                from: "w-a1".into(),
+                to: String::new(),
+            },
+            latches::Scope::Edge {
+                from: "w-a1→x".into(),
+                to: "w-a2".into(),
+            },
+        ] {
+            assert!(
+                matches!(
+                    err(&mut s, |tx| latches::set(tx, &bad, "r")),
+                    CollabError::Invalid(_)
+                ),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM wake_latches"), 0);
+        s.conn()
+            .execute(
+                "INSERT INTO wake_latches(scope,id,reason,at) VALUES('edge','没有箭头','r','2026-09-01T00:00:00.000Z')",
+                [],
+            )
+            .unwrap();
+        assert!(
+            latches::list(s.conn()).is_err(),
+            "存了认不出的行要报，不能静默漏掉一条熔断"
+        );
     }
 }
