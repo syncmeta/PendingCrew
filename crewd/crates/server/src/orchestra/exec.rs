@@ -1,0 +1,159 @@
+//! 执行器抽象（spec §22.4「执行器抽象」；§13 Q12 的窄接口）。claude = M2b 的 `start_claude` + `SessionHandle`；
+//! codex（M2c）/ ACP（M2e）合入时各加一个 `Executor` 实现，`Executors` 里登记一行。
+//! 事件流直接用 crewd-exec 的 `SessionEvent`：M2c 已合（main@e66be68），加了 `Item` / `TurnEnded` / `Notice` / `Profile`，
+//! `core.rs` 的 match 显式列出它们（claude 不发，接 codex 执行器时逐个决定怎么处理）。
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use crewd_exec::driver::{Closed, SendError, SessionHandle, SessionStatus, StartError};
+use crewd_exec::resume::AgentIdLedger;
+use crewd_exec::session::SessionEvent;
+use crewd_term::Snapshot;
+use tokio::sync::mpsc;
+
+pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// codex 的 `additionalContext`（按 key 组装、去重；§4.3、§22.6 的 `ContextExtras` 口）。
+pub type Context = BTreeMap<String, String>;
+
+pub struct LaunchRequest {
+    pub session_id: String,
+    pub crew_id: String,
+    pub workdir: PathBuf,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// 世界观（`collab::worldview::render`）。
+    pub system_prompt: Option<String>,
+    /// 开场正文（只走输入投递，绝不进 argv）。
+    pub initial_prompt: Option<String>,
+    /// helper 用来 `agent.attach` 的 token（M3b）。
+    pub token: String,
+    pub ledger: Arc<dyn AgentIdLedger>,
+}
+
+#[derive(Debug)]
+pub enum LaunchError {
+    /// 这种执行器还没接进 crewd（codex 在 M2c 合入前）。
+    Unsupported(String),
+    /// 本 crewd 没配置这个执行器的可执行文件。
+    NotConfigured(String),
+    Start(StartError),
+    Failed(String),
+}
+
+impl std::fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported(kind) => write!(f, "执行器 {kind} 还没接入 crewd"),
+            Self::NotConfigured(why) | Self::Failed(why) => write!(f, "{why}"),
+            Self::Start(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for LaunchError {}
+
+pub type Launched = (Arc<dyn ExecHandle>, mpsc::UnboundedReceiver<SessionEvent>);
+
+pub trait Executor: Send + Sync {
+    fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>>;
+
+    /// 续跑被拒时多说一句诊断：这个会话号的日志在不在盘上（只用来说明，不决定任何事；
+    /// `AgentSessionResume.swift:136-163`）。
+    fn locate_transcript(&self, _agent_session_id: &str) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// §13 Q12 的窄接口（启动之外）。
+pub trait ExecHandle: Send + Sync {
+    /// `context` 只能在 `accepts_context()` 为真时非空。
+    fn send(&self, text: String, context: &Context) -> Result<u64, SendError>;
+    fn accepts_context(&self) -> bool {
+        false
+    }
+    fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed>;
+    fn stop(&self) -> Result<(), Closed>;
+    fn clear_quota_health(&self) -> Result<(), Closed>;
+    fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>>;
+    fn snapshot(&self) -> BoxFut<'_, Result<Option<Snapshot>, Closed>>;
+    fn status(&self) -> BoxFut<'_, Result<SessionStatus, Closed>>;
+}
+
+/// claude（M2b）。上下文由 hook 注入（M3b），不收 additionalContext。
+impl ExecHandle for SessionHandle {
+    fn send(&self, text: String, context: &Context) -> Result<u64, SendError> {
+        assert!(
+            context.is_empty(),
+            "claude 不收 additionalContext：调用方必须先看 accepts_context()"
+        );
+        SessionHandle::send(self, text)
+    }
+
+    fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed> {
+        SessionHandle::raw(self, bytes)
+    }
+
+    fn stop(&self) -> Result<(), Closed> {
+        SessionHandle::stop(self)
+    }
+
+    fn clear_quota_health(&self) -> Result<(), Closed> {
+        SessionHandle::clear_quota_health(self)
+    }
+
+    fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>> {
+        Box::pin(SessionHandle::screen_text(self, max_lines))
+    }
+
+    fn snapshot(&self) -> BoxFut<'_, Result<Option<Snapshot>, Closed>> {
+        // M2c 已合（main@e66be68）：`SessionHandle::snapshot` 自己返回 `Result<Option<Snapshot>, Closed>`。
+        Box::pin(SessionHandle::snapshot(self))
+    }
+
+    fn status(&self) -> BoxFut<'_, Result<SessionStatus, Closed>> {
+        Box::pin(SessionHandle::status(self))
+    }
+}
+
+/// 执行器类型（`sessions.executor`：`claude` / `codex` / `acp:<id>`）→ 实现。
+#[derive(Clone, Default)]
+pub struct Executors(BTreeMap<String, Arc<dyn Executor>>);
+
+impl Executors {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with(mut self, kind: &str, executor: Arc<dyn Executor>) -> Self {
+        self.0.insert(kind.to_string(), executor);
+        self
+    }
+
+    pub fn get(&self, kind: &str) -> Result<Arc<dyn Executor>, LaunchError> {
+        self.0
+            .get(kind)
+            .cloned()
+            .ok_or_else(|| LaunchError::Unsupported(kind.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn executors_reject_kinds_that_are_not_wired_in() {
+        let e = Executors::new();
+        for kind in ["codex", "acp:opencode", "claude"] {
+            let err = e.get(kind).err().expect("空表什么都不认");
+            assert!(
+                matches!(&err, LaunchError::Unsupported(k) if k == kind),
+                "{err:?}"
+            );
+        }
+    }
+}

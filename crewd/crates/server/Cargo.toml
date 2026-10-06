@@ -10,6 +10,8 @@ crewd-collab = { version = "0.1.0", path = "../collab" }
 crewd-exec = { version = "0.1.0", path = "../exec" }
 crewd-proto = { version = "0.1.0", path = "../proto" }
 crewd-store = { version = "0.1.0", path = "../store" }
+crewd-term = { version = "0.1.0", path = "../term" }
+crewd-wake = { version = "0.1.0", path = "../wake" }
 crewd-work = { version = "0.1.0", path = "../work" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = "1.0.229"
@@ -24,3 +26,4 @@ testkit = []
 
 [dev-dependencies]
 tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["test-util", "rt", "macros"] }

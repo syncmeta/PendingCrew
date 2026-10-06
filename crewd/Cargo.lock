@@ -424,6 +424,8 @@ dependencies = [
  "crewd-exec",
  "crewd-proto",
  "crewd-store",
+ "crewd-term",
+ "crewd-wake",
  "crewd-work",
  "rusqlite",
  "serde",
