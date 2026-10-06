@@ -149,6 +149,21 @@ fn is_blank(c: char) -> bool {
     c.is_whitespace() || matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}')
 }
 
+/// @ 的目标不在群里：Invalid，列出群里的 session 成员（@session 与 @机长 共用）。
+fn not_a_member(conn: &Connection, channel: &str, who: &str) -> Result<CollabError> {
+    let names: Vec<String> = channels::members(conn, channel)?
+        .into_iter()
+        .filter_map(|x| match x {
+            MemberRef::Session { id } => Some(id),
+            MemberRef::Human => None,
+        })
+        .collect();
+    Ok(CollabError::Invalid(format!(
+        "{who} 不是群 {channel} 的成员；成员有：{}",
+        names.join(", ")
+    )))
+}
+
 fn push_mention(v: &mut Vec<Mention>, m: Mention) {
     if !v.contains(&m) {
         v.push(m);
@@ -245,6 +260,11 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                 let cap = crews::captain_of(conn, &ch.crew_id)?.ok_or_else(|| {
                     CollabError::Invalid(format!("机组 {} 现在没有机长", ch.crew_id))
                 })?;
+                // 机长不在这个群里（topic / dm）：@ 了也唤不醒它，拒并列出成员，同 @session。
+                // 大厅、人类群里机长是隐式成员，is_member 认。
+                if !channels::is_member(conn, &ch.id, &MemberRef::session(cap.clone()))? {
+                    return Err(not_a_member(conn, &ch.id, &format!("机长 {cap}"))?);
+                }
                 Mention {
                     kind: MentionKind::Captain,
                     target_id: Some(cap),
@@ -256,18 +276,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                     .clone()
                     .ok_or_else(|| CollabError::Invalid("@session 要带 targetId".into()))?;
                 if !channels::is_member(conn, &ch.id, &MemberRef::session(t.clone()))? {
-                    let names: Vec<String> = channels::members(conn, &ch.id)?
-                        .into_iter()
-                        .filter_map(|x| match x {
-                            MemberRef::Session { id } => Some(id),
-                            MemberRef::Human => None,
-                        })
-                        .collect();
-                    return Err(CollabError::Invalid(format!(
-                        "{t} 不是群 {} 的成员；成员有：{}",
-                        ch.id,
-                        names.join(", ")
-                    )));
+                    return Err(not_a_member(conn, &ch.id, &t)?);
                 }
                 Mention {
                     kind: MentionKind::Session,
@@ -1145,6 +1154,55 @@ mod tests {
             )),
             CollabError::Invalid(_)
         ));
+    }
+
+    #[test]
+    fn captain_mention_must_target_a_member_of_the_channel() {
+        let mut s = store();
+        let topic = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &session("w-a1"),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "排期".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("w-a2")],
+                },
+            )
+        });
+        let e = err(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                NewPost {
+                    mentions: vec![m(MentionKind::Captain, None)],
+                    ..post_text(&topic.id, "@机长 看一下")
+                },
+            )
+        });
+        let CollabError::Invalid(why) = e else {
+            panic!("机长不在群里，@机长 会无声丢失：{e:?}")
+        };
+        assert!(
+            why.contains("cap-a") && why.contains("w-a1") && why.contains("w-a2"),
+            "错误里点名机长并列出成员：{why}"
+        );
+        // 大厅、根机组人类群里机长是隐式成员：照常解析。
+        for ch in ["crew-a/lobby", "crew-a/human"] {
+            let p = ok(&mut s, |tx| {
+                post(
+                    tx,
+                    session("w-a1"),
+                    NewPost {
+                        mentions: vec![m(MentionKind::Captain, None)],
+                        ..post_text(ch, "@机长 看一下")
+                    },
+                )
+            });
+            assert_eq!(p.message.mentions, [m(MentionKind::Captain, Some("cap-a"))]);
+        }
     }
 
     #[test]
