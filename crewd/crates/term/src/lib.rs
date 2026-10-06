@@ -4,6 +4,7 @@ mod input_box;
 mod menu;
 mod screen;
 mod side;
+mod snapshot;
 mod tail;
 mod tracker;
 
@@ -16,5 +17,6 @@ pub use menu::{
     TRAILING_SLACK, is_confirm_footer, parse_menu, strip,
 };
 pub use screen::{CursorPos, Screen, ScreenConfig};
+pub use snapshot::Snapshot;
 pub use tail::AnsiPlainTextTail;
 pub use tracker::{DecisionEvent, PendingDecisionTracker, STABLE_WINDOW};

@@ -316,6 +316,11 @@ impl Screen {
         out.truncate(trimmed);
         out
     }
+
+    /// 给快照编码器读格子用。不对 crate 外公开——外面不该依赖 alacritty 的类型。
+    pub(crate) fn term(&self) -> &Term<Replies> {
+        &self.term
+    }
 }
 
 #[cfg(test)]
