@@ -257,6 +257,7 @@ dependencies = [
  "libc",
  "rustix",
  "rustix-openpty",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
