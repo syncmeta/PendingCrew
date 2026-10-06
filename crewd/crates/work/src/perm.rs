@@ -26,6 +26,8 @@ pub enum Action {
     /// 指派负责人（ctx.assignee = 被指派的人）。
     Assign,
     ReassignLost,
+    /// 开一条人类待确认（H 号），不卡任何项（`open_ask`）。
+    OpenAsk,
     AnswerAsk,
     ApplyDefault,
     RecordWake,
@@ -35,7 +37,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 21] = [
+    pub const ALL: [Action; 22] = [
         Action::ClaimEntry,
         Action::CreateItem,
         Action::CreateChild,
@@ -51,6 +53,7 @@ impl Action {
         Action::TransferWithdraw,
         Action::Assign,
         Action::ReassignLost,
+        Action::OpenAsk,
         Action::AnswerAsk,
         Action::ApplyDefault,
         Action::RecordWake,
@@ -78,13 +81,14 @@ pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
                 | CreateChild
                 | Assign
                 | ReassignLost
+                | OpenAsk
                 | ApplyDefault
                 | RecordWake
                 | NoteEscalation
         ),
         Actor::Human => !matches!(
             action,
-            TransferRequest | TransferAccept | ApplyDefault | RecordWake | NoteEscalation
+            TransferRequest | TransferAccept | OpenAsk | ApplyDefault | RecordWake | NoteEscalation
         ),
         Actor::Session { id, role } => {
             let owns = ctx.owner == Some(id);
@@ -92,6 +96,7 @@ pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
                 TransferRequest => owns,
                 TransferAccept => ctx.transfer_to == Some(id),
                 TransferWithdraw => owns || ctx.transfer_to == Some(id) || *role == Role::Captain,
+                OpenAsk => true,
                 AnswerAsk | ApplyDefault | RecordWake | NoteEscalation => false,
                 _ => match role {
                     Role::Captain => true,
@@ -155,7 +160,8 @@ mod tests {
                 Relink,
                 LinkChannel,
                 TransferRequest,
-                TransferWithdraw
+                TransferWithdraw,
+                OpenAsk
             ]
         );
         let foreign = Ctx {
@@ -164,7 +170,7 @@ mod tests {
         };
         assert_eq!(
             grants(&Actor::worker("w"), foreign),
-            [ClaimEntry, CreateItem]
+            [ClaimEntry, CreateItem, OpenAsk]
         );
     }
 
@@ -202,7 +208,13 @@ mod tests {
         };
         assert_eq!(
             grants(&Actor::worker("w"), ctx),
-            [ClaimEntry, CreateItem, TransferAccept, TransferWithdraw]
+            [
+                ClaimEntry,
+                CreateItem,
+                TransferAccept,
+                TransferWithdraw,
+                OpenAsk
+            ]
         );
     }
 
@@ -245,6 +257,7 @@ mod tests {
                 Relink,
                 LinkChannel,
                 ReassignLost,
+                OpenAsk,
                 CloseEntryFactual
             ]
         );
@@ -269,6 +282,7 @@ mod tests {
             [
                 TransferRequest,
                 TransferAccept,
+                OpenAsk,
                 ApplyDefault,
                 RecordWake,
                 NoteEscalation
@@ -297,6 +311,7 @@ mod tests {
                 CreateChild,
                 Assign,
                 ReassignLost,
+                OpenAsk,
                 ApplyDefault,
                 RecordWake,
                 NoteEscalation

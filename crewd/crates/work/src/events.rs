@@ -49,7 +49,7 @@ pub enum EventKind {
     },
     AskOpened {
         ask: AskId,
-        item: WorkId,
+        item: Option<WorkId>,
         question: String,
         default: Option<DefaultOption>,
     },

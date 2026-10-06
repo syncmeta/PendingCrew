@@ -244,8 +244,9 @@ pub enum WaitTier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanAsk {
     pub id: AskId,
-    /// 提问时被它卡住的那一项（后来别的项也可以挂到同一条问上）。
-    pub item: WorkId,
+    /// 这条问关于哪一项：卡住时开的问 = 被它卡住的那一项（后来别的项也可以挂到同一条问上）；
+    /// `open_ask` 开的问可以不挂任何项（M3 的人类待确认台账也从这里拿 H 号）。
+    pub item: Option<WorkId>,
     pub asked_by: Actor,
     pub question: String,
     pub default: Option<DefaultOption>,
@@ -253,6 +254,9 @@ pub struct HumanAsk {
     pub state: AskState,
     /// 已经通知过的最高升级档。
     pub escalated: WaitTier,
+    /// true = `open_ask` 直接开的问（不是卡住时开的）：只要还开着、关于的项还活着（或不关于任何项），
+    /// 就进人的待确认清单；卡住时开的问只在此刻仍卡着活项时才进（没人等的问不打扰人）。
+    pub standalone: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

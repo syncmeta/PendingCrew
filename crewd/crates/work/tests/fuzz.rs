@@ -32,7 +32,7 @@ impl Rng {
 const SESSIONS: [&str; 3] = ["a", "b", "c"];
 
 /// 命令种类与抽中的权重。
-const KINDS: [(&str, u64); 19] = [
+const KINDS: [(&str, u64); 20] = [
     ("register_entry", 1),
     ("claim_entry", 6),
     ("create_item", 5),
@@ -52,6 +52,7 @@ const KINDS: [(&str, u64); 19] = [
     ("close_entry", 1),
     ("note_escalation", 2),
     ("link_channel", 2),
+    ("open_ask", 2),
 ];
 
 fn pick_kind(r: &mut Rng) -> &'static str {
@@ -347,6 +348,15 @@ fn step(r: &mut Rng, b: &mut WorkBook, now: Ts) -> (&'static str, Result<Vec<Eve
             let by = actor_for(r, b, id);
             let ch = r.chance(2).then(|| ChannelId::new("ch"));
             ok(b.link_channel(&by, now, id, ch))
+        }
+        "open_ask" => {
+            let by = any_actor(r);
+            let about = r.chance(2).then(|| item(r, b));
+            let default = r.chance(3).then(|| DefaultOption {
+                text: "A".into(),
+                after_ms: r.below(4 * HOUR as u64) as i64,
+            });
+            ok(b.open_ask(&by, now, &text(r, "q?"), default, about))
         }
         other => unreachable!("{other}"),
     };

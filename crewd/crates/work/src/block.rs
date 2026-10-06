@@ -54,41 +54,7 @@ impl WorkBook {
             for b in on {
                 match b {
                     BlockOn::NewAsk { question, default } => {
-                        let question = question.trim().to_string();
-                        if question.is_empty() {
-                            return Err(Rejected::Blank("question"));
-                        }
-                        if let Some(opt) = &default {
-                            if opt.text.trim().is_empty() {
-                                return Err(Rejected::Blank("default option"));
-                            }
-                            if opt.after_ms <= 0 {
-                                return Err(Rejected::Invalid(
-                                    "a default option needs a positive delay",
-                                ));
-                            }
-                        }
-                        d.s.last_ask += 1;
-                        let h = AskId(d.s.last_ask);
-                        d.s.asks.insert(
-                            h,
-                            HumanAsk {
-                                id: h,
-                                item: id,
-                                asked_by: d.by.clone(),
-                                question: question.clone(),
-                                default: default.clone(),
-                                asked_at: d.now,
-                                state: AskState::Open,
-                                escalated: WaitTier::Fresh,
-                            },
-                        );
-                        d.emit(EventKind::AskOpened {
-                            ask: h,
-                            item: id,
-                            question,
-                            default,
-                        });
+                        let h = d.new_ask(&question, default, Some(id), false)?;
                         blockers.push(Blocker::Human(h));
                         asks.push(h);
                     }
@@ -128,6 +94,25 @@ impl WorkBook {
             it.next_check_at = None;
             d.emit(EventKind::Blocked { id, on: blockers });
             Ok(BlockResult { asks, split })
+        })
+    }
+
+    /// 开一条人类待确认、拿一个 H 号，不卡任何项（裁定 Q1：H 号只由工作账本发；M3 的人类待确认台账用它）。
+    /// `item` = 这条问关于哪一项（可不填；填了必须是活着的项，但不会把它标 blocked——要卡住用 `block`）。
+    pub fn open_ask(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        question: &str,
+        default: Option<DefaultOption>,
+        item: Option<WorkId>,
+    ) -> Result<Applied<AskId>, Rejected> {
+        self.transact(by, now, |d| {
+            d.permit(Action::OpenAsk, Ctx::default())?;
+            if let Some(w) = item {
+                d.live(w)?;
+            }
+            d.new_ask(question, default, item, true)
         })
     }
 
@@ -190,6 +175,51 @@ impl WorkBook {
 }
 
 impl Draft {
+    /// 发一个 H 号、记下这条问（`block` 的新问与 `open_ask` 共用）：问题与默认方案先校验，被拒不消耗号码。
+    pub(crate) fn new_ask(
+        &mut self,
+        question: &str,
+        default: Option<DefaultOption>,
+        item: Option<WorkId>,
+        standalone: bool,
+    ) -> Result<AskId, Rejected> {
+        let question = question.trim().to_string();
+        if question.is_empty() {
+            return Err(Rejected::Blank("question"));
+        }
+        if let Some(opt) = &default {
+            if opt.text.trim().is_empty() {
+                return Err(Rejected::Blank("default option"));
+            }
+            if opt.after_ms <= 0 {
+                return Err(Rejected::Invalid("a default option needs a positive delay"));
+            }
+        }
+        self.s.last_ask += 1;
+        let h = AskId(self.s.last_ask);
+        self.s.asks.insert(
+            h,
+            HumanAsk {
+                id: h,
+                item,
+                asked_by: self.by.clone(),
+                question: question.clone(),
+                default: default.clone(),
+                asked_at: self.now,
+                state: AskState::Open,
+                escalated: WaitTier::Fresh,
+                standalone,
+            },
+        );
+        self.emit(EventKind::AskOpened {
+            ask: h,
+            item,
+            question,
+            default,
+        });
+        Ok(h)
+    }
+
     /// 从所有项的 blockedOn 里去掉 `blocker`。卡点清空的项：依赖已齐 → active 且 nextCheckAt = now
     /// （下一轮检查点立刻叫醒负责人）；依赖没齐 → open。每个受影响的项都产出一条 `BlockerCleared`。
     pub(crate) fn release(&mut self, blocker: Blocker) -> Vec<WorkId> {
@@ -281,8 +311,8 @@ mod tests {
         let h = b.ask(AskId(1)).unwrap();
         assert_eq!(h.question, "要保留旧格式吗？");
         assert_eq!(
-            (h.item, h.asked_at, h.state.clone()),
-            (w, T1, AskState::Open)
+            (h.item, h.asked_at, h.state.clone(), h.standalone),
+            (Some(w), T1, AskState::Open, false)
         );
         assert_eq!(kinds(&got.events), ["ask_opened", "blocked"]);
     }
@@ -672,5 +702,97 @@ mod tests {
             b.answer_ask(&Actor::Human, T1.plus(5 * HOUR), AskId(1), "晚了"),
             Err(Rejected::AskNotOpen(AskId(1)))
         );
+    }
+
+    #[test]
+    fn a_question_need_not_be_tied_to_a_work_item() {
+        // M3 的人类待确认台账也从这里拿 H 号（裁定 Q1：H 号只由工作账本发），问题可以不挂任何工作项。
+        let mut b = book();
+        let got = b
+            .open_ask(
+                &Actor::captain("c"),
+                T1,
+                "  发版窗口定在周几？ ",
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(got.value, AskId(1));
+        assert_eq!(kinds(&got.events), ["ask_opened"]);
+        let h = b.ask(AskId(1)).unwrap();
+        assert_eq!(
+            (h.item, h.question.as_str(), h.state.clone(), h.standalone),
+            (None, "发版窗口定在周几？", AskState::Open, true)
+        );
+        let waits = b.human_waits(T1);
+        assert_eq!(waits.len(), 1, "没卡任何项，但有人在等答案：进人的清单");
+        assert!(waits[0].items.is_empty());
+        assert_eq!(waits[0].owners, [sid("c")]);
+
+        let w = claim(&mut b, "a", &["x"])[0];
+        let blocked = b
+            .block(
+                &Actor::worker("a"),
+                T1,
+                w,
+                vec![ask("q")],
+                Continuation::Nothing,
+            )
+            .unwrap();
+        assert_eq!(blocked.value.asks, [AskId(2)], "与卡住时开的问同一个计数器");
+        assert_eq!(b.ask(AskId(2)).unwrap().item, Some(w));
+
+        let about = b
+            .open_ask(
+                &Actor::System,
+                T1,
+                "要不要顺手升级依赖？",
+                Some(DefaultOption {
+                    text: "不升".into(),
+                    after_ms: HOUR,
+                }),
+                Some(w),
+            )
+            .unwrap()
+            .value;
+        assert_eq!(about, AskId(3));
+        assert_eq!(
+            b.item(w).unwrap().blocked_on,
+            [Blocker::Human(AskId(2))],
+            "挂在一项上的问不卡住它"
+        );
+        assert!(
+            b.answer_ask(&Actor::Human, T1, AskId(1), "周四")
+                .unwrap()
+                .value
+                .is_empty(),
+            "回答不放行任何项"
+        );
+        assert_eq!(
+            b.open_ask(&Actor::Human, T1, "q", None, None),
+            Err(Rejected::Forbidden(Action::OpenAsk))
+        );
+        assert_eq!(
+            b.open_ask(&Actor::worker("a"), T1, " ", None, None),
+            Err(Rejected::Blank("question"))
+        );
+        assert_eq!(
+            b.open_ask(&Actor::worker("a"), T1, "q", None, Some(WorkId(9))),
+            Err(Rejected::UnknownItem(WorkId(9)))
+        );
+        assert_eq!(
+            b.open_ask(
+                &Actor::worker("a"),
+                T1,
+                "q",
+                Some(DefaultOption {
+                    text: "A".into(),
+                    after_ms: 0
+                }),
+                None
+            ),
+            Err(Rejected::Invalid("a default option needs a positive delay"))
+        );
+        assert_eq!(b.state().last_ask, 3, "被拒的不消耗 H 号");
     }
 }

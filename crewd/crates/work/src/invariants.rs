@@ -207,11 +207,10 @@ pub fn check(s: &BookState) -> Result<(), Violation> {
         }
     }
     for (h, ask) in &s.asks {
-        if !s.items.contains_key(&ask.item) {
-            return Err(Violation::AskForUnknownItem {
-                ask: *h,
-                item: ask.item,
-            });
+        if let Some(item) = ask.item
+            && !s.items.contains_key(&item)
+        {
+            return Err(Violation::AskForUnknownItem { ask: *h, item });
         }
     }
     match find_cycle(&adjacency(&s.items)) {
@@ -309,13 +308,14 @@ mod tests {
             AskId(n),
             HumanAsk {
                 id: AskId(n),
-                item: WorkId(item),
+                item: Some(WorkId(item)),
                 asked_by: Actor::worker("s1"),
                 question: "q".into(),
                 default: None,
                 asked_at: NOW,
                 state,
                 escalated: WaitTier::Fresh,
+                standalone: false,
             },
         );
     }

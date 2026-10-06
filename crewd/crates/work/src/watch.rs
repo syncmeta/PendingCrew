@@ -164,6 +164,16 @@ impl WorkBook {
                 }
             }
         }
+        // `open_ask` 开的问：还开着、关于的项还活着（或不关于任何项）就在清单里，提问的 session 算在等。
+        for ask in self.state.asks.values() {
+            let about_live = ask
+                .item
+                .is_none_or(|w| self.state.items[&w].status.is_live());
+            if ask.standalone && ask.state == AskState::Open && about_live {
+                let entry = waiting.entry(ask.id).or_default();
+                entry.1.extend(ask.asked_by.session().cloned());
+            }
+        }
         let mut out: Vec<HumanWait> = waiting
             .into_iter()
             .filter_map(|(h, (items, owners))| {
