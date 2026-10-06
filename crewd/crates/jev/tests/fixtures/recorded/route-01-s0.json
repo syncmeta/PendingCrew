@@ -1,0 +1,1 @@
+{"model":"jev-1.13.0","answers":{"route":{"type":"choice","choice":"scroll","confidence":0.99,"probabilities":{"new_crew":0.0,"crewd":0.0,"captain":0.0,"scroll":1.0,"ios":0.0,"new_session":0.0,"docs":0.0,"release":0.0}}},"usage":{"input_tokens":1130,"output_tokens":78}}

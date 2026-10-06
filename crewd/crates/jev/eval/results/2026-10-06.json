@@ -1,0 +1,1498 @@
+{
+  "cases": "cases.zh.json",
+  "model": "jev-latest",
+  "resolved_models": [
+    "jev-1.13.0"
+  ],
+  "runs": [
+    {
+      "answer": "scroll",
+      "confidence": 0.99,
+      "correct": true,
+      "error": null,
+      "id": "route-01",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 14129014500236819922
+    },
+    {
+      "answer": "scroll",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-01",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": true,
+      "seed": 14127888600329721083
+    },
+    {
+      "answer": "release",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-02",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 17221298545909820673
+    },
+    {
+      "answer": "release",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-02",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 17222424445816919512
+    },
+    {
+      "answer": "crewd",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-03",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 7814404817907651408
+    },
+    {
+      "answer": "crewd",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-03",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 7813278918000552569
+    },
+    {
+      "answer": "ios",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-04",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 5493925322836395399
+    },
+    {
+      "answer": "ios",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-04",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 5494488272789850206
+    },
+    {
+      "answer": "docs",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-05",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 14564174966034500278
+    },
+    {
+      "answer": "docs",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-05",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 14563049066127401439
+    },
+    {
+      "answer": "new_session",
+      "confidence": 0.44,
+      "correct": true,
+      "error": null,
+      "id": "route-06",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 17503899574300244357
+    },
+    {
+      "answer": "new_session",
+      "confidence": 0.48,
+      "correct": true,
+      "error": null,
+      "id": "route-06",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 17504462524253699164
+    },
+    {
+      "answer": "captain",
+      "confidence": 0.98,
+      "correct": true,
+      "error": null,
+      "id": "route-07",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 2119040248772970964
+    },
+    {
+      "answer": "captain",
+      "confidence": 0.97,
+      "correct": true,
+      "error": null,
+      "id": "route-07",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 2117914348865872125
+    },
+    {
+      "answer": "new_crew",
+      "confidence": 0.67,
+      "correct": true,
+      "error": null,
+      "id": "route-08",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 10471528397782971803
+    },
+    {
+      "answer": "new_crew",
+      "confidence": 0.79,
+      "correct": true,
+      "error": null,
+      "id": "route-08",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 8,
+      "picked_first": false,
+      "seed": 10472654297690070642
+    },
+    {
+      "answer": "billing",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-09",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": false,
+      "seed": 13441652303539438410
+    },
+    {
+      "answer": "billing",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-09",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": true,
+      "seed": 13440526403632339571
+    },
+    {
+      "answer": "voice",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-10",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": false,
+      "seed": 2888984212748674080
+    },
+    {
+      "answer": "voice",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-10",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": false,
+      "seed": 2887858312841575241
+    },
+    {
+      "answer": "board",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-11",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": true,
+      "seed": 12295877940750843345
+    },
+    {
+      "answer": "board",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-11",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": false,
+      "seed": 12297003840657942184
+    },
+    {
+      "answer": "captain",
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "id": "route-12",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": false,
+      "seed": 9325754034994376738
+    },
+    {
+      "answer": "captain",
+      "confidence": 0.95,
+      "correct": true,
+      "error": null,
+      "id": "route-12",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 7,
+      "picked_first": false,
+      "seed": 9324628135087277899
+    },
+    {
+      "answer": "blog",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-13",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 6263869286812098515
+    },
+    {
+      "answer": "blog",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "route-13",
+      "kind": "route_todo",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 6264995186719197354
+    },
+    {
+      "answer": "captain,release",
+      "confidence": 0.28,
+      "correct": false,
+      "error": null,
+      "id": "wake-01",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.11,
+          false
+        ],
+        [
+          0.64,
+          false
+        ],
+        [
+          0.07,
+          false
+        ],
+        [
+          0.94,
+          true
+        ]
+      ],
+      "options": 4,
+      "picked_first": null,
+      "seed": 2467693766787610233
+    },
+    {
+      "answer": "captain,release",
+      "confidence": 0.3600000000000001,
+      "correct": false,
+      "error": null,
+      "id": "wake-01",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.11,
+          false
+        ],
+        [
+          0.68,
+          false
+        ],
+        [
+          0.07,
+          false
+        ],
+        [
+          0.94,
+          true
+        ]
+      ],
+      "options": 4,
+      "picked_first": null,
+      "seed": 2468819666694709072
+    },
+    {
+      "answer": "scroll",
+      "confidence": 0.33999999999999997,
+      "correct": true,
+      "error": null,
+      "id": "wake-02",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.88,
+          true
+        ],
+        [
+          0.33,
+          false
+        ],
+        [
+          0.12,
+          false
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 17852553092314883626
+    },
+    {
+      "answer": "scroll",
+      "confidence": 0.31999999999999995,
+      "correct": true,
+      "error": null,
+      "id": "wake-02",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.9,
+          true
+        ],
+        [
+          0.34,
+          false
+        ],
+        [
+          0.12,
+          false
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 17851990142361428819
+    },
+    {
+      "answer": "",
+      "confidence": 0.86,
+      "correct": true,
+      "error": null,
+      "id": "wake-03",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.05,
+          false
+        ],
+        [
+          0.07,
+          false
+        ],
+        [
+          0.06,
+          false
+        ],
+        [
+          0.05,
+          false
+        ],
+        [
+          0.06,
+          false
+        ]
+      ],
+      "options": 5,
+      "picked_first": null,
+      "seed": 8782303449116778747
+    },
+    {
+      "answer": "",
+      "confidence": 0.88,
+      "correct": true,
+      "error": null,
+      "id": "wake-03",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.05,
+          false
+        ],
+        [
+          0.06,
+          false
+        ],
+        [
+          0.06,
+          false
+        ],
+        [
+          0.05,
+          false
+        ],
+        [
+          0.06,
+          false
+        ]
+      ],
+      "options": 5,
+      "picked_first": null,
+      "seed": 8783429349023877586
+    },
+    {
+      "answer": "crewd",
+      "confidence": 0.31999999999999995,
+      "correct": true,
+      "error": null,
+      "id": "wake-04",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.11,
+          false
+        ],
+        [
+          0.82,
+          true
+        ],
+        [
+          0.08,
+          false
+        ],
+        [
+          0.09,
+          false
+        ],
+        [
+          0.24,
+          false
+        ]
+      ],
+      "options": 6,
+      "picked_first": null,
+      "seed": 5842578840851034668
+    },
+    {
+      "answer": "crewd",
+      "confidence": 0.33999999999999997,
+      "correct": true,
+      "error": null,
+      "id": "wake-04",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.1,
+          false
+        ],
+        [
+          0.83,
+          true
+        ],
+        [
+          0.08,
+          false
+        ],
+        [
+          0.08,
+          false
+        ],
+        [
+          0.2,
+          false
+        ]
+      ],
+      "options": 6,
+      "picked_first": null,
+      "seed": 5842015890897579861
+    },
+    {
+      "answer": "ios",
+      "confidence": 0.33999999999999997,
+      "correct": true,
+      "error": null,
+      "id": "wake-05",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.33,
+          false
+        ],
+        [
+          0.07,
+          false
+        ],
+        [
+          0.75,
+          true
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 2750294795178033917
+    },
+    {
+      "answer": "ios",
+      "confidence": 0.43999999999999995,
+      "correct": true,
+      "error": null,
+      "id": "wake-05",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.28,
+          false
+        ],
+        [
+          0.05,
+          false
+        ],
+        [
+          0.76,
+          true
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 2751420695085132756
+    },
+    {
+      "answer": "migrate",
+      "confidence": 0.14,
+      "correct": true,
+      "error": null,
+      "id": "wake-06",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.76,
+          true
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 18135154120705307310
+    },
+    {
+      "answer": "migrate",
+      "confidence": 0.040000000000000036,
+      "correct": true,
+      "error": null,
+      "id": "wake-06",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.77,
+          true
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 18134028220798208471
+    },
+    {
+      "answer": "board",
+      "confidence": 0.54,
+      "correct": true,
+      "error": null,
+      "id": "wake-07",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.1,
+          false
+        ],
+        [
+          0.15,
+          false
+        ],
+        [
+          0.77,
+          true
+        ],
+        [
+          0.08,
+          false
+        ]
+      ],
+      "options": 5,
+      "picked_first": null,
+      "seed": 9217463914914459103
+    },
+    {
+      "answer": "board",
+      "confidence": 0.48,
+      "correct": true,
+      "error": null,
+      "id": "wake-07",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.1,
+          false
+        ],
+        [
+          0.17,
+          false
+        ],
+        [
+          0.77,
+          true
+        ],
+        [
+          0.08,
+          false
+        ]
+      ],
+      "options": 5,
+      "picked_first": null,
+      "seed": 9218589814821557942
+    },
+    {
+      "answer": "",
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "id": "wake-08",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.02,
+          false
+        ],
+        [
+          0.04,
+          false
+        ],
+        [
+          0.02,
+          false
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 6125179869241458352
+    },
+    {
+      "answer": "",
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "id": "wake-08",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.02,
+          false
+        ],
+        [
+          0.04,
+          false
+        ],
+        [
+          0.02,
+          false
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 6124053969334359513
+    },
+    {
+      "answer": "blog,captain",
+      "confidence": 0.040000000000000036,
+      "correct": false,
+      "error": null,
+      "id": "wake-09",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.75,
+          true
+        ],
+        [
+          0.52,
+          false
+        ]
+      ],
+      "options": 2,
+      "picked_first": null,
+      "seed": 3063295121059180129
+    },
+    {
+      "answer": "blog,captain",
+      "confidence": 0.08000000000000007,
+      "correct": false,
+      "error": null,
+      "id": "wake-09",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.77,
+          true
+        ],
+        [
+          0.54,
+          false
+        ]
+      ],
+      "options": 2,
+      "picked_first": null,
+      "seed": 3064421020966278968
+    },
+    {
+      "answer": "captain",
+      "confidence": 0.33999999999999997,
+      "correct": true,
+      "error": null,
+      "id": "wake-10",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.06,
+          false
+        ],
+        [
+          0.94,
+          true
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 7281091990270922923
+    },
+    {
+      "answer": "captain",
+      "confidence": 0.30000000000000004,
+      "correct": true,
+      "error": null,
+      "id": "wake-10",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.06,
+          false
+        ],
+        [
+          0.94,
+          true
+        ]
+      ],
+      "options": 3,
+      "picked_first": null,
+      "seed": 7282217890178021762
+    },
+    {
+      "answer": "billing,voice",
+      "confidence": 0.6599999999999999,
+      "correct": true,
+      "error": null,
+      "id": "wake-11",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.83,
+          true
+        ],
+        [
+          0.03,
+          false
+        ],
+        [
+          0.04,
+          false
+        ],
+        [
+          0.85,
+          true
+        ]
+      ],
+      "options": 5,
+      "picked_first": null,
+      "seed": 10373938985897567706
+    },
+    {
+      "answer": "billing,voice",
+      "confidence": 0.7,
+      "correct": true,
+      "error": null,
+      "id": "wake-11",
+      "kind": "wake",
+      "nouls": [
+        [
+          0.85,
+          true
+        ],
+        [
+          0.03,
+          false
+        ],
+        [
+          0.03,
+          false
+        ],
+        [
+          0.88,
+          true
+        ]
+      ],
+      "options": 5,
+      "picked_first": null,
+      "seed": 10372813085990468867
+    },
+    {
+      "answer": "m-301",
+      "confidence": 0.86,
+      "correct": true,
+      "error": null,
+      "id": "attr-01",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 8406633582045217534
+    },
+    {
+      "answer": "m-301",
+      "confidence": 0.79,
+      "correct": true,
+      "error": null,
+      "id": "attr-01",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 8406070632091762727
+    },
+    {
+      "answer": "m-298",
+      "confidence": 0.98,
+      "correct": true,
+      "error": null,
+      "id": "attr-02",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": true,
+      "seed": 11346358190310961613
+    },
+    {
+      "answer": "m-298",
+      "confidence": 0.98,
+      "correct": true,
+      "error": null,
+      "id": "attr-02",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": true,
+      "seed": 11347484090218060452
+    },
+    {
+      "answer": "none",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "attr-03",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 14438642235983962364
+    },
+    {
+      "answer": "none",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "attr-03",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 14438079286030507557
+    },
+    {
+      "answer": "w7",
+      "confidence": 0.85,
+      "correct": true,
+      "error": null,
+      "id": "attr-04",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 5031748507981793099
+    },
+    {
+      "answer": "w7",
+      "confidence": 0.89,
+      "correct": true,
+      "error": null,
+      "id": "attr-04",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 5032874407888891938
+    },
+    {
+      "answer": "todo-12",
+      "confidence": 0.99,
+      "correct": true,
+      "error": null,
+      "id": "attr-05",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": true,
+      "seed": 8001872413738259706
+    },
+    {
+      "answer": "todo-12",
+      "confidence": 0.99,
+      "correct": true,
+      "error": null,
+      "id": "attr-05",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 8001309463784804899
+    },
+    {
+      "answer": "ch-release",
+      "confidence": 0.96,
+      "correct": true,
+      "error": null,
+      "id": "attr-06",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 11063757161920537929
+    },
+    {
+      "answer": "ch-release",
+      "confidence": 0.96,
+      "correct": true,
+      "error": null,
+      "id": "attr-06",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": true,
+      "seed": 11064883061827636768
+    },
+    {
+      "answer": "ch-voice",
+      "confidence": 0.89,
+      "correct": true,
+      "error": null,
+      "id": "attr-07",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": false,
+      "seed": 14033881067677004536
+    },
+    {
+      "answer": "ch-voice",
+      "confidence": 0.84,
+      "correct": true,
+      "error": null,
+      "id": "attr-07",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 4,
+      "picked_first": true,
+      "seed": 14033318117723549729
+    },
+    {
+      "answer": "m-12",
+      "confidence": 0.96,
+      "correct": true,
+      "error": null,
+      "id": "attr-08",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 3,
+      "picked_first": true,
+      "seed": 54145433035216695
+    },
+    {
+      "answer": "m-12",
+      "confidence": 0.94,
+      "correct": true,
+      "error": null,
+      "id": "attr-08",
+      "kind": "attribute",
+      "nouls": [],
+      "options": 3,
+      "picked_first": false,
+      "seed": 55271332942315534
+    },
+    {
+      "answer": "0 (0.30)",
+      "confidence": 0.75,
+      "correct": true,
+      "error": null,
+      "id": "urg-01",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 15170078272109539847
+    },
+    {
+      "answer": "0 (0.39)",
+      "confidence": 0.67,
+      "correct": true,
+      "error": null,
+      "id": "urg-01",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 15171204172016638686
+    },
+    {
+      "answer": "2 (2.00)",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "urg-02",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 11795193198046115412
+    },
+    {
+      "answer": "2 (2.00)",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "urg-02",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 11794067298139016573
+    },
+    {
+      "answer": "4 (3.72)",
+      "confidence": 0.76,
+      "correct": true,
+      "error": null,
+      "id": "urg-03",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 8733308449863837189
+    },
+    {
+      "answer": "4 (3.73)",
+      "confidence": 0.78,
+      "correct": true,
+      "error": null,
+      "id": "urg-03",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 8734434349770936028
+    },
+    {
+      "answer": "4 (3.92)",
+      "confidence": 0.93,
+      "correct": true,
+      "error": null,
+      "id": "urg-04",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 17827201851984860242
+    },
+    {
+      "answer": "4 (3.91)",
+      "confidence": 0.93,
+      "correct": true,
+      "error": null,
+      "id": "urg-04",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 17826075952077761403
+    },
+    {
+      "answer": "0 (0.13)",
+      "confidence": 0.89,
+      "correct": true,
+      "error": null,
+      "id": "urg-05",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 14888040193672760195
+    },
+    {
+      "answer": "0 (0.10)",
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "id": "urg-05",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 14888603143626215002
+    },
+    {
+      "answer": "3 (3.00)",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "urg-06",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 11513155119609335760
+    },
+    {
+      "answer": "3 (3.00)",
+      "confidence": 1.0,
+      "correct": true,
+      "error": null,
+      "id": "urg-06",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 11512029219702236921
+    },
+    {
+      "answer": "3 (2.86)",
+      "confidence": 0.88,
+      "correct": false,
+      "error": null,
+      "id": "urg-07",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 8451270371427057537
+    },
+    {
+      "answer": "3 (2.84)",
+      "confidence": 0.87,
+      "correct": false,
+      "error": null,
+      "id": "urg-07",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 8451833321380512344
+    },
+    {
+      "answer": "4 (3.76)",
+      "confidence": 0.8,
+      "correct": true,
+      "error": null,
+      "id": "urg-08",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 5076385297363633102
+    },
+    {
+      "answer": "4 (3.80)",
+      "confidence": 0.84,
+      "correct": true,
+      "error": null,
+      "id": "urg-08",
+      "kind": "urgency",
+      "nouls": [],
+      "options": 5,
+      "picked_first": null,
+      "seed": 5075259397456534263
+    }
+  ],
+  "seeds": 2,
+  "summary": {
+    "kinds": [
+      {
+        "accuracy": 1.0,
+        "buckets": [
+          {
+            "correct": 0,
+            "hi": 0.25,
+            "lo": 0.0,
+            "n": 0
+          },
+          {
+            "correct": 2,
+            "hi": 0.5,
+            "lo": 0.25,
+            "n": 2
+          },
+          {
+            "correct": 1,
+            "hi": 0.75,
+            "lo": 0.5,
+            "n": 1
+          },
+          {
+            "correct": 1,
+            "hi": 0.9,
+            "lo": 0.75,
+            "n": 1
+          },
+          {
+            "correct": 22,
+            "hi": 1.0,
+            "lo": 0.9,
+            "n": 22
+          }
+        ],
+        "consistent": [
+          13,
+          13
+        ],
+        "correct": 26,
+        "errors": 0,
+        "kind": "route_todo",
+        "pick": {
+          "acted": 26,
+          "coverage": 1.0,
+          "precision": 1.0,
+          "threshold": 0.3
+        },
+        "picked_first": [
+          3,
+          26,
+          0.14010989010989008
+        ],
+        "runs": 26,
+        "wake_pick": null
+      },
+      {
+        "accuracy": 0.8181818181818182,
+        "buckets": [
+          {
+            "correct": 2,
+            "hi": 0.25,
+            "lo": 0.0,
+            "n": 4
+          },
+          {
+            "correct": 9,
+            "hi": 0.5,
+            "lo": 0.25,
+            "n": 11
+          },
+          {
+            "correct": 3,
+            "hi": 0.75,
+            "lo": 0.5,
+            "n": 3
+          },
+          {
+            "correct": 2,
+            "hi": 0.9,
+            "lo": 0.75,
+            "n": 2
+          },
+          {
+            "correct": 2,
+            "hi": 1.0,
+            "lo": 0.9,
+            "n": 2
+          }
+        ],
+        "consistent": [
+          11,
+          11
+        ],
+        "correct": 18,
+        "errors": 0,
+        "kind": "wake",
+        "pick": null,
+        "picked_first": null,
+        "runs": 22,
+        "wake_pick": {
+          "judgements": 72,
+          "member_accuracy": 1.0,
+          "threshold": 0.7
+        }
+      },
+      {
+        "accuracy": 1.0,
+        "buckets": [
+          {
+            "correct": 0,
+            "hi": 0.25,
+            "lo": 0.0,
+            "n": 0
+          },
+          {
+            "correct": 0,
+            "hi": 0.5,
+            "lo": 0.25,
+            "n": 0
+          },
+          {
+            "correct": 0,
+            "hi": 0.75,
+            "lo": 0.5,
+            "n": 0
+          },
+          {
+            "correct": 6,
+            "hi": 0.9,
+            "lo": 0.75,
+            "n": 6
+          },
+          {
+            "correct": 10,
+            "hi": 1.0,
+            "lo": 0.9,
+            "n": 10
+          }
+        ],
+        "consistent": [
+          8,
+          8
+        ],
+        "correct": 16,
+        "errors": 0,
+        "kind": "attribute",
+        "pick": {
+          "acted": 16,
+          "coverage": 1.0,
+          "precision": 1.0,
+          "threshold": 0.3
+        },
+        "picked_first": [
+          6,
+          16,
+          0.2604166666666667
+        ],
+        "runs": 16,
+        "wake_pick": null
+      },
+      {
+        "accuracy": 0.875,
+        "buckets": [
+          {
+            "correct": 0,
+            "hi": 0.25,
+            "lo": 0.0,
+            "n": 0
+          },
+          {
+            "correct": 0,
+            "hi": 0.5,
+            "lo": 0.25,
+            "n": 0
+          },
+          {
+            "correct": 1,
+            "hi": 0.75,
+            "lo": 0.5,
+            "n": 1
+          },
+          {
+            "correct": 6,
+            "hi": 0.9,
+            "lo": 0.75,
+            "n": 8
+          },
+          {
+            "correct": 7,
+            "hi": 1.0,
+            "lo": 0.9,
+            "n": 7
+          }
+        ],
+        "consistent": [
+          2,
+          8
+        ],
+        "correct": 14,
+        "errors": 0,
+        "kind": "urgency",
+        "pick": {
+          "acted": 7,
+          "coverage": 0.4375,
+          "precision": 1.0,
+          "threshold": 0.9
+        },
+        "picked_first": null,
+        "runs": 16,
+        "wake_pick": null
+      }
+    ],
+    "latency_p50_ms": 286,
+    "latency_p95_ms": 414,
+    "target_precision": 0.95
+  }
+}

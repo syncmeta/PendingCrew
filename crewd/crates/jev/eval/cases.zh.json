@@ -1,0 +1,100 @@
+{
+  "crews": {
+    "mac": {
+      "name": "PendingCrew Mac 开发",
+      "members": [
+        { "key": "captain", "name": "机长", "role": "机长：规划、拆分、验收整个 Mac 版的工作", "work": ["本周发版计划"], "busy": false, "recency_rank": 2 },
+        { "key": "scroll", "name": "滚动修复", "role": "修终端视图的滚动、重绘和选区问题", "work": ["终端滚动跳动", "选区高亮残影"], "busy": true, "recency_rank": 1 },
+        { "key": "release", "name": "发版", "role": "负责 Mac 版打包、签名、公证、自动更新源和 Homebrew tap", "work": ["新版本 dmg 与公证", "自动更新源更新"], "busy": false, "recency_rank": 4 },
+        { "key": "crewd", "name": "crewd 后端", "role": "用 Rust 写新的后台进程 crewd：会话驱动、存储、接口", "work": ["claude 会话投递状态机", "SQLite 存储迁移"], "busy": true, "recency_rank": 3 },
+        { "key": "ios", "name": "iOS 配对", "role": "iOS 客户端与 Mac 的配对和加密直连", "work": ["证书指纹配对"], "busy": false, "recency_rank": 6 },
+        { "key": "docs", "name": "文档", "role": "维护设计文档、实现计划和交付记录", "work": ["设计文档交付记录回写"], "busy": false, "recency_rank": 8 }
+      ]
+    },
+    "edge": {
+      "name": "大绿豆后端",
+      "members": [
+        { "key": "captain", "name": "机长", "role": "机长：大绿豆后端的规划与验收", "work": [], "busy": false, "recency_rank": 3 },
+        { "key": "billing", "name": "计费", "role": "钱包与计费：网页支付、应用内购买、钱包余额门禁", "work": ["钱包门禁缓存", "支付回调对账"], "busy": true, "recency_rank": 1 },
+        { "key": "voice", "name": "群语音", "role": "群语音：媒体容器与实时音频转发", "work": ["语音断续修复"], "busy": false, "recency_rank": 5 },
+        { "key": "migrate", "name": "数据库迁移", "role": "数据库表结构、迁移脚本与表权限", "work": ["bot 可见性迁移", "表权限授权修复"], "busy": false, "recency_rank": 2 },
+        { "key": "board", "name": "看板", "role": "运维看板：告警、埋点、错误上报", "work": ["告警面板"], "busy": true, "recency_rank": 4 }
+      ]
+    },
+    "solo": {
+      "name": "个人博客",
+      "members": [
+        { "key": "captain", "name": "机长", "role": "机长：个人博客站点", "work": [], "busy": false, "recency_rank": 2 },
+        { "key": "blog", "name": "博客写作", "role": "写博客文章、维护静态站点", "work": ["Rust 异步入门文章"], "busy": false, "recency_rank": 1 }
+      ]
+    }
+  },
+  "cases": [
+    { "decision": "route_todo", "id": "route-01", "crew": "mac", "todo": "终端里滚动到底部的时候画面会上下跳一下，帮忙看看", "expect": ["scroll"] },
+    { "decision": "route_todo", "id": "route-02", "crew": "mac", "todo": "新版本的公证一直卡在 In Progress，查一下怎么回事", "expect": ["release"] },
+    { "decision": "route_todo", "id": "route-03", "crew": "mac", "todo": "crewd 的 SQLite 迁移跑完以后 sessions 表少了几列", "expect": ["crewd"] },
+    { "decision": "route_todo", "id": "route-04", "crew": "mac", "todo": "iPhone 上扫码配对总是提示证书不匹配", "expect": ["ios"] },
+    { "decision": "route_todo", "id": "route-05", "crew": "mac", "todo": "把上周定下来的工作项设计回写到设计文档里，交付记录也补上", "expect": ["docs"] },
+    { "decision": "route_todo", "id": "route-06", "crew": "mac", "todo": "Mac 版加一个快捷键面板，把所有快捷键列出来", "expect": ["new_session", "captain"] },
+    { "decision": "route_todo", "id": "route-07", "crew": "mac", "todo": "这周先发版还是先把 crewd 做完？你们排一下优先级", "expect": ["captain"] },
+    { "decision": "route_todo", "id": "route-08", "crew": "mac", "todo": "我想从零开始做一个安卓版的客户端，单独一个仓库", "expect": ["new_crew"] },
+    { "decision": "route_todo", "id": "route-09", "crew": "edge", "todo": "支付回调重复触发，有用户的钱包被扣了两次", "expect": ["billing"] },
+    { "decision": "route_todo", "id": "route-10", "crew": "edge", "todo": "群语音里有人说话断断续续，人一多就更明显", "expect": ["voice"] },
+    { "decision": "route_todo", "id": "route-11", "crew": "edge", "todo": "告警面板上服务端错误的告警一直在响，看看是不是阈值设错了", "expect": ["board"] },
+    { "decision": "route_todo", "id": "route-12", "crew": "edge", "todo": "上线前把计费和数据库迁移一起过一遍，谁先谁后你们定好再动手", "expect": ["captain"] },
+    { "decision": "route_todo", "id": "route-13", "crew": "solo", "todo": "写一篇介绍 tokio select 宏的文章", "expect": ["blog"] },
+
+    { "decision": "wake", "id": "wake-01", "crew": "mac", "channel": ["captain", "scroll", "release", "crewd"], "recent": ["滚动修复：选区残影已经修好了，等合并"], "message": "@发版 新版本的 dmg 打好了吗？", "expect": ["release"] },
+    { "decision": "wake", "id": "wake-02", "crew": "mac", "channel": ["captain", "scroll", "crewd"], "recent": ["滚动修复：我把滚动锚点改成按行对齐了，你再试试"], "message": "试了，还是会跳，而且选区也花了", "expect": ["scroll"] },
+    { "decision": "wake", "id": "wake-03", "crew": "mac", "channel": ["captain", "scroll", "release", "crewd", "docs"], "recent": ["发版：新版本已经发出去了"], "message": "谢谢大家，今天辛苦了", "expect": [] },
+    { "decision": "wake", "id": "wake-04", "crew": "mac", "channel": ["captain", "scroll", "release", "crewd", "ios", "docs"], "recent": [], "message": "crewd 的接口我想改成 gRPC，先别往下写了", "expect": ["crewd"], "optional": ["captain"] },
+    { "decision": "wake", "id": "wake-05", "crew": "mac", "channel": ["captain", "ios", "crewd"], "recent": ["iOS 配对：需要你确认一下，配对码是显示在 Mac 上还是 iPhone 上？"], "message": "显示在 Mac 上", "expect": ["ios"] },
+    { "decision": "wake", "id": "wake-06", "crew": "edge", "channel": ["captain", "billing", "migrate"], "recent": ["数据库迁移：bot 可见性的迁移准备好了，今晚推"], "message": "迁移今晚先别推，计费那边的表还在改", "expect": ["migrate"], "optional": ["billing", "captain"] },
+    { "decision": "wake", "id": "wake-07", "crew": "edge", "channel": ["captain", "billing", "voice", "migrate", "board"], "recent": ["看板：错误告警突然多了，我在查"], "message": "那个告警是我手动触发的测试，别查了", "expect": ["board"], "optional": ["captain"] },
+    { "decision": "wake", "id": "wake-08", "crew": "edge", "channel": ["captain", "billing", "voice"], "recent": [], "message": "今天中午吃什么好", "expect": [] },
+    { "decision": "wake", "id": "wake-09", "crew": "solo", "channel": ["captain", "blog"], "recent": ["博客写作：tokio select 那篇初稿写好了"], "message": "标题改成《tokio select 的几个坑》", "expect": ["blog"] },
+    { "decision": "wake", "id": "wake-10", "crew": "mac", "channel": ["captain", "scroll", "release"], "recent": [], "message": "机长，这周的发版计划发我看一下", "expect": ["captain"], "optional": ["release"] },
+    { "decision": "wake", "id": "wake-11", "crew": "edge", "channel": ["captain", "billing", "voice", "migrate", "board"], "recent": [], "message": "@计费 @群语音 你们俩对一下，语音通话要不要按时长扣费", "expect": ["billing", "voice"], "optional": ["captain"] },
+
+    { "decision": "attribute", "id": "attr-01", "message": "还是不行，换个思路吧", "candidates": [
+      { "key": "m-301", "kind": "message", "summary": "滚动修复：我把滚动锚点改成按行对齐了，你再试试" },
+      { "key": "m-298", "kind": "message", "summary": "发版：dmg 已经传到发布页了" },
+      { "key": "todo-41", "kind": "todo", "summary": "iPhone 扫码配对提示证书不匹配" } ], "expect": ["m-301"] },
+    { "decision": "attribute", "id": "attr-02", "message": "dmg 我下好了，装上能打开", "candidates": [
+      { "key": "m-301", "kind": "message", "summary": "滚动修复：我把滚动锚点改成按行对齐了，你再试试" },
+      { "key": "m-298", "kind": "message", "summary": "发版：dmg 已经传到发布页了" },
+      { "key": "todo-40", "kind": "todo", "summary": "自动更新没有弹出新版本提示" } ], "expect": ["m-298"] },
+    { "decision": "attribute", "id": "attr-03", "message": "早上好", "candidates": [
+      { "key": "m-301", "kind": "message", "summary": "滚动修复：我把滚动锚点改成按行对齐了，你再试试" },
+      { "key": "m-298", "kind": "message", "summary": "发版：dmg 已经传到发布页了" },
+      { "key": "todo-41", "kind": "todo", "summary": "iPhone 扫码配对提示证书不匹配" } ], "expect": ["none"] },
+    { "decision": "attribute", "id": "attr-04", "message": "配对那个，证书指纹我看对上了", "candidates": [
+      { "key": "todo-41", "kind": "todo", "summary": "iPhone 扫码配对提示证书不匹配" },
+      { "key": "w7", "kind": "work_item", "summary": "证书指纹配对：配对时交换自签证书指纹" },
+      { "key": "m-298", "kind": "message", "summary": "发版：dmg 已经传到发布页了" } ], "expect": ["todo-41", "w7"] },
+    { "decision": "attribute", "id": "attr-05", "message": "扣两次费的那个用户我已经手动退款了", "candidates": [
+      { "key": "todo-12", "kind": "todo", "summary": "支付回调重复触发，有用户的钱包被扣了两次" },
+      { "key": "w3", "kind": "work_item", "summary": "钱包门禁缓存" },
+      { "key": "m-77", "kind": "message", "summary": "群语音：断续问题定位到容器的抖动缓冲" } ], "expect": ["todo-12"] },
+    { "decision": "attribute", "id": "attr-06", "message": "新版本的公证又失败了，报错说签名没带时间戳", "candidates": [
+      { "key": "ch-release", "kind": "channel", "summary": "发版群：打包、签名、公证、自动更新" },
+      { "key": "ch-scroll", "kind": "channel", "summary": "滚动问题排查群" },
+      { "key": "ch-voice", "kind": "channel", "summary": "群语音排查群" } ], "expect": ["ch-release"] },
+    { "decision": "attribute", "id": "attr-07", "message": "三个人通话的时候第二个人的声音会断", "candidates": [
+      { "key": "ch-release", "kind": "channel", "summary": "发版群：打包、签名、公证、自动更新" },
+      { "key": "ch-scroll", "kind": "channel", "summary": "滚动问题排查群" },
+      { "key": "ch-voice", "kind": "channel", "summary": "群语音排查群" } ], "expect": ["ch-voice"] },
+    { "decision": "attribute", "id": "attr-08", "message": "这篇你觉得怎么样，结尾是不是太突然了", "candidates": [
+      { "key": "m-12", "kind": "message", "summary": "博客写作：tokio select 那篇初稿写好了，链接在这" },
+      { "key": "todo-3", "kind": "todo", "summary": "给博客加订阅源" } ], "expect": ["m-12"] },
+
+    { "decision": "urgency", "id": "urg-01", "crew_name": "个人博客", "recent": ["博客写作：初稿写好了"], "expect_level": [0, 1] },
+    { "decision": "urgency", "id": "urg-02", "crew_name": "PendingCrew Mac 开发", "waiting": [{ "question": "要不要把滚动修复合进这次发版", "waited_minutes": 20 }], "human_mentions": 1, "recent": ["crewd 后端：投递状态机测试全绿"], "expect_level": [2, 2] },
+    { "decision": "urgency", "id": "urg-03", "crew_name": "PendingCrew Mac 开发", "waiting": [{ "question": "公证用的 Apple 账号专用密码过期了，需要你重新生成一个", "waited_minutes": 1560 }], "human_mentions": 3, "issues": ["发版卡住"], "expect_level": [3, 4] },
+    { "decision": "urgency", "id": "urg-04", "crew_name": "大绿豆后端", "waiting": [{ "question": "要不要回滚昨天的迁移", "waited_minutes": 10 }], "human_mentions": 2, "issues": ["线上支付回调全部返回服务器错误"], "expect_level": [4, 4] },
+    { "decision": "urgency", "id": "urg-05", "crew_name": "大绿豆后端", "recent": ["看板：告警面板调好了", "群语音：断续修复已经合并"], "expect_level": [0, 1] },
+    { "decision": "urgency", "id": "urg-06", "crew_name": "PendingCrew Mac 开发", "waiting": [{ "question": "配对码放在 Mac 上还是 iPhone 上", "waited_minutes": 3000 }, { "question": "crewd 用不用 gRPC", "waited_minutes": 1800 }], "human_mentions": 4, "expect_level": [3, 3] },
+    { "decision": "urgency", "id": "urg-07", "crew_name": "个人博客", "waiting": [{ "question": "文章标题用哪一个", "waited_minutes": 180 }], "expect_level": [2, 2] },
+    { "decision": "urgency", "id": "urg-08", "crew_name": "大绿豆后端", "human_mentions": 1, "issues": ["数据库磁盘快满了，可能很快写不进去"], "expect_level": [3, 4] }
+  ]
+}
