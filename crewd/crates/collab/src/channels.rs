@@ -234,6 +234,8 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
 
 /// 两人之间的 dm：已有（未归档、恰好这两人）就复用，否则以 `a` 的身份新建在 `crew` 下
 /// （新建时 `crew` 必须是发起者所在机组，见 `create`，R10）。返回 (群, 是否新建)。
+/// `crew` 只管新建：复用时不论传哪个机组都返回已有的那个（终审裁定，推翻 Task 7 修复 #4），
+/// 否则对方从自己机组发起私聊会被拒、永远打不开这条 dm。
 pub fn ensure_dm(
     tx: &mut Tx<'_>,
     crew: &str,
@@ -252,14 +254,7 @@ pub fn ensure_dm(
         let mut want = vec![a.clone(), b.clone()];
         want.sort();
         if m == want {
-            let existing = get(tx.conn(), &id)?;
-            if existing.crew_id != crew {
-                return Err(CollabError::Invalid(format!(
-                    "这对人的私聊归属机组 {}，不是 {crew}",
-                    existing.crew_id
-                )));
-            }
-            return Ok((existing, false));
+            return Ok((get(tx.conn(), &id)?, false));
         }
     }
     let by = match a {
@@ -1375,7 +1370,8 @@ mod tests {
     }
 
     #[test]
-    fn dm_reuse_requires_the_same_crew() {
+    fn dm_reuse_returns_the_existing_dm_whatever_crew_is_passed() {
+        // 终审裁定（推翻 Task 7 修复 #4）：crew 只管新建（R10）；复用不再核对。
         let mut s_ = store();
         let dm = ok(&mut s_, |tx| {
             create(
@@ -1384,19 +1380,16 @@ mod tests {
                 dm_to("crew-a", s("w-b1")),
             )
         });
-        assert!(matches!(
-            err(&mut s_, |tx| ensure_dm(
-                tx,
-                "crew-b",
-                &s("w-b1"),
-                &s("w-a1")
-            )),
-            CollabError::Invalid(_)
-        ));
+        // 对方从自己的机组发起：拿到同一个 dm，归属不变。
         let (again, created) = ok(&mut s_, |tx| {
-            ensure_dm(tx, "crew-a", &s("w-b1"), &s("w-a1"))
+            ensure_dm(tx, "crew-b", &s("w-b1"), &s("w-a1"))
         });
-        assert_eq!((again.id, created), (dm.id, false));
+        assert_eq!((again.id.as_str(), created), (dm.id.as_str(), false));
+        assert_eq!(again.crew_id, "crew-a");
+        let (same, created) = ok(&mut s_, |tx| {
+            ensure_dm(tx, "crew-a", &s("w-a1"), &s("w-b1"))
+        });
+        assert_eq!((same.id, created), (dm.id, false));
     }
 
     #[test]
