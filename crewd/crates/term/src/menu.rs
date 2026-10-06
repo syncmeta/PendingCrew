@@ -410,4 +410,44 @@ mod tests {
         assert_eq!(a.fingerprint(), "q|a");
         assert_eq!(a.fingerprint(), b.fingerprint());
     }
+
+    /// 菜单后面跟几行正文的边界：恰好 TRAILING_SLACK 行还认，多一行就当已答掉。
+    #[test]
+    fn trailing_slack_boundary_numbered() {
+        let menu = "Do you want to proceed?\n❯ 1. Yes\n  2. No";
+        let two = format!("{menu}\n⏺ 正文一\n⏺ 正文二");
+        assert_eq!(TRAILING_SLACK, 2, "下面两个用例按 2 行写");
+        assert!(parse_menu(&two).is_some(), "后跟 2 行正文仍是待决策");
+        let three = format!("{two}\n⏺ 正文三");
+        assert_eq!(parse_menu(&three), None, "后跟 3 行正文说明已答掉");
+    }
+
+    #[test]
+    fn trailing_slack_boundary_cursor_list() {
+        let list = "Pick one\n\n❯ a\n  b\n\nEnter to confirm · Esc to cancel";
+        let two = format!("{list}\n后跟一\n后跟二");
+        assert!(parse_menu(&two).is_some(), "脚注后 2 行仍是待决策");
+        let three = format!("{two}\n后跟三");
+        assert_eq!(parse_menu(&three), None, "脚注后 3 行说明已答掉");
+    }
+
+    /// 钉住现状（与 Swift 一致，不改行为）：真实 PTY 输出行尾是 CRLF，尾窗把 CR 和 LF
+    /// 各变成一个 `\n`，行与行之间多出空行，而选项块不跨空行——字节尾窗认不出多行菜单。
+    /// 屏幕源（渲染后的行）才是生产里能用的那条。要不要把 CRLF 折成一个换行是 M2b 的决定。
+    #[test]
+    fn crlf_byte_tail_never_recognises_a_multi_line_menu() {
+        let lines = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"];
+        let mut lf = crate::tail::AnsiPlainTextTail::new();
+        lf.feed(lines.join("\n").as_bytes());
+        assert!(parse_menu(lf.tail()).is_some(), "对照：纯 LF 能认出");
+
+        let mut crlf = crate::tail::AnsiPlainTextTail::new();
+        crlf.feed(lines.join("\r\n").as_bytes());
+        crlf.feed(b"\r\n");
+        assert_eq!(
+            crlf.tail(),
+            "Do you want to proceed?\n\n❯ 1. Yes\n\n  2. No\n\n"
+        );
+        assert_eq!(parse_menu(crlf.tail()), None, "CRLF：CR 与 LF 各成一个换行");
+    }
 }
