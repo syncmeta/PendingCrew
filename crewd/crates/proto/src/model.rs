@@ -468,6 +468,13 @@ pub struct CrewRef {
     pub crew_id: String,
 }
 
+/// `channel.removed` 的数据：群随机组删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelRef {
+    pub channel_id: String,
+}
+
 /// `events.lagged`：漏掉的事件条数，客户端应全量重拉。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

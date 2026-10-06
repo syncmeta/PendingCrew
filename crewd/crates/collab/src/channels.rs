@@ -577,6 +577,68 @@ fn set_owner(tx: &mut Tx<'_>, id: &str, to: &MemberRef) -> Result<Channel> {
     get(tx.conn(), id)
 }
 
+/// 机组 `crew` 要被删掉（`crews::delete` 在级联之前调，终审 I4）：它的 session 会随级联消失，
+/// 先把它们从**别的机组**的群里摘干净——显式成员行记 `left_at`；它们当群主的 topic / dm 交给群所属机组
+/// 此刻的机长（没有机长就交给人）；转给它们的待接受转让作废。每个受影响、活下来的群发 ChannelChanged。
+/// 本机组自己的群随级联消失，这里不动，返回它们的 id（调用方在 DELETE 之后发 ChannelRemoved）。
+pub(crate) fn release_sessions_of_doomed_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
+    const DOOMED: &str = "SELECT id FROM sessions WHERE crew_id=?1";
+    let ids = |tx: &Tx<'_>, sql: &str| -> Result<Vec<String>> {
+        let mut st = tx.conn().prepare(sql)?;
+        let v = st
+            .query_map([crew], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(v)
+    };
+    let left = ids(
+        tx,
+        &format!(
+            "SELECT DISTINCT channel_id FROM channel_members
+             WHERE member_kind='session' AND left_at IS NULL AND member_id IN ({DOOMED})
+               AND channel_id IN (SELECT id FROM channels WHERE crew_id<>?1)
+             ORDER BY channel_id"
+        ),
+    )?;
+    let now = tx.now_ts();
+    tx.conn().execute(
+        &format!(
+            "UPDATE channel_members SET left_at=?2
+             WHERE member_kind='session' AND left_at IS NULL AND member_id IN ({DOOMED})
+               AND channel_id IN (SELECT id FROM channels WHERE crew_id<>?1)"
+        ),
+        params![crew, now],
+    )?;
+    for id in left {
+        tx.note(Change::ChannelChanged { channel_id: id });
+    }
+    let owned = ids(
+        tx,
+        &format!(
+            "SELECT id FROM channels WHERE crew_id<>?1 AND owner_kind='session' AND owner_id IN ({DOOMED})
+             ORDER BY id"
+        ),
+    )?;
+    for id in owned {
+        let ch_crew = get(tx.conn(), &id)?.crew_id;
+        let to = crews::captain_of(tx.conn(), &ch_crew)?
+            .map(MemberRef::session)
+            .unwrap_or(MemberRef::Human);
+        set_owner(tx, &id, &to)?;
+    }
+    let pending = ids(
+        tx,
+        &format!(
+            "SELECT id FROM channels WHERE crew_id<>?1 AND pending_owner_kind='session'
+               AND pending_owner_id IN ({DOOMED}) ORDER BY id"
+        ),
+    )?;
+    for id in pending {
+        set_pending(tx, &id, None)?;
+        tx.note(Change::ChannelChanged { channel_id: id });
+    }
+    ids(tx, "SELECT id FROM channels WHERE crew_id=?1 ORDER BY id")
+}
+
 /// 群主发起转让（§22.7 Q2：同工作项负责人，双方确认）。
 pub fn request_owner_transfer(
     tx: &mut Tx<'_>,

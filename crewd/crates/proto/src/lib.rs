@@ -94,6 +94,8 @@ pub mod events {
     ];
     pub const MESSAGE_APPENDED: &str = "message.appended";
     pub const CHANNEL_CHANGED: &str = "channel.changed";
+    /// 群随机组删除被级联删掉（`{channelId}`）。
+    pub const CHANNEL_REMOVED: &str = "channel.removed";
     pub const CREW_CHANGED: &str = "crew.changed";
     pub const CREW_REMOVED: &str = "crew.removed";
     pub const BADGE_CHANGED: &str = "badge.changed";
@@ -219,6 +221,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
     vec![
         (events::MESSAGE_APPENDED, sub::<Message>(g)),
         (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
+        (events::CHANNEL_REMOVED, sub::<ChannelRef>(g)),
         (events::CREW_CHANGED, sub::<Crew>(g)),
         (events::CREW_REMOVED, sub::<CrewRef>(g)),
         (events::BADGE_CHANGED, sub::<Badge>(g)),
@@ -971,7 +974,7 @@ mod tests {
         );
     }
 
-    /// `crew.removed` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
+    /// `crew.removed` / `channel.removed` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
     #[test]
     fn small_event_and_ack_payloads_keep_their_wire_shape() {
         assert_eq!(
@@ -980,6 +983,13 @@ mod tests {
             })
             .unwrap(),
             json!({"crewId":"crew-a"})
+        );
+        assert_eq!(
+            serde_json::to_value(ChannelRef {
+                channel_id: "crew-a/lobby".into()
+            })
+            .unwrap(),
+            json!({"channelId":"crew-a/lobby"})
         );
         assert_eq!(
             serde_json::to_value(Lagged { missed: 3 }).unwrap(),

@@ -1,6 +1,6 @@
 //! 进程内事件总线：客户端事件（`Event`，连接层按主题转发）与内部协作事件（`CollabEvent`，M3c / M4b 订阅）。
 use crewd_collab::{Change, CollabError};
-use crewd_proto::{CrewRef, Event, events};
+use crewd_proto::{ChannelRef, CrewRef, Event, events};
 use rusqlite::Connection;
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -58,7 +58,7 @@ fn ev<T: Serialize>(name: &str, data: &T) -> crewd_collab::Result<Event> {
     })
 }
 
-/// 删掉了的东西读不到 = 不发（删除另有 `crew.removed`）。
+/// 删掉了的东西读不到 = 不发（删除另有 `crew.removed` / `channel.removed`）。
 fn gone<T>(r: crewd_collab::Result<T>) -> crewd_collab::Result<Option<T>> {
     match r {
         Ok(v) => Ok(Some(v)),
@@ -94,6 +94,12 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             events::CREW_REMOVED,
             &CrewRef {
                 crew_id: crew_id.clone(),
+            },
+        )?],
+        Change::ChannelRemoved { channel_id } => vec![ev(
+            events::CHANNEL_REMOVED,
+            &ChannelRef {
+                channel_id: channel_id.clone(),
             },
         )?],
         Change::AskChanged { crew_id, ask } => gone(asks::get(conn, crew_id, ask))?

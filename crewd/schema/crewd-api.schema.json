@@ -484,6 +484,18 @@
       ],
       "type": "object"
     },
+    "ChannelRef": {
+      "description": "`channel.removed` 的数据：群随机组删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。",
+      "properties": {
+        "channelId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId"
+      ],
+      "type": "object"
+    },
     "ChannelSetOwnerParams": {
       "additionalProperties": false,
       "properties": {
@@ -995,6 +1007,22 @@
             },
             "event": {
               "const": "channel.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ChannelRef"
+            },
+            "event": {
+              "const": "channel.removed",
               "type": "string"
             }
           },
@@ -2135,6 +2163,9 @@
     },
     "channel.changed": {
       "$ref": "#/$defs/ChannelSummary"
+    },
+    "channel.removed": {
+      "$ref": "#/$defs/ChannelRef"
     },
     "crew.changed": {
       "$ref": "#/$defs/Crew"

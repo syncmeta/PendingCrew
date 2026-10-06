@@ -850,4 +850,15 @@ async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once()
         .map(|e| &e.data)
         .collect();
     assert_eq!(removed, [&json!({"crewId":made})], "{evs:?}");
+    // 它的群随之级联删掉：每个群一条 channel.removed（终审 I4），负载 {"channelId": …}。
+    let channels_removed: Vec<&Value> = evs
+        .iter()
+        .filter(|e| e.event == "channel.removed")
+        .map(|e| &e.data)
+        .collect();
+    assert_eq!(
+        channels_removed,
+        [&json!({"channelId":format!("{}/lobby", made.as_str().unwrap())})],
+        "{evs:?}"
+    );
 }

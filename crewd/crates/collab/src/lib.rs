@@ -45,6 +45,10 @@ pub enum Change {
     CrewRemoved {
         crew_id: String,
     },
+    /// 群随机组删除被级联删掉了（客户端事件 `channel.removed`；删了的群读不到，`ChannelChanged` 发不出）。
+    ChannelRemoved {
+        channel_id: String,
+    },
     BadgeChanged {
         channel_id: String,
     },

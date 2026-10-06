@@ -336,6 +336,8 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
 }
 
 /// 只能删非内建、且没有 desired=running session 的机组（spec §22.2）。子机组的父边随之消失。
+/// 删除级联（人显式的操作）：本机组的 session、群（含跨机组 topic 及其历史）一起删掉，每个群发
+/// ChannelRemoved；它的 session 在别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
 pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     let crew = get(tx.conn(), id)?;
     if crew.builtin {
@@ -360,7 +362,12 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
         }
     }
     let around: Vec<String> = parents(tx.conn(), id)?.into_iter().chain(kids).collect();
+    // 级联之前：它的 session 退出别的机组的群、交出群主（终审 I4）。
+    let cascaded = crate::channels::release_sessions_of_doomed_crew(tx, id)?;
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
+    for channel_id in cascaded {
+        tx.note(Change::ChannelRemoved { channel_id });
+    }
     for k in &orphans {
         put_last(tx, k, None)?;
         // 又成了根：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）。
@@ -743,6 +750,140 @@ mod tests {
         assert_eq!(
             count(&s, "SELECT COUNT(*) FROM channels WHERE crew_id='crew-x'"),
             0
+        );
+    }
+
+    /// 终审 I4：删机组仍然级联（人显式的操作），但别的机组的群里不留幽灵成员 / 幽灵群主，
+    /// 活下来的群发 ChannelChanged，被级联删掉的群发 ChannelRemoved。
+    #[test]
+    fn delete_clears_its_sessions_out_of_other_crews_channels_and_reports_every_channel() {
+        use crate::channels::{self, NewChannel};
+        use crewd_proto::{ChannelKind, MemberRef};
+        let mut s = store();
+        let as_ = |id: &str| crate::Sender::Session(id.into());
+        let topic = |crew: &str, name: &str, members: Vec<MemberRef>| NewChannel {
+            crew_id: crew.into(),
+            kind: ChannelKind::Topic,
+            name: name.into(),
+            purpose: None,
+            members,
+        };
+        // crew-a 的群：cap-x 只是成员（群主 w-a1，且有一条转给 cap-x 的待接受转让）。
+        let member_only = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &as_("w-a1"),
+                topic("crew-a", "甲", vec![MemberRef::session("cap-x")]),
+            )
+        });
+        ok(&mut s, |tx| {
+            channels::request_owner_transfer(
+                tx,
+                &as_("w-a1"),
+                &member_only.id,
+                &MemberRef::session("cap-x"),
+            )
+        });
+        // crew-a 的群：cap-x 建的、是群主 → 交给 crew-a 此刻的机长。
+        let owned = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &as_("cap-x"),
+                topic("crew-a", "乙", vec![MemberRef::session("w-a2")]),
+            )
+        });
+        // crew-b 的群：cap-x 是群主，crew-b 没有机长 → 交给人。
+        let owned_no_captain = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &as_("cap-x"),
+                topic("crew-b", "丙", vec![MemberRef::session("w-b1")]),
+            )
+        });
+        s.conn()
+            .execute(
+                "UPDATE crews SET captain_session_id=NULL WHERE id='crew-b'",
+                [],
+            )
+            .unwrap();
+        // crew-a 的人类群：cap-x 被人显式拉进来。
+        ok(&mut s, |tx| channels::ensure_human_channel(tx, "crew-a"));
+        ok(&mut s, |tx| {
+            channels::add_members(
+                tx,
+                &crate::Sender::Human,
+                "crew-a/human",
+                &[MemberRef::session("cap-x")],
+            )
+        });
+        // crew-x 自己的群：随机组级联删掉。
+        let doomed = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &as_("cap-x"),
+                topic("crew-x", "丁", vec![MemberRef::session("w-a1")]),
+            )
+        });
+
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| delete(tx, "crew-x"));
+
+        let ghost = MemberRef::session("cap-x");
+        for id in [
+            &member_only.id,
+            &owned.id,
+            &owned_no_captain.id,
+            "crew-a/human",
+        ] {
+            assert!(
+                !channels::members(s.conn(), id).unwrap().contains(&ghost),
+                "{id} 里不留幽灵成员"
+            );
+            assert!(
+                ch.contains(&Change::ChannelChanged {
+                    channel_id: id.to_string()
+                }),
+                "{id} 活下来、成员变了，要发 ChannelChanged：{ch:?}"
+            );
+        }
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM channel_members WHERE member_id='cap-x' AND left_at IS NULL"
+            ),
+            0
+        );
+        let get = |id: &str| channels::get(s.conn(), id).unwrap();
+        assert_eq!(
+            get(&owned.id).owner,
+            Some(MemberRef::session("cap-a")),
+            "交给本群机组的机长"
+        );
+        assert_eq!(
+            get(&owned_no_captain.id).owner,
+            Some(MemberRef::Human),
+            "没机长就交给人"
+        );
+        assert_eq!(
+            get(&member_only.id).owner,
+            Some(MemberRef::session("w-a1")),
+            "别人的群主不动"
+        );
+        assert_eq!(
+            get(&member_only.id).pending_owner,
+            None,
+            "转给幽灵的待接受转让作废"
+        );
+        for gone in [doomed.id.as_str(), "crew-x/lobby"] {
+            assert!(
+                ch.contains(&Change::ChannelRemoved {
+                    channel_id: gone.to_string()
+                }),
+                "{gone} 被级联删掉，要发 ChannelRemoved：{ch:?}"
+            );
+        }
+        assert!(
+            !ch.iter().any(|c| matches!(c, Change::ChannelRemoved { channel_id } if !channel_id.starts_with("crew-x/") && *channel_id != doomed.id)),
+            "只报被删掉的群：{ch:?}"
         );
     }
 

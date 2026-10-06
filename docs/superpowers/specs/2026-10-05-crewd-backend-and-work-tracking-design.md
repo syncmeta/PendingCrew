@@ -642,7 +642,7 @@ crews    += title_source, status_line, policy, captain_session_id, next_ext, pos
 | directory.list | {query?} | DirectoryRow[] |
 | todo.list | 不变 | 不变 |
 
-事件（主题 = 事件名第一段）：`message.appended`(Message)、`channel.changed`(ChannelSummary)、`crew.changed`(Crew)、`crew.removed`({crewId})、`badge.changed`({channelId, unreadForHuman, humanMentions})、`ask.changed`(Ask)、`approval.changed`(Approval)、`restart.changed`(RestartPrompt)、`session.changed`(SessionLive，由 M3c 发)、`wake.changed`（M3c，排障）、`events.lagged`。`Message.crewId` 换成 `channelId`，不保留两个字段。M2d 与 iOS 只用这一套；iOS 的远程传输仍按 Q11。
+事件（主题 = 事件名第一段）：`message.appended`(Message)、`channel.changed`(ChannelSummary)、`channel.removed`({channelId}，群随机组删除被级联删掉)、`crew.changed`(Crew)、`crew.removed`({crewId})、`badge.changed`({channelId, unreadForHuman, humanMentions})、`ask.changed`(Ask)、`approval.changed`(Approval)、`restart.changed`(RestartPrompt)、`session.changed`(SessionLive，由 M3c 发)、`wake.changed`（M3c，排障）、`events.lagged`。`Message.crewId` 换成 `channelId`，不保留两个字段。M2d 与 iOS 只用这一套；iOS 的远程传输仍按 Q11。
 
 验收
 - 真实数据只读演练（照 M1 的做法，在副本上跑）：v2→v3 前后消息条数与 seq 集合一致；每个机组恰好一个大厅；迁移后 human 红标为 0、每个 session 未读为 0；再跑一遍迁移没有变化。
