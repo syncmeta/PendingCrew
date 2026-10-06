@@ -249,6 +249,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewd-exec"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "crewd-legacy"
 version = "0.1.0"
 dependencies = [

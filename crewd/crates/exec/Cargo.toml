@@ -1,0 +1,12 @@
+[package]
+name = "crewd-exec"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+rustix = { version = "1", features = ["termios", "process", "fs", "stdio"] }
+tokio = { version = "1.53.2", features = ["rt", "macros", "time", "sync", "process", "net"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
