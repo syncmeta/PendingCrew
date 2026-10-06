@@ -312,6 +312,7 @@ fn block_text(l: Locale, b: &ChannelBlock) -> String {
         out.push_str(&fill(
             f.get("line"),
             &[
+                ("seq", &ln.seq.to_string()),
                 ("at", &flat(&ln.at)),
                 ("sender", &flat(&ln.sender)),
                 ("text", &indent(&ln.text)),
@@ -1110,10 +1111,10 @@ mod tests {
         }
     }
 
-    /// 行首是 `[` 或 `【` 的行（只有真的行头 / 消息行可以这样开头）。
+    /// 行首是 `#`（消息行，带序号）或 `[` / `【`（块头）的行（只有真的行头 / 消息行可以这样开头）。
     fn frame_lines(text: &str) -> Vec<&str> {
         text.lines()
-            .filter(|l| l.starts_with('[') || l.starts_with('【'))
+            .filter(|l| l.starts_with('#') || l.starts_with('[') || l.starts_with('【'))
             .collect()
     }
 
@@ -1153,6 +1154,36 @@ mod tests {
             &build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap(),
         );
         assert_eq!(frame_lines(&wake).len(), 2, "{wake}");
+    }
+
+    /// 注入 / 唤醒里每条消息行带它的序号：agent 的 `reply_to` 填的就是这个 `#序号`。
+    #[test]
+    fn every_injected_line_carries_its_number() {
+        let line = |seq: i64, directed: Option<Vec<String>>, reply: Option<String>| MsgLine {
+            seq,
+            at: "2026-09-21T13:33:20.000Z".into(),
+            sender: "人类".into(),
+            text: "正文".into(),
+            directed_to: directed,
+            reply_to: reply,
+        };
+        let blocks = [ChannelBlock {
+            channel_id: "crew-a/lobby".into(),
+            kind: ChannelKind::Lobby,
+            name: String::new(),
+            crew_title: "机组甲".into(),
+            lines: vec![
+                line(128, None, None),
+                line(129, Some(vec!["乙".into()]), Some("丙".into())),
+            ],
+        }];
+        for l in [Locale::Zh, Locale::En] {
+            let text = injection(l, &blocks);
+            let numbered: Vec<&str> = text.lines().filter(|x| x.contains("#12")).collect();
+            assert_eq!(numbered.len(), 2, "{l:?}: {text}");
+            assert!(text.contains("#128 [2026-09-21T13:33:20.000Z]"), "{text}");
+            assert!(text.contains("#129 [2026-09-21T13:33:20.000Z]"), "{text}");
+        }
     }
 
     /// 名字（发送者、机组、群、目标、被回复者）里的换行压成空格；唤醒正文里的问 / 答 / 附言续行缩进。
@@ -1485,12 +1516,12 @@ mod tests {
             Locale::Zh,
             &blocks_for(s.conn(), "cap-a", Locale::Zh, &unread).unwrap(),
         );
-        assert!(zh.contains("不是派给你的） （回复 人类） ["), "{zh}");
+        assert!(zh.contains("不是派给你的） （回复 人类） #"), "{zh}");
         let en = injection(
             Locale::En,
             &blocks_for(s.conn(), "cap-a", Locale::En, &unread).unwrap(),
         );
-        assert!(en.contains("not to you) (reply to Human) ["), "{en}");
+        assert!(en.contains("not to you) (reply to Human) #"), "{en}");
     }
 
     /// 游标远远落后、窗口里全是比被叫消息更旧的未读：第一批只有积压（wake_ids 空、那一行 deferred），

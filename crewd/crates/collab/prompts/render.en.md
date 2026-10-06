@@ -42,7 +42,7 @@ New messages in your channels (only those addressed to or visible to you):
 [direct message]
 
 ## line
-[{at}] {sender}: {text}
+#{seq} [{at}] {sender}: {text}
 
 ## line.directed
 (addressed to {targets}, not to you)

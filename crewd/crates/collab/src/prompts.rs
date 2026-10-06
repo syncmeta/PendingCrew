@@ -82,7 +82,7 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("inject.channel.human", &["crew"]),
     ("inject.channel.topic", &["name"]),
     ("inject.channel.dm", &[]),
-    ("line", &["at", "sender", "text"]),
+    ("line", &["seq", "at", "sender", "text"]),
     ("line.directed", &["targets"]),
     ("line.directed.unknown", &[]),
     ("line.reply", &["reply"]),

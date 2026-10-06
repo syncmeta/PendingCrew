@@ -42,7 +42,7 @@ crewd
 【私聊】
 
 ## line
-[{at}] {sender}：{text}
+#{seq} [{at}] {sender}：{text}
 
 ## line.directed
 （发给 {targets} 的，不是派给你的）
