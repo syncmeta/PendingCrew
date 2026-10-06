@@ -282,7 +282,8 @@ pub struct Channel {
     pub purpose: Option<String>,
     /// "human" | "system" | session id。
     pub created_by: String,
-    /// 群主（§22.7 Q2）。大厅 / 人类群 = 归属机组此刻的机长（现算；没有机长时 None）。
+    /// 群主（§22.7 Q2）。大厅 / 人类群 = 归属机组此刻的机长（现算；没有机长时 None）。topic / dm 存的是群主；
+    /// 删机组时群主随之消失、群里又一个成员不剩，就没有群主（None），只能由机长 / 人 `force_owner`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<MemberRef>,
     /// 待接受的群主转让对象。
