@@ -8,6 +8,13 @@
 //! 2. 标签扫描（代码）：「标签 + 分隔 + 值」——`DB_PASSWORD=…`、`密码是 …`、`api key 是 "…"`、
 //!    `{"密码": "…"}`、`my password is …`、`验证码 482913`。保留标签与分隔，只遮值。
 //!    被放过的候选（值不像凭据）不吞文字：从标签末尾继续找，后面真正的值照样能找到。
+//!    值只看前 1024 个字符判断，判过了就遮到这一段的末尾。
+//!
+//! 已知、接受的边界（复审裁定，不修）：
+//! - 一次 `scrub_str` 最多重复 8 轮（`MAX_ROUNDS`）。首尾相粘、每遮一把才露出下一把边界的厂商 key
+//!   （`AKIA…AKIA…` 连粘九把以上）可能留下尾部几把，第二次调用才遮完；真实消息里不会这样粘。
+//! - 对抗性输入（MB 级、满是标签与分隔）有常数倍的开销（每个被放过的候选最多看 1024 个字符）；
+//!   总体仍是线性的，消息在进来前已截到 2000 字符（`decisions::MAX_TEXT_CHARS`）。
 use crate::model::{Question, Request};
 use regex_lite::{Captures, Regex};
 use serde_json::Value;
@@ -88,14 +95,17 @@ static LABEL: LazyLock<Regex> = LazyLock::new(|| {
     .expect("标签正则写错了")
 });
 
-/// 值最长扫这么多字符：防「token:token:token:…」这种输入把扫描拖成平方级。
-const MAX_VALUE_CHARS: usize = 1024;
+/// 判断只看值的前这么多字符；判过了就一直遮到这一段的末尾（长值的尾巴不漏）。
+/// 只扫这么多再判断，是为了「token:/token:/…」这类输入里被放过的候选不会每个都把整段扫一遍。
+const JUDGE_CHARS: usize = 1024;
+/// 标签与值之间最多跳过这么多字节的分隔（空白、冒号、是……）。
+const MAX_SEP_BYTES: usize = 1024;
 
 fn is_code_label(label: &str) -> bool {
     label == "验证码" || label == "驗證碼"
 }
 
-/// 口令类标签：纯数字也是真口令（「密码：12345678」）。
+/// 口令类标签：纯数字也是真口令（「密码：12345678」「密码 88886666」）。
 fn password_like(label: &str) -> bool {
     let l = label.to_ascii_lowercase();
     l.contains("password")
@@ -109,6 +119,26 @@ fn password_like(label: &str) -> bool {
             .any(|p| l.contains(p))
 }
 
+/// 汉字、假名、谚文、CJK 与全角标点：值到这里为止（「密码：Abc123别外传」）。
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x2FDF
+        | 0x3000..=0x303F
+        | 0x3040..=0x30FF
+        | 0x3100..=0x31FF
+        | 0x3200..=0x9FFF
+        | 0xAC00..=0xD7AF
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFFEF
+        | 0x20000..=0x3FFFF)
+}
+
+/// 值里能出现的字符：除空白、引号、`,` `;` 与 CJK 之外都算——ä ß € emoji 都是值的一部分。
+fn value_char(c: char) -> bool {
+    !c.is_whitespace() && !"\"'`,;“”‘’「」『』".contains(c) && !is_cjk(c)
+}
+
 /// 路径、URL 不是凭据值（URL 里的账号密码另有规则）。
 fn path_or_url(value: &str) -> bool {
     value.starts_with('/')
@@ -117,7 +147,15 @@ fn path_or_url(value: &str) -> bool {
         || value.contains("://")
 }
 
-/// 显式分隔（`:` `=` `是` `is`…）后面的值像不像凭据：
+fn has_letter(v: &str) -> bool {
+    v.chars().any(char::is_alphabetic)
+}
+
+fn has_digit(v: &str) -> bool {
+    v.chars().any(|c| c.is_ascii_digit())
+}
+
+/// 显式分隔（`:` `=` `是`…）后面的值像不像凭据：
 /// 口令类标签 ≥6 个字符即可（纯数字也算）；其他标签要有字母，且（有数字 / 大小写混合 / 有符号 / ≥12 个字符）。
 /// 「token: 409600」「这个 token 是 bearer 类型」不遮。
 fn credential_value(label: &str, value: &str) -> bool {
@@ -128,20 +166,25 @@ fn credential_value(label: &str, value: &str) -> bool {
     if password_like(label) {
         return true;
     }
-    let letter = value.chars().any(|c| c.is_ascii_alphabetic());
-    let digit = value.chars().any(|c| c.is_ascii_digit());
-    let upper = value.chars().any(|c| c.is_ascii_uppercase());
-    let lower = value.chars().any(|c| c.is_ascii_lowercase());
-    let symbol = value.chars().any(|c| "!@#$%^&*+=~?".contains(c));
-    letter && (digit || (upper && lower) || symbol || n >= 12)
+    let upper = value.chars().any(char::is_uppercase);
+    let lower = value.chars().any(char::is_lowercase);
+    let symbol = value
+        .chars()
+        .any(|c| "!@#$%^&*+=~?".contains(c) || (!c.is_ascii() && !c.is_alphanumeric()));
+    has_letter(value) && (has_digit(value) || (upper && lower) || symbol || n >= 12)
 }
 
-/// 只隔空白（或标签后直接跟值）：行文里太常见（「password expired」「令牌 refresh」），要求值里既有字母又有数字。
-fn mixed_value(value: &str) -> bool {
-    value.chars().count() >= 6
-        && !path_or_url(value)
-        && value.chars().any(|c| c.is_ascii_alphabetic())
-        && value.chars().any(|c| c.is_ascii_digit())
+/// 只隔空白、`is`、或中文标签后直接跟值：行文里太常见（「password expired」「令牌 refresh」
+/// 「password is required」），要求值里既有字母又有数字；口令类标签后 ≥6 位纯数字也算（数字口令）。
+fn strict_value(label: &str, value: &str) -> bool {
+    let n = value.chars().count();
+    if n < 6 || path_or_url(value) {
+        return false;
+    }
+    // 数字口令后面常跟句末标点（「密码 88886666.」）：判断时去掉。
+    let digits = value.trim_end_matches(|c: char| c.is_ascii_punctuation());
+    (has_letter(value) && has_digit(value))
+        || (password_like(label) && digits.len() >= 6 && digits.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// 验证码：四到八位字母数字、含数字，且后面不是量词 / 单位（「2024 年」「1000 条/天」）。
@@ -164,12 +207,25 @@ struct Found {
     end: usize,
 }
 
+/// 从 `start` 起最多 `max` 个值字符的字节终点。
+fn run_end(text: &str, start: usize, max: usize) -> usize {
+    let mut end = start;
+    for (n, c) in text[start..].chars().enumerate() {
+        if n == max || !value_char(c) {
+            break;
+        }
+        end += c.len_utf8();
+    }
+    end
+}
+
 /// 从标签末尾（`after`）起解析「分隔 + 值」，像凭据就返回值的区间。
 fn value_after(text: &str, label: &str, after: usize) -> Option<Found> {
     let rest = &text[after..];
     let mut i = 0;
     let mut explicit = false;
     let mut seen_sep = false;
+    let mut saw_is = false;
     // JSON 键的收尾引号：{"密码": "…"}
     if rest.starts_with('"') || rest.starts_with('\'') {
         i += 1;
@@ -188,14 +244,14 @@ fn value_after(text: &str, label: &str, after: usize) -> Option<Found> {
             && !r[2..].starts_with(|c: char| c.is_ascii_alphanumeric())
         {
             seen_sep = true;
-            explicit = true;
+            saw_is = true;
             i += 2;
             continue;
         } else {
             break;
         }
         i += c.len_utf8();
-        if i > 64 {
+        if i > MAX_SEP_BYTES {
             return None;
         }
     }
@@ -205,32 +261,31 @@ fn value_after(text: &str, label: &str, after: usize) -> Option<Found> {
         i += q.len_utf8();
     }
     let start = after + i;
-    let value: String = text[start..]
-        .chars()
-        .take_while(|c| c.is_ascii() && !c.is_ascii_whitespace() && !"\"'`,;".contains(*c))
-        .take(MAX_VALUE_CHARS)
-        .collect();
-    let end = start + value.len();
+    let judge_end = run_end(text, start, JUDGE_CHARS);
+    let mut value = &text[start..judge_end];
     // 已经遮过的、或残留的分隔符开头：不是值（幂等的关键）。
     if value.is_empty() || value.starts_with(['[', ':', '=']) {
         return None;
     }
-    let ok = if is_code_label(label) {
-        code_value(&value, &text[end..])
-    } else if !seen_sep {
-        // 标签后面直接跟值：只认中文标签（「wifi密码12345678」）。按只隔空白处理；
-        // 口令类标签后紧跟 ≥6 位纯数字也算（数字口令）。
-        !label.is_ascii()
-            && (mixed_value(&value)
-                || (password_like(label)
-                    && value.len() >= 6
-                    && value.chars().all(|c| c.is_ascii_digit())))
-    } else if explicit {
-        credential_value(label, &value)
+    if is_code_label(label) {
+        // 验证码后面常跟英文标点（「482913.」「482913)」）：去掉再判断，只遮码本身。
+        value = value.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        let end = start + value.len();
+        return code_value(value, &text[end..]).then_some(Found { start, end });
+    }
+    let ok = if !seen_sep {
+        // 标签后面直接跟值：只认中文标签（「wifi密码12345678」）。
+        !label.is_ascii() && strict_value(label, value)
+    } else if explicit && !saw_is {
+        credential_value(label, value)
     } else {
-        mixed_value(&value)
+        strict_value(label, value)
     };
-    ok.then_some(Found { start, end })
+    // 判过了：一直遮到这一段的末尾（超过判断窗口的长值也不留尾巴）。
+    ok.then(|| Found {
+        start,
+        end: run_end(text, judge_end, usize::MAX),
+    })
 }
 
 /// 标签扫描：找出所有「标签 + 分隔 + 值」里的值区间。
@@ -641,6 +696,133 @@ mod tests {
             assert!(once.ends_with(REDACTED), "{input} -> {once}");
             assert_eq!(scrub_str(&once), (once.clone(), 0), "{input}");
         }
+    }
+
+    fn assert_exact(cases: &[(&str, &str)]) {
+        for (input, expected) in cases {
+            let (out, hits) = scrub_str(input);
+            assert_eq!((out.as_str(), hits), (*expected, 1), "{input}");
+            assert_eq!(scrub_str(&out), (out.clone(), 0), "{input}");
+        }
+    }
+
+    fn assert_untouched(cases: &[&str]) {
+        for text in cases {
+            let (out, hits) = scrub_str(text);
+            assert_eq!((out.as_str(), hits), (*text, 0), "误遮了：{text}");
+        }
+    }
+
+    /// 长值：只拿前 1024 个字符判断，判过了就遮到这一段的末尾，尾巴不漏。
+    #[test]
+    fn long_values_are_redacted_to_the_end_of_the_run() {
+        let long = "A".repeat(1500) + "TAILLEAK";
+        for input in [
+            format!("password={long}"),
+            format!("密码：{long}"),
+            format!(
+                "PRIVATE_KEY_B64={}",
+                "QUJDRGVmZ2gxMjM0".repeat(120) + "TAILLEAK"
+            ),
+        ] {
+            let (out, hits) = scrub_str(&input);
+            assert!(
+                !out.contains("TAILLEAK"),
+                "尾巴漏了：…{}",
+                &out[out.len().saturating_sub(40)..]
+            );
+            assert!(
+                out.ends_with(REDACTED),
+                "…{}",
+                &out[out.len().saturating_sub(40)..]
+            );
+            assert_eq!(hits, 1);
+            assert_eq!(scrub_str(&out), (out.clone(), 0));
+        }
+    }
+
+    /// 口令类标签只隔空白、后面是纯数字口令：照样遮（非口令类标签仍要求字母 + 数字）。
+    #[test]
+    fn numeric_passwords_after_a_space_are_redacted() {
+        assert_exact(&[
+            ("密码 88886666", "密码 [REDACTED]"),
+            ("wifi 密码 88886666", "wifi 密码 [REDACTED]"),
+            ("我的密码 12345678", "我的密码 [REDACTED]"),
+            ("口令 123456789", "口令 [REDACTED]"),
+            ("我的授权码 12345678", "我的授权码 [REDACTED]"),
+            ("password 12345678", "password [REDACTED]"),
+        ]);
+        assert_untouched(&[
+            "令牌 12345678",
+            "token 12345678",
+            "密钥 20240611",
+            "密码 2024 年改过",
+        ]);
+    }
+
+    /// 显式分隔之后，值不在第一个非 ASCII 字符处截断：ä ß € emoji 都算值的一部分；
+    /// 只在空白、引号、汉字 / 假名 / 谚文和全角标点处停。
+    #[test]
+    fn values_keep_non_cjk_unicode() {
+        assert_exact(&[
+            ("password=Straße2024", "password=[REDACTED]"),
+            ("DB_PASSWORD=pässwörd123", "DB_PASSWORD=[REDACTED]"),
+            ("API_KEY=abc€def123456", "API_KEY=[REDACTED]"),
+            (
+                r#"{"password": "pässwörd123"}"#,
+                r#"{"password": "[REDACTED]"}"#,
+            ),
+            ("password=hunter2ü99", "password=[REDACTED]"),
+            ("token=abcdef123456😀xyz789", "token=[REDACTED]"),
+            ("密码：Abc12345别外传", "密码：[REDACTED]别外传"),
+            ("密码：Abc12345，别外传", "密码：[REDACTED]，别外传"),
+        ]);
+    }
+
+    /// 验证码后面跟英文标点：先去掉尾部标点再判断，只遮码本身。
+    #[test]
+    fn verification_codes_followed_by_punctuation() {
+        assert_exact(&[
+            ("验证码 482913.", "验证码 [REDACTED]."),
+            ("验证码：482913)", "验证码：[REDACTED])"),
+            ("(验证码 482913)", "(验证码 [REDACTED])"),
+            ("验证码:482913!", "验证码:[REDACTED]!"),
+        ]);
+    }
+
+    /// `is` 后面按只隔空白处理（要字母 + 数字，或口令类标签后的纯数字）：校验提示语不遮。
+    #[test]
+    fn is_takes_the_strict_rule() {
+        assert_untouched(&[
+            "password is required",
+            "password is invalid",
+            "the password is incorrect",
+            "Password is missing",
+            "password is expired",
+            "password is optional for local dev",
+            "the password is: required",
+            "api key is required",
+            "token is expired",
+        ]);
+        assert_exact(&[
+            ("my password is hunter2hunter", "my password is [REDACTED]"),
+            (
+                "the password is: hunter2hunter",
+                "the password is: [REDACTED]",
+            ),
+            ("password is 88886666", "password is [REDACTED]"),
+        ]);
+    }
+
+    /// 标签与值之间隔多少空白都行（不再有 64 字节的上限）。
+    #[test]
+    fn any_amount_of_whitespace_between_label_and_value() {
+        let spaced = format!("password:{}hunter2hunter", " ".repeat(70));
+        let expected = format!("password:{}[REDACTED]", " ".repeat(70));
+        assert_exact(&[
+            (&spaced, &expected),
+            ("password:\t\t\thunter2hunter", "password:\t\t\t[REDACTED]"),
+        ]);
     }
 
     /// 两把厂商 key 首尾相粘：第一把遮掉后第二把前面才出现边界。必须一遍里都遮掉，第二遍 0 命中。
