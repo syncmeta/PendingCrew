@@ -128,9 +128,6 @@ enum CallOut {
 #[serde(rename_all = "camelCase")]
 struct Memo {
     last_prompt_id: Option<String>,
-    /// 最近一次代发出去的问句；没有 prompt_id 的重复 Stop 靠它去重，一轮非问句收尾就清掉。
-    #[serde(default)]
-    last_relayed: Option<String>,
     called_out: CallOut,
 }
 
@@ -172,7 +169,7 @@ pub fn note_post(tx: &mut Tx<'_>, session: &str, mentions: &[Mention]) -> Result
 }
 
 /// 顺序即判据（`SessionTurnTrace.swift:207-215`）：同轮去重 → 不是问句不发 → 已叫过人（或不知道）不发。
-/// `prompt_id` 为空串 = 没有。
+/// `prompt_id` 为空串 = 没有；没有 prompt_id 时不做问句去重（同 Swift：重复一条远比丢掉一个问题轻）。
 pub fn on_turn_end(
     tx: &mut Tx<'_>,
     session: &str,
@@ -185,18 +182,11 @@ pub fn on_turn_end(
     if !prompt_id.is_empty() && memo.last_prompt_id.as_deref() == Some(prompt_id) {
         return Ok(TurnEnd::Replayed);
     }
-    // 没有 prompt_id 的重复 Stop：同一个问句紧接着再来一次，不再代发。
-    if prompt_id.is_empty() && question.is_some() && memo.last_relayed == question {
-        return Ok(TurnEnd::Replayed);
-    }
     let called = memo.called_out;
     if !prompt_id.is_empty() {
         memo.last_prompt_id = Some(prompt_id.to_string());
     }
     memo.called_out = CallOut::No;
-    if question.is_none() {
-        memo.last_relayed = None;
-    }
     save(tx, session, &memo)?;
     let Some(question) = question else {
         return Ok(TurnEnd::Nothing);
@@ -262,8 +252,6 @@ pub fn on_turn_end(
             ..Default::default()
         },
     )?;
-    memo.last_relayed = Some(question);
-    save(tx, session, &memo)?;
     Ok(TurnEnd::Posted {
         message_id: posted.message.id,
     })
@@ -497,7 +485,8 @@ mod tests {
     }
 
     #[test]
-    fn without_a_prompt_id_the_same_question_is_relayed_once() {
+    fn without_a_prompt_id_there_is_no_question_dedupe() {
+        // 取舍（同 Swift）：重复 Stop 且没有 prompt_id 时，同一个问句会发两次——重复一条远比丢掉一个问题轻。
         let mut s = store();
         let lobby = crewd_store::channels::lobby_id("crew-a");
         let before = count_in(&s, &lobby);
@@ -505,21 +494,59 @@ mod tests {
             turn(&mut s, "w-a1", "", "要不要做 B？"),
             TurnEnd::Posted { .. }
         ));
+        assert!(matches!(
+            turn(&mut s, "w-a1", "", "要不要做 B？"),
+            TurnEnd::Posted { .. }
+        ));
+        assert_eq!(count_in(&s, &lobby), before + 2);
+    }
+
+    #[test]
+    fn every_outcome_resets_called_out_so_a_stale_yes_cannot_linger() {
+        let mut s = store();
+        let call = |s: &mut crewd_store::Store| {
+            crate::run(s, 1_790_000_000_000, |tx| {
+                note_post(
+                    tx,
+                    "w-a1",
+                    &[Mention {
+                        kind: MentionKind::Captain,
+                        target_id: None,
+                    }],
+                )
+            })
+            .unwrap();
+        };
+        // 叫过人 + 同一问句再来一次（无 prompt_id）：这一轮 AlreadyCalled，账清回 no，下一轮照发。
+        call(&mut s);
         assert_eq!(
             turn(&mut s, "w-a1", "", "要不要做 B？"),
-            TurnEnd::Replayed,
-            "没有 prompt_id 的重复 Stop"
+            TurnEnd::AlreadyCalled
         );
-        assert_eq!(count_in(&s, &lobby), before + 1);
+        assert!(matches!(
+            turn(&mut s, "w-a1", "", "要不要做 B？"),
+            TurnEnd::Posted { .. }
+        ));
+        // 叫过人 + 陈述收尾：账同样清掉，之后的新问句不会被陈年的 yes 吞掉。
+        call(&mut s);
         assert_eq!(turn(&mut s, "w-a1", "", "做完了。"), TurnEnd::Nothing);
-        assert!(
-            matches!(
-                turn(&mut s, "w-a1", "", "要不要做 B？"),
-                TurnEnd::Posted { .. }
-            ),
-            "中间有过非问句的一轮：算新的一问"
+        assert!(matches!(
+            turn(&mut s, "w-a1", "", "要不要做 C？"),
+            TurnEnd::Posted { .. }
+        ));
+        // 带 prompt_id 的重放：第一次处理已经清过账，重放不会留下 yes。
+        assert!(matches!(
+            turn(&mut s, "w-a1", "p9", "要不要做 D？"),
+            TurnEnd::Posted { .. }
+        ));
+        assert_eq!(
+            turn(&mut s, "w-a1", "p9", "要不要做 D？"),
+            TurnEnd::Replayed
         );
-        assert_eq!(count_in(&s, &lobby), before + 2);
+        assert!(matches!(
+            turn(&mut s, "w-a1", "p10", "要不要做 E？"),
+            TurnEnd::Posted { .. }
+        ));
     }
 
     fn last_text(s: &crewd_store::Store, channel: &str) -> String {
