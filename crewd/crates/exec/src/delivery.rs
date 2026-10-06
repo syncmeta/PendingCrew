@@ -10,7 +10,9 @@
 //! 3. 提交 = 发回车后那一行又变了（或提示符被长正文顶出屏幕后重新出现）。
 //!
 //! 每步有上限，到顶给出终局裁决。等就绪期间的两种坏消息（被对话框挡住、等不到输入框）
-//! **只报不终止**：答完对话框 / 输入框终于画出来，照样投出去。
+//! **只报不终止**：答完对话框 / 输入框终于画出来，照样投出去。写入 / 提交之后屏上弹了
+//! 对话框也一样：等人期间放弃计时停走（框答掉后本轮窗口重新给满），不会因为人没答就终结、
+//! 把正文留在输入框里。
 //! 纯值、时间由调用方传入——整台机器可以脱离进程单测。
 use std::time::{Duration, Instant};
 
@@ -33,7 +35,7 @@ impl Subject {
         }
     }
 
-    fn lost_tail(self) -> &'static str {
+    pub(crate) fn lost_tail(self) -> &'static str {
         match self {
             Self::Brief => "这个 session 一个字都没收到，派给它的活等于没派出去——请改派或重起。",
             Self::Steer => "session 本身是好的、屏幕上也有字，但它没收到这条——需要有人重发。",
@@ -122,6 +124,22 @@ fn reached(deadline: Deadline, now: Instant) -> bool {
     deadline.is_some_and(|d| now >= d)
 }
 
+/// 两个期限里晚的那个（`None` = 永不到点，最晚）。
+fn later(a: Deadline, b: Deadline) -> Deadline {
+    a.zip(b).map(|(a, b)| a.max(b))
+}
+
+/// 写入 / 提交阶段输入框不在屏上时处在哪一步（只影响文案：回车到底发没发）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// 写了正文，还没按过回车。
+    Written,
+    /// 这一轮回车发出去了。
+    Entered,
+    /// 正文进了输入框，这一轮回车还没能发出去（上一轮被撤回）。
+    EnterPending,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Phase {
     AwaitingReady,
@@ -165,6 +183,9 @@ pub struct Delivery {
     reported_dialog: bool,
     reported_not_ready: bool,
     reported_stall: bool,
+    /// 发出过几轮 `Submit`、其中几轮被调用方撤回（回车没发出去）——文案据此说实话。
+    submits: u32,
+    submits_aborted: u32,
 }
 
 /// 「正文真的进了输入行」：非空且不同于写之前。
@@ -187,6 +208,8 @@ impl Delivery {
             reported_dialog: false,
             reported_not_ready: false,
             reported_stall: false,
+            submits: 0,
+            submits_aborted: 0,
         }
     }
 
@@ -194,13 +217,13 @@ impl Delivery {
         self.subject
     }
 
-    /// 已给出终局裁决（成功或放弃）。
     /// 调用方没把这一轮提交拍发完（回车没发出去）。只在提交阶段有效：这一轮不算提交过，
     /// 安全了（没有对话框、输入行或正文尾巴在屏）再发一轮，记一次重试；超过
     /// `max_attempts` 轮就给终局 `Unsubmitted`。
     pub fn submit_aborted(&mut self, now: Instant) {
         self.last_now = self.last_now.max(now);
         if let Phase::Submitting { attempt, .. } = self.phase {
+            self.submits_aborted += 1;
             self.phase = Phase::Resubmit {
                 attempt: attempt + 1,
                 deadline: after(now, self.timing.verify_window),
@@ -208,6 +231,7 @@ impl Delivery {
         }
     }
 
+    /// 已给出终局裁决（成功或放弃）。
     pub fn is_finished(&self) -> bool {
         self.phase == Phase::Finished
     }
@@ -229,7 +253,12 @@ impl Delivery {
                         None,
                     ]
                 } else if let Some(since) = self.ready_since {
-                    [after(since, t.ready_settle), None]
+                    [
+                        after(since, t.ready_settle),
+                        (!self.reported_not_ready)
+                            .then(|| after(self.readiness_since, t.readiness_deadline))
+                            .flatten(),
+                    ]
                 } else {
                     [
                         (!self.reported_not_ready)
@@ -290,7 +319,20 @@ impl Delivery {
                     }
                     let since = self.ready_since.unwrap_or(now);
                     if now.saturating_duration_since(since) < t.ready_settle {
-                        return Step::Idle;
+                        // 文本一直在变、稳不下来：同样受 `readiness_deadline` 约束（只报一次）。
+                        if self.reported_not_ready
+                            || now.saturating_duration_since(self.readiness_since)
+                                < t.readiness_deadline
+                        {
+                            return Step::Idle;
+                        }
+                        self.reported_not_ready = true;
+                        return Step::NotReady(format!(
+                            "{}还没投出去：输入框在屏上，但等了 {}s 它的内容一直在变、稳不下来\
+                             （还在重绘？有人在打字？），不敢往里写。看一眼它停在哪一屏。",
+                            self.subject.noun(),
+                            t.readiness_deadline.as_secs()
+                        ));
                     }
                     self.phase = Phase::Writing {
                         attempt: 1,
@@ -319,20 +361,23 @@ impl Delivery {
                 deadline,
                 baseline,
             } => {
+                if obs.dialog_present {
+                    return self.hold_for_dialog(now);
+                }
                 let Some(row) = obs.input_row else {
                     // 重绘到一半输入行暂时不在——等下一拍；除非正文尾巴已经清楚可见
                     // （长正文把提示符顶出了屏幕），那就是落地了。
                     // 对话框在场时不算：空格会被当成按键吃进对话框。
-                    if reached(not_before, now) && obs.body_visible && !obs.dialog_present {
+                    if reached(not_before, now) && obs.body_visible {
                         self.stalled_since = None;
                         self.phase = Phase::Submitting {
                             attempt: 1,
                             deadline: after(now, t.verify_window),
                             submitted: None,
                         };
-                        return Step::Submit { attempt: 1 };
+                        return self.submit(1);
                     }
-                    return self.input_row_absent(now, deadline, attempt, true);
+                    return self.input_row_absent(now, deadline, attempt, Stage::Written);
                 };
                 self.stalled_since = None;
                 if reached(not_before, now) && landed(row, &baseline) {
@@ -341,7 +386,7 @@ impl Delivery {
                         deadline: after(now, t.verify_window),
                         submitted: Some(row.to_string()),
                     };
-                    return Step::Submit { attempt: 1 };
+                    return self.submit(1);
                 }
                 if !reached(deadline, now) {
                     return Step::Idle;
@@ -368,16 +413,17 @@ impl Delivery {
                 if attempt > t.max_attempts {
                     self.phase = Phase::Finished;
                     return Step::Unsubmitted(format!(
-                        "{}卡在输入框里没提交：正文已经进去了，但提交被打断了 {} 次\
-                         （每次回车之前屏上都弹出了对话框、或输入框不见了），一直没能安全地按下回车。\
+                        "{}卡在输入框里没提交：正文已经进去了，但一直没能安全地按下回车——{}。\
                          看一眼屏幕：代答掉挡路的框，或按 Ctrl-U 清掉再重发。",
                         self.subject.noun(),
-                        attempt - 1
+                        self.enter_summary()
                     ));
                 }
-                let safe = !obs.dialog_present && (obs.input_row.is_some() || obs.body_visible);
-                if !safe {
-                    return self.input_row_absent(now, deadline, attempt - 1, false);
+                if obs.dialog_present {
+                    return self.hold_for_dialog(now);
+                }
+                if obs.input_row.is_none() && !obs.body_visible {
+                    return self.input_row_absent(now, deadline, attempt - 1, Stage::EnterPending);
                 }
                 self.stalled_since = None;
                 self.phase = Phase::Submitting {
@@ -385,15 +431,18 @@ impl Delivery {
                     deadline: after(now, t.verify_window),
                     submitted: obs.input_row.map(str::to_string),
                 };
-                Step::Submit { attempt }
+                self.submit(attempt)
             }
             Phase::Submitting {
                 attempt,
                 deadline,
                 submitted,
             } => {
+                if obs.dialog_present {
+                    return self.hold_for_dialog(now);
+                }
                 let Some(row) = obs.input_row else {
-                    return self.input_row_absent(now, deadline, attempt, false);
+                    return self.input_row_absent(now, deadline, attempt, Stage::Entered);
                 };
                 self.stalled_since = None;
                 if submitted.as_deref() != Some(row) {
@@ -406,10 +455,11 @@ impl Delivery {
                 if attempt >= t.max_attempts {
                     self.phase = Phase::Finished;
                     return Step::Unsubmitted(format!(
-                        "{}卡在输入框里没提交：正文已经进去了，但回车发了 {attempt} 次都没被接受\
+                        "{}卡在输入框里没提交：正文已经进去了，但{}，输入框始终没变\
                          （多半有个模态挡在前面）。输入框里那段没人敲过的字就是它——代答掉挡路的框，\
                          或按 Ctrl-U 清掉再重发。",
-                        self.subject.noun()
+                        self.subject.noun(),
+                        self.enter_summary()
                     ));
                 }
                 self.phase = Phase::Submitting {
@@ -417,22 +467,58 @@ impl Delivery {
                     deadline: after(now, t.verify_window),
                     submitted,
                 };
-                Step::Submit {
-                    attempt: attempt + 1,
-                }
+                self.submit(attempt + 1)
             }
         }
+    }
+
+    /// 发第 `attempt` 轮提交（记账：文案要说回车发了几次）。
+    fn submit(&mut self, attempt: u32) -> Step {
+        self.submits += 1;
+        Step::Submit { attempt }
+    }
+
+    /// 回车到底发出去几次：撤回的那几轮一个回车都没发。
+    fn enter_summary(&self) -> String {
+        let sent = self.submits.saturating_sub(self.submits_aborted);
+        let aborted = self.submits_aborted;
+        let interrupted = format!("{aborted} 次在按下之前被打断（屏上弹了对话框、或输入框不见了）");
+        match (sent, aborted) {
+            (0, _) => format!("回车一次也没发出去（{interrupted}）"),
+            (n, 0) => format!("回车发了 {n} 次"),
+            (n, _) => format!("回车发了 {n} 次，另有 {interrupted}"),
+        }
+    }
+
+    /// 写入 / 提交之后屏上摆着要人回答的对话框：等人不算「输入框没回来」，放弃计时停走——
+    /// 本轮期限与 stall 的总上限都从这一刻重新给满（框答掉之后才开始算）。什么都不写：
+    /// 正文、空格、回车都会被当成按键吃进对话框。
+    fn hold_for_dialog(&mut self, now: Instant) -> Step {
+        let fresh = after(now, self.timing.verify_window);
+        if let Phase::Writing { deadline, .. }
+        | Phase::Submitting { deadline, .. }
+        | Phase::Resubmit { deadline, .. } = &mut self.phase
+        {
+            *deadline = later(*deadline, fresh);
+        }
+        if self.stalled_since.is_some() {
+            self.stalled_since = Some(now);
+        }
+        Step::Idle
     }
 
     /// 写入 / 提交阶段输入行不在屏上。期限之前当重绘处理；过了期限先报一次 `Stalled`
     /// （不终止、不重试——没有输入行就没有回读，重试只会更乱），
     /// 缺席满 `readiness_deadline` 仍不回来就给终局裁决，免得后面排队的活一直饿着。
+    ///
+    /// 终局文案不说「没收到」：输入框不在屏上，正文进没进去、回车生没生效都确认不了——
+    /// 照 [`Subject::lost_tail`] 那样让人重发，可能投两遍。
     fn input_row_absent(
         &mut self,
         now: Instant,
         deadline: Deadline,
         attempt: u32,
-        writing: bool,
+        stage: Stage,
     ) -> Step {
         if !reached(deadline, now) {
             return Step::Idle;
@@ -442,13 +528,13 @@ impl Delivery {
         let noun = self.subject.noun();
         if !self.reported_stall {
             self.reported_stall = true;
-            let what = if writing {
-                "写了正文"
-            } else {
-                "发了回车"
+            let what = match stage {
+                Stage::Written => "写了正文之后，",
+                Stage::Entered => "发了回车之后，",
+                Stage::EnterPending => "的正文进了输入框、回车还没发出去，",
             };
             return Step::Stalled(format!(
-                "{noun}{what}之后，输入框一直没回到屏上（整屏重绘卡住或被别的界面占了）。\
+                "{noun}{what}输入框一直没回到屏上（整屏重绘卡住或被别的界面占了）。\
                  先不重试，等它回来；等满 {}s 还不回来就放弃。",
                 t.readiness_deadline.as_secs()
             ));
@@ -458,16 +544,16 @@ impl Delivery {
         }
         self.phase = Phase::Finished;
         let secs = t.readiness_deadline.as_secs();
-        if writing {
-            Step::Undelivered(format!(
-                "{noun}没送到：正文写了 {attempt} 次，之后输入框等了 {secs}s 也没回来，没法确认它进没进去。{}",
-                self.subject.lost_tail()
-            ))
-        } else {
-            Step::Unsubmitted(format!(
-                "{noun}没提交：回车发了 {attempt} 次，之后输入框等了 {secs}s 也没回来，没法确认它提交没提交。\
-                 看一眼屏幕再决定要不要重发。"
-            ))
+        match stage {
+            Stage::Written => Step::Undelivered(format!(
+                "{noun}可能没送到：正文写了 {attempt} 次，之后输入框等了 {secs}s 也没回来，\
+                 没法确认它进没进去。重发之前先看一眼屏幕和它的对话，免得投两遍。"
+            )),
+            Stage::Entered | Stage::EnterPending => Step::Unsubmitted(format!(
+                "{noun}可能没提交：{}，之后输入框等了 {secs}s 也没回来，没法确认它提交没提交\
+                 （正文可能还躺在输入框里）。重发之前先看一眼屏幕和它的对话，免得投两遍。",
+                self.enter_summary()
+            )),
         }
     }
 }
@@ -1043,6 +1129,186 @@ mod tests {
         );
     }
 
+    fn dialog(at: Instant) -> Observation<'static> {
+        Observation {
+            input_row: None,
+            body_visible: false,
+            dialog_present: true,
+            now: at,
+        }
+    }
+
+    /// 写入 / 提交之后屏上弹了对话框、人一直没答：等人不算「输入框没回来」，放弃计时停走——
+    /// 否则 90s 后给终局，正文留在输入框里，下一笔就拼在它后面。
+    #[test]
+    fn a_dialog_pauses_the_give_up_clocks_after_writing() {
+        let (mut d, c) = setup();
+        assert_eq!(
+            d.step(obs(Some(""), c.at(0.0))),
+            Step::WriteBody { attempt: 1 }
+        );
+        for s in 1..=30 {
+            assert_eq!(d.step(dialog(c.at(s as f64))), Step::Idle, "写入后 第 {s}s");
+        }
+        assert!(!d.is_finished());
+        assert_eq!(
+            d.step(obs(Some(""), c.at(31.0))),
+            Step::Idle,
+            "对话框刚走：本轮窗口重新给满"
+        );
+        assert_eq!(
+            d.step(obs(Some(""), c.at(32.0))),
+            Step::WriteBody { attempt: 2 }
+        );
+    }
+
+    #[test]
+    fn a_dialog_pauses_the_give_up_clocks_while_submitting() {
+        let (mut d, c) = setup();
+        d.step(obs(Some(""), c.at(0.0)));
+        assert_eq!(
+            d.step(obs(Some("brief"), c.at(0.5))),
+            Step::Submit { attempt: 1 }
+        );
+        for s in 1..=30 {
+            assert_eq!(d.step(dialog(c.at(s as f64))), Step::Idle, "提交后 第 {s}s");
+        }
+        assert_eq!(d.step(obs(Some("brief"), c.at(31.0))), Step::Idle);
+        assert_eq!(d.step(obs(Some(""), c.at(31.5))), Step::Delivered);
+    }
+
+    #[test]
+    fn a_dialog_pauses_the_give_up_clocks_while_waiting_to_resubmit() {
+        let (mut d, c) = setup();
+        long_path_submitting(&mut d, &c);
+        d.submit_aborted(c.at(0.7));
+        for s in 1..=200 {
+            let step = d.step(dialog(c.at(s as f64)));
+            assert_eq!(step, Step::Idle, "等重发 第 {s}s");
+        }
+        assert!(!d.is_finished());
+        assert_eq!(
+            d.step(obs(Some("正文"), c.at(201.0))),
+            Step::Submit { attempt: 2 }
+        );
+    }
+
+    /// 回车有没有真的发出去，文案得说实话：被撤回的那几轮一个回车都没发。
+    #[test]
+    fn texts_say_whether_an_enter_was_actually_sent() {
+        let (mut d, c) = setup();
+        long_path_submitting(&mut d, &c);
+        d.submit_aborted(c.at(0.7));
+        // 输入框没了、也没有对话框（整屏重绘卡住）：Resubmit 的期限（0.7 + 2s）过后报 Stalled。
+        let stalled = match d.step(obs(None, c.at(2.7))) {
+            Step::Stalled(detail) => detail,
+            other => panic!("{other:?}"),
+        };
+        assert!(!stalled.contains("发了回车"), "{stalled}");
+        assert!(stalled.contains("回车还没发出去"), "{stalled}");
+        match d.step(obs(None, c.at(12.7))) {
+            Step::Unsubmitted(detail) => {
+                assert!(!detail.contains("回车发了"), "{detail}");
+                assert!(detail.contains("回车一次也没发出去"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let (mut d, c) = setup();
+        long_path_submitting(&mut d, &c);
+        for (k, s) in [0.7, 1.1, 1.3].into_iter().enumerate() {
+            d.submit_aborted(c.at(s));
+            if k < 2 {
+                assert!(matches!(
+                    d.step(obs(Some("正文"), c.at(s + 0.05))),
+                    Step::Submit { .. }
+                ));
+            }
+        }
+        match d.step(obs(Some("正文"), c.at(1.4))) {
+            Step::Unsubmitted(detail) => {
+                assert!(detail.contains("回车一次也没发出去"), "{detail}")
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let (mut d, c) = setup();
+        d.step(obs(Some(""), c.at(0.0)));
+        d.step(obs(Some("brief"), c.at(0.5)));
+        d.submit_aborted(c.at(0.6));
+        assert_eq!(
+            d.step(obs(Some("brief"), c.at(0.7))),
+            Step::Submit { attempt: 2 }
+        );
+        assert_eq!(
+            d.step(obs(Some("brief"), c.at(2.7))),
+            Step::Submit { attempt: 3 }
+        );
+        match d.step(obs(Some("brief"), c.at(4.7))) {
+            Step::Unsubmitted(detail) => {
+                assert!(detail.contains("回车发了 2 次"), "{detail}");
+                assert!(detail.contains("1 次"), "被撤回的那次也要说：{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// 写入后输入框一直不回来：没法确认正文进没进去——不能照搬「一个字都没收到」的说法
+    /// （那会让人重发，投两遍）。
+    #[test]
+    fn stall_give_up_text_does_not_claim_nothing_arrived() {
+        let (mut d, c) = setup();
+        d.step(obs(Some(""), c.at(0.0)));
+        assert!(matches!(d.step(obs(None, c.at(2.0))), Step::Stalled(_)));
+        match d.step(obs(None, c.at(12.0))) {
+            Step::Undelivered(detail) => {
+                assert!(!detail.contains(Subject::Brief.lost_tail()), "{detail}");
+                assert!(detail.contains("先看一眼"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// 输入行在屏、文本却一直在变（稳不下来）：同样受 `readiness_deadline` 约束，报一次 NotReady。
+    #[test]
+    fn an_input_row_that_never_settles_is_reported_not_ready() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let mut d = Delivery::new(
+            Timing {
+                ready_settle: Duration::from_millis(300),
+                ..timing()
+            },
+            Subject::Brief,
+            t0,
+        );
+        let mut reports = Vec::new();
+        for k in 0..=150 {
+            let s = k as f64 * 0.1;
+            let row = if k % 2 == 0 { "a" } else { "b" };
+            match d.step(obs(Some(row), at(s))) {
+                Step::Idle => {}
+                Step::NotReady(detail) => reports.push((s, detail)),
+                other => panic!("第 {s}s：{other:?}"),
+            }
+            if let Some(dl) = d.next_deadline() {
+                assert!(dl > at(s));
+            }
+        }
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!((reports[0].0 - 10.0).abs() < 0.15, "{reports:?}");
+        assert!(!d.is_finished());
+        assert_eq!(
+            d.step(obs(Some("c"), at(16.0))),
+            Step::Idle,
+            "终于稳住：从这一刻起算"
+        );
+        assert_eq!(
+            d.step(obs(Some("c"), at(16.3))),
+            Step::WriteBody { attempt: 1 }
+        );
+    }
+
     #[test]
     fn huge_timings_saturate_instead_of_panicking() {
         let t0 = Instant::now();
@@ -1088,6 +1354,10 @@ mod tests {
             t0,
         );
         assert_eq!(d.step(obs(Some(""), at(0.0))), Step::Idle);
-        assert_eq!(d.next_deadline(), None);
+        assert_eq!(
+            d.next_deadline(),
+            Some(at(10.0)),
+            "settle 溢出 = 没有期限；剩下的是 readiness_deadline"
+        );
     }
 }

@@ -157,6 +157,8 @@ struct InFlight {
     /// 去毒后的正文：写进去的是它，回读比对的也是它（屏上回显的是去毒后的样子）。
     body: String,
     machine: Delivery,
+    /// 正文至少写进 PTY 一次了（终局不是「已投递」时，输入框里可能还留着它）。
+    wrote_body: bool,
 }
 
 /// 排好的按键是干什么的：到点发之前按用途再看一眼屏幕。
@@ -199,6 +201,8 @@ pub struct Core {
     resume_tail: AnsiPlainTextTail,
     pending_decision: Option<PendingDecision>,
     in_flight: Option<InFlight>,
+    /// 上一笔没投成、但正文写进过输入框：残留可能还在，下一笔第一次写入也先 Ctrl-U。
+    input_dirty: bool,
     queue: VecDeque<PendingText>,
     keys: VecDeque<Key>,
     actions: Vec<Action>,
@@ -234,6 +238,7 @@ impl Core {
             resume_tail: AnsiPlainTextTail::new(),
             pending_decision: None,
             in_flight: None,
+            input_dirty: false,
             queue: pending.into(),
             keys: VecDeque::new(),
             actions: Vec::new(),
@@ -358,6 +363,14 @@ impl Core {
         self.last_output_at = Some(now);
         if !self.working {
             self.set_working(true, now);
+        }
+        // 起得慢、报过「拉起卡住」的进程终于吐字了：它是活的，撤掉那条拉起失败。
+        if self
+            .health
+            .as_ref()
+            .is_some_and(|h| h.launch_verdict == Some(LaunchVerdict::Stalled))
+        {
+            self.set_health(None, now);
         }
         if let Some(h) = self.quota.feed(bytes) {
             self.set_health(Some(h), now);
@@ -582,8 +595,9 @@ impl Core {
 
     /// 发到点的排队按键。发之前按用途再看一眼当前屏幕：
     /// - 提交拍：屏上弹了对话框、或输入行没了（凭正文尾巴起的提交：尾巴没了）——这一轮剩下的
-    ///   提交拍全丢掉（回车会替人选中对话框的第一项）。投递机还在「提交」阶段，输入行回来、
-    ///   期限到了会自己重发一轮。
+    ///   提交拍全丢掉（回车会替人选中对话框的第一项），并经 `Delivery::submit_aborted` 告诉
+    ///   投递机这一轮回车没发出去：它转入「等重发」，对话框不在、输入行（或正文尾巴）回来了
+    ///   再发一轮（记一次重试）。
     /// - 限流应答的回车：菜单不在了就不发（「1」可能已经直接选中关掉了它）。
     fn flush_due_keys(&mut self, now: Instant) {
         while self.keys.front().is_some_and(|k| k.at <= now) {
@@ -691,6 +705,7 @@ impl Core {
                 pending,
                 body,
                 machine,
+                wrote_body: false,
             });
             self.step_delivery(now);
         }
@@ -716,10 +731,12 @@ impl Core {
             Step::Idle => {}
             Step::WriteBody { attempt } => {
                 let mut bytes = Vec::new();
-                if attempt > 1 {
-                    // 重投前清掉输入行：上一笔若落了一半，两笔会叠成乱码。
+                if attempt > 1 || self.input_dirty {
+                    // 重投前清掉输入行：这一笔（或没投成的上一笔）若落了一半，两段会叠成一条。
                     bytes.push(0x15);
                 }
+                self.input_dirty = false;
+                flight.wrote_body = true;
                 bytes.extend_from_slice(flight.body.as_bytes());
                 self.actions.push(Action::Write(bytes));
             }
@@ -753,6 +770,7 @@ impl Core {
             Subject::Steer => HealthKind::PromptUndelivered,
         };
         let pending = flight.pending.clone();
+        let wrote_body = flight.wrote_body;
         match &outcome {
             DeliveryOutcome::Delivered => {
                 if self.health.as_ref().map(|h| h.kind) == Some(kind) {
@@ -769,6 +787,9 @@ impl Core {
             }
         }
         if outcome.is_final() {
+            if outcome != DeliveryOutcome::Delivered && wrote_body {
+                self.input_dirty = true;
+            }
             self.in_flight = None;
             self.finish(pending, outcome, now);
             self.start_next(now);
@@ -1814,6 +1835,112 @@ mod tests {
                 .any(|e| matches!(e, SessionEvent::Delivery { id: 9, .. })),
             "不再报第二次：{later:?}"
         );
+    }
+
+    fn final_outcomes(actions: &[Action], id: u64) -> Vec<DeliveryOutcome> {
+        events(actions)
+            .into_iter()
+            .filter_map(|e| match e {
+                SessionEvent::Delivery { id: i, outcome, .. } if i == id && outcome.is_final() => {
+                    Some(outcome)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 空格之后弹了权限框、人 90s 多都没答：对话框在屏期间这一笔不终结（终结了正文就留在
+    /// 输入框里，下一笔拼在后面成了「甲乙」）。框答掉、输入框带着「甲」回来，补发回车投出去，
+    /// 下一笔「乙」单独提交。
+    #[test]
+    fn an_unanswered_dialog_does_not_end_the_delivery_or_glue_the_next_one_on() {
+        let mut t = T::new(vec![]);
+        t.core.send(1, "甲", t.at(0.0));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        assert_eq!(
+            writes(&t.output(&input_box("甲"), 0.9)),
+            vec![b" ".to_vec()]
+        );
+        let mut waiting = t.output(&permission_menu(), 0.95);
+        let mut s = 1.0;
+        while s < 200.0 {
+            waiting.extend(t.tick(s));
+            s += 1.0;
+        }
+        assert!(
+            final_outcomes(&waiting, 1).is_empty(),
+            "对话框在屏期间不终结：{:?}",
+            events(&waiting)
+        );
+        assert!(writes(&waiting).is_empty(), "{waiting:?}");
+        t.core.send(2, "乙", t.at(199.5));
+        let mut back = t.output(&input_box("甲"), 200.0);
+        back.extend(t.tick(200.1));
+        back.extend(t.tick(200.2));
+        back.extend(t.output(&input_box(""), 200.3));
+        assert_eq!(
+            writes(&back),
+            vec![b" ".to_vec(), vec![0x7f], b"\r".to_vec()],
+            "甲补发回车：{back:?}"
+        );
+        assert!(delivered(&back, 1), "{back:?}");
+        let second = drive_one(&mut t, "乙", 201.0);
+        assert!(delivered(&second, 2), "{second:?}");
+        assert!(
+            writes(&second).contains(&"乙".as_bytes().to_vec()),
+            "乙单独写：{second:?}"
+        );
+    }
+
+    /// 一笔以非「已投递」的终局收场、而正文已经写进过输入框：残留可能还在。下一笔的第一次
+    /// 写入也要先 Ctrl-U，不然两段拼成一条。
+    #[test]
+    fn residue_of_a_failed_delivery_is_cleared_before_the_next_one() {
+        let mut t = T::new(vec![]);
+        t.core.send(1, "甲", t.at(0.0));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        assert_eq!(
+            writes(&t.output(&input_box("甲"), 0.9)),
+            vec![b" ".to_vec()]
+        );
+        // 输入框没了、也没有对话框：退格 / 回车被撤回，之后一直不回来 → 终局。
+        let mut gone = t.output("\x1b[2J\x1b[H\u{23fa} redrawing".as_bytes(), 0.95);
+        let mut s = 1.0;
+        while s < 100.0 {
+            gone.extend(t.tick(s));
+            s += 1.0;
+        }
+        let finals = final_outcomes(&gone, 1);
+        assert!(
+            matches!(finals.as_slice(), [DeliveryOutcome::Unsubmitted(_)]),
+            "前提：第一笔以没提交收场：{:?}",
+            events(&gone)
+        );
+        t.core.send(2, "乙", t.at(100.0));
+        let mut next = t.output(&input_box("甲"), 100.0);
+        next.extend(t.tick(100.3));
+        assert_eq!(
+            writes(&next),
+            vec!["\u{15}乙".as_bytes().to_vec()],
+            "残留先清掉：{next:?}"
+        );
+    }
+
+    /// 起得慢的 claude：25s 没吐字报了拉起卡住，之后终于有输出——拉起失败要撤掉（它是活的）。
+    #[test]
+    fn launch_stall_clears_once_output_arrives() {
+        let mut t = T::new(vec![]);
+        t.tick(25.0);
+        assert_eq!(t.core.state(), DerivedState::LaunchFailed);
+        let late = t.output(b"Claude Code starting", 26.0);
+        assert!(
+            events(&late).contains(&SessionEvent::Health(None)),
+            "{late:?}"
+        );
+        assert_eq!(t.core.health(), None);
+        assert_ne!(t.core.state(), DerivedState::LaunchFailed);
     }
 
     /// 长正文把提示符顶出了屏：屏上只剩正文尾巴，没有输入行。
