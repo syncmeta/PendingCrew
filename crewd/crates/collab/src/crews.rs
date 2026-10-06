@@ -278,10 +278,14 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
     if ps.iter().any(|p| p == parent) {
         return get(tx.conn(), crew);
     }
+    let was_root = ps.is_empty();
     tx.conn().execute(
         "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
         params![crew, parent],
     )?;
+    if was_root {
+        crate::channels::archive_human_of(tx, crew)?;
+    }
     put_last(tx, crew, Some(parent))?;
     tx.note(Change::CrewChanged {
         crew_id: crew.into(),
@@ -315,6 +319,10 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     )?;
     if to.is_none() && is_root(tx.conn(), crew)? {
         put_last(tx, crew, None)?;
+    }
+    // 又成了根：原来就有的人类群解档（没有的仍然懒建）。
+    if is_root(tx.conn(), crew)? && crate::channels::human_channel_exists(tx.conn(), crew)? {
+        crate::channels::ensure_human_channel(tx, crew)?;
     }
     tx.note(Change::CrewChanged {
         crew_id: crew.into(),
@@ -408,18 +416,24 @@ pub(crate) fn point_captain_at(tx: &mut Tx<'_>, crew: &str, session: &str) -> Re
     )?;
     if is_root(tx.conn(), crew)? {
         let human = crewd_store::channels::human_id(crew);
-        let exists: bool =
-            tx.conn()
-                .query_row("SELECT COUNT(*) FROM channels WHERE id=?1", [&human], |r| {
-                    r.get::<_, i64>(0)
-                })?
-                > 0;
+        let exists = crate::channels::human_channel_exists(tx.conn(), crew)?;
         if exists {
             crate::cursors::pin_to_end(tx, session, &human)?;
             tx.note(Change::ChannelChanged { channel_id: human });
         }
     }
     Ok(())
+}
+
+pub fn detail(tx: &mut Tx<'_>, id: &str) -> Result<crewd_proto::CrewDetail> {
+    let crew = get(tx.conn(), id)?;
+    Ok(crewd_proto::CrewDetail {
+        root_id: root_of(tx.conn(), id)?,
+        children: children(tx.conn(), id)?,
+        channels: crate::channels::list_for_crew(tx, id)?,
+        sessions: crate::sessions::list(tx.conn(), Some(id))?,
+        crew,
+    })
 }
 
 /// 同级：`parent` 的直系子（按它们在这个父下的边次序）；`None` = 顶层的可见根机组（没有父边、非内建；

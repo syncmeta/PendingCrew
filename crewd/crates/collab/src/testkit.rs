@@ -112,3 +112,30 @@ pub(crate) fn err<T: std::fmt::Debug>(
 pub(crate) fn count(s: &Store, sql: &str) -> i64 {
     s.conn().query_row(sql, [], |r| r.get(0)).unwrap()
 }
+
+/// 直接往群里插一条消息（绕过 collab 的规则，只为造测试前提），返回 seq。
+pub(crate) fn msg(
+    s: &Store,
+    channel: &str,
+    id: &str,
+    sender_kind: crewd_proto::SenderKind,
+    sender_session: Option<&str>,
+    mentions: Vec<crewd_proto::Mention>,
+) -> i64 {
+    crewd_store::messages::insert(
+        s.conn(),
+        &crewd_proto::Message {
+            id: id.into(),
+            channel_id: channel.into(),
+            sender_kind,
+            sender_session_id: sender_session.map(Into::into),
+            text: format!("合成消息 {id}"),
+            mentions,
+            created_at: crewd_store::ts_from_ms(NOW),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap()
+    .unwrap()
+}
