@@ -24,9 +24,9 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         suffix,
     };
     vec![
-        // PEM 私钥块（没有 END 的半截也遮到文本结尾）。
+        // PEM / PGP 私钥块（没有 END 的半截也遮到文本结尾）。
         rule(
-            r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)",
+            r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|\z)",
             false,
             "",
         ),
@@ -38,16 +38,29 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         ),
         // Authorization: Bearer xxx
         rule(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{16,}", true, ""),
+        // Authorization: Basic <base64>（只认带 Authorization 的写法，「basic configuration」不遮）。
+        rule(
+            r#"(?i)(authorization["']?\s*[:=]\s*["']?basic\s+)[A-Za-z0-9+/=]{8,}"#,
+            true,
+            "",
+        ),
+        // Slack / Discord webhook：URL 本身就是凭据。
+        rule(
+            r"hooks\.slack\.com/services/T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]{8,}|discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]{16,}",
+            false,
+            "",
+        ),
         // JWT
         rule(
             r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
             false,
             "",
         ),
-        // 厂商前缀的 key / token。
+        // 厂商前缀的 key / token。前面要求「行首或非字母数字」而不是 `\b`：
+        // `_` 是单词字符，`KEY_sk-ant-…` 这种粘在标识符后面的 key 用 `\b` 会漏。第 1 组（那个边界字符）原样保留。
         rule(
-            r"\b(?:sk-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|rk_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})",
-            false,
+            r"(^|[^A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{20,}|[sr]k_(?:test|live)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|whsec_[A-Za-z0-9+/=]{20,}|npm_[A-Za-z0-9]{30,}|hf_[A-Za-z0-9]{30,}|ya29\.[A-Za-z0-9_-]{20,}|GOCSPX-[A-Za-z0-9_-]{20,})",
+            true,
             "",
         ),
         // key=value / key: value（英文字段名）。字段名前可以带一段标识符前缀
@@ -271,6 +284,90 @@ mod tests {
             let out = assert_scrubbed(input, secret, 1);
             assert_eq!(out, expected);
             assert_eq!(scrub_str(&out), (out.clone(), 0), "第二遍不该再命中");
+        }
+    }
+
+    #[test]
+    fn more_vendor_shapes_webhooks_pgp_and_basic_auth() {
+        let cases: [(&str, &str); 14] = [
+            (
+                "STRIPE_SECRET_KEY=sk_test_51Habcdefghijklmnop",
+                "51Habcdefghijklmnop",
+            ),
+            ("sk_test_51HabcdefghijklmnopqrstuV", "51Habcdefghijklmnop"),
+            ("sk_live_51HabcdefghijklmnopqrstuV", "51Habcdefghijklmnop"),
+            ("rk_test_51HabcdefghijklmnopqrstuV", "51Habcdefghijklmnop"),
+            (
+                "whsec_abcdefghijklmnopqrstuvwxyz012345",
+                "abcdefghijklmnopqrstuvwxyz",
+            ),
+            (
+                "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+                "abcdefghijklmnopqrstuvwxyz",
+            ),
+            (
+                "hf_abcdefghijklmnopqrstuvwxyzABCDEFGH",
+                "abcdefghijklmnopqrstuvwxyz",
+            ),
+            (
+                "ya29.a0AfH6SMBabcdefghijklmnopqrstuvwxyz",
+                "a0AfH6SMBabcdefghij",
+            ),
+            (
+                "GOCSPX-abcdefghijklmnopqrstuvwxyz12",
+                "abcdefghijklmnopqrstuvwxyz",
+            ),
+            (
+                "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+                "XXXXXXXXXXXXXXXXXXXXXXXX",
+            ),
+            (
+                "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+            ),
+            (
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBFabcdefgh\n-----END PGP PRIVATE KEY BLOCK-----",
+                "lQOYBFabcdefgh",
+            ),
+            (
+                "Authorization: Basic dXNlcjpwYXNzd29yZDEyMw==",
+                "dXNlcjpwYXNzd29yZDEyMw",
+            ),
+            (
+                "KEY_sk-ant-api03-AbCdEf0123456789xyzXYZ_-abcdef",
+                "AbCdEf0123456789xyzXYZ",
+            ),
+        ];
+        for (input, secret) in cases {
+            let out = assert_scrubbed(input, secret, 1);
+            assert_eq!(scrub_str(&out), (out.clone(), 0), "第二遍不该再命中：{out}");
+        }
+        let out = assert_scrubbed(
+            "-H 'Authorization: Basic dXNlcjpwYXNzd29yZDEyMw=='",
+            "dXNlcjpwYXNzd29yZDEyMw",
+            1,
+        );
+        assert_eq!(out, "-H 'Authorization: Basic [REDACTED]'");
+        let out = assert_scrubbed(
+            "KEY_sk-ant-api03-AbCdEf0123456789xyzXYZ_-abcdef",
+            "AbCdEf0123456789xyzXYZ",
+            1,
+        );
+        assert_eq!(out, "KEY_[REDACTED]");
+    }
+
+    #[test]
+    fn vendor_lookalikes_in_chat_stay_untouched() {
+        for text in [
+            "basic configuration 先别动",
+            "hooks.slack.com 的文档看一下",
+            "hf_hub 下载模型太慢",
+            "ya29 是什么前缀",
+            "npm_config_registry 换成镜像",
+            "the secret sauce is caching",
+        ] {
+            let (out, hits) = scrub_str(text);
+            assert_eq!((out.as_str(), hits), (text, 0), "误遮了：{text}");
         }
     }
 
