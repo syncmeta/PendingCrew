@@ -11,13 +11,16 @@ pub mod directory;
 pub mod listens;
 pub mod messages;
 pub mod prompts;
+pub mod render;
 pub mod restart;
 pub mod sessions;
 pub mod settings;
 #[cfg(test)]
 mod testkit;
 pub mod todos;
+pub mod turn_trace;
 pub mod wakes;
+pub mod worldview;
 
 use crewd_proto::RestartAnswer;
 use crewd_store::{Store, StoreError};
