@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 rustix = { version = "1", features = ["termios", "process", "fs", "stdio"] }
-tokio = { version = "1.53.2", features = ["rt", "macros", "time", "sync", "process", "net"] }
+tokio = { version = "1.53.2", features = ["rt", "macros", "time", "sync", "process", "net", "io-util"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

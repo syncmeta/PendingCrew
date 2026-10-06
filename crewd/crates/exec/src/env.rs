@@ -67,26 +67,51 @@ fn default_shell() -> &'static str {
 }
 
 /// 起 `shell -lic "printf '<哨兵>%s<哨兵>' "$PATH""`，取哨兵之间那段。
-/// 超时、退出码非 0、没有哨兵、哨兵之间为空 → `None`。超时会杀掉 shell。
+/// 超时、退出码非 0、没有哨兵、哨兵之间为空 → `None`。
+///
+/// shell 自成一个进程组；读到收尾哨兵就不再等 EOF（rc 文件留下的后台任务会一直攥着
+/// stdout 管道），等 shell 自己退出拿退出码。无论成败、超时，最后都对整个进程组
+/// SIGKILL 再收尸，rc 文件起的后代一个不留。
 pub async fn login_shell_path(shell: &Path, timeout: Duration) -> Option<String> {
+    use tokio::io::AsyncReadExt;
+
     let mut cmd = tokio::process::Command::new(shell);
     cmd.arg("-lic")
         .arg(format!(
             "/usr/bin/printf '{PATH_SENTINEL_OPEN}%s{PATH_SENTINEL_CLOSE}' \"$PATH\""
         ))
         .current_dir(std::env::temp_dir())
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let out = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .ok()?
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let mut child = cmd.spawn().ok()?;
+    // 组长的 pid 就是 pgid。在收尸之前 killpg，这个 pid 不会被别人复用。
+    let pgid = child
+        .id()
+        .and_then(|id| rustix::process::Pid::from_raw(id as i32));
+    let mut stdout = child.stdout.take()?;
+
+    let capture = async {
+        let mut buf: Vec<u8> = Vec::new();
+        while stdout.read_buf(&mut buf).await.ok()? > 0 {
+            if String::from_utf8_lossy(&buf).contains(PATH_SENTINEL_CLOSE) {
+                break;
+            }
+        }
+        let status = child.wait().await.ok()?;
+        status.success().then_some(buf)
+    };
+    let captured = tokio::time::timeout(timeout, capture).await;
+
+    if let Some(pgid) = pgid {
+        let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
     }
-    extract_sentinel_path(&String::from_utf8_lossy(&out.stdout))
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+
+    extract_sentinel_path(&String::from_utf8_lossy(&captured.ok()??))
 }
 
 /// 从 shell 输出里取哨兵之间的 PATH。
@@ -214,14 +239,62 @@ mod tests {
         assert_eq!(got.as_deref(), Some("/x/bin:/y/bin"));
     }
 
+    /// 脚本把自己的 pid 写进 `pidfile`（登录 shell 是自己进程组的组长，pid = pgid）。
+    /// 轮询到整组进程消失为止；2s 内没消失 = 有后代逃过了 killpg。
+    fn assert_group_gone(pidfile: &Path) {
+        let pgid: i32 = std::fs::read_to_string(pidfile)
+            .expect("脚本没写 pidfile")
+            .trim()
+            .parse()
+            .unwrap();
+        let pgid = rustix::process::Pid::from_raw(pgid).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match rustix::process::test_kill_process_group(pgid) {
+                Err(rustix::io::Errno::SRCH) => return,
+                _ if Instant::now() > deadline => panic!("进程组 {pgid:?} 里还有活着的进程"),
+                _ => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
+
     #[tokio::test]
-    async fn hanging_login_shell_times_out() {
+    async fn hanging_login_shell_times_out_and_leaves_no_survivors() {
         let dir = tempfile::tempdir().unwrap();
-        let shell = script(dir.path(), "stuck-shell", "sleep 30");
+        let pidfile = dir.path().join("pid");
+        let shell = script(
+            dir.path(),
+            "stuck-shell",
+            &format!("echo $$ > {}; sleep 30", pidfile.display()),
+        );
         let started = Instant::now();
-        let got = login_shell_path(&shell, Duration::from_millis(300)).await;
+        // 超时要留够脚本冷启动写下 pidfile 的时间，否则测不到进程组。
+        let got = login_shell_path(&shell, Duration::from_secs(1)).await;
         assert_eq!(got, None);
         assert!(started.elapsed() < Duration::from_secs(5), "超时必须生效");
+        assert_group_gone(&pidfile);
+    }
+
+    #[tokio::test]
+    async fn background_job_holding_stdout_does_not_delay_or_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let shell = script(
+            dir.path(),
+            "rc-with-bg-job",
+            &format!(
+                "echo $$ > {}; sleep 8 &\nprintf '{PATH_SENTINEL_OPEN}/x/bin{PATH_SENTINEL_CLOSE}'",
+                pidfile.display()
+            ),
+        );
+        let started = Instant::now();
+        let got = login_shell_path(&shell, Duration::from_secs(5)).await;
+        assert_eq!(got.as_deref(), Some("/x/bin"));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "不能为后台任务攥着的管道等到 EOF"
+        );
+        assert_group_gone(&pidfile);
     }
 
     #[tokio::test]
