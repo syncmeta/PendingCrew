@@ -55,13 +55,21 @@ pub fn list(
     )?)
 }
 
+/// RFC 3339（任意时区偏移）→ 库里存的 `…sssZ` 形式，才能按字符串比大小。
+fn normalize_ts(s: &str) -> Result<String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(s.trim())
+        .map_err(|e| CollabError::Invalid(format!("时间 {s:?} 不是 RFC 3339：{e}")))?;
+    Ok(crewd_store::ts_from_ms(dt.timestamp_millis()))
+}
+
 pub fn search(conn: &Connection, q: &Search) -> Result<Vec<Message>> {
-    let needle = q.query.trim().to_lowercase();
+    // 两边在 SQL 里用同一个 lower() 折叠（只折 ASCII）：「Über」这类非 ASCII 的原样匹配不能被一边折一边不折弄丢。
+    let needle = q.query.trim().to_string();
     if needle.is_empty() {
         return Err(CollabError::Invalid("搜索词不能为空".into()));
     }
     let mut sql = String::from(
-        "SELECT m.id FROM messages m JOIN channels ch ON ch.id=m.channel_id WHERE instr(lower(m.text), ?1) > 0",
+        "SELECT m.id FROM messages m JOIN channels ch ON ch.id=m.channel_id WHERE instr(lower(m.text), lower(?1)) > 0",
     );
     let mut args: Vec<rusqlite::types::Value> = vec![needle.into()];
     if let Some(c) = &q.crew_id {
@@ -80,11 +88,11 @@ pub fn search(conn: &Connection, q: &Search) -> Result<Vec<Message>> {
         sql += &format!(" AND m.channel_id IN ({})", ph.join(","));
     }
     if let Some(a) = &q.after {
-        args.push(a.clone().into());
+        args.push(normalize_ts(a)?.into());
         sql += &format!(" AND m.created_at>=?{}", args.len());
     }
     if let Some(b) = &q.before {
-        args.push(b.clone().into());
+        args.push(normalize_ts(b)?.into());
         sql += &format!(" AND m.created_at<?{}", args.len());
     }
     args.push(i64::from(q.limit.clamp(1, 500)).into());
@@ -97,14 +105,24 @@ pub fn search(conn: &Connection, q: &Search) -> Result<Vec<Message>> {
 }
 
 pub fn post(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
-    post_with(tx, sender, p, true)
+    post_with(tx, sender, p, false)
 }
 
 /// collab 自己的公告（问、审批、重启询问）：跳过发言者成员检查，其余规则同 `post`。
 // TEMP: first caller in Task 10 (asks / approvals / restart announcements)
 #[allow(dead_code)]
 pub(crate) fn post_internal(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
-    post_with(tx, sender, p, false)
+    post_with(tx, sender, p, true)
+}
+
+/// 正文上限（字节）。
+const MAX_BODY_BYTES: usize = 256 * 1024;
+/// 只有 collab 自己的公告（`post_internal`）能用的 `category`。
+const RESERVED_CATEGORIES: [&str; 3] = ["ask", "approval", "restart"];
+
+/// 空白与零宽字符（U+200B/200C/200D/FEFF）：只含这些的正文等于空。
+fn is_blank(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}')
 }
 
 fn push_mention(v: &mut Vec<Mention>, m: Mention) {
@@ -113,13 +131,20 @@ fn push_mention(v: &mut Vec<Mention>, m: Mention) {
     }
 }
 
-fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, check_member: bool) -> Result<Posted> {
+fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Result<Posted> {
     let conn = tx.conn();
-    // R1：根机组人类群懒建；第一条发言到这里时群可能还不存在，用同一个 ensure 建好再发（同一个 Tx）。
-    if let Some(root) = p.channel_id.strip_suffix("/human")
-        && !channels::human_channel_exists(conn, root)?
-    {
-        channels::ensure_human_channel(tx, root)?;
+    // R1：根机组人类群懒建；现在是根的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、已归档就解档、
+    // 钉机长游标、记 ChannelChanged），同一个 Tx。非根机组没有人类群，指路到它的根。
+    if let Some(crew) = p.channel_id.strip_suffix("/human") {
+        crews::get(conn, crew)?;
+        if crews::is_root(conn, crew)? {
+            channels::ensure_human_channel(tx, crew)?;
+        } else {
+            return Err(CollabError::Invalid(format!(
+                "{crew} 是非根机组，没有人类群，请发到 {}/human",
+                crews::root_of(conn, crew)?
+            )));
+        }
     }
     let ch = channels::get(conn, &p.channel_id)?;
     if ch.archived_at.is_some() {
@@ -128,8 +153,22 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, check_member: bool) ->
             ch.id
         )));
     }
-    if p.text.trim().is_empty() {
+    if p.text.trim_matches(is_blank).is_empty() {
         return Err(CollabError::Invalid("消息不能为空".into()));
+    }
+    if p.text.len() > MAX_BODY_BYTES {
+        return Err(CollabError::Invalid(format!(
+            "消息正文最长 {MAX_BODY_BYTES} 字节，这条有 {} 字节",
+            p.text.len()
+        )));
+    }
+    if !internal
+        && let Some(c) = p.category.as_deref()
+        && RESERVED_CATEGORIES.contains(&c)
+    {
+        return Err(CollabError::Invalid(format!(
+            "分类 {c:?} 留给系统公告，不能由发言带上"
+        )));
     }
     if !p.attachments.is_empty() {
         return Err(CollabError::Invalid("附件上传尚未实现".into()));
@@ -141,8 +180,15 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, check_member: bool) ->
         Sender::System => (SenderKind::System, None, None),
         Sender::Session(id) => {
             let me = MemberRef::session(id.clone());
-            if check_member && !channels::is_member(conn, &ch.id, &me)? {
+            if !internal && !channels::is_member(conn, &ch.id, &me)? {
                 if is_root_human {
+                    // 只有这棵树里的 session 能经发言入群；别的机组走 System（C7）。
+                    if crews::root_of(conn, &sessions::crew_of(conn, id)?)? != ch.crew_id {
+                        return Err(CollabError::Forbidden(format!(
+                            "{id} 不属于 {} 这棵机组树，不能进它的人类群",
+                            ch.crew_id
+                        )));
+                    }
                     // 往根机组人类群发言 = 显式入群（R14：与 add_members 同一个 join；人回话时它才在群里）。
                     channels::join(tx, &ch.id, &me)?;
                     tx.note(Change::ChannelChanged {
@@ -231,13 +277,17 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, check_member: bool) ->
                     target_id: None,
                 },
             ),
-            (SenderKind::Session | SenderKind::Captain, Some(sid)) => push_mention(
-                &mut mentions,
-                Mention {
-                    kind: MentionKind::Session,
-                    target_id: Some(sid),
-                },
-            ),
+            (SenderKind::Session | SenderKind::Captain, Some(sid))
+                if sender_session_id.as_deref() != Some(sid.as_str()) =>
+            {
+                push_mention(
+                    &mut mentions,
+                    Mention {
+                        kind: MentionKind::Session,
+                        target_id: Some(sid),
+                    },
+                )
+            }
             _ => {}
         }
     }
@@ -284,7 +334,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, check_member: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{NOW, err, ok, ok_at, store};
+    use crate::testkit::{MIN, NOW, err, ok, ok_at, store};
 
     fn post_text(ch: &str, text: &str) -> NewPost {
         NewPost {
@@ -715,6 +765,383 @@ mod tests {
                 }
             )
             .is_err()
+        );
+    }
+
+    // ---- review fixes ----
+
+    #[test]
+    fn an_archived_human_channel_of_a_current_root_is_reopened_by_posting() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-x")
+        });
+        ok(&mut s, |tx| crate::crews::adopt(tx, "crew-x", "crew-a"));
+        assert!(
+            crate::channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_some()
+        );
+        // 现根被删：crew-x 重新成了根，它的人类群要一并解档（与 release 同一个做法）。
+        ok(&mut s, |tx| crate::crews::delete(tx, "crew-a"));
+        assert!(crate::crews::is_root(s.conn(), "crew-x").unwrap());
+        assert!(
+            crate::channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_none(),
+            "删父后孤儿根的人类群解档"
+        );
+        ok(&mut s, |tx| {
+            post(tx, Sender::Human, post_text("crew-x/human", "人说话"))
+        });
+        ok(&mut s, |tx| {
+            post(tx, session("cap-x"), post_text("crew-x/human", "机长说话"))
+        });
+    }
+
+    #[test]
+    fn posting_reopens_an_archived_human_channel_of_a_root_even_if_nothing_else_did() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-x")
+        });
+        // 只在库里把它标成已归档（模拟任何漏掉解档的路径）。
+        s.conn()
+            .execute(
+                "UPDATE channels SET archived_at='2026-09-01T00:00:00.000Z' WHERE id='crew-x/human'",
+                [],
+            )
+            .unwrap();
+        ok(&mut s, |tx| {
+            post(tx, Sender::Human, post_text("crew-x/human", "还在吗"))
+        });
+        assert!(
+            crate::channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_non_root_crews_human_channel_is_refused_with_a_pointer_to_the_root() {
+        let mut s = store();
+        let e = err(&mut s, |tx| {
+            post(tx, Sender::Human, post_text("crew-b/human", "发错地方"))
+        });
+        let CollabError::Invalid(why) = e else {
+            panic!("{e:?}")
+        };
+        assert!(why.contains("crew-a/human"), "{why}");
+        assert!(!crate::channels::human_channel_exists(s.conn(), "crew-b").unwrap());
+    }
+
+    #[test]
+    fn search_matches_non_ascii_exactly() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                post_text("crew-a/lobby", "Über 文档 Hello"),
+            )
+        });
+        let q = |query: &str| {
+            search(
+                s.conn(),
+                &Search {
+                    query: query.into(),
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .len()
+        };
+        assert_eq!(q("Über"), 1);
+        assert_eq!(q("  文档 "), 1);
+        assert_eq!(q("hello"), 1, "ASCII 仍不分大小写");
+        assert_eq!(q("HELLO"), 1);
+    }
+
+    #[test]
+    fn search_filters_by_channel_ids_and_time_with_any_offset() {
+        let mut s = store();
+        let late = NOW + 60 * MIN;
+        ok_at(&mut s, NOW, |tx| {
+            post(tx, session("w-a1"), post_text("crew-a/lobby", "早 词"))
+        });
+        ok_at(&mut s, late, |tx| {
+            post(tx, session("w-a1"), post_text("crew-a/lobby", "晚 词"))
+        });
+        ok_at(&mut s, late, |tx| {
+            post(tx, session("cap-x"), post_text("crew-x/lobby", "别处 词"))
+        });
+        let run = |q: Search| -> Vec<String> {
+            search(
+                s.conn(),
+                &Search {
+                    query: "词".into(),
+                    limit: 50,
+                    ..q
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|m| m.text)
+            .collect()
+        };
+        assert_eq!(
+            run(Search {
+                channel_ids: Some(vec!["crew-x/lobby".into()]),
+                ..Default::default()
+            }),
+            ["别处 词"]
+        );
+        assert!(
+            run(Search {
+                channel_ids: Some(vec![]),
+                ..Default::default()
+            })
+            .is_empty()
+        );
+        // 中点用 +08:00 写：字符串比较会错，必须解析后比。
+        let mid = chrono::DateTime::from_timestamp_millis(NOW + 30 * MIN)
+            .unwrap()
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .to_rfc3339();
+        assert!(mid.ends_with("+08:00"), "{mid}");
+        assert_eq!(
+            run(Search {
+                after: Some(mid.clone()),
+                crew_id: Some("crew-a".into()),
+                ..Default::default()
+            }),
+            ["晚 词"]
+        );
+        assert_eq!(
+            run(Search {
+                before: Some(mid),
+                ..Default::default()
+            }),
+            ["早 词"]
+        );
+        // after 含、before 不含（正好落在整点上）。
+        let at_late = crewd_store::ts_from_ms(late);
+        assert_eq!(
+            run(Search {
+                after: Some(at_late.clone()),
+                ..Default::default()
+            })
+            .len(),
+            2
+        );
+        assert_eq!(
+            run(Search {
+                before: Some(at_late),
+                ..Default::default()
+            }),
+            ["早 词"]
+        );
+        assert!(matches!(
+            search(
+                s.conn(),
+                &Search {
+                    query: "词".into(),
+                    after: Some("昨天".into()),
+                    limit: 5,
+                    ..Default::default()
+                }
+            ),
+            Err(CollabError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn a_session_may_only_join_its_own_trees_root_human_channel() {
+        let mut s = store();
+        // 别棵树的 session：拒，且没入群。
+        assert!(matches!(
+            err(&mut s, |tx| post(
+                tx,
+                session("cap-x"),
+                post_text("crew-a/human", "越界")
+            )),
+            CollabError::Forbidden(_)
+        ));
+        assert!(
+            !crate::channels::is_member(s.conn(), "crew-a/human", &MemberRef::session("cap-x"))
+                .unwrap_or(false)
+        );
+        // 子机组的 session（根是 crew-a）可以。
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-b1"),
+                post_text("crew-a/human", "子机组要人拍板"),
+            )
+        });
+        // 跨机组走 System（C7）。
+        ok(&mut s, |tx| {
+            post(tx, Sender::System, post_text("crew-a/human", "来自 crew-x"))
+        });
+    }
+
+    #[test]
+    fn replying_to_your_own_message_does_not_mention_yourself() {
+        let mut s = store();
+        let mine = ok(&mut s, |tx| {
+            post(tx, session("w-a1"), post_text("crew-a/lobby", "第一句"))
+        });
+        let r = ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                NewPost {
+                    in_reply_to: Some(mine.message.id.clone()),
+                    ..post_text("crew-a/lobby", "补一句")
+                },
+            )
+        });
+        assert_eq!(r.message.mentions, [m(MentionKind::Broadcast, None)]);
+    }
+
+    #[test]
+    fn replying_to_a_system_message_only_broadcasts() {
+        let mut s = store();
+        let sys = ok(&mut s, |tx| {
+            post(tx, Sender::System, post_text("crew-a/lobby", "系统公告"))
+        });
+        let r = ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                NewPost {
+                    in_reply_to: Some(sys.message.id.clone()),
+                    ..post_text("crew-a/lobby", "收到")
+                },
+            )
+        });
+        assert_eq!(r.message.mentions, [m(MentionKind::Broadcast, None)]);
+    }
+
+    #[test]
+    fn invisible_only_bodies_oversized_bodies_and_reserved_categories_are_refused() {
+        let mut s = store();
+        for blank in ["\u{200B}", " \u{200C}\u{200D}\n\u{FEFF} "] {
+            assert!(
+                matches!(
+                    err(&mut s, |tx| post(
+                        tx,
+                        session("w-a1"),
+                        post_text("crew-a/lobby", blank)
+                    )),
+                    CollabError::Invalid(_)
+                ),
+                "{blank:?}"
+            );
+        }
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                post_text("crew-a/lobby", &"a".repeat(256 * 1024)),
+            )
+        });
+        let e = err(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                post_text("crew-a/lobby", &"a".repeat(256 * 1024 + 1)),
+            )
+        });
+        let CollabError::Invalid(why) = e else {
+            panic!("{e:?}")
+        };
+        assert!(why.contains("262144"), "错误里写明上限：{why}");
+        for cat in ["ask", "approval", "restart"] {
+            assert!(
+                matches!(
+                    err(&mut s, |tx| post(
+                        tx,
+                        Sender::Human,
+                        NewPost {
+                            category: Some(cat.into()),
+                            ..post_text("crew-a/lobby", "冒充公告")
+                        }
+                    )),
+                    CollabError::Invalid(_)
+                ),
+                "{cat}"
+            );
+        }
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                Sender::Human,
+                NewPost {
+                    category: Some("note".into()),
+                    ..post_text("crew-a/lobby", "普通分类")
+                },
+            )
+        });
+        // 公告路径可以用保留分类。
+        let a = ok(&mut s, |tx| {
+            post_internal(
+                tx,
+                Sender::System,
+                NewPost {
+                    category: Some("ask".into()),
+                    ..post_text("crew-a/lobby", "公告")
+                },
+            )
+        });
+        assert_eq!(a.message.category.as_deref(), Some("ask"));
+    }
+
+    #[test]
+    fn captain_mention_with_no_captain_is_refused() {
+        let mut s = store();
+        s.conn()
+            .execute(
+                "UPDATE crews SET captain_session_id=NULL WHERE id='crew-a'",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| post(
+                tx,
+                session("w-a1"),
+                NewPost {
+                    mentions: vec![m(MentionKind::Captain, None)],
+                    ..post_text("crew-a/lobby", "@机长")
+                }
+            )),
+            CollabError::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn a_human_posting_into_a_session_dm_leaves_membership_alone() {
+        let mut s = store();
+        let (dm, _) = ok(&mut s, |tx| {
+            crate::channels::ensure_dm(
+                tx,
+                "crew-a",
+                &MemberRef::session("w-a1"),
+                &MemberRef::session("w-a2"),
+            )
+        });
+        let before = crate::channels::members(s.conn(), &dm.id).unwrap();
+        ok(&mut s, |tx| {
+            post(tx, Sender::Human, post_text(&dm.id, "人插一句"))
+        });
+        assert_eq!(crate::channels::members(s.conn(), &dm.id).unwrap(), before);
+        assert!(
+            !crate::channels::is_member(s.conn(), &dm.id, &MemberRef::Human).unwrap(),
+            "人没有因此入群"
         );
     }
 }

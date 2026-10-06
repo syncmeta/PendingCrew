@@ -361,6 +361,10 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
     for k in &orphans {
         put_last(tx, k, None)?;
+        // 又成了根：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）。
+        if crate::channels::human_channel_exists(tx.conn(), k)? {
+            crate::channels::ensure_human_channel(tx, k)?;
+        }
     }
     tx.note(Change::CrewRemoved { crew_id: id.into() });
     for c in around {
