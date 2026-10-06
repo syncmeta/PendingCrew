@@ -616,6 +616,8 @@ mod tests {
         assert!(ch.is_empty(), "回退不发 BadgeChanged");
         let (_, ch) = ok_at(&mut s, NOW, |tx| mark_read(tx, "crew-a/lobby", m.seq));
         assert!(ch.is_empty(), "原地不动不发 BadgeChanged");
+        let (_, ch) = ok_at(&mut s, NOW, |tx| mark_read(tx, "crew-a/lobby", i64::MAX));
+        assert!(ch.is_empty(), "已在末尾时远未来的 seq 也是空操作");
         assert_eq!(
             cursor(s.conn(), HUMAN, "crew-a/lobby").unwrap(),
             Some(m.seq)
