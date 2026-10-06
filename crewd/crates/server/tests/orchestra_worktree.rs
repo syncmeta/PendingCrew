@@ -213,3 +213,38 @@ async fn the_deadline_kills_the_whole_process_group() {
     });
     assert!(gone, "后台子进程 {pid} 还活着");
 }
+
+/// Task 7 评审：git 自己正常退了，但它起的后台进程（hook 的后台任务）还拿着输出管道——读输出也受同一个期限，
+/// 到点连组杀掉、回「超时」，不无限等 EOF。
+#[tokio::test]
+async fn output_held_open_after_git_exits_is_bounded_by_the_deadline() {
+    let t = tempfile::tempdir().unwrap();
+    let pidfile = t.path().join("child.pid");
+    let body = format!("sleep 30 & echo $! > '{}'; exit 0", pidfile.display());
+    let wt = GitWorktrees {
+        program: fake_git(t.path(), &body),
+        timeout: Duration::from_millis(300),
+    };
+    let started = Instant::now();
+    let e = wt.create(t.path(), "x").await.unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(e.contains("超时"), "{e}");
+    let pid: i32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let gone = (0..200).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        !Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    });
+    assert!(gone, "拿着管道的后台进程 {pid} 还活着");
+}

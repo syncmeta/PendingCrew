@@ -92,15 +92,18 @@ impl Git {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("跑不了 git（{e}）；请确认 git 在 PATH 上"))?;
-        // 两个管道各一条线程读完，免得输出多时子进程堵在写管道上、永远等不到退出。
+        // 两个管道各一条线程读完，免得输出多时子进程堵在写管道上、永远等不到退出。读完经通道交回来：
+        // 收的一方按同一个期限等（git 自己退了、它起的后台孙进程还拿着管道时，读线程永远读不到 EOF）。
         let drain = |pipe: Option<Box<dyn Read + Send>>| {
+            let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut buf = Vec::new();
                 if let Some(mut p) = pipe {
                     let _ = p.read_to_end(&mut buf);
                 }
-                String::from_utf8_lossy(&buf).trim().to_string()
-            })
+                let _ = tx.send(String::from_utf8_lossy(&buf).trim().to_string());
+            });
+            rx
         };
         let out = drain(
             child
@@ -132,11 +135,28 @@ impl Git {
                 Err(e) => return Err(format!("等 git 结束时出错：{e}")),
             }
         };
-        Ok(Out {
-            ok: status.success(),
-            stdout: out.join().unwrap_or_default(),
-            stderr: err.join().unwrap_or_default(),
-        })
+        // 成功路径同样受期限约束（Task 7 评审）：git 退了、管道却还被它起的孙进程（hook 的后台任务）拿着。
+        let collect = |rx: &std::sync::mpsc::Receiver<String>| {
+            rx.recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+                .ok()
+        };
+        match (collect(&out), collect(&err)) {
+            (Some(stdout), Some(stderr)) => Ok(Out {
+                ok: status.success(),
+                stdout,
+                stderr,
+            }),
+            _ => {
+                // 还拿着管道的都在 git 那一组里（`process_group(0)`）：连组杀掉，不留孤儿。
+                kill_group(child.id());
+                Err(format!(
+                    "无法为 session 新建 worktree：git {} 退出后输出一直没读完、超时（新建限时 {:.1} 秒，\
+                     多半是 hook 留下的后台进程拿着管道），已中止",
+                    args.first().copied().unwrap_or_default(),
+                    self.limit.as_secs_f64()
+                ))
+            }
+        }
     }
 }
 
