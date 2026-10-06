@@ -40,6 +40,45 @@ pub enum Rejected {
     Invariant(Violation),
 }
 
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 给日志 / 开发者看的英文短句；给 agent / 人看的文案归 M4b 的 MCP 层映射。
+        match self {
+            Rejected::Forbidden(a) => write!(f, "not allowed: {a}"),
+            Rejected::UnknownItem(w) => write!(f, "no such work item {w}"),
+            Rejected::UnknownEntry(e) => write!(f, "no such entry {e}"),
+            Rejected::UnknownAsk(h) => write!(f, "no such human ask {h}"),
+            Rejected::Terminal(w) => write!(f, "{w} is already done or dropped"),
+            Rejected::EntryClosed(e) => write!(f, "entry {e} is closed"),
+            Rejected::Blank(field) => write!(f, "{field} must not be blank"),
+            Rejected::BatchRef(i) => {
+                write!(f, "batch reference #{i} does not point to an earlier item")
+            }
+            Rejected::OwnerRequired => write!(f, "every claimed item needs an owner"),
+            Rejected::NextCheckNotFuture => write!(f, "next check must be later than now"),
+            Rejected::SameOwner => write!(f, "that session already owns the item"),
+            Rejected::TransferPending(w) => write!(f, "{w} already has a pending transfer"),
+            Rejected::NoPendingTransfer(w) => write!(f, "{w} has no pending transfer"),
+            Rejected::NotOwned(w) => write!(f, "{w} has no owner"),
+            Rejected::NotLost(w) => write!(f, "{w}'s owner is not verified lost"),
+            Rejected::AskNotOpen(h) => write!(f, "{h} is no longer open"),
+            Rejected::NoDefault(h) => write!(f, "{h} has no default option"),
+            Rejected::DefaultNotDue(h) => write!(f, "{h}'s default option is not due yet"),
+            Rejected::Invalid(why) => f.write_str(why),
+            Rejected::Invariant(v) => write!(f, "invariant violated: {v}"),
+        }
+    }
+}
+
+impl std::error::Error for Rejected {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Rejected::Invariant(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
 /// 成功的命令：返回值 + 这次产出的事件（已追加到账本的事件日志里）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Applied<T> {
@@ -931,6 +970,54 @@ mod tests {
                 limit: T1.plus(HOUR)
             })),
             "新写入的值按新上限"
+        );
+    }
+
+    #[test]
+    fn rejections_and_violations_are_printable_errors() {
+        fn as_error(e: &dyn std::error::Error) -> String {
+            e.to_string()
+        }
+        assert_eq!(
+            as_error(&Rejected::NotLost(WorkId(3))),
+            "W3's owner is not verified lost"
+        );
+        assert_eq!(
+            as_error(&Rejected::Forbidden(Action::CreateChild)),
+            "not allowed: create_child"
+        );
+        assert_eq!(
+            as_error(&Rejected::Invariant(Violation::Cycle(vec![
+                WorkId(1),
+                WorkId(2)
+            ]))),
+            "invariant violated: cycle W1 → W2 → W1"
+        );
+        assert_eq!(
+            as_error(&Violation::StaleBlocker {
+                item: WorkId(4),
+                blocker: crate::model::Blocker::Human(AskId(2))
+            }),
+            "W4 is still blocked on H2, which is already resolved"
+        );
+        let source = Rejected::Invariant(Violation::CounterBehind);
+        assert!(
+            std::error::Error::source(&source).is_some(),
+            "不变量违反作为 source 带出来"
+        );
+    }
+
+    #[test]
+    fn config_fields_default_individually() {
+        let c: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(c, Config::default());
+        let c: Config = serde_json::from_str("{\"recheck_after_ms\": 60000}").unwrap();
+        assert_eq!(
+            c,
+            Config {
+                recheck_after_ms: 60_000,
+                ..Config::default()
+            }
         );
     }
 }

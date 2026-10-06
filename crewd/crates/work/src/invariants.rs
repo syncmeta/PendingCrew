@@ -70,6 +70,58 @@ pub enum Violation {
     Cycle(Vec<WorkId>),
 }
 
+impl std::fmt::Display for Violation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Violation::*;
+        match self {
+            KeyMismatch(w) => write!(f, "item stored under {w} carries a different id"),
+            CounterBehind => write!(f, "a W/H counter is behind the numbers already issued"),
+            BlankTitle(w) => write!(f, "{w} has a blank title"),
+            DuplicateRef(w) => write!(f, "{w} lists the same reference twice"),
+            UnknownItemRef { item, missing } => write!(f, "{item} refers to missing {missing}"),
+            UnknownEntryRef { item, entry } => write!(f, "{item} refers to missing entry {entry}"),
+            UnknownAskRef { item, ask } => write!(f, "{item} refers to missing {ask}"),
+            AskForUnknownItem { ask, item } => write!(f, "{ask} is about missing {item}"),
+            OwnerMissing(w) => write!(f, "{w} is active or blocked without an owner"),
+            ActiveWithoutCheck(w) => write!(f, "{w} is active without a next check"),
+            CheckTooFar { item, at, limit } => write!(
+                f,
+                "{item}'s next check {} is beyond the limit {}",
+                at.0, limit.0
+            ),
+            CheckNotAllowed(w) => write!(f, "{w} may not have a next check in its state"),
+            DoneWithoutEvidence(w) => write!(f, "{w} is done without evidence"),
+            ActiveBeforeDeps { item, dep } => write!(f, "{item} is active before {dep} is done"),
+            BlockedWithoutBlocker(w) => write!(f, "{w} is blocked on nothing"),
+            BlockerOnUnblocked(w) => write!(f, "{w} has blockers but is not blocked"),
+            StaleBlocker { item, blocker } => write!(
+                f,
+                "{item} is still blocked on {blocker}, which is already resolved"
+            ),
+            LiveUnderTerminal { item, parent } => {
+                write!(f, "{item} is live under finished parent {parent}")
+            }
+            LiveOnDropped { item, dep } => write!(f, "{item} depends on dropped {dep}"),
+            LiveOnClosedEntry { item, entry } => {
+                write!(f, "{item} is live under closed entry {entry}")
+            }
+            StrayTransfer(w) => write!(f, "{w} has a transfer that cannot be accepted"),
+            Cycle(ids) => {
+                f.write_str("cycle ")?;
+                for w in ids {
+                    write!(f, "{w} → ")?;
+                }
+                match ids.first() {
+                    Some(first) => write!(f, "{first}"),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for Violation {}
+
 /// 结构不变量（与时间无关）：每条命令改完后、`WorkBook::restore` 读回时都跑。检查时间的上限不在这里——
 /// 它只约束这一次写入的值（见 `check_written`），所以调低上限不会让旧账本读不回来。
 pub fn check(s: &BookState) -> Result<(), Violation> {

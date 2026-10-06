@@ -64,6 +64,15 @@ pub enum Blocker {
     Item(WorkId),
 }
 
+impl std::fmt::Display for Blocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Blocker::Human(h) => write!(f, "{h}"),
+            Blocker::Item(w) => write!(f, "{w}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -320,6 +329,7 @@ impl BookState {
 /// 24h / 72h（§6）、巡检每 10 条消息 / 30min（§8.4）。`recheck_after_ms`（叫醒后没回报、多久再叫）由人拍板
 /// 默认 15 分钟：配合 K=2，一个不回话的负责人约 30 分钟被判失联（M4a 裁定 Q3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub max_check_horizon_ms: i64,
     pub recheck_after_ms: i64,

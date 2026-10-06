@@ -63,6 +63,25 @@ impl Action {
     ];
 }
 
+impl std::fmt::Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 与 serde 的 snake_case 线上名一致。
+        let camel = format!("{self:?}");
+        let mut out = String::with_capacity(camel.len() + 4);
+        for (i, ch) in camel.chars().enumerate() {
+            if ch.is_ascii_uppercase() {
+                if i > 0 {
+                    out.push('_');
+                }
+                out.push(ch.to_ascii_lowercase());
+            } else {
+                out.push(ch);
+            }
+        }
+        f.write_str(&out)
+    }
+}
+
 /// 判定需要的上下文：被操作项当前的负责人、待接受的转交对象、被指派的人。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ctx<'a> {
