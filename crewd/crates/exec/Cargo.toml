@@ -5,7 +5,9 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2.190"
 rustix = { version = "1", features = ["termios", "process", "fs", "stdio"] }
+rustix-openpty = "0.2"
 serde_json = "1.0.151"
 tokio = { version = "1.53.2", features = ["rt", "macros", "time", "sync", "process", "net", "io-util"] }
 uuid = { version = "1.27.0", features = ["v4"] }

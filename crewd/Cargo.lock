@@ -252,7 +252,9 @@ dependencies = [
 name = "crewd-exec"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix",
+ "rustix-openpty",
  "serde_json",
  "tempfile",
  "tokio",
