@@ -6,6 +6,7 @@ pub mod channels;
 pub mod crews;
 pub mod cursors;
 pub mod directory;
+pub mod messages;
 pub mod sessions;
 pub mod settings;
 #[cfg(test)]

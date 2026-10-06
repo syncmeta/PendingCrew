@@ -212,7 +212,6 @@ pub fn set_profile(
 }
 
 /// 最近一次发言的时间（只是数据，**不算产出**）：只由 `messages::post` 在 session 发言时调。
-#[allow(dead_code)] // TEMP: first caller in Task 8
 pub(crate) fn note_output(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     let now = tx.now_ts();
     update_one(
