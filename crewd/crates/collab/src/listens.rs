@@ -38,12 +38,20 @@ pub fn set(
     if until_ms.is_some_and(|u| u <= tx.now_ms()) {
         return Err(CollabError::Invalid("收听截止时间必须晚于现在".into()));
     }
+    // 这个群此刻是否已经在它的注入面上：有效的收听，或本来就在群里（成员 / 本机组大厅 / 机长的人类群）。
+    // 不在 = 过期 / 清掉 / 从没收听过——从现在起重新收听，必须钉到末尾，不能把期间的历史倒出来。
+    let on_surface = active_for_channel(tx.conn(), channel, tx.now_ms())?
+        .iter()
+        .any(|l| l.session == session)
+        || channels::channels_of_session(tx.conn(), session)?
+            .iter()
+            .any(|c| c.id == channel);
     tx.conn().execute(
         "INSERT INTO listens(session_id,channel_id,until,senders,created_at) VALUES(?1,?2,?3,?4,?5)
          ON CONFLICT(session_id,channel_id) DO UPDATE SET until=excluded.until, senders=excluded.senders",
         params![session, channel, until_ms, serde_json::to_string(&senders)?, tx.now_ts()],
     )?;
-    if cursors::cursor(tx.conn(), session, channel)?.is_none() {
+    if !on_surface || cursors::cursor(tx.conn(), session, channel)?.is_none() {
         cursors::pin_to_end(tx, session, channel)?;
     }
     Ok(())
@@ -63,8 +71,8 @@ pub fn clear(tx: &mut Tx<'_>, session: &str, channel: Option<&str>) -> Result<us
 
 pub fn active_for_channel(conn: &Connection, channel: &str, now_ms: i64) -> Result<Vec<Listen>> {
     let mut st = conn.prepare(
-        "SELECT session_id, channel_id, until, senders FROM listens
-          WHERE channel_id=?1 AND (until IS NULL OR until>?2) ORDER BY session_id",
+        "SELECT l.session_id, l.channel_id, l.until, l.senders FROM listens l JOIN channels ch ON ch.id=l.channel_id
+          WHERE l.channel_id=?1 AND (l.until IS NULL OR l.until>?2) AND ch.archived_at IS NULL ORDER BY l.session_id",
     )?;
     Ok(st
         .query_map(params![channel, now_ms], row)?
@@ -137,5 +145,30 @@ mod tests {
             err(&mut s, |tx| set(tx, "ghost", "crew-x/lobby", None, vec![])),
             CollabError::NotFound(_)
         ));
+    }
+
+    /// 复核 6：已归档的群不算「有人在收听」。
+    #[test]
+    fn active_for_channel_skips_archived_channels() {
+        let mut s = store();
+        ok(&mut s, |tx| set(tx, "w-a1", "crew-x/lobby", None, vec![]));
+        assert_eq!(
+            active_for_channel(s.conn(), "crew-x/lobby", NOW)
+                .unwrap()
+                .len(),
+            1
+        );
+        s.conn()
+            .execute(
+                "UPDATE channels SET archived_at='2026-09-01T00:00:00.000Z' WHERE id='crew-x/lobby'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            active_for_channel(s.conn(), "crew-x/lobby", NOW)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(channels_of(s.conn(), "w-a1", NOW).unwrap().is_empty());
     }
 }
