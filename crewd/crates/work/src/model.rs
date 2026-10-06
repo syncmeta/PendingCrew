@@ -201,6 +201,8 @@ pub struct WorkItem {
     pub pending_transfer: Option<PendingTransfer>,
     pub channel: Option<ChannelId>,
     pub last_report: Option<Note>,
+    /// 建这一项的 session（调度层 / 人建的为空）。无主的 request_help 项可由它撤回。
+    pub created_by: Option<SessionId>,
     pub revision: u64,
     pub created_at: Ts,
     pub updated_at: Ts,

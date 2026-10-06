@@ -82,12 +82,14 @@ impl std::fmt::Display for Action {
     }
 }
 
-/// 判定需要的上下文：被操作项当前的负责人、待接受的转交对象、被指派的人。
+/// 判定需要的上下文：被操作项当前的负责人、待接受的转交对象、被指派的人、建它的 session。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ctx<'a> {
     pub owner: Option<&'a SessionId>,
     pub transfer_to: Option<&'a SessionId>,
     pub assignee: Option<&'a SessionId>,
+    /// 建这一项的 session（无主的 request_help 项可由它撤回）。
+    pub creator: Option<&'a SessionId>,
 }
 
 pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
@@ -129,8 +131,10 @@ pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
                     ),
                     Role::Worker => match action {
                         ClaimEntry | CreateItem => true,
-                        CreateChild | Report | Block | Done | DropDecision | DropFactual
-                        | Relink | LinkChannel => owns,
+                        CreateChild | Report | Block | Done | DropFactual | Relink
+                        | LinkChannel => owns,
+                        // 自己发起的求助（无主项）没人接之前，可以自己撤回。
+                        DropDecision => owns || (ctx.owner.is_none() && ctx.creator == Some(id)),
                         Assign => ctx.owner.is_none() && ctx.assignee == Some(id),
                         _ => false,
                     },
@@ -336,5 +340,25 @@ mod tests {
                 NoteEscalation
             ]
         );
+    }
+
+    #[test]
+    fn the_creator_of_an_unowned_item_may_only_cancel_it() {
+        let me = sid("w");
+        let other = sid("x");
+        let mine_unowned = Ctx {
+            creator: Some(&me),
+            ..Ctx::default()
+        };
+        assert_eq!(
+            grants(&Actor::worker("w"), mine_unowned),
+            [ClaimEntry, CreateItem, DropDecision, OpenAsk]
+        );
+        let taken = Ctx {
+            owner: Some(&other),
+            creator: Some(&me),
+            ..Ctx::default()
+        };
+        assert!(!allowed(&Actor::worker("w"), DropDecision, taken));
     }
 }

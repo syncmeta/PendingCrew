@@ -709,4 +709,34 @@ mod tests {
         let it = b.item(waiter).unwrap();
         assert_eq!((it.status, it.next_check_at), (Status::Active, Some(later)));
     }
+
+    #[test]
+    fn the_worker_who_asked_for_help_may_cancel_it_while_nobody_took_it() {
+        // 评审 P10：request_help 建出的无主项，发起的 worker 可以撤回（业务放弃）；有人接了就归负责人管。
+        let mut b = book();
+        let help = |b: &mut WorkBook| {
+            b.create_item(&Actor::worker("a"), T1, NewItem::titled("帮我查日志"))
+                .unwrap()
+                .value
+        };
+        let first = help(&mut b);
+        assert_eq!(b.item(first).unwrap().created_by, Some(sid("a")));
+        assert_eq!(
+            b.drop_item(&Actor::worker("b"), T1, first, not_needed()),
+            Err(Rejected::Forbidden(Action::DropDecision)),
+            "别人不行"
+        );
+        assert!(
+            b.drop_item(&Actor::worker("a"), T1, first, not_needed())
+                .is_ok()
+        );
+        let second = help(&mut b);
+        b.assign(&Actor::System, T1, second, sid("c"), "c 来")
+            .unwrap();
+        assert_eq!(
+            b.drop_item(&Actor::worker("a"), T1, second, not_needed()),
+            Err(Rejected::Forbidden(Action::DropDecision)),
+            "有人接了就不再是发起人能撤的"
+        );
+    }
 }

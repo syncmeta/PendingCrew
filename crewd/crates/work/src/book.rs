@@ -360,6 +360,7 @@ impl Draft {
                 owner: it.owner.as_ref(),
                 transfer_to: it.pending_transfer.as_ref().map(|t| &t.to),
                 assignee: None,
+                creator: it.created_by.as_ref(),
             },
         )
     }
@@ -472,6 +473,7 @@ impl Draft {
                     pending_transfer: None,
                     channel: n.channel,
                     last_report: None,
+                    created_by: self.by.session().cloned(),
                     revision: 1,
                     created_at: self.now,
                     updated_at: self.now,
