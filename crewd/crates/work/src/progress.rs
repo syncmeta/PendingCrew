@@ -93,14 +93,15 @@ impl WorkBook {
     }
 
     /// 放弃。重复 / 被取代 = 事实性关闭（行政处可做，必须带证据）；不做了 = 业务决定。
-    /// 还有活着的子项、依赖它的项、卡在它上面的项时被拒（不变量）。
+    /// 事实性关闭时，卡在这一项上的项随之放行、叫醒负责人（同 `mark_done`；那件事在别处做 / 已被取代）；
+    /// 返回被放行的项。业务放弃不替等它的人做决定：还有活着的子项、依赖它的项、卡在它上面的项时被拒（不变量）。
     pub fn drop_item(
         &mut self,
         by: &Actor,
         now: Ts,
         id: WorkId,
         reason: DropReason,
-    ) -> Result<Applied<()>, Rejected> {
+    ) -> Result<Applied<Vec<WorkId>>, Rejected> {
         self.transact(by, now, |d| {
             let action = if reason.kind.is_factual() {
                 Action::DropFactual
@@ -120,8 +121,13 @@ impl WorkBook {
             it.next_check_at = None;
             it.pending_transfer = None;
             it.blocked_on.clear();
+            let factual = reason.kind.is_factual();
             d.emit(EventKind::Dropped { id, reason });
-            Ok(())
+            Ok(if factual {
+                d.release(Blocker::Item(id))
+            } else {
+                Vec::new()
+            })
         })
     }
 
@@ -645,5 +651,62 @@ mod tests {
                 .is_ok(),
             "行政处改链接（事实修正）照旧可以"
         );
+    }
+
+    #[test]
+    fn a_factual_drop_releases_whoever_waited_on_it() {
+        // 评审 P11：被判重复 / 被取代的项，卡在它上面的项随之放行、叫醒其负责人（同 mark_done）。
+        let mut b = book();
+        let dup = claim(&mut b, "a", &["重复的那件"])[0];
+        let waiter = b
+            .create_item(
+                &Actor::worker("b"),
+                T1,
+                NewItem::titled("等它").owned_by("b"),
+            )
+            .unwrap()
+            .value;
+        b.block(
+            &Actor::worker("b"),
+            T1,
+            waiter,
+            vec![BlockOn::Item(dup)],
+            Continuation::Nothing,
+        )
+        .unwrap();
+        assert_eq!(
+            b.drop_item(&Actor::worker("a"), T1, dup, not_needed()),
+            Err(Rejected::Invariant(Violation::StaleBlocker {
+                item: waiter,
+                blocker: Blocker::Item(dup)
+            })),
+            "业务上的「不做了」不替等它的人做决定：仍然拒"
+        );
+        let later = T1.plus(HOUR);
+        let got = b
+            .drop_item(
+                &Actor::admin("d"),
+                later,
+                dup,
+                DropReason {
+                    kind: DropKind::Duplicate,
+                    note: "与 W9 重复".into(),
+                    evidence: Some(Evidence::Text("W9".into())),
+                },
+            )
+            .unwrap();
+        assert_eq!(got.value, [waiter]);
+        assert_eq!(kinds(&got.events), ["dropped", "blocker_cleared"]);
+        assert_eq!(
+            got.events[1].kind,
+            EventKind::BlockerCleared {
+                id: waiter,
+                owner: Some(sid("b")),
+                blocker: Blocker::Item(dup),
+                status: Status::Active
+            }
+        );
+        let it = b.item(waiter).unwrap();
+        assert_eq!((it.status, it.next_check_at), (Status::Active, Some(later)));
     }
 }
