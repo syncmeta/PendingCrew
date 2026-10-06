@@ -1,7 +1,7 @@
 //! 世界观的上下文与渲染签名（spec §22.5：M3a 定签名，M3b 写 prompts/world-model.*.md 与 `render` 的正文）。
 //! 变量照 `Sources/Stores/LocalSessionWorldModel.swift:73-90`；M3b 可以往 `WorldCtx` 加字段（文件归 M3b）。
 use crate::render::safe_name;
-use crate::{Locale, Result, channels, crews, directory, sessions};
+use crate::{Locale, Result, crews, directory, sessions};
 use crewd_proto::Role;
 use rusqlite::Connection;
 use std::sync::LazyLock;
@@ -59,10 +59,6 @@ pub struct WorldCtx {
     pub captain_name: Option<String>,
     pub parent_titles: Vec<String>,
     pub child_titles: Vec<String>,
-    /// 它在的群（id）。
-    pub channels: Vec<String>,
-    /// 找人类该发到哪：人类正在注视的群 + 根机组人类群（§17）。
-    pub human_watching: Vec<String>,
     // M3b additions.
     /// 群里的显示名（`sessions::display_name`）。
     pub label: String,
@@ -82,16 +78,7 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
     let titles = |ids: Vec<String>| -> Result<Vec<String>> {
         ids.iter().map(|i| Ok(crews::get(conn, i)?.title)).collect()
     };
-    let mut watching: Vec<String> = {
-        let mut st =
-            conn.prepare("SELECT channel_id FROM channel_watch ORDER BY since, channel_id")?;
-        st.query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?
-    };
     let root_human = crewd_store::channels::human_id(&crews::root_of(conn, &crew.id)?);
-    if !watching.contains(&root_human) {
-        watching.push(root_human.clone());
-    }
     let label = sessions::display_name(conn, &s.id)?;
     let extension = directory::list(conn, None)?
         .into_iter()
@@ -115,11 +102,6 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
             .transpose()?,
         parent_titles: titles(crews::parents(conn, &crew.id)?)?,
         child_titles: titles(crews::children(conn, &crew.id)?)?,
-        channels: channels::channels_of_session(conn, &s.id)?
-            .into_iter()
-            .map(|c| c.id)
-            .collect(),
-        human_watching: watching,
         label,
         extension,
         root_human_channel_id: root_human,
@@ -148,6 +130,7 @@ pub fn render(ctx: &WorldCtx) -> String {
             .join(f.get("lineage.sep"))
     };
     let role_block = match ctx.role {
+        Role::Captain if ctx.builtin_crew => f.get("role.captain.builtin"),
         Role::Captain => f.get("role.captain"),
         // Admin has no tools of its own in M3 and reads as a worker.
         Role::Worker | Role::Admin => f.get("role.worker"),
@@ -188,6 +171,12 @@ pub fn render(ctx: &WorldCtx) -> String {
             ("codex", ctx.quota_codex.as_deref().unwrap_or(unknown)),
         ],
     );
+    // The chief crew's catalog hides ask / respond_todo / start_session, so its text must not offer them.
+    let ask = if ctx.builtin_crew {
+        f.get("ask.builtin")
+    } else {
+        f.get("ask.normal")
+    };
     let builtin = if ctx.builtin_crew {
         f.get("builtin").to_string()
     } else {
@@ -204,6 +193,7 @@ pub fn render(ctx: &WorldCtx) -> String {
             ("lineageBlock", &lineage),
             ("quotaBlock", &quota),
             ("builtinBlock", &builtin),
+            ("askBlock", ask),
             ("executor", &ctx.executor),
             ("sessionId", &ctx.session_id),
             ("extension", &extension),
@@ -222,21 +212,16 @@ pub fn render(ctx: &WorldCtx) -> String {
 mod tests {
     use super::*;
     use crate::prompts::placeholders;
-    use crate::testkit::{ok, store};
+    use crate::testkit::store;
 
     #[test]
     fn context_collects_crew_lineage_channels_and_where_to_find_the_human() {
-        let mut s = store();
-        ok(&mut s, |tx| {
-            crate::channels::watch(tx, "crew-b/lobby", true)
-        });
+        let s = store();
         let c = context_for(s.conn(), "w-b1", Locale::Zh).unwrap();
         assert_eq!(c.crew_title, "机组乙");
         assert_eq!(c.role, Role::Worker);
         assert_eq!(c.captain_name.as_deref(), Some("名字-cap-b"));
         assert_eq!(c.parent_titles, ["机组甲"]);
-        assert_eq!(c.channels, ["crew-b/lobby"]);
-        assert_eq!(c.human_watching, ["crew-b/lobby", "crew-a/human"]);
     }
 
     const BODY_VARS: &[&str] = &[
@@ -255,6 +240,7 @@ mod tests {
         "lineageBlock",
         "quotaBlock",
         "builtinBlock",
+        "askBlock",
     ];
 
     fn ctx(locale: Locale, role: Role, builtin: bool) -> WorldCtx {
@@ -270,8 +256,6 @@ mod tests {
             captain_name: Some("示例机长".into()),
             parent_titles: vec!["上级示例".into()],
             child_titles: vec![],
-            channels: vec!["crew-a/lobby".into()],
-            human_watching: vec!["crew-root/human".into()],
             label: "示例 worker".into(),
             extension: Some("7-3".into()),
             root_human_channel_id: "crew-root/human".into(),
@@ -284,13 +268,35 @@ mod tests {
     fn all_variants() -> Vec<WorldCtx> {
         let mut v = Vec::new();
         for loc in [Locale::Zh, Locale::En] {
-            for role in [Role::Captain, Role::Worker] {
+            for role in [Role::Captain, Role::Worker, Role::Admin] {
                 for builtin in [false, true] {
                     v.push(ctx(loc, role, builtin));
+                    // A root crew without a captain, with child crews.
+                    let mut c = ctx(loc, role, builtin);
+                    c.captain_name = None;
+                    c.parent_titles = vec![];
+                    c.child_titles = vec!["子甲".into(), "子乙".into()];
+                    v.push(c);
                 }
             }
         }
         v
+    }
+
+    /// Whole-word match on identifier characters ("ask" must not match "task").
+    fn has_word(md: &str, word: &str) -> bool {
+        md.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|w| w == word)
+    }
+
+    /// Render minus the sections that legitimately name the tools the chief crew does not have.
+    fn without_absence_notes(md: &str, l: Locale) -> String {
+        let f = file(l);
+        let mut out = md.to_string();
+        for sec in ["builtin", "ask.builtin", "role.captain.builtin"] {
+            out = out.replace(f.get(sec), "");
+        }
+        out
     }
 
     #[test]
@@ -382,12 +388,27 @@ mod tests {
             for must in [
                 "human_watching",
                 "channel_listen",
-                "ask",
                 "read_channel",
                 "channel_create",
                 "channel_transfer",
             ] {
-                assert!(md.contains(must), "{:?}: 缺 {must}", c.locale);
+                assert!(has_word(&md, must), "{:?}: 缺 {must}", c.locale);
+            }
+            // ask / respond_todo / start_session are not on the chief crew's tool list (catalog).
+            for tool in ["ask", "respond_todo", "resume_note"] {
+                assert_eq!(
+                    has_word(&without_absence_notes(&md, c.locale), tool),
+                    !c.builtin_crew,
+                    "{:?} builtin={}: {tool}",
+                    c.locale,
+                    c.builtin_crew
+                );
+            }
+            if c.builtin_crew {
+                assert!(!has_word(
+                    &without_absence_notes(&md, c.locale),
+                    "start_session"
+                ));
             }
         }
         assert!(render(&ctx(Locale::Zh, Role::Worker, false)).contains("群主"));
@@ -471,22 +492,31 @@ mod tests {
         for (md, wants) in [
             (
                 &zh,
-                [
+                vec![
                     "下次启动时生效",
-                    "（7号）名字",
-                    "群主 → 私聊里的另一方 → 机长",
+                    "（3号）名字",
+                    "7-3",
+                    "群主；没有群主就叫私聊里的另一方；再没有就叫机长",
                     "免打扰",
-                    "重跑同一个调用会放行一次",
+                    "你对该工具的下一次调用（不论参数）会放行一次",
+                    "不论同意还是不同意",
+                    "他正在注视、且你是成员的群",
+                    "没有分机号的（例如管理员）",
                 ],
             ),
             (
                 &en,
-                [
+                vec![
                     "at your next start",
-                    "(ext 7) name",
-                    "then the other party of a dm, then the captain",
+                    "(ext 3) name",
+                    "7-3",
+                    "the first of these that is in the channel: the owner, otherwise the dm's other party, otherwise the captain",
                     "do-not-disturb",
-                    "retrying that same call then goes through once",
+                    "your next call to that tool (with any arguments) goes through once",
+                    "whether the human allows or denies",
+                    "a channel they are watching that you are a member of",
+                    "without an extension (an admin, for instance)",
+                    "the human decides",
                 ],
             ),
         ] {
@@ -494,6 +524,86 @@ mod tests {
                 assert!(md.contains(w), "missing {w}");
             }
         }
-        assert!(!zh.contains("本回合结束后生效") && !en.contains("after the current turn"));
+        for gone in [
+            "本回合结束后生效",
+            "after the current turn",
+            "可以关联到工作项",
+            "may link it",
+            "-1 恒定",
+            "-1 is always",
+        ] {
+            assert!(!zh.contains(gone) && !en.contains(gone), "{gone}");
+        }
+    }
+
+    #[test]
+    fn builtin_crew_gets_the_builtin_sections_and_not_the_normal_ones() {
+        for l in [Locale::Zh, Locale::En] {
+            let f = file(l);
+            let chief_cap = render(&ctx(l, Role::Captain, true));
+            let chief_wk = render(&ctx(l, Role::Worker, true));
+            let cap = render(&ctx(l, Role::Captain, false));
+            assert!(
+                chief_cap.contains(f.get("ask.builtin"))
+                    && !chief_cap.contains(f.get("ask.normal"))
+            );
+            assert!(
+                chief_wk.contains(f.get("ask.builtin")) && !chief_wk.contains(f.get("ask.normal"))
+            );
+            assert!(
+                chief_cap.contains(f.get("role.captain.builtin"))
+                    && !chief_cap.contains(f.get("role.captain"))
+            );
+            assert!(cap.contains(f.get("ask.normal")) && !cap.contains(f.get("ask.builtin")));
+            assert!(
+                cap.contains(f.get("role.captain")) && !cap.contains(f.get("role.captain.builtin"))
+            );
+        }
+    }
+
+    #[test]
+    fn captain_and_lineage_variants() {
+        for l in [Locale::Zh, Locale::En] {
+            let f = file(l);
+            for role in [Role::Worker, Role::Captain] {
+                let mut c = ctx(l, role, false);
+                c.captain_name = None;
+                c.parent_titles = vec![];
+                c.child_titles = vec!["子甲".into(), "子乙".into()];
+                let md = render(&c);
+                assert!(
+                    md.contains(f.get("captain.none")) == (role == Role::Worker),
+                    "{l:?}/{role:?}"
+                );
+                assert!(
+                    md.contains(f.get("lineage.root"))
+                        && !md.contains(f.get("lineage.no_children"))
+                );
+                assert!(md.contains("子甲") && md.contains("子乙"), "{md}");
+                let c = ctx(l, role, false);
+                let md = render(&c);
+                assert!(!md.contains(f.get("lineage.root")) && md.contains("上级示例"));
+                assert!(md.contains(f.get("lineage.no_children")));
+            }
+        }
+    }
+
+    #[test]
+    fn captain_owns_the_human_channel_only_in_a_root_crew() {
+        let zh = file(Locale::Zh).get("role.captain");
+        let en = file(Locale::En).get("role.captain");
+        assert!(zh.contains("若本机组是根机组，人类群的群主也是你"), "{zh}");
+        assert!(
+            en.contains("if this is the root crew, you also own the human channel"),
+            "{en}"
+        );
+        // The body bullet says the same.
+        let body_zh = render(&ctx(Locale::Zh, Role::Worker, false));
+        let body_en = render(&ctx(Locale::En, Role::Worker, false));
+        assert!(body_zh.contains("根机组的人类群"), "{body_zh}");
+        assert!(
+            body_en.contains("the root crew's human channel"),
+            "{body_en}"
+        );
     }
 }
