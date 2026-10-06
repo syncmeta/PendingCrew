@@ -247,3 +247,17 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - 字节尾窗（`AnsiPlainTextTail`）把 CR 与 LF 各变成一个 `\n`（与 Swift 一致，已用单测钉住），而生产 PTY 输出行尾是 CRLF，行与行之间会多出空行、选项块不跨空行——所以字节尾窗源永远认不出多行菜单，屏幕源才是唯一能用的那条。要不要把 CRLF 折成一个换行是 M2b 的决定，M2a 不改行为。
 - DA1/DA2 的回答串与 SwiftTerm 不同（alacritty 回 `ESC[?6c`）。这只在录制字节上验过，没有和真 claude 交互过——M2b 接上 PTY 后真机核一次 claude 的启动与主题选择。
 - 群消息渲染（`SessionDecisionNotice`，按 `numbered` 分叉、绝不编造编号）归 M3。
+
+## 16. M2 细分与 ACP 第三条后端（2026-10-06）
+
+M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话驱动（PTY 启动、投递、健康、生命周期、resume）→ **M2c** codex app-server 客户端 → **M2d** attach 协议（快照/实时字节/codex 结构化历史给客户端）→ **M2e** ACP 通用后端。
+
+**ACP 定位**（沿用 2026-09-09 人的决定 A：「claude 和 codex 留现在的，ACP 是额外扩展接其它的用」；2026-10-06 复核官方现状后结论不变）：
+- claude 不走 ACP：会丢 TUI（选择/回滚/重排）、PostToolUse 白板中途注入无对应、v1 无中途 steer；且 `claude-agent-acp` 基于 Agent SDK，官方写明未经批准第三方不得提供 claude.ai 登录——订阅登录经适配器有政策风险（待确认，未核实）。
+- codex 不走 ACP：`codex-acp` 只是包了 app-server，反丢 `developerInstructions`、`additionalContext` 不可信包装、`turn/steer`。
+- 其它 harness（opencode、gemini `--acp`、qwen-code `--acp`、cursor-agent、goose、kilo、copilot、Kiro 等，registry 41 家）走 ACP v1（`protocolVersion:1`，stdio JSON-RPC），客户端用 Rust crate `agent-client-protocol` 2.2；内部事件按 v2 的 idle/running/requires_action 建模，v2（draft）放 feature flag 后。
+- 位置：新 crate 实现 §13 Q12 的同一窄执行器接口；「屏幕文本」由结构化 transcript 代替，走 M2d 给 codex 定的结构化历史 attach 路。每家 = 一份 `AgentSpec`（registry 条目 + 我们的覆盖）；世界观（system prompt）三态：有口子 / 明确没有 / 未确认则拒起（ACP 无标准入口，无 RFD）。
+- 存储：session 的执行器类型字段设计为 `claude` / `codex` / `acp:<registry-id>`，M2b 起就按此建，避免日后迁移。
+- 已知坑（09-09 实测）：`mcpServers[].env` 不继承父环境；探针须自动放行审批否则全被读成挂不上；copilot 静默不挂 MCP、cancel 后报 end_turn；MCP 是否真挂上必须用我们这侧的标记验证。
+- M2e 起步 spike：Rust 重写普查器（initialize / new+MCP 标记 / prompt / cancel / load），先跑 codex-acp 当对照尺（证明会绿），再跑 opencode 当目标，再重测 gemini / qwen / copilot（09-09 读数已过期）。
+- 风险：世界观缺口；各家 mode id / cancel 语义不一；每 session 多一个 node 进程（并发资源未量）；各家登录态不一；v2 仍在变。
