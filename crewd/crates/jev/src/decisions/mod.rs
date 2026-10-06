@@ -1,7 +1,10 @@
 //! 四个决策（spec §7.2）的共用部分：输入里的成员、阈值、构造结果 `Built`、判定 `Verdict` / `Outcome`，
 //! 以及「代码算好的量 → 词」的分档（jaggedness #2/#3：不给 Jev 日期、时长、计数）。
 //! 构造器是纯函数：同一输入 + 同一种子 → 同一请求。不碰网络、不读时钟。
+pub mod attribute;
 pub mod route;
+pub mod urgency;
+pub mod wake;
 
 use crate::error::CallError;
 use crate::model::{Answer, Question, Request, Response};
