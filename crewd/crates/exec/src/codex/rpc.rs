@@ -458,4 +458,23 @@ mod tests {
         assert_eq!(failed[0].2, RpcFailure::Disconnected);
         assert_eq!(rpc.next_deadline(), None);
     }
+
+    #[test]
+    fn a_string_id_never_resolves_one_of_our_int_requests() {
+        let mut rpc: Rpc<&str> = Rpc::default();
+        let _ = rpc.request(
+            "a",
+            "turn/start",
+            &json!({}),
+            Instant::now(),
+            Duration::from_secs(5),
+        );
+        assert!(
+            rpc.resolve(&RequestId::Str("0".into()), Ok(json!({})))
+                .is_none()
+        );
+        assert_eq!(rpc.pending_len(), 1);
+        assert_eq!(rpc.stray_responses(), 1);
+        assert!(rpc.resolve(&RequestId::Int(0), Ok(json!({}))).is_some());
+    }
 }
