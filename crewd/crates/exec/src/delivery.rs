@@ -137,6 +137,12 @@ enum Phase {
         deadline: Deadline,
         submitted: Option<String>,
     },
+    /// 上一轮提交拍被调用方撤回（回车没发出去：屏上弹了对话框 / 输入行没了）。这一轮不算
+    /// 提交过；对话框不在、输入行回来（或正文尾巴可见）就发第 `attempt` 轮。
+    Resubmit {
+        attempt: u32,
+        deadline: Deadline,
+    },
     Finished,
 }
 
@@ -189,6 +195,19 @@ impl Delivery {
     }
 
     /// 已给出终局裁决（成功或放弃）。
+    /// 调用方没把这一轮提交拍发完（回车没发出去）。只在提交阶段有效：这一轮不算提交过，
+    /// 安全了（没有对话框、输入行或正文尾巴在屏）再发一轮，记一次重试；超过
+    /// `max_attempts` 轮就给终局 `Unsubmitted`。
+    pub fn submit_aborted(&mut self, now: Instant) {
+        self.last_now = self.last_now.max(now);
+        if let Phase::Submitting { attempt, .. } = self.phase {
+            self.phase = Phase::Resubmit {
+                attempt: attempt + 1,
+                deadline: after(now, self.timing.verify_window),
+            };
+        }
+    }
+
     pub fn is_finished(&self) -> bool {
         self.phase == Phase::Finished
     }
@@ -225,7 +244,9 @@ impl Delivery {
                 deadline,
                 ..
             } => [*not_before, *deadline],
-            Phase::Submitting { deadline, .. } => [*deadline, None],
+            Phase::Submitting { deadline, .. } | Phase::Resubmit { deadline, .. } => {
+                [*deadline, None]
+            }
             Phase::Finished => [None, None],
         };
         candidates
@@ -301,7 +322,8 @@ impl Delivery {
                 let Some(row) = obs.input_row else {
                     // 重绘到一半输入行暂时不在——等下一拍；除非正文尾巴已经清楚可见
                     // （长正文把提示符顶出了屏幕），那就是落地了。
-                    if reached(not_before, now) && obs.body_visible {
+                    // 对话框在场时不算：空格会被当成按键吃进对话框。
+                    if reached(not_before, now) && obs.body_visible && !obs.dialog_present {
                         self.stalled_since = None;
                         self.phase = Phase::Submitting {
                             attempt: 1,
@@ -341,6 +363,29 @@ impl Delivery {
                 Step::WriteBody {
                     attempt: attempt + 1,
                 }
+            }
+            Phase::Resubmit { attempt, deadline } => {
+                if attempt > t.max_attempts {
+                    self.phase = Phase::Finished;
+                    return Step::Unsubmitted(format!(
+                        "{}卡在输入框里没提交：正文已经进去了，但提交被打断了 {} 次\
+                         （每次回车之前屏上都弹出了对话框、或输入框不见了），一直没能安全地按下回车。\
+                         看一眼屏幕：代答掉挡路的框，或按 Ctrl-U 清掉再重发。",
+                        self.subject.noun(),
+                        attempt - 1
+                    ));
+                }
+                let safe = !obs.dialog_present && (obs.input_row.is_some() || obs.body_visible);
+                if !safe {
+                    return self.input_row_absent(now, deadline, attempt - 1, false);
+                }
+                self.stalled_since = None;
+                self.phase = Phase::Submitting {
+                    attempt,
+                    deadline: after(now, t.verify_window),
+                    submitted: obs.input_row.map(str::to_string),
+                };
+                Step::Submit { attempt }
             }
             Phase::Submitting {
                 attempt,
@@ -616,6 +661,75 @@ mod tests {
         assert_eq!(d.step(o), Step::Submit { attempt: 1 });
         // 提示符重新出现 = 提交了。
         assert_eq!(d.step(obs(Some(""), c.at(1.0))), Step::Delivered);
+    }
+
+    /// 修正 2：正文尾巴在屏上、可屏上同时摆着对话框——空格会被当成按键吃进对话框，不提交。
+    #[test]
+    fn visible_body_does_not_submit_into_a_dialog() {
+        let (mut d, c) = setup();
+        assert_eq!(
+            d.step(obs(Some(""), c.at(0.0))),
+            Step::WriteBody { attempt: 1 }
+        );
+        let mut o = obs(None, c.at(1.0));
+        o.body_visible = true;
+        o.dialog_present = true;
+        assert_eq!(d.step(o), Step::Idle, "对话框在场不提交");
+        o.dialog_present = false;
+        o.now = c.at(1.5);
+        assert_eq!(d.step(o), Step::Submit { attempt: 1 });
+    }
+
+    fn long_path_submitting(d: &mut Delivery, c: &Clock) {
+        assert_eq!(
+            d.step(obs(Some(""), c.at(0.0))),
+            Step::WriteBody { attempt: 1 }
+        );
+        let mut o = obs(None, c.at(0.6));
+        o.body_visible = true;
+        assert_eq!(d.step(o), Step::Submit { attempt: 1 });
+    }
+
+    /// 修正 1：提交拍被调用方撤回（回车没发出去）——这一轮不算提交过：输入行回来不是
+    /// 「已投递」，等安全了重发一轮（记一次重试）。
+    #[test]
+    fn aborted_submit_is_resent_when_safe_and_not_taken_as_delivered() {
+        let (mut d, c) = setup();
+        long_path_submitting(&mut d, &c);
+        d.submit_aborted(c.at(0.7));
+        let mut dialog = obs(None, c.at(0.8));
+        dialog.dialog_present = true;
+        dialog.body_visible = true;
+        assert_eq!(d.step(dialog), Step::Idle, "对话框还在，不重发");
+        assert_eq!(
+            d.step(obs(Some("正文"), c.at(1.5))),
+            Step::Submit { attempt: 2 },
+            "输入行带着正文回来 = 没提交，重发一轮"
+        );
+        assert_eq!(d.step(obs(Some("正文"), c.at(1.6))), Step::Idle);
+        assert_eq!(d.step(obs(Some(""), c.at(1.8))), Step::Delivered);
+    }
+
+    #[test]
+    fn aborted_submits_count_against_the_attempt_cap() {
+        let (mut d, c) = setup();
+        long_path_submitting(&mut d, &c);
+        d.submit_aborted(c.at(0.7));
+        assert_eq!(
+            d.step(obs(Some("正文"), c.at(1.0))),
+            Step::Submit { attempt: 2 }
+        );
+        d.submit_aborted(c.at(1.1));
+        assert_eq!(
+            d.step(obs(Some("正文"), c.at(1.2))),
+            Step::Submit { attempt: 3 }
+        );
+        d.submit_aborted(c.at(1.3));
+        match d.step(obs(Some("正文"), c.at(1.4))) {
+            Step::Unsubmitted(detail) => assert!(detail.contains("3"), "{detail}"),
+            other => panic!("三次都被打断应当放弃，实际 {other:?}"),
+        }
+        assert!(d.is_finished());
     }
 
     #[test]

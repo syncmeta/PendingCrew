@@ -531,7 +531,7 @@ impl Core {
         self.event(SessionEvent::Working(working));
     }
 
-    /// health 只有一格：拉起失败 > 额度 / 限流 / 认证 > 投递报告。低档的不盖高档的
+    /// health 只有一格：拉起失败 > 额度 / 限流 > 认证 > 投递报告。低档的不盖高档的
     /// （清掉 = `None` 由各调用方只对自己那一类做）。`quota_at` 与这一格无关：撞过额度
     /// 就记下时刻，health 被盖、被清都不抹它（`hit_limit` 看的是它）。
     fn set_health(&mut self, health: Option<Health>, now: Instant) {
@@ -605,6 +605,11 @@ impl Core {
             } else if let KeyPurpose::SubmitBeat { .. } = key.purpose {
                 self.keys
                     .retain(|k| !matches!(k.purpose, KeyPurpose::SubmitBeat { .. }));
+                // 回车没发出去：告诉投递机这一轮不算提交过（否则长正文那一路「输入行出现」
+                // 会被当成投递成功），等安全了它会再发一轮。
+                if let Some(flight) = self.in_flight.as_mut() {
+                    flight.machine.submit_aborted(now);
+                }
             }
         }
     }
@@ -815,11 +820,13 @@ impl Core {
     }
 }
 
-/// health 那一格的档位：拉起失败 > 额度 / 限流 / 认证 > 投递报告。
+/// health 那一格的档位：拉起失败 > 额度 / 限流 > 认证 > 投递报告。额度类只由它自己的恢复
+/// 路径清掉：认证探测的来回（要登录 → 已登录）既不能盖掉它，也不能借「清掉认证」把它清掉。
 fn health_rank(kind: HealthKind) -> u8 {
     match kind {
-        HealthKind::LaunchFailed => 3,
-        HealthKind::UsageLimit | HealthKind::RateLimited | HealthKind::AuthRequired => 2,
+        HealthKind::LaunchFailed => 4,
+        HealthKind::UsageLimit | HealthKind::RateLimited => 3,
+        HealthKind::AuthRequired => 2,
         HealthKind::BriefUndelivered | HealthKind::PromptUndelivered => 1,
     }
 }
@@ -1786,6 +1793,93 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, SessionEvent::Delivery { id: 9, .. })),
             "不再报第二次：{later:?}"
+        );
+    }
+
+    /// 长正文把提示符顶出了屏：屏上只剩正文尾巴，没有输入行。
+    fn body_only(body: &str) -> Vec<u8> {
+        format!("\x1b[2J\x1b[H{body}\r\n").into_bytes()
+    }
+
+    /// 正文尾巴还在屏上，下面弹了个权限框。
+    fn body_then_dialog(body: &str) -> Vec<u8> {
+        format!(
+            "\x1b[2J\x1b[H{body}\r\n\r\nDo you want to proceed?\r\n\u{276f} 1. Yes\r\n  2. No\r\n"
+        )
+        .into_bytes()
+    }
+
+    /// 修正轮 2 之 3：凭正文尾巴起的提交，退格与回车照样发出去。
+    #[test]
+    fn long_text_submit_beats_are_sent_when_only_the_body_tail_is_visible() {
+        let mut t = T::new(brief("红色的字"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        assert_eq!(
+            writes(&t.output(&body_only("红色的字"), 0.9)),
+            vec![b" ".to_vec()]
+        );
+        assert_eq!(writes(&t.tick(1.0)), vec![vec![0x7f]]);
+        assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
+        let done = t.output(&input_box(""), 1.2);
+        assert!(delivered(&done, BRIEF_DELIVERY_ID), "{done:?}");
+    }
+
+    /// 修正轮 2 之 1：长正文那一路，空格之后弹了权限框，退格 / 回车被撤回——这一轮没提交。
+    /// 框答掉、输入框带着正文回来：不是「已投递」，重发一轮提交，输入行变了才算投递成功。
+    #[test]
+    fn dropped_long_text_submit_is_not_delivered_and_is_resent() {
+        let mut t = T::new(brief("红色的字"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        assert_eq!(
+            writes(&t.output(&body_only("红色的字"), 0.9)),
+            vec![b" ".to_vec()]
+        );
+        let mut dropped = t.output(&body_then_dialog("红色的字"), 0.95);
+        dropped.extend(t.tick(1.0));
+        dropped.extend(t.tick(1.1));
+        assert!(writes(&dropped).is_empty(), "{dropped:?}");
+        let back = t.output(&input_box("红色的字"), 2.0);
+        assert!(
+            !delivered(&back, BRIEF_DELIVERY_ID),
+            "回车没发过，不算投递：{back:?}"
+        );
+        assert_eq!(writes(&back), vec![b" ".to_vec()], "重发一轮提交：{back:?}");
+        assert_eq!(writes(&t.tick(2.1)), vec![vec![0x7f]]);
+        assert_eq!(writes(&t.tick(2.2)), vec![b"\r".to_vec()]);
+        let done = t.output(&input_box(""), 2.3);
+        assert!(delivered(&done, BRIEF_DELIVERY_ID), "{done:?}");
+    }
+
+    /// 修正轮 2 之 2：正文尾巴在屏上、下面摆着权限框——空格不许写（会被当成按键吃进框里）。
+    #[test]
+    fn visible_body_over_a_dialog_gets_no_space() {
+        let mut t = T::new(brief("红色的字"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        let mut all = t.output(&body_then_dialog("红色的字"), 0.9);
+        for s in [1.0, 1.1, 1.5, 2.0] {
+            all.extend(t.tick(s));
+        }
+        assert!(writes(&all).is_empty(), "{all:?}");
+    }
+
+    /// 修正轮 2 之 4：额度 health 只由它自己的恢复路径清掉；认证探测的来回不能把它盖掉或清掉。
+    #[test]
+    fn auth_probe_transitions_do_not_clear_quota_health() {
+        let mut t = T::new(vec![]);
+        t.output(b"You've reached your usage limit", 0.0);
+        t.core.on_auth(AuthState::AuthenticationRequired, t.at(1.0));
+        assert_eq!(
+            t.core.health().map(|h| h.kind),
+            Some(HealthKind::UsageLimit)
+        );
+        t.core.on_auth(AuthState::Authenticated, t.at(3.0));
+        assert_eq!(
+            t.core.health().map(|h| h.kind),
+            Some(HealthKind::UsageLimit),
+            "额度还没恢复"
         );
     }
 
