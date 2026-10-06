@@ -107,6 +107,11 @@ impl ControlError {
     pub fn internal(e: impl std::fmt::Display) -> Self {
         Self::Internal(e.to_string())
     }
+
+    /// `Core::launch` 的错误：它自己拒的（`AlreadyRunning`）原样带出来，其余是 Internal。
+    pub fn from_launch(e: anyhow::Error) -> Self {
+        e.downcast::<Self>().unwrap_or_else(Self::internal)
+    }
 }
 
 impl std::fmt::Display for ControlError {
@@ -510,7 +515,7 @@ impl<P: Port> Core<P> {
         }
         self.launch(row.clone(), exec, brief, vec![], vec![])
             .await
-            .map_err(ControlError::internal)?;
+            .map_err(ControlError::from_launch)?;
         Ok(row)
     }
 
@@ -541,7 +546,7 @@ impl<P: Port> Core<P> {
         let text = interrupted.then(|| text::get(self.lang(), "restart.interrupted").to_string());
         self.launch(row, exec, text, vec![], vec![])
             .await
-            .map_err(ControlError::internal)
+            .map_err(ControlError::from_launch)
     }
 
     /// 人停掉（裁定 10）：desired=stopped，丢掉此刻 pending 的唤醒，叫停进程（已带进进程、还没投进去的那些
@@ -668,6 +673,10 @@ impl<P: Port> Core<P> {
         wakes: Vec<QueuedWake>,
         cursor_targets: Vec<(String, i64)>,
     ) -> anyhow::Result<()> {
+        // 一个 session 一个进程（裁定 6）：所有拉起路径都经过这里，所以在这里挡，不只靠调用方先查。
+        if self.live.contains_key(&row.id) || self.starting.contains_key(&row.id) {
+            return Err(ControlError::AlreadyRunning(row.id).into());
+        }
         let now = self.now();
         let workdir = row
             .workdir
@@ -754,6 +763,10 @@ impl<P: Port> Core<P> {
             .get(session)
             .is_none_or(|s| s.generator != generator)
         {
+            // 没人在等这次拉起：起来了的进程不留着就叫停，不能成为没人管的孤儿。
+            if let Ok(handle) = result {
+                let _ = handle.stop();
+            }
             return Ok(());
         }
         let st = self.starting.remove(session).expect("上面查过");
@@ -788,6 +801,15 @@ impl<P: Port> Core<P> {
                         halting: false,
                     },
                 );
+            }
+            Err(_) if st.stop_requested => {
+                // 人在拉起回来之前就停掉了：带着的唤醒跟人停一样丢掉（裁定 10）——不重试、不告警、不记「起不来」。
+                if !st.wakes.is_empty() {
+                    let s = Settle::Dropped {
+                        error: "stopped".into(),
+                    };
+                    self.port.settle(&ids(&st.wakes), s, self.now()).await?;
+                }
             }
             Err(e) => {
                 // 先记恢复失败（告警一次），再按失败处理带着的唤醒：放弃时就不会再告第二次（裁定 9 / C2）。
@@ -1868,6 +1890,99 @@ mod tests {
             !delivery_settles_inflight(&O::Blocked("x".into())),
             "非终局"
         );
+    }
+
+    /// 预检 P1：人在拉起还没回来时停掉、拉起又失败了——带着的唤醒跟人停一样丢掉：不重试、不告警、不记「起不来」。
+    #[tokio::test]
+    async fn a_launch_error_after_a_stop_drops_its_wakes_without_retry_or_alert() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.port.enqueue(timer_wake("w1", "t1")).await.unwrap();
+        rig.exec.lock().fail_next = vec!["合成：claude 不在".into()];
+        let wakes = rig.port.pending("w1").await.unwrap();
+        let exec = rig.core.execs.get("claude").unwrap();
+        let row = rig.port.row("w1");
+        rig.core
+            .launch(row, exec, Some("合成定时".into()), wakes, vec![])
+            .await
+            .unwrap();
+        let (tx, stopped) = oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: "w1".into(),
+                reply: tx,
+            }))
+            .await;
+        rig.settle().await;
+        stopped.await.unwrap().unwrap();
+        let w = &rig.port.wakes_of("w1")[0];
+        assert_eq!((w.state, w.attempts), (WakeState::Dropped, 0));
+        assert!(rig.port.posts().is_empty(), "{:?}", rig.port.posts());
+        assert_eq!(rig.port.row("w1").resume_failed_at, None);
+    }
+
+    /// 「一个 session 一个进程」不只靠 `resume` 先查：`launch` 自己也拒（Task 8 的唤醒拉起直接调它）。
+    #[tokio::test]
+    async fn launch_itself_refuses_a_session_that_is_starting_or_live() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let exec = rig.core.execs.get("claude").unwrap();
+        let row = rig.port.row("cap");
+        rig.core
+            .launch(row.clone(), exec.clone(), None, vec![], vec![])
+            .await
+            .unwrap();
+        let err = rig
+            .core
+            .launch(row.clone(), exec.clone(), None, vec![], vec![])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<ControlError>(),
+            Some(&ControlError::AlreadyRunning("cap".into())),
+            "正在起"
+        );
+        rig.settle().await;
+        assert!(rig.live("cap").is_some());
+        assert!(
+            rig.core
+                .launch(row, exec, None, vec![], vec![])
+                .await
+                .is_err(),
+            "已经在跑"
+        );
+        rig.settle().await;
+        assert_eq!(rig.exec.launches("cap").len(), 1);
+    }
+
+    /// 迟到 / 对不上号的 `Launched`（没人在等它）：进程已经起来了，不留着就叫停，不能变成没人管的孤儿。
+    #[tokio::test]
+    async fn a_launched_handle_nobody_waits_for_is_stopped() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let exec = rig.core.execs.get("claude").unwrap();
+        let req = LaunchRequest {
+            session_id: "cap".into(),
+            crew_id: "c1".into(),
+            workdir: PathBuf::from("/nonexistent/wd"),
+            model: None,
+            effort: None,
+            system_prompt: None,
+            initial_prompt: None,
+            token: "tok".into(),
+            ledger: rig.port.ledger("cap"),
+        };
+        let (handle, _events) = exec.launch(req).await.unwrap();
+        rig.core
+            .handle(Input::Launched {
+                session: "cap".into(),
+                generator: 99,
+                result: Ok(handle),
+            })
+            .await;
+        assert_eq!(rig.exec.lock().stops, ["cap"]);
+        assert!(rig.live("cap").is_none());
     }
 
     /// 把 `session` 到期的唤醒带着拉起、让它按 `die` 死掉，一直重复到没有到期的唤醒为止（每轮先等过最长的退避）。
