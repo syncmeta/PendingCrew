@@ -1169,7 +1169,9 @@
         "rate_limited",
         "launch_failed",
         "brief_undelivered",
-        "prompt_undelivered"
+        "prompt_undelivered",
+        "turn_failed",
+        "version_incompatible"
       ],
       "type": "string"
     },

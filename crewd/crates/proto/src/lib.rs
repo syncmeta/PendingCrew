@@ -494,6 +494,27 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn health_kind_view_covers_every_exec_health_kind() {
+        // crewd-exec 的 HealthKind 共 8 档（含 codex 的 TurnFailed / VersionIncompatible）；线上 snake_case。
+        let want = [
+            "auth_required",
+            "usage_limit",
+            "rate_limited",
+            "launch_failed",
+            "brief_undelivered",
+            "prompt_undelivered",
+            "turn_failed",
+            "version_incompatible",
+        ];
+        let got: Vec<&str> = HealthKindView::ALL.iter().map(|k| k.as_str()).collect();
+        assert_eq!(got, want);
+        for w in want {
+            let k = HealthKindView::parse(w).unwrap();
+            assert_eq!(serde_json::to_value(k).unwrap(), json!(w));
+        }
+    }
+
+    #[test]
     fn request_params_default_to_null() {
         let r: Request = serde_json::from_str(r#"{"id":7,"method":"system.hello"}"#).unwrap();
         assert_eq!(r.id, 7);

@@ -237,6 +237,7 @@ closed_vocab!(DirectoryKind { Crew = "crew", Session = "session" } default Crew)
 closed_vocab!(HealthKindView {
     AuthRequired = "auth_required", UsageLimit = "usage_limit", RateLimited = "rate_limited",
     LaunchFailed = "launch_failed", BriefUndelivered = "brief_undelivered", PromptUndelivered = "prompt_undelivered",
+    TurnFailed = "turn_failed", VersionIncompatible = "version_incompatible",
 } default AuthRequired);
 closed_vocab!(RestartAnswer { Resume = "resume", Later = "later" } default Later);
 
