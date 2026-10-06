@@ -364,7 +364,7 @@ fn exercise_views(b: &WorkBook, now: Ts) {
     let _ = b.human_waits(now);
     let _ = b.escalations_due(now);
     let _ = b.defaults_due(now);
-    let _ = b.patrol(now, &dead);
+    let _ = b.patrol(now, &dead, &BTreeSet::new());
     for s in SESSIONS {
         let s = SessionId::new(s);
         let _ = b.my_items(&s);

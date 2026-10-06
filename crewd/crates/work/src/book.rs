@@ -164,6 +164,22 @@ impl WorkBook {
                 }
             }
         }
+        // 停下即检查的连续计数是软状态：名下已没有活项的 session（转走了 / 都收尾了）不再留计数，
+        // 免得一条早已无关的「交过行政处」把巡检一直钉成需要起行政 session。
+        let s = &d.s;
+        let idle_owners: Vec<SessionId> = s
+            .stop_streaks
+            .keys()
+            .filter(|sid| {
+                !s.items
+                    .values()
+                    .any(|it| it.status.is_live() && it.owner.as_ref() == Some(*sid))
+            })
+            .cloned()
+            .collect();
+        for sid in idle_owners {
+            d.s.stop_streaks.remove(&sid);
+        }
         invariants::check(&d.s).map_err(Rejected::Invariant)?;
         invariants::check_written(&self.state, &d.s, &self.cfg, now)
             .map_err(Rejected::Invariant)?;

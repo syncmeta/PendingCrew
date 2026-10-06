@@ -229,8 +229,17 @@ impl WorkBook {
             .collect()
     }
 
-    /// 行政巡检的代码检查部分。`unrecoverable` 同 `owner_lost`。
-    pub fn patrol(&self, now: Ts, unrecoverable: &BTreeSet<SessionId>) -> Patrol {
+    /// 行政巡检的代码检查部分。`unrecoverable` 同 `owner_lost`；`archived` 是已经归档的群（群的状态在 M3 的群表里，
+    /// 不在工作账本里），它们不再算「可归档」。
+    ///
+    /// `stop_escalated` 只列此刻仍然没改善的 session：交过行政处、且此刻的违反集合还和交出去时一模一样。
+    /// 改好了（集合变了，哪怕还没再 idle 过）或名下已没有活项的 session 不再列——否则 `needs_admin_session` 会一直是 true。
+    pub fn patrol(
+        &self,
+        now: Ts,
+        unrecoverable: &BTreeSet<SessionId>,
+        archived: &BTreeSet<ChannelId>,
+    ) -> Patrol {
         let now = self.view_now(now);
         let views = self.entry_views();
         let mut channel_live: BTreeMap<ChannelId, bool> = BTreeMap::new();
@@ -256,7 +265,7 @@ impl WorkBook {
                 .state
                 .stop_streaks
                 .iter()
-                .filter(|(_, s)| s.escalated)
+                .filter(|(sid, s)| s.escalated && self.stop_violations(sid, now) == s.last)
                 .map(|(sid, _)| sid.clone())
                 .collect(),
             long_waits: self
@@ -267,7 +276,7 @@ impl WorkBook {
                 .collect(),
             archivable_channels: channel_live
                 .into_iter()
-                .filter(|(_, live)| !live)
+                .filter(|(ch, live)| !live && !archived.contains(ch))
                 .map(|(ch, _)| ch)
                 .collect(),
         }
@@ -370,7 +379,8 @@ mod tests {
         assert_eq!(b.on_idle(&a, T1), StopDecision::Escalate(expect.clone()));
         assert_eq!(b.on_idle(&a, T1), StopDecision::Suppressed(expect.clone()));
         assert_eq!(
-            b.patrol(T1, &BTreeSet::new()).stop_escalated,
+            b.patrol(T1, &BTreeSet::new(), &BTreeSet::new())
+                .stop_escalated,
             vec![a.clone()]
         );
         // 有变化（新领了一项）= 有动作，重新计数。
@@ -518,7 +528,7 @@ mod tests {
             },
         )
         .unwrap();
-        let p = b.patrol(T1, &BTreeSet::new());
+        let p = b.patrol(T1, &BTreeSet::new(), &BTreeSet::new());
         assert_eq!(p.unowned_items, [orphan]);
         assert_eq!(p.unclaimed_entries, [EntryNo(2)]);
         assert_eq!(p.needs_ruling, [EntryNo(3)]);
@@ -526,7 +536,7 @@ mod tests {
         assert!(!p.needs_admin_session());
         b.mark_done(&Actor::worker("a"), T1, w, Evidence::Text("ok".into()))
             .unwrap();
-        let p = b.patrol(T1, &BTreeSet::new());
+        let p = b.patrol(T1, &BTreeSet::new(), &BTreeSet::new());
         assert_eq!(p.archivable_channels, [ch]);
         assert!(p.needs_admin_session());
     }
@@ -547,5 +557,64 @@ mod tests {
         assert_eq!(wait_tier(24 * HOUR, &cfg), WaitTier::Pinned);
         assert_eq!(wait_tier(72 * HOUR, &cfg), WaitTier::StillWanted);
         assert_eq!(wait_tier(-5, &cfg), WaitTier::Fresh);
+    }
+
+    #[test]
+    fn an_escalated_session_drops_off_once_it_owns_nothing_or_improved() {
+        // 评审 P6：交过行政处的 session 后来不管事了 / 已经改好了，巡检不能一直判「需要起行政 session」。
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        let escalate = |b: &mut WorkBook| {
+            for _ in 0..4 {
+                b.on_idle(&sid("a"), T1);
+            }
+            assert_eq!(b.patrol(T1, &none, &no_ch).stop_escalated, [sid("a")]);
+        };
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        escalate(&mut b);
+        b.assign(&Actor::captain("c"), T1, w, sid("b"), "a 不在了，交给 b")
+            .unwrap();
+        let p = b.patrol(T1, &none, &no_ch);
+        assert_eq!(p.stop_escalated, Vec::<SessionId>::new());
+        assert!(!p.needs_admin_session());
+        assert!(
+            !b.state().stop_streaks.contains_key(&sid("a")),
+            "名下没有活项的 session 的连续计数被清掉"
+        );
+
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        escalate(&mut b);
+        activate(&mut b, "a", w, T1);
+        let p = b.patrol(T1, &none, &no_ch);
+        assert_eq!(
+            p.stop_escalated,
+            Vec::<SessionId>::new(),
+            "违反集合已经变了（改好了），哪怕它还没再 idle 过"
+        );
+        assert!(!p.needs_admin_session());
+    }
+
+    #[test]
+    fn archived_channels_leave_the_patrol() {
+        // 评审 P7：行政处归档过的群不能永远挂在「可归档」里、把 needs_admin_session 钉成 true。
+        let mut b = book();
+        let w = claim(&mut b, "a", &["x"])[0];
+        let ch = ChannelId::new("ch");
+        b.link_channel(&Actor::worker("a"), T1, w, Some(ch.clone()))
+            .unwrap();
+        b.mark_done(&Actor::worker("a"), T1, w, Evidence::Text("ok".into()))
+            .unwrap();
+        let none: BTreeSet<SessionId> = BTreeSet::new();
+        let no_ch: BTreeSet<ChannelId> = BTreeSet::new();
+        assert_eq!(
+            b.patrol(T1, &none, &no_ch).archivable_channels,
+            std::slice::from_ref(&ch)
+        );
+        let archived: BTreeSet<ChannelId> = [ch].into();
+        let p = b.patrol(T1, &none, &archived);
+        assert_eq!(p.archivable_channels, Vec::<ChannelId>::new());
+        assert!(!p.needs_admin_session());
     }
 }
