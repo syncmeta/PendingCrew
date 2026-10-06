@@ -137,6 +137,8 @@ pub fn endpoint_for(base_url: &str) -> Result<String, String> {
     // 已经填了完整端点（…/v1/systemone）的，不再拼一遍。
     let base = url.as_str().trim_end_matches('/');
     let base = base.strip_suffix(ENDPOINT_PATH).unwrap_or(base);
+    // 只填到 /v1 的，也不拼成 /v1/v1/systemone。
+    let base = base.strip_suffix("/v1").unwrap_or(base);
     Ok(format!("{base}{ENDPOINT_PATH}"))
 }
 
@@ -325,6 +327,13 @@ mod tests {
             endpoint_for("https://proxy.example.com/jev/v1/systemone").unwrap(),
             "https://proxy.example.com/jev/v1/systemone"
         );
+        for with_version in ["https://api.typesafe.ai/v1", "https://api.typesafe.ai/v1/"] {
+            assert_eq!(
+                endpoint_for(with_version).unwrap(),
+                "https://api.typesafe.ai/v1/systemone",
+                "填到 /v1 的不能拼成 /v1/v1/systemone"
+            );
+        }
         assert_eq!(
             endpoint_for("http://127.0.0.1:8080").unwrap(),
             "http://127.0.0.1:8080/v1/systemone"

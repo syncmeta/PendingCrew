@@ -123,6 +123,13 @@ fn file_load(path: &Path) -> Result<Option<Vec<u8>>, KeyError> {
                 reason: "是符号链接",
             });
         }
+        // FIFO / 设备 / 目录：打开前就拒（打开 FIFO 会一直等写端，把 load() 挂住）。
+        Ok(m) if !m.file_type().is_file() => {
+            return Err(KeyError::Untrusted {
+                path: path.to_path_buf(),
+                reason: "不是普通文件",
+            });
+        }
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -130,7 +137,8 @@ fn file_load(path: &Path) -> Result<Option<Vec<u8>>, KeyError> {
     // O_NOFOLLOW 打开，再对**打开的那个文件**做检查：检查与读取之间被换成链接也读不到别处。
     let mut file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        // O_NONBLOCK：检查与打开之间被换成 FIFO 也不会挂住（随后的类型检查会拒它）。
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
     let meta = file.metadata()?;
     vet(
@@ -291,6 +299,25 @@ mod tests {
         match KeyStore::File(path).load() {
             Err(KeyError::InsecurePermissions { mode, .. }) => assert_eq!(mode, 0o644),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// 指向 FIFO 的 key 路径不能把 load() 挂住：先看类型，不是普通文件就拒。
+    #[test]
+    fn a_fifo_at_the_key_path_is_refused_without_hanging() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(KEY_FILE_NAME);
+        let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: 合法的 NUL 结尾路径；mkfifo 只建一个文件系统节点。
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(KeyStore::File(path).load().map(|k| k.is_some()));
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(Err(KeyError::Untrusted { .. })) => {}
+            Ok(other) => panic!("{other:?}"),
+            Err(_) => panic!("load() 卡在 FIFO 上了"),
         }
     }
 
