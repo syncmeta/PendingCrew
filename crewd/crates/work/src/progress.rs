@@ -3,7 +3,7 @@ use crate::book::{Applied, Rejected, WorkBook};
 use crate::events::EventKind;
 use crate::ids::{EntryNo, Ts, WorkId};
 use crate::model::{Actor, Blocker, DropReason, EntryClosure, Evidence, Note, Status};
-use crate::perm::{Action, Ctx};
+use crate::perm::{self, Action, Ctx};
 
 /// 回报时可以改到的状态（done / dropped / blocked 各有专门的命令）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +138,22 @@ impl WorkBook {
             d.permit_on(Action::Relink, id)?;
             for w in parent.iter().chain(&depends_on) {
                 d.item(*w)?;
+            }
+            if let Some(p) = parent
+                && d.item(id)?.parent != Some(p)
+            {
+                // 挂到新父项下 = 在它下面建子项：与 insert_batch 同一道 CreateChild 检查（对新父项的负责人）。
+                // 能在新父项上改链接的人（机长 / 人 / 行政处的事实修正、新父项自己的负责人）同样放行。
+                let owner = d.item(p)?.owner.clone();
+                let ctx = Ctx {
+                    owner: owner.as_ref(),
+                    ..Ctx::default()
+                };
+                if !perm::allowed(&d.by, Action::CreateChild, ctx)
+                    && !perm::allowed(&d.by, Action::Relink, ctx)
+                {
+                    return Err(Rejected::Forbidden(Action::CreateChild));
+                }
             }
             let mut deps = depends_on;
             deps.sort();
@@ -567,6 +583,67 @@ mod tests {
                 Some(Evidence::Commit("abc".into()))
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn relink_under_someone_elses_item_needs_the_same_right_as_creating_a_child() {
+        // 评审 P1：worker 不能借改链接把自己的项挂到别人的项下（绕过 CreateChild，还会卡住对方完成）。
+        let mut b = book();
+        let theirs = claim(&mut b, "b", &["b 的项"])[0];
+        let mine = b
+            .create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("a 的项").owned_by("a"),
+            )
+            .unwrap()
+            .value;
+        assert_eq!(
+            b.relink(&Actor::worker("a"), T1, mine, Some(theirs), vec![]),
+            Err(Rejected::Forbidden(Action::CreateChild))
+        );
+        assert_eq!(b.item(mine).unwrap().parent, None, "被拒不动账本");
+        assert!(
+            b.mark_done(&Actor::worker("b"), T1, theirs, commit())
+                .is_ok(),
+            "对方的项照样能完成"
+        );
+        let theirs = b
+            .create_item(
+                &Actor::worker("b"),
+                T1,
+                NewItem::titled("b 的另一项").owned_by("b"),
+            )
+            .unwrap()
+            .value;
+        assert!(
+            b.relink(&Actor::worker("a"), T1, mine, None, vec![theirs])
+                .is_ok(),
+            "依赖别人的项不需要对方的权限"
+        );
+        assert!(
+            b.relink(&Actor::captain("c"), T1, mine, Some(theirs), vec![])
+                .is_ok(),
+            "机长可以改到任何父项下"
+        );
+        assert!(
+            b.relink(&Actor::worker("a"), T1, mine, Some(theirs), vec![])
+                .is_ok(),
+            "父项没变就不再问一次"
+        );
+        let own_parent = b
+            .create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("a 的父项").owned_by("a"),
+            )
+            .unwrap()
+            .value;
+        assert!(
+            b.relink(&Actor::admin("d"), T1, mine, Some(own_parent), vec![])
+                .is_ok(),
+            "行政处改链接（事实修正）照旧可以"
         );
     }
 }
