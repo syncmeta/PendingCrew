@@ -364,6 +364,24 @@ UPDATE crews SET captain_session_id =
   (SELECT id FROM sessions s WHERE s.crew_id=crews.id AND s.role='captain'
     ORDER BY s.updated_at DESC, s.id DESC LIMIT 1)
  WHERE captain_session_id IS NULL;
+-- Swift 时代的 captain mention 没有 target：一次性落成该群所属机组此刻的机长指针（之后可见性只认存下来的
+-- target，不随机长变动）。机组没有机长就保持原样；已有 target 的、别的 mention 不动；幂等（落定后不再命中）。
+UPDATE messages SET mentions = (
+  SELECT json_group_array(
+           CASE WHEN json_extract(j.value,'$.kind')='captain'
+                 AND COALESCE(json_extract(j.value,'$.targetId'),'')=''
+                THEN json_set(json(j.value),'$.targetId',
+                       (SELECT cr.captain_session_id FROM channels ch JOIN crews cr ON cr.id=ch.crew_id
+                         WHERE ch.id=messages.channel_id))
+                ELSE json(j.value) END)
+    FROM (SELECT value FROM json_each(messages.mentions) ORDER BY key) j)
+ WHERE CASE WHEN json_valid(mentions) AND json_type(mentions)='array' THEN
+         EXISTS (SELECT 1 FROM channels ch JOIN crews cr ON cr.id=ch.crew_id
+                  WHERE ch.id=messages.channel_id AND cr.captain_session_id IS NOT NULL)
+         AND EXISTS (SELECT 1 FROM json_each(messages.mentions) j
+                      WHERE json_extract(j.value,'$.kind')='captain'
+                        AND COALESCE(json_extract(j.value,'$.targetId'),'')='')
+       ELSE 0 END;
 -- 侧栏手动序的初值（控制者裁定 C1）：按建组先后的全局名次（只有顶层的相对次序有意义）。
 UPDATE crews SET position =
   (SELECT COUNT(*) FROM crews c2 WHERE c2.created_at < crews.created_at
@@ -828,5 +846,78 @@ INSERT INTO crew_parents(crew_id,parent_id) VALUES('crew-c','crew-a'),('crew-d',
         backfill_v3(&c).unwrap();
         assert_eq!(pos("crew-d", "crew-a"), 9, "回填幂等：人排过的不重算");
         assert_eq!(pos("crew-b", "crew-a"), 1);
+    }
+
+    /// 旧数据里没有 target 的 captain mention：迁移时一次性落成「该群所属机组机长指针」，之后不再随机长变动；
+    /// 机组没有机长的保持原样；已有 target 的、别的 mention 的顺序与内容不动；重跑幂等。
+    #[test]
+    fn migration_resolves_untargeted_captain_mentions_once_and_is_idempotent() {
+        let c = v2_db();
+        c.execute_batch(
+            r#"
+INSERT INTO crews(id,title,number,builtin,created_at,updated_at,extra) VALUES
+  ('crew-n','无机长',9,0,'2026-09-04T00:00:00.000Z','2026-09-04T00:00:00.000Z',NULL);
+INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,created_at) VALUES
+  ('c1','crew-a','session','worker-a1','给机长','[{"kind":"human"},{"kind":"captain"},{"kind":"broadcast"}]','2026-09-01T03:00:00.000Z'),
+  ('c2','crew-a','session','worker-a1','带 target','[{"kind":"captain","targetId":"captain-old"}]','2026-09-01T03:01:00.000Z'),
+  ('c3','crew-b','session','worker-b1','机组乙没有机长','[{"kind":"captain"}]','2026-09-02T03:00:00.000Z'),
+  ('c4','crew-n','user',NULL,'无机长机组','[{"kind":"captain"}]','2026-09-04T03:00:00.000Z');
+"#,
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        let mentions = |id: &str| -> String {
+            one(
+                &c,
+                &format!("SELECT mentions FROM messages WHERE id='{id}'"),
+            )
+        };
+        let v = |s: String| serde_json::from_str::<serde_json::Value>(&s).unwrap();
+        assert_eq!(
+            v(mentions("c1")),
+            serde_json::json!([{"kind":"human"},{"kind":"captain","targetId":"captain-new"},{"kind":"broadcast"}]),
+            "落成机长指针，顺序不变"
+        );
+        assert_eq!(
+            v(mentions("c2")),
+            serde_json::json!([{"kind":"captain","targetId":"captain-old"}])
+        );
+        assert_eq!(
+            v(mentions("c3")),
+            serde_json::json!([{"kind":"captain"}]),
+            "没有机长就保持原样"
+        );
+        assert_eq!(v(mentions("c4")), serde_json::json!([{"kind":"captain"}]));
+        assert_eq!(
+            v(mentions("m2")),
+            serde_json::json!([{"kind":"session","targetId":"captain-new"}])
+        );
+        // 机长之后换人：已落定的 target 不跟着变；重跑回填也不改。
+        c.execute(
+            "UPDATE crews SET captain_session_id='worker-a1' WHERE id='crew-a'",
+            [],
+        )
+        .unwrap();
+        let before: Vec<String> = ["c1", "c2", "c3", "c4"]
+            .iter()
+            .map(|i| mentions(i))
+            .collect();
+        backfill_v3(&c).unwrap();
+        let after: Vec<String> = ["c1", "c2", "c3", "c4"]
+            .iter()
+            .map(|i| mentions(i))
+            .collect();
+        assert_eq!(before, after, "幂等");
+        // 给没机长的机组补上机长再回填：此后才落定（一次性）。
+        c.execute(
+            "INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('cap-n','crew-n','captain','claude','2026-09-05T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        backfill_v3(&c).unwrap();
+        assert_eq!(
+            v(mentions("c4")),
+            serde_json::json!([{"kind":"captain","targetId":"cap-n"}])
+        );
     }
 }

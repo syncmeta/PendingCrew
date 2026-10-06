@@ -271,3 +271,42 @@ fn unreadable_legacy_file_aborts_the_import_and_leaves_the_store_empty() {
         assert_eq!(rows, 0, "{rel}: 回滚后可以重试");
     }
 }
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let p = e.unwrap().path();
+        let dest = to.join(p.file_name().unwrap());
+        if p.is_dir() {
+            copy_tree(&p, &dest);
+        } else {
+            std::fs::copy(&p, &dest).unwrap();
+        }
+    }
+}
+
+/// Swift 时代的 captain mention 没有 target：导入时和迁移走同一条回填，落成该机组的机长指针。
+#[test]
+fn legacy_captain_mentions_without_target_are_resolved_by_the_import() {
+    let src = tempfile::tempdir().unwrap();
+    copy_tree(&fixture(), src.path());
+    std::fs::write(
+        src.path().join("whiteboards/local-aaaa.json"),
+        r#"[{"id":"22222222-0000-4000-8000-000000000001","senderKind":"session","senderSessionId":"worker-2222bbbb",
+             "text":"请机长看","createdAt":"2026-09-11T12:34:56Z","mentions":[{"kind":"captain"}]}]"#,
+    )
+    .unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    import(src.path(), &mut store, dest.path()).unwrap();
+    let m = crewd_store::messages::list(store.conn(), "local-aaaa/lobby", 0, None, 10).unwrap();
+    let hit = m
+        .iter()
+        .find(|m| m.id == "22222222-0000-4000-8000-000000000001")
+        .expect("消息已导入");
+    assert_eq!(hit.mentions.len(), 1);
+    assert_eq!(
+        hit.mentions[0].target_id.as_deref(),
+        Some("captain-1111aaaa")
+    );
+}

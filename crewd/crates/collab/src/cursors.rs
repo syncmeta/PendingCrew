@@ -1,5 +1,5 @@
 //! 已读游标（spec §22.2：红标与未读都按游标派生，不建表）。reader = "human" 或 session id。
-use crate::{Change, Result, Tx, channels, crews, listens};
+use crate::{Change, Result, Tx, channels, listens};
 use crewd_proto::{Badge, MentionKind, Message};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -57,6 +57,8 @@ pub fn badge(conn: &Connection, channel: &str) -> Result<Badge> {
 pub const UNREAD_CAP: u32 = 200;
 
 /// 这条消息对 `session` 可见吗（移植 `CrewWhiteboardVisibility.isVisible`）。
+/// 纯函数，只看消息里存下来的 target；旧数据里没有 target 的 captain mention 已在数据层落定（`schema::backfill_v3`），
+/// 没落定的（机组没有机长）不是给任何人的。
 pub fn visible_to(m: &Message, session: &str) -> bool {
     if m.mentions.iter().any(|x| x.kind == MentionKind::Broadcast) {
         return true;
@@ -98,17 +100,6 @@ pub fn directed_targets(m: &Message, session: &str) -> Option<Vec<String>> {
     Some(targets)
 }
 
-/// 旧数据（Swift 时代）里 `captain` mention 没有 target：当作给「这个群所属机组此刻的机长」。
-/// 新发的消息发送时都已落成具体 target，不会走到这里。只改内存里的副本。
-fn resolve_legacy_captain(m: &mut Message, captain: Option<&str>) {
-    let Some(c) = captain else { return };
-    for x in &mut m.mentions {
-        if x.kind == MentionKind::Captain && x.target_id.is_none() {
-            x.target_id = Some(c.to_string());
-        }
-    }
-}
-
 /// 注入面：该 session 所在的群 + 正在收听的群里，游标之后、对它可见、不是它自己发的消息。
 /// 缺游标行的群先钉末尾、本次不返回。除此之外只读，唯一的写：游标之后**开头**那一段「不可投递」
 /// （自己发的 / 对它不可见）的消息会被游标跳过——那段里没有任何东西可投递，跳过永远安全，
@@ -133,7 +124,6 @@ pub fn unread_for(tx: &mut Tx<'_>, session: &str) -> Result<Vec<(String, Vec<Mes
             pin_to_end(tx, session, &ch)?;
             continue;
         };
-        let captain = crews::captain_of(tx.conn(), &channels::get(tx.conn(), &ch)?.crew_id)?;
         let mut got: Vec<Message> = Vec::new();
         let mut leading_end: Option<i64> = None; // 开头那段不可投递消息的最后一个 seq
         'scan: loop {
@@ -142,8 +132,7 @@ pub fn unread_for(tx: &mut Tx<'_>, session: &str) -> Result<Vec<(String, Vec<Mes
                 break;
             };
             let full = page.len() >= UNREAD_CAP as usize;
-            for mut m in page {
-                resolve_legacy_captain(&mut m, captain.as_deref());
+            for m in page {
                 if m.sender_session_id.as_deref() != Some(session) && visible_to(&m, session) {
                     got.push(m);
                     if got.len() >= UNREAD_CAP as usize {
@@ -532,11 +521,12 @@ mod tests {
         assert_eq!(unread_ids(&mut s, "w-a1"), [m.id]);
     }
 
-    /// 复核 3：旧数据里没有 target 的 captain mention = 给该群所属机组「此刻」的机长。
+    /// 复核 3：旧数据里没有 target 的 captain mention 在数据层一次性落成机长指针（`backfill_v3`），
+    /// 读时不再解析；落定之后机长换人，可见性仍跟着存下来的 target。
     #[test]
-    fn legacy_captain_mention_without_target_goes_to_the_current_captain() {
+    fn legacy_captain_mention_is_resolved_once_in_the_data_and_stays_put() {
         let mut s = store();
-        let seq = msg(
+        msg(
             &s,
             "crew-a/lobby",
             "legacy-1",
@@ -544,9 +534,25 @@ mod tests {
             Some("w-a1"),
             vec![at(MentionKind::Captain, None)],
         );
-        assert!(seq > 0);
-        assert!(unread_ids(&mut s, "w-a2").is_empty(), "不是机长，看不到");
-        assert_eq!(unread_ids(&mut s, "cap-a"), ["legacy-1"]);
+        let raw = crewd_store::messages::list(s.conn(), "crew-a/lobby", 0, None, 10)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            !visible_to(&raw, "cap-a"),
+            "读时不解析：没落定 = 不是给任何人的"
+        );
+        crewd_store::schema::backfill_v3(s.conn()).unwrap();
+        ok(&mut s, |tx| crate::crews::set_captain(tx, "crew-a", "w-a2"));
+        assert_eq!(
+            unread_ids(&mut s, "cap-a"),
+            ["legacy-1"],
+            "落定的是当时的机长"
+        );
+        assert!(
+            unread_ids(&mut s, "w-a2").is_empty(),
+            "后来的机长不是它的对象"
+        );
     }
 
     /// 复核 4：没有收窄型 mention = None；有收窄型但解不出目标 = Some(空)；目标去重。
