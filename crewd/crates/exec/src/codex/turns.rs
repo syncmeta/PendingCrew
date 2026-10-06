@@ -140,6 +140,7 @@ impl TurnTracker {
                             self.compacted_in_turn = true;
                             self.turns_since_compaction = 0;
                         }
+                        Some("agentMessage") if self.is_foreign_turn(params) => {}
                         Some("agentMessage") => {
                             self.last_agent_message = Some(
                                 item.get("text")
@@ -162,6 +163,17 @@ impl TurnTracker {
             _ => {}
         }
         s
+    }
+
+    /// 通知带着回合 id、而且不是当前进行中的回合：别的回合迟到的条目。
+    fn is_foreign_turn(&self, params: &Value) -> bool {
+        match (
+            params.get("turnId").and_then(Value::as_str),
+            self.active_turn.as_deref(),
+        ) {
+            (Some(turn), Some(active)) => turn != active,
+            _ => false,
+        }
     }
 
     fn on_usage(&mut self, params: &Value, s: &mut Signals) {
@@ -189,6 +201,13 @@ impl TurnTracker {
             .map(str::to_string);
         if let (Some(active), Some(done)) = (&self.active_turn, &completed_id)
             && active != done
+        {
+            return;
+        }
+        // 刚结束的那个回合又来一次完成（重复 / 陈旧）：不是第二次回答，也不能提前结束压缩。
+        if completed_id.is_some()
+            && completed_id == self.last_completed
+            && self.active_turn != completed_id
         {
             return;
         }
@@ -541,5 +560,33 @@ mod tests {
             ),
             vec!["⚙ crew.post_to_crew（completed）"]
         );
+    }
+
+    #[test]
+    fn another_turns_agent_message_is_not_this_turns_answer() {
+        let mut t = TurnTracker::new("thr");
+        t.on_notification("turn/started", &started("b"));
+        // 旧回合 a 迟到的正文：照常交给记录，但不能当 b 的结论。
+        let s = t.on_notification("item/completed", &agent("a", "旧回合的话"));
+        assert_eq!(s.item.as_ref().unwrap().0, "a");
+        let s = t.on_notification("turn/completed", &completed("b", "completed"));
+        assert_eq!(s.turn_ended.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_duplicate_completion_of_the_last_turn_is_ignored() {
+        let mut t = TurnTracker::new("thr");
+        t.on_notification("turn/started", &started("t1"));
+        t.on_notification("item/completed", &agent("t1", "答"));
+        let s = t.on_notification("turn/completed", &completed("t1", "completed"));
+        assert_eq!(s.turn_ended.as_deref(), Some("答"));
+        // 空闲时又来一次同一回合的完成：不是第二次回答。
+        let s = t.on_notification("turn/completed", &completed("t1", "completed"));
+        assert_eq!(s, Signals::default());
+        // 压缩进行中来的陈旧完成：不能提前结束压缩。
+        t.begin_compaction();
+        let s = t.on_notification("turn/completed", &completed("t1", "completed"));
+        assert_eq!(s, Signals::default());
+        assert!(t.is_compacting() && t.is_busy());
     }
 }
