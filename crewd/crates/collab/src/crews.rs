@@ -737,6 +737,32 @@ mod tests {
     }
 
     #[test]
+    fn adopt_and_release_to_put_the_crew_after_the_new_siblings() {
+        let mut s = store();
+        let mk = |s: &mut crewd_store::Store, title: &str, parent: &str| {
+            ok(s, |tx| {
+                create(
+                    tx,
+                    NewCrew {
+                        title: title.into(),
+                        working_directory: "/tmp/example".into(),
+                        parent_id: Some(parent.into()),
+                        ..Default::default()
+                    },
+                )
+            })
+        };
+        let c1 = mk(&mut s, "先建的", "crew-a");
+        let c2 = mk(&mut s, "后建的", "crew-x");
+        // c1 的 position 比 c2 小；收编到 crew-x 下后必须排在 c2 后面（新同级的末尾）。
+        ok(&mut s, |tx| adopt(tx, &c1.id, "crew-x"));
+        assert_eq!(order(&s, Some("crew-x")), [c2.id.clone(), c1.id.clone()]);
+        let c3 = mk(&mut s, "再一个", "crew-b");
+        ok(&mut s, |tx| release(tx, &c2.id, "crew-x", Some("crew-b")));
+        assert_eq!(order(&s, Some("crew-b")), [c3.id.clone(), c2.id.clone()]);
+    }
+
+    #[test]
     fn new_crews_go_last_among_their_siblings_and_only_reorder_moves_them() {
         let mut s = store();
         let a = ok(&mut s, |tx| {
