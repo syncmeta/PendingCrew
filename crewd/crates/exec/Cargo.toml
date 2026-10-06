@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+crewd-term = { version = "0.1.0", path = "../term" }
 libc = "0.2.190"
 rustix = { version = "1", features = ["termios", "process", "fs", "stdio"] }
 rustix-openpty = "0.2"
