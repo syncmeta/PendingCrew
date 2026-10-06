@@ -51,6 +51,10 @@ impl From<CollabError> for PortError {
         match e {
             CollabError::NotFound(s) => Self::NotFound(s),
             CollabError::Store(s) => Self::Internal(s.to_string()),
+            // The ledger's own invariant broke: a server fault, same as `dispatch::collab_err`.
+            CollabError::Work(crewd_work::Rejected::Invariant(v)) => {
+                Self::Internal(format!("work book invariant violated: {v}"))
+            }
             other => Self::Refused(other.to_string()),
         }
     }
@@ -2017,5 +2021,16 @@ mod tests {
         let rows = directory(&f.state, None).await.unwrap();
         let child = rows.iter().find(|d| d.name == "示例子组").unwrap();
         assert_eq!(child.detail, "示例\u{300c}根\u{300d}");
+    }
+
+    #[test]
+    fn work_book_invariants_are_internal_not_refusals() {
+        use crewd_work::{Rejected, Violation};
+        let e = PortError::from(CollabError::Work(Rejected::Invariant(Violation::Cycle(
+            vec![],
+        ))));
+        assert!(matches!(e, PortError::Internal(_)), "{e:?}");
+        let e = PortError::from(CollabError::Work(Rejected::OwnerRequired));
+        assert!(matches!(e, PortError::Refused(_)), "{e:?}");
     }
 }

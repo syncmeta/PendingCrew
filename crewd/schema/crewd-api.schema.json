@@ -2263,7 +2263,7 @@
     },
     "ToolsChanged": {
       "additionalProperties": false,
-      "description": "`agent.tools_changed` 的 `data`：此刻的角色（线上 `{\"role\": \"captain\" | \"worker\"}`）。",
+      "description": "`agent.tools_changed` 的 `data`：此刻的角色（线上 `{\"role\": \"captain\" | \"worker\" | \"admin\"}`；\nadmin 的工具表同 worker，但线上照实报）。",
       "properties": {
         "role": {
           "$ref": "#/$defs/Role"

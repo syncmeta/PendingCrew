@@ -74,6 +74,14 @@ async fn route(
         if !port::verify_token(state, &p.session_id, &p.token) {
             return Err(invalid());
         }
+        // One connection serves one session: re-attaching as the same session is fine (it just
+        // restarts the push task), attaching as another one is a conflict.
+        if conn.session.as_deref().is_some_and(|s| s != p.session_id) {
+            return Err(RpcError::new(
+                RpcError::CONFLICT,
+                "this connection is already attached to another session",
+            ));
+        }
         // Subscribe before reading the identity: a captain change between the two is not missed.
         let rx = port::subscribe_collab(state);
         let me = current(state, &p.session_id).await?;
@@ -84,6 +92,7 @@ async fn route(
             state.clone(),
             me.session_id.clone(),
             me.role,
+            me.crew_id.clone(),
             rx,
             tx.clone(),
         ));
@@ -137,26 +146,29 @@ async fn hook(
     }
 }
 
-/// A role only changes when a session row or a crew row changes (a captain change is
-/// `crews::set_captain`, which emits CrewChanged / SessionChanged).
-fn relevant(c: &Change) -> bool {
-    matches!(
-        c,
-        Change::SessionChanged { .. } | Change::CrewChanged { .. }
-    )
+/// A role only changes when my own session row or my crew's row changes (a captain change is
+/// `crews::set_captain`, which emits CrewChanged for the crew and SessionChanged for the two
+/// sessions involved). Anything else is not worth a database read.
+pub(crate) fn relevant(c: &Change, session: &str, crew: &str) -> bool {
+    match c {
+        Change::SessionChanged { session_id } => session_id == session,
+        Change::CrewChanged { crew_id } => crew_id == crew,
+        _ => false,
+    }
 }
 
 fn spawn_watcher(
     state: Arc<AppState>,
     session: String,
     mut last: Role,
+    mut crew: String,
     mut rx: broadcast::Receiver<Change>,
     tx: mpsc::Sender<ServerFrame>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(c) if relevant(&c) => {}
+                Ok(c) if relevant(&c, &session, &crew) => {}
                 Ok(_) => continue,
                 // Missed some changes: re-read the role to be safe.
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -165,6 +177,8 @@ fn spawn_watcher(
             let Ok(Some(me)) = port::identity(&state, &session).await else {
                 continue;
             };
+            // A session can move to another crew: follow it.
+            crew = me.crew_id.clone();
             if me.role != last {
                 last = me.role;
                 let data = serde_json::to_value(ToolsChanged { role: me.role })
@@ -189,8 +203,10 @@ mod tests {
     use serde_json::json;
 
     use crate::agent::Role;
+    use crate::agent::rpc::relevant;
     use crate::agent::testkit::{Fixture, RpcClient};
     use crate::agent::text::{self, Locale};
+    use crewd_collab::Change;
 
     async fn attached(f: &Fixture, session: &str) -> RpcClient {
         let sock = f.spawn_socket().await;
@@ -342,5 +358,109 @@ mod tests {
             .unwrap();
         f.human_post(&lobby.id, "示例消息", vec![]).await;
         assert!(w.next_event(Duration::from_millis(300)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn push_survives_a_lagged_receiver() {
+        // The collab broadcast holds 4096 changes. One transaction that changes the captain and then
+        // notes more distinct changes than that overflows the watcher's receiver, so the
+        // CrewChanged that matters is dropped: only the Lagged re-read can still find the new role.
+        // The transaction runs on its own thread and runtime and the test thread blocks on it, so
+        // the watcher cannot drain the queue while events are being emitted.
+        let f = Fixture::new().await;
+        let mut w = attached(&f, &f.worker).await;
+        let (st, crew, worker) = (f.state.clone(), f.crew.clone(), f.worker.clone());
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(st.collab(move |tx| {
+                    crewd_collab::crews::set_captain(tx, &crew, &worker)?;
+                    for i in 0..4200 {
+                        tx.note(Change::Progress {
+                            session_id: format!("noise-{i}"),
+                            kind: crewd_collab::ProgressKind::ToolCall,
+                        });
+                    }
+                    Ok(())
+                }))
+                .unwrap();
+        })
+        .join()
+        .unwrap();
+        let ev = w
+            .next_event(Duration::from_secs(5))
+            .await
+            .expect("tools_changed must survive a Lagged receiver");
+        assert_eq!(ev.event, TOOLS_CHANGED);
+        assert_eq!(ev.data["role"], "captain");
+    }
+
+    #[tokio::test]
+    async fn second_attach_for_another_session_is_refused_same_session_is_fine() {
+        let f = Fixture::new().await;
+        let mut c = attached(&f, &f.worker).await;
+        let (code, _) = c
+            .call(
+                methods::ATTACH,
+                json!({"sessionId": f.captain, "token": f.token(&f.captain)}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(code, -32009);
+        // Still the worker: the refused attach changed nothing.
+        let n = c.call(methods::TOOLS, json!(null)).await.unwrap();
+        assert_eq!(n.as_array().unwrap().len(), 21);
+        let a = c
+            .call(
+                methods::ATTACH,
+                json!({"sessionId": f.worker, "token": f.token(&f.worker)}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(a["role"], "worker");
+    }
+
+    #[tokio::test]
+    async fn a_session_deleted_after_attach_is_refused_with_32003() {
+        let f = Fixture::new().await;
+        let mut w = attached(&f, &f.worker).await;
+        let id = f.worker.clone();
+        f.state
+            .db
+            .call(move |s| {
+                s.conn()
+                    .execute("DELETE FROM sessions WHERE id=?1", [&id])
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        for m in [methods::TOOLS, methods::CALL] {
+            let (code, _) = w
+                .call(m, json!({"tool": "post", "args": {}}))
+                .await
+                .unwrap_err();
+            assert_eq!(code, -32003, "{m}");
+        }
+    }
+
+    #[test]
+    fn only_my_session_or_my_crew_changes_can_change_my_role() {
+        use crewd_collab::Change as C;
+        let s = |id: &str| C::SessionChanged {
+            session_id: id.into(),
+        };
+        let c = |id: &str| C::CrewChanged { crew_id: id.into() };
+        assert!(relevant(&s("me"), "me", "crew-1"));
+        assert!(relevant(&c("crew-1"), "me", "crew-1"));
+        assert!(!relevant(&s("someone"), "me", "crew-1"));
+        assert!(!relevant(&c("crew-2"), "me", "crew-1"));
+        assert!(!relevant(
+            &C::ChannelChanged {
+                channel_id: "x".into()
+            },
+            "me",
+            "crew-1"
+        ));
     }
 }

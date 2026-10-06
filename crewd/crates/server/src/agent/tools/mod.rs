@@ -37,8 +37,9 @@ impl Ctx<'_> {
     pub fn fail(&self, e: PortError) -> CallResult {
         match e {
             PortError::Internal(detail) => {
-                let n = crate::dispatch::log_internal(&detail);
-                self.err("r.failed", &[("detail", &format!("internal error #{n}"))])
+                let n = crate::dispatch::log_internal(&detail).to_string();
+                let shown = self.r("r.internal", &[("n", &n)]);
+                self.err("r.failed", &[("detail", &shown)])
             }
             other => self.err("r.failed", &[("detail", &other.to_string())]),
         }
@@ -69,11 +70,14 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     let Some(spec) = catalog::find(tool) else {
         return cx.err("r.unknown_tool", &[("name", tool)]);
     };
-    if spec.scope == Scope::Captain && me.role != Role::Captain {
-        return cx.err("r.captain_only", &[("name", tool)]);
-    }
-    if spec.not_on_builtin && me.builtin_crew {
-        return cx.err("r.not_on_builtin", &[("name", tool)]);
+    // One gate (`catalog::visible`, the same rule the tool list uses); the checks below only pick
+    // which receipt to give.
+    if !catalog::visible(spec, me) {
+        return if spec.scope == Scope::Captain && me.role != Role::Captain {
+            cx.err("r.captain_only", &[("name", tool)])
+        } else {
+            cx.err("r.not_on_builtin", &[("name", tool)])
+        };
     }
     // Task 12 replaces the two lines below with `match tool { ... _ => cx.err("r.no_handler", ...) }`,
     // and Tasks 12-15 add the group branches.
@@ -121,7 +125,13 @@ mod tests {
         let r = cx.fail(PortError::Internal("no such table: secrets".into()));
         assert!(r.is_error);
         assert!(!r.text.contains("secrets"), "{}", r.text);
-        assert!(r.text.contains('#'), "{}", r.text);
+        let probe = text::r(Locale::Zh, "r.internal", &[("n", "@@")]);
+        let (before, after) = probe.split_once("@@").unwrap();
+        assert!(
+            r.text.contains(before) && r.text.contains(after),
+            "{}",
+            r.text
+        );
         // Refusals are rule explanations for the agent: shown as they are.
         let r = cx.fail(PortError::Refused("not a member".into()));
         assert!(r.text.contains("not a member"), "{}", r.text);

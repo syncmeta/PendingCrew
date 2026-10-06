@@ -15,7 +15,8 @@ pub mod methods {
 /// serve → helper 的推送：角色变了，工具表要重取。`data` 是 [`ToolsChanged`]。
 pub const TOOLS_CHANGED: &str = "agent.tools_changed";
 
-/// `agent.tools_changed` 的 `data`：此刻的角色（线上 `{"role": "captain" | "worker"}`）。
+/// `agent.tools_changed` 的 `data`：此刻的角色（线上 `{"role": "captain" | "worker" | "admin"}`；
+/// admin 的工具表同 worker，但线上照实报）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolsChanged {

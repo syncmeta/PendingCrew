@@ -407,3 +407,6 @@ claude 或 codex，必须明确选。
 
 ## r.no_handler
 {name} 还没有实现。
+
+## r.internal
+内部错误 #{n}（详情见 crewd 日志）

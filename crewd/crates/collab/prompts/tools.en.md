@@ -407,3 +407,6 @@ Did not go through: {detail}
 
 ## r.no_handler
 {name} is not implemented yet.
+
+## r.internal
+Internal error #{n} (details are in the crewd log)
