@@ -43,7 +43,7 @@ pub fn pending(conn: &Connection) -> Result<Option<RestartPrompt>> {
         .optional()?)
 }
 
-/// crewd 启动时（M3c）给出上次在跑的 session：去重、保序；空 = 不问。新的一次重启替换掉还没答的那条。
+/// crewd 启动时（M3c）给出上次在跑的 session：去重、保序；空 = 不问。新的一次重启取代所有还没定下来的询问。
 pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartPrompt>> {
     let mut ids: Vec<String> = Vec::new();
     for id in session_ids {
@@ -55,8 +55,21 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
     if ids.is_empty() {
         return Ok(None);
     }
-    tx.conn()
-        .execute("DELETE FROM restart_prompts WHERE answer IS NULL", [])?;
+    // 新的一次重启取代所有还没定下来的（没答的、答了「先不」的）：旧名单作废，不会在答完新的之后又冒出来。
+    let superseded: Vec<i64> = {
+        let mut st = tx
+            .conn()
+            .prepare("SELECT id FROM restart_prompts WHERE answer IS NULL OR answer='later'")?;
+        st.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    tx.conn().execute(
+        "DELETE FROM restart_prompts WHERE answer IS NULL OR answer='later'",
+        [],
+    )?;
+    for old in superseded {
+        tx.note(Change::RestartChanged { id: old });
+    }
     tx.conn().execute(
         "INSERT INTO restart_prompts(created_at,session_ids) VALUES(?1,?2)",
         params![tx.now_ts(), serde_json::to_string(&ids)?],
@@ -91,6 +104,7 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
 }
 
 /// 人答重启询问（客户端 `restart.answer`）。「先不」之后还能答「恢复」；答过「恢复」就定了。
+/// 只有最新那条还没定下来的（`pending`）能答。
 pub fn answer(tx: &mut Tx<'_>, id: i64, a: RestartAnswer) -> Result<RestartPrompt> {
     let p = get(tx.conn(), id)?;
     match (p.answer, a) {
@@ -99,6 +113,11 @@ pub fn answer(tx: &mut Tx<'_>, id: i64, a: RestartAnswer) -> Result<RestartPromp
         }
         (Some(RestartAnswer::Later), RestartAnswer::Later) => return Ok(p),
         _ => {}
+    }
+    if pending(tx.conn())?.map(|x| x.id) != Some(id) {
+        return Err(CollabError::Conflict(format!(
+            "重启询问 {id} 已被更新的一条取代"
+        )));
     }
     tx.conn().execute(
         "UPDATE restart_prompts SET answer=?2, answered_at=?3 WHERE id=?1",
@@ -181,5 +200,48 @@ mod tests {
             CollabError::NotFound(_)
         ));
         assert_eq!(pending(s.conn()).unwrap().unwrap().id, b.id);
+    }
+
+    #[test]
+    fn a_new_restart_supersedes_a_later_prompt_too() {
+        let mut s = store();
+        let p1 = ok(&mut s, |tx| open(tx, vec!["w-a1".into()])).unwrap();
+        ok(&mut s, |tx| answer(tx, p1.id, RestartAnswer::Later));
+        let (p2, ch) = ok_at(&mut s, NOW, |tx| open(tx, vec!["w-a2".into()]));
+        let p2 = p2.unwrap();
+        assert!(
+            ch.contains(&Change::RestartChanged { id: p1.id }),
+            "被取代的那条也发变更：{ch:?}"
+        );
+        assert!(ch.contains(&Change::RestartChanged { id: p2.id }));
+        ok(&mut s, |tx| answer(tx, p2.id, RestartAnswer::Resume));
+        assert!(pending(s.conn()).unwrap().is_none(), "旧的「先不」不会复活");
+        assert!(matches!(
+            err(&mut s, |tx| answer(tx, p1.id, RestartAnswer::Resume)),
+            CollabError::NotFound(_) | CollabError::Conflict(_)
+        ));
+    }
+
+    #[test]
+    fn only_the_newest_unresolved_prompt_can_be_answered() {
+        let mut s = store();
+        // 绕过 open 造出两条都没决的旧数据（open 自己不会留下这种状态）。
+        s.conn().execute("INSERT INTO restart_prompts(created_at,session_ids,answer) VALUES('t','[\"w-a1\"]','later')", []).unwrap();
+        let old = s.conn().last_insert_rowid();
+        s.conn()
+            .execute(
+                "INSERT INTO restart_prompts(created_at,session_ids) VALUES('t','[\"w-a2\"]')",
+                [],
+            )
+            .unwrap();
+        let new = s.conn().last_insert_rowid();
+        assert!(matches!(
+            err(&mut s, |tx| answer(tx, old, RestartAnswer::Resume)),
+            CollabError::Conflict(_)
+        ));
+        assert_eq!(
+            ok(&mut s, |tx| answer(tx, new, RestartAnswer::Resume)).answer,
+            Some(RestartAnswer::Resume)
+        );
     }
 }
