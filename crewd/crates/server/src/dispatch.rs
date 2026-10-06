@@ -6,8 +6,6 @@ use crewd_proto::{
 use serde::Serialize;
 use serde_json::Value;
 
-const SENDER_KINDS: &[&str] = &["user", "session", "captain", "pendingcrew"];
-
 pub async fn handle(state: &AppState, req: Request) -> Response {
     let id = req.id;
     match route(state, req).await {
@@ -50,7 +48,13 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let after_seq = p.after_seq.unwrap_or(0);
             to_value(
                 db(state, move |s| {
-                    crewd_store::messages::list(s.conn(), &p.crew_id, after_seq, limit)
+                    crewd_store::messages::list(
+                        s.conn(),
+                        &crewd_store::channels::lobby_id(&p.crew_id),
+                        after_seq,
+                        None,
+                        limit,
+                    )
                 })
                 .await?,
             )
@@ -60,14 +64,14 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             if p.text.trim().is_empty() {
                 return Err(invalid("text 不能为空"));
             }
-            if !SENDER_KINDS.contains(&p.sender_kind.as_str()) {
-                return Err(invalid(format!("未知 senderKind: {}", p.sender_kind)));
-            }
+            let kind = crewd_store::messages::normalize_sender_kind(&p.sender_kind)
+                .ok_or_else(|| invalid(format!("未知 senderKind: {}", p.sender_kind)))?;
+            let crew_id = p.crew_id;
             let mut msg = Message {
                 seq: 0,
                 id: uuid::Uuid::new_v4().to_string(),
-                crew_id: p.crew_id,
-                sender_kind: p.sender_kind,
+                channel_id: crewd_store::channels::lobby_id(&crew_id),
+                sender_kind: kind.into(),
                 sender_session_id: p.sender_session_id,
                 sender_name: p.sender_name,
                 text: p.text,
@@ -82,8 +86,8 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let posted = state
                 .db
                 .call(move |s| -> Result<Value, RpcError> {
-                    if !crewd_store::crews::exists(s.conn(), &msg.crew_id).map_err(internal)? {
-                        return Err(invalid(format!("机组不存在: {}", msg.crew_id)));
+                    if !crewd_store::crews::exists(s.conn(), &crew_id).map_err(internal)? {
+                        return Err(invalid(format!("机组不存在: {crew_id}")));
                     }
                     msg.seq = crewd_store::messages::insert(s.conn(), &msg, None)
                         .map_err(internal)?

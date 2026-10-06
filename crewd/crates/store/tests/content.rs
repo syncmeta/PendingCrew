@@ -1,4 +1,5 @@
 use crewd_proto::{Attachment, Crew, Ledger, Mention, Message, Todo, TodoResponse};
+use crewd_store::channels::{ensure_lobby, lobby_id};
 use crewd_store::{Store, archive, crews, messages, todos};
 
 fn store_with_crew() -> Store {
@@ -20,6 +21,7 @@ fn store_with_crew() -> Store {
         None,
     )
     .unwrap();
+    ensure_lobby(s.conn(), "a", "2026-10-01T00:00:00.000Z").unwrap();
     s
 }
 
@@ -27,8 +29,8 @@ fn msg(id: &str, text: &str) -> Message {
     Message {
         seq: 0,
         id: id.into(),
-        crew_id: "a".into(),
-        sender_kind: "user".into(),
+        channel_id: lobby_id("a"),
+        sender_kind: "human".into(),
         sender_session_id: None,
         sender_name: Some("我".into()),
         text: text.into(),
@@ -74,16 +76,20 @@ fn messages_list_after_seq_with_limit_roundtrips_unicode() {
         .unwrap();
     messages::insert(s.conn(), &msg("m2", "二"), None).unwrap();
     messages::insert(s.conn(), &msg("m3", "三"), None).unwrap();
-    let all = messages::list(s.conn(), "a", 0, 10).unwrap();
+    let all = messages::list(s.conn(), &lobby_id("a"), 0, None, 10).unwrap();
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].text, text);
     assert_eq!(all[0].seq, first);
     assert_eq!(all[0].mentions[0].kind, "broadcast");
     assert_eq!(all[0].attachments[0].size, Some(3));
-    let tail = messages::list(s.conn(), "a", first, 1).unwrap();
+    let tail = messages::list(s.conn(), &lobby_id("a"), first, None, 1).unwrap();
     assert_eq!(tail.len(), 1);
     assert_eq!(tail[0].id, "m2");
-    assert!(messages::list(s.conn(), "other", 0, 10).unwrap().is_empty());
+    assert!(
+        messages::list(s.conn(), &lobby_id("other"), 0, None, 10)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

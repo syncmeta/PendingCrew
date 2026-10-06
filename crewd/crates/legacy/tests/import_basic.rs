@@ -57,6 +57,58 @@ fn full_import_from_fixture() {
 }
 
 #[test]
+fn imported_database_has_lobbies_pinned_cursors_and_counters() {
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    import(&fixture(), &mut store, dest.path()).unwrap();
+    let c = store.conn();
+    let lobbies: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM channels WHERE kind='lobby'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let crews: i64 = c
+        .query_row("SELECT COUNT(*) FROM crews", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(lobbies, crews);
+    let behind: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM sessions s JOIN read_cursors r
+               ON r.reader=s.id AND r.channel_id=s.crew_id||'/lobby'
+              WHERE r.seq < (SELECT COALESCE(MAX(seq),0) FROM messages m WHERE m.channel_id=s.crew_id||'/lobby')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(behind, 0, "导入后没有任何 session 有未读");
+    assert_eq!(
+        crewd_store::meta_get(c, "nextCrewNumber")
+            .unwrap()
+            .as_deref(),
+        Some("3"),
+        "夹具 local-crews.json 的 nextCrewNumber"
+    );
+    let ext: i64 = c
+        .query_row(
+            "SELECT ext FROM sessions WHERE id='worker-2222bbbb'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(ext, 2);
+    let cap: String = c
+        .query_row(
+            "SELECT captain_session_id FROM crews WHERE id='local-aaaa'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cap, "captain-1111aaaa");
+}
+
+#[test]
 fn missing_source_is_an_error() {
     let dest = tempfile::tempdir().unwrap();
     let mut store = Store::open_in_memory().unwrap();

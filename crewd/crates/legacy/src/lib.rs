@@ -66,6 +66,8 @@ pub fn import(
         }
         whiteboard::import_outbox(tx, &mut cx)?;
         archive::import_rest(tx, &mut cx)?;
+        // 大厅、游标钉末尾、机长指针、分机号、nextCrewNumber（local-crews.json 此时已进归档）。
+        crewd_store::schema::backfill_v3(tx)?;
         crewd_store::meta_set(tx, "importedAt", &crewd_store::now_ts())?;
         crewd_store::meta_set(tx, "importSource", &src.display().to_string())?;
         // 到这里所有计数都已完成：报告与数据同一个事务落库，不会出现有数据没报告。
@@ -472,7 +474,14 @@ mod tests {
         let store = crewd_store::Store::open_in_memory().unwrap();
         let r = import_parts(&src, &store);
 
-        let msgs = crewd_store::messages::list(store.conn(), "local-aaaa", 0, 100).unwrap();
+        let msgs = crewd_store::messages::list(
+            store.conn(),
+            &crewd_store::channels::lobby_id("local-aaaa"),
+            0,
+            None,
+            100,
+        )
+        .unwrap();
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].text, "你好，大家 👋");
         assert_eq!(
@@ -585,9 +594,15 @@ mod tests {
         whiteboard::import_board(store.conn(), &mut cx, "local-aaaa").unwrap();
         whiteboard::import_board(store.conn(), &mut cx, "local-aaaa").unwrap();
         assert_eq!(
-            crewd_store::messages::list(store.conn(), "local-aaaa", 0, 100)
-                .unwrap()
-                .len(),
+            crewd_store::messages::list(
+                store.conn(),
+                &crewd_store::channels::lobby_id("local-aaaa"),
+                0,
+                None,
+                100,
+            )
+            .unwrap()
+            .len(),
             2
         );
         assert_eq!(r.counts["duplicateMessages"], 2);
@@ -619,6 +634,58 @@ mod tests {
             "{paths:?}"
         );
         assert!(paths.contains(&"local-crews.json".to_string()), "{paths:?}");
+    }
+
+    /// 裁定 6 + 控制者裁定 R14：认不出的 sender / mention 词不猜、不丢——行进报告的 skipped（带下标）并加警告，
+    /// 整份文件原样归档；认得的旧词（user）归一后照常导入。
+    #[test]
+    fn rows_with_unknown_sender_or_mention_are_skipped_and_file_is_archived() {
+        let crews = r#"{"crews":[{"id":"c1","title":"t","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}]}"#;
+        let src = legacy_root(crews, "[]");
+        fs::write(
+            src.path().join("whiteboards/c1.json"),
+            r#"[{"id":"m1","senderKind":"user","text":"示例消息","createdAt":"2026-09-01T01:00:00Z"},
+                {"id":"m2","senderKind":"robot","text":"t","createdAt":"2026-09-01T01:01:00Z"},
+                {"id":"m3","senderKind":"session","text":"t","createdAt":"2026-09-01T01:02:00Z",
+                 "mentions":[{"kind":"everyone"}]}]"#,
+        )
+        .unwrap();
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let r = import_parts(src.path(), &store);
+        let msgs = crewd_store::messages::list(
+            store.conn(),
+            &crewd_store::channels::lobby_id("c1"),
+            0,
+            None,
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            msgs.iter()
+                .map(|m| (m.id.as_str(), m.sender_kind.as_str()))
+                .collect::<Vec<_>>(),
+            [("m1", "human")]
+        );
+        assert_eq!(r.counts["messagesWithUnknownSender"], 1);
+        assert_eq!(r.counts["messagesWithUnknownMention"], 1);
+        let sk: Vec<_> = r
+            .skipped
+            .iter()
+            .filter(|s| s.file == "whiteboards/c1.json")
+            .map(|s| (s.index, s.reason.as_str()))
+            .collect();
+        assert_eq!(sk.len(), 2, "{sk:?}");
+        assert_eq!(sk[0].0, Some(1));
+        assert!(sk[0].1.contains("robot"), "{sk:?}");
+        assert_eq!(sk[1].0, Some(2));
+        assert!(sk[1].1.contains("everyone"), "{sk:?}");
+        assert!(r.warnings.iter().any(|w| w.contains("robot")));
+        assert!(r.warnings.iter().any(|w| w.contains("everyone")));
+        let paths = crewd_store::archive::list_paths(store.conn()).unwrap();
+        assert!(
+            paths.contains(&"whiteboards/c1.json".to_string()),
+            "{paths:?}"
+        );
     }
 
     #[test]

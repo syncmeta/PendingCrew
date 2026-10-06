@@ -60,6 +60,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             updated_at: norm_ts(cx, &c.updated_at),
         };
         crewd_store::crews::upsert(tx, &crew, Some(&Value::Object(c.extra)))?;
+        crewd_store::channels::ensure_lobby(tx, &crew.id, &crew.created_at)?;
         cx.report.bump("crews");
         parents.push((c.id.clone(), c.parent_crew_ids));
         crews.push(ImportedCrew {

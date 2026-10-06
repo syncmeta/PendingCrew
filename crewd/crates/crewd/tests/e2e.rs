@@ -84,6 +84,8 @@ fn import_then_serve_then_rpc() {
     );
     let after = rpc(data.path(), "whiteboard.list", r#"{"crewId":"local-aaaa"}"#);
     assert_eq!(after[3]["text"], "切换后第一条 ✅");
+    assert_eq!(after[3]["channelId"], "local-aaaa/lobby");
+    assert_eq!(after[3]["senderKind"], "human");
 
     let second = crewd(data.path()).arg("serve").output().unwrap();
     assert!(!second.status.success());

@@ -200,10 +200,11 @@
             "null"
           ]
         },
-        "createdAt": {
+        "channelId": {
+          "description": "归属的群（spec §17）：大厅是 `<crewId>/lobby`。",
           "type": "string"
         },
-        "crewId": {
+        "createdAt": {
           "type": "string"
         },
         "id": {
@@ -223,7 +224,7 @@
           "type": "array"
         },
         "senderKind": {
-          "description": "\"user\" | \"session\" | \"captain\" | \"pendingcrew\" | 旧数据里的 \"human\"",
+          "description": "\"human\" | \"session\" | \"captain\" | \"system\"（v3 归一后的词表；Task 4 换成枚举）",
           "type": "string"
         },
         "senderName": {
@@ -250,7 +251,7 @@
       "required": [
         "seq",
         "id",
-        "crewId",
+        "channelId",
         "senderKind",
         "text",
         "createdAt"

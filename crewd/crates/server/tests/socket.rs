@@ -27,6 +27,7 @@ async fn start(dir: &Path) -> oneshot::Sender<()> {
             None,
         )
         .unwrap();
+        crewd_store::channels::ensure_lobby(s.conn(), "a", "2026-10-01T00:00:00.000Z").unwrap();
     }
     let (tx, rx) = oneshot::channel::<()>();
     let d = dir.to_path_buf();
@@ -111,6 +112,8 @@ async fn hello_post_list_and_todo_list() {
         )
         .await;
     assert!(m["seq"].as_i64().unwrap() > 0);
+    assert_eq!(m["channelId"], "a/lobby");
+    assert_eq!(m["senderKind"], "human", "旧词 user 归一成 human");
     let list = c.call(4, "whiteboard.list", json!({"crewId":"a"})).await;
     assert_eq!(list[0]["text"], text);
     let none = c

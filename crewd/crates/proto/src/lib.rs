@@ -166,7 +166,7 @@ mod tests {
         let m = Message {
             seq: 5,
             id: "m1".into(),
-            crew_id: "local-a".into(),
+            channel_id: "local-a/lobby".into(),
             sender_kind: "user".into(),
             sender_session_id: None,
             sender_name: None,
@@ -181,7 +181,7 @@ mod tests {
             created_at: "2026-10-05T00:00:00.000Z".into(),
         };
         let v = serde_json::to_value(&m).unwrap();
-        assert_eq!(v["crewId"], "local-a");
+        assert_eq!(v["channelId"], "local-a/lobby");
         assert_eq!(v["inReplyTo"], "m0");
         assert_eq!(v["mentions"][0]["targetId"], "worker-1");
         assert!(v.get("senderName").is_none());

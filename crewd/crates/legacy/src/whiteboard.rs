@@ -1,19 +1,19 @@
 use crate::Ctx;
 use crate::model::LMessage;
-use crate::rows::{conv_att, io_fatal, norm_ts, read_file, read_rows};
+use crate::rows::{conv_att, io_fatal, norm_ts, read_file, read_rows_indexed};
 use crewd_proto::{Mention, Message};
 use rusqlite::Connection;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 旧版白板读失败时会重建一行内存警示，不是真实消息。
 const READ_FAILURE_ID: &str = "whiteboard-read-failure";
 
 pub fn import_board(tx: &Connection, cx: &mut Ctx, crew_id: &str) -> crewd_store::Result<()> {
     let path = cx.src.join("whiteboards").join(format!("{crew_id}.json"));
-    let rows: Vec<LMessage> = read_rows(cx, &path)?;
-    for m in rows {
-        if !insert_one(tx, cx, crew_id, m)? {
+    let rows: Vec<(usize, LMessage)> = read_rows_indexed(cx, &path)?;
+    for (i, m) in rows {
+        if !insert_one(tx, cx, crew_id, m, &path, Some(i))? {
             // 这行没完整进库（重复 id 或嵌套未知键）：整份文件留给归档原样保存。
             cx.consumed.remove(&path);
         }
@@ -60,24 +60,51 @@ pub fn import_outbox(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<()> {
             continue;
         }
         cx.report.bump("outboxMessages");
-        if insert_one(tx, cx, &crew_id, m)? {
+        if insert_one(tx, cx, &crew_id, m, &f, None)? {
             cx.consumed.insert(f.clone());
         }
     }
     Ok(())
 }
 
-/// 导入一行；返回 false 表示这行没完整进库（id 重复，或嵌套对象里有没处放的键）。
-/// 旧版合成的读失败警示行有意丢弃，算处理完。
+/// 导入一行；返回 false 表示这行没完整进库（id 重复，嵌套对象里有没处放的键，或 sender / mention
+/// 词认不出——后者记进报告的 skipped 并加一条警告，裁定 6 / 控制者裁定 R14）。
+/// 旧版合成的读失败警示行有意丢弃，算处理完。`file` / `index` 只用于报告定位。
 fn insert_one(
     tx: &Connection,
     cx: &mut Ctx,
     crew_id: &str,
     m: LMessage,
+    file: &Path,
+    index: Option<usize>,
 ) -> crewd_store::Result<bool> {
     if m.id == READ_FAILURE_ID {
         cx.report.bump("syntheticRowsDropped");
         return Ok(true);
+    }
+    let Some(sender_kind) = crewd_store::messages::normalize_sender_kind(&m.sender_kind) else {
+        cx.report.bump("messagesWithUnknownSender");
+        let why = format!(
+            "机组 {crew_id} 的消息 {} senderKind={:?} 认不出，未导入（原件留在归档里）",
+            m.id, m.sender_kind
+        );
+        cx.report.skip(cx.src, file, index, why.clone());
+        cx.report.warn(why);
+        return Ok(false);
+    };
+    if let Some(bad) = m
+        .mentions
+        .iter()
+        .find(|x| !crewd_store::messages::MENTION_KINDS.contains(&x.kind.as_str()))
+    {
+        cx.report.bump("messagesWithUnknownMention");
+        let why = format!(
+            "机组 {crew_id} 的消息 {} 的 mention kind={:?} 认不出，未导入（原件留在归档里）",
+            m.id, bad.kind
+        );
+        cx.report.skip(cx.src, file, index, why.clone());
+        cx.report.warn(why);
+        return Ok(false);
     }
     let nested_extra = m.has_nested_extra();
     let created_at = norm_ts(cx, &m.created_at);
@@ -88,8 +115,8 @@ fn insert_one(
     let msg = Message {
         seq: 0,
         id: m.id,
-        crew_id: crew_id.to_string(),
-        sender_kind: m.sender_kind,
+        channel_id: crewd_store::channels::lobby_id(crew_id),
+        sender_kind: sender_kind.to_string(),
         sender_session_id: m.sender_session_id,
         sender_name: m.sender_name,
         text: m.text,

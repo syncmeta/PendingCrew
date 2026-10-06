@@ -1,5 +1,6 @@
 //! crewd 的持久化层。crewd 是数据库的唯一写者；其他进程一律经 crewd 的 API。
 pub mod archive;
+pub mod channels;
 pub mod crews;
 pub mod db;
 pub mod messages;
@@ -94,8 +95,20 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Unix 毫秒（crewd 里唯一读墙钟的地方之一；collab 不读时钟，由调用方传入）。
+pub fn now_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+/// 毫秒 → RFC 3339（毫秒、`Z`），与 `now_ts()` 同格式，可按字符串比较先后。
+pub fn ts_from_ms(ms: i64) -> String {
+    chrono::DateTime::<Utc>::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
 pub fn now_ts() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    ts_from_ms(now_ms())
 }
 
 /// 只认 UNIQUE（2067）与 PRIMARY KEY（1555）两种扩展码；
@@ -304,7 +317,8 @@ mod tests {
         assert!(is_unique_violation(&pk));
 
         // UNIQUE 冲突（messages.id 是 UNIQUE 列）
-        let ins = "INSERT INTO messages(id,crew_id,sender_kind,text,created_at) VALUES('m1','a','human','t','x')";
+        channels::ensure_lobby(s.conn(), "a", "x").unwrap();
+        let ins = "INSERT INTO messages(id,channel_id,sender_kind,text,created_at) VALUES('m1','a/lobby','human','t','x')";
         s.conn().execute(ins, []).unwrap();
         let uq = s.conn().execute(ins, []).unwrap_err();
         assert!(is_unique_violation(&uq));
@@ -322,6 +336,13 @@ mod tests {
             .execute("INSERT INTO crews(id) VALUES('z')", [])
             .unwrap_err();
         assert!(!is_unique_violation(&nn));
+    }
+
+    #[test]
+    fn ts_from_ms_roundtrips() {
+        assert_eq!(ts_from_ms(0), "1970-01-01T00:00:00.000Z");
+        // 计划原写 13:33:20；`date -u -r 1790000000` 实测 14:13:20（控制者裁定 R14）。
+        assert_eq!(ts_from_ms(1_790_000_000_123), "2026-09-21T14:13:20.123Z");
     }
 
     #[test]

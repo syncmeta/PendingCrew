@@ -73,14 +73,15 @@ pub struct Attachment {
     pub filename: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     /// 全库单调递增的序号；客户端用它增量拉取。
     pub seq: i64,
     pub id: String,
-    pub crew_id: String,
-    /// "user" | "session" | "captain" | "pendingcrew" | 旧数据里的 "human"
+    /// 归属的群（spec §17）：大厅是 `<crewId>/lobby`。
+    pub channel_id: String,
+    /// "human" | "session" | "captain" | "system"（v3 归一后的词表；Task 4 换成枚举）
     pub sender_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_session_id: Option<String>,
