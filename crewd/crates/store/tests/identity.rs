@@ -272,8 +272,12 @@ fn a_stale_wal_cannot_lend_its_identity_to_a_swapped_db() {
          INSERT INTO meta(key,value) VALUES('probe','x');",
         scratch.path(),
     );
-    remove_db(a.path());
-    std::fs::copy(b.path().join(DB_FILE), a.path().join(DB_FILE)).unwrap();
+    // `cp b a` 式的覆盖：同一个文件（inode 不变）、内容换成 B——inode 判据看不出来，只能靠只读主文件的偷看。
+    std::fs::write(
+        a.path().join(DB_FILE),
+        std::fs::read(b.path().join(DB_FILE)).unwrap(),
+    )
+    .unwrap();
     std::fs::copy(&wal, side(a.path(), "-wal")).unwrap();
     std::fs::copy(&shm, side(a.path(), "-shm")).unwrap();
     let main_before = std::fs::read(a.path().join(DB_FILE)).unwrap();
@@ -281,13 +285,7 @@ fn a_stale_wal_cannot_lend_its_identity_to_a_swapped_db() {
     let err = Store::open_data_dir(a.path())
         .err()
         .expect("换进来的库不能借旧 WAL 的身份");
-    assert!(
-        matches!(
-            err,
-            StoreError::DbIdMismatch { .. } | StoreError::DbReplaced { .. }
-        ),
-        "{err:?}"
-    );
+    assert!(matches!(err, StoreError::DbIdMismatch { .. }), "{err:?}");
     assert_eq!(std::fs::read(a.path().join(DB_FILE)).unwrap(), main_before);
     assert_eq!(std::fs::read(side(a.path(), "-wal")).unwrap(), wal_before);
 }
