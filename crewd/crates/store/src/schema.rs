@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 pub const SCHEMA_VERSION: i64 = 3;
 
-const V1: &str = r#"
+pub(crate) const V1: &str = r#"
 BEGIN;
 CREATE TABLE meta(
   key TEXT PRIMARY KEY,
@@ -93,7 +93,7 @@ COMMIT;
 /// v2（M2b，spec §16）：执行器类型字段。`sessions.agent_kind` 改名 `executor`、
 /// `crews.captain_agent_kind` 改名 `captain_executor`，词表改成 `claude` / `codex` /
 /// `acp:<registry-id>`；旧数据里的 `terminal` / `unknown` 原样保留。
-const V2: &str = r#"
+pub(crate) const V2: &str = r#"
 BEGIN;
 ALTER TABLE sessions RENAME COLUMN agent_kind TO executor;
 UPDATE sessions SET executor='claude' WHERE executor='claude_code';

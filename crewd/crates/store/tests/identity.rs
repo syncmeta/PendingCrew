@@ -108,6 +108,10 @@ fn a_foreign_sqlite_file_is_refused() {
         .err()
         .expect("别人的库不能碰");
     assert!(err.to_string().contains("不是 crewd"), "{err}");
+    // M1：拒绝之前什么 pragma 都没设：还是回滚日志模式（文件头第 18、19 字节 = 1），没有 -wal。
+    let header = std::fs::read(d.path().join(DB_FILE)).unwrap();
+    assert_eq!((header[18], header[19]), (1, 1), "没被改成 WAL");
+    assert!(!d.path().join("crewd.db-wal").exists());
     let c = rusqlite::Connection::open(d.path().join(DB_FILE)).unwrap();
     let n: i64 = c
         .query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get(0))
@@ -123,4 +127,91 @@ fn a_foreign_sqlite_file_is_refused() {
         .err()
         .expect("别的程序标过的库不能碰");
     assert!(err.to_string().contains("不是 crewd"), "{err}");
+}
+
+fn sidecars(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+/// 复审 1：有人把迁移前快照（旧版本、没有 dbId）`cp` 回 crewd.db。必须在打开之前就拒绝：
+/// 不设 pragma、不迁移、不补 dbId，文件一个字节都不动；提示怎么恢复 / 认领。
+#[test]
+fn an_id_less_old_db_copied_in_is_refused_before_anything_touches_it() {
+    let d = tempfile::tempdir().unwrap();
+    db_id(d.path());
+    remove_db(d.path());
+    let db = d.path().join(DB_FILE);
+    crewd_store::testing::write_v2_db(&db);
+    let before = std::fs::read(&db).unwrap();
+    let names_before = sidecars(d.path());
+    let err = Store::open_data_dir(d.path())
+        .err()
+        .expect("没有 dbId 的库不能顶替");
+    assert!(matches!(err, StoreError::DbUnmarked { .. }), "{err:?}");
+    let msg = err.to_string();
+    for want in ["crewd restore --from", ID_FILE, "crewd.db.replaced-"] {
+        assert!(msg.contains(want), "缺 {want}：{msg}");
+    }
+    assert_eq!(std::fs::read(&db).unwrap(), before, "字节不动");
+    assert_eq!(
+        sidecars(d.path()),
+        names_before,
+        "不建 -wal / -shm / backups"
+    );
+}
+
+#[test]
+fn an_id_less_current_db_copied_in_is_refused_too() {
+    let d = tempfile::tempdir().unwrap();
+    db_id(d.path());
+    let other = tempfile::tempdir().unwrap();
+    {
+        let s = Store::open(&other.path().join(DB_FILE)).unwrap();
+        s.conn()
+            .execute("DELETE FROM meta WHERE key='dbId'", [])
+            .unwrap();
+    }
+    remove_db(d.path());
+    std::fs::copy(other.path().join(DB_FILE), d.path().join(DB_FILE)).unwrap();
+    let err = Store::open_data_dir(d.path())
+        .err()
+        .expect("没有 dbId 的库不能顶替");
+    assert!(matches!(err, StoreError::DbUnmarked { .. }), "{err:?}");
+}
+
+/// id 文件在、库文件却是空的（0 字节）：等于库丢了，不在里面建表。
+#[test]
+fn an_empty_db_file_next_to_the_id_file_counts_as_missing() {
+    let d = tempfile::tempdir().unwrap();
+    db_id(d.path());
+    remove_db(d.path());
+    std::fs::write(d.path().join(DB_FILE), b"").unwrap();
+    let err = Store::open_data_dir(d.path()).err().expect("空文件 = 丢了");
+    assert!(matches!(err, StoreError::DbMissing { .. }), "{err:?}");
+    assert_eq!(std::fs::metadata(d.path().join(DB_FILE)).unwrap().len(), 0);
+}
+
+/// 换进来的库标识对不上时，提示同样要说清怎么办。
+#[test]
+fn the_mismatch_message_says_what_to_do() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    db_id(a.path());
+    db_id(b.path());
+    remove_db(a.path());
+    std::fs::copy(b.path().join(DB_FILE), a.path().join(DB_FILE)).unwrap();
+    let msg = Store::open_data_dir(a.path()).err().unwrap().to_string();
+    for want in [
+        "crewd restore --from",
+        ID_FILE,
+        "crewd.db.replaced-",
+        "挪出",
+    ] {
+        assert!(msg.contains(want), "缺 {want}：{msg}");
+    }
 }

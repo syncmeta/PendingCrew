@@ -117,13 +117,26 @@ pub enum StoreError {
     /// 库换了（S24）：`crewd.db.id` 记的不是这个库。
     #[error(
         "{} 里的库（dbId {found}）不是这个数据目录原来的库（{ID_FILE} 记的是 {expected}）：可能指错了目录，\
-         或库文件被换过。拒绝启动。确实要换成它，用 crewd restore --from <那个文件>。",
-        dir.display()
+         或库文件被换过。拒绝启动，什么都没改。{}",
+        dir.display(),
+        SWAP_HELP
     )]
     DbIdMismatch {
         dir: std::path::PathBuf,
         expected: String,
         found: String,
+    },
+    /// 库换了（S24）：`crewd.db.id` 在，而 crewd.db 是一个没有 dbId 的库（典型：把迁移前快照 `cp` 回来）。
+    /// 在设任何 pragma、迁移之前就拒绝，文件不动。
+    #[error(
+        "{} 里的库没有 dbId（{ID_FILE} 记的是 {expected}）：多半是把旧库或迁移前快照直接拷了回来。\
+         拒绝启动，什么都没改。{}",
+        dir.display(),
+        SWAP_HELP
+    )]
+    DbUnmarked {
+        dir: std::path::PathBuf,
+        expected: String,
     },
     /// 迁移前的保护步骤（完整性检查、快照）没过：没有迁移，库保持原版本、原样。
     #[error("拒绝迁移（库保持 v{from}，未改动）：{source}")]
@@ -162,6 +175,11 @@ impl StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// 库被换掉时的处理办法（DbIdMismatch / DbUnmarked 共用）。
+const SWAP_HELP: &str = "要用这个文件：先把它挪出数据目录，再 crewd restore --from <挪到的路径>（会先核检、拍快照式地换进来）；\
+     或者确认它就是要用的库，删掉 crewd.db.id 让 crewd 认领它。\
+     要找回原来的库：看 backups/，以及被中断的 restore 留下的 crewd.db.replaced-*。";
+
 /// 数据目录里的库文件名。
 pub const DB_FILE: &str = "crewd.db";
 /// 库旁边的标识文件：内容 = 库 `meta.dbId`（S24）。
@@ -193,8 +211,9 @@ impl Store {
     }
 
     fn init(conn: Connection, backups: Option<std::path::PathBuf>) -> Result<Self> {
-        pin_pragmas(&conn)?;
+        // 先认人再动手（复审 M1）：别人的回滚日志库不能被 journal_mode=WAL 顺手改掉。
         refuse_foreign(&conn)?;
+        pin_pragmas(&conn)?;
         schema::migrate_guarded(&conn, backups.as_deref())?;
         mark_identity(&conn)?;
         Ok(Self { conn, backups })
@@ -224,14 +243,30 @@ impl Store {
                     why,
                 });
             }
-        } else if let (Some(expected), Some(found)) = (&recorded, peek_db_id(&db))
-            && &found != expected
-        {
-            return Err(StoreError::DbIdMismatch {
-                dir: dir.to_path_buf(),
-                expected: expected.clone(),
-                found,
-            });
+        } else if let Some(expected) = &recorded {
+            // 在任何 pragma / 迁移 / 补 dbId 之前，只读偷看一眼：换进来的库原样拒绝，一个字节都不动。
+            match peek(&db) {
+                Peek::Id(found) if &found != expected => {
+                    return Err(StoreError::DbIdMismatch {
+                        dir: dir.to_path_buf(),
+                        expected: expected.clone(),
+                        found,
+                    });
+                }
+                Peek::Id(_) | Peek::Unreadable => {}
+                Peek::Unmarked => {
+                    return Err(StoreError::DbUnmarked {
+                        dir: dir.to_path_buf(),
+                        expected: expected.clone(),
+                    });
+                }
+                Peek::Empty => {
+                    return Err(StoreError::DbMissing {
+                        dir: dir.to_path_buf(),
+                        why: format!("{DB_FILE} 是空的，而 {ID_FILE} 还在"),
+                    });
+                }
+            }
         }
         let store = Store::open(&db)?;
         let id = meta_get(store.conn(), "dbId")?
@@ -374,10 +409,44 @@ fn mark_identity(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// 不建库地偷看一眼 dbId（只读打开；打不开、没有就是 `None`，交给后面的正式打开去报错）。
-fn peek_db_id(db: &Path) -> Option<String> {
-    let c = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    meta_get(&c, "dbId").ok().flatten()
+/// 不建库、不改库地偷看一眼（只读打开）。
+enum Peek {
+    /// 有 dbId。
+    Id(String),
+    /// 是个库、有表，但没有 dbId（N4 之前的库、迁移前快照）。
+    Unmarked,
+    /// 0 字节或一张表都没有。
+    Empty,
+    /// 读不了（坏库、不是库、权限）：交给后面的正式打开去报具体的错。
+    Unreadable,
+}
+
+fn peek(db: &Path) -> Peek {
+    let Ok(c) = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return Peek::Unreadable;
+    };
+    let tables: rusqlite::Result<i64> =
+        c.query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get(0));
+    match tables {
+        Ok(0) => return Peek::Empty,
+        Ok(_) => {}
+        Err(_) => return Peek::Unreadable,
+    }
+    let has_meta: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if has_meta == 0 {
+        return Peek::Unmarked;
+    }
+    match meta_get(&c, "dbId") {
+        Ok(Some(id)) => Peek::Id(id),
+        Ok(None) => Peek::Unmarked,
+        Err(_) => Peek::Unreadable,
+    }
 }
 
 /// 「不存在」只认 NotFound；权限错误等照实报（S7 的教训：读不到 ≠ 不存在）。

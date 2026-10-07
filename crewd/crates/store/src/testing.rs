@@ -47,3 +47,15 @@ pub fn violate_a_check(conn: &rusqlite::Connection) {
     )
     .unwrap();
 }
+
+/// 一个停在 v2、有数据、没有 dbId 的库（= N4 之前的库，或它的迁移前快照）。只用合成数据。
+pub fn write_v2_db(path: &Path) {
+    let c = rusqlite::Connection::open(path).unwrap();
+    c.execute_batch(crate::schema::V1).unwrap();
+    c.execute_batch(crate::schema::V2).unwrap();
+    c.execute_batch(
+        "INSERT INTO crews(id,title,created_at,updated_at) VALUES('old','示例','t','t');
+         INSERT INTO messages(id,crew_id,sender_kind,text,created_at) VALUES('m1','old','user','示例','t');",
+    )
+    .unwrap();
+}
