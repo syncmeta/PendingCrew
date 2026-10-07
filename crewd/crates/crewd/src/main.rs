@@ -107,8 +107,9 @@ async fn run() -> anyhow::Result<()> {
             // 只拒绝非空的库；上次导入失败留下的空库允许重试。
             if !store.is_empty()? {
                 bail!(
-                    "{} 已存在且非空。导入只写新库：先把它挪走再导入。",
-                    db.display()
+                    "{} 已存在且非空。导入只写新库：先把它连同 {} 一起挪出数据目录（只挪库文件会被身份核对拦住），再导入。",
+                    db.display(),
+                    crewd_store::ID_FILE
                 );
             }
             let report = crewd_legacy::import(&src, &mut store, &dir)?;

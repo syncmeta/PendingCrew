@@ -71,6 +71,9 @@ fn import_then_serve_then_rpc() {
         .output()
         .unwrap();
     assert!(!again.status.success(), "已有库时必须拒绝导入");
+    // 复审 1：只挪 crewd.db 会被身份核对拦住（crewd.db.id 还在），提示里要说连它一起挪。
+    let hint = String::from_utf8_lossy(&again.stderr);
+    assert!(hint.contains("crewd.db.id"), "{hint}");
 
     let _d = start(data.path());
     let crews = rpc(data.path(), "crew.list", "null");
