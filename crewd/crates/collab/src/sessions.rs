@@ -20,14 +20,22 @@ pub struct NewSession {
     pub worktree: Option<String>,
 }
 
-/// session 标题最长字符数（S80）。
+/// session 标题最长字符数（S80）。数的是 Unicode 码点（`chars().count()`），不是字素簇、也不是显示宽度：
+/// 一个带组合符的字或一个 emoji 序列可能占好几个；一个汉字占 1 个、但显示宽度是 2。
 pub const TITLE_MAX_CHARS: usize = 18;
 
-/// 没给标题时从 brief 派生：第一条去空白后非空的行，内部空白压成一个空格，取前 `TITLE_MAX_CHARS` 个字符。
+/// 标题只算看得见的字（Task 8 复审）：去掉零宽 / 双向控制这类看不见的字符（`render::visible`，换行压成空格），
+/// 内部空白压成一个空格、去掉首尾；剩下为空 = 没有标题。
+fn visible_title(s: &str) -> Option<String> {
+    let v = crate::render::visible(s);
+    let squeezed = v.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!squeezed.is_empty()).then_some(squeezed)
+}
+
+/// 没给标题时从 brief 派生：第一条有看得见的字的行（`visible_title`），取前 `TITLE_MAX_CHARS` 个字符。
 pub(crate) fn title_from_brief(brief: &str) -> Option<String> {
-    let line = brief.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let squeezed = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    Some(squeezed.chars().take(TITLE_MAX_CHARS).collect())
+    let line = brief.lines().find_map(visible_title)?;
+    Some(line.chars().take(TITLE_MAX_CHARS).collect())
 }
 
 pub fn valid_executor(e: &str) -> bool {
@@ -101,8 +109,8 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
             n.executor
         )));
     }
-    let title = match n.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        Some(t) if t.chars().count() <= TITLE_MAX_CHARS => t.to_string(),
+    let title = match n.title.as_deref().and_then(visible_title) {
+        Some(t) if t.chars().count() <= TITLE_MAX_CHARS => t,
         Some(t) => {
             return Err(CollabError::Invalid(format!(
                 "session 标题最长 {TITLE_MAX_CHARS} 个字（现在 {} 个）；写短一点，细节放进 brief",
@@ -356,6 +364,52 @@ mod tests {
         assert_eq!(
             ok18.title.as_deref(),
             Some("一二三四五六七八九十甲乙丙丁戊己庚辛")
+        );
+    }
+
+    /// Task 8 复审：标题按「看得见的」字算——零宽 / 双向控制这类看不见的字符去掉后为空 = 没给标题
+    /// （退回 brief，两者都没有 = 要标题）；brief 里只有看不见字符的行跳过。
+    #[test]
+    fn an_invisible_title_counts_as_no_title() {
+        let mut s = store();
+        let got = ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    title: Some("\u{200B}\u{202E} \u{FEFF}".into()),
+                    brief: Some("\u{200B}\u{2066}\n  修\u{200B}滚动  条\n".into()),
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert_eq!(got.title.as_deref(), Some("修滚动 条"));
+        let e = err(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    title: Some("\u{200D}".into()),
+                    brief: Some("\u{200B}\n\u{FEFF}".into()),
+                    ..worker("crew-a")
+                },
+            )
+        });
+        match e {
+            CollabError::Invalid(m) => assert!(m.contains("要有标题"), "{m}"),
+            e => panic!("{e:?}"),
+        }
+        let kept = ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    title: Some(" 修\u{200B}滚动 ".into()),
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert_eq!(
+            kept.title.as_deref(),
+            Some("修滚动"),
+            "给的标题也去掉看不见的字符"
         );
     }
 

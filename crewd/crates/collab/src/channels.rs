@@ -61,7 +61,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
 /// 取一个群。大厅 / 人类群的 `owner` 不是存的，而是**此刻机组的机长**（跟着机长走）。
 ///
 /// 不变式「owner ∈ members」只对**活着的**群成立：人类群的成员 = home 机组的机长 + 发过言的 session；
-/// 机组被收编后不再是 home，它已归档的人类群留作历史，`owner` 仍显示原机长（给人看的名字），但他不再是成员
+/// 机组被收编后不再是 home，它已归档的人类群留作历史，`owner` 仍显示该机组此刻的机长（给人看的名字），但他不再是成员
 /// （[`is_member`] 为假）、也不能往里发言（`messages::post` 拒绝）。别拿 owner 当成员 / 权限的依据。
 pub fn get(conn: &Connection, id: &str) -> Result<Channel> {
     let r = conn
