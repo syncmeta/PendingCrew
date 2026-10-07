@@ -59,3 +59,26 @@ pub fn write_v2_db(path: &Path) {
     )
     .unwrap();
 }
+
+/// 造一份「崩溃留下的」非空 WAL：在 `db` 上提交 `sql`（不做检查点），连接还开着时把 -wal / -shm 拷出来，
+/// 返回拷出来的两份（关连接时 SQLite 会把原来的折回去删掉，拷出来的这两份就是崩溃时留在盘上的样子）。
+pub fn crash_left_wal(
+    db: &Path,
+    sql: &str,
+    out_dir: &Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let c = rusqlite::Connection::open(db).unwrap();
+    c.execute_batch("PRAGMA wal_autocheckpoint=0").unwrap();
+    c.execute_batch(sql).unwrap();
+    let wal = out_dir.join("stale-wal");
+    let shm = out_dir.join("stale-shm");
+    let side = |s: &str| {
+        let mut p = db.as_os_str().to_owned();
+        p.push(s);
+        std::path::PathBuf::from(p)
+    };
+    std::fs::copy(side("-wal"), &wal).unwrap();
+    std::fs::copy(side("-shm"), &shm).unwrap();
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+    (wal, shm)
+}

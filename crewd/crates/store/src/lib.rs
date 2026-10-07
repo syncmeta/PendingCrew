@@ -106,7 +106,9 @@ pub enum StoreError {
     /// 数据目录里该有库却没有（S24）：拒绝启动，不新建空库。
     #[error(
         "数据目录 {} 里的库 {DB_FILE} 不见了（{why}）。crewd 不会新建一个空库顶替它。\
-         从备份恢复：crewd restore --from <{}/ 里的某个文件>；确认要从零开始，就先把 {ID_FILE} 和 backups/ 挪走。",
+         从备份恢复：crewd restore --from <{}/ 里的某个文件>（会把残留的 crewd.db-wal / crewd.db-shm 一起挪开）；\
+         自己挪文件时，crewd.db 一定连同它的 -wal / -shm 一起挪，否则旧 WAL 会被回放到别的库上。\
+         确认要从零开始，就先把 {ID_FILE}、crewd.db-wal / -shm 和 backups/ 挪走。",
         dir.display(),
         dir.join(backup::BACKUPS_DIR).display()
     )]
@@ -176,7 +178,7 @@ impl StoreError {
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 /// 库被换掉时的处理办法（DbIdMismatch / DbUnmarked 共用）。
-const SWAP_HELP: &str = "要用这个文件：先把它挪出数据目录，再 crewd restore --from <挪到的路径>（会先核检、拍快照式地换进来）；\
+const SWAP_HELP: &str = "要用这个文件：先把它（连同同名的 -wal / -shm）挪出数据目录，再 crewd restore --from <挪到的路径>（会先核检、拍快照式地换进来）；\
      或者确认它就是要用的库，删掉 crewd.db.id 让 crewd 认领它。\
      要找回原来的库：看 backups/，以及被中断的 restore 留下的 crewd.db.replaced-*。";
 

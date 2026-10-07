@@ -44,6 +44,10 @@ fn a_missing_db_with_an_id_file_refuses_to_start_and_creates_nothing() {
         .expect("库丢了必须拒绝");
     assert!(matches!(err, StoreError::DbMissing { .. }), "{err:?}");
     assert!(err.to_string().contains("crewd restore"), "{err}");
+    assert!(
+        err.to_string().contains("-wal"),
+        "要说连 -wal / -shm 一起挪：{err}"
+    );
     assert!(!d.path().join(DB_FILE).exists(), "不能顺手建出空库");
 }
 
@@ -211,6 +215,7 @@ fn the_mismatch_message_says_what_to_do() {
         ID_FILE,
         "crewd.db.replaced-",
         "挪出",
+        "-wal",
     ] {
         assert!(msg.contains(want), "缺 {want}：{msg}");
     }

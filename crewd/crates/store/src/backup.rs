@@ -576,27 +576,32 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     ensure_ok(&open_for_check(from)?, Check::Integrity)?;
     let src_id = crate::meta_get(&src, "dbId")?;
 
-    let replaced = if db.exists() {
+    let side = |suffix: &str| data_dir.join(format!("{}{suffix}", crate::DB_FILE));
+    let db_present = db.exists();
+    if db_present {
         // 先把 WAL 折回主库，挪走的那份自成一体；做不成也照样连 -wal / -shm 一起挪（名字跟着改）。
         if let Ok(c) = open_for_checkpoint(&db) {
             let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         }
-        let aside = data_dir.join(format!(
-            "{}.replaced-{}",
-            crate::DB_FILE,
-            stamp_from_ms(crate::now_ms())
-        ));
-        if aside.exists() {
-            return Err(StoreError::Invalid(format!("{} 已存在", aside.display())));
+    }
+    let aside = data_dir.join(format!(
+        "{}.replaced-{}",
+        crate::DB_FILE,
+        stamp_from_ms(crate::now_ms())
+    ));
+    if aside.exists() {
+        return Err(StoreError::Invalid(format!("{} 已存在", aside.display())));
+    }
+    // 不管库文件在不在，残留的 -wal / -shm 一律挪开（复审 2 轮 2）：库不在时崩溃留下的旧 WAL
+    // 会被 SQLite 回放到恢复出来的新文件上，把它弄坏。
+    for suffix in ["-wal", "-shm"] {
+        if side(suffix).exists() {
+            let mut to = aside.as_os_str().to_owned();
+            to.push(suffix);
+            fsutil::rename_durably(&side(suffix), Path::new(&to))?;
         }
-        for suffix in ["-wal", "-shm"] {
-            let side = data_dir.join(format!("{}{suffix}", crate::DB_FILE));
-            if side.exists() {
-                let mut to = aside.as_os_str().to_owned();
-                to.push(suffix);
-                fsutil::rename_durably(&side, Path::new(&to))?;
-            }
-        }
+    }
+    let replaced = if db_present {
         fsutil::rename_durably(&db, &aside)?;
         Some(aside)
     } else {

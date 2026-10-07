@@ -491,3 +491,50 @@ fn stale_temp_files_of_dead_processes_are_swept() {
     t.stop();
     assert!(!dead.exists());
 }
+
+/// 复审 2 轮 2（数据损坏路径）：crewd.db 不在、但崩溃留下的非空 -wal / -shm 还在。restore 必须先把它们
+/// 挪到一边（同样的 replaced-* 名字），否则 SQLite 会把旧 WAL 回放到恢复出来的文件上。
+#[test]
+fn restore_moves_a_crash_left_wal_aside_even_when_the_db_is_gone() {
+    let d = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let db = d.path().join(DB_FILE);
+    let src = {
+        let s = Store::open_data_dir(d.path()).unwrap();
+        add_crew(&s, "a");
+        backup_of(d.path())
+    };
+    let (wal, shm) = crewd_store::testing::crash_left_wal(
+        &db,
+        "INSERT INTO crews(id,title,created_at,updated_at,position) VALUES('z','崩溃前写的','t','t',99);
+         DELETE FROM crews WHERE id='a';",
+        scratch.path(),
+    );
+    for f in ["crewd.db", "crewd.db-wal", "crewd.db-shm"] {
+        let _ = std::fs::remove_file(d.path().join(f));
+    }
+    std::fs::copy(&wal, d.path().join("crewd.db-wal")).unwrap();
+    std::fs::copy(&shm, d.path().join("crewd.db-shm")).unwrap();
+
+    let r = backup::restore(d.path(), &src).unwrap();
+    assert!(r.replaced.is_none(), "原来没有库文件");
+    let names = files(d.path());
+    assert!(
+        names
+            .iter()
+            .any(|n| n.starts_with("crewd.db.replaced-") && n.ends_with("-wal")),
+        "旧 WAL 挪到一边留着：{names:?}"
+    );
+    let s = Store::open_data_dir(d.path()).unwrap();
+    assert!(
+        backup::check(s.conn(), backup::Check::Integrity)
+            .unwrap()
+            .is_empty()
+    );
+    let ids: Vec<String> = crews::list(s.conn())
+        .unwrap()
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(ids, ["a"], "是备份里的数据，没有被旧 WAL 改过");
+}
