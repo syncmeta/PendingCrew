@@ -37,7 +37,7 @@ enum Cmd {
         #[arg(long)]
         from: PathBuf,
     },
-    /// 检查库的完整性（integrity_check + foreign_key_check；只读，serve 在跑也行）。只报告，不修、不删
+    /// 检查库的完整性（integrity_check + foreign_key_check；不改数据，serve 在跑也行）。只报告，不修、不删
     Check {
         /// 只跑 quick_check（快，不核索引内容）
         #[arg(long)]

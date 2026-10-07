@@ -232,8 +232,28 @@ pub fn open_for_check(db: &Path) -> Result<Connection> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
+    durable(&c)?;
     c.execute_batch("PRAGMA query_only=ON")?;
     Ok(c)
+}
+
+/// restore 挪走旧库之前做检查点用的连接（READ_WRITE、不带 CREATE）。
+pub(crate) fn open_for_checkpoint(db: &Path) -> Result<Connection> {
+    require_file(db)?;
+    let c = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    c.busy_timeout(std::time::Duration::from_secs(5))?;
+    durable(&c)?;
+    Ok(c)
+}
+
+/// 能写库文件的第二连接也要和库线程同一档落盘（复审 2）：它若是最后一个关的，关的时候会把 WAL
+/// 检查点进主库——那是唯一那份数据。
+fn durable(c: &Connection) -> Result<()> {
+    c.execute_batch(&format!(
+        "PRAGMA synchronous=FULL; PRAGMA checkpoint_fullfsync=ON; PRAGMA fullfsync={};",
+        if crate::FULLFSYNC { "ON" } else { "OFF" }
+    ))?;
+    Ok(())
 }
 
 /// 在线备份（S21 / S32）：自己开一条只读连接做 `VACUUM INTO`，不占库线程；快照后过 `quick_check`。
@@ -491,8 +511,7 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
 
     let replaced = if db.exists() {
         // 先把 WAL 折回主库，挪走的那份自成一体；做不成也照样连 -wal / -shm 一起挪（名字跟着改）。
-        if let Ok(c) = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-        {
+        if let Ok(c) = open_for_checkpoint(&db) {
             let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         }
         let aside = data_dir.join(format!(
@@ -528,4 +547,32 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
         },
     }
     Ok(RestoreReport { replaced })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pragma(c: &Connection, name: &str) -> i64 {
+        c.query_row(&format!("PRAGMA {name}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// 复审 2：会写库文件的第二连接（检查连接关掉时如果它是最后一个，会把 WAL 检查点进唯一那份库；
+    /// restore 前的检查点连接）也要 F_FULLFSYNC，不能退回编译期默认。
+    #[test]
+    fn second_connections_that_may_checkpoint_are_durable() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("crewd.db");
+        drop(crate::Store::open(&db).unwrap());
+        for c in [
+            open_for_check(&db).unwrap(),
+            open_for_checkpoint(&db).unwrap(),
+        ] {
+            assert_eq!(pragma(&c, "synchronous"), 2);
+            assert_eq!(pragma(&c, "fullfsync"), crate::FULLFSYNC as i64);
+            assert_eq!(pragma(&c, "checkpoint_fullfsync"), 1);
+        }
+        assert_eq!(pragma(&open_for_check(&db).unwrap(), "query_only"), 1);
+    }
 }
