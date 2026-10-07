@@ -266,8 +266,10 @@ pub trait Port: Send + Sync + 'static {
     /// 一批的终局，**一次调用、一个事务**（C24）：送到 = 行 + 随批行 + 游标一起提交；没送到 = 全部行一起退避或放弃。
     /// `Err` = 什么都没改（那几行仍是 inflight，由重启时的回收接走）。
     fn ack(&self, b: &Batch, a: Ack) -> impl Future<Output = Result<Acked>> + Send;
-    /// 启动时：全部 inflight 退回 pending（表里的 `Requeue`，退回 claim 那一次；C25 由 Task 9 改成算一次尝试）。
-    fn requeue_inflight(&self) -> impl Future<Output = Result<usize>> + Send;
+    /// 启动时：上次没确认的全部 inflight 按一次失败的尝试结算（C25；M3a `wakes::reset_inflight`）——次数不退回，
+    /// 按库里的次数问 `crewd_wake::queue::after_restart(n, now)`：没到上限立刻回 pending（`not_before = now`），
+    /// 到了上限放弃（dropped，记 `error`）。一个事务；返回同 [`Port::ack`] 的 `Failed`（`retried` / `gave_up`）。
+    fn fail_inflight(&self, error: &str, now: Ms) -> impl Future<Output = Result<Acked>> + Send;
     /// 有到期 pending 的 session：按其中最高优先级降序、再按最早一条的 id 升序。
     fn due_sessions(&self, now: Ms) -> impl Future<Output = Result<Vec<String>>> + Send;
     /// 晚于 `now` 的最早 `not_before`（已到期的不算，免得忙等）。

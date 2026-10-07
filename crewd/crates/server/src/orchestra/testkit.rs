@@ -488,7 +488,7 @@ impl Port for MemPort {
         }
     }
 
-    async fn requeue_inflight(&self) -> Result<usize> {
+    async fn fail_inflight(&self, _error: &str, now: Ms) -> Result<Acked> {
         let mut st = self.lock();
         let ids: Vec<i64> = st
             .wakes
@@ -496,8 +496,27 @@ impl Port for MemPort {
             .filter(|w| w.state == WakeState::Inflight)
             .map(|w| w.id)
             .collect();
-        apply_event(&mut st.wakes, &ids, lifecycle::WakeEvent::Requeue)?;
-        Ok(ids.len())
+        // 同 collab `reset_inflight`：先全部核过（按真正要用的事件），再写；按库里的次数判。
+        let mut wakes = st.wakes.clone();
+        let mut out = Acked::default();
+        for id in ids {
+            let attempts = wakes.iter().find(|w| w.id == id).expect("刚选的").attempts;
+            match crewd_wake::queue::after_restart(attempts, now) {
+                Some(t) => {
+                    let fail = lifecycle::WakeEvent::Fail {
+                        retry_at: Some(t.0),
+                    };
+                    apply_event(&mut wakes, &[id], fail)?;
+                    out.retried.push((id, t));
+                }
+                None => {
+                    apply_event(&mut wakes, &[id], lifecycle::WakeEvent::GiveUp)?;
+                    out.gave_up.push(id);
+                }
+            }
+        }
+        st.wakes = wakes;
+        Ok(out)
     }
 
     async fn due_sessions(&self, now: Ms) -> Result<Vec<String>> {
@@ -1331,8 +1350,36 @@ mod self_tests {
         };
         p.claim(&batch).await.unwrap();
         assert!(p.pending("a").await.unwrap().is_empty());
-        assert_eq!(p.requeue_inflight().await.unwrap(), 1);
+        let acked = p.fail_inflight("合成：重启", Ms(5)).await.unwrap();
+        assert_eq!(acked.retried, [(1, Ms(5))]);
         assert_eq!(p.pending("a").await.unwrap().len(), 1);
+    }
+
+    /// C25：启动回收算一次尝试——按库里的次数（`crewd_wake::queue::after_restart`），没到上限立刻再试、到了上限放弃。
+    #[tokio::test]
+    async fn mem_port_fail_inflight_counts_the_attempt_and_gives_up_at_the_limit() {
+        let p = MemPort::new();
+        let (a, b, c) = (
+            row_in(&p, WakeState::Pending),
+            row_in(&p, WakeState::Pending),
+            row_in(&p, WakeState::Pending),
+        );
+        p.claim(&batch_of(&p, &[a, b], &[], &[])).await.unwrap();
+        p.lock().wakes[1].attempts = queue::MAX_ATTEMPTS;
+        let acked = p.fail_inflight("合成：重启", Ms(9)).await.unwrap();
+        assert_eq!(acked.retried, [(a, Ms(9))]);
+        assert_eq!(acked.gave_up, [b]);
+        let w = p.lock().wakes.clone();
+        assert_eq!(
+            (w[0].state, w[0].attempts, w[0].not_before),
+            (WakeState::Pending, 1, Ms(9))
+        );
+        assert_eq!(w[1].state, WakeState::Dropped);
+        assert_eq!(
+            (w[2].id, w[2].state),
+            (c, WakeState::Pending),
+            "pending 的不动"
+        );
     }
 
     fn msg(st: &mut MemState, ch: &str, seq: i64, sender: Sender, mentions: Vec<Mention>) {

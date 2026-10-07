@@ -458,11 +458,16 @@ pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64) -> Result<usize> {
     )?)
 }
 
-/// 启动时：上次没确认的 inflight 全部退回 pending（spec §22.4「重启时 inflight 退回 pending」），走表里的 `Requeue`：
-/// 退回 `claim` 记的那一次，所以这次重启不算一次尝试（C25：Task 9 改成算一次，让弄崩 crewd 的唤醒有上限）。
-/// 只在启动时调（运行期的退回是 `requeue`、失败是 `ack_failed`）。语义是至少一次：上次可能已经投出去只是没来得及记，
-/// 所以会再投一遍。delivered / dropped 不动。
-pub fn reset_inflight(tx: &mut Tx<'_>) -> Result<usize> {
+/// 启动时：上次没确认的 inflight 全部按「一次失败的尝试」结算（spec §22.4「重启时 inflight 退回 pending」；C25）：
+/// 跟 [`ack_failed`] 同一条路——**不退回** `claim` 记的那一次，按库里的次数问 `decide`（M3c 给
+/// `crewd_wake::queue::after_restart`：没到上限立刻再试、到了上限放弃），所以一条每次都把 crewd 弄崩的唤醒到上限就
+/// 放弃，不无限重投。只在启动时调（运行期的退回是 `requeue`、失败是 `ack_failed`）。语义是至少一次：上次可能已经
+/// 投出去只是没来得及记，所以会再投一遍。delivered / dropped / pending 不动。
+pub fn reset_inflight(
+    tx: &mut Tx<'_>,
+    error: &str,
+    decide: impl Fn(u32) -> Option<i64>,
+) -> Result<Vec<Failed>> {
     let ids: Vec<i64> = {
         let mut st = tx
             .conn()
@@ -470,8 +475,7 @@ pub fn reset_inflight(tx: &mut Tx<'_>) -> Result<usize> {
         st.query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<Vec<i64>>>()?
     };
-    requeue(tx, &ids)?;
-    Ok(ids.len())
+    ack_failed(tx, &ids, error, decide)
 }
 
 /// 某个目标 `since_ms` 之后入队的全部唤醒（任何状态），按入队先后。熔断判定读它（§22.7 Q5）。
@@ -993,7 +997,8 @@ mod tests {
         let mut s = store();
         let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
         ok(&mut s, |tx| claim(tx, &ids));
-        assert_eq!(ok(&mut s, reset_inflight), 2);
+        let failed = ok(&mut s, |tx| reset_inflight(tx, "重启", |_| Some(NOW)));
+        assert_eq!(failed.len(), 2);
         assert_eq!(due_for(s.conn(), "w-a1", NOW).unwrap().len(), 2);
     }
 
@@ -1062,24 +1067,48 @@ mod tests {
         assert!(latches::get(s.conn(), &edge).unwrap().is_none());
     }
 
+    /// C25：重启回收**算一次尝试**（不退回 claim 那一次）：一条把 crewd 弄崩的唤醒到上限就放弃，不无限重投。
+    /// 按库里的次数问 `decide`；delivered / dropped 不动。
     #[test]
-    fn reset_inflight_leaves_settled_rows_and_does_not_count_an_attempt() {
+    fn reset_inflight_counts_the_attempt_and_leaves_settled_rows() {
         let mut s = store();
-        let ids = new_ids(&mut s, &["msg:1", "msg:2", "msg:3"]);
+        let ids = new_ids(&mut s, &["msg:1", "msg:2", "msg:3", "msg:4"]);
         ok(&mut s, |tx| claim(tx, &ids[..1]));
         ok(&mut s, |tx| {
             ack_failed(tx, &ids[..1], "没就绪", |_| Some(NOW))
         });
         ok(&mut s, |tx| claim(tx, &ids[..1]));
+        ok(&mut s, |tx| claim(tx, &ids[3..]));
         ok(&mut s, |tx| mark_delivered(tx, &ids[1..2]));
         ok(&mut s, |tx| mark_dropped(tx, ids[2], "游标已越过"));
         let before = by_ids(s.conn(), &ids).unwrap();
-        assert_eq!(ok(&mut s, reset_inflight), 1, "只动 inflight 那一条");
-        let after = by_ids(s.conn(), &ids).unwrap();
-        assert_eq!(after[0].state, WakeState::Pending);
+        // 第 2 次的那条到了「上限」（这里上限 = 2）就放弃；第 1 次的那条立刻再试。
+        let failed = ok(&mut s, |tx| {
+            reset_inflight(tx, "crewd 重启", |n| (n < 2).then_some(NOW))
+        });
         assert_eq!(
-            after[0].attempts, 1,
-            "重启退回不算一次尝试（退掉这次 claim）"
+            failed,
+            [
+                Failed {
+                    id: ids[0],
+                    attempts: 2,
+                    retry_at_ms: None
+                },
+                Failed {
+                    id: ids[3],
+                    attempts: 1,
+                    retry_at_ms: Some(NOW)
+                },
+            ],
+            "只动 inflight 那两条，按库里的次数"
+        );
+        let after = by_ids(s.conn(), &ids).unwrap();
+        assert_eq!((after[0].state, after[0].attempts), (WakeState::Dropped, 2));
+        assert_eq!(after[0].last_error.as_deref(), Some("crewd 重启"));
+        assert_eq!(
+            (after[3].state, after[3].attempts),
+            (WakeState::Pending, 1),
+            "重启算一次尝试（不退回 claim 那一次）"
         );
         assert_eq!(after[1], before[1], "delivered 原样");
         assert_eq!(after[2], before[2], "dropped 原样");

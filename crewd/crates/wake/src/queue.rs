@@ -69,6 +69,13 @@ pub fn after_failure(attempts: u32, now: Ms, jitter: f64) -> Option<Ms> {
         .map(|d| now.add((*d as f64 * (1.0 + j)).round() as i64))
 }
 
+/// 启动时回收上次没确认的 inflight（C25）：那一次尝试**算数**（`attempts` 是库里记的、含那一次）。没到上限 =
+/// 立刻再试（`Some(now)`：重启不是投递出错，不退避）；到了上限 = 放弃（记 dropped、告警一次）——一条每次投都把
+/// crewd 弄崩的唤醒不会无限重投。
+pub fn after_restart(attempts: u32, now: Ms) -> Option<Ms> {
+    (attempts < MAX_ATTEMPTS).then_some(now)
+}
+
 /// 退避抖动的来源：splitmix64，种子由调用方给（serve 用启动时刻，测试用固定值）——不引第三方 crate、不读时钟。
 #[derive(Clone, Debug)]
 pub struct Jitter {
@@ -169,6 +176,17 @@ mod tests {
             ids(&select_batch(&pending, Ms(10), &BatchLimits::default())),
             [2]
         );
+    }
+
+    /// C25：重启时还没确认的那次尝试算数——没到上限就立刻再试（`now`，不退避：重启不是投递出错），
+    /// 到了上限就放弃（一条把 crewd 弄崩的唤醒不会无限重投）。
+    #[test]
+    fn a_restart_retries_at_once_until_the_attempt_limit() {
+        for n in 0..MAX_ATTEMPTS {
+            assert_eq!(after_restart(n, Ms(7)), Some(Ms(7)), "第 {n} 次");
+        }
+        assert_eq!(after_restart(MAX_ATTEMPTS, Ms(7)), None);
+        assert_eq!(after_restart(MAX_ATTEMPTS + 1, Ms(7)), None);
     }
 
     #[test]
