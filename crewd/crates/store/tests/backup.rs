@@ -257,7 +257,9 @@ fn restore_moves_the_current_db_aside_and_brings_the_backup_back() {
     assert_eq!(
         std::fs::read_to_string(d.path().join(ID_FILE))
             .unwrap()
-            .trim(),
+            .lines()
+            .next()
+            .unwrap(),
         id
     );
     assert!(src.exists(), "备份文件本身不动");

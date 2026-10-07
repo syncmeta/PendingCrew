@@ -140,6 +140,15 @@ pub enum StoreError {
         dir: std::path::PathBuf,
         expected: String,
     },
+    /// 库文件换过了（inode 和 `crewd.db.id` 记的不一样），而旁边还有一份非空的 -wal：那份 WAL 属于原来的
+    /// 文件，回放到换进来的文件上会把它弄坏（复审 2 轮 3）。拒绝，什么都不动。
+    #[error(
+        "{} 里的 crewd.db 换过了（不是 {ID_FILE} 记下的那个文件），而旁边还留着一份非空的 crewd.db-wal——\
+         它属于原来的文件，不能回放到换进来的文件上。拒绝启动，什么都没改。{}",
+        dir.display(),
+        SWAP_HELP
+    )]
+    DbReplaced { dir: std::path::PathBuf },
     /// 迁移前的保护步骤（完整性检查、快照）没过：没有迁移，库保持原版本、原样。
     #[error("拒绝迁移（库保持 v{from}，未改动）：{source}")]
     MigrationRefused { from: i64, source: Box<StoreError> },
@@ -230,7 +239,8 @@ impl Store {
     pub fn open_data_dir(dir: &Path) -> Result<Self> {
         let db = dir.join(DB_FILE);
         let id_path = dir.join(ID_FILE);
-        let recorded = read_id_file(&id_path)?;
+        let record = read_id_file(&id_path)?;
+        let recorded = record.as_ref().map(|r| r.id.clone());
         if !exists_strict(&db)? {
             let why = if recorded.is_some() {
                 Some(format!("{ID_FILE} 还在"))
@@ -269,20 +279,41 @@ impl Store {
                     });
                 }
             }
+            // 复审 2 轮 3：dbId 一样也可能是换进来的旧副本。旁边有非空 WAL 时，库文件必须还是记下的那一个
+            // （inode）；换过了，那份 WAL 就不属于它，回放会把它弄坏。
+            if let Some(ino) = record.as_ref().and_then(|r| r.ino)
+                && wal_has_frames(&db)?
+                && inode_of(&db)? != ino
+            {
+                return Err(StoreError::DbReplaced {
+                    dir: dir.to_path_buf(),
+                });
+            }
         }
         let store = Store::open(&db)?;
         let id = meta_get(store.conn(), "dbId")?
             .ok_or_else(|| StoreError::Invalid("库里没有 dbId".into()))?;
-        match recorded {
-            Some(expected) if expected != id => {
-                return Err(StoreError::DbIdMismatch {
-                    dir: dir.to_path_buf(),
-                    expected,
-                    found: id,
-                });
-            }
-            Some(_) => {}
-            None => fsutil::atomic_write(&id_path, format!("{id}\n").as_bytes(), 0o600)?,
+        if let Some(expected) = recorded
+            && expected != id
+        {
+            return Err(StoreError::DbIdMismatch {
+                dir: dir.to_path_buf(),
+                expected,
+                found: id,
+            });
+        }
+        // 偷看只读主文件，所以标识文件写下之前，dbId 必须已经落进主文件：先做一次检查点（我们拿着数据目录锁，
+        // 最多有个只读的 crewd backup / check 在读）。没落进去（检查点被挡）就这次先不写，下次打开再写。
+        let _ = store
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        let ino = inode_of(&db)?;
+        let want = IdRecord {
+            id: id.clone(),
+            ino: Some(ino),
+        };
+        if record.as_ref() != Some(&want) && matches!(peek(&db), Peek::Id(ref f) if *f == id) {
+            fsutil::atomic_write(&id_path, want.render().as_bytes(), 0o600)?;
         }
         Ok(store)
     }
@@ -435,8 +466,14 @@ enum Peek {
     Unreadable,
 }
 
+/// 只读**主文件**（`immutable=1`）：不看旁边的 -wal（别的库留下的 WAL 不能替换进来的文件「作证」，
+/// 复审 2 轮 3），也不建 -wal / -shm（复审 2 轮 4）。所以 `open_data_dir` 写标识文件之前要先把 dbId
+/// 检查点进主文件。
 fn peek(db: &Path) -> Peek {
-    let Ok(c) = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+    let Ok(c) = Connection::open_with_flags(
+        file_uri(db, "immutable=1"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
         return Peek::Unreadable;
     };
     let tables: rusqlite::Result<i64> =
@@ -463,6 +500,22 @@ fn peek(db: &Path) -> Peek {
     }
 }
 
+/// `file:` URI（`%`、`?`、`#` 转义），带查询参数。
+fn file_uri(p: &Path, query: &str) -> String {
+    let mut out = String::from("file:");
+    for ch in p.to_string_lossy().chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            '?' => out.push_str("%3f"),
+            '#' => out.push_str("%23"),
+            c => out.push(c),
+        }
+    }
+    out.push('?');
+    out.push_str(query);
+    out
+}
+
 /// 「不存在」只认 NotFound；权限错误等照实报（S7 的教训：读不到 ≠ 不存在）。
 fn exists_strict(p: &Path) -> Result<bool> {
     match std::fs::symlink_metadata(p) {
@@ -472,10 +525,53 @@ fn exists_strict(p: &Path) -> Result<bool> {
     }
 }
 
-fn read_id_file(p: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(p) {
-        Ok(s) => Ok(Some(s.trim().to_string()).filter(|s| !s.is_empty())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+/// `crewd.db.id` 的内容：第一行 dbId；第二行（可选）`ino=<库文件的 inode>`，最近一次成功打开时记下。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IdRecord {
+    id: String,
+    ino: Option<u64>,
+}
+
+impl IdRecord {
+    fn render(&self) -> String {
+        match self.ino {
+            Some(ino) => format!("{}\nino={ino}\n", self.id),
+            None => format!("{}\n", self.id),
+        }
+    }
+}
+
+fn read_id_file(p: &Path) -> Result<Option<IdRecord>> {
+    let text = match std::fs::read_to_string(p) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(id) = lines.next() else {
+        return Ok(None);
+    };
+    let ino = lines
+        .find_map(|l| l.strip_prefix("ino="))
+        .and_then(|v| v.parse().ok());
+    Ok(Some(IdRecord {
+        id: id.to_string(),
+        ino,
+    }))
+}
+
+fn inode_of(p: &Path) -> Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(std::fs::metadata(p)?.ino())
+}
+
+/// 旁边的 -wal 存在且非空（里面可能有没回放的帧）。
+fn wal_has_frames(db: &Path) -> Result<bool> {
+    let mut p = db.as_os_str().to_owned();
+    p.push("-wal");
+    match std::fs::metadata(std::path::PathBuf::from(p)) {
+        Ok(m) => Ok(m.len() > 0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
     }
 }

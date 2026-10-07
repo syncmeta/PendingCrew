@@ -21,7 +21,9 @@ fn first_open_marks_the_db_and_writes_the_id_file() {
     assert_eq!(
         std::fs::read_to_string(d.path().join(ID_FILE))
             .unwrap()
-            .trim(),
+            .lines()
+            .next()
+            .unwrap(),
         id
     );
     let s = Store::open_data_dir(d.path()).unwrap();
@@ -95,7 +97,9 @@ fn a_pre_marker_db_is_adopted() {
     assert_eq!(
         std::fs::read_to_string(d.path().join(ID_FILE))
             .unwrap()
-            .trim(),
+            .lines()
+            .next()
+            .unwrap(),
         id
     );
 }
@@ -182,10 +186,13 @@ fn an_id_less_current_db_copied_in_is_refused_too() {
     }
     remove_db(d.path());
     std::fs::copy(other.path().join(DB_FILE), d.path().join(DB_FILE)).unwrap();
+    let names_before = sidecars(d.path());
     let err = Store::open_data_dir(d.path())
         .err()
         .expect("没有 dbId 的库不能顶替");
     assert!(matches!(err, StoreError::DbUnmarked { .. }), "{err:?}");
+    // 复审 2 轮 4：偷看不留 -wal / -shm（这是个 WAL 头的文件）。
+    assert_eq!(sidecars(d.path()), names_before, "偷看不建旁路文件");
 }
 
 /// id 文件在、库文件却是空的（0 字节）：等于库丢了，不在里面建表。
@@ -244,4 +251,110 @@ fn a_swapped_old_version_db_is_refused_before_it_is_migrated() {
     assert!(matches!(err, StoreError::DbIdMismatch { .. }), "{err:?}");
     assert_eq!(std::fs::read(&db).unwrap(), before, "字节不动（没迁移）");
     assert_eq!(sidecars(d.path()), names_before);
+}
+
+fn side(dir: &Path, suffix: &str) -> std::path::PathBuf {
+    dir.join(format!("{DB_FILE}{suffix}"))
+}
+
+/// 复审 2 轮 3：A 崩溃留下的 WAL（里面有 A 的 meta 页）还在，crewd.db 换成了另一个库 B。偷看要只看主文件，
+/// 不能透过 A 的 WAL 读到 A 的 dbId 而放行（放行 = 把 A 的页回放到 B 上）。拒绝，B 和旧 WAL 都不动。
+#[test]
+fn a_stale_wal_cannot_lend_its_identity_to_a_swapped_db() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    db_id(a.path());
+    db_id(b.path());
+    let (wal, shm) = crewd_store::testing::crash_left_wal(
+        &a.path().join(DB_FILE),
+        "UPDATE meta SET value=value WHERE key='dbId';
+         INSERT INTO meta(key,value) VALUES('probe','x');",
+        scratch.path(),
+    );
+    remove_db(a.path());
+    std::fs::copy(b.path().join(DB_FILE), a.path().join(DB_FILE)).unwrap();
+    std::fs::copy(&wal, side(a.path(), "-wal")).unwrap();
+    std::fs::copy(&shm, side(a.path(), "-shm")).unwrap();
+    let main_before = std::fs::read(a.path().join(DB_FILE)).unwrap();
+    let wal_before = std::fs::read(side(a.path(), "-wal")).unwrap();
+    let err = Store::open_data_dir(a.path())
+        .err()
+        .expect("换进来的库不能借旧 WAL 的身份");
+    assert!(
+        matches!(
+            err,
+            StoreError::DbIdMismatch { .. } | StoreError::DbReplaced { .. }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(std::fs::read(a.path().join(DB_FILE)).unwrap(), main_before);
+    assert_eq!(std::fs::read(side(a.path(), "-wal")).unwrap(), wal_before);
+}
+
+/// 同一个库的旧副本被 `mv` 进来（dbId 一样），而上次崩溃的 WAL 还在：库文件换过了（inode 变了），
+/// 旧 WAL 不属于它。拒绝，文件不动。
+#[test]
+fn an_older_copy_moved_in_over_a_crash_left_wal_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    db_id(d.path());
+    let older = scratch.path().join("older.db");
+    crewd_store::backup::backup_db(&d.path().join(DB_FILE), &older).unwrap();
+    let (wal, shm) = crewd_store::testing::crash_left_wal(
+        &d.path().join(DB_FILE),
+        "INSERT INTO meta(key,value) VALUES('probe','x');",
+        scratch.path(),
+    );
+    remove_db(d.path());
+    std::fs::rename(&older, d.path().join(DB_FILE)).unwrap();
+    std::fs::copy(&wal, side(d.path(), "-wal")).unwrap();
+    std::fs::copy(&shm, side(d.path(), "-shm")).unwrap();
+    let wal_before = std::fs::read(side(d.path(), "-wal")).unwrap();
+    let err = Store::open_data_dir(d.path())
+        .err()
+        .expect("旧 WAL 不属于换进来的文件");
+    assert!(matches!(err, StoreError::DbReplaced { .. }), "{err:?}");
+    assert!(err.to_string().contains("-wal"), "{err}");
+    assert_eq!(std::fs::read(side(d.path(), "-wal")).unwrap(), wal_before);
+}
+
+/// 反面：真崩溃（同一个文件、它自己的 WAL）照常打开，WAL 里的提交都在。
+#[test]
+fn a_genuine_crash_left_wal_is_recovered() {
+    let d = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    db_id(d.path());
+    let main_before_crash = std::fs::read(d.path().join(DB_FILE)).unwrap();
+    let (wal, shm) = crewd_store::testing::crash_left_wal(
+        &d.path().join(DB_FILE),
+        "INSERT INTO meta(key,value) VALUES('probe','x');",
+        scratch.path(),
+    );
+    // 关连接时 SQLite 已经把 WAL 折回去了；把崩溃时的样子摆回来：同一个文件（同 inode）的内容回到
+    // 崩溃前，WAL 放回去。probe 只在 WAL 里。
+    std::fs::write(d.path().join(DB_FILE), &main_before_crash).unwrap();
+    std::fs::copy(&wal, side(d.path(), "-wal")).unwrap();
+    std::fs::copy(&shm, side(d.path(), "-shm")).unwrap();
+    let s = Store::open_data_dir(d.path()).unwrap();
+    assert_eq!(meta_get(s.conn(), "probe").unwrap().as_deref(), Some("x"));
+}
+
+/// 第一次建库：标识文件写下之前，dbId 已经落进主文件（偷看只读主文件，所以这是前提）。
+#[test]
+fn the_db_id_reaches_the_main_file_before_the_id_file_is_written() {
+    let d = tempfile::tempdir().unwrap();
+    let s = Store::open_data_dir(d.path()).unwrap();
+    let id = meta_get(s.conn(), "dbId").unwrap().unwrap();
+    let uri = format!("file:{}?immutable=1", d.path().join(DB_FILE).display());
+    let c = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .unwrap();
+    let main: String = c
+        .query_row("SELECT value FROM meta WHERE key='dbId'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(main, id);
+    drop(s);
 }
