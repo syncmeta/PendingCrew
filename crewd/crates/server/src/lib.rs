@@ -64,10 +64,15 @@ impl AppState {
     }
 }
 
-/// 建数据目录；新建的那一级权限 0700（库里是聊天记录，别让同机其他用户读）。已存在的不动。
+/// 建数据目录，权限 0700（库里是聊天记录，别让同机其他用户读）。已存在的只收紧：去掉组和其他人的位
+/// （PM 2026-10-07）。
 pub fn ensure_data_dir(dir: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if dir.is_dir() {
+        let mode = std::fs::metadata(dir)?.permissions().mode() & 0o7777;
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode & !0o077))?;
+        }
         return Ok(());
     }
     if let Some(parent) = dir.parent() {
@@ -309,8 +314,9 @@ mod tests {
         slow.await.unwrap().unwrap();
     }
 
+    /// PM 2026-10-07：数据目录一律 0700；已有目录只收紧（去掉组和其他人的位），不放宽。
     #[test]
-    fn fresh_data_dir_is_0700_and_existing_dir_is_left_alone() {
+    fn fresh_data_dir_is_0700_and_an_existing_loose_dir_is_tightened() {
         let root = tempfile::tempdir().unwrap();
         let d = root.path().join("a/b");
         ensure_data_dir(&d).unwrap();
@@ -323,7 +329,7 @@ mod tests {
         std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
         ensure_data_dir(&existing).unwrap();
         let mode = std::fs::metadata(&existing).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
+        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
     }
 
     #[test]
