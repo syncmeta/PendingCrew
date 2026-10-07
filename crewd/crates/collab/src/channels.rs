@@ -58,6 +58,11 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     })
 }
 
+/// 取一个群。大厅 / 人类群的 `owner` 不是存的，而是**此刻机组的机长**（跟着机长走）。
+///
+/// 不变式「owner ∈ members」只对**活着的**群成立：人类群的成员 = home 机组的机长 + 发过言的 session；
+/// 机组被收编后不再是 home，它已归档的人类群留作历史，`owner` 仍显示原机长（给人看的名字），但他不再是成员
+/// （[`is_member`] 为假）、也不能往里发言（`messages::post` 拒绝）。别拿 owner 当成员 / 权限的依据。
 pub fn get(conn: &Connection, id: &str) -> Result<Channel> {
     let r = conn
         .query_row(
@@ -1485,6 +1490,39 @@ mod tests {
                 .is_none(),
             "又成了 home → 解档"
         );
+    }
+
+    /// 不变式 owner ∈ members 只对活着的群成立：已归档（不再是 home）的人类群仍显示原机长为群主（历史），
+    /// 但他不是成员、也发不了言。
+    #[test]
+    fn an_archived_human_channel_keeps_its_historical_owner_who_is_no_longer_a_member() {
+        let mut s_ = store();
+        ok(&mut s_, |tx| ensure_human_channel(tx, "crew-x"));
+        assert_eq!(
+            get(s_.conn(), "crew-x/human").unwrap().owner,
+            Some(s("cap-x"))
+        );
+        assert!(is_member(s_.conn(), "crew-x/human", &s_ref("cap-x")).unwrap());
+        ok(&mut s_, |tx| crate::crews::adopt(tx, "crew-x", "crew-a"));
+        let h = get(s_.conn(), "crew-x/human").unwrap();
+        assert!(h.archived_at.is_some());
+        assert_eq!(h.owner, Some(s("cap-x")), "归档的群留着原群主（展示用）");
+        assert!(
+            !is_member(s_.conn(), "crew-x/human", &s_ref("cap-x")).unwrap(),
+            "owner 不再是成员：不变式只管活着的群"
+        );
+        assert!(matches!(
+            err(&mut s_, |tx| crate::messages::post(
+                tx,
+                Sender::Session("cap-x".into()),
+                crate::messages::NewPost {
+                    channel_id: "crew-x/human".into(),
+                    text: "示例消息".into(),
+                    ..Default::default()
+                },
+            )),
+            CollabError::Invalid(_)
+        ));
     }
 
     #[test]
