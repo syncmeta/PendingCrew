@@ -66,6 +66,17 @@ fn backing_up_a_missing_db_does_not_create_one() {
     assert!(!d.path().join(DB_FILE).exists());
 }
 
+/// 一份合成的 pre-delete 快照（名字与 `Store::snapshot_before_purge` 拍的一样）。
+fn pre_delete(dir: &Path, what: &str, ms: i64) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let p = dir.join(format!(
+        "crewd-pre-delete-{what}-{}.db",
+        backup::stamp_from_ms(ms)
+    ));
+    std::fs::write(&p, b"d").unwrap();
+    p
+}
+
 fn auto(dir: &Path, ms: i64) -> String {
     let name = backup::auto_name(ms);
     std::fs::create_dir_all(dir).unwrap();
@@ -153,12 +164,17 @@ fn a_tick_backs_up_checks_and_rotates() {
         auto(&b, now - day * DAY);
     }
     let oldest = b.join(backup::auto_name(now - 31 * DAY));
+    // 永久删除前的快照只是安全网（PM 2026-10-07）：同一次轮转里，超过 30 天的删掉，30 天内的留着。
+    let expired = pre_delete(&b, "crew-old", now - 31 * DAY);
+    let young = pre_delete(&b, "crew-new", now - DAY);
     let r = backup::tick(&db, now, Policy::default()).unwrap();
     let made = r.backup.clone().expect("该拍了");
     assert_eq!(crew_ids(&made), ["a"]);
     assert!(r.removed.contains(&oldest), "{:?}", r.removed);
     assert!(!oldest.exists());
     assert!(made.exists());
+    assert!(r.removed.contains(&expired), "{:?}", r.removed);
+    assert!(!expired.exists() && young.exists());
     // 同一天再 tick：不重复拍。
     assert!(
         backup::tick(&db, now + 60_000, Policy::default())
@@ -189,10 +205,12 @@ fn a_tick_on_a_db_failing_quick_check_reports_and_does_not_rotate() {
     for day in 2..=31 {
         auto(&b, now - day * DAY);
     }
+    let expired = pre_delete(&b, "crew-old", now - 31 * DAY);
     let before = backup::list_auto(&b).unwrap().len();
     let r = backup::tick(&db, now, Policy::default()).unwrap();
     assert!(!r.live_problems.is_empty(), "坏处要报出来");
     assert!(r.removed.is_empty(), "库没过检查时不淘汰旧备份");
+    assert!(expired.exists(), "过期的 pre-delete 快照也不删");
     assert!(backup::list_auto(&b).unwrap().len() >= before);
     assert!(db.exists(), "绝不删库");
 }
@@ -344,9 +362,9 @@ fn a_snapshot_that_fails_its_own_quick_check_is_not_kept() {
 }
 
 /// S22（store 侧）：永久删除之前的快照落在 backups/crewd-pre-delete-{对象}-{时间}.db，名字里的对象 id
-/// 只留安全字符；内存库没有备份目录就不拍（返回 None）；这类快照不参加轮转。
+/// 只留安全字符；内存库没有备份目录就不拍（返回 None）；按份数的定时备份轮转不碰它（它按日子过期，见下）。
 #[test]
-fn a_pre_purge_snapshot_lands_in_backups_and_is_never_rotated() {
+fn a_pre_purge_snapshot_lands_in_backups_and_the_count_based_rotation_leaves_it() {
     let d = tempfile::tempdir().unwrap();
     let s = Store::open_data_dir(d.path()).unwrap();
     add_crew(&s, "a");
@@ -366,6 +384,52 @@ fn a_pre_purge_snapshot_lands_in_backups_and_is_never_rotated() {
     assert!(p.exists());
     let mem = Store::open_in_memory().unwrap();
     assert!(mem.snapshot_before_purge("a").unwrap().is_none());
+}
+
+/// PM 2026-10-07：永久删除真的删；删前快照只是安全网，按名字里的时间算，超过 30 天（严格大于）就删。
+/// 只动 crewd-pre-delete-*：定时、手动、迁移前的快照不动；名字里看不出时间的不删（宁留勿错删）；
+/// 对象 id 里带 `-` 和数字也认得出时间；再转一次不动。
+#[test]
+fn pre_delete_snapshots_expire_after_thirty_days() {
+    let d = tempfile::tempdir().unwrap();
+    let b = d.path().join("backups");
+    let now = 1_791_374_400_000;
+    let old = pre_delete(&b, "crew-a", now - 30 * DAY - 1);
+    let dashed = pre_delete(&b, "crew-2026-b", now - 45 * DAY);
+    let edge = pre_delete(&b, "crew-c", now - 30 * DAY);
+    let young = pre_delete(&b, "crew-d", now - 29 * DAY);
+    let odd = b.join("crewd-pre-delete-weird.db");
+    std::fs::write(&odd, b"d").unwrap();
+    let a = auto(&b, now - 400 * DAY);
+    for keep in [
+        "crewd-manual-20200101T000000000Z.db",
+        "crewd-v2-pre-v3-20200101T000000000Z.db",
+    ] {
+        std::fs::write(b.join(keep), b"k").unwrap();
+    }
+    let mut removed = backup::expire_pre_delete(&b, now, Policy::default()).unwrap();
+    removed.sort();
+    let mut want = vec![old.clone(), dashed.clone()];
+    want.sort();
+    assert_eq!(removed, want);
+    assert!(!old.exists() && !dashed.exists());
+    for p in [&edge, &young, &odd] {
+        assert!(p.exists(), "{p:?}");
+    }
+    assert!(b.join(a).exists());
+    assert!(b.join("crewd-manual-20200101T000000000Z.db").exists());
+    assert!(b.join("crewd-v2-pre-v3-20200101T000000000Z.db").exists());
+    assert!(
+        backup::expire_pre_delete(&b, now, Policy::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        backup::expire_pre_delete(&d.path().join("missing"), now, Policy::default())
+            .unwrap()
+            .is_empty(),
+        "没有备份目录 = 没东西可删"
+    );
 }
 
 /// S25：到点要拍的那一次（每天一次）对在用的库跑完整的 integrity_check，quick_check 看不见的

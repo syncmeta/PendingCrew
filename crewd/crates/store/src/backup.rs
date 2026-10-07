@@ -1,5 +1,5 @@
 //! 快照、备份与检查（N4：S20 / S21 / S25）。数据只在这台机器上，所以这里**只增不删库**：
-//! 检查失败只报告；快照绝不覆盖已有文件；轮转只淘汰定时备份，迁移前 / 删除前 / 手动的快照永远保留。
+//! 检查失败只报告；快照绝不覆盖已有文件；轮转按份数淘汰定时备份、按日子（30 天）淘汰删除前的快照；迁移前 / 手动的快照永远保留。
 use crate::{Result, StorageKind, StoreError, fsutil};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -287,6 +287,8 @@ pub struct Policy {
     pub keep_weekly: usize,
     /// 拍备份之后至少还要剩这么多可用空间（字节），不够就不拍。
     pub reserve_bytes: u64,
+    /// 永久删除前的快照（`crewd-pre-delete-*`）留多久（毫秒，按名字里的时间算）；之后随轮转删掉。
+    pub keep_pre_delete_ms: i64,
 }
 
 impl Default for Policy {
@@ -296,6 +298,7 @@ impl Default for Policy {
             keep_daily: 7,
             keep_weekly: 4,
             reserve_bytes: 0,
+            keep_pre_delete_ms: 30 * 24 * 3_600_000,
         }
     }
 }
@@ -383,6 +386,43 @@ pub fn rotate(dir: &Path, policy: Policy) -> Result<Vec<PathBuf>> {
     Ok(removed)
 }
 
+const PRE_DELETE_PREFIX: &str = "crewd-pre-delete-";
+
+/// `crewd-pre-delete-{对象}-{时间}.db` 里的时间（对象 id 里可以有 `-`，时间在最后一个 `-` 之后）。
+fn parse_pre_delete(name: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let rest = name.strip_prefix(PRE_DELETE_PREFIX)?.strip_suffix(".db")?;
+    let (_, stamp) = rest.rsplit_once('-')?;
+    chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%3fZ")
+        .ok()
+        .map(|t| t.and_utc())
+}
+
+/// 永久删除前的快照过期（PM 2026-10-07：永久删除真的删，快照只是安全网）：名字里的时间比
+/// `now_ms - keep_pre_delete_ms` 还早的删掉。只动 `crewd-pre-delete-*`；名字里看不出时间的不删。
+/// 返回删掉的文件。
+pub fn expire_pre_delete(dir: &Path, now_ms: i64, policy: Policy) -> Result<Vec<PathBuf>> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+    let mut removed = vec![];
+    for e in rd {
+        let e = e?;
+        let Some(t) = parse_pre_delete(&e.file_name().to_string_lossy()) else {
+            continue;
+        };
+        if now_ms - t.timestamp_millis() > policy.keep_pre_delete_ms {
+            std::fs::remove_file(e.path())?;
+            removed.push(e.path());
+        }
+    }
+    if !removed.is_empty() {
+        fsutil::fsync_dir(dir)?;
+    }
+    Ok(removed)
+}
+
 /// 一次定时拍的结果。
 #[derive(Debug, Default)]
 pub struct TickReport {
@@ -392,12 +432,12 @@ pub struct TickReport {
     pub backup: Option<PathBuf>,
     /// 到点了却没拍成（库坏了、磁盘满……）。
     pub backup_error: Option<String>,
-    /// 轮转删掉的旧定时备份。
+    /// 轮转删掉的旧定时备份与过期的 pre-delete 快照。
     pub removed: Vec<PathBuf>,
 }
 
 /// 定时拍一次（S21 / S25）：先对在用的库跑检查（到点要拍的那次是 `integrity_check`，平时 `quick_check`），到点了就备份（备份文件自己也过
-/// `quick_check`），备份成功**且**在用的库没问题才轮转淘汰旧备份。库是空的不拍。
+/// `quick_check`），备份成功**且**在用的库没问题才轮转淘汰旧备份（含过期的 pre-delete 快照）。库是空的不拍。
 pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
     let dir = backups_dir_for(db);
     let c = open_read_only(db)?;
@@ -427,6 +467,9 @@ pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
     }
     if report.backup.is_some() && report.live_problems.is_empty() {
         report.removed = rotate(&dir, policy)?;
+        report
+            .removed
+            .extend(expire_pre_delete(&dir, now_ms, policy)?);
     }
     Ok(report)
 }
