@@ -358,17 +358,23 @@ The tool {name} is gone: {replacement} does its job now. Call that instead.
 Invalid arguments: {detail}
 
 ## trace.worker
-{label} stopped this turn on a question and is waiting for an answer:
+(auto-relayed) {label} stopped this turn on a question and is waiting for an answer:
 {question}
-Captain: inspect_session to see the state; to answer it, post(to: …) to it, and it reads that when woken; if you cannot decide, ask the human. (session: {session})
+{reply}
 
 ## trace.captain
-{label} of {crew} stopped this turn on a question and is waiting for your answer:
+(auto-relayed) {label} of {crew} stopped this turn on a question and is waiting for your answer:
 {question}
-Please open this session's terminal and reply. (session: {session})
+{reply}
 
 ## trace.crew
 {title} (crew {number})
+
+## trace.reply
+Reply to this message to answer it.
+
+## trace.reply_elsewhere
+It is not in this channel, so a reply here does not wake it: send it a dm (session {session}) or answer in its terminal.
 
 ## r.failed
 Did not go through: {detail}

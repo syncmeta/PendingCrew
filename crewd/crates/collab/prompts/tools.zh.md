@@ -358,17 +358,23 @@ create_child 必填：子机组的机长要做的第一件事，写清目标与�
 参数不对：{detail}
 
 ## trace.worker
-{label} 这一轮停在一个问题上，在等回复：
+（自动代发）{label} 这一轮停在一个问题上，在等回答：
 {question}
-机长可以 inspect_session 看现场；要回答它就 post(to: …) 发给它，它被唤醒时会读到；拍不了板就问人。（session：{session}）
+{reply}
 
 ## trace.captain
-{crew} 的 {label} 这一轮停在一个问题上，在等你回复：
+（自动代发）{crew} 的 {label} 这一轮停在一个问题上，在等你回答：
 {question}
-需要你打开这个 session 的终端回它一句。（session：{session}）
+{reply}
 
 ## trace.crew
 {title}（{number}号机组）
+
+## trace.reply
+回复这条消息就能答它。
+
+## trace.reply_elsewhere
+它不在这个群里，回复这条叫不醒它：私聊它（session {session}），或到它的终端里回它。
 
 ## r.failed
 没成：{detail}

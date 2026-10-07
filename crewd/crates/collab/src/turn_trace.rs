@@ -1,8 +1,11 @@
 //! 「一轮收尾停在一个没人被叫到的问句上，系统替它发进群」（移植 `SessionTurnTrace.swift`）。
 //! 判据只有一条：停在问句上、且这一轮没 @ 到能答的人。静默是正常状态，不是异常信号。永不阻塞。
 use crate::prompts::fill;
+use crate::refusal::Code;
 use crate::render::{member_label, safe_name};
-use crate::{Result, Sender, Tx, channels, crews, messages, sessions, settings, worldview};
+use crate::{
+    CollabError, Result, Sender, Tx, channels, crews, messages, sessions, settings, worldview,
+};
 use crewd_proto::{MemberRef, Mention, MentionKind, Role};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub enum TurnEnd {
     /// 不需要代发。
     Nothing,
-    /// 代发了一条（worker → 大厅 @机长；机长 → home 的人类群 @人）。
+    /// 代发了一条（worker → 大厅 @机长；机长 → home 的人类群 @人），以卡住的 session 的名义（S67 step 1）。
     Posted { message_id: String },
     /// 这一轮已经 @ 过能答的人（机长 / 人）。
     AlreadyCalled,
@@ -229,32 +232,66 @@ pub fn on_turn_end(
             "trace.worker",
         )
     };
-    let text = fill(
-        f.get(key),
-        &[
-            ("label", &label),
-            ("crew", &crew_label),
-            ("question", &question),
-            ("session", session),
-        ],
-    );
-    let posted = messages::post(
+    let text = |reply: &str| {
+        fill(
+            f.get(key),
+            &[
+                ("label", &label),
+                ("crew", &crew_label),
+                ("question", &question),
+                ("reply", reply),
+            ],
+        )
+    };
+    let elsewhere = fill(f.get("trace.reply_elsewhere"), &[("session", session)]);
+    let posted = relay(
         tx,
-        Sender::System,
-        messages::NewPost {
-            channel_id,
-            text,
-            mentions: vec![Mention {
-                kind,
-                target_id: None,
-            }],
-            category: Some("question".into()),
-            ..Default::default()
-        },
+        session,
+        channel_id,
+        kind,
+        text(f.get("trace.reply")),
+        text(&elsewhere),
     )?;
     Ok(TurnEnd::Posted {
         message_id: posted.message.id,
     })
+}
+
+/// S67 step 1: the relay speaks **as the stuck session**, so a reply to it (`reply_to`) @s that session and
+/// wakes it. If collab will not let that session post there (it is not a member and posting does not
+/// join it), the relay goes out as crewd instead, with `as_system`'s text (a reply to a system message
+/// @s nobody, so that text says how to reach the session). Both tries run in the caller's Tx; the
+/// refused one wrote nothing (collab checks the sender before any write). Not a call-out: the memo was
+/// already cleared by `on_turn_end`, and nothing here calls `note_post`.
+fn relay(
+    tx: &mut Tx<'_>,
+    session: &str,
+    channel_id: String,
+    kind: MentionKind,
+    as_session: String,
+    as_system: String,
+) -> Result<messages::Posted> {
+    let post = |text: String| messages::NewPost {
+        channel_id: channel_id.clone(),
+        text,
+        mentions: vec![Mention {
+            kind,
+            target_id: None,
+        }],
+        category: Some("question".into()),
+        ..Default::default()
+    };
+    match messages::post(tx, Sender::Session(session.to_string()), post(as_session)) {
+        Err(CollabError::Forbidden(r))
+            if matches!(
+                r.code,
+                Code::MessageSenderNotMember | Code::ChannelHumanChannelOtherHome
+            ) =>
+        {
+            messages::post(tx, Sender::System, post(as_system))
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -635,6 +672,147 @@ mod tests {
         let t = last_text(&s, &human);
         assert!(t.contains("乙 「假」") && !t.contains('['), "{t}");
         assert_eq!(t.lines().count(), 3, "{t}");
+    }
+
+    fn posted_id(e: TurnEnd) -> String {
+        match e {
+            TurnEnd::Posted { message_id } => message_id,
+            other => panic!("expected a relay, got {other:?}"),
+        }
+    }
+
+    fn reply(
+        s: &mut crewd_store::Store,
+        by: Sender,
+        to: &crewd_proto::Message,
+    ) -> crewd_proto::Message {
+        let (posted, _) = crate::run(s, 1_790_000_000_000, |tx| {
+            messages::post(
+                tx,
+                by.clone(),
+                messages::NewPost {
+                    channel_id: to.channel_id.clone(),
+                    text: "示例答复".into(),
+                    in_reply_to: Some(to.id.clone()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+        posted.message
+    }
+
+    fn wakes(m: &crewd_proto::Message, session: &str) -> bool {
+        m.mentions.contains(&Mention {
+            kind: MentionKind::Session,
+            target_id: Some(session.into()),
+        })
+    }
+
+    /// S67 step 1: the relay is the stuck session's own message (auto-relayed), so a reply to it @s
+    /// that session; and it is not a call-out, so the next turn's question is relayed again.
+    #[test]
+    fn relay_posts_as_the_stuck_session_and_a_reply_reaches_it() {
+        let mut s = store();
+        let f = worldview::tools_file(crate::Locale::Zh);
+        // Worker -> its lobby, @captain; the captain's reply wakes the worker.
+        let id = posted_id(turn(&mut s, "w-a1", "p1", "要不要接着做 B？"));
+        let m = messages::get(s.conn(), &id).unwrap();
+        assert_eq!(m.sender_session_id.as_deref(), Some("w-a1"));
+        assert_eq!(m.sender_kind, crewd_proto::SenderKind::Session);
+        assert_eq!(m.category.as_deref(), Some("question"));
+        assert_eq!(m.channel_id, crewd_store::channels::lobby_id("crew-a"));
+        assert!(
+            m.text.ends_with(f.get("trace.reply")) && m.text.starts_with("（自动代发）"),
+            "{}",
+            m.text
+        );
+        let r = reply(&mut s, Sender::Session("cap-a".into()), &m);
+        assert!(wakes(&r, "w-a1"), "{:?}", r.mentions);
+        assert!(
+            matches!(
+                turn(&mut s, "w-a1", "p2", "那 C 呢？"),
+                TurnEnd::Posted { .. }
+            ),
+            "the relay is not a call-out for the next turn"
+        );
+        // Child-crew captain -> its home's human channel, @human, as itself (posting joins it there);
+        // the human's reply wakes it.
+        let id = posted_id(turn(&mut s, "cap-b", "p1", "要发版吗？"));
+        let m = messages::get(s.conn(), &id).unwrap();
+        assert_eq!(m.channel_id, crewd_store::channels::human_id("crew-a"));
+        assert_eq!(m.sender_session_id.as_deref(), Some("cap-b"));
+        assert_eq!(m.sender_kind, crewd_proto::SenderKind::Captain);
+        let r = reply(&mut s, Sender::Human, &m);
+        assert!(wakes(&r, "cap-b"), "{:?}", r.mentions);
+    }
+
+    /// When collab refuses the session as the sender there, the relay still goes out, as crewd, and its
+    /// text says how to reach the session (a reply to a system message @s nobody). Today both relay
+    /// targets accept the stuck session (its lobby; its home's human channel, which posting joins), so
+    /// this drives `relay` with a channel the session may not post in.
+    #[test]
+    fn relay_falls_back_to_system_when_the_session_may_not_post_there() {
+        let mut s = store();
+        let lobby = crewd_store::channels::lobby_id("crew-a");
+        let refused = crate::run(&mut s, 1_790_000_000_000, |tx| {
+            messages::post(
+                tx,
+                Sender::Session("cap-x".into()),
+                messages::NewPost {
+                    channel_id: lobby.clone(),
+                    text: "x".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(
+            matches!(&refused, Err(CollabError::Forbidden(r)) if r.code == Code::MessageSenderNotMember),
+            "{refused:?}"
+        );
+        let (posted, _) = crate::run(&mut s, 1_790_000_000_000, |tx| {
+            relay(
+                tx,
+                "cap-x",
+                lobby.clone(),
+                MentionKind::Captain,
+                "as session".into(),
+                "as system".into(),
+            )
+        })
+        .unwrap();
+        let m = posted.message;
+        assert_eq!(m.sender_kind, crewd_proto::SenderKind::System);
+        assert_eq!(m.sender_session_id, None);
+        assert_eq!(m.text, "as system");
+        assert_eq!(m.category.as_deref(), Some("question"));
+        assert_eq!(
+            m.mentions,
+            [Mention {
+                kind: MentionKind::Captain,
+                target_id: Some("cap-a".into())
+            }]
+        );
+        // The system text names the session and the way to reach it.
+        for l in [crate::Locale::Zh, crate::Locale::En] {
+            let t = fill(
+                worldview::tools_file(l).get("trace.reply_elsewhere"),
+                &[("session", "cap-x")],
+            );
+            assert!(t.contains("cap-x"), "{t}");
+        }
+        // A refusal about something else is not swallowed.
+        let other = crate::run(&mut s, 1_790_000_000_000, |tx| {
+            relay(
+                tx,
+                "w-a1",
+                "no-such/channel".into(),
+                MentionKind::Captain,
+                "a".into(),
+                "b".into(),
+            )
+        });
+        assert!(other.is_err(), "{other:?}");
     }
 
     #[test]
