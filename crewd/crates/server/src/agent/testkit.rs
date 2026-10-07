@@ -261,6 +261,16 @@ impl Fixture {
             .collect()
     }
 
+    /// The fake's next call (any method) fails with `e`.
+    pub fn fail_next(&self, e: crate::control::ControlError) {
+        self.control.fail_next(e);
+    }
+
+    /// The fake's next call of `method` fails with `e` (other methods go through).
+    pub fn fail_method(&self, method: crate::control::FakeMethod, e: crate::control::ControlError) {
+        self.control.fail_method(method, e);
+    }
+
     /// What the fake's `live` / `inspect` report for `l.session_id` from now on.
     pub fn set_live(&self, l: crewd_proto::SessionLive) {
         self.control.set_live(l);

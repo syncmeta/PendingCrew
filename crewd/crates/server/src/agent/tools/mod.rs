@@ -44,13 +44,18 @@ impl Ctx<'_> {
     /// from its stable code). Internal errors (store failures) are not shown:
     /// the detail goes to the log with a number, the agent gets only the number (M3a policy).
     pub fn fail(&self, e: PortError) -> CallResult {
+        let detail = self.detail(e);
+        self.err("r.failed", &[("detail", &detail)])
+    }
+    /// What `fail` shows as the reason (for a receipt that wraps it in its own sentence): the
+    /// refusal in the agent's locale, or for an internal error only its logged number.
+    pub fn detail(&self, e: PortError) -> String {
         match e {
             PortError::Internal(detail) => {
                 let n = crate::dispatch::log_internal(&detail).to_string();
-                let shown = self.r("r.internal", &[("n", &n)]);
-                self.err("r.failed", &[("detail", &shown)])
+                self.r("r.internal", &[("n", &n)])
             }
-            other => self.err("r.failed", &[("detail", &other.text(self.loc))]),
+            other => other.text(self.loc),
         }
     }
 }
