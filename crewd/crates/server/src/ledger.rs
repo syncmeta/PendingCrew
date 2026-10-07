@@ -97,7 +97,7 @@ mod tests {
             id: "c".into(),
             title: "机组".into(),
             number: None,
-            org_root: false,
+            management: false,
             parent_ids: vec![],
             working_directory: None,
             captain_executor: None,

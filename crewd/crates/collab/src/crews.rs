@@ -45,7 +45,7 @@ pub fn list(conn: &Connection, include_archived: bool) -> Result<Vec<Crew>> {
         .collect();
     let mut out: Vec<Crew> = Vec::with_capacity(rest.len());
     // 先序：栈里倒着压子机组，弹出来就是 child_ids 的次序。
-    let mut stack: Vec<String> = org_root(conn)?.into_iter().collect();
+    let mut stack: Vec<String> = management(conn)?.into_iter().collect();
     while let Some(id) = stack.pop() {
         let Some(c) = rest.remove(&id) else {
             continue; // 已经出现过（多父）
@@ -102,15 +102,17 @@ fn created_at(conn: &Connection, id: &str) -> Result<String> {
     )
 }
 
-pub fn org_root(conn: &Connection) -> Result<Option<String>> {
-    Ok(crewd_store::crews::org_root(conn)?)
+pub fn management(conn: &Connection) -> Result<Option<String>> {
+    Ok(crewd_store::crews::management(conn)?)
 }
 
 /// 一次直查（preflight D9）：`home_of` / `is_home` 在循环里调它，不走 `get`（那会把全部机组连同父子边读一遍）。
-pub fn is_org_root(conn: &Connection, id: &str) -> Result<bool> {
-    conn.query_row("SELECT org_root FROM crews WHERE id=?1", [id], |r| r.get(0))
-        .optional()?
-        .ok_or_else(|| not_found(id))
+pub fn is_management(conn: &Connection, id: &str) -> Result<bool> {
+    conn.query_row("SELECT management FROM crews WHERE id=?1", [id], |r| {
+        r.get(0)
+    })
+    .optional()?
+    .ok_or_else(|| not_found(id))
 }
 
 /// 机组已归档（N1 裁定 13）？一次直查；不存在 = NotFound。
@@ -138,15 +140,15 @@ pub(crate) fn refuse_archived(conn: &Connection, id: &str) -> Result<()> {
 /// 有自己人类群的机组（H2）：总机组；一级机组（父边恰好是 [总机组]）。没有父边的非根机组只会出现在
 /// 旧形状 / 脏数据里，当作自己的 home（全函数，同旧 `root_of` 遇环退回自己）。
 pub fn is_home(conn: &Connection, id: &str) -> Result<bool> {
-    if is_org_root(conn, id)? {
+    if is_management(conn, id)? {
         return Ok(true);
     }
     let ps = parents(conn, id)?;
-    Ok(ps.is_empty() || (ps.len() == 1 && is_org_root(conn, &ps[0])?))
+    Ok(ps.is_empty() || (ps.len() == 1 && is_management(conn, &ps[0])?))
 }
 
 /// 人类群归属（N1 裁定 5）：自己是 home → 自己；否则往上走，遇到的 home 里 created_at 最早的（再按 id）。
-/// 每个祖先几次直查（O(祖先数)，不读全部机组）；不存在的机组由 `is_home` → `is_org_root` 报 NotFound。
+/// 每个祖先几次直查（O(祖先数)，不读全部机组）；不存在的机组由 `is_home` → `is_management` 报 NotFound。
 pub fn home_of(conn: &Connection, id: &str) -> Result<String> {
     if is_home(conn, id)? {
         return Ok(id.to_string());
@@ -155,7 +157,7 @@ pub fn home_of(conn: &Connection, id: &str) -> Result<String> {
     let mut queue = VecDeque::from(parents(conn, id)?);
     let mut homes: Vec<(String, String)> = Vec::new();
     while let Some(c) = queue.pop_front() {
-        if !seen.insert(c.clone()) || is_org_root(conn, &c)? {
+        if !seen.insert(c.clone()) || is_management(conn, &c)? {
             continue;
         }
         if is_home(conn, &c)? {
@@ -207,9 +209,11 @@ pub(crate) fn alloc_ext(conn: &Connection, crew: &str) -> Result<i64> {
 }
 
 /// 根的轻量规则（N1 裁定 6）：总机组不能有父（不能被收编、转挂、摘出），不能归档、不能删。被操作的机组不存在 = NotFound。
-fn refuse_org_root(conn: &Connection, id: &str) -> Result<()> {
-    if is_org_root(conn, id)? {
-        return Err(CollabError::Forbidden(Refusal::new(Code::CrewOrgRootFixed)));
+fn refuse_management(conn: &Connection, id: &str) -> Result<()> {
+    if is_management(conn, id)? {
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::CrewManagementFixed,
+        )));
     }
     Ok(())
 }
@@ -218,8 +222,8 @@ fn refuse_org_root(conn: &Connection, id: &str) -> Result<()> {
 /// 懒建出来的总机组连同它的大厅和别的建群一样发 ChannelChanged。
 fn hang_under_org_root(tx: &mut Tx<'_>, crew: &str) -> Result<String> {
     let now = tx.now_ts();
-    let existed = org_root(tx.conn())?.is_some();
-    let root = crewd_store::crews::ensure_org_root(tx.conn(), &now)?;
+    let existed = management(tx.conn())?.is_some();
+    let root = crewd_store::crews::ensure_management(tx.conn(), &now)?;
     tx.conn().execute(
         "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
         params![crew, root],
@@ -267,7 +271,7 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
         id: format!("crew-{}", uuid::Uuid::new_v4().simple()),
         title,
         number: Some(number),
-        org_root: false,
+        management: false,
         working_directory: Some(wd),
         title_source: n.title_source,
         created_at: now.clone(),
@@ -285,7 +289,7 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     });
     match n.parent_id.as_deref() {
         // 有（非根的）父：排在父下的末尾（adopt 做）。
-        Some(p) if !is_org_root(tx.conn(), p)? => {
+        Some(p) if !is_management(tx.conn(), p)? => {
             adopt(tx, &crew.id, p)?;
         }
         // 没给父 / 给的就是总机组：挂在总机组下的末尾（空库里第一个机组顺带建出总机组，N1 裁定 3）。
@@ -300,8 +304,10 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_archived(tx.conn(), id)?;
     // 根的轻量规则（N1 裁定 6）：总机组不能被隐藏（改名等其余字段与普通机组一样）。
-    if crew.org_root && p.hidden == Some(true) {
-        return Err(CollabError::Forbidden(Refusal::new(Code::CrewOrgRootFixed)));
+    if crew.management && p.hidden == Some(true) {
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::CrewManagementFixed,
+        )));
     }
     let conn = tx.conn();
     let now = tx.now_ts();
@@ -361,12 +367,12 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
 /// 不变式 I-root（N1 裁定 4）：指向总机组的边只能是唯一的父——挂上非根的父时顺手删掉根边；
 /// `parent` 是总机组：已是一级 → 空操作，否则 `Invalid`（挪到一级要用 release 摘掉其它父）。
 pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
-    refuse_org_root(tx.conn(), crew)?;
+    refuse_management(tx.conn(), crew)?;
     get(tx.conn(), crew)?;
     get(tx.conn(), parent)?;
     refuse_archived(tx.conn(), crew)?;
     refuse_archived(tx.conn(), parent)?;
-    if is_org_root(tx.conn(), parent)? {
+    if is_management(tx.conn(), parent)? {
         if parents(tx.conn(), crew)? == [parent] {
             return get(tx.conn(), crew);
         }
@@ -396,7 +402,7 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
         params![crew, parent],
     )?;
     // 有了别的父：指向总机组的边去掉（总机组的 childIds 变了）。
-    if let Some(root) = org_root(tx.conn())? {
+    if let Some(root) = management(tx.conn())? {
         let dropped = tx.conn().execute(
             "DELETE FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
             params![crew, root],
@@ -423,9 +429,9 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
 /// 摘掉的是最后一条父边 = 回到总机组下的末尾（N1 裁定 4）。`to` = 总机组：`from` 是最后一个父时同 `None`；
 /// 摘掉后还挂着别的上级 → `Invalid`（回不到一级，指路先解除其它上级）。一级机组从总机组摘出 = 原地不动（空操作）。
 pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Result<Crew> {
-    refuse_org_root(tx.conn(), crew)?;
+    refuse_management(tx.conn(), crew)?;
     let to_root = match to {
-        Some(t) => is_org_root(tx.conn(), t)?,
+        Some(t) => is_management(tx.conn(), t)?,
         None => false,
     };
     let to = if to_root { None } else { to };
@@ -442,7 +448,7 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
         ));
     }
     // 一级机组从总机组「摘出」、落回总机组下 = 原地不动（不挪到末尾、不发变更；与 adopt 到总机组对称）。
-    if to == Some(from) || (to.is_none() && is_org_root(tx.conn(), from)?) {
+    if to == Some(from) || (to.is_none() && is_management(tx.conn(), from)?) {
         return get(tx.conn(), crew);
     }
     // 明说要回到一级，但摘掉这个父之后还挂在别的上级下：回不到一级，拒并指路（不悄悄留在原处）。
@@ -501,7 +507,7 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
 /// 已归档 = 原样返回、不发变更。
 pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
-    refuse_org_root(tx.conn(), id)?;
+    refuse_management(tx.conn(), id)?;
     if crew.archived_at.is_some() {
         return Ok(crew);
     }
@@ -602,7 +608,7 @@ pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
 /// `crew.purge` 先跑它、再拍快照（N4：删不了就不拍整库快照），三步在同一个库线程任务里。
 pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
     get(conn, id)?;
-    refuse_org_root(conn, id)?;
+    refuse_management(conn, id)?;
     if !is_archived(conn, id)? {
         return Err(CollabError::Conflict(
             Refusal::new(Code::CrewNotArchived).arg("crew", id),
@@ -811,7 +817,8 @@ mod tests {
         assert!(is_home(s.conn(), "crew-a").unwrap());
         assert!(!is_home(s.conn(), "crew-b").unwrap());
         assert!(
-            is_org_root(s.conn(), "chief").unwrap() && !is_org_root(s.conn(), "crew-a").unwrap()
+            is_management(s.conn(), "chief").unwrap()
+                && !is_management(s.conn(), "crew-a").unwrap()
         );
         // 多父：二级机组同时挂在两个一级机组下 → created_at 最早的一级祖先（§13 Q1 同口径）。
         crewd_store::crews::set_parents(
@@ -1845,8 +1852,8 @@ mod tests {
     fn the_first_crew_in_an_empty_database_creates_the_org_root() {
         let mut s = crewd_store::Store::open_in_memory().unwrap();
         let (c, changes) = ok_at(&mut s, NOW, |tx| create(tx, new_crew("第一个")));
-        let root = org_root(s.conn()).unwrap().unwrap();
-        assert_eq!(root, crewd_store::crews::ORG_ROOT_ID);
+        let root = management(s.conn()).unwrap().unwrap();
+        assert_eq!(root, crewd_store::crews::MANAGEMENT_ID);
         assert_eq!(
             parents(s.conn(), &c.id).unwrap(),
             std::slice::from_ref(&root)
@@ -2002,7 +2009,7 @@ mod tests {
         let root_edge_plus_another = |s: &crewd_store::Store| {
             count(
                 s,
-                "SELECT COUNT(*) FROM crew_parents p JOIN crews r ON r.id=p.parent_id AND r.org_root=1
+                "SELECT COUNT(*) FROM crew_parents p JOIN crews r ON r.id=p.parent_id AND r.management=1
                   WHERE (SELECT COUNT(*) FROM crew_parents q WHERE q.crew_id=p.crew_id) > 1",
             )
         };
@@ -2043,8 +2050,8 @@ mod tests {
         let mut s = crewd_store::Store::open_in_memory().unwrap();
         let c = ok(&mut s, |tx| create(tx, new_crew("第一个")));
         assert_eq!(c.number, Some(1));
-        let root = get(s.conn(), crewd_store::crews::ORG_ROOT_ID).unwrap();
-        assert!(root.org_root);
+        let root = get(s.conn(), crewd_store::crews::MANAGEMENT_ID).unwrap();
+        assert!(root.management);
         assert_eq!(root.number, Some(0));
         let d = ok(&mut s, |tx| create(tx, new_crew("第二个")));
         assert_eq!(d.number, Some(2));
@@ -2149,7 +2156,7 @@ mod tests {
         assert!(x.hidden_at.is_some());
     }
 
-    /// `home_of` 不再先 `get`（那会把全部机组连同父子边读一遍）：不存在的机组仍是 NotFound（由 `is_org_root` 报）。
+    /// `home_of` 不再先 `get`（那会把全部机组连同父子边读一遍）：不存在的机组仍是 NotFound（由 `is_management` 报）。
     #[test]
     fn home_of_an_unknown_crew_is_not_found() {
         let s = store();
@@ -2171,7 +2178,7 @@ mod tests {
         let two_parent_root_edges = |s: &crewd_store::Store| {
             count(
                 s,
-                "SELECT COUNT(*) FROM crew_parents p JOIN crews r ON r.id=p.parent_id AND r.org_root=1
+                "SELECT COUNT(*) FROM crew_parents p JOIN crews r ON r.id=p.parent_id AND r.management=1
                   WHERE (SELECT COUNT(*) FROM crew_parents q WHERE q.crew_id=p.crew_id) > 1",
             )
         };

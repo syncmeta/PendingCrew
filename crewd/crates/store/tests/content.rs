@@ -12,7 +12,7 @@ fn store_with_crew() -> Store {
             id: "a".into(),
             title: "A".into(),
             number: None,
-            org_root: false,
+            management: false,
             parent_ids: vec![],
             working_directory: None,
             captain_executor: None,

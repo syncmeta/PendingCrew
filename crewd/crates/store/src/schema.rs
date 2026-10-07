@@ -502,7 +502,7 @@ INSERT OR IGNORE INTO read_cursors(reader,channel_id,seq,updated_at)
 const V4_DDL: &str = r#"
 DROP INDEX IF EXISTS approvals_open;
 DROP TABLE IF EXISTS approvals;
-ALTER TABLE crews RENAME COLUMN builtin TO org_root;
+ALTER TABLE crews RENAME COLUMN builtin TO management;
 ALTER TABLE crews ADD COLUMN archived_at TEXT;
 "#;
 
@@ -522,7 +522,7 @@ fn migrate_v4_in_tx(conn: &Connection) -> Result<()> {
     tx.execute_batch(V4_DDL)?;
     backfill_v4(&tx)?;
     tx.execute_batch(
-        "CREATE UNIQUE INDEX crews_one_org_root ON crews(org_root) WHERE org_root=1;",
+        "CREATE UNIQUE INDEX crews_one_management ON crews(management) WHERE management=1;",
     )?;
     if let Some(report) = foreign_key_violations(&tx)? {
         return Err(StoreError::Invalid(format!("迁移后外键不成立：{report}")));
@@ -537,8 +537,8 @@ fn migrate_v4_in_tx(conn: &Connection) -> Result<()> {
 pub fn backfill_v4(conn: &Connection) -> Result<()> {
     // 1) 多个组织根：留 created_at 最早的（再按 id），其余降为普通机组。
     conn.execute_batch(
-        "UPDATE crews SET org_root=0 WHERE org_root=1 AND id <>
-           (SELECT id FROM crews WHERE org_root=1 ORDER BY created_at, id LIMIT 1);",
+        "UPDATE crews SET management=0 WHERE management=1 AND id <>
+           (SELECT id FROM crews WHERE management=1 ORDER BY created_at, id LIMIT 1);",
     )?;
     // 2) 作废排队中的审批唤醒（审批已删除，N1 裁定 15）。
     conn.execute(
@@ -560,7 +560,7 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
     if crews == 0 {
         return Ok(());
     }
-    let root = crate::crews::ensure_org_root(conn, &crate::now_ts())?;
+    let root = crate::crews::ensure_management(conn, &crate::now_ts())?;
     // 4) 根不挂在任何人下面；号码 0（没有号、且 0 没人用时）；侧栏次序恒为 1；不隐藏。
     conn.execute("DELETE FROM crew_parents WHERE crew_id=?1", [&root])?;
     conn.execute(
@@ -716,7 +716,7 @@ mod tests {
                 ("c3".to_string(), None),
                 ("c4".to_string(), Some("unknown".to_string())),
                 // v4：库里有机组而没有内建机组 → 建出总机组（N1 裁定 2），其余四个挂到它下面。
-                (crate::crews::ORG_ROOT_ID.to_string(), None),
+                (crate::crews::MANAGEMENT_ID.to_string(), None),
             ]
         );
         migrate(&conn).unwrap();
@@ -1339,7 +1339,7 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
                 "stamped={stamped}"
             );
             assert_eq!(
-                one::<i64>(s.conn(), "SELECT COUNT(*) FROM crews WHERE org_root=1"),
+                one::<i64>(s.conn(), "SELECT COUNT(*) FROM crews WHERE management=1"),
                 1
             );
             assert_eq!(
@@ -1477,7 +1477,10 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         let c = v3_db();
         migrate(&c).unwrap();
         assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
-        assert_eq!(rows(&c, "SELECT id FROM crews WHERE org_root=1"), ["chief"]);
+        assert_eq!(
+            rows(&c, "SELECT id FROM crews WHERE management=1"),
+            ["chief"]
+        );
         assert_eq!(
             rows(
                 &c,
@@ -1543,8 +1546,8 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
             .unwrap();
         migrate(&c).unwrap();
         assert_eq!(
-            rows(&c, "SELECT id FROM crews WHERE org_root=1"),
-            [crate::crews::ORG_ROOT_ID]
+            rows(&c, "SELECT id FROM crews WHERE management=1"),
+            [crate::crews::MANAGEMENT_ID]
         );
         assert_eq!(
             one::<i64>(
@@ -1569,7 +1572,10 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         c.execute("UPDATE crews SET builtin=1 WHERE id='crew-x'", [])
             .unwrap();
         migrate(&c).unwrap();
-        assert_eq!(rows(&c, "SELECT id FROM crews WHERE org_root=1"), ["chief"]);
+        assert_eq!(
+            rows(&c, "SELECT id FROM crews WHERE management=1"),
+            ["chief"]
+        );
         assert_eq!(
             rows(
                 &c,
@@ -1584,9 +1590,9 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         let c = v3_db();
         migrate(&c).unwrap();
         let err = c
-            .execute("UPDATE crews SET org_root=1 WHERE id='crew-x'", [])
+            .execute("UPDATE crews SET management=1 WHERE id='crew-x'", [])
             .unwrap_err();
-        // 预检 D3：基线上这句因「没有 org_root 列」也报错；要的是唯一索引挡住的那一种。
+        // 预检 D3：基线上这句因「没有 management 列」也报错；要的是唯一索引挡住的那一种。
         assert!(crate::is_unique_violation(&err), "{err}");
     }
 
@@ -1807,7 +1813,7 @@ INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-c','chief',5);
                 ),
                 one(
                     c,
-                    "SELECT group_concat(id, ',') FROM crews WHERE org_root=1",
+                    "SELECT group_concat(id, ',') FROM crews WHERE management=1",
                 ),
                 one(c, "SELECT COUNT(*) FROM channels"),
                 one(

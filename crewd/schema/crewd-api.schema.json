@@ -555,16 +555,16 @@
         "id": {
           "type": "string"
         },
+        "management": {
+          "description": "组织唯一的根（总机组，spec §24 H2）；至多一个。",
+          "type": "boolean"
+        },
         "number": {
           "format": "int64",
           "type": [
             "integer",
             "null"
           ]
-        },
-        "orgRoot": {
-          "description": "组织唯一的根（总机组，spec §24 H2）；至多一个。",
-          "type": "boolean"
         },
         "parentIds": {
           "items": {
@@ -611,7 +611,7 @@
       "required": [
         "id",
         "title",
-        "orgRoot",
+        "management",
         "parentIds",
         "createdAt",
         "updatedAt"

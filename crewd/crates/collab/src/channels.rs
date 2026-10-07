@@ -226,7 +226,7 @@ impl Reader {
     fn of(conn: &Connection, session: &str) -> Result<Self> {
         let crew = sessions::crew_of(conn, session)?;
         Ok(Self {
-            manages_org: crews::is_org_root(conn, &crew)?,
+            manages_org: crews::is_management(conn, &crew)?,
             home: crews::home_of(conn, &crew)?,
             crew,
         })

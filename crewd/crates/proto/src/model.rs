@@ -18,7 +18,7 @@ pub struct Crew {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number: Option<i64>,
     /// 组织唯一的根（总机组，spec §24 H2）；至多一个。
-    pub org_root: bool,
+    pub management: bool,
     pub parent_ids: Vec<String>,
     /// 这个机组的直系子机组，按侧栏顺序（每个父下各自一套次序，控制者裁定 C1；`crew.reorder {parentId}` 改它）。
     #[serde(default)]

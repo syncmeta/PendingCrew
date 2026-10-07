@@ -68,7 +68,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             id: c.id.clone(),
             title: c.title.clone(),
             number: c.crew_number,
-            org_root: c.is_builtin && Some(&c.id) == root_id.as_ref(),
+            management: c.is_builtin && Some(&c.id) == root_id.as_ref(),
             parent_ids: vec![],
             working_directory: c.working_directory.clone(),
             captain_executor: c

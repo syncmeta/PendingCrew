@@ -68,7 +68,7 @@ fn org_path(conn: &Connection, crew: &str) -> Result<String> {
     let mut seen = std::collections::BTreeSet::new();
     let mut cur = crew.to_string();
     while let Some(p) = crews::parents(conn, &cur)?.into_iter().next() {
-        if !seen.insert(p.clone()) || crews::is_org_root(conn, &p)? {
+        if !seen.insert(p.clone()) || crews::is_management(conn, &p)? {
             break;
         }
         titles.push(crews::get(conn, &p)?.title);

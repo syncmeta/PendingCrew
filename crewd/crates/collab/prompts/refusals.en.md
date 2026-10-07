@@ -112,7 +112,7 @@ There is no crew {crew}. List the crews and check the id.
 ## crew.archived
 Crew {crew} is archived and read-only. Ask the human to unarchive it (only the human can, from the client) before changing it.
 
-## crew.org_root_fixed
+## crew.management_fixed
 The headquarters crew is the root of the organisation; it cannot be adopted, released, hidden, deleted or archived. To reorganise, change the crews under it.
 
 ## crew.title_empty

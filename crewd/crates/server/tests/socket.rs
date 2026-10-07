@@ -157,7 +157,7 @@ async fn hello_crews_channels_and_messages() {
         3
     );
     let crews = c.call(2, "crew.list", json!({})).await;
-    assert_eq!(crews[0]["orgRoot"], true, "总机组排第一（树根）");
+    assert_eq!(crews[0]["management"], true, "总机组排第一（树根）");
     assert_eq!(crews[1]["id"], "a");
     let chans = c.call(3, "channel.list", json!({"crewId":"a"})).await;
     let ids: Vec<&str> = chans
@@ -554,7 +554,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
         c.call_err(
             14,
             "crew.delete",
-            json!({"crewId":crewd_store::crews::ORG_ROOT_ID})
+            json!({"crewId":crewd_store::crews::MANAGEMENT_ID})
         )
         .await,
         crewd_proto::RpcError::FORBIDDEN
@@ -639,7 +639,7 @@ async fn crew_reorder_is_per_parent_edge() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|x| x["orgRoot"] == true)
+        .find(|x| x["management"] == true)
         .expect("总机组在 crew.list 里")["id"]
         .as_str()
         .unwrap()
@@ -905,7 +905,7 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         })
         .collect();
     changed.sort_by_key(|v| v.to_string());
-    let mut want = vec![made.clone(), json!(crewd_store::crews::ORG_ROOT_ID)];
+    let mut want = vec![made.clone(), json!(crewd_store::crews::MANAGEMENT_ID)];
     want.sort_by_key(|v| v.to_string());
     assert_eq!(changed, want);
     // 删机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
@@ -1187,7 +1187,7 @@ async fn crew_purge_that_cannot_happen_takes_no_snapshot() {
         c.call_err(
             2,
             "crew.purge",
-            json!({"crewId":crewd_store::crews::ORG_ROOT_ID})
+            json!({"crewId":crewd_store::crews::MANAGEMENT_ID})
         )
         .await,
         crewd_proto::RpcError::FORBIDDEN

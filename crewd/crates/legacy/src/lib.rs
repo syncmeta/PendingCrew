@@ -242,7 +242,7 @@ mod tests {
         let b = list.iter().find(|c| c.id == "local-bbbb").unwrap();
         assert_eq!(b.parent_ids, ["local-aaaa"]);
         let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
-        assert!(chief.org_root);
+        assert!(chief.management);
         assert_eq!(
             list[0].captain_executor.as_deref(),
             Some("claude"),

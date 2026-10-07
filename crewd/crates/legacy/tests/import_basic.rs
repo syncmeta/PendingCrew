@@ -320,7 +320,7 @@ fn imported_top_level_crews_hang_under_the_builtin_chief() {
     let a = list.iter().find(|c| c.id == "local-aaaa").unwrap();
     assert_eq!(a.parent_ids, ["pendingcrew-chief"]);
     let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
-    assert!(chief.org_root && chief.parent_ids.is_empty());
+    assert!(chief.management && chief.parent_ids.is_empty());
     assert_eq!(chief.number, Some(0));
 }
 
@@ -343,7 +343,7 @@ fn several_builtin_crews_in_legacy_data_keep_only_the_earliest_as_org_root() {
     let list = crewd_store::crews::list(store.conn()).unwrap();
     let roots: Vec<_> = list
         .iter()
-        .filter(|c| c.org_root)
+        .filter(|c| c.management)
         .map(|c| c.id.as_str())
         .collect();
     assert_eq!(roots, ["pendingcrew-chief"]);

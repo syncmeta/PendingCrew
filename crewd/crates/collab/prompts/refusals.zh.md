@@ -112,7 +112,7 @@
 ## crew.archived
 机组 {crew} 已归档，只读；请人先解档它（解档只有人在客户端能做）
 
-## crew.org_root_fixed
+## crew.management_fixed
 总机组是组织的根，不能被收编、摘出、隐藏、删除或归档；要整理组织就动它下面的机组
 
 ## crew.title_empty

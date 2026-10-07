@@ -62,7 +62,7 @@ refusal_codes! {
     // crew
     CrewNotFound = "crew.not_found" ["crew"],
     CrewArchived = "crew.archived" ["crew"],
-    CrewOrgRootFixed = "crew.org_root_fixed" [],
+    CrewManagementFixed = "crew.management_fixed" [],
     CrewTitleEmpty = "crew.title_empty" [],
     CrewWorkingDirEmpty = "crew.working_dir_empty" [],
     CrewMoveToFirstLevel = "crew.move_to_first_level" ["crew"],
