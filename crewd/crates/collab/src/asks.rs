@@ -475,6 +475,7 @@ mod tests {
                     crate::sessions::NewSession {
                         crew_id: c.id.clone(),
                         executor: "claude".into(),
+                        title: Some("提问者".into()),
                         ..Default::default()
                     },
                 )?;

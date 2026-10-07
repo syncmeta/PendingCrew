@@ -20,6 +20,16 @@ pub struct NewSession {
     pub worktree: Option<String>,
 }
 
+/// session 标题最长字符数（S80）。
+pub const TITLE_MAX_CHARS: usize = 18;
+
+/// 没给标题时从 brief 派生：第一条去空白后非空的行，内部空白压成一个空格，取前 `TITLE_MAX_CHARS` 个字符。
+pub(crate) fn title_from_brief(brief: &str) -> Option<String> {
+    let line = brief.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let squeezed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(squeezed.chars().take(TITLE_MAX_CHARS).collect())
+}
+
 pub fn valid_executor(e: &str) -> bool {
     e == "claude"
         || e == "codex"
@@ -90,10 +100,27 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
             n.executor
         )));
     }
-    for (what, v) in [("标题", &n.title), ("显示名", &n.display_name)] {
-        if let Some(v) = v {
-            crate::prompts::refuse_sender_label(what, v)?;
+    let title = match n.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) if t.chars().count() <= TITLE_MAX_CHARS => t.to_string(),
+        Some(t) => {
+            return Err(CollabError::Invalid(format!(
+                "session 标题最长 {TITLE_MAX_CHARS} 个字（现在 {} 个）；写短一点，细节放进 brief",
+                t.chars().count()
+            )));
         }
+        None => n
+            .brief
+            .as_deref()
+            .and_then(title_from_brief)
+            .ok_or_else(|| {
+                CollabError::Invalid(format!(
+                    "session 要有标题（不超过 {TITLE_MAX_CHARS} 个字）或 brief；两者都没有就没法给它起名"
+                ))
+            })?,
+    };
+    crate::prompts::refuse_sender_label("标题", &title)?;
+    if let Some(v) = &n.display_name {
+        crate::prompts::refuse_sender_label("显示名", v)?;
     }
     if n.role == Role::Captain && crews::captain_of(tx.conn(), &crew.id)?.is_some() {
         return Err(CollabError::Conflict(format!(
@@ -118,7 +145,7 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
         model: n.model,
         effort: n.effort,
         updated_at: tx.now_ts(),
-        title: n.title,
+        title: Some(title),
         brief: n.brief,
         desired: Desired::Stopped,
         ext,
@@ -264,6 +291,67 @@ mod tests {
             title: Some("修滚动".into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_session_without_a_title_gets_one_from_its_brief() {
+        let mut s = store();
+        let got = ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    title: None,
+                    brief: Some("\n  一二三四五六七八九十甲乙丙丁戊己庚辛壬癸\n第二行".into()),
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert_eq!(
+            got.title.as_deref(),
+            Some("一二三四五六七八九十甲乙丙丁戊己庚辛")
+        );
+    }
+
+    #[test]
+    fn a_session_needs_a_short_title_or_a_brief() {
+        let mut s = store();
+        assert!(matches!(
+            err(&mut s, |tx| register(
+                tx,
+                NewSession {
+                    title: None,
+                    brief: None,
+                    ..worker("crew-a")
+                }
+            )),
+            CollabError::Invalid(_)
+        ));
+        assert!(
+            matches!(
+                err(&mut s, |tx| register(
+                    tx,
+                    NewSession {
+                        title: Some("一二三四五六七八九十甲乙丙丁戊己庚辛壬".into()),
+                        ..worker("crew-a")
+                    }
+                )),
+                CollabError::Invalid(_)
+            ),
+            "19 字超长"
+        );
+        let ok18 = ok(&mut s, |tx| {
+            register(
+                tx,
+                NewSession {
+                    title: Some("  一二三四五六七八九十甲乙丙丁戊己庚辛  ".into()),
+                    ..worker("crew-a")
+                },
+            )
+        });
+        assert_eq!(
+            ok18.title.as_deref(),
+            Some("一二三四五六七八九十甲乙丙丁戊己庚辛")
+        );
     }
 
     #[test]

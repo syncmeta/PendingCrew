@@ -587,7 +587,18 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
             AND crew_id IN (SELECT crew_id FROM crew_parents WHERE parent_id <> ?1)",
         [&root],
     )?;
-    // （Task 8 在这里加：session 标题回填。）
+    // 7) 显示名与标题都空的旧 session 补标题（N1 裁定 12）：brief 第一条非空行的前 18 个字符；
+    //    没有 brief = 机组标题 + ' #' + 分机号（机长没号 = 机组标题）。标签绝不回落到原始 id。
+    //    SQLite 的 substr 按字符算。内部空白不压缩（只管首尾，旧数据的近似即可）。
+    conn.execute_batch(
+        "UPDATE sessions SET title = COALESCE(
+             NULLIF(substr(trim(substr(ltrim(brief, char(9)||char(10)||char(13)||' '), 1,
+                    instr(ltrim(brief, char(9)||char(10)||char(13)||' ')||char(10), char(10)) - 1),
+                    char(9)||char(13)||' '), 1, 18), ''),
+             (SELECT c.title FROM crews c WHERE c.id=sessions.crew_id)
+               || CASE WHEN ext IS NULL THEN '' ELSE ' #'||ext END)
+          WHERE COALESCE(display_name,'')='' AND COALESCE(title,'')='';",
+    )?;
     Ok(())
 }
 
@@ -1132,6 +1143,33 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
             .unwrap()
             .map(|r| r.unwrap())
             .collect()
+    }
+
+    #[test]
+    fn v4_gives_every_unnamed_session_a_title() {
+        let c = v3_db();
+        c.execute_batch(
+            "UPDATE sessions SET display_name=NULL, title=NULL;
+             UPDATE sessions SET brief='修首页滚动' WHERE id='worker-a2';",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sessions WHERE COALESCE(display_name,'')='' AND COALESCE(title,'')=''"
+            ),
+            0,
+            "标签绝不回落到原始 id"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-a2'"),
+            "修首页滚动"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-a1'"),
+            "示例机组 #5"
+        );
     }
 
     #[test]
