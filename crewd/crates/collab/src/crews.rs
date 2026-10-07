@@ -1571,4 +1571,80 @@ mod tests {
             CollabError::NotFound(_)
         ));
     }
+
+    /// 单根下一个一级机组被收编、再多挂一个父、逐个摘掉：home 身份、人类群的归档 / 解档、机长「在」的群、
+    /// 提问的转达对象都跟着树走；全程没有「既挂总机组又挂别人」的形状（I-root）。
+    #[test]
+    fn moving_a_first_level_crew_down_and_back_keeps_home_human_channel_and_relay_in_step() {
+        let mut s = store();
+        let two_parent_root_edges = |s: &crewd_store::Store| {
+            count(
+                s,
+                "SELECT COUNT(*) FROM crew_parents p JOIN crews r ON r.id=p.parent_id AND r.org_root=1
+                  WHERE (SELECT COUNT(*) FROM crew_parents q WHERE q.crew_id=p.crew_id) > 1",
+            )
+        };
+        let in_human = |s: &crewd_store::Store| {
+            crate::channels::channels_of_session(s.conn(), "cap-x")
+                .unwrap()
+                .iter()
+                .any(|c| c.id == "crew-x/human")
+        };
+        let archived = |s: &crewd_store::Store| {
+            crate::channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_some()
+        };
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-x")
+        });
+        assert!(in_human(&s), "一级机组的机长在自己的人类群里");
+
+        ok(&mut s, |tx| adopt(tx, "crew-x", "crew-a"));
+        assert!(!is_home(s.conn(), "crew-x").unwrap() && archived(&s) && !in_human(&s));
+        // 提问的机长恢复失败：转达给它此刻的 home（crew-a）的机长。
+        let a = ok(&mut s, |tx| {
+            crate::asks::open(
+                tx,
+                "cap-x",
+                crate::asks::OpenAsk {
+                    question: "示例问题".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        ok(&mut s, |tx| {
+            crate::sessions::set_resume_failed(tx, "cap-x", true)
+        });
+        ok(&mut s, |tx| {
+            crate::asks::answer(tx, "crew-x", &a.ask, "示例回答")
+        });
+        assert_eq!(
+            crate::wakes::list(s.conn(), Some("cap-a"), 10).unwrap()[0].source,
+            format!("ask:crew-x/{}", a.ask)
+        );
+
+        // 再多挂一个（非根的）父、摘掉一个：仍不是 home，人类群保持归档。
+        ok(&mut s, |tx| adopt(tx, "crew-x", "crew-b"));
+        assert_eq!(edges(&s, "crew-x"), ["crew-a", "crew-b"]);
+        ok(&mut s, |tx| release(tx, "crew-x", "crew-a", None));
+        assert_eq!(edges(&s, "crew-x"), ["crew-b"]);
+        assert!(!is_home(s.conn(), "crew-x").unwrap() && archived(&s));
+        assert_eq!(two_parent_root_edges(&s), 0);
+
+        // 摘掉最后一个父：回到总机组下，重新是 home，人类群解档，机长又在里面。
+        ok(&mut s, |tx| release(tx, "crew-x", "crew-b", None));
+        assert_eq!(edges(&s, "crew-x"), ["chief"]);
+        assert!(is_home(s.conn(), "crew-x").unwrap() && !archived(&s) && in_human(&s));
+
+        // 非 home 的二级机组收编到别处：从来没有人类群，也不会凭空建一个。
+        ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
+        assert_eq!(edges(&s, "crew-b"), ["crew-a", "crew-x"]);
+        assert_eq!(
+            count(&s, "SELECT COUNT(*) FROM channels WHERE id='crew-b/human'"),
+            0
+        );
+        assert_eq!(two_parent_root_edges(&s), 0);
+    }
 }
