@@ -389,6 +389,8 @@ pub struct Live {
     pub halting: bool,
     /// 最近一批送进去的唤醒（拉起时带的、或最后一次「送到了」的那批）：休眠记录里「停下时在做什么」（C26）。
     pub last_wakes: Vec<QueuedWake>,
+    /// 休眠到期限按过 Esc（C26 / 评审 m1）：之后这一轮停下的 `Working(false)` 不落库——它是被打断的，was_working 留着。
+    pub hibernate_cut: bool,
     /// 往这个会话里写东西的队列（预检 P4 / 控制者裁定）：投递与 nudge 按 actor 收下的先后排进来，
     /// 由 [`Core::pump_writes`] 一个个写；一次 nudge 的整串写完才轮到下一个，两次写不交错。
     pub writes: VecDeque<Write>,
@@ -1216,6 +1218,7 @@ impl<P: Port> Core<P> {
                         stopping: st.stop_requested,
                         halting: st.halt_requested && !st.stop_requested,
                         last_wakes: st.batch.wakes.clone(),
+                        hibernate_cut: false,
                         writes: VecDeque::new(),
                         writing: false,
                     },
@@ -1402,7 +1405,8 @@ impl<P: Port> Core<P> {
                 l.working = on;
                 let mut patch = SessionPatch {
                     // crewd 叫停时驱动层 abandon 发的 Working(false) 不落库：was_working 留着「被打断」。
-                    was_working: (on || !l.halting).then_some(on),
+                    // 休眠按过 Esc 之后的 Working(false) 同理（它是被打断的，C26）。
+                    was_working: (on || !(l.halting || l.hibernate_cut)).then_some(on),
                     last_active_at: Some(now),
                     ..Default::default()
                 };

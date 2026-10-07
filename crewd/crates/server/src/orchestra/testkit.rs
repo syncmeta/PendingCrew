@@ -822,6 +822,8 @@ pub struct StandInState {
     pub stops: Vec<String>,
     /// `interrupt` 调过的 session（按先后）。
     pub interrupts: Vec<String>,
+    /// 这些 session 被打断后不停下这一轮（不发 `Working(false)`）；其余的像 claude 一样按了 Esc 就停下这一轮。
+    pub deaf_to_interrupt: BTreeSet<String>,
     /// 这些 session 被叫停时不退出（模拟停不下来的进程：停机到期限）。
     pub hang_on_stop: BTreeSet<String>,
     pub cleared_quota: Vec<String>,
@@ -1097,6 +1099,7 @@ impl ExecHandle for StandInHandle {
         Ok(())
     }
 
+    /// 像 claude 一样：在干活时按 Esc，这一轮就停下（`Working(false)`）；`deaf_to_interrupt` 里的不理它。
     fn interrupt(&self) -> Result<(), Closed> {
         let mut s = self.lock();
         s.interrupts.push(self.session.clone());
@@ -1104,6 +1107,9 @@ impl ExecHandle for StandInHandle {
             .entry(self.session.clone())
             .or_default()
             .push("interrupt".into());
+        if s.working.contains(&self.session) && !s.deaf_to_interrupt.contains(&self.session) {
+            s.push(&self.session, SessionEvent::Working(false));
+        }
         Ok(())
     }
 

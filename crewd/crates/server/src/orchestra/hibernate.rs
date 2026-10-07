@@ -16,9 +16,9 @@ use std::collections::BTreeMap;
 
 use crewd_collab::hibernate::Outcome;
 use crewd_collab::render::safe_name;
-use crewd_wake::Ms;
 use crewd_wake::policy::{self, HibernateFacts};
 use crewd_wake::text;
+use crewd_wake::{Ms, SEC};
 
 use super::core::{ControlError, Core, Reply};
 use super::port::*;
@@ -50,7 +50,12 @@ pub(crate) struct Hibernation {
     pub(crate) record: HibernateRecord,
     /// 结果已经发出去了。
     pub(crate) reported: bool,
+    /// 发出去的那份结果：回报之后再来的休眠当场回它（评审 m2）。
+    pub(crate) report: Option<HibernateReport>,
 }
+
+/// 到期限按了 Esc 之后，最多等多久让它自己停下这一轮（`Working(false)`）再叫停（评审 m1）；叫停宽限剩得更少时等到宽限为止。
+pub(crate) const INTERRUPT_SETTLE_MS: i64 = 5 * SEC;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Track {
@@ -58,6 +63,8 @@ pub(crate) struct Track {
     pub(crate) busy: bool,
     /// 到期限被打断了。
     pub(crate) interrupted: bool,
+    /// 按 Esc 的时刻：从这一刻起等它停下这一轮，至多 [`INTERRUPT_SETTLE_MS`]，然后叫停。
+    pub(crate) cut_at: Option<Ms>,
 }
 
 impl<P: Port> Core<P> {
@@ -71,6 +78,11 @@ impl<P: Port> Core<P> {
         let now = self.now();
         let grace = self.cfg.hibernate_stop_grace.as_millis() as i64;
         if let Some(h) = self.hibernation.as_mut() {
+            if let Some(r) = &h.report {
+                // 已经回报过了（actor 在收尾 / 等 serve 中止）：当场回那份，不留永远等不到的回执（m2）。
+                let _ = reply.send(Ok(r.clone()));
+                return;
+            }
             if let Some(ms) = deadline_ms {
                 h.deadline = h.deadline.min(now.add(ms.max(0)));
                 h.give_up = h.give_up.min(h.deadline.add(grace));
@@ -114,7 +126,7 @@ impl<P: Port> Core<P> {
                 s.clone(),
                 Track {
                     busy,
-                    interrupted: false,
+                    ..Track::default()
                 },
             );
             entries.push(entry(s, busy, &doing));
@@ -124,10 +136,14 @@ impl<P: Port> Core<P> {
             entries.push(entry(s, false, &st.batch.wakes));
         }
         entries.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-        // 上次休眠还没恢复的（一直在等人答、这次没在跑）：带进新记录，下次照样给休眠附言。
+        // 上次休眠还没恢复、仍在待恢复名单里的（一直在等人答、这次没在跑）：带进新记录，下次照样给休眠附言。
+        // 不在名单里的（人停过 / 已不算待恢复）不带（评审 m4）。
         if let Some(old) = &self.hibernated {
             for h in &old.sessions {
-                if !h.resumed && !tracked.contains_key(&h.session_id) {
+                if !h.resumed
+                    && !tracked.contains_key(&h.session_id)
+                    && self.held.contains(&h.session_id)
+                {
                     entries.push(h.clone());
                 }
             }
@@ -162,6 +178,7 @@ impl<P: Port> Core<P> {
             tracked,
             record,
             reported: false,
+            report: None,
         });
     }
 
@@ -229,12 +246,39 @@ impl<P: Port> Core<P> {
                 self.halt(&s);
             }
         }
+        let give_up = self.hibernation.as_ref().map_or(now, |h| h.give_up);
+        let settle_until = |at: Ms| at.add(INTERRUPT_SETTLE_MS.min(give_up.since(at)).max(0));
         for s in &cut {
-            // 先打断这一轮、再叫停（驱动层按收到的先后执行：Esc 在 SIGTERM 之前）。
-            if let Some(l) = self.live.get(s) {
+            // 先按 Esc 打断这一轮，给它一点时间自己停下（m1），再叫停（下面那一段）。等的这几秒里驱动层发来的
+            // `Working(false)` 不抹掉 was_working（`Live::hibernate_cut`）：它是被打断的。
+            if let Some(l) = self.live.get_mut(s) {
+                l.hibernate_cut = true;
                 let _ = l.handle.interrupt();
             }
-            self.halt(s);
+            if let Some(t) = self.hibernation.as_mut().and_then(|h| h.tracked.get_mut(s)) {
+                t.cut_at = Some(now);
+            }
+            self.timers.insert(settle_until(now));
+        }
+        // 按过 Esc 的：这一轮停下了（不在干活）或等够了 → 叫停。
+        let to_halt: Vec<String> = self
+            .hibernation
+            .as_ref()
+            .map(|h| {
+                h.tracked
+                    .iter()
+                    .filter_map(|(s, t)| t.cut_at.map(|at| (s, at)))
+                    .filter(|(s, at)| {
+                        self.live.get(*s).is_some_and(|l| {
+                            !l.halting && !l.stopping && (!l.working || now >= settle_until(*at))
+                        })
+                    })
+                    .map(|(s, _)| s.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for s in to_halt {
+            self.halt(&s);
         }
         if let Some(r) = record
             && let Err(e) = self.port.put_hibernate(&r).await
@@ -275,6 +319,7 @@ impl<P: Port> Core<P> {
         for w in h.waiters.drain(..) {
             let _ = w.send(Ok(report.clone()));
         }
+        h.report = Some(report);
     }
 
     /// 恢复一个等人答复的 session 时开场的附言（§22.7 Q1 / C26）：被休眠停下、还没恢复过的 → 休眠附言（只给一次：
@@ -899,6 +944,15 @@ mod tests {
     async fn entries_not_yet_resumed_are_carried_into_the_next_hibernate() {
         let mut rig = Rig::new().await;
         after_hibernate(&rig);
+        // 评审 m4：只带还在等人答的（待恢复名单里的）；w3 早就不在名单里了（人停过），它的旧项不带。
+        rig.worker("c1", "w3");
+        rig.port
+            .lock()
+            .hibernate
+            .as_mut()
+            .unwrap()
+            .sessions
+            .push(hib("w3", true, Outcome::Pending, None));
         rig.core.boot().await.unwrap();
         rig.run("cap").await; // 人只恢复了机长
         let mut rx = hibernate(&mut rig, Some(0)).await;
@@ -918,6 +972,64 @@ mod tests {
             ]
         );
         assert_eq!(rec.prompt_id, None, "新的一次休眠：还没开询问");
+    }
+
+    /// 评审 m2：休眠已经回报过了（actor 正在收尾 / 等 abort）再来一次休眠：当场回那份结果，不留一个永远等不到的回执。
+    #[tokio::test]
+    async fn a_hibernate_after_the_report_gets_the_same_report_at_once() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("cap").await;
+        rig.run("w1").await;
+        rig.exec.lock().hang_on_stop.insert("w1".into());
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let mut first = hibernate(&mut rig, Some(0)).await;
+        rig.tick(rig.core.cfg.hibernate_stop_grace.as_millis() as i64)
+            .await;
+        let a = report(&mut first);
+        assert!(!a.completed);
+        let mut again = hibernate(&mut rig, Some(0)).await;
+        assert_eq!(report(&mut again), a);
+    }
+
+    /// 评审 m1：到期限先按 Esc，给它一点时间自己停下这一轮（`Working(false)`）再叫停；它一直不停就最多等 5 秒
+    /// （叫停宽限更短时等到宽限为止）。等的这几秒里驱动层发来的 `Working(false)` 不抹掉 was_working（它是被打断的）。
+    #[tokio::test]
+    async fn after_esc_it_waits_for_the_turn_to_end_up_to_five_seconds() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.worker("c1", "w2");
+        for s in ["cap", "w1", "w2"] {
+            rig.run(s).await;
+        }
+        rig.exec.lock().deaf_to_interrupt.insert("w1".into());
+        rig.exec.lock().deaf_to_interrupt.insert("w2".into());
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w2", SessionEvent::Working(true)).await;
+        let mut rx = hibernate(&mut rig, Some(0)).await;
+        assert_eq!(rig.exec.lock().interrupts, ids(&["w1", "w2"]));
+        assert_eq!(rig.exec.lock().stops, ids(&["cap"]), "按了 Esc，先不叫停");
+        rig.clock.advance(SEC);
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(
+            rig.exec.lock().stops,
+            ids(&["cap", "w1"]),
+            "这一轮停下了：叫停"
+        );
+        rig.tick(4 * SEC - 1).await;
+        assert_eq!(rig.exec.lock().stops, ids(&["cap", "w1"]));
+        rig.tick(1).await;
+        assert_eq!(
+            rig.exec.lock().stops,
+            ids(&["cap", "w1", "w2"]),
+            "一直不停：5 秒后叫停"
+        );
+        let r = report(&mut rx);
+        assert_eq!(r.interrupted, ids(&["w1", "w2"]));
+        assert!(r.completed);
+        assert!(rig.port.row("w1").was_working, "被打断的：was_working 留着");
     }
 
     /// 评审 I3：休眠中途 crewd 没了（电脑先关了，期限还没到）——在干活的那个停在「等安全点」，下次恢复时按被打断说
