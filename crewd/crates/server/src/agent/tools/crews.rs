@@ -340,16 +340,23 @@ async fn crew_structure_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
         Action::CreateParent => create_parent(cx, &crew, trimmed(a.title)).await,
         Action::Adopt => {
             let target = crew_arg(cx, a.target.as_deref().unwrap_or_default()).await?;
+            require_structure_reach(cx, &target).await?;
             adopt(cx, &target, &crew).await
         }
         Action::AdoptParent => {
             let target = crew_arg(cx, a.target.as_deref().unwrap_or_default()).await?;
+            require_structure_reach(cx, &target).await?;
             adopt(cx, &crew, &target).await
         }
         Action::Release => {
+            // `target` must be a direct child of `crew`: collab's `crew.not_direct_child`.
             let target = crew_arg(cx, a.target.as_deref().unwrap_or_default()).await?;
             let to = match trimmed(a.to) {
-                Some(t) => Some(release_destination(cx, &crew, &t).await?),
+                Some(t) => {
+                    let to = crew_arg(cx, &t).await?;
+                    require_structure_reach(cx, &to).await?;
+                    Some(to)
+                }
                 None => None,
             };
             release(cx, &crew, &target, to.as_ref()).await
@@ -525,7 +532,7 @@ async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) ->
 async fn adopt(cx: &Ctx<'_>, child: &CrewView, parent: &CrewView) -> Step<CallResult> {
     let (child_name, parent_name) = (cx.name(&child.title), cx.name(&parent.title));
     let already = child.parent_ids.contains(&parent.id);
-    port::attach_parent(cx.st, cx.me, &child.id, &parent.id)
+    port::attach_parent(cx.st, &child.id, &parent.id)
         .await
         .map_err(|e| cx.fail(e))?;
     if already {
@@ -545,15 +552,21 @@ async fn adopt(cx: &Ctx<'_>, child: &CrewView, parent: &CrewView) -> Step<CallRe
     Ok(CallResult::ok(out))
 }
 
-/// Where a released child may go: another direct child of `crew`, or a crew I act as the captain
-/// of (collab, C2).
-async fn release_destination(cx: &Ctx<'_>, crew: &CrewView, arg: &str) -> Step<CrewView> {
-    let to = crew_arg(cx, arg).await?;
-    if crew.child_ids.contains(&to.id) {
-        return Ok(to);
+/// Structure reach over `x` (controller ruling R0, T15b fix 1): I act as its captain (collab,
+/// C2), or it is a direct child of a crew I act as the captain of. Every other crew of the
+/// tree stays where it is unless the management captain or the human moves it (an org-level
+/// change). Kept in the tool layer: collab's `adopt` / `release` also serve the human's RPC,
+/// which has no session to check.
+async fn require_structure_reach(cx: &Ctx<'_>, x: &CrewView) -> Step<()> {
+    for id in std::iter::once(&x.id).chain(&x.parent_ids) {
+        if port::acts_as_captain_of(cx.st, &cx.me.session_id, id)
+            .await
+            .map_err(|e| cx.fail(e))?
+        {
+            return Ok(());
+        }
     }
-    require_captain_of(cx, &to).await?;
-    Ok(to)
+    Err(not_your_crew(cx, x))
 }
 
 /// Detach `target` from `crew`, optionally under `to`. A crew whose last parent is gone becomes
@@ -564,7 +577,7 @@ async fn release(
     target: &CrewView,
     to: Option<&CrewView>,
 ) -> Step<CallResult> {
-    port::detach_parent(cx.st, cx.me, &crew.id, &target.id, to.map(|t| t.id.clone()))
+    port::detach_parent(cx.st, &crew.id, &target.id, to.map(|t| t.id.clone()))
         .await
         .map_err(|e| cx.fail(e))?;
     let (name, from) = (cx.name(&target.title), cx.name(&crew.title));
@@ -1245,12 +1258,17 @@ mod tests {
             [f.crew.clone(), t1.clone(), t2.clone()]
         );
         let n1 = number_of(&f, &t1).await;
+        let cn = number_of(&f, &f.crew).await;
+        // Moving a crew from another branch is the management captain's (R0).
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
         // adopt: appended to my children; it was top-level, so the warning names its new home.
         let r = run(
             &f,
-            &f.captain,
+            "s-boss",
             "crew_structure",
-            json!({"action": "adopt", "target": n1}),
+            json!({"action": "adopt", "crew": cn, "target": n1}),
         )
         .await;
         assert_eq!(
@@ -1357,9 +1375,9 @@ mod tests {
         // adopt_parent: my crew goes under another top-level crew, at the end of its children.
         let r = run(
             &f,
-            &f.captain,
+            "s-boss",
             "crew_structure",
-            json!({"action": "adopt_parent", "target": n2}),
+            json!({"action": "adopt_parent", "crew": cn, "target": n2}),
         )
         .await;
         assert_eq!(
@@ -1380,6 +1398,120 @@ mod tests {
         assert_eq!(top_level(&f).await, [t2, a]);
     }
 
+    /// R0: adopt / adopt_parent / release(to:) reach only crews I act as the captain of and their
+    /// direct children; the management captain reaches every crew.
+    #[tokio::test]
+    async fn structure_targets_need_structure_reach() {
+        let f = Fixture::new().await;
+        let a = f.add_crew("示例甲", Some(&f.crew)).await;
+        let b = f.add_crew("示例乙", Some(&f.crew)).await;
+        let stranger = f.add_crew("示例陌生", None).await;
+        f.add_session(&stranger, "s-st", Role::Captain, "陌生机长")
+            .await;
+        let human = port::home_human_channel(&f.state, &stranger).await.unwrap();
+        let sn = number_of(&f, &stranger).await;
+        let an = number_of(&f, &a).await;
+        let bn = number_of(&f, &b).await;
+        let cn = number_of(&f, &f.crew).await;
+        // An ordinary captain: a stranger crew is refused as a target, nothing changes.
+        for args in [
+            json!({"action": "adopt", "target": sn}),
+            json!({"action": "adopt_parent", "target": sn}),
+            json!({"action": "release", "target": an, "to": sn}),
+        ] {
+            let r = run(&f, &f.captain, "crew_structure", args).await;
+            not_yours(&f, &r, &stranger).await;
+        }
+        assert!(crew(&f, &stranger).await.parent_ids.is_empty());
+        assert!(crew(&f, &f.crew).await.parent_ids.is_empty());
+        assert_eq!(
+            crew(&f, &f.crew).await.child_ids,
+            vec![a.clone(), b.clone()]
+        );
+        let human = port::channel(&f.state, &human.id).await.unwrap().unwrap();
+        assert!(!human.archived, "the refused adopt archived nothing");
+        // My other direct child is in reach.
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "release", "target": an, "to": bn}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.released_to",
+            &[("child", "示例甲"), ("from", "示例机组"), ("to", "示例乙")],
+        );
+        assert_eq!(crew(&f, &b).await.child_ids, vec![a.clone()]);
+        // A grandchild is not (its parent is another captain's crew).
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "adopt", "target": an}),
+        )
+        .await;
+        not_yours(&f, &r, &a).await;
+        // The management captain does all of them.
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
+        let r = run(
+            &f,
+            "s-boss",
+            "crew_structure",
+            json!({"action": "release", "crew": bn, "target": an, "to": sn}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.released_to",
+            &[("child", "示例甲"), ("from", "示例乙"), ("to", "示例陌生")],
+        );
+        let r = run(
+            &f,
+            "s-boss",
+            "crew_structure",
+            json!({"action": "adopt", "crew": cn, "target": sn}),
+        )
+        .await;
+        assert_eq!(
+            r.text,
+            [
+                z(
+                    "r.adopted",
+                    &[("child", "示例陌生"), ("parent", "示例机组")]
+                ),
+                z(
+                    "r.no_longer_top",
+                    &[("crew", "示例陌生"), ("home", "示例机组")]
+                ),
+            ]
+            .join("\n")
+        );
+        let human = port::channel(&f.state, &human.id).await.unwrap().unwrap();
+        assert!(human.archived);
+        let other = f.add_crew("示例上级", None).await;
+        let on = number_of(&f, &other).await;
+        let r = run(
+            &f,
+            "s-boss",
+            "crew_structure",
+            json!({"action": "adopt_parent", "crew": bn, "target": on}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.adopted",
+            &[("child", "示例乙"), ("parent", "示例上级")],
+        );
+        assert_eq!(crew(&f, &b).await.parent_ids.len(), 2);
+    }
+
     #[tokio::test]
     async fn structure_refusals_pass_through() {
         let f = Fixture::new().await;
@@ -1387,8 +1519,21 @@ mod tests {
         let stranger = f.add_crew("示例陌生", None).await;
         let call =
             |action: &'static str, target: String| json!({"action": action, "target": target});
-        // The management crew is outside the tree (number "0").
+        // The management crew: out of an ordinary captain's reach (R0); for the management captain
+        // collab refuses it, being outside the tree (number "0").
         let r = run(&f, &f.captain, "crew_structure", call("adopt", "0".into())).await;
+        not_yours(&f, &r, &management_crew(&f).await).await;
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
+        let cn = number_of(&f, &f.crew).await;
+        let r = run(
+            &f,
+            "s-boss",
+            "crew_structure",
+            json!({"action": "adopt", "crew": cn, "target": "0"}),
+        )
+        .await;
         refused(&r, Refusal::new(Code::CrewManagementNotInTree));
         // A cycle: my child as my parent.
         let r = run(
@@ -1448,9 +1593,6 @@ mod tests {
         not_yours(&f, &r, &stranger).await;
         // The management captain on its own crew: collab refuses, nothing is created (one
         // transaction), nothing is started.
-        let mgmt = management_crew(&f).await;
-        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
-            .await;
         let before = crew_count(&f).await;
         for args in [
             json!({"action": "create_child", "brief": "x"}),

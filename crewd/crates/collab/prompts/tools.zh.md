@@ -331,10 +331,10 @@ create_child / create_parent / adopt / adopt_parent / release 之一。
 可选：被操作的机组（号码或 id）；不填 = 本机组。
 
 ## crew_structure.target
-adopt / adopt_parent / release 必填：另一个机组（号码或 id）。
+adopt / adopt_parent / release 必填：另一个机组（号码或 id）。adopt / adopt_parent 的 target 和 release 的 to 只能是你按机长算的机组，或这种机组的直系子机组；把别的分支下的机组挂过来、挂过去是组织层面的调整，找总机组的机长（post(to: "0")）或人来做。
 
 ## crew_structure.to
-可选，只配 release：把 target 改挂到哪个机组（crew 的另一个直系子机组，或你按机长算的机组）。
+可选，只配 release：把 target 改挂到哪个机组（同 target 的范围：你按机长算的机组，或它的直系子机组）。
 
 ## crew_structure.title
 可选，配 create_child / create_parent：新机组的短标签名；不填就按模板起。

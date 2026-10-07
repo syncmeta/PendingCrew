@@ -331,10 +331,10 @@ One of create_child / create_parent / adopt / adopt_parent / release.
 Optional: the crew acted on (number or id); omitted = this crew.
 
 ## crew_structure.target
-Required for adopt / adopt_parent / release: the other crew (number or id).
+Required for adopt / adopt_parent / release: the other crew (number or id). The target of adopt / adopt_parent and the to of release must be a crew you act as captain of, or a direct child of one; moving crews across other branches of the tree is an organisation-level change: ask the management crew's captain (post(to: "0")) or the human.
 
 ## crew_structure.to
-Optional, release only: where to move target (another direct child of crew, or a crew you act as captain of).
+Optional, release only: where to move target (the same reach as target: a crew you act as captain of, or a direct child of one).
 
 ## crew_structure.title
 Optional, for create_child / create_parent: the new crew's short label; omitted = from a template.

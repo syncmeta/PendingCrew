@@ -512,13 +512,9 @@ pub async fn set_working_directory(
     .await
 }
 
-/// `child` 加上 `parent` 做父（`crews::adopt`）。权限与成环由 M3a 判。
-pub async fn attach_parent(
-    st: &AppState,
-    _by: &Identity,
-    child: &str,
-    parent: &str,
-) -> PortResult<()> {
+/// `child` 加上 `parent` 做父（`crews::adopt`）。成环、总机组、已移除由 collab 判；谁能调（结构可达，R0）
+/// 只在工具层 `crew_structure` 判，这里不收调用者。
+pub async fn attach_parent(st: &AppState, child: &str, parent: &str) -> PortResult<()> {
     let (c, p) = (child.to_string(), parent.to_string());
     write(st, move |tx| {
         crewd_collab::crews::adopt(tx, &c, &p).map(|_| ())
@@ -526,10 +522,9 @@ pub async fn attach_parent(
     .await
 }
 
-/// `child` 从 `parent` 下放出来（`crews::release`）；`to` = 改挂到哪个机组。
+/// `child` 从 `parent` 下放出来（`crews::release`）；`to` = 改挂到哪个机组。谁能调同 `attach_parent`。
 pub async fn detach_parent(
     st: &AppState,
-    _by: &Identity,
     parent: &str,
     child: &str,
     to: Option<String>,
