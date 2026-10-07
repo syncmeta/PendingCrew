@@ -283,13 +283,15 @@ pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask>
     closed(tx, crew, h, standalone, &applied.events)
 }
 
-/// 撤回一条问。人随时可以；session 只能是提问者本人，或**问所在机组**此刻的机长——
-/// 别的机组的机长（另一棵树的、子机组的）在这本账上只算普通 session（账本按提问者放行）。
+/// 撤回一条问。人随时可以；session 只能是提问者本人，或**问所在机组**此刻的机长，或总机组的机长（权限上当作
+/// 每个机组的机长，PM 2026-10-07）——别的机组的机长（另一棵树的、子机组的）、总机组的普通 session 在这本账上
+/// 只算普通 session（账本按提问者放行）。
 pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &str) -> Result<Ask> {
     let h = parse_ask(ask)?;
     let actor = match by {
         Sender::Human => Actor::Human,
         Sender::Session(s) if sessions::crew_of(tx.conn(), s)? == crew => actor_of(tx.conn(), s)?,
+        Sender::Session(s) if crews::is_management_captain(tx.conn(), s)? => Actor::captain(s),
         Sender::Session(s) => Actor::worker(s),
         Sender::System => {
             return Err(CollabError::Forbidden(Refusal::new(
@@ -745,6 +747,35 @@ mod tests {
         });
         let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
         assert_eq!(m.channel_id, "chief/human");
+    }
+
+    /// 总机组的机长权限上当作每个机组的机长（PM 2026-10-07）：能撤别的机组的问；总机组的普通 session 不能。
+    #[test]
+    fn the_management_captain_may_withdraw_any_crews_ask_and_its_workers_may_not() {
+        let mut s = store();
+        let boss = crate::testkit::org_captain(&mut s);
+        let worker = crate::testkit::org_worker(&mut s);
+        let a = ok(&mut s, |tx| open(tx, "w-a1", q("谁能撤？")));
+        assert!(matches!(
+            err(&mut s, |tx| withdraw(
+                tx,
+                &Sender::Session(worker.clone()),
+                "crew-a",
+                &a.ask,
+                "不是你的"
+            )),
+            CollabError::Work(Rejected::Forbidden(_))
+        ));
+        let w = ok(&mut s, |tx| {
+            withdraw(
+                tx,
+                &Sender::Session(boss.clone()),
+                "crew-a",
+                &a.ask,
+                "管理层撤",
+            )
+        });
+        assert_eq!(w.state, AskStateView::Withdrawn);
     }
 
     #[test]

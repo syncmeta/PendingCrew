@@ -132,6 +132,27 @@ pub fn is_management(conn: &Connection, id: &str) -> Result<bool> {
     .ok_or_else(|| not_found(id))
 }
 
+/// `session` 是总机组此刻的机长？权限上它当作每个机组的机长（PM 2026-10-07：「就像所有机组的根机组一样的权限」——
+/// 只是权限，不是树）。总机组的其它 session 读全组织、可以往任何群发言，但在别的机组里只算普通 session。
+/// 一次直查；session 不存在 = false（同 `captain_of(..) == Some(s)` 的口径）。
+pub fn is_management_captain(conn: &Connection, session: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM crews WHERE management=1 AND captain_session_id=?1",
+        [session],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// `session` 在机组 `crew` 上有机长的权限：是它此刻的机长，或总机组的机长（`is_management_captain`）。
+/// collab 里「这个机组的机长才能做」的检查都走这里。
+pub(crate) fn acts_as_captain_of(conn: &Connection, session: &str, crew: &str) -> Result<bool> {
+    Ok(
+        captain_of(conn, crew)?.as_deref() == Some(session)
+            || is_management_captain(conn, session)?,
+    )
+}
+
 /// `session` 属于总机组（管理机组）？读全组织、往任何群发言（dm 除外）的依据。一次直查；session 不存在 = false。
 pub fn is_management_session(conn: &Connection, session: &str) -> Result<bool> {
     let n: i64 = conn.query_row(

@@ -106,6 +106,23 @@ pub(crate) fn org_worker(s: &mut Store) -> String {
     .id
 }
 
+/// 在总机组里登记机长，返回它的 id。权限上它当作每个机组的机长（PM 2026-10-07）；总机组的其它 session 没有这份权限。
+pub(crate) fn org_captain(s: &mut Store) -> String {
+    ok(s, |tx| {
+        crate::sessions::register(
+            tx,
+            crate::sessions::NewSession {
+                crew_id: "chief".into(),
+                role: Role::Captain,
+                executor: "claude".into(),
+                title: Some("管理层机长".into()),
+                ..Default::default()
+            },
+        )
+    })
+    .id
+}
+
 /// 在 NOW 跑一个操作，失败就 panic（测试的正路径）。
 pub(crate) fn ok<T>(s: &mut Store, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> T {
     crate::run(s, NOW, f).unwrap().0

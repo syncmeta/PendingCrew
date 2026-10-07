@@ -477,13 +477,13 @@ pub fn ensure_dm(
     Ok((ch, true))
 }
 
-/// 能管这个群的：人、归属机组的机长、群主。
+/// 能管这个群的：人、归属机组的机长（含总机组的机长，`crews::acts_as_captain_of`）、群主。
 fn may_manage(conn: &Connection, by: &Sender, ch: &Channel) -> Result<bool> {
     Ok(match by {
         Sender::Human => true,
         Sender::System => false,
         Sender::Session(s) => {
-            crews::captain_of(conn, &ch.crew_id)?.as_deref() == Some(s.as_str())
+            crews::acts_as_captain_of(conn, s, &ch.crew_id)?
                 || ch.owner == Some(MemberRef::session(s.clone()))
         }
     })
@@ -558,7 +558,14 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
         return Err(archived(id));
     }
     let me = sender_ref(by)?;
-    if me != MemberRef::Human && !is_member(tx.conn(), id, &me)? {
+    // 人类群里归属机组的机长是隐式成员；总机组的机长权限上当作它（`crews::is_management_captain`），同样能拉人。
+    let as_captain = match (&me, ch.kind) {
+        (MemberRef::Session { id: s }, ChannelKind::Human) => {
+            crews::is_management_captain(tx.conn(), s)?
+        }
+        _ => false,
+    };
+    if me != MemberRef::Human && !as_captain && !is_member(tx.conn(), id, &me)? {
         return Err(CollabError::Forbidden(Refusal::new(
             Code::ChannelAddMembersMemberOnly,
         )));
@@ -995,15 +1002,13 @@ pub fn withdraw_owner_transfer(tx: &mut Tx<'_>, by: &Sender, id: &str) -> Result
     get(tx.conn(), id)
 }
 
-/// 机长（归属机组的）或人强制换群主。
+/// 机长（归属机组的，含总机组的机长）或人强制换群主。
 pub fn force_owner(tx: &mut Tx<'_>, by: &Sender, id: &str, to: &MemberRef) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
     require_owner_channel(&ch)?;
     let allowed = match by {
         Sender::Human => true,
-        Sender::Session(s) => {
-            crews::captain_of(tx.conn(), &ch.crew_id)?.as_deref() == Some(s.as_str())
-        }
+        Sender::Session(s) => crews::acts_as_captain_of(tx.conn(), s, &ch.crew_id)?,
         Sender::System => false,
     };
     if !allowed {
@@ -2353,6 +2358,88 @@ mod tests {
             dm_peer(s.conn(), "crew-a/lobby", &MemberRef::session("w-a1")).unwrap(),
             None,
             "不是 dm"
+        );
+    }
+
+    /// PM 2026-10-07：总机组的机长权限上当作每个机组的机长——管得了别的机组的群（改名、归档、移人、强制换群主、
+    /// 往人类群拉人，凡是那个机组的机长能做的）；总机组的普通 session 与别的机组的机长都不行。
+    #[test]
+    fn the_management_captain_manages_any_crews_channels_and_its_workers_do_not() {
+        let mut s_ = store();
+        let boss = crate::testkit::org_captain(&mut s_);
+        let worker = crate::testkit::org_worker(&mut s_);
+        let by = |id: &str| Sender::Session(id.into());
+        let ch = ok(&mut s_, |tx| {
+            create(tx, &by("w-a1"), topic("crew-a", vec![s("w-a2")]))
+        });
+        ok(&mut s_, |tx| ensure_human_channel(tx, "crew-a"));
+        let rename = |n: &str| ChannelPatch {
+            name: Some(n.into()),
+            ..Default::default()
+        };
+        for other in [worker.as_str(), "cap-x"] {
+            match err(&mut s_, |tx| update(tx, &by(other), &ch.id, rename("越权"))) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelManageForbidden, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+            match err(&mut s_, |tx| {
+                force_owner(tx, &by(other), &ch.id, &s("w-a2"))
+            }) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelForceOwnerForbidden, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+            match err(&mut s_, |tx| {
+                remove_member(tx, &by(other), &ch.id, &s("w-a2"))
+            }) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelLeaveForbidden, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+            match err(&mut s_, |tx| {
+                add_members(tx, &by(other), "crew-a/human", &[s("w-a1")])
+            }) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelAddMembersMemberOnly, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+        }
+        let renamed = ok(&mut s_, |tx| {
+            update(tx, &by(&boss), &ch.id, rename("管理层改名"))
+        });
+        assert_eq!(renamed.name, "管理层改名");
+        let owned = ok(&mut s_, |tx| {
+            force_owner(tx, &by(&boss), &ch.id, &s("w-a2"))
+        });
+        assert_eq!(owned.owner, Some(s("w-a2")));
+        ok(&mut s_, |tx| {
+            remove_member(tx, &by(&boss), &ch.id, &s("w-a1"))
+        });
+        assert!(!is_member(s_.conn(), &ch.id, &s("w-a1")).unwrap());
+        ok(&mut s_, |tx| {
+            add_members(tx, &by(&boss), "crew-a/human", &[s("w-a1")])
+        });
+        assert!(is_member(s_.conn(), "crew-a/human", &s("w-a1")).unwrap());
+        let archived = ok(&mut s_, |tx| {
+            update(
+                tx,
+                &by(&boss),
+                &ch.id,
+                ChannelPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(archived.archived_at.is_some());
+        assert!(
+            !is_member(s_.conn(), &ch.id, &s(&boss)).unwrap(),
+            "管得了 ≠ 成员"
         );
     }
 
