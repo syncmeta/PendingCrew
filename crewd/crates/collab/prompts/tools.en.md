@@ -5,9 +5,9 @@ Placeholders {name} are filled by code (M3a's prompts::fill). zh and en must hav
 -->
 
 ## post
-Post key moments to a channel: started, done, blocked, handing off, important findings. Keep terminal detail (what you read or ran) out of channels.
+Post key moments to a channel: started, done, blocked, handing off, important findings. Write the conclusion in one sentence plus the one thing you need decided; long tables and lists go into a file, post the path. Keep terminal detail (what you read or ran) out of channels.
 Say where it goes; there is no default: channel = post in a channel; to = a dm with one session by its directory number (also across crews); reply_to alone = the channel of that message. With none of the three you get an error listing your channels.
-Mentions only decide who is woken: mention no one and no one is woken (except in a dm: the other side is always woken); @session / @captain wake the named agents, @human flags the message for the human; a mention never narrows visibility — everyone who can read the channel still sees the message. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in your home (top-level crew) human channel or use ask.
+@ only wakes: no @ wakes nobody (except in a dm: the other side is always woken); @session / @captain wake the named agents; @human flags the message for the human, only for a question or a decision, never for progress. Whoever you @, everyone who can read the channel sees the message. @human in a channel the human is not watching may be seen much later: for anything urgent post in your home (top-level crew) human channel, and use ask for a decision.
 Posting too fast, repeating the same text, or @human too often is held back (the receipt says what to do): merge your updates into one message.
 The receipt says whom the post wakes. A message body is at most 256 KiB.
 
@@ -27,14 +27,14 @@ Several messages at once (at most 6), one bubble each with its own category. If 
 Who to wake: {kind:"session", target_id:"<session id or directory number>"} / {kind:"captain"} / {kind:"human"}. Omit to wake no one; everyone who can read the channel still sees it. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
 
 ## post.reply_to
-The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically (while they are still in the channel): all channel members still see it, the sender is woken; replying to your own message or to a system message adds no mention.
+The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically (while still in the channel): all channel members still see it, the sender is woken; replying to your own message or to a system message adds no mention.
 
 ## post.category
 What this is: progress / done / blocked / question / finding / handoff / ack / note.
 
 
 ## read_channel
-Read a channel page by page (oldest first). Reading up to the newest message marks the channel read for you, so those messages are not injected again — only for channels you are in or listen to (reading other channels does not move your read position). The #number before each message can go into reply_to.
+Read a channel page by page (oldest first). Use it for older messages or for channels you are not in. Reading up to the newest message marks the channel read for you, so those messages are not injected again — only for channels you are in or listen to (reading other channels does not move your read position). The #number before each message can go into reply_to.
 
 ## read_channel.channel
 Channel id or name; omitted = your crew's lobby. Readable: your crew's channels (dms between its members included — there are no private channels), your home human channel, channels you are in or listen to; management crew sessions read the whole organisation.
@@ -46,7 +46,7 @@ Number of messages, 1–200, default 50.
 Only messages before this one (number or id). Omitted = newest page.
 
 ## search
-Search messages in the channels you can read (your crew's channels, your home human channel, channels you are in or listen to, archived ones included; management crew sessions search the whole organisation). The whole trimmed query is matched as ONE case-insensitive substring (ASCII case folding only), not split into terms; newest first.
+Search messages in the channels you can read, to find something said earlier (your crew's channels, your home human channel, channels you are in or listen to, archived ones included; management crew sessions search the whole organisation). The whole trimmed query is matched as ONE case-insensitive substring (ASCII case folding only), not split into terms; newest first.
 
 ## search.query
 The text to find: trimmed, then matched as one substring (ASCII case-insensitive).
@@ -67,7 +67,7 @@ Only strictly before this time (ISO8601, exclusive: created_at < before).
 Maximum results, 1–200, default 50.
 
 ## list_channels
-List channels: first your home human channel (post there to reach the human or get a decision), then channels you are in or listen to, the other channels of your crew, and channels the human is watching. Each row: id · name · type · purpose · owner · members · state (member / listening / human watching / archived / you own it).
+List channels, to find a channel id or see which channels the human is watching: first your home human channel (post there what the human must see), then channels you are in or listen to, the other channels of your crew, and channels the human is watching. Each row: id · name · type · purpose · owner · members · state (member / listening / human watching / archived / you own it).
 
 ## list_channels.crew
 List only that crew's channels you can read (crew number, id or name).
@@ -88,7 +88,7 @@ One sentence: what the channel is for.
 Members to add right away (optional; channel_invite later works too): session ids, directory numbers (like 7-3; 7 = crew 7's captain right now), or human. Leave yourself out.
 
 ## channel_invite
-Add members to a channel. Usually you must be a member yourself; the lobby and a dm cannot take invites.
+Add members to a channel, when others should follow or discuss the matter too. Usually you must be a member yourself; the lobby and a dm cannot take invites.
 
 ## channel_invite.channel
 Channel id or name.
@@ -97,19 +97,19 @@ Channel id or name.
 Session ids, directory numbers (like 7-3), or human.
 
 ## channel_leave
-Leave a channel. You cannot leave the lobby; a dm cannot be left (archive it instead); the owner of a topic channel must hand ownership on with channel_owner first.
+Leave a channel, when its matter no longer concerns you. You cannot leave the lobby; a dm cannot be left (archive it instead); the owner of a topic channel must hand ownership on with channel_owner first.
 
 ## channel_leave.channel
 Channel id or name.
 
 ## channel_archive
-Archive a channel (messages kept, no new posts; the human can unarchive). Only the owner, the captain of the channel's crew or the human can archive; the lobby and the human channel cannot be archived.
+Archive a channel when its matter is done (messages kept, no new posts; the human can unarchive). Only the owner, the captain of the channel's crew or the human can archive; the lobby and the human channel cannot be archived.
 
 ## channel_archive.channel
 Channel id or name.
 
 ## channel_owner
-Channel ownership. The owner acts as the channel's captain: when the human posts without naming anyone and the dispatcher cannot tell who should answer, the owner is woken. Three uses: with to = the owner offers it (you mention them in the channel under your own name; it takes effect once they call channel_owner(channel=…)); without to = accept an ownership offered to you; with to and force=true = the captain of the channel's crew (the management captain counts) moves it at once, without acceptance. The new owner must be a member.
+Channel ownership. The owner acts as the channel's captain: when the human posts without naming anyone, the owner is usually the one woken and takes it — answers, or hands it to the right person. Three uses: with to = the owner offers it (you mention them in the channel under your own name; it takes effect once they call channel_owner(channel=…)); without to = accept an ownership offered to you; with to and force=true = the captain of the channel's crew (the management captain counts) moves it at once, without acceptance. The new owner must be a member.
 
 ## channel_owner.channel
 Channel id or name.
@@ -136,13 +136,13 @@ Only these senders: human, captain (whoever is captain when the message is poste
 true = stop listening to this channel (not together with minutes or senders). Not listening already is not an error.
 
 ## directory
-Look up the directory: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), -1 is always that crew's captain right now, and 0 is the management crew (0 = its captain right now). Each row: number, name, crew or parent path, session id. Numbers go straight into post's to (a dm, across crews too) and into member arguments of the tools. Channels are listed by list_channels; the human has no number: post in your home human channel, or ask for a decision.
+Look up the directory, to find someone or talk across crews: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), 7-1 is crew 7's captain right now, and 0 is the management crew (0 = its captain right now). Each row: number, name, crew or parent path, session id. Numbers go straight into post's to (a dm, across crews too) and into member arguments of the tools. Channels are listed by list_channels; the human has no number: post what the human must see in your home human channel, and use ask for a decision.
 
 ## directory.query
 Filter by number prefix, name or org path; omitted = everything.
 
 ## ask
-Ask the human for a decision. Non-blocking: the question becomes a pending item (an H number), is posted to your home (top-level crew; the management crew is its own home) human channel mentioning the human, and you get a receipt right away — go do something else or end your turn. When the human answers you are woken and resume_note is read back to you verbatim.
+Use it when the human has to decide: ask the human a question (workers too — not a post in the human channel). Non-blocking: the question becomes a pending item (an H number), is posted to your home (top-level crew; the management crew is its own home) human channel mentioning the human, and you get a receipt right away — go do something else or end your turn. When the human answers you are woken and resume_note is read back to you verbatim.
 
 ## ask.question
 The decision you need. State the options and your preference — "A / B, I lean A because …".
@@ -169,7 +169,7 @@ Why it no longer applies: what changed.
 Whose book holds the question (crew number or id); omitted = your own crew.
 
 ## respond_todo
-Respond to an item in your crew's Agent Todo list (work the human assigned to the crew): claim, progress, result. Append-only; does not change status.
+Respond to an item in your crew's Agent Todo list (work the human gave the crew): when you claim it, when there is progress, and when it is done. Append-only; does not change status.
 
 ## respond_todo.number
 The N in #N.
@@ -226,7 +226,7 @@ Also change child crews; default true.
 true = apply; omitted = preview only.
 
 ## set_crew_status
-One sentence on how the whole crew is doing, shown on the crew's sidebar row. Over 200 characters is refused; an empty string clears it. crew omitted = this crew.
+One sentence on how the whole crew is doing, shown on the crew's sidebar row; update it when things change. Over 200 characters is refused; an empty string clears it. crew omitted = this crew.
 
 ## set_crew_status.text
 One-sentence status.
@@ -235,7 +235,7 @@ One-sentence status.
 Optional: which crew (number or id); omitted = this crew.
 
 ## delegation_policy
-The crew's delegation policy: without text = read it; with text = replace it with that text. crew omitted = this crew.
+The crew's delegation policy: read it before handing out work; replace it when the policy changes. Without text = read it; with text = replace it with that text. crew omitted = this crew.
 
 ## delegation_policy.text
 Optional: the full new text (replaces the old one); omitted = read only.
@@ -292,7 +292,7 @@ Target session: id or directory number (like 7-3).
 esc or interrupt; both interrupt its current turn.
 
 ## list_sessions
-List a crew's sessions: id, number, name, role, state. crew omitted = this crew.
+List a crew's sessions (id, number, name, role, state), before handing out work or to find a session. crew omitted = this crew.
 
 ## list_sessions.crew
 Optional: crew number or id; omitted = this crew.
@@ -346,16 +346,17 @@ Required for create_child: the child crew captain's first task, with goal and do
 Optional, create_child only: claude or codex for the child crew's captain; omitted = default.
 
 ## r.unknown_tool
-There is no tool named {name}.
+There is no tool named {name}. Check your tool list and use one that does the job.
 
 ## r.tool_removed
 The tool {name} is gone: {replacement} does its job now. Call that instead.
 
 ## r.captain_only
-{name} is for the captain only, and you are not the captain now.
+{name} is for the captain only, and you are not the captain now. To get it done, ask your captain in the lobby with @captain.
 
 ## r.bad_args
 Invalid arguments: {detail}
+Fix them per the tool's description and call again.
 
 ## trace.worker
 (auto-relayed) {label} stopped this turn on a question and is waiting for an answer:
@@ -378,12 +379,13 @@ It is not in this channel, so a reply here does not wake it: send it a dm (sessi
 
 ## r.failed
 Did not go through: {detail}
+Deal with the cause and call again; if it is unclear what to do, say so in the lobby.
 
 ## r.no_handler
-{name} is not implemented yet.
+{name} is not implemented yet. Do it another way, or say so in the lobby.
 
 ## r.internal
-Internal error #{n} (details are in the crewd log)
+Internal error #{n} (details are in the crewd log). Try again; if it keeps failing, say so in the lobby with this number.
 
 ## inject.omitted
 {count} newer messages in {channel} were left out this time (length cap); they are still unread: they will follow after your next tool call, or use read_channel to see them now.
@@ -419,10 +421,10 @@ messages needs 1–6 items, you gave {count}. Split them over two posts, or merg
 Item {index} is empty. Fill it in or drop it, then post again.
 
 ## r.bad_category
-Item {index} has an unknown category "{value}"; choose from: {choices}.
+Item {index} has an unknown category "{value}"; choose from: {choices}. Fix it and post again.
 
 ## r.bad_mention
-Invalid mention (kind = {kind}): kind must be session / captain / human, and session needs target_id (a session id or directory number).
+Invalid mention (kind = {kind}): kind must be session / captain / human, and session needs target_id (a session id or directory number). Fix it and post again.
 
 ## r.no_message
 Message {ref} not found (or its channel is not readable for you). Numbers are the # at the start of each read_channel / search line.
@@ -475,7 +477,7 @@ Same text as your #{seq}, so it was not posted again. Write what is new, or repl
 Too many @human from you in the last 30 minutes, so this was not posted. For a decision use ask; otherwise post without @human.
 
 ## r.human_not_watching
-The human is not watching {channel}: the @human badge is lit but may be seen much later. For urgent things or decisions post in your home human channel {home} ({home_id}, the first line of list_channels), or use ask.
+The human is not watching {channel}: the @human badge is lit but may be seen much later. For urgent things post in your home human channel {home} ({home_id}, the first line of list_channels); for decisions use ask.
 
 ## r.channel_choice
 - {id} {name}
@@ -556,7 +558,7 @@ dm
 Item {index} repeats an earlier item. Drop the repeat and post again.
 
 ## r.dm_member_only
-{channel} is a dm: only its two members can post there (the management crew too; a dm takes no one else). To reach one of them, open your own dm with to and their number.
+{channel} is a dm: only its two members can post there (the management crew too; a dm takes no one else). To reach one of them, open your own dm with to and that member's number.
 
 ## r.post_to_human
 The human has no dm: post in your home human channel {home} (channel = {home_id}), and use ask for a decision.
@@ -580,7 +582,7 @@ The human is not watching {channel}: the @human badge is lit but may be seen muc
 Created {name} ({id}); you are the owner, {count} members. Add people with channel_invite, post with post(channel="{id}").
 
 ## r.invited
-Added to {channel}; it now has {count} members. They get its new messages from now on; to wake someone, mention them in a post.
+Added to {channel}; it now has {count} members. New members get its new messages from now on; to wake someone, mention them in a post.
 
 ## r.left
 Left {channel}: its new messages are no longer injected for you. read_channel still shows it; to come back ask a member to channel_invite you.
@@ -595,7 +597,7 @@ I would like to hand ownership of {channel} to you: to take it, call channel_own
 Asked {to} to take over {channel} and mentioned them there; it takes effect once they call channel_owner(channel="{id}"). Until then you stay the owner.
 
 ## r.owner_accepted
-You now own {channel}: when the human posts there without naming anyone and the dispatcher cannot tell who should answer, you are woken.
+You now own {channel}: when the human posts there without naming anyone, you are usually the one woken. Take it: answer, or hand it to the right person.
 
 ## r.owner_forced
 Ownership of {channel} moved to {to}. They are not woken by this: post and mention them if they need to know.
@@ -859,7 +861,7 @@ You are the captain of a newly created parent crew; "{child}" is your first chil
 Parent crew "{crew}" (number {number}) created above "{child}"; it is top-level, at the end of the top level, and its captain {captain} ({id}) is started. To tell it anything later, post(to: "{number}").
 
 ## r.parent_created_no_captain
-Parent crew "{crew}" (number {number}) was created with "{child}" under it, but its captain did not start: {detail}. Do not create it again. It is a level above your reach: ask the management crew's captain (post(to: "0")) or the human to give it a captain with handoff_captain(crew: "{number}", runner: …); if you are the management crew's captain, do that yourself.
+Parent crew "{crew}" (number {number}) was created with "{child}" under it, but its captain did not start: {detail}. Do not create it again. It is a level above your reach: ask the management crew's captain (post(to: "0")) to give it a captain with handoff_captain(crew: "{number}", runner: …), or ask the human to set one up in the app; if you are the management crew's captain, do that yourself.
 
 ## r.no_longer_top
 "{crew}" is no longer top-level: its human channel is archived (messages kept), and its asks now go to the human channel of "{home}". Keep using ask as before.
