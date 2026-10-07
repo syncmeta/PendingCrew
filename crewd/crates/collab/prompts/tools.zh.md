@@ -244,7 +244,7 @@ true = 真执行；不填 = 只看预览。
 可选：哪个机组（号码或 id）；不填 = 本机组。
 
 ## start_session
-（机长）起一个 worker 去干一件明确的编码任务。crew 不填 = 本机组；别的机组只有你按机长算的才行（总机组的机长在每个机组都按机长算）。
+起一个 worker 去干一件明确的编码任务。crew 不填 = 本机组；别的机组只有你按机长算的才行（总机组的机长在每个机组都按机长算）。
 
 ## start_session.brief
 要它干的事，写清目标与完成标准。
@@ -268,7 +268,7 @@ claude 或 codex；不填 = 机组默认。
 可选：在哪个机组起（号码或 id）；不填 = 本机组。
 
 ## stop_session
-（机长）停掉一个 session 的进程：原因先以你的名义写进它所在机组的大厅，再停；不可撤销。只想打断它这一轮，用 nudge_session 发 esc。不能停你自己。
+停掉一个 session 的进程：原因先以你的名义写进它所在机组的大厅，再停；不可撤销。只想打断它这一轮，用 nudge_session 发 esc。不能停你自己。
 
 ## stop_session.session_id
 目标 session：id 或通讯录号（如 7-3）。
@@ -277,13 +277,13 @@ claude 或 codex；不填 = 机组默认。
 停的原因，会公开写进大厅。
 
 ## inspect_session
-（机长）看某个 session 的现场：状态 + 终端最近的输出（codex 是记录尾部）。@ 不应时先看它卡在哪。
+看某个 session 的现场：状态 + 终端最近的输出（codex 是记录尾部）。@ 不应时先看它卡在哪。
 
 ## inspect_session.session_id
 目标 session：id 或通讯录号（如 7-3）。
 
 ## nudge_session
-（机长）打断某个 session 当前这一轮：只收按键 esc / interrupt。要告诉它什么，用 post(to: …) 发给它，它被唤醒时会读到。发出后不保证生效：过几秒 inspect_session 看效果。
+打断某个 session 当前这一轮：只收按键 esc / interrupt。要告诉它什么，用 post(to: …) 发给它，它被唤醒时会读到。发出后不保证生效：过几秒 inspect_session 看效果。
 
 ## nudge_session.session_id
 目标 session：id 或通讯录号（如 7-3）。
@@ -292,13 +292,13 @@ claude 或 codex；不填 = 机组默认。
 esc 或 interrupt，都是打断它当前这一轮。
 
 ## list_sessions
-（机长）列出一个机组的 session：id、号、名字、角色、状态。crew 不填 = 本机组。
+列出一个机组的 session：id、号、名字、角色、状态。crew 不填 = 本机组。
 
 ## list_sessions.crew
 可选：机组号码或 id；不填 = 本机组。
 
 ## handoff_captain
-（机长）交出一个机组的机长位置：to_session 交给一个现有 session（必须属于那个机组），或 runner 新起一个 session 接任，两者只给一个。crew 不填 = 本机组；也可以是你的直系子机组，或任何你按机长算的机组。原机长留在机组里当 worker。
+交出一个机组的机长位置：to_session 交给一个现有 session（必须属于那个机组），或 runner 新起一个 session 接任，两者只给一个。crew 不填 = 本机组；也可以是你的直系子机组，或任何你按机长算的机组。原机长留在机组里当 worker。
 
 ## handoff_captain.crew
 可选：哪个机组的机长位置（号码或 id）；不填 = 本机组。

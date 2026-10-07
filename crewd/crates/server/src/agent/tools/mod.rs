@@ -343,6 +343,23 @@ mod tests {
         );
     }
 
+    /// Every catalog tool reaches its handler (28 after T15b): none answers `r.no_handler`.
+    #[tokio::test]
+    async fn every_catalog_tool_has_a_handler() {
+        let f = Fixture::new().await;
+        let me = f.me(&f.captain).await;
+        assert_eq!(catalog::CATALOG.len(), 28);
+        for t in catalog::CATALOG {
+            let r = call(&f.state, &me, t.name, json!({})).await;
+            assert_ne!(
+                r.text,
+                text::r(Locale::Zh, "r.no_handler", &[("name", t.name)]),
+                "{} has no handler",
+                t.name
+            );
+        }
+    }
+
     #[tokio::test]
     async fn internal_failures_show_a_number_not_the_detail() {
         let f = Fixture::new().await;

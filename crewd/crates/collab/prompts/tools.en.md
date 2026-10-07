@@ -244,7 +244,7 @@ Optional: the full new text (replaces the old one); omitted = read only.
 Optional: which crew (number or id); omitted = this crew.
 
 ## start_session
-(Captain) Start a worker for a clear coding task. crew omitted = this crew; another crew only if you act as its captain (the management crew's captain counts as the captain of every crew).
+Start a worker for a clear coding task. crew omitted = this crew; another crew only if you act as its captain (the management crew's captain counts as the captain of every crew).
 
 ## start_session.brief
 The task, with goal and done criteria.
@@ -268,7 +268,7 @@ Optional reasoning effort.
 Optional: the crew to start it in (number or id); omitted = this crew.
 
 ## stop_session
-(Captain) Stop a session's process: the reason is posted in your name to its crew's lobby first, then it is stopped; irreversible. To interrupt one turn only, nudge_session with esc. You cannot stop yourself.
+Stop a session's process: the reason is posted in your name to its crew's lobby first, then it is stopped; irreversible. To interrupt one turn only, nudge_session with esc. You cannot stop yourself.
 
 ## stop_session.session_id
 Target session: id or directory number (like 7-3).
@@ -277,13 +277,13 @@ Target session: id or directory number (like 7-3).
 Why; posted publicly to the lobby.
 
 ## inspect_session
-(Captain) See a session's state and recent terminal output (codex: transcript tail). Use it when a mention gets no answer.
+See a session's state and recent terminal output (codex: transcript tail). Use it when a mention gets no answer.
 
 ## inspect_session.session_id
 Target session: id or directory number (like 7-3).
 
 ## nudge_session
-(Captain) Interrupt a session's current turn: only the keys esc / interrupt. To tell it something, post(to: …) to it; it reads that when woken. Sending is not confirmation: inspect_session a few seconds later to see the effect.
+Interrupt a session's current turn: only the keys esc / interrupt. To tell it something, post(to: …) to it; it reads that when woken. Sending is not confirmation: inspect_session a few seconds later to see the effect.
 
 ## nudge_session.session_id
 Target session: id or directory number (like 7-3).
@@ -292,13 +292,13 @@ Target session: id or directory number (like 7-3).
 esc or interrupt; both interrupt its current turn.
 
 ## list_sessions
-(Captain) List a crew's sessions: id, number, name, role, state. crew omitted = this crew.
+List a crew's sessions: id, number, name, role, state. crew omitted = this crew.
 
 ## list_sessions.crew
 Optional: crew number or id; omitted = this crew.
 
 ## handoff_captain
-(Captain) Hand over a crew's captain role: to_session hands it to an existing session (which must belong to that crew), or runner starts a new session to take over; give exactly one. crew omitted = this crew; it may also be a direct child crew of yours, or any crew you act as captain of. The old captain stays in the crew as a worker.
+Hand over a crew's captain role: to_session hands it to an existing session (which must belong to that crew), or runner starts a new session to take over; give exactly one. crew omitted = this crew; it may also be a direct child crew of yours, or any crew you act as captain of. The old captain stays in the crew as a worker.
 
 ## handoff_captain.crew
 Optional: whose captain role (crew number or id); omitted = this crew.
