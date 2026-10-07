@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 crewd-collab = { version = "0.1.0", path = "../collab" }
 crewd-exec = { version = "0.1.0", path = "../exec" }
 crewd-proto = { version = "0.1.0", path = "../proto" }
