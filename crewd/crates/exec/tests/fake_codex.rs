@@ -111,7 +111,6 @@ impl Env {
             session_id: "worker-1".into(),
             token: token.into(),
             hooks: false,
-            approval_gates: vec![],
         });
     }
 

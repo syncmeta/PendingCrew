@@ -103,7 +103,7 @@ pub fn new_agent_session_id() -> String {
 /// 文件名：`<launch dir>/agent-token`。helper 读它做 `agent.attach`。
 pub const TOKEN_FILE: &str = "agent-token";
 /// 各 hook 的超时（秒）。官方默认 600 秒：卡住的 crewd 会把每次工具调用拖 10 分钟。
-/// 审批闸也用它：审批不阻塞（照 Swift 驾驶舱 #75②，控制者裁定 C2），一次 hook 就是一次本机 socket 往返。
+/// 一次 hook 就是一次本机 socket 往返。
 pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15;
 
 /// crew 通讯（MCP + hooks）要用的 helper 与身份（spec §22.3「身份」）。
@@ -120,8 +120,6 @@ pub struct CommsSpec {
     pub token: String,
     /// false = 只挂 MCP，不注册任何 hook。
     pub hooks: bool,
-    /// 要人审批的工具名子串（serve 配置）；空 = 不注册 PreToolUse。
-    pub approval_gates: Vec<String>,
 }
 
 /// `Debug` 不打印 token（它会进日志 / panic 信息）。
@@ -133,7 +131,6 @@ impl std::fmt::Debug for CommsSpec {
             .field("session_id", &self.session_id)
             .field("token", &"<redacted>")
             .field("hooks", &self.hooks)
-            .field("approval_gates", &self.approval_gates)
             .finish()
     }
 }
@@ -184,24 +181,17 @@ pub enum HookEvent {
     /// Fires instead of `PostToolUse` when the tool call failed (official hooks docs); handled by
     /// the same `crewd hook post-tool-use` command.
     PostToolUseFailure,
-    PreToolUse,
     Stop,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 4] = [
-        Self::PostToolUse,
-        Self::PostToolUseFailure,
-        Self::PreToolUse,
-        Self::Stop,
-    ];
+    pub const ALL: [HookEvent; 3] = [Self::PostToolUse, Self::PostToolUseFailure, Self::Stop];
 
     /// claude settings.json 里的事件名。
     pub fn settings_key(self) -> &'static str {
         match self {
             Self::PostToolUse => "PostToolUse",
             Self::PostToolUseFailure => "PostToolUseFailure",
-            Self::PreToolUse => "PreToolUse",
             Self::Stop => "Stop",
         }
     }
@@ -211,38 +201,14 @@ impl HookEvent {
     pub fn subcommand(self) -> &'static str {
         match self {
             Self::PostToolUse | Self::PostToolUseFailure => "post-tool-use",
-            Self::PreToolUse => "pre-tool-use",
             Self::Stop => "stop",
         }
     }
 
-    /// 显式超时（秒）。PreToolUse 超时**不挡**工具调用（官方 hooks 文档），所以 helper 自己的期限
-    /// （`hook_cmd::QUICK` = 5s）必须短于它：helper 到期 / 连不上 crewd 时对命中闸的调用输出 deny。
+    /// 显式超时（秒）。helper 自己的期限（`hook_cmd::QUICK` = 5s）短于它：卡住的 crewd 拖不住 claude。
     pub fn timeout_secs(self) -> u64 {
         QUICK_HOOK_TIMEOUT_SECS
     }
-}
-
-/// 审批闸 → PreToolUse 的 matcher。外层括号让 claude 走正则路径（只含字母数字 `_ - , |`
-/// 空格的 matcher 是精确匹配，`computer-use` 就匹配不到 `mcp__computer-use__x`）；
-/// 不锚定 = 子串匹配，与 Swift `toolName.contains(gate)` 同义。空表 = None。
-pub fn gate_matcher(gates: &[String]) -> Option<String> {
-    let parts: Vec<String> = gates
-        .iter()
-        .map(|g| g.trim())
-        .filter(|g| !g.is_empty())
-        .map(|g| {
-            let mut s = String::new();
-            for ch in g.chars() {
-                if r"\^$.|?*+()[]{}/".contains(ch) {
-                    s.push('\\');
-                }
-                s.push(ch);
-            }
-            s
-        })
-        .collect();
-    (!parts.is_empty()).then(|| format!("({})", parts.join("|")))
 }
 
 /// 写 token 文件（0600、`create_new`）。claude 的启动目录与 codex 驱动共用。
@@ -352,14 +318,6 @@ pub fn prepare_claude(
             let mut hooks = serde_json::Map::new();
             for e in HookEvent::ALL {
                 let mut entry = serde_json::Map::new();
-                if e == HookEvent::PreToolUse {
-                    match gate_matcher(&comms.approval_gates) {
-                        Some(m) => {
-                            entry.insert("matcher".to_string(), Value::String(m));
-                        }
-                        None => continue,
-                    }
-                }
                 entry.insert(
                     "hooks".to_string(),
                     json!([{
@@ -419,7 +377,6 @@ mod tests {
             session_id: "worker-1".to_string(),
             token: "tok-SECRET".to_string(),
             hooks: true,
-            approval_gates: vec!["computer-use".to_string()],
         }
     }
 
@@ -619,37 +576,31 @@ mod tests {
         assert!(failed.get("matcher").is_none());
         assert_eq!(failed["hooks"][0], post["hooks"][0]);
         assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["timeout"], 15);
-        let pre = &settings["hooks"]["PreToolUse"][0];
-        assert_eq!(pre["matcher"], "(computer-use)");
-        assert_eq!(
-            pre["hooks"][0]["timeout"], 15,
-            "审批不阻塞（C2）：闸也是一次本机往返"
-        );
-        assert!(
-            pre["hooks"][0]["command"]
-                .as_str()
-                .unwrap()
-                .contains("'hook' 'pre-tool-use'"),
-            "{}",
-            pre["hooks"][0]["command"]
-        );
     }
 
+    /// B16: PendingCrew does no approvals (claude / codex handle permissions themselves), so no
+    /// hook ever sits in front of a tool call: there is no PreToolUse entry, whatever the config.
     #[test]
-    fn no_gates_means_no_pre_tool_use_hook() {
+    fn launch_settings_never_register_a_pre_tool_use_hook() {
         let rt = tempfile::tempdir().unwrap();
-        let mut c = comms();
-        c.approval_gates.clear();
         let spec = ClaudeSpec {
-            comms: Some(c),
+            comms: Some(comms()),
             ..ClaudeSpec::default()
         };
         let (args, _f) =
             prepare_claude(&spec, AgentSessionArg::New("u-5".into()), rt.path()).unwrap();
-        let settings: Value =
-            serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
-        assert!(settings["hooks"].get("PreToolUse").is_none());
-        assert!(settings["hooks"].get("PostToolUse").is_some());
+        let raw = std::fs::read_to_string(args.settings_file.unwrap()).unwrap();
+        assert!(!raw.contains("PreToolUse"), "{raw}");
+        assert!(!raw.contains("pre-tool-use"), "{raw}");
+        let settings: Value = serde_json::from_str(&raw).unwrap();
+        let mut keys: Vec<&str> = settings["hooks"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["PostToolUse", "PostToolUseFailure", "Stop"]);
     }
 
     #[test]
@@ -666,20 +617,6 @@ mod tests {
         assert!(args.mcp_config_file.is_some());
         assert_eq!(args.settings_file, None);
         assert!(files.dir().join(TOKEN_FILE).exists(), "MCP 也要 token");
-    }
-
-    #[test]
-    fn gate_matcher_escapes_and_forces_the_regex_path() {
-        assert_eq!(gate_matcher(&[]), None);
-        assert_eq!(gate_matcher(&["".into(), "  ".into()]), None, "空项忽略");
-        assert_eq!(
-            gate_matcher(&["computer-use".into()]).unwrap(),
-            "(computer-use)"
-        );
-        assert_eq!(
-            gate_matcher(&["a.b".into(), "x|y".into(), "(z)".into()]).unwrap(),
-            r"(a\.b|x\|y|\(z\))"
-        );
     }
 
     #[test]

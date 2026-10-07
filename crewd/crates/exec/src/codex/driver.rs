@@ -57,7 +57,7 @@ pub struct CodexSpec {
     pub initial_prompt: Option<String>,
     /// 开场任务附带的不可信上下文（首轮白板）。
     pub initial_context: UntrustedContext,
-    /// crew 通讯：挂到 `config.mcp_servers.crew`。codex 没有 hook，`hooks` 与 `approval_gates` 不看。
+    /// crew 通讯：挂到 `config.mcp_servers.crew`。codex 没有 hook，`hooks` 不看。
     pub comms: Option<CommsSpec>,
     /// 额外环境变量。过白名单的禁用前缀，再剥掉 [`crate::codex::transport::BILLING_KEYS`]。
     pub additional_env: BTreeMap<String, String>,
