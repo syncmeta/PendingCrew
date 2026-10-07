@@ -15,3 +15,40 @@ fn acts_as_captain_of_is_public_and_unknowns_are_not_captains() {
     let store = crewd_store::Store::open_in_memory().unwrap();
     assert!(!crewd_collab::crews::acts_as_captain_of(store.conn(), "nobody", "no-crew").unwrap());
 }
+
+/// M3b `start_session` refuses with collab's own title rule before it starts anything (Q2): the
+/// rule `sessions::register` applies is reachable from outside the crate, codes included.
+#[test]
+fn resolve_title_is_public_and_is_registers_rule() {
+    use crewd_collab::CollabError;
+    use crewd_collab::refusal::Code;
+    use crewd_collab::sessions::resolve_title;
+    let code = |r: crewd_collab::Result<String>| match r {
+        Err(CollabError::Invalid(r)) => r.code,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        resolve_title(Some(" 修\u{200B}滚动 "), None).unwrap(),
+        "修滚动"
+    );
+    assert_eq!(
+        resolve_title(
+            None,
+            Some("\n补齐示例模块的单元测试，覆盖边界情况和错误路径\n第二行")
+        )
+        .unwrap(),
+        "补齐示例模块的单元测试，覆盖边界情况"
+    );
+    assert_eq!(
+        code(resolve_title(Some(&"长".repeat(19)), Some("x"))),
+        Code::SessionTitleTooLong
+    );
+    assert_eq!(
+        code(resolve_title(None, Some(" \n "))),
+        Code::SessionTitleOrBriefRequired
+    );
+    assert_eq!(
+        code(resolve_title(Some("人类"), None)),
+        Code::SessionTitleIsSenderLabel
+    );
+}

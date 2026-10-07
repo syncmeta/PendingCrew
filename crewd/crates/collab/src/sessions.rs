@@ -39,6 +39,32 @@ pub(crate) fn title_from_brief(brief: &str) -> Option<String> {
     Some(line.chars().take(TITLE_MAX_CHARS).collect())
 }
 
+/// The title a new session gets (S80), the one rule `register` applies: the given title's visible
+/// characters (`visible_title`), at most `TITLE_MAX_CHARS` (`session.title_too_long`); none given =
+/// derived from the brief (`title_from_brief`; neither = `session.title_or_brief_required`); a
+/// sender label is refused (`session.title_is_sender_label`). Public so a caller that starts a
+/// session through another path (M3b `start_session`) refuses with the same codes before it starts.
+pub fn resolve_title(title: Option<&str>, brief: Option<&str>) -> Result<String> {
+    let title = match title.and_then(visible_title) {
+        Some(t) if t.chars().count() <= TITLE_MAX_CHARS => t,
+        Some(t) => {
+            return Err(CollabError::Invalid(
+                Refusal::new(Code::SessionTitleTooLong)
+                    .arg("max", TITLE_MAX_CHARS.to_string())
+                    .arg("actual", t.chars().count().to_string()),
+            ));
+        }
+        None => brief.and_then(title_from_brief).ok_or_else(|| {
+            CollabError::Invalid(
+                Refusal::new(Code::SessionTitleOrBriefRequired)
+                    .arg("max", TITLE_MAX_CHARS.to_string()),
+            )
+        })?,
+    };
+    crate::prompts::refuse_sender_label(Code::SessionTitleIsSenderLabel, &title)?;
+    Ok(title)
+}
+
 pub fn valid_executor(e: &str) -> bool {
     e == "claude"
         || e == "codex"
@@ -139,27 +165,7 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
             Refusal::new(Code::SessionBadExecutor).arg("executor", n.executor.clone()),
         ));
     }
-    let title = match n.title.as_deref().and_then(visible_title) {
-        Some(t) if t.chars().count() <= TITLE_MAX_CHARS => t,
-        Some(t) => {
-            return Err(CollabError::Invalid(
-                Refusal::new(Code::SessionTitleTooLong)
-                    .arg("max", TITLE_MAX_CHARS.to_string())
-                    .arg("actual", t.chars().count().to_string()),
-            ));
-        }
-        None => n
-            .brief
-            .as_deref()
-            .and_then(title_from_brief)
-            .ok_or_else(|| {
-                CollabError::Invalid(
-                    Refusal::new(Code::SessionTitleOrBriefRequired)
-                        .arg("max", TITLE_MAX_CHARS.to_string()),
-                )
-            })?,
-    };
-    crate::prompts::refuse_sender_label(Code::SessionTitleIsSenderLabel, &title)?;
+    let title = resolve_title(n.title.as_deref(), n.brief.as_deref())?;
     if let Some(v) = &n.display_name {
         crate::prompts::refuse_sender_label(Code::SessionDisplayNameIsSenderLabel, v)?;
     }
