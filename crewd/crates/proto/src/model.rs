@@ -389,7 +389,7 @@ pub struct DirectoryRow {
     pub crew_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// 根在最左，" / " 分隔；根机组本身是空串。
+    /// 上级的路径：一级机组在最左，" / " 分隔；总机组是所有人的祖先、不进路径（总机组与一级机组本身是空串）。
     pub org_path: String,
 }
 

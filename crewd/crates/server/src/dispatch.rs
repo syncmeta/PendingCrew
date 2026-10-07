@@ -169,7 +169,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             .await
         }
         methods::CHANNEL_LIST => {
-            // 写路径：根机组的人类群懒建（R1）。
+            // 写路径：home（总机组 / 一级机组）的人类群懒建（R1）。
             let p: CrewIdParams = parse_params(p)?;
             write(state, move |tx| channels::list_for_crew(tx, &p.crew_id)).await
         }
