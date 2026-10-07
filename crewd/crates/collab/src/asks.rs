@@ -172,6 +172,8 @@ pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
 pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;
+    // 归档的机组只读（终审 5）：二级机组的 home 人类群还活着，不能靠公告发不进去碰巧挡住。
+    crews::refuse_archived(tx.conn(), &crew.id)?;
     let actor = actor_of(tx.conn(), asker)?;
     let question = o.question.trim().to_string();
     let default = o.default.map(|d| DefaultOption {
@@ -504,6 +506,28 @@ mod tests {
         assert_eq!(count(&s, "SELECT COUNT(*) FROM wakes"), wakes_before);
         s.conn().execute("DELETE FROM ask_meta", []).unwrap();
         assert_eq!(ok(&mut s, |tx| open(tx, "w-a1", q("这次能成？"))).ask, "H1");
+    }
+
+    /// 终审 5：提问者的机组已归档 → crew.archived（Conflict，指路先解档）；不发号、不建账本、不发公告。
+    /// 二级机组 crew-b 归档后它的 home（crew-a）的人类群还活着——拒绝必须来自提问者自己的机组，不能靠
+    /// 「公告发不进归档的人类群」碰巧挡住（一级机组 crew-x 那条路就是被它碰巧挡住的）。
+    #[test]
+    fn an_archived_crews_session_cannot_open_an_ask() {
+        let mut s = store();
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-x"));
+        let messages_before = count(&s, "SELECT COUNT(*) FROM messages");
+        for asker in ["cap-b", "w-b1", "cap-x"] {
+            match err(&mut s, |tx| open(tx, asker, q("归档了还能问吗？"))) {
+                CollabError::Conflict(r) => {
+                    assert_eq!(r.code, Code::CrewArchived, "{asker}: {r:?}")
+                }
+                e => panic!("{asker}: {e:?}"),
+            }
+        }
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM work_books"), 0);
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM ask_meta"), 0);
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM messages"), messages_before);
     }
 
     #[test]
