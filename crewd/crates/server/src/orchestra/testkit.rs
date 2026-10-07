@@ -779,6 +779,8 @@ pub struct StandInState {
     /// 写进会话的先后（`raw:<字节>` / `send:<正文>`），按 session：量 nudge / 投递有没有交错。
     pub writes: BTreeMap<String, Vec<String>>,
     pub stops: Vec<String>,
+    /// 这些 session 被叫停时不退出（模拟停不下来的进程：停机到期限）。
+    pub hang_on_stop: BTreeSet<String>,
     pub cleared_quota: Vec<String>,
     pub events: BTreeMap<String, mpsc::UnboundedSender<SessionEvent>>,
     pub transcripts: BTreeMap<String, PathBuf>,
@@ -1057,6 +1059,9 @@ impl ExecHandle for StandInHandle {
     fn stop(&self) -> Result<(), Closed> {
         let mut s = self.lock();
         s.stops.push(self.session.clone());
+        if s.hang_on_stop.contains(&self.session) {
+            return Ok(());
+        }
         if s.running.remove(&self.session) {
             s.abandon(&self.session, "session 被停掉");
             let info = crewd_exec::session::ExitInfo {

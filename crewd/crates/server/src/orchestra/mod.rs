@@ -108,9 +108,21 @@ impl std::fmt::Display for ActorDied {
 impl std::error::Error for ActorDied {}
 
 impl Actor {
-    /// 等 actor 结束：停机完成 = `Ok`；panic / 被取消 = `Err`（tokio 的 `JoinError` 文字里带着 panic 的原话）。
+    /// 等 actor 结束：停机完成 = `Ok`；被我们自己中止（[`Actor::abort_handle`]，停机到期限之后）也是 `Ok`；
+    /// panic = `Err`（tokio 的 `JoinError` 文字里带着 panic 的原话）。
     pub async fn finished(self) -> Result<(), ActorDied> {
-        self.task.await.map_err(|e| ActorDied(e.to_string()))
+        match self.task.await {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_cancelled() => Ok(()),
+            Err(e) => Err(ActorDied(e.to_string())),
+        }
+    }
+
+    /// 中止 actor 的把手（先拿到它，再把 `Actor` 交给等 `finished` 的那一路）。serve 在 [`Handle::shutdown`]
+    /// 回 false（到期限还有会话没退）之后用它中止 actor、再关库（`Db::shutdown`）。中止时还被拿着的唤醒行仍是
+    /// inflight：下次启动由 `boot` 按一次失败的尝试回收（C25，至少一次、到上限放弃）。
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.task.abort_handle()
     }
 }
 
@@ -274,12 +286,15 @@ impl Handle {
     }
 
     /// 停机：叫停全部会话（crewd 叫停，不是人停：desired / was_working 不动，带着的唤醒原样退回），最多等 `limit`。
-    /// `limit` 就是期限（T9b 的休眠在这之上加「先等安全点」，C26）。
-    pub async fn shutdown(&self, limit: Duration) {
+    /// `limit` 就是期限（T9b 的休眠在这之上加「先等安全点」，C26）。返回 true = 期限内全部退出、actor 收尾了；
+    /// false = 到期限还有会话没退（或 actor 已经没了）——这时 serve 用 [`Actor::abort_handle`] 中止 actor 再关库；
+    /// 那时还在投的唤醒行留在 inflight，下次启动按一次失败的尝试回收（C25）。
+    pub async fn shutdown(&self, limit: Duration) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.tx.send(Input::Shutdown(tx)).is_ok() {
-            let _ = tokio::time::timeout(limit, rx).await;
+        if self.tx.send(Input::Shutdown(tx)).is_err() {
+            return false;
         }
+        matches!(tokio::time::timeout(limit, rx).await, Ok(Ok(())))
     }
 }
 
@@ -342,13 +357,63 @@ mod tests {
             h.resume(&row.id, Origin::Human).await,
             Err(ControlError::AlreadyRunning(row.id.clone()))
         );
-        h.shutdown(Duration::from_secs(5)).await;
+        assert!(h.shutdown(Duration::from_secs(5)).await, "期限内收尾完了");
         assert_eq!(exec.lock().stops, std::slice::from_ref(&row.id));
         assert!(
             h.live(&row.id).await.is_err(),
             "停机完了 actor 就结束了：句柄回「编排已停止」"
         );
         assert!(actor.finished().await.is_ok(), "正常收尾");
+    }
+
+    /// 评审 Fix 2：停机到期限还有会话没退——`shutdown` 照实回 false，serve 用 `abort_handle` 中止 actor 再关库；
+    /// 我们自己中止的不算崩（`finished` 回 Ok），之后句柄回错。
+    #[tokio::test]
+    async fn a_timed_out_shutdown_says_so_and_the_actor_can_be_aborted() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let row = port
+            .insert_session(port::NewSession {
+                crew_id: "c1".into(),
+                captain: false,
+                executor: "claude".into(),
+                brief: String::new(),
+                title: Some("w1".into()),
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        let exec = StandIn::default();
+        exec.lock().hang_on_stop.insert(row.id.clone());
+        let (h, actor) = spawn(
+            port.clone(),
+            Executors::new().with("claude", Arc::new(exec.clone())),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        h.resume(&row.id, Origin::Human).await.unwrap();
+        for _ in 0..200 {
+            if h.live(&row.id).await.unwrap().running {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let abort = actor.abort_handle();
+        assert!(
+            !h.shutdown(Duration::from_millis(50)).await,
+            "期限到了它还没退：照实说"
+        );
+        abort.abort();
+        let r = tokio::time::timeout(Duration::from_secs(10), actor.finished())
+            .await
+            .expect("中止之后 actor 要结束");
+        assert!(r.is_ok(), "自己中止的不算崩：{r:?}");
+        assert!(h.live(&row.id).await.is_err());
     }
 
     struct PanickingQuota;
