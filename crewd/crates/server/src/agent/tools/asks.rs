@@ -200,14 +200,18 @@ async fn schedule_wakeup_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
     };
     let now = port::now_ms();
     let ceiling = now + MAX_AHEAD_MINUTES * 60_000;
-    let at = match (a.after_minutes, a.at.as_deref()) {
+    // `shown` = the time as the receipt writes it: in the offset the agent gave (an `at` without
+    // the offset it meant is the likely mistake, so it is echoed back as written), else UTC.
+    let (at, shown) = match (a.after_minutes, a.at.as_deref()) {
         (Some(m), None) if (WAKEUP_MIN_MINUTES..=WAKEUP_MAX_MINUTES).contains(&m) => {
-            now + (m * 60_000.0) as i64
+            let at = now + (m * 60_000.0) as i64;
+            (at, wake_time(at))
         }
         (None, Some(s)) => match chrono::DateTime::parse_from_rfc3339(s.trim()) {
-            Ok(t) if t.timestamp_millis() > now && t.timestamp_millis() <= ceiling => {
-                t.timestamp_millis()
-            }
+            Ok(t) if t.timestamp_millis() > now && t.timestamp_millis() <= ceiling => (
+                t.timestamp_millis(),
+                t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
             _ => return Err(cx.err("r.wakeup_when", &[])),
         },
         _ => return Err(cx.err("r.wakeup_when", &[])),
@@ -216,10 +220,26 @@ async fn schedule_wakeup_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
         .await
         .map_err(|e| cx.fail(e))?
     {
-        Timer::Scheduled => Ok(cx.ok("r.wakeup_set", &[("at", &wake_time(at))])),
+        Timer::Scheduled => Ok(cx.ok(
+            "r.wakeup_set",
+            &[("at", &shown), ("delta", &wake_delta(cx, at - now))],
+        )),
         // S85: my crew was removed, nothing was queued; say so instead of a false receipt.
         Timer::Skipped => Err(cx.err("r.wakeup_skipped", &[])),
     }
+}
+
+/// How far ahead a wakeup is, to the nearest minute, so the agent can sanity-check the absolute
+/// time (I1: an `at` in the wrong offset shows up as a delta it did not mean).
+fn wake_delta(cx: &Ctx<'_>, ms: i64) -> String {
+    let minutes = (ms as f64 / 60_000.0).round() as i64;
+    cx.r(
+        "r.wakeup_in",
+        &[
+            ("hours", &(minutes / 60).to_string()),
+            ("minutes", &(minutes % 60).to_string()),
+        ],
+    )
 }
 
 /// A wakeup time as written in receipts: RFC 3339, UTC, whole seconds.
@@ -267,6 +287,19 @@ mod tests {
     use serde_json::json;
 
     use super::wake_time;
+
+    /// `r.wakeup_set` with its relative delta, as the tool writes it.
+    fn wakeup_set(at: &str, hours: i64, minutes: i64) -> String {
+        let delta = text::r(
+            Locale::Zh,
+            "r.wakeup_in",
+            &[
+                ("hours", &hours.to_string()),
+                ("minutes", &minutes.to_string()),
+            ],
+        );
+        text::r(Locale::Zh, "r.wakeup_set", &[("at", at), ("delta", &delta)])
+    }
     use crate::agent::Role;
     use crate::agent::port;
     use crate::agent::testkit::Fixture;
@@ -698,10 +731,7 @@ mod tests {
         assert_eq!(w[0].0, "timer");
         assert!(w[0].1 >= before + 30 * 60_000 && w[0].1 <= port::now_ms() + 30 * 60_000);
         assert_eq!(w[0].2, "额度重置后接着跑全量");
-        assert_eq!(
-            r.text,
-            text::r(Locale::Zh, "r.wakeup_set", &[("at", &wake_time(w[0].1))])
-        );
+        assert_eq!(r.text, wakeup_set(&wake_time(w[0].1), 0, 30));
         assert!(!r.is_error);
         // `at` in the future works too.
         let at = port::now_ms() + 2 * 3_600_000;
@@ -714,6 +744,36 @@ mod tests {
         .await;
         assert!(!r.is_error, "{}", r.text);
         assert_eq!(f.wakes_of(&f.worker).await.len(), 2);
+    }
+
+    /// I1: `at` is taken in the offset it carries; the receipt echoes it as written, with the
+    /// delta from now so a wrong offset shows.
+    #[tokio::test]
+    async fn at_with_an_offset_is_that_instant_and_the_receipt_shows_the_delta() {
+        let f = Fixture::new().await;
+        // A whole second, 7h 58m 20s ahead: the delta rounds to 7h 58m however long the call takes.
+        let at = (port::now_ms() / 1000) * 1000 + (7 * 60 + 58) * 60_000 + 20_000;
+        let east8 = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let written = chrono::DateTime::from_timestamp_millis(at)
+            .unwrap()
+            .with_timezone(&east8)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        assert!(written.ends_with("+08:00"), "{written}");
+        let r = run(
+            &f,
+            &f.worker,
+            "schedule_wakeup",
+            json!({"at": written, "note": "示例"}),
+        )
+        .await;
+        assert_eq!(r.text, wakeup_set(&written, 7, 58));
+        assert!(!r.is_error);
+        let w = f.wakes_of(&f.worker).await;
+        assert_eq!(w.len(), 1);
+        assert_eq!(
+            w[0].1, at,
+            "the instant the offset names, not the wall time as UTC"
+        );
     }
 
     /// The same 7-day ceiling as `fallback_after_minutes`.

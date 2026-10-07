@@ -187,7 +187,7 @@ Wake yourself later: at the time, note is delivered back to you. When quota runs
 Minutes from now (1–1440). Either this or at.
 
 ## schedule_wakeup.at
-An RFC 3339 time (like 2026-10-08T09:00:00Z), in the future and at most 7 days ahead. Either this or after_minutes.
+An RFC 3339 time carrying the offset you mean (like 2026-10-08T09:00:00+08:00; Z = UTC), in the future and at most 7 days ahead. Either this or after_minutes.
 
 ## schedule_wakeup.note
 What to do on waking and where the context is.
@@ -686,10 +686,13 @@ No quota information is available right now. Keep working; if a limit stops you,
 note is required: on waking you only have this note and channel messages. Write what to do on waking and where the context is, then call again.
 
 ## r.wakeup_when
-Give either after_minutes (1–1440) or at (an RFC 3339 time in the next 7 days, like 2026-10-08T09:00:00Z); fix it and call again.
+Give either after_minutes (1–1440) or at (an RFC 3339 time in the next 7 days carrying the offset you mean, like 2026-10-08T09:00:00+08:00; Z = UTC); fix it and call again.
 
 ## r.wakeup_set
-You will be woken at {at}. If you are not running then, you will be started to continue. You can wrap up or do something else now.
+You will be woken at {at} ({delta}); if that gap is not what you meant, the offset is probably wrong: schedule the right time too (this one cannot be cancelled; when it fires, judge by its note). If you are not running then, you will be started to continue. You can wrap up or do something else now.
+
+## r.wakeup_in
+in {hours}h {minutes}m
 
 ## r.wakeup_skipped
 Your crew has been removed, so nothing was scheduled. Do not retry: schedule again after the human restores the crew.
