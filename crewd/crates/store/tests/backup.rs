@@ -406,11 +406,15 @@ fn no_snapshot_no_destructive_step() {
     std::fs::create_dir_all(&b).unwrap();
     std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
     let mut ran = false;
-    let r: Result<((), Option<PathBuf>), StoreError> = s.snapshot_then("a", |s| {
-        ran = true;
-        s.conn().execute("DELETE FROM crews WHERE id='a'", [])?;
-        Ok(())
-    });
+    let r: Result<((), Option<PathBuf>), StoreError> = s.snapshot_then(
+        "a",
+        |_| Ok(()),
+        |s| {
+            ran = true;
+            s.conn().execute("DELETE FROM crews WHERE id='a'", [])?;
+            Ok(())
+        },
+    );
     std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
     let err = r.expect_err("快照失败必须报错");
     assert!(err.storage_kind().is_some(), "{err:?}");
@@ -419,13 +423,43 @@ fn no_snapshot_no_destructive_step() {
 
     // 快照成功：先拍、再删，快照里还有 a。
     let ((), snap) = s
-        .snapshot_then("a", |s| {
-            s.conn().execute("DELETE FROM crews WHERE id='a'", [])?;
-            Ok::<(), StoreError>(())
-        })
+        .snapshot_then(
+            "a",
+            |_| Ok(()),
+            |s| {
+                s.conn().execute("DELETE FROM crews WHERE id='a'", [])?;
+                Ok::<(), StoreError>(())
+            },
+        )
         .unwrap();
     assert_eq!(crew_ids(&snap.unwrap()), ["a"]);
     assert!(crews::list(s.conn()).unwrap().is_empty());
+}
+
+/// 复审 2 轮 1：前置条件不成立（比如没有这个机组）时，既不拍快照也不跑破坏性的一步。
+#[test]
+fn a_failing_precondition_takes_no_snapshot() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open_data_dir(d.path()).unwrap();
+    add_crew(&s, "a");
+    let mut ran = false;
+    let r: Result<((), Option<PathBuf>), StoreError> = s.snapshot_then(
+        "zz",
+        |c| {
+            if crews::exists(c, "zz")? {
+                Ok(())
+            } else {
+                Err(StoreError::NotFound("没有机组 zz".into()))
+            }
+        },
+        |_| {
+            ran = true;
+            Ok(())
+        },
+    );
+    assert!(matches!(r, Err(StoreError::NotFound(_))), "{r:?}");
+    assert!(!ran);
+    assert!(files(&d.path().join("backups")).is_empty(), "不拍快照");
 }
 
 /// 复审 M2：到点了但新备份没拍成（这里用预留空间顶满可用空间检查），旧备份一份都不淘汰。

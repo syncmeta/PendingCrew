@@ -1019,3 +1019,39 @@ async fn a_failed_bind_still_stops_the_ticker_and_closes_the_db_before_unlocking
     );
     crewd_server::lock_data_dir(&dir).expect("锁已释放");
 }
+
+fn pre_delete_snapshots(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir.join("backups"))
+        .map(|rd| {
+            rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("crewd-pre-delete-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 复审 2 轮 1：删不了的（没有这个机组 / 还有在跑的 session）先被前置条件挡下，不拍那份整库快照。
+#[tokio::test]
+async fn crew_delete_that_cannot_happen_takes_no_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    assert_eq!(
+        c.call_err(1, "crew.delete", json!({"crewId":"no-such-crew"}))
+            .await,
+        crewd_proto::RpcError::NOT_FOUND
+    );
+    rusqlite::Connection::open(dir.path().join("crewd.db"))
+        .unwrap()
+        .execute("UPDATE sessions SET desired='running' WHERE id='cap-a'", [])
+        .unwrap();
+    assert_eq!(
+        c.call_err(2, "crew.delete", json!({"crewId":"a"})).await,
+        crewd_proto::RpcError::CONFLICT
+    );
+    assert!(
+        pre_delete_snapshots(dir.path()).is_empty(),
+        "{:?}",
+        pre_delete_snapshots(dir.path())
+    );
+}

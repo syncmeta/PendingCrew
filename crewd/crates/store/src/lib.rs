@@ -364,11 +364,16 @@ impl Store {
     /// 先快照、再做破坏性的那一步（复审 3）：两步在同一次调用里先后执行——经 `Db::call` 调时就是同一个
     /// 库线程任务，中间插不进任何写，快照 = 删之前那一刻。快照拍不成就返回错误，`f` 根本不跑。
     /// 内存库没有备份目录：不拍，直接跑 `f`（快照位置为 `None`）。`f` 自己管事务；不能在事务里调。
+    ///
+    /// `check` 是便宜的前置条件（有没有这一行、是不是不准删……）：先跑它，不成立就直接返回它的错误，
+    /// 不拍那份整库快照（复审 2 轮 1）。三步在同一次调用里，前置条件和事务之间也插不进别的写。
     pub fn snapshot_then<T, E: From<StoreError>>(
         &mut self,
         what: &str,
+        check: impl FnOnce(&Connection) -> std::result::Result<(), E>,
         f: impl FnOnce(&mut Store) -> std::result::Result<T, E>,
     ) -> std::result::Result<(T, Option<std::path::PathBuf>), E> {
+        check(&self.conn)?;
         let snap = self.snapshot_before_purge(what)?;
         Ok((f(self)?, snap))
     }

@@ -335,15 +335,14 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     get(tx.conn(), crew)
 }
 
-/// 只能删非内建、且没有 desired=running session 的机组（spec §22.2）。子机组的父边随之消失。
-/// 删除级联（人显式的操作）：本机组的 session、群（含跨机组 topic 及其历史）一起删掉，每个群发
-/// ChannelRemoved；它的 session 在别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
-pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
-    let crew = get(tx.conn(), id)?;
+/// `delete` 的前置条件（只读、便宜）：机组存在、不是内建、没有 desired=running 的 session。
+/// 永久删除先跑它、再拍快照（N4：删不了就不拍整库快照）。
+pub fn check_deletable(conn: &Connection, id: &str) -> Result<()> {
+    let crew = get(conn, id)?;
     if crew.builtin {
         return Err(CollabError::Forbidden("内建机组不能删".into()));
     }
-    let running: i64 = tx.conn().query_row(
+    let running: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sessions WHERE crew_id=?1 AND desired='running'",
         [id],
         |r| r.get(0),
@@ -353,6 +352,14 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
             "机组 {id} 还有 {running} 个在跑的 session，先停掉"
         )));
     }
+    Ok(())
+}
+
+/// 只能删非内建、且没有 desired=running session 的机组（spec §22.2）。子机组的父边随之消失。
+/// 删除级联（人显式的操作）：本机组的 session、群（含跨机组 topic 及其历史）一起删掉，每个群发
+/// ChannelRemoved；它的 session 在别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
+pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
+    check_deletable(tx.conn(), id)?;
     let kids = children(tx.conn(), id)?;
     // 只有这一个父的子机组删后变成根：按原先的次序排到顶层末尾（C1）。
     let mut orphans = Vec::new();

@@ -179,11 +179,14 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             // N4 / S22：永久删除之前先拍快照，快照和删除在同一个库线程任务里；拍不成就不删。
             // N1 把 crew.delete 改成默认归档后，`crew.purge` 用同一个 `collab_after_snapshot`。
             let what = p.crew_id.clone();
+            let id = p.crew_id.clone();
             to_value(
                 state
-                    .collab_after_snapshot(what, move |tx| {
-                        crews::delete(tx, &p.crew_id).map(|()| Empty {})
-                    })
+                    .collab_after_snapshot(
+                        what,
+                        move |c| crews::check_deletable(c, &id),
+                        move |tx| crews::delete(tx, &p.crew_id).map(|()| Empty {}),
+                    )
                     .await
                     .map_err(collab_err)?,
             )
