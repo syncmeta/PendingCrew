@@ -187,7 +187,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         } else {
             return Err(CollabError::Invalid(format!(
                 "{crew} 不是一级机组，没有人类群，请发到 {}/human",
-                crews::home_of(conn, crew)?
+                crews::home_pointer(conn, crew)?
             )));
         }
     }

@@ -465,7 +465,7 @@ pub fn ensure_human_channel(tx: &mut Tx<'_>, home: &str) -> Result<Channel> {
     if !crews::is_home(tx.conn(), home)? {
         return Err(CollabError::Invalid(format!(
             "{home} 没有人类群，人类群在 {}/human",
-            crews::home_of(tx.conn(), home)?
+            crews::home_pointer(tx.conn(), home)?
         )));
     }
     let id = human_id(home);
@@ -1828,5 +1828,35 @@ mod tests {
         assert_eq!(d.channels.len(), 1);
         let d = ok(&mut s_, |tx| crate::crews::detail(tx, "crew-a"));
         assert_eq!(d.children, ["crew-b"]);
+    }
+
+    /// 树规则下一个非 home 机组往上一定走得到一级机组；走不到（旧数据里与总机组断开的环）时，
+    /// `home_of` 退回自己——拒绝不能指回自己（「crew-b 没有人类群，人类群在 crew-b/human」），按内部数据不一致报。
+    #[test]
+    fn a_crew_cut_off_from_the_org_root_is_an_internal_error_not_a_pointer_to_itself() {
+        let mut s_ = store();
+        // 合成的脏形状：crew-b 与 crew-x 互为父，和总机组断开（结构操作造不出来，直接写库）。
+        crewd_store::crews::set_parents(s_.conn(), "crew-b", &["crew-x".to_string()]).unwrap();
+        crewd_store::crews::set_parents(s_.conn(), "crew-x", &["crew-b".to_string()]).unwrap();
+        let e = err(&mut s_, |tx| ensure_human_channel(tx, "crew-b"));
+        assert!(
+            matches!(&e, CollabError::Store(_)) && !e.to_string().contains("crew-b/human"),
+            "{e:?}"
+        );
+        let e = err(&mut s_, |tx| {
+            crate::messages::post(
+                tx,
+                crate::Sender::Human,
+                crate::messages::NewPost {
+                    channel_id: "crew-b/human".into(),
+                    text: "示例消息".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(
+            matches!(&e, CollabError::Store(_)) && !e.to_string().contains("crew-b/human"),
+            "{e:?}"
+        );
     }
 }

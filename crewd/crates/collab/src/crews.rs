@@ -126,6 +126,20 @@ pub fn home_of(conn: &Connection, id: &str) -> Result<String> {
         .unwrap_or_else(|| id.to_string()))
 }
 
+/// 给「`crew` 不是 home、没有人类群」的拒绝指路用的 home。树规则（I-root、无环）下非 home 机组往上一定走得到
+/// 一级机组；走不到（旧数据里与总机组断开的环）时 `home_of` 退回自己——指回自己没有意义，按内部数据不一致报。
+pub(crate) fn home_pointer(conn: &Connection, crew: &str) -> Result<String> {
+    let home = home_of(conn, crew)?;
+    if home == crew {
+        return Err(CollabError::Store(crewd_store::StoreError::Invalid(
+            format!(
+                "机组 {crew} 不是 home，往上也走不到一级机组（上级成环或与总机组断开）：数据不一致"
+            ),
+        )));
+    }
+    Ok(home)
+}
+
 pub fn captain_of(conn: &Connection, crew: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row(
