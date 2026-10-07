@@ -247,7 +247,9 @@ impl<P: Port> Core<P> {
             }
         }
         let give_up = self.hibernation.as_ref().map_or(now, |h| h.give_up);
-        let settle_until = |at: Ms| at.add(INTERRUPT_SETTLE_MS.min(give_up.since(at)).max(0));
+        // 按过 Esc 之后至多等 min(5 秒, 到放弃之前剩下的一半)：另一半留给叫停之后的退出（9b 复审）——等满到放弃那一刻
+        // 才叫停，它的退出就来不及在放弃之前到，白白报成没停下。
+        let settle_until = |at: Ms| at.add(INTERRUPT_SETTLE_MS.min(give_up.since(at) / 2).max(0));
         for s in &cut {
             // 先按 Esc 打断这一轮，给它一点时间自己停下（m1），再叫停（下面那一段）。等的这几秒里驱动层发来的
             // `Working(false)` 不抹掉 was_working（`Live::hibernate_cut`）：它是被打断的。
@@ -388,7 +390,7 @@ fn entry(session: &str, was_working: bool, doing: &[crewd_wake::QueuedWake]) -> 
 mod tests {
     use super::*;
     use crate::orchestra::OrchestraConfig;
-    use crate::orchestra::core::{Cmd, CollabFact, Input, Origin, StartSession};
+    use crate::orchestra::core::{Cmd, CollabFact, ControlError, Input, Origin, StartSession};
     use crate::orchestra::exec::Executors;
     use crate::orchestra::hooks::Hooks;
     use crate::orchestra::testkit::{Rig, T0};
@@ -1134,5 +1136,58 @@ mod tests {
             })
             .await;
         assert_eq!(r, Err(ControlError::ShuttingDown));
+    }
+
+    /// 9b 复审：按过 Esc 之后至多等 min(5 秒, 到放弃之前剩下的一半)——宽限短于 10 秒时，叫停之后还留着一半时间给它退出，
+    /// 不会等满到放弃那一刻才叫停、再白白报成「没停下」。
+    #[tokio::test]
+    async fn with_a_short_grace_the_settle_wait_leaves_half_of_it_for_the_exit() {
+        let cfg = OrchestraConfig {
+            hibernate_stop_grace: std::time::Duration::from_secs(4),
+            ..OrchestraConfig::for_tests()
+        };
+        let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("cap").await;
+        rig.run("w1").await;
+        rig.exec.lock().deaf_to_interrupt.insert("w1".into());
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let mut rx = hibernate(&mut rig, Some(0)).await;
+        assert_eq!(rig.exec.lock().interrupts, ids(&["w1"]));
+        rig.tick(2 * SEC - 1).await;
+        assert_eq!(rig.exec.lock().stops, ids(&["cap"]), "还在等它停下这一轮");
+        rig.tick(1).await;
+        assert_eq!(
+            rig.exec.lock().stops,
+            ids(&["cap", "w1"]),
+            "等了宽限的一半（2 秒）就叫停"
+        );
+        let r = report(&mut rx);
+        assert!(r.completed && r.failed.is_empty(), "{r:?}");
+        assert_eq!(r.interrupted, ids(&["w1"]));
+    }
+
+    /// 9b 复审：休眠到期限、按过 Esc 等它停下的 session 不再收 nudge（当场回「没在跑」，不排队）。
+    #[tokio::test]
+    async fn a_session_cut_by_hibernate_refuses_nudges() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("cap").await;
+        rig.run("w1").await;
+        rig.exec.lock().deaf_to_interrupt.insert("w1".into());
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let _rx = hibernate(&mut rig, Some(0)).await;
+        assert!(rig.live("w1").is_some_and(|l| l.hibernate_cut));
+        let r = rig
+            .cmd(|reply| Cmd::Nudge {
+                session: "w1".into(),
+                input: "合成补充".into(),
+                reply,
+            })
+            .await;
+        assert_eq!(r, Err(ControlError::NotRunning("w1".into())));
+        assert!(rig.exec.sent("w1").is_empty());
     }
 }

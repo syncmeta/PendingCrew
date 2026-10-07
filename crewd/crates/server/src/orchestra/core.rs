@@ -979,9 +979,9 @@ impl<P: Port> Core<P> {
         let Some(l) = self
             .live
             .get_mut(session)
-            .filter(|l| !l.stopping && !l.halting)
+            .filter(|l| !l.stopping && !l.halting && !l.hibernate_cut)
         else {
-            // 正在被停掉的当场回「没在跑」：不排队等 `on_exited`（它可能永远不来）。
+            // 正在被停掉的（含休眠到期限、按过 Esc 等它停下的）当场回「没在跑」：不排队等 `on_exited`（它可能永远不来）。
             let _ = reply.send(Err(ControlError::NotRunning(session.into())));
             return Ok(());
         };

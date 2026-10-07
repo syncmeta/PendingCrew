@@ -38,7 +38,8 @@ pub struct OrchestraConfig {
     /// 两次拉起之间至少隔多久（§22.7 Q1）。
     pub stagger_ms: i64,
     pub lang: Lang,
-    /// 问 Arbiter（M5b 的 Jev）最多等多久；超时 = 没答案 → 群主。
+    /// 问 Arbiter（M5b 的 Jev）最多等多久；超时 = 没答案 → 群主。C25（Jev 的决策预算）：缺省 2 秒——人发的
+    /// 没 @ 谁的消息最多晚这么久才叫醒群主；之后才到的答案作废。
     pub arbiter_timeout: Duration,
     /// 其余挂钩（IdleHook / AskAnsweredHook / QuotaSource / ContextExtras）各自最多等多久（C25：挂住的挂钩不能卡住
     /// actor）。到期 = 当它没答：IdleHook 没有唤醒、QuotaSource 拿不到重置时刻（45 分钟退避）、ContextExtras 空。
@@ -62,7 +63,7 @@ impl Default for OrchestraConfig {
             loops: LOOP_LIMITS,
             stagger_ms: DEFAULT_STAGGER_MS,
             lang: Lang::Zh,
-            arbiter_timeout: Duration::from_secs(15),
+            arbiter_timeout: Duration::from_secs(2),
             hook_timeout: Duration::from_secs(5),
             heartbeat_ms: 30_000,
             boot_id: uuid::Uuid::new_v4().to_string(),
@@ -163,7 +164,11 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
                 // Core 自己拿着一个发送端（派生任务回报用），所以这里其实收不到 None；收到了也照样收尾。
                 None => return,
             },
-            _ = tokio::time::sleep(Duration::from_millis(wait)) => core.handle(Input::Tick).await,
+            _ = tokio::time::sleep(Duration::from_millis(wait)) => {
+                core.handle(Input::Tick).await;
+                // 刚拍过：心跳从这里重新起算（9b 复审），不然两路一前一后各拍一次。
+                heartbeat.reset();
+            }
             _ = heartbeat.tick() => core.handle(Input::Tick).await,
         }
         if core.shutdown_done() {
@@ -559,6 +564,60 @@ mod tests {
         }
         let ticks = port.lock().defaults_applied - before;
         assert!(ticks >= 3, "120 秒里心跳 30 秒一拍，却只拍了 {ticks} 次");
+    }
+
+    /// C25：Jev 的决策预算缺省 2 秒（之后按群主兜底）。
+    #[test]
+    fn default_arbiter_budget_is_two_seconds() {
+        assert_eq!(
+            OrchestraConfig::default().arbiter_timeout,
+            Duration::from_secs(2)
+        );
+    }
+
+    /// 9b 复审：精确的定时拍（睡到下一个 not_before）拍过之后心跳重新起算——不会在它后面紧跟着再来一拍。
+    /// 一条 20 秒后才到点的唤醒（时钟停着，所以它一直在 20 秒后）：95 秒里只有那四拍（20/40/60/80），心跳一次都插不进来。
+    #[tokio::test(start_paused = true)]
+    async fn an_exact_tick_restarts_the_heartbeat_so_ticks_do_not_double() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let row = port
+            .insert_session(port::NewSession {
+                crew_id: "c1".into(),
+                captain: true,
+                executor: "claude".into(),
+                brief: String::new(),
+                title: Some("cap".into()),
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        port.enqueue(crewd_wake::NewWake {
+            session: row.id.clone(),
+            kind: crewd_wake::WakeKind::Timer,
+            source: crewd_wake::source::timer("later"),
+            priority: crewd_wake::Priority::Auto,
+            not_before: T0.add(20_000),
+            note: None,
+            origin: row.id.clone(),
+        })
+        .await
+        .unwrap();
+        let (_h, _actor) = spawn(
+            port.clone(),
+            Executors::new(),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        let before = port.lock().defaults_applied;
+        tokio::time::sleep(Duration::from_secs(95)).await;
+        let ticks = port.lock().defaults_applied - before;
+        assert_eq!(ticks, 4, "20/40/60/80 秒各一拍，心跳不再紧跟着多拍");
     }
 
     struct PanickingQuota;

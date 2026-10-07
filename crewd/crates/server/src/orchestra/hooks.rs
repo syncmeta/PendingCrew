@@ -21,6 +21,8 @@ pub struct ArbiterQuestion {
     pub ctx: ChannelCtx,
 }
 
+/// 调度层（M5b 的 Jev）：人发、没 @ 谁的消息该叫醒谁。在派生任务里问，预算 `OrchestraConfig::arbiter_timeout`
+/// （C25，缺省 2 秒）：超时 = 没答案 → 群主兜底（`plan::untargeted_human`）；超时之后才到的答案丢掉，不再叫谁。
 pub trait Arbiter: Send + Sync {
     fn wake_set<'a>(&'a self, q: &'a ArbiterQuestion) -> BoxFut<'a, Option<Vec<String>>>;
 }
