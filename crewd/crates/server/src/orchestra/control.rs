@@ -6,11 +6,13 @@ use crewd_exec::health::HealthKind;
 use crewd_proto::{DecisionView, HealthKindView, HealthView, Role, Session, SessionLive};
 
 use super::Handle;
-use super::core::{ControlError, Origin, StartSession};
+use super::core::{ControlError, Origin, RefusedKind, StartSession};
 use super::port::LiveView;
 use crate::control::{
     BoxFuture, ControlError as M3aError, Inspection, QuotaReport, SessionControl, StartRequest,
 };
+use crewd_collab::Locale;
+use crewd_collab::refusal::{Code, Refusal};
 
 /// `AppState` 先建（编排的 Port 要持有它），编排后起：句柄晚到，放在 `OnceLock` 里。
 pub struct OrchestraControl {
@@ -23,11 +25,41 @@ impl OrchestraControl {
         Self { cell, db }
     }
 
-    /// 编排还没起来（或没配执行器、根本不跑）。T10b 换成拒绝码的文字。
-    fn h(&self) -> Result<&Handle, M3aError> {
-        self.cell
-            .get()
-            .ok_or_else(|| M3aError::Failed("orchestra not running".into()))
+    /// 设置里的语言（给 agent 看的拒绝文字用它，T10b 补充 §2.4）；读不出来 = 中文（记一行）。
+    async fn locale(&self) -> Locale {
+        match self
+            .db
+            .call(|s| crewd_collab::settings::locale(s.conn()))
+            .await
+        {
+            Ok(Ok(l)) => l,
+            Ok(Err(e)) => {
+                eprintln!("crewd: 编排：读语言设置失败，拒绝文字先用中文：{e}");
+                Locale::Zh
+            }
+            Err(e) => {
+                eprintln!("crewd: 编排：读语言设置失败，拒绝文字先用中文：{e}");
+                Locale::Zh
+            }
+        }
+    }
+
+    /// 编排还没起来（或没配执行器、根本不跑）：`orchestra.not_running` 的文字。
+    async fn h(&self) -> Result<&Handle, M3aError> {
+        match self.cell.get() {
+            Some(h) => Ok(h),
+            None => Err(M3aError::Failed(
+                Refusal::new(Code::OrchestraNotRunning).text(self.locale().await),
+            )),
+        }
+    }
+
+    /// 编排的结果：错误按设置的语言变成 M3a 的词表（只在出错时读语言）。
+    async fn done<T>(&self, r: Result<T, ControlError>) -> Result<T, M3aError> {
+        match r {
+            Ok(v) => Ok(v),
+            Err(e) => Err(map_error(e, self.locale().await)),
+        }
     }
 
     async fn session(&self, id: String) -> Result<Session, M3aError> {
@@ -42,22 +74,33 @@ impl OrchestraControl {
     }
 }
 
-/// 编排的错误 → M3a 的 `SessionControl` 词表（T10a 补充 §2.4）。文字暂用 `ControlError` 的 Display（T10b 换拒绝码）。
-pub fn map_error(e: ControlError) -> M3aError {
+/// 编排的错误 → M3a 的 `SessionControl` 词表（T10a 补充 §2.4）。文字 = 拒绝码按 `l` 渲染（T10b 补充 §2.4）；
+/// 存储故障只给类别；内部错误给原文（agent 的回执，不上线给客户端）。
+pub fn map_error(e: ControlError, l: Locale) -> M3aError {
+    let text = match e.refusal() {
+        Some(r) => r.text(l),
+        None => e.to_string(),
+    };
     match e {
-        ControlError::NotFound(s) => M3aError::NotFound(s),
-        ControlError::AlreadyRunning(s) => M3aError::AlreadyRunning(s),
-        ControlError::Unsupported(s) => M3aError::Unsupported(s),
-        e @ (ControlError::Invalid(_)
+        ControlError::NotFound(_)
+        | ControlError::Refused {
+            kind: RefusedKind::NotFound,
+            ..
+        } => M3aError::NotFound(text),
+        ControlError::AlreadyRunning(_) => M3aError::AlreadyRunning(text),
+        ControlError::Unsupported(_) => M3aError::Unsupported(text),
+        ControlError::Invalid(_)
         | ControlError::NotRunning(_)
         | ControlError::NoWorkdir(_)
         | ControlError::CaptainTaken(_)
-        | ControlError::CrewRemoved(_)) => M3aError::Invalid(e.to_string()),
+        | ControlError::CrewRemoved(_)
+        | ControlError::Refused { .. } => M3aError::Invalid(text),
         // 建 worktree 失败（C8）带原因原样给调用方（M3b 的 `start_session` 回执 = 失败 + 这段原因）。
-        e @ (ControlError::AtCap { .. }
+        ControlError::AtCap { .. }
         | ControlError::Worktree(_)
         | ControlError::ShuttingDown
-        | ControlError::Internal(_)) => M3aError::Failed(e.to_string()),
+        | ControlError::Storage { .. }
+        | ControlError::Internal(_) => M3aError::Failed(text),
     }
 }
 
@@ -74,34 +117,33 @@ impl SessionControl for OrchestraControl {
                 effort: req.effort,
                 isolation: req.isolation,
             };
-            let row = self
-                .h()?
-                .start(start, Origin::Agent)
-                .await
-                .map_err(map_error)?;
+            let r = self.h().await?.start(start, Origin::Agent).await;
+            let row = self.done(r).await?;
             self.session(row.id).await
         })
     }
 
     fn resume(&self, session_id: String) -> BoxFuture<'_, Result<(), M3aError>> {
         Box::pin(async move {
-            self.h()?
-                .resume(&session_id, Origin::Agent)
-                .await
-                .map_err(map_error)
+            let r = self.h().await?.resume(&session_id, Origin::Agent).await;
+            self.done(r).await
         })
     }
 
     fn stop(&self, session_id: String, reason: String) -> BoxFuture<'_, Result<(), M3aError>> {
         Box::pin(async move {
             eprintln!("crewd: 停止 session {session_id}：{reason}");
-            self.h()?.stop(&session_id).await.map_err(map_error)
+            let r = self.h().await?.stop(&session_id).await;
+            self.done(r).await
         })
     }
 
     /// T10c 收窄 nudge（交给人选的框不让 agent 代按）；这里原样转。
     fn nudge(&self, session_id: String, text: String) -> BoxFuture<'_, Result<(), M3aError>> {
-        Box::pin(async move { self.h()?.nudge(&session_id, text).await.map_err(map_error) })
+        Box::pin(async move {
+            let r = self.h().await?.nudge(&session_id, text).await;
+            self.done(r).await
+        })
     }
 
     fn inspect(
@@ -110,11 +152,8 @@ impl SessionControl for OrchestraControl {
         max_lines: usize,
     ) -> BoxFuture<'_, Result<Inspection, M3aError>> {
         Box::pin(async move {
-            let (live, screen) = self
-                .h()?
-                .inspect(&session_id, max_lines)
-                .await
-                .map_err(map_error)?;
+            let r = self.h().await?.inspect(&session_id, max_lines).await;
+            let (live, screen) = self.done(r).await?;
             Ok(Inspection {
                 live: live_to_proto(&live),
                 screen,
@@ -130,10 +169,12 @@ impl SessionControl for OrchestraControl {
         effort: Option<String>,
     ) -> BoxFuture<'_, Result<(), M3aError>> {
         Box::pin(async move {
-            self.h()?
+            let r = self
+                .h()
+                .await?
                 .set_profile(&session_id, model, effort)
-                .await
-                .map_err(map_error)
+                .await;
+            self.done(r).await
         })
     }
 
@@ -143,10 +184,8 @@ impl SessionControl for OrchestraControl {
         to_session_id: String,
     ) -> BoxFuture<'_, Result<(), M3aError>> {
         Box::pin(async move {
-            self.h()?
-                .set_captain(&crew_id, &to_session_id)
-                .await
-                .map_err(map_error)
+            let r = self.h().await?.set_captain(&crew_id, &to_session_id).await;
+            self.done(r).await
         })
     }
 
@@ -157,11 +196,8 @@ impl SessionControl for OrchestraControl {
 
     fn live(&self, session_id: String) -> BoxFuture<'_, Result<SessionLive, M3aError>> {
         Box::pin(async move {
-            self.h()?
-                .live(&session_id)
-                .await
-                .map(|v| live_to_proto(&v))
-                .map_err(map_error)
+            let r = self.h().await?.live(&session_id).await;
+            Ok(live_to_proto(&self.done(r).await?))
         })
     }
 }
@@ -215,46 +251,63 @@ mod tests {
         }
     }
 
+    /// 每个变体 → M3a 的词（T10a 补充 §2.4）；文字 = 拒绝码按设置的语言（T10b 补充 §2.4）。
     #[test]
-    fn errors_map_onto_the_m3a_vocabulary() {
-        let s = || "s".to_string();
-        assert_eq!(
-            map_error(ControlError::NotFound(s())),
-            M3aError::NotFound(s())
-        );
-        assert_eq!(
-            map_error(ControlError::AlreadyRunning(s())),
-            M3aError::AlreadyRunning(s())
-        );
-        assert_eq!(
-            map_error(ControlError::Unsupported(s())),
-            M3aError::Unsupported(s())
-        );
-        for e in [
-            ControlError::Invalid(s()),
-            ControlError::NotRunning(s()),
-            ControlError::NoWorkdir(s()),
-            ControlError::CaptainTaken(s()),
-            ControlError::CrewRemoved(s()),
-        ] {
-            assert_eq!(
-                map_error(e.clone()),
-                M3aError::Invalid(e.to_string()),
-                "{e:?}"
-            );
+    fn errors_map_onto_the_m3a_vocabulary_with_refusal_text_in_the_set_language() {
+        use crewd_store::StorageKind;
+        let s = || "s-1".to_string();
+        let invalid = ControlError::Invalid(Refusal::new(Code::OrchestraNudgeEmpty));
+        let refused = |kind| ControlError::Refused {
+            kind,
+            refusal: Refusal::new(Code::SessionTitleTooLong)
+                .arg("max", "5")
+                .arg("actual", "9"),
+        };
+        type Want = fn(String) -> M3aError;
+        let table: Vec<(ControlError, Want)> = vec![
+            (ControlError::NotFound(s()), M3aError::NotFound),
+            (refused(RefusedKind::NotFound), M3aError::NotFound),
+            (ControlError::AlreadyRunning(s()), M3aError::AlreadyRunning),
+            (
+                ControlError::Unsupported("codex".into()),
+                M3aError::Unsupported,
+            ),
+            (invalid.clone(), M3aError::Invalid),
+            (ControlError::NotRunning(s()), M3aError::Invalid),
+            (ControlError::NoWorkdir(s()), M3aError::Invalid),
+            (ControlError::CaptainTaken("c-1".into()), M3aError::Invalid),
+            (ControlError::CrewRemoved("c-1".into()), M3aError::Invalid),
+            (refused(RefusedKind::Invalid), M3aError::Invalid),
+            (refused(RefusedKind::Forbidden), M3aError::Invalid),
+            (refused(RefusedKind::Conflict), M3aError::Invalid),
+            (ControlError::AtCap { max: 2 }, M3aError::Failed),
+            (ControlError::Worktree("合成原因".into()), M3aError::Failed),
+            (ControlError::ShuttingDown, M3aError::Failed),
+        ];
+        for (e, want) in table {
+            for l in [Locale::Zh, Locale::En] {
+                let text = e.refusal().expect("规则拒绝都带码").text(l);
+                assert_eq!(map_error(e.clone(), l), want(text), "{e:?} {l:?}");
+            }
         }
-        for e in [
-            ControlError::AtCap { max: 2 },
-            ControlError::Worktree(s()),
-            ControlError::ShuttingDown,
-            ControlError::Internal(s()),
-        ] {
-            assert_eq!(
-                map_error(e.clone()),
-                M3aError::Failed(e.to_string()),
-                "{e:?}"
-            );
-        }
+        let en = map_error(ControlError::NotRunning(s()), Locale::En);
+        assert!(
+            matches!(&en, M3aError::Invalid(t) if t.contains("s-1") && t.is_ascii()),
+            "英文设置给英文文字：{en:?}"
+        );
+        // 没有码的：存储故障只说类别（原文不给），内部错误给原文。
+        let storage = ControlError::Storage {
+            kind: StorageKind::DiskFull,
+            detail: "/secret/crewd.db".into(),
+        };
+        assert_eq!(
+            map_error(storage, Locale::En),
+            M3aError::Failed(StorageKind::DiskFull.describe().into())
+        );
+        assert_eq!(
+            map_error(ControlError::Internal("合成内部".into()), Locale::En),
+            M3aError::Failed("合成内部".into())
+        );
     }
 
     /// 编排没起来（没配执行器 / 还在起）：每个方法都回 Failed，不挂住、不 panic；quota 照实回空。
@@ -273,6 +326,9 @@ mod tests {
         failed(c.inspect("s".into(), 10).await.map(|_| ()));
         failed(c.start(StartRequest::default()).await.map(|_| ()));
         assert_eq!(c.quota().await, Ok(QuotaReport { lines: vec![] }));
+        // 文字是 `orchestra.not_running`、按设置的语言（库里没设 = 中文）。
+        let zh = Refusal::new(Code::OrchestraNotRunning).text(Locale::Zh);
+        assert_eq!(c.resume("s".into()).await, Err(M3aError::Failed(zh)));
     }
 
     /// 起来了的编排：agent 的 start 经句柄起会话、回注册后的行（真库里的 `Session`）。

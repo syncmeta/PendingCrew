@@ -242,7 +242,7 @@ session 要有标题（不超过 {max} 个字）或 brief；两者都没有就�
 机组 {crew} 已有机长；要换机长请用 set_captain
 
 ## settings.bad_locale
-meta.locale 存的是 {value}，只认 zh / en；改成 zh 或 en
+语言 {value} 不认识（库里存的或客户端给的），只认 zh / en；改成 zh 或 en
 
 ## settings.bad_max_live
 meta.maxLiveSessions 存的是 {value}，不是正整数；改成正整数，或清掉它
@@ -279,3 +279,39 @@ wake_latches 里有认不出的行：scope={scope} id={id}；这是库里的脏�
 
 ## listen.not_readable
 你读不到群 {channel}，不能收听它：收听不扩大读范围。只能收听读得到的群（自己机组的群、自己在的群、自己 home 的人类群）；要听这个群，请它所在机组的机长把你拉进群
+
+## session.already_running
+session {session} 已经在跑或正在起；不用再起，要它干活就给它发消息
+
+## session.not_running
+session {session} 没在跑；先恢复它，或给它发消息让它被拉起
+
+## session.at_cap
+已达设置里的并发 session 上限 {max}；等有 session 停下，或在设置里调高 / 清掉上限
+
+## session.executor_unavailable
+执行器 {executor} 在这台 crewd 上用不了（没接上）；改用 claude，或先接上它
+
+## session.no_workdir
+session {session} 没有可用的工作目录（它的 worktree 与机组目录都没有或已被删）；给机组设好工作目录再试
+
+## session.worktree_failed
+没能为 session 新建 git worktree：{detail}；修好之后再试，或用 isolation=false 在机组目录里起
+
+## orchestra.not_running
+这台 crewd 没有启用会话管理（没配 agent 执行器）；用 crewd serve --claude <路径> 重新启动后再试
+
+## orchestra.shutting_down
+crewd 正在停机或休眠，不再起、恢复或叫醒 session；等它重新起来后再试
+
+## orchestra.nudge_empty
+nudge 的输入是空的；不会替它按一个裸回车（那会选中当前高亮的那一项），写明要按的键或要发的文字
+
+## orchestra.nudge_digits_unnumbered
+这一屏的选项没有编号，发数字无效；高亮在要选的那一项上就发 enter，否则交给人
+
+## loop.edge_needs_from
+scope=edge 要给 from（叫醒它的来源：session id 或 system）；要解这个 session 的整体熔断，用 scope=session
+
+## system.api_incompatible
+客户端的 API 版本 {client} 太旧：这台 crewd 支持 {min} 到 {current}；更新客户端后再连

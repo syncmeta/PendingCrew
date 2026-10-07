@@ -89,9 +89,9 @@ impl<P: Port> Core<P> {
         self.port
             .set_max_live(max)
             .await
-            .map_err(ControlError::internal)?;
+            .map_err(ControlError::from_port)?;
         self.gate.set_max_live(max);
-        self.rescan().await.map_err(ControlError::internal)
+        self.rescan().await.map_err(ControlError::from_port)
     }
 
     /// 停机：关上停机闸（不投、不拉起、不起 / 恢复会话），用 [`Core::halt`] 叫停全部在跑的（不改 desired /
@@ -645,7 +645,8 @@ mod tests {
         rig.settle().await;
         assert!(rig.core.shutdown_done());
         let r = started.try_recv().expect("起会话要有回执");
-        assert!(matches!(r, Err(ControlError::Internal(_))), "{r:?}");
+        // T10b：带码的「正在停机」（orchestra.shutting_down），不再是包着原文的内部错误；留下的 worktree 路径进日志。
+        assert_eq!(r, Err(ControlError::ShuttingDown));
         assert_eq!(rig.port.lock().sessions.len(), 1, "没写新行");
         assert!(rig.exec.lock().launches.is_empty());
     }

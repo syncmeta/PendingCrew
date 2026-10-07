@@ -1065,14 +1065,14 @@ impl<P: Port> Core<P> {
             .port
             .session(session)
             .await
-            .map_err(ControlError::internal)?
+            .map_err(ControlError::from_port)?
             .filter(|r| r.crew_id == crew)
             .ok_or_else(|| ControlError::NotFound(format!("{crew}/{session}")))?;
         let prev = self
             .port
             .set_captain(crew, session)
             .await
-            .map_err(ControlError::internal)?;
+            .map_err(ControlError::from_port)?;
         let (now, lang) = (self.now(), self.lang());
         if let Some(l) = self.live.get_mut(session) {
             l.captain = true;
@@ -1106,7 +1106,7 @@ impl<P: Port> Core<P> {
                 .touch(&self.port)
                 .enqueue(w)
                 .await
-                .map_err(ControlError::internal)?;
+                .map_err(ControlError::from_port)?;
             told.push(s);
         }
         // 换机长本身已成；附言都已入队，投不出去的留在队列里下次再试（评审 (3)）。
@@ -1125,8 +1125,8 @@ impl<P: Port> Core<P> {
         self.port
             .clear_latch(scope, id)
             .await
-            .map_err(ControlError::internal)?;
-        self.rescan().await.map_err(ControlError::internal)
+            .map_err(ControlError::from_port)?;
+        self.rescan().await.map_err(ControlError::from_port)
     }
 }
 

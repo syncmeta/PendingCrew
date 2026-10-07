@@ -23,7 +23,7 @@ fn to_value<T: Serialize>(v: T) -> Result<Value, RpcError> {
 
 /// 内部错误（库 / SQL / 序列化失败、账本不变式坏了）：细节只进日志（stderr），客户端拿到一句通用话 + 一个编号
 /// （对日志用）。错误原文可能带表名、SQL、数据片段，不上线（Task 14 复审裁定 5）。
-fn internal(detail: impl std::fmt::Display) -> RpcError {
+pub(crate) fn internal(detail: impl std::fmt::Display) -> RpcError {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     eprintln!("crewd: 内部错误 #{n}: {detail}");
@@ -34,7 +34,7 @@ fn internal(detail: impl std::fmt::Display) -> RpcError {
 }
 
 /// 规则拒绝 → RPC 错误：message 是中文缺省，`data.refusal` 是稳定码，客户端按码本地化。
-fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError {
+pub(crate) fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError {
     RpcError::new(code, r.to_string()).with_refusal(r.code.as_str())
 }
 
@@ -78,7 +78,7 @@ pub fn collab_err(e: CollabError) -> RpcError {
 }
 
 /// 存储故障（S26）：给人一句原因 + 编号，原文（路径、SQL）只进日志。
-fn storage(kind: crewd_store::StorageKind, detail: impl std::fmt::Display) -> RpcError {
+pub(crate) fn storage(kind: crewd_store::StorageKind, detail: impl std::fmt::Display) -> RpcError {
     let e = internal(detail);
     RpcError::new(
         RpcError::STORAGE,

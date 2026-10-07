@@ -242,7 +242,7 @@ The display name {value} collides with a speaker label (human / crewd) and would
 Crew {crew} already has a captain. To change the captain, use set_captain.
 
 ## settings.bad_locale
-meta.locale holds {value}, but only zh and en are accepted. Set it to zh or en.
+The language {value} (stored or sent by the client) is not known; only zh and en are accepted. Use zh or en.
 
 ## settings.bad_max_live
 meta.maxLiveSessions holds {value}, which is not a positive integer. Set a positive integer, or clear it.
@@ -279,3 +279,39 @@ The listen deadline must be in the future. Give a later time, or set no deadline
 
 ## listen.not_readable
 You cannot read channel {channel}, so you cannot listen to it: listening never widens what you can read. Listen only to channels you can read (your crew's channels, channels you are in, your home's human channel); to follow this one, ask the captain of the crew it belongs to to add you.
+
+## session.already_running
+Session {session} is already running or starting. No need to start it again; send it a message to give it work.
+
+## session.not_running
+Session {session} is not running. Resume it first, or send it a message so it gets started.
+
+## session.at_cap
+The concurrent session limit in settings ({max}) is reached. Wait for a session to stop, or raise or clear the limit in settings.
+
+## session.executor_unavailable
+Executor {executor} is not available on this crewd. Use claude, or set that executor up first.
+
+## session.no_workdir
+Session {session} has no usable working directory (its worktree and the crew directory are missing or deleted). Set the crew's working directory and try again.
+
+## session.worktree_failed
+Could not create a git worktree for the session: {detail}. Fix that and try again, or start it with isolation=false in the crew directory.
+
+## orchestra.not_running
+Session management is not running on this crewd (no agent executor configured). Restart it with crewd serve --claude <path> and try again.
+
+## orchestra.shutting_down
+crewd is shutting down or hibernating and will not start, resume or wake sessions. Try again once it is back up.
+
+## orchestra.nudge_empty
+The nudge input is empty. crewd will not press a bare Enter for you (that would pick the highlighted option); say which keys or text to send.
+
+## orchestra.nudge_digits_unnumbered
+The options on this screen are not numbered, so digits do nothing. Send enter if the highlighted option is the one you want; otherwise leave it to the human.
+
+## loop.edge_needs_from
+scope=edge needs from (the source that woke it: a session id or system). To release the session's own latch, use scope=session.
+
+## system.api_incompatible
+The client's API version {client} is too old: this crewd supports {min} to {current}. Update the client and connect again.

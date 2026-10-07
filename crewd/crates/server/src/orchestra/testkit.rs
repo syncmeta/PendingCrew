@@ -114,6 +114,24 @@ pub struct MemState {
     pub archived_channels: BTreeSet<String>,
     /// 设了就在下一次 `claim` 之前把这一行作废（模拟别人在 `pending()` 与 `claim` 之间停了它，spec §26.5）。
     pub claim_race: Option<i64>,
+    /// 设了就让 `session` 读出一个存储故障（同库：`StoreError::Storage` 经 anyhow 上抛，S26）。
+    pub storage_error: Option<crewd_store::StorageKind>,
+}
+
+/// 一个存储故障（`StoreError::Storage`，经 rusqlite 的错误码归类，同库）。
+pub fn storage_failure(kind: crewd_store::StorageKind) -> anyhow::Error {
+    let rc = match kind {
+        crewd_store::StorageKind::DiskFull => rusqlite::ffi::SQLITE_FULL,
+        crewd_store::StorageKind::Io => rusqlite::ffi::SQLITE_IOERR_WRITE,
+        crewd_store::StorageKind::Corrupt => rusqlite::ffi::SQLITE_CORRUPT,
+        crewd_store::StorageKind::ReadOnly => rusqlite::ffi::SQLITE_READONLY,
+        crewd_store::StorageKind::CantOpen => rusqlite::ffi::SQLITE_CANTOPEN,
+    };
+    let e = crewd_store::StoreError::from(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rc),
+        Some("/合成/路径/crewd.db".into()),
+    ));
+    anyhow::Error::new(e)
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -321,7 +339,11 @@ impl MemPort {
 
 impl Port for MemPort {
     async fn session(&self, id: &str) -> Result<Option<SessionRow>> {
-        Ok(self.lock().sessions.get(id).cloned())
+        let st = self.lock();
+        if let Some(kind) = st.storage_error {
+            return Err(storage_failure(kind));
+        }
+        Ok(st.sessions.get(id).cloned())
     }
 
     async fn sessions_desired_running(&self) -> Result<Vec<SessionRow>> {

@@ -13,6 +13,7 @@ pub mod hooks;
 pub mod port;
 #[cfg(test)]
 mod port_contract;
+pub mod rpc;
 #[cfg(test)]
 mod testkit;
 pub mod worktree;

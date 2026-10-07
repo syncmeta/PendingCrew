@@ -26,10 +26,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crewd_collab::CollabError;
+use crewd_collab::refusal::{Code, Refusal};
 use crewd_collab::render::safe_name;
 use crewd_exec::driver::SendError;
 use crewd_exec::health::{Health, HealthKind};
 use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, SessionEvent};
+use crewd_store::{StorageKind, StoreError};
 use crewd_term::{DecisionEvent, PendingDecision};
 use crewd_wake::breaker::{LoopBreaker, SYSTEM};
 use crewd_wake::notice::{
@@ -123,6 +126,14 @@ impl DueCache {
     pub(crate) fn set(&self, v: Option<Ms>, now: Ms) {
         *self.0.lock().expect("缓存锁中毒") = Some((v, now));
     }
+}
+
+/// 起会话失败时已建好的 worktree 留着（crewd 永不删 worktree，C8）：路径记进日志，人据此清理。
+fn kept_worktree(path: &std::path::Path) {
+    eprintln!(
+        "crewd: 编排：起会话没成，已建好的 worktree {} 留着、不会被自动删除",
+        path.display()
+    );
 }
 
 /// 会话事件里顺带的投递出错：记日志、不打断这个事件本身的处理（评审 (7)：`session.changed` 照样要发）。
@@ -235,26 +246,50 @@ pub struct StartSession {
     pub isolation: bool,
 }
 
+/// collab 规则拒绝的类别（同 `CollabError` 的四个规则变体）：RPC 错误号按它定。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusedKind {
+    NotFound,
+    Invalid,
+    Forbidden,
+    Conflict,
+}
+
+/// 编排拒绝 / 失败的原因。除了 `Storage` / `Internal`，每一个都有稳定的拒绝码（[`ControlError::refusal`]，
+/// 文字在 `crewd_collab` 的 `prompts/refusals.{zh,en}.md`）：客户端按码本地化，agent 按设置的语言读文字。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlError {
+    /// 没有这个 session（id）。
     NotFound(String),
     AlreadyRunning(String),
     NotRunning(String),
     AtCap {
         max: usize,
     },
+    /// 这个执行器（`claude` / `codex` / `acp:<id>`）在这台 crewd 上没接上。
     Unsupported(String),
     NoWorkdir(String),
     /// 建 worktree 失败（C8）：原因给人看；什么都没留下、没起、没退回共享目录。
     Worktree(String),
     /// 要起机长、但机组已有机长（M3a 的 `sessions::register` 对此回 `Conflict`）。换机长走 `crew.setCaptain` / handoff。
     CaptainTaken(String),
-    /// 请求本身不成立（空的 nudge、在没编号的选择框上发数字）。
-    Invalid(String),
-    /// crewd 正在停机：不再起 / 恢复会话。
+    /// 请求本身不成立（空的 nudge、在没编号的选择框上发数字、设置值不对）。
+    Invalid(Refusal),
+    /// crewd 正在停机 / 休眠：不再起 / 恢复会话。
     ShuttingDown,
     /// 机组已被移除（归档，只读；spec §26.5 / §26.7）：不起新 session、不恢复它的 session（机组 id）。
     CrewRemoved(String),
+    /// collab 的规则拒绝原样带出来（写 session 行时标题太长、设置值不对……）：码与类别都不变。
+    Refused {
+        kind: RefusedKind,
+        refusal: Refusal,
+    },
+    /// 存储故障（S26）：给人看的只有类别，原文只进日志。
+    Storage {
+        kind: StorageKind,
+        detail: String,
+    },
+    /// 别的失败（C14）：原文只进日志，客户端拿到一个编号。
     Internal(String),
 }
 
@@ -263,29 +298,78 @@ impl ControlError {
         Self::Internal(e.to_string())
     }
 
-    /// `Core::launch` 的错误：它自己拒的（`AlreadyRunning`）原样带出来，其余是 Internal。
-    pub fn from_launch(e: anyhow::Error) -> Self {
-        e.downcast::<Self>().unwrap_or_else(Self::internal)
+    /// Port（以及 `Core::launch`）的错误 → 编排的错误：沿错误链找，collab 的规则拒绝原样带出（码不丢，T10a 遗留 2）；
+    /// 存储故障归成 `Storage`（S26，同 dispatch 的 `collab_err`）；编排自己拒的（`AlreadyRunning` 等）原样；其余 `Internal`。
+    pub fn from_port(e: anyhow::Error) -> Self {
+        for cause in e.chain() {
+            if let Some(c) = cause.downcast_ref::<ControlError>() {
+                return c.clone();
+            }
+            if let Some(c) = cause.downcast_ref::<CollabError>() {
+                let kind = match c {
+                    CollabError::NotFound(_) => Some(RefusedKind::NotFound),
+                    CollabError::Invalid(_) => Some(RefusedKind::Invalid),
+                    CollabError::Forbidden(_) => Some(RefusedKind::Forbidden),
+                    CollabError::Conflict(_) => Some(RefusedKind::Conflict),
+                    CollabError::Work(_) | CollabError::Store(_) => None,
+                };
+                if let (Some(kind), Some(r)) = (kind, c.refusal()) {
+                    return Self::Refused {
+                        kind,
+                        refusal: r.clone(),
+                    };
+                }
+                if let CollabError::Store(se) = c
+                    && let Some(kind) = se.storage_kind()
+                {
+                    return Self::Storage {
+                        kind,
+                        detail: format!("{e:#}"),
+                    };
+                }
+            }
+            if let Some(se) = cause.downcast_ref::<StoreError>()
+                && let Some(kind) = se.storage_kind()
+            {
+                return Self::Storage {
+                    kind,
+                    detail: format!("{e:#}"),
+                };
+            }
+        }
+        Self::Internal(format!("{e:#}"))
+    }
+
+    /// 稳定的拒绝码 + 参数（`Storage` / `Internal` 没有：它们不是规则拒绝）。
+    pub fn refusal(&self) -> Option<Refusal> {
+        let r = |code| Refusal::new(code);
+        Some(match self {
+            Self::NotFound(s) => r(Code::SessionNotFound).arg("session", s),
+            Self::AlreadyRunning(s) => r(Code::SessionAlreadyRunning).arg("session", s),
+            Self::NotRunning(s) => r(Code::SessionNotRunning).arg("session", s),
+            Self::AtCap { max } => r(Code::SessionAtCap).arg("max", max.to_string()),
+            Self::Unsupported(executor) => {
+                r(Code::SessionExecutorUnavailable).arg("executor", executor)
+            }
+            Self::NoWorkdir(s) => r(Code::SessionNoWorkdir).arg("session", s),
+            Self::Worktree(detail) => r(Code::SessionWorktreeFailed).arg("detail", detail),
+            Self::CaptainTaken(crew) => r(Code::SessionCaptainExists).arg("crew", crew),
+            Self::Invalid(refusal) | Self::Refused { refusal, .. } => refusal.clone(),
+            Self::ShuttingDown => r(Code::OrchestraShuttingDown),
+            Self::CrewRemoved(crew) => r(Code::CrewRemoved).arg("crew", crew),
+            Self::Storage { .. } | Self::Internal(_) => return None,
+        })
     }
 }
 
+/// 日志与 RPC message 的缺省：拒绝码的中文文字；存储故障只说类别；内部错误是原文（只进日志，RPC 上换成编号）。
 impl std::fmt::Display for ControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound(id) => write!(f, "没有 session {id}"),
-            Self::AlreadyRunning(id) => write!(f, "session {id} 已经在跑或正在起"),
-            Self::NotRunning(id) => write!(f, "session {id} 没在跑"),
-            Self::AtCap { max } => write!(f, "已达设置里的并发会话上限 {max}"),
-            Self::Unsupported(why)
-            | Self::Internal(why)
-            | Self::Worktree(why)
-            | Self::Invalid(why) => {
-                write!(f, "{why}")
-            }
-            Self::NoWorkdir(id) => write!(f, "session {id} 没有可用的工作目录"),
-            Self::CaptainTaken(crew) => write!(f, "机组 {crew} 已有机长；换机长用 crew.setCaptain"),
-            Self::ShuttingDown => write!(f, "crewd 正在停机，不再起或恢复会话"),
-            Self::CrewRemoved(crew) => write!(f, "机组 {crew} 已被移除，先恢复它再起或恢复会话"),
+        match (self, self.refusal()) {
+            (_, Some(r)) => f.write_str(&r.text(crewd_collab::Locale::Zh)),
+            (Self::Storage { kind, .. }, None) => f.write_str(kind.describe()),
+            (Self::Internal(detail), None) => f.write_str(detail),
+            (_, None) => unreachable!("只有 Storage / Internal 没有拒绝码"),
         }
     }
 }
@@ -665,7 +749,7 @@ impl<P: Port> Core<P> {
                     .port
                     .patch_session(&session, patch)
                     .await
-                    .map_err(ControlError::internal);
+                    .map_err(ControlError::from_port);
                 let _ = reply.send(r);
             }
             Cmd::SetCaptain {
@@ -680,7 +764,7 @@ impl<P: Port> Core<P> {
                 let r = self
                     .wake_list(session.as_deref())
                     .await
-                    .map_err(ControlError::internal);
+                    .map_err(ControlError::from_port);
                 let _ = reply.send(r);
             }
             Cmd::Recover { scope, id, reply } => {
@@ -752,13 +836,13 @@ impl<P: Port> Core<P> {
     ) -> Result<Option<PathBuf>, ControlError> {
         self.execs
             .get(&req.executor)
-            .map_err(|e| ControlError::Unsupported(e.to_string()))?;
+            .map_err(|_| ControlError::Unsupported(req.executor.clone()))?;
         // 已移除的机组只读（§26.7）：什么都不建、不写、不起。
         if self
             .port
             .crew_removed(&req.crew_id)
             .await
-            .map_err(ControlError::internal)?
+            .map_err(ControlError::from_port)?
         {
             return Err(ControlError::CrewRemoved(req.crew_id.clone()));
         }
@@ -771,7 +855,7 @@ impl<P: Port> Core<P> {
                     .port
                     .captain(&req.crew_id)
                     .await
-                    .map_err(ControlError::internal)?
+                    .map_err(ControlError::from_port)?
                     .is_some())
         {
             return Err(ControlError::CaptainTaken(req.crew_id.clone()));
@@ -784,7 +868,7 @@ impl<P: Port> Core<P> {
             .port
             .crew_workdir(&req.crew_id)
             .await
-            .map_err(ControlError::internal)?
+            .map_err(ControlError::from_port)?
             .ok_or_else(|| {
                 ControlError::Worktree(format!(
                     "机组 {} 没有工作目录，无法为 session 新建 worktree",
@@ -805,12 +889,11 @@ impl<P: Port> Core<P> {
             self.captain_pending.remove(&req.crew_id);
         }
         let r = match result {
-            // 建 worktree 期间开始停机了：不写行、不起（worktree 留着：crewd 不删，把路径告诉人）。
-            Ok(path) if self.shutting_down => Err(ControlError::Internal(format!(
-                "{}（已建好的 worktree {} 不会被自动删除）",
-                ControlError::ShuttingDown,
-                path.display()
-            ))),
+            // 建 worktree 期间开始停机了：不写行、不起（worktree 留着：crewd 不删，路径记进日志）。
+            Ok(path) if self.shutting_down => {
+                kept_worktree(&path);
+                Err(ControlError::ShuttingDown)
+            }
             Ok(path) => self.finish_start(req, Some(path)).await,
             Err(why) => Err(ControlError::Worktree(why)),
         };
@@ -823,17 +906,17 @@ impl<P: Port> Core<P> {
         req: StartSession,
         worktree: Option<PathBuf>,
     ) -> Result<SessionRow, ControlError> {
-        let kept = |e: String| match &worktree {
-            Some(p) => ControlError::Internal(format!(
-                "{e}（已建好的 worktree {} 不会被自动删除）",
-                p.display()
-            )),
-            None => ControlError::Internal(e),
+        // 之后出错：已建好的 worktree 留着（crewd 不删），路径记进日志；错误本身照常带码上抛。
+        let kept = |e: ControlError| {
+            if let Some(p) = &worktree {
+                kept_worktree(p);
+            }
+            e
         };
         let exec = self
             .execs
             .get(&req.executor)
-            .map_err(|e| ControlError::Unsupported(e.to_string()))?;
+            .map_err(|_| kept(ControlError::Unsupported(req.executor.clone())))?;
         // 建 worktree 期间机长指针可能变了（换机长）：再查一次。
         if worktree.is_some()
             && req.captain
@@ -841,12 +924,10 @@ impl<P: Port> Core<P> {
                 .port
                 .captain(&req.crew_id)
                 .await
-                .map_err(|e| kept(e.to_string()))?
+                .map_err(|e| kept(ControlError::from_port(e)))?
                 .is_some()
         {
-            return Err(kept(
-                ControlError::CaptainTaken(req.crew_id.clone()).to_string(),
-            ));
+            return Err(kept(ControlError::CaptainTaken(req.crew_id.clone())));
         }
         let brief = Some(req.brief.clone()).filter(|b| !b.trim().is_empty());
         let row = self
@@ -862,13 +943,13 @@ impl<P: Port> Core<P> {
                 worktree: worktree.clone(),
             })
             .await
-            .map_err(|e| kept(e.to_string()))?;
+            .map_err(|e| kept(ControlError::from_port(e)))?;
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
         self.launch(row.clone(), exec, brief, vec![], vec![])
             .await
-            .map_err(ControlError::from_launch)?;
+            .map_err(ControlError::from_port)?;
         Ok(row)
     }
 
@@ -887,7 +968,7 @@ impl<P: Port> Core<P> {
             .port
             .session(session)
             .await
-            .map_err(ControlError::internal)?
+            .map_err(ControlError::from_port)?
             .ok_or_else(|| ControlError::NotFound(session.into()))?;
         if row.crew_removed {
             return Err(ControlError::CrewRemoved(row.crew_id));
@@ -895,7 +976,7 @@ impl<P: Port> Core<P> {
         let exec = self
             .execs
             .get(&row.executor)
-            .map_err(|e| ControlError::Unsupported(e.to_string()))?;
+            .map_err(|_| ControlError::Unsupported(row.executor.clone()))?;
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
@@ -909,7 +990,7 @@ impl<P: Port> Core<P> {
         };
         self.launch(row, exec, text, vec![], vec![])
             .await
-            .map_err(ControlError::from_launch)
+            .map_err(ControlError::from_port)
     }
 
     /// 人停掉（裁定 10）：desired=stopped，丢掉此刻 pending 的唤醒，叫停进程（已带进进程、还没投进去的那些
@@ -919,7 +1000,7 @@ impl<P: Port> Core<P> {
             .port
             .session(session)
             .await
-            .map_err(ControlError::internal)?
+            .map_err(ControlError::from_port)?
             .is_none()
         {
             return Err(ControlError::NotFound(session.into()));
@@ -929,7 +1010,7 @@ impl<P: Port> Core<P> {
             .port
             .pending(session)
             .await
-            .map_err(ControlError::internal)?;
+            .map_err(ControlError::from_port)?;
         if !pending.is_empty() {
             self.due
                 .touch(&self.port)
@@ -941,7 +1022,7 @@ impl<P: Port> Core<P> {
                     now,
                 )
                 .await
-                .map_err(ControlError::internal)?;
+                .map_err(ControlError::from_port)?;
         }
         let patch = SessionPatch {
             desired: Some(Desired::Stopped),
@@ -951,7 +1032,7 @@ impl<P: Port> Core<P> {
         self.port
             .patch_session(session, patch)
             .await
-            .map_err(ControlError::internal)?;
+            .map_err(ControlError::from_port)?;
         self.held.remove(session);
         if let Some(l) = self.live.get_mut(session) {
             l.stopping = true;
@@ -988,15 +1069,15 @@ impl<P: Port> Core<P> {
             return Ok(());
         };
         let Some(plan) = notice::nudge_plan(input) else {
-            let why = "nudge 的输入是空的：不会替它按一个裸回车（那会选中当前高亮的那一项）";
-            let _ = reply.send(Err(ControlError::Invalid(why.into())));
+            // 不会替它按一个裸回车（那会选中当前高亮的那一项）。
+            let r = Refusal::new(Code::OrchestraNudgeEmpty);
+            let _ = reply.send(Err(ControlError::Invalid(r)));
             return Ok(());
         };
         let digits = input.trim().bytes().all(|b| b.is_ascii_digit());
         if digits && l.decision.as_ref().is_some_and(|d| !d.numbered) {
-            let why =
-                "这一屏的选项没有编号，发数字无效；高亮在要选的那一项上就发 enter，否则交给人";
-            let _ = reply.send(Err(ControlError::Invalid(why.into())));
+            let r = Refusal::new(Code::OrchestraNudgeDigitsUnnumbered);
+            let _ = reply.send(Err(ControlError::Invalid(r)));
             return Ok(());
         }
         l.writes.push_back(Write::Nudge { plan, reply });
@@ -1031,7 +1112,10 @@ impl<P: Port> Core<P> {
                             ExecSendError::Send(SendError::Closed) => {
                                 ControlError::NotRunning(session.into())
                             }
-                            other => ControlError::Invalid(other.to_string()),
+                            ExecSendError::Send(SendError::EmptyText) => {
+                                ControlError::Invalid(Refusal::new(Code::OrchestraNudgeEmpty))
+                            }
+                            other => ControlError::internal(other),
                         });
                     let _ = reply.send(r);
                 }
@@ -1839,7 +1923,7 @@ impl<P: Port> Core<P> {
             .port
             .session(session)
             .await
-            .map_err(ControlError::internal)?
+            .map_err(ControlError::from_port)?
             .ok_or_else(|| ControlError::NotFound(session.into()))?;
         let l = self.live.get(session);
         Ok(LiveView {
@@ -3166,7 +3250,10 @@ mod tests {
         rig.crew("c1", "cap");
         rig.run("cap").await;
         let err = nudge(&mut rig, "cap", "  ").await.unwrap_err();
-        assert!(matches!(err, ControlError::Invalid(_)), "{err}");
+        assert_eq!(
+            err,
+            ControlError::Invalid(Refusal::new(Code::OrchestraNudgeEmpty))
+        );
         nudge(&mut rig, "cap", "继续\n干").await.unwrap();
         assert_eq!(rig.exec.sent("cap"), ["继续 干"], "去毒后经 send 投递");
         assert!(!rig.exec.lock().raws.contains_key("cap"), "文本不走 raw");
@@ -3185,7 +3272,10 @@ mod tests {
         rig.emit("cap", SessionEvent::Decision(DecisionEvent::Appeared(d)))
             .await;
         let err = nudge(&mut rig, "cap", "1").await.unwrap_err();
-        assert!(matches!(err, ControlError::Invalid(_)), "{err}");
+        assert_eq!(
+            err,
+            ControlError::Invalid(Refusal::new(Code::OrchestraNudgeDigitsUnnumbered))
+        );
         assert!(!rig.exec.lock().raws.contains_key("cap"));
         nudge(&mut rig, "cap", "enter").await.unwrap();
         assert_eq!(rig.exec.lock().raws["cap"], [b"\r".to_vec()]);

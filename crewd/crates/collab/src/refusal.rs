@@ -82,6 +82,8 @@ refusal_codes! {
     DirectoryNoSuchCrew = "directory.no_such_crew" ["number"],
     DirectoryCrewRemoved = "directory.crew_removed" ["number"],
     DirectoryNoSuchExtension = "directory.no_such_extension" ["number", "ext"],
+    // loop（环路熔断，M3c 的 `loop.recover`）
+    LoopEdgeNeedsFrom = "loop.edge_needs_from" [],
     // message
     MessageNotFound = "message.not_found" ["message"],
     MessageSeqNotFound = "message.seq_not_found" ["seq"],
@@ -97,6 +99,11 @@ refusal_codes! {
     MessageMentionNeedsTarget = "message.mention_needs_target" [],
     MessageReplyOtherChannel = "message.reply_other_channel" [],
     MessageIdConflict = "message.id_conflict" [],
+    // orchestra（M3c 的会话管理与唤醒）
+    OrchestraNotRunning = "orchestra.not_running" [],
+    OrchestraShuttingDown = "orchestra.shutting_down" [],
+    OrchestraNudgeEmpty = "orchestra.nudge_empty" [],
+    OrchestraNudgeDigitsUnnumbered = "orchestra.nudge_digits_unnumbered" [],
     // restart
     RestartNotFound = "restart.not_found" ["id"],
     RestartAlreadyResumed = "restart.already_resumed" [],
@@ -109,11 +116,19 @@ refusal_codes! {
     SessionTitleIsSenderLabel = "session.title_is_sender_label" ["value"],
     SessionDisplayNameIsSenderLabel = "session.display_name_is_sender_label" ["value"],
     SessionCaptainExists = "session.captain_exists" ["crew"],
+    SessionAlreadyRunning = "session.already_running" ["session"],
+    SessionNotRunning = "session.not_running" ["session"],
+    SessionAtCap = "session.at_cap" ["max"],
+    SessionExecutorUnavailable = "session.executor_unavailable" ["executor"],
+    SessionNoWorkdir = "session.no_workdir" ["session"],
+    SessionWorktreeFailed = "session.worktree_failed" ["detail"],
     // settings
     SettingsBadLocale = "settings.bad_locale" ["value"],
     SettingsBadMaxLive = "settings.bad_max_live" ["value"],
     SettingsMaxLiveMin = "settings.max_live_min" [],
     SettingsBadHibernateDeadline = "settings.bad_hibernate_deadline" ["value"],
+    // system（握手）
+    SystemApiIncompatible = "system.api_incompatible" ["client", "min", "current"],
     // todo
     TodoResponseEmpty = "todo.response_empty" [],
     TodoNotFound = "todo.not_found" ["number"],
