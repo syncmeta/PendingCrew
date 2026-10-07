@@ -509,8 +509,10 @@ mod tests {
         assert!(counts_as_progress("Bash"));
     }
 
+    /// §24.2: @ only decides who is woken. Everything others post in my channels is injected, and
+    /// each line says whom it mentions (the reader itself reads as "you").
     #[tokio::test]
-    async fn directed_to_others_is_hidden_and_widened_is_marked() {
+    async fn everything_others_post_is_injected_and_mentions_are_marked() {
         let f = Fixture::new().await;
         f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
             .await;
@@ -522,26 +524,20 @@ mod tests {
             vec![at(MentionKind::Session, Some("s-w2"))],
         )
         .await;
+        let ctx = ctx_of(&f, &f.worker).await.unwrap();
         assert!(
-            ctx_of(&f, &f.worker).await.is_none(),
-            "@ 了别人的不进（游标照样推过去）"
+            ctx.contains("给 w2 的活") && ctx.contains("（@") && ctx.contains("另一个 worker"),
+            "@ 了别人的照样进，标出 @ 了谁：{ctx}"
         );
         f.session_post(
             &f.captain,
             &l,
-            "全组看、w2 来做",
-            vec![
-                at(MentionKind::Broadcast, None),
-                at(MentionKind::Session, Some("s-w2")),
-            ],
+            "你来做",
+            vec![at(MentionKind::Session, Some(f.worker.as_str()))],
         )
         .await;
         let ctx = ctx_of(&f, &f.worker).await.unwrap();
-        assert!(
-            ctx.contains("全组看、w2 来做") && ctx.contains("另一个 worker"),
-            "旁观者看得出是给谁的：{ctx}"
-        );
-        assert!(!ctx.contains("给 w2 的活"));
+        assert!(ctx.contains("你来做") && ctx.contains("（@你）"), "{ctx}");
     }
 
     #[tokio::test]
@@ -712,7 +708,7 @@ mod tests {
                     at: at.to_string(),
                     sender: String::new(),
                     text: String::new(),
-                    directed_to: None,
+                    mentions: vec![],
                     reply_to: None,
                 })
                 .collect(),

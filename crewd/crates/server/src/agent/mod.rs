@@ -26,6 +26,6 @@ pub struct Identity {
     pub role: Role,
     /// 群里的显示名（session 的 title / display_name，没有就是 id）。
     pub label: String,
-    /// 所在机组是内建总机组（`crews.builtin`）。
-    pub builtin_crew: bool,
+    /// 所在机组是总机组（管理机组，`crews.management`）。
+    pub management_crew: bool,
 }

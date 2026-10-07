@@ -32,7 +32,8 @@ impl Ctx<'_> {
         CallResult::err(self.r(key, vars))
     }
     /// M3a refusal / failure: the agent gets its explanation as is (they are rule explanations
-    /// written for people, e.g. "not a member"). Internal errors (store failures) are not shown:
+    /// written for people, e.g. "not a member"; a collab refusal is rendered in the agent's locale
+    /// from its stable code). Internal errors (store failures) are not shown:
     /// the detail goes to the log with a number, the agent gets only the number (M3a policy).
     pub fn fail(&self, e: PortError) -> CallResult {
         match e {
@@ -41,7 +42,7 @@ impl Ctx<'_> {
                 let shown = self.r("r.internal", &[("n", &n)]);
                 self.err("r.failed", &[("detail", &shown)])
             }
-            other => self.err("r.failed", &[("detail", &other.to_string())]),
+            other => self.err("r.failed", &[("detail", &other.text(self.loc))]),
         }
     }
 }
@@ -135,7 +136,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return if spec.scope == Scope::Captain && me.role != Role::Captain {
             cx.err("r.captain_only", &[("name", tool)])
         } else {
-            cx.err("r.not_on_builtin", &[("name", tool)])
+            cx.err("r.not_on_management", &[("name", tool)])
         };
     }
     // Task 12 replaces the two lines below with `match tool { ... _ => cx.err("r.no_handler", ...) }`,
@@ -153,18 +154,29 @@ mod tests {
     use crate::agent::testkit::Fixture;
 
     #[tokio::test]
-    async fn builtin_crew_refuses_hidden_tools_even_when_called_directly() {
+    async fn management_crew_refuses_hidden_tools_even_when_called_directly() {
         let f = Fixture::new().await;
         let mut me = f.me(&f.captain).await;
-        me.builtin_crew = true;
-        let r = call(&f.state, &me, "ask", json!({"question": "示例"})).await;
+        me.management_crew = true;
+        // ask is open on the management crew (N1-R9); respond_todo is still hidden there (until T15b).
+        let r = call(
+            &f.state,
+            &me,
+            "respond_todo",
+            json!({"number": 1, "response": "示例"}),
+        )
+        .await;
         assert!(r.is_error);
         assert_eq!(
             r.text,
-            text::r(Locale::Zh, "r.not_on_builtin", &[("name", "ask")])
+            text::r(
+                Locale::Zh,
+                "r.not_on_management",
+                &[("name", "respond_todo")]
+            )
         );
         me.role = Role::Worker;
-        me.builtin_crew = false;
+        me.management_crew = false;
         let r = call(&f.state, &me, "rename_crew", json!({"name": "x"})).await;
         assert_eq!(
             r.text,

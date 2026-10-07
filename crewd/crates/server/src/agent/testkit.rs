@@ -1,4 +1,4 @@
-//! 测试夹具：临时数据目录里的真库（M3a 的 Db + schema v3）+ FakeSessionControl。
+//! 测试夹具：临时数据目录里的真库（M3a 的 Db + 当前 schema）+ FakeSessionControl。
 //! `crewd` 的集成测试经 feature `testkit` 用它；仓库公开，只造合成数据。
 //! 不进产品代码（字面量扫描器不扫它）。
 use std::path::{Path, PathBuf};
@@ -94,12 +94,14 @@ impl Fixture {
             .unwrap();
     }
 
-    /// 走 `sessions::register`（分配分机号）；返回生成的 id。
+    /// 走 `sessions::register`（分配分机号）；返回生成的 id。`label` 同时当标题（N1：`register` 要标题或 brief，
+    /// 标题 ≤ 18 个码点）。
     pub async fn register(&self, crew: &str, role: Role, label: &str) -> String {
         let n = crewd_collab::sessions::NewSession {
             crew_id: crew.into(),
             role,
             executor: "claude".into(),
+            title: Some(label.into()),
             display_name: Some(label.into()),
             ..Default::default()
         };

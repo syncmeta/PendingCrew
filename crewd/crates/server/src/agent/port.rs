@@ -5,9 +5,10 @@
 //! （同一事务里跑并把 `Change` 发到 Hub）。视图里的名字是原值：给 agent 看之前由调用方过
 //! `render::safe_name`（群 / 发言者标签用本文件的 `display_label` / `sender_label`，它们已经过了）。
 //!
-//! 可见性：「读得到哪些群」只有一条规则（见 `Reader`，spec §22.7 Q3），`readable_channels` / `message` /
-//! `messages_as` / `search` / `set_listen` / `watched_channels` 都经它；收窄给别人的消息另按
-//! `cursors::visible_to` 滤掉。`messages_raw` 是**不带视角**的原始读（系统 / 测试用，名字里带 `_raw` 就是怕误用）。
+//! 可见性：「读得到哪些群」只有一条规则，在 collab（B15：`channels::readable_by` / `readable_channels`，
+//! 含总机组读全组织）∪ 自己的收听；`readable_channels` / `message` / `messages_as` / `search` /
+//! `watched_channels` 都经本文件的 `can_read`。@ 只决定叫醒谁，不藏消息（§24.2），所以读到的群里每条都看得见。
+//! `messages_raw` 是**不带视角**的原始读（系统 / 测试用，名字里带 `_raw` 就是怕误用）。
 //! `crew_channels` 是结构性列表（`list_for_crew` 的口径，比可读集合宽），不是可读性判定。
 //!
 //! 授权：M3a 对机组 DAG（`attach_parent` / `detach_parent` / `create_crew`）与会话控制（`start_session` /
@@ -29,10 +30,59 @@ pub type PortResult<T> = Result<T, PortError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortError {
-    NotFound(String),
-    /// M3a 按规则拒绝（不是成员、已归档、成环、没权限、冲突……）；文本是 M3a 写的说明，原样给 agent。
-    Refused(String),
+    NotFound(Reason),
+    /// M3a 按规则拒绝（不是成员、已归档、成环、没权限、冲突……）：给 agent 的说明，原样给。
+    Refused(Reason),
     Internal(String),
+}
+
+/// 拒绝的说明：collab 的规则拒绝带稳定码（`Refusal`），到了知道 agent 语言的地方（`tools::Ctx::fail`）
+/// 才按语言渲染；其余来源（会话控制、本文件）是已写好的一句话。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reason {
+    Rule(crewd_collab::refusal::Refusal),
+    Text(String),
+}
+
+impl Reason {
+    /// 按 agent 的语言渲染（`Text` 原样）。
+    pub fn text(&self, l: Locale) -> String {
+        match self {
+            Self::Rule(r) => r.text(l),
+            Self::Text(s) => s.clone(),
+        }
+    }
+}
+
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rule(r) => write!(f, "{r}"),
+            Self::Text(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<String> for Reason {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for Reason {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+impl PortError {
+    /// 给 agent 看的说明（`Internal` 不该给 agent 看细节，调用方另行处理；这里只为完整）。
+    pub fn text(&self, l: Locale) -> String {
+        match self {
+            Self::NotFound(r) | Self::Refused(r) => r.text(l),
+            Self::Internal(s) => s.clone(),
+        }
+    }
 }
 
 impl fmt::Display for PortError {
@@ -49,13 +99,16 @@ impl std::error::Error for PortError {}
 impl From<CollabError> for PortError {
     fn from(e: CollabError) -> Self {
         match e {
-            CollabError::NotFound(s) => Self::NotFound(s),
+            CollabError::NotFound(r) => Self::NotFound(Reason::Rule(r)),
+            CollabError::Invalid(r) | CollabError::Forbidden(r) | CollabError::Conflict(r) => {
+                Self::Refused(Reason::Rule(r))
+            }
             CollabError::Store(s) => Self::Internal(s.to_string()),
             // The ledger's own invariant broke: a server fault, same as `dispatch::collab_err`.
             CollabError::Work(crewd_work::Rejected::Invariant(v)) => {
                 Self::Internal(format!("work book invariant violated: {v}"))
             }
-            other => Self::Refused(other.to_string()),
+            CollabError::Work(other) => Self::Refused(Reason::Text(other.to_string())),
         }
     }
 }
@@ -69,8 +122,8 @@ impl From<crewd_store::StoreError> for PortError {
 impl From<ControlError> for PortError {
     fn from(e: ControlError) -> Self {
         match e {
-            ControlError::NotFound(s) => Self::NotFound(s),
-            other => Self::Refused(other.to_string()),
+            ControlError::NotFound(s) => Self::NotFound(Reason::Text(s)),
+            other => Self::Refused(Reason::Text(other.to_string())),
         }
     }
 }
@@ -191,7 +244,8 @@ pub struct CrewView {
     pub id: String,
     pub title: String,
     pub number: Option<i64>,
-    pub builtin: bool,
+    /// 总机组（管理机组，不在机组树里）。
+    pub management: bool,
     pub parent_ids: Vec<String>,
     pub child_ids: Vec<String>,
     pub working_directory: Option<String>,
@@ -215,7 +269,7 @@ fn crew_view(conn: &Connection, id: &str) -> crewd_collab::Result<CrewView> {
         id: c.id,
         title: c.title,
         number: c.number,
-        builtin: c.builtin,
+        management: c.management,
         working_directory: c.working_directory,
         captain_executor: c.captain_executor,
     })
@@ -317,7 +371,7 @@ pub async fn identity(st: &AppState, session: &str) -> PortResult<Option<Identit
         Ok(Some(Identity {
             role: crewd_collab::sessions::role_of(conn, &id)?,
             label: crewd_collab::sessions::display_name(conn, &id)?,
-            builtin_crew: crew.builtin,
+            management_crew: crew.management,
             crew_id: row.crew_id,
             session_id: row.id,
         }))
@@ -370,21 +424,33 @@ pub async fn crew(st: &AppState, id: &str) -> PortResult<Option<CrewView>> {
     read(st, move |conn| opt(crew_view(conn, &id))).await
 }
 
-/// id → 号码（全数字，比 `Crew.number`）→ 标题恰好一个。
+/// id → 号码（全数字，比 `Crew.number`；`"0"` = 总机组；撞号取最早建的，同 `directory::resolve`）→ 标题恰好一个。
+/// 已移除的机组：按 id / 标题当没有；按号码 = Conflict `directory.crew_removed`（号还在、不回收，原样回给 agent）。
 pub async fn resolve_crew(st: &AppState, arg: &str) -> PortResult<Option<CrewView>> {
+    use crewd_collab::refusal::{Code, Refusal};
+    use rusqlite::OptionalExtension;
     let arg = arg.to_string();
     read(st, move |conn| {
-        let all = crewd_collab::crews::list(conn)?;
+        let all = crewd_collab::crews::list(conn, false)?;
         if let Some(c) = all.iter().find(|c| c.id == arg) {
             return opt(crew_view(conn, &c.id));
         }
-        if !arg.is_empty()
-            && arg.chars().all(|c| c.is_ascii_digit())
-            && let Some(c) = all
-                .iter()
-                .find(|c| c.number.is_some_and(|n| n.to_string() == arg))
-        {
-            return opt(crew_view(conn, &c.id));
+        if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit()) {
+            let by_number: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM crews WHERE CAST(number AS TEXT)=?1 ORDER BY created_at, id LIMIT 1",
+                    [&arg],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(id) = by_number {
+                if crewd_collab::crews::is_archived(conn, &id)? {
+                    return Err(CollabError::Conflict(
+                        Refusal::new(Code::DirectoryCrewRemoved).arg("number", arg.clone()),
+                    ));
+                }
+                return opt(crew_view(conn, &id));
+            }
         }
         let mut hits = all.iter().filter(|c| c.title == arg);
         match (hits.next(), hits.next()) {
@@ -505,7 +571,7 @@ fn views_of(tx: &mut Tx<'_>, crew: &str) -> crewd_collab::Result<Vec<ChannelView
         .collect()
 }
 
-/// `channels::list_for_crew`（根机组会顺手懒建人类群，所以走写事务）。结构性列表，**比可读集合宽**
+/// `channels::list_for_crew`（顶层机组 / 总机组会顺手懒建人类群，所以走写事务）。结构性列表，**比可读集合宽**
 /// （含「有本机组成员」的别组的群）：要判「读不读得到」用 `readable_channels`。
 pub async fn crew_channels(st: &AppState, crew: &str) -> PortResult<Vec<ChannelView>> {
     let crew = crew.to_string();
@@ -517,12 +583,12 @@ pub async fn lobby_of(st: &AppState, crew: &str) -> PortResult<ChannelView> {
     read(st, move |conn| channel_view(conn, &id)).await
 }
 
-/// `ensure_human_channel(root_of(crew))`：懒建，建一次。
-pub async fn root_human_channel(st: &AppState, crew: &str) -> PortResult<ChannelView> {
+/// `ensure_human_channel(home_of(crew))`：home = 顶层祖先（总机组 / 顶层机组是自己）；懒建，建一次。
+pub async fn home_human_channel(st: &AppState, crew: &str) -> PortResult<ChannelView> {
     let crew = crew.to_string();
     write(st, move |tx| {
-        let root = crewd_collab::crews::root_of(tx.conn(), &crew)?;
-        let ch = crewd_collab::channels::ensure_human_channel(tx, &root)?;
+        let home = crewd_collab::crews::home_of(tx.conn(), &crew)?;
+        let ch = crewd_collab::channels::ensure_human_channel(tx, &home)?;
         channel_view(tx.conn(), &ch.id)
     })
     .await
@@ -532,7 +598,6 @@ pub async fn root_human_channel(st: &AppState, crew: &str) -> PortResult<Channel
 pub async fn watched_channels(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
     let s = me.session_id.clone();
     read(st, move |conn| {
-        let reader = Reader::new(conn, &s)?;
         let ids: Vec<String> = {
             let mut q =
                 conn.prepare("SELECT channel_id FROM channel_watch ORDER BY since, channel_id")?;
@@ -541,9 +606,7 @@ pub async fn watched_channels(st: &AppState, me: &Identity) -> PortResult<Vec<Ch
         };
         let mut out = Vec::new();
         for id in ids {
-            if let Some(ch) = opt(crewd_collab::channels::get(conn, &id))?
-                && reader.can_read(conn, &ch)?
-            {
+            if opt(crewd_collab::channels::get(conn, &id))?.is_some() && can_read(conn, &s, &id)? {
                 out.push(channel_view(conn, &id)?);
             }
         }
@@ -688,14 +751,8 @@ pub async fn set_listen(
     senders: Vec<String>,
 ) -> PortResult<()> {
     let (s, ch) = (session.to_string(), channel.to_string());
+    // 门在 collab：`listens::set` 要求读得到、群没归档（拒 Forbidden `listen.not_readable`），这里不另做一道。
     write(st, move |tx| {
-        // 与「读得到」同一条规则把门：收听不能把自己听进别的树（已有的收听行不算，见 `Reader::inside`）。
-        let c = crewd_collab::channels::get(tx.conn(), &ch)?;
-        if !Reader::new(tx.conn(), &s)?.inside(tx.conn(), &c)? {
-            return Err(CollabError::Forbidden(
-                "channel is outside this session's tree".into(),
-            ));
-        }
         crewd_collab::listens::set(tx, &s, &ch, until_ms, senders)
     })
     .await
@@ -757,96 +814,26 @@ pub async fn messages_raw(
 }
 
 // ---------------------------------------------------------------------------------------------
-// 「读得到」的唯一规则（spec §22.7 Q3：没有私有群；机组的群机组内人人可读，只有成员才被注入 / 唤醒）
+// 「读得到」：collab 的 B15 规则 ∪ 自己的收听（spec §24.1 B15、§26.1 Task 6）
 // ---------------------------------------------------------------------------------------------
 
-/// session S 读得到群 C，当且仅当：
-/// (a) S 是 C 的有效成员；(b) S 在收听 C；(c) C 属于 S 的机组（私聊也算，没有私有群）；
-/// (d) C 是 S 所在**树**的根人类群（树里任何 session，别的树的不行）。
-/// 跨机组的 dm / 话题：成员和 C 所属机组的人读得到，**不是**成员所在机组的每个人。
-/// `readable_channels` / `message` / `messages_as` / `search` / `set_listen` 都经这一个类型。
-struct Reader {
-    session: String,
-    crew: String,
-    /// S 所在机组往上走到的全部根机组（多父机组可有多个）。
-    roots: std::collections::BTreeSet<String>,
-    listening: Vec<String>,
+/// session S 读得到群 C ⇔ collab `channels::readable_by`（⓪ 总机组读全组织；① 成员；② 挂在 S 的机组下；
+/// ③ S 的 home 的人类群）或 S 在收听 C（`listens::channels_of` 已只算读得到、没归档的收听行）。
+/// `readable_channels` / `message` / `messages_as` / `search` / `watched_channels` 都经这一个函数。
+fn can_read(conn: &Connection, session: &str, channel: &str) -> crewd_collab::Result<bool> {
+    Ok(crewd_collab::listens::channels_of(conn, session, now_ms())?
+        .iter()
+        .any(|c| c == channel)
+        || crewd_collab::channels::readable_by(conn, channel, session)?)
 }
 
-impl Reader {
-    fn new(conn: &Connection, session: &str) -> crewd_collab::Result<Self> {
-        use crewd_collab::crews;
-        let crew = crewd_collab::sessions::crew_of(conn, session)?;
-        let mut roots = std::collections::BTreeSet::new();
-        let mut seen = std::collections::BTreeSet::new();
-        let mut queue = std::collections::VecDeque::from([crew.clone()]);
-        while let Some(c) = queue.pop_front() {
-            if !seen.insert(c.clone()) {
-                continue;
-            }
-            let ps = crews::parents(conn, &c)?;
-            if ps.is_empty() {
-                roots.insert(c);
-            } else {
-                queue.extend(ps);
-            }
-        }
-        Ok(Self {
-            session: session.to_string(),
-            crew,
-            roots,
-            listening: crewd_collab::listens::channels_of(conn, session, now_ms())?,
-        })
-    }
-
-    /// (a) (c) (d)：不含收听。`set_listen` 用它把门（收听不能把自己听进别的树）。
-    fn inside(&self, conn: &Connection, ch: &crewd_proto::Channel) -> crewd_collab::Result<bool> {
-        if ch.crew_id == self.crew
-            || (ch.kind == ChannelKind::Human && self.roots.contains(&ch.crew_id))
-        {
-            return Ok(true);
-        }
-        let me = crewd_proto::MemberRef::session(self.session.clone());
-        Ok(crewd_collab::channels::members(conn, &ch.id)?.contains(&me))
-    }
-
-    /// (a) (b) (c) (d)。
-    fn can_read(&self, conn: &Connection, ch: &crewd_proto::Channel) -> crewd_collab::Result<bool> {
-        Ok(self.listening.contains(&ch.id) || self.inside(conn, ch)?)
-    }
-}
-
-/// 这个 session 读得到的全部群 id（含已归档的）：只读，不建任何群。
+/// 这个 session 读得到的全部群 id（含已归档的）：只读，不建任何群。collab 的可读集合在前，收听接在后面。
 pub async fn readable_channels(st: &AppState, me: &Identity) -> PortResult<Vec<String>> {
     let s = me.session_id.clone();
     read(st, move |conn| {
-        let r = Reader::new(conn, &s)?;
-        // 候选：本机组的群 + 我显式在的群 + 本树根人类群 + 我收听的群；最后逐个过同一条规则。
-        let mut cands: Vec<String> = {
-            let mut st = conn.prepare(
-                "SELECT ch.id FROM channels ch WHERE ch.crew_id=?1
-                    OR ch.id IN (SELECT channel_id FROM channel_members
-                                  WHERE member_kind='session' AND member_id=?2 AND left_at IS NULL)
-                  ORDER BY ch.created_at, ch.id",
-            )?;
-            st.query_map(rusqlite::params![r.crew, s], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        cands.extend(
-            r.roots
-                .iter()
-                .map(|root| crewd_store::channels::human_id(root)),
-        );
-        cands.extend(r.listening.iter().cloned());
-        let mut seen = std::collections::BTreeSet::new();
-        let mut out = Vec::new();
-        for id in cands {
-            if !seen.insert(id.clone()) {
-                continue;
-            }
-            if let Some(ch) = opt(crewd_collab::channels::get(conn, &id))?
-                && r.can_read(conn, &ch)?
-            {
+        let mut out = crewd_collab::channels::readable_channels(conn, &s)?;
+        for id in crewd_collab::listens::channels_of(conn, &s, now_ms())? {
+            if !out.contains(&id) {
                 out.push(id);
             }
         }
@@ -855,8 +842,8 @@ pub async fn readable_channels(st: &AppState, me: &Identity) -> PortResult<Vec<S
     .await
 }
 
-/// `messages_raw` 的 agent 视角：群必须读得到（读不到 = `NotFound`，不区分「没有」和「看不见」）；
-/// 丢掉收窄给别人的消息（`cursors::visible_to`），并往前翻页补满 `limit` 条（一页里被滤掉的不会让这一页变短）。旧在前。
+/// `messages_raw` 的 agent 视角：群必须读得到（读不到 = `NotFound`，不区分「没有」和「看不见」）。旧在前。
+/// @ 不藏消息（§24.2），读得到的群里每条都给。
 pub async fn messages_as(
     st: &AppState,
     viewer: &str,
@@ -866,38 +853,21 @@ pub async fn messages_as(
 ) -> PortResult<Vec<Message>> {
     let (viewer, ch) = (viewer.to_string(), channel.to_string());
     read(st, move |conn| {
-        let readable = match opt(crewd_collab::channels::get(conn, &ch))? {
-            Some(c) => Reader::new(conn, &viewer)?.can_read(conn, &c)?,
-            None => false,
-        };
+        let readable =
+            opt(crewd_collab::channels::get(conn, &ch))?.is_some() && can_read(conn, &viewer, &ch)?;
         if !readable {
-            return Err(CollabError::NotFound("channel not found".into()));
+            return Err(CollabError::NotFound(
+                crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ChannelNotFound)
+                    .arg("channel", ch.clone()),
+            ));
         }
-        let want = limit.clamp(1, 1000) as usize;
-        let mut before = before_seq.unwrap_or(i64::MAX);
-        let mut out: Vec<Message> = Vec::new();
-        loop {
-            let page = crewd_collab::messages::list(conn, &ch, None, Some(before), want as u32)?;
-            let Some(oldest) = page.first().map(|m| m.seq) else {
-                break;
-            };
-            let full = page.len() >= want;
-            let mut vis: Vec<Message> = page
-                .into_iter()
-                .filter(|m| crewd_collab::cursors::visible_to(m, &viewer))
-                .collect();
-            vis.append(&mut out);
-            out = vis;
-            if out.len() >= want {
-                out.drain(..out.len() - want);
-                break;
-            }
-            if !full {
-                break;
-            }
-            before = oldest;
-        }
-        Ok(out)
+        crewd_collab::messages::list(
+            conn,
+            &ch,
+            None,
+            Some(before_seq.unwrap_or(i64::MAX)),
+            limit.clamp(1, 1000),
+        )
     })
     .await
 }
@@ -915,7 +885,7 @@ pub async fn latest_seq(st: &AppState, channel: &str) -> PortResult<Option<i64>>
     .await
 }
 
-/// 按 seq（全库唯一）或 id 取一条消息。只给 `me` 读得到的群里、对 `me` 可见的消息；否则 `None`
+/// 按 seq（全库唯一）或 id 取一条消息。只给 `me` 读得到的群里的消息；否则 `None`
 /// （不区分「不存在」与「看不见」，免得靠它探别的机组）。数据库错误照实往上抛，不当成「没有」。
 pub async fn message(st: &AppState, me: &Identity, r: MsgRef) -> PortResult<Option<Message>> {
     let me = me.session_id.clone();
@@ -927,17 +897,13 @@ pub async fn message(st: &AppState, me: &Identity, r: MsgRef) -> PortResult<Opti
         let Some(m) = found else {
             return Ok(None);
         };
-        if !crewd_collab::cursors::visible_to(&m, &me) {
-            return Ok(None);
-        }
-        let ch = crewd_collab::channels::get(conn, &m.channel_id)?;
-        Ok(Reader::new(conn, &me)?.can_read(conn, &ch)?.then_some(m))
+        Ok(can_read(conn, &me, &m.channel_id)?.then_some(m))
     })
     .await
 }
 
 /// 在 `channel_ids` 里搜；范围先收进 `viewer` 读得到的群（给了读不到的群 = 当没给）。
-/// 丢掉收窄给别人的消息；新的在前；最多 `limit` 条。
+/// 新的在前；最多 `limit` 条（collab 的上限 500）。
 pub async fn search(
     st: &AppState,
     viewer: &str,
@@ -949,32 +915,25 @@ pub async fn search(
 ) -> PortResult<Vec<Message>> {
     let (viewer, query) = (viewer.to_string(), query.to_string());
     read(st, move |conn| {
-        let reader = Reader::new(conn, &viewer)?;
         let mut ids = Vec::new();
         for id in channel_ids {
-            if let Some(c) = opt(crewd_collab::channels::get(conn, &id))?
-                && reader.can_read(conn, &c)?
+            if opt(crewd_collab::channels::get(conn, &id))?.is_some()
+                && can_read(conn, &viewer, &id)?
             {
                 ids.push(id);
             }
         }
-        // 按可见性滤掉之后条数会少：先按 M3a 的上限（500）多取，再截到 limit。
-        let hits = crewd_collab::messages::search(
+        crewd_collab::messages::search(
             conn,
             &crewd_collab::messages::Search {
                 query,
                 channel_ids: Some(ids),
                 after,
                 before,
-                limit: 500,
+                limit: limit.min(500),
                 crew_id: None,
             },
-        )?;
-        Ok(hits
-            .into_iter()
-            .filter(|m| crewd_collab::cursors::visible_to(m, &viewer))
-            .take(limit as usize)
-            .collect())
+        )
     })
     .await
 }
@@ -1324,14 +1283,14 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn identity_reads_role_label_and_builtin() {
+    async fn identity_reads_role_label_and_management() {
         let f = Fixture::new().await;
         let cap = identity(&f.state, &f.captain).await.unwrap().unwrap();
         assert_eq!(cap.role, Role::Captain);
         assert_eq!(cap.crew_id, f.crew);
         let w = identity(&f.state, &f.worker).await.unwrap().unwrap();
         assert_eq!((w.role, w.label.as_str()), (Role::Worker, "示例 worker"));
-        assert!(!w.builtin_crew);
+        assert!(!w.management_crew);
         assert!(identity(&f.state, "nobody").await.unwrap().is_none());
     }
 
@@ -1381,10 +1340,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn root_human_channel_is_created_lazily_once() {
+    async fn home_human_channel_is_created_lazily_once() {
         let f = Fixture::new().await;
-        let a = root_human_channel(&f.state, &f.crew).await.unwrap();
-        let b = root_human_channel(&f.state, &f.crew).await.unwrap();
+        let a = home_human_channel(&f.state, &f.crew).await.unwrap();
+        let b = home_human_channel(&f.state, &f.crew).await.unwrap();
         assert_eq!(a.id, b.id);
         assert_eq!(a.kind, ChannelKind::Human);
     }
@@ -1405,9 +1364,10 @@ mod tests {
         }
     }
 
-    /// Task 3 复审 NOTE：收窄给别人的消息，经读 / 搜 / 按号取都读不到；发的人和收的人读得到。
+    /// §24.2（N1 改了 Task 3 复审 NOTE 的期望）：@ 只决定叫醒谁，不藏消息——@ 了别人的消息，经读 / 搜 /
+    /// 按号取，旁观者照样读得到。
     #[tokio::test]
-    async fn narrowed_messages_are_hidden_from_other_readers() {
+    async fn mentions_only_wake_they_never_hide_a_message() {
         let f = Fixture::new().await;
         f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
             .await;
@@ -1415,96 +1375,57 @@ mod tests {
         let open = f
             .session_post(&f.captain, &lobby, "示例全员通知", vec![])
             .await;
-        let secret = f
-            .session_post(&f.captain, &lobby, "示例悄悄话", vec![to("s-w2")])
+        let directed = f
+            .session_post(&f.captain, &lobby, "示例给 w2 的活", vec![to("s-w2")])
             .await;
         let w1 = f.me(&f.worker).await;
-        let w2 = f.me("s-w2").await;
+        let both = [open.id.as_str(), directed.id.as_str()];
 
-        let seen_by_w1 = messages_as(&f.state, &f.worker, &lobby, None, 10)
-            .await
-            .unwrap();
-        assert_eq!(
-            seen_by_w1.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            [open.id.as_str()]
-        );
-        let seen_by_w2 = messages_as(&f.state, "s-w2", &lobby, None, 10)
-            .await
-            .unwrap();
-        assert_eq!(seen_by_w2.len(), 2);
-        let seen_by_cap = messages_as(&f.state, &f.captain, &lobby, None, 10)
-            .await
-            .unwrap();
-        assert_eq!(seen_by_cap.len(), 2, "发的人自己看得见");
-
-        assert!(
-            message(&f.state, &w1, MsgRef::Seq(secret.seq))
+        for who in [f.worker.as_str(), "s-w2", f.captain.as_str()] {
+            let seen = messages_as(&f.state, who, &lobby, None, 10).await.unwrap();
+            assert_eq!(
+                seen.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+                both,
+                "{who}"
+            );
+            let hits = search(&f.state, who, "示例", vec![lobby.clone()], None, None, 10)
                 .await
-                .unwrap()
-                .is_none()
-        );
+                .unwrap();
+            assert_eq!(hits.len(), 2, "{who}");
+        }
         assert!(
-            message(&f.state, &w1, MsgRef::Id(secret.id.clone()))
-                .await
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            message(&f.state, &w2, MsgRef::Seq(secret.seq))
+            message(&f.state, &w1, MsgRef::Seq(directed.seq))
                 .await
                 .unwrap()
                 .is_some()
         );
-
-        let hits = search(
-            &f.state,
-            &f.worker,
-            "示例",
-            vec![lobby.clone()],
-            None,
-            None,
-            10,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            hits.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            [open.id.as_str()]
+        assert!(
+            message(&f.state, &w1, MsgRef::Id(directed.id.clone()))
+                .await
+                .unwrap()
+                .is_some()
         );
-        let hits = search(
-            &f.state,
-            "s-w2",
-            "示例",
-            vec![lobby.clone()],
-            None,
-            None,
-            10,
-        )
-        .await
-        .unwrap();
-        assert_eq!(hits.len(), 2);
     }
 
-    /// 被滤掉的消息不让一页变短：往前翻页补满。
+    /// 一页 = 最新的 `limit` 条，旧在前（@ 了别人的也算在页里）。
     #[tokio::test]
-    async fn filtered_messages_do_not_shorten_a_page() {
+    async fn a_page_is_the_latest_messages_old_first() {
         let f = Fixture::new().await;
         f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
             .await;
         let lobby = lobby_of(&f.state, &f.crew).await.unwrap().id;
-        let first = f.session_post(&f.captain, &lobby, "示例甲", vec![]).await;
-        let second = f.session_post(&f.captain, &lobby, "示例乙", vec![]).await;
-        for i in 0..3 {
-            f.session_post(&f.captain, &lobby, &format!("示例私 {i}"), vec![to("s-w2")])
-                .await;
-        }
+        f.session_post(&f.captain, &lobby, "示例甲", vec![]).await;
+        let second = f
+            .session_post(&f.captain, &lobby, "示例乙", vec![to("s-w2")])
+            .await;
+        let third = f.session_post(&f.captain, &lobby, "示例丙", vec![]).await;
         let page = messages_as(&f.state, &f.worker, &lobby, None, 2)
             .await
             .unwrap();
         assert_eq!(
             page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            [first.id.as_str(), second.id.as_str()],
-            "旧在前、补满 2 条"
+            [second.id.as_str(), third.id.as_str()],
+            "旧在前、最新的 2 条"
         );
     }
 
@@ -1761,7 +1682,9 @@ mod tests {
             PortError::Refused(_)
         ));
         assert!(matches!(
-            PortError::from(CollabError::Invalid("x".into())),
+            PortError::from(CollabError::Invalid(crewd_collab::refusal::Refusal::new(
+                crewd_collab::refusal::Code::MessageEmpty,
+            ))),
             PortError::Refused(_)
         ));
     }
@@ -1833,7 +1756,8 @@ mod tests {
             .is_some()
     }
 
-    /// (a) 成员读得到；(c) 话题所属机组的人读得到；同机组的非成员读不到别组的话题。
+    /// ① 成员读得到；② 话题所属机组的人、以及话题里有自己机组的在群 session 的人读得到（B15：挂在本机组下的群，
+    /// `channel.list(本机组)` 列得出的就读得到）；不相干的机组读不到。
     #[tokio::test]
     async fn readable_clause_member_and_channel_crew() {
         let w = world().await;
@@ -1849,21 +1773,26 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(can(f, &f.worker, &topic.id).await, "(a) 成员");
-        assert!(can(f, "s-far2", &topic.id).await, "(c) 话题所属机组的人");
+        assert!(can(f, &f.worker, &topic.id).await, "① 成员");
+        assert!(can(f, "s-far2", &topic.id).await, "② 话题所属机组的人");
         assert!(
-            !can(f, "s-w2", &topic.id).await,
-            "成员的同事不是成员：读不到"
+            can(f, "s-w2", &topic.id).await && can(f, &f.captain, &topic.id).await,
+            "② 群里有本机组的在群 session：挂在本机组下（N1 改了 M3b 的期望）"
         );
-        assert!(!can(f, &f.captain, &topic.id).await);
+        assert!(
+            !can(f, "s-ch", &topic.id).await,
+            "子机组不读上级机组名下的群（只看本机组）"
+        );
         let m = f
             .session_post("s-fcap", &topic.id, "示例话题消息", vec![])
             .await;
         assert!(sees(f, "s-w1", m.seq).await);
-        assert!(!sees(f, "s-w2", m.seq).await);
+        assert!(sees(f, "s-w2", m.seq).await);
+        assert!(!sees(f, "s-ch", m.seq).await);
     }
 
-    /// (c) 私聊也是机组的群（没有私有群）；跨机组的 dm 只有成员和 dm 所属机组的人读得到。
+    /// 私聊也是机组的群（B15：没有私有群）；跨机组的 dm 两边机组的人都读得到（② 群里有本机组的在群 session），
+    /// 子机组读不到。
     #[tokio::test]
     async fn readable_clause_cross_crew_dm() {
         let w = world().await;
@@ -1878,24 +1807,27 @@ mod tests {
             can(f, "s-w2", &dm.id).await && can(f, &f.captain, &dm.id).await,
             "(c) dm 所属机组的人"
         );
-        assert!(!can(f, "s-far2", &dm.id).await, "对方机组的其他人读不到");
-        assert!(!can(f, "s-fcap", &dm.id).await);
+        assert!(
+            can(f, "s-far2", &dm.id).await && can(f, "s-fcap", &dm.id).await,
+            "② 对方机组的人也读得到（N1 改了 M3b 的期望）"
+        );
         assert!(
             !can(f, "s-ch", &dm.id).await,
-            "子组 worker 不是 dm 所属机组的人"
+            "子组 worker 不是 dm 两边机组的人"
         );
         let m = f.session_post(&f.worker, &dm.id, "示例私聊", vec![]).await;
         assert!(sees(f, "s-w2", m.seq).await);
-        assert!(!sees(f, "s-far2", m.seq).await);
+        assert!(sees(f, "s-far2", m.seq).await);
+        assert!(!sees(f, "s-ch", m.seq).await);
     }
 
-    /// (d) 本树的根人类群：整棵树的任何 session 读得到（含子组 worker）；别的树的不行。
+    /// ③ 自己 home（顶层机组）的人类群：整棵树的任何 session 读得到（含子组 worker）；别的顶层机组的不行。
     #[tokio::test]
-    async fn readable_clause_root_human_channel_of_my_tree() {
+    async fn readable_clause_home_human_channel() {
         let w = world().await;
         let f = &w.f;
-        let human = root_human_channel(&f.state, &f.crew).await.unwrap();
-        let far_human = root_human_channel(&f.state, &w.other).await.unwrap();
+        let human = home_human_channel(&f.state, &f.crew).await.unwrap();
+        let far_human = home_human_channel(&f.state, &w.other).await.unwrap();
         for who in ["s-w1", "s-w2", "s-ch", "s-cap"] {
             assert!(can(f, who, &human.id).await, "{who} 读得到本树的人类群");
             assert!(
@@ -1907,7 +1839,10 @@ mod tests {
             assert!(!can(f, who, &human.id).await, "{who} 读不到别的树的人类群");
         }
         let m = f.human_post(&human.id, "示例人类消息", vec![]).await;
-        assert!(sees(f, "s-ch", m.seq).await, "子组 worker 读得到根人类群");
+        assert!(
+            sees(f, "s-ch", m.seq).await,
+            "子组 worker 读得到 home 的人类群"
+        );
         assert!(!sees(f, "s-far", m.seq).await);
         assert_eq!(
             messages_as(&f.state, "s-ch", &human.id, None, 5)
@@ -1924,34 +1859,75 @@ mod tests {
         );
     }
 
-    /// (b) 数据里已有的收听行算读得到；但 `set_listen` 受同一条规则把门，收听不进别的树。
+    /// 收听的门在 collab（`listens::set` 拒 `listen.not_readable`）；读不到的群上遗留的收听行（裸 SQL 写入，模拟
+    /// 旧数据）不让它变得读得到（§26.1：失去读权的收听行留着但不算）。
     #[tokio::test]
     async fn listening_clause_and_set_listen_gate() {
         let w = world().await;
         let f = &w.f;
         let far_lobby = lobby_of(&f.state, &w.other).await.unwrap().id;
-        assert!(matches!(
-            set_listen(&f.state, "s-w2", &far_lobby, None, vec![]).await,
-            Err(PortError::Refused(_))
-        ));
+        match set_listen(&f.state, "s-w2", &far_lobby, None, vec![]).await {
+            Err(PortError::Refused(Reason::Rule(r))) => {
+                assert_eq!(r.code, crewd_collab::refusal::Code::ListenNotReadable)
+            }
+            other => panic!("{other:?}"),
+        }
         assert!(!can(f, "s-w2", &far_lobby).await);
-        // 子组 worker 可以收听本树的根人类群（d）。
-        let human = root_human_channel(&f.state, &f.crew).await.unwrap().id;
+        // 子组 worker 可以收听 home 的人类群（③）。
+        let human = home_human_channel(&f.state, &f.crew).await.unwrap().id;
         set_listen(&f.state, "s-ch", &human, None, vec![])
             .await
             .unwrap();
-        // 直接写一行收听（绕过门，模拟旧数据）：读得到。
+        // 遗留的收听行（绕过门）：不算。
         let lobby = far_lobby.clone();
         f.state
-            .collab(move |tx| crewd_collab::listens::set(tx, "s-w2", &lobby, None, vec![]))
+            .db
+            .call(move |s| {
+                s.conn().execute(
+                    "INSERT INTO listens(session_id,channel_id,until,senders,created_at)
+                     VALUES('s-w2',?1,NULL,'[]','2026-10-07T00:00:00.000Z')",
+                    [&lobby],
+                )
+            })
             .await
+            .unwrap()
             .unwrap();
-        assert!(can(f, "s-w2", &far_lobby).await, "(b)");
+        assert!(!can(f, "s-w2", &far_lobby).await, "遗留的收听行不给读权");
         let m = f
             .session_post("s-far", &far_lobby, "示例外组", vec![])
             .await;
-        assert!(sees(f, "s-w2", m.seq).await);
+        assert!(!sees(f, "s-w2", m.seq).await);
         assert!(!can(f, "s-w1", &far_lobby).await);
+    }
+
+    /// ⓪ 总机组（管理层）的 session 读得到全组织的群：别的顶层机组的大厅、人类群、私聊都读得到。
+    #[tokio::test]
+    async fn management_sessions_read_the_whole_organisation() {
+        let w = world().await;
+        let f = &w.f;
+        let management = f
+            .state
+            .db
+            .call(|s| crewd_collab::crews::management(s.conn()))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("crew.create 懒建总机组");
+        f.add_session(&management, "s-mgr", Role::Worker, "管理层 worker")
+            .await;
+        assert!(f.me("s-mgr").await.management_crew);
+        let far_lobby = lobby_of(&f.state, &w.other).await.unwrap().id;
+        let far_human = home_human_channel(&f.state, &w.other).await.unwrap().id;
+        let far = f.me("s-far").await;
+        let (dm, _) = ensure_dm(&f.state, &far, "s-far2").await.unwrap();
+        for ch in [&far_lobby, &far_human, &dm.id] {
+            assert!(can(f, "s-mgr", ch).await, "{ch}");
+        }
+        let m = f
+            .session_post("s-far", &dm.id, "示例外组私聊", vec![])
+            .await;
+        assert!(sees(f, "s-mgr", m.seq).await);
+        assert!(!sees(f, "s-w1", m.seq).await);
     }
 
     /// search 的范围被收进可读集合：给了读不到的群也搜不出来。

@@ -40,15 +40,16 @@ pub struct Param {
 pub struct ToolSpec {
     pub name: &'static str,
     pub scope: Scope,
-    /// 内建总机组上不列（`McpServer.swift:565`、`:745-753`）。
-    pub not_on_builtin: bool,
+    /// 总机组（管理机组）上不列（`McpServer.swift:565`、`:745-753` 的遗留；ask 已放开（N1-R9：总机组的问去它自己的人类群），
+    /// 其余两个等 T15b 删掉这个标记）。
+    pub not_on_management: bool,
     pub params: &'static [Param],
 }
 
 pub const CATEGORIES: &[&str] = &[
     "progress", "done", "blocked", "question", "finding", "handoff", "ack", "note",
 ];
-pub const MENTION_KINDS: &[&str] = &["session", "captain", "human", "broadcast"];
+pub const MENTION_KINDS: &[&str] = &["session", "captain", "human"];
 const RUNNERS: &[&str] = &["claude", "codex"];
 const CHANNEL_KINDS: &[&str] = &["topic", "dm"];
 
@@ -83,7 +84,7 @@ const fn all(name: &'static str, params: &'static [Param]) -> ToolSpec {
     ToolSpec {
         name,
         scope: Scope::All,
-        not_on_builtin: false,
+        not_on_management: false,
         params,
     }
 }
@@ -91,13 +92,13 @@ const fn cap(name: &'static str, params: &'static [Param]) -> ToolSpec {
     ToolSpec {
         name,
         scope: Scope::Captain,
-        not_on_builtin: false,
+        not_on_management: false,
         params,
     }
 }
-const fn not_builtin(t: ToolSpec) -> ToolSpec {
+const fn not_on_mgmt(t: ToolSpec) -> ToolSpec {
     ToolSpec {
-        not_on_builtin: true,
+        not_on_management: true,
         ..t
     }
 }
@@ -171,7 +172,7 @@ pub const CATALOG: &[ToolSpec] = &[
     all("channel_unlisten", &[p("channel", Str, true)]),
     all("directory", &[p("query", Str, false)]),
     all("contact", &[p("to", Str, true), p("message", Str, true)]),
-    not_builtin(all(
+    all(
         "ask",
         &[
             p("question", Str, true),
@@ -179,12 +180,12 @@ pub const CATALOG: &[ToolSpec] = &[
             p("fallback_after_minutes", Num, false),
             p("fallback", Str, false),
         ],
-    )),
+    ),
     all(
         "withdraw_ask",
         &[p("ask", Str, true), p("reason", Str, true)],
     ),
-    not_builtin(all(
+    not_on_mgmt(all(
         "respond_todo",
         &[p("number", Int, true), p("response", Str, true)],
     )),
@@ -214,7 +215,7 @@ pub const CATALOG: &[ToolSpec] = &[
     cap("set_crew_status", &[p("text", Str, true)]),
     cap("read_delegation_policy", &[]),
     cap("update_delegation_policy", &[p("text", Str, true)]),
-    not_builtin(cap(
+    not_on_mgmt(cap(
         "start_session",
         &[
             p("brief", Str, true),
@@ -295,7 +296,8 @@ pub fn find(name: &str) -> Option<&'static ToolSpec> {
 
 /// 这个身份此刻能不能看见 / 调这个工具。
 pub fn visible(t: &ToolSpec, me: &Identity) -> bool {
-    (t.scope == Scope::All || me.role == Role::Captain) && !(t.not_on_builtin && me.builtin_crew)
+    (t.scope == Scope::All || me.role == Role::Captain)
+        && !(t.not_on_management && me.management_crew)
 }
 
 pub fn tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
@@ -371,13 +373,13 @@ mod tests {
     use crate::agent::{Identity, Role};
     use crewd_collab::Locale;
 
-    fn who(role: Role, builtin: bool) -> Identity {
+    fn who(role: Role, management: bool) -> Identity {
         Identity {
             session_id: "s-1".into(),
             crew_id: "crew-a".into(),
             role,
             label: "示例".into(),
-            builtin_crew: builtin,
+            management_crew: management,
         }
     }
 
@@ -412,11 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn builtin_crew_hides_ask_respond_and_start_session() {
+    fn management_crew_hides_respond_and_start_session_but_has_ask() {
         let chief = names(&who(Role::Captain, true));
-        for hidden in ["ask", "respond_todo", "start_session"] {
+        for hidden in ["respond_todo", "start_session"] {
             assert!(!chief.contains(&hidden.to_string()), "{hidden}");
         }
+        // N1-R9: the management crew's questions go to its own human channel.
+        assert!(chief.contains(&"ask".to_string()));
         assert!(chief.contains(&"report_to_parent".to_string()));
     }
 
@@ -430,9 +434,10 @@ mod tests {
             s["properties"]["channel"]["description"],
             crate::agent::text::get(Locale::Zh, "post.channel")
         );
+        // §24.2: @ only wakes; the `broadcast` mention kind is gone.
         assert_eq!(
-            s["properties"]["mentions"]["items"]["properties"]["kind"]["enum"][3],
-            "broadcast"
+            s["properties"]["mentions"]["items"]["properties"]["kind"]["enum"],
+            serde_json::json!(["session", "captain", "human"])
         );
         assert_eq!(
             s["properties"]["reply_to"]["type"],
@@ -526,11 +531,11 @@ mod tests {
 
     #[test]
     fn admin_sees_exactly_the_worker_set() {
-        for builtin in [false, true] {
+        for management in [false, true] {
             assert_eq!(
-                names(&who(Role::Admin, builtin)),
-                names(&who(Role::Worker, builtin)),
-                "builtin={builtin}"
+                names(&who(Role::Admin, management)),
+                names(&who(Role::Worker, management)),
+                "management={management}"
             );
         }
     }
