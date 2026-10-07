@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// 2：`whiteboard.*` 删除、`Message.crewId` → `channelId`（裁定 18）。
-/// v3：删审批、单根、@ 不再收窄（N1，spec §24）。
+/// v3：删审批、总机组 = 管理机组（不在机组树里）、@ 不再收窄（N1，spec §24）。
 pub const API_VERSION: u32 = 3;
 
 pub mod methods {

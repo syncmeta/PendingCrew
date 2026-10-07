@@ -92,7 +92,7 @@ impl Client {
     }
 }
 
-/// 合成数据：机组 a（1 号，机长 cap-a、worker w-a1），挂在总机组下（`backfill_v4` 懒建，与迁移同一条路）；
+/// 合成数据：机组 a（1 号，机长 cap-a、worker w-a1），在顶层（总机组由 `backfill_v4` 懒建，不在树里，与迁移同一条路）；
 /// w-a1 开了一条问；有一条重启询问。
 fn seed(dir: &Path) {
     use crewd_proto::{Role, Session};

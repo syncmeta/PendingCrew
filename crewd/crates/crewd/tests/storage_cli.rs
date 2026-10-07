@@ -85,7 +85,7 @@ fn add_crew(data: &Path, id: &str) {
     .unwrap();
 }
 
-/// 按标题看机组，不按个数：第一次建机组会懒建总机组（N1 单根），个数随之多一。
+/// 按标题看机组，不按个数：第一次建机组会懒建总机组（管理机组），个数随之多一。
 fn crew_titles(data: &Path) -> Vec<String> {
     let v: serde_json::Value = serde_json::from_slice(
         &ok(crewd(data).args(["rpc", "crew.list"]).output().unwrap()).stdout,

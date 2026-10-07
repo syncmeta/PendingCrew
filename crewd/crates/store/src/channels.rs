@@ -7,7 +7,7 @@ pub fn lobby_id(crew_id: &str) -> String {
     format!("{crew_id}/lobby")
 }
 
-/// home（总机组 / 一级机组）人类群的 id（确定性；懒建）。
+/// home（总机组 / 顶层机组）人类群的 id（确定性；懒建）。
 pub fn human_id(home_crew_id: &str) -> String {
     format!("{home_crew_id}/human")
 }

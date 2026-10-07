@@ -675,7 +675,7 @@
           "$ref": "#/$defs/Crew"
         },
         "homeId": {
-          "description": "这个机组的人类群在 `<homeId>/human`；总机组 / 一级机组 = 自己（多父归最早建的一级祖先，§13 Q1 同口径）。",
+          "description": "这个机组的人类群在 `<homeId>/human`；总机组 / 顶层机组 = 自己（多父归最早建的顶层祖先，§13 Q1 同口径）。",
           "type": "string"
         },
         "sessions": {
@@ -892,7 +892,7 @@
           "type": "string"
         },
         "orgPath": {
-          "description": "上级的路径：一级机组在最左，\" / \" 分隔；总机组是所有人的祖先、不进路径（总机组与一级机组本身是空串）。",
+          "description": "上级的路径：顶层机组在最左，\" / \" 分隔；总机组不在机组树里（总机组与顶层机组本身是空串）。",
           "type": "string"
         },
         "sessionId": {

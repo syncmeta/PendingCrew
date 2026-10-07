@@ -343,7 +343,7 @@ pub struct Badge {
 #[serde(rename_all = "camelCase")]
 pub struct CrewDetail {
     pub crew: Crew,
-    /// 这个机组的人类群在 `<homeId>/human`；总机组 / 一级机组 = 自己（多父归最早建的一级祖先，§13 Q1 同口径）。
+    /// 这个机组的人类群在 `<homeId>/human`；总机组 / 顶层机组 = 自己（多父归最早建的顶层祖先，§13 Q1 同口径）。
     pub home_id: String,
     pub children: Vec<String>,
     pub channels: Vec<ChannelSummary>,
@@ -411,7 +411,7 @@ pub struct DirectoryRow {
     pub crew_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// 上级的路径：一级机组在最左，" / " 分隔；总机组是所有人的祖先、不进路径（总机组与一级机组本身是空串）。
+    /// 上级的路径：顶层机组在最左，" / " 分隔；总机组不在机组树里（总机组与顶层机组本身是空串）。
     pub org_path: String,
 }
 
