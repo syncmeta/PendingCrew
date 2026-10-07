@@ -1,5 +1,6 @@
 //! 收听（§22.7 Q2：session 可以收听一个群，持久化；收听者在该群有新消息时也会被叫醒——叫醒判定在 M3c）。
 //! `until_ms = None` = 一直收听，直到 `clear`。`senders` 非空 = 只对这些发送者的消息叫醒（判定在 M3c）。
+use crate::refusal::{Code, Refusal};
 use crate::{CollabError, Result, Tx, channels, cursors, sessions};
 use rusqlite::{Connection, params};
 
@@ -33,10 +34,10 @@ pub fn set(
     sessions::get(tx.conn(), session)?;
     let ch = channels::get(tx.conn(), channel)?;
     if ch.archived_at.is_some() {
-        return Err(CollabError::Invalid("群已归档".into()));
+        return Err(channels::archived(channel));
     }
     if until_ms.is_some_and(|u| u <= tx.now_ms()) {
-        return Err(CollabError::Invalid("收听截止时间必须晚于现在".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::ListenUntilInPast)));
     }
     // 这个群此刻是否已经在它的注入面上：有效的收听，或本来就在群里（成员 / 本机组大厅 / 机长的人类群）。
     // 不在 = 过期 / 清掉 / 从没收听过——从现在起重新收听，必须钉到末尾，不能把期间的历史倒出来。

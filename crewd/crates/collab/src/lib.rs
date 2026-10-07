@@ -10,6 +10,7 @@ pub mod directory;
 pub mod listens;
 pub mod messages;
 pub mod prompts;
+pub mod refusal;
 pub mod render;
 pub mod restart;
 pub mod sessions;
@@ -21,6 +22,7 @@ pub mod turn_trace;
 pub mod wakes;
 pub mod worldview;
 
+use crate::refusal::Refusal;
 use crewd_proto::RestartAnswer;
 use crewd_store::{Store, StoreError};
 use rusqlite::Connection;
@@ -97,17 +99,30 @@ pub enum ProgressKind {
 #[derive(Debug, thiserror::Error)]
 pub enum CollabError {
     #[error("{0}")]
-    NotFound(String),
+    NotFound(Refusal),
     #[error("{0}")]
-    Invalid(String),
+    Invalid(Refusal),
     #[error("{0}")]
-    Forbidden(String),
+    Forbidden(Refusal),
     #[error("{0}")]
-    Conflict(String),
+    Conflict(Refusal),
     #[error("{0}")]
     Work(crewd_work::Rejected),
     #[error(transparent)]
     Store(#[from] StoreError),
+}
+
+impl CollabError {
+    /// 规则拒绝（四个变体）带的码 + 参数；客户端靠 `code.as_str()` 本地化。`Work` / `Store` 没有码。
+    pub fn refusal(&self) -> Option<&Refusal> {
+        match self {
+            CollabError::NotFound(r)
+            | CollabError::Invalid(r)
+            | CollabError::Forbidden(r)
+            | CollabError::Conflict(r) => Some(r),
+            CollabError::Work(_) | CollabError::Store(_) => None,
+        }
+    }
 }
 
 impl From<rusqlite::Error> for CollabError {
@@ -267,7 +282,9 @@ mod tests {
             tx.note(Change::CrewChanged {
                 crew_id: "crew-a".into(),
             });
-            Err(CollabError::Invalid("中途失败".into()))
+            Err(CollabError::Invalid(Refusal::new(
+                crate::refusal::Code::MessageEmpty,
+            )))
         })
         .map(|(v, _)| v);
         assert!(matches!(r, Err(CollabError::Invalid(_))));

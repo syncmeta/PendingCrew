@@ -124,6 +124,17 @@ pub struct Request {
 pub struct RpcError {
     pub code: i32,
     pub message: String,
+    /// 规则拒绝的稳定码（N1 Task 10）：客户端按码本地化，`message` 只是中文缺省。只加不改——老客户端忽略它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<RpcErrorData>,
+}
+
+/// `RpcError.data`：规则拒绝带的机器可读部分。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcErrorData {
+    /// 拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。
+    pub refusal: String,
 }
 
 impl RpcError {
@@ -144,7 +155,16 @@ impl RpcError {
         Self {
             code,
             message: message.into(),
+            data: None,
         }
+    }
+
+    /// 带上规则拒绝码（`data.refusal`）。
+    pub fn with_refusal(mut self, code: &str) -> Self {
+        self.data = Some(RpcErrorData {
+            refusal: code.to_string(),
+        });
+        self
     }
 }
 

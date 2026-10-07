@@ -1,5 +1,6 @@
 //! 人类待确认（H 号）：经 crewd-work 的工作账本发号（§19 Q1：工作账本是唯一发号处）。
 use crate::messages;
+use crate::refusal::{Code, Refusal};
 use crate::wakes::{self, WakeKind, WakePriority, WakeRequest};
 use crate::{Change, CollabError, Result, Sender, Tx, crews, sessions};
 use crewd_proto::{Ask, AskDefault, AskStateView, HumanWait, WaitTierView};
@@ -45,9 +46,9 @@ fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
 /// 其余原样带着 `Rejected`（服务层按种类映射）。
 fn rejected(crew: &str, r: Rejected) -> CollabError {
     match r {
-        Rejected::UnknownAsk(h) => CollabError::NotFound(format!("机组 {crew} 没有 {h}")),
-        Rejected::UnknownItem(w) => CollabError::NotFound(format!("机组 {crew} 没有 {w}")),
-        Rejected::UnknownEntry(e) => CollabError::NotFound(format!("机组 {crew} 没有 {e}")),
+        Rejected::UnknownAsk(id) => unknown_id(crew, id),
+        Rejected::UnknownItem(id) => unknown_id(crew, id),
+        Rejected::UnknownEntry(id) => unknown_id(crew, id),
         other => CollabError::Work(other),
     }
 }
@@ -85,9 +86,19 @@ fn actor_of(conn: &Connection, session: &str) -> Result<Actor> {
     })
 }
 
+/// 格式对、账本里没有的 H / W / # 号（R11：NotFound）。
+fn unknown_id(crew: &str, id: impl std::fmt::Display) -> CollabError {
+    CollabError::NotFound(
+        Refusal::new(Code::AskIdNotFound)
+            .arg("crew", crew)
+            .arg("id", id.to_string()),
+    )
+}
+
 fn parse_ask(ask: &str) -> Result<AskId> {
-    ask.parse()
-        .map_err(|e: crewd_work::ParseIdError| CollabError::Invalid(e.to_string()))
+    ask.parse().map_err(|e: crewd_work::ParseIdError| {
+        CollabError::Invalid(Refusal::new(Code::AskBadId).arg("input", e.input))
+    })
 }
 
 fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
@@ -154,9 +165,7 @@ pub(crate) fn by_message(conn: &Connection, message_id: &str) -> Result<Option<(
 pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
     let h = parse_ask(ask)?;
     let book = load(conn, crew)?;
-    let a = book
-        .ask(h)
-        .ok_or_else(|| CollabError::NotFound(format!("机组 {crew} 没有 {ask}")))?;
+    let a = book.ask(h).ok_or_else(|| unknown_id(crew, ask))?;
     view(conn, crew, a)
 }
 
@@ -280,7 +289,11 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
         Sender::Human => Actor::Human,
         Sender::Session(s) if sessions::crew_of(tx.conn(), s)? == crew => actor_of(tx.conn(), s)?,
         Sender::Session(s) => Actor::worker(s),
-        Sender::System => return Err(CollabError::Forbidden("系统不撤回问".into())),
+        Sender::System => {
+            return Err(CollabError::Forbidden(Refusal::new(
+                Code::AskSystemCannotWithdraw,
+            )));
+        }
     };
     with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))?;
     // 规范写法（"H1"），不是调用方原样给的（"h1"）：客户端按它对号（终审 M3）。
@@ -315,9 +328,11 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
             b.withdraw_ask(&Actor::Human, now, h, &reason)
         })
         .map_err(|e| match e {
-            CollabError::Work(Rejected::AskInUse(h)) => CollabError::Conflict(format!(
-                "机组 {crew} 的 {h} 还卡着活项；先答掉它或让负责人改道，再归档"
-            )),
+            CollabError::Work(Rejected::AskInUse(h)) => CollabError::Conflict(
+                Refusal::new(Code::AskArchiveBlocked)
+                    .arg("crew", crew)
+                    .arg("ask", h.to_string()),
+            ),
             e => e,
         })?;
         tx.note(Change::AskChanged {

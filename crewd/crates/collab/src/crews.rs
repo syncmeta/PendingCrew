@@ -1,4 +1,5 @@
 //! 机组：根、机长、DAG、建 / 改 / 删、编号。移植 `LocalCrewStore.swift:356-526`、`CrewDirectory.swift:8-13`。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Tx};
 use crewd_proto::Crew;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -24,7 +25,7 @@ pub struct CrewPatch {
 }
 
 fn not_found(id: &str) -> CollabError {
-    CollabError::NotFound(format!("没有机组 {id}"))
+    CollabError::NotFound(Refusal::new(Code::CrewNotFound).arg("crew", id))
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<Crew> {
@@ -127,9 +128,9 @@ pub fn is_archived(conn: &Connection, id: &str) -> Result<bool> {
 /// 往它的人类群发言一律拒，指路先解档。读（列表、详情、读消息）照常。
 pub(crate) fn refuse_archived(conn: &Connection, id: &str) -> Result<()> {
     if is_archived(conn, id)? {
-        return Err(CollabError::Conflict(format!(
-            "机组 {id} 已归档，只读；要动它先解档（crew.unarchive）"
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewArchived).arg("crew", id),
+        ));
     }
     Ok(())
 }
@@ -208,9 +209,7 @@ pub(crate) fn alloc_ext(conn: &Connection, crew: &str) -> Result<i64> {
 /// 根的轻量规则（N1 裁定 6）：总机组不能有父（不能被收编、转挂、摘出），不能归档、不能删。被操作的机组不存在 = NotFound。
 fn refuse_org_root(conn: &Connection, id: &str) -> Result<()> {
     if is_org_root(conn, id)? {
-        return Err(CollabError::Forbidden(
-            "总机组是组织的根，不能被收编、摘出、归档或删除".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(Code::CrewOrgRootFixed)));
     }
     Ok(())
 }
@@ -251,11 +250,13 @@ fn next_crew_number(tx: &mut Tx<'_>) -> Result<i64> {
 pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     let title = n.title.trim().to_string();
     if title.is_empty() {
-        return Err(CollabError::Invalid("机组名不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::CrewTitleEmpty)));
     }
     let wd = n.working_directory.trim().to_string();
     if wd.is_empty() {
-        return Err(CollabError::Invalid("工作目录不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::CrewWorkingDirEmpty,
+        )));
     }
     if let Some(p) = n.parent_id.as_deref() {
         refuse_archived(tx.conn(), p)?;
@@ -300,14 +301,14 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
     refuse_archived(tx.conn(), id)?;
     // 根的轻量规则（N1 裁定 6）：总机组不能被隐藏（改名等其余字段与普通机组一样）。
     if crew.org_root && p.hidden == Some(true) {
-        return Err(CollabError::Forbidden("总机组是组织的根，不能隐藏".into()));
+        return Err(CollabError::Forbidden(Refusal::new(Code::CrewOrgRootFixed)));
     }
     let conn = tx.conn();
     let now = tx.now_ts();
     if let Some(t) = p.title {
         let t = t.trim().to_string();
         if t.is_empty() {
-            return Err(CollabError::Invalid("机组名不能为空".into()));
+            return Err(CollabError::Invalid(Refusal::new(Code::CrewTitleEmpty)));
         }
         conn.execute("UPDATE crews SET title=?2 WHERE id=?1", params![id, t])?;
     }
@@ -320,7 +321,9 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
     }
     if let Some(wd) = p.working_directory {
         if wd.trim().is_empty() {
-            return Err(CollabError::Invalid("工作目录不能为空".into()));
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::CrewWorkingDirEmpty,
+            )));
         }
         conn.execute(
             "UPDATE crews SET working_directory=?2 WHERE id=?1",
@@ -367,17 +370,21 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
         if parents(tx.conn(), crew)? == [parent] {
             return get(tx.conn(), crew);
         }
-        return Err(CollabError::Invalid(format!(
-            "挪到一级：用 release 摘掉 {crew} 的其它上级"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::CrewMoveToFirstLevel).arg("crew", crew),
+        ));
     }
     if crew == parent {
-        return Err(CollabError::Invalid("机组不能挂在自己下面".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::CrewCannotParentSelf,
+        )));
     }
     if descendants(tx.conn(), crew)?.contains(parent) {
-        return Err(CollabError::Invalid(format!(
-            "{parent} 是 {crew} 的下级，挂上去会成环"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::CrewWouldCycle)
+                .arg("parent", parent)
+                .arg("crew", crew),
+        ));
     }
     let ps = parents(tx.conn(), crew)?;
     if ps.iter().any(|p| p == parent) {
@@ -428,9 +435,11 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     get(tx.conn(), from)?;
     let ps = parents(tx.conn(), crew)?;
     if !ps.iter().any(|p| p == from) {
-        return Err(CollabError::Invalid(format!(
-            "{crew} 不是 {from} 的直系子机组"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::CrewNotDirectChild)
+                .arg("crew", crew)
+                .arg("from", from),
+        ));
     }
     // 一级机组从总机组「摘出」、落回总机组下 = 原地不动（不挪到末尾、不发变更；与 adopt 到总机组对称）。
     if to == Some(from) || (to.is_none() && is_org_root(tx.conn(), from)?) {
@@ -438,9 +447,11 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     }
     // 明说要回到一级，但摘掉这个父之后还挂在别的上级下：回不到一级，拒并指路（不悄悄留在原处）。
     if to_root && ps.len() > 1 {
-        return Err(CollabError::Invalid(format!(
-            "挪到一级：先解除 {crew} 的其它上级（release），只剩 {from} 时再摘到总机组下"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::CrewReleaseToRootOtherParents)
+                .arg("crew", crew)
+                .arg("from", from),
+        ));
     }
     if let Some(t) = to {
         adopt(tx, crew, t)?;
@@ -472,9 +483,11 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
         |r| r.get(0),
     )?;
     if running > 0 {
-        return Err(CollabError::Conflict(format!(
-            "机组 {id} 还有 {running} 个在跑的 session，先停掉"
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewRunningSessions)
+                .arg("crew", id)
+                .arg("running", running.to_string()),
+        ));
     }
     Ok(())
 }
@@ -498,10 +511,11 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
         }
     }
     if !live_kids.is_empty() {
-        return Err(CollabError::Conflict(format!(
-            "机组 {id} 下面还有没归档的子机组 {}；先把它们挪走（crew.release）或归档",
-            live_kids.join(", ")
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewLiveChildren)
+                .arg("crew", id)
+                .arg("children", live_kids.join(", ")),
+        ));
     }
     // 它还开着的问一并撤回（Task 9 复审裁定；解档不重开）。
     crate::asks::withdraw_open_for_archive(tx, id)?;
@@ -545,10 +559,11 @@ pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
         }
     }
     if !archived_parents.is_empty() {
-        return Err(CollabError::Conflict(format!(
-            "机组 {id} 的上级 {} 也已归档；先解档上级",
-            archived_parents.join(", ")
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewParentArchived)
+                .arg("crew", id)
+                .arg("parents", archived_parents.join(", ")),
+        ));
     }
     let now = tx.now_ts();
     tx.conn().execute(
@@ -576,9 +591,9 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
     get(conn, id)?;
     refuse_org_root(conn, id)?;
     if !is_archived(conn, id)? {
-        return Err(CollabError::Conflict(format!(
-            "机组 {id} 还没归档；永久删除只收已归档的机组，先归档（crew.delete）"
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewNotArchived).arg("crew", id),
+        ));
     }
     refuse_running(conn, id)
 }
@@ -624,9 +639,11 @@ pub fn set_captain(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
     refuse_archived(tx.conn(), crew)?;
     let s = crate::sessions::get(tx.conn(), session)?;
     if s.crew_id != crew {
-        return Err(CollabError::Invalid(format!(
-            "{session} 不在机组 {crew} 里"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::CrewSessionNotInCrew)
+                .arg("session", session)
+                .arg("crew", crew),
+        ));
     }
     let old = captain_of(tx.conn(), crew)?;
     if old.as_deref() == Some(session) {
@@ -716,9 +733,9 @@ pub fn reorder(tx: &mut Tx<'_>, parent: &str, ordered: &[String]) -> Result<Vec<
     let want: BTreeSet<&String> = ordered.iter().collect();
     let have: BTreeSet<&String> = current.iter().collect();
     if want.len() != ordered.len() || want != have {
-        return Err(CollabError::Invalid(format!(
-            "crewIds 必须恰好是这一层的全部机组（不重复）：现有 {current:?}"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::CrewReorderMismatch).arg("current", format!("{current:?}")),
+        ));
     }
     let mut moved = false;
     for (i, id) in ordered.iter().enumerate() {
@@ -1869,7 +1886,7 @@ mod tests {
         ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
         let e = err(&mut s, |tx| release(tx, "crew-b", "crew-a", Some("chief")));
         assert!(
-            matches!(&e, CollabError::Invalid(m) if m.contains("其它上级")),
+            matches!(&e, CollabError::Invalid(r) if r.code == crate::refusal::Code::CrewReleaseToRootOtherParents),
             "{e:?}"
         );
         let mut ps = parents(s.conn(), "crew-b").unwrap();
@@ -2507,7 +2524,10 @@ mod tests {
             })
         });
         match err(&mut s, |tx| archive(tx, "crew-x")) {
-            CollabError::Conflict(m) => assert!(m.contains(&h), "{m}"),
+            CollabError::Conflict(r) => {
+                assert_eq!(r.code, crate::refusal::Code::AskArchiveBlocked);
+                assert_eq!(r.value("ask"), Some(h.as_str()), "{r}");
+            }
             e => panic!("{e:?}"),
         }
         assert!(get(s.conn(), "crew-x").unwrap().archived_at.is_none());

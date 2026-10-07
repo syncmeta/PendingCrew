@@ -1,4 +1,5 @@
 //! 群（spec §17、§22.2「群规则」、§22.7 Q2 群主）。成员判定、群主、人类群懒建都只在这里写一次。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Locale, Result, Sender, Tx, crews, cursors, sessions};
 use crewd_proto::{Channel, ChannelKind, ChannelSummary, MemberRef};
 use crewd_store::channels::{human_id, lobby_id};
@@ -71,7 +72,9 @@ pub fn get(conn: &Connection, id: &str) -> Result<Channel> {
             row,
         )
         .optional()?
-        .ok_or_else(|| CollabError::NotFound(format!("没有群 {id}")))?;
+        .ok_or_else(|| {
+            CollabError::NotFound(Refusal::new(Code::ChannelNotFound).arg("channel", id))
+        })?;
     let mut ch = r.ch;
     ch.owner = match ch.kind {
         ChannelKind::Lobby | ChannelKind::Human => {
@@ -314,9 +317,23 @@ pub fn dm_peer(conn: &Connection, channel: &str, of: &MemberRef) -> Result<Optio
     Ok(ms.into_iter().find(|m| m != of))
 }
 
+/// 群已归档（channel.archived；listens / messages / 本文件共用同一句）。
+pub(crate) fn archived(channel: &str) -> CollabError {
+    CollabError::Invalid(Refusal::new(Code::ChannelArchived).arg("channel", channel))
+}
+
+/// `crew` 不是一级机组、没有自己的人类群：指路到它的 home 的人类群（messages / 本文件共用同一句）。
+pub(crate) fn no_human_channel(conn: &Connection, crew: &str) -> Result<CollabError> {
+    Ok(CollabError::Invalid(
+        Refusal::new(Code::ChannelNoHumanChannel)
+            .arg("crew", crew)
+            .arg("home", crews::home_pointer(conn, crew)?),
+    ))
+}
+
 fn sender_ref(by: &Sender) -> Result<MemberRef> {
     by.member()
-        .ok_or_else(|| CollabError::Invalid("系统不能以成员身份做这件事".into()))
+        .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::ChannelSystemCannotAct)))
 }
 
 fn check_member_exists(conn: &Connection, m: &MemberRef) -> Result<()> {
@@ -352,7 +369,7 @@ fn dm_crew(conn: &Connection, all: &[MemberRef]) -> Result<String> {
     };
     match anchor {
         MemberRef::Session { id } => sessions::crew_of(conn, id),
-        MemberRef::Human => Err(CollabError::Invalid("私聊至多一方是人类".into())),
+        MemberRef::Human => Err(CollabError::Invalid(Refusal::new(Code::ChannelDmOneHuman))),
     }
 }
 
@@ -362,9 +379,9 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
     crews::get(tx.conn(), &n.crew_id)?;
     crews::refuse_archived(tx.conn(), &n.crew_id)?;
     if !matches!(n.kind, ChannelKind::Topic | ChannelKind::Dm) {
-        return Err(CollabError::Invalid(
-            "只能建 topic 或 dm；大厅与人类群由 crewd 建".into(),
-        ));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelCreateKindFixed,
+        )));
     }
     let mut all = vec![creator.clone()];
     for m in n.members {
@@ -375,22 +392,21 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
     }
     let name = n.name.trim().to_string();
     if n.kind == ChannelKind::Topic && name.is_empty() {
-        return Err(CollabError::Invalid("群名不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::ChannelNameEmpty)));
     }
-    crate::prompts::refuse_sender_label("群名", &name)?;
+    crate::prompts::refuse_sender_label(Code::ChannelNameIsSenderLabel, &name)?;
     if n.kind == ChannelKind::Dm {
         let humans = all.iter().filter(|m| **m == MemberRef::Human).count();
         if all.len() != 2 || humans > 1 {
-            return Err(CollabError::Invalid(
-                "私聊恰好两个人（至多一方是人类）".into(),
-            ));
+            return Err(CollabError::Invalid(Refusal::new(Code::ChannelDmNeedsTwo)));
         }
         let owner_crew = dm_crew(tx.conn(), &all)?;
         if owner_crew != n.crew_id {
-            return Err(CollabError::Invalid(format!(
-                "私聊归属发起者所在的机组 {owner_crew}，不是 {}",
-                n.crew_id
-            )));
+            return Err(CollabError::Invalid(
+                Refusal::new(Code::ChannelDmWrongCrew)
+                    .arg("owner", owner_crew)
+                    .arg("crew", n.crew_id.clone()),
+            ));
         }
     }
     let id = format!("ch-{}", uuid::Uuid::new_v4().simple());
@@ -473,20 +489,20 @@ pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result
     // 归档机组的群跟着只读（含解档：先解档机组）。
     crews::refuse_archived(tx.conn(), &ch.crew_id)?;
     if !may_manage(tx.conn(), by, &ch)? {
-        return Err(CollabError::Forbidden(
-            "只有群主、机长或人能改这个群".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelManageForbidden,
+        )));
     }
     let fixed = matches!(ch.kind, ChannelKind::Lobby | ChannelKind::Human);
     if let Some(name) = p.name {
         if fixed {
-            return Err(CollabError::Invalid("大厅 / 人类群不能改名".into()));
+            return Err(CollabError::Invalid(Refusal::new(Code::ChannelFixedName)));
         }
         let name = name.trim().to_string();
         if name.is_empty() && ch.kind == ChannelKind::Topic {
-            return Err(CollabError::Invalid("群名不能为空".into()));
+            return Err(CollabError::Invalid(Refusal::new(Code::ChannelNameEmpty)));
         }
-        crate::prompts::refuse_sender_label("群名", &name)?;
+        crate::prompts::refuse_sender_label(Code::ChannelNameIsSenderLabel, &name)?;
         tx.conn()
             .execute("UPDATE channels SET name=?2 WHERE id=?1", params![id, name])?;
     }
@@ -499,7 +515,9 @@ pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result
     }
     if let Some(a) = p.archived {
         if fixed {
-            return Err(CollabError::Invalid("大厅 / 人类群不能手动归档".into()));
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::ChannelFixedNoArchive,
+            )));
         }
         let at = a.then(|| tx.now_ts());
         tx.conn().execute(
@@ -520,19 +538,25 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
     let ch = get(tx.conn(), id)?;
     match ch.kind {
         ChannelKind::Lobby => {
-            return Err(CollabError::Invalid(
-                "大厅成员 = 本机组全体，不能手动加".into(),
-            ));
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::ChannelLobbyCannotAdd,
+            )));
         }
-        ChannelKind::Dm => return Err(CollabError::Invalid("私聊不能加人".into())),
+        ChannelKind::Dm => {
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::ChannelDmCannotGrow,
+            )));
+        }
         _ => {}
     }
     if ch.archived_at.is_some() {
-        return Err(CollabError::Invalid("群已归档".into()));
+        return Err(archived(id));
     }
     let me = sender_ref(by)?;
     if me != MemberRef::Human && !is_member(tx.conn(), id, &me)? {
-        return Err(CollabError::Forbidden("只有群成员能拉人".into()));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelAddMembersMemberOnly,
+        )));
     }
     for m in ms {
         check_member_exists(tx.conn(), m)?;
@@ -542,9 +566,12 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
         {
             let home = crews::home_of(tx.conn(), &sessions::crew_of(tx.conn(), sid)?)?;
             if home != ch.crew_id {
-                return Err(CollabError::Invalid(format!(
-                    "{sid} 的人类群是 {home}/human，不能拉进 {id}；跨机组说话走私聊"
-                )));
+                return Err(CollabError::Invalid(
+                    Refusal::new(Code::ChannelHumanChannelOtherHome)
+                        .arg("session", sid.clone())
+                        .arg("home", home)
+                        .arg("channel", id),
+                ));
             }
         }
         join(tx, id, m)?;
@@ -558,21 +585,25 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
 pub fn remove_member(tx: &mut Tx<'_>, by: &Sender, id: &str, m: &MemberRef) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
     if ch.kind == ChannelKind::Lobby {
-        return Err(CollabError::Invalid(
-            "大厅成员 = 本机组全体，不能移出".into(),
-        ));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelLobbyCannotRemove,
+        )));
     }
     if ch.kind == ChannelKind::Dm {
-        return Err(CollabError::Invalid("私聊不能退群；要结束就归档".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelDmCannotLeave,
+        )));
     }
     let me = sender_ref(by)?;
     if me != *m && !may_manage(tx.conn(), by, &ch)? {
-        return Err(CollabError::Forbidden(
-            "只能自己退群，或由群主 / 机长 / 人移出".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelLeaveForbidden,
+        )));
     }
     if ch.owner.as_ref() == Some(m) && ch.kind == ChannelKind::Topic {
-        return Err(CollabError::Invalid("群主要先把群主转让出去".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelOwnerMustTransfer,
+        )));
     }
     let (k, mid) = m.to_row();
     let n = tx.conn().execute(
@@ -580,9 +611,9 @@ pub fn remove_member(tx: &mut Tx<'_>, by: &Sender, id: &str, m: &MemberRef) -> R
         params![id, k, mid, tx.now_ts()],
     )?;
     if n == 0 {
-        return Err(CollabError::NotFound(
-            "不在这个群里（隐式成员不能移出）".into(),
-        ));
+        return Err(CollabError::NotFound(Refusal::new(
+            Code::ChannelNotExplicitMember,
+        )));
     }
     // 待接受转让的对象退群了：那条转让作废（否则它会一直挂着、还能被陈旧地接受）。
     if ch.pending_owner.as_ref() == Some(m) {
@@ -630,10 +661,7 @@ pub fn ensure_human_channel(tx: &mut Tx<'_>, home: &str) -> Result<Channel> {
     // 归档的机组只读：不建、不解档它的人类群（发言、列群都走这里，统一在这一处挡）。
     crews::refuse_archived(tx.conn(), home)?;
     if !crews::is_home(tx.conn(), home)? {
-        return Err(CollabError::Invalid(format!(
-            "{home} 没有人类群，人类群在 {}/human",
-            crews::home_pointer(tx.conn(), home)?
-        )));
+        return Err(no_human_channel(tx.conn(), home)?);
     }
     let id = human_id(home);
     let created = tx.conn().execute(
@@ -753,12 +781,12 @@ pub fn list_for_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<ChannelSummary>>
 /// 群主转让只发生在活着的 topic / dm 上：大厅 / 人类群的群主跟着机长走，归档的群不再动群主。
 fn require_owner_channel(ch: &Channel) -> Result<()> {
     if ch.archived_at.is_some() {
-        return Err(CollabError::Invalid("群已归档".into()));
+        return Err(archived(&ch.id));
     }
     if matches!(ch.kind, ChannelKind::Lobby | ChannelKind::Human) {
-        return Err(CollabError::Invalid(
-            "大厅 / 人类群的群主跟着机组机长走，换机长即可".into(),
-        ));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelOwnerFollowsCaptain,
+        )));
     }
     Ok(())
 }
@@ -890,13 +918,19 @@ pub fn request_owner_transfer(
     require_owner_channel(&ch)?;
     let me = sender_ref(by)?;
     if ch.owner.as_ref() != Some(&me) {
-        return Err(CollabError::Forbidden("只有群主能发起转让".into()));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelTransferOwnerOnly,
+        )));
     }
     if *to == me {
-        return Err(CollabError::Invalid("已经是群主".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelAlreadyOwner,
+        )));
     }
     if !is_member(tx.conn(), id, to)? {
-        return Err(CollabError::Invalid("新群主必须是群成员".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNewOwnerMustBeMember,
+        )));
     }
     let by_s = me.to_row().1.to_string();
     set_pending(tx, id, Some((to, &by_s)))?;
@@ -913,12 +947,18 @@ pub fn accept_owner_transfer(tx: &mut Tx<'_>, by: &Sender, id: &str) -> Result<C
     match &ch.pending_owner {
         Some(p) if *p == me => {
             if !is_member(tx.conn(), id, &me)? {
-                return Err(CollabError::Invalid("你已经不在这个群里".into()));
+                return Err(CollabError::Invalid(Refusal::new(
+                    Code::ChannelTransferTargetLeft,
+                )));
             }
             set_owner(tx, id, &me)
         }
-        Some(_) => Err(CollabError::Forbidden("转让对象不是你".into())),
-        None => Err(CollabError::Invalid("没有待接受的群主转让".into())),
+        Some(_) => Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelTransferNotForYou,
+        ))),
+        None => Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNoPendingTransfer,
+        ))),
     }
 }
 
@@ -927,14 +967,16 @@ pub fn withdraw_owner_transfer(tx: &mut Tx<'_>, by: &Sender, id: &str) -> Result
     let ch = get(tx.conn(), id)?;
     require_owner_channel(&ch)?;
     if ch.pending_owner.is_none() {
-        return Err(CollabError::Invalid("没有待接受的群主转让".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNoPendingTransfer,
+        )));
     }
     let me = by.member();
     let allowed = may_manage(tx.conn(), by, &ch)? || me.as_ref() == ch.pending_owner.as_ref();
     if !allowed {
-        return Err(CollabError::Forbidden(
-            "只有群主、被转让的人、机长或人能撤回".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelTransferWithdrawForbidden,
+        )));
     }
     set_pending(tx, id, None)?;
     tx.note(Change::ChannelChanged {
@@ -955,10 +997,14 @@ pub fn force_owner(tx: &mut Tx<'_>, by: &Sender, id: &str, to: &MemberRef) -> Re
         Sender::System => false,
     };
     if !allowed {
-        return Err(CollabError::Forbidden("只有机长或人能强制换群主".into()));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelForceOwnerForbidden,
+        )));
     }
     if !is_member(tx.conn(), id, to)? {
-        return Err(CollabError::Invalid("新群主必须是群成员".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNewOwnerMustBeMember,
+        )));
     }
     set_owner(tx, id, to)
 }

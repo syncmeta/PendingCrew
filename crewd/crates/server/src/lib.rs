@@ -323,7 +323,9 @@ mod tests {
                         ..Default::default()
                     },
                 )?;
-                Err(crewd_collab::CollabError::Invalid("中途失败".into()))
+                Err(crewd_collab::CollabError::Invalid(
+                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::MessageEmpty),
+                ))
             })
             .await;
         assert!(r.is_err());

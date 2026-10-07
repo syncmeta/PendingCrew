@@ -33,14 +33,19 @@ fn internal(detail: impl std::fmt::Display) -> RpcError {
     )
 }
 
+/// 规则拒绝 → RPC 错误：message 是中文缺省，`data.refusal` 是稳定码，客户端按码本地化。
+fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError {
+    RpcError::new(code, r.to_string()).with_refusal(r.code.as_str())
+}
+
 /// collab 错误 → RPC 错误码（M3b 的 agent RPC 复用同一张表）。
 pub fn collab_err(e: CollabError) -> RpcError {
     use crewd_work::Rejected as R;
     match e {
-        CollabError::NotFound(m) => RpcError::new(RpcError::NOT_FOUND, m),
-        CollabError::Invalid(m) => RpcError::new(RpcError::INVALID_PARAMS, m),
-        CollabError::Forbidden(m) => RpcError::new(RpcError::FORBIDDEN, m),
-        CollabError::Conflict(m) => RpcError::new(RpcError::CONFLICT, m),
+        CollabError::NotFound(r) => refused(RpcError::NOT_FOUND, r),
+        CollabError::Invalid(r) => refused(RpcError::INVALID_PARAMS, r),
+        CollabError::Forbidden(r) => refused(RpcError::FORBIDDEN, r),
+        CollabError::Conflict(r) => refused(RpcError::CONFLICT, r),
         CollabError::Work(R::Forbidden(a)) => {
             RpcError::new(RpcError::FORBIDDEN, format!("not allowed: {a}"))
         }
@@ -390,6 +395,43 @@ mod tests {
 
     fn code(e: CollabError) -> i32 {
         collab_err(e).code
+    }
+
+    #[test]
+    fn a_refusal_carries_its_code_to_the_client() {
+        use crewd_collab::refusal::{Code, Refusal};
+        let e = collab_err(CollabError::Invalid(Refusal::new(
+            Code::ChannelDmCannotGrow,
+        )));
+        assert_eq!(e.code, RpcError::INVALID_PARAMS);
+        assert_eq!(
+            e.data.as_ref().map(|d| d.refusal.as_str()),
+            Some("channel.dm_cannot_grow")
+        );
+        // 其余错误（账本 / 存储 / 内部）不带码：data 缺席，线上不出现这个键。
+        let e = collab_err(CollabError::Work(Rejected::Blank("text")));
+        assert!(e.data.is_none());
+        let wire = serde_json::to_value(&e).unwrap();
+        assert!(wire.get("data").is_none(), "{wire}");
+        // 每个规则变体都带码，状态码对得上。
+        for (e, want) in [
+            (
+                CollabError::NotFound(Refusal::new(Code::MessageEmpty)),
+                RpcError::NOT_FOUND,
+            ),
+            (
+                CollabError::Forbidden(Refusal::new(Code::MessageEmpty)),
+                RpcError::FORBIDDEN,
+            ),
+            (
+                CollabError::Conflict(Refusal::new(Code::MessageEmpty)),
+                RpcError::CONFLICT,
+            ),
+        ] {
+            let r = collab_err(e);
+            assert_eq!(r.code, want);
+            assert_eq!(r.data.unwrap().refusal, "message.empty");
+        }
     }
 
     /// 控制者裁定 a：与当前状态冲突（问已经答过 / 撤过、转交已在途 / 没有在途、入口已关、项已结、问还卡着活项）

@@ -1,5 +1,6 @@
 //! 持久化唤醒队列（spec §22.4：取代只在内存里的 `CrewDeferredWakeQueue`）与熔断台账（§22.7 Q5）。
 //! 这里只有读写；叫谁、何时投、准入与熔断判据都在 M3c（`crewd-wake` + `server::orchestra`）。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Tx};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -212,10 +213,12 @@ fn rows(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Wa
 /// 命中已有行返回 `Duplicate`，**不**改它的优先级、`not_before`、`note`，也不发变更。
 pub fn enqueue(tx: &mut Tx<'_>, r: WakeRequest) -> Result<Enqueued> {
     if r.source.trim().is_empty() {
-        return Err(CollabError::Invalid("唤醒的 source 不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::WakeSourceEmpty)));
     }
     if crewd_store::sessions::get(tx.conn(), &r.session)?.is_none() {
-        return Err(CollabError::NotFound(format!("没有 session {}", r.session)));
+        return Err(CollabError::NotFound(
+            Refusal::new(Code::SessionNotFound).arg("session", r.session.clone()),
+        ));
     }
     let n = tx.conn().execute(
         "INSERT INTO wakes(session_id,kind,source,origin,priority,not_before,note,created_at)
@@ -317,13 +320,17 @@ fn set_state(
             .query_row("SELECT state FROM wakes WHERE id=?1", [id], |r| r.get(0))
             .optional()?;
         let Some(state) = state else {
-            return Err(CollabError::NotFound(format!("没有唤醒 {id}")));
+            return Err(CollabError::NotFound(
+                Refusal::new(Code::WakeNotFound).arg("wake", id.to_string()),
+            ));
         };
         if !from.contains(&state.as_str()) {
-            return Err(CollabError::Conflict(format!(
-                "唤醒 {id} 是 {state}，不能改成 {}",
-                to.as_str()
-            )));
+            return Err(CollabError::Conflict(
+                Refusal::new(Code::WakeBadTransition)
+                    .arg("wake", id.to_string())
+                    .arg("from", state)
+                    .arg("to", to.as_str()),
+            ));
         }
         tx.conn().execute(
             "UPDATE wakes SET state=?2, settled_at=CASE WHEN ?3 THEN ?4 ELSE settled_at END WHERE id=?1",
@@ -428,6 +435,7 @@ pub fn list(conn: &Connection, session: Option<&str>, limit: u32) -> Result<Vec<
 /// 熔断台账（§22.7 Q5：「来源 → 目标」与「目标 session」两级；绝不按全机总量）。
 /// 只有人能从客户端解（M3c 的 `admission.recover`）。
 pub mod latches {
+    use crate::refusal::{Code, Refusal};
     use crate::{CollabError, Result, Tx};
     use rusqlite::{Connection, OptionalExtension, params};
 
@@ -446,9 +454,9 @@ pub mod latches {
                     Ok(("edge", format!("{from}→{to}")))
                 }
                 Scope::Session(s) if ok(s) => Ok(("session", s.clone())),
-                _ => Err(CollabError::Invalid(format!(
-                    "熔断台账的 id 不能为空、也不能含「→」：{self:?}"
-                ))),
+                _ => Err(CollabError::Invalid(
+                    Refusal::new(Code::WakeLatchBadScope).arg("scope", format!("{self:?}")),
+                )),
             }
         }
         fn from_key(scope: &str, id: &str) -> Option<Scope> {
@@ -527,9 +535,11 @@ pub mod latches {
                 Scope::from_key(&s, &id)
                     .map(|scope| Latch { scope, reason, at })
                     .ok_or_else(|| {
-                        CollabError::Invalid(format!(
-                            "wake_latches 里有认不出的行：scope={s:?} id={id:?}"
-                        ))
+                        CollabError::Invalid(
+                            Refusal::new(Code::WakeLatchRowUnreadable)
+                                .arg("scope", s.clone())
+                                .arg("id", id.clone()),
+                        )
                     })
             })
             .collect()

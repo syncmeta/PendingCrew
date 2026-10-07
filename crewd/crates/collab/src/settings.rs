@@ -1,4 +1,5 @@
 //! crewd 的设置（存 `meta`）。§22.7 Q5：并发上限默认不设；语言默认 zh（见计划「人的拍板」末段）。
+use crate::refusal::{Code, Refusal};
 use crate::{CollabError, Locale, Result, Tx};
 use rusqlite::Connection;
 
@@ -8,8 +9,9 @@ const MAX_LIVE_KEY: &str = "maxLiveSessions";
 pub fn locale(conn: &Connection) -> Result<Locale> {
     match crewd_store::meta_get(conn, LOCALE_KEY)? {
         None => Ok(Locale::default()),
-        Some(v) => Locale::parse(&v)
-            .ok_or_else(|| CollabError::Invalid(format!("meta.locale = {v:?}，只认 zh / en"))),
+        Some(v) => Locale::parse(&v).ok_or_else(|| {
+            CollabError::Invalid(Refusal::new(Code::SettingsBadLocale).arg("value", v.clone()))
+        }),
     }
 }
 
@@ -28,7 +30,7 @@ pub fn max_live_sessions(conn: &Connection) -> Result<Option<u32>> {
             .filter(|n| *n > 0)
             .map(Some)
             .ok_or_else(|| {
-                CollabError::Invalid(format!("meta.maxLiveSessions = {v:?} 不是正整数"))
+                CollabError::Invalid(Refusal::new(Code::SettingsBadMaxLive).arg("value", v.clone()))
             }),
     }
 }
@@ -40,9 +42,7 @@ pub fn set_max_live_sessions(tx: &mut Tx<'_>, n: Option<u32>) -> Result<()> {
                 .execute("DELETE FROM meta WHERE key=?1", [MAX_LIVE_KEY])?;
         }
         Some(0) => {
-            return Err(CollabError::Invalid(
-                "上限必须 ≥ 1；不设上限请传 null".into(),
-            ));
+            return Err(CollabError::Invalid(Refusal::new(Code::SettingsMaxLiveMin)));
         }
         Some(n) => crewd_store::meta_set(tx.conn(), MAX_LIVE_KEY, &n.to_string())?,
     }

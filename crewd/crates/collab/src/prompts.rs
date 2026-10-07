@@ -60,6 +60,23 @@ static EN: LazyLock<PromptFile> = LazyLock::new(|| {
     parse("render.en", include_str!("../prompts/render.en.md")).unwrap_or_else(|e| panic!("{e}"))
 });
 
+static REFUSAL_ZH: LazyLock<PromptFile> = LazyLock::new(|| {
+    parse("refusals.zh", include_str!("../prompts/refusals.zh.md"))
+        .unwrap_or_else(|e| panic!("{e}"))
+});
+static REFUSAL_EN: LazyLock<PromptFile> = LazyLock::new(|| {
+    parse("refusals.en", include_str!("../prompts/refusals.en.md"))
+        .unwrap_or_else(|e| panic!("{e}"))
+});
+
+/// 拒绝文字（N1 Task 10）：节名 = `refusal::Code::as_str()`。
+pub fn refusal_file(l: Locale) -> &'static PromptFile {
+    match l {
+        Locale::Zh => &REFUSAL_ZH,
+        Locale::En => &REFUSAL_EN,
+    }
+}
+
 pub fn render_file(l: Locale) -> &'static PromptFile {
     match l {
         Locale::Zh => &ZH,
@@ -132,23 +149,22 @@ pub fn fill(template: &str, vars: &[(&str, &str)]) -> String {
 
 /// 人类 / crewd 的发言者标签留给它们自己（终审 I5）：session 的标题、显示名与 topic 名不能是任一语言里的
 /// `sender.human` / `sender.system`（压换行、去掉看不见的字符（Cf / Cc / Zl / Zp，同渲染的 `safe_name`）、去首尾空白后比，不分大小写），否则注入面上它的发言就像人说的。
-pub(crate) fn refuse_sender_label(what: &str, value: &str) -> crate::Result<()> {
+pub(crate) fn refuse_sender_label(code: crate::refusal::Code, value: &str) -> crate::Result<()> {
     let v = crate::render::visible(value).trim().to_lowercase();
     for l in [Locale::Zh, Locale::En] {
         let f = render_file(l);
         for label in ["sender.human", "sender.system"] {
             if v == f.get(label).to_lowercase() {
-                return Err(crate::CollabError::Invalid(format!(
-                    "{what} {value:?} 与发言者标签 {:?} 相同，会被当成人类 / crewd 的发言",
-                    f.get(label)
-                )));
+                return Err(crate::CollabError::Invalid(
+                    crate::refusal::Refusal::new(code).arg("value", value),
+                ));
             }
         }
     }
     Ok(())
 }
 
-/// 模板里出现的全部 `{名字}`。
+/// 模板里出现的全部 `{名字}`，按首次出现的顺序、同名只算一个（一句话里 `{channel}` 用两次是合法的）。
 pub fn placeholders(template: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = template;
@@ -156,7 +172,10 @@ pub fn placeholders(template: &str) -> Vec<String> {
         let after = &rest[i + 1..];
         match after.find('}') {
             Some(j) => {
-                out.push(after[..j].to_string());
+                let name = after[..j].to_string();
+                if !out.contains(&name) {
+                    out.push(name);
+                }
                 rest = &after[j + 1..];
             }
             None => break,
@@ -213,6 +232,11 @@ mod tests {
     fn fill_replaces_named_placeholders() {
         assert_eq!(fill("{a} 和 {b}", &[("a", "甲"), ("b", "乙")]), "甲 和 乙");
         assert_eq!(placeholders("x {a} y {b}"), ["a", "b"]);
+        assert_eq!(
+            placeholders("{a} {b} {a}"),
+            ["a", "b"],
+            "同名占位符只算一个"
+        );
     }
 
     #[test]

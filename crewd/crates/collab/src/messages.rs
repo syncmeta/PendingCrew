@@ -1,4 +1,5 @@
 //! 发消息（spec §22.2「群规则」、裁定 10–14）、列表、搜索。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Sender, Tx, asks, channels, crews, cursors, sessions};
 use crewd_proto::{
     AskStateView, Attachment, ChannelKind, MemberRef, Mention, MentionKind, Message, Role,
@@ -37,14 +38,16 @@ pub struct Search {
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<Message> {
-    crewd_store::messages::get(conn, id)?
-        .ok_or_else(|| CollabError::NotFound(format!("没有消息 {id}")))
+    crewd_store::messages::get(conn, id)?.ok_or_else(|| {
+        CollabError::NotFound(Refusal::new(Code::MessageNotFound).arg("message", id))
+    })
 }
 
 /// 按 seq（全库唯一）取一条消息；没有 → `NotFound`。
 pub fn get_by_seq(conn: &Connection, seq: i64) -> Result<Message> {
-    crewd_store::messages::get_by_seq(conn, seq)?
-        .ok_or_else(|| CollabError::NotFound(format!("没有消息 seq={seq}")))
+    crewd_store::messages::get_by_seq(conn, seq)?.ok_or_else(|| {
+        CollabError::NotFound(Refusal::new(Code::MessageSeqNotFound).arg("seq", seq.to_string()))
+    })
 }
 
 pub fn list(
@@ -66,8 +69,13 @@ pub fn list(
 
 /// RFC 3339（任意时区偏移）→ 库里存的 `…sssZ` 形式，才能按字符串比大小。
 fn normalize_ts(s: &str) -> Result<String> {
-    let dt = chrono::DateTime::parse_from_rfc3339(s.trim())
-        .map_err(|e| CollabError::Invalid(format!("时间 {s:?} 不是 RFC 3339：{e}")))?;
+    let dt = chrono::DateTime::parse_from_rfc3339(s.trim()).map_err(|e| {
+        CollabError::Invalid(
+            Refusal::new(Code::MessageBadTime)
+                .arg("value", s)
+                .arg("why", e.to_string()),
+        )
+    })?;
     Ok(crewd_store::ts_from_ms(dt.timestamp_millis()))
 }
 
@@ -75,7 +83,7 @@ pub fn search(conn: &Connection, q: &Search) -> Result<Vec<Message>> {
     // 两边在 SQL 里用同一个 lower() 折叠（只折 ASCII）：「Über」这类非 ASCII 的原样匹配不能被一边折一边不折弄丢。
     let needle = q.query.trim().to_string();
     if needle.is_empty() {
-        return Err(CollabError::Invalid("搜索词不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::MessageSearchEmpty)));
     }
     let mut sql = String::from(
         "SELECT m.id FROM messages m JOIN channels ch ON ch.id=m.channel_id WHERE instr(lower(m.text), lower(?1)) > 0",
@@ -158,8 +166,9 @@ fn is_blank(c: char) -> bool {
     c.is_whitespace() || matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}')
 }
 
-/// @ 的目标不在群里：Invalid，列出群里的 session 成员（@session 与 @机长 共用）。
-fn not_a_member(conn: &Connection, channel: &str, who: &str) -> Result<CollabError> {
+/// @ 的目标不在群里：Invalid，列出群里的 session 成员（@session 用 `MessageNotAMember`，@机长 用
+/// `MessageCaptainNotAMember`；`who` 只放 session id，不拼句子）。
+fn not_a_member(conn: &Connection, channel: &str, code: Code, who: &str) -> Result<CollabError> {
     let names: Vec<String> = channels::members(conn, channel)?
         .into_iter()
         .filter_map(|x| match x {
@@ -167,10 +176,17 @@ fn not_a_member(conn: &Connection, channel: &str, who: &str) -> Result<CollabErr
             MemberRef::Human => None,
         })
         .collect();
-    Ok(CollabError::Invalid(format!(
-        "{who} 不是群 {channel} 的成员；成员有：{}",
-        names.join(", ")
-    )))
+    let who_key = if code == Code::MessageCaptainNotAMember {
+        "captain"
+    } else {
+        "who"
+    };
+    Ok(CollabError::Invalid(
+        Refusal::new(code)
+            .arg(who_key, who)
+            .arg("channel", channel)
+            .arg("members", names.join(", ")),
+    ))
 }
 
 fn push_mention(v: &mut Vec<Mention>, m: Mention) {
@@ -188,38 +204,35 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         if crews::is_home(conn, crew)? {
             channels::ensure_human_channel(tx, crew)?;
         } else {
-            return Err(CollabError::Invalid(format!(
-                "{crew} 不是一级机组，没有人类群，请发到 {}/human",
-                crews::home_pointer(conn, crew)?
-            )));
+            return Err(channels::no_human_channel(conn, crew)?);
         }
     }
     let ch = channels::get(conn, &p.channel_id)?;
     if ch.archived_at.is_some() {
-        return Err(CollabError::Invalid(format!(
-            "群 {} 已归档，不收消息",
-            ch.id
-        )));
+        return Err(channels::archived(&ch.id));
     }
     if p.text.trim_matches(is_blank).is_empty() {
-        return Err(CollabError::Invalid("消息不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::MessageEmpty)));
     }
     if p.text.len() > MAX_BODY_BYTES {
-        return Err(CollabError::Invalid(format!(
-            "消息正文最长 {MAX_BODY_BYTES} 字节，这条有 {} 字节",
-            p.text.len()
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::MessageTooLong)
+                .arg("max", MAX_BODY_BYTES.to_string())
+                .arg("actual", p.text.len().to_string()),
+        ));
     }
     if !internal
         && let Some(c) = p.category.as_deref()
         && RESERVED_CATEGORIES.contains(&c)
     {
-        return Err(CollabError::Invalid(format!(
-            "分类 {c:?} 留给系统公告，不能由发言带上"
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::MessageReservedCategory).arg("category", c),
+        ));
     }
     if !p.attachments.is_empty() {
-        return Err(CollabError::Invalid("附件上传尚未实现".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::MessageAttachmentsUnsupported,
+        )));
     }
     let is_human_channel = ch.kind == ChannelKind::Human;
     // 发言者
@@ -233,10 +246,12 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                     // 只有 home 是这个机组的 session 能经发言入群（跨机组说话走 dm）。
                     let home = crews::home_of(conn, &sessions::crew_of(conn, id)?)?;
                     if home != ch.crew_id {
-                        return Err(CollabError::Forbidden(format!(
-                            "{id} 的人类群是 {home}/human，不能进 {}",
-                            ch.id
-                        )));
+                        return Err(CollabError::Forbidden(
+                            Refusal::new(Code::ChannelHumanChannelOtherHome)
+                                .arg("session", id.clone())
+                                .arg("home", home)
+                                .arg("channel", ch.id.clone()),
+                        ));
                     }
                     // 往自己 home 的人类群发言 = 显式入群（R14：与 add_members 同一个 join；人回话时它才在群里）。
                     channels::join(tx, &ch.id, &me)?;
@@ -244,10 +259,11 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                         channel_id: ch.id.clone(),
                     });
                 } else {
-                    return Err(CollabError::Forbidden(format!(
-                        "{id} 不是群 {} 的成员",
-                        ch.id
-                    )));
+                    return Err(CollabError::Forbidden(
+                        Refusal::new(Code::MessageSenderNotMember)
+                            .arg("session", id.clone())
+                            .arg("channel", ch.id.clone()),
+                    ));
                 }
             }
             let kind = if sessions::role_of(conn, id)? == Role::Captain {
@@ -268,12 +284,19 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         let resolved = match m.kind {
             MentionKind::Captain => {
                 let cap = crews::captain_of(conn, &ch.crew_id)?.ok_or_else(|| {
-                    CollabError::Invalid(format!("机组 {} 现在没有机长", ch.crew_id))
+                    CollabError::Invalid(
+                        Refusal::new(Code::CrewNoCaptain).arg("crew", ch.crew_id.clone()),
+                    )
                 })?;
                 // 机长不在这个群里（topic / dm）：@ 了也唤不醒它，拒并列出成员，同 @session。
                 // 大厅、人类群里机长是隐式成员，is_member 认。
                 if !channels::is_member(conn, &ch.id, &MemberRef::session(cap.clone()))? {
-                    return Err(not_a_member(conn, &ch.id, &format!("机长 {cap}"))?);
+                    return Err(not_a_member(
+                        conn,
+                        &ch.id,
+                        Code::MessageCaptainNotAMember,
+                        &cap,
+                    )?);
                 }
                 Mention {
                     kind: MentionKind::Captain,
@@ -281,12 +304,11 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                 }
             }
             MentionKind::Session => {
-                let t = m
-                    .target_id
-                    .clone()
-                    .ok_or_else(|| CollabError::Invalid("@session 要带 targetId".into()))?;
+                let t = m.target_id.clone().ok_or_else(|| {
+                    CollabError::Invalid(Refusal::new(Code::MessageMentionNeedsTarget))
+                })?;
                 if !channels::is_member(conn, &ch.id, &MemberRef::session(t.clone()))? {
-                    return Err(not_a_member(conn, &ch.id, &t)?);
+                    return Err(not_a_member(conn, &ch.id, Code::MessageNotAMember, &t)?);
                 }
                 Mention {
                     kind: MentionKind::Session,
@@ -304,7 +326,9 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
     if let Some(rid) = &p.in_reply_to {
         let replied = get(conn, rid)?;
         if replied.channel_id != ch.id {
-            return Err(CollabError::Invalid("只能回复同一个群里的消息".into()));
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::MessageReplyOtherChannel,
+            )));
         }
         // 裁定 11：人回复一条问的公告、且那条问还开着 = 回答它。session 的回复、对已答 / 已撤 / 已按默认办的问的
         // 回复都是普通消息（只有人能答问）。
@@ -357,7 +381,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         created_at: tx.now_ts(),
     };
     message.seq = crewd_store::messages::insert(conn, &message, None)?
-        .ok_or_else(|| CollabError::Conflict("新消息 id 冲突".into()))?;
+        .ok_or_else(|| CollabError::Conflict(Refusal::new(Code::MessageIdConflict)))?;
     match &sender {
         Sender::Human => cursors::advance(tx, cursors::HUMAN, &ch.id, message.seq)?,
         Sender::Session(id) => sessions::note_output(tx, id)?,
@@ -690,7 +714,11 @@ mod tests {
         let CollabError::Invalid(why) = e else {
             panic!("{e:?}")
         };
-        assert!(why.contains("w-a2"), "错误里列出成员：{why}");
+        assert_eq!(why.code, Code::MessageNotAMember);
+        assert!(
+            why.value("members").is_some_and(|m| m.contains("w-a2")),
+            "错误里列出成员：{why}"
+        );
         assert!(matches!(
             err(&mut s, |tx| post(
                 tx,
@@ -1003,7 +1031,9 @@ mod tests {
         let CollabError::Invalid(why) = e else {
             panic!("{e:?}")
         };
-        assert!(why.contains("crew-a/human"), "{why}");
+        assert_eq!(why.code, Code::ChannelNoHumanChannel);
+        assert_eq!(why.value("home"), Some("crew-a"), "{why}");
+        assert!(why.to_string().contains("crew-a/human"), "{why}");
         assert!(!crate::channels::human_channel_exists(s.conn(), "crew-b").unwrap());
     }
 
@@ -1191,7 +1221,8 @@ mod tests {
         let CollabError::Invalid(why) = e else {
             panic!("{e:?}")
         };
-        assert!(why.contains("262144"), "错误里写明上限：{why}");
+        assert_eq!(why.code, Code::MessageTooLong);
+        assert_eq!(why.value("max"), Some("262144"), "错误里写明上限：{why}");
         for cat in ["ask", "restart"] {
             assert!(
                 matches!(
@@ -1300,9 +1331,12 @@ mod tests {
         let CollabError::Invalid(why) = e else {
             panic!("机长不在群里，@机长 会无声丢失：{e:?}")
         };
+        assert_eq!(why.code, Code::MessageCaptainNotAMember);
+        assert_eq!(why.value("captain"), Some("cap-a"), "错误里点名机长：{why}");
+        let members = why.value("members").unwrap_or_default();
         assert!(
-            why.contains("cap-a") && why.contains("w-a1") && why.contains("w-a2"),
-            "错误里点名机长并列出成员：{why}"
+            members.contains("w-a1") && members.contains("w-a2"),
+            "错误里列出成员：{why}"
         );
         // 大厅、home 人类群里机长是隐式成员：照常解析。
         for ch in ["crew-a/lobby", "crew-a/human"] {

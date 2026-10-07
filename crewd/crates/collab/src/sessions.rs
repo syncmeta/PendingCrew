@@ -1,4 +1,5 @@
 //! session 行：注册（分机号）与 M3c / M3b 要写的生命周期字段（裁定 16）。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Tx, crews, cursors};
 use crewd_proto::{Desired, Role, Session};
 use rusqlite::{Connection, params};
@@ -51,8 +52,9 @@ pub fn valid_executor(e: &str) -> bool {
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<Session> {
-    crewd_store::sessions::get(conn, id)?
-        .ok_or_else(|| CollabError::NotFound(format!("没有 session {id}")))
+    crewd_store::sessions::get(conn, id)?.ok_or_else(|| {
+        CollabError::NotFound(Refusal::new(Code::SessionNotFound).arg("session", id))
+    })
 }
 
 pub fn list(conn: &Connection, crew: Option<&str>) -> Result<Vec<Session>> {
@@ -133,38 +135,38 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
     let crew = crews::get(tx.conn(), &n.crew_id)?;
     crews::refuse_archived(tx.conn(), &crew.id)?;
     if !valid_executor(&n.executor) {
-        return Err(CollabError::Invalid(format!(
-            "执行器 {:?} 不认识（claude / codex / acp:<id>）",
-            n.executor
-        )));
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::SessionBadExecutor).arg("executor", n.executor.clone()),
+        ));
     }
     let title = match n.title.as_deref().and_then(visible_title) {
         Some(t) if t.chars().count() <= TITLE_MAX_CHARS => t,
         Some(t) => {
-            return Err(CollabError::Invalid(format!(
-                "session 标题最长 {TITLE_MAX_CHARS} 个字（现在 {} 个）；写短一点，细节放进 brief",
-                t.chars().count()
-            )));
+            return Err(CollabError::Invalid(
+                Refusal::new(Code::SessionTitleTooLong)
+                    .arg("max", TITLE_MAX_CHARS.to_string())
+                    .arg("actual", t.chars().count().to_string()),
+            ));
         }
         None => n
             .brief
             .as_deref()
             .and_then(title_from_brief)
             .ok_or_else(|| {
-                CollabError::Invalid(format!(
-                    "session 要有标题（不超过 {TITLE_MAX_CHARS} 个字）或 brief；两者都没有就没法给它起名"
-                ))
+                CollabError::Invalid(
+                    Refusal::new(Code::SessionTitleOrBriefRequired)
+                        .arg("max", TITLE_MAX_CHARS.to_string()),
+                )
             })?,
     };
-    crate::prompts::refuse_sender_label("标题", &title)?;
+    crate::prompts::refuse_sender_label(Code::SessionTitleIsSenderLabel, &title)?;
     if let Some(v) = &n.display_name {
-        crate::prompts::refuse_sender_label("显示名", v)?;
+        crate::prompts::refuse_sender_label(Code::SessionDisplayNameIsSenderLabel, v)?;
     }
     if n.role == Role::Captain && crews::captain_of(tx.conn(), &crew.id)?.is_some() {
-        return Err(CollabError::Conflict(format!(
-            "机组 {} 已有机长；换机长用 set_captain",
-            crew.id
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::SessionCaptainExists).arg("crew", crew.id.clone()),
+        ));
     }
     let conn = tx.conn();
     let ext = if n.role == Role::Worker {
@@ -213,7 +215,9 @@ fn update_one(
     notify: bool,
 ) -> Result<()> {
     if tx.conn().execute(sql, p)? == 0 {
-        return Err(CollabError::NotFound(format!("没有 session {id}")));
+        return Err(CollabError::NotFound(
+            Refusal::new(Code::SessionNotFound).arg("session", id),
+        ));
     }
     if notify {
         tx.note(Change::SessionChanged {
@@ -423,7 +427,9 @@ mod tests {
             )
         });
         match e {
-            CollabError::Invalid(m) => assert!(m.contains("要有标题"), "{m}"),
+            CollabError::Invalid(r) => {
+                assert_eq!(r.code, crate::refusal::Code::SessionTitleOrBriefRequired)
+            }
             e => panic!("{e:?}"),
         }
         let kept = ok(&mut s, |tx| {

@@ -1,5 +1,6 @@
 //! 重启后问人是否恢复上次在跑的 session（§22.7 Q1）。这里只记账与公告；恢复由 M3c 订阅 `RestartAnswered` 后做。
 use crate::messages;
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Sender, Tx, crews, prompts, sessions, settings};
 use crewd_proto::{RestartAnswer, RestartPrompt};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -27,7 +28,9 @@ pub fn get(conn: &Connection, id: i64) -> Result<RestartPrompt> {
         row,
     )
     .optional()?
-    .ok_or_else(|| CollabError::NotFound(format!("没有重启询问 {id}")))
+    .ok_or_else(|| {
+        CollabError::NotFound(Refusal::new(Code::RestartNotFound).arg("id", id.to_string()))
+    })
 }
 
 /// 还要人拍板的那一条（没答，或答了「先不」）。
@@ -113,15 +116,17 @@ pub fn answer(tx: &mut Tx<'_>, id: i64, a: RestartAnswer) -> Result<RestartPromp
     let p = get(tx.conn(), id)?;
     match (p.answer, a) {
         (Some(RestartAnswer::Resume), _) => {
-            return Err(CollabError::Conflict("已经答过「恢复」".into()));
+            return Err(CollabError::Conflict(Refusal::new(
+                Code::RestartAlreadyResumed,
+            )));
         }
         (Some(RestartAnswer::Later), RestartAnswer::Later) => return Ok(p),
         _ => {}
     }
     if pending(tx.conn())?.map(|x| x.id) != Some(id) {
-        return Err(CollabError::Conflict(format!(
-            "重启询问 {id} 已被更新的一条取代"
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::RestartSuperseded).arg("id", id.to_string()),
+        ));
     }
     tx.conn().execute(
         "UPDATE restart_prompts SET answer=?2, answered_at=?3 WHERE id=?1",

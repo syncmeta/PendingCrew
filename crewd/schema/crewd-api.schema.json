@@ -1664,6 +1664,17 @@
           "format": "int32",
           "type": "integer"
         },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "规则拒绝的稳定码（N1 Task 10）：客户端按码本地化，`message` 只是中文缺省。只加不改——老客户端忽略它。"
+        },
         "message": {
           "type": "string"
         }
@@ -1671,6 +1682,19 @@
       "required": [
         "code",
         "message"
+      ],
+      "type": "object"
+    },
+    "RpcErrorData": {
+      "description": "`RpcError.data`：规则拒绝带的机器可读部分。",
+      "properties": {
+        "refusal": {
+          "description": "拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "refusal"
       ],
       "type": "object"
     },

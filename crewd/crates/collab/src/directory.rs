@@ -1,4 +1,5 @@
 //! 全机通讯录（移植 `CrewDirectory.swift:125-170`）：机组按号升序，每个机组后面跟机长（分机 1）与有号的成员。
+use crate::refusal::{Code, Refusal};
 use crate::{CollabError, Result, crews, sessions};
 use crewd_proto::{DirectoryKind, DirectoryRow};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -9,11 +10,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 /// 机组已归档（N1 裁定 13）→ `Conflict`「已归档」（号还在、不回收，但不再收消息；不说成「没有这个号」）。
 /// 号码没有唯一索引：撞号时取最早建的机组（再按 id），与通讯录里的先后一致。
 pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
-    let bad = || {
-        CollabError::Invalid(format!(
-            "地址 {address:?} 不对：写机组号或「机组号-分机号」，如 3 或 3-2"
-        ))
-    };
+    let bad =
+        || CollabError::Invalid(Refusal::new(Code::DirectoryBadAddress).arg("address", address));
     let num = |s: &str| -> Result<i64> {
         if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
             return Err(bad());
@@ -31,15 +29,20 @@ pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
             |r| r.get(0),
         )
         .optional()?
-        .ok_or_else(|| CollabError::NotFound(format!("通讯录里没有 {n} 号机组")))?;
+        .ok_or_else(|| {
+            CollabError::NotFound(
+                Refusal::new(Code::DirectoryNoSuchCrew).arg("number", n.to_string()),
+            )
+        })?;
     if crews::is_archived(conn, &crew)? {
-        return Err(CollabError::Conflict(format!(
-            "{n} 号机组已归档，不收消息；要联系先请人解档"
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::DirectoryCrewArchived).arg("number", n.to_string()),
+        ));
     }
     match e {
-        None | Some(1) => crews::captain_of(conn, &crew)?
-            .ok_or_else(|| CollabError::Invalid(format!("{n} 号机组现在没有机长"))),
+        None | Some(1) => crews::captain_of(conn, &crew)?.ok_or_else(|| {
+            CollabError::Invalid(Refusal::new(Code::CrewNoCaptain).arg("crew", crew.clone()))
+        }),
         Some(e) => conn
             .query_row(
                 "SELECT id FROM sessions WHERE crew_id=?1 AND ext=?2 ORDER BY id LIMIT 1",
@@ -47,7 +50,13 @@ pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
                 |r| r.get(0),
             )
             .optional()?
-            .ok_or_else(|| CollabError::NotFound(format!("{n} 号机组没有分机 {e}"))),
+            .ok_or_else(|| {
+                CollabError::NotFound(
+                    Refusal::new(Code::DirectoryNoSuchExtension)
+                        .arg("number", n.to_string())
+                        .arg("ext", e.to_string()),
+                )
+            }),
     }
 }
 
@@ -229,7 +238,13 @@ mod tests {
         );
         for addr in ["3", "3-1"] {
             match resolve(s.conn(), addr).unwrap_err() {
-                CollabError::Conflict(m) => assert!(m.contains("已归档"), "{addr}: {m}"),
+                CollabError::Conflict(r) => {
+                    assert_eq!(
+                        r.code,
+                        crate::refusal::Code::DirectoryCrewArchived,
+                        "{addr}"
+                    )
+                }
                 e => panic!("{addr}: {e:?}"),
             }
         }

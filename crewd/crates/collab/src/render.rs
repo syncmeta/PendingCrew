@@ -528,8 +528,8 @@ pub fn build_batch(
                 };
                 let a = match asks::get(conn, crew, ask) {
                     Ok(a) => a,
-                    Err(CollabError::NotFound(e)) => {
-                        unusable.push((r.id, e));
+                    Err(e @ CollabError::NotFound(_)) => {
+                        unusable.push((r.id, e.to_string()));
                         continue;
                     }
                     Err(e) => return Err(e),
