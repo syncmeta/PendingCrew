@@ -14,10 +14,61 @@ use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
+/// 存储本身出了故障（S26）：和「SQL 写错了 / 约束不成立」分开，人要看到的是原因，不是一个通用的内部错。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageKind {
+    /// SQLITE_FULL：磁盘（或 max_page_count）满了。
+    DiskFull,
+    /// SQLITE_IOERR*：读写库文件时系统 I/O 出错。
+    Io,
+    /// SQLITE_CORRUPT / SQLITE_NOTADB：库文件损坏，或者根本不是库。
+    Corrupt,
+    /// SQLITE_READONLY：库（或它所在的目录）只读。
+    ReadOnly,
+    /// SQLITE_CANTOPEN / SQLITE_PERM：打不开库文件（权限、路径、EPERM）。
+    CantOpen,
+}
+
+impl StorageKind {
+    /// 给人看的一句话（不含路径、SQL）。
+    pub fn describe(self) -> &'static str {
+        match self {
+            StorageKind::DiskFull => "磁盘已满",
+            StorageKind::Io => "读写数据库文件时出现 I/O 错误",
+            StorageKind::Corrupt => "数据库文件已损坏",
+            StorageKind::ReadOnly => "数据库是只读的",
+            StorageKind::CantOpen => "打不开数据库文件",
+        }
+    }
+
+    /// 只看主错误码：扩展码（IOERR_WRITE、CORRUPT_INDEX…）都归到同一类。
+    pub fn of(e: &rusqlite::Error) -> Option<StorageKind> {
+        use rusqlite::ErrorCode as C;
+        let rusqlite::Error::SqliteFailure(f, _) = e else {
+            return None;
+        };
+        Some(match f.code {
+            C::DiskFull => StorageKind::DiskFull,
+            C::SystemIoFailure => StorageKind::Io,
+            C::DatabaseCorrupt | C::NotADatabase => StorageKind::Corrupt,
+            C::ReadOnly => StorageKind::ReadOnly,
+            C::CannotOpen | C::PermissionDenied => StorageKind::CantOpen,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error(transparent)]
-    Sql(#[from] rusqlite::Error),
+    Sql(rusqlite::Error),
+    /// 存储故障（分类见 `StorageKind`）。`rusqlite::Error` 经 `From` 进来时自动归类。
+    #[error("存储故障（{}）：{source}", kind.describe())]
+    Storage {
+        kind: StorageKind,
+        #[source]
+        source: rusqlite::Error,
+    },
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("{0}")]
@@ -31,6 +82,25 @@ pub enum StoreError {
     /// 交给库线程的闭包 panic 了；该闭包里的事务已回滚，线程照常服务。
     #[error("数据库任务 panic，已回滚")]
     DbJobPanicked,
+}
+
+impl From<rusqlite::Error> for StoreError {
+    fn from(e: rusqlite::Error) -> Self {
+        match StorageKind::of(&e) {
+            Some(kind) => StoreError::Storage { kind, source: e },
+            None => StoreError::Sql(e),
+        }
+    }
+}
+
+impl StoreError {
+    /// 是存储故障就给出类别（磁盘满、I/O、损坏、只读、打不开）；别的错误是 `None`。
+    pub fn storage_kind(&self) -> Option<StorageKind> {
+        match self {
+            StoreError::Storage { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
