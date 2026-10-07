@@ -920,6 +920,7 @@ mod tests {
         )
         .await;
         not_yours(&f, &r, &other).await;
+        let before = crew(&f, &other).await.working_directory.unwrap();
         let r = run(
             &f,
             "s-boss",
@@ -927,7 +928,17 @@ mod tests {
             json!({"new_path": path, "crew": on, "confirm": true}),
         )
         .await;
-        assert!(!r.is_error, "{}", r.text);
+        let one = text::r(
+            Locale::Zh,
+            "r.workdir_line",
+            &[("crew", "示例他组"), ("old", &before)],
+        );
+        says(
+            &r,
+            false,
+            "r.workdir_done",
+            &[("path", &path), ("count", "1"), ("crews", &one)],
+        );
         assert_eq!(
             crew(&f, &other).await.working_directory.as_deref(),
             Some(path.as_str())
@@ -1458,7 +1469,12 @@ mod tests {
             json!({"action": "adopt", "crew": sn, "target": child}),
         )
         .await;
-        assert!(!r.is_error, "{}", r.text);
+        says(
+            &r,
+            false,
+            "r.adopted",
+            &[("child", "示例子机组"), ("parent", "示例陌生")],
+        );
         assert_eq!(crew(&f, &child).await.parent_ids.len(), 2);
     }
 

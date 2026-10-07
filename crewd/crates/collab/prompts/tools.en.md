@@ -812,7 +812,7 @@ The delegation policy of "{crew}" was replaced. To check it, call delegation_pol
 (none)
 
 ## r.workdir_line
-- "{crew}" now: {old}
+- "{crew}" (before: {old})
 
 ## r.workdir_preview
 Preview (nothing changed yet): the working directory of these {count} crews would become {path}:
@@ -820,9 +820,10 @@ Preview (nothing changed yet): the working directory of these {count} crews woul
 If that is right, call again with confirm: true and the same other arguments.
 
 ## r.workdir_done
-The working directory of these {count} crews is now {path} (the old one shown on the right):
+The working directory of these {count} crews is now {path}:
 {crews}
 Sessions started from now on work there; running processes keep their directory: stop and start one again to move it.
+
 ## r.structure_args
 crew_structure(action: "{action}") takes only these besides crew: {params} (? = optional); a missing required one or any other argument is refused. Fix the call and try again.
 

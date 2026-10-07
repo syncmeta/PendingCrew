@@ -812,7 +812,7 @@ text 是空的。只读就别给 text；要改就给完整的新正文，再调�
 （没有）
 
 ## r.workdir_line
-- 「{crew}」现在：{old}
+- 「{crew}」（改前：{old}）
 
 ## r.workdir_preview
 预览（还没改）：下面 {count} 个机组的工作目录会改成 {path}：
@@ -820,9 +820,10 @@ text 是空的。只读就别给 text；要改就给完整的新正文，再调�
 没问题就带上 confirm: true、其余参数不变再调一次。
 
 ## r.workdir_done
-已把下面 {count} 个机组的工作目录改成 {path}（右边是原来的）：
+已把下面 {count} 个机组的工作目录改成 {path}：
 {crews}
 之后起的 session 在新目录里工作；正在跑的进程不换目录，要它用新目录就停掉再起。
+
 ## r.structure_args
 crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（带 ? 的可选）；缺了必填的、或多给了别的都不行。改好再调一次。
 
