@@ -130,7 +130,7 @@ session id、通讯录号码（如 7-3），或 human。
 听多久（分钟，1–480）。不填 = 一直听，直到用 off=true 停掉。
 
 ## channel_listen.senders
-只听这些人：human、session id 或通讯录号码（号码按此刻解析成那个 session，如 7-1 = 7 号机组此刻的机长）。这只决定谁的消息会叫醒你；群里的消息照样都会注入给你。不填 = 所有人。
+只听这些人：human、captain（发言时是机长的那位，换了机长就跟着换）、session id 或通讯录号码（号码按此刻解析成那个 session，如 7-1 = 7 号机组此刻的机长，之后换机长不跟着换）。这只决定谁的消息会叫醒你；群里的消息照样都会注入给你。不填 = 所有人。
 
 ## channel_listen.off
 true = 停止收听这个群（不能和 minutes、senders 一起给）。本来就没在收听也不报错。
@@ -647,3 +647,12 @@ minutes 要在 1–480 之间；不填就一直听，直到 channel_listen(chann
 
 ## r.dir_empty
 没有匹配的号码：换个关键词，或不带 query 看全表。
+
+## r.owner_force_needs_to
+force 要和 to 一起给（新群主是谁）；不给 to 是接受转给你的群主，那时不要带 force。
+
+## r.listen_off_alone
+off=true 只停止收听，不能同时给 minutes 或 senders；要改收听的时长或发言者，不带 off 重新 channel_listen。
+
+## r.owner_offer_notice_human
+我想把 {channel} 的群主转给你：要接手的话，在 app 里这个群的菜单里把群主设成自己。

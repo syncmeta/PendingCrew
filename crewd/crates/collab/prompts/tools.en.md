@@ -130,7 +130,7 @@ Channel id or name.
 How long (minutes, 1–480). Omitted = until you stop it with off=true.
 
 ## channel_listen.senders
-Only these senders: human, session ids or directory numbers (a number is resolved to its session now, e.g. 7-1 = crew 7's captain right now). This only filters whose messages wake you; everything in the channel is still injected. Omitted = everyone.
+Only these senders: human, captain (whoever is captain when the message is posted; follows captain changes), session ids or directory numbers (a number is resolved to its session now, e.g. 7-1 = crew 7's captain right now, and does not follow later changes). This only filters whose messages wake you; everything in the channel is still injected. Omitted = everyone.
 
 ## channel_listen.off
 true = stop listening to this channel (not together with minutes or senders). Not listening already is not an error.
@@ -647,3 +647,12 @@ Directory (you have no extension; others can reach you by your session id {id}):
 
 ## r.dir_empty
 No matching numbers: try another keyword, or omit query for the whole directory.
+
+## r.owner_force_needs_to
+force needs to (who the new owner is); without to the call accepts an ownership offered to you, and then takes no force.
+
+## r.listen_off_alone
+off=true only stops listening and takes no minutes or senders; to change the duration or the senders, call channel_listen again without off.
+
+## r.owner_offer_notice_human
+I would like to hand ownership of {channel} to you: to take it, set yourself as owner from this channel's menu in the app.

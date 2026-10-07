@@ -12,12 +12,16 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{Ctx, channel_label, parse_args, post_as, resolve_channel};
-use crate::agent::port::{self, ChannelKind, ChannelView, MemberRef, PostSender};
+use crate::agent::port::{self, ChannelKind, MemberRef, PostSender};
 
 /// Longest accepted `channel_listen.minutes` (8 hours).
 const LISTEN_MAX_MINUTES: i64 = 480;
 /// How the human is stored among a listen's `senders` (session ids otherwise).
 const HUMAN_SENDER: &str = "human";
+/// A listen `senders` entry that follows the captain: whoever is the captain when a message is
+/// posted (the M3c wake matcher, `wake::plan::Sender::matches_filter`). Stored as is, unlike an
+/// address such as `7-1`, which is frozen to its session when the listen is set.
+const CAPTAIN_SENDER: &str = "captain";
 
 /// `Result` with the receipt on both sides: `?` returns the error receipt as it is.
 type Step<T> = Result<T, CallResult>;
@@ -176,7 +180,8 @@ async fn owner_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
     let fail = |e| cx.fail(e);
     let Some(to_arg) = a.to else {
         if a.force {
-            return Err(cx.err("r.bad_args", &[("detail", "force")]));
+            let detail = cx.r("r.owner_force_needs_to", &[]);
+            return Err(cx.err("r.bad_args", &[("detail", &detail)]));
         }
         port::accept_owner_transfer(cx.st, cx.me, &ch.id)
             .await
@@ -213,10 +218,12 @@ async fn owner_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
             target_id: None,
         },
     };
-    let notice = cx.r(
-        "r.owner_offer_notice",
-        &[("channel", &channel), ("id", &ch.id)],
-    );
+    // The human accepts in the app (channel menu), not with a tool.
+    let notice_key = match &to {
+        MemberRef::Human => "r.owner_offer_notice_human",
+        MemberRef::Session(_) => "r.owner_offer_notice",
+    };
+    let notice = cx.r(notice_key, &[("channel", &channel), ("id", &ch.id)]);
     post_as(
         cx,
         &ch.id,
@@ -244,20 +251,6 @@ struct ListenArgs {
     off: bool,
 }
 
-/// The channel of a listen call. Readability is collab's rule (`listen.not_readable`): a channel I
-/// cannot read is still passed on by its exact id so that rule answers, instead of the tool's
-/// "no such channel".
-async fn listen_target(cx: &Ctx<'_>, arg: &str) -> Step<ChannelView> {
-    match resolve_channel(cx, arg).await {
-        Ok(c) => Ok(c),
-        Err(miss) => match port::channel(cx.st, arg.trim()).await {
-            Ok(Some(c)) => Ok(c),
-            Ok(None) => Err(miss),
-            Err(e) => Err(cx.fail(e)),
-        },
-    }
-}
-
 pub async fn listen(cx: &Ctx<'_>, v: Value) -> CallResult {
     done(listen_(cx, v).await)
 }
@@ -265,9 +258,12 @@ pub async fn listen(cx: &Ctx<'_>, v: Value) -> CallResult {
 async fn listen_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
     let a: ListenArgs = parse_args(cx, v)?;
     if a.off && (a.minutes.is_some() || a.senders.is_some()) {
-        return Err(cx.err("r.bad_args", &[("detail", "off")]));
+        let detail = cx.r("r.listen_off_alone", &[]);
+        return Err(cx.err("r.bad_args", &[("detail", &detail)]));
     }
-    let ch = listen_target(cx, &a.channel).await?;
+    // A channel I cannot read is "no such channel", same as one that does not exist (collab's
+    // `listen.not_readable` stays as defence in depth).
+    let ch = resolve_channel(cx, &a.channel).await?;
     let channel = channel_label(cx, &ch).await;
     if a.off {
         let removed = port::clear_listen(cx.st, &cx.me.session_id, &ch.id)
@@ -285,13 +281,20 @@ async fn listen_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
         Some(m) if (1..=LISTEN_MAX_MINUTES).contains(&m) => Some(port::now_ms() + m * 60_000),
         Some(_) => return Err(cx.err("r.listen_minutes", &[])),
     };
-    // Senders are stored canonically: session ids, or `human`.
-    let mut senders = Vec::new();
-    for m in resolve_members(cx, a.senders.as_deref().unwrap_or(&[]), false).await? {
-        senders.push(match m {
-            MemberRef::Session(s) => s,
-            MemberRef::Human => HUMAN_SENDER.to_string(),
-        });
+    // Senders are stored canonically: session ids, `human`, or `captain` (dynamic).
+    let mut senders: Vec<String> = Vec::new();
+    for arg in a.senders.as_deref().unwrap_or(&[]) {
+        let one = if arg.trim().eq_ignore_ascii_case(CAPTAIN_SENDER) {
+            CAPTAIN_SENDER.to_string()
+        } else {
+            match resolve_member(cx, arg).await? {
+                MemberRef::Session(s) => s,
+                MemberRef::Human => HUMAN_SENDER.to_string(),
+            }
+        };
+        if !senders.contains(&one) {
+            senders.push(one);
+        }
     }
     port::set_listen(cx.st, &cx.me.session_id, &ch.id, until, senders)
         .await
@@ -661,7 +664,14 @@ mod tests {
         .await;
         assert_eq!(
             r.text,
-            text::r(Locale::Zh, "r.bad_args", &[("detail", "force")])
+            text::r(
+                Locale::Zh,
+                "r.bad_args",
+                &[(
+                    "detail",
+                    &text::r(Locale::Zh, "r.owner_force_needs_to", &[])
+                )]
+            )
         );
         // The management captain counts as captain of every crew (C2).
         let mgmt = management_crew(&f).await;
@@ -741,7 +751,11 @@ mod tests {
         .await;
         assert_eq!(
             r.text,
-            text::r(Locale::Zh, "r.bad_args", &[("detail", "off")])
+            text::r(
+                Locale::Zh,
+                "r.bad_args",
+                &[("detail", &text::r(Locale::Zh, "r.listen_off_alone", &[]))]
+            )
         );
         let r = run(
             &f,
@@ -776,8 +790,10 @@ mod tests {
         );
     }
 
+    /// I1: an unreadable channel is "no such channel", word for word the same as an unknown id,
+    /// for listen (set and off) and for every other channel tool; nothing is written.
     #[tokio::test]
-    async fn listen_needs_readability() {
+    async fn listen_on_an_unreadable_channel_is_no_such_channel() {
         let f = Fixture::new().await;
         let other = f.add_crew("示例外组", None).await;
         f.add_session(&other, "s-cap2", Role::Captain, "外组机长")
@@ -793,18 +809,185 @@ mod tests {
         )
         .await
         .unwrap();
-        let r = run(&f, &f.worker, "channel_listen", json!({"channel": t.id})).await;
-        refused(
-            &r,
-            Refusal::new(Code::ListenNotReadable).arg("channel", t.id.clone()),
-        );
+        // Archived, too: its state must not leak either.
+        let archived = port::create_channel(
+            &f.state,
+            &cap2,
+            ChannelKind::Topic,
+            "外组旧话题".into(),
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+        port::archive_channel(&f.state, &cap2, &archived.id)
+            .await
+            .unwrap();
+        let unknown = "ch-no-such-channel";
+        let calls = |id: &str| {
+            vec![
+                ("channel_listen", json!({"channel": id})),
+                ("channel_listen", json!({"channel": id, "off": true})),
+                (
+                    "channel_invite",
+                    json!({"channel": id, "members": ["s-cap"]}),
+                ),
+                ("channel_archive", json!({"channel": id})),
+                ("channel_owner", json!({"channel": id, "to": "s-cap"})),
+                ("channel_owner", json!({"channel": id})),
+                ("channel_leave", json!({"channel": id})),
+            ]
+        };
+        let marker = "\u{1}";
+        let baseline = run(&f, &f.worker, "channel_listen", json!({"channel": unknown})).await;
         assert!(
-            !port::my_channels(&f.state, &f.worker)
-                .await
-                .unwrap()
-                .iter()
-                .any(|c| c.id == t.id)
+            baseline.is_error && shows(&baseline.text, "r.no_channel", &["arg", "choices"]),
+            "{}",
+            baseline.text
         );
+        let want = baseline.text.replace(unknown, marker);
+        for id in [unknown, t.id.as_str(), archived.id.as_str()] {
+            for (tool, args) in calls(id) {
+                let r = run(&f, &f.worker, tool, args).await;
+                assert!(r.is_error, "{tool} {id}: {}", r.text);
+                assert_eq!(r.text.replace(id, marker), want, "{tool} on {id}");
+            }
+        }
+        let rows: i64 = f
+            .state
+            .db
+            .call(|s| {
+                Ok::<_, crewd_collab::CollabError>(
+                    s.conn()
+                        .query_row(
+                            "SELECT COUNT(*) FROM listens WHERE session_id='s-w1'",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap(),
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows, 0, "no listen row written");
+    }
+
+    /// M2: `captain` is stored as is (dynamic: whoever is captain when a message is posted, the
+    /// M3c wake matcher), while an address is frozen to its session when the listen is set.
+    #[tokio::test]
+    async fn listen_senders_captain_is_dynamic_and_an_address_is_frozen() {
+        let f = Fixture::new().await;
+        let l = port::lobby_of(&f.state, &f.crew).await.unwrap();
+        let n = number_of(&f, &f.crew).await;
+        let other = f.add_crew("示例外组", None).await;
+        f.add_session(&other, "s-cap2", Role::Captain, "外组机长")
+            .await;
+        let r = run(
+            &f,
+            &f.worker,
+            "channel_listen",
+            json!({"channel": l.id, "senders": ["Captain", "captain", format!("{n}-1")]}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let id = l.id.clone();
+        let rows = f
+            .state
+            .db
+            .call(move |s| crewd_collab::listens::active_for_channel(s.conn(), &id, port::now_ms()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rows[0].senders,
+            ["captain".to_string(), f.captain.clone()],
+            "captain kept literal (deduplicated), 7-1 frozen to the session"
+        );
+    }
+
+    /// M4: an offer to the human posts the human's own notice (accept in the app), never a tool call.
+    #[tokio::test]
+    async fn ownership_offer_to_the_human_points_to_the_app() {
+        let f = Fixture::new().await;
+        let r = run(
+            &f,
+            &f.captain,
+            "channel_create",
+            json!({"name": "示例人类话题", "members": ["human"]}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let t = port::crew_channels(&f.state, &f.crew)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "示例人类话题")
+            .unwrap();
+        let r = run(
+            &f,
+            &f.captain,
+            "channel_owner",
+            json!({"channel": t.id, "to": "human"}),
+        )
+        .await;
+        assert!(
+            !r.is_error,
+            "collab accepts an offer to the human: {}",
+            r.text
+        );
+        let notice = port::messages_raw(&f.state, &t.id, None, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let label = crate::agent::tools::channel_label_raw(
+            Locale::Zh,
+            ChannelKind::Topic,
+            "示例人类话题",
+            "",
+        );
+        assert_eq!(
+            notice.text,
+            text::r(
+                Locale::Zh,
+                "r.owner_offer_notice_human",
+                &[("channel", &label), ("id", &t.id)]
+            )
+        );
+        assert!(!notice.text.contains("channel_owner"), "{}", notice.text);
+        assert!(
+            notice.mentions.iter().any(|m| m.kind == MentionKind::Human),
+            "{:?}",
+            notice.mentions
+        );
+    }
+
+    /// M6: an ordinary management-crew session reads the whole organisation but has no captain
+    /// powers over another crew's channels; the management captain does.
+    #[tokio::test]
+    async fn an_ordinary_management_session_cannot_force_or_archive_another_crews_channel() {
+        let f = Fixture::new().await;
+        let t = topic_by_captain(&f).await;
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-mcap", Role::Captain, "管理层机长")
+            .await;
+        f.add_session(&mgmt, "s-mw", Role::Worker, "管理层成员")
+            .await;
+        let r = run(
+            &f,
+            "s-mw",
+            "channel_owner",
+            json!({"channel": t.id, "to": f.worker, "force": true}),
+        )
+        .await;
+        refused(&r, Refusal::new(Code::ChannelForceOwnerForbidden));
+        let r = run(&f, "s-mw", "channel_archive", json!({"channel": t.id})).await;
+        refused(&r, Refusal::new(Code::ChannelManageForbidden));
+        assert!(!channel(&f, &t.id).await.archived);
+        let r = run(&f, "s-mcap", "channel_archive", json!({"channel": t.id})).await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(channel(&f, &t.id).await.archived);
     }
 
     #[tokio::test]
