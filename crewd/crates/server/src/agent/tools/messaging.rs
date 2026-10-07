@@ -112,6 +112,10 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
         };
         mentions.push(Mention { kind, target_id });
     }
+    // One post call of this session at a time, from the target lookup to the duplicate record:
+    // two identical posts sent together cannot both pass the gate.
+    let lock = cx.st.agent.post_lock(&cx.me.session_id);
+    let _held = lock.lock().await;
     // 2. The target: exactly one of channel / to, or reply_to alone (no default target, S64).
     let target = match resolve_target(cx, a.channel, a.to, a.reply_to.as_ref()).await {
         Ok(t) => t,
@@ -130,11 +134,12 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
         Target::Channel(c) => Some(c.id.clone()),
         Target::Dm { existing, .. } => existing.clone(),
     };
+    let human = mentions.iter().any(|m| m.kind == MentionKind::Human);
     let attempt = PostAttempt {
         session: &cx.me.session_id,
         channel: gate_channel.as_deref(),
         texts: &texts,
-        human_mention: mentions.iter().any(|m| m.kind == MentionKind::Human),
+        human_mention: human,
     };
     if let Err(g) = cx.st.agent.admit_post(&attempt) {
         return match g {
@@ -146,6 +151,9 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
                 cx.err("r.post_duplicate", &[("seq", &seq.to_string())])
             }
             GateRefusal::HumanMentions => cx.err("r.human_mention_throttled", &[]),
+            GateRefusal::RepeatedInBatch { index } => {
+                cx.err("r.post_repeated", &[("index", &index.to_string())])
+            }
         };
     }
     // 4. Open the dm when the target is an address.
@@ -154,7 +162,9 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
         Target::Dm { peer, address, .. } => match port::ensure_dm(cx.st, cx.me, &peer).await {
             Ok((c, created)) => (c, Some((address, created))),
             Err(e) => {
-                cx.st.agent.refund_post(&attempt);
+                cx.st
+                    .agent
+                    .refund_post(&cx.me.session_id, texts.len(), human);
                 return cx.fail(e);
             }
         },
@@ -184,10 +194,12 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
                 posted.push(p.message);
             }
             Err(e) if posted.is_empty() => {
-                cx.st.agent.refund_post(&attempt);
-                return cx.fail(e);
+                cx.st.agent.refund_post(&cx.me.session_id, total, human);
+                return first_failure(cx, &channel, e).await;
             }
             Err(e) => {
+                // The @ rode on the first item, which was posted: only the tokens come back.
+                cx.st.agent.refund_post(&cx.me.session_id, total - i, false);
                 let detail = cx.fail(e).text;
                 return cx.err(
                     "r.post_partial",
@@ -202,6 +214,18 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
         }
     }
     receipt(cx, &channel, dm, &posted, unwatched).await
+}
+
+/// The first write was refused. A dm is member-only (also for the management crew): say that
+/// instead of collab's general "ask a member to add you", which a dm cannot do.
+async fn first_failure(cx: &Ctx<'_>, channel: &ChannelView, e: port::PortError) -> CallResult {
+    use crewd_collab::refusal::Code;
+    let not_member = matches!(&e, port::PortError::Refused(port::Reason::Rule(r)) if r.code == Code::MessageSenderNotMember);
+    if channel.kind == ChannelKind::Dm && not_member {
+        let label = channel_label(cx, channel).await;
+        return cx.err("r.dm_member_only", &[("channel", &label)]);
+    }
+    cx.fail(e)
 }
 
 fn seq_list(ms: &[crewd_proto::Message]) -> String {
@@ -222,6 +246,9 @@ async fn resolve_target(
             Err(cx.err("r.post_target_conflict", &[]))
         }
         (None, None, None) => Err(no_target(cx).await),
+        (None, Some(to), None) if to.trim().eq_ignore_ascii_case("human") => {
+            Err(to_human(cx).await)
+        }
         (None, Some(to), None) => {
             let peer = port::resolve_address(cx.st, &to)
                 .await
@@ -269,6 +296,21 @@ async fn resolve_target(
             }
         }
         (Some(arg), None, None) => resolve_channel(cx, &arg).await.map(Target::Channel),
+    }
+}
+
+/// `to: "human"`: the human has no dm; point to the home human channel (or to ask before it exists).
+async fn to_human(cx: &Ctx<'_>) -> CallResult {
+    match port::home_human_channel_if_any(cx.st, &cx.me.crew_id).await {
+        Ok(Some(home)) => {
+            let label = channel_label(cx, &home).await;
+            cx.err(
+                "r.post_to_human",
+                &[("home", &label), ("home_id", &home.id)],
+            )
+        }
+        Ok(None) => cx.err("r.post_to_human_no_channel", &[]),
+        Err(e) => cx.fail(e),
     }
 }
 
@@ -328,18 +370,25 @@ async fn receipt(
         } else {
             out.push(cx.r("r.posted_wakes", &[("names", &names.join(NAME_SEP))]));
         }
-        let listening = port::listening_to(cx.st, &cx.me.session_id)
-            .await
-            .unwrap_or_default();
-        if !channel.has_session(&cx.me.session_id) && !listening.contains(&channel.id) {
+        // Membership AFTER the post: posting into my home human channel joins it (collab).
+        let member = match port::channel(cx.st, &channel.id).await {
+            Ok(c) => c.is_some_and(|c| c.has_session(&cx.me.session_id)),
+            Err(e) => return cx.fail(e),
+        };
+        let listening = match port::listening_to(cx.st, &cx.me.session_id).await {
+            Ok(l) => l.contains(&channel.id),
+            Err(e) => return cx.fail(e),
+        };
+        if !member && !listening {
             // 26.5: a management session posting where it is not a member is not woken by replies.
             out.push(cx.r("r.posted_not_member", &[("channel", &label)]));
         }
     }
     if unwatched {
         // §17: @human in a channel the human is not watching (collab decides).
-        match port::home_human_channel(cx.st, &cx.me.crew_id).await {
-            Ok(home) => {
+        // Read only: a receipt never creates the home human channel.
+        match port::home_human_channel_if_any(cx.st, &cx.me.crew_id).await {
+            Ok(Some(home)) => {
                 let home_label = channel_label(cx, &home).await;
                 out.push(cx.r(
                     "r.human_not_watching",
@@ -350,13 +399,16 @@ async fn receipt(
                     ],
                 ));
             }
+            Ok(None) => out.push(cx.r("r.human_not_watching_no_home", &[("channel", &label)])),
             Err(e) => return cx.fail(e),
         }
     }
     CallResult::ok(out.join("\n"))
 }
 
-/// The @ targets of the posted messages as the injection surface labels them.
+/// The @ targets of the posted messages that this wakes, as the injection surface labels them:
+/// not me, and not @human (the human is not woken; `r.human_not_watching` covers where it is seen).
+/// Listeners are not listed (S72 placeholder; M3i-a swaps in the wake planner).
 async fn wake_names(
     cx: &Ctx<'_>,
     posted: &[crewd_proto::Message],
@@ -364,11 +416,21 @@ async fn wake_names(
     let Some(first) = posted.first() else {
         return Ok(vec![]);
     };
+    let me = cx.me.session_id.as_str();
+    let woken: Vec<crewd_proto::Message> = posted
+        .iter()
+        .cloned()
+        .map(|mut m| {
+            m.mentions
+                .retain(|x| x.kind != MentionKind::Human && x.target_id.as_deref() != Some(me));
+            m
+        })
+        .collect();
     let blocks = port::blocks(
         cx.st,
         &cx.me.session_id,
         cx.loc,
-        vec![(first.channel_id.clone(), posted.to_vec())],
+        vec![(first.channel_id.clone(), woken)],
     )
     .await
     .map_err(|e| cx.fail(e))?;
@@ -442,20 +504,40 @@ pub async fn read_channel(cx: &Ctx<'_>, args: Value) -> CallResult {
             Err(e) => return e,
         }
     }
-    if msgs.len() as u32 == limit {
+    // The message just before this page, if any: "older ones exist" and how far the page reaches.
+    let older = if msgs.len() as u32 == limit {
+        match port::messages_as(cx.st, &cx.me.session_id, &ch.id, Some(msgs[0].seq), 1).await {
+            Ok(v) => v.last().map(|m| m.seq),
+            Err(e) => return cx.fail(e),
+        }
+    } else {
+        None
+    };
+    if older.is_some() {
         out.push(cx.r("r.read_more", &[("before", &msgs[0].seq.to_string())]));
     }
-    // Reading the latest page marks the channel read, but only where I am a member or listen:
-    // reading someone else's channel leaves my cursors alone.
+    // Reading the latest page marks the channel read, but only where I am a member or listen
+    // (reading someone else's channel leaves my cursors alone), and only when the page reaches
+    // back to my cursor: unread messages older than the page were not delivered (R6).
     let listening = ch.listening
-        || port::listening_to(cx.st, &cx.me.session_id)
-            .await
-            .unwrap_or_default()
-            .contains(&ch.id);
+        || match port::listening_to(cx.st, &cx.me.session_id).await {
+            Ok(l) => l.contains(&ch.id),
+            Err(e) => return cx.fail(e),
+        };
     if before.is_none() && (ch.has_session(&cx.me.session_id) || listening) {
-        let newest = msgs[msgs.len() - 1].seq;
-        if let Err(e) = port::advance(cx.st, &cx.me.session_id, &ch.id, newest).await {
-            eprintln!("crewd: read_channel cursor for {}: {e}", cx.me.session_id);
+        let reaches = match older {
+            None => true,
+            Some(o) => match port::cursor(cx.st, &cx.me.session_id, &ch.id).await {
+                // No cursor: nothing is unread for me here (collab pins a missing cursor at the end).
+                Ok(c) => c.is_none_or(|c| o <= c),
+                Err(e) => return cx.fail(e),
+            },
+        };
+        if reaches {
+            let newest = msgs[msgs.len() - 1].seq;
+            if let Err(e) = port::advance(cx.st, &cx.me.session_id, &ch.id, newest).await {
+                eprintln!("crewd: read_channel cursor for {}: {e}", cx.me.session_id);
+            }
         }
     }
     CallResult::ok(out.join("\n"))
@@ -558,6 +640,8 @@ pub async fn list_channels(cx: &Ctx<'_>, args: Value) -> CallResult {
     let mine = |c: &ChannelView| c.has_session(me) || c.listening;
     // (channel, is my home human channel)
     let mut rows: Vec<(ChannelView, bool)> = Vec::new();
+    // My home human channel is not created by listing (read only); absent = one line saying so.
+    let mut home_absent = false;
     let push = |rows: &mut Vec<(ChannelView, bool)>, c: &ChannelView, home: bool| {
         if !rows.iter().any(|(x, _)| x.id == c.id) {
             rows.push((c.clone(), home));
@@ -579,8 +663,9 @@ pub async fn list_channels(cx: &Ctx<'_>, args: Value) -> CallResult {
             }
         }
         None => {
-            match port::home_human_channel(cx.st, &cx.me.crew_id).await {
-                Ok(home) => push(&mut rows, &home, true),
+            match port::home_human_channel_if_any(cx.st, &cx.me.crew_id).await {
+                Ok(Some(home)) => push(&mut rows, &home, true),
+                Ok(None) => home_absent = true,
                 Err(e) => return cx.fail(e),
             }
             for c in views.iter().filter(|c| mine(c)) {
@@ -595,11 +680,17 @@ pub async fn list_channels(cx: &Ctx<'_>, args: Value) -> CallResult {
         }
     }
     if !a.include_archived {
-        rows.retain(|(c, _)| !c.archived);
+        rows.retain(|(c, home)| *home || !c.archived);
     }
     let more = rows.len().saturating_sub(LIST_CAP);
     rows.truncate(LIST_CAP);
     let mut out = vec![cx.r("r.list_header", &[])];
+    if home_absent {
+        out.push(cx.r("r.home_human_absent", &[]));
+    }
+    if rows.is_empty() {
+        out.push(cx.r("r.list_none", &[]));
+    }
     for (c, home) in &rows {
         out.push(list_line(cx, c, *home).await);
     }
@@ -1707,6 +1798,331 @@ mod tests {
         assert!(!r.is_error, "{}", r.text);
         assert!(
             !r.text.contains(&topic.id) && !r.text.contains(&l),
+            "{}",
+            r.text
+        );
+    }
+
+    // ---- Fix round 1 ----
+
+    fn human_channel_id(crew: &str) -> String {
+        crewd_store::channels::human_id(crew)
+    }
+
+    #[tokio::test]
+    async fn posting_into_the_home_human_channel_joins_it_and_the_receipt_says_member() {
+        let f = Fixture::new().await;
+        let human = port::home_human_channel(&f.state, &f.crew).await.unwrap();
+        let child = f.add_crew("示例子组", Some(&f.crew)).await;
+        f.add_session(&child, "s-ch", Role::Worker, "子组 worker")
+            .await;
+        for who in [f.worker.clone(), "s-ch".to_string()] {
+            let r = run(
+                &f,
+                &who,
+                "post",
+                json!({"channel": human.id, "message": format!("示例：{who} 报到")}),
+            )
+            .await;
+            assert!(!r.is_error, "{who}: {}", r.text);
+            assert!(
+                !shows(&r.text, "r.posted_not_member", &["channel"]),
+                "{who} joined by posting: {}",
+                r.text
+            );
+            let ch = port::channel(&f.state, &human.id).await.unwrap().unwrap();
+            assert!(ch.has_session(&who), "{who} is a member afterwards");
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_identical_posts_are_one_post_and_one_duplicate() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        let me = f.me(&f.worker).await;
+        let args = json!({"channel": l, "message": "示例：同一句"});
+        let (a, b) = tokio::join!(
+            call(&f.state, &me, "post", args.clone()),
+            call(&f.state, &me, "post", args.clone())
+        );
+        let errors: Vec<_> = [&a, &b].into_iter().filter(|r| r.is_error).collect();
+        assert_eq!(errors.len(), 1, "{} / {}", a.text, b.text);
+        assert!(
+            shows(&errors[0].text, "r.post_duplicate", &["seq"]),
+            "{}",
+            errors[0].text
+        );
+        let texts: Vec<_> = port::messages_raw(&f.state, &l, None, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.text == "示例：同一句")
+            .collect();
+        assert_eq!(texts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_batch_repeating_its_own_text_is_refused_and_names_the_item() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        let before = port::latest_seq(&f.state, &l).await.unwrap();
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"channel": l, "messages": [{"text": "示例 a"}, {"text": "示例 b"}, {"text": " 示例   a "}]}),
+        )
+        .await;
+        assert!(r.is_error);
+        assert_eq!(
+            r.text,
+            text::r(Locale::Zh, "r.post_repeated", &[("index", "3")])
+        );
+        assert_eq!(port::latest_seq(&f.state, &l).await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn the_wake_receipt_leaves_out_me_and_the_human() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        let none = text::r(Locale::Zh, "r.posted_wakes_none", &[]);
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"channel": l, "message": "示例 @人", "mentions": [{"kind": "human"}]}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(r.text.contains(&none), "@human is not 'woken': {}", r.text);
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"channel": l, "message": "示例 @我", "mentions": [{"kind": "session", "target_id": f.worker}]}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(r.text.contains(&none), "@me wakes no one: {}", r.text);
+    }
+
+    #[tokio::test]
+    async fn the_latest_page_does_not_mark_read_past_older_unread_messages() {
+        let f = Fixture::new().await;
+        let l = lobby(&f).await;
+        for i in 0..120 {
+            f.human_post(&l, &format!("示例积压{i:03}"), vec![]).await;
+        }
+        let me = f.me(&f.worker).await;
+        let r = run(&f, &f.worker, "read_channel", json!({})).await;
+        assert!(
+            r.text.contains("示例积压119") && !r.text.contains("示例积压069"),
+            "{}",
+            r.text
+        );
+        assert!(shows(&r.text, "r.read_more", &["before"]), "{}", r.text);
+        let pending = crate::agent::inject::prepare(&f.state, &me)
+            .await
+            .unwrap()
+            .and_then(|p| p.context)
+            .unwrap_or_default();
+        assert!(
+            pending.contains("示例积压000"),
+            "older unread stays unread: {pending}"
+        );
+        let r = run(&f, &f.worker, "read_channel", json!({"limit": 200})).await;
+        assert!(r.text.contains("示例积压000"), "{}", r.text);
+        assert!(
+            !shows(&r.text, "r.read_more", &["before"]),
+            "no older ones: {}",
+            r.text
+        );
+        assert!(
+            crate::agent::inject::prepare(&f.state, &me)
+                .await
+                .unwrap()
+                .is_none(),
+            "the whole backlog was delivered: read"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_more_only_when_older_messages_exist() {
+        let f = Fixture::new().await;
+        let cap = f.me(&f.captain).await;
+        let topic = port::create_channel(
+            &f.state,
+            &cap,
+            ChannelKind::Topic,
+            "示例话题".into(),
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+        f.session_post(&f.captain, &topic.id, "示例 1", vec![])
+            .await;
+        f.session_post(&f.captain, &topic.id, "示例 2", vec![])
+            .await;
+        let r = run(
+            &f,
+            &f.worker,
+            "read_channel",
+            json!({"channel": topic.id, "limit": 2}),
+        )
+        .await;
+        assert!(r.text.contains("示例 1"), "{}", r.text);
+        assert!(!shows(&r.text, "r.read_more", &["before"]), "{}", r.text);
+        let r = run(
+            &f,
+            &f.worker,
+            "read_channel",
+            json!({"channel": topic.id, "limit": 1}),
+        )
+        .await;
+        assert!(shows(&r.text, "r.read_more", &["before"]), "{}", r.text);
+    }
+
+    #[tokio::test]
+    async fn a_batch_failing_part_way_refunds_the_unposted_items() {
+        let (f, _now) = with_clock(AgentConfig::default()).await;
+        let l = lobby(&f).await;
+        let huge = "a".repeat(300 * 1024);
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"channel": l, "messages": [{"text": "示例 前"}, {"text": huge}, {"text": "示例 后"}]}),
+        )
+        .await;
+        assert!(r.is_error);
+        assert!(
+            shows(
+                &r.text,
+                "r.post_partial",
+                &["sent", "index", "total", "detail"]
+            ),
+            "{}",
+            r.text
+        );
+        // One of six tokens was used: five more posts go, the sixth is throttled.
+        for i in 0..5 {
+            let r = run(
+                &f,
+                &f.worker,
+                "post",
+                json!({"channel": l, "message": format!("示例 {i}")}),
+            )
+            .await;
+            assert!(!r.is_error, "{i}: {}", r.text);
+        }
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"channel": l, "message": "示例 多"}),
+        )
+        .await;
+        assert!(
+            shows(&r.text, "r.post_throttled", &["retry_secs"]),
+            "{}",
+            r.text
+        );
+    }
+
+    #[tokio::test]
+    async fn to_human_points_to_the_home_human_channel_and_dms_are_member_only() {
+        let f = Fixture::new().await;
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"to": "human", "message": "示例"}),
+        )
+        .await;
+        assert!(r.is_error);
+        assert_eq!(
+            r.text,
+            text::r(Locale::Zh, "r.post_to_human_no_channel", &[])
+        );
+        let human = port::home_human_channel(&f.state, &f.crew).await.unwrap();
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"to": "Human", "message": "示例"}),
+        )
+        .await;
+        assert!(r.is_error);
+        assert!(
+            shows(&r.text, "r.post_to_human", &["home", "home_id"]),
+            "{}",
+            r.text
+        );
+        assert!(r.text.contains(&human.id), "{}", r.text);
+        // A management session cannot post into someone else's dm: the dm is member-only.
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-mgr", Role::Worker, "管理层 worker")
+            .await;
+        let w = f.me(&f.worker).await;
+        let (dm, _) = port::ensure_dm(&f.state, &w, &f.captain).await.unwrap();
+        let r = run(
+            &f,
+            "s-mgr",
+            "post",
+            json!({"channel": dm.id, "message": "示例"}),
+        )
+        .await;
+        assert!(r.is_error);
+        assert!(
+            shows(&r.text, "r.dm_member_only", &["channel"]),
+            "{}",
+            r.text
+        );
+    }
+
+    #[tokio::test]
+    async fn list_channels_and_receipts_do_not_create_the_home_human_channel() {
+        let f = Fixture::new().await;
+        let hid = human_channel_id(&f.crew);
+        let r = run(&f, &f.worker, "list_channels", json!({})).await;
+        assert!(!r.is_error, "{}", r.text);
+        let first = r.text.lines().nth(1).unwrap_or_default();
+        assert_eq!(
+            first,
+            text::r(Locale::Zh, "r.home_human_absent", &[]),
+            "{}",
+            r.text
+        );
+        let l = lobby(&f).await;
+        let r = run(
+            &f,
+            &f.worker,
+            "post",
+            json!({"channel": l, "message": "示例 @人", "mentions": [{"kind": "human"}]}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(
+            shows(&r.text, "r.human_not_watching_no_home", &["channel"]),
+            "{}",
+            r.text
+        );
+        assert!(
+            port::channel(&f.state, &hid).await.unwrap().is_none(),
+            "not created"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_channels_of_a_crew_with_nothing_readable_says_so() {
+        let f = Fixture::new().await;
+        let other = f.add_crew("示例外组", None).await;
+        let n = number_of(&f, &other).await;
+        let r = run(&f, &f.worker, "list_channels", json!({"crew": n})).await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(
+            r.text.contains(&text::r(Locale::Zh, "r.list_none", &[])),
             "{}",
             r.text
         );

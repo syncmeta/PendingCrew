@@ -15,7 +15,7 @@ The receipt says whom the post wakes. A message body is at most 256 KiB.
 Channel id, or a channel name that is unique among the channels you can read. Not together with to.
 
 ## post.to
-A dm with one session by its directory number: 7-3 (crew 7, extension 3), 7 (crew 7's current captain), 0 (the management crew's captain); look numbers up with directory. A pair has one dm, reused when it exists. Not together with channel or reply_to.
+A dm with one session by its directory number: 7-3 (crew 7, extension 3), 7 (crew 7's current captain), 0 (the management crew's captain); look numbers up with directory. A pair has one dm, reused when it exists. The human has no dm (to: "human" points you to your home human channel): reach the human there, and use ask for a decision. Not together with channel or reply_to.
 
 ## post.message
 Use for a single message. Mutually exclusive with messages.
@@ -584,3 +584,24 @@ topic
 
 ## r.kind_dm
 dm
+
+## r.post_repeated
+Item {index} repeats an earlier item. Drop the repeat and post again.
+
+## r.dm_member_only
+{channel} is a dm: only its two members can post there (the management crew too; a dm takes no one else). To reach one of them, open your own dm with to and their number.
+
+## r.post_to_human
+The human has no dm: post in your home human channel {home} (channel = {home_id}), and use ask for a decision.
+
+## r.post_to_human_no_channel
+The human has no dm, and your home human channel does not exist yet: use ask for a decision (it posts into that human channel).
+
+## r.human_not_watching_no_home
+The human is not watching {channel}: the @human badge is lit but may be seen much later. Your home human channel does not exist yet; for urgent things or decisions use ask.
+
+## r.home_human_absent
+- (your home human channel does not exist yet: reach the human with ask; the first ask creates it)
+
+## r.list_none
+- (no channels you can read here. List again without crew to see your own, or look other crews up with directory)

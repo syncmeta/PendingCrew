@@ -594,6 +594,20 @@ pub async fn home_human_channel(st: &AppState, crew: &str) -> PortResult<Channel
     .await
 }
 
+/// home（顶层祖先）的人类群，**不建**：还没建过就是 `None`。只读，给列表 / 回执用（建群只发生在往里发言、
+/// `home_human_channel` 与 collab 自己的路径上）。
+pub async fn home_human_channel_if_any(
+    st: &AppState,
+    crew: &str,
+) -> PortResult<Option<ChannelView>> {
+    let crew = crew.to_string();
+    read(st, move |conn| {
+        let home = crewd_collab::crews::home_of(conn, &crew)?;
+        opt(channel_view(conn, &crewd_store::channels::human_id(&home)))
+    })
+    .await
+}
+
 /// 人此刻正在注视的群里 `me` 读得到的那些。只读：只看已存在的群，不替任何树懒建人类群、不发事件。
 pub async fn watched_channels(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
     let s = me.session_id.clone();
@@ -1036,6 +1050,12 @@ pub async fn advance_all(
         Ok(())
     })
     .await
+}
+
+/// 这个 session 在群里的已读游标（没有游标 = `None`）。
+pub async fn cursor(st: &AppState, session: &str, channel: &str) -> PortResult<Option<i64>> {
+    let (s, ch) = (session.to_string(), channel.to_string());
+    read(st, move |conn| crewd_collab::cursors::cursor(conn, &s, &ch)).await
 }
 
 pub async fn advance(st: &AppState, session: &str, channel: &str, seq: i64) -> PortResult<()> {

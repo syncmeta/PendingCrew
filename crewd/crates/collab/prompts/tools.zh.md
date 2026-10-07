@@ -15,7 +15,7 @@
 群 id，或你读得到的群里唯一的群名。与 to 二选一。
 
 ## post.to
-私聊一个人：通讯录号码——7-3（7 号机组的 3 号分机）、7（7 号机组此刻的机长）、0（总机组的机长）；directory 查号。同一对人只有一个私聊，已有就接着用。与 channel、reply_to 都不能同时给。
+私聊一个人：通讯录号码——7-3（7 号机组的 3 号分机）、7（7 号机组此刻的机长）、0（总机组的机长）；directory 查号。同一对人只有一个私聊，已有就接着用。人类没有私聊（to 填 human 会指给你 home 人类群）：找人发 home 人类群，要拍板用 ask。与 channel、reply_to 都不能同时给。
 
 ## post.message
 发一条时用它。与 messages 二选一。
@@ -584,3 +584,24 @@ mention 写法不对（kind = {kind}）：kind 只能是 session / captain / hum
 
 ## r.kind_dm
 私聊
+
+## r.post_repeated
+第 {index} 条和前面某一条一模一样。删掉重复的那条再发。
+
+## r.dm_member_only
+{channel} 是私聊，只有那两个人能在里面说话（总机组也一样，私聊不能拉人）。要找其中一个人，用 to 填他的号码另开私聊。
+
+## r.post_to_human
+人类没有私聊：找人发到你的 home 人类群 {home}（channel 填 {home_id}），要人拍板用 ask。
+
+## r.post_to_human_no_channel
+人类没有私聊，你的 home 人类群也还没建：要人拍板用 ask（它会发进那个人类群）。
+
+## r.human_not_watching_no_home
+人类现在没有注视{channel}：@人类 的标记已经亮了，但可能很久才被看到。你的 home 人类群还没建；急事或要拍板的事用 ask。
+
+## r.home_human_absent
+- （你的 home 人类群还没建：找人用 ask，第一次 ask 会建它）
+
+## r.list_none
+- （这里没有你读得到的群。不带 crew 再列一次看你自己的群，或用 directory 查别的机组）

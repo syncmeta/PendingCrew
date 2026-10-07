@@ -66,6 +66,8 @@ pub enum GateRefusal {
     Duplicate { seq: i64 },
     /// Too many @human in the last 30 minutes.
     HumanMentions,
+    /// Item `index` (1-based) of the batch repeats an earlier item's text.
+    RepeatedInBatch { index: usize },
 }
 
 /// One `post` call as the gate sees it: all of its items are admitted or none.
@@ -110,6 +112,10 @@ pub struct AgentRuntime {
     locks: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Post gate state per session (S61). In memory only: a restart forgets it, which is fine.
     gates: Mutex<HashMap<String, SenderGate>>,
+    /// One async mutex per session around a whole `post` call (target lookup, gate, dm, writes,
+    /// duplicate record): two calls of one session cannot both pass the duplicate check. Separate
+    /// from `locks` (the injection lock), so a post never waits for a hook or the other way round.
+    post_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl AgentRuntime {
@@ -131,10 +137,22 @@ impl AgentRuntime {
         m.entry(session.to_string()).or_default().clone()
     }
 
-    /// The post gate (S61), checked before anything is written: duplicate text, then the @human
-    /// cap, then the bucket. Admitting takes the tokens (one per item) and the @human slot;
+    /// The post lock of one session (held across one whole `post` call).
+    pub fn post_lock(&self, session: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut m = self.post_locks.lock().unwrap_or_else(|e| e.into_inner());
+        m.entry(session.to_string()).or_default().clone()
+    }
+
+    /// The post gate (S61), checked before anything is written: a batch repeating itself, duplicate
+    /// text, then the @human cap, then the bucket. Admitting takes the tokens (one per item) and the @human slot;
     /// a refusal takes nothing.
     pub fn admit_post(&self, a: &PostAttempt<'_>) -> Result<(), GateRefusal> {
+        let normalized: Vec<String> = a.texts.iter().map(|t| normalize(t)).collect();
+        for (i, t) in normalized.iter().enumerate() {
+            if normalized[..i].contains(t) {
+                return Err(GateRefusal::RepeatedInBatch { index: i + 1 });
+            }
+        }
         let now = self.clock.now();
         let cfg = &self.config;
         let mut gates = self.gates.lock().unwrap_or_else(|e| e.into_inner());
@@ -144,13 +162,12 @@ impl AgentRuntime {
             g.recent.pop_front();
         }
         if let Some(ch) = a.channel {
-            for t in a.texts {
-                let t = normalize(t);
+            for t in &normalized {
                 if let Some(r) = g
                     .recent
                     .iter()
                     .rev()
-                    .find(|r| r.channel == ch && r.text == t)
+                    .find(|r| r.channel == ch && r.text == *t)
                 {
                     return Err(GateRefusal::Duplicate { seq: r.seq });
                 }
@@ -185,12 +202,13 @@ impl AgentRuntime {
         Ok(())
     }
 
-    /// Give back what `admit_post` took when nothing was posted after all (the write was refused).
-    pub fn refund_post(&self, a: &PostAttempt<'_>) {
+    /// Give back what `admit_post` took for `items` messages that were not written after all; with
+    /// `human` also the @human slot (only when the message carrying the @ was not written).
+    pub fn refund_post(&self, session: &str, items: usize, human: bool) {
         let mut gates = self.gates.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(g) = gates.get_mut(a.session) {
-            g.tokens = (g.tokens + a.texts.len() as f64).min(f64::from(self.config.post_burst));
-            if a.human_mention {
+        if let Some(g) = gates.get_mut(session) {
+            g.tokens = (g.tokens + items as f64).min(f64::from(self.config.post_burst));
+            if human {
                 g.human_at.pop_back();
             }
         }
@@ -255,7 +273,7 @@ mod tests {
         now.store(20_000, Ordering::SeqCst);
         assert_eq!(rt.admit_post(&attempt(&one, false)), Ok(()));
         // A refund puts the tokens back.
-        rt.refund_post(&attempt(&one, false));
+        rt.refund_post("s-1", 1, false);
         assert_eq!(rt.admit_post(&attempt(&one, false)), Ok(()));
     }
 
