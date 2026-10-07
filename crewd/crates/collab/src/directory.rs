@@ -1,7 +1,49 @@
 //! 全机通讯录（移植 `CrewDirectory.swift:125-170`）：机组按号升序，每个机组后面跟机长（分机 1）与有号的成员。
-use crate::{Result, crews, sessions};
+use crate::{CollabError, Result, crews, sessions};
 use crewd_proto::{DirectoryKind, DirectoryRow};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, params};
+
+/// 通讯录地址 → session id（M3b `post.to` 用）：`"N-E"` = N 号机组分机 E 的 session；`"N"` / `"N-1"` = N 号机组
+/// **此刻**的机长（分机 1 = 机长，跟着机长指针走）。号码只认十进制数字。
+/// 格式不对 → `Invalid`；没有这个号的机组 / 分机 → `NotFound`；机组此刻没有机长 → `Invalid`。
+/// 号码没有唯一索引：撞号时取最早建的机组（再按 id），与通讯录里的先后一致。
+pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
+    let bad = || {
+        CollabError::Invalid(format!(
+            "地址 {address:?} 不对：写机组号或「机组号-分机号」，如 3 或 3-2"
+        ))
+    };
+    let num = |s: &str| -> Result<i64> {
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad());
+        }
+        s.parse().map_err(|_| bad())
+    };
+    let (n, e) = match address.split_once('-') {
+        Some((n, e)) => (num(n)?, Some(num(e)?)),
+        None => (num(address)?, None),
+    };
+    let crew: String = conn
+        .query_row(
+            "SELECT id FROM crews WHERE number=?1 ORDER BY created_at, id LIMIT 1",
+            [n],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| CollabError::NotFound(format!("通讯录里没有 {n} 号机组")))?;
+    match e {
+        None | Some(1) => crews::captain_of(conn, &crew)?
+            .ok_or_else(|| CollabError::Invalid(format!("{n} 号机组现在没有机长"))),
+        Some(e) => conn
+            .query_row(
+                "SELECT id FROM sessions WHERE crew_id=?1 AND ext=?2 ORDER BY id LIMIT 1",
+                params![crew, e],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| CollabError::NotFound(format!("{n} 号机组没有分机 {e}"))),
+    }
+}
 
 /// 组织路径：从一级机组到 `crew` 的**上级**，" / " 分隔。每层只取最早建的那个父（`crews::parents` 的第一个）。
 /// 总机组是所有人的祖先、不带信息，不进路径（preflight M5）；它自己仍有 "0" 那一行。
@@ -143,5 +185,29 @@ mod tests {
                 .all(|r| r.crew_id == "chief"),
             "组织路径里没有总机组：按它的名字只搜到它自己"
         );
+    }
+
+    #[test]
+    fn an_address_resolves_to_a_session_or_a_crews_current_captain() {
+        let s = store();
+        assert_eq!(resolve(s.conn(), "1-2").unwrap(), "w-a1");
+        assert_eq!(resolve(s.conn(), "1").unwrap(), "cap-a");
+        assert_eq!(resolve(s.conn(), "1-1").unwrap(), "cap-a");
+        assert!(matches!(
+            resolve(s.conn(), "9").unwrap_err(),
+            CollabError::NotFound(_)
+        ));
+        assert!(matches!(
+            resolve(s.conn(), "1-9").unwrap_err(),
+            CollabError::NotFound(_)
+        ));
+        assert!(
+            matches!(resolve(s.conn(), "0").unwrap_err(), CollabError::Invalid(_)),
+            "总机组现在没有机长"
+        );
+        assert!(matches!(
+            resolve(s.conn(), "甲").unwrap_err(),
+            CollabError::Invalid(_)
+        ));
     }
 }

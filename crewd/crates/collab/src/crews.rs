@@ -928,15 +928,11 @@ mod tests {
                 [],
             )
             .unwrap();
-        // crew-a 的人类群：cap-x 被人显式拉进来。
+        // crew-a 的人类群：cap-x 留着一条成员行（旧数据的形状：home 不是 crew-a，现在 add_members 拒、行也不算数），
+        // 删机组时这条行照样要清掉。
         ok(&mut s, |tx| channels::ensure_human_channel(tx, "crew-a"));
         ok(&mut s, |tx| {
-            channels::add_members(
-                tx,
-                &crate::Sender::Human,
-                "crew-a/human",
-                &[MemberRef::session("cap-x")],
-            )
+            channels::join(tx, "crew-a/human", &MemberRef::session("cap-x"))
         });
         // crew-x 自己的群：随机组级联删掉。
         let doomed = ok(&mut s, |tx| {
