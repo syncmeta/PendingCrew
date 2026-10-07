@@ -4,7 +4,7 @@
 //! 每次推送都会被拦下、要人工标成误报。夹具改用 `concat!("sk_t", "est_…")` 拼出来，
 //! 源码里永远没有完整形状；运行时拼出的字节与原字面量逐字节相同。
 //!
-//! 本测试扫 `crewd/` 与 `docs/` 全部文本文件，出现完整形状就红。
+//! 本测试扫 `crewd/` 与 `docs/` 下会被推送的文本文件（git 跟踪的 + 未忽略的新文件），出现完整形状就红。
 //! 规则本身是正则源码（`sk_(?:live|test)_[A-Za-z0-9]{16,}`），不会命中自己，所以不需要排除名单；
 //! `patterns_do_catch_the_shapes` 用运行时拼出的样本证明尺子真的会红。
 
@@ -97,12 +97,45 @@ fn scan(files: &[PathBuf], root: &Path) -> Vec<String> {
     hits
 }
 
+/// 只扫会被推上去的文件：git 跟踪的 + 未跟踪但没被忽略的（下一次 commit 会带上）。
+/// 被 .gitignore 忽略的（docs/private、target 等本机私有目录）永远不会进推送，不扫——
+/// 那里存着旧评审包，里面原样留有历史上的夹具。没有 git 时退回整树遍历。
+fn pushable_files(root: &Path) -> Vec<PathBuf> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "crewd",
+            "docs",
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => o
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| root.join(String::from_utf8_lossy(p).as_ref()))
+            .filter(|p| p.is_file())
+            .collect(),
+        _ => {
+            let mut files = Vec::new();
+            walk(&root.join("crewd"), &mut files);
+            walk(&root.join("docs"), &mut files);
+            files
+        }
+    }
+}
+
 #[test]
 fn no_secret_shaped_literals_in_crewd_or_docs() {
     let root = repo_root();
-    let mut files = Vec::new();
-    walk(&root.join("crewd"), &mut files);
-    walk(&root.join("docs"), &mut files);
+    let files = pushable_files(&root);
     assert!(
         files.len() > 50,
         "扫到的文件太少（{}），目录判断错了？",
