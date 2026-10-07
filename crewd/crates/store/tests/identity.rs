@@ -215,3 +215,28 @@ fn the_mismatch_message_says_what_to_do() {
         assert!(msg.contains(want), "缺 {want}：{msg}");
     }
 }
+
+/// 换进来的是另一个库的旧版本（带着别的 dbId）：在迁移之前就拒绝，文件一个字节都不动。
+#[test]
+fn a_swapped_old_version_db_is_refused_before_it_is_migrated() {
+    let d = tempfile::tempdir().unwrap();
+    db_id(d.path());
+    remove_db(d.path());
+    let db = d.path().join(DB_FILE);
+    crewd_store::testing::write_v2_db(&db);
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO meta(key,value) VALUES('dbId','0123456789abcdef0123456789abcdef')",
+            [],
+        )
+        .unwrap();
+    let before = std::fs::read(&db).unwrap();
+    let names_before = sidecars(d.path());
+    let err = Store::open_data_dir(d.path())
+        .err()
+        .expect("换了库必须拒绝");
+    assert!(matches!(err, StoreError::DbIdMismatch { .. }), "{err:?}");
+    assert_eq!(std::fs::read(&db).unwrap(), before, "字节不动（没迁移）");
+    assert_eq!(sidecars(d.path()), names_before);
+}
