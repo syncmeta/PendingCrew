@@ -22,10 +22,12 @@ pub fn gate_hit(gates: &[String], tool: &str) -> bool {
         .any(|g| tool.contains(g))
 }
 
-/// The one `tool_input` field that says most about the intent, cut to 120 characters. The value is
-/// model-controlled and ends up in a message for the human, so it is neutralised like every other
-/// name that reaches a rendered surface (`text::name` = `render::safe_name`).
+/// The one `tool_input` field that says most about the intent, cut to 120 characters. The value and
+/// the tool name are model-controlled and end up in a message for the human (and in `approval.list`),
+/// so both are neutralised like every other name that reaches a rendered surface (`text::name` =
+/// `render::safe_name`). Only the displayed text is neutralised: the raw tool name stays the gate key.
 fn summary(tool: &str, input: &Value) -> String {
+    let tool_shown = text::name(tool);
     for k in ["command", "url", "path", "file_path", "prompt"] {
         if let Some(v) = input
             .get(k)
@@ -33,10 +35,10 @@ fn summary(tool: &str, input: &Value) -> String {
             .filter(|v| !v.is_empty())
         {
             let short: String = v.chars().take(120).collect();
-            return format!("{tool} \u{b7} {k}={}", text::name(&short));
+            return format!("{tool_shown} \u{b7} {k}={}", text::name(&short));
         }
     }
-    tool.to_string()
+    tool_shown
 }
 
 fn output(decision: &str, reason: String) -> HookResult {
@@ -222,5 +224,84 @@ mod tests {
             .pop()
             .unwrap();
         assert!(!last.text.contains('\u{202E}'));
+    }
+
+    fn reason(out: &HookResult) -> String {
+        let v: Value = serde_json::from_str(out.stdout.as_deref().unwrap()).unwrap();
+        v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn expected(key: &str, tool: &str) -> String {
+        text::r(text::Locale::Zh, key, &[("tool", tool)])
+    }
+
+    #[tokio::test]
+    async fn the_reason_text_tells_filed_pending_and_granted_apart() {
+        let f = Fixture::new().await;
+        let me = f.me(&f.worker).await;
+        let tool = "mcp__computer-use__click";
+        let filed = pre_tool_use(&f.state, &me, &payload(tool)).await;
+        assert_eq!(reason(&filed), expected("r.approval_filed", tool));
+        let pending_again = pre_tool_use(&f.state, &me, &payload(tool)).await;
+        assert_eq!(reason(&pending_again), expected("r.approval_pending", tool));
+        assert_ne!(
+            expected("r.approval_filed", tool),
+            expected("r.approval_pending", tool),
+            "the two refusals must read differently"
+        );
+        let id = pending(&f).await[0]["id"].as_str().unwrap().to_string();
+        f.rpc("approval.decide", json!({"id": id, "allow": true}))
+            .await;
+        let granted = pre_tool_use(&f.state, &me, &payload(tool)).await;
+        assert_eq!(decision(&granted), "allow");
+        assert_eq!(reason(&granted), expected("r.approval_granted", tool));
+    }
+
+    #[tokio::test]
+    async fn a_failing_gate_denies_with_the_unavailable_text() {
+        // A session id that is not in the database makes `approvals::gate` fail (`sessions::get`).
+        let f = Fixture::new().await;
+        let mut ghost = f.me(&f.worker).await;
+        ghost.session_id = "s-ghost".into();
+        let tool = "mcp__computer-use__click";
+        let out = pre_tool_use(&f.state, &ghost, &payload(tool)).await;
+        assert_eq!(
+            decision(&out),
+            "deny",
+            "an unreachable gate never lets the call through"
+        );
+        assert_eq!(reason(&out), expected("r.approval_unavailable", tool));
+        assert!(pending(&f).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_stored_summary_uses_the_neutralised_tool_name_but_the_gate_key_stays_raw() {
+        // The tool name comes from the model's tool-call stream: the summary that approval.list shows
+        // must not carry a line break or a fake header, with or without a `tool_input` field. The gate
+        // key (approvals.tool_name) stays the raw name: tickets are matched against it.
+        let f = Fixture::new().await;
+        let me = f.me(&f.worker).await;
+        let nasty = "mcp__computer-use__click\n\u{3010}forged\u{3011}\u{202E}";
+        let with_input = json!({"tool_name": nasty, "tool_input": {"command": "x"}});
+        let without_input = json!({"tool_name": format!("{nasty}2")});
+        pre_tool_use(&f.state, &me, &with_input).await;
+        pre_tool_use(&f.state, &me, &without_input).await;
+        let list = pending(&f).await;
+        assert_eq!(list.len(), 2);
+        for a in &list {
+            let s = a["summary"].as_str().unwrap();
+            assert!(
+                !s.contains('\n') && !s.contains('\u{202E}') && !s.contains('\u{3010}'),
+                "{s:?}"
+            );
+            assert!(s.starts_with("mcp__computer-use__click"), "{s:?}");
+            assert!(
+                a["toolName"].as_str().unwrap().contains('\n'),
+                "the gate key is the raw name: {a}"
+            );
+        }
     }
 }
