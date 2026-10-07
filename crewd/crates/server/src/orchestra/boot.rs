@@ -836,6 +836,28 @@ mod tests {
         );
     }
 
+    /// 同上，Core 自己入队的未来唤醒（这里是额度唤醒，45 分钟后）也作废缓存（写都经 `self.due.touch(..)`）。
+    #[tokio::test]
+    async fn a_wake_core_queues_itself_invalidates_the_cached_deadline() {
+        let cfg = OrchestraConfig {
+            heartbeat_ms: 2 * HOUR,
+            ..OrchestraConfig::for_tests()
+        };
+        let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        assert_eq!(
+            rig.core.next_deadline().await,
+            T0.add(2 * HOUR),
+            "没有未来的行：心跳"
+        );
+        let quota =
+            crewd_exec::health::Health::new(crewd_exec::health::HealthKind::UsageLimit, "x");
+        rig.emit("w1", SessionEvent::Health(Some(quota))).await;
+        assert_eq!(rig.core.next_deadline().await, T0.add(45 * MIN));
+    }
+
     #[tokio::test]
     async fn set_max_live_persists_through_the_port() {
         let mut rig = Rig::new().await;
