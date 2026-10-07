@@ -360,9 +360,6 @@ There is no tool named {name}.
 ## r.captain_only
 {name} is for the captain only, and you are not the captain now.
 
-## r.not_on_management
-{name} is not available in the management crew.
-
 ## r.bad_args
 Invalid arguments: {detail}
 

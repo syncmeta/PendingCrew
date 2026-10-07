@@ -40,9 +40,6 @@ pub struct Param {
 pub struct ToolSpec {
     pub name: &'static str,
     pub scope: Scope,
-    /// 总机组（管理机组）上不列（`McpServer.swift:565`、`:745-753` 的遗留；ask 已放开（N1-R9：总机组的问去它自己的人类群），
-    /// 其余两个等 T15b 删掉这个标记）。
-    pub not_on_management: bool,
     pub params: &'static [Param],
 }
 
@@ -95,7 +92,6 @@ const fn all(name: &'static str, params: &'static [Param]) -> ToolSpec {
     ToolSpec {
         name,
         scope: Scope::All,
-        not_on_management: false,
         params,
     }
 }
@@ -103,14 +99,7 @@ const fn cap(name: &'static str, params: &'static [Param]) -> ToolSpec {
     ToolSpec {
         name,
         scope: Scope::Captain,
-        not_on_management: false,
         params,
-    }
-}
-const fn not_on_mgmt(t: ToolSpec) -> ToolSpec {
-    ToolSpec {
-        not_on_management: true,
-        ..t
     }
 }
 
@@ -201,10 +190,10 @@ pub const CATALOG: &[ToolSpec] = &[
             p("crew", Str, false),
         ],
     ),
-    not_on_mgmt(all(
+    all(
         "respond_todo",
         &[p("number", Int, true), p("response", Str, true)],
-    )),
+    ),
     all("get_quota", &[]),
     all(
         "schedule_wakeup",
@@ -231,8 +220,6 @@ pub const CATALOG: &[ToolSpec] = &[
     cap("set_crew_status", &[p("text", Str, true)]),
     cap("read_delegation_policy", &[]),
     cap("update_delegation_policy", &[p("text", Str, true)]),
-    // T15a: the management captain starts workers in any crew, its own included (S68); the
-    // `not_on_mgmt` mark is gone from start_session (the flag itself goes in T15b).
     cap(
         "start_session",
         &[
@@ -323,10 +310,10 @@ pub fn find(name: &str) -> Option<&'static ToolSpec> {
     CATALOG.iter().find(|t| t.name == name)
 }
 
-/// 这个身份此刻能不能看见 / 调这个工具。
+/// 这个身份此刻能不能看见 / 调这个工具：只看角色。总机组没有特例（S68）：它的机长与任何机组的机长同一张表，
+/// 它的其他 session 与任何 worker 同一张表。
 pub fn visible(t: &ToolSpec, me: &Identity) -> bool {
-    (t.scope == Scope::All || me.role == Role::Captain)
-        && !(t.not_on_management && me.management_crew)
+    t.scope == Scope::All || me.role == Role::Captain
 }
 
 pub fn tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
@@ -402,13 +389,12 @@ mod tests {
     use crate::agent::{Identity, Role};
     use crewd_collab::Locale;
 
-    fn who(role: Role, management: bool) -> Identity {
+    fn who(role: Role) -> Identity {
         Identity {
             session_id: "s-1".into(),
             crew_id: "crew-a".into(),
             role,
             label: "示例".into(),
-            management_crew: management,
         }
     }
 
@@ -433,24 +419,13 @@ mod tests {
 
     #[test]
     fn worker_and_captain_get_different_tables() {
-        let worker = names(&who(Role::Worker, false));
-        let captain = names(&who(Role::Captain, false));
+        let worker = names(&who(Role::Worker));
+        let captain = names(&who(Role::Captain));
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
         assert_eq!(worker.len(), 17);
         assert_eq!(captain.len(), 33);
-    }
-
-    #[test]
-    fn management_crew_hides_respond_but_has_ask_and_start_session() {
-        let chief = names(&who(Role::Captain, true));
-        assert!(!chief.contains(&"respond_todo".to_string()));
-        // N1-R9: the management crew's questions go to its own human channel.
-        assert!(chief.contains(&"ask".to_string()));
-        // T15a: the management captain starts workers in any crew, its own included.
-        assert!(chief.contains(&"start_session".to_string()));
-        assert!(chief.contains(&"handoff_captain".to_string()));
     }
 
     #[test]
@@ -560,13 +535,42 @@ mod tests {
 
     #[test]
     fn admin_sees_exactly_the_worker_set() {
-        for management in [false, true] {
-            assert_eq!(
-                names(&who(Role::Admin, management)),
-                names(&who(Role::Worker, management)),
-                "management={management}"
-            );
+        assert_eq!(names(&who(Role::Admin)), names(&who(Role::Worker)));
+    }
+
+    /// S68: no management special case. The management crew's captain gets the table of any
+    /// captain, its other sessions the table of any worker (`respond_todo` and `start_session`
+    /// included).
+    #[tokio::test]
+    async fn management_crew_sees_the_same_tables_as_any_crew() {
+        use crate::agent::testkit::Fixture;
+        let f = Fixture::new().await;
+        let mgmt = f
+            .state
+            .db
+            .call(|s| crewd_collab::crews::management(s.conn()))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("crew.create creates the management crew");
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
+        f.add_session(&mgmt, "s-mw", Role::Worker, "示例管理 worker")
+            .await;
+        let of = |id: Identity| names(&id);
+        let boss = of(f.me("s-boss").await);
+        assert_eq!(boss, of(f.me(&f.captain).await));
+        assert_eq!(of(f.me("s-mw").await), of(f.me(&f.worker).await));
+        for t in ["respond_todo", "start_session", "ask"] {
+            assert!(boss.contains(&t.to_string()), "{t}");
         }
+        assert_eq!(
+            boss,
+            CATALOG
+                .iter()
+                .map(|t| t.name.to_string())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

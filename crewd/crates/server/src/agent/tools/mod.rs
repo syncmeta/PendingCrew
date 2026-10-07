@@ -9,12 +9,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::AppState;
-use crate::agent::catalog::{self, Scope};
+use crate::agent::Identity;
+use crate::agent::catalog;
 use crate::agent::port::{
     self, ChannelView, CrewView, MsgRef, PortError, PostReq, PostSender, Posted,
 };
 use crate::agent::text::{self, Locale};
-use crate::agent::{Identity, Role};
 use crewd_proto::agent::CallResult;
 use crewd_proto::{Mention, Message};
 
@@ -143,14 +143,10 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     let Some(spec) = catalog::find(tool) else {
         return cx.err("r.unknown_tool", &[("name", tool)]);
     };
-    // One gate (`catalog::visible`, the same rule the tool list uses); the checks below only pick
-    // which receipt to give.
+    // One gate (`catalog::visible`, the same rule the tool list uses): the role, re-read on
+    // every call. The management crew has no special case (S68).
     if !catalog::visible(spec, me) {
-        return if spec.scope == Scope::Captain && me.role != Role::Captain {
-            cx.err("r.captain_only", &[("name", tool)])
-        } else {
-            cx.err("r.not_on_management", &[("name", tool)])
-        };
+        return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
         "post" => messaging::post(&cx, args).await,
@@ -327,29 +323,10 @@ mod tests {
     use crate::agent::testkit::Fixture;
 
     #[tokio::test]
-    async fn management_crew_refuses_hidden_tools_even_when_called_directly() {
+    async fn captain_tools_are_refused_to_a_worker_even_when_called_directly() {
         let f = Fixture::new().await;
         let mut me = f.me(&f.captain).await;
-        me.management_crew = true;
-        // ask is open on the management crew (N1-R9); respond_todo is still hidden there (until T15b).
-        let r = call(
-            &f.state,
-            &me,
-            "respond_todo",
-            json!({"number": 1, "response": "示例"}),
-        )
-        .await;
-        assert!(r.is_error);
-        assert_eq!(
-            r.text,
-            text::r(
-                Locale::Zh,
-                "r.not_on_management",
-                &[("name", "respond_todo")]
-            )
-        );
         me.role = Role::Worker;
-        me.management_crew = false;
         let r = call(&f.state, &me, "rename_crew", json!({"name": "x"})).await;
         assert_eq!(
             r.text,

@@ -360,9 +360,6 @@ esc 或 interrupt，都是打断它当前这一轮。
 ## r.captain_only
 {name} 只有机长能用，你现在不是机长。
 
-## r.not_on_management
-{name} 在总机组（管理机组）里不能用。
-
 ## r.bad_args
 参数不对：{detail}
 

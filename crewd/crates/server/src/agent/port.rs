@@ -364,11 +364,9 @@ pub async fn identity(st: &AppState, session: &str) -> PortResult<Option<Identit
             Some(r) => r,
             None => return Ok(None),
         };
-        let crew = crewd_collab::crews::get(conn, &row.crew_id)?;
         Ok(Some(Identity {
             role: crewd_collab::sessions::role_of(conn, &id)?,
             label: crewd_collab::sessions::display_name(conn, &id)?,
-            management_crew: crew.management,
             crew_id: row.crew_id,
             session_id: row.id,
         }))
@@ -1469,14 +1467,13 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn identity_reads_role_label_and_management() {
+    async fn identity_reads_role_and_label() {
         let f = Fixture::new().await;
         let cap = identity(&f.state, &f.captain).await.unwrap().unwrap();
         assert_eq!(cap.role, Role::Captain);
         assert_eq!(cap.crew_id, f.crew);
         let w = identity(&f.state, &f.worker).await.unwrap().unwrap();
         assert_eq!((w.role, w.label.as_str()), (Role::Worker, "示例 worker"));
-        assert!(!w.management_crew);
         assert!(identity(&f.state, "nobody").await.unwrap().is_none());
     }
 
@@ -2131,7 +2128,7 @@ mod tests {
             .expect("crew.create 懒建总机组");
         f.add_session(&management, "s-mgr", Role::Worker, "管理层 worker")
             .await;
-        assert!(f.me("s-mgr").await.management_crew);
+        assert_eq!(f.me("s-mgr").await.crew_id, management);
         let far_lobby = lobby_of(&f.state, &w.other).await.unwrap().id;
         let far_human = home_human_channel(&f.state, &w.other).await.unwrap().id;
         let far = f.me("s-far").await;
