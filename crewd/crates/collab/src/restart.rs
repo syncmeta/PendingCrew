@@ -22,16 +22,24 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RestartPrompt> {
     })
 }
 
+/// 休眠记录；坏了（读不出来）只记日志、当没有（评审 m3：不能因为它把重启询问的读写弄坏，按普通重启问）。
+fn record_or_none(conn: &Connection) -> Option<hibernate::Record> {
+    hibernate::get(conn).unwrap_or_else(|e| {
+        eprintln!("crewd: 协作：休眠记录读不出来，按普通重启算：{e}");
+        None
+    })
+}
+
 /// 休眠记录（[`hibernate`]，C26）指着这条询问 → 标成 `hibernate`、带被打断的名单（只列这条询问里的）。
 fn with_reason(conn: &Connection, mut p: RestartPrompt) -> Result<RestartPrompt> {
-    if let Some(r) = hibernate::get(conn)?
+    if let Some(r) = record_or_none(conn)
         && r.prompt_id == Some(p.id)
     {
         p.reason = RestartReason::Hibernate;
         p.interrupted = r
             .sessions
             .iter()
-            .filter(|h| h.interrupted && p.session_ids.contains(&h.session_id))
+            .filter(|h| h.interrupted() && p.session_ids.contains(&h.session_id))
             .map(|h| h.session_id.clone())
             .collect();
     }
@@ -108,18 +116,22 @@ pub fn open_with(
         params![tx.now_ts(), serde_json::to_string(&ids)?],
     )?;
     let id = tx.conn().last_insert_rowid();
+    // 休眠停下、还没恢复过的（公告里「上次休眠了 N 个」只数它们，评审 m4）。
+    let mut hibernated: Vec<String> = Vec::new();
     if reason == RestartReason::Hibernate {
-        let mut rec = hibernate::get(tx.conn())?.unwrap_or_else(|| hibernate::Record {
+        let mut rec = record_or_none(tx.conn()).unwrap_or_else(|| hibernate::Record {
             at_ms: tx.now_ms(),
             ..Default::default()
         });
         rec.prompt_id = Some(id);
         hibernate::put(tx, &rec)?;
+        hibernated = rec
+            .sessions
+            .iter()
+            .filter(|h| !h.resumed)
+            .map(|h| h.session_id.clone())
+            .collect();
     }
-    let head = match reason {
-        RestartReason::Restart => "notice.restart",
-        RestartReason::Hibernate => "notice.restart.hibernate",
-    };
     // 每个涉及的根机组人类群各一条，只列那棵树里的 session。
     let f = prompts::render_file(settings::locale(tx.conn())?);
     let mut by_root: Vec<(String, Vec<String>)> = Vec::new();
@@ -131,7 +143,14 @@ pub fn open_with(
         }
     }
     for (root, sids) in by_root {
-        let mut text = prompts::fill(f.get(head), &[("count", &sids.len().to_string())]);
+        // 这棵树里有休眠停下的 → 「上次休眠了 N 个」（N 只数它们）；没有 → 普通公告。
+        let n = sids.iter().filter(|s| hibernated.contains(s)).count();
+        let (head, count) = if n > 0 {
+            ("notice.restart.hibernate", n)
+        } else {
+            ("notice.restart", sids.len())
+        };
+        let mut text = prompts::fill(f.get(head), &[("count", &count.to_string())]);
         for sid in &sids {
             text.push('\n');
             text.push_str(&prompts::fill(
@@ -269,45 +288,66 @@ mod tests {
         ));
     }
 
-    fn hibernated(id: &str, interrupted: bool) -> crate::hibernate::Hibernated {
+    fn hibernated(
+        id: &str,
+        was_working: bool,
+        outcome: crate::hibernate::Outcome,
+    ) -> crate::hibernate::Hibernated {
         crate::hibernate::Hibernated {
             session_id: id.into(),
-            was_working: interrupted,
-            interrupted,
+            was_working,
+            outcome,
             ..Default::default()
         }
     }
 
-    /// C26：休眠之后的那次询问——公告说「上次休眠了 N 个」，载荷 `reason = hibernate`、带被打断的名单，与崩溃重启
-    /// 分得开；之后一次普通重启开的询问又是 `restart`。
+    /// C26：休眠之后的那次询问——公告说「上次休眠了 N 个」（N 只数休眠停下的，评审 m4；名单里没有休眠的那棵树发普通
+    /// 公告），载荷 `reason = hibernate`、带被打断的名单（评审 I3：休眠中途崩了、还停在「等安全点」的也算被打断），
+    /// 与崩溃重启分得开；之后一次普通重启开的询问又是 `restart`。
     #[test]
     fn a_prompt_after_hibernate_says_so_in_the_notice_and_the_payload() {
+        use crate::hibernate::Outcome;
         let mut s = store();
         let rec = crate::hibernate::Record {
             at_ms: NOW,
-            sessions: vec![hibernated("w-a1", true), hibernated("w-a2", false)],
+            sessions: vec![
+                hibernated("w-a1", true, Outcome::Interrupted),
+                hibernated("w-a2", true, Outcome::Finished),
+                hibernated("w-b1", true, Outcome::Pending),
+            ],
             ..Default::default()
         };
         ok(&mut s, |tx| crate::hibernate::put(tx, &rec));
-        let p = ok(&mut s, |tx| {
-            open_with(
-                tx,
-                vec!["w-a1".into(), "w-a2".into()],
-                RestartReason::Hibernate,
-            )
-        })
-        .unwrap();
+        let ids: Vec<String> = ["w-a1", "w-a2", "w-b1", "cap-a", "cap-x"]
+            .map(String::from)
+            .to_vec();
+        let p = ok(&mut s, |tx| open_with(tx, ids, RestartReason::Hibernate)).unwrap();
         assert_eq!(p.reason, RestartReason::Hibernate);
-        assert_eq!(p.interrupted, ["w-a1"]);
+        assert_eq!(
+            p.interrupted,
+            ["w-a1", "w-b1"],
+            "还停在「等安全点」的（休眠中途崩了）也算被打断"
+        );
         assert_eq!(
             crate::hibernate::get(s.conn()).unwrap().unwrap().prompt_id,
             Some(p.id),
             "记录记下了是哪条询问"
         );
         let f = prompts::render_file(crate::Locale::Zh);
-        let head = prompts::fill(f.get("notice.restart.hibernate"), &[("count", "2")]);
+        let head = prompts::fill(f.get("notice.restart.hibernate"), &[("count", "3")]);
         let a = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
-        assert!(a[0].text.starts_with(&head), "{}", a[0].text);
+        assert!(
+            a[0].text.starts_with(&head),
+            "只数休眠停下的（cap-a 不算）：{}",
+            a[0].text
+        );
+        let x = crate::messages::list(s.conn(), "crew-x/human", None, None, 10).unwrap();
+        let plain1 = prompts::fill(f.get("notice.restart"), &[("count", "1")]);
+        assert!(
+            x[0].text.starts_with(&plain1),
+            "那棵树里没有休眠停下的：普通公告：{}",
+            x[0].text
+        );
         assert_eq!(
             pending(s.conn()).unwrap().unwrap(),
             p,
@@ -321,9 +361,30 @@ mod tests {
         let q = ok(&mut s, |tx| open(tx, vec!["w-a1".into()])).unwrap();
         assert_eq!(q.reason, RestartReason::Restart, "普通重启：不是休眠");
         assert!(q.interrupted.is_empty());
-        let plain = prompts::fill(f.get("notice.restart"), &[("count", "1")]);
         let a = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
-        assert!(a.last().unwrap().text.starts_with(&plain));
+        assert!(a.last().unwrap().text.starts_with(&plain1));
+    }
+
+    /// 评审 m3：休眠记录坏了（读不出来）不能把重启询问弄坏——按普通重启算、记一行日志；get / pending / answer /
+    /// 开新询问（含说是休眠的）都照常。
+    #[test]
+    fn a_corrupt_hibernate_record_degrades_to_a_plain_restart() {
+        let mut s = store();
+        crewd_store::meta_set(s.conn(), "hibernate", "{坏").unwrap();
+        let p = ok(&mut s, |tx| {
+            open_with(tx, vec!["w-a1".into()], RestartReason::Hibernate)
+        })
+        .unwrap();
+        assert_eq!(
+            get(s.conn(), p.id).unwrap().reason,
+            RestartReason::Hibernate,
+            "坏记录被一份新的盖掉"
+        );
+        crewd_store::meta_set(s.conn(), "hibernate", "{坏").unwrap();
+        assert_eq!(get(s.conn(), p.id).unwrap().reason, RestartReason::Restart);
+        assert_eq!(pending(s.conn()).unwrap().unwrap().id, p.id);
+        let r = ok(&mut s, |tx| answer(tx, p.id, RestartAnswer::Resume));
+        assert_eq!(r.reason, RestartReason::Restart);
     }
 
     #[test]

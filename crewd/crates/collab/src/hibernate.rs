@@ -28,8 +28,10 @@ pub struct Hibernated {
     pub session_id: String,
     /// 休眠开始时它在干活（或正有一批唤醒在投）。
     pub was_working: bool,
-    /// 到了期限还没做完那一轮，被打断了（恢复后被打断的命令要重跑）。
-    pub interrupted: bool,
+    /// 这一轮的结局（评审 I3）：开始时在干活的先记 `Pending`，到了安全点改 `Finished`、到期限被打断改 `Interrupted`；
+    /// 休眠中途 crewd 没了（电脑先关了）就停在 `Pending`——按被打断算（[`Hibernated::interrupted`]），不能说「做完了」。
+    #[serde(default)]
+    pub outcome: Outcome,
     /// 停下之前在处理的那批唤醒的摘要（数据，不是文案；插进附言前过 `safe_name`）。不知道 = None。
     #[serde(default)]
     pub doing: Option<String>,
@@ -39,6 +41,27 @@ pub struct Hibernated {
     /// 已恢复过（附言给过了）：不再给第二次。项不删，重启询问的 `interrupted` 名单因此不随恢复变化。
     #[serde(default)]
     pub resumed: bool,
+}
+
+/// 一个休眠停下的 session 的这一轮怎么样了。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// 还在等它到达安全点（休眠中途 crewd 没了就一直是它）。
+    #[default]
+    Pending,
+    /// 在安全点停下的（空闲的、期限内做完这一轮的）。
+    Finished,
+    /// 到了期限还没做完、被打断了。
+    Interrupted,
+}
+
+impl Hibernated {
+    /// 恢复后要不要当成「被打断」（被打断的命令要重跑）：明确被打断的，或开始时在干活、却没等到结局的（I3）。
+    pub fn interrupted(&self) -> bool {
+        self.outcome == Outcome::Interrupted
+            || (self.was_working && self.outcome == Outcome::Pending)
+    }
 }
 
 /// 读不出来（不是这个形状）= `Invalid`：不猜、不当没有。
@@ -79,7 +102,7 @@ mod tests {
             sessions: vec![Hibernated {
                 session_id: "w-a1".into(),
                 was_working: true,
-                interrupted: true,
+                outcome: Outcome::Interrupted,
                 doing: Some("timer timer:t1: 合成".into()),
                 last_wakes: vec![3, 4],
                 resumed: false,

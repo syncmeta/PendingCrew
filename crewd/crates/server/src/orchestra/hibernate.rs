@@ -14,6 +14,7 @@
 //! - 客户端（macOS 关机 / 重启通知触发休眠）不在 crewd：这里只给 `Handle::hibernate`（RPC `crewd.hibernate` 由 T10 接）。
 use std::collections::BTreeMap;
 
+use crewd_collab::hibernate::Outcome;
 use crewd_collab::render::safe_name;
 use crewd_wake::Ms;
 use crewd_wake::policy::{self, HibernateFacts};
@@ -199,9 +200,17 @@ impl<P: Port> Core<P> {
             }
         }
         let h = self.hibernation.as_mut().expect("上面查过");
-        for (s, _) in &safe {
+        let mut changed = false;
+        for (s, at_safe_point) in &safe {
             if let Some(t) = h.tracked.get_mut(s) {
                 t.busy = false;
+            }
+            // 到了安全点才记「做完了」；自己没了 / 被别人停了的留在 Pending（恢复时按被打断说，I3）。
+            if *at_safe_point
+                && let Some(e) = h.record.sessions.iter_mut().find(|e| &e.session_id == s)
+            {
+                e.outcome = Outcome::Finished;
+                changed = true;
             }
         }
         for s in &cut {
@@ -210,10 +219,11 @@ impl<P: Port> Core<P> {
                 t.interrupted = true;
             }
             if let Some(e) = h.record.sessions.iter_mut().find(|e| &e.session_id == s) {
-                e.interrupted = true;
+                e.outcome = Outcome::Interrupted;
+                changed = true;
             }
         }
-        let record = (!cut.is_empty()).then(|| h.record.clone());
+        let record = changed.then(|| h.record.clone());
         for (s, halt) in safe {
             if halt {
                 self.halt(&s);
@@ -229,7 +239,7 @@ impl<P: Port> Core<P> {
         if let Some(r) = record
             && let Err(e) = self.port.put_hibernate(&r).await
         {
-            eprintln!("crewd: 编排：休眠记录（被打断的）写不进去：{e:#}");
+            eprintln!("crewd: 编排：休眠记录（这一轮的结局）写不进去：{e:#}");
         }
         if self.live.is_empty() && self.starting.is_empty() && self.preparing == 0 {
             self.finish_hibernate(true);
@@ -287,7 +297,7 @@ impl<P: Port> Core<P> {
             lang,
             &HibernateFacts {
                 was_working: h.was_working,
-                interrupted: h.interrupted,
+                interrupted: h.interrupted(),
                 doing: doing.as_deref(),
             },
         );
@@ -313,11 +323,16 @@ impl<P: Port> Core<P> {
     }
 }
 
+/// 开始时的一项：在干活的记 `Pending`（等安全点；中途 crewd 没了就一直是它，按被打断算，I3），空闲的记 `Finished`。
 fn entry(session: &str, was_working: bool, doing: &[crewd_wake::QueuedWake]) -> Hibernated {
     Hibernated {
         session_id: session.to_string(),
         was_working,
-        interrupted: false,
+        outcome: if was_working {
+            Outcome::Pending
+        } else {
+            Outcome::Finished
+        },
         doing: policy::batch_summary(doing),
         last_wakes: doing.iter().map(|w| w.id).collect(),
         resumed: false,
@@ -332,6 +347,7 @@ mod tests {
     use crate::orchestra::exec::Executors;
     use crate::orchestra::hooks::Hooks;
     use crate::orchestra::testkit::{Rig, T0};
+    use crewd_collab::hibernate::Outcome;
     use crewd_collab::render::safe_name;
     use crewd_exec::session::SessionEvent;
     use crewd_wake::plan::{Mention, MsgFacts, Sender};
@@ -478,9 +494,13 @@ mod tests {
             );
         }
         let (cap, w1, w2) = (entry(&rig, "cap"), entry(&rig, "w1"), entry(&rig, "w2"));
-        assert!(!cap.was_working && !cap.interrupted);
-        assert!(w1.was_working && !w1.interrupted);
-        assert!(w2.was_working && w2.interrupted);
+        assert_eq!((cap.was_working, cap.outcome), (false, Outcome::Finished));
+        assert_eq!(
+            (w1.was_working, w1.outcome),
+            (true, Outcome::Finished),
+            "到了安全点：记「做完了」"
+        );
+        assert_eq!((w2.was_working, w2.outcome), (true, Outcome::Interrupted));
         assert_eq!(rig.port.lock().hibernate.as_ref().unwrap().at_ms, T0.0);
         assert_eq!(rig.port.wakes_of("cap")[0].state, WakeState::Pending);
     }
@@ -650,7 +670,11 @@ mod tests {
             }
         );
         assert!(!rig.core.shutdown_done());
-        assert!(entry(&rig, "w1").interrupted, "记录里照样记下被打断");
+        assert_eq!(
+            entry(&rig, "w1").outcome,
+            Outcome::Interrupted,
+            "记录里照样记下被打断"
+        );
     }
 
     /// 停机进行中再要休眠 = 拒绝（停机已经不等安全点地叫停了）；休眠进行中来了停机 = 期限提前到现在。
@@ -684,11 +708,11 @@ mod tests {
         row.was_working = was_working;
     }
 
-    fn hib(id: &str, was_working: bool, interrupted: bool, doing: Option<&str>) -> Hibernated {
+    fn hib(id: &str, was_working: bool, outcome: Outcome, doing: Option<&str>) -> Hibernated {
         Hibernated {
             session_id: id.into(),
             was_working,
-            interrupted,
+            outcome,
             doing: doing.map(str::to_string),
             last_wakes: vec![],
             resumed: false,
@@ -706,9 +730,14 @@ mod tests {
         rig.port.lock().hibernate = Some(HibernateRecord {
             at_ms: T0.0 - HOUR,
             sessions: vec![
-                hib("cap", false, false, None),
-                hib("w1", true, false, Some("timer timer:t1: 合成定时")),
-                hib("w2", true, true, Some(HOSTILE)),
+                hib("cap", false, Outcome::Finished, None),
+                hib(
+                    "w1",
+                    true,
+                    Outcome::Finished,
+                    Some("timer timer:t1: 合成定时"),
+                ),
+                hib("w2", true, Outcome::Interrupted, Some(HOSTILE)),
             ],
             ..Default::default()
         });
@@ -875,20 +904,91 @@ mod tests {
         let mut rx = hibernate(&mut rig, Some(0)).await;
         assert!(report(&mut rx).completed);
         let rec = rig.port.lock().hibernate.clone().unwrap();
-        let got: Vec<(&str, bool, bool)> = rec
+        let got: Vec<(&str, Outcome, bool)> = rec
             .sessions
             .iter()
-            .map(|h| (h.session_id.as_str(), h.interrupted, h.resumed))
+            .map(|h| (h.session_id.as_str(), h.outcome, h.resumed))
             .collect();
         assert_eq!(
             got,
             [
-                ("cap", false, false),
-                ("w1", false, false),
-                ("w2", true, false)
+                ("cap", Outcome::Finished, false),
+                ("w1", Outcome::Finished, false),
+                ("w2", Outcome::Interrupted, false)
             ]
         );
         assert_eq!(rec.prompt_id, None, "新的一次休眠：还没开询问");
+    }
+
+    /// 评审 I3：休眠中途 crewd 没了（电脑先关了，期限还没到）——在干活的那个停在「等安全点」，下次恢复时按被打断说
+    /// （要重跑），不能说「做完了」。
+    #[tokio::test]
+    async fn a_crash_before_the_deadline_resumes_the_working_ones_as_interrupted() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("cap").await;
+        rig.run("w1").await;
+        enqueue(&mut rig, timer("w1", "t1", "合成定时甲")).await;
+        rig.ack("w1").await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let _rx = hibernate(&mut rig, Some(2 * MIN)).await;
+        assert_eq!(entry(&rig, "w1").outcome, Outcome::Pending);
+        // 崩了：新的 Core，同一个库。
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        rig.rx = rx;
+        rig.core = Core::new(
+            rig.port.clone(),
+            Executors::new().with("claude", std::sync::Arc::new(rig.exec.clone())),
+            Hooks::default(),
+            rig.clock.clone(),
+            OrchestraConfig::for_tests(),
+            tx,
+        )
+        .await
+        .unwrap();
+        rig.core.boot().await.unwrap();
+        assert_eq!(rig.port.lock().restart_reasons, [RestartReason::Hibernate]);
+        rig.cmd(|reply| Cmd::Resume {
+            session: "w1".into(),
+            origin: Origin::Human,
+            reply,
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            rig.exec.launches("w1")[1].initial.as_deref(),
+            Some(note(true, true, Some("timer timer:t1: 合成定时甲")).as_str()),
+            "没等到结局的按被打断说"
+        );
+    }
+
+    /// 评审 I4：恢复一个之后，记录里那条询问的链接还在（`put_hibernate` 写回的是带着询问 id 的那份）——不然之后读这条
+    /// 询问就不再是「休眠」了。
+    #[tokio::test]
+    async fn resuming_one_keeps_the_record_linked_to_the_prompt() {
+        let mut rig = Rig::new().await;
+        after_hibernate(&rig);
+        rig.core.boot().await.unwrap();
+        rig.settle().await;
+        assert_eq!(
+            rig.port.lock().hibernate.as_ref().unwrap().prompt_id,
+            Some(1)
+        );
+        rig.cmd(|reply| Cmd::Resume {
+            session: "w2".into(),
+            origin: Origin::Human,
+            reply,
+        })
+        .await
+        .unwrap();
+        let rec = rig.port.lock().hibernate.clone().unwrap();
+        assert_eq!(rec.prompt_id, Some(1), "{rec:?}");
+        assert!(
+            rec.sessions
+                .iter()
+                .any(|h| h.session_id == "w2" && h.resumed)
+        );
     }
 
     /// 起会话（新建）在休眠中同样被拒；没有会话在跑时休眠立刻完成。

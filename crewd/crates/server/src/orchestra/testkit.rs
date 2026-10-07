@@ -626,7 +626,17 @@ impl Port for MemPort {
         }
         st.restarts.push(session_ids);
         st.restart_reasons.push(reason);
-        Ok(Some(st.restarts.len() as i64))
+        let id = st.restarts.len() as i64;
+        // 同 collab `restart::open_with`：说是休眠的询问把 id 记进休眠记录（没有就补一份空的）。
+        if reason == RestartReason::Hibernate {
+            let now = st.now;
+            let rec = st.hibernate.get_or_insert_with(|| HibernateRecord {
+                at_ms: now.0,
+                ..Default::default()
+            });
+            rec.prompt_id = Some(id);
+        }
+        Ok(Some(id))
     }
 
     async fn restart_answer(&self, id: i64) -> Result<Option<bool>> {
