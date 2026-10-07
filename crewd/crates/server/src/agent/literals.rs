@@ -261,3 +261,137 @@ fn md_sections_are_all_used_or_allow_listed() {
         }
     }
 }
+
+// ---- Tool names in the text an agent reads (T15c) ----
+
+fn is_ident(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Does `text` use `name` as a tool? Always: a call `name(` or a backticked `` `name` `` / `` `name( ``
+/// (the name standing alone, not inside a longer identifier such as `channel_listen(`). With `bare`,
+/// also the bare whole identifier. Callers pass `bare` only where a bare spelling can only be the tool:
+/// a snake_case name, or any name in Chinese text. Plain English words (`contact`, `listen`, `post`,
+/// `ask`) in English prose count only in a call shape, and a name that is also a current value (the
+/// `adopt_parent` action of `crew_structure`) is passed without `bare`.
+fn uses_tool(text: &str, name: &str, bare: bool) -> bool {
+    let mut from = 0;
+    while let Some(i) = text[from..].find(name) {
+        let at = from + i;
+        let end = at + name.len();
+        from = end;
+        let before = text[..at].chars().next_back();
+        let after = text[end..].chars().next();
+        if before.is_some_and(is_ident) || after.is_some_and(is_ident) {
+            continue;
+        }
+        let call = after == Some('(');
+        let ticked = before == Some('`') && matches!(after, Some('`') | Some('('));
+        if call || ticked || bare {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every section body of every md an agent reads, with its locale: the world model, the tool text, the
+/// injection / wake text (render md) and collab's refusals. Section headers and file comments are not
+/// read by agents and are not scanned.
+fn agent_md() -> Vec<(Locale, String, &'static str)> {
+    use crewd_collab::prompts::{PromptFile, refusal_file, render_file};
+    use crewd_collab::worldview::{tools_file, world_file};
+    let mut out = Vec::new();
+    for l in [Locale::Zh, Locale::En] {
+        let files: [(&str, &'static PromptFile); 4] = [
+            ("world-model", world_file(l)),
+            ("tools", tools_file(l)),
+            ("render", render_file(l)),
+            ("refusals", refusal_file(l)),
+        ];
+        for (file, f) in files {
+            for s in f.section_names() {
+                out.push((l, format!("{file}.{l:?} ## {s}"), f.get(s)));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn uses_tool_reads_call_shapes_not_prose_or_action_values() {
+    assert!(uses_tool("找人用 contact(to: \"7-3\")", "contact", false));
+    assert!(uses_tool("use `contact` to reach", "contact", false));
+    assert!(uses_tool("用 contact 找人", "contact", true));
+    assert!(!uses_tool("to contact its captain", "contact", false));
+    assert!(!uses_tool("channel_listen(off: true)", "listen", true));
+    assert!(!uses_tool(
+        "crew_structure(action: \"adopt_parent\")",
+        "adopt_parent",
+        false
+    ));
+    assert!(!uses_tool(
+        "adopt / adopt_parent / release",
+        "adopt_parent",
+        false
+    ));
+    assert!(uses_tool("adopt_parent(target: 3)", "adopt_parent", false));
+    assert!(uses_tool(
+        "（机长的 report_to_parent）",
+        "report_to_parent",
+        true
+    ));
+}
+
+/// C4 / S65: a removed or merged tool (catalog `REMOVED`) is never taught again. The replacement map in
+/// the catalog is the only place the old names live.
+#[test]
+fn no_removed_tool_name_appears_in_agent_text() {
+    use super::catalog::{REMOVED, STRUCTURE_ACTIONS};
+    let md = agent_md();
+    assert!(md.len() > 300, "scanned too little: {}", md.len());
+    let mut hits = Vec::new();
+    for (old, _) in REMOVED {
+        // `adopt_parent` is still a crew_structure action: only its call shape is the old tool.
+        let bare_ok = !STRUCTURE_ACTIONS.contains(old);
+        for (l, what, text) in &md {
+            let bare = bare_ok && (old.contains('_') || *l == Locale::Zh);
+            if uses_tool(text, old, bare) {
+                hits.push(format!("{what}: {old}"));
+            }
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "removed tools still taught:\n{}",
+        hits.join("\n")
+    );
+}
+
+/// S84: roles describe duties; the tool list is per role already, so `role.*`, the `ask*` sections and
+/// `management` name no tool (a second copy of the catalog drifts, as L103 / L106 / L133 did).
+#[test]
+fn role_and_ask_sections_name_no_tools() {
+    use super::catalog::CATALOG;
+    let mut seen = 0;
+    let mut hits = Vec::new();
+    for l in [Locale::Zh, Locale::En] {
+        let f = crewd_collab::worldview::world_file(l);
+        for s in f.section_names() {
+            if !(s.starts_with("role.") || s.starts_with("ask") || s == "management") {
+                continue;
+            }
+            seen += 1;
+            for t in CATALOG {
+                let bare = t.name.contains('_') || l == Locale::Zh;
+                if uses_tool(f.get(s), t.name, bare) {
+                    hits.push(format!("{l:?} ## {s}: {}", t.name));
+                }
+            }
+        }
+    }
+    assert!(
+        seen >= 12,
+        "expected role / ask / management sections in both locales, saw {seen}"
+    );
+    assert!(hits.is_empty(), "{}", hits.join("\n"));
+}
