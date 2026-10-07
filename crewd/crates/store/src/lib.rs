@@ -250,6 +250,23 @@ impl Store {
         Ok(store)
     }
 
+    /// 关库前的收尾（S16）：`PRAGMA optimize`（SQLite 建议关连接前跑）+ `wal_checkpoint(TRUNCATE)`。
+    /// 有读者挡着、检查点没做完时报错（数据不丢：WAL 里的提交下次打开照样在）。
+    pub fn finish(&self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA optimize")?;
+        let (busy, log, done): (i64, i64, i64) =
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+        if busy != 0 {
+            return Err(StoreError::Invalid(format!(
+                "检查点被挡住（WAL {log} 帧，已写回 {done} 帧）"
+            )));
+        }
+        Ok(())
+    }
+
     /// 备份目录（内存库是 `None`）。
     pub fn backups_dir(&self) -> Option<&Path> {
         self.backups.as_deref()
