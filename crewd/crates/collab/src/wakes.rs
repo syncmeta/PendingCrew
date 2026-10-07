@@ -383,14 +383,25 @@ pub fn mark_dropped(tx: &mut Tx<'_>, id: i64, why: &str) -> Result<()> {
     Ok(())
 }
 
-/// 归档机组时把它的 session 还排着队的唤醒（pending / inflight）全部作废：归档机组不让 session 起来，
-/// 留着只会占队、解档后还会把陈旧的叫醒冲出来。同一个事务里调（`crews::archive`）；已投递 / 已作废的不动。
-/// 返回作废了几条。原因写进 `last_error`（`wake.list` 排障看得到）。
+/// 机组的 session 名下正在投递（inflight）的唤醒条数。`crews::archive` 见到非零就拒：投递方随后还要
+/// `mark_delivered` / `requeue`，作废了它们会撞上 dropped。
+pub fn count_inflight_for_crew(conn: &Connection, crew: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM wakes w JOIN sessions s ON s.id=w.session_id
+          WHERE s.crew_id=?1 AND w.state='inflight'",
+        [crew],
+        |r| r.get(0),
+    )?)
+}
+
+/// 归档机组时把它的 session 还排着队的唤醒（**pending**，含 requeue 回来的）作废：归档机组不让 session 起来，
+/// 留着只会占队、解档后还会把陈旧的叫醒冲出来。同一个事务里调（`crews::archive`，它已先确认没有 inflight）；
+/// 已投递 / 已作废的不动。返回作废了几条。原因写进 `last_error`（`wake.list` 排障看得到）。
 pub fn drop_for_crew(tx: &mut Tx<'_>, crew: &str, why: &str) -> Result<usize> {
     let ids: Vec<i64> = {
         let mut st = tx.conn().prepare(
             "SELECT w.id FROM wakes w JOIN sessions s ON s.id=w.session_id
-              WHERE s.crew_id=?1 AND w.state IN ('pending','inflight') ORDER BY w.id",
+              WHERE s.crew_id=?1 AND w.state='pending' ORDER BY w.id",
         )?;
         st.query_map([crew], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?

@@ -496,8 +496,9 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
 /// 拒还有**没归档的子机组**（先挪走或归档子机组，不级联）。写 `crews.archived_at`，把**归属这个机组**的群全部标归档
 /// （每个一条 ChannelChanged；topic / dm 上待接受的群主转让随之作废，同 `channels::update` 归档）。
 /// 消息、session 行、成员行、账本全部保留；父子边不动（解档原地回来）。还开着的问撤回（`asks::withdraw_open_for_archive`，
-/// 解档不重开）。它的 session 排着队的唤醒（pending / inflight）作废（`wakes::drop_for_crew`，原因 "crew archived"，
-/// 同一事务）。已归档 = 原样返回、不发变更。
+/// 解档不重开）。它的 session 排着队的唤醒（pending，含 requeue 回来的）作废（`wakes::drop_for_crew`，原因
+/// "crew archived"，同一事务）；还有 inflight 的唤醒（正在投递）→ Conflict（等投递结束再归档），什么都不变。
+/// 已归档 = 原样返回、不发变更。
 pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_org_root(tx.conn(), id)?;
@@ -518,9 +519,18 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
                 .arg("children", live_kids.join(", ")),
         ));
     }
+    // 还有唤醒正在投递（inflight）就拒：投递方随后还要 mark_delivered / requeue，作废了它们会撞上 dropped。
+    let inflight = crate::wakes::count_inflight_for_crew(tx.conn(), id)?;
+    if inflight > 0 {
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewWakesInflight)
+                .arg("crew", id)
+                .arg("count", inflight.to_string()),
+        ));
+    }
     // 它还开着的问一并撤回（Task 9 复审裁定；解档不重开）。
     crate::asks::withdraw_open_for_archive(tx, id)?;
-    // 它的 session 还排着队的唤醒一并作废（归档的 session 起不来）。
+    // 它的 session 还排着队（pending）的唤醒一并作废（归档的 session 起不来）。
     crate::wakes::drop_for_crew(tx, id, "crew archived")?;
     let now = tx.now_ts();
     tx.conn().execute(
@@ -1679,73 +1689,134 @@ mod tests {
         );
     }
 
-    /// 归档把这个机组的 session 还排着队的唤醒作废（pending / inflight → dropped，原因 "crew archived"，
-    /// 同一个事务）；已投递的、别的机组的唤醒不动。归档的 session 起不来，留着的唤醒只会白占队。
-    #[test]
-    fn archiving_drops_the_queued_wakes_of_the_crews_sessions_and_nothing_else() {
-        use crate::wakes::{self, WakeKind, WakePriority, WakeRequest, WakeState};
-        let mut s = store();
-        let req = |session: &str, kind: WakeKind, source: String| WakeRequest {
+    fn wake_req(
+        session: &str,
+        kind: crate::wakes::WakeKind,
+        source: String,
+    ) -> crate::wakes::WakeRequest {
+        crate::wakes::WakeRequest {
             session: session.into(),
             kind,
             source,
-            priority: WakePriority::Auto,
+            priority: crate::wakes::WakePriority::Auto,
             not_before_ms: None,
             note: None,
             origin: None,
-        };
-        let id = |e: wakes::Enqueued| match e {
-            wakes::Enqueued::New(id) => id,
+        }
+    }
+
+    fn enqueue_id(
+        s: &mut crewd_store::Store,
+        session: &str,
+        kind: crate::wakes::WakeKind,
+        source: String,
+    ) -> i64 {
+        match ok(s, |tx| {
+            crate::wakes::enqueue(tx, wake_req(session, kind, source))
+        }) {
+            crate::wakes::Enqueued::New(id) => id,
             d => panic!("{d:?}"),
-        };
-        let answer = id(ok(&mut s, |tx| {
-            wakes::enqueue(
-                tx,
-                req(
-                    "cap-x",
-                    WakeKind::AskAnswer,
-                    wakes::source::ask("crew-x", "H1"),
-                ),
-            )
-        }));
-        let inflight = id(ok(&mut s, |tx| {
-            wakes::enqueue(
-                tx,
-                req("cap-x", WakeKind::Message, wakes::source::message("m-1")),
-            )
-        }));
+        }
+    }
+
+    fn wake_state(
+        s: &crewd_store::Store,
+        session: &str,
+        id: i64,
+    ) -> (crate::wakes::WakeState, Option<String>) {
+        let r = crate::wakes::list(s.conn(), Some(session), 50)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        (r.state, r.last_error)
+    }
+
+    /// 还有唤醒正在投递（inflight）时归档被拒：否则 M3c 随后的 mark_delivered / requeue 会撞上 dropped。
+    /// 拒绝时什么都不变（排队的唤醒没被作废、问没被撤、机组没归档）。
+    #[test]
+    fn archiving_is_refused_while_a_wake_is_inflight_and_changes_nothing() {
+        use crate::wakes::{self, WakeKind, WakeState};
+        let mut s = store();
+        let pending = enqueue_id(
+            &mut s,
+            "cap-x",
+            WakeKind::AskAnswer,
+            wakes::source::ask("crew-x", "H1"),
+        );
+        let inflight = enqueue_id(
+            &mut s,
+            "cap-x",
+            WakeKind::Message,
+            wakes::source::message("m-1"),
+        );
         ok(&mut s, |tx| wakes::mark_inflight(tx, &[inflight]));
-        let delivered = id(ok(&mut s, |tx| {
-            wakes::enqueue(
-                tx,
-                req("cap-x", WakeKind::Message, wakes::source::message("m-2")),
-            )
-        }));
-        ok(&mut s, |tx| wakes::mark_delivered(tx, &[delivered]));
-        let other = id(ok(&mut s, |tx| {
-            wakes::enqueue(
-                tx,
-                req("cap-a", WakeKind::Message, wakes::source::message("m-3")),
-            )
-        }));
+        let e = err(&mut s, |tx| archive(tx, "crew-x"));
+        match &e {
+            CollabError::Conflict(r) => {
+                assert_eq!(r.code, crate::refusal::Code::CrewWakesInflight, "{e:?}");
+                assert_eq!(r.value("count"), Some("1"));
+                assert_eq!(r.value("crew"), Some("crew-x"));
+            }
+            e => panic!("{e:?}"),
+        }
+        assert!(get(s.conn(), "crew-x").unwrap().archived_at.is_none());
+        assert_eq!(wake_state(&s, "cap-x", pending), (WakeState::Pending, None));
+        assert_eq!(
+            wake_state(&s, "cap-x", inflight),
+            (WakeState::Inflight, None)
+        );
+        // 投递结束后可以归档，M3c 的收尾（mark_delivered）不会撞上。
+        ok(&mut s, |tx| wakes::mark_delivered(tx, &[inflight]));
         ok(&mut s, |tx| archive(tx, "crew-x"));
-        let state = |s: &crewd_store::Store, session: &str, id: i64| {
-            let r = wakes::list(s.conn(), Some(session), 50)
-                .unwrap()
-                .into_iter()
-                .find(|r| r.id == id)
-                .unwrap();
-            (r.state, r.last_error)
-        };
-        for w in [answer, inflight] {
+    }
+
+    /// 归档把这个机组的 session 排着队的唤醒（pending，含 requeue 回来的）作废（原因 "crew archived"，
+    /// 同一个事务）；已投递的、别的机组的唤醒不动。归档的 session 起不来，留着的唤醒只会白占队。
+    #[test]
+    fn archiving_drops_the_pending_wakes_of_the_crews_sessions_and_nothing_else() {
+        use crate::wakes::{self, WakeKind, WakeState};
+        let mut s = store();
+        let answer = enqueue_id(
+            &mut s,
+            "cap-x",
+            WakeKind::AskAnswer,
+            wakes::source::ask("crew-x", "H1"),
+        );
+        let requeued = enqueue_id(
+            &mut s,
+            "cap-x",
+            WakeKind::Message,
+            wakes::source::message("m-1"),
+        );
+        ok(&mut s, |tx| wakes::mark_inflight(tx, &[requeued]));
+        ok(&mut s, |tx| wakes::requeue(tx, &[requeued]));
+        let delivered = enqueue_id(
+            &mut s,
+            "cap-x",
+            WakeKind::Message,
+            wakes::source::message("m-2"),
+        );
+        ok(&mut s, |tx| wakes::mark_delivered(tx, &[delivered]));
+        let other = enqueue_id(
+            &mut s,
+            "cap-a",
+            WakeKind::Message,
+            wakes::source::message("m-3"),
+        );
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        for w in [answer, requeued] {
             assert_eq!(
-                state(&s, "cap-x", w),
+                wake_state(&s, "cap-x", w),
                 (WakeState::Dropped, Some("crew archived".to_string())),
                 "wake {w}"
             );
         }
-        assert_eq!(state(&s, "cap-x", delivered), (WakeState::Delivered, None));
-        assert_eq!(state(&s, "cap-a", other), (WakeState::Pending, None));
+        assert_eq!(
+            wake_state(&s, "cap-x", delivered),
+            (WakeState::Delivered, None)
+        );
+        assert_eq!(wake_state(&s, "cap-a", other), (WakeState::Pending, None));
     }
 
     #[test]

@@ -53,7 +53,7 @@ The lobby members are the whole crew, so nobody is added by hand. To get someone
 A DM is limited to two people. To bring in more people, create a topic channel.
 
 ## channel.archived
-Channel {channel} is archived and takes no messages. Unarchive it to continue, or start a new channel.
+Channel {channel} is archived and takes no messages. Unarchive it to continue, or start a new channel; if its crew is archived, ask the human to unarchive the crew first.
 
 ## channel.add_members_member_only
 Only members of the channel can add people. Ask a member to add them, or have a member add you first.
@@ -77,7 +77,7 @@ You can only leave on your own, or be removed by the owner, the captain or the h
 The owner must transfer ownership to another member before leaving.
 
 ## channel.not_explicit_member
-Not on this channel's member list. Implicit members (the lobby, the captain's human channel) cannot be removed.
+Not on this channel's member list. Implicit members (the lobby, the captain's human channel) cannot be removed; to take someone out, take them out of the crew, or change the captain.
 
 ## channel.owner_follows_captain
 The owner of the lobby and the human channel is the crew captain. To change the owner, change the captain.
@@ -101,7 +101,7 @@ This transfer is not addressed to you; only the named member can accept it.
 There is no ownership transfer waiting to be accepted. The owner must start one first.
 
 ## channel.transfer_withdraw_forbidden
-Only the owner, the member it was offered to, the captain or the human can withdraw this transfer.
+Only the owner, the member it was offered to, the captain or the human can withdraw this transfer. Ask one of them to do it.
 
 ## channel.force_owner_forbidden
 Only the captain or the human can set the owner by force. Ask one of them, or have the owner start a transfer.
@@ -110,10 +110,10 @@ Only the captain or the human can set the owner by force. Ask one of them, or ha
 There is no crew {crew}. List the crews and check the id.
 
 ## crew.archived
-Crew {crew} is archived and read-only. Unarchive it (crew.unarchive) before changing it.
+Crew {crew} is archived and read-only. Ask the human to unarchive it (only the human can, from the client) before changing it.
 
 ## crew.org_root_fixed
-The headquarters crew is the root of the organisation; it cannot be adopted, released, hidden, deleted or archived.
+The headquarters crew is the root of the organisation; it cannot be adopted, released, hidden, deleted or archived. To reorganise, change the crews under it.
 
 ## crew.title_empty
 The crew title cannot be empty. Give the crew a title.
@@ -142,8 +142,11 @@ Crew {crew} still has {running} running sessions. Stop them first.
 ## crew.live_children
 Crew {crew} still has unarchived child crews: {children}. Move them away (crew.release) or archive them first.
 
+## crew.wakes_inflight
+Crew {crew} still has {count} wakes being delivered. Wait for delivery to finish, then archive again.
+
 ## crew.parent_archived
-The parent crews of {crew} ({parents}) are archived, and nothing live may hang under an archived crew. Unarchive that parent first (crew.unarchive). Once it is unarchived, release {crew} from it if you no longer want it there.
+The parent crews of {crew} ({parents}) are archived, and nothing live may hang under an archived crew. Ask the human to unarchive {parents} first; once that is done, release {crew} from them if you no longer want it there.
 
 ## crew.not_archived
 Crew {crew} is not archived. Only archived crews can be deleted permanently; archive it first (crew.delete).
@@ -266,7 +269,7 @@ There is no wake {wake}. Check the wake id.
 Wake {wake} is {from} and cannot become {to}. Check its current state first.
 
 ## wake.latch_bad_scope
-A circuit-breaker ledger id cannot be empty or contain an arrow character. Got: {scope}
+A circuit-breaker ledger id cannot be empty or contain an arrow character. Got: {scope}. Use an id made of ordinary characters.
 
 ## wake.latch_row_unreadable
 wake_latches holds a row that cannot be read: scope={scope} id={id}. This is bad data in the database and needs a human.

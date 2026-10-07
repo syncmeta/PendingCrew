@@ -53,7 +53,7 @@
 私聊只能两个人；要拉更多人就新建一个 topic 群
 
 ## channel.archived
-群 {channel} 已归档，不收消息；要继续就解档，或新开一个群
+群 {channel} 已归档，不收消息；要继续就解档，或新开一个群；它所在的机组若已归档，请人先解档机组
 
 ## channel.add_members_member_only
 只有群成员能拉人；请群里的成员来拉，或先让他们拉你进群
@@ -77,7 +77,7 @@
 群主要先把群主转让给别的成员再退群
 
 ## channel.not_explicit_member
-不在这个群的成员名单里；大厅与机长的人类群里的隐式成员不能被移出
+不在这个群的成员名单里；大厅与机长的人类群里的隐式成员不能被移出，要让他离开就让他离开本机组，或换机长
 
 ## channel.owner_follows_captain
 大厅与人类群的群主跟着机组机长走；要换群主就换机长
@@ -101,7 +101,7 @@
 没有待接受的群主转让；先由群主发起转让
 
 ## channel.transfer_withdraw_forbidden
-只有群主、被转让的人、机长或人能撤回这次转让
+只有群主、被转让的人、机长或人能撤回这次转让；请他们来撤回
 
 ## channel.force_owner_forbidden
 只有机长或人能强制换群主；请他们来操作，或请群主发起转让
@@ -110,10 +110,10 @@
 没有机组 {crew}；先列出机组，核对 id
 
 ## crew.archived
-机组 {crew} 已归档，只读；要动它先解档（crew.unarchive）
+机组 {crew} 已归档，只读；请人先解档它（解档只有人在客户端能做）
 
 ## crew.org_root_fixed
-总机组是组织的根，不能被收编、摘出、隐藏、删除或归档
+总机组是组织的根，不能被收编、摘出、隐藏、删除或归档；要整理组织就动它下面的机组
 
 ## crew.title_empty
 机组名不能为空；给机组起个名字
@@ -142,8 +142,11 @@
 ## crew.live_children
 机组 {crew} 下面还有没归档的子机组 {children}；先把它们挪走（crew.release）或归档
 
+## crew.wakes_inflight
+机组 {crew} 还有 {count} 条唤醒正在投递；等投递结束再归档
+
 ## crew.parent_archived
-机组 {crew} 的上级 {parents} 已归档，归档的机组下面不挂活的；先解档这个上级（crew.unarchive）。解档后若不想再挂在它下面，用 release 把 {crew} 从它摘出
+机组 {crew} 的上级 {parents} 已归档，归档的机组下面不挂活的；请人先解档 {parents}，解档之后若不想让 {crew} 继续挂在它们下面，再用 release 把 {crew} 摘出
 
 ## crew.not_archived
 机组 {crew} 还没归档；永久删除只收已归档的机组，先归档（crew.delete）
@@ -266,7 +269,7 @@ meta.maxLiveSessions 存的是 {value}，不是正整数；改成正整数，或
 唤醒 {wake} 是 {from}，不能改成 {to}；先看它现在的状态
 
 ## wake.latch_bad_scope
-熔断台账的 id 不能为空，也不能含箭头字符；收到：{scope}
+熔断台账的 id 不能为空，也不能含箭头字符；收到：{scope}。换一个只含普通字符的 id
 
 ## wake.latch_row_unreadable
 wake_latches 里有认不出的行：scope={scope} id={id}；这是库里的脏数据，需要人处理

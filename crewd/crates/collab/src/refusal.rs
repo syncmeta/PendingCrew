@@ -72,6 +72,7 @@ refusal_codes! {
     CrewReleaseToRootOtherParents = "crew.release_to_root_other_parents" ["crew", "from"],
     CrewRunningSessions = "crew.running_sessions" ["crew", "running"],
     CrewLiveChildren = "crew.live_children" ["crew", "children"],
+    CrewWakesInflight = "crew.wakes_inflight" ["crew", "count"],
     CrewParentArchived = "crew.parent_archived" ["crew", "parents"],
     CrewNotArchived = "crew.not_archived" ["crew"],
     CrewSessionNotInCrew = "crew.session_not_in_crew" ["session", "crew"],
