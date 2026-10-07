@@ -383,20 +383,29 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
 /// 摘掉的是最后一条父边 = 回到总机组下的末尾；`to` = 总机组 等同 `None`（N1 裁定 4）。
 pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Result<Crew> {
     refuse_org_root(tx.conn(), crew)?;
-    let to = match to {
-        Some(t) if is_org_root(tx.conn(), t)? => None,
-        t => t,
+    let to_root = match to {
+        Some(t) => is_org_root(tx.conn(), t)?,
+        None => false,
     };
+    let to = if to_root { None } else { to };
     get(tx.conn(), crew)?;
     // 不存在的父 = NotFound（控制者裁定 e），与「存在但不是直系父」（Invalid）分开。
     get(tx.conn(), from)?;
-    if !parents(tx.conn(), crew)?.iter().any(|p| p == from) {
+    let ps = parents(tx.conn(), crew)?;
+    if !ps.iter().any(|p| p == from) {
         return Err(CollabError::Invalid(format!(
             "{crew} 不是 {from} 的直系子机组"
         )));
     }
-    if to == Some(from) {
+    // 一级机组从总机组「摘出」、落回总机组下 = 原地不动（不挪到末尾、不发变更；与 adopt 到总机组对称）。
+    if to == Some(from) || (to.is_none() && is_org_root(tx.conn(), from)?) {
         return get(tx.conn(), crew);
+    }
+    // 明说要回到一级，但摘掉这个父之后还挂在别的上级下：回不到一级，拒并指路（不悄悄留在原处）。
+    if to_root && ps.len() > 1 {
+        return Err(CollabError::Invalid(format!(
+            "挪到一级：先解除 {crew} 的其它上级（release），只剩 {from} 时再摘到总机组下"
+        )));
     }
     if let Some(t) = to {
         adopt(tx, crew, t)?;
@@ -1634,6 +1643,45 @@ mod tests {
             ids(&s),
             ["chief", n.id.as_str(), "crew-x", "crew-b", "crew-a"]
         );
+    }
+
+    /// 从总机组「摘出」一级机组（`to` 缺省或就是总机组）= 原地不动：不能把它挪到一级的末尾
+    /// （只有 reorder 动次序），也不发变更——与 `adopt(一级机组, 总机组)` 对称。
+    #[test]
+    fn releasing_a_first_level_crew_from_the_org_root_is_a_no_op() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            reorder(tx, "chief", &["crew-a".into(), "crew-x".into()])
+        });
+        for to in [None, Some("chief")] {
+            let (c, changes) = ok_at(&mut s, NOW, |tx| release(tx, "crew-a", "chief", to));
+            assert_eq!(c.parent_ids, ["chief"], "{to:?}");
+            assert!(changes.is_empty(), "{to:?}: {changes:?}");
+            assert_eq!(
+                children(s.conn(), "chief").unwrap(),
+                ["crew-a", "crew-x"],
+                "{to:?}"
+            );
+        }
+    }
+
+    /// 多父的机组「摘到总机组下」：摘掉一个父之后它还挂在别的上级下，回不到一级——拒并指路，不悄悄留在原处。
+    #[test]
+    fn releasing_to_the_org_root_with_other_parents_left_is_refused() {
+        let mut s = store();
+        ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
+        let e = err(&mut s, |tx| release(tx, "crew-b", "crew-a", Some("chief")));
+        assert!(
+            matches!(&e, CollabError::Invalid(m) if m.contains("其它上级")),
+            "{e:?}"
+        );
+        let mut ps = parents(s.conn(), "crew-b").unwrap();
+        ps.sort();
+        assert_eq!(ps, ["crew-a", "crew-x"], "什么都没动");
+        // 只剩这一个父时摘到总机组下照常。
+        ok(&mut s, |tx| release(tx, "crew-b", "crew-x", None));
+        let c = ok(&mut s, |tx| release(tx, "crew-b", "crew-a", Some("chief")));
+        assert_eq!(c.parent_ids, ["chief"]);
     }
 
     /// 根的轻量规则（N1 裁定 6）：总机组不能被隐藏；取消隐藏 / 别的机组照常。
