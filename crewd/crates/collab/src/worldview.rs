@@ -19,7 +19,7 @@ pub struct WorldCtx {
     pub child_titles: Vec<String>,
     /// 它在的群（id）。
     pub channels: Vec<String>,
-    /// 找人类该发到哪：人类正在注视的群 + home（总机组 / 一级机组）的人类群（§17）。
+    /// 找人类该发到哪：人类正在注视的群 + home（总机组 / 顶层机组）的人类群（§17）。
     pub human_watching: Vec<String>,
 }
 

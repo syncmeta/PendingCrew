@@ -642,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn registering_a_captain_pins_the_root_human_channel_like_set_captain() {
+    fn registering_a_captain_pins_the_home_human_channel_like_set_captain() {
         let mut s = store();
         let crew = ok(&mut s, |tx| {
             crate::crews::create(

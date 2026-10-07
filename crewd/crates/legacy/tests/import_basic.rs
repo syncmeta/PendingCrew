@@ -386,12 +386,12 @@ fn several_builtin_crews_in_legacy_data_keep_only_the_earliest_as_the_management
     let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
     let r = import(t.path(), &mut store, dest.path()).unwrap();
     let list = crewd_store::crews::list(store.conn()).unwrap();
-    let roots: Vec<_> = list
+    let management: Vec<_> = list
         .iter()
         .filter(|c| c.management)
         .map(|c| c.id.as_str())
         .collect();
-    assert_eq!(roots, ["pendingcrew-chief"]);
+    assert_eq!(management, ["pendingcrew-chief"]);
     assert!(
         r.warnings.iter().any(|w| w.contains("local-bbbb")),
         "{:?}",

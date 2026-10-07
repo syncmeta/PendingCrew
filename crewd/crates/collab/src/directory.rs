@@ -166,13 +166,13 @@ mod tests {
             numbers(&rows),
             ["0", "1", "1-1", "1-2", "1-3", "2", "2-1", "2-2", "3", "3-1"]
         );
-        let root = rows.iter().find(|r| r.number == "0").unwrap();
+        let management = rows.iter().find(|r| r.number == "0").unwrap();
         assert_eq!(
-            (root.crew_id.as_str(), root.org_path.as_str()),
+            (management.crew_id.as_str(), management.org_path.as_str()),
             ("chief", "")
         );
         let a = rows.iter().find(|r| r.number == "1").unwrap();
-        assert_eq!(a.org_path, "", "总机组不进组织路径");
+        assert_eq!(a.org_path, "", "顶层机组的组织路径为空");
         let b = rows.iter().find(|r| r.number == "2").unwrap();
         assert_eq!(b.org_path, "机组甲");
         let b1 = rows.iter().find(|r| r.number == "2-2").unwrap();

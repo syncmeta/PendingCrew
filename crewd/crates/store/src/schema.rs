@@ -721,7 +721,7 @@ mod tests {
                 ("c2".to_string(), Some("codex".to_string())),
                 ("c3".to_string(), None),
                 ("c4".to_string(), Some("unknown".to_string())),
-                // v4：库里有机组而没有内建机组 → 建出总机组（N1 裁定 2），其余四个挂到它下面。
+                // v4：库里有机组而没有内建机组 → 建出总机组（N1 裁定 2），其余四个仍是顶层机组（总机组不在树里）。
                 (crate::crews::MANAGEMENT_ID.to_string(), None),
             ]
         );
