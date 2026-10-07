@@ -1285,8 +1285,11 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
     fn v3_db() -> Connection {
         let c = v2_db();
         migrate_v3(&c).unwrap();
-        c.execute_batch(
-            r#"
+        c.execute_batch(V3_EXTRA).unwrap();
+        c
+    }
+
+    const V3_EXTRA: &str = r#"
 INSERT INTO crews(id,title,number,builtin,created_at,updated_at) VALUES
   ('crew-x','另一个根',3,0,'2026-09-03T00:00:00.000Z','2026-09-03T00:00:00.000Z');
 INSERT INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES
@@ -1297,10 +1300,95 @@ UPDATE crews SET position = CASE id WHEN 'crew-x' THEN 1 WHEN 'crew-a' THEN 2 EL
 INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-b','chief',0);
 INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,created_at) VALUES
   ('worker-a1','ask_answer','approval:ap-1','human',0,'pending',0,'2026-09-04T00:00:00.000Z');
-"#,
-        )
-        .unwrap();
-        c
+"#;
+
+    /// 同一份 v3 数据落在文件里（WAL）。`stamped` = N4 之后的 v3 库：带 application_id / dbId，
+    /// 旁边有 `crewd.db.id`（main 上的 crewd 跑过的库就是这样）；否则是 N4 之前、没有身份的 v3 库。
+    fn v3_data_dir(dir: &std::path::Path, stamped: bool) {
+        let p = dir.join(crate::DB_FILE);
+        v2_file(&p);
+        let c = Connection::open(&p).unwrap();
+        migrate_v3(&c).unwrap();
+        c.execute_batch(V3_EXTRA).unwrap();
+        if stamped {
+            crate::mark_identity(&c).unwrap();
+            let _: i64 = c
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+                .unwrap();
+            let id = crate::meta_get(&c, "dbId").unwrap().unwrap();
+            let rec = crate::IdRecord {
+                id,
+                ino: Some(crate::inode_of(&p).unwrap()),
+            };
+            std::fs::write(dir.join(crate::ID_FILE), rec.render()).unwrap();
+        }
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+    }
+
+    /// N1 × N4：v3 → v4 走 `open_data_dir` 的守卫链——迁移前先在 backups/ 拍一份 v3 快照（审批表、
+    /// builtin 列都还在），再在一个事务里升到 v4。没身份的旧库与 N4 之后带身份的库各一遍。
+    #[test]
+    fn a_v3_data_dir_is_snapshotted_then_migrated_to_v4_through_the_guarded_open() {
+        for stamped in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            v3_data_dir(d.path(), stamped);
+            let s = crate::Store::open_data_dir(d.path()).unwrap();
+            assert_eq!(
+                one::<i64>(s.conn(), "PRAGMA user_version"),
+                4,
+                "stamped={stamped}"
+            );
+            assert_eq!(
+                one::<i64>(s.conn(), "SELECT COUNT(*) FROM crews WHERE org_root=1"),
+                1
+            );
+            assert_eq!(
+                one::<i64>(
+                    s.conn(),
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+                ),
+                0
+            );
+            assert_eq!(
+                one::<String>(
+                    s.conn(),
+                    "SELECT state FROM wakes WHERE source='approval:ap-1'"
+                ),
+                "dropped"
+            );
+            let snaps = snapshots(&d.path().join(crate::backup::BACKUPS_DIR));
+            assert_eq!(snaps.len(), 1, "stamped={stamped}: {snaps:?}");
+            let name = snaps[0].file_name().unwrap().to_string_lossy().into_owned();
+            assert!(name.starts_with("crewd-v3-pre-v4-"), "{name}");
+            let snap = Connection::open(&snaps[0]).unwrap();
+            assert_eq!(one::<i64>(&snap, "PRAGMA user_version"), 3);
+            assert_eq!(
+                one::<i64>(&snap, "SELECT COUNT(*) FROM approvals"),
+                0,
+                "快照是 v3 的形状：审批表还在"
+            );
+            assert_eq!(
+                one::<i64>(&snap, "SELECT COUNT(*) FROM crews WHERE builtin=1"),
+                1
+            );
+            assert_eq!(
+                one::<String>(
+                    &snap,
+                    "SELECT state FROM wakes WHERE source='approval:ap-1'"
+                ),
+                "pending",
+                "快照拍在任何 v4 写之前"
+            );
+            assert_eq!(one::<String>(&snap, "PRAGMA quick_check"), "ok");
+            assert!(d.path().join(crate::ID_FILE).exists());
+            // 再开一次：已是 v4，不再拍。
+            drop(s);
+            drop(crate::Store::open_data_dir(d.path()).unwrap());
+            assert_eq!(
+                snapshots(&d.path().join(crate::backup::BACKUPS_DIR)).len(),
+                1
+            );
+        }
     }
 
     fn rows(c: &Connection, sql: &str) -> Vec<String> {
