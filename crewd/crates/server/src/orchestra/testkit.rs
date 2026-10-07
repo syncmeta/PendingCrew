@@ -79,6 +79,8 @@ pub struct MemState {
     pub renders: usize,
     /// 设了就让 `ack(Delivered)` 的游标那一步出错（模拟库在同一事务里推游标失败）：整批回滚。
     pub advance_error: Option<String>,
+    /// 设了就让 `put_latch` 出错（模拟熔断台账写不进去）。
+    pub latch_error: Option<String>,
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -530,6 +532,9 @@ impl Port for MemPort {
 
     async fn put_latch(&self, l: &Latch) -> Result<()> {
         let mut st = self.lock();
+        if let Some(e) = &st.latch_error {
+            anyhow::bail!("{e}");
+        }
         st.latches.retain(|x| (x.scope, &x.id) != (l.scope, &l.id));
         st.latches.push(l.clone());
         Ok(())

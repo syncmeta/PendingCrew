@@ -332,7 +332,10 @@ impl<P: Port> Core<P> {
                 Verdict::Pass => true,
                 Verdict::Held(_) => false,
                 Verdict::Tripped(latch) => {
+                    // 先落库、再在内存里生效（P2 / R12）：写不进去就这次不熔断（错误往上抛，唤醒留在 pending），
+                    // 内存与库不分叉——重启后也不会「库里没有、内存里有」地放掉这条环路。
                     self.port.put_latch(&latch).await?;
+                    self.breaker.latch(latch.clone());
                     self.notify_loop(session, &latch, o, w).await?;
                     false
                 }
@@ -1178,6 +1181,29 @@ mod tests {
             rig.exec.sent("w1").last().map(String::as_str),
             Some("人来了")
         );
+    }
+
+    /// P2 / R12：熔断先落库、再在内存里生效。台账写不进去 → 这一次不熔断（内存与库一致：都没有），也不发通知；
+    /// 那条唤醒留在 pending。写得进去了，下一拍照样判出来、落库、生效、通知。
+    #[tokio::test]
+    async fn a_trip_that_cannot_be_persisted_does_not_take_effect() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["cap", "w1"]).await;
+        rig.port.lock().latch_error = Some("合成：台账写不进去".into());
+        assert_eq!(ping_pong_until_cut(&mut rig).await, LOOP_LIMITS.edge_max);
+        assert!(rig.core.breaker.held("w1", "cap").is_none(), "内存没先生效");
+        assert!(rig.port.lock().latches.is_empty());
+        assert!(rig.port.posts().is_empty(), "{:?}", rig.port.posts());
+        assert_eq!(
+            rig.port.pending("w1").await.unwrap().len(),
+            1,
+            "没投的那条留着"
+        );
+        rig.port.lock().latch_error = None;
+        rig.tick(SEC).await;
+        assert!(rig.core.breaker.held("w1", "cap").is_some());
+        assert_eq!(rig.port.lock().latches.len(), 1);
+        assert!(!rig.port.posts().is_empty(), "落成了才通知");
     }
 
     #[tokio::test]

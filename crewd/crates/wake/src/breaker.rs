@@ -111,17 +111,21 @@ impl LoopBreaker {
         None
     }
 
-    /// 判一次并在 `Pass` 时立刻记下（= [`judge`](Self::judge) + [`record`](Self::record)）。
+    /// 判一次并立刻生效：`Pass` 记下、`Tripped` 当场 latch（= [`judge`](Self::judge) + [`record`](Self::record) /
+    /// [`latch`](Self::latch)；没有落库这一步的调用方用，例如本 crate 的测试）。
     pub fn admit(&mut self, target: &str, origin: &str, now: Ms) -> Verdict {
         let v = self.judge(target, origin, now);
-        if v == Verdict::Pass {
-            self.record(target, origin, now);
+        match &v {
+            Verdict::Pass => self.record(target, origin, now),
+            Verdict::Tripped(l) => self.latch(l.clone()),
+            Verdict::Held(_) => {}
         }
         v
     }
 
-    /// 投递前问：被挡着 / 这一次该熔断（熔断即记下台账）/ 放行。**放行不计数**——IO 层只在投进去了之后
-    /// 调 [`record`](Self::record)（Task 8 评审：渲染失败、投递失败、只有积压的批都不算一次唤醒）。
+    /// 投递前问：被挡着 / 这一次该熔断 / 放行。**只判、不改**：放行不计数——IO 层只在投进去了之后调
+    /// [`record`](Self::record)（Task 8 评审：渲染失败、投递失败、只有积压的批都不算一次唤醒）；熔断也不当场生效——
+    /// IO 层先把台账落库、成功了再 [`latch`](Self::latch)（C24 P2 / R12：落库失败时内存与库不分叉）。
     pub fn judge(&mut self, target: &str, origin: &str, now: Ms) -> Verdict {
         if origin == HUMAN {
             return Verdict::Pass;
@@ -171,15 +175,18 @@ impl LoopBreaker {
             .push((now, origin.to_string()));
     }
 
-    fn trip(&mut self, scope: LatchScope, id: String, count: usize, now: Ms) -> Latch {
-        let latch = Latch {
+    fn trip(&self, scope: LatchScope, id: String, count: usize, now: Ms) -> Latch {
+        Latch {
             scope,
-            id: id.clone(),
+            id,
             reason: format!("no-progress:{count}/{}min", self.limits.window_ms / MIN),
             at: now,
-        };
-        self.latches.insert((scope, id), latch.clone());
-        latch
+        }
+    }
+
+    /// 让一条熔断生效（台账已落库之后调）。之后 [`held`](Self::held) 就挡它。
+    pub fn latch(&mut self, l: Latch) {
+        self.latches.insert((l.scope, l.id.clone()), l);
     }
 
     /// 目标有了产出（工具调用、工作项变化）。
@@ -259,6 +266,28 @@ mod tests {
         assert!(matches!(b.judge("b", "a", T0), Verdict::Tripped(_)));
         b.record("b", HUMAN, T0);
         assert_eq!(b.streak_len("b"), LOOP_LIMITS.edge_max, "人不记");
+    }
+
+    /// P2 / R12：`judge` 判出熔断但不改自己——调用方先把台账落库、成功了再 `latch`（落库失败时内存与库不分叉）。
+    #[test]
+    fn a_trip_holds_only_once_the_caller_takes_the_latch() {
+        let mut b = lb();
+        for _ in 0..LOOP_LIMITS.edge_max {
+            b.record("b", "a", T0);
+        }
+        let Verdict::Tripped(l) = b.judge("b", "a", T0) else {
+            panic!("该熔断")
+        };
+        assert!(b.held("b", "a").is_none(), "还没 latch：不挡");
+        assert!(b.latches().is_empty());
+        assert_eq!(
+            b.judge("b", "a", T0),
+            Verdict::Tripped(l.clone()),
+            "没落成的熔断下一次照样判出来"
+        );
+        b.latch(l.clone());
+        assert_eq!(b.held("b", "a"), Some(&l));
+        assert_eq!(b.judge("b", "a", T0), Verdict::Held(l));
     }
 
     fn round(i: usize) -> Ms {
