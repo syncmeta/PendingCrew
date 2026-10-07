@@ -590,13 +590,8 @@ pub struct SettingsView {
     pub hibernate_deadline_secs: Option<u32>,
 }
 
-/// 改设置（`settings.set`）：外层 None = 不改；`max_live` / `hibernate_deadline_secs` 里层 None = 清掉（回到默认）。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SettingsUpdate {
-    pub lang: Option<text::Lang>,
-    pub max_live: Option<Option<usize>>,
-    pub hibernate_deadline_secs: Option<Option<u32>>,
-}
+/// 改设置（`settings.set`）的数据形状在 Port 那边（一个事务写完，[`Port::set_settings`]）。
+pub use super::port::SettingsUpdate;
 
 impl<P: Port> Core<P> {
     pub async fn new(

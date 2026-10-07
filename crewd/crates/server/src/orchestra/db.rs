@@ -606,12 +606,6 @@ impl Port for DbPort {
             .await
     }
 
-    async fn set_max_live(&self, max: Option<usize>) -> Result<()> {
-        let max = max.map(u32::try_from).transpose()?;
-        self.write(move |tx| collab::settings::set_max_live_sessions(tx, max))
-            .await
-    }
-
     async fn locale(&self) -> Result<Lang> {
         self.read(|c| {
             Ok(match collab::settings::locale(c)? {
@@ -622,13 +616,30 @@ impl Port for DbPort {
         .await
     }
 
-    async fn set_locale(&self, l: Lang) -> Result<()> {
-        let l = match l {
-            Lang::Zh => collab::Locale::Zh,
-            Lang::En => collab::Locale::En,
+    /// 一个 collab 事务：任何一步被拒（collab 的规则，如上限 0）整个回滚。
+    async fn set_settings(&self, u: &SettingsUpdate) -> Result<()> {
+        let max = match u.max_live {
+            Some(m) => Some(m.map(u32::try_from).transpose()?),
+            None => None,
         };
-        self.write(move |tx| collab::settings::set_locale(tx, l))
-            .await
+        let (lang, secs) = (u.lang, u.hibernate_deadline_secs);
+        self.write(move |tx| {
+            if let Some(l) = lang {
+                let l = match l {
+                    Lang::Zh => collab::Locale::Zh,
+                    Lang::En => collab::Locale::En,
+                };
+                collab::settings::set_locale(tx, l)?;
+            }
+            if let Some(secs) = secs {
+                collab::settings::set_hibernate_deadline_secs(tx, secs)?;
+            }
+            if let Some(max) = max {
+                collab::settings::set_max_live_sessions(tx, max)?;
+            }
+            Ok(())
+        })
+        .await
     }
 
     async fn open_restart(
@@ -681,11 +692,6 @@ impl Port for DbPort {
 
     async fn hibernate_deadline_secs(&self) -> Result<Option<u32>> {
         self.read(collab::settings::hibernate_deadline_secs).await
-    }
-
-    async fn set_hibernate_deadline_secs(&self, secs: Option<u32>) -> Result<()> {
-        self.write(move |tx| collab::settings::set_hibernate_deadline_secs(tx, secs))
-            .await
     }
 
     async fn hibernate_record(&self) -> Result<Option<HibernateRecord>> {

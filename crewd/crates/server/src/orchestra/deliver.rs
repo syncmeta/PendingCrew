@@ -1141,7 +1141,10 @@ impl<P: Port> Core<P> {
             .clear_latch(scope, id)
             .await
             .map_err(ControlError::from_port)?;
-        self.rescan().await.map_err(ControlError::from_port)?;
+        // 熔断已经解了（库里也清了）：之后的重扫出错只记日志（修复轮 M4），回「解了」——不然人会以为没解、再点一次。
+        if let Err(e) = self.rescan().await {
+            eprintln!("crewd: 编排：熔断已解，之后的重扫出错（下一拍再试）：{e:#}");
+        }
         Ok(true)
     }
 
@@ -3389,5 +3392,30 @@ mod tests {
             .unwrap_err();
         assert_eq!(e, ControlError::NotFound("w1".into()));
         assert_eq!(e.refusal().unwrap().value("session"), Some("w1"));
+    }
+
+    /// 修复轮 M4：解熔断、改上限都已存下之后，重扫读库出错只记日志——回执照实说「解了 / 改了」，不回失败。
+    #[tokio::test]
+    async fn a_failed_rescan_after_a_saved_change_is_logged_not_returned() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["cap", "w1"]).await;
+        ping_pong_until_cut(&mut rig).await;
+        rig.port.lock().due_error = Some("合成：读不出到期的".into());
+        let r = rig
+            .cmd(|reply| Cmd::Recover {
+                scope: LatchScope::Edge,
+                id: edge_id("cap", "w1"),
+                reply,
+            })
+            .await;
+        assert_eq!(r, Ok(true));
+        assert!(rig.port.lock().latches.is_empty(), "库里也清了");
+        let update = SettingsUpdate {
+            max_live: Some(Some(5)),
+            ..Default::default()
+        };
+        let got = rig.cmd(|reply| Cmd::SetSettings { update, reply }).await;
+        assert_eq!(got.map(|s| s.max_live), Ok(Some(5)));
+        assert_eq!(rig.core.gate.max_live(), Some(5));
     }
 }

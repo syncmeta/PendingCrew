@@ -1005,22 +1005,38 @@ async fn wakes_for_message_lists_each_target_in_order<W: World>() {
     assert!(p.wakes_for_message("nope").await.unwrap().is_empty());
 }
 
-/// S49：三个设置各自写、各自读回；null 清掉（回到默认）。
+/// S49：三个设置一起写、读回；null 清掉（回到默认）；没给的不动；被拒的一次什么都不改（一个事务，修复轮 M4）。
 async fn settings_round_trip<W: World>() {
     use crewd_wake::text::Lang;
     let w = W::new().await;
     let p = w.port();
     assert_eq!(p.locale().await.unwrap(), Lang::Zh);
-    p.set_locale(Lang::En).await.unwrap();
+    let all = SettingsUpdate {
+        lang: Some(Lang::En),
+        max_live: Some(Some(3)),
+        hibernate_deadline_secs: Some(Some(0)),
+    };
+    p.set_settings(&all).await.unwrap();
     assert_eq!(p.locale().await.unwrap(), Lang::En);
-    p.set_hibernate_deadline_secs(Some(0)).await.unwrap();
     assert_eq!(p.hibernate_deadline_secs().await.unwrap(), Some(0));
-    p.set_hibernate_deadline_secs(None).await.unwrap();
-    assert_eq!(p.hibernate_deadline_secs().await.unwrap(), None);
-    p.set_max_live(Some(3)).await.unwrap();
     assert_eq!(p.max_live().await.unwrap(), Some(3));
-    p.set_max_live(None).await.unwrap();
+    let bad = SettingsUpdate {
+        lang: Some(Lang::Zh),
+        hibernate_deadline_secs: Some(Some(9)),
+        max_live: Some(Some(0)),
+    };
+    assert!(p.set_settings(&bad).await.is_err(), "上限 0 被拒");
+    assert_eq!(p.locale().await.unwrap(), Lang::En, "一个事务：语言也没改");
+    assert_eq!(p.hibernate_deadline_secs().await.unwrap(), Some(0));
+    let clear = SettingsUpdate {
+        max_live: Some(None),
+        hibernate_deadline_secs: Some(None),
+        ..Default::default()
+    };
+    p.set_settings(&clear).await.unwrap();
     assert_eq!(p.max_live().await.unwrap(), None);
+    assert_eq!(p.hibernate_deadline_secs().await.unwrap(), None);
+    assert_eq!(p.locale().await.unwrap(), Lang::En, "没给的不动");
 }
 
 /// T10a 复审：归档的 dm 里没有人「在」——没有成员、也没有 dm 各方（两边一致；MemPort 曾照旧给 dm 各方）。

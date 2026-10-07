@@ -242,6 +242,14 @@ pub struct Rendered {
     pub cursor_targets: Vec<(String, i64)>,
 }
 
+/// 改设置（`settings.set`）：外层 None = 不改；`max_live` / `hibernate_deadline_secs` 里层 None = 清掉（回到默认）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsUpdate {
+    pub lang: Option<crewd_wake::text::Lang>,
+    pub max_live: Option<Option<usize>>,
+    pub hibernate_deadline_secs: Option<Option<u32>>,
+}
+
 /// M3c 自己发的事件（M3a 的协作事件由 collab 发）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestraEvent {
@@ -348,9 +356,9 @@ pub trait Port: Send + Sync + 'static {
     // —— 设置（M3a `collab::settings`）
     /// 可选并发上限（§22.7 Q5：缺省 None = 不设）。
     fn max_live(&self) -> impl Future<Output = Result<Option<usize>>> + Send;
-    fn set_max_live(&self, max: Option<usize>) -> impl Future<Output = Result<()>> + Send;
     fn locale(&self) -> impl Future<Output = Result<crewd_wake::text::Lang>> + Send;
-    fn set_locale(&self, l: crewd_wake::text::Lang) -> impl Future<Output = Result<()>> + Send;
+    /// 改设置（`settings.set`）：给了的才写，**一个事务**——库拒了其中一个（如上限 0）就什么都不改（修复轮 M4）。
+    fn set_settings(&self, u: &SettingsUpdate) -> impl Future<Output = Result<()>> + Send;
     // —— 重启询问与默认方案（M3a `collab::restart` / `collab::asks`）
     /// 开一次「是否恢复这些 session」的询问（M3a 在相关根机组人类群各发一条 @人）。返回询问 id；名单空 = None。
     /// `reason = Hibernate`（C26）：公告说「上次休眠了 N 个」，休眠记录记下这条询问（collab `restart::open_with`）。
@@ -369,11 +377,6 @@ pub trait Port: Send + Sync + 'static {
     // —— 休眠（C26；collab `settings::hibernate_deadline_secs`、`hibernate::{get, put}`）
     /// 休眠期限的设置（秒）；None = 没设（用 `crewd_wake::policy::DEFAULT_HIBERNATE_DEADLINE_SECS`）。
     fn hibernate_deadline_secs(&self) -> impl Future<Output = Result<Option<u32>>> + Send;
-    /// None = 回到默认值。
-    fn set_hibernate_deadline_secs(
-        &self,
-        secs: Option<u32>,
-    ) -> impl Future<Output = Result<()>> + Send;
     /// 最近一次休眠的记录。
     fn hibernate_record(&self) -> impl Future<Output = Result<Option<HibernateRecord>>> + Send;
     /// 整份写入（`prompt_id` 原样保留调用方给的）。

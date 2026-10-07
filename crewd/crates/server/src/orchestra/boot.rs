@@ -105,38 +105,27 @@ impl<P: Port> Core<P> {
         })
     }
 
-    /// 改设置（`settings.set`，S49）：给了的才写；写完刷新内存里的语言（给 agent / 群的文字）与启动闸。
-    /// 值的核对在 RPC 那一层先做完（一个不对就什么都不改）；库再拒（collab 的规则）照样带码上抛。
+    /// 改设置（`settings.set`，S49）：给了的才写，**一个事务**（修复轮 M4：库拒了其中一个就什么都不改）；写完刷新
+    /// 内存里的语言（给 agent / 群的文字）与启动闸。值的核对 RPC 那一层先做；库再拒照样带码上抛。上限变了之后的重扫
+    /// （可能有被上限挡着的现在能拉起了）出错只记日志：设置已经存下了，不能回「失败」让人以为没改。
     pub(crate) async fn set_settings(
         &mut self,
         u: SettingsUpdate,
     ) -> Result<SettingsView, ControlError> {
-        if let Some(lang) = u.lang {
-            self.port
-                .set_locale(lang)
-                .await
-                .map_err(ControlError::from_port)?;
-            self.cfg.lang = lang;
-        }
-        if let Some(secs) = u.hibernate_deadline_secs {
-            self.port
-                .set_hibernate_deadline_secs(secs)
-                .await
-                .map_err(ControlError::from_port)?;
-        }
-        if let Some(max) = u.max_live {
-            self.set_max_live(max).await?;
-        }
-        self.settings().await
-    }
-
-    pub(crate) async fn set_max_live(&mut self, max: Option<usize>) -> Result<(), ControlError> {
         self.port
-            .set_max_live(max)
+            .set_settings(&u)
             .await
             .map_err(ControlError::from_port)?;
-        self.gate.set_max_live(max);
-        self.rescan().await.map_err(ControlError::from_port)
+        if let Some(lang) = u.lang {
+            self.cfg.lang = lang;
+        }
+        if let Some(max) = u.max_live {
+            self.gate.set_max_live(max);
+            if let Err(e) = self.rescan().await {
+                eprintln!("crewd: 编排：上限已改，之后的重扫出错（下一拍再试）：{e:#}");
+            }
+        }
+        self.settings().await
     }
 
     /// 停机：关上停机闸（不投、不拉起、不起 / 恢复会话），用 [`Core::halt`] 叫停全部在跑的（不改 desired /

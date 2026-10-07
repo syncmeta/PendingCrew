@@ -116,6 +116,8 @@ pub struct MemState {
     pub claim_race: Option<i64>,
     /// 设了就让 `session` 读出一个存储故障（同库：`StoreError::Storage` 经 anyhow 上抛，S26）。
     pub storage_error: Option<crewd_store::StorageKind>,
+    /// 设了就让 `due_sessions` 出错（模拟重扫读库失败）。
+    pub due_error: Option<String>,
     /// 唤醒 id → 结算（delivered / dropped）时刻（同 collab `settled_at`；`prune_wakes` 按它清，见 [`mark_settled`]）。
     pub settled_at: BTreeMap<i64, Ms>,
     /// `post_system` 每一条 @ 了谁（与 `posted` 一一对应）：session id，人 = `"human"`（同 DbPort 发出的 mentions）。
@@ -727,6 +729,9 @@ impl Port for MemPort {
 
     async fn due_sessions(&self, now: Ms) -> Result<Vec<String>> {
         let st = self.lock();
+        if let Some(e) = &st.due_error {
+            anyhow::bail!("{e}");
+        }
         let mut best: BTreeMap<String, (crewd_wake::Priority, i64)> = BTreeMap::new();
         for w in st.wakes.iter().filter(|w| is_due(w, now)) {
             let e = best.entry(w.session.clone()).or_insert((w.priority, w.id));
@@ -802,11 +807,6 @@ impl Port for MemPort {
         Ok(self.lock().max_live)
     }
 
-    async fn set_max_live(&self, max: Option<usize>) -> Result<()> {
-        self.lock().max_live = max;
-        Ok(())
-    }
-
     async fn locale(&self) -> Result<crewd_wake::text::Lang> {
         let st = self.lock();
         if let Some(e) = &st.locale_error {
@@ -815,8 +815,25 @@ impl Port for MemPort {
         Ok(st.locale.unwrap_or(crewd_wake::text::Lang::Zh))
     }
 
-    async fn set_locale(&self, l: crewd_wake::text::Lang) -> Result<()> {
-        self.lock().locale = Some(l);
+    /// 同 DbPort：全有或全无。库拒上限 0（collab `settings.max_live_min`），这里照样拒、而且什么都不改。
+    async fn set_settings(&self, u: &SettingsUpdate) -> Result<()> {
+        if u.max_live == Some(Some(0)) {
+            return Err(anyhow::Error::new(crewd_collab::CollabError::Invalid(
+                crewd_collab::refusal::Refusal::new(
+                    crewd_collab::refusal::Code::SettingsMaxLiveMin,
+                ),
+            )));
+        }
+        let mut st = self.lock();
+        if let Some(l) = u.lang {
+            st.locale = Some(l);
+        }
+        if let Some(secs) = u.hibernate_deadline_secs {
+            st.hibernate_deadline = secs;
+        }
+        if let Some(max) = u.max_live {
+            st.max_live = max;
+        }
         Ok(())
     }
 
@@ -850,11 +867,6 @@ impl Port for MemPort {
 
     async fn hibernate_deadline_secs(&self) -> Result<Option<u32>> {
         Ok(self.lock().hibernate_deadline)
-    }
-
-    async fn set_hibernate_deadline_secs(&self, secs: Option<u32>) -> Result<()> {
-        self.lock().hibernate_deadline = secs;
-        Ok(())
     }
 
     async fn hibernate_record(&self) -> Result<Option<HibernateRecord>> {
