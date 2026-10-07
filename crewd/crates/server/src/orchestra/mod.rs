@@ -108,21 +108,9 @@ impl std::fmt::Display for ActorDied {
 impl std::error::Error for ActorDied {}
 
 impl Actor {
-    /// 等 actor 结束：停机完成 = `Ok`；panic / 被取消 = `Err`（带 panic 的原话）。
+    /// 等 actor 结束：停机完成 = `Ok`；panic / 被取消 = `Err`（tokio 的 `JoinError` 文字里带着 panic 的原话）。
     pub async fn finished(self) -> Result<(), ActorDied> {
-        match self.task.await {
-            Ok(()) => Ok(()),
-            Err(e) if e.is_panic() => {
-                let p = e.into_panic();
-                let why = p
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| p.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "（panic 没带文字）".into());
-                Err(ActorDied(why))
-            }
-            Err(e) => Err(ActorDied(e.to_string())),
-        }
+        self.task.await.map_err(|e| ActorDied(e.to_string()))
     }
 }
 
