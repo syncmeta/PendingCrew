@@ -484,16 +484,6 @@ mod tests {
         assert_eq!(r.is_error, error, "{}", r.text);
     }
 
-    async fn management_crew(f: &Fixture) -> String {
-        f.state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create creates the management crew")
-    }
-
     async fn number_of(f: &Fixture, crew: &str) -> String {
         port::crew(&f.state, crew)
             .await
@@ -669,7 +659,7 @@ mod tests {
     #[tokio::test]
     async fn management_captain_starts_in_another_crew() {
         let f = Fixture::new().await;
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let n = number_of(&f, &f.crew).await;
@@ -813,7 +803,7 @@ mod tests {
         says(&r, true, "r.stop_reason_empty", &[]);
         assert_eq!(calls_of(&f, "Stop(").len(), 1);
         // The management captain may, in any crew; its notice lands in that crew's lobby.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let r = run(
@@ -976,7 +966,7 @@ mod tests {
         let on = number_of(&f, &other).await;
         let r = run(&f, &f.captain, "list_sessions", json!({"crew": on})).await;
         not_yours(&f, &r, &other).await;
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let r = run(&f, "s-boss", "list_sessions", json!({"crew": on})).await;
@@ -1159,7 +1149,7 @@ mod tests {
         .await;
         not_yours(&f, &r, &stranger).await;
         // The management captain: any crew (this one has no captain yet).
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let handoffs = calls_of(&f, "Handoff(").len();

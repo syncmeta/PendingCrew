@@ -2169,14 +2169,7 @@ mod tests {
     async fn management_sessions_read_the_whole_organisation() {
         let w = world().await;
         let f = &w.f;
-        let management = f
-            .state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create 懒建总机组");
+        let management = f.management_crew().await;
         f.add_session(&management, "s-mgr", Role::Worker, "管理层 worker")
             .await;
         assert_eq!(f.me("s-mgr").await.crew_id, management);

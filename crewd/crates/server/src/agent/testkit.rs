@@ -132,6 +132,18 @@ impl Fixture {
             .unwrap();
     }
 
+    /// The management crew's id (`crew.create` creates it with the first crew, so it exists in
+    /// every fixture).
+    pub async fn management_crew(&self) -> String {
+        self.state
+            .db
+            .call(|s| crewd_collab::crews::management(s.conn()))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("crew.create creates the management crew")
+    }
+
     pub fn token(&self, session: &str) -> String {
         self.state.tokens.mint(session)
     }

@@ -454,16 +454,6 @@ mod tests {
             .unwrap()
     }
 
-    async fn management_crew(f: &Fixture) -> String {
-        f.state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create creates the management crew")
-    }
-
     #[tokio::test]
     async fn create_topic_only_and_creator_owns_it() {
         let f = Fixture::new().await;
@@ -674,7 +664,7 @@ mod tests {
             )
         );
         // The management captain counts as captain of every crew (C2).
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-mcap", Role::Captain, "管理层机长")
             .await;
         let r = run(
@@ -969,7 +959,7 @@ mod tests {
     async fn an_ordinary_management_session_cannot_force_or_archive_another_crews_channel() {
         let f = Fixture::new().await;
         let t = topic_by_captain(&f).await;
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-mcap", Role::Captain, "管理层机长")
             .await;
         f.add_session(&mgmt, "s-mw", Role::Worker, "管理层成员")
@@ -997,7 +987,7 @@ mod tests {
         let ext = extension_of(&f, &f.crew, &x).await;
         let gone = f.add_crew("示例已移除", None).await;
         f.rpc("crew.remove", json!({"crewId": gone})).await;
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         let mgmt_title = port::crew(&f.state, &mgmt).await.unwrap().unwrap().title;
         let n = number_of(&f, &f.crew).await;
         let r = run(&f, &x, "directory", json!({})).await;

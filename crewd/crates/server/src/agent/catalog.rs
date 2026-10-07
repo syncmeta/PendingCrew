@@ -750,14 +750,7 @@ mod tests {
     async fn management_crew_sees_the_same_tables_as_any_crew() {
         use crate::agent::testkit::Fixture;
         let f = Fixture::new().await;
-        let mgmt = f
-            .state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create creates the management crew");
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         f.add_session(&mgmt, "s-mw", Role::Worker, "示例管理 worker")

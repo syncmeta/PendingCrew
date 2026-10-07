@@ -803,16 +803,6 @@ mod tests {
             .all(|part| text.contains(part))
     }
 
-    async fn management_crew(f: &Fixture) -> String {
-        f.state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create creates the management crew")
-    }
-
     async fn number_of(f: &Fixture, crew: &str) -> String {
         port::crew(&f.state, crew)
             .await
@@ -974,7 +964,7 @@ mod tests {
             "the number follows the captain"
         );
         // "0" = the management crew's captain.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-mcap", Role::Captain, "管理层机长")
             .await;
         let r = run(
@@ -1253,7 +1243,7 @@ mod tests {
     #[tokio::test]
     async fn management_session_posts_without_joining_and_is_told_replies_wont_wake_it() {
         let f = Fixture::new().await;
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-mgr", Role::Worker, "管理层 worker")
             .await;
         let l = lobby(&f).await;
@@ -1732,7 +1722,7 @@ mod tests {
             r.text
         );
         // The management crew reads the whole organisation.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-mgr", Role::Worker, "管理层 worker")
             .await;
         let r = run(&f, "s-mgr", "search", json!({"query": "暗号"})).await;
@@ -2067,7 +2057,7 @@ mod tests {
         );
         assert!(r.text.contains(&human.id), "{}", r.text);
         // A management session cannot post into someone else's dm: the dm is member-only.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-mgr", Role::Worker, "管理层 worker")
             .await;
         let w = f.me(&f.worker).await;

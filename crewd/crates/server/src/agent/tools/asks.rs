@@ -352,16 +352,6 @@ mod tests {
         t
     }
 
-    async fn management_crew(f: &Fixture) -> String {
-        f.state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create creates the management crew")
-    }
-
     async fn number_of(f: &Fixture, crew: &str) -> String {
         port::crew(&f.state, crew)
             .await
@@ -411,7 +401,7 @@ mod tests {
             asked_receipt("H2", "第二个问题", &human_label("示例机组"), false)
         );
 
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let r = run(&f, "s-boss", "ask", json!({"question": "全局冻结发版吗？"})).await;
@@ -579,7 +569,7 @@ mod tests {
         );
         // The management captain may in any crew, by naming it; without `crew` it looks in its
         // own book.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let r = run(

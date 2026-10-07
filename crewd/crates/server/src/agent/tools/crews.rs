@@ -654,16 +654,6 @@ mod tests {
         assert_eq!(r.is_error, error, "{}", r.text);
     }
 
-    async fn management_crew(f: &Fixture) -> String {
-        f.state
-            .db
-            .call(|s| crewd_collab::crews::management(s.conn()))
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("crew.create creates the management crew")
-    }
-
     async fn crew(f: &Fixture, id: &str) -> port::CrewView {
         port::crew(&f.state, id).await.unwrap().unwrap()
     }
@@ -697,7 +687,7 @@ mod tests {
 
     /// The management captain (`s-boss`) and another top-level crew with its own captain.
     async fn boss_and_other(f: &Fixture) -> String {
-        let mgmt = management_crew(f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let other = f.add_crew("示例他组", None).await;
@@ -966,7 +956,7 @@ mod tests {
             Some(path.as_str())
         );
         // The management crew never: its captain, with no crew (its own) or by number "0" (I1).
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         for args in [
             json!({"new_path": path, "confirm": true}),
             json!({"new_path": path, "crew": "0", "confirm": true}),
@@ -1107,7 +1097,7 @@ mod tests {
         );
         assert_eq!(m.sender_kind, SenderKind::System);
         // With a title and a runner; the management captain under another crew.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let an = number_of(&f, &a).await;
@@ -1308,7 +1298,7 @@ mod tests {
         assert!(r.is_error);
         assert_eq!(top_level(&f).await, parents);
         // Its next step works: the management captain can hand it a captain.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let id = next_fake_id(&f);
@@ -1350,7 +1340,7 @@ mod tests {
         let n1 = number_of(&f, &t1).await;
         let cn = number_of(&f, &f.crew).await;
         // Moving a crew from another branch is the management captain's (R0).
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         // adopt: appended to my children; it was top-level, so the warning names its new home.
@@ -1545,7 +1535,7 @@ mod tests {
         .await;
         not_yours(&f, &r, &a).await;
         // The management captain does all of them.
-        let mgmt = management_crew(&f).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let r = run(
@@ -1612,8 +1602,8 @@ mod tests {
         // The management crew: out of an ordinary captain's reach (R0); for the management captain
         // collab refuses it, being outside the tree (number "0").
         let r = run(&f, &f.captain, "crew_structure", call("adopt", "0".into())).await;
-        not_yours(&f, &r, &management_crew(&f).await).await;
-        let mgmt = management_crew(&f).await;
+        not_yours(&f, &r, &f.management_crew().await).await;
+        let mgmt = f.management_crew().await;
         f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
             .await;
         let cn = number_of(&f, &f.crew).await;
