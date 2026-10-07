@@ -110,6 +110,9 @@ pub trait ExecHandle: Send + Sync {
         false
     }
     fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed>;
+    /// 打断当前回合（claude：一个 Esc；codex：`turn/interrupt`；没有进行中的回合就什么都不做）。休眠到了期限、
+    /// 还没做完这一轮的 session 先打断再叫停（C26）。
+    fn interrupt(&self) -> Result<(), Closed>;
     fn stop(&self) -> Result<(), Closed>;
     fn clear_quota_health(&self) -> Result<(), Closed>;
     fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>>;
@@ -126,6 +129,10 @@ impl ExecHandle for SessionHandle {
 
     fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed> {
         SessionHandle::raw(self, bytes)
+    }
+
+    fn interrupt(&self) -> Result<(), Closed> {
+        SessionHandle::interrupt(self)
     }
 
     fn stop(&self) -> Result<(), Closed> {

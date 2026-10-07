@@ -54,6 +54,14 @@ pub struct MemState {
     pub events: Vec<OrchestraEvent>,
     pub max_live: Option<usize>,
     pub restarts: Vec<Vec<String>>,
+    /// 每次 `open_restart` 的 reason（与 `restarts` 一一对应）。
+    pub restart_reasons: Vec<RestartReason>,
+    /// 休眠期限的设置（`Port::hibernate_deadline_secs`）。
+    pub hibernate_deadline: Option<u32>,
+    /// 休眠记录（`Port::{hibernate_record, put_hibernate}`）。
+    pub hibernate: Option<HibernateRecord>,
+    /// `put_hibernate` 的每一次（按先后）。
+    pub hibernate_puts: Vec<HibernateRecord>,
     /// 重启询问 id → 答复（`true` = 恢复）；测试里直接写，模拟「人答了但 `RestartAnswered` 事件丢了」。
     pub restart_answers: BTreeMap<i64, bool>,
     pub defaults_applied: usize,
@@ -607,17 +615,37 @@ impl Port for MemPort {
         Ok(crewd_wake::text::Lang::Zh)
     }
 
-    async fn open_restart(&self, session_ids: Vec<String>) -> Result<Option<i64>> {
+    async fn open_restart(
+        &self,
+        session_ids: Vec<String>,
+        reason: RestartReason,
+    ) -> Result<Option<i64>> {
         let mut st = self.lock();
         if session_ids.is_empty() {
             return Ok(None);
         }
         st.restarts.push(session_ids);
+        st.restart_reasons.push(reason);
         Ok(Some(st.restarts.len() as i64))
     }
 
     async fn restart_answer(&self, id: i64) -> Result<Option<bool>> {
         Ok(self.lock().restart_answers.get(&id).copied())
+    }
+
+    async fn hibernate_deadline_secs(&self) -> Result<Option<u32>> {
+        Ok(self.lock().hibernate_deadline)
+    }
+
+    async fn hibernate_record(&self) -> Result<Option<HibernateRecord>> {
+        Ok(self.lock().hibernate.clone())
+    }
+
+    async fn put_hibernate(&self, r: &HibernateRecord) -> Result<()> {
+        let mut st = self.lock();
+        st.hibernate = Some(r.clone());
+        st.hibernate_puts.push(r.clone());
+        Ok(())
     }
 
     async fn apply_due_defaults(&self) -> Result<()> {
@@ -782,6 +810,8 @@ pub struct StandInState {
     /// 写进会话的先后（`raw:<字节>` / `send:<正文>`），按 session：量 nudge / 投递有没有交错。
     pub writes: BTreeMap<String, Vec<String>>,
     pub stops: Vec<String>,
+    /// `interrupt` 调过的 session（按先后）。
+    pub interrupts: Vec<String>,
     /// 这些 session 被叫停时不退出（模拟停不下来的进程：停机到期限）。
     pub hang_on_stop: BTreeSet<String>,
     pub cleared_quota: Vec<String>,
@@ -1054,6 +1084,16 @@ impl ExecHandle for StandInHandle {
             .entry(self.session.clone())
             .or_default()
             .push(format!("raw:{shown}"));
+        Ok(())
+    }
+
+    fn interrupt(&self) -> Result<(), Closed> {
+        let mut s = self.lock();
+        s.interrupts.push(self.session.clone());
+        s.writes
+            .entry(self.session.clone())
+            .or_default()
+            .push("interrupt".into());
         Ok(())
     }
 

@@ -575,9 +575,13 @@ impl<P: Port> Core<P> {
                 return Ok(false);
             }
         };
-        // C4：等重启答复的 session 被人 @ 拉起 = 对它单个 resume；上次停在干活中途的，开场补一句「被打断」。
-        let interrupted = (self.held.remove(session) && row.was_working)
-            .then(|| text::get(self.lang(), "restart.interrupted").to_string());
+        // C4：等重启答复的 session 被人 @ 拉起 = 对它单个 resume；上次停在干活中途的，开场补一句「被打断」
+        // （被休眠停下的换成休眠附言，C26）。
+        let interrupted = if self.held.remove(session) {
+            self.resume_note(session, row.was_working).await
+        } else {
+            None
+        };
         let (silent, speak) = split_silent(batch);
         if !silent.is_empty() {
             // 无附言的恢复：拉起本身就是它要的（起不来由 launch_failed 告警）。
@@ -633,6 +637,9 @@ impl<P: Port> Core<P> {
             return self.fail_batch(inf.batch, &format!("{outcome:?}")).await;
         }
         l.worked = true;
+        if !inf.batch.wakes.is_empty() {
+            l.last_wakes = inf.batch.wakes.clone();
+        }
         // 随批行：平时放回 pending、下一批带上；人正在停它时跟别的 pending 一样丢掉（不把刚停掉的拉起来）。
         let riders = if l.stopping {
             Riders::Drop("stopped".into())
@@ -782,18 +789,18 @@ impl<P: Port> Core<P> {
             }
         }
         let ordered = policy::restart_order(rows);
-        let (now, lang) = (self.now(), self.lang());
+        let now = self.now();
         for r in &ordered {
             self.held.remove(&r.session);
+            // 被打断的补「被打断」；被休眠停下的换成休眠附言（C26，只给一次）。
+            let note = self.resume_note(&r.session, r.was_working).await;
             let w = NewWake {
                 session: r.session.clone(),
                 kind: WakeKind::Restart,
                 source: policy::restart_source(&prompt.to_string()),
                 priority: Priority::Human,
                 not_before: now,
-                note: r
-                    .was_working
-                    .then(|| text::get(lang, "restart.interrupted").to_string()),
+                note,
                 origin: HUMAN.into(),
             };
             self.due.touch(&self.port).enqueue(w).await?;

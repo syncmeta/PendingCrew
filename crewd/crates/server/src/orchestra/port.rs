@@ -11,6 +11,11 @@ use crewd_term::PendingDecision;
 use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeState};
 
+/// 休眠记录（C26）的形状就是 collab `hibernate` 存进 `meta` 的那一份（M3c 自己的功能，不是 M3a 的冻结接口）：
+/// DbPort 原样读写，不另抄一份类型。
+pub use crewd_collab::hibernate::{Hibernated, Record as HibernateRecord};
+pub use crewd_proto::RestartReason;
+
 /// 默认错误类型是 anyhow；带第二个参数时就是 std 的 `Result<T, E>`——`use super::port::*` 的模块里
 /// 两种写法都照常用（控制者裁定 C16 / 预检 G-1：一参的别名会遮住 std `Result`，E0107）。
 pub type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
@@ -304,9 +309,11 @@ pub trait Port: Send + Sync + 'static {
     fn locale(&self) -> impl Future<Output = Result<crewd_wake::text::Lang>> + Send;
     // —— 重启询问与默认方案（M3a `collab::restart` / `collab::asks`）
     /// 开一次「是否恢复这些 session」的询问（M3a 在相关根机组人类群各发一条 @人）。返回询问 id；名单空 = None。
+    /// `reason = Hibernate`（C26）：公告说「上次休眠了 N 个」，休眠记录记下这条询问（collab `restart::open_with`）。
     fn open_restart(
         &self,
         session_ids: Vec<String>,
+        reason: RestartReason,
     ) -> impl Future<Output = Result<Option<i64>>> + Send;
     /// 这条重启询问此刻的答复（M3a `restart::get(conn, id).answer`）：`Some(true)` = 恢复、`Some(false)` = 先不、None = 没答。
     fn restart_answer(&self, id: i64) -> impl Future<Output = Result<Option<bool>>> + Send;
@@ -315,6 +322,13 @@ pub trait Port: Send + Sync + 'static {
     /// 删掉 `before` 之前就已 delivered / dropped 的队列行，一次至多 `limit` 条（M3a `wakes::prune`；控制者裁定 C6：
     /// 清理归 M3c 的定时拍；S28：分批）。返回删了几条。
     fn prune_wakes(&self, before: Ms, limit: usize) -> impl Future<Output = Result<usize>> + Send;
+    // —— 休眠（C26；collab `settings::hibernate_deadline_secs`、`hibernate::{get, put}`）
+    /// 休眠期限的设置（秒）；None = 没设（用 `crewd_wake::policy::DEFAULT_HIBERNATE_DEADLINE_SECS`）。
+    fn hibernate_deadline_secs(&self) -> impl Future<Output = Result<Option<u32>>> + Send;
+    /// 最近一次休眠的记录。
+    fn hibernate_record(&self) -> impl Future<Output = Result<Option<HibernateRecord>>> + Send;
+    /// 整份写入（`prompt_id` 原样保留调用方给的）。
+    fn put_hibernate(&self, r: &HibernateRecord) -> impl Future<Output = Result<()>> + Send;
     // —— 协作数据（M3a 的 Collab）
     /// 消息的规划要素 + 正文（正文只给 Arbiter）。
     fn message(

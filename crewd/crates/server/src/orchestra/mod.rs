@@ -6,6 +6,7 @@ pub mod core;
 pub mod deliver;
 pub mod exec;
 pub mod exec_claude;
+pub mod hibernate;
 pub mod hooks;
 pub mod port;
 #[cfg(test)]
@@ -48,6 +49,8 @@ pub struct OrchestraConfig {
     pub retry_jitter: f64,
     /// 抖动的种子；None = 用启动时刻（`Clock::now`）。测试给定值，结果就是确定的。
     pub jitter_seed: Option<u64>,
+    /// 休眠（C26）到了期限、叫停之后最多再等多久它们退出；到点还没退的照实回报（`HibernateReport::failed`）。
+    pub hibernate_stop_grace: Duration,
 }
 
 impl Default for OrchestraConfig {
@@ -63,6 +66,7 @@ impl Default for OrchestraConfig {
             boot_id: uuid::Uuid::new_v4().to_string(),
             retry_jitter: RETRY_JITTER,
             jitter_seed: None,
+            hibernate_stop_grace: Duration::from_secs(10),
         }
     }
 }
@@ -285,6 +289,21 @@ impl Handle {
         let _ = self.tx.send(Input::Collab(f));
     }
 
+    /// 休眠（C26）：不再投 / 拉起；空闲的立刻停，在干活的等到 `deadline`（None = 设置里的，没设 = 120 秒；0 = 立即）
+    /// 做完这一轮、到期限还没做完的先打断再停；唤醒一条不丢；每个 session 记一份休眠记录（下次启动的询问与附言据它）。
+    /// 回执在全部退出时（`completed = true`，之后 actor 随停机收尾）或到了「期限 + 叫停宽限」时（`completed = false`，
+    /// 名单里有 `failed`）发出——后一种 serve 照 [`Handle::shutdown`] 回 false 的办法收尾（[`Actor::abort_handle`] 再关库）。
+    /// 已在休眠时再调 = 并进那一次（同一份结果），期限只会提前。普通停机进行中 = `ShuttingDown`。
+    /// RPC `crewd.hibernate { deadlineSecs? }` 由 T10 接到这里；回执之后 serve 走自己的停机次序退出。
+    pub async fn hibernate(
+        &self,
+        deadline: Option<Duration>,
+    ) -> Result<hibernate::HibernateReport, ControlError> {
+        let deadline_ms = deadline.map(|d| d.as_millis().min(i64::MAX as u128) as i64);
+        self.call(|reply| Cmd::Hibernate { deadline_ms, reply })
+            .await
+    }
+
     /// 停机：叫停全部会话（crewd 叫停，不是人停：desired / was_working 不动，带着的唤醒原样退回），最多等 `limit`。
     /// `limit` 就是期限（T9b 的休眠在这之上加「先等安全点」，C26）。返回 true = 期限内全部退出、actor 收尾了；
     /// false = 到期限还有会话没退（或 actor 已经没了）——这时 serve 用 [`Actor::abort_handle`] 中止 actor 再关库；
@@ -414,6 +433,73 @@ mod tests {
             .expect("中止之后 actor 要结束");
         assert!(r.is_ok(), "自己中止的不算崩：{r:?}");
         assert!(h.live(&row.id).await.is_err());
+    }
+
+    /// C26：经句柄休眠——在干活的当场打断（期限 0）、空闲的停下；结果经句柄回来，之后 actor 正常收尾，句柄回错。
+    #[tokio::test]
+    async fn hibernate_through_the_handle_reports_and_the_actor_winds_down() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let mut ids = Vec::new();
+        for (title, captain) in [("cap", true), ("w1", false)] {
+            let row = port
+                .insert_session(port::NewSession {
+                    crew_id: "c1".into(),
+                    captain,
+                    executor: "claude".into(),
+                    brief: String::new(),
+                    title: Some(title.into()),
+                    model: None,
+                    effort: None,
+                    worktree: None,
+                })
+                .await
+                .unwrap();
+            ids.push(row.id);
+        }
+        let (cap, w1) = (ids[0].clone(), ids[1].clone());
+        let exec = StandIn::default();
+        let (h, actor) = spawn(
+            port.clone(),
+            Executors::new().with("claude", Arc::new(exec.clone())),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        for id in &ids {
+            h.resume(id, Origin::Human).await.unwrap();
+        }
+        for _ in 0..200 {
+            if h.live(&cap).await.unwrap().running && h.live(&w1).await.unwrap().running {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        exec.emit(&w1, crewd_exec::session::SessionEvent::Working(true));
+        for _ in 0..200 {
+            if h.live(&w1).await.unwrap().working {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let r = h.hibernate(Some(Duration::ZERO)).await.unwrap();
+        assert_eq!(
+            r,
+            hibernate::HibernateReport {
+                clean: vec![cap],
+                interrupted: vec![w1.clone()],
+                failed: vec![],
+                completed: true,
+            }
+        );
+        assert_eq!(exec.lock().interrupts, [w1]);
+        let done = tokio::time::timeout(Duration::from_secs(10), actor.finished())
+            .await
+            .expect("休眠完了 actor 收尾");
+        assert!(done.is_ok());
+        assert!(h.hibernate(None).await.is_err(), "actor 没了：句柄回错");
     }
 
     struct PanickingQuota;

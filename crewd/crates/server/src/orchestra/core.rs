@@ -45,6 +45,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::OrchestraConfig;
 use super::clock::Clock;
 use super::exec::{Context, ExecHandle, ExecSendError, Executor, Executors, LaunchRequest};
+use super::hibernate::{HibernateReport, Hibernation};
 use super::hooks::Hooks;
 use super::port::*;
 
@@ -347,6 +348,11 @@ pub enum Cmd {
         max: Option<usize>,
         reply: Reply<()>,
     },
+    /// 休眠（C26，[`Core::begin_hibernate`]）：`deadline_ms` = 在干活的最多等多久（None = 设置里的；0 = 立即）。
+    Hibernate {
+        deadline_ms: Option<i64>,
+        reply: Reply<HibernateReport>,
+    },
 }
 
 /// 一笔还没回执的投递。`delivery` = `ExecHandle::send` 的编号（拉起时带的正文 = `BRIEF_DELIVERY_ID`）；
@@ -381,6 +387,8 @@ pub struct Live {
     pub stopping: bool,
     /// crewd 自己叫停的（停机等，[`Core::halt`]）：不改 desired / was_working，带着的唤醒原样退回。
     pub halting: bool,
+    /// 最近一批送进去的唤醒（拉起时带的、或最后一次「送到了」的那批）：休眠记录里「停下时在做什么」（C26）。
+    pub last_wakes: Vec<QueuedWake>,
     /// 往这个会话里写东西的队列（预检 P4 / 控制者裁定）：投递与 nudge 按 actor 收下的先后排进来，
     /// 由 [`Core::pump_writes`] 一个个写；一次 nudge 的整串写完才轮到下一个，两次写不交错。
     pub writes: VecDeque<Write>,
@@ -453,6 +461,10 @@ pub struct Core<P: Port> {
     pub(crate) prune_more: bool,
     /// 下一个未来 not_before 的缓存（[`DueCache`]）。
     pub(crate) due: DueCache,
+    /// 休眠进行中（C26，`hibernate.rs`）。
+    pub(crate) hibernation: Option<Hibernation>,
+    /// 上次休眠的记录（`boot` 读进来）：恢复时据它给休眠附言（[`Core::resume_note`]），给过就记「已恢复」。
+    pub(crate) hibernated: Option<HibernateRecord>,
 }
 
 impl<P: Port> Core<P> {
@@ -508,6 +520,8 @@ impl<P: Port> Core<P> {
             last_prune: Ms(0),
             prune_more: false,
             due: DueCache::default(),
+            hibernation: None,
+            hibernated: None,
         })
     }
 
@@ -573,6 +587,8 @@ impl<P: Port> Core<P> {
         if let Err(e) = r {
             eprintln!("crewd: 编排：{e:#}");
         }
+        // 休眠中（C26）：每条输入之后看一眼——谁到了安全点、期限到没到、是不是全退了。
+        self.hibernate_step().await;
     }
 
     pub(crate) fn now(&self) -> Ms {
@@ -662,6 +678,7 @@ impl<P: Port> Core<P> {
                 let r = self.set_max_live(max).await;
                 let _ = reply.send(r);
             }
+            Cmd::Hibernate { deadline_ms, reply } => self.begin_hibernate(deadline_ms, reply).await,
         }
     }
 
@@ -851,9 +868,13 @@ impl<P: Port> Core<P> {
             return Err(ControlError::NoWorkdir(row.id));
         }
         self.check_cap(origin)?;
-        // 单个恢复一个等人答复的 session（§22.7 Q1）：上次停在干活中途的，开场补一句「被打断」。
-        let interrupted = self.held.remove(session) && row.was_working;
-        let text = interrupted.then(|| text::get(self.lang(), "restart.interrupted").to_string());
+        // 单个恢复一个等人答复的 session（§22.7 Q1）：上次停在干活中途的，开场补一句「被打断」；被休眠停下的换成
+        // 休眠附言（C26，只给一次）。
+        let text = if self.held.remove(session) {
+            self.resume_note(session, row.was_working).await
+        } else {
+            None
+        };
         self.launch(row, exec, text, vec![], vec![])
             .await
             .map_err(ControlError::from_launch)
@@ -1194,6 +1215,7 @@ impl<P: Port> Core<P> {
                         inflight,
                         stopping: st.stop_requested,
                         halting: st.halt_requested && !st.stop_requested,
+                        last_wakes: st.batch.wakes.clone(),
                         writes: VecDeque::new(),
                         writing: false,
                     },

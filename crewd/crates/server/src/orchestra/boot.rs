@@ -54,9 +54,15 @@ impl<P: Port> Core<P> {
                 .collect(),
         );
         self.held = rows.iter().map(|r| r.session.clone()).collect();
+        // 上次是休眠停下的（C26）：询问标成休眠，恢复时给休眠附言。读不出来只记日志、按普通重启问。
+        self.hibernated = self.port.hibernate_record().await.unwrap_or_else(|e| {
+            eprintln!("crewd: 编排：休眠记录读不出来（按普通重启问）：{e:#}");
+            None
+        });
+        let reason = self.restart_reason();
         self.restart_prompt = self
             .port
-            .open_restart(rows.into_iter().map(|r| r.session).collect())
+            .open_restart(rows.into_iter().map(|r| r.session).collect(), reason)
             .await?;
         self.replan_unread().await?;
         // C4 的水位：到此为止排着的（含积压补救刚补的旧 @）都不算「询问之后人新 @ 的」。
@@ -87,6 +93,10 @@ impl<P: Port> Core<P> {
     pub(crate) fn begin_shutdown(&mut self, reply: oneshot::Sender<()>) {
         self.shutting_down = true;
         self.shutdown.push(reply);
+        // 休眠进行中（C26）：期限提前到现在，叫停由休眠那一路做（在干活的照样先打断、记进记录）。
+        if self.hibernate_now() {
+            return;
+        }
         let live: Vec<String> = self.live.keys().cloned().collect();
         for s in live {
             self.halt(&s);
@@ -108,6 +118,7 @@ impl<P: Port> Core<P> {
         for reply in self.shutdown.drain(..) {
             let _ = reply.send(());
         }
+        self.finish_hibernate(true);
         true
     }
 
