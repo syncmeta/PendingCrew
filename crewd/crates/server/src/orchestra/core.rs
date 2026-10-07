@@ -2067,6 +2067,7 @@ mod tests {
             prompt: prompt.into(),
             options: vec!["Yes".into(), "No".into()],
             numbered: true,
+            selected: Some(0),
         }
     }
 
@@ -3204,6 +3205,7 @@ mod tests {
             prompt: HOSTILE.into(),
             options: vec![HOSTILE.into(), "No".into()],
             numbered: true,
+            selected: Some(0),
         };
         rig.emit("w1", SessionEvent::Decision(DecisionEvent::Appeared(d)))
             .await;

@@ -1464,6 +1464,7 @@ mod tests {
             prompt: "Trust?".into(),
             options: vec!["Yes".into()],
             numbered: true,
+            selected: Some(0),
         };
         rig.emit("w1", SessionEvent::Decision(DecisionEvent::Appeared(d)))
             .await;
@@ -3053,6 +3054,7 @@ mod tests {
             prompt: "合成框".into(),
             options: vec!["Yes".into()],
             numbered: true,
+            selected: Some(0),
         };
         rig.emit("w1", SessionEvent::Decision(DecisionEvent::Appeared(d)))
             .await;

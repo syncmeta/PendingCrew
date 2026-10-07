@@ -247,6 +247,7 @@ mod tests {
                 prompt: "Trust?".into(),
                 options: vec!["Yes".into()],
                 numbered: false,
+                selected: None,
             }),
             awaiting_question: None,
         }

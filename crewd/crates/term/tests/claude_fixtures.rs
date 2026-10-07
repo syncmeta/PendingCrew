@@ -5,8 +5,8 @@
 use std::time::Instant;
 
 use crewd_term::{
-    CURSOR_MARKERS, DecisionEvent, PendingDecision, PendingDecisionTracker, STABLE_WINDOW, Screen,
-    ScreenConfig, blocking_dialog, input_row, strip,
+    CURSOR_MARKERS, DecisionEvent, InputDraft, PendingDecision, PendingDecisionTracker,
+    STABLE_WINDOW, Screen, ScreenConfig, blocking_dialog, input_row, strip,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -124,6 +124,7 @@ fn claude_old_trust_dialog_is_numbered_trust_then_exit() {
         cursor.contains("trust"),
         "8-26 默认高亮在「同意」：{cursor}"
     );
+    assert_eq!(d.selected, Some(0), "光标在第一项：{d:?}");
 }
 
 // ---- tui-claude-trust.bin（2026-09-06：无编号、No, exit 在前且默认高亮）----
@@ -159,6 +160,9 @@ fn todays_trust_dialog_cursor_sits_on_exit() {
     let rows = whole("tui-claude-trust.bin");
     let cursor = cursor_line(&rows);
     assert!(cursor.contains("exit"), "今天默认高亮在「退出」：{cursor}");
+    let d = blocking_dialog(&rows).expect("信任框");
+    assert_eq!(d.selected, Some(0), "{d:?}");
+    assert!(d.options[0].contains("exit"), "{d:?}");
 }
 
 #[test]
@@ -271,4 +275,98 @@ fn ready_fixture_answers_each_focus_request() {
     let replies = s.take_replies();
     let count = replies.windows(3).filter(|w| *w == b"\x1b[I").count();
     assert_eq!(count, 2, "{:?}", String::from_utf8_lossy(&replies));
+}
+
+// ---- 输入框草稿（T10d）----
+//
+// 这几段录像**一个 SGR 都没有**（录的时候 claude 没开颜色：`\x1b[...m` 出现 0 次），所以占位提示和打的字
+// 在格子上长得一样——原样喂进去只能是 `Unknown`（分不清就按有草稿处理）。生产里 crewd 给 claude 的 TERM 是
+// xterm-256color，claude 会上样式；下面的「上了样式」用例把录像里的占位提示 / 提示条原地包上 SGR 2 再喂，
+// 其余字节一个不动。claude 真实用的是不是 SGR 2（还是灰色前景）没在真 claude 上核过：两种都认（见 input_box）。
+
+/// 把 `from` 全部换成 `to`（字节级）。
+fn replace_all(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(from) {
+            out.extend_from_slice(to);
+            i += from.len();
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// 有没有 `ESC [ 数字;… m`（SGR，样式）。
+fn has_sgr(bytes: &[u8]) -> bool {
+    bytes.windows(2).enumerate().any(|(i, w)| {
+        w == b"\x1b["
+            && bytes[i + 2..]
+                .iter()
+                .find(|b| !(b.is_ascii_digit() || **b == b';'))
+                == Some(&b'm')
+    })
+}
+
+/// 逐块喂，收下每一步「输入行在、且是空框示例提示」时的草稿判定。
+fn drafts_at_idle_prompt(bytes: &[u8]) -> Vec<InputDraft> {
+    let mut s = screen();
+    let mut seen = Vec::new();
+    for chunk in bytes.chunks(64) {
+        s.feed(chunk);
+        if input_row(&s.screen_rows()).is_some_and(|r| r.starts_with("Try")) {
+            seen.push(s.input_draft());
+        }
+    }
+    seen
+}
+
+#[test]
+fn recorded_idle_box_has_no_styles_so_its_placeholder_is_unknown() {
+    let bytes = fixture("tui-claude.bin");
+    assert!(!has_sgr(&bytes), "前提：录像里没有 SGR");
+    let seen = drafts_at_idle_prompt(&bytes);
+    assert!(!seen.is_empty(), "录像里有空框示例提示那一屏");
+    assert!(seen.iter().all(|d| *d == InputDraft::Unknown), "{seen:?}");
+}
+
+#[test]
+fn recorded_idle_box_with_its_placeholder_dimmed_is_empty() {
+    let raw = fixture("tui-claude.bin");
+    assert!(!has_sgr(&raw));
+    let styled = replace_all(&raw, "\u{a0}Try".as_bytes(), "\u{a0}\x1b[2mTry".as_bytes());
+    let styled = replace_all(&styled, b"error?\"", b"error?\"\x1b[22m");
+    assert!(has_sgr(&styled), "占位提示原地包上了样式");
+    let seen = drafts_at_idle_prompt(&styled);
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|d| *d == InputDraft::Empty), "{seen:?}");
+}
+
+#[test]
+fn recorded_typed_draft_is_text_once_the_screen_has_styles() {
+    let raw = fixture("tui-claude-ready.bin");
+    let mut s = screen();
+    s.feed(&raw);
+    assert_eq!(s.input_draft(), InputDraft::Unknown, "没样式的录像：分不清");
+    // 只给底下的提示条上样式（草稿本身一个字节不动）。
+    let styled = replace_all(&raw, "⏵⏵".as_bytes(), "\x1b[2m⏵⏵\x1b[22m".as_bytes());
+    assert!(!has_sgr(&raw) && has_sgr(&styled), "提示条原地包上了样式");
+    let mut s = screen();
+    s.feed(&styled);
+    match s.input_draft() {
+        InputDraft::Text(t) => {
+            assert!(t.starts_with("这是一行故意打得很长"), "{t}");
+            assert!(
+                t.contains("折行的输入框不是选择菜单"),
+                "折行的第二行也算：{t}"
+            );
+        }
+        other => panic!(
+            "打了字的输入框应是草稿：{other:?}\n{}",
+            s.screen_rows().join("\n")
+        ),
+    }
 }

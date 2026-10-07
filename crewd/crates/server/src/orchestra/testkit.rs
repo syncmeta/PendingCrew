@@ -2326,6 +2326,7 @@ mod self_tests {
                 prompt: "p".into(),
                 options: vec![],
                 numbered: false,
+                selected: None,
             })),
         );
         drain(&mut rx);

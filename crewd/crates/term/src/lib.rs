@@ -12,7 +12,8 @@ mod tracker;
 
 pub use alacritty_terminal::vte::ansi::Rgb;
 pub use input_box::{
-    BODY_TAIL_CHARS, INPUT_MARKERS, INPUT_SCAN_DEPTH, blocking_dialog, body_tail_visible, input_row,
+    BODY_TAIL_CHARS, INPUT_MARKERS, INPUT_SCAN_DEPTH, InputDraft, blocking_dialog,
+    body_tail_visible, input_row,
 };
 pub use menu::{
     BOX_CHARS, CURSOR_MARKERS, PROMPT_SCAN_DEPTH, PendingDecision, RATE_LIMIT_MENU_PHRASES,

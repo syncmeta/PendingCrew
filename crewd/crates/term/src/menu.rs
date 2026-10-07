@@ -35,10 +35,13 @@ pub struct PendingDecision {
     pub options: Vec<String>,
     /// 屏幕上本来有没有编号。事实字段，每个生产者如实填，没有缺省。
     pub numbered: bool,
+    /// 光标（[`CURSOR_MARKERS`]）此刻停在第几项（0 起，同 `options` 的下标）；屏上看不到光标 = `None`。
+    /// 不进 [`PendingDecision::fingerprint`]：挪高亮不是换了一个框，但按键前要核它（T10d 的安全按键）。
+    pub selected: Option<usize>,
 }
 
 impl PendingDecision {
-    /// 去重指纹：同一菜单反复重绘 → 同一指纹。故意不含 `numbered`。
+    /// 去重指纹：同一菜单反复重绘 → 同一指纹。故意不含 `numbered` 与 `selected`。
     pub fn fingerprint(&self) -> String {
         std::iter::once(self.prompt.as_str())
             .chain(self.options.iter().map(String::as_str))
@@ -170,10 +173,13 @@ fn parse_numbered(lines: &[&str]) -> Option<PendingDecision> {
     if parsed.len() < 2 || !consecutive || !parsed.iter().any(|o| o.selected) {
         return None;
     }
+    // 好几行都带光标（不该发生）时取第一行：判据只要「至少一行」，这里如实报第一处。
+    let selected = parsed.iter().position(|o| o.selected);
     Some(PendingDecision {
         prompt: prompt_above(lines, start),
         options: parsed.into_iter().map(|o| o.text).collect(),
         numbered: true,
+        selected,
     })
 }
 
@@ -191,10 +197,12 @@ fn parse_cursor_list(lines: &[&str]) -> Option<PendingDecision> {
     }
     let mut options = Vec::with_capacity(block.len());
     let mut cursors = 0;
-    for line in block {
+    let mut selected = None;
+    for (i, line) in block.iter().enumerate() {
         let first = line.chars().next()?;
         if CURSOR_MARKERS.contains(&first) {
             cursors += 1;
+            selected = Some(i);
             let text = line[first.len_utf8()..].trim();
             if text.is_empty() {
                 return None;
@@ -211,6 +219,7 @@ fn parse_cursor_list(lines: &[&str]) -> Option<PendingDecision> {
         prompt: prompt_above(lines, start),
         options,
         numbered: false,
+        selected,
     })
 }
 
@@ -397,14 +406,16 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_ignores_numbered() {
+    fn fingerprint_ignores_numbered_and_selected() {
         let a = PendingDecision {
             prompt: "q".into(),
             options: vec!["a".into()],
             numbered: true,
+            selected: Some(0),
         };
         let b = PendingDecision {
             numbered: false,
+            selected: None,
             ..a.clone()
         };
         assert_eq!(a.fingerprint(), "q|a");
@@ -449,5 +460,51 @@ mod tests {
             "Do you want to proceed?\n\n❯ 1. Yes\n\n  2. No\n\n"
         );
         assert_eq!(parse_menu(crlf.tail()), None, "CRLF：CR 与 LF 各成一个换行");
+    }
+
+    /// T10d：光标停在哪一项（0 起）。编号式：第一 / 中间 / 最后。
+    #[test]
+    fn numbered_menu_reports_the_highlighted_option() {
+        let menu = |at: usize| {
+            let opts = ["Yes", "Yes, and don't ask again", "No"];
+            let mut lines = vec!["Do you want to proceed?".to_string()];
+            for (i, o) in opts.iter().enumerate() {
+                let mark = if i == at { "❯" } else { " " };
+                lines.push(format!("{mark} {}. {o}", i + 1));
+            }
+            lines.join("\n")
+        };
+        for at in [0, 1, 2] {
+            let d = parse_menu(&menu(at)).unwrap();
+            assert_eq!(d.selected, Some(at), "{d:?}");
+            assert_eq!(d.fingerprint(), parse_menu(&menu(0)).unwrap().fingerprint());
+        }
+        assert_eq!(parse_menu(&permission_menu()).unwrap().selected, Some(0));
+    }
+
+    /// 光标列表式（没编号）：第一 / 中间 / 最后。
+    #[test]
+    fn cursor_list_reports_the_highlighted_option() {
+        let list = |at: usize| {
+            let opts = ["a", "b", "c"];
+            let block: Vec<String> = opts
+                .iter()
+                .enumerate()
+                .map(|(i, o)| format!("{} {o}", if i == at { "❯" } else { " " }))
+                .collect();
+            format!(
+                "Pick one\n\n{}\n\nEnter to confirm · Esc to cancel",
+                block.join("\n")
+            )
+        };
+        for at in [0, 1, 2] {
+            let d = parse_menu(&list(at)).unwrap();
+            assert!(!d.numbered);
+            assert_eq!(d.selected, Some(at), "{d:?}");
+        }
+        assert_eq!(
+            parse_menu(&unnumbered_trust_dialog()).unwrap().selected,
+            Some(0)
+        );
     }
 }
