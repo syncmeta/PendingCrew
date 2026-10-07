@@ -585,7 +585,10 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
 
 pub fn remove_member(tx: &mut Tx<'_>, by: &Sender, id: &str, m: &MemberRef) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
-    // 归档机组的群跟着只读（同 `update`）：名单不动，先解档机组。
+    // 归档的群（手动归档，或所在机组归档时一并归档）名单不动，答案与 `add_members` 同一个：channel.archived。
+    if ch.archived_at.is_some() {
+        return Err(archived(id));
+    }
     crews::refuse_archived(tx.conn(), &ch.crew_id)?;
     if ch.kind == ChannelKind::Lobby {
         return Err(CollabError::Invalid(Refusal::new(
@@ -1349,7 +1352,43 @@ mod tests {
         );
     }
 
-    /// 归档机组的群只读：移出成员也拒（同 update / add_members 的守卫），成员名单不变；解档后照常。
+    /// 手动归档的群（机组是活的）也不能再移出成员：与 add_members 同一个码 channel.archived，名单不变。
+    #[test]
+    fn removing_a_member_from_a_hand_archived_channel_is_refused_like_adding() {
+        let mut s_ = store();
+        let ch = ok(&mut s_, |tx| {
+            create(tx, &Sender::Human, topic("crew-a", vec![s("w-a1")]))
+        });
+        ok(&mut s_, |tx| {
+            update(
+                tx,
+                &Sender::Human,
+                &ch.id,
+                ChannelPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+        });
+        let code = |e: CollabError| match e {
+            CollabError::Conflict(r) => r.code,
+            e => panic!("{e:?}"),
+        };
+        let removed = code(err(&mut s_, |tx| {
+            remove_member(tx, &Sender::Human, &ch.id, &s("w-a1"))
+        }));
+        let added = code(err(&mut s_, |tx| {
+            add_members(tx, &Sender::Human, &ch.id, &[s("w-a2")])
+        }));
+        assert_eq!(removed, crate::refusal::Code::ChannelArchived);
+        assert_eq!(removed, added, "增删成员对归档群同一个答案");
+        assert!(
+            is_member(s_.conn(), &ch.id, &s("w-a1")).unwrap(),
+            "名单没变"
+        );
+    }
+
+    /// 归档机组的群只读：移出成员也拒（channel.archived，与机组归档后该机组的群别的群级操作同一个码），成员名单不变；解档后照常。
     #[test]
     fn removing_a_member_from_an_archived_crews_channel_is_refused() {
         let mut s_ = store();
@@ -1362,7 +1401,7 @@ mod tests {
         });
         match &e {
             CollabError::Conflict(r) => {
-                assert_eq!(r.code, crate::refusal::Code::CrewArchived, "{e:?}")
+                assert_eq!(r.code, crate::refusal::Code::ChannelArchived, "{e:?}")
             }
             e => panic!("{e:?}"),
         }
