@@ -1,6 +1,7 @@
 //! 持久化唤醒队列（spec §22.4：取代只在内存里的 `CrewDeferredWakeQueue`）与熔断台账（§22.7 Q5）。
 //! 这里只有读写；叫谁、何时投、准入与熔断判据都在 M3c（`crewd-wake` + `server::orchestra`）。
 use crate::{Change, CollabError, Result, Tx};
+use crewd_proto::wake_lifecycle as lifecycle;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
@@ -27,14 +28,8 @@ pub enum WakePriority {
     Human,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum WakeState {
-    Pending,
-    Inflight,
-    Delivered,
-    Dropped,
-}
+/// 唤醒行的状态与改状态的事件（与 M3c 的测试实现共用同一张转移表，见 [`crewd_proto::wake_lifecycle`]，C24）。
+pub use crewd_proto::wake_lifecycle::{WakeEvent, WakeState};
 
 /// 入队请求。存来源身份，不存渲染好的正文（出队时现渲染，`render::build_batch`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,26 +141,6 @@ impl WakePriority {
             "auto" => Some(WakePriority::Auto),
             "system" => Some(WakePriority::System),
             "human" => Some(WakePriority::Human),
-            _ => None,
-        }
-    }
-}
-
-impl WakeState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WakeState::Pending => "pending",
-            WakeState::Inflight => "inflight",
-            WakeState::Delivered => "delivered",
-            WakeState::Dropped => "dropped",
-        }
-    }
-    pub fn parse(s: &str) -> Option<WakeState> {
-        match s {
-            "pending" => Some(WakeState::Pending),
-            "inflight" => Some(WakeState::Inflight),
-            "delivered" => Some(WakeState::Delivered),
-            "dropped" => Some(WakeState::Dropped),
             _ => None,
         }
     }
@@ -308,81 +283,168 @@ pub fn by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<WakeRow>> {
     Ok(out)
 }
 
-fn set_state(
-    tx: &mut Tx<'_>,
-    ids: &[i64],
-    from: &[&str],
-    to: WakeState,
-    settle: bool,
-) -> Result<()> {
+/// 一批行按同一个生命周期事件改状态（[`crewd_proto::wake_lifecycle`] 那张表是**唯一**的规则，C24）。
+/// 先把每一行都核一遍（没有 = `NotFound`，表不认 = `Conflict`），全过了才写——一行不对整批不动
+/// （调用方的 `Tx` 再兜一层回滚）。次数按 [`lifecycle::attempts_after`] 改；`Fail { retry_at: Some(t) }` 改 `not_before`；
+/// 进终局的记 `settled_at`。返回每一行事件之后的次数（与 `ids` 同序）。
+pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>> {
+    let mut planned = Vec::with_capacity(ids.len());
     for id in ids {
-        let state: Option<String> = tx
+        let row: Option<(String, u32)> = tx
             .conn()
-            .query_row("SELECT state FROM wakes WHERE id=?1", [id], |r| r.get(0))
+            .query_row("SELECT state,attempts FROM wakes WHERE id=?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .optional()?;
-        let Some(state) = state else {
+        let Some((state, attempts)) = row else {
             return Err(CollabError::NotFound(format!("没有唤醒 {id}")));
         };
-        if !from.contains(&state.as_str()) {
-            return Err(CollabError::Conflict(format!(
-                "唤醒 {id} 是 {state}，不能改成 {}",
-                to.as_str()
-            )));
-        }
+        let from = WakeState::parse(&state)
+            .ok_or_else(|| CollabError::Invalid(format!("唤醒 {id} 的状态坏了：{state:?}")))?;
+        let to = lifecycle::next(from, event)
+            .map_err(|e| CollabError::Conflict(format!("唤醒 {id}：{e}")))?;
+        planned.push((*id, to, lifecycle::attempts_after(event, attempts)));
+    }
+    let retry_at = match event {
+        WakeEvent::Fail { retry_at } => retry_at,
+        _ => None,
+    };
+    for (id, to, attempts) in &planned {
+        let settled = matches!(to, WakeState::Delivered | WakeState::Dropped);
         tx.conn().execute(
-            "UPDATE wakes SET state=?2, settled_at=CASE WHEN ?3 THEN ?4 ELSE settled_at END WHERE id=?1",
-            params![id, to.as_str(), settle, tx.now_ts()],
+            "UPDATE wakes SET state=?2, attempts=?3, not_before=COALESCE(?4, not_before),
+                    settled_at=CASE WHEN ?5 THEN ?6 ELSE settled_at END
+              WHERE id=?1",
+            params![id, to.as_str(), attempts, retry_at, settled, tx.now_ts()],
+        )?;
+    }
+    Ok(planned.into_iter().map(|(_, _, a)| a).collect())
+}
+
+fn note_error(tx: &mut Tx<'_>, ids: &[i64], error: &str) -> Result<()> {
+    for id in ids {
+        tx.conn().execute(
+            "UPDATE wakes SET last_error=?2 WHERE id=?1",
+            params![id, error],
         )?;
     }
     Ok(())
 }
 
-pub fn mark_inflight(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
-    set_state(tx, ids, &["pending"], WakeState::Inflight, false)
+/// 一批拿走这些行（含随批的窗口外行，C24）：pending → inflight，次数在这里 +1（这是第几次尝试；Oban / River 同）。
+/// 返回每一行拿走后的次数（与 `ids` 同序）。
+pub fn claim(tx: &mut Tx<'_>, ids: &[i64]) -> Result<Vec<u32>> {
+    apply(tx, ids, WakeEvent::Claim)
 }
 
-/// 投递确认（`Delivery::Delivered`）或「游标已越过」时记。
-pub fn mark_delivered(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
-    set_state(
-        tx,
-        ids,
-        &["pending", "inflight"],
-        WakeState::Delivered,
-        true,
-    )
+/// 随批窗口外行（M3a R6 `deferred`）在这批送到时怎么办。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Riders<'a> {
+    /// 放回 pending（退回 `claim` 记的那一次），下一批带上。
+    Release,
+    /// 一起丢掉（人正在停这个 session：跟别的 pending 一样不再投）。
+    Drop(&'a str),
 }
 
-/// 投递失败：回到 pending、次数 +1、记下原因；`retry_at_ms` 有值 = 退避（改 `not_before`，持久化，重启不会立刻重试）。
-/// 返回累计失败次数（M3c 连续 3 次就放弃并告警）。
-pub fn mark_failed(tx: &mut Tx<'_>, id: i64, error: &str, retry_at_ms: Option<i64>) -> Result<u32> {
-    set_state(tx, &[id], &["inflight"], WakeState::Pending, false)?;
-    tx.conn().execute(
-        "UPDATE wakes SET attempts=attempts+1, last_error=?2, not_before=COALESCE(?3, not_before) WHERE id=?1",
-        params![id, error, retry_at_ms],
-    )?;
-    Ok(tx
-        .conn()
-        .query_row("SELECT attempts FROM wakes WHERE id=?1", [id], |r| r.get(0))?)
-}
-
-pub fn mark_dropped(tx: &mut Tx<'_>, id: i64, why: &str) -> Result<()> {
-    set_state(
-        tx,
-        &[id],
-        &["pending", "inflight"],
-        WakeState::Dropped,
-        true,
-    )?;
-    tx.conn().execute(
-        "UPDATE wakes SET last_error=?2 WHERE id=?1",
-        params![id, why],
-    )?;
+/// 一批送到了：`wakes` → delivered、`riders` 放回或丢掉、各群游标推到 `cursor_targets`——**全在调用方的这一个
+/// `Tx` 里**（River 的 `JobCompleteTx`：游标是消息唤醒的幂等键，必须跟确认一起提交，否则崩在两者之间就会重投）。
+/// 任何一步出错整批回滚，一行都不改、游标也不动。`wakes` / `riders` 都必须是 `session` 的行。
+pub fn ack_delivered(
+    tx: &mut Tx<'_>,
+    session: &str,
+    wakes: &[i64],
+    riders: Riders<'_>,
+    rider_ids: &[i64],
+    cursor_targets: &[(String, i64)],
+) -> Result<()> {
+    let all: Vec<i64> = wakes.iter().chain(rider_ids).copied().collect();
+    for r in by_ids(tx.conn(), &all)? {
+        if r.session != session {
+            return Err(CollabError::Invalid(format!(
+                "唤醒 {} 属于 {}，不是 {session}",
+                r.id, r.session
+            )));
+        }
+    }
+    apply(tx, wakes, WakeEvent::Deliver)?;
+    match riders {
+        Riders::Release => {
+            apply(tx, rider_ids, WakeEvent::Requeue)?;
+        }
+        Riders::Drop(why) => {
+            apply(tx, rider_ids, WakeEvent::Drop)?;
+            note_error(tx, rider_ids, why)?;
+        }
+    }
+    for (channel, seq) in cursor_targets {
+        crate::cursors::advance(tx, session, channel, *seq)?;
+    }
     Ok(())
 }
 
-/// inflight 原样退回 pending（不算失败、attempts 不变）：会话退出 / 投递被打断时 M3c 用。
+/// [`ack_failed`] 里一行的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Failed {
+    pub id: i64,
+    /// 库里的次数（`claim` 记的）。
+    pub attempts: u32,
+    /// 再试的时刻（新的 `not_before`）；None = 到上限放弃了（dropped）。
+    pub retry_at_ms: Option<i64>,
+}
+
+/// 一批没送到（终局失败）：每一行按**库里的**次数（`claim` 时记的，不是调用方手里那份）问 `decide`——
+/// `Some(t)` = 回 pending、`not_before = t`；`None` = 放弃（dropped）。全部记下 `error`。一个 `Tx`、全有或全无：
+/// 任何一行不是 inflight 整批不动。
+pub fn ack_failed(
+    tx: &mut Tx<'_>,
+    ids: &[i64],
+    error: &str,
+    decide: impl Fn(u32) -> Option<i64>,
+) -> Result<Vec<Failed>> {
+    let rows = by_ids(tx.conn(), ids)?;
+    let mut counts = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(r) = rows.iter().find(|r| r.id == *id) else {
+            return Err(CollabError::NotFound(format!("没有唤醒 {id}")));
+        };
+        // 先按表把每一行都核一遍（Fail 与 GiveUp 认的起始状态相同）：有一行不对整批不动，也不问 `decide`。
+        lifecycle::next(r.state, WakeEvent::GiveUp)
+            .map_err(|e| CollabError::Conflict(format!("唤醒 {id}：{e}")))?;
+        counts.push((*id, r.attempts));
+    }
+    let out: Vec<Failed> = counts
+        .into_iter()
+        .map(|(id, attempts)| Failed {
+            id,
+            attempts,
+            retry_at_ms: decide(attempts),
+        })
+        .collect();
+    for f in &out {
+        let event = match f.retry_at_ms {
+            Some(t) => WakeEvent::Fail { retry_at: Some(t) },
+            None => WakeEvent::GiveUp,
+        };
+        apply(tx, &[f.id], event)?;
+    }
+    note_error(tx, ids, error)?;
+    Ok(out)
+}
+
+/// 投递确认（`Delivery::Delivered`）以外的「算送到」：游标已越过、无附言的恢复在跑就算到（pending / inflight → delivered）。
+pub fn mark_delivered(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
+    apply(tx, ids, WakeEvent::Deliver).map(|_| ())
+}
+
+/// 丢掉（人停、渲染不出来、没有这个 session）：pending / inflight → dropped，记下原因。
+pub fn mark_dropped(tx: &mut Tx<'_>, id: i64, why: &str) -> Result<()> {
+    apply(tx, &[id], WakeEvent::Drop)?;
+    note_error(tx, &[id], why)
+}
+
+/// inflight 原样退回 pending（没尝试成：crewd 停、撞额度、会话退出时被打断）：退回 `claim` 记的那一次，不算失败。
 pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
-    set_state(tx, ids, &["inflight"], WakeState::Pending, false)
+    apply(tx, ids, WakeEvent::Requeue).map(|_| ())
 }
 
 /// 清理：删掉 `settled_before_ms` 之前就已 delivered / dropped 的行（M3c 的定时拍按保留期调，缺省 7 天）。
@@ -394,14 +456,20 @@ pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64) -> Result<usize> {
     )?)
 }
 
-/// 启动时：上次没确认的 inflight 全部退回 pending（spec §22.4「重启时 inflight 退回 pending」）。
-/// 只在启动时调（不是运行期的重试路径，那是 `requeue` / `mark_failed`）。语义是至少一次：上次可能已经
-/// 投出去只是没来得及记，所以会再投一遍；这不算一次失败尝试，`attempts` 不变。delivered / dropped 不动。
+/// 启动时：上次没确认的 inflight 全部退回 pending（spec §22.4「重启时 inflight 退回 pending」），走表里的 `Requeue`：
+/// 退回 `claim` 记的那一次，所以这次重启不算一次尝试（C25：Task 9 改成算一次，让弄崩 crewd 的唤醒有上限）。
+/// 只在启动时调（运行期的退回是 `requeue`、失败是 `ack_failed`）。语义是至少一次：上次可能已经投出去只是没来得及记，
+/// 所以会再投一遍。delivered / dropped 不动。
 pub fn reset_inflight(tx: &mut Tx<'_>) -> Result<usize> {
-    Ok(tx.conn().execute(
-        "UPDATE wakes SET state='pending' WHERE state='inflight'",
-        [],
-    )?)
+    let ids: Vec<i64> = {
+        let mut st = tx
+            .conn()
+            .prepare("SELECT id FROM wakes WHERE state='inflight' ORDER BY id")?;
+        st.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?
+    };
+    requeue(tx, &ids)?;
+    Ok(ids.len())
 }
 
 /// 某个目标 `since_ms` 之后入队的全部唤醒（任何状态），按入队先后。熔断判定读它（§22.7 Q5）。
@@ -544,6 +612,7 @@ pub mod latches {
 mod tests {
     use super::*;
     use crate::testkit::{MIN, NOW, count, err, ok, ok_at, store};
+    use crewd_store::Store;
 
     fn req(session: &str, source: &str, p: WakePriority) -> WakeRequest {
         WakeRequest {
@@ -633,94 +702,293 @@ mod tests {
         assert_eq!(later.len(), 4);
     }
 
-    #[test]
-    fn lifecycle_pending_inflight_delivered_and_failures() {
-        let mut s = store();
-        let Enqueued::New(id) = ok(&mut s, |tx| {
-            enqueue(tx, req("w-a1", "msg:1", WakePriority::Auto))
-        }) else {
-            panic!()
-        };
-        ok(&mut s, |tx| mark_inflight(tx, &[id]));
-        assert!(
-            due_for(s.conn(), "w-a1", NOW).unwrap().is_empty(),
-            "inflight 不再算到期"
-        );
-        assert!(matches!(
-            err(&mut s, |tx| mark_inflight(tx, &[id])),
-            CollabError::Conflict(_)
-        ));
-        assert_eq!(
-            ok(&mut s, |tx| mark_failed(tx, id, "输入框没就绪", None)),
-            1
-        );
-        assert_eq!(
-            due_for(s.conn(), "w-a1", NOW).unwrap()[0].attempts,
-            1,
-            "失败回到 pending、记次数"
-        );
-        ok(&mut s, |tx| mark_inflight(tx, &[id]));
-        assert_eq!(
-            ok(&mut s, |tx| mark_failed(
-                tx,
-                id,
-                "又没就绪",
-                Some(NOW + 2 * MIN)
-            )),
-            2
-        );
-        assert!(
-            due_for(s.conn(), "w-a1", NOW).unwrap().is_empty(),
-            "退避：not_before 推后，持久化（重启后不会立刻重试）"
-        );
-        assert_eq!(
-            by_ids(s.conn(), &[id]).unwrap()[0].not_before_ms,
-            NOW + 2 * MIN
-        );
-        ok(&mut s, |tx| mark_inflight(tx, &[id]));
-        ok(&mut s, |tx| requeue(tx, &[id]));
-        let back = &by_ids(s.conn(), &[id]).unwrap()[0];
-        assert_eq!(
-            (back.state, back.attempts),
-            (WakeState::Pending, 2),
-            "原样退回不记失败"
-        );
-        ok(&mut s, |tx| mark_inflight(tx, &[id]));
-        ok(&mut s, |tx| mark_delivered(tx, &[id]));
-        let row = &list(s.conn(), None, 10).unwrap()[0];
-        assert_eq!(row.state, WakeState::Delivered);
-        assert!(row.settled_at.is_some());
-        let Enqueued::New(id2) = ok(&mut s, |tx| {
-            enqueue(tx, req("w-a1", "msg:2", WakePriority::Auto))
-        }) else {
-            panic!()
-        };
-        ok(&mut s, |tx| {
-            mark_dropped(tx, id2, "游标已越过：hook 注入过了")
-        });
-        assert_eq!(
-            list(s.conn(), Some("w-a1"), 10)
-                .unwrap()
-                .iter()
-                .filter(|r| r.state == WakeState::Dropped)
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn reset_inflight_returns_everything_in_flight_to_pending() {
-        let mut s = store();
-        let ids: Vec<i64> = ok(&mut s, |tx| {
+    fn new_ids(s: &mut Store, srcs: &[&str]) -> Vec<i64> {
+        ok(s, |tx| {
             let mut v = Vec::new();
-            for src in ["msg:1", "msg:2"] {
+            for src in srcs {
                 if let Enqueued::New(id) = enqueue(tx, req("w-a1", src, WakePriority::Auto))? {
                     v.push(id);
                 }
             }
             Ok(v)
+        })
+    }
+
+    fn state_of(s: &Store, id: i64) -> (WakeState, u32) {
+        let r = &by_ids(s.conn(), &[id]).unwrap()[0];
+        (r.state, r.attempts)
+    }
+
+    fn lobby_cursor(s: &Store) -> Option<i64> {
+        crate::cursors::cursor(s.conn(), "w-a1", "crew-a/lobby").unwrap()
+    }
+
+    /// 两条合成消息进大厅（游标能推到 2）。
+    fn two_lobby_messages(s: &Store) {
+        for id in ["m-1", "m-2"] {
+            crate::testkit::msg(
+                s,
+                "crew-a/lobby",
+                id,
+                crewd_proto::SenderKind::Human,
+                None,
+                vec![],
+            );
+        }
+    }
+
+    /// 次数在 claim 时记（C24）；失败不再加，按库里的数问 `decide`；退回把 claim 那次退掉；退避改 `not_before`。
+    #[test]
+    fn lifecycle_counts_attempts_at_claim_and_fails_by_the_stored_count() {
+        let mut s = store();
+        let id = new_ids(&mut s, &["msg:1"])[0];
+        assert_eq!(ok(&mut s, |tx| claim(tx, &[id])), [1]);
+        assert!(
+            due_for(s.conn(), "w-a1", NOW).unwrap().is_empty(),
+            "inflight 不再算到期"
+        );
+        assert!(matches!(
+            err(&mut s, |tx| claim(tx, &[id])),
+            CollabError::Conflict(_)
+        ));
+        let seen = std::cell::RefCell::new(Vec::new());
+        let failed = ok(&mut s, |tx| {
+            ack_failed(tx, &[id], "输入框没就绪", |n| {
+                seen.borrow_mut().push(n);
+                Some(NOW + MIN)
+            })
         });
-        ok(&mut s, |tx| mark_inflight(tx, &ids));
+        assert_eq!(seen.into_inner(), [1], "decide 拿到的是库里 claim 记的数");
+        assert_eq!(
+            failed,
+            [Failed {
+                id,
+                attempts: 1,
+                retry_at_ms: Some(NOW + MIN)
+            }]
+        );
+        let r = &by_ids(s.conn(), &[id]).unwrap()[0];
+        assert_eq!((r.state, r.attempts), (WakeState::Pending, 1), "失败不再加");
+        assert_eq!(r.not_before_ms, NOW + MIN, "退避持久化，重启不会立刻重试");
+        assert_eq!(r.last_error.as_deref(), Some("输入框没就绪"));
+        assert!(due_for(s.conn(), "w-a1", NOW).unwrap().is_empty());
+        assert_eq!(ok(&mut s, |tx| claim(tx, &[id])), [2]);
+        ok(&mut s, |tx| requeue(tx, &[id]));
+        assert_eq!(
+            state_of(&s, id),
+            (WakeState::Pending, 1),
+            "原样退回：退掉这次 claim，不记失败"
+        );
+        assert_eq!(ok(&mut s, |tx| claim(tx, &[id])), [2]);
+        assert_eq!(ok(&mut s, |tx| claim(tx, &[])), Vec::<u32>::new());
+        ok(&mut s, |tx| mark_delivered(tx, &[id]));
+        let row = &list(s.conn(), None, 10).unwrap()[0];
+        assert_eq!((row.state, row.attempts), (WakeState::Delivered, 2));
+        assert!(row.settled_at.is_some());
+        let id2 = new_ids(&mut s, &["msg:2"])[0];
+        ok(&mut s, |tx| {
+            mark_dropped(tx, id2, "游标已越过：hook 注入过了")
+        });
+        let r2 = &by_ids(s.conn(), &[id2]).unwrap()[0];
+        assert_eq!(r2.state, WakeState::Dropped);
+        assert_eq!(r2.last_error.as_deref(), Some("游标已越过：hook 注入过了"));
+        assert!(r2.settled_at.is_some());
+    }
+
+    /// 到上限放弃：`decide` 回 None → dropped（库里的数，不是调用方那份）。
+    #[test]
+    fn ack_failed_gives_up_when_decide_says_so() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
+        ok(&mut s, |tx| claim(tx, &ids));
+        ok(&mut s, |tx| ack_failed(tx, &ids, "x", |_| Some(NOW)));
+        ok(&mut s, |tx| claim(tx, &ids[..1]));
+        ok(&mut s, |tx| claim(tx, &ids[1..]));
+        let out = ok(&mut s, |tx| {
+            ack_failed(tx, &ids, "又没送到", |n| (n < 2).then_some(NOW))
+        });
+        assert_eq!(
+            out.iter()
+                .map(|f| (f.attempts, f.retry_at_ms))
+                .collect::<Vec<_>>(),
+            [(2, None), (2, None)]
+        );
+        for id in &ids {
+            let r = &by_ids(s.conn(), &[*id]).unwrap()[0];
+            assert_eq!((r.state, r.attempts), (WakeState::Dropped, 2));
+            assert!(r.settled_at.is_some());
+            assert_eq!(r.last_error.as_deref(), Some("又没送到"));
+        }
+    }
+
+    /// 全有或全无（C24）：一批里有一行不是 inflight，整批不动、也不问 `decide`。
+    #[test]
+    fn ack_failed_with_one_bad_row_changes_nothing() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:1", "msg:2", "msg:3"]);
+        ok(&mut s, |tx| claim(tx, &ids[..2]));
+        let before = by_ids(s.conn(), &ids).unwrap();
+        let e = err(&mut s, |tx| {
+            ack_failed(tx, &ids, "x", |_| panic!("不该问到这里"))
+        });
+        assert!(matches!(e, CollabError::Conflict(_)), "{e:?}");
+        assert_eq!(by_ids(s.conn(), &ids).unwrap(), before);
+        assert!(matches!(
+            err(&mut s, |tx| ack_failed(tx, &[999], "x", |_| None)),
+            CollabError::NotFound(_)
+        ));
+    }
+
+    /// 送到 = 一个 Tx：进正文的 → delivered、随批的放回 pending（退回 claim 那次）、游标推到 cursor_targets。
+    #[test]
+    fn ack_delivered_settles_rows_releases_riders_and_advances_the_cursor_together() {
+        let mut s = store();
+        two_lobby_messages(&s);
+        let ids = new_ids(&mut s, &["msg:1", "msg:2", "msg:3"]);
+        ok(&mut s, |tx| claim(tx, &ids));
+        let targets = vec![("crew-a/lobby".to_string(), 2)];
+        ok(&mut s, |tx| {
+            ack_delivered(tx, "w-a1", &ids[..2], Riders::Release, &ids[2..], &targets)
+        });
+        assert_eq!(state_of(&s, ids[0]), (WakeState::Delivered, 1));
+        assert_eq!(state_of(&s, ids[1]), (WakeState::Delivered, 1));
+        assert_eq!(
+            state_of(&s, ids[2]),
+            (WakeState::Pending, 0),
+            "随批的放回、这次不算"
+        );
+        assert_eq!(lobby_cursor(&s), Some(2));
+    }
+
+    /// 人正在停这个 session：随批的跟 pending 一起丢，不放回。
+    #[test]
+    fn ack_delivered_can_drop_the_riders() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
+        ok(&mut s, |tx| claim(tx, &ids));
+        ok(&mut s, |tx| {
+            ack_delivered(
+                tx,
+                "w-a1",
+                &ids[..1],
+                Riders::Drop("stopped"),
+                &ids[1..],
+                &[],
+            )
+        });
+        let r = &by_ids(s.conn(), &ids[1..]).unwrap()[0];
+        assert_eq!(
+            (r.state, r.last_error.as_deref()),
+            (WakeState::Dropped, Some("stopped"))
+        );
+    }
+
+    /// 原子性（C24）：游标那一步出错（推到一个不存在的群，外键挡住）→ 整个 Tx 回滚：行还是 inflight、游标没动。
+    #[test]
+    fn ack_delivered_rolls_back_everything_when_the_cursor_step_fails() {
+        let mut s = store();
+        two_lobby_messages(&s);
+        let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
+        ok(&mut s, |tx| claim(tx, &ids));
+        let cursor_before = lobby_cursor(&s);
+        let before = by_ids(s.conn(), &ids).unwrap();
+        let targets = vec![
+            ("crew-a/lobby".to_string(), 2),
+            ("没有这个群".to_string(), 1),
+        ];
+        let _ = err(&mut s, |tx| {
+            ack_delivered(tx, "w-a1", &ids[..1], Riders::Release, &ids[1..], &targets)
+        });
+        assert_eq!(by_ids(s.conn(), &ids).unwrap(), before, "行一行都没改");
+        assert_eq!(lobby_cursor(&s), cursor_before, "游标也没动");
+    }
+
+    /// 一行不对（不是 inflight / 不是这个 session 的）：整批不动。
+    #[test]
+    fn ack_delivered_refuses_a_bad_row_without_touching_the_rest() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
+        ok(&mut s, |tx| claim(tx, &ids[..1]));
+        ok(&mut s, |tx| mark_dropped(tx, ids[1], "x"));
+        let before = by_ids(s.conn(), &ids).unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| ack_delivered(
+                tx,
+                "w-a1",
+                &ids[..1],
+                Riders::Release,
+                &ids[1..],
+                &[]
+            )),
+            CollabError::Conflict(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| ack_delivered(
+                tx,
+                "w-a2",
+                &ids[..1],
+                Riders::Release,
+                &[],
+                &[]
+            )),
+            CollabError::Invalid(_)
+        ));
+        assert_eq!(by_ids(s.conn(), &ids).unwrap(), before);
+    }
+
+    /// 整批 claim 也是全有或全无。
+    #[test]
+    fn claim_with_one_non_pending_row_claims_nothing() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
+        ok(&mut s, |tx| claim(tx, &ids[1..]));
+        assert!(matches!(
+            err(&mut s, |tx| claim(tx, &ids)),
+            CollabError::Conflict(_)
+        ));
+        assert_eq!(state_of(&s, ids[0]), (WakeState::Pending, 0));
+        assert_eq!(state_of(&s, ids[1]), (WakeState::Inflight, 1));
+    }
+
+    /// `apply` 与 `crewd_proto::wake_lifecycle::next` 逐格一致（4 状态 × 6 事件），次数按 `attempts_after`。
+    #[test]
+    fn apply_follows_the_shared_table_for_every_state_and_event() {
+        for from in WakeState::ALL {
+            for event in WakeEvent::ALL {
+                let mut s = store();
+                let id = new_ids(&mut s, &["msg:1"])[0];
+                match from {
+                    WakeState::Pending => {}
+                    WakeState::Inflight => {
+                        ok(&mut s, |tx| claim(tx, &[id]));
+                    }
+                    WakeState::Delivered => ok(&mut s, |tx| mark_delivered(tx, &[id])),
+                    WakeState::Dropped => ok(&mut s, |tx| mark_dropped(tx, id, "x")),
+                }
+                let (_, attempts) = state_of(&s, id);
+                let got = crate::run(&mut s, NOW, |tx| apply(tx, &[id], event));
+                match lifecycle::next(from, event) {
+                    Ok(to) => {
+                        assert_eq!(got.unwrap().0, [lifecycle::attempts_after(event, attempts)]);
+                        assert_eq!(state_of(&s, id).0, to, "{from:?} + {event:?}");
+                    }
+                    Err(_) => {
+                        assert!(
+                            matches!(got, Err(CollabError::Conflict(_))),
+                            "{from:?} + {event:?}: {got:?}"
+                        );
+                        assert_eq!(state_of(&s, id), (from, attempts));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reset_inflight_returns_everything_in_flight_to_pending() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:1", "msg:2"]);
+        ok(&mut s, |tx| claim(tx, &ids));
         assert_eq!(ok(&mut s, reset_inflight), 2);
         assert_eq!(due_for(s.conn(), "w-a1", NOW).unwrap().len(), 2);
     }
@@ -793,24 +1061,22 @@ mod tests {
     #[test]
     fn reset_inflight_leaves_settled_rows_and_does_not_count_an_attempt() {
         let mut s = store();
-        let mut ids = Vec::new();
-        for src in ["msg:1", "msg:2", "msg:3"] {
-            if let Enqueued::New(id) = ok(&mut s, |tx| {
-                enqueue(tx, req("w-a1", src, WakePriority::Auto))
-            }) {
-                ids.push(id);
-            }
-        }
-        ok(&mut s, |tx| mark_inflight(tx, &ids[..1]));
-        ok(&mut s, |tx| mark_failed(tx, ids[0], "没就绪", None));
-        ok(&mut s, |tx| mark_inflight(tx, &ids[..1]));
+        let ids = new_ids(&mut s, &["msg:1", "msg:2", "msg:3"]);
+        ok(&mut s, |tx| claim(tx, &ids[..1]));
+        ok(&mut s, |tx| {
+            ack_failed(tx, &ids[..1], "没就绪", |_| Some(NOW))
+        });
+        ok(&mut s, |tx| claim(tx, &ids[..1]));
         ok(&mut s, |tx| mark_delivered(tx, &ids[1..2]));
         ok(&mut s, |tx| mark_dropped(tx, ids[2], "游标已越过"));
         let before = by_ids(s.conn(), &ids).unwrap();
         assert_eq!(ok(&mut s, reset_inflight), 1, "只动 inflight 那一条");
         let after = by_ids(s.conn(), &ids).unwrap();
         assert_eq!(after[0].state, WakeState::Pending);
-        assert_eq!(after[0].attempts, 1, "重启退回不算一次尝试");
+        assert_eq!(
+            after[0].attempts, 1,
+            "重启退回不算一次尝试（退掉这次 claim）"
+        );
         assert_eq!(after[1], before[1], "delivered 原样");
         assert_eq!(after[2], before[2], "dropped 原样");
     }
