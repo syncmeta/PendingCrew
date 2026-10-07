@@ -315,3 +315,6 @@ scope=edge needs from (the source that woke it: a session id or system). To rele
 
 ## system.api_incompatible
 The client's API version {client} is too old: this crewd supports {min} to {current}. Update the client and connect again.
+
+## crew.no_workdir
+Crew {crew} has no working directory, so no worktree can be created for the session. Set the crew's working directory first, or start with isolation=false.

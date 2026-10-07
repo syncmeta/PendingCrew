@@ -273,6 +273,8 @@ pub enum ControlError {
     NoWorkdir(String),
     /// 建 worktree 失败（C8）：原因给人看；什么都没留下、没起、没退回共享目录。
     Worktree(String),
+    /// `isolation: true` 但机组没有工作目录（C8：不退回共享目录）：`crew.no_workdir`（机组 id）。
+    CrewNoWorkdir(String),
     /// 要起机长、但机组已有机长（M3a 的 `sessions::register` 对此回 `Conflict`）。换机长走 `crew.setCaptain` / handoff。
     CaptainTaken(String),
     /// 请求本身不成立（空的 nudge、在没编号的选择框上发数字、设置值不对）。
@@ -355,6 +357,7 @@ impl ControlError {
             }
             Self::NoWorkdir(s) => r(Code::SessionNoWorkdir).arg("session", s),
             Self::Worktree(detail) => r(Code::SessionWorktreeFailed).arg("detail", detail),
+            Self::CrewNoWorkdir(crew) => r(Code::CrewNoWorkdir).arg("crew", crew),
             Self::CaptainTaken(crew) => r(Code::SessionCaptainExists).arg("crew", crew),
             Self::Invalid(refusal) | Self::Refused { refusal, .. } => refusal.clone(),
             Self::ShuttingDown => r(Code::OrchestraShuttingDown),
@@ -914,12 +917,7 @@ impl<P: Port> Core<P> {
             .crew_workdir(&req.crew_id)
             .await
             .map_err(ControlError::from_port)?
-            .ok_or_else(|| {
-                ControlError::Worktree(format!(
-                    "机组 {} 没有工作目录，无法为 session 新建 worktree",
-                    req.crew_id
-                ))
-            })?;
+            .ok_or_else(|| ControlError::CrewNoWorkdir(req.crew_id.clone()))?;
         Ok(Some(base))
     }
 
@@ -2433,7 +2431,8 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(matches!(err, ControlError::Worktree(_)), "{err}");
+        // 修复轮 M3：带码（`crew.no_workdir`），不再是一段中文原因的 Worktree。
+        assert_eq!(err, ControlError::CrewNoWorkdir("c1".into()), "{err}");
         assert!(rig.worktrees.calls().is_empty());
         assert_eq!(rig.port.lock().sessions.len(), 1);
     }

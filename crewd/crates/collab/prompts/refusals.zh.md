@@ -315,3 +315,6 @@ scope=edge 要给 from（叫醒它的来源：session id 或 system）；要解�
 
 ## system.api_incompatible
 客户端的 API 版本 {client} 太旧：这台 crewd 支持 {min} 到 {current}；更新客户端后再连
+
+## crew.no_workdir
+机组 {crew} 没有工作目录，没法为 session 新建 worktree；先给机组设好工作目录，或用 isolation=false

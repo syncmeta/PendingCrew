@@ -55,6 +55,7 @@ pub fn rpc_err(e: ControlError) -> RpcError {
         | ControlError::ShuttingDown
         | ControlError::NoWorkdir(_)
         | ControlError::Worktree(_)
+        | ControlError::CrewNoWorkdir(_)
         | ControlError::CrewRemoved(_)
         | ControlError::Unsupported(_) => RpcError::CONFLICT,
     };
@@ -431,6 +432,11 @@ mod tests {
                 ControlError::CrewRemoved("c-1".into()),
                 -32009,
                 "crew.removed",
+            ),
+            (
+                ControlError::CrewNoWorkdir("c-1".into()),
+                -32009,
+                "crew.no_workdir",
             ),
             (
                 refused(RefusedKind::NotFound),
@@ -1121,5 +1127,93 @@ mod tests {
             (RpcError::NOT_FOUND, Some("crew.not_found".into()))
         );
         assert_eq!(rig.port.lock().sessions.len(), 1, "没写行");
+    }
+
+    /// `ControlError::X(…)` 括号里（`//` 注释之外、`#[cfg(test)] mod tests` 之前）带中日韩字符的那几段。
+    /// 括号按字符配对（中文句子里用的是全角括号，不影响配对）。
+    fn prose_in_control_errors(src: &str) -> Vec<String> {
+        fn cjk(c: char) -> bool {
+            ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3000}'..='\u{303f}').contains(&c)
+        }
+        let code = match src.find("#[cfg(test)]\nmod tests") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let code: String = code
+            .lines()
+            .map(|l| match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut hits = Vec::new();
+        let mut from = 0;
+        while let Some(i) = code[from..].find("ControlError::") {
+            let start = from + i;
+            let rest = &code[start..];
+            let head = "ControlError::".len();
+            let ident_end = rest[head..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .map_or(rest.len(), |n| n + head);
+            from = start + ident_end;
+            if !rest[ident_end..].starts_with('(') {
+                continue;
+            }
+            let mut depth = 0;
+            let mut end = rest.len();
+            for (k, c) in rest[ident_end..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = ident_end + k + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if rest[..end].chars().any(cjk) {
+                hits.push(rest[..end].to_string());
+            }
+        }
+        hits
+    }
+
+    /// 修复轮 M3：编排给客户端 / agent 的拒绝都是码 + 数据，不在构造 `ControlError` 时塞中文句子（文字在 collab 的
+    /// `prompts/refusals.*.md`）。扫 orchestra 的全部非测试源码。
+    #[test]
+    fn control_errors_are_built_from_codes_not_prose() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestra");
+        let mut seen = 0;
+        let mut hits = Vec::new();
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let path = e.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.ends_with(".rs") || name == "testkit.rs" || name == "port_contract.rs" {
+                continue;
+            }
+            seen += 1;
+            for h in prose_in_control_errors(&std::fs::read_to_string(&path).unwrap()) {
+                hits.push(format!("{name}: {h}"));
+            }
+        }
+        assert!(seen >= 10, "只扫到 {seen} 个文件，目录读错了？");
+        assert!(
+            hits.is_empty(),
+            "ControlError 里有中文句子（换成拒绝码）：\n{}",
+            hits.join("\n")
+        );
+    }
+
+    /// 扫描器自己会红（防「从来不发声的检查」）：修复轮之前的那一处原样抓得到；注释里的、测试里的不算；带码的不算。
+    #[test]
+    fn the_control_error_scanner_catches_a_prose_literal() {
+        let old = "let b = x.ok_or_else(|| {\n    ControlError::Worktree(format!(\n        \"机组 {} 没有工作目录\",\n        c\n    ))\n})?;";
+        assert_eq!(prose_in_control_errors(old).len(), 1);
+        let ok = "let e = ControlError::CrewNoWorkdir(c.clone()); // 机组没有工作目录\n#[cfg(test)]\nmod tests {\n    ControlError::Worktree(\"合成\".into())\n}";
+        assert!(prose_in_control_errors(ok).is_empty());
     }
 }

@@ -98,6 +98,7 @@ pub fn map_error(e: ControlError, l: Locale) -> M3aError {
         // 建 worktree 失败（C8）带原因原样给调用方（M3b 的 `start_session` 回执 = 失败 + 这段原因）。
         ControlError::AtCap { .. }
         | ControlError::Worktree(_)
+        | ControlError::CrewNoWorkdir(_)
         | ControlError::ShuttingDown
         | ControlError::Storage { .. }
         | ControlError::Internal(_) => M3aError::Failed(text),
@@ -282,6 +283,7 @@ mod tests {
             (refused(RefusedKind::Conflict), M3aError::Invalid),
             (ControlError::AtCap { max: 2 }, M3aError::Failed),
             (ControlError::Worktree("合成原因".into()), M3aError::Failed),
+            (ControlError::CrewNoWorkdir("c-1".into()), M3aError::Failed),
             (ControlError::ShuttingDown, M3aError::Failed),
         ];
         for (e, want) in table {

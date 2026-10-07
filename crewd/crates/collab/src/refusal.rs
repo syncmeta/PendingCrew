@@ -77,6 +77,7 @@ refusal_codes! {
     CrewSessionNotInCrew = "crew.session_not_in_crew" ["session", "crew"],
     CrewReorderMismatch = "crew.reorder_mismatch" ["current"],
     CrewNoCaptain = "crew.no_captain" ["crew"],
+    CrewNoWorkdir = "crew.no_workdir" ["crew"],
     // directory
     DirectoryBadAddress = "directory.bad_address" ["address"],
     DirectoryNoSuchCrew = "directory.no_such_crew" ["number"],
