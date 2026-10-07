@@ -19,3 +19,17 @@ pub fn truncate_half(db: &Path) {
     let len = f.metadata().unwrap().len();
     f.set_len(len / 2).unwrap();
 }
+
+/// 只坏索引、表数据完好：`VACUUM INTO` 照样拷得出来（并把坏处一起拷走），`integrity_check` 才看得见。
+/// 用来证明「检查」这一步自己在起作用，而不是被后面更早失败的步骤顶替。
+pub fn corrupt_an_index(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "CREATE TABLE probe(a TEXT, b TEXT);
+         CREATE INDEX probe_i ON probe(a);
+         INSERT INTO probe VALUES('x','y'),('p','q');
+         PRAGMA writable_schema=ON;
+         UPDATE sqlite_master SET sql='CREATE INDEX probe_i ON probe(b)' WHERE name='probe_i';
+         PRAGMA writable_schema=OFF;",
+    )
+    .unwrap();
+}

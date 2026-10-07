@@ -739,6 +739,26 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert!(snapshots(&d.path().join("backups")).is_empty());
     }
 
+    /// S25：坏处只在索引里、拷贝照样能成的库，也要被迁移前的 integrity_check 拦住（不靠快照失败顶替）。
+    #[test]
+    fn an_old_db_that_copies_fine_but_fails_integrity_check_is_not_migrated() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        crate::testing::corrupt_an_index(&Connection::open(&p).unwrap());
+        let err = crate::Store::open(&p).err().expect("没过检查的库不能迁");
+        assert!(
+            matches!(&err, StoreError::MigrationRefused { source, .. }
+                if matches!(**source, StoreError::Integrity { .. })),
+            "{err:?}"
+        );
+        assert_eq!(
+            one::<i64>(&Connection::open(&p).unwrap(), "PRAGMA user_version"),
+            2
+        );
+        assert!(snapshots(&d.path().join("backups")).is_empty());
+    }
+
     /// 空的旧库和全新的库都没有要保的东西：不拍快照，也不建 backups/。
     #[test]
     fn empty_or_fresh_dbs_are_not_snapshotted() {
