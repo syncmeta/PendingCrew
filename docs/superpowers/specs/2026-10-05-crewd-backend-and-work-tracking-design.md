@@ -990,7 +990,7 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - **Task 8 session 标题**：`sessions::TITLE_MAX_CHARS = 18`（按码点数，先去掉不可见字符、压空白）；`register` 要标题或 brief（从 brief 第一条非空行派生），两样都没有 → 拒绝；v4 回填没标题也没显示名的旧 session。
 - **Task 9 移除 / 恢复 / 永久删除**：`crew.remove` 归档并返回 `Crew`；`crew.restore`；`crew.purge`（只收已移除的，经 N4 的 `collab_after_snapshot` 先快照再删）；已移除的机组及其群只读；`crew.list` / `session.list` / `directory.list` 默认不含；`resolve` 到已移除机组的号 → Conflict `directory.crew_removed`；`wakes::enqueue` 对已移除机组的 session 返回 `Enqueued::Skipped`（不写行、不发变更）；`asks::open` 拒已移除机组的 session。删前快照 30 天后随定时备份的轮转删掉（`backup::expire_pre_delete`，按文件名里的时间；备份失败或在用的库没过检查时不删）。
 - **Task 10 拒绝文字的稳定码**：`CollabError::{NotFound,Invalid,Forbidden,Conflict}` 装 `Refusal { code, args }`；码 = `area.name`，全集在 `collab::refusal::Code`，文字在 `crates/collab/prompts/refusals.{zh,en}.md`（每句都说下一步怎么办；两种语言节名与占位符由测试钉住；collab 源码里的散文由扫描测试拦住）；`RpcError.data.refusal` 把码带给客户端（只加不改）。
-- **N1b 管理机组的权限**：`crews::is_management_session` / `is_management_captain` / `acts_as_captain_of`（`pub(crate)`）；总机组机长在 `channels::may_manage` / `force_owner` / 人类群拉人 / `asks::withdraw` 上按那个机组的机长算；总机组的其他 session 不行。`messages::post`：总机组的 session 可往任何活的大厅 / topic / 别的 home 的人类群发言而不入群（dm 不行；已归档的仍 `channel.archived`；@ 仍只认群成员）。
+- **N1b 管理机组的权限**：`crews::is_management_session` / `is_management_captain` / `acts_as_captain_of`（`pub`，M3b 的机长工具用它）；总机组机长在 `channels::may_manage` / `force_owner` / 人类群拉人 / `asks::withdraw` 上按那个机组的机长算；总机组的其他 session 不行。`messages::post`：总机组的 session 可往任何活的大厅 / topic / 别的 home 的人类群发言而不入群（dm 不行；已归档的仍 `channel.archived`；@ 仍只认群成员）。
 - **Task 11 / N1b-2**：真实数据只读演练两次（26.4）；本节与 README。
 
 ### 26.2 与计划不同的地方（含改了期望的老测试）
@@ -1059,7 +1059,7 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 | `port.rs` 的 `From<CollabError>` 与 `CollabError::Forbidden("…".into())` | 四个变体装 `Refusal`（`collab::refusal::{Code, Refusal}`） | `Self::Refused(r.text(locale))`（agent 的语言）；需要新的拒绝就加码 + 两种语言的 md 节，不在代码里写句子（扫描测试会红） |
 | `port.rs` 里 `builtin` / `builtin_crew` 与 `not_on_builtin` | `Crew.management` | 映射到 `management`；T15b 删 `not_on_builtin`；`ask` 不再限制总机组（N1-R9：它的问去它自己的管理用人类群） |
 | `port.rs` 里人类群 = `ensure_human_channel(root_of(crew))` | 同上 | `home_of`（顶层祖先） |
-| T15b 机长工具（`crew_structure` 等）的权限判断 | 总机组的**机长**在每个机组都按机长算；总机组的其他 session 不算 | 用 `crews::acts_as_captain_of`（现在是 `pub(crate)`，M3b 要用就改成 `pub`）或 `is_management_captain`，不要只比 `crew.captain_session_id`；结构操作碰到总机组时 collab 会拒 `crew.management_not_in_tree`，原样回给 agent |
+| T15b 机长工具（`crew_structure` 等）的权限判断 | 总机组的**机长**在每个机组都按机长算；总机组的其他 session 不算 | 用 `crews::acts_as_captain_of`（`pub`）或 `is_management_captain`，不要只比 `crew.captain_session_id`；结构操作碰到总机组时 collab 会拒 `crew.management_not_in_tree`，原样回给 agent |
 | T12 `post`（**静默**） | 总机组的 session 可往任何活的大厅 / topic / 人类群发言而不入群（collab `messages::post` 已放行，dm 除外） | 工具层不要另加「必须是成员」的门；回执要说清它不在群里、别人回复叫不醒它（26.5） |
 | `agent/catalog.rs:51` 与 `:435` 的 `MENTION_KINDS`（含 `"broadcast"`）；`collab/prompts/tools.{zh,en}.md` 第 10、23、26 行与 `world-model.{zh,en}.md` 第 58–59 行教 @ 收窄、@broadcast、回复 @ `[broadcast, 发送者]`（**静默**：文字不进编译） | `MentionKind::Broadcast` 删；@ 只叫醒；回复只 @ 原发送者 | `MENTION_KINDS` 去掉 `broadcast`；T15c 把这几处改成「@ 只决定叫醒谁；回复只 @ 原发送者（他还在群里时）」 |
 | `agent/inject.rs` 测试里的 `MentionKind::Broadcast`、`render::MsgLine.directed_to` | 删 | 按 `MsgLine.mentions`（`Vec<String>`，读者自己显示成「你」）改；「@ 了别人的不进 / broadcast 放宽」改成「群里别人发的全进、标出 @ 了谁」 |

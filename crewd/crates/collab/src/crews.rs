@@ -147,9 +147,12 @@ pub fn is_management_captain(conn: &Connection, session: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// `session` 在机组 `crew` 上有机长的权限：是它此刻的机长，或总机组的机长（`is_management_captain`）。
-/// collab 里「这个机组的机长才能做」的检查都走这里。
-pub(crate) fn acts_as_captain_of(conn: &Connection, session: &str, crew: &str) -> Result<bool> {
+/// `session` 在机组 `crew` 上有机长的权限：是它此刻的机长，或总机组的机长（`is_management_captain`；
+/// PM 2026-10-07：总机组的机长像所有机组的根机组一样，在每个机组都按机长算）。总机组的其他 session
+/// 不算（它们只多出「读全组织、往任何活群发言」）。collab 里「这个机组的机长才能做」的检查都走这里；
+/// collab 之外（M3b 的机长工具、`crew_structure` 等）也必须用它，不要只比 `Crew.captain_session_id`。
+/// 一两次直查；机组或 session 不存在 = false（不是错误）。
+pub fn acts_as_captain_of(conn: &Connection, session: &str, crew: &str) -> Result<bool> {
     Ok(
         captain_of(conn, crew)?.as_deref() == Some(session)
             || is_management_captain(conn, session)?,
