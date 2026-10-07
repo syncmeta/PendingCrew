@@ -1472,7 +1472,7 @@ mod tests {
             crate::asks::apply_due_defaults(tx, "crew-b")
         })
         .0;
-        assert_eq!(done, [a.ask.clone()], "前提：默认方案已经办了");
+        assert_eq!(done, std::slice::from_ref(&a.ask), "前提：默认方案已经办了");
         assert_reply_to_closed_ask_is_just_a_message(&mut s, &a);
     }
 
