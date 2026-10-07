@@ -257,4 +257,24 @@ mod tests {
             "沿错误链找到 collab 的拒绝：{e:?}"
         );
     }
+
+    /// DbPort 的存储故障是包在 `CollabError::Store` 里上来的（collab 的读写函数都回 `CollabError`）：照样归成 `Storage`。
+    #[test]
+    fn a_storage_failure_inside_a_collab_error_is_still_storage() {
+        let inner = crate::orchestra::testkit::storage_failure(StorageKind::Corrupt)
+            .downcast::<crewd_store::StoreError>()
+            .unwrap();
+        let e =
+            ControlError::from_port(anyhow::Error::new(crewd_collab::CollabError::Store(inner)));
+        assert!(
+            matches!(
+                e,
+                ControlError::Storage {
+                    kind: StorageKind::Corrupt,
+                    ..
+                }
+            ),
+            "{e:?}"
+        );
+    }
 }
