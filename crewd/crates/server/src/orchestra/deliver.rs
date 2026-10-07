@@ -624,8 +624,9 @@ impl<P: Port> Core<P> {
 
     /// idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`）：①到期唤醒合并投递，投了就结束；
     /// ②`IdleHook`（M4b 的停下即检查）；③到此为止（机长 60s 检查点、continue_work、Todo sweep 都不再有）。
-    /// IdleHook 只在「队列空了」时问（评审 (4)(5)）：正在被停掉 / crewd 叫停 / 已经没在跑的不是 idle 边沿
-    /// （驱动层 abandon 发的 `Working(false)`）；四轮上限用完、还有 pending 的也不问。
+    /// IdleHook 只在「没有能投的」时问（评审 (4)(5)）：正在被停掉 / crewd 叫停 / 已经没在跑的不是 idle 边沿
+    /// （驱动层 abandon 发的 `Working(false)`）；四轮上限用完、还有此刻就投得出去的 pending 也不问。
+    /// 没到点的（明天的定时、额度唤醒、退避中的）和被熔断挡着的**不算**——它们不该让停下即检查失效。
     pub(crate) async fn on_idle(&mut self, session: &str) -> anyhow::Result<()> {
         if self.try_deliver(session).await? {
             return Ok(());
@@ -634,16 +635,25 @@ impl<P: Port> Core<P> {
             .live
             .get(session)
             .is_some_and(|l| !l.stopping && !l.halting);
-        if !idle || !self.port.pending(session).await?.is_empty() {
+        let now = self.now();
+        if !idle || self.deliverable_now(session, now).await? {
             return Ok(());
         }
-        let now = self.now();
         if let Some(w) = self.hooks.idle.on_idle(session, now).await
             && self.port.enqueue(w).await?
         {
             self.try_deliver(session).await?;
         }
         Ok(())
+    }
+
+    /// 还有此刻就投得出去的 pending 吗：到点、不在退避、没被熔断挡着（pending 行本来就不是 inflight）。
+    async fn deliverable_now(&self, session: &str, now: Ms) -> anyhow::Result<bool> {
+        Ok(self.port.pending(session).await?.iter().any(|w| {
+            queue::is_due(w, now)
+                && self.backoff.get(&w.id).is_none_or(|t| *t <= now)
+                && self.breaker.held(session, &w.origin).is_none()
+        }))
     }
 
     pub(crate) async fn rescan(&mut self) -> anyhow::Result<()> {
@@ -2033,5 +2043,58 @@ mod tests {
                 OrchestraEvent::SessionChanged(v) if v.session_id == "w1" && !v.working)),
             "{events:?}"
         );
+    }
+
+    /// 裁定（评审 (5) 细化）：只有「此刻就投得出去」的 pending（到点、没被熔断挡着）才压住 IdleHook。
+    /// 明天的 schedule_wakeup（没到点的定时唤醒）不能让今天的停下即检查失效。
+    #[tokio::test]
+    async fn a_future_timer_does_not_suppress_the_idle_hook() {
+        let hook = Arc::new(AlwaysCheck::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let tomorrow = NewWake {
+            session: "w1".into(),
+            kind: WakeKind::Timer,
+            source: source::timer("明天"),
+            priority: Priority::Auto,
+            not_before: T0.add(24 * HOUR),
+            note: Some("合成明天的定时".into()),
+            origin: "w1".into(),
+        };
+        rig.port.enqueue(tomorrow).await.unwrap();
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(hook.0.load(Ordering::SeqCst), 1);
+        assert_eq!(rig.exec.sent("w1"), ["合成停下即检查"]);
+    }
+
+    /// 同上：被熔断挡着的 pending 也不压住 IdleHook（它要等人恢复，不是「队列里还有能投的」）。
+    #[tokio::test]
+    async fn a_held_wake_does_not_suppress_the_idle_hook() {
+        let hook = Arc::new(AlwaysCheck::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["cap", "w1"]).await;
+        ping_pong_until_cut(&mut rig).await;
+        let calls = hook.0.load(Ordering::SeqCst);
+        assert!(
+            rig.port
+                .pending("w1")
+                .await
+                .unwrap()
+                .iter()
+                .any(|w| w.origin == "cap"),
+            "被挡的那条还在 pending"
+        );
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(hook.0.load(Ordering::SeqCst), calls + 1);
     }
 }
