@@ -176,7 +176,15 @@ async fn subtree(cx: &Ctx<'_>, root: CrewView) -> Step<Vec<CrewView>> {
 /// Whose directory I may change: a crew I act as the captain of (collab, C2: mine; every crew
 /// for the management captain), or any crew below mine.
 async fn workdir_crew(cx: &Ctx<'_>, arg: Option<&str>) -> Step<CrewView> {
+    use crewd_collab::refusal::{Code, Refusal};
     let crew = target_crew(cx, arg).await?;
+    // The management crew has no working directory of its own and gets none (I1): collab's code
+    // for "the management crew stays as it is".
+    if crew.management {
+        return Err(cx.fail(PortError::Refused(port::Reason::Rule(Refusal::new(
+            Code::CrewManagementFixed,
+        )))));
+    }
     if port::acts_as_captain_of(cx.st, &cx.me.session_id, &crew.id)
         .await
         .map_err(|e| cx.fail(e))?
@@ -440,19 +448,25 @@ async fn create_child(
 
 /// `r.no_longer_top`: `crew` was top-level and is not any more (its human channel is archived and
 /// its asks go to its new home's human channel, N1).
-async fn no_longer_top(cx: &Ctx<'_>, crew: &CrewView) -> Step<String> {
-    let home = port::home_of(cx.st, &crew.id)
-        .await
-        .map_err(|e| cx.fail(e))?;
-    let home = port::crew(cx.st, &home)
-        .await
-        .map_err(|e| cx.fail(e))?
-        .map(|c| cx.name(&c.title))
-        .unwrap_or_default();
-    Ok(cx.r(
-        "r.no_longer_top",
-        &[("crew", &cx.name(&crew.title)), ("home", &home)],
-    ))
+///
+/// Only ever said after the change is made, so it cannot fail: if the new home cannot be read,
+/// the line says so without naming it (an internal error is still logged by `Ctx::detail`).
+async fn no_longer_top(cx: &Ctx<'_>, crew: &CrewView) -> String {
+    let name = cx.name(&crew.title);
+    let home = match port::home_of(cx.st, &crew.id).await {
+        Ok(h) => port::crew(cx.st, &h)
+            .await
+            .map(|c| c.map(|c| cx.name(&c.title))),
+        Err(e) => Err(e),
+    };
+    match home {
+        Ok(Some(home)) => cx.r("r.no_longer_top", &[("crew", &name), ("home", &home)]),
+        Ok(None) => cx.r("r.no_longer_top_unnamed", &[("crew", &name)]),
+        Err(e) => {
+            let _logged = cx.detail(e);
+            cx.r("r.no_longer_top_unnamed", &[("crew", &name)])
+        }
+    }
 }
 
 fn was_top(c: &CrewView) -> bool {
@@ -479,11 +493,7 @@ async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) ->
     )
     .await
     .map_err(|e| cx.fail(e))?;
-    let warning = if was_top(child) {
-        Some(no_longer_top(cx, child).await?)
-    } else {
-        None
-    };
+    // From here on the crew exists: nothing below may answer a plain failure (M1).
     let name = cx.name(&parent.title);
     let n = number(&parent);
     let brief = cx.r("r.parent_brief", &[("child", &child_name)]);
@@ -517,9 +527,9 @@ async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) ->
             ],
         ),
     };
-    if let Some(w) = warning {
+    if was_top(child) {
         out.push('\n');
-        out.push_str(&w);
+        out.push_str(&no_longer_top(cx, child).await);
     }
     Ok(CallResult {
         text: out,
@@ -547,7 +557,7 @@ async fn adopt(cx: &Ctx<'_>, child: &CrewView, parent: &CrewView) -> Step<CallRe
     );
     if was_top(child) {
         out.push('\n');
-        out.push_str(&no_longer_top(cx, child).await?);
+        out.push_str(&no_longer_top(cx, child).await);
     }
     Ok(CallResult::ok(out))
 }
@@ -577,6 +587,9 @@ async fn release(
     target: &CrewView,
     to: Option<&CrewView>,
 ) -> Step<CallResult> {
+    // Whether it ends up top-level follows from the state before (its only parent was `crew`), so
+    // nothing is read after the change.
+    let top = target.parent_ids == [crew.id.clone()];
     port::detach_parent(cx.st, &crew.id, &target.id, to.map(|t| t.id.clone()))
         .await
         .map_err(|e| cx.fail(e))?;
@@ -591,10 +604,6 @@ async fn release(
             ],
         ));
     }
-    let now = port::crew(cx.st, &target.id)
-        .await
-        .map_err(|e| cx.fail(e))?;
-    let top = now.is_some_and(|c| c.parent_ids.is_empty());
     Ok(cx.ok(
         if top { "r.released_top" } else { "r.released" },
         &[("child", &name), ("from", &from)],
@@ -956,6 +965,17 @@ mod tests {
             crew(&f, &other).await.working_directory.as_deref(),
             Some(path.as_str())
         );
+        // The management crew never: its captain, with no crew (its own) or by number "0" (I1).
+        let mgmt = management_crew(&f).await;
+        for args in [
+            json!({"new_path": path, "confirm": true}),
+            json!({"new_path": path, "crew": "0", "confirm": true}),
+            json!({"new_path": path, "crew": "0"}),
+        ] {
+            let r = run(&f, "s-boss", "change_workdir", args).await;
+            refused(&r, Refusal::new(Code::CrewManagementFixed));
+        }
+        assert_eq!(crew(&f, &mgmt).await.working_directory, None);
         // My parent is not below me.
         let parent = f.add_crew("示例上级", None).await;
         f.rpc("crew.adopt", json!({"crewId": f.crew, "parentId": parent}))
@@ -1244,6 +1264,76 @@ mod tests {
             ],
         );
         assert_eq!(top_level(&f).await, [other, parent, second]);
+    }
+
+    /// I2 / M1: a parent whose captain does not start is kept; the result is an error that says
+    /// who can start its captain (it is above an ordinary captain's reach) and still warns that
+    /// my crew left the top level.
+    #[tokio::test]
+    async fn create_parent_without_captain_says_who_can_start_it() {
+        let f = Fixture::new().await;
+        f.fail_method(
+            FakeMethod::Start,
+            ControlError::Failed("示例：起不来".into()),
+        );
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "create_parent", "title": "示例总部"}),
+        )
+        .await;
+        let parents = crew(&f, &f.crew).await.parent_ids;
+        assert_eq!(parents.len(), 1, "the parent is kept");
+        let n = number_of(&f, &parents[0]).await;
+        assert_eq!(
+            r.text,
+            [
+                z(
+                    "r.parent_created_no_captain",
+                    &[
+                        ("crew", "示例总部"),
+                        ("number", &n),
+                        ("child", "示例机组"),
+                        ("detail", "示例：起不来"),
+                    ],
+                ),
+                z(
+                    "r.no_longer_top",
+                    &[("crew", "示例机组"), ("home", "示例总部")]
+                ),
+            ]
+            .join("\n")
+        );
+        assert!(r.is_error);
+        assert_eq!(top_level(&f).await, parents);
+        // Its next step works: the management captain can hand it a captain.
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
+        let id = next_fake_id(&f);
+        let r = run(
+            &f,
+            "s-boss",
+            "handoff_captain",
+            json!({"crew": n, "runner": "claude"}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.handoff_done_vacant",
+            &[("crew", "示例总部"), ("new", "机长"), ("id", &id)],
+        );
+        // ... and an ordinary captain cannot (so the text does not send it there).
+        let r = run(
+            &f,
+            &f.captain,
+            "handoff_captain",
+            json!({"crew": n, "runner": "claude"}),
+        )
+        .await;
+        not_yours(&f, &r, &parents[0]).await;
     }
 
     #[tokio::test]

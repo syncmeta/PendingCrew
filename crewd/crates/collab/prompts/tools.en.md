@@ -853,10 +853,13 @@ You are the captain of a newly created parent crew; "{child}" is your first chil
 Parent crew "{crew}" (number {number}) created above "{child}"; it is top-level, at the end of the top level, and its captain {captain} ({id}) is started. To tell it anything later, post(to: "{number}").
 
 ## r.parent_created_no_captain
-Parent crew "{crew}" (number {number}) was created with "{child}" under it, but its captain did not start: {detail}. Do not create it again: give it a captain with handoff_captain(crew: "{number}", runner: …).
+Parent crew "{crew}" (number {number}) was created with "{child}" under it, but its captain did not start: {detail}. Do not create it again. It is a level above your reach: ask the management crew's captain (post(to: "0")) or the human to give it a captain with handoff_captain(crew: "{number}", runner: …); if you are the management crew's captain, do that yourself.
 
 ## r.no_longer_top
 "{crew}" is no longer top-level: its human channel is archived (messages kept), and its asks now go to the human channel of "{home}". Keep using ask as before.
+
+## r.no_longer_top_unnamed
+"{crew}" is no longer top-level: its human channel is archived (messages kept), and its asks now go to the human channel of its new top-level parent. Keep using ask as before.
 
 ## r.adopted
 "{child}" is now under "{parent}", at the end of its children. To reach its captain, look up its number with directory and post(to: number).

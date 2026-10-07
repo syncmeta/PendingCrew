@@ -853,10 +853,13 @@ crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（�
 已在「{child}」头上建好上级机组「{crew}」（{number}号），它是顶层机组、排在顶层末尾；它的机长 {captain}（{id}）已起。之后要交代它什么，post(to: "{number}")。
 
 ## r.parent_created_no_captain
-上级机组「{crew}」（{number}号）已建好、「{child}」已挂到它下面，但它的机长没起来：{detail}。别再建一次：用 handoff_captain(crew: "{number}", runner: …) 给它起一个机长。
+上级机组「{crew}」（{number}号）已建好、「{child}」已挂到它下面，但它的机长没起来：{detail}。别再建一次。它在你够不着的上一层：请总机组的机长（post(to: "0")）或人用 handoff_captain(crew: "{number}", runner: …) 给它起一个机长；你自己就是总机组的机长，就直接这么做。
 
 ## r.no_longer_top
 「{crew}」不再是顶层机组：它的人类群已归档（消息还在），它今后的 ask 去「{home}」的人类群。ask 照常用，做法不变。
+
+## r.no_longer_top_unnamed
+「{crew}」不再是顶层机组：它的人类群已归档（消息还在），它今后的 ask 去它新的顶层上级的人类群。ask 照常用，做法不变。
 
 ## r.adopted
 「{child}」已挂到「{parent}」名下，排在它的子机组末尾。要联系它的机长，用 directory 查号再 post(to: 号)。
