@@ -140,6 +140,17 @@ fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
     })
 }
 
+/// 这条消息是哪条问的公告（`ask_meta.message_id`）：(机组, H 号)。
+pub(crate) fn by_message(conn: &Connection, message_id: &str) -> Result<Option<(String, String)>> {
+    Ok(conn
+        .query_row(
+            "SELECT crew_id, ask FROM ask_meta WHERE message_id=?1",
+            [message_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
 pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
     let h = parse_ask(ask)?;
     let book = load(conn, crew)?;

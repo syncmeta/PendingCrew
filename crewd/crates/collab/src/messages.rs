@@ -1,7 +1,8 @@
 //! 发消息（spec §22.2「群规则」、裁定 10–14）、列表、搜索。
-use crate::{Change, CollabError, Result, Sender, Tx, channels, crews, cursors, sessions};
+use crate::{Change, CollabError, Result, Sender, Tx, asks, channels, crews, cursors, sessions};
 use crewd_proto::{
-    Attachment, ChannelKind, MemberRef, Mention, MentionKind, Message, Role, SenderKind,
+    AskStateView, Attachment, ChannelKind, MemberRef, Mention, MentionKind, Message, Role,
+    SenderKind,
 };
 use rusqlite::Connection;
 
@@ -20,6 +21,8 @@ pub struct Posted {
     pub message: Message,
     /// mentions 含 human、群没被注视、且不是人类群：M3b 回执要明说「人类未注视此群」（§17）。
     pub unwatched_human_mention: bool,
+    /// 裁定 11：这条是人对一条开着的问的回复，同一事务里已答掉那条问：(机组, H 号)。
+    pub answered_ask: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -297,13 +300,25 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         };
         push_mention(&mut mentions, resolved);
     }
+    let mut answering: Option<(String, String)> = None;
     if let Some(rid) = &p.in_reply_to {
         let replied = get(conn, rid)?;
         if replied.channel_id != ch.id {
             return Err(CollabError::Invalid("只能回复同一个群里的消息".into()));
         }
+        // 裁定 11：人回复一条问的公告、且那条问还开着 = 回答它。session 的回复、对已答 / 已撤 / 已按默认办的问的
+        // 回复都是普通消息（只有人能答问）。
+        if matches!(sender, Sender::Human)
+            && replied.category.as_deref() == Some("ask")
+            && let Some((crew, h)) = asks::by_message(conn, &replied.id)?
+            && asks::get(conn, &crew, &h)?.state == AskStateView::Open
+        {
+            answering = Some((crew, h));
+        }
         // 裁定 8：只 @ 原发送者，且他得还在群里（@ = 叫醒，叫不醒的不 @）；system 发的不 @ 任何人。
+        // 例外：回答问时不追加 @提问者——叫醒走问的回答路径（ask_answer，带 resume_note），不重复。
         match (replied.sender_kind, replied.sender_session_id) {
+            _ if answering.is_some() => {}
             (SenderKind::Human, _) => push_mention(
                 &mut mentions,
                 Mention {
@@ -360,9 +375,14 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         sender_session_id,
     });
     tx.note(Change::BadgeChanged { channel_id: ch.id });
+    // 同一事务：回复先落库，再答问（`answer` 自己记 AskChanged / AskAnswered 并叫醒提问者）。
+    if let Some((crew, h)) = &answering {
+        asks::answer(tx, crew, h, &message.text)?;
+    }
     Ok(Posted {
         message,
         unwatched_human_mention,
+        answered_ask: answering,
     })
 }
 
@@ -1316,6 +1336,103 @@ mod tests {
         assert!(
             !crate::channels::is_member(s.conn(), &dm.id, &MemberRef::Human).unwrap(),
             "人没有因此入群"
+        );
+    }
+
+    use crewd_proto::AskStateView;
+
+    fn open_ask(s: &mut crewd_store::Store) -> crewd_proto::Ask {
+        ok(s, |tx| {
+            crate::asks::open(
+                tx,
+                "w-b1",
+                crate::asks::OpenAsk {
+                    question: "用哪个分支？".into(),
+                    resume_note: Some("接着发版".into()),
+                    ..Default::default()
+                },
+            )
+        })
+    }
+
+    #[test]
+    fn a_human_reply_to_an_open_ask_answers_it_and_wakes_the_asker_once() {
+        let mut s = store();
+        let a = open_ask(&mut s);
+        let (p, ch) = ok_at(&mut s, NOW + MIN, |tx| {
+            post(
+                tx,
+                Sender::Human,
+                NewPost {
+                    in_reply_to: a.message_id.clone(),
+                    ..post_text("crew-a/human", "用 main")
+                },
+            )
+        });
+        assert_eq!(p.answered_ask, Some(("crew-b".to_string(), a.ask.clone())));
+        assert!(
+            p.message.mentions.is_empty(),
+            "叫醒走问的回答路径，回复本身不再 @ 提问者"
+        );
+        let after = crate::asks::get(s.conn(), "crew-b", &a.ask).unwrap();
+        assert_eq!(
+            (after.state, after.answer.as_deref()),
+            (AskStateView::Answered, Some("用 main"))
+        );
+        assert!(
+            ch.iter()
+                .any(|c| matches!(c, Change::AskAnswered { ask, .. } if *ask == a.ask))
+        );
+        let w = crate::wakes::list(s.conn(), Some("w-b1"), 10).unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].source, crate::wakes::source::ask("crew-b", &a.ask));
+    }
+
+    #[test]
+    fn replying_to_an_ask_that_is_no_longer_open_is_just_a_message() {
+        let mut s = store();
+        let a = open_ask(&mut s);
+        ok(&mut s, |tx| {
+            crate::asks::answer(tx, "crew-b", &a.ask, "先答的")
+        });
+        let p = ok(&mut s, |tx| {
+            post(
+                tx,
+                Sender::Human,
+                NewPost {
+                    in_reply_to: a.message_id.clone(),
+                    ..post_text("crew-a/human", "改主意了")
+                },
+            )
+        });
+        assert_eq!(p.answered_ask, None);
+        assert_eq!(
+            crate::asks::get(s.conn(), "crew-b", &a.ask)
+                .unwrap()
+                .answer
+                .as_deref(),
+            Some("先答的")
+        );
+    }
+
+    #[test]
+    fn a_session_reply_to_an_ask_does_not_answer_it() {
+        let mut s = store();
+        let a = open_ask(&mut s);
+        let p = ok(&mut s, |tx| {
+            post(
+                tx,
+                session("cap-a"),
+                NewPost {
+                    in_reply_to: a.message_id.clone(),
+                    ..post_text("crew-a/human", "我觉得用 main")
+                },
+            )
+        });
+        assert_eq!(p.answered_ask, None);
+        assert_eq!(
+            crate::asks::get(s.conn(), "crew-b", &a.ask).unwrap().state,
+            AskStateView::Open
         );
     }
 }
