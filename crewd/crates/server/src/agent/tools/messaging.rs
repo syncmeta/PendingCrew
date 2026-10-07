@@ -1479,12 +1479,14 @@ mod tests {
             older.text
         );
         let me = f.me(&f.worker).await;
+        let pending = crate::agent::inject::prepare(&f.state, &me)
+            .await
+            .unwrap()
+            .and_then(|p| p.context)
+            .unwrap_or_default();
         assert!(
-            crate::agent::inject::prepare(&f.state, &me)
-                .await
-                .unwrap()
-                .is_some(),
-            "an older page is not 'read'"
+            pending.contains("消息0") && pending.contains("消息3"),
+            "an older page is not 'read', not even up to its last line: {pending}"
         );
         let latest = run(&f, &f.worker, "read_channel", json!({})).await;
         assert!(latest.text.contains("消息4"), "{}", latest.text);
