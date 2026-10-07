@@ -183,6 +183,12 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
         }
+        // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
+        {
+            let copy =
+                Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            ensure_ok(&copy, Check::Quick)?;
+        }
         std::fs::File::open(&tmp)?.sync_all()?;
         fsutil::rename_durably(&tmp, dest)?;
         Ok(())
@@ -191,4 +197,307 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// 只读打开库文件（不建、不改；WAL 下不挡写者）。库不在就报错。
+pub fn open_read_only(db: &Path) -> Result<Connection> {
+    if !db.exists() {
+        return Err(StoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("库文件不存在：{}", db.display()),
+        )));
+    }
+    let c = Connection::open_with_flags(
+        db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    c.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(c)
+}
+
+/// 在线备份（S21 / S32）：自己开一条只读连接做 `VACUUM INTO`，不占库线程；快照后过 `quick_check`。
+pub fn backup_db(db: &Path, dest: &Path) -> Result<()> {
+    let c = open_read_only(db)?;
+    vacuum_into(&c, dest)
+}
+
+/// 定时备份的保留策略。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Policy {
+    /// 两份定时备份之间至少隔多久（毫秒）。
+    pub min_interval_ms: i64,
+    /// 每天留最新的一份，留最近这么多天。
+    pub keep_daily: usize,
+    /// 每个 ISO 周留最新的一份，留最近这么多周。
+    pub keep_weekly: usize,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Policy {
+            min_interval_ms: 24 * 3_600_000,
+            keep_daily: 7,
+            keep_weekly: 4,
+        }
+    }
+}
+
+const AUTO_PREFIX: &str = "crewd-auto-";
+
+/// 定时备份的文件名（只有这一种会被轮转淘汰）。
+pub fn auto_name(ms: i64) -> String {
+    format!("{AUTO_PREFIX}{}.db", stamp_from_ms(ms))
+}
+
+/// 手动备份（`crewd backup`）的文件名：永不轮转。
+pub fn manual_name(ms: i64) -> String {
+    format!("crewd-manual-{}.db", stamp_from_ms(ms))
+}
+
+fn parse_auto(name: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let stamp = name.strip_prefix(AUTO_PREFIX)?.strip_suffix(".db")?;
+    chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S%3fZ")
+        .ok()
+        .map(|t| t.and_utc())
+}
+
+/// 备份目录里的定时备份，按时间从新到旧。
+pub fn list_auto(dir: &Path) -> Result<Vec<(chrono::DateTime<chrono::Utc>, PathBuf)>> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+    let mut v = vec![];
+    for e in rd {
+        let e = e?;
+        if let Some(t) = parse_auto(&e.file_name().to_string_lossy()) {
+            v.push((t, e.path()));
+        }
+    }
+    v.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(v)
+}
+
+/// 最新一份定时备份已经比 `min_interval` 旧（或一份都没有）。
+pub fn due(dir: &Path, now_ms: i64, policy: Policy) -> Result<bool> {
+    Ok(match list_auto(dir)?.first() {
+        None => true,
+        Some((t, _)) => now_ms - t.timestamp_millis() >= policy.min_interval_ms,
+    })
+}
+
+/// 轮转（只动 `crewd-auto-*`）：按「有备份的日子」数，每天最新一份留 `keep_daily` 天；比这些更早的，
+/// 每个 ISO 周最新一份再留 `keep_weekly` 周；其余删掉。按份数不按日历：crewd 停了几个月，
+/// 留下的旧备份也不会因为「太旧」被删光。返回删掉的文件。
+pub fn rotate(dir: &Path, policy: Policy) -> Result<Vec<PathBuf>> {
+    use chrono::Datelike;
+    let all = list_auto(dir)?;
+    let mut keep = std::collections::HashSet::new();
+    let mut days = Vec::new();
+    let mut weeks = Vec::new();
+    for (t, p) in &all {
+        let day = t.date_naive();
+        if days.contains(&day) {
+            continue;
+        }
+        if days.len() < policy.keep_daily {
+            days.push(day);
+            keep.insert(p.clone());
+            continue;
+        }
+        let week = (t.iso_week().year(), t.iso_week().week());
+        if weeks.len() < policy.keep_weekly && !weeks.contains(&week) {
+            weeks.push(week);
+            keep.insert(p.clone());
+        }
+    }
+    let mut removed = vec![];
+    for (_, p) in all {
+        if !keep.contains(&p) {
+            std::fs::remove_file(&p)?;
+            removed.push(p);
+        }
+    }
+    if !removed.is_empty() {
+        fsutil::fsync_dir(dir)?;
+    }
+    Ok(removed)
+}
+
+/// 一次定时拍的结果。
+#[derive(Debug, Default)]
+pub struct TickReport {
+    /// 在用的库上 `quick_check` 发现的问题（空 = 通过）。
+    pub live_problems: Vec<String>,
+    /// 这次拍下的备份（不到时间、库是空的就没有）。
+    pub backup: Option<PathBuf>,
+    /// 到点了却没拍成（库坏了、磁盘满……）。
+    pub backup_error: Option<String>,
+    /// 轮转删掉的旧定时备份。
+    pub removed: Vec<PathBuf>,
+}
+
+/// 定时拍一次（S21 / S25）：只读连接上先对在用的库跑 `quick_check`，到点了就备份（备份文件自己也过
+/// `quick_check`），备份成功**且**在用的库没问题才轮转淘汰旧备份。库是空的不拍。
+pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
+    let dir = backups_dir_for(db);
+    let c = open_read_only(db)?;
+    let mut report = TickReport {
+        live_problems: check(&c, Check::Quick)?,
+        ..Default::default()
+    };
+    let has_data: i64 = c.query_row(
+        "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages)",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_data == 0 || !due(&dir, now_ms, policy)? {
+        return Ok(report);
+    }
+    let dest = dir.join(auto_name(now_ms));
+    match vacuum_into(&c, &dest) {
+        Ok(()) => report.backup = Some(dest),
+        Err(e) => report.backup_error = Some(e.to_string()),
+    }
+    if report.backup.is_some() && report.live_problems.is_empty() {
+        report.removed = rotate(&dir, policy)?;
+    }
+    Ok(report)
+}
+
+/// serve 里的定时拍（D-8：serve 自己的 interval，不进编排 Core）。一条自己的线程：启动时先拍一次，
+/// 之后每 `every` 看一次到没到点。`stop` 等正在进行的那次做完再返回。
+pub struct Ticker {
+    stop: std::sync::mpsc::Sender<()>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl Ticker {
+    pub fn start(
+        db: PathBuf,
+        every: std::time::Duration,
+        policy: Policy,
+    ) -> std::io::Result<Ticker> {
+        let (stop, rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::Builder::new()
+            .name("crewd-backup".into())
+            .spawn(move || {
+                loop {
+                    log_tick(tick(&db, crate::now_ms(), policy));
+                    match rx.recv_timeout(every) {
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                        _ => break,
+                    }
+                }
+            })?;
+        Ok(Ticker { stop, handle })
+    }
+
+    /// 停下并等线程退出（阻塞；async 里用 `spawn_blocking`）。
+    pub fn stop(self) {
+        let _ = self.stop.send(());
+        let _ = self.handle.join();
+    }
+}
+
+fn log_tick(r: Result<TickReport>) {
+    match r {
+        Ok(r) => {
+            if !r.live_problems.is_empty() {
+                eprintln!(
+                    "crewd: 数据库没通过 quick_check（不删、不替换；旧备份暂停淘汰）：{}",
+                    r.live_problems
+                        .iter()
+                        .take(5)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("；")
+                );
+            }
+            if let Some(p) = r.backup {
+                eprintln!("crewd: 已备份到 {}", p.display());
+            }
+            if let Some(e) = r.backup_error {
+                eprintln!("crewd: 定时备份没拍成（旧备份一份不删）：{e}");
+            }
+            for p in r.removed {
+                eprintln!("crewd: 轮转删掉旧备份 {}", p.display());
+            }
+        }
+        Err(e) => eprintln!("crewd: 定时备份失败：{e}"),
+    }
+}
+
+/// 一次恢复的结果。
+#[derive(Debug)]
+pub struct RestoreReport {
+    /// 原来的库被挪到了哪里（原来没有库就是 `None`）。
+    pub replaced: Option<PathBuf>,
+}
+
+/// 从备份恢复（S21）。**调用方必须先拿到数据目录锁**（serve 在跑时不能恢复）。
+/// 先核来源（是 crewd 的库、版本不比本程序新、`integrity_check` 通过、不是在用的库自己）；
+/// 原来的库（连同 -wal / -shm）改名为 `crewd.db.replaced-{时间}`，永不覆盖；再把来源 `VACUUM INTO` 成新的
+/// `crewd.db`，标识文件改成来源的 dbId。
+pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
+    let db = data_dir.join(crate::DB_FILE);
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(from), std::fs::canonicalize(&db))
+        && a == b
+    {
+        return Err(StoreError::Invalid("不能用在用的库恢复它自己".into()));
+    }
+    let src = open_read_only(from)?;
+    let app: i32 = src.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    let version: i64 = src.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if (app != 0 && app != crate::APPLICATION_ID)
+        || !(1..=crate::schema::SCHEMA_VERSION).contains(&version)
+    {
+        return Err(StoreError::Invalid(format!(
+            "{} 不是本程序能用的 crewd 库（application_id={app}，user_version={version}）",
+            from.display()
+        )));
+    }
+    ensure_ok(&src, Check::Integrity)?;
+    let src_id = crate::meta_get(&src, "dbId")?;
+
+    let replaced = if db.exists() {
+        // 先把 WAL 折回主库，挪走的那份自成一体；做不成也照样连 -wal / -shm 一起挪（名字跟着改）。
+        if let Ok(c) = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        {
+            let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        }
+        let aside = data_dir.join(format!(
+            "{}.replaced-{}",
+            crate::DB_FILE,
+            stamp_from_ms(crate::now_ms())
+        ));
+        if aside.exists() {
+            return Err(StoreError::Invalid(format!("{} 已存在", aside.display())));
+        }
+        for suffix in ["-wal", "-shm"] {
+            let side = data_dir.join(format!("{}{suffix}", crate::DB_FILE));
+            if side.exists() {
+                let mut to = aside.as_os_str().to_owned();
+                to.push(suffix);
+                fsutil::rename_durably(&side, Path::new(&to))?;
+            }
+        }
+        fsutil::rename_durably(&db, &aside)?;
+        Some(aside)
+    } else {
+        None
+    };
+    vacuum_into(&src, &db)?;
+    let id_path = data_dir.join(crate::ID_FILE);
+    match src_id {
+        Some(id) => fsutil::atomic_write(&id_path, format!("{id}\n").as_bytes(), 0o600)?,
+        // 没有 dbId 的旧库：去掉标识文件，下次打开时认领。
+        None => match std::fs::remove_file(&id_path) {
+            Ok(()) => fsutil::fsync_dir(data_dir)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        },
+    }
+    Ok(RestoreReport { replaced })
 }
