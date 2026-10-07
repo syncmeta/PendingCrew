@@ -112,6 +112,8 @@ pub struct MemState {
     pub posted: Vec<(String, String)>,
     /// 归档了的群（同 collab：归档的 topic / dm / 人类群里没有人「在」，收听也不算；大厅照算）。
     pub archived_channels: BTreeSet<String>,
+    /// 设了就在下一次 `claim` 之前把这一行作废（模拟别人在 `pending()` 与 `claim` 之间停了它，spec §26.5）。
+    pub claim_race: Option<i64>,
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -510,12 +512,12 @@ impl Port for MemPort {
     }
 
     async fn claim(&self, b: &Batch) -> Result<()> {
-        apply_event(
-            &mut self.lock().wakes,
-            &b.ids(),
-            lifecycle::WakeEvent::Claim,
-        )
-        .map(|_| ())
+        let mut st = self.lock();
+        // 模拟 `pending()` 与 `claim` 之间别人作废了一行（人停、机组移除）：先把它记 dropped，再照常 claim。
+        if let Some(id) = st.claim_race.take() {
+            apply_event(&mut st.wakes, &[id], lifecycle::WakeEvent::Drop)?;
+        }
+        apply_event(&mut st.wakes, &b.ids(), lifecycle::WakeEvent::Claim).map(|_| ())
     }
 
     /// 同库的一个事务：在副本上做完全部步骤，任何一步出错就丢掉副本（一行都不改、游标不动）。

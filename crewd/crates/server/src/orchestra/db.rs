@@ -1074,6 +1074,56 @@ mod tests {
         assert_eq!(source::timer("t"), cw::source::timer("t"));
     }
 
+    /// ledger NOTE T2：读不出发送时刻 = 当作刚发的（不是 Ms(0)，那会被 6h 陈旧闸挡掉、谁都不叫）。
+    /// §2.2：没有目标的 session / 机长 @ 略过（叫不醒任何人）；@人类 原样；机长发的带 `captain`。
+    #[test]
+    fn facts_of_treats_an_unreadable_time_as_now_and_skips_targetless_mentions() {
+        let m = Message {
+            id: "m-1".into(),
+            channel_id: "c-1/lobby".into(),
+            seq: 3,
+            sender_kind: SenderKind::Captain,
+            sender_session_id: Some("cap-1".into()),
+            text: "合成".into(),
+            mentions: vec![
+                crewd_proto::Mention {
+                    kind: MentionKind::Captain,
+                    target_id: None,
+                },
+                crewd_proto::Mention {
+                    kind: MentionKind::Session,
+                    target_id: Some("w-1".into()),
+                },
+                crewd_proto::Mention {
+                    kind: MentionKind::Human,
+                    target_id: None,
+                },
+            ],
+            created_at: "不是时间".into(),
+            ..Default::default()
+        };
+        let now = Ms(10 * crewd_wake::HOUR);
+        let f = facts_of(&m, now);
+        assert_eq!(f.created_at, now);
+        assert!(!crewd_wake::plan::is_stale(&f, now));
+        assert_eq!(f.mentions, [Mention::Session("w-1".into()), Mention::Human]);
+        assert_eq!(
+            f.sender,
+            Sender::Session {
+                id: "cap-1".into(),
+                captain: true
+            }
+        );
+        let ok = Message {
+            created_at: "2026-09-01T00:00:00.000Z".into(),
+            ..m
+        };
+        assert_eq!(
+            facts_of(&ok, now).created_at,
+            ms_of("2026-09-01T00:00:00.000Z").unwrap()
+        );
+    }
+
     #[tokio::test]
     async fn enqueue_dedupes_and_pending_resolves_the_message_position() {
         let (state, port, _d) = seeded().await;

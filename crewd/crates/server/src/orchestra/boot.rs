@@ -1109,4 +1109,46 @@ mod tests {
             OrchestraConfig::for_tests().lang
         );
     }
+
+    /// spec §26.5 / 合并报告的遗留：`pending()` 与 `claim` 之间有一行被作废（人停 / 机组移除）→ claim 整批失败、什么都
+    /// 没拿、什么都没投；下一拍不带那一行再来。
+    #[tokio::test]
+    async fn a_row_dropped_between_pending_and_claim_fails_that_batch_and_the_next_tick_goes_without_it()
+     {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        rig.ack_brief("w1").await;
+        rig.port.enqueue(timer("w1", "t1", "合成甲")).await.unwrap();
+        rig.port.enqueue(timer("w1", "t2", "合成乙")).await.unwrap();
+        let ids: Vec<i64> = rig.port.wakes_of("w1").iter().map(|w| w.id).collect();
+        rig.port.lock().claim_race = Some(ids[1]);
+        rig.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w1".into(),
+            }))
+            .await;
+        rig.settle().await;
+        assert!(rig.exec.sent("w1").is_empty(), "这一批什么都没投");
+        let st: Vec<(WakeState, u32)> = rig
+            .port
+            .wakes_of("w1")
+            .iter()
+            .map(|w| (w.state, w.attempts))
+            .collect();
+        assert_eq!(
+            st,
+            [(WakeState::Pending, 0), (WakeState::Dropped, 0)],
+            "没拿走任何一行"
+        );
+        rig.tick(MIN).await;
+        let sent = rig.exec.sent("w1");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("合成甲") && !sent[0].contains("合成乙"),
+            "{}",
+            sent[0]
+        );
+    }
 }
