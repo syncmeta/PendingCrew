@@ -10,7 +10,7 @@ use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent};
 use crewd_proto::wake_lifecycle as lifecycle;
 use crewd_term::{DecisionEvent, Snapshot};
-use crewd_wake::plan::{ChannelCtx, Listen, Mention, MsgFacts, Sender, visible_to};
+use crewd_wake::plan::{ChannelCtx, Listen, Mention, MsgFacts, Sender};
 use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
 use tokio::sync::{mpsc, oneshot};
@@ -29,6 +29,8 @@ use super::port::*;
 pub enum MemKind {
     Lobby,
     Human,
+    /// dm：`members` = dm 里的 session 各方（[`ChannelCtx::dm_sessions`]）。
+    Dm,
     Other,
 }
 
@@ -36,7 +38,7 @@ pub enum MemKind {
 pub struct MemChannel {
     pub crew: String,
     pub kind: MemKind,
-    /// 只对 `Other` 有意义；大厅 / 人类群的群主 = 机组机长。
+    /// 只对 `Other` / `Dm` 有意义；大厅 / 人类群的群主 = 机组机长。
     pub owner: Option<String>,
     pub members: Vec<String>,
 }
@@ -154,7 +156,7 @@ impl MemPort {
     }
 
     /// 填法同控制者裁定 C22 对 DbPort 的要求：`live_sessions` = 库里全部 session（有 session 就不会空）、
-    /// `crew_captain` = 这个群所属机组的机长；MemPort 没有 dm 群，`dm_peer` 恒为 None。
+    /// `crew_captain` = 这个群所属机组的机长；`dm_sessions` = dm 群（[`MemKind::Dm`]）的 session 各方，别的群为空。
     fn ctx_of(st: &MemState, channel: &str) -> Option<ChannelCtx> {
         let ch = st.channels.get(channel)?;
         let captain = Self::captain_of(st, &ch.crew);
@@ -177,13 +179,18 @@ impl MemPort {
                 }
                 (m, captain.clone())
             }
-            MemKind::Other => (ch.members.clone(), ch.owner.clone()),
+            MemKind::Dm | MemKind::Other => (ch.members.clone(), ch.owner.clone()),
+        };
+        let dm_sessions = if ch.kind == MemKind::Dm {
+            ch.members.clone()
+        } else {
+            vec![]
         };
         Some(ChannelCtx {
             session_members: members,
             live_sessions: st.sessions.keys().cloned().collect(),
             owner,
-            dm_peer: None,
+            dm_sessions,
             crew_captain: captain,
             listens: st.listens.get(channel).cloned().unwrap_or_default(),
         })
@@ -685,8 +692,8 @@ impl Port for MemPort {
         Ok(Self::ctx_of(&self.lock(), channel))
     }
 
-    /// 同 M3a `cursors::unread_for`：所在的群 + 此刻还在收听的群；游标之后、对它可见（`plan::visible_to`）、
-    /// 不是它自己发的。没有游标行的群 = 入群点没记：先钉到群末尾、本次不返回（M3a 在入群时钉，`Rig` 也是）。
+    /// 同 M3a `cursors::unread_for`：所在的群 + 此刻还在收听的群；游标之后、不是它自己发的（@ 不收窄可见范围，
+    /// §24.2）。没有游标行的群 = 入群点没记：先钉到群末尾、本次不返回（M3a 在入群时钉，`Rig` 也是）。
     /// 不模拟的：`UNREAD_CAP` 窗口与「开头一段不可投递的消息让游标跳过」（只影响游标，不影响返回什么）。
     async fn unread(&self, session: &str) -> Result<Vec<MsgFacts>> {
         let mut st = self.lock();
@@ -717,7 +724,7 @@ impl Port for MemPort {
                 st.messages
                     .range((ch.clone(), after + 1)..=(ch.clone(), i64::MAX))
                     .map(|(_, (m, _))| m)
-                    .filter(|m| m.sender.session_id() != Some(session) && visible_to(m, session))
+                    .filter(|m| m.sender.session_id() != Some(session))
                     .cloned(),
             );
         }
@@ -1504,7 +1511,7 @@ mod self_tests {
     }
 
     /// Task 6 评审 (5)：MemPort 的 `unread` 与 M3a `cursors::unread_for` 同义——所在群 + 收听中的群、
-    /// 游标之后、对它可见、不是它自己发的；没有游标行的群先钉到末尾、本次不返回。
+    /// 游标之后、不是它自己发的（@ 不藏消息）；没有游标行的群先钉到末尾、本次不返回。
     #[tokio::test]
     async fn mem_port_unread_mirrors_collab_unread_for() {
         let p = MemPort::new();
@@ -1575,16 +1582,16 @@ mod self_tests {
             msg(&mut st, "c1/lobby", 2, cap.clone(), vec![]); // 看得见
             msg(&mut st, "c1/lobby", 3, w1.clone(), vec![]); // 自己发的
             let to_cap = vec![Mention::Session("cap".into())];
-            msg(&mut st, "c1/lobby", 4, Sender::Human, to_cap); // 收窄给别人
-            let all = vec![Mention::Session("cap".into()), Mention::Broadcast];
-            msg(&mut st, "c1/lobby", 5, Sender::Human, all); // broadcast 人人可见
+            msg(&mut st, "c1/lobby", 4, Sender::Human, to_cap); // @ 了别人：照样看得见（§24.2）
+            let human = vec![Mention::Human];
+            msg(&mut st, "c1/lobby", 5, w1.clone(), human); // 自己发的（还 @ 了人）
             msg(&mut st, "c1/heard", 2, cap.clone(), vec![]); // 不在群里、但在收听
             msg(&mut st, "c1/expired", 2, cap.clone(), vec![]); // 收听已过期
             msg(&mut st, "c1/fresh", 1, cap.clone(), vec![]); // 没有游标行
         }
         let got = p.unread("w1").await.unwrap();
         // 顺序同 M3a：先所在的群（按 id），再收听中的群。
-        assert_eq!(ids_of(&got), ["c1/lobby#2", "c1/lobby#5", "c1/heard#2"]);
+        assert_eq!(ids_of(&got), ["c1/lobby#2", "c1/lobby#4", "c1/heard#2"]);
         assert_eq!(
             p.lock().cursors.get(&("w1".into(), "c1/fresh".into())),
             Some(&1),
@@ -2125,6 +2132,21 @@ mod self_tests {
             [cap.id.clone(), w1.id.clone()],
             "不在群里的机长也是活 session"
         );
-        assert_eq!(ctx.dm_peer, None);
+        assert!(ctx.dm_sessions.is_empty(), "不是 dm");
+        p.lock().channels.insert(
+            "c1/dm".into(),
+            MemChannel {
+                crew: "c1".into(),
+                kind: MemKind::Dm,
+                owner: None,
+                members: vec![cap.id.clone(), w1.id.clone()],
+            },
+        );
+        let ctx = p.channel_ctx("c1/dm", Ms(0)).await.unwrap().unwrap();
+        assert_eq!(
+            ctx.dm_sessions,
+            [cap.id.clone(), w1.id.clone()],
+            "dm 的 session 各方"
+        );
     }
 }

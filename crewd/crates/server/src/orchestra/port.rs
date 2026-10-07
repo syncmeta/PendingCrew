@@ -336,7 +336,8 @@ pub trait Port: Send + Sync + 'static {
         r: &MessageRef,
     ) -> impl Future<Output = Result<Option<(MsgFacts, String)>>> + Send;
     /// `now` 来自注入的 `Clock`：只取此刻还有效的收听（M3a `listens::active_for_channel(conn, ch, now_ms)` 按它滤）。
-    /// 填法见控制者裁定 C22：`live_sessions` / `dm_peer` / `crew_captain` 都要填，有 session 时 `live_sessions` 不能为空。
+    /// 填法见控制者裁定 C22（T10a 补充 §2.2）：六个字段都要填（`dm_sessions` = dm 里的 session 各方，别的群为空）；
+    /// 群里有 session 成员或收听者时 `live_sessions` 不能为空。
     fn channel_ctx(
         &self,
         channel: &str,

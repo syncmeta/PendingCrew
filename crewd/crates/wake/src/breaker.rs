@@ -619,7 +619,7 @@ mod tests {
                 seq: 1,
             },
             sender: Sender::Human,
-            mentions: vec![Mention::Broadcast, Mention::Session("w1".into())],
+            mentions: vec![Mention::Session("w1".into())],
             created_at: now,
         };
         let w2 = plan(&msg, &ctx, None, now)
