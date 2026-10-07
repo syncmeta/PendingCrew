@@ -219,6 +219,7 @@ mod tests {
             created_at: Ms(0),
             origin: "system".into(),
             msg: None,
+            last_error: None,
         }
     }
 

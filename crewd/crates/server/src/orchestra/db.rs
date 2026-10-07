@@ -153,6 +153,7 @@ fn queued(conn: &rusqlite::Connection, row: &WakeRow) -> collab::Result<QueuedWa
             channel: m.channel_id,
             seq: m.seq,
         }),
+        last_error: row.last_error.clone(),
     })
 }
 

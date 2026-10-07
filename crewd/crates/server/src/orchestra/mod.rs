@@ -20,8 +20,8 @@ pub mod worktree;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crewd_wake::LatchScope;
 use crewd_wake::breaker::{LOOP_LIMITS, LoopLimits};
-use crewd_wake::{LatchScope, QueuedWake};
 use tokio::sync::{mpsc, oneshot};
 
 use self::clock::Clock;
@@ -275,7 +275,8 @@ impl Handle {
         .await
     }
 
-    pub async fn wakes(&self, session: Option<String>) -> Result<Vec<QueuedWake>, ControlError> {
+    /// `wake.list`：唤醒行（新的在前，至多 `WAKE_LIST_LIMIT` 条）、每条 pending 为什么还没出去、每个目标的近况。
+    pub async fn wakes(&self, session: Option<String>) -> Result<deliver::WakeList, ControlError> {
         self.call(|reply| Cmd::Wakes { session, reply }).await
     }
 

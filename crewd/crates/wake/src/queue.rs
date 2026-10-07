@@ -139,6 +139,7 @@ mod tests {
             created_at: Ms(created_at),
             origin: "cap".into(),
             msg: None,
+            last_error: None,
         }
     }
 

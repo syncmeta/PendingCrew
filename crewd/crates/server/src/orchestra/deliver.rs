@@ -1,15 +1,17 @@
 //! 唤醒的入队与投递（spec §22.4「唤醒规划」「队列」「idle 边沿」「问被回答」；§22.7 Q2 / Q5）。
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crewd_collab::render::safe_name;
 use crewd_exec::health::HealthKind;
 use crewd_exec::session::DeliveryOutcome;
 use crewd_wake::breaker::{self, HUMAN, Verdict};
+use crewd_wake::explain::{self, Blocker, HealthBlock, TargetFacts};
 use crewd_wake::plan::{self, ChannelCtx, MsgFacts, Sender};
 use crewd_wake::policy::{self, Gate, RestartRow};
 use crewd_wake::queue::{self, ids};
 use crewd_wake::{
-    Latch, LatchScope, MIN, MessageRef, Ms, NewWake, Priority, QueuedWake, WakeKind, source, text,
+    Latch, LatchScope, MIN, MessageRef, Ms, NewWake, Priority, QueuedWake, WakeKind, WakeState,
+    source, text,
 };
 
 use super::core::{
@@ -29,6 +31,48 @@ fn split_silent(batch: Vec<QueuedWake>) -> (Vec<QueuedWake>, Vec<QueuedWake>) {
 /// 一条消息唤醒的来源（环路熔断的键）：**唯一的定义**是 `crewd_wake::breaker::origin_of`。
 fn message_origin(msg: &MsgFacts, target: &str) -> String {
     breaker::origin_of(WakeKind::Message, Some(&msg.sender), target)
+}
+
+/// 投递回执的变体名（[`Live::last_outcome`]，`wake.list` 的近况）。
+pub(crate) fn outcome_name(o: &DeliveryOutcome) -> &'static str {
+    match o {
+        DeliveryOutcome::Delivered => "delivered",
+        DeliveryOutcome::Blocked(_) => "blocked",
+        DeliveryOutcome::NotReady(_) => "not_ready",
+        DeliveryOutcome::Stalled(_) => "stalled",
+        DeliveryOutcome::Undelivered(_) => "undelivered",
+        DeliveryOutcome::Unsubmitted(_) => "unsubmitted",
+        DeliveryOutcome::Abandoned(_) => "abandoned",
+    }
+}
+
+/// `wake.list` 的一行：唤醒本身 + 它为什么此刻还没出去（只有 pending 的才有；`None` = 下一次投递就带上它）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedWake {
+    pub wake: QueuedWake,
+    pub blocker: Option<Blocker>,
+}
+
+/// `wake.list` 里一个目标的近况（R9）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TargetSummary {
+    pub session: String,
+    pub running: bool,
+    /// 在途那一批拿着的行（在跑的 `inflight`，或正在起的那批）。
+    pub inflight_wake_ids: Vec<i64>,
+    /// 在途那笔投递的编号（还排在写队列里 = None）。
+    pub delivery_id: Option<u64>,
+    /// 写队列里排着几项（投递 + nudge）。
+    pub writes_queued: usize,
+    /// 最近一次投递回执的种类（[`outcome_name`]）。
+    pub last_outcome: Option<&'static str>,
+}
+
+/// [`Core::wake_list`] 的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WakeList {
+    pub wakes: Vec<ListedWake>,
+    pub targets: Vec<TargetSummary>,
 }
 
 /// 渲染并裁好的一批（[`Core::render_fitted`]）：`batch.riders` = 落在窗口外的（M3a R6），随这批一起 claim。
@@ -169,6 +213,9 @@ impl<P: Port> Core<P> {
     }
 
     /// 能投就投（裁定 7、8）。返回这次有没有投出 / 拉起。
+    /// 判定只有一处：`crewd_wake::explain::why_not_woken`（`wake.list` 给人看的是同一个函数，C25 / R9）。次序：
+    /// 先按每一行的原因选批（拉起闸那一段的原因此时算「可选」），把已注入的记 delivered，剩下的没在跑就再问一次
+    /// 拉起闸（人在询问之后 @ 了它看的是这一批）。副作用照旧在这里：额度唤醒到点先清额度类 health、错开的时刻记进定时器。
     pub(crate) async fn try_deliver(&mut self, session: &str) -> anyhow::Result<bool> {
         if self.shutting_down {
             return Ok(false); // 停机中不投、不拉起
@@ -183,16 +230,20 @@ impl<P: Port> Core<P> {
             if !pending.iter().any(|w| queue::is_due(w, now)) {
                 return Ok(false);
             }
-            if !self.live_ready(session, &pending, now) {
-                return Ok(false);
-            }
+            let top = self.top_due(session, &pending, now);
+            let mut facts = self.target_facts(session, &pending, top, &[], now).await?;
+            self.clear_quota_if_due(session, &facts);
             let mut origins: BTreeMap<i64, String> = BTreeMap::new();
             let mut candidates = Vec::new();
-            // 退避中的不会到点（退避就是库里的 `not_before`），`is_due` 已经把它们滤掉。
-            for w in pending.iter().filter(|w| queue::is_due(w, now)) {
-                if self.breaker.held(session, &w.origin).is_none() {
-                    origins.insert(w.id, w.origin.clone());
-                    candidates.push(w.clone());
+            // 退避中的不会到点（退避就是库里的 `not_before`），`why_not_woken` 报 `not_due`。
+            for w in &pending {
+                let held = self.breaker.held(session, &w.origin);
+                match explain::why_not_woken(w, top, &facts, held, now) {
+                    Some(b) if !b.is_launch_gate() => {}
+                    _ => {
+                        origins.insert(w.id, w.origin.clone());
+                        candidates.push(w.clone());
+                    }
                 }
             }
             let batch = queue::select_batch(&candidates, now, &self.cfg.batch);
@@ -203,7 +254,7 @@ impl<P: Port> Core<P> {
             let mut injected = Vec::new();
             for w in batch {
                 if self.injected(session, &w).await? {
-                    injected.push(w.id);
+                    injected.push(w);
                 } else {
                     fresh.push(w);
                 }
@@ -211,7 +262,7 @@ impl<P: Port> Core<P> {
             if !injected.is_empty() {
                 self.due
                     .touch(&self.port)
-                    .settle(&injected, Settle::Delivered, now)
+                    .settle(&ids(&injected), Settle::Delivered, now)
                     .await?;
                 self.port.publish(OrchestraEvent::WakeChanged {
                     session: session.into(),
@@ -221,8 +272,11 @@ impl<P: Port> Core<P> {
                 continue;
             }
             let running = self.live.contains_key(session);
-            if !running && !self.may_launch(session, &fresh, &pending, now) {
-                return Ok(false);
+            if !running {
+                facts.human_called_after_watermark = self.human_called(&fresh);
+                if !self.may_launch(session, &fresh, top, &facts, now) {
+                    return Ok(false);
+                }
             }
             let fresh = self.admit(session, fresh, &origins, now).await?;
             if fresh.is_empty() {
@@ -237,65 +291,119 @@ impl<P: Port> Core<P> {
         Ok(false)
     }
 
-    /// 在跑的目标此刻能不能投（裁定 7）。额度类 health 在身且额度唤醒到点 → 先清 health。没在跑 → true（交给拉起）。
-    fn live_ready(&mut self, session: &str, pending: &[QueuedWake], now: Ms) -> bool {
-        let Some(l) = self.live.get_mut(session) else {
-            return true;
-        };
-        if l.inflight.is_some() || l.working || l.decision.is_some() || l.stopping || l.halting {
-            return false;
-        }
-        match &l.health {
-            Some(h) if h.kind.is_quota() => {
-                if !policy::quota_due(pending, now) {
-                    return false;
+    /// 到期、没被熔断挡着的唤醒里最高的一档（一次只投这一档）。
+    pub(crate) fn top_due(
+        &self,
+        session: &str,
+        pending: &[QueuedWake],
+        now: Ms,
+    ) -> Option<Priority> {
+        pending
+            .iter()
+            .filter(|w| queue::is_due(w, now) && self.breaker.held(session, &w.origin).is_none())
+            .map(|w| w.priority)
+            .max()
+    }
+
+    /// 询问开出之后人 @ 了它（C4）：这几条里有比启动水位新的人类消息唤醒。
+    fn human_called(&self, batch: &[QueuedWake]) -> bool {
+        batch.iter().any(|w| {
+            w.priority == Priority::Human
+                && w.kind == WakeKind::Message
+                && w.id > self.held_watermark
+        })
+    }
+
+    /// 一个目标此刻的事实（`why_not_woken` 的输入）。`called` = 判「询问之后人 @ 了它」看的那几条；
+    /// 拉起闸按 `top` 是不是人的一档决定绕不绕可选上限（C5）。机组移除只对没在跑的读（它只影响拉起）。
+    pub(crate) async fn target_facts(
+        &self,
+        session: &str,
+        pending: &[QueuedWake],
+        top: Option<Priority>,
+        called: &[QueuedWake],
+        now: Ms,
+    ) -> anyhow::Result<TargetFacts> {
+        let live = self.live.get(session);
+        let health = live.and_then(|l| l.health.as_ref()).and_then(|h| {
+            if h.kind.is_quota() {
+                Some(HealthBlock::Quota)
+            } else {
+                match h.kind {
+                    HealthKind::AuthRequired => Some(HealthBlock::Auth),
+                    HealthKind::LaunchFailed => Some(HealthBlock::LaunchFailed),
+                    _ => None,
                 }
-                let _ = l.handle.clear_quota_health();
-                l.health = None;
-                true
             }
-            Some(h) if matches!(h.kind, HealthKind::AuthRequired | HealthKind::LaunchFailed) => {
-                false
-            }
-            _ => true,
+        });
+        let running = live.is_some();
+        let crew_removed = !running
+            && self
+                .port
+                .session(session)
+                .await?
+                .is_some_and(|r| r.crew_removed);
+        let gate = if running {
+            Gate::Go
+        } else {
+            self.gate.check(
+                self.live.len() + self.starting.len(),
+                top == Some(Priority::Human),
+                now,
+            )
+        };
+        Ok(TargetFacts {
+            running,
+            starting: self.starting.contains_key(session),
+            inflight: live.is_some_and(|l| l.inflight.is_some()),
+            working: live.is_some_and(|l| l.working),
+            decision: live.is_some_and(|l| l.decision.is_some()),
+            stopping: live.is_some_and(|l| l.stopping || l.halting || l.hibernate_cut),
+            shutting_down: self.shutting_down,
+            crew_removed,
+            health,
+            quota_due: policy::quota_due(pending, now),
+            quota_pending: policy::quota_pending(pending),
+            held_for_restart: self.held.contains(session),
+            human_called_after_watermark: self.human_called(called),
+            gate,
+            max_live: self.gate.max_live(),
+        })
+    }
+
+    /// 额度类 health 在身、在跑的此刻别的都不挡、额度唤醒到点了 → 先清 health 再投（§22.4）。
+    fn clear_quota_if_due(&mut self, session: &str, f: &TargetFacts) {
+        let ready = !(f.inflight || f.working || f.decision || f.stopping);
+        if !(ready && f.quota_due && f.health == Some(HealthBlock::Quota)) {
+            return;
+        }
+        if let Some(l) = self.live.get_mut(session) {
+            let _ = l.handle.clear_quota_health();
+            l.health = None;
         }
     }
 
-    /// 没在跑的目标要不要为这批唤醒拉起（裁定 4、5、13）。
+    /// 没在跑的目标要不要为这批唤醒拉起（裁定 4、5、13）：`why_not_woken` 拉起闸那一段（这批同一档，看第一条就够）。
+    /// 机组已被移除的照样往下走——`launch_for_wakes` 把这几行作废（不拉起、不告警）。错开的时刻记进定时器。
     fn may_launch(
         &mut self,
         session: &str,
         batch: &[QueuedWake],
-        pending: &[QueuedWake],
+        top: Option<Priority>,
+        facts: &TargetFacts,
         now: Ms,
     ) -> bool {
-        if self.held.contains(session) {
-            // 等人答重启询问（§22.7 Q1）：不被自动拉起。例外（控制者裁定 C4）：询问开出之后人新 @ 了它
-            // → 只拉起它（`launch_for_wakes` 把它移出名单，算对它单个 resume）；启动前就排着的人类唤醒不算。
-            let called_by_human = batch.iter().any(|w| {
-                w.priority == Priority::Human
-                    && w.kind == WakeKind::Message
-                    && w.id > self.held_watermark
-            });
-            if !called_by_human {
-                return false;
-            }
-        }
-        // 人的唤醒不受可选上限挡（C5；错开照样生效）。`select_batch` 只取最高一档，看第一条就够。
-        let human = batch.first().is_some_and(|w| w.priority == Priority::Human);
-        if !human && policy::quota_pending(pending) && !policy::quota_due(pending, now) {
-            return false; // 额度没恢复：自动唤醒别把它拉起来又撞墙
-        }
-        match self
-            .gate
-            .check(self.live.len() + self.starting.len(), human, now)
-        {
-            Gate::Go => true,
-            Gate::AtCap => false,
-            Gate::WaitUntil(t) => {
-                self.timers.insert(t);
+        let Some(w) = batch.first() else {
+            return false;
+        };
+        let held = self.breaker.held(session, &w.origin);
+        match explain::why_not_woken(w, top, facts, held, now) {
+            None | Some(Blocker::CrewRemoved) => true,
+            Some(Blocker::Stagger { until }) => {
+                self.timers.insert(until);
                 false
             }
+            Some(_) => false,
         }
     }
 
@@ -630,6 +738,9 @@ impl<P: Port> Core<P> {
         id: u64,
         outcome: DeliveryOutcome,
     ) -> anyhow::Result<()> {
+        if let Some(l) = self.live.get_mut(session) {
+            l.last_outcome = Some(outcome_name(&outcome));
+        }
         if !delivery_settles_inflight(&outcome) {
             return Ok(());
         }
@@ -745,14 +856,84 @@ impl<P: Port> Core<P> {
     }
 
     /// 还有此刻就投得出去的 pending 吗：到点（退避中的 `not_before` 在后面、不到点）、没被熔断挡着
-    /// （pending 行本来就不是 inflight）。
+    /// （pending 行本来就不是 inflight）。同一个 `why_not_woken`，问的是「换一个随时可投的目标，它出不出去」。
     async fn deliverable_now(&self, session: &str, now: Ms) -> anyhow::Result<bool> {
-        Ok(self
-            .port
-            .pending(session)
-            .await?
-            .iter()
-            .any(|w| queue::is_due(w, now) && self.breaker.held(session, &w.origin).is_none()))
+        let pending = self.port.pending(session).await?;
+        let top = self.top_due(session, &pending, now);
+        let ready = TargetFacts {
+            running: true,
+            ..TargetFacts::default()
+        };
+        Ok(pending.iter().any(|w| {
+            let held = self.breaker.held(session, &w.origin);
+            explain::why_not_woken(w, top, &ready, held, now).is_none()
+        }))
+    }
+
+    /// `wake.list`（C25 / R9）：最新的唤醒行；每条 pending 的原因用投递同一个 `why_not_woken` 现算（人在询问之后
+    /// @ 了它看的是「这一刻会选进批」的那几条，同投递）；列到的 session（给了 `session` 就是它；没给还加上在跑 / 在起的）
+    /// 各一份近况。只读：不清 health、不记定时器。
+    pub(crate) async fn wake_list(&self, session: Option<&str>) -> anyhow::Result<WakeList> {
+        let now = self.now();
+        let rows = self.port.list_wakes(session).await?;
+        let mut sessions: BTreeSet<String> = rows.iter().map(|w| w.session.clone()).collect();
+        match session {
+            Some(s) => {
+                sessions.insert(s.to_string());
+            }
+            None => sessions.extend(self.live.keys().chain(self.starting.keys()).cloned()),
+        }
+        let mut blockers: BTreeMap<i64, Option<Blocker>> = BTreeMap::new();
+        for s in &sessions {
+            if !rows
+                .iter()
+                .any(|w| &w.session == s && w.state == WakeState::Pending)
+            {
+                continue;
+            }
+            let pending = self.port.pending(s).await?;
+            let top = self.top_due(s, &pending, now);
+            let due: Vec<QueuedWake> = pending
+                .iter()
+                .filter(|w| queue::is_due(w, now) && self.breaker.held(s, &w.origin).is_none())
+                .cloned()
+                .collect();
+            let called = queue::select_batch(&due, now, &self.cfg.batch);
+            let facts = self.target_facts(s, &pending, top, &called, now).await?;
+            for w in &pending {
+                let held = self.breaker.held(s, &w.origin);
+                blockers.insert(w.id, explain::why_not_woken(w, top, &facts, held, now));
+            }
+        }
+        let wakes = rows
+            .into_iter()
+            .map(|w| ListedWake {
+                blocker: blockers.get(&w.id).cloned().flatten(),
+                wake: w,
+            })
+            .collect();
+        let targets = sessions
+            .into_iter()
+            .map(|s| {
+                let mut t = TargetSummary {
+                    running: self.live.contains_key(&s),
+                    ..TargetSummary::default()
+                };
+                if let Some(l) = self.live.get(&s) {
+                    if let Some(f) = &l.inflight {
+                        t.inflight_wake_ids = f.batch.ids();
+                        t.delivery_id = f.delivery;
+                    }
+                    t.writes_queued = l.writes.len();
+                    t.last_outcome = l.last_outcome;
+                } else if let Some(st) = self.starting.get(&s) {
+                    t.inflight_wake_ids = st.batch.ids();
+                }
+                t.session = s;
+                t
+            })
+            .collect();
+        Ok(WakeList { wakes, targets })
     }
 
     pub(crate) async fn rescan(&mut self) -> anyhow::Result<()> {
@@ -2767,5 +2948,223 @@ mod tests {
             seen.push(got);
         }
         assert_ne!(seen[0], seen[1], "没有一起重试");
+    }
+
+    /// `wake.list` 给人看的原因：每条 pending → 码（按 source）。
+    async fn codes(rig: &Rig, session: &str) -> BTreeMap<String, Option<&'static str>> {
+        rig.core
+            .wake_list(Some(session))
+            .await
+            .unwrap()
+            .wakes
+            .into_iter()
+            .filter(|w| w.wake.state == WakeState::Pending)
+            .map(|w| (w.wake.source.clone(), w.blocker.as_ref().map(Blocker::code)))
+            .collect()
+    }
+
+    /// C25 / R9：`wake.list` 说挡着（码 = `want`），投递就真的什么都不发、不拉起——同一个 `why_not_woken`。
+    async fn agrees(rig: &mut Rig, session: &str, source: &str, want: &str) {
+        let (sent, launched) = (
+            rig.exec.sent(session).len(),
+            rig.exec.launches(session).len(),
+        );
+        let got = codes(rig, session).await;
+        assert_eq!(
+            got.get(source).copied().flatten(),
+            Some(want),
+            "{source}: {got:?}"
+        );
+        assert!(
+            !rig.core.try_deliver(session).await.unwrap(),
+            "{want}：投递说没投"
+        );
+        rig.settle().await;
+        assert_eq!(rig.exec.sent(session).len(), sent, "{want}：什么都没发");
+        assert_eq!(rig.exec.launches(session).len(), launched, "{want}：没拉起");
+    }
+
+    const MSG1: &str = "msg:c1/lobby#1";
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_a_running_target() {
+        // 忙。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "working").await;
+        // 卡在待决策框上。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let d = PendingDecision {
+            prompt: "合成框".into(),
+            options: vec!["Yes".into()],
+            numbered: true,
+        };
+        rig.emit("w1", SessionEvent::Decision(DecisionEvent::Appeared(d)))
+            .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "decision").await;
+        // 上一笔还没回执。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成乙")
+            .await;
+        agrees(&mut rig, "w1", "msg:c1/lobby#2", "inflight").await;
+        let list = rig.core.wake_list(Some("w1")).await.unwrap();
+        let t = &list.targets[0];
+        assert_eq!(
+            (t.session.as_str(), t.running, t.inflight_wake_ids.len()),
+            ("w1", true, 1),
+            "近况：在途的那一批"
+        );
+        assert!(t.delivery_id.is_some());
+        // 额度类 health、额度唤醒没到点。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit(
+            "w1",
+            SessionEvent::Health(Some(Health::new(HealthKind::UsageLimit, "x"))),
+        )
+        .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "quota").await;
+        // 要登录。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit(
+            "w1",
+            SessionEvent::Health(Some(Health::new(HealthKind::AuthRequired, "x"))),
+        )
+        .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "auth_required").await;
+        // crewd 正在叫停它。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.core.live.get_mut("w1").unwrap().halting = true;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "stopping").await;
+        // 明天的定时。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let w = NewWake {
+            session: "w1".into(),
+            kind: WakeKind::Timer,
+            source: source::timer("明天"),
+            priority: Priority::System,
+            not_before: rig.core.now().add(HOUR),
+            note: Some("合成提醒".into()),
+            origin: "w1".into(),
+        };
+        rig.port.enqueue(w).await.unwrap();
+        agrees(&mut rig, "w1", "timer:明天", "not_due").await;
+        // 停机中。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.core.shutting_down = true;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "shutting_down").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_a_loop_latch() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["cap", "w1"]).await;
+        let cut = ping_pong_until_cut(&mut rig).await;
+        let source = format!("msg:c1/lobby#{}", 2 * cut + 1);
+        agrees(&mut rig, "w1", &source, "held").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_the_launch_gates() {
+        // 可选上限满了。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["cap"]).await;
+        rig.core.gate.set_max_live(Some(1));
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "at_cap").await;
+        let list = rig.core.wake_list(Some("w1")).await.unwrap();
+        assert_eq!(list.wakes[0].blocker, Some(Blocker::AtCap { max: 1 }));
+        // 错开：刚拉起过一个。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &[]).await;
+        rig.core.gate = policy::LaunchGate::new(None, 2 * SEC);
+        let now = rig.core.now();
+        rig.core.gate.launched(now);
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "stagger").await;
+        assert!(
+            rig.core.timers.contains(&now.add(2 * SEC)),
+            "错开的时刻记进定时器"
+        );
+        // 等人答重启询问：人在询问之前 @ 的不算（C4），低一档的排在它后面。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &[]).await;
+        rig.core.held.insert("w1".into());
+        rig.core.held_watermark = i64::MAX;
+        rig.post(LOBBY, Sender::Human, at("w1"), "合成人叫").await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "awaiting_restart_answer").await;
+        assert_eq!(
+            codes(&rig, "w1")
+                .await
+                .get("msg:c1/lobby#2")
+                .copied()
+                .flatten(),
+            Some("behind_higher_priority")
+        );
+        // 额度没恢复：自动唤醒不把它拉起来。
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &[]).await;
+        let quota = NewWake {
+            session: "w1".into(),
+            kind: WakeKind::System,
+            source: source::quota(rig.core.now().add(HOUR).0),
+            priority: Priority::System,
+            not_before: rig.core.now().add(HOUR),
+            note: None,
+            origin: breaker::SYSTEM.into(),
+        };
+        rig.port.enqueue(quota).await.unwrap();
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        agrees(&mut rig, "w1", MSG1, "quota_not_reset").await;
+    }
+
+    /// 没被挡的就真的出去：`wake.list` 说 `None` 的那条，下一次投递就带上它。
+    #[tokio::test]
+    async fn a_wake_with_no_blocker_is_the_one_that_goes_out() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        rig.core.live.get_mut("w1").unwrap().working = false;
+        assert_eq!(codes(&rig, "w1").await.get(MSG1).copied().flatten(), None);
+        assert!(rig.core.try_deliver("w1").await.unwrap());
+        assert_eq!(rig.exec.sent("w1"), ["合成甲"]);
+        assert_eq!(
+            rig.core.wake_list(Some("w1")).await.unwrap().targets[0].last_outcome,
+            None,
+            "还没有回执"
+        );
+        rig.ack("w1").await;
+        assert_eq!(
+            rig.core.wake_list(Some("w1")).await.unwrap().targets[0].last_outcome,
+            Some("delivered")
+        );
     }
 }

@@ -147,6 +147,14 @@ pub fn apply_event(
     Ok(planned.into_iter().map(|(_, _, a)| a).collect())
 }
 
+/// 记下一行的 `last_error`（同 collab：失败 / 作废 / 重启回收时写）：`errors` 表与行上的 `last_error` 一起改。
+fn note_error(st: &mut MemState, id: i64, error: &str) {
+    st.errors.insert(id, error.to_string());
+    if let Some(w) = st.wakes.iter_mut().find(|w| w.id == id) {
+        w.last_error = Some(error.to_string());
+    }
+}
+
 pub struct MemPort {
     pub st: Mutex<MemState>,
 }
@@ -274,7 +282,7 @@ impl MemPort {
             .collect();
         apply_event(&mut st.wakes, &pending, lifecycle::WakeEvent::Drop).expect("pending 都能作废");
         for id in pending {
-            st.errors.insert(id, "crew removed".into());
+            note_error(&mut st, id, "crew removed");
         }
     }
 
@@ -489,6 +497,7 @@ impl Port for MemPort {
             created_at: now,
             origin: w.origin,
             msg,
+            last_error: None,
         });
         Ok(true)
     }
@@ -508,7 +517,15 @@ impl Port for MemPort {
 
     /// 跟库一样严：规则只来自共享的那张表（[`apply_event`]，C24）；没有这一行 / 表不认 = 错误，整批一行都不改。
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
-        apply_event(&mut self.lock().wakes, ids, s.event()).map(|_| ())
+        let mut st = self.lock();
+        apply_event(&mut st.wakes, ids, s.event())?;
+        // 同 collab `mark_dropped`：作废的原因记进 last_error。
+        if let Settle::Dropped { error } = &s {
+            for id in ids {
+                note_error(&mut st, *id, error);
+            }
+        }
+        Ok(())
     }
 
     async fn claim(&self, b: &Batch) -> Result<()> {
@@ -569,7 +586,7 @@ impl Port for MemPort {
                     ..Default::default()
                 })
             }
-            Ack::Failed { now, jitter, .. } => {
+            Ack::Failed { error, now, jitter } => {
                 // 同 collab `ack_failed`：按**库里的**次数（claim 记的）判，每一行按真正要用的事件（`Fail` 或 `GiveUp`）
                 // 核表（Task 8b 评审 (3)），全过了才写。
                 let mut planned = Vec::new();
@@ -597,6 +614,10 @@ impl Port for MemPort {
                     }
                 }
                 st.wakes = wakes;
+                // 同 collab `ack_failed`：每一行记下这次的原因。
+                for id in b.ids() {
+                    note_error(&mut st, id, &error);
+                }
                 Ok(out)
             }
         }
@@ -625,14 +646,15 @@ impl Port for MemPort {
                 }
                 None => {
                     apply_event(&mut wakes, &[*id], lifecycle::WakeEvent::GiveUp)?;
-                    let row = wakes.iter().find(|w| w.id == *id).expect("刚改的").clone();
-                    out.gave_up.push(row);
+                    let row = wakes.iter_mut().find(|w| w.id == *id).expect("刚改的");
+                    row.last_error = Some(error.to_string());
+                    out.gave_up.push(row.clone());
                 }
             }
         }
         st.wakes = wakes;
         for id in ids {
-            st.errors.insert(id, error.to_string());
+            note_error(&mut st, id, error);
         }
         Ok(out)
     }
@@ -1763,6 +1785,7 @@ mod self_tests {
             created_at: Ms(0),
             origin: "s".into(),
             msg: None,
+            last_error: None,
         });
         id
     }

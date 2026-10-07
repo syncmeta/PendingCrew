@@ -333,9 +333,10 @@ pub enum Cmd {
         session: String,
         reply: Reply<()>,
     },
+    /// `wake.list`：唤醒行 + 每条 pending 为什么还没出去 + 每个目标的近况（[`Core::wake_list`]）。
     Wakes {
         session: Option<String>,
-        reply: Reply<Vec<QueuedWake>>,
+        reply: Reply<super::deliver::WakeList>,
     },
     /// 人解熔断（只有客户端能调）。
     Recover {
@@ -399,6 +400,8 @@ pub struct Live {
     pub last_wakes: Vec<QueuedWake>,
     /// 休眠到期限按过 Esc（C26 / 评审 m1）：之后这一轮停下的 `Working(false)` 不落库——它是被打断的，was_working 留着。
     pub hibernate_cut: bool,
+    /// 最近一次投递回执的种类（`DeliveryOutcome` 的变体名，`wake.list` 的近况给人看，R9）。
+    pub last_outcome: Option<&'static str>,
     /// 往这个会话里写东西的队列（预检 P4 / 控制者裁定）：投递与 nudge 按 actor 收下的先后排进来，
     /// 由 [`Core::pump_writes`] 一个个写；一次 nudge 的整串写完才轮到下一个，两次写不交错。
     pub writes: VecDeque<Write>,
@@ -675,8 +678,7 @@ impl<P: Port> Core<P> {
             }
             Cmd::Wakes { session, reply } => {
                 let r = self
-                    .port
-                    .list_wakes(session.as_deref())
+                    .wake_list(session.as_deref())
                     .await
                     .map_err(ControlError::internal);
                 let _ = reply.send(r);
@@ -1247,6 +1249,7 @@ impl<P: Port> Core<P> {
                         halting: st.halt_requested && !st.stop_requested,
                         last_wakes: st.batch.wakes.clone(),
                         hibernate_cut: false,
+                        last_outcome: None,
                         writes: VecDeque::new(),
                         writing: false,
                     },

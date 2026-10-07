@@ -109,6 +109,8 @@ pub struct QueuedWake {
     pub origin: String,
     /// 消息类唤醒指向的那条消息（Port 从 `msg:<id>` 解析出来；消息已删 = None）。
     pub msg: Option<MessageRef>,
+    /// 最近一次失败 / 放弃 / 重启回收记下的原因（`wakes.last_error`；排障用，判定不读它）。
+    pub last_error: Option<String>,
 }
 
 /// 一条消息在群里的位置（游标比的是它）。
