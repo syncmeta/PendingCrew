@@ -360,6 +360,25 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     get(tx.conn(), &crew.id)
 }
 
+/// A new top-level crew with `child` under it (M3b `crew_structure` create_parent). `child` is
+/// checked first (exists, not the management crew, not removed), so its refusal is the reason
+/// given, not the empty directory the new crew would have inherited from the management crew.
+/// The caller's transaction holds both steps: a refusal leaves nothing behind.
+pub fn create_above(tx: &mut Tx<'_>, n: NewCrew, child: &str) -> Result<Crew> {
+    get(tx.conn(), child)?;
+    refuse_management_in_tree(tx.conn(), &[child])?;
+    refuse_archived(tx.conn(), child)?;
+    let parent = create(
+        tx,
+        NewCrew {
+            parent_id: None,
+            ..n
+        },
+    )?;
+    adopt(tx, child, &parent.id)?;
+    get(tx.conn(), &parent.id)
+}
+
 pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_archived(tx.conn(), id)?;
@@ -1729,6 +1748,31 @@ mod tests {
             CollabError::Invalid(r) => assert_eq!(r.code, Code::CrewManagementNotInTree),
             e => panic!("{e:?}"),
         }
+    }
+
+    #[test]
+    fn create_above_puts_the_child_under_a_new_top_level_crew_and_refuses_the_management_crew() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            create_above(tx, new_crew("示例上级"), "crew-a")
+        });
+        assert_eq!(edges(&s, "crew-a"), [p.id.as_str()]);
+        assert!(edges(&s, &p.id).is_empty(), "the new crew is top-level");
+        let before = list(s.conn(), true).unwrap().len();
+        match err(&mut s, |tx| {
+            create_above(
+                tx,
+                NewCrew {
+                    title: "示例".into(),
+                    ..Default::default()
+                },
+                "chief",
+            )
+        }) {
+            CollabError::Invalid(r) => assert_eq!(r.code, Code::CrewManagementNotInTree),
+            e => panic!("{e:?}"),
+        }
+        assert_eq!(list(s.conn(), true).unwrap().len(), before);
     }
 
     fn new_crew(title: &str) -> NewCrew {
