@@ -583,13 +583,17 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
         "DELETE FROM crew_parents WHERE crew_id=?1 OR parent_id=?1",
         [&m],
     )?;
-    // 6) 号码 0（没有号、且 0 没人用时）；不隐藏（总机组不能被隐藏）。
+    // 6) 号码 0（没有号、且 0 没人用时）；不隐藏（总机组不能被隐藏）；position 0（与新建的总机组一致，
+    //    旧库里它可能带着全局排名）。
     conn.execute(
         "UPDATE crews SET number=0 WHERE id=?1 AND number IS NULL
             AND NOT EXISTS (SELECT 1 FROM crews WHERE number=0)",
         [&m],
     )?;
-    conn.execute("UPDATE crews SET hidden_at=NULL WHERE id=?1", [&m])?;
+    conn.execute(
+        "UPDATE crews SET hidden_at=NULL, position=0 WHERE id=?1",
+        [&m],
+    )?;
     // 7) 显示名与标题都空的旧 session 补标题（N1 裁定 12）：brief 第一条非空行的前 18 个字符；
     //    没有 brief = 机组标题 + ' #' + 分机号（机长没号 = 机组标题）。标签绝不回落到原始 id。
     //    SQLite 的 substr 按字符算。内部空白不压缩（只管首尾，旧数据的近似即可）。
@@ -1513,6 +1517,11 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         assert_eq!(
             one::<i64>(&c, "SELECT number FROM crews WHERE id='chief'"),
             0
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT position FROM crews WHERE id='chief'"),
+            0,
+            "迁移来的总机组与新建的一样 position=0（旧库里它的 position 是别的值）"
         );
     }
 

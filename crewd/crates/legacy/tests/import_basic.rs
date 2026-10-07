@@ -322,6 +322,7 @@ fn imported_top_level_crews_stay_top_level_and_the_builtin_chief_is_the_manageme
     let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
     assert!(chief.management && chief.parent_ids.is_empty() && chief.child_ids.is_empty());
     assert_eq!(chief.number, Some(0));
+    assert_eq!(chief.position, 0, "与迁移来的、新建的总机组一样");
 }
 
 /// 旧数据里挂在内建机组下的子机组：导入与 v3 库迁移走同一个 `backfill_v4`，结果一样——只挂在它下面的成为顶层、
