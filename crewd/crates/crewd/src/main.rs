@@ -87,8 +87,9 @@ async fn run() -> anyhow::Result<()> {
             crewd_server::ensure_data_dir(&dir)?;
             // 与 serve 同一把锁：正在服务的库不能被导入写。
             let _lock = crewd_server::lock_data_dir(&dir)?;
-            let db = dir.join("crewd.db");
-            let mut store = crewd_store::Store::open(&db)?;
+            let db = dir.join(crewd_store::DB_FILE);
+            // 与 serve 同一道身份核对：库丢了 / 换了就拒绝，而不是往一个新建的空库里导（N4 / S24）。
+            let mut store = crewd_store::Store::open_data_dir(&dir)?;
             // 只拒绝非空的库；上次导入失败留下的空库允许重试。
             if !store.is_empty()? {
                 bail!(

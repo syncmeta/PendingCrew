@@ -153,7 +153,8 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     let sock = data_dir.join("crewd.sock");
     let _ = std::fs::remove_file(&sock);
 
-    let store = Store::open(&data_dir.join("crewd.db"))?;
+    // 核对库的身份：该在的库不在 / 被换掉时拒绝启动，不新建空库（N4 / S24）。
+    let store = Store::open_data_dir(&data_dir)?;
     let db = Db::spawn(store)?;
     let state = Arc::new(AppState::new(db));
     let listener = UnixListener::bind(&sock)?;
