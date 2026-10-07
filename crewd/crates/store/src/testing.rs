@@ -33,3 +33,17 @@ pub fn corrupt_an_index(conn: &rusqlite::Connection) {
     )
     .unwrap();
 }
+
+/// 让一行违反 CHECK 约束（改表定义，不改数据）：`quick_check` 报错，`VACUUM INTO` 却照样拷得出来
+/// （VACUUM 不核 CHECK）——用来证明「拍完的那份自己也要过检查」这一步在起作用。
+pub fn violate_a_check(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "CREATE TABLE probe_check(a INTEGER);
+         INSERT INTO probe_check VALUES(5);
+         PRAGMA writable_schema=ON;
+         UPDATE sqlite_master SET sql='CREATE TABLE probe_check(a INTEGER CHECK(a<3))'
+          WHERE name='probe_check';
+         PRAGMA writable_schema=OFF;",
+    )
+    .unwrap();
+}

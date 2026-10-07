@@ -185,8 +185,7 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
         }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
         {
-            let copy =
-                Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let copy = open_for_check(&tmp)?;
             ensure_ok(&copy, Check::Quick)?;
         }
         std::fs::File::open(&tmp)?.sync_all()?;
@@ -199,19 +198,41 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
     result
 }
 
-/// 只读打开库文件（不建、不改；WAL 下不挡写者）。库不在就报错。
-pub fn open_read_only(db: &Path) -> Result<Connection> {
-    if !db.exists() {
-        return Err(StoreError::Io(std::io::Error::new(
+fn require_file(db: &Path) -> Result<()> {
+    if db.exists() {
+        Ok(())
+    } else {
+        Err(StoreError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("库文件不存在：{}", db.display()),
-        )));
+        )))
     }
+}
+
+/// 只读的第二连接（`SQLITE_OPEN_READ_ONLY`：不建库、不写；WAL 下不挡库线程的写）。拍快照用。
+/// 库不在就报错。**做检查别用它**，见 `open_for_check`。
+pub fn open_read_only(db: &Path) -> Result<Connection> {
+    require_file(db)?;
     let c = Connection::open_with_flags(
         db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(c)
+}
+
+/// 做 `quick_check` / `integrity_check` 用的第二连接：READ_WRITE 标志（不带 CREATE）+ `query_only`。
+/// 不用 `SQLITE_OPEN_READ_ONLY`，是因为 SQLite 在只读打开的库上根本不解析 CHECK 约束
+/// （`sqlite3AddCheckConstraint` 跳过只读 btree），检查就看不见违反 CHECK 的行（N4 实测）。
+/// `query_only` 让它照样写不了（`VACUUM INTO` 也被挡，所以拍快照用 `open_read_only`）。
+pub fn open_for_check(db: &Path) -> Result<Connection> {
+    require_file(db)?;
+    let c = Connection::open_with_flags(
+        db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    c.busy_timeout(std::time::Duration::from_secs(5))?;
+    c.execute_batch("PRAGMA query_only=ON")?;
     Ok(c)
 }
 
@@ -342,11 +363,11 @@ pub struct TickReport {
 /// `quick_check`），备份成功**且**在用的库没问题才轮转淘汰旧备份。库是空的不拍。
 pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
     let dir = backups_dir_for(db);
-    let c = open_read_only(db)?;
     let mut report = TickReport {
-        live_problems: check(&c, Check::Quick)?,
+        live_problems: check(&open_for_check(db)?, Check::Quick)?,
         ..Default::default()
     };
+    let c = open_read_only(db)?;
     let has_data: i64 = c.query_row(
         "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages)",
         [],
@@ -458,7 +479,7 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
             from.display()
         )));
     }
-    ensure_ok(&src, Check::Integrity)?;
+    ensure_ok(&open_for_check(from)?, Check::Integrity)?;
     let src_id = crate::meta_get(&src, "dbId")?;
 
     let replaced = if db.exists() {

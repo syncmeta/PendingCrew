@@ -318,3 +318,25 @@ fn restore_refuses_bad_sources_and_leaves_the_current_db_alone() {
         files(d.path())
     );
 }
+
+/// 拍出来的那份没过 quick_check 就不算备份：报错、不留文件（VACUUM INTO 本身是成功的）。
+#[test]
+fn a_snapshot_that_fails_its_own_quick_check_is_not_kept() {
+    let d = tempfile::tempdir().unwrap();
+    {
+        let s = Store::open_data_dir(d.path()).unwrap();
+        add_crew(&s, "a");
+        crewd_store::testing::violate_a_check(s.conn());
+    }
+    let dest = d.path().join("backups/x.db");
+    let err = backup::backup_db(&d.path().join(DB_FILE), &dest).unwrap_err();
+    assert_eq!(
+        err.storage_kind(),
+        Some(crewd_store::StorageKind::Corrupt),
+        "{err}"
+    );
+    assert!(
+        files(&d.path().join("backups")).is_empty(),
+        "不留半截 / 坏的备份"
+    );
+}
