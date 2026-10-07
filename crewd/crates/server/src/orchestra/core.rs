@@ -353,6 +353,11 @@ pub enum Cmd {
         deadline_ms: Option<i64>,
         reply: Reply<HibernateReport>,
     },
+    /// 测试用：actor 此刻的下一次定时拍（[`Core::next_deadline`]）。
+    #[cfg(test)]
+    NextDeadline {
+        reply: oneshot::Sender<Ms>,
+    },
 }
 
 /// 一笔还没回执的投递。`delivery` = `ExecHandle::send` 的编号（拉起时带的正文 = `BRIEF_DELIVERY_ID`）；
@@ -681,6 +686,10 @@ impl<P: Port> Core<P> {
                 let _ = reply.send(r);
             }
             Cmd::Hibernate { deadline_ms, reply } => self.begin_hibernate(deadline_ms, reply).await,
+            #[cfg(test)]
+            Cmd::NextDeadline { reply } => {
+                let _ = reply.send(self.next_deadline().await);
+            }
         }
     }
 

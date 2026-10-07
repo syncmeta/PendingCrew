@@ -47,6 +47,8 @@ pub struct SessionRow {
     pub awaiting_question: Option<String>,
     /// 最近一次「产出」（M3a `sessions.last_progress_at`：工具调用 / 工作项变化，`note_progress` 写；发言不写，C3）。
     pub last_progress_at: Option<Ms>,
+    /// 它的机组已被移除（归档，N1 Task 9）：只读、不收新 session、起不来也不该被叫醒（spec §26.5 / §26.7）。
+    pub crew_removed: bool,
 }
 
 impl SessionRow {
@@ -268,13 +270,15 @@ pub trait Port: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<String>>> + Send;
     /// 机组此刻的机长（= 大厅群主）。
     fn captain(&self, crew: &str) -> impl Future<Output = Result<Option<String>>> + Send;
+    /// 机组已被移除（归档；M3a `crews::is_archived`）。没有这个机组 = 错误。
+    fn crew_removed(&self, crew: &str) -> impl Future<Output = Result<bool>> + Send;
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger>;
     fn worldview(&self, session: &str) -> impl Future<Output = Result<String>> + Send;
     fn mint_token(&self, session: &str) -> String;
     /// 进程退出（含人停掉）后作废它的 helper 令牌（M3a `TokenTable::revoke`）：旧配置文件里的 token 不能再 attach。
     fn revoke_token(&self, session: &str);
     // —— 唤醒队列与熔断
-    /// 插入成功 = true；`UNIQUE(session, kind, source)` 撞了 = false。
+    /// 插入成功 = true；`UNIQUE(session, kind, source)` 撞了 = false；目标的机组已被移除（M3a `Enqueued::Skipped`）= false。
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<bool>> + Send;
     /// 该 session 所有 `pending` 的唤醒（不论到没到点）。
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;

@@ -100,6 +100,8 @@ pub struct MemState {
     pub errors: BTreeMap<i64, String>,
     /// 设了就让 `patch_session` 出错（模拟写 session 行失败）：带着的那批照样要结算，不能留下没人拿着的 inflight 行。
     pub patch_error: Option<String>,
+    /// 已被移除（归档）的机组（[`MemPort::remove_crew`]，同 M3a `crews::archive`）。
+    pub removed_crews: BTreeSet<String>,
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -186,9 +188,16 @@ impl MemPort {
         } else {
             vec![]
         };
+        // 同 DbPort（C22 / T10a 补充 §2.2）：活着 = 存在且机组没被移除（不是「进程在跑」）。
+        let live_sessions = st
+            .sessions
+            .values()
+            .filter(|s| !st.removed_crews.contains(&s.crew_id))
+            .map(|s| s.id.clone())
+            .collect();
         Some(ChannelCtx {
             session_members: members,
-            live_sessions: st.sessions.keys().cloned().collect(),
+            live_sessions,
             owner,
             dm_sessions,
             crew_captain: captain,
@@ -212,6 +221,32 @@ impl MemPort {
         st.cursors
             .entry((session.to_string(), channel.to_string()))
             .or_insert(end);
+    }
+
+    /// 同 M3a `crews::archive`（移除）：机组记成已移除，它的 session 行 `crew_removed`，还排着的（pending）唤醒作废；
+    /// 之后对它的 session 入队 = 什么都不做（`Enqueued::Skipped`），也不收新 session。
+    pub fn remove_crew(&self, crew: &str) {
+        let mut st = self.lock();
+        st.removed_crews.insert(crew.to_string());
+        let ids: Vec<String> = st
+            .sessions
+            .values_mut()
+            .filter(|s| s.crew_id == crew)
+            .map(|s| {
+                s.crew_removed = true;
+                s.id.clone()
+            })
+            .collect();
+        let pending: Vec<i64> = st
+            .wakes
+            .iter()
+            .filter(|w| ids.contains(&w.session) && w.state == WakeState::Pending)
+            .map(|w| w.id)
+            .collect();
+        apply_event(&mut st.wakes, &pending, lifecycle::WakeEvent::Drop).expect("pending 都能作废");
+        for id in pending {
+            st.errors.insert(id, "crew removed".into());
+        }
     }
 
     pub fn wakes_of(&self, session: &str) -> Vec<QueuedWake> {
@@ -272,6 +307,9 @@ impl Port for MemPort {
 
     async fn insert_session(&self, s: NewSession) -> Result<SessionRow> {
         let mut st = self.lock();
+        if st.removed_crews.contains(&s.crew_id) {
+            anyhow::bail!("机组 {} 已被移除", s.crew_id);
+        }
         st.next_session += 1;
         let shared = st.crew_dirs.get(&s.crew_id).cloned();
         let row = SessionRow {
@@ -296,6 +334,7 @@ impl Port for MemPort {
             resume_failed_at: None,
             awaiting_question: None,
             last_progress_at: None,
+            crew_removed: false,
         };
         // 同 M3a `sessions::register`：新 session 的大厅游标钉在当前末尾（机长另加人类群，同 `point_captain_at`）。
         let joined: Vec<String> = st
@@ -358,6 +397,10 @@ impl Port for MemPort {
         Ok(Self::captain_of(&self.lock(), crew))
     }
 
+    async fn crew_removed(&self, crew: &str) -> Result<bool> {
+        Ok(self.lock().removed_crews.contains(crew))
+    }
+
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger> {
         self.lock()
             .ledgers
@@ -380,6 +423,14 @@ impl Port for MemPort {
 
     async fn enqueue(&self, w: NewWake) -> Result<bool> {
         let mut st = self.lock();
+        // 同 M3a `wakes::enqueue`：目标的机组已移除 = `Skipped`（不写行）。
+        if st
+            .sessions
+            .get(&w.session)
+            .is_some_and(|s| st.removed_crews.contains(&s.crew_id))
+        {
+            return Ok(false);
+        }
         if st
             .wakes
             .iter()
@@ -1220,6 +1271,7 @@ impl Rig {
             resume_failed_at: None,
             awaiting_question: None,
             last_progress_at: None,
+            crew_removed: false,
         }
     }
 
@@ -1546,6 +1598,7 @@ mod self_tests {
                         resume_failed_at: None,
                         awaiting_question: None,
                         last_progress_at: None,
+                        crew_removed: false,
                     },
                 );
             }

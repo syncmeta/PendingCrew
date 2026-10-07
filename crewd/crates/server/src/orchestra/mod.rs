@@ -2,7 +2,9 @@
 //! 一个 actor（`core::Core`）独占会话句柄与内存状态；数据只经 `port::Port`；执行器只经 `exec::Executor`。
 pub mod boot;
 pub mod clock;
+pub mod control;
 pub mod core;
+pub mod db;
 pub mod deliver;
 pub mod exec;
 pub mod exec_claude;
@@ -293,6 +295,16 @@ impl Handle {
 
     pub fn collab(&self, f: CollabFact) {
         let _ = self.tx.send(Input::Collab(f));
+    }
+
+    /// 测试用：actor 此刻的下一次定时拍；actor 没了 = None。
+    #[cfg(test)]
+    pub async fn next_deadline(&self) -> Option<crewd_wake::Ms> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Input::Cmd(Cmd::NextDeadline { reply: tx }))
+            .ok()?;
+        rx.await.ok()
     }
 
     /// 休眠（C26）：不再投 / 拉起；空闲的立刻停，在干活的等到 `deadline`（None = 设置里的，没设 = 120 秒；0 = 立即）
