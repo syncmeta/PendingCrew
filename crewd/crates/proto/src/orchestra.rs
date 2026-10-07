@@ -179,10 +179,15 @@ pub struct Settings {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
-    /// `zh` / `en`；别的词 = -32602 `settings.bad_locale`（语言不能清掉）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<LocaleView>")]
-    pub locale: Option<String>,
+    /// `zh` / `en`；别的词、以及 `null`（语言没有「清掉」这回事，null 在这张表里只有一个意思）=
+    /// -32602 `settings.bad_locale`。契约里写成不可为 null 的 `LocaleView`（修复轮 M5）。
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "LocaleView")]
+    pub locale: Option<Option<String>>,
     /// ≥ 1；0 = -32602 `settings.max_live_min`。
     #[serde(
         default,
@@ -606,6 +611,25 @@ mod tests {
         assert_eq!(p.max_live_sessions, Some(None));
         assert_eq!(p.hibernate_deadline_secs, Some(Some(30)));
         assert_eq!(p.locale, None);
+        let p: SettingsPatch = serde_json::from_value(json!({"locale": null})).unwrap();
+        assert_eq!(
+            p.locale,
+            Some(None),
+            "null 读得出来，由 settings.set 拒（settings.bad_locale）"
+        );
+        let s = serde_json::to_value(schemars::schema_for!(SettingsPatch)).unwrap();
+        let locale = &s["properties"]["locale"];
+        assert!(
+            locale["$ref"].is_string()
+                && locale.get("anyOf").is_none()
+                && locale.get("type").is_none(),
+            "契约里语言不可为 null：{locale}"
+        );
+        let max = &s["properties"]["maxLiveSessions"];
+        assert!(
+            max.to_string().contains("\"null\""),
+            "上限可以 null（清掉）：{max}"
+        );
         assert!(serde_json::from_value::<SettingsPatch>(json!({"maxLiveSessions": -1})).is_err());
         assert!(serde_json::from_value::<SettingsPatch>(json!({"bogus": 1})).is_err());
     }

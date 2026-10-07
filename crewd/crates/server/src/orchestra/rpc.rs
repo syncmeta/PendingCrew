@@ -213,13 +213,14 @@ fn settings_view(s: &SettingsView) -> Settings {
 
 /// `settings.set` 的参数 → 编排的更新。先全部核对、再写（一个值不对就什么都不改）。
 fn settings_update(p: SettingsPatch) -> Result<SettingsUpdate, ControlError> {
-    let lang = match p.locale.as_deref() {
+    let lang = match p.locale.as_ref().map(|l| l.as_deref()) {
         None => None,
-        Some("zh") => Some(Lang::Zh),
-        Some("en") => Some(Lang::En),
+        Some(Some("zh")) => Some(Lang::Zh),
+        Some(Some("en")) => Some(Lang::En),
+        // 语言清不掉：null 与别的词一样是坏值（修复轮 M5）。
         Some(other) => {
             return Err(ControlError::Invalid(
-                Refusal::new(Code::SettingsBadLocale).arg("value", other),
+                Refusal::new(Code::SettingsBadLocale).arg("value", other.unwrap_or("null")),
             ));
         }
     };
@@ -807,6 +808,10 @@ mod tests {
             (
                 json!({"maxLiveSessions": 0, "locale": "zh"}),
                 "settings.max_live_min",
+            ),
+            (
+                json!({"locale": null, "maxLiveSessions": 2}),
+                "settings.bad_locale",
             ),
         ] {
             let e = rpc(&h, &st, methods::SETTINGS_SET, bad.clone())

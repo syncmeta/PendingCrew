@@ -2522,15 +2522,8 @@
           ]
         },
         "locale": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LocaleView"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "`zh` / `en`；别的词 = -32602 `settings.bad_locale`（语言不能清掉）。"
+          "$ref": "#/$defs/LocaleView",
+          "description": "`zh` / `en`；别的词、以及 `null`（语言没有「清掉」这回事，null 在这张表里只有一个意思）=\n-32602 `settings.bad_locale`。契约里写成不可为 null 的 `LocaleView`（修复轮 M5）。"
         },
         "maxLiveSessions": {
           "description": "≥ 1；0 = -32602 `settings.max_live_min`。",
