@@ -176,9 +176,9 @@ impl<P: Port> Core<P> {
             }
             let mut origins: BTreeMap<i64, String> = BTreeMap::new();
             let mut candidates = Vec::new();
+            // 退避中的不会到点（退避就是库里的 `not_before`），`is_due` 已经把它们滤掉。
             for w in pending.iter().filter(|w| queue::is_due(w, now)) {
-                let backing_off = self.backoff.get(&w.id).is_some_and(|t| *t > now);
-                if !backing_off && self.breaker.held(session, &w.origin).is_none() {
+                if self.breaker.held(session, &w.origin).is_none() {
                     origins.insert(w.id, w.origin.clone());
                     candidates.push(w.clone());
                 }
@@ -639,13 +639,15 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
-    /// 还有此刻就投得出去的 pending 吗：到点、不在退避、没被熔断挡着（pending 行本来就不是 inflight）。
+    /// 还有此刻就投得出去的 pending 吗：到点（退避中的 `not_before` 在后面、不到点）、没被熔断挡着
+    /// （pending 行本来就不是 inflight）。
     async fn deliverable_now(&self, session: &str, now: Ms) -> anyhow::Result<bool> {
-        Ok(self.port.pending(session).await?.iter().any(|w| {
-            queue::is_due(w, now)
-                && self.backoff.get(&w.id).is_none_or(|t| *t <= now)
-                && self.breaker.held(session, &w.origin).is_none()
-        }))
+        Ok(self
+            .port
+            .pending(session)
+            .await?
+            .iter()
+            .any(|w| queue::is_due(w, now) && self.breaker.held(session, &w.origin).is_none()))
     }
 
     pub(crate) async fn rescan(&mut self) -> anyhow::Result<()> {
@@ -1000,13 +1002,16 @@ mod tests {
         fail_last(&mut rig, "w1").await;
         let w = rig.port.wakes_of("w1")[0].clone();
         assert_eq!((w.state, w.attempts), (WakeState::Pending, 1));
-        assert_eq!(rig.core.backoff[&w.id], T0.add(30 * SEC));
+        assert_eq!(w.not_before, T0.add(30 * SEC), "退避就是库里的 not_before");
         rig.tick(29 * SEC).await;
         assert_eq!(rig.exec.sent("w1").len(), 1, "退避没到不重投");
         rig.tick(SEC).await;
         assert_eq!(rig.exec.sent("w1").len(), 2);
         fail_last(&mut rig, "w1").await;
-        assert_eq!(rig.core.backoff[&w.id], T0.add(30 * SEC + 2 * MIN));
+        assert_eq!(
+            rig.port.wakes_of("w1")[0].not_before,
+            T0.add(30 * SEC + 2 * MIN)
+        );
         rig.tick(2 * MIN).await;
         fail_last(&mut rig, "w1").await;
         assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);

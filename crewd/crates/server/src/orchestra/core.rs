@@ -346,9 +346,6 @@ pub struct Core<P: Port> {
     pub(crate) breaker: LoopBreaker,
     /// 退避 / 错开产生的「这一刻再看一次」。
     pub(crate) timers: BTreeSet<Ms>,
-    /// 失败重试的退避：唤醒 id → 不早于。同一时刻也经 `Port::ack(Failed)` 写进库里的 `not_before`
-    /// （M3a `mark_failed(.., retry_at_ms)`），重启后照样退避；内存这份只为选批时不必回读。
-    pub(crate) backoff: HashMap<i64, Ms>,
     /// 已经看过的 `last_progress_at`（`Change::Progress` 丢了时的兜底，裁定 3）。
     pub(crate) seen_progress: HashMap<String, Ms>,
 }
@@ -397,7 +394,6 @@ impl<P: Port> Core<P> {
             restart_prompt: None,
             breaker: LoopBreaker::new(loops, latches),
             timers: BTreeSet::new(),
-            backoff: HashMap::new(),
             seen_progress: HashMap::new(),
         })
     }
@@ -1132,9 +1128,8 @@ impl<P: Port> Core<P> {
                 },
             )
             .await?;
-        for (id, retry_at) in &acked.retried {
-            // 在那一刻再看一次（定时拍 / 下一个 not_before）。退避本身只在库里的 not_before。
-            self.backoff.insert(*id, *retry_at);
+        for (_, retry_at) in &acked.retried {
+            // 在那一刻再看一次（定时拍 / 下一个 not_before）。退避本身只在库里的 `not_before`（唯一的事实，P2 / R10）。
             self.timers.insert(*retry_at);
         }
         let gave_up: Vec<QueuedWake> = batch
@@ -1143,9 +1138,6 @@ impl<P: Port> Core<P> {
             .chain(batch.riders)
             .filter(|w| acked.gave_up.contains(&w.id))
             .collect();
-        for w in &gave_up {
-            self.backoff.remove(&w.id);
-        }
         if queue::should_alert(&gave_up)
             && let Some(row) = self.port.session(&session).await?
             && row.resume_failed_at.is_none()

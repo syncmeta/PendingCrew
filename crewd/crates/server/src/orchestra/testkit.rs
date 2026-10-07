@@ -1705,9 +1705,12 @@ mod self_tests {
         assert_eq!((w[0].state, w[0].attempts), (WakeState::Pending, 1));
         assert_eq!(w[0].not_before, Ms(1_000 + queue::RETRY_DELAYS_MS[0]));
         assert_eq!(w[1].state, WakeState::Dropped);
-        // a 回 pending 了：同一批再 ack 一次 = 有一行不是 inflight → 整批不动（b 也不动）。
+        // 前一行认、后一行不认（a 已经回 pending 了）：整批不动——前面那行（c，inflight）也不能先被记了失败。
+        let c = row_in(&p, WakeState::Pending);
+        let mixed = batch_of(&p, &[c], &[a], &[]);
+        p.claim(&batch_of(&p, &[c], &[], &[])).await.unwrap();
         let before = p.lock().wakes.clone();
-        assert!(p.ack(&batch, failed()).await.is_err());
+        assert!(p.ack(&mixed, failed()).await.is_err());
         assert_eq!(p.lock().wakes, before);
     }
 
