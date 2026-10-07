@@ -145,7 +145,7 @@ mod tests {
             id: id.into(),
             title: format!("机组 {id}"),
             number: n,
-            builtin: false,
+            org_root: false,
             parent_ids: vec![],
             working_directory: Some("/tmp/w".into()),
             captain_executor: Some("claude".into()),
@@ -378,7 +378,7 @@ mod tests {
         let pk = s
             .conn()
             .execute(
-                "INSERT INTO crews(id,title,builtin,created_at,updated_at) VALUES('a','t',0,'x','x')",
+                "INSERT INTO crews(id,title,org_root,created_at,updated_at) VALUES('a','t',0,'x','x')",
                 [],
             )
             .unwrap_err();

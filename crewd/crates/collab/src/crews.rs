@@ -140,7 +140,7 @@ fn position_of(conn: &Connection, id: &str) -> Result<i64> {
 fn refuse_builtin(conn: &Connection, ids: &[&str]) -> Result<()> {
     for id in ids {
         let builtin: Option<bool> = conn
-            .query_row("SELECT builtin FROM crews WHERE id=?1", [id], |r| r.get(0))
+            .query_row("SELECT org_root FROM crews WHERE id=?1", [id], |r| r.get(0))
             .optional()?;
         if builtin == Some(true) {
             return Err(CollabError::Forbidden(format!(
@@ -177,7 +177,7 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
         id: format!("crew-{}", uuid::Uuid::new_v4().simple()),
         title,
         number: Some(number),
-        builtin: false,
+        org_root: false,
         working_directory: Some(wd),
         title_source: n.title_source,
         created_at: now.clone(),
@@ -213,7 +213,7 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
         if t.is_empty() {
             return Err(CollabError::Invalid("机组名不能为空".into()));
         }
-        if crew.builtin {
+        if crew.org_root {
             return Err(CollabError::Forbidden("内建机组不能改名".into()));
         }
         conn.execute("UPDATE crews SET title=?2 WHERE id=?1", params![id, t])?;
@@ -340,7 +340,7 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
 /// ChannelRemoved；它的 session 在别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
 pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     let crew = get(tx.conn(), id)?;
-    if crew.builtin {
+    if crew.org_root {
         return Err(CollabError::Forbidden("内建机组不能删".into()));
     }
     let running: i64 = tx.conn().query_row(
@@ -461,7 +461,7 @@ fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
         None => {
             let mut out = Vec::new();
             for c in list(conn)? {
-                if !c.builtin && is_root(conn, &c.id)? {
+                if !c.org_root && is_root(conn, &c.id)? {
                     out.push(c.id);
                 }
             }
@@ -1052,7 +1052,7 @@ mod tests {
             None => list(s.conn())
                 .unwrap()
                 .into_iter()
-                .filter(|c| !c.builtin && is_root(s.conn(), &c.id).unwrap())
+                .filter(|c| !c.org_root && is_root(s.conn(), &c.id).unwrap())
                 .map(|c| c.id)
                 .collect(),
         }

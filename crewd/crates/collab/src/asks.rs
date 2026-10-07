@@ -152,7 +152,7 @@ pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
 pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;
-    if crew.builtin {
+    if crew.org_root {
         return Err(CollabError::Forbidden(
             "内建总机组不提问（同 McpServer.swift:745-753）".into(),
         ));

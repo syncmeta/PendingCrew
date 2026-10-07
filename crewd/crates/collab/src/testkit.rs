@@ -18,7 +18,7 @@ pub(crate) const MIN: i64 = 60_000;
 pub(crate) fn store() -> Store {
     let s = Store::open_in_memory().unwrap();
     let c = s.conn();
-    for (id, title, number, builtin, at) in [
+    for (id, title, number, org_root, at) in [
         (
             "crew-a",
             "机组甲",
@@ -48,7 +48,7 @@ pub(crate) fn store() -> Store {
                 id: id.into(),
                 title: title.into(),
                 number,
-                builtin,
+                org_root,
                 working_directory: Some("/tmp/example".into()),
                 created_at: at.into(),
                 updated_at: at.into(),

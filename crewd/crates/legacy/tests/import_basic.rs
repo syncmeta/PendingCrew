@@ -310,3 +310,46 @@ fn legacy_captain_mentions_without_target_are_resolved_by_the_import() {
         Some("captain-1111aaaa")
     );
 }
+
+#[test]
+fn imported_top_level_crews_hang_under_the_builtin_chief() {
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    import(&fixture(), &mut store, dest.path()).unwrap();
+    let list = crewd_store::crews::list(store.conn()).unwrap();
+    let a = list.iter().find(|c| c.id == "local-aaaa").unwrap();
+    assert_eq!(a.parent_ids, ["pendingcrew-chief"]);
+    let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
+    assert!(chief.org_root && chief.parent_ids.is_empty());
+    assert_eq!(chief.number, Some(0));
+}
+
+/// 旧数据里多于一个 isBuiltin：留 createdAt 最早的为总机组，其余降为普通机组并记一条警告——
+/// 否则 v4 的部分唯一索引让整个导入失败。
+#[test]
+fn several_builtin_crews_in_legacy_data_keep_only_the_earliest_as_org_root() {
+    let t = fixture_copy();
+    let path = t.path().join("local-crews.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for c in v["crews"].as_array_mut().unwrap() {
+        if c["id"] == "local-bbbb" {
+            c["isBuiltin"] = serde_json::Value::Bool(true);
+        }
+    }
+    std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    let r = import(t.path(), &mut store, dest.path()).unwrap();
+    let list = crewd_store::crews::list(store.conn()).unwrap();
+    let roots: Vec<_> = list
+        .iter()
+        .filter(|c| c.org_root)
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(roots, ["pendingcrew-chief"]);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("local-bbbb")),
+        "{:?}",
+        r.warnings
+    );
+}

@@ -322,7 +322,9 @@ fn rpc_drives_every_client_method() {
             Ok,
         ),
         ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
-        ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        // v4 起导入的顶层机组挂在总机组下；人类群用总机组自己的（管理用人类群，N1-R2）——
+        // 它在 Task 2 的过渡形状与 Task 3 的 home 规则下都存在。
+        ("channel.list", r#"{"crewId":"pendingcrew-chief"}"#, Ok),
         (
             "channel.create",
             r#"{"crewId":"local-aaaa","kind":"topic","name":"端到端群"}"#,
@@ -330,17 +332,17 @@ fn rpc_drives_every_client_method() {
         ),
         (
             "channel.update",
-            r#"{"channelId":"local-aaaa/human","purpose":"找人"}"#,
+            r#"{"channelId":"pendingcrew-chief/human","purpose":"找人"}"#,
             Ok,
         ),
         (
             "channel.addMembers",
-            r#"{"channelId":"local-aaaa/human","members":[{"kind":"session","id":"worker-2222bbbb"}]}"#,
+            r#"{"channelId":"pendingcrew-chief/human","members":[{"kind":"session","id":"worker-2222bbbb"}]}"#,
             Ok,
         ),
         (
             "channel.removeMember",
-            r#"{"channelId":"local-aaaa/human","member":{"kind":"session","id":"worker-2222bbbb"}}"#,
+            r#"{"channelId":"pendingcrew-chief/human","member":{"kind":"session","id":"worker-2222bbbb"}}"#,
             Ok,
         ),
         (

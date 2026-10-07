@@ -514,8 +514,12 @@
     },
     "Crew": {
       "properties": {
-        "builtin": {
-          "type": "boolean"
+        "archivedAt": {
+          "description": "归档时刻（删机组 = 归档，N1 裁定 13）；没归档时不出现。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "captainExecutor": {
           "description": "机长的执行器类型，词表同 `Session.executor`。",
@@ -558,6 +562,10 @@
             "null"
           ]
         },
+        "orgRoot": {
+          "description": "组织唯一的根（总机组，spec §24 H2）；至多一个。",
+          "type": "boolean"
+        },
         "parentIds": {
           "items": {
             "type": "string"
@@ -569,7 +577,7 @@
         },
         "position": {
           "default": 0,
-          "description": "只在**顶层**（根机组之间）有意义的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 不带 parentId 时改它，\n新根排在末尾）。子机组在某个父下的次序不在这里：看父的 `childIds`（多父机组在每个父下各有自己的次序）。",
+          "description": "只有总机组用（恒为 1）；子机组的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。",
           "format": "int64",
           "type": "integer"
         },
@@ -603,7 +611,7 @@
       "required": [
         "id",
         "title",
-        "builtin",
+        "orgRoot",
         "parentIds",
         "createdAt",
         "updatedAt"
