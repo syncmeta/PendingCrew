@@ -132,12 +132,11 @@ async fn route(
     }
 }
 
-/// Task 11 wires the Stop hook in here.
 async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Value) -> HookResult {
     match event {
         HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
         HookKind::PreToolUse => crate::agent::approval::pre_tool_use(state, me, &payload).await,
-        HookKind::Stop => HookResult { stdout: None },
+        HookKind::Stop => crate::agent::turn::stop(state, me, &payload).await,
     }
 }
 
@@ -342,6 +341,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r["isError"], true, "卸任后当场被拒，不靠 helper 刷新");
+    }
+
+    #[tokio::test]
+    async fn stop_hook_over_the_wire_relays_a_trailing_question_and_prints_nothing() {
+        let f = Fixture::new().await;
+        let mut w = attached(&f, &f.worker).await;
+        let lobby = crate::agent::port::lobby_of(&f.state, &f.crew)
+            .await
+            .unwrap();
+        let stop = |prompt: &str, text: &str| json!({"event": "stop", "payload": {"hook_event_name": "Stop", "prompt_id": prompt, "last_assistant_message": text}});
+        let r = w.call(methods::HOOK, stop("p0", "收到。")).await.unwrap();
+        assert!(r["stdout"].is_null());
+        let before = crate::agent::port::latest_seq(&f.state, &lobby.id)
+            .await
+            .unwrap();
+        let r = w
+            .call(methods::HOOK, stop("p1", "要不要接着做 B？"))
+            .await
+            .unwrap();
+        assert!(r["stdout"].is_null());
+        assert_ne!(
+            crate::agent::port::latest_seq(&f.state, &lobby.id)
+                .await
+                .unwrap(),
+            before,
+            "Stop must reach turn_trace through the RPC"
+        );
     }
 
     #[tokio::test]
