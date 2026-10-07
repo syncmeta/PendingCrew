@@ -19,7 +19,8 @@ macro_rules! params {
 // R11（契约与解析器一致）：解析器收 `null` 的参数类型在契约里写成 `object | null`。只给只被
 // `parse_no_params` / `parse_params_or_default` 解析的类型加（proto 的测试按方法逐个核）。
 /// 客户端给的 @（`message.post`）。线上形状同 `Mention`。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+// 同样不实现 `Default`（kind 必填，终审 9）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MentionParam {
     pub kind: MentionKind,

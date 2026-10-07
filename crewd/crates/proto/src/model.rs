@@ -99,7 +99,8 @@ pub struct Session {
 }
 
 /// 模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `MentionParam`。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+// 不实现 `Default`：@ 谁必须由构造方写明（终审 9；守卫见 `MentionHasNoDefault`）。普通注释，不进契约。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Mention {
     pub kind: MentionKind,
@@ -202,14 +203,17 @@ pub struct Todo {
 /// 封闭词表：线上是固定字符串，`parse` 认不出就是 None（不猜）。
 macro_rules! closed_vocab {
     ($name:ident { $($variant:ident = $s:literal),+ $(,)? } default $def:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-        pub enum $name {
-            $(#[serde(rename = $s)] $variant,)+
-        }
+        closed_vocab!($name { $($variant = $s),+ });
         impl Default for $name {
             fn default() -> $name {
                 $name::$def
             }
+        }
+    };
+    ($name:ident { $($variant:ident = $s:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+        pub enum $name {
+            $(#[serde(rename = $s)] $variant,)+
         }
         impl $name {
             pub const ALL: &'static [$name] = &[$($name::$variant),+];
@@ -229,7 +233,23 @@ macro_rules! closed_vocab {
 }
 
 closed_vocab!(SenderKind { Human = "human", Session = "session", Captain = "captain", System = "system" } default Human);
-closed_vocab!(MentionKind { Session = "session", Captain = "captain", Human = "human" } default Human);
+// 没有缺省值（终审 9）：`Mention::default()` 曾静默等于 @人类——@ 谁必须写明。
+closed_vocab!(MentionKind { Session = "session", Captain = "captain", Human = "human" });
+
+/// 守卫（终审 9，只在 doctest 里存在）：`Mention` / `MentionKind` 没有 `Default`，下面两段编不过才对。
+///
+/// ```compile_fail
+/// let _ = crewd_proto::Mention::default();
+/// ```
+/// ```compile_fail
+/// let _ = crewd_proto::MentionKind::default();
+/// ```
+/// 对照（编得过）：同一个宏生成、带缺省值的词表。
+/// ```
+/// let _ = crewd_proto::SenderKind::default();
+/// ```
+#[cfg(doctest)]
+pub struct MentionHasNoDefault;
 closed_vocab!(Role { Captain = "captain", Worker = "worker", Admin = "admin" } default Worker);
 closed_vocab!(Desired { Running = "running", Stopped = "stopped" } default Stopped);
 closed_vocab!(ChannelKind { Lobby = "lobby", Human = "human", Topic = "topic", Dm = "dm" } default Topic);
