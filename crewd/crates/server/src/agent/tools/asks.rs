@@ -625,6 +625,50 @@ mod tests {
         );
     }
 
+    /// A question still blocking a live work item cannot be withdrawn: collab's `ask.in_use`
+    /// reaches the agent through the tool, whole.
+    #[tokio::test]
+    async fn withdrawing_an_ask_that_blocks_work_is_collabs_refusal() {
+        let f = Fixture::new().await;
+        let worker = f.worker.clone();
+        let crew = f.crew.clone();
+        let h = f
+            .state
+            .collab(move |tx| {
+                crewd_collab::asks::with_book(tx, &crew, |b, now| {
+                    let me = crewd_work::Actor::worker(worker.as_str());
+                    let w = b
+                        .create_item(
+                            &me,
+                            now,
+                            crewd_work::NewItem::titled("示例项").owned_by(worker.as_str()),
+                        )?
+                        .value;
+                    let r = b.block(
+                        &me,
+                        now,
+                        w,
+                        vec![crewd_work::BlockOn::NewAsk {
+                            question: "用哪个格式？".into(),
+                            default: None,
+                        }],
+                        crewd_work::Continuation::Nothing,
+                    )?;
+                    Ok(r.value.asks[0].to_string())
+                })
+            })
+            .await
+            .unwrap();
+        let r = run(
+            &f,
+            &f.worker,
+            "withdraw_ask",
+            json!({"ask": h, "reason": "不用了"}),
+        )
+        .await;
+        refused(&r, Refusal::new(Code::AskInUse).arg("ask", h.as_str()));
+    }
+
     /// S73: the receipt echoes the item answered; the status does not change (§9).
     #[tokio::test]
     async fn respond_todo_echoes_the_item_and_keeps_status() {
@@ -675,10 +719,18 @@ mod tests {
             json!({"number": 1, "response": "x", "status": "completed"}),
         )
         .await;
-        assert!(
-            r.is_error && r.text.contains("status"),
-            "the status param is gone: {}",
-            r.text
+        // The status param is gone: serde names it (whole receipt).
+        assert!(r.is_error);
+        assert_eq!(
+            r.text,
+            text::r(
+                Locale::Zh,
+                "r.bad_args",
+                &[(
+                    "detail",
+                    "unknown field `status`, expected `number` or `response`"
+                )]
+            )
         );
     }
 
@@ -706,6 +758,14 @@ mod tests {
             &f.worker,
             "schedule_wakeup",
             json!({"after_minutes": 5, "at": "2099-01-01T00:00:00Z", "note": "x"}),
+        )
+        .await;
+        tool_error(&r, "r.wakeup_when");
+        let r = run(
+            &f,
+            &f.worker,
+            "schedule_wakeup",
+            json!({"after_minutes": 1441, "note": "x"}),
         )
         .await;
         tool_error(&r, "r.wakeup_when");
