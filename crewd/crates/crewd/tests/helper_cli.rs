@@ -326,7 +326,7 @@ async fn crewd_gone_during_a_hook_is_silent() {
     .await;
     assert_eq!(out, "");
     assert!(
-        err.contains("closed"),
+        err.contains("connection to crewd closed before it answered"),
         "stderr names the closed connection: {err}"
     );
     assert!(!err.contains("no answer within"), "{err}");
