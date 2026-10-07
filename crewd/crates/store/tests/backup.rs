@@ -393,3 +393,35 @@ fn the_daily_tick_runs_a_full_integrity_check() {
     assert!(r.removed.is_empty(), "{:?}", r.removed);
     assert_eq!(backup::list_auto(&b).unwrap().len(), 31);
 }
+
+/// 复审 3：快照与破坏性事务在同一个库线程任务里先后执行；快照拍不成，破坏性那一步根本不跑。
+#[test]
+fn no_snapshot_no_destructive_step() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open_data_dir(d.path()).unwrap();
+    add_crew(&s, "a");
+    let b = d.path().join("backups");
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let mut ran = false;
+    let r: Result<((), Option<PathBuf>), StoreError> = s.snapshot_then("a", |s| {
+        ran = true;
+        s.conn().execute("DELETE FROM crews WHERE id='a'", [])?;
+        Ok(())
+    });
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let err = r.expect_err("快照失败必须报错");
+    assert!(err.storage_kind().is_some(), "{err:?}");
+    assert!(!ran, "破坏性的一步不能跑");
+    assert_eq!(crews::list(s.conn()).unwrap().len(), 1);
+
+    // 快照成功：先拍、再删，快照里还有 a。
+    let ((), snap) = s
+        .snapshot_then("a", |s| {
+            s.conn().execute("DELETE FROM crews WHERE id='a'", [])?;
+            Ok::<(), StoreError>(())
+        })
+        .unwrap();
+    assert_eq!(crew_ids(&snap.unwrap()), ["a"]);
+    assert!(crews::list(s.conn()).unwrap().is_empty());
+}

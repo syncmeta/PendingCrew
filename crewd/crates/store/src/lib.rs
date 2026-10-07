@@ -328,6 +328,18 @@ impl Store {
         Ok(Some(dest))
     }
 
+    /// 先快照、再做破坏性的那一步（复审 3）：两步在同一次调用里先后执行——经 `Db::call` 调时就是同一个
+    /// 库线程任务，中间插不进任何写，快照 = 删之前那一刻。快照拍不成就返回错误，`f` 根本不跑。
+    /// 内存库没有备份目录：不拍，直接跑 `f`（快照位置为 `None`）。`f` 自己管事务；不能在事务里调。
+    pub fn snapshot_then<T, E: From<StoreError>>(
+        &mut self,
+        what: &str,
+        f: impl FnOnce(&mut Store) -> std::result::Result<T, E>,
+    ) -> std::result::Result<(T, Option<std::path::PathBuf>), E> {
+        let snap = self.snapshot_before_purge(what)?;
+        Ok((f(self)?, snap))
+    }
+
     /// 备份目录（内存库是 `None`）。
     pub fn backups_dir(&self) -> Option<&Path> {
         self.backups.as_deref()
