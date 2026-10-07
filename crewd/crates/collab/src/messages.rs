@@ -246,10 +246,19 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         Sender::Session(id) => {
             let me = MemberRef::session(id.clone());
             if !internal && !channels::is_member(conn, &ch.id, &me)? {
+                // 总机组（管理机组）的 session 可以往任何没归档的大厅 / topic / 别的机组的人类群发言，不必是成员、
+                // 也不因此入群（PM 2026-10-07；可见范围 = 成员，叫醒照旧只看 @ / 收听）。dm 不在此列。
+                let manages = ch.kind != ChannelKind::Dm && crews::is_management_session(conn, id)?;
                 if is_human_channel {
                     // 只有 home 是这个机组的 session 能经发言入群（跨机组说话走 dm）。
                     let home = crews::home_of(conn, &sessions::crew_of(conn, id)?)?;
-                    if home != ch.crew_id {
+                    if home == ch.crew_id {
+                        // 往自己 home 的人类群发言 = 显式入群（R14：与 add_members 同一个 join；人回话时它才在群里）。
+                        channels::join(tx, &ch.id, &me)?;
+                        tx.note(Change::ChannelChanged {
+                            channel_id: ch.id.clone(),
+                        });
+                    } else if !manages {
                         return Err(CollabError::Forbidden(
                             Refusal::new(Code::ChannelHumanChannelOtherHome)
                                 .arg("session", id.clone())
@@ -257,12 +266,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                                 .arg("channel", ch.id.clone()),
                         ));
                     }
-                    // 往自己 home 的人类群发言 = 显式入群（R14：与 add_members 同一个 join；人回话时它才在群里）。
-                    channels::join(tx, &ch.id, &me)?;
-                    tx.note(Change::ChannelChanged {
-                        channel_id: ch.id.clone(),
-                    });
-                } else {
+                } else if !manages {
                     return Err(CollabError::Forbidden(
                         Refusal::new(Code::MessageSenderNotMember)
                             .arg("session", id.clone())
@@ -435,6 +439,96 @@ mod tests {
     }
     fn session(id: &str) -> Sender {
         Sender::Session(id.into())
+    }
+
+    /// PM 2026-10-07：总机组（管理机组）的 session 可以往任何没归档的大厅 / topic / 人类群发言，不必是成员，
+    /// 也不因此入群（可见范围 = 成员，叫醒照旧只看 @ / 收听）；dm 只有在里面才能发；别的机组的 session 照旧不行。
+    #[test]
+    fn management_sessions_post_into_any_live_lobby_topic_or_human_channel_without_joining() {
+        use crate::channels::{self, NewChannel};
+        use crewd_proto::{ChannelKind, MemberRef};
+        let mut s = store();
+        let boss = crate::testkit::org_worker(&mut s);
+        let topic = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &session("cap-x"),
+                NewChannel {
+                    crew_id: "crew-x".into(),
+                    kind: ChannelKind::Topic,
+                    name: "示例话题".into(),
+                    purpose: None,
+                    members: vec![],
+                },
+            )
+        });
+        for ch in [
+            "crew-a/lobby",
+            "crew-b/lobby",
+            topic.id.as_str(),
+            "crew-a/human",
+        ] {
+            let p = ok(&mut s, |tx| {
+                post(tx, session(&boss), post_text(ch, "管理层说一句"))
+            });
+            assert_eq!(p.message.channel_id, ch);
+            assert_eq!(p.message.sender_session_id.as_deref(), Some(boss.as_str()));
+            assert!(
+                !channels::is_member(s.conn(), ch, &MemberRef::session(boss.clone())).unwrap(),
+                "{ch}：发言不入群"
+            );
+        }
+        // @ 群里的人照常解析（叫醒仍只看 @）。
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                session(&boss),
+                NewPost {
+                    mentions: vec![m(MentionKind::Session, Some("w-a1"))],
+                    ..post_text("crew-a/lobby", "请看一下")
+                },
+            )
+        });
+        // 别的机组的 session（含机长）照旧不能往不在的群里发。
+        match err(&mut s, |tx| {
+            post(tx, session("cap-x"), post_text("crew-a/lobby", "越界"))
+        }) {
+            CollabError::Forbidden(r) => assert_eq!(r.code, Code::MessageSenderNotMember),
+            e => panic!("{e:?}"),
+        }
+        // dm：不在里面就不能发。
+        let (dm, _) = ok(&mut s, |tx| {
+            channels::ensure_dm(
+                tx,
+                "crew-a",
+                &MemberRef::session("cap-a"),
+                &MemberRef::session("w-a1"),
+            )
+        });
+        match err(&mut s, |tx| {
+            post(tx, session(&boss), post_text(&dm.id, "插话"))
+        }) {
+            CollabError::Forbidden(r) => assert_eq!(r.code, Code::MessageSenderNotMember),
+            e => panic!("{e:?}"),
+        }
+        // 归档的群：同一个 channel.archived。
+        ok(&mut s, |tx| {
+            channels::update(
+                tx,
+                &session("cap-x"),
+                &topic.id,
+                channels::ChannelPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+        });
+        match err(&mut s, |tx| {
+            post(tx, session(&boss), post_text(&topic.id, "晚了"))
+        }) {
+            CollabError::Conflict(r) => assert_eq!(r.code, Code::ChannelArchived),
+            e => panic!("{e:?}"),
+        }
     }
 
     #[test]

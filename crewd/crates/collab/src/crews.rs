@@ -132,6 +132,17 @@ pub fn is_management(conn: &Connection, id: &str) -> Result<bool> {
     .ok_or_else(|| not_found(id))
 }
 
+/// `session` 属于总机组（管理机组）？读全组织、往任何群发言（dm 除外）的依据。一次直查；session 不存在 = false。
+pub fn is_management_session(conn: &Connection, session: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions s JOIN crews c ON c.id=s.crew_id
+          WHERE s.id=?1 AND c.management=1",
+        [session],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
 /// 机组已归档（N1 裁定 13）？一次直查；不存在 = NotFound。
 pub fn is_archived(conn: &Connection, id: &str) -> Result<bool> {
     conn.query_row(
