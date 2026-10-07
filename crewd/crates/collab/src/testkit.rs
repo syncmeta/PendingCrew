@@ -88,6 +88,24 @@ pub(crate) fn store() -> Store {
     s
 }
 
+/// 在总机组（管理层，读全组织）里登记一个 worker，返回它的 id。夹具本身不放总机组的 session（别的测试数着行数），
+/// 要「读得到、但不在群里」的收听者时用它（终审 I4：收听只能落在读得到的群上）。
+pub(crate) fn org_worker(s: &mut Store) -> String {
+    ok(s, |tx| {
+        crate::sessions::register(
+            tx,
+            crate::sessions::NewSession {
+                crew_id: "chief".into(),
+                role: Role::Worker,
+                executor: "claude".into(),
+                title: Some("管理层示例".into()),
+                ..Default::default()
+            },
+        )
+    })
+    .id
+}
+
 /// 在 NOW 跑一个操作，失败就 panic（测试的正路径）。
 pub(crate) fn ok<T>(s: &mut Store, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> T {
     crate::run(s, NOW, f).unwrap().0

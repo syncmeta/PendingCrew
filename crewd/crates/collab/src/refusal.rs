@@ -125,6 +125,7 @@ refusal_codes! {
     WakeLatchRowUnreadable = "wake.latch_row_unreadable" ["scope", "id"],
     // listen
     ListenUntilInPast = "listen.until_in_past" [],
+    ListenNotReadable = "listen.not_readable" ["channel"],
 }
 
 /// 一次规则拒绝：码 + 填进文字的值。

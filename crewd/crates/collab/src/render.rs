@@ -1294,12 +1294,13 @@ mod tests {
         assert_eq!(b.unusable[0].0, r_x, "读得到但不在群里：不投");
     }
 
-    /// 收听不在读规则里：收听着一个读不到的群，入队的行照投。
+    /// 收听着一个读得到、但不在里面的群：入队的行照投（管理层收听一个机组的大厅）。
     #[test]
-    fn queued_rows_from_a_listened_channel_are_delivered_even_if_not_readable() {
+    fn queued_rows_from_a_listened_readable_channel_are_delivered() {
         let mut s = store();
+        let o = crate::testkit::org_worker(&mut s);
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "cap-x", "crew-b/lobby", None, vec![])
+            crate::listens::set(tx, &o, "crew-b/lobby", None, vec![])
         });
         let m = say(
             &mut s,
@@ -1309,13 +1310,75 @@ mod tests {
             vec![],
             None,
         );
-        assert!(!crate::channels::readable_by(s.conn(), "crew-b/lobby", "cap-x").unwrap());
-        let r = wake_msg(&mut s, "cap-x", &m.id);
-        let rows = crate::wakes::due_for(s.conn(), "cap-x", NOW).unwrap();
-        let b = build_batch(s.conn(), "cap-x", Locale::Zh, &rows).unwrap();
+        assert!(
+            !crate::channels::channels_of_session(s.conn(), &o)
+                .unwrap()
+                .iter()
+                .any(|c| c.id == "crew-b/lobby"),
+            "不在群里，只靠收听"
+        );
+        let r = wake_msg(&mut s, &o, &m.id);
+        let rows = crate::wakes::due_for(s.conn(), &o, NOW).unwrap();
+        let b = build_batch(s.conn(), &o, Locale::Zh, &rows).unwrap();
         assert!(b.unusable.is_empty(), "{:?}", b.unusable);
         assert_eq!(b.items[0].wake_ids, [r]);
         assert_eq!(line_seqs(&b), [m.seq]);
+    }
+
+    /// 终审 I4：收听只在读得到时算数。入队之后失去读权（crew-b 挪到一级，crew-a 的人类群不再是 w-b1 的 home）
+    /// → 收听行还在，但排着的行不投（unusable）；群归档（终审 6）同样不投。
+    #[test]
+    fn queued_rows_from_a_listen_that_lost_read_access_or_was_archived_are_unusable() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-a")
+        });
+        ok(&mut s, |tx| {
+            crate::listens::set(tx, "w-b1", "crew-a/human", None, vec![])
+        });
+        let m = say(
+            &mut s,
+            Sender::Human,
+            "crew-a/human",
+            "示例消息",
+            vec![],
+            None,
+        );
+        let r = wake_msg(&mut s, "w-b1", &m.id);
+        ok(&mut s, |tx| {
+            crate::crews::release(tx, "crew-b", "crew-a", None)
+        });
+        assert!(!crate::channels::readable_by(s.conn(), "crew-a/human", "w-b1").unwrap());
+        let rows = crate::wakes::due_for(s.conn(), "w-b1", NOW).unwrap();
+        let b = build_batch(s.conn(), "w-b1", Locale::Zh, &rows).unwrap();
+        assert!(b.items.is_empty(), "{b:?}");
+        assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
+        assert_eq!(b.unusable[0].0, r);
+
+        let o = crate::testkit::org_worker(&mut s);
+        ok(&mut s, |tx| {
+            crate::listens::set(tx, &o, "crew-b/lobby", None, vec![])
+        });
+        let m2 = say(
+            &mut s,
+            Sender::Human,
+            "crew-b/lobby",
+            "示例消息",
+            vec![],
+            None,
+        );
+        let r2 = wake_msg(&mut s, &o, &m2.id);
+        s.conn()
+            .execute(
+                "UPDATE channels SET archived_at='2026-09-01T00:00:00.000Z' WHERE id='crew-b/lobby'",
+                [],
+            )
+            .unwrap();
+        let rows = crate::wakes::due_for(s.conn(), &o, NOW).unwrap();
+        let b = build_batch(s.conn(), &o, Locale::Zh, &rows).unwrap();
+        assert!(b.items.is_empty(), "{b:?}");
+        assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
+        assert_eq!(b.unusable[0].0, r2, "归档的群上的收听不算");
     }
 
     /// 入队的消息行同样要过「对它可投递」（评审 3）：它自己发的 → unusable，不投。

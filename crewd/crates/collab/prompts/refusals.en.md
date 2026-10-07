@@ -276,3 +276,6 @@ wake_latches holds a row that cannot be read: scope={scope} id={id}. This is bad
 
 ## listen.until_in_past
 The listen deadline must be in the future. Give a later time, or set no deadline.
+
+## listen.not_readable
+You cannot read channel {channel}, so you cannot listen to it: listening never widens what you can read. Listen only to channels you can read (your crew's channels, channels you are in, your home's human channel); to follow this one, ask the captain of the crew it belongs to to add you.

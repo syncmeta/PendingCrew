@@ -258,18 +258,19 @@ mod tests {
     #[test]
     fn listened_channels_join_the_injection_surface_until_they_expire() {
         let mut s = store();
+        let o = crate::testkit::org_worker(&mut s);
         let m = say(&mut s, "cap-x", "crew-x/lobby", vec![]);
-        assert!(unread_ids(&mut s, "w-a1").is_empty());
+        assert!(unread_ids(&mut s, &o).is_empty());
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", Some(NOW + 30 * MIN), vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", Some(NOW + 30 * MIN), vec![])
         });
         let m2 = say(&mut s, "cap-x", "crew-x/lobby", vec![]);
         assert_eq!(
-            unread_ids(&mut s, "w-a1"),
+            unread_ids(&mut s, &o),
             [m2.id],
             "开始收听时从末尾开始，{m:?} 不算"
         );
-        let (got, _) = ok_at(&mut s, NOW + 31 * MIN, |tx| unread_for(tx, "w-a1"));
+        let (got, _) = ok_at(&mut s, NOW + 31 * MIN, |tx| unread_for(tx, &o));
         assert!(got.is_empty(), "收听过期");
     }
 
@@ -359,49 +360,52 @@ mod tests {
     #[test]
     fn relistening_after_expiry_starts_from_the_end() {
         let mut s = store();
+        let o = crate::testkit::org_worker(&mut s);
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", Some(NOW + MIN), vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", Some(NOW + MIN), vec![])
         });
         for _ in 0..3 {
             say(&mut s, "cap-x", "crew-x/lobby", vec![]);
         }
         ok_at(&mut s, NOW + 2 * MIN, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", Some(NOW + 30 * MIN), vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", Some(NOW + 30 * MIN), vec![])
         });
-        assert!(unread_ids(&mut s, "w-a1").is_empty(), "过期期间的不算");
+        assert!(unread_ids(&mut s, &o).is_empty(), "过期期间的不算");
         let m = say(&mut s, "cap-x", "crew-x/lobby", vec![]);
-        assert_eq!(unread_ids(&mut s, "w-a1"), [m.id]);
+        assert_eq!(unread_ids(&mut s, &o), [m.id]);
     }
 
     /// 复核 2：clear 之后再 set，同样从末尾开始。
     #[test]
     fn relistening_after_clear_starts_from_the_end() {
         let mut s = store();
+        let o = crate::testkit::org_worker(&mut s);
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", None, vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", None, vec![])
         });
-        ok(&mut s, |tx| crate::listens::clear(tx, "w-a1", None));
+        ok(&mut s, |tx| crate::listens::clear(tx, &o, None));
         for _ in 0..3 {
             say(&mut s, "cap-x", "crew-x/lobby", vec![]);
         }
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", None, vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", None, vec![])
         });
-        assert!(unread_ids(&mut s, "w-a1").is_empty());
+        assert!(unread_ids(&mut s, &o).is_empty());
     }
 
     /// 复核 2：续期一个仍然有效的收听不动游标——没读的还在。
     #[test]
     fn extending_an_active_listen_keeps_the_unread() {
         let mut s = store();
+        let o = crate::testkit::org_worker(&mut s);
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", Some(NOW + 10 * MIN), vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", Some(NOW + 10 * MIN), vec![])
         });
         let m = say(&mut s, "cap-x", "crew-x/lobby", vec![]);
         ok(&mut s, |tx| {
-            crate::listens::set(tx, "w-a1", "crew-x/lobby", Some(NOW + 30 * MIN), vec![])
+            crate::listens::set(tx, &o, "crew-x/lobby", Some(NOW + 30 * MIN), vec![])
         });
-        assert_eq!(unread_ids(&mut s, "w-a1"), [m.id]);
+        assert_eq!(unread_ids(&mut s, &o), [m.id]);
     }
 
     /// 复核 2：在自己本来就「在」的群（成员 / 本机组大厅）上收听，也不动游标。

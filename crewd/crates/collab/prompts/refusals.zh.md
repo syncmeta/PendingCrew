@@ -276,3 +276,6 @@ wake_latches 里有认不出的行：scope={scope} id={id}；这是库里的脏�
 
 ## listen.until_in_past
 收听截止时间必须晚于现在；给一个将来的时间，或不设截止
+
+## listen.not_readable
+你读不到群 {channel}，不能收听它：收听不扩大读范围。只能收听读得到的群（自己机组的群、自己在的群、自己 home 的人类群）；要听这个群，请它所在机组的机长把你拉进群
