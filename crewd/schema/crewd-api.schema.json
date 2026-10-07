@@ -2763,6 +2763,7 @@
       "type": "string"
     },
     "WakeBlocker": {
+      "description": "pending 的唤醒此刻为什么还没出去。没有它（`WakeView.blocker` 缺省 / null）= 此刻就有资格出去：已经从别处读到\n（游标越过）的会在下一次投递时直接记 delivered，同一档超过一批上限的排在下一批——这两种都在下一轮里结掉，\n不在这里报。",
       "properties": {
         "code": {
           "$ref": "#/$defs/BlockerCodeView"
@@ -2910,7 +2911,7 @@
               "type": "null"
             }
           ],
-          "description": "只有 pending 的才有：此刻为什么还没出去（没有 = 下一次投递就带上它）。"
+          "description": "只有 pending 的才有：此刻为什么还没出去。没有 = 此刻就有资格出去（已注入的、超出一批上限的在下一轮里结掉）。"
         },
         "id": {
           "format": "int64",

@@ -1084,7 +1084,8 @@ impl<P: Port> Core<P> {
             .await
             .map_err(ControlError::from_port)?
             .filter(|r| r.crew_id == crew)
-            .ok_or_else(|| ControlError::NotFound(format!("{crew}/{session}")))?;
+            // 不在这个机组里 = 对这个机组来说没有它：`session.not_found` 只带 session id（修复轮 M6）。
+            .ok_or_else(|| ControlError::NotFound(session.to_string()))?;
         let prev = self
             .port
             .set_captain(crew, session)
@@ -3371,5 +3372,22 @@ mod tests {
             [("w1".to_string(), WakeState::Pending, false)],
             "窗口外的随批行：还排着"
         );
+    }
+
+    /// 修复轮 M6：换机长时 session 不在这个机组 = `session.not_found`，参数只是 session id。
+    #[tokio::test]
+    async fn set_captain_with_a_session_of_another_crew_is_not_found_by_session_id() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &[]).await;
+        let e = rig
+            .cmd(|reply| Cmd::SetCaptain {
+                crew: "c9".into(),
+                session: "w1".into(),
+                reply,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e, ControlError::NotFound("w1".into()));
+        assert_eq!(e.refusal().unwrap().value("session"), Some("w1"));
     }
 }

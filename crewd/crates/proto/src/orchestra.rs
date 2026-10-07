@@ -347,6 +347,9 @@ pub enum BlockerCodeView {
     Unknown,
 }
 
+/// pending 的唤醒此刻为什么还没出去。没有它（`WakeView.blocker` 缺省 / null）= 此刻就有资格出去：已经从别处读到
+/// （游标越过）的会在下一次投递时直接记 delivered，同一档超过一批上限的排在下一批——这两种都在下一轮里结掉，
+/// 不在这里报。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WakeBlocker {
@@ -372,7 +375,7 @@ pub struct WakeView {
     pub attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// 只有 pending 的才有：此刻为什么还没出去（没有 = 下一次投递就带上它）。
+    /// 只有 pending 的才有：此刻为什么还没出去。没有 = 此刻就有资格出去（已注入的、超出一批上限的在下一轮里结掉）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocker: Option<WakeBlocker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
