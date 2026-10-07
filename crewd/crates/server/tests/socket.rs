@@ -157,7 +157,10 @@ async fn hello_crews_channels_and_messages() {
         3
     );
     let crews = c.call(2, "crew.list", json!({})).await;
-    assert_eq!(crews[0]["management"], true, "总机组排第一（树根）");
+    assert_eq!(
+        crews[0]["management"], true,
+        "总机组（管理机组，不在树里）单独排第一"
+    );
     assert_eq!(crews[1]["id"], "a");
     let chans = c.call(3, "channel.list", json!({"crewId":"a"})).await;
     let ids: Vec<&str> = chans
@@ -562,7 +565,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
 }
 
 /// C1：侧栏次序按父边分层。`crew.reorder {parentId}` 只改这个父名下的次序；同一批机组在另一个父下的次序不动；
-/// 一级机组的次序就是总机组名下的次序（`parentId` 必填，给总机组）；缺 parentId = -32602。
+/// 不给 parentId = 排顶层机组（`crews.position`）；总机组不在树里：给它当 parentId、或把它放进顶层名单 = -32602。
 #[tokio::test]
 async fn crew_reorder_is_per_parent_edge() {
     let dir = tempfile::tempdir().unwrap();
@@ -634,46 +637,49 @@ async fn crew_reorder_is_per_parent_edge() {
         "另一个父下的次序不动"
     );
 
-    // 一级：总机组名下只有 a、p2（子甲 / 子乙 有别的父，不在这一层）。
-    let root = after
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|x| x["management"] == true)
-        .expect("总机组在 crew.list 里")["id"]
+    // 顶层：a、p2（子甲 / 子乙 有父，不在这一层）；总机组不在顶层次序里，单独排在 crew.list 最前。
+    let management = after.as_array().unwrap()[0]["id"]
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(child_ids(&after, &root), ["a".to_string(), p2.clone()]);
-    c.call(
-        33,
-        "crew.reorder",
-        json!({"parentId":root,"crewIds":[p2.clone(), "a"]}),
-    )
-    .await;
+    assert_eq!(after.as_array().unwrap()[0]["management"], true);
+    let top_level = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .filter(|x| x["management"] != true && x["parentIds"] == json!([]))
+            .map(|x| x["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(top_level(&after), ["a".to_string(), p2.clone()]);
+    c.call(33, "crew.reorder", json!({"crewIds":[p2.clone(), "a"]}))
+        .await;
     let top = c.call(34, "crew.list", Value::Null).await;
     assert_eq!(
-        child_ids(&top, &root),
+        top_level(&top),
         [p2.clone(), "a".to_string()],
-        "一级按人排的次序"
+        "顶层按人排的次序"
     );
+    assert_eq!(top.as_array().unwrap()[0]["id"], management.as_str());
     assert_eq!(child_ids(&top, "a"), [k2.clone(), k1.clone()]);
     assert_eq!(child_ids(&top, &p2), [k1.clone(), k2.clone()]);
-    // 名单必须恰好是这一层：混进子机组 = -32602；不给 parentId = -32602（必填）。
-    assert_eq!(
-        c.call_err(
-            35,
-            "crew.reorder",
-            json!({"parentId":root,"crewIds":[p2.clone(), "a", k1]})
-        )
-        .await,
-        -32602
-    );
-    assert_eq!(
-        c.call_err(36, "crew.reorder", json!({"crewIds":[p2, "a"]}))
-            .await,
-        -32602
-    );
+    // parentId: null 与缺省一样（顶层）。
+    c.call(
+        35,
+        "crew.reorder",
+        json!({"parentId":null,"crewIds":["a", p2.clone()]}),
+    )
+    .await;
+    let back = c.call(36, "crew.list", Value::Null).await;
+    assert_eq!(top_level(&back), ["a".to_string(), p2.clone()]);
+    // 名单必须恰好是这一层：混进子机组 / 总机组 = -32602；总机组当 parentId = -32602（它不在树里）。
+    for (id, params) in [
+        (37, json!({"crewIds":[p2.clone(), "a", k1]})),
+        (38, json!({"crewIds":[p2.clone(), "a", management.clone()]})),
+        (39, json!({"parentId":management,"crewIds":[]})),
+    ] {
+        assert_eq!(c.call_err(id, "crew.reorder", params).await, -32602);
+    }
 }
 
 #[tokio::test]
@@ -884,7 +890,7 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         )
         .await["id"]
         .clone();
-    // 新机组挂在总机组下：它自己、以及 childIds 变了的总机组，各一条 crew.changed；它新建的大厅一条 channel.changed。
+    // 新机组在顶层：它自己一条 crew.changed（总机组不是谁的父，不变）；它新建的大厅一条 channel.changed。
     let frames = frames_until_hello(&mut sub, 106).await;
     let channels_changed: Vec<&Value> = frames
         .iter()
@@ -905,9 +911,7 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         })
         .collect();
     changed.sort_by_key(|v| v.to_string());
-    let mut want = vec![made.clone(), json!(crewd_store::crews::MANAGEMENT_ID)];
-    want.sort_by_key(|v| v.to_string());
-    assert_eq!(changed, want);
+    assert_eq!(changed, std::slice::from_ref(&made));
     // 删机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
     let archived = c.call(9, "crew.delete", json!({"crewId":made})).await;
     assert!(archived["archivedAt"].is_string());

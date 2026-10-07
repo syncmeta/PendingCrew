@@ -105,7 +105,7 @@ fn explicit(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
 }
 
 /// 人类群的显式成员（同 `explicit` 的顺序），只留 home 仍是这个群的 session：人类群的权利从 `home_of` 推出，
-/// 不认陈旧的行（机组被挪到别的一级机组下之后，它的 session 在旧 home 人类群里留下的行不再给它发言 / 注入 / 读的权利）。
+/// 不认陈旧的行（机组被挪到别的顶层机组下之后，它的 session 在旧 home 人类群里留下的行不再给它发言 / 注入 / 读的权利）。
 /// 一次查询带出成员所在的机组，home 按不同的机组各算一次。session 行已不存在的成员行照旧保留（与 topic / dm 的显式行同一口径）。
 fn homed_here(conn: &Connection, id: &str, home: &str) -> Result<Vec<MemberRef>> {
     let mut st = conn.prepare(
@@ -144,7 +144,7 @@ fn homed_here(conn: &Connection, id: &str, home: &str) -> Result<Vec<MemberRef>>
 }
 
 /// **有效**成员（冻结语义，C6）：大厅 = 人 + 本机组全部 session（隐式，不写 channel_members）；
-/// 人类群 = 人 + home（总机组 / 一级机组）此刻的机长（隐式；机组已不是 home——被收编后归档的旧人类群——就没有）
+/// 人类群 = 人 + home（总机组 / 顶层机组）此刻的机长（隐式；机组已不是 home——被收编后归档的旧人类群——就没有）
 /// 加上 home 是它的 session 的显式行（`homed_here`）；
 /// topic / dm = 显式行。M3b 的注入面、M3c 的唤醒规划都只认它。
 pub fn members(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
@@ -327,7 +327,7 @@ pub(crate) fn archived(channel: &str) -> CollabError {
     CollabError::Conflict(Refusal::new(Code::ChannelArchived).arg("channel", channel))
 }
 
-/// `crew` 不是一级机组、没有自己的人类群：指路到它的 home 的人类群（messages / 本文件共用同一句）。
+/// `crew` 不是顶层机组、没有自己的人类群：指路到它的 home 的人类群（messages / 本文件共用同一句）。
 pub(crate) fn no_human_channel(conn: &Connection, crew: &str) -> Result<CollabError> {
     Ok(CollabError::Invalid(
         Refusal::new(Code::ChannelNoHumanChannel)
@@ -662,9 +662,9 @@ pub(crate) fn human_channel_exists(conn: &Connection, home: &str) -> Result<bool
     )? > 0)
 }
 
-/// home（总机组 / 一级机组）的人类群（懒建，spec §22.2；R1：`messages::post` 往还没建的人类群发言时也调
+/// home（总机组 / 顶层机组）的人类群（懒建，spec §22.2；R1：`messages::post` 往还没建的人类群发言时也调
 /// 这一个函数，不另写第二份）。总机组的是管理用人类群，同一条规则（N1-R2）。
-/// 已归档（曾被收编到二级、后又回到一级）→ 解档。新建或解档时，当前机长的游标钉到群末尾
+/// 已归档（曾被收编到二级、后又回到顶层）→ 解档。新建或解档时，当前机长的游标钉到群末尾
 /// （与 `crews::point_captain_at` 一致：机长不会因为群刚出现 / 刚解档就凭空多出一屏历史未读，裁定 9）。
 pub fn ensure_human_channel(tx: &mut Tx<'_>, home: &str) -> Result<Channel> {
     crews::get(tx.conn(), home)?;
@@ -762,7 +762,7 @@ pub fn summary(conn: &Connection, id: &str) -> Result<ChannelSummary> {
 }
 
 /// `channel.list(crewId)`：归属该机组的群 ∪ 有成员 session 属于该机组的群（§17「同时显示在每个成员所在机组下」）。
-/// home（总机组 / 一级机组）会顺手懒建人类群（归档的机组除外：只读，列出已有的群、不建不解档）。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
+/// home（总机组 / 顶层机组）会顺手懒建人类群（归档的机组除外：只读，列出已有的群、不建不解档）。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
 /// 大厅 / 人类群 / 其他、建群时间。
 pub fn list_for_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<ChannelSummary>> {
     crews::get(tx.conn(), crew)?;
@@ -1306,7 +1306,7 @@ mod tests {
                 err(&mut s_, |tx| ensure_human_channel(tx, "crew-b")),
                 CollabError::Invalid(_)
             ),
-            "只有 home（总机组 / 一级机组）有人类群"
+            "只有 home（总机组 / 顶层机组）有人类群"
         );
         assert_eq!(
             get(s_.conn(), lobby).unwrap().owner,
@@ -2059,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn the_org_root_is_a_home_and_keeps_its_management_human_channel() {
+    fn the_management_crew_is_a_home_and_keeps_its_own_human_channel() {
         let mut s_ = store();
         let h = ok(&mut s_, |tx| ensure_human_channel(tx, "chief"));
         assert_eq!(h.id, "chief/human");
@@ -2101,7 +2101,7 @@ mod tests {
         assert_eq!(ids(&mut s_, "crew-b"), ["crew-b/lobby", "crew-a/human"]);
     }
 
-    /// I2：一级机组被收编之后，它自己的人类群（已归档）仍归它的机组，读得到（②）；机长不再隐式在群里
+    /// I2：顶层机组被收编之后，它自己的人类群（已归档）仍归它的机组，读得到（②）；机长不再隐式在群里
     /// （不再是 home），成员与读规则一致。
     #[test]
     fn an_adopted_crews_own_human_channel_stays_readable_but_has_no_implicit_captain() {
@@ -2232,12 +2232,12 @@ mod tests {
         assert_eq!(d.children, ["crew-b"]);
     }
 
-    /// 树规则下一个非 home 机组往上一定走得到一级机组；走不到（旧数据里与总机组断开的环）时，
+    /// 树规则下一个非 home 机组往上一定走得到顶层机组；走不到（旧数据里成环）时，
     /// `home_of` 退回自己——拒绝不能指回自己（「crew-b 没有人类群，人类群在 crew-b/human」），按内部数据不一致报。
     #[test]
-    fn a_crew_cut_off_from_the_org_root_is_an_internal_error_not_a_pointer_to_itself() {
+    fn a_crew_in_a_parent_cycle_is_an_internal_error_not_a_pointer_to_itself() {
         let mut s_ = store();
-        // 合成的脏形状：crew-b 与 crew-x 互为父，和总机组断开（结构操作造不出来，直接写库）。
+        // 合成的脏形状：crew-b 与 crew-x 互为父、走不到顶层（结构操作造不出来，直接写库）。
         crewd_store::crews::set_parents(s_.conn(), "crew-b", &["crew-x".to_string()]).unwrap();
         crewd_store::crews::set_parents(s_.conn(), "crew-x", &["crew-b".to_string()]).unwrap();
         let e = err(&mut s_, |tx| ensure_human_channel(tx, "crew-b"));
@@ -2358,7 +2358,7 @@ mod tests {
 
     /// N1-R3（PM 2026-10-07）：总机组 = 管理层，它的 session 读得到全组织的群；读得到仍 ≠ 成员。
     #[test]
-    fn the_org_roots_sessions_read_every_channel() {
+    fn the_management_crews_sessions_read_every_channel() {
         let mut s = store();
         let chief_cap = ok(&mut s, |tx| {
             crate::sessions::register(
@@ -2431,7 +2431,7 @@ mod tests {
         );
     }
 
-    /// 人类群的读 / 发言 / 注入权从 `home_of` 推出，不认陈旧的成员行：机组被挪到另一个一级机组下之后，
+    /// 人类群的读 / 发言 / 注入权从 `home_of` 推出，不认陈旧的成员行：机组被挪到另一个顶层机组下之后，
     /// 它的 session 在旧 home 人类群里发过言留下的那一行不再算数（progress NOTE Task 6）。
     #[test]
     fn a_re_homed_session_loses_its_old_homes_human_channel() {

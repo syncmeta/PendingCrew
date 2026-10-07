@@ -59,7 +59,7 @@
 只有群成员能拉人；请群里的成员来拉，或先让他们拉你进群
 
 ## channel.no_human_channel
-{crew} 不是一级机组，没有自己的人类群；人类群在 {home}/human，请发到那里
+{crew} 不是顶层机组，没有自己的人类群；人类群在 {home}/human，请发到那里
 
 ## channel.human_channel_other_home
 {session} 的人类群是 {home}/human，进不了群 {channel}；跨机组说话走私聊
@@ -113,16 +113,16 @@
 机组 {crew} 已归档，只读；请人先解档它（解档只有人在客户端能做）
 
 ## crew.management_fixed
-总机组是组织的根，不能被收编、摘出、隐藏、删除或归档；要整理组织就动它下面的机组
+总机组是管理机组，不能隐藏、归档或永久删除；保持原样即可，要整理侧栏就隐藏或归档别的机组
+
+## crew.management_not_in_tree
+总机组不在机组树里：它不能有上级或下级，别的机组也不能挂到它下面；换一个机组当上级，或者不给 parentId、建成顶层机组
 
 ## crew.title_empty
 机组名不能为空；给机组起个名字
 
 ## crew.working_dir_empty
 工作目录不能为空；填机组 session 要用的目录路径
-
-## crew.move_to_first_level
-要挪到一级：先用 release 摘掉 {crew} 的其它上级
 
 ## crew.cannot_parent_self
 机组不能挂在自己下面；换一个别的上级
@@ -132,9 +132,6 @@
 
 ## crew.not_direct_child
 {crew} 不是 {from} 的直系子机组；核对上下级关系再摘
-
-## crew.release_to_root_other_parents
-要摘到总机组下：先解除 {crew} 的其它上级（release），只剩 {from} 时再摘
 
 ## crew.running_sessions
 机组 {crew} 还有 {running} 个在跑的 session；先停掉它们

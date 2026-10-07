@@ -130,7 +130,7 @@ pub(crate) fn post_internal(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Resu
     post_with(tx, sender, p, true)
 }
 
-/// 给人的待确认公告（问 / 重启询问）的唯一一处（R14）：发到 `home`（总机组 / 一级机组）的人类群（懒建 / 解档，同
+/// 给人的待确认公告（问 / 重启询问）的唯一一处（R14）：发到 `home`（总机组 / 顶层机组）的人类群（懒建 / 解档，同
 /// `ensure_human_channel`），@human，带保留分类 `category`。同一个 Tx：后面任何一步失败，公告一起回滚。
 pub(crate) fn announce_to_human(
     tx: &mut Tx<'_>,
@@ -197,7 +197,7 @@ fn push_mention(v: &mut Vec<Mention>, m: Mention) {
 
 fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Result<Posted> {
     let conn = tx.conn();
-    // R1：人类群懒建；现在是 home（总机组 / 一级机组）的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、
+    // R1：人类群懒建；现在是 home（总机组 / 顶层机组）的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、
     // 已归档就解档、钉机长游标、记 ChannelChanged），同一个 Tx。更深的机组没有人类群，指路到它的 home。
     if let Some(crew) = p.channel_id.strip_suffix("/human") {
         crews::get(conn, crew)?;
@@ -438,11 +438,8 @@ mod tests {
     }
 
     #[test]
-    fn sessions_join_only_their_home_human_channel_and_the_org_root_has_its_own() {
+    fn sessions_join_only_their_home_human_channel_and_the_management_crew_has_its_own() {
         let mut s = store();
-        for c in ["crew-a", "crew-x"] {
-            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
-        }
         ok(&mut s, |tx| {
             post(
                 tx,

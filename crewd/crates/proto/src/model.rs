@@ -17,7 +17,8 @@ pub struct Crew {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number: Option<i64>,
-    /// 组织唯一的根（总机组，spec §24 H2）；至多一个。
+    /// 总机组（管理机组）：至多一个；不在机组树里（没有父、没有子），对全部机组有权限（PM 2026-10-07）。
+    /// `crew.list` 把它排在最前。
     pub management: bool,
     pub parent_ids: Vec<String>,
     /// 这个机组的直系子机组，按侧栏顺序（每个父下各自一套次序，控制者裁定 C1；`crew.reorder {parentId}` 改它）。
@@ -44,7 +45,8 @@ pub struct Crew {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// 此刻的机长（裁定 8）。
     pub captain_session_id: Option<String>,
-    /// 只有总机组用（恒为 1）；子机组的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。
+    /// 顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。
+    /// 子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）；总机组不参与（0）。
     #[serde(default)]
     pub position: i64,
     /// 归档时刻（删机组 = 归档，N1 裁定 13）；没归档时不出现。

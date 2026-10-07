@@ -1123,7 +1123,7 @@ mod tests {
         assert!(frame_lines(&wake).is_empty(), "{wake}");
     }
 
-    /// B15：入队之后它不再读得到那个群（被移出群；机组挪到别的一级机组下之后的旧 home 人类群）→ 那个群的行进
+    /// B15：入队之后它不再读得到那个群（被移出群；机组挪到别的顶层机组下之后的旧 home 人类群）→ 那个群的行进
     /// unusable、不投；仍读得到的群照常投。
     #[test]
     fn queued_rows_from_channels_it_can_no_longer_read_are_unusable() {
@@ -1325,7 +1325,7 @@ mod tests {
         assert_eq!(line_seqs(&b), [m.seq]);
     }
 
-    /// 终审 I4：收听只在读得到时算数。入队之后失去读权（crew-b 挪到一级，crew-a 的人类群不再是 w-b1 的 home）
+    /// 终审 I4：收听只在读得到时算数。入队之后失去读权（crew-b 挪到顶层，crew-a 的人类群不再是 w-b1 的 home）
     /// → 收听行还在，但排着的行不投（unusable）；群归档（终审 6）同样不投。
     #[test]
     fn queued_rows_from_a_listen_that_lost_read_access_or_was_archived_are_unusable() {

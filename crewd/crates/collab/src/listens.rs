@@ -204,7 +204,7 @@ mod tests {
         );
     }
 
-    /// 终审 I4 的另一半：收听只在读得到时算数。设下之后失去读权（这里：crew-b 从 crew-a 下挪到一级，crew-a 的
+    /// 终审 I4 的另一半：收听只在读得到时算数。设下之后失去读权（这里：crew-b 从 crew-a 下挪到顶层，crew-a 的
     /// 人类群不再是它的 home）→ 行还在，但注入面、叫醒名单都不认它（同归档的群：行留着，用时过滤）。
     #[test]
     fn a_listen_stops_counting_once_the_channel_is_no_longer_readable() {

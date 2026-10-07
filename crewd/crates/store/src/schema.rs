@@ -498,7 +498,7 @@ INSERT OR IGNORE INTO read_cursors(reader,channel_id,seq,updated_at)
     Ok(())
 }
 
-/// v4（N1，spec §24）：删审批；组织根标记改名并保证唯一；归档列。数据部分在 `backfill_v4`。
+/// v4（N1，spec §24）：删审批；内建机组标记改名为「管理机组」并保证至多一个；归档列。数据部分在 `backfill_v4`。
 const V4_DDL: &str = r#"
 DROP INDEX IF EXISTS approvals_open;
 DROP TABLE IF EXISTS approvals;
@@ -534,8 +534,10 @@ fn migrate_v4_in_tx(conn: &Connection) -> Result<()> {
 
 /// v4 的数据回填（幂等；迁移与旧 JSON 导入共用，导入在 `backfill_v3` 之后调）。
 /// 空机组表时只做与机组无关的几步（总机组由第一次建机组时懒建，N1 裁定 3）。
+/// 机组树是森林：旧的顶层机组原样留在顶层（不挂到谁下面）；总机组（管理机组，PM 2026-10-07）不在树里——
+/// 它的父边、子边全部去掉，原来只挂在它下面的子机组成为顶层、排在顶层末尾（保持它们在总机组下的相对次序）。
 pub fn backfill_v4(conn: &Connection) -> Result<()> {
-    // 1) 多个组织根：留 created_at 最早的（再按 id），其余降为普通机组。
+    // 1) 多个管理机组：留 created_at 最早的（再按 id），其余降为普通机组。
     conn.execute_batch(
         "UPDATE crews SET management=0 WHERE management=1 AND id <>
            (SELECT id FROM crews WHERE management=1 ORDER BY created_at, id LIMIT 1);",
@@ -560,34 +562,34 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
     if crews == 0 {
         return Ok(());
     }
-    let root = crate::crews::ensure_management(conn, &crate::now_ts())?;
-    // 4) 根不挂在任何人下面；号码 0（没有号、且 0 没人用时）；侧栏次序恒为 1；不隐藏。
-    conn.execute("DELETE FROM crew_parents WHERE crew_id=?1", [&root])?;
+    let m = crate::crews::ensure_management(conn, &crate::now_ts())?;
+    // 4) 只挂在总机组下的子机组成为顶层：排在现有顶层（没有任何父边的非管理机组）之后，
+    //    次序 = 它们在总机组下的次序（边上的 position, created_at, id）。
+    conn.execute(
+        "WITH freed AS (
+           SELECT c.id, ROW_NUMBER() OVER (ORDER BY p.position, c.created_at, c.id) AS k
+             FROM crew_parents p JOIN crews c ON c.id=p.crew_id
+            WHERE p.parent_id=?1 AND c.id<>?1
+              AND NOT EXISTS (SELECT 1 FROM crew_parents q WHERE q.crew_id=c.id AND q.parent_id<>?1))
+         UPDATE crews SET position =
+           (SELECT COALESCE(MAX(COALESCE(t.position,0)),0) FROM crews t
+             WHERE t.id<>?1 AND NOT EXISTS (SELECT 1 FROM crew_parents q WHERE q.crew_id=t.id))
+           + (SELECT k FROM freed WHERE freed.id=crews.id)
+          WHERE id IN (SELECT id FROM freed)",
+        [&m],
+    )?;
+    // 5) 总机组不在树里：去掉它的父边与子边（多父的子机组只少掉指向总机组的那一条）。
+    conn.execute(
+        "DELETE FROM crew_parents WHERE crew_id=?1 OR parent_id=?1",
+        [&m],
+    )?;
+    // 6) 号码 0（没有号、且 0 没人用时）；不隐藏（总机组不能被隐藏）。
     conn.execute(
         "UPDATE crews SET number=0 WHERE id=?1 AND number IS NULL
             AND NOT EXISTS (SELECT 1 FROM crews WHERE number=0)",
-        [&root],
+        [&m],
     )?;
-    conn.execute("UPDATE crews SET position=1 WHERE id=?1", [&root])?;
-    // 根不能被隐藏（N1 裁定 6）：旧数据里藏着的露出来。
-    conn.execute("UPDATE crews SET hidden_at=NULL WHERE id=?1", [&root])?;
-    // 5) 没有父边的其它机组挂到根下：次序 = 旧顶层次序（position, created_at, id），接在根已有的子之后。
-    conn.execute(
-        "INSERT INTO crew_parents(crew_id,parent_id,position)
-           SELECT c.id, ?1,
-                  (SELECT COALESCE(MAX(position),0) FROM crew_parents WHERE parent_id=?1)
-                  + ROW_NUMBER() OVER (ORDER BY COALESCE(c.position,0), c.created_at, c.id)
-             FROM crews c
-            WHERE c.id <> ?1
-              AND NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)",
-        [&root],
-    )?;
-    // 6) 不变式 I-root：指向根的边只能是唯一的父（N1 裁定 4）。
-    conn.execute(
-        "DELETE FROM crew_parents WHERE parent_id=?1
-            AND crew_id IN (SELECT crew_id FROM crew_parents WHERE parent_id <> ?1)",
-        [&root],
-    )?;
+    conn.execute("UPDATE crews SET hidden_at=NULL WHERE id=?1", [&m])?;
     // 7) 显示名与标题都空的旧 session 补标题（N1 裁定 12）：brief 第一条非空行的前 18 个字符；
     //    没有 brief = 机组标题 + ' #' + 分机号（机长没号 = 机组标题）。标签绝不回落到原始 id。
     //    SQLite 的 substr 按字符算。内部空白不压缩（只管首尾，旧数据的近似即可）。
@@ -1280,7 +1282,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(snapshot(&c), a);
     }
 
-    /// 停在 v3 的库：内建 chief、两个旧根（crew-x 人排在 crew-a 前面）、子机组 crew-b（也挂着 chief）；
+    /// 停在 v3 的库：内建 chief、两个顶层机组（crew-x 人排在 crew-a 前面）、子机组 crew-b（也挂着 chief）；
     /// crew-a 有人类群；一条排队中的审批唤醒。
     fn v3_db() -> Connection {
         let c = v2_db();
@@ -1296,7 +1298,7 @@ INSERT INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES
   ('crew-x/lobby','crew-x','lobby','','system','2026-09-03T00:00:00.000Z'),
   ('crew-a/human','crew-a','human','','system','2026-09-01T00:00:00.000Z');
 UPDATE crews SET position = CASE id WHEN 'crew-x' THEN 1 WHEN 'crew-a' THEN 2 ELSE 9 END;
--- 旧数据里「既挂在 chief 下、又有别的父」的机组：v4 后根边必须去掉（不变式 I-root）。
+-- 旧数据里「既挂在 chief 下、又有别的父」的机组：v4 后指向总机组的边去掉（总机组不在树里），别的父留着。
 INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-b','chief',0);
 INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,created_at) VALUES
   ('worker-a1','ask_answer','approval:ap-1','human',0,'pending',0,'2026-09-04T00:00:00.000Z');
@@ -1473,7 +1475,8 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
     }
 
     #[test]
-    fn v3_roots_are_reparented_under_the_one_org_root_in_their_sidebar_order() {
+    fn v3_top_level_crews_stay_top_level_and_the_chief_becomes_the_management_crew_outside_the_tree()
+     {
         let c = v3_db();
         migrate(&c).unwrap();
         assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
@@ -1484,18 +1487,20 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         assert_eq!(
             rows(
                 &c,
-                "SELECT id FROM crews c WHERE NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)"
+                "SELECT crew_id||'>'||parent_id FROM crew_parents WHERE crew_id='chief' OR parent_id='chief'"
             ),
-            ["chief"],
-            "只剩一个没有父边的：总机组"
+            Vec::<String>::new(),
+            "总机组没有父边也没有子边"
         );
         assert_eq!(
             rows(
                 &c,
-                "SELECT crew_id FROM crew_parents WHERE parent_id='chief' ORDER BY position"
+                "SELECT id FROM crews c WHERE management=0
+                   AND NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)
+                 ORDER BY position, created_at, id"
             ),
             ["crew-x", "crew-a"],
-            "人排过的顶层次序原样搬到总机组下"
+            "旧的顶层机组原样留在顶层，人排过的次序不变（不挂到总机组下）"
         );
         assert_eq!(
             rows(
@@ -1503,7 +1508,7 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
                 "SELECT parent_id FROM crew_parents WHERE crew_id='crew-b'"
             ),
             ["crew-a"],
-            "子机组不动"
+            "多父的子机组只少掉指向总机组的那条边"
         );
         assert_eq!(
             one::<i64>(&c, "SELECT number FROM crews WHERE id='chief'"),
@@ -1512,7 +1517,7 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
     }
 
     #[test]
-    fn a_first_level_crews_human_channel_survives_the_migration() {
+    fn a_top_level_crews_human_channel_survives_the_migration() {
         let c = v3_db();
         migrate(&c).unwrap();
         assert_eq!(
@@ -1521,24 +1526,24 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
                 "SELECT archived_at FROM channels WHERE id='crew-a/human'"
             ),
             None,
-            "一级机组保留自己的人类群（H2）"
+            "顶层机组保留自己的人类群"
         );
-        // 预检 D3：基线上也绿，所以再钉住「挂到总机组下之后，群仍归属它、id 不变」。
         assert_eq!(
             one::<String>(&c, "SELECT crew_id FROM channels WHERE id='crew-a/human'"),
             "crew-a"
         );
         assert_eq!(
-            rows(
+            one::<i64>(
                 &c,
-                "SELECT parent_id FROM crew_parents WHERE crew_id='crew-a'"
+                "SELECT COUNT(*) FROM crew_parents WHERE crew_id='crew-a'"
             ),
-            ["chief"]
+            0,
+            "仍是顶层"
         );
     }
 
     #[test]
-    fn a_v3_database_without_a_builtin_crew_gets_one_org_root() {
+    fn a_v3_database_without_a_builtin_crew_gets_one_management_crew_with_no_edges() {
         let c = v3_db();
         // 预检 D1：外键开着删，级联带走 chief 的群、游标与 crew-b → chief 的边（关着删会留下悬空行，
         // 迁移的外键检查必然中止）。
@@ -1560,14 +1565,23 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         assert_eq!(
             one::<i64>(
                 &c,
-                "SELECT COUNT(*) FROM crew_parents WHERE parent_id='pendingcrew-chief'"
+                "SELECT COUNT(*) FROM crew_parents WHERE parent_id='pendingcrew-chief' OR crew_id='pendingcrew-chief'"
             ),
-            2
+            0,
+            "不挂任何机组"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crews c WHERE NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)"
+            ),
+            3,
+            "crew-a、crew-x 与新建的总机组"
         );
     }
 
     #[test]
-    fn extra_builtin_crews_are_demoted_and_the_earliest_stays_the_root() {
+    fn extra_builtin_crews_are_demoted_and_the_earliest_stays_the_management_crew() {
         let c = v3_db();
         c.execute("UPDATE crews SET builtin=1 WHERE id='crew-x'", [])
             .unwrap();
@@ -1577,16 +1591,17 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
             ["chief"]
         );
         assert_eq!(
-            rows(
+            one::<i64>(
                 &c,
-                "SELECT parent_id FROM crew_parents WHERE crew_id='crew-x'"
+                "SELECT COUNT(*) FROM crew_parents WHERE crew_id='crew-x'"
             ),
-            ["chief"]
+            0,
+            "降级的内建机组是普通的顶层机组"
         );
     }
 
     #[test]
-    fn at_most_one_org_root_is_enforced_by_the_schema() {
+    fn at_most_one_management_crew_is_enforced_by_the_schema() {
         let c = v3_db();
         migrate(&c).unwrap();
         let err = c
@@ -1614,7 +1629,7 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
     }
 
     #[test]
-    fn fresh_database_is_v4_and_has_no_org_root_until_a_crew_exists() {
+    fn fresh_database_is_v4_and_has_no_management_crew_until_a_crew_exists() {
         let c = Connection::open_in_memory().unwrap();
         migrate(&c).unwrap();
         assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
@@ -1670,7 +1685,7 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
                 "SELECT COUNT(*) FROM crew_parents WHERE parent_id='chief'"
             ),
             1,
-            "没有挂到总机组下的边（只有夹具里 crew-b 那条）"
+            "夹具里 crew-b → chief 那条边没被摘掉"
         );
     }
 
@@ -1726,15 +1741,18 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         assert_eq!(row("msg:m2"), "inflight||0");
     }
 
-    /// 根下已经有子（旧数据里只挂着内建机组的）：挂过来的旧根接在它们后面，原有的次序不动。
+    /// 旧数据里挂在内建机组下的子机组：只挂在它下面的成为顶层、排在现有顶层之后（保持在它下面的相对次序）；
+    /// 还有别的父的只少掉那条边；内建机组自己挂在别人下面的边也去掉。
     #[test]
-    fn reparented_roots_go_after_the_org_roots_existing_children() {
+    fn the_chiefs_former_children_become_top_level_last_in_their_old_order() {
         let c = v3_db();
         c.execute_batch(
             r#"
 INSERT INTO crews(id,title,number,builtin,created_at,updated_at,position) VALUES
-  ('crew-c','原本挂在总机组下',4,0,'2026-09-04T00:00:00.000Z','2026-09-04T00:00:00.000Z',9);
-INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-c','chief',5);
+  ('crew-c','原本挂在总机组下',4,0,'2026-09-04T00:00:00.000Z','2026-09-04T00:00:00.000Z',1),
+  ('crew-d','也挂在总机组下',5,0,'2026-09-05T00:00:00.000Z','2026-09-05T00:00:00.000Z',1);
+INSERT INTO crew_parents(crew_id,parent_id,position) VALUES
+  ('crew-d','chief',3),('crew-c','chief',7),('chief','crew-x',1);
 "#,
         )
         .unwrap();
@@ -1742,15 +1760,32 @@ INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-c','chief',5);
         assert_eq!(
             rows(
                 &c,
-                "SELECT crew_id||'#'||position FROM crew_parents WHERE parent_id='chief' ORDER BY position"
+                "SELECT id FROM crews c WHERE management=0
+                   AND NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)
+                 ORDER BY position, created_at, id"
             ),
-            ["crew-c#5", "crew-x#6", "crew-a#7"]
+            ["crew-x", "crew-a", "crew-d", "crew-c"],
+            "原来的顶层在前；总机组下的两个按边上的次序接在后面"
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT crew_id||'>'||parent_id FROM crew_parents WHERE crew_id='chief' OR parent_id='chief'"
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT parent_id FROM crew_parents WHERE crew_id='crew-b'"
+            ),
+            ["crew-a"]
         );
     }
 
     /// 号码 0 已被别的机组占着：总机组不抢（留空），别人的 0 号不动；新建总机组的那条路也一样。
     #[test]
-    fn the_org_root_does_not_take_number_zero_from_another_crew() {
+    fn the_management_crew_does_not_take_number_zero_from_another_crew() {
         let c = v3_db();
         c.execute("UPDATE crews SET number=0 WHERE id='crew-x'", [])
             .unwrap();
@@ -1782,7 +1817,7 @@ INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-c','chief',5);
 
     /// 总机组不能被隐藏（N1 裁定 6）：旧数据里藏着的，迁移后露出来。
     #[test]
-    fn a_hidden_org_root_is_unhidden_by_the_migration() {
+    fn a_hidden_management_crew_is_unhidden_by_the_migration() {
         let c = v3_db();
         c.execute(
             "UPDATE crews SET hidden_at='2026-09-05T00:00:00.000Z' WHERE id IN ('chief','crew-x')",

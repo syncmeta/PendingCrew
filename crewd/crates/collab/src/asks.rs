@@ -204,7 +204,7 @@ fn available(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// 直接开的问被答 / 按默认办了：叫醒能接着干的第一位（§22.4）。依次：提问者 → 问所在机组此刻的机长（转达）
-/// → home（总机组 / 一级机组）此刻的机长。三位都不能接（例如 home 机长自己提问、之后恢复失败）→ 不叫任何人：
+/// → home（总机组 / 顶层机组）此刻的机长。三位都不能接（例如 home 机长自己提问、之后恢复失败）→ 不叫任何人：
 /// 答复照样记在账上，人在 `ask.list` 里看得到，下次有人接手时读得到。
 fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     let Some(asker) = &a.asked_by else {
@@ -409,11 +409,8 @@ mod tests {
     use crewd_proto::{Mention, MentionKind};
 
     #[test]
-    fn a_second_level_ask_goes_to_its_first_level_human_channel_not_the_org_root() {
+    fn a_second_level_ask_goes_to_its_top_level_human_channel_not_the_management_crew() {
         let mut s = store();
-        for c in ["crew-a", "crew-x"] {
-            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
-        }
         let a = ok(&mut s, |tx| {
             open(
                 tx,
@@ -510,7 +507,7 @@ mod tests {
 
     /// 终审 5：提问者的机组已归档 → crew.archived（Conflict，指路先解档）；不发号、不建账本、不发公告。
     /// 二级机组 crew-b 归档后它的 home（crew-a）的人类群还活着——拒绝必须来自提问者自己的机组，不能靠
-    /// 「公告发不进归档的人类群」碰巧挡住（一级机组 crew-x 那条路就是被它碰巧挡住的）。
+    /// 「公告发不进归档的人类群」碰巧挡住（顶层机组 crew-x 那条路就是被它碰巧挡住的）。
     #[test]
     fn an_archived_crews_session_cannot_open_an_ask() {
         let mut s = store();
@@ -722,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn the_org_roots_own_asks_go_to_its_management_human_channel() {
+    fn the_management_crews_own_asks_go_to_its_management_human_channel() {
         let mut s = store();
         let cap = ok(&mut s, |tx| {
             crate::sessions::register(

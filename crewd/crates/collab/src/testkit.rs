@@ -7,14 +7,14 @@ use crewd_store::Store;
 pub(crate) const NOW: i64 = 1_790_000_000_000;
 pub(crate) const MIN: i64 = 60_000;
 
-/// 合成的机组树：
+/// 合成的机组：
 /// ```text
-/// chief（总机组，号 0，无 session）
-///   ├ crew-a（1 号，一级）  机长 cap-a；w-a1（分机 2）、w-a2（分机 3）
-///   │   └ crew-b（2 号）    机长 cap-b；w-b1（分机 2）
-///   └ crew-x（3 号，一级）  机长 cap-x
+/// chief（总机组 = 管理机组，号 0，无 session，不在树里）
+/// crew-a（1 号，顶层）  机长 cap-a；w-a1（分机 2）、w-a2（分机 3）
+///   └ crew-b（2 号）    机长 cap-b；w-b1（分机 2）
+/// crew-x（3 号，顶层）  机长 cap-x
 /// ```
-/// 大厅、机长指针、next_ext、游标由 `backfill_v3` 建好，单根由 `backfill_v4` 挂好（与迁移同一条路）。
+/// 大厅、机长指针、next_ext、游标由 `backfill_v3` 建好，总机组的标记由 `backfill_v4` 落定（与迁移同一条路）。
 pub(crate) fn store() -> Store {
     let s = Store::open_in_memory().unwrap();
     let c = s.conn();

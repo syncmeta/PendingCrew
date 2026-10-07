@@ -3,7 +3,8 @@ use crewd_proto::Crew;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-/// 组织根（总机组）的固定 id：与 Swift 的内建机组同 id，导入的旧数据天然对上（N1 裁定 2）。
+/// 总机组（管理机组：独立于机组树、对全部机组有权限的管理层，PM 2026-10-07）的固定 id：与 Swift 的内建机组同 id，
+/// 导入的旧数据天然对上（N1 裁定 2）。
 pub const MANAGEMENT_ID: &str = "pendingcrew-chief";
 
 /// 新建总机组时的默认标题（数据默认值，人可以改名；不是给 LLM 的提示词）。
@@ -20,8 +21,9 @@ pub fn management(conn: &Connection) -> Result<Option<String>> {
         .optional()?)
 }
 
-/// 总机组：有就返回；没有就建（号码 0、侧栏次序 1、大厅），不加任何父边。
-/// 只有 store 的回填与 collab 的 `hang_under_org_root` 调它（create / release / delete 把机组挂回总机组下时都经过那里）。
+/// 总机组：有就返回；没有就建（号码 0——没被别的机组占着时——、大厅），不加任何父边或子边（它不在机组树里）。
+/// `position` 记 0：顶层次序不含总机组（`crew.list` 把它单独排在最前）。
+/// 只有 store 的回填与 collab 的 `crews::create`（空库里第一个机组顺带懒建，N1 裁定 3）调它。
 pub fn ensure_management(conn: &Connection, now_ts: &str) -> Result<String> {
     if let Some(id) = management(conn)? {
         return Ok(id);
@@ -30,7 +32,7 @@ pub fn ensure_management(conn: &Connection, now_ts: &str) -> Result<String> {
         r.get(0)
     })?;
     conn.execute(
-        "INSERT INTO crews(id,title,number,management,created_at,updated_at,position) VALUES(?1,?2,?3,1,?4,?4,1)",
+        "INSERT INTO crews(id,title,number,management,created_at,updated_at,position) VALUES(?1,?2,?3,1,?4,?4,0)",
         params![
             MANAGEMENT_ID,
             default_management_title(conn)?,

@@ -63,13 +63,12 @@ refusal_codes! {
     CrewNotFound = "crew.not_found" ["crew"],
     CrewArchived = "crew.archived" ["crew"],
     CrewManagementFixed = "crew.management_fixed" [],
+    CrewManagementNotInTree = "crew.management_not_in_tree" [],
     CrewTitleEmpty = "crew.title_empty" [],
     CrewWorkingDirEmpty = "crew.working_dir_empty" [],
-    CrewMoveToFirstLevel = "crew.move_to_first_level" ["crew"],
     CrewCannotParentSelf = "crew.cannot_parent_self" [],
     CrewWouldCycle = "crew.would_cycle" ["parent", "crew"],
     CrewNotDirectChild = "crew.not_direct_child" ["crew", "from"],
-    CrewReleaseToRootOtherParents = "crew.release_to_root_other_parents" ["crew", "from"],
     CrewRunningSessions = "crew.running_sessions" ["crew", "running"],
     CrewLiveChildren = "crew.live_children" ["crew", "children"],
     CrewWakesInflight = "crew.wakes_inflight" ["crew", "count"],
@@ -374,7 +373,7 @@ mod tests {
     const LOG_ONLY: &[(&str, &str)] = &[
         (
             "crews.rs",
-            r#""机组 {crew} 不是 home，往上也走不到一级机组（上级成环或与总机组断开）：数据不一致""#,
+            r#"format!("机组 {crew} 不是 home，往上也走不到顶层机组（上级成环）：数据不一致"),"#,
         ),
         (
             "crews.rs",

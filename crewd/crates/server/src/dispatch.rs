@@ -165,10 +165,10 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             write(state, move |tx| crews::adopt(tx, &p.crew_id, &p.parent_id)).await
         }
         methods::CREW_REORDER => {
-            // C1：一次排一层，parentId 必填（N1 裁定 7）：这个父名下（边上的次序 → 父的 childIds）；一级 = 总机组名下。
+            // C1：一次排一层：parentId 给了 = 这个父名下（边上的次序 → 父的 childIds）；缺省 = 顶层机组（crews.position）。
             let p: CrewReorderParams = parse_params(p)?;
             write(state, move |tx| {
-                crews::reorder(tx, &p.parent_id, &p.crew_ids)
+                crews::reorder(tx, p.parent_id.as_deref(), &p.crew_ids)
             })
             .await
         }

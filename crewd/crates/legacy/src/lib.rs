@@ -68,7 +68,7 @@ pub fn import(
         archive::import_rest(tx, &mut cx)?;
         // 大厅、游标钉末尾、机长指针、分机号、nextCrewNumber（local-crews.json 此时已进归档）。
         crewd_store::schema::backfill_v3(tx)?;
-        // 总机组单根：最早的内建机组（或新建的 pendingcrew-chief）当组织根，其余顶层机组挂到它下面。
+        // 总机组：最早的内建机组（或新建的 pendingcrew-chief）当管理机组，不在机组树里（它的父边、子边去掉）；顶层机组留在顶层。
         crewd_store::schema::backfill_v4(tx)?;
         crewd_store::meta_set(tx, "importedAt", &crewd_store::now_ts())?;
         crewd_store::meta_set(tx, "importSource", &src.display().to_string())?;

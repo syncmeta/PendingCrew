@@ -60,15 +60,15 @@ pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
     }
 }
 
-/// 组织路径：从一级机组到 `crew` 的**上级**，" / " 分隔。每层只取最早建的那个父（`crews::parents` 的第一个）。
-/// 总机组是所有人的祖先、不带信息，不进路径（preflight M5）；它自己仍有 "0" 那一行。
-/// 多父机组里这条链与 `home_of`（在全部一级祖先里取最早建的）不保证经过同一个一级机组——两者是各自独立的口径。
+/// 组织路径：从顶层机组到 `crew` 的**上级**，" / " 分隔。每层只取最早建的那个父（`crews::parents` 的第一个）。
+/// 顶层机组与总机组（不在树里）的路径是空的；总机组仍有 "0" 那一行。
+/// 多父机组里这条链与 `home_of`（在全部顶层祖先里取最早建的）不保证经过同一个顶层机组——两者是各自独立的口径。
 fn org_path(conn: &Connection, crew: &str) -> Result<String> {
     let mut titles = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let mut cur = crew.to_string();
     while let Some(p) = crews::parents(conn, &cur)?.into_iter().next() {
-        if !seen.insert(p.clone()) || crews::is_management(conn, &p)? {
+        if !seen.insert(p.clone()) {
             break;
         }
         titles.push(crews::get(conn, &p)?.title);

@@ -43,7 +43,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
             Err(e) => cx.report.skip(cx.src, &path, Some(i), e.to_string()),
         }
     }
-    // 组织根至多一个（v4 的部分唯一索引在 upsert 之前就在）：多个 isBuiltin 时留 createdAt 最早的（再按 id），
+    // 管理机组（总机组）至多一个（v4 的部分唯一索引在 upsert 之前就在）：多个 isBuiltin 时留 createdAt 最早的（再按 id），
     // 其余降为普通机组并警告——与 `backfill_v4` 对已有库的口径相同。
     let root_id = parsed
         .iter()
@@ -53,7 +53,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
     for (c, _) in &parsed {
         if c.is_builtin && Some(&c.id) != root_id.as_ref() {
             cx.report.warn(format!(
-                "机组 {} 也标着 isBuiltin；组织根只留最早的 {}，它按普通机组导入",
+                "机组 {} 也标着 isBuiltin；总机组只留最早的 {}，它按普通机组导入",
                 c.id,
                 root_id.as_deref().unwrap_or_default()
             ));

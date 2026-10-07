@@ -78,7 +78,7 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
         params![tx.now_ts(), serde_json::to_string(&ids)?],
     )?;
     let id = tx.conn().last_insert_rowid();
-    // 每个涉及的 home（总机组 / 一级机组）人类群各一条，只列 home 是它的 session。
+    // 每个涉及的 home（总机组 / 顶层机组）人类群各一条，只列 home 是它的 session。
     let f = prompts::render_file(settings::locale(tx.conn())?);
     let mut by_home: Vec<(String, Vec<String>)> = Vec::new();
     for sid in &ids {
@@ -147,11 +147,8 @@ mod tests {
     use crate::testkit::{NOW, err, ok, ok_at, store};
 
     #[test]
-    fn a_restart_prompt_is_announced_in_each_first_level_human_channel() {
+    fn a_restart_prompt_is_announced_in_each_top_level_human_channel() {
         let mut s = store();
-        for c in ["crew-a", "crew-x"] {
-            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
-        }
         ok(&mut s, |tx| open(tx, vec!["w-b1".into(), "cap-x".into()]));
         let n = |ch: &str| {
             crate::messages::list(s.conn(), ch, None, None, 10)

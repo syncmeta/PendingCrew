@@ -59,7 +59,7 @@ Channel {channel} is archived and takes no messages. Unarchive it to continue, o
 Only members of the channel can add people. Ask a member to add them, or have a member add you first.
 
 ## channel.no_human_channel
-{crew} is not a first-level crew and has no human channel of its own. The human channel is {home}/human; post there.
+{crew} is not a top-level crew and has no human channel of its own. The human channel is {home}/human; post there.
 
 ## channel.human_channel_other_home
 The human channel of {session} is {home}/human, so it cannot join channel {channel}. To talk across crews, use a DM.
@@ -113,16 +113,16 @@ There is no crew {crew}. List the crews and check the id.
 Crew {crew} is archived and read-only. Ask the human to unarchive it (only the human can, from the client) before changing it.
 
 ## crew.management_fixed
-The headquarters crew is the root of the organisation; it cannot be adopted, released, hidden, deleted or archived. To reorganise, change the crews under it.
+The headquarters crew is the management crew: it cannot be hidden, archived or purged. Leave it as it is; to tidy the sidebar, hide or archive other crews.
+
+## crew.management_not_in_tree
+The headquarters crew is outside the crew tree: it cannot have a parent or children, and no crew can be placed under it. Pick another crew as the parent, or leave parentId out to make a top-level crew.
 
 ## crew.title_empty
 The crew title cannot be empty. Give the crew a title.
 
 ## crew.working_dir_empty
 The working directory cannot be empty. Give the directory path the crew's sessions should work in.
-
-## crew.move_to_first_level
-To make {crew} a first-level crew, first release it from its other parents (release).
 
 ## crew.cannot_parent_self
 A crew cannot be placed under itself. Pick a different parent.
@@ -132,9 +132,6 @@ A crew cannot be placed under itself. Pick a different parent.
 
 ## crew.not_direct_child
 {crew} is not a direct child of {from}. Check the parent links before releasing.
-
-## crew.release_to_root_other_parents
-To move {crew} under the headquarters crew, first release its other parents (release); once only {from} is left, release that.
 
 ## crew.running_sessions
 Crew {crew} still has {running} running sessions. Stop them first.
