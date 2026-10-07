@@ -19,7 +19,8 @@ macro_rules! params {
 // R11（契约与解析器一致）：解析器收 `null` 的参数类型在契约里写成 `object | null`。只给只被
 // `parse_no_params` / `parse_params_or_default` 解析的类型加（proto 的测试按方法逐个核）。
 /// 客户端给的 @（`message.post`）。线上形状同 `Mention`。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+// 同样不实现 `Default`（kind 必填，终审 9）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MentionParam {
     pub kind: MentionKind,
@@ -103,6 +104,10 @@ params!(/// 无参数方法只收 null 或 {}。
     #[schemars(extend("type" = ["object", "null"]))]
     NoParams {});
 params!(CrewIdParams { crew_id: String });
+params!(/// 全可选：`null` 当 `{}`。已移除的机组默认不列；`includeRemoved: true` 连它们一起列。
+    /// `Crew.childIds` 照实含已移除的子机组（边还在）：列表里没有的 id 跳过即可。
+    #[schemars(extend("type" = ["object", "null"]))]
+    CrewListParams { #[serde(default)] include_removed: Option<bool> });
 params!(CrewCreateParams { title: String, working_directory: String, #[serde(default)] parent_id: Option<String> });
 params!(CrewUpdateParams {
     crew_id: String,
@@ -118,8 +123,12 @@ params!(CrewAdoptParams {
 });
 params!(/// 侧栏次序按父边分层（控制者裁定 C1）：一次只排**一层**。
     /// `parentId` 给了 = 排这个父名下的直系子机组（写的是这条父边上的次序，读回来是父的 `Crew.childIds`；
-    /// 多父机组在别的父下的次序不受影响）；缺省 = 排顶层的根机组（写 `Crew.position`；内建机组不参与顶层排序、不能出现在名单里）。
-    /// `crewIds` 必须恰好是这一层现有的全部机组（不重复、不缺、不多），否则 -32602。
+    /// 多父机组在别的父下的次序不受影响；给总机组 = -32602，它不在树里）；缺省 / null = 排顶层机组
+    /// （写 `Crew.position`；总机组不在顶层次序里，不能出现在名单里）。
+    /// `crewIds` 必须包含这一层所有**没移除**的机组，不重复、不含别的机组（不认识的 id 一律 -32602）；
+    /// 客户端从默认列表（不含已移除）排序，所以不必带已移除的。没带的已移除子机组保持原来的相对次序、排在
+    /// `crewIds` 后面（带了就按给的次序）。`parentId` 给的父已移除 = `crew.removed`（移除 = 冻结，次序也不能改）。
+    /// 返回最终的全序。
     CrewReorderParams { #[serde(default)] parent_id: Option<String>, crew_ids: Vec<String> });
 params!(CrewReleaseParams { crew_id: String, from_parent_id: String, #[serde(default)] to_parent_id: Option<String> });
 params!(ChannelCreateParams {
@@ -178,13 +187,17 @@ params!(ReadMarkParams {
     channel_id: String,
     seq: i64
 });
-params!(/// 全可选：`null` 当 `{}`。
-    #[schemars(extend("type" = ["object", "null"]))]
-    SessionListParams { #[serde(default)] crew_id: Option<String> });
+params!(/// 全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（已移除的也列）；不给 = 全部，但已移除机组的
+/// session 只在 `includeRemoved: true` 时列（同 `crew.list`）。
+#[schemars(extend("type" = ["object", "null"]))]
+SessionListParams {
+    #[serde(default)] crew_id: Option<String>,
+    #[serde(default)] include_removed: Option<bool>,
+});
 params!(SessionGetParams { session_id: String });
 params!(/// 全可选：`null` 当 `{}`。
     #[schemars(extend("type" = ["object", "null"]))]
-    AskListParams { #[serde(default)] root_crew_id: Option<String> });
+    AskListParams { #[serde(default)] home_crew_id: Option<String> });
 params!(AskAnswerParams {
     crew_id: String,
     ask: String,
@@ -194,10 +207,6 @@ params!(AskWithdrawParams {
     crew_id: String,
     ask: String,
     reason: String
-});
-params!(ApprovalDecideParams {
-    id: String,
-    allow: bool
 });
 params!(RestartAnswerParams {
     id: i64,

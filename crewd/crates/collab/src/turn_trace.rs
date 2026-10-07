@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum TurnEnd {
     /// 不需要代发。
     Nothing,
-    /// 代发了一条（worker → 大厅 @机长；机长 → 根机组人类群 @人）。
+    /// 代发了一条（worker → 大厅 @机长；机长 → home 的人类群 @人）。
     Posted { message_id: String },
     /// 这一轮已经 @ 过能答的人（机长 / 人）。
     AlreadyCalled,
@@ -219,8 +219,8 @@ pub fn on_turn_end(
         None => safe_name(&crew.title),
     };
     let (channel_id, kind, key) = if captain {
-        let root = crews::root_of(conn, &s.crew_id)?;
-        let ch = channels::ensure_human_channel(tx, &root)?;
+        let home = crews::home_of(conn, &s.crew_id)?;
+        let ch = channels::ensure_human_channel(tx, &home)?;
         (ch.id, MentionKind::Human, "trace.captain")
     } else {
         (
@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn captain_question_goes_to_the_root_human_channel_never_to_itself() {
+    fn captain_question_goes_to_the_home_human_channel_never_to_itself() {
         let mut s = store();
         turn(&mut s, "cap-b", "p0", "好。");
         assert!(matches!(
@@ -583,7 +583,7 @@ mod tests {
         };
         assert!(
             t.contains("（机长）名字-cap-a") && t.contains("机组甲") && t.contains("1号机组"),
-            "根机长：{t}"
+            "顶层机组机长：{t}"
         );
     }
 

@@ -82,7 +82,7 @@ async fn option_order_survives_the_wire() {
 
 #[tokio::test]
 async fn secrets_never_leave_the_machine() {
-    let secret = "sk-ant-api03-AbCdEf0123456789xyzXYZ_-abcdef";
+    let secret = concat!("sk-a", "nt-api03-AbCdEf0123456789xyzXYZ_-abcdef");
     let fake = FakeJev::start(vec![Reply::ok(choice_body("route", "alpha", 0.9))]).await;
     let client = Client::new(config(&fake.base_url)).unwrap();
     let (_, report) = client

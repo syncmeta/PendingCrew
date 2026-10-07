@@ -64,9 +64,10 @@ pub struct WorldCtx {
     pub label: String,
     /// 通讯录分机号（`directory::list` 里这个 session 那一行的 number，如 "1-2"）。
     pub extension: Option<String>,
-    /// 根机组人类群（找人拍板的固定去处）。
-    pub root_human_channel_id: String,
-    pub builtin_crew: bool,
+    /// home（总机组 / 顶层机组）的人类群（找人拍板的固定去处）。
+    pub home_human_channel_id: String,
+    /// 它所在的机组是总机组（管理机组）。
+    pub management_crew: bool,
     /// 订阅档位描述；`context_for` 填 None，M3c 起会话前从 `SessionControl::quota` 填。
     pub quota_claude: Option<String>,
     pub quota_codex: Option<String>,
@@ -78,7 +79,7 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
     let titles = |ids: Vec<String>| -> Result<Vec<String>> {
         ids.iter().map(|i| Ok(crews::get(conn, i)?.title)).collect()
     };
-    let root_human = crewd_store::channels::human_id(&crews::root_of(conn, &crew.id)?);
+    let home_human = crewd_store::channels::human_id(&crews::home_of(conn, &crew.id)?);
     let label = sessions::display_name(conn, &s.id)?;
     let extension = directory::list(conn, None)?
         .into_iter()
@@ -104,8 +105,8 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
         child_titles: titles(crews::children(conn, &crew.id)?)?,
         label,
         extension,
-        root_human_channel_id: root_human,
-        builtin_crew: crew.builtin,
+        home_human_channel_id: home_human,
+        management_crew: crew.management,
         quota_claude: None,
         quota_codex: None,
     })
@@ -130,7 +131,7 @@ pub fn render(ctx: &WorldCtx) -> String {
             .join(f.get("lineage.sep"))
     };
     let role_block = match ctx.role {
-        Role::Captain if ctx.builtin_crew => f.get("role.captain.builtin"),
+        Role::Captain if ctx.management_crew => f.get("role.captain.management"),
         Role::Captain => f.get("role.captain"),
         // Admin has no tools of its own in M3 and reads as a worker.
         Role::Worker | Role::Admin => f.get("role.worker"),
@@ -144,26 +145,31 @@ pub fn render(ctx: &WorldCtx) -> String {
         ),
         (_, None) => f.get("captain.none").to_string(),
     };
-    let lineage = [
-        if ctx.parent_titles.is_empty() {
-            f.get("lineage.root").to_string()
-        } else {
-            fill(
-                f.get("lineage.parents"),
-                &[("titles", &titles(&ctx.parent_titles))],
-            )
-        },
-        if ctx.child_titles.is_empty() {
-            f.get("lineage.no_children").to_string()
-        } else {
-            fill(
-                f.get("lineage.children"),
-                &[("titles", &titles(&ctx.child_titles))],
-            )
-        },
-        f.get("lineage.tail").to_string(),
-    ]
-    .join("\n");
+    // 总机组不在机组树里（§24.1 H2）：没有上下级，也没有汇报线。
+    let lineage = if ctx.management_crew {
+        f.get("lineage.management").to_string()
+    } else {
+        [
+            if ctx.parent_titles.is_empty() {
+                f.get("lineage.root").to_string()
+            } else {
+                fill(
+                    f.get("lineage.parents"),
+                    &[("titles", &titles(&ctx.parent_titles))],
+                )
+            },
+            if ctx.child_titles.is_empty() {
+                f.get("lineage.no_children").to_string()
+            } else {
+                fill(
+                    f.get("lineage.children"),
+                    &[("titles", &titles(&ctx.child_titles))],
+                )
+            },
+            f.get("lineage.tail").to_string(),
+        ]
+        .join("\n")
+    };
     let quota = fill(
         f.get("quota"),
         &[
@@ -171,14 +177,15 @@ pub fn render(ctx: &WorldCtx) -> String {
             ("codex", ctx.quota_codex.as_deref().unwrap_or(unknown)),
         ],
     );
-    // The chief crew's catalog hides ask / respond_todo / start_session, so its text must not offer them.
-    let ask = if ctx.builtin_crew {
-        f.get("ask.builtin")
+    // The management crew's catalog hides respond_todo / start_session (until T15b), so its text must
+    // not offer them; its questions go to its own human channel (N1-R9).
+    let ask = if ctx.management_crew {
+        f.get("ask.management")
     } else {
         f.get("ask.normal")
     };
-    let builtin = if ctx.builtin_crew {
-        f.get("builtin").to_string()
+    let management = if ctx.management_crew {
+        f.get("management").to_string()
     } else {
         String::new()
     };
@@ -192,14 +199,14 @@ pub fn render(ctx: &WorldCtx) -> String {
             ("captainBlock", &captain_block),
             ("lineageBlock", &lineage),
             ("quotaBlock", &quota),
-            ("builtinBlock", &builtin),
+            ("managementBlock", &management),
             ("askBlock", ask),
             ("executor", &ctx.executor),
             ("sessionId", &ctx.session_id),
             ("extension", &extension),
             ("crewId", &ctx.crew_id),
             ("lobbyId", &lobby),
-            ("humanChannelId", &ctx.root_human_channel_id),
+            ("humanChannelId", &ctx.home_human_channel_id),
             ("crewTitle", &or_unknown(&safe_name(&ctx.crew_title))),
             ("workingDirectory", &or_unknown(&ctx.working_directory)),
             ("label", &or_unknown(&safe_name(&ctx.label))),
@@ -239,11 +246,11 @@ mod tests {
         "captainBlock",
         "lineageBlock",
         "quotaBlock",
-        "builtinBlock",
+        "managementBlock",
         "askBlock",
     ];
 
-    fn ctx(locale: Locale, role: Role, builtin: bool) -> WorldCtx {
+    fn ctx(locale: Locale, role: Role, management: bool) -> WorldCtx {
         WorldCtx {
             locale,
             session_id: "s-worker-1".into(),
@@ -258,8 +265,8 @@ mod tests {
             child_titles: vec![],
             label: "示例 worker".into(),
             extension: Some("7-3".into()),
-            root_human_channel_id: "crew-root/human".into(),
-            builtin_crew: builtin,
+            home_human_channel_id: "crew-home/human".into(),
+            management_crew: management,
             quota_claude: Some("Max".into()),
             quota_codex: None,
         }
@@ -269,10 +276,10 @@ mod tests {
         let mut v = Vec::new();
         for loc in [Locale::Zh, Locale::En] {
             for role in [Role::Captain, Role::Worker, Role::Admin] {
-                for builtin in [false, true] {
-                    v.push(ctx(loc, role, builtin));
-                    // A root crew without a captain, with child crews.
-                    let mut c = ctx(loc, role, builtin);
+                for management in [false, true] {
+                    v.push(ctx(loc, role, management));
+                    // A top-level crew without a captain, with child crews.
+                    let mut c = ctx(loc, role, management);
                     c.captain_name = None;
                     c.parent_titles = vec![];
                     c.child_titles = vec!["子甲".into(), "子乙".into()];
@@ -289,11 +296,11 @@ mod tests {
             .any(|w| w == word)
     }
 
-    /// Render minus the sections that legitimately name the tools the chief crew does not have.
+    /// Render minus the sections that legitimately name the tools the management crew does not have.
     fn without_absence_notes(md: &str, l: Locale) -> String {
         let f = file(l);
         let mut out = md.to_string();
-        for sec in ["builtin", "ask.builtin", "role.captain.builtin"] {
+        for sec in ["management", "ask.management", "role.captain.management"] {
             out = out.replace(f.get(sec), "");
         }
         out
@@ -339,7 +346,7 @@ mod tests {
             "7-3",
             "/tmp/example-repo",
             lobby.as_str(),
-            "crew-root/human",
+            "crew-home/human",
             "示例机长",
             "上级示例",
             "把示例模块的测试补齐",
@@ -360,8 +367,8 @@ mod tests {
     }
 
     #[test]
-    fn builtin_note_only_on_builtin() {
-        let note = file(Locale::En).get("builtin");
+    fn management_note_only_on_management() {
+        let note = file(Locale::En).get("management");
         assert!(render(&ctx(Locale::En, Role::Captain, true)).contains(note));
         assert!(!render(&ctx(Locale::En, Role::Captain, false)).contains(note));
     }
@@ -394,17 +401,19 @@ mod tests {
             ] {
                 assert!(has_word(&md, must), "{:?}: 缺 {must}", c.locale);
             }
-            // ask / respond_todo / start_session are not on the chief crew's tool list (catalog).
-            for tool in ["ask", "respond_todo", "resume_note"] {
-                assert_eq!(
-                    has_word(&without_absence_notes(&md, c.locale), tool),
-                    !c.builtin_crew,
-                    "{:?} builtin={}: {tool}",
-                    c.locale,
-                    c.builtin_crew
-                );
+            // ask is on every crew's tool list (N1-R9: the management crew asks in its own human
+            // channel); respond_todo / start_session are not on the management crew's (catalog).
+            for tool in ["ask", "resume_note"] {
+                assert!(has_word(&md, tool), "{:?}: {tool}", c.locale);
             }
-            if c.builtin_crew {
+            assert_eq!(
+                has_word(&without_absence_notes(&md, c.locale), "respond_todo"),
+                !c.management_crew,
+                "{:?} management={}: respond_todo",
+                c.locale,
+                c.management_crew
+            );
+            if c.management_crew {
                 assert!(!has_word(
                     &without_absence_notes(&md, c.locale),
                     "start_session"
@@ -470,11 +479,11 @@ mod tests {
             c.extension
         );
         assert_eq!(
-            c.root_human_channel_id,
+            c.home_human_channel_id,
             crewd_store::channels::human_id("crew-a"),
-            "根是 crew-a"
+            "home 是顶层机组 crew-a"
         );
-        assert!(!c.builtin_crew);
+        assert!(!c.management_crew);
         assert_eq!(
             (c.quota_claude.clone(), c.quota_codex.clone()),
             (None, None),
@@ -538,10 +547,10 @@ mod tests {
         let mut texts: Vec<(String, String)> = Vec::new();
         for l in [Locale::Zh, Locale::En] {
             for role in [Role::Captain, Role::Worker, Role::Admin] {
-                for builtin in [false, true] {
+                for management in [false, true] {
                     texts.push((
-                        format!("world {l:?} {role:?} {builtin}"),
-                        render(&ctx(l, role, builtin)),
+                        format!("world {l:?} {role:?} {management}"),
+                        render(&ctx(l, role, management)),
                     ));
                 }
             }
@@ -570,26 +579,28 @@ mod tests {
     }
 
     #[test]
-    fn builtin_crew_gets_the_builtin_sections_and_not_the_normal_ones() {
+    fn management_crew_gets_the_management_sections_and_not_the_normal_ones() {
         for l in [Locale::Zh, Locale::En] {
             let f = file(l);
             let chief_cap = render(&ctx(l, Role::Captain, true));
             let chief_wk = render(&ctx(l, Role::Worker, true));
             let cap = render(&ctx(l, Role::Captain, false));
             assert!(
-                chief_cap.contains(f.get("ask.builtin"))
+                chief_cap.contains(f.get("ask.management"))
                     && !chief_cap.contains(f.get("ask.normal"))
             );
             assert!(
-                chief_wk.contains(f.get("ask.builtin")) && !chief_wk.contains(f.get("ask.normal"))
+                chief_wk.contains(f.get("ask.management"))
+                    && !chief_wk.contains(f.get("ask.normal"))
             );
             assert!(
-                chief_cap.contains(f.get("role.captain.builtin"))
+                chief_cap.contains(f.get("role.captain.management"))
                     && !chief_cap.contains(f.get("role.captain"))
             );
-            assert!(cap.contains(f.get("ask.normal")) && !cap.contains(f.get("ask.builtin")));
+            assert!(cap.contains(f.get("ask.normal")) && !cap.contains(f.get("ask.management")));
             assert!(
-                cap.contains(f.get("role.captain")) && !cap.contains(f.get("role.captain.builtin"))
+                cap.contains(f.get("role.captain"))
+                    && !cap.contains(f.get("role.captain.management"))
             );
         }
     }
@@ -622,21 +633,78 @@ mod tests {
     }
 
     #[test]
-    fn captain_owns_the_human_channel_only_in_a_root_crew() {
+    fn captain_owns_the_human_channel_only_in_a_top_level_crew() {
         let zh = file(Locale::Zh).get("role.captain");
         let en = file(Locale::En).get("role.captain");
-        assert!(zh.contains("若本机组是根机组，人类群的群主也是你"), "{zh}");
         assert!(
-            en.contains("if this is the root crew, you also own the human channel"),
+            zh.contains("若本机组是顶层机组，它的人类群的群主也是你"),
+            "{zh}"
+        );
+        assert!(
+            en.contains("if this is a top-level crew, you also own its human channel"),
             "{en}"
         );
         // The body bullet says the same.
         let body_zh = render(&ctx(Locale::Zh, Role::Worker, false));
         let body_en = render(&ctx(Locale::En, Role::Worker, false));
-        assert!(body_zh.contains("根机组的人类群"), "{body_zh}");
+        assert!(body_zh.contains("顶层机组和总机组的人类群"), "{body_zh}");
         assert!(
-            body_en.contains("the root crew's human channel"),
+            body_en.contains("a top-level crew's or the management crew's human channel"),
             "{body_en}"
         );
+    }
+
+    /// §24.1 H2: the management crew is outside the crew tree, so it gets no tree lineage.
+    #[test]
+    fn management_crew_has_no_tree_lineage() {
+        for l in [Locale::Zh, Locale::En] {
+            let f = file(l);
+            for role in [Role::Worker, Role::Captain] {
+                let md = render(&ctx(l, role, true));
+                assert!(md.contains(f.get("lineage.management")), "{l:?}/{role:?}");
+                for sec in ["lineage.root", "lineage.no_children", "lineage.tail"] {
+                    assert!(!md.contains(f.get(sec)), "{l:?}/{role:?}: {sec}");
+                }
+                let normal = render(&ctx(l, role, false));
+                assert!(!normal.contains(f.get("lineage.management")));
+            }
+        }
+    }
+
+    /// §24.2 / N1: @ only decides who is woken (no narrowing, no `broadcast` kind), and the single-root
+    /// model is gone (human channels belong to the home, i.e. the top-level crew). Nothing an agent
+    /// reads may still teach the old shapes.
+    #[test]
+    fn nothing_the_agent_reads_teaches_narrowing_broadcast_or_a_root_crew() {
+        let mut texts: Vec<(String, String)> = Vec::new();
+        for c in all_variants() {
+            texts.push((
+                format!("world {:?} {:?} {}", c.locale, c.role, c.management_crew),
+                render(&c),
+            ));
+        }
+        texts.push((
+            "tools.zh.md".into(),
+            include_str!("../prompts/tools.zh.md").into(),
+        ));
+        texts.push((
+            "tools.en.md".into(),
+            include_str!("../prompts/tools.en.md").into(),
+        ));
+        for (what, t) in &texts {
+            let low = t.to_lowercase();
+            for gone in [
+                "broadcast",
+                "visibility — only the named",
+                "——只有被点到的",
+                "根机组",
+                "root crew",
+                "内建",
+                "built-in",
+                "chief crew",
+            ] {
+                assert!(!low.contains(gone), "{what} still says {gone:?}");
+            }
+        }
     }
 }

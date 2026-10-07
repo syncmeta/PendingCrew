@@ -68,6 +68,8 @@ pub fn import(
         archive::import_rest(tx, &mut cx)?;
         // 大厅、游标钉末尾、机长指针、分机号、nextCrewNumber（local-crews.json 此时已进归档）。
         crewd_store::schema::backfill_v3(tx)?;
+        // 总机组：最早的内建机组（或新建的 pendingcrew-chief）当管理机组，不在机组树里（它的父边、子边去掉）；顶层机组留在顶层。
+        crewd_store::schema::backfill_v4(tx)?;
         crewd_store::meta_set(tx, "importedAt", &crewd_store::now_ts())?;
         crewd_store::meta_set(tx, "importSource", &src.display().to_string())?;
         // 到这里所有计数都已完成：报告与数据同一个事务落库，不会出现有数据没报告。
@@ -240,7 +242,7 @@ mod tests {
         let b = list.iter().find(|c| c.id == "local-bbbb").unwrap();
         assert_eq!(b.parent_ids, ["local-aaaa"]);
         let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
-        assert!(chief.builtin);
+        assert!(chief.management);
         assert_eq!(
             list[0].captain_executor.as_deref(),
             Some("claude"),

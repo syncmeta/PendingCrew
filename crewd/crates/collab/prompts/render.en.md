@@ -1,15 +1,14 @@
-Group notices and injected text shown to people and agents (read by crewd-collab render / asks / approvals / restart).
+Group notices and injected text shown to people and agents (read by crewd-collab render / asks / restart).
 One `## name` per section; `{placeholders}` are filled by code; see REQUIRED in src/prompts.rs.
-
-## notice.approval
-{session} wants to use tool {tool}: {summary}
-This call was denied on the spot; it will move on to other work. Allow it in the approvals list to let it retry once (one-time grant); deny it and it will be told no.
 
 ## notice.restart
 crewd restarted. {count} sessions were running before; resume them now? (Or not yet: @-mention one of them in a channel to resume just that one.)
 
 ## notice.restart.item
 - {name}
+
+## notice.ask.crew_removed
+The crew was removed
 
 ## sender.human
 Human
@@ -27,7 +26,7 @@ crewd
 (captain) {name}
 
 ## inject.header
-New messages in your channels (only those addressed to or visible to you):
+New messages from others in your channels (all of them, not only those that @-mention you; each line marks who was @-mentioned):
 
 ## inject.channel.lobby
 [{crew} · lobby]
@@ -44,11 +43,11 @@ New messages in your channels (only those addressed to or visible to you):
 ## line
 #{seq} [{at}] {sender}: {text}
 
-## line.directed
-(addressed to {targets}, not to you)
+## line.at
+(@{targets})
 
-## line.directed.unknown
-(not addressed to you)
+## line.at.you
+you
 
 ## line.reply
 (reply to {reply})
@@ -70,13 +69,7 @@ Answer: {answer}
 ## wake.ask_defaulted
 Nobody answered your question {ask} in time; going with the default: {answer}
 Question: {question}
-Actions after the deadline still pass the approval gate: if a call is denied pending approval, move on; you will be woken to retry once the human allows it.
-
-## wake.approval_allowed
-The human allowed {tool} ({summary}). Retry that call now and it will go through — once.
-
-## wake.approval_denied
-The human did not allow {tool} ({summary}). Find a way that does not need it, or explain in the channel why you need it.
+Actions after the deadline still go through your own permission prompts (claude / codex); if one is blocked, move on to other work.
 
 ## wake.resume_note
 Your note on how to continue: {note}

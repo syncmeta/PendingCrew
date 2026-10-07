@@ -2,9 +2,9 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
-const V1: &str = r#"
+pub(crate) const V1: &str = r#"
 BEGIN;
 CREATE TABLE meta(
   key TEXT PRIMARY KEY,
@@ -93,7 +93,7 @@ COMMIT;
 /// v2（M2b，spec §16）：执行器类型字段。`sessions.agent_kind` 改名 `executor`、
 /// `crews.captain_agent_kind` 改名 `captain_executor`，词表改成 `claude` / `codex` /
 /// `acp:<registry-id>`；旧数据里的 `terminal` / `unknown` 原样保留。
-const V2: &str = r#"
+pub(crate) const V2: &str = r#"
 BEGIN;
 ALTER TABLE sessions RENAME COLUMN agent_kind TO executor;
 UPDATE sessions SET executor='claude' WHERE executor='claude_code';
@@ -498,12 +498,138 @@ INSERT OR IGNORE INTO read_cursors(reader,channel_id,seq,updated_at)
     Ok(())
 }
 
+/// v4（N1，spec §24）：删审批；内建机组标记改名为「管理机组」并保证至多一个；归档列。数据部分在 `backfill_v4`。
+const V4_DDL: &str = r#"
+DROP INDEX IF EXISTS approvals_open;
+DROP TABLE IF EXISTS approvals;
+ALTER TABLE crews RENAME COLUMN builtin TO management;
+ALTER TABLE crews ADD COLUMN archived_at TEXT;
+"#;
+
+/// 一个事务：DDL → 回填 → 唯一索引 → 外键检查 → 版本号。任何一步失败整体回滚，库保持 v3；
+/// 错误一律带上「v4 迁移失败，已回滚（库保持 v3）」——crewd 拒绝启动时人看到的就是这句加原因。
+/// 只用传进来的连接。由 `migrate_guarded` 的版本链调用：文件库的迁移前快照（integrity_check +
+/// `VACUUM INTO`，S20）在链的开头、任何写之前就已拍好；拍不成整条链不跑。
+fn migrate_v4(conn: &Connection) -> Result<()> {
+    // 事务在 `migrate_v4_in_tx` 返回时已经落定（提交或随 drop 回滚），这里只补上下文。
+    migrate_v4_in_tx(conn)
+        .map_err(|e| StoreError::Invalid(format!("v4 迁移失败，已回滚（库保持 v3）：{e}")))
+}
+
+fn migrate_v4_in_tx(conn: &Connection) -> Result<()> {
+    // 迁移前快照已由 `migrate_guarded` 在链开头拍好（v3 及更早的写也都在它之后）。
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(V4_DDL)?;
+    backfill_v4(&tx)?;
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX crews_one_management ON crews(management) WHERE management=1;",
+    )?;
+    if let Some(report) = foreign_key_violations(&tx)? {
+        return Err(StoreError::Invalid(format!("迁移后外键不成立：{report}")));
+    }
+    tx.execute_batch("PRAGMA user_version = 4")?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// v4 的数据回填（幂等；迁移与旧 JSON 导入共用，导入在 `backfill_v3` 之后调）。
+/// 空机组表时只做与机组无关的几步（总机组由第一次建机组时懒建，N1 裁定 3）。
+/// 机组树是森林：旧的顶层机组原样留在顶层（不挂到谁下面）；总机组（管理机组，PM 2026-10-07）不在树里——
+/// 它的父边、子边全部去掉，原来只挂在它下面的子机组成为顶层、排在顶层末尾（保持它们在总机组下的相对次序）。
+pub fn backfill_v4(conn: &Connection) -> Result<()> {
+    // 1) 多个管理机组：留 created_at 最早的（再按 id），其余降为普通机组。
+    conn.execute_batch(
+        "UPDATE crews SET management=0 WHERE management=1 AND id <>
+           (SELECT id FROM crews WHERE management=1 ORDER BY created_at, id LIMIT 1);",
+    )?;
+    // 2) 作废排队中的审批唤醒（审批已删除，N1 裁定 15）。
+    conn.execute(
+        "UPDATE wakes SET state='dropped', last_error='approvals removed (v4)', settled_at=?1
+          WHERE source LIKE 'approval:%' AND state IN ('pending','inflight')",
+        [crate::now_ts()],
+    )?;
+    // 3) 剥掉 broadcast mention（@ 只决定叫醒谁，可见范围 = 群成员，N1 裁定 8）。其余 mention 顺序不变；
+    //    在 `crews == 0` 提前返回之前——空机组表的库也可能有消息。
+    conn.execute_batch(
+        "UPDATE messages SET mentions = (
+           SELECT json_group_array(json(value)) FROM (
+             SELECT value FROM json_each(messages.mentions)
+              WHERE json_extract(value,'$.kind') <> 'broadcast' ORDER BY key))
+          WHERE json_valid(mentions) AND json_type(mentions)='array'
+            AND EXISTS (SELECT 1 FROM json_each(messages.mentions) j WHERE json_extract(j.value,'$.kind')='broadcast');",
+    )?;
+    let crews: i64 = conn.query_row("SELECT COUNT(*) FROM crews", [], |r| r.get(0))?;
+    if crews == 0 {
+        return Ok(());
+    }
+    let m = crate::crews::ensure_management(conn, &crate::now_ts())?;
+    // 4) 只挂在总机组下的子机组成为顶层：排在现有顶层（没有任何父边的非管理机组）之后，
+    //    次序 = 它们在总机组下的次序（边上的 position, created_at, id）。
+    conn.execute(
+        "WITH freed AS (
+           SELECT c.id, ROW_NUMBER() OVER (ORDER BY p.position, c.created_at, c.id) AS k
+             FROM crew_parents p JOIN crews c ON c.id=p.crew_id
+            WHERE p.parent_id=?1 AND c.id<>?1
+              AND NOT EXISTS (SELECT 1 FROM crew_parents q WHERE q.crew_id=c.id AND q.parent_id<>?1))
+         UPDATE crews SET position =
+           (SELECT COALESCE(MAX(COALESCE(t.position,0)),0) FROM crews t
+             WHERE t.id<>?1 AND NOT EXISTS (SELECT 1 FROM crew_parents q WHERE q.crew_id=t.id))
+           + (SELECT k FROM freed WHERE freed.id=crews.id)
+          WHERE id IN (SELECT id FROM freed)",
+        [&m],
+    )?;
+    // 5) 总机组不在树里：去掉它的父边与子边（多父的子机组只少掉指向总机组的那一条）。
+    conn.execute(
+        "DELETE FROM crew_parents WHERE crew_id=?1 OR parent_id=?1",
+        [&m],
+    )?;
+    // 6) 号码 0（没有号、且 0 没人用时）；不隐藏（总机组不能被隐藏）；position 0（与新建的总机组一致，
+    //    旧库里它可能带着全局排名）。
+    conn.execute(
+        "UPDATE crews SET number=0 WHERE id=?1 AND number IS NULL
+            AND NOT EXISTS (SELECT 1 FROM crews WHERE number=0)",
+        [&m],
+    )?;
+    conn.execute(
+        "UPDATE crews SET hidden_at=NULL, position=0 WHERE id=?1",
+        [&m],
+    )?;
+    // 7) 显示名与标题都空的旧 session 补标题（N1 裁定 12）：brief 第一条非空行的前 18 个字符；
+    //    没有 brief = 机组标题 + ' #' + 分机号（机长没号 = 机组标题）。标签绝不回落到原始 id。
+    //    SQLite 的 substr 按字符算。内部空白不压缩（只管首尾，旧数据的近似即可）。
+    conn.execute_batch(
+        "UPDATE sessions SET title = COALESCE(
+             NULLIF(substr(trim(substr(ltrim(brief, char(9)||char(10)||char(13)||' '), 1,
+                    instr(ltrim(brief, char(9)||char(10)||char(13)||' ')||char(10), char(10)) - 1),
+                    char(9)||char(13)||' '), 1, 18), ''),
+             (SELECT c.title FROM crews c WHERE c.id=sessions.crew_id)
+               || CASE WHEN ext IS NULL THEN '' ELSE ' #'||ext END)
+          WHERE COALESCE(display_name,'')='' AND COALESCE(title,'')='';",
+    )?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
+    migrate_guarded(conn, None)
+}
+
+/// 迁移。`backups` = 文件库的备份目录：给了、且库是非空的旧版本时，先过 `integrity_check`、再
+/// `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{时间}.db`；任何一步不成就拒绝迁移，库原样不动（S20 / S25）。
+pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v > SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
             "数据库版本 {v} 比本程序支持的 {SCHEMA_VERSION} 新，拒绝打开"
         )));
+    }
+    if let Some(dir) = backups
+        && (1..SCHEMA_VERSION).contains(&v)
+        && has_data(conn)?
+    {
+        protect_before_migrating(conn, v, dir).map_err(|e| StoreError::MigrationRefused {
+            from: v,
+            source: Box::new(e),
+        })?;
     }
     if v < 1 {
         conn.execute_batch(V1)?;
@@ -514,7 +640,29 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if v < 3 {
         migrate_v3(conn)?;
     }
+    if v < 4 {
+        migrate_v4(conn)?;
+    }
     Ok(())
+}
+
+/// 有没有值得保的数据（v1 起就有这两张表）。
+fn has_data(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages)",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+fn protect_before_migrating(conn: &Connection, v: i64, dir: &std::path::Path) -> Result<()> {
+    crate::backup::ensure_ok(conn, crate::backup::Check::Integrity)?;
+    let name = format!(
+        "crewd-v{v}-pre-v{SCHEMA_VERSION}-{}.db",
+        crate::backup::stamp_from_ms(crate::now_ms())
+    );
+    crate::backup::vacuum_into(conn, &dir.join(name))
 }
 
 #[cfg(test)]
@@ -573,6 +721,8 @@ mod tests {
                 ("c2".to_string(), Some("codex".to_string())),
                 ("c3".to_string(), None),
                 ("c4".to_string(), Some("unknown".to_string())),
+                // v4：库里有机组而没有内建机组 → 建出总机组（N1 裁定 2），其余四个仍是顶层机组（总机组不在树里）。
+                (crate::crews::MANAGEMENT_ID.to_string(), None),
             ]
         );
         migrate(&conn).unwrap();
@@ -580,13 +730,8 @@ mod tests {
 
     use crate::{archive, channels, messages};
 
-    /// 一个停在 v2 的库（真实用户升级前的样子）。
-    fn v2_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
-        conn.execute_batch(
-            r#"
+    /// v2 库里的合成数据（真实用户升级前的样子）。
+    const V2_SEED: &str = r#"
 INSERT INTO crews(id,title,number,builtin,created_at,updated_at,extra) VALUES
   ('crew-a','示例机组',1,0,'2026-09-01T00:00:00.000Z','2026-09-01T00:00:00.000Z','{"titleSource":"human"}'),
   ('crew-b','子机组',2,0,'2026-09-02T00:00:00.000Z','2026-09-02T00:00:00.000Z',NULL),
@@ -603,10 +748,146 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
   ('m2','crew-a','session','worker-a1','收到','[{"kind":"session","targetId":"captain-new"}]','2026-09-01T01:01:00.000Z'),
   ('m3','crew-b','pendingcrew',NULL,'系统通知','[{"kind":"human"}]','2026-09-02T01:00:00.000Z'),
   ('m4','crew-a','captain','captain-new','@人类 请看','[{"kind":"human"},{"kind":"broadcast"}]','2026-09-01T02:00:00.000Z');
-"#,
-        )
-        .unwrap();
+"#;
+
+    /// 一个停在 v2 的库。
+    fn v2_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        seed_v2(&conn);
         conn
+    }
+
+    fn seed_v2(conn: &Connection) {
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
+        conn.execute_batch(V2_SEED).unwrap();
+    }
+
+    /// 同一份 v2 数据，落在文件里（快照只对文件库做）。
+    fn v2_file(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        let _: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+            .unwrap();
+        seed_v2(&conn);
+    }
+
+    fn snapshots(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return vec![];
+        };
+        let mut v: Vec<_> = rd.map(|e| e.unwrap().path()).collect();
+        v.sort();
+        v
+    }
+
+    /// S20：非空的旧版本库，迁移前先在 backups/ 里留一份迁移前的完整快照（旧版本号、旧数据、能通过 quick_check）。
+    #[test]
+    fn migrating_a_non_empty_file_db_snapshots_it_first() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        let s = crate::Store::open(&p).unwrap();
+        assert_eq!(one::<i64>(s.conn(), "PRAGMA user_version"), SCHEMA_VERSION);
+        let snaps = snapshots(&d.path().join("backups"));
+        assert_eq!(snaps.len(), 1, "{snaps:?}");
+        let name = snaps[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!("crewd-v2-pre-v{SCHEMA_VERSION}-")) && name.ends_with(".db"),
+            "{name}"
+        );
+        let snap = Connection::open(&snaps[0]).unwrap();
+        assert_eq!(one::<i64>(&snap, "PRAGMA user_version"), 2);
+        assert_eq!(one::<i64>(&snap, "SELECT COUNT(*) FROM messages"), 4);
+        assert_eq!(one::<String>(&snap, "PRAGMA quick_check"), "ok");
+        // 已经是新版本的库再打开，不再拍。
+        drop(s);
+        drop(crate::Store::open(&p).unwrap());
+        assert_eq!(snapshots(&d.path().join("backups")).len(), 1);
+    }
+
+    /// S20：快照拍不出来（这里是 backups/ 只读）就不迁：库保持 v2、一个字节都不动。
+    #[test]
+    fn a_failed_snapshot_refuses_the_migration_and_leaves_the_db_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        let b = d.path().join("backups");
+        std::fs::create_dir(&b).unwrap();
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let r = crate::Store::open(&p);
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let err = r.err().expect("快照失败必须拒绝迁移");
+        assert!(err.to_string().contains("拒绝迁移"), "{err}");
+        let c = Connection::open(&p).unwrap();
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 2);
+        assert_eq!(one::<i64>(&c, "SELECT COUNT(*) FROM messages"), 4);
+        assert!(snapshots(&b).is_empty(), "不留半截快照");
+    }
+
+    /// S25：迁移前先过 integrity_check；没过就不迁、不快照、不删，原样留给人。
+    #[test]
+    fn a_corrupt_old_db_is_not_migrated() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(
+                "CREATE TABLE filler(id INTEGER PRIMARY KEY, t TEXT);
+                 CREATE INDEX filler_t ON filler(t);
+                 WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<5000)
+                 INSERT INTO filler(t) SELECT hex(randomblob(50)) FROM n;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .unwrap();
+        }
+        crate::testing::scribble_near_end(&p);
+        let err = crate::Store::open(&p).err().expect("坏库不能迁");
+        assert_eq!(
+            err.storage_kind(),
+            Some(crate::StorageKind::Corrupt),
+            "{err}"
+        );
+        assert!(err.to_string().contains("拒绝迁移"), "{err}");
+        assert!(p.exists(), "绝不删");
+        assert!(snapshots(&d.path().join("backups")).is_empty());
+    }
+
+    /// S25：坏处只在索引里、拷贝照样能成的库，也要被迁移前的 integrity_check 拦住（不靠快照失败顶替）。
+    #[test]
+    fn an_old_db_that_copies_fine_but_fails_integrity_check_is_not_migrated() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        crate::testing::corrupt_an_index(&Connection::open(&p).unwrap());
+        let err = crate::Store::open(&p).err().expect("没过检查的库不能迁");
+        assert!(
+            matches!(&err, StoreError::MigrationRefused { source, .. }
+                if matches!(**source, StoreError::Integrity { .. })),
+            "{err:?}"
+        );
+        assert_eq!(
+            one::<i64>(&Connection::open(&p).unwrap(), "PRAGMA user_version"),
+            2
+        );
+        assert!(snapshots(&d.path().join("backups")).is_empty());
+    }
+
+    /// 空的旧库和全新的库都没有要保的东西：不拍快照，也不建 backups/。
+    #[test]
+    fn empty_or_fresh_dbs_are_not_snapshotted() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(V1).unwrap();
+            c.execute_batch(V2).unwrap();
+        }
+        drop(crate::Store::open(&p).unwrap());
+        drop(crate::Store::open(&d.path().join("fresh.db")).unwrap());
+        assert!(!d.path().join("backups").exists());
     }
 
     fn one<T: rusqlite::types::FromSql>(c: &Connection, sql: &str) -> T {
@@ -624,7 +905,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
                 .collect()
         };
         migrate(&c).unwrap();
-        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), SCHEMA_VERSION);
         let lobbies: Vec<(String, String)> = {
             let mut st = c
                 .prepare("SELECT id, crew_id FROM channels WHERE kind='lobby' ORDER BY id")
@@ -897,7 +1178,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         )
         .unwrap();
         migrate(&ok).unwrap();
-        assert_eq!(one::<i64>(&ok, "PRAGMA user_version"), 3);
+        assert_eq!(one::<i64>(&ok, "PRAGMA user_version"), SCHEMA_VERSION);
     }
 
     /// 迁移前的词表检查（SQL 里的字面量）接受 proto 封闭词表里的每一个值：sender / mention / role 都不漂。
@@ -927,7 +1208,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
             .unwrap();
         }
         migrate(&c).unwrap();
-        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), SCHEMA_VERSION);
     }
 
     /// 外键不成立时中止的报错要让人找得到行：列出每个 (表, 父表) 及至多 5 个 rowid，库保持 v2。
@@ -1005,13 +1286,594 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         assert_eq!(snapshot(&c), a);
     }
 
+    /// 停在 v3 的库：内建 chief、两个顶层机组（crew-x 人排在 crew-a 前面）、子机组 crew-b（也挂着 chief）；
+    /// crew-a 有人类群；一条排队中的审批唤醒。
+    fn v3_db() -> Connection {
+        let c = v2_db();
+        migrate_v3(&c).unwrap();
+        c.execute_batch(V3_EXTRA).unwrap();
+        c
+    }
+
+    const V3_EXTRA: &str = r#"
+INSERT INTO crews(id,title,number,builtin,created_at,updated_at) VALUES
+  ('crew-x','另一个根',3,0,'2026-09-03T00:00:00.000Z','2026-09-03T00:00:00.000Z');
+INSERT INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES
+  ('crew-x/lobby','crew-x','lobby','','system','2026-09-03T00:00:00.000Z'),
+  ('crew-a/human','crew-a','human','','system','2026-09-01T00:00:00.000Z');
+UPDATE crews SET position = CASE id WHEN 'crew-x' THEN 1 WHEN 'crew-a' THEN 2 ELSE 9 END;
+-- 旧数据里「既挂在 chief 下、又有别的父」的机组：v4 后指向总机组的边去掉（总机组不在树里），别的父留着。
+INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-b','chief',0);
+INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,created_at) VALUES
+  ('worker-a1','ask_answer','approval:ap-1','human',0,'pending',0,'2026-09-04T00:00:00.000Z');
+"#;
+
+    /// 同一份 v3 数据落在文件里（WAL）。`stamped` = N4 之后的 v3 库：带 application_id / dbId，
+    /// 旁边有 `crewd.db.id`（main 上的 crewd 跑过的库就是这样）；否则是 N4 之前、没有身份的 v3 库。
+    fn v3_data_dir(dir: &std::path::Path, stamped: bool) {
+        let p = dir.join(crate::DB_FILE);
+        v2_file(&p);
+        let c = Connection::open(&p).unwrap();
+        migrate_v3(&c).unwrap();
+        c.execute_batch(V3_EXTRA).unwrap();
+        if stamped {
+            crate::mark_identity(&c).unwrap();
+            let _: i64 = c
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+                .unwrap();
+            let id = crate::meta_get(&c, "dbId").unwrap().unwrap();
+            let rec = crate::IdRecord {
+                id,
+                ino: Some(crate::inode_of(&p).unwrap()),
+            };
+            std::fs::write(dir.join(crate::ID_FILE), rec.render()).unwrap();
+        }
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+    }
+
+    /// N1 × N4：v3 → v4 走 `open_data_dir` 的守卫链——迁移前先在 backups/ 拍一份 v3 快照（审批表、
+    /// builtin 列都还在），再在一个事务里升到 v4。没身份的旧库与 N4 之后带身份的库各一遍。
     #[test]
-    fn fresh_database_is_v3_and_has_no_lobbies_to_fill() {
+    fn a_v3_data_dir_is_snapshotted_then_migrated_to_v4_through_the_guarded_open() {
+        for stamped in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            v3_data_dir(d.path(), stamped);
+            let s = crate::Store::open_data_dir(d.path()).unwrap();
+            assert_eq!(
+                one::<i64>(s.conn(), "PRAGMA user_version"),
+                4,
+                "stamped={stamped}"
+            );
+            assert_eq!(
+                one::<i64>(s.conn(), "SELECT COUNT(*) FROM crews WHERE management=1"),
+                1
+            );
+            assert_eq!(
+                one::<i64>(
+                    s.conn(),
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+                ),
+                0
+            );
+            assert_eq!(
+                one::<String>(
+                    s.conn(),
+                    "SELECT state FROM wakes WHERE source='approval:ap-1'"
+                ),
+                "dropped"
+            );
+            let snaps = snapshots(&d.path().join(crate::backup::BACKUPS_DIR));
+            assert_eq!(snaps.len(), 1, "stamped={stamped}: {snaps:?}");
+            let name = snaps[0].file_name().unwrap().to_string_lossy().into_owned();
+            assert!(name.starts_with("crewd-v3-pre-v4-"), "{name}");
+            let snap = Connection::open(&snaps[0]).unwrap();
+            assert_eq!(one::<i64>(&snap, "PRAGMA user_version"), 3);
+            assert_eq!(
+                one::<i64>(&snap, "SELECT COUNT(*) FROM approvals"),
+                0,
+                "快照是 v3 的形状：审批表还在"
+            );
+            assert_eq!(
+                one::<i64>(&snap, "SELECT COUNT(*) FROM crews WHERE builtin=1"),
+                1
+            );
+            assert_eq!(
+                one::<String>(
+                    &snap,
+                    "SELECT state FROM wakes WHERE source='approval:ap-1'"
+                ),
+                "pending",
+                "快照拍在任何 v4 写之前"
+            );
+            assert_eq!(one::<String>(&snap, "PRAGMA quick_check"), "ok");
+            assert!(d.path().join(crate::ID_FILE).exists());
+            // 再开一次：已是 v4，不再拍。
+            drop(s);
+            drop(crate::Store::open_data_dir(d.path()).unwrap());
+            assert_eq!(
+                snapshots(&d.path().join(crate::backup::BACKUPS_DIR)).len(),
+                1
+            );
+        }
+    }
+
+    fn rows(c: &Connection, sql: &str) -> Vec<String> {
+        let mut st = c.prepare(sql).unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn v4_gives_every_unnamed_session_a_title() {
+        let c = v3_db();
+        c.execute_batch(
+            "UPDATE sessions SET display_name=NULL, title=NULL;
+             UPDATE sessions SET brief='修首页滚动' WHERE id='worker-a2';
+             UPDATE sessions SET brief=char(10)||'  一二三四五六七八九十甲乙丙丁戊己庚辛壬癸  '||char(10)||'第二行' WHERE id='worker-b1';",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sessions WHERE COALESCE(display_name,'')='' AND COALESCE(title,'')=''"
+            ),
+            0,
+            "标签绝不回落到原始 id"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-a2'"),
+            "修首页滚动"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-a1'"),
+            "示例机组 #5"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-b1'"),
+            "一二三四五六七八九十甲乙丙丁戊己庚辛",
+            "跳过空行、去首尾空白、截 18 字"
+        );
+    }
+
+    #[test]
+    fn v4_strips_broadcast_mentions_and_keeps_the_rest_in_order() {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM messages m, json_each(m.mentions) j WHERE json_extract(j.value,'$.kind')='broadcast'"
+            ),
+            0
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT mentions FROM messages WHERE id='m4'"),
+            r#"[{"kind":"human"}]"#
+        );
+        // 读得回来：剥掉之后，旧消息照常反序列化（broadcast 已不在词表里）。
+        let m4 = crate::messages::get(&c, "m4").unwrap().unwrap();
+        assert_eq!(m4.mentions.len(), 1);
+        assert_eq!(m4.mentions[0].kind, crewd_proto::MentionKind::Human);
+    }
+
+    /// 空机组表的库也可能有消息：剥 broadcast 在 `crews == 0` 提前返回之前。
+    #[test]
+    fn v4_strips_broadcast_even_without_crews() {
+        let c = v3_db();
+        c.execute_batch(
+            "INSERT INTO messages(id,channel_id,sender_kind,text,mentions,created_at)
+               VALUES('lonely','crew-a/lobby','human','示例消息','[{\"kind\":\"broadcast\"},{\"kind\":\"human\"}]','2026-09-05T00:00:00.000Z');",
+        )
+        .unwrap();
+        c.execute_batch(V4_DDL).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM crews;")
+            .unwrap();
+        backfill_v4(&c).unwrap();
+        assert_eq!(
+            one::<String>(&c, "SELECT mentions FROM messages WHERE id='lonely'"),
+            r#"[{"kind":"human"}]"#
+        );
+    }
+
+    #[test]
+    fn v3_top_level_crews_stay_top_level_and_the_chief_becomes_the_management_crew_outside_the_tree()
+     {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
+        assert_eq!(
+            rows(&c, "SELECT id FROM crews WHERE management=1"),
+            ["chief"]
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT crew_id||'>'||parent_id FROM crew_parents WHERE crew_id='chief' OR parent_id='chief'"
+            ),
+            Vec::<String>::new(),
+            "总机组没有父边也没有子边"
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT id FROM crews c WHERE management=0
+                   AND NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)
+                 ORDER BY position, created_at, id"
+            ),
+            ["crew-x", "crew-a"],
+            "旧的顶层机组原样留在顶层，人排过的次序不变（不挂到总机组下）"
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT parent_id FROM crew_parents WHERE crew_id='crew-b'"
+            ),
+            ["crew-a"],
+            "多父的子机组只少掉指向总机组的那条边"
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT number FROM crews WHERE id='chief'"),
+            0
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT position FROM crews WHERE id='chief'"),
+            0,
+            "迁移来的总机组与新建的一样 position=0（旧库里它的 position 是别的值）"
+        );
+    }
+
+    #[test]
+    fn a_top_level_crews_human_channel_survives_the_migration() {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<String>>(
+                &c,
+                "SELECT archived_at FROM channels WHERE id='crew-a/human'"
+            ),
+            None,
+            "顶层机组保留自己的人类群"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT crew_id FROM channels WHERE id='crew-a/human'"),
+            "crew-a"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crew_parents WHERE crew_id='crew-a'"
+            ),
+            0,
+            "仍是顶层"
+        );
+    }
+
+    #[test]
+    fn a_v3_database_without_a_builtin_crew_gets_one_management_crew_with_no_edges() {
+        let c = v3_db();
+        // 预检 D1：外键开着删，级联带走 chief 的群、游标与 crew-b → chief 的边（关着删会留下悬空行，
+        // 迁移的外键检查必然中止）。
+        c.execute_batch("DELETE FROM crews WHERE id='chief';")
+            .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            rows(&c, "SELECT id FROM crews WHERE management=1"),
+            [crate::crews::MANAGEMENT_ID]
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM channels WHERE id='pendingcrew-chief/lobby'"
+            ),
+            1,
+            "新建的总机组也有大厅"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crew_parents WHERE parent_id='pendingcrew-chief' OR crew_id='pendingcrew-chief'"
+            ),
+            0,
+            "不挂任何机组"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crews c WHERE NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)"
+            ),
+            3,
+            "crew-a、crew-x 与新建的总机组"
+        );
+    }
+
+    #[test]
+    fn extra_builtin_crews_are_demoted_and_the_earliest_stays_the_management_crew() {
+        let c = v3_db();
+        c.execute("UPDATE crews SET builtin=1 WHERE id='crew-x'", [])
+            .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            rows(&c, "SELECT id FROM crews WHERE management=1"),
+            ["chief"]
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crew_parents WHERE crew_id='crew-x'"
+            ),
+            0,
+            "降级的内建机组是普通的顶层机组"
+        );
+    }
+
+    #[test]
+    fn at_most_one_management_crew_is_enforced_by_the_schema() {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        let err = c
+            .execute("UPDATE crews SET management=1 WHERE id='crew-x'", [])
+            .unwrap_err();
+        // 预检 D3：基线上这句因「没有 management 列」也报错；要的是唯一索引挡住的那一种。
+        assert!(crate::is_unique_violation(&err), "{err}");
+    }
+
+    #[test]
+    fn v4_drops_the_approvals_table_and_voids_queued_approval_wakes() {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+            ),
+            0
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT state FROM wakes WHERE source='approval:ap-1'"),
+            "dropped"
+        );
+    }
+
+    #[test]
+    fn fresh_database_is_v4_and_has_no_management_crew_until_a_crew_exists() {
         let c = Connection::open_in_memory().unwrap();
         migrate(&c).unwrap();
-        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
+        assert_eq!(
+            one::<i64>(&c, "SELECT COUNT(*) FROM crews"),
+            0,
+            "导入要求空库：迁移不能凭空建总机组"
+        );
+        // 被取代的 v3 版本测试里的两句（没有可填的大厅）并到这里。
         assert_eq!(one::<i64>(&c, "SELECT COUNT(*) FROM channels"), 0);
         assert_eq!(channels::lobby_id("x"), "x/lobby");
+    }
+
+    /// 迁移在一个事务里：v4 中途失败（这里是外键检查不过）→ 整体回滚，库保持 v3，列名、审批表、唤醒都没被动过。
+    #[test]
+    fn a_failed_v4_migration_rolls_back_and_keeps_v3() {
+        let c = v3_db();
+        // 合成的孤儿行：关外键才写得进去。
+        c.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('orphan-a','ghost-crew','worker','claude','2026-09-03T00:00:00.000Z');
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
+        let err = migrate(&c).unwrap_err().to_string();
+        assert!(
+            err.contains("库保持 v3") && err.contains("sessions → crews"),
+            "{err}"
+        );
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM pragma_table_info('crews') WHERE name='builtin'"
+            ),
+            1,
+            "列名没改"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+            ),
+            1
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT state FROM wakes WHERE source='approval:ap-1'"),
+            "pending"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crew_parents WHERE parent_id='chief'"
+            ),
+            1,
+            "夹具里 crew-b → chief 那条边没被摘掉"
+        );
+    }
+
+    /// 任何一步失败（不只外键检查）都带上同一句上下文：人看得出是 v4 迁移、库没被动过。
+    #[test]
+    fn every_v4_failure_says_it_rolled_back_and_kept_v3() {
+        let c = v3_db();
+        // 合成的冲突：v4 要加的列已经在了 → DDL 那一步就失败。
+        c.execute_batch("ALTER TABLE crews ADD COLUMN archived_at TEXT;")
+            .unwrap();
+        let err = migrate(&c).unwrap_err().to_string();
+        assert!(
+            err.starts_with("v4 迁移失败，已回滚（库保持 v3）") && err.contains("archived_at"),
+            "{err}"
+        );
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+            ),
+            1
+        );
+    }
+
+    /// 审批唤醒：排队中的（pending / inflight）作废并写明原因与结算时间；已结算的、非审批的一概不动。
+    #[test]
+    fn v4_voids_pending_and_inflight_approval_wakes_only() {
+        let c = v3_db();
+        c.execute_batch(
+            r#"
+INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,created_at) VALUES
+  ('worker-a1','message','approval:ap-2','human',0,'inflight',1,'2026-09-04T00:00:00.000Z'),
+  ('worker-a2','ask_answer','approval:ap-3','human',0,'delivered',1,'2026-09-04T00:00:00.000Z'),
+  ('worker-a1','message','msg:m1','auto',0,'pending',0,'2026-09-04T00:00:00.000Z'),
+  ('worker-a2','message','msg:m2','auto',0,'inflight',1,'2026-09-04T00:00:00.000Z');
+"#,
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        let row = |source: &str| -> String {
+            one(
+                &c,
+                &format!(
+                    "SELECT state||'|'||COALESCE(last_error,'')||'|'||(settled_at IS NOT NULL) FROM wakes WHERE source='{source}'"
+                ),
+            )
+        };
+        assert_eq!(row("approval:ap-1"), "dropped|approvals removed (v4)|1");
+        assert_eq!(row("approval:ap-2"), "dropped|approvals removed (v4)|1");
+        assert_eq!(row("approval:ap-3"), "delivered||0", "已结算的不改");
+        assert_eq!(row("msg:m1"), "pending||0", "非审批的不动");
+        assert_eq!(row("msg:m2"), "inflight||0");
+    }
+
+    /// 旧数据里挂在内建机组下的子机组：只挂在它下面的成为顶层、排在现有顶层之后（保持在它下面的相对次序）；
+    /// 还有别的父的只少掉那条边；内建机组自己挂在别人下面的边也去掉。
+    #[test]
+    fn the_chiefs_former_children_become_top_level_last_in_their_old_order() {
+        let c = v3_db();
+        c.execute_batch(
+            r#"
+INSERT INTO crews(id,title,number,builtin,created_at,updated_at,position) VALUES
+  ('crew-c','原本挂在总机组下',4,0,'2026-09-04T00:00:00.000Z','2026-09-04T00:00:00.000Z',1),
+  ('crew-d','也挂在总机组下',5,0,'2026-09-05T00:00:00.000Z','2026-09-05T00:00:00.000Z',1);
+INSERT INTO crew_parents(crew_id,parent_id,position) VALUES
+  ('crew-d','chief',3),('crew-c','chief',7),('chief','crew-x',1);
+"#,
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT id FROM crews c WHERE management=0
+                   AND NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)
+                 ORDER BY position, created_at, id"
+            ),
+            ["crew-x", "crew-a", "crew-d", "crew-c"],
+            "原来的顶层在前；总机组下的两个按边上的次序接在后面"
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT crew_id||'>'||parent_id FROM crew_parents WHERE crew_id='chief' OR parent_id='chief'"
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT parent_id FROM crew_parents WHERE crew_id='crew-b'"
+            ),
+            ["crew-a"]
+        );
+    }
+
+    /// 号码 0 已被别的机组占着：总机组不抢（留空），别人的 0 号不动；新建总机组的那条路也一样。
+    #[test]
+    fn the_management_crew_does_not_take_number_zero_from_another_crew() {
+        let c = v3_db();
+        c.execute("UPDATE crews SET number=0 WHERE id='crew-x'", [])
+            .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<i64>>(&c, "SELECT number FROM crews WHERE id='chief'"),
+            None
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT number FROM crews WHERE id='crew-x'"),
+            0
+        );
+
+        let c = v3_db();
+        c.execute_batch(
+            "DELETE FROM crews WHERE id='chief'; UPDATE crews SET number=0 WHERE id='crew-x';",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<i64>>(&c, "SELECT number FROM crews WHERE id='pendingcrew-chief'"),
+            None
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT number FROM crews WHERE id='crew-x'"),
+            0
+        );
+    }
+
+    /// 总机组不能被隐藏（N1 裁定 6）：旧数据里藏着的，迁移后露出来。
+    #[test]
+    fn a_hidden_management_crew_is_unhidden_by_the_migration() {
+        let c = v3_db();
+        c.execute(
+            "UPDATE crews SET hidden_at='2026-09-05T00:00:00.000Z' WHERE id IN ('chief','crew-x')",
+            [],
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<String>>(&c, "SELECT hidden_at FROM crews WHERE id='chief'"),
+            None
+        );
+        assert_eq!(
+            one::<Option<String>>(&c, "SELECT hidden_at FROM crews WHERE id='crew-x'").as_deref(),
+            Some("2026-09-05T00:00:00.000Z"),
+            "别的机组照旧"
+        );
+    }
+
+    #[test]
+    fn backfill_v4_is_idempotent() {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        let snap = |c: &Connection| -> (String, String, i64, String, String) {
+            (
+                one(
+                    c,
+                    "SELECT group_concat(crew_id||'>'||parent_id||'#'||position, ',') FROM (SELECT * FROM crew_parents ORDER BY crew_id, parent_id)",
+                ),
+                one(
+                    c,
+                    "SELECT group_concat(id, ',') FROM crews WHERE management=1",
+                ),
+                one(c, "SELECT COUNT(*) FROM channels"),
+                one(
+                    c,
+                    "SELECT group_concat(id||':'||COALESCE(number,'')||':'||COALESCE(position,''), ',') FROM (SELECT * FROM crews ORDER BY id)",
+                ),
+                one(
+                    c,
+                    "SELECT group_concat(id||':'||state||':'||COALESCE(settled_at,''), ',') FROM (SELECT * FROM wakes ORDER BY id)",
+                ),
+            )
+        };
+        let a = snap(&c);
+        backfill_v4(&c).unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(snap(&c), a);
     }
 
     #[test]
@@ -1087,7 +1949,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         let v = |s: String| serde_json::from_str::<serde_json::Value>(&s).unwrap();
         assert_eq!(
             v(mentions("c1")),
-            serde_json::json!([{"kind":"human"},{"kind":"captain","targetId":"captain-new"},{"kind":"broadcast"}]),
+            serde_json::json!([{"kind":"human"},{"kind":"captain","targetId":"captain-new"}]),
             "落成机长指针，顺序不变"
         );
         assert_eq!(
@@ -1096,7 +1958,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         );
         assert_eq!(
             v(mentions("c5")),
-            serde_json::json!([{"kind":"broadcast"},{"kind":"captain","targetId":"captain-new"},{"kind":"captain","targetId":"captain-old"},{"kind":"human"}]),
+            serde_json::json!([{"kind":"captain","targetId":"captain-new"},{"kind":"captain","targetId":"captain-old"},{"kind":"human"}]),
             "同一条里只补没 target 的，已有的不动，顺序不变"
         );
         assert_eq!(

@@ -319,7 +319,12 @@ impl ProcessRegistry {
             .open(&tmp)?;
         io::Write::write_all(&mut f, &bytes)?;
         f.sync_all()?;
-        std::fs::rename(&tmp, &self.path)
+        std::fs::rename(&tmp, &self.path)?;
+        // 改名本身也要落盘：只 fsync 文件不 fsync 目录，断电后登记表可能回到旧版本（N4 / S31）。
+        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::File::open(dir)?.sync_all()?;
+        }
+        Ok(())
     }
 }
 

@@ -58,7 +58,7 @@ fn ev<T: Serialize>(name: &str, data: &T) -> crewd_collab::Result<Event> {
     })
 }
 
-/// 删掉了的东西读不到 = 不发（删除另有 `crew.removed` / `channel.removed`）。
+/// 删掉了的东西读不到 = 不发（永久删除另有 `crew.purged` / `channel.purged`）。
 fn gone<T>(r: crewd_collab::Result<T>) -> crewd_collab::Result<Option<T>> {
     match r {
         Ok(v) => Ok(Some(v)),
@@ -68,7 +68,7 @@ fn gone<T>(r: crewd_collab::Result<T>) -> crewd_collab::Result<Option<T>> {
 }
 
 fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Event>> {
-    use crewd_collab::{approvals, asks, channels, crews, cursors, messages, restart};
+    use crewd_collab::{asks, channels, crews, cursors, messages, restart};
     Ok(match c {
         Change::MessageAppended { message_id, .. } => gone(messages::get(conn, message_id))?
             .map(|m| ev(events::MESSAGE_APPENDED, &m))
@@ -91,24 +91,19 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             .into_iter()
             .collect(),
         Change::CrewRemoved { crew_id } => vec![ev(
-            events::CREW_REMOVED,
+            events::CREW_PURGED,
             &CrewRef {
                 crew_id: crew_id.clone(),
             },
         )?],
         Change::ChannelRemoved { channel_id } => vec![ev(
-            events::CHANNEL_REMOVED,
+            events::CHANNEL_PURGED,
             &ChannelRef {
                 channel_id: channel_id.clone(),
             },
         )?],
         Change::AskChanged { crew_id, ask } => gone(asks::get(conn, crew_id, ask))?
             .map(|a| ev(events::ASK_CHANGED, &a))
-            .transpose()?
-            .into_iter()
-            .collect(),
-        Change::ApprovalChanged { id } => gone(approvals::get(conn, id))?
-            .map(|a| ev(events::APPROVAL_CHANGED, &a))
             .transpose()?
             .into_iter()
             .collect(),

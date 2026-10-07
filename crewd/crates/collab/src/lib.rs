@@ -1,8 +1,7 @@
-//! crewd 的协作层（spec §22.2）：群、成员、发消息、游标、机组 DAG、人类待确认、审批、唤醒队列。
+//! crewd 的协作层（spec §22.2）：群、成员、发消息、游标、机组 DAG、人类待确认、唤醒队列。
 //! 同步、不碰 tokio、不读时钟：每个写操作是 `fn(&mut Tx, ..) -> Result<T>`，时间是 `Tx` 里调用方给的
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
-pub mod approvals;
 pub mod asks;
 pub mod channels;
 pub mod crews;
@@ -11,6 +10,7 @@ pub mod directory;
 pub mod listens;
 pub mod messages;
 pub mod prompts;
+pub mod refusal;
 pub mod render;
 pub mod restart;
 pub mod sessions;
@@ -22,6 +22,7 @@ pub mod turn_trace;
 pub mod wakes;
 pub mod worldview;
 
+use crate::refusal::Refusal;
 use crewd_proto::RestartAnswer;
 use crewd_store::{Store, StoreError};
 use rusqlite::Connection;
@@ -42,10 +43,11 @@ pub enum Change {
     CrewChanged {
         crew_id: String,
     },
+    /// 机组被永久删除（purge；客户端事件 `crew.purged`）。移除 = 归档，发的是 `CrewChanged`。
     CrewRemoved {
         crew_id: String,
     },
-    /// 群随机组删除被级联删掉了（客户端事件 `channel.removed`；删了的群读不到，`ChannelChanged` 发不出）。
+    /// 群随机组的永久删除被级联删掉了（客户端事件 `channel.purged`；删了的群读不到，`ChannelChanged` 发不出）。
     ChannelRemoved {
         channel_id: String,
     },
@@ -65,9 +67,6 @@ pub enum Change {
         ask: String,
         asked_by: Option<String>,
         cleared: Vec<(String, Option<String>)>,
-    },
-    ApprovalChanged {
-        id: String,
     },
     WakeEnqueued {
         wake_id: i64,
@@ -101,22 +100,36 @@ pub enum ProgressKind {
 #[derive(Debug, thiserror::Error)]
 pub enum CollabError {
     #[error("{0}")]
-    NotFound(String),
+    NotFound(Refusal),
     #[error("{0}")]
-    Invalid(String),
+    Invalid(Refusal),
     #[error("{0}")]
-    Forbidden(String),
+    Forbidden(Refusal),
     #[error("{0}")]
-    Conflict(String),
+    Conflict(Refusal),
     #[error("{0}")]
     Work(crewd_work::Rejected),
     #[error(transparent)]
     Store(#[from] StoreError),
 }
 
+impl CollabError {
+    /// 规则拒绝（四个变体）带的码 + 参数；客户端靠 `code.as_str()` 本地化。`Work` / `Store` 没有码。
+    pub fn refusal(&self) -> Option<&Refusal> {
+        match self {
+            CollabError::NotFound(r)
+            | CollabError::Invalid(r)
+            | CollabError::Forbidden(r)
+            | CollabError::Conflict(r) => Some(r),
+            CollabError::Work(_) | CollabError::Store(_) => None,
+        }
+    }
+}
+
 impl From<rusqlite::Error> for CollabError {
     fn from(e: rusqlite::Error) -> Self {
-        CollabError::Store(StoreError::Sql(e))
+        // 经 StoreError 的 From 归类：磁盘满 / I/O / 损坏 / 只读 / 打不开不落成普通 SQL 错（S26）。
+        CollabError::Store(StoreError::from(e))
     }
 }
 
@@ -221,6 +234,20 @@ mod tests {
     use super::*;
     use crate::testkit::{NOW, count, store};
 
+    /// S26：collab 里 `?` 过来的 rusqlite 错误也要按存储故障归类，不能一律落成 `Sql`。
+    #[test]
+    fn sqlite_storage_failures_keep_their_class_through_collab() {
+        let full = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        );
+        let e = CollabError::from(full);
+        assert!(
+            matches!(&e, CollabError::Store(s) if s.storage_kind() == Some(crewd_store::StorageKind::DiskFull)),
+            "{e:?}"
+        );
+    }
+
     #[test]
     fn run_commits_and_hands_back_changes_once() {
         let mut s = store();
@@ -256,7 +283,9 @@ mod tests {
             tx.note(Change::CrewChanged {
                 crew_id: "crew-a".into(),
             });
-            Err(CollabError::Invalid("中途失败".into()))
+            Err(CollabError::Invalid(Refusal::new(
+                crate::refusal::Code::MessageEmpty,
+            )))
         })
         .map(|(v, _)| v);
         assert!(matches!(r, Err(CollabError::Invalid(_))));

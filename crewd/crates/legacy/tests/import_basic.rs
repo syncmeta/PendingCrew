@@ -310,3 +310,112 @@ fn legacy_captain_mentions_without_target_are_resolved_by_the_import() {
         Some("captain-1111aaaa")
     );
 }
+
+#[test]
+fn imported_top_level_crews_stay_top_level_and_the_builtin_chief_is_the_management_crew() {
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    import(&fixture(), &mut store, dest.path()).unwrap();
+    let list = crewd_store::crews::list(store.conn()).unwrap();
+    let a = list.iter().find(|c| c.id == "local-aaaa").unwrap();
+    assert!(a.parent_ids.is_empty(), "不挂到总机组下");
+    let chief = list.iter().find(|c| c.id == "pendingcrew-chief").unwrap();
+    assert!(chief.management && chief.parent_ids.is_empty() && chief.child_ids.is_empty());
+    assert_eq!(chief.number, Some(0));
+    assert_eq!(chief.position, 0, "与迁移来的、新建的总机组一样");
+}
+
+/// 旧数据里挂在内建机组下的子机组：导入与 v3 库迁移走同一个 `backfill_v4`，结果一样——只挂在它下面的成为顶层、
+/// 排在顶层末尾；还有别的父的只少掉那一条；内建机组自己挂在别人下面的那条也去掉（store 的
+/// `the_chiefs_former_children_become_top_level_last_in_their_old_order` 是迁移那一半）。
+#[test]
+fn imported_children_of_the_builtin_chief_become_top_level_like_a_migrated_v3_database() {
+    let t = fixture_copy();
+    let path = t.path().join("local-crews.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for c in v["crews"].as_array_mut().unwrap() {
+        match c["id"].as_str() {
+            Some("local-aaaa") => c["parentCrewIds"] = serde_json::json!(["pendingcrew-chief"]),
+            Some("local-bbbb") => {
+                c["parentCrewIds"] = serde_json::json!(["local-aaaa", "pendingcrew-chief"])
+            }
+            Some("pendingcrew-chief") => c["parentCrewIds"] = serde_json::json!(["local-bbbb"]),
+            _ => {}
+        }
+    }
+    std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    import(t.path(), &mut store, dest.path()).unwrap();
+    let list = crewd_store::crews::list(store.conn()).unwrap();
+    let get = |id: &str| list.iter().find(|c| c.id == id).unwrap();
+    assert!(
+        get("local-aaaa").parent_ids.is_empty(),
+        "只挂在总机组下 → 顶层"
+    );
+    assert_eq!(get("local-bbbb").parent_ids, ["local-aaaa"]);
+    let chief = get("pendingcrew-chief");
+    assert!(chief.parent_ids.is_empty() && chief.child_ids.is_empty());
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM crew_parents WHERE crew_id='pendingcrew-chief' OR parent_id='pendingcrew-chief'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+/// 旧数据里多于一个 isBuiltin：留 createdAt 最早的为总机组，其余降为普通机组并记一条警告——
+/// 否则 v4 的部分唯一索引让整个导入失败。
+#[test]
+fn several_builtin_crews_in_legacy_data_keep_only_the_earliest_as_the_management_crew() {
+    let t = fixture_copy();
+    let path = t.path().join("local-crews.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for c in v["crews"].as_array_mut().unwrap() {
+        if c["id"] == "local-bbbb" {
+            c["isBuiltin"] = serde_json::Value::Bool(true);
+        }
+    }
+    std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    let r = import(t.path(), &mut store, dest.path()).unwrap();
+    let list = crewd_store::crews::list(store.conn()).unwrap();
+    let management: Vec<_> = list
+        .iter()
+        .filter(|c| c.management)
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(management, ["pendingcrew-chief"]);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("local-bbbb")),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
+fn broadcast_mentions_are_dropped_on_import_and_the_message_is_kept() {
+    let src = fixture_copy();
+    let board = src.path().join("whiteboards/local-aaaa.json");
+    let text = std::fs::read_to_string(&board).unwrap().replace(
+        r#""mentions":[{"kind":"session","target_id":"worker-2222bbbb"}]"#,
+        r#""mentions":[{"kind":"broadcast"},{"kind":"session","target_id":"worker-2222bbbb"}]"#,
+    );
+    std::fs::write(&board, text).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    let r = import(src.path(), &mut store, dest.path()).unwrap();
+    assert_eq!(r.counts["messages"], 3, "带 broadcast 的消息照常导入");
+    assert_eq!(r.counts["broadcastMentionsDropped"], 1);
+    let m = crewd_store::messages::get(store.conn(), "11111111-0000-4000-8000-000000000001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(m.mentions.len(), 1);
+    assert_eq!(m.mentions[0].kind, crewd_proto::MentionKind::Session);
+}

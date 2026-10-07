@@ -74,7 +74,7 @@ fn insert_one(
     tx: &Connection,
     cx: &mut Ctx,
     crew_id: &str,
-    m: LMessage,
+    mut m: LMessage,
     file: &Path,
     index: Option<usize>,
 ) -> crewd_store::Result<bool> {
@@ -92,6 +92,13 @@ fn insert_one(
         cx.report.warn(why);
         return Ok(false);
     };
+    // broadcast 已不是 mention（@ 只决定叫醒谁，N1 裁定 8）：去掉、计数，消息照常导入。
+    let before = m.mentions.len();
+    m.mentions.retain(|x| x.kind != "broadcast");
+    let dropped = before - m.mentions.len();
+    if dropped > 0 {
+        cx.report.add("broadcastMentionsDropped", dropped);
+    }
     if let Some(bad) = m
         .mentions
         .iter()

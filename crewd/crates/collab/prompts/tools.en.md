@@ -7,7 +7,7 @@ Placeholders {name} are filled by code (M3a's prompts::fill). zh and en must hav
 ## post
 Post key moments to a channel: started, done, blocked, handing off, important findings. Keep terminal detail (what you read or ran) out of channels.
 Without channel: if reply_to is given the post goes to that message's channel, otherwise to your crew's lobby.
-Mentions: @session / @captain narrow visibility — only the named agents see it in their injected context and get woken; add @broadcast to make it "all channel members see it, only the named wake"; @human does not narrow, it only flags the message for the human. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in the root crew's human channel or use ask.
+Mentions only decide who is woken: @session / @captain wake the named agents, @human flags the message for the human; a mention never narrows visibility — every channel member still sees the message. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in your home (top-level crew) human channel or use ask.
 A message body is at most 256 KiB.
 
 ## post.channel
@@ -20,10 +20,10 @@ Use for a single message. Mutually exclusive with messages.
 Several messages at once (at most 6), one bubble each with its own category. If any item is invalid nothing is posted and the error names the item.
 
 ## post.mentions
-Directed mentions: {kind:"session", target_id:"<session id>"} / {kind:"captain"} / {kind:"human"} / {kind:"broadcast"}. Omit for everyone in the channel. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
+Who to wake: {kind:"session", target_id:"<session id>"} / {kind:"captain"} / {kind:"human"}. Omit to name no one; everyone in the channel still sees it. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
 
 ## post.reply_to
-The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically as [broadcast, sender]: all channel members still see it, the sender is woken; replying to your own message adds no mention; replying to a system message adds broadcast only.
+The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically (while they are still in the channel): all channel members still see it, the sender is woken; replying to your own message or to a system message adds no mention.
 
 ## post.category
 What this is: progress / done / blocked / question / finding / handoff / ack / note.
@@ -63,7 +63,7 @@ Maximum results, 1–200, default 50.
 List channels you are in (lobby, joined channels, channels you listen to) and the other channels of your crew: id, name, purpose, owner, members, whether the human is watching.
 
 ## human_watching
-Where the human is now: channels marked "watching", plus the root crew's human channel. Post there when you need the human to see or decide; @human elsewhere may be seen much later.
+Where the human is now: channels marked "watching", plus your home (top-level crew) human channel. Post there when you need the human to see or decide; @human elsewhere may be seen much later.
 
 ## channel_create
 Create a channel (topic channel or two-person dm). Use it whenever you need to collaborate with someone on something or discuss a topic separately — do not create a child crew for that. You become the owner and a member. Give it a name and a purpose, e.g. "release", "scroll bug". A name equal to the human labels (人类 / Human) or to crewd's own system labels is rejected.
@@ -153,7 +153,7 @@ Target number: 7 (crew) or 7-3 (session).
 What you want to say: who you are and what you need.
 
 ## ask
-Ask the human for a decision. Non-blocking: the question becomes a pending item (an H number), is posted to the root crew's human channel mentioning the human, and you get a receipt right away — go do something else or end your turn. When the human answers you are woken and resume_note is read back to you verbatim.
+Ask the human for a decision. Non-blocking: the question becomes a pending item (an H number), is posted to your home (top-level crew; the management crew is its own home) human channel mentioning the human, and you get a receipt right away — go do something else or end your turn. When the human answers you are woken and resume_note is read back to you verbatim.
 
 ## ask.question
 The decision you need. State the options and your preference — "A / B, I lean A because …".
@@ -339,7 +339,7 @@ Child crew name, id or number.
 What to pass on.
 
 ## adopt_crew
-(Captain) Adopt a crew that has no parent/child relation with yours, making it your child. No cycles; the built-in chief crew cannot be adopted.
+(Captain) Adopt a crew that has no parent/child relation with yours, making it your child. No cycles; the management crew is outside the crew tree and cannot be adopted.
 
 ## adopt_crew.crew
 Target crew name, id or number.
@@ -383,8 +383,8 @@ There is no tool named {name}.
 ## r.captain_only
 {name} is for the captain only, and you are not the captain now.
 
-## r.not_on_builtin
-{name} is not available in the chief crew.
+## r.not_on_management
+{name} is not available in the management crew.
 
 ## r.bad_args
 Invalid arguments: {detail}

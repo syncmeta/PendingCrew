@@ -7,9 +7,9 @@ pub fn lobby_id(crew_id: &str) -> String {
     format!("{crew_id}/lobby")
 }
 
-/// 根机组人类群的 id（确定性；懒建）。
-pub fn human_id(root_crew_id: &str) -> String {
-    format!("{root_crew_id}/human")
+/// home（总机组 / 顶层机组）人类群的 id（确定性；懒建）。
+pub fn human_id(home_crew_id: &str) -> String {
+    format!("{home_crew_id}/human")
 }
 
 /// 确保机组有大厅（已有就不动）。返回大厅 id。

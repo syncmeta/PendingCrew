@@ -17,7 +17,9 @@ pub struct Crew {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number: Option<i64>,
-    pub builtin: bool,
+    /// 总机组（管理机组）：至多一个；不在机组树里（没有父、没有子），对全部机组有权限（PM 2026-10-07）。
+    /// `crew.list` 把它排在最前。
+    pub management: bool,
     pub parent_ids: Vec<String>,
     /// 这个机组的直系子机组，按侧栏顺序（每个父下各自一套次序，控制者裁定 C1；`crew.reorder {parentId}` 改它）。
     #[serde(default)]
@@ -43,10 +45,15 @@ pub struct Crew {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// 此刻的机长（裁定 8）。
     pub captain_session_id: Option<String>,
-    /// 只在**顶层**（根机组之间）有意义的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 不带 parentId 时改它，
-    /// 新根排在末尾）。子机组在某个父下的次序不在这里：看父的 `childIds`（多父机组在每个父下各有自己的次序）。
+    /// 只表示顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。
+    /// `parentIds` 非空时这个值没有意义（可能是变成子机组之前留下的旧值），客户端不要用它排序：
+    /// 子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。总机组恒为 0，单独列出。
     #[serde(default)]
     pub position: i64,
+    /// 移除时刻（`crew.remove`：隐藏并冻结、可恢复，N1 裁定 13 / PM 2026-10-07）；没移除时不出现。
+    /// 库里的列仍叫 `crews.archived_at`（内部叫归档）；线上一律叫 removed，archived 只用于群。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -96,7 +103,8 @@ pub struct Session {
 }
 
 /// 模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `MentionParam`。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+// 不实现 `Default`：@ 谁必须由构造方写明（终审 9；守卫见 `MentionHasNoDefault`）。普通注释，不进契约。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Mention {
     pub kind: MentionKind,
@@ -199,14 +207,17 @@ pub struct Todo {
 /// 封闭词表：线上是固定字符串，`parse` 认不出就是 None（不猜）。
 macro_rules! closed_vocab {
     ($name:ident { $($variant:ident = $s:literal),+ $(,)? } default $def:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-        pub enum $name {
-            $(#[serde(rename = $s)] $variant,)+
-        }
+        closed_vocab!($name { $($variant = $s),+ });
         impl Default for $name {
             fn default() -> $name {
                 $name::$def
             }
+        }
+    };
+    ($name:ident { $($variant:ident = $s:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+        pub enum $name {
+            $(#[serde(rename = $s)] $variant,)+
         }
         impl $name {
             pub const ALL: &'static [$name] = &[$($name::$variant),+];
@@ -226,13 +237,28 @@ macro_rules! closed_vocab {
 }
 
 closed_vocab!(SenderKind { Human = "human", Session = "session", Captain = "captain", System = "system" } default Human);
-closed_vocab!(MentionKind { Session = "session", Captain = "captain", Human = "human", Broadcast = "broadcast" } default Broadcast);
+// 没有缺省值（终审 9）：`Mention::default()` 曾静默等于 @人类——@ 谁必须写明。
+closed_vocab!(MentionKind { Session = "session", Captain = "captain", Human = "human" });
+
+/// 守卫（终审 9，只在 doctest 里存在）：`Mention` / `MentionKind` 没有 `Default`，下面两段编不过才对。
+///
+/// ```compile_fail
+/// let _ = crewd_proto::Mention::default();
+/// ```
+/// ```compile_fail
+/// let _ = crewd_proto::MentionKind::default();
+/// ```
+/// 对照（编得过）：同一个宏生成、带缺省值的词表。
+/// ```
+/// let _ = crewd_proto::SenderKind::default();
+/// ```
+#[cfg(doctest)]
+pub struct MentionHasNoDefault;
 closed_vocab!(Role { Captain = "captain", Worker = "worker", Admin = "admin" } default Worker);
 closed_vocab!(Desired { Running = "running", Stopped = "stopped" } default Stopped);
 closed_vocab!(ChannelKind { Lobby = "lobby", Human = "human", Topic = "topic", Dm = "dm" } default Topic);
 closed_vocab!(AskStateView { Open = "open", Answered = "answered", Defaulted = "defaulted", Withdrawn = "withdrawn" } default Open);
 closed_vocab!(WaitTierView { Fresh = "fresh", Pinned = "pinned", StillWanted = "still_wanted" } default Fresh);
-closed_vocab!(Decision { Allow = "allow", Deny = "deny" } default Deny);
 closed_vocab!(DirectoryKind { Crew = "crew", Session = "session" } default Crew);
 closed_vocab!(HealthKindView {
     AuthRequired = "auth_required", UsageLimit = "usage_limit", RateLimited = "rate_limited",
@@ -319,8 +345,8 @@ pub struct Badge {
 #[serde(rename_all = "camelCase")]
 pub struct CrewDetail {
     pub crew: Crew,
-    /// 归属的根机组（§13 Q1：多父归最早的根）。
-    pub root_id: String,
+    /// 这个机组的人类群在 `<homeId>/human`；总机组 / 顶层机组 = 自己（多父归最早建的顶层祖先，§13 Q1 同口径）。
+    pub home_id: String,
     pub children: Vec<String>,
     pub channels: Vec<ChannelSummary>,
     pub sessions: Vec<Session>,
@@ -379,29 +405,6 @@ pub struct HumanWait {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Approval {
-    pub id: String,
-    pub session_id: String,
-    pub crew_id: String,
-    pub tool_name: String,
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    pub requested_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision: Option<Decision>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decided_at: Option<String>,
-    /// 只有 "human"（审批不阻塞、不超时，控制者裁定 C2）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decided_by: Option<String>,
-    /// 同意后那张一次性放行票被用掉的时刻（None + Allow = 票还在）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consumed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct DirectoryRow {
     /// "7" 或 "7-3"
     pub number: String,
@@ -410,7 +413,7 @@ pub struct DirectoryRow {
     pub crew_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// 根在最左，" / " 分隔；根机组本身是空串。
+    /// 上级的路径：顶层机组在最左，" / " 分隔；总机组不在机组树里（总机组与顶层机组本身是空串）。
     pub org_path: String,
 }
 
@@ -458,19 +461,19 @@ pub struct RestartPrompt {
     pub answered_at: Option<String>,
 }
 
-/// 空结果（`crew.delete` 等）。
+/// 空结果（`crew.purge` 等）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
 
-/// `crew.removed` 的数据。
+/// `crew.purged` 的数据。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CrewRef {
     pub crew_id: String,
 }
 
-/// `channel.removed` 的数据：群随机组删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。
+/// `channel.purged` 的数据：群随机组的永久删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelRef {

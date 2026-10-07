@@ -1,4 +1,5 @@
 //! 群（spec §17、§22.2「群规则」、§22.7 Q2 群主）。成员判定、群主、人类群懒建都只在这里写一次。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Locale, Result, Sender, Tx, crews, cursors, sessions};
 use crewd_proto::{Channel, ChannelKind, ChannelSummary, MemberRef};
 use crewd_store::channels::{human_id, lobby_id};
@@ -58,6 +59,11 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     })
 }
 
+/// 取一个群。大厅 / 人类群的 `owner` 不是存的，而是**此刻机组的机长**（跟着机长走）。
+///
+/// 不变式「owner ∈ members」只对**活着的**群成立：人类群的成员 = home 机组的机长 + 发过言的 session；
+/// 机组被收编后不再是 home，它已归档的人类群留作历史，`owner` 仍显示该机组此刻的机长（给人看的名字），但他不再是成员
+/// （[`is_member`] 为假）、也不能往里发言（`messages::post` 拒绝）。别拿 owner 当成员 / 权限的依据。
 pub fn get(conn: &Connection, id: &str) -> Result<Channel> {
     let r = conn
         .query_row(
@@ -66,7 +72,9 @@ pub fn get(conn: &Connection, id: &str) -> Result<Channel> {
             row,
         )
         .optional()?
-        .ok_or_else(|| CollabError::NotFound(format!("没有群 {id}")))?;
+        .ok_or_else(|| {
+            CollabError::NotFound(Refusal::new(Code::ChannelNotFound).arg("channel", id))
+        })?;
     let mut ch = r.ch;
     ch.owner = match ch.kind {
         ChannelKind::Lobby | ChannelKind::Human => {
@@ -96,8 +104,49 @@ fn explicit(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
         .collect())
 }
 
+/// 人类群的显式成员（同 `explicit` 的顺序），只留 home 仍是这个群的 session：人类群的权利从 `home_of` 推出，
+/// 不认陈旧的行（机组被挪到别的顶层机组下之后，它的 session 在旧 home 人类群里留下的行不再给它发言 / 注入 / 读的权利）。
+/// 一次查询带出成员所在的机组，home 按不同的机组各算一次。session 行已不存在的成员行照旧保留（与 topic / dm 的显式行同一口径）。
+fn homed_here(conn: &Connection, id: &str, home: &str) -> Result<Vec<MemberRef>> {
+    let mut st = conn.prepare(
+        "SELECT cm.member_kind, cm.member_id, s.crew_id FROM channel_members cm
+           LEFT JOIN sessions s ON cm.member_kind='session' AND s.id=cm.member_id
+          WHERE cm.channel_id=?1 AND cm.left_at IS NULL ORDER BY cm.joined_at, cm.member_id",
+    )?;
+    let raw = st
+        .query_map([id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut homes: std::collections::BTreeMap<String, bool> = Default::default();
+    let mut out = Vec::with_capacity(raw.len());
+    for (k, i, crew) in raw {
+        if let Some(crew) = crew {
+            let here = match homes.get(&crew) {
+                Some(h) => *h,
+                None => {
+                    let h = crews::home_of(conn, &crew)? == home;
+                    homes.insert(crew, h);
+                    h
+                }
+            };
+            if !here {
+                continue;
+            }
+        }
+        out.extend(MemberRef::from_row(&k, &i));
+    }
+    Ok(out)
+}
+
 /// **有效**成员（冻结语义，C6）：大厅 = 人 + 本机组全部 session（隐式，不写 channel_members）；
-/// 人类群 = 人 + 根机组此刻的机长（隐式）+ 显式行；topic / dm = 显式行。M3b 的注入面、M3c 的唤醒规划都只认它。
+/// 人类群 = 人 + home（总机组 / 顶层机组）此刻的机长（隐式；机组已不是 home——被收编后归档的旧人类群——就没有）
+/// 加上 home 是它的 session 的显式行（`homed_here`）；
+/// topic / dm = 显式行。M3b 的注入面、M3c 的唤醒规划都只认它。
 pub fn members(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
     let ch = get(conn, id)?;
     let mut out = match ch.kind {
@@ -112,8 +161,10 @@ pub fn members(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
         }
         ChannelKind::Human => {
             let mut v = vec![MemberRef::Human];
-            v.extend(crews::captain_of(conn, &ch.crew_id)?.map(MemberRef::session));
-            v.extend(explicit(conn, id)?);
+            if crews::is_home(conn, &ch.crew_id)? {
+                v.extend(crews::captain_of(conn, &ch.crew_id)?.map(MemberRef::session));
+            }
+            v.extend(homed_here(conn, id, &ch.crew_id)?);
             v
         }
         ChannelKind::Topic | ChannelKind::Dm => explicit(conn, id)?,
@@ -163,9 +214,131 @@ pub fn is_watched(conn: &Connection, id: &str) -> Result<bool> {
     )? > 0)
 }
 
+/// 读规则里「谁在读」的那一半：每个 session 只算一次（`home_of` 不按群重算，progress NOTE Task 6）。
+struct Reader {
+    crew: String,
+    home: String,
+    /// 总机组的 session（管理层）。
+    manages_org: bool,
+}
+
+impl Reader {
+    fn of(conn: &Connection, session: &str) -> Result<Self> {
+        let crew = sessions::crew_of(conn, session)?;
+        Ok(Self {
+            manages_org: crews::is_management(conn, &crew)?,
+            home: crews::home_of(conn, &crew)?,
+            crew,
+        })
+    }
+
+    fn can_read(&self, conn: &Connection, id: &str, crew: &str, kind: ChannelKind) -> Result<bool> {
+        // ⓪ 总机组 = 管理层，读全组织（controller N1-R3，PM 2026-10-07）。
+        if self.manages_org {
+            return Ok(true);
+        }
+        // ③ 自己 home 的人类群；② 自己机组的人类群（被收编后归档的旧人类群仍归自己机组）。人类群不看成员行：
+        // 它的有效成员也是从 home 推出的（`homed_here`），陈旧的行不给读权。
+        if kind == ChannelKind::Human {
+            return Ok(crew == self.home || crew == self.crew);
+        }
+        // ② 归属自己的机组（大厅的隐式成员 ① 也在这里）。
+        if crew == self.crew {
+            return Ok(true);
+        }
+        // ① 显式成员 + ② 群里有本机组的在群 session（自己也是本机组的人，所以 ① 包含在这一句里）。
+        let crewmate_inside: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM channel_members cm JOIN sessions s ON cm.member_kind='session' AND cm.member_id=s.id
+              WHERE cm.channel_id=?1 AND cm.left_at IS NULL AND s.crew_id=?2",
+            params![id, self.crew],
+            |r| r.get(0),
+        )?;
+        Ok(crewmate_inside > 0)
+    }
+}
+
+/// B15（人 2026-10-07：没有私有群，dm 别人也读得到）+ N1 裁定 10 + controller N1-R3。读 = 主动拉取
+/// （read_channel / search）；注入与唤醒只认 `members`。session S 读得到群 C ⇔
+/// ⓪ S 在总机组（管理层，读全组织）；或 ① S 是 C 的有效成员；或 ② C 挂在 S 的机组下（归属 S 的机组，或 C 里有
+/// S 机组的在群 session——`channel.list(S 的机组)` 列得出的群；**不含**子机组的群）；或 ③ C 是 S 的 home 的人类群。
+/// 人类群只看 ③ 与「归属自己的机组」（从 `home_of` 推出，不认陈旧的成员行）。收听不在这里，调用方并上 `listens::channels_of`。
+pub fn readable_by(conn: &Connection, channel: &str, session: &str) -> Result<bool> {
+    let ch = get(conn, channel)?;
+    Reader::of(conn, session)?.can_read(conn, &ch.id, &ch.crew_id, ch.kind)
+}
+
+/// 这个 session 有没有**算数**的收听这个群的行（不看截止时间：collab 不读时钟；入队时收听有效就投，见
+/// `render::build_batch`）。其余判据同 `listens::active_for_channel` / `channels_of`（终审 I4 / 终审 6）：
+/// 群已归档不算；收听者此刻读不到（设下之后失去读权）不算。
+pub(crate) fn has_listen_row(conn: &Connection, channel: &str, session: &str) -> Result<bool> {
+    let live_row = conn.query_row(
+        "SELECT COUNT(*) FROM listens l JOIN channels ch ON ch.id=l.channel_id
+          WHERE l.session_id=?1 AND l.channel_id=?2 AND ch.archived_at IS NULL",
+        params![session, channel],
+        |r| r.get::<_, i64>(0),
+    )? > 0;
+    Ok(live_row && readable_by(conn, channel, session)?)
+}
+
+/// `readable_by` 为真的全部群（同一条规则；含已归档；按 `created_at, id`；不含收听）。
+/// 候选是全表（M3 的量级可接受；量大再换成按机组 / 成员取候选）；读者的 home 只算一次。
+pub fn readable_channels(conn: &Connection, session: &str) -> Result<Vec<String>> {
+    let reader = Reader::of(conn, session)?;
+    let mut st = conn.prepare("SELECT id, crew_id, kind FROM channels ORDER BY created_at, id")?;
+    let rows = st
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::new();
+    for (id, crew, kind) in rows {
+        let kind = ChannelKind::parse(&kind).ok_or_else(|| {
+            CollabError::Store(crewd_store::StoreError::Invalid(format!(
+                "群 {id} 的 kind = {kind:?}"
+            )))
+        })?;
+        if reader.can_read(conn, &id, &crew, kind)? {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// dm 里 `of` 的对方（M3b `post.to` / M3c dm 唤醒的缺省对象）。不是 dm、`of` 不在这个 dm 里、或对方已不在
+/// （机组删除时交接后只剩一方）→ `None`。
+pub fn dm_peer(conn: &Connection, channel: &str, of: &MemberRef) -> Result<Option<MemberRef>> {
+    if get(conn, channel)?.kind != ChannelKind::Dm {
+        return Ok(None);
+    }
+    let ms = explicit(conn, channel)?;
+    if !ms.contains(of) {
+        return Ok(None);
+    }
+    Ok(ms.into_iter().find(|m| m != of))
+}
+
+/// 群已归档（channel.archived；listens / messages / 本文件共用同一句）：与当前状态冲突（解档就行），
+/// 一律 Conflict —— 往归档机组的大厅、人类群、topic 发言得到的是同一个答案。
+pub(crate) fn archived(channel: &str) -> CollabError {
+    CollabError::Conflict(Refusal::new(Code::ChannelArchived).arg("channel", channel))
+}
+
+/// `crew` 不是顶层机组、没有自己的人类群：指路到它的 home 的人类群（messages / 本文件共用同一句）。
+pub(crate) fn no_human_channel(conn: &Connection, crew: &str) -> Result<CollabError> {
+    Ok(CollabError::Invalid(
+        Refusal::new(Code::ChannelNoHumanChannel)
+            .arg("crew", crew)
+            .arg("home", crews::home_pointer(conn, crew)?),
+    ))
+}
+
 fn sender_ref(by: &Sender) -> Result<MemberRef> {
     by.member()
-        .ok_or_else(|| CollabError::Invalid("系统不能以成员身份做这件事".into()))
+        .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::ChannelSystemCannotAct)))
 }
 
 fn check_member_exists(conn: &Connection, m: &MemberRef) -> Result<()> {
@@ -178,7 +351,7 @@ fn check_member_exists(conn: &Connection, m: &MemberRef) -> Result<()> {
 /// 显式入群的唯一一处（R14）：写成员行；入群的 session 的游标钉到群的当前末尾（裁定 9）。
 /// 已经在群里的人再被加一次什么都不动（不跳过他没读的）；退群后重新入群 = 新的入群点，重新钉。
 /// 人类的游标**不动**：它的意思是「人看过了」，拉人进群不等于看过，钉了会抹掉没看的 @人 红标（spec §17）。
-/// `create` / `add_members` 用它；Task 8 的「session 在根机组人类群发言即显式入群」也必须用它。
+/// `create` / `add_members` 用它；Task 8 的「session 在 home 人类群发言即显式入群」也必须用它。
 pub(crate) fn join(tx: &mut Tx<'_>, id: &str, m: &MemberRef) -> Result<()> {
     let (k, mid) = m.to_row();
     let joined = tx.conn().execute(
@@ -201,7 +374,7 @@ fn dm_crew(conn: &Connection, all: &[MemberRef]) -> Result<String> {
     };
     match anchor {
         MemberRef::Session { id } => sessions::crew_of(conn, id),
-        MemberRef::Human => Err(CollabError::Invalid("私聊至多一方是人类".into())),
+        MemberRef::Human => Err(CollabError::Invalid(Refusal::new(Code::ChannelDmOneHuman))),
     }
 }
 
@@ -209,10 +382,11 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
     let creator = sender_ref(by)?;
     check_member_exists(tx.conn(), &creator)?;
     crews::get(tx.conn(), &n.crew_id)?;
+    crews::refuse_archived(tx.conn(), &n.crew_id)?;
     if !matches!(n.kind, ChannelKind::Topic | ChannelKind::Dm) {
-        return Err(CollabError::Invalid(
-            "只能建 topic 或 dm；大厅与人类群由 crewd 建".into(),
-        ));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelCreateKindFixed,
+        )));
     }
     let mut all = vec![creator.clone()];
     for m in n.members {
@@ -223,22 +397,21 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
     }
     let name = n.name.trim().to_string();
     if n.kind == ChannelKind::Topic && name.is_empty() {
-        return Err(CollabError::Invalid("群名不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::ChannelNameEmpty)));
     }
-    crate::prompts::refuse_sender_label("群名", &name)?;
+    crate::prompts::refuse_sender_label(Code::ChannelNameIsSenderLabel, &name)?;
     if n.kind == ChannelKind::Dm {
         let humans = all.iter().filter(|m| **m == MemberRef::Human).count();
         if all.len() != 2 || humans > 1 {
-            return Err(CollabError::Invalid(
-                "私聊恰好两个人（至多一方是人类）".into(),
-            ));
+            return Err(CollabError::Invalid(Refusal::new(Code::ChannelDmNeedsTwo)));
         }
         let owner_crew = dm_crew(tx.conn(), &all)?;
         if owner_crew != n.crew_id {
-            return Err(CollabError::Invalid(format!(
-                "私聊归属发起者所在的机组 {owner_crew}，不是 {}",
-                n.crew_id
-            )));
+            return Err(CollabError::Invalid(
+                Refusal::new(Code::ChannelDmWrongCrew)
+                    .arg("owner", owner_crew)
+                    .arg("crew", n.crew_id.clone()),
+            ));
         }
     }
     let id = format!("ch-{}", uuid::Uuid::new_v4().simple());
@@ -304,13 +477,13 @@ pub fn ensure_dm(
     Ok((ch, true))
 }
 
-/// 能管这个群的：人、归属机组的机长、群主。
+/// 能管这个群的：人、归属机组的机长（含总机组的机长，`crews::acts_as_captain_of`）、群主。
 fn may_manage(conn: &Connection, by: &Sender, ch: &Channel) -> Result<bool> {
     Ok(match by {
         Sender::Human => true,
         Sender::System => false,
         Sender::Session(s) => {
-            crews::captain_of(conn, &ch.crew_id)?.as_deref() == Some(s.as_str())
+            crews::acts_as_captain_of(conn, s, &ch.crew_id)?
                 || ch.owner == Some(MemberRef::session(s.clone()))
         }
     })
@@ -318,21 +491,23 @@ fn may_manage(conn: &Connection, by: &Sender, ch: &Channel) -> Result<bool> {
 
 pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
+    // 归档机组的群跟着只读（含解档：先解档机组）。
+    crews::refuse_archived(tx.conn(), &ch.crew_id)?;
     if !may_manage(tx.conn(), by, &ch)? {
-        return Err(CollabError::Forbidden(
-            "只有群主、机长或人能改这个群".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelManageForbidden,
+        )));
     }
     let fixed = matches!(ch.kind, ChannelKind::Lobby | ChannelKind::Human);
     if let Some(name) = p.name {
         if fixed {
-            return Err(CollabError::Invalid("大厅 / 人类群不能改名".into()));
+            return Err(CollabError::Invalid(Refusal::new(Code::ChannelFixedName)));
         }
         let name = name.trim().to_string();
         if name.is_empty() && ch.kind == ChannelKind::Topic {
-            return Err(CollabError::Invalid("群名不能为空".into()));
+            return Err(CollabError::Invalid(Refusal::new(Code::ChannelNameEmpty)));
         }
-        crate::prompts::refuse_sender_label("群名", &name)?;
+        crate::prompts::refuse_sender_label(Code::ChannelNameIsSenderLabel, &name)?;
         tx.conn()
             .execute("UPDATE channels SET name=?2 WHERE id=?1", params![id, name])?;
     }
@@ -345,7 +520,9 @@ pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result
     }
     if let Some(a) = p.archived {
         if fixed {
-            return Err(CollabError::Invalid("大厅 / 人类群不能手动归档".into()));
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::ChannelFixedNoArchive,
+            )));
         }
         let at = a.then(|| tx.now_ts());
         tx.conn().execute(
@@ -366,22 +543,49 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
     let ch = get(tx.conn(), id)?;
     match ch.kind {
         ChannelKind::Lobby => {
-            return Err(CollabError::Invalid(
-                "大厅成员 = 本机组全体，不能手动加".into(),
-            ));
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::ChannelLobbyCannotAdd,
+            )));
         }
-        ChannelKind::Dm => return Err(CollabError::Invalid("私聊不能加人".into())),
+        ChannelKind::Dm => {
+            return Err(CollabError::Invalid(Refusal::new(
+                Code::ChannelDmCannotGrow,
+            )));
+        }
         _ => {}
     }
     if ch.archived_at.is_some() {
-        return Err(CollabError::Invalid("群已归档".into()));
+        return Err(archived(id));
     }
     let me = sender_ref(by)?;
-    if me != MemberRef::Human && !is_member(tx.conn(), id, &me)? {
-        return Err(CollabError::Forbidden("只有群成员能拉人".into()));
+    // 人类群里归属机组的机长是隐式成员；总机组的机长权限上当作它（`crews::is_management_captain`），同样能拉人。
+    let as_captain = match (&me, ch.kind) {
+        (MemberRef::Session { id: s }, ChannelKind::Human) => {
+            crews::is_management_captain(tx.conn(), s)?
+        }
+        _ => false,
+    };
+    if me != MemberRef::Human && !as_captain && !is_member(tx.conn(), id, &me)? {
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelAddMembersMemberOnly,
+        )));
     }
     for m in ms {
         check_member_exists(tx.conn(), m)?;
+        // 人类群只收 home 是它的 session（与 `post` 的发言入群同一条；拉进来也不算数的行不写，免得静默失效）。
+        if ch.kind == ChannelKind::Human
+            && let MemberRef::Session { id: sid } = m
+        {
+            let home = crews::home_of(tx.conn(), &sessions::crew_of(tx.conn(), sid)?)?;
+            if home != ch.crew_id {
+                return Err(CollabError::Invalid(
+                    Refusal::new(Code::ChannelHumanChannelOtherHome)
+                        .arg("session", sid.clone())
+                        .arg("home", home)
+                        .arg("channel", id),
+                ));
+            }
+        }
         join(tx, id, m)?;
     }
     tx.note(Change::ChannelChanged {
@@ -392,22 +596,31 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
 
 pub fn remove_member(tx: &mut Tx<'_>, by: &Sender, id: &str, m: &MemberRef) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
+    // 归档的群（手动归档，或所在机组归档时一并归档）名单不动，答案与 `add_members` 同一个：channel.archived。
+    if ch.archived_at.is_some() {
+        return Err(archived(id));
+    }
+    crews::refuse_archived(tx.conn(), &ch.crew_id)?;
     if ch.kind == ChannelKind::Lobby {
-        return Err(CollabError::Invalid(
-            "大厅成员 = 本机组全体，不能移出".into(),
-        ));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelLobbyCannotRemove,
+        )));
     }
     if ch.kind == ChannelKind::Dm {
-        return Err(CollabError::Invalid("私聊不能退群；要结束就归档".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelDmCannotLeave,
+        )));
     }
     let me = sender_ref(by)?;
     if me != *m && !may_manage(tx.conn(), by, &ch)? {
-        return Err(CollabError::Forbidden(
-            "只能自己退群，或由群主 / 机长 / 人移出".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelLeaveForbidden,
+        )));
     }
     if ch.owner.as_ref() == Some(m) && ch.kind == ChannelKind::Topic {
-        return Err(CollabError::Invalid("群主要先把群主转让出去".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelOwnerMustTransfer,
+        )));
     }
     let (k, mid) = m.to_row();
     let n = tx.conn().execute(
@@ -415,9 +628,9 @@ pub fn remove_member(tx: &mut Tx<'_>, by: &Sender, id: &str, m: &MemberRef) -> R
         params![id, k, mid, tx.now_ts()],
     )?;
     if n == 0 {
-        return Err(CollabError::NotFound(
-            "不在这个群里（隐式成员不能移出）".into(),
-        ));
+        return Err(CollabError::NotFound(Refusal::new(
+            Code::ChannelNotExplicitMember,
+        )));
     }
     // 待接受转让的对象退群了：那条转让作废（否则它会一直挂着、还能被陈旧地接受）。
     if ch.pending_owner.as_ref() == Some(m) {
@@ -446,38 +659,38 @@ pub fn watch(tx: &mut Tx<'_>, id: &str, on: bool) -> Result<ChannelSummary> {
     summary(tx.conn(), id)
 }
 
-/// 这个根机组的人类群已经建过了吗（含已归档的）？「人类群存在与否」的唯一一处判定（R14）：
+/// 这个机组的人类群已经建过了吗（含已归档的）？「人类群存在与否」的唯一一处判定（R14）：
 /// `crews::{point_captain_at, release}` 都用它决定「只对已有的人类群动手，没有的仍然懒建」。
-pub(crate) fn human_channel_exists(conn: &Connection, root: &str) -> Result<bool> {
+pub(crate) fn human_channel_exists(conn: &Connection, home: &str) -> Result<bool> {
     Ok(conn.query_row(
         "SELECT COUNT(*) FROM channels WHERE id=?1",
-        [human_id(root)],
+        [human_id(home)],
         |r| r.get::<_, i64>(0),
     )? > 0)
 }
 
-/// 内建的总机组（chief）也是根机组，同样有人类群，不特殊处理（测试 `the_builtin_chief_crew_...`）。
-/// 根机组人类群（懒建，spec §22.2；R1：`messages::post` 往还没建的人类群发言时也调这一个函数，不另写第二份）。
-/// 已归档（根曾被收编、后又独立）→ 解档。新建或解档时，当前机长的游标钉到群末尾
+/// home（总机组 / 顶层机组）的人类群（懒建，spec §22.2；R1：`messages::post` 往还没建的人类群发言时也调
+/// 这一个函数，不另写第二份）。总机组的是管理用人类群，同一条规则（N1-R2）。
+/// 已归档（曾被收编到二级、后又回到顶层）→ 解档。新建或解档时，当前机长的游标钉到群末尾
 /// （与 `crews::point_captain_at` 一致：机长不会因为群刚出现 / 刚解档就凭空多出一屏历史未读，裁定 9）。
-pub fn ensure_human_channel(tx: &mut Tx<'_>, root: &str) -> Result<Channel> {
-    crews::get(tx.conn(), root)?;
-    if !crews::is_root(tx.conn(), root)? {
-        return Err(CollabError::Invalid(format!(
-            "{root} 不是根机组，没有人类群"
-        )));
+pub fn ensure_human_channel(tx: &mut Tx<'_>, home: &str) -> Result<Channel> {
+    crews::get(tx.conn(), home)?;
+    // 归档的机组只读：不建、不解档它的人类群（发言、列群都走这里，统一在这一处挡）。
+    crews::refuse_archived(tx.conn(), home)?;
+    if !crews::is_home(tx.conn(), home)? {
+        return Err(no_human_channel(tx.conn(), home)?);
     }
-    let id = human_id(root);
+    let id = human_id(home);
     let created = tx.conn().execute(
         "INSERT OR IGNORE INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES(?1,?2,'human','','system',?3)",
-        params![id, root, tx.now_ts()],
+        params![id, home, tx.now_ts()],
     )? > 0;
     let unarchived = tx.conn().execute(
         "UPDATE channels SET archived_at=NULL WHERE id=?1 AND archived_at IS NOT NULL",
         [&id],
     )? > 0;
     if created || unarchived {
-        if let Some(cap) = crews::captain_of(tx.conn(), root)? {
+        if let Some(cap) = crews::captain_of(tx.conn(), home)? {
             cursors::pin_to_end(tx, &cap, &id)?;
         }
         tx.note(Change::ChannelChanged {
@@ -487,7 +700,7 @@ pub fn ensure_human_channel(tx: &mut Tx<'_>, root: &str) -> Result<Channel> {
     get(tx.conn(), &id)
 }
 
-/// 根机组被收编：它的人类群归档（消息保留，spec §22.2）。
+/// home 机组被收编到二级：它的人类群归档（消息保留，spec §22.2）。
 pub(crate) fn archive_human_of(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
     let id = human_id(crew);
     let at = tx.now_ts();
@@ -501,11 +714,11 @@ pub(crate) fn archive_human_of(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
     Ok(())
 }
 
-/// 一个 session 「在」的群：自己机组的大厅 + （是根机组机长时）人类群 + 显式加入且未归档的群。
+/// 一个 session 「在」的群：自己机组的大厅 + （是 home 机长时）人类群 + 显式加入且未归档的群。
 pub fn channels_of_session(conn: &Connection, session: &str) -> Result<Vec<Channel>> {
     let s = sessions::get(conn, session)?;
     let mut out = vec![get(conn, &lobby_id(&s.crew_id))?];
-    if crews::is_root(conn, &s.crew_id)?
+    if crews::is_home(conn, &s.crew_id)?
         && crews::captain_of(conn, &s.crew_id)?.as_deref() == Some(session)
     {
         // 人类群是懒建的：还没有 = NotFound = 跳过；别的错误照实往上抛。
@@ -523,10 +736,22 @@ pub fn channels_of_session(conn: &Connection, session: &str) -> Result<Vec<Chann
     let ids: Vec<String> = st
         .query_map([session], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
+    let mut home: Option<String> = None;
     for id in ids {
-        if !out.iter().any(|c| c.id == id) {
-            out.push(get(conn, &id)?);
+        if out.iter().any(|c| c.id == id) {
+            continue;
         }
+        let ch = get(conn, &id)?;
+        // 人类群的显式行只在 home 对得上时算数（同 `members` 的 `homed_here`）；home 只算一次。
+        if ch.kind == ChannelKind::Human {
+            if home.is_none() {
+                home = Some(crews::home_of(conn, &s.crew_id)?);
+            }
+            if home.as_deref() != Some(ch.crew_id.as_str()) {
+                continue;
+            }
+        }
+        out.push(ch);
     }
     Ok(out)
 }
@@ -544,23 +769,28 @@ pub fn summary(conn: &Connection, id: &str) -> Result<ChannelSummary> {
 }
 
 /// `channel.list(crewId)`：归属该机组的群 ∪ 有成员 session 属于该机组的群（§17「同时显示在每个成员所在机组下」）。
-/// 根机组会顺手懒建人类群。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
+/// home（总机组 / 顶层机组）会顺手懒建人类群（归档的机组除外：只读，列出已有的群、不建不解档）。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
 /// 大厅 / 人类群 / 其他、建群时间。
 pub fn list_for_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<ChannelSummary>> {
     crews::get(tx.conn(), crew)?;
-    if crews::is_root(tx.conn(), crew)? {
+    if crews::is_home(tx.conn(), crew)? && !crews::is_archived(tx.conn(), crew)? {
         ensure_human_channel(tx, crew)?;
     }
+    // 成员行带进来的别人的人类群只在它是本机组 home 的人类群时才挂（陈旧的跨 home 行不算，与读规则一致）。
+    let home = crews::home_of(tx.conn(), crew)?;
     let mut st = tx.conn().prepare(
         "SELECT id FROM channels ch WHERE ch.crew_id=?1
-            OR ch.id IN (SELECT cm.channel_id FROM channel_members cm JOIN sessions s
-                           ON cm.member_kind='session' AND cm.member_id=s.id
-                          WHERE s.crew_id=?1 AND cm.left_at IS NULL)
+            OR (ch.id IN (SELECT cm.channel_id FROM channel_members cm JOIN sessions s
+                            ON cm.member_kind='session' AND cm.member_id=s.id
+                           WHERE s.crew_id=?1 AND cm.left_at IS NULL)
+                AND NOT (ch.kind='human' AND ch.crew_id<>?4))
           ORDER BY CASE WHEN ch.id=?2 THEN 0 WHEN ch.id=?3 THEN 1 ELSE 2 END,
                    CASE kind WHEN 'lobby' THEN 0 WHEN 'human' THEN 1 ELSE 2 END, created_at, id",
     )?;
     let ids: Vec<String> = st
-        .query_map(params![crew, lobby_id(crew), human_id(crew)], |r| r.get(0))?
+        .query_map(params![crew, lobby_id(crew), human_id(crew), home], |r| {
+            r.get(0)
+        })?
         .collect::<rusqlite::Result<_>>()?;
     ids.iter().map(|id| summary(tx.conn(), id)).collect()
 }
@@ -568,12 +798,12 @@ pub fn list_for_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<ChannelSummary>>
 /// 群主转让只发生在活着的 topic / dm 上：大厅 / 人类群的群主跟着机长走，归档的群不再动群主。
 fn require_owner_channel(ch: &Channel) -> Result<()> {
     if ch.archived_at.is_some() {
-        return Err(CollabError::Invalid("群已归档".into()));
+        return Err(archived(&ch.id));
     }
     if matches!(ch.kind, ChannelKind::Lobby | ChannelKind::Human) {
-        return Err(CollabError::Invalid(
-            "大厅 / 人类群的群主跟着机组机长走，换机长即可".into(),
-        ));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelOwnerFollowsCaptain,
+        )));
     }
     Ok(())
 }
@@ -607,7 +837,7 @@ fn set_owner(tx: &mut Tx<'_>, id: &str, to: &MemberRef) -> Result<Channel> {
     get(tx.conn(), id)
 }
 
-/// 机组 `crew` 要被删掉（`crews::delete` 在级联之前调，终审 I4）：它的 session 会随级联消失，
+/// 机组 `crew` 要被永久删掉（`crews::purge` 在级联之前调，终审 I4）：它的 session 会随级联消失，
 /// 先把它们从**别的机组**的群里摘干净——显式成员行记 `left_at`；它们当群主的 topic 交给群所属机组
 /// 此刻的机长（机长随之入群），没有机长（或是 dm）交给剩下的成员里最早入群的，一个不剩群主留空；
 /// 转给它们的待接受转让作废。每个受影响、活下来的群发 ChannelChanged。
@@ -705,13 +935,19 @@ pub fn request_owner_transfer(
     require_owner_channel(&ch)?;
     let me = sender_ref(by)?;
     if ch.owner.as_ref() != Some(&me) {
-        return Err(CollabError::Forbidden("只有群主能发起转让".into()));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelTransferOwnerOnly,
+        )));
     }
     if *to == me {
-        return Err(CollabError::Invalid("已经是群主".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelAlreadyOwner,
+        )));
     }
     if !is_member(tx.conn(), id, to)? {
-        return Err(CollabError::Invalid("新群主必须是群成员".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNewOwnerMustBeMember,
+        )));
     }
     let by_s = me.to_row().1.to_string();
     set_pending(tx, id, Some((to, &by_s)))?;
@@ -728,12 +964,18 @@ pub fn accept_owner_transfer(tx: &mut Tx<'_>, by: &Sender, id: &str) -> Result<C
     match &ch.pending_owner {
         Some(p) if *p == me => {
             if !is_member(tx.conn(), id, &me)? {
-                return Err(CollabError::Invalid("你已经不在这个群里".into()));
+                return Err(CollabError::Invalid(Refusal::new(
+                    Code::ChannelTransferTargetLeft,
+                )));
             }
             set_owner(tx, id, &me)
         }
-        Some(_) => Err(CollabError::Forbidden("转让对象不是你".into())),
-        None => Err(CollabError::Invalid("没有待接受的群主转让".into())),
+        Some(_) => Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelTransferNotForYou,
+        ))),
+        None => Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNoPendingTransfer,
+        ))),
     }
 }
 
@@ -742,14 +984,16 @@ pub fn withdraw_owner_transfer(tx: &mut Tx<'_>, by: &Sender, id: &str) -> Result
     let ch = get(tx.conn(), id)?;
     require_owner_channel(&ch)?;
     if ch.pending_owner.is_none() {
-        return Err(CollabError::Invalid("没有待接受的群主转让".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNoPendingTransfer,
+        )));
     }
     let me = by.member();
     let allowed = may_manage(tx.conn(), by, &ch)? || me.as_ref() == ch.pending_owner.as_ref();
     if !allowed {
-        return Err(CollabError::Forbidden(
-            "只有群主、被转让的人、机长或人能撤回".into(),
-        ));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelTransferWithdrawForbidden,
+        )));
     }
     set_pending(tx, id, None)?;
     tx.note(Change::ChannelChanged {
@@ -758,22 +1002,24 @@ pub fn withdraw_owner_transfer(tx: &mut Tx<'_>, by: &Sender, id: &str) -> Result
     get(tx.conn(), id)
 }
 
-/// 机长（归属机组的）或人强制换群主。
+/// 机长（归属机组的，含总机组的机长）或人强制换群主。
 pub fn force_owner(tx: &mut Tx<'_>, by: &Sender, id: &str, to: &MemberRef) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
     require_owner_channel(&ch)?;
     let allowed = match by {
         Sender::Human => true,
-        Sender::Session(s) => {
-            crews::captain_of(tx.conn(), &ch.crew_id)?.as_deref() == Some(s.as_str())
-        }
+        Sender::Session(s) => crews::acts_as_captain_of(tx.conn(), s, &ch.crew_id)?,
         Sender::System => false,
     };
     if !allowed {
-        return Err(CollabError::Forbidden("只有机长或人能强制换群主".into()));
+        return Err(CollabError::Forbidden(Refusal::new(
+            Code::ChannelForceOwnerForbidden,
+        )));
     }
     if !is_member(tx.conn(), id, to)? {
-        return Err(CollabError::Invalid("新群主必须是群成员".into()));
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::ChannelNewOwnerMustBeMember,
+        )));
     }
     set_owner(tx, id, to)
 }
@@ -1051,13 +1297,13 @@ mod tests {
         assert_eq!(
             members(s_.conn(), &h.id).unwrap(),
             [MemberRef::Human, s("cap-a")],
-            "人类群：人 + 根机组机长（隐式）"
+            "人类群：人 + home 机长（隐式）"
         );
         assert_eq!(h.id, "crew-a/human");
         assert_eq!(h.kind, ChannelKind::Human);
         assert!(
             is_member(s_.conn(), &h.id, &s("cap-a")).unwrap(),
-            "根机组机长隐式在人类群"
+            "home 机长隐式在人类群"
         );
         assert!(!is_member(s_.conn(), &h.id, &s("w-a1")).unwrap());
         assert!(
@@ -1065,7 +1311,7 @@ mod tests {
                 err(&mut s_, |tx| ensure_human_channel(tx, "crew-b")),
                 CollabError::Invalid(_)
             ),
-            "只有根机组有人类群"
+            "只有 home（总机组 / 顶层机组）有人类群"
         );
         assert_eq!(
             get(s_.conn(), lobby).unwrap().owner,
@@ -1111,8 +1357,83 @@ mod tests {
         assert_eq!(
             ids("crew-b", &mut s_),
             ["crew-b/lobby"],
-            "非根机组没有人类群"
+            "非 home 机组没有人类群"
         );
+    }
+
+    /// 手动归档的群（机组是活的）也不能再移出成员：与 add_members 同一个码 channel.archived，名单不变。
+    #[test]
+    fn removing_a_member_from_a_hand_archived_channel_is_refused_like_adding() {
+        let mut s_ = store();
+        let ch = ok(&mut s_, |tx| {
+            create(tx, &Sender::Human, topic("crew-a", vec![s("w-a1")]))
+        });
+        ok(&mut s_, |tx| {
+            update(
+                tx,
+                &Sender::Human,
+                &ch.id,
+                ChannelPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+        });
+        let code = |e: CollabError| match e {
+            CollabError::Conflict(r) => r.code,
+            e => panic!("{e:?}"),
+        };
+        let removed = code(err(&mut s_, |tx| {
+            remove_member(tx, &Sender::Human, &ch.id, &s("w-a1"))
+        }));
+        let added = code(err(&mut s_, |tx| {
+            add_members(tx, &Sender::Human, &ch.id, &[s("w-a2")])
+        }));
+        assert_eq!(removed, crate::refusal::Code::ChannelArchived);
+        assert_eq!(removed, added, "增删成员对归档群同一个答案");
+        assert!(
+            is_member(s_.conn(), &ch.id, &s("w-a1")).unwrap(),
+            "名单没变"
+        );
+    }
+
+    /// 归档机组的群只读：移出成员也拒（channel.archived，与机组归档后该机组的群别的群级操作同一个码），成员名单不变；解档后照常。
+    #[test]
+    fn removing_a_member_from_an_archived_crews_channel_is_refused() {
+        let mut s_ = store();
+        let ch = ok(&mut s_, |tx| {
+            create(tx, &Sender::Human, topic("crew-x", vec![s("cap-x")]))
+        });
+        ok(&mut s_, |tx| crate::crews::archive(tx, "crew-x"));
+        let e = err(&mut s_, |tx| {
+            remove_member(tx, &Sender::Human, &ch.id, &s("cap-x"))
+        });
+        match &e {
+            CollabError::Conflict(r) => {
+                assert_eq!(r.code, crate::refusal::Code::ChannelArchived, "{e:?}")
+            }
+            e => panic!("{e:?}"),
+        }
+        assert!(
+            is_member(s_.conn(), &ch.id, &s("cap-x")).unwrap(),
+            "名单没变"
+        );
+        ok(&mut s_, |tx| crate::crews::unarchive(tx, "crew-x"));
+        ok(&mut s_, |tx| {
+            update(
+                tx,
+                &Sender::Human,
+                &ch.id,
+                ChannelPatch {
+                    archived: Some(false),
+                    ..Default::default()
+                },
+            )
+        });
+        ok(&mut s_, |tx| {
+            remove_member(tx, &Sender::Human, &ch.id, &s("cap-x"))
+        });
+        assert!(!is_member(s_.conn(), &ch.id, &s("cap-x")).unwrap());
     }
 
     #[test]
@@ -1308,8 +1629,41 @@ mod tests {
                 .unwrap()
                 .archived_at
                 .is_none(),
-            "又成了根 → 解档"
+            "又成了 home → 解档"
         );
+    }
+
+    /// 不变式 owner ∈ members 只对活着的群成立：已归档（不再是 home）的人类群仍显示原机长为群主（历史），
+    /// 但他不是成员、也发不了言。
+    #[test]
+    fn an_archived_human_channel_keeps_its_historical_owner_who_is_no_longer_a_member() {
+        let mut s_ = store();
+        ok(&mut s_, |tx| ensure_human_channel(tx, "crew-x"));
+        assert_eq!(
+            get(s_.conn(), "crew-x/human").unwrap().owner,
+            Some(s("cap-x"))
+        );
+        assert!(is_member(s_.conn(), "crew-x/human", &s_ref("cap-x")).unwrap());
+        ok(&mut s_, |tx| crate::crews::adopt(tx, "crew-x", "crew-a"));
+        let h = get(s_.conn(), "crew-x/human").unwrap();
+        assert!(h.archived_at.is_some());
+        assert_eq!(h.owner, Some(s("cap-x")), "归档的群留着原群主（展示用）");
+        assert!(
+            !is_member(s_.conn(), "crew-x/human", &s_ref("cap-x")).unwrap(),
+            "owner 不再是成员：不变式只管活着的群"
+        );
+        assert!(matches!(
+            err(&mut s_, |tx| crate::messages::post(
+                tx,
+                Sender::Session("cap-x".into()),
+                crate::messages::NewPost {
+                    channel_id: "crew-x/human".into(),
+                    text: "示例消息".into(),
+                    ..Default::default()
+                },
+            )),
+            CollabError::Invalid(_)
+        ));
     }
 
     #[test]
@@ -1656,15 +2010,15 @@ mod tests {
                 &ch.id,
                 &s("w-a2")
             )),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| accept_owner_transfer(tx, &w2, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| withdraw_owner_transfer(tx, &w1, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| force_owner(
@@ -1673,7 +2027,7 @@ mod tests {
                 &ch.id,
                 &s("w-a2")
             )),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         // 带着陈旧待办的已归档群（直接造数据）：accept / withdraw 也拒。
         s_.conn()
@@ -1684,11 +2038,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             err(&mut s_, |tx| accept_owner_transfer(tx, &w2, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| withdraw_owner_transfer(tx, &w1, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
     }
 
@@ -1710,7 +2064,7 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_chief_crew_is_a_root_and_keeps_its_human_channel() {
+    fn the_management_crew_is_a_home_and_keeps_its_own_human_channel() {
         let mut s_ = store();
         let h = ok(&mut s_, |tx| ensure_human_channel(tx, "chief"));
         assert_eq!(h.id, "chief/human");
@@ -1727,6 +2081,7 @@ mod tests {
         // crew-a 的人类群里有 crew-x 的机长发过言（显式成员）→ crew-x 的列表里会多一个别人的人类群，
         // 而且它的 id 排在 crew-x 自己的人类群前面。
         ok(&mut s_, |tx| ensure_human_channel(tx, "crew-a"));
+        // 陈旧的跨 home 成员行（cap-x 的 home 是 crew-x）：crew-a/human 不挂到 crew-x 下（与读规则一致）。
         ok(&mut s_, |tx| join(tx, "crew-a/human", &s("cap-x")));
         let topic_ch = ok(&mut s_, |tx| {
             create(
@@ -1735,19 +2090,72 @@ mod tests {
                 topic("crew-x", vec![]),
             )
         });
-        let ids: Vec<String> = ok(&mut s_, |tx| list_for_crew(tx, "crew-x"))
-            .into_iter()
-            .map(|c| c.channel.id)
-            .collect();
+        let ids = |s_: &mut crewd_store::Store, crew: &str| -> Vec<String> {
+            ok(s_, |tx| list_for_crew(tx, crew))
+                .into_iter()
+                .map(|c| c.channel.id)
+                .collect()
+        };
         assert_eq!(
-            ids,
-            [
-                "crew-x/lobby",
-                "crew-x/human",
-                "crew-a/human",
-                topic_ch.id.as_str()
-            ]
+            ids(&mut s_, "crew-x"),
+            ["crew-x/lobby", "crew-x/human", topic_ch.id.as_str()]
         );
+        assert!(!readable_by(s_.conn(), "crew-a/human", "cap-x").unwrap());
+        // home 对得上的成员行照常挂：w-b1（home = crew-a）在 crew-a/human 里 → crew-b 下列得出。
+        ok(&mut s_, |tx| join(tx, "crew-a/human", &s("w-b1")));
+        assert_eq!(ids(&mut s_, "crew-b"), ["crew-b/lobby", "crew-a/human"]);
+    }
+
+    /// I2：顶层机组被收编之后，它自己的人类群（已归档）仍归它的机组，读得到（②）；机长不再隐式在群里
+    /// （不再是 home），成员与读规则一致。
+    #[test]
+    fn an_adopted_crews_own_human_channel_stays_readable_but_has_no_implicit_captain() {
+        let mut s = store();
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-x"));
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-a"));
+        assert!(is_member(s.conn(), "crew-x/human", &s_ref("cap-x")).unwrap());
+        ok(&mut s, |tx| crate::crews::adopt(tx, "crew-x", "crew-a"));
+        assert!(get(s.conn(), "crew-x/human").unwrap().archived_at.is_some());
+        assert!(
+            readable_by(s.conn(), "crew-x/human", "cap-x").unwrap(),
+            "自己机组的群"
+        );
+        assert!(
+            !is_member(s.conn(), "crew-x/human", &s_ref("cap-x")).unwrap(),
+            "不是 home 了：没有隐式机长"
+        );
+        assert!(
+            readable_by(s.conn(), "crew-a/human", "cap-x").unwrap(),
+            "新 home 的人类群"
+        );
+        assert!(!readable_by(s.conn(), "crew-x/human", "w-a1").unwrap());
+    }
+
+    /// M5：跨机组的 topic（不是 dm）经「群里有本机组的在群 session」读得到；那个同事退群后就读不到了。
+    #[test]
+    fn a_cross_crew_topic_is_readable_through_a_crewmate_until_they_leave() {
+        let mut s = store();
+        let t = ok(&mut s, |tx| {
+            create(
+                tx,
+                &Sender::Session("cap-x".into()),
+                topic("crew-x", vec![s_ref("w-a1")]),
+            )
+        });
+        assert!(readable_by(s.conn(), &t.id, "w-a2").unwrap());
+        assert!(readable_channels(s.conn(), "w-a2").unwrap().contains(&t.id));
+        ok(&mut s, |tx| {
+            remove_member(tx, &Sender::Session("w-a1".into()), &t.id, &s_ref("w-a1"))
+        });
+        assert!(
+            !readable_by(s.conn(), &t.id, "w-a2").unwrap(),
+            "退群的同事不再给读权"
+        );
+        assert!(
+            !readable_by(s.conn(), &t.id, "w-a1").unwrap(),
+            "自己退了也读不到"
+        );
+        assert!(readable_by(s.conn(), &t.id, "cap-x").unwrap());
     }
 
     #[test]
@@ -1814,18 +2222,372 @@ mod tests {
         });
         assert!(matches!(
             err(&mut s_, |tx| add_members(tx, &w1, &ch.id, &[s("w-b1")])),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
     }
 
     #[test]
-    fn crew_detail_collects_root_children_channels_and_sessions() {
+    fn crew_detail_collects_home_children_channels_and_sessions() {
         let mut s_ = store();
         let d = ok(&mut s_, |tx| crate::crews::detail(tx, "crew-b"));
-        assert_eq!(d.root_id, "crew-a");
+        assert_eq!(d.home_id, "crew-a");
         assert_eq!(d.sessions.len(), 2);
         assert_eq!(d.channels.len(), 1);
         let d = ok(&mut s_, |tx| crate::crews::detail(tx, "crew-a"));
         assert_eq!(d.children, ["crew-b"]);
+    }
+
+    /// 树规则下一个非 home 机组往上一定走得到顶层机组；走不到（旧数据里成环）时，
+    /// `home_of` 退回自己——拒绝不能指回自己（「crew-b 没有人类群，人类群在 crew-b/human」），按内部数据不一致报。
+    #[test]
+    fn a_crew_in_a_parent_cycle_is_an_internal_error_not_a_pointer_to_itself() {
+        let mut s_ = store();
+        // 合成的脏形状：crew-b 与 crew-x 互为父、走不到顶层（结构操作造不出来，直接写库）。
+        crewd_store::crews::set_parents(s_.conn(), "crew-b", &["crew-x".to_string()]).unwrap();
+        crewd_store::crews::set_parents(s_.conn(), "crew-x", &["crew-b".to_string()]).unwrap();
+        let e = err(&mut s_, |tx| ensure_human_channel(tx, "crew-b"));
+        assert!(
+            matches!(&e, CollabError::Store(_)) && !e.to_string().contains("crew-b/human"),
+            "{e:?}"
+        );
+        let e = err(&mut s_, |tx| {
+            crate::messages::post(
+                tx,
+                crate::Sender::Human,
+                crate::messages::NewPost {
+                    channel_id: "crew-b/human".into(),
+                    text: "示例消息".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(
+            matches!(&e, CollabError::Store(_)) && !e.to_string().contains("crew-b/human"),
+            "{e:?}"
+        );
+    }
+
+    fn s_ref(id: &str) -> MemberRef {
+        MemberRef::session(id)
+    }
+
+    #[test]
+    fn a_dm_between_two_sessions_is_readable_by_both_crews_but_injected_into_neither() {
+        let mut s = store();
+        let (dm, _) = ok(&mut s, |tx| {
+            ensure_dm(
+                tx,
+                "crew-a",
+                &MemberRef::session("w-a1"),
+                &MemberRef::session("cap-x"),
+            )
+        });
+        let x2 = ok(&mut s, |tx| {
+            crate::sessions::register(
+                tx,
+                crate::sessions::NewSession {
+                    crew_id: "crew-x".into(),
+                    role: crewd_proto::Role::Worker,
+                    executor: "claude".into(),
+                    title: Some("丙二".into()),
+                    ..Default::default()
+                },
+            )
+        })
+        .id;
+        assert!(
+            readable_by(s.conn(), &dm.id, "w-a2").unwrap(),
+            "发起方机组的同事读得到（B15）"
+        );
+        assert!(
+            readable_by(s.conn(), &dm.id, &x2).unwrap(),
+            "对方机组的同事也读得到（dm 显示在两边机组下）"
+        );
+        assert!(
+            !readable_by(s.conn(), &dm.id, "w-b1").unwrap(),
+            "子机组不因上级的 dm 读得到"
+        );
+        assert!(
+            readable_channels(s.conn(), "w-a2")
+                .unwrap()
+                .contains(&dm.id)
+        );
+        assert!(
+            !is_member(s.conn(), &dm.id, &MemberRef::session("w-a2")).unwrap(),
+            "读得到 ≠ 成员：不注入、不叫醒"
+        );
+    }
+
+    #[test]
+    fn the_home_human_channel_is_readable_by_its_subtree_and_topics_by_the_owning_crew() {
+        let mut s = store();
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-a"));
+        assert!(readable_by(s.conn(), "crew-a/human", "w-b1").unwrap());
+        assert!(!readable_by(s.conn(), "crew-a/human", "cap-x").unwrap());
+        let t = ok(&mut s, |tx| {
+            create(tx, &Sender::Session("w-a1".into()), topic("crew-a", vec![]))
+        });
+        assert!(
+            readable_by(s.conn(), &t.id, "w-a2").unwrap(),
+            "没有私有群：本机组的 topic 本机组都读得到"
+        );
+        assert!(!readable_by(s.conn(), &t.id, "cap-x").unwrap());
+    }
+
+    #[test]
+    fn dm_peer_is_the_other_party_and_nothing_else() {
+        let mut s = store();
+        let (dm, _) = ok(&mut s, |tx| {
+            ensure_dm(
+                tx,
+                "crew-a",
+                &MemberRef::session("w-a1"),
+                &MemberRef::session("cap-x"),
+            )
+        });
+        assert_eq!(
+            dm_peer(s.conn(), &dm.id, &MemberRef::session("w-a1")).unwrap(),
+            Some(MemberRef::session("cap-x"))
+        );
+        assert_eq!(
+            dm_peer(s.conn(), &dm.id, &MemberRef::session("w-a2")).unwrap(),
+            None,
+            "旁观者没有对方"
+        );
+        assert_eq!(
+            dm_peer(s.conn(), "crew-a/lobby", &MemberRef::session("w-a1")).unwrap(),
+            None,
+            "不是 dm"
+        );
+    }
+
+    /// PM 2026-10-07：总机组的机长权限上当作每个机组的机长——管得了别的机组的群（改名、归档、移人、强制换群主、
+    /// 往人类群拉人，凡是那个机组的机长能做的）；总机组的普通 session 与别的机组的机长都不行。
+    #[test]
+    fn the_management_captain_manages_any_crews_channels_and_its_workers_do_not() {
+        let mut s_ = store();
+        let boss = crate::testkit::org_captain(&mut s_);
+        let worker = crate::testkit::org_worker(&mut s_);
+        let by = |id: &str| Sender::Session(id.into());
+        let ch = ok(&mut s_, |tx| {
+            create(tx, &by("w-a1"), topic("crew-a", vec![s("w-a2")]))
+        });
+        ok(&mut s_, |tx| ensure_human_channel(tx, "crew-a"));
+        let rename = |n: &str| ChannelPatch {
+            name: Some(n.into()),
+            ..Default::default()
+        };
+        for other in [worker.as_str(), "cap-x"] {
+            match err(&mut s_, |tx| update(tx, &by(other), &ch.id, rename("越权"))) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelManageForbidden, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+            match err(&mut s_, |tx| {
+                force_owner(tx, &by(other), &ch.id, &s("w-a2"))
+            }) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelForceOwnerForbidden, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+            match err(&mut s_, |tx| {
+                remove_member(tx, &by(other), &ch.id, &s("w-a2"))
+            }) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelLeaveForbidden, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+            match err(&mut s_, |tx| {
+                add_members(tx, &by(other), "crew-a/human", &[s("w-a1")])
+            }) {
+                CollabError::Forbidden(r) => {
+                    assert_eq!(r.code, Code::ChannelAddMembersMemberOnly, "{other}")
+                }
+                e => panic!("{other}: {e:?}"),
+            }
+        }
+        let renamed = ok(&mut s_, |tx| {
+            update(tx, &by(&boss), &ch.id, rename("管理层改名"))
+        });
+        assert_eq!(renamed.name, "管理层改名");
+        let owned = ok(&mut s_, |tx| {
+            force_owner(tx, &by(&boss), &ch.id, &s("w-a2"))
+        });
+        assert_eq!(owned.owner, Some(s("w-a2")));
+        ok(&mut s_, |tx| {
+            remove_member(tx, &by(&boss), &ch.id, &s("w-a1"))
+        });
+        assert!(!is_member(s_.conn(), &ch.id, &s("w-a1")).unwrap());
+        ok(&mut s_, |tx| {
+            add_members(tx, &by(&boss), "crew-a/human", &[s("w-a1")])
+        });
+        assert!(is_member(s_.conn(), "crew-a/human", &s("w-a1")).unwrap());
+        let archived = ok(&mut s_, |tx| {
+            update(
+                tx,
+                &by(&boss),
+                &ch.id,
+                ChannelPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(archived.archived_at.is_some());
+        assert!(
+            !is_member(s_.conn(), &ch.id, &s(&boss)).unwrap(),
+            "管得了 ≠ 成员"
+        );
+    }
+
+    /// N1-R3（PM 2026-10-07）：总机组 = 管理层，它的 session 读得到全组织的群；读得到仍 ≠ 成员。
+    #[test]
+    fn the_management_crews_sessions_read_every_channel() {
+        let mut s = store();
+        let chief_cap = ok(&mut s, |tx| {
+            crate::sessions::register(
+                tx,
+                crate::sessions::NewSession {
+                    crew_id: "chief".into(),
+                    role: crewd_proto::Role::Captain,
+                    executor: "claude".into(),
+                    title: Some("总机长".into()),
+                    ..Default::default()
+                },
+            )
+        })
+        .id;
+        let (dm, _) = ok(&mut s, |tx| {
+            ensure_dm(
+                tx,
+                "crew-a",
+                &MemberRef::session("w-a1"),
+                &MemberRef::session("cap-x"),
+            )
+        });
+        let tb = ok(&mut s, |tx| {
+            create(tx, &Sender::Session("w-b1".into()), topic("crew-b", vec![]))
+        });
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-a"));
+        // 普通的总机组 session（不是机长）一样读全组织：读全组织跟着机组走，不跟着机长身份走。
+        let org_worker = crate::testkit::org_worker(&mut s);
+        for id in [
+            "crew-x/lobby",
+            dm.id.as_str(),
+            tb.id.as_str(),
+            "crew-a/human",
+        ] {
+            for who in [&chief_cap, &org_worker] {
+                assert!(
+                    readable_by(s.conn(), id, who).unwrap(),
+                    "{id}：总机组的 {who} 读全组织"
+                );
+                assert!(
+                    !is_member(s.conn(), id, &MemberRef::session(who.clone())).unwrap(),
+                    "{id}：读得到 ≠ 成员"
+                );
+            }
+        }
+        let all: Vec<String> = {
+            let mut st = s
+                .conn()
+                .prepare("SELECT id FROM channels ORDER BY created_at, id")
+                .unwrap();
+            st.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(all.len(), 7, "四个大厅 + dm + topic + 人类群：{all:?}");
+        assert_eq!(readable_channels(s.conn(), &chief_cap).unwrap(), all);
+        assert_eq!(readable_channels(s.conn(), &org_worker).unwrap(), all);
+    }
+
+    /// N1-R3：除总机组外，上级机组读不到子机组的群（只看自己机组下的 + 自己 home 的人类群）。
+    #[test]
+    fn a_parent_crew_does_not_read_its_child_crews_channels() {
+        let mut s = store();
+        let tb = ok(&mut s, |tx| {
+            create(tx, &Sender::Session("w-b1".into()), topic("crew-b", vec![]))
+        });
+        assert!(readable_by(s.conn(), &tb.id, "cap-b").unwrap());
+        assert!(!readable_by(s.conn(), &tb.id, "cap-a").unwrap());
+        assert!(!readable_by(s.conn(), "crew-b/lobby", "cap-a").unwrap());
+        let mine = readable_channels(s.conn(), "cap-a").unwrap();
+        assert!(
+            !mine.contains(&tb.id) && mine.contains(&"crew-a/lobby".to_string()),
+            "{mine:?}"
+        );
+    }
+
+    /// 人类群的读 / 发言 / 注入权从 `home_of` 推出，不认陈旧的成员行：机组被挪到另一个顶层机组下之后，
+    /// 它的 session 在旧 home 人类群里发过言留下的那一行不再算数（progress NOTE Task 6）。
+    #[test]
+    fn a_re_homed_session_loses_its_old_homes_human_channel() {
+        let mut s = store();
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-a"));
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-x"));
+        let say = |text: &str| crate::messages::NewPost {
+            channel_id: "crew-a/human".into(),
+            text: text.into(),
+            ..Default::default()
+        };
+        ok(&mut s, |tx| {
+            crate::messages::post(tx, Sender::Session("w-b1".into()), say("示例消息"))
+        });
+        assert!(
+            is_member(s.conn(), "crew-a/human", &s_ref("w-b1")).unwrap(),
+            "发言即入群"
+        );
+        ok(&mut s, |tx| {
+            crate::crews::release(tx, "crew-b", "crew-a", Some("crew-x"))
+        });
+        assert_eq!(crate::crews::home_of(s.conn(), "crew-b").unwrap(), "crew-x");
+        assert!(
+            !readable_by(s.conn(), "crew-a/human", "w-b1").unwrap(),
+            "读权跟着 home 走"
+        );
+        assert!(readable_by(s.conn(), "crew-x/human", "w-b1").unwrap());
+        assert!(
+            !is_member(s.conn(), "crew-a/human", &s_ref("w-b1")).unwrap(),
+            "不再注入、不能再被 @ 叫醒"
+        );
+        assert!(
+            !channels_of_session(s.conn(), "w-b1")
+                .unwrap()
+                .iter()
+                .any(|c| c.id == "crew-a/human")
+        );
+        assert!(matches!(
+            err(&mut s, |tx| crate::messages::post(
+                tx,
+                Sender::Session("w-b1".into()),
+                say("越界")
+            )),
+            CollabError::Forbidden(_)
+        ));
+    }
+
+    #[test]
+    fn only_sessions_homed_here_can_be_added_to_a_human_channel() {
+        let mut s = store();
+        ok(&mut s, |tx| ensure_human_channel(tx, "crew-a"));
+        assert!(matches!(
+            err(&mut s, |tx| add_members(
+                tx,
+                &Sender::Human,
+                "crew-a/human",
+                &[s_ref("cap-x")]
+            )),
+            CollabError::Invalid(_)
+        ));
+        assert!(!is_member(s.conn(), "crew-a/human", &s_ref("cap-x")).unwrap());
+        ok(&mut s, |tx| {
+            add_members(tx, &Sender::Human, "crew-a/human", &[s_ref("w-b1")])
+        });
+        assert!(is_member(s.conn(), "crew-a/human", &s_ref("w-b1")).unwrap());
     }
 }

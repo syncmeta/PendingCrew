@@ -12,7 +12,7 @@ fn store_with_crew() -> Store {
             id: "a".into(),
             title: "A".into(),
             number: None,
-            builtin: false,
+            management: false,
             parent_ids: vec![],
             working_directory: None,
             captain_executor: None,
@@ -40,7 +40,7 @@ fn msg(id: &str, text: &str) -> Message {
         category: None,
         in_reply_to: None,
         mentions: vec![Mention {
-            kind: MentionKind::Broadcast,
+            kind: MentionKind::Human,
             target_id: None,
         }],
         attachments: vec![Attachment {
@@ -83,7 +83,7 @@ fn messages_list_after_seq_with_limit_roundtrips_unicode() {
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].text, text);
     assert_eq!(all[0].seq, first);
-    assert_eq!(all[0].mentions[0].kind, MentionKind::Broadcast);
+    assert_eq!(all[0].mentions[0].kind, MentionKind::Human);
     assert_eq!(all[0].attachments[0].size, Some(3));
     let tail = messages::list(s.conn(), &lobby_id("a"), first, None, 1).unwrap();
     assert_eq!(tail.len(), 1);

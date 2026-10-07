@@ -33,6 +33,20 @@ enum Cmd {
         #[arg(long)]
         from: Option<PathBuf>,
     },
+    /// 立即备份库到 <数据目录>/backups/crewd-manual-*.db（serve 在跑也行：走自己的只读连接）
+    Backup,
+    /// 从备份恢复（serve 必须停着）。原来的库挪成 crewd.db.replaced-*，永不覆盖
+    Restore {
+        /// 备份文件（通常在 <数据目录>/backups/ 里）
+        #[arg(long)]
+        from: PathBuf,
+    },
+    /// 检查库的完整性（integrity_check + foreign_key_check；不改数据，serve 在跑也行）。只报告，不修、不删
+    Check {
+        /// 只跑 quick_check（快，不核索引内容）
+        #[arg(long)]
+        quick: bool,
+    },
     /// 调用一个 RPC 方法并打印结果
     Rpc {
         method: String,
@@ -118,17 +132,52 @@ async fn run() -> anyhow::Result<()> {
             crewd_server::ensure_data_dir(&dir)?;
             // 与 serve 同一把锁：正在服务的库不能被导入写。
             let _lock = crewd_server::lock_data_dir(&dir)?;
-            let db = dir.join("crewd.db");
-            let mut store = crewd_store::Store::open(&db)?;
+            let db = dir.join(crewd_store::DB_FILE);
+            // 与 serve 同一道身份核对：库丢了 / 换了就拒绝，而不是往一个新建的空库里导（N4 / S24）。
+            let mut store = crewd_store::Store::open_data_dir(&dir)?;
             // 只拒绝非空的库；上次导入失败留下的空库允许重试。
             if !store.is_empty()? {
                 bail!(
-                    "{} 已存在且非空。导入只写新库：先把它挪走再导入。",
-                    db.display()
+                    "{} 已存在且非空。导入只写新库：先把它连同 {} 一起挪出数据目录（只挪库文件会被身份核对拦住），再导入。",
+                    db.display(),
+                    crewd_store::ID_FILE
                 );
             }
             let report = crewd_legacy::import(&src, &mut store, &dir)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Cmd::Backup => {
+            use crewd_store::backup;
+            let db = dir.join(crewd_store::DB_FILE);
+            let dest =
+                backup::backups_dir_for(&db).join(backup::manual_name(crewd_store::now_ms()));
+            backup::backup_db(&db, &dest)?;
+            println!("{}", dest.display());
+        }
+        Cmd::Restore { from } => {
+            crewd_server::ensure_data_dir(&dir)?;
+            // 与 serve 同一把锁：serve 在跑就拒绝（它手里的库不能被换掉）。
+            let _lock = crewd_server::lock_data_dir(&dir)?;
+            let r = crewd_store::backup::restore(&dir, from)?;
+            match r.replaced {
+                Some(p) => println!("已恢复；原来的库挪到了 {}", p.display()),
+                None => println!("已恢复（原来没有库）"),
+            }
+        }
+        Cmd::Check { quick } => {
+            use crewd_store::backup::{self, Check};
+            let db = dir.join(crewd_store::DB_FILE);
+            let kind = if *quick { Check::Quick } else { Check::Full };
+            let problems = backup::check(&backup::open_for_check(&db)?, kind)?;
+            if !problems.is_empty() {
+                bail!(
+                    "{} 没通过 {}（只报告，没有改动任何文件；可用 crewd restore 从 backups/ 恢复）：\n{}",
+                    db.display(),
+                    kind.name(),
+                    problems.join("\n")
+                );
+            }
+            println!("ok（{}）", kind.name());
         }
         Cmd::Rpc { method, params } => {
             let params: serde_json::Value = match params {

@@ -127,8 +127,11 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<usize> {
             n += copy_tree(&p, &t)?;
         } else {
             fs::copy(&p, &t)?;
+            // 引用这些附件的事务提交之前，附件本身要已经落盘（N4 / S27）。
+            fs::File::open(&t)?.sync_all()?;
             n += 1;
         }
     }
+    fs::File::open(to)?.sync_all()?;
     Ok(n)
 }

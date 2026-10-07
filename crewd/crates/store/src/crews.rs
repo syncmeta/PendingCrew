@@ -1,14 +1,55 @@
 use crate::Result;
 use crewd_proto::Crew;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
+
+/// 总机组（管理机组：独立于机组树、对全部机组有权限的管理层，PM 2026-10-07）的固定 id：与 Swift 的内建机组同 id，
+/// 导入的旧数据天然对上（N1 裁定 2）。
+pub const MANAGEMENT_ID: &str = "pendingcrew-chief";
+
+/// 新建总机组时的默认标题（数据默认值，人可以改名；不是给 LLM 的提示词）。
+fn default_management_title(conn: &Connection) -> Result<&'static str> {
+    Ok(match crate::meta_get(conn, "locale")?.as_deref() {
+        Some("en") => "Headquarters",
+        _ => "总机组",
+    })
+}
+
+pub fn management(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT id FROM crews WHERE management=1", [], |r| r.get(0))
+        .optional()?)
+}
+
+/// 总机组：有就返回；没有就建（号码 0——没被别的机组占着时——、大厅），不加任何父边或子边（它不在机组树里）。
+/// `position` 记 0：顶层次序不含总机组（`crew.list` 把它单独排在最前）。
+/// 只有 store 的回填与 collab 的 `crews::create`（空库里第一个机组顺带懒建，N1 裁定 3）调它。
+pub fn ensure_management(conn: &Connection, now_ts: &str) -> Result<String> {
+    if let Some(id) = management(conn)? {
+        return Ok(id);
+    }
+    let zero_taken: i64 = conn.query_row("SELECT COUNT(*) FROM crews WHERE number=0", [], |r| {
+        r.get(0)
+    })?;
+    conn.execute(
+        "INSERT INTO crews(id,title,number,management,created_at,updated_at,position) VALUES(?1,?2,?3,1,?4,?4,0)",
+        params![
+            MANAGEMENT_ID,
+            default_management_title(conn)?,
+            (zero_taken == 0).then_some(0i64),
+            now_ts
+        ],
+    )?;
+    crate::channels::ensure_lobby(conn, MANAGEMENT_ID, now_ts)?;
+    Ok(MANAGEMENT_ID.to_string())
+}
 
 pub fn upsert(conn: &Connection, c: &Crew, extra: Option<&Value>) -> Result<()> {
     conn.execute(
-        "INSERT INTO crews(id,title,number,builtin,working_directory,captain_executor,hidden_at,created_at,updated_at,extra,
+        "INSERT INTO crews(id,title,number,management,working_directory,captain_executor,hidden_at,created_at,updated_at,extra,
                            title_source,status_line,policy,captain_session_id)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, number=excluded.number, builtin=excluded.builtin,
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, number=excluded.number, management=excluded.management,
            working_directory=excluded.working_directory, captain_executor=excluded.captain_executor,
            hidden_at=excluded.hidden_at, updated_at=excluded.updated_at, extra=excluded.extra,
            title_source=excluded.title_source, status_line=excluded.status_line, policy=excluded.policy,
@@ -17,7 +58,7 @@ pub fn upsert(conn: &Connection, c: &Crew, extra: Option<&Value>) -> Result<()> 
             c.id,
             c.title,
             c.number,
-            c.builtin,
+            c.management,
             c.working_directory,
             c.captain_executor,
             c.hidden_at,
@@ -52,8 +93,8 @@ pub fn exists(conn: &Connection, id: &str) -> Result<bool> {
 /// 按编号升序（无编号的排最后），同号按创建时间。侧栏顺序（`position`）由 collab 在内存里排，这里不管。
 pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
     let mut stmt = conn.prepare(
-        "SELECT id,title,number,builtin,working_directory,captain_executor,hidden_at,created_at,updated_at,
-                title_source,status_line,policy,captain_session_id,COALESCE(position,0)
+        "SELECT id,title,number,management,working_directory,captain_executor,hidden_at,created_at,updated_at,
+                title_source,status_line,policy,captain_session_id,COALESCE(position,0),archived_at
          FROM crews ORDER BY number IS NULL, number, created_at, id",
     )?;
     let mut crews = stmt
@@ -62,7 +103,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
                 id: r.get(0)?,
                 title: r.get(1)?,
                 number: r.get(2)?,
-                builtin: r.get(3)?,
+                management: r.get(3)?,
                 parent_ids: vec![],
                 child_ids: vec![],
                 working_directory: r.get(4)?,
@@ -75,6 +116,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
                 policy: policy_col(r, 11)?,
                 captain_session_id: r.get(12)?,
                 position: r.get(13)?,
+                removed_at: r.get(14)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -7,18 +7,18 @@ use crewd_store::Store;
 pub(crate) const NOW: i64 = 1_790_000_000_000;
 pub(crate) const MIN: i64 = 60_000;
 
-/// 合成的机组树：
+/// 合成的机组：
 /// ```text
-/// crew-a（1 号，根）  机长 cap-a；w-a1（分机 2）、w-a2（分机 3）
-///   └ crew-b（2 号）  机长 cap-b；w-b1（分机 2）
-/// crew-x（3 号，另一棵树的根）机长 cap-x
-/// chief（内建总机组，无号、无 session）
+/// chief（总机组 = 管理机组，号 0，无 session，不在树里）
+/// crew-a（1 号，顶层）  机长 cap-a；w-a1（分机 2）、w-a2（分机 3）
+///   └ crew-b（2 号）    机长 cap-b；w-b1（分机 2）
+/// crew-x（3 号，顶层）  机长 cap-x
 /// ```
-/// 大厅、机长指针、next_ext、游标都由 `backfill_v3` 建好（与迁移同一条路）。
+/// 大厅、机长指针、next_ext、游标由 `backfill_v3` 建好，总机组的标记由 `backfill_v4` 落定（与迁移同一条路）。
 pub(crate) fn store() -> Store {
     let s = Store::open_in_memory().unwrap();
     let c = s.conn();
-    for (id, title, number, builtin, at) in [
+    for (id, title, number, management, at) in [
         (
             "crew-a",
             "机组甲",
@@ -48,7 +48,7 @@ pub(crate) fn store() -> Store {
                 id: id.into(),
                 title: title.into(),
                 number,
-                builtin,
+                management,
                 working_directory: Some("/tmp/example".into()),
                 created_at: at.into(),
                 updated_at: at.into(),
@@ -84,7 +84,43 @@ pub(crate) fn store() -> Store {
         .unwrap();
     }
     crewd_store::schema::backfill_v3(c).unwrap();
+    crewd_store::schema::backfill_v4(c).unwrap();
     s
+}
+
+/// 在总机组（管理层，读全组织）里登记一个 worker，返回它的 id。夹具本身不放总机组的 session（别的测试数着行数），
+/// 要「读得到、但不在群里」的收听者时用它（终审 I4：收听只能落在读得到的群上）。
+pub(crate) fn org_worker(s: &mut Store) -> String {
+    ok(s, |tx| {
+        crate::sessions::register(
+            tx,
+            crate::sessions::NewSession {
+                crew_id: "chief".into(),
+                role: Role::Worker,
+                executor: "claude".into(),
+                title: Some("管理层示例".into()),
+                ..Default::default()
+            },
+        )
+    })
+    .id
+}
+
+/// 在总机组里登记机长，返回它的 id。权限上它当作每个机组的机长（PM 2026-10-07）；总机组的其它 session 没有这份权限。
+pub(crate) fn org_captain(s: &mut Store) -> String {
+    ok(s, |tx| {
+        crate::sessions::register(
+            tx,
+            crate::sessions::NewSession {
+                crew_id: "chief".into(),
+                role: Role::Captain,
+                executor: "claude".into(),
+                title: Some("管理层机长".into()),
+                ..Default::default()
+            },
+        )
+    })
+    .id
 }
 
 /// 在 NOW 跑一个操作，失败就 panic（测试的正路径）。
