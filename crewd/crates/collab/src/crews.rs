@@ -147,27 +147,29 @@ pub(crate) fn alloc_ext(conn: &Connection, crew: &str) -> Result<i64> {
     Ok(ext)
 }
 
-/// 机组此刻的侧栏次序（缺省 0）。
-fn position_of(conn: &Connection, id: &str) -> Result<i64> {
-    Ok(conn.query_row(
-        "SELECT COALESCE(position,0) FROM crews WHERE id=?1",
-        [id],
-        |r| r.get(0),
-    )?)
-}
-
-fn refuse_builtin(conn: &Connection, ids: &[&str]) -> Result<()> {
-    for id in ids {
-        let builtin: Option<bool> = conn
-            .query_row("SELECT org_root FROM crews WHERE id=?1", [id], |r| r.get(0))
-            .optional()?;
-        if builtin == Some(true) {
-            return Err(CollabError::Forbidden(format!(
-                "内建机组 {id} 不参与收编 / 摘出"
-            )));
-        }
+/// 根的轻量规则（N1 裁定 6）：总机组不能有父（不能被收编、转挂、摘出），不能删。被操作的机组不存在 = NotFound。
+fn refuse_org_root(conn: &Connection, id: &str) -> Result<()> {
+    if is_org_root(conn, id)? {
+        return Err(CollabError::Forbidden(
+            "总机组是组织的根，不能被收编、摘出或删除".into(),
+        ));
     }
     Ok(())
+}
+
+/// 把 `crew` 挂到总机组下、排在末尾（必要时懒建总机组），返回总机组 id。调用方保证 `crew` 此刻没有父边。
+fn hang_under_org_root(tx: &mut Tx<'_>, crew: &str) -> Result<String> {
+    let now = tx.now_ts();
+    let root = crewd_store::crews::ensure_org_root(tx.conn(), &now)?;
+    tx.conn().execute(
+        "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
+        params![crew, root],
+    )?;
+    put_last(tx, crew, &root)?;
+    tx.note(Change::CrewChanged {
+        crew_id: root.clone(),
+    });
+    Ok(root)
 }
 
 fn next_crew_number(tx: &mut Tx<'_>) -> Result<i64> {
@@ -205,35 +207,30 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     };
     crewd_store::crews::upsert(tx.conn(), &crew, None)?;
     crewd_store::channels::ensure_lobby(tx.conn(), &crew.id, &now)?;
+    tx.note(Change::CrewChanged {
+        crew_id: crew.id.clone(),
+    });
     match n.parent_id.as_deref() {
-        // 有父的直接排在父下的末尾（adopt 做），不占顶层的次序。
-        Some(p) => {
-            tx.note(Change::CrewChanged {
-                crew_id: crew.id.clone(),
-            });
+        // 有（非根的）父：排在父下的末尾（adopt 做）。
+        Some(p) if !is_org_root(tx.conn(), p)? => {
             adopt(tx, &crew.id, p)?;
         }
-        None => {
-            put_last(tx, &crew.id, None)?;
-            tx.note(Change::CrewChanged {
-                crew_id: crew.id.clone(),
-            });
+        // 没给父 / 给的就是总机组：挂在总机组下的末尾（空库里第一个机组顺带建出总机组，N1 裁定 3）。
+        _ => {
+            hang_under_org_root(tx, &crew.id)?;
         }
     }
     get(tx.conn(), &crew.id)
 }
 
 pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
-    let crew = get(tx.conn(), id)?;
+    get(tx.conn(), id)?;
     let conn = tx.conn();
     let now = tx.now_ts();
     if let Some(t) = p.title {
         let t = t.trim().to_string();
         if t.is_empty() {
             return Err(CollabError::Invalid("机组名不能为空".into()));
-        }
-        if crew.org_root {
-            return Err(CollabError::Forbidden("内建机组不能改名".into()));
         }
         conn.execute("UPDATE crews SET title=?2 WHERE id=?1", params![id, t])?;
     }
@@ -281,10 +278,20 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
 }
 
 /// 把 `crew`（整棵子树）挂到 `parent` 名下。父边 additive（DAG 多父保留），已是其子 → 不动。
+/// 不变式 I-root（N1 裁定 4）：指向总机组的边只能是唯一的父——挂上非根的父时顺手删掉根边；
+/// `parent` 是总机组：已是一级 → 空操作，否则 `Invalid`（挪到一级要用 release 摘掉其它父）。
 pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
-    refuse_builtin(tx.conn(), &[crew, parent])?;
+    refuse_org_root(tx.conn(), crew)?;
     get(tx.conn(), crew)?;
     get(tx.conn(), parent)?;
+    if is_org_root(tx.conn(), parent)? {
+        if parents(tx.conn(), crew)? == [parent] {
+            return get(tx.conn(), crew);
+        }
+        return Err(CollabError::Invalid(format!(
+            "挪到一级：用 release 摘掉 {crew} 的其它上级"
+        )));
+    }
     if crew == parent {
         return Err(CollabError::Invalid("机组不能挂在自己下面".into()));
     }
@@ -302,11 +309,21 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
         "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
         params![crew, parent],
     )?;
+    // 有了别的父：指向总机组的边去掉（总机组的 childIds 变了）。
+    if let Some(root) = org_root(tx.conn())? {
+        let dropped = tx.conn().execute(
+            "DELETE FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
+            params![crew, root],
+        )?;
+        if dropped > 0 {
+            tx.note(Change::CrewChanged { crew_id: root });
+        }
+    }
     // 不再是 home（总机组 / 一级机组）：它的人类群归档（消息保留）。
     if was_home && !is_home(tx.conn(), crew)? {
         crate::channels::archive_human_of(tx, crew)?;
     }
-    put_last(tx, crew, Some(parent))?;
+    put_last(tx, crew, parent)?;
     tx.note(Change::CrewChanged {
         crew_id: crew.into(),
     });
@@ -317,10 +334,13 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
 }
 
 /// 把 `from` 的直系子 `crew` 摘出；`to` 有值 = 先挂新边（过 adopt 的全部检查）再摘旧边。
+/// 摘掉的是最后一条父边 = 回到总机组下的末尾；`to` = 总机组 等同 `None`（N1 裁定 4）。
 pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Result<Crew> {
-    let mut ids = vec![crew, from];
-    ids.extend(to);
-    refuse_builtin(tx.conn(), &ids)?;
+    refuse_org_root(tx.conn(), crew)?;
+    let to = match to {
+        Some(t) if is_org_root(tx.conn(), t)? => None,
+        t => t,
+    };
     get(tx.conn(), crew)?;
     // 不存在的父 = NotFound（控制者裁定 e），与「存在但不是直系父」（Invalid）分开。
     get(tx.conn(), from)?;
@@ -339,8 +359,8 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
         "DELETE FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
         params![crew, from],
     )?;
-    if to.is_none() && is_home(tx.conn(), crew)? {
-        put_last(tx, crew, None)?;
+    if parents(tx.conn(), crew)?.is_empty() {
+        hang_under_org_root(tx, crew)?;
     }
     // 又成了 home：原来就有的人类群解档（没有的仍然懒建）。
     if is_home(tx.conn(), crew)? && crate::channels::human_channel_exists(tx.conn(), crew)? {
@@ -355,14 +375,12 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     get(tx.conn(), crew)
 }
 
-/// 只能删非内建、且没有 desired=running session 的机组（spec §22.2）。子机组的父边随之消失。
+/// 只能删非总机组、且没有 desired=running session 的机组（spec §22.2）。子机组的父边随之消失；
+/// 只剩这一个父的子机组回到总机组下（N1 裁定 4）。
 /// 删除级联（人显式的操作）：本机组的 session、群（含跨机组 topic 及其历史）一起删掉，每个群发
 /// ChannelRemoved；它的 session 在别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
 pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
-    let crew = get(tx.conn(), id)?;
-    if crew.org_root {
-        return Err(CollabError::Forbidden("内建机组不能删".into()));
-    }
+    refuse_org_root(tx.conn(), id)?;
     let running: i64 = tx.conn().query_row(
         "SELECT COUNT(*) FROM sessions WHERE crew_id=?1 AND desired='running'",
         [id],
@@ -374,7 +392,7 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
         )));
     }
     let kids = children(tx.conn(), id)?;
-    // 只有这一个父的子机组删后变成根：按原先的次序排到顶层末尾（C1）。
+    // 只有这一个父的子机组删后没有父了：按原先的次序排到总机组下的末尾（C1）。
     let mut orphans = Vec::new();
     for k in &kids {
         if parents(tx.conn(), k)? == [id] {
@@ -389,7 +407,7 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
         tx.note(Change::ChannelRemoved { channel_id });
     }
     for k in &orphans {
-        put_last(tx, k, None)?;
+        hang_under_org_root(tx, k)?;
         // 又成了 home：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）。
         if crate::channels::human_channel_exists(tx.conn(), k)? {
             crate::channels::ensure_human_channel(tx, k)?;
@@ -473,64 +491,29 @@ pub fn detail(tx: &mut Tx<'_>, id: &str) -> Result<crewd_proto::CrewDetail> {
     })
 }
 
-/// 同级：`parent` 的直系子（按它们在这个父下的边次序）；`None` = 顶层的可见 home 机组（一级机组或没有父边的、非内建；
-/// 内建机组不参与排序，客户端给的顶层名单里也没有它），按 `crews.position`。
-fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
-    match parent {
-        Some(p) => children(conn, p),
-        None => {
-            let mut out = Vec::new();
-            for c in list(conn)? {
-                if !c.org_root && is_home(conn, &c.id)? {
-                    out.push(c.id);
-                }
-            }
-            Ok(out)
-        }
-    }
-}
-
-/// 把 `crew` 放到 `parent` 这一层（`None` = 顶层）的末尾（C1：新建 / 收编 / 转挂进来的排最后）。
-/// `Some(p)` 读写 (crew, p) 这条边的 position，只和 p 的其它边比；多父机组在每个父下各有自己的次序，互不影响。
-/// 调用时边必须已经存在。`None` 写 `crews.position`（只管顶层）。
-fn put_last(tx: &mut Tx<'_>, crew: &str, parent: Option<&str>) -> Result<()> {
-    match parent {
-        Some(p) => {
-            let max: i64 = tx.conn().query_row(
-                "SELECT COALESCE(MAX(position),0) FROM crew_parents WHERE parent_id=?1 AND crew_id<>?2",
-                params![p, crew],
-                |r| r.get(0),
-            )?;
-            let n = tx.conn().execute(
-                "UPDATE crew_parents SET position=?3 WHERE crew_id=?1 AND parent_id=?2",
-                params![crew, p, max + 1],
-            )?;
-            debug_assert_eq!(n, 1, "put_last 要求边已存在");
-        }
-        None => {
-            let mut max = 0i64;
-            for c in siblings(tx.conn(), None)? {
-                if c != crew {
-                    max = max.max(position_of(tx.conn(), &c)?);
-                }
-            }
-            tx.conn().execute(
-                "UPDATE crews SET position=?2 WHERE id=?1",
-                params![crew, max + 1],
-            )?;
-        }
-    }
+/// 把 `crew` 放到 `parent` 名下的末尾（C1：新建 / 收编 / 转挂进来的排最后）：读写 (crew, parent) 这条边的
+/// position，只和 parent 的其它边比；多父机组在每个父下各有自己的次序，互不影响。调用时边必须已经存在。
+fn put_last(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<()> {
+    let max: i64 = tx.conn().query_row(
+        "SELECT COALESCE(MAX(position),0) FROM crew_parents WHERE parent_id=?1 AND crew_id<>?2",
+        params![parent, crew],
+        |r| r.get(0),
+    )?;
+    let n = tx.conn().execute(
+        "UPDATE crew_parents SET position=?3 WHERE crew_id=?1 AND parent_id=?2",
+        params![crew, parent, max + 1],
+    )?;
+    debug_assert_eq!(n, 1, "put_last 要求边已存在");
     Ok(())
 }
 
-/// 人手动排侧栏（C1，只有客户端 `crew.reorder` 调）：`ordered` 必须恰好是这一层现有的全部机组（防客户端拿着旧列表覆盖）。
-/// `Some(p)` 只改 p 名下各条边的次序（同一机组在别的父下的次序不动）并给 p 发一条 `CrewChanged`（它的 `childIds` 变了）；
-/// `None` 改顶层的 `crews.position`。挪了位置的每个机组各发一条 `CrewChanged`。
-pub fn reorder(tx: &mut Tx<'_>, parent: Option<&str>, ordered: &[String]) -> Result<Vec<Crew>> {
-    if let Some(p) = parent {
-        get(tx.conn(), p)?;
-    }
-    let current = siblings(tx.conn(), parent)?;
+/// 人手动排侧栏（C1，只有客户端 `crew.reorder` 调）：`ordered` 必须恰好是 `parent` 名下现有的全部直系子
+/// （防客户端拿着旧列表覆盖）。只改 `parent` 名下各条边的次序（同一机组在别的父下的次序不动）；顶层只剩总机组
+/// （N1 裁定 7），一级机组的次序就是总机组名下的次序。挪了位置的每个机组各发一条 `CrewChanged`，
+/// 有挪动时 `parent` 也发一条（它的 `childIds` 变了）。
+pub fn reorder(tx: &mut Tx<'_>, parent: &str, ordered: &[String]) -> Result<Vec<Crew>> {
+    get(tx.conn(), parent)?;
+    let current = children(tx.conn(), parent)?;
     let want: BTreeSet<&String> = ordered.iter().collect();
     let have: BTreeSet<&String> = current.iter().collect();
     if want.len() != ordered.len() || want != have {
@@ -541,33 +524,27 @@ pub fn reorder(tx: &mut Tx<'_>, parent: Option<&str>, ordered: &[String]) -> Res
     let mut moved = false;
     for (i, id) in ordered.iter().enumerate() {
         let pos = i as i64 + 1;
-        let old: i64 = match parent {
-            Some(p) => tx.conn().query_row(
-                "SELECT position FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
-                params![id, p],
-                |r| r.get(0),
-            )?,
-            None => position_of(tx.conn(), id)?,
-        };
+        let old: i64 = tx.conn().query_row(
+            "SELECT position FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
+            params![id, parent],
+            |r| r.get(0),
+        )?;
         if old == pos {
             continue;
         }
-        match parent {
-            Some(p) => tx.conn().execute(
-                "UPDATE crew_parents SET position=?3 WHERE crew_id=?1 AND parent_id=?2",
-                params![id, p, pos],
-            )?,
-            None => tx
-                .conn()
-                .execute("UPDATE crews SET position=?2 WHERE id=?1", params![id, pos])?,
-        };
+        tx.conn().execute(
+            "UPDATE crew_parents SET position=?3 WHERE crew_id=?1 AND parent_id=?2",
+            params![id, parent, pos],
+        )?;
         tx.note(Change::CrewChanged {
             crew_id: id.clone(),
         });
         moved = true;
     }
-    if let (Some(p), true) = (parent, moved) {
-        tx.note(Change::CrewChanged { crew_id: p.into() });
+    if moved {
+        tx.note(Change::CrewChanged {
+            crew_id: parent.into(),
+        });
     }
     ordered.iter().map(|id| get(tx.conn(), id)).collect()
 }
@@ -581,16 +558,9 @@ mod tests {
         parents(s.conn(), crew).unwrap()
     }
 
-    fn single_root(s: &crewd_store::Store) {
-        for c in ["crew-a", "crew-x"] {
-            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
-        }
-    }
-
     #[test]
     fn home_is_the_first_level_ancestor_and_the_org_root_is_its_own_home() {
         let s = store();
-        single_root(&s);
         assert_eq!(home_of(s.conn(), "chief").unwrap(), "chief");
         assert_eq!(home_of(s.conn(), "crew-a").unwrap(), "crew-a");
         assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-a");
@@ -613,7 +583,6 @@ mod tests {
     #[test]
     fn crew_detail_names_the_home_not_the_org_root() {
         let mut s = store();
-        single_root(&s);
         let d = ok(&mut s, |tx| detail(tx, "crew-b"));
         assert_eq!(d.home_id, "crew-a");
     }
@@ -639,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn adopt_refuses_cycles_self_and_builtin_and_is_idempotent() {
+    fn adopt_refuses_cycles_self_and_the_org_root_and_is_idempotent() {
         let mut s = store();
         assert!(
             matches!(
@@ -659,10 +628,9 @@ mod tests {
             err(&mut s, |tx| adopt(tx, "chief", "crew-a")),
             CollabError::Forbidden(_)
         ));
-        assert!(matches!(
-            err(&mut s, |tx| adopt(tx, "crew-a", "chief")),
-            CollabError::Forbidden(_)
-        ));
+        // 一级机组再挂到总机组下 = 空操作（N1 裁定 4）。
+        ok(&mut s, |tx| adopt(tx, "crew-a", "chief"));
+        assert_eq!(edges(&s, "crew-a"), ["chief"]);
         assert!(matches!(
             err(&mut s, |tx| adopt(tx, "crew-a", "nope")),
             CollabError::NotFound(_)
@@ -679,17 +647,24 @@ mod tests {
             err(&mut s, |tx| release(tx, "crew-b", "crew-x", None)),
             CollabError::Invalid(_)
         ));
-        assert!(matches!(
-            err(&mut s, |tx| release(tx, "crew-b", "chief", None)),
-            CollabError::Forbidden(_)
-        ));
+        assert!(
+            matches!(
+                err(&mut s, |tx| release(tx, "crew-b", "chief", None)),
+                CollabError::Invalid(_)
+            ),
+            "crew-b 不是总机组的直系子"
+        );
         // 控制者裁定 e：不存在的父 = NotFound（-32004），不是「不是直系子机组」（-32602）。
         assert!(matches!(
             err(&mut s, |tx| release(tx, "crew-b", "nope", None)),
             CollabError::NotFound(_)
         ));
         ok(&mut s, |tx| release(tx, "crew-b", "crew-a", None));
-        assert!(edges(&s, "crew-b").is_empty());
+        assert_eq!(
+            edges(&s, "crew-b"),
+            ["chief"],
+            "摘掉最后一个父 = 回到总机组下"
+        );
         assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-b");
     }
 
@@ -1103,16 +1078,8 @@ mod tests {
         assert!(ch.contains(&Change::ChannelChanged { channel_id: human }));
     }
 
-    fn order(s: &crewd_store::Store, parent: Option<&str>) -> Vec<String> {
-        match parent {
-            Some(p) => children(s.conn(), p).unwrap(),
-            None => list(s.conn())
-                .unwrap()
-                .into_iter()
-                .filter(|c| !c.org_root && is_home(s.conn(), &c.id).unwrap())
-                .map(|c| c.id)
-                .collect(),
-        }
+    fn order(s: &crewd_store::Store, parent: &str) -> Vec<String> {
+        children(s.conn(), parent).unwrap()
     }
 
     fn kid(s: &mut crewd_store::Store, title: &str, parent: &str) -> Crew {
@@ -1149,10 +1116,10 @@ mod tests {
         let c2 = mk(&mut s, "后建的", "crew-x");
         // c1 的 position 比 c2 小；收编到 crew-x 下后必须排在 c2 后面（新同级的末尾）。
         ok(&mut s, |tx| adopt(tx, &c1.id, "crew-x"));
-        assert_eq!(order(&s, Some("crew-x")), [c2.id.clone(), c1.id.clone()]);
+        assert_eq!(order(&s, "crew-x"), [c2.id.clone(), c1.id.clone()]);
         let c3 = mk(&mut s, "再一个", "crew-b");
         ok(&mut s, |tx| release(tx, &c2.id, "crew-x", Some("crew-b")));
-        assert_eq!(order(&s, Some("crew-b")), [c3.id.clone(), c2.id.clone()]);
+        assert_eq!(order(&s, "crew-b"), [c3.id.clone(), c2.id.clone()]);
     }
 
     #[test]
@@ -1180,7 +1147,7 @@ mod tests {
                 },
             )
         });
-        let kids = order(&s, Some("crew-a"));
+        let kids = order(&s, "crew-a");
         assert_eq!(
             &kids[kids.len() - 2..],
             [a.id.clone(), b.id.clone()],
@@ -1199,18 +1166,18 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(order(&s, Some("crew-a")), kids);
+        assert_eq!(order(&s, "crew-a"), kids);
         let mut want = kids.clone();
         want.reverse();
-        let (got, ch) = crate::testkit::ok_at(&mut s, NOW, |tx| reorder(tx, Some("crew-a"), &want));
+        let (got, ch) = crate::testkit::ok_at(&mut s, NOW, |tx| reorder(tx, "crew-a", &want));
         assert_eq!(got.into_iter().map(|c| c.id).collect::<Vec<_>>(), want);
-        assert_eq!(order(&s, Some("crew-a")), want);
+        assert_eq!(order(&s, "crew-a"), want);
         assert!(ch.iter().all(|c| matches!(c, Change::CrewChanged { .. })) && !ch.is_empty());
         let mut partial = want.clone();
         partial.pop();
         assert!(
             matches!(
-                err(&mut s, |tx| reorder(tx, Some("crew-a"), &partial)),
+                err(&mut s, |tx| reorder(tx, "crew-a", &partial)),
                 CollabError::Invalid(_)
             ),
             "必须给出这一层的全部机组"
@@ -1218,17 +1185,17 @@ mod tests {
         let mut dup = want.clone();
         dup[0] = dup[1].clone();
         assert!(matches!(
-            err(&mut s, |tx| reorder(tx, Some("crew-a"), &dup)),
+            err(&mut s, |tx| reorder(tx, "crew-a", &dup)),
             CollabError::Invalid(_)
         ));
         // 转挂到别处 = 新同级的末尾。
         ok(&mut s, |tx| release(tx, &a.id, "crew-a", Some("crew-x")));
-        assert_eq!(order(&s, Some("crew-x")).last(), Some(&a.id));
+        assert_eq!(order(&s, "crew-x").last(), Some(&a.id));
         // 顶层也能排。
-        let mut roots = order(&s, None);
+        let mut roots = order(&s, "chief");
         roots.rotate_left(1);
-        ok(&mut s, |tx| reorder(tx, None, &roots));
-        assert_eq!(order(&s, None), roots);
+        ok(&mut s, |tx| reorder(tx, "chief", &roots));
+        assert_eq!(order(&s, "chief"), roots);
     }
 
     #[test]
@@ -1239,21 +1206,16 @@ mod tests {
         let m1 = kid(&mut s, "丙1", "crew-x");
         ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x")); // crew-b 有两个父
         let under_a = vec!["crew-b".to_string(), k1.id.clone(), k2.id.clone()];
-        assert_eq!(order(&s, Some("crew-a")), under_a);
+        assert_eq!(order(&s, "crew-a"), under_a);
         assert_eq!(
-            order(&s, Some("crew-x")),
+            order(&s, "crew-x"),
             vec![m1.id.clone(), "crew-b".to_string()]
         );
         let want_x = vec!["crew-b".to_string(), m1.id.clone()];
-        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| {
-            reorder(tx, Some("crew-x"), &want_x).map(|_| ())
-        });
-        assert_eq!(order(&s, Some("crew-x")), want_x);
-        assert_eq!(
-            order(&s, Some("crew-a")),
-            under_a,
-            "crew-a 下的顺序不受影响"
-        );
+        let ((), ch) =
+            crate::testkit::ok_at(&mut s, NOW, |tx| reorder(tx, "crew-x", &want_x).map(|_| ()));
+        assert_eq!(order(&s, "crew-x"), want_x);
+        assert_eq!(order(&s, "crew-a"), under_a, "crew-a 下的顺序不受影响");
         assert!(
             ch.contains(&Change::CrewChanged {
                 crew_id: "crew-x".into()
@@ -1261,8 +1223,8 @@ mod tests {
             "父的 childIds 变了"
         );
         let want_a = vec![k2.id.clone(), k1.id.clone(), "crew-b".to_string()];
-        ok(&mut s, |tx| reorder(tx, Some("crew-a"), &want_a));
-        assert_eq!(order(&s, Some("crew-x")), want_x, "反过来也一样");
+        ok(&mut s, |tx| reorder(tx, "crew-a", &want_a));
+        assert_eq!(order(&s, "crew-x"), want_x, "反过来也一样");
         assert_eq!(
             get(s.conn(), "crew-a").unwrap().child_ids,
             want_a,
@@ -1282,52 +1244,52 @@ mod tests {
             .map(|i| kid(&mut s, &format!("x{i}"), "crew-x").id)
             .collect();
         let under_a: Vec<String> = std::iter::once("crew-b".to_string()).chain(ks).collect();
-        assert_eq!(order(&s, Some("crew-a")), under_a);
+        assert_eq!(order(&s, "crew-a"), under_a);
         ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
         assert_eq!(
-            order(&s, Some("crew-a")),
+            order(&s, "crew-a"),
             under_a,
             "收编进别的父不改 crew-a 下的顺序"
         );
         let mut want_x = xs;
         want_x.push("crew-b".to_string());
-        assert_eq!(order(&s, Some("crew-x")), want_x, "排在新父的末尾");
+        assert_eq!(order(&s, "crew-x"), want_x, "排在新父的末尾");
     }
 
     #[test]
-    fn the_top_level_order_leaves_out_builtin_crews() {
+    fn the_first_level_order_is_the_org_roots_children_and_leaves_out_the_root() {
         let mut s = store();
-        let roots = order(&s, None);
-        assert!(!roots.contains(&"chief".to_string()));
+        let roots = order(&s, "chief");
+        assert_eq!(roots, ["crew-a", "crew-x"]);
         let mut rotated = roots.clone();
         rotated.rotate_left(1);
-        ok(&mut s, |tx| reorder(tx, None, &rotated));
-        assert_eq!(order(&s, None), rotated);
+        ok(&mut s, |tx| reorder(tx, "chief", &rotated));
+        assert_eq!(order(&s, "chief"), rotated);
         let mut with_chief = roots.clone();
         with_chief.push("chief".into());
         assert!(
             matches!(
-                err(&mut s, |tx| reorder(tx, None, &with_chief)),
+                err(&mut s, |tx| reorder(tx, "chief", &with_chief)),
                 CollabError::Invalid(_)
             ),
-            "客户端只会给可见的顶层"
+            "总机组自己不在它名下的名单里"
         );
     }
 
     #[test]
-    fn delete_puts_orphaned_children_last_at_the_top_level() {
+    fn delete_puts_orphaned_children_last_under_the_org_root() {
         let mut s = store();
         let solo = kid(&mut s, "只有一个父", "crew-a");
         let shared = kid(&mut s, "另有父", "crew-a");
         ok(&mut s, |tx| adopt(tx, &shared.id, "crew-x")); // 另有父 crew-x，不会变根
-        let roots_before = order(&s, None);
+        let roots_before = order(&s, "chief");
         ok(&mut s, |tx| delete(tx, "crew-a"));
-        let roots = order(&s, None);
+        let roots = order(&s, "chief");
         let mut want: Vec<String> = roots_before.into_iter().filter(|c| c != "crew-a").collect();
         want.extend(["crew-b".to_string(), solo.id.clone()]);
         assert_eq!(
             roots, want,
-            "变成根的（按原先的次序）排在顶层末尾，原有的根不动"
+            "没了父的（按原先的次序）排在总机组下的末尾，原有的一级机组不动"
         );
         assert!(!roots.contains(&shared.id));
         assert_eq!(edges(&s, &shared.id), ["crew-x"]);
@@ -1338,19 +1300,19 @@ mod tests {
         let mut s = store();
         let crews_before = count(&s, "SELECT COUNT(*) FROM crews");
         let chans_before = count(&s, "SELECT COUNT(*) FROM channels");
-        // create 先发号、写机组、建大厅，最后挂到内建父下才失败。
+        // create 先发号、写机组、建大厅，最后挂到不存在的父下才失败。
         let e = err(&mut s, |tx| {
             create(
                 tx,
                 NewCrew {
                     title: "半截".into(),
                     working_directory: "/tmp/example".into(),
-                    parent_id: Some("chief".into()),
+                    parent_id: Some("nope".into()),
                     ..Default::default()
                 },
             )
         });
-        assert!(matches!(e, CollabError::Forbidden(_)));
+        assert!(matches!(e, CollabError::NotFound(_)));
         assert_eq!(count(&s, "SELECT COUNT(*) FROM crews"), crews_before);
         assert_eq!(count(&s, "SELECT COUNT(*) FROM channels"), chans_before);
         let next = ok(&mut s, |tx| {
@@ -1411,5 +1373,152 @@ mod tests {
             Some("human"),
             "没给 titleSource = 不动"
         );
+    }
+
+    fn new_crew(title: &str) -> NewCrew {
+        NewCrew {
+            title: title.into(),
+            working_directory: "/tmp/example".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_new_crew_without_a_parent_lands_last_under_the_org_root() {
+        let mut s = store();
+        let c = ok(&mut s, |tx| create(tx, new_crew("新机组")));
+        assert_eq!(parents(s.conn(), &c.id).unwrap(), ["chief"]);
+        assert_eq!(children(s.conn(), "chief").unwrap().last(), Some(&c.id));
+        assert!(is_home(s.conn(), &c.id).unwrap());
+    }
+
+    #[test]
+    fn the_first_crew_in_an_empty_database_creates_the_org_root() {
+        let mut s = crewd_store::Store::open_in_memory().unwrap();
+        let c = ok(&mut s, |tx| create(tx, new_crew("第一个")));
+        let root = org_root(s.conn()).unwrap().unwrap();
+        assert_eq!(root, crewd_store::crews::ORG_ROOT_ID);
+        assert_eq!(
+            parents(s.conn(), &c.id).unwrap(),
+            std::slice::from_ref(&root)
+        );
+        assert!(crate::channels::get(s.conn(), &crewd_store::channels::lobby_id(&root)).is_ok());
+    }
+
+    #[test]
+    fn the_org_root_cannot_be_adopted_released_or_deleted() {
+        let mut s = store();
+        assert!(matches!(
+            err(&mut s, |tx| adopt(tx, "chief", "crew-a")),
+            CollabError::Forbidden(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| release(tx, "chief", "crew-a", None)),
+            CollabError::Forbidden(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| delete(tx, "chief")),
+            CollabError::Forbidden(_)
+        ));
+    }
+
+    #[test]
+    fn adopting_a_first_level_crew_drops_its_root_edge_and_releasing_it_brings_it_back() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-x")
+        });
+        ok(&mut s, |tx| adopt(tx, "crew-x", "crew-a"));
+        assert_eq!(
+            parents(s.conn(), "crew-x").unwrap(),
+            ["crew-a"],
+            "指向根的边只能是唯一的父"
+        );
+        assert_eq!(home_of(s.conn(), "crew-x").unwrap(), "crew-a");
+        assert!(
+            crate::channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_some()
+        );
+        ok(&mut s, |tx| release(tx, "crew-x", "crew-a", None));
+        assert_eq!(
+            parents(s.conn(), "crew-x").unwrap(),
+            ["chief"],
+            "摘出 = 回到总机组下"
+        );
+        assert!(
+            crate::channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn adopting_under_the_org_root_is_a_noop_for_first_level_crews_and_refused_otherwise() {
+        let mut s = store();
+        ok(&mut s, |tx| adopt(tx, "crew-a", "chief"));
+        assert_eq!(parents(s.conn(), "crew-a").unwrap(), ["chief"]);
+        assert!(matches!(
+            err(&mut s, |tx| adopt(tx, "crew-b", "chief")),
+            CollabError::Invalid(_)
+        ));
+        ok(&mut s, |tx| release(tx, "crew-b", "crew-a", Some("chief")));
+        assert_eq!(
+            parents(s.conn(), "crew-b").unwrap(),
+            ["chief"],
+            "release to=根 ≡ to=None"
+        );
+    }
+
+    #[test]
+    fn deleting_a_parent_moves_its_only_child_under_the_org_root() {
+        let mut s = store();
+        ok(&mut s, |tx| delete(tx, "crew-a"));
+        assert_eq!(parents(s.conn(), "crew-b").unwrap(), ["chief"]);
+        assert!(is_home(s.conn(), "crew-b").unwrap());
+    }
+
+    #[test]
+    fn reorder_takes_a_parent_and_the_org_root_is_renamable() {
+        let mut s = store();
+        let got = ok(&mut s, |tx| {
+            reorder(tx, "chief", &["crew-x".to_string(), "crew-a".to_string()])
+        });
+        assert_eq!(
+            got.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["crew-x", "crew-a"]
+        );
+        assert_eq!(children(s.conn(), "chief").unwrap(), ["crew-x", "crew-a"]);
+        ok(&mut s, |tx| {
+            update(
+                tx,
+                "chief",
+                CrewPatch {
+                    title: Some("管理层".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(get(s.conn(), "chief").unwrap().title, "管理层");
+    }
+
+    /// 不变式：任何结构操作之后，没有父边的只有总机组（`is_home` 的「无父 = home」防御分支走不到）。
+    #[test]
+    fn after_any_structural_op_the_only_parentless_crew_is_the_org_root() {
+        let mut s = store();
+        let parentless = |s: &crewd_store::Store| {
+            count(
+                s,
+                "SELECT COUNT(*) FROM crews c WHERE NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)",
+            )
+        };
+        assert_eq!(parentless(&s), 1);
+        ok(&mut s, |tx| adopt(tx, "crew-x", "crew-b"));
+        ok(&mut s, |tx| release(tx, "crew-x", "crew-b", None));
+        ok(&mut s, |tx| delete(tx, "crew-a"));
+        ok(&mut s, |tx| create(tx, new_crew("再建一个")));
+        assert_eq!(parentless(&s), 1);
     }
 }

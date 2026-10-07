@@ -117,10 +117,10 @@ params!(CrewAdoptParams {
     parent_id: String
 });
 params!(/// 侧栏次序按父边分层（控制者裁定 C1）：一次只排**一层**。
-    /// `parentId` 给了 = 排这个父名下的直系子机组（写的是这条父边上的次序，读回来是父的 `Crew.childIds`；
-    /// 多父机组在别的父下的次序不受影响）；缺省 = 排顶层的根机组（写 `Crew.position`；内建机组不参与顶层排序、不能出现在名单里）。
+    /// 排 `parentId` 名下的直系子机组（写的是这条父边上的次序，读回来是父的 `Crew.childIds`；
+    /// 多父机组在别的父下的次序不受影响）。顶层只剩总机组：一级机组的次序 = `parentId` 给总机组。
     /// `crewIds` 必须恰好是这一层现有的全部机组（不重复、不缺、不多），否则 -32602。
-    CrewReorderParams { #[serde(default)] parent_id: Option<String>, crew_ids: Vec<String> });
+    CrewReorderParams { parent_id: String, crew_ids: Vec<String> });
 params!(CrewReleaseParams { crew_id: String, from_parent_id: String, #[serde(default)] to_parent_id: Option<String> });
 params!(ChannelCreateParams {
     crew_id: String,

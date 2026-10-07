@@ -1711,7 +1711,7 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_chief_crew_is_a_root_and_keeps_its_human_channel() {
+    fn the_org_root_is_a_home_and_keeps_its_management_human_channel() {
         let mut s_ = store();
         let h = ok(&mut s_, |tx| ensure_human_channel(tx, "chief"));
         assert_eq!(h.id, "chief/human");

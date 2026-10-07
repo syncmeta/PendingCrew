@@ -83,7 +83,8 @@ impl Client {
     }
 }
 
-/// 合成数据：机组 a（1 号，机长 cap-a、worker w-a1）；w-a1 开了一条问；有一条重启询问。
+/// 合成数据：机组 a（1 号，机长 cap-a、worker w-a1），挂在总机组下（`backfill_v4` 懒建，与迁移同一条路）；
+/// w-a1 开了一条问；有一条重启询问。
 fn seed(dir: &Path) {
     use crewd_proto::{Role, Session};
     let mut s = crewd_store::Store::open(&dir.join("crewd.db")).unwrap();
@@ -122,6 +123,7 @@ fn seed(dir: &Path) {
         .unwrap();
     }
     crewd_store::schema::backfill_v3(s.conn()).unwrap();
+    crewd_store::schema::backfill_v4(s.conn()).unwrap();
     crewd_collab::run(&mut s, crewd_store::now_ms(), |tx| {
         crewd_collab::asks::open(
             tx,
@@ -191,7 +193,7 @@ async fn hello_crews_channels_and_messages() {
         .iter()
         .map(|r| r["number"].as_str().unwrap())
         .collect();
-    assert_eq!(nums, ["1", "1-1", "1-2"]);
+    assert_eq!(nums, ["0", "1", "1-1", "1-2"], "总机组是 0 号");
     assert_eq!(
         c.call(10, "session.get", json!({"sessionId":"w-a1"})).await["ext"],
         2
@@ -504,7 +506,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
 }
 
 /// C1：侧栏次序按父边分层。`crew.reorder {parentId}` 只改这个父名下的次序；同一批机组在另一个父下的次序不动；
-/// 不带 parentId 只排顶层（`Crew.position`），不动任何父的 `childIds`。
+/// 一级机组的次序就是总机组名下的次序（`parentId` 必填，给总机组）；缺 parentId = -32602。
 #[tokio::test]
 async fn crew_reorder_is_per_parent_edge() {
     let dir = tempfile::tempdir().unwrap();
@@ -576,25 +578,43 @@ async fn crew_reorder_is_per_parent_edge() {
         "另一个父下的次序不动"
     );
 
-    // 顶层：只有根机组（a、p2）；不带 parentId 改 position，不动任何 childIds。
-    c.call(33, "crew.reorder", json!({"crewIds":[p2.clone(), "a"]}))
-        .await;
+    // 一级：总机组名下只有 a、p2（子甲 / 子乙 有别的父，不在这一层）。
+    let root = after
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["orgRoot"] == true)
+        .expect("总机组在 crew.list 里")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(child_ids(&after, &root), ["a".to_string(), p2.clone()]);
+    c.call(
+        33,
+        "crew.reorder",
+        json!({"parentId":root,"crewIds":[p2.clone(), "a"]}),
+    )
+    .await;
     let top = c.call(34, "crew.list", Value::Null).await;
-    let pos = |id: &str| {
-        top.as_array()
-            .unwrap()
-            .iter()
-            .find(|x| x["id"] == id)
-            .unwrap()["position"]
-            .as_i64()
-            .unwrap()
-    };
-    assert!(pos(&p2) < pos("a"), "顶层按人排的次序");
+    assert_eq!(
+        child_ids(&top, &root),
+        [p2.clone(), "a".to_string()],
+        "一级按人排的次序"
+    );
     assert_eq!(child_ids(&top, "a"), [k2.clone(), k1.clone()]);
     assert_eq!(child_ids(&top, &p2), [k1.clone(), k2.clone()]);
-    // 名单必须恰好是这一层：顶层名单里混进子机组 = -32602。
+    // 名单必须恰好是这一层：混进子机组 = -32602；不给 parentId = -32602（必填）。
     assert_eq!(
-        c.call_err(35, "crew.reorder", json!({"crewIds":[p2, "a", k1]}))
+        c.call_err(
+            35,
+            "crew.reorder",
+            json!({"parentId":root,"crewIds":[p2.clone(), "a", k1]})
+        )
+        .await,
+        -32602
+    );
+    assert_eq!(
+        c.call_err(36, "crew.reorder", json!({"crewIds":[p2, "a"]}))
             .await,
         -32602
     );
@@ -808,7 +828,19 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         )
         .await["id"]
         .clone();
-    assert_eq!(events_until_hello(&mut sub, 106).await, ["crew.changed"]);
+    // 新机组挂在总机组下：它自己、以及 childIds 变了的总机组，各一条。
+    let mut changed: Vec<Value> = frames_until_hello(&mut sub, 106)
+        .await
+        .into_iter()
+        .map(|e| {
+            assert_eq!(e.event, "crew.changed");
+            e.data["id"].clone()
+        })
+        .collect();
+    changed.sort_by_key(|v| v.to_string());
+    let mut want = vec![made.clone(), json!(crewd_store::crews::ORG_ROOT_ID)];
+    want.sort_by_key(|v| v.to_string());
+    assert_eq!(changed, want);
     c.call(9, "crew.delete", json!({"crewId":made})).await;
     let evs = frames_until_hello(&mut sub, 107).await;
     let removed: Vec<&Value> = evs

@@ -3,14 +3,15 @@ use crate::{Result, crews, sessions};
 use crewd_proto::{DirectoryKind, DirectoryRow};
 use rusqlite::Connection;
 
-/// 组织路径：从根到 `crew` 的**上级**，" / " 分隔。每层只取最早建的那个父（`crews::parents` 的第一个）。
+/// 组织路径：从一级机组到 `crew` 的**上级**，" / " 分隔。每层只取最早建的那个父（`crews::parents` 的第一个）。
+/// 总机组是所有人的祖先、不带信息，不进路径（preflight M5）；它自己仍有 "0" 那一行。
 /// 多父机组里这条链与 `home_of`（在全部一级祖先里取最早建的）不保证经过同一个一级机组——两者是各自独立的口径。
 fn org_path(conn: &Connection, crew: &str) -> Result<String> {
     let mut titles = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let mut cur = crew.to_string();
     while let Some(p) = crews::parents(conn, &cur)?.into_iter().next() {
-        if !seen.insert(p.clone()) {
+        if !seen.insert(p.clone()) || crews::is_org_root(conn, &p)? {
             break;
         }
         titles.push(crews::get(conn, &p)?.title);
@@ -105,8 +106,15 @@ mod tests {
         let rows = list(s.conn(), None).unwrap();
         assert_eq!(
             numbers(&rows),
-            ["1", "1-1", "1-2", "1-3", "2", "2-1", "2-2", "3", "3-1"]
+            ["0", "1", "1-1", "1-2", "1-3", "2", "2-1", "2-2", "3", "3-1"]
         );
+        let root = rows.iter().find(|r| r.number == "0").unwrap();
+        assert_eq!(
+            (root.crew_id.as_str(), root.org_path.as_str()),
+            ("chief", "")
+        );
+        let a = rows.iter().find(|r| r.number == "1").unwrap();
+        assert_eq!(a.org_path, "", "总机组不进组织路径");
         let b = rows.iter().find(|r| r.number == "2").unwrap();
         assert_eq!(b.org_path, "机组甲");
         let b1 = rows.iter().find(|r| r.number == "2-2").unwrap();
@@ -127,6 +135,13 @@ mod tests {
         );
         assert_eq!(numbers(&list(s.conn(), Some("3")).unwrap()), ["3", "3-1"]);
         assert!(list(s.conn(), Some("不存在的名字")).unwrap().is_empty());
-        assert_eq!(list(s.conn(), Some("  ")).unwrap().len(), 9, "空白 = 全表");
+        assert_eq!(list(s.conn(), Some("  ")).unwrap().len(), 10, "空白 = 全表");
+        assert!(
+            list(s.conn(), Some("总机组"))
+                .unwrap()
+                .iter()
+                .all(|r| r.crew_id == "chief"),
+            "组织路径里没有总机组：按它的名字只搜到它自己"
+        );
     }
 }

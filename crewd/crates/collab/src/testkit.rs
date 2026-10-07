@@ -9,12 +9,12 @@ pub(crate) const MIN: i64 = 60_000;
 
 /// 合成的机组树：
 /// ```text
-/// crew-a（1 号，根）  机长 cap-a；w-a1（分机 2）、w-a2（分机 3）
-///   └ crew-b（2 号）  机长 cap-b；w-b1（分机 2）
-/// crew-x（3 号，另一棵树的根）机长 cap-x
-/// chief（内建总机组，无号、无 session）
+/// chief（总机组，号 0，无 session）
+///   ├ crew-a（1 号，一级）  机长 cap-a；w-a1（分机 2）、w-a2（分机 3）
+///   │   └ crew-b（2 号）    机长 cap-b；w-b1（分机 2）
+///   └ crew-x（3 号，一级）  机长 cap-x
 /// ```
-/// 大厅、机长指针、next_ext、游标都由 `backfill_v3` 建好（与迁移同一条路）。
+/// 大厅、机长指针、next_ext、游标由 `backfill_v3` 建好，单根由 `backfill_v4` 挂好（与迁移同一条路）。
 pub(crate) fn store() -> Store {
     let s = Store::open_in_memory().unwrap();
     let c = s.conn();
@@ -84,6 +84,7 @@ pub(crate) fn store() -> Store {
         .unwrap();
     }
     crewd_store::schema::backfill_v3(c).unwrap();
+    crewd_store::schema::backfill_v4(c).unwrap();
     s
 }
 

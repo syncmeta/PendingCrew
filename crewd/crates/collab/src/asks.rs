@@ -152,11 +152,6 @@ pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
 pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;
-    if crew.org_root {
-        return Err(CollabError::Forbidden(
-            "内建总机组不提问（同 McpServer.swift:745-753）".into(),
-        ));
-    }
     let actor = actor_of(tx.conn(), asker)?;
     let question = o.question.trim().to_string();
     let default = o.default.map(|d| DefaultOption {
@@ -639,13 +634,32 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_crew_does_not_ask() {
+    fn the_org_roots_own_asks_go_to_its_management_human_channel() {
         let mut s = store();
-        s.conn().execute("INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('chief-1','chief','captain','claude','t')", []).unwrap();
-        assert!(matches!(
-            err(&mut s, |tx| open(tx, "chief-1", q("?"))),
-            CollabError::Forbidden(_)
-        ));
+        let cap = ok(&mut s, |tx| {
+            crate::sessions::register(
+                tx,
+                crate::sessions::NewSession {
+                    crew_id: "chief".into(),
+                    role: crewd_proto::Role::Captain,
+                    executor: "claude".into(),
+                    title: Some("总机长".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        let a = ok(&mut s, |tx| {
+            open(
+                tx,
+                &cap.id,
+                OpenAsk {
+                    question: "全局要不要冻结发版？".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
+        assert_eq!(m.channel_id, "chief/human");
     }
 
     #[test]
