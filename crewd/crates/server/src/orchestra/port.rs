@@ -324,3 +324,24 @@ pub trait Port: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Rendered>> + Send;
     fn publish(&self, e: OrchestraEvent);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Task 8b 评审 (4)：crewd-wake 的 `WakeState` 与共享表的 `WakeState` 两个方向互转是一一对应的（四个状态都过一遍）。
+    #[test]
+    fn wake_state_round_trips_through_the_shared_table() {
+        for s in [
+            WakeState::Pending,
+            WakeState::Inflight,
+            WakeState::Delivered,
+            WakeState::Dropped,
+        ] {
+            assert_eq!(wake_state(lifecycle_state(s)), s);
+        }
+        for s in lifecycle::WakeState::ALL {
+            assert_eq!(lifecycle_state(wake_state(s)), s);
+        }
+    }
+}

@@ -394,7 +394,9 @@ pub struct Failed {
 
 /// 一批没送到（终局失败）：每一行按**库里的**次数（`claim` 时记的，不是调用方手里那份）问 `decide`——
 /// `Some(t)` = 回 pending、`not_before = t`；`None` = 放弃（dropped）。全部记下 `error`。一个 `Tx`、全有或全无：
-/// 任何一行不是 inflight 整批不动。
+/// 每一行都按**真正要用的那个事件**（`Fail` 或 `GiveUp`，`decide` 定的）核过表才写（Task 8b 评审 (3)：不拿 `GiveUp`
+/// 当 `Fail` 的替身）；有一行不认整批不动。`decide` 是纯函数（`crewd_wake::queue::after_failure` 一类），
+/// 对整批不动的那次调用没有副作用。
 pub fn ack_failed(
     tx: &mut Tx<'_>,
     ids: &[i64],
@@ -402,33 +404,33 @@ pub fn ack_failed(
     decide: impl Fn(u32) -> Option<i64>,
 ) -> Result<Vec<Failed>> {
     let rows = by_ids(tx.conn(), ids)?;
-    let mut counts = Vec::with_capacity(ids.len());
+    let mut out = Vec::with_capacity(ids.len());
     for id in ids {
         let Some(r) = rows.iter().find(|r| r.id == *id) else {
             return Err(CollabError::NotFound(format!("没有唤醒 {id}")));
         };
-        // 先按表把每一行都核一遍（Fail 与 GiveUp 认的起始状态相同）：有一行不对整批不动，也不问 `decide`。
-        lifecycle::next(r.state, WakeEvent::GiveUp)
+        let retry_at_ms = decide(r.attempts);
+        lifecycle::next(r.state, failure_event(retry_at_ms))
             .map_err(|e| CollabError::Conflict(format!("唤醒 {id}：{e}")))?;
-        counts.push((*id, r.attempts));
+        out.push(Failed {
+            id: *id,
+            attempts: r.attempts,
+            retry_at_ms,
+        });
     }
-    let out: Vec<Failed> = counts
-        .into_iter()
-        .map(|(id, attempts)| Failed {
-            id,
-            attempts,
-            retry_at_ms: decide(attempts),
-        })
-        .collect();
     for f in &out {
-        let event = match f.retry_at_ms {
-            Some(t) => WakeEvent::Fail { retry_at: Some(t) },
-            None => WakeEvent::GiveUp,
-        };
-        apply(tx, &[f.id], event)?;
+        apply(tx, &[f.id], failure_event(f.retry_at_ms))?;
     }
     note_error(tx, ids, error)?;
     Ok(out)
+}
+
+/// `decide` 的答复对应的表事件：给了时刻 = `Fail`（回 pending），没给 = `GiveUp`（放弃）。
+fn failure_event(retry_at_ms: Option<i64>) -> WakeEvent {
+    match retry_at_ms {
+        Some(t) => WakeEvent::Fail { retry_at: Some(t) },
+        None => WakeEvent::GiveUp,
+    }
 }
 
 /// 投递确认（`Delivery::Delivered`）以外的「算送到」：游标已越过、无附言的恢复在跑就算到（pending / inflight → delivered）。
@@ -828,11 +830,13 @@ mod tests {
         let ids = new_ids(&mut s, &["msg:1", "msg:2", "msg:3"]);
         ok(&mut s, |tx| claim(tx, &ids[..2]));
         let before = by_ids(s.conn(), &ids).unwrap();
-        let e = err(&mut s, |tx| {
-            ack_failed(tx, &ids, "x", |_| panic!("不该问到这里"))
-        });
-        assert!(matches!(e, CollabError::Conflict(_)), "{e:?}");
-        assert_eq!(by_ids(s.conn(), &ids).unwrap(), before);
+        // 两个分支都要挡住（Task 8b 评审 (3)）：判「再试」（Fail）与判「放弃」（GiveUp）各按自己的事件核表。
+        let deciders: [fn(u32) -> Option<i64>; 2] = [|_| Some(NOW), |_| None];
+        for decide in deciders {
+            let e = err(&mut s, |tx| ack_failed(tx, &ids, "x", decide));
+            assert!(matches!(e, CollabError::Conflict(_)), "{e:?}");
+            assert_eq!(by_ids(s.conn(), &ids).unwrap(), before);
+        }
         assert!(matches!(
             err(&mut s, |tx| ack_failed(tx, &[999], "x", |_| None)),
             CollabError::NotFound(_)

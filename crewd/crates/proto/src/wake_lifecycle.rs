@@ -165,6 +165,21 @@ mod tests {
         }
     }
 
+    /// Task 8b 评审 (3)：`Fail` 与 `GiveUp` 各自认哪些起始状态——逐个钉住，调用方（collab `ack_failed`、MemPort）
+    /// 按真正要用的那个事件核，不拿其中一个当另一个的替身（两者今天相同，表改了哪个都会在这里红）。
+    #[test]
+    fn fail_and_give_up_are_accepted_from_inflight_only() {
+        for event in [Fail { retry_at: None }, Fail { retry_at: Some(7) }, GiveUp] {
+            let accepted: Vec<WakeState> = WakeState::ALL
+                .into_iter()
+                .filter(|s| next(*s, event).is_ok())
+                .collect();
+            assert_eq!(accepted, [Inflight], "{event:?}");
+        }
+        assert_eq!(next(Inflight, Fail { retry_at: Some(7) }), Ok(Pending));
+        assert_eq!(next(Inflight, GiveUp), Ok(Dropped));
+    }
+
     /// `Fail` 的 `retry_at` 不影响状态。
     #[test]
     fn fail_goes_back_to_pending_whatever_the_retry_time() {

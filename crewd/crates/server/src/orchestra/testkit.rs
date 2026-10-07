@@ -418,6 +418,14 @@ impl Port for MemPort {
         let rider_ids: Vec<i64> = b.riders.iter().map(|w| w.id).collect();
         match a {
             Ack::Delivered { riders } => {
+                // 同 collab `ack_delivered`：行都必须是这个 session 的（不是 = Invalid，整批不动）。
+                for id in wake_ids.iter().chain(&rider_ids) {
+                    if let Some(w) = wakes.iter().find(|w| w.id == *id)
+                        && w.session != b.session
+                    {
+                        anyhow::bail!("唤醒 {id} 属于 {}，不是 {}", w.session, b.session);
+                    }
+                }
                 apply_event(&mut wakes, &wake_ids, lifecycle::WakeEvent::Deliver)?;
                 let fate = match riders {
                     Riders::Release => lifecycle::WakeEvent::Requeue,
@@ -448,31 +456,30 @@ impl Port for MemPort {
                 })
             }
             Ack::Failed { now, jitter, .. } => {
-                let all = b.ids();
-                // 先按表核一遍（Fail 与 GiveUp 认的起始状态相同），再按**库里的**次数（claim 记的）判。
-                let mut counts = Vec::new();
-                for id in &all {
-                    let Some(w) = wakes.iter().find(|w| w.id == *id) else {
+                // 同 collab `ack_failed`：按**库里的**次数（claim 记的）判，每一行按真正要用的事件（`Fail` 或 `GiveUp`）
+                // 核表（Task 8b 评审 (3)），全过了才写。
+                let mut planned = Vec::new();
+                for id in b.ids() {
+                    let Some(w) = wakes.iter().find(|w| w.id == id) else {
                         anyhow::bail!("没有唤醒 {id}");
                     };
-                    lifecycle::next(lifecycle_state(w.state), lifecycle::WakeEvent::GiveUp)
+                    let retry = crewd_wake::queue::after_failure(w.attempts, now, jitter);
+                    let event = match retry {
+                        Some(t) => lifecycle::WakeEvent::Fail {
+                            retry_at: Some(t.0),
+                        },
+                        None => lifecycle::WakeEvent::GiveUp,
+                    };
+                    lifecycle::next(lifecycle_state(w.state), event)
                         .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
-                    counts.push((*id, w.attempts));
+                    planned.push((id, event, retry));
                 }
                 let mut out = Acked::default();
-                for (id, attempts) in counts {
-                    match crewd_wake::queue::after_failure(attempts, now, jitter) {
-                        Some(t) => {
-                            let fail = lifecycle::WakeEvent::Fail {
-                                retry_at: Some(t.0),
-                            };
-                            apply_event(&mut wakes, &[id], fail)?;
-                            out.retried.push((id, t));
-                        }
-                        None => {
-                            apply_event(&mut wakes, &[id], lifecycle::WakeEvent::GiveUp)?;
-                            out.gave_up.push(id);
-                        }
+                for (id, event, retry) in planned {
+                    apply_event(&mut wakes, &[id], event)?;
+                    match retry {
+                        Some(t) => out.retried.push((id, t)),
+                        None => out.gave_up.push(id),
                     }
                 }
                 st.wakes = wakes;
@@ -1566,6 +1573,10 @@ mod self_tests {
         (wake_state(r.state), r.attempts)
     }
 
+    fn store_not_before(store: &crewd_store::Store, id: i64) -> Ms {
+        Ms(crewd_collab::wakes::by_ids(store.conn(), &[id]).unwrap()[0].not_before_ms)
+    }
+
     /// C24：MemPort 与真库对每一格（4 状态 × 6 事件）给出同一个答案——认不认、认了之后的状态与次数。
     /// 两边都只经 `crewd_proto::wake_lifecycle` 改状态，这里把「假的不比库松」钉成测试。另核一批里混了一行不认的：
     /// 两边都整批不动。
@@ -1579,7 +1590,11 @@ mod self_tests {
             WakeState::Delivered,
             WakeState::Dropped,
         ] {
-            for event in WakeEvent::ALL {
+            // 表里的六个事件，外加带时刻的 `Fail`（它还要改 `not_before`，Task 8b 评审 (4)）。
+            let events = WakeEvent::ALL.into_iter().chain([WakeEvent::Fail {
+                retry_at: Some(5_000),
+            }]);
+            for event in events {
                 n += 1;
                 let mut store = real_store();
                 let (sid, attempts) = store_row_in(&mut store, from, n);
@@ -1601,6 +1616,11 @@ mod self_tests {
                     store_state(&store, sid),
                     (w.state, w.attempts),
                     "{from:?} + {event:?} 之后"
+                );
+                assert_eq!(
+                    store_not_before(&store, sid),
+                    w.not_before,
+                    "{from:?} + {event:?} 之后的 not_before"
                 );
                 if got_mem.is_err() {
                     assert_eq!((w.state, w.attempts), (from, attempts), "不认 = 一行都不改");
@@ -1685,6 +1705,36 @@ mod self_tests {
             ]
         );
         assert_eq!(p.cursor("s", "c1/lobby").await.unwrap(), 7);
+    }
+
+    /// Task 8b 评审 (2)：同 collab `ack_delivered`——批里的行（进正文的与随批的）都必须是 `b.session` 的，
+    /// 不是就整批不动（库回 `Invalid`）。
+    #[tokio::test]
+    async fn mem_port_ack_delivered_refuses_rows_of_another_session() {
+        let p = MemPort::new();
+        let (a, other) = (
+            row_in(&p, WakeState::Pending),
+            row_in(&p, WakeState::Pending),
+        );
+        p.lock().wakes[1].session = "s2".into();
+        for (wakes, riders) in [(vec![a, other], vec![]), (vec![a], vec![other])] {
+            let batch = batch_of(&p, &wakes, &riders, &[]);
+            p.claim(&batch).await.unwrap();
+            let before = p.lock().wakes.clone();
+            let r = p
+                .ack(
+                    &batch,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await;
+            assert!(r.is_err(), "别的 session 的行混进来了：{r:?}");
+            assert_eq!(p.lock().wakes, before, "整批不动");
+            p.settle(&batch.ids(), Settle::Requeue, Ms(0))
+                .await
+                .unwrap();
+        }
     }
 
     /// C24：没送到时按**库里的**次数判（不是这批手里那份）；一行不是 inflight → 整批不动。
