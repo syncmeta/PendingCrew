@@ -1947,7 +1947,7 @@
           "$ref": "#/$defs/ReceiptStateView"
         },
         "working": {
-          "description": "送到之后它此刻在干活（「处理中」）。",
+          "description": "目标此刻在干活（不论这一行走到哪）。`state = delivered` 且 `working` = 「处理中」；排着的行带 `working`\n只说明它在忙别的。",
           "type": "boolean"
         }
       },
@@ -1964,7 +1964,7 @@
       "oneOf": [
         {
           "const": "queued",
-          "description": "排着（没轮到、被挡着）。",
+          "description": "排着（没轮到、被挡着；也包括随在途那一批拿走、但这一批不送的窗口外行）。",
           "type": "string"
         },
         {
