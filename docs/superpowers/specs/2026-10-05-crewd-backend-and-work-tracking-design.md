@@ -615,7 +615,7 @@ crews    += title_source, status_line, policy, captain_session_id, next_ext, pos
 
 人类待确认（H 号）
 - `collab::asks`：每个机组一本 `crewd_work::WorkBook`，整份 `BookState` 存 `work_books`（M4a 定的持久化边界），每条命令在一个 SQLite 事务里读、改、写。M3 只用 `open_ask / answer_ask / apply_default`，外加 M3a 给 crewd-work 补的 `withdraw_ask(by, now, ask, reason)`（提问者 / 机长 / 人可撤；`AskState::Withdrawn{reason, at}`；问还卡着活项时拒绝）。
-- 开问时在同一事务里往根机组人类群发一条 @human 消息，`ask_meta` 记下这条消息的 id 和 resume_note。
+- 开问时在同一事务里往根机组人类群发一条 @human 消息，`ask_meta` 记下这条消息的 id 和 resume_note。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作 home（顶层机组）的人类群。
 - 权限审批（照 Swift 驾驶舱 #75②，不阻塞）：`approvals::gate` 一个事务——有票 → 用掉、放行；同 session 同工具已有未决请求 → 只拒；否则开一条、在根机组人类群 @人 → 拒。人同意 = 一次性放行票（同 session 下一次同名调用用掉），决定后给提问者入队唤醒（source `approval:<id>`）。不发 H 号（不是工作卡点），人在 `approval.list` 里看到它。 **〔2026-10-07 改，见 §24〕** **作废**：PendingCrew 不做审批（人 2026-10-07），claude / codex 自己的权限系统处理；v4 删表。
 
 客户端 RPC（`crewd_proto::methods`；`whiteboard.*` 直接删，不留别名）
@@ -659,7 +659,7 @@ crews    += title_source, status_line, policy, captain_session_id, next_ext, pos
 - `crewd hook <post-tool-use|pre-tool-use|stop>`：读 stdin JSON → `agent.hook` → 把返回的 stdout 原样打印，exit 0。
 - 工具实现在 serve 的 `server::agent::*`；描述文字在 `crates/collab/prompts/tools.{zh,en}.md`，每个工具一节。
 - 世界观：`crates/collab/prompts/world-model.{zh,en}.md`，由 `collab::worldview::render(&WorldCtx) -> String` 渲染（变量照 `LocalSessionWorldModel.swift:73-90`）。claude 走 `--append-system-prompt-file`（M2b 已有通路），codex 走 `developerInstructions`（M2c）。内容按 §17 重写：机组与群的模型；只装自己所在群的消息；不能默认人类在看；注视规则；在没人注视的群 @人类 = 对方开着免打扰时叫他；删掉 plan / continue_work / sweep 那几段。
-- `collab::turn_trace`：移植 `SessionTurnTrace.swift`。Stop 时停在一个没叫到人的问句上 → 代发一条：worker 在所在机组大厅 @机长，机长在根机组人类群 @人（`:21-26`，绝不 @ 自己）；按 prompt_id 去重；**永不阻塞**（`McpTurnHook.swift:13`）。同时写 `sessions.awaiting_question`。
+- `collab::turn_trace`：移植 `SessionTurnTrace.swift`。Stop 时停在一个没叫到人的问句上 → 代发一条：worker 在所在机组大厅 @机长，机长在根机组人类群 @人（`:21-26`，绝不 @ 自己）；按 prompt_id 去重；**永不阻塞**（`McpTurnHook.swift:13`）。同时写 `sessions.awaiting_question`。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作 home（顶层机组）的人类群。
 
 非目标：不起 / 停进程（经 `SessionControl` 调 M3c）；不决定谁醒（只入队，交 M3c）；不加 UserPromptSubmit（M4b）；不接 Jev。
 
@@ -687,7 +687,7 @@ hook 行为
 | post(channel?, message 或 messages[≤6], mentions?, reply_to?, category?) | post_to_crew | 加 channel（缺省：有 reply_to 就发到那条所在的群，否则发本机组大厅）；删 plan / todo / todo_status / todo_reference / evidence* / headline / audience / crew_status；在没人注视的群 @人类 时，回执写明 §17 那句免打扰提示 |
 | read_channel(channel?, limit?, before?) | read_whiteboard | 读到最新一条时推进游标 |
 | search(query, channel?, after?, before?, limit?) | search_whiteboard | 范围限自己是成员的群 |
-| list_channels() / human_watching() | 新 | 后者返回人类正在注视的群 + 根机组人类群 |
+| list_channels() / human_watching() | 新 | 后者返回人类正在注视的群 + 根机组人类群 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作 home 的人类群；M3b 里 `human_watching` 是工具。 |
 | channel_create(name, purpose, members[], kind?) / channel_invite(channel, members[]) / channel_leave(channel) / channel_archive(channel) | 新 | 归档：群主或机长 |
 | channel_transfer(channel, to, force?) / channel_accept(channel) | 新（§22.7 Q2） | 群主发起 + 对方接受；机长 force |
 | channel_listen(channel, minutes?, senders?) / channel_unlisten(channel) | listen | 按群收听（§22.7 Q2） |
@@ -744,7 +744,7 @@ hook 行为
 - 重启时 `inflight` 退回 `pending`；消息类重投前先查游标，防重放。已结的行保留 7 天，M3c 定时清。
 
 环路熔断 `crewd_wake::breaker`（§22.7 Q5；取代 `AutomaticWakeAdmission`，**不移植**它的全机 12 次/分、单机组 5 次/分、单 session 2 次/分——那会挡住 30 个 session 的正常收发）
-- 判据：目标 T 上一次有产出之后、10 分钟内送到 T 的非人类唤醒，按「来源 → T」与「T 的非 session 来源合计」两级各超 8 次 → 熔断那一条，落 `wake_latches`；告诉人（根机组人类群）和群主。阈值是一处常量。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作一级机组人类群。
+- 判据：目标 T 上一次有产出之后、10 分钟内送到 T 的非人类唤醒，按「来源 → T」与「T 的非 session 来源合计」两级各超 8 次 → 熔断那一条，落 `wake_latches`；告诉人（根机组人类群）和群主。阈值是一处常量。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作 home（顶层机组）的人类群。
 - 产出 = `Change::Progress`（M3a `sessions::note_progress`：工具调用、工作项变化）；T 发的消息叫醒了正在叫它的来源以外的人也算。**回话给叫醒你的人不算**（否则互相 @ 的环路永远截不住）。
 - 人类唤醒永不计数、永不被挡；system 唤醒照常计数。被挡 = 留在 pending（背压），不是丢掉。只有人能从客户端 `admission.recover` 解。
 
@@ -754,7 +754,7 @@ idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺
 3. 到此为止。删掉：机长 60s 检查点定时器（`:608`）、continue_work 租约、孤儿租约复核、Todo sweep 提醒（`:576`）——都由 M4a 取代。
 
 重启恢复（§22.7 Q1：问人）
-- serve 启动：回收孤儿 → inflight 退回 pending → `desired='running'` 的 session **一个都不起**，进待恢复名单，`restart::open` 在相关根机组人类群 @人、客户端弹窗。人答「恢复」→ 机长在前、错开 2s 逐个 `--resume`，`was_working=1` 的开场补一句「crewd 重启打断了上一轮，先核对状态再继续」；答「先不」或不答 → 都不起，唤醒照常入队，之后可整批或单个恢复。等答复期间人在群里 @ 了名单里的某一个 → 只恢复它（算它单个 resume），其余照旧等。
+- serve 启动：回收孤儿 → inflight 退回 pending → `desired='running'` 的 session **一个都不起**，进待恢复名单，`restart::open` 在相关根机组人类群 @人、客户端弹窗。人答「恢复」→ 机长在前、错开 2s 逐个 `--resume`，`was_working=1` 的开场补一句「crewd 重启打断了上一轮，先核对状态再继续」；答「先不」或不答 → 都不起，唤醒照常入队，之后可整批或单个恢复。等答复期间人在群里 @ 了名单里的某一个 → 只恢复它（算它单个 resume），其余照旧等。 **〔2026-10-07 改，见 §24〕** 「相关根机组」读作各 home（`by_home` 分组）。
 - resume 失败（续跑被拒、换新号也起不来，或根本起不来）→ 写 `resume_failed_at`，并在大厅 @机长。M4b 的 `reassign_lost(unrecoverable)` 只认这一列（§19：这份名单只能来自 crewd 自己的恢复失败记录）。
 - 计时类唤醒（schedule_wakeup、额度重置、退避）都存在 `wakes.not_before` 里，重启不会丢；serve 只用一个定时任务，按晚于现在的最早 not_before（`wakes::next_due_after`）醒，另有 30s 心跳兜底；心跳顺带调 `asks::apply_due_defaults`（默认方案到点）。
 
@@ -1023,6 +1023,7 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - `CrewDetail.rootId` → `homeId`（home = 顶层祖先）；`ask.list {rootCrewId}` → `{homeCrewId}`；`DirectoryRow.orgPath` 从顶层机组开始，总机组与顶层机组是空串。
 - **规则拒绝**：`RpcError.data.refusal` = 稳定码（如 `channel.archived`），`message` 只是中文缺省；客户端按码本地化。码与两种语言的文字在 `crates/collab/prompts/refusals.{zh,en}.md`。N1b 的变化：新增 `crew.management_not_in_tree`、`listen.not_readable`（agent 的收听工具用，客户端不会收到）；改名 `crew.org_root_fixed` → `crew.management_fixed`，机组一级的「归档」码改叫 removed：`crew.archived` → `crew.removed`、`crew.parent_archived` → `crew.parent_removed`、`crew.not_archived` → `crew.not_removed`、`directory.crew_archived` → `directory.crew_removed`、`ask.archive_blocked` → `ask.remove_blocked`（群一级的 `channel.archived` 不变）；删除 `crew.move_to_first_level`、`crew.release_to_root_other_parents`。`work.*` 的拒绝与参数解析错误还没有码（见 26.5）。
 - **错误号变化**：往归档的大厅 / topic / dm 发言 -32602 → **-32009**（`channel.archived`）；往归档的非 home 人类群发言 -32602 → -32009；`channel.addMembers` / `channel.setOwner` 遇归档群 -32602 → -32009；`channel.removeMember` 遇已移除的机组或归档群 → -32009；`crew.reorder` 不给已移除的机组 → 成功（以前报不一致）；总机组的结构操作见上。
+- **`MentionKind` 少了 `broadcast`**：`message.post` 带 `{kind:"broadcast"}` 现在是参数错误；存下的消息不再带它（v4 迁移与导入都剥掉）；回复自动 @ 的是 `[发送者]`，不再是 `[broadcast, 发送者]`。
 - **服务端语义**（客户端看不到线上变化，但行为变了）：总机组的 session 读得到全组织的群，能往任何活的大厅 / topic / 人类群发言而不入群（所以群里可能出现非成员的发言者）；总机组的机长在每个机组都按机长算。对已移除机组的 session 入队唤醒是空操作（`Enqueued::Skipped`）。
 
 ### 26.4 真实数据只读演练（副本，2026-10-07，两次）
@@ -1053,7 +1054,7 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 | M3b 的位置 | 变化 | 怎么改 |
 |---|---|---|
 | 审批：M3b 已在分支上删掉 PreToolUse 审批闸与 agent 侧的审批调用（`87c2193`）；M3b 分支上 collab 的 `approvals.rs` 与 `render.{zh,en}.md` 的审批节还是 M3a 的原样 | N1 删了 collab 的 `approvals` 模块、`Change::ApprovalChanged`、`WakeBody::Approval`、`wakes::source::approval` 与 render 的审批节 | 合并取 main 的删除；两道守卫都留：M3b 的 `worldview.rs` `nothing_the_agent_reads_mentions_an_approval_gate` 与 collab 的 `prompts::tests::render_text_has_no_approval_wording` |
-| `collab/src/worldview.rs`（`root_of`、`builtin_crew`、`role.captain.builtin` / `ask.builtin` / `builtin` 节；第 22 行注释说「一级机组」）、`collab/src/turn_trace.rs`（`root_of`） | `crews::root_of` / `is_root` 删；`Crew.builtin` → `management`；无 builtin 特例；森林 | `crews::home_of`（= 顶层祖先，人类群）+ `crews::is_management`；三节删，换成「管理机组」的一句（T15c）；`WorldCtx` 留 N1 的 channels / human_watching（经 `home_of`），删 `builtin_crew`；第 22 行改「顶层机组」；`turn_trace` 用 `home_of` + `channels::ensure_human_channel` |
+| `collab/src/worldview.rs`（`root_of`、`builtin_crew`、`role.captain.builtin` / `ask.builtin` / `builtin` 节；第 22 行注释说「一级机组」）、`collab/src/turn_trace.rs`（`root_of`） | `crews::root_of` / `is_root` 删；`Crew.builtin` → `management`；无 builtin 特例；森林 | `crews::home_of`（= 顶层祖先，人类群）+ `crews::is_management`；三节删，换成「管理机组」的一句（T15c）；`WorldCtx` **取 M3b 的结构**：M3b 有意删了 `channels` / `human_watching`（`human_watching` 变成工具），不要把 N1 的两个字段带回来；人类群 id 用 `crews::home_of` 算（M3b 的 `root_human_channel_id` 建议顺手改名 `home_human_channel_id`）；`builtin_crew` / `crew.builtin` 换成 `crew.management`，在 T15c 删掉 builtin 三节之前先这样顶着；第 22 行（N1 已改成「顶层机组」）取 N1 的；`turn_trace` 用 `home_of` + `channels::ensure_human_channel` |
 | `server/src/agent/port.rs` 的 `cursors::visible_to` 过滤（read / search）、`Reader`（roots、`inside`、`can_read`）、`set_listen` 的「别的树」门 | `visible_to` 删；B15 规则在 collab | 不再过滤；可读范围 = `channels::readable_by` / `readable_channels`（含 ⓪ 总机组读全组织）∪ 收听；删 M3b 自己的 `Reader`；收听工具直接调 `listens::set`——它已经要求读得到（拒 Forbidden `listen.not_readable`），不要另做一道门；`messages::search` 一律传 `channel_ids = readable_channels ∪ 收听` |
 | `port.rs:377` `crews::list(conn)` | 签名变成 `list(conn, include_archived)`；号码解析在 collab | 按需要传 `include_archived`；号码一律走 `directory::resolve`（`"0"` = 总机组；已移除的机组 → Conflict `directory.crew_removed`，原样回给 agent） |
 | `port.rs` 的 `From<CollabError>` 与 `CollabError::Forbidden("…".into())` | 四个变体装 `Refusal`（`collab::refusal::{Code, Refusal}`） | `Self::Refused(r.text(locale))`（agent 的语言）；需要新的拒绝就加码 + 两种语言的 md 节，不在代码里写句子（扫描测试会红） |
@@ -1070,6 +1071,10 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 | 任何 `crews::delete` / `crew.delete` / `check_deletable` | 改名 `purge` / `check_purgeable`；`crew.delete` → `crew.remove`（`crews::archive`），`crew.unarchive` → `crew.restore`；事件 `crew.removed` / `channel.removed` → `crew.purged` / `channel.purged` | 机长工具不提供移除 / 永久删除；读状态用 `crews::is_archived` |
 | `collab::prompts::placeholders` | N1 没有新加同名函数，只是让 main 上已有的那个去重 | M3b 若另写过一份就删掉，调用点都指向 `prompts::placeholders` |
 | 唤醒入队（**静默**） | `wakes::enqueue` 多了 `Enqueued::Skipped`（目标 session 的机组已移除：不写行、不发变更） | 对 `Enqueued` 的穷举 match 要处理 `Skipped`（编译会报）；把它当「无事发生」 |
+| `collab/src/render.rs` 测试 `every_injected_line_carries_its_number`（M3b 约 :1161，`directed_to: directed` 在 :1167；**自动合并后编不过**） | `MsgLine.directed_to` 删，换成 `mentions: Vec<String>` | 改成 `mentions: directed.unwrap_or_default()`；`render.rs` 冲突段的取法：N1 的 @ 标记与 M3b 的 `#seq` 前缀**两边都要**，期望文本是 `"…, 人类） （回复 人类） #"`，只取任何一边都会让 `markers_are_separated_from_the_timestamp` 红 |
+| `server/src/agent/port.rs` 测试 `narrowed_messages_are_hidden_from_other_readers`（:1410）、`filtered_messages_do_not_shorten_a_page`（:1490）（**静默**：编译照过，运行时红） | 测的是已删的收窄 | 删，或改写成「@ 只叫醒、不藏消息」 |
+| `port.rs` 测试 `listening_clause_and_set_listen_gate`（:1929，:1946 的绕过；**静默**） | 绕过用的 `listens::set` 现在会拒 `listen.not_readable` | 那条旧的收听行改用裸 SQL 插入（模拟遗留数据） |
+| 提示词文字（**静默**，进 T15c 那一行）：`world-model.{zh,en}.md` 第 65 行仍教收窄（与第 58–59 行同列）；「根机组人类群」的说法在 `world-model.{zh,en}.md` 第 32、41、42、120、126、133 行与 `tools.{zh,en}.md` 第 66、156 行；`tools.{zh,en}.md` 第 342 行「内建的总机组不能被收编」 | 人类群归 home（顶层机组）；总机组在树外 | 「根机组人类群」→ 「home（顶层机组）的人类群」；第 342 行 → 「管理机组在树外，不能被收编」；与第 58–59 行一并列入 T15c |
 | 预计的合并冲突 | — | `collab/src/prompts.rs` 的 `REQUIRED`：留 M3b 的 `line` `["seq","at","sender","text"]` 与 N1 的 `line.at` / `line.at.you`，删 `line.directed` / `line.directed.unknown`；`render.rs` 测试段（约 1605 / 1614 行：N1 的 @ 标记 + M3b 的 `#seq` 前缀，两边都要）；`worldview.rs` 的 `WorldCtx`（见上）；最后重生成 `schema/crewd-api.schema.json` |
 
 ### 26.7 给 M3c 的合并注意（T10a 的唤醒侧跟进）
@@ -1089,4 +1094,6 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 | `settings.rs:58` 休眠期限不合法 | 同上 | 新码 `settings.bad_hibernate_deadline`（占位符 `["value"]`），两种语言的 md 各加一节 |
 | `restart.rs`（预计 4 个冲突段） | N1 按 `home_of` 分组（`by_home`）；拒绝装码 | 留 N1 的 `by_home` / `home_of` 分组，再加 M3c 的休眠计数与 `notice.restart.hibernate`；`get` 找不到 → `Code::RestartNotFound`；`restart.rs:28` 的 `eprintln!` 改成英文或走 LOG_ONLY |
 | `wakes.rs`（预计 2 个冲突段） | 同上；N1 加了 `count_inflight_for_crew` / `drop_for_crew` / `Enqueued::Skipped` | M3c 的 `apply` / `ack_delivered` / `ack_failed` 错误 → `WakeNotFound` / `WakeBadTransition(from, to)`；坏行 → `Store(Invalid)`；session 对不上 → 新码或 `Store(Invalid)`；N1 的三样都留；对 `Enqueued` 的穷举 match 处理 `Skipped` |
+| N1 自己的测试 `collab/src/crews.rs:1840` 与 `:1879` 调 `wakes::mark_inflight` | M3c 把它换成 `claim`（**合并后编不过**） | 改成 `wakes::claim(tx, &[id]).map(\|_\| ())` |
+| `hibernate.rs:73` 与 wakes「坏行 → `Store(Invalid)`」那几行 | collab 的文字扫描测试连 `Store(Invalid(format!(…)))` 里的中文也报 | 写英文，或进 `LOG_ONLY` 白名单（同 `restart.rs:28` 的做法） |
 | `dispatch.rs` 里 M3c 加的方法若构造 `CollabError` 字符串 | 变体装 `Refusal` | 用码（`collab::refusal::Code`）；`dispatch::collab_err` 会带上 `data.refusal` |

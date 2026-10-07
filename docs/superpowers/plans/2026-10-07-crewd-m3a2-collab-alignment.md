@@ -1,5 +1,7 @@
 # crewd M3a.2 协作模型对齐（N1）Implementation Plan
 
+> **已被 N1b 取代**（总机组 = 独立的管理机组，机组成森林）——以 spec §24.1 / §26 为准；本计划是历史记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 2026-10-07 的人类裁定与采纳的消息模型落到 main 上的数据层与协作层（`crewd-store` / `crewd-proto` / `crewd-collab` / `crewd-legacy` / `crewd-server` 的 M3a 部分），在 M3b T12 与 M3c T10a 之前完成，两条分支随后合 main：
