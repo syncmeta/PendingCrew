@@ -3,6 +3,7 @@ pub mod archive;
 pub mod channels;
 pub mod crews;
 pub mod db;
+pub mod fsutil;
 pub mod messages;
 pub mod schema;
 pub mod sessions;
