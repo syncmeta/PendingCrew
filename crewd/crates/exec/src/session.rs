@@ -2520,7 +2520,8 @@ mod tests {
         );
         let mut log = t.core.take_actions();
         assert_eq!(writes(&log), vec![b"\x1b[B".to_vec()]);
-        log.extend(t.output(&numbered_menu("Run rm -rf build?", 0), 0.05));
+        // 新框的高亮恰好也停在第二项（下一下预期的位置）：只有指纹能分出它不是原来那个框。
+        log.extend(t.output(&numbered_menu("Run rm -rf build?", 1), 0.05));
         log.extend(t.tick(0.15));
         log.extend(t.tick(1.0));
         assert_eq!(
