@@ -951,3 +951,40 @@ async fn crew_delete_snapshots_before_purging() {
         .unwrap();
     assert_eq!(n, 1, "快照是删之前的样子");
 }
+
+/// 复审 3：快照拍不成（这里是 backups/ 只读），crew.delete 报存储故障，机组原样还在。
+#[tokio::test]
+async fn crew_delete_without_a_snapshot_deletes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let made = c
+        .call(
+            1,
+            "crew.create",
+            json!({"title":"删不掉的","workingDirectory":"/tmp/example"}),
+        )
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = dir.path().join("backups");
+    // 启动时的定时备份可能正在写 backups/：等它出现再收权限。
+    for _ in 0..200 {
+        if crewd_store::backup::list_auto(&b)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let code = c.call_err(2, "crew.delete", json!({"crewId":made})).await;
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code, crewd_proto::RpcError::STORAGE);
+    let got = c.call(3, "crew.get", json!({"crewId":made})).await;
+    assert_eq!(got["crew"]["id"], made, "{got}");
+}
