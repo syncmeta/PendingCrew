@@ -6,7 +6,7 @@ use crate::{Result, Tx};
 pub enum TurnEnd {
     /// 不需要代发。
     Nothing,
-    /// 代发了一条（worker → 大厅 @机长；机长 → 根机组人类群 @人）。
+    /// 代发了一条（worker → 大厅 @机长；机长 → home 的人类群 @人）。
     Posted { message_id: String },
     /// 这一轮已经 @ 过能答的人（机长 / 人）。
     AlreadyCalled,

@@ -1,5 +1,6 @@
 //! 重启后问人是否恢复上次在跑的 session（§22.7 Q1）。这里只记账与公告；恢复由 M3c 订阅 `RestartAnswered` 后做。
 use crate::messages;
+use crate::refusal::{Code, Refusal};
 use crate::{
     Change, CollabError, Result, Sender, Tx, crews, hibernate, prompts, sessions, settings,
 };
@@ -25,7 +26,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RestartPrompt> {
 /// 休眠记录；坏了（读不出来）只记日志、当没有（评审 m3：不能因为它把重启询问的读写弄坏，按普通重启问）。
 fn record_or_none(conn: &Connection) -> Option<hibernate::Record> {
     hibernate::get(conn).unwrap_or_else(|e| {
-        eprintln!("crewd: 协作：休眠记录读不出来，按普通重启算：{e}");
+        eprintln!("crewd: collab: hibernate record unreadable, treating as a plain restart: {e}");
         None
     })
 }
@@ -56,7 +57,9 @@ pub fn get(conn: &Connection, id: i64) -> Result<RestartPrompt> {
             row,
         )
         .optional()?
-        .ok_or_else(|| CollabError::NotFound(format!("没有重启询问 {id}")))?;
+        .ok_or_else(|| {
+            CollabError::NotFound(Refusal::new(Code::RestartNotFound).arg("id", id.to_string()))
+        })?;
     with_reason(conn, p)
 }
 
@@ -132,18 +135,18 @@ pub fn open_with(
             .map(|h| h.session_id.clone())
             .collect();
     }
-    // 每个涉及的根机组人类群各一条，只列那棵树里的 session。
+    // 每个涉及的 home（总机组 / 顶层机组）人类群各一条，只列 home 是它的 session。
     let f = prompts::render_file(settings::locale(tx.conn())?);
-    let mut by_root: Vec<(String, Vec<String>)> = Vec::new();
+    let mut by_home: Vec<(String, Vec<String>)> = Vec::new();
     for sid in &ids {
-        let root = crews::root_of(tx.conn(), &sessions::crew_of(tx.conn(), sid)?)?;
-        match by_root.iter_mut().find(|(r, _)| *r == root) {
+        let home = crews::home_of(tx.conn(), &sessions::crew_of(tx.conn(), sid)?)?;
+        match by_home.iter_mut().find(|(h, _)| *h == home) {
             Some((_, v)) => v.push(sid.clone()),
-            None => by_root.push((root, vec![sid.clone()])),
+            None => by_home.push((home, vec![sid.clone()])),
         }
     }
-    for (root, sids) in by_root {
-        // 这棵树里有休眠停下的 → 「上次休眠了 N 个」（N 只数它们）；没有 → 普通公告。
+    for (home, sids) in by_home {
+        // 这个 home 下有休眠停下的 → 「上次休眠了 N 个」（N 只数它们）；没有 → 普通公告。
         let n = sids.iter().filter(|s| hibernated.contains(s)).count();
         let (head, count) = if n > 0 {
             ("notice.restart.hibernate", n)
@@ -162,7 +165,7 @@ pub fn open_with(
                 )],
             ));
         }
-        messages::announce_to_human(tx, &root, Sender::System, text, "restart")?;
+        messages::announce_to_human(tx, &home, Sender::System, text, "restart")?;
     }
     tx.note(Change::RestartChanged { id });
     Ok(Some(get(tx.conn(), id)?))
@@ -174,15 +177,17 @@ pub fn answer(tx: &mut Tx<'_>, id: i64, a: RestartAnswer) -> Result<RestartPromp
     let p = get(tx.conn(), id)?;
     match (p.answer, a) {
         (Some(RestartAnswer::Resume), _) => {
-            return Err(CollabError::Conflict("已经答过「恢复」".into()));
+            return Err(CollabError::Conflict(Refusal::new(
+                Code::RestartAlreadyResumed,
+            )));
         }
         (Some(RestartAnswer::Later), RestartAnswer::Later) => return Ok(p),
         _ => {}
     }
     if pending(tx.conn())?.map(|x| x.id) != Some(id) {
-        return Err(CollabError::Conflict(format!(
-            "重启询问 {id} 已被更新的一条取代"
-        )));
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::RestartSuperseded).arg("id", id.to_string()),
+        ));
     }
     tx.conn().execute(
         "UPDATE restart_prompts SET answer=?2, answered_at=?3 WHERE id=?1",
@@ -204,7 +209,20 @@ mod tests {
     use crewd_proto::RestartReason;
 
     #[test]
-    fn open_announces_per_root_and_nothing_to_resume_means_no_prompt() {
+    fn a_restart_prompt_is_announced_in_each_top_level_human_channel() {
+        let mut s = store();
+        ok(&mut s, |tx| open(tx, vec!["w-b1".into(), "cap-x".into()]));
+        let n = |ch: &str| {
+            crate::messages::list(s.conn(), ch, None, None, 10)
+                .map(|v| v.len())
+                .unwrap_or(0)
+        };
+        assert_eq!((n("crew-a/human"), n("crew-x/human")), (1, 1));
+        assert!(!crate::channels::human_channel_exists(s.conn(), "chief").unwrap());
+    }
+
+    #[test]
+    fn open_announces_per_home_and_nothing_to_resume_means_no_prompt() {
         let mut s = store();
         assert_eq!(ok(&mut s, |tx| open(tx, vec![])), None);
         let p = ok(&mut s, |tx| {
@@ -216,7 +234,7 @@ mod tests {
         .unwrap();
         assert_eq!(p.session_ids, ["w-a1", "w-b1", "cap-x"], "去重、保持顺序");
         let a = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
-        assert_eq!(a.len(), 1, "crew-a 与 crew-b 同根，一条公告");
+        assert_eq!(a.len(), 1, "crew-a 与 crew-b 同一个 home，一条公告");
         assert!(a[0].text.contains("名字-w-a1") && a[0].text.contains("名字-w-b1"));
         assert_eq!(
             crate::messages::list(s.conn(), "crew-x/human", None, None, 10)

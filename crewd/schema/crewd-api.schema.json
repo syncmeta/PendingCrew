@@ -1,88 +1,5 @@
 {
   "$defs": {
-    "Approval": {
-      "properties": {
-        "consumedAt": {
-          "description": "同意后那张一次性放行票被用掉的时刻（None + Allow = 票还在）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "crewId": {
-          "type": "string"
-        },
-        "decidedAt": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decidedBy": {
-          "description": "只有 \"human\"（审批不阻塞、不超时，控制者裁定 C2）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Decision"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "id": {
-          "type": "string"
-        },
-        "requestedAt": {
-          "type": "string"
-        },
-        "sessionId": {
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        },
-        "toolName": {
-          "type": "string"
-        },
-        "toolUseId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "sessionId",
-        "crewId",
-        "toolName",
-        "summary",
-        "requestedAt"
-      ],
-      "type": "object"
-    },
-    "ApprovalDecideParams": {
-      "additionalProperties": false,
-      "properties": {
-        "allow": {
-          "type": "boolean"
-        },
-        "id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "allow"
-      ],
-      "type": "object"
-    },
     "Ask": {
       "description": "一条人类待确认（H 号按机组发，§19 Q1）。",
       "properties": {
@@ -208,7 +125,7 @@
       "additionalProperties": false,
       "description": "全可选：`null` 当 `{}`。",
       "properties": {
-        "rootCrewId": {
+        "homeCrewId": {
           "default": null,
           "type": [
             "string",
@@ -485,7 +402,7 @@
       "type": "object"
     },
     "ChannelRef": {
-      "description": "`channel.removed` 的数据：群随机组删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。",
+      "description": "`channel.purged` 的数据：群随机组的永久删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。",
       "properties": {
         "channelId": {
           "type": "string"
@@ -597,9 +514,6 @@
     },
     "Crew": {
       "properties": {
-        "builtin": {
-          "type": "boolean"
-        },
         "captainExecutor": {
           "description": "机长的执行器类型，词表同 `Session.executor`。",
           "type": [
@@ -634,6 +548,10 @@
         "id": {
           "type": "string"
         },
+        "management": {
+          "description": "总机组（管理机组）：至多一个；不在机组树里（没有父、没有子），对全部机组有权限（PM 2026-10-07）。\n`crew.list` 把它排在最前。",
+          "type": "boolean"
+        },
         "number": {
           "format": "int64",
           "type": [
@@ -652,9 +570,16 @@
         },
         "position": {
           "default": 0,
-          "description": "只在**顶层**（根机组之间）有意义的次序（侧栏手动排，控制者裁定 C1；`crew.reorder` 不带 parentId 时改它，\n新根排在末尾）。子机组在某个父下的次序不在这里：看父的 `childIds`（多父机组在每个父下各有自己的次序）。",
+          "description": "只表示顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。\n`parentIds` 非空时这个值没有意义（可能是变成子机组之前留下的旧值），客户端不要用它排序：\n子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。总机组恒为 0，单独列出。",
           "format": "int64",
           "type": "integer"
+        },
+        "removedAt": {
+          "description": "移除时刻（`crew.remove`：隐藏并冻结、可恢复，N1 裁定 13 / PM 2026-10-07）；没移除时不出现。\n库里的列仍叫 `crews.archived_at`（内部叫归档）；线上一律叫 removed，archived 只用于群。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "statusLine": {
           "description": "机长写的一句状态（`set_crew_status`）。",
@@ -686,7 +611,7 @@
       "required": [
         "id",
         "title",
-        "builtin",
+        "management",
         "parentIds",
         "createdAt",
         "updatedAt"
@@ -749,8 +674,8 @@
         "crew": {
           "$ref": "#/$defs/Crew"
         },
-        "rootId": {
-          "description": "归属的根机组（§13 Q1：多父归最早的根）。",
+        "homeId": {
+          "description": "这个机组的人类群在 `<homeId>/human`；总机组 / 顶层机组 = 自己（多父归最早建的顶层祖先，§13 Q1 同口径）。",
           "type": "string"
         },
         "sessions": {
@@ -762,7 +687,7 @@
       },
       "required": [
         "crew",
-        "rootId",
+        "homeId",
         "children",
         "channels",
         "sessions"
@@ -781,8 +706,25 @@
       ],
       "type": "object"
     },
+    "CrewListParams": {
+      "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`。已移除的机组默认不列；`includeRemoved: true` 连它们一起列。\n`Crew.childIds` 照实含已移除的子机组（边还在）：列表里没有的 id 跳过即可。",
+      "properties": {
+        "includeRemoved": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CrewRef": {
-      "description": "`crew.removed` 的数据。",
+      "description": "`crew.purged` 的数据。",
       "properties": {
         "crewId": {
           "type": "string"
@@ -818,7 +760,7 @@
     },
     "CrewReorderParams": {
       "additionalProperties": false,
-      "description": "侧栏次序按父边分层（控制者裁定 C1）：一次只排**一层**。\n`parentId` 给了 = 排这个父名下的直系子机组（写的是这条父边上的次序，读回来是父的 `Crew.childIds`；\n多父机组在别的父下的次序不受影响）；缺省 = 排顶层的根机组（写 `Crew.position`；内建机组不参与顶层排序、不能出现在名单里）。\n`crewIds` 必须恰好是这一层现有的全部机组（不重复、不缺、不多），否则 -32602。",
+      "description": "侧栏次序按父边分层（控制者裁定 C1）：一次只排**一层**。\n`parentId` 给了 = 排这个父名下的直系子机组（写的是这条父边上的次序，读回来是父的 `Crew.childIds`；\n多父机组在别的父下的次序不受影响；给总机组 = -32602，它不在树里）；缺省 / null = 排顶层机组\n（写 `Crew.position`；总机组不在顶层次序里，不能出现在名单里）。\n`crewIds` 必须包含这一层所有**没移除**的机组，不重复、不含别的机组（不认识的 id 一律 -32602）；\n客户端从默认列表（不含已移除）排序，所以不必带已移除的。没带的已移除子机组保持原来的相对次序、排在\n`crewIds` 后面（带了就按给的次序）。`parentId` 给的父已移除 = `crew.removed`（移除 = 冻结，次序也不能改）。\n返回最终的全序。",
       "properties": {
         "crewIds": {
           "items": {
@@ -879,13 +821,6 @@
         "crewId"
       ],
       "type": "object"
-    },
-    "Decision": {
-      "enum": [
-        "allow",
-        "deny"
-      ],
-      "type": "string"
     },
     "DecisionView": {
       "properties": {
@@ -957,7 +892,7 @@
           "type": "string"
         },
         "orgPath": {
-          "description": "根在最左，\" / \" 分隔；根机组本身是空串。",
+          "description": "上级的路径：顶层机组在最左，\" / \" 分隔；总机组不在机组树里（总机组与顶层机组本身是空串）。",
           "type": "string"
         },
         "sessionId": {
@@ -978,7 +913,7 @@
     },
     "Empty": {
       "additionalProperties": false,
-      "description": "空结果（`crew.delete` 等）。",
+      "description": "空结果（`crew.purge` 等）。",
       "type": "object"
     },
     "Event": {
@@ -1022,7 +957,7 @@
               "$ref": "#/$defs/ChannelRef"
             },
             "event": {
-              "const": "channel.removed",
+              "const": "channel.purged",
               "type": "string"
             }
           },
@@ -1054,7 +989,7 @@
               "$ref": "#/$defs/CrewRef"
             },
             "event": {
-              "const": "crew.removed",
+              "const": "crew.purged",
               "type": "string"
             }
           },
@@ -1087,22 +1022,6 @@
             },
             "event": {
               "const": "ask.changed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "event",
-            "data"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "data": {
-              "$ref": "#/$defs/Approval"
-            },
-            "event": {
-              "const": "approval.changed",
               "type": "string"
             }
           },
@@ -1362,8 +1281,7 @@
       "enum": [
         "session",
         "captain",
-        "human",
-        "broadcast"
+        "human"
       ],
       "type": "string"
     },
@@ -1768,6 +1686,17 @@
           "format": "int32",
           "type": "integer"
         },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "规则拒绝的稳定码（N1 Task 10）：客户端按码本地化，`message` 只是中文缺省。只加不改——老客户端忽略它。"
+        },
         "message": {
           "type": "string"
         }
@@ -1775,6 +1704,19 @@
       "required": [
         "code",
         "message"
+      ],
+      "type": "object"
+    },
+    "RpcErrorData": {
+      "description": "`RpcError.data`：规则拒绝带的机器可读部分。",
+      "properties": {
+        "refusal": {
+          "description": "拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "refusal"
       ],
       "type": "object"
     },
@@ -1936,12 +1878,19 @@
     },
     "SessionListParams": {
       "additionalProperties": false,
-      "description": "全可选：`null` 当 `{}`。",
+      "description": "全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（已移除的也列）；不给 = 全部，但已移除机组的\nsession 只在 `includeRemoved: true` 时列（同 `crew.list`）。",
       "properties": {
         "crewId": {
           "default": null,
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "includeRemoved": {
+          "default": null,
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -2009,7 +1958,6 @@
               "crew",
               "badge",
               "ask",
-              "approval",
               "session",
               "restart",
               "wake"
@@ -2171,11 +2119,8 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "events": {
-    "approval.changed": {
-      "$ref": "#/$defs/Approval"
-    },
     "ask.changed": {
       "$ref": "#/$defs/Ask"
     },
@@ -2185,13 +2130,13 @@
     "channel.changed": {
       "$ref": "#/$defs/ChannelSummary"
     },
-    "channel.removed": {
+    "channel.purged": {
       "$ref": "#/$defs/ChannelRef"
     },
     "crew.changed": {
       "$ref": "#/$defs/Crew"
     },
-    "crew.removed": {
+    "crew.purged": {
       "$ref": "#/$defs/CrewRef"
     },
     "events.lagged": {
@@ -2216,25 +2161,6 @@
     }
   },
   "methods": {
-    "approval.decide": {
-      "params": {
-        "$ref": "#/$defs/ApprovalDecideParams"
-      },
-      "result": {
-        "$ref": "#/$defs/Approval"
-      }
-    },
-    "approval.list": {
-      "params": {
-        "$ref": "#/$defs/NoParams"
-      },
-      "result": {
-        "items": {
-          "$ref": "#/$defs/Approval"
-        },
-        "type": "array"
-      }
-    },
     "ask.answer": {
       "params": {
         "$ref": "#/$defs/AskAnswerParams"
@@ -2337,14 +2263,6 @@
         "$ref": "#/$defs/Crew"
       }
     },
-    "crew.delete": {
-      "params": {
-        "$ref": "#/$defs/CrewIdParams"
-      },
-      "result": {
-        "$ref": "#/$defs/Empty"
-      }
-    },
     "crew.get": {
       "params": {
         "$ref": "#/$defs/CrewIdParams"
@@ -2355,7 +2273,7 @@
     },
     "crew.list": {
       "params": {
-        "$ref": "#/$defs/NoParams"
+        "$ref": "#/$defs/CrewListParams"
       },
       "result": {
         "items": {
@@ -2364,9 +2282,25 @@
         "type": "array"
       }
     },
+    "crew.purge": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
     "crew.release": {
       "params": {
         "$ref": "#/$defs/CrewReleaseParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
+      }
+    },
+    "crew.remove": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
       },
       "result": {
         "$ref": "#/$defs/Crew"
@@ -2381,6 +2315,14 @@
           "$ref": "#/$defs/Crew"
         },
         "type": "array"
+      }
+    },
+    "crew.restore": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
       }
     },
     "crew.update": {
@@ -2516,7 +2458,6 @@
     "crew",
     "badge",
     "ask",
-    "approval",
     "session",
     "restart",
     "wake"

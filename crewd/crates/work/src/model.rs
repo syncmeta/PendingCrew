@@ -225,7 +225,7 @@ pub struct EntryTodo {
     pub closed: Option<EntryClosure>,
 }
 
-/// 「X 毫秒没回复就按 A 办」（spec §6；到点后照常走审批，§13 Q2）。
+/// 「X 毫秒没回复就按 A 办」（spec §6；到点后照常经过 runner 自己的权限确认，§13 Q2）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DefaultOption {
     pub text: String,

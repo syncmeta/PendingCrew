@@ -1,7 +1,9 @@
 //! 持久化唤醒队列（spec §22.4：取代只在内存里的 `CrewDeferredWakeQueue`）与熔断台账（§22.7 Q5）。
 //! 这里只有读写；叫谁、何时投、准入与熔断判据都在 M3c（`crewd-wake` + `server::orchestra`）。
+use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Tx};
 use crewd_proto::wake_lifecycle as lifecycle;
+use crewd_store::StoreError;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +53,9 @@ pub enum Enqueued {
     New(i64),
     /// 同一 (session, kind, source) 已经在表里（不论状态）：不重复入队。
     Duplicate(i64),
+    /// 目标 session 的机组已归档（终审 I3）：不入队、不写行、不发变更。调用方当作无事发生——
+    /// 归档机组起不来 session；解档也不会把归档期间的叫醒冲出来（同 `crews::archive` 作废排着的唤醒）。
+    Skipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,10 +87,6 @@ pub mod source {
     /// H 号按机组发，所以带上机组。
     pub fn ask(crew_id: &str, ask: &str) -> String {
         format!("ask:{crew_id}/{ask}")
-    }
-    /// 审批有了结果（控制者裁定 C2）：kind 仍是 `ask_answer`，按 source 前缀区分。
-    pub fn approval(approval_id: &str) -> String {
-        format!("approval:{approval_id}")
     }
     pub fn timer(token: &str) -> String {
         format!("timer:{token}")
@@ -189,12 +190,18 @@ fn rows(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Wa
 
 /// 入队。去重键 `(session, kind, source)` 跨所有状态（见 `source`）直到 `prune`；
 /// 命中已有行返回 `Duplicate`，**不**改它的优先级、`not_before`、`note`，也不发变更。
+/// 目标 session 的机组已归档 → `Skipped`（不写行、不发变更；不变式在 collab 这里，入队方不必各自判）。
 pub fn enqueue(tx: &mut Tx<'_>, r: WakeRequest) -> Result<Enqueued> {
     if r.source.trim().is_empty() {
-        return Err(CollabError::Invalid("唤醒的 source 不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::WakeSourceEmpty)));
     }
-    if crewd_store::sessions::get(tx.conn(), &r.session)?.is_none() {
-        return Err(CollabError::NotFound(format!("没有 session {}", r.session)));
+    let Some(target) = crewd_store::sessions::get(tx.conn(), &r.session)? else {
+        return Err(CollabError::NotFound(
+            Refusal::new(Code::SessionNotFound).arg("session", r.session.clone()),
+        ));
+    };
+    if crate::crews::is_archived(tx.conn(), &target.crew_id)? {
+        return Ok(Enqueued::Skipped);
     }
     let n = tx.conn().execute(
         "INSERT INTO wakes(session_id,kind,source,origin,priority,not_before,note,created_at)
@@ -297,12 +304,14 @@ pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>>
             })
             .optional()?;
         let Some((state, attempts)) = row else {
-            return Err(CollabError::NotFound(format!("没有唤醒 {id}")));
+            return Err(not_found(*id));
         };
-        let from = WakeState::parse(&state)
-            .ok_or_else(|| CollabError::Invalid(format!("唤醒 {id} 的状态坏了：{state:?}")))?;
-        let to = lifecycle::next(from, event)
-            .map_err(|e| CollabError::Conflict(format!("唤醒 {id}：{e}")))?;
+        let from = WakeState::parse(&state).ok_or_else(|| {
+            CollabError::Store(StoreError::Invalid(format!(
+                "wake {id} has an unreadable state {state:?}"
+            )))
+        })?;
+        let to = lifecycle::next(from, event).map_err(|e| bad_transition(*id, e))?;
         planned.push((*id, to, lifecycle::attempts_after(event, attempts)));
     }
     let retry_at = match event {
@@ -319,6 +328,26 @@ pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>>
         )?;
     }
     Ok(planned.into_iter().map(|(_, _, a)| a).collect())
+}
+
+fn not_found(id: i64) -> CollabError {
+    CollabError::NotFound(Refusal::new(Code::WakeNotFound).arg("wake", id.to_string()))
+}
+
+/// 表不认的事件 → `wake.bad_transition`：`to` 是这个事件想去的状态（表认的话会到的那一个）。
+fn bad_transition(id: i64, e: lifecycle::Illegal) -> CollabError {
+    let to = match e.event {
+        WakeEvent::Claim => WakeState::Inflight,
+        WakeEvent::Deliver => WakeState::Delivered,
+        WakeEvent::Fail { .. } | WakeEvent::Requeue => WakeState::Pending,
+        WakeEvent::GiveUp | WakeEvent::Drop => WakeState::Dropped,
+    };
+    CollabError::Conflict(
+        Refusal::new(Code::WakeBadTransition)
+            .arg("wake", id.to_string())
+            .arg("from", e.from.as_str())
+            .arg("to", to.as_str()),
+    )
 }
 
 fn note_error(tx: &mut Tx<'_>, ids: &[i64], error: &str) -> Result<()> {
@@ -360,10 +389,11 @@ pub fn ack_delivered(
     let all: Vec<i64> = wakes.iter().chain(rider_ids).copied().collect();
     for r in by_ids(tx.conn(), &all)? {
         if r.session != session {
-            return Err(CollabError::Invalid(format!(
-                "唤醒 {} 属于 {}，不是 {session}",
+            // 调用方（M3c）自己的错，不是给人看的规则拒绝。
+            return Err(CollabError::Store(StoreError::Invalid(format!(
+                "wake {} belongs to session {}, not {session}",
                 r.id, r.session
-            )));
+            ))));
         }
     }
     apply(tx, wakes, WakeEvent::Deliver)?;
@@ -407,11 +437,10 @@ pub fn ack_failed(
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
         let Some(r) = rows.iter().find(|r| r.id == *id) else {
-            return Err(CollabError::NotFound(format!("没有唤醒 {id}")));
+            return Err(not_found(*id));
         };
         let retry_at_ms = decide(r.attempts);
-        lifecycle::next(r.state, failure_event(retry_at_ms))
-            .map_err(|e| CollabError::Conflict(format!("唤醒 {id}：{e}")))?;
+        lifecycle::next(r.state, failure_event(retry_at_ms)).map_err(|e| bad_transition(*id, e))?;
         out.push(Failed {
             id: *id,
             attempts: r.attempts,
@@ -442,6 +471,35 @@ pub fn mark_delivered(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
 pub fn mark_dropped(tx: &mut Tx<'_>, id: i64, why: &str) -> Result<()> {
     apply(tx, &[id], WakeEvent::Drop)?;
     note_error(tx, &[id], why)
+}
+
+/// 机组的 session 名下正在投递（inflight）的唤醒条数。`crews::archive` 见到非零就拒：投递方随后还要
+/// `ack_delivered` / `ack_failed` / `requeue`，作废了它们会撞上 dropped。
+pub fn count_inflight_for_crew(conn: &Connection, crew: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM wakes w JOIN sessions s ON s.id=w.session_id
+          WHERE s.crew_id=?1 AND w.state='inflight'",
+        [crew],
+        |r| r.get(0),
+    )?)
+}
+
+/// 归档机组时把它的 session 还排着队的唤醒（**pending**，含 requeue 回来的）作废：归档机组不让 session 起来，
+/// 留着只会占队、解档后还会把陈旧的叫醒冲出来。同一个事务里调（`crews::archive`，它已先确认没有 inflight）；
+/// 已投递 / 已作废的不动。返回作废了几条。原因写进 `last_error`（`wake.list` 排障看得到）。
+pub fn drop_for_crew(tx: &mut Tx<'_>, crew: &str, why: &str) -> Result<usize> {
+    let ids: Vec<i64> = {
+        let mut st = tx.conn().prepare(
+            "SELECT w.id FROM wakes w JOIN sessions s ON s.id=w.session_id
+              WHERE s.crew_id=?1 AND w.state='pending' ORDER BY w.id",
+        )?;
+        st.query_map([crew], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for id in &ids {
+        mark_dropped(tx, *id, why)?;
+    }
+    Ok(ids.len())
 }
 
 /// inflight 原样退回 pending（没尝试成：crewd 停、撞额度、会话退出时被打断）：退回 `claim` 记的那一次，不算失败。
@@ -512,6 +570,7 @@ pub fn list(conn: &Connection, session: Option<&str>, limit: u32) -> Result<Vec<
 /// 熔断台账（§22.7 Q5：「来源 → 目标」与「目标 session」两级；绝不按全机总量）。
 /// 只有人能从客户端解（M3c 的 `admission.recover`）。
 pub mod latches {
+    use crate::refusal::{Code, Refusal};
     use crate::{CollabError, Result, Tx};
     use rusqlite::{Connection, OptionalExtension, params};
 
@@ -530,9 +589,9 @@ pub mod latches {
                     Ok(("edge", format!("{from}→{to}")))
                 }
                 Scope::Session(s) if ok(s) => Ok(("session", s.clone())),
-                _ => Err(CollabError::Invalid(format!(
-                    "熔断台账的 id 不能为空、也不能含「→」：{self:?}"
-                ))),
+                _ => Err(CollabError::Invalid(
+                    Refusal::new(Code::WakeLatchBadScope).arg("scope", format!("{self:?}")),
+                )),
             }
         }
         fn from_key(scope: &str, id: &str) -> Option<Scope> {
@@ -611,9 +670,11 @@ pub mod latches {
                 Scope::from_key(&s, &id)
                     .map(|scope| Latch { scope, reason, at })
                     .ok_or_else(|| {
-                        CollabError::Invalid(format!(
-                            "wake_latches 里有认不出的行：scope={s:?} id={id:?}"
-                        ))
+                        CollabError::Invalid(
+                            Refusal::new(Code::WakeLatchRowUnreadable)
+                                .arg("scope", s.clone())
+                                .arg("id", id.clone()),
+                        )
                     })
             })
             .collect()
@@ -675,6 +736,68 @@ mod tests {
             )),
             CollabError::NotFound(_)
         ));
+    }
+
+    /// 终审 I3：归档机组的 session 不入队（归档机组起不来 session；排着的唤醒解档后会把陈旧的叫醒冲出来）。
+    /// 它在别的机组的 topic 里被 @ 了：入队 = Skipped、不写行、不发变更；解档之后队里也没有陈旧的唤醒。
+    #[test]
+    fn enqueue_skips_sessions_of_archived_crews_and_unarchive_flushes_nothing() {
+        use crate::Sender;
+        use crewd_proto::{ChannelKind, MemberRef, Mention, MentionKind};
+        let mut s = store();
+        let t = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "示例".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("cap-x")],
+                },
+            )
+        });
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-x"));
+        let m = ok(&mut s, |tx| {
+            crate::messages::post(
+                tx,
+                Sender::Session("w-a1".into()),
+                crate::messages::NewPost {
+                    channel_id: t.id.clone(),
+                    text: "叫一下归档机组的机长".into(),
+                    mentions: vec![Mention {
+                        kind: MentionKind::Session,
+                        target_id: Some("cap-x".into()),
+                    }],
+                    ..Default::default()
+                },
+            )
+        })
+        .message;
+        let (got, ch) = ok_at(&mut s, NOW, |tx| {
+            enqueue(
+                tx,
+                req("cap-x", &source::message(&m.id), WakePriority::Auto),
+            )
+        });
+        assert_eq!(got, Enqueued::Skipped);
+        assert!(ch.is_empty(), "跳过不发变更");
+        assert_eq!(
+            count(&s, "SELECT COUNT(*) FROM wakes WHERE session_id='cap-x'"),
+            0
+        );
+        // 活机组的 session 照常入队（跳过只看 session 自己的机组）。
+        assert!(matches!(
+            ok(&mut s, |tx| enqueue(
+                tx,
+                req("w-a2", &source::message(&m.id), WakePriority::Auto)
+            )),
+            Enqueued::New(_)
+        ));
+        ok(&mut s, |tx| crate::crews::unarchive(tx, "crew-x"));
+        assert!(due_for(s.conn(), "cap-x", NOW + MIN).unwrap().is_empty());
+        assert!(sessions_with_due(s.conn(), NOW + MIN).unwrap() == ["w-a2"]);
     }
 
     #[test]
@@ -945,7 +1068,7 @@ mod tests {
                 &[],
                 &[]
             )),
-            CollabError::Invalid(_)
+            CollabError::Store(StoreError::Invalid(_))
         ));
         assert_eq!(by_ids(s.conn(), &ids).unwrap(), before);
     }

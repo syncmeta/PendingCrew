@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// 2：`whiteboard.*` 删除、`Message.crewId` → `channelId`（裁定 18）。
-pub const API_VERSION: u32 = 2;
+/// v3：删审批、总机组 = 管理机组（不在机组树里）、@ 不再收窄（N1，spec §24）。
+pub const API_VERSION: u32 = 3;
 
 pub mod methods {
     pub const HELLO: &str = "system.hello";
@@ -24,7 +25,14 @@ pub mod methods {
     pub const CREW_ADOPT: &str = "crew.adopt";
     pub const CREW_REORDER: &str = "crew.reorder";
     pub const CREW_RELEASE: &str = "crew.release";
-    pub const CREW_DELETE: &str = "crew.delete";
+    /// 移除机组（PM 2026-10-07）：隐藏并冻结（库里叫归档；线上 `Crew.removedAt`），不删任何东西、可恢复；
+    /// 返回移除后的 `Crew`。
+    pub const CREW_REMOVE: &str = "crew.remove";
+    /// 恢复（`crew.remove` 的反操作），返回 `Crew`。
+    pub const CREW_RESTORE: &str = "crew.restore";
+    /// 永久删除：只收已移除的机组，真的删掉这个机组的一切；删之前拍一份 pre-delete 快照（N4），拍不成就不删；
+    /// 快照只是安全网，30 天后随定时备份轮转删掉。
+    pub const CREW_PURGE: &str = "crew.purge";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_UPDATE: &str = "channel.update";
@@ -41,8 +49,6 @@ pub mod methods {
     pub const ASK_LIST: &str = "ask.list";
     pub const ASK_ANSWER: &str = "ask.answer";
     pub const ASK_WITHDRAW: &str = "ask.withdraw";
-    pub const APPROVAL_LIST: &str = "approval.list";
-    pub const APPROVAL_DECIDE: &str = "approval.decide";
     pub const RESTART_PENDING: &str = "restart.pending";
     pub const RESTART_ANSWER: &str = "restart.answer";
     pub const DIRECTORY_LIST: &str = "directory.list";
@@ -60,7 +66,9 @@ pub mod methods {
         CREW_ADOPT,
         CREW_REORDER,
         CREW_RELEASE,
-        CREW_DELETE,
+        CREW_REMOVE,
+        CREW_RESTORE,
+        CREW_PURGE,
         CHANNEL_LIST,
         CHANNEL_CREATE,
         CHANNEL_UPDATE,
@@ -77,8 +85,6 @@ pub mod methods {
         ASK_LIST,
         ASK_ANSWER,
         ASK_WITHDRAW,
-        APPROVAL_LIST,
-        APPROVAL_DECIDE,
         RESTART_PENDING,
         RESTART_ANSWER,
         DIRECTORY_LIST,
@@ -92,17 +98,18 @@ pub mod events {
     /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
     pub const TOPICS: &[&str] = &[
-        "message", "channel", "crew", "badge", "ask", "approval", "session", "restart", "wake",
+        "message", "channel", "crew", "badge", "ask", "session", "restart", "wake",
     ];
     pub const MESSAGE_APPENDED: &str = "message.appended";
     pub const CHANNEL_CHANGED: &str = "channel.changed";
-    /// 群随机组删除被级联删掉（`{channelId}`）。
-    pub const CHANNEL_REMOVED: &str = "channel.removed";
+    /// 群随机组的永久删除（`crew.purge`）被级联删掉（`{channelId}`）。不叫 `*.removed`：
+    /// 「移除」（`crew.remove`）是可逆的归档，发的是 `channel.changed`（PM 2026-10-07）。
+    pub const CHANNEL_PURGED: &str = "channel.purged";
     pub const CREW_CHANGED: &str = "crew.changed";
-    pub const CREW_REMOVED: &str = "crew.removed";
+    /// 机组被永久删除（`crew.purge`，`{crewId}`）；移除（归档）发的是 `crew.changed`。
+    pub const CREW_PURGED: &str = "crew.purged";
     pub const BADGE_CHANGED: &str = "badge.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
-    pub const APPROVAL_CHANGED: &str = "approval.changed";
     /// `SessionLive`，M3c 发。
     pub const SESSION_CHANGED: &str = "session.changed";
     pub const RESTART_CHANGED: &str = "restart.changed";
@@ -123,6 +130,17 @@ pub struct Request {
 pub struct RpcError {
     pub code: i32,
     pub message: String,
+    /// 规则拒绝的稳定码（N1 Task 10）：客户端按码本地化，`message` 只是中文缺省。只加不改——老客户端忽略它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<RpcErrorData>,
+}
+
+/// `RpcError.data`：规则拒绝带的机器可读部分。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcErrorData {
+    /// 拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。
+    pub refusal: String,
 }
 
 impl RpcError {
@@ -132,16 +150,27 @@ impl RpcError {
     pub const INTERNAL: i32 = -32603;
     /// 规则不允许（不是参数写错：换个身份 / 时机就行）。
     pub const FORBIDDEN: i32 = -32003;
-    /// 引用的东西不存在（机组、群、消息、session、H 号、审批、重启询问……）。
+    /// 引用的东西不存在（机组、群、消息、session、H 号、重启询问……）。
     pub const NOT_FOUND: i32 = -32004;
-    /// 与当前状态冲突（已经决过的审批、还有在跑 session 的机组……）。
+    /// 与当前状态冲突（已经答过 / 撤回的问、还有在跑 session 的机组……）。
     pub const CONFLICT: i32 = -32009;
+    /// 存储故障（磁盘满、I/O 错、库损坏、只读、打不开）：不是这次请求的错，重试多半没用，要人处理（N4 / S26）。
+    pub const STORAGE: i32 = -32010;
 
     pub fn new(code: i32, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
+            data: None,
         }
+    }
+
+    /// 带上规则拒绝码（`data.refusal`）。
+    pub fn with_refusal(mut self, code: &str) -> Self {
+        self.data = Some(RpcErrorData {
+            refusal: code.to_string(),
+        });
+        self
     }
 }
 
@@ -223,12 +252,11 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
     vec![
         (events::MESSAGE_APPENDED, sub::<Message>(g)),
         (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
-        (events::CHANNEL_REMOVED, sub::<ChannelRef>(g)),
+        (events::CHANNEL_PURGED, sub::<ChannelRef>(g)),
         (events::CREW_CHANGED, sub::<Crew>(g)),
-        (events::CREW_REMOVED, sub::<CrewRef>(g)),
+        (events::CREW_PURGED, sub::<CrewRef>(g)),
         (events::BADGE_CHANGED, sub::<Badge>(g)),
         (events::ASK_CHANGED, sub::<Ask>(g)),
-        (events::APPROVAL_CHANGED, sub::<Approval>(g)),
         (events::SESSION_CHANGED, sub::<SessionLive>(g)),
         (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
         (events::LAGGED, sub::<Lagged>(g)),
@@ -342,7 +370,7 @@ pub fn api_schema() -> Value {
         (methods::HELLO, m(sub::<NoParams>(g), sub::<Hello>(g))),
         (
             methods::CREW_LIST,
-            m(sub::<NoParams>(g), many(sub::<Crew>(g))),
+            m(sub::<CrewListParams>(g), many(sub::<Crew>(g))),
         ),
         (
             methods::CREW_GET,
@@ -369,7 +397,15 @@ pub fn api_schema() -> Value {
             m(sub::<CrewReleaseParams>(g), sub::<Crew>(g)),
         ),
         (
-            methods::CREW_DELETE,
+            methods::CREW_REMOVE,
+            m(sub::<CrewIdParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_RESTORE,
+            m(sub::<CrewIdParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_PURGE,
             m(sub::<CrewIdParams>(g), sub::<Empty>(g)),
         ),
         (
@@ -435,14 +471,6 @@ pub fn api_schema() -> Value {
         (
             methods::ASK_WITHDRAW,
             m(sub::<AskWithdrawParams>(g), sub::<Ask>(g)),
-        ),
-        (
-            methods::APPROVAL_LIST,
-            m(sub::<NoParams>(g), many(sub::<Approval>(g))),
-        ),
-        (
-            methods::APPROVAL_DECIDE,
-            m(sub::<ApprovalDecideParams>(g), sub::<Approval>(g)),
         ),
         (
             methods::RESTART_PENDING,
@@ -830,10 +858,7 @@ mod tests {
             serde_json::from_value::<SenderKind>(json!("user")).is_err(),
             "旧词只在迁移 / 导入里归一"
         );
-        assert_eq!(
-            serde_json::to_value(MentionKind::Broadcast).unwrap(),
-            json!("broadcast")
-        );
+        assert_eq!(MentionKind::parse("broadcast"), None);
         assert_eq!(serde_json::to_value(ChannelKind::Dm).unwrap(), json!("dm"));
         assert_eq!(
             serde_json::to_value(MemberRef::Session { id: "w-1".into() }).unwrap(),
@@ -905,7 +930,18 @@ mod tests {
         let mut all: Vec<&str> = methods::ALL.to_vec();
         all.sort();
         assert_eq!(listed, all);
-        assert_eq!(s["apiVersion"], 2);
+        assert_eq!(s["apiVersion"], 3);
+    }
+
+    /// 不做审批了（人 2026-10-07）：契约里不剩任何审批方法 / 事件 / 主题 / 类型（不分大小写，`$defs` 的类型名也算）。
+    #[test]
+    fn there_is_no_approval_surface_left() {
+        let schema = serde_json::to_string(&api_schema()).unwrap().to_lowercase();
+        assert!(
+            !schema.contains("approval"),
+            "契约里不能再有任何审批方法 / 事件 / 类型"
+        );
+        assert_eq!(API_VERSION, 3);
     }
 
     #[test]
@@ -975,7 +1011,6 @@ mod tests {
         let null_ok = [
             methods::HELLO,
             methods::CREW_LIST,
-            methods::APPROVAL_LIST,
             methods::RESTART_PENDING,
             methods::SESSION_LIST,
             methods::ASK_LIST,
@@ -998,7 +1033,7 @@ mod tests {
         );
     }
 
-    /// `crew.removed` / `channel.removed` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
+    /// `crew.purged` / `channel.purged` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
     #[test]
     fn small_event_and_ack_payloads_keep_their_wire_shape() {
         assert_eq!(

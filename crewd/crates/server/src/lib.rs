@@ -64,10 +64,41 @@ impl AppState {
     }
 }
 
-/// 建数据目录；新建的那一级权限 0700（库里是聊天记录，别让同机其他用户读）。已存在的不动。
+impl AppState {
+    /// 和 `collab` 一样，但先拍 pre-delete 快照（N4 / S22）：快照与事务在**同一个**库线程任务里，中间插不进
+    /// 别的写；快照拍不成就返回存储错误，`f` 不跑。给永久删除用。
+    /// `check` 是只读的前置条件，先于快照跑：删不了（没有、不准、冲突）就不拍整库快照（复审 2 轮 1）。
+    pub async fn collab_after_snapshot<T: Send + 'static>(
+        &self,
+        what: String,
+        check: impl FnOnce(&rusqlite::Connection) -> crewd_collab::Result<()> + Send + 'static,
+        f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
+    ) -> crewd_collab::Result<T> {
+        let hub = self.hub.clone();
+        self.db
+            .call(move |s| {
+                let (v, _snapshot) = s.snapshot_then(&what, check, |s| {
+                    let now = crewd_store::now_ms();
+                    let (v, changes) = crewd_collab::run(s, now, f)?;
+                    hub.emit(s.conn(), &changes);
+                    Ok::<T, crewd_collab::CollabError>(v)
+                })?;
+                Ok(v)
+            })
+            .await
+            .map_err(crewd_collab::CollabError::from)?
+    }
+}
+
+/// 建数据目录，权限 0700（库里是聊天记录，别让同机其他用户读）。已存在的只收紧：去掉组和其他人的位
+/// （PM 2026-10-07）。
 pub fn ensure_data_dir(dir: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if dir.is_dir() {
+        let mode = std::fs::metadata(dir)?.permissions().mode() & 0o7777;
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode & !0o077))?;
+        }
         return Ok(());
     }
     if let Some(parent) = dir.parent() {
@@ -148,10 +179,34 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     let sock = data_dir.join("crewd.sock");
     let _ = std::fs::remove_file(&sock);
 
-    let store = Store::open(&data_dir.join("crewd.db"))?;
+    // 核对库的身份：该在的库不在 / 被换掉时拒绝启动，不新建空库（N4 / S24）。
+    let store = Store::open_data_dir(&data_dir)?;
     let db = Db::spawn(store)?;
+    // 定时备份（N4 / D-8：serve 自己的 interval，不进编排 Core）：启动时拍一次，之后每小时看一次到没到点。
+    let backups = match crewd_store::backup::Ticker::start(
+        data_dir.join(crewd_store::DB_FILE),
+        std::time::Duration::from_secs(3600),
+        crewd_store::backup::Policy::default(),
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            // 起不来也先关库再放锁（复审 2 轮 5）。
+            let db = db.clone();
+            tokio::task::spawn_blocking(move || db.shutdown()).await?;
+            drop(lock);
+            return Err(e.into());
+        }
+    };
     let state = Arc::new(AppState::new(db));
-    let listener = UnixListener::bind(&sock)?;
+    let listener = match UnixListener::bind(&sock) {
+        Ok(l) => l,
+        Err(e) => {
+            // 绑不上也要按次序收尾再放锁（复审 M7）。
+            close_storage(backups, state.db.clone()).await?;
+            drop(lock);
+            return Err(e.into());
+        }
+    };
 
     tokio::pin!(shutdown);
     loop {
@@ -179,7 +234,20 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
         }
     }
     let _ = std::fs::remove_file(&sock);
+    // 放锁之前关库：已入队的写跑完，optimize + WAL 截断，库线程 join（N4 / S16）。
+    close_storage(backups, state.db.clone()).await?;
     drop(lock);
+    Ok(())
+}
+
+/// 放锁之前的存储收尾：先停 Ticker（等正在拍的那次做完），再关库（已入队的写跑完，optimize + WAL 截断，
+/// 库线程 join）。N4 / S16。
+async fn close_storage(backups: crewd_store::backup::Ticker, db: Db) -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || {
+        backups.stop();
+        db.shutdown()
+    })
+    .await?;
     Ok(())
 }
 
@@ -255,7 +323,9 @@ mod tests {
                         ..Default::default()
                     },
                 )?;
-                Err(crewd_collab::CollabError::Invalid("中途失败".into()))
+                Err(crewd_collab::CollabError::Invalid(
+                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::MessageEmpty),
+                ))
             })
             .await;
         assert!(r.is_err());
@@ -309,8 +379,9 @@ mod tests {
         slow.await.unwrap().unwrap();
     }
 
+    /// PM 2026-10-07：数据目录一律 0700；已有目录只收紧（去掉组和其他人的位），不放宽。
     #[test]
-    fn fresh_data_dir_is_0700_and_existing_dir_is_left_alone() {
+    fn fresh_data_dir_is_0700_and_an_existing_loose_dir_is_tightened() {
         let root = tempfile::tempdir().unwrap();
         let d = root.path().join("a/b");
         ensure_data_dir(&d).unwrap();
@@ -323,7 +394,7 @@ mod tests {
         std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
         ensure_data_dir(&existing).unwrap();
         let mode = std::fs::metadata(&existing).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
+        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
     }
 
     #[test]

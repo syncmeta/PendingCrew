@@ -19,7 +19,7 @@ pub struct WorldCtx {
     pub child_titles: Vec<String>,
     /// 它在的群（id）。
     pub channels: Vec<String>,
-    /// 找人类该发到哪：人类正在注视的群 + 根机组人类群（§17）。
+    /// 找人类该发到哪：人类正在注视的群 + home（总机组 / 顶层机组）的人类群（§17）。
     pub human_watching: Vec<String>,
 }
 
@@ -35,9 +35,9 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
         st.query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?
     };
-    let root_human = crewd_store::channels::human_id(&crews::root_of(conn, &crew.id)?);
-    if !watching.contains(&root_human) {
-        watching.push(root_human);
+    let home_human = crewd_store::channels::human_id(&crews::home_of(conn, &crew.id)?);
+    if !watching.contains(&home_human) {
+        watching.push(home_human);
     }
     Ok(WorldCtx {
         locale,

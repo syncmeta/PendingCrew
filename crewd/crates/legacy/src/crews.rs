@@ -33,22 +33,42 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
         return Ok(vec![]);
     };
 
+    let mut parsed: Vec<(LCrew, String)> = Vec::new();
+    for (i, v) in rows.into_iter().enumerate() {
+        match serde_json::from_value::<LCrew>(v) {
+            Ok(c) => {
+                let created_at = norm_ts(cx, &c.created_at);
+                parsed.push((c, created_at));
+            }
+            Err(e) => cx.report.skip(cx.src, &path, Some(i), e.to_string()),
+        }
+    }
+    // 管理机组（总机组）至多一个（v4 的部分唯一索引在 upsert 之前就在）：多个 isBuiltin 时留 createdAt 最早的（再按 id），
+    // 其余降为普通机组并警告——与 `backfill_v4` 对已有库的口径相同。
+    let management_id = parsed
+        .iter()
+        .filter(|(c, _)| c.is_builtin)
+        .min_by(|(a, at), (b, bt)| (at, &a.id).cmp(&(bt, &b.id)))
+        .map(|(c, _)| c.id.clone());
+    for (c, _) in &parsed {
+        if c.is_builtin && Some(&c.id) != management_id.as_ref() {
+            cx.report.warn(format!(
+                "机组 {} 也标着 isBuiltin；总机组只留最早的 {}，它按普通机组导入",
+                c.id,
+                management_id.as_deref().unwrap_or_default()
+            ));
+        }
+    }
+
     let mut crews = Vec::new();
     let mut parents: Vec<(String, Vec<String>)> = Vec::new();
-    for (i, v) in rows.into_iter().enumerate() {
-        let c: LCrew = match serde_json::from_value(v) {
-            Ok(c) => c,
-            Err(e) => {
-                cx.report.skip(cx.src, &path, Some(i), e.to_string());
-                continue;
-            }
-        };
+    for (c, created_at) in parsed {
         let hidden_at = c.manually_hidden_at.as_deref().map(|t| norm_ts(cx, t));
         let crew = Crew {
             id: c.id.clone(),
             title: c.title.clone(),
             number: c.crew_number,
-            builtin: c.is_builtin,
+            management: c.is_builtin && Some(&c.id) == management_id.as_ref(),
             parent_ids: vec![],
             working_directory: c.working_directory.clone(),
             captain_executor: c
@@ -56,7 +76,7 @@ pub fn import(tx: &Connection, cx: &mut Ctx) -> crewd_store::Result<Vec<Imported
                 .as_deref()
                 .map(crate::sessions::executor_of),
             hidden_at,
-            created_at: norm_ts(cx, &c.created_at),
+            created_at,
             updated_at: norm_ts(cx, &c.updated_at),
             ..Default::default()
         };

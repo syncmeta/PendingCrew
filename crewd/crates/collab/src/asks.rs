@@ -1,5 +1,6 @@
 //! 人类待确认（H 号）：经 crewd-work 的工作账本发号（§19 Q1：工作账本是唯一发号处）。
 use crate::messages;
+use crate::refusal::{Code, Refusal};
 use crate::wakes::{self, WakeKind, WakePriority, WakeRequest};
 use crate::{Change, CollabError, Result, Sender, Tx, crews, sessions};
 use crewd_proto::{Ask, AskDefault, AskStateView, HumanWait, WaitTierView};
@@ -12,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenAsk {
     pub question: String,
-    /// 「X 分钟没回复就按 A 办」（§6；到点后照常走审批，§13 Q2）。
+    /// 「X 分钟没回复就按 A 办」（§6；到点后照常经过 runner 自己的权限确认，§13 Q2）。
     pub default: Option<AskDefault>,
     /// 回答后叫醒提问者时带上的「接着做什么」。
     pub resume_note: Option<String>,
@@ -45,9 +46,9 @@ fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
 /// 其余原样带着 `Rejected`（服务层按种类映射）。
 fn rejected(crew: &str, r: Rejected) -> CollabError {
     match r {
-        Rejected::UnknownAsk(h) => CollabError::NotFound(format!("机组 {crew} 没有 {h}")),
-        Rejected::UnknownItem(w) => CollabError::NotFound(format!("机组 {crew} 没有 {w}")),
-        Rejected::UnknownEntry(e) => CollabError::NotFound(format!("机组 {crew} 没有 {e}")),
+        Rejected::UnknownAsk(id) => unknown_id(crew, id),
+        Rejected::UnknownItem(id) => unknown_id(crew, id),
+        Rejected::UnknownEntry(id) => unknown_id(crew, id),
         other => CollabError::Work(other),
     }
 }
@@ -85,9 +86,19 @@ fn actor_of(conn: &Connection, session: &str) -> Result<Actor> {
     })
 }
 
+/// 格式对、账本里没有的 H / W / # 号（R11：NotFound）。
+fn unknown_id(crew: &str, id: impl std::fmt::Display) -> CollabError {
+    CollabError::NotFound(
+        Refusal::new(Code::AskIdNotFound)
+            .arg("crew", crew)
+            .arg("id", id.to_string()),
+    )
+}
+
 fn parse_ask(ask: &str) -> Result<AskId> {
-    ask.parse()
-        .map_err(|e: crewd_work::ParseIdError| CollabError::Invalid(e.to_string()))
+    ask.parse().map_err(|e: crewd_work::ParseIdError| {
+        CollabError::Invalid(Refusal::new(Code::AskBadId).arg("input", e.input))
+    })
 }
 
 fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
@@ -140,23 +151,29 @@ fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
     })
 }
 
+/// 这条消息是哪条问的公告（`ask_meta.message_id`）：(机组, H 号)。
+pub(crate) fn by_message(conn: &Connection, message_id: &str) -> Result<Option<(String, String)>> {
+    Ok(conn
+        .query_row(
+            "SELECT crew_id, ask FROM ask_meta WHERE message_id=?1",
+            [message_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
 pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
     let h = parse_ask(ask)?;
     let book = load(conn, crew)?;
-    let a = book
-        .ask(h)
-        .ok_or_else(|| CollabError::NotFound(format!("机组 {crew} 没有 {ask}")))?;
+    let a = book.ask(h).ok_or_else(|| unknown_id(crew, ask))?;
     view(conn, crew, a)
 }
 
 pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;
-    if crew.builtin {
-        return Err(CollabError::Forbidden(
-            "内建总机组不提问（同 McpServer.swift:745-753）".into(),
-        ));
-    }
+    // 归档的机组只读（终审 5）：二级机组的 home 人类群还活着，不能靠公告发不进去碰巧挡住。
+    crews::refuse_archived(tx.conn(), &crew.id)?;
     let actor = actor_of(tx.conn(), asker)?;
     let question = o.question.trim().to_string();
     let default = o.default.map(|d| DefaultOption {
@@ -167,9 +184,9 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
         b.open_ask(&actor, now, &question, default, None)
             .map(|a| a.value)
     })?;
-    let root = crews::root_of(tx.conn(), &crew.id)?;
+    let home = crews::home_of(tx.conn(), &crew.id)?;
     let posted =
-        messages::announce_to_human(tx, &root, Sender::Session(asker.into()), question, "ask")?;
+        messages::announce_to_human(tx, &home, Sender::Session(asker.into()), question, "ask")?;
     tx.conn().execute(
         "INSERT INTO ask_meta(crew_id,ask,resume_note,message_id) VALUES(?1,?2,?3,?4)",
         params![crew.id, h.to_string(), o.resume_note, posted.message.id],
@@ -187,7 +204,7 @@ fn available(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// 直接开的问被答 / 按默认办了：叫醒能接着干的第一位（§22.4）。依次：提问者 → 问所在机组此刻的机长（转达）
-/// → 根机组此刻的机长。三位都不能接（例如根机组机长自己提问、之后恢复失败）→ 不叫任何人：
+/// → home（总机组 / 顶层机组）此刻的机长。三位都不能接（例如 home 机长自己提问、之后恢复失败）→ 不叫任何人：
 /// 答复照样记在账上，人在 `ask.list` 里看得到，下次有人接手时读得到。
 fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     let Some(asker) = &a.asked_by else {
@@ -196,7 +213,7 @@ fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     let conn = tx.conn();
     let mut candidates = vec![asker.clone()];
     candidates.extend(crews::captain_of(conn, crew)?);
-    candidates.extend(crews::captain_of(conn, &crews::root_of(conn, crew)?)?);
+    candidates.extend(crews::captain_of(conn, &crews::home_of(conn, crew)?)?);
     let mut target = None;
     for c in candidates {
         if available(conn, &c)? {
@@ -266,15 +283,21 @@ pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask>
     closed(tx, crew, h, standalone, &applied.events)
 }
 
-/// 撤回一条问。人随时可以；session 只能是提问者本人，或**问所在机组**此刻的机长——
-/// 别的机组的机长（另一棵树的、子机组的）在这本账上只算普通 session（账本按提问者放行）。
+/// 撤回一条问。人随时可以；session 只能是提问者本人，或**问所在机组**此刻的机长，或总机组的机长（权限上当作
+/// 每个机组的机长，PM 2026-10-07）——别的机组的机长（另一棵树的、子机组的）、总机组的普通 session 在这本账上
+/// 只算普通 session（账本按提问者放行）。
 pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &str) -> Result<Ask> {
     let h = parse_ask(ask)?;
     let actor = match by {
         Sender::Human => Actor::Human,
         Sender::Session(s) if sessions::crew_of(tx.conn(), s)? == crew => actor_of(tx.conn(), s)?,
+        Sender::Session(s) if crews::is_management_captain(tx.conn(), s)? => Actor::captain(s),
         Sender::Session(s) => Actor::worker(s),
-        Sender::System => return Err(CollabError::Forbidden("系统不撤回问".into())),
+        Sender::System => {
+            return Err(CollabError::Forbidden(Refusal::new(
+                Code::AskSystemCannotWithdraw,
+            )));
+        }
     };
     with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))?;
     // 规范写法（"H1"），不是调用方原样给的（"h1"）：客户端按它对号（终审 M3）。
@@ -283,6 +306,45 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
         ask: h.to_string(),
     });
     get(tx.conn(), crew, ask)
+}
+
+/// 机组归档（`crews::archive` 同一事务里调，N1 裁定 13）：以人的身份撤回这个机组账本里全部还开着的问，理由取
+/// render md 的 `notice.ask.crew_removed`（按 meta.locale）。挂在一个 home 人类群里的问只来自它自己和它的下级，
+/// 而下级必须先归档，所以归档到 home 时那里的问都已撤回。解档不重开。还卡着活项的问账本不让撤 →
+/// Conflict（归档整体失败，什么都不变）。每条撤回记 AskChanged。
+pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
+    let open: Vec<AskId> = load(tx.conn(), crew)?
+        .state()
+        .asks
+        .iter()
+        .filter(|(_, a)| a.state == AskState::Open)
+        .map(|(h, _)| *h)
+        .collect();
+    if open.is_empty() {
+        return Ok(());
+    }
+    let reason = crate::prompts::render_file(crate::settings::locale(tx.conn())?)
+        .get("notice.ask.crew_removed")
+        .trim()
+        .to_string();
+    for h in open {
+        with_book(tx, crew, |b, now| {
+            b.withdraw_ask(&Actor::Human, now, h, &reason)
+        })
+        .map_err(|e| match e {
+            CollabError::Work(Rejected::AskInUse(h)) => CollabError::Conflict(
+                Refusal::new(Code::AskRemoveBlocked)
+                    .arg("crew", crew)
+                    .arg("ask", h.to_string()),
+            ),
+            e => e,
+        })?;
+        tx.note(Change::AskChanged {
+            crew_id: crew.into(),
+            ask: h.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// 默认方案到点的问按默认办（M3c 的定时拍按机组逐个调，控制者裁定 C7）。返回办了的 H 号。
@@ -303,16 +365,16 @@ pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// 人的待确认清单（`ask.list`）：`root` 给了就只看这棵树里的机组。等得久的在前。
-pub fn waits(conn: &Connection, now_ms: i64, root: Option<&str>) -> Result<Vec<HumanWait>> {
+/// 人的待确认清单（`ask.list`）：`home` 给了就只看 home 是它的机组（它的人类群里的问）。等得久的在前。
+pub fn waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<HumanWait>> {
     let mut st = conn.prepare("SELECT crew_id FROM work_books ORDER BY crew_id")?;
     let crews_with_books: Vec<String> = st
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     let mut out = Vec::new();
     for crew in crews_with_books {
-        if let Some(r) = root
-            && crews::root_of(conn, &crew)? != r
+        if let Some(h) = home
+            && crews::home_of(conn, &crew)? != h
         {
             continue;
         }
@@ -348,6 +410,29 @@ mod tests {
     use crate::testkit::{MIN, NOW, count, err, ok, ok_at, store};
     use crewd_proto::{Mention, MentionKind};
 
+    #[test]
+    fn a_second_level_ask_goes_to_its_top_level_human_channel_not_the_management_crew() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| {
+            open(
+                tx,
+                "w-b1",
+                OpenAsk {
+                    question: "用哪个分支？".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
+        assert_eq!(m.channel_id, "crew-a/human");
+        assert!(!crate::channels::human_channel_exists(s.conn(), "chief").unwrap());
+        assert_eq!(waits(s.conn(), NOW, Some("crew-a")).unwrap().len(), 1);
+        assert!(
+            waits(s.conn(), NOW, Some("chief")).unwrap().is_empty(),
+            "按 home 过滤"
+        );
+    }
+
     fn q(text: &str) -> OpenAsk {
         OpenAsk {
             question: text.into(),
@@ -356,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn open_issues_h_numbers_from_the_crew_book_and_posts_to_the_root_human_channel() {
+    fn open_issues_h_numbers_from_the_crew_book_and_posts_to_the_home_human_channel() {
         let mut s = store();
         let a = ok(&mut s, |tx| {
             open(
@@ -374,7 +459,7 @@ mod tests {
         let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
         assert_eq!(
             m.channel_id, "crew-a/human",
-            "公告发到 crew-b 的根（crew-a）的人类群"
+            "公告发到 crew-b 的 home（crew-a）的人类群"
         );
         assert_eq!(
             m.mentions,
@@ -422,6 +507,28 @@ mod tests {
         assert_eq!(ok(&mut s, |tx| open(tx, "w-a1", q("这次能成？"))).ask, "H1");
     }
 
+    /// 终审 5：提问者的机组已移除 → crew.removed（Conflict，指路先恢复）；不发号、不建账本、不发公告。
+    /// 二级机组 crew-b 归档后它的 home（crew-a）的人类群还活着——拒绝必须来自提问者自己的机组，不能靠
+    /// 「公告发不进归档的人类群」碰巧挡住（顶层机组 crew-x 那条路就是被它碰巧挡住的）。
+    #[test]
+    fn an_archived_crews_session_cannot_open_an_ask() {
+        let mut s = store();
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-x"));
+        let messages_before = count(&s, "SELECT COUNT(*) FROM messages");
+        for asker in ["cap-b", "w-b1", "cap-x"] {
+            match err(&mut s, |tx| open(tx, asker, q("归档了还能问吗？"))) {
+                CollabError::Conflict(r) => {
+                    assert_eq!(r.code, Code::CrewRemoved, "{asker}: {r:?}")
+                }
+                e => panic!("{asker}: {e:?}"),
+            }
+        }
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM work_books"), 0);
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM ask_meta"), 0);
+        assert_eq!(count(&s, "SELECT COUNT(*) FROM messages"), messages_before);
+    }
+
     #[test]
     fn asks_survive_reopening_the_database() {
         let dir = tempfile::tempdir().unwrap();
@@ -443,6 +550,7 @@ mod tests {
                     crate::sessions::NewSession {
                         crew_id: c.id.clone(),
                         executor: "claude".into(),
+                        title: Some("提问者".into()),
                         ..Default::default()
                     },
                 )?;
@@ -613,13 +721,61 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_crew_does_not_ask() {
+    fn the_management_crews_own_asks_go_to_its_management_human_channel() {
         let mut s = store();
-        s.conn().execute("INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('chief-1','chief','captain','claude','t')", []).unwrap();
+        let cap = ok(&mut s, |tx| {
+            crate::sessions::register(
+                tx,
+                crate::sessions::NewSession {
+                    crew_id: "chief".into(),
+                    role: crewd_proto::Role::Captain,
+                    executor: "claude".into(),
+                    title: Some("总机长".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        let a = ok(&mut s, |tx| {
+            open(
+                tx,
+                &cap.id,
+                OpenAsk {
+                    question: "全局要不要冻结发版？".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
+        assert_eq!(m.channel_id, "chief/human");
+    }
+
+    /// 总机组的机长权限上当作每个机组的机长（PM 2026-10-07）：能撤别的机组的问；总机组的普通 session 不能。
+    #[test]
+    fn the_management_captain_may_withdraw_any_crews_ask_and_its_workers_may_not() {
+        let mut s = store();
+        let boss = crate::testkit::org_captain(&mut s);
+        let worker = crate::testkit::org_worker(&mut s);
+        let a = ok(&mut s, |tx| open(tx, "w-a1", q("谁能撤？")));
         assert!(matches!(
-            err(&mut s, |tx| open(tx, "chief-1", q("?"))),
-            CollabError::Forbidden(_)
+            err(&mut s, |tx| withdraw(
+                tx,
+                &Sender::Session(worker.clone()),
+                "crew-a",
+                &a.ask,
+                "不是你的"
+            )),
+            CollabError::Work(Rejected::Forbidden(_))
         ));
+        let w = ok(&mut s, |tx| {
+            withdraw(
+                tx,
+                &Sender::Session(boss.clone()),
+                "crew-a",
+                &a.ask,
+                "管理层撤",
+            )
+        });
+        assert_eq!(w.state, AskStateView::Withdrawn);
     }
 
     #[test]
@@ -757,9 +913,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unavailable_captain_asker_falls_back_to_the_root_captain() {
+    fn an_unavailable_captain_asker_falls_back_to_the_home_captain() {
         let mut s = store();
-        // cap-b 在 crew-b 提问后恢复失败：crew-b 的机长就是它自己 → 叫根机组 crew-a 的机长。
+        // cap-b 在 crew-b 提问后恢复失败：crew-b 的机长就是它自己 → 叫 home crew-a 的机长。
         let a = ok(&mut s, |tx| open(tx, "cap-b", q("要不要上线？")));
         ok(&mut s, |tx| {
             crate::sessions::set_resume_failed(tx, "cap-b", true)
@@ -777,9 +933,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unavailable_root_captain_asker_wakes_nobody() {
+    fn an_unavailable_home_captain_asker_wakes_nobody() {
         let mut s = store();
-        // cap-a 是根机组的机长：本机组机长与根机组机长都是它自己 → 没人可转达（答复仍在 ask.list 里可见）。
+        // cap-a 是 home 的机长：本机组机长与 home 机长都是它自己 → 没人可转达（答复仍在 ask.list 里可见）。
         let a = ok(&mut s, |tx| open(tx, "cap-a", q("要不要回滚？")));
         ok(&mut s, |tx| {
             crate::sessions::set_resume_failed(tx, "cap-a", true)

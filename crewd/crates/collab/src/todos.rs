@@ -1,5 +1,6 @@
 //! Agent 那本 Todo（人派给机组的活）的回应：追加一条，不改状态（§9：状态 / 证据参数已删）。
 //! 不发客户端事件：`todo.list` 在 M3 不变，客户端重拉即可（M4b 重做 Todo 时补事件）。
+use crate::refusal::{Code, Refusal};
 use crate::{CollabError, Result, Tx, sessions};
 use crewd_proto::TodoResponse;
 use rusqlite::{OptionalExtension, params};
@@ -8,7 +9,7 @@ use rusqlite::{OptionalExtension, params};
 pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Result<TodoResponse> {
     let text = text.trim();
     if text.is_empty() {
-        return Err(CollabError::Invalid("回应不能为空".into()));
+        return Err(CollabError::Invalid(Refusal::new(Code::TodoResponseEmpty)));
     }
     let s = sessions::get(tx.conn(), session)?;
     let todo: Option<String> = tx
@@ -20,9 +21,9 @@ pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Resul
         )
         .optional()?;
     let Some(todo) = todo else {
-        return Err(CollabError::NotFound(format!(
-            "本机组没有 Agent Todo #{number}"
-        )));
+        return Err(CollabError::NotFound(
+            Refusal::new(Code::TodoNotFound).arg("number", number.to_string()),
+        ));
     };
     let ord: i64 = tx.conn().query_row(
         "SELECT COALESCE(MAX(ord),-1)+1 FROM todo_responses WHERE todo_id=?1",

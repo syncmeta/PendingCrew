@@ -1,9 +1,5 @@
-给人和 agent 看的群内公告与注入文字（crewd-collab 的 render / asks / approvals / restart 读这里）。
+给人和 agent 看的群内公告与注入文字（crewd-collab 的 render / asks / restart 读这里）。
 每节 `## 名字`；`{占位符}` 由代码填，允许哪些见 src/prompts.rs 的 REQUIRED。
-
-## notice.approval
-{session} 想用工具 {tool}：{summary}
-这次已当场拒绝，它会先去干别的。在审批列表里同意 = 放行它重跑这一次（一次性）；拒绝 = 它会收到「不行」。
 
 ## notice.restart
 crewd 重新启动了。上次有 {count} 个 session 在跑，是否现在恢复它们？（先不恢复也行：在群里 @ 其中某一个，就只恢复它。）
@@ -13,6 +9,9 @@ crewd 从休眠里起来了。上次休眠时停下了 {count} 个 session，是
 
 ## notice.restart.item
 - {name}
+
+## notice.ask.crew_removed
+机组已被移除
 
 ## sender.human
 人类
@@ -30,7 +29,7 @@ crewd
 （机长）{name}
 
 ## inject.header
-以下是你所在的群里的新消息（只含与你相关、你看得见的）：
+以下是你所在的群里别人发的全部新消息（不只是 @ 你的；每行标出 @ 了谁）：
 
 ## inject.channel.lobby
 【{crew} · 大厅】
@@ -47,11 +46,11 @@ crewd
 ## line
 [{at}] {sender}：{text}
 
-## line.directed
-（发给 {targets} 的，不是派给你的）
+## line.at
+（@{targets}）
 
-## line.directed.unknown
-（不是发给你的）
+## line.at.you
+你
 
 ## line.reply
 （回复 {reply}）
@@ -73,13 +72,7 @@ crewd
 ## wake.ask_defaulted
 你的问题 {ask} 到时没人回复，按默认方案办：{answer}
 问题：{question}
-到点后的动作照常过审批闸：被闸拒了就先干别的，人同意后会叫你回来重跑。
-
-## wake.approval_allowed
-人同意了你用 {tool}（{summary}）。现在重跑那一次调用会放行——只放行一次。
-
-## wake.approval_denied
-人没有同意你用 {tool}（{summary}）。换个不需要它的办法，或在群里说明为什么需要。
+到点后的动作照常经过你自己的权限确认（claude / codex 的权限框）；被拦下就先干别的。
 
 ## wake.resume_note
 你当时留的接续说明：{note}

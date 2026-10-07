@@ -2,8 +2,7 @@
 //! 写操作经 `AppState::collab`（同一事务 + 提交后发事件）；纯读直接在库线程上读。
 use crate::AppState;
 use crewd_collab::{
-    CollabError, Sender, approvals, asks, channels, crews, cursors, directory, messages, restart,
-    sessions,
+    CollabError, Sender, asks, channels, crews, cursors, directory, messages, restart, sessions,
 };
 use crewd_proto::*;
 use rusqlite::Connection;
@@ -34,14 +33,19 @@ fn internal(detail: impl std::fmt::Display) -> RpcError {
     )
 }
 
+/// 规则拒绝 → RPC 错误：message 是中文缺省，`data.refusal` 是稳定码，客户端按码本地化。
+fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError {
+    RpcError::new(code, r.to_string()).with_refusal(r.code.as_str())
+}
+
 /// collab 错误 → RPC 错误码（M3b 的 agent RPC 复用同一张表）。
 pub fn collab_err(e: CollabError) -> RpcError {
     use crewd_work::Rejected as R;
     match e {
-        CollabError::NotFound(m) => RpcError::new(RpcError::NOT_FOUND, m),
-        CollabError::Invalid(m) => RpcError::new(RpcError::INVALID_PARAMS, m),
-        CollabError::Forbidden(m) => RpcError::new(RpcError::FORBIDDEN, m),
-        CollabError::Conflict(m) => RpcError::new(RpcError::CONFLICT, m),
+        CollabError::NotFound(r) => refused(RpcError::NOT_FOUND, r),
+        CollabError::Invalid(r) => refused(RpcError::INVALID_PARAMS, r),
+        CollabError::Forbidden(r) => refused(RpcError::FORBIDDEN, r),
+        CollabError::Conflict(r) => refused(RpcError::CONFLICT, r),
         CollabError::Work(R::Forbidden(a)) => {
             RpcError::new(RpcError::FORBIDDEN, format!("not allowed: {a}"))
         }
@@ -66,8 +70,20 @@ pub fn collab_err(e: CollabError) -> RpcError {
         CollabError::Store(crewd_store::StoreError::NotFound(m)) => {
             RpcError::new(RpcError::NOT_FOUND, m)
         }
-        CollabError::Store(e) => internal(e),
+        CollabError::Store(e) => match e.storage_kind() {
+            Some(kind) => storage(kind, e),
+            None => internal(e),
+        },
     }
+}
+
+/// 存储故障（S26）：给人一句原因 + 编号，原文（路径、SQL）只进日志。
+fn storage(kind: crewd_store::StorageKind, detail: impl std::fmt::Display) -> RpcError {
+    let e = internal(detail);
+    RpcError::new(
+        RpcError::STORAGE,
+        format!("存储故障：{}。{}", kind.describe(), e.message),
+    )
 }
 
 async fn write<T: Serialize + Send + 'static>(
@@ -102,8 +118,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
         }
         methods::CREW_LIST => {
-            parse_no_params(p)?;
-            read(state, crews::list).await
+            let p: CrewListParams = parse_params_or_default(p)?;
+            let all = p.include_removed.unwrap_or(false);
+            read(state, move |c| crews::list(c, all)).await
         }
         methods::CREW_GET => {
             let p: CrewIdParams = parse_params(p)?;
@@ -148,7 +165,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             write(state, move |tx| crews::adopt(tx, &p.crew_id, &p.parent_id)).await
         }
         methods::CREW_REORDER => {
-            // C1：一次排一层。parentId 给了 = 这个父名下（边上的次序 → 父的 childIds）；缺省 = 顶层（Crew.position）。
+            // C1：一次排一层：parentId 给了 = 这个父名下（边上的次序 → 父的 childIds）；缺省 = 顶层机组（crews.position）。
             let p: CrewReorderParams = parse_params(p)?;
             write(state, move |tx| {
                 crews::reorder(tx, p.parent_id.as_deref(), &p.crew_ids)
@@ -162,15 +179,34 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
-        methods::CREW_DELETE => {
+        methods::CREW_REMOVE => {
+            // 移除机组 = 归档（N1 裁定 13；PM 2026-10-07 定名「移除」）：可逆、什么都不删，不拍快照。
             let p: CrewIdParams = parse_params(p)?;
-            write(state, move |tx| {
-                crews::delete(tx, &p.crew_id).map(|()| Empty {})
-            })
-            .await
+            write(state, move |tx| crews::archive(tx, &p.crew_id)).await
+        }
+        methods::CREW_RESTORE => {
+            let p: CrewIdParams = parse_params(p)?;
+            write(state, move |tx| crews::unarchive(tx, &p.crew_id)).await
+        }
+        methods::CREW_PURGE => {
+            let p: CrewIdParams = parse_params(p)?;
+            // N4 / S22：永久删除之前先拍快照（安全网，30 天后随定时备份轮转删掉），前置条件 → 快照 → 删除在同一个库线程任务里；
+            // 前置条件不成立（没有 / 总机组 / 没归档 / 有在跑的 session）不拍；快照拍不成就不删。
+            let what = p.crew_id.clone();
+            let id = p.crew_id.clone();
+            to_value(
+                state
+                    .collab_after_snapshot(
+                        what,
+                        move |c| crews::check_purgeable(c, &id),
+                        move |tx| crews::purge(tx, &p.crew_id).map(|()| Empty {}),
+                    )
+                    .await
+                    .map_err(collab_err)?,
+            )
         }
         methods::CHANNEL_LIST => {
-            // 写路径：根机组的人类群懒建（R1）。
+            // 写路径：home（总机组 / 顶层机组）的人类群懒建（R1）。
             let p: CrewIdParams = parse_params(p)?;
             write(state, move |tx| channels::list_for_crew(tx, &p.crew_id)).await
         }
@@ -293,7 +329,11 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::SESSION_LIST => {
             let p: SessionListParams = parse_params_or_default(p)?;
-            read(state, move |c| sessions::list(c, p.crew_id.as_deref())).await
+            let all = p.include_removed.unwrap_or(false);
+            read(state, move |c| {
+                sessions::list_for_client(c, p.crew_id.as_deref(), all)
+            })
+            .await
         }
         methods::SESSION_GET => {
             let p: SessionGetParams = parse_params(p)?;
@@ -303,7 +343,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: AskListParams = parse_params_or_default(p)?;
             let now = crewd_store::now_ms();
             read(state, move |c| {
-                asks::waits(c, now, p.root_crew_id.as_deref())
+                asks::waits(c, now, p.home_crew_id.as_deref())
             })
             .await
         }
@@ -318,17 +358,6 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: AskWithdrawParams = parse_params(p)?;
             write(state, move |tx| {
                 asks::withdraw(tx, &Sender::Human, &p.crew_id, &p.ask, &p.reason)
-            })
-            .await
-        }
-        methods::APPROVAL_LIST => {
-            parse_no_params(p)?;
-            read(state, approvals::list_pending).await
-        }
-        methods::APPROVAL_DECIDE => {
-            let p: ApprovalDecideParams = parse_params(p)?;
-            write(state, move |tx| {
-                approvals::decide(tx, &p.id, p.allow, "human")
             })
             .await
         }
@@ -368,8 +397,45 @@ mod tests {
         collab_err(e).code
     }
 
+    #[test]
+    fn a_refusal_carries_its_code_to_the_client() {
+        use crewd_collab::refusal::{Code, Refusal};
+        let e = collab_err(CollabError::Invalid(Refusal::new(
+            Code::ChannelDmCannotGrow,
+        )));
+        assert_eq!(e.code, RpcError::INVALID_PARAMS);
+        assert_eq!(
+            e.data.as_ref().map(|d| d.refusal.as_str()),
+            Some("channel.dm_cannot_grow")
+        );
+        // 其余错误（账本 / 存储 / 内部）不带码：data 缺席，线上不出现这个键。
+        let e = collab_err(CollabError::Work(Rejected::Blank("text")));
+        assert!(e.data.is_none());
+        let wire = serde_json::to_value(&e).unwrap();
+        assert!(wire.get("data").is_none(), "{wire}");
+        // 每个规则变体都带码，状态码对得上。
+        for (e, want) in [
+            (
+                CollabError::NotFound(Refusal::new(Code::MessageEmpty)),
+                RpcError::NOT_FOUND,
+            ),
+            (
+                CollabError::Forbidden(Refusal::new(Code::MessageEmpty)),
+                RpcError::FORBIDDEN,
+            ),
+            (
+                CollabError::Conflict(Refusal::new(Code::MessageEmpty)),
+                RpcError::CONFLICT,
+            ),
+        ] {
+            let r = collab_err(e);
+            assert_eq!(r.code, want);
+            assert_eq!(r.data.unwrap().refusal, "message.empty");
+        }
+    }
+
     /// 控制者裁定 a：与当前状态冲突（问已经答过 / 撤过、转交已在途 / 没有在途、入口已关、项已结、问还卡着活项）
-    /// = -32009，与「审批已经决过」同一个码（Mac 与 iOS 同时答同一条问，后到的要看到「已经答了」，不是「参数错」）。
+    /// = -32009（Mac 与 iOS 同时答同一条问，后到的要看到「已经答了」，不是「参数错」）。
     #[test]
     fn state_conflicts_are_conflict_not_invalid_params() {
         for r in [
@@ -405,6 +471,30 @@ mod tests {
                 "库错误原文不上线：{}",
                 r.message
             );
+            assert!(r.message.contains('#'), "带编号：{}", r.message);
+        }
+    }
+
+    /// S26：存储故障（磁盘满、I/O、损坏、只读、打不开）有自己的码和一句人话，不混进 -32603；
+    /// 原文（路径、SQL）照样只进日志。
+    #[test]
+    fn storage_failures_get_their_own_code_and_a_plain_reason() {
+        use crewd_store::StorageKind;
+        for (rc, kind) in [
+            (rusqlite::ffi::SQLITE_FULL, StorageKind::DiskFull),
+            (rusqlite::ffi::SQLITE_IOERR_WRITE, StorageKind::Io),
+            (rusqlite::ffi::SQLITE_CORRUPT, StorageKind::Corrupt),
+            (rusqlite::ffi::SQLITE_READONLY, StorageKind::ReadOnly),
+            (rusqlite::ffi::SQLITE_CANTOPEN, StorageKind::CantOpen),
+        ] {
+            let e = StoreError::from(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rc),
+                Some("/secret/path/crewd.db".into()),
+            ));
+            let r = collab_err(CollabError::Store(e));
+            assert_eq!(r.code, RpcError::STORAGE, "{kind:?}");
+            assert!(r.message.contains(kind.describe()), "{}", r.message);
+            assert!(!r.message.contains("secret"), "{}", r.message);
             assert!(r.message.contains('#'), "带编号：{}", r.message);
         }
     }

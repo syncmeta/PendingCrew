@@ -71,6 +71,9 @@ fn import_then_serve_then_rpc() {
         .output()
         .unwrap();
     assert!(!again.status.success(), "已有库时必须拒绝导入");
+    // 复审 1：只挪 crewd.db 会被身份核对拦住（crewd.db.id 还在），提示里要说连它一起挪。
+    let hint = String::from_utf8_lossy(&again.stderr);
+    assert!(hint.contains("crewd.db.id"), "{hint}");
 
     let _d = start(data.path());
     let crews = rpc(data.path(), "crew.list", "null");
@@ -272,7 +275,7 @@ fn committed_schema_matches_generated() {
 }
 
 /// 每个客户端方法都能经 `crewd rpc` 走到处理函数（不是 -32601）：能成功的就要求成功；需要 agent 先造数据的
-/// （回答问、审批、重启询问）用不存在的号，要求得到「不存在 / 规则不过」而不是「没有这个方法」。
+/// （回答问、重启询问）用不存在的号，要求得到「不存在 / 规则不过」而不是「没有这个方法」。
 #[test]
 fn rpc_drives_every_client_method() {
     let data = tempfile::tempdir().unwrap();
@@ -321,8 +324,13 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-bbbb","fromParentId":"local-aaaa","toParentId":"local-aaaa"}"#,
             Ok,
         ),
-        ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.remove", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.restore", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.purge", r#"{"crewId":"nope"}"#, Code(-32004)),
+        // 导入的顶层机组仍在顶层（总机组不在树里），人类群是它自己的（home_of，N1-R2）。
         ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        // 总机组自己的管理用人类群：同一条懒建规则（list 建出来，update 才找得到）。
+        ("channel.list", r#"{"crewId":"pendingcrew-chief"}"#, Ok),
         (
             "channel.create",
             r#"{"crewId":"local-aaaa","kind":"topic","name":"端到端群"}"#,
@@ -331,6 +339,11 @@ fn rpc_drives_every_client_method() {
         (
             "channel.update",
             r#"{"channelId":"local-aaaa/human","purpose":"找人"}"#,
+            Ok,
+        ),
+        (
+            "channel.update",
+            r#"{"channelId":"pendingcrew-chief/human","purpose":"管理"}"#,
             Ok,
         ),
         (
@@ -379,12 +392,6 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-aaaa","ask":"H1","reason":"x"}"#,
             Code(-32004),
         ),
-        ("approval.list", "null", Ok),
-        (
-            "approval.decide",
-            r#"{"id":"ap-none","allow":true}"#,
-            Code(-32004),
-        ),
         ("restart.pending", "null", Ok),
         (
             "restart.answer",
@@ -401,6 +408,7 @@ fn rpc_drives_every_client_method() {
     ];
     let mut covered: Vec<&str> = cases.iter().map(|c| c.0).collect();
     covered.sort();
+    covered.dedup();
     let mut all = crewd_proto::methods::ALL.to_vec();
     all.sort();
     assert_eq!(covered, all, "加了新方法就在这里加一条");
