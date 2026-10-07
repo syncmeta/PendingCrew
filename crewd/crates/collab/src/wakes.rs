@@ -383,6 +383,24 @@ pub fn mark_dropped(tx: &mut Tx<'_>, id: i64, why: &str) -> Result<()> {
     Ok(())
 }
 
+/// 归档机组时把它的 session 还排着队的唤醒（pending / inflight）全部作废：归档机组不让 session 起来，
+/// 留着只会占队、解档后还会把陈旧的叫醒冲出来。同一个事务里调（`crews::archive`）；已投递 / 已作废的不动。
+/// 返回作废了几条。原因写进 `last_error`（`wake.list` 排障看得到）。
+pub fn drop_for_crew(tx: &mut Tx<'_>, crew: &str, why: &str) -> Result<usize> {
+    let ids: Vec<i64> = {
+        let mut st = tx.conn().prepare(
+            "SELECT w.id FROM wakes w JOIN sessions s ON s.id=w.session_id
+              WHERE s.crew_id=?1 AND w.state IN ('pending','inflight') ORDER BY w.id",
+        )?;
+        st.query_map([crew], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for id in &ids {
+        mark_dropped(tx, *id, why)?;
+    }
+    Ok(ids.len())
+}
+
 /// inflight 原样退回 pending（不算失败、attempts 不变）：会话退出 / 投递被打断时 M3c 用。
 pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
     set_state(tx, ids, &["inflight"], WakeState::Pending, false)

@@ -496,7 +496,8 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
 /// 拒还有**没归档的子机组**（先挪走或归档子机组，不级联）。写 `crews.archived_at`，把**归属这个机组**的群全部标归档
 /// （每个一条 ChannelChanged；topic / dm 上待接受的群主转让随之作废，同 `channels::update` 归档）。
 /// 消息、session 行、成员行、账本全部保留；父子边不动（解档原地回来）。还开着的问撤回（`asks::withdraw_open_for_archive`，
-/// 解档不重开）。已归档 = 原样返回、不发变更。
+/// 解档不重开）。它的 session 排着队的唤醒（pending / inflight）作废（`wakes::drop_for_crew`，原因 "crew archived"，
+/// 同一事务）。已归档 = 原样返回、不发变更。
 pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_org_root(tx.conn(), id)?;
@@ -519,6 +520,8 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     }
     // 它还开着的问一并撤回（Task 9 复审裁定；解档不重开）。
     crate::asks::withdraw_open_for_archive(tx, id)?;
+    // 它的 session 还排着队的唤醒一并作废（归档的 session 起不来）。
+    crate::wakes::drop_for_crew(tx, id, "crew archived")?;
     let now = tx.now_ts();
     tx.conn().execute(
         "UPDATE crews SET archived_at=?2, updated_at=?2 WHERE id=?1",
@@ -1674,6 +1677,75 @@ mod tests {
             children(s.conn(), "chief").unwrap(),
             [n.id.as_str(), "crew-a", "crew-x"]
         );
+    }
+
+    /// 归档把这个机组的 session 还排着队的唤醒作废（pending / inflight → dropped，原因 "crew archived"，
+    /// 同一个事务）；已投递的、别的机组的唤醒不动。归档的 session 起不来，留着的唤醒只会白占队。
+    #[test]
+    fn archiving_drops_the_queued_wakes_of_the_crews_sessions_and_nothing_else() {
+        use crate::wakes::{self, WakeKind, WakePriority, WakeRequest, WakeState};
+        let mut s = store();
+        let req = |session: &str, kind: WakeKind, source: String| WakeRequest {
+            session: session.into(),
+            kind,
+            source,
+            priority: WakePriority::Auto,
+            not_before_ms: None,
+            note: None,
+            origin: None,
+        };
+        let id = |e: wakes::Enqueued| match e {
+            wakes::Enqueued::New(id) => id,
+            d => panic!("{d:?}"),
+        };
+        let answer = id(ok(&mut s, |tx| {
+            wakes::enqueue(
+                tx,
+                req(
+                    "cap-x",
+                    WakeKind::AskAnswer,
+                    wakes::source::ask("crew-x", "H1"),
+                ),
+            )
+        }));
+        let inflight = id(ok(&mut s, |tx| {
+            wakes::enqueue(
+                tx,
+                req("cap-x", WakeKind::Message, wakes::source::message("m-1")),
+            )
+        }));
+        ok(&mut s, |tx| wakes::mark_inflight(tx, &[inflight]));
+        let delivered = id(ok(&mut s, |tx| {
+            wakes::enqueue(
+                tx,
+                req("cap-x", WakeKind::Message, wakes::source::message("m-2")),
+            )
+        }));
+        ok(&mut s, |tx| wakes::mark_delivered(tx, &[delivered]));
+        let other = id(ok(&mut s, |tx| {
+            wakes::enqueue(
+                tx,
+                req("cap-a", WakeKind::Message, wakes::source::message("m-3")),
+            )
+        }));
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        let state = |s: &crewd_store::Store, session: &str, id: i64| {
+            let r = wakes::list(s.conn(), Some(session), 50)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == id)
+                .unwrap();
+            (r.state, r.last_error)
+        };
+        for w in [answer, inflight] {
+            assert_eq!(
+                state(&s, "cap-x", w),
+                (WakeState::Dropped, Some("crew archived".to_string())),
+                "wake {w}"
+            );
+        }
+        assert_eq!(state(&s, "cap-x", delivered), (WakeState::Delivered, None));
+        assert_eq!(state(&s, "cap-a", other), (WakeState::Pending, None));
     }
 
     #[test]
