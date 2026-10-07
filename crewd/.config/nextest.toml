@@ -1,0 +1,23 @@
+# cargo-nextest 配置。只有 `ci` 档在 CI 与 scripts/check.sh（CREWD_TEST_RUNNER=nextest）里用；
+# 本机日常的 `cargo test` / `cargo nextest run` 走 default 档，不受影响。
+#
+# flaky-result 需要 nextest >= 0.9.131（见下面这行硬门槛：版本不够会直接报错，而不是静默忽略）。
+nextest-version = "0.9.131"
+
+[profile.default]
+# 本机：失败就是失败，不重试，不掩盖抖动。
+
+[profile.ci]
+# 重试**只为把抖动标出来，不为把它吞掉**：一个测试第 1 次红、第 2/3 次绿 =
+# FLAKY；flaky-result = "fail" 让它依然使整趟红，同时报告里写明
+# 「第几次过了」，区分「真坏」与「抖」。
+retries = 2
+flaky-result = "fail"
+# 红了留全：不因第一个失败就停掉，一趟里能看见所有红。
+fail-fast = false
+# 单测超过 60 秒给一次提示，超过 5 分钟（60s × 5）按挂死杀掉。
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+# 产物路径相对 target/nextest/ci/；CI 把它当 artifact 上传。
+path = "junit.xml"
