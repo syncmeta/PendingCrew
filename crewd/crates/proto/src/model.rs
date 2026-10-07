@@ -240,6 +240,8 @@ closed_vocab!(HealthKindView {
     TurnFailed = "turn_failed", VersionIncompatible = "version_incompatible",
 } default AuthRequired);
 closed_vocab!(RestartAnswer { Resume = "resume", Later = "later" } default Later);
+// 重启询问为什么开（C26）：`restart` = crewd 上次没有经休眠就停了（崩了 / 被杀 / 普通停机）；`hibernate` = 人让它休眠的。
+closed_vocab!(RestartReason { Restart = "restart", Hibernate = "hibernate" } default Restart);
 
 /// 群成员 / 群主的引用。人类没有 id（全机只有一个「人」）。客户端参数用严格的 `MemberParam`。
 #[derive(
@@ -456,6 +458,12 @@ pub struct RestartPrompt {
     pub answer: Option<RestartAnswer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<String>,
+    /// 为什么问（C26）：`hibernate` = 上次是人让 crewd 休眠的（客户端据此写「上次休眠了 N 个」）。
+    #[serde(default)]
+    pub reason: RestartReason,
+    /// `reason = hibernate` 时：到了休眠期限还没做完、被打断的 session（恢复后要重跑被打断的命令）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interrupted: Vec<String>,
 }
 
 /// 空结果（`crew.delete` 等）。

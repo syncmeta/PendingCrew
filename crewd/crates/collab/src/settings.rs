@@ -4,6 +4,7 @@ use rusqlite::Connection;
 
 const LOCALE_KEY: &str = "locale";
 const MAX_LIVE_KEY: &str = "maxLiveSessions";
+const HIBERNATE_DEADLINE_KEY: &str = "hibernate.deadlineSecs";
 
 pub fn locale(conn: &Connection) -> Result<Locale> {
     match crewd_store::meta_get(conn, LOCALE_KEY)? {
@@ -49,6 +50,28 @@ pub fn set_max_live_sessions(tx: &mut Tx<'_>, n: Option<u32>) -> Result<()> {
     Ok(())
 }
 
+/// 休眠（C26）时等在干活的 session 到达安全点的期限（秒）；None = 没设（M3c 用默认值）；0 = 立即休眠。
+pub fn hibernate_deadline_secs(conn: &Connection) -> Result<Option<u32>> {
+    match crewd_store::meta_get(conn, HIBERNATE_DEADLINE_KEY)? {
+        None => Ok(None),
+        Some(v) => v.parse::<u32>().map(Some).map_err(|_| {
+            CollabError::Invalid(format!("meta.hibernate.deadlineSecs = {v:?} 不是非负整数"))
+        }),
+    }
+}
+
+/// None = 回到默认值。
+pub fn set_hibernate_deadline_secs(tx: &mut Tx<'_>, secs: Option<u32>) -> Result<()> {
+    match secs {
+        None => {
+            tx.conn()
+                .execute("DELETE FROM meta WHERE key=?1", [HIBERNATE_DEADLINE_KEY])?;
+        }
+        Some(n) => crewd_store::meta_set(tx.conn(), HIBERNATE_DEADLINE_KEY, &n.to_string())?,
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,6 +94,24 @@ mod tests {
         assert!(matches!(
             err(&mut s, |tx| set_max_live_sessions(tx, Some(0))),
             CollabError::Invalid(_)
+        ));
+    }
+
+    /// C26：休眠期限的设置。没设 = None（默认值 120 秒由 M3c 用 crewd-wake 的常量补）；0 = 立即休眠，是合法值。
+    #[test]
+    fn hibernate_deadline_is_optional_zero_is_allowed_and_garbage_is_an_error() {
+        let mut s = store();
+        assert_eq!(hibernate_deadline_secs(s.conn()).unwrap(), None);
+        ok(&mut s, |tx| set_hibernate_deadline_secs(tx, Some(0)));
+        assert_eq!(hibernate_deadline_secs(s.conn()).unwrap(), Some(0));
+        ok(&mut s, |tx| set_hibernate_deadline_secs(tx, Some(300)));
+        assert_eq!(hibernate_deadline_secs(s.conn()).unwrap(), Some(300));
+        ok(&mut s, |tx| set_hibernate_deadline_secs(tx, None));
+        assert_eq!(hibernate_deadline_secs(s.conn()).unwrap(), None);
+        crewd_store::meta_set(s.conn(), "hibernate.deadlineSecs", "-1").unwrap();
+        assert!(matches!(
+            hibernate_deadline_secs(s.conn()),
+            Err(CollabError::Invalid(_))
         ));
     }
 

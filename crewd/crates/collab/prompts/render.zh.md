@@ -8,6 +8,9 @@
 ## notice.restart
 crewd 重新启动了。上次有 {count} 个 session 在跑，是否现在恢复它们？（先不恢复也行：在群里 @ 其中某一个，就只恢复它。）
 
+## notice.restart.hibernate
+crewd 从休眠里起来了。上次休眠时停下了 {count} 个 session，是否现在恢复它们？（先不恢复也行：在群里 @ 其中某一个，就只恢复它。被期限打断的那几个，恢复后会被提醒重跑被打断的命令。）
+
 ## notice.restart.item
 - {name}
 

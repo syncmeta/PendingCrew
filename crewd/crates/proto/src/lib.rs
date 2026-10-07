@@ -949,6 +949,7 @@ mod tests {
             "Desired",
             "AskStateView",
             "RestartAnswer",
+            "RestartReason",
         ] {
             assert!(
                 defs[e].get("enum").is_some() || defs[e].get("oneOf").is_some(),

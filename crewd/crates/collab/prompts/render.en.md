@@ -8,6 +8,9 @@ This call was denied on the spot; it will move on to other work. Allow it in the
 ## notice.restart
 crewd restarted. {count} sessions were running before; resume them now? (Or not yet: @-mention one of them in a channel to resume just that one.)
 
+## notice.restart.hibernate
+crewd is back from hibernation. {count} session(s) were stopped by the hibernate — resume them now? (You can also leave them for now: @-mention one of them in a channel to resume only that one. Those cut off by the deadline will be told to re-run the interrupted command.)
+
 ## notice.restart.item
 - {name}
 

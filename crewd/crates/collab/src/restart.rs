@@ -1,7 +1,9 @@
 //! 重启后问人是否恢复上次在跑的 session（§22.7 Q1）。这里只记账与公告；恢复由 M3c 订阅 `RestartAnswered` 后做。
 use crate::messages;
-use crate::{Change, CollabError, Result, Sender, Tx, crews, prompts, sessions, settings};
-use crewd_proto::{RestartAnswer, RestartPrompt};
+use crate::{
+    Change, CollabError, Result, Sender, Tx, crews, hibernate, prompts, sessions, settings,
+};
+use crewd_proto::{RestartAnswer, RestartPrompt, RestartReason};
 use rusqlite::{Connection, OptionalExtension, params};
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RestartPrompt> {
@@ -15,24 +17,44 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RestartPrompt> {
         })?,
         answer: answer.as_deref().and_then(RestartAnswer::parse),
         answered_at: r.get(4)?,
+        reason: RestartReason::Restart,
+        interrupted: Vec::new(),
     })
+}
+
+/// 休眠记录（[`hibernate`]，C26）指着这条询问 → 标成 `hibernate`、带被打断的名单（只列这条询问里的）。
+fn with_reason(conn: &Connection, mut p: RestartPrompt) -> Result<RestartPrompt> {
+    if let Some(r) = hibernate::get(conn)?
+        && r.prompt_id == Some(p.id)
+    {
+        p.reason = RestartReason::Hibernate;
+        p.interrupted = r
+            .sessions
+            .iter()
+            .filter(|h| h.interrupted && p.session_ids.contains(&h.session_id))
+            .map(|h| h.session_id.clone())
+            .collect();
+    }
+    Ok(p)
 }
 
 const COLS: &str = "id,created_at,session_ids,answer,answered_at";
 
 pub fn get(conn: &Connection, id: i64) -> Result<RestartPrompt> {
-    conn.query_row(
-        &format!("SELECT {COLS} FROM restart_prompts WHERE id=?1"),
-        [id],
-        row,
-    )
-    .optional()?
-    .ok_or_else(|| CollabError::NotFound(format!("没有重启询问 {id}")))
+    let p = conn
+        .query_row(
+            &format!("SELECT {COLS} FROM restart_prompts WHERE id=?1"),
+            [id],
+            row,
+        )
+        .optional()?
+        .ok_or_else(|| CollabError::NotFound(format!("没有重启询问 {id}")))?;
+    with_reason(conn, p)
 }
 
 /// 还要人拍板的那一条（没答，或答了「先不」）。
 pub fn pending(conn: &Connection) -> Result<Option<RestartPrompt>> {
-    Ok(conn
+    let p = conn
         .query_row(
             &format!(
                 "SELECT {COLS} FROM restart_prompts WHERE answer IS NULL OR answer='later' ORDER BY id DESC LIMIT 1"
@@ -40,11 +62,22 @@ pub fn pending(conn: &Connection) -> Result<Option<RestartPrompt>> {
             [],
             row,
         )
-        .optional()?)
+        .optional()?;
+    p.map(|p| with_reason(conn, p)).transpose()
 }
 
 /// crewd 启动时（M3c）给出上次在跑的 session：去重、保序；空 = 不问。新的一次重启取代所有还没定下来的询问。
 pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartPrompt>> {
+    open_with(tx, session_ids, RestartReason::Restart)
+}
+
+/// 同 [`open`]，说明为什么问（C26）：`Hibernate` = 上次是人让 crewd 休眠的——公告换成「上次休眠了 N 个」，
+/// 休眠记录（[`hibernate`]）记下这条询问的 id（没有记录就补一份空的），之后读这条询问都标成 `hibernate`。
+pub fn open_with(
+    tx: &mut Tx<'_>,
+    session_ids: Vec<String>,
+    reason: RestartReason,
+) -> Result<Option<RestartPrompt>> {
     let mut ids: Vec<String> = Vec::new();
     for id in session_ids {
         sessions::get(tx.conn(), &id)?;
@@ -75,6 +108,18 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
         params![tx.now_ts(), serde_json::to_string(&ids)?],
     )?;
     let id = tx.conn().last_insert_rowid();
+    if reason == RestartReason::Hibernate {
+        let mut rec = hibernate::get(tx.conn())?.unwrap_or_else(|| hibernate::Record {
+            at_ms: tx.now_ms(),
+            ..Default::default()
+        });
+        rec.prompt_id = Some(id);
+        hibernate::put(tx, &rec)?;
+    }
+    let head = match reason {
+        RestartReason::Restart => "notice.restart",
+        RestartReason::Hibernate => "notice.restart.hibernate",
+    };
     // 每个涉及的根机组人类群各一条，只列那棵树里的 session。
     let f = prompts::render_file(settings::locale(tx.conn())?);
     let mut by_root: Vec<(String, Vec<String>)> = Vec::new();
@@ -86,10 +131,7 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
         }
     }
     for (root, sids) in by_root {
-        let mut text = prompts::fill(
-            f.get("notice.restart"),
-            &[("count", &sids.len().to_string())],
-        );
+        let mut text = prompts::fill(f.get(head), &[("count", &sids.len().to_string())]);
         for sid in &sids {
             text.push('\n');
             text.push_str(&prompts::fill(
@@ -140,6 +182,7 @@ pub fn answer(tx: &mut Tx<'_>, id: i64, a: RestartAnswer) -> Result<RestartPromp
 mod tests {
     use super::*;
     use crate::testkit::{NOW, err, ok, ok_at, store};
+    use crewd_proto::RestartReason;
 
     #[test]
     fn open_announces_per_root_and_nothing_to_resume_means_no_prompt() {
@@ -224,6 +267,63 @@ mod tests {
             err(&mut s, |tx| answer(tx, p1.id, RestartAnswer::Resume)),
             CollabError::NotFound(_) | CollabError::Conflict(_)
         ));
+    }
+
+    fn hibernated(id: &str, interrupted: bool) -> crate::hibernate::Hibernated {
+        crate::hibernate::Hibernated {
+            session_id: id.into(),
+            was_working: interrupted,
+            interrupted,
+            ..Default::default()
+        }
+    }
+
+    /// C26：休眠之后的那次询问——公告说「上次休眠了 N 个」，载荷 `reason = hibernate`、带被打断的名单，与崩溃重启
+    /// 分得开；之后一次普通重启开的询问又是 `restart`。
+    #[test]
+    fn a_prompt_after_hibernate_says_so_in_the_notice_and_the_payload() {
+        let mut s = store();
+        let rec = crate::hibernate::Record {
+            at_ms: NOW,
+            sessions: vec![hibernated("w-a1", true), hibernated("w-a2", false)],
+            ..Default::default()
+        };
+        ok(&mut s, |tx| crate::hibernate::put(tx, &rec));
+        let p = ok(&mut s, |tx| {
+            open_with(
+                tx,
+                vec!["w-a1".into(), "w-a2".into()],
+                RestartReason::Hibernate,
+            )
+        })
+        .unwrap();
+        assert_eq!(p.reason, RestartReason::Hibernate);
+        assert_eq!(p.interrupted, ["w-a1"]);
+        assert_eq!(
+            crate::hibernate::get(s.conn()).unwrap().unwrap().prompt_id,
+            Some(p.id),
+            "记录记下了是哪条询问"
+        );
+        let f = prompts::render_file(crate::Locale::Zh);
+        let head = prompts::fill(f.get("notice.restart.hibernate"), &[("count", "2")]);
+        let a = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
+        assert!(a[0].text.starts_with(&head), "{}", a[0].text);
+        assert_eq!(
+            pending(s.conn()).unwrap().unwrap(),
+            p,
+            "pending 也带着休眠的标记"
+        );
+        assert_eq!(
+            ok(&mut s, |tx| answer(tx, p.id, RestartAnswer::Later)).reason,
+            RestartReason::Hibernate,
+            "答过之后照样是休眠的那条"
+        );
+        let q = ok(&mut s, |tx| open(tx, vec!["w-a1".into()])).unwrap();
+        assert_eq!(q.reason, RestartReason::Restart, "普通重启：不是休眠");
+        assert!(q.interrupted.is_empty());
+        let plain = prompts::fill(f.get("notice.restart"), &[("count", "1")]);
+        let a = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
+        assert!(a.last().unwrap().text.starts_with(&plain));
     }
 
     #[test]

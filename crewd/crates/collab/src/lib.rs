@@ -8,6 +8,7 @@ pub mod channels;
 pub mod crews;
 pub mod cursors;
 pub mod directory;
+pub mod hibernate;
 pub mod listens;
 pub mod messages;
 pub mod prompts;
