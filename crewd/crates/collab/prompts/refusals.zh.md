@@ -13,6 +13,18 @@
 ## ask.remove_blocked
 机组 {crew} 的 {ask} 还卡着活项；先答掉它或让负责人改道，再移除机组
 
+## ask.withdraw_forbidden
+{ask} 只能由提问者本人、问所在机组的机长或人撤回；需要撤的话请他们来撤，或在群里说明情况
+
+## ask.reason_empty
+撤回理由不能为空；用一句话写清变了什么
+
+## ask.not_open
+{ask} 已经答过、按默认办了或撤回了，不能再撤；这条不用再处理
+
+## ask.in_use
+{ask} 还卡着一个活项，撤不了；先让负责人改道（把那一项报回 open / active），再撤
+
 ## channel.not_found
 没有群 {channel}；先列出现有的群，核对 id
 

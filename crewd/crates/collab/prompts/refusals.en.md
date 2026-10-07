@@ -13,6 +13,18 @@ The system cannot withdraw an ask. Withdraw it as a session or as the human.
 ## ask.remove_blocked
 Ask {ask} in crew {crew} still blocks a live work item. Answer it, or have the owner reroute, then remove the crew.
 
+## ask.withdraw_forbidden
+Only the asker, the captain of the ask's crew, or the human can withdraw {ask}. Ask one of them to withdraw it, or explain in the channel.
+
+## ask.reason_empty
+The withdraw reason cannot be empty. Say in one sentence what changed.
+
+## ask.not_open
+{ask} is already answered, defaulted or withdrawn, so it cannot be withdrawn again. Nothing more to do for it.
+
+## ask.in_use
+{ask} still blocks a live work item and cannot be withdrawn. Have the owner reroute that item (report it back to open / active) first, then withdraw.
+
 ## channel.not_found
 There is no channel {channel}. List the existing channels and check the id.
 
