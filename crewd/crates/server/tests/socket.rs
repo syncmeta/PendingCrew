@@ -501,9 +501,48 @@ async fn channels_can_be_created_watched_and_handed_over() {
         json!({"crewId":made["id"],"fromParentId":"a"}),
     )
     .await;
+    // 删机组 = 归档（N1 裁定 13）：返回归档后的机组；默认列表里没有它，includeArchived 列得出；解档后回来。
+    let gone = c.call(8, "crew.delete", json!({"crewId":made["id"]})).await;
+    assert_eq!(gone["id"], made["id"]);
+    assert!(gone["archivedAt"].is_string(), "{gone}");
+    let has = |list: &Value| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == made["id"])
+    };
+    assert!(
+        !has(&c.call(9, "crew.list", Value::Null).await),
+        "默认不列归档的"
+    );
+    let all = c
+        .call(10, "crew.list", json!({"includeArchived":true}))
+        .await;
+    assert!(has(&all), "{all}");
     assert_eq!(
-        c.call(8, "crew.delete", json!({"crewId":made["id"]})).await,
-        json!({})
+        c.call_err(
+            11,
+            "message.post",
+            json!({"channelId":format!("{}/lobby", made["id"].as_str().unwrap()),"text":"还在吗"})
+        )
+        .await,
+        -32602,
+        "归档机组的大厅不收消息"
+    );
+    let back = c
+        .call(12, "crew.unarchive", json!({"crewId":made["id"]}))
+        .await;
+    assert!(back.get("archivedAt").is_none_or(Value::is_null), "{back}");
+    assert!(has(&c.call(13, "crew.list", json!({})).await));
+    // 总机组不能归档。
+    assert_eq!(
+        c.call_err(
+            14,
+            "crew.delete",
+            json!({"crewId":crewd_store::crews::ORG_ROOT_ID})
+        )
+        .await,
+        crewd_proto::RpcError::FORBIDDEN
     );
 }
 
@@ -854,8 +893,36 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
     let mut want = vec![made.clone(), json!(crewd_store::crews::ORG_ROOT_ID)];
     want.sort_by_key(|v| v.to_string());
     assert_eq!(changed, want);
-    c.call(9, "crew.delete", json!({"crewId":made})).await;
+    // 删机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
+    let archived = c.call(9, "crew.delete", json!({"crewId":made})).await;
+    assert!(archived["archivedAt"].is_string());
     let evs = frames_until_hello(&mut sub, 107).await;
+    let mut kinds: Vec<(String, Value)> = evs
+        .iter()
+        .map(|e| {
+            let id = if e.event == "channel.changed" {
+                e.data["channel"]["id"].clone()
+            } else {
+                e.data["id"].clone()
+            };
+            (e.event.clone(), id)
+        })
+        .collect();
+    kinds.sort_by_key(|(e, v)| format!("{e}{v}"));
+    assert_eq!(
+        kinds,
+        [
+            (
+                "channel.changed".to_string(),
+                json!(format!("{}/lobby", made.as_str().unwrap()))
+            ),
+            ("crew.changed".to_string(), made.clone()),
+        ],
+        "{evs:?}"
+    );
+    // 永久删除（已归档的）：crew.removed + 每个被级联删掉的群一条 channel.removed。
+    c.call(10, "crew.purge", json!({"crewId":made})).await;
+    let evs = frames_until_hello(&mut sub, 108).await;
     let removed: Vec<&Value> = evs
         .iter()
         .filter(|e| e.event == "crew.removed")
@@ -926,10 +993,10 @@ async fn serve_closes_the_db_cleanly_before_releasing_the_lock() {
     crewd_server::lock_data_dir(&dir).expect("锁已释放");
 }
 
-/// S22 / N4：`crew.delete`（目前是永久删除）先拍 pre-delete 快照再删；快照里还有这个机组。
-/// N1 把 crew.delete 改成默认归档之后，这一步跟着移到真正的永久删除（purge）上。
+/// S22 / N4：`crew.purge`（永久删除，只收已归档的）先拍 pre-delete 快照再删；快照里还有这个机组。
+/// `crew.delete` 只是归档（N1 裁定 13）：可逆，不拍快照。
 #[tokio::test]
-async fn crew_delete_snapshots_before_purging() {
+async fn crew_purge_snapshots_before_purging() {
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
     let mut c = Client::connect(dir.path()).await;
@@ -944,6 +1011,20 @@ async fn crew_delete_snapshots_before_purging() {
         .unwrap()
         .to_string();
     c.call(2, "crew.delete", json!({"crewId":made})).await;
+    assert!(
+        pre_delete_snapshots(dir.path()).is_empty(),
+        "归档不拍快照：{:?}",
+        pre_delete_snapshots(dir.path())
+    );
+    assert_eq!(
+        c.call(3, "crew.purge", json!({"crewId":made})).await,
+        json!({})
+    );
+    assert_eq!(
+        c.call_err(4, "crew.get", json!({"crewId":made})).await,
+        crewd_proto::RpcError::NOT_FOUND,
+        "删掉了"
+    );
     let snaps: Vec<std::path::PathBuf> = std::fs::read_dir(dir.path().join("backups"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -964,9 +1045,9 @@ async fn crew_delete_snapshots_before_purging() {
     assert_eq!(n, 1, "快照是删之前的样子");
 }
 
-/// 复审 3：快照拍不成（这里是 backups/ 只读），crew.delete 报存储故障，机组原样还在。
+/// 复审 3：快照拍不成（这里是 backups/ 只读），crew.purge 报存储故障，机组原样还在（仍是归档的）。
 #[tokio::test]
-async fn crew_delete_without_a_snapshot_deletes_nothing() {
+async fn crew_purge_without_a_snapshot_deletes_nothing() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
@@ -981,6 +1062,7 @@ async fn crew_delete_without_a_snapshot_deletes_nothing() {
         .as_str()
         .unwrap()
         .to_string();
+    c.call(9, "crew.delete", json!({"crewId":made})).await;
     let b = dir.path().join("backups");
     // 启动时的定时备份可能正在写 backups/：等它出现再收权限。
     for _ in 0..200 {
@@ -994,11 +1076,12 @@ async fn crew_delete_without_a_snapshot_deletes_nothing() {
     }
     std::fs::create_dir_all(&b).unwrap();
     std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
-    let code = c.call_err(2, "crew.delete", json!({"crewId":made})).await;
+    let code = c.call_err(2, "crew.purge", json!({"crewId":made})).await;
     std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(code, crewd_proto::RpcError::STORAGE);
     let got = c.call(3, "crew.get", json!({"crewId":made})).await;
     assert_eq!(got["crew"]["id"], made, "{got}");
+    assert!(got["crew"]["archivedAt"].is_string(), "{got}");
 }
 
 /// 复审 M7：socket 绑不上（这里路径上是个目录）时 serve 报错退出，但退出前照样收尾：Ticker 停下（启动时
@@ -1042,23 +1125,39 @@ fn pre_delete_snapshots(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 复审 2 轮 1：删不了的（没有这个机组 / 还有在跑的 session）先被前置条件挡下，不拍那份整库快照。
+/// 复审 2 轮 1：删不了的（没有这个机组 / 总机组 / 还没归档 / 还有在跑的 session）先被前置条件挡下，
+/// 不拍那份整库快照。
 #[tokio::test]
-async fn crew_delete_that_cannot_happen_takes_no_snapshot() {
+async fn crew_purge_that_cannot_happen_takes_no_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
     let mut c = Client::connect(dir.path()).await;
     assert_eq!(
-        c.call_err(1, "crew.delete", json!({"crewId":"no-such-crew"}))
+        c.call_err(1, "crew.purge", json!({"crewId":"no-such-crew"}))
             .await,
         crewd_proto::RpcError::NOT_FOUND
     );
+    assert_eq!(
+        c.call_err(
+            2,
+            "crew.purge",
+            json!({"crewId":crewd_store::crews::ORG_ROOT_ID})
+        )
+        .await,
+        crewd_proto::RpcError::FORBIDDEN
+    );
+    assert_eq!(
+        c.call_err(3, "crew.purge", json!({"crewId":"a"})).await,
+        crewd_proto::RpcError::CONFLICT,
+        "没归档的不能永久删除"
+    );
+    c.call(4, "crew.delete", json!({"crewId":"a"})).await;
     rusqlite::Connection::open(dir.path().join("crewd.db"))
         .unwrap()
         .execute("UPDATE sessions SET desired='running' WHERE id='cap-a'", [])
         .unwrap();
     assert_eq!(
-        c.call_err(2, "crew.delete", json!({"crewId":"a"})).await,
+        c.call_err(5, "crew.purge", json!({"crewId":"a"})).await,
         crewd_proto::RpcError::CONFLICT
     );
     assert!(

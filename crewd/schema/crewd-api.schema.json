@@ -706,6 +706,23 @@
       ],
       "type": "object"
     },
+    "CrewListParams": {
+      "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`。归档的机组默认不列；`includeArchived: true` 连它们一起列。\n`Crew.childIds` 照实含归档的子机组（边还在）：列表里没有的 id 跳过即可。",
+      "properties": {
+        "includeArchived": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CrewRef": {
       "description": "`crew.removed` 的数据。",
       "properties": {
@@ -893,7 +910,7 @@
     },
     "Empty": {
       "additionalProperties": false,
-      "description": "空结果（`crew.delete` 等）。",
+      "description": "空结果（`crew.purge` 等）。",
       "type": "object"
     },
     "Event": {
@@ -2198,7 +2215,7 @@
         "$ref": "#/$defs/CrewIdParams"
       },
       "result": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/Crew"
       }
     },
     "crew.get": {
@@ -2211,13 +2228,21 @@
     },
     "crew.list": {
       "params": {
-        "$ref": "#/$defs/NoParams"
+        "$ref": "#/$defs/CrewListParams"
       },
       "result": {
         "items": {
           "$ref": "#/$defs/Crew"
         },
         "type": "array"
+      }
+    },
+    "crew.purge": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
       }
     },
     "crew.release": {
@@ -2237,6 +2262,14 @@
           "$ref": "#/$defs/Crew"
         },
         "type": "array"
+      }
+    },
+    "crew.unarchive": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
       }
     },
     "crew.update": {

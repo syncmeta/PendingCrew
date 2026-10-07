@@ -360,6 +360,7 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, n: NewChannel) -> Result<Channel> {
     let creator = sender_ref(by)?;
     check_member_exists(tx.conn(), &creator)?;
     crews::get(tx.conn(), &n.crew_id)?;
+    crews::refuse_archived(tx.conn(), &n.crew_id)?;
     if !matches!(n.kind, ChannelKind::Topic | ChannelKind::Dm) {
         return Err(CollabError::Invalid(
             "只能建 topic 或 dm；大厅与人类群由 crewd 建".into(),
@@ -469,6 +470,8 @@ fn may_manage(conn: &Connection, by: &Sender, ch: &Channel) -> Result<bool> {
 
 pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
+    // 归档机组的群跟着只读（含解档：先解档机组）。
+    crews::refuse_archived(tx.conn(), &ch.crew_id)?;
     if !may_manage(tx.conn(), by, &ch)? {
         return Err(CollabError::Forbidden(
             "只有群主、机长或人能改这个群".into(),
@@ -624,6 +627,8 @@ pub(crate) fn human_channel_exists(conn: &Connection, home: &str) -> Result<bool
 /// （与 `crews::point_captain_at` 一致：机长不会因为群刚出现 / 刚解档就凭空多出一屏历史未读，裁定 9）。
 pub fn ensure_human_channel(tx: &mut Tx<'_>, home: &str) -> Result<Channel> {
     crews::get(tx.conn(), home)?;
+    // 归档的机组只读：不建、不解档它的人类群（发言、列群都走这里，统一在这一处挡）。
+    crews::refuse_archived(tx.conn(), home)?;
     if !crews::is_home(tx.conn(), home)? {
         return Err(CollabError::Invalid(format!(
             "{home} 没有人类群，人类群在 {}/human",
@@ -719,11 +724,11 @@ pub fn summary(conn: &Connection, id: &str) -> Result<ChannelSummary> {
 }
 
 /// `channel.list(crewId)`：归属该机组的群 ∪ 有成员 session 属于该机组的群（§17「同时显示在每个成员所在机组下」）。
-/// home（总机组 / 一级机组）会顺手懒建人类群。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
+/// home（总机组 / 一级机组）会顺手懒建人类群（归档的机组除外：只读，列出已有的群、不建不解档）。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
 /// 大厅 / 人类群 / 其他、建群时间。
 pub fn list_for_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<ChannelSummary>> {
     crews::get(tx.conn(), crew)?;
-    if crews::is_home(tx.conn(), crew)? {
+    if crews::is_home(tx.conn(), crew)? && !crews::is_archived(tx.conn(), crew)? {
         ensure_human_channel(tx, crew)?;
     }
     // 成员行带进来的别人的人类群只在它是本机组 home 的人类群时才挂（陈旧的跨 home 行不算，与读规则一致）。
@@ -787,7 +792,7 @@ fn set_owner(tx: &mut Tx<'_>, id: &str, to: &MemberRef) -> Result<Channel> {
     get(tx.conn(), id)
 }
 
-/// 机组 `crew` 要被删掉（`crews::delete` 在级联之前调，终审 I4）：它的 session 会随级联消失，
+/// 机组 `crew` 要被永久删掉（`crews::purge` 在级联之前调，终审 I4）：它的 session 会随级联消失，
 /// 先把它们从**别的机组**的群里摘干净——显式成员行记 `left_at`；它们当群主的 topic 交给群所属机组
 /// 此刻的机长（机长随之入群），没有机长（或是 dm）交给剩下的成员里最早入群的，一个不剩群主留空；
 /// 转给它们的待接受转让作废。每个受影响、活下来的群发 ChannelChanged。

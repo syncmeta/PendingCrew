@@ -103,6 +103,10 @@ params!(/// 无参数方法只收 null 或 {}。
     #[schemars(extend("type" = ["object", "null"]))]
     NoParams {});
 params!(CrewIdParams { crew_id: String });
+params!(/// 全可选：`null` 当 `{}`。归档的机组默认不列；`includeArchived: true` 连它们一起列。
+    /// `Crew.childIds` 照实含归档的子机组（边还在）：列表里没有的 id 跳过即可。
+    #[schemars(extend("type" = ["object", "null"]))]
+    CrewListParams { #[serde(default)] include_archived: Option<bool> });
 params!(CrewCreateParams { title: String, working_directory: String, #[serde(default)] parent_id: Option<String> });
 params!(CrewUpdateParams {
     crew_id: String,

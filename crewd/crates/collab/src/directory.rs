@@ -5,7 +5,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 /// 通讯录地址 → session id（M3b `post.to` 用）：`"N-E"` = N 号机组分机 E 的 session；`"N"` / `"N-1"` = N 号机组
 /// **此刻**的机长（分机 1 = 机长，跟着机长指针走）。号码只认十进制数字。
-/// 格式不对 → `Invalid`；没有这个号的机组 / 分机 → `NotFound`；机组此刻没有机长 → `Invalid`。
+/// 格式不对 → `Invalid`；没有这个号的机组 / 分机 → `NotFound`；机组此刻没有机长 → `Invalid`；
+/// 机组已归档（N1 裁定 13）→ `Conflict`「已归档」（号还在、不回收，但不再收消息；不说成「没有这个号」）。
 /// 号码没有唯一索引：撞号时取最早建的机组（再按 id），与通讯录里的先后一致。
 pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
     let bad = || {
@@ -31,6 +32,11 @@ pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
         )
         .optional()?
         .ok_or_else(|| CollabError::NotFound(format!("通讯录里没有 {n} 号机组")))?;
+    if crews::is_archived(conn, &crew)? {
+        return Err(CollabError::Conflict(format!(
+            "{n} 号机组已归档，不收消息；要联系先请人解档"
+        )));
+    }
     match e {
         None | Some(1) => crews::captain_of(conn, &crew)?
             .ok_or_else(|| CollabError::Invalid(format!("{n} 号机组现在没有机长"))),
@@ -63,9 +69,10 @@ fn org_path(conn: &Connection, crew: &str) -> Result<String> {
     Ok(titles.join(" / "))
 }
 
+/// 归档的机组不列（与 `crew.list` 默认同口径；它的号也不再解析，见 `resolve`）。
 pub fn list(conn: &Connection, query: Option<&str>) -> Result<Vec<DirectoryRow>> {
     let mut all = Vec::new();
-    let mut numbered: Vec<_> = crews::list(conn)?
+    let mut numbered: Vec<_> = crews::list(conn, false)?
         .into_iter()
         .filter(|c| c.number.is_some())
         .collect();
@@ -209,5 +216,24 @@ mod tests {
             resolve(s.conn(), "甲").unwrap_err(),
             CollabError::Invalid(_)
         ));
+    }
+
+    /// 归档的机组不在通讯录里，它的号（含分机）也不再解析：报「已归档」，不是「没有这个号」。
+    #[test]
+    fn an_archived_crew_is_out_of_the_directory_and_its_number_does_not_resolve() {
+        let mut s = store();
+        crate::testkit::ok(&mut s, |tx| crate::crews::archive(tx, "crew-x"));
+        assert_eq!(
+            numbers(&list(s.conn(), None).unwrap()),
+            ["0", "1", "1-1", "1-2", "1-3", "2", "2-1", "2-2"]
+        );
+        for addr in ["3", "3-1"] {
+            match resolve(s.conn(), addr).unwrap_err() {
+                CollabError::Conflict(m) => assert!(m.contains("已归档"), "{addr}: {m}"),
+                e => panic!("{addr}: {e:?}"),
+            }
+        }
+        crate::testkit::ok(&mut s, |tx| crate::crews::unarchive(tx, "crew-x"));
+        assert_eq!(resolve(s.conn(), "3").unwrap(), "cap-x");
     }
 }

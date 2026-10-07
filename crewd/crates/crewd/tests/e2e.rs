@@ -325,6 +325,8 @@ fn rpc_drives_every_client_method() {
             Ok,
         ),
         ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.unarchive", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.purge", r#"{"crewId":"nope"}"#, Code(-32004)),
         // v4 起导入的顶层机组挂在总机组下 = 一级机组，人类群是它自己的（home_of，N1-R2）。
         ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
         // 总机组自己的管理用人类群：同一条懒建规则（list 建出来，update 才找得到）。

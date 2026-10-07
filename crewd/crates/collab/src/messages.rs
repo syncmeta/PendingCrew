@@ -950,15 +950,17 @@ mod tests {
                 .archived_at
                 .is_some()
         );
-        // 现父被删：crew-x 重新成了 home，它的人类群要一并解档（与 release 同一个做法）。
-        ok(&mut s, |tx| crate::crews::delete(tx, "crew-a"));
+        // 摘掉现父：crew-x 重新成了 home，它的人类群要一并解档。
+        ok(&mut s, |tx| {
+            crate::crews::release(tx, "crew-x", "crew-a", None)
+        });
         assert!(crate::crews::is_home(s.conn(), "crew-x").unwrap());
         assert!(
             crate::channels::get(s.conn(), "crew-x/human")
                 .unwrap()
                 .archived_at
                 .is_none(),
-            "删父后又成 home 的人类群解档"
+            "摘出后又成 home 的人类群解档"
         );
         ok(&mut s, |tx| {
             post(tx, Sender::Human, post_text("crew-x/human", "人说话"))

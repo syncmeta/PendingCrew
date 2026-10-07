@@ -35,7 +35,9 @@ pub fn get(conn: &Connection, id: &str) -> Result<Crew> {
 /// `reorder` 排的就是它）；多父的机组排在第一次遇到的位置、只出现一次；从根走不到的（旧数据里断开的）
 /// 按建组时间、id 排在最后。不看 `crews.position`（只对总机组有意义，N1 裁定 7）。
 /// 这只是一个稳定的扁平次序；客户端建树用 `parent_ids` / `child_ids`。store 层仍按号排（M1 的测试依赖它）。
-pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
+/// 归档的机组（N1 裁定 13）默认不列，`include_archived` 才列；`child_ids` 照实含归档的子机组（边还在，解档原地回来），
+/// 客户端遇到列表里没有的 id 跳过即可。
+pub fn list(conn: &Connection, include_archived: bool) -> Result<Vec<Crew>> {
     let mut rest: BTreeMap<String, Crew> = crewd_store::crews::list(conn)?
         .into_iter()
         .map(|c| (c.id.clone(), c))
@@ -57,6 +59,9 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
             .then_with(|| a.id.cmp(&b.id))
     });
     out.extend(cut_off);
+    if !include_archived {
+        out.retain(|c| c.archived_at.is_none());
+    }
     Ok(out)
 }
 
@@ -105,6 +110,28 @@ pub fn is_org_root(conn: &Connection, id: &str) -> Result<bool> {
     conn.query_row("SELECT org_root FROM crews WHERE id=?1", [id], |r| r.get(0))
         .optional()?
         .ok_or_else(|| not_found(id))
+}
+
+/// 机组已归档（N1 裁定 13）？一次直查；不存在 = NotFound。
+pub fn is_archived(conn: &Connection, id: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT archived_at IS NOT NULL FROM crews WHERE id=?1",
+        [id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| not_found(id))
+}
+
+/// 归档的机组只读（N1 裁定 13、preflight M4）：结构操作、改名、换机长、起 / 注册 session、建群、动它的群、
+/// 往它的人类群发言一律拒，指路先解档。读（列表、详情、读消息）照常。
+pub(crate) fn refuse_archived(conn: &Connection, id: &str) -> Result<()> {
+    if is_archived(conn, id)? {
+        return Err(CollabError::Conflict(format!(
+            "机组 {id} 已归档，只读；要动它先解档（crew.unarchive）"
+        )));
+    }
+    Ok(())
 }
 
 /// 有自己人类群的机组（H2）：总机组；一级机组（父边恰好是 [总机组]）。没有父边的非根机组只会出现在
@@ -178,11 +205,11 @@ pub(crate) fn alloc_ext(conn: &Connection, crew: &str) -> Result<i64> {
     Ok(ext)
 }
 
-/// 根的轻量规则（N1 裁定 6）：总机组不能有父（不能被收编、转挂、摘出），不能删。被操作的机组不存在 = NotFound。
+/// 根的轻量规则（N1 裁定 6）：总机组不能有父（不能被收编、转挂、摘出），不能归档、不能删。被操作的机组不存在 = NotFound。
 fn refuse_org_root(conn: &Connection, id: &str) -> Result<()> {
     if is_org_root(conn, id)? {
         return Err(CollabError::Forbidden(
-            "总机组是组织的根，不能被收编、摘出或删除".into(),
+            "总机组是组织的根，不能被收编、摘出、归档或删除".into(),
         ));
     }
     Ok(())
@@ -230,6 +257,9 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     if wd.is_empty() {
         return Err(CollabError::Invalid("工作目录不能为空".into()));
     }
+    if let Some(p) = n.parent_id.as_deref() {
+        refuse_archived(tx.conn(), p)?;
+    }
     let number = next_crew_number(tx)?;
     let now = tx.now_ts();
     let crew = Crew {
@@ -267,6 +297,7 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
 
 pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
+    refuse_archived(tx.conn(), id)?;
     // 根的轻量规则（N1 裁定 6）：总机组不能被隐藏（改名等其余字段与普通机组一样）。
     if crew.org_root && p.hidden == Some(true) {
         return Err(CollabError::Forbidden("总机组是组织的根，不能隐藏".into()));
@@ -330,6 +361,8 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
     refuse_org_root(tx.conn(), crew)?;
     get(tx.conn(), crew)?;
     get(tx.conn(), parent)?;
+    refuse_archived(tx.conn(), crew)?;
+    refuse_archived(tx.conn(), parent)?;
     if is_org_root(tx.conn(), parent)? {
         if parents(tx.conn(), crew)? == [parent] {
             return get(tx.conn(), crew);
@@ -390,6 +423,7 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     };
     let to = if to_root { None } else { to };
     get(tx.conn(), crew)?;
+    refuse_archived(tx.conn(), crew)?;
     // 不存在的父 = NotFound（控制者裁定 e），与「存在但不是直系父」（Invalid）分开。
     get(tx.conn(), from)?;
     let ps = parents(tx.conn(), crew)?;
@@ -431,11 +465,7 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
     get(tx.conn(), crew)
 }
 
-/// `delete` 的前置条件（只读、便宜）：机组存在、不是总机组、没有 desired=running 的 session。
-/// 永久删除先跑它、再拍快照（N4：删不了就不拍整库快照）。
-pub fn check_deletable(conn: &Connection, id: &str) -> Result<()> {
-    get(conn, id)?;
-    refuse_org_root(conn, id)?;
+fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
     let running: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sessions WHERE crew_id=?1 AND desired='running'",
         [id],
@@ -449,12 +479,113 @@ pub fn check_deletable(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// 只能删非总机组、且没有 desired=running session 的机组（spec §22.2，见 `check_deletable`）。子机组的父边随之消失；
-/// 只剩这一个父的子机组回到总机组下（N1 裁定 4）。
-/// 删除级联（人显式的操作）：本机组的 session、群（含跨机组 topic 及其历史）一起删掉，每个群发
-/// ChannelRemoved；它的 session 在别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
-pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
-    check_deletable(tx.conn(), id)?;
+/// 删机组 = 归档（N1 裁定 13；`crew.delete` 调它，可逆，不拍快照）：拒总机组、拒还有 desired=running 的 session、
+/// 拒还有**没归档的子机组**（先挪走或归档子机组，不级联）。写 `crews.archived_at`，把**归属这个机组**的群全部标归档
+/// （每个一条 ChannelChanged；topic / dm 上待接受的群主转让随之作废，同 `channels::update` 归档）。
+/// 消息、session 行、成员行、账本全部保留；父子边不动（解档原地回来）。已归档 = 原样返回、不发变更。
+pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
+    let crew = get(tx.conn(), id)?;
+    refuse_org_root(tx.conn(), id)?;
+    if crew.archived_at.is_some() {
+        return Ok(crew);
+    }
+    refuse_running(tx.conn(), id)?;
+    let mut live_kids = Vec::new();
+    for k in children(tx.conn(), id)? {
+        if !is_archived(tx.conn(), &k)? {
+            live_kids.push(k);
+        }
+    }
+    if !live_kids.is_empty() {
+        return Err(CollabError::Conflict(format!(
+            "机组 {id} 下面还有没归档的子机组 {}；先把它们挪走（crew.release）或归档",
+            live_kids.join(", ")
+        )));
+    }
+    let now = tx.now_ts();
+    tx.conn().execute(
+        "UPDATE crews SET archived_at=?2, updated_at=?2 WHERE id=?1",
+        params![id, now],
+    )?;
+    let channels: Vec<String> = {
+        let mut st = tx.conn().prepare(
+            "SELECT id FROM channels WHERE crew_id=?1 AND archived_at IS NULL ORDER BY created_at, id",
+        )?;
+        st.query_map([id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    tx.conn().execute(
+        "UPDATE channels SET archived_at=?2, pending_owner_kind=NULL, pending_owner_id=NULL,
+                pending_owner_by=NULL, pending_owner_at=NULL
+          WHERE crew_id=?1 AND archived_at IS NULL",
+        params![id, now],
+    )?;
+    for channel_id in channels {
+        tx.note(Change::ChannelChanged { channel_id });
+    }
+    tx.note(Change::CrewChanged { crew_id: id.into() });
+    get(tx.conn(), id)
+}
+
+/// 解档（`crew.unarchive`）：清 `archived_at`；大厅解档；是 home 且人类群建过 → 人类群解档（`ensure_human_channel`，
+/// 钉机长游标）。topic / dm 留归档（人逐个解档）。上级还归档着 → Conflict（先解档上级：归档的机组下面不挂活的）。
+/// 没归档 = 原样返回、不发变更。
+pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
+    let crew = get(tx.conn(), id)?;
+    if crew.archived_at.is_none() {
+        return Ok(crew);
+    }
+    let mut archived_parents = Vec::new();
+    for p in parents(tx.conn(), id)? {
+        if is_archived(tx.conn(), &p)? {
+            archived_parents.push(p);
+        }
+    }
+    if !archived_parents.is_empty() {
+        return Err(CollabError::Conflict(format!(
+            "机组 {id} 的上级 {} 也已归档；先解档上级",
+            archived_parents.join(", ")
+        )));
+    }
+    let now = tx.now_ts();
+    tx.conn().execute(
+        "UPDATE crews SET archived_at=NULL, updated_at=?2 WHERE id=?1",
+        params![id, now],
+    )?;
+    let lobby = crewd_store::channels::lobby_id(id);
+    if tx.conn().execute(
+        "UPDATE channels SET archived_at=NULL WHERE id=?1 AND archived_at IS NOT NULL",
+        [&lobby],
+    )? > 0
+    {
+        tx.note(Change::ChannelChanged { channel_id: lobby });
+    }
+    if is_home(tx.conn(), id)? && crate::channels::human_channel_exists(tx.conn(), id)? {
+        crate::channels::ensure_human_channel(tx, id)?;
+    }
+    tx.note(Change::CrewChanged { crew_id: id.into() });
+    get(tx.conn(), id)
+}
+
+/// `purge` 的前置条件（只读、便宜）：机组存在、不是总机组、**已归档**、没有 desired=running 的 session。
+/// `crew.purge` 先跑它、再拍快照（N4：删不了就不拍整库快照），三步在同一个库线程任务里。
+pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
+    get(conn, id)?;
+    refuse_org_root(conn, id)?;
+    if !is_archived(conn, id)? {
+        return Err(CollabError::Conflict(format!(
+            "机组 {id} 还没归档；永久删除只收已归档的机组，先归档（crew.delete）"
+        )));
+    }
+    refuse_running(conn, id)
+}
+
+/// 永久删除（`crew.purge`，N4 的快照之后跑；只收已归档的机组，见 `check_purgeable`）。子机组的父边随之消失；
+/// 只剩这一个父的子机组回到总机组下（N1 裁定 4）——它们也已归档（归档的机组下面不挂活的），人类群不顺手解档。
+/// 删除级联：本机组的 session、群（含跨机组 topic 及其历史）一起删掉，每个群发 ChannelRemoved；它的 session 在
+/// 别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
+pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
+    check_purgeable(tx.conn(), id)?;
     let kids = children(tx.conn(), id)?;
     // 只有这一个父的子机组删后没有父了：按原先的次序排到总机组下的末尾（C1）。
     let mut orphans = Vec::new();
@@ -472,8 +603,8 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     }
     for k in &orphans {
         hang_under_org_root(tx, k)?;
-        // 又成了 home：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）。
-        if crate::channels::human_channel_exists(tx.conn(), k)? {
+        // 又成了 home：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）——归档的孤儿除外，它只读。
+        if !is_archived(tx.conn(), k)? && crate::channels::human_channel_exists(tx.conn(), k)? {
             crate::channels::ensure_human_channel(tx, k)?;
         }
     }
@@ -487,6 +618,7 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
 /// 换机长（数据部分；进程与世界观由 M3c / M3b 处理）：旧机长降为 worker，没号就领下一个分机号。
 pub fn set_captain(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
     get(tx.conn(), crew)?;
+    refuse_archived(tx.conn(), crew)?;
     let s = crate::sessions::get(tx.conn(), session)?;
     if s.crew_id != crew {
         return Err(CollabError::Invalid(format!(
@@ -785,7 +917,8 @@ mod tests {
             ),
             1
         );
-        ok(&mut s, |tx| delete(tx, &a.id));
+        archive_subtree(&mut s, &a.id);
+        ok(&mut s, |tx| purge(tx, &a.id));
         let b = ok(&mut s, |tx| {
             create(
                 tx,
@@ -823,23 +956,24 @@ mod tests {
     }
 
     #[test]
-    fn delete_refuses_builtin_and_crews_with_running_sessions() {
+    fn purge_refuses_the_org_root_and_crews_with_running_sessions() {
         let mut s = store();
         assert!(matches!(
-            err(&mut s, |tx| delete(tx, "chief")),
+            err(&mut s, |tx| purge(tx, "chief")),
             CollabError::Forbidden(_)
         ));
+        ok(&mut s, |tx| archive(tx, "crew-x"));
         s.conn()
             .execute("UPDATE sessions SET desired='running' WHERE id='cap-x'", [])
             .unwrap();
         assert!(matches!(
-            err(&mut s, |tx| delete(tx, "crew-x")),
+            err(&mut s, |tx| purge(tx, "crew-x")),
             CollabError::Conflict(_)
         ));
         s.conn()
             .execute("UPDATE sessions SET desired='stopped' WHERE id='cap-x'", [])
             .unwrap();
-        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| delete(tx, "crew-x"));
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| purge(tx, "crew-x"));
         assert!(ch.contains(&Change::CrewRemoved {
             crew_id: "crew-x".into()
         }));
@@ -856,7 +990,7 @@ mod tests {
     /// 终审 I4：删机组仍然级联（人显式的操作），但别的机组的群里不留幽灵成员 / 幽灵群主，
     /// 活下来的群发 ChannelChanged，被级联删掉的群发 ChannelRemoved。
     #[test]
-    fn delete_clears_its_sessions_out_of_other_crews_channels_and_reports_every_channel() {
+    fn purge_clears_its_sessions_out_of_other_crews_channels_and_reports_every_channel() {
         use crate::channels::{self, NewChannel};
         use crewd_proto::{ChannelKind, MemberRef};
         let mut s = store();
@@ -952,7 +1086,8 @@ mod tests {
             )
         });
 
-        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| delete(tx, "crew-x"));
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        let ((), ch) = crate::testkit::ok_at(&mut s, NOW, |tx| purge(tx, "crew-x"));
 
         let ghost = MemberRef::session("cap-x");
         for id in [
@@ -1337,13 +1472,14 @@ mod tests {
     }
 
     #[test]
-    fn delete_puts_orphaned_children_last_under_the_org_root() {
+    fn purge_puts_orphaned_children_last_under_the_org_root() {
         let mut s = store();
         let solo = kid(&mut s, "只有一个父", "crew-a");
         let shared = kid(&mut s, "另有父", "crew-a");
         ok(&mut s, |tx| adopt(tx, &shared.id, "crew-x")); // 另有父 crew-x，不会变根
         let roots_before = order(&s, "chief");
-        ok(&mut s, |tx| delete(tx, "crew-a"));
+        archive_subtree(&mut s, "crew-a");
+        ok(&mut s, |tx| purge(tx, "crew-a"));
         let roots = order(&s, "chief");
         let mut want: Vec<String> = roots_before.into_iter().filter(|c| c != "crew-a").collect();
         want.extend(["crew-b".to_string(), solo.id.clone()]);
@@ -1496,7 +1632,7 @@ mod tests {
     }
 
     #[test]
-    fn the_org_root_cannot_be_adopted_released_or_deleted() {
+    fn the_org_root_cannot_be_adopted_released_archived_or_purged() {
         let mut s = store();
         assert!(matches!(
             err(&mut s, |tx| adopt(tx, "chief", "crew-a")),
@@ -1507,7 +1643,11 @@ mod tests {
             CollabError::Forbidden(_)
         ));
         assert!(matches!(
-            err(&mut s, |tx| delete(tx, "chief")),
+            err(&mut s, |tx| archive(tx, "chief")),
+            CollabError::Forbidden(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| purge(tx, "chief")),
             CollabError::Forbidden(_)
         ));
     }
@@ -1563,9 +1703,10 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_parent_moves_its_only_child_under_the_org_root() {
+    fn purging_a_parent_moves_its_only_child_under_the_org_root() {
         let mut s = store();
-        ok(&mut s, |tx| delete(tx, "crew-a"));
+        archive_subtree(&mut s, "crew-a");
+        ok(&mut s, |tx| purge(tx, "crew-a"));
         assert_eq!(parents(s.conn(), "crew-b").unwrap(), ["chief"]);
         assert!(is_home(s.conn(), "crew-b").unwrap());
     }
@@ -1635,8 +1776,10 @@ mod tests {
         });
         check(&s, "create(parent=总机组)");
         assert_eq!(under_root.parent_ids, ["chief"]);
-        ok(&mut s, |tx| delete(tx, "crew-a"));
-        check(&s, "delete");
+        archive_subtree(&mut s, "crew-a");
+        check(&s, "archive");
+        ok(&mut s, |tx| purge(tx, "crew-a"));
+        check(&s, "purge");
         ok(&mut s, |tx| create(tx, new_crew("再建一个")));
         check(&s, "create");
     }
@@ -1667,7 +1810,11 @@ mod tests {
             .unwrap();
         let n = ok(&mut s, |tx| create(tx, new_crew("新机组")));
         let ids = |s: &crewd_store::Store| -> Vec<String> {
-            list(s.conn()).unwrap().into_iter().map(|c| c.id).collect()
+            list(s.conn(), true)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.id)
+                .collect()
         };
         assert_eq!(
             ids(&s),
@@ -1837,5 +1984,435 @@ mod tests {
             0
         );
         assert_eq!(two_parent_root_edges(&s), 0);
+    }
+
+    // ---- 删机组 = 归档（N1 裁定 13，Task 9）----
+
+    /// 永久删除只收已归档的机组：子树先从叶子往上逐个归档（后序：子先于父）。
+    fn archive_subtree(s: &mut crewd_store::Store, id: &str) {
+        for k in children(s.conn(), id).unwrap() {
+            archive_subtree(s, &k);
+        }
+        if get(s.conn(), id).unwrap().archived_at.is_none() {
+            ok(s, |tx| archive(tx, id));
+        }
+    }
+
+    #[test]
+    fn archiving_a_crew_keeps_everything_and_unarchiving_brings_it_back() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-x")
+        });
+        ok(&mut s, |tx| {
+            crate::messages::post(
+                tx,
+                crate::Sender::Human,
+                crate::messages::NewPost {
+                    channel_id: "crew-x/lobby".into(),
+                    text: "归档前的一句".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let c = ok(&mut s, |tx| archive(tx, "crew-x"));
+        assert!(c.archived_at.is_some());
+        for ch in ["crew-x/lobby", "crew-x/human"] {
+            assert!(
+                crate::channels::get(s.conn(), ch)
+                    .unwrap()
+                    .archived_at
+                    .is_some(),
+                "{ch}"
+            );
+        }
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM messages WHERE channel_id='crew-x/lobby'"
+            ),
+            1,
+            "消息保留"
+        );
+        assert!(
+            crate::sessions::get(s.conn(), "cap-x").is_ok(),
+            "session 行保留"
+        );
+        assert!(
+            matches!(
+                err(&mut s, |tx| crate::sessions::register(
+                    tx,
+                    crate::sessions::NewSession {
+                        crew_id: "crew-x".into(),
+                        role: crewd_proto::Role::Worker,
+                        executor: "claude".into(),
+                        title: Some("新人".into()),
+                        ..Default::default()
+                    }
+                )),
+                CollabError::Conflict(_)
+            ),
+            "归档的机组不收新 session"
+        );
+        let c = ok(&mut s, |tx| unarchive(tx, "crew-x"));
+        assert!(c.archived_at.is_none());
+        for ch in ["crew-x/lobby", "crew-x/human"] {
+            assert!(
+                crate::channels::get(s.conn(), ch)
+                    .unwrap()
+                    .archived_at
+                    .is_none(),
+                "{ch}"
+            );
+        }
+    }
+
+    #[test]
+    fn archiving_refuses_the_org_root_running_sessions_and_live_children() {
+        let mut s = store();
+        assert!(matches!(
+            err(&mut s, |tx| archive(tx, "chief")),
+            CollabError::Forbidden(_)
+        ));
+        assert!(
+            matches!(
+                err(&mut s, |tx| archive(tx, "crew-a")),
+                CollabError::Conflict(_)
+            ),
+            "crew-b 还在它下面"
+        );
+        s.conn()
+            .execute("UPDATE sessions SET desired='running' WHERE id='cap-x'", [])
+            .unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| archive(tx, "crew-x")),
+            CollabError::Conflict(_)
+        ));
+        // 子机组归档了，父就能归档（归档的子不算「还在下面干活」）。
+        ok(&mut s, |tx| archive(tx, "crew-b"));
+        ok(&mut s, |tx| archive(tx, "crew-a"));
+    }
+
+    /// 归档只动归属这个机组的群：topic 一起归档（解档时留着，人逐个解档），别的机组的群不动；
+    /// 每个被归档的群一条 ChannelChanged，机组一条 CrewChanged；再归档一次 = 原样返回、不发变更。
+    #[test]
+    fn archiving_notes_every_channel_it_archives_and_unarchiving_leaves_topics_archived() {
+        use crate::channels::{self, NewChannel};
+        use crewd_proto::{ChannelKind, MemberRef};
+        let mut s = store();
+        ok(&mut s, |tx| channels::ensure_human_channel(tx, "crew-x"));
+        let topic = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &crate::Sender::Session("cap-x".into()),
+                NewChannel {
+                    crew_id: "crew-x".into(),
+                    kind: ChannelKind::Topic,
+                    name: "丙的群".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("w-a1")],
+                },
+            )
+        });
+        let elsewhere = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &crate::Sender::Session("w-a1".into()),
+                NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "甲的群".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("cap-x")],
+                },
+            )
+        });
+        let (_, ch) = ok_at(&mut s, NOW, |tx| archive(tx, "crew-x"));
+        for id in ["crew-x/lobby", "crew-x/human", topic.id.as_str()] {
+            assert!(
+                ch.contains(&Change::ChannelChanged {
+                    channel_id: id.to_string()
+                }),
+                "{id}：{ch:?}"
+            );
+            assert!(channels::get(s.conn(), id).unwrap().archived_at.is_some());
+        }
+        assert!(ch.contains(&Change::CrewChanged {
+            crew_id: "crew-x".into()
+        }));
+        assert!(
+            channels::get(s.conn(), &elsewhere.id)
+                .unwrap()
+                .archived_at
+                .is_none(),
+            "别的机组的群不动"
+        );
+        let (again, ch) = ok_at(&mut s, NOW, |tx| archive(tx, "crew-x"));
+        assert!(again.archived_at.is_some());
+        assert!(ch.is_empty(), "已归档：原样返回 {ch:?}");
+        let (_, ch) = ok_at(&mut s, NOW, |tx| unarchive(tx, "crew-x"));
+        for id in ["crew-x/lobby", "crew-x/human"] {
+            assert!(
+                ch.contains(&Change::ChannelChanged {
+                    channel_id: id.to_string()
+                }),
+                "{id}：{ch:?}"
+            );
+        }
+        assert!(
+            channels::get(s.conn(), &topic.id)
+                .unwrap()
+                .archived_at
+                .is_some(),
+            "topic 留归档，人逐个解档"
+        );
+        // 解档后 topic 可以由人解档（机组不再只读）。
+        ok(&mut s, |tx| {
+            channels::update(
+                tx,
+                &crate::Sender::Human,
+                &topic.id,
+                channels::ChannelPatch {
+                    archived: Some(false),
+                    ..Default::default()
+                },
+            )
+        });
+    }
+
+    /// 归档的机组只读（Task 9 / preflight M4）：结构操作、改名、换机长、起 session、建群、解档它的群、
+    /// 往它的人类群发言一律 Conflict，指路先解档；channel.list 不会顺手把它的人类群解档。
+    #[test]
+    fn an_archived_crew_is_read_only_until_unarchived() {
+        use crate::channels::{self, NewChannel};
+        use crewd_proto::{ChannelKind, MemberRef};
+        let mut s = store();
+        ok(&mut s, |tx| channels::ensure_human_channel(tx, "crew-x"));
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        let conflict = |e: CollabError, what: &str| {
+            assert!(matches!(e, CollabError::Conflict(_)), "{what}: {e:?}");
+        };
+        conflict(
+            err(&mut s, |tx| {
+                create(
+                    tx,
+                    NewCrew {
+                        parent_id: Some("crew-x".into()),
+                        ..new_crew("挂到归档的下面")
+                    },
+                )
+            }),
+            "create(parent=归档)",
+        );
+        conflict(
+            err(&mut s, |tx| adopt(tx, "crew-b", "crew-x")),
+            "adopt 到归档的下面",
+        );
+        conflict(
+            err(&mut s, |tx| adopt(tx, "crew-x", "crew-a")),
+            "adopt 归档的",
+        );
+        conflict(
+            err(&mut s, |tx| release(tx, "crew-x", "chief", Some("crew-a"))),
+            "release 归档的",
+        );
+        conflict(
+            err(&mut s, |tx| {
+                update(
+                    tx,
+                    "crew-x",
+                    CrewPatch {
+                        title: Some("改名".into()),
+                        ..Default::default()
+                    },
+                )
+            }),
+            "update",
+        );
+        conflict(
+            err(&mut s, |tx| set_captain(tx, "crew-x", "cap-x")),
+            "set_captain",
+        );
+        conflict(
+            err(&mut s, |tx| {
+                channels::create(
+                    tx,
+                    &crate::Sender::Human,
+                    NewChannel {
+                        crew_id: "crew-x".into(),
+                        kind: ChannelKind::Topic,
+                        name: "新群".into(),
+                        purpose: None,
+                        members: vec![],
+                    },
+                )
+            }),
+            "channels::create",
+        );
+        conflict(
+            err(&mut s, |tx| {
+                channels::ensure_dm(
+                    tx,
+                    "crew-x",
+                    &MemberRef::session("cap-x"),
+                    &MemberRef::Human,
+                )
+            }),
+            "ensure_dm",
+        );
+        conflict(
+            err(&mut s, |tx| {
+                channels::update(
+                    tx,
+                    &crate::Sender::Human,
+                    "crew-x/lobby",
+                    channels::ChannelPatch {
+                        purpose: Some("改用途".into()),
+                        ..Default::default()
+                    },
+                )
+            }),
+            "channels::update",
+        );
+        conflict(
+            err(&mut s, |tx| channels::ensure_human_channel(tx, "crew-x")),
+            "ensure_human_channel",
+        );
+        conflict(
+            err(&mut s, |tx| {
+                crate::messages::post(
+                    tx,
+                    crate::Sender::Human,
+                    crate::messages::NewPost {
+                        channel_id: "crew-x/human".into(),
+                        text: "还在吗".into(),
+                        ..Default::default()
+                    },
+                )
+            }),
+            "往归档机组的人类群发言",
+        );
+        conflict(
+            err(&mut s, |tx| {
+                crate::sessions::set_desired(tx, "cap-x", crewd_proto::Desired::Running)
+            }),
+            "起归档机组的 session",
+        );
+        // 停（desired=stopped）照样能写：只拦「跑起来」。
+        ok(&mut s, |tx| {
+            crate::sessions::set_desired(tx, "cap-x", crewd_proto::Desired::Stopped)
+        });
+        // 读照常：channel.list / crew.get 列得出它的群，但不顺手把人类群解档。
+        let listed = ok(&mut s, |tx| channels::list_for_crew(tx, "crew-x"));
+        assert!(listed.iter().any(|c| c.channel.id == "crew-x/human"));
+        ok(&mut s, |tx| detail(tx, "crew-x"));
+        assert!(
+            channels::get(s.conn(), "crew-x/human")
+                .unwrap()
+                .archived_at
+                .is_some(),
+            "列一下不等于解档"
+        );
+        ok(&mut s, |tx| unarchive(tx, "crew-x"));
+        ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
+        ok(&mut s, |tx| set_captain(tx, "crew-x", "cap-x"));
+    }
+
+    #[test]
+    fn unarchiving_under_an_archived_parent_is_refused() {
+        let mut s = store();
+        ok(&mut s, |tx| archive(tx, "crew-b"));
+        ok(&mut s, |tx| archive(tx, "crew-a"));
+        assert!(
+            matches!(
+                err(&mut s, |tx| unarchive(tx, "crew-b")),
+                CollabError::Conflict(_)
+            ),
+            "上级 crew-a 还归档着"
+        );
+        ok(&mut s, |tx| unarchive(tx, "crew-a"));
+        ok(&mut s, |tx| unarchive(tx, "crew-b"));
+        // 没归档的机组解档 = 原样返回。
+        let (c, ch) = ok_at(&mut s, NOW, |tx| unarchive(tx, "crew-b"));
+        assert!(c.archived_at.is_none() && ch.is_empty(), "{ch:?}");
+        assert!(matches!(
+            err(&mut s, |tx| unarchive(tx, "nope")),
+            CollabError::NotFound(_)
+        ));
+    }
+
+    /// 永久删除只收已归档的机组（先 crew.delete 归档）；前置条件也挡总机组与在跑的 session。
+    #[test]
+    fn purge_only_takes_an_archived_crew() {
+        let mut s = store();
+        assert!(matches!(
+            check_purgeable(s.conn(), "crew-x").unwrap_err(),
+            CollabError::Conflict(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| purge(tx, "crew-x")),
+            CollabError::Conflict(_)
+        ));
+        assert!(get(s.conn(), "crew-x").is_ok(), "没归档的不删");
+        assert!(matches!(
+            check_purgeable(s.conn(), "chief").unwrap_err(),
+            CollabError::Forbidden(_)
+        ));
+        assert!(matches!(
+            check_purgeable(s.conn(), "nope").unwrap_err(),
+            CollabError::NotFound(_)
+        ));
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        s.conn()
+            .execute("UPDATE sessions SET desired='running' WHERE id='cap-x'", [])
+            .unwrap();
+        assert!(matches!(
+            check_purgeable(s.conn(), "crew-x").unwrap_err(),
+            CollabError::Conflict(_)
+        ));
+        s.conn()
+            .execute("UPDATE sessions SET desired='stopped' WHERE id='cap-x'", [])
+            .unwrap();
+        check_purgeable(s.conn(), "crew-x").unwrap();
+        ok(&mut s, |tx| purge(tx, "crew-x"));
+        assert!(matches!(
+            get(s.conn(), "crew-x").unwrap_err(),
+            CollabError::NotFound(_)
+        ));
+    }
+
+    /// 永久删除父机组：只剩它这一个父的（已归档的）子机组挂回总机组下，但仍是归档的——人类群不顺手解档。
+    #[test]
+    fn purging_a_parent_leaves_its_archived_orphans_archived() {
+        let mut s = store();
+        // crew-x 原是一级机组、有人类群；收编到 crew-a 下 → 人类群随之归档。
+        ok(&mut s, |tx| {
+            crate::channels::ensure_human_channel(tx, "crew-x")
+        });
+        ok(&mut s, |tx| adopt(tx, "crew-x", "crew-a"));
+        archive_subtree(&mut s, "crew-a");
+        ok(&mut s, |tx| purge(tx, "crew-a"));
+        for orphan in ["crew-b", "crew-x"] {
+            assert_eq!(edges(&s, orphan), ["chief"], "{orphan}");
+            assert!(get(s.conn(), orphan).unwrap().archived_at.is_some());
+        }
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM channels WHERE id='crew-x/human' AND archived_at IS NULL"
+            ),
+            0,
+            "归档的孤儿：人类群不解档"
+        );
+    }
+
+    /// 默认列表不含归档的机组（通讯录同口径），`include_archived` 才列出来。
+    #[test]
+    fn archived_crews_are_left_out_of_the_default_list() {
+        let mut s = store();
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        let ids = |v: Vec<Crew>| v.into_iter().map(|c| c.id).collect::<Vec<_>>();
+        assert!(!ids(list(s.conn(), false).unwrap()).contains(&"crew-x".to_string()));
+        assert!(ids(list(s.conn(), true).unwrap()).contains(&"crew-x".to_string()));
     }
 }

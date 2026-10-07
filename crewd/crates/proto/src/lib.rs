@@ -23,7 +23,12 @@ pub mod methods {
     pub const CREW_ADOPT: &str = "crew.adopt";
     pub const CREW_REORDER: &str = "crew.reorder";
     pub const CREW_RELEASE: &str = "crew.release";
+    /// 删机组 = 归档（N1 裁定 13）：可逆，返回归档后的 `Crew`。
     pub const CREW_DELETE: &str = "crew.delete";
+    /// 解档（`crew.delete` 的反操作），返回 `Crew`。
+    pub const CREW_UNARCHIVE: &str = "crew.unarchive";
+    /// 永久删除：只收已归档的机组；先拍一份不轮转的 pre-delete 快照（N4），拍不成就不删。
+    pub const CREW_PURGE: &str = "crew.purge";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_UPDATE: &str = "channel.update";
@@ -58,6 +63,8 @@ pub mod methods {
         CREW_REORDER,
         CREW_RELEASE,
         CREW_DELETE,
+        CREW_UNARCHIVE,
+        CREW_PURGE,
         CHANNEL_LIST,
         CHANNEL_CREATE,
         CHANNEL_UPDATE,
@@ -337,7 +344,7 @@ pub fn api_schema() -> Value {
         (methods::HELLO, m(sub::<NoParams>(g), sub::<Hello>(g))),
         (
             methods::CREW_LIST,
-            m(sub::<NoParams>(g), many(sub::<Crew>(g))),
+            m(sub::<CrewListParams>(g), many(sub::<Crew>(g))),
         ),
         (
             methods::CREW_GET,
@@ -365,6 +372,14 @@ pub fn api_schema() -> Value {
         ),
         (
             methods::CREW_DELETE,
+            m(sub::<CrewIdParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_UNARCHIVE,
+            m(sub::<CrewIdParams>(g), sub::<Crew>(g)),
+        ),
+        (
+            methods::CREW_PURGE,
             m(sub::<CrewIdParams>(g), sub::<Empty>(g)),
         ),
         (

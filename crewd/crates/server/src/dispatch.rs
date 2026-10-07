@@ -113,8 +113,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
         }
         methods::CREW_LIST => {
-            parse_no_params(p)?;
-            read(state, crews::list).await
+            let p: CrewListParams = parse_params_or_default(p)?;
+            let all = p.include_archived.unwrap_or(false);
+            read(state, move |c| crews::list(c, all)).await
         }
         methods::CREW_GET => {
             let p: CrewIdParams = parse_params(p)?;
@@ -174,17 +175,26 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             .await
         }
         methods::CREW_DELETE => {
+            // 删机组 = 归档（N1 裁定 13）：可逆、什么都不删，不拍快照。
             let p: CrewIdParams = parse_params(p)?;
-            // N4 / S22：永久删除之前先拍快照，快照和删除在同一个库线程任务里；拍不成就不删。
-            // N1 把 crew.delete 改成默认归档后，`crew.purge` 用同一个 `collab_after_snapshot`。
+            write(state, move |tx| crews::archive(tx, &p.crew_id)).await
+        }
+        methods::CREW_UNARCHIVE => {
+            let p: CrewIdParams = parse_params(p)?;
+            write(state, move |tx| crews::unarchive(tx, &p.crew_id)).await
+        }
+        methods::CREW_PURGE => {
+            let p: CrewIdParams = parse_params(p)?;
+            // N4 / S22：永久删除之前先拍快照（不轮转、永远保留），前置条件 → 快照 → 删除在同一个库线程任务里；
+            // 前置条件不成立（没有 / 总机组 / 没归档 / 有在跑的 session）不拍；快照拍不成就不删。
             let what = p.crew_id.clone();
             let id = p.crew_id.clone();
             to_value(
                 state
                     .collab_after_snapshot(
                         what,
-                        move |c| crews::check_deletable(c, &id),
-                        move |tx| crews::delete(tx, &p.crew_id).map(|()| Empty {}),
+                        move |c| crews::check_purgeable(c, &id),
+                        move |tx| crews::purge(tx, &p.crew_id).map(|()| Empty {}),
                     )
                     .await
                     .map_err(collab_err)?,

@@ -94,6 +94,7 @@ pub fn running_desired(conn: &Connection) -> Result<Vec<Session>> {
 
 pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
     let crew = crews::get(tx.conn(), &n.crew_id)?;
+    crews::refuse_archived(tx.conn(), &crew.id)?;
     if !valid_executor(&n.executor) {
         return Err(CollabError::Invalid(format!(
             "执行器 {:?} 不认识（claude / codex / acp:<id>）",
@@ -185,7 +186,11 @@ fn update_one(
     Ok(())
 }
 
+/// 归档的机组只读：它的 session 不能被拉起来（`Running` 拒）；停照常。
 pub fn set_desired(tx: &mut Tx<'_>, id: &str, d: Desired) -> Result<()> {
+    if d == Desired::Running {
+        crews::refuse_archived(tx.conn(), &crew_of(tx.conn(), id)?)?;
+    }
     let now = tx.now_ts();
     update_one(
         tx,

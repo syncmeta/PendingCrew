@@ -437,7 +437,7 @@ pub struct RestartPrompt {
     pub answered_at: Option<String>,
 }
 
-/// 空结果（`crew.delete` 等）。
+/// 空结果（`crew.purge` 等）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
