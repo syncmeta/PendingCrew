@@ -308,6 +308,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         }
         // 裁定 11：人回复一条问的公告、且那条问还开着 = 回答它。session 的回复、对已答 / 已撤 / 已按默认办的问的
         // 回复都是普通消息（只有人能答问）。
+        // `category == "ask"` 是 by_message 的 SQL 之前的廉价前置过滤（绝大多数回复不是回问），不是死代码。
         if matches!(sender, Sender::Human)
             && replied.category.as_deref() == Some("ask")
             && let Some((crew, h)) = asks::by_message(conn, &replied.id)?
@@ -1413,6 +1414,66 @@ mod tests {
                 .as_deref(),
             Some("先答的")
         );
+    }
+
+    /// 人在人类群里回复一条已撤回 / 已按默认办的问：只是普通消息，问的状态与账不动。
+    fn assert_reply_to_closed_ask_is_just_a_message(
+        s: &mut crewd_store::Store,
+        ask: &crewd_proto::Ask,
+    ) {
+        let before = crate::asks::get(s.conn(), "crew-b", &ask.ask).unwrap();
+        assert_ne!(before.state, AskStateView::Open, "前提：问已经不开着");
+        let p = ok(s, |tx| {
+            post(
+                tx,
+                Sender::Human,
+                NewPost {
+                    in_reply_to: ask.message_id.clone(),
+                    ..post_text("crew-a/human", "补一句")
+                },
+            )
+        });
+        assert_eq!(p.answered_ask, None);
+        assert_eq!(
+            crate::asks::get(s.conn(), "crew-b", &ask.ask).unwrap(),
+            before,
+            "问的状态不因普通回复而变"
+        );
+    }
+
+    #[test]
+    fn a_human_reply_to_a_withdrawn_ask_is_just_a_message() {
+        let mut s = store();
+        let a = open_ask(&mut s);
+        ok(&mut s, |tx| {
+            crate::asks::withdraw(tx, &Sender::Human, "crew-b", &a.ask, "不用问了")
+        });
+        assert_reply_to_closed_ask_is_just_a_message(&mut s, &a);
+    }
+
+    #[test]
+    fn a_human_reply_to_a_defaulted_ask_is_just_a_message() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| {
+            crate::asks::open(
+                tx,
+                "w-b1",
+                crate::asks::OpenAsk {
+                    question: "用哪个分支？".into(),
+                    default: Some(crewd_proto::AskDefault {
+                        text: "用 main".into(),
+                        after_minutes: 30,
+                    }),
+                    ..Default::default()
+                },
+            )
+        });
+        let done = ok_at(&mut s, NOW + 31 * MIN, |tx| {
+            crate::asks::apply_due_defaults(tx, "crew-b")
+        })
+        .0;
+        assert_eq!(done, [a.ask.clone()], "前提：默认方案已经办了");
+        assert_reply_to_closed_ask_is_just_a_message(&mut s, &a);
     }
 
     #[test]
