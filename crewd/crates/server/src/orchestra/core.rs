@@ -90,6 +90,36 @@ pub(crate) async fn within<T>(
     }
 }
 
+/// 下一个「未来的 not_before」的缓存（评审 Fix 3）：actor 每处理一条输入都要算下一拍，不能每次都读库。
+/// 改唤醒行的写（入队 / 结算 / 拿走 / 确认 / 回收 / 清理）一律写成 `self.due.touch(&self.port).settle(..)`——
+/// 先作废、再写；别人入队的经 `WakeEnqueued` 等协作事件作废（[`Core::handle`]）。缓存的时刻过了也算作废。
+#[derive(Default)]
+pub(crate) struct DueCache(std::sync::Mutex<Option<Option<Ms>>>);
+
+impl DueCache {
+    /// 唤醒行要变了：作废，原样交回 `x`。
+    pub(crate) fn touch<'a, T>(&self, x: &'a T) -> &'a T {
+        self.clear();
+        x
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.0.lock().expect("缓存锁中毒") = None;
+    }
+
+    /// 还有效的缓存（`Some(None)` = 没有未来的行）；没缓存或缓存的时刻已过 = `None`（要重读）。
+    pub(crate) fn get(&self, now: Ms) -> Option<Option<Ms>> {
+        match *self.0.lock().expect("缓存锁中毒") {
+            Some(Some(t)) if t <= now => None,
+            v => v,
+        }
+    }
+
+    pub(crate) fn set(&self, v: Option<Ms>) {
+        *self.0.lock().expect("缓存锁中毒") = Some(v);
+    }
+}
+
 /// 会话事件里顺带的投递出错：记日志、不打断这个事件本身的处理（评审 (7)：`session.changed` 照样要发）。
 fn log_err(r: anyhow::Result<()>) {
     if let Err(e) = r {
@@ -417,6 +447,8 @@ pub struct Core<P: Port> {
     pub(crate) last_prune: Ms,
     /// 上一次清满了一批：下一拍接着清，不等一小时。
     pub(crate) prune_more: bool,
+    /// 下一个未来 not_before 的缓存（[`DueCache`]）。
+    pub(crate) due: DueCache,
 }
 
 impl<P: Port> Core<P> {
@@ -471,10 +503,24 @@ impl<P: Port> Core<P> {
             shutdown: Vec::new(),
             last_prune: Ms(0),
             prune_more: false,
+            due: DueCache::default(),
         })
     }
 
     pub async fn handle(&mut self, input: Input) {
+        // 别人改了队列（M3a / M3b / M4b 入队、订阅落后）或定时拍：下一拍的缓存作废（[`DueCache`]）。
+        if matches!(
+            input,
+            Input::Tick
+                | Input::Collab(
+                    CollabFact::WakeEnqueued { .. }
+                        | CollabFact::Lagged
+                        | CollabFact::AskAnswered { .. }
+                        | CollabFact::RestartAnswered { .. }
+                )
+        ) {
+            self.due.clear();
+        }
         let r = match input {
             Input::Exec {
                 session,
@@ -828,7 +874,8 @@ impl<P: Port> Core<P> {
             .await
             .map_err(ControlError::internal)?;
         if !pending.is_empty() {
-            self.port
+            self.due
+                .touch(&self.port)
                 .settle(
                     &ids(&pending),
                     Settle::Dropped {
@@ -1024,7 +1071,7 @@ impl<P: Port> Core<P> {
         let system_prompt = Some(self.port.worldview(&row.id).await?);
         let token = self.port.mint_token(&row.id);
         if !batch.ids().is_empty() {
-            self.port.claim(&batch).await?;
+            self.due.touch(&self.port).claim(&batch).await?;
         }
         self.gate.launched(now);
         self.next_generator += 1;
@@ -1155,14 +1202,20 @@ impl<P: Port> Core<P> {
                     let s = Settle::Dropped {
                         error: "stopped".into(),
                     };
-                    self.port.settle(&held, s, self.now()).await?;
+                    self.due
+                        .touch(&self.port)
+                        .settle(&held, s, self.now())
+                        .await?;
                 }
             }
             Err(_) if st.halt_requested => {
                 // crewd 停机时它还在起、结果起不来：那批原样退回（停机不是人停、也不算一次失败；起不来的原因多半就是停机）。
                 let held = st.batch.ids();
                 if !held.is_empty() {
-                    self.port.settle(&held, Settle::Requeue, self.now()).await?;
+                    self.due
+                        .touch(&self.port)
+                        .settle(&held, Settle::Requeue, self.now())
+                        .await?;
                 }
             }
             Err(e) => {
@@ -1232,7 +1285,8 @@ impl<P: Port> Core<P> {
         let now = self.now();
         let session = batch.session.clone();
         let acked = self
-            .port
+            .due
+            .touch(&self.port)
             .ack(
                 &batch,
                 Ack::Failed {
@@ -1438,9 +1492,12 @@ impl<P: Port> Core<P> {
                 let s = Settle::Dropped {
                     error: "stopped".into(),
                 };
-                self.port.settle(&held, s, now).await?;
+                self.due.touch(&self.port).settle(&held, s, now).await?;
             } else if l.halting || stopped_by_user || hit_limit {
-                self.port.settle(&held, Settle::Requeue, now).await?;
+                self.due
+                    .touch(&self.port)
+                    .settle(&held, Settle::Requeue, now)
+                    .await?;
             } else {
                 let why = match &info {
                     Some(i) => format!("{:?}", i.status),
@@ -1503,7 +1560,8 @@ impl<P: Port> Core<P> {
             ..Default::default()
         };
         self.port.patch_session(session, patch).await?;
-        self.port
+        self.due
+            .touch(&self.port)
             .enqueue(NewWake {
                 session: session.into(),
                 kind: WakeKind::System,
@@ -1553,7 +1611,8 @@ impl<P: Port> Core<P> {
         .flatten();
         let plan = policy::quota_plan(reset, now);
         let lang = self.lang();
-        self.port
+        self.due
+            .touch(&self.port)
             .enqueue(NewWake {
                 session: session.into(),
                 kind: WakeKind::System,
@@ -1701,7 +1760,8 @@ impl<P: Port> Core<P> {
         }
         self.last_prune = now;
         let n = self
-            .port
+            .due
+            .touch(&self.port)
             .prune_wakes(Ms(now.0 - WAKE_RETENTION_MS), PRUNE_BATCH)
             .await?;
         self.prune_more = n >= PRUNE_BATCH;

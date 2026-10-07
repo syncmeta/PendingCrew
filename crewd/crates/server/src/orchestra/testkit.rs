@@ -84,6 +84,8 @@ pub struct MemState {
     pub advance_error: Option<String>,
     /// 设了就让 `put_latch` 出错（模拟熔断台账写不进去）。
     pub latch_error: Option<String>,
+    /// `next_not_before_after` 被调了几次（量下一拍时刻的缓存）。
+    pub next_due_reads: usize,
     /// 唤醒 id → `last_error`（同 collab：失败 / 放弃 / 重启回收时记下原因）。
     pub errors: BTreeMap<i64, String>,
     /// 设了就让 `patch_session` 出错（模拟写 session 行失败）：带着的那批照样要结算，不能留下没人拿着的 inflight 行。
@@ -547,8 +549,9 @@ impl Port for MemPort {
     }
 
     async fn next_not_before_after(&self, now: Ms) -> Result<Option<Ms>> {
-        Ok(self
-            .lock()
+        let mut st = self.lock();
+        st.next_due_reads += 1;
+        Ok(st
             .wakes
             .iter()
             .filter(|w| w.state == WakeState::Pending && w.not_before > now)

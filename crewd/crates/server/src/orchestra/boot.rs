@@ -21,7 +21,11 @@ impl<P: Port> Core<P> {
     /// ③ 积压补救的规划（裁定 16）；④ 记 C4 的水位（控制者裁定 C3：在重扫之前）；⑤ 能投的投出去（待恢复的不会被拉起）。
     pub(crate) async fn boot(&mut self) -> anyhow::Result<()> {
         let now = self.now();
-        let acked = self.port.fail_inflight(RESTART_ERROR, now).await?;
+        let acked = self
+            .due
+            .touch(&self.port)
+            .fail_inflight(RESTART_ERROR, now)
+            .await?;
         if !acked.retried.is_empty() || !acked.gave_up.is_empty() {
             eprintln!(
                 "crewd: 编排：上次没确认的唤醒 {} 条再试、{} 条到上限放弃",
@@ -109,13 +113,25 @@ impl<P: Port> Core<P> {
 
     /// 下一次定时拍：最早的「未来」not_before、退避 / 错开的时刻、待决策升级时刻，都没有就心跳。
     /// 已到期却投不了的（目标在忙）不算——那些由 idle 边沿接，不能让定时器空转。
+    /// 未来的 not_before 来自缓存（`Core::due`），队列没变就不读库（评审 Fix 3）。
     pub(crate) async fn next_deadline(&self) -> Ms {
         let now = self.now();
         let mut t = now.add(self.cfg.heartbeat_ms);
-        match self.port.next_not_before_after(now).await {
-            Ok(Some(nb)) => t = t.min(nb),
-            Ok(None) => {}
-            Err(e) => eprintln!("crewd: 编排：读下一个到点时刻失败（按心跳）：{e:#}"),
+        let next = match self.due.get(now) {
+            Some(v) => v,
+            None => match self.port.next_not_before_after(now).await {
+                Ok(v) => {
+                    self.due.set(v);
+                    v
+                }
+                Err(e) => {
+                    eprintln!("crewd: 编排：读下一个到点时刻失败（按心跳）：{e:#}");
+                    None
+                }
+            },
+        };
+        if let Some(nb) = next {
+            t = t.min(nb);
         }
         if let Some(first) = self.timers.iter().next() {
             t = t.min((*first).max(now));
@@ -759,8 +775,65 @@ mod tests {
             not_before: T0.add(5 * SEC),
             ..timer("w1", "t2", "x")
         };
-        rig.port.enqueue(later).await.unwrap();
+        // 别人入队（M3b 的 schedule_wakeup 等）照契约都发 `WakeEnqueued`：下一拍的缓存随之作废。
+        enqueue_from_outside(&mut rig, later).await;
         assert_eq!(rig.core.next_deadline().await, T0.add(5 * SEC));
+    }
+
+    async fn enqueue_from_outside(rig: &mut Rig, w: NewWake) {
+        let session = w.session.clone();
+        rig.port.enqueue(w).await.unwrap();
+        rig.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued { session }))
+            .await;
+        rig.settle().await;
+    }
+
+    /// 评审 Fix 3：下一拍的时刻缓存着，不是每条输入之后都读一次库；队列一变（入队 / 结算 / 拿走，或别人入队的
+    /// `WakeEnqueued`）就作废、重读。缓存的时刻过了也重读。
+    #[tokio::test]
+    async fn next_deadline_reads_the_store_once_until_the_queue_changes() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let later = NewWake {
+            not_before: T0.add(5 * SEC),
+            ..timer("w1", "t1", "x")
+        };
+        enqueue_from_outside(&mut rig, later).await;
+        let port = rig.port.clone();
+        let reads = move || port.lock().next_due_reads;
+        assert_eq!(rig.core.next_deadline().await, T0.add(5 * SEC));
+        let first = reads();
+        for _ in 0..3 {
+            rig.core
+                .handle(Input::Cmd(Cmd::Live {
+                    session: "w1".into(),
+                    reply: oneshot::channel().0,
+                }))
+                .await;
+            assert_eq!(rig.core.next_deadline().await, T0.add(5 * SEC));
+        }
+        assert_eq!(reads(), first, "队列没变：不再读库");
+        let sooner = NewWake {
+            not_before: T0.add(2 * SEC),
+            ..timer("w1", "t2", "y")
+        };
+        enqueue_from_outside(&mut rig, sooner).await;
+        assert_eq!(
+            rig.core.next_deadline().await,
+            T0.add(2 * SEC),
+            "入队之后重读"
+        );
+        assert_eq!(reads(), first + 1);
+        rig.clock.advance(3 * SEC);
+        assert_eq!(
+            rig.core.next_deadline().await,
+            T0.add(5 * SEC),
+            "缓存的时刻过了：重读"
+        );
     }
 
     #[tokio::test]

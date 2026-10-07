@@ -151,7 +151,7 @@ impl<P: Port> Core<P> {
                 note: None,
                 origin: message_origin(msg, &t.session),
             };
-            if self.port.enqueue(w).await? {
+            if self.due.touch(&self.port).enqueue(w).await? {
                 fresh.push(t.session);
             }
         }
@@ -209,7 +209,10 @@ impl<P: Port> Core<P> {
                 }
             }
             if !injected.is_empty() {
-                self.port.settle(&injected, Settle::Delivered, now).await?;
+                self.due
+                    .touch(&self.port)
+                    .settle(&injected, Settle::Delivered, now)
+                    .await?;
                 self.port.publish(OrchestraEvent::WakeChanged {
                     session: session.into(),
                 });
@@ -472,7 +475,8 @@ impl<P: Port> Core<P> {
         let (silent, speak) = split_silent(batch);
         if !silent.is_empty() {
             // 不需要正文的唤醒（无附言的恢复）：在跑就算送到。
-            self.port
+            self.due
+                .touch(&self.port)
                 .settle(&ids(&silent), Settle::Delivered, now)
                 .await?;
         }
@@ -510,12 +514,15 @@ impl<P: Port> Core<P> {
         }
         // 进正文的与随批的一起拿走（C24）：从此它们只属于这一批，直到这批的 ack。
         if !held.is_empty() {
-            self.port.claim(&batch).await?;
+            self.due.touch(&self.port).claim(&batch).await?;
         }
         let Some(l) = self.live.get_mut(session) else {
             // 到不了（见上）；万一到了就原样退回，退回出错由重启回收接走（core.rs 模块文档的不变式 ①）。
             if !held.is_empty() {
-                self.port.settle(&held, Settle::Requeue, now).await?;
+                self.due
+                    .touch(&self.port)
+                    .settle(&held, Settle::Requeue, now)
+                    .await?;
             }
             return Ok(false);
         };
@@ -542,7 +549,10 @@ impl<P: Port> Core<P> {
             let s = Settle::Dropped {
                 error: "no such session".into(),
             };
-            self.port.settle(&ids(&batch), s, now).await?;
+            self.due
+                .touch(&self.port)
+                .settle(&ids(&batch), s, now)
+                .await?;
             return Ok(false);
         };
         let exec = match self.execs.get(&row.executor) {
@@ -555,7 +565,10 @@ impl<P: Port> Core<P> {
                 };
                 self.launch_failed(&row, &detail).await?;
                 let s = Settle::Dropped { error: detail };
-                self.port.settle(&ids(&batch), s, now).await?;
+                self.due
+                    .touch(&self.port)
+                    .settle(&ids(&batch), s, now)
+                    .await?;
                 self.port.publish(OrchestraEvent::WakeChanged {
                     session: session.into(),
                 });
@@ -568,7 +581,8 @@ impl<P: Port> Core<P> {
         let (silent, speak) = split_silent(batch);
         if !silent.is_empty() {
             // 无附言的恢复：拉起本身就是它要的（起不来由 launch_failed 告警）。
-            self.port
+            self.due
+                .touch(&self.port)
                 .settle(&ids(&silent), Settle::Delivered, now)
                 .await?;
         }
@@ -628,7 +642,11 @@ impl<P: Port> Core<P> {
         // M3a R6：游标推到渲染时报回的 `cursor_targets`（批里实际带上的最大 seq），**不是**排队行里最大的 seq——随批行
         // 比它新，推过去就把它们越过、永远不投了。跟行的确认同一个事务（游标是消息唤醒的幂等键）。
         // 出错 = 什么都没改：这几行仍是 inflight、没人拿着，由重启时的回收接走（记日志，不在这里重试）。
-        let acked = self.port.ack(&inf.batch, Ack::Delivered { riders }).await?;
+        let acked = self
+            .due
+            .touch(&self.port)
+            .ack(&inf.batch, Ack::Delivered { riders })
+            .await?;
         // 环路熔断只数投进去了的（评审 (2)）、而且只在确认提交之后：一次投递、每个来源记一次（同一批里同一来源的几条
         // 合并成一次唤醒）。随批行没投进去，不记；只有积压的批没有唤醒，什么都不记。
         for o in &acked.origins {
@@ -698,7 +716,7 @@ impl<P: Port> Core<P> {
                 .live
                 .get(session)
                 .is_some_and(|l| l.generator == generator && !l.stopping && !l.halting);
-        if current && self.port.enqueue(w).await? {
+        if current && self.due.touch(&self.port).enqueue(w).await? {
             self.try_deliver(session).await?;
         }
         Ok(())
@@ -778,7 +796,7 @@ impl<P: Port> Core<P> {
                     .then(|| text::get(lang, "restart.interrupted").to_string()),
                 origin: HUMAN.into(),
             };
-            self.port.enqueue(w).await?;
+            self.due.touch(&self.port).enqueue(w).await?;
         }
         let sessions: Vec<String> = ordered.into_iter().map(|r| r.session).collect();
         self.deliver_each(&sessions).await;
@@ -817,7 +835,7 @@ impl<P: Port> Core<P> {
                         note: None,
                         origin: message_origin(&msg, &s),
                     };
-                    self.port.enqueue(w).await?;
+                    self.due.touch(&self.port).enqueue(w).await?;
                 }
             }
         }
@@ -870,7 +888,11 @@ impl<P: Port> Core<P> {
                 note: Some(note),
                 origin: breaker::SYSTEM.into(),
             };
-            self.port.enqueue(w).await.map_err(ControlError::internal)?;
+            self.due
+                .touch(&self.port)
+                .enqueue(w)
+                .await
+                .map_err(ControlError::internal)?;
             told.push(s);
         }
         // 换机长本身已成；附言都已入队，投不出去的留在队列里下次再试（评审 (3)）。
