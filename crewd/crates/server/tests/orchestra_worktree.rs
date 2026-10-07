@@ -134,12 +134,26 @@ async fn refuses_non_repos_and_detached_head_and_never_falls_back() {
     assert!(!root.join(".pendingcrew").exists(), "失败不留半成品");
 }
 
+/// 期限测试给假 git 的期限。不能太短：脚本里的第一行（写 pidfile）要在期限之前跑到，否则量不到孙进程
+/// （Task 8b 记下的抖动：负载下新写出来的脚本冷启动 250–380 ms，撞上过 300 ms 的期限）。
+const DEADLINE: Duration = Duration::from_secs(2);
+
 /// 一个假的 `git`（shell 脚本）：不碰真仓库，只用来量 `GitWorktrees` 怎么调它。
+/// 写好后先空跑一次（带 `CREWD_FAKE_GIT_WARM`，脚本第一行就退出）：新文件第一次 exec 的冷启动不算进被测的期限。
 fn fake_git(dir: &Path, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let p = dir.join("fake-git");
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::write(
+        &p,
+        format!("#!/bin/sh\n[ -n \"$CREWD_FAKE_GIT_WARM\" ] && exit 0\n{body}\n"),
+    )
+    .unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let warm = Command::new(&p)
+        .env("CREWD_FAKE_GIT_WARM", "1")
+        .status()
+        .unwrap();
+    assert!(warm.success(), "假 git 空跑失败：{warm:?}");
     p
 }
 
@@ -170,7 +184,7 @@ async fn a_hung_git_is_killed_at_the_deadline() {
     let t = tempfile::tempdir().unwrap();
     let wt = GitWorktrees {
         program: fake_git(t.path(), "exec sleep 30"),
-        timeout: Duration::from_millis(300),
+        timeout: DEADLINE,
     };
     let started = Instant::now();
     let e = wt.create(t.path(), "x").await.unwrap_err();
@@ -193,7 +207,7 @@ async fn the_deadline_kills_the_whole_process_group() {
     );
     let wt = GitWorktrees {
         program: fake_git(t.path(), &body),
-        timeout: Duration::from_millis(300),
+        timeout: DEADLINE,
     };
     let e = wt.create(t.path(), "x").await.unwrap_err();
     assert!(e.contains("超时"), "{e}");
@@ -223,7 +237,7 @@ async fn output_held_open_after_git_exits_is_bounded_by_the_deadline() {
     let body = format!("sleep 30 & echo $! > '{}'; exit 0", pidfile.display());
     let wt = GitWorktrees {
         program: fake_git(t.path(), &body),
-        timeout: Duration::from_millis(300),
+        timeout: DEADLINE,
     };
     let started = Instant::now();
     let e = wt.create(t.path(), "x").await.unwrap_err();
