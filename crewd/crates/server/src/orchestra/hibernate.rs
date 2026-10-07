@@ -417,6 +417,16 @@ mod tests {
         rig.emit("w1", SessionEvent::Working(true)).await;
         rig.emit("w2", SessionEvent::Working(true)).await;
         let mut rx = hibernate(&mut rig, Some(2 * MIN)).await;
+        {
+            let puts = &rig.port.lock().hibernate_puts;
+            assert_eq!(puts.len(), 1, "开始时就先落库（休眠中途被关机也知道）");
+            let first: Vec<&str> = puts[0]
+                .sessions
+                .iter()
+                .map(|h| h.session_id.as_str())
+                .collect();
+            assert_eq!(first, ["cap", "w1", "w2"]);
+        }
         assert_eq!(rig.exec.lock().stops, ids(&["cap"]), "空闲的立刻停");
         assert!(rx.try_recv().is_err(), "还在等 w1 / w2");
         let r = rig
