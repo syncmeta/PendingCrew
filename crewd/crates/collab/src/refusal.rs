@@ -262,36 +262,152 @@ mod tests {
         }
     }
 
+    /// 去掉源码里的注释（`//…`、`/* … */`），**只在字符串 / 字符字面量之外**：字符串里的 `//`（如 URL 或中文里夹的
+    /// `// `）不是注释，不能把后面的中文一起吞掉；保留行结构（行号不变）。处理普通字符串（含转义、跨行）、
+    /// 原始字符串 `r#"…"#`、字符字面量 `'"'`（与生命周期 `'a` 区分）。
+    fn strip_comments(src: &str) -> String {
+        let c: Vec<char> = src.chars().collect();
+        let mut out = String::with_capacity(src.len());
+        let mut i = 0;
+        while i < c.len() {
+            match c[i] {
+                '/' if c.get(i + 1) == Some(&'/') => {
+                    while i < c.len() && c[i] != '\n' {
+                        i += 1;
+                    }
+                }
+                '/' if c.get(i + 1) == Some(&'*') => {
+                    i += 2;
+                    while i < c.len() && !(c[i] == '*' && c.get(i + 1) == Some(&'/')) {
+                        if c[i] == '\n' {
+                            out.push('\n');
+                        }
+                        i += 1;
+                    }
+                    i += 2;
+                }
+                'r' if matches!(c.get(i + 1), Some('"') | Some('#'))
+                    && (i == 0 || !(c[i - 1].is_alphanumeric() || c[i - 1] == '_')) =>
+                {
+                    let mut j = i + 1;
+                    let mut hashes = 0;
+                    while c.get(j) == Some(&'#') {
+                        hashes += 1;
+                        j += 1;
+                    }
+                    if c.get(j) != Some(&'"') {
+                        out.push(c[i]);
+                        i += 1;
+                        continue;
+                    }
+                    let close: Vec<char> = std::iter::once('"')
+                        .chain(std::iter::repeat_n('#', hashes))
+                        .collect();
+                    let start = i;
+                    i = j + 1;
+                    while i < c.len() && c[i..].get(..close.len()) != Some(&close[..]) {
+                        i += 1;
+                    }
+                    i = (i + close.len()).min(c.len());
+                    out.extend(&c[start..i]);
+                }
+                '"' => {
+                    let start = i;
+                    i += 1;
+                    while i < c.len() && c[i] != '"' {
+                        if c[i] == '\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    i = (i + 1).min(c.len());
+                    out.extend(&c[start..i]);
+                }
+                '\'' => {
+                    // 字符字面量：'x' 或 '\…'；否则是生命周期，原样放行。
+                    let lit_end = if c.get(i + 1) == Some(&'\\') {
+                        (i + 2..c.len().min(i + 12)).find(|&k| c[k] == '\'')
+                    } else if c.get(i + 2) == Some(&'\'') {
+                        Some(i + 2)
+                    } else {
+                        None
+                    };
+                    match lit_end {
+                        Some(e) => {
+                            out.extend(&c[i..=e]);
+                            i = e + 1;
+                        }
+                        None => {
+                            out.push('\'');
+                            i += 1;
+                        }
+                    }
+                }
+                ch => {
+                    out.push(ch);
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+
     /// 代码里（非测试、非注释的每一行，不只 `CollabError::` 所在行）不得有中文：规则拒绝的文字在 md 里，
-    /// 否则中文会经 `.arg(..)` 的值、`format!` 或别的路径漏进英文文字（D8）。行尾 `// 注释` 不算。
+    /// 否则中文会经 `.arg(..)` 的值、`format!` 或别的路径漏进英文文字（D8）。返回（行号，整行去首尾空白）。
     fn cjk_lines(src: &str) -> Vec<(usize, String)> {
         let code = match src.find("#[cfg(test)]\nmod tests") {
             Some(i) => &src[..i],
             None => src,
         };
-        code.lines()
+        strip_comments(code)
+            .lines()
             .enumerate()
-            .filter(|(_, l)| !l.trim_start().starts_with("//"))
-            .map(|(i, l)| (i, l.split(" // ").next().unwrap_or(l)))
             .filter(|(_, l)| l.chars().any(is_cjk))
             .map(|(i, l)| (i + 1, l.trim().to_string()))
             .collect()
     }
 
-    /// 只进日志 / panic / 内部错误、不会成为规则拒绝的中文诊断（开发者看的）。逐条列出：新加的中文行默认不过；
-    /// 表里的每一条必须还在源码里（下面的测试查），免得表自己烂掉。
+    /// 只进日志 / panic / 内部错误、不会成为规则拒绝的中文诊断（开发者看的）。**整行**（去首尾空白、去注释后）
+    /// 逐条列出，不是子串：同一行里再夹别的中文就不在表里，照样红。表里的每一条必须还在源码里（下面的测试查），
+    /// 免得表自己烂掉。
     const LOG_ONLY: &[(&str, &str)] = &[
-        ("crews.rs", "机组 {crew} 不是 home，往上也走不到一级机组"),
-        ("crews.rs", "put_last 要求边已存在"),
-        ("prompts.rs", "缺少一节"),
-        ("prompts.rs", "的 ## {key} 是空的"),
-        ("prompts.rs", "的 ## {key} 重复"),
-        ("prompts.rs", "有一个没有名字的 ##"),
-        ("asks.rs", "human_waits 只列账本里的问"),
-        ("channels.rs", "的 kind = {kind:?}"),
-        ("refusal.rs", "没有占位符"),
-        ("refusal.rs", "少给了占位符"),
+        (
+            "crews.rs",
+            r#""机组 {crew} 不是 home，往上也走不到一级机组（上级成环或与总机组断开）：数据不一致""#,
+        ),
+        (
+            "crews.rs",
+            r#"debug_assert_eq!(n, 1, "put_last 要求边已存在");"#,
+        ),
+        (
+            "prompts.rs",
+            r#"None => panic!("prompts/{}.md 缺少一节：## {section}", self.name),"#,
+        ),
+        (
+            "prompts.rs",
+            r#"return Err(format!("prompts/{name}.md 的 ## {key} 是空的"));"#,
+        ),
+        (
+            "prompts.rs",
+            r#"return Err(format!("prompts/{name}.md 的 ## {key} 重复"));"#,
+        ),
+        (
+            "prompts.rs",
+            r#"return Err(format!("prompts/{name}.md 有一个没有名字的 ##"));"#,
+        ),
+        (
+            "asks.rs",
+            r#"let a = book.ask(w.ask).expect("human_waits 只列账本里的问");"#,
+        ),
+        ("refusal.rs", r#""{} 没有占位符 {{{key}}}","#),
+        ("refusal.rs", r#""{} 少给了占位符：要 {:?}，给了 {:?}","#),
+        ("channels.rs", r#""群 {id} 的 kind = {kind:?}""#),
     ];
+
+    /// 一行（已去注释、去首尾空白）能不能放行：必须与表里该文件的某一条整行相等。
+    fn log_only_index(file: &str, line: &str) -> Option<usize> {
+        LOG_ONLY.iter().position(|(f, l)| *f == file && *l == line)
+    }
 
     #[test]
     fn the_prose_scanner_catches_chinese_smuggled_through_an_arg() {
@@ -300,6 +416,35 @@ mod tests {
         let ok =
             "// 机长 注释可以有中文\nlet x = 1;\n#[cfg(test)]\nmod tests {\n let y = \"机长\";\n}";
         assert!(cjk_lines(ok).is_empty());
+    }
+
+    /// 盲点探针 1：字符串里的 `//` 不是注释；它后面的中文照样要被抓。行尾真注释里的中文不算。
+    #[test]
+    fn the_scanner_only_strips_comments_outside_string_literals() {
+        let hidden = "let u = \"见 http://x // 机长 {cap}\";";
+        assert_eq!(cjk_lines(hidden).len(), 1, "字符串里的 // 之后的中文要抓");
+        let hidden_raw = "let u = r#\"a // 机长\"#;";
+        assert_eq!(cjk_lines(hidden_raw).len(), 1, "原始字符串同理");
+        let hidden_char = "let q = '\"'; let u = \"// 机长\";";
+        assert_eq!(
+            cjk_lines(hidden_char).len(),
+            1,
+            "字符字面量 '\"' 不能把后面当成字符串起点"
+        );
+        let comment = "let x = 1; // 机长 是注释\nlet y = 2; /* 机长 */ let z = 3;\n/* 多行\n机长 */\nlet w = 4;";
+        assert!(cjk_lines(comment).is_empty(), "{:?}", cjk_lines(comment));
+        let lifetime = "fn f<'a>(x: &'a str) -> &'a str { x } // 机长";
+        assert!(cjk_lines(lifetime).is_empty());
+    }
+
+    /// 盲点探针 2：LOG_ONLY 按整行匹配；放行行里再夹别的中文，不在表里，照样红。
+    #[test]
+    fn log_only_matches_the_whole_line_not_a_substring() {
+        let (file, line) = LOG_ONLY[0];
+        assert_eq!(log_only_index(file, line), Some(0));
+        let smuggled = format!("{line} + \"机长 {{cap}}\"");
+        assert_eq!(log_only_index(file, &smuggled), None);
+        assert_eq!(log_only_index("messages.rs", line), None, "别的文件不借用");
     }
 
     #[test]
@@ -316,10 +461,7 @@ mod tests {
             }
             seen += 1;
             for (n, l) in cjk_lines(&std::fs::read_to_string(&path).unwrap()) {
-                let allowed = LOG_ONLY
-                    .iter()
-                    .position(|(f, s)| *f == name && l.contains(s));
-                match allowed {
+                match log_only_index(&name, &l) {
                     Some(i) => used[i] = true,
                     None => hits.push(format!("{name}:{n}: {l}")),
                 }
@@ -328,7 +470,7 @@ mod tests {
         for (i, (f, s)) in LOG_ONLY.iter().enumerate() {
             assert!(
                 used[i],
-                "LOG_ONLY 里的 {f}「{s}」已经不在源码里了，删掉这一条"
+                "LOG_ONLY 里的 {f}「{s}」已经不在源码里了（或那一行改了），更新或删掉这一条"
             );
         }
         assert!(seen >= 15, "只扫到 {seen} 个源文件，目录读错了？");
