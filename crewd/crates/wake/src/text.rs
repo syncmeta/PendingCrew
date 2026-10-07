@@ -42,6 +42,12 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
     ("decision.tail.captain", &[]),
     ("decision.tail.escalate", &[]),
     ("decision.session", &["session"]),
+    ("hibernate.resume", &[]),
+    ("hibernate.doing", &["doing"]),
+    ("hibernate.doing.unknown", &[]),
+    ("hibernate.idle", &[]),
+    ("hibernate.finished", &[]),
+    ("hibernate.interrupted", &[]),
 ];
 
 type Sections = BTreeMap<&'static str, &'static str>;

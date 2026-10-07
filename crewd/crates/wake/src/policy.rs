@@ -1,6 +1,7 @@
 //! 会话生命周期的几条策略（纯函数）：额度重置唤醒的时刻、重启后的恢复名单顺序、启动闸（可选上限 + 错开）。
-use crate::model::{MIN, Ms, QueuedWake, SEC, WakeState};
+use crate::model::{MIN, Ms, QueuedWake, SEC, WakeKind, WakeState};
 use crate::queue::is_due;
+use crate::text::{Lang, get, render};
 
 /// 重置后再缓 1 分钟（额度窗刚翻新，别掐点撞上仍受限的边缘；`AgentQuota.swift:342`）。
 pub const QUOTA_RESET_BUFFER_MS: i64 = MIN;
@@ -130,10 +131,74 @@ impl LaunchGate {
     }
 }
 
+/// 休眠（C26）的默认期限（秒）：在干活的 session 最多等这么久到达安全点（这一轮结束），之后打断。0 = 立即休眠。
+pub const DEFAULT_HIBERNATE_DEADLINE_SECS: u32 = 120;
+
+/// 被休眠的 session 恢复时附言要的事实（C26）。`doing` 是外来文字（唤醒附言、群 id），调用方先过 `safe_name`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HibernateFacts<'a> {
+    /// 休眠开始时它在干活（或正有一批在投）。
+    pub was_working: bool,
+    /// 到了期限它还没做完那一轮，被打断了。
+    pub interrupted: bool,
+    /// 停下之前在处理的那批唤醒（[`batch_summary`]）；不知道 = None。
+    pub doing: Option<&'a str>,
+}
+
+/// 休眠恢复时给 agent 的附言：是休眠暂停的；停下时在做什么（或空闲）；被打断的 → 被打断的命令要重跑。
+pub fn hibernate_note(lang: Lang, f: &HibernateFacts<'_>) -> String {
+    let mut parts = vec![get(lang, "hibernate.resume").to_string()];
+    if f.was_working || f.interrupted {
+        parts.push(match f.doing {
+            Some(doing) => render(lang, "hibernate.doing", &[("doing", doing)]),
+            None => get(lang, "hibernate.doing.unknown").to_string(),
+        });
+        let tail = if f.interrupted {
+            "hibernate.interrupted"
+        } else {
+            "hibernate.finished"
+        };
+        parts.push(get(lang, tail).to_string());
+    } else {
+        parts.push(get(lang, "hibernate.idle").to_string());
+    }
+    parts.join("\n\n")
+}
+
+/// [`batch_summary`] 至多多少个字符（含每条附言的截断）。
+pub const SUMMARY_MAX_CHARS: usize = 400;
+/// 摘要里每条附言至多多少个字符。
+const NOTE_MAX_CHARS: usize = 80;
+
+/// 一批唤醒的摘要（休眠记录里的「停下时在做什么」，C26）：每条 `种类 来源[: 附言]`，消息类写成 `message 群#序号`；
+/// 恢复类的附言不再套进来（那是上一次的附言）。是数据、不是文案；插进附言前要过 `safe_name`。空批 = None。
+pub fn batch_summary(wakes: &[QueuedWake]) -> Option<String> {
+    if wakes.is_empty() {
+        return None;
+    }
+    let items: Vec<String> = wakes
+        .iter()
+        .map(|w| {
+            let head = match (&w.kind, &w.msg) {
+                (WakeKind::Message, Some(r)) => format!("{} {}#{}", w.kind, r.channel, r.seq),
+                _ => format!("{} {}", w.kind, w.source),
+            };
+            match &w.note {
+                Some(n) if w.kind != WakeKind::Restart => {
+                    let n: String = n.chars().take(NOTE_MAX_CHARS).collect();
+                    format!("{head}: {n}")
+                }
+                _ => head,
+            }
+        })
+        .collect();
+    Some(items.join("; ").chars().take(SUMMARY_MAX_CHARS).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Priority, WakeKind};
+    use crate::model::Priority;
 
     fn quota_wake(source: &str, state: WakeState, not_before: i64) -> QueuedWake {
         QueuedWake {
@@ -265,6 +330,111 @@ mod tests {
             ]),
             ["b", "a"]
         );
+    }
+
+    fn wake(id: i64, kind: WakeKind, source: &str, note: Option<&str>) -> QueuedWake {
+        QueuedWake {
+            id,
+            kind,
+            source: source.into(),
+            note: note.map(str::to_string),
+            ..quota_wake("x", WakeState::Delivered, 0)
+        }
+    }
+
+    /// C26：休眠恢复的附言——说清是休眠暂停的、停下时在做什么、被打断的要重跑；空闲的说空闲。
+    #[test]
+    fn hibernate_note_says_it_was_suspended_what_it_was_doing_and_to_rerun_if_interrupted() {
+        use crate::text::{Lang, get, render};
+        for lang in [Lang::Zh, Lang::En] {
+            let doing = "message c1/lobby#3";
+            let cut = hibernate_note(
+                lang,
+                &HibernateFacts {
+                    was_working: true,
+                    interrupted: true,
+                    doing: Some(doing),
+                },
+            );
+            assert!(cut.starts_with(get(lang, "hibernate.resume")), "{cut}");
+            assert!(cut.contains(&render(lang, "hibernate.doing", &[("doing", doing)])));
+            assert!(cut.contains(get(lang, "hibernate.interrupted")), "{cut}");
+            assert!(!cut.contains(get(lang, "hibernate.finished")));
+            let done = hibernate_note(
+                lang,
+                &HibernateFacts {
+                    was_working: true,
+                    interrupted: false,
+                    doing: None,
+                },
+            );
+            assert!(
+                done.contains(get(lang, "hibernate.doing.unknown")),
+                "{done}"
+            );
+            assert!(done.contains(get(lang, "hibernate.finished")));
+            assert!(!done.contains(get(lang, "hibernate.interrupted")));
+            let idle = hibernate_note(
+                lang,
+                &HibernateFacts {
+                    was_working: false,
+                    interrupted: false,
+                    doing: Some(doing),
+                },
+            );
+            assert_eq!(
+                idle,
+                format!(
+                    "{}\n\n{}",
+                    get(lang, "hibernate.resume"),
+                    get(lang, "hibernate.idle")
+                )
+            );
+            // 被打断就一定是在干活（防御：调用方给错了也按「被打断」说，不漏掉「要重跑」）。
+            let odd = hibernate_note(
+                lang,
+                &HibernateFacts {
+                    was_working: false,
+                    interrupted: true,
+                    doing: None,
+                },
+            );
+            assert!(odd.contains(get(lang, "hibernate.interrupted")));
+        }
+    }
+
+    #[test]
+    fn batch_summary_lists_each_wake_and_caps_long_notes() {
+        assert_eq!(batch_summary(&[]), None);
+        let mut m = wake(1, WakeKind::Message, "msg:m-1", None);
+        m.msg = Some(crate::model::MessageRef {
+            channel: "c1/lobby".into(),
+            seq: 3,
+        });
+        let long = "x".repeat(500);
+        let got = batch_summary(&[
+            m,
+            wake(2, WakeKind::Timer, "timer:t1", Some("check CI")),
+            wake(
+                3,
+                WakeKind::Restart,
+                "restart:7",
+                Some("an older resume note"),
+            ),
+            wake(4, WakeKind::System, "system:s", Some(&long)),
+        ])
+        .unwrap();
+        assert!(
+            got.starts_with(
+                "message c1/lobby#3; timer timer:t1: check CI; restart restart:7; system system:s: "
+            ),
+            "{got}"
+        );
+        assert!(
+            !got.contains("an older resume note"),
+            "恢复附言不再套进摘要"
+        );
+        assert!(got.chars().count() <= SUMMARY_MAX_CHARS, "{}", got.len());
     }
 
     #[test]

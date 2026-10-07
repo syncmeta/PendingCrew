@@ -80,3 +80,21 @@ crewd 重启打断了你上一轮的工作。先核对现状（git status、你�
 
 ## decision.session
 （session: {session}）
+
+## hibernate.resume
+你上一次是被「休眠」暂停的：人要重启电脑（或让 crewd 整体歇一下），crewd 先让各个 session 停在安全点再退出。你的对话原样接回来了；这期间群里的消息照常会注入。
+
+## hibernate.doing
+停下之前你在处理的唤醒：{doing}
+
+## hibernate.doing.unknown
+停下之前你在干活，但 crewd 没记下是哪一批唤醒——翻一下自己对话的最后几轮。
+
+## hibernate.idle
+停下时你是空闲的（上一轮已经做完）。醒来先看群里的未读，再决定要不要动手。
+
+## hibernate.finished
+你在休眠期限之内做完了那一轮才停下，没有被打断。先核对一下现状再继续。
+
+## hibernate.interrupted
+休眠期限到了你还没做完那一轮，crewd 按 Esc 打断了你。被打断时在跑的命令（构建、测试、安装、迁移……）没跑完，它的输出和结果都不可信：先核对现状（git status、做到哪一步了），把被打断的命令重新跑一遍，再往下做。

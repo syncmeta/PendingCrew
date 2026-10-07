@@ -80,3 +80,21 @@ A human needs to decide: open this session's terminal and choose, or have the ca
 
 ## decision.session
 (session: {session})
+
+## hibernate.resume
+You were suspended by a hibernate: the human is restarting the computer (or pausing crewd as a whole), so crewd let every session stop at a safe point before exiting. Your conversation has been resumed as it was; channel messages from the meantime are injected as usual.
+
+## hibernate.doing
+The wakes you were handling before you stopped: {doing}
+
+## hibernate.doing.unknown
+You were working before you stopped, but crewd did not record which batch of wakes it was — look at the last few turns of your own conversation.
+
+## hibernate.idle
+You were idle when you stopped (your previous turn had finished). Read your unread channel messages first, then decide whether there is anything to do.
+
+## hibernate.finished
+You finished that turn within the hibernate deadline and were not interrupted. Check the current state before you continue.
+
+## hibernate.interrupted
+The hibernate deadline passed before you finished that turn, so crewd interrupted you with Esc. Whatever command was running at that moment (build, test, install, migration…) did not complete, and its output and result cannot be trusted: check the current state (git status, how far you got), run the interrupted command again, and only then continue.
