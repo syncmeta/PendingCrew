@@ -32,7 +32,7 @@ const COMMIT_DEADLINE: Duration = Duration::from_secs(3);
 /// crewd's own tools that only talk or read (B14). A session answering another session through
 /// `post` is not output: two sessions replying to each other would otherwise keep the loop breaker
 /// from ever firing. State-changing crew tools (start / stop / nudge, channel create / invite /
-/// archive / transfer, ask, respond_todo, schedule_wakeup, set_session_profile, crew structure
+/// archive / owner, ask, respond_todo, schedule_wakeup, set_session_profile, crew structure
 /// tools) are not listed, so they count.
 const PASSIVE_CREW_TOOLS: &[&str] = &[
     "post",
@@ -40,9 +40,7 @@ const PASSIVE_CREW_TOOLS: &[&str] = &[
     "search",
     "list_channels",
     "directory",
-    "contact",
     "channel_listen",
-    "channel_unlisten",
     // Pure reads.
     "get_quota",
     "read_delegation_policy",
@@ -456,9 +454,7 @@ mod tests {
             "search",
             "list_channels",
             "directory",
-            "contact",
             "channel_listen",
-            "channel_unlisten",
             "get_quota",
             "read_delegation_policy",
             "inspect_session",
@@ -479,7 +475,8 @@ mod tests {
             "mcp__crew__channel_create",
             "mcp__crew__channel_invite",
             "mcp__crew__channel_archive",
-            "mcp__crew__channel_transfer",
+            "mcp__crew__channel_owner",
+            "mcp__crew__channel_leave",
             "mcp__crew__ask",
             "mcp__crew__respond_todo",
             "mcp__crew__schedule_wakeup",
@@ -492,7 +489,7 @@ mod tests {
     #[test]
     fn crewd_tool_names_and_the_passive_list_match_the_catalog() {
         assert!(
-            is_crewd_tool("mcp__crew__contact")
+            is_crewd_tool("mcp__crew__directory")
                 && !is_crewd_tool("mcp__computer-use__click")
                 && !is_crewd_tool("Edit")
         );

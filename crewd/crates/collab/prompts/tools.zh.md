@@ -76,7 +76,7 @@
 true = 连已归档的群一起列；默认不列。
 
 ## channel_create
-建一个群（话题群或两人私聊）。要和谁就某件事协作、要单独讨论一个话题，就用它——不要为此开子机组。你是群主，自动在群里。群有名字和用途，例如「发版」「scroll bug 排查」。群名不能与人类（人类 / Human）或 crewd 的系统标签重名，重名会被拒绝。
+建一个话题群。要和谁就某件事协作、要单独讨论一个话题，就用它——不要为此开子机组。你是群主，自动在群里。群有名字和用途，例如「发版」「scroll bug 排查」。群名不能与人类（人类 / Human）或 crewd 的系统标签重名，重名会被拒绝。私聊不用建：post(to:) 直接发，还没有就自动开。
 
 ## channel_create.name
 群名，短。
@@ -85,13 +85,10 @@ true = 连已归档的群一起列；默认不列。
 这个群是干什么的，一句话。
 
 ## channel_create.members
-要拉进来的成员：session id、通讯录号码（如 7-3），或 human（人类）。
-
-## channel_create.kind
-topic（话题群，默认）或 dm（恰好两个成员的私聊，其中至多一个是人类；同一对成员已有私聊就直接复用，不新建）。
+一起拉进来的成员（可不填，之后再用 channel_invite）：session id、通讯录号码（如 7-3；7 = 7 号机组此刻的机长），或 human（人类）。不用填你自己。
 
 ## channel_invite
-把人拉进一个群。你自己必须是这个群的成员；大厅和私聊（dm）不接受邀请。
+把人拉进一个群。一般要你自己是这个群的成员；大厅和私聊不接受邀请。
 
 ## channel_invite.channel
 群 id 或群名。
@@ -100,67 +97,49 @@ topic（话题群，默认）或 dm（恰好两个成员的私聊，其中至多
 session id、通讯录号码（如 7-3），或 human。
 
 ## channel_leave
-退出一个群。大厅退不了；私聊（dm）退不了，不要的话归档它；话题群的群主要先 channel_transfer 转给别人才能退。
+退出一个群。大厅退不了；私聊退不了（不要的话归档它）；话题群的群主要先用 channel_owner 转给别人才能退。
 
 ## channel_leave.channel
 群 id 或群名。
 
 ## channel_archive
-归档一个群（消息保留，不能再发言；可以由人解档）。只有群主或机长能归档；大厅和人类群不能归档。
+归档一个群（消息保留，不能再发言；人可以解档）。只有群主、该群所属机组的机长或人能归档；大厅和人类群不能归档。
 
 ## channel_archive.channel
 群 id 或群名。
 
-## channel_transfer
-把群主转给别人。群主发起后要对方用 channel_accept 接受才生效；机长可以 force 直接转。群主相当于这个群的机长：人类在群里说话没点名时，调度判断不了就叫群主。
+## channel_owner
+群主的转让。群主相当于这个群的机长：人类在群里说话没点名时，调度判断不了就叫群主。三种用法：给 to = 群主请对方接手（会以你的名义在群里 @ 对方，对方调 channel_owner(channel=…) 接受后才生效）；不给 to = 接受转给你的群主；给 to 且 force=true = 该群所属机组的机长（总机组的机长也算）不等对方接受，直接换群主。新群主必须是群成员。
 
-## channel_transfer.channel
+## channel_owner.channel
 群 id 或群名。
 
-## channel_transfer.to
-新群主：session id 或通讯录号码。必须是群成员。
+## channel_owner.to
+新群主：session id 或通讯录号码（如 7-3）。不填 = 接受转给你的群主。
 
-## channel_transfer.force
-机长专用：true = 不等对方接受，直接转。
-
-## channel_accept
-接受别人转给你的群主。
-
-## channel_accept.channel
-群 id 或群名。
+## channel_owner.force
+机长用，要同时给 to：true = 不等对方接受，直接转。
 
 ## channel_listen
-收听一个群：这个群有新消息时也叫醒你（不用被 @）。在等某个群的动静时用；收听期间正常结束回合等着，别轮询 read_channel。
+收听一个群：这个群有新消息时也叫醒你（不用被 @）。在等某个群的动静时用；收听期间正常结束回合等着，别轮询 read_channel。只能收听你读得到的群。不再需要时 channel_listen(channel=…, off=true)。
 
 ## channel_listen.channel
 群 id 或群名。
 
 ## channel_listen.minutes
-听多久（分钟，1–480）。不填 = 一直听到 channel_unlisten。
+听多久（分钟，1–480）。不填 = 一直听，直到用 off=true 停掉。
 
 ## channel_listen.senders
-只听这些人：human、captain，或 session id。这只决定谁的消息会叫醒你；群里看得见的消息照样都会注入给你。不填 = 所有人。
+只听这些人：human、session id 或通讯录号码（号码按此刻解析成那个 session，如 7-1 = 7 号机组此刻的机长）。这只决定谁的消息会叫醒你；群里的消息照样都会注入给你。不填 = 所有人。
 
-## channel_unlisten
-停止收听一个群。
-
-## channel_unlisten.channel
-群 id 或群名。
+## channel_listen.off
+true = 停止收听这个群（不能和 minutes、senders 一起给）。本来就没在收听也不报错。
 
 ## directory
-查通讯录：本机每个机组、每个 session 都有短号码——机组是整数（7），成员是分机（7-3），-1 恒定是那个机组的机长。每条返回：号码、类别（机组或成员）、名字、机组 / 组织路径、session id；另外附上你所在的群。人类不编号，找人用 ask。
+查通讯录：本机每个机组、每个 session 都有短号码——机组是整数（7），成员是分机（7-3），-1 恒定是那个机组此刻的机长，0 是总机组（填 0 = 它此刻的机长）。每行：号码、名字、所在机组或上级路径、session id。号码可以直接填进 post 的 to（私聊，跨机组也用它）和各工具的成员参数。列群用 list_channels；人类不编号：找人发 home 人类群，要拍板用 ask。
 
 ## directory.query
-按号码前缀、名字或关键词过滤；不填 = 全表。
-
-## contact
-按号码联系别的机组或 session。to 填机组号（如 7）= 发到它的大厅并 @它的机长，消息带上你的来源；填分机号（如 7-3）= 与那个 session 私聊（没有就建）。你自己的大厅会留一行「已联系 …」。本机组的事直接 post。
-
-## contact.to
-目标号码：7（机组）或 7-3（session）。
-
-## contact.message
-要说的话：写清你是谁、要什么。
+按号码前缀、名字或组织路径过滤；不填 = 全表。
 
 ## ask
 向人类提一个要他拍板的问题。不阻塞：问题记成一条待确认（H 号），发进你的 home（顶层机组；总机组是它自己）的人类群并 @人类；你立刻拿到回执，去干别的或收工。人回答时系统直接叫醒你，并把 resume_note 原样念回给你。
@@ -608,3 +587,60 @@ mention 写法不对（kind = {kind}）：kind 只能是 session / captain / hum
 
 ## r.list_none_mine
 - （没有你读得到的未归档的群。要看已归档的：list_channels(include_archived=true)；找人用 directory 查号、post(to:) 私聊；要人拍板用 ask）
+
+## r.channel_created
+建好了：{name}（{id}），你是群主，成员 {count} 人。拉人用 channel_invite，发言用 post(channel="{id}")。
+
+## r.invited
+已拉进 {channel}：现在 {count} 人。他们之后会收到这个群的新消息；要叫醒谁就在 post 里 @ 他。
+
+## r.left
+已退出 {channel}：它的新消息不再注入给你。还想看时用 read_channel，要回来请成员 channel_invite 你。
+
+## r.archived
+已归档 {channel}：消息保留，不能再发言。要恢复请人解档。
+
+## r.owner_offer_notice
+我想把 {channel} 的群主转给你：同意就调 channel_owner(channel="{id}") 接手。
+
+## r.owner_offered
+已请 {to} 接手 {channel} 的群主，并在群里 @ 了对方；对方调 channel_owner(channel="{id}") 接受后生效，在那之前你还是群主。
+
+## r.owner_accepted
+你现在是 {channel} 的群主：人类在群里没点名时，调度判断不了就会叫你。
+
+## r.owner_forced
+{channel} 的群主已换成 {to}。对方不会因此被叫醒：需要时 post @ 对方说明。
+
+## r.listen_minutes
+minutes 要在 1–480 之间；不填就一直听，直到 channel_listen(channel=…, off=true)。
+
+## r.listening_for
+在收听 {channel}，{minutes} 分钟后自动停。正常结束回合等着就行。
+
+## r.listening
+在收听 {channel}，直到 channel_listen(channel="{id}", off=true)。正常结束回合等着就行。
+
+## r.unlistened
+已停止收听 {channel}。要再听就 channel_listen(channel="{id}")。
+
+## r.unlisten_none
+你本来就没在收听 {channel}，什么都没变。
+
+## r.dir_header
+通讯录（你的号码：{me}）：
+
+## r.dir_header_no_number
+通讯录（你没有分机号；别人可以用你的 session id {id} 找你）：
+
+## r.dir_crew
+- {number} 机组 {name}{path}
+
+## r.dir_path
+（上级：{path}）
+
+## r.dir_session
+- {number} {name} · {crew} · {id}
+
+## r.dir_empty
+没有匹配的号码：换个关键词，或不带 query 看全表。

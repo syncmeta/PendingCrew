@@ -389,15 +389,20 @@ mod tests {
                 "白板",
                 "whiteboard",
                 "attachments",
+                // T13: merged into channel_owner / channel_listen(off), contact -> post(to:).
+                "channel_transfer",
+                "channel_accept",
+                "channel_unlisten",
             ] {
                 assert!(!md.contains(gone), "{:?}: 还有 {gone}", c.locale);
             }
+            assert!(!has_word(&md, "contact"), "{:?}: 还有 contact", c.locale);
             for must in [
                 "list_channels",
                 "channel_listen",
                 "read_channel",
                 "channel_create",
-                "channel_transfer",
+                "channel_owner",
             ] {
                 assert!(has_word(&md, must), "{:?}: 缺 {must}", c.locale);
             }

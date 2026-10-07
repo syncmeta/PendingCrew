@@ -319,16 +319,12 @@ pub enum MsgRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NumberTarget {
-    Crew(String),
-    Session { crew_id: String, session_id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     pub number: String,
     pub name: String,
     pub crew_title: String,
+    /// The session behind an extension row; `None` = a crew row.
+    pub session_id: Option<String>,
     /// 组织路径（顶层机组在最左，" / " 分隔；顶层机组与总机组本身是空串）；每一段机组标题都过了 `safe_name`。
     pub detail: String,
 }
@@ -1079,6 +1075,7 @@ pub async fn directory(st: &AppState, query: Option<String>) -> PortResult<Vec<D
                     crew_title: crewd_collab::crews::get(conn, &r.crew_id)?.title,
                     number: r.number,
                     name: r.name,
+                    session_id: r.session_id,
                     detail: r
                         .org_path
                         .split(" / ")
@@ -1108,22 +1105,47 @@ pub async fn resolve_address(st: &AppState, arg: &str) -> PortResult<String> {
     .await
 }
 
-/// 在通讯录里找 `number` 完全相等的那一行。
-pub async fn resolve_number(st: &AppState, number: &str) -> PortResult<Option<NumberTarget>> {
-    let number = number.to_string();
+/// A member argument that names a session (C3): an address (only digits and `-`) goes through collab
+/// `directory::resolve` (its refusals come back with their codes); anything else must be the id of
+/// an existing session (`session.not_found`). Unlike `resolve_address` (post.to), a non-address
+/// that is no session is "no such session", not "bad address".
+pub async fn resolve_session(st: &AppState, arg: &str) -> PortResult<String> {
+    let arg = arg.trim().to_string();
     read(st, move |conn| {
-        Ok(crewd_collab::directory::list(conn, None)?
-            .into_iter()
-            .find(|r| r.number == number)
-            .map(|r| match r.session_id {
-                Some(session_id) => NumberTarget::Session {
-                    crew_id: r.crew_id,
-                    session_id,
-                },
-                None => NumberTarget::Crew(r.crew_id),
-            }))
+        if !arg.is_empty() && arg.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+            return crewd_collab::directory::resolve(conn, &arg);
+        }
+        crewd_collab::sessions::get(conn, &arg).map(|s| s.id)
     })
     .await
+}
+
+/// Does `s` name the human (`human`, any ASCII case, or the human's sender label in either locale)?
+pub fn names_the_human(s: &str) -> bool {
+    let s = s.trim();
+    s.eq_ignore_ascii_case("human")
+        || [Locale::Zh, Locale::En]
+            .iter()
+            .any(|l| s == crewd_collab::prompts::render_file(*l).get("sender.human"))
+}
+
+/// How a member is called in a receipt: the human's sender label, or the session's display name
+/// (through `safe_name`).
+pub async fn member_label(st: &AppState, m: &MemberRef, loc: Locale) -> PortResult<String> {
+    match m {
+        MemberRef::Human => Ok(crewd_collab::prompts::render_file(loc)
+            .get("sender.human")
+            .to_string()),
+        MemberRef::Session(id) => {
+            let id = id.clone();
+            read(st, move |conn| {
+                Ok(crewd_collab::render::safe_name(
+                    &crewd_collab::sessions::display_name(conn, &id)?,
+                ))
+            })
+            .await
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1671,13 +1693,7 @@ mod tests {
             .unwrap()
             .extension
             .expect("登记的 worker 有分机号");
-        match resolve_number(&f.state, &ext).await.unwrap() {
-            Some(NumberTarget::Session {
-                crew_id,
-                session_id,
-            }) => assert_eq!((crew_id, session_id), (f.crew.clone(), x)),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(resolve_session(&f.state, &ext).await.unwrap(), x);
         let n = crew(&f.state, &f.crew)
             .await
             .unwrap()
@@ -1686,10 +1702,44 @@ mod tests {
             .unwrap()
             .to_string();
         assert_eq!(
-            resolve_number(&f.state, &n).await.unwrap(),
-            Some(NumberTarget::Crew(f.crew.clone()))
+            resolve_session(&f.state, &n).await.unwrap(),
+            f.captain,
+            "a crew number is that crew's captain right now"
         );
-        assert!(resolve_number(&f.state, "9999").await.unwrap().is_none());
+        assert_eq!(
+            resolve_session(&f.state, &f.worker).await.unwrap(),
+            f.worker
+        );
+        let rule = |e: PortError| match e {
+            PortError::NotFound(Reason::Rule(r)) | PortError::Refused(Reason::Rule(r)) => r.code,
+            other => panic!("{other:?}"),
+        };
+        use crewd_collab::refusal::Code;
+        assert_eq!(
+            rule(resolve_session(&f.state, "9999").await.unwrap_err()),
+            Code::DirectoryNoSuchCrew
+        );
+        assert_eq!(
+            rule(resolve_session(&f.state, "s-nobody").await.unwrap_err()),
+            Code::SessionNotFound,
+            "not an address: must be a session id"
+        );
+        let rows = directory(&f.state, None).await.unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|d| d.number == ext)
+                .unwrap()
+                .session_id
+                .as_deref(),
+            Some(x.as_str())
+        );
+        assert!(
+            rows.iter()
+                .find(|d| d.number == n)
+                .unwrap()
+                .session_id
+                .is_none()
+        );
         assert!(
             directory(&f.state, None)
                 .await

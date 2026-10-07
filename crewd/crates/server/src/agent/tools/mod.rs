@@ -1,5 +1,6 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
+pub mod channels;
 pub mod messaging;
 
 use serde::de::DeserializeOwned;
@@ -149,7 +150,14 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "read_channel" => messaging::read_channel(&cx, args).await,
         "search" => messaging::search(&cx, args).await,
         "list_channels" => messaging::list_channels(&cx, args).await,
-        // Tasks 13-15 add the other groups.
+        "channel_create" => channels::create(&cx, args).await,
+        "channel_invite" => channels::invite(&cx, args).await,
+        "channel_leave" => channels::leave(&cx, args).await,
+        "channel_archive" => channels::archive(&cx, args).await,
+        "channel_owner" => channels::owner(&cx, args).await,
+        "channel_listen" => channels::listen(&cx, args).await,
+        "directory" => channels::directory(&cx, args).await,
+        // Tasks 14-15 add the other groups.
         _ => cx.err("r.no_handler", &[("name", tool)]),
     }
 }

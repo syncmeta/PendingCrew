@@ -76,7 +76,7 @@ List only that crew's channels you can read (crew number, id or name).
 true = include archived channels; they are left out by default.
 
 ## channel_create
-Create a channel (topic channel or two-person dm). Use it whenever you need to collaborate with someone on something or discuss a topic separately — do not create a child crew for that. You become the owner and a member. Give it a name and a purpose, e.g. "release", "scroll bug". A name equal to the human labels (人类 / Human) or to crewd's own system labels is rejected.
+Create a topic channel. Use it whenever you need to collaborate with someone on something or discuss a topic separately — do not create a child crew for that. You become the owner and a member. Give it a name and a purpose, e.g. "release", "scroll bug". A name equal to the human labels (人类 / Human) or to crewd's own system labels is rejected. A dm needs no creating: post(to:) opens one when there is none yet.
 
 ## channel_create.name
 Short channel name.
@@ -85,13 +85,10 @@ Short channel name.
 One sentence: what the channel is for.
 
 ## channel_create.members
-Members to add: session ids, directory numbers (like 7-3), or human.
-
-## channel_create.kind
-topic (default) or dm (exactly two members, at most one of them the human; if a dm for the same pair already exists it is reused, not created again).
+Members to add right away (optional; channel_invite later works too): session ids, directory numbers (like 7-3; 7 = crew 7's captain right now), or human. Leave yourself out.
 
 ## channel_invite
-Add members to a channel. You must be a member yourself; the lobby and a dm cannot take invites.
+Add members to a channel. Usually you must be a member yourself; the lobby and a dm cannot take invites.
 
 ## channel_invite.channel
 Channel id or name.
@@ -100,67 +97,49 @@ Channel id or name.
 Session ids, directory numbers (like 7-3), or human.
 
 ## channel_leave
-Leave a channel. You cannot leave the lobby; a dm cannot be left (archive it instead); the owner of a topic channel must transfer ownership first.
+Leave a channel. You cannot leave the lobby; a dm cannot be left (archive it instead); the owner of a topic channel must hand ownership on with channel_owner first.
 
 ## channel_leave.channel
 Channel id or name.
 
 ## channel_archive
-Archive a channel (messages kept, no new posts; the human can unarchive). Only the owner or the captain can archive; the lobby and the human channel cannot be archived.
+Archive a channel (messages kept, no new posts; the human can unarchive). Only the owner, the captain of the channel's crew or the human can archive; the lobby and the human channel cannot be archived.
 
 ## channel_archive.channel
 Channel id or name.
 
-## channel_transfer
-Hand channel ownership to someone else. The new owner must accept with channel_accept; the captain can force it. The owner acts as the channel's captain: when the human posts without naming anyone and the dispatcher cannot tell who should answer, the owner is woken.
+## channel_owner
+Channel ownership. The owner acts as the channel's captain: when the human posts without naming anyone and the dispatcher cannot tell who should answer, the owner is woken. Three uses: with to = the owner offers it (you mention them in the channel under your own name; it takes effect once they call channel_owner(channel=…)); without to = accept an ownership offered to you; with to and force=true = the captain of the channel's crew (the management captain counts) moves it at once, without acceptance. The new owner must be a member.
 
-## channel_transfer.channel
+## channel_owner.channel
 Channel id or name.
 
-## channel_transfer.to
-New owner: session id or directory number. Must be a member.
+## channel_owner.to
+New owner: session id or directory number (like 7-3). Omitted = accept the ownership offered to you.
 
-## channel_transfer.force
-Captain only: true = transfer without waiting for acceptance.
-
-## channel_accept
-Accept ownership of a channel offered to you.
-
-## channel_accept.channel
-Channel id or name.
+## channel_owner.force
+For captains, together with to: true = move ownership without waiting for acceptance.
 
 ## channel_listen
-Listen to a channel: new messages there wake you even without a mention. Use it while waiting for activity; end your turn normally while listening instead of polling read_channel.
+Listen to a channel: new messages there wake you even without a mention. Use it while waiting for activity; end your turn normally while listening instead of polling read_channel. Only channels you can read can be listened to. Stop with channel_listen(channel=…, off=true).
 
 ## channel_listen.channel
 Channel id or name.
 
 ## channel_listen.minutes
-How long (minutes, 1–480). Omitted = until channel_unlisten.
+How long (minutes, 1–480). Omitted = until you stop it with off=true.
 
 ## channel_listen.senders
-Only these senders: human, captain, or session ids. This only filters whose messages wake you; everything visible in the channel is still injected. Omitted = everyone.
+Only these senders: human, session ids or directory numbers (a number is resolved to its session now, e.g. 7-1 = crew 7's captain right now). This only filters whose messages wake you; everything in the channel is still injected. Omitted = everyone.
 
-## channel_unlisten
-Stop listening to a channel.
-
-## channel_unlisten.channel
-Channel id or name.
+## channel_listen.off
+true = stop listening to this channel (not together with minutes or senders). Not listening already is not an error.
 
 ## directory
-Look up the directory: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), and -1 is always that crew's captain. Each entry returns: number, kind (crew or member), name, crew / org path, session id; plus the channels you are in. The human has no number; use ask.
+Look up the directory: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), -1 is always that crew's captain right now, and 0 is the management crew (0 = its captain right now). Each row: number, name, crew or parent path, session id. Numbers go straight into post's to (a dm, across crews too) and into member arguments of the tools. Channels are listed by list_channels; the human has no number: post in your home human channel, or ask for a decision.
 
 ## directory.query
-Filter by number prefix, name or keyword; omitted = everything.
-
-## contact
-Reach another crew or session by number. A crew number (7) posts to its lobby mentioning its captain, with your origin attached; an extension (7-3) opens a dm with that session (created if missing). Your own lobby gets a "contacted …" line. For your own crew just post.
-
-## contact.to
-Target number: 7 (crew) or 7-3 (session).
-
-## contact.message
-What you want to say: who you are and what you need.
+Filter by number prefix, name or org path; omitted = everything.
 
 ## ask
 Ask the human for a decision. Non-blocking: the question becomes a pending item (an H number), is posted to your home (top-level crew; the management crew is its own home) human channel mentioning the human, and you get a receipt right away — go do something else or end your turn. When the human answers you are woken and resume_note is read back to you verbatim.
@@ -608,3 +587,60 @@ The human is not watching {channel}: the @human badge is lit but may be seen muc
 
 ## r.list_none_mine
 - (no unarchived channels you can read. For archived ones: list_channels(include_archived=true); to reach someone look the number up with directory and post(to:); for a decision from the human use ask)
+
+## r.channel_created
+Created {name} ({id}); you are the owner, {count} members. Add people with channel_invite, post with post(channel="{id}").
+
+## r.invited
+Added to {channel}; it now has {count} members. They get its new messages from now on; to wake someone, mention them in a post.
+
+## r.left
+Left {channel}: its new messages are no longer injected for you. read_channel still shows it; to come back ask a member to channel_invite you.
+
+## r.archived
+Archived {channel}: messages kept, no new posts. Ask the human to unarchive it if needed.
+
+## r.owner_offer_notice
+I would like to hand ownership of {channel} to you: to take it, call channel_owner(channel="{id}").
+
+## r.owner_offered
+Asked {to} to take over {channel} and mentioned them there; it takes effect once they call channel_owner(channel="{id}"). Until then you stay the owner.
+
+## r.owner_accepted
+You now own {channel}: when the human posts there without naming anyone and the dispatcher cannot tell who should answer, you are woken.
+
+## r.owner_forced
+Ownership of {channel} moved to {to}. They are not woken by this: post and mention them if they need to know.
+
+## r.listen_minutes
+minutes must be 1–480; omit it to listen until channel_listen(channel=…, off=true).
+
+## r.listening_for
+Listening to {channel} for {minutes} minutes. Just end your turn and wait.
+
+## r.listening
+Listening to {channel} until channel_listen(channel="{id}", off=true). Just end your turn and wait.
+
+## r.unlistened
+Stopped listening to {channel}. To listen again: channel_listen(channel="{id}").
+
+## r.unlisten_none
+You were not listening to {channel}; nothing changed.
+
+## r.dir_header
+Directory (your number: {me}):
+
+## r.dir_header_no_number
+Directory (you have no extension; others can reach you by your session id {id}):
+
+## r.dir_crew
+- {number} crew {name}{path}
+
+## r.dir_path
+(under: {path})
+
+## r.dir_session
+- {number} {name} · {crew} · {id}
+
+## r.dir_empty
+No matching numbers: try another keyword, or omit query for the whole directory.

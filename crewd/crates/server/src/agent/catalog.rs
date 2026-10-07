@@ -51,7 +51,6 @@ pub const CATEGORIES: &[&str] = &[
 ];
 pub const MENTION_KINDS: &[&str] = &["session", "captain", "human"];
 const RUNNERS: &[&str] = &["claude", "codex"];
-const CHANNEL_KINDS: &[&str] = &["topic", "dm"];
 
 const fn p(name: &'static str, ty: Ty, required: bool) -> Param {
     Param {
@@ -146,8 +145,7 @@ pub const CATALOG: &[ToolSpec] = &[
         &[
             p("name", Str, true),
             p("purpose", Str, false),
-            p("members", StrList, true),
-            c("kind", false, CHANNEL_KINDS),
+            p("members", StrList, false),
         ],
     ),
     all(
@@ -157,25 +155,23 @@ pub const CATALOG: &[ToolSpec] = &[
     all("channel_leave", &[p("channel", Str, true)]),
     all("channel_archive", &[p("channel", Str, true)]),
     all(
-        "channel_transfer",
+        "channel_owner",
         &[
             p("channel", Str, true),
-            p("to", Str, true),
+            p("to", Str, false),
             p("force", Bool, false),
         ],
     ),
-    all("channel_accept", &[p("channel", Str, true)]),
     all(
         "channel_listen",
         &[
             p("channel", Str, true),
             int("minutes", 1, 480),
             p("senders", StrList, false),
+            p("off", Bool, false),
         ],
     ),
-    all("channel_unlisten", &[p("channel", Str, true)]),
     all("directory", &[p("query", Str, false)]),
-    all("contact", &[p("to", Str, true), p("message", Str, true)]),
     all(
         "ask",
         &[
@@ -294,6 +290,14 @@ pub const REMOVED: &[&str] = &[
     "answer_decision",
     // -> list_channels (S70; T15b turns this list into (name, replacement) pairs).
     "human_watching",
+    // -> post(to:) (S65: cross-crew talk is a dm; system-signed crew messages are gone).
+    "contact",
+    // -> channel_owner (S70).
+    "channel_transfer",
+    // -> channel_owner without `to` (S70).
+    "channel_accept",
+    // -> channel_listen(off: true) (S70).
+    "channel_unlisten",
 ];
 
 pub fn find(name: &str) -> Option<&'static ToolSpec> {
@@ -405,7 +409,7 @@ mod tests {
         for gone in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 39);
+        assert_eq!(CATALOG.len(), 36);
     }
 
     #[test]
@@ -415,8 +419,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 20);
-        assert_eq!(captain.len(), 39);
+        assert_eq!(worker.len(), 17);
+        assert_eq!(captain.len(), 36);
     }
 
     #[test]
