@@ -878,3 +878,4 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - `crew.delete`：删之前 `Store::snapshot_before_purge` → `backups/crewd-pre-delete-{机组}-{ts}.db`，拍不成不删。默认归档由 N1 做；合并时这一步移到永久删除（purge）上。
 - 旁路文件：`fsutil::atomic_write` / `rename_durably`（rename 后 fsync 目录）；登记表与 jev key 补上目录 fsync；导入时附件逐个 fsync。
 - 量级（合成 367066 条消息，约 145MiB，release）：quick_check 0.16s，integrity_check 0.29s，+外键 0.32s，在线备份 0.38s。
+- 复审第 1 轮：`crewd.db.id` 在时，打开前只读偷看——没有 dbId 的库（典型：迁移前快照被 `cp` 回来）→ `DbUnmarked`，空文件 → `DbMissing`，dbId 不同 → `DbIdMismatch`，都在任何 pragma / 迁移之前，文件不动；提示「挪出数据目录再 `crewd restore --from`，或删 `crewd.db.id` 认领；找原库看 backups/ 与 `crewd.db.replaced-*`」。认人（application_id / 版本 / 有无表）挪到 pragma 之前。检查连接与 restore 的检查点连接也设 fullfsync / checkpoint_fullfsync。快照 + 删除在同一个库线程任务里：`Store::snapshot_then`、`AppState::collab_after_snapshot`（N1 的 `crew.purge` 复用它）。backups/ 收紧到 0700，快照临时文件以 0600 预建，Ticker 启动时清死进程留下的 `.*.tmp-<pid>`；socket 绑不上时同样先停 Ticker、关库再放锁。
