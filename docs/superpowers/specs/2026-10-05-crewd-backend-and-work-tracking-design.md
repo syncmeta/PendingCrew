@@ -864,3 +864,17 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - M3c：排队的 `deferred` 行留着不动、绝不 `mark_dropped`；游标只推进到 `cursor_targets()`（不是排队的最大 seq），`Inflight` 带着它、`on_delivery` 用它；只有积压、`wake_ids` 为空的批也要投；`render_fitted` 不含 deferred；`UNREAD_CAP` 按群计、各群游标独立推进；`build_batch` 报错（账本坏）是 fail-loud，不能紧循环重试；游标后面的排队行会重渲已读消息，先过滤；显式 @机长 + 回复机长会得到 `Captain(x)` + `Session(x)` 两条 mention，同一条消息每个 session 只叫一次；latches 的 get / clear / list 遇坏 id / 坏行回 `Invalid`，启动要处理；`reset_inflight` 至少一次、只在启动时调；serve 关闭次序 = 停止接入 → 收完 / 中止连接任务 → 丢 `AppState` → join Db 线程（`Db` 要有 JoinHandle）；`CollabEvent` 落后（Lagged）时从库重推状态（`restart::pending`、问的 cleared），不只重排未读；停 session 时 `TokenTable::revoke`；`orchestra::schema_entries` 用共享的 `SchemaGenerator`，要么自成一节要么扩 `schema_lists_exactly_the_client_methods`；`blocks_for` / `build_batch` 要传 `Locale`。
 - M3b：调用点改 `Response::into_result()`；`agent::schema()` 用共享的 `SchemaGenerator`（`sub::<T>(g)`）后再 `take_definitions`，不嵌套 `$defs`；`blocks_for` / `build_batch` 传 `Locale`。
 - M2c → M3c：`driver::with_untrusted_context` 需要同样的帧伪造中和（转义闭合标签 / 校验键）后才能塞队友文字；`ClaudeSpec` 没有 `initial_context`；codex 的 Notice 拒绝要按 MCP server 报；`CommsSpec` / `mcp_args_for` 用 M2c 合进 main 的接口。
+
+## 24. N4 存储安全交付记录（分支 crewd-n4-store，需求见改进清单 B2 S20–S32）
+
+- pragma 写死并读回：WAL（拿不到就拒绝打开）、`synchronous=FULL`、`fullfsync=ON`（本机实测单行提交 p50 3.9ms / p99 6ms，关掉是 40µs / 60µs）、`checkpoint_fullfsync=ON`、`busy_timeout=5000`、`journal_size_limit=64MiB`、`foreign_keys=ON`。
+- 权限（PM 2026-10-07）：数据目录 0700（已有的去掉组 / 其他人位）；库在打开前以 0600 预建，SQLite 让 -wal / -shm 沿用库文件权限；快照 0600。数据库不加密（FileVault）；离开本盘的导出要加密，未实现，`crewd backup` 只写 `backups/`。
+- 身份：`PRAGMA application_id`=「CRWD」，`meta.dbId`，旁放 `crewd.db.id`。`Store::open_data_dir`：库不在而 id 文件或备份在 → `DbMissing`；dbId 对不上 → `DbIdMismatch`（迁移之前就拒绝）；别人的 SQLite 文件拒绝。serve 与 import 都走它。
+- 迁移前：非空旧库先 `integrity_check` 再 `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{ts}.db`，任一步失败 → `MigrationRefused`，库原样不动。
+- 备份：serve 起 `backup::Ticker`（D-8，serve 自己的线程，不进 Core）：启动时与每小时一 tick；到点（24h）的那次对在用的库跑 `integrity_check` 并拍 `crewd-auto-*`，其他 tick 只跑 `quick_check`；快照自己过 `quick_check` 才改名；轮转 = 最近 7 个有备份的日子各一份 + 更早 4 个 ISO 周各一份；备份失败或在用的库没过检查时不淘汰。`crewd backup` / `crewd check [--quick]` / `crewd restore --from`（拿数据目录锁；旧库连 -wal/-shm 改名为 `crewd.db.replaced-{ts}`，永不覆盖）。
+- 检查连接用 READ_WRITE + `query_only`，不用 `SQLITE_OPEN_READ_ONLY`：只读打开时 SQLite 不解析 CHECK 约束，检查会漏（实测）。快照用真只读连接（`query_only` 会挡 `VACUUM INTO`）。
+- 错误：`StorageKind`（DiskFull / Io / Corrupt / ReadOnly / CantOpen）经 `From<rusqlite::Error>` 自动归类（collab 的 From 也走它）；RPC -32010「存储故障：{原因}」+ 日志编号。只读降级、健康事件未做。
+- 停机：库线程退出前 `PRAGMA optimize` + `wal_checkpoint(TRUNCATE)`；serve 先停 Ticker、再 `Db::shutdown`（spawn_blocking），之后才放锁。M3c 计划 Task 11 ⑤「只能 drop」那段已过时。
+- `crew.delete`：删之前 `Store::snapshot_before_purge` → `backups/crewd-pre-delete-{机组}-{ts}.db`，拍不成不删。默认归档由 N1 做；合并时这一步移到永久删除（purge）上。
+- 旁路文件：`fsutil::atomic_write` / `rename_durably`（rename 后 fsync 目录）；登记表与 jev key 补上目录 fsync；导入时附件逐个 fsync。
+- 量级（合成 367066 条消息，约 145MiB，release）：quick_check 0.16s，integrity_check 0.29s，+外键 0.32s，在线备份 0.38s。
