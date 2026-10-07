@@ -184,6 +184,16 @@ pub struct Acked {
     pub gave_up: Vec<i64>,
 }
 
+/// [`Port::fail_inflight`] 提交之后的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reclaimed {
+    /// 还要再试的 (id, 新的 not_before)。
+    pub retried: Vec<(i64, Ms)>,
+    /// 到上限放弃了的行（结算之后的样子，含 session）：boot 据此告警，**不**回头去封顶的 [`Port::list_wakes`] 里找
+    /// （评审 Fix 1：一条崩了好几轮的唤醒 id 很旧，早就不在最新的 200 条里）。
+    pub gave_up: Vec<QueuedWake>,
+}
+
 /// 系统消息发到哪、@ 谁。群主由 Port 按 M3a 的规则解析（大厅 / 人类群的群主 = 机组机长）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Audience {
@@ -232,6 +242,10 @@ pub enum OrchestraEvent {
     WakeChanged { session: String },
 }
 
+/// [`Port::list_wakes`] 至多给几条（最新的在前）：DbPort 落在 collab `wakes::list(.., limit)`（`ORDER BY id DESC LIMIT`）。
+/// 它是给人看的近况（`wake.list`），**不能**拿来找「某几行」——要哪几行，让写它们的那个调用把它们带回来。
+pub const WAKE_LIST_LIMIT: usize = 200;
+
 pub trait Port: Send + Sync + 'static {
     // —— sessions 行
     fn session(&self, id: &str) -> impl Future<Output = Result<Option<SessionRow>>> + Send;
@@ -268,12 +282,14 @@ pub trait Port: Send + Sync + 'static {
     fn ack(&self, b: &Batch, a: Ack) -> impl Future<Output = Result<Acked>> + Send;
     /// 启动时：上次没确认的全部 inflight 按一次失败的尝试结算（C25；M3a `wakes::reset_inflight`）——次数不退回，
     /// 按库里的次数问 `crewd_wake::queue::after_restart(n, now)`：没到上限立刻回 pending（`not_before = now`），
-    /// 到了上限放弃（dropped，记 `error`）。一个事务；返回同 [`Port::ack`] 的 `Failed`（`retried` / `gave_up`）。
-    fn fail_inflight(&self, error: &str, now: Ms) -> impl Future<Output = Result<Acked>> + Send;
+    /// 到了上限放弃（dropped）。全部记 `error`（last_error）。一个事务；放弃的行原样带回（[`Reclaimed`]）。
+    fn fail_inflight(&self, error: &str, now: Ms)
+    -> impl Future<Output = Result<Reclaimed>> + Send;
     /// 有到期 pending 的 session：按其中最高优先级降序、再按最早一条的 id 升序。
     fn due_sessions(&self, now: Ms) -> impl Future<Output = Result<Vec<String>>> + Send;
     /// 晚于 `now` 的最早 `not_before`（已到期的不算，免得忙等）。
     fn next_not_before_after(&self, now: Ms) -> impl Future<Output = Result<Option<Ms>>> + Send;
+    /// 最新的至多 [`WAKE_LIST_LIMIT`] 条（任何状态），新的在前。
     fn list_wakes(
         &self,
         session: Option<&str>,

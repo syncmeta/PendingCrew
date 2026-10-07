@@ -84,6 +84,8 @@ pub struct MemState {
     pub advance_error: Option<String>,
     /// 设了就让 `put_latch` 出错（模拟熔断台账写不进去）。
     pub latch_error: Option<String>,
+    /// 唤醒 id → `last_error`（同 collab：失败 / 放弃 / 重启回收时记下原因）。
+    pub errors: BTreeMap<i64, String>,
     /// 设了就让 `patch_session` 出错（模拟写 session 行失败）：带着的那批照样要结算，不能留下没人拿着的 inflight 行。
     pub patch_error: Option<String>,
 }
@@ -496,7 +498,7 @@ impl Port for MemPort {
         }
     }
 
-    async fn fail_inflight(&self, _error: &str, now: Ms) -> Result<Acked> {
+    async fn fail_inflight(&self, error: &str, now: Ms) -> Result<Reclaimed> {
         let mut st = self.lock();
         let ids: Vec<i64> = st
             .wakes
@@ -504,26 +506,30 @@ impl Port for MemPort {
             .filter(|w| w.state == WakeState::Inflight)
             .map(|w| w.id)
             .collect();
-        // 同 collab `reset_inflight`：先全部核过（按真正要用的事件），再写；按库里的次数判。
+        // 同 collab `reset_inflight`（= `ack_failed`）：按库里的次数判，每行按真正要用的事件改；全部记 last_error。
         let mut wakes = st.wakes.clone();
-        let mut out = Acked::default();
-        for id in ids {
-            let attempts = wakes.iter().find(|w| w.id == id).expect("刚选的").attempts;
+        let mut out = Reclaimed::default();
+        for id in &ids {
+            let attempts = wakes.iter().find(|w| w.id == *id).expect("刚选的").attempts;
             match crewd_wake::queue::after_restart(attempts, now) {
                 Some(t) => {
                     let fail = lifecycle::WakeEvent::Fail {
                         retry_at: Some(t.0),
                     };
-                    apply_event(&mut wakes, &[id], fail)?;
-                    out.retried.push((id, t));
+                    apply_event(&mut wakes, &[*id], fail)?;
+                    out.retried.push((*id, t));
                 }
                 None => {
-                    apply_event(&mut wakes, &[id], lifecycle::WakeEvent::GiveUp)?;
-                    out.gave_up.push(id);
+                    apply_event(&mut wakes, &[*id], lifecycle::WakeEvent::GiveUp)?;
+                    let row = wakes.iter().find(|w| w.id == *id).expect("刚改的").clone();
+                    out.gave_up.push(row);
                 }
             }
         }
         st.wakes = wakes;
+        for id in ids {
+            st.errors.insert(id, error.to_string());
+        }
         Ok(out)
     }
 
@@ -550,14 +556,18 @@ impl Port for MemPort {
             .min())
     }
 
+    /// 同 DbPort（collab `wakes::list` = `ORDER BY id DESC LIMIT`）：最新的至多 `WAKE_LIST_LIMIT` 条、新的在前。
     async fn list_wakes(&self, session: Option<&str>) -> Result<Vec<QueuedWake>> {
-        Ok(self
+        let mut v: Vec<QueuedWake> = self
             .lock()
             .wakes
             .iter()
             .filter(|w| session.is_none_or(|s| w.session == s))
             .cloned()
-            .collect())
+            .collect();
+        v.sort_by_key(|w| std::cmp::Reverse(w.id));
+        v.truncate(WAKE_LIST_LIMIT);
+        Ok(v)
     }
 
     async fn latches(&self) -> Result<Vec<Latch>> {
@@ -1379,7 +1389,24 @@ mod self_tests {
         p.lock().wakes[1].attempts = queue::MAX_ATTEMPTS;
         let acked = p.fail_inflight("合成：重启", Ms(9)).await.unwrap();
         assert_eq!(acked.retried, [(a, Ms(9))]);
-        assert_eq!(acked.gave_up, [b]);
+        let gave_up: Vec<(i64, String, WakeState)> = acked
+            .gave_up
+            .iter()
+            .map(|w| (w.id, w.session.clone(), w.state))
+            .collect();
+        assert_eq!(
+            gave_up,
+            [(b, "s".to_string(), WakeState::Dropped)],
+            "放弃的行原样带回（含 session），不靠封顶的 list_wakes 再找"
+        );
+        let errors = p.lock().errors.clone();
+        assert_eq!(
+            errors.get(&a).map(String::as_str),
+            Some("合成：重启"),
+            "同 collab：记 last_error"
+        );
+        assert_eq!(errors.get(&b).map(String::as_str), Some("合成：重启"));
+        assert!(!errors.contains_key(&c));
         let w = p.lock().wakes.clone();
         assert_eq!(
             (w[0].state, w[0].attempts, w[0].not_before),
@@ -1826,6 +1853,34 @@ mod self_tests {
         let before = p.lock().wakes.clone();
         assert!(p.ack(&mixed, failed()).await.is_err());
         assert_eq!(p.lock().wakes, before);
+    }
+
+    /// 同 DbPort（collab `wakes::list` 是 `ORDER BY id DESC LIMIT`）：只给最新的 `WAKE_LIST_LIMIT` 条、新的在前。
+    /// 需要「某几行」的地方不能靠它找（boot 的放弃告警曾经这么做，评审 Fix 1）。
+    #[tokio::test]
+    async fn mem_port_list_wakes_is_capped_to_the_newest_rows_like_the_store() {
+        let p = MemPort::new();
+        for _ in 0..WAKE_LIST_LIMIT + 3 {
+            row_in(&p, WakeState::Pending);
+        }
+        let got: Vec<i64> = p
+            .list_wakes(None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+        let n = (WAKE_LIST_LIMIT + 3) as i64;
+        assert_eq!(got.len(), WAKE_LIST_LIMIT);
+        assert_eq!(
+            (got[0], got[WAKE_LIST_LIMIT - 1]),
+            (n, 4),
+            "新的在前，最旧的 3 条不在"
+        );
+        assert_eq!(
+            p.list_wakes(Some("s")).await.unwrap().len(),
+            WAKE_LIST_LIMIT
+        );
     }
 
     /// 人类群的成员 = 机长 + 显式成员；机长同时是显式成员时只算一次（同 M3a `channels::members`）。

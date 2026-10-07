@@ -30,11 +30,10 @@ impl<P: Port> Core<P> {
             );
         }
         if !acked.gave_up.is_empty() {
+            // 放弃的行由 `fail_inflight` 原样带回：不去封顶的 `list_wakes` 里找（评审 Fix 1）。
             let mut by_session: BTreeMap<String, Vec<QueuedWake>> = BTreeMap::new();
-            for w in self.port.list_wakes(None).await? {
-                if acked.gave_up.contains(&w.id) {
-                    by_session.entry(w.session.clone()).or_default().push(w);
-                }
+            for w in acked.gave_up {
+                by_session.entry(w.session.clone()).or_default().push(w);
             }
             for (session, rows) in by_session {
                 if let Err(e) = self.alert_gave_up(&session, &rows, RESTART_ERROR).await {
@@ -263,6 +262,18 @@ mod tests {
         rig.worker("c1", "w1");
         rig.port
             .enqueue(timer("w1", "t1", "合成：弄崩 crewd 的定时"))
+            .await
+            .unwrap();
+        // 评审 Fix 1：它之后又有一大堆更新的行（已结的），多过 `list_wakes` 的封顶——放弃告警不能靠那张封顶的表找它。
+        for i in 0..WAKE_LIST_LIMIT + 5 {
+            rig.port
+                .enqueue(timer("cap", &format!("新-{i}"), "合成：早就结了"))
+                .await
+                .unwrap();
+        }
+        let newer: Vec<i64> = rig.port.wakes_of("cap").iter().map(|w| w.id).collect();
+        rig.port
+            .settle(&newer, Settle::Delivered, T0)
             .await
             .unwrap();
         for life in 1..=queue::MAX_ATTEMPTS + 1 {
