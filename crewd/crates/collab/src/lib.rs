@@ -43,10 +43,11 @@ pub enum Change {
     CrewChanged {
         crew_id: String,
     },
+    /// 机组被永久删除（purge；客户端事件 `crew.purged`）。移除 = 归档，发的是 `CrewChanged`。
     CrewRemoved {
         crew_id: String,
     },
-    /// 群随机组删除被级联删掉了（客户端事件 `channel.removed`；删了的群读不到，`ChannelChanged` 发不出）。
+    /// 群随机组的永久删除被级联删掉了（客户端事件 `channel.purged`；删了的群读不到，`ChannelChanged` 发不出）。
     ChannelRemoved {
         channel_id: String,
     },

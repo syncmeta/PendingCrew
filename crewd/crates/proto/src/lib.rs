@@ -100,10 +100,12 @@ pub mod events {
     ];
     pub const MESSAGE_APPENDED: &str = "message.appended";
     pub const CHANNEL_CHANGED: &str = "channel.changed";
-    /// 群随机组删除被级联删掉（`{channelId}`）。
-    pub const CHANNEL_REMOVED: &str = "channel.removed";
+    /// 群随机组的永久删除（`crew.purge`）被级联删掉（`{channelId}`）。不叫 `*.removed`：
+    /// 「移除」（`crew.remove`）是可逆的归档，发的是 `channel.changed`（PM 2026-10-07）。
+    pub const CHANNEL_PURGED: &str = "channel.purged";
     pub const CREW_CHANGED: &str = "crew.changed";
-    pub const CREW_REMOVED: &str = "crew.removed";
+    /// 机组被永久删除（`crew.purge`，`{crewId}`）；移除（归档）发的是 `crew.changed`。
+    pub const CREW_PURGED: &str = "crew.purged";
     pub const BADGE_CHANGED: &str = "badge.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
     /// `SessionLive`，M3c 发。
@@ -248,9 +250,9 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
     vec![
         (events::MESSAGE_APPENDED, sub::<Message>(g)),
         (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
-        (events::CHANNEL_REMOVED, sub::<ChannelRef>(g)),
+        (events::CHANNEL_PURGED, sub::<ChannelRef>(g)),
         (events::CREW_CHANGED, sub::<Crew>(g)),
-        (events::CREW_REMOVED, sub::<CrewRef>(g)),
+        (events::CREW_PURGED, sub::<CrewRef>(g)),
         (events::BADGE_CHANGED, sub::<Badge>(g)),
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::SESSION_CHANGED, sub::<SessionLive>(g)),
@@ -1028,7 +1030,7 @@ mod tests {
         );
     }
 
-    /// `crew.removed` / `channel.removed` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
+    /// `crew.purged` / `channel.purged` / `events.lagged` / 订阅回执有了类型，线上形状与 Task 13 的手写 JSON 相同。
     #[test]
     fn small_event_and_ack_payloads_keep_their_wire_shape() {
         assert_eq!(

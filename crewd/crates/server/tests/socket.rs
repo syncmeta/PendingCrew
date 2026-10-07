@@ -889,7 +889,7 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         .await;
     assert_eq!(events_until_hello(&mut sub, 105).await, ["crew.changed"]);
 
-    // crew.removed 的负载有了类型（CrewRef），线上形状不变：{"crewId": …}。
+    // crew.purged 的负载有了类型（CrewRef）：{"crewId": …}。
     let made = c
         .call(
             8,
@@ -920,7 +920,7 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         .collect();
     changed.sort_by_key(|v| v.to_string());
     assert_eq!(changed, std::slice::from_ref(&made));
-    // 删机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
+    // 移除机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
     let archived = c.call(9, "crew.remove", json!({"crewId":made})).await;
     assert!(archived["archivedAt"].is_string());
     let evs = frames_until_hello(&mut sub, 107).await;
@@ -947,19 +947,20 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         ],
         "{evs:?}"
     );
-    // 永久删除（已归档的）：crew.removed + 每个被级联删掉的群一条 channel.removed。
+    // 永久删除（已移除的）：crew.purged + 每个被级联删掉的群一条 channel.purged。事件名不叫 *.removed：
+    // 「移除」（crew.remove）是可逆的归档，发的是 crew.changed（PM 2026-10-07 的叫法，免得同名不同义）。
     c.call(10, "crew.purge", json!({"crewId":made})).await;
     let evs = frames_until_hello(&mut sub, 108).await;
     let removed: Vec<&Value> = evs
         .iter()
-        .filter(|e| e.event == "crew.removed")
+        .filter(|e| e.event == "crew.purged")
         .map(|e| &e.data)
         .collect();
     assert_eq!(removed, [&json!({"crewId":made})], "{evs:?}");
-    // 它的群随之级联删掉：每个群一条 channel.removed（终审 I4），负载 {"channelId": …}。
+    // 它的群随之级联删掉：每个群一条 channel.purged（终审 I4），负载 {"channelId": …}。
     let channels_removed: Vec<&Value> = evs
         .iter()
-        .filter(|e| e.event == "channel.removed")
+        .filter(|e| e.event == "channel.purged")
         .map(|e| &e.data)
         .collect();
     assert_eq!(

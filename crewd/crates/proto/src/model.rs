@@ -465,14 +465,14 @@ pub struct RestartPrompt {
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
 
-/// `crew.removed` 的数据。
+/// `crew.purged` 的数据。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CrewRef {
     pub crew_id: String,
 }
 
-/// `channel.removed` 的数据：群随机组删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。
+/// `channel.purged` 的数据：群随机组的永久删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelRef {

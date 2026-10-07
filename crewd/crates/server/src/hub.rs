@@ -58,7 +58,7 @@ fn ev<T: Serialize>(name: &str, data: &T) -> crewd_collab::Result<Event> {
     })
 }
 
-/// 删掉了的东西读不到 = 不发（删除另有 `crew.removed` / `channel.removed`）。
+/// 删掉了的东西读不到 = 不发（永久删除另有 `crew.purged` / `channel.purged`）。
 fn gone<T>(r: crewd_collab::Result<T>) -> crewd_collab::Result<Option<T>> {
     match r {
         Ok(v) => Ok(Some(v)),
@@ -91,13 +91,13 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             .into_iter()
             .collect(),
         Change::CrewRemoved { crew_id } => vec![ev(
-            events::CREW_REMOVED,
+            events::CREW_PURGED,
             &CrewRef {
                 crew_id: crew_id.clone(),
             },
         )?],
         Change::ChannelRemoved { channel_id } => vec![ev(
-            events::CHANNEL_REMOVED,
+            events::CHANNEL_PURGED,
             &ChannelRef {
                 channel_id: channel_id.clone(),
             },

@@ -402,7 +402,7 @@
       "type": "object"
     },
     "ChannelRef": {
-      "description": "`channel.removed` 的数据：群随机组删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。",
+      "description": "`channel.purged` 的数据：群随机组的永久删除被级联删掉了（删了的群读不到，发不出 `channel.changed`）。",
       "properties": {
         "channelId": {
           "type": "string"
@@ -724,7 +724,7 @@
       ]
     },
     "CrewRef": {
-      "description": "`crew.removed` 的数据。",
+      "description": "`crew.purged` 的数据。",
       "properties": {
         "crewId": {
           "type": "string"
@@ -957,7 +957,7 @@
               "$ref": "#/$defs/ChannelRef"
             },
             "event": {
-              "const": "channel.removed",
+              "const": "channel.purged",
               "type": "string"
             }
           },
@@ -989,7 +989,7 @@
               "$ref": "#/$defs/CrewRef"
             },
             "event": {
-              "const": "crew.removed",
+              "const": "crew.purged",
               "type": "string"
             }
           },
@@ -2111,13 +2111,13 @@
     "channel.changed": {
       "$ref": "#/$defs/ChannelSummary"
     },
-    "channel.removed": {
+    "channel.purged": {
       "$ref": "#/$defs/ChannelRef"
     },
     "crew.changed": {
       "$ref": "#/$defs/Crew"
     },
-    "crew.removed": {
+    "crew.purged": {
       "$ref": "#/$defs/CrewRef"
     },
     "events.lagged": {
