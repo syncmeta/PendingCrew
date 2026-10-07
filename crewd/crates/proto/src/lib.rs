@@ -2,6 +2,8 @@
 //! 传输：每行一个 JSON（NDJSON）。客户端发 `Request`，服务端回 `ServerFrame`。
 mod model;
 mod params;
+/// 唤醒行的状态转移表（不是线协议的一部分；放这里是因为 collab 与 server 都依赖本 crate，C24）。
+pub mod wake_lifecycle;
 
 pub use model::*;
 pub use params::*;
