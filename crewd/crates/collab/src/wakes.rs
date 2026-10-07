@@ -57,6 +57,9 @@ pub enum Enqueued {
     New(i64),
     /// 同一 (session, kind, source) 已经在表里（不论状态）：不重复入队。
     Duplicate(i64),
+    /// 目标 session 的机组已归档（终审 I3）：不入队、不写行、不发变更。调用方当作无事发生——
+    /// 归档机组起不来 session；解档也不会把归档期间的叫醒冲出来（同 `crews::archive` 作废排着的唤醒）。
+    Skipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,14 +214,18 @@ fn rows(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Wa
 
 /// 入队。去重键 `(session, kind, source)` 跨所有状态（见 `source`）直到 `prune`；
 /// 命中已有行返回 `Duplicate`，**不**改它的优先级、`not_before`、`note`，也不发变更。
+/// 目标 session 的机组已归档 → `Skipped`（不写行、不发变更；不变式在 collab 这里，入队方不必各自判）。
 pub fn enqueue(tx: &mut Tx<'_>, r: WakeRequest) -> Result<Enqueued> {
     if r.source.trim().is_empty() {
         return Err(CollabError::Invalid(Refusal::new(Code::WakeSourceEmpty)));
     }
-    if crewd_store::sessions::get(tx.conn(), &r.session)?.is_none() {
+    let Some(target) = crewd_store::sessions::get(tx.conn(), &r.session)? else {
         return Err(CollabError::NotFound(
             Refusal::new(Code::SessionNotFound).arg("session", r.session.clone()),
         ));
+    };
+    if crate::crews::is_archived(tx.conn(), &target.crew_id)? {
+        return Ok(Enqueued::Skipped);
     }
     let n = tx.conn().execute(
         "INSERT INTO wakes(session_id,kind,source,origin,priority,not_before,note,created_at)
@@ -629,6 +636,68 @@ mod tests {
             )),
             CollabError::NotFound(_)
         ));
+    }
+
+    /// 终审 I3：归档机组的 session 不入队（归档机组起不来 session；排着的唤醒解档后会把陈旧的叫醒冲出来）。
+    /// 它在别的机组的 topic 里被 @ 了：入队 = Skipped、不写行、不发变更；解档之后队里也没有陈旧的唤醒。
+    #[test]
+    fn enqueue_skips_sessions_of_archived_crews_and_unarchive_flushes_nothing() {
+        use crate::Sender;
+        use crewd_proto::{ChannelKind, MemberRef, Mention, MentionKind};
+        let mut s = store();
+        let t = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "示例".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("cap-x")],
+                },
+            )
+        });
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-x"));
+        let m = ok(&mut s, |tx| {
+            crate::messages::post(
+                tx,
+                Sender::Session("w-a1".into()),
+                crate::messages::NewPost {
+                    channel_id: t.id.clone(),
+                    text: "叫一下归档机组的机长".into(),
+                    mentions: vec![Mention {
+                        kind: MentionKind::Session,
+                        target_id: Some("cap-x".into()),
+                    }],
+                    ..Default::default()
+                },
+            )
+        })
+        .message;
+        let (got, ch) = ok_at(&mut s, NOW, |tx| {
+            enqueue(
+                tx,
+                req("cap-x", &source::message(&m.id), WakePriority::Auto),
+            )
+        });
+        assert_eq!(got, Enqueued::Skipped);
+        assert!(ch.is_empty(), "跳过不发变更");
+        assert_eq!(
+            count(&s, "SELECT COUNT(*) FROM wakes WHERE session_id='cap-x'"),
+            0
+        );
+        // 活机组的 session 照常入队（跳过只看 session 自己的机组）。
+        assert!(matches!(
+            ok(&mut s, |tx| enqueue(
+                tx,
+                req("w-a2", &source::message(&m.id), WakePriority::Auto)
+            )),
+            Enqueued::New(_)
+        ));
+        ok(&mut s, |tx| crate::crews::unarchive(tx, "crew-x"));
+        assert!(due_for(s.conn(), "cap-x", NOW + MIN).unwrap().is_empty());
+        assert!(sessions_with_due(s.conn(), NOW + MIN).unwrap() == ["w-a2"]);
     }
 
     #[test]
