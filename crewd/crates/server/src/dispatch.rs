@@ -66,8 +66,20 @@ pub fn collab_err(e: CollabError) -> RpcError {
         CollabError::Store(crewd_store::StoreError::NotFound(m)) => {
             RpcError::new(RpcError::NOT_FOUND, m)
         }
-        CollabError::Store(e) => internal(e),
+        CollabError::Store(e) => match e.storage_kind() {
+            Some(kind) => storage(kind, e),
+            None => internal(e),
+        },
     }
+}
+
+/// 存储故障（S26）：给人一句原因 + 编号，原文（路径、SQL）只进日志。
+fn storage(kind: crewd_store::StorageKind, detail: impl std::fmt::Display) -> RpcError {
+    let e = internal(detail);
+    RpcError::new(
+        RpcError::STORAGE,
+        format!("存储故障：{}。{}", kind.describe(), e.message),
+    )
 }
 
 async fn write<T: Serialize + Send + 'static>(
@@ -405,6 +417,30 @@ mod tests {
                 "库错误原文不上线：{}",
                 r.message
             );
+            assert!(r.message.contains('#'), "带编号：{}", r.message);
+        }
+    }
+
+    /// S26：存储故障（磁盘满、I/O、损坏、只读、打不开）有自己的码和一句人话，不混进 -32603；
+    /// 原文（路径、SQL）照样只进日志。
+    #[test]
+    fn storage_failures_get_their_own_code_and_a_plain_reason() {
+        use crewd_store::StorageKind;
+        for (rc, kind) in [
+            (rusqlite::ffi::SQLITE_FULL, StorageKind::DiskFull),
+            (rusqlite::ffi::SQLITE_IOERR_WRITE, StorageKind::Io),
+            (rusqlite::ffi::SQLITE_CORRUPT, StorageKind::Corrupt),
+            (rusqlite::ffi::SQLITE_READONLY, StorageKind::ReadOnly),
+            (rusqlite::ffi::SQLITE_CANTOPEN, StorageKind::CantOpen),
+        ] {
+            let e = StoreError::from(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rc),
+                Some("/secret/path/crewd.db".into()),
+            ));
+            let r = collab_err(CollabError::Store(e));
+            assert_eq!(r.code, RpcError::STORAGE, "{kind:?}");
+            assert!(r.message.contains(kind.describe()), "{}", r.message);
+            assert!(!r.message.contains("secret"), "{}", r.message);
             assert!(r.message.contains('#'), "带编号：{}", r.message);
         }
     }
