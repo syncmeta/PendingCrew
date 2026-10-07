@@ -18,7 +18,7 @@ pub struct NewPost {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Posted {
     pub message: Message,
-    /// mentions 含 human、群没被注视、且不是根机组人类群：M3b 回执要明说「人类未注视此群」（§17）。
+    /// mentions 含 human、群没被注视、且不是人类群：M3b 回执要明说「人类未注视此群」（§17）。
     pub unwatched_human_mention: bool,
 }
 
@@ -119,16 +119,16 @@ pub(crate) fn post_internal(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Resu
     post_with(tx, sender, p, true)
 }
 
-/// 给人的待确认公告（问 / 重启询问）的唯一一处（R14）：发到 `root` 的根机组人类群（懒建 / 解档，同
+/// 给人的待确认公告（问 / 重启询问）的唯一一处（R14）：发到 `home`（总机组 / 一级机组）的人类群（懒建 / 解档，同
 /// `ensure_human_channel`），@human，带保留分类 `category`。同一个 Tx：后面任何一步失败，公告一起回滚。
 pub(crate) fn announce_to_human(
     tx: &mut Tx<'_>,
-    root: &str,
+    home: &str,
     sender: Sender,
     text: String,
     category: &str,
 ) -> Result<Posted> {
-    let ch = channels::ensure_human_channel(tx, root)?;
+    let ch = channels::ensure_human_channel(tx, home)?;
     post_internal(
         tx,
         sender,
@@ -178,16 +178,16 @@ fn push_mention(v: &mut Vec<Mention>, m: Mention) {
 
 fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Result<Posted> {
     let conn = tx.conn();
-    // R1：根机组人类群懒建；现在是根的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、已归档就解档、
-    // 钉机长游标、记 ChannelChanged），同一个 Tx。非根机组没有人类群，指路到它的根。
+    // R1：人类群懒建；现在是 home（总机组 / 一级机组）的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、
+    // 已归档就解档、钉机长游标、记 ChannelChanged），同一个 Tx。更深的机组没有人类群，指路到它的 home。
     if let Some(crew) = p.channel_id.strip_suffix("/human") {
         crews::get(conn, crew)?;
-        if crews::is_root(conn, crew)? {
+        if crews::is_home(conn, crew)? {
             channels::ensure_human_channel(tx, crew)?;
         } else {
             return Err(CollabError::Invalid(format!(
-                "{crew} 是非根机组，没有人类群，请发到 {}/human",
-                crews::root_of(conn, crew)?
+                "{crew} 不是一级机组，没有人类群，请发到 {}/human",
+                crews::home_of(conn, crew)?
             )));
         }
     }
@@ -218,7 +218,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
     if !p.attachments.is_empty() {
         return Err(CollabError::Invalid("附件上传尚未实现".into()));
     }
-    let is_root_human = ch.kind == ChannelKind::Human;
+    let is_human_channel = ch.kind == ChannelKind::Human;
     // 发言者
     let (sender_kind, sender_session_id, sender_name) = match &sender {
         Sender::Human => (SenderKind::Human, None, None),
@@ -226,15 +226,16 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         Sender::Session(id) => {
             let me = MemberRef::session(id.clone());
             if !internal && !channels::is_member(conn, &ch.id, &me)? {
-                if is_root_human {
-                    // 只有这棵树里的 session 能经发言入群；别的机组走 System（C7）。
-                    if crews::root_of(conn, &sessions::crew_of(conn, id)?)? != ch.crew_id {
+                if is_human_channel {
+                    // 只有 home 是这个机组的 session 能经发言入群（跨机组说话走 dm）。
+                    let home = crews::home_of(conn, &sessions::crew_of(conn, id)?)?;
+                    if home != ch.crew_id {
                         return Err(CollabError::Forbidden(format!(
-                            "{id} 不属于 {} 这棵机组树，不能进它的人类群",
-                            ch.crew_id
+                            "{id} 的人类群是 {home}/human，不能进 {}",
+                            ch.id
                         )));
                     }
-                    // 往根机组人类群发言 = 显式入群（R14：与 add_members 同一个 join；人回话时它才在群里）。
+                    // 往自己 home 的人类群发言 = 显式入群（R14：与 add_members 同一个 join；人回话时它才在群里）。
                     channels::join(tx, &ch.id, &me)?;
                     tx.note(Change::ChannelChanged {
                         channel_id: ch.id.clone(),
@@ -356,7 +357,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         .iter()
         .any(|m| m.kind == MentionKind::Human);
     let unwatched_human_mention =
-        human_mention && !is_root_human && !channels::is_watched(conn, &ch.id)?;
+        human_mention && !is_human_channel && !channels::is_watched(conn, &ch.id)?;
     tx.note(Change::MessageAppended {
         channel_id: ch.id.clone(),
         seq: message.seq,
@@ -390,6 +391,40 @@ mod tests {
     }
     fn session(id: &str) -> Sender {
         Sender::Session(id.into())
+    }
+
+    #[test]
+    fn sessions_join_only_their_home_human_channel_and_the_org_root_has_its_own() {
+        let mut s = store();
+        for c in ["crew-a", "crew-x"] {
+            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
+        }
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-b1"),
+                post_text("crew-a/human", "子机组要人拍板"),
+            )
+        });
+        assert!(matches!(
+            err(&mut s, |tx| post(
+                tx,
+                session("cap-a"),
+                post_text("chief/human", "越级")
+            )),
+            CollabError::Forbidden(_)
+        ));
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                Sender::Human,
+                post_text("chief/human", "管理群里人说话"),
+            )
+        });
+        let e = err(&mut s, |tx| {
+            post(tx, Sender::Human, post_text("crew-b/human", "发错地方"))
+        });
+        assert!(e.to_string().contains("crew-a/human"), "{e}");
     }
 
     #[test]
@@ -438,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn only_members_may_post_except_into_the_root_human_channel() {
+    fn only_members_may_post_except_into_the_home_human_channel() {
         let mut s = store();
         assert!(matches!(
             err(&mut s, |tx| post(
@@ -476,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn posting_into_a_not_yet_created_root_human_channel_creates_it_and_joins() {
+    fn posting_into_a_not_yet_created_home_human_channel_creates_it_and_joins() {
         // R1：不预先建群。
         let mut s = store();
         assert!(!crate::channels::human_channel_exists(s.conn(), "crew-a").unwrap());
@@ -498,7 +533,7 @@ mod tests {
             Some(0),
             "入群点钉在发言之前的末尾（自己的发言不是自己的未读）"
         );
-        // 非根机组没有人类群：拒，且不留下群。
+        // 非 home 机组没有人类群：拒，且不留下群。
         assert!(
             crate::run(&mut s, NOW, |tx| post(
                 tx,
@@ -739,7 +774,7 @@ mod tests {
                 },
             )
         });
-        assert!(!p.unwatched_human_mention, "根机组人类群本来就是找人的地方");
+        assert!(!p.unwatched_human_mention, "人类群本来就是找人的地方");
     }
 
     #[test]
@@ -822,7 +857,7 @@ mod tests {
     // ---- review fixes ----
 
     #[test]
-    fn an_archived_human_channel_of_a_current_root_is_reopened_by_posting() {
+    fn an_archived_human_channel_of_a_current_home_is_reopened_by_posting() {
         let mut s = store();
         ok(&mut s, |tx| {
             crate::channels::ensure_human_channel(tx, "crew-x")
@@ -834,15 +869,15 @@ mod tests {
                 .archived_at
                 .is_some()
         );
-        // 现根被删：crew-x 重新成了根，它的人类群要一并解档（与 release 同一个做法）。
+        // 现父被删：crew-x 重新成了 home，它的人类群要一并解档（与 release 同一个做法）。
         ok(&mut s, |tx| crate::crews::delete(tx, "crew-a"));
-        assert!(crate::crews::is_root(s.conn(), "crew-x").unwrap());
+        assert!(crate::crews::is_home(s.conn(), "crew-x").unwrap());
         assert!(
             crate::channels::get(s.conn(), "crew-x/human")
                 .unwrap()
                 .archived_at
                 .is_none(),
-            "删父后孤儿根的人类群解档"
+            "删父后又成 home 的人类群解档"
         );
         ok(&mut s, |tx| {
             post(tx, Sender::Human, post_text("crew-x/human", "人说话"))
@@ -853,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn posting_reopens_an_archived_human_channel_of_a_root_even_if_nothing_else_did() {
+    fn posting_reopens_an_archived_human_channel_of_a_home_even_if_nothing_else_did() {
         let mut s = store();
         ok(&mut s, |tx| {
             crate::channels::ensure_human_channel(tx, "crew-x")
@@ -877,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn a_non_root_crews_human_channel_is_refused_with_a_pointer_to_the_root() {
+    fn a_non_home_crews_human_channel_is_refused_with_a_pointer_to_the_home() {
         let mut s = store();
         let e = err(&mut s, |tx| {
             post(tx, Sender::Human, post_text("crew-b/human", "发错地方"))
@@ -1011,9 +1046,9 @@ mod tests {
     }
 
     #[test]
-    fn a_session_may_only_join_its_own_trees_root_human_channel() {
+    fn a_session_may_only_join_its_own_homes_human_channel() {
         let mut s = store();
-        // 别棵树的 session：拒，且没入群。
+        // home 不是 crew-a 的 session：拒，且没入群。
         assert!(matches!(
             err(&mut s, |tx| post(
                 tx,
@@ -1026,7 +1061,7 @@ mod tests {
             !crate::channels::is_member(s.conn(), "crew-a/human", &MemberRef::session("cap-x"))
                 .unwrap_or(false)
         );
-        // 子机组的 session（根是 crew-a）可以。
+        // 子机组的 session（home 是 crew-a）可以。
         ok(&mut s, |tx| {
             post(
                 tx,
@@ -1034,7 +1069,7 @@ mod tests {
                 post_text("crew-a/human", "子机组要人拍板"),
             )
         });
-        // 跨机组走 System（C7）。
+        // System 不过成员检查（session 跨机组说话走 dm）。
         ok(&mut s, |tx| {
             post(tx, Sender::System, post_text("crew-a/human", "来自 crew-x"))
         });
@@ -1224,7 +1259,7 @@ mod tests {
             why.contains("cap-a") && why.contains("w-a1") && why.contains("w-a2"),
             "错误里点名机长并列出成员：{why}"
         );
-        // 大厅、根机组人类群里机长是隐式成员：照常解析。
+        // 大厅、home 人类群里机长是隐式成员：照常解析。
         for ch in ["crew-a/lobby", "crew-a/human"] {
             let p = ok(&mut s, |tx| {
                 post(

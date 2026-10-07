@@ -322,8 +322,9 @@ fn rpc_drives_every_client_method() {
             Ok,
         ),
         ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
-        // v4 起导入的顶层机组挂在总机组下；人类群用总机组自己的（管理用人类群，N1-R2）——
-        // 它在 Task 2 的过渡形状与 Task 3 的 home 规则下都存在。
+        // v4 起导入的顶层机组挂在总机组下 = 一级机组，人类群是它自己的（home_of，N1-R2）。
+        ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        // 总机组自己的管理用人类群：同一条懒建规则（list 建出来，update 才找得到）。
         ("channel.list", r#"{"crewId":"pendingcrew-chief"}"#, Ok),
         (
             "channel.create",
@@ -332,17 +333,22 @@ fn rpc_drives_every_client_method() {
         ),
         (
             "channel.update",
-            r#"{"channelId":"pendingcrew-chief/human","purpose":"找人"}"#,
+            r#"{"channelId":"local-aaaa/human","purpose":"找人"}"#,
+            Ok,
+        ),
+        (
+            "channel.update",
+            r#"{"channelId":"pendingcrew-chief/human","purpose":"管理"}"#,
             Ok,
         ),
         (
             "channel.addMembers",
-            r#"{"channelId":"pendingcrew-chief/human","members":[{"kind":"session","id":"worker-2222bbbb"}]}"#,
+            r#"{"channelId":"local-aaaa/human","members":[{"kind":"session","id":"worker-2222bbbb"}]}"#,
             Ok,
         ),
         (
             "channel.removeMember",
-            r#"{"channelId":"pendingcrew-chief/human","member":{"kind":"session","id":"worker-2222bbbb"}}"#,
+            r#"{"channelId":"local-aaaa/human","member":{"kind":"session","id":"worker-2222bbbb"}}"#,
             Ok,
         ),
         (
@@ -397,6 +403,7 @@ fn rpc_drives_every_client_method() {
     ];
     let mut covered: Vec<&str> = cases.iter().map(|c| c.0).collect();
     covered.sort();
+    covered.dedup();
     let mut all = crewd_proto::methods::ALL.to_vec();
     all.sort();
     assert_eq!(covered, all, "加了新方法就在这里加一条");

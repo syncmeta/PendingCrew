@@ -97,7 +97,7 @@ fn explicit(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
 }
 
 /// **有效**成员（冻结语义，C6）：大厅 = 人 + 本机组全部 session（隐式，不写 channel_members）；
-/// 人类群 = 人 + 根机组此刻的机长（隐式）+ 显式行；topic / dm = 显式行。M3b 的注入面、M3c 的唤醒规划都只认它。
+/// 人类群 = 人 + home（总机组 / 一级机组）此刻的机长（隐式）+ 显式行；topic / dm = 显式行。M3b 的注入面、M3c 的唤醒规划都只认它。
 pub fn members(conn: &Connection, id: &str) -> Result<Vec<MemberRef>> {
     let ch = get(conn, id)?;
     let mut out = match ch.kind {
@@ -178,7 +178,7 @@ fn check_member_exists(conn: &Connection, m: &MemberRef) -> Result<()> {
 /// 显式入群的唯一一处（R14）：写成员行；入群的 session 的游标钉到群的当前末尾（裁定 9）。
 /// 已经在群里的人再被加一次什么都不动（不跳过他没读的）；退群后重新入群 = 新的入群点，重新钉。
 /// 人类的游标**不动**：它的意思是「人看过了」，拉人进群不等于看过，钉了会抹掉没看的 @人 红标（spec §17）。
-/// `create` / `add_members` 用它；Task 8 的「session 在根机组人类群发言即显式入群」也必须用它。
+/// `create` / `add_members` 用它；Task 8 的「session 在 home 人类群发言即显式入群」也必须用它。
 pub(crate) fn join(tx: &mut Tx<'_>, id: &str, m: &MemberRef) -> Result<()> {
     let (k, mid) = m.to_row();
     let joined = tx.conn().execute(
@@ -446,38 +446,39 @@ pub fn watch(tx: &mut Tx<'_>, id: &str, on: bool) -> Result<ChannelSummary> {
     summary(tx.conn(), id)
 }
 
-/// 这个根机组的人类群已经建过了吗（含已归档的）？「人类群存在与否」的唯一一处判定（R14）：
+/// 这个机组的人类群已经建过了吗（含已归档的）？「人类群存在与否」的唯一一处判定（R14）：
 /// `crews::{point_captain_at, release}` 都用它决定「只对已有的人类群动手，没有的仍然懒建」。
-pub(crate) fn human_channel_exists(conn: &Connection, root: &str) -> Result<bool> {
+pub(crate) fn human_channel_exists(conn: &Connection, home: &str) -> Result<bool> {
     Ok(conn.query_row(
         "SELECT COUNT(*) FROM channels WHERE id=?1",
-        [human_id(root)],
+        [human_id(home)],
         |r| r.get::<_, i64>(0),
     )? > 0)
 }
 
-/// 内建的总机组（chief）也是根机组，同样有人类群，不特殊处理（测试 `the_builtin_chief_crew_...`）。
-/// 根机组人类群（懒建，spec §22.2；R1：`messages::post` 往还没建的人类群发言时也调这一个函数，不另写第二份）。
-/// 已归档（根曾被收编、后又独立）→ 解档。新建或解档时，当前机长的游标钉到群末尾
+/// home（总机组 / 一级机组）的人类群（懒建，spec §22.2；R1：`messages::post` 往还没建的人类群发言时也调
+/// 这一个函数，不另写第二份）。总机组的是管理用人类群，同一条规则（N1-R2）。
+/// 已归档（曾被收编到二级、后又回到一级）→ 解档。新建或解档时，当前机长的游标钉到群末尾
 /// （与 `crews::point_captain_at` 一致：机长不会因为群刚出现 / 刚解档就凭空多出一屏历史未读，裁定 9）。
-pub fn ensure_human_channel(tx: &mut Tx<'_>, root: &str) -> Result<Channel> {
-    crews::get(tx.conn(), root)?;
-    if !crews::is_root(tx.conn(), root)? {
+pub fn ensure_human_channel(tx: &mut Tx<'_>, home: &str) -> Result<Channel> {
+    crews::get(tx.conn(), home)?;
+    if !crews::is_home(tx.conn(), home)? {
         return Err(CollabError::Invalid(format!(
-            "{root} 不是根机组，没有人类群"
+            "{home} 没有人类群，人类群在 {}/human",
+            crews::home_of(tx.conn(), home)?
         )));
     }
-    let id = human_id(root);
+    let id = human_id(home);
     let created = tx.conn().execute(
         "INSERT OR IGNORE INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES(?1,?2,'human','','system',?3)",
-        params![id, root, tx.now_ts()],
+        params![id, home, tx.now_ts()],
     )? > 0;
     let unarchived = tx.conn().execute(
         "UPDATE channels SET archived_at=NULL WHERE id=?1 AND archived_at IS NOT NULL",
         [&id],
     )? > 0;
     if created || unarchived {
-        if let Some(cap) = crews::captain_of(tx.conn(), root)? {
+        if let Some(cap) = crews::captain_of(tx.conn(), home)? {
             cursors::pin_to_end(tx, &cap, &id)?;
         }
         tx.note(Change::ChannelChanged {
@@ -487,7 +488,7 @@ pub fn ensure_human_channel(tx: &mut Tx<'_>, root: &str) -> Result<Channel> {
     get(tx.conn(), &id)
 }
 
-/// 根机组被收编：它的人类群归档（消息保留，spec §22.2）。
+/// home 机组被收编到二级：它的人类群归档（消息保留，spec §22.2）。
 pub(crate) fn archive_human_of(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
     let id = human_id(crew);
     let at = tx.now_ts();
@@ -501,11 +502,11 @@ pub(crate) fn archive_human_of(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
     Ok(())
 }
 
-/// 一个 session 「在」的群：自己机组的大厅 + （是根机组机长时）人类群 + 显式加入且未归档的群。
+/// 一个 session 「在」的群：自己机组的大厅 + （是 home 机长时）人类群 + 显式加入且未归档的群。
 pub fn channels_of_session(conn: &Connection, session: &str) -> Result<Vec<Channel>> {
     let s = sessions::get(conn, session)?;
     let mut out = vec![get(conn, &lobby_id(&s.crew_id))?];
-    if crews::is_root(conn, &s.crew_id)?
+    if crews::is_home(conn, &s.crew_id)?
         && crews::captain_of(conn, &s.crew_id)?.as_deref() == Some(session)
     {
         // 人类群是懒建的：还没有 = NotFound = 跳过；别的错误照实往上抛。
@@ -544,11 +545,11 @@ pub fn summary(conn: &Connection, id: &str) -> Result<ChannelSummary> {
 }
 
 /// `channel.list(crewId)`：归属该机组的群 ∪ 有成员 session 属于该机组的群（§17「同时显示在每个成员所在机组下」）。
-/// 根机组会顺手懒建人类群。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
+/// home（总机组 / 一级机组）会顺手懒建人类群。顺序：本机组自己的大厅、自己的人类群，其余（含别的机组的人类群）按
 /// 大厅 / 人类群 / 其他、建群时间。
 pub fn list_for_crew(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<ChannelSummary>> {
     crews::get(tx.conn(), crew)?;
-    if crews::is_root(tx.conn(), crew)? {
+    if crews::is_home(tx.conn(), crew)? {
         ensure_human_channel(tx, crew)?;
     }
     let mut st = tx.conn().prepare(
@@ -1051,13 +1052,13 @@ mod tests {
         assert_eq!(
             members(s_.conn(), &h.id).unwrap(),
             [MemberRef::Human, s("cap-a")],
-            "人类群：人 + 根机组机长（隐式）"
+            "人类群：人 + home 机长（隐式）"
         );
         assert_eq!(h.id, "crew-a/human");
         assert_eq!(h.kind, ChannelKind::Human);
         assert!(
             is_member(s_.conn(), &h.id, &s("cap-a")).unwrap(),
-            "根机组机长隐式在人类群"
+            "home 机长隐式在人类群"
         );
         assert!(!is_member(s_.conn(), &h.id, &s("w-a1")).unwrap());
         assert!(
@@ -1065,7 +1066,7 @@ mod tests {
                 err(&mut s_, |tx| ensure_human_channel(tx, "crew-b")),
                 CollabError::Invalid(_)
             ),
-            "只有根机组有人类群"
+            "只有 home（总机组 / 一级机组）有人类群"
         );
         assert_eq!(
             get(s_.conn(), lobby).unwrap().owner,
@@ -1111,7 +1112,7 @@ mod tests {
         assert_eq!(
             ids("crew-b", &mut s_),
             ["crew-b/lobby"],
-            "非根机组没有人类群"
+            "非 home 机组没有人类群"
         );
     }
 
@@ -1308,7 +1309,7 @@ mod tests {
                 .unwrap()
                 .archived_at
                 .is_none(),
-            "又成了根 → 解档"
+            "又成了 home → 解档"
         );
     }
 
@@ -1819,10 +1820,10 @@ mod tests {
     }
 
     #[test]
-    fn crew_detail_collects_root_children_channels_and_sessions() {
+    fn crew_detail_collects_home_children_channels_and_sessions() {
         let mut s_ = store();
         let d = ok(&mut s_, |tx| crate::crews::detail(tx, "crew-b"));
-        assert_eq!(d.root_id, "crew-a");
+        assert_eq!(d.home_id, "crew-a");
         assert_eq!(d.sessions.len(), 2);
         assert_eq!(d.channels.len(), 1);
         let d = ok(&mut s_, |tx| crate::crews::detail(tx, "crew-a"));

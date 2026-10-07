@@ -184,7 +184,7 @@ params!(/// 全可选：`null` 当 `{}`。
 params!(SessionGetParams { session_id: String });
 params!(/// 全可选：`null` 当 `{}`。
     #[schemars(extend("type" = ["object", "null"]))]
-    AskListParams { #[serde(default)] root_crew_id: Option<String> });
+    AskListParams { #[serde(default)] home_crew_id: Option<String> });
 params!(AskAnswerParams {
     crew_id: String,
     ask: String,

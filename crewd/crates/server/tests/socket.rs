@@ -380,7 +380,7 @@ async fn asks_and_restart_round_trip() {
         .await;
     assert_eq!(a["state"], "answered");
     assert_eq!(
-        c.call(3, "ask.list", json!({"rootCrewId":"a"})).await,
+        c.call(3, "ask.list", json!({"homeCrewId":"a"})).await,
         json!([])
     );
     assert_eq!(
@@ -490,7 +490,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
         )
         .await;
     let detail = c.call(6, "crew.get", json!({"crewId":made["id"]})).await;
-    assert_eq!(detail["rootId"], "a");
+    assert_eq!(detail["homeId"], "a");
     c.call(
         7,
         "crew.release",

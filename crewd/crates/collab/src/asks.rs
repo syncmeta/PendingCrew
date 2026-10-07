@@ -167,9 +167,9 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
         b.open_ask(&actor, now, &question, default, None)
             .map(|a| a.value)
     })?;
-    let root = crews::root_of(tx.conn(), &crew.id)?;
+    let home = crews::home_of(tx.conn(), &crew.id)?;
     let posted =
-        messages::announce_to_human(tx, &root, Sender::Session(asker.into()), question, "ask")?;
+        messages::announce_to_human(tx, &home, Sender::Session(asker.into()), question, "ask")?;
     tx.conn().execute(
         "INSERT INTO ask_meta(crew_id,ask,resume_note,message_id) VALUES(?1,?2,?3,?4)",
         params![crew.id, h.to_string(), o.resume_note, posted.message.id],
@@ -187,7 +187,7 @@ fn available(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// 直接开的问被答 / 按默认办了：叫醒能接着干的第一位（§22.4）。依次：提问者 → 问所在机组此刻的机长（转达）
-/// → 根机组此刻的机长。三位都不能接（例如根机组机长自己提问、之后恢复失败）→ 不叫任何人：
+/// → home（总机组 / 一级机组）此刻的机长。三位都不能接（例如 home 机长自己提问、之后恢复失败）→ 不叫任何人：
 /// 答复照样记在账上，人在 `ask.list` 里看得到，下次有人接手时读得到。
 fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     let Some(asker) = &a.asked_by else {
@@ -196,7 +196,7 @@ fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     let conn = tx.conn();
     let mut candidates = vec![asker.clone()];
     candidates.extend(crews::captain_of(conn, crew)?);
-    candidates.extend(crews::captain_of(conn, &crews::root_of(conn, crew)?)?);
+    candidates.extend(crews::captain_of(conn, &crews::home_of(conn, crew)?)?);
     let mut target = None;
     for c in candidates {
         if available(conn, &c)? {
@@ -303,16 +303,16 @@ pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// 人的待确认清单（`ask.list`）：`root` 给了就只看这棵树里的机组。等得久的在前。
-pub fn waits(conn: &Connection, now_ms: i64, root: Option<&str>) -> Result<Vec<HumanWait>> {
+/// 人的待确认清单（`ask.list`）：`home` 给了就只看 home 是它的机组（它的人类群里的问）。等得久的在前。
+pub fn waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<HumanWait>> {
     let mut st = conn.prepare("SELECT crew_id FROM work_books ORDER BY crew_id")?;
     let crews_with_books: Vec<String> = st
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     let mut out = Vec::new();
     for crew in crews_with_books {
-        if let Some(r) = root
-            && crews::root_of(conn, &crew)? != r
+        if let Some(h) = home
+            && crews::home_of(conn, &crew)? != h
         {
             continue;
         }
@@ -348,6 +348,32 @@ mod tests {
     use crate::testkit::{MIN, NOW, count, err, ok, ok_at, store};
     use crewd_proto::{Mention, MentionKind};
 
+    #[test]
+    fn a_second_level_ask_goes_to_its_first_level_human_channel_not_the_org_root() {
+        let mut s = store();
+        for c in ["crew-a", "crew-x"] {
+            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
+        }
+        let a = ok(&mut s, |tx| {
+            open(
+                tx,
+                "w-b1",
+                OpenAsk {
+                    question: "用哪个分支？".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
+        assert_eq!(m.channel_id, "crew-a/human");
+        assert!(!crate::channels::human_channel_exists(s.conn(), "chief").unwrap());
+        assert_eq!(waits(s.conn(), NOW, Some("crew-a")).unwrap().len(), 1);
+        assert!(
+            waits(s.conn(), NOW, Some("chief")).unwrap().is_empty(),
+            "按 home 过滤"
+        );
+    }
+
     fn q(text: &str) -> OpenAsk {
         OpenAsk {
             question: text.into(),
@@ -356,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn open_issues_h_numbers_from_the_crew_book_and_posts_to_the_root_human_channel() {
+    fn open_issues_h_numbers_from_the_crew_book_and_posts_to_the_home_human_channel() {
         let mut s = store();
         let a = ok(&mut s, |tx| {
             open(
@@ -374,7 +400,7 @@ mod tests {
         let m = crate::messages::get(s.conn(), a.message_id.as_deref().unwrap()).unwrap();
         assert_eq!(
             m.channel_id, "crew-a/human",
-            "公告发到 crew-b 的根（crew-a）的人类群"
+            "公告发到 crew-b 的 home（crew-a）的人类群"
         );
         assert_eq!(
             m.mentions,
@@ -757,9 +783,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unavailable_captain_asker_falls_back_to_the_root_captain() {
+    fn an_unavailable_captain_asker_falls_back_to_the_home_captain() {
         let mut s = store();
-        // cap-b 在 crew-b 提问后恢复失败：crew-b 的机长就是它自己 → 叫根机组 crew-a 的机长。
+        // cap-b 在 crew-b 提问后恢复失败：crew-b 的机长就是它自己 → 叫 home crew-a 的机长。
         let a = ok(&mut s, |tx| open(tx, "cap-b", q("要不要上线？")));
         ok(&mut s, |tx| {
             crate::sessions::set_resume_failed(tx, "cap-b", true)
@@ -777,9 +803,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unavailable_root_captain_asker_wakes_nobody() {
+    fn an_unavailable_home_captain_asker_wakes_nobody() {
         let mut s = store();
-        // cap-a 是根机组的机长：本机组机长与根机组机长都是它自己 → 没人可转达（答复仍在 ask.list 里可见）。
+        // cap-a 是 home 的机长：本机组机长与 home 机长都是它自己 → 没人可转达（答复仍在 ask.list 里可见）。
         let a = ok(&mut s, |tx| open(tx, "cap-a", q("要不要回滚？")));
         ok(&mut s, |tx| {
             crate::sessions::set_resume_failed(tx, "cap-a", true)

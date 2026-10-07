@@ -75,17 +75,17 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
         params![tx.now_ts(), serde_json::to_string(&ids)?],
     )?;
     let id = tx.conn().last_insert_rowid();
-    // 每个涉及的根机组人类群各一条，只列那棵树里的 session。
+    // 每个涉及的 home（总机组 / 一级机组）人类群各一条，只列 home 是它的 session。
     let f = prompts::render_file(settings::locale(tx.conn())?);
-    let mut by_root: Vec<(String, Vec<String>)> = Vec::new();
+    let mut by_home: Vec<(String, Vec<String>)> = Vec::new();
     for sid in &ids {
-        let root = crews::root_of(tx.conn(), &sessions::crew_of(tx.conn(), sid)?)?;
-        match by_root.iter_mut().find(|(r, _)| *r == root) {
+        let home = crews::home_of(tx.conn(), &sessions::crew_of(tx.conn(), sid)?)?;
+        match by_home.iter_mut().find(|(h, _)| *h == home) {
             Some((_, v)) => v.push(sid.clone()),
-            None => by_root.push((root, vec![sid.clone()])),
+            None => by_home.push((home, vec![sid.clone()])),
         }
     }
-    for (root, sids) in by_root {
+    for (home, sids) in by_home {
         let mut text = prompts::fill(
             f.get("notice.restart"),
             &[("count", &sids.len().to_string())],
@@ -101,7 +101,7 @@ pub fn open(tx: &mut Tx<'_>, session_ids: Vec<String>) -> Result<Option<RestartP
                 )],
             ));
         }
-        messages::announce_to_human(tx, &root, Sender::System, text, "restart")?;
+        messages::announce_to_human(tx, &home, Sender::System, text, "restart")?;
     }
     tx.note(Change::RestartChanged { id });
     Ok(Some(get(tx.conn(), id)?))
@@ -142,7 +142,23 @@ mod tests {
     use crate::testkit::{NOW, err, ok, ok_at, store};
 
     #[test]
-    fn open_announces_per_root_and_nothing_to_resume_means_no_prompt() {
+    fn a_restart_prompt_is_announced_in_each_first_level_human_channel() {
+        let mut s = store();
+        for c in ["crew-a", "crew-x"] {
+            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
+        }
+        ok(&mut s, |tx| open(tx, vec!["w-b1".into(), "cap-x".into()]));
+        let n = |ch: &str| {
+            crate::messages::list(s.conn(), ch, None, None, 10)
+                .map(|v| v.len())
+                .unwrap_or(0)
+        };
+        assert_eq!((n("crew-a/human"), n("crew-x/human")), (1, 1));
+        assert!(!crate::channels::human_channel_exists(s.conn(), "chief").unwrap());
+    }
+
+    #[test]
+    fn open_announces_per_home_and_nothing_to_resume_means_no_prompt() {
         let mut s = store();
         assert_eq!(ok(&mut s, |tx| open(tx, vec![])), None);
         let p = ok(&mut s, |tx| {
@@ -154,7 +170,7 @@ mod tests {
         .unwrap();
         assert_eq!(p.session_ids, ["w-a1", "w-b1", "cap-x"], "去重、保持顺序");
         let a = crate::messages::list(s.conn(), "crew-a/human", None, None, 10).unwrap();
-        assert_eq!(a.len(), 1, "crew-a 与 crew-b 同根，一条公告");
+        assert_eq!(a.len(), 1, "crew-a 与 crew-b 同一个 home，一条公告");
         assert!(a[0].text.contains("名字-w-a1") && a[0].text.contains("名字-w-b1"));
         assert_eq!(
             crate::messages::list(s.conn(), "crew-x/human", None, None, 10)

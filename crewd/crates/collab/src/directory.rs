@@ -4,7 +4,7 @@ use crewd_proto::{DirectoryKind, DirectoryRow};
 use rusqlite::Connection;
 
 /// 组织路径：从根到 `crew` 的**上级**，" / " 分隔。每层只取最早建的那个父（`crews::parents` 的第一个）。
-/// 多父机组里这条链与 `root_of`（在全部祖先根里取最早建的）不保证走到同一个根——两者是各自独立的口径。
+/// 多父机组里这条链与 `home_of`（在全部一级祖先里取最早建的）不保证经过同一个一级机组——两者是各自独立的口径。
 fn org_path(conn: &Connection, crew: &str) -> Result<String> {
     let mut titles = Vec::new();
     let mut seen = std::collections::BTreeSet::new();

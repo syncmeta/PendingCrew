@@ -321,8 +321,8 @@ pub struct Badge {
 #[serde(rename_all = "camelCase")]
 pub struct CrewDetail {
     pub crew: Crew,
-    /// 归属的根机组（§13 Q1：多父归最早的根）。
-    pub root_id: String,
+    /// 这个机组的人类群在 `<homeId>/human`；总机组 / 一级机组 = 自己（多父归最早建的一级祖先，§13 Q1 同口径）。
+    pub home_id: String,
     pub children: Vec<String>,
     pub channels: Vec<ChannelSummary>,
     pub sessions: Vec<Session>,

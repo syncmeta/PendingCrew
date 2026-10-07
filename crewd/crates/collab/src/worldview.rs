@@ -35,7 +35,7 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
         st.query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?
     };
-    let root_human = crewd_store::channels::human_id(&crews::root_of(conn, &crew.id)?);
+    let root_human = crewd_store::channels::human_id(&crews::home_of(conn, &crew.id)?);
     if !watching.contains(&root_human) {
         watching.push(root_human);
     }

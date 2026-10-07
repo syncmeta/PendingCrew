@@ -302,7 +302,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: AskListParams = parse_params_or_default(p)?;
             let now = crewd_store::now_ms();
             read(state, move |c| {
-                asks::waits(c, now, p.root_crew_id.as_deref())
+                asks::waits(c, now, p.home_crew_id.as_deref())
             })
             .await
         }

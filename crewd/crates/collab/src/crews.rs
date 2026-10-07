@@ -58,10 +58,6 @@ pub fn children(conn: &Connection, id: &str) -> Result<Vec<String>> {
     Ok(crewd_store::crews::children_of(conn, id)?)
 }
 
-pub fn is_root(conn: &Connection, id: &str) -> Result<bool> {
-    Ok(parents(conn, id)?.is_empty())
-}
-
 fn descendants(conn: &Connection, id: &str) -> Result<BTreeSet<String>> {
     let mut out = BTreeSet::new();
     let mut queue = VecDeque::from([id.to_string()]);
@@ -83,27 +79,50 @@ fn created_at(conn: &Connection, id: &str) -> Result<String> {
     )
 }
 
-/// 没有父边的祖先里 created_at 最早的（§13 Q1）。自己就是根 → 自己。脏数据成环时有 visited 守卫、退回自己。
-pub fn root_of(conn: &Connection, id: &str) -> Result<String> {
+pub fn org_root(conn: &Connection) -> Result<Option<String>> {
+    Ok(crewd_store::crews::org_root(conn)?)
+}
+
+/// 一次直查（preflight D9）：`home_of` / `is_home` 在循环里调它，不走 `get`（那会把全部机组连同父子边读一遍）。
+pub fn is_org_root(conn: &Connection, id: &str) -> Result<bool> {
+    conn.query_row("SELECT org_root FROM crews WHERE id=?1", [id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| not_found(id))
+}
+
+/// 有自己人类群的机组（H2）：总机组；一级机组（父边恰好是 [总机组]）。没有父边的非根机组只会出现在
+/// 旧形状 / 脏数据里，当作自己的 home（全函数，同旧 `root_of` 遇环退回自己）。
+pub fn is_home(conn: &Connection, id: &str) -> Result<bool> {
+    if is_org_root(conn, id)? {
+        return Ok(true);
+    }
+    let ps = parents(conn, id)?;
+    Ok(ps.is_empty() || (ps.len() == 1 && is_org_root(conn, &ps[0])?))
+}
+
+/// 人类群归属（N1 裁定 5）：自己是 home → 自己；否则往上走，遇到的 home 里 created_at 最早的（再按 id）。
+pub fn home_of(conn: &Connection, id: &str) -> Result<String> {
     get(conn, id)?;
+    if is_home(conn, id)? {
+        return Ok(id.to_string());
+    }
     let mut seen = BTreeSet::new();
-    let mut queue = VecDeque::from([id.to_string()]);
-    let mut roots: Vec<(String, String)> = Vec::new();
+    let mut queue = VecDeque::from(parents(conn, id)?);
+    let mut homes: Vec<(String, String)> = Vec::new();
     while let Some(c) = queue.pop_front() {
-        if !seen.insert(c.clone()) {
+        if !seen.insert(c.clone()) || is_org_root(conn, &c)? {
             continue;
         }
-        let ps = parents(conn, &c)?;
-        if ps.is_empty() {
-            roots.push((created_at(conn, &c)?, c));
+        if is_home(conn, &c)? {
+            homes.push((created_at(conn, &c)?, c));
         } else {
-            queue.extend(ps);
+            queue.extend(parents(conn, &c)?);
         }
     }
-    Ok(roots
+    Ok(homes
         .into_iter()
         .min()
-        .map(|(_, r)| r)
+        .map(|(_, h)| h)
         .unwrap_or_else(|| id.to_string()))
 }
 
@@ -278,12 +297,13 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
     if ps.iter().any(|p| p == parent) {
         return get(tx.conn(), crew);
     }
-    let was_root = ps.is_empty();
+    let was_home = is_home(tx.conn(), crew)?;
     tx.conn().execute(
         "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
         params![crew, parent],
     )?;
-    if was_root {
+    // 不再是 home（总机组 / 一级机组）：它的人类群归档（消息保留）。
+    if was_home && !is_home(tx.conn(), crew)? {
         crate::channels::archive_human_of(tx, crew)?;
     }
     put_last(tx, crew, Some(parent))?;
@@ -319,11 +339,11 @@ pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Res
         "DELETE FROM crew_parents WHERE crew_id=?1 AND parent_id=?2",
         params![crew, from],
     )?;
-    if to.is_none() && is_root(tx.conn(), crew)? {
+    if to.is_none() && is_home(tx.conn(), crew)? {
         put_last(tx, crew, None)?;
     }
-    // 又成了根：原来就有的人类群解档（没有的仍然懒建）。
-    if is_root(tx.conn(), crew)? && crate::channels::human_channel_exists(tx.conn(), crew)? {
+    // 又成了 home：原来就有的人类群解档（没有的仍然懒建）。
+    if is_home(tx.conn(), crew)? && crate::channels::human_channel_exists(tx.conn(), crew)? {
         crate::channels::ensure_human_channel(tx, crew)?;
     }
     tx.note(Change::CrewChanged {
@@ -370,7 +390,7 @@ pub fn delete(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     }
     for k in &orphans {
         put_last(tx, k, None)?;
-        // 又成了根：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）。
+        // 又成了 home：原来就有的人类群解档（与 release 同一个做法；没有的仍然懒建）。
         if crate::channels::human_channel_exists(tx.conn(), k)? {
             crate::channels::ensure_human_channel(tx, k)?;
         }
@@ -420,7 +440,7 @@ pub fn set_captain(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
 }
 
 /// 「成为机长」的公共一处（`set_captain` 与 `sessions::register(Role::Captain)` 共用）：机长指针指向 `session`，
-/// 大厅发 ChannelChanged（群主随机长算）；根机组且人类群已存在时，把新机长的游标钉到人类群末尾（不凭空多出一屏历史未读，裁定 9）。
+/// 大厅发 ChannelChanged（群主随机长算）；home（总机组 / 一级机组）且人类群已存在时，把新机长的游标钉到人类群末尾（不凭空多出一屏历史未读，裁定 9）。
 /// 调用方负责 session 行的 role 与分机号。
 pub(crate) fn point_captain_at(tx: &mut Tx<'_>, crew: &str, session: &str) -> Result<()> {
     tx.conn().execute(
@@ -431,7 +451,7 @@ pub(crate) fn point_captain_at(tx: &mut Tx<'_>, crew: &str, session: &str) -> Re
     tx.note(Change::ChannelChanged {
         channel_id: crewd_store::channels::lobby_id(crew),
     });
-    if is_root(tx.conn(), crew)? {
+    if is_home(tx.conn(), crew)? {
         let human = crewd_store::channels::human_id(crew);
         let exists = crate::channels::human_channel_exists(tx.conn(), crew)?;
         if exists {
@@ -445,7 +465,7 @@ pub(crate) fn point_captain_at(tx: &mut Tx<'_>, crew: &str, session: &str) -> Re
 pub fn detail(tx: &mut Tx<'_>, id: &str) -> Result<crewd_proto::CrewDetail> {
     let crew = get(tx.conn(), id)?;
     Ok(crewd_proto::CrewDetail {
-        root_id: root_of(tx.conn(), id)?,
+        home_id: home_of(tx.conn(), id)?,
         children: children(tx.conn(), id)?,
         channels: crate::channels::list_for_crew(tx, id)?,
         sessions: crate::sessions::list(tx.conn(), Some(id))?,
@@ -453,7 +473,7 @@ pub fn detail(tx: &mut Tx<'_>, id: &str) -> Result<crewd_proto::CrewDetail> {
     })
 }
 
-/// 同级：`parent` 的直系子（按它们在这个父下的边次序）；`None` = 顶层的可见根机组（没有父边、非内建；
+/// 同级：`parent` 的直系子（按它们在这个父下的边次序）；`None` = 顶层的可见 home 机组（一级机组或没有父边的、非内建；
 /// 内建机组不参与排序，客户端给的顶层名单里也没有它），按 `crews.position`。
 fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
     match parent {
@@ -461,7 +481,7 @@ fn siblings(conn: &Connection, parent: Option<&str>) -> Result<Vec<String>> {
         None => {
             let mut out = Vec::new();
             for c in list(conn)? {
-                if !c.org_root && is_root(conn, &c.id)? {
+                if !c.org_root && is_home(conn, &c.id)? {
                     out.push(c.id);
                 }
             }
@@ -561,14 +581,51 @@ mod tests {
         parents(s.conn(), crew).unwrap()
     }
 
+    fn single_root(s: &crewd_store::Store) {
+        for c in ["crew-a", "crew-x"] {
+            crewd_store::crews::set_parents(s.conn(), c, &["chief".to_string()]).unwrap();
+        }
+    }
+
     #[test]
-    fn root_of_is_the_earliest_root_among_ancestors() {
+    fn home_is_the_first_level_ancestor_and_the_org_root_is_its_own_home() {
+        let s = store();
+        single_root(&s);
+        assert_eq!(home_of(s.conn(), "chief").unwrap(), "chief");
+        assert_eq!(home_of(s.conn(), "crew-a").unwrap(), "crew-a");
+        assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-a");
+        assert!(is_home(s.conn(), "chief").unwrap());
+        assert!(is_home(s.conn(), "crew-a").unwrap());
+        assert!(!is_home(s.conn(), "crew-b").unwrap());
+        assert!(
+            is_org_root(s.conn(), "chief").unwrap() && !is_org_root(s.conn(), "crew-a").unwrap()
+        );
+        // 多父：二级机组同时挂在两个一级机组下 → created_at 最早的一级祖先（§13 Q1 同口径）。
+        crewd_store::crews::set_parents(
+            s.conn(),
+            "crew-b",
+            &["crew-x".to_string(), "crew-a".to_string()],
+        )
+        .unwrap();
+        assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-a");
+    }
+
+    #[test]
+    fn crew_detail_names_the_home_not_the_org_root() {
         let mut s = store();
-        assert_eq!(root_of(s.conn(), "crew-b").unwrap(), "crew-a");
-        assert_eq!(root_of(s.conn(), "crew-a").unwrap(), "crew-a");
+        single_root(&s);
+        let d = ok(&mut s, |tx| detail(tx, "crew-b"));
+        assert_eq!(d.home_id, "crew-a");
+    }
+
+    #[test]
+    fn home_of_is_the_earliest_home_among_ancestors() {
+        let mut s = store();
+        assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-a");
+        assert_eq!(home_of(s.conn(), "crew-a").unwrap(), "crew-a");
         ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
         assert_eq!(
-            root_of(s.conn(), "crew-b").unwrap(),
+            home_of(s.conn(), "crew-b").unwrap(),
             "crew-a",
             "crew-a 建得更早"
         );
@@ -578,7 +635,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert_eq!(root_of(s.conn(), "crew-b").unwrap(), "crew-x");
+        assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-x");
     }
 
     #[test]
@@ -633,7 +690,7 @@ mod tests {
         ));
         ok(&mut s, |tx| release(tx, "crew-b", "crew-a", None));
         assert!(edges(&s, "crew-b").is_empty());
-        assert_eq!(root_of(s.conn(), "crew-b").unwrap(), "crew-b");
+        assert_eq!(home_of(s.conn(), "crew-b").unwrap(), "crew-b");
     }
 
     #[test]
@@ -1052,7 +1109,7 @@ mod tests {
             None => list(s.conn())
                 .unwrap()
                 .into_iter()
-                .filter(|c| !c.org_root && is_root(s.conn(), &c.id).unwrap())
+                .filter(|c| !c.org_root && is_home(s.conn(), &c.id).unwrap())
                 .map(|c| c.id)
                 .collect(),
         }
