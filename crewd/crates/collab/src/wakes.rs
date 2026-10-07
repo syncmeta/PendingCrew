@@ -567,6 +567,16 @@ pub fn list(conn: &Connection, session: Option<&str>, limit: u32) -> Result<Vec<
     }
 }
 
+/// 同一个来源（`kind` + `source`，如一条消息的 `msg:<id>`）给每个 session 入队的唤醒（任何状态），按入队先后。
+/// M3c 的 `message.receipts` 读它（S54）：这条消息叫醒了谁、送到没有。
+pub fn for_source(conn: &Connection, kind: WakeKind, source: &str) -> Result<Vec<WakeRow>> {
+    rows(
+        conn,
+        &format!("SELECT {COLS} FROM wakes WHERE kind=?1 AND source=?2 ORDER BY id"),
+        params![kind.as_str(), source],
+    )
+}
+
 /// 熔断台账（§22.7 Q5：「来源 → 目标」与「目标 session」两级；绝不按全机总量）。
 /// 只有人能从客户端解（M3c 的 `admission.recover`）。
 pub mod latches {
@@ -734,6 +744,28 @@ mod tests {
         let row = &list(s.conn(), Some("w-a1"), 10).unwrap()[0];
         assert_eq!(row.origin.as_deref(), Some("w-a2"));
         assert_eq!(row.not_before_ms, NOW, "None = 现在");
+    }
+
+    #[test]
+    fn for_source_lists_every_session_one_source_woke_in_order() {
+        let mut s = store();
+        for (session, source) in [("w-a1", "msg:m1"), ("w-a2", "msg:m1"), ("w-a1", "msg:m2")] {
+            ok_at(&mut s, NOW, |tx| {
+                enqueue(tx, req(session, source, WakePriority::Auto))
+            });
+        }
+        let got: Vec<String> = for_source(s.conn(), WakeKind::Message, "msg:m1")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.session)
+            .collect();
+        assert_eq!(got, ["w-a1", "w-a2"]);
+        assert!(
+            for_source(s.conn(), WakeKind::Timer, "msg:m1")
+                .unwrap()
+                .is_empty(),
+            "种类也要对上"
+        );
     }
 
     #[test]

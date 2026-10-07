@@ -55,6 +55,11 @@ pub fn edge_id(origin: &str, target: &str) -> String {
     format!("{origin}{EDGE_SEP}{target}")
 }
 
+/// [`edge_id`] 的反方向：(来源, 目标)；不是边的 id = None。
+pub fn edge_parts(id: &str) -> Option<(&str, &str)> {
+    id.split_once(EDGE_SEP)
+}
+
 fn is_other_session(origin: &str, target: &str) -> bool {
     origin != HUMAN && origin != SYSTEM && origin != target
 }
@@ -222,7 +227,7 @@ impl LoopBreaker {
                 }
             }
             LatchScope::Edge => {
-                if let Some((origin, target)) = id.split_once(EDGE_SEP)
+                if let Some((origin, target)) = edge_parts(id)
                     && let Some(s) = self.streak.get_mut(target)
                 {
                     s.retain(|(_, o)| o != origin);
@@ -639,5 +644,7 @@ mod tests {
         // 与 crewd-collab 台账（wakes::latches::Scope::Edge）的键一致：from→to（U+2192）。
         // 本 crate 不依赖 collab，格式靠这条钉住。
         assert_eq!(edge_id("w-a1", "w-b1"), "w-a1\u{2192}w-b1");
+        assert_eq!(edge_parts(&edge_id("w-a1", "w-b1")), Some(("w-a1", "w-b1")));
+        assert_eq!(edge_parts("w-a1"), None);
     }
 }

@@ -23,10 +23,13 @@ use std::time::Duration;
 
 use crewd_wake::LatchScope;
 use crewd_wake::breaker::{LOOP_LIMITS, LoopLimits};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use self::clock::Clock;
-use self::core::{Cmd, CollabFact, ControlError, Core, Input, Origin, Reply, StartSession};
+use self::core::{
+    Cmd, CollabFact, ControlError, Core, Input, Origin, Reply, SettingsUpdate, SettingsView,
+    StartSession,
+};
 use self::exec::Executors;
 use self::hooks::Hooks;
 use self::port::{LiveView, Port, SessionRow};
@@ -97,6 +100,7 @@ impl OrchestraConfig {
 #[derive(Clone)]
 pub struct Handle {
     tx: mpsc::UnboundedSender<Input>,
+    exit: watch::Receiver<bool>,
 }
 
 /// 跑着的 actor 任务（C25：不能悄悄留下一个死句柄）。serve 必须等它：[`Actor::finished`] 回 `Err` = actor panic 了，
@@ -147,8 +151,9 @@ pub async fn spawn<P: Port>(
     let (tx, rx) = mpsc::unbounded_channel();
     let mut core = Core::new(port, execs, hooks, clock, cfg, tx.clone()).await?;
     core.boot().await?;
+    let exit = core.exit.subscribe();
     let task = tokio::spawn(run(core, rx));
-    Ok((Handle { tx }, Actor { task }))
+    Ok((Handle { tx, exit }, Actor { task }))
 }
 
 /// actor 循环：输入一条条处理；没输入时睡到下一次定时拍（`next_deadline`：最早的未来 not_before、退避 / 错开的
@@ -281,17 +286,38 @@ impl Handle {
         self.call(|reply| Cmd::Wakes { session, reply }).await
     }
 
-    /// 人解熔断（只给客户端 RPC 用，agent 没有入口）。
-    pub async fn recover(&self, scope: LatchScope, id: String) -> Result<(), ControlError> {
+    /// 人解熔断（只给客户端 RPC 用，agent 没有入口）。回 false = 本来就没有这条熔断。
+    pub async fn recover(&self, scope: LatchScope, id: String) -> Result<bool, ControlError> {
         self.call(|reply| Cmd::Recover { scope, id, reply }).await
     }
 
-    pub async fn max_live(&self) -> Result<Option<usize>, ControlError> {
-        self.call(|reply| Cmd::MaxLive { reply }).await
+    /// 此刻的环路熔断（`loop.list`）。
+    pub async fn latches(&self) -> Result<Vec<crewd_wake::Latch>, ControlError> {
+        self.call(|reply| Cmd::Latches { reply }).await
     }
 
-    pub async fn set_max_live(&self, max: Option<usize>) -> Result<(), ControlError> {
-        self.call(|reply| Cmd::SetMaxLive { max, reply }).await
+    /// 设置（`settings.get`）。
+    pub async fn settings(&self) -> Result<SettingsView, ControlError> {
+        self.call(|reply| Cmd::Settings { reply }).await
+    }
+
+    /// 改设置（`settings.set`）：回改完的设置。
+    pub async fn set_settings(&self, update: SettingsUpdate) -> Result<SettingsView, ControlError> {
+        self.call(|reply| Cmd::SetSettings { update, reply }).await
+    }
+
+    /// 一条消息叫醒了谁、走到哪了（`message.receipts`）。
+    pub async fn receipts(
+        &self,
+        message_id: &str,
+    ) -> Result<Vec<deliver::ReceiptRow>, ControlError> {
+        let message_id = message_id.to_string();
+        self.call(|reply| Cmd::Receipts { message_id, reply }).await
+    }
+
+    /// 休眠回执发出去之后读到 true（T11 的 serve 据此走停机次序退出）。
+    pub fn exit_requested(&self) -> watch::Receiver<bool> {
+        self.exit.clone()
     }
 
     /// 有了产出（测试用；生产路径是 M3a `sessions::note_progress` → `Change::Progress` → `forward_collab`，
@@ -511,6 +537,8 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
+        let exit = h.exit_requested();
+        assert!(!*exit.borrow(), "休眠回执之前 serve 不退");
         // 有期限地等：休眠一直不回报（变异 m4：期限永远不到）要红，不能把测试挂住。
         let r = tokio::time::timeout(Duration::from_secs(10), h.hibernate(Some(Duration::ZERO)))
             .await
@@ -525,6 +553,7 @@ mod tests {
                 completed: true,
             }
         );
+        assert!(*exit.borrow(), "回执发出去了：serve 据此收尾退出（T11）");
         assert_eq!(exec.lock().interrupts, [w1]);
         let done = tokio::time::timeout(Duration::from_secs(10), actor.finished())
             .await

@@ -380,6 +380,17 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        // M3c：编排的方法（T10b 补充 §2.7）。编排没起来（库里的 `serve()` 不带执行器，C1）= -32009 `orchestra.not_running`，
+        // 不是 -32601。
+        m if crate::orchestra::rpc::handles(m) => match state.orchestra.get() {
+            Some(h) => crate::orchestra::rpc::call(h, state, m, p).await,
+            None => Err(refused(
+                RpcError::CONFLICT,
+                crewd_collab::refusal::Refusal::new(
+                    crewd_collab::refusal::Code::OrchestraNotRunning,
+                ),
+            )),
+        },
         other => Err(RpcError::new(
             RpcError::METHOD_NOT_FOUND,
             format!("未知方法: {other}"),

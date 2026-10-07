@@ -255,6 +255,96 @@
       ],
       "type": "object"
     },
+    "BlockerCodeView": {
+      "description": "pending 的唤醒此刻为什么还没出去（crewd-wake `explain::Blocker::code`，词逐字相同）。",
+      "oneOf": [
+        {
+          "const": "shutting_down",
+          "description": "crewd 在停机 / 休眠。",
+          "type": "string"
+        },
+        {
+          "const": "crew_removed",
+          "description": "机组已被移除：不拉起，下一次尝试把它作废。",
+          "type": "string"
+        },
+        {
+          "const": "starting",
+          "description": "目标正在拉起。",
+          "type": "string"
+        },
+        {
+          "const": "not_due",
+          "description": "还没到点（`untilMs`）。",
+          "type": "string"
+        },
+        {
+          "const": "held",
+          "description": "环路熔断挡着（`detail` = 哪一条；`loop.recover` 解）。",
+          "type": "string"
+        },
+        {
+          "const": "behind_higher_priority",
+          "description": "有更高一档的到期唤醒先走。",
+          "type": "string"
+        },
+        {
+          "const": "inflight",
+          "description": "上一笔投递还没回执。",
+          "type": "string"
+        },
+        {
+          "const": "working",
+          "description": "目标在干活（停下时投）。",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "目标卡在待决策框上。",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "description": "目标正在被停掉。",
+          "type": "string"
+        },
+        {
+          "const": "quota",
+          "description": "额度用尽、额度唤醒还没到点。",
+          "type": "string"
+        },
+        {
+          "const": "auth_required",
+          "description": "目标要人登录。",
+          "type": "string"
+        },
+        {
+          "const": "launch_failed",
+          "description": "目标起来了但不能用。",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_restart_answer",
+          "description": "在等人答重启询问。",
+          "type": "string"
+        },
+        {
+          "const": "quota_not_reset",
+          "description": "额度还没恢复：自动唤醒不拉起它。",
+          "type": "string"
+        },
+        {
+          "const": "at_cap",
+          "description": "可选并发上限满了（`detail` = 上限）。",
+          "type": "string"
+        },
+        {
+          "const": "stagger",
+          "description": "错开：这一刻之后再拉起（`untilMs`）。",
+          "type": "string"
+        }
+      ]
+    },
     "Channel": {
       "properties": {
         "archivedAt": {
@@ -781,6 +871,22 @@
       ],
       "type": "object"
     },
+    "CrewSetCaptainParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
     "CrewUpdateParams": {
       "additionalProperties": false,
       "properties": {
@@ -1078,6 +1184,22 @@
             "data"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/WakeChanged"
+            },
+            "event": {
+              "const": "wake.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1127,6 +1249,63 @@
         "server",
         "version",
         "apiVersion"
+      ],
+      "type": "object"
+    },
+    "HibernateParams": {
+      "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`（= 用设置里的期限）。",
+      "properties": {
+        "deadlineSecs": {
+          "default": null,
+          "description": "在干活的最多等几秒（不给 = 设置里的，没设 = 120；0 = 立即打断）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "HibernateResult": {
+      "description": "`crewd.hibernate` 的回执（之后 crewd 自己退出）。",
+      "properties": {
+        "clean": {
+          "description": "在安全点停下的（空闲的、期限内做完这一轮的、正在起被叫停的）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "completed": {
+          "description": "全部退出了。",
+          "type": "boolean"
+        },
+        "failed": {
+          "description": "到期限之后的宽限也没退出的。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "interrupted": {
+          "description": "到了期限还在干活、被打断之后停下的（恢复后要重跑被打断的命令）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "clean",
+        "interrupted",
+        "failed",
+        "completed"
       ],
       "type": "object"
     },
@@ -1184,12 +1363,103 @@
       ],
       "type": "object"
     },
+    "LatchScopeView": {
+      "oneOf": [
+        {
+          "const": "edge",
+          "description": "「来源 → 目标」这一条（`from` 必填）。",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "description": "目标的非 session 来源（系统、它自己的定时）。",
+          "type": "string"
+        }
+      ]
+    },
+    "LatchView": {
+      "description": "`loop.list` 的一行：一条环路熔断。",
+      "properties": {
+        "atMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "from": {
+          "description": "`edge` 的来源（session id，或 `system`）；`session` 级的没有。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "诊断短码（如 `no-progress:9/10min`）。",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/LatchScopeView"
+        },
+        "targetSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "targetSessionId",
+        "reason",
+        "atMs"
+      ],
+      "type": "object"
+    },
     "Ledger": {
       "enum": [
         "agent",
         "human"
       ],
       "type": "string"
+    },
+    "LocaleView": {
+      "description": "设置的语言。",
+      "enum": [
+        "zh",
+        "en"
+      ],
+      "type": "string"
+    },
+    "LoopRecoverParams": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "default": null,
+          "description": "`edge` 的来源（session id，或 `system`）；`edge` 不给 = -32602 `loop.edge_needs_from`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/LatchScopeView"
+        },
+        "targetSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "targetSessionId"
+      ],
+      "type": "object"
+    },
+    "LoopRecovered": {
+      "description": "`loop.recover` 的结果：`false` = 本来就没有这条熔断（不算错）。",
+      "properties": {
+        "recovered": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "recovered"
+      ],
+      "type": "object"
     },
     "MemberParam": {
       "description": "客户端给的成员 / 群主。线上形状同 `MemberRef`。",
@@ -1453,6 +1723,18 @@
       ],
       "type": "object"
     },
+    "MessageReceiptsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId"
+      ],
+      "type": "object"
+    },
     "MessageSearchParams": {
       "additionalProperties": false,
       "properties": {
@@ -1530,6 +1812,64 @@
         "seq"
       ],
       "type": "object"
+    },
+    "Receipt": {
+      "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
+      "properties": {
+        "attempts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ReceiptStateView"
+        },
+        "working": {
+          "description": "送到之后它此刻在干活（「处理中」）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sessionId",
+        "state",
+        "working",
+        "attempts"
+      ],
+      "type": "object"
+    },
+    "ReceiptStateView": {
+      "description": "这条消息对一个 session 的唤醒走到哪了。",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "排着（没轮到、被挡着）。",
+          "type": "string"
+        },
+        {
+          "const": "delivering",
+          "description": "正在送（已拿走，等回执）。",
+          "type": "string"
+        },
+        {
+          "const": "delivered",
+          "description": "送进了它的会话（或它已经从别处读到了）。",
+          "type": "string"
+        },
+        {
+          "const": "dropped",
+          "description": "不再送（人停了它、它的机组被移除、送了几次都没送到）。",
+          "type": "string"
+        }
+      ]
     },
     "Request": {
       "properties": {
@@ -1876,6 +2216,18 @@
       ],
       "type": "object"
     },
+    "SessionIdParams": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
     "SessionListParams": {
       "additionalProperties": false,
       "description": "全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（已移除的也列）；不给 = 全部，但已移除机组的\nsession 只在 `includeRemoved: true` 时列（同 `crew.list`）。",
@@ -1946,6 +2298,139 @@
       ],
       "type": "object"
     },
+    "SessionStartParams": {
+      "additionalProperties": false,
+      "properties": {
+        "brief": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "effort": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executor": {
+          "description": "`claude` / `codex` / `acp:<id>`（M3c 里只有 claude 起得来）。",
+          "type": "string"
+        },
+        "isolation": {
+          "description": "必填（控制者裁定 C8）：true = 在机组工作目录里新建 git worktree 并在那里起；false = 机组共享目录。",
+          "type": "boolean"
+        },
+        "model": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/Role"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "role",
+        "executor",
+        "brief",
+        "isolation"
+      ],
+      "type": "object"
+    },
+    "SessionStopParams": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Settings": {
+      "description": "`settings.get` / `settings.set` 的结果：crewd 的全部设置。",
+      "properties": {
+        "hibernateDeadlineSecs": {
+          "description": "休眠时等在干活的 session 到安全点的期限（秒；没有 = 默认 120；0 = 立即）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "locale": {
+          "$ref": "#/$defs/LocaleView",
+          "description": "给 agent 与群看的文字的语言（拒绝文字的语言由客户端按码自己定）。"
+        },
+        "maxLiveSessions": {
+          "description": "可选并发上限（§22.7 Q5：没有 = 不设；只挡自动拉起）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "locale"
+      ],
+      "type": "object"
+    },
+    "SettingsPatch": {
+      "additionalProperties": false,
+      "description": "`settings.set`：键不在 = 不改；`null` = 清掉（回到默认）；值 = 设成它。",
+      "properties": {
+        "hibernateDeadlineSecs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "locale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocaleView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`zh` / `en`；别的词 = -32602 `settings.bad_locale`（语言不能清掉）。"
+        },
+        "maxLiveSessions": {
+          "description": "≥ 1；0 = -32602 `settings.max_live_min`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SubscribeParams": {
       "additionalProperties": false,
       "properties": {
@@ -1984,6 +2469,53 @@
       },
       "required": [
         "topics"
+      ],
+      "type": "object"
+    },
+    "TargetView": {
+      "description": "`wake.list` 里一个目标的近况（R9）。",
+      "properties": {
+        "deliveryId": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "inflightWakeIds": {
+          "description": "在途那一批拿着的唤醒（在跑的投递，或正在起的那批）。",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "lastOutcome": {
+          "description": "最近一次投递回执（`delivered` / `undelivered` / `abandoned` …）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "writesQueued": {
+          "description": "写进它的会话之前还排着几项（投递 + nudge）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessionId",
+        "running",
+        "inflightWakeIds",
+        "writesQueued"
       ],
       "type": "object"
     },
@@ -2116,6 +2648,215 @@
         "still_wanted"
       ],
       "type": "string"
+    },
+    "WakeBlocker": {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BlockerCodeView"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "untilMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
+    "WakeChanged": {
+      "description": "`wake.changed` 的数据：这一次改到的唤醒行与它们的消息（S54）。客户端据此刷新 `wake.list` / `message.receipts`。",
+      "properties": {
+        "messageIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "wakeIds": {
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessionId",
+        "wakeIds",
+        "messageIds"
+      ],
+      "type": "object"
+    },
+    "WakeKindView": {
+      "oneOf": [
+        {
+          "enum": [
+            "message",
+            "timer",
+            "ask_answer",
+            "restart",
+            "system",
+            "checkpoint",
+            "stop_check"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WakeListParams": {
+      "additionalProperties": false,
+      "description": "全可选：`null` 当 `{}`（= 全部 session）。",
+      "properties": {
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "WakeListResult": {
+      "properties": {
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/TargetView"
+          },
+          "type": "array"
+        },
+        "wakes": {
+          "description": "最新的至多 200 条，新的在前。",
+          "items": {
+            "$ref": "#/$defs/WakeView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "wakes",
+        "targets"
+      ],
+      "type": "object"
+    },
+    "WakePriorityView": {
+      "oneOf": [
+        {
+          "enum": [
+            "auto",
+            "system",
+            "human"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WakeStateView": {
+      "oneOf": [
+        {
+          "enum": [
+            "pending",
+            "inflight",
+            "delivered",
+            "dropped"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WakeView": {
+      "description": "排障用的一行唤醒（`wake.list`）。`kind` / `priority` / `state` 的词同 `wakes` 表。",
+      "properties": {
+        "attempts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "blocker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WakeBlocker"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "只有 pending 的才有：此刻为什么还没出去（没有 = 下一次投递就带上它）。"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/WakeKindView"
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messageId": {
+          "description": "消息类唤醒的消息 id。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notBefore": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/WakePriorityView"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/WakeStateView"
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "kind",
+        "source",
+        "origin",
+        "priority",
+        "notBefore",
+        "state",
+        "attempts"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2150,6 +2891,9 @@
     },
     "session.changed": {
       "$ref": "#/$defs/SessionLive"
+    },
+    "wake.changed": {
+      "$ref": "#/$defs/WakeChanged"
     }
   },
   "frames": {
@@ -2325,12 +3069,28 @@
         "$ref": "#/$defs/Crew"
       }
     },
+    "crew.setCaptain": {
+      "params": {
+        "$ref": "#/$defs/CrewSetCaptainParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
     "crew.update": {
       "params": {
         "$ref": "#/$defs/CrewUpdateParams"
       },
       "result": {
         "$ref": "#/$defs/Crew"
+      }
+    },
+    "crewd.hibernate": {
+      "params": {
+        "$ref": "#/$defs/HibernateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HibernateResult"
       }
     },
     "directory.list": {
@@ -2352,6 +3112,25 @@
         "$ref": "#/$defs/Subscribed"
       }
     },
+    "loop.list": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/LatchView"
+        },
+        "type": "array"
+      }
+    },
+    "loop.recover": {
+      "params": {
+        "$ref": "#/$defs/LoopRecoverParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LoopRecovered"
+      }
+    },
     "message.list": {
       "params": {
         "$ref": "#/$defs/MessageListParams"
@@ -2369,6 +3148,17 @@
       },
       "result": {
         "$ref": "#/$defs/Message"
+      }
+    },
+    "message.receipts": {
+      "params": {
+        "$ref": "#/$defs/MessageReceiptsParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/Receipt"
+        },
+        "type": "array"
       }
     },
     "message.search": {
@@ -2432,6 +3222,54 @@
         "type": "array"
       }
     },
+    "session.live": {
+      "params": {
+        "$ref": "#/$defs/SessionIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionLive"
+      }
+    },
+    "session.resume": {
+      "params": {
+        "$ref": "#/$defs/SessionIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session.start": {
+      "params": {
+        "$ref": "#/$defs/SessionStartParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Session"
+      }
+    },
+    "session.stop": {
+      "params": {
+        "$ref": "#/$defs/SessionStopParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "settings.get": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Settings"
+      }
+    },
+    "settings.set": {
+      "params": {
+        "$ref": "#/$defs/SettingsPatch"
+      },
+      "result": {
+        "$ref": "#/$defs/Settings"
+      }
+    },
     "system.hello": {
       "params": {
         "$ref": "#/$defs/NoParams"
@@ -2449,6 +3287,14 @@
           "$ref": "#/$defs/Todo"
         },
         "type": "array"
+      }
+    },
+    "wake.list": {
+      "params": {
+        "$ref": "#/$defs/WakeListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WakeListResult"
       }
     }
   },

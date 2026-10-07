@@ -42,8 +42,10 @@ use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::policy::{self, Gate, LaunchGate};
 use crewd_wake::queue::{self, ids};
 use crewd_wake::text;
-use crewd_wake::{HOUR, LatchScope, MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
-use tokio::sync::{mpsc, oneshot};
+use crewd_wake::{
+    HOUR, Latch, LatchScope, MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source,
+};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::OrchestraConfig;
 use super::clock::Clock;
@@ -422,19 +424,29 @@ pub enum Cmd {
         session: Option<String>,
         reply: Reply<super::deliver::WakeList>,
     },
-    /// 人解熔断（只有客户端能调）。
+    /// 人解熔断（只有客户端能调）。回 false = 本来就没有这条熔断。
     Recover {
         scope: LatchScope,
         id: String,
-        reply: Reply<()>,
+        reply: Reply<bool>,
     },
-    /// 可选并发上限（§22.7 Q5；None = 不设）。
-    MaxLive {
-        reply: Reply<Option<usize>>,
+    /// 此刻的环路熔断（`loop.list`）。
+    Latches {
+        reply: Reply<Vec<Latch>>,
     },
-    SetMaxLive {
-        max: Option<usize>,
-        reply: Reply<()>,
+    /// 设置（`settings.get`，S49）。
+    Settings {
+        reply: Reply<SettingsView>,
+    },
+    /// 改设置（`settings.set`）：落库，再刷新内存里的语言与启动闸。回改完的设置。
+    SetSettings {
+        update: SettingsUpdate,
+        reply: Reply<SettingsView>,
+    },
+    /// 一条消息叫醒了谁、走到哪了（`message.receipts`，S54）。
+    Receipts {
+        message_id: String,
+        reply: Reply<Vec<super::deliver::ReceiptRow>>,
     },
     /// 休眠（C26，[`Core::begin_hibernate`]）：`deadline_ms` = 在干活的最多等多久（None = 设置里的；0 = 立即）。
     Hibernate {
@@ -562,6 +574,24 @@ pub struct Core<P: Port> {
     pub(crate) hibernation: Option<Hibernation>,
     /// 上次休眠的记录（`boot` 读进来）：恢复时据它给休眠附言（[`Core::resume_note`]），给过就记「已恢复」。
     pub(crate) hibernated: Option<HibernateRecord>,
+    /// 休眠回执发出去了（不论全退没有）= true：serve（T11）据此走自己的停机次序退出（[`super::Handle::exit_requested`]）。
+    pub(crate) exit: watch::Sender<bool>,
+}
+
+/// 此刻的设置（`settings.get`，S49）：语言、可选并发上限、休眠期限（秒）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingsView {
+    pub lang: text::Lang,
+    pub max_live: Option<usize>,
+    pub hibernate_deadline_secs: Option<u32>,
+}
+
+/// 改设置（`settings.set`）：外层 None = 不改；`max_live` / `hibernate_deadline_secs` 里层 None = 清掉（回到默认）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsUpdate {
+    pub lang: Option<text::Lang>,
+    pub max_live: Option<Option<usize>>,
+    pub hibernate_deadline_secs: Option<Option<u32>>,
 }
 
 impl<P: Port> Core<P> {
@@ -623,6 +653,7 @@ impl<P: Port> Core<P> {
             due: DueCache::default(),
             hibernation: None,
             hibernated: None,
+            exit: watch::channel(false).0,
         })
     }
 
@@ -771,11 +802,24 @@ impl<P: Port> Core<P> {
                 let r = self.recover(scope, &id).await;
                 let _ = reply.send(r);
             }
-            Cmd::MaxLive { reply } => {
-                let _ = reply.send(Ok(self.gate.max_live()));
+            Cmd::Latches { reply } => {
+                let mut v = self.breaker.latches();
+                v.sort_by(|a, b| (a.scope, &a.id).cmp(&(b.scope, &b.id)));
+                let _ = reply.send(Ok(v));
             }
-            Cmd::SetMaxLive { max, reply } => {
-                let r = self.set_max_live(max).await;
+            Cmd::Settings { reply } => {
+                let r = self.settings().await;
+                let _ = reply.send(r);
+            }
+            Cmd::SetSettings { update, reply } => {
+                let r = self.set_settings(update).await;
+                let _ = reply.send(r);
+            }
+            Cmd::Receipts { message_id, reply } => {
+                let r = self
+                    .receipts(&message_id)
+                    .await
+                    .map_err(ControlError::from_port);
                 let _ = reply.send(r);
             }
             Cmd::Hibernate { deadline_ms, reply } => self.begin_hibernate(deadline_ms, reply).await,
@@ -1023,6 +1067,7 @@ impl<P: Port> Core<P> {
                 )
                 .await
                 .map_err(ControlError::from_port)?;
+            self.port.publish(wake_changed(session, &pending));
         }
         let patch = SessionPatch {
             desired: Some(Desired::Stopped),
@@ -1350,6 +1395,10 @@ impl<P: Port> Core<P> {
                         .touch(&self.port)
                         .settle(&held, s, self.now())
                         .await?;
+                    self.port.publish(wake_changed(
+                        session,
+                        st.batch.wakes.iter().chain(&st.batch.riders),
+                    ));
                 }
             }
             Err(_) if st.halt_requested => {
@@ -1360,6 +1409,10 @@ impl<P: Port> Core<P> {
                         .touch(&self.port)
                         .settle(&held, Settle::Requeue, self.now())
                         .await?;
+                    self.port.publish(wake_changed(
+                        session,
+                        st.batch.wakes.iter().chain(&st.batch.riders),
+                    ));
                 }
             }
             Err(e) => {
@@ -1444,6 +1497,7 @@ impl<P: Port> Core<P> {
             // 在那一刻再看一次（定时拍 / 下一个 not_before）。退避本身只在库里的 `not_before`（唯一的事实，P2 / R10）。
             self.timers.insert(*retry_at);
         }
+        let changed = wake_changed(&session, batch.wakes.iter().chain(&batch.riders));
         let gave_up: Vec<QueuedWake> = batch
             .wakes
             .into_iter()
@@ -1451,8 +1505,34 @@ impl<P: Port> Core<P> {
             .filter(|w| acked.gave_up.contains(&w.id))
             .collect();
         self.alert_gave_up(&session, &gave_up, error).await?;
-        self.port.publish(OrchestraEvent::WakeChanged { session });
+        self.port.publish(changed);
         Ok(())
+    }
+
+    /// 编排自己入队（规划、恢复、换机长、额度、IdleHook……）：入了就发一条 `wake.changed`（S54：客户端看得到「排上了」）。
+    /// 返回入没入（撞了去重 / 机组已移除 = false）。
+    pub(crate) async fn enqueue(&self, w: NewWake) -> anyhow::Result<bool> {
+        let session = w.session.clone();
+        let Some(id) = self.due.touch(&self.port).enqueue(w.clone()).await? else {
+            return Ok(false);
+        };
+        let row = QueuedWake {
+            id,
+            session: w.session,
+            kind: w.kind,
+            source: w.source,
+            priority: w.priority,
+            not_before: w.not_before,
+            note: w.note,
+            state: crewd_wake::WakeState::Pending,
+            attempts: 0,
+            created_at: self.now(),
+            origin: w.origin,
+            msg: None,
+            last_error: None,
+        };
+        self.port.publish(wake_changed(&session, [&row]));
+        Ok(true)
     }
 
     /// 一个 session 的唤醒到上限放弃了：告警一次（任何优先级，C19）；已记过「起不来」的 session 不再告（那条已经说了）。
@@ -1638,11 +1718,19 @@ impl<P: Port> Core<P> {
                     error: "stopped".into(),
                 };
                 self.due.touch(&self.port).settle(&held, s, now).await?;
+                self.port.publish(wake_changed(
+                    session,
+                    inf.batch.wakes.iter().chain(&inf.batch.riders),
+                ));
             } else if l.halting || stopped_by_user || hit_limit {
                 self.due
                     .touch(&self.port)
                     .settle(&held, Settle::Requeue, now)
                     .await?;
+                self.port.publish(wake_changed(
+                    session,
+                    inf.batch.wakes.iter().chain(&inf.batch.riders),
+                ));
             } else {
                 let why = match &info {
                     Some(i) => format!("{:?}", i.status),
@@ -1705,22 +1793,20 @@ impl<P: Port> Core<P> {
             ..Default::default()
         };
         self.port.patch_session(session, patch).await?;
-        self.due
-            .touch(&self.port)
-            .enqueue(NewWake {
-                session: session.into(),
-                kind: WakeKind::System,
-                source: source::system(&format!("resume-refused:{id}")),
-                priority: Priority::System,
-                not_before: now,
-                note: Some(text::render(
-                    lang,
-                    "resume.refused.agent",
-                    &[("id", &id_s), ("said", &said_s)],
-                )),
-                origin: SYSTEM.into(),
-            })
-            .await?;
+        self.enqueue(NewWake {
+            session: session.into(),
+            kind: WakeKind::System,
+            source: source::system(&format!("resume-refused:{id}")),
+            priority: Priority::System,
+            not_before: now,
+            note: Some(text::render(
+                lang,
+                "resume.refused.agent",
+                &[("id", &id_s), ("said", &said_s)],
+            )),
+            origin: SYSTEM.into(),
+        })
+        .await?;
         Ok(())
     }
 
@@ -1756,18 +1842,16 @@ impl<P: Port> Core<P> {
         .flatten();
         let plan = policy::quota_plan(reset, now);
         let lang = self.lang();
-        self.due
-            .touch(&self.port)
-            .enqueue(NewWake {
-                session: session.into(),
-                kind: WakeKind::System,
-                source: plan.source(),
-                priority: Priority::System,
-                not_before: plan.fire_at,
-                note: Some(text::get(lang, "quota.wake").to_string()),
-                origin: SYSTEM.into(),
-            })
-            .await?;
+        self.enqueue(NewWake {
+            session: session.into(),
+            kind: WakeKind::System,
+            source: plan.source(),
+            priority: Priority::System,
+            not_before: plan.fire_at,
+            note: Some(text::get(lang, "quota.wake").to_string()),
+            origin: SYSTEM.into(),
+        })
+        .await?;
         let minutes = (plan.fire_at.since(now) + MIN - 1) / MIN;
         let key = if plan.fallback {
             "quota.fallback"

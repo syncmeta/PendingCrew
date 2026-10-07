@@ -1,6 +1,8 @@
 //! crewd 线协议：客户端（Mac / iOS / CLI）与 crewd 之间的唯一契约。
 //! 传输：每行一个 JSON（NDJSON）。客户端发 `Request`，服务端回 `ServerFrame`。
 mod model;
+/// M3c（编排）的方法、事件与类型。
+pub mod orchestra;
 mod params;
 /// 唤醒行的状态转移表（不是线协议的一部分；放这里是因为 collab 与 server 都依赖本 crate，C24）。
 pub mod wake_lifecycle;
@@ -90,6 +92,19 @@ pub mod methods {
         DIRECTORY_LIST,
         TODO_LIST,
         SUBSCRIBE,
+        // M3c（编排，`crate::orchestra::methods`）。
+        crate::orchestra::methods::SESSION_START,
+        crate::orchestra::methods::SESSION_STOP,
+        crate::orchestra::methods::SESSION_RESUME,
+        crate::orchestra::methods::SESSION_LIVE,
+        crate::orchestra::methods::CREW_SET_CAPTAIN,
+        crate::orchestra::methods::WAKE_LIST,
+        crate::orchestra::methods::LOOP_LIST,
+        crate::orchestra::methods::LOOP_RECOVER,
+        crate::orchestra::methods::SETTINGS_GET,
+        crate::orchestra::methods::SETTINGS_SET,
+        crate::orchestra::methods::HIBERNATE,
+        crate::orchestra::methods::MESSAGE_RECEIPTS,
     ];
 }
 
@@ -261,6 +276,9 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
         (events::LAGGED, sub::<Lagged>(g)),
     ]
+    .into_iter()
+    .chain(orchestra::schema_entries(g).1)
+    .collect()
 }
 
 /// 手写：按 `event` 区分的 oneOf（每个事件一支：`event` 是常量、`data` 指向负载类型），Swift 端可直接生成
@@ -494,6 +512,7 @@ pub fn api_schema() -> Value {
         ),
     ]
     .into_iter()
+    .chain(orchestra::schema_entries(g).0)
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let events: serde_json::Map<String, Value> = event_payloads(g)
@@ -1015,6 +1034,10 @@ mod tests {
             methods::SESSION_LIST,
             methods::ASK_LIST,
             methods::DIRECTORY_LIST,
+            orchestra::methods::WAKE_LIST,
+            orchestra::methods::LOOP_LIST,
+            orchestra::methods::SETTINGS_GET,
+            orchestra::methods::HIBERNATE,
         ];
         for (m, spec) in s["methods"].as_object().unwrap() {
             let r = spec["params"]["$ref"].as_str().unwrap();

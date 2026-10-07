@@ -261,13 +261,6 @@ fn acked_origins(b: &Batch) -> Vec<String> {
     origins
 }
 
-/// `wake.changed` 的数据（T10b 换成契约里的 `crewd_proto::orchestra::WakeChanged`，同形）。
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WakeChangedData<'a> {
-    session_id: &'a str,
-}
-
 impl Port for DbPort {
     async fn session(&self, id: &str) -> Result<Option<SessionRow>> {
         let id = id.to_string();
@@ -416,7 +409,7 @@ impl Port for DbPort {
         self.state.tokens.revoke(session);
     }
 
-    async fn enqueue(&self, w: NewWake) -> Result<bool> {
+    async fn enqueue(&self, w: NewWake) -> Result<Option<i64>> {
         let r = self
             .write(move |tx| {
                 cw::enqueue(
@@ -434,7 +427,10 @@ impl Port for DbPort {
             })
             .await?;
         // `Skipped` = 目标的机组已移除（不写行、不发变更）：当作无事发生，不记日志。
-        Ok(matches!(r, Enqueued::New(_)))
+        Ok(match r {
+            Enqueued::New(id) => Some(id),
+            Enqueued::Duplicate(_) | Enqueued::Skipped => None,
+        })
     }
 
     async fn pending(&self, session: &str) -> Result<Vec<QueuedWake>> {
@@ -557,6 +553,17 @@ impl Port for DbPort {
         .await
     }
 
+    async fn wakes_for_message(&self, message_id: &str) -> Result<Vec<QueuedWake>> {
+        let source = cw::source::message(message_id);
+        self.read(move |c| {
+            cw::for_source(c, cw::WakeKind::Message, &source)?
+                .iter()
+                .map(|r| queued(c, r))
+                .collect()
+        })
+        .await
+    }
+
     async fn latches(&self) -> Result<Vec<Latch>> {
         self.read(|c| {
             Ok(cw::latches::list(c)?
@@ -611,6 +618,15 @@ impl Port for DbPort {
         .await
     }
 
+    async fn set_locale(&self, l: Lang) -> Result<()> {
+        let l = match l {
+            Lang::Zh => collab::Locale::Zh,
+            Lang::En => collab::Locale::En,
+        };
+        self.write(move |tx| collab::settings::set_locale(tx, l))
+            .await
+    }
+
     async fn open_restart(
         &self,
         session_ids: Vec<String>,
@@ -661,6 +677,11 @@ impl Port for DbPort {
 
     async fn hibernate_deadline_secs(&self) -> Result<Option<u32>> {
         self.read(collab::settings::hibernate_deadline_secs).await
+    }
+
+    async fn set_hibernate_deadline_secs(&self, secs: Option<u32>) -> Result<()> {
+        self.write(move |tx| collab::settings::set_hibernate_deadline_secs(tx, secs))
+            .await
     }
 
     async fn hibernate_record(&self) -> Result<Option<HibernateRecord>> {
@@ -854,10 +875,16 @@ impl Port for DbPort {
                 event: crewd_proto::events::SESSION_CHANGED.into(),
                 data: serde_json::to_value(super::control::live_to_proto(&v)).unwrap_or_default(),
             },
-            OrchestraEvent::WakeChanged { session } => crewd_proto::Event {
-                event: "wake.changed".into(),
-                data: serde_json::to_value(WakeChangedData {
-                    session_id: &session,
+            OrchestraEvent::WakeChanged {
+                session,
+                wake_ids,
+                message_ids,
+            } => crewd_proto::Event {
+                event: crewd_proto::orchestra::events::WAKE_CHANGED.into(),
+                data: serde_json::to_value(crewd_proto::orchestra::WakeChanged {
+                    session_id: session,
+                    wake_ids,
+                    message_ids,
                 })
                 .unwrap_or_default(),
             },
@@ -1146,8 +1173,8 @@ mod tests {
                 "cap-1",
             )
         };
-        assert!(port.enqueue(w.clone()).await.unwrap());
-        assert!(!port.enqueue(w).await.unwrap());
+        assert!(port.enqueue(w.clone()).await.unwrap().is_some());
+        assert!(port.enqueue(w).await.unwrap().is_none());
         let p = port.pending("w-1").await.unwrap();
         assert_eq!(
             p[0].msg,
@@ -1196,7 +1223,7 @@ mod tests {
                 "w-1",
             ),
         ] {
-            assert!(port.enqueue(w).await.unwrap());
+            assert!(port.enqueue(w).await.unwrap().is_some());
         }
         // M3a 自己入队的问的答复：origin 恒为 NULL，优先级不一定是 Human。
         state

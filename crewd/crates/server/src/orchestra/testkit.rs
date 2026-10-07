@@ -480,7 +480,7 @@ impl Port for MemPort {
         self.lock().revoked.push(session.to_string());
     }
 
-    async fn enqueue(&self, w: NewWake) -> Result<bool> {
+    async fn enqueue(&self, w: NewWake) -> Result<Option<i64>> {
         let mut st = self.lock();
         // 同 M3a `wakes::enqueue`：目标的机组已移除 = `Skipped`（不写行）。
         if st
@@ -488,14 +488,14 @@ impl Port for MemPort {
             .get(&w.session)
             .is_some_and(|s| st.removed_crews.contains(&s.crew_id))
         {
-            return Ok(false);
+            return Ok(None);
         }
         if st
             .wakes
             .iter()
             .any(|q| q.session == w.session && q.kind == w.kind && q.source == w.source)
         {
-            return Ok(false);
+            return Ok(None);
         }
         st.next_wake += 1;
         let (id, now) = (st.next_wake, st.now);
@@ -521,7 +521,7 @@ impl Port for MemPort {
             msg,
             last_error: None,
         });
-        Ok(true)
+        Ok(Some(id))
     }
 
     /// 同 collab `due_for(.., i64::MAX)`：优先级高的在前、同档按入队先后（契约测试钉住）。
@@ -719,6 +719,20 @@ impl Port for MemPort {
         Ok(v)
     }
 
+    /// 同 collab `wakes::for_source(.., message, msg:<id>)`：任何状态，按入队先后。
+    async fn wakes_for_message(&self, message_id: &str) -> Result<Vec<QueuedWake>> {
+        let source = crewd_wake::source::message(message_id);
+        let mut v: Vec<QueuedWake> = self
+            .lock()
+            .wakes
+            .iter()
+            .filter(|w| w.kind == WakeKind::Message && w.source == source)
+            .cloned()
+            .collect();
+        v.sort_by_key(|w| w.id);
+        Ok(v)
+    }
+
     async fn latches(&self) -> Result<Vec<Latch>> {
         Ok(self.lock().latches.clone())
     }
@@ -757,6 +771,11 @@ impl Port for MemPort {
         Ok(st.locale.unwrap_or(crewd_wake::text::Lang::Zh))
     }
 
+    async fn set_locale(&self, l: crewd_wake::text::Lang) -> Result<()> {
+        self.lock().locale = Some(l);
+        Ok(())
+    }
+
     async fn open_restart(
         &self,
         session_ids: Vec<String>,
@@ -787,6 +806,11 @@ impl Port for MemPort {
 
     async fn hibernate_deadline_secs(&self) -> Result<Option<u32>> {
         Ok(self.lock().hibernate_deadline)
+    }
+
+    async fn set_hibernate_deadline_secs(&self, secs: Option<u32>) -> Result<()> {
+        self.lock().hibernate_deadline = secs;
+        Ok(())
     }
 
     async fn hibernate_record(&self) -> Result<Option<HibernateRecord>> {
@@ -1579,13 +1603,31 @@ mod self_tests {
     #[tokio::test]
     async fn mem_port_dedupes_and_orders_due_sessions_by_priority_then_age() {
         let p = MemPort::new();
-        assert!(p.enqueue(wake("a", "x#1", Priority::Auto)).await.unwrap());
         assert!(
-            !p.enqueue(wake("a", "x#1", Priority::Auto)).await.unwrap(),
+            p.enqueue(wake("a", "x#1", Priority::Auto))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            p.enqueue(wake("a", "x#1", Priority::Auto))
+                .await
+                .unwrap()
+                .is_none(),
             "UNIQUE(session, kind, source)"
         );
-        assert!(p.enqueue(wake("b", "x#2", Priority::Human)).await.unwrap());
-        assert!(p.enqueue(wake("c", "x#3", Priority::Auto)).await.unwrap());
+        assert!(
+            p.enqueue(wake("b", "x#2", Priority::Human))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            p.enqueue(wake("c", "x#3", Priority::Auto))
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(p.due_sessions(Ms(0)).await.unwrap(), ["b", "a", "c"]);
         let batch = Batch {
             session: "a".into(),

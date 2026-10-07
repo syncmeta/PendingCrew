@@ -498,9 +498,10 @@ fn sources(v: &[QueuedWake]) -> Vec<String> {
 
 async fn enqueue_dedupes<W: World>() {
     let w = W::new().await;
-    assert!(w.port().enqueue(timer("w-1", "t")).await.unwrap());
+    let id = w.port().enqueue(timer("w-1", "t")).await.unwrap();
+    assert!(id.is_some_and(|id| id > 0), "新行回它的 id");
     assert!(
-        !w.port().enqueue(timer("w-1", "t")).await.unwrap(),
+        w.port().enqueue(timer("w-1", "t")).await.unwrap().is_none(),
         "撞了 UNIQUE"
     );
     assert_eq!(w.port().pending("w-1").await.unwrap().len(), 1);
@@ -510,7 +511,7 @@ async fn enqueue_for_a_removed_crew_is_nothing<W: World>() {
     let mut w = W::new().await;
     w.remove_crew("c-9").await;
     assert!(
-        !w.port().enqueue(timer("w-9", "t")).await.unwrap(),
+        w.port().enqueue(timer("w-9", "t")).await.unwrap().is_none(),
         "Skipped"
     );
     assert!(w.port().pending("w-9").await.unwrap().is_empty());
@@ -927,6 +928,71 @@ async fn injection_and_planner_agree_on_every_message<W: World>() {
     assert!(!saw("w-1", 11) && !saw("chief-1", 11), "归档的群");
 }
 
+/// `message.receipts` 的来源（S54）：一条消息给每个 session 入队的唤醒，任何状态、按入队先后；作废的原因在 `last_error`。
+async fn wakes_for_message_lists_each_target_in_order<W: World>() {
+    let mut w = W::new().await;
+    let lobby = crewd_store::channels::lobby_id("c-1");
+    let m = w.post(Who::S("cap-1"), &lobby, &["w-1", "w-2"]).await;
+    let msg = |session: &str| NewWake {
+        session: session.into(),
+        kind: WakeKind::Message,
+        source: source::message(&m.id),
+        priority: Priority::Auto,
+        not_before: Ms(0),
+        note: None,
+        origin: "cap-1".into(),
+    };
+    let p = w.port();
+    let a = p.enqueue(msg("w-2")).await.unwrap().unwrap();
+    let b = p.enqueue(msg("w-1")).await.unwrap().unwrap();
+    p.enqueue(timer("w-1", &m.id)).await.unwrap();
+    p.settle(
+        &[a],
+        Settle::Dropped {
+            error: "合成：停了".into(),
+        },
+        Ms(0),
+    )
+    .await
+    .unwrap();
+    let got = p.wakes_for_message(&m.id).await.unwrap();
+    let rows: Vec<(i64, &str, WakeState, Option<&str>)> = got
+        .iter()
+        .map(|w| (w.id, w.session.as_str(), w.state, w.last_error.as_deref()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (a, "w-2", WakeState::Dropped, Some("合成：停了")),
+            (b, "w-1", WakeState::Pending, None)
+        ],
+        "按入队先后；定时不算；作废的原因读得回来"
+    );
+    assert_eq!(
+        got[1].msg.as_ref().map(|r| r.channel.as_str()),
+        Some(lobby.as_str())
+    );
+    assert!(p.wakes_for_message("nope").await.unwrap().is_empty());
+}
+
+/// S49：三个设置各自写、各自读回；null 清掉（回到默认）。
+async fn settings_round_trip<W: World>() {
+    use crewd_wake::text::Lang;
+    let w = W::new().await;
+    let p = w.port();
+    assert_eq!(p.locale().await.unwrap(), Lang::Zh);
+    p.set_locale(Lang::En).await.unwrap();
+    assert_eq!(p.locale().await.unwrap(), Lang::En);
+    p.set_hibernate_deadline_secs(Some(0)).await.unwrap();
+    assert_eq!(p.hibernate_deadline_secs().await.unwrap(), Some(0));
+    p.set_hibernate_deadline_secs(None).await.unwrap();
+    assert_eq!(p.hibernate_deadline_secs().await.unwrap(), None);
+    p.set_max_live(Some(3)).await.unwrap();
+    assert_eq!(p.max_live().await.unwrap(), Some(3));
+    p.set_max_live(None).await.unwrap();
+    assert_eq!(p.max_live().await.unwrap(), None);
+}
+
 macro_rules! both {
     ($($case:ident),* $(,)?) => {
         mod mem {
@@ -956,4 +1022,6 @@ both!(
     channel_ctx_fills_all_six_fields,
     a_child_crews_human_notice_lands_in_its_homes_human_channel,
     injection_and_planner_agree_on_every_message,
+    wakes_for_message_lists_each_target_in_order,
+    settings_round_trip,
 );

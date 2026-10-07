@@ -405,6 +405,43 @@ fn rpc_drives_every_client_method() {
             Ok,
         ),
         ("events.subscribe", r#"{"topics":["message"]}"#, Ok),
+        // M3c（编排）：`crewd serve` 还没接上编排（T11 接线），都回 -32009 `orchestra.not_running`，不是 -32601。
+        (
+            "session.start",
+            r#"{"crewId":"local-aaaa","role":"worker","executor":"claude","brief":"x","isolation":false}"#,
+            Code(-32009),
+        ),
+        (
+            "session.stop",
+            r#"{"sessionId":"worker-2222bbbb","reason":"x"}"#,
+            Code(-32009),
+        ),
+        (
+            "session.resume",
+            r#"{"sessionId":"worker-2222bbbb"}"#,
+            Code(-32009),
+        ),
+        (
+            "session.live",
+            r#"{"sessionId":"worker-2222bbbb"}"#,
+            Code(-32009),
+        ),
+        (
+            "crew.setCaptain",
+            r#"{"crewId":"local-aaaa","sessionId":"worker-2222bbbb"}"#,
+            Code(-32009),
+        ),
+        ("wake.list", "null", Code(-32009)),
+        ("loop.list", "null", Code(-32009)),
+        (
+            "loop.recover",
+            r#"{"scope":"session","targetSessionId":"worker-2222bbbb"}"#,
+            Code(-32009),
+        ),
+        ("settings.get", "null", Code(-32009)),
+        ("settings.set", r#"{"maxLiveSessions":null}"#, Code(-32009)),
+        ("crewd.hibernate", "null", Code(-32009)),
+        ("message.receipts", r#"{"messageId":"m1"}"#, Code(-32009)),
     ];
     let mut covered: Vec<&str> = cases.iter().map(|c| c.0).collect();
     covered.sort();

@@ -6,7 +6,7 @@ use crewd_wake::policy;
 use crewd_wake::{Ms, QueuedWake};
 use tokio::sync::oneshot;
 
-use super::core::{ControlError, Core};
+use super::core::{ControlError, Core, SettingsUpdate, SettingsView};
 use super::deliver::restart_row;
 use super::port::*;
 
@@ -83,6 +83,51 @@ impl<P: Port> Core<P> {
             .max()
             .unwrap_or(0);
         self.rescan().await
+    }
+
+    /// 此刻的设置（`settings.get`）：都从库里读（库是事实）。
+    pub(crate) async fn settings(&self) -> Result<SettingsView, ControlError> {
+        let lang = self.port.locale().await.map_err(ControlError::from_port)?;
+        let max_live = self
+            .port
+            .max_live()
+            .await
+            .map_err(ControlError::from_port)?;
+        let hibernate_deadline_secs = self
+            .port
+            .hibernate_deadline_secs()
+            .await
+            .map_err(ControlError::from_port)?;
+        Ok(SettingsView {
+            lang,
+            max_live,
+            hibernate_deadline_secs,
+        })
+    }
+
+    /// 改设置（`settings.set`，S49）：给了的才写；写完刷新内存里的语言（给 agent / 群的文字）与启动闸。
+    /// 值的核对在 RPC 那一层先做完（一个不对就什么都不改）；库再拒（collab 的规则）照样带码上抛。
+    pub(crate) async fn set_settings(
+        &mut self,
+        u: SettingsUpdate,
+    ) -> Result<SettingsView, ControlError> {
+        if let Some(lang) = u.lang {
+            self.port
+                .set_locale(lang)
+                .await
+                .map_err(ControlError::from_port)?;
+            self.cfg.lang = lang;
+        }
+        if let Some(secs) = u.hibernate_deadline_secs {
+            self.port
+                .set_hibernate_deadline_secs(secs)
+                .await
+                .map_err(ControlError::from_port)?;
+        }
+        if let Some(max) = u.max_live {
+            self.set_max_live(max).await?;
+        }
+        self.settings().await
     }
 
     pub(crate) async fn set_max_live(&mut self, max: Option<usize>) -> Result<(), ControlError> {
@@ -922,14 +967,56 @@ mod tests {
     #[tokio::test]
     async fn set_max_live_persists_through_the_port() {
         let mut rig = Rig::new().await;
-        rig.cmd(|reply| Cmd::SetMaxLive {
-            max: Some(4),
-            reply,
-        })
-        .await
-        .unwrap();
+        let update = SettingsUpdate {
+            max_live: Some(Some(4)),
+            ..Default::default()
+        };
+        rig.cmd(|reply| Cmd::SetSettings { update, reply })
+            .await
+            .unwrap();
         assert_eq!(rig.port.lock().max_live, Some(4));
-        assert_eq!(rig.cmd(|reply| Cmd::MaxLive { reply }).await, Ok(Some(4)));
+        assert_eq!(rig.core.gate.max_live(), Some(4));
+        let got = rig.cmd(|reply| Cmd::Settings { reply }).await.unwrap();
+        assert_eq!(got.max_live, Some(4));
+    }
+
+    /// S49：一次 `settings.set` 只改给了的；语言改了 Core 立刻用新语言（给 agent / 群的文字）；null 清掉。
+    #[tokio::test]
+    async fn settings_change_only_what_is_given_and_the_language_takes_effect_at_once() {
+        use crewd_wake::text::Lang;
+        let mut rig = Rig::new().await;
+        rig.port.lock().max_live = Some(3);
+        let update = SettingsUpdate {
+            lang: Some(Lang::En),
+            hibernate_deadline_secs: Some(Some(30)),
+            ..Default::default()
+        };
+        let got = rig
+            .cmd(|reply| Cmd::SetSettings { update, reply })
+            .await
+            .unwrap();
+        assert_eq!(
+            got,
+            SettingsView {
+                lang: Lang::En,
+                max_live: Some(3),
+                hibernate_deadline_secs: Some(30),
+            },
+            "没给的上限不动"
+        );
+        assert_eq!(rig.core.lang(), Lang::En);
+        let update = SettingsUpdate {
+            max_live: Some(None),
+            hibernate_deadline_secs: Some(None),
+            ..Default::default()
+        };
+        let got = rig
+            .cmd(|reply| Cmd::SetSettings { update, reply })
+            .await
+            .unwrap();
+        assert_eq!((got.max_live, got.hibernate_deadline_secs), (None, None));
+        assert_eq!(rig.core.gate.max_live(), None);
+        assert_eq!(got.lang, Lang::En, "没给的语言不动");
     }
 
     // —— 已移除的机组（spec §26.5 / §26.7，T10a 补充 §2.4）
@@ -1064,10 +1151,11 @@ mod tests {
         rig.worker("c1", "w1");
         rig.port.remove_crew("c1");
         assert!(
-            !rig.port
+            rig.port
                 .enqueue(timer("w1", "t1", "合成提醒"))
                 .await
                 .unwrap()
+                .is_none()
         );
         rig.core
             .handle(Input::Collab(CollabFact::WakeEnqueued {

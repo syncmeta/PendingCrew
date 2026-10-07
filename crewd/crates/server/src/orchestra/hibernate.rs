@@ -322,6 +322,8 @@ impl<P: Port> Core<P> {
             let _ = w.send(Ok(report.clone()));
         }
         h.report = Some(report);
+        // 回执发出去了：serve 可以收尾退出（T11；U6「休眠之后再更新」）。
+        self.exit.send_replace(true);
     }
 
     /// 恢复一个等人答复的 session 时开场的附言（§22.7 Q1 / C26）：被休眠停下、还没恢复过的 → 休眠附言（只给一次：
@@ -701,12 +703,18 @@ mod tests {
         rig.run("w1").await;
         rig.exec.lock().hang_on_stop.insert("w1".into());
         rig.emit("w1", SessionEvent::Working(true)).await;
+        let exit = rig.core.exit.subscribe();
         let mut rx = hibernate(&mut rig, Some(0)).await;
         assert!(rx.try_recv().is_err(), "还在等 w1 退出");
         let grace = rig.core.cfg.hibernate_stop_grace.as_millis() as i64;
         rig.tick(grace - 1).await;
         assert!(rx.try_recv().is_err());
+        assert!(!*exit.borrow(), "回执之前不叫 serve 退出");
         rig.tick(1).await;
+        assert!(
+            *exit.borrow(),
+            "没全退也照样叫 serve 退出（T11 中止 actor 再关库）"
+        );
         assert_eq!(
             report(&mut rx),
             HibernateReport {

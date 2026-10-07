@@ -246,7 +246,41 @@ pub struct Rendered {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestraEvent {
     SessionChanged(LiveView),
-    WakeChanged { session: String },
+    /// 这个 session 的唤醒行变了：这一次改到的行（入队 / 拿走 / 送到 / 失败 / 作废）与它们的消息（S54）。
+    WakeChanged {
+        session: String,
+        wake_ids: Vec<i64>,
+        message_ids: Vec<String>,
+    },
+}
+
+/// 消息类唤醒指向的消息 id（`msg:<id>` 的 id）；别的种类 = None。
+pub fn message_id(w: &QueuedWake) -> Option<&str> {
+    match w.kind {
+        crewd_wake::WakeKind::Message => w.source.strip_prefix("msg:"),
+        _ => None,
+    }
+}
+
+/// 一次改动（这几行）的 `WakeChanged`：行 id 按出现先后、消息 id 去重。
+pub fn wake_changed<'a>(
+    session: &str,
+    rows: impl IntoIterator<Item = &'a QueuedWake>,
+) -> OrchestraEvent {
+    let (mut wake_ids, mut message_ids) = (Vec::new(), Vec::<String>::new());
+    for w in rows {
+        wake_ids.push(w.id);
+        if let Some(m) = message_id(w)
+            && !message_ids.iter().any(|x| x == m)
+        {
+            message_ids.push(m.to_string());
+        }
+    }
+    OrchestraEvent::WakeChanged {
+        session: session.to_string(),
+        wake_ids,
+        message_ids,
+    }
 }
 
 /// [`Port::list_wakes`] 至多给几条（最新的在前）：DbPort 落在 collab `wakes::list(.., limit)`（`ORDER BY id DESC LIMIT`）。
@@ -278,8 +312,8 @@ pub trait Port: Send + Sync + 'static {
     /// 进程退出（含人停掉）后作废它的 helper 令牌（M3a `TokenTable::revoke`）：旧配置文件里的 token 不能再 attach。
     fn revoke_token(&self, session: &str);
     // —— 唤醒队列与熔断
-    /// 插入成功 = true；`UNIQUE(session, kind, source)` 撞了 = false；目标的机组已被移除（M3a `Enqueued::Skipped`）= false。
-    fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<bool>> + Send;
+    /// 插入成功 = 新行的 id；`UNIQUE(session, kind, source)` 撞了 = None；目标的机组已被移除（M3a `Enqueued::Skipped`）= None。
+    fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<Option<i64>>> + Send;
     /// 该 session 所有 `pending` 的唤醒（不论到没到点），优先级高的在前、同档按入队先后。
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
     /// 不属于一批的结算（见 [`Settle`]）：全部 id 一个事务，表不认 / 没有这一行 = 错误、整批不改。
@@ -303,6 +337,11 @@ pub trait Port: Send + Sync + 'static {
         &self,
         session: Option<&str>,
     ) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
+    /// 一条消息给每个 session 入队的唤醒（任何状态，按入队先后；`message.receipts`，S54）。
+    fn wakes_for_message(
+        &self,
+        message_id: &str,
+    ) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
     fn latches(&self) -> impl Future<Output = Result<Vec<Latch>>> + Send;
     fn put_latch(&self, l: &Latch) -> impl Future<Output = Result<()>> + Send;
     fn clear_latch(&self, scope: LatchScope, id: &str) -> impl Future<Output = Result<()>> + Send;
@@ -311,6 +350,7 @@ pub trait Port: Send + Sync + 'static {
     fn max_live(&self) -> impl Future<Output = Result<Option<usize>>> + Send;
     fn set_max_live(&self, max: Option<usize>) -> impl Future<Output = Result<()>> + Send;
     fn locale(&self) -> impl Future<Output = Result<crewd_wake::text::Lang>> + Send;
+    fn set_locale(&self, l: crewd_wake::text::Lang) -> impl Future<Output = Result<()>> + Send;
     // —— 重启询问与默认方案（M3a `collab::restart` / `collab::asks`）
     /// 开一次「是否恢复这些 session」的询问（M3a 在相关根机组人类群各发一条 @人）。返回询问 id；名单空 = None。
     /// `reason = Hibernate`（C26）：公告说「上次休眠了 N 个」，休眠记录记下这条询问（collab `restart::open_with`）。
@@ -329,6 +369,11 @@ pub trait Port: Send + Sync + 'static {
     // —— 休眠（C26；collab `settings::hibernate_deadline_secs`、`hibernate::{get, put}`）
     /// 休眠期限的设置（秒）；None = 没设（用 `crewd_wake::policy::DEFAULT_HIBERNATE_DEADLINE_SECS`）。
     fn hibernate_deadline_secs(&self) -> impl Future<Output = Result<Option<u32>>> + Send;
+    /// None = 回到默认值。
+    fn set_hibernate_deadline_secs(
+        &self,
+        secs: Option<u32>,
+    ) -> impl Future<Output = Result<()>> + Send;
     /// 最近一次休眠的记录。
     fn hibernate_record(&self) -> impl Future<Output = Result<Option<HibernateRecord>>> + Send;
     /// 整份写入（`prompt_id` 原样保留调用方给的）。

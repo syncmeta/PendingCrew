@@ -68,6 +68,17 @@ pub struct TargetSummary {
     pub last_outcome: Option<&'static str>,
 }
 
+/// `message.receipts` 的一行（[`Core::receipts`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiptRow {
+    pub session: String,
+    pub state: WakeState,
+    /// 送到了、而它此刻在干活（「处理中」）。
+    pub working: bool,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+}
+
 /// [`Core::wake_list`] 的结果。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WakeList {
@@ -195,7 +206,7 @@ impl<P: Port> Core<P> {
                 note: None,
                 origin: message_origin(msg, &t.session),
             };
-            if self.due.touch(&self.port).enqueue(w).await? {
+            if self.enqueue(w).await? {
                 fresh.push(t.session);
             }
         }
@@ -264,9 +275,7 @@ impl<P: Port> Core<P> {
                     .touch(&self.port)
                     .settle(&ids(&injected), Settle::Delivered, now)
                     .await?;
-                self.port.publish(OrchestraEvent::WakeChanged {
-                    session: session.into(),
-                });
+                self.port.publish(wake_changed(session, &injected));
             }
             if fresh.is_empty() {
                 continue;
@@ -589,9 +598,7 @@ impl<P: Port> Core<P> {
                 .await?;
         }
         if speak.is_empty() {
-            self.port.publish(OrchestraEvent::WakeChanged {
-                session: session.into(),
-            });
+            self.port.publish(wake_changed(session, &silent));
             return Ok(true);
         }
         let Fitted { batch, text } = self.render_fitted(session, speak).await?;
@@ -634,15 +641,17 @@ impl<P: Port> Core<P> {
             }
             return Ok(false);
         };
+        let changed = wake_changed(
+            session,
+            silent.iter().chain(&batch.wakes).chain(&batch.riders),
+        );
         l.inflight = Some(Inflight {
             delivery: None,
             batch,
         });
         l.writes.push_back(Write::Deliver { text, extras });
         self.pump_writes(session).await?;
-        self.port.publish(OrchestraEvent::WakeChanged {
-            session: session.into(),
-        });
+        self.port.publish(changed);
         // 写失败的那批已由 `pump_writes` 交给 `fail_batch`（inflight 清空了）。
         Ok(self.live.get(session).is_some_and(|l| l.inflight.is_some()))
     }
@@ -661,6 +670,7 @@ impl<P: Port> Core<P> {
                 .touch(&self.port)
                 .settle(&ids(&batch), s, now)
                 .await?;
+            self.port.publish(wake_changed(session, &batch));
             return Ok(false);
         };
         if row.crew_removed {
@@ -676,6 +686,7 @@ impl<P: Port> Core<P> {
                 .touch(&self.port)
                 .settle(&ids(&batch), s, now)
                 .await?;
+            self.port.publish(wake_changed(session, &batch));
             return Ok(false);
         }
         let exec = match self.execs.get(&row.executor) {
@@ -692,9 +703,7 @@ impl<P: Port> Core<P> {
                     .touch(&self.port)
                     .settle(&ids(&batch), s, now)
                     .await?;
-                self.port.publish(OrchestraEvent::WakeChanged {
-                    session: session.into(),
-                });
+                self.port.publish(wake_changed(session, &batch));
                 return Ok(false);
             }
         };
@@ -715,6 +724,7 @@ impl<P: Port> Core<P> {
         }
         if speak.is_empty() {
             self.launch(row, exec, interrupted, vec![], vec![]).await?;
+            self.port.publish(wake_changed(session, &silent));
             return Ok(true);
         }
         let Fitted { batch, text } = self.render_fitted(session, speak).await?;
@@ -725,7 +735,12 @@ impl<P: Port> Core<P> {
             Some(note) => format!("{note}\n\n{text}"),
             None => text,
         };
+        let changed = wake_changed(
+            session,
+            silent.iter().chain(&batch.wakes).chain(&batch.riders),
+        );
         self.launch_carrying(row, exec, Some(text), batch).await?;
+        self.port.publish(changed);
         Ok(true)
     }
 
@@ -785,9 +800,10 @@ impl<P: Port> Core<P> {
         for o in &acked.origins {
             self.breaker.record(session, o, now);
         }
-        self.port.publish(OrchestraEvent::WakeChanged {
-            session: session.into(),
-        });
+        self.port.publish(wake_changed(
+            session,
+            inf.batch.wakes.iter().chain(&inf.batch.riders),
+        ));
         Ok(())
     }
 
@@ -849,7 +865,7 @@ impl<P: Port> Core<P> {
                 .live
                 .get(session)
                 .is_some_and(|l| l.generator == generator && !l.stopping && !l.halting);
-        if current && self.due.touch(&self.port).enqueue(w).await? {
+        if current && self.enqueue(w).await? {
             self.try_deliver(session).await?;
         }
         Ok(())
@@ -1010,7 +1026,7 @@ impl<P: Port> Core<P> {
                 note,
                 origin: HUMAN.into(),
             };
-            self.due.touch(&self.port).enqueue(w).await?;
+            self.enqueue(w).await?;
         }
         let sessions: Vec<String> = ordered.into_iter().map(|r| r.session).collect();
         self.deliver_each(&sessions).await;
@@ -1049,7 +1065,7 @@ impl<P: Port> Core<P> {
                         note: None,
                         origin: message_origin(&msg, &s),
                     };
-                    self.due.touch(&self.port).enqueue(w).await?;
+                    self.enqueue(w).await?;
                 }
             }
         }
@@ -1102,11 +1118,7 @@ impl<P: Port> Core<P> {
                 note: Some(note),
                 origin: breaker::SYSTEM.into(),
             };
-            self.due
-                .touch(&self.port)
-                .enqueue(w)
-                .await
-                .map_err(ControlError::from_port)?;
+            self.enqueue(w).await.map_err(ControlError::from_port)?;
             told.push(s);
         }
         // 换机长本身已成；附言都已入队，投不出去的留在队列里下次再试（评审 (3)）。
@@ -1114,19 +1126,39 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
+    /// 人解熔断（`loop.recover`）：本来就没有这条 = false（不算错）。
     pub(crate) async fn recover(
         &mut self,
         scope: LatchScope,
         id: &str,
-    ) -> Result<(), ControlError> {
+    ) -> Result<bool, ControlError> {
         if !self.breaker.recover(scope, id) {
-            return Err(ControlError::NotFound(id.to_string()));
+            return Ok(false);
         }
         self.port
             .clear_latch(scope, id)
             .await
             .map_err(ControlError::from_port)?;
-        self.rescan().await.map_err(ControlError::from_port)
+        self.rescan().await.map_err(ControlError::from_port)?;
+        Ok(true)
+    }
+
+    /// `message.receipts`（S54）：这条消息给每个 session 入队的唤醒，各自走到哪了；送到了的再看它此刻在不在干活。
+    pub(crate) async fn receipts(&self, message_id: &str) -> anyhow::Result<Vec<ReceiptRow>> {
+        Ok(self
+            .port
+            .wakes_for_message(message_id)
+            .await?
+            .into_iter()
+            .map(|w| ReceiptRow {
+                working: w.state == WakeState::Delivered
+                    && self.live.get(&w.session).is_some_and(|l| l.working),
+                session: w.session,
+                state: w.state,
+                attempts: w.attempts,
+                last_error: w.last_error,
+            })
+            .collect())
     }
 }
 
@@ -1519,13 +1551,14 @@ mod tests {
         let before = rig.exec.sent("w1").len();
         let id = edge_id("cap", "w1");
         let i = id.clone();
-        rig.cmd(|reply| Cmd::Recover {
-            scope: LatchScope::Edge,
-            id: i,
-            reply,
-        })
-        .await
-        .unwrap();
+        let first = rig
+            .cmd(|reply| Cmd::Recover {
+                scope: LatchScope::Edge,
+                id: i,
+                reply,
+            })
+            .await;
+        assert_eq!(first, Ok(true));
         assert!(rig.port.lock().latches.is_empty());
         assert_eq!(
             rig.exec.sent("w1").len(),
@@ -1539,7 +1572,8 @@ mod tests {
                 reply,
             })
             .await;
-        assert!(matches!(again, Err(ControlError::NotFound(_))));
+        // `loop.recover` → `{recovered: false}`：本来就没有这条熔断不是错（T10b 补充 §2.1）。
+        assert_eq!(again, Ok(false));
     }
 
     #[tokio::test]
@@ -3166,5 +3200,107 @@ mod tests {
             rig.core.wake_list(Some("w1")).await.unwrap().targets[0].last_outcome,
             Some("delivered")
         );
+    }
+
+    async fn receipts(rig: &mut Rig, msg: &str) -> Vec<(String, WakeState, bool)> {
+        let m = msg.to_string();
+        rig.cmd(|reply| Cmd::Receipts {
+            message_id: m,
+            reply,
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.session, r.state, r.working))
+        .collect()
+    }
+
+    /// S54：`message.receipts` —— 一条消息 @ 了两个，两个都排着；送进 w1 之后它是「已送达」，w1 动起来就是「处理中」。
+    #[tokio::test]
+    async fn receipts_follow_a_message_from_queued_to_delivered_and_working() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1", "w2"], &["w1", "w2"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w2", SessionEvent::Working(true)).await;
+        let both = vec![Mention::Session("w1".into()), Mention::Session("w2".into())];
+        rig.post(LOBBY, Rig::sender("cap"), both, "合成派活").await;
+        let id = "c1/lobby#1";
+        assert_eq!(
+            receipts(&mut rig, id).await,
+            [
+                ("w1".to_string(), WakeState::Pending, false),
+                ("w2".to_string(), WakeState::Pending, false)
+            ],
+            "两个都排着（忙）"
+        );
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(receipts(&mut rig, id).await[0].1, WakeState::Inflight);
+        rig.ack("w1").await;
+        assert_eq!(
+            receipts(&mut rig, id).await[0],
+            ("w1".to_string(), WakeState::Delivered, false),
+            "送到了，还没动"
+        );
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        assert_eq!(
+            receipts(&mut rig, id).await,
+            [
+                ("w1".to_string(), WakeState::Delivered, true),
+                ("w2".to_string(), WakeState::Pending, false)
+            ],
+            "w1 处理中；w2 还排着、它的「在干活」不算这条消息的"
+        );
+        assert!(receipts(&mut rig, "c1/lobby#9").await.is_empty());
+    }
+
+    fn wake_events(rig: &Rig, session: &str) -> Vec<(Vec<i64>, Vec<String>)> {
+        rig.port
+            .lock()
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                OrchestraEvent::WakeChanged {
+                    session: s,
+                    wake_ids,
+                    message_ids,
+                } if s == session => Some((wake_ids.clone(), message_ids.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// S54：`wake.changed` 带着这一次改到的行与它们的消息：入队、拿走（送出）、送到各一条。
+    #[tokio::test]
+    async fn wake_changed_names_the_rows_and_messages_it_touched() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        let id = rig.port.wakes_of("w1")[0].id;
+        let one = (vec![id], vec!["c1/lobby#1".to_string()]);
+        assert_eq!(wake_events(&rig, "w1"), std::slice::from_ref(&one), "入队");
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(wake_events(&rig, "w1").len(), 2, "拿走送出");
+        rig.ack("w1").await;
+        assert_eq!(
+            wake_events(&rig, "w1"),
+            [one.clone(), one.clone(), one],
+            "送到"
+        );
+        // 不是消息的（定时）没有消息 id。
+        let w = NewWake {
+            session: "w1".into(),
+            kind: WakeKind::Timer,
+            source: source::timer("合成"),
+            priority: Priority::System,
+            not_before: rig.core.now().add(HOUR),
+            note: Some("合成提醒".into()),
+            origin: "w1".into(),
+        };
+        assert!(rig.core.enqueue(w).await.unwrap());
+        let last = wake_events(&rig, "w1").pop().unwrap();
+        assert_eq!(last.1, Vec::<String>::new());
+        assert_eq!(last.0.len(), 1);
     }
 }
