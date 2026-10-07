@@ -545,13 +545,22 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
           WHERE source LIKE 'approval:%' AND state IN ('pending','inflight')",
         [crate::now_ts()],
     )?;
-    // （Task 5 在这里加：剥掉 broadcast mention。）
+    // 3) 剥掉 broadcast mention（@ 只决定叫醒谁，可见范围 = 群成员，N1 裁定 8）。其余 mention 顺序不变；
+    //    在 `crews == 0` 提前返回之前——空机组表的库也可能有消息。
+    conn.execute_batch(
+        "UPDATE messages SET mentions = (
+           SELECT json_group_array(json(value)) FROM (
+             SELECT value FROM json_each(messages.mentions)
+              WHERE json_extract(value,'$.kind') <> 'broadcast' ORDER BY key))
+          WHERE json_valid(mentions) AND json_type(mentions)='array'
+            AND EXISTS (SELECT 1 FROM json_each(messages.mentions) j WHERE json_extract(j.value,'$.kind')='broadcast');",
+    )?;
     let crews: i64 = conn.query_row("SELECT COUNT(*) FROM crews", [], |r| r.get(0))?;
     if crews == 0 {
         return Ok(());
     }
     let root = crate::crews::ensure_org_root(conn, &crate::now_ts())?;
-    // 3) 根不挂在任何人下面；号码 0（没有号、且 0 没人用时）；侧栏次序恒为 1；不隐藏。
+    // 4) 根不挂在任何人下面；号码 0（没有号、且 0 没人用时）；侧栏次序恒为 1；不隐藏。
     conn.execute("DELETE FROM crew_parents WHERE crew_id=?1", [&root])?;
     conn.execute(
         "UPDATE crews SET number=0 WHERE id=?1 AND number IS NULL
@@ -561,7 +570,7 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
     conn.execute("UPDATE crews SET position=1 WHERE id=?1", [&root])?;
     // 根不能被隐藏（N1 裁定 6）：旧数据里藏着的露出来。
     conn.execute("UPDATE crews SET hidden_at=NULL WHERE id=?1", [&root])?;
-    // 4) 没有父边的其它机组挂到根下：次序 = 旧顶层次序（position, created_at, id），接在根已有的子之后。
+    // 5) 没有父边的其它机组挂到根下：次序 = 旧顶层次序（position, created_at, id），接在根已有的子之后。
     conn.execute(
         "INSERT INTO crew_parents(crew_id,parent_id,position)
            SELECT c.id, ?1,
@@ -572,7 +581,7 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
               AND NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)",
         [&root],
     )?;
-    // 5) 不变式 I-root：指向根的边只能是唯一的父（N1 裁定 4）。
+    // 6) 不变式 I-root：指向根的边只能是唯一的父（N1 裁定 4）。
     conn.execute(
         "DELETE FROM crew_parents WHERE parent_id=?1
             AND crew_id IN (SELECT crew_id FROM crew_parents WHERE parent_id <> ?1)",
@@ -1126,6 +1135,46 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
     }
 
     #[test]
+    fn v4_strips_broadcast_mentions_and_keeps_the_rest_in_order() {
+        let c = v3_db();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM messages m, json_each(m.mentions) j WHERE json_extract(j.value,'$.kind')='broadcast'"
+            ),
+            0
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT mentions FROM messages WHERE id='m4'"),
+            r#"[{"kind":"human"}]"#
+        );
+        // 读得回来：剥掉之后，旧消息照常反序列化（broadcast 已不在词表里）。
+        let m4 = crate::messages::get(&c, "m4").unwrap().unwrap();
+        assert_eq!(m4.mentions.len(), 1);
+        assert_eq!(m4.mentions[0].kind, crewd_proto::MentionKind::Human);
+    }
+
+    /// 空机组表的库也可能有消息：剥 broadcast 在 `crews == 0` 提前返回之前。
+    #[test]
+    fn v4_strips_broadcast_even_without_crews() {
+        let c = v3_db();
+        c.execute_batch(
+            "INSERT INTO messages(id,channel_id,sender_kind,text,mentions,created_at)
+               VALUES('lonely','crew-a/lobby','human','示例消息','[{\"kind\":\"broadcast\"},{\"kind\":\"human\"}]','2026-09-05T00:00:00.000Z');",
+        )
+        .unwrap();
+        c.execute_batch(V4_DDL).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM crews;")
+            .unwrap();
+        backfill_v4(&c).unwrap();
+        assert_eq!(
+            one::<String>(&c, "SELECT mentions FROM messages WHERE id='lonely'"),
+            r#"[{"kind":"human"}]"#
+        );
+    }
+
+    #[test]
     fn v3_roots_are_reparented_under_the_one_org_root_in_their_sidebar_order() {
         let c = v3_db();
         migrate(&c).unwrap();
@@ -1552,7 +1601,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         let v = |s: String| serde_json::from_str::<serde_json::Value>(&s).unwrap();
         assert_eq!(
             v(mentions("c1")),
-            serde_json::json!([{"kind":"human"},{"kind":"captain","targetId":"captain-new"},{"kind":"broadcast"}]),
+            serde_json::json!([{"kind":"human"},{"kind":"captain","targetId":"captain-new"}]),
             "落成机长指针，顺序不变"
         );
         assert_eq!(
@@ -1561,7 +1610,7 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
         );
         assert_eq!(
             v(mentions("c5")),
-            serde_json::json!([{"kind":"broadcast"},{"kind":"captain","targetId":"captain-new"},{"kind":"captain","targetId":"captain-old"},{"kind":"human"}]),
+            serde_json::json!([{"kind":"captain","targetId":"captain-new"},{"kind":"captain","targetId":"captain-old"},{"kind":"human"}]),
             "同一条里只补没 target 的，已有的不动，顺序不变"
         );
         assert_eq!(

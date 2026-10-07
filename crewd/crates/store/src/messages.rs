@@ -14,8 +14,9 @@ pub fn normalize_sender_kind(k: &str) -> Option<&'static str> {
     }
 }
 
-/// v3 的 mention 词表（裁定 6）。导入器拿它判「认不出」；迁移里的检查是同一张表的 SQL 写法。
-pub const MENTION_KINDS: &[&str] = &["session", "captain", "human", "broadcast"];
+/// mention 词表（v4 起没有 `broadcast`：@ 只决定叫醒谁，N1 裁定 8）。导入器拿它判「认不出」（`broadcast` 在那之前已剥掉）。
+/// v3 迁移前的检查（`schema::check_v3_vocabulary`）是 v2 的输入词表，仍认 `broadcast`，不引用这里。
+pub const MENTION_KINDS: &[&str] = &["session", "captain", "human"];
 
 const COLS: &str = "seq,id,channel_id,sender_kind,sender_session_id,sender_name,text,category,in_reply_to,mentions,attachments,created_at";
 

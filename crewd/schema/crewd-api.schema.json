@@ -1261,8 +1261,7 @@
       "enum": [
         "session",
         "captain",
-        "human",
-        "broadcast"
+        "human"
       ],
       "type": "string"
     },

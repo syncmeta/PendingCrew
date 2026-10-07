@@ -40,11 +40,11 @@ New messages in your channels (only those addressed to or visible to you):
 ## line
 [{at}] {sender}: {text}
 
-## line.directed
-(addressed to {targets}, not to you)
+## line.at
+(@{targets})
 
-## line.directed.unknown
-(not addressed to you)
+## line.at.you
+you
 
 ## line.reply
 (reply to {reply})

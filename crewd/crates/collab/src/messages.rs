@@ -290,7 +290,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                     target_id: Some(t),
                 }
             }
-            MentionKind::Human | MentionKind::Broadcast => Mention {
+            MentionKind::Human => Mention {
                 kind: m.kind,
                 target_id: None,
             },
@@ -302,13 +302,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         if replied.channel_id != ch.id {
             return Err(CollabError::Invalid("只能回复同一个群里的消息".into()));
         }
-        push_mention(
-            &mut mentions,
-            Mention {
-                kind: MentionKind::Broadcast,
-                target_id: None,
-            },
-        );
+        // 裁定 8：只 @ 原发送者，且他得还在群里（@ = 叫醒，叫不醒的不 @）；system 发的不 @ 任何人。
         match (replied.sender_kind, replied.sender_session_id) {
             (SenderKind::Human, _) => push_mention(
                 &mut mentions,
@@ -318,7 +312,8 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
                 },
             ),
             (SenderKind::Session | SenderKind::Captain, Some(sid))
-                if sender_session_id.as_deref() != Some(sid.as_str()) =>
+                if sender_session_id.as_deref() != Some(sid.as_str())
+                    && channels::is_member(conn, &ch.id, &MemberRef::session(sid.clone()))? =>
             {
                 push_mention(
                     &mut mentions,
@@ -689,8 +684,20 @@ mod tests {
     }
 
     #[test]
-    fn reply_to_appends_broadcast_and_the_replied_sender_without_duplicates() {
+    fn reply_to_mentions_only_the_replied_sender_and_never_broadcast() {
         let mut s = store();
+        let reply = |s: &mut crewd_store::Store, who: Sender, to: &str, text: &str| {
+            ok(s, |tx| {
+                post(
+                    tx,
+                    who,
+                    NewPost {
+                        in_reply_to: Some(to.into()),
+                        ..post_text("crew-a/lobby", text)
+                    },
+                )
+            })
+        };
         let q = ok(&mut s, |tx| {
             post(
                 tx,
@@ -698,41 +705,94 @@ mod tests {
                 post_text("crew-a/lobby", "这个怎么做？"),
             )
         });
-        let r = ok(&mut s, |tx| {
+        let r = reply(&mut s, session("w-a1"), &q.message.id, "这样做");
+        assert_eq!(r.message.mentions, [m(MentionKind::Session, Some("w-a2"))]);
+        let again = ok(&mut s, |tx| {
             post(
                 tx,
                 session("w-a1"),
                 NewPost {
                     in_reply_to: Some(q.message.id.clone()),
                     mentions: vec![m(MentionKind::Session, Some("w-a2"))],
-                    ..post_text("crew-a/lobby", "这样做")
+                    ..post_text("crew-a/lobby", "补一句")
                 },
             )
         });
         assert_eq!(
-            r.message.mentions,
-            [
-                m(MentionKind::Session, Some("w-a2")),
-                m(MentionKind::Broadcast, None)
-            ]
+            again.message.mentions,
+            [m(MentionKind::Session, Some("w-a2"))],
+            "去重"
+        );
+        assert!(
+            reply(&mut s, session("w-a1"), &r.message.id, "自言自语")
+                .message
+                .mentions
+                .is_empty(),
+            "回复自己不 @ 自己"
         );
         let h = ok(&mut s, |tx| {
             post(tx, Sender::Human, post_text("crew-a/lobby", "人的问题"))
         });
-        let r2 = ok(&mut s, |tx| {
+        assert_eq!(
+            reply(&mut s, session("w-a1"), &h.message.id, "答人")
+                .message
+                .mentions,
+            [m(MentionKind::Human, None)]
+        );
+        let sys = ok(&mut s, |tx| {
+            post(tx, Sender::System, post_text("crew-a/lobby", "系统公告"))
+        });
+        assert!(
+            reply(&mut s, session("w-a1"), &sys.message.id, "收到")
+                .message
+                .mentions
+                .is_empty(),
+            "回复系统消息不叫醒任何人"
+        );
+    }
+
+    #[test]
+    fn replying_to_someone_who_left_the_channel_mentions_nobody() {
+        let mut s = store();
+        let t = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &session("w-a1"),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "发版".into(),
+                    members: vec![MemberRef::session("w-a2")],
+                    ..Default::default()
+                },
+            )
+        });
+        let q = ok(&mut s, |tx| {
+            post(tx, session("w-a2"), post_text(&t.id, "我先撤了"))
+        });
+        ok(&mut s, |tx| {
+            crate::channels::remove_member(tx, &Sender::Human, &t.id, &MemberRef::session("w-a2"))
+        });
+        let r = ok(&mut s, |tx| {
             post(
                 tx,
                 session("w-a1"),
                 NewPost {
-                    in_reply_to: Some(h.message.id.clone()),
-                    ..post_text("crew-a/lobby", "答人")
+                    in_reply_to: Some(q.message.id.clone()),
+                    ..post_text(&t.id, "好")
                 },
             )
         });
-        assert_eq!(
-            r2.message.mentions,
-            [m(MentionKind::Broadcast, None), m(MentionKind::Human, None)]
+        assert!(
+            r.message.mentions.is_empty(),
+            "@ = 叫醒；不在群里的人叫不醒，不凭空 @"
         );
+    }
+
+    /// 原 `reply_to_appends_broadcast…` 里的跨群断言，单独留着。
+    #[test]
+    fn replying_across_channels_is_refused() {
+        let mut s = store();
         let other = ok(&mut s, |tx| {
             post(tx, session("cap-x"), post_text("crew-x/lobby", "别处"))
         });
@@ -1073,44 +1133,6 @@ mod tests {
         ok(&mut s, |tx| {
             post(tx, Sender::System, post_text("crew-a/human", "来自 crew-x"))
         });
-    }
-
-    #[test]
-    fn replying_to_your_own_message_does_not_mention_yourself() {
-        let mut s = store();
-        let mine = ok(&mut s, |tx| {
-            post(tx, session("w-a1"), post_text("crew-a/lobby", "第一句"))
-        });
-        let r = ok(&mut s, |tx| {
-            post(
-                tx,
-                session("w-a1"),
-                NewPost {
-                    in_reply_to: Some(mine.message.id.clone()),
-                    ..post_text("crew-a/lobby", "补一句")
-                },
-            )
-        });
-        assert_eq!(r.message.mentions, [m(MentionKind::Broadcast, None)]);
-    }
-
-    #[test]
-    fn replying_to_a_system_message_only_broadcasts() {
-        let mut s = store();
-        let sys = ok(&mut s, |tx| {
-            post(tx, Sender::System, post_text("crew-a/lobby", "系统公告"))
-        });
-        let r = ok(&mut s, |tx| {
-            post(
-                tx,
-                session("w-a1"),
-                NewPost {
-                    in_reply_to: Some(sys.message.id.clone()),
-                    ..post_text("crew-a/lobby", "收到")
-                },
-            )
-        });
-        assert_eq!(r.message.mentions, [m(MentionKind::Broadcast, None)]);
     }
 
     #[test]

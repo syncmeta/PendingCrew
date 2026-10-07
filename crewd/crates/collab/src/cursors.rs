@@ -1,6 +1,6 @@
 //! 已读游标（spec §22.2：红标与未读都按游标派生，不建表）。reader = "human" 或 session id。
 use crate::{Change, Result, Tx, channels, listens};
-use crewd_proto::{Badge, MentionKind, Message};
+use crewd_proto::{Badge, Message};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 人类的游标名（Mac / iOS 共用一个）。
@@ -56,54 +56,10 @@ pub fn badge(conn: &Connection, channel: &str) -> Result<Badge> {
 /// 每个群一次最多带多少条未读（再多就是该 `read_channel` 主动拉的量了）。
 pub const UNREAD_CAP: u32 = 200;
 
-/// 这条消息对 `session` 可见吗（移植 `CrewWhiteboardVisibility.isVisible`）。
-/// 纯函数，只看消息里存下来的 target；旧数据里没有 target 的 captain mention 已在数据层落定（`schema::backfill_v3`），
-/// 没落定的（机组没有机长）不是给任何人的。
-pub fn visible_to(m: &Message, session: &str) -> bool {
-    if m.mentions.iter().any(|x| x.kind == MentionKind::Broadcast) {
-        return true;
-    }
-    let narrowing: Vec<_> = m
-        .mentions
-        .iter()
-        .filter(|x| matches!(x.kind, MentionKind::Session | MentionKind::Captain))
-        .collect();
-    if narrowing.is_empty() || m.sender_session_id.as_deref() == Some(session) {
-        return true;
-    }
-    narrowing
-        .iter()
-        .any(|x| x.target_id.as_deref() == Some(session))
-}
-
-/// 看得见、但收窄型 mention 里没有它 → 返回那些目标（去重；渲染时标「发给 X 的」）；否则 None。
-/// 有收窄型 mention、但一个目标都解不出（缺 target_id）→ `Some(vec![])`：仍要标，只是说不出是冲谁。
-/// 没有收窄型 mention（真广播，含只 @ 人类）→ None。
-pub fn directed_targets(m: &Message, session: &str) -> Option<Vec<String>> {
-    let narrowing: Vec<_> = m
-        .mentions
-        .iter()
-        .filter(|x| matches!(x.kind, MentionKind::Session | MentionKind::Captain))
-        .collect();
-    if narrowing.is_empty() {
-        return None;
-    }
-    let mut targets: Vec<String> = Vec::new();
-    for t in narrowing.iter().filter_map(|x| x.target_id.as_ref()) {
-        if t == session {
-            return None;
-        }
-        if !targets.contains(t) {
-            targets.push(t.clone());
-        }
-    }
-    Some(targets)
-}
-
-/// 注入面：该 session 所在的群 + 正在收听的群里，游标之后、对它可见、不是它自己发的消息。
-/// 缺游标行的群先钉末尾、本次不返回。除此之外只读，唯一的写：游标之后**开头**那一段「不可投递」
-/// （自己发的 / 对它不可见）的消息会被游标跳过——那段里没有任何东西可投递，跳过永远安全，
-/// 否则一整个窗口的不可投递消息会把后面的消息永远堵住。
+/// 注入面：该 session 所在的群 + 正在收听的群里，游标之后、不是它自己发的消息（@ 只决定叫醒谁，不收窄
+/// 可见范围——群里的每条消息群成员都看得见，N1 裁定 8）。
+/// 缺游标行的群先钉末尾、本次不返回。除此之外只读，唯一的写：游标之后**开头**那一段自己发的消息
+/// 被游标越过——那段里没有任何东西可投递，跳过永远安全，否则一整个窗口的自己发的消息会把后面的消息永远堵住。
 ///
 /// 窗口规则（裁定 R6）：每个群在游标之后按 seq 升序翻页扫描，收满最旧的 `UNREAD_CAP` 条可投递消息
 /// 或扫到群末尾为止（绝不丢旧留新）。调用方只能把游标推进到**实际带上**的那批里最大的 seq——
@@ -125,7 +81,7 @@ pub fn unread_for(tx: &mut Tx<'_>, session: &str) -> Result<Vec<(String, Vec<Mes
             continue;
         };
         let mut got: Vec<Message> = Vec::new();
-        let mut leading_end: Option<i64> = None; // 开头那段不可投递消息的最后一个 seq
+        let mut leading_end: Option<i64> = None; // 开头那段自己发的消息的最后一个 seq
         'scan: loop {
             let page = crewd_store::messages::list(tx.conn(), &ch, after, None, UNREAD_CAP)?;
             let Some(last) = page.last().map(|m| m.seq) else {
@@ -133,7 +89,7 @@ pub fn unread_for(tx: &mut Tx<'_>, session: &str) -> Result<Vec<(String, Vec<Mes
             };
             let full = page.len() >= UNREAD_CAP as usize;
             for m in page {
-                if m.sender_session_id.as_deref() != Some(session) && visible_to(&m, session) {
+                if m.sender_session_id.as_deref() != Some(session) {
                     got.push(m);
                     if got.len() >= UNREAD_CAP as usize {
                         break 'scan;
@@ -270,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn directed_messages_are_hidden_from_others_but_human_and_broadcast_are_not() {
+    fn a_mention_wakes_but_never_hides_everyone_in_the_channel_sees_it() {
         let mut s = store();
         let to_a2 = say(
             &mut s,
@@ -278,55 +234,25 @@ mod tests {
             "crew-a/lobby",
             vec![at(MentionKind::Session, Some("w-a2"))],
         );
-        let to_human = say(
-            &mut s,
-            "w-a1",
-            "crew-a/lobby",
-            vec![at(MentionKind::Human, None)],
-        );
-        let widened = say(
-            &mut s,
-            "w-a1",
-            "crew-a/lobby",
-            vec![
-                at(MentionKind::Broadcast, None),
-                at(MentionKind::Session, Some("w-a2")),
-            ],
-        );
-        assert_eq!(
-            unread_ids(&mut s, "w-a2"),
-            [to_a2.id.clone(), to_human.id.clone(), widened.id.clone()]
-        );
-        assert_eq!(
-            unread_ids(&mut s, "cap-a"),
-            [to_human.id.clone(), widened.id.clone()]
-        );
-        assert!(visible_to(&to_a2, "w-a1"), "自己发的永远可见");
-        assert_eq!(
-            directed_targets(&widened, "cap-a"),
-            Some(vec!["w-a2".to_string()]),
-            "看得见但不是给我的 → 要标注"
-        );
-        assert_eq!(directed_targets(&widened, "w-a2"), None);
-        assert_eq!(
-            directed_targets(&to_human, "cap-a"),
-            None,
-            "只 @ 人类 = 广播，不标"
-        );
-    }
-
-    #[test]
-    fn visibility_follows_the_stored_target_not_the_current_captain() {
-        let mut s = store();
-        let m = say(
+        let to_cap = say(
             &mut s,
             "w-a1",
             "crew-a/lobby",
             vec![at(MentionKind::Captain, None)],
         );
-        ok(&mut s, |tx| crate::crews::set_captain(tx, "crew-a", "w-a2"));
-        assert!(visible_to(&m, "cap-a"), "发送时的机长是 cap-a");
-        assert!(!visible_to(&m, "w-a2"), "后来的机长不是那条消息的对象");
+        assert_eq!(
+            unread_ids(&mut s, "w-a2"),
+            [to_a2.id.clone(), to_cap.id.clone()]
+        );
+        assert_eq!(
+            unread_ids(&mut s, "cap-a"),
+            [to_a2.id.clone(), to_cap.id.clone()],
+            "@ 别人的也看得见"
+        );
+        assert!(
+            unread_ids(&mut s, "w-a1").is_empty(),
+            "自己发的不是自己的未读"
+        );
     }
 
     #[test]
@@ -392,21 +318,6 @@ mod tests {
         );
     }
 
-    fn directed_to(who: &str) -> Vec<Mention> {
-        vec![at(MentionKind::Session, Some(who))]
-    }
-
-    /// 复核 1（a）：前 200 条都是别人的定向消息，第 201 条才是广播——不能被前面的窗口堵死。
-    #[test]
-    fn a_window_of_invisible_messages_does_not_stall_the_unread_surface() {
-        let mut s = store();
-        for _ in 0..UNREAD_CAP {
-            say(&mut s, "w-a1", "crew-a/lobby", directed_to("w-a2"));
-        }
-        let m = say(&mut s, "w-a1", "crew-a/lobby", vec![]);
-        assert_eq!(unread_ids(&mut s, "cap-a"), [m.id]);
-    }
-
     /// 复核 1（a）：前 200 条是自己发的，第 201 条才是别人发的。
     #[test]
     fn a_window_of_own_messages_does_not_stall_the_unread_surface() {
@@ -418,45 +329,28 @@ mod tests {
         assert_eq!(unread_ids(&mut s, "w-a1"), [m.id]);
     }
 
-    /// 复核 1（a）：可投递的和不可投递的交错，仍然凑满 UNREAD_CAP 条最旧的可投递消息。
-    #[test]
-    fn paging_collects_the_oldest_deliverable_messages_across_hidden_ones() {
-        let mut s = store();
-        let mut deliverable = Vec::new();
-        for i in 0..(UNREAD_CAP as usize * 2 + 10) {
-            if i % 2 == 0 {
-                say(&mut s, "w-a1", "crew-a/lobby", directed_to("w-a2"));
-            } else {
-                deliverable.push(say(&mut s, "w-a1", "crew-a/lobby", vec![]).id);
-            }
-        }
-        let got = unread_ids(&mut s, "cap-a");
-        assert_eq!(got.len(), UNREAD_CAP as usize);
-        assert_eq!(got, deliverable[..UNREAD_CAP as usize]);
-    }
-
-    /// 复核 1（b）：开头那段不可投递的消息，游标被安全地推过去；全程没有可投递的就推到末尾。
+    /// 复核 1（b）：开头一段自己发的消息，游标被安全地推过去；全程没有可投递的就推到末尾。
     #[test]
     fn leading_run_of_undeliverable_messages_advances_the_cursor() {
         let mut s = store();
-        let mut last_hidden = 0;
+        let mut last_own = 0;
         for _ in 0..3 {
-            last_hidden = say(&mut s, "w-a1", "crew-a/lobby", directed_to("w-a2")).seq;
+            last_own = say(&mut s, "cap-a", "crew-a/lobby", vec![]).seq;
         }
         assert!(unread_ids(&mut s, "cap-a").is_empty());
         assert_eq!(
             cursor(s.conn(), "cap-a", "crew-a/lobby").unwrap(),
-            Some(last_hidden),
+            Some(last_own),
             "没有可投递的 = 推到扫过的末尾"
         );
         let m = say(&mut s, "w-a1", "crew-a/lobby", vec![]);
-        say(&mut s, "w-a1", "crew-a/lobby", directed_to("w-a2"));
+        say(&mut s, "cap-a", "crew-a/lobby", vec![]);
         let m_after = say(&mut s, "w-a2", "crew-a/lobby", vec![]);
-        // 可投递消息之后的不可投递消息不能被越过：游标只推过「开头那段」。
+        // 可投递消息之后的自己发的消息不能被越过：游标只推过「开头那段」。
         assert_eq!(unread_ids(&mut s, "cap-a"), [m.id.clone(), m_after.id]);
         assert_eq!(
             cursor(s.conn(), "cap-a", "crew-a/lobby").unwrap(),
-            Some(last_hidden),
+            Some(last_own),
             "遇到第一条可投递的就停；调用方自己 advance"
         );
     }
@@ -522,7 +416,7 @@ mod tests {
     }
 
     /// 复核 3：旧数据里没有 target 的 captain mention 在数据层一次性落成机长指针（`backfill_v3`），
-    /// 读时不再解析；落定之后机长换人，可见性仍跟着存下来的 target。
+    /// 读时不再解析；落定之后机长换人，存下来的 target 仍是当时的机长。
     #[test]
     fn legacy_captain_mention_is_resolved_once_in_the_data_and_stays_put() {
         let mut s = store();
@@ -534,60 +428,16 @@ mod tests {
             Some("w-a1"),
             vec![at(MentionKind::Captain, None)],
         );
-        let raw = crewd_store::messages::list(s.conn(), "crew-a/lobby", 0, None, 10)
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert!(
-            !visible_to(&raw, "cap-a"),
-            "读时不解析：没落定 = 不是给任何人的"
-        );
         crewd_store::schema::backfill_v3(s.conn()).unwrap();
         ok(&mut s, |tx| crate::crews::set_captain(tx, "crew-a", "w-a2"));
+        let stored = crewd_store::messages::get(s.conn(), "legacy-1")
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            unread_ids(&mut s, "cap-a"),
-            ["legacy-1"],
+            stored.mentions,
+            [at(MentionKind::Captain, Some("cap-a"))],
             "落定的是当时的机长"
         );
-        assert!(
-            unread_ids(&mut s, "w-a2").is_empty(),
-            "后来的机长不是它的对象"
-        );
-    }
-
-    /// 复核 4：没有收窄型 mention = None；有收窄型但解不出目标 = Some(空)；目标去重。
-    #[test]
-    fn directed_targets_distinguishes_no_narrowing_from_unresolvable_and_dedupes() {
-        // 直接构造消息：post 会拒绝缺 target 的 session mention，这里要的正是那种旧数据。
-        let with = |mentions: Vec<Mention>| crewd_proto::Message {
-            sender_session_id: Some("w-a1".into()),
-            mentions,
-            ..Default::default()
-        };
-        assert_eq!(directed_targets(&with(vec![]), "cap-a"), None);
-        assert_eq!(
-            directed_targets(&with(vec![at(MentionKind::Human, None)]), "cap-a"),
-            None
-        );
-        let broken = with(vec![
-            at(MentionKind::Broadcast, None),
-            at(MentionKind::Session, None),
-        ]);
-        assert_eq!(
-            directed_targets(&broken, "cap-a"),
-            Some(vec![]),
-            "要标，只是不知道是谁"
-        );
-        let twice = with(vec![
-            at(MentionKind::Broadcast, None),
-            at(MentionKind::Session, Some("w-a2")),
-            at(MentionKind::Session, Some("w-a2")),
-        ]);
-        assert_eq!(
-            directed_targets(&twice, "cap-a"),
-            Some(vec!["w-a2".to_string()])
-        );
-        assert_eq!(directed_targets(&twice, "w-a2"), None);
     }
 
     /// 复核 5：advance 夹在群末尾之内；mark_read 同；回退 / 空操作不产生变更。

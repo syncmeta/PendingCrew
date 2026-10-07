@@ -815,10 +815,7 @@ mod tests {
             serde_json::from_value::<SenderKind>(json!("user")).is_err(),
             "旧词只在迁移 / 导入里归一"
         );
-        assert_eq!(
-            serde_json::to_value(MentionKind::Broadcast).unwrap(),
-            json!("broadcast")
-        );
+        assert_eq!(MentionKind::parse("broadcast"), None);
         assert_eq!(serde_json::to_value(ChannelKind::Dm).unwrap(), json!("dm"));
         assert_eq!(
             serde_json::to_value(MemberRef::Session { id: "w-1".into() }).unwrap(),

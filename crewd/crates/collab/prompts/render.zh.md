@@ -40,11 +40,11 @@ crewd
 ## line
 [{at}] {sender}：{text}
 
-## line.directed
-（发给 {targets} 的，不是派给你的）
+## line.at
+（@{targets}）
 
-## line.directed.unknown
-（不是发给你的）
+## line.at.you
+你
 
 ## line.reply
 （回复 {reply}）

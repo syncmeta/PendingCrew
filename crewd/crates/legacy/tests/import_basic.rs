@@ -353,3 +353,24 @@ fn several_builtin_crews_in_legacy_data_keep_only_the_earliest_as_org_root() {
         r.warnings
     );
 }
+
+#[test]
+fn broadcast_mentions_are_dropped_on_import_and_the_message_is_kept() {
+    let src = fixture_copy();
+    let board = src.path().join("whiteboards/local-aaaa.json");
+    let text = std::fs::read_to_string(&board).unwrap().replace(
+        r#""mentions":[{"kind":"session","target_id":"worker-2222bbbb"}]"#,
+        r#""mentions":[{"kind":"broadcast"},{"kind":"session","target_id":"worker-2222bbbb"}]"#,
+    );
+    std::fs::write(&board, text).unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dest.path().join("crewd.db")).unwrap();
+    let r = import(src.path(), &mut store, dest.path()).unwrap();
+    assert_eq!(r.counts["messages"], 3, "带 broadcast 的消息照常导入");
+    assert_eq!(r.counts["broadcastMentionsDropped"], 1);
+    let m = crewd_store::messages::get(store.conn(), "11111111-0000-4000-8000-000000000001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(m.mentions.len(), 1);
+    assert_eq!(m.mentions[0].kind, crewd_proto::MentionKind::Session);
+}

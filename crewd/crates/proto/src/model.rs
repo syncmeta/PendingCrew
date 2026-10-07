@@ -229,7 +229,7 @@ macro_rules! closed_vocab {
 }
 
 closed_vocab!(SenderKind { Human = "human", Session = "session", Captain = "captain", System = "system" } default Human);
-closed_vocab!(MentionKind { Session = "session", Captain = "captain", Human = "human", Broadcast = "broadcast" } default Broadcast);
+closed_vocab!(MentionKind { Session = "session", Captain = "captain", Human = "human" } default Human);
 closed_vocab!(Role { Captain = "captain", Worker = "worker", Admin = "admin" } default Worker);
 closed_vocab!(Desired { Running = "running", Stopped = "stopped" } default Stopped);
 closed_vocab!(ChannelKind { Lobby = "lobby", Human = "human", Topic = "topic", Dm = "dm" } default Topic);
