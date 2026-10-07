@@ -185,6 +185,9 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
         }
     }
     let _ = std::fs::remove_file(&sock);
+    // 放锁之前关库：已入队的写跑完，optimize + WAL 截断，库线程 join（N4 / S16）。
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || db.shutdown()).await?;
     drop(lock);
     Ok(())
 }

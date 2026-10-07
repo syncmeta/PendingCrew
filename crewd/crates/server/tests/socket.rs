@@ -862,3 +862,54 @@ async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once()
         "{evs:?}"
     );
 }
+
+/// S16 / N4：serve 收到停机信号后，先关库（optimize + WAL 截断）再放数据目录锁。
+/// 外面另开一条读连接，库线程就不是最后一个关的：WAL 被截成 0 只能是 serve 主动收的尾。
+#[tokio::test]
+async fn serve_closes_the_db_cleanly_before_releasing_the_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().to_path_buf();
+    seed(&dir);
+    let (tx, rx) = oneshot::channel::<()>();
+    let d = dir.clone();
+    let served = tokio::spawn(async move {
+        crewd_server::serve(d, async {
+            let _ = rx.await;
+        })
+        .await
+    });
+    let mut ok = false;
+    for _ in 0..100 {
+        if UnixStream::connect(dir.join("crewd.sock")).await.is_ok() {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(ok, "crewd 没起来");
+    let mut c = Client::connect(&dir).await;
+    c.call(
+        1,
+        "message.post",
+        json!({"channelId":"a/lobby","text":"关机前的最后一条"}),
+    )
+    .await;
+    let other = rusqlite::Connection::open(dir.join("crewd.db")).unwrap();
+    let _: i64 = other
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap();
+    assert!(std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len() > 0);
+    tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), served)
+        .await
+        .expect("serve 没退出")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len(),
+        0,
+        "serve 返回时库已经收好尾"
+    );
+    drop(c);
+    crewd_server::lock_data_dir(&dir).expect("锁已释放");
+}
