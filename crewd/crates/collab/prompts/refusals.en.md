@@ -143,7 +143,7 @@ Crew {crew} still has {running} running sessions. Stop them first.
 Crew {crew} still has unarchived child crews: {children}. Move them away (crew.release) or archive them first.
 
 ## crew.parent_archived
-The parent crews of {crew} ({parents}) are archived too. Unarchive the parents first.
+The parent crews of {crew} ({parents}) are archived, and nothing live may hang under an archived crew. Unarchive that parent first (crew.unarchive). Once it is unarchived, release {crew} from it if you no longer want it there.
 
 ## crew.not_archived
 Crew {crew} is not archived. Only archived crews can be deleted permanently; archive it first (crew.delete).

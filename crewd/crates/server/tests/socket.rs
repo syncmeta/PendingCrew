@@ -71,11 +71,20 @@ impl Client {
         }
     }
     async fn call_err(&mut self, id: u64, method: &str, params: Value) -> i32 {
+        self.call_rpc_err(id, method, params).await.code
+    }
+    /// 整个错误（含 `data.refusal`）。
+    async fn call_rpc_err(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> crewd_proto::RpcError {
         self.send_raw(&json!({"id":id,"method":method,"params":params}).to_string())
             .await;
         match self.next().await {
             ServerFrame::Response(r) => match r.into_result() {
-                Err(e) => e.code,
+                Err(e) => e,
                 Ok(v) => panic!("{method} 应当失败，却返回 {v}"),
             },
             ServerFrame::Event(e) => panic!("意外的事件 {e:?}"),
@@ -519,15 +528,21 @@ async fn channels_can_be_created_watched_and_handed_over() {
         .call(10, "crew.list", json!({"includeArchived":true}))
         .await;
     assert!(has(&all), "{all}");
-    assert_eq!(
-        c.call_err(
+    let refused = c
+        .call_rpc_err(
             11,
             "message.post",
-            json!({"channelId":format!("{}/lobby", made["id"].as_str().unwrap()),"text":"还在吗"})
+            json!({"channelId":format!("{}/lobby", made["id"].as_str().unwrap()),"text":"还在吗"}),
         )
-        .await,
-        -32602,
-        "归档机组的大厅不收消息"
+        .await;
+    assert_eq!(
+        refused.code, -32009,
+        "归档机组的大厅不收消息（与人类群同一个答案）"
+    );
+    assert_eq!(
+        refused.data.map(|d| d.refusal).as_deref(),
+        Some("channel.archived"),
+        "线上带稳定码"
     );
     let back = c
         .call(12, "crew.unarchive", json!({"crewId":made["id"]}))

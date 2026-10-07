@@ -317,9 +317,10 @@ pub fn dm_peer(conn: &Connection, channel: &str, of: &MemberRef) -> Result<Optio
     Ok(ms.into_iter().find(|m| m != of))
 }
 
-/// 群已归档（channel.archived；listens / messages / 本文件共用同一句）。
+/// 群已归档（channel.archived；listens / messages / 本文件共用同一句）：与当前状态冲突（解档就行），
+/// 一律 Conflict —— 往归档机组的大厅、人类群、topic 发言得到的是同一个答案。
 pub(crate) fn archived(channel: &str) -> CollabError {
-    CollabError::Invalid(Refusal::new(Code::ChannelArchived).arg("channel", channel))
+    CollabError::Conflict(Refusal::new(Code::ChannelArchived).arg("channel", channel))
 }
 
 /// `crew` 不是一级机组、没有自己的人类群：指路到它的 home 的人类群（messages / 本文件共用同一句）。
@@ -1920,15 +1921,15 @@ mod tests {
                 &ch.id,
                 &s("w-a2")
             )),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| accept_owner_transfer(tx, &w2, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| withdraw_owner_transfer(tx, &w1, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| force_owner(
@@ -1937,7 +1938,7 @@ mod tests {
                 &ch.id,
                 &s("w-a2")
             )),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         // 带着陈旧待办的已归档群（直接造数据）：accept / withdraw 也拒。
         s_.conn()
@@ -1948,11 +1949,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             err(&mut s_, |tx| accept_owner_transfer(tx, &w2, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s_, |tx| withdraw_owner_transfer(tx, &w1, &ch.id)),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
     }
 
@@ -2132,7 +2133,7 @@ mod tests {
         });
         assert!(matches!(
             err(&mut s_, |tx| add_members(tx, &w1, &ch.id, &[s("w-b1")])),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
     }
 

@@ -201,6 +201,10 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
     // 已归档就解档、钉机长游标、记 ChannelChanged），同一个 Tx。更深的机组没有人类群，指路到它的 home。
     if let Some(crew) = p.channel_id.strip_suffix("/human") {
         crews::get(conn, crew)?;
+        // 归档机组的人类群发言与它的大厅 / topic 同一个答案（channel.archived，Conflict），不是 crew.archived。
+        if crews::is_archived(conn, crew)? {
+            return Err(channels::archived(&p.channel_id));
+        }
         if crews::is_home(conn, crew)? {
             channels::ensure_human_channel(tx, crew)?;
         } else {
@@ -626,7 +630,7 @@ mod tests {
                 session("w-a1"),
                 post_text(&ch.id, "还在吗")
             )),
-            CollabError::Invalid(_)
+            CollabError::Conflict(_)
         ));
         assert!(matches!(
             err(&mut s, |tx| post(

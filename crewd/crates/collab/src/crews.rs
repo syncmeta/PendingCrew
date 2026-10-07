@@ -2200,6 +2200,48 @@ mod tests {
         });
     }
 
+    /// 往归档机组的任何群发言都是同一个答案（Task 9 复审）：Conflict + `channel.archived`，不论大厅、人类群还是
+    /// topic（之前大厅 -32602、人类群 -32009）。
+    #[test]
+    fn posting_to_any_channel_of_an_archived_crew_gets_one_code() {
+        use crate::channels::{self, NewChannel};
+        use crate::refusal::Code;
+        use crewd_proto::ChannelKind;
+        let mut s = store();
+        ok(&mut s, |tx| channels::ensure_human_channel(tx, "crew-x"));
+        let topic = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &crate::Sender::Human,
+                NewChannel {
+                    crew_id: "crew-x".into(),
+                    kind: ChannelKind::Topic,
+                    name: "议题".into(),
+                    purpose: None,
+                    members: vec![],
+                },
+            )
+        });
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        for ch in ["crew-x/lobby", "crew-x/human", topic.id.as_str()] {
+            let e = err(&mut s, |tx| {
+                crate::messages::post(
+                    tx,
+                    crate::Sender::Human,
+                    crate::messages::NewPost {
+                        channel_id: ch.into(),
+                        text: "还在吗".into(),
+                        ..Default::default()
+                    },
+                )
+            });
+            match &e {
+                CollabError::Conflict(r) => assert_eq!(r.code, Code::ChannelArchived, "{ch}"),
+                e => panic!("{ch}: {e:?}"),
+            }
+        }
+    }
+
     /// 归档的机组只读（Task 9 / preflight M4）：结构操作、改名、换机长、起 session、建群、解档它的群、
     /// 往它的人类群发言一律 Conflict，指路先解档；channel.list 不会顺手把它的人类群解档。
     #[test]

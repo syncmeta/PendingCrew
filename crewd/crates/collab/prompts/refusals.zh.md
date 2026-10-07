@@ -143,7 +143,7 @@
 机组 {crew} 下面还有没归档的子机组 {children}；先把它们挪走（crew.release）或归档
 
 ## crew.parent_archived
-机组 {crew} 的上级 {parents} 也已归档；先解档上级
+机组 {crew} 的上级 {parents} 已归档，归档的机组下面不挂活的；先解档这个上级（crew.unarchive）。解档后若不想再挂在它下面，用 release 把 {crew} 从它摘出
 
 ## crew.not_archived
 机组 {crew} 还没归档；永久删除只收已归档的机组，先归档（crew.delete）
