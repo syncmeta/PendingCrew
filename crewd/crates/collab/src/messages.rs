@@ -1435,4 +1435,35 @@ mod tests {
             AskStateView::Open
         );
     }
+
+    /// 裁定 8 的例外落在提问者确实在人类群里的时候：它先在 home 的人类群发过言（= 入群），人再回复它的问。
+    #[test]
+    fn answering_an_ask_does_not_also_mention_an_asker_who_is_in_the_human_channel() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            post(tx, session("w-b1"), post_text("crew-a/human", "我要问个事"))
+        });
+        assert!(
+            crate::channels::is_member(s.conn(), "crew-a/human", &MemberRef::session("w-b1"))
+                .unwrap()
+        );
+        let a = open_ask(&mut s);
+        let p = ok(&mut s, |tx| {
+            post(
+                tx,
+                Sender::Human,
+                NewPost {
+                    in_reply_to: a.message_id.clone(),
+                    ..post_text("crew-a/human", "用 main")
+                },
+            )
+        });
+        assert_eq!(p.answered_ask, Some(("crew-b".to_string(), a.ask.clone())));
+        assert!(p.message.mentions.is_empty(), "{:?}", p.message.mentions);
+        let w = crate::wakes::list(s.conn(), Some("w-b1"), 10).unwrap();
+        assert_eq!(
+            w.iter().map(|x| x.source.clone()).collect::<Vec<_>>(),
+            vec![crate::wakes::source::ask("crew-b", &a.ask)]
+        );
+    }
 }
