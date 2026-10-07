@@ -13,7 +13,7 @@
 目标
 - G1 布置下去的事一定有人跟进，不靠 session 记性，不靠人催 **[人]**。
 - G2 卡在人身上只卡那一件，不卡 session **[人]**。
-- G3 高频小判断（派给谁、谁收消息、归到哪条、侧边栏排序）由 Jev 做，机长只接低置信度 **[人]**。
+- G3 高频小判断（派给谁、谁收消息、归到哪条、~~侧边栏排序~~）由 Jev 做，机长只接低置信度 **[人]**。 **〔2026-10-07 改，见 §24〕** 侧栏不自动排序（§22.7 Q4 / C1），「侧边栏排序」这项删除。
 - G4 前后端解耦，后端跨平台，Mac 与 iOS 平等地是客户端 **[人]**。
 - G5 iOS 正式重启（08-23 的「当没有 iOS」作废），与 iPadOS 一起做 **[人]**。
 
@@ -36,7 +36,7 @@
 - 延迟唤醒队列只在内存 **[码 CrewDeferredWakeQueue.swift]**；重启丢。
 - Stop hook **刻意永不阻塞**（「把等人变空转」）**[码 McpTurnHook.swift:13]** —— 本设计的「停下即检查」必须走 idle 边沿重新唤醒，**不能**改成 Stop block。
 - 上下文注入已有两条路：claude 的 PostToolUse `additionalContext`（白板未读）**[码 HookEmitter.swift:166-221]**；codex `turn/start.additionalContext` 按 key 去重 **[码 CodexProtocol turnStartParams]**。claude 目前没注册 UserPromptSubmit。
-- 机组是多父 DAG（`parentIds`）**[码 LocalCrewStore.swift:416]**，总机组不是存下来的边。→「根机组」= 无存储父边的机组；多父时归属有歧义（§13 Q1）。
+- 机组是多父 DAG（`parentIds`）**[码 LocalCrewStore.swift:416]**，总机组不是存下来的边。→「根机组」= 无存储父边的机组；多父时归属有歧义（§13 Q1）。 **〔2026-10-07 改，见 §24〕** 这是 Swift 版的事实。crewd 里总机组是唯一的根（H2），一级机组 = 总机组的直系子，人类群归一级机组。
 - 唤醒准入限流：全机 12/分、单 session 2/分、单机组 5/分，且人类唤醒也受全机限 **[码 AutomaticWakeAdmission.swift:282-330]**。检查点唤醒量上来会撞这个。
 - 全部数据是 JSON + flock，无 DB **[码 MultiProcessJSONStore.swift]**；Mac UI 直接读写这些文件，绕过协议。
 - 已有语言中立线协议（长度前缀帧：control JSON / terminal bytes / snapshot）**[码 SessionProtocol.swift:11-17]**，但只覆盖 session + 7 个 crew 读/发操作。
@@ -63,7 +63,7 @@
 不做「crewd ↔ Swift 执行器」的桥（白写、双常驻进程）。crewd 独立开发到主路径对等后一次性切换；期间现有 Swift 版照用、只修 bug。
 - **M1 地基**：Rust workspace、SQLite 存储、旧 JSON 只读导入、客户端 API（Unix socket）+ 契约 schema。
 - **M2 执行器**：PTY（rustix-openpty 手写 + tokio，选型见 §18）+ alacritty_terminal 无头终端（屏幕文本、快照、对话框识别）、claude 启动参数与 hooks、codex app-server 客户端、孤儿回收、会话恢复（--resume）。
-- **M3 协作**：机组/白板/人类待确认/审批台账、`crewd mcp` 与 `crewd hook` 子命令、唤醒投递与准入。细分见 §22（M3a 数据与 API → M3b agent 面 ∥ M3c 编排 → M4b）。
+- **M3 协作**：机组/白板/人类待确认/审批台账、`crewd mcp` 与 `crewd hook` 子命令、唤醒投递与准入。细分见 §22（M3a 数据与 API → M3b agent 面 ∥ M3c 编排 → M4b）。 **〔2026-10-07 改，见 §24〕** 审批台账不做了（runner 自己的权限系统处理）。
 - **M4 工作跟进**：两层 Todo、负责人、检查点、停下即检查、卡住拆分（§4–6、§9）。
 - **M5 Jev 调度**（§7）：**M5a** 客户端 + 中文实测（已交付，§20）→ **M5b** 接进调度（依赖 M3 的群与成员、M4 的工作项）。
 - **M6 行政处**（§8）。
@@ -106,7 +106,7 @@ revision, createdAt, updatedAt
 - active ⇒ nextCheckAt 存在且 ≤ now + 上限（默认上限 2h，可配）。
 - done ⇒ evidence。
 - dependsOn 未全 done 的项不能 active（只能 open/blocked）。
-- **[推]** v1 依赖只限同机组；跨机组靠入口 Todo 的 contact，不做跨组 DAG 边（§13 Q5）。
+- **[推]** v1 依赖只限同机组；跨机组靠入口 Todo 的 contact，不做跨组 DAG 边（§13 Q5）。 **〔2026-10-07 改，见 §24〕** `contact` 删除，跨机组说话 = dm；工作账本改为全组织一本（M4b）。
 
 ### 4.3 「我的工作项」常驻上下文 **[人]**
 - 每次唤醒正文 + 每轮注入一段「你名下的工作项」（id、标题、状态、下一步、检查时间、被谁卡）。
@@ -139,9 +139,9 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 | 决策 | 问题 | 状态（state） | 执行 |
 |---|---|---|---|
 | 入口 Todo 派给谁 | `choice`：captain / 每个活跃 session 一项 / new_session / new_crew | Todo 原文 + 活跃名单（角色、名下工作项标题、忙闲、最近活跃**相对排名**而非时间戳） | 绑定并唤醒；new_session → crewd 起 worker，首条唤醒 = Todo 原文 + 机组上下文；**new_crew → 交机长执行**（建组要起名/写章程，Jev 不能生成文字）**[推]** |
-| 人类消息谁被叫醒 | 每个成员一道 `noul` | 消息 + 最近几条 + 名单与分工 | 叫醒集合 = p≥阈值；空集 → 机长。**可见性不变**（全员可读），Jev 只决定「谁现在醒」——对齐记忆：broadcast 管看得见、session 管谁醒 |
+| 人类消息谁被叫醒 | 每个成员一道 `noul` | 消息 + 最近几条 + 名单与分工 | 叫醒集合 = p≥阈值；空集 → 机长。**可见性不变**（全员可读），Jev 只决定「谁现在醒」——对齐记忆：broadcast 管看得见、session 管谁醒 **〔2026-10-07 改，见 §24〕** 可见性 = 群成员资格，@ 只决定叫醒谁；broadcast 已删。 |
 | 随手消息归属 | `choice`：最近 N 条消息 + 未完成入口/工作项 + none | 消息 + 候选摘要 | 写 reply_to / 关联工作项 |
-| 侧边栏排序 | 每机组一道 `score`（紧急度） | 机组摘要 | 与代码算的最近活跃合成排序键 |
+| ~~侧边栏排序~~ | ~~每机组一道 `score`（紧急度）~~ | ~~机组摘要~~ | ~~与代码算的最近活跃合成排序键~~ **〔2026-10-07 改，见 §24〕** 作废：侧栏由人手排（§22.7 Q4）；urgency 决策一并删除（M5b） |
 
 ### 7.3 防坑（来自官方 jev-1.13 已知局限）
 - 偏向第一个选项 → 每次按种子打乱选项顺序（种子由这次的输入算出：同一输入同一顺序，诊断日志可复现；不同输入的顺序近似均匀）。
@@ -156,7 +156,7 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 ## 8. 行政处 **[人]**
 
 ### 8.1 编制
-每个**根机组**一个行政处（管整棵子树），按需启动的临时 session，新角色 `admin`。
+每个**根机组**一个行政处（管整棵子树），按需启动的临时 session，新角色 `admin`。 **〔2026-10-07 改，见 §24〕** 根只剩总机组；行政处的管辖范围（按一级机组还是全组织）留给 M6 重定。
 
 ### 8.2 业务 vs 行政
 机长 = 业务：做什么、怎么做、做到什么程度、优先级、验收。
@@ -169,8 +169,8 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 | 人事 | 活跃名单（最近活跃、负载）、并发上限 | 「该 session 是否可下线」 | — |
 | 督办 | 计时器、持久队列、停下即检查 | 「回报是真进展还是原地踏步」「是否卡死」 | 需要协调时（谈换人、拆项） |
 | 档案 | DAG/链接完整性 | 发现疑似过期/重复/已完成 | 核实（git/群聊）并带证据关闭 |
-| 秘书 | 等待时长、提醒节奏 | 合并同类、排紧急度 | 写给人的简报 |
-| 排序 | 最近活跃 | 紧急度打分 | — |
+| 秘书 | 等待时长、提醒节奏 | 合并同类、~~排紧急度~~ | 写给人的简报 |
+| ~~排序~~ | ~~最近活跃~~ | ~~紧急度打分~~ | — **〔2026-10-07 改，见 §24〕** 作废（侧栏人排） |
 
 ### 8.4 运行
 - 巡检触发：子树内每 10 条消息 / 定时（默认 30min）/ 人手动按钮 **[人]**。
@@ -188,7 +188,7 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 
 ## 11. UI（最小）
 - 入口 Todo 行内显示「→ W3 W4（2/3）」与负责人。
-- 人的待确认清单：按紧急度排，显示已等时长。
+- 人的待确认清单：~~按紧急度排~~按已等时长排，显示已等时长。**〔2026-10-07 改，见 §24〕** 清单即全组织一个的「待人类处理」收件箱（M4b）。
 - 机组页一个「行政巡检」按钮。设置页 Jev 一节。
 - 工作项 DAG 不做专门可视化（人说看不完；需要时点进去看列表）。
 
@@ -276,9 +276,9 @@ M2 拆为：**M2a** 终端核心（已交付，§15）→ **M2b** claude 会话�
 - **工作项不自动建群 [人 已定]**：需要协作时负责人自己建，可把群关联到工作项；换负责人时把新负责人拉进关联群；工作项结束后行政处归档闲置群。
 
 **人类与群 [人 已定]**：
-- **每个根机组预置一个「人类群」**：人类参与，相当于以前「仅看 @人类」的过滤视图——要找人类、要人拍板的东西发这里（人类待确认清单的入口也在这里）。
+- **每个根机组预置一个「人类群」**：人类参与，相当于以前「仅看 @人类」的过滤视图——要找人类、要人拍板的东西发这里（人类待确认清单的入口也在这里）。 **〔2026-10-07 改，见 §24〕** 改为：每个一级机组一个人类群，总机组有自己的管理用人类群；二级及更深的机组用一级祖先的。
 - 人类**可以进任何群发言**，但 session **不能默认人类在看**任何群。
-- 人类可以把某个群标成**「我在注视」**，让 agent 知道「找人类该发到哪」；**默认不注视**。agent 要找人类时：发到根机组人类群，或发到人类正在注视的群。
+- 人类可以把某个群标成**「我在注视」**，让 agent 知道「找人类该发到哪」；**默认不注视**。agent 要找人类时：发到根机组人类群，或发到人类正在注视的群。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作「本机组所属一级机组的人类群」。
 - 世界观提示词要写清这条规则；MCP 工具提供「人类现在注视哪些群」的查询。
 - **@人类 = 叫人 [人 已定 2026-10-06]**：任何群里 @人类，该群在人类界面上显示红色「叫你」标记（类似微信被@），不论是否注视；人类看过该条后标记消失。
 - 但 agent 必须清楚：**在人类没有注视的群里 @人类，相当于对方开着免打扰时叫他**——标记会亮，但人类可能很久才看到。急事或要拍板的事应发到根机组人类群（或写成人类待确认项）。为此，在未注视的群 @人类 时，工具回执要明说「人类未注视此群，@ 已标红但可能延迟看到；急事请发人类群」，而不是只回「已发送」（记忆：回执照回「已发到」误导过）。
@@ -595,37 +595,37 @@ crews    += title_source, status_line, policy, captain_session_id, next_ext, pos
 
 迁移
 - 每个机组建大厅，`id = '<crew_id>/lobby'`（确定性，测试可断言）；旧消息全部归到所属机组大厅。
-- 人类群**懒建**：`'<root_crew_id>/human'`，在第一次有人往根机组人类群发言、或客户端 `channel.list` 列到根机组时建。
+- 人类群**懒建**：`'<root_crew_id>/human'`，在第一次有人往根机组人类群发言、或客户端 `channel.list` 列到根机组时建。 **〔2026-10-07 改，见 §24〕** id 改为 `<一级机组 id>/human`（总机组 = 它自己的）。
 - 游标全部钉在迁移那一刻各群的末尾（每个 session 钉自己机组的大厅，human 钉每个群）：**迁移不产生任何未读、红标或唤醒**（#595 全机重放的教训）。代价是旧的 @人类 不再亮，接受。
 - 导入的 session 一律 `desired='stopped'`；`extra` JSON 不解析。
 
 群规则 [推]
-- 大厅成员 = 本机组全部 session + 人类，**隐式**，不写 channel_members。人类群成员 = 人类 + 根机组机长（隐式）+ 显式行。topic / dm 全部显式。
-- 只有成员能发言。例外：往根机组人类群发言自动入群（人回话时它才在群里）；system 可往任何群发——跨机组语法糖（`contact` 到别的机组、`report_to_parent`、`message_child_crew`）= system 发言 + 正文首行署名。dm 恰好两人、不能加人，归属发起者的机组。
+- 大厅成员 = 本机组全部 session + 人类，**隐式**，不写 channel_members。人类群成员 = 人类 + 根机组机长（隐式）+ 显式行。topic / dm 全部显式。 **〔2026-10-07 改，见 §24〕** 「根机组」读作一级机组（`crews::home_of`）。
+- 只有成员能发言。例外：往根机组人类群发言自动入群（人回话时它才在群里）；system 可往任何群发——跨机组语法糖（`contact` 到别的机组、`report_to_parent`、`message_child_crew`）= system 发言 + 正文首行署名。dm 恰好两人、不能加人，归属发起者的机组。 **〔2026-10-07 改，见 §24〕** system 署名的跨机组语法糖（C7）作废，跨机组说话 = dm。
 - 跨机组成员：`channel.list(crewId)` 返回归属该机组的群 ∪ 有成员 session 属于该机组的群（§17「同时显示在每个成员所在机组下」）。
 - 已归档的群拒收消息，可以解档。
-- @ 在发送时解析成具体目标落库：`captain` → 群归属机组当时的机长 session id（写进 targetId，事后换机长不改历史）；`reply_to` 自动追加 `[broadcast, 被回复者]`（同 main 7af98b6）；目标不是群成员 → 拒，回执列出成员。
+- @ 在发送时解析成具体目标落库：`captain` → 群归属机组当时的机长 session id（写进 targetId，事后换机长不改历史）；`reply_to` 自动追加 `[broadcast, 被回复者]`（同 main 7af98b6）；目标不是群成员 → 拒，回执列出成员。 **〔2026-10-07 改，见 §24〕** reply_to 不再追加 broadcast，只 @ 原发送者且他仍在群里；broadcast 种类删除。
 - §17 的待细化项：不做话题 / 回复串，用 `in_reply_to`；子机组只表达组织结构（部门 / 小组，可有独立工作目录与机长），按话题 / 任务协作用群（人 2026-10-06）。
 
 红标与未读 [推]：不建表，按游标派生。某群 @人类红标数 = 该群 `seq > human 游标` 且 mentions 含 human 的消息数；`read.mark` 推进 human 游标，红标就消。Mac / iOS 共用同一个 human 游标。
 
-根机组：`collab::root_of(crew)` = 没有父边的祖先里 created_at 最早的（§13 Q1）。根机组被收编后，它的人类群自动归档（消息保留）；它账本上的 H 号不动，改在新根的人类群里展示 [推]。
+根机组：`collab::root_of(crew)` = 没有父边的祖先里 created_at 最早的（§13 Q1）。根机组被收编后，它的人类群自动归档（消息保留）；它账本上的 H 号不动，改在新根的人类群里展示 [推]。 **〔2026-10-07 改，见 §24〕** `root_of` 删除，换成 `home_of`（总机组 → 自己；一级机组 → 自己；更深 → 一级祖先里最早建的）。
 
-机组 DAG（移植 `LocalCrewStore.swift:356 attachParent`、`:501 adopt`、`:526 release`）：禁环（含自己挂自己）；内建机组（`builtin`）既不能被收编也不能收编别人；只能 release 直系子；release 带 `to` 时先挂新边、再摘旧边，失败不留副作用；能新建子机组、父机组；只能删非内建、且没有 `desired=running` session 的机组。号码规则照 `CrewDirectory.swift:8-13`（终身不变、不回收、分机 1 = 机长）。
+机组 DAG（移植 `LocalCrewStore.swift:356 attachParent`、`:501 adopt`、`:526 release`）：禁环（含自己挂自己）；内建机组（`builtin`）既不能被收编也不能收编别人；只能 release 直系子；release 带 `to` 时先挂新边、再摘旧边，失败不留副作用；能新建子机组、父机组；只能删非内建、且没有 `desired=running` session 的机组。号码规则照 `CrewDirectory.swift:8-13`（终身不变、不回收、分机 1 = 机长）。 **〔2026-10-07 改，见 §24〕** 内建特例删除；总机组 = 唯一根：不能被收编 / 摘出 / 删除 / 归档，新机组默认挂它下面，指向它的边只能是唯一的父；`crew.delete` = 归档。
 
 人类待确认（H 号）
 - `collab::asks`：每个机组一本 `crewd_work::WorkBook`，整份 `BookState` 存 `work_books`（M4a 定的持久化边界），每条命令在一个 SQLite 事务里读、改、写。M3 只用 `open_ask / answer_ask / apply_default`，外加 M3a 给 crewd-work 补的 `withdraw_ask(by, now, ask, reason)`（提问者 / 机长 / 人可撤；`AskState::Withdrawn{reason, at}`；问还卡着活项时拒绝）。
 - 开问时在同一事务里往根机组人类群发一条 @human 消息，`ask_meta` 记下这条消息的 id 和 resume_note。
-- 权限审批（照 Swift 驾驶舱 #75②，不阻塞）：`approvals::gate` 一个事务——有票 → 用掉、放行；同 session 同工具已有未决请求 → 只拒；否则开一条、在根机组人类群 @人 → 拒。人同意 = 一次性放行票（同 session 下一次同名调用用掉），决定后给提问者入队唤醒（source `approval:<id>`）。不发 H 号（不是工作卡点），人在 `approval.list` 里看到它。
+- 权限审批（照 Swift 驾驶舱 #75②，不阻塞）：`approvals::gate` 一个事务——有票 → 用掉、放行；同 session 同工具已有未决请求 → 只拒；否则开一条、在根机组人类群 @人 → 拒。人同意 = 一次性放行票（同 session 下一次同名调用用掉），决定后给提问者入队唤醒（source `approval:<id>`）。不发 H 号（不是工作卡点），人在 `approval.list` 里看到它。 **〔2026-10-07 改，见 §24〕** **作废**：PendingCrew 不做审批（人 2026-10-07），claude / codex 自己的权限系统处理；v4 删表。
 
 客户端 RPC（`crewd_proto::methods`；`whiteboard.*` 直接删，不留别名）
 | 方法 | params | result |
 |---|---|---|
 | crew.list / crew.get | — / {crewId} | Crew[]（按 position）/ CrewDetail（含 channels、sessions、rootId）|
-| crew.reorder | {parentId?, crewIds}（这一层的全部机组，新顺序；只有客户端）| Crew[] |
+| crew.reorder | {parentId?, crewIds}（这一层的全部机组，新顺序；只有客户端）| Crew[] **〔2026-10-07 改，见 §24〕** `parentId` 必填（顶层只剩总机组）。 |
 | crew.create | {title, workingDirectory, parentId?} | Crew |
 | crew.update | {crewId, title?, workingDirectory?, hidden?, statusLine?} | Crew |
-| crew.adopt / crew.release / crew.delete | {crewId, parentId} / {crewId, fromParentId, toParentId?} / {crewId} | Crew / Crew / {} |
+| crew.adopt / crew.release / crew.delete | {crewId, parentId} / {crewId, fromParentId, toParentId?} / {crewId} | Crew / Crew / {} **〔2026-10-07 改，见 §24〕** `crew.delete` = 归档，另有 `crew.unarchive`；永久删除另开（先快照，N4）。 |
 | channel.list | {crewId} | ChannelSummary[]（群 + 成员 + watched + unreadForHuman + humanMentions）|
 | channel.create | {crewId, kind: topic 或 dm, name, purpose?, members: MemberRef[]} | Channel |
 | channel.update | {channelId, name?, purpose?, archived?} | Channel |
@@ -636,13 +636,13 @@ crews    += title_source, status_line, policy, captain_session_id, next_ext, pos
 | message.search | {query, crewId?, channelIds?, after?, before?, limit?} | Message[] |
 | read.mark | {channelId, seq} | ChannelSummary |
 | session.list / session.get | {crewId?} / {sessionId} | Session[] / Session |
-| ask.list / ask.answer / ask.withdraw | {rootCrewId?} / {crewId, ask, text} / {crewId, ask, reason} | HumanWait[] / Ask / Ask |
-| approval.list / approval.decide | {} / {id, allow}（同意 = 一次性票）| Approval[] / Approval |
+| ask.list / ask.answer / ask.withdraw | {rootCrewId?} / {crewId, ask, text} / {crewId, ask, reason} | HumanWait[] / Ask / Ask **〔2026-10-07 改，见 §24〕** `rootCrewId` → `homeCrewId`（一级机组）。 |
+| approval.list / approval.decide | {} / {id, allow}（同意 = 一次性票）| Approval[] / Approval **〔2026-10-07 改，见 §24〕** 删除（不做审批）。 |
 | restart.pending / restart.answer | {} / {id, answer: resume\|later} | RestartPrompt? / RestartPrompt |
 | directory.list | {query?} | DirectoryRow[] |
 | todo.list | 不变 | 不变 |
 
-事件（主题 = 事件名第一段）：`message.appended`(Message)、`channel.changed`(ChannelSummary)、`channel.removed`({channelId}，群随机组删除被级联删掉)、`crew.changed`(Crew)、`crew.removed`({crewId})、`badge.changed`({channelId, unreadForHuman, humanMentions})、`ask.changed`(Ask)、`approval.changed`(Approval)、`restart.changed`(RestartPrompt)、`session.changed`(SessionLive，由 M3c 发)、`wake.changed`（M3c，排障）、`events.lagged`。`Message.crewId` 换成 `channelId`，不保留两个字段。M2d 与 iOS 只用这一套；iOS 的远程传输仍按 Q11。
+事件（主题 = 事件名第一段）：`message.appended`(Message)、`channel.changed`(ChannelSummary)、`channel.removed`({channelId}，群随机组删除被级联删掉)、`crew.changed`(Crew)、`crew.removed`({crewId})、`badge.changed`({channelId, unreadForHuman, humanMentions})、`ask.changed`(Ask)、`approval.changed`(Approval)、`restart.changed`(RestartPrompt)、`session.changed`(SessionLive，由 M3c 发)、`wake.changed`（M3c，排障）、`events.lagged`。`Message.crewId` 换成 `channelId`，不保留两个字段。M2d 与 iOS 只用这一套；iOS 的远程传输仍按 Q11。 **〔2026-10-07 改，见 §24〕** `approval.changed` 与主题 `approval` 删除。
 
 验收
 - 真实数据只读演练（照 M1 的做法，在副本上跑）：v2→v3 前后消息条数与 seq 集合一致；每个机组恰好一个大厅；迁移后 human 红标为 0、每个 session 未读为 0；再跑一遍迁移没有变化。
@@ -676,8 +676,8 @@ agent RPC（只有 attach 过的连接能调；没 attach 的调 → -32601）
 - 角色变了：serve 在 attach 的连接上推 `agent.tools_changed`，helper 转成 `notifications/tools/list_changed`。客户端不理会也没关系，调用时还会现查。
 
 hook 行为
-- post-tool-use：先报产出——工具不是 crewd 自己的（`mcp__crew__*`）→ `sessions::note_progress(ToolCall)`（发言 / 读群不算，§22.7 控制者裁定）；再把本 session 所在的群（大厅 + 显式成员群 + 正在收听的群）里游标之后的未读渲染成 `hookSpecificOutput.additionalContext`（上限 9,000 字符，超了省略最旧的并自报）。可见性（M3a 的 `cursors`，移植 `CrewWhiteboardVisibility.swift:48`）：只有 session / captain 收窄可见范围，human 不收窄，broadcast 放宽，自己发的永远可见。注入后推进游标；这个游标与唤醒共用，一条消息对一个 session 至多注入一次（`HookEmitter.swift:166-221`）。
-- pre-tool-use（照 Swift 驾驶舱 #75②，**不阻塞**）：tool_name 命中 `approval_gates`（默认 `["computer-use"]`）→ `approvals::gate`：有一次性票 → allow；否则 deny，并（同工具没在等时）开一条审批、在根机组人类群 @人；人同意后它被叫醒、重跑同一调用放行一次。人卡住的只有这一次调用，session 照常干别的。没命中 → 不输出。连不上 crewd：命中的 **deny**。
+- post-tool-use：先报产出——工具不是 crewd 自己的（`mcp__crew__*`）→ `sessions::note_progress(ToolCall)`（发言 / 读群不算，§22.7 控制者裁定）；再把本 session 所在的群（大厅 + 显式成员群 + 正在收听的群）里游标之后的未读渲染成 `hookSpecificOutput.additionalContext`（上限 9,000 字符，超了省略最旧的并自报）。可见性（M3a 的 `cursors`，移植 `CrewWhiteboardVisibility.swift:48`）：只有 session / captain 收窄可见范围，human 不收窄，broadcast 放宽，自己发的永远可见。注入后推进游标；这个游标与唤醒共用，一条消息对一个 session 至多注入一次（`HookEmitter.swift:166-221`）。 **〔2026-10-07 改，见 §24〕** 可见性规则改为「群成员全可见」，不再有收窄 / broadcast。
+- pre-tool-use（照 Swift 驾驶舱 #75②，**不阻塞**）：tool_name 命中 `approval_gates`（默认 `["computer-use"]`）→ `approvals::gate`：有一次性票 → allow；否则 deny，并（同工具没在等时）开一条审批、在根机组人类群 @人；人同意后它被叫醒、重跑同一调用放行一次。人卡住的只有这一次调用，session 照常干别的。没命中 → 不输出。连不上 crewd：命中的 **deny**。 **〔2026-10-07 改，见 §24〕** **作废**：不做审批，PreToolUse 不注册。
 - stop：调 `turn_trace`；连不上 crewd → 什么都不做（宁可漏一次）。
 - 任何失败都写 stderr，绝不输出坏 JSON。
 
@@ -692,24 +692,24 @@ hook 行为
 | channel_transfer(channel, to, force?) / channel_accept(channel) | 新（§22.7 Q2） | 群主发起 + 对方接受；机长 force |
 | channel_listen(channel, minutes?, senders?) / channel_unlisten(channel) | listen | 按群收听（§22.7 Q2） |
 | directory(query?) | directory | 加上群 |
-| contact(to, message) | contact | 语法糖：`7` → 7 号机组大厅 @它的机长（system 发言 + 署名）；`7-3` → 与该 session 的 dm（没有就建） |
+| contact(to, message) | contact | 语法糖：`7` → 7 号机组大厅 @它的机长（system 发言 + 署名）；`7-3` → 与该 session 的 dm（没有就建） **〔2026-10-07 改，见 §24〕** 删除：跨机组 = `post(to: "7" 或 "7-3")` 的 dm（M3b T12）。 |
 | ask(question, resume_note?, fallback_after_minutes?, fallback?) | ask + add_human_todo | 用 open_ask 发 H 号，不阻塞；fallback → DefaultOption |
 | withdraw_ask(ask, reason) | withdraw_human_todo | 原来的 supersedes = 撤旧问 + 开新问 |
 | respond_todo(number, response) | respond_todo | 去掉 status / evidence（§9）|
 | get_quota / schedule_wakeup(after_minutes 或 at, note) / set_session_profile(model?, effort?) | 同名 | schedule_wakeup 入 `wakes(kind=timer)`，持久化；set_session_profile 下次启动生效 |
 | C rename_crew / change_workdir / set_crew_status(text) / read_delegation_policy / update_delegation_policy | 同名；set_crew_status 是从 post 的 crew_status 拆出来的 | |
 | C start_session / stop_session / inspect_session / nudge_session / list_sessions / handoff_captain_to_session / create_and_handoff_captain | 同名 | 经 `SessionControl`；start_session 保留 Swift 的 `isolation`（必填 bool，机长逐次定，`McpServer.swift:576`、`:1141`；C8）：`true` = crewd 新建 git worktree，`false` = 机组共享目录；建失败直接报错、不退回共享目录 |
-| C report_to_parent / message_child_crew | 同名 | 语法糖：发到父 / 子机组大厅并 @它的机长（system 发言 + 署名） |
+| C report_to_parent / message_child_crew | 同名 | 语法糖：发到父 / 子机组大厅并 @它的机长（system 发言 + 署名） **〔2026-10-07 改，见 §24〕** 删除，同上。 |
 | C adopt_crew / release_crew / create_parent_crew / adopt_parent / create_child_crew | 同名 | create_child_crew = collab 建组 + `SessionControl::start` 起子机长 |
 | 删 | continue_work / confirm_todo_sweep / plan_add / plan_update / plan_list | 由 M4 取代（§9）|
 | 删（Q4） | raise_attention / clear_attention / crew_ordering_signals / arrange_crews | 由 @人类红标取代；侧栏由人手动排，agent 不排序 |
 
-内建总机组上不列 ask / respond_todo / start_session（同 `McpServer.swift:745-753`），调用时再拒一次。
+内建总机组上不列 ask / respond_todo / start_session（同 `McpServer.swift:745-753`），调用时再拒一次。 **〔2026-10-07 改，见 §24〕** 作废：总机组没有工具特例。
 
 验收
 - 假 claude（真 PTY）+ 真 helper：机长和 worker 拿到的工具表不同；worker 调机长专用工具被拒；中途换机长后不用重启就生效。
-- 注入：@ 了别人的不进，@人类的进，broadcast 放宽，非成员群的不进；hook 与唤醒交错时每条消息至多一次。
-- pre-tool-use：命中 → 当场 deny、出现一条审批（重试不重复开）；`approval.decide` 同意后同名调用放行一次；serve 停掉时命中的工具被 deny。
+- 注入：@ 了别人的不进，@人类的进，broadcast 放宽，非成员群的不进；hook 与唤醒交错时每条消息至多一次。 **〔2026-10-07 改，见 §24〕** 改为：所在群的消息全进，行内标出 @ 了谁。
+- pre-tool-use：命中 → 当场 deny、出现一条审批（重试不重复开）；`approval.decide` 同意后同名调用放行一次；serve 停掉时命中的工具被 deny。 **〔2026-10-07 改，见 §24〕** 作废（不做审批）。
 - stop：同一个 prompt_id 只代发一次；已经 @ 过机长 / 人的不代发。
 - token 错或没 attach 时调 agent.* → 拒绝。
 - 提示词：测试断言 `server::agent` 与 `collab` 的源码里没有工具描述 / 世界观字面量（照 jev 的节齐全测试），zh / en 两份的节名集合一致。
@@ -729,7 +729,7 @@ hook 行为
 
 唤醒规划：`crewd_wake::plan(msg, ctx) -> Vec<WakeTarget>`（纯函数；ctx = 群成员、各成员角色、收听表、now）
 - 只在群成员里选（§17）。自己发的不叫自己。超过 6h 的消息不叫（`CrewLocalMentionWakeLogic.swift:53`）。
-- @session / @captain（发送时已解析成 session id）→ 叫目标。broadcast / human 不叫任何人（`:74`）。
+- @session / @captain（发送时已解析成 session id）→ 叫目标。broadcast / human 不叫任何人（`:74`）。 **〔2026-10-07 改，见 §24〕** broadcast 删除；session 在 dm 里发言 = 隐式 @ 对方（M3c T10a）。
 - 人发、没有 @：先问 `Arbiter`（M5b 挂 Jev，候选 = 群成员；M3 的默认实现返回 None）；None / 低置信 → 群主（大厅、人类群的群主 = 机长；dm → 另一方）。
 - 正在收听的 session：在 listen 窗口内、发送者匹配 → 叫（与上面取并集，一条消息一个 session 只叫一次）。
 - system 发的消息照样参与唤醒，但不做回执判定。
@@ -744,7 +744,7 @@ hook 行为
 - 重启时 `inflight` 退回 `pending`；消息类重投前先查游标，防重放。已结的行保留 7 天，M3c 定时清。
 
 环路熔断 `crewd_wake::breaker`（§22.7 Q5；取代 `AutomaticWakeAdmission`，**不移植**它的全机 12 次/分、单机组 5 次/分、单 session 2 次/分——那会挡住 30 个 session 的正常收发）
-- 判据：目标 T 上一次有产出之后、10 分钟内送到 T 的非人类唤醒，按「来源 → T」与「T 的非 session 来源合计」两级各超 8 次 → 熔断那一条，落 `wake_latches`；告诉人（根机组人类群）和群主。阈值是一处常量。
+- 判据：目标 T 上一次有产出之后、10 分钟内送到 T 的非人类唤醒，按「来源 → T」与「T 的非 session 来源合计」两级各超 8 次 → 熔断那一条，落 `wake_latches`；告诉人（根机组人类群）和群主。阈值是一处常量。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作一级机组人类群。
 - 产出 = `Change::Progress`（M3a `sessions::note_progress`：工具调用、工作项变化）；T 发的消息叫醒了正在叫它的来源以外的人也算。**回话给叫醒你的人不算**（否则互相 @ 的环路永远截不住）。
 - 人类唤醒永不计数、永不被挡；system 唤醒照常计数。被挡 = 留在 pending（背压），不是丢掉。只有人能从客户端 `admission.recover` 解。
 
@@ -758,7 +758,7 @@ idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺
 - resume 失败（续跑被拒、换新号也起不来，或根本起不来）→ 写 `resume_failed_at`，并在大厅 @机长。M4b 的 `reassign_lost(unrecoverable)` 只认这一列（§19：这份名单只能来自 crewd 自己的恢复失败记录）。
 - 计时类唤醒（schedule_wakeup、额度重置、退避）都存在 `wakes.not_before` 里，重启不会丢；serve 只用一个定时任务，按晚于现在的最早 not_before（`wakes::next_due_after`）醒，另有 30s 心跳兜底；心跳顺带调 `asks::apply_due_defaults`（默认方案到点）。
 
-问被回答：M3a 的 `asks::answer` 在同一事务里给提问者入队 `wakes(kind=ask_answer, source='ask:<crew>/H<n>', priority=human)`（H 号按机组发，单独的 `H<n>` 不唯一），正文出队时现渲染（问题、答复、resume_note）；提问者已无法恢复 → 叫它所在机组的机长转达。M3c 只投递，并把 `Change::AskAnswered.cleared` 交给 `AskAnsweredHook`（M4b 的 BlockerCleared 叫醒负责人）。审批有结果的唤醒同理（source `approval:<id>`）。
+问被回答：M3a 的 `asks::answer` 在同一事务里给提问者入队 `wakes(kind=ask_answer, source='ask:<crew>/H<n>', priority=human)`（H 号按机组发，单独的 `H<n>` 不唯一），正文出队时现渲染（问题、答复、resume_note）；提问者已无法恢复 → 叫它所在机组的机长转达。M3c 只投递，并把 `Change::AskAnswered.cleared` 交给 `AskAnsweredHook`（M4b 的 BlockerCleared 叫醒负责人）。审批有结果的唤醒同理（source `approval:<id>`）。 **〔2026-10-07 改，见 §24〕** 审批有结果的唤醒作废；人在人类群里回复那条问的消息 = 回答它（N1）。
 
 客户端 RPC（M3c 新增）：`session.start {crewId, role, executor, brief, title?, model?, effort?, isolation}`（`isolation` 必填，C8）、`session.stop {sessionId, reason}`、`session.resume {sessionId}`、`session.live {sessionId}` → SessionLive（working / health / pendingDecision / awaitingQuestion）、`crew.setCaptain {crewId, sessionId}`、`wake.list {sessionId?}`（排障用）、`admission.recover {scope: edge|session, targetSessionId, from?}`（只有客户端能调，agent 没有这个入口）、`orchestra.settings.get / set {maxLiveSessions?}`。事件：`session.changed`、`wake.changed`（主题 wake，排障用）。重启询问的 `restart.pending / restart.answer` 是 M3a 的。
 
@@ -775,14 +775,14 @@ idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`），按顺
 |---|---|---|---|
 | schema v3 全部表 | `crewd-store` | M3a | 全部 |
 | `Db`：专用线程 actor，`db.call(\|s: &mut Store\| ..).await` | `crewd-store` | M3a | 全部 |
-| `crewd-collab`：群 / 成员（`members` = 有效成员，含隐式）/ 发消息 / 游标（`cursor`、`unread_for`、`advance`）/ 机组 DAG 与 `reorder` / sessions（含 `note_progress`）/ asks / approvals（`gate`、`decide`）/ todos::respond / wakes（队列读写与清理）/ latches / restart / settings | `crewd-collab` | M3a | M3b、M3c |
+| `crewd-collab`：群 / 成员（`members` = 有效成员，含隐式）/ 发消息 / 游标（`cursor`、`unread_for`、`advance`）/ 机组 DAG 与 `reorder` / sessions（含 `note_progress`）/ asks / approvals（`gate`、`decide`）/ todos::respond / wakes（队列读写与清理）/ latches / restart / settings | `crewd-collab` | M3a | M3b、M3c **〔2026-10-07 改，见 §24〕** `approvals` 删除；`root_of` → `home_of`；`cursors::visible_to` 删除（N1）。 |
 | `render::{blocks_for, injection, build_batch, wake_text}`（文字在 prompts/render.*.md）、`prompts::fill`（一遍扫描） | `crewd-collab` | M3a | M3b（hook）、M3c（唤醒、codex additionalContext） |
 | `CollabEvent` = `crewd_collab::Change`（`MessageAppended`、`WakeEnqueued`、`AskAnswered{cleared}`、`RestartAnswered`、`Progress` …），经 `Hub` 发出 | 类型在 collab，`crewd-server::hub` 重导出 | M3a | M3c、M3b 订阅 |
 | `WakeRequest{session, kind, source, priority, not_before_ms, note, origin}` | `crewd-collab` | M3b（timer）、M3a（ask_answer / 审批结果）、M4b（checkpoint / stop_check） | M3c |
 | `TokenTable{mint, verify, revoke}` | `crewd-server` | M3c（mint） | M3b（verify） |
 | `trait SessionControl`（start / resume / stop / nudge / inspect / set_profile / handoff_captain / quota / live；`BoxFuture`，可做 dyn）+ `FakeSessionControl`；`StartRequest.isolation: bool`（C8；没有路径字段） | `crewd-server` | M3c 实现 | M3b 的工具、M3a 的 RPC |
 | `AppState { db, hub, sessions, tokens, agent, orchestra }`（后两个 M3a 放占位类型） | `crewd-server` | M3a | M3b、M3c |
-| `CommsSpec{helper, data_dir, session_id, token, hooks, approval_gates}` | `crewd-exec::launch` | M3b 改 | M3c 填 |
+| `CommsSpec{helper, data_dir, session_id, token, hooks, approval_gates}` | `crewd-exec::launch` | M3b 改 | M3c 填 **〔2026-10-07 改，见 §24〕** `approval_gates` 删除（不做审批）。 |
 | `worldview::render(&WorldCtx) -> String`、`turn_trace::on_turn_end(tx, session, prompt_id, last_text) -> TurnEnd`（5 个值）的签名 | `crewd-collab`（M3a 先放 stub） | M3b 实现 | M3c 调 |
 
 文件归属（M3a 先合 main，之后不改 M3a 的文件）：
@@ -815,15 +815,15 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - **Q5 并发上限**：**默认不设上限**；设置里提供可选上限（默认关）。必须防的是**异常唤醒循环**（程序错误导致同一 session 被反复叫醒、两个 session 互相叫醒打转）：按「唤醒来源 → 目标」与「目标 session」两级做熔断，判据是**短时间内重复唤醒且没有新产出**（没有新消息 / 工作项变化 / 工具调用），熔断只停那一条环路并告诉人和群主，绝不按全机总量限流——大量 session 同时正常工作不受影响。阈值与判据写成一处常量，带测试（循环被截住；30 个 session 各自正常收发不被截）。
 控制者裁定（2026-10-06，三份 M3 计划对齐时定；正文 §22.2–§22.6 已按此改）：
 - **C1 侧栏手动排**：`crews.position`（根层）+ `crew_parents.position`（父下，按边；M3a 落地）+ 只有客户端能调的 `crew.reorder {parentId?, crewIds}`（一次给出一层的完整新顺序），新建 / 收编 / 转挂进来的排在同级末尾；没有任何按动静排序的 API。话题 / 任务协作用群，子机组只表达组织结构（§17）。
-- **C2 审批照 Swift 驾驶舱 #75②，不阻塞**（取代原 §22.3 的「等 30 分钟」）：命中闸的 PreToolUse 当场 deny 并给人开一条待确认；人同意 = 一次性放行票，同一 session 下一次同名工具调用用掉它。理由：人卡住的只能是那一件，绝不能卡住整个 session。闸的 matcher 与「连不上 crewd → deny」保留。
+- **C2 审批照 Swift 驾驶舱 #75②，不阻塞**（取代原 §22.3 的「等 30 分钟」）：命中闸的 PreToolUse 当场 deny 并给人开一条待确认；人同意 = 一次性放行票，同一 session 下一次同名工具调用用掉它。理由：人卡住的只能是那一件，绝不能卡住整个 session。闸的 matcher 与「连不上 crewd → deny」保留。 **〔2026-10-07 改，见 §24〕** **作废**（人 2026-10-07：不做审批）。
 - **C3 产出信号**：M3a 的 `sessions::note_progress(ToolCall | WorkItem)` 写 `last_progress_at` 并发 `Change::Progress`，与 `last_output_at`（发言）分开；回话给叫醒你的人不算产出。M3b 的 post-tool-use 对非 crewd 工具调它，M4b 的工作项命令必须调它，M3c 的熔断消费它。
 - **C4 重启询问 vs 人 @**：等答复期间，人在群里 @ 了名单里的某一个 → 只恢复它（算它单个 resume），其余照旧等；启动前就排着的人类唤醒不算。
 - **C5** 人类唤醒绕过可选并发上限；其余照 M3c 的默认：环路窗口 10 分钟 / 8 次、人停 session 丢弃它 pending 的唤醒、`set_profile` 下次启动生效。（原写的「`worktree` = 已存在的目录、`start_session` 改收 `workdir?`」已被 C8 取代。）
 - **C6** M3b / M3c 要的读写口全部由 M3a 提供并冻结（M3b 的 G3 / G-F / G-S / G-T / G9 / G11；M3c 的 `next_due_after`、`cursor`、`mark_failed` 带退避时刻、`requeue`、`by_ids`、`prune`、`members` 含隐式成员）；任何计划都不往别的计划的表里写 SQL。
-- **C7** 默认方案到点由 M3c 的定时拍调 `asks::apply_due_defaults`；ask 唤醒的 source 一律 `ask:<crew>/H<n>`；跨机组语法糖（`contact` 到别的机组 / `report_to_parent` / `message_child_crew`）= system 发言 + 正文首行署名。
+- **C7** 默认方案到点由 M3c 的定时拍调 `asks::apply_due_defaults`；ask 唤醒的 source 一律 `ask:<crew>/H<n>`；跨机组语法糖（`contact` 到别的机组 / `report_to_parent` / `message_child_crew`）= system 发言 + 正文首行署名。 **〔2026-10-07 改，见 §24〕** 跨机组语法糖那半句作废（跨机组 = dm）。
 - **C8 `start_session` 保留 Swift 的 `isolation`**（必填 bool，机长逐次定，取代 C5 里「`worktree` = 已存在目录」）：`true` = M3c 的会话管理器在机组工作目录里新建 git worktree（位置、分支名、slug 照 Swift，见 §22.4），记进 `sessions.worktree`，session 在那里起；`false` = 机组共享目录；建失败 = start 失败并带原因、不写行、不起进程、不退回共享目录；crewd 永不删 worktree（删除是人的动作）。落点：M3a `StartRequest.isolation` 与列注释，M3b `start_session` 工具，M3c `orchestra/worktree.rs` + `Core::start_new`。测试一律用临时 git 仓库（合成），不碰真仓库。
-- **C9 一次性放行票的范围 = (session, tool)**（照原计划，对 C2 的补记）：人同意一条审批 = 只放行「同一个 session 的下一次同名工具调用」，不跨 session、不按工具名全局放行。
-- **C10 审批仍是独立的表 / 清单，客户端「等你拍板」视图把 ask 与 approval 合并显示**（红标、侧栏顶层）：合并在客户端做；M3a 的 `Ask`（`crewId`、`askedAt`）与 `Approval`（`crewId`、`requestedAt`）都带机组与创建时间，人类群 = `<根机组>/human`（`crew.list` 的父链推得），`ask.changed` / `approval.changed` 负载就是整条，足够客户端合并、排序、计徽标；不把审批并进 `ask.list`（H 号只给工作卡点，C2）。
+- **C9 一次性放行票的范围 = (session, tool)**（照原计划，对 C2 的补记）：人同意一条审批 = 只放行「同一个 session 的下一次同名工具调用」，不跨 session、不按工具名全局放行。 **〔2026-10-07 改，见 §24〕** **作废**（不做审批）。
+- **C10 审批仍是独立的表 / 清单，客户端「等你拍板」视图把 ask 与 approval 合并显示**（红标、侧栏顶层）：合并在客户端做；M3a 的 `Ask`（`crewId`、`askedAt`）与 `Approval`（`crewId`、`requestedAt`）都带机组与创建时间，人类群 = `<根机组>/human`（`crew.list` 的父链推得），`ask.changed` / `approval.changed` 负载就是整条，足够客户端合并、排序、计徽标；不把审批并进 `ask.list`（H 号只给工作卡点，C2）。 **〔2026-10-07 改，见 §24〕** **作废**（不做审批）；「等你」清单只剩问（M4b 的「待人类处理」）。
 
 ## 23. M3a 交付记录与遗留（计划 `docs/superpowers/plans/2026-10-06-crewd-m3a-data-and-api.md`，分支 crewd-m3a）
 
@@ -864,3 +864,91 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - M3c：排队的 `deferred` 行留着不动、绝不 `mark_dropped`；游标只推进到 `cursor_targets()`（不是排队的最大 seq），`Inflight` 带着它、`on_delivery` 用它；只有积压、`wake_ids` 为空的批也要投；`render_fitted` 不含 deferred；`UNREAD_CAP` 按群计、各群游标独立推进；`build_batch` 报错（账本坏）是 fail-loud，不能紧循环重试；游标后面的排队行会重渲已读消息，先过滤；显式 @机长 + 回复机长会得到 `Captain(x)` + `Session(x)` 两条 mention，同一条消息每个 session 只叫一次；latches 的 get / clear / list 遇坏 id / 坏行回 `Invalid`，启动要处理；`reset_inflight` 至少一次、只在启动时调；serve 关闭次序 = 停止接入 → 收完 / 中止连接任务 → 丢 `AppState` → join Db 线程（`Db` 要有 JoinHandle）；`CollabEvent` 落后（Lagged）时从库重推状态（`restart::pending`、问的 cleared），不只重排未读；停 session 时 `TokenTable::revoke`；`orchestra::schema_entries` 用共享的 `SchemaGenerator`，要么自成一节要么扩 `schema_lists_exactly_the_client_methods`；`blocks_for` / `build_batch` 要传 `Locale`。
 - M3b：调用点改 `Response::into_result()`；`agent::schema()` 用共享的 `SchemaGenerator`（`sub::<T>(g)`）后再 `take_definitions`，不嵌套 `$defs`；`blocks_for` / `build_batch` 传 `Locale`。
 - M2c → M3c：`driver::with_untrusted_context` 需要同样的帧伪造中和（转义闭合标签 / 校验键）后才能塞队友文字；`ClaudeSpec` 没有 `initial_context`；codex 的 Notice 拒绝要按 MCP server 报；`CommsSpec` / `mcp_args_for` 用 M2c 合进 main 的接口。
+
+## 24. 2026-10-07 复审：改进计划与裁定
+
+> 来源：2026-10-07 对 M3 设计与旧版使用情况的复审（九份研究，底稿在仓库外的私有目录，含真实使用数据，**不进仓库**）与当天人的拍板。本节只记结论与理由；旧版的教训只写成抽象的形状，不写任何计数。上文与本节冲突的地方已就地加「〔2026-10-07 改，见 §24〕」的标注。
+
+### 24.1 人的裁定（2026-10-07）
+
+- **H1 被 @ 先回一声**：保留在世界观里（「收到」类回复不改成系统回执）；降噪靠限一句、对其他 agent 折叠、在人的界面里折叠、以及「已送达 / 处理中」指示器，不靠删掉这句话。
+- **H2 总机组 = 唯一的根 = 组织的管理层**：其余机组都挂在它下面；不再有「内建机组」的特例分支，只留轻量的根规则（不能被收编 / 摘出 / 删除 / 归档，新机组默认挂它下面）。**每个一级机组（总机组的直系子）保留自己的人类群，总机组有自己的管理用人类群**；今天一切「找根机组人类群」的地方改成找一级机组的人类群（总机组自己 → 它自己的）。旧数据里的多个根在迁移时挂到总机组下，人排过的顺序不变。
+- **B15 没有私有群**：两个 session 之间的 dm，所在机组的其他成员也读得到（「不是自己的消息也能看」）。读得到 ≠ 被注入 / 被叫醒。
+- **不做审批**：「pendingcrew 不做审批了，claude code 和 codex 会处理好的」。§22 的审批台账、一次性放行票、PreToolUse 审批闸、审批唤醒、客户端审批清单全部删除（C2 / C9 / C10 作废）。屏幕上 runner 自己弹的权限框仍按待决策处理（交给人选，见 24.3 的 T10c）。
+- **C26 休眠**：人可以让 crewd「像休眠一样」冻结全部 session（给一个期限让在干活的 session 停在安全点，到点打断、干净退出，排队的唤醒全部保留），开机后在重启询问里列出被休眠的 session，按人的答复续跑并告诉它被挂起过、当时在做什么。归 M3c T9b。
+- **删机组默认归档**：`crew.delete` = 归档（消息、session、账本都留着，可以恢复）；真正的永久删除另开入口，删之前先做一份快照（N4）。人已同意。
+- **工作模型的命名**：人交代的 = 「**原始需求**」；agent 整理后的 = 「**计划**」（计划项带可读代号，例如 M4b / M4b-1）；要人做的 = 「**待人类处理**」（全组织一个收件箱）。
+- **完成不需要「验证过的凭据」**：负责的 agent 自己标完成（可附一段文字凭据），不等任何人或系统验收，免得事情卡在验证上。此前「完成 = 凭据被系统验过」的提议被人否决。
+- **工作模型其余要点（人已同意，详细设计在做，归 M4b）**：一本账、三种条目（原始需求 / 计划 / 待人类处理）互相连边；稳定编号全组织唯一、永不复用，另有可读代号，挪到别的父项下按新父项重编、旧代号永久可跳转，最多 3 层；**进度表 = 计划项上的视图**，放进群 / session / 机组的是对同一份视图的引用（改一处处处变），不做自由表格，每项只有一个覆盖式备注栏；「待人类处理」全组织一个，每条带上下文与推荐选项，可以回答 / 稍后 / 不要了，事项结束自动撤回。
+- 维持不变的已有拍板：每个群都有群主（可转让）；重启后先问人；侧栏不自动排序（人手排）。
+
+### 24.2 采纳的消息模型
+
+控制者在人授权「可以重新想」的范围内采纳，已报人、人可否决。借鉴了 Slack / Zulip / Matrix 的做法：**可见性跟着成员资格走，@ 只是通知**。
+
+- **看得见 = 在群里**（加上 B15 的可读规则：本机组名下的群、自己一级机组的人类群也读得到）。
+- **@ 只决定叫醒谁**：删掉「@ 某人就让别人看不见」的收窄规则和 `broadcast` 这个 mention 种类（库里的旧数据在迁移时剥掉）。注入给 agent 的每一行标出 @ 了谁。
+- **回复只 @ 原发送者**，而且只在他还在群里时（叫不醒的不 @）；回复系统消息不叫醒任何人。
+- **dm 里 session 说话默认叫醒对方**（不用再 @）；世界观写明「不 @ 谁就不叫醒任何人」。
+- **在人类群里回复一条问 = 回答这条问**：同一事务里记答复、按原有规则叫醒提问者（带 resume note）；问已答 / 已撤时当普通消息。
+- **跨机组说话 = dm**：`post(to: 机组号 或 分机号)`，填机组号 = 对方现任机长。`contact` / `report_to_parent` / `message_child_crew` 这类「系统代发 + 署名」的语法糖删除（C7 那半句作废）——旧版里代发的消息回不了话、署名还绕过了防冒名。
+- `post` 不再默认发到大厅：没给群 / 收件人 / 回复对象就报错并列出你的群。
+- 理由（抽象的教训）：旧版里收窄规则让旁观者只看到回复、看不到问题，而「只跟一个人说」本来就有 dm；两套机制做同一件事，agent 必然用得不一致。降噪不靠藏消息，靠 24.3 里的发帖限速、系统事件不进群、对其他 agent 折叠进度类消息。
+
+### 24.3 改进计划（任务清单）
+
+| 任务 | 一句话 |
+|---|---|
+| **N0 CI** | CI 里跑 crewd（macOS + Linux，`check.sh`，nextest 重试且 flaky 记成第三态，另跑 doctest）；之后加 cargo-mutants 只报差异。 |
+| **N1 M3a.2 协作模型对齐**（main，计划 `docs/superpowers/plans/2026-10-07-crewd-m3a2-collab-alignment.md`） | 删审批；H2 单根（schema v4、旧根挂到总机组下、`home_of` 取代 `root_of`、无 builtin 特例）；24.2 的消息模型在 collab 侧的部分（删收窄与 broadcast、B15 可读、dm 原语、回复即回答）；session 标题、删机组 = 归档、拒绝文字的稳定码。必须在 M3b T12 与 M3c T10a 之前，且在 N4 之后合 main。 |
+| **N3 数据目录** | 数据目录读不了时大声报（健康事件，不把「打不开」当成「空」）；启动自检；运行期文件（token、启动文件、socket）移出数据目录；库的位置等下一次故障时量过再定。 |
+| **N4 存储安全** | 迁移前 `VACUUM INTO` 快照（失败就拒绝启动）；在线定期备份与 `crewd backup / restore`；pragma 读回断言；「库应该在却不在」时拒绝启动；完整性检查；存储错误分类成健康事件；永久删除前快照。 |
+| M3b T12 | 消息工具：`post.to`、不给目标就报错、每个发送者限速与相同文本合并、回执写明会叫醒谁。 |
+| M3b T13 | 群工具：dm 只经 `post.to` 产生；`contact` 不写；对其他 agent 的进度 / 「收到」类消息折叠成摘要；收听与群主转让各合成一个工具。 |
+| M3b T14 | 问人：问去一级机组的人类群；回执回显原文；定时唤醒的目标已删 / 已归档时只告警一次。 |
+| M3b T15a | 会话控制工具（起 / 停 / 查看 / 打断 / 交接 / 配置）：标题必填或从 brief 派生；换机长后旧机长降为普通成员。 |
+| M3b T15b | 机组结构：五个改结构的工具合成一个只给机长的 `crew_structure`；新机组排在同级末尾、不动人排好的顺序；工具注解；建子机组没起来机长时说清楚。 |
+| M3b T15c | 世界观与文字改版：精简；「先回一声」限一句；写明群主的责任；不 @ 就不叫醒；session 不能代表人同意；根 / 管理机组一句话；删 builtin 与审批相关的段落。 |
+| M3b T16 | 端到端与真 claude 冒烟；`crew` MCP 标成总是加载（防工具搜索把发言工具藏起来）；启动参数钉死；拦掉 runner 自带的阻塞式提问工具；几条 agent 文字评测场景。 |
+| M3c T9a | 重启 / 定时拍 / 停机 / actor：重启回收算一次尝试、actor 崩溃就整体退出、钩子带超时、过期唤醒清理。 |
+| M3c T9b | 休眠（C26）。 |
+| M3c T10a | DbPort、协作事件转发、SessionControl：按 24.2 改唤醒规划（删收窄与 broadcast、dm 默认叫醒对方）、唤醒正文的裁剪、假实现与真实现共用契约测试。 |
+| M3c T10b | 客户端 RPC 与契约：`why_not_woken` 视图、统一的设置读写、hello 带构建身份、未知值兜底、「已送达 / 处理中」的事件字段、存储错误码。 |
+| M3c T10c | 通知与待决策：系统事件不进群（只在状态变化时报一次、恢复时再报一次）；屏幕上的待决策框首报就交给人、客户端能直接选；删掉「机长代按」。 |
+| M3c T10d | 安全按键：按键前核对屏幕指纹（不一致就不按，带回现在的框）；输入框里已有人打了一半的字时不写入。 |
+| M3c T11 | serve 接线与端到端；有序停机；helper 用自己的可执行文件路径；运行期文件移出数据目录。 |
+| **M3i-a 合并后集成正确性** | 钩子注入与唤醒投递不再把同一条消息送两遍（预留游标）；每个钩子一条接线测试；多方环路的因果跳数；回执接上「将叫醒谁」。 |
+| **M3i-b 合并后安全与可观测** | 只有人的客户端能调人的 API（按对端进程识别 session 子进程）；tracing 日志写到 `~/Library/Logs/PendingCrew/`；panic 隔离；helper 版本不一致时报出来。 |
+| **N2 claude 结构化信号** | 用 claude 的钩子报回合开始 / 失败 / 会话号，忙闲边沿以钩子为准、读屏只做矛盾检测；起进程前预检登录；「在干活但很久没进展」报出来；人发的消息显示已送达 / 处理中、长时间没人接时提醒人（不自动接管）。 |
+
+次序：N0、N4、N1 先并行（N1 在 N4 之后合 main）→ M3c 8b → T9a/b → T10a… ∥ M3b T12… T15c → T16 → 两条分支合 main → M3i-a/b → N2、N3 → 切换。schema 版本：N1 占 v4，M4b 的工作账本表顺延为 v5。
+
+### 24.4 驳回 / 推迟（及理由）
+
+| 项 | 处理 | 理由 |
+|---|---|---|
+| 把「收到」改成已读回执 | 驳回（H1） | 人要的是「知道有人在接」；回执另做成指示器，不取代这句话。 |
+| 去掉总机组 | 驳回（H2） | 改成「唯一的根 + 管理层」。 |
+| agent 之间的协调对人默认隐藏 | 驳回「隐藏」 | 没有私有群（B15）；改成在客户端里折叠。 |
+| 熔断默认自动恢复 | 驳回 | 环路熔断只能由人解（§22.7 Q5）；解法是让熔断看得见、能一键恢复。 |
+| 停摆时自动重启或接管机长 | 驳回自动接管 | 重启先问人、换机长归人；只做提醒。 |
+| 侧栏紧急度打分（含缓存、确定性评分） | 驳回 | 侧栏不自动排序；urgency 这项 Jev 决策删除。 |
+| 删掉 `post.category` | 驳回 | 留给「对其他 agent 折叠进度类消息」用。 |
+| 删掉改组织结构的工具 | 改成合并 | 人自己也会让 agent 整理机组；合成一个只给机长的工具，不打乱人排的顺序。 |
+| 完成 = 凭据被系统验过 | 驳回（人） | 会让事情卡在验证上；负责人自己标完成，凭据可选。 |
+| 审批台账（含一次性票绑定具体调用） | 删除（人） | runner 自己的权限系统已经处理；PendingCrew 不再重做一层。 |
+| 客户端 Keychain token | 推迟 | 先按对端进程识别；Keychain 方案要先试。 |
+| Claude Code channels / agents 列表当第二把尺子 | 推迟，只观察 | 还在研究预览，没有注入协议。 |
+| 整体换成 stream-json / SDK 驱动 claude | 驳回 | 会丢掉 TUI attach（§16）。 |
+| loom / turmoil / madsim；给唤醒加令牌桶 | 驳回 | 竞态是消息顺序的问题；令牌桶会伤到正常繁忙的机组。 |
+| Litestream；库坏了就删库重建 | 驳回 | 太重；数据只在本机，不能删。 |
+| 改由 launchd / SMAppService 托管 | 推迟 | 与「不加登录项」冲突，而且要先量数据目录的故障。 |
+| minidump；换 proptest | 推迟 | 收益要等真遇到。 |
+| claude 的额度自动续跑与额度唤醒双发 | 推迟到 M3d | 先确认读用户设置的方式。 |
+| codex 服务端自动压缩 | 推迟（待核） | 还没读源码确认。 |
+
+### 24.5 待人确认（不阻塞执行）
+
+- 总机组的号码定为 0（`post(to: "0")` = 找总机组机长）。
+- 二级及更深机组的问去一级祖先的人类群；多父时取最早建的那个一级祖先（同 §13 Q1 的口径）。
+- B15 的「本机组名下的群读得到」只看本机组，不含子机组的群；子树只额外读得到所属一级机组的人类群。
