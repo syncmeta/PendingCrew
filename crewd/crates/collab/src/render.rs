@@ -795,7 +795,7 @@ mod tests {
         assert!(text.contains("第一条") && text.contains("第二条"), "{text}");
         assert!(
             text.contains("夹在中间"),
-            "游标之后到批里最大 seq 的可见消息都带上（M3c 推游标不丢消息）：{text}"
+            "游标之后到批里最大 seq 别人发的消息都带上（M3c 推游标不丢消息）：{text}"
         );
         assert_eq!(list(s.conn(), Some("w-a1"), 10).unwrap().len(), 4);
     }

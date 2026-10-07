@@ -23,7 +23,7 @@ crewd
 （机长）{name}
 
 ## inject.header
-以下是你所在的群里的新消息（只含与你相关、你看得见的）：
+以下是你所在的群里别人发的全部新消息（不只是 @ 你的；每行标出 @ 了谁）：
 
 ## inject.channel.lobby
 【{crew} · 大厅】

@@ -379,8 +379,9 @@ pub fn adopt(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<Crew> {
     get(tx.conn(), crew)
 }
 
-/// 把 `from` 的直系子 `crew` 摘出；`to` 有值 = 先挂新边（过 adopt 的全部检查）再摘旧边。
-/// 摘掉的是最后一条父边 = 回到总机组下的末尾；`to` = 总机组 等同 `None`（N1 裁定 4）。
+/// 把 `from` 的直系子 `crew` 摘出；`to` 是别的机组 = 先挂新边（过 adopt 的全部检查）再摘旧边。
+/// 摘掉的是最后一条父边 = 回到总机组下的末尾（N1 裁定 4）。`to` = 总机组：`from` 是最后一个父时同 `None`；
+/// 摘掉后还挂着别的上级 → `Invalid`（回不到一级，指路先解除其它上级）。一级机组从总机组摘出 = 原地不动（空操作）。
 pub fn release(tx: &mut Tx<'_>, crew: &str, from: &str, to: Option<&str>) -> Result<Crew> {
     refuse_org_root(tx.conn(), crew)?;
     let to_root = match to {

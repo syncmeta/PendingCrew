@@ -23,7 +23,7 @@ crewd
 (captain) {name}
 
 ## inject.header
-New messages in your channels (only those addressed to or visible to you):
+New messages from others in your channels (all of them, not only those that @-mention you; each line marks who was @-mentioned):
 
 ## inject.channel.lobby
 [{crew} · lobby]
