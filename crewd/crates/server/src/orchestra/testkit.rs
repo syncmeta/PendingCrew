@@ -349,8 +349,18 @@ impl Port for MemPort {
             .collect())
     }
 
+    /// 跟 M3a `wakes::set_state` 一样严（控制者裁定 C23）：起始状态见 [`Settle::from_states`]；没有这一行 /
+    /// 起始状态不对 = 错误，整批一行都不改（M3a 在同一事务里，出错回滚）。假的不能比库松。
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
         let mut st = self.lock();
+        for id in ids {
+            let Some(w) = st.wakes.iter().find(|w| w.id == *id) else {
+                anyhow::bail!("没有唤醒 {id}");
+            };
+            if !s.from_states().contains(&w.state) {
+                anyhow::bail!("唤醒 {id} 是 {}，不能 {s:?}", w.state);
+            }
+        }
         for w in st.wakes.iter_mut().filter(|w| ids.contains(&w.id)) {
             match &s {
                 Settle::Inflight => w.state = WakeState::Inflight,
@@ -363,11 +373,7 @@ impl Port for MemPort {
                     w.not_before = *retry_at;
                 }
                 Settle::Dropped { .. } => w.state = WakeState::Dropped,
-                Settle::Requeue => {
-                    if w.state == WakeState::Inflight {
-                        w.state = WakeState::Pending;
-                    }
-                }
+                Settle::Requeue => w.state = WakeState::Pending,
             }
         }
         Ok(())
@@ -1368,6 +1374,67 @@ mod self_tests {
         assert_eq!(p.cursor(&row.id, "c1/lobby").await.unwrap(), 1);
         msg(&mut p.lock(), "c1/lobby", 2, Sender::Human, vec![]);
         assert_eq!(ids_of(&p.unread(&row.id).await.unwrap()), ["c1/lobby#2"]);
+    }
+
+    fn row_in(p: &MemPort, state: WakeState) -> i64 {
+        let mut st = p.lock();
+        st.next_wake += 1;
+        let id = st.next_wake;
+        st.wakes.push(QueuedWake {
+            id,
+            session: "s".into(),
+            kind: WakeKind::Timer,
+            source: format!("timer:{id}"),
+            priority: Priority::Auto,
+            not_before: Ms(0),
+            note: None,
+            state,
+            attempts: 0,
+            created_at: Ms(0),
+            origin: "s".into(),
+            msg: None,
+        });
+        id
+    }
+
+    /// MemPort 的 settle 跟 M3a `wakes::set_state` 一样严（控制者裁定 C23）：每种结算只认它的起始状态，别的回错、
+    /// 一行都不改（同一事务回滚）。唯一的扩展：`Retry` 也认 pending（跟着一批没投进去的窗口外行）。
+    #[tokio::test]
+    async fn mem_port_settle_enforces_the_store_from_states() {
+        use WakeState::{Delivered, Dropped, Inflight, Pending};
+        let retry = || Settle::Retry {
+            attempts: 1,
+            error: "x".into(),
+            retry_at: Ms(5),
+        };
+        let dropped = || Settle::Dropped { error: "x".into() };
+        let cases: Vec<(Settle, Vec<WakeState>)> = vec![
+            (Settle::Inflight, vec![Pending]),
+            (Settle::Delivered, vec![Pending, Inflight]),
+            (retry(), vec![Pending, Inflight]),
+            (dropped(), vec![Pending, Inflight]),
+            (Settle::Requeue, vec![Inflight]),
+        ];
+        for (settle, ok_from) in cases {
+            for from in [Pending, Inflight, Delivered, Dropped] {
+                let p = MemPort::new();
+                let id = row_in(&p, from);
+                let r = p.settle(&[id], settle.clone(), Ms(0)).await;
+                assert_eq!(r.is_ok(), ok_from.contains(&from), "{settle:?} 从 {from:?}");
+                if r.is_err() {
+                    assert_eq!(p.lock().wakes[0].state, from, "失败不改任何行");
+                }
+            }
+        }
+        let p = MemPort::new();
+        let ok = row_in(&p, Pending);
+        let bad = row_in(&p, Dropped);
+        assert!(p.settle(&[ok, bad], retry(), Ms(0)).await.is_err());
+        assert_eq!(p.lock().wakes[0].attempts, 0, "整批回滚");
+        assert!(
+            p.settle(&[99], Settle::Delivered, Ms(0)).await.is_err(),
+            "没有这一行"
+        );
     }
 
     /// 人类群的成员 = 机长 + 显式成员；机长同时是显式成员时只算一次（同 M3a `channels::members`）。

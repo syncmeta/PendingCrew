@@ -42,6 +42,21 @@ use super::port::*;
 
 /// 这次投递回执能不能结算 inflight 的那批：只有终局、且不是 `Abandoned`（那是驱动层停掉 / 退出时的 abandon，
 /// 该批由 `on_exited` 按三种情况结算，见模块文档的绑定规则）。
+/// 停掉一个会话时，写队列里还没轮到的 nudge 当场回「没在跑」（复审 C）；排着的投递留在队列里，
+/// 那批随 `inflight` 由 `on_exited` 结算。
+fn refuse_queued_nudges(l: &mut Live, session: &str) {
+    let mut kept = VecDeque::new();
+    for job in std::mem::take(&mut l.writes) {
+        match job {
+            Write::Nudge { reply, .. } => {
+                let _ = reply.send(Err(ControlError::NotRunning(session.into())));
+            }
+            deliver => kept.push_back(deliver),
+        }
+    }
+    l.writes = kept;
+}
+
 /// 会话事件里顺带的投递出错：记日志、不打断这个事件本身的处理（评审 (7)：`session.changed` 照样要发）。
 fn log_err(r: anyhow::Result<()>) {
     if let Err(e) = r {
@@ -752,6 +767,7 @@ impl<P: Port> Core<P> {
         self.held.remove(session);
         if let Some(l) = self.live.get_mut(session) {
             l.stopping = true;
+            refuse_queued_nudges(l, session);
             let _ = l.handle.stop();
         } else if let Some(st) = self.starting.get_mut(session) {
             st.stop_requested = true;
@@ -765,6 +781,7 @@ impl<P: Port> Core<P> {
     pub(crate) fn halt(&mut self, session: &str) {
         if let Some(l) = self.live.get_mut(session) {
             l.halting = true;
+            refuse_queued_nudges(l, session);
             let _ = l.handle.stop();
         }
     }
@@ -774,7 +791,12 @@ impl<P: Port> Core<P> {
     /// actor 收下的先后写，不交错；写完才回执。
     /// 待决策框的选项没有编号时拒绝数字：发了也只是把回车落在当前高亮项上。
     async fn nudge(&mut self, session: &str, input: &str, reply: Reply<()>) -> anyhow::Result<()> {
-        let Some(l) = self.live.get_mut(session) else {
+        let Some(l) = self
+            .live
+            .get_mut(session)
+            .filter(|l| !l.stopping && !l.halting)
+        else {
+            // 正在被停掉的当场回「没在跑」：不排队等 `on_exited`（它可能永远不来）。
             let _ = reply.send(Err(ControlError::NotRunning(session.into())));
             return Ok(());
         };

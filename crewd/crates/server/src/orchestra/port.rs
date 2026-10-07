@@ -8,7 +8,7 @@ use crewd_exec::health::Health;
 use crewd_exec::resume::AgentIdLedger;
 use crewd_term::PendingDecision;
 use crewd_wake::plan::{ChannelCtx, MsgFacts};
-use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake};
+use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeState};
 
 /// 默认错误类型是 anyhow；带第二个参数时就是 std 的 `Result<T, E>`——`use super::port::*` 的模块里
 /// 两种写法都照常用（控制者裁定 C16 / 预检 G-1：一参的别名会遮住 std `Result`，E0107）。
@@ -80,21 +80,39 @@ pub struct SessionPatch {
     pub effort: Option<String>,
 }
 
+/// 一批唤醒的结算。每种只认它的起始状态（[`Settle::from_states`]，同 M3a `wakes::set_state`）；起始状态不对 /
+/// 没有这一行 = 错误（M3a 回 `Conflict` / `NotFound`），整批不改。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Settle {
+    /// pending → inflight（M3a `mark_inflight`）。
     Inflight,
+    /// pending / inflight → delivered（M3a `mark_delivered`；pending 的 = 游标已越过、已被看到）。
     Delivered,
-    /// 终局失败、还要再试：回 pending、次数 +1、`not_before = retry_at`（M3a `mark_failed(.., Some(retry_at))`，持久化退避）。
+    /// 终局失败、还要再试：回 pending、次数 +1、`not_before = retry_at`（持久化退避）。
+    /// 起始状态 inflight **或 pending**（控制者裁定 C23：随一批没投进去的窗口外行——它们一直是 pending，见
+    /// `Rendered::deferred`）；delivered / dropped 的 = 错误。DbPort 的映射：inflight → `mark_failed(.., Some(retry_at))`；
+    /// pending → 同一事务里 `mark_inflight` 再 `mark_failed`。
     Retry {
         attempts: u32,
         error: String,
         retry_at: Ms,
     },
-    Dropped {
-        error: String,
-    },
-    /// inflight → pending，次数不变（进程没了、重启）。
+    /// pending / inflight → dropped（M3a `mark_dropped`）。
+    Dropped { error: String },
+    /// inflight → pending，次数不变（进程没了、重启；M3a `requeue`）。
     Requeue,
+}
+
+impl Settle {
+    /// 这种结算认哪些起始状态（M3a `wakes::set_state` 的 `from`，外加 C23 的 `Retry` 认 pending）。
+    pub fn from_states(&self) -> &'static [WakeState] {
+        use WakeState::{Inflight, Pending};
+        match self {
+            Self::Inflight => &[Pending],
+            Self::Delivered | Self::Retry { .. } | Self::Dropped { .. } => &[Pending, Inflight],
+            Self::Requeue => &[Inflight],
+        }
+    }
 }
 
 /// 系统消息发到哪、@ 谁。群主由 Port 按 M3a 的规则解析（大厅 / 人类群的群主 = 机组机长）。
@@ -129,8 +147,10 @@ pub struct Rendered {
     pub text: String,
     /// 渲染不出来、已被记 dropped 的唤醒 id。
     pub dropped: Vec<i64>,
-    /// M3a R6：消息行里、消息落在这批窗口之外的（一个群一批只带最旧的 `UNREAD_CAP` 条）。**不进正文、不 settle**
-    /// （仍是 pending，绝不 `mark_dropped`），投递成功、按 `cursor_targets` 推完游标后下一批带上（`WakeBatch.deferred`）。
+    /// M3a R6：消息行里、消息落在这批窗口之外的（一个群一批只带最旧的 `UNREAD_CAP` 条）。**不进正文**、渲染与投递
+    /// 成功时不 settle（仍是 pending），投递成功、按 `cursor_targets` 推完游标后下一批带上（`WakeBatch.deferred`）。
+    /// 例外（Task 8 评审 (1) / C23）：这批**没投进去**时它们随批记一次失败（`Settle::Retry`，从 pending），
+    /// 第 `MAX_ATTEMPTS` 次放弃时 `Settle::Dropped`——只有积压的批不记账就会无限重投。
     pub deferred: Vec<i64>,
     /// 投递成功后每个群的游标推到哪（M3a `WakeBatch::cursor_targets()` = 批里**实际带上**的最大 seq）。
     /// 可能在没有任何 `wake_ids` 的时候非空（只有积压的窗口），这样的批照样要投。

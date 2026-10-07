@@ -592,6 +592,11 @@ impl<P: Port> Core<P> {
         if l.inflight.as_ref().is_none_or(|f| f.delivery != Some(id)) {
             return Ok(());
         }
+        // 正在被停掉（人停 / crewd 叫停）：这批只由 `on_exited` 结算（人停 → 丢弃；crewd 停 → 退回）。这里不能
+        // `fail_batch`——那会把 `stop` 刚丢掉的窗口外行救活、或让人停的那批退避后把它重新拉起（复审 P7a / P7b）。
+        if l.stopping || l.halting {
+            return Ok(());
+        }
         let inf = l.inflight.take().expect("上面查过");
         if matches!(outcome, DeliveryOutcome::Delivered) {
             l.worked = true;
@@ -2096,5 +2101,124 @@ mod tests {
         rig.emit("w1", SessionEvent::Working(true)).await;
         rig.emit("w1", SessionEvent::Working(false)).await;
         assert_eq!(hook.0.load(Ordering::SeqCst), calls + 1);
+    }
+
+    // —— Task 8 复审修复（裁定 C23 / B / C）
+
+    /// 人停掉的同时（驱动层的退出事件还没到）来了一条「没投进去」的回执：那批留给 `on_exited`（人停 → 丢弃），
+    /// 不走 `fail_batch`。
+    async fn undelivered_while_stopping(rig: &mut Rig, session: &str) {
+        let generator = rig.live(session).unwrap().generator;
+        let id = rig.exec.last_send_id(session);
+        let (tx, _stopped) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: session.into(),
+                reply: tx,
+            }))
+            .await;
+        let outcome = DeliveryOutcome::Undelivered("合成：没投进去".into());
+        let event = SessionEvent::Delivery {
+            id,
+            subject: Subject::Steer,
+            outcome,
+        };
+        rig.core
+            .handle(Input::Exec {
+                session: session.into(),
+                generator,
+                event,
+            })
+            .await;
+        rig.settle().await;
+    }
+
+    /// 评审 P7a：只有积压的批在路上时人停掉：`stop` 已把 deferred 那条丢掉，迟到的失败回执不能把它救活。
+    #[tokio::test]
+    async fn a_failed_receipt_while_stopping_does_not_revive_dropped_deferred_rows() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        defer_first_wake_behind_a_backlog(&rig, "w1");
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        assert_eq!(rig.exec.sent("w1").len(), 1, "只有积压的那批在路上");
+        undelivered_while_stopping(&mut rig, "w1").await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!((w.state, w.attempts), (WakeState::Dropped, 0));
+        rig.tick(3 * MIN).await;
+        assert_eq!(rig.exec.launches("w1").len(), 1);
+    }
+
+    /// 评审 P7b：普通的批在路上时人停掉、随后回执说没投进去——那批跟人停一样丢掉，不重试、不把刚停掉的拉起来。
+    #[tokio::test]
+    async fn a_failed_receipt_while_stopping_drops_the_batch_instead_of_retrying() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        undelivered_while_stopping(&mut rig, "w1").await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!((w.state, w.attempts), (WakeState::Dropped, 0));
+        rig.tick(3 * MIN).await;
+        assert_eq!(rig.exec.launches("w1").len(), 1, "人停的没被重新拉起");
+        assert!(rig.port.posts().is_empty(), "{:?}", rig.port.posts());
+    }
+
+    /// 裁定 C：正在被停掉的 session 收到 nudge，当场回「没在跑」（不等 `on_exited`——它可能永远不来）。
+    #[tokio::test]
+    async fn a_nudge_to_a_stopping_session_is_refused_at_once() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let (tx, _stopped) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: "w1".into(),
+                reply: tx,
+            }))
+            .await;
+        let (tx, mut reply) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Nudge {
+                session: "w1".into(),
+                input: "继续".into(),
+                reply: tx,
+            }))
+            .await;
+        assert_eq!(
+            reply.try_recv(),
+            Ok(Err(ControlError::NotRunning("w1".into()))),
+            "没处理退出事件之前就回了"
+        );
+    }
+
+    /// 裁定 C：停掉时已经排在写队列里的 nudge（前面有一串键在写）也当场回「没在跑」。
+    #[tokio::test]
+    async fn queued_nudges_are_refused_when_the_stop_begins() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        for (input, _) in [("12", ()), ("继续", ())] {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            rig.core
+                .handle(Input::Cmd(Cmd::Nudge {
+                    session: "w1".into(),
+                    input: input.into(),
+                    reply: tx,
+                }))
+                .await;
+            if input == "继续" {
+                let (tx, _stopped) = tokio::sync::oneshot::channel();
+                rig.core
+                    .handle(Input::Cmd(Cmd::Stop {
+                        session: "w1".into(),
+                        reply: tx,
+                    }))
+                    .await;
+                let mut rx = rx;
+                assert_eq!(
+                    rx.try_recv(),
+                    Ok(Err(ControlError::NotRunning("w1".into())))
+                );
+            }
+        }
     }
 }
