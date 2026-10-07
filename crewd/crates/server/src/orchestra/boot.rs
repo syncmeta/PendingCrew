@@ -113,15 +113,15 @@ impl<P: Port> Core<P> {
 
     /// 下一次定时拍：最早的「未来」not_before、退避 / 错开的时刻、待决策升级时刻，都没有就心跳。
     /// 已到期却投不了的（目标在忙）不算——那些由 idle 边沿接，不能让定时器空转。
-    /// 未来的 not_before 来自缓存（`Core::due`），队列没变就不读库（评审 Fix 3）。
+    /// 未来的 not_before 来自缓存（`Core::due`），队列没变就不读库（评审 Fix 3）；缓存最多信一个心跳（9a 复审）。
     pub(crate) async fn next_deadline(&self) -> Ms {
         let now = self.now();
         let mut t = now.add(self.cfg.heartbeat_ms);
-        let next = match self.due.get(now) {
+        let next = match self.due.get(now, self.cfg.heartbeat_ms) {
             Some(v) => v,
             None => match self.port.next_not_before_after(now).await {
                 Ok(v) => {
-                    self.due.set(v);
+                    self.due.set(v, now);
                     v
                 }
                 Err(e) => {
@@ -834,6 +834,47 @@ mod tests {
             T0.add(5 * SEC),
             "缓存的时刻过了：重读"
         );
+    }
+
+    /// 9a 复审（折进 T9b）：缓存的下一拍最多信一个心跳。别人入队却漏了通告（没发 `WakeEnqueued`）、actor 又一直有
+    /// 输入（定时拍不来、缓存不被作废）时，旧缓存也不能把那条唤醒的定时推迟超过一个心跳。
+    #[tokio::test]
+    async fn a_cached_deadline_older_than_one_heartbeat_is_read_again() {
+        let mut rig = Rig::new().await;
+        let hb = rig.core.cfg.heartbeat_ms;
+        assert_eq!(hb, 30 * SEC, "下面的时刻按 30s 心跳算");
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        assert_eq!(rig.core.next_deadline().await, T0.add(hb), "没有未来的行");
+        let first = rig.port.lock().next_due_reads;
+        // 漏了通告的入队：只进库，Core 不知道。
+        let later = NewWake {
+            not_before: T0.add(50 * SEC),
+            ..timer("w1", "t1", "x")
+        };
+        rig.port.enqueue(later).await.unwrap();
+        let busy = async |rig: &mut Rig| {
+            rig.clock.advance(10 * SEC);
+            rig.core
+                .handle(Input::Cmd(Cmd::Live {
+                    session: "w1".into(),
+                    reply: oneshot::channel().0,
+                }))
+                .await;
+        };
+        busy(&mut rig).await;
+        busy(&mut rig).await;
+        assert_eq!(rig.core.next_deadline().await, T0.add(50 * SEC));
+        assert_eq!(rig.port.lock().next_due_reads, first, "缓存还新：不读库");
+        busy(&mut rig).await;
+        assert_eq!(
+            rig.core.next_deadline().await,
+            T0.add(50 * SEC),
+            "缓存满一个心跳就作废、重读：看见了那条（不然是 T0+60s）"
+        );
+        assert_eq!(rig.port.lock().next_due_reads, first + 1);
     }
 
     /// 同上，Core 自己入队的未来唤醒（这里是额度唤醒，45 分钟后）也作废缓存（写都经 `self.due.touch(..)`）。

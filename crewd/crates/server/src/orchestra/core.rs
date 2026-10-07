@@ -92,9 +92,10 @@ pub(crate) async fn within<T>(
 
 /// 下一个「未来的 not_before」的缓存（评审 Fix 3）：actor 每处理一条输入都要算下一拍，不能每次都读库。
 /// 改唤醒行的写（入队 / 结算 / 拿走 / 确认 / 回收 / 清理）一律写成 `self.due.touch(&self.port).settle(..)`——
-/// 先作废、再写；别人入队的经 `WakeEnqueued` 等协作事件作废（[`Core::handle`]）。缓存的时刻过了也算作废。
+/// 先作废、再写；别人入队的经 `WakeEnqueued` 等协作事件作废（[`Core::handle`]）。缓存的时刻过了也算作废；
+/// 缓存满 `max_age`（一个心跳）也算作废（9a 复审：漏了通告的入队、而 actor 一直忙着没有定时拍时，旧缓存最多误事一个心跳）。
 #[derive(Default)]
-pub(crate) struct DueCache(std::sync::Mutex<Option<Option<Ms>>>);
+pub(crate) struct DueCache(std::sync::Mutex<Option<(Option<Ms>, Ms)>>);
 
 impl DueCache {
     /// 唤醒行要变了：作废，原样交回 `x`。
@@ -107,16 +108,19 @@ impl DueCache {
         *self.0.lock().expect("缓存锁中毒") = None;
     }
 
-    /// 还有效的缓存（`Some(None)` = 没有未来的行）；没缓存或缓存的时刻已过 = `None`（要重读）。
-    pub(crate) fn get(&self, now: Ms) -> Option<Option<Ms>> {
+    /// 还有效的缓存（`Some(None)` = 没有未来的行）；没缓存、缓存的时刻已过、或缓存满 `max_age` = `None`（要重读）。
+    pub(crate) fn get(&self, now: Ms, max_age: i64) -> Option<Option<Ms>> {
         match *self.0.lock().expect("缓存锁中毒") {
-            Some(Some(t)) if t <= now => None,
-            v => v,
+            None => None,
+            Some((_, at)) if now.since(at) >= max_age => None,
+            Some((Some(t), _)) if t <= now => None,
+            Some((v, _)) => Some(v),
         }
     }
 
-    pub(crate) fn set(&self, v: Option<Ms>) {
-        *self.0.lock().expect("缓存锁中毒") = Some(v);
+    /// `now` = 读库的时刻（缓存从这一刻起算年龄）。
+    pub(crate) fn set(&self, v: Option<Ms>, now: Ms) {
+        *self.0.lock().expect("缓存锁中毒") = Some((v, now));
     }
 }
 
