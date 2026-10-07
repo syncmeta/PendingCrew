@@ -224,7 +224,11 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
 }
 
 pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
-    get(tx.conn(), id)?;
+    let crew = get(tx.conn(), id)?;
+    // 根的轻量规则（N1 裁定 6）：总机组不能被隐藏（改名等其余字段与普通机组一样）。
+    if crew.org_root && p.hidden == Some(true) {
+        return Err(CollabError::Forbidden("总机组是组织的根，不能隐藏".into()));
+    }
     let conn = tx.conn();
     let now = tx.now_ts();
     if let Some(t) = p.title {
@@ -1520,5 +1524,23 @@ mod tests {
         ok(&mut s, |tx| delete(tx, "crew-a"));
         ok(&mut s, |tx| create(tx, new_crew("再建一个")));
         assert_eq!(parentless(&s), 1);
+    }
+
+    /// 根的轻量规则（N1 裁定 6）：总机组不能被隐藏；取消隐藏 / 别的机组照常。
+    #[test]
+    fn the_org_root_cannot_be_hidden() {
+        let mut s = store();
+        let hide = |h: bool| CrewPatch {
+            hidden: Some(h),
+            ..Default::default()
+        };
+        assert!(matches!(
+            err(&mut s, |tx| update(tx, "chief", hide(true))),
+            CollabError::Forbidden(_)
+        ));
+        assert!(get(s.conn(), "chief").unwrap().hidden_at.is_none());
+        ok(&mut s, |tx| update(tx, "chief", hide(false)));
+        let x = ok(&mut s, |tx| update(tx, "crew-x", hide(true)));
+        assert!(x.hidden_at.is_some());
     }
 }
