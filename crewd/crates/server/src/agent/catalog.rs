@@ -46,8 +46,18 @@ pub struct ToolSpec {
     pub params: &'static [Param],
 }
 
+/// The categories the injection digest folds (S62); see `CATEGORIES`.
+pub const CAT_PROGRESS: &str = "progress";
+pub const CAT_ACK: &str = "ack";
 pub const CATEGORIES: &[&str] = &[
-    "progress", "done", "blocked", "question", "finding", "handoff", "ack", "note",
+    CAT_PROGRESS,
+    "done",
+    "blocked",
+    "question",
+    "finding",
+    "handoff",
+    CAT_ACK,
+    "note",
 ];
 pub const MENTION_KINDS: &[&str] = &["session", "captain", "human"];
 const RUNNERS: &[&str] = &["claude", "codex"];

@@ -4,6 +4,12 @@
 //! total length cap and decides how far the cursors move (the cursor is shared with wake-ups: at
 //! most once per message).
 //!
+//! The digest (S62): per channel, other sessions' `progress` / `ack` messages that neither @ me nor
+//! reply to my message are folded into one `inject.digest` line (count, senders, seq range) instead
+//! of being listed; everything else (the human, the system, any other category, anything for me)
+//! stays a full line. Folded messages were announced, so the cursor passes them like shown ones.
+//! Digest lines count toward the cap.
+//!
 //! The cap (R6): what does not fit is left out from the NEWEST end, so what is injected is a
 //! contiguous prefix of each channel's unread run. Cursors move only to the highest seq actually
 //! injected; omitted messages stay unread and arrive with the next call. The omission note never
@@ -18,6 +24,7 @@ use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::agent::Identity;
+use crate::agent::catalog::{CAT_ACK, CAT_PROGRESS};
 use crate::agent::port::{self, PortResult};
 use crate::agent::text::{self, Locale};
 use crate::agent::tools::channel_label_for;
@@ -63,6 +70,102 @@ pub fn counts_as_progress(tool_name: &str) -> bool {
     }
 }
 
+/// Categories folded into the digest when another session posts them (S62, Q1).
+const FOLDED_CATEGORIES: &[&str] = &[CAT_PROGRESS, CAT_ACK];
+/// A digest line names at most this many senders.
+const DIGEST_SENDERS: usize = 5;
+/// Joins sender names in a digest line (no prose: the same in both locales).
+const NAME_SEP: &str = ", ";
+
+/// Is this unread message folded into its channel's digest (S62)? Another session's progress /
+/// ack that does not @ me and is not a reply to one of my messages. `replied_sender` = the sender
+/// session of the message it replies to.
+fn folds(me: &str, m: &crewd_proto::Message, replied_sender: Option<&str>) -> bool {
+    use crewd_proto::SenderKind;
+    let by_peer = matches!(m.sender_kind, SenderKind::Session | SenderKind::Captain)
+        && m.sender_session_id.as_deref().is_some_and(|s| s != me);
+    let at_me = m
+        .mentions
+        .iter()
+        .any(|x| x.target_id.as_deref() == Some(me));
+    by_peer
+        && m.category
+            .as_deref()
+            .is_some_and(|c| FOLDED_CATEGORIES.contains(&c))
+        && !at_me
+        && replied_sender != Some(me)
+}
+
+/// One channel's unread run: every message in seq order (`true` = folded) and the folded ones'
+/// senders, so the digest and the cursor follow whatever prefix of the full lines the cap kept.
+#[derive(Debug, Clone)]
+struct ChannelRun {
+    channel_id: String,
+    label: String,
+    seqs: Vec<(i64, bool)>,
+    /// (seq, sender label) of the folded messages.
+    folded: Vec<(i64, String)>,
+}
+
+impl ChannelRun {
+    /// The highest seq that is shown or announced when `kept` full lines of this channel are in:
+    /// folded messages up to the first full line that was left out.
+    fn advance_point(&self, kept: usize) -> Option<i64> {
+        let (mut seen, mut point) = (0, None);
+        for &(seq, folded) in &self.seqs {
+            if !folded {
+                if seen == kept {
+                    break;
+                }
+                seen += 1;
+            }
+            point = Some(seq);
+        }
+        point
+    }
+
+    fn kept_in(&self, blocks: &[ChannelBlock]) -> usize {
+        blocks
+            .iter()
+            .find(|b| b.channel_id == self.channel_id)
+            .map_or(0, |b| b.lines.len())
+    }
+
+    /// The digest line for what `blocks` keep (none when nothing folded is announced).
+    fn digest(&self, loc: Locale, blocks: &[ChannelBlock]) -> Option<String> {
+        let upto = self.advance_point(self.kept_in(blocks))?;
+        let shown: Vec<&(i64, String)> = self.folded.iter().filter(|(s, _)| *s <= upto).collect();
+        let (first, last) = (shown.first()?.0, shown.last()?.0);
+        let mut names: Vec<&str> = Vec::new();
+        for (_, n) in &shown {
+            if !names.contains(&n.as_str()) {
+                names.push(n);
+            }
+        }
+        let mut senders = names
+            .iter()
+            .take(DIGEST_SENDERS)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(NAME_SEP);
+        if names.len() > DIGEST_SENDERS {
+            senders.push_str(NAME_SEP);
+            senders.push('\u{2026}');
+        }
+        Some(text::r(
+            loc,
+            "inject.digest",
+            &[
+                ("channel", &self.label),
+                ("count", &shown.len().to_string()),
+                ("senders", &senders),
+                ("first", &first.to_string()),
+                ("last", &last.to_string()),
+            ],
+        ))
+    }
+}
+
 pub struct Prepared {
     pub context: Option<String>,
     /// Per channel, the highest seq that is really in `context`.
@@ -76,30 +179,86 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
     if unread.iter().all(|(_, v)| v.is_empty()) {
         return Ok(None);
     }
-    let blocks = port::blocks(st, &me.session_id, loc, unread).await?;
-    let mut labels = Vec::with_capacity(blocks.len());
-    for b in &blocks {
-        labels.push(
-            channel_label_for(
-                st,
-                &me.session_id,
-                &b.channel_id,
-                b.kind,
-                &b.name,
-                &b.crew_title,
-                loc,
-            )
-            .await,
-        );
-    }
-    let fitted = fit(loc, blocks, &labels, cap);
-    let advance_to = fitted
-        .blocks
+    // Who wrote the messages these reply to (a reply to me is never folded).
+    let replied: Vec<String> = unread
         .iter()
-        .filter_map(|b| b.lines.last().map(|l| (b.channel_id.clone(), l.seq)))
+        .flat_map(|(_, v)| v.iter().filter_map(|m| m.in_reply_to.clone()))
+        .collect();
+    let replied = port::message_senders(st, replied).await?;
+    let mut runs = Vec::new();
+    let mut full_unread = Vec::new();
+    for (channel_id, msgs) in unread {
+        if msgs.is_empty() {
+            continue;
+        }
+        let mut seqs = Vec::with_capacity(msgs.len());
+        let mut folded = Vec::new();
+        let mut full = Vec::new();
+        for m in msgs {
+            let to = m
+                .in_reply_to
+                .as_ref()
+                .and_then(|r| replied.get(r).cloned().flatten());
+            let f = folds(&me.session_id, &m, to.as_deref());
+            seqs.push((m.seq, f));
+            if f {
+                folded.push((m.seq, port::sender_label(st, &m, loc).await?));
+            } else {
+                full.push(m);
+            }
+        }
+        let label = match port::channel(st, &channel_id).await? {
+            Some(c) => {
+                channel_label_for(
+                    st,
+                    &me.session_id,
+                    &c.id,
+                    c.kind,
+                    &c.name,
+                    &c.crew_title,
+                    loc,
+                )
+                .await
+            }
+            None => String::new(),
+        };
+        runs.push(ChannelRun {
+            channel_id: channel_id.clone(),
+            label,
+            seqs,
+            folded,
+        });
+        if !full.is_empty() {
+            full_unread.push((channel_id, full));
+        }
+    }
+    let blocks = port::blocks(st, &me.session_id, loc, full_unread).await?;
+    let labels: Vec<String> = blocks
+        .iter()
+        .map(|b| {
+            runs.iter()
+                .find(|r| r.channel_id == b.channel_id)
+                .map(|r| r.label.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    let fitted = fit(loc, blocks, &labels, &runs, cap);
+    // Nothing shown (a cap too small even for the notes): nothing announced, no cursor moves.
+    if fitted.context.trim().is_empty() {
+        return Ok(Some(Prepared {
+            context: None,
+            advance_to: vec![],
+        }));
+    }
+    let advance_to = runs
+        .iter()
+        .filter_map(|r| {
+            r.advance_point(r.kept_in(&fitted.blocks))
+                .map(|seq| (r.channel_id.clone(), seq))
+        })
         .collect();
     Ok(Some(Prepared {
-        context: (!fitted.context.trim().is_empty()).then_some(fitted.context),
+        context: Some(fitted.context),
         advance_to,
     }))
 }
@@ -152,9 +311,10 @@ fn render(
     full: &[bool],
     omitted: &[usize],
     cut: Option<(usize, i64)>,
+    runs: &[ChannelRun],
 ) -> String {
     let body = port::injection(loc, blocks);
-    let mut notes: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = runs.iter().filter_map(|r| r.digest(loc, blocks)).collect();
     if let Some((bi, seq)) = cut {
         notes.push(text::r(
             loc,
@@ -207,7 +367,13 @@ fn first_fit(mut lo: usize, mut hi: usize, fits: impl Fn(usize) -> bool) -> usiz
     hi
 }
 
-fn fit(loc: Locale, blocks: Vec<ChannelBlock>, labels: &[String], cap: usize) -> Fitted {
+fn fit(
+    loc: Locale,
+    blocks: Vec<ChannelBlock>,
+    labels: &[String],
+    runs: &[ChannelRun],
+    cap: usize,
+) -> Fitted {
     let full: Vec<bool> = blocks
         .iter()
         .map(|b| b.lines.len() >= crewd_collab::cursors::UNREAD_CAP as usize)
@@ -224,7 +390,7 @@ fn fit(loc: Locale, blocks: Vec<ChannelBlock>, labels: &[String], cap: usize) ->
     };
     let size = |k: usize| {
         let (b, o) = trimmed(&blocks, &order[..k]);
-        units(&render(loc, &b, labels, &full, &o, None))
+        units(&render(loc, &b, labels, &full, &o, None, runs))
     };
     let k_body = if body(n) > cap {
         None
@@ -235,7 +401,7 @@ fn fit(loc: Locale, blocks: Vec<ChannelBlock>, labels: &[String], cap: usize) ->
     };
     if let Some(k) = k_body.and_then(|k0| (k0..=n).find(|k| size(*k) <= cap)) {
         let (blocks, omitted) = trimmed(&blocks, &order[..k]);
-        let context = render(loc, &blocks, labels, &full, &omitted, None);
+        let context = render(loc, &blocks, labels, &full, &omitted, None, runs);
         return Fitted { blocks, context };
     }
     // No `k` fits: even one line does not. Cut its text (it is then injected, so the cursor may
@@ -254,7 +420,7 @@ fn fit(loc: Locale, blocks: Vec<ChannelBlock>, labels: &[String], cap: usize) ->
         let mut s: String = whole.chars().take(t).collect();
         s.push('\u{2026}');
         blocks[bi].lines[0].text = s;
-        render(loc, blocks, labels, &full, &omitted, Some((bi, seq)))
+        render(loc, blocks, labels, &full, &omitted, Some((bi, seq)), runs)
     };
     let fits = |t: usize| units(&with_cut(t, &mut blocks.clone())) <= cap;
     // A cap too small for even the notes cannot be honoured; cut to nothing then.
@@ -875,7 +1041,7 @@ mod tests {
         assert_eq!(order, [1, 0, 1, 1]);
         let size = |k: usize| {
             let (b, o) = trimmed(&blocks, &order[..k]);
-            units(&render(loc, &b, &labels, &[false, false], &o, None))
+            units(&render(loc, &b, &labels, &[false, false], &o, None, &[]))
         };
         let cap = size(1);
         assert!(
@@ -889,7 +1055,7 @@ mod tests {
             size(3) <= cap || size(4) <= cap,
             "binary search would settle here"
         );
-        let fitted = fit(loc, blocks.clone(), &labels, cap);
+        let fitted = fit(loc, blocks.clone(), &labels, &[], cap);
         let kept: usize = fitted.blocks.iter().map(|b| b.lines.len()).sum();
         assert_eq!(kept, 4, "the smallest fitting k keeps the most lines");
     }
@@ -1001,5 +1167,329 @@ mod tests {
             gone,
             crate::agent::text::r(crewd_collab::Locale::En, "r.dm_generic", &[])
         );
+    }
+
+    // --- S62 injection digest: other sessions' progress / ack fold into one line per channel ---
+
+    async fn peer_post(
+        f: &Fixture,
+        who: &str,
+        ch: &str,
+        text: &str,
+        category: Option<&str>,
+        mentions: Vec<Mention>,
+        reply_to: Option<String>,
+    ) -> crewd_proto::Message {
+        port::post(
+            &f.state,
+            port::PostReq {
+                channel_id: ch.into(),
+                sender: port::PostSender::Session(who.into()),
+                text: text.into(),
+                mentions,
+                in_reply_to: reply_to,
+                category: category.map(str::to_string),
+                attachments: vec![],
+            },
+        )
+        .await
+        .unwrap()
+        .message
+    }
+
+    /// The `inject.digest` lines in `ctx` (fixed parts of the template all present).
+    fn digest_lines(ctx: &str) -> Vec<&str> {
+        let probe = text::r(
+            crewd_collab::Locale::Zh,
+            "inject.digest",
+            &[
+                ("channel", "\u{1}"),
+                ("count", "\u{1}"),
+                ("senders", "\u{1}"),
+                ("first", "\u{1}"),
+                ("last", "\u{1}"),
+            ],
+        );
+        let parts: Vec<&str> = probe.split('\u{1}').filter(|p| !p.is_empty()).collect();
+        ctx.lines()
+            .filter(|l| parts.iter().all(|p| l.contains(p)))
+            .collect()
+    }
+
+    fn digest_line(label: &str, count: usize, senders: &str, first: i64, last: i64) -> String {
+        text::r(
+            crewd_collab::Locale::Zh,
+            "inject.digest",
+            &[
+                ("channel", label),
+                ("count", &count.to_string()),
+                ("senders", senders),
+                ("first", &first.to_string()),
+                ("last", &last.to_string()),
+            ],
+        )
+    }
+
+    fn lobby_label() -> String {
+        crate::agent::tools::channel_label_raw(
+            crewd_collab::Locale::Zh,
+            ChannelKind::Lobby,
+            "",
+            "示例机组",
+        )
+    }
+
+    async fn label_of(f: &Fixture, session: &str) -> String {
+        let m = f
+            .session_post(session, &lobby(f).await, "示例：标签探针", vec![])
+            .await;
+        port::sender_label(&f.state, &m, crewd_collab::Locale::Zh)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn peer_progress_and_ack_fold_into_one_digest_line() {
+        let f = Fixture::new().await;
+        f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
+            .await;
+        let w2 = label_of(&f, "s-w2").await;
+        let l = lobby(&f).await;
+        ctx_of(&f, &f.worker).await; // the probe above
+        let a = peer_post(&f, "s-w2", &l, "P-001 进度", Some("progress"), vec![], None).await;
+        peer_post(&f, "s-w2", &l, "A-001 收到", Some("ack"), vec![], None).await;
+        let c = peer_post(
+            &f,
+            &f.captain,
+            &l,
+            "P-002 进度",
+            Some("progress"),
+            vec![],
+            None,
+        )
+        .await;
+        let cap = label_of(&f, &f.captain).await;
+        let ctx = ctx_of(&f, &f.worker).await.expect("the digest is injected");
+        for t in ["P-001", "A-001", "P-002"] {
+            assert!(!ctx.contains(t), "{t} is folded, not listed: {ctx}");
+        }
+        assert_eq!(digest_lines(&ctx).len(), 1, "one line per channel: {ctx}");
+        let want = digest_line(&lobby_label(), 3, &format!("{w2}, {cap}"), a.seq, c.seq);
+        assert!(ctx.contains(&want), "{want}\n{ctx}");
+        assert!(ctx.contains("read_channel"), "{ctx}");
+        // The captain's own probe after them is a full line: only it is listed.
+        assert!(ctx.contains("示例：标签探针"), "{ctx}");
+    }
+
+    #[tokio::test]
+    async fn human_done_question_and_mentions_of_me_are_never_folded() {
+        let f = Fixture::new().await;
+        f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
+            .await;
+        let l = lobby(&f).await;
+        f.human_post(&l, "H-001 人说的", vec![]).await;
+        for (t, cat) in [
+            ("D-001", "done"),
+            ("Q-001", "question"),
+            ("B-001", "blocked"),
+            ("F-001", "finding"),
+            ("O-001", "handoff"),
+            ("N-001", "note"),
+        ] {
+            peer_post(&f, "s-w2", &l, t, Some(cat), vec![], None).await;
+        }
+        peer_post(&f, "s-w2", &l, "U-001 没分类", None, vec![], None).await;
+        peer_post(
+            &f,
+            "s-w2",
+            &l,
+            "M-001 @我的进度",
+            Some("progress"),
+            vec![at(MentionKind::Session, Some(f.worker.as_str()))],
+            None,
+        )
+        .await;
+        peer_post(
+            &f,
+            "s-w2",
+            &l,
+            "K-001 @机长的收到",
+            Some("ack"),
+            vec![at(MentionKind::Captain, None)],
+            None,
+        )
+        .await;
+        port::post(
+            &f.state,
+            port::PostReq {
+                channel_id: l.clone(),
+                sender: port::PostSender::System,
+                text: "S-001 系统".into(),
+                mentions: vec![],
+                in_reply_to: None,
+                category: None,
+                attachments: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        let ctx = ctx_of(&f, &f.worker).await.unwrap();
+        for t in [
+            "H-001", "D-001", "Q-001", "B-001", "F-001", "O-001", "N-001", "U-001", "M-001",
+            "S-001",
+        ] {
+            assert!(ctx.contains(t), "{t} stays a full line: {ctx}");
+        }
+        // @captain is not @ the worker: folded for it.
+        assert!(!ctx.contains("K-001"), "{ctx}");
+        assert_eq!(digest_lines(&ctx).len(), 1, "{ctx}");
+        // ... but for the captain it is an @ of itself: full; the worker's @ is folded there.
+        let cap = ctx_of(&f, &f.captain).await.unwrap();
+        assert!(cap.contains("K-001") && !cap.contains("M-001"), "{cap}");
+    }
+
+    #[tokio::test]
+    async fn reply_to_my_message_is_never_folded() {
+        let f = Fixture::new().await;
+        f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
+            .await;
+        let cap = f.me(&f.captain).await;
+        let t = port::create_channel(
+            &f.state,
+            &cap,
+            ChannelKind::Topic,
+            "示例话题".into(),
+            None,
+            vec![
+                port::MemberRef::Session(f.worker.clone()),
+                port::MemberRef::Session("s-w2".into()),
+            ],
+        )
+        .await
+        .unwrap();
+        let mine = f.session_post(&f.worker, &t.id, "我的问题", vec![]).await;
+        // I leave and listen instead: a reply then carries no automatic @ of me, so only the
+        // reply rule can keep it full.
+        let w = f.me(&f.worker).await;
+        port::remove_member(
+            &f.state,
+            &w,
+            &t.id,
+            port::MemberRef::Session(f.worker.clone()),
+        )
+        .await
+        .unwrap();
+        port::set_listen(&f.state, &f.worker, &t.id, None, vec![])
+            .await
+            .unwrap();
+        ctx_of(&f, &f.worker).await;
+        let reply = peer_post(
+            &f,
+            "s-w2",
+            &t.id,
+            "R-001 回你",
+            Some("ack"),
+            vec![],
+            Some(mine.id.clone()),
+        )
+        .await;
+        assert!(
+            !reply
+                .mentions
+                .iter()
+                .any(|m| m.target_id.as_deref() == Some(f.worker.as_str())),
+            "the reply must not @ me for this test: {:?}",
+            reply.mentions
+        );
+        peer_post(
+            &f,
+            "s-w2",
+            &t.id,
+            "R-002 别的收到",
+            Some("ack"),
+            vec![],
+            None,
+        )
+        .await;
+        let ctx = ctx_of(&f, &f.worker).await.unwrap();
+        assert!(
+            ctx.contains("R-001"),
+            "a reply to my message stays full: {ctx}"
+        );
+        assert!(!ctx.contains("R-002"), "{ctx}");
+        assert_eq!(digest_lines(&ctx).len(), 1, "{ctx}");
+    }
+
+    #[tokio::test]
+    async fn cursor_moves_past_folded_messages() {
+        let f = Fixture::new().await;
+        f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
+            .await;
+        let l = lobby(&f).await;
+        peer_post(&f, "s-w2", &l, "P-001", Some("progress"), vec![], None).await;
+        f.human_post(&l, "H-001 中间一条", vec![]).await;
+        let last = peer_post(&f, "s-w2", &l, "P-002", Some("progress"), vec![], None).await;
+        let ctx = ctx_of(&f, &f.worker).await.unwrap();
+        assert!(
+            ctx.contains("H-001") && digest_lines(&ctx).len() == 1,
+            "{ctx}"
+        );
+        assert!(ctx_of(&f, &f.worker).await.is_none(), "announced = read");
+        assert_eq!(
+            port::cursor(&f.state, &f.worker, &l).await.unwrap(),
+            Some(last.seq)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_channel_with_only_folded_messages_still_shows_its_digest() {
+        let f = Fixture::new().await;
+        f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
+            .await;
+        let l = lobby(&f).await;
+        let p = peer_post(&f, "s-w2", &l, "P-001", Some("progress"), vec![], None).await;
+        let ctx = ctx_of(&f, &f.worker)
+            .await
+            .expect("a digest alone is injected");
+        assert!(!ctx.contains("P-001"), "{ctx}");
+        let w2 = port::sender_label(&f.state, &p, crewd_collab::Locale::Zh)
+            .await
+            .unwrap();
+        assert!(
+            ctx.contains(&digest_line(&lobby_label(), 1, &w2, p.seq, p.seq)),
+            "{ctx}"
+        );
+        assert!(ctx_of(&f, &f.worker).await.is_none());
+    }
+
+    #[test]
+    fn digest_line_counts_toward_the_cap() {
+        let loc = crewd_collab::Locale::Zh;
+        let mut b = block(
+            "a",
+            &[
+                ("2026-01-01T00:00:02Z", 2),
+                ("2026-01-01T00:00:03Z", 3),
+                ("2026-01-01T00:00:04Z", 4),
+            ],
+        );
+        for l in &mut b.lines {
+            l.text = "很长的说明".repeat(20);
+        }
+        let blocks = vec![b];
+        let labels = vec![a_label(&blocks[0])];
+        // A folded message before them: always announced with what is kept.
+        let runs = vec![ChannelRun {
+            channel_id: "a".into(),
+            label: "a".into(),
+            seqs: vec![(1, true), (2, false), (3, false), (4, false)],
+            folded: vec![(1, "示例发言者".into())],
+        }];
+        let without_digest = units(&render(loc, &blocks, &labels, &[false], &[0], None, &[]));
+        let fitted = fit(loc, blocks.clone(), &labels, &runs, without_digest);
+        let kept: usize = fitted.blocks.iter().map(|b| b.lines.len()).sum();
+        assert!(kept < 3, "the digest line must make room: kept {kept}");
+        assert!(units(&fitted.context) <= without_digest);
+        assert!(fitted.context.contains("示例发言者"), "{}", fitted.context);
     }
 }

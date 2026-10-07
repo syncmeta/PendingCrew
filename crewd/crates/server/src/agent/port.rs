@@ -979,6 +979,23 @@ pub async fn search(
     .await
 }
 
+/// The sender session of each message id (`None` = not a session, or no such message). Ids only,
+/// no content: the injection digest uses it to keep replies to the reader unfolded.
+pub async fn message_senders(
+    st: &AppState,
+    ids: Vec<String>,
+) -> PortResult<std::collections::HashMap<String, Option<String>>> {
+    read(st, move |conn| {
+        let mut out = std::collections::HashMap::new();
+        for id in ids {
+            let s = opt(crewd_collab::messages::get(conn, &id))?.and_then(|m| m.sender_session_id);
+            out.insert(id, s);
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// 群在列表 / 读取面上的显示名（M3a `channels::display_label`，已过 `safe_name`）。
 /// dm 的对方已不在时是空串：调用方给一句 md 里的回退文字。dm 的修饰按**此刻**的机长指针。
 pub async fn display_label(

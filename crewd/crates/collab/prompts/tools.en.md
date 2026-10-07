@@ -409,6 +409,9 @@ At least {count} newer messages in {channel} were left out this time (length cap
 ## inject.truncated
 Message #{seq} in {channel} is too long; only its beginning is shown. For the full text: read_channel(channel="{id}", before={next}, limit=1).
 
+## inject.digest
+{channel}: {count} more progress / ack messages ({senders}, #{first}–#{last}) are folded, not listed one by one; read_channel shows them.
+
 ## r.lobby_label
 lobby of "{crew}"
 

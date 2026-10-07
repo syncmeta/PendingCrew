@@ -409,6 +409,9 @@ claude 或 codex，必须明确选。
 ## inject.truncated
 {channel} 里 #{seq} 这条太长，只带了开头；要看全文：read_channel(channel="{id}", before={next}, limit=1)。
 
+## inject.digest
+{channel}：另有 {count} 条进度 / 收到（{senders}，#{first}–#{last}）折叠了，没逐条列出；要看就用 read_channel。
+
 ## r.lobby_label
 「{crew}」大厅
 
