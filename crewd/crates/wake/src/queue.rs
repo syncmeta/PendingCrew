@@ -48,14 +48,57 @@ pub fn select_batch(pending: &[QueuedWake], now: Ms, limits: &BatchLimits) -> Ve
 pub const RETRY_DELAYS_MS: [i64; 2] = [30 * SEC, 2 * MIN];
 /// 总共试几次：第一次 + 每个退避间隔一次重试。从 `RETRY_DELAYS_MS` 推出来，两者不会漂。
 pub const MAX_ATTEMPTS: u32 = RETRY_DELAYS_MS.len() as u32 + 1;
+/// 重试时刻的抖动幅度：±20%（River 是 ±10%）。一次 API 故障里一起失败的几十个 session 不会在同一毫秒一起重试。
+pub const RETRY_JITTER: f64 = 0.2;
 
-/// 一次投递终局失败之后：`attempts` 是算上这次的次数。`None` = 放弃（记 dropped）。
-pub fn after_failure(attempts: u32, now: Ms) -> Option<Ms> {
+/// 一次投递终局失败之后：`attempts` 是**库里**记的次数（claim 时 +1，含这一次）。`None` = 放弃（记 dropped）。
+/// `jitter` ∈ [-[`RETRY_JITTER`], +[`RETRY_JITTER`]]（超出的按边界算）：退避 × (1 + jitter)。由调用方抽
+/// （[`Jitter`]，种子注入），这里不碰随机数，测试照样确定。
+pub fn after_failure(attempts: u32, now: Ms, jitter: f64) -> Option<Ms> {
     if attempts >= MAX_ATTEMPTS {
         return None;
     }
     let i = attempts.max(1) as usize - 1;
-    RETRY_DELAYS_MS.get(i).map(|d| now.add(*d))
+    let j = if jitter.is_finite() {
+        jitter.clamp(-RETRY_JITTER, RETRY_JITTER)
+    } else {
+        0.0
+    };
+    RETRY_DELAYS_MS
+        .get(i)
+        .map(|d| now.add((*d as f64 * (1.0 + j)).round() as i64))
+}
+
+/// 退避抖动的来源：splitmix64，种子由调用方给（serve 用启动时刻，测试用固定值）——不引第三方 crate、不读时钟。
+#[derive(Clone, Debug)]
+pub struct Jitter {
+    state: u64,
+    spread: f64,
+}
+
+impl Jitter {
+    /// `spread` = 抖动幅度（0 = 不抖；正常是 [`RETRY_JITTER`]）。
+    pub fn new(seed: u64, spread: f64) -> Self {
+        Self {
+            state: seed,
+            spread: spread.clamp(0.0, RETRY_JITTER),
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// 下一个抖动值，均匀落在 [-spread, +spread]。
+    pub fn draw(&mut self) -> f64 {
+        // 高 53 位 → [0, 1)。
+        let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
+        (unit * 2.0 - 1.0) * self.spread
+    }
 }
 
 pub fn ids(batch: &[QueuedWake]) -> Vec<i64> {
@@ -131,8 +174,8 @@ mod tests {
     #[test]
     fn max_attempts_is_one_more_than_the_back_off_steps() {
         assert_eq!(MAX_ATTEMPTS as usize, RETRY_DELAYS_MS.len() + 1);
-        assert!(after_failure(MAX_ATTEMPTS - 1, Ms(0)).is_some());
-        assert_eq!(after_failure(MAX_ATTEMPTS, Ms(0)), None);
+        assert!(after_failure(MAX_ATTEMPTS - 1, Ms(0), 0.0).is_some());
+        assert_eq!(after_failure(MAX_ATTEMPTS, Ms(0), 0.0), None);
     }
 
     #[test]
@@ -164,10 +207,45 @@ mod tests {
 
     #[test]
     fn failures_back_off_then_give_up_on_the_third() {
-        assert_eq!(after_failure(1, Ms(0)), Some(Ms(30 * SEC)));
-        assert_eq!(after_failure(2, Ms(0)), Some(Ms(2 * MIN)));
-        assert_eq!(after_failure(3, Ms(0)), None);
-        assert_eq!(after_failure(9, Ms(0)), None);
+        assert_eq!(after_failure(1, Ms(0), 0.0), Some(Ms(30 * SEC)));
+        assert_eq!(after_failure(2, Ms(0), 0.0), Some(Ms(2 * MIN)));
+        assert_eq!(after_failure(3, Ms(0), 0.0), None);
+        assert_eq!(after_failure(9, Ms(0), 0.0), None);
+    }
+
+    /// 抖动 = 退避 × (1 + jitter)，幅度封顶 ±20%（超出的、非数按边界 / 0 算）；放弃不受抖动影响。
+    #[test]
+    fn jitter_stretches_or_shrinks_the_delay_by_at_most_twenty_percent() {
+        assert_eq!(after_failure(1, Ms(0), 0.2), Some(Ms(36 * SEC)));
+        assert_eq!(after_failure(1, Ms(0), -0.2), Some(Ms(24 * SEC)));
+        assert_eq!(after_failure(2, Ms(0), 0.1), Some(Ms(132 * SEC)));
+        assert_eq!(after_failure(1, Ms(0), 5.0), Some(Ms(36 * SEC)), "封顶");
+        assert_eq!(after_failure(1, Ms(0), f64::NAN), Some(Ms(30 * SEC)));
+        assert_eq!(after_failure(MAX_ATTEMPTS, Ms(0), 0.2), None);
+    }
+
+    /// 同一个种子给同一串数（测试确定）；全都落在 ±spread 里；不是常数（真的会把一起失败的错开）；spread 0 = 不抖。
+    #[test]
+    fn jitter_draws_are_seeded_bounded_and_spread() {
+        let draws = |seed| {
+            let mut j = Jitter::new(seed, RETRY_JITTER);
+            (0..200).map(|_| j.draw()).collect::<Vec<f64>>()
+        };
+        let a = draws(7);
+        assert_eq!(a, draws(7), "同一个种子同一串");
+        assert_ne!(a, draws(8));
+        assert!(a.iter().all(|x| (-RETRY_JITTER..=RETRY_JITTER).contains(x)));
+        assert!(
+            a.iter().any(|x| *x > 0.1) && a.iter().any(|x| *x < -0.1),
+            "两边都有"
+        );
+        let mut flat = Jitter::new(7, 0.0);
+        assert!((0..20).all(|_| flat.draw() == 0.0));
+        let mut wide = Jitter::new(7, 9.0);
+        assert!(
+            (0..200).all(|_| wide.draw().abs() <= RETRY_JITTER),
+            "幅度封顶"
+        );
     }
 
     #[test]

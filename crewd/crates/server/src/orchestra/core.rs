@@ -348,6 +348,8 @@ pub struct Core<P: Port> {
     pub(crate) timers: BTreeSet<Ms>,
     /// 已经看过的 `last_progress_at`（`Change::Progress` 丢了时的兜底，裁定 3）。
     pub(crate) seen_progress: HashMap<String, Ms>,
+    /// 失败重试的抖动（每批没送到时抽一个；种子见 `OrchestraConfig::jitter_seed`）。
+    pub(crate) jitter: queue::Jitter,
 }
 
 impl<P: Port> Core<P> {
@@ -375,6 +377,8 @@ impl<P: Port> Core<P> {
             }
         };
         let loops = cfg.loops;
+        let seed = cfg.jitter_seed.unwrap_or(clock.now().0 as u64);
+        let jitter = queue::Jitter::new(seed, cfg.retry_jitter);
         Ok(Self {
             port,
             execs,
@@ -395,6 +399,7 @@ impl<P: Port> Core<P> {
             breaker: LoopBreaker::new(loops, latches),
             timers: BTreeSet::new(),
             seen_progress: HashMap::new(),
+            jitter,
         })
     }
 
@@ -1125,6 +1130,7 @@ impl<P: Port> Core<P> {
                 Ack::Failed {
                     error: error.into(),
                     now,
+                    jitter: self.jitter.draw(),
                 },
             )
             .await?;

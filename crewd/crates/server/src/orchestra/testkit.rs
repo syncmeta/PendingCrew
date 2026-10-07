@@ -445,7 +445,7 @@ impl Port for MemPort {
                     ..Default::default()
                 })
             }
-            Ack::Failed { now, .. } => {
+            Ack::Failed { now, jitter, .. } => {
                 let all = b.ids();
                 // 先按表核一遍（Fail 与 GiveUp 认的起始状态相同），再按**库里的**次数（claim 记的）判。
                 let mut counts = Vec::new();
@@ -459,7 +459,7 @@ impl Port for MemPort {
                 }
                 let mut out = Acked::default();
                 for (id, attempts) in counts {
-                    match crewd_wake::queue::after_failure(attempts, now) {
+                    match crewd_wake::queue::after_failure(attempts, now, jitter) {
                         Some(t) => {
                             let fail = lifecycle::WakeEvent::Fail {
                                 retry_at: Some(t.0),
@@ -1697,6 +1697,7 @@ mod self_tests {
         let failed = || Ack::Failed {
             error: "合成：没送到".into(),
             now: Ms(1_000),
+            jitter: 0.0,
         };
         let acked = p.ack(&batch, failed()).await.unwrap();
         assert_eq!(acked.retried, [(a, Ms(1_000 + queue::RETRY_DELAYS_MS[0]))]);

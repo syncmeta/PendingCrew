@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crewd_wake::breaker::{LOOP_LIMITS, LoopLimits};
 use crewd_wake::policy::DEFAULT_STAGGER_MS;
-use crewd_wake::queue::BatchLimits;
+use crewd_wake::queue::{BatchLimits, RETRY_JITTER};
 use crewd_wake::text::Lang;
 
 #[derive(Clone, Debug)]
@@ -31,6 +31,10 @@ pub struct OrchestraConfig {
     pub heartbeat_ms: i64,
     /// 本次 serve 启动的标识（重启询问的 promptId、restart 唤醒的 source）。
     pub boot_id: String,
+    /// 失败重试时刻的抖动幅度（P2：一起失败的不一起重试）；0 = 不抖。
+    pub retry_jitter: f64,
+    /// 抖动的种子；None = 用启动时刻（`Clock::now`）。测试给定值，结果就是确定的。
+    pub jitter_seed: Option<u64>,
 }
 
 impl Default for OrchestraConfig {
@@ -43,6 +47,8 @@ impl Default for OrchestraConfig {
             arbiter_timeout: Duration::from_secs(15),
             heartbeat_ms: 30_000,
             boot_id: uuid::Uuid::new_v4().to_string(),
+            retry_jitter: RETRY_JITTER,
+            jitter_seed: None,
         }
     }
 }
@@ -54,6 +60,9 @@ impl OrchestraConfig {
             stagger_ms: 0,
             arbiter_timeout: Duration::from_millis(50),
             boot_id: "boot-1".into(),
+            // 测试默认不抖：退避就是 30s / 2min 整（要抖的测试自己给种子）。
+            retry_jitter: 0.0,
+            jitter_seed: Some(1),
             ..Self::default()
         }
     }

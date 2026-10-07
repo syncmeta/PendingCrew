@@ -169,7 +169,8 @@ pub enum Ack {
     Delivered { riders: Riders },
     /// 没送到：`wakes` 与 `riders` 全部按**库里的**次数（claim 时记的）判——`crewd_wake::queue::after_failure`
     /// 给了时刻就回 pending、`not_before` = 它；没给 = 到上限放弃（dropped）。
-    Failed { error: String, now: Ms },
+    /// `jitter` 是这一批抽的一个抖动值（`crewd_wake::queue::Jitter`，±20%），原样交给 `after_failure`。
+    Failed { error: String, now: Ms, jitter: f64 },
 }
 
 /// [`Port::ack`] 提交之后的结果（没提交 = `Err`，什么都没改）。

@@ -2366,4 +2366,34 @@ mod tests {
             assert_eq!(w.not_before, T0.add(30 * SEC));
         }
     }
+
+    /// P2 / R11：一起失败的不在同一刻一起重试。抖动来自注入的种子（测试确定）：每一批抽一次，±20% 以内。
+    #[tokio::test]
+    async fn simultaneous_failures_do_not_retry_in_lockstep() {
+        let cfg = crate::orchestra::OrchestraConfig {
+            retry_jitter: queue::RETRY_JITTER,
+            jitter_seed: Some(42),
+            ..crate::orchestra::OrchestraConfig::for_tests()
+        };
+        let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
+        crew_with(&mut rig, &["w1", "w2"], &["w1", "w2"]).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w2"), "合成派活乙")
+            .await;
+        fail_last(&mut rig, "w1").await;
+        fail_last(&mut rig, "w2").await;
+        let mut j = queue::Jitter::new(42, queue::RETRY_JITTER);
+        let base = queue::RETRY_DELAYS_MS[0] as f64;
+        let mut seen = Vec::new();
+        for s in ["w1", "w2"] {
+            let want = T0.add((base * (1.0 + j.draw())).round() as i64);
+            let got = rig.port.wakes_of(s)[0].not_before;
+            assert_eq!(got, want, "{s}");
+            let d = got.since(T0);
+            assert!((24 * SEC..=36 * SEC).contains(&d), "{s}: {d}");
+            seen.push(got);
+        }
+        assert_ne!(seen[0], seen[1], "没有一起重试");
+    }
 }
