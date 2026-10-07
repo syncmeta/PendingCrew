@@ -340,3 +340,28 @@ fn a_snapshot_that_fails_its_own_quick_check_is_not_kept() {
         "不留半截 / 坏的备份"
     );
 }
+
+/// S22（store 侧）：永久删除之前的快照落在 backups/crewd-pre-delete-{对象}-{时间}.db，名字里的对象 id
+/// 只留安全字符；内存库没有备份目录就不拍（返回 None）；这类快照不参加轮转。
+#[test]
+fn a_pre_purge_snapshot_lands_in_backups_and_is_never_rotated() {
+    let d = tempfile::tempdir().unwrap();
+    let s = Store::open_data_dir(d.path()).unwrap();
+    add_crew(&s, "a");
+    let p = s
+        .snapshot_before_purge("crew/../a b")
+        .unwrap()
+        .expect("文件库要拍");
+    let name = p.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("crewd-pre-delete-crew_.._a_b-"), "{name}");
+    assert_eq!(p.parent().unwrap(), d.path().join("backups"));
+    assert_eq!(crew_ids(&p), ["a"]);
+    assert!(
+        backup::rotate(&d.path().join("backups"), Policy::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(p.exists());
+    let mem = Store::open_in_memory().unwrap();
+    assert!(mem.snapshot_before_purge("a").unwrap().is_none());
+}

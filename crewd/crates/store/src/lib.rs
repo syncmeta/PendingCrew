@@ -267,6 +267,32 @@ impl Store {
         Ok(())
     }
 
+    /// 永久删除（purge）之前的快照（S22 的 store 侧）：`backups/crewd-pre-delete-{对象}-{时间}.db`，
+    /// 在库线程自己的连接上 `VACUUM INTO`（与删除串行，快照 = 删之前那一刻）。不参加轮转、永远保留。
+    /// 拍不成就返回错误，调用方不该再删。内存库没有备份目录，返回 `None`。不能在事务里调。
+    pub fn snapshot_before_purge(&self, what: &str) -> Result<Option<std::path::PathBuf>> {
+        let Some(dir) = &self.backups else {
+            return Ok(None);
+        };
+        let safe: String = what
+            .chars()
+            .take(48)
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let dest = dir.join(format!(
+            "crewd-pre-delete-{safe}-{}.db",
+            backup::stamp_from_ms(now_ms())
+        ));
+        backup::vacuum_into(&self.conn, &dest)?;
+        Ok(Some(dest))
+    }
+
     /// 备份目录（内存库是 `None`）。
     pub fn backups_dir(&self) -> Option<&Path> {
         self.backups.as_deref()
