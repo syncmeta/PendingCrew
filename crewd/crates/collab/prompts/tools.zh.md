@@ -605,3 +605,6 @@ mention 写法不对（kind = {kind}）：kind 只能是 session / captain / hum
 
 ## r.list_none
 - （这里没有你读得到的群。不带 crew 再列一次看你自己的群，或用 directory 查别的机组）
+
+## r.list_none_mine
+- （没有你读得到的未归档的群。要看已归档的：list_channels(include_archived=true)；找人用 directory 查号、post(to:) 私聊；要人拍板用 ask）

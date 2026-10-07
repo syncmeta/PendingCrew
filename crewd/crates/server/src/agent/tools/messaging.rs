@@ -689,7 +689,13 @@ pub async fn list_channels(cx: &Ctx<'_>, args: Value) -> CallResult {
         out.push(cx.r("r.home_human_absent", &[]));
     }
     if rows.is_empty() {
-        out.push(cx.r("r.list_none", &[]));
+        // With a crew: try without it; without one there is no "without crew" to try.
+        let key = if a.crew.is_some() {
+            "r.list_none"
+        } else {
+            "r.list_none_mine"
+        };
+        out.push(cx.r(key, &[]));
     }
     for (c, home) in &rows {
         out.push(list_line(cx, c, *home).await);
@@ -2124,6 +2130,61 @@ mod tests {
         assert!(
             r.text.contains(&text::r(Locale::Zh, "r.list_none", &[])),
             "{}",
+            r.text
+        );
+    }
+
+    /// Without `crew` there is nothing to "list again without": an empty own list gets its own
+    /// wording (T12 re-review fold).
+    #[tokio::test]
+    async fn an_empty_own_list_does_not_say_list_again_without_crew() {
+        let f = Fixture::new().await;
+        // Removing the crew archives its lobby; its home human channel was never created.
+        f.rpc("crew.remove", json!({"crewId": f.crew})).await;
+        let r = run(&f, &f.worker, "list_channels", json!({})).await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(
+            r.text
+                .contains(&text::r(Locale::Zh, "r.list_none_mine", &[])),
+            "{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains(&text::r(Locale::Zh, "r.list_none", &[])),
+            "{}",
+            r.text
+        );
+    }
+
+    /// Deliberate (T12 re-review): the home human channel is listed first even when it is
+    /// archived (with the archived flag), while other archived channels are hidden by default.
+    #[tokio::test]
+    async fn an_archived_home_human_channel_is_still_listed_first() {
+        let f = Fixture::new().await;
+        let home = port::home_human_channel(&f.state, &f.crew).await.unwrap();
+        let l = lobby(&f).await;
+        f.rpc("crew.remove", json!({"crewId": f.crew})).await;
+        assert!(
+            port::channel(&f.state, &home.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .archived
+        );
+        let r = run(&f, &f.worker, "list_channels", json!({})).await;
+        assert!(!r.is_error, "{}", r.text);
+        let rows: Vec<&str> = r.text.lines().skip(1).collect();
+        assert_eq!(rows.len(), 1, "{}", r.text);
+        assert!(rows[0].contains(&home.id), "{}", r.text);
+        assert!(
+            rows[0].contains(&text::r(Locale::Zh, "r.flag_home_human", &[]))
+                && rows[0].contains(&text::r(Locale::Zh, "r.flag_archived", &[])),
+            "{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains(&l),
+            "the archived lobby stays hidden: {}",
             r.text
         );
     }

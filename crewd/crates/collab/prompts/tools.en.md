@@ -605,3 +605,6 @@ The human is not watching {channel}: the @human badge is lit but may be seen muc
 
 ## r.list_none
 - (no channels you can read here. List again without crew to see your own, or look other crews up with directory)
+
+## r.list_none_mine
+- (no unarchived channels you can read. For archived ones: list_channels(include_archived=true); to reach someone look the number up with directory and post(to:); for a decision from the human use ask)
