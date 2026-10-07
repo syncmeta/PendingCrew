@@ -309,6 +309,12 @@ fn next_crew_number(tx: &mut Tx<'_>) -> Result<i64> {
 }
 
 pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
+    // The parent first: under the management crew (which has no working directory) the reason
+    // is that it is outside the tree, not the empty directory a caller inherited from it.
+    if let Some(p) = n.parent_id.as_deref() {
+        refuse_management_in_tree(tx.conn(), &[p])?;
+        refuse_archived(tx.conn(), p)?;
+    }
     let title = n.title.trim().to_string();
     if title.is_empty() {
         return Err(CollabError::Invalid(Refusal::new(Code::CrewTitleEmpty)));
@@ -318,10 +324,6 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
         return Err(CollabError::Invalid(Refusal::new(
             Code::CrewWorkingDirEmpty,
         )));
-    }
-    if let Some(p) = n.parent_id.as_deref() {
-        refuse_management_in_tree(tx.conn(), &[p])?;
-        refuse_archived(tx.conn(), p)?;
     }
     let number = next_crew_number(tx)?;
     let now = tx.now_ts();
@@ -1706,6 +1708,27 @@ mod tests {
             Some("human"),
             "没给 titleSource = 不动"
         );
+    }
+
+    /// A child of the management crew is refused for being outside the tree, before the empty
+    /// directory a caller inherited from it (the management crew has none).
+    #[test]
+    fn create_under_the_management_crew_names_the_tree_before_the_directory() {
+        let mut s = store();
+        match err(&mut s, |tx| {
+            create(
+                tx,
+                NewCrew {
+                    title: "示例".into(),
+                    working_directory: String::new(),
+                    parent_id: Some("chief".into()),
+                    title_source: None,
+                },
+            )
+        }) {
+            CollabError::Invalid(r) => assert_eq!(r.code, Code::CrewManagementNotInTree),
+            e => panic!("{e:?}"),
+        }
     }
 
     fn new_crew(title: &str) -> NewCrew {
