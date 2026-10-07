@@ -1599,12 +1599,54 @@ mod tests {
                 "SELECT COUNT(*) FROM crews c WHERE NOT EXISTS (SELECT 1 FROM crew_parents p WHERE p.crew_id=c.id)",
             )
         };
-        assert_eq!(parentless(&s), 1);
+        // I-root：指向总机组的边只能是唯一的父。
+        let root_edge_plus_another = |s: &crewd_store::Store| {
+            count(
+                s,
+                "SELECT COUNT(*) FROM crew_parents p JOIN crews r ON r.id=p.parent_id AND r.org_root=1
+                  WHERE (SELECT COUNT(*) FROM crew_parents q WHERE q.crew_id=p.crew_id) > 1",
+            )
+        };
+        let check = |s: &crewd_store::Store, step: &str| {
+            assert_eq!(parentless(s), 1, "{step}");
+            assert_eq!(root_edge_plus_another(s), 0, "{step}");
+        };
+        check(&s, "初始");
         ok(&mut s, |tx| adopt(tx, "crew-x", "crew-b"));
+        check(&s, "adopt");
         ok(&mut s, |tx| release(tx, "crew-x", "crew-b", None));
+        check(&s, "release 到总机组下");
+        ok(&mut s, |tx| release(tx, "crew-x", "chief", Some("crew-a")));
+        check(&s, "release(from=总机组, to=crew-a)");
+        assert_eq!(parents(s.conn(), "crew-x").unwrap(), ["crew-a"]);
+        let under_root = ok(&mut s, |tx| {
+            create(
+                tx,
+                NewCrew {
+                    parent_id: Some("chief".into()),
+                    ..new_crew("挂在总机组下")
+                },
+            )
+        });
+        check(&s, "create(parent=总机组)");
+        assert_eq!(under_root.parent_ids, ["chief"]);
         ok(&mut s, |tx| delete(tx, "crew-a"));
+        check(&s, "delete");
         ok(&mut s, |tx| create(tx, new_crew("再建一个")));
-        assert_eq!(parentless(&s), 1);
+        check(&s, "create");
+    }
+
+    /// 号码：空库里第一次建机组，懒建出来的总机组是 0 号，第一个机组是 1 号（N1 裁定 2 / N1-R1）。
+    #[test]
+    fn in_an_empty_database_the_org_root_is_number_zero_and_the_first_crew_number_one() {
+        let mut s = crewd_store::Store::open_in_memory().unwrap();
+        let c = ok(&mut s, |tx| create(tx, new_crew("第一个")));
+        assert_eq!(c.number, Some(1));
+        let root = get(s.conn(), crewd_store::crews::ORG_ROOT_ID).unwrap();
+        assert!(root.org_root);
+        assert_eq!(root.number, Some(0));
+        let d = ok(&mut s, |tx| create(tx, new_crew("第二个")));
+        assert_eq!(d.number, Some(2));
     }
 
     /// `crew.list` 的次序：总机组在前（不看 `crews.position` / 建组时间），然后按树的先序、每层按父的 childIds。
