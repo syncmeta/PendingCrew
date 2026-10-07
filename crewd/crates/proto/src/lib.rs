@@ -1,5 +1,16 @@
 //! crewd 线协议：客户端（Mac / iOS / CLI）与 crewd 之间的唯一契约。
 //! 传输：每行一个 JSON（NDJSON）。客户端发 `Request`，服务端回 `ServerFrame`。
+//!
+//! **兼容规则**（S9 第 1 部分，U1）：
+//! - 加可选字段、加方法、加事件、加枚举值 = 兼容：`API_VERSION` 不变。
+//! - 删掉 / 改名 / 改含义（含把可选改成必填、收紧参数）= 不兼容：`API_VERSION` 加一，旧行为一直保留到
+//!   `MIN_API_VERSION`；比它更老的客户端在 `system.hello` 就被拒（-32009 `system.api_incompatible`）。
+//! - 服务端发给客户端的枚举，客户端必须容忍不认识的词（读成 unknown，不让整条解析失败）；M3c 的词表在 Rust 里就带一个
+//!   不进契约的 `Unknown`（`orchestra`）。共享的 M3a 词表随 iOS 准备一起改。
+//! - 客户端发给服务端的参数保持严格（`deny_unknown_fields`：拼错字段报错）；唯一的例外是 `system.hello` 的参数
+//!   （握手是以后加字段、协商能力的地方）。
+//! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
+//! - v3 还没发布：v3 之内的改名不留别名。
 mod model;
 /// M3c（编排）的方法、事件与类型。
 pub mod orchestra;
@@ -17,6 +28,8 @@ use serde_json::{Value, json};
 /// 2：`whiteboard.*` 删除、`Message.crewId` → `channelId`（裁定 18）。
 /// v3：删审批、总机组 = 管理机组（不在机组树里）、@ 不再收窄（N1，spec §24）。
 pub const API_VERSION: u32 = 3;
+/// 这个 crewd 还认的最老的客户端 API 版本（U1；见模块文档的兼容规则）。
+pub const MIN_API_VERSION: u32 = 3;
 
 pub mod methods {
     pub const HELLO: &str = "system.hello";
@@ -385,7 +398,7 @@ pub fn api_schema() -> Value {
     let g = &mut generator;
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
-        (methods::HELLO, m(sub::<NoParams>(g), sub::<Hello>(g))),
+        (methods::HELLO, m(sub::<HelloParams>(g), sub::<Hello>(g))),
         (
             methods::CREW_LIST,
             m(sub::<CrewListParams>(g), many(sub::<Crew>(g))),
@@ -561,6 +574,45 @@ mod tests {
             let k = HealthKindView::parse(w).unwrap();
             assert_eq!(serde_json::to_value(k).unwrap(), json!(w));
         }
+    }
+
+    /// U1：hello 的参数全可选、收 null、**收未知字段**（以后的客户端在握手里加字段）；结果带版本、构建、能力，
+    /// 老 crewd 的 hello（没有新字段）新客户端也读得出来。
+    #[test]
+    fn hello_params_accept_null_and_unknown_fields_and_the_result_is_additive() {
+        let p: HelloParams = parse_params_or_default(Value::Null).unwrap();
+        assert_eq!(p, HelloParams::default());
+        let p: HelloParams = parse_params(json!({
+            "client": {"name": "合成客户端", "version": "1.0", "build": "b1", "later": true},
+            "apiVersion": 4,
+            "capabilities": ["x"],
+            "negotiate": {"anything": 1}
+        }))
+        .unwrap();
+        assert_eq!(p.api_version, Some(4));
+        assert_eq!(p.client.unwrap().build.as_deref(), Some("b1"));
+        let h = Hello {
+            server: "crewd".into(),
+            version: "0.1.0".into(),
+            api_version: API_VERSION,
+            min_api_version: MIN_API_VERSION,
+            build: BuildInfo {
+                git_sha: "0123456789ab".into(),
+                dirty: false,
+                exe: "/合成/crewd".into(),
+                exe_still_on_disk: true,
+            },
+            capabilities: vec!["orchestra".into()],
+        };
+        let v = serde_json::to_value(&h).unwrap();
+        assert_eq!(v["minApiVersion"], MIN_API_VERSION);
+        assert_eq!(v["build"]["exeStillOnDisk"], true);
+        assert_eq!(v["build"]["gitSha"], "0123456789ab");
+        let old: Hello =
+            serde_json::from_value(json!({"server":"crewd","version":"0.1.0","apiVersion":3}))
+                .unwrap();
+        assert_eq!((old.min_api_version, old.capabilities.len()), (0, 0));
+        const { assert!(MIN_API_VERSION <= API_VERSION) };
     }
 
     #[test]
@@ -990,10 +1042,15 @@ mod tests {
                 .as_str()
                 .unwrap_or_else(|| panic!("{m} 的 params 不是 $ref"));
             let def = &defs[r.trim_start_matches("#/$defs/")];
+            // 唯一的例外（U1）：握手的参数收未知字段——以后的客户端在这里加字段。
+            let want = if m == methods::HELLO {
+                Value::Null
+            } else {
+                json!(false)
+            };
             assert_eq!(
-                def["additionalProperties"],
-                json!(false),
-                "{m} 的参数没有 deny_unknown_fields"
+                def["additionalProperties"], want,
+                "{m} 的参数：除了 system.hello 都要 deny_unknown_fields"
             );
         }
         for e in [

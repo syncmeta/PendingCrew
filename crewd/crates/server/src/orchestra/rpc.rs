@@ -1011,4 +1011,84 @@ mod tests {
             (RpcError::CONFLICT, Some("orchestra.shutting_down".into()))
         );
     }
+
+    async fn hello(st: &AppState, params: Value) -> Result<Value, RpcError> {
+        crate::dispatch::handle(
+            st,
+            Request {
+                id: 1,
+                method: all_methods::HELLO.into(),
+                params,
+            },
+        )
+        .await
+        .into_result()
+    }
+
+    /// U1：hello 回 API 版本、最老还认的版本、构建身份；能力只在编排在跑时有（库里的 `serve()` 没有）。
+    #[tokio::test]
+    async fn hello_reports_versions_build_and_capabilities() {
+        let st = state();
+        let v = hello(&st, Value::Null).await.unwrap();
+        assert_eq!(v["apiVersion"], 3);
+        assert_eq!(v["minApiVersion"], crewd_proto::MIN_API_VERSION);
+        assert_eq!(v["capabilities"], json!([]), "没有编排：没有能力");
+        let build = &v["build"];
+        assert!(
+            build["gitSha"].as_str().is_some_and(|s| !s.is_empty()),
+            "{v}"
+        );
+        assert!(build["exe"].as_str().is_some_and(|s| !s.is_empty()), "{v}");
+        assert_eq!(build["exeStillOnDisk"], true);
+        assert!(build["dirty"].is_boolean());
+        let (h, _a, _x) = handle(Arc::new(MemPort::new())).await;
+        let st = state();
+        assert!(st.orchestra.set(h).is_ok());
+        let v = hello(&st, json!({})).await.unwrap();
+        assert_eq!(
+            v["capabilities"],
+            json!([
+                "orchestra",
+                "crewd.hibernate",
+                "wake.explain",
+                "message.receipts",
+                "settings"
+            ])
+        );
+    }
+
+    /// U1：太老的客户端被拒（-32009 + 码）；比 crewd 新的照收；hello 收未知字段（以后的客户端在这里加东西）。
+    #[tokio::test]
+    async fn hello_refuses_a_client_older_than_the_minimum_and_accepts_newer_ones() {
+        let st = state();
+        let old = crewd_proto::MIN_API_VERSION - 1;
+        let e = hello(
+            &st,
+            json!({"client": {"name": "合成客户端", "version": "0.0.1"}, "apiVersion": old}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (e.code, e.data.map(|d| d.refusal)),
+            (RpcError::CONFLICT, Some("system.api_incompatible".into()))
+        );
+        assert!(e.message.contains(&old.to_string()), "{}", e.message);
+        let newer = crewd_proto::API_VERSION + 1;
+        let v = hello(
+            &st,
+            json!({
+                "client": {"name": "合成客户端", "version": "9.9", "build": "abc", "future": 1},
+                "apiVersion": newer,
+                "capabilities": ["something.new"],
+                "somethingAddedLater": {"x": 1}
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["apiVersion"], 3);
+        assert!(
+            hello(&st, json!({"apiVersion": "3"})).await.is_err(),
+            "类型不对照样是参数错"
+        );
+    }
 }

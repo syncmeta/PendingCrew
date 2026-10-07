@@ -1,5 +1,6 @@
 //! crewd 服务端：Unix socket 上的 NDJSON RPC。
 pub mod agent;
+pub mod build_info;
 pub(crate) mod conn;
 pub mod control;
 pub mod dispatch;

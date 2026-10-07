@@ -2,12 +2,61 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// `system.hello` 的结果（U1：版本、构建身份、能力）。新字段带 `default`：新客户端连老 crewd 也读得出来。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Hello {
     pub server: String,
     pub version: String,
     pub api_version: u32,
+    /// 这个 crewd 还认的最老的客户端 API 版本（更老的客户端 hello 被拒：-32009 `system.api_incompatible`）。
+    #[serde(default)]
+    pub min_api_version: u32,
+    #[serde(default)]
+    pub build: BuildInfo,
+    /// 这个 crewd 此刻开着的能力（客户端据此显示 / 隐藏功能）。没有会话管理（没配 agent 执行器）时是空的。
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+/// crewd 二进制的构建身份（U1 / S6）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildInfo {
+    /// 构建时的 git 提交（12 位；拿不到 = `unknown`）。
+    pub git_sha: String,
+    /// 构建时工作区有改动。
+    pub dirty: bool,
+    /// 正在跑的可执行文件。
+    pub exe: String,
+    /// 那个文件此刻还是正在跑的这一个；false = 被更新换掉 / 删了，重启 crewd 才用上新版。
+    pub exe_still_on_disk: bool,
+}
+
+/// `system.hello` 的参数（U1）。**故意不 `deny_unknown_fields`**：握手是以后的客户端加字段（能力协商等）的地方，
+/// 老 crewd 必须收得下新客户端的 hello——这是契约里唯一不拒未知字段的参数。全可选：`null` 当 `{}`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[schemars(extend("type" = ["object", "null"]))]
+pub struct HelloParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<ClientInfo>,
+    /// 客户端说的 API 版本：比 `minApiVersion` 老 = 拒；比 crewd 新 = 收（客户端自己决定怎么降级）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<u32>,
+    /// 客户端会的能力（留给以后协商；crewd 现在只记日志）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+}
+
+/// 客户端是谁（crewd 每次 hello 记一行日志）。同样不拒未知字段。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientInfo {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

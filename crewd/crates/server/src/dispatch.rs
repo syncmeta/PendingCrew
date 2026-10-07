@@ -110,11 +110,44 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
     let p = req.params;
     match req.method.as_str() {
         methods::HELLO => {
-            parse_no_params(p)?;
+            // U1：客户端报自己是谁（记一行）；太老的拒掉，比 crewd 新的照收（客户端自己决定怎么降级）。
+            let p: HelloParams = parse_params_or_default(p)?;
+            let client = p.client.as_ref();
+            eprintln!(
+                "crewd: hello：客户端 {:?} {:?}（构建 {:?}），API {:?}，能力 {:?}",
+                client.map(|c| c.name.as_str()),
+                client.map(|c| c.version.as_str()),
+                client.and_then(|c| c.build.as_deref()),
+                p.api_version,
+                p.capabilities
+            );
+            if let Some(v) = p.api_version
+                && v < MIN_API_VERSION
+            {
+                return Err(refused(
+                    RpcError::CONFLICT,
+                    crewd_collab::refusal::Refusal::new(
+                        crewd_collab::refusal::Code::SystemApiIncompatible,
+                    )
+                    .arg("client", v.to_string())
+                    .arg("min", MIN_API_VERSION.to_string())
+                    .arg("current", API_VERSION.to_string()),
+                ));
+            }
+            let capabilities = match state.orchestra.get() {
+                Some(_) => orchestra::CAPABILITIES
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect(),
+                None => Vec::new(),
+            };
             to_value(Hello {
                 server: "crewd".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 api_version: API_VERSION,
+                min_api_version: MIN_API_VERSION,
+                build: crate::build_info::build_info(),
+                capabilities,
             })
         }
         methods::CREW_LIST => {

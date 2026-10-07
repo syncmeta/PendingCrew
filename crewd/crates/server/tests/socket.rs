@@ -233,7 +233,15 @@ async fn params_are_strict_and_errors_are_typed() {
             .await,
         -32602
     );
-    assert_eq!(c.call_err(2, "system.hello", json!({"x":1})).await, -32602);
+    // 无参数的方法拒未知字段；`system.hello` 是唯一的例外（T10b / U1：握手是以后的客户端加字段的地方）。
+    assert_eq!(
+        c.call_err(2, "restart.pending", json!({"x":1})).await,
+        -32602
+    );
+    assert_eq!(
+        c.call(20, "system.hello", json!({"x":1})).await["apiVersion"],
+        3
+    );
     assert_eq!(
         c.call_err(3, "whiteboard.list", json!({"crewId":"a"}))
             .await,

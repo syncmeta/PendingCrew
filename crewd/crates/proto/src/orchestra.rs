@@ -44,6 +44,15 @@ pub mod methods {
     ];
 }
 
+/// `system.hello` 的 `capabilities`：会话管理（编排）在跑时这个 crewd 开着的能力（U1）。没有编排 = 空。
+pub const CAPABILITIES: &[&str] = &[
+    "orchestra",
+    "crewd.hibernate",
+    "wake.explain",
+    "message.receipts",
+    "settings",
+];
+
 pub mod events {
     /// 某个 session 的唤醒行变了（`WakeChanged`）。主题 = `wake`。
     pub const WAKE_CHANGED: &str = "wake.changed";
