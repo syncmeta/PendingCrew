@@ -104,10 +104,10 @@ params!(/// 无参数方法只收 null 或 {}。
     #[schemars(extend("type" = ["object", "null"]))]
     NoParams {});
 params!(CrewIdParams { crew_id: String });
-params!(/// 全可选：`null` 当 `{}`。归档的机组默认不列；`includeArchived: true` 连它们一起列。
-    /// `Crew.childIds` 照实含归档的子机组（边还在）：列表里没有的 id 跳过即可。
+params!(/// 全可选：`null` 当 `{}`。已移除的机组默认不列；`includeRemoved: true` 连它们一起列。
+    /// `Crew.childIds` 照实含已移除的子机组（边还在）：列表里没有的 id 跳过即可。
     #[schemars(extend("type" = ["object", "null"]))]
-    CrewListParams { #[serde(default)] include_archived: Option<bool> });
+    CrewListParams { #[serde(default)] include_removed: Option<bool> });
 params!(CrewCreateParams { title: String, working_directory: String, #[serde(default)] parent_id: Option<String> });
 params!(CrewUpdateParams {
     crew_id: String,
@@ -186,12 +186,12 @@ params!(ReadMarkParams {
     channel_id: String,
     seq: i64
 });
-params!(/// 全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（归档的也列）；不给 = 全部，但归档机组的
-/// session 只在 `includeArchived: true` 时列（同 `crew.list`）。
+params!(/// 全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（已移除的也列）；不给 = 全部，但已移除机组的
+/// session 只在 `includeRemoved: true` 时列（同 `crew.list`）。
 #[schemars(extend("type" = ["object", "null"]))]
 SessionListParams {
     #[serde(default)] crew_id: Option<String>,
-    #[serde(default)] include_archived: Option<bool>,
+    #[serde(default)] include_removed: Option<bool>,
 });
 params!(SessionGetParams { session_id: String });
 params!(/// 全可选：`null` 当 `{}`。

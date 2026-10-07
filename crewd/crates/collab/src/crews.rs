@@ -69,7 +69,7 @@ pub fn list(conn: &Connection, include_archived: bool) -> Result<Vec<Crew>> {
     });
     out.extend(cut_off);
     if !include_archived {
-        out.retain(|c| c.archived_at.is_none());
+        out.retain(|c| c.removed_at.is_none());
     }
     Ok(out)
 }
@@ -183,7 +183,7 @@ pub fn is_archived(conn: &Connection, id: &str) -> Result<bool> {
 pub(crate) fn refuse_archived(conn: &Connection, id: &str) -> Result<()> {
     if is_archived(conn, id)? {
         return Err(CollabError::Conflict(
-            Refusal::new(Code::CrewArchived).arg("crew", id),
+            Refusal::new(Code::CrewRemoved).arg("crew", id),
         ));
     }
     Ok(())
@@ -533,7 +533,7 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
 pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_management(tx.conn(), id)?;
-    if crew.archived_at.is_some() {
+    if crew.removed_at.is_some() {
         return Ok(crew);
     }
     refuse_running(tx.conn(), id)?;
@@ -593,7 +593,7 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
 /// 没归档 = 原样返回、不发变更。
 pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
-    if crew.archived_at.is_none() {
+    if crew.removed_at.is_none() {
         return Ok(crew);
     }
     let mut archived_parents = Vec::new();
@@ -604,7 +604,7 @@ pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     }
     if !archived_parents.is_empty() {
         return Err(CollabError::Conflict(
-            Refusal::new(Code::CrewParentArchived)
+            Refusal::new(Code::CrewParentRemoved)
                 .arg("crew", id)
                 .arg("parents", archived_parents.join(", ")),
         ));
@@ -636,7 +636,7 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
     refuse_management(conn, id)?;
     if !is_archived(conn, id)? {
         return Err(CollabError::Conflict(
-            Refusal::new(Code::CrewNotArchived).arg("crew", id),
+            Refusal::new(Code::CrewNotRemoved).arg("crew", id),
         ));
     }
     refuse_running(conn, id)
@@ -1844,7 +1844,7 @@ mod tests {
             }
             e => panic!("{e:?}"),
         }
-        assert!(get(s.conn(), "crew-x").unwrap().archived_at.is_none());
+        assert!(get(s.conn(), "crew-x").unwrap().removed_at.is_none());
         assert_eq!(wake_state(&s, "cap-x", pending), (WakeState::Pending, None));
         assert_eq!(
             wake_state(&s, "cap-x", inflight),
@@ -2333,7 +2333,7 @@ mod tests {
         for k in children(s.conn(), id).unwrap() {
             archive_subtree(s, &k);
         }
-        if get(s.conn(), id).unwrap().archived_at.is_none() {
+        if get(s.conn(), id).unwrap().removed_at.is_none() {
             ok(s, |tx| archive(tx, id));
         }
     }
@@ -2356,7 +2356,7 @@ mod tests {
             )
         });
         let c = ok(&mut s, |tx| archive(tx, "crew-x"));
-        assert!(c.archived_at.is_some());
+        assert!(c.removed_at.is_some());
         for ch in ["crew-x/lobby", "crew-x/human"] {
             assert!(
                 crate::channels::get(s.conn(), ch)
@@ -2395,7 +2395,7 @@ mod tests {
             "归档的机组不收新 session"
         );
         let c = ok(&mut s, |tx| unarchive(tx, "crew-x"));
-        assert!(c.archived_at.is_none());
+        assert!(c.removed_at.is_none());
         for ch in ["crew-x/lobby", "crew-x/human"] {
             assert!(
                 crate::channels::get(s.conn(), ch)
@@ -2488,7 +2488,7 @@ mod tests {
             "别的机组的群不动"
         );
         let (again, ch) = ok_at(&mut s, NOW, |tx| archive(tx, "crew-x"));
-        assert!(again.archived_at.is_some());
+        assert!(again.removed_at.is_some());
         assert!(ch.is_empty(), "已归档：原样返回 {ch:?}");
         let (_, ch) = ok_at(&mut s, NOW, |tx| unarchive(tx, "crew-x"));
         for id in ["crew-x/lobby", "crew-x/human"] {
@@ -2716,7 +2716,7 @@ mod tests {
         ok(&mut s, |tx| unarchive(tx, "crew-b"));
         // 没归档的机组解档 = 原样返回。
         let (c, ch) = ok_at(&mut s, NOW, |tx| unarchive(tx, "crew-b"));
-        assert!(c.archived_at.is_none() && ch.is_empty(), "{ch:?}");
+        assert!(c.removed_at.is_none() && ch.is_empty(), "{ch:?}");
         assert!(matches!(
             err(&mut s, |tx| unarchive(tx, "nope")),
             CollabError::NotFound(_)
@@ -2776,7 +2776,7 @@ mod tests {
         ok(&mut s, |tx| purge(tx, "crew-a"));
         for orphan in ["crew-b", "crew-x"] {
             assert!(edges(&s, orphan).is_empty(), "{orphan}");
-            assert!(get(s.conn(), orphan).unwrap().archived_at.is_some());
+            assert!(get(s.conn(), orphan).unwrap().removed_at.is_some());
         }
         assert_eq!(
             count(
@@ -2812,7 +2812,7 @@ mod tests {
         .ask
     }
 
-    /// 归档撤回这个机组账本里还开着的问（同一事务，理由取 render md 的 `notice.ask.crew_archived`，按 meta.locale）；
+    /// 归档撤回这个机组账本里还开着的问（同一事务，理由取 render md 的 `notice.ask.crew_removed`，按 meta.locale）；
     /// 子机组先归档，所以挂在这个 home 人类群里的问（含子机组的）都已撤回。解档不重开。
     #[test]
     fn archiving_withdraws_open_asks_and_unarchiving_does_not_reopen_them() {
@@ -2887,12 +2887,12 @@ mod tests {
         });
         match err(&mut s, |tx| archive(tx, "crew-x")) {
             CollabError::Conflict(r) => {
-                assert_eq!(r.code, crate::refusal::Code::AskArchiveBlocked);
+                assert_eq!(r.code, crate::refusal::Code::AskRemoveBlocked);
                 assert_eq!(r.value("ask"), Some(h.as_str()), "{r}");
             }
             e => panic!("{e:?}"),
         }
-        assert!(get(s.conn(), "crew-x").unwrap().archived_at.is_none());
+        assert!(get(s.conn(), "crew-x").unwrap().removed_at.is_none());
         assert_eq!(
             crate::asks::get(s.conn(), "crew-x", &h).unwrap().state,
             crewd_proto::AskStateView::Open

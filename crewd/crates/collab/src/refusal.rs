@@ -26,7 +26,7 @@ refusal_codes! {
     AskIdNotFound = "ask.id_not_found" ["crew", "id"],
     AskBadId = "ask.bad_id" ["input"],
     AskSystemCannotWithdraw = "ask.system_cannot_withdraw" [],
-    AskArchiveBlocked = "ask.archive_blocked" ["crew", "ask"],
+    AskRemoveBlocked = "ask.remove_blocked" ["crew", "ask"],
     // channel
     ChannelNotFound = "channel.not_found" ["channel"],
     ChannelSystemCannotAct = "channel.system_cannot_act" [],
@@ -61,7 +61,7 @@ refusal_codes! {
     ChannelForceOwnerForbidden = "channel.force_owner_forbidden" [],
     // crew
     CrewNotFound = "crew.not_found" ["crew"],
-    CrewArchived = "crew.archived" ["crew"],
+    CrewRemoved = "crew.removed" ["crew"],
     CrewManagementFixed = "crew.management_fixed" [],
     CrewManagementNotInTree = "crew.management_not_in_tree" [],
     CrewTitleEmpty = "crew.title_empty" [],
@@ -72,15 +72,15 @@ refusal_codes! {
     CrewRunningSessions = "crew.running_sessions" ["crew", "running"],
     CrewLiveChildren = "crew.live_children" ["crew", "children"],
     CrewWakesInflight = "crew.wakes_inflight" ["crew", "count"],
-    CrewParentArchived = "crew.parent_archived" ["crew", "parents"],
-    CrewNotArchived = "crew.not_archived" ["crew"],
+    CrewParentRemoved = "crew.parent_removed" ["crew", "parents"],
+    CrewNotRemoved = "crew.not_removed" ["crew"],
     CrewSessionNotInCrew = "crew.session_not_in_crew" ["session", "crew"],
     CrewReorderMismatch = "crew.reorder_mismatch" ["current"],
     CrewNoCaptain = "crew.no_captain" ["crew"],
     // directory
     DirectoryBadAddress = "directory.bad_address" ["address"],
     DirectoryNoSuchCrew = "directory.no_such_crew" ["number"],
-    DirectoryCrewArchived = "directory.crew_archived" ["number"],
+    DirectoryCrewRemoved = "directory.crew_removed" ["number"],
     DirectoryNoSuchExtension = "directory.no_such_extension" ["number", "ext"],
     // message
     MessageNotFound = "message.not_found" ["message"],

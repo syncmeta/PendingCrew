@@ -36,7 +36,7 @@ pub fn resolve(conn: &Connection, address: &str) -> Result<String> {
         })?;
     if crews::is_archived(conn, &crew)? {
         return Err(CollabError::Conflict(
-            Refusal::new(Code::DirectoryCrewArchived).arg("number", n.to_string()),
+            Refusal::new(Code::DirectoryCrewRemoved).arg("number", n.to_string()),
         ));
     }
     match e {
@@ -239,11 +239,7 @@ mod tests {
         for addr in ["3", "3-1"] {
             match resolve(s.conn(), addr).unwrap_err() {
                 CollabError::Conflict(r) => {
-                    assert_eq!(
-                        r.code,
-                        crate::refusal::Code::DirectoryCrewArchived,
-                        "{addr}"
-                    )
+                    assert_eq!(r.code, crate::refusal::Code::DirectoryCrewRemoved, "{addr}")
                 }
                 e => panic!("{addr}: {e:?}"),
             }

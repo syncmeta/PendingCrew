@@ -309,7 +309,7 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
 }
 
 /// 机组归档（`crews::archive` 同一事务里调，N1 裁定 13）：以人的身份撤回这个机组账本里全部还开着的问，理由取
-/// render md 的 `notice.ask.crew_archived`（按 meta.locale）。挂在一个 home 人类群里的问只来自它自己和它的下级，
+/// render md 的 `notice.ask.crew_removed`（按 meta.locale）。挂在一个 home 人类群里的问只来自它自己和它的下级，
 /// 而下级必须先归档，所以归档到 home 时那里的问都已撤回。解档不重开。还卡着活项的问账本不让撤 →
 /// Conflict（归档整体失败，什么都不变）。每条撤回记 AskChanged。
 pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
@@ -324,7 +324,7 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
         return Ok(());
     }
     let reason = crate::prompts::render_file(crate::settings::locale(tx.conn())?)
-        .get("notice.ask.crew_archived")
+        .get("notice.ask.crew_removed")
         .trim()
         .to_string();
     for h in open {
@@ -333,7 +333,7 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
         })
         .map_err(|e| match e {
             CollabError::Work(Rejected::AskInUse(h)) => CollabError::Conflict(
-                Refusal::new(Code::AskArchiveBlocked)
+                Refusal::new(Code::AskRemoveBlocked)
                     .arg("crew", crew)
                     .arg("ask", h.to_string()),
             ),
@@ -507,7 +507,7 @@ mod tests {
         assert_eq!(ok(&mut s, |tx| open(tx, "w-a1", q("这次能成？"))).ask, "H1");
     }
 
-    /// 终审 5：提问者的机组已归档 → crew.archived（Conflict，指路先解档）；不发号、不建账本、不发公告。
+    /// 终审 5：提问者的机组已移除 → crew.removed（Conflict，指路先恢复）；不发号、不建账本、不发公告。
     /// 二级机组 crew-b 归档后它的 home（crew-a）的人类群还活着——拒绝必须来自提问者自己的机组，不能靠
     /// 「公告发不进归档的人类群」碰巧挡住（顶层机组 crew-x 那条路就是被它碰巧挡住的）。
     #[test]
@@ -519,7 +519,7 @@ mod tests {
         for asker in ["cap-b", "w-b1", "cap-x"] {
             match err(&mut s, |tx| open(tx, asker, q("归档了还能问吗？"))) {
                 CollabError::Conflict(r) => {
-                    assert_eq!(r.code, Code::CrewArchived, "{asker}: {r:?}")
+                    assert_eq!(r.code, Code::CrewRemoved, "{asker}: {r:?}")
                 }
                 e => panic!("{asker}: {e:?}"),
             }

@@ -7,7 +7,7 @@ crewd 重新启动了。上次有 {count} 个 session 在跑，是否现在恢�
 ## notice.restart.item
 - {name}
 
-## notice.ask.crew_archived
+## notice.ask.crew_removed
 机组已被移除
 
 ## sender.human

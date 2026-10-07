@@ -88,7 +88,7 @@ pub fn render_file(l: Locale) -> &'static PromptFile {
 pub const REQUIRED: &[(&str, &[&str])] = &[
     ("notice.restart", &["count"]),
     ("notice.restart.item", &["name"]),
-    ("notice.ask.crew_archived", &[]),
+    ("notice.ask.crew_removed", &[]),
     ("sender.human", &[]),
     ("sender.system", &[]),
     ("sender.session", &["name", "ext"]),

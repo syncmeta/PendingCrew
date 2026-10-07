@@ -10,7 +10,7 @@
 ## ask.system_cannot_withdraw
 系统身份不能撤回问；请以 session 或人的身份撤回
 
-## ask.archive_blocked
+## ask.remove_blocked
 机组 {crew} 的 {ask} 还卡着活项；先答掉它或让负责人改道，再移除机组
 
 ## channel.not_found
@@ -109,7 +109,7 @@
 ## crew.not_found
 没有机组 {crew}；先列出机组，核对 id
 
-## crew.archived
+## crew.removed
 机组 {crew} 已被移除（隐藏并冻结，没有删除），只读；请人先恢复它（crew.restore，只有人在客户端能做）
 
 ## crew.management_fixed
@@ -142,10 +142,10 @@
 ## crew.wakes_inflight
 机组 {crew} 还有 {count} 条唤醒正在投递；等投递结束再移除
 
-## crew.parent_archived
+## crew.parent_removed
 机组 {crew} 的上级 {parents} 已被移除，被移除的机组下面不挂活的；请人先恢复 {parents}，恢复之后若不想让 {crew} 继续挂在它们下面，再用 release 把 {crew} 摘出
 
-## crew.not_archived
+## crew.not_removed
 机组 {crew} 还没移除；永久删除只收已移除的机组，先移除（crew.remove）。永久删除会真的删掉这个机组的一切，删前的快照只留 30 天
 
 ## crew.session_not_in_crew
@@ -163,7 +163,7 @@ crewIds 必须包含这一层所有没移除的机组，不重复、不含别的
 ## directory.no_such_crew
 通讯录里没有 {number} 号机组；核对机组号
 
-## directory.crew_archived
+## directory.crew_removed
 {number} 号机组已被移除，不收消息；要联系它请先请人恢复它
 
 ## directory.no_such_extension

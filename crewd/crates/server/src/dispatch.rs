@@ -119,7 +119,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::CREW_LIST => {
             let p: CrewListParams = parse_params_or_default(p)?;
-            let all = p.include_archived.unwrap_or(false);
+            let all = p.include_removed.unwrap_or(false);
             read(state, move |c| crews::list(c, all)).await
         }
         methods::CREW_GET => {
@@ -329,7 +329,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::SESSION_LIST => {
             let p: SessionListParams = parse_params_or_default(p)?;
-            let all = p.include_archived.unwrap_or(false);
+            let all = p.include_removed.unwrap_or(false);
             read(state, move |c| {
                 sessions::list_for_client(c, p.crew_id.as_deref(), all)
             })

@@ -116,7 +116,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
                 policy: policy_col(r, 11)?,
                 captain_session_id: r.get(12)?,
                 position: r.get(13)?,
-                archived_at: r.get(14)?,
+                removed_at: r.get(14)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

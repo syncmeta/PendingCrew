@@ -23,7 +23,7 @@ pub mod methods {
     pub const CREW_ADOPT: &str = "crew.adopt";
     pub const CREW_REORDER: &str = "crew.reorder";
     pub const CREW_RELEASE: &str = "crew.release";
-    /// 移除机组（PM 2026-10-07）：隐藏并冻结（库里叫归档，`archivedAt`），不删任何东西、可恢复；
+    /// 移除机组（PM 2026-10-07）：隐藏并冻结（库里叫归档；线上 `Crew.removedAt`），不删任何东西、可恢复；
     /// 返回移除后的 `Crew`。
     pub const CREW_REMOVE: &str = "crew.remove";
     /// 恢复（`crew.remove` 的反操作），返回 `Crew`。

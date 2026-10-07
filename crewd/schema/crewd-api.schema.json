@@ -514,13 +514,6 @@
     },
     "Crew": {
       "properties": {
-        "archivedAt": {
-          "description": "归档时刻（删机组 = 归档，N1 裁定 13）；没归档时不出现。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "captainExecutor": {
           "description": "机长的执行器类型，词表同 `Session.executor`。",
           "type": [
@@ -580,6 +573,13 @@
           "description": "只表示顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。\n`parentIds` 非空时这个值没有意义（可能是变成子机组之前留下的旧值），客户端不要用它排序：\n子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。总机组恒为 0，单独列出。",
           "format": "int64",
           "type": "integer"
+        },
+        "removedAt": {
+          "description": "移除时刻（`crew.remove`：隐藏并冻结、可恢复，N1 裁定 13 / PM 2026-10-07）；没移除时不出现。\n库里的列仍叫 `crews.archived_at`（内部叫归档）；线上一律叫 removed，archived 只用于群。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "statusLine": {
           "description": "机长写的一句状态（`set_crew_status`）。",
@@ -708,9 +708,9 @@
     },
     "CrewListParams": {
       "additionalProperties": false,
-      "description": "全可选：`null` 当 `{}`。归档的机组默认不列；`includeArchived: true` 连它们一起列。\n`Crew.childIds` 照实含归档的子机组（边还在）：列表里没有的 id 跳过即可。",
+      "description": "全可选：`null` 当 `{}`。已移除的机组默认不列；`includeRemoved: true` 连它们一起列。\n`Crew.childIds` 照实含已移除的子机组（边还在）：列表里没有的 id 跳过即可。",
       "properties": {
-        "includeArchived": {
+        "includeRemoved": {
           "default": null,
           "type": [
             "boolean",
@@ -1859,7 +1859,7 @@
     },
     "SessionListParams": {
       "additionalProperties": false,
-      "description": "全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（归档的也列）；不给 = 全部，但归档机组的\nsession 只在 `includeArchived: true` 时列（同 `crew.list`）。",
+      "description": "全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（已移除的也列）；不给 = 全部，但已移除机组的\nsession 只在 `includeRemoved: true` 时列（同 `crew.list`）。",
       "properties": {
         "crewId": {
           "default": null,
@@ -1868,7 +1868,7 @@
             "null"
           ]
         },
-        "includeArchived": {
+        "includeRemoved": {
           "default": null,
           "type": [
             "boolean",

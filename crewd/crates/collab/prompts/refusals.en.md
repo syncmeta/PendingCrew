@@ -10,7 +10,7 @@ Crew {crew} has no {id}. Check the id first (asks start with H, work items with 
 ## ask.system_cannot_withdraw
 The system cannot withdraw an ask. Withdraw it as a session or as the human.
 
-## ask.archive_blocked
+## ask.remove_blocked
 Ask {ask} in crew {crew} still blocks a live work item. Answer it, or have the owner reroute, then remove the crew.
 
 ## channel.not_found
@@ -109,7 +109,7 @@ Only the captain or the human can set the owner by force. Ask one of them, or ha
 ## crew.not_found
 There is no crew {crew}. List the crews and check the id.
 
-## crew.archived
+## crew.removed
 Crew {crew} has been removed (hidden and frozen, not deleted) and is read-only. Ask the human to restore it (crew.restore; only the human can, from the client) before changing it.
 
 ## crew.management_fixed
@@ -142,10 +142,10 @@ Crew {crew} still has child crews that are not removed: {children}. Move them aw
 ## crew.wakes_inflight
 Crew {crew} still has {count} wakes being delivered. Wait for delivery to finish, then remove it again.
 
-## crew.parent_archived
+## crew.parent_removed
 The parent crews of {crew} ({parents}) have been removed, and nothing live may hang under a removed crew. Ask the human to restore {parents} first; once that is done, release {crew} from them if you no longer want it there.
 
-## crew.not_archived
+## crew.not_removed
 Crew {crew} has not been removed. Only removed crews can be permanently deleted; remove it first (crew.remove). Permanent deletion really deletes everything of the crew; the snapshot taken before it is kept for 30 days only.
 
 ## crew.session_not_in_crew
@@ -163,7 +163,7 @@ The address "{address}" is not valid. Write a crew number or crew-extension, e.g
 ## directory.no_such_crew
 The directory has no crew number {number}. Check the number.
 
-## directory.crew_archived
+## directory.crew_removed
 Crew number {number} has been removed and takes no messages. Ask the human to restore it before contacting it.
 
 ## directory.no_such_extension

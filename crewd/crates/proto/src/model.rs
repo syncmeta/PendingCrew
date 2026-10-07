@@ -50,9 +50,10 @@ pub struct Crew {
     /// 子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。总机组恒为 0，单独列出。
     #[serde(default)]
     pub position: i64,
-    /// 归档时刻（删机组 = 归档，N1 裁定 13）；没归档时不出现。
+    /// 移除时刻（`crew.remove`：隐藏并冻结、可恢复，N1 裁定 13 / PM 2026-10-07）；没移除时不出现。
+    /// 库里的列仍叫 `crews.archived_at`（内部叫归档）；线上一律叫 removed，archived 只用于群。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub archived_at: Option<String>,
+    pub removed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

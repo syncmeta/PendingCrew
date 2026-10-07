@@ -521,10 +521,12 @@ async fn channels_can_be_created_watched_and_handed_over() {
         json!({"crewId":made["id"],"fromParentId":"a"}),
     )
     .await;
-    // 删机组 = 归档（N1 裁定 13）：返回归档后的机组；默认列表里没有它，includeArchived 列得出；解档后回来。
+    // 移除机组（N1 裁定 13，PM 2026-10-07 定名）：返回移除后的机组（removedAt）；默认列表里没有它，includeRemoved
+    // 列得出；恢复后回来。线上一律叫 removed，不叫 archived（archived 只留给群）。
     let gone = c.call(8, "crew.remove", json!({"crewId":made["id"]})).await;
     assert_eq!(gone["id"], made["id"]);
-    assert!(gone["archivedAt"].is_string(), "{gone}");
+    assert!(gone["removedAt"].is_string(), "{gone}");
+    assert!(gone.get("archivedAt").is_none(), "{gone}");
     let has = |list: &Value| {
         list.as_array()
             .unwrap()
@@ -536,7 +538,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
         "默认不列归档的"
     );
     let all = c
-        .call(10, "crew.list", json!({"includeArchived":true}))
+        .call(10, "crew.list", json!({"includeRemoved":true}))
         .await;
     assert!(has(&all), "{all}");
     let refused = c
@@ -558,7 +560,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
     let back = c
         .call(12, "crew.restore", json!({"crewId":made["id"]}))
         .await;
-    assert!(back.get("archivedAt").is_none_or(Value::is_null), "{back}");
+    assert!(back.get("removedAt").is_none_or(Value::is_null), "{back}");
     assert!(has(&c.call(13, "crew.list", json!({})).await));
     // 总机组不能归档。
     assert_eq!(
@@ -921,8 +923,8 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
     changed.sort_by_key(|v| v.to_string());
     assert_eq!(changed, std::slice::from_ref(&made));
     // 移除机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
-    let archived = c.call(9, "crew.remove", json!({"crewId":made})).await;
-    assert!(archived["archivedAt"].is_string());
+    let removed = c.call(9, "crew.remove", json!({"crewId":made})).await;
+    assert!(removed["removedAt"].is_string());
     let evs = frames_until_hello(&mut sub, 107).await;
     let mut kinds: Vec<(String, Value)> = evs
         .iter()
@@ -1021,7 +1023,7 @@ async fn serve_closes_the_db_cleanly_before_releasing_the_lock() {
     crewd_server::lock_data_dir(&dir).expect("锁已释放");
 }
 
-/// `session.list` 不带 crewId 时不列归档机组的 session（同 crew.list），`includeArchived: true` 才列；
+/// `session.list` 不带 crewId 时不列已移除机组的 session（同 crew.list），`includeRemoved: true` 才列；
 /// 点名机组照实列。归档同时撤回机组还开着的问（`ask.list` 里不再有）。
 #[tokio::test]
 async fn session_list_hides_archived_crews_and_archiving_withdraws_their_asks() {
@@ -1034,7 +1036,7 @@ async fn session_list_hides_archived_crews_and_archiving_withdraws_their_asks() 
     c.call(3, "crew.remove", json!({"crewId":"a"})).await;
     assert_eq!(n(&c.call(4, "session.list", json!({})).await), 0);
     assert_eq!(
-        n(&c.call(5, "session.list", json!({"includeArchived":true}))
+        n(&c.call(5, "session.list", json!({"includeRemoved":true}))
             .await),
         2
     );
@@ -1140,7 +1142,7 @@ async fn crew_purge_without_a_snapshot_deletes_nothing() {
     assert_eq!(code, crewd_proto::RpcError::STORAGE);
     let got = c.call(3, "crew.get", json!({"crewId":made})).await;
     assert_eq!(got["crew"]["id"], made, "{got}");
-    assert!(got["crew"]["archivedAt"].is_string(), "{got}");
+    assert!(got["crew"]["removedAt"].is_string(), "{got}");
 }
 
 /// 复审 M7：socket 绑不上（这里路径上是个目录）时 serve 报错退出，但退出前照样收尾：Ticker 停下（启动时
@@ -1205,12 +1207,27 @@ async fn crew_purge_that_cannot_happen_takes_no_snapshot() {
         .await,
         crewd_proto::RpcError::FORBIDDEN
     );
+    let live = c.call_rpc_err(3, "crew.purge", json!({"crewId":"a"})).await;
     assert_eq!(
-        c.call_err(3, "crew.purge", json!({"crewId":"a"})).await,
+        live.code,
         crewd_proto::RpcError::CONFLICT,
-        "没归档的不能永久删除"
+        "没移除的不能永久删除"
+    );
+    assert_eq!(
+        live.data.map(|d| d.refusal).as_deref(),
+        Some("crew.not_removed"),
+        "机组一级的码叫 removed"
     );
     c.call(4, "crew.remove", json!({"crewId":"a"})).await;
+    let frozen = c
+        .call_rpc_err(40, "crew.update", json!({"crewId":"a","statusLine":"x"}))
+        .await;
+    assert_eq!(frozen.code, crewd_proto::RpcError::CONFLICT);
+    assert_eq!(
+        frozen.data.map(|d| d.refusal).as_deref(),
+        Some("crew.removed"),
+        "已移除的机组只读"
+    );
     rusqlite::Connection::open(dir.path().join("crewd.db"))
         .unwrap()
         .execute("UPDATE sessions SET desired='running' WHERE id='cap-a'", [])
