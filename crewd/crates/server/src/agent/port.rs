@@ -1206,8 +1206,15 @@ pub async fn open_ask(
                 resume_note,
             },
         )?;
-        let message = a.message_id.as_deref().unwrap_or_default();
-        let posted = crewd_collab::messages::get(tx.conn(), message)?;
+        // `asks::open` always records its announcement; a missing one is a broken invariant: a
+        // server fault (`PortError::Internal`, logged with a number) that rolls the ask back, not
+        // a receipt with no channel.
+        let Some(m) = a.message_id.as_deref() else {
+            return Err(CollabError::Store(crewd_store::StoreError::Invalid(
+                format!("ask {} was opened without an announcement message", a.ask),
+            )));
+        };
+        let posted = crewd_collab::messages::get(tx.conn(), m)?;
         Ok(Asked {
             ask: a.ask,
             channel: channel_view(tx.conn(), &posted.channel_id)?,
