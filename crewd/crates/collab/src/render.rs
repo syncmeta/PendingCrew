@@ -437,7 +437,8 @@ fn batch_window(
 
 /// 队列行 → 可渲染的批（出队时现渲染，spec §22.4）。行的顺序即输出顺序（`due_for` 已按优先级排好）；
 /// 消息类合成一项，放在第一条消息行出现的位置。渲染不了的行进 `unusable`：source 格式不对、消息 / 问查无此项、
-/// 问已撤回或还没答，以及被叫的消息对它不可投递（它自己发的，与 `unread_for` 同一判据）。
+/// 问已撤回或还没答，被叫的消息对它不可投递（它自己发的，与 `unread_for` 同一判据），以及消息所在的群它此刻
+/// 已经读不到了（B15 `channels::readable_by`；收听的群照投）。
 /// 库出错原样上抛（不当成 unusable，免得一次瞬时错误把唤醒永久丢掉）。语言由调用方给（发送者标签用它）。
 ///
 /// 消息项里每个群带「它的游标之后、到批里最大 seq 为止」别人发的全部消息（不止叫它的那几条）：M3c 投递成功后
@@ -456,6 +457,8 @@ pub fn build_batch(
     let mut msg_slot: Option<usize> = None;
     // 消息行：(队列行 id, 群, seq)，按行的顺序。
     let mut queued: Vec<(i64, String, i64)> = Vec::new();
+    let mut reader: Option<channels::Reader> = None;
+    let mut readable: Vec<(String, bool)> = Vec::new();
     for r in rows {
         match r.kind {
             WakeKind::Message => {
@@ -470,6 +473,33 @@ pub fn build_batch(
                 // 与 `cursors::unread_for` 同一个「可投递」判据：入队方叫错了人也不投给它。
                 if m.sender_session_id.as_deref() == Some(session) {
                     unusable.push((r.id, format!("message {id} is its own message")));
+                    continue;
+                }
+                // B15：入队之后不再读得到这个群（被移出、机组挪走后的旧 home 人类群）→ 不投。收听的群照投
+                // （收听不在读规则里）。按群只判一次，读者只解析一次。
+                let readable = match readable.iter().find(|(c, _)| *c == m.channel_id) {
+                    Some((_, ok)) => *ok,
+                    None => {
+                        if reader.is_none() {
+                            reader = Some(channels::Reader::of(conn, session)?);
+                        }
+                        let ok = reader
+                            .as_ref()
+                            .expect("set above")
+                            .reads(conn, &m.channel_id)?
+                            || channels::has_listen_row(conn, &m.channel_id, session)?;
+                        readable.push((m.channel_id.clone(), ok));
+                        ok
+                    }
+                };
+                if !readable {
+                    unusable.push((
+                        r.id,
+                        format!(
+                            "channel {} is no longer readable by {session}",
+                            m.channel_id
+                        ),
+                    ));
                     continue;
                 }
                 queued.push((r.id, m.channel_id, m.seq));
@@ -1087,6 +1117,116 @@ mod tests {
         };
         let wake = wake_text(Locale::Zh, &batch);
         assert!(frame_lines(&wake).is_empty(), "{wake}");
+    }
+
+    /// B15：入队之后它不再读得到那个群（被移出群；机组挪到别的一级机组下之后的旧 home 人类群）→ 那个群的行进
+    /// unusable、不投；仍读得到的群照常投。
+    #[test]
+    fn queued_rows_from_channels_it_can_no_longer_read_are_unusable() {
+        use crewd_proto::MemberRef;
+        let mut s = store();
+        let t = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: crewd_proto::ChannelKind::Topic,
+                    name: "示例".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("cap-x")],
+                },
+            )
+        });
+        let at = |id: &str| Mention {
+            kind: MentionKind::Session,
+            target_id: Some(id.into()),
+        };
+        let in_topic = say(
+            &mut s,
+            Sender::Session("w-a1".into()),
+            &t.id,
+            "示例消息",
+            vec![at("cap-x")],
+            None,
+        );
+        let in_lobby = say(
+            &mut s,
+            Sender::Human,
+            "crew-x/lobby",
+            "大厅里",
+            vec![],
+            None,
+        );
+        let r_topic = wake_msg(&mut s, "cap-x", &in_topic.id);
+        let r_lobby = wake_msg(&mut s, "cap-x", &in_lobby.id);
+        say(
+            &mut s,
+            Sender::Session("w-b1".into()),
+            "crew-a/human",
+            "要人拍板",
+            vec![],
+            None,
+        );
+        let in_human = say(
+            &mut s,
+            Sender::Human,
+            "crew-a/human",
+            "人回话",
+            vec![at("w-b1")],
+            None,
+        );
+        let r_human = wake_msg(&mut s, "w-b1", &in_human.id);
+
+        ok(&mut s, |tx| {
+            crate::channels::remove_member(tx, &Sender::Human, &t.id, &MemberRef::session("cap-x"))
+        });
+        ok(&mut s, |tx| {
+            crate::crews::release(tx, "crew-b", "crew-a", Some("crew-x"))
+        });
+
+        let rows = crate::wakes::due_for(s.conn(), "cap-x", NOW).unwrap();
+        let b = build_batch(s.conn(), "cap-x", Locale::Zh, &rows).unwrap();
+        assert_eq!(b.items.len(), 1, "{b:?}");
+        assert_eq!(b.items[0].wake_ids, [r_lobby]);
+        assert_eq!(line_seqs(&b), [in_lobby.seq], "被移出的群一行都不带");
+        assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
+        assert_eq!(b.unusable[0].0, r_topic);
+        assert!(
+            b.unusable[0].1.contains("no longer readable"),
+            "{:?}",
+            b.unusable
+        );
+
+        let rows = crate::wakes::due_for(s.conn(), "w-b1", NOW).unwrap();
+        let b = build_batch(s.conn(), "w-b1", Locale::Zh, &rows).unwrap();
+        assert!(b.items.is_empty(), "{b:?}");
+        assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
+        assert_eq!(b.unusable[0].0, r_human, "旧 home 的人类群不再投");
+    }
+
+    /// 收听不在读规则里：收听着一个读不到的群，入队的行照投。
+    #[test]
+    fn queued_rows_from_a_listened_channel_are_delivered_even_if_not_readable() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            crate::listens::set(tx, "cap-x", "crew-b/lobby", None, vec![])
+        });
+        let m = say(
+            &mut s,
+            Sender::Human,
+            "crew-b/lobby",
+            "示例消息",
+            vec![],
+            None,
+        );
+        assert!(!crate::channels::readable_by(s.conn(), "crew-b/lobby", "cap-x").unwrap());
+        let r = wake_msg(&mut s, "cap-x", &m.id);
+        let rows = crate::wakes::due_for(s.conn(), "cap-x", NOW).unwrap();
+        let b = build_batch(s.conn(), "cap-x", Locale::Zh, &rows).unwrap();
+        assert!(b.unusable.is_empty(), "{:?}", b.unusable);
+        assert_eq!(b.items[0].wake_ids, [r]);
+        assert_eq!(line_seqs(&b), [m.seq]);
     }
 
     /// 入队的消息行同样要过「对它可投递」（评审 3）：它自己发的 → unusable，不投。

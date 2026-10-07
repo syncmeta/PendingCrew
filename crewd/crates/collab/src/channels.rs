@@ -196,7 +196,8 @@ pub fn is_watched(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// 读规则里「谁在读」的那一半：每个 session 只算一次（`home_of` 不按群重算，progress NOTE Task 6）。
-struct Reader {
+/// `render::build_batch` 也用它（一批里多个群，读者只解析一次）。
+pub(crate) struct Reader {
     crew: String,
     home: String,
     /// 总机组的 session（管理层）。
@@ -204,13 +205,19 @@ struct Reader {
 }
 
 impl Reader {
-    fn of(conn: &Connection, session: &str) -> Result<Self> {
+    pub(crate) fn of(conn: &Connection, session: &str) -> Result<Self> {
         let crew = sessions::crew_of(conn, session)?;
         Ok(Self {
             manages_org: crews::is_org_root(conn, &crew)?,
             home: crews::home_of(conn, &crew)?,
             crew,
         })
+    }
+
+    /// `readable_by` 的读者已解析版本。
+    pub(crate) fn reads(&self, conn: &Connection, channel: &str) -> Result<bool> {
+        let ch = get(conn, channel)?;
+        self.can_read(conn, &ch.id, &ch.crew_id, ch.kind)
     }
 
     fn can_read(&self, conn: &Connection, id: &str, crew: &str, kind: ChannelKind) -> Result<bool> {
@@ -245,6 +252,15 @@ impl Reader {
 pub fn readable_by(conn: &Connection, channel: &str, session: &str) -> Result<bool> {
     let ch = get(conn, channel)?;
     Reader::of(conn, session)?.can_read(conn, &ch.id, &ch.crew_id, ch.kind)
+}
+
+/// 这个 session 有没有收听这个群的行（不看截止时间：collab 不读时钟；入队时收听有效就投，见 `render::build_batch`）。
+pub(crate) fn has_listen_row(conn: &Connection, channel: &str, session: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM listens WHERE session_id=?1 AND channel_id=?2",
+        params![session, channel],
+        |r| r.get::<_, i64>(0),
+    )? > 0)
 }
 
 /// `readable_by` 为真的全部群（同一条规则；含已归档；按 `created_at, id`；不含收听）。
