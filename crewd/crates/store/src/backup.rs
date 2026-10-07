@@ -14,6 +14,23 @@ pub fn backups_dir_for(db: &Path) -> PathBuf {
         .join(BACKUPS_DIR)
 }
 
+/// 备份目录里有没有库文件（`*.db`，不算临时文件）。目录不在 = 没有；读不了照实报错。
+pub fn has_backups(dir: &Path) -> Result<bool> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    for e in rd {
+        let name = e?.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".db") && !name.starts_with('.') {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// 检查的强度。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {

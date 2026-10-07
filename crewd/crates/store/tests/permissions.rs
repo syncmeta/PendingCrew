@@ -39,15 +39,9 @@ fn a_new_db_and_its_wal_and_shm_are_0600() {
 fn an_existing_loose_db_is_tightened_on_open() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("crewd.db");
-    {
-        let c = rusqlite::Connection::open(&p).unwrap();
-        let _: String = c
-            .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
-            .unwrap();
-        c.execute_batch("CREATE TABLE x(v); INSERT INTO x VALUES(1);")
-            .unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-    }
+    // N4 之前建的库是 umask 给的 0644。
+    drop(Store::open(&p).unwrap());
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
     let s = Store::open(&p).unwrap();
     touch_a_row(&s);
     for f in ["crewd.db", "crewd.db-wal", "crewd.db-shm"] {

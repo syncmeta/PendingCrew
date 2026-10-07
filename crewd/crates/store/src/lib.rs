@@ -103,6 +103,28 @@ pub enum StoreError {
         dest: std::path::PathBuf,
         source: Box<StoreError>,
     },
+    /// 数据目录里该有库却没有（S24）：拒绝启动，不新建空库。
+    #[error(
+        "数据目录 {} 里的库 {DB_FILE} 不见了（{why}）。crewd 不会新建一个空库顶替它。\
+         从备份恢复：crewd restore --from <{}/ 里的某个文件>；确认要从零开始，就先把 {ID_FILE} 和 backups/ 挪走。",
+        dir.display(),
+        dir.join(backup::BACKUPS_DIR).display()
+    )]
+    DbMissing {
+        dir: std::path::PathBuf,
+        why: String,
+    },
+    /// 库换了（S24）：`crewd.db.id` 记的不是这个库。
+    #[error(
+        "{} 里的库（dbId {found}）不是这个数据目录原来的库（{ID_FILE} 记的是 {expected}）：可能指错了目录，\
+         或库文件被换过。拒绝启动。确实要换成它，用 crewd restore --from <那个文件>。",
+        dir.display()
+    )]
+    DbIdMismatch {
+        dir: std::path::PathBuf,
+        expected: String,
+        found: String,
+    },
     /// 迁移前的保护步骤（完整性检查、快照）没过：没有迁移，库保持原版本、原样。
     #[error("拒绝迁移（库保持 v{from}，未改动）：{source}")]
     MigrationRefused { from: i64, source: Box<StoreError> },
@@ -140,6 +162,13 @@ impl StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// 数据目录里的库文件名。
+pub const DB_FILE: &str = "crewd.db";
+/// 库旁边的标识文件：内容 = 库 `meta.dbId`（S24）。
+pub const ID_FILE: &str = "crewd.db.id";
+/// `PRAGMA application_id`：ASCII「CRWD」，标明这是 crewd 的库文件。
+pub const APPLICATION_ID: i32 = 0x4352_5744;
+
 /// 每次提交都走 `F_FULLFSYNC`（S23）。本机实测（N4 报告，Apple Fabric SSD，单行事务 ×400，两轮）：
 /// 关 p50≈40µs / p99≈60µs（普通 fsync 在 macOS 上不保证落到盘片）；开 p50≈3.9ms / p99≈6ms。
 /// 单写者每秒仍能做 ~250 次提交，远高于实际写入频率；而这个库是聊天记录的唯一一份，取强的那档。
@@ -165,8 +194,60 @@ impl Store {
 
     fn init(conn: Connection, backups: Option<std::path::PathBuf>) -> Result<Self> {
         pin_pragmas(&conn)?;
+        refuse_foreign(&conn)?;
         schema::migrate_guarded(&conn, backups.as_deref())?;
+        mark_identity(&conn)?;
         Ok(Self { conn, backups })
+    }
+
+    /// serve / import 用：打开数据目录里的库，并核对身份（S24）。
+    /// - 库不在，但 `crewd.db.id` 在、或 `backups/` 里有备份 → `DbMissing`（不建空库）；
+    /// - 库在，`crewd.db.id` 记的 dbId 和库里的不一样 → `DbIdMismatch`（在迁移之前就拒绝）；
+    /// - 真正的第一次（两样都没有）才新建；N4 之前的库没有 id 文件，第一次打开时补上。
+    ///
+    /// 读不到（EPERM / EACCES 等）一律报错，绝不当成「不存在」。
+    pub fn open_data_dir(dir: &Path) -> Result<Self> {
+        let db = dir.join(DB_FILE);
+        let id_path = dir.join(ID_FILE);
+        let recorded = read_id_file(&id_path)?;
+        if !exists_strict(&db)? {
+            let why = if recorded.is_some() {
+                Some(format!("{ID_FILE} 还在"))
+            } else if backup::has_backups(&dir.join(backup::BACKUPS_DIR))? {
+                Some("backups/ 里有备份".to_string())
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                return Err(StoreError::DbMissing {
+                    dir: dir.to_path_buf(),
+                    why,
+                });
+            }
+        } else if let (Some(expected), Some(found)) = (&recorded, peek_db_id(&db))
+            && &found != expected
+        {
+            return Err(StoreError::DbIdMismatch {
+                dir: dir.to_path_buf(),
+                expected: expected.clone(),
+                found,
+            });
+        }
+        let store = Store::open(&db)?;
+        let id = meta_get(store.conn(), "dbId")?
+            .ok_or_else(|| StoreError::Invalid("库里没有 dbId".into()))?;
+        match recorded {
+            Some(expected) if expected != id => {
+                return Err(StoreError::DbIdMismatch {
+                    dir: dir.to_path_buf(),
+                    expected,
+                    found: id,
+                });
+            }
+            Some(_) => {}
+            None => fsutil::atomic_write(&id_path, format!("{id}\n").as_bytes(), 0o600)?,
+        }
+        Ok(store)
     }
 
     /// 备份目录（内存库是 `None`）。
@@ -221,6 +302,56 @@ fn pin_pragmas(conn: &Connection) -> Result<()> {
         64 * 1024 * 1024
     ))?;
     Ok(())
+}
+
+/// 拒绝别人的 SQLite 文件：`application_id` 是别的程序的，或者版本 0 却已经有表。
+fn refuse_foreign(conn: &Connection) -> Result<()> {
+    let app: i32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get(0))?;
+    if (app != 0 && app != APPLICATION_ID) || (app == 0 && version == 0 && tables > 0) {
+        return Err(StoreError::Invalid(format!(
+            "{} 不是 crewd 的库（application_id={app}，user_version={version}），拒绝打开",
+            conn.path().unwrap_or("?")
+        )));
+    }
+    Ok(())
+}
+
+/// 迁移之后补上身份：`application_id` 和 `meta.dbId`（已有的不动）。
+fn mark_identity(conn: &Connection) -> Result<()> {
+    let app: i32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    if app == 0 {
+        conn.execute_batch(&format!("PRAGMA application_id={APPLICATION_ID}"))?;
+    }
+    if meta_get(conn, "dbId")?.is_none() {
+        let id: String = conn.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
+        meta_set(conn, "dbId", &id)?;
+    }
+    Ok(())
+}
+
+/// 不建库地偷看一眼 dbId（只读打开；打不开、没有就是 `None`，交给后面的正式打开去报错）。
+fn peek_db_id(db: &Path) -> Option<String> {
+    let c = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    meta_get(&c, "dbId").ok().flatten()
+}
+
+/// 「不存在」只认 NotFound；权限错误等照实报（S7 的教训：读不到 ≠ 不存在）。
+fn exists_strict(p: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(p) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn read_id_file(p: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(p) {
+        Ok(s) => Ok(Some(s.trim().to_string()).filter(|s| !s.is_empty())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
