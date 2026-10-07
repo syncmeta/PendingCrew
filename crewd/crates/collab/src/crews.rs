@@ -2,7 +2,7 @@
 use crate::{Change, CollabError, Result, Tx};
 use crewd_proto::Crew;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NewCrew {
@@ -31,16 +31,33 @@ pub fn get(conn: &Connection, id: &str) -> Result<Crew> {
     crewd_store::crews::get(conn, id)?.ok_or_else(|| not_found(id))
 }
 
-/// 侧栏顺序（C1）：position，再按建组时间、id。store 层仍按号排（M1 的测试依赖它）。
+/// `crew.list` 的次序 = 侧栏的树：总机组（树根）第一，然后先序遍历，每层按父的 `child_ids`（边上的次序，
+/// `reorder` 排的就是它）；多父的机组排在第一次遇到的位置、只出现一次；从根走不到的（旧数据里断开的）
+/// 按建组时间、id 排在最后。不看 `crews.position`（只对总机组有意义，N1 裁定 7）。
+/// 这只是一个稳定的扁平次序；客户端建树用 `parent_ids` / `child_ids`。store 层仍按号排（M1 的测试依赖它）。
 pub fn list(conn: &Connection) -> Result<Vec<Crew>> {
-    let mut crews = crewd_store::crews::list(conn)?;
-    crews.sort_by(|a, b| {
-        a.position
-            .cmp(&b.position)
-            .then_with(|| a.created_at.cmp(&b.created_at))
+    let mut rest: BTreeMap<String, Crew> = crewd_store::crews::list(conn)?
+        .into_iter()
+        .map(|c| (c.id.clone(), c))
+        .collect();
+    let mut out: Vec<Crew> = Vec::with_capacity(rest.len());
+    // 先序：栈里倒着压子机组，弹出来就是 child_ids 的次序。
+    let mut stack: Vec<String> = org_root(conn)?.into_iter().collect();
+    while let Some(id) = stack.pop() {
+        let Some(c) = rest.remove(&id) else {
+            continue; // 已经出现过（多父）
+        };
+        stack.extend(c.child_ids.iter().rev().cloned());
+        out.push(c);
+    }
+    let mut cut_off: Vec<Crew> = rest.into_values().collect();
+    cut_off.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
             .then_with(|| a.id.cmp(&b.id))
     });
-    Ok(crews)
+    out.extend(cut_off);
+    Ok(out)
 }
 
 pub fn parents(conn: &Connection, id: &str) -> Result<Vec<String>> {
@@ -1538,6 +1555,44 @@ mod tests {
         ok(&mut s, |tx| delete(tx, "crew-a"));
         ok(&mut s, |tx| create(tx, new_crew("再建一个")));
         assert_eq!(parentless(&s), 1);
+    }
+
+    /// `crew.list` 的次序：总机组在前（不看 `crews.position` / 建组时间），然后按树的先序、每层按父的 childIds。
+    #[test]
+    fn crew_list_puts_the_org_root_first_then_the_tree_in_sidebar_order() {
+        let mut s = store();
+        // 根建得最晚、position 最大：照样排第一；新机组的 position 是 0，也不能排到根前面。
+        s.conn()
+            .execute(
+                "UPDATE crews SET position=99, created_at='2099-01-01T00:00:00.000Z' WHERE id='chief'",
+                [],
+            )
+            .unwrap();
+        let n = ok(&mut s, |tx| create(tx, new_crew("新机组")));
+        let ids = |s: &crewd_store::Store| -> Vec<String> {
+            list(s.conn()).unwrap().into_iter().map(|c| c.id).collect()
+        };
+        assert_eq!(
+            ids(&s),
+            ["chief", "crew-a", "crew-b", "crew-x", n.id.as_str()]
+        );
+        ok(&mut s, |tx| {
+            reorder(
+                tx,
+                "chief",
+                &[n.id.clone(), "crew-x".into(), "crew-a".into()],
+            )
+        });
+        assert_eq!(
+            ids(&s),
+            ["chief", n.id.as_str(), "crew-x", "crew-a", "crew-b"]
+        );
+        // 多父的机组排在第一次遇到的位置，只出现一次。
+        ok(&mut s, |tx| adopt(tx, "crew-b", "crew-x"));
+        assert_eq!(
+            ids(&s),
+            ["chief", n.id.as_str(), "crew-x", "crew-b", "crew-a"]
+        );
     }
 
     /// 根的轻量规则（N1 裁定 6）：总机组不能被隐藏；取消隐藏 / 别的机组照常。

@@ -147,7 +147,9 @@ async fn hello_crews_channels_and_messages() {
         c.call(1, "system.hello", Value::Null).await["apiVersion"],
         3
     );
-    assert_eq!(c.call(2, "crew.list", json!({})).await[0]["id"], "a");
+    let crews = c.call(2, "crew.list", json!({})).await;
+    assert_eq!(crews[0]["orgRoot"], true, "总机组排第一（树根）");
+    assert_eq!(crews[1]["id"], "a");
     let chans = c.call(3, "channel.list", json!({"crewId":"a"})).await;
     let ids: Vec<&str> = chans
         .as_array()
