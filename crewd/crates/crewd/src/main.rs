@@ -84,16 +84,13 @@ async fn run() -> anyhow::Result<()> {
     let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
         // `crewd hook …` 的命令行错不能 exit 2（对 Stop 是「挡住」、对 PostToolUse 会喂回给模型）：
-        // exit 0，pre-tool-use 打 deny。`--help` / `--version` 照常。
+        // exit 0、不打 stdout。`--help` / `--version` 照常。
         Err(e) if !matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
-            match hook_cmd::hook_event_from_argv(&argv) {
-                Some(event) => {
-                    eprintln!("crewd hook: bad command line: {e}");
-                    hook_cmd::fail_closed(event.as_deref());
-                    std::process::exit(0);
-                }
-                None => e.exit(),
+            if hook_cmd::is_hook_argv(&argv) {
+                eprintln!("crewd hook: bad command line: {e}");
+                std::process::exit(0);
             }
+            e.exit()
         }
         Err(e) => e.exit(),
     };
@@ -104,7 +101,6 @@ async fn run() -> anyhow::Result<()> {
         (Ok(d), _) => d,
         (Err(e), Cmd::Hook(args)) => {
             eprintln!("crewd hook {}: {e:#}", args.event());
-            hook_cmd::fail_closed(Some(args.event()));
             return Ok(());
         }
         (Err(e), _) => return Err(e),
@@ -146,10 +142,9 @@ async fn run() -> anyhow::Result<()> {
         Cmd::Codex(args) => codex_cmd::run(&dir, args.clone()).await?,
         Cmd::Mcp(args) => mcp_cmd::run(&dir, args.clone()).await?,
         Cmd::Hook(args) => {
-            // `run` 只在 bug 时返回 Err：同样 exit 0、pre-tool-use deny。
+            // `run` 只在 bug 时返回 Err：同样 exit 0、不打 stdout。
             if let Err(e) = hook_cmd::run(&dir, args.clone()).await {
                 eprintln!("crewd hook {}: {e:#}", args.event());
-                hook_cmd::fail_closed(Some(args.event()));
             }
         }
         Cmd::Schema => {

@@ -135,7 +135,6 @@ async fn route(
 async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Value) -> HookResult {
     match event {
         HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
-        HookKind::PreToolUse => crate::agent::approval::pre_tool_use(state, me, &payload).await,
         HookKind::Stop => crate::agent::turn::stop(state, me, &payload).await,
     }
 }

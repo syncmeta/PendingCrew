@@ -300,7 +300,6 @@ pub struct StartReq {
     pub isolation: bool,
 }
 
-pub use crewd_collab::approvals::Gate;
 pub use crewd_collab::render::ChannelBlock;
 
 // ---------------------------------------------------------------------------------------------
@@ -1183,27 +1182,6 @@ pub async fn schedule_timer(
         .map(|_| ())
     })
     .await
-}
-
-// ---------------------------------------------------------------------------------------------
-// 审批
-// ---------------------------------------------------------------------------------------------
-
-/// C2：一次调用，不等。用票 / 只拒 / 开新请求（开新请求时 M3a 自己发人类群通知）。
-pub async fn gate_approval(
-    st: &AppState,
-    by: &Identity,
-    tool_name: &str,
-    summary: &str,
-    tool_use_id: Option<String>,
-) -> PortResult<Gate> {
-    let n = crewd_collab::approvals::NewApproval {
-        session_id: by.session_id.clone(),
-        tool_name: tool_name.to_string(),
-        summary: summary.to_string(),
-        tool_use_id,
-    };
-    write(st, move |tx| crewd_collab::approvals::gate(tx, n)).await
 }
 
 /// C3：记一次产出（一个真正干活的工具调用）。

@@ -162,7 +162,7 @@ session id、通讯录号码（如 7-3），或 human。
 答复回来后你要接着做什么（做到哪一步、下一步是什么）。半路上问的问题一定要写。
 
 ## ask.fallback_after_minutes
-可选：等这么多分钟没人答，就叫醒你按 fallback 办。只用于可撤回的事；到点之后若要动生产、花钱、隐私或凭据，照样会被审批拦住。
+可选：等这么多分钟没人答，就叫醒你按 fallback 办。只用于可撤回的事。
 
 ## ask.fallback
 到点没人答时你打算怎么办（「就按 A 做」）。和 fallback_after_minutes 一起给。
@@ -431,15 +431,3 @@ claude 或 codex，必须明确选。
 
 ## r.dm_generic
 私聊
-
-## r.approval_granted
-人类已同意 {tool}，这一次放行（只此一次）。
-
-## r.approval_filed
-{tool} 需要人类同意，已请人审批，这次先拒绝。先去干不需要它的活；人同意后会叫你回来，那时重跑这一次调用就会放行。
-
-## r.approval_pending
-{tool} 还在等人类审批（已经请过了，不会再请一次）。先去干别的；人同意后会叫你回来。
-
-## r.approval_unavailable
-现在没法发起审批，已拒绝 {tool}。

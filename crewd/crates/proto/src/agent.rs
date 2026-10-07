@@ -81,17 +81,15 @@ impl CallResult {
 #[serde(rename_all = "kebab-case")]
 pub enum HookKind {
     PostToolUse,
-    PreToolUse,
     Stop,
 }
 
 impl HookKind {
-    pub const ALL: [HookKind; 3] = [Self::PostToolUse, Self::PreToolUse, Self::Stop];
+    pub const ALL: [HookKind; 2] = [Self::PostToolUse, Self::Stop];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PostToolUse => "post-tool-use",
-            Self::PreToolUse => "pre-tool-use",
             Self::Stop => "stop",
         }
     }
@@ -170,7 +168,6 @@ mod tests {
     fn hook_kind_wire_names() {
         for (k, s) in [
             (HookKind::PostToolUse, "post-tool-use"),
-            (HookKind::PreToolUse, "pre-tool-use"),
             (HookKind::Stop, "stop"),
         ] {
             assert_eq!(serde_json::to_value(k).unwrap(), json!(s));
@@ -178,6 +175,8 @@ mod tests {
             assert_eq!(HookKind::parse(s), Some(k));
         }
         assert_eq!(HookKind::parse("user-prompt-submit"), None, "M4b 才加");
+        // B16: no approvals, so no PreToolUse hook; an old settings file's event is simply unknown.
+        assert_eq!(HookKind::parse("pre-tool-use"), None);
     }
 
     #[test]

@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn states_the_ruled_behaviours() {
         // Controller rulings: profile change = next start (B8); ext prefix on speaker labels;
-        // untargeted human post routing; approvals do not block; @human in an unwatched channel = do-not-disturb.
+        // untargeted human post routing; @human in an unwatched channel = do-not-disturb.
         let zh = render(&ctx(Locale::Zh, Role::Worker, false));
         let en = render(&ctx(Locale::En, Role::Worker, false));
         for (md, wants) in [
@@ -498,8 +498,6 @@ mod tests {
                     "7-3",
                     "群主；没有群主就叫私聊里的另一方；再没有就叫机长",
                     "免打扰",
-                    "你对该工具的下一次调用（不论参数）会放行一次",
-                    "不论同意还是不同意",
                     "他正在注视、且你是成员的群",
                     "没有分机号的（例如管理员）",
                 ],
@@ -512,11 +510,8 @@ mod tests {
                     "7-3",
                     "the first of these that is in the channel: the owner, otherwise the dm's other party, otherwise the captain",
                     "do-not-disturb",
-                    "your next call to that tool (with any arguments) goes through once",
-                    "whether the human allows or denies",
                     "a channel they are watching that you are a member of",
                     "without an extension (an admin, for instance)",
-                    "the human decides",
                 ],
             ),
         ] {
@@ -533,6 +528,44 @@ mod tests {
             "-1 is always",
         ] {
             assert!(!zh.contains(gone) && !en.contains(gone), "{gone}");
+        }
+    }
+
+    /// B16: PendingCrew does no approvals (claude / codex handle permissions themselves), so nothing an
+    /// agent reads may promise or describe an approval gate, a one-time grant or a retry-after-allow.
+    #[test]
+    fn nothing_the_agent_reads_mentions_an_approval_gate() {
+        let mut texts: Vec<(String, String)> = Vec::new();
+        for l in [Locale::Zh, Locale::En] {
+            for role in [Role::Captain, Role::Worker, Role::Admin] {
+                for builtin in [false, true] {
+                    texts.push((
+                        format!("world {l:?} {role:?} {builtin}"),
+                        render(&ctx(l, role, builtin)),
+                    ));
+                }
+            }
+        }
+        texts.push((
+            "tools.zh.md".into(),
+            include_str!("../prompts/tools.zh.md").into(),
+        ));
+        texts.push((
+            "tools.en.md".into(),
+            include_str!("../prompts/tools.en.md").into(),
+        ));
+        for (what, t) in &texts {
+            let low = t.to_lowercase();
+            for gone in [
+                "approval",
+                "approve",
+                "审批",
+                "批准",
+                "放行",
+                "goes through once",
+            ] {
+                assert!(!low.contains(gone), "{what} still says {gone:?}");
+            }
         }
     }
 

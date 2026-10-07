@@ -162,7 +162,7 @@ The decision you need. State the options and your preference — "A / B, I lean 
 What you will do once answered (where you are, what is next). Always write it for questions asked mid-task.
 
 ## ask.fallback_after_minutes
-Optional: if nobody answers within this many minutes, you are woken to act on fallback. Only for reversible things; production, money, privacy or credentials still hit the approval gate.
+Optional: if nobody answers within this many minutes, you are woken to act on fallback. Only for reversible things.
 
 ## ask.fallback
 What you will do if nobody answers in time ("go with A"). Give together with fallback_after_minutes.
@@ -431,15 +431,3 @@ dissolved direct message
 
 ## r.dm_generic
 direct message
-
-## r.approval_granted
-The human allowed {tool}; this call goes through (once).
-
-## r.approval_filed
-{tool} needs the human's approval. A request was filed and this call is denied. Move on to work that does not need it; you will be woken when the human allows it, and retrying that call will then go through.
-
-## r.approval_pending
-{tool} is still waiting for the human's approval (already requested; not asking again). Move on; you will be woken when the human allows it.
-
-## r.approval_unavailable
-An approval could not be raised right now, so {tool} was denied.

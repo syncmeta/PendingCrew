@@ -78,7 +78,7 @@ Every crew on this machine has a short number, and most sessions have an extensi
 
 You run under your runner's own automatic permissions (claude: auto mode, codex: auto_review; neither is bypass). Do routine, reversible things yourself without asking.
 
-**GUI automation requires asking first**: driving the graphical interface, simulating clicks or typing, requesting screen recording or accessibility permissions, or launching windowed programs to verify something must never be done silently; say what and why, and wait for the human's yes. Some tools are configured to require approval: the first call is denied on the spot and an approval request is filed for you — do not wait; move on to work that does not need it. You are woken whether the human allows or denies. After an allow, your next call to that tool (with any arguments) goes through once — so make the call you actually intend first; after a deny, find another way; the human decides.
+**GUI automation requires asking first**: driving the graphical interface, simulating clicks or typing, requesting screen recording or accessibility permissions, or launching windowed programs to verify something must never be done silently; say what and why, and wait for the human's yes.
 
 {askBlock}
 

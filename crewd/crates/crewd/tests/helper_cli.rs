@@ -9,6 +9,11 @@ use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+/// A generous wall-clock ceiling for "the hook must not hang": below claude's own hook timeout (15 s),
+/// far above the helper's 5 s deadline, so a cold exec under load cannot trip it. Which path a hook
+/// took is asserted from its stderr, never from how long it took.
+const CEILING: Duration = Duration::from_secs(15);
+
 const SESSION: &str = "s-1";
 const TOKEN: &str = "tok-示例";
 
@@ -74,8 +79,8 @@ impl FakeServe {
                                     }}),
                                     "agent.hook" => match p["event"].as_str().unwrap() {
                                         "post-tool-use" => json!({"id": id, "result": {"stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"示例未读\"}}"}}),
-                                        "pre-tool-use" => json!({"id": id, "result": {"stdout": format!("{{\"echo\":{}}}", p["payload"]["tool_name"])}}),
-                                        _ => json!({"id": id, "result": {}}),
+                                        "stop" => json!({"id": id, "result": {}}),
+                                        e => json!({"id": id, "error": {"code": -32602, "message": format!("unexpected event {e}")}}),
                                     },
                                     m => json!({"id": id, "error": {"code": -32601, "message": m}}),
                                 };
@@ -284,71 +289,60 @@ async fn hook_prints_serve_stdout_verbatim() {
     );
     let (out, _, _) = run_hook(f.data_dir(), "stop", &[], &f.token_file(), "{}").await;
     assert_eq!(out, "", "serve 没给 stdout 就什么都不打");
-    let (out, _, _) = run_hook(
-        f.data_dir(),
-        "pre-tool-use",
-        &[],
-        &f.token_file(),
-        "{\"tool_name\":\"mcp__computer-use__click\"}",
-    )
-    .await;
-    assert_eq!(out.trim_end(), "{\"echo\":\"mcp__computer-use__click\"}");
 }
 
 #[tokio::test]
-async fn hook_without_crewd_is_silent_except_pre_tool_use_which_denies() {
+async fn hook_without_crewd_is_silent() {
     let empty = tempfile::tempdir().unwrap();
     let tf = empty.path().join("token");
     std::fs::write(&tf, TOKEN).unwrap();
     for ev in ["post-tool-use", "stop"] {
         let (out, err, took) = run_hook(empty.path(), ev, &[], &tf, "{}").await;
         assert_eq!(out, "", "{ev}");
-        assert!(!err.is_empty(), "{ev}: 失败要写 stderr");
-        assert!(took < Duration::from_secs(6), "{ev}: {took:?}");
+        assert!(
+            err.contains("cannot connect"),
+            "{ev}: stderr names the failed connect: {err}"
+        );
+        assert!(
+            !err.contains("no answer within"),
+            "{ev}: it failed fast, not by deadline: {err}"
+        );
+        assert!(took < CEILING, "{ev}: {took:?}");
     }
-    let (out, _, _) = run_hook(
-        empty.path(),
-        "pre-tool-use",
-        &[],
-        &tf,
-        "{\"tool_name\":\"x\"}",
-    )
-    .await;
-    let v: Value = serde_json::from_str(out.trim()).unwrap();
-    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 
 #[tokio::test]
-async fn crewd_gone_during_wait_means_deny() {
-    // Review Focus 3: serve goes away in the middle of the approval gate -> the helper denies at
-    // once instead of waiting for claude's timeout (which would let the call through).
+async fn crewd_gone_during_a_hook_is_silent() {
+    // serve goes away in the middle of the request -> the helper notices the closed connection
+    // (stderr says so) and stays silent; it does not sit on the deadline timer.
     let f = FakeServe::start(Mode::DropOnHook).await;
-    let (out, _, took) = run_hook(
+    let (out, err, took) = run_hook(
         f.data_dir(),
-        "pre-tool-use",
+        "post-tool-use",
         &[],
         &f.token_file(),
         "{\"tool_name\":\"x\"}",
     )
     .await;
-    assert!(out.contains("\"deny\""), "{out}");
-    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert_eq!(out, "");
+    assert!(
+        err.contains("closed"),
+        "stderr names the closed connection: {err}"
+    );
+    assert!(!err.contains("no answer within"), "{err}");
+    assert!(took < CEILING, "{took:?}");
 }
 
 #[tokio::test]
-async fn hook_gives_up_quickly_when_crewd_hangs() {
-    // Review Focus 1
+async fn hook_gives_up_when_crewd_hangs() {
+    // Review Focus 1: the helper's own deadline ends it (stderr says so); claude's 15 s never matters.
     let f = FakeServe::start(Mode::Hang).await;
-    let (out, _, took) = run_hook(f.data_dir(), "post-tool-use", &[], &f.token_file(), "{}").await;
-    assert_eq!(out, "");
-    assert!(took < Duration::from_secs(7), "{took:?}");
-    let (out, _, took) = run_hook(f.data_dir(), "pre-tool-use", &[], &f.token_file(), "{}").await;
-    assert!(
-        out.contains("\"deny\""),
-        "到 helper 自己的期限（5s）就 deny：{out}"
-    );
-    assert!(took < Duration::from_secs(7), "{took:?}");
+    for ev in ["post-tool-use", "stop"] {
+        let (out, err, took) = run_hook(f.data_dir(), ev, &[], &f.token_file(), "{}").await;
+        assert_eq!(out, "", "{ev}");
+        assert!(err.contains("no answer within"), "{ev}: {err}");
+        assert!(took < CEILING, "{ev}: {took:?}");
+    }
 }
 
 #[tokio::test]
@@ -364,18 +358,6 @@ async fn bad_stdin_or_unknown_event_never_prints_garbage() {
     .await;
     assert_eq!(out, "");
     assert!(!err.is_empty());
-    let (out, _, _) = run_hook(
-        f.data_dir(),
-        "pre-tool-use",
-        &[],
-        &f.token_file(),
-        "not json",
-    )
-    .await;
-    assert!(
-        out.contains("\"deny\""),
-        "看不懂的 PreToolUse 输入：保守 deny"
-    );
     let (out, err, _) = run_hook(
         f.data_dir(),
         "user-prompt-submit",
@@ -389,32 +371,64 @@ async fn bad_stdin_or_unknown_event_never_prints_garbage() {
 }
 
 #[tokio::test]
-async fn hook_with_stdin_held_open_still_answers_within_its_deadline() {
-    // claude 没关 stdin（或卡住）：读 stdin 也算在 5s 期限里，命中闸的 pre-tool-use 照样 deny、进程照样退出。
+async fn obsolete_pre_tool_use_event_is_silent_and_exits_zero() {
+    // B16: PendingCrew no longer registers a PreToolUse hook. A settings file written by an older
+    // build may still call `crewd hook pre-tool-use`; that must be a silent no-op (exit 0, no
+    // stdout), never an error, never a call to serve, never a deny.
     let f = FakeServe::start(Mode::Normal).await;
-    for (ev, denies) in [("pre-tool-use", true), ("post-tool-use", false)] {
-        let started = Instant::now();
+    let (out, err, _) = run_hook(
+        f.data_dir(),
+        "pre-tool-use",
+        &[],
+        &f.token_file(),
+        "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"mcp__computer-use__click\"}",
+    )
+    .await;
+    assert_eq!(out, "");
+    assert!(err.contains("unknown event"), "{err}");
+    assert!(
+        !err.contains("unexpected event"),
+        "it must not reach serve: {err}"
+    );
+    // Not even a reachable serve is needed.
+    let empty = tempfile::tempdir().unwrap();
+    let (out, err, _) = run_hook(
+        empty.path(),
+        "pre-tool-use",
+        &[],
+        &empty.path().join("none"),
+        "{}",
+    )
+    .await;
+    assert_eq!(out, "");
+    assert!(
+        err.contains("unknown event") && !err.contains("cannot connect"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn hook_with_stdin_held_open_still_ends_by_its_deadline() {
+    // claude did not close stdin (or is stuck): reading stdin is inside the 5 s deadline, so the
+    // hook ends, silent, and says why on stderr.
+    let f = FakeServe::start(Mode::Normal).await;
+    for ev in ["post-tool-use", "stop"] {
         let mut child = crewd(f.data_dir(), &["hook", ev], &f.token_file())
             .spawn()
             .unwrap();
         let _held = child.stdin.take().unwrap();
         let mut stdout = child.stdout.take().unwrap();
-        let status = tokio::time::timeout(Duration::from_secs(20), child.wait())
+        let mut stderr = child.stderr.take().unwrap();
+        let status = tokio::time::timeout(CEILING, child.wait())
             .await
-            .expect("stdin 不关也不该挂住")
+            .expect("stdin not closed must not hang the hook")
             .unwrap();
         assert!(status.success(), "{ev}: hook 永远 exit 0");
-        let mut out = String::new();
+        let (mut out, mut err) = (String::new(), String::new());
         stdout.read_to_string(&mut out).await.unwrap();
-        assert_eq!(out.contains("\"deny\""), denies, "{ev}: {out}");
-        if !denies {
-            assert_eq!(out, "", "{ev}");
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(7),
-            "{ev}: {:?}",
-            started.elapsed()
-        );
+        stderr.read_to_string(&mut err).await.unwrap();
+        assert_eq!(out, "", "{ev}");
+        assert!(err.contains("stdin not closed within"), "{ev}: {err}");
     }
 }
 
@@ -512,93 +526,67 @@ async fn run_raw(
     )
 }
 
-fn is_deny(out: &str) -> bool {
-    serde_json::from_str::<Value>(out.trim()).is_ok_and(|v| {
-        v["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-            && v["hookSpecificOutput"]["permissionDecision"] == "deny"
-    })
-}
-
 #[tokio::test]
-async fn hook_argv_errors_exit_zero_and_only_pre_tool_use_denies() {
-    // exit 2 对 Stop 是「挡住」、对 PostToolUse 是把 stderr 喂回给模型；命令行错一律 exit 0。
+async fn hook_argv_errors_exit_zero_and_print_nothing() {
+    // exit 2 对 Stop 是「挡住」、对 PostToolUse 是把 stderr 喂回给模型；命令行错一律 exit 0、不打 stdout。
     let f = FakeServe::start(Mode::Normal).await;
     let d = f.data_dir().as_os_str().to_owned();
     let t = f.token_file().into_os_string();
     let o = |s: &'static str| std::ffi::OsStr::new(s);
-    let cases: Vec<(Vec<&std::ffi::OsStr>, bool)> = vec![
-        (
-            vec![
-                o("hook"),
-                o("pre-tool-use"),
-                o("--data-dir"),
-                &d,
-                o("--session"),
-                o(SESSION),
-                o("--token-file"),
-                &t,
-                o("--bogus"),
-            ],
-            true,
-        ),
-        (
-            vec![
-                o("hook"),
-                o("pre-tool-use"),
-                o("--data-dir"),
-                &d,
-                o("--session"),
-                o(SESSION),
-            ],
-            true,
-        ),
-        (
-            vec![
-                o("--data-dir"),
-                &d,
-                o("hook"),
-                o("--bogus"),
-                o("pre-tool-use"),
-                o("--session"),
-                o(SESSION),
-            ],
-            true,
-        ),
-        (
-            vec![
-                o("hook"),
-                o("post-tool-use"),
-                o("--data-dir"),
-                &d,
-                o("--session"),
-                o(SESSION),
-                o("--token-file"),
-                &t,
-                o("--bogus"),
-            ],
-            false,
-        ),
-        (
-            vec![
-                o("hook"),
-                o("stop"),
-                o("--data-dir"),
-                &d,
-                o("--session"),
-                o(SESSION),
-            ],
-            false,
-        ),
-        (vec![o("hook")], false),
+    let cases: Vec<Vec<&std::ffi::OsStr>> = vec![
+        vec![
+            o("hook"),
+            o("pre-tool-use"),
+            o("--data-dir"),
+            &d,
+            o("--session"),
+            o(SESSION),
+            o("--token-file"),
+            &t,
+            o("--bogus"),
+        ],
+        vec![
+            o("hook"),
+            o("pre-tool-use"),
+            o("--data-dir"),
+            &d,
+            o("--session"),
+            o(SESSION),
+        ],
+        vec![
+            o("--data-dir"),
+            &d,
+            o("hook"),
+            o("--bogus"),
+            o("pre-tool-use"),
+            o("--session"),
+            o(SESSION),
+        ],
+        vec![
+            o("hook"),
+            o("post-tool-use"),
+            o("--data-dir"),
+            &d,
+            o("--session"),
+            o(SESSION),
+            o("--token-file"),
+            &t,
+            o("--bogus"),
+        ],
+        vec![
+            o("hook"),
+            o("stop"),
+            o("--data-dir"),
+            &d,
+            o("--session"),
+            o(SESSION),
+        ],
+        vec![o("hook")],
     ];
-    for (args, denies) in cases {
+    for args in cases {
         let (ok, out, err, _) = run_raw(&args, &[], "{\"tool_name\":\"x\"}").await;
         assert!(ok, "{args:?}: hook 永远 exit 0 ({err})");
-        if denies {
-            assert!(is_deny(&out), "{args:?}: {out}");
-        } else {
-            assert_eq!(out, "", "{args:?}");
-        }
+        assert_eq!(out, "", "{args:?}");
     }
 }
 
@@ -612,30 +600,21 @@ async fn token_file_that_never_opens_is_inside_the_deadline() {
         .status()
         .unwrap();
     assert!(st.success());
-    for (ev, denies) in [
-        ("pre-tool-use", true),
-        ("post-tool-use", false),
-        ("stop", false),
-    ] {
-        let (out, _, took) = run_hook(f.data_dir(), ev, &[], &fifo, "{\"tool_name\":\"x\"}").await;
-        assert_eq!(is_deny(&out), denies, "{ev}: {out}");
-        if !denies {
-            assert_eq!(out, "", "{ev}");
-        }
-        assert!(took < Duration::from_secs(7), "{ev}: {took:?}");
+    for ev in ["post-tool-use", "stop"] {
+        let (out, err, took) =
+            run_hook(f.data_dir(), ev, &[], &fifo, "{\"tool_name\":\"x\"}").await;
+        assert_eq!(out, "", "{ev}");
+        assert!(err.contains("no answer within"), "{ev}: {err}");
+        assert!(took < CEILING, "{ev}: {took:?}");
     }
 }
 
 #[tokio::test]
-async fn a_panic_fails_closed_for_pre_tool_use_and_silent_for_the_others() {
+async fn a_panic_exits_zero_and_stays_silent() {
     // 注入的 panic 只在 debug 构建里存在（`CREWD_TEST_HOOK_PANIC`，见 hook_cmd）。
     let f = FakeServe::start(Mode::Normal).await;
     let env = [("CREWD_TEST_HOOK_PANIC", "1")];
-    for (ev, denies) in [
-        ("pre-tool-use", true),
-        ("post-tool-use", false),
-        ("stop", false),
-    ] {
+    for ev in ["post-tool-use", "stop"] {
         let d = f.data_dir().as_os_str().to_owned();
         let t = f.token_file().into_os_string();
         let o = std::ffi::OsStr::new;
@@ -652,10 +631,7 @@ async fn a_panic_fails_closed_for_pre_tool_use_and_silent_for_the_others() {
         let (ok, out, err, _) = run_raw(&args, &env, "{\"tool_name\":\"x\"}").await;
         assert!(ok, "{ev}: panic 也 exit 0 ({err})");
         assert!(err.contains("panic"), "{ev}: panic 写 stderr：{err}");
-        assert_eq!(is_deny(&out), denies, "{ev}: {out}");
-        if !denies {
-            assert_eq!(out, "", "{ev}");
-        }
+        assert_eq!(out, "", "{ev}");
     }
 }
 

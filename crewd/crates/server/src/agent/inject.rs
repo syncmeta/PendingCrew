@@ -599,7 +599,6 @@ mod tests {
         // only past it; the omitted ones are delivered by the next calls, never marked read.
         let f = Fixture::with_config(AgentConfig {
             inject_cap_chars: 2_000,
-            ..AgentConfig::default()
         })
         .await;
         let l = lobby(&f).await;
@@ -635,7 +634,6 @@ mod tests {
     async fn trimming_across_channels_never_skips_a_message() {
         let f = Fixture::with_config(AgentConfig {
             inject_cap_chars: 1_500,
-            ..AgentConfig::default()
         })
         .await;
         let cap = f.me(&f.captain).await;
@@ -681,7 +679,6 @@ mod tests {
     async fn one_message_longer_than_the_cap_is_cut_not_stuck() {
         let f = Fixture::with_config(AgentConfig {
             inject_cap_chars: 2_000,
-            ..AgentConfig::default()
         })
         .await;
         let l = lobby(&f).await;
@@ -793,7 +790,6 @@ mod tests {
         // Claude Code's limit is a JS string length: an astral character is two units.
         let f = Fixture::with_config(AgentConfig {
             inject_cap_chars: 2_000,
-            ..AgentConfig::default()
         })
         .await;
         let l = lobby(&f).await;
@@ -810,7 +806,6 @@ mod tests {
     async fn a_full_window_says_at_least() {
         let f = Fixture::with_config(AgentConfig {
             inject_cap_chars: 3_000,
-            ..AgentConfig::default()
         })
         .await;
         let l = lobby(&f).await;

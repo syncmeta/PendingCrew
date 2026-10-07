@@ -1280,7 +1280,6 @@
     "HookKind": {
       "enum": [
         "post-tool-use",
-        "pre-tool-use",
         "stop"
       ],
       "type": "string"
