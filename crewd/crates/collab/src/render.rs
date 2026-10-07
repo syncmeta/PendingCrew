@@ -91,6 +91,14 @@ impl WakeBatch {
     }
 }
 
+/// 唤醒正文里消息部分的字节预算（S45）：每个群取窗口里最旧的一段，渲染出的行加起来不超过它；超出的那段留到下一批
+/// （游标只推到实际带上的最后一条，被叫的行进 `deferred`）。整个消息部分至少带一条：单独一条就超预算时只带它的开头
+/// （[`WAKE_MESSAGE_HEAD_BYTES`]）加一行「去读全文」的提示。M3b 的注入上限另有一个数（合一个常量 → M3i-a）。
+pub const WAKE_MESSAGES_MAX_BYTES: usize = 9000;
+
+/// 一条超预算的消息只带开头这么多字节（按字符边界往前收）。
+pub const WAKE_MESSAGE_HEAD_BYTES: usize = 4000;
+
 /// 队列行 source 的前缀（拼法见 `wakes::source`）。
 const SRC_MESSAGE: &str = "msg:";
 const SRC_ASK: &str = "ask:";
@@ -440,17 +448,20 @@ fn batch_window(
 /// 问已撤回或还没答，被叫的消息对它不可投递（它自己发的，与 `unread_for` 同一判据），以及消息所在的群它此刻
 /// 已经不在了（`channels::channels_of_session`，注入只认成员资格；收听的群照投）。
 /// 库出错原样上抛（不当成 unusable，免得一次瞬时错误把唤醒永久丢掉）。语言由调用方给（发送者标签用它）。
+/// `now_ms` 由调用方给（collab 不读时钟）：收听的群只在收听还没过期（`until` 为空或晚于它）时照投（§26.5）。
 ///
 /// 消息项里每个群带「它的游标之后、到批里最大 seq 为止」别人发的全部消息（不止叫它的那几条）：M3c 投递成功后
 /// 按 `cursor_targets` 推游标，中间没叫它的消息就随这次唤醒告知过了，不会被越过而丢（M3c 计划 spec 问题 12）。
 /// 窗口规则同 `cursors::unread_for`（R6）：一个群一批最多带最旧的 `UNREAD_CAP` 条；被叫的消息落在窗口之外的
 /// 那些行进 `deferred`（留在队列里，下一批带）。游标远远落后时，窗口可能整段都是比被叫消息更旧的未读——
 /// 这时消息项的 `wake_ids` 可以是空的，它仍要投（投完游标前进，下一批就轮到被叫的那几条）。
+/// 窗口再按字节预算收一次（[`WAKE_MESSAGES_MAX_BYTES`]，S45）：只带最旧的一段，被叫的行落在这段之后的同样进 `deferred`。
 pub fn build_batch(
     conn: &Connection,
     session: &str,
     l: Locale,
     rows: &[WakeRow],
+    now_ms: i64,
 ) -> Result<WakeBatch> {
     let mut items: Vec<WakeItem> = Vec::new();
     let mut unusable = Vec::new();
@@ -493,7 +504,7 @@ pub fn build_batch(
                             .as_ref()
                             .expect("set above")
                             .contains(&m.channel_id)
-                            || channels::has_listen_row(conn, &m.channel_id, session)?;
+                            || channels::has_listen_row(conn, &m.channel_id, session, now_ms)?;
                         deliverable.push((m.channel_id.clone(), ok));
                         ok
                     }
@@ -615,6 +626,12 @@ pub fn build_batch(
             ends.push((ch.clone(), end));
             msgs.push((ch, window));
         }
+        let mut blocks = blocks_for(conn, session, l, &msgs)?;
+        for (ch, last) in fit_budget(l, &mut blocks) {
+            if let Some(e) = ends.iter_mut().find(|(c, _)| *c == ch) {
+                e.1 = last;
+            }
+        }
         for (row, ch, seq) in &queued {
             let end = ends
                 .iter()
@@ -627,7 +644,7 @@ pub fn build_batch(
                 deferred.push(*row);
             }
         }
-        items[i].body = WakeBody::Messages(blocks_for(conn, session, l, &msgs)?);
+        items[i].body = WakeBody::Messages(blocks);
     }
     Ok(WakeBatch {
         session_id: session.into(),
@@ -637,12 +654,73 @@ pub fn build_batch(
     })
 }
 
+/// 一行渲染出来多少字节：同一个群头下一行与零行的差（行的格式只在 `block_text` 一处）。
+fn line_bytes(l: Locale, shell: &ChannelBlock, ln: &MsgLine) -> usize {
+    let one = ChannelBlock {
+        lines: vec![ln.clone()],
+        ..shell.clone()
+    };
+    block_text(l, &one)
+        .len()
+        .saturating_sub(block_text(l, shell).len())
+}
+
+/// S45：按 [`WAKE_MESSAGES_MAX_BYTES`] 收窄各群的窗口（群按出现先后共用一份预算），每个群只留最旧的一段。
+/// 整个消息部分的第一条总要带上：它单独就超预算时只留开头 + 提示行（`wake.message.truncated`）。
+/// 被收窄的群返回 (群, 留下的最后一个 seq；一条都没留 = 0)，留空的群从 `blocks` 里拿掉。
+fn fit_budget(l: Locale, blocks: &mut Vec<ChannelBlock>) -> Vec<(String, i64)> {
+    let mut used = 0usize;
+    let mut cut = Vec::new();
+    for b in blocks.iter_mut() {
+        let shell = ChannelBlock {
+            channel_id: b.channel_id.clone(),
+            kind: b.kind,
+            name: b.name.clone(),
+            crew_title: b.crew_title.clone(),
+            lines: Vec::new(),
+        };
+        let mut kept = 0;
+        while kept < b.lines.len() {
+            let n = line_bytes(l, &shell, &b.lines[kept]);
+            if used + n <= WAKE_MESSAGES_MAX_BYTES {
+                used += n;
+                kept += 1;
+                continue;
+            }
+            if used == 0 {
+                let ln = &mut b.lines[kept];
+                let mut head = WAKE_MESSAGE_HEAD_BYTES.min(ln.text.len());
+                while !ln.text.is_char_boundary(head) {
+                    head -= 1;
+                }
+                let hint = fill(
+                    render_file(l).get("wake.message.truncated"),
+                    &[("seq", &ln.seq.to_string())],
+                );
+                ln.text = format!("{}\n{hint}", &ln.text[..head]);
+                used += line_bytes(l, &shell, ln);
+                kept += 1;
+            }
+            break;
+        }
+        if kept < b.lines.len() {
+            b.lines.truncate(kept);
+            cut.push((
+                b.channel_id.clone(),
+                b.lines.last().map(|ln| ln.seq).unwrap_or(0),
+            ));
+        }
+    }
+    blocks.retain(|b| !b.lines.is_empty());
+    cut
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Sender;
     use crate::messages::{NewPost, post};
-    use crate::testkit::{NOW, msg, ok, store};
+    use crate::testkit::{MIN, NOW, msg, ok, store};
     use crate::wakes::{Enqueued, WakePriority, WakeRequest, enqueue, list};
     use crewd_proto::{Mention, MentionKind};
 
@@ -782,7 +860,7 @@ mod tests {
             r
         });
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let batch = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
+        let batch = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
         assert_eq!(batch.unusable.len(), 1, "消息不存在的那一行");
         let kinds: Vec<WakeKind> = batch.items.iter().map(|i| i.kind).collect();
         assert_eq!(
@@ -947,7 +1025,7 @@ mod tests {
         );
         let row = wake_msg(&mut s, "w-a1", "q");
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let batch = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
+        let batch = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
         assert_eq!(
             line_seqs(&batch),
             [v1, v2, q],
@@ -958,8 +1036,9 @@ mod tests {
         assert_eq!(batch.cursor_targets(), [("crew-a/lobby".to_string(), q)]);
     }
 
-    /// R6：批与 `unread_for` 同一条窗口规则——取最旧的 `UNREAD_CAP` 条；窗口之外的消息行留在队列里
-    /// （`deferred`），M3c 把游标推到这批实际带上的最大 seq 之后，下一批紧接着开始，一条不丢、一条不重。
+    /// R6：批与 `unread_for` 同一条窗口规则——取最旧的一段（至多 `UNREAD_CAP` 条，S45 起再受字节预算约束，
+    /// 250 条短消息的渲染超过预算，所以这里收窄的是预算）；窗口之外的消息行留在队列里（`deferred`），M3c 把游标推到
+    /// 这批实际带上的最大 seq 之后，下一批紧接着开始，一条不丢、一条不重。
     #[test]
     fn build_batch_takes_the_oldest_window_and_defers_rows_beyond_it() {
         let mut s = store();
@@ -977,24 +1056,44 @@ mod tests {
         let early = wake_msg(&mut s, "w-a1", "m9");
         let late = wake_msg(&mut s, "w-a1", "m249");
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let b1 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
-        assert_eq!(line_seqs(&b1), seqs[..200], "最旧的 200 条");
+        let b1 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+        let k = line_seqs(&b1).len();
+        assert!(k > 10 && k < 200, "预算收窄了窗口：{k}");
+        assert_eq!(line_seqs(&b1), seqs[..k], "最旧的一段");
         assert_eq!(b1.items[0].wake_ids, [early], "窗口里的那一行随这批投");
         assert_eq!(b1.deferred, [late], "窗口外的那一行留到下一批");
         assert!(b1.unusable.is_empty());
         assert_eq!(
             b1.cursor_targets(),
-            [("crew-a/lobby".to_string(), seqs[199])]
+            [("crew-a/lobby".to_string(), seqs[k - 1])]
         );
         ok(&mut s, |tx| {
             crate::wakes::mark_delivered(tx, &b1.items[0].wake_ids)?;
-            crate::cursors::advance(tx, "w-a1", "crew-a/lobby", seqs[199])
+            crate::cursors::advance(tx, "w-a1", "crew-a/lobby", seqs[k - 1])
         });
-        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let b2 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
-        assert_eq!(line_seqs(&b2), seqs[200..], "下一批从紧接着的那条开始");
-        assert_eq!(b2.items[0].wake_ids, [late]);
-        assert!(b2.deferred.is_empty());
+        // 之后每一批都从紧接着的那条开始，直到 late 那一行随批投出：一条不丢、一条不重。
+        let mut seen: Vec<i64> = line_seqs(&b1);
+        loop {
+            let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+            let b = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+            let got = line_seqs(&b);
+            assert_eq!(
+                got,
+                seqs[seen.len()..seen.len() + got.len()],
+                "紧接着上一批"
+            );
+            seen.extend(&got);
+            let top = *got.last().expect("每批至少一条");
+            ok(&mut s, |tx| {
+                crate::cursors::advance(tx, "w-a1", "crew-a/lobby", top)
+            });
+            if b.items[0].wake_ids == [late] {
+                assert!(b.deferred.is_empty());
+                break;
+            }
+            assert_eq!(b.deferred, [late]);
+        }
+        assert_eq!(seen, seqs, "全部恰好带了一次");
     }
 
     // ---- 第一轮评审修复（Task 11 review）的测试 ----
@@ -1059,7 +1158,7 @@ mod tests {
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
         let wake = wake_text(
             Locale::Zh,
-            &build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap(),
+            &build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap(),
         );
         assert_eq!(frame_lines(&wake).len(), 2, "{wake}");
     }
@@ -1190,7 +1289,7 @@ mod tests {
         });
 
         let rows = crate::wakes::due_for(s.conn(), "cap-x", NOW).unwrap();
-        let b = build_batch(s.conn(), "cap-x", Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), "cap-x", Locale::Zh, &rows, NOW).unwrap();
         assert_eq!(b.items.len(), 1, "{b:?}");
         assert_eq!(b.items[0].wake_ids, [r_lobby]);
         assert_eq!(line_seqs(&b), [in_lobby.seq], "被移出的群一行都不带");
@@ -1203,7 +1302,7 @@ mod tests {
         );
 
         let rows = crate::wakes::due_for(s.conn(), "w-b1", NOW).unwrap();
-        let b = build_batch(s.conn(), "w-b1", Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), "w-b1", Locale::Zh, &rows, NOW).unwrap();
         assert!(b.items.is_empty(), "{b:?}");
         assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
         assert_eq!(b.unusable[0].0, r_human, "旧 home 的人类群不再投");
@@ -1248,7 +1347,7 @@ mod tests {
             "仍读得到"
         );
         let rows = crate::wakes::due_for(s.conn(), "w-a2", NOW).unwrap();
-        let b = build_batch(s.conn(), "w-a2", Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), "w-a2", Locale::Zh, &rows, NOW).unwrap();
         assert!(b.items.is_empty(), "{b:?}");
         assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
         assert_eq!(b.unusable[0].0, r);
@@ -1286,7 +1385,7 @@ mod tests {
         let r_own = wake_msg(&mut s, &chief_cap, &own.id);
         assert!(crate::channels::readable_by(s.conn(), "crew-x/lobby", &chief_cap).unwrap());
         let rows = crate::wakes::due_for(s.conn(), &chief_cap, NOW).unwrap();
-        let b = build_batch(s.conn(), &chief_cap, Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), &chief_cap, Locale::Zh, &rows, NOW).unwrap();
         assert_eq!(b.items.len(), 1, "{b:?}");
         assert_eq!(b.items[0].wake_ids, [r_own]);
         assert_eq!(line_seqs(&b), [own.seq]);
@@ -1319,10 +1418,132 @@ mod tests {
         );
         let r = wake_msg(&mut s, &o, &m.id);
         let rows = crate::wakes::due_for(s.conn(), &o, NOW).unwrap();
-        let b = build_batch(s.conn(), &o, Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), &o, Locale::Zh, &rows, NOW).unwrap();
         assert!(b.unusable.is_empty(), "{:?}", b.unusable);
         assert_eq!(b.items[0].wake_ids, [r]);
         assert_eq!(line_seqs(&b), [m.seq]);
+    }
+
+    /// §26.5：收听的 `until` 由调用方给的 `now_ms` 判——收听过期之后，排着的行不投（unusable）；没过期照投。
+    #[test]
+    fn queued_rows_from_an_expired_listen_are_unusable() {
+        let mut s = store();
+        let o = crate::testkit::org_worker(&mut s);
+        ok(&mut s, |tx| {
+            crate::listens::set(tx, &o, "crew-b/lobby", Some(NOW + 10 * MIN), vec![])
+        });
+        let m = say(
+            &mut s,
+            Sender::Human,
+            "crew-b/lobby",
+            "示例消息",
+            vec![],
+            None,
+        );
+        let r = wake_msg(&mut s, &o, &m.id);
+        let rows = crate::wakes::due_for(s.conn(), &o, NOW).unwrap();
+        let live = build_batch(s.conn(), &o, Locale::Zh, &rows, NOW + 10 * MIN - 1).unwrap();
+        assert_eq!(live.items[0].wake_ids, [r], "收听还有效：照投");
+        let gone = build_batch(s.conn(), &o, Locale::Zh, &rows, NOW + 10 * MIN).unwrap();
+        assert!(gone.items.is_empty(), "{gone:?}");
+        assert_eq!(gone.unusable.len(), 1, "{:?}", gone.unusable);
+        assert_eq!(gone.unusable[0].0, r, "收听已过期：不投");
+    }
+
+    /// S45：300 条长消息 → 消息部分不超预算；游标停在实际带上的最后一条，被叫的后面那一行留到下一批，
+    /// 下一批紧接着开始。
+    #[test]
+    fn a_long_backlog_is_cut_to_the_byte_budget_and_continues_in_the_next_batch() {
+        let mut s = store();
+        let long = "合成长文".repeat(40); // 480 字节
+        let mut seqs = Vec::new();
+        for i in 0..300 {
+            let m = say(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                "crew-a/lobby",
+                &format!("{i} {long}"),
+                vec![],
+                None,
+            );
+            seqs.push((m.id, m.seq));
+        }
+        let first = wake_msg(&mut s, "w-a1", &seqs[0].0);
+        let last = wake_msg(&mut s, "w-a1", &seqs[299].0);
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        let b1 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+        let text = wake_text(Locale::Zh, &b1);
+        assert!(
+            text.len() <= WAKE_MESSAGES_MAX_BYTES + 200,
+            "消息部分受预算约束：{} 字节",
+            text.len()
+        );
+        let got = line_seqs(&b1);
+        let k = got.len();
+        assert!(k > 1 && k < 30, "{k}");
+        let all: Vec<i64> = seqs.iter().map(|(_, q)| *q).collect();
+        assert_eq!(got, all[..k], "最旧的一段");
+        assert_eq!(b1.items[0].wake_ids, [first]);
+        assert_eq!(b1.deferred, [last], "预算之外的被叫行留到下一批");
+        assert_eq!(
+            b1.cursor_targets(),
+            [("crew-a/lobby".to_string(), all[k - 1])],
+            "游标停在实际带上的最后一条"
+        );
+        ok(&mut s, |tx| {
+            crate::wakes::mark_delivered(tx, &[first])?;
+            crate::cursors::advance(tx, "w-a1", "crew-a/lobby", all[k - 1])
+        });
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        let b2 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+        assert_eq!(line_seqs(&b2)[0], all[k], "下一批紧接着开始");
+        assert_eq!(b2.deferred, [last]);
+    }
+
+    /// S45：单独一条就超预算（50 KB）→ 只带开头 + 「去读全文 #seq」的提示；游标越过它（下一批不重带）。
+    #[test]
+    fn a_single_huge_message_is_cut_to_its_head_with_a_hint_and_the_cursor_passes_it() {
+        let mut s = store();
+        let huge = "x".repeat(50_000);
+        let m = say(
+            &mut s,
+            Sender::Session("w-a2".into()),
+            "crew-a/lobby",
+            &huge,
+            vec![],
+            None,
+        );
+        let after = say(
+            &mut s,
+            Sender::Session("w-a2".into()),
+            "crew-a/lobby",
+            "后面一条",
+            vec![],
+            None,
+        );
+        let r = wake_msg(&mut s, "w-a1", &m.id);
+        let r2 = wake_msg(&mut s, "w-a1", &after.id);
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        for l in [Locale::Zh, Locale::En] {
+            let b = build_batch(s.conn(), "w-a1", l, &rows, NOW).unwrap();
+            assert_eq!(line_seqs(&b), [m.seq], "只带这一条");
+            assert_eq!(b.items[0].wake_ids, [r]);
+            assert_eq!(b.deferred, [r2]);
+            assert_eq!(
+                b.cursor_targets(),
+                [("crew-a/lobby".to_string(), m.seq)],
+                "游标越过它"
+            );
+            let text = wake_text(l, &b);
+            assert!(text.len() < WAKE_MESSAGES_MAX_BYTES, "{}", text.len());
+            let hint = fill(
+                render_file(l).get("wake.message.truncated"),
+                &[("seq", &m.seq.to_string())],
+            );
+            assert!(text.contains(&hint), "{text}");
+            assert!(text.contains(&"x".repeat(WAKE_MESSAGE_HEAD_BYTES)));
+            assert!(!text.contains(&"x".repeat(WAKE_MESSAGE_HEAD_BYTES + 1)));
+        }
     }
 
     /// 终审 I4：收听只在读得到时算数。入队之后失去读权（crew-b 挪到顶层，crew-a 的人类群不再是 w-b1 的 home）
@@ -1350,7 +1571,7 @@ mod tests {
         });
         assert!(!crate::channels::readable_by(s.conn(), "crew-a/human", "w-b1").unwrap());
         let rows = crate::wakes::due_for(s.conn(), "w-b1", NOW).unwrap();
-        let b = build_batch(s.conn(), "w-b1", Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), "w-b1", Locale::Zh, &rows, NOW).unwrap();
         assert!(b.items.is_empty(), "{b:?}");
         assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
         assert_eq!(b.unusable[0].0, r);
@@ -1375,7 +1596,7 @@ mod tests {
             )
             .unwrap();
         let rows = crate::wakes::due_for(s.conn(), &o, NOW).unwrap();
-        let b = build_batch(s.conn(), &o, Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), &o, Locale::Zh, &rows, NOW).unwrap();
         assert!(b.items.is_empty(), "{b:?}");
         assert_eq!(b.unusable.len(), 1, "{:?}", b.unusable);
         assert_eq!(b.unusable[0].0, r2, "归档的群上的收听不算");
@@ -1408,7 +1629,7 @@ mod tests {
         let r_to_cap = wake_msg(&mut s, "w-a1", &to_cap.id);
         let r_own = wake_msg(&mut s, "w-a1", &own.id);
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let b = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
         assert_eq!(b.items.len(), 1, "{b:?}");
         assert_eq!(b.items[0].wake_ids, [r_to_cap]);
         assert_eq!(line_seqs(&b), [to_cap.seq]);
@@ -1461,7 +1682,7 @@ mod tests {
             "approval:ap-nope".to_string(),
         );
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let b = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
+        let b = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
         assert!(b.items.is_empty());
         assert_eq!(b.unusable.len(), 4, "{:?}", b.unusable);
         assert!(b.unusable[0].1.contains("withdrawn"), "{:?}", b.unusable);
@@ -1489,7 +1710,7 @@ mod tests {
             .cloned()
             .collect();
         assert!(matches!(
-            build_batch(s.conn(), "w-a1", Locale::Zh, &ask_row),
+            build_batch(s.conn(), "w-a1", Locale::Zh, &ask_row, NOW),
             Err(crate::CollabError::Store(_))
         ));
     }
@@ -1660,24 +1881,37 @@ mod tests {
         }
         let row = wake_msg(&mut s, "w-a1", "b249");
         let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let b1 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
+        let b1 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
         assert_eq!(b1.items.len(), 1);
         assert!(b1.items[0].wake_ids.is_empty(), "第一批只有积压");
         assert_eq!(b1.deferred, [row]);
-        assert_eq!(line_seqs(&b1), seqs[..200]);
+        let k = line_seqs(&b1).len();
+        assert_eq!(line_seqs(&b1), seqs[..k]);
         let targets = b1.cursor_targets();
-        assert_eq!(targets, [("crew-a/lobby".to_string(), seqs[199])]);
-        ok(&mut s, |tx| {
-            for (ch, seq) in &targets {
-                crate::cursors::advance(tx, "w-a1", ch, *seq)?;
+        assert_eq!(targets, [("crew-a/lobby".to_string(), seqs[k - 1])]);
+        // 推到 cursor_targets 之后一批接一批，最后一批带上被叫的那一行（S45 预算让中间可能还有几批积压）。
+        let mut seen = line_seqs(&b1);
+        let mut targets = targets;
+        loop {
+            ok(&mut s, |tx| {
+                for (ch, seq) in &targets {
+                    crate::cursors::advance(tx, "w-a1", ch, *seq)?;
+                }
+                Ok(())
+            });
+            let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+            let b = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+            let got = line_seqs(&b);
+            assert_eq!(got, seqs[seen.len()..seen.len() + got.len()]);
+            seen.extend(&got);
+            targets = b.cursor_targets();
+            if b.items[0].wake_ids == [row] {
+                assert!(b.deferred.is_empty());
+                break;
             }
-            Ok(())
-        });
-        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
-        let b2 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows).unwrap();
-        assert_eq!(b2.items[0].wake_ids, [row]);
-        assert!(b2.deferred.is_empty());
-        assert_eq!(line_seqs(&b2), seqs[200..]);
+            assert!(b.items[0].wake_ids.is_empty() && b.deferred == [row]);
+        }
+        assert_eq!(seen, seqs);
     }
 
     /// 终审 I5：session 发言者总带修饰（分机号 / 机长），哪怕它的名字恰好是「人类」，渲染出的行也不会和人类的行同形。

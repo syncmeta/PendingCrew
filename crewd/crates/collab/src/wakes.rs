@@ -594,7 +594,17 @@ pub mod latches {
                 )),
             }
         }
-        fn from_key(scope: &str, id: &str) -> Option<Scope> {
+        /// 台账里的 id（`edge` = `from→to`，`session` = session id）。M3c 的熔断 id 只经这里与 [`Scope::parse`]
+        /// 互转（控制者裁定 C21），不自己拼 / 拆分隔符。
+        pub fn id(&self) -> String {
+            match self {
+                Scope::Edge { from, to } => format!("{from}→{to}"),
+                Scope::Session(s) => s.clone(),
+            }
+        }
+
+        /// `(scope, id)` → `Scope`；认不出（未知的 scope、空段、多个箭头）= None。与 [`Scope::id`] 往返一致。
+        pub fn parse(scope: &str, id: &str) -> Option<Scope> {
             let parsed = match scope {
                 "edge" => id.split_once('→').map(|(f, t)| Scope::Edge {
                     from: f.to_string(),
@@ -667,7 +677,7 @@ pub mod latches {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         raw.into_iter()
             .map(|(s, id, reason, at)| {
-                Scope::from_key(&s, &id)
+                Scope::parse(&s, &id)
                     .map(|scope| Latch { scope, reason, at })
                     .ok_or_else(|| {
                         CollabError::Invalid(
@@ -1363,6 +1373,43 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].scope, edge);
         assert_eq!(all[0].reason, "原因");
+    }
+
+    /// C21：M3c 只经 `Scope::id` / `Scope::parse` 与台账 id 互转（不自己拆分隔符）；两边往返一致，
+    /// 认不出的（未知 scope、没有箭头、多个箭头、空段）= None。session id 里可以有 `-`。
+    #[test]
+    fn scope_id_and_parse_round_trip_and_refuse_what_they_did_not_write() {
+        for sc in [
+            latches::Scope::Edge {
+                from: "w-a1".into(),
+                to: "w-a2".into(),
+            },
+            latches::Scope::Session("w-a1".into()),
+        ] {
+            let kind = match sc {
+                latches::Scope::Edge { .. } => "edge",
+                latches::Scope::Session(_) => "session",
+            };
+            assert_eq!(latches::Scope::parse(kind, &sc.id()), Some(sc.clone()));
+        }
+        assert_eq!(
+            latches::Scope::Edge {
+                from: "a".into(),
+                to: "b".into()
+            }
+            .id(),
+            "a→b"
+        );
+        for (kind, id) in [
+            ("edge", "没有箭头"),
+            ("edge", "a→b→c"),
+            ("edge", "→b"),
+            ("session", ""),
+            ("session", "a→b"),
+            ("other", "a"),
+        ] {
+            assert_eq!(latches::Scope::parse(kind, id), None, "{kind} {id}");
+        }
     }
 
     #[test]

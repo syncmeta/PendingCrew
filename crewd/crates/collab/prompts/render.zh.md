@@ -61,6 +61,9 @@ crewd
 ## wake.message
 群里有需要你看的消息：
 
+## wake.message.truncated
+（这条太长，只带了开头。要看全文，用读群工具读 #{seq}。）
+
 ## wake.timer
 你之前约的提醒到了。
 

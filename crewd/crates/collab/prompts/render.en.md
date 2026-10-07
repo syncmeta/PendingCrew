@@ -61,6 +61,9 @@ You were woken up for the following.
 ## wake.message
 Messages that need your attention:
 
+## wake.message.truncated
+(This message is too long; only its beginning is shown. Read #{seq} in full with the read tool.)
+
 ## wake.timer
 A reminder you scheduled is due.
 

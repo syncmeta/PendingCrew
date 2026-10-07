@@ -267,14 +267,20 @@ pub fn readable_by(conn: &Connection, channel: &str, session: &str) -> Result<bo
     Reader::of(conn, session)?.can_read(conn, &ch.id, &ch.crew_id, ch.kind)
 }
 
-/// 这个 session 有没有**算数**的收听这个群的行（不看截止时间：collab 不读时钟；入队时收听有效就投，见
-/// `render::build_batch`）。其余判据同 `listens::active_for_channel` / `channels_of`（终审 I4 / 终审 6）：
+/// 这个 session 有没有**算数**的收听这个群的行（截止时间由调用方给的 `now_ms` 判：过了就不算，§26.5；
+/// 见 `render::build_batch`）。其余判据同 `listens::active_for_channel` / `channels_of`（终审 I4 / 终审 6）：
 /// 群已归档不算；收听者此刻读不到（设下之后失去读权）不算。
-pub(crate) fn has_listen_row(conn: &Connection, channel: &str, session: &str) -> Result<bool> {
+pub(crate) fn has_listen_row(
+    conn: &Connection,
+    channel: &str,
+    session: &str,
+    now_ms: i64,
+) -> Result<bool> {
     let live_row = conn.query_row(
         "SELECT COUNT(*) FROM listens l JOIN channels ch ON ch.id=l.channel_id
-          WHERE l.session_id=?1 AND l.channel_id=?2 AND ch.archived_at IS NULL",
-        params![session, channel],
+          WHERE l.session_id=?1 AND l.channel_id=?2 AND ch.archived_at IS NULL
+            AND (l.until IS NULL OR l.until>?3)",
+        params![session, channel, now_ms],
         |r| r.get::<_, i64>(0),
     )? > 0;
     Ok(live_row && readable_by(conn, channel, session)?)
