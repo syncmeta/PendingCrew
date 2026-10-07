@@ -555,6 +555,21 @@ impl<P: Port> Core<P> {
                 .await?;
             return Ok(false);
         };
+        if row.crew_removed {
+            // 机组已被移除（§26.5）：不拉起；它若还在等重启答复（C4 的人类 @ 路径）也一并移出名单。这几行作废
+            // （同 collab 移除机组时作废排着的唤醒），不告警、不算「起不来」。
+            if self.held.remove(session) {
+                eprintln!("crewd: 编排：{session} 的机组已被移除，移出待恢复名单、不拉起");
+            }
+            let s = Settle::Dropped {
+                error: "crew removed".into(),
+            };
+            self.due
+                .touch(&self.port)
+                .settle(&ids(&batch), s, now)
+                .await?;
+            return Ok(false);
+        }
         let exec = match self.execs.get(&row.executor) {
             Ok(e) if row.workdir.is_some() => e,
             other => {
@@ -783,9 +798,20 @@ impl<P: Port> Core<P> {
             return Ok(());
         }
         let mut rows = Vec::new();
-        for s in sessions.iter().filter(|s| self.held.contains(*s)) {
-            if let Some(r) = self.port.session(s).await? {
-                rows.push(restart_row(&r));
+        let held: Vec<String> = sessions
+            .iter()
+            .filter(|s| self.held.contains(*s))
+            .cloned()
+            .collect();
+        for s in held {
+            match self.port.session(&s).await? {
+                // 机组已被移除（§26.5）：跳过这一个、移出名单，不让整批失败。
+                Some(r) if r.crew_removed => {
+                    eprintln!("crewd: 编排：{s} 的机组已被移除，不恢复它");
+                    self.held.remove(&s);
+                }
+                Some(r) => rows.push(restart_row(&r)),
+                None => {}
             }
         }
         let ordered = policy::restart_order(rows);

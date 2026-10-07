@@ -253,6 +253,8 @@ pub enum ControlError {
     Invalid(String),
     /// crewd 正在停机：不再起 / 恢复会话。
     ShuttingDown,
+    /// 机组已被移除（归档，只读；spec §26.5 / §26.7）：不起新 session、不恢复它的 session（机组 id）。
+    CrewRemoved(String),
     Internal(String),
 }
 
@@ -283,6 +285,7 @@ impl std::fmt::Display for ControlError {
             Self::NoWorkdir(id) => write!(f, "session {id} 没有可用的工作目录"),
             Self::CaptainTaken(crew) => write!(f, "机组 {crew} 已有机长；换机长用 crew.setCaptain"),
             Self::ShuttingDown => write!(f, "crewd 正在停机，不再起或恢复会话"),
+            Self::CrewRemoved(crew) => write!(f, "机组 {crew} 已被移除，先恢复它再起或恢复会话"),
         }
     }
 }
@@ -484,7 +487,11 @@ impl<P: Port> Core<P> {
         inbox: mpsc::UnboundedSender<Input>,
     ) -> anyhow::Result<Self> {
         let mut cfg = cfg;
-        cfg.lang = port.locale().await?;
+        // 给 agent / 群看的文字的语言 = 设置里的（M3a `settings::locale`）；读不出来才退回配置里的，并记一行。
+        match port.locale().await {
+            Ok(l) => cfg.lang = l,
+            Err(e) => eprintln!("crewd: 编排：读语言设置失败，先用 {:?}：{e:#}", cfg.lang),
+        }
         // 可选并发上限（§22.7 Q5：缺省不设），存在 M3a 的 `collab::settings`。
         let gate = LaunchGate::new(port.max_live().await?, cfg.stagger_ms);
         // M3a 的 `latches::list` 遇到坏 id / 坏行整表回 `Invalid`——fail-loud，但不能让它把编排起不来；也不能悄悄
@@ -744,6 +751,15 @@ impl<P: Port> Core<P> {
         self.execs
             .get(&req.executor)
             .map_err(|e| ControlError::Unsupported(e.to_string()))?;
+        // 已移除的机组只读（§26.7）：什么都不建、不写、不起。
+        if self
+            .port
+            .crew_removed(&req.crew_id)
+            .await
+            .map_err(ControlError::internal)?
+        {
+            return Err(ControlError::CrewRemoved(req.crew_id.clone()));
+        }
         self.check_cap(origin)?;
         // M3a 的 `sessions::register` 对「机组已有机长、又要起一个机长」回 `Conflict`：先查，给一个说得清的错
         // （不然它会在 worktree 建好之后才冒出来，还被包成 Internal）。不建 worktree、不写行、不起进程。
@@ -871,6 +887,9 @@ impl<P: Port> Core<P> {
             .await
             .map_err(ControlError::internal)?
             .ok_or_else(|| ControlError::NotFound(session.into()))?;
+        if row.crew_removed {
+            return Err(ControlError::CrewRemoved(row.crew_id));
+        }
         let exec = self
             .execs
             .get(&row.executor)

@@ -102,6 +102,10 @@ pub struct MemState {
     pub patch_error: Option<String>,
     /// 已被移除（归档）的机组（[`MemPort::remove_crew`]，同 M3a `crews::archive`）。
     pub removed_crews: BTreeSet<String>,
+    /// 语言设置（`Port::locale`）；None = 中文。
+    pub locale: Option<crewd_wake::text::Lang>,
+    /// 设了就让 `locale` 读失败。
+    pub locale_error: Option<String>,
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -670,7 +674,11 @@ impl Port for MemPort {
     }
 
     async fn locale(&self) -> Result<crewd_wake::text::Lang> {
-        Ok(crewd_wake::text::Lang::Zh)
+        let st = self.lock();
+        if let Some(e) = &st.locale_error {
+            anyhow::bail!("{e}");
+        }
+        Ok(st.locale.unwrap_or(crewd_wake::text::Lang::Zh))
     }
 
     async fn open_restart(

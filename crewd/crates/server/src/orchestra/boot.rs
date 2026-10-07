@@ -45,14 +45,15 @@ impl<P: Port> Core<P> {
                 }
             }
         }
-        let rows = policy::restart_order(
-            self.port
-                .sessions_desired_running()
-                .await?
-                .iter()
-                .map(restart_row)
-                .collect(),
-        );
+        let mut running = self.port.sessions_desired_running().await?;
+        // 机组已被移除的（§26.5）不进名单、不问人：记一行，其余照常。
+        running.retain(|r| {
+            if r.crew_removed {
+                eprintln!("crewd: 编排：{} 的机组已被移除，不进待恢复名单", r.id);
+            }
+            !r.crew_removed
+        });
+        let rows = policy::restart_order(running.iter().map(restart_row).collect());
         self.held = rows.iter().map(|r| r.session.clone()).collect();
         // 上次是休眠停下的（C26）：询问标成休眠，恢复时给休眠附言。读不出来只记日志、按普通重启问。
         self.hibernated = self.port.hibernate_record().await.unwrap_or_else(|e| {
@@ -166,7 +167,7 @@ mod tests {
     use super::*;
     use crate::orchestra::OrchestraConfig;
     use crate::orchestra::core::{
-        Cmd, CollabFact, Input, Origin, PRUNE_BATCH, StartSession, WAKE_RETENTION_MS,
+        Cmd, CollabFact, ControlError, Input, Origin, PRUNE_BATCH, StartSession, WAKE_RETENTION_MS,
     };
     use crate::orchestra::exec::Executors;
     use crate::orchestra::hooks::Hooks;
@@ -928,5 +929,169 @@ mod tests {
         .unwrap();
         assert_eq!(rig.port.lock().max_live, Some(4));
         assert_eq!(rig.cmd(|reply| Cmd::MaxLive { reply }).await, Ok(Some(4)));
+    }
+
+    // —— 已移除的机组（spec §26.5 / §26.7，T10a 补充 §2.4）
+
+    #[tokio::test]
+    async fn a_removed_crews_sessions_cannot_be_started_or_resumed() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.port.remove_crew("c1");
+        let before = rig.port.lock().sessions.len();
+        let r = rig
+            .cmd(|reply| Cmd::Start {
+                req: StartSession {
+                    crew_id: "c1".into(),
+                    captain: false,
+                    executor: "claude".into(),
+                    brief: "合成任务甲".into(),
+                    title: None,
+                    model: None,
+                    effort: None,
+                    isolation: true,
+                },
+                origin: Origin::Human,
+                reply,
+            })
+            .await;
+        assert_eq!(r.unwrap_err(), ControlError::CrewRemoved("c1".into()));
+        assert_eq!(rig.port.lock().sessions.len(), before, "没写行");
+        assert!(rig.worktrees.calls().is_empty(), "没建 worktree");
+        let r = rig
+            .cmd(|reply| Cmd::Resume {
+                session: "w1".into(),
+                origin: Origin::Human,
+                reply,
+            })
+            .await;
+        assert_eq!(r, Err(ControlError::CrewRemoved("c1".into())));
+        assert!(rig.exec.lock().launches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn boot_leaves_a_removed_crews_session_out_of_the_held_list() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.crew("c2", "cap2");
+        desired_running(&rig, "cap", false);
+        desired_running(&rig, "cap2", false);
+        // 库里被移除了、行却还是 desired=running（移除本来会拒；这里模拟漂移的数据）。
+        {
+            let mut st = rig.port.lock();
+            st.removed_crews.insert("c2".into());
+            st.sessions.get_mut("cap2").unwrap().crew_removed = true;
+        }
+        rig.core.boot().await.unwrap();
+        assert_eq!(rig.port.lock().restarts, [vec!["cap".to_string()]]);
+        assert!(rig.core.held.contains("cap") && !rig.core.held.contains("cap2"));
+    }
+
+    #[tokio::test]
+    async fn a_resume_answer_skips_a_session_whose_crew_was_removed_meanwhile() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.crew("c2", "cap2");
+        desired_running(&rig, "cap", false);
+        desired_running(&rig, "cap2", false);
+        rig.core.boot().await.unwrap();
+        assert!(rig.core.held.contains("cap2"));
+        {
+            let mut st = rig.port.lock();
+            st.removed_crews.insert("c2".into());
+            st.sessions.get_mut("cap2").unwrap().crew_removed = true;
+        }
+        let answer = CollabFact::RestartAnswered {
+            prompt: 1,
+            resume: true,
+            sessions: vec!["cap2".into(), "cap".into()],
+        };
+        rig.core.handle(Input::Collab(answer)).await;
+        rig.settle().await;
+        assert_eq!(rig.exec.launches("cap").len(), 1, "其余照常恢复");
+        assert!(rig.exec.launches("cap2").is_empty());
+        assert!(rig.core.held.is_empty(), "被移除的移出名单");
+    }
+
+    #[tokio::test]
+    async fn a_human_mention_of_a_held_session_in_a_removed_crew_does_not_launch_it() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        desired_running(&rig, "w1", true);
+        rig.core.boot().await.unwrap();
+        rig.settle().await;
+        human_mention(&rig, "w1", "人丁").await;
+        {
+            let mut st = rig.port.lock();
+            st.removed_crews.insert("c1".into());
+            st.sessions.get_mut("w1").unwrap().crew_removed = true;
+        }
+        rig.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w1".into(),
+            }))
+            .await;
+        rig.settle().await;
+        assert!(rig.exec.launches("w1").is_empty());
+        assert!(!rig.core.held.contains("w1"));
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        assert!(rig.port.posts().is_empty(), "不告警、不算起不来");
+    }
+
+    /// S85（只核）：已移除机组的 session 的定时唤醒 = `Skipped`：不入队、不告警、不拉起。
+    #[tokio::test]
+    async fn a_timer_for_a_removed_crews_session_is_skipped_without_alert_or_relaunch() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.port.remove_crew("c1");
+        assert!(
+            !rig.port
+                .enqueue(timer("w1", "t1", "合成提醒"))
+                .await
+                .unwrap()
+        );
+        rig.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w1".into(),
+            }))
+            .await;
+        rig.tick(MIN).await;
+        assert!(rig.port.wakes_of("w1").is_empty());
+        assert!(rig.exec.lock().launches.is_empty());
+        assert!(rig.port.posts().is_empty());
+    }
+
+    /// `Core.lang` 读语言设置（之前恒为配置里的中文）；读不出来才退回配置、照样起得来。
+    #[tokio::test]
+    async fn core_language_comes_from_the_setting_and_falls_back_to_the_config() {
+        use crate::orchestra::clock::ManualClock;
+        use crate::orchestra::core::Core;
+        use crate::orchestra::testkit::MemPort;
+        use std::sync::Arc;
+        let make = |port: MemPort| async move {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            Core::new(
+                Arc::new(port),
+                Executors::new(),
+                Hooks::default(),
+                Arc::new(ManualClock::new(T0)),
+                OrchestraConfig::for_tests(),
+                tx,
+            )
+            .await
+        };
+        let en = MemPort::new();
+        en.lock().locale = Some(text::Lang::En);
+        assert_eq!(make(en).await.unwrap().lang(), text::Lang::En);
+        let broken = MemPort::new();
+        broken.lock().locale = Some(text::Lang::En);
+        broken.lock().locale_error = Some("读不出".into());
+        assert_eq!(
+            make(broken).await.unwrap().lang(),
+            OrchestraConfig::for_tests().lang
+        );
     }
 }
