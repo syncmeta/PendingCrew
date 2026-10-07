@@ -1268,6 +1268,52 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         assert_eq!(channels::lobby_id("x"), "x/lobby");
     }
 
+    /// 迁移在一个事务里：v4 中途失败（这里是外键检查不过）→ 整体回滚，库保持 v3，列名、审批表、唤醒都没被动过。
+    #[test]
+    fn a_failed_v4_migration_rolls_back_and_keeps_v3() {
+        let c = v3_db();
+        // 合成的孤儿行：关外键才写得进去。
+        c.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('orphan-a','ghost-crew','worker','claude','2026-09-03T00:00:00.000Z');
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
+        let err = migrate(&c).unwrap_err().to_string();
+        assert!(
+            err.contains("库保持 v3") && err.contains("sessions → crews"),
+            "{err}"
+        );
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM pragma_table_info('crews') WHERE name='builtin'"
+            ),
+            1,
+            "列名没改"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+            ),
+            1
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT state FROM wakes WHERE source='approval:ap-1'"),
+            "pending"
+        );
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM crew_parents WHERE parent_id='chief'"
+            ),
+            1,
+            "没有挂到总机组下的边（只有夹具里 crew-b 那条）"
+        );
+    }
+
     #[test]
     fn backfill_v4_is_idempotent() {
         let c = v3_db();
