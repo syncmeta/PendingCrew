@@ -21,7 +21,7 @@ pub fn org_root(conn: &Connection) -> Result<Option<String>> {
 }
 
 /// 总机组：有就返回；没有就建（号码 0、侧栏次序 1、大厅），不加任何父边。
-/// 只有 store 的回填与 collab 的 `crews::create` 调它。
+/// 只有 store 的回填与 collab 的 `hang_under_org_root` 调它（create / release / delete 把机组挂回总机组下时都经过那里）。
 pub fn ensure_org_root(conn: &Connection, now_ts: &str) -> Result<String> {
     if let Some(id) = org_root(conn)? {
         return Ok(id);
