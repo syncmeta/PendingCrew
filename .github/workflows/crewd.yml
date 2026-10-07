@@ -1,0 +1,123 @@
+# crewd（crewd/ 下的 Rust 后端）的 CI。
+#
+# **它存在的理由：** 之前 ci.yml 里一个 cargo 都没有，crewd 的「绿」只存在于
+# 跑过 crewd/scripts/check.sh 的那台机器上。这里把同一个脚本搬到 CI ——
+# 本机和 CI 都调 `crewd/scripts/check.sh`，所以两边不会各写一份然后漂移；
+# CI 只多设一个环境变量 CREWD_TEST_RUNNER=nextest（见 crewd/.config/nextest.toml 的 ci 档：
+# 失败重试 2 次、抖动照样判红、出 JUnit）。
+#
+# 不跑 `--ignored`：那些是要真 claude/codex、付费 API、真钥匙串的活测试，CI 上没有也不该有。
+#
+# 与 ci.yml 刻意分开：Xcode 那两个 job 慢（13 分钟）且按 Swift 改动触发，crewd 的检查几分钟、
+# 按 Rust 改动触发，互不拖累，也互不遮挡。
+name: crewd
+
+on:
+  workflow_dispatch:
+  # **push 上不设 paths 过滤**，理由同 ci.yml 里那段长注释：push 上的 paths 按这一推
+  # 的 head 提交判，纯 .md 的收尾提交会让一次推 28 笔代码的流水线整条不触发。
+  # 省下的只是几分钟免费机器时间，赔进去的是「main 被验过」这个前提。
+  push:
+    branches: [main]
+  # PR 上的过滤按整个 PR 的 diff 判，不会被最后一笔带偏，所以这里可以收窄。
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crewd/**'
+      - '.github/workflows/crewd.yml'
+
+concurrency:
+  group: crewd-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # 钉死 nextest 版本。flaky-result 需要 >= 0.9.131；不钉的话上游一升级，
+  # 所有人的 PR 同时变红（同 ci.yml 钉 Xcode / xcodegen 的理由）。
+  NEXTEST_VERSION: 0.9.146
+
+jobs:
+  check:
+    name: crewd (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # 一个平台红了不要把另一个平台的结果也取消掉 —— 两边的红是不同的信息。
+      fail-fast: false
+      matrix:
+        include:
+          # macOS 是产品的真实运行平台（PTY、进程组、钥匙串），是权威的一份。
+          # 和 ci.yml 一样用 macos-26，不用会漂移的 macos-latest。
+          - name: macOS
+            os: macos-26
+          # Linux 用来抓「无意间依赖了 macOS」的平台假设；跑的范围见 crewd/README.md「CI」一节。
+          - name: Linux
+            os: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crewd
+    steps:
+      - uses: actions/checkout@v5
+
+      # 工具链版本只有一个事实源：crewd/rust-toolchain.toml。这里读出来喂给 action，
+      # 不在 workflow 里再写一遍数字。
+      - name: 读取钉死的工具链版本
+        id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          test -n "$channel" || { echo "::error::rust-toolchain.toml 里没读到 channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
+
+      # 缓存键自动带 Cargo.lock 的哈希和 rustc 版本；workspaces 指到 crewd/。
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+
+      # fmt --check、clippy -D warnings、nextest（ci 档）、doctest —— 全在 check.sh 里。
+      - name: scripts/check.sh
+        env:
+          CREWD_TEST_RUNNER: nextest
+        run: scripts/check.sh
+
+      # flaky-result = "fail" 已经让抖动使上一步变红；这一步只负责把「是哪几个测试抖了」
+      # 写进 job 摘要，免得去翻 JUnit。上一步红或绿都跑。
+      - name: 抖动测试清单
+        if: always()
+        run: |
+          f=target/nextest/ci/junit.xml
+          if [ ! -f "$f" ]; then
+            echo "没有 JUnit（check.sh 在跑到 nextest 之前就失败了）。" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 - "$f" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          flaky = []
+          total = 0
+          for tc in ET.parse(sys.argv[1]).getroot().iter("testcase"):
+              total += 1
+              if tc.find("flakyFailure") is not None or tc.find("flakyError") is not None:
+                  flaky.append(f'{tc.get("classname")}::{tc.get("name")}')
+          print(f"### crewd nextest：{total} 个测试，{len(flaky)} 个抖动（FLAKY）")
+          for name in flaky:
+              print(f"- `{name}`")
+          PY
+
+      - name: 上传 JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-junit-${{ matrix.name }}
+          path: crewd/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
