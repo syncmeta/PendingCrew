@@ -449,12 +449,16 @@ pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
     apply(tx, ids, WakeEvent::Requeue).map(|_| ())
 }
 
-/// 清理：删掉 `settled_before_ms` 之前就已 delivered / dropped 的行（M3c 的定时拍按保留期调，缺省 7 天）。
+/// 清理：删掉 `settled_before_ms` 之前就已 delivered / dropped 的行，**一次至多 `limit` 条**（结得最早的先删）——
+/// M3c 的定时拍按保留期（缺省 7 天）分批调，积了很多也不会一口气删几十万行把库卡住（S28）。返回删了几条。
 /// 删了之后同一 source 可以再入队——消息类有 6h 陈旧闸，带时刻 / 序号的 source 不会重复，所以安全。
-pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64) -> Result<usize> {
+pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64, limit: u32) -> Result<usize> {
     Ok(tx.conn().execute(
-        "DELETE FROM wakes WHERE state IN ('delivered','dropped') AND settled_at IS NOT NULL AND settled_at<?1",
-        [crewd_store::ts_from_ms(settled_before_ms)],
+        "DELETE FROM wakes WHERE id IN (
+           SELECT id FROM wakes
+            WHERE state IN ('delivered','dropped') AND settled_at IS NOT NULL AND settled_at<?1
+            ORDER BY settled_at, id LIMIT ?2)",
+        params![crewd_store::ts_from_ms(settled_before_ms), limit],
     )?)
 }
 
@@ -1017,7 +1021,7 @@ mod tests {
         ok_at(&mut s, NOW - 9 * MIN, |tx| {
             mark_dropped(tx, ids[1], "游标已越过")
         });
-        assert_eq!(ok(&mut s, |tx| prune(tx, NOW - 5 * MIN)), 2);
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW - 5 * MIN, 100)), 2);
         let left: Vec<i64> = list(s.conn(), None, 10)
             .unwrap()
             .into_iter()
@@ -1114,6 +1118,27 @@ mod tests {
         assert_eq!(after[2], before[2], "dropped 原样");
     }
 
+    /// S28：一次最多清 `limit` 条（定时拍里清，不能一口气删几十万行卡住库），先清结得最早的。
+    #[test]
+    fn prune_deletes_at_most_limit_rows_settled_earliest_first() {
+        let mut s = store();
+        let ids = new_ids(&mut s, &["msg:a", "msg:b", "msg:c"]);
+        for (i, id) in ids.iter().enumerate() {
+            ok_at(&mut s, NOW - (9 - i as i64) * MIN, |tx| {
+                mark_delivered(tx, &[*id])
+            });
+        }
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW, 2)), 2);
+        let left: Vec<i64> = list(s.conn(), None, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(left, [ids[2]], "结得最晚的那条留到下一次");
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW, 2)), 1);
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW, 2)), 0);
+    }
+
     #[test]
     fn prune_keeps_rows_settled_after_the_cutoff() {
         let mut s = store();
@@ -1127,7 +1152,7 @@ mod tests {
         }
         ok_at(&mut s, NOW - 9 * MIN, |tx| mark_delivered(tx, &ids[..1]));
         ok_at(&mut s, NOW - MIN, |tx| mark_delivered(tx, &ids[1..]));
-        assert_eq!(ok(&mut s, |tx| prune(tx, NOW - 5 * MIN)), 1);
+        assert_eq!(ok(&mut s, |tx| prune(tx, NOW - 5 * MIN, 100)), 1);
         let left: Vec<i64> = list(s.conn(), None, 10)
             .unwrap()
             .into_iter()
