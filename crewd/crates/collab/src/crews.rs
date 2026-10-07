@@ -723,8 +723,9 @@ fn put_last(tx: &mut Tx<'_>, crew: &str, parent: &str) -> Result<()> {
     Ok(())
 }
 
-/// 人手动排侧栏（C1，只有客户端 `crew.reorder` 调）：`ordered` 必须恰好是 `parent` 名下现有的全部直系子
-/// （防客户端拿着旧列表覆盖）。只改 `parent` 名下各条边的次序（同一机组在别的父下的次序不动）；顶层只剩总机组
+/// 人手动排侧栏（C1，只有客户端 `crew.reorder` 调）：`ordered` 必须包含 `parent` 名下现有的全部**活的**直系子
+/// （防客户端拿着旧列表覆盖），不重复、不含不认识的；客户端从默认列表（不含归档）排序，所以不必带上归档的子机组。
+/// 没带的归档子机组保持原来的相对次序，排在 `ordered` 后面（带了就按客户端给的次序）。返回最终的全序。只改 `parent` 名下各条边的次序（同一机组在别的父下的次序不动）；顶层只剩总机组
 /// （N1 裁定 7），一级机组的次序就是总机组名下的次序。挪了位置的每个机组各发一条 `CrewChanged`，
 /// 有挪动时 `parent` 也发一条（它的 `childIds` 变了）。
 pub fn reorder(tx: &mut Tx<'_>, parent: &str, ordered: &[String]) -> Result<Vec<Crew>> {
@@ -732,11 +733,24 @@ pub fn reorder(tx: &mut Tx<'_>, parent: &str, ordered: &[String]) -> Result<Vec<
     let current = children(tx.conn(), parent)?;
     let want: BTreeSet<&String> = ordered.iter().collect();
     let have: BTreeSet<&String> = current.iter().collect();
-    if want.len() != ordered.len() || want != have {
+    let mut live = BTreeSet::new();
+    for id in &current {
+        if !is_archived(tx.conn(), id)? {
+            live.insert(id);
+        }
+    }
+    // 重复 / 不认识的 / 缺了活的 → Invalid；归档的可带可不带。
+    if want.len() != ordered.len() || !want.is_subset(&have) || !live.is_subset(&want) {
+        let live_ids: Vec<&String> = live.into_iter().collect();
         return Err(CollabError::Invalid(
-            Refusal::new(Code::CrewReorderMismatch).arg("current", format!("{current:?}")),
+            Refusal::new(Code::CrewReorderMismatch).arg("current", format!("{live_ids:?}")),
         ));
     }
+    let ordered: Vec<String> = ordered
+        .iter()
+        .cloned()
+        .chain(current.iter().filter(|id| !want.contains(id)).cloned())
+        .collect();
     let mut moved = false;
     for (i, id) in ordered.iter().enumerate() {
         let pos = i as i64 + 1;
@@ -1597,6 +1611,69 @@ mod tests {
             working_directory: "/tmp/example".into(),
             ..Default::default()
         }
+    }
+
+    /// 客户端从默认列表（不含归档）排序：只给活的那部分也算数。归档的子机组相对次序不变、排在活的后面；
+    /// 缺了活的或多了不认识的仍然 Invalid。
+    #[test]
+    fn reorder_accepts_the_live_children_and_parks_archived_ones_after_them() {
+        let mut s = store();
+        ok(&mut s, |tx| {
+            reorder(tx, "chief", &["crew-x".into(), "crew-a".into()])
+        });
+        let n = ok(&mut s, |tx| create(tx, new_crew("新一级")));
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        ok(&mut s, |tx| archive(tx, &n.id));
+        assert_eq!(
+            children(s.conn(), "chief").unwrap(),
+            ["crew-x", "crew-a", n.id.as_str()],
+            "归档不动次序"
+        );
+        // 缺活的 / 多出不认识的：Invalid，什么都不变。
+        assert!(matches!(
+            err(&mut s, |tx| reorder(tx, "chief", &[])),
+            CollabError::Invalid(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| reorder(
+                tx,
+                "chief",
+                &["crew-a".into(), "nope".into()]
+            )),
+            CollabError::Invalid(_)
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| reorder(
+                tx,
+                "chief",
+                &["crew-a".into(), "crew-a".into()]
+            )),
+            CollabError::Invalid(_)
+        ));
+        // 只给活的：活的在前，归档的保持原来的相对次序（crew-x 在 n 前）接在后面。
+        let got = ok(&mut s, |tx| reorder(tx, "chief", &["crew-a".into()]));
+        let want = ["crew-a", "crew-x", n.id.as_str()];
+        assert_eq!(children(s.conn(), "chief").unwrap(), want);
+        assert_eq!(
+            got.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            want,
+            "返回最终全序"
+        );
+        // 再排一次也稳定（幂等）。
+        ok(&mut s, |tx| reorder(tx, "chief", &["crew-a".into()]));
+        assert_eq!(children(s.conn(), "chief").unwrap(), want);
+        // 全序（含归档）照旧收，按客户端给的次序。
+        ok(&mut s, |tx| {
+            reorder(
+                tx,
+                "chief",
+                &[n.id.clone(), "crew-a".into(), "crew-x".into()],
+            )
+        });
+        assert_eq!(
+            children(s.conn(), "chief").unwrap(),
+            [n.id.as_str(), "crew-a", "crew-x"]
+        );
     }
 
     #[test]

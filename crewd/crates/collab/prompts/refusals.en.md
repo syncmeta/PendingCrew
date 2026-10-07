@@ -152,7 +152,7 @@ Crew {crew} is not archived. Only archived crews can be deleted permanently; arc
 {session} is not in crew {crew}. The captain has to be chosen from the crew's own sessions.
 
 ## crew.reorder_mismatch
-crewIds must be exactly all the crews on this level, without repeats. Currently: {current}
+crewIds must include every unarchived crew on this level, without repeats and without other crews (archived ones are optional). Currently: {current}
 
 ## crew.no_captain
 Crew {crew} has no captain right now. Appoint a captain first, or address a specific session.

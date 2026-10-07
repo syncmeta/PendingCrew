@@ -152,7 +152,7 @@
 {session} 不在机组 {crew} 里；机长只能从本机组的 session 里选
 
 ## crew.reorder_mismatch
-crewIds 必须恰好是这一层的全部机组（不重复）：现有 {current}
+crewIds 必须包含这一层所有没归档的机组，不重复、不含别的机组（归档的可带可不带）：现有 {current}
 
 ## crew.no_captain
 机组 {crew} 现在没有机长；先给它指定机长，或改发给具体的 session
