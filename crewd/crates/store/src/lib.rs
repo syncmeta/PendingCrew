@@ -153,7 +153,9 @@ pub struct Store {
 
 impl Store {
     /// 打开（必要时新建）库文件。旧版本的非空库迁移前先在 `backups/` 拍快照（S20）。
+    /// 库文件和它的 -wal / -shm 一律只给本用户读写（0600；PM 2026-10-07）。
     pub fn open(path: &Path) -> Result<Self> {
+        fsutil::restrict_db_files(path)?;
         Self::init(Connection::open(path)?, Some(backup::backups_dir_for(path)))
     }
 

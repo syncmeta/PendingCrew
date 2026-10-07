@@ -161,6 +161,11 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
             .to_str()
             .ok_or_else(|| StoreError::Invalid(format!("路径不是 UTF-8：{}", tmp.display())))?;
         conn.execute("VACUUM INTO ?1", [tmp_str])?;
+        // VACUUM INTO 按 umask 建文件（通常 0644）；快照里是全部聊天记录，收成 0600 再改名。
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
         std::fs::File::open(&tmp)?.sync_all()?;
         fsutil::rename_durably(&tmp, dest)?;
         Ok(())

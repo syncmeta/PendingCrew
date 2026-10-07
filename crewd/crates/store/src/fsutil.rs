@@ -52,6 +52,37 @@ pub fn rename_durably(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// 库文件不存在就先以 0600 建一个空文件（SQLite 把 0 字节文件当新库，之后建的 -wal / -shm 沿用库文件的权限）；
+/// 已有的库、-wal、-shm 去掉组和其他人的权限位（只收紧，不放宽：只读的库仍是只读）。
+pub fn restrict_db_files(db: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(db)
+    {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let mut side = db.as_os_str().to_owned();
+    side.push("-wal");
+    let wal = std::path::PathBuf::from(side);
+    let mut side = db.as_os_str().to_owned();
+    side.push("-shm");
+    let shm = std::path::PathBuf::from(side);
+    for p in [db, wal.as_path(), shm.as_path()] {
+        if let Ok(m) = std::fs::metadata(p) {
+            let mode = m.permissions().mode() & 0o7777;
+            if mode & 0o077 != 0 {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode & !0o077))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parent_of(path: &Path) -> io::Result<&Path> {
     match path.parent() {
         Some(p) if p.as_os_str().is_empty() => Ok(Path::new(".")),
