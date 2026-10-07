@@ -793,12 +793,14 @@ fn put_last_top(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
 /// `ordered` 必须包含这一层现有的全部**活的**机组（防客户端拿着旧列表覆盖），不重复、不含不认识的；客户端从默认
 /// 列表（不含归档）排序，所以不必带上归档的。没带的归档机组保持原来的相对次序，排在 `ordered` 后面（带了就按
 /// 客户端给的次序）。返回最终的全序。挪了位置的每个机组各发一条 `CrewChanged`，有挪动时 `parent` 也发一条
-/// （它的 `childIds` 变了）。
+/// （它的 `childIds` 变了）。p 已移除 → Conflict `crew.removed`（移除 = 冻结，次序也不能改）。
 pub fn reorder(tx: &mut Tx<'_>, parent: Option<&str>, ordered: &[String]) -> Result<Vec<Crew>> {
     let current = match parent {
         Some(p) => {
             get(tx.conn(), p)?;
             refuse_management_in_tree(tx.conn(), &[p])?;
+            // 移除 = 冻结：已移除的父名下的次序也不改。
+            refuse_archived(tx.conn(), p)?;
             children(tx.conn(), p)?
         }
         None => top_level(tx.conn())?,
@@ -1774,6 +1776,30 @@ mod tests {
         let want = ["crew-x", "crew-a", n.id.as_str(), m.id.as_str()];
         assert_eq!(top(&s), want);
         assert_eq!(got.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), want);
+    }
+
+    /// 移除 = 冻结：已移除的父机组名下的子机组次序也不能改（`crew.removed`，什么都不变）；顶层、活的父照旧。
+    #[test]
+    fn reorder_under_a_removed_parent_is_refused_and_changes_nothing() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| create(tx, new_crew("要移除的父")));
+        let k1 = kid(&mut s, "子一", &p.id);
+        let k2 = kid(&mut s, "子二", &p.id);
+        ok(&mut s, |tx| archive(tx, &k1.id));
+        ok(&mut s, |tx| archive(tx, &k2.id));
+        ok(&mut s, |tx| archive(tx, &p.id));
+        let before = order(&s, &p.id);
+        assert_eq!(before, [k1.id.clone(), k2.id.clone()]);
+        let flipped = vec![k2.id.clone(), k1.id.clone()];
+        match err(&mut s, |tx| reorder(tx, Some(&p.id), &flipped)) {
+            CollabError::Conflict(r) => assert_eq!(r.code, Code::CrewRemoved),
+            other => panic!("want Conflict(crew.removed), got {other:?}"),
+        }
+        assert_eq!(order(&s, &p.id), before, "次序没变");
+        // 顶层（没有父）不受影响。
+        ok(&mut s, |tx| {
+            reorder(tx, None, &["crew-x".into(), "crew-a".into()])
+        });
     }
 
     fn wake_req(
