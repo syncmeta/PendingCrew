@@ -359,21 +359,28 @@ pub struct TickReport {
     pub removed: Vec<PathBuf>,
 }
 
-/// 定时拍一次（S21 / S25）：只读连接上先对在用的库跑 `quick_check`，到点了就备份（备份文件自己也过
+/// 定时拍一次（S21 / S25）：先对在用的库跑检查（到点要拍的那次是 `integrity_check`，平时 `quick_check`），到点了就备份（备份文件自己也过
 /// `quick_check`），备份成功**且**在用的库没问题才轮转淘汰旧备份。库是空的不拍。
 pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
     let dir = backups_dir_for(db);
-    let mut report = TickReport {
-        live_problems: check(&open_for_check(db)?, Check::Quick)?,
-        ..Default::default()
-    };
     let c = open_read_only(db)?;
     let has_data: i64 = c.query_row(
         "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages)",
         [],
         |r| r.get(0),
     )?;
-    if has_data == 0 || !due(&dir, now_ms, policy)? {
+    let backup_due = has_data > 0 && due(&dir, now_ms, policy)?;
+    // 每天拍的那一次跑完整的 integrity_check（367k 条合成消息约 0.3s），平时的整点只跑 quick_check。
+    let kind = if backup_due {
+        Check::Integrity
+    } else {
+        Check::Quick
+    };
+    let mut report = TickReport {
+        live_problems: check(&open_for_check(db)?, kind)?,
+        ..Default::default()
+    };
+    if !backup_due {
         return Ok(report);
     }
     let dest = dir.join(auto_name(now_ms));

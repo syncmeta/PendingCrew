@@ -365,3 +365,31 @@ fn a_pre_purge_snapshot_lands_in_backups_and_is_never_rotated() {
     let mem = Store::open_in_memory().unwrap();
     assert!(mem.snapshot_before_purge("a").unwrap().is_none());
 }
+
+/// S25：到点要拍的那一次（每天一次）对在用的库跑完整的 integrity_check，quick_check 看不见的
+/// 索引内容错误也要报出来；没到点的整点 tick 只跑 quick_check。
+#[test]
+fn the_daily_tick_runs_a_full_integrity_check() {
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join(DB_FILE);
+    {
+        let s = Store::open_data_dir(d.path()).unwrap();
+        add_crew(&s, "a");
+        crewd_store::testing::corrupt_an_index(s.conn());
+    }
+    let now = 1_791_374_400_000;
+    let b = d.path().join("backups");
+    for day in 2..=31 {
+        auto(&b, now - day * DAY);
+    }
+    let r = backup::tick(&db, now, Policy::default()).unwrap();
+    assert!(
+        r.live_problems.iter().any(|p| p.contains("probe_i")),
+        "{:?}",
+        r.live_problems
+    );
+    // 这种坏处 VACUUM INTO 拷得过去、拷出来的那份 quick_check 也看不见：备份照拍，但旧备份一份不淘汰。
+    assert!(r.backup.is_some());
+    assert!(r.removed.is_empty(), "{:?}", r.removed);
+    assert_eq!(backup::list_auto(&b).unwrap().len(), 31);
+}
