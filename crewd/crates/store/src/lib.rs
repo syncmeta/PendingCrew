@@ -35,6 +35,11 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// 每次提交都走 `F_FULLFSYNC`（S23）。本机实测（N4 报告，Apple Fabric SSD，单行事务 ×400，两轮）：
+/// 关 p50≈40µs / p99≈60µs（普通 fsync 在 macOS 上不保证落到盘片）；开 p50≈3.9ms / p99≈6ms。
+/// 单写者每秒仍能做 ~250 次提交，远高于实际写入频率；而这个库是聊天记录的唯一一份，取强的那档。
+pub const FULLFSYNC: bool = true;
+
 pub struct Store {
     conn: Connection,
 }
@@ -49,9 +54,7 @@ impl Store {
     }
 
     fn init(conn: Connection) -> Result<Self> {
-        // journal_mode 会返回一行结果，所以用 query_row 而不是 execute。
-        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        pin_pragmas(&conn)?;
         schema::migrate(&conn)?;
         Ok(Self { conn })
     }
@@ -79,6 +82,30 @@ impl Store {
         )?;
         Ok(n == 0)
     }
+}
+
+/// 落盘相关的 pragma 一律显式设（S23），不靠编译期默认值。文件库拿不到 WAL 就拒绝打开
+/// （比如落在不支持共享内存的文件系统上），别悄悄退回别的日志模式。
+fn pin_pragmas(conn: &Connection) -> Result<()> {
+    // journal_mode 会返回一行结果，所以用 query_row 而不是 execute。
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+    let in_memory = conn.path().is_none_or(str::is_empty);
+    if !in_memory && !mode.eq_ignore_ascii_case("wal") {
+        return Err(StoreError::Invalid(format!(
+            "数据库拿不到 WAL 日志模式（得到 {mode}），拒绝打开"
+        )));
+    }
+    conn.execute_batch(&format!(
+        "PRAGMA synchronous=FULL;
+         PRAGMA foreign_keys=ON;
+         PRAGMA busy_timeout=5000;
+         PRAGMA checkpoint_fullfsync=ON;
+         PRAGMA fullfsync={};
+         PRAGMA journal_size_limit={};",
+        if FULLFSYNC { "ON" } else { "OFF" },
+        64 * 1024 * 1024
+    ))?;
+    Ok(())
 }
 
 pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -178,6 +205,23 @@ mod tests {
         let s = Store::open(&p).unwrap();
         assert_eq!(crews::list(s.conn()).unwrap().len(), 1);
         assert!(!s.is_empty().unwrap());
+    }
+
+    /// S23：落盘相关的 pragma 写死并读回（不靠编译期默认值；默认值换了版本也不会悄悄变）。
+    #[test]
+    fn file_store_pins_its_durability_pragmas() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(&dir.path().join("crewd.db")).unwrap();
+        let c = s.conn();
+        let text = |sql: &str| c.query_row(sql, [], |r| r.get::<_, String>(0)).unwrap();
+        let int = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(text("PRAGMA journal_mode"), "wal");
+        assert_eq!(int("PRAGMA synchronous"), 2, "FULL");
+        assert_eq!(int("PRAGMA foreign_keys"), 1);
+        assert_eq!(int("PRAGMA busy_timeout"), 5000);
+        assert_eq!(int("PRAGMA checkpoint_fullfsync"), 1);
+        assert_eq!(int("PRAGMA fullfsync"), FULLFSYNC as i64);
+        assert_eq!(int("PRAGMA journal_size_limit"), 64 * 1024 * 1024);
     }
 
     #[test]
