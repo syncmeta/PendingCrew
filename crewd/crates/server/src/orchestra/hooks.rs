@@ -46,6 +46,9 @@ impl IdleHook for NoIdleHook {
     }
 }
 
+/// **在 actor 里等它，必须便宜**（同 [`QuotaSource`]）：Core 直接 await，等的这段时间别的输入都在排队。actor 用
+/// `hook_timeout` 掐它（到期 = 当它没调成），但期限只掐得住会让出的 future——在 `poll` 里同步阻塞（同步 IO、
+/// 长循环、拿锁等别的线程）的实现掐不住，会把整个 actor 卡死。要读库 / 联网的实现自己派生任务、立刻返回。
 pub trait AskAnsweredHook: Send + Sync {
     fn on_answered<'a>(
         &'a self,
@@ -73,6 +76,7 @@ impl AskAnsweredHook for NoAskHook {
 pub trait QuotaSource: Send + Sync {
     /// **必须便宜**：Core 在 actor 里直接 await 它（额度 health / 撞额度退出时），这段时间别的会话事件都在排队。
     /// 要联网 / 读大文件的实现自己先算好缓存着，或在内部派生任务、限时返回（拿不到 = None → 45 分钟退避）。
+    /// actor 用 `hook_timeout` 掐它，但掐不住在 `poll` 里同步阻塞的实现。
     fn reset_at<'a>(&'a self, executor: &'a str, now: Ms) -> BoxFut<'a, Option<Ms>>;
 }
 
@@ -84,6 +88,8 @@ impl QuotaSource for NoQuotaSource {
     }
 }
 
+/// **在 actor 里等它，必须便宜**（同 [`QuotaSource`]）：投递前直接 await。actor 用 `hook_timeout` 掐它（到期 = 空的
+/// context），但期限只掐得住会让出的 future——在 `poll` 里同步阻塞的实现掐不住，会把整个 actor 卡死。
 pub trait ContextExtras: Send + Sync {
     fn extras<'a>(&'a self, session: &'a str) -> BoxFut<'a, Context>;
 }

@@ -452,6 +452,8 @@ pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
 /// 清理：删掉 `settled_before_ms` 之前就已 delivered / dropped 的行，**一次至多 `limit` 条**（结得最早的先删）——
 /// M3c 的定时拍按保留期（缺省 7 天）分批调，积了很多也不会一口气删几十万行把库卡住（S28）。返回删了几条。
 /// 删了之后同一 source 可以再入队——消息类有 6h 陈旧闸，带时刻 / 序号的 source 不会重复，所以安全。
+/// 代价：`settled_at` 上没有索引，每次调用扫一遍已结的行再排序取前 `limit` 条——按预期规模（保留 7 天、一小时一次）
+/// 可以接受；行数大到这一步显眼时再加 `(state, settled_at)` 索引（那是一次迁移）。
 pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64, limit: u32) -> Result<usize> {
     Ok(tx.conn().execute(
         "DELETE FROM wakes WHERE id IN (
