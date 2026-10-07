@@ -444,18 +444,27 @@ impl Ticker {
         every: std::time::Duration,
         policy: Policy,
     ) -> std::io::Result<Ticker> {
+        // 先同步清掉死进程留下的临时文件（复审 2 轮 5：在本线程开拍之前，不和它抢）：backups/ 里的快照
+        // 临时文件，和数据目录里中断的 restore 留下的 `.crewd.db.tmp-<pid>`。清不掉只记一笔，不挡启动。
+        let data_dir = db
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        for dir in [backups_dir_for(&db), data_dir] {
+            match sweep_stale_tmp(&dir) {
+                Ok(gone) => {
+                    for p in gone {
+                        eprintln!("crewd: 清掉上次没做完的临时文件 {}", p.display());
+                    }
+                }
+                Err(e) => eprintln!("crewd: 清理 {} 里的临时文件失败：{e}", dir.display()),
+            }
+        }
         let (stop, rx) = std::sync::mpsc::channel::<()>();
         let handle = std::thread::Builder::new()
             .name("crewd-backup".into())
             .spawn(move || {
-                match sweep_stale_tmp(&backups_dir_for(&db)) {
-                    Ok(gone) => {
-                        for p in gone {
-                            eprintln!("crewd: 清掉上次没拍完的临时文件 {}", p.display());
-                        }
-                    }
-                    Err(e) => eprintln!("crewd: 清理 backups/ 临时文件失败：{e}"),
-                }
                 loop {
                     log_tick(tick(&db, crate::now_ms(), policy));
                     match rx.recv_timeout(every) {

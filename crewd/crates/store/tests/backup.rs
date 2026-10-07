@@ -516,16 +516,20 @@ fn stale_temp_files_of_dead_processes_are_swept() {
     assert_eq!(removed, vec![dead.clone()]);
     assert!(!dead.exists() && alive.exists() && other.exists());
 
-    // Ticker 启动时扫一遍。
+    // Ticker 启动时扫一遍：backups/ 里的，和数据目录里中断的 restore 留下的 `.crewd.db.tmp-<pid>`。
+    // 复审 2 轮 5：`start` 返回之前就扫完（同步），不和之后的备份抢。
     std::fs::write(&dead, b"x").unwrap();
+    let dead_restore = d.path().join(".crewd.db.tmp-2147483647");
+    std::fs::write(&dead_restore, b"x").unwrap();
     let t = Ticker::start(
         d.path().join(DB_FILE),
         Duration::from_secs(3600),
         Policy::default(),
     )
     .unwrap();
+    let swept = !dead.exists() && !dead_restore.exists();
     t.stop();
-    assert!(!dead.exists());
+    assert!(swept, "start 返回时已经扫完");
 }
 
 /// 复审 2 轮 2（数据损坏路径）：crewd.db 不在、但崩溃留下的非空 -wal / -shm 还在。restore 必须先把它们
