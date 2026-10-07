@@ -176,6 +176,19 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::CREW_DELETE => {
             let p: CrewIdParams = parse_params(p)?;
+            // N4 / S22：永久删除之前先拍快照，拍不成就不删（机组不存在就不拍，交给下面报 not found）。
+            // N1 把 crew.delete 改成默认归档后，这一步跟着永久删除（purge）走。
+            let id = p.crew_id.clone();
+            state
+                .db
+                .call(move |s| match crewd_store::crews::exists(s.conn(), &id) {
+                    Ok(true) => s.snapshot_before_purge(&id).map(|_| ()),
+                    Ok(false) => Ok(()),
+                    Err(e) => Err(e),
+                })
+                .await
+                .map_err(internal)?
+                .map_err(|e| collab_err(CollabError::Store(e)))?;
             write(state, move |tx| {
                 crews::delete(tx, &p.crew_id).map(|()| Empty {})
             })

@@ -913,3 +913,41 @@ async fn serve_closes_the_db_cleanly_before_releasing_the_lock() {
     drop(c);
     crewd_server::lock_data_dir(&dir).expect("锁已释放");
 }
+
+/// S22 / N4：`crew.delete`（目前是永久删除）先拍 pre-delete 快照再删；快照里还有这个机组。
+/// N1 把 crew.delete 改成默认归档之后，这一步跟着移到真正的永久删除（purge）上。
+#[tokio::test]
+async fn crew_delete_snapshots_before_purging() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let made = c
+        .call(
+            1,
+            "crew.create",
+            json!({"title":"要删的","workingDirectory":"/tmp/example"}),
+        )
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    c.call(2, "crew.delete", json!({"crewId":made})).await;
+    let snaps: Vec<std::path::PathBuf> = std::fs::read_dir(dir.path().join("backups"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("crewd-pre-delete-")
+        })
+        .collect();
+    assert_eq!(snaps.len(), 1, "{snaps:?}");
+    let snap = rusqlite::Connection::open(&snaps[0]).unwrap();
+    let n: i64 = snap
+        .query_row("SELECT COUNT(*) FROM crews WHERE id=?1", [&made], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(n, 1, "快照是删之前的样子");
+}
