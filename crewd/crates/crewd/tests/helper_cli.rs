@@ -70,7 +70,8 @@ impl FakeServe {
                                     _ if mode == Mode::Hang => continue,
                                     "agent.hook" if mode == Mode::DropOnHook => break,
                                     "agent.tools" => json!({"id": id, "result": [
-                                        {"name": "post", "description": "发群", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}}},
+                                        {"name": "post", "description": "发群", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}},
+                                         "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false}},
                                         {"name": "ask", "description": "问人", "inputSchema": {"type": "object"}}
                                     ]}),
                                     "agent.call" => json!({"id": id, "result": {
@@ -223,6 +224,13 @@ async fn mcp_bridges_list_and_call_and_errors() {
         tools[0]["inputSchema"]["properties"]["message"]["type"],
         "string"
     );
+    // crewd's hints reach the agent's client under the MCP names; a tool without them (a serve
+    // that predates them) is listed without annotations.
+    assert_eq!(
+        tools[0]["annotations"],
+        json!({"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false})
+    );
+    assert!(tools[1].get("annotations").is_none(), "{}", tools[1]);
     let call = m
         .request(
             3,

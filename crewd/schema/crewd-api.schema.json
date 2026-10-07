@@ -2193,6 +2193,17 @@
     },
     "ToolDef": {
       "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "MCP tool annotations (hints for the agent's client). Absent from a serve that predates\nthem: the helper then lists the tool without annotations."
+        },
         "description": {
           "type": "string"
         },
@@ -2205,6 +2216,31 @@
         "name",
         "description",
         "inputSchema"
+      ],
+      "type": "object"
+    },
+    "ToolHints": {
+      "additionalProperties": false,
+      "description": "MCP `ToolAnnotations` hints, under their MCP wire names (`readOnlyHint` …); `crewd mcp` passes\nthem through as they are. Every crewd tool works inside crewd only: `openWorldHint` is false.",
+      "properties": {
+        "destructiveHint": {
+          "type": "boolean"
+        },
+        "idempotentHint": {
+          "type": "boolean"
+        },
+        "openWorldHint": {
+          "type": "boolean"
+        },
+        "readOnlyHint": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint"
       ],
       "type": "object"
     },

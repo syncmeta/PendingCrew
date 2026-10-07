@@ -37,32 +37,18 @@ const CREWD_TOOL_PREFIX: &str = "mcp__crew__";
 /// helper's own limit is 5 s (`hook_cmd::QUICK`) and claude's 15 s, after which the output is lost.
 const COMMIT_DEADLINE: Duration = Duration::from_secs(3);
 
-/// crewd's own tools that only talk or read (B14). A session answering another session through
-/// `post` is not output: two sessions replying to each other would otherwise keep the loop breaker
-/// from ever firing. State-changing crew tools (start / stop / nudge, channel create / invite /
-/// archive / owner, ask, respond_todo, schedule_wakeup, set_session_profile, crew structure
-/// tools) are not listed, so they count.
-const PASSIVE_CREW_TOOLS: &[&str] = &[
-    "post",
-    "read_channel",
-    "search",
-    "list_channels",
-    "directory",
-    "channel_listen",
-    // Pure reads.
-    "get_quota",
-    "inspect_session",
-    "list_sessions",
-];
-
 pub fn is_crewd_tool(tool_name: &str) -> bool {
     tool_name.starts_with(CREWD_TOOL_PREFIX)
 }
 
-/// Does a finished tool call count as output for the loop breaker (C3 + B14)?
+/// Does a finished tool call count as output for the loop breaker (C3 + B14)? crewd's own tools
+/// that only read or talk do not (`ToolSpec::passive`, derived from the catalog's annotations,
+/// S76): a session answering another through `post` is not output, or two sessions replying to
+/// each other would keep the breaker from ever firing. Everything else counts, an unknown
+/// `mcp__crew__*` name included (fail toward counting).
 pub fn counts_as_progress(tool_name: &str) -> bool {
     match tool_name.strip_prefix(CREWD_TOOL_PREFIX) {
-        Some(own) => !PASSIVE_CREW_TOOLS.contains(&own),
+        Some(own) => !crate::agent::catalog::find(own).is_some_and(|t| t.passive()),
         None => true,
     }
 }
@@ -636,6 +622,11 @@ mod tests {
             "Bash",
             "Edit",
             "mcp__computer-use__click",
+            "mcp__crew__no_such_tool",
+            "mcp__crew__delegation_policy",
+            "mcp__crew__crew_structure",
+            "mcp__crew__change_workdir",
+            "mcp__crew__handoff_captain",
             "mcp__crew__start_session",
             "mcp__crew__nudge_session",
             "mcp__crew__stop_session",
@@ -654,20 +645,26 @@ mod tests {
     }
 
     #[test]
-    fn crewd_tool_names_and_the_passive_list_match_the_catalog() {
+    fn crewd_tool_names_and_passive_comes_from_the_catalog() {
         assert!(
             is_crewd_tool("mcp__crew__directory")
                 && !is_crewd_tool("mcp__computer-use__click")
                 && !is_crewd_tool("Edit")
         );
-        for t in PASSIVE_CREW_TOOLS {
-            assert!(
-                crate::agent::catalog::find(t).is_some(),
-                "{t} is not a tool"
+        for t in crate::agent::catalog::CATALOG {
+            assert_eq!(
+                counts_as_progress(&format!("mcp__crew__{}", t.name)),
+                !t.passive(),
+                "{}",
+                t.name
             );
         }
         assert!(!counts_as_progress("mcp__crew__post"));
         assert!(counts_as_progress("mcp__crew__channel_create"));
+        assert!(
+            counts_as_progress("mcp__crew__read_delegation_policy"),
+            "a removed name counts"
+        );
         assert!(counts_as_progress("Bash"));
     }
 

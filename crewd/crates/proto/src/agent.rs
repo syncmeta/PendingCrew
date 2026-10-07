@@ -45,6 +45,21 @@ pub struct ToolDef {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    /// MCP tool annotations (hints for the agent's client). Absent from a serve that predates
+    /// them: the helper then lists the tool without annotations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolHints>,
+}
+
+/// MCP `ToolAnnotations` hints, under their MCP wire names (`readOnlyHint` …); `crewd mcp` passes
+/// them through as they are. Every crewd tool works inside crewd only: `openWorldHint` is false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolHints {
+    pub read_only_hint: bool,
+    pub destructive_hint: bool,
+    pub idempotent_hint: bool,
+    pub open_world_hint: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -206,6 +221,37 @@ mod tests {
     }
 
     #[test]
+    fn tool_hints_use_the_mcp_wire_names_and_may_be_absent() {
+        let d = ToolDef {
+            name: "post".into(),
+            description: "x".into(),
+            input_schema: json!({"type": "object"}),
+            annotations: Some(ToolHints {
+                read_only_hint: false,
+                destructive_hint: true,
+                idempotent_hint: false,
+                open_world_hint: false,
+            }),
+        };
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!(
+            v["annotations"],
+            json!({"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false})
+        );
+        let old: ToolDef = serde_json::from_value(
+            json!({"name": "post", "description": "x", "inputSchema": {"type": "object"}}),
+        )
+        .unwrap();
+        assert_eq!(old.annotations, None);
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("annotations")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn hook_result_omits_absent_stdout() {
         assert_eq!(
             serde_json::to_value(HookResult { stdout: None }).unwrap(),
@@ -236,6 +282,7 @@ mod tests {
             "AttachParams",
             "AttachResult",
             "ToolDef",
+            "ToolHints",
             "CallParams",
             "CallResult",
             "HookKind",

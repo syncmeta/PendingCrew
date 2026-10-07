@@ -3,7 +3,7 @@ use serde_json::{Map, Value, json};
 
 use crate::agent::text::{self, Locale};
 use crate::agent::{Identity, Role};
-use crewd_proto::agent::ToolDef;
+use crewd_proto::agent::{ToolDef, ToolHints};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -41,6 +41,30 @@ pub struct ToolSpec {
     pub name: &'static str,
     pub scope: Scope,
     pub params: &'static [Param],
+    /// MCP `readOnlyHint`: changes nothing (S76; the index table's RO column).
+    pub read_only: bool,
+    /// MCP `destructiveHint`: may undo or end something (S76).
+    pub destructive: bool,
+    /// MCP `idempotentHint`: calling again with the same arguments changes nothing more.
+    pub idempotent: bool,
+    /// Only talks (`post`, `channel_listen`): not output for the loop breaker (B14).
+    pub talk: bool,
+}
+
+impl ToolSpec {
+    /// Not output for the loop breaker (B14, S76): reads and talk. One rule, derived here.
+    pub fn passive(&self) -> bool {
+        self.read_only || self.talk
+    }
+
+    pub fn hints(&self) -> ToolHints {
+        ToolHints {
+            read_only_hint: self.read_only,
+            destructive_hint: self.destructive,
+            idempotent_hint: self.idempotent,
+            open_world_hint: false,
+        }
+    }
 }
 
 /// The categories the injection digest folds (S62); see `CATEGORIES`.
@@ -101,20 +125,46 @@ const fn all(name: &'static str, params: &'static [Param]) -> ToolSpec {
         name,
         scope: Scope::All,
         params,
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        talk: false,
     }
 }
 const fn cap(name: &'static str, params: &'static [Param]) -> ToolSpec {
     ToolSpec {
-        name,
         scope: Scope::Captain,
-        params,
+        ..all(name, params)
     }
+}
+/// Read-only (and so idempotent).
+const fn ro(t: ToolSpec) -> ToolSpec {
+    ToolSpec {
+        read_only: true,
+        idempotent: true,
+        ..t
+    }
+}
+const fn destructive(t: ToolSpec) -> ToolSpec {
+    ToolSpec {
+        destructive: true,
+        ..t
+    }
+}
+const fn idempotent(t: ToolSpec) -> ToolSpec {
+    ToolSpec {
+        idempotent: true,
+        ..t
+    }
+}
+const fn talk(t: ToolSpec) -> ToolSpec {
+    ToolSpec { talk: true, ..t }
 }
 
 use Ty::*;
 
 pub const CATALOG: &[ToolSpec] = &[
-    all(
+    talk(all(
         "post",
         &[
             p("channel", Str, false),
@@ -125,16 +175,16 @@ pub const CATALOG: &[ToolSpec] = &[
             p("reply_to", Ref, false),
             c("category", false, CATEGORIES),
         ],
-    ),
-    all(
+    )),
+    ro(all(
         "read_channel",
         &[
             p("channel", Str, false),
             int("limit", 1, 200),
             p("before", Ref, false),
         ],
-    ),
-    all(
+    )),
+    ro(all(
         "search",
         &[
             p("query", Str, true),
@@ -144,11 +194,11 @@ pub const CATALOG: &[ToolSpec] = &[
             p("before", Str, false),
             int("limit", 1, 200),
         ],
-    ),
-    all(
+    )),
+    ro(all(
         "list_channels",
         &[p("crew", Str, false), p("include_archived", Bool, false)],
-    ),
+    )),
     all(
         "channel_create",
         &[
@@ -162,7 +212,7 @@ pub const CATALOG: &[ToolSpec] = &[
         &[p("channel", Str, true), p("members", StrList, true)],
     ),
     all("channel_leave", &[p("channel", Str, true)]),
-    all("channel_archive", &[p("channel", Str, true)]),
+    destructive(all("channel_archive", &[p("channel", Str, true)])),
     all(
         "channel_owner",
         &[
@@ -171,7 +221,7 @@ pub const CATALOG: &[ToolSpec] = &[
             p("force", Bool, false),
         ],
     ),
-    all(
+    talk(idempotent(all(
         "channel_listen",
         &[
             p("channel", Str, true),
@@ -179,8 +229,8 @@ pub const CATALOG: &[ToolSpec] = &[
             p("senders", StrList, false),
             p("off", Bool, false),
         ],
-    ),
-    all("directory", &[p("query", Str, false)]),
+    ))),
+    ro(all("directory", &[p("query", Str, false)])),
     all(
         "ask",
         &[
@@ -202,7 +252,7 @@ pub const CATALOG: &[ToolSpec] = &[
         "respond_todo",
         &[p("number", Int, true), p("response", Str, true)],
     ),
-    all("get_quota", &[]),
+    ro(all("get_quota", &[])),
     all(
         "schedule_wakeup",
         &[
@@ -211,15 +261,15 @@ pub const CATALOG: &[ToolSpec] = &[
             p("note", Str, true),
         ],
     ),
-    all(
+    idempotent(all(
         "set_session_profile",
         &[p("model", Str, false), p("effort", Str, false)],
-    ),
-    cap(
+    )),
+    idempotent(cap(
         "rename_crew",
         &[p("name", Str, true), p("crew", Str, false)],
-    ),
-    cap(
+    )),
+    destructive(idempotent(cap(
         "change_workdir",
         &[
             p("new_path", Str, true),
@@ -227,15 +277,15 @@ pub const CATALOG: &[ToolSpec] = &[
             p("include_children", Bool, false),
             p("confirm", Bool, false),
         ],
-    ),
-    cap(
+    ))),
+    idempotent(cap(
         "set_crew_status",
         &[p("text", Str, true), p("crew", Str, false)],
-    ),
-    cap(
+    )),
+    idempotent(cap(
         "delegation_policy",
         &[p("text", Str, false), p("crew", Str, false)],
-    ),
+    )),
     cap(
         "start_session",
         &[
@@ -248,17 +298,17 @@ pub const CATALOG: &[ToolSpec] = &[
             p("crew", Str, false),
         ],
     ),
-    cap(
+    destructive(cap(
         "stop_session",
         &[p("session_id", Str, true), p("reason", Str, true)],
-    ),
-    cap("inspect_session", &[p("session_id", Str, true)]),
+    )),
+    ro(cap("inspect_session", &[p("session_id", Str, true)])),
     cap(
         "nudge_session",
         &[p("session_id", Str, true), c("key", true, NUDGE_KEYS)],
     ),
-    cap("list_sessions", &[p("crew", Str, false)]),
-    cap(
+    ro(cap("list_sessions", &[p("crew", Str, false)])),
+    destructive(cap(
         "handoff_captain",
         &[
             p("crew", Str, false),
@@ -269,8 +319,8 @@ pub const CATALOG: &[ToolSpec] = &[
             p("title", Str, false),
             p("opening_brief", Str, false),
         ],
-    ),
-    cap(
+    )),
+    destructive(cap(
         "crew_structure",
         &[
             c("action", true, STRUCTURE_ACTIONS),
@@ -281,7 +331,7 @@ pub const CATALOG: &[ToolSpec] = &[
             p("brief", Str, false),
             c("runner", false, RUNNERS),
         ],
-    ),
+    )),
 ];
 
 /// Removed or renamed tool names (§9, §22.3, §22.7 Q4, S65, S70) and what replaces each, written
@@ -360,6 +410,7 @@ pub fn tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
             name: t.name.to_string(),
             description: text::get(loc, t.name).to_string(),
             input_schema: input_schema(t, loc),
+            annotations: Some(t.hints()),
         })
         .collect()
 }
@@ -505,6 +556,81 @@ mod tests {
         assert!(captain.contains(&"start_session".to_string()));
         assert_eq!(worker.len(), 17);
         assert_eq!(captain.len(), 28);
+    }
+
+    /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
+    /// from them: read-only or talk.
+    #[test]
+    fn annotations_are_on_every_tool_and_passive_is_derived() {
+        let defs = tools_for(&who(Role::Captain), Locale::Zh);
+        assert_eq!(defs.len(), CATALOG.len());
+        for d in &defs {
+            let h = d
+                .annotations
+                .unwrap_or_else(|| panic!("{} has no annotations", d.name));
+            let t = find(&d.name).unwrap();
+            assert_eq!(h, t.hints(), "{}", d.name);
+            assert!(!h.open_world_hint, "{}", d.name);
+            if h.read_only_hint {
+                assert!(
+                    t.passive() && h.idempotent_hint && !h.destructive_hint,
+                    "{}",
+                    d.name
+                );
+            }
+        }
+        let with = |f: fn(&ToolSpec) -> bool| -> Vec<&str> {
+            CATALOG.iter().filter(|t| f(t)).map(|t| t.name).collect()
+        };
+        assert_eq!(
+            with(|t| t.read_only),
+            [
+                "read_channel",
+                "search",
+                "list_channels",
+                "directory",
+                "get_quota",
+                "inspect_session",
+                "list_sessions"
+            ]
+        );
+        assert_eq!(
+            with(|t| t.destructive),
+            [
+                "channel_archive",
+                "change_workdir",
+                "stop_session",
+                "handoff_captain",
+                "crew_structure"
+            ]
+        );
+        assert_eq!(
+            with(|t| t.idempotent && !t.read_only),
+            [
+                "channel_listen",
+                "set_session_profile",
+                "rename_crew",
+                "change_workdir",
+                "set_crew_status",
+                "delegation_policy"
+            ]
+        );
+        assert_eq!(
+            with(ToolSpec::passive),
+            [
+                "post",
+                "read_channel",
+                "search",
+                "list_channels",
+                "channel_listen",
+                "directory",
+                "get_quota",
+                "inspect_session",
+                "list_sessions"
+            ]
+        );
+        let stop = find("stop_session").unwrap();
+        assert!(stop.destructive && !stop.passive());
     }
 
     #[test]

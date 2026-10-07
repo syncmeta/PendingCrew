@@ -7,7 +7,7 @@ use crewd_proto::agent::{CallResult, TOOLS_CHANGED, ToolDef, ToolsChanged, metho
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerConfig, Tool,
+    ServerConfig, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -55,7 +55,17 @@ fn to_tool(d: ToolDef) -> Tool {
         Value::Object(m) => m,
         _ => Default::default(),
     };
-    Tool::new(d.name, d.description, Arc::new(schema))
+    let tool = Tool::new(d.name, d.description, Arc::new(schema));
+    match d.annotations {
+        Some(h) => tool.with_annotations(
+            ToolAnnotations::new()
+                .read_only(h.read_only_hint)
+                .destructive(h.destructive_hint)
+                .idempotent(h.idempotent_hint)
+                .open_world(h.open_world_hint),
+        ),
+        None => tool,
+    }
 }
 
 impl ServerHandler for Bridge {
