@@ -181,6 +181,10 @@ fn no_agent_facing_literals_in_source() {
 
 const PREFIXES: [&str; 3] = ["r.", "trace.", "inject."];
 
+/// Keys of collab's render.md (not tools.md) that agent code reads directly (`port::injection_header`).
+/// They are checked against render.md in both locales instead.
+const RENDER_MD_KEYS: &[&str] = &["inject.header"];
+
 /// md 里已写好、但调用它们的代码还没有的节（Task 7 起空了：`r.captain_only` / `r.not_on_management` / `r.bad_args`
 /// 已被 `tools::call` / `parse_args` 用上）。清单里的节一旦被代码用到，下面的测试就红，提醒把它删掉。
 const UNUSED_UNTIL_TASK_7: &[&str] = &[];
@@ -215,7 +219,19 @@ fn every_text_key_used_in_source_exists_in_both_locales() {
     );
     for loc in [Locale::Zh, Locale::En] {
         let have = crate::agent::text::section_names(loc);
+        let render = crewd_collab::prompts::render_file(loc).section_names();
         for k in &used {
+            if RENDER_MD_KEYS.contains(&k.as_str()) {
+                assert!(
+                    render.contains(&k.as_str()),
+                    "{loc:?} 的 render md 缺 ## {k}"
+                );
+                assert!(
+                    !have.contains(&k.as_str()),
+                    "{k} 在两份 md 里都有：只能在一份"
+                );
+                continue;
+            }
             assert!(have.iter().any(|h| h == k), "{loc:?} 的 tools md 缺 ## {k}");
         }
     }

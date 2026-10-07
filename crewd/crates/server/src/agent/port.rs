@@ -1045,6 +1045,13 @@ pub async fn blocks(
     .await
 }
 
+/// The injection's header line (what `injection` starts with), for a text without any block.
+pub fn injection_header(loc: Locale) -> String {
+    crewd_collab::prompts::render_file(loc)
+        .get("inject.header")
+        .to_string()
+}
+
 pub fn injection(loc: Locale, blocks: &[ChannelBlock]) -> String {
     crewd_collab::render::injection(loc, blocks)
 }

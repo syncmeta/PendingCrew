@@ -8,7 +8,8 @@
 //! reply to my message are folded into one `inject.digest` line (count, senders, seq range) instead
 //! of being listed; everything else (the human, the system, any other category, anything for me)
 //! stays a full line. Folded messages were announced, so the cursor passes them like shown ones.
-//! Digest lines count toward the cap.
+//! The cap cuts folded messages like full lines (newest first): a folded message left out is not
+//! announced and stays unread, and a text with only digest lines still gets the header.
 //!
 //! The cap (R6): what does not fit is left out from the NEWEST end, so what is injected is a
 //! contiguous prefix of each channel's unread run. Cursors move only to the highest seq actually
@@ -96,49 +97,46 @@ fn folds(me: &str, m: &crewd_proto::Message, replied_sender: Option<&str>) -> bo
         && replied_sender != Some(me)
 }
 
-/// One channel's unread run: every message in seq order (`true` = folded) and the folded ones'
-/// senders, so the digest and the cursor follow whatever prefix of the full lines the cap kept.
+/// One unread message of a channel's run: a full line (`folded: None`) or folded into the
+/// channel's digest line (`Some(sender label)`).
+#[derive(Debug, Clone)]
+struct Item {
+    seq: i64,
+    at: String,
+    folded: Option<String>,
+}
+
+/// One channel's unread run in seq order (the window `cursors::unread_for` returned). What is
+/// injected of it is always a prefix: its full lines go into the channel's block, its folded
+/// messages into one digest line, and the cursor moves to the end of the prefix. Full lines and
+/// folded messages are cut by the cap alike (newest first), so nothing announced is skipped and
+/// nothing left out is marked read.
 #[derive(Debug, Clone)]
 struct ChannelRun {
     channel_id: String,
     label: String,
-    seqs: Vec<(i64, bool)>,
-    /// (seq, sender label) of the folded messages.
-    folded: Vec<(i64, String)>,
+    items: Vec<Item>,
+    /// This channel's block in the rendered blocks (`None` = it has no full line).
+    block: Option<usize>,
 }
 
 impl ChannelRun {
-    /// The highest seq that is shown or announced when `kept` full lines of this channel are in:
-    /// folded messages up to the first full line that was left out.
-    fn advance_point(&self, kept: usize) -> Option<i64> {
-        let (mut seen, mut point) = (0, None);
-        for &(seq, folded) in &self.seqs {
-            if !folded {
-                if seen == kept {
-                    break;
-                }
-                seen += 1;
-            }
-            point = Some(seq);
-        }
-        point
+    /// The unread window came back full (`UNREAD_CAP` messages, counted before folding): more
+    /// unread messages may exist beyond it, so an omitted count is only a lower bound.
+    fn window_full(&self) -> bool {
+        self.items.len() >= crewd_collab::cursors::UNREAD_CAP as usize
     }
 
-    fn kept_in(&self, blocks: &[ChannelBlock]) -> usize {
-        blocks
+    /// The digest line for the folded messages among the first `kept` items (none if there are none).
+    fn digest(&self, loc: Locale, kept: usize) -> Option<String> {
+        let shown: Vec<(i64, &str)> = self.items[..kept]
             .iter()
-            .find(|b| b.channel_id == self.channel_id)
-            .map_or(0, |b| b.lines.len())
-    }
-
-    /// The digest line for what `blocks` keep (none when nothing folded is announced).
-    fn digest(&self, loc: Locale, blocks: &[ChannelBlock]) -> Option<String> {
-        let upto = self.advance_point(self.kept_in(blocks))?;
-        let shown: Vec<&(i64, String)> = self.folded.iter().filter(|(s, _)| *s <= upto).collect();
+            .filter_map(|i| i.folded.as_deref().map(|n| (i.seq, n)))
+            .collect();
         let (first, last) = (shown.first()?.0, shown.last()?.0);
         let mut names: Vec<&str> = Vec::new();
         for (_, n) in &shown {
-            if !names.contains(&n.as_str()) {
+            if !names.contains(n) {
                 names.push(n);
             }
         }
@@ -168,7 +166,7 @@ impl ChannelRun {
 
 pub struct Prepared {
     pub context: Option<String>,
-    /// Per channel, the highest seq that is really in `context`.
+    /// Per channel, the highest seq that is really in `context` (shown or announced).
     advance_to: Vec<(String, i64)>,
 }
 
@@ -191,19 +189,24 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
         if msgs.is_empty() {
             continue;
         }
-        let mut seqs = Vec::with_capacity(msgs.len());
-        let mut folded = Vec::new();
+        let mut items = Vec::with_capacity(msgs.len());
         let mut full = Vec::new();
         for m in msgs {
             let to = m
                 .in_reply_to
                 .as_ref()
                 .and_then(|r| replied.get(r).cloned().flatten());
-            let f = folds(&me.session_id, &m, to.as_deref());
-            seqs.push((m.seq, f));
-            if f {
-                folded.push((m.seq, port::sender_label(st, &m, loc).await?));
+            let folded = if folds(&me.session_id, &m, to.as_deref()) {
+                Some(port::sender_label(st, &m, loc).await?)
             } else {
+                None
+            };
+            items.push(Item {
+                seq: m.seq,
+                at: m.created_at.clone(),
+                folded: folded.clone(),
+            });
+            if folded.is_none() {
                 full.push(m);
             }
         }
@@ -225,25 +228,19 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
         runs.push(ChannelRun {
             channel_id: channel_id.clone(),
             label,
-            seqs,
-            folded,
+            items,
+            block: None,
         });
         if !full.is_empty() {
             full_unread.push((channel_id, full));
         }
     }
     let blocks = port::blocks(st, &me.session_id, loc, full_unread).await?;
-    let labels: Vec<String> = blocks
-        .iter()
-        .map(|b| {
-            runs.iter()
-                .find(|r| r.channel_id == b.channel_id)
-                .map(|r| r.label.clone())
-                .unwrap_or_default()
-        })
-        .collect();
-    let fitted = fit(loc, blocks, &labels, &runs, cap);
-    // Nothing shown (a cap too small even for the notes): nothing announced, no cursor moves.
+    for r in &mut runs {
+        r.block = blocks.iter().position(|b| b.channel_id == r.channel_id);
+    }
+    let fitted = fit(loc, blocks, &runs, cap);
+    // Nothing shown: nothing announced, no cursor moves.
     if fitted.context.trim().is_empty() {
         return Ok(Some(Prepared {
             context: None,
@@ -252,10 +249,9 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
     }
     let advance_to = runs
         .iter()
-        .filter_map(|r| {
-            r.advance_point(r.kept_in(&fitted.blocks))
-                .map(|seq| (r.channel_id.clone(), seq))
-        })
+        .zip(&fitted.kept)
+        .filter(|(_, k)| **k > 0)
+        .map(|(r, k)| (r.channel_id.clone(), r.items[*k - 1].seq))
         .collect();
     Ok(Some(Prepared {
         context: Some(fitted.context),
@@ -264,23 +260,24 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
 }
 
 struct Fitted {
-    /// The blocks as injected (a prefix of every channel's run).
-    blocks: Vec<ChannelBlock>,
+    /// Per run, how many of its items are shown or announced (a prefix).
+    kept: Vec<usize>,
     context: String,
 }
 
-/// The block lines in the order they are dropped: always the newest tail among all channels
-/// (`at`, then seq), so every channel keeps a prefix. The last remaining line is never dropped.
-fn removal_order(blocks: &[ChannelBlock]) -> Vec<usize> {
-    let mut tails: Vec<usize> = blocks.iter().map(|b| b.lines.len()).collect();
+/// The run items in the order they are dropped: always the newest tail among all channels (`at`,
+/// then seq), full or folded alike, so every channel keeps a prefix. The last remaining item is
+/// never dropped (every injection makes progress).
+fn removal_order(runs: &[ChannelRun]) -> Vec<usize> {
+    let mut tails: Vec<usize> = runs.iter().map(|r| r.items.len()).collect();
     let total: usize = tails.iter().sum();
     let mut order = Vec::new();
     while order.len() + 1 < total {
         let key = |i: usize| {
-            let l = &blocks[i].lines[tails[i] - 1];
-            (l.at.clone(), l.seq)
+            let it = &runs[i].items[tails[i] - 1];
+            (it.at.clone(), it.seq)
         };
-        let Some(i) = (0..blocks.len())
+        let Some(i) = (0..runs.len())
             .filter(|i| tails[*i] > 0)
             .max_by_key(|i| key(*i))
         else {
@@ -292,43 +289,59 @@ fn removal_order(blocks: &[ChannelBlock]) -> Vec<usize> {
     order
 }
 
-fn trimmed(blocks: &[ChannelBlock], order: &[usize]) -> (Vec<ChannelBlock>, Vec<usize>) {
+/// The blocks and per-run prefixes after dropping the items in `order`.
+fn trimmed(
+    blocks: &[ChannelBlock],
+    runs: &[ChannelRun],
+    order: &[usize],
+) -> (Vec<ChannelBlock>, Vec<usize>) {
     let mut out: Vec<ChannelBlock> = blocks.to_vec();
-    let mut omitted = vec![0usize; blocks.len()];
-    for &i in order {
-        out[i].lines.pop();
-        omitted[i] += 1;
+    let mut kept: Vec<usize> = runs.iter().map(|r| r.items.len()).collect();
+    for &r in order {
+        kept[r] -= 1;
+        if runs[r].items[kept[r]].folded.is_none()
+            && let Some(b) = runs[r].block
+        {
+            out[b].lines.pop();
+        }
     }
-    (out, omitted)
+    (out, kept)
 }
 
-/// `full[i]`: block `i` came back with a full unread window (`UNREAD_CAP` lines), so more unread
-/// messages may exist beyond it and an omitted count is only a lower bound.
+/// The injected text: the blocks, then one digest line per channel with folded messages in its
+/// prefix, then the cut / omission notes. A text without any full line still gets the header.
+/// `cut` = (run, seq) of a message shown only in part.
 fn render(
     loc: Locale,
     blocks: &[ChannelBlock],
-    labels: &[String],
-    full: &[bool],
-    omitted: &[usize],
-    cut: Option<(usize, i64)>,
     runs: &[ChannelRun],
+    kept: &[usize],
+    cut: Option<(usize, i64)>,
 ) -> String {
     let body = port::injection(loc, blocks);
-    let mut notes: Vec<String> = runs.iter().filter_map(|r| r.digest(loc, blocks)).collect();
-    if let Some((bi, seq)) = cut {
+    let mut notes: Vec<String> = runs
+        .iter()
+        .zip(kept)
+        .filter_map(|(r, k)| r.digest(loc, *k))
+        .collect();
+    if let Some((ri, seq)) = cut {
         notes.push(text::r(
             loc,
             "inject.truncated",
             &[
-                ("channel", &labels[bi]),
-                ("id", &blocks[bi].channel_id),
+                ("channel", &runs[ri].label),
+                ("id", &runs[ri].channel_id),
                 ("seq", &seq.to_string()),
                 ("next", &(seq + 1).to_string()),
             ],
         ));
     }
-    for (bi, n) in omitted.iter().enumerate().filter(|(_, n)| **n > 0) {
-        let key = if full[bi] {
+    for (r, k) in runs.iter().zip(kept) {
+        let n = r.items.len() - k;
+        if n == 0 {
+            continue;
+        }
+        let key = if r.window_full() {
             "inject.omitted_at_least"
         } else {
             "inject.omitted"
@@ -336,14 +349,14 @@ fn render(
         notes.push(text::r(
             loc,
             key,
-            &[("channel", &labels[bi]), ("count", &n.to_string())],
+            &[("channel", &r.label), ("count", &n.to_string())],
         ));
     }
     if notes.is_empty() {
         return body;
     }
     if body.is_empty() {
-        return notes.join("\n");
+        return format!("{}\n\n{}", port::injection_header(loc), notes.join("\n"));
     }
     format!("{body}\n\n{}", notes.join("\n"))
 }
@@ -367,30 +380,20 @@ fn first_fit(mut lo: usize, mut hi: usize, fits: impl Fn(usize) -> bool) -> usiz
     hi
 }
 
-fn fit(
-    loc: Locale,
-    blocks: Vec<ChannelBlock>,
-    labels: &[String],
-    runs: &[ChannelRun],
-    cap: usize,
-) -> Fitted {
-    let full: Vec<bool> = blocks
-        .iter()
-        .map(|b| b.lines.len() >= crewd_collab::cursors::UNREAD_CAP as usize)
-        .collect();
-    let order = removal_order(&blocks);
+fn fit(loc: Locale, blocks: Vec<ChannelBlock>, runs: &[ChannelRun], cap: usize) -> Fitted {
+    let order = removal_order(runs);
     let n = order.len();
     // The text with all its notes is NOT monotone in `k` (the first drop in a channel adds a
     // note), so a plain binary search could skip a fitting `k`. The body alone is monotone and
     // the notes only add to it: no `k` below the body's own fit can fit; from there on, take the
     // first `k` that fits with its notes (a few steps: the notes are short).
     let body = |k: usize| {
-        let (b, _) = trimmed(&blocks, &order[..k]);
+        let (b, _) = trimmed(&blocks, runs, &order[..k]);
         units(&port::injection(loc, &b))
     };
     let size = |k: usize| {
-        let (b, o) = trimmed(&blocks, &order[..k]);
-        units(&render(loc, &b, labels, &full, &o, None, runs))
+        let (b, kept) = trimmed(&blocks, runs, &order[..k]);
+        units(&render(loc, &b, runs, &kept, None))
     };
     let k_body = if body(n) > cap {
         None
@@ -400,19 +403,24 @@ fn fit(
         Some(first_fit(0, n, |k| body(k) <= cap))
     };
     if let Some(k) = k_body.and_then(|k0| (k0..=n).find(|k| size(*k) <= cap)) {
-        let (blocks, omitted) = trimmed(&blocks, &order[..k]);
-        let context = render(loc, &blocks, labels, &full, &omitted, None, runs);
-        return Fitted { blocks, context };
+        let (blocks, kept) = trimmed(&blocks, runs, &order[..k]);
+        let context = render(loc, &blocks, runs, &kept, None);
+        return Fitted { kept, context };
     }
-    // No `k` fits: even one line does not. Cut its text (it is then injected, so the cursor may
-    // pass it; the note says how to read it in full). Otherwise this message would block its
-    // channel forever.
-    let (mut blocks, omitted) = trimmed(&blocks, &order);
-    let Some(bi) = blocks.iter().position(|b| !b.lines.is_empty()) else {
+    // No `k` fits: even one item does not. If it is a full line, cut its text (it is then
+    // injected, so the cursor may pass it; the note says how to read it in full); otherwise this
+    // message would block its channel forever. A lone digest line is shown as it is (a cap too
+    // small for one digest line cannot be honoured).
+    let (mut blocks, kept) = trimmed(&blocks, runs, &order);
+    let Some(ri) = (0..runs.len()).find(|r| kept[*r] > 0) else {
         return Fitted {
             context: String::new(),
-            blocks,
+            kept,
         };
+    };
+    let (Some(bi), None) = (runs[ri].block, &runs[ri].items[kept[ri] - 1].folded) else {
+        let context = render(loc, &blocks, runs, &kept, None);
+        return Fitted { kept, context };
     };
     let whole = blocks[bi].lines[0].text.clone();
     let seq = blocks[bi].lines[0].seq;
@@ -420,7 +428,7 @@ fn fit(
         let mut s: String = whole.chars().take(t).collect();
         s.push('\u{2026}');
         blocks[bi].lines[0].text = s;
-        render(loc, blocks, labels, &full, &omitted, Some((bi, seq)), runs)
+        render(loc, blocks, runs, &kept, Some((ri, seq)))
     };
     let fits = |t: usize| units(&with_cut(t, &mut blocks.clone())) <= cap;
     // A cap too small for even the notes cannot be honoured; cut to nothing then.
@@ -430,7 +438,7 @@ fn fit(
         0
     };
     let context = with_cut(t, &mut blocks);
-    Fitted { blocks, context }
+    Fitted { kept, context }
 }
 
 /// Largest `t` in `[0, max]` with `fits(t)`, given that size grows with `t` and `fits(0)` holds.
@@ -890,7 +898,7 @@ mod tests {
             &[("2026-01-01T00:00:02Z", 7), ("2026-01-01T00:00:04Z", 8)],
         );
         // b's #8 (newest), a's #2, b's #7; a's #1 (the oldest) is never dropped.
-        assert_eq!(removal_order(&[a, b]), [1, 0, 1]);
+        assert_eq!(removal_order(&runs_of(&[a, b])), [1, 0, 1]);
     }
 
     #[tokio::test]
@@ -1035,13 +1043,13 @@ mod tests {
         a.name = "示例话题甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲甲".into();
         b.name = "示例话题乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙乙".into();
         let blocks = vec![a, b];
-        let labels = vec![a_label(&blocks[0]), a_label(&blocks[1])];
+        let runs = runs_of(&blocks);
         let loc = crewd_collab::Locale::Zh;
-        let order = removal_order(&blocks);
+        let order = removal_order(&runs);
         assert_eq!(order, [1, 0, 1, 1]);
         let size = |k: usize| {
-            let (b, o) = trimmed(&blocks, &order[..k]);
-            units(&render(loc, &b, &labels, &[false, false], &o, None, &[]))
+            let (b, kept) = trimmed(&blocks, &runs, &order[..k]);
+            units(&render(loc, &b, &runs, &kept, None))
         };
         let cap = size(1);
         assert!(
@@ -1055,9 +1063,31 @@ mod tests {
             size(3) <= cap || size(4) <= cap,
             "binary search would settle here"
         );
-        let fitted = fit(loc, blocks.clone(), &labels, &[], cap);
-        let kept: usize = fitted.blocks.iter().map(|b| b.lines.len()).sum();
+        let fitted = fit(loc, blocks.clone(), &runs, cap);
+        let kept: usize = fitted.kept.iter().sum();
         assert_eq!(kept, 4, "the smallest fitting k keeps the most lines");
+    }
+
+    /// Runs for blocks of full lines only (label = the block name).
+    fn runs_of(blocks: &[ChannelBlock]) -> Vec<ChannelRun> {
+        blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| ChannelRun {
+                channel_id: b.channel_id.clone(),
+                label: a_label(b),
+                items: b
+                    .lines
+                    .iter()
+                    .map(|l| Item {
+                        seq: l.seq,
+                        at: l.at.clone(),
+                        folded: None,
+                    })
+                    .collect(),
+                block: Some(i),
+            })
+            .collect()
     }
 
     fn a_label(b: &ChannelBlock) -> String {
@@ -1452,6 +1482,10 @@ mod tests {
             .await
             .expect("a digest alone is injected");
         assert!(!ctx.contains("P-001"), "{ctx}");
+        assert!(
+            ctx.starts_with(&port::injection_header(crewd_collab::Locale::Zh)),
+            "a digest-only injection still has the header: {ctx}"
+        );
         let w2 = port::sender_label(&f.state, &p, crewd_collab::Locale::Zh)
             .await
             .unwrap();
@@ -1477,19 +1511,123 @@ mod tests {
             l.text = "很长的说明".repeat(20);
         }
         let blocks = vec![b];
-        let labels = vec![a_label(&blocks[0])];
-        // A folded message before them: always announced with what is kept.
-        let runs = vec![ChannelRun {
-            channel_id: "a".into(),
-            label: "a".into(),
-            seqs: vec![(1, true), (2, false), (3, false), (4, false)],
-            folded: vec![(1, "示例发言者".into())],
-        }];
-        let without_digest = units(&render(loc, &blocks, &labels, &[false], &[0], None, &[]));
-        let fitted = fit(loc, blocks.clone(), &labels, &runs, without_digest);
-        let kept: usize = fitted.blocks.iter().map(|b| b.lines.len()).sum();
+        let plain = runs_of(&blocks);
+        // A folded message before them: announced with what is kept.
+        let mut runs = plain.clone();
+        runs[0].items.insert(
+            0,
+            Item {
+                seq: 1,
+                at: "2026-01-01T00:00:01Z".into(),
+                folded: Some("示例发言者".into()),
+            },
+        );
+        let without_digest = units(&render(loc, &blocks, &plain, &[3], None));
+        let fitted = fit(loc, blocks.clone(), &runs, without_digest);
+        // Item 0 is the folded one (the oldest, always kept); the rest are full lines.
+        let kept = fitted.kept[0] - 1;
         assert!(kept < 3, "the digest line must make room: kept {kept}");
         assert!(units(&fitted.context) <= without_digest);
         assert!(fitted.context.contains("示例发言者"), "{}", fitted.context);
+    }
+
+    /// M1 (review): the "at least" note follows the unread window counted before folding.
+    #[tokio::test]
+    async fn a_full_window_with_folded_messages_still_says_at_least() {
+        let f = Fixture::with_config(AgentConfig {
+            inject_cap_chars: 3_000,
+            ..Default::default()
+        })
+        .await;
+        f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
+            .await;
+        let l = lobby(&f).await;
+        for i in 0..10 {
+            peer_post(
+                &f,
+                "s-w2",
+                &l,
+                &format!("P-{i:03}"),
+                Some("progress"),
+                vec![],
+                None,
+            )
+            .await;
+        }
+        for i in 0..crewd_collab::cursors::UNREAD_CAP as usize {
+            f.human_post(&l, &format!("L-{:03}", i % 1000), vec![])
+                .await;
+        }
+        let first = ctx_of(&f, &f.worker).await.unwrap();
+        let (pre, _) = text::get(crewd_collab::Locale::Zh, "inject.omitted_at_least")
+            .split_once("{count}")
+            .unwrap();
+        let (_, mid) = pre.split_once("{channel}").unwrap();
+        assert!(first.contains(mid), "{first}");
+        assert!(first.contains("至少"), "{first}");
+    }
+
+    /// M5 (review): digest lines are cut like full lines; what is left out stays unread for the
+    /// next call, every call makes progress, and each digest is announced exactly once.
+    #[tokio::test]
+    async fn digests_alone_over_the_cap_are_spread_over_calls() {
+        let cap_units = 700;
+        let f = Fixture::with_config(AgentConfig {
+            inject_cap_chars: cap_units,
+            ..Default::default()
+        })
+        .await;
+        let long = format!("示例同事{}", "很长的名字".repeat(14));
+        f.add_session(&f.crew, "s-w2", Role::Worker, &long).await;
+        let cap = f.me(&f.captain).await;
+        let mut topics = Vec::new();
+        for i in 0..6 {
+            let t = port::create_channel(
+                &f.state,
+                &cap,
+                ChannelKind::Topic,
+                format!("示例话题{i}"),
+                None,
+                vec![
+                    port::MemberRef::Session(f.worker.clone()),
+                    port::MemberRef::Session("s-w2".into()),
+                ],
+            )
+            .await
+            .unwrap();
+            topics.push(t);
+        }
+        ctx_of(&f, &f.worker).await; // pin the new channels' cursors
+        for t in &topics {
+            peer_post(&f, "s-w2", &t.id, "P-进度", Some("progress"), vec![], None).await;
+        }
+        let ctxs = drain(&f, &f.worker, cap_units).await;
+        assert!(ctxs.len() > 1, "all six do not fit at once: {ctxs:?}");
+        assert!(
+            ctxs.len() <= 6,
+            "every call announces at least one: {ctxs:?}"
+        );
+        let header = port::injection_header(crewd_collab::Locale::Zh);
+        let mut seen: Vec<String> = Vec::new();
+        for c in &ctxs {
+            assert!(c.starts_with(&header), "{c}");
+            for line in digest_lines(c) {
+                let t = topics
+                    .iter()
+                    .find(|t| line.starts_with(&format!("{}：", t.name)))
+                    .unwrap_or_else(|| panic!("{line}"));
+                seen.push(t.name.clone());
+            }
+        }
+        seen.sort();
+        let mut want: Vec<String> = topics.iter().map(|t| t.name.clone()).collect();
+        want.sort();
+        assert_eq!(seen, want, "each digest exactly once");
+        for t in &topics {
+            assert_eq!(
+                port::cursor(&f.state, &f.worker, &t.id).await.unwrap(),
+                port::latest_seq(&f.state, &t.id).await.unwrap()
+            );
+        }
     }
 }
