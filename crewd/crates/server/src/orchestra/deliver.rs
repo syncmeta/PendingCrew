@@ -755,7 +755,7 @@ impl<P: Port> Core<P> {
 
     /// 协作事件落后（`Lagged`）：漏掉的不只是消息，从库里重推状态，不只重排未读——
     /// ① 重启询问答没答（漏了 `RestartAnswered` = 名单永远等着）；② 未读重新规划（裁定 16）；③ 到期的唤醒重扫
-    /// （漏了 `WakeEnqueued` 的 ask_answer / 审批结果 / timer 都在库里排着）。漏掉的 `Progress` 由 `observe_progress`
+    /// （漏了 `WakeEnqueued` 的 ask_answer / timer 都在库里排着）。漏掉的 `Progress` 由 `observe_progress`
     /// 的 `last_progress_at` 兜底。漏掉的 `AskAnswered.cleared` 无从重推（M3a 没有「某时刻之后答过的问」的查询）：
     /// `AskAnsweredHook` 的实现（M4b）必须容忍漏调、自己能从账本重推（写进交付记录）。
     pub(crate) async fn on_lagged(&mut self) -> anyhow::Result<()> {
