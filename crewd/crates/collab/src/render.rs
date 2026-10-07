@@ -528,8 +528,9 @@ pub fn build_batch(
                 };
                 let a = match asks::get(conn, crew, ask) {
                     Ok(a) => a,
-                    Err(e @ CollabError::NotFound(_)) => {
-                        unusable.push((r.id, e.to_string()));
+                    Err(CollabError::NotFound(why)) => {
+                        // 原因进日志 / 排障：与上下几条 unusable 原因一样用英文（拒绝文字的 en 渲染）。
+                        unusable.push((r.id, why.text(Locale::En)));
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -1401,6 +1402,15 @@ mod tests {
         assert!(b.items.is_empty());
         assert_eq!(b.unusable.len(), 4, "{:?}", b.unusable);
         assert!(b.unusable[0].1.contains("withdrawn"), "{:?}", b.unusable);
+        // 不存在的问（NotFound 拒绝）：原因与别的 unusable 原因一样是英文（拒绝文字的 en 渲染），日志里不混中文。
+        assert!(b.unusable[1].1.contains("has no H99"), "{:?}", b.unusable);
+        assert!(
+            !b.unusable
+                .iter()
+                .any(|(_, why)| why.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))),
+            "{:?}",
+            b.unusable
+        );
         assert!(
             b.unusable[3].1.contains("is not an ask"),
             "{:?}",
