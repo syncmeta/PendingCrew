@@ -1316,8 +1316,9 @@ impl<P: Port> Core<P> {
                 return Ok(());
             }
         };
+        // 执行器核的是调用方看到的那个框（不是 actor 此刻记的）：两道检查各自独立成立。
         l.writes.push_back(Write::Answer {
-            expect: d.fingerprint(),
+            expect: fingerprint.to_string(),
             steps,
             reply: AnswerReply::Answer(reply),
         });
