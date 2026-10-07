@@ -994,7 +994,17 @@ mod tests {
         rig.crew("c1", "cap");
         rig.crew("c2", "cap2");
         desired_running(&rig, "cap", false);
-        desired_running(&rig, "cap2", false);
+        desired_running(&rig, "cap2", true);
+        // 上次是休眠停下的：恢复附言只给一次（给了就记 resumed）——被跳过的那一个不能白白用掉它。
+        rig.port.lock().hibernate = Some(HibernateRecord {
+            at_ms: T0.0,
+            sessions: vec![Hibernated {
+                session_id: "cap2".into(),
+                was_working: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
         rig.core.boot().await.unwrap();
         assert!(rig.core.held.contains("cap2"));
         {
@@ -1012,6 +1022,11 @@ mod tests {
         assert_eq!(rig.exec.launches("cap").len(), 1, "其余照常恢复");
         assert!(rig.exec.launches("cap2").is_empty());
         assert!(rig.core.held.is_empty(), "被移除的移出名单");
+        let rec = rig.port.lock().hibernate.clone().unwrap();
+        assert!(
+            !rec.sessions[0].resumed,
+            "没恢复的那一个，休眠附言还留着：{rec:?}"
+        );
     }
 
     #[tokio::test]
