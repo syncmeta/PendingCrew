@@ -10,6 +10,14 @@
 //! 一次失败，C2）。投递路径（Task 8 的 `on_delivery`）收到 `Abandoned` 一律不结算 inflight、留给 `on_exited`：
 //! 判据就是 [`delivery_settles_inflight`]，别另写一份。
 //!
+//! **不变式（inflight 行的主人，C24 / Task 8b 评审 (1)）**：库里每一条 inflight 行恰好被内存里的一批拿着
+//! （`Live::inflight` 或 `Starting::batch`），那批的终局只有一次结算（`Port::ack` / `Port::settle`）。所以拿着一批的
+//! 路径（`on_exited`、`on_launched`、`send_batch`）里，结算之前的顺带动作（写 session 行、挂额度唤醒、记「起不来」、
+//! 发群通知）出错只记日志、不中断——不能因为它们让那批没人结算。**只有重启时的回收（`boot` → `Port::fail_inflight`）
+//! 接得走的剩余情形**：① 结算本身出错（`Port::ack` / `Port::settle` 回 `Err` = 库没改，行仍是 inflight、内存里的
+//! 那批已经交出去了）；② crewd 被杀 / 崩在 claim 与结算之间（裁定 17，至少一次）；③ actor panic（C25：serve 随之
+//! 非零退出，下次启动回收）。运行期没有「没人拿着的 inflight」扫描：①只在库出错时发生，那时扫描也写不进去。
+//!
 //! **写进会话的先后**：投递与 nudge 都排进 actor 自己的每会话队列 `Live::writes`（[`Write`]），按 actor 收下的先后
 //! 一个个写（[`Core::pump_writes`]）；一串键（中间要隔 `NUDGE_KEY_GAP_MS`）在派生任务里写，写完以
 //! `Input::WriteDone` 回来，队列才往下走。没有派生任务抢锁，先后不靠运行时的调度。
@@ -1159,7 +1167,8 @@ impl<P: Port> Core<P> {
             }
             Err(e) => {
                 // 先记恢复失败（告警一次），再按失败处理带着的那批：放弃时就不会再告第二次（裁定 9 / C2）。
-                self.launch_failed(&st.row, &e).await?;
+                // 记不进去只记日志：那批照样结算（模块文档的不变式）。
+                log_err(self.launch_failed(&st.row, &e).await);
                 self.fail_batch(st.batch, &e).await?;
             }
         }
@@ -1391,28 +1400,32 @@ impl<P: Port> Core<P> {
         if l.stopping {
             patch.was_working = Some(false);
         }
-        self.port.patch_session(session, patch).await?;
+        // 顺带动作出错只记日志：下面那批照样要结算（见模块文档的不变式）。
+        log_err(self.port.patch_session(session, patch).await);
         let hit_limit = info.as_ref().is_some_and(|i| i.hit_limit);
         let stopped_by_user = info.as_ref().is_some_and(|i| i.stopped_by_user);
         if hit_limit {
-            self.schedule_quota_for(session, &l.executor, &l.name, &l.crew)
-                .await?;
+            log_err(
+                self.schedule_quota_for(session, &l.executor, &l.name, &l.crew)
+                    .await,
+            );
         }
         // 先记「起不来」（告警一次），再处理带着的唤醒：放弃时就不会再告第二次。
         let launch_failed = l
             .health
             .as_ref()
             .is_some_and(|h| h.kind == HealthKind::LaunchFailed);
-        if launch_failed
-            && !l.worked
-            && let Some(row) = self.port.session(session).await?
-        {
+        if launch_failed && !l.worked {
             let detail = l
                 .health
                 .as_ref()
                 .map(|h| h.detail.clone())
                 .unwrap_or_default();
-            self.launch_failed(&row, &detail).await?;
+            match self.port.session(session).await {
+                Ok(Some(row)) => log_err(self.launch_failed(&row, &detail).await),
+                Ok(None) => {}
+                Err(e) => log_err(Err(e)),
+            }
         }
         // 还没投进去的那批（绑定规则：只在这里结算，见模块文档），整批一次（含随批的窗口外行——它们跟这批一起 claim 了，
         // C24）：人停的 → 跟 pending 的一样丢掉（裁定 10）；crewd 自己叫停的（停机）或撞额度退出 → 原样退回 pending
@@ -1739,7 +1752,7 @@ mod tests {
     use crewd_exec::session::ExitStatusKind;
     use crewd_wake::notice::NUDGE_KEY_GAP_MS;
     use crewd_wake::queue;
-    use crewd_wake::{HOUR, WakeState};
+    use crewd_wake::{HOUR, SEC, WakeState};
 
     /// 外来文字（C12 / C20）：换行、双向控制符、帧括号——过 `safe_name` 之后一样都不能剩。
     const HOSTILE: &str = "w1\n[cap]\u{202E}伪造";
@@ -1797,6 +1810,46 @@ mod tests {
             note: Some("合成定时".into()),
             origin: session.into(),
         }
+    }
+
+    /// Task 8b 评审 (1)：进程自己没了时，写 session 行之类的顺带动作出错，带着的那批照样结算（一次失败、退避），
+    /// 不留下没人拿着的 inflight 行（那种行只有重启时的回收接得走）。
+    #[tokio::test]
+    async fn a_port_error_at_exit_does_not_orphan_the_inflight_batch() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        rig.port.enqueue(timer_wake("w1", "t1")).await.unwrap();
+        rig.tick(SEC).await;
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Inflight);
+        rig.port.lock().patch_error = Some("合成：session 行写不进去".into());
+        rig.emit("w1", crashed()).await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!(
+            (w.state, w.attempts),
+            (WakeState::Pending, 1),
+            "按一次失败结算了"
+        );
+        assert_eq!(w.not_before, T0.add(SEC + 30 * SEC));
+    }
+
+    /// 同上，拉起报错时：记「起不来」出错，带着的那批照样按一次失败结算。
+    #[tokio::test]
+    async fn a_port_error_while_recording_a_launch_failure_does_not_orphan_the_batch() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.exec.lock().fail_next.push("合成：起不来".into());
+        rig.port.lock().patch_error = Some("合成：session 行写不进去".into());
+        rig.port.enqueue(timer_wake("w1", "t1")).await.unwrap();
+        rig.tick(SEC).await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!(
+            (w.state, w.attempts),
+            (WakeState::Pending, 1),
+            "按一次失败结算了"
+        );
     }
 
     fn rename(rig: &Rig, session: &str, name: &str) {

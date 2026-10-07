@@ -504,11 +504,16 @@ impl<P: Port> Core<P> {
         } else {
             Context::new()
         };
+        // 会话得在（上面的 await 里 actor 不处理别的输入，它不会消失；这里先查，claim 之后就不会出现「拿走了却没人拿着」）。
+        if !self.live.contains_key(session) {
+            return Ok(false);
+        }
         // 进正文的与随批的一起拿走（C24）：从此它们只属于这一批，直到这批的 ack。
         if !held.is_empty() {
             self.port.claim(&batch).await?;
         }
         let Some(l) = self.live.get_mut(session) else {
+            // 到不了（见上）；万一到了就原样退回，退回出错由重启回收接走（core.rs 模块文档的不变式 ①）。
             if !held.is_empty() {
                 self.port.settle(&held, Settle::Requeue, now).await?;
             }
@@ -2664,10 +2669,8 @@ mod tests {
             .await;
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活乙")
             .await;
-        {
-            let mut st = rig.port.lock();
-            st.defer.insert(2);
-        }
+        let second = rig.port.wakes_of("w1")[1].id;
+        rig.port.lock().defer.insert(second);
         rig.emit("w1", SessionEvent::Working(false)).await;
         let w = rig.port.wakes_of("w1");
         assert_eq!(

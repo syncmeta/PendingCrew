@@ -84,6 +84,8 @@ pub struct MemState {
     pub advance_error: Option<String>,
     /// 设了就让 `put_latch` 出错（模拟熔断台账写不进去）。
     pub latch_error: Option<String>,
+    /// 设了就让 `patch_session` 出错（模拟写 session 行失败）：带着的那批照样要结算，不能留下没人拿着的 inflight 行。
+    pub patch_error: Option<String>,
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -296,6 +298,9 @@ impl Port for MemPort {
 
     async fn patch_session(&self, id: &str, p: SessionPatch) -> Result<()> {
         let mut st = self.lock();
+        if let Some(e) = &st.patch_error {
+            anyhow::bail!("{e}");
+        }
         let row = st
             .sessions
             .get_mut(id)
