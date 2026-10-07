@@ -3458,8 +3458,13 @@ mod tests {
             .await;
         assert_eq!(rig.exec.sent("w1").len(), 1, "第一笔交给了执行器");
         let id = rig.exec.last_send_id("w1");
-        rig.emit("w1", SessionEvent::InputDraft(Some("人打了一半".into())))
-            .await;
+        rig.emit(
+            "w1",
+            SessionEvent::InputDraft(Some(crewd_exec::session::HeldDraft::Text(
+                "人打了一半".into(),
+            ))),
+        )
+        .await;
         rig.emit(
             "w1",
             SessionEvent::Delivery {
@@ -3473,13 +3478,19 @@ mod tests {
             .await;
         agrees(&mut rig, "w1", "msg:c1/lobby#2", "input_draft").await;
         let live = rig.core.live_view("w1").await.unwrap();
-        assert_eq!(live.input_draft.as_deref(), Some("人打了一半"));
-        assert_eq!(
-            super::super::control::live_to_proto(&live)
-                .input_draft
-                .as_deref(),
-            Some("人打了一半")
-        );
+        let wire = super::super::control::live_to_proto(&live);
+        assert_eq!(wire.input_draft.as_deref(), Some("人打了一半"));
+        assert!(!wire.input_draft_unknown);
+        // 分不清的读数（fix R3）：同样挡（`input_draft`），但不把看得见的那行当成人的草稿报出去。
+        rig.emit(
+            "w1",
+            SessionEvent::InputDraft(Some(crewd_exec::session::HeldDraft::Unknown)),
+        )
+        .await;
+        agrees(&mut rig, "w1", "msg:c1/lobby#2", "input_draft").await;
+        let wire = super::super::control::live_to_proto(&rig.core.live_view("w1").await.unwrap());
+        assert_eq!(wire.input_draft, None);
+        assert!(wire.input_draft_unknown);
         rig.emit("w1", SessionEvent::InputDraft(None)).await;
         agrees(&mut rig, "w1", "msg:c1/lobby#2", "inflight").await;
         assert_eq!(rig.core.live_view("w1").await.unwrap().input_draft, None);

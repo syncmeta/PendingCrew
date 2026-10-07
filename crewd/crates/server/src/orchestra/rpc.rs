@@ -496,10 +496,18 @@ mod tests {
             (
                 ControlError::InputDraft {
                     session: "s-1".into(),
-                    text: "draft".into(),
+                    text: Some("draft".into()),
                 },
                 -32009,
                 "session.input_draft",
+            ),
+            (
+                ControlError::InputDraft {
+                    session: "s-1".into(),
+                    text: None,
+                },
+                -32009,
+                "session.input_draft_unknown",
             ),
         ];
         for (e, code, refusal) in table {

@@ -497,10 +497,13 @@ pub struct SessionLive {
     pub pending_decision: Option<DecisionView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_question: Option<String>,
-    /// 输入框里有一段还没发出的草稿、正挡着投递（M3c T10d）：草稿文本（分不清是不是草稿时 = 输入行上看得见的字）。
-    /// 不在 = 没有。
+    /// 输入框里有一段人打的、还没发出的草稿，正挡着投递（M3c T10d）：草稿原文。不在 = 没有（或分不清，见下）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_draft: Option<String>,
+    /// true = 有人在终端里敲过字、但分不清输入框里是草稿还是占位提示，投递照样挡着（T10d fix R3）。这时不给
+    /// `inputDraft`：看得见的那行不一定是人的字。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub input_draft_unknown: bool,
 }
 
 /// 重启后「是否立即恢复这 N 个 session」（§22.7 Q1）。

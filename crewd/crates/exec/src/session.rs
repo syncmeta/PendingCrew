@@ -38,6 +38,27 @@ pub const ANSWER_VERIFY_DELAY: Duration = Duration::from_millis(500);
 /// 草稿闸挡住一笔投递时 `DeliveryOutcome::Blocked` 带的原因（是码不是文案：编排层据它显示 `input_draft`）。
 pub const INPUT_DRAFT: &str = "input_draft";
 
+/// 外来输入的标记（[`Core::raw`] 置、输入框读成空清）。分两步清：`raw` 之后回显还没到时框仍读成空，那一次空不算
+/// 「人清掉了」——要先读到过非空（回显到了），再读到空才清。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Foreign {
+    None,
+    /// 有外来按键，框里还没读到过字（回显可能还在路上）。
+    Typed,
+    /// 有外来按键之后框里读到过字：再读成空 = 清掉。
+    Shown,
+}
+
+/// 草稿闸挡着投递时看到的输入框（[`SessionEvent::InputDraft`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HeldDraft {
+    /// 人打的字（正常样式），原样。
+    Text(String),
+    /// 有人往终端里敲过东西、而此刻分不清框里是草稿还是占位提示（样式认不出 / 混着）：不当成人的草稿转述，
+    /// 只说「分不清」（T10d fix R3）。
+    Unknown,
+}
+
 /// 回答一个待决策框的一下按键（[`Core::answer`]）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnswerStep {
@@ -187,9 +208,9 @@ pub enum SessionEvent {
     },
     /// 执行器替 agent 做了一个人应该知道的决定（代拒了一个表单、丢了一段原始按键……）。
     Notice(String),
-    /// 有正文等着写、而输入框里有草稿（T10d 草稿闸）：草稿文本（分不清是不是草稿时 = 输入行上看得见的字）；
-    /// 草稿清掉 / 不再有东西等着写 = `None`。只在看到的草稿变了时发。
-    InputDraft(Option<String>),
+    /// 有正文等着写、而输入框里有草稿（T10d 草稿闸）：[`HeldDraft`]；草稿清掉 / 不再有东西等着写 = `None`。
+    /// 只在看到的草稿变了时发。
+    InputDraft(Option<HeldDraft>),
     /// codex：服务端确认的实际模型 / 推理强度 / fast 档（握手回包、设置回显）。
     Profile(Profile),
     Exited(ExitInfo),
@@ -269,6 +290,8 @@ struct AnswerJob {
 struct Answering {
     id: u64,
     expect: String,
+    /// 还没排进 `keys` 的下几下：上一下真正按下去之后才排下一下（按下时刻 + 间隔，T10d fix M3）。
+    remaining: VecDeque<AnswerStep>,
     verify_at: Option<Instant>,
 }
 
@@ -307,7 +330,12 @@ pub struct Core {
     /// `input_dirty` 时那段残留落地时的输入行（草稿闸认出「是自己的残留」，见 [`Core::draft_held`]）。
     residue: Option<String>,
     /// 最近一次发出去的 `SessionEvent::InputDraft`（只在变了时再发）。
-    draft_reported: Option<String>,
+    draft_reported: Option<HeldDraft>,
+    /// 输入来源（T10d fix R1，草稿闸的主信号）：输入框上次读成空（`Empty`）之后，有没有经 [`Core::raw`] 进来过
+    /// 人的按键（attach / 人在终端里敲）。`None` = 没人能往框里打过字，框里读出的 `Text` / `Unknown` 都是 claude 自己
+    /// 画的（占位提示的样式没认出来），当空框；其余 = 照样式判据（`Text` / `Unknown` 挡，fail-closed）。
+    /// 我们自己的投递、回答、打断、限流应答、终端回复都不经 `raw`，不会置它。
+    foreign_input: Foreign,
     /// 正在进行的回答、排在它后面的回答（一次只答一个）。
     answering: Option<Answering>,
     answers: VecDeque<AnswerJob>,
@@ -349,6 +377,7 @@ impl Core {
             input_dirty: false,
             residue: None,
             draft_reported: None,
+            foreign_input: Foreign::None,
             answering: None,
             answers: VecDeque::new(),
             queue: pending.into(),
@@ -488,6 +517,7 @@ impl Core {
         if let Some(h) = self.quota.feed(bytes) {
             self.set_health(Some(h), now);
         }
+        self.observe_input_box();
         self.flush_due_keys(now);
         self.verify_answer(now);
         // 扫描器只是附加触发：它触发与否，按键前都要看屏幕；而屏幕每块输出、每拍都看，
@@ -507,6 +537,7 @@ impl Core {
             return;
         }
         self.last_now = self.last_now.max(now);
+        self.observe_input_box();
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -568,10 +599,19 @@ impl Core {
         self.start_next(now);
     }
 
-    /// 原样写字节（nudge / 人在终端里按键）。
+    /// 原样写字节：人在终端里按键 / attach 的输入（**外来输入的唯一入口**，T10d fix R1）。会置 `foreign_input`：
+    /// 从这一刻起直到输入框读成空，框里的字可能是人打的。
     pub fn raw(&mut self, bytes: &[u8]) {
         if self.running && !bytes.is_empty() {
+            self.foreign_input = Foreign::Typed;
             self.actions.push(Action::Write(bytes.to_vec()));
+        }
+    }
+
+    /// 打断当前回合（我们自己的动作：写一个 Esc，不算外来输入）。
+    pub fn interrupt(&mut self) {
+        if self.running {
+            self.actions.push(Action::Write(vec![0x1b]));
         }
     }
 
@@ -755,14 +795,10 @@ impl Core {
                     });
                     if same {
                         self.actions.push(Action::Write(key.bytes));
-                        let id = *id;
-                        if !self.keys.iter().any(|k| answer_id(k) == Some(id)) {
-                            // 最后一下按完：到点回读（S73）。
-                            let at = now + self.config.answer_verify_delay;
-                            if let Some(a) = self.answering.as_mut() {
-                                a.verify_at = Some(at);
-                            }
-                        }
+                        // 下一下 = 这一下真正按下的时刻 + 间隔（不按预排的绝对时刻：拍子晚到时间隔不会被压没）；
+                        // 这是最后一下 = 到点回读。
+                        let next = now + self.config.answer_key_gap;
+                        self.schedule_next_answer_key_or_verify(next, now);
                     } else {
                         let id = *id;
                         self.keys.retain(|k| answer_id(k) != Some(id));
@@ -793,20 +829,6 @@ impl Core {
         let Some(job) = self.answers.pop_front() else {
             return;
         };
-        let gap = self.config.answer_key_gap;
-        let mut at = now;
-        for step in job.steps.iter() {
-            self.schedule(
-                at,
-                step.bytes.clone(),
-                KeyPurpose::Answer {
-                    id: job.id,
-                    expect: job.expect.clone(),
-                    selected: step.selected_before,
-                },
-            );
-            at += gap;
-        }
         let verify_at = job
             .steps
             .is_empty()
@@ -814,9 +836,44 @@ impl Core {
         self.answering = Some(Answering {
             id: job.id,
             expect: job.expect,
+            remaining: job.steps.into(),
             verify_at,
         });
+        // 第一下「现在」排进去（下一次 flush 之前回读屏幕）；后面的每一下在上一下按下之后再排。
+        self.schedule_next_answer_key(now);
         self.flush_due_keys(now);
+    }
+
+    /// 把正在进行的回答的下一下排在 `at`；没有下一下了 = 到 `at + answer_verify_delay` 回读（S73）。
+    fn schedule_next_answer_key(&mut self, at: Instant) {
+        let delay = self.config.answer_verify_delay;
+        let Some(a) = self.answering.as_mut() else {
+            return;
+        };
+        match a.remaining.pop_front() {
+            Some(step) => {
+                let purpose = KeyPurpose::Answer {
+                    id: a.id,
+                    expect: a.expect.clone(),
+                    selected: step.selected_before,
+                };
+                self.schedule(at, step.bytes, purpose);
+            }
+            None => {
+                if a.verify_at.is_none() {
+                    a.verify_at = Some(at + delay);
+                }
+            }
+        }
+    }
+
+    /// 按下一下之后：还有下一下就排在 `next`；没有了就 `now + answer_verify_delay` 回读。
+    fn schedule_next_answer_key_or_verify(&mut self, next: Instant, now: Instant) {
+        let has_more = self
+            .answering
+            .as_ref()
+            .is_some_and(|a| !a.remaining.is_empty());
+        self.schedule_next_answer_key(if has_more { next } else { now });
     }
 
     /// 最后一下按完、回读时刻到了：看框还在不在。
@@ -1049,20 +1106,46 @@ impl Core {
     /// 草稿闸（T10d / S52）：输入框里有人留下的字（或分不清）= `Some(给人看的草稿文本)`。上一笔没投成、留在框里
     /// 的残留（[`Self::residue`]，输入行原样没变）是自己的，不算——下一笔照旧先 Ctrl-U 清掉它。
     /// 屏上没有输入行 = 还没就绪（投递机自己等），不是草稿。
-    fn draft_held(&self, row: Option<&str>) -> Option<String> {
+    ///
+    /// 主信号是输入来源（T10d fix R1）：输入框上次读成空之后没有外来输入（[`Core::raw`]）= 没人打过字，读出什么都当
+    /// 空框；有外来输入才照样式判据（`Text` / `Unknown` 挡）。读成空 = 清掉外来输入的标记。
+    fn draft_held(&mut self, row: Option<&str>) -> Option<HeldDraft> {
         let row = row?;
         if self.input_dirty && self.residue.as_deref() == Some(row) {
             return None;
         }
-        match self.screen.input_draft() {
+        let reading = self.observe_input_box()?;
+        match reading {
             InputDraft::Empty => None,
-            InputDraft::Text(t) => Some(t),
-            InputDraft::Unknown => Some(row.to_string()),
+            InputDraft::Text(t) => Some(HeldDraft::Text(t)),
+            InputDraft::Unknown => Some(HeldDraft::Unknown),
         }
     }
 
+    /// 有外来输入标记时读一次输入框、推进标记（读到字 → `Shown`；`Shown` 后读成空 → 清掉）。返回此刻要按样式判的
+    /// 读数；`None` = 没有标记（或刚清掉），框里的东西不当草稿。屏上没有输入行时不动标记。
+    fn observe_input_box(&mut self) -> Option<InputDraft> {
+        if self.foreign_input == Foreign::None {
+            return None;
+        }
+        let rows = self.screen.screen_rows();
+        input_row(&rows)?;
+        let reading = self.screen.input_draft();
+        match (self.foreign_input, &reading) {
+            (Foreign::Shown, InputDraft::Empty) => {
+                self.foreign_input = Foreign::None;
+                return None;
+            }
+            (Foreign::Typed, InputDraft::Text(_) | InputDraft::Unknown) => {
+                self.foreign_input = Foreign::Shown;
+            }
+            _ => {}
+        }
+        Some(reading)
+    }
+
     /// 看到的草稿变了才发 `InputDraft`（清掉 = `None`）。
-    fn note_draft(&mut self, draft: Option<String>) {
+    fn note_draft(&mut self, draft: Option<HeldDraft>) {
         if draft != self.draft_reported {
             self.draft_reported = draft.clone();
             self.event(SessionEvent::InputDraft(draft));
@@ -2353,9 +2436,25 @@ mod tests {
     #[test]
     fn recorded_ready_screen_with_a_typed_draft_holds_the_brief() {
         let mut t = T::new(brief("开场任务"));
+        let raw = fixture("tui-claude-ready.bin");
+        let cut = raw
+            .windows("这是".len())
+            .position(|w| w == "这是".as_bytes())
+            .expect("录像里有那句草稿");
+        // 草稿开始回显之前，人在终端里敲了字：经 raw 进来（外来输入，T10d fix R1）。前一段每块只隔 10ms，输入行还没
+        // 稳住 300ms，开场正文还没写。
         let mut all = Vec::new();
-        for (k, chunk) in fixture("tui-claude-ready.bin").chunks(64).enumerate() {
+        let (before, after) = raw.split_at(cut);
+        let mut k = 0;
+        for chunk in before.chunks(64) {
             all.extend(t.output(chunk, k as f64 * 0.01));
+            k += 1;
+        }
+        t.core.raw("这是".as_bytes());
+        t.core.take_actions();
+        for chunk in after.chunks(64) {
+            all.extend(t.output(chunk, k as f64 * 0.01));
+            k += 1;
         }
         all.extend(t.tick(3.0));
         all.extend(t.tick(200.0));
@@ -2373,7 +2472,8 @@ mod tests {
         assert!(
             ev.iter().any(|e| matches!(
                 e,
-                SessionEvent::InputDraft(Some(d)) if d.starts_with("这是一行故意打得很长")
+                // 录像没有样式：分不清是草稿还是占位提示，报「分不清」，不把那行字当成人的草稿转述（fix R3）。
+                SessionEvent::InputDraft(Some(HeldDraft::Unknown))
             )),
             "{ev:?}"
         );
@@ -2604,13 +2704,18 @@ mod tests {
     fn a_body_waits_behind_a_typed_draft_and_goes_out_once_it_is_cleared() {
         let mut t = T::new(vec![]);
         t.core.send(1, "唤醒正文", t.at(0.0));
+        // 人在终端里打了字（外来输入）：草稿闸才按样式判。
+        t.core.raw("人".as_bytes());
+        t.core.take_actions();
         let mut log = t.output(&styled_box("人打了一半"), 0.0);
         for s in 1..=5 {
             log.extend(t.tick(s as f64 * 0.4));
         }
         assert!(writes(&log).is_empty(), "一个字节都不写：{log:?}");
         let ev = events(&log);
-        assert!(ev.contains(&SessionEvent::InputDraft(Some("人打了一半".into()))));
+        assert!(ev.contains(&SessionEvent::InputDraft(Some(HeldDraft::Text(
+            "人打了一半".into()
+        )))));
         assert_eq!(
             ev.iter()
                 .filter(|e| matches!(e, SessionEvent::Delivery { outcome: DeliveryOutcome::Blocked(d), .. } if d == INPUT_DRAFT))
@@ -2620,9 +2725,11 @@ mod tests {
         );
         // 草稿改了：再说一次（只在变了时发）。
         let more = t.output(&styled_box("人打了一半又多打几个"), 2.2);
-        assert!(events(&more).contains(&SessionEvent::InputDraft(Some(
-            "人打了一半又多打几个".into()
-        ))));
+        assert!(
+            events(&more).contains(&SessionEvent::InputDraft(Some(HeldDraft::Text(
+                "人打了一半又多打几个".into()
+            ))))
+        );
         // 人清掉了：占位提示回来 → 草稿事件清零、稳住 0.3s 后写正文。
         let cleared = t.output(&styled_box(""), 3.0);
         assert!(events(&cleared).contains(&SessionEvent::InputDraft(None)));
@@ -2654,5 +2761,116 @@ mod tests {
                 .any(|e| matches!(e, SessionEvent::InputDraft(_))),
             "{log:?}"
         );
+    }
+
+    // ---- T10d fix R1：输入来源是草稿闸的主信号 ----
+
+    /// 占位提示的样式认不出来（这里：没样式的 `Try "…"`，读成 Text；以及一个认不出的浅灰 truecolor），但从开起来就
+    /// 没有外来输入：没人能往框里打过字，照常投。
+    #[test]
+    fn a_fresh_session_with_an_unrecognised_placeholder_style_gets_its_brief() {
+        for placeholder in [
+            "Try \"write a test\"".to_string(),
+            "\x1b[38;2;220;220;220mTry \"write a test\"\x1b[39m".to_string(),
+        ] {
+            let mut t = T::new(brief("开场任务"));
+            let screen = |p: &str| {
+                format!(
+                    "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {p}\r\n────────────────────\r\n\x1b[2m  ? for shortcuts\x1b[22m"
+                )
+            };
+            assert_ne!(
+                {
+                    let mut sc = Screen::new(ScreenConfig::default());
+                    sc.feed(screen(&placeholder).as_bytes());
+                    sc.input_draft()
+                },
+                InputDraft::Empty,
+                "前提：这个占位提示读不成空框"
+            );
+            let mut all = t.output(screen(&placeholder).as_bytes(), 0.0);
+            all.extend(t.tick(0.3));
+            assert!(
+                writes(&all)
+                    .iter()
+                    .any(|w| w.ends_with("开场任务".as_bytes())),
+                "{placeholder:?}: {all:?}"
+            );
+            assert!(
+                !events(&all)
+                    .iter()
+                    .any(|e| matches!(e, SessionEvent::InputDraft(Some(_)))),
+                "{all:?}"
+            );
+        }
+    }
+
+    /// 外来输入之后框里有字 → 挡；框读成空（人清掉 / 发出去）→ 标记清掉、照常投；之后再出现认不出样式的字（没有新的
+    /// 外来输入）不再挡。我们自己的打断与回答不算外来输入。
+    #[test]
+    fn foreign_input_arms_the_guard_until_the_box_reads_blank() {
+        let mut t = T::new(vec![]);
+        t.core.interrupt();
+        let own = t.core.take_actions();
+        assert_eq!(writes(&own), vec![vec![0x1b]], "打断写一个 Esc");
+        t.core.send(1, "甲", t.at(0.0));
+        let mut log = t.output(&styled_box("自己画的字"), 0.0);
+        log.extend(t.tick(0.3));
+        assert_eq!(
+            writes(&log),
+            vec!["甲".as_bytes().to_vec()],
+            "没有外来输入：照常投"
+        );
+        log.extend(t.output(&styled_box("甲"), 0.9));
+        log.extend(t.tick(1.0));
+        log.extend(t.tick(1.1));
+        log.extend(t.output(&styled_box(""), 1.2));
+        assert!(delivered(&log, 1), "{log:?}");
+        // 人在终端里敲了字。
+        t.core.raw(b"x");
+        t.core.take_actions();
+        t.core.send(2, "乙", t.at(2.0));
+        let mut held = t.output(&styled_box("x"), 2.0);
+        for k in 1..=4 {
+            held.extend(t.tick(2.0 + k as f64 * 0.3));
+        }
+        assert!(writes(&held).is_empty(), "外来输入之后有字：挡：{held:?}");
+        assert!(
+            events(&held).contains(&SessionEvent::InputDraft(Some(HeldDraft::Text("x".into()))))
+        );
+        // 框读成空：标记清掉，乙照常投出去。
+        let mut back = t.output(&styled_box(""), 4.0);
+        back.extend(t.tick(4.3));
+        assert_eq!(writes(&back), vec!["乙".as_bytes().to_vec()]);
+        back.extend(t.output(&styled_box("乙"), 4.9));
+        back.extend(t.tick(5.0));
+        back.extend(t.tick(5.1));
+        back.extend(t.output(&styled_box(""), 5.2));
+        assert!(delivered(&back, 2), "{back:?}");
+        // 之后再出现认不出样式的字、没有新的外来输入：不挡。
+        t.core.send(3, "丙", t.at(6.0));
+        let mut again = t.output(&styled_box("claude 画的"), 6.0);
+        again.extend(t.tick(6.3));
+        assert_eq!(writes(&again), vec!["丙".as_bytes().to_vec()]);
+    }
+
+    /// T10d fix M3：下一下排在上一下真正按下的时刻 + 间隔（拍子晚到时，后面的间隔不会被压没）。
+    #[test]
+    fn each_answer_key_waits_a_full_gap_after_the_previous_write() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(
+            1,
+            expect,
+            vec![step(b"a", None), step(b"b", None), step(b"c", None)],
+            t.at(0.0),
+        );
+        assert_eq!(writes(&t.core.take_actions()), vec![b"a".to_vec()]);
+        // 这一拍晚到了（本该 0.15）：第二下在 0.4 按下。
+        assert_eq!(writes(&t.tick(0.4)), vec![b"b".to_vec()]);
+        // 第三下在 0.4 + 0.15 = 0.55，不是预排的 0.3：0.45 时还不能按。
+        assert!(writes(&t.tick(0.45)).is_empty());
+        assert_eq!(writes(&t.tick(0.55)), vec![b"c".to_vec()]);
     }
 }

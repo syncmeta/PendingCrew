@@ -96,6 +96,20 @@ pub fn spawn_pty(spec: &SpawnSpec) -> io::Result<PtyProcess> {
 }
 
 impl PtyMaster {
+    /// 不等：此刻读得到就读一块（`Some(n)`，`Some(0)` = 从端全关了），读不到 = `None`。直接对 fd 做一次非阻塞读，
+    /// 不看 tokio 的就绪缓存（缓存可能还没反映刚到的字节）；之后 `read` 遇到过期的就绪会自己清掉再等。
+    pub fn try_read(&self, buf: &mut [u8]) -> io::Result<Option<usize>> {
+        loop {
+            match rustix::io::read(self.fd.get_ref(), &mut *buf).map_err(io::Error::from) {
+                Ok(n) => return Ok(Some(n)),
+                Err(e) if e.raw_os_error() == Some(libc::EIO) => return Ok(Some(0)),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// 读一块。`Ok(0)` = 从端全关了（子进程退出；Linux 上这时 read 报 EIO，也映射成 0）。
     pub async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {

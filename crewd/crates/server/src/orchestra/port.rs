@@ -227,7 +227,7 @@ pub struct LiveView {
     pub pending_decision: Option<PendingDecision>,
     pub awaiting_question: Option<String>,
     /// 输入框里挡着投递的草稿（T10d；`SessionLive.inputDraft`）。
-    pub input_draft: Option<String>,
+    pub input_draft: Option<crewd_exec::session::HeldDraft>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

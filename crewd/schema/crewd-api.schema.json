@@ -2401,11 +2401,15 @@
           ]
         },
         "inputDraft": {
-          "description": "输入框里有一段还没发出的草稿、正挡着投递（M3c T10d）：草稿文本（分不清是不是草稿时 = 输入行上看得见的字）。\n不在 = 没有。",
+          "description": "输入框里有一段人打的、还没发出的草稿，正挡着投递（M3c T10d）：草稿原文。不在 = 没有（或分不清，见下）。",
           "type": [
             "string",
             "null"
           ]
+        },
+        "inputDraftUnknown": {
+          "description": "true = 有人在终端里敲过字、但分不清输入框里是草稿还是占位提示，投递照样挡着（T10d fix R3）。这时不给\n`inputDraft`：看得见的那行不一定是人的字。",
+          "type": "boolean"
         },
         "pendingDecision": {
           "anyOf": [

@@ -129,6 +129,7 @@ refusal_codes! {
     SessionNoWorkdir = "session.no_workdir" ["session"],
     SessionWorktreeFailed = "session.worktree_failed" ["detail"],
     SessionInputDraft = "session.input_draft" ["session", "text"],
+    SessionInputDraftUnknown = "session.input_draft_unknown" ["session"],
     // settings
     SettingsBadLocale = "settings.bad_locale" ["value"],
     SettingsBadMaxLive = "settings.bad_max_live" ["value"],

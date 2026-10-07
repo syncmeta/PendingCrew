@@ -33,7 +33,7 @@ use crewd_collab::render::safe_name;
 use crewd_exec::driver::SendError;
 use crewd_exec::health::{Health, HealthKind};
 use crewd_exec::session::{
-    AnswerOutcome, BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, SessionEvent,
+    AnswerOutcome, BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, HeldDraft, SessionEvent,
 };
 use crewd_store::{StorageKind, StoreError};
 use crewd_term::{DecisionEvent, PendingDecision};
@@ -323,10 +323,11 @@ pub enum ControlError {
     },
     /// 要靠方向键选、但看不出高亮在哪一项（session id）：`decision.needs_terminal`，交给人在终端里选。
     NeedsTerminal(String),
-    /// 输入框里有还没发出的草稿：什么都不敲（T10d）。`text` = 草稿（分不清时 = 输入行上看得见的字）。
+    /// 输入框里有还没发出的草稿：什么都不敲（T10d）。`text` = 人打的字；`None` = 有人在终端里敲过、但分不清框里
+    /// 是草稿还是占位提示（fix R3：不把看得见的那行当成人的草稿转述）。
     InputDraft {
         session: String,
-        text: String,
+        text: Option<String>,
     },
     /// crewd 正在停机 / 休眠：不再起 / 恢复会话。
     ShuttingDown,
@@ -415,9 +416,16 @@ impl ControlError {
             }
             Self::NeedsTerminal(s) => r(Code::DecisionNeedsTerminal).arg("session", s),
             // 草稿是屏上抓来的外来文字：过 safe_name（C20）再进拒绝文字。
-            Self::InputDraft { session, text } => r(Code::SessionInputDraft)
+            Self::InputDraft {
+                session,
+                text: Some(text),
+            } => r(Code::SessionInputDraft)
                 .arg("session", session)
                 .arg("text", safe_name(text)),
+            Self::InputDraft {
+                session,
+                text: None,
+            } => r(Code::SessionInputDraftUnknown).arg("session", session),
             Self::ShuttingDown => r(Code::OrchestraShuttingDown),
             Self::CrewRemoved(crew) => r(Code::CrewRemoved).arg("crew", crew),
             Self::Storage { .. } | Self::Internal(_) => return None,
@@ -565,7 +573,7 @@ pub struct Live {
     pub health: Option<Health>,
     pub decision: Option<PendingDecision>,
     /// 执行器报的输入框草稿（`SessionEvent::InputDraft`，T10d）：有 = 它正挡着一笔投递，不再往里送（`input_draft`）。
-    pub input_draft: Option<String>,
+    pub input_draft: Option<HeldDraft>,
     pub inflight: Option<Inflight>,
     /// 人从客户端叫停的（不是停机）。
     pub stopping: bool,
@@ -1235,7 +1243,10 @@ impl<P: Port> Core<P> {
                 if let Some(draft) = &l.input_draft {
                     let e = ControlError::InputDraft {
                         session: session.into(),
-                        text: draft.clone(),
+                        text: match draft {
+                            HeldDraft::Text(t) => Some(t.clone()),
+                            HeldDraft::Unknown => None,
+                        },
                     };
                     let _ = reply.send(Err(e));
                     return Ok(());
@@ -3800,14 +3811,17 @@ mod tests {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         rig.run("cap").await;
-        rig.emit("cap", SessionEvent::InputDraft(Some("人打的半句".into())))
-            .await;
+        rig.emit(
+            "cap",
+            SessionEvent::InputDraft(Some(HeldDraft::Text("人打的半句".into()))),
+        )
+        .await;
         let err = nudge(&mut rig, "cap", "继续").await.unwrap_err();
         assert_eq!(
             err,
             ControlError::InputDraft {
                 session: "cap".into(),
-                text: "人打的半句".into()
+                text: Some("人打的半句".into())
             }
         );
         let r = err.refusal().unwrap();
@@ -3816,6 +3830,18 @@ mod tests {
             assert!(r.text(l).contains("人打的半句"), "{}", r.text(l));
         }
         assert!(rig.exec.sent("cap").is_empty());
+        // 分不清（fix R3）：照样拒，但用另一个码、不转述看得见的那行。
+        rig.emit("cap", SessionEvent::InputDraft(Some(HeldDraft::Unknown)))
+            .await;
+        let err = nudge(&mut rig, "cap", "继续").await.unwrap_err();
+        assert_eq!(
+            err,
+            ControlError::InputDraft {
+                session: "cap".into(),
+                text: None
+            }
+        );
+        assert_eq!(err.refusal().unwrap().code, Code::SessionInputDraftUnknown);
         // 草稿清掉了：照常 send。
         rig.emit("cap", SessionEvent::InputDraft(None)).await;
         nudge(&mut rig, "cap", "继续").await.unwrap();
@@ -3828,8 +3854,11 @@ mod tests {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         rig.run("cap").await;
-        rig.emit("cap", SessionEvent::InputDraft(Some(HOSTILE.into())))
-            .await;
+        rig.emit(
+            "cap",
+            SessionEvent::InputDraft(Some(HeldDraft::Text(HOSTILE.into()))),
+        )
+        .await;
         let err = nudge(&mut rig, "cap", "继续").await.unwrap_err();
         let text = err.refusal().unwrap().text(crewd_collab::Locale::En);
         assert!(text.contains(&safe_name(HOSTILE)), "{text}");

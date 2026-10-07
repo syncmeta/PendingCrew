@@ -333,3 +333,6 @@ The dialog on session {session} has only {options} options, and the one you chos
 
 ## session.input_draft
 The input box of session {session} holds an unsent draft: {text}. Nothing was typed this time; try again once someone sends or clears it.
+
+## session.input_draft_unknown
+Someone typed into the terminal of session {session}, and it cannot be told whether its input box now holds an unsent draft or only the empty-box hint. Nothing was typed this time; try again once someone sends or clears the input box.

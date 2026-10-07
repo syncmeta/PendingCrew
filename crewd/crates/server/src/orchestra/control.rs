@@ -3,6 +3,7 @@
 use std::sync::{Arc, OnceLock};
 
 use crewd_exec::health::HealthKind;
+use crewd_exec::session::HeldDraft;
 use crewd_proto::{DecisionView, HealthKindView, HealthView, Role, Session, SessionLive};
 use crewd_term::PendingDecision;
 
@@ -229,7 +230,11 @@ pub fn live_to_proto(v: &LiveView) -> SessionLive {
         }),
         pending_decision: v.pending_decision.as_ref().map(decision_view),
         awaiting_question: v.awaiting_question.clone(),
-        input_draft: v.input_draft.clone(),
+        input_draft: match &v.input_draft {
+            Some(HeldDraft::Text(t)) => Some(t.clone()),
+            _ => None,
+        },
+        input_draft_unknown: v.input_draft == Some(HeldDraft::Unknown),
     }
 }
 
@@ -303,7 +308,14 @@ mod tests {
             (
                 ControlError::InputDraft {
                     session: s(),
-                    text: "draft".into(),
+                    text: Some("draft".into()),
+                },
+                M3aError::Invalid,
+            ),
+            (
+                ControlError::InputDraft {
+                    session: s(),
+                    text: None,
                 },
                 M3aError::Invalid,
             ),

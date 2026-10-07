@@ -701,6 +701,21 @@ pub(crate) fn decode(status: io::Result<std::process::ExitStatus>) -> ExitStatus
     }
 }
 
+/// 定时拍 / 回答按键之前：把 PTY 里此刻已经到了的输出（非阻塞）喂进屏幕，再让 Core 按「当前屏幕」决定按不按
+/// （T10d fix M2）。`select!` 不偏向读那一支：一直有输出时会饿死命令；这里只读已经到了的，至多 [`DRAIN_CHUNKS`] 块。
+fn drain_ready(t: &mut Task) {
+    let mut buf = vec![0u8; 16 * 1024];
+    for _ in 0..DRAIN_CHUNKS {
+        match t.running.master.try_read(&mut buf) {
+            Ok(Some(n)) if n > 0 => t.core.on_output(&buf[..n], Instant::now()),
+            _ => return,
+        }
+    }
+}
+
+/// [`drain_ready`] 一次至多读几块（不让一直吐字的子进程把这一拍拖住）。
+const DRAIN_CHUNKS: usize = 64;
+
 /// 子进程退出后把 PTY 里剩下的输出读干净（最多 `limit`）：claude 拒绝续跑时是先打印再退出的。
 async fn drain(master: &PtyMaster, core: &mut Core, limit: Duration) {
     let deadline = tokio::time::Instant::now() + limit;
@@ -735,6 +750,10 @@ async fn run(mut t: Task) {
             status = t.running.child.wait() => exit = Some(decode(status)),
             cmd = t.cmd_rx.recv(), if commands_open => match cmd {
                 Some(c) => {
+                    if matches!(c, Command::Answer { .. }) {
+                        // 第一下当场按（按之前回读）：先把已经到了的输出喂进屏幕，别拿旧屏核框。
+                        drain_ready(&mut t);
+                    }
                     if handle(&mut t, c) {
                         begin_stop(&mut t, &mut stopping, &mut stop_deadline);
                     }
@@ -744,8 +763,13 @@ async fn run(mut t: Task) {
                     begin_stop(&mut t, &mut stopping, &mut stop_deadline);
                 }
             },
-            _ = tick.tick() => t.core.on_tick(Instant::now()),
+            _ = tick.tick() => {
+                drain_ready(&mut t);
+                t.core.on_tick(Instant::now());
+            }
             _ = tokio::time::sleep_until(wake.unwrap_or_else(tokio::time::Instant::now)), if wake.is_some() => {
+                // 到点的多半是排好的按键（回答 / 提交拍）：按之前回读的屏幕要是此刻的（T10d fix M2）。
+                drain_ready(&mut t);
                 t.core.on_tick(Instant::now());
             }
             _ = tokio::time::sleep_until(stop_deadline.unwrap_or_else(tokio::time::Instant::now)), if stop_deadline.is_some() => {
@@ -841,7 +865,7 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 .send(id, &with_untrusted_context(&context, &text), now)
         }
         Command::Raw(bytes) => t.core.raw(&bytes),
-        Command::Interrupt => t.core.raw(&[0x1b]),
+        Command::Interrupt => t.core.interrupt(),
         Command::Resize { cols, lines } => t.core.resize(cols, lines),
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
