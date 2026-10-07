@@ -106,6 +106,12 @@ pub struct MemState {
     pub locale: Option<crewd_wake::text::Lang>,
     /// 设了就让 `locale` 读失败。
     pub locale_error: Option<String>,
+    /// 机组 → 父机组（只用来找 home：`post_system(HumanChannel)` 落在 home 的人类群）。
+    pub crew_parents: BTreeMap<String, String>,
+    /// `post_system` 落在了哪个群：(群, 正文)。
+    pub posted: Vec<(String, String)>,
+    /// 归档了的群（同 collab：归档的 topic / dm / 人类群里没有人「在」，收听也不算；大厅照算）。
+    pub archived_channels: BTreeSet<String>,
 }
 
 /// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
@@ -163,10 +169,11 @@ impl MemPort {
 
     /// 填法同控制者裁定 C22 对 DbPort 的要求：`live_sessions` = 库里全部 session（有 session 就不会空）、
     /// `crew_captain` = 这个群所属机组的机长；`dm_sessions` = dm 群（[`MemKind::Dm`]）的 session 各方，别的群为空。
-    fn ctx_of(st: &MemState, channel: &str) -> Option<ChannelCtx> {
+    fn ctx_of(st: &MemState, channel: &str, now: Ms) -> Option<ChannelCtx> {
         let ch = st.channels.get(channel)?;
         let captain = Self::captain_of(st, &ch.crew);
-        let (members, owner) = match ch.kind {
+        let archived = st.archived_channels.contains(channel);
+        let (members, owner): (Vec<String>, Option<String>) = match ch.kind {
             MemKind::Lobby => (
                 st.sessions
                     .values()
@@ -187,25 +194,41 @@ impl MemPort {
             }
             MemKind::Dm | MemKind::Other => (ch.members.clone(), ch.owner.clone()),
         };
+        let members = if archived && ch.kind != MemKind::Lobby {
+            vec![]
+        } else {
+            members
+        };
         let dm_sessions = if ch.kind == MemKind::Dm {
             ch.members.clone()
         } else {
             vec![]
         };
-        // 同 DbPort（C22 / T10a 补充 §2.2）：活着 = 存在且机组没被移除（不是「进程在跑」）。
-        let live_sessions = st
-            .sessions
-            .values()
-            .filter(|s| !st.removed_crews.contains(&s.crew_id))
-            .map(|s| s.id.clone())
-            .collect();
+        // 同 DbPort `listens::active_for_channel(.., now)`：只给此刻还有效的收听。
+        let listens: Vec<Listen> = st
+            .listens
+            .get(channel)
+            .filter(|_| !archived)
+            .map(|ls| ls.iter().filter(|l| l.until > now).cloned().collect())
+            .unwrap_or_default();
+        // 同 DbPort（C22 / T10a 补充 §2.2）：活着 = 群成员 ∪ 机组没被移除的收听者（不是「进程在跑」）。
+        let mut live_sessions: Vec<String> = members.clone();
+        for l in &listens {
+            let ok = st
+                .sessions
+                .get(&l.session)
+                .is_some_and(|s| !st.removed_crews.contains(&s.crew_id));
+            if ok && !live_sessions.contains(&l.session) {
+                live_sessions.push(l.session.clone());
+            }
+        }
         Some(ChannelCtx {
             session_members: members,
             live_sessions,
             owner,
             dm_sessions,
             crew_captain: captain,
-            listens: st.listens.get(channel).cloned().unwrap_or_default(),
+            listens,
         })
     }
 
@@ -468,14 +491,17 @@ impl Port for MemPort {
         Ok(true)
     }
 
+    /// 同 collab `due_for(.., i64::MAX)`：优先级高的在前、同档按入队先后（契约测试钉住）。
     async fn pending(&self, session: &str) -> Result<Vec<QueuedWake>> {
-        Ok(self
+        let mut v: Vec<QueuedWake> = self
             .lock()
             .wakes
             .iter()
             .filter(|w| w.session == session && w.state == WakeState::Pending)
             .cloned()
-            .collect())
+            .collect();
+        v.sort_by_key(|w| (std::cmp::Reverse(w.priority), w.id));
+        Ok(v)
     }
 
     /// 跟库一样严：规则只来自共享的那张表（[`apply_event`]，C24）；没有这一行 / 表不认 = 错误，整批一行都不改。
@@ -518,6 +544,10 @@ impl Port for MemPort {
                 for (channel, seq) in &b.cursor_targets {
                     if let Some(e) = &st.advance_error {
                         anyhow::bail!("{e}");
+                    }
+                    // 同库（游标行的外键）：没有这个群 = 整批回滚。
+                    if !st.channels.contains_key(channel) {
+                        anyhow::bail!("没有群 {channel}：游标推不了");
                     }
                     let c = cursors
                         .entry((b.session.clone(), channel.clone()))
@@ -746,9 +776,8 @@ impl Port for MemPort {
             .cloned())
     }
 
-    async fn channel_ctx(&self, channel: &str, _now: Ms) -> Result<Option<ChannelCtx>> {
-        // MemPort 原样给全部收听；过期的由 `plan` 按 `until > now` 再滤一次（与 DbPort 结果一致）。
-        Ok(Self::ctx_of(&self.lock(), channel))
+    async fn channel_ctx(&self, channel: &str, now: Ms) -> Result<Option<ChannelCtx>> {
+        Ok(Self::ctx_of(&self.lock(), channel, now))
     }
 
     /// 同 M3a `cursors::unread_for`：所在的群 + 此刻还在收听的群；游标之后、不是它自己发的（@ 不收窄可见范围，
@@ -761,13 +790,16 @@ impl Port for MemPort {
             .channels
             .keys()
             .filter(|ch| {
-                Self::ctx_of(&st, ch)
+                Self::ctx_of(&st, ch, now)
                     .is_some_and(|c| c.session_members.iter().any(|s| s == session))
             })
             .cloned()
             .collect();
         for (ch, ls) in &st.listens {
-            if ls.iter().any(|l| l.session == session && l.until > now) && !chans.contains(ch) {
+            if ls.iter().any(|l| l.session == session && l.until > now)
+                && !st.archived_channels.contains(ch)
+                && !chans.contains(ch)
+            {
                 chans.push(ch.clone());
             }
         }
@@ -800,7 +832,21 @@ impl Port for MemPort {
     }
 
     async fn post_system(&self, to: Audience, text: String) -> Result<()> {
-        self.lock().posts.push((to, text));
+        let mut st = self.lock();
+        // 落在哪个群（同 DbPort：人类群归 home = 最顶上的祖先，§24.1 H2）。
+        let channel = match &to {
+            Audience::HumanChannel { crew } => {
+                let mut home = crew.clone();
+                while let Some(p) = st.crew_parents.get(&home) {
+                    home = p.clone();
+                }
+                format!("{home}/human")
+            }
+            Audience::Lobby { crew, .. } => format!("{crew}/lobby"),
+            Audience::Channel { channel, .. } => channel.clone(),
+        };
+        st.posted.push((channel, text.clone()));
+        st.posts.push((to, text));
         Ok(())
     }
 
@@ -1895,6 +1941,16 @@ mod self_tests {
             row_in(&p, WakeState::Pending),
         );
         let batch = batch_of(&p, &[a, b], &[r], &[("c1/lobby", 7)]);
+        // 游标推到的群得存在（同库的外键，T10a 起 MemPort 也查）。
+        p.lock().channels.insert(
+            "c1/lobby".into(),
+            MemChannel {
+                crew: "c1".into(),
+                kind: MemKind::Lobby,
+                owner: None,
+                members: vec![],
+            },
+        );
         p.claim(&batch).await.unwrap();
         let before = p.lock().wakes.clone();
         p.lock().advance_error = Some("合成：游标写不进去".into());
@@ -2184,15 +2240,36 @@ mod self_tests {
                 members: vec![w1.id.clone()],
             },
         );
+        p.lock().listens.insert(
+            "c1/side".into(),
+            vec![
+                Listen {
+                    session: cap.id.clone(),
+                    until: Ms(10),
+                    senders: None,
+                },
+                Listen {
+                    session: "gone".into(),
+                    until: Ms(10),
+                    senders: None,
+                },
+            ],
+        );
         let ctx = p.channel_ctx("c1/side", Ms(0)).await.unwrap().unwrap();
         assert_eq!(ctx.session_members, std::slice::from_ref(&w1.id));
         assert_eq!(ctx.owner.as_deref(), Some(w1.id.as_str()));
         assert_eq!(ctx.crew_captain.as_deref(), Some(cap.id.as_str()));
         assert_eq!(
             ctx.live_sessions,
-            [cap.id.clone(), w1.id.clone()],
-            "不在群里的机长也是活 session"
+            [w1.id.clone(), cap.id.clone()],
+            "活着 = 成员 ∪ 存在、机组没被移除的收听者（同 DbPort）"
         );
+        let later = p.channel_ctx("c1/side", Ms(10)).await.unwrap().unwrap();
+        assert!(
+            later.listens.is_empty(),
+            "过期的收听不给（同 active_for_channel）"
+        );
+        assert_eq!(later.live_sessions, std::slice::from_ref(&w1.id));
         assert!(ctx.dm_sessions.is_empty(), "不是 dm");
         p.lock().channels.insert(
             "c1/dm".into(),

@@ -157,7 +157,7 @@ fn queued(conn: &rusqlite::Connection, row: &WakeRow) -> collab::Result<QueuedWa
 }
 
 /// 消息 → 规划要素。`now` 只在读不出发送时刻时用：读不出 = 当作刚发的（绝不当成陈旧而不叫，ledger NOTE T2）。
-fn facts_of(m: &Message, now: Ms) -> MsgFacts {
+pub(crate) fn facts_of(m: &Message, now: Ms) -> MsgFacts {
     let sender = match (m.sender_kind, &m.sender_session_id) {
         (SenderKind::Human, _) => Sender::Human,
         (SenderKind::Session | SenderKind::Captain, Some(id)) => Sender::Session {
@@ -936,7 +936,7 @@ pub fn forward_collab(
 /// chief（总机组 = 管理机组）  chief-1（worker）
 /// c-1（顶层，工作目录 = 临时目录） 机长 cap-1；w-1（分机 2）、w-2（分机 3）
 ///   └ c-2                         机长 cap-2
-/// c-9（顶层）                     机长 cap-9
+/// c-9（顶层）                     机长 cap-9；w-9（分机 2）
 /// ```
 /// session id 都带 `-`（熔断台账的 id 要经得起）。
 #[cfg(test)]
@@ -979,6 +979,7 @@ pub(crate) mod fixture {
             ("w-2", "c-1", Role::Worker, Some(3)),
             ("cap-2", "c-2", Role::Captain, None),
             ("cap-9", "c-9", Role::Captain, None),
+            ("w-9", "c-9", Role::Worker, Some(2)),
             ("chief-1", "chief", Role::Worker, Some(2)),
         ] {
             crewd_store::sessions::upsert(

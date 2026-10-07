@@ -280,7 +280,7 @@ pub trait Port: Send + Sync + 'static {
     // —— 唤醒队列与熔断
     /// 插入成功 = true；`UNIQUE(session, kind, source)` 撞了 = false；目标的机组已被移除（M3a `Enqueued::Skipped`）= false。
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<bool>> + Send;
-    /// 该 session 所有 `pending` 的唤醒（不论到没到点）。
+    /// 该 session 所有 `pending` 的唤醒（不论到没到点），优先级高的在前、同档按入队先后。
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
     /// 不属于一批的结算（见 [`Settle`]）：全部 id 一个事务，表不认 / 没有这一行 = 错误、整批不改。
     fn settle(&self, ids: &[i64], s: Settle, now: Ms) -> impl Future<Output = Result<()>> + Send;
