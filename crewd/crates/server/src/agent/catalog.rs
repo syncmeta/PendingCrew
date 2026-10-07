@@ -61,6 +61,8 @@ pub const CATEGORIES: &[&str] = &[
 ];
 pub const MENTION_KINDS: &[&str] = &["session", "captain", "human"];
 const RUNNERS: &[&str] = &["claude", "codex"];
+/// `nudge_session.key` (T15 Q1): both interrupt the current turn; free text goes through `post(to:)`.
+pub const NUDGE_KEYS: &[&str] = &["esc", "interrupt"];
 
 const fn p(name: &'static str, ty: Ty, required: bool) -> Param {
     Param {
@@ -229,7 +231,9 @@ pub const CATALOG: &[ToolSpec] = &[
     cap("set_crew_status", &[p("text", Str, true)]),
     cap("read_delegation_policy", &[]),
     cap("update_delegation_policy", &[p("text", Str, true)]),
-    not_on_mgmt(cap(
+    // T15a: the management captain starts workers in any crew, its own included (S68); the
+    // `not_on_mgmt` mark is gone from start_session (the flag itself goes in T15b).
+    cap(
         "start_session",
         &[
             p("brief", Str, true),
@@ -238,8 +242,9 @@ pub const CATALOG: &[ToolSpec] = &[
             p("isolation", Bool, true),
             p("model", Str, false),
             p("effort", Str, false),
+            p("crew", Str, false),
         ],
-    )),
+    ),
     cap(
         "stop_session",
         &[p("session_id", Str, true), p("reason", Str, true)],
@@ -247,28 +252,20 @@ pub const CATALOG: &[ToolSpec] = &[
     cap("inspect_session", &[p("session_id", Str, true)]),
     cap(
         "nudge_session",
-        &[p("session_id", Str, true), p("input", Str, true)],
+        &[p("session_id", Str, true), c("key", true, NUDGE_KEYS)],
     ),
-    cap("list_sessions", &[]),
+    cap("list_sessions", &[p("crew", Str, false)]),
     cap(
-        "handoff_captain_to_session",
-        &[p("session_id", Str, true), p("target_crew_id", Str, false)],
-    ),
-    cap(
-        "create_and_handoff_captain",
+        "handoff_captain",
         &[
-            c("runner", true, RUNNERS),
+            p("crew", Str, false),
+            p("to_session", Str, false),
+            c("runner", false, RUNNERS),
             p("model", Str, false),
             p("effort", Str, false),
             p("title", Str, false),
             p("opening_brief", Str, false),
-            p("target_crew_id", Str, false),
         ],
-    ),
-    cap("report_to_parent", &[p("message", Str, true)]),
-    cap(
-        "message_child_crew",
-        &[p("crew", Str, true), p("message", Str, true)],
     ),
     cap("adopt_crew", &[p("crew", Str, true)]),
     cap("release_crew", &[p("crew", Str, true), p("to", Str, false)]),
@@ -312,6 +309,14 @@ pub const REMOVED: &[&str] = &[
     "channel_accept",
     // -> channel_listen(off: true) (S70).
     "channel_unlisten",
+    // -> handoff_captain(to_session:) (S70).
+    "handoff_captain_to_session",
+    // -> handoff_captain(runner:) (S70).
+    "create_and_handoff_captain",
+    // -> post(to: <parent crew number>) (S65).
+    "report_to_parent",
+    // -> post(to: <child crew number>) (S65).
+    "message_child_crew",
 ];
 
 pub fn find(name: &str) -> Option<&'static ToolSpec> {
@@ -423,7 +428,7 @@ mod tests {
         for gone in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 36);
+        assert_eq!(CATALOG.len(), 33);
     }
 
     #[test]
@@ -434,18 +439,18 @@ mod tests {
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
         assert_eq!(worker.len(), 17);
-        assert_eq!(captain.len(), 36);
+        assert_eq!(captain.len(), 33);
     }
 
     #[test]
-    fn management_crew_hides_respond_and_start_session_but_has_ask() {
+    fn management_crew_hides_respond_but_has_ask_and_start_session() {
         let chief = names(&who(Role::Captain, true));
-        for hidden in ["respond_todo", "start_session"] {
-            assert!(!chief.contains(&hidden.to_string()), "{hidden}");
-        }
+        assert!(!chief.contains(&"respond_todo".to_string()));
         // N1-R9: the management crew's questions go to its own human channel.
         assert!(chief.contains(&"ask".to_string()));
-        assert!(chief.contains(&"report_to_parent".to_string()));
+        // T15a: the management captain starts workers in any crew, its own included.
+        assert!(chief.contains(&"start_session".to_string()));
+        assert!(chief.contains(&"handoff_captain".to_string()));
     }
 
     #[test]

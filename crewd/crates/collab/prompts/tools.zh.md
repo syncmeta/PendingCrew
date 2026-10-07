@@ -238,13 +238,13 @@ true = 真执行；不填 = 只看预览。
 完整的新正文。
 
 ## start_session
-（机长）在本机组起一个 worker 去干一件明确的编码任务。
+（机长）起一个 worker 去干一件明确的编码任务。crew 不填 = 本机组；别的机组只有你按机长算的才行（总机组的机长在每个机组都按机长算）。
 
 ## start_session.brief
 要它干的事，写清目标与完成标准。
 
 ## start_session.title
-≤18 字、不带项目名的任务概括，作群里的显示名。
+≤18 个字、不带项目名的任务概括，作群里的显示名；不填就取 brief 第一行的前 18 个字。
 
 ## start_session.runner
 claude 或 codex；不填 = 机组默认。
@@ -258,11 +258,14 @@ claude 或 codex；不填 = 机组默认。
 ## start_session.effort
 可选推理强度。
 
+## start_session.crew
+可选：在哪个机组起（号码或 id）；不填 = 本机组。
+
 ## stop_session
-（机长）停掉本机组某个 session 的进程。先在大厅写明原因再停；不可撤销。只想打断一轮用 nudge_session 发 Esc。
+（机长）停掉一个 session 的进程：原因先以你的名义写进它所在机组的大厅，再停；不可撤销。只想打断它这一轮，用 nudge_session 发 esc。不能停你自己。
 
 ## stop_session.session_id
-目标 session id。
+目标 session：id 或通讯录号（如 7-3）。
 
 ## stop_session.reason
 停的原因，会公开写进大厅。
@@ -271,64 +274,46 @@ claude 或 codex；不填 = 机组默认。
 （机长）看某个 session 的现场：状态 + 终端最近的输出（codex 是记录尾部）。@ 不应时先看它卡在哪。
 
 ## inspect_session.session_id
-目标 session id。
+目标 session：id 或通讯录号（如 7-3）。
 
 ## nudge_session
-（机长）给某个 session 的终端发按键或文本替它解围：Enter / Esc 发对应按键，其它文本当一条输入提交。先 inspect_session 看清再按。
+（机长）打断某个 session 当前这一轮：只收按键 esc / interrupt。要告诉它什么，用 post(to: …) 发给它，它被唤醒时会读到。发出后不保证生效：过几秒 inspect_session 看效果。
 
 ## nudge_session.session_id
-目标 session id。
+目标 session：id 或通讯录号（如 7-3）。
 
-## nudge_session.input
-Enter、Esc，或要发的文本。
+## nudge_session.key
+esc 或 interrupt，都是打断它当前这一轮。
 
 ## list_sessions
-（机长）列出本机组的 session：id、号码、显示名、角色、状态。
+（机长）列出一个机组的 session：id、号、名字、角色、状态。crew 不填 = 本机组。
 
-## handoff_captain_to_session
-（机长）把机长位置交给一个现有 session。target_crew_id 不填 = 本机组；填了只能是你的直系子机组。
+## list_sessions.crew
+可选：机组号码或 id；不填 = 本机组。
 
-## handoff_captain_to_session.session_id
-接任者的 session id，必须属于目标机组。
+## handoff_captain
+（机长）交出一个机组的机长位置：to_session 交给一个现有 session（必须属于那个机组），或 runner 新起一个 session 接任，两者只给一个。crew 不填 = 本机组；也可以是你的直系子机组，或任何你按机长算的机组。原机长留在机组里当 worker。
 
-## handoff_captain_to_session.target_crew_id
-可选：直系子机组的 id。
+## handoff_captain.crew
+可选：哪个机组的机长位置（号码或 id）；不填 = 本机组。
 
-## create_and_handoff_captain
-（机长）新起一个 session 并把机长位置交给它。target_crew_id 不填 = 本机组；填了只能是你的直系子机组。
+## handoff_captain.to_session
+接任者：一个现有 session 的 id 或通讯录号，必须属于那个机组。
 
-## create_and_handoff_captain.runner
-claude 或 codex，必须明确选。
+## handoff_captain.runner
+新起一个 session 接任：claude 或 codex。
 
-## create_and_handoff_captain.model
-可选模型。
+## handoff_captain.model
+可选：新机长的模型（只配 runner 用）。
 
-## create_and_handoff_captain.effort
-可选推理强度。
+## handoff_captain.effort
+可选：新机长的推理强度（只配 runner 用）。
 
-## create_and_handoff_captain.title
-可选显示名；不填 = 机长。
+## handoff_captain.title
+可选：新机长的显示名，≤18 个字；不填 = 机长（只配 runner 用）。
 
-## create_and_handoff_captain.opening_brief
-可选：新机长的第一件事。
-
-## create_and_handoff_captain.target_crew_id
-可选：直系子机组的 id。
-
-## report_to_parent
-（机长）向上级汇报：发到每个直系父机组的大厅并 @父机长。阶段性结果、要上级拍板或协调资源、被卡住时用。结论先行。
-
-## report_to_parent.message
-汇报内容。
-
-## message_child_crew
-（机长）给一个直系子机组下达消息：发到它的大厅并 @子机长。
-
-## message_child_crew.crew
-子机组的名字、id 或号码。
-
-## message_child_crew.message
-要传达的内容。
+## handoff_captain.opening_brief
+可选：新机长的第一件事（只配 runner 用）。
 
 ## adopt_crew
 （机长）收编：把一个与本机组没有上下级关系的机组挂到本机组名下。不能成环；总机组（管理机组）在机组树外，不能被收编。
@@ -384,7 +369,7 @@ claude 或 codex，必须明确选。
 ## trace.worker
 {label} 这一轮停在一个问题上，在等回复：
 {question}
-机长可以 inspect_session 看现场、nudge_session 代答；拍不了板就问人。（session：{session}）
+机长可以 inspect_session 看现场；要回答它就 post(to: …) 发给它，它被唤醒时会读到；拍不了板就问人。（session：{session}）
 
 ## trace.captain
 {crew} 的 {label} 这一轮停在一个问题上，在等你回复：
@@ -702,3 +687,91 @@ model 和 effort 至少给一个；补上再调一次。
 
 ## r.profile_next_start
 已记下：下一次启动这个 session（重启或续跑）时生效；这一回合和接下来的工具调用仍是原来的配置。照常继续手上的活。
+
+## r.not_your_crew
+「{crew}」不归你管：你不是它的机长。要它做什么，找它的机长：post(to: "{number}")。
+
+## r.brief_empty
+brief 是空的：写清要它做什么、做到什么程度算完，再调一次。
+
+## r.session_started
+已起 worker「{title}」（{id}）。它上线后会在群里出声；要补充说明就 post(to: "{id}")，一直没动静就 inspect_session 看看。
+
+## r.stop_reason_empty
+reason 是空的：写一句为什么停（会公开写进大厅），再调一次。
+
+## r.stop_self
+不能停你自己。要结束就收尾、在群里说一声，然后结束这一轮。
+
+## r.stop_notice
+停掉了 {target}：{reason}
+
+## r.session_stopped
+已停掉 {target}，原因已写进「{crew}」的大厅。它的活还要接着做，就 start_session 另起一个。
+
+## r.inspect
+{target} 的现场如下。卡在要人回答的框上就 ask 人；要它改做别的就 post(to: …) 给它：
+{report}
+
+## r.nudge_keys_only
+nudge_session 只收按键 esc 或 interrupt（打断它当前这一轮），不收「{key}」。要告诉它什么，用 post(to: …) 发给它，它被唤醒时会读到。
+
+## r.nudged
+已给 {target} 发出 {key}。只是发出、没确认生效：过几秒 inspect_session 看效果。
+
+## r.sessions_header
+「{crew}」的 session（id · 号 · 名字 · 角色 · 状态）：
+
+## r.session_line
+- {id} · {address} · {name} · {role} · {state}
+
+## r.sessions_none
+（还没有 session）
+
+## r.sessions_tail
+看某个的现场用 inspect_session；要它做事就 post(to: 号)。
+
+## r.no_address
+无号
+
+## r.role_captain
+机长
+
+## r.role_worker
+worker
+
+## r.state_stopped
+没在跑
+
+## r.state_idle
+空闲
+
+## r.state_working
+干活中
+
+## r.state_waiting
+在等回答
+
+## r.state_unknown
+状态不明
+
+## r.handoff_one_of
+to_session 和 runner 给且只给一个：交给现有 session 用 to_session，新起一个接任用 runner（model / effort / title / opening_brief 只配 runner 用）。改好再调一次。
+
+## r.handoff_already
+{target} 已经是「{crew}」的机长，没有交接。要换人，就给 to_session 另一个 session，或用 runner 新起一个。
+
+## r.handoff_done
+「{crew}」的机长已交给 {new}（{id}）。原机长 {old} 留在机组里当 worker。有事要交代新机长，就 post(to: "{id}")。
+
+## r.handoff_done_vacant
+「{crew}」的机长已交给 {new}（{id}）；之前没有机长。有事要交代它，就 post(to: "{id}")。
+
+## r.handoff_self
+你现在是 worker 了：下一次调用起，你的工具表就变了。把手上在协调的事交代给新机长，再接着做你自己的活。
+
+## r.handoff_default_brief
+你刚接任本机组的机长：先读大厅最近的消息，确认手上在办的事和各 worker 的状态，再在大厅说一句你接手了。
+
+## r.default_captain_title
+机长

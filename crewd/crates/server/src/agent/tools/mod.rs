@@ -1,6 +1,7 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
 pub mod asks;
+pub mod captain;
 pub mod channels;
 pub mod messaging;
 
@@ -164,7 +165,13 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "get_quota" => asks::get_quota(&cx, args).await,
         "schedule_wakeup" => asks::schedule_wakeup(&cx, args).await,
         "set_session_profile" => asks::set_session_profile(&cx, args).await,
-        // Task 15 adds the captain groups.
+        "start_session" => captain::start_session(&cx, args).await,
+        "stop_session" => captain::stop_session(&cx, args).await,
+        "inspect_session" => captain::inspect_session(&cx, args).await,
+        "nudge_session" => captain::nudge_session(&cx, args).await,
+        "list_sessions" => captain::list_sessions(&cx, args).await,
+        "handoff_captain" => captain::handoff_captain(&cx, args).await,
+        // T15b adds the crew attribute and structure tools.
         _ => cx.err("r.no_handler", &[("name", tool)]),
     }
 }

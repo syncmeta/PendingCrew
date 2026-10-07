@@ -238,13 +238,13 @@ One-sentence status.
 The full new text.
 
 ## start_session
-(Captain) Start a worker in this crew for a clear coding task.
+(Captain) Start a worker for a clear coding task. crew omitted = this crew; another crew only if you act as its captain (the management crew's captain counts as the captain of every crew).
 
 ## start_session.brief
 The task, with goal and done criteria.
 
 ## start_session.title
-At most 18 characters, no project name; the worker's display name.
+At most 18 characters, no project name; the worker's display name. Omitted = the first 18 characters of the brief's first line.
 
 ## start_session.runner
 claude or codex; omitted = crew default.
@@ -258,11 +258,14 @@ Optional model.
 ## start_session.effort
 Optional reasoning effort.
 
+## start_session.crew
+Optional: the crew to start it in (number or id); omitted = this crew.
+
 ## stop_session
-(Captain) Stop a session's process in this crew. The reason is posted to the lobby first; irreversible. To interrupt one turn, nudge_session with Esc instead.
+(Captain) Stop a session's process: the reason is posted in your name to its crew's lobby first, then it is stopped; irreversible. To interrupt one turn only, nudge_session with esc. You cannot stop yourself.
 
 ## stop_session.session_id
-Target session id.
+Target session: id or directory number (like 7-3).
 
 ## stop_session.reason
 Why; posted publicly to the lobby.
@@ -271,64 +274,46 @@ Why; posted publicly to the lobby.
 (Captain) See a session's state and recent terminal output (codex: transcript tail). Use it when a mention gets no answer.
 
 ## inspect_session.session_id
-Target session id.
+Target session: id or directory number (like 7-3).
 
 ## nudge_session
-(Captain) Send keys or text to a session's terminal: Enter / Esc send that key, anything else is submitted as input. Inspect first.
+(Captain) Interrupt a session's current turn: only the keys esc / interrupt. To tell it something, post(to: …) to it; it reads that when woken. Sending is not confirmation: inspect_session a few seconds later to see the effect.
 
 ## nudge_session.session_id
-Target session id.
+Target session: id or directory number (like 7-3).
 
-## nudge_session.input
-Enter, Esc, or text to send.
+## nudge_session.key
+esc or interrupt; both interrupt its current turn.
 
 ## list_sessions
-(Captain) List this crew's sessions: id, number, name, role, state.
+(Captain) List a crew's sessions: id, number, name, role, state. crew omitted = this crew.
 
-## handoff_captain_to_session
-(Captain) Hand the captain role to an existing session. target_crew_id omitted = this crew; otherwise only a direct child crew.
+## list_sessions.crew
+Optional: crew number or id; omitted = this crew.
 
-## handoff_captain_to_session.session_id
-The successor's session id; must belong to the target crew.
+## handoff_captain
+(Captain) Hand over a crew's captain role: to_session hands it to an existing session (which must belong to that crew), or runner starts a new session to take over; give exactly one. crew omitted = this crew; it may also be a direct child crew of yours, or any crew you act as captain of. The old captain stays in the crew as a worker.
 
-## handoff_captain_to_session.target_crew_id
-Optional: a direct child crew id.
+## handoff_captain.crew
+Optional: whose captain role (crew number or id); omitted = this crew.
 
-## create_and_handoff_captain
-(Captain) Start a new session and hand it the captain role. target_crew_id omitted = this crew; otherwise only a direct child crew.
+## handoff_captain.to_session
+The successor: an existing session's id or directory number; it must belong to that crew.
 
-## create_and_handoff_captain.runner
-claude or codex; must be explicit.
+## handoff_captain.runner
+Start a new session to take over: claude or codex.
 
-## create_and_handoff_captain.model
-Optional model.
+## handoff_captain.model
+Optional: the new captain's model (with runner only).
 
-## create_and_handoff_captain.effort
-Optional reasoning effort.
+## handoff_captain.effort
+Optional: the new captain's reasoning effort (with runner only).
 
-## create_and_handoff_captain.title
-Optional display name; default "Captain".
+## handoff_captain.title
+Optional: the new captain's display name, at most 18 characters; omitted = Captain (with runner only).
 
-## create_and_handoff_captain.opening_brief
-Optional first task for the new captain.
-
-## create_and_handoff_captain.target_crew_id
-Optional: a direct child crew id.
-
-## report_to_parent
-(Captain) Report upward: posts to each direct parent crew's lobby mentioning its captain. For milestones, decisions or resources you need from above, or being blocked. Lead with the conclusion.
-
-## report_to_parent.message
-The report.
-
-## message_child_crew
-(Captain) Send a message to a direct child crew: posted to its lobby mentioning its captain.
-
-## message_child_crew.crew
-Child crew name, id or number.
-
-## message_child_crew.message
-What to pass on.
+## handoff_captain.opening_brief
+Optional: the new captain's first task (with runner only).
 
 ## adopt_crew
 (Captain) Adopt a crew that has no parent/child relation with yours, making it your child. No cycles; the management crew is outside the crew tree and cannot be adopted.
@@ -384,7 +369,7 @@ Invalid arguments: {detail}
 ## trace.worker
 {label} stopped this turn on a question and is waiting for an answer:
 {question}
-Captain: inspect_session to see the state, nudge_session to answer for it; if you cannot decide, ask the human. (session: {session})
+Captain: inspect_session to see the state; to answer it, post(to: …) to it, and it reads that when woken; if you cannot decide, ask the human. (session: {session})
 
 ## trace.captain
 {label} of {crew} stopped this turn on a question and is waiting for your answer:
@@ -702,3 +687,91 @@ Give at least one of model and effort, then call again.
 
 ## r.profile_next_start
 Saved: it takes effect the next time this session starts (restart or resume); this turn and your next tool calls still run on the current settings. Carry on with your work.
+
+## r.not_your_crew
+"{crew}" is not yours: you are not its captain. To get something done there, ask its captain: post(to: "{number}").
+
+## r.brief_empty
+brief is empty: write what it should do and what counts as done, then call again.
+
+## r.session_started
+Worker "{title}" started ({id}). It will speak up in the channel once running; to add details, post(to: "{id}"); if it stays quiet, inspect_session.
+
+## r.stop_reason_empty
+reason is empty: write one sentence on why (it is posted publicly to the lobby), then call again.
+
+## r.stop_self
+You cannot stop yourself. To finish, wrap up, say so in the channel, and end your turn.
+
+## r.stop_notice
+Stopped {target}: {reason}
+
+## r.session_stopped
+Stopped {target}; the reason is in the lobby of "{crew}". If its work must go on, start_session a new one.
+
+## r.inspect
+State of {target} below. If it is stuck on a box only a person can answer, ask the human; to give it other work, post(to: …) to it:
+{report}
+
+## r.nudge_keys_only
+nudge_session only takes the keys esc or interrupt (interrupting its current turn), not "{key}". To tell it something, post(to: …) to it; it reads that when woken.
+
+## r.nudged
+Sent {key} to {target}. Sent, not confirmed: inspect_session in a few seconds to see the effect.
+
+## r.sessions_header
+Sessions of "{crew}" (id · number · name · role · state):
+
+## r.session_line
+- {id} · {address} · {name} · {role} · {state}
+
+## r.sessions_none
+(no sessions yet)
+
+## r.sessions_tail
+To see one's state, inspect_session; to give one work, post(to: its number).
+
+## r.no_address
+no number
+
+## r.role_captain
+captain
+
+## r.role_worker
+worker
+
+## r.state_stopped
+not running
+
+## r.state_idle
+idle
+
+## r.state_working
+working
+
+## r.state_waiting
+waiting for an answer
+
+## r.state_unknown
+state unknown
+
+## r.handoff_one_of
+Give exactly one of to_session and runner: to_session hands over to an existing session, runner starts a new one to take over (model / effort / title / opening_brief go with runner only). Fix it and call again.
+
+## r.handoff_already
+{target} is already the captain of "{crew}"; nothing was handed over. To change, give to_session another session, or start a new one with runner.
+
+## r.handoff_done
+Captain of "{crew}" handed to {new} ({id}). The old captain {old} stays in the crew as a worker. To brief the new captain, post(to: "{id}").
+
+## r.handoff_done_vacant
+Captain of "{crew}" handed to {new} ({id}); there was no captain before. To brief it, post(to: "{id}").
+
+## r.handoff_self
+You are a worker now: your tool list changes on your next call. Hand what you were coordinating to the new captain, then carry on with your own work.
+
+## r.handoff_default_brief
+You have just taken over as this crew's captain: read the lobby's recent messages, check what is in progress and how each worker is doing, then say in the lobby that you have taken over.
+
+## r.default_captain_title
+Captain

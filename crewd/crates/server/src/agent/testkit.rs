@@ -261,6 +261,30 @@ impl Fixture {
             .collect()
     }
 
+    /// What the fake's `live` / `inspect` report for `l.session_id` from now on.
+    pub fn set_live(&self, l: crewd_proto::SessionLive) {
+        self.control.set_live(l);
+    }
+
+    /// Apply the last `handoff_captain` the fake recorded the way M3c does (collab
+    /// `crews::set_captain` through `AppState::collab`), so a test sees the data after a handoff.
+    pub async fn apply_last_handoff(&self) {
+        let (crew, to) = self
+            .control
+            .calls()
+            .into_iter()
+            .rev()
+            .find_map(|c| match c {
+                crate::control::FakeCall::Handoff(crew, to) => Some((crew, to)),
+                _ => None,
+            })
+            .expect("a recorded handoff");
+        self.state
+            .collab(move |tx| crewd_collab::crews::set_captain(tx, &crew, &to))
+            .await
+            .unwrap();
+    }
+
     /// FakeSessionControl 记下的调用，逐条 `{:?}`（如 `Start(StartRequest { crew_id: "…", role: Worker, … })`）。
     pub fn control_calls(&self) -> Vec<String> {
         self.control

@@ -54,9 +54,6 @@ const PASSIVE_CREW_TOOLS: &[&str] = &[
     "read_delegation_policy",
     "inspect_session",
     "list_sessions",
-    // Cross-crew messaging is talk like `post`, not output.
-    "report_to_parent",
-    "message_child_crew",
 ];
 
 pub fn is_crewd_tool(tool_name: &str) -> bool {
@@ -633,8 +630,6 @@ mod tests {
             "read_delegation_policy",
             "inspect_session",
             "list_sessions",
-            "report_to_parent",
-            "message_child_crew",
         ];
         let tools: Vec<String> = passive.iter().map(|t| format!("mcp__crew__{t}")).collect();
         let tools: Vec<&str> = tools.iter().map(String::as_str).collect();

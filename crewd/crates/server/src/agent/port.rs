@@ -13,7 +13,8 @@
 //!
 //! 授权：M3a 对机组 DAG（`attach_parent` / `detach_parent` / `create_crew`）与会话控制（`start_session` /
 //! `stop_session` / `nudge` / `set_profile` / `handoff_captain` ...）**不做**「谁能调」的授权——`by` 参数在
-//! M3a 里是被忽略的。这些操作的授权（只有机长、只能动自己机组 / 自己的树……）全在 T15 的工具层，不在这里。
+//! M3a 里是被忽略的。这些操作的授权在 T15 的工具层，判据是 collab 的 `crews::acts_as_captain_of`（经本文件的
+//! `acts_as_captain_of`；总机组的机长在每个机组都按机长算，C2），工具层不另写一份。
 use std::fmt;
 
 use crewd_collab::{Change, CollabError, Locale, Sender, Tx};
@@ -453,6 +454,17 @@ pub async fn resolve_crew(st: &AppState, arg: &str) -> PortResult<Option<CrewVie
             (Some(c), None) => opt(crew_view(conn, &c.id)),
             _ => Ok(None),
         }
+    })
+    .await
+}
+
+/// C2: may `session` act as the captain of `crew`: its current captain, or the management crew's
+/// captain (who counts as the captain of every crew). collab `crews::acts_as_captain_of`, the one
+/// copy of this rule; unknown session / crew = false.
+pub async fn acts_as_captain_of(st: &AppState, session: &str, crew: &str) -> PortResult<bool> {
+    let (s, c) = (session.to_string(), crew.to_string());
+    read(st, move |conn| {
+        crewd_collab::crews::acts_as_captain_of(conn, &s, &c)
     })
     .await
 }
@@ -1317,6 +1329,14 @@ pub async fn note_progress(st: &AppState, session: &str) -> PortResult<()> {
 // 会话控制（SessionControl）
 // ---------------------------------------------------------------------------------------------
 
+/// The title a session started through `start_session` will get: collab's own rule
+/// (`sessions::resolve_title`, the one `register` applies), checked here so its refusals
+/// (`session.title_too_long` / `title_or_brief_required` / `title_is_sender_label`) reach the agent
+/// before anything is started.
+pub fn resolve_title(title: Option<&str>, brief: Option<&str>) -> PortResult<String> {
+    Ok(crewd_collab::sessions::resolve_title(title, brief)?)
+}
+
 /// `executor` 缺省 = 机组的 `captain_executor`，再缺省 "claude"。返回新 session 的 id。
 pub async fn start_session(st: &AppState, r: StartReq) -> PortResult<String> {
     let executor = match r.executor {
@@ -1421,6 +1441,11 @@ pub async fn quota(st: &AppState) -> PortResult<String> {
         })
         .collect::<Vec<_>>()
         .join("\n"))
+}
+
+/// A session's live state as SessionControl reports it (a list row picks its words from it).
+pub async fn live(st: &AppState, session: &str) -> PortResult<crewd_proto::SessionLive> {
+    Ok(st.sessions.live(session.to_string()).await?)
 }
 
 pub async fn live_state(st: &AppState, session: &str) -> PortResult<String> {
