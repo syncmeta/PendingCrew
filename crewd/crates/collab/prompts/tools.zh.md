@@ -357,6 +357,9 @@ esc 或 interrupt，都是打断它当前这一轮。
 ## r.unknown_tool
 没有 {name} 这个工具。
 
+## r.tool_removed
+没有 {name} 这个工具了：它的活改由 {replacement} 做。用它再调一次。
+
 ## r.captain_only
 {name} 只有机长能用，你现在不是机长。
 

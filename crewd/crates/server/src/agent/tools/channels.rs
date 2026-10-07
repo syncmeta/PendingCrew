@@ -1071,15 +1071,18 @@ mod tests {
             "channel_unlisten",
         ] {
             assert!(catalog::find(gone).is_none(), "{gone}");
-            assert!(
-                catalog::REMOVED.contains(&gone),
-                "{gone} names its replacement in REMOVED"
-            );
+            let new = catalog::replacement(gone)
+                .unwrap_or_else(|| panic!("{gone} names its replacement in REMOVED"));
             let r = run(&f, &f.worker, gone, json!({})).await;
             assert_eq!(
                 r.text,
-                text::r(Locale::Zh, "r.unknown_tool", &[("name", gone)])
+                text::r(
+                    Locale::Zh,
+                    "r.tool_removed",
+                    &[("name", gone), ("replacement", new)]
+                )
             );
+            assert!(r.is_error);
         }
         for kept in [
             "channel_create",

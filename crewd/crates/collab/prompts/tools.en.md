@@ -357,6 +357,9 @@ Optional: claude or codex for the child captain.
 ## r.unknown_tool
 There is no tool named {name}.
 
+## r.tool_removed
+The tool {name} is gone: {replacement} does its job now. Call that instead.
+
 ## r.captain_only
 {name} is for the captain only, and you are not the captain now.
 

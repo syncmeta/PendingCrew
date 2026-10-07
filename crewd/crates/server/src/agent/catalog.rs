@@ -268,43 +268,50 @@ pub const CATALOG: &[ToolSpec] = &[
     ),
 ];
 
-/// 已删的旧工具名（§9、§22.3、§22.7 Q4）与改了名的旧名：测试断言它们不在表里。
-pub const REMOVED: &[&str] = &[
-    "continue_work",
-    "confirm_todo_sweep",
-    "plan_add",
-    "plan_update",
-    "plan_list",
-    "raise_attention",
-    "clear_attention",
-    "crew_ordering_signals",
-    "arrange_crews",
-    "post_to_crew",
-    "read_whiteboard",
-    "search_whiteboard",
-    "add_human_todo",
-    "withdraw_human_todo",
-    "listen",
-    "answer_decision",
-    // -> list_channels (S70; T15b turns this list into (name, replacement) pairs).
-    "human_watching",
-    // -> post(to:) (S65: cross-crew talk is a dm; system-signed crew messages are gone).
-    "contact",
-    // -> channel_owner (S70).
-    "channel_transfer",
-    // -> channel_owner without `to` (S70).
-    "channel_accept",
-    // -> channel_listen(off: true) (S70).
-    "channel_unlisten",
-    // -> handoff_captain(to_session:) (S70).
-    "handoff_captain_to_session",
-    // -> handoff_captain(runner:) (S70).
-    "create_and_handoff_captain",
-    // -> post(to: <parent crew number>) (S65).
-    "report_to_parent",
-    // -> post(to: <child crew number>) (S65).
-    "message_child_crew",
+/// Removed or renamed tool names (§9, §22.3, §22.7 Q4, S65, S70) and what replaces each, written
+/// the way an agent calls it (a tool name, optionally with the parameter that does the job). An
+/// empty replacement = gone without a successor (M4 or the human took it over). Calling an old
+/// name with a replacement answers `r.tool_removed`, naming it.
+pub const REMOVED: &[(&str, &str)] = &[
+    // §9: work tracking moved to M4.
+    ("continue_work", ""),
+    ("confirm_todo_sweep", ""),
+    ("plan_add", ""),
+    ("plan_update", ""),
+    ("plan_list", ""),
+    // Q4: the human's @ marker replaces attention flags; the human orders the sidebar.
+    ("raise_attention", "post(mentions: [{kind: \"human\"}])"),
+    ("clear_attention", ""),
+    ("crew_ordering_signals", ""),
+    ("arrange_crews", ""),
+    ("post_to_crew", "post"),
+    ("read_whiteboard", "read_channel"),
+    ("search_whiteboard", "search"),
+    ("add_human_todo", "ask"),
+    ("withdraw_human_todo", "withdraw_ask"),
+    ("listen", "channel_listen"),
+    // S51: pending decisions are the human's to answer.
+    ("answer_decision", ""),
+    // S70 merges and S65 removals (M3b).
+    ("human_watching", "list_channels"),
+    ("contact", "post(to:)"),
+    ("channel_transfer", "channel_owner(to:)"),
+    ("channel_accept", "channel_owner"),
+    ("channel_unlisten", "channel_listen(off: true)"),
+    ("handoff_captain_to_session", "handoff_captain(to_session:)"),
+    ("create_and_handoff_captain", "handoff_captain(runner:)"),
+    ("report_to_parent", "post(to:)"),
+    ("message_child_crew", "post(to:)"),
 ];
+
+/// What replaces a removed tool (`None`: not a removed name, or gone without a successor).
+pub fn replacement(name: &str) -> Option<&'static str> {
+    REMOVED
+        .iter()
+        .find(|(old, _)| *old == name)
+        .map(|(_, new)| *new)
+        .filter(|new| !new.is_empty())
+}
 
 pub fn find(name: &str) -> Option<&'static ToolSpec> {
     CATALOG.iter().find(|t| t.name == name)
@@ -389,6 +396,19 @@ mod tests {
     use crate::agent::{Identity, Role};
     use crewd_collab::Locale;
 
+    /// The supplements' removed list (index "Removed without a same-shape successor" + merged).
+    const M3B_REMOVED: &[&str] = &[
+        "contact",
+        "report_to_parent",
+        "message_child_crew",
+        "human_watching",
+        "channel_transfer",
+        "channel_accept",
+        "channel_unlisten",
+        "handoff_captain_to_session",
+        "create_and_handoff_captain",
+    ];
+
     fn who(role: Role) -> Identity {
         Identity {
             session_id: "s-1".into(),
@@ -411,10 +431,33 @@ mod tests {
         for t in CATALOG {
             assert!(seen.insert(t.name), "重名 {}", t.name);
         }
-        for gone in REMOVED {
+        for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
         assert_eq!(CATALOG.len(), 33);
+    }
+
+    /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
+    /// that exists; the names merged or removed in M3b (the supplements' list) all name one.
+    #[test]
+    fn removed_names_are_absent_and_name_a_replacement() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (old, new) in REMOVED {
+            assert!(seen.insert(*old), "{old} listed twice");
+            assert!(find(old).is_none(), "{old} is still in CATALOG");
+            if !new.is_empty() {
+                let tool = new.split('(').next().unwrap();
+                assert!(find(tool).is_some(), "{old} -> {new}: {tool} is not a tool");
+            }
+        }
+        for old in M3B_REMOVED {
+            assert!(
+                replacement(old).is_some(),
+                "{old} must name its replacement in REMOVED"
+            );
+        }
+        assert_eq!(replacement("post"), None);
+        assert_eq!(replacement("continue_work"), None, "no successor");
     }
 
     #[test]
