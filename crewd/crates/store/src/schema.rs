@@ -506,9 +506,16 @@ ALTER TABLE crews RENAME COLUMN builtin TO org_root;
 ALTER TABLE crews ADD COLUMN archived_at TEXT;
 "#;
 
-/// 一个事务：DDL → 回填 → 唯一索引 → 外键检查 → 版本号。任何一步失败整体回滚，库保持 v3。
+/// 一个事务：DDL → 回填 → 唯一索引 → 外键检查 → 版本号。任何一步失败整体回滚，库保持 v3；
+/// 错误一律带上「v4 迁移失败，已回滚（库保持 v3）」——crewd 拒绝启动时人看到的就是这句加原因。
 /// 只用传进来的连接（N4 的守卫在外面先做迁移前快照，再调 `migrate`）。
 fn migrate_v4(conn: &Connection) -> Result<()> {
+    // 事务在 `migrate_v4_in_tx` 返回时已经落定（提交或随 drop 回滚），这里只补上下文。
+    migrate_v4_in_tx(conn)
+        .map_err(|e| StoreError::Invalid(format!("v4 迁移失败，已回滚（库保持 v3）：{e}")))
+}
+
+fn migrate_v4_in_tx(conn: &Connection) -> Result<()> {
     // N4 的迁移前快照必须在这之前（计划「次序与外部依赖」）。
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(V4_DDL)?;
@@ -517,9 +524,7 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
         "CREATE UNIQUE INDEX crews_one_org_root ON crews(org_root) WHERE org_root=1;",
     )?;
     if let Some(report) = foreign_key_violations(&tx)? {
-        return Err(StoreError::Invalid(format!(
-            "v4 迁移后外键不成立，已回滚（库保持 v3）：{report}"
-        )));
+        return Err(StoreError::Invalid(format!("迁移后外键不成立：{report}")));
     }
     tx.execute_batch("PRAGMA user_version = 4")?;
     tx.commit()?;
@@ -546,7 +551,7 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     let root = crate::crews::ensure_org_root(conn, &crate::now_ts())?;
-    // 3) 根不挂在任何人下面；号码 0（没有号、且 0 没人用时）；侧栏次序恒为 1。
+    // 3) 根不挂在任何人下面；号码 0（没有号、且 0 没人用时）；侧栏次序恒为 1；不隐藏。
     conn.execute("DELETE FROM crew_parents WHERE crew_id=?1", [&root])?;
     conn.execute(
         "UPDATE crews SET number=0 WHERE id=?1 AND number IS NULL
@@ -554,6 +559,8 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
         [&root],
     )?;
     conn.execute("UPDATE crews SET position=1 WHERE id=?1", [&root])?;
+    // 根不能被隐藏（N1 裁定 6）：旧数据里藏着的露出来。
+    conn.execute("UPDATE crews SET hidden_at=NULL WHERE id=?1", [&root])?;
     // 4) 没有父边的其它机组挂到根下：次序 = 旧顶层次序（position, created_at, id），接在根已有的子之后。
     conn.execute(
         "INSERT INTO crew_parents(crew_id,parent_id,position)
@@ -1311,6 +1318,133 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
             ),
             1,
             "没有挂到总机组下的边（只有夹具里 crew-b 那条）"
+        );
+    }
+
+    /// 任何一步失败（不只外键检查）都带上同一句上下文：人看得出是 v4 迁移、库没被动过。
+    #[test]
+    fn every_v4_failure_says_it_rolled_back_and_kept_v3() {
+        let c = v3_db();
+        // 合成的冲突：v4 要加的列已经在了 → DDL 那一步就失败。
+        c.execute_batch("ALTER TABLE crews ADD COLUMN archived_at TEXT;")
+            .unwrap();
+        let err = migrate(&c).unwrap_err().to_string();
+        assert!(
+            err.starts_with("v4 迁移失败，已回滚（库保持 v3）") && err.contains("archived_at"),
+            "{err}"
+        );
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 3);
+        assert_eq!(
+            one::<i64>(
+                &c,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='approvals'"
+            ),
+            1
+        );
+    }
+
+    /// 审批唤醒：排队中的（pending / inflight）作废并写明原因与结算时间；已结算的、非审批的一概不动。
+    #[test]
+    fn v4_voids_pending_and_inflight_approval_wakes_only() {
+        let c = v3_db();
+        c.execute_batch(
+            r#"
+INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,created_at) VALUES
+  ('worker-a1','message','approval:ap-2','human',0,'inflight',1,'2026-09-04T00:00:00.000Z'),
+  ('worker-a2','ask_answer','approval:ap-3','human',0,'delivered',1,'2026-09-04T00:00:00.000Z'),
+  ('worker-a1','message','msg:m1','auto',0,'pending',0,'2026-09-04T00:00:00.000Z'),
+  ('worker-a2','message','msg:m2','auto',0,'inflight',1,'2026-09-04T00:00:00.000Z');
+"#,
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        let row = |source: &str| -> String {
+            one(
+                &c,
+                &format!(
+                    "SELECT state||'|'||COALESCE(last_error,'')||'|'||(settled_at IS NOT NULL) FROM wakes WHERE source='{source}'"
+                ),
+            )
+        };
+        assert_eq!(row("approval:ap-1"), "dropped|approvals removed (v4)|1");
+        assert_eq!(row("approval:ap-2"), "dropped|approvals removed (v4)|1");
+        assert_eq!(row("approval:ap-3"), "delivered||0", "已结算的不改");
+        assert_eq!(row("msg:m1"), "pending||0", "非审批的不动");
+        assert_eq!(row("msg:m2"), "inflight||0");
+    }
+
+    /// 根下已经有子（旧数据里只挂着内建机组的）：挂过来的旧根接在它们后面，原有的次序不动。
+    #[test]
+    fn reparented_roots_go_after_the_org_roots_existing_children() {
+        let c = v3_db();
+        c.execute_batch(
+            r#"
+INSERT INTO crews(id,title,number,builtin,created_at,updated_at,position) VALUES
+  ('crew-c','原本挂在总机组下',4,0,'2026-09-04T00:00:00.000Z','2026-09-04T00:00:00.000Z',9);
+INSERT INTO crew_parents(crew_id,parent_id,position) VALUES('crew-c','chief',5);
+"#,
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            rows(
+                &c,
+                "SELECT crew_id||'#'||position FROM crew_parents WHERE parent_id='chief' ORDER BY position"
+            ),
+            ["crew-c#5", "crew-x#6", "crew-a#7"]
+        );
+    }
+
+    /// 号码 0 已被别的机组占着：总机组不抢（留空），别人的 0 号不动；新建总机组的那条路也一样。
+    #[test]
+    fn the_org_root_does_not_take_number_zero_from_another_crew() {
+        let c = v3_db();
+        c.execute("UPDATE crews SET number=0 WHERE id='crew-x'", [])
+            .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<i64>>(&c, "SELECT number FROM crews WHERE id='chief'"),
+            None
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT number FROM crews WHERE id='crew-x'"),
+            0
+        );
+
+        let c = v3_db();
+        c.execute_batch(
+            "DELETE FROM crews WHERE id='chief'; UPDATE crews SET number=0 WHERE id='crew-x';",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<i64>>(&c, "SELECT number FROM crews WHERE id='pendingcrew-chief'"),
+            None
+        );
+        assert_eq!(
+            one::<i64>(&c, "SELECT number FROM crews WHERE id='crew-x'"),
+            0
+        );
+    }
+
+    /// 总机组不能被隐藏（N1 裁定 6）：旧数据里藏着的，迁移后露出来。
+    #[test]
+    fn a_hidden_org_root_is_unhidden_by_the_migration() {
+        let c = v3_db();
+        c.execute(
+            "UPDATE crews SET hidden_at='2026-09-05T00:00:00.000Z' WHERE id IN ('chief','crew-x')",
+            [],
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            one::<Option<String>>(&c, "SELECT hidden_at FROM crews WHERE id='chief'"),
+            None
+        );
+        assert_eq!(
+            one::<Option<String>>(&c, "SELECT hidden_at FROM crews WHERE id='crew-x'").as_deref(),
+            Some("2026-09-05T00:00:00.000Z"),
+            "别的机组照旧"
         );
     }
 
