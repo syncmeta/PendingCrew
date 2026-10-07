@@ -585,6 +585,8 @@ pub fn add_members(tx: &mut Tx<'_>, by: &Sender, id: &str, ms: &[MemberRef]) -> 
 
 pub fn remove_member(tx: &mut Tx<'_>, by: &Sender, id: &str, m: &MemberRef) -> Result<Channel> {
     let ch = get(tx.conn(), id)?;
+    // 归档机组的群跟着只读（同 `update`）：名单不动，先解档机组。
+    crews::refuse_archived(tx.conn(), &ch.crew_id)?;
     if ch.kind == ChannelKind::Lobby {
         return Err(CollabError::Invalid(Refusal::new(
             Code::ChannelLobbyCannotRemove,
@@ -1345,6 +1347,45 @@ mod tests {
             ["crew-b/lobby"],
             "非 home 机组没有人类群"
         );
+    }
+
+    /// 归档机组的群只读：移出成员也拒（同 update / add_members 的守卫），成员名单不变；解档后照常。
+    #[test]
+    fn removing_a_member_from_an_archived_crews_channel_is_refused() {
+        let mut s_ = store();
+        let ch = ok(&mut s_, |tx| {
+            create(tx, &Sender::Human, topic("crew-x", vec![s("cap-x")]))
+        });
+        ok(&mut s_, |tx| crate::crews::archive(tx, "crew-x"));
+        let e = err(&mut s_, |tx| {
+            remove_member(tx, &Sender::Human, &ch.id, &s("cap-x"))
+        });
+        match &e {
+            CollabError::Conflict(r) => {
+                assert_eq!(r.code, crate::refusal::Code::CrewArchived, "{e:?}")
+            }
+            e => panic!("{e:?}"),
+        }
+        assert!(
+            is_member(s_.conn(), &ch.id, &s("cap-x")).unwrap(),
+            "名单没变"
+        );
+        ok(&mut s_, |tx| crate::crews::unarchive(tx, "crew-x"));
+        ok(&mut s_, |tx| {
+            update(
+                tx,
+                &Sender::Human,
+                &ch.id,
+                ChannelPatch {
+                    archived: Some(false),
+                    ..Default::default()
+                },
+            )
+        });
+        ok(&mut s_, |tx| {
+            remove_member(tx, &Sender::Human, &ch.id, &s("cap-x"))
+        });
+        assert!(!is_member(s_.conn(), &ch.id, &s("cap-x")).unwrap());
     }
 
     #[test]
