@@ -41,7 +41,7 @@ use crate::health::LaunchVerdict;
 use crate::launch::{CommsSpec, HelperCommands};
 use crate::registry::{ProbeResult, ProcessRegistry, probe};
 use crate::resume::{AgentIdLedger, valid_agent_session_id};
-use crate::session::{BRIEF_DELIVERY_ID, ExitStatusKind, SessionEvent};
+use crate::session::{AnswerOutcome, BRIEF_DELIVERY_ID, ExitStatusKind, SessionEvent};
 
 /// 一次 codex 启动要的全部输入（调用方给的）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -467,6 +467,10 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
             t.next_ticket += 1;
             t.controls.insert(ticket, reply);
             t.core.control(ticket, op, now);
+        }
+        // codex 没有终端可按：M3d 改为回复挂起的服务端请求（T10c §2.6）。
+        Command::Answer { reply, .. } => {
+            let _ = reply.send(AnswerOutcome::Unsupported);
         }
     }
     false

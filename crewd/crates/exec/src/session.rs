@@ -11,9 +11,9 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crewd_term::{
-    AnsiPlainTextTail, CURSOR_MARKERS, DecisionEvent, PendingDecision, PendingDecisionTracker,
-    RATE_LIMIT_MENU_PHRASES, Screen, ScreenConfig, Snapshot, blocking_dialog, body_tail_visible,
-    input_row, strip,
+    AnsiPlainTextTail, CURSOR_MARKERS, DecisionEvent, InputDraft, PendingDecision,
+    PendingDecisionTracker, RATE_LIMIT_MENU_PHRASES, Screen, ScreenConfig, Snapshot,
+    blocking_dialog, body_tail_visible, input_row, strip,
 };
 
 use crate::delivery::{Delivery, Observation, Step, Subject, Timing};
@@ -27,6 +27,40 @@ pub const BRIEF_DELIVERY_ID: u64 = 0;
 
 /// claude 拒绝续跑时屏上的原话。
 pub const NO_CONVERSATION_MARKER: &str = "No conversation found with session ID";
+
+/// 回答待决策框的按键之间隔多久（T10d：从 crewd-wake 的 `NUDGE_KEY_GAP_MS` 挪到这里——按键由会话自己排、
+/// 自己在每一下之前回读屏幕，编排层不 sleep）。
+pub const ANSWER_KEY_GAP: Duration = Duration::from_millis(150);
+
+/// 最后一下按完多久回读一次，看框答掉没有（S73）。
+pub const ANSWER_VERIFY_DELAY: Duration = Duration::from_millis(500);
+
+/// 草稿闸挡住一笔投递时 `DeliveryOutcome::Blocked` 带的原因（是码不是文案：编排层据它显示 `input_draft`）。
+pub const INPUT_DRAFT: &str = "input_draft";
+
+/// 回答一个待决策框的一下按键（[`Core::answer`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnswerStep {
+    pub bytes: Vec<u8>,
+    /// 按这一下之前，框的高亮必须停在第几项（0 起）；`None` = 不核（编号框上按数字）。
+    pub selected_before: Option<usize>,
+}
+
+/// 一次回答的结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AnswerOutcome {
+    /// 键都按下去了；最后一下之后 [`ANSWER_VERIFY_DELAY`] 回读：`cleared` = 屏上没有框了、或已换成另一个框
+    /// （指纹不同）；`now` = 此刻屏上的框。
+    Answered {
+        cleared: bool,
+        now: Option<PendingDecision>,
+    },
+    /// 某一下按之前，屏上的框已经不是要答的那个（指纹不同、没有框了、或高亮不在预期的那一项）：这一下和后面的
+    /// 都没按。`now` = 此刻屏上的框。
+    Conflict { now: Option<PendingDecision> },
+    /// 这个执行器不靠按键回答（codex：M3d 改为回复挂起的服务端请求）。
+    Unsupported,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreConfig {
@@ -43,6 +77,10 @@ pub struct CoreConfig {
     pub resume_refusal_window: Duration,
     /// 拉起自检的期限。
     pub launch_deadline: Duration,
+    /// 回答待决策框的按键间隔（[`ANSWER_KEY_GAP`]）。
+    pub answer_key_gap: Duration,
+    /// 回答完多久回读（[`ANSWER_VERIFY_DELAY`]）。
+    pub answer_verify_delay: Duration,
 }
 
 impl Default for CoreConfig {
@@ -55,6 +93,8 @@ impl Default for CoreConfig {
             hit_limit_window: Duration::from_secs(600),
             resume_refusal_window: Duration::from_secs(5),
             launch_deadline: FIRST_OUTPUT_DEADLINE,
+            answer_key_gap: ANSWER_KEY_GAP,
+            answer_verify_delay: ANSWER_VERIFY_DELAY,
         }
     }
 }
@@ -147,6 +187,9 @@ pub enum SessionEvent {
     },
     /// 执行器替 agent 做了一个人应该知道的决定（代拒了一个表单、丢了一段原始按键……）。
     Notice(String),
+    /// 有正文等着写、而输入框里有草稿（T10d 草稿闸）：草稿文本（分不清是不是草稿时 = 输入行上看得见的字）；
+    /// 草稿清掉 / 不再有东西等着写 = `None`。只在看到的草稿变了时发。
+    InputDraft(Option<String>),
     /// codex：服务端确认的实际模型 / 推理强度 / fast 档（握手回包、设置回显）。
     Profile(Profile),
     Exited(ExitInfo),
@@ -164,8 +207,16 @@ pub struct Profile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Write(Vec<u8>),
-    Resize { cols: u16, lines: u16 },
+    Resize {
+        cols: u16,
+        lines: u16,
+    },
     Event(SessionEvent),
+    /// 一次回答（[`Core::answer`] 的 `id`）有了结果；`None` = 会话停了 / 退了，没答成（驱动层回 `Closed`）。
+    AnswerDone {
+        id: u64,
+        outcome: Option<AnswerOutcome>,
+    },
 }
 
 /// 推导出的会话状态（坏消息优先）。
@@ -187,16 +238,38 @@ struct InFlight {
     machine: Delivery,
     /// 正文至少写进 PTY 一次了（终局不是「已投递」时，输入框里可能还留着它）。
     wrote_body: bool,
+    /// 正文落地时输入行的样子（终局不是「已投递」时它就是残留；草稿闸据此认出「是自己的残留」）。
+    landed_row: Option<String>,
 }
 
 /// 排好的按键是干什么的：到点发之前按用途再看一眼屏幕。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum KeyPurpose {
     /// 提交三拍里的退格 / 回车。`via_body`：这一轮提交是凭「正文尾巴在屏上」起的
     /// （长正文把提示符滚出了屏），没有输入行可看。
     SubmitBeat { via_body: bool },
     /// 限流菜单自动应答「1」之后的回车。
     RateLimitAnswer,
+    /// 回答待决策框的一下（[`Core::answer`]）：按之前屏上的框指纹必须是 `expect`，`selected` 给了就还要高亮在那一项。
+    Answer {
+        id: u64,
+        expect: String,
+        selected: Option<usize>,
+    },
+}
+
+/// 排着、还没开始的一次回答。
+struct AnswerJob {
+    id: u64,
+    expect: String,
+    steps: Vec<AnswerStep>,
+}
+
+/// 正在进行的一次回答：键排在 `Core::keys` 里；最后一下按完后 `verify_at` 到点回读。
+struct Answering {
+    id: u64,
+    expect: String,
+    verify_at: Option<Instant>,
 }
 
 struct Key {
@@ -231,6 +304,13 @@ pub struct Core {
     in_flight: Option<InFlight>,
     /// 上一笔没投成、但正文写进过输入框：残留可能还在，下一笔第一次写入也先 Ctrl-U。
     input_dirty: bool,
+    /// `input_dirty` 时那段残留落地时的输入行（草稿闸认出「是自己的残留」，见 [`Core::draft_held`]）。
+    residue: Option<String>,
+    /// 最近一次发出去的 `SessionEvent::InputDraft`（只在变了时再发）。
+    draft_reported: Option<String>,
+    /// 正在进行的回答、排在它后面的回答（一次只答一个）。
+    answering: Option<Answering>,
+    answers: VecDeque<AnswerJob>,
     queue: VecDeque<PendingText>,
     keys: VecDeque<Key>,
     actions: Vec<Action>,
@@ -267,6 +347,10 @@ impl Core {
             pending_decision: None,
             in_flight: None,
             input_dirty: false,
+            residue: None,
+            draft_reported: None,
+            answering: None,
+            answers: VecDeque::new(),
             queue: pending.into(),
             keys: VecDeque::new(),
             actions: Vec::new(),
@@ -287,8 +371,9 @@ impl Core {
             return None;
         }
         let key = self.keys.front().map(|k| k.at);
-        // 排着按键时投递机是冻住的（`step_delivery` 不推进），它的期限可能早已过去——不算。
-        let delivery = if self.keys.is_empty() {
+        let verify = self.answering.as_ref().and_then(|a| a.verify_at);
+        // 排着按键、或正在回答时投递机是冻住的（`step_delivery` 不推进），它的期限可能早已过去——不算。
+        let delivery = if self.keys.is_empty() && self.answering.is_none() {
             self.in_flight
                 .as_ref()
                 .and_then(|f| f.machine.next_deadline())
@@ -305,7 +390,7 @@ impl Core {
                     .and_then(|at| at.checked_add(self.config.working_quiet))
             })
             .flatten();
-        [key, delivery, launch, idle]
+        [key, verify, delivery, launch, idle]
             .into_iter()
             .flatten()
             .filter(|t| *t > self.last_now)
@@ -404,6 +489,7 @@ impl Core {
             self.set_health(Some(h), now);
         }
         self.flush_due_keys(now);
+        self.verify_answer(now);
         // 扫描器只是附加触发：它触发与否，按键前都要看屏幕；而屏幕每块输出、每拍都看，
         // 所以它的结果不改变判定（扫描器没认出的菜单——光标定位摆的词——照样会答）。
         let _scanner_fired = self.rate_limit.feed(bytes, now);
@@ -422,6 +508,7 @@ impl Core {
         }
         self.last_now = self.last_now.max(now);
         self.flush_due_keys(now);
+        self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
         let working = self
             .last_output_at
@@ -486,6 +573,19 @@ impl Core {
         if self.running && !bytes.is_empty() {
             self.actions.push(Action::Write(bytes.to_vec()));
         }
+    }
+
+    /// 回答屏上那个待决策框（T10d 的安全按键）：`expect` = 要答的框的指纹，`steps` 一下一下按，之间隔
+    /// `answer_key_gap`。**每一下按之前都回读屏幕**（[`Core::flush_due_keys`]）：框不是 `expect`、或高亮不在
+    /// `selected_before` → 这一下和剩下的都不按，回 `Conflict`。最后一下按完 `answer_verify_delay` 再回读，回
+    /// `Answered`。一次只答一个，后来的排队。结果以 [`Action::AnswerDone`] 交出去。
+    pub fn answer(&mut self, id: u64, expect: String, steps: Vec<AnswerStep>, now: Instant) {
+        if !self.running || self.stopped_by_user {
+            self.actions.push(Action::AnswerDone { id, outcome: None });
+            return;
+        }
+        self.answers.push_back(AnswerJob { id, expect, steps });
+        self.start_next_answer(now);
     }
 
     pub fn resize(&mut self, cols: u16, lines: u16) {
@@ -631,10 +731,10 @@ impl Core {
         while self.keys.front().is_some_and(|k| k.at <= now) {
             let key = self.keys.pop_front().expect("刚看过非空");
             let rows = self.screen.screen_rows();
-            let safe = match key.purpose {
+            let safe = match &key.purpose {
                 KeyPurpose::SubmitBeat { via_body } => {
                     blocking_dialog(&rows).is_none()
-                        && if via_body {
+                        && if *via_body {
                             self.in_flight
                                 .as_ref()
                                 .is_some_and(|f| body_tail_visible(&f.body, &rows))
@@ -643,6 +743,33 @@ impl Core {
                         }
                 }
                 KeyPurpose::RateLimitAnswer => rate_limit_menu_on_screen(&rows),
+                KeyPurpose::Answer {
+                    id,
+                    expect,
+                    selected,
+                } => {
+                    let shown = blocking_dialog(&rows);
+                    let same = shown.as_ref().is_some_and(|d| {
+                        d.fingerprint() == *expect
+                            && selected.is_none_or(|want| d.selected == Some(want))
+                    });
+                    if same {
+                        self.actions.push(Action::Write(key.bytes));
+                        let id = *id;
+                        if !self.keys.iter().any(|k| answer_id(k) == Some(id)) {
+                            // 最后一下按完：到点回读（S73）。
+                            let at = now + self.config.answer_verify_delay;
+                            if let Some(a) = self.answering.as_mut() {
+                                a.verify_at = Some(at);
+                            }
+                        }
+                    } else {
+                        let id = *id;
+                        self.keys.retain(|k| answer_id(k) != Some(id));
+                        self.finish_answer(AnswerOutcome::Conflict { now: shown }, now);
+                    }
+                    continue;
+                }
             };
             if safe {
                 self.actions.push(Action::Write(key.bytes));
@@ -656,6 +783,70 @@ impl Core {
                 }
             }
         }
+    }
+
+    /// 没有回答在进行时，开始排着的下一个：键全部排进 `keys`（第一下就是「现在」，下一次 flush 前回读）。
+    fn start_next_answer(&mut self, now: Instant) {
+        if self.answering.is_some() {
+            return;
+        }
+        let Some(job) = self.answers.pop_front() else {
+            return;
+        };
+        let gap = self.config.answer_key_gap;
+        let mut at = now;
+        for step in job.steps.iter() {
+            self.schedule(
+                at,
+                step.bytes.clone(),
+                KeyPurpose::Answer {
+                    id: job.id,
+                    expect: job.expect.clone(),
+                    selected: step.selected_before,
+                },
+            );
+            at += gap;
+        }
+        let verify_at = job
+            .steps
+            .is_empty()
+            .then(|| now + self.config.answer_verify_delay);
+        self.answering = Some(Answering {
+            id: job.id,
+            expect: job.expect,
+            verify_at,
+        });
+        self.flush_due_keys(now);
+    }
+
+    /// 最后一下按完、回读时刻到了：看框还在不在。
+    fn verify_answer(&mut self, now: Instant) {
+        let Some(a) = self.answering.as_ref() else {
+            return;
+        };
+        if a.verify_at.is_none_or(|at| at > now) {
+            return;
+        }
+        let shown = blocking_dialog(&self.screen.screen_rows());
+        let cleared = shown.as_ref().is_none_or(|d| d.fingerprint() != a.expect);
+        self.finish_answer(
+            AnswerOutcome::Answered {
+                cleared,
+                now: shown,
+            },
+            now,
+        );
+    }
+
+    /// 当前这次回答有了结果：交出去，开始下一个。
+    fn finish_answer(&mut self, outcome: AnswerOutcome, now: Instant) {
+        if let Some(a) = self.answering.take() {
+            self.actions.push(Action::AnswerDone {
+                id: a.id,
+                outcome: Some(outcome),
+            });
+        }
+        self.start_next_answer(now);
     }
 
     fn answer_rate_limit_menu(&mut self, now: Instant) {
@@ -734,29 +925,46 @@ impl Core {
                 body,
                 machine,
                 wrote_body: false,
+                landed_row: None,
             });
             self.step_delivery(now);
         }
     }
 
     fn step_delivery(&mut self, now: Instant) {
-        // 提交三拍（空格 / 退格 / 回车）没发完之前不回读：中间那一帧（多了个空格）不作数。
-        if !self.keys.is_empty() {
+        // 提交三拍（空格 / 退格 / 回车）没发完之前不回读：中间那一帧（多了个空格）不作数。回答待决策框的键
+        // 没按完、或还没回读时也不动（不往一个正在被答的框所在的屏上敲字）。
+        if !self.keys.is_empty() || self.answering.is_some() {
             return;
         }
+        if self.in_flight.is_none() {
+            self.note_draft(None);
+            return;
+        }
+        let rows = self.screen.screen_rows();
+        let row = input_row(&rows);
+        let held = self.draft_held(row.as_deref());
         let Some(flight) = self.in_flight.as_mut() else {
             return;
         };
-        let rows = self.screen.screen_rows();
-        let row = input_row(&rows);
         let step = flight.machine.step(Observation {
             input_row: row.as_deref(),
             body_visible: body_tail_visible(&flight.body, &rows),
             dialog_present: blocking_dialog(&rows).is_some(),
+            draft_held: held.is_some(),
             now,
         });
+        // 第一次写正文之前（还在等就绪）才看草稿：写进去以后输入框里的字是自己的。
+        let awaiting = matches!(step, Step::Idle | Step::HeldByDraft) && !flight.wrote_body;
+        self.note_draft(held.filter(|_| awaiting));
+        let Some(flight) = self.in_flight.as_mut() else {
+            return;
+        };
         match step {
             Step::Idle => {}
+            Step::HeldByDraft => {
+                self.report(DeliveryOutcome::Blocked(INPUT_DRAFT.to_string()), now)
+            }
             Step::WriteBody { attempt } => {
                 let mut bytes = Vec::new();
                 if attempt > 1 || self.input_dirty {
@@ -764,11 +972,15 @@ impl Core {
                     bytes.push(0x15);
                 }
                 self.input_dirty = false;
+                self.residue = None;
                 flight.wrote_body = true;
                 bytes.extend_from_slice(flight.body.as_bytes());
                 self.actions.push(Action::Write(bytes));
             }
             Step::Submit { .. } => {
+                if flight.landed_row.is_none() {
+                    flight.landed_row = row.clone();
+                }
                 // 正文是一次灌进去的，claude 会当成粘贴：单发回车可能只结束粘贴而不提交。
                 // 先补一个空格再删掉（输入行判据 trim，不影响判定），隔拍再回车。
                 self.actions.push(Action::Write(b" ".to_vec()));
@@ -776,7 +988,7 @@ impl Core {
                 let purpose = KeyPurpose::SubmitBeat {
                     via_body: row.is_none(),
                 };
-                self.schedule(now + gap, vec![0x7f], purpose);
+                self.schedule(now + gap, vec![0x7f], purpose.clone());
                 self.schedule(now + gap * 2, b"\r".to_vec(), purpose);
             }
             Step::BlockedByDialog(detail) => self.report(DeliveryOutcome::Blocked(detail), now),
@@ -799,12 +1011,15 @@ impl Core {
         };
         let pending = flight.pending.clone();
         let wrote_body = flight.wrote_body;
+        let landed_row = flight.landed_row.clone();
         match &outcome {
             DeliveryOutcome::Delivered => {
                 if self.health.as_ref().map(|h| h.kind) == Some(kind) {
                     self.set_health(None, now);
                 }
             }
+            // 草稿闸：人在输入框里打字不是会话出了毛病，不留 health（`SessionEvent::InputDraft` 已经说了）。
+            DeliveryOutcome::Blocked(d) if d == INPUT_DRAFT => {}
             DeliveryOutcome::Blocked(d)
             | DeliveryOutcome::NotReady(d)
             | DeliveryOutcome::Stalled(d)
@@ -817,6 +1032,7 @@ impl Core {
         if outcome.is_final() {
             if outcome != DeliveryOutcome::Delivered && wrote_body {
                 self.input_dirty = true;
+                self.residue = landed_row;
             }
             self.in_flight = None;
             self.finish(pending, outcome, now);
@@ -827,6 +1043,29 @@ impl Core {
                 subject: pending.subject,
                 outcome,
             });
+        }
+    }
+
+    /// 草稿闸（T10d / S52）：输入框里有人留下的字（或分不清）= `Some(给人看的草稿文本)`。上一笔没投成、留在框里
+    /// 的残留（[`Self::residue`]，输入行原样没变）是自己的，不算——下一笔照旧先 Ctrl-U 清掉它。
+    /// 屏上没有输入行 = 还没就绪（投递机自己等），不是草稿。
+    fn draft_held(&self, row: Option<&str>) -> Option<String> {
+        let row = row?;
+        if self.input_dirty && self.residue.as_deref() == Some(row) {
+            return None;
+        }
+        match self.screen.input_draft() {
+            InputDraft::Empty => None,
+            InputDraft::Text(t) => Some(t),
+            InputDraft::Unknown => Some(row.to_string()),
+        }
+    }
+
+    /// 看到的草稿变了才发 `InputDraft`（清掉 = `None`）。
+    fn note_draft(&mut self, draft: Option<String>) {
+        if draft != self.draft_reported {
+            self.draft_reported = draft.clone();
+            self.event(SessionEvent::InputDraft(draft));
         }
     }
 
@@ -842,6 +1081,18 @@ impl Core {
     fn abandon(&mut self, reason: &str, report: bool, now: Instant) {
         let lost = self.take_pending();
         self.keys.clear();
+        // 回答也答不成了（进程退了 / 被停了）：驱动层回 `Closed`。
+        let answers: Vec<u64> = self
+            .answering
+            .take()
+            .map(|a| a.id)
+            .into_iter()
+            .chain(self.answers.drain(..).map(|j| j.id))
+            .collect();
+        for id in answers {
+            self.actions.push(Action::AnswerDone { id, outcome: None });
+        }
+        self.note_draft(None);
         for p in &lost {
             self.finish(
                 p.clone(),
@@ -895,6 +1146,14 @@ pub fn preview(text: &str) -> String {
         one_line
     } else {
         one_line.chars().take(40).collect::<String>() + "…"
+    }
+}
+
+/// 这一下按键属于哪一次回答。
+fn answer_id(k: &Key) -> Option<u64> {
+    match k.purpose {
+        KeyPurpose::Answer { id, .. } => Some(id),
+        _ => None,
     }
 }
 
@@ -2089,12 +2348,63 @@ mod tests {
         );
     }
 
-    /// 已信任目录：录下来的就绪屏上直接投。
+    /// 这段录像（已信任目录）的末尾是人在输入框里打的一长句草稿：T10d 起正文不往草稿上写，等人清掉。
+    /// （T10d 之前这条断言的是「写进去了」——那正是草稿闸要挡的事。）
     #[test]
-    fn recorded_ready_screen_receives_the_brief() {
+    fn recorded_ready_screen_with_a_typed_draft_holds_the_brief() {
         let mut t = T::new(brief("开场任务"));
         let mut all = Vec::new();
         for (k, chunk) in fixture("tui-claude-ready.bin").chunks(64).enumerate() {
+            all.extend(t.output(chunk, k as f64 * 0.01));
+        }
+        all.extend(t.tick(3.0));
+        all.extend(t.tick(200.0));
+        assert!(
+            !writes(&all)
+                .iter()
+                .any(|w| w.ends_with("开场任务".as_bytes())),
+            "草稿在框里，一个字都不写：{all:?}"
+        );
+        let ev = events(&all);
+        assert!(ev.iter().any(|e| matches!(
+            e,
+            SessionEvent::Delivery { outcome: DeliveryOutcome::Blocked(d), .. } if d == INPUT_DRAFT
+        )));
+        assert!(
+            ev.iter().any(|e| matches!(
+                e,
+                SessionEvent::InputDraft(Some(d)) if d.starts_with("这是一行故意打得很长")
+            )),
+            "{ev:?}"
+        );
+        assert!(
+            !ev.iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    outcome: DeliveryOutcome::NotReady(_),
+                    ..
+                }
+            )),
+            "等人清草稿不算没就绪：{ev:?}"
+        );
+        assert_eq!(t.core.health(), None, "草稿不是会话的毛病");
+    }
+
+    /// 同一段录像截在人开始打字之前、占位提示按 claude 的样子上了暗淡样式：就绪屏上直接投。
+    #[test]
+    fn recorded_ready_screen_receives_the_brief() {
+        let raw = fixture("tui-claude-ready.bin");
+        let cut = raw
+            .windows("这是".len())
+            .position(|w| w == "这是".as_bytes())
+            .expect("录像里有那句草稿");
+        let styled = String::from_utf8_lossy(&raw[..cut])
+            .replace("\u{a0}Try", "\u{a0}\x1b[2mTry")
+            .replace("errors\"", "errors\"\x1b[22m");
+        assert!(styled.contains("\x1b[2mTry"), "占位提示上了样式");
+        let mut t = T::new(brief("开场任务"));
+        let mut all = Vec::new();
+        for (k, chunk) in styled.as_bytes().chunks(64).enumerate() {
             all.extend(t.output(chunk, k as f64 * 0.01));
         }
         all.extend(t.tick(3.0));
@@ -2102,7 +2412,246 @@ mod tests {
             writes(&all)
                 .iter()
                 .any(|w| w.ends_with("开场任务".as_bytes())),
-            "就绪屏上应写正文"
+            "就绪屏上应写正文：{:?}",
+            t.core.screen_text(25)
+        );
+    }
+
+    // ---- T10d：安全按键（回答待决策框）与草稿闸 ----
+
+    /// 有样式的 claude 输入框：空框 = 暗淡的占位提示；底下一条暗淡的提示条（真 claude 的屏总有样式）。
+    fn styled_box(input: &str) -> Vec<u8> {
+        let shown = if input.is_empty() {
+            "\x1b[2mTry \"write a test\"\x1b[22m".to_string()
+        } else {
+            input.to_string()
+        };
+        format!(
+            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {shown}\r\n────────────────────\r\n\x1b[2m  ? for shortcuts\x1b[22m"
+        )
+        .into_bytes()
+    }
+
+    fn numbered_menu(prompt: &str, cursor: usize) -> Vec<u8> {
+        let mark = |i: usize| if i == cursor { "❯" } else { " " };
+        format!(
+            "\x1b[2J\x1b[H{prompt}\r\n{} 1. Yes\r\n{} 2. No\r\n{} 3. Ask later",
+            mark(0),
+            mark(1),
+            mark(2)
+        )
+        .into_bytes()
+    }
+
+    fn cursor_list(prompt: &str, cursor: usize) -> Vec<u8> {
+        let mark = |i: usize| if i == cursor { "❯" } else { " " };
+        format!(
+            "\x1b[2J\x1b[H{prompt}\r\n\r\n{}  No, exit\r\n{}  Yes, I trust this folder\r\n{}  Later\r\n\r\nEnter to confirm · Esc to cancel",
+            mark(0),
+            mark(1),
+            mark(2)
+        )
+        .into_bytes()
+    }
+
+    fn shown(t: &T) -> PendingDecision {
+        blocking_dialog(&t.core.screen.screen_rows()).expect("屏上有框")
+    }
+
+    fn step(bytes: &[u8], selected_before: Option<usize>) -> AnswerStep {
+        AnswerStep {
+            bytes: bytes.to_vec(),
+            selected_before,
+        }
+    }
+
+    fn answers(actions: &[Action]) -> Vec<(u64, Option<AnswerOutcome>)> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::AnswerDone { id, outcome } => Some((*id, outcome.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn digits_on_a_numbered_box_are_answered_and_verified() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Do you want to proceed?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(7, expect, vec![step(b"2", None)], t.at(0.1));
+        let first = t.core.take_actions();
+        assert_eq!(
+            writes(&first),
+            vec![b"2".to_vec()],
+            "第一下当场按（按之前回读过）"
+        );
+        assert!(answers(&first).is_empty(), "还没回读");
+        t.output(&styled_box(""), 0.2);
+        assert!(
+            answers(&t.tick(0.5)).is_empty(),
+            "最后一下之后 500ms 才回读"
+        );
+        let done = t.tick(0.6);
+        assert_eq!(
+            answers(&done),
+            vec![(
+                7,
+                Some(AnswerOutcome::Answered {
+                    cleared: true,
+                    now: None
+                })
+            )]
+        );
+    }
+
+    /// 第一下按完、第二下之前框换了：第二下不按，回 `Conflict` 并带上现在的框。
+    #[test]
+    fn a_box_replaced_between_two_keys_stops_the_answer() {
+        let mut t = T::new(vec![]);
+        t.output(&cursor_list("Trust this folder?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(
+            1,
+            expect,
+            vec![step(b"\x1b[B", Some(0)), step(b"\r", Some(1))],
+            t.at(0.0),
+        );
+        let mut log = t.core.take_actions();
+        assert_eq!(writes(&log), vec![b"\x1b[B".to_vec()]);
+        log.extend(t.output(&numbered_menu("Run rm -rf build?", 0), 0.05));
+        log.extend(t.tick(0.15));
+        log.extend(t.tick(1.0));
+        assert_eq!(
+            writes(&log),
+            vec![b"\x1b[B".to_vec()],
+            "第二下（回车）绝不能按到新框上"
+        );
+        match answers(&log).as_slice() {
+            [(1, Some(AnswerOutcome::Conflict { now: Some(d) }))] => {
+                assert_eq!(d.prompt, "Run rm -rf build?")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// 高亮被别人挪了（人在终端里按了方向键）：按之前核 `selected`，对不上就停手。
+    #[test]
+    fn a_highlight_moved_by_someone_else_stops_the_answer() {
+        let mut t = T::new(vec![]);
+        t.output(&cursor_list("Trust this folder?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(
+            2,
+            expect,
+            vec![step(b"\x1b[B", Some(0)), step(b"\r", Some(1))],
+            t.at(0.0),
+        );
+        let mut log = t.core.take_actions();
+        // 同一个框（指纹相同），高亮却停在第三项。
+        log.extend(t.output(&cursor_list("Trust this folder?", 2), 0.05));
+        log.extend(t.tick(0.15));
+        assert_eq!(writes(&log), vec![b"\x1b[B".to_vec()], "{log:?}");
+        assert!(matches!(
+            answers(&log).as_slice(),
+            [(2, Some(AnswerOutcome::Conflict { now: Some(d) }))] if d.selected == Some(2)
+        ));
+        // 高亮如期挪到第二项：照常按完。
+        let mut t = T::new(vec![]);
+        t.output(&cursor_list("Trust this folder?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(
+            3,
+            expect,
+            vec![step(b"\x1b[B", Some(0)), step(b"\r", Some(1))],
+            t.at(0.0),
+        );
+        let mut log = t.core.take_actions();
+        log.extend(t.output(&cursor_list("Trust this folder?", 1), 0.05));
+        log.extend(t.tick(0.15));
+        assert_eq!(writes(&log), vec![b"\x1b[B".to_vec(), b"\r".to_vec()]);
+        log.extend(t.output(&styled_box(""), 0.2));
+        log.extend(t.tick(0.7));
+        assert!(matches!(
+            answers(&log).as_slice(),
+            [(3, Some(AnswerOutcome::Answered { cleared: true, .. }))]
+        ));
+    }
+
+    /// 回答期间不投正文；回答排队一次一个；会话被停掉 = 没答成（`None`）。
+    #[test]
+    fn answers_queue_and_are_dropped_when_the_session_stops() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core
+            .answer(1, expect.clone(), vec![step(b"1", None)], t.at(0.0));
+        t.core.answer(2, expect, vec![step(b"2", None)], t.at(0.0));
+        let first = t.core.take_actions();
+        assert_eq!(writes(&first), vec![b"1".to_vec()], "第二个排在第一个后面");
+        t.core.stop(t.at(0.1));
+        let stopped = t.core.take_actions();
+        assert_eq!(answers(&stopped), vec![(1, None), (2, None)]);
+        t.core
+            .answer(3, "x".into(), vec![step(b"1", None)], t.at(0.2));
+        assert_eq!(answers(&t.core.take_actions()), vec![(3, None)]);
+    }
+
+    /// 草稿闸：输入框里有人打的字 → 正文不写（Blocked input_draft、InputDraft 事件）；人清掉之后照常投出去。
+    #[test]
+    fn a_body_waits_behind_a_typed_draft_and_goes_out_once_it_is_cleared() {
+        let mut t = T::new(vec![]);
+        t.core.send(1, "唤醒正文", t.at(0.0));
+        let mut log = t.output(&styled_box("人打了一半"), 0.0);
+        for s in 1..=5 {
+            log.extend(t.tick(s as f64 * 0.4));
+        }
+        assert!(writes(&log).is_empty(), "一个字节都不写：{log:?}");
+        let ev = events(&log);
+        assert!(ev.contains(&SessionEvent::InputDraft(Some("人打了一半".into()))));
+        assert_eq!(
+            ev.iter()
+                .filter(|e| matches!(e, SessionEvent::Delivery { outcome: DeliveryOutcome::Blocked(d), .. } if d == INPUT_DRAFT))
+                .count(),
+            1,
+            "只报一次：{ev:?}"
+        );
+        // 草稿改了：再说一次（只在变了时发）。
+        let more = t.output(&styled_box("人打了一半又多打几个"), 2.2);
+        assert!(events(&more).contains(&SessionEvent::InputDraft(Some(
+            "人打了一半又多打几个".into()
+        ))));
+        // 人清掉了：占位提示回来 → 草稿事件清零、稳住 0.3s 后写正文。
+        let cleared = t.output(&styled_box(""), 3.0);
+        assert!(events(&cleared).contains(&SessionEvent::InputDraft(None)));
+        let wrote = t.tick(3.4);
+        assert_eq!(writes(&wrote), vec!["唤醒正文".as_bytes().to_vec()]);
+        let mut rest = t.output(&styled_box("唤醒正文"), 4.0);
+        rest.extend(t.tick(4.1));
+        rest.extend(t.tick(4.2));
+        rest.extend(t.output(&styled_box(""), 4.3));
+        assert!(delivered(&rest, 1), "{rest:?}");
+    }
+
+    /// 占位提示（暗淡）不是草稿：照常投。
+    #[test]
+    fn a_placeholder_box_is_delivered_normally() {
+        let mut t = T::new(vec![]);
+        t.core.send(1, "甲", t.at(0.0));
+        let mut log = t.output(&styled_box(""), 0.0);
+        log.extend(t.tick(0.3));
+        assert_eq!(writes(&log), vec!["甲".as_bytes().to_vec()]);
+        log.extend(t.output(&styled_box("甲"), 0.9));
+        log.extend(t.tick(1.0));
+        log.extend(t.tick(1.1));
+        log.extend(t.output(&styled_box(""), 1.2));
+        assert!(delivered(&log, 1), "{log:?}");
+        assert!(
+            !events(&log)
+                .iter()
+                .any(|e| matches!(e, SessionEvent::InputDraft(_))),
+            "{log:?}"
         );
     }
 }

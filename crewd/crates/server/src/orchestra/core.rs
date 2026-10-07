@@ -1629,7 +1629,8 @@ impl<P: Port> Core<P> {
             SessionEvent::Item { .. }
             | SessionEvent::TurnEnded { .. }
             | SessionEvent::Notice(_)
-            | SessionEvent::Profile(_) => {}
+            | SessionEvent::Profile(_)
+            | SessionEvent::InputDraft(_) => {}
             SessionEvent::Health(h) => {
                 let quota = h.as_ref().is_some_and(|h| h.kind.is_quota());
                 let cleared = h.is_none();

@@ -28,8 +28,8 @@ use crate::pty::{PtyMaster, SpawnSpec, spawn_pty};
 use crate::registry::{ProbeResult, ProcessRegistry, group_signal_refused, probe};
 use crate::resume::{AgentIdLedger, decide_resume};
 use crate::session::{
-    Action, BRIEF_DELIVERY_ID, Core, CoreConfig, DerivedState, ExitStatusKind, PendingText,
-    SessionEvent,
+    Action, AnswerOutcome, AnswerStep, BRIEF_DELIVERY_ID, Core, CoreConfig, DerivedState,
+    ExitStatusKind, PendingText, SessionEvent,
 };
 
 /// 驱动层参数。
@@ -226,6 +226,12 @@ pub(crate) enum Command {
         op: Control,
         reply: oneshot::Sender<ControlOutcome>,
     },
+    /// 回答屏上的待决策框（T10d，[`SessionHandle::answer`]）。
+    Answer {
+        expect: String,
+        steps: Vec<AnswerStep>,
+        reply: oneshot::Sender<AnswerOutcome>,
+    },
 }
 
 /// 窄接口：启动之外的一切（输入 / 打断 / 停止 / 状态 / 屏幕文本 / 快照 / 控制）。
@@ -276,6 +282,27 @@ impl SessionHandle {
     /// 打断当前回合：claude 写一个 Esc，codex 发 `turn/interrupt`（没有进行中的回合就什么都不做）。
     pub fn interrupt(&self) -> Result<(), Closed> {
         self.cmd(Command::Interrupt)
+    }
+
+    /// 回答屏上的待决策框（T10d 安全按键）：`expect` = 要答的那个框的指纹（`PendingDecision::fingerprint`）。
+    /// 每一下按之前会话自己回读屏幕，框换了 / 高亮挪了就停手回 `Conflict`；按完回读一次回 `Answered`。
+    /// 命令在调用时就进了会话的命令队列（返回的 future 只是等结果），先后与 `send` / `raw` 一致。
+    /// codex 回 `Unsupported`。
+    pub fn answer(
+        &self,
+        expect: String,
+        steps: Vec<AnswerStep>,
+    ) -> impl std::future::Future<Output = Result<AnswerOutcome, Closed>> + Send + 'static {
+        let (reply, rx) = oneshot::channel();
+        let sent = self.cmd(Command::Answer {
+            expect,
+            steps,
+            reply,
+        });
+        async move {
+            sent?;
+            rx.await.map_err(|_| Closed)
+        }
     }
 
     /// 会话控制（换模型 / 推理强度 / fast、压缩）。不支持的执行器回 `Unsupported`。
@@ -367,6 +394,8 @@ pub async fn start_claude(
         start,
         config,
         core,
+        answers: BTreeMap::new(),
+        next_answer: 0,
         running,
         cmd_rx,
         ev_tx,
@@ -572,6 +601,9 @@ struct Task {
     start: ClaudeStart,
     config: DriverConfig,
     core: Core,
+    /// 等结果的回答（[`Command::Answer`]），按 `Core::answer` 的 id。
+    answers: BTreeMap<u64, oneshot::Sender<AnswerOutcome>>,
+    next_answer: u64,
     running: Running,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
     ev_tx: mpsc::UnboundedSender<SessionEvent>,
@@ -824,6 +856,16 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 "claude 会话的 {op:?} 由屏幕驱动（M3 的 /model、/compact），执行器不直接支持"
             )));
         }
+        Command::Answer {
+            expect,
+            steps,
+            reply,
+        } => {
+            let id = t.next_answer;
+            t.next_answer += 1;
+            t.answers.insert(id, reply);
+            t.core.answer(id, expect, steps, now);
+        }
         Command::Status { reply } => {
             let _ = reply.send(SessionStatus {
                 state: t.core.state(),
@@ -853,6 +895,12 @@ fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
                 refused |= matches!(e, SessionEvent::ResumeRefused { .. });
                 let _ = t.ev_tx.send(e);
             }
+            // `None`（会话停了 / 退了）= 丢掉回执，等的一方拿到 `Closed`。
+            Action::AnswerDone { id, outcome } => {
+                if let (Some(reply), Some(outcome)) = (t.answers.remove(&id), outcome) {
+                    let _ = reply.send(outcome);
+                }
+            }
         }
     }
     refused
@@ -861,6 +909,8 @@ fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
 /// claude 拒绝了 `--resume`：换新号（先落账）重起一次，没投出去的正文搬过去。
 async fn respawn(t: &mut Task) -> Result<(), StartError> {
     let pending = t.core.take_pending();
+    // 旧 Core 上还没答完的回答随它作废：丢掉回执（等的一方拿到 `Closed`）。
+    t.answers.clear();
     let agent = AgentSessionArg::New(new_agent_session_id());
     let running = launch(&t.start, &t.config, agent, &t.auth_tx).await?;
     let mut old = std::mem::replace(&mut t.running, running);

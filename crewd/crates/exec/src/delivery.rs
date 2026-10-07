@@ -82,6 +82,8 @@ pub struct Observation<'a> {
     pub body_visible: bool,
     /// 屏上有需要人回答的对话框。
     pub dialog_present: bool,
+    /// 输入框里有人留下的草稿（或分不清是不是草稿，T10d）：第一次写正文之前看它，有就不写。
+    pub draft_held: bool,
     pub now: Instant,
 }
 
@@ -99,6 +101,9 @@ pub enum Step {
     },
     /// 对话框挡着，没投。只报一次，**不终止**。
     BlockedByDialog(String),
+    /// 输入框里有草稿（人打了一半的字），第一次写正文之前停住：什么都不写（T10d 草稿闸）。草稿出现时报一次，
+    /// 清掉再出现再报；**不终止**、等人清掉，等的时间不算「没就绪」。
+    HeldByDraft,
     /// 等到期限也没见到输入框。只报一次，**不终止**。
     NotReady(String),
     /// 写入 / 提交之后，过了本阶段的期限输入框仍不在屏上（整屏重绘卡住、被别的模态占了屏）。
@@ -183,6 +188,8 @@ pub struct Delivery {
     reported_dialog: bool,
     reported_not_ready: bool,
     reported_stall: bool,
+    /// 这一段草稿已经报过 `HeldByDraft`（草稿清掉就复位）。
+    reported_draft: bool,
     /// 发出过几轮 `Submit`、其中几轮被调用方撤回（回车没发出去）——文案据此说实话。
     submits: u32,
     submits_aborted: u32,
@@ -208,6 +215,7 @@ impl Delivery {
             reported_dialog: false,
             reported_not_ready: false,
             reported_stall: false,
+            reported_draft: false,
             submits: 0,
             submits_aborted: 0,
         }
@@ -293,6 +301,9 @@ impl Delivery {
         match self.phase.clone() {
             Phase::Finished => Step::Idle,
             Phase::AwaitingReady => {
+                if !obs.draft_held {
+                    self.reported_draft = false;
+                }
                 if obs.dialog_present {
                     self.ready_since = None;
                     let since = *self.dialog_since.get_or_insert(now);
@@ -333,6 +344,15 @@ impl Delivery {
                             self.subject.noun(),
                             t.readiness_deadline.as_secs()
                         ));
+                    }
+                    if obs.draft_held {
+                        // 等人清掉草稿不算「没就绪」（同对话框）：就绪期限从这一刻重新给满。
+                        self.readiness_since = now;
+                        if self.reported_draft {
+                            return Step::Idle;
+                        }
+                        self.reported_draft = true;
+                        return Step::HeldByDraft;
                     }
                     self.phase = Phase::Writing {
                         attempt: 1,
@@ -586,6 +606,7 @@ mod tests {
             input_row: row,
             body_visible: false,
             dialog_present: false,
+            draft_held: false,
             now: at,
         }
     }
@@ -825,6 +846,7 @@ mod tests {
             input_row: None,
             body_visible: false,
             dialog_present: true,
+            draft_held: false,
             now: at,
         };
         assert_eq!(d.step(dialog(c.at(0.0))), Step::Idle);
@@ -845,6 +867,7 @@ mod tests {
                 input_row: None,
                 body_visible: false,
                 dialog_present: true,
+                draft_held: false,
                 now: c.at(s as f64),
             });
             assert!(
@@ -896,6 +919,7 @@ mod tests {
             input_row: None,
             body_visible: false,
             dialog_present: true,
+            draft_held: false,
             now: at(0.25),
         };
         assert_eq!(d.step(dialog), Step::Idle, "页脚画出来了：其实是对话框");
@@ -984,6 +1008,7 @@ mod tests {
             input_row: None,
             body_visible: false,
             dialog_present: true,
+            draft_held: false,
             now: c.at(s),
         };
         assert_eq!(step_checked(&mut d, dialog(2.0), &c), Step::Idle);
@@ -1134,6 +1159,7 @@ mod tests {
             input_row: None,
             body_visible: false,
             dialog_present: true,
+            draft_held: false,
             now: at,
         }
     }
@@ -1332,6 +1358,7 @@ mod tests {
             input_row: None,
             body_visible: false,
             dialog_present: true,
+            draft_held: false,
             now: at(2.0),
         };
         assert_eq!(d.step(dialog), Step::Idle);

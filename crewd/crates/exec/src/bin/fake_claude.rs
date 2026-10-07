@@ -45,8 +45,9 @@ impl Fake {
     }
 
     fn draw_box(&self) {
+        // 占位提示与底下的提示条照真 claude 上暗淡样式（SGR 2）：执行器的草稿闸靠样式分辨占位提示和人打的字。
         let shown = if self.input.is_empty() {
-            HINT.to_string()
+            format!("\x1b[2m{HINT}\x1b[22m")
         } else if self.input.contains('\n') || self.input.chars().count() > 60 {
             format!("[Pasted text #1 +{} lines]", self.input.lines().count())
         } else {
@@ -54,7 +55,7 @@ impl Fake {
         };
         let rule = "─".repeat(40);
         out(format!(
-            "{}\r\n{}\r\n\r\n{rule}\r\n\u{276f} {shown}\r\n{rule}\r\n  ? for shortcuts",
+            "{}\r\n{}\r\n\r\n{rule}\r\n\u{276f} {shown}\r\n{rule}\r\n\x1b[2m  ? for shortcuts\x1b[22m",
             self.banner(),
             self.last
         )

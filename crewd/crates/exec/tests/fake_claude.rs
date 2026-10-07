@@ -10,7 +10,9 @@ use crewd_exec::driver::{ClaudeStart, DriverConfig, SessionHandle, start_claude}
 use crewd_exec::health::HealthKind;
 use crewd_exec::launch::ClaudeSpec;
 use crewd_exec::resume::MemoryLedger;
-use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitStatusKind, SessionEvent};
+use crewd_exec::session::{
+    AnswerOutcome, AnswerStep, BRIEF_DELIVERY_ID, DeliveryOutcome, ExitStatusKind, SessionEvent,
+};
 use crewd_term::DecisionEvent;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -236,6 +238,54 @@ async fn recorded_trust_dialog_blocks_until_answered_then_brief_lands() {
         "补投成功后清掉 BriefUndelivered"
     );
     assert_eq!(r.submitted(), ["信任之后再干活"]);
+    r.stop().await;
+}
+
+/// T10d：经 `SessionHandle::answer` 代答信任框（↓ 回车，每一下之前会话自己回读屏幕）。指纹不对的回答一下都不按。
+#[tokio::test]
+async fn trust_dialog_answered_through_answer_lands_the_brief() {
+    let mut r = start(&[("FAKE_CLAUDE_MODE", "trust")], Some("答完框再干活")).await;
+    let seen = r
+        .until(|e| matches!(e, SessionEvent::Decision(DecisionEvent::Appeared(_))))
+        .await;
+    let Some(SessionEvent::Decision(DecisionEvent::Appeared(d))) = seen.last() else {
+        unreachable!()
+    };
+    assert_eq!(d.selected, Some(0), "{d:?}");
+    let wrong =
+        r.h.answer(
+            "别的框|a|b".into(),
+            vec![AnswerStep {
+                bytes: b"\r".to_vec(),
+                selected_before: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(&wrong, AnswerOutcome::Conflict { now: Some(now) } if now.fingerprint() == d.fingerprint()),
+        "{wrong:?}"
+    );
+    let steps = vec![
+        AnswerStep {
+            bytes: b"\x1b[B".to_vec(),
+            selected_before: Some(0),
+        },
+        AnswerStep {
+            bytes: b"\r".to_vec(),
+            selected_before: Some(1),
+        },
+    ];
+    let done = r.h.answer(d.fingerprint(), steps).await.unwrap();
+    assert!(
+        matches!(done, AnswerOutcome::Answered { cleared: true, .. }),
+        "{done:?}"
+    );
+    r.until(outcome(BRIEF_DELIVERY_ID, |o| {
+        *o == DeliveryOutcome::Delivered
+    }))
+    .await;
+    assert_eq!(r.submitted(), ["答完框再干活"]);
     r.stop().await;
 }
 
