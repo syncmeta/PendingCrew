@@ -1,10 +1,11 @@
 //! 待决策通知与 nudge 键表（移植 `Sources/Mac/LocalRunner/SessionPendingDecision.swift:339-470`）。
 //! - 按法由这一屏现算：有编号说发数字；没编号说「别发数字」，可用的键从 [`NUDGE_KEYS`] 现算（一张表、一份名单）。
 //! - 选靶：worker 卡住 → @机长；机长卡住 → 直接 @人（绝不 @ 自己：@机长会触发拉起，成环，`:375`）；升级 → @人。
-//! - 键表与执行器对齐：`SessionHandle::raw` 把字节原样写进 PTY（claude），所以表里的字节就是终端收到的字节。
-//!   **但别把一段字节一次 `raw` 写出去**：claude 把一次写入的一整块当粘贴，其中的回车可能只是粘贴的结尾，
-//!   而且 `raw` 不会把输入框标成脏。所以 [`nudge_plan`] 给的是计划：键 / 数字逐个单独写、之间留 [`NUDGE_KEY_GAP_MS`]；
-//!   文本走执行器的正常 `SessionHandle::send`（三拍提交、输入框脏处理）。
+//! - 键表与执行器对齐：表里的字节就是终端收到的字节。**别把一段字节一次写出去**：claude 把一次写入的一整块当粘贴，
+//!   其中的回车可能只是粘贴的结尾。所以 [`nudge_plan`] 给的是计划：键一个一个、文本走执行器的正常
+//!   `SessionHandle::send`（三拍提交、输入框脏处理）。键只用来答屏上的待决策框，经执行器的安全按键
+//!   （`SessionHandle::answer`，T10d）：键与键之间的间隔（`crewd_exec::session::ANSWER_KEY_GAP`）、每一下之前回读屏幕
+//!   都在执行器里，IO 层不 sleep。选第几项的按法是 [`answer_plan`]。
 //! - 文本去毒规则（比执行器的 `sanitize_text` 更严）：制表符 → U+2409，换行 / CR → 空格，其余 C0 → U+2400 起的
 //!   控制图形，DEL → U+2421，C1 → U+FFFD。
 //!
@@ -39,8 +40,8 @@ pub struct Notice {
     pub to_human: bool,
 }
 
-/// 别名 → 发给 PTY 的字节（每个键单独一次写，不额外补回车）。不在表里的输入见 [`nudge_plan`]：1..=2 位数字逐位写、
-/// 再单独写一个回车；其余去毒后当文本经执行器的 `send` 投递（由它提交，不是 `raw` 补回车）。
+/// 别名 → 发给 PTY 的字节（每个键单独按一下，不额外补回车）。不在表里的输入见 [`nudge_plan`]：1..=2 位数字是选项号
+/// （IO 层按 [`answer_plan`] 换成按键）；其余去毒后当文本经执行器的 `send` 投递（由它提交，不是补一个回车）。
 pub const NUDGE_KEYS: &[(&str, &[u8])] = &[
     ("enter", b"\r"),
     ("esc", b"\x1b"),
@@ -143,17 +144,15 @@ pub fn selection_move_keys() -> Vec<&'static str> {
         .collect()
 }
 
-/// 键 / 数字序列里相邻两次写之间至少隔多久（毫秒）：IO 层必须遵守，别把它们合成一次写。
-pub const NUDGE_KEY_GAP_MS: u64 = 150;
-
 /// 数字串最长几位才算「菜单序号」；再长当文本。
 const MAX_MENU_DIGITS: usize = 2;
 
 /// `nudge_session` 的输入该怎么送进会话。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NudgePlan {
-    /// 一串**各自独立**的写：每一项（一个表里的键 / 一位数字 / 最后单独一个 `\r`）是一次 `SessionHandle::raw`，
-    /// 相邻两次之间至少隔 [`NUDGE_KEY_GAP_MS`]。**绝不要把这些字节合成一次 `raw` 写**。
+    /// 一串**各自独立**的按键（一个表里的键 / 一位数字 / 最后单独一个 `\r`）。IO 层只拿它答屏上的待决策框：表里的键
+    /// 经执行器的安全按键原样按；数字按 [`answer_plan`] 换成「选第 N 项」的按法（不用这里的 `\r`）。
+    /// **绝不要把这些字节合成一次写**。
     Keys(Vec<Vec<u8>>),
     /// 去毒后的文本：必须经执行器的正常 `SessionHandle::send` 投递（它负责三拍提交与输入框脏处理），
     /// **不要**用 `raw` 写，也不要自己补回车。
@@ -424,7 +423,6 @@ mod tests {
         assert_eq!(nudge_plan(" 12 "), keys(&[b"1", b"2", b"\r"]));
         // 太长的数字串不是菜单序号：当文本。
         assert_eq!(nudge_plan("2026"), Some(NudgePlan::Text("2026".into())));
-        const { assert!(NUDGE_KEY_GAP_MS >= 100, "写与写之间要留间隔") };
     }
 
     #[test]

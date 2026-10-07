@@ -318,3 +318,18 @@ scope=edge 要给 from（叫醒它的来源：session id 或 system）；要解�
 
 ## crew.no_workdir
 机组 {crew} 没有工作目录，没法为 session 新建 worktree；先给机组设好工作目录，或用 isolation=false
+
+## decision.none
+session {session} 屏上没有待决策的框，没有要按的键；要它干活就给它发消息
+
+## decision.changed
+session {session} 屏上的框变了（已被答掉、换成了别的框，或高亮被挪了），没有再往下按；看一眼它现在的框再决定
+
+## decision.needs_terminal
+session {session} 屏上的框要靠方向键选，但看不出高亮停在哪一项；打开它的终端直接选
+
+## decision.out_of_range
+session {session} 屏上的框只有 {options} 项，没有你选的那一项；按屏上的选项重新选
+
+## session.input_draft
+session {session} 的输入框里有一段还没发出的草稿：{text}；这次什么都没敲进去，等人把它发出去或清掉再试

@@ -23,7 +23,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::Handle;
-use super::control::live_to_proto;
+use super::control::{decision_view, live_to_proto};
 use super::core::{ControlError, Origin, RefusedKind, SettingsUpdate, SettingsView, StartSession};
 use super::deliver::{ListedWake, ReceiptRow, TargetSummary, WakeList};
 use super::hibernate::HibernateReport;
@@ -51,6 +51,10 @@ pub fn rpc_err(e: ControlError) -> RpcError {
         ControlError::AlreadyRunning(_)
         | ControlError::CaptainTaken(_)
         | ControlError::NotRunning(_)
+        | ControlError::NoDecision(_)
+        | ControlError::DecisionChanged { .. }
+        | ControlError::NeedsTerminal(_)
+        | ControlError::InputDraft { .. }
         | ControlError::AtCap { .. }
         | ControlError::ShuttingDown
         | ControlError::NoWorkdir(_)
@@ -59,8 +63,19 @@ pub fn rpc_err(e: ControlError) -> RpcError {
         | ControlError::CrewRemoved(_)
         | ControlError::Unsupported(_) => RpcError::CONFLICT,
     };
+    // `decision.changed` 带上此刻屏上的框（`data.decision`，T10d；没有框了就不带）。
+    let now = match &e {
+        ControlError::DecisionChanged { now: Some(d), .. } => Some(decision_view(d)),
+        _ => None,
+    };
     match e.refusal() {
-        Some(r) => dispatch::refused(code, r),
+        Some(r) => {
+            let err = dispatch::refused(code, r);
+            match now {
+                Some(d) => err.with_decision(d),
+                None => err,
+            }
+        }
         // 到不了：除了内部 / 存储错误，编排的错误都带拒绝码（`refusal` 的定义）。
         None => dispatch::internal(e),
     }
@@ -459,6 +474,32 @@ mod tests {
                 refused(RefusedKind::Conflict),
                 -32009,
                 "session.title_too_long",
+            ),
+            (
+                ControlError::NoDecision("s-1".into()),
+                -32009,
+                "decision.none",
+            ),
+            (
+                ControlError::DecisionChanged {
+                    session: "s-1".into(),
+                    now: None,
+                },
+                -32009,
+                "decision.changed",
+            ),
+            (
+                ControlError::NeedsTerminal("s-1".into()),
+                -32009,
+                "decision.needs_terminal",
+            ),
+            (
+                ControlError::InputDraft {
+                    session: "s-1".into(),
+                    text: "draft".into(),
+                },
+                -32009,
+                "session.input_draft",
             ),
         ];
         for (e, code, refusal) in table {

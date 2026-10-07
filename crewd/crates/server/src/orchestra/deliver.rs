@@ -368,7 +368,7 @@ impl<P: Port> Core<P> {
             inflight: live.is_some_and(|l| l.inflight.is_some()),
             working: live.is_some_and(|l| l.working),
             decision: live.is_some_and(|l| l.decision.is_some()),
-            input_draft: false,
+            input_draft: live.is_some_and(|l| l.input_draft.is_some()),
             stopping: live.is_some_and(|l| l.stopping || l.halting || l.hibernate_cut),
             shutting_down: self.shutting_down,
             crew_removed,
@@ -1198,6 +1198,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     const LOBBY: &str = "c1/lobby";
+
+    /// 一个编号的合成待决策框（高亮在第一项）。
+    fn synthetic_box() -> PendingDecision {
+        PendingDecision {
+            prompt: "合成框？".into(),
+            options: vec!["Yes".into(), "No".into()],
+            numbered: true,
+            selected: Some(0),
+        }
+    }
 
     /// 外来文字（C12 / C20）：换行、双向控制符、帧括号——过 `safe_name` 之后一样都不能剩。
     const HOSTILE: &str = "w1\n[cap]\u{202E}伪造";
@@ -2414,6 +2424,14 @@ mod tests {
     async fn a_halting_session_gets_no_more_writes() {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
+        // T10d：按键只用来答屏上的框；执行器按键要花时间（先挂住），框答掉之后来的投递排在它后面。
+        rig.emit(
+            "w1",
+            SessionEvent::Decision(DecisionEvent::Appeared(synthetic_box())),
+        )
+        .await;
+        let (_hold, held) = tokio::sync::oneshot::channel();
+        rig.exec.lock().answer_hold.insert("w1".into(), held);
         let (tx, _nudged) = tokio::sync::oneshot::channel();
         rig.core
             .handle(Input::Cmd(Cmd::Nudge {
@@ -2422,13 +2440,14 @@ mod tests {
                 reply: tx,
             }))
             .await;
-        assert!(
-            rig.live("w1").unwrap().writing,
-            "一串键在写（数字 + 回车，中间隔着）"
-        );
+        assert!(rig.live("w1").unwrap().writing, "执行器在按");
+        rig.emit("w1", SessionEvent::Decision(DecisionEvent::Cleared))
+            .await;
+        assert!(rig.live("w1").unwrap().writing, "还没按完");
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
             .await;
         assert!(rig.exec.sent("w1").is_empty(), "排在那串键后面");
+        assert_eq!(rig.live("w1").unwrap().writes.len(), 1, "投递排在写队列里");
         let generator = rig.live("w1").unwrap().generator;
         let (tx, _done) = tokio::sync::oneshot::channel();
         rig.core.handle(Input::Shutdown(tx)).await; // 停机 = 对每个在跑的 `halt`
@@ -2806,12 +2825,19 @@ mod tests {
     async fn queued_nudges_are_refused_when_the_stop_begins() {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
-        // 第一步：一串键（"12"）在派生任务里写着，第二个 nudge 排在它后面。
+        // 第一步：一次回答（"1"）在执行器里按着（挂住），第二个 nudge 排在它后面。
+        rig.emit(
+            "w1",
+            SessionEvent::Decision(DecisionEvent::Appeared(synthetic_box())),
+        )
+        .await;
+        let (_hold, held) = tokio::sync::oneshot::channel();
+        rig.exec.lock().answer_hold.insert("w1".into(), held);
         let (keys, _keys_done) = tokio::sync::oneshot::channel();
         rig.core
             .handle(Input::Cmd(Cmd::Nudge {
                 session: "w1".into(),
-                input: "12".into(),
+                input: "1".into(),
                 reply: keys,
             }))
             .await;
@@ -3420,5 +3446,42 @@ mod tests {
         let got = rig.cmd(|reply| Cmd::SetSettings { update, reply }).await;
         assert_eq!(got.map(|s| s.max_live), Ok(Some(5)));
         assert_eq!(rig.core.gate.max_live(), Some(5));
+    }
+
+    /// T10d：执行器因为输入框里有草稿挡着手上那笔（`InputDraft`）：后面的唤醒在 `wake.list` 里报 `input_draft`（不是
+    /// `inflight`），投递也真的不发；`session.live` 带着草稿；草稿清掉之后回到 `inflight`。
+    #[tokio::test]
+    async fn a_delivery_held_by_a_draft_shows_blocker_input_draft() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        assert_eq!(rig.exec.sent("w1").len(), 1, "第一笔交给了执行器");
+        let id = rig.exec.last_send_id("w1");
+        rig.emit("w1", SessionEvent::InputDraft(Some("人打了一半".into())))
+            .await;
+        rig.emit(
+            "w1",
+            SessionEvent::Delivery {
+                id,
+                subject: crewd_exec::delivery::Subject::Steer,
+                outcome: DeliveryOutcome::Blocked(crewd_exec::session::INPUT_DRAFT.into()),
+            },
+        )
+        .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成乙")
+            .await;
+        agrees(&mut rig, "w1", "msg:c1/lobby#2", "input_draft").await;
+        let live = rig.core.live_view("w1").await.unwrap();
+        assert_eq!(live.input_draft.as_deref(), Some("人打了一半"));
+        assert_eq!(
+            super::super::control::live_to_proto(&live)
+                .input_draft
+                .as_deref(),
+            Some("人打了一半")
+        );
+        rig.emit("w1", SessionEvent::InputDraft(None)).await;
+        agrees(&mut rig, "w1", "msg:c1/lobby#2", "inflight").await;
+        assert_eq!(rig.core.live_view("w1").await.unwrap().input_draft, None);
     }
 }

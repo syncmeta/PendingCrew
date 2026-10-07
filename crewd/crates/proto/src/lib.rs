@@ -169,6 +169,9 @@ pub struct RpcError {
 pub struct RpcErrorData {
     /// 拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。
     pub refusal: String,
+    /// `decision.changed`：此刻屏上的那个框（没有框了 = 不在）。客户端据它重新问人（M3c T10d）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<DecisionView>,
 }
 
 impl RpcError {
@@ -197,7 +200,16 @@ impl RpcError {
     pub fn with_refusal(mut self, code: &str) -> Self {
         self.data = Some(RpcErrorData {
             refusal: code.to_string(),
+            decision: None,
         });
+        self
+    }
+
+    /// 附上此刻屏上的框（`data.decision`；先 [`Self::with_refusal`]）。
+    pub fn with_decision(mut self, decision: DecisionView) -> Self {
+        if let Some(d) = self.data.as_mut() {
+            d.decision = Some(decision);
+        }
         self
     }
 }

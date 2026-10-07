@@ -27,8 +27,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use self::clock::Clock;
 use self::core::{
-    Cmd, CollabFact, ControlError, Core, Input, Origin, Reply, SettingsUpdate, SettingsView,
-    StartSession,
+    AnswerReport, Cmd, CollabFact, ControlError, Core, Input, Origin, Reply, SettingsUpdate,
+    SettingsView, StartSession,
 };
 use self::exec::Executors;
 use self::hooks::Hooks;
@@ -232,6 +232,23 @@ impl Handle {
         self.call(|reply| Cmd::Nudge {
             session,
             input,
+            reply,
+        })
+        .await
+    }
+
+    /// 回答屏上的待决策框、选第 `choice` 项（0 起；T10d，T10c 的 `session.answer` 用它）。
+    pub async fn answer(
+        &self,
+        session: &str,
+        fingerprint: &str,
+        choice: usize,
+    ) -> Result<AnswerReport, ControlError> {
+        let (session, fingerprint) = (session.to_string(), fingerprint.to_string());
+        self.call(|reply| Cmd::Answer {
+            session,
+            fingerprint,
+            choice,
             reply,
         })
         .await

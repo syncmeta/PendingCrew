@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crewd_exec::driver::{Closed, SendError, SessionHandle, SessionStatus, StartError};
 use crewd_exec::resume::AgentIdLedger;
-use crewd_exec::session::SessionEvent;
+use crewd_exec::session::{AnswerOutcome, AnswerStep, SessionEvent};
 use crewd_term::Snapshot;
 use tokio::sync::mpsc;
 
@@ -102,6 +102,9 @@ pub fn check_context(accepts: bool, context: &Context) -> Result<(), ExecSendErr
     }
 }
 
+/// 回答待决策框的一串键：（字节, 按之前高亮应在第几项；`None` = 不核）。
+pub type AnswerSteps = Vec<(Vec<u8>, Option<usize>)>;
+
 /// §13 Q12 的窄接口（启动之外）。
 pub trait ExecHandle: Send + Sync {
     /// `context` 只能在 `accepts_context()` 为真时非空，否则回 `ContextUnsupported`（见 [`check_context`]）。
@@ -113,6 +116,13 @@ pub trait ExecHandle: Send + Sync {
     /// 打断当前回合（claude：一个 Esc；codex：`turn/interrupt`；没有进行中的回合就什么都不做）。休眠到了期限、
     /// 还没做完这一轮的 session 先打断再叫停（C26）。
     fn interrupt(&self) -> Result<(), Closed>;
+    /// 回答屏上的待决策框（T10d 安全按键）：`expect` = 框的指纹，`steps` = (字节, 按之前高亮应在第几项)。键之间的间隔、
+    /// 每一下之前的回读都在执行器里；编排层只等结果，不 sleep。codex 回 `Unsupported`（M3d）。
+    fn answer(
+        &self,
+        expect: String,
+        steps: AnswerSteps,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>>;
     fn stop(&self) -> Result<(), Closed>;
     fn clear_quota_health(&self) -> Result<(), Closed>;
     fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>>;
@@ -133,6 +143,21 @@ impl ExecHandle for SessionHandle {
 
     fn interrupt(&self) -> Result<(), Closed> {
         SessionHandle::interrupt(self)
+    }
+
+    fn answer(
+        &self,
+        expect: String,
+        steps: AnswerSteps,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        let steps = steps
+            .into_iter()
+            .map(|(bytes, selected_before)| AnswerStep {
+                bytes,
+                selected_before,
+            })
+            .collect();
+        Box::pin(SessionHandle::answer(self, expect, steps))
     }
 
     fn stop(&self) -> Result<(), Closed> {

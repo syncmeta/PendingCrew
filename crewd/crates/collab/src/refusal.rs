@@ -78,6 +78,11 @@ refusal_codes! {
     CrewReorderMismatch = "crew.reorder_mismatch" ["current"],
     CrewNoCaptain = "crew.no_captain" ["crew"],
     CrewNoWorkdir = "crew.no_workdir" ["crew"],
+    // decision（回答 session 屏上的待决策框，M3c T10d）
+    DecisionNone = "decision.none" ["session"],
+    DecisionChanged = "decision.changed" ["session"],
+    DecisionNeedsTerminal = "decision.needs_terminal" ["session"],
+    DecisionOutOfRange = "decision.out_of_range" ["session", "options"],
     // directory
     DirectoryBadAddress = "directory.bad_address" ["address"],
     DirectoryNoSuchCrew = "directory.no_such_crew" ["number"],
@@ -123,6 +128,7 @@ refusal_codes! {
     SessionExecutorUnavailable = "session.executor_unavailable" ["executor"],
     SessionNoWorkdir = "session.no_workdir" ["session"],
     SessionWorktreeFailed = "session.worktree_failed" ["detail"],
+    SessionInputDraft = "session.input_draft" ["session", "text"],
     // settings
     SettingsBadLocale = "settings.bad_locale" ["value"],
     SettingsBadMaxLive = "settings.bad_max_live" ["value"],

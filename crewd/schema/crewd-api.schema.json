@@ -2168,6 +2168,17 @@
     "RpcErrorData": {
       "description": "`RpcError.data`：规则拒绝带的机器可读部分。",
       "properties": {
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`decision.changed`：此刻屏上的那个框（没有框了 = 不在）。客户端据它重新问人（M3c T10d）。"
+        },
         "refusal": {
           "description": "拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。",
           "type": "string"
@@ -2387,6 +2398,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "inputDraft": {
+          "description": "输入框里有一段还没发出的草稿、正挡着投递（M3c T10d）：草稿文本（分不清是不是草稿时 = 输入行上看得见的字）。\n不在 = 没有。",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "pendingDecision": {

@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use crewd_exec::health::HealthKind;
 use crewd_proto::{DecisionView, HealthKindView, HealthView, Role, Session, SessionLive};
+use crewd_term::PendingDecision;
 
 use super::Handle;
 use super::core::{ControlError, Origin, RefusedKind, StartSession};
@@ -91,6 +92,10 @@ pub fn map_error(e: ControlError, l: Locale) -> M3aError {
         ControlError::Unsupported(_) => M3aError::Unsupported(text),
         ControlError::Invalid(_)
         | ControlError::NotRunning(_)
+        | ControlError::NoDecision(_)
+        | ControlError::DecisionChanged { .. }
+        | ControlError::NeedsTerminal(_)
+        | ControlError::InputDraft { .. }
         | ControlError::NoWorkdir(_)
         | ControlError::CaptainTaken(_)
         | ControlError::CrewRemoved(_)
@@ -222,12 +227,18 @@ pub fn live_to_proto(v: &LiveView) -> SessionLive {
             },
             detail: h.detail.clone(),
         }),
-        pending_decision: v.pending_decision.as_ref().map(|d| DecisionView {
-            summary: d.prompt.clone(),
-            options: d.options.clone(),
-            numbered: d.numbered,
-        }),
+        pending_decision: v.pending_decision.as_ref().map(decision_view),
         awaiting_question: v.awaiting_question.clone(),
+        input_draft: v.input_draft.clone(),
+    }
+}
+
+/// 屏上的待决策框 → 线上的 `DecisionView`（`session.live` 与 `decision.changed` 的 `data.decision` 共用）。
+pub fn decision_view(d: &PendingDecision) -> DecisionView {
+    DecisionView {
+        summary: d.prompt.clone(),
+        options: d.options.clone(),
+        numbered: d.numbered,
     }
 }
 
@@ -250,6 +261,7 @@ mod tests {
                 selected: None,
             }),
             awaiting_question: None,
+            input_draft: None,
         }
     }
 
@@ -279,6 +291,22 @@ mod tests {
             (ControlError::NoWorkdir(s()), M3aError::Invalid),
             (ControlError::CaptainTaken("c-1".into()), M3aError::Invalid),
             (ControlError::CrewRemoved("c-1".into()), M3aError::Invalid),
+            (ControlError::NoDecision(s()), M3aError::Invalid),
+            (
+                ControlError::DecisionChanged {
+                    session: s(),
+                    now: None,
+                },
+                M3aError::Invalid,
+            ),
+            (ControlError::NeedsTerminal(s()), M3aError::Invalid),
+            (
+                ControlError::InputDraft {
+                    session: s(),
+                    text: "draft".into(),
+                },
+                M3aError::Invalid,
+            ),
             (refused(RefusedKind::Invalid), M3aError::Invalid),
             (refused(RefusedKind::Forbidden), M3aError::Invalid),
             (refused(RefusedKind::Conflict), M3aError::Invalid),

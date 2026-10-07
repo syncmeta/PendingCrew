@@ -475,7 +475,7 @@ pub struct HealthView {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DecisionView {
     pub summary: String,
@@ -497,6 +497,10 @@ pub struct SessionLive {
     pub pending_decision: Option<DecisionView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_question: Option<String>,
+    /// 输入框里有一段还没发出的草稿、正挡着投递（M3c T10d）：草稿文本（分不清是不是草稿时 = 输入行上看得见的字）。
+    /// 不在 = 没有。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_draft: Option<String>,
 }
 
 /// 重启后「是否立即恢复这 N 个 session」（§22.7 Q1）。

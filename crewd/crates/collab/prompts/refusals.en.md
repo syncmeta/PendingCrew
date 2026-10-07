@@ -318,3 +318,18 @@ The client's API version {client} is too old: this crewd supports {min} to {curr
 
 ## crew.no_workdir
 Crew {crew} has no working directory, so no worktree can be created for the session. Set the crew's working directory first, or start with isolation=false.
+
+## decision.none
+Session {session} has no pending dialog on screen, so there is nothing to press. Send it a message to give it work.
+
+## decision.changed
+The dialog on session {session} changed (answered, replaced by another one, or its highlight moved), so no further keys were pressed. Look at its current dialog and decide again.
+
+## decision.needs_terminal
+The dialog on session {session} needs arrow keys, but which option is highlighted cannot be read from the screen. Open its terminal and choose there.
+
+## decision.out_of_range
+The dialog on session {session} has only {options} options, and the one you chose is not among them. Choose again from the options on screen.
+
+## session.input_draft
+The input box of session {session} holds an unsent draft: {text}. Nothing was typed this time; try again once someone sends or clears it.

@@ -1,15 +1,15 @@
 //! 测试器材：内存里的 Port 与顶替执行器。只在 `cargo test` 里编译。
 #![allow(dead_code)]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crewd_exec::delivery::Subject;
 use crewd_exec::driver::{Closed, SendError, SessionStatus};
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
-use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent};
+use crewd_exec::session::{AnswerOutcome, BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent};
 use crewd_proto::wake_lifecycle as lifecycle;
-use crewd_term::{DecisionEvent, Snapshot};
+use crewd_term::{DecisionEvent, PendingDecision, Snapshot};
 use crewd_wake::plan::{ChannelCtx, Listen, Mention, MsgFacts, Sender};
 use crewd_wake::queue::is_due;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeKind, WakeState};
@@ -19,8 +19,8 @@ use super::OrchestraConfig;
 use super::clock::{Clock, ManualClock};
 use super::core::{Cmd, CollabFact, Core, Input, Live, Origin};
 use super::exec::{
-    BoxFut, Context, ExecHandle, ExecSendError, Executor, Executors, LaunchError, LaunchRequest,
-    Launched, check_context,
+    AnswerSteps, BoxFut, Context, ExecHandle, ExecSendError, Executor, Executors, LaunchError,
+    LaunchRequest, Launched, check_context,
 };
 use super::hooks::Hooks;
 use super::port::*;
@@ -1111,6 +1111,14 @@ pub struct StandInState {
     pub working: BTreeSet<String>,
     pub deciding: BTreeSet<String>,
     pub running: BTreeSet<String>,
+    /// 屏上此刻的待决策框（T10d 的回答按它核）：推 `Decision(Appeared)` 时记下、`Cleared` 时清掉；测试也可以直接改。
+    pub boxes: BTreeMap<String, PendingDecision>,
+    /// 回答每按下一键之后屏上换成什么（依次取；`None` = 框没了）。取完了就不变——「被人改了框」的测试往这里排。
+    pub box_script: BTreeMap<String, VecDeque<Option<PendingDecision>>>,
+    /// 下一次回答先等这个信号（模拟按键要花时间：写队列里排在它后面的得等着）。
+    pub answer_hold: BTreeMap<String, oneshot::Receiver<()>>,
+    /// 每次 `answer` 调用的 `expect`（按 session）。
+    pub answers: BTreeMap<String, Vec<String>>,
 }
 
 impl StandInState {
@@ -1124,11 +1132,13 @@ impl StandInState {
                     self.working.remove(session);
                 }
             }
-            SessionEvent::Decision(DecisionEvent::Appeared(_)) => {
+            SessionEvent::Decision(DecisionEvent::Appeared(d)) => {
                 self.deciding.insert(session.to_string());
+                self.boxes.insert(session.to_string(), d.clone());
             }
             SessionEvent::Decision(DecisionEvent::Cleared) => {
                 self.deciding.remove(session);
+                self.boxes.remove(session);
             }
             SessionEvent::Delivery { id, outcome, .. } if outcome.is_final() => {
                 if let Some(o) = self.outstanding.get_mut(session) {
@@ -1145,6 +1155,44 @@ impl StandInState {
         if let Some(tx) = self.events.get(session) {
             let _ = tx.send(e);
         }
+    }
+
+    /// 按回答的键（见 `StandInHandle::answer`）。
+    fn press(&mut self, session: &str, expect: &str, steps: AnswerSteps) -> AnswerOutcome {
+        for (bytes, selected) in steps {
+            let shown = self.boxes.get(session).cloned();
+            let same = shown.as_ref().is_some_and(|d| {
+                d.fingerprint() == expect && selected.is_none_or(|w| d.selected == Some(w))
+            });
+            if !same {
+                return AnswerOutcome::Conflict { now: shown };
+            }
+            let text = String::from_utf8_lossy(&bytes).escape_default().to_string();
+            self.raws
+                .entry(session.to_string())
+                .or_default()
+                .push(bytes);
+            self.writes
+                .entry(session.to_string())
+                .or_default()
+                .push(format!("answer:{text}"));
+            match self
+                .box_script
+                .get_mut(session)
+                .and_then(VecDeque::pop_front)
+            {
+                Some(Some(d)) => {
+                    self.boxes.insert(session.to_string(), d);
+                }
+                Some(None) => {
+                    self.boxes.remove(session);
+                }
+                None => {}
+            }
+        }
+        let now = self.boxes.get(session).cloned();
+        let cleared = now.as_ref().is_none_or(|d| d.fingerprint() != expect);
+        AnswerOutcome::Answered { cleared, now }
     }
 
     /// 同 M2b `abandon()`：每笔没终局的投递一条 `Delivery{Abandoned}`，待决策框清掉，在干活的发 `Working(false)`。
@@ -1386,6 +1434,34 @@ impl ExecHandle for StandInHandle {
             s.push(&self.session, SessionEvent::Working(false));
         }
         Ok(())
+    }
+
+    /// 像 M2b 的会话 Core 一样（T10d）：每一下按之前核屏上的框（指纹 = `expect`、给了高亮就核高亮），对不上就停手回
+    /// `Conflict`；按下去的记进 `raws` / `writes`（`answer:<字节>`），之后按 `box_script` 换屏。按完回 `Answered`。
+    /// 键在调用当下就按完（不 sleep，键间隔是执行器的事）；`answer_hold` 只把**结果**往后压（模拟按键要花时间）。
+    fn answer(
+        &self,
+        expect: String,
+        steps: AnswerSteps,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        let mut s = self.lock();
+        s.answers
+            .entry(self.session.clone())
+            .or_default()
+            .push(expect.clone());
+        let hold = s.answer_hold.remove(&self.session);
+        let outcome = if s.running.contains(&self.session) {
+            Ok(s.press(&self.session, &expect, steps))
+        } else {
+            Err(Closed)
+        };
+        drop(s);
+        Box::pin(async move {
+            if let Some(h) = hold {
+                let _ = h.await;
+            }
+            outcome
+        })
     }
 
     /// 像真驱动层一样（M2b `stop` + `on_exit`）：先 `abandon("session 被停掉")`（没终局的投递 → Abandoned、
