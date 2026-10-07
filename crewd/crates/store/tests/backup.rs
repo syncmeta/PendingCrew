@@ -425,3 +425,69 @@ fn no_snapshot_no_destructive_step() {
     assert_eq!(crew_ids(&snap.unwrap()), ["a"]);
     assert!(crews::list(s.conn()).unwrap().is_empty());
 }
+
+/// 复审 M2：到点了但新备份没拍成（这里用预留空间顶满可用空间检查），旧备份一份都不淘汰。
+#[test]
+fn a_failed_fresh_backup_never_rotates() {
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join(DB_FILE);
+    let s = Store::open_data_dir(d.path()).unwrap();
+    add_crew(&s, "a");
+    let b = d.path().join("backups");
+    let now = 1_791_374_400_000;
+    for day in 2..=31 {
+        auto(&b, now - day * DAY);
+    }
+    let policy = Policy {
+        reserve_bytes: u64::MAX / 4,
+        ..Policy::default()
+    };
+    let r = backup::tick(&db, now, policy).unwrap();
+    assert!(r.backup.is_none());
+    let e = r.backup_error.expect("要报没拍成");
+    assert!(e.contains("可用空间"), "{e}");
+    assert!(r.removed.is_empty(), "{:?}", r.removed);
+    assert_eq!(backup::list_auto(&b).unwrap().len(), 30);
+}
+
+/// 复审 M3：已有的、权限宽的 backups/ 收成 0700。
+#[test]
+fn a_loose_existing_backups_dir_is_tightened() {
+    let d = tempfile::tempdir().unwrap();
+    let s = Store::open_data_dir(d.path()).unwrap();
+    add_crew(&s, "a");
+    let b = d.path().join("backups");
+    std::fs::create_dir(&b).unwrap();
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o755)).unwrap();
+    backup::backup_db(&d.path().join(DB_FILE), &b.join("x.db")).unwrap();
+    let mode = std::fs::metadata(&b).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{mode:o}");
+}
+
+/// 复审 M4：backups/ 里死进程留下的 `.*.tmp-<pid>` 在 Ticker 启动时清掉；活着的进程的不动。
+#[test]
+fn stale_temp_files_of_dead_processes_are_swept() {
+    let d = tempfile::tempdir().unwrap();
+    let b = d.path().join("backups");
+    std::fs::create_dir(&b).unwrap();
+    let dead = b.join(".crewd-auto-x.db.tmp-2147483647");
+    let alive = b.join(".crewd-manual-y.db.tmp-1");
+    let other = b.join(".keep");
+    for p in [&dead, &alive, &other] {
+        std::fs::write(p, b"x").unwrap();
+    }
+    let removed = backup::sweep_stale_tmp(&b).unwrap();
+    assert_eq!(removed, vec![dead.clone()]);
+    assert!(!dead.exists() && alive.exists() && other.exists());
+
+    // Ticker 启动时扫一遍。
+    std::fs::write(&dead, b"x").unwrap();
+    let t = Ticker::start(
+        d.path().join(DB_FILE),
+        Duration::from_secs(3600),
+        Policy::default(),
+    )
+    .unwrap();
+    t.stop();
+    assert!(!dead.exists());
+}

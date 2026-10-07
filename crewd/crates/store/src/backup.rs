@@ -126,10 +126,14 @@ pub fn stamp_from_ms(ms: i64) -> String {
         .to_string()
 }
 
-/// 建备份目录（新建的那一级 0700，和数据目录一样）。
+/// 建备份目录（0700，和数据目录一样）；已有的只收紧：去掉组和其他人的位（复审 M3）。
 fn ensure_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if dir.is_dir() {
+        let mode = std::fs::metadata(dir)?.permissions().mode() & 0o7777;
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode & !0o077))?;
+        }
         return Ok(());
     }
     std::fs::DirBuilder::new()
@@ -143,13 +147,18 @@ fn ensure_dir(dir: &Path) -> std::io::Result<()> {
 /// 目标已存在就拒绝（绝不覆盖）；可用空间不够约 1.1 倍库大小就不动手。失败时不留半截文件。
 /// 不能在事务里调（SQLite 的限制）。
 pub fn vacuum_into(conn: &Connection, dest: &Path) -> Result<()> {
-    snapshot_steps(conn, dest).map_err(|e| StoreError::Snapshot {
+    vacuum_into_reserving(conn, dest, 0)
+}
+
+/// 同 `vacuum_into`，另外要求拍完之后还剩 `reserve` 字节可用空间。
+pub fn vacuum_into_reserving(conn: &Connection, dest: &Path, reserve: u64) -> Result<()> {
+    snapshot_steps(conn, dest, reserve).map_err(|e| StoreError::Snapshot {
         dest: dest.to_path_buf(),
         source: Box::new(e),
     })
 }
 
-fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
+fn snapshot_steps(conn: &Connection, dest: &Path, reserve: u64) -> Result<()> {
     let dir = dest
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
@@ -166,7 +175,7 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
             dest.display()
         )));
     }
-    let needed = db_bytes(conn)? / 10 * 11 + (1 << 20);
+    let needed = (db_bytes(conn)? / 10 * 11 + (1 << 20)).saturating_add(reserve);
     let available = available_bytes(dir)?;
     if available < needed {
         return Err(StoreError::NoSpace { needed, available });
@@ -177,12 +186,17 @@ fn snapshot_steps(conn: &Connection, dest: &Path) -> Result<()> {
         let tmp_str = tmp
             .to_str()
             .ok_or_else(|| StoreError::Invalid(format!("路径不是 UTF-8：{}", tmp.display())))?;
-        conn.execute("VACUUM INTO ?1", [tmp_str])?;
-        // VACUUM INTO 按 umask 建文件（通常 0644）；快照里是全部聊天记录，收成 0600 再改名。
+        // 先以 0600 建好空文件（SQLite 允许 VACUUM INTO 写进一个空文件）：快照里是全部聊天记录，
+        // 任何时刻都不以 umask 给的 0644 存在（复审 M3）。
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
         }
+        conn.execute("VACUUM INTO ?1", [tmp_str])?;
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
         {
             let copy = open_for_check(&tmp)?;
@@ -271,6 +285,8 @@ pub struct Policy {
     pub keep_daily: usize,
     /// 每个 ISO 周留最新的一份，留最近这么多周。
     pub keep_weekly: usize,
+    /// 拍备份之后至少还要剩这么多可用空间（字节），不够就不拍。
+    pub reserve_bytes: u64,
 }
 
 impl Default for Policy {
@@ -279,6 +295,7 @@ impl Default for Policy {
             min_interval_ms: 24 * 3_600_000,
             keep_daily: 7,
             keep_weekly: 4,
+            reserve_bytes: 0,
         }
     }
 }
@@ -404,7 +421,7 @@ pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
         return Ok(report);
     }
     let dest = dir.join(auto_name(now_ms));
-    match vacuum_into(&c, &dest) {
+    match vacuum_into_reserving(&c, &dest, policy.reserve_bytes) {
         Ok(()) => report.backup = Some(dest),
         Err(e) => report.backup_error = Some(e.to_string()),
     }
@@ -431,6 +448,14 @@ impl Ticker {
         let handle = std::thread::Builder::new()
             .name("crewd-backup".into())
             .spawn(move || {
+                match sweep_stale_tmp(&backups_dir_for(&db)) {
+                    Ok(gone) => {
+                        for p in gone {
+                            eprintln!("crewd: 清掉上次没拍完的临时文件 {}", p.display());
+                        }
+                    }
+                    Err(e) => eprintln!("crewd: 清理 backups/ 临时文件失败：{e}"),
+                }
                 loop {
                     log_tick(tick(&db, crate::now_ms(), policy));
                     match rx.recv_timeout(every) {
@@ -475,6 +500,48 @@ fn log_tick(r: Result<TickReport>) {
         }
         Err(e) => eprintln!("crewd: 定时备份失败：{e}"),
     }
+}
+
+/// 清掉 `dir` 里死进程留下的快照临时文件（`.{名字}.tmp-{pid}`）。pid 还活着的不动（可能是正在跑的
+/// `crewd backup`）；自己进程的也算残留（Ticker 启动时本进程还没开始拍）。返回删掉的文件。
+pub fn sweep_stale_tmp(dir: &Path) -> Result<Vec<PathBuf>> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+    let me = std::process::id() as i32;
+    let mut removed = vec![];
+    for e in rd {
+        let e = e?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .strip_prefix('.')
+            .and_then(|n| n.rsplit_once(".tmp-"))
+            .and_then(|(_, pid)| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if pid == me || !process_alive(pid) {
+            std::fs::remove_file(e.path())?;
+            removed.push(e.path());
+        }
+    }
+    if !removed.is_empty() {
+        fsutil::fsync_dir(dir)?;
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+/// `kill(pid, 0)`：ESRCH = 没有这个进程；EPERM = 有，只是不是我们的。
+fn process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: 信号 0 不发送任何信号，只做存在与权限检查。
+    let r = unsafe { libc::kill(pid, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// 一次恢复的结果。
