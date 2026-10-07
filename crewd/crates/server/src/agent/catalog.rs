@@ -193,7 +193,11 @@ pub const CATALOG: &[ToolSpec] = &[
     ),
     all(
         "withdraw_ask",
-        &[p("ask", Str, true), p("reason", Str, true)],
+        &[
+            p("ask", Str, true),
+            p("reason", Str, true),
+            p("crew", Str, false),
+        ],
     ),
     not_on_mgmt(all(
         "respond_todo",

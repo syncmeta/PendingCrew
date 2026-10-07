@@ -157,7 +157,7 @@ true = 停止收听这个群（不能和 minutes、senders 一起给）。本来
 到点没人答时你打算怎么办（「就按 A 做」）。和 fallback_after_minutes 一起给。
 
 ## withdraw_ask
-撤回一条还没人答的问（那件事已经不成立了）。你自己提的能撤；机长能撤本机组的任何一条。还卡着工作项的问撤不了。
+撤回一条还没人答的问（那件事已经不成立了）。你自己提的能撤；机长能撤本机组的任何一条（总机组的机长在每个机组都算机长）。还卡着工作项的问撤不了。
 
 ## withdraw_ask.ask
 H 号，如 H3。
@@ -165,8 +165,11 @@ H 号，如 H3。
 ## withdraw_ask.reason
 为什么不成立了，一句话说清变了什么。
 
+## withdraw_ask.crew
+这条问记在哪个机组的账上（号码或 id）；不填 = 你自己的机组。
+
 ## respond_todo
-回应 Agent 那本 Todo（人类派给你们的活）的某一条：认领、进展、结果。追加式，不改状态。
+回应你所在机组的 Agent Todo（人类派给机组的活）的某一条：认领、进展、结果。追加式，不改状态。
 
 ## respond_todo.number
 条目编号 #N 里的 N。
@@ -184,7 +187,7 @@ H 号，如 H3。
 多少分钟后（1–1440）。与 at 二选一。
 
 ## schedule_wakeup.at
-ISO8601 时刻，必须在未来。与 after_minutes 二选一。
+RFC 3339 时刻（如 2026-10-08T09:00:00Z），必须在未来、7 天以内。与 after_minutes 二选一。
 
 ## schedule_wakeup.note
 醒来该干什么、上下文在哪。
@@ -656,3 +659,43 @@ off=true 只停止收听，不能同时给 minutes 或 senders；要改收听的
 
 ## r.owner_offer_notice_human
 我想把 {channel} 的群主转给你：要接手的话，在 app 里这个群的菜单里把群主设成自己。
+
+## r.fallback_pair
+fallback_after_minutes（1 分钟到 7 天）和 fallback（不能是空的）要一起给，或者都不给；改好再调一次 ask。
+
+## r.asked
+已记成 {ask}（「{question_head}」），发进了 {channel} 并 @了人类。不用等：去干别的或收工，人回答时会叫醒你并念回 resume_note。
+
+## r.ask_no_resume_note
+你没写 resume_note：被叫醒时你只看得到问题和答复。半路上问的问题，最好用 withdraw_ask 撤掉、写上答复后接着做什么再问一次。
+
+## r.withdrawn
+已撤回 {crew} 的 {ask}，人类群里会留一行记录。这件事如果还要人拍板，用 ask 重新问。
+
+## r.responded
+已回应 Todo #{number}（「{todo_head}」）。状态没变：有新进展再 respond_todo，做完了在回应里说清结果。
+
+## r.quota
+{report}
+没有剩余量的绝对值，别据此编造额度。额度紧时先收尾，再用 schedule_wakeup 约在重置后接着做。
+
+## r.quota_none
+现在拿不到额度信息。照常干活；被限额挡住时用 schedule_wakeup 约在稍后接着做。
+
+## r.wakeup_note
+note 必填：醒来的你只有这条备注和群消息可依靠。写上醒来该干什么、上下文在哪，再调一次。
+
+## r.wakeup_when
+after_minutes（1–1440）或 at（未来 7 天内的 RFC 3339 时刻，如 2026-10-08T09:00:00Z）二选一；改好再调一次。
+
+## r.wakeup_set
+已约好 {at} 叫醒你。到点时如果你不在运行，会被拉起来接着做。现在可以收尾或去干别的。
+
+## r.wakeup_skipped
+你的机组已被移除，什么都没约上。不用再约：机组被人恢复之后再安排。
+
+## r.profile_empty
+model 和 effort 至少给一个；补上再调一次。
+
+## r.profile_next_start
+已记下：下一次启动这个 session（重启或续跑）时生效；这一回合和接下来的工具调用仍是原来的配置。照常继续手上的活。

@@ -24,9 +24,9 @@ const HUMAN_SENDER: &str = "human";
 const CAPTAIN_SENDER: &str = "captain";
 
 /// `Result` with the receipt on both sides: `?` returns the error receipt as it is.
-type Step<T> = Result<T, CallResult>;
+pub(super) type Step<T> = Result<T, CallResult>;
 
-fn done(r: Step<CallResult>) -> CallResult {
+pub(super) fn done(r: Step<CallResult>) -> CallResult {
     r.unwrap_or_else(|e| e)
 }
 

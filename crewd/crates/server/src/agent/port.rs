@@ -1176,17 +1176,25 @@ pub async fn member_label(st: &AppState, m: &MemberRef, loc: Locale) -> PortResu
 // 人类待确认 / Todo / 唤醒
 // ---------------------------------------------------------------------------------------------
 
-/// 开一条人类待确认，返回 "H<n>"。`fallback` = (按它办的文字, 多少分钟没回复就按它办)。
+/// 一条刚开的问：H 号，和公告实际发进的群（collab `asks::open` 选的 home 人类群，同一事务里读回）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    pub ask: String,
+    pub channel: ChannelView,
+}
+
+/// 开一条人类待确认。`fallback` = (按它办的文字, 多少分钟没回复就按它办)。发到哪个群由 collab 定（home 人类群，
+/// S68）；这里只把它读回来给回执用，不另算一遍。
 pub async fn open_ask(
     st: &AppState,
     by: &Identity,
     question: &str,
     fallback: Option<(String, i64)>,
     resume_note: Option<String>,
-) -> PortResult<String> {
+) -> PortResult<Asked> {
     let (s, question) = (by.session_id.clone(), question.to_string());
     write(st, move |tx| {
-        crewd_collab::asks::open(
+        let a = crewd_collab::asks::open(
             tx,
             &s,
             crewd_collab::asks::OpenAsk {
@@ -1197,30 +1205,49 @@ pub async fn open_ask(
                 }),
                 resume_note,
             },
-        )
-        .map(|a| a.ask)
+        )?;
+        let message = a.message_id.as_deref().unwrap_or_default();
+        let posted = crewd_collab::messages::get(tx.conn(), message)?;
+        Ok(Asked {
+            ask: a.ask,
+            channel: channel_view(tx.conn(), &posted.channel_id)?,
+        })
     })
     .await
 }
 
-pub async fn withdraw_ask(st: &AppState, by: &Identity, ask: &str, reason: &str) -> PortResult<()> {
+/// 撤回 `crew` 那本账里的一条问；返回规范写法的 H 号。谁能撤全由 collab 定（提问者 / 问所在机组的机长 /
+/// 总机组的机长，`asks::withdraw`）。
+pub async fn withdraw_ask(
+    st: &AppState,
+    by: &Identity,
+    crew: &str,
+    ask: &str,
+    reason: &str,
+) -> PortResult<String> {
     let (s, crew, ask, reason) = (
         by.session_id.clone(),
-        by.crew_id.clone(),
+        crew.to_string(),
         ask.to_string(),
         reason.to_string(),
     );
     write(st, move |tx| {
-        crewd_collab::asks::withdraw(tx, &Sender::Session(s), &crew, &ask, &reason).map(|_| ())
+        crewd_collab::asks::withdraw(tx, &Sender::Session(s), &crew, &ask, &reason).map(|a| a.ask)
     })
     .await
 }
 
-/// 给本机组的 Agent Todo `#number` 追加回应（G3）。没有这个号 = `Refused`（M3a 的 NotFound 对 agent 是「被拒」）。
-pub async fn respond_todo(st: &AppState, by: &Identity, number: i64, text: &str) -> PortResult<()> {
+/// 给本机组的 Agent Todo `#number` 追加回应（G3），返回被回应那条的原文（同一事务里读的，S73）。
+/// 没有这个号 = `Refused`（M3a 的 NotFound 对 agent 是「被拒」）。
+pub async fn respond_todo(
+    st: &AppState,
+    by: &Identity,
+    number: i64,
+    text: &str,
+) -> PortResult<String> {
     let (s, text) = (by.session_id.clone(), text.to_string());
     match write(st, move |tx| {
-        crewd_collab::todos::respond(tx, &s, number, &text).map(|_| ())
+        crewd_collab::todos::respond(tx, &s, number, &text).map(|r| r.todo_text)
     })
     .await
     {
@@ -1229,13 +1256,22 @@ pub async fn respond_todo(st: &AppState, by: &Identity, number: i64, text: &str)
     }
 }
 
+/// 定时唤醒排上了没有。`Skipped` = 目标 session 的机组已移除（collab `wakes::enqueue` 不入队）：要报给调用方，
+/// 不能当排上了（S85）。
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Timer {
+    Scheduled,
+    Skipped,
+}
+
 /// 给 `session` 排一个定时唤醒（`at_ms` 之后投）。每次调用一个新的去重键，同一时刻排两个也都入队。
 pub async fn schedule_timer(
     st: &AppState,
     session: &str,
     at_ms: i64,
     note: &str,
-) -> PortResult<()> {
+) -> PortResult<Timer> {
     let (s, note) = (session.to_string(), note.to_string());
     let token = uuid::Uuid::new_v4().simple().to_string();
     write(st, move |tx| {
@@ -1251,7 +1287,12 @@ pub async fn schedule_timer(
                 origin: None,
             },
         )
-        .map(|_| ())
+        .map(|e| match e {
+            crewd_collab::wakes::Enqueued::Skipped => Timer::Skipped,
+            crewd_collab::wakes::Enqueued::New(_) | crewd_collab::wakes::Enqueued::Duplicate(_) => {
+                Timer::Scheduled
+            }
+        })
     })
     .await
 }
@@ -1835,12 +1876,14 @@ mod tests {
         let f = Fixture::new().await;
         let w = f.me(&f.worker).await;
         let at = now_ms() + 60_000;
-        schedule_timer(&f.state, &f.worker, at, "示例备注")
-            .await
-            .unwrap();
-        schedule_timer(&f.state, &f.worker, at, "示例备注")
-            .await
-            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                schedule_timer(&f.state, &f.worker, at, "示例备注")
+                    .await
+                    .unwrap(),
+                Timer::Scheduled
+            );
+        }
         let wakes = f
             .state
             .db

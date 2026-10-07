@@ -1,5 +1,6 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
+pub mod asks;
 pub mod channels;
 pub mod messaging;
 
@@ -157,7 +158,13 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "channel_owner" => channels::owner(&cx, args).await,
         "channel_listen" => channels::listen(&cx, args).await,
         "directory" => channels::directory(&cx, args).await,
-        // Tasks 14-15 add the other groups.
+        "ask" => asks::ask(&cx, args).await,
+        "withdraw_ask" => asks::withdraw_ask(&cx, args).await,
+        "respond_todo" => asks::respond_todo(&cx, args).await,
+        "get_quota" => asks::get_quota(&cx, args).await,
+        "schedule_wakeup" => asks::schedule_wakeup(&cx, args).await,
+        "set_session_profile" => asks::set_session_profile(&cx, args).await,
+        // Task 15 adds the captain groups.
         _ => cx.err("r.no_handler", &[("name", tool)]),
     }
 }

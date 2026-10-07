@@ -157,7 +157,7 @@ Optional: if nobody answers within this many minutes, you are woken to act on fa
 What you will do if nobody answers in time ("go with A"). Give together with fallback_after_minutes.
 
 ## withdraw_ask
-Withdraw an unanswered question that no longer applies. You can withdraw your own; the captain can withdraw any in the crew. A question still blocking a work item cannot be withdrawn.
+Withdraw an unanswered question that no longer applies. You can withdraw your own; the captain can withdraw any in the crew (the management crew's captain counts as the captain of every crew). A question still blocking a work item cannot be withdrawn.
 
 ## withdraw_ask.ask
 The H number, like H3.
@@ -165,8 +165,11 @@ The H number, like H3.
 ## withdraw_ask.reason
 Why it no longer applies: what changed.
 
+## withdraw_ask.crew
+Whose book holds the question (crew number or id); omitted = your own crew.
+
 ## respond_todo
-Respond to an item in the Agent Todo list (work the human assigned): claim, progress, result. Append-only; does not change status.
+Respond to an item in your crew's Agent Todo list (work the human assigned to the crew): claim, progress, result. Append-only; does not change status.
 
 ## respond_todo.number
 The N in #N.
@@ -184,7 +187,7 @@ Wake yourself later: at the time, note is delivered back to you. When quota runs
 Minutes from now (1–1440). Either this or at.
 
 ## schedule_wakeup.at
-ISO8601 time in the future. Either this or after_minutes.
+An RFC 3339 time (like 2026-10-08T09:00:00Z), in the future and at most 7 days ahead. Either this or after_minutes.
 
 ## schedule_wakeup.note
 What to do on waking and where the context is.
@@ -656,3 +659,43 @@ off=true only stops listening and takes no minutes or senders; to change the dur
 
 ## r.owner_offer_notice_human
 I would like to hand ownership of {channel} to you: to take it, set yourself as owner from this channel's menu in the app.
+
+## r.fallback_pair
+Give fallback_after_minutes (1 minute to 7 days) and a non-empty fallback together, or neither; fix them and call ask again.
+
+## r.asked
+Recorded as {ask} ("{question_head}") and posted to {channel} mentioning the human. Do not wait: do something else or end your turn; you will be woken with your resume_note when the human answers.
+
+## r.ask_no_resume_note
+You gave no resume_note: when woken you will only see the question and the answer. For a question asked mid-task, withdraw_ask it and ask again with a resume_note saying what to do after the answer.
+
+## r.withdrawn
+Withdrew {ask} in {crew}; a note is left in the human channel. If the matter still needs the human's decision, ask again.
+
+## r.responded
+Responded to Todo #{number} ("{todo_head}"). Its status is unchanged: respond_todo again on new progress, and state the result when done.
+
+## r.quota
+{report}
+There is no absolute remaining amount; do not invent one. When quota is tight, wrap up and schedule_wakeup for after the reset.
+
+## r.quota_none
+No quota information is available right now. Keep working; if a limit stops you, schedule_wakeup to continue later.
+
+## r.wakeup_note
+note is required: on waking you only have this note and channel messages. Write what to do on waking and where the context is, then call again.
+
+## r.wakeup_when
+Give either after_minutes (1–1440) or at (an RFC 3339 time in the next 7 days, like 2026-10-08T09:00:00Z); fix it and call again.
+
+## r.wakeup_set
+You will be woken at {at}. If you are not running then, you will be started to continue. You can wrap up or do something else now.
+
+## r.wakeup_skipped
+Your crew has been removed, so nothing was scheduled. Do not retry: schedule again after the human restores the crew.
+
+## r.profile_empty
+Give at least one of model and effort, then call again.
+
+## r.profile_next_start
+Saved: it takes effect the next time this session starts (restart or resume); this turn and your next tool calls still run on the current settings. Carry on with your work.

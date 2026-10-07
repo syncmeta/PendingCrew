@@ -217,6 +217,50 @@ impl Fixture {
         self.dir.path()
     }
 
+    /// 本机组 Agent 那本 Todo 加一条（M1 的 store 函数；M3 没有客户端建 Todo 的入口）。
+    pub async fn add_agent_todo(&self, number: i64, text: &str) {
+        let todo = crewd_proto::Todo {
+            id: format!("todo-{number}"),
+            crew_id: self.crew.clone(),
+            ledger: crewd_proto::Ledger::Agent,
+            number,
+            text: text.into(),
+            status: "pending".into(),
+            created_at: "2026-10-06T00:00:00.000Z".into(),
+            updated_at: None,
+            deleted_at: None,
+            attachments: vec![],
+            responses: vec![],
+        };
+        self.state
+            .db
+            .call(move |s| crewd_store::todos::insert(s.conn(), &todo, None))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    /// 这个 session 的唤醒（kind, not_before 毫秒, note），新的在前（M3a `wakes::list`）。
+    pub async fn wakes_of(&self, session: &str) -> Vec<(String, i64, String)> {
+        let session = session.to_string();
+        let rows = self
+            .state
+            .db
+            .call(move |s| crewd_collab::wakes::list(s.conn(), Some(&session), 100))
+            .await
+            .unwrap()
+            .unwrap();
+        rows.into_iter()
+            .map(|w| {
+                (
+                    w.kind.as_str().to_string(),
+                    w.not_before_ms,
+                    w.note.unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
     /// FakeSessionControl 记下的调用，逐条 `{:?}`（如 `Start(StartRequest { crew_id: "…", role: Worker, … })`）。
     pub fn control_calls(&self) -> Vec<String> {
         self.control
