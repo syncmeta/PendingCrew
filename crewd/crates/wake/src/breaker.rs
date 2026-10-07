@@ -111,8 +111,18 @@ impl LoopBreaker {
         None
     }
 
-    /// 投递前问一次；`Pass` 即记下这一次。
+    /// 判一次并在 `Pass` 时立刻记下（= [`judge`](Self::judge) + [`record`](Self::record)）。
     pub fn admit(&mut self, target: &str, origin: &str, now: Ms) -> Verdict {
+        let v = self.judge(target, origin, now);
+        if v == Verdict::Pass {
+            self.record(target, origin, now);
+        }
+        v
+    }
+
+    /// 投递前问：被挡着 / 这一次该熔断（熔断即记下台账）/ 放行。**放行不计数**——IO 层只在投进去了之后
+    /// 调 [`record`](Self::record)（Task 8 评审：渲染失败、投递失败、只有积压的批都不算一次唤醒）。
+    pub fn judge(&mut self, target: &str, origin: &str, now: Ms) -> Verdict {
         if origin == HUMAN {
             return Verdict::Pass;
         }
@@ -147,11 +157,18 @@ impl LoopBreaker {
                 now,
             ));
         }
-        self.streak
-            .get_mut(target)
-            .expect("上面 entry 建过")
-            .push((now, origin.to_string()));
         Verdict::Pass
+    }
+
+    /// 记下一次**投进去了**的唤醒（这个来源对这个目标）。人发起的不记。
+    pub fn record(&mut self, target: &str, origin: &str, now: Ms) {
+        if origin == HUMAN {
+            return;
+        }
+        self.streak
+            .entry(target.to_string())
+            .or_default()
+            .push((now, origin.to_string()));
     }
 
     fn trip(&mut self, scope: LatchScope, id: String, count: usize, now: Ms) -> Latch {
@@ -226,6 +243,22 @@ mod tests {
 
     fn lb() -> LoopBreaker {
         LoopBreaker::new(LOOP_LIMITS, vec![])
+    }
+
+    /// `judge` 只判不记：没投进去的那些次（渲染失败、投递失败）再多也不熔断；`record` 之后才算数。
+    #[test]
+    fn judge_does_not_count_only_record_does() {
+        let mut b = lb();
+        for _ in 0..(LOOP_LIMITS.edge_max * 3) {
+            assert_eq!(b.judge("b", "a", T0), Verdict::Pass);
+        }
+        assert_eq!(b.streak_len("b"), 0);
+        for _ in 0..LOOP_LIMITS.edge_max {
+            b.record("b", "a", T0);
+        }
+        assert!(matches!(b.judge("b", "a", T0), Verdict::Tripped(_)));
+        b.record("b", HUMAN, T0);
+        assert_eq!(b.streak_len("b"), LOOP_LIMITS.edge_max, "人不记");
     }
 
     fn round(i: usize) -> Ms {
