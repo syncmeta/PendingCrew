@@ -330,6 +330,8 @@ pub enum BlockerCodeView {
     Working,
     /// 目标卡在待决策框上。
     Decision,
+    /// 目标的输入框里有人留下的草稿（或分不清是不是）：不往里敲，等人清掉（`SessionLive.inputDraft`）。
+    InputDraft,
     /// 目标正在被停掉。
     Stopping,
     /// 额度用尽、额度唤醒还没到点。

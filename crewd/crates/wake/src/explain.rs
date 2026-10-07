@@ -31,6 +31,8 @@ pub struct TargetFacts {
     pub working: bool,
     /// 卡在待决策框上。
     pub decision: bool,
+    /// 输入框里有人留下的草稿（或分不清，T10d Q1 fail-closed）：执行器正挡着一笔投递，不再往里送。
+    pub input_draft: bool,
     /// 正在被停掉：人停、crewd 叫停、休眠到期限按过 Esc。
     pub stopping: bool,
     /// crewd 在停机 / 休眠：不投、不拉起。
@@ -60,6 +62,7 @@ impl Default for TargetFacts {
             inflight: false,
             working: false,
             decision: false,
+            input_draft: false,
             stopping: false,
             shutting_down: false,
             crew_removed: false,
@@ -94,6 +97,8 @@ pub enum Blocker {
     Inflight,
     Working,
     Decision,
+    /// 输入框里有草稿（人打了一半的字，或分不清是不是）：不往里敲，等人清掉（T10d）。
+    InputDraft,
     Stopping,
     /// 额度类 health 在身、额度唤醒还没到点。
     Quota,
@@ -125,6 +130,7 @@ impl Blocker {
             Blocker::Inflight => "inflight",
             Blocker::Working => "working",
             Blocker::Decision => "decision",
+            Blocker::InputDraft => "input_draft",
             Blocker::Stopping => "stopping",
             Blocker::Quota => "quota",
             Blocker::AuthRequired => "auth_required",
@@ -163,6 +169,10 @@ impl Blocker {
 pub fn live_blocker(t: &TargetFacts) -> Option<Blocker> {
     if !t.running {
         return None;
+    }
+    // 草稿排在 inflight 前面：被草稿挡住的正是手上这一笔，根因是草稿，说「inflight」等于没说。
+    if t.input_draft {
+        return Some(Blocker::InputDraft);
     }
     if t.inflight {
         return Some(Blocker::Inflight);
@@ -606,5 +616,32 @@ mod tests {
         codes.sort();
         codes.dedup();
         assert_eq!(codes.len(), all.len());
+    }
+
+    /// T10d：草稿挡着的目标报 `input_draft`（排在 inflight 前：手上那笔正是被它挡着的）；分不清是不是草稿的同样挡
+    /// （fail-closed，调用方把 Unknown 也记成有草稿）。额度唤醒到点也不放行（不往草稿上敲）。
+    #[test]
+    fn an_input_draft_holds_a_running_target_before_inflight() {
+        let t = TargetFacts {
+            input_draft: true,
+            inflight: true,
+            working: true,
+            ..running()
+        };
+        assert_eq!(live_blocker(&t), Some(Blocker::InputDraft));
+        assert_eq!(why(&due(Priority::Human), &t), Some(Blocker::InputDraft));
+        assert_eq!(Blocker::InputDraft.code(), "input_draft");
+        let quota_due = TargetFacts {
+            input_draft: true,
+            health: Some(HealthBlock::Quota),
+            quota_due: true,
+            ..running()
+        };
+        assert_eq!(live_blocker(&quota_due), Some(Blocker::InputDraft));
+        let not_running = TargetFacts {
+            input_draft: true,
+            ..stopped()
+        };
+        assert_eq!(live_blocker(&not_running), None);
     }
 }

@@ -368,6 +368,7 @@ impl<P: Port> Core<P> {
             inflight: live.is_some_and(|l| l.inflight.is_some()),
             working: live.is_some_and(|l| l.working),
             decision: live.is_some_and(|l| l.decision.is_some()),
+            input_draft: false,
             stopping: live.is_some_and(|l| l.stopping || l.halting || l.hibernate_cut),
             shutting_down: self.shutting_down,
             crew_removed,

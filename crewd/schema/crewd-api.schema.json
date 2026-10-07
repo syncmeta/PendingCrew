@@ -304,6 +304,11 @@
           "type": "string"
         },
         {
+          "const": "input_draft",
+          "description": "目标的输入框里有人留下的草稿（或分不清是不是）：不往里敲，等人清掉（`SessionLive.inputDraft`）。",
+          "type": "string"
+        },
+        {
           "const": "stopping",
           "description": "目标正在被停掉。",
           "type": "string"
