@@ -830,10 +830,21 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
         )
         .await["id"]
         .clone();
-    // 新机组挂在总机组下：它自己、以及 childIds 变了的总机组，各一条。
-    let mut changed: Vec<Value> = frames_until_hello(&mut sub, 106)
-        .await
+    // 新机组挂在总机组下：它自己、以及 childIds 变了的总机组，各一条 crew.changed；它新建的大厅一条 channel.changed。
+    let frames = frames_until_hello(&mut sub, 106).await;
+    let channels_changed: Vec<&Value> = frames
+        .iter()
+        .filter(|e| e.event == "channel.changed")
+        .map(|e| &e.data["channel"]["id"])
+        .collect();
+    assert_eq!(
+        channels_changed,
+        [&json!(format!("{}/lobby", made.as_str().unwrap()))],
+        "{frames:?}"
+    );
+    let mut changed: Vec<Value> = frames
         .into_iter()
+        .filter(|e| e.event != "channel.changed")
         .map(|e| {
             assert_eq!(e.event, "crew.changed");
             e.data["id"].clone()

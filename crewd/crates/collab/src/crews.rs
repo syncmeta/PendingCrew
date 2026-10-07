@@ -189,8 +189,10 @@ fn refuse_org_root(conn: &Connection, id: &str) -> Result<()> {
 }
 
 /// 把 `crew` 挂到总机组下、排在末尾（必要时懒建总机组），返回总机组 id。调用方保证 `crew` 此刻没有父边。
+/// 懒建出来的总机组连同它的大厅和别的建群一样发 ChannelChanged。
 fn hang_under_org_root(tx: &mut Tx<'_>, crew: &str) -> Result<String> {
     let now = tx.now_ts();
+    let existed = org_root(tx.conn())?.is_some();
     let root = crewd_store::crews::ensure_org_root(tx.conn(), &now)?;
     tx.conn().execute(
         "INSERT INTO crew_parents(crew_id,parent_id) VALUES(?1,?2)",
@@ -200,6 +202,11 @@ fn hang_under_org_root(tx: &mut Tx<'_>, crew: &str) -> Result<String> {
     tx.note(Change::CrewChanged {
         crew_id: root.clone(),
     });
+    if !existed {
+        tx.note(Change::ChannelChanged {
+            channel_id: crewd_store::channels::lobby_id(&root),
+        });
+    }
     Ok(root)
 }
 
@@ -240,6 +247,10 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     crewd_store::channels::ensure_lobby(tx.conn(), &crew.id, &now)?;
     tx.note(Change::CrewChanged {
         crew_id: crew.id.clone(),
+    });
+    // 大厅是新建的群：和别的建群一样发 ChannelChanged。
+    tx.note(Change::ChannelChanged {
+        channel_id: crewd_store::channels::lobby_id(&crew.id),
     });
     match n.parent_id.as_deref() {
         // 有（非根的）父：排在父下的末尾（adopt 做）。
@@ -587,7 +598,7 @@ pub fn reorder(tx: &mut Tx<'_>, parent: &str, ordered: &[String]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{NOW, count, err, ok, store};
+    use crate::testkit::{NOW, count, err, ok, ok_at, store};
 
     fn edges(s: &crewd_store::Store, crew: &str) -> Vec<String> {
         parents(s.conn(), crew).unwrap()
@@ -1430,7 +1441,7 @@ mod tests {
     #[test]
     fn the_first_crew_in_an_empty_database_creates_the_org_root() {
         let mut s = crewd_store::Store::open_in_memory().unwrap();
-        let c = ok(&mut s, |tx| create(tx, new_crew("第一个")));
+        let (c, changes) = ok_at(&mut s, NOW, |tx| create(tx, new_crew("第一个")));
         let root = org_root(s.conn()).unwrap().unwrap();
         assert_eq!(root, crewd_store::crews::ORG_ROOT_ID);
         assert_eq!(
@@ -1438,6 +1449,36 @@ mod tests {
             std::slice::from_ref(&root)
         );
         assert!(crate::channels::get(s.conn(), &crewd_store::channels::lobby_id(&root)).is_ok());
+        // 顺带建出的群（总机组的大厅、新机组的大厅）和别的建群一样发 ChannelChanged。
+        for lobby in [
+            crewd_store::channels::lobby_id(&root),
+            crewd_store::channels::lobby_id(&c.id),
+        ] {
+            assert!(
+                changes.contains(&Change::ChannelChanged {
+                    channel_id: lobby.clone()
+                }),
+                "{lobby}: {changes:?}"
+            );
+        }
+        assert!(changes.contains(&Change::CrewChanged { crew_id: root }));
+    }
+
+    /// 总机组已在：只有新机组的大厅是新建的群，总机组的大厅不发。
+    #[test]
+    fn a_new_crews_lobby_is_announced_and_an_existing_root_lobby_is_not() {
+        let mut s = store();
+        let (c, changes) = ok_at(&mut s, NOW, |tx| create(tx, new_crew("新机组")));
+        let channel_changes: Vec<&Change> = changes
+            .iter()
+            .filter(|x| matches!(x, Change::ChannelChanged { .. }))
+            .collect();
+        assert_eq!(
+            channel_changes,
+            [&Change::ChannelChanged {
+                channel_id: crewd_store::channels::lobby_id(&c.id)
+            }]
+        );
     }
 
     #[test]
