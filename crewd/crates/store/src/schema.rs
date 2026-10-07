@@ -1150,7 +1150,8 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         let c = v3_db();
         c.execute_batch(
             "UPDATE sessions SET display_name=NULL, title=NULL;
-             UPDATE sessions SET brief='修首页滚动' WHERE id='worker-a2';",
+             UPDATE sessions SET brief='修首页滚动' WHERE id='worker-a2';
+             UPDATE sessions SET brief=char(10)||'  一二三四五六七八九十甲乙丙丁戊己庚辛壬癸  '||char(10)||'第二行' WHERE id='worker-b1';",
         )
         .unwrap();
         migrate(&c).unwrap();
@@ -1169,6 +1170,11 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
         assert_eq!(
             one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-a1'"),
             "示例机组 #5"
+        );
+        assert_eq!(
+            one::<String>(&c, "SELECT title FROM sessions WHERE id='worker-b1'"),
+            "一二三四五六七八九十甲乙丙丁戊己庚辛",
+            "跳过空行、去首尾空白、截 18 字"
         );
     }
 
