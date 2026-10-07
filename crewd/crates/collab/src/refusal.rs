@@ -31,6 +31,7 @@ refusal_codes! {
     AskReasonEmpty = "ask.reason_empty" [],
     AskNotOpen = "ask.not_open" ["ask"],
     AskInUse = "ask.in_use" ["ask"],
+    AskQuestionEmpty = "ask.question_empty" [],
     // channel
     ChannelNotFound = "channel.not_found" ["channel"],
     ChannelSystemCannotAct = "channel.system_cannot_act" [],

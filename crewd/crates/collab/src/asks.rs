@@ -183,6 +183,13 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let h = with_book(tx, &crew.id, |b, now| {
         b.open_ask(&actor, now, &question, default, None)
             .map(|a| a.value)
+    })
+    .map_err(|e| match e {
+        // 账本的英文短句换成带码的拒绝（M3b T14，同 `withdraw_refused`）。
+        CollabError::Work(Rejected::Blank("question")) => {
+            CollabError::Invalid(Refusal::new(Code::AskQuestionEmpty))
+        }
+        e => e,
     })?;
     let home = crews::home_of(tx.conn(), &crew.id)?;
     let posted =
@@ -834,6 +841,15 @@ mod tests {
             withdraw(tx, &Sender::Human, "crew-a", &b.ask, "人撤")
         });
         assert_eq!(h.state, AskStateView::Withdrawn);
+    }
+
+    #[test]
+    fn a_blank_question_is_refused_with_a_code() {
+        let mut s = store();
+        match err(&mut s, |tx| open(tx, "w-a1", q(" \n "))) {
+            CollabError::Invalid(r) => assert_eq!(r, Refusal::new(Code::AskQuestionEmpty)),
+            e => panic!("{e:?}"),
+        }
     }
 
     /// 账本对撤回的四种拒绝都带码（M3b T14）：agent 拿到的是按语言渲染的「下一步」，不是账本的英文短句。

@@ -25,6 +25,9 @@
 ## ask.in_use
 {ask} 还卡着一个活项，撤不了；先让负责人改道（把那一项报回 open / active），再撤
 
+## ask.question_empty
+问题不能为空；写清要人拍板的那件事，最好带上选项和你的倾向
+
 ## channel.not_found
 没有群 {channel}；先列出现有的群，核对 id
 
