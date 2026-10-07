@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crewd_exec::health::Health;
 use crewd_exec::resume::AgentIdLedger;
+use crewd_proto::wake_lifecycle as lifecycle;
 use crewd_term::PendingDecision;
 use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, QueuedWake, WakeState};
@@ -80,39 +81,106 @@ pub struct SessionPatch {
     pub effort: Option<String>,
 }
 
-/// 一批唤醒的结算。每种只认它的起始状态（[`Settle::from_states`]，同 M3a `wakes::set_state`）；起始状态不对 /
-/// 没有这一行 = 错误（M3a 回 `Conflict` / `NotFound`），整批不改。
+/// 唤醒行状态的唯一规则是 `crewd_proto::wake_lifecycle`（控制者裁定 C24；collab 的写函数与 MemPort 都只经它改状态）。
+/// crewd-wake 是零依赖的纯判定 crate，自己有一份同名的 `WakeState`；两边只在这里对上。
+pub fn lifecycle_state(s: WakeState) -> lifecycle::WakeState {
+    match s {
+        WakeState::Pending => lifecycle::WakeState::Pending,
+        WakeState::Inflight => lifecycle::WakeState::Inflight,
+        WakeState::Delivered => lifecycle::WakeState::Delivered,
+        WakeState::Dropped => lifecycle::WakeState::Dropped,
+    }
+}
+
+/// [`lifecycle_state`] 的反方向。
+pub fn wake_state(s: lifecycle::WakeState) -> WakeState {
+    match s {
+        lifecycle::WakeState::Pending => WakeState::Pending,
+        lifecycle::WakeState::Inflight => WakeState::Inflight,
+        lifecycle::WakeState::Delivered => WakeState::Delivered,
+        lifecycle::WakeState::Dropped => WakeState::Dropped,
+    }
+}
+
+/// 不属于任何一批的结算（一批的结算走 [`Port::ack`]）。每种对应表里的一个事件，表不认 / 没有这一行 = 错误，
+/// 整批不改（库在同一事务里回滚）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Settle {
-    /// pending → inflight（M3a `mark_inflight`）。
-    Inflight,
-    /// pending / inflight → delivered（M3a `mark_delivered`；pending 的 = 游标已越过、已被看到）。
+    /// 表里的 `Deliver`：pending / inflight → delivered（pending 的 = 游标已越过、已被看到；无附言的恢复在跑就算到）。
     Delivered,
-    /// 终局失败、还要再试：回 pending、次数 +1、`not_before = retry_at`（持久化退避）。
-    /// 起始状态 inflight **或 pending**（控制者裁定 C23：随一批没投进去的窗口外行——它们一直是 pending，见
-    /// `Rendered::deferred`）；delivered / dropped 的 = 错误。DbPort 的映射：inflight → `mark_failed(.., Some(retry_at))`；
-    /// pending → 同一事务里 `mark_inflight` 再 `mark_failed`。
-    Retry {
-        attempts: u32,
-        error: String,
-        retry_at: Ms,
-    },
-    /// pending / inflight → dropped（M3a `mark_dropped`）。
+    /// 表里的 `Drop`：pending / inflight → dropped（人停、渲染不出来、没有这个 session、起不来）。
     Dropped { error: String },
-    /// inflight → pending，次数不变（进程没了、重启；M3a `requeue`）。
+    /// 表里的 `Requeue`：inflight → pending，退回 `claim` 记的那一次（crewd 停、撞额度、拿走之后会话没了）。
     Requeue,
 }
 
 impl Settle {
-    /// 这种结算认哪些起始状态（M3a `wakes::set_state` 的 `from`，外加 C23 的 `Retry` 认 pending）。
-    pub fn from_states(&self) -> &'static [WakeState] {
-        use WakeState::{Inflight, Pending};
+    pub fn event(&self) -> lifecycle::WakeEvent {
         match self {
-            Self::Inflight => &[Pending],
-            Self::Delivered | Self::Retry { .. } | Self::Dropped { .. } => &[Pending, Inflight],
-            Self::Requeue => &[Inflight],
+            Self::Delivered => lifecycle::WakeEvent::Deliver,
+            Self::Dropped { .. } => lifecycle::WakeEvent::Drop,
+            Self::Requeue => lifecycle::WakeEvent::Requeue,
         }
     }
+}
+
+/// 一次投递拿着的全部行（C24）：进正文的 `wakes`、随批的窗口外行 `riders`（M3a R6 `deferred`）、送到后各群游标推到哪。
+/// `wakes` 与 `riders` 在投出去之前一起 [`Port::claim`]（pending → inflight，次数 +1）：一行要么 pending 要么被一批拿着，
+/// 没有「看起来 pending、其实跟着一批」的行。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Batch {
+    pub session: String,
+    pub wakes: Vec<QueuedWake>,
+    /// 渲染时落在窗口外的唤醒：不进正文；这批送到时放回 pending（[`Riders::Release`]），没送到时跟这批一起记失败。
+    pub riders: Vec<QueuedWake>,
+    /// 送到后各群游标推到哪（`Rendered::cursor_targets` = 批里**实际带上**的最大 seq）。只有积压时 `wakes` 可以为空而它非空。
+    pub cursor_targets: Vec<(String, i64)>,
+}
+
+impl Batch {
+    /// 这批拿着的全部行（`wakes` 在前、`riders` 在后）。
+    pub fn ids(&self) -> Vec<i64> {
+        self.wakes
+            .iter()
+            .chain(&self.riders)
+            .map(|w| w.id)
+            .collect()
+    }
+
+    /// 有要投的东西：唤醒，或只有积压（游标推进点）。只有随批行的不算（它们只随一批走）。
+    pub fn has_work(&self) -> bool {
+        !self.wakes.is_empty() || !self.cursor_targets.is_empty()
+    }
+}
+
+/// 送到时随批行怎么办。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Riders {
+    /// 放回 pending（退回 claim 那一次），下一批带上。
+    Release,
+    /// 一起丢掉（人正在停这个 session：跟别的 pending 一样不再投）。
+    Drop(String),
+}
+
+/// 一批的终局（[`Port::ack`]）。
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ack {
+    /// 送到了：`wakes` → delivered、`riders` 按这里办、游标推到 `cursor_targets`。
+    Delivered { riders: Riders },
+    /// 没送到：`wakes` 与 `riders` 全部按**库里的**次数（claim 时记的）判——`crewd_wake::queue::after_failure`
+    /// 给了时刻就回 pending、`not_before` = 它；没给 = 到上限放弃（dropped）。
+    Failed { error: String, now: Ms },
+}
+
+/// [`Port::ack`] 提交之后的结果（没提交 = `Err`，什么都没改）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Acked {
+    /// `Delivered`：要记进环路熔断的来源（批里进正文的唤醒的来源，去重、按出现先后）。
+    pub origins: Vec<String>,
+    /// `Failed`：还要再试的 (id, 新的 not_before)。
+    pub retried: Vec<(i64, Ms)>,
+    /// `Failed`：到上限放弃了的 id。
+    pub gave_up: Vec<i64>,
 }
 
 /// 系统消息发到哪、@ 谁。群主由 Port 按 M3a 的规则解析（大厅 / 人类群的群主 = 机组机长）。
@@ -147,10 +215,9 @@ pub struct Rendered {
     pub text: String,
     /// 渲染不出来、已被记 dropped 的唤醒 id。
     pub dropped: Vec<i64>,
-    /// M3a R6：消息行里、消息落在这批窗口之外的（一个群一批只带最旧的 `UNREAD_CAP` 条）。**不进正文**、渲染与投递
-    /// 成功时不 settle（仍是 pending），投递成功、按 `cursor_targets` 推完游标后下一批带上（`WakeBatch.deferred`）。
-    /// 例外（Task 8 评审 (1) / C23）：这批**没投进去**时它们随批记一次失败（`Settle::Retry`，从 pending），
-    /// 第 `MAX_ATTEMPTS` 次放弃时 `Settle::Dropped`——只有积压的批不记账就会无限重投。
+    /// M3a R6：消息行里、消息落在这批窗口之外的（一个群一批只带最旧的 `UNREAD_CAP` 条）。**不进正文**；它们随这批
+    /// 一起被 claim（[`Batch::riders`]，C24）：送到时放回 pending、下一批带上（`WakeBatch.deferred`）；没送到时跟这批
+    /// 一起记一次失败、到上限放弃——只有积压的批不记账就会无限重投（Task 8 评审 (1)）。
     pub deferred: Vec<i64>,
     /// 投递成功后每个群的游标推到哪（M3a `WakeBatch::cursor_targets()` = 批里**实际带上**的最大 seq）。
     /// 可能在没有任何 `wake_ids` 的时候非空（只有积压的窗口），这样的批照样要投。
@@ -191,7 +258,14 @@ pub trait Port: Send + Sync + 'static {
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<bool>> + Send;
     /// 该 session 所有 `pending` 的唤醒（不论到没到点）。
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
+    /// 不属于一批的结算（见 [`Settle`]）：全部 id 一个事务，表不认 / 没有这一行 = 错误、整批不改。
     fn settle(&self, ids: &[i64], s: Settle, now: Ms) -> impl Future<Output = Result<()>> + Send;
+    /// 投出去之前拿走一批（`wakes` + `riders`）：pending → inflight，次数在这里 +1（库记次数，C24）。一个事务、全有或全无。
+    fn claim(&self, b: &Batch) -> impl Future<Output = Result<()>> + Send;
+    /// 一批的终局，**一次调用、一个事务**（C24）：送到 = 行 + 随批行 + 游标一起提交；没送到 = 全部行一起退避或放弃。
+    /// `Err` = 什么都没改（那几行仍是 inflight，由重启时的回收接走）。
+    fn ack(&self, b: &Batch, a: Ack) -> impl Future<Output = Result<Acked>> + Send;
+    /// 启动时：全部 inflight 退回 pending（表里的 `Requeue`，退回 claim 那一次；C25 由 Task 9 改成算一次尝试）。
     fn requeue_inflight(&self) -> impl Future<Output = Result<usize>> + Send;
     /// 有到期 pending 的 session：按其中最高优先级降序、再按最早一条的 id 升序。
     fn due_sessions(&self, now: Ms) -> impl Future<Output = Result<Vec<String>>> + Send;
@@ -236,18 +310,12 @@ pub trait Port: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<ChannelCtx>>> + Send;
     /// 该 session 所在各群里游标之后的消息。
     fn unread(&self, session: &str) -> impl Future<Output = Result<Vec<MsgFacts>>> + Send;
+    /// 游标只经 [`ack`](Port::ack) 往前推（跟送到同一个事务：游标是消息唤醒的幂等键）。
     fn cursor(&self, session: &str, channel: &str) -> impl Future<Output = Result<i64>> + Send;
-    /// 只往前推。
-    fn advance(
-        &self,
-        session: &str,
-        channel: &str,
-        seq: i64,
-    ) -> impl Future<Output = Result<()>> + Send;
     fn post_system(&self, to: Audience, text: String) -> impl Future<Output = Result<()>> + Send;
     /// 唤醒正文（`collab::render::{build_batch, wake_text}`）。渲染不出来的行（消息已删、问已撤回）由实现记 dropped，
     /// 不出现在正文里，并在 `Rendered::dropped` 里报回（调用方把它们从这一批里拿掉）；窗口外的消息行报在
-    /// `Rendered::deferred`（调用方也拿掉、但**不碰**它们的状态）；游标推进点在 `Rendered::cursor_targets`。
+    /// `Rendered::deferred`（调用方把它们从正文里拿掉、作为随批行一起 claim）；游标推进点在 `Rendered::cursor_targets`。
     fn render_wake(
         &self,
         session: &str,

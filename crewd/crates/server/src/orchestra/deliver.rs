@@ -31,13 +31,10 @@ fn message_origin(msg: &MsgFacts, target: &str) -> String {
     breaker::origin_of(WakeKind::Message, Some(&msg.sender), target)
 }
 
-/// 渲染并裁好的一批（[`Core::render_fitted`]）。
+/// 渲染并裁好的一批（[`Core::render_fitted`]）：`batch.riders` = 落在窗口外的（M3a R6），随这批一起 claim。
 struct Fitted {
-    wakes: Vec<QueuedWake>,
-    /// 落在窗口外的（M3a R6）：状态不动，但这批没投进去时一起记一次失败（`Inflight::deferred`）。
-    deferred: Vec<QueuedWake>,
+    batch: Batch,
     text: String,
-    cursor_targets: Vec<(String, i64)>,
 }
 
 fn restart_row(r: &SessionRow) -> RestartRow {
@@ -414,11 +411,11 @@ impl<P: Port> Core<P> {
         self.port.post_system(to, owner).await
     }
 
-    /// 渲染。渲染不出来的（Port 已记 dropped）拿掉；窗口外的（`deferred`，M3a R6）也拿掉，但**不碰**它们的状态——
-    /// 它们仍是 pending，下一批带上，绝不 settle / dropped。超过 8KB 就从尾部减**非消息**的唤醒（减下的留在 pending）；
+    /// 渲染。渲染不出来的（Port 已记 dropped）拿掉；窗口外的（`deferred`，M3a R6）从正文里拿掉、作为随批行
+    /// （`Batch::riders`）跟这批一起 claim——送到时放回 pending、下一批带上（C24）。超过 8KB 就从尾部减**非消息**的唤醒（减下的留在 pending）；
     /// 消息项的 8KB 只是建议值：它是一个群「游标之后、最旧的至多 `UNREAD_CAP` 条」的连续窗口，减一条消息行改变不了
     /// 窗口（会被重新算进来），也不能截一半（游标要推到窗口末尾），所以只剩消息项时照原样投。
-    /// 返回这批真正投出去的唤醒、窗口外的唤醒、正文、投递成功后各群游标推到哪（[`Fitted`]）。
+    /// 返回这批（真正投出去的唤醒、随批行、送到后各群游标推到哪）与正文（[`Fitted`]）。
     /// 渲染出错（M3a `build_batch` 遇到坏账本 fail-loud）原样往上抛：唤醒留在 pending，**不在这里重试**——
     /// 下一次定时拍 / idle 边沿再试（不紧循环）。
     async fn render_fitted(
@@ -428,7 +425,7 @@ impl<P: Port> Core<P> {
     ) -> anyhow::Result<Fitted> {
         loop {
             let r = self.port.render_wake(session, &batch).await?;
-            let deferred: Vec<QueuedWake> = batch
+            let riders: Vec<QueuedWake> = batch
                 .iter()
                 .filter(|w| r.deferred.contains(&w.id))
                 .cloned()
@@ -441,10 +438,13 @@ impl<P: Port> Core<P> {
                 }
                 _ => {
                     return Ok(Fitted {
-                        wakes: batch,
-                        deferred,
+                        batch: Batch {
+                            session: session.to_string(),
+                            wakes: batch,
+                            riders,
+                            cursor_targets: r.cursor_targets,
+                        },
                         text: r.text,
-                        cursor_targets: r.cursor_targets,
                     });
                 }
             }
@@ -467,18 +467,13 @@ impl<P: Port> Core<P> {
             });
             return Ok(true);
         }
-        let Fitted {
-            wakes: batch,
-            deferred,
-            text,
-            cursor_targets,
-        } = self.render_fitted(session, speak).await?;
-        // 只有积压（M3a R6：窗口里全是比被叫消息更旧的未读，被叫的那几行 deferred）：`batch` 空而 `cursor_targets`
-        // 非空——照样投，投完游标前进，下一批就轮到被叫的那几条。两样都空才是真没东西可投。
-        if batch.is_empty() && cursor_targets.is_empty() {
+        let Fitted { batch, text } = self.render_fitted(session, speak).await?;
+        // 只有积压（M3a R6：窗口里全是比被叫消息更旧的未读，被叫的那几行 deferred）：`wakes` 空而 `cursor_targets`
+        // 非空——照样投，投完游标前进，下一批就轮到被叫的那几条。两样都空才是真没东西可投（随批行不 claim、留在 pending）。
+        if !batch.has_work() {
             return Ok(false);
         }
-        let batch_ids = ids(&batch);
+        let held = batch.ids();
         let accepts = self
             .live
             .get(session)
@@ -488,20 +483,19 @@ impl<P: Port> Core<P> {
         } else {
             Context::new()
         };
-        if !batch_ids.is_empty() {
-            self.port.settle(&batch_ids, Settle::Inflight, now).await?;
+        // 进正文的与随批的一起拿走（C24）：从此它们只属于这一批，直到这批的 ack。
+        if !held.is_empty() {
+            self.port.claim(&batch).await?;
         }
         let Some(l) = self.live.get_mut(session) else {
-            if !batch_ids.is_empty() {
-                self.port.settle(&batch_ids, Settle::Requeue, now).await?;
+            if !held.is_empty() {
+                self.port.settle(&held, Settle::Requeue, now).await?;
             }
             return Ok(false);
         };
         l.inflight = Some(Inflight {
             delivery: None,
-            wakes: batch,
-            cursor_targets,
-            deferred,
+            batch,
         });
         l.writes.push_back(Write::Deliver { text, extras });
         self.pump_writes(session).await?;
@@ -556,26 +550,21 @@ impl<P: Port> Core<P> {
             self.launch(row, exec, interrupted, vec![], vec![]).await?;
             return Ok(true);
         }
-        let Fitted {
-            wakes: batch,
-            deferred,
-            text,
-            cursor_targets,
-        } = self.render_fitted(session, speak).await?;
-        if batch.is_empty() && cursor_targets.is_empty() {
+        let Fitted { batch, text } = self.render_fitted(session, speak).await?;
+        if !batch.has_work() {
             return Ok(false);
         }
         let text = match interrupted {
             Some(note) => format!("{note}\n\n{text}"),
             None => text,
         };
-        self.launch_carrying(row, exec, Some(text), batch, deferred, cursor_targets)
-            .await?;
+        self.launch_carrying(row, exec, Some(text), batch).await?;
         Ok(true)
     }
 
     /// 投递回执（裁定 8）。非终局的（Blocked / NotReady / Stalled）驱动层自己会补投，等终局；`Abandoned`（停掉 /
     /// 退出时的 abandon）不结算 inflight——那批只在 `on_exited` 里结算（绑定规则，判据 [`delivery_settles_inflight`]）。
+    /// 终局一律**一次** [`Port::ack`]（C24）：送到 = 行、随批行、游标一个事务；没送到 = 整批退避或放弃（`fail_batch`）。
     pub(crate) async fn on_delivery(
         &mut self,
         session: &str,
@@ -592,38 +581,36 @@ impl<P: Port> Core<P> {
         if l.inflight.as_ref().is_none_or(|f| f.delivery != Some(id)) {
             return Ok(());
         }
-        // 正在被停掉（人停 / crewd 叫停）：这批只由 `on_exited` 结算（人停 → 丢弃；crewd 停 → 退回）。这里不能
-        // `fail_batch`——那会把 `stop` 刚丢掉的窗口外行救活、或让人停的那批退避后把它重新拉起（复审 P7a / P7b）。
-        if l.stopping || l.halting {
+        let delivered = matches!(outcome, DeliveryOutcome::Delivered);
+        // 没送到、且正在被停掉（人停 / crewd 叫停）：这批只由 `on_exited` 结算（人停 → 丢弃；crewd 停 → 退回）。这里不能
+        // `fail_batch`——那会让人停的那批退避后把它重新拉起（复审 P7b）。**送到了**的照样在这里确认（Task 8 复审 7(a)）：
+        // 已经进了会话的不能因为随后的停掉被当成没送到。
+        if !delivered && (l.stopping || l.halting) {
             return Ok(());
         }
         let inf = l.inflight.take().expect("上面查过");
-        if matches!(outcome, DeliveryOutcome::Delivered) {
-            l.worked = true;
-            // 环路熔断只数投进去了的（评审 (2)）：一次投递、每个来源记一次（同一批里同一来源的几条合并成一次唤醒）。
-            // 窗口外的（deferred）没投进去，不记；只有积压的批没有唤醒，什么都不记。
-            let origins: std::collections::BTreeSet<&str> =
-                inf.wakes.iter().map(|w| w.origin.as_str()).collect();
-            for o in origins {
-                self.breaker.record(session, o, now);
-            }
-            if !inf.wakes.is_empty() {
-                self.port
-                    .settle(&ids(&inf.wakes), Settle::Delivered, now)
-                    .await?;
-            }
-            // M3a R6：推到渲染时报回的 `cursor_targets`（批里实际带上的最大 seq），**不是**排队行里最大的 seq——
-            // deferred 的那几条比它新，推过去就把它们越过、永远不投了。`advance` 只往前推。
-            for (channel, seq) in &inf.cursor_targets {
-                self.port.advance(session, channel, *seq).await?;
-            }
-            self.port.publish(OrchestraEvent::WakeChanged {
-                session: session.into(),
-            });
-        } else {
-            self.fail_batch(session, inf.carried(), &format!("{outcome:?}"))
-                .await?;
+        if !delivered {
+            return self.fail_batch(inf.batch, &format!("{outcome:?}")).await;
         }
+        l.worked = true;
+        // 随批行：平时放回 pending、下一批带上；人正在停它时跟别的 pending 一样丢掉（不把刚停掉的拉起来）。
+        let riders = if l.stopping {
+            Riders::Drop("stopped".into())
+        } else {
+            Riders::Release
+        };
+        // M3a R6：游标推到渲染时报回的 `cursor_targets`（批里实际带上的最大 seq），**不是**排队行里最大的 seq——随批行
+        // 比它新，推过去就把它们越过、永远不投了。跟行的确认同一个事务（游标是消息唤醒的幂等键）。
+        // 出错 = 什么都没改：这几行仍是 inflight、没人拿着，由重启时的回收接走（记日志，不在这里重试）。
+        let acked = self.port.ack(&inf.batch, Ack::Delivered { riders }).await?;
+        // 环路熔断只数投进去了的（评审 (2)）、而且只在确认提交之后：一次投递、每个来源记一次（同一批里同一来源的几条
+        // 合并成一次唤醒）。随批行没投进去，不记；只有积压的批没有唤醒，什么都不记。
+        for o in &acked.origins {
+            self.breaker.record(session, o, now);
+        }
+        self.port.publish(OrchestraEvent::WakeChanged {
+            session: session.into(),
+        });
         Ok(())
     }
 
@@ -953,9 +940,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deferred_rows_stay_pending_and_a_backlog_only_batch_still_goes_out() {
-        // M3a R6：一个群一批只带最旧的 UNREAD_CAP 条。被叫的消息落在窗口外 = deferred：不进正文、不 settle、绝不 dropped；
-        // 窗口里只有更旧的积压时 wake_ids 为空、cursor_targets 非空——照样投；投完游标推到 cursor_targets，不是排队的最大 seq。
+    async fn deferred_rows_ride_the_batch_and_a_backlog_only_batch_still_goes_out() {
+        // M3a R6：一个群一批只带最旧的 UNREAD_CAP 条。被叫的消息落在窗口外 = deferred：不进正文、随这批一起 claim（C24）、
+        // 送到后放回 pending、绝不 dropped；窗口里只有更旧的积压时 wake_ids 为空、cursor_targets 非空——照样投；
+        // 投完游标推到 cursor_targets，不是排队的最大 seq。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
         rig.emit("w1", SessionEvent::Working(true)).await;
@@ -973,14 +961,14 @@ mod tests {
         assert_eq!(rig.exec.sent("w1").len(), 1, "只有积压也投");
         assert_eq!(
             rig.port.wakes_of("w1")[0].state,
-            WakeState::Pending,
-            "deferred 不进 inflight"
+            WakeState::Inflight,
+            "deferred 随批被拿走（C24）"
         );
         rig.ack("w1").await;
         assert_eq!(
             rig.port.wakes_of("w1")[0].state,
             WakeState::Pending,
-            "deferred 留在队列里"
+            "送到后 deferred 放回队列里"
         );
         assert!(
             rig.port.cursor("w1", LOBBY).await.unwrap() < r.seq,
@@ -2133,7 +2121,8 @@ mod tests {
         rig.settle().await;
     }
 
-    /// 评审 P7a：只有积压的批在路上时人停掉：`stop` 已把 deferred 那条丢掉，迟到的失败回执不能把它救活。
+    /// 评审 P7a：只有积压的批在路上时人停掉：deferred 那条随批被拿着（C24，`stop` 碰不到它），迟到的失败回执不能
+    /// 把它记成「再试」——退出时整批跟人停一样丢掉。
     #[tokio::test]
     async fn a_failed_receipt_while_stopping_does_not_revive_dropped_deferred_rows() {
         let mut rig = Rig::new().await;
@@ -2144,7 +2133,11 @@ mod tests {
         assert_eq!(rig.exec.sent("w1").len(), 1, "只有积压的那批在路上");
         undelivered_while_stopping(&mut rig, "w1").await;
         let w = rig.port.wakes_of("w1")[0].clone();
-        assert_eq!((w.state, w.attempts), (WakeState::Dropped, 0));
+        assert_eq!(
+            (w.state, w.attempts),
+            (WakeState::Dropped, 1),
+            "claim 记的那次留着"
+        );
         rig.tick(3 * MIN).await;
         assert_eq!(rig.exec.launches("w1").len(), 1);
     }
@@ -2158,7 +2151,11 @@ mod tests {
             .await;
         undelivered_while_stopping(&mut rig, "w1").await;
         let w = rig.port.wakes_of("w1")[0].clone();
-        assert_eq!((w.state, w.attempts), (WakeState::Dropped, 0));
+        assert_eq!(
+            (w.state, w.attempts),
+            (WakeState::Dropped, 1),
+            "claim 记的那次留着"
+        );
         rig.tick(3 * MIN).await;
         assert_eq!(rig.exec.launches("w1").len(), 1, "人停的没被重新拉起");
         assert!(rig.port.posts().is_empty(), "{:?}", rig.port.posts());
@@ -2196,29 +2193,172 @@ mod tests {
     async fn queued_nudges_are_refused_when_the_stop_begins() {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
-        for (input, _) in [("12", ()), ("继续", ())] {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            rig.core
-                .handle(Input::Cmd(Cmd::Nudge {
-                    session: "w1".into(),
-                    input: input.into(),
-                    reply: tx,
-                }))
-                .await;
-            if input == "继续" {
-                let (tx, _stopped) = tokio::sync::oneshot::channel();
-                rig.core
-                    .handle(Input::Cmd(Cmd::Stop {
-                        session: "w1".into(),
-                        reply: tx,
-                    }))
-                    .await;
-                let mut rx = rx;
-                assert_eq!(
-                    rx.try_recv(),
-                    Ok(Err(ControlError::NotRunning("w1".into())))
-                );
-            }
+        // 第一步：一串键（"12"）在派生任务里写着，第二个 nudge 排在它后面。
+        let (keys, _keys_done) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Nudge {
+                session: "w1".into(),
+                input: "12".into(),
+                reply: keys,
+            }))
+            .await;
+        let (queued, mut queued_reply) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Nudge {
+                session: "w1".into(),
+                input: "继续".into(),
+                reply: queued,
+            }))
+            .await;
+        // 第二步：人停掉——排着的那个当场回「没在跑」，不等退出事件。
+        let (tx, _stopped) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: "w1".into(),
+                reply: tx,
+            }))
+            .await;
+        assert_eq!(
+            queued_reply.try_recv(),
+            Ok(Err(ControlError::NotRunning("w1".into())))
+        );
+    }
+
+    // —— Task 8b（裁定 C24）：显式状态机、随批行一起 claim、库记次数、每批一次原子的 ack
+
+    /// 人停掉的同时来了一条「送到了」的回执（驱动层的退出事件还没到）。
+    async fn delivered_while_stopping(rig: &mut Rig, session: &str) {
+        let generator = rig.live(session).unwrap().generator;
+        let id = rig.exec.last_send_id(session);
+        let (tx, _stopped) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: session.into(),
+                reply: tx,
+            }))
+            .await;
+        let event = SessionEvent::Delivery {
+            id,
+            subject: Subject::Steer,
+            outcome: DeliveryOutcome::Delivered,
+        };
+        rig.core
+            .handle(Input::Exec {
+                session: session.into(),
+                generator,
+                event,
+            })
+            .await;
+        rig.settle().await;
+    }
+
+    /// 复审 7(a)：停掉途中收到「送到了」——已经进了会话的照样记 delivered、游标照样推（不能因为随后的停掉当成没送到）。
+    #[tokio::test]
+    async fn a_delivered_receipt_while_stopping_still_settles_delivered() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let r = rig
+            .post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        delivered_while_stopping(&mut rig, "w1").await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!((w.state, w.attempts), (WakeState::Delivered, 1));
+        assert_eq!(rig.port.cursor("w1", LOBBY).await.unwrap(), r.seq);
+    }
+
+    /// 同上，带随批行：人正在停它，随批行跟别的 pending 一样丢掉（不放回、不把刚停掉的拉起来）。
+    #[tokio::test]
+    async fn a_delivered_receipt_while_stopping_drops_the_riders() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        defer_first_wake_behind_a_backlog(&rig, "w1");
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        delivered_while_stopping(&mut rig, "w1").await;
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        rig.tick(3 * MIN).await;
+        assert_eq!(rig.exec.launches("w1").len(), 1, "人停的没被重新拉起");
+    }
+
+    /// C24：窗口外的行随它的批一起被拿走（inflight），不是「看起来 pending」——`stop` 丢 pending 时碰不到它，
+    /// 别的路径也选不中它；这批送到后它回 pending（退回 claim 那一次），下一批带上。
+    #[tokio::test]
+    async fn rider_rows_are_claimed_with_their_batch_and_released_when_it_lands() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        defer_first_wake_behind_a_backlog(&rig, "w1");
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!(
+            (w.state, w.attempts),
+            (WakeState::Inflight, 1),
+            "随批 = 被拿走"
+        );
+        assert!(rig.port.pending("w1").await.unwrap().is_empty());
+        rig.ack("w1").await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!(
+            (w.state, w.attempts),
+            (WakeState::Pending, 0),
+            "放回、这次不算"
+        );
+    }
+
+    /// C24 / R2：放弃按**库里的**次数判，不按这批手里那份副本（Core 不自己 +1）。库里已经到上限的行，这一次没送到就放弃。
+    #[tokio::test]
+    async fn give_up_follows_the_attempts_the_store_counted() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        // 这批手里的副本记着第 1 次；库里已经是第 MAX_ATTEMPTS 次（别的地方记过，例如重启回收）。
+        rig.port.lock().wakes[0].attempts = queue::MAX_ATTEMPTS;
+        fail_last(&mut rig, "w1").await;
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        assert_eq!(rig.port.posts().len(), 1, "放弃告警一次");
+    }
+
+    /// C24 / R3：送到的确认、随批行、游标是一个事务。游标那一步出错 → 什么都没改：行仍是 inflight、游标没动，
+    /// 环路熔断也不记（只在确认提交之后记）。
+    #[tokio::test]
+    async fn a_failed_ack_changes_nothing_and_records_no_loop_count() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        rig.port.lock().advance_error = Some("合成：游标写不进去".into());
+        rig.ack("w1").await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!((w.state, w.attempts), (WakeState::Inflight, 1));
+        assert_eq!(rig.port.cursor("w1", LOBBY).await.unwrap(), 0);
+        assert_eq!(rig.core.breaker.streak_len("w1"), 0);
+    }
+
+    /// 一批没送到：进正文的与随批的**一次**记失败（全有或全无），各自按库里的次数退避。
+    #[tokio::test]
+    async fn a_failed_batch_fails_its_riders_in_the_same_ack() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活乙")
+            .await;
+        {
+            let mut st = rig.port.lock();
+            st.defer.insert(2);
+        }
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        let w = rig.port.wakes_of("w1");
+        assert_eq!(
+            w.iter().map(|w| w.state).collect::<Vec<_>>(),
+            [WakeState::Inflight, WakeState::Inflight]
+        );
+        fail_last(&mut rig, "w1").await;
+        for w in rig.port.wakes_of("w1") {
+            assert_eq!((w.state, w.attempts), (WakeState::Pending, 1), "{w:?}");
+            assert_eq!(w.not_before, T0.add(30 * SEC));
         }
     }
 }

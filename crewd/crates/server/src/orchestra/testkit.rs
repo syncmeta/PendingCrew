@@ -8,6 +8,7 @@ use crewd_exec::delivery::Subject;
 use crewd_exec::driver::{Closed, SendError, SessionStatus};
 use crewd_exec::resume::{AgentIdLedger, MemoryLedger};
 use crewd_exec::session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent};
+use crewd_proto::wake_lifecycle as lifecycle;
 use crewd_term::{DecisionEvent, Snapshot};
 use crewd_wake::plan::{ChannelCtx, Listen, Mention, MsgFacts, Sender, visible_to};
 use crewd_wake::queue::is_due;
@@ -76,6 +77,39 @@ pub struct MemState {
     pub render_error_for: BTreeMap<String, String>,
     /// `render_wake` 被调了几次（量「出错不原地紧循环重试」）。
     pub renders: usize,
+    /// 设了就让 `ack(Delivered)` 的游标那一步出错（模拟库在同一事务里推游标失败）：整批回滚。
+    pub advance_error: Option<String>,
+}
+
+/// 一批行按同一个生命周期事件改状态，规则**只**来自 `crewd_proto::wake_lifecycle`（C24，同 collab `wakes::apply`）：
+/// 先核每一行（没有 / 表不认 = 错误、一行都不改），全过了才写。返回每行事件之后的次数（与 `ids` 同序）。
+pub fn apply_event(
+    wakes: &mut [QueuedWake],
+    ids: &[i64],
+    event: lifecycle::WakeEvent,
+) -> Result<Vec<u32>> {
+    let mut planned = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(w) = wakes.iter().find(|w| w.id == *id) else {
+            anyhow::bail!("没有唤醒 {id}");
+        };
+        let to = lifecycle::next(lifecycle_state(w.state), event)
+            .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
+        planned.push((
+            *id,
+            wake_state(to),
+            lifecycle::attempts_after(event, w.attempts),
+        ));
+    }
+    for (id, to, attempts) in &planned {
+        let w = wakes.iter_mut().find(|w| w.id == *id).expect("上面查过");
+        w.state = *to;
+        w.attempts = *attempts;
+        if let lifecycle::WakeEvent::Fail { retry_at: Some(t) } = event {
+            w.not_before = Ms(t);
+        }
+    }
+    Ok(planned.into_iter().map(|(_, _, a)| a).collect())
 }
 
 pub struct MemPort {
@@ -165,6 +199,17 @@ impl MemPort {
 
     pub fn posts(&self) -> Vec<(Audience, String)> {
         self.lock().posts.clone()
+    }
+
+    /// 测试布置用：直接把游标往前推（编排自己只经 `Port::ack` 推）。
+    pub async fn advance(&self, session: &str, channel: &str, seq: i64) -> Result<()> {
+        let mut st = self.lock();
+        let c = st
+            .cursors
+            .entry((session.to_string(), channel.to_string()))
+            .or_insert(0);
+        *c = (*c).max(seq);
+        Ok(())
     }
 
     pub fn row(&self, id: &str) -> SessionRow {
@@ -349,48 +394,101 @@ impl Port for MemPort {
             .collect())
     }
 
-    /// 跟 M3a `wakes::set_state` 一样严（控制者裁定 C23）：起始状态见 [`Settle::from_states`]；没有这一行 /
-    /// 起始状态不对 = 错误，整批一行都不改（M3a 在同一事务里，出错回滚）。假的不能比库松。
+    /// 跟库一样严：规则只来自共享的那张表（[`apply_event`]，C24）；没有这一行 / 表不认 = 错误，整批一行都不改。
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
+        apply_event(&mut self.lock().wakes, ids, s.event()).map(|_| ())
+    }
+
+    async fn claim(&self, b: &Batch) -> Result<()> {
+        apply_event(
+            &mut self.lock().wakes,
+            &b.ids(),
+            lifecycle::WakeEvent::Claim,
+        )
+        .map(|_| ())
+    }
+
+    /// 同库的一个事务：在副本上做完全部步骤，任何一步出错就丢掉副本（一行都不改、游标不动）。
+    async fn ack(&self, b: &Batch, a: Ack) -> Result<Acked> {
         let mut st = self.lock();
-        for id in ids {
-            let Some(w) = st.wakes.iter().find(|w| w.id == *id) else {
-                anyhow::bail!("没有唤醒 {id}");
-            };
-            if !s.from_states().contains(&w.state) {
-                anyhow::bail!("唤醒 {id} 是 {}，不能 {s:?}", w.state);
-            }
-        }
-        for w in st.wakes.iter_mut().filter(|w| ids.contains(&w.id)) {
-            match &s {
-                Settle::Inflight => w.state = WakeState::Inflight,
-                Settle::Delivered => w.state = WakeState::Delivered,
-                Settle::Retry {
-                    attempts, retry_at, ..
-                } => {
-                    w.state = WakeState::Pending;
-                    w.attempts = *attempts;
-                    w.not_before = *retry_at;
+        let mut wakes = st.wakes.clone();
+        let wake_ids: Vec<i64> = b.wakes.iter().map(|w| w.id).collect();
+        let rider_ids: Vec<i64> = b.riders.iter().map(|w| w.id).collect();
+        match a {
+            Ack::Delivered { riders } => {
+                apply_event(&mut wakes, &wake_ids, lifecycle::WakeEvent::Deliver)?;
+                let fate = match riders {
+                    Riders::Release => lifecycle::WakeEvent::Requeue,
+                    Riders::Drop(_) => lifecycle::WakeEvent::Drop,
+                };
+                apply_event(&mut wakes, &rider_ids, fate)?;
+                let mut cursors = st.cursors.clone();
+                for (channel, seq) in &b.cursor_targets {
+                    if let Some(e) = &st.advance_error {
+                        anyhow::bail!("{e}");
+                    }
+                    let c = cursors
+                        .entry((b.session.clone(), channel.clone()))
+                        .or_insert(0);
+                    *c = (*c).max(*seq);
                 }
-                Settle::Dropped { .. } => w.state = WakeState::Dropped,
-                Settle::Requeue => w.state = WakeState::Pending,
+                st.wakes = wakes;
+                st.cursors = cursors;
+                let mut origins: Vec<String> = Vec::new();
+                for w in &b.wakes {
+                    if !origins.contains(&w.origin) {
+                        origins.push(w.origin.clone());
+                    }
+                }
+                Ok(Acked {
+                    origins,
+                    ..Default::default()
+                })
+            }
+            Ack::Failed { now, .. } => {
+                let all = b.ids();
+                // 先按表核一遍（Fail 与 GiveUp 认的起始状态相同），再按**库里的**次数（claim 记的）判。
+                let mut counts = Vec::new();
+                for id in &all {
+                    let Some(w) = wakes.iter().find(|w| w.id == *id) else {
+                        anyhow::bail!("没有唤醒 {id}");
+                    };
+                    lifecycle::next(lifecycle_state(w.state), lifecycle::WakeEvent::GiveUp)
+                        .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
+                    counts.push((*id, w.attempts));
+                }
+                let mut out = Acked::default();
+                for (id, attempts) in counts {
+                    match crewd_wake::queue::after_failure(attempts, now) {
+                        Some(t) => {
+                            let fail = lifecycle::WakeEvent::Fail {
+                                retry_at: Some(t.0),
+                            };
+                            apply_event(&mut wakes, &[id], fail)?;
+                            out.retried.push((id, t));
+                        }
+                        None => {
+                            apply_event(&mut wakes, &[id], lifecycle::WakeEvent::GiveUp)?;
+                            out.gave_up.push(id);
+                        }
+                    }
+                }
+                st.wakes = wakes;
+                Ok(out)
             }
         }
-        Ok(())
     }
 
     async fn requeue_inflight(&self) -> Result<usize> {
         let mut st = self.lock();
-        let mut n = 0;
-        for w in st
+        let ids: Vec<i64> = st
             .wakes
-            .iter_mut()
+            .iter()
             .filter(|w| w.state == WakeState::Inflight)
-        {
-            w.state = WakeState::Pending;
-            n += 1;
-        }
-        Ok(n)
+            .map(|w| w.id)
+            .collect();
+        apply_event(&mut st.wakes, &ids, lifecycle::WakeEvent::Requeue)?;
+        Ok(ids.len())
     }
 
     async fn due_sessions(&self, now: Ms) -> Result<Vec<String>> {
@@ -540,16 +638,6 @@ impl Port for MemPort {
             .get(&(session.to_string(), channel.to_string()))
             .copied()
             .unwrap_or(0))
-    }
-
-    async fn advance(&self, session: &str, channel: &str, seq: i64) -> Result<()> {
-        let mut st = self.lock();
-        let c = st
-            .cursors
-            .entry((session.to_string(), channel.to_string()))
-            .or_insert(0);
-        *c = (*c).max(seq);
-        Ok(())
     }
 
     async fn post_system(&self, to: Audience, text: String) -> Result<()> {
@@ -1198,6 +1286,7 @@ impl Rig {
 #[cfg(test)]
 mod self_tests {
     use super::*;
+    use crewd_wake::queue;
     use crewd_wake::{Priority, WakeKind};
 
     fn wake(session: &str, source: &str, priority: Priority) -> NewWake {
@@ -1223,8 +1312,12 @@ mod self_tests {
         assert!(p.enqueue(wake("b", "x#2", Priority::Human)).await.unwrap());
         assert!(p.enqueue(wake("c", "x#3", Priority::Auto)).await.unwrap());
         assert_eq!(p.due_sessions(Ms(0)).await.unwrap(), ["b", "a", "c"]);
-        let ids: Vec<i64> = p.pending("a").await.unwrap().iter().map(|w| w.id).collect();
-        p.settle(&ids, Settle::Inflight, Ms(0)).await.unwrap();
+        let batch = Batch {
+            session: "a".into(),
+            wakes: p.pending("a").await.unwrap(),
+            ..Default::default()
+        };
+        p.claim(&batch).await.unwrap();
         assert!(p.pending("a").await.unwrap().is_empty());
         assert_eq!(p.requeue_inflight().await.unwrap(), 1);
         assert_eq!(p.pending("a").await.unwrap().len(), 1);
@@ -1397,44 +1490,225 @@ mod self_tests {
         id
     }
 
-    /// MemPort 的 settle 跟 M3a `wakes::set_state` 一样严（控制者裁定 C23）：每种结算只认它的起始状态，别的回错、
-    /// 一行都不改（同一事务回滚）。唯一的扩展：`Retry` 也认 pending（跟着一批没投进去的窗口外行）。
-    #[tokio::test]
-    async fn mem_port_settle_enforces_the_store_from_states() {
-        use WakeState::{Delivered, Dropped, Inflight, Pending};
-        let retry = || Settle::Retry {
-            attempts: 1,
-            error: "x".into(),
-            retry_at: Ms(5),
-        };
-        let dropped = || Settle::Dropped { error: "x".into() };
-        let cases: Vec<(Settle, Vec<WakeState>)> = vec![
-            (Settle::Inflight, vec![Pending]),
-            (Settle::Delivered, vec![Pending, Inflight]),
-            (retry(), vec![Pending, Inflight]),
-            (dropped(), vec![Pending, Inflight]),
-            (Settle::Requeue, vec![Inflight]),
-        ];
-        for (settle, ok_from) in cases {
-            for from in [Pending, Inflight, Delivered, Dropped] {
+    /// 一个真的 collab 库（内存 SQLite），一个机组 `c1`、一个 session `s`（全是编的名字）。
+    fn real_store() -> crewd_store::Store {
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        crewd_store::crews::upsert(
+            store.conn(),
+            &crewd_proto::Crew {
+                id: "c1".into(),
+                title: "机组甲".into(),
+                created_at: "2026-09-01T00:00:00.000Z".into(),
+                updated_at: "2026-09-01T00:00:00.000Z".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        crewd_store::sessions::upsert(
+            store.conn(),
+            &crewd_proto::Session {
+                id: "s".into(),
+                crew_id: "c1".into(),
+                role: crewd_proto::Role::Worker,
+                executor: "claude".into(),
+                updated_at: "2026-09-01T00:00:00.000Z".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        crewd_store::schema::backfill_v3(store.conn()).unwrap();
+        store
+    }
+
+    /// 库里造一行处在 `from` 的唤醒（只用 collab 的写函数，走的也是那张表）。返回 (id, 次数)。
+    fn store_row_in(store: &mut crewd_store::Store, from: WakeState, n: usize) -> (i64, u32) {
+        use crewd_collab::wakes;
+        let (id, _) = crewd_collab::run(store, 1_000, |tx| {
+            let r = wakes::enqueue(
+                tx,
+                wakes::WakeRequest {
+                    session: "s".into(),
+                    kind: wakes::WakeKind::Timer,
+                    source: format!("timer:{n}"),
+                    priority: wakes::WakePriority::Auto,
+                    not_before_ms: Some(0),
+                    note: None,
+                    origin: None,
+                },
+            )?;
+            let wakes::Enqueued::New(id) = r else {
+                panic!("{r:?}")
+            };
+            match from {
+                WakeState::Pending => {}
+                WakeState::Inflight => {
+                    wakes::claim(tx, &[id])?;
+                }
+                WakeState::Delivered => wakes::mark_delivered(tx, &[id])?,
+                WakeState::Dropped => wakes::mark_dropped(tx, id, "x")?,
+            }
+            Ok(id)
+        })
+        .unwrap();
+        let row = &crewd_collab::wakes::by_ids(store.conn(), &[id]).unwrap()[0];
+        (id, row.attempts)
+    }
+
+    fn store_state(store: &crewd_store::Store, id: i64) -> (WakeState, u32) {
+        let r = &crewd_collab::wakes::by_ids(store.conn(), &[id]).unwrap()[0];
+        (wake_state(r.state), r.attempts)
+    }
+
+    /// C24：MemPort 与真库对每一格（4 状态 × 6 事件）给出同一个答案——认不认、认了之后的状态与次数。
+    /// 两边都只经 `crewd_proto::wake_lifecycle` 改状态，这里把「假的不比库松」钉成测试。另核一批里混了一行不认的：
+    /// 两边都整批不动。
+    #[test]
+    fn mem_port_and_the_store_answer_every_state_and_event_alike() {
+        use lifecycle::WakeEvent;
+        let mut n = 0;
+        for from in [
+            WakeState::Pending,
+            WakeState::Inflight,
+            WakeState::Delivered,
+            WakeState::Dropped,
+        ] {
+            for event in WakeEvent::ALL {
+                n += 1;
+                let mut store = real_store();
+                let (sid, attempts) = store_row_in(&mut store, from, n);
                 let p = MemPort::new();
-                let id = row_in(&p, from);
-                let r = p.settle(&[id], settle.clone(), Ms(0)).await;
-                assert_eq!(r.is_ok(), ok_from.contains(&from), "{settle:?} 从 {from:?}");
-                if r.is_err() {
-                    assert_eq!(p.lock().wakes[0].state, from, "失败不改任何行");
+                let mid = row_in(&p, from);
+                p.lock().wakes[0].attempts = attempts;
+                let got_store = crewd_collab::run(&mut store, 2_000, |tx| {
+                    crewd_collab::wakes::apply(tx, &[sid], event)
+                })
+                .map(|(v, _)| v);
+                let got_mem = apply_event(&mut p.lock().wakes, &[mid], event);
+                assert_eq!(
+                    got_store.is_ok(),
+                    got_mem.is_ok(),
+                    "{from:?} + {event:?}：库 {got_store:?} / MemPort {got_mem:?}"
+                );
+                let w = p.lock().wakes[0].clone();
+                assert_eq!(
+                    store_state(&store, sid),
+                    (w.state, w.attempts),
+                    "{from:?} + {event:?} 之后"
+                );
+                if got_mem.is_err() {
+                    assert_eq!((w.state, w.attempts), (from, attempts), "不认 = 一行都不改");
                 }
             }
         }
-        let p = MemPort::new();
-        let ok = row_in(&p, Pending);
-        let bad = row_in(&p, Dropped);
-        assert!(p.settle(&[ok, bad], retry(), Ms(0)).await.is_err());
-        assert_eq!(p.lock().wakes[0].attempts, 0, "整批回滚");
+        // 一批里混了一行不认的：两边都整批不动。
+        let mut store = real_store();
+        let (ok_s, _) = store_row_in(&mut store, WakeState::Pending, 100);
+        let (bad_s, _) = store_row_in(&mut store, WakeState::Dropped, 101);
+        let claim = WakeEvent::Claim;
         assert!(
-            p.settle(&[99], Settle::Delivered, Ms(0)).await.is_err(),
+            crewd_collab::run(&mut store, 2_000, |tx| crewd_collab::wakes::apply(
+                tx,
+                &[ok_s, bad_s],
+                claim
+            ))
+            .is_err()
+        );
+        assert_eq!(store_state(&store, ok_s), (WakeState::Pending, 0));
+        let p = MemPort::new();
+        let ok_m = row_in(&p, WakeState::Pending);
+        let bad_m = row_in(&p, WakeState::Dropped);
+        assert!(apply_event(&mut p.lock().wakes, &[ok_m, bad_m], claim).is_err());
+        assert_eq!(p.lock().wakes[0].state, WakeState::Pending, "整批回滚");
+        assert!(
+            apply_event(&mut p.lock().wakes, &[99], WakeEvent::Deliver).is_err(),
             "没有这一行"
         );
+    }
+
+    fn batch_of(p: &MemPort, wakes: &[i64], riders: &[i64], targets: &[(&str, i64)]) -> Batch {
+        let st = p.lock();
+        let pick = |ids: &[i64]| -> Vec<QueuedWake> {
+            ids.iter()
+                .map(|id| st.wakes.iter().find(|w| w.id == *id).unwrap().clone())
+                .collect()
+        };
+        Batch {
+            session: "s".into(),
+            wakes: pick(wakes),
+            riders: pick(riders),
+            cursor_targets: targets.iter().map(|(c, s)| (c.to_string(), *s)).collect(),
+        }
+    }
+
+    /// C24：送到 = 行 + 随批行 + 游标一个事务。游标那一步出错 → 一行都不改、游标不动；成功 → 进正文的 delivered、
+    /// 随批的放回 pending（退回 claim 那一次）、游标前进、报回去重后的来源。
+    #[tokio::test]
+    async fn mem_port_ack_delivered_is_all_or_nothing() {
+        let p = MemPort::new();
+        let (a, b, r) = (
+            row_in(&p, WakeState::Pending),
+            row_in(&p, WakeState::Pending),
+            row_in(&p, WakeState::Pending),
+        );
+        let batch = batch_of(&p, &[a, b], &[r], &[("c1/lobby", 7)]);
+        p.claim(&batch).await.unwrap();
+        let before = p.lock().wakes.clone();
+        p.lock().advance_error = Some("合成：游标写不进去".into());
+        let ack = || Ack::Delivered {
+            riders: Riders::Release,
+        };
+        assert!(p.ack(&batch, ack()).await.is_err());
+        assert_eq!(p.lock().wakes, before, "行一行都没改");
+        assert_eq!(p.cursor("s", "c1/lobby").await.unwrap(), 0, "游标也没动");
+        p.lock().advance_error = None;
+        let acked = p.ack(&batch, ack()).await.unwrap();
+        assert_eq!(acked.origins, ["s"], "来源去重");
+        let st: Vec<(WakeState, u32)> = p
+            .lock()
+            .wakes
+            .iter()
+            .map(|w| (w.state, w.attempts))
+            .collect();
+        assert_eq!(
+            st,
+            [
+                (WakeState::Delivered, 1),
+                (WakeState::Delivered, 1),
+                (WakeState::Pending, 0)
+            ]
+        );
+        assert_eq!(p.cursor("s", "c1/lobby").await.unwrap(), 7);
+    }
+
+    /// C24：没送到时按**库里的**次数判（不是这批手里那份）；一行不是 inflight → 整批不动。
+    #[tokio::test]
+    async fn mem_port_ack_failed_uses_the_stored_count_and_is_all_or_nothing() {
+        let p = MemPort::new();
+        let (a, b) = (
+            row_in(&p, WakeState::Pending),
+            row_in(&p, WakeState::Pending),
+        );
+        let batch = batch_of(&p, &[a], &[b], &[]);
+        p.claim(&batch).await.unwrap();
+        // 这批手里的副本说 0 次；库里 b 已经是第 3 次了（例如重启回收记过）。
+        p.lock().wakes[1].attempts = queue::MAX_ATTEMPTS;
+        let failed = || Ack::Failed {
+            error: "合成：没送到".into(),
+            now: Ms(1_000),
+        };
+        let acked = p.ack(&batch, failed()).await.unwrap();
+        assert_eq!(acked.retried, [(a, Ms(1_000 + queue::RETRY_DELAYS_MS[0]))]);
+        assert_eq!(acked.gave_up, [b]);
+        let w = p.lock().wakes.clone();
+        assert_eq!((w[0].state, w[0].attempts), (WakeState::Pending, 1));
+        assert_eq!(w[0].not_before, Ms(1_000 + queue::RETRY_DELAYS_MS[0]));
+        assert_eq!(w[1].state, WakeState::Dropped);
+        // a 回 pending 了：同一批再 ack 一次 = 有一行不是 inflight → 整批不动（b 也不动）。
+        let before = p.lock().wakes.clone();
+        assert!(p.ack(&batch, failed()).await.is_err());
+        assert_eq!(p.lock().wakes, before);
     }
 
     /// 人类群的成员 = 机长 + 显式成员；机长同时是显式成员时只算一次（同 M3a `channels::members`）。
