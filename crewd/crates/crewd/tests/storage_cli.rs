@@ -36,16 +36,6 @@ fn start(data: &Path) -> Daemon {
     panic!("crewd serve 没起来");
 }
 
-fn ok(out: Output) -> Output {
-    assert!(
-        out.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    out
-}
-
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
