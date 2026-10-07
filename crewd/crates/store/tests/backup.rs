@@ -512,8 +512,18 @@ fn stale_temp_files_of_dead_processes_are_swept() {
     for p in [&dead, &alive, &other] {
         std::fs::write(p, b"x").unwrap();
     }
+    // 快照临时库自己的旁路文件（SQLite 给 `.X.tmp-<pid>` 建的 -wal / -shm）也算残留（复审 3 轮）。
+    let dead_wal = b.join(".crewd-auto-x.db.tmp-2147483647-wal");
+    let dead_shm = b.join(".crewd-auto-x.db.tmp-2147483647-shm");
+    let alive_wal = b.join(".crewd-manual-y.db.tmp-1-wal");
+    for p in [&dead_wal, &dead_shm, &alive_wal] {
+        std::fs::write(p, b"x").unwrap();
+    }
     let removed = backup::sweep_stale_tmp(&b).unwrap();
-    assert_eq!(removed, vec![dead.clone()]);
+    let mut want = vec![dead.clone(), dead_shm.clone(), dead_wal.clone()];
+    want.sort();
+    assert_eq!(removed, want);
+    assert!(alive_wal.exists());
     assert!(!dead.exists() && alive.exists() && other.exists());
 
     // Ticker 启动时扫一遍：backups/ 里的，和数据目录里中断的 restore 留下的 `.crewd.db.tmp-<pid>`。

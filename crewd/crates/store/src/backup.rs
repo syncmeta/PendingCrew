@@ -524,10 +524,17 @@ pub fn sweep_stale_tmp(dir: &Path) -> Result<Vec<PathBuf>> {
     for e in rd {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
+        // `.X.tmp-<pid>`，以及 SQLite 给它建的 `.X.tmp-<pid>-wal` / `-shm` / `-journal`。
         let Some(pid) = name
             .strip_prefix('.')
             .and_then(|n| n.rsplit_once(".tmp-"))
-            .and_then(|(_, pid)| pid.parse::<i32>().ok())
+            .map(|(_, rest)| {
+                ["-wal", "-shm", "-journal"]
+                    .iter()
+                    .find_map(|suf| rest.strip_suffix(suf))
+                    .unwrap_or(rest)
+            })
+            .and_then(|pid| pid.parse::<i32>().ok())
         else {
             continue;
         };

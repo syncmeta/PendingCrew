@@ -314,6 +314,10 @@ fn an_older_copy_moved_in_over_a_crash_left_wal_is_refused() {
         .expect("旧 WAL 不属于换进来的文件");
     assert!(matches!(err, StoreError::DbReplaced { .. }), "{err:?}");
     assert!(err.to_string().contains("-wal"), "{err}");
+    // 整个数据目录搬过家时 crewd.db 和 -wal 是一对：提示要说认领（删 crewd.db.id），绝不删 -wal。
+    for want in ["Time Machine", "删掉 crewd.db.id", "绝不要删 crewd.db-wal"] {
+        assert!(err.to_string().contains(want), "缺 {want}：{err}");
+    }
     assert_eq!(std::fs::read(side(d.path(), "-wal")).unwrap(), wal_before);
 }
 

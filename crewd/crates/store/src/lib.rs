@@ -140,13 +140,19 @@ pub enum StoreError {
         dir: std::path::PathBuf,
         expected: String,
     },
-    /// 库文件换过了（inode 和 `crewd.db.id` 记的不一样），而旁边还有一份非空的 -wal：那份 WAL 属于原来的
-    /// 文件，回放到换进来的文件上会把它弄坏（复审 2 轮 3）。拒绝，什么都不动。
+    /// 库文件换过了（inode 和 `crewd.db.id` 记的不一样），而旁边还有一份非空的 -wal（复审 2 轮 3）。
+    /// 拒绝，什么都不动。提示分两种情况：整个目录一起搬来的（库和 -wal 是一对，认领即可，绝不删 -wal），
+    /// 还是只有库文件被单独换过（-wal 不属于它，走 restore）。
     #[error(
-        "{} 里的 crewd.db 换过了（不是 {ID_FILE} 记下的那个文件），而旁边还留着一份非空的 crewd.db-wal——\
-         它属于原来的文件，不能回放到换进来的文件上。拒绝启动，什么都没改。{}",
-        dir.display(),
-        SWAP_HELP
+        "{} 里的 crewd.db 不是 {ID_FILE} 记下的那个文件（inode 变了），旁边还留着一份非空的 crewd.db-wal。\
+         拒绝启动，什么都没改。分两种情况：\
+         ① 整个数据目录是一起搬过来的（换了新 Mac、Time Machine / 迁移助理恢复、cp -R 或 rsync 整个目录）：\
+         crewd.db 和它的 -wal 是一对，删掉 crewd.db.id 让 crewd 认领即可；这种情况下绝不要删 crewd.db-wal，\
+         里面是还没写回库文件的提交。\
+         ② 只有 crewd.db 被单独换过：那份 -wal 属于原来的文件，不能回放到换进来的文件上。\
+         把换进来的文件挪出数据目录，再 crewd restore --from <挪到的路径>（restore 会把那份 -wal / -shm \
+         挪到 crewd.db.replaced-* 留着）。要找回原来的库：看 backups/ 和 crewd.db.replaced-*。",
+        dir.display()
     )]
     DbReplaced { dir: std::path::PathBuf },
     /// 迁移前的保护步骤（完整性检查、快照）没过：没有迁移，库保持原版本、原样。
