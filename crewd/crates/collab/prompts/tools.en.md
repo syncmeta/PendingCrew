@@ -321,44 +321,29 @@ Optional: the new captain's display name, at most 18 characters; omitted = Capta
 ## handoff_captain.opening_brief
 Optional: the new captain's first task (with runner only).
 
-## adopt_crew
-(Captain) Adopt a crew that has no parent/child relation with yours, making it your child. No cycles; the management crew is outside the crew tree and cannot be adopted.
+## crew_structure
+Change where crews sit in the organisation tree. action is one of five: create_child (a new child crew under crew: it inherits the working directory and gets its own captain started, whose first task is brief); create_parent (a new parent crew above crew, with its own captain started); adopt (put target under crew); adopt_parent (put crew under target); release (detach crew's direct child target, optionally moving it under to; with no other parent left it becomes top-level). New or adopted crews go at the end of their siblings. Removing, restoring, purging and ordering crews are the human's and are not here. Child crews only express organisational structure — a lasting department or team with its own captain. To collaborate on a topic or a task, create a channel with channel_create instead. crew omitted = this crew; another crew only if you act as its captain.
 
-## adopt_crew.crew
-Target crew name, id or number.
+## crew_structure.action
+One of create_child / create_parent / adopt / adopt_parent / release.
 
-## release_crew
-(Captain) Re-home a direct child crew: without to it becomes top-level; with to it moves under another of your direct children.
+## crew_structure.crew
+Optional: the crew acted on (number or id); omitted = this crew.
 
-## release_crew.crew
-Direct child crew name, id or number.
+## crew_structure.target
+Required for adopt / adopt_parent / release: the other crew (number or id).
 
-## release_crew.to
-Optional destination: another of your direct child crews.
+## crew_structure.to
+Optional, release only: where to move target (another direct child of crew, or a crew you act as captain of).
 
-## create_parent_crew
-(Captain) Create a parent crew above yours: your crew becomes its child, it inherits the working directory and gets its own captain. Only when the organisation really needs another level (grouping departments under one parent).
+## crew_structure.title
+Optional, for create_child / create_parent: the new crew's short label; omitted = from a template.
 
-## create_parent_crew.title
-Optional short label.
+## crew_structure.brief
+Required for create_child: the child crew captain's first task, with goal and done criteria.
 
-## adopt_parent
-(Captain) Make an existing crew your crew's parent. No cycles.
-
-## adopt_parent.crew
-Target crew name, id or number.
-
-## create_child_crew
-(Captain) Create a child crew under yours: it inherits the working directory, gets its own captain, and brief is that captain's first task. Child crews only express organisational structure — a lasting department or team with its own captain. To collaborate on a topic or a task, create a channel with channel_create instead.
-
-## create_child_crew.brief
-What the child crew should do.
-
-## create_child_crew.title
-Optional short label.
-
-## create_child_crew.runner
-Optional: claude or codex for the child captain.
+## crew_structure.runner
+Optional, create_child only: claude or codex for the child crew's captain; omitted = default.
 
 ## r.unknown_tool
 There is no tool named {name}.
@@ -838,3 +823,51 @@ If that is right, call again with confirm: true and the same other arguments.
 The working directory of these {count} crews is now {path} (the old one shown on the right):
 {crews}
 Sessions started from now on work there; running processes keep their directory: stop and start one again to move it.
+## r.structure_args
+crew_structure(action: "{action}") takes only these besides crew: {params} (? = optional); a missing required one or any other argument is refused. Fix the call and try again.
+
+## r.default_child_title
+{parent} · child
+
+## r.default_parent_title
+{child} · parent
+
+## r.child_brief_notice
+{by} created this crew. Its captain's first task:
+{brief}
+
+## r.child_created
+Child crew "{crew}" (number {number}) created under "{parent}", at the end of its children; its captain {captain} ({id}) is started and the brief is in its lobby. To tell it anything later, post(to: "{number}").
+
+## r.child_created_no_captain
+Child crew "{crew}" (number {number}) was created, but its captain did not start: {detail}. Do not create it again: give it a captain with handoff_captain(crew: "{number}", runner: …).
+
+## r.parent_notice
+{by} created this crew as the parent of "{child}".
+
+## r.parent_brief
+You are the captain of a newly created parent crew; "{child}" is your first child crew. Read its lobby first to see what it is doing, then decide whether to adopt other crews.
+
+## r.parent_created
+Parent crew "{crew}" (number {number}) created above "{child}"; it is top-level, at the end of the top level, and its captain {captain} ({id}) is started. To tell it anything later, post(to: "{number}").
+
+## r.parent_created_no_captain
+Parent crew "{crew}" (number {number}) was created with "{child}" under it, but its captain did not start: {detail}. Do not create it again: give it a captain with handoff_captain(crew: "{number}", runner: …).
+
+## r.no_longer_top
+"{crew}" is no longer top-level: its human channel is archived (messages kept), and its asks now go to the human channel of "{home}". Keep using ask as before.
+
+## r.adopted
+"{child}" is now under "{parent}", at the end of its children. To reach its captain, look up its number with directory and post(to: number).
+
+## r.already_child
+"{child}" was already under "{parent}"; nothing changed. Carry on with your work.
+
+## r.released_top
+"{child}" was detached from "{from}" and is now top-level, at the end of the top level; its asks go to its own human channel from now on. Carry on with your work.
+
+## r.released
+"{child}" was detached from "{from}"; it is still under another parent. Carry on with your work.
+
+## r.released_to
+"{child}" was moved from "{from}" to "{to}", at the end of its children. Carry on with your work.

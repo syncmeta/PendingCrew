@@ -60,6 +60,14 @@ pub const MENTION_KINDS: &[&str] = &["session", "captain", "human"];
 const RUNNERS: &[&str] = &["claude", "codex"];
 /// `nudge_session.key` (T15 Q1): both interrupt the current turn; free text goes through `post(to:)`.
 pub const NUDGE_KEYS: &[&str] = &["esc", "interrupt"];
+/// `crew_structure.action` (S69). No remove / restore / purge / reorder: those are the human's.
+pub const STRUCTURE_ACTIONS: &[&str] = &[
+    "create_child",
+    "create_parent",
+    "adopt",
+    "adopt_parent",
+    "release",
+];
 
 const fn p(name: &'static str, ty: Ty, required: bool) -> Param {
     Param {
@@ -262,15 +270,15 @@ pub const CATALOG: &[ToolSpec] = &[
             p("opening_brief", Str, false),
         ],
     ),
-    cap("adopt_crew", &[p("crew", Str, true)]),
-    cap("release_crew", &[p("crew", Str, true), p("to", Str, false)]),
-    cap("create_parent_crew", &[p("title", Str, false)]),
-    cap("adopt_parent", &[p("crew", Str, true)]),
     cap(
-        "create_child_crew",
+        "crew_structure",
         &[
-            p("brief", Str, true),
+            c("action", true, STRUCTURE_ACTIONS),
+            p("crew", Str, false),
+            p("target", Str, false),
+            p("to", Str, false),
             p("title", Str, false),
+            p("brief", Str, false),
             c("runner", false, RUNNERS),
         ],
     ),
@@ -312,6 +320,17 @@ pub const REMOVED: &[(&str, &str)] = &[
     ("message_child_crew", "post(to:)"),
     ("read_delegation_policy", "delegation_policy"),
     ("update_delegation_policy", "delegation_policy(text:)"),
+    ("adopt_crew", "crew_structure(action: \"adopt\")"),
+    ("release_crew", "crew_structure(action: \"release\")"),
+    (
+        "create_parent_crew",
+        "crew_structure(action: \"create_parent\")",
+    ),
+    ("adopt_parent", "crew_structure(action: \"adopt_parent\")"),
+    (
+        "create_child_crew",
+        "crew_structure(action: \"create_child\")",
+    ),
 ];
 
 /// What replaces a removed tool (`None`: not a removed name, or gone without a successor).
@@ -419,6 +438,11 @@ mod tests {
         "create_and_handoff_captain",
         "read_delegation_policy",
         "update_delegation_policy",
+        "adopt_crew",
+        "release_crew",
+        "create_parent_crew",
+        "adopt_parent",
+        "create_child_crew",
     ];
 
     fn who(role: Role) -> Identity {
@@ -446,7 +470,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 32);
+        assert_eq!(CATALOG.len(), 28);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -480,7 +504,7 @@ mod tests {
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
         assert_eq!(worker.len(), 17);
-        assert_eq!(captain.len(), 32);
+        assert_eq!(captain.len(), 28);
     }
 
     #[test]
@@ -513,7 +537,7 @@ mod tests {
         // 人 2026-10-06：协作与话题用群，子机组只表达组织结构（部门 / 团队）。
         for loc in [Locale::Zh, Locale::En] {
             assert!(
-                crate::agent::text::get(loc, "create_child_crew").contains("channel_create"),
+                crate::agent::text::get(loc, "crew_structure").contains("channel_create"),
                 "{loc:?}"
             );
             assert!(

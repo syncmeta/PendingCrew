@@ -541,27 +541,57 @@ pub async fn detach_parent(
     .await
 }
 
-/// 缺省由调用方补齐：M3a 的 `crews::create` 拒空标题 / 空目录。
-pub async fn create_crew(
-    st: &AppState,
-    _by: &Identity,
-    title: String,
-    workdir: String,
-    parent: Option<String>,
-) -> PortResult<CrewView> {
+/// A crew to create (`crew_structure`). collab's `crews::create` refuses an empty title or
+/// directory and a parent outside the tree; the caller fills the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewCrewReq {
+    pub title: String,
+    pub working_directory: String,
+    /// Created under this crew (appended at the end of its children), else top-level (at the end).
+    pub parent: Option<String>,
+    /// This crew becomes a child of the new one (`crews::create_above`; then `parent` is ignored).
+    pub child: Option<String>,
+    /// Posted as System into the new crew's lobby (why the crew exists, for the human).
+    pub notice: Option<String>,
+}
+
+/// Create a crew, hang `child` under it and post `notice`: one transaction, so a refusal (e.g.
+/// `crew.management_not_in_tree` for `child`) leaves nothing behind.
+pub async fn create_crew(st: &AppState, r: NewCrewReq) -> PortResult<CrewView> {
     write(st, move |tx| {
-        let c = crewd_collab::crews::create(
-            tx,
-            crewd_collab::crews::NewCrew {
-                title,
-                working_directory: workdir,
-                parent_id: parent,
-                title_source: None,
-            },
-        )?;
+        let n = crewd_collab::crews::NewCrew {
+            title: r.title,
+            working_directory: r.working_directory,
+            parent_id: r.parent,
+            title_source: None,
+        };
+        let c = match &r.child {
+            Some(child) => crewd_collab::crews::create_above(tx, n, child)?,
+            None => crewd_collab::crews::create(tx, n)?,
+        };
+        if let Some(text) = r.notice {
+            crewd_collab::messages::post(
+                tx,
+                Sender::System,
+                crewd_collab::messages::NewPost {
+                    channel_id: crewd_store::channels::lobby_id(&c.id),
+                    text,
+                    in_reply_to: None,
+                    mentions: vec![],
+                    attachments: vec![],
+                    category: None,
+                },
+            )?;
+        }
         crew_view(tx.conn(), &c.id)
     })
     .await
+}
+
+/// The crew whose human channel `crew`'s asks go to (collab `crews::home_of`).
+pub async fn home_of(st: &AppState, crew: &str) -> PortResult<String> {
+    let crew = crew.to_string();
+    read(st, move |conn| crewd_collab::crews::home_of(conn, &crew)).await
 }
 
 // ---------------------------------------------------------------------------------------------

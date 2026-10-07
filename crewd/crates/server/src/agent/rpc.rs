@@ -275,7 +275,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            32
+            28
         );
     }
 
@@ -321,7 +321,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            32
+            28
         );
         let r = w
             .call(methods::CALL, json!({"tool": "list_sessions"}))

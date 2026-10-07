@@ -321,44 +321,29 @@ esc 或 interrupt，都是打断它当前这一轮。
 ## handoff_captain.opening_brief
 可选：新机长的第一件事（只配 runner 用）。
 
-## adopt_crew
-（机长）收编：把一个与本机组没有上下级关系的机组挂到本机组名下。不能成环；总机组（管理机组）在机组树外，不能被收编。
+## crew_structure
+调整机组在组织树里的位置。action 五选一：create_child（在 crew 下新建子机组：继承工作目录、自动起它的机长，brief 是那位机长的第一件事）；create_parent（在 crew 头上新建上级机组并起它的机长）；adopt（把 target 挂到 crew 名下）；adopt_parent（把 crew 挂到 target 名下）；release（把 crew 的直系子机组 target 摘出，可用 to 改挂到别处；没有别的上级了就成为顶层机组）。新建或挂过来的机组排在同级末尾。移除、恢复、永久删除和排序是人的事，这里没有。子机组只表达组织结构——一个长期存在、有自己机长的部门或团队；围绕某个话题或某件事协作，用 channel_create 建群，不要开子机组。crew 不填 = 本机组；别的机组只有你按机长算的才行。
 
-## adopt_crew.crew
-目标机组的名字、id 或号码。
+## crew_structure.action
+create_child / create_parent / adopt / adopt_parent / release 之一。
 
-## release_crew
-（机长）调整自己直系子机组的挂靠：不填 to = 摘出到顶层；填 to = 转挂到你的另一个直系子机组名下。
+## crew_structure.crew
+可选：被操作的机组（号码或 id）；不填 = 本机组。
 
-## release_crew.crew
-直系子机组的名字、id 或号码。
+## crew_structure.target
+adopt / adopt_parent / release 必填：另一个机组（号码或 id）。
 
-## release_crew.to
-可选：转挂目的地（你的另一个直系子机组）。
+## crew_structure.to
+可选，只配 release：把 target 改挂到哪个机组（crew 的另一个直系子机组，或你按机长算的机组）。
 
-## create_parent_crew
-（机长）在本机组头上新建一个父机组：本机组成为它的子机组，父机组继承工作目录并起父机长。只在组织结构真要多一层（把几个部门归到一个上级下）时用。
+## crew_structure.title
+可选，配 create_child / create_parent：新机组的短标签名；不填就按模板起。
 
-## create_parent_crew.title
-可选：父机组的短标签名。
+## crew_structure.brief
+create_child 必填：子机组的机长要做的第一件事，写清目标与完成标准。
 
-## adopt_parent
-（机长）认父：把一个现有机组认作本机组的父机组。不能成环。
-
-## adopt_parent.crew
-目标机组的名字、id 或号码。
-
-## create_child_crew
-（机长）以本机组为父建子机组：继承工作目录，自动起子机长，brief 是子机长的第一件事。子机组只表达组织结构——一个长期存在、有自己机长的部门或团队。围绕某个话题或某件事协作，用 channel_create 建群，不要开子机组。
-
-## create_child_crew.brief
-子机组要干的事。
-
-## create_child_crew.title
-可选：短标签名。
-
-## create_child_crew.runner
-可选：子机长用 claude 还是 codex。
+## crew_structure.runner
+可选，只配 create_child：子机组的机长用 claude 还是 codex；不填 = 默认。
 
 ## r.unknown_tool
 没有 {name} 这个工具。
@@ -838,3 +823,51 @@ text 是空的。只读就别给 text；要改就给完整的新正文，再调�
 已把下面 {count} 个机组的工作目录改成 {path}（右边是原来的）：
 {crews}
 之后起的 session 在新目录里工作；正在跑的进程不换目录，要它用新目录就停掉再起。
+## r.structure_args
+crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（带 ? 的可选）；缺了必填的、或多给了别的都不行。改好再调一次。
+
+## r.default_child_title
+{parent}·子机组
+
+## r.default_parent_title
+{child}·上级
+
+## r.child_brief_notice
+{by} 建了这个机组。交给它的机长的第一件事：
+{brief}
+
+## r.child_created
+已在「{parent}」下建好子机组「{crew}」（{number}号），排在子机组末尾；它的机长 {captain}（{id}）已起，brief 也写进了它的大厅。之后要交代它什么，post(to: "{number}")。
+
+## r.child_created_no_captain
+子机组「{crew}」（{number}号）已建好，但它的机长没起来：{detail}。别再建一次：用 handoff_captain(crew: "{number}", runner: …) 给它起一个机长。
+
+## r.parent_notice
+{by} 在「{child}」头上建了这个上级机组。
+
+## r.parent_brief
+你是新建的上级机组的机长，「{child}」是你的第一个子机组。先读它的大厅，弄清它在做什么，再决定还要收编哪些机组。
+
+## r.parent_created
+已在「{child}」头上建好上级机组「{crew}」（{number}号），它是顶层机组、排在顶层末尾；它的机长 {captain}（{id}）已起。之后要交代它什么，post(to: "{number}")。
+
+## r.parent_created_no_captain
+上级机组「{crew}」（{number}号）已建好、「{child}」已挂到它下面，但它的机长没起来：{detail}。别再建一次：用 handoff_captain(crew: "{number}", runner: …) 给它起一个机长。
+
+## r.no_longer_top
+「{crew}」不再是顶层机组：它的人类群已归档（消息还在），它今后的 ask 去「{home}」的人类群。ask 照常用，做法不变。
+
+## r.adopted
+「{child}」已挂到「{parent}」名下，排在它的子机组末尾。要联系它的机长，用 directory 查号再 post(to: 号)。
+
+## r.already_child
+「{child}」本来就在「{parent}」名下，没有变化。接着做手上的事。
+
+## r.released_top
+「{child}」已从「{from}」下摘出，成了顶层机组、排在顶层末尾；它的 ask 今后去它自己的人类群。接着做手上的事。
+
+## r.released
+「{child}」已从「{from}」下摘出；它还挂在别的上级下面。接着做手上的事。
+
+## r.released_to
+「{child}」已从「{from}」下摘出，改挂到「{to}」名下、排在末尾。接着做手上的事。

@@ -181,6 +181,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "set_crew_status" => crews::set_crew_status(&cx, args).await,
         "delegation_policy" => crews::delegation_policy(&cx, args).await,
         "change_workdir" => crews::change_workdir(&cx, args).await,
+        "crew_structure" => crews::crew_structure(&cx, args).await,
         _ => cx.err("r.no_handler", &[("name", tool)]),
     }
 }

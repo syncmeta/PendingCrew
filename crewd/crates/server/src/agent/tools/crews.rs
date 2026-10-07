@@ -1,20 +1,25 @@
 //! Captain tools, the crew itself (spec §22.3; T15 supplement, T15b): `rename_crew`,
-//! `set_crew_status`, `delegation_policy`, `change_workdir`.
+//! `set_crew_status`, `delegation_policy`, `change_workdir`, and its place in the tree,
+//! `crew_structure` (S69: create_child / create_parent / adopt / adopt_parent / release; removing,
+//! restoring, purging and ordering crews are the human's).
 //!
 //! The target crew is the `crew` argument (number or id), else my own; acting on it needs
 //! `acts_as_captain_of` (collab's rule, C2: the management captain counts as the captain of every
 //! crew). `change_workdir` also reaches my crew's descendants. collab decides everything else
-//! (an empty title, a removed crew …) and its refusals reach the agent with their codes (C1).
+//! (an empty title, a removed crew, cycles, the management crew outside the tree …) and its
+//! refusals reach the agent with their codes (C1). New and adopted crews go at the end of their
+//! siblings (collab appends); nothing here reorders existing siblings (PM: no auto-sort).
 use std::path::Path;
 
 use crewd_proto::agent::CallResult;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::captain::{not_your_crew, require_captain_of, target_crew};
+use super::captain::{not_your_crew, require_captain_of, target_crew, trimmed};
 use super::channels::{Step, done};
-use super::{Ctx, parse_args};
-use crate::agent::port::{self, CrewPatch, CrewView};
+use super::{Ctx, crew_arg, parse_args};
+use crate::agent::Role;
+use crate::agent::port::{self, CrewPatch, CrewView, NewCrewReq, PortError, StartReq};
 
 /// Longest crew status line, in characters (`set_crew_status.text`).
 const STATUS_MAX_CHARS: usize = 200;
@@ -226,9 +231,367 @@ async fn change_workdir_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
     Ok(cx.ok("r.workdir_done", &vars))
 }
 
+/// `crew_structure.action` (S69). Removing, restoring, purging and ordering crews are the human's:
+/// they are not actions here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Action {
+    CreateChild,
+    CreateParent,
+    Adopt,
+    AdoptParent,
+    Release,
+}
+
+impl Action {
+    fn name(self) -> &'static str {
+        match self {
+            Self::CreateChild => "create_child",
+            Self::CreateParent => "create_parent",
+            Self::Adopt => "adopt",
+            Self::AdoptParent => "adopt_parent",
+            Self::Release => "release",
+        }
+    }
+
+    /// (required, optional) arguments besides `action` and `crew`.
+    fn shape(self) -> (&'static [&'static str], &'static [&'static str]) {
+        match self {
+            Self::CreateChild => (&["brief"], &["title", "runner"]),
+            Self::CreateParent => (&[], &["title"]),
+            Self::Adopt | Self::AdoptParent => (&["target"], &[]),
+            Self::Release => (&["target"], &["to"]),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructureArgs {
+    action: Action,
+    crew: Option<String>,
+    target: Option<String>,
+    to: Option<String>,
+    title: Option<String>,
+    brief: Option<String>,
+    runner: Option<String>,
+}
+
+pub async fn crew_structure(cx: &Ctx<'_>, v: Value) -> CallResult {
+    done(crew_structure_(cx, v).await)
+}
+
+/// What a new crew's captain is started with.
+struct NewCaptain {
+    brief: String,
+    runner: Option<String>,
+}
+
+/// A crew's number as the receipts write it (`post(to: "N")`); every crew created here has one.
+fn number(c: &CrewView) -> String {
+    c.number.map(|n| n.to_string()).unwrap_or_default()
+}
+
+async fn crew_structure_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
+    let a: StructureArgs = parse_args(cx, v)?;
+    let given = [
+        ("target", &a.target),
+        ("to", &a.to),
+        ("title", &a.title),
+        ("brief", &a.brief),
+        ("runner", &a.runner),
+    ];
+    let (required, optional) = a.action.shape();
+    let has = |n: &str| {
+        given
+            .iter()
+            .any(|(k, v)| *k == n && v.as_deref().is_some_and(|s| !s.trim().is_empty()))
+    };
+    let stray = given
+        .iter()
+        .any(|(k, v)| v.is_some() && !required.contains(k) && !optional.contains(k));
+    if stray || !required.iter().all(|r| has(r)) {
+        let params = required
+            .iter()
+            .map(|r| r.to_string())
+            .chain(optional.iter().map(|o| format!("{o}?")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(cx.err(
+            "r.structure_args",
+            &[("action", a.action.name()), ("params", &params)],
+        ));
+    }
+    let crew = crew_in_reach(cx, a.crew.as_deref()).await?;
+    match a.action {
+        Action::CreateChild => {
+            let brief = trimmed(a.brief).unwrap_or_default();
+            create_child(
+                cx,
+                &crew,
+                trimmed(a.title),
+                NewCaptain {
+                    brief,
+                    runner: trimmed(a.runner),
+                },
+            )
+            .await
+        }
+        Action::CreateParent => create_parent(cx, &crew, trimmed(a.title)).await,
+        Action::Adopt => {
+            let target = crew_arg(cx, a.target.as_deref().unwrap_or_default()).await?;
+            adopt(cx, &target, &crew).await
+        }
+        Action::AdoptParent => {
+            let target = crew_arg(cx, a.target.as_deref().unwrap_or_default()).await?;
+            adopt(cx, &crew, &target).await
+        }
+        Action::Release => {
+            let target = crew_arg(cx, a.target.as_deref().unwrap_or_default()).await?;
+            let to = match trimmed(a.to) {
+                Some(t) => Some(release_destination(cx, &crew, &t).await?),
+                None => None,
+            };
+            release(cx, &crew, &target, to.as_ref()).await
+        }
+    }
+}
+
+/// Start the captain of a crew just created (it has none yet). The title is collab's rule.
+async fn start_captain(
+    cx: &Ctx<'_>,
+    crew: &CrewView,
+    c: NewCaptain,
+) -> Result<(String, String), PortError> {
+    let wanted = cx.r("r.default_captain_title", &[]);
+    let title = port::resolve_title(Some(&wanted), Some(&c.brief))?;
+    let id = port::start_session(
+        cx.st,
+        StartReq {
+            crew_id: crew.id.clone(),
+            role: Role::Captain,
+            executor: c.runner,
+            brief: c.brief,
+            title: Some(title.clone()),
+            model: None,
+            effort: None,
+            // A captain works in its crew's shared directory.
+            isolation: false,
+        },
+    )
+    .await?;
+    Ok((cx.name(&title), id))
+}
+
+/// A child crew under `parent`, at the end of its children (collab appends; nothing is reordered,
+/// S69). The brief goes into the new lobby first (System), so the human sees why it exists even
+/// if its captain does not start (S81: then the crew stays and the result says not to create it
+/// again).
+async fn create_child(
+    cx: &Ctx<'_>,
+    parent: &CrewView,
+    title: Option<String>,
+    captain: NewCaptain,
+) -> Step<CallResult> {
+    let parent_name = cx.name(&parent.title);
+    let title = title.unwrap_or_else(|| cx.r("r.default_child_title", &[("parent", &parent_name)]));
+    let notice = cx.r(
+        "r.child_brief_notice",
+        &[("by", &cx.name(&cx.me.label)), ("brief", &captain.brief)],
+    );
+    let child = port::create_crew(
+        cx.st,
+        NewCrewReq {
+            title,
+            working_directory: parent.working_directory.clone().unwrap_or_default(),
+            parent: Some(parent.id.clone()),
+            child: None,
+            notice: Some(notice),
+        },
+    )
+    .await
+    .map_err(|e| cx.fail(e))?;
+    let name = cx.name(&child.title);
+    let n = number(&child);
+    match start_captain(cx, &child, captain).await {
+        Ok((captain, id)) => Ok(cx.ok(
+            "r.child_created",
+            &[
+                ("crew", &name),
+                ("number", &n),
+                ("parent", &parent_name),
+                ("captain", &captain),
+                ("id", &id),
+            ],
+        )),
+        Err(e) => Err(cx.err(
+            "r.child_created_no_captain",
+            &[("crew", &name), ("number", &n), ("detail", &cx.detail(e))],
+        )),
+    }
+}
+
+/// `r.no_longer_top`: `crew` was top-level and is not any more (its human channel is archived and
+/// its asks go to its new home's human channel, N1).
+async fn no_longer_top(cx: &Ctx<'_>, crew: &CrewView) -> Step<String> {
+    let home = port::home_of(cx.st, &crew.id)
+        .await
+        .map_err(|e| cx.fail(e))?;
+    let home = port::crew(cx.st, &home)
+        .await
+        .map_err(|e| cx.fail(e))?
+        .map(|c| cx.name(&c.title))
+        .unwrap_or_default();
+    Ok(cx.r(
+        "r.no_longer_top",
+        &[("crew", &cx.name(&crew.title)), ("home", &home)],
+    ))
+}
+
+fn was_top(c: &CrewView) -> bool {
+    c.parent_ids.is_empty() && !c.management
+}
+
+/// A new top-level crew (at the end of the top level) with `child` under it, in one transaction.
+async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) -> Step<CallResult> {
+    let child_name = cx.name(&child.title);
+    let title = title.unwrap_or_else(|| cx.r("r.default_parent_title", &[("child", &child_name)]));
+    let notice = cx.r(
+        "r.parent_notice",
+        &[("by", &cx.name(&cx.me.label)), ("child", &child_name)],
+    );
+    let parent = port::create_crew(
+        cx.st,
+        NewCrewReq {
+            title,
+            working_directory: child.working_directory.clone().unwrap_or_default(),
+            parent: None,
+            child: Some(child.id.clone()),
+            notice: Some(notice),
+        },
+    )
+    .await
+    .map_err(|e| cx.fail(e))?;
+    let warning = if was_top(child) {
+        Some(no_longer_top(cx, child).await?)
+    } else {
+        None
+    };
+    let name = cx.name(&parent.title);
+    let n = number(&parent);
+    let brief = cx.r("r.parent_brief", &[("child", &child_name)]);
+    let started = start_captain(
+        cx,
+        &parent,
+        NewCaptain {
+            brief,
+            runner: None,
+        },
+    )
+    .await;
+    let mut out = match &started {
+        Ok((captain, id)) => cx.r(
+            "r.parent_created",
+            &[
+                ("crew", &name),
+                ("number", &n),
+                ("child", &child_name),
+                ("captain", captain),
+                ("id", id),
+            ],
+        ),
+        Err(e) => cx.r(
+            "r.parent_created_no_captain",
+            &[
+                ("crew", &name),
+                ("number", &n),
+                ("child", &child_name),
+                ("detail", &cx.detail(e.clone())),
+            ],
+        ),
+    };
+    if let Some(w) = warning {
+        out.push('\n');
+        out.push_str(&w);
+    }
+    Ok(CallResult {
+        text: out,
+        is_error: started.is_err(),
+    })
+}
+
+/// `child` goes under `parent` (at the end of its children). collab refuses cycles, the
+/// management crew and removed crews.
+async fn adopt(cx: &Ctx<'_>, child: &CrewView, parent: &CrewView) -> Step<CallResult> {
+    let (child_name, parent_name) = (cx.name(&child.title), cx.name(&parent.title));
+    let already = child.parent_ids.contains(&parent.id);
+    port::attach_parent(cx.st, cx.me, &child.id, &parent.id)
+        .await
+        .map_err(|e| cx.fail(e))?;
+    if already {
+        return Ok(cx.ok(
+            "r.already_child",
+            &[("child", &child_name), ("parent", &parent_name)],
+        ));
+    }
+    let mut out = cx.r(
+        "r.adopted",
+        &[("child", &child_name), ("parent", &parent_name)],
+    );
+    if was_top(child) {
+        out.push('\n');
+        out.push_str(&no_longer_top(cx, child).await?);
+    }
+    Ok(CallResult::ok(out))
+}
+
+/// Where a released child may go: another direct child of `crew`, or a crew I act as the captain
+/// of (collab, C2).
+async fn release_destination(cx: &Ctx<'_>, crew: &CrewView, arg: &str) -> Step<CrewView> {
+    let to = crew_arg(cx, arg).await?;
+    if crew.child_ids.contains(&to.id) {
+        return Ok(to);
+    }
+    require_captain_of(cx, &to).await?;
+    Ok(to)
+}
+
+/// Detach `target` from `crew`, optionally under `to`. A crew whose last parent is gone becomes
+/// top-level, at the end. collab refuses one that is not a direct child.
+async fn release(
+    cx: &Ctx<'_>,
+    crew: &CrewView,
+    target: &CrewView,
+    to: Option<&CrewView>,
+) -> Step<CallResult> {
+    port::detach_parent(cx.st, cx.me, &crew.id, &target.id, to.map(|t| t.id.clone()))
+        .await
+        .map_err(|e| cx.fail(e))?;
+    let (name, from) = (cx.name(&target.title), cx.name(&crew.title));
+    if let Some(to) = to {
+        return Ok(cx.ok(
+            "r.released_to",
+            &[
+                ("child", &name),
+                ("from", &from),
+                ("to", &cx.name(&to.title)),
+            ],
+        ));
+    }
+    let now = port::crew(cx.st, &target.id)
+        .await
+        .map_err(|e| cx.fail(e))?;
+    let top = now.is_some_and(|c| c.parent_ids.is_empty());
+    Ok(cx.ok(
+        if top { "r.released_top" } else { "r.released" },
+        &[("child", &name), ("from", &from)],
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use crewd_collab::refusal::{Code, Refusal};
+    use crewd_proto::SenderKind;
     use serde_json::json;
 
     use crate::agent::Role;
@@ -236,6 +599,7 @@ mod tests {
     use crate::agent::testkit::Fixture;
     use crate::agent::text::{self, Locale};
     use crate::agent::tools::call;
+    use crate::control::{ControlError, FakeCall, FakeMethod, StartRequest};
 
     async fn run(
         f: &Fixture,
@@ -581,5 +945,591 @@ mod tests {
         )
         .await;
         not_yours(&f, &r, &parent).await;
+    }
+
+    fn calls_of(f: &Fixture, prefix: &str) -> Vec<String> {
+        f.control_calls()
+            .into_iter()
+            .filter(|c| c.starts_with(prefix))
+            .collect()
+    }
+
+    /// The fake's next session id (`fake-<number of calls so far>`).
+    fn next_fake_id(f: &Fixture) -> String {
+        format!("fake-{}", f.control_calls().len())
+    }
+
+    /// The Start call of a new crew's captain, as the fake records it.
+    fn captain_start(crew: &str, brief: &str, executor: &str) -> String {
+        format!(
+            "{:?}",
+            FakeCall::Start(StartRequest {
+                crew_id: crew.into(),
+                role: Role::Captain,
+                executor: executor.into(),
+                brief: brief.into(),
+                title: Some("机长".into()),
+                model: None,
+                effort: None,
+                isolation: false,
+            })
+        )
+    }
+
+    async fn last_lobby_message(f: &Fixture, crew: &str) -> crewd_proto::Message {
+        let lobby = port::lobby_of(&f.state, crew).await.unwrap().id;
+        port::messages_raw(&f.state, &lobby, None, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+    }
+
+    async fn top_level(f: &Fixture) -> Vec<String> {
+        f.state
+            .db
+            .call(|s| crewd_collab::crews::top_level(s.conn()))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn crew_count(f: &Fixture) -> usize {
+        f.state
+            .db
+            .call(|s| crewd_collab::crews::list(s.conn(), true))
+            .await
+            .unwrap()
+            .unwrap()
+            .len()
+    }
+
+    fn z(key: &str, vars: &[(&str, &str)]) -> String {
+        text::r(Locale::Zh, key, vars)
+    }
+
+    #[tokio::test]
+    async fn crew_structure_create_child_appends_and_starts_captain() {
+        let f = Fixture::new().await;
+        let a = f.add_crew("示例甲", Some(&f.crew)).await;
+        let b = f.add_crew("示例乙", Some(&f.crew)).await;
+        let id = next_fake_id(&f);
+        let brief = "做语音重连：断线 3 秒内自动恢复";
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "create_child", "brief": brief}),
+        )
+        .await;
+        let kids = crew(&f, &f.crew).await.child_ids;
+        assert_eq!(
+            kids[..2],
+            [a.clone(), b.clone()],
+            "siblings keep their order"
+        );
+        assert_eq!(kids.len(), 3);
+        let new = crew(&f, &kids[2]).await;
+        let n = new.number.unwrap().to_string();
+        says(
+            &r,
+            false,
+            "r.child_created",
+            &[
+                ("crew", "示例机组·子机组"),
+                ("number", &n),
+                ("parent", "示例机组"),
+                ("captain", "机长"),
+                ("id", &id),
+            ],
+        );
+        assert_eq!(new.title, "示例机组·子机组", "the md template");
+        assert_eq!(
+            new.working_directory,
+            crew(&f, &f.crew).await.working_directory,
+            "inherited"
+        );
+        assert_eq!(
+            calls_of(&f, "Start("),
+            [captain_start(&new.id, brief, "claude")]
+        );
+        let m = last_lobby_message(&f, &new.id).await;
+        assert_eq!(
+            m.text,
+            z(
+                "r.child_brief_notice",
+                &[("by", "示例机长"), ("brief", brief)]
+            )
+        );
+        assert_eq!(m.sender_kind, SenderKind::System);
+        // With a title and a runner; the management captain under another crew.
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
+        let an = number_of(&f, &a).await;
+        let id = next_fake_id(&f);
+        let r = run(
+            &f,
+            "s-boss",
+            "crew_structure",
+            json!({"action": "create_child", "crew": an, "brief": "示例任务", "title": "语音", "runner": "codex"}),
+        )
+        .await;
+        let kid = crew(&f, &a).await.child_ids.pop().unwrap();
+        let n = number_of(&f, &kid).await;
+        says(
+            &r,
+            false,
+            "r.child_created",
+            &[
+                ("crew", "语音"),
+                ("number", &n),
+                ("parent", "示例甲"),
+                ("captain", "机长"),
+                ("id", &id),
+            ],
+        );
+        assert_eq!(
+            calls_of(&f, "Start(").pop().unwrap(),
+            captain_start(&kid, "示例任务", "codex")
+        );
+        // The top level is untouched by children.
+        assert_eq!(top_level(&f).await, vec![f.crew.clone()]);
+    }
+
+    /// S81 / Q3: the crew stays; isError; the text says not to create it again.
+    #[tokio::test]
+    async fn create_child_without_captain_says_so() {
+        let f = Fixture::new().await;
+        f.fail_method(
+            FakeMethod::Start,
+            ControlError::Failed("示例：额度用完".into()),
+        );
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "create_child", "brief": "示例任务", "title": "语音"}),
+        )
+        .await;
+        let kids = crew(&f, &f.crew).await.child_ids;
+        assert_eq!(kids.len(), 1, "the crew is kept");
+        let n = number_of(&f, &kids[0]).await;
+        says(
+            &r,
+            true,
+            "r.child_created_no_captain",
+            &[
+                ("crew", "语音"),
+                ("number", &n),
+                ("detail", "示例：额度用完"),
+            ],
+        );
+        assert_eq!(calls_of(&f, "Start(").len(), 1);
+        // The human still sees why it exists.
+        let m = last_lobby_message(&f, &kids[0]).await;
+        assert_eq!(
+            m.text,
+            z(
+                "r.child_brief_notice",
+                &[("by", "示例机长"), ("brief", "示例任务")]
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn create_parent_warns_home_changes() {
+        let f = Fixture::new().await;
+        let other = f.add_crew("示例他组", None).await;
+        let human = port::home_human_channel(&f.state, &f.crew).await.unwrap();
+        assert!(!human.archived);
+        let id = next_fake_id(&f);
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "create_parent", "title": "示例总部"}),
+        )
+        .await;
+        let parents = crew(&f, &f.crew).await.parent_ids;
+        assert_eq!(parents.len(), 1);
+        let parent = parents[0].clone();
+        let n = number_of(&f, &parent).await;
+        let expected = [
+            z(
+                "r.parent_created",
+                &[
+                    ("crew", "示例总部"),
+                    ("number", &n),
+                    ("child", "示例机组"),
+                    ("captain", "机长"),
+                    ("id", &id),
+                ],
+            ),
+            z(
+                "r.no_longer_top",
+                &[("crew", "示例机组"), ("home", "示例总部")],
+            ),
+        ]
+        .join("\n");
+        assert_eq!(r.text, expected);
+        assert!(!r.is_error);
+        // The new crew is top-level at the end; mine left the top level; its human channel is
+        // archived; the new captain was started with the md brief.
+        assert_eq!(top_level(&f).await, [other.clone(), parent.clone()]);
+        let human = port::channel(&f.state, &human.id).await.unwrap().unwrap();
+        assert!(human.archived);
+        let brief = z("r.parent_brief", &[("child", "示例机组")]);
+        assert_eq!(
+            calls_of(&f, "Start("),
+            [captain_start(&parent, &brief, "claude")]
+        );
+        assert_eq!(
+            last_lobby_message(&f, &parent).await.text,
+            z(
+                "r.parent_notice",
+                &[("by", "示例机长"), ("child", "示例机组")]
+            )
+        );
+        // A crew that already has a parent: no warning; a captain that does not start: isError,
+        // both crews kept.
+        f.fail_method(
+            FakeMethod::Start,
+            ControlError::Failed("示例：起不来".into()),
+        );
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "create_parent"}),
+        )
+        .await;
+        let parents = crew(&f, &f.crew).await.parent_ids;
+        assert_eq!(parents.len(), 2);
+        let second = parents.into_iter().find(|p| *p != parent).unwrap();
+        let n = number_of(&f, &second).await;
+        says(
+            &r,
+            true,
+            "r.parent_created_no_captain",
+            &[
+                ("crew", "示例机组·上级"),
+                ("number", &n),
+                ("child", "示例机组"),
+                ("detail", "示例：起不来"),
+            ],
+        );
+        assert_eq!(top_level(&f).await, [other, parent, second]);
+    }
+
+    #[tokio::test]
+    async fn adopt_and_release_keep_order() {
+        let f = Fixture::new().await;
+        let a = f.add_crew("示例甲", Some(&f.crew)).await;
+        let b = f.add_crew("示例乙", Some(&f.crew)).await;
+        let t1 = f.add_crew("示例平级", None).await;
+        let t2 = f.add_crew("示例另一组", None).await;
+        assert_eq!(
+            top_level(&f).await,
+            [f.crew.clone(), t1.clone(), t2.clone()]
+        );
+        let n1 = number_of(&f, &t1).await;
+        // adopt: appended to my children; it was top-level, so the warning names its new home.
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "adopt", "target": n1}),
+        )
+        .await;
+        assert_eq!(
+            r.text,
+            [
+                z(
+                    "r.adopted",
+                    &[("child", "示例平级"), ("parent", "示例机组")]
+                ),
+                z(
+                    "r.no_longer_top",
+                    &[("crew", "示例平级"), ("home", "示例机组")]
+                ),
+            ]
+            .join("\n")
+        );
+        assert!(!r.is_error);
+        assert_eq!(
+            crew(&f, &f.crew).await.child_ids,
+            [a.clone(), b.clone(), t1.clone()]
+        );
+        assert_eq!(top_level(&f).await, [f.crew.clone(), t2.clone()]);
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "adopt", "target": t1}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.already_child",
+            &[("child", "示例平级"), ("parent", "示例机组")],
+        );
+        // release without `to`, last parent: top-level, at the end.
+        let an = number_of(&f, &a).await;
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "release", "target": an}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.released_top",
+            &[("child", "示例甲"), ("from", "示例机组")],
+        );
+        assert_eq!(top_level(&f).await, [f.crew.clone(), t2.clone(), a.clone()]);
+        assert_eq!(crew(&f, &f.crew).await.child_ids, [b.clone(), t1.clone()]);
+        // release `to` another child of mine: at the end of its children.
+        let bn = number_of(&f, &b).await;
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "release", "target": n1, "to": bn}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.released_to",
+            &[
+                ("child", "示例平级"),
+                ("from", "示例机组"),
+                ("to", "示例乙"),
+            ],
+        );
+        assert_eq!(crew(&f, &f.crew).await.child_ids, vec![b.clone()]);
+        assert_eq!(crew(&f, &b).await.child_ids, vec![t1.clone()]);
+        // `to` a crew that is neither my child nor mine to act on: refused, nothing moved.
+        let d = f.add_crew("示例双亲", Some(&f.crew)).await;
+        let n2 = number_of(&f, &t2).await;
+        let dn = number_of(&f, &d).await;
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "release", "target": dn, "to": n2}),
+        )
+        .await;
+        not_yours(&f, &r, &t2).await;
+        assert_eq!(crew(&f, &f.crew).await.child_ids, [b.clone(), d.clone()]);
+        // A crew with another parent stays under it.
+        f.rpc("crew.adopt", json!({"crewId": d, "parentId": a}))
+            .await;
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "release", "target": dn}),
+        )
+        .await;
+        says(
+            &r,
+            false,
+            "r.released",
+            &[("child", "示例双亲"), ("from", "示例机组")],
+        );
+        assert_eq!(crew(&f, &d).await.parent_ids, vec![a.clone()]);
+        // adopt_parent: my crew goes under another top-level crew, at the end of its children.
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "adopt_parent", "target": n2}),
+        )
+        .await;
+        assert_eq!(
+            r.text,
+            [
+                z(
+                    "r.adopted",
+                    &[("child", "示例机组"), ("parent", "示例另一组")]
+                ),
+                z(
+                    "r.no_longer_top",
+                    &[("crew", "示例机组"), ("home", "示例另一组")]
+                ),
+            ]
+            .join("\n")
+        );
+        assert_eq!(crew(&f, &t2).await.child_ids, vec![f.crew.clone()]);
+        assert_eq!(top_level(&f).await, [t2, a]);
+    }
+
+    #[tokio::test]
+    async fn structure_refusals_pass_through() {
+        let f = Fixture::new().await;
+        let child = f.add_crew("示例子机组", Some(&f.crew)).await;
+        let stranger = f.add_crew("示例陌生", None).await;
+        let call =
+            |action: &'static str, target: String| json!({"action": action, "target": target});
+        // The management crew is outside the tree (number "0").
+        let r = run(&f, &f.captain, "crew_structure", call("adopt", "0".into())).await;
+        refused(&r, Refusal::new(Code::CrewManagementNotInTree));
+        // A cycle: my child as my parent.
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            call("adopt_parent", child.clone()),
+        )
+        .await;
+        refused(
+            &r,
+            Refusal::new(Code::CrewWouldCycle)
+                .arg("parent", child.as_str())
+                .arg("crew", f.crew.as_str()),
+        );
+        // Myself.
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            call("adopt", f.crew.clone()),
+        )
+        .await;
+        refused(&r, Refusal::new(Code::CrewCannotParentSelf));
+        // Not a direct child.
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            call("release", stranger.clone()),
+        )
+        .await;
+        refused(
+            &r,
+            Refusal::new(Code::CrewNotDirectChild)
+                .arg("crew", stranger.as_str())
+                .arg("from", f.crew.as_str()),
+        );
+        // A removed crew, by number.
+        let gone = f.add_crew("示例已移除", None).await;
+        let gn = number_of(&f, &gone).await;
+        f.rpc("crew.remove", json!({"crewId": gone})).await;
+        let r = run(&f, &f.captain, "crew_structure", call("adopt", gn.clone())).await;
+        refused(
+            &r,
+            Refusal::new(Code::DirectoryCrewRemoved).arg("number", gn.as_str()),
+        );
+        // Another crew as `crew`: not mine.
+        let sn = number_of(&f, &stranger).await;
+        let r = run(
+            &f,
+            &f.captain,
+            "crew_structure",
+            json!({"action": "create_child", "crew": sn, "brief": "x"}),
+        )
+        .await;
+        not_yours(&f, &r, &stranger).await;
+        // The management captain on its own crew: collab refuses, nothing is created (one
+        // transaction), nothing is started.
+        let mgmt = management_crew(&f).await;
+        f.add_session(&mgmt, "s-boss", Role::Captain, "示例总机长")
+            .await;
+        let before = crew_count(&f).await;
+        for args in [
+            json!({"action": "create_child", "brief": "x"}),
+            json!({"action": "create_parent"}),
+        ] {
+            let r = run(&f, "s-boss", "crew_structure", args).await;
+            refused(&r, Refusal::new(Code::CrewManagementNotInTree));
+        }
+        assert_eq!(crew_count(&f).await, before);
+        assert!(calls_of(&f, "Start(").is_empty());
+        // ... while it may act on any other crew.
+        let r = run(
+            &f,
+            "s-boss",
+            "crew_structure",
+            json!({"action": "adopt", "crew": sn, "target": child}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        assert_eq!(crew(&f, &child).await.parent_ids.len(), 2);
+    }
+
+    /// S69 / PM: no remove, restore, purge or reorder; each action takes its own arguments only.
+    #[tokio::test]
+    async fn structure_has_no_remove_or_purge() {
+        let f = Fixture::new().await;
+        let schema = crate::agent::catalog::input_schema(
+            crate::agent::catalog::find("crew_structure").unwrap(),
+            Locale::Zh,
+        );
+        assert_eq!(
+            schema["properties"]["action"]["enum"],
+            json!([
+                "create_child",
+                "create_parent",
+                "adopt",
+                "adopt_parent",
+                "release"
+            ])
+        );
+        for name in crate::agent::catalog::STRUCTURE_ACTIONS {
+            let a: super::Action = serde_json::from_value(json!(name)).unwrap();
+            assert_eq!(a.name(), *name);
+        }
+        for action in ["remove", "restore", "purge", "reorder", "archive"] {
+            let r = run(
+                &f,
+                &f.captain,
+                "crew_structure",
+                json!({"action": action, "target": f.crew}),
+            )
+            .await;
+            let detail = format!(
+                "unknown variant `{action}`, expected one of `create_child`, `create_parent`, `adopt`, `adopt_parent`, `release`"
+            );
+            says(&r, true, "r.bad_args", &[("detail", &detail)]);
+        }
+        let before = crew_count(&f).await;
+        for (args, action, params) in [
+            (
+                json!({"action": "create_child"}),
+                "create_child",
+                "brief, title?, runner?",
+            ),
+            (
+                json!({"action": "create_child", "brief": " "}),
+                "create_child",
+                "brief, title?, runner?",
+            ),
+            (
+                json!({"action": "adopt", "target": "1", "brief": "x"}),
+                "adopt",
+                "target",
+            ),
+            (
+                json!({"action": "create_parent", "target": "1"}),
+                "create_parent",
+                "title?",
+            ),
+            (json!({"action": "release"}), "release", "target, to?"),
+        ] {
+            let r = run(&f, &f.captain, "crew_structure", args).await;
+            says(
+                &r,
+                true,
+                "r.structure_args",
+                &[("action", action), ("params", params)],
+            );
+        }
+        assert_eq!(crew_count(&f).await, before);
+        assert!(f.control_calls().is_empty());
     }
 }
