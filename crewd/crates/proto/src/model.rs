@@ -45,8 +45,9 @@ pub struct Crew {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// 此刻的机长（裁定 8）。
     pub captain_session_id: Option<String>,
-    /// 顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。
-    /// 子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）；总机组不参与（0）。
+    /// 只表示顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。
+    /// `parentIds` 非空时这个值没有意义（可能是变成子机组之前留下的旧值），客户端不要用它排序：
+    /// 子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。总机组恒为 0，单独列出。
     #[serde(default)]
     pub position: i64,
     /// 归档时刻（删机组 = 归档，N1 裁定 13）；没归档时不出现。

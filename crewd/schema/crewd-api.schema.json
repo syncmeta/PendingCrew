@@ -577,7 +577,7 @@
         },
         "position": {
           "default": 0,
-          "description": "顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。\n子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）；总机组不参与（0）。",
+          "description": "只表示顶层机组之间的侧栏次序（人排的；`crew.reorder` 不带 parentId 时改它，新的顶层机组排在末尾）。\n`parentIds` 非空时这个值没有意义（可能是变成子机组之前留下的旧值），客户端不要用它排序：\n子机组在某个父下的次序看父的 `childIds`（多父机组在每个父下各有自己的次序）。总机组恒为 0，单独列出。",
           "format": "int64",
           "type": "integer"
         },
