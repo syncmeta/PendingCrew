@@ -195,10 +195,6 @@ params!(AskWithdrawParams {
     ask: String,
     reason: String
 });
-params!(ApprovalDecideParams {
-    id: String,
-    allow: bool
-});
 params!(RestartAnswerParams {
     id: i64,
     answer: RestartAnswer

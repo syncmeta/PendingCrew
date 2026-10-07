@@ -69,7 +69,6 @@ pub fn render_file(l: Locale) -> &'static PromptFile {
 
 /// 节名 → 允许出现的占位符。两种语言都必须有这些节，且只用这些占位符。
 pub const REQUIRED: &[(&str, &[&str])] = &[
-    ("notice.approval", &["session", "tool", "summary"]),
     ("notice.restart", &["count"]),
     ("notice.restart.item", &["name"]),
     ("sender.human", &[]),
@@ -91,8 +90,6 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("wake.timer", &[]),
     ("wake.ask_answer", &["ask", "question", "answer"]),
     ("wake.ask_defaulted", &["ask", "question", "answer"]),
-    ("wake.approval_allowed", &["tool", "summary"]),
-    ("wake.approval_denied", &["tool", "summary"]),
     ("wake.resume_note", &["note"]),
     ("wake.restart", &[]),
     ("wake.system", &[]),
@@ -191,6 +188,24 @@ mod tests {
             render_file(Locale::En).section_names(),
             "zh / en 节名集合一致"
         );
+    }
+
+    /// 不做审批了（人 2026-10-07，controller N1-R8）：渲染文字（含文件头注释）与节名表里不剩任何审批措辞；
+    /// 权限归 claude / codex 自己的权限框。
+    #[test]
+    fn render_text_has_no_approval_wording() {
+        for (name, text) in [
+            ("render.zh", include_str!("../prompts/render.zh.md")),
+            ("render.en", include_str!("../prompts/render.en.md")),
+        ] {
+            let t = text.to_lowercase();
+            for word in ["approv", "审批"] {
+                assert!(!t.contains(word), "prompts/{name}.md 还提到 {word}");
+            }
+        }
+        for (section, _) in REQUIRED {
+            assert!(!section.contains("approv"), "REQUIRED 里还有 {section}");
+        }
     }
 
     #[test]

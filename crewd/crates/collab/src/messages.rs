@@ -114,12 +114,12 @@ pub fn post(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
     post_with(tx, sender, p, false)
 }
 
-/// collab 自己的公告（问、审批、重启询问）：跳过发言者成员检查，其余规则同 `post`。
+/// collab 自己的公告（问、重启询问）：跳过发言者成员检查，其余规则同 `post`。
 pub(crate) fn post_internal(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
     post_with(tx, sender, p, true)
 }
 
-/// 给人的待确认公告（问 / 审批 / 重启询问）的唯一一处（R14）：发到 `root` 的根机组人类群（懒建 / 解档，同
+/// 给人的待确认公告（问 / 重启询问）的唯一一处（R14）：发到 `root` 的根机组人类群（懒建 / 解档，同
 /// `ensure_human_channel`），@human，带保留分类 `category`。同一个 Tx：后面任何一步失败，公告一起回滚。
 pub(crate) fn announce_to_human(
     tx: &mut Tx<'_>,
@@ -148,7 +148,7 @@ pub(crate) fn announce_to_human(
 /// 正文上限（字节）。
 const MAX_BODY_BYTES: usize = 256 * 1024;
 /// 只有 collab 自己的公告（`post_internal`）能用的 `category`。
-const RESERVED_CATEGORIES: [&str; 3] = ["ask", "approval", "restart"];
+const RESERVED_CATEGORIES: [&str; 2] = ["ask", "restart"];
 
 /// 空白与零宽字符（U+200B/200C/200D/FEFF）：只含这些的正文等于空。
 fn is_blank(c: char) -> bool {
@@ -1112,7 +1112,7 @@ mod tests {
             panic!("{e:?}")
         };
         assert!(why.contains("262144"), "错误里写明上限：{why}");
-        for cat in ["ask", "approval", "restart"] {
+        for cat in ["ask", "restart"] {
             assert!(
                 matches!(
                     err(&mut s, |tx| post(
@@ -1150,6 +1150,23 @@ mod tests {
             )
         });
         assert_eq!(a.message.category.as_deref(), Some("ask"));
+    }
+
+    /// 不做审批了（人 2026-10-07）：`approval` 不再是保留分类，发言可以带它（只是一个普通标签）。
+    #[test]
+    fn approval_is_no_longer_a_reserved_category() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                NewPost {
+                    category: Some("approval".into()),
+                    ..post_text("crew-a/lobby", "普通发言")
+                },
+            )
+        });
+        assert_eq!(p.message.category.as_deref(), Some("approval"));
     }
 
     #[test]

@@ -1,8 +1,7 @@
-//! crewd 的协作层（spec §22.2）：群、成员、发消息、游标、机组 DAG、人类待确认、审批、唤醒队列。
+//! crewd 的协作层（spec §22.2）：群、成员、发消息、游标、机组 DAG、人类待确认、唤醒队列。
 //! 同步、不碰 tokio、不读时钟：每个写操作是 `fn(&mut Tx, ..) -> Result<T>`，时间是 `Tx` 里调用方给的
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
-pub mod approvals;
 pub mod asks;
 pub mod channels;
 pub mod crews;
@@ -65,9 +64,6 @@ pub enum Change {
         ask: String,
         asked_by: Option<String>,
         cleared: Vec<(String, Option<String>)>,
-    },
-    ApprovalChanged {
-        id: String,
     },
     WakeEnqueued {
         wake_id: i64,

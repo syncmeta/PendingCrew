@@ -2,8 +2,7 @@
 //! 写操作经 `AppState::collab`（同一事务 + 提交后发事件）；纯读直接在库线程上读。
 use crate::AppState;
 use crewd_collab::{
-    CollabError, Sender, approvals, asks, channels, crews, cursors, directory, messages, restart,
-    sessions,
+    CollabError, Sender, asks, channels, crews, cursors, directory, messages, restart, sessions,
 };
 use crewd_proto::*;
 use rusqlite::Connection;
@@ -321,17 +320,6 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
-        methods::APPROVAL_LIST => {
-            parse_no_params(p)?;
-            read(state, approvals::list_pending).await
-        }
-        methods::APPROVAL_DECIDE => {
-            let p: ApprovalDecideParams = parse_params(p)?;
-            write(state, move |tx| {
-                approvals::decide(tx, &p.id, p.allow, "human")
-            })
-            .await
-        }
         methods::RESTART_PENDING => {
             parse_no_params(p)?;
             read(state, restart::pending).await
@@ -369,7 +357,7 @@ mod tests {
     }
 
     /// 控制者裁定 a：与当前状态冲突（问已经答过 / 撤过、转交已在途 / 没有在途、入口已关、项已结、问还卡着活项）
-    /// = -32009，与「审批已经决过」同一个码（Mac 与 iOS 同时答同一条问，后到的要看到「已经答了」，不是「参数错」）。
+    /// = -32009（Mac 与 iOS 同时答同一条问，后到的要看到「已经答了」，不是「参数错」）。
     #[test]
     fn state_conflicts_are_conflict_not_invalid_params() {
         for r in [

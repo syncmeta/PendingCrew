@@ -68,7 +68,7 @@ fn gone<T>(r: crewd_collab::Result<T>) -> crewd_collab::Result<Option<T>> {
 }
 
 fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Event>> {
-    use crewd_collab::{approvals, asks, channels, crews, cursors, messages, restart};
+    use crewd_collab::{asks, channels, crews, cursors, messages, restart};
     Ok(match c {
         Change::MessageAppended { message_id, .. } => gone(messages::get(conn, message_id))?
             .map(|m| ev(events::MESSAGE_APPENDED, &m))
@@ -104,11 +104,6 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
         )?],
         Change::AskChanged { crew_id, ask } => gone(asks::get(conn, crew_id, ask))?
             .map(|a| ev(events::ASK_CHANGED, &a))
-            .transpose()?
-            .into_iter()
-            .collect(),
-        Change::ApprovalChanged { id } => gone(approvals::get(conn, id))?
-            .map(|a| ev(events::APPROVAL_CHANGED, &a))
             .transpose()?
             .into_iter()
             .collect(),

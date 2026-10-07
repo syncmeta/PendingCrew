@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenAsk {
     pub question: String,
-    /// 「X 分钟没回复就按 A 办」（§6；到点后照常走审批，§13 Q2）。
+    /// 「X 分钟没回复就按 A 办」（§6；到点后照常经过 runner 自己的权限确认，§13 Q2）。
     pub default: Option<AskDefault>,
     /// 回答后叫醒提问者时带上的「接着做什么」。
     pub resume_note: Option<String>,

@@ -83,7 +83,7 @@ impl Client {
     }
 }
 
-/// 合成数据：机组 a（1 号，机长 cap-a、worker w-a1）；w-a1 开了一条问、申请了一次审批；有一条重启询问。
+/// 合成数据：机组 a（1 号，机长 cap-a、worker w-a1）；w-a1 开了一条问；有一条重启询问。
 fn seed(dir: &Path) {
     use crewd_proto::{Role, Session};
     let mut s = crewd_store::Store::open(&dir.join("crewd.db")).unwrap();
@@ -131,15 +131,6 @@ fn seed(dir: &Path) {
                 ..Default::default()
             },
         )?;
-        crewd_collab::approvals::gate(
-            tx,
-            crewd_collab::approvals::NewApproval {
-                session_id: "w-a1".into(),
-                tool_name: "computer-use".into(),
-                summary: "点击设置".into(),
-                tool_use_id: None,
-            },
-        )?;
         crewd_collab::restart::open(tx, vec!["w-a1".into()])
     })
     .unwrap();
@@ -152,7 +143,7 @@ async fn hello_crews_channels_and_messages() {
     let mut c = Client::connect(dir.path()).await;
     assert_eq!(
         c.call(1, "system.hello", Value::Null).await["apiVersion"],
-        2
+        3
     );
     assert_eq!(c.call(2, "crew.list", json!({})).await[0]["id"], "a");
     let chans = c.call(3, "channel.list", json!({"crewId":"a"})).await;
@@ -256,10 +247,11 @@ async fn params_are_strict_and_errors_are_typed() {
         .await,
         -32602
     );
+    // 不做审批了（人 2026-10-07）：没有留壳的方法，旧客户端调它 = 没有这个方法。
     assert_eq!(
         c.call_err(7, "approval.decide", json!({"id":"ap-none","allow":true}))
             .await,
-        -32004
+        -32601
     );
     // 控制者裁定 b：params 是数组 = -32602（serde 本会把它按字段顺序读成结构体）。
     assert_eq!(c.call_err(11, "crew.get", json!(["a"])).await, -32602);
@@ -321,7 +313,6 @@ async fn params_are_strict_and_errors_are_typed() {
     for (i, m) in [
         "system.hello",
         "crew.list",
-        "approval.list",
         "restart.pending",
         "session.list",
         "ask.list",
@@ -374,7 +365,7 @@ async fn subscribers_receive_message_and_badge_events_in_order() {
 }
 
 #[tokio::test]
-async fn asks_approvals_and_restart_round_trip() {
+async fn asks_and_restart_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
     let mut c = Client::connect(dir.path()).await;
@@ -400,28 +391,12 @@ async fn asks_approvals_and_restart_round_trip() {
         )
         .await,
         -32009,
-        "控制者裁定 a：已经答过 = 与当前状态冲突（同审批再决），不是参数错"
+        "控制者裁定 a：已经答过 = 与当前状态冲突，不是参数错"
     );
-    let aps = c.call(5, "approval.list", Value::Null).await;
-    // C10：客户端把 ask 与 approval 合并成一张「等你拍板」清单，两边都必须带机组与创建时间。
-    assert!(
-        aps[0]["crewId"].is_string() && aps[0]["requestedAt"].is_string(),
-        "approval 带 crewId / requestedAt"
-    );
+    // C10：客户端的「等你拍板」清单要带机组与创建时间。
     assert!(
         waits[0]["ask"]["crewId"].is_string() && waits[0]["ask"]["askedAt"].is_string(),
         "ask 带 crewId / askedAt"
-    );
-    let id = aps[0]["id"].as_str().unwrap().to_string();
-    assert_eq!(
-        c.call(6, "approval.decide", json!({"id":id,"allow":true}))
-            .await["decision"],
-        "allow"
-    );
-    assert_eq!(
-        c.call_err(7, "approval.decide", json!({"id":id,"allow":false}))
-            .await,
-        -32009
     );
     let p = c.call(8, "restart.pending", Value::Null).await;
     let rid = p["id"].as_i64().unwrap();
@@ -456,8 +431,8 @@ async fn read_mark_clears_the_human_channel_badge() {
         .find(|x| x["channel"]["id"] == "a/human")
         .unwrap()
         .clone();
-    assert_eq!(human["unreadForHuman"], 3, "问、审批、重启询问各一条公告");
-    assert_eq!(human["humanMentions"], 3);
+    assert_eq!(human["unreadForHuman"], 2, "问、重启询问各一条公告");
+    assert_eq!(human["humanMentions"], 2);
     let last = c
         .call(2, "message.list", json!({"channelId":"a/human"}))
         .await;
@@ -650,7 +625,7 @@ async fn invalid_utf8_gets_parse_error_and_connection_survives() {
         other => panic!("{other:?}"),
     }
     let h = c.call(1, "system.hello", Value::Null).await;
-    assert_eq!(h["apiVersion"], 2);
+    assert_eq!(h["apiVersion"], 3);
 }
 
 // R4：以下两条测的是连接层的订阅语义（与白板无关），从 whiteboard 主题移植到 message 主题。
@@ -684,7 +659,7 @@ async fn repeated_subscribe_does_not_duplicate_events() {
     // 给可能存在的重复事件留出时间，再确认下一帧就是 hello 的响应。
     tokio::time::sleep(Duration::from_millis(100)).await;
     let h = sub.call(3, "system.hello", Value::Null).await;
-    assert_eq!(h["apiVersion"], 2);
+    assert_eq!(h["apiVersion"], 3);
 }
 
 #[tokio::test]
@@ -720,10 +695,10 @@ async fn subscribe_with_unknown_topic_is_invalid_params_and_subscribes_nothing()
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let h = sub.call(2, "system.hello", Value::Null).await;
-    assert_eq!(h["apiVersion"], 2);
+    assert_eq!(h["apiVersion"], 3);
 }
 
-/// 控制者裁定 a：再撤一次 / 撤了再答 = -32009（状态冲突），与审批再决同码。
+/// 控制者裁定 a：再撤一次 / 撤了再答 = -32009（状态冲突），与「问已经答过」同码。
 #[tokio::test]
 async fn re_withdrawing_or_answering_a_withdrawn_ask_is_a_conflict() {
     let dir = tempfile::tempdir().unwrap();
@@ -783,16 +758,16 @@ async fn events_until_hello(sub: &mut Client, id: u64) -> Vec<String> {
         .collect()
 }
 
-/// 控制者裁定 f：问、审批、重启询问、群、机组的变更各自推到自己的主题，恰好一次。
+/// 控制者裁定 f：问、重启询问、群、机组的变更各自推到自己的主题，恰好一次。
 #[tokio::test]
-async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once() {
+async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
     let mut sub = Client::connect(dir.path()).await;
     sub.call(
         1,
         "events.subscribe",
-        json!({"topics":["ask","approval","restart","channel","crew"]}),
+        json!({"topics":["ask","restart","channel","crew"]}),
     )
     .await;
     let mut c = Client::connect(dir.path()).await;
@@ -806,14 +781,6 @@ async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once()
         .await;
     assert_eq!(a["state"], "answered");
     assert_eq!(events_until_hello(&mut sub, 101).await, ["ask.changed"]);
-
-    let id = c.call(2, "approval.list", Value::Null).await[0]["id"].clone();
-    c.call(3, "approval.decide", json!({"id":id,"allow":false}))
-        .await;
-    assert_eq!(
-        events_until_hello(&mut sub, 102).await,
-        ["approval.changed"]
-    );
 
     let rid = c.call(4, "restart.pending", Value::Null).await["id"].clone();
     c.call(5, "restart.answer", json!({"id":rid,"answer":"later"}))

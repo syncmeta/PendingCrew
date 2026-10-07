@@ -272,7 +272,7 @@ fn committed_schema_matches_generated() {
 }
 
 /// 每个客户端方法都能经 `crewd rpc` 走到处理函数（不是 -32601）：能成功的就要求成功；需要 agent 先造数据的
-/// （回答问、审批、重启询问）用不存在的号，要求得到「不存在 / 规则不过」而不是「没有这个方法」。
+/// （回答问、重启询问）用不存在的号，要求得到「不存在 / 规则不过」而不是「没有这个方法」。
 #[test]
 fn rpc_drives_every_client_method() {
     let data = tempfile::tempdir().unwrap();
@@ -377,12 +377,6 @@ fn rpc_drives_every_client_method() {
         (
             "ask.withdraw",
             r#"{"crewId":"local-aaaa","ask":"H1","reason":"x"}"#,
-            Code(-32004),
-        ),
-        ("approval.list", "null", Ok),
-        (
-            "approval.decide",
-            r#"{"id":"ap-none","allow":true}"#,
             Code(-32004),
         ),
         ("restart.pending", "null", Ok),

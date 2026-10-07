@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// 2：`whiteboard.*` 删除、`Message.crewId` → `channelId`（裁定 18）。
-pub const API_VERSION: u32 = 2;
+/// v3：删审批、单根、@ 不再收窄（N1，spec §24）。
+pub const API_VERSION: u32 = 3;
 
 pub mod methods {
     pub const HELLO: &str = "system.hello";
@@ -39,8 +40,6 @@ pub mod methods {
     pub const ASK_LIST: &str = "ask.list";
     pub const ASK_ANSWER: &str = "ask.answer";
     pub const ASK_WITHDRAW: &str = "ask.withdraw";
-    pub const APPROVAL_LIST: &str = "approval.list";
-    pub const APPROVAL_DECIDE: &str = "approval.decide";
     pub const RESTART_PENDING: &str = "restart.pending";
     pub const RESTART_ANSWER: &str = "restart.answer";
     pub const DIRECTORY_LIST: &str = "directory.list";
@@ -75,8 +74,6 @@ pub mod methods {
         ASK_LIST,
         ASK_ANSWER,
         ASK_WITHDRAW,
-        APPROVAL_LIST,
-        APPROVAL_DECIDE,
         RESTART_PENDING,
         RESTART_ANSWER,
         DIRECTORY_LIST,
@@ -90,7 +87,7 @@ pub mod events {
     /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
     pub const TOPICS: &[&str] = &[
-        "message", "channel", "crew", "badge", "ask", "approval", "session", "restart", "wake",
+        "message", "channel", "crew", "badge", "ask", "session", "restart", "wake",
     ];
     pub const MESSAGE_APPENDED: &str = "message.appended";
     pub const CHANNEL_CHANGED: &str = "channel.changed";
@@ -100,7 +97,6 @@ pub mod events {
     pub const CREW_REMOVED: &str = "crew.removed";
     pub const BADGE_CHANGED: &str = "badge.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
-    pub const APPROVAL_CHANGED: &str = "approval.changed";
     /// `SessionLive`，M3c 发。
     pub const SESSION_CHANGED: &str = "session.changed";
     pub const RESTART_CHANGED: &str = "restart.changed";
@@ -130,9 +126,9 @@ impl RpcError {
     pub const INTERNAL: i32 = -32603;
     /// 规则不允许（不是参数写错：换个身份 / 时机就行）。
     pub const FORBIDDEN: i32 = -32003;
-    /// 引用的东西不存在（机组、群、消息、session、H 号、审批、重启询问……）。
+    /// 引用的东西不存在（机组、群、消息、session、H 号、重启询问……）。
     pub const NOT_FOUND: i32 = -32004;
-    /// 与当前状态冲突（已经决过的审批、还有在跑 session 的机组……）。
+    /// 与当前状态冲突（已经答过 / 撤回的问、还有在跑 session 的机组……）。
     pub const CONFLICT: i32 = -32009;
 
     pub fn new(code: i32, message: impl Into<String>) -> Self {
@@ -226,7 +222,6 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::CREW_REMOVED, sub::<CrewRef>(g)),
         (events::BADGE_CHANGED, sub::<Badge>(g)),
         (events::ASK_CHANGED, sub::<Ask>(g)),
-        (events::APPROVAL_CHANGED, sub::<Approval>(g)),
         (events::SESSION_CHANGED, sub::<SessionLive>(g)),
         (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
         (events::LAGGED, sub::<Lagged>(g)),
@@ -433,14 +428,6 @@ pub fn api_schema() -> Value {
         (
             methods::ASK_WITHDRAW,
             m(sub::<AskWithdrawParams>(g), sub::<Ask>(g)),
-        ),
-        (
-            methods::APPROVAL_LIST,
-            m(sub::<NoParams>(g), many(sub::<Approval>(g))),
-        ),
-        (
-            methods::APPROVAL_DECIDE,
-            m(sub::<ApprovalDecideParams>(g), sub::<Approval>(g)),
         ),
         (
             methods::RESTART_PENDING,
@@ -903,7 +890,18 @@ mod tests {
         let mut all: Vec<&str> = methods::ALL.to_vec();
         all.sort();
         assert_eq!(listed, all);
-        assert_eq!(s["apiVersion"], 2);
+        assert_eq!(s["apiVersion"], 3);
+    }
+
+    /// 不做审批了（人 2026-10-07）：契约里不剩任何审批方法 / 事件 / 主题 / 类型（不分大小写，`$defs` 的类型名也算）。
+    #[test]
+    fn there_is_no_approval_surface_left() {
+        let schema = serde_json::to_string(&api_schema()).unwrap().to_lowercase();
+        assert!(
+            !schema.contains("approval"),
+            "契约里不能再有任何审批方法 / 事件 / 类型"
+        );
+        assert_eq!(API_VERSION, 3);
     }
 
     #[test]
@@ -972,7 +970,6 @@ mod tests {
         let null_ok = [
             methods::HELLO,
             methods::CREW_LIST,
-            methods::APPROVAL_LIST,
             methods::RESTART_PENDING,
             methods::SESSION_LIST,
             methods::ASK_LIST,

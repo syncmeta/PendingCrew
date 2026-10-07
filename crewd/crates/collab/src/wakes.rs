@@ -88,10 +88,6 @@ pub mod source {
     pub fn ask(crew_id: &str, ask: &str) -> String {
         format!("ask:{crew_id}/{ask}")
     }
-    /// 审批有了结果（控制者裁定 C2）：kind 仍是 `ask_answer`，按 source 前缀区分。
-    pub fn approval(approval_id: &str) -> String {
-        format!("approval:{approval_id}")
-    }
     pub fn timer(token: &str) -> String {
         format!("timer:{token}")
     }

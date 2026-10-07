@@ -232,7 +232,6 @@ closed_vocab!(Desired { Running = "running", Stopped = "stopped" } default Stopp
 closed_vocab!(ChannelKind { Lobby = "lobby", Human = "human", Topic = "topic", Dm = "dm" } default Topic);
 closed_vocab!(AskStateView { Open = "open", Answered = "answered", Defaulted = "defaulted", Withdrawn = "withdrawn" } default Open);
 closed_vocab!(WaitTierView { Fresh = "fresh", Pinned = "pinned", StillWanted = "still_wanted" } default Fresh);
-closed_vocab!(Decision { Allow = "allow", Deny = "deny" } default Deny);
 closed_vocab!(DirectoryKind { Crew = "crew", Session = "session" } default Crew);
 closed_vocab!(HealthKindView {
     AuthRequired = "auth_required", UsageLimit = "usage_limit", RateLimited = "rate_limited",
@@ -375,29 +374,6 @@ pub struct HumanWait {
     pub tier: WaitTierView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_due_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Approval {
-    pub id: String,
-    pub session_id: String,
-    pub crew_id: String,
-    pub tool_name: String,
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    pub requested_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision: Option<Decision>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decided_at: Option<String>,
-    /// 只有 "human"（审批不阻塞、不超时，控制者裁定 C2）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decided_by: Option<String>,
-    /// 同意后那张一次性放行票被用掉的时刻（None + Allow = 票还在）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consumed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

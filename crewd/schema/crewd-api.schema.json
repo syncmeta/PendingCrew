@@ -1,88 +1,5 @@
 {
   "$defs": {
-    "Approval": {
-      "properties": {
-        "consumedAt": {
-          "description": "同意后那张一次性放行票被用掉的时刻（None + Allow = 票还在）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "crewId": {
-          "type": "string"
-        },
-        "decidedAt": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decidedBy": {
-          "description": "只有 \"human\"（审批不阻塞、不超时，控制者裁定 C2）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Decision"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "id": {
-          "type": "string"
-        },
-        "requestedAt": {
-          "type": "string"
-        },
-        "sessionId": {
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        },
-        "toolName": {
-          "type": "string"
-        },
-        "toolUseId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "sessionId",
-        "crewId",
-        "toolName",
-        "summary",
-        "requestedAt"
-      ],
-      "type": "object"
-    },
-    "ApprovalDecideParams": {
-      "additionalProperties": false,
-      "properties": {
-        "allow": {
-          "type": "boolean"
-        },
-        "id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "allow"
-      ],
-      "type": "object"
-    },
     "Ask": {
       "description": "一条人类待确认（H 号按机组发，§19 Q1）。",
       "properties": {
@@ -880,13 +797,6 @@
       ],
       "type": "object"
     },
-    "Decision": {
-      "enum": [
-        "allow",
-        "deny"
-      ],
-      "type": "string"
-    },
     "DecisionView": {
       "properties": {
         "numbered": {
@@ -1087,22 +997,6 @@
             },
             "event": {
               "const": "ask.changed",
-              "type": "string"
-            }
-          },
-          "required": [
-            "event",
-            "data"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "data": {
-              "$ref": "#/$defs/Approval"
-            },
-            "event": {
-              "const": "approval.changed",
               "type": "string"
             }
           },
@@ -1990,7 +1884,6 @@
               "crew",
               "badge",
               "ask",
-              "approval",
               "session",
               "restart",
               "wake"
@@ -2152,11 +2045,8 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "events": {
-    "approval.changed": {
-      "$ref": "#/$defs/Approval"
-    },
     "ask.changed": {
       "$ref": "#/$defs/Ask"
     },
@@ -2197,25 +2087,6 @@
     }
   },
   "methods": {
-    "approval.decide": {
-      "params": {
-        "$ref": "#/$defs/ApprovalDecideParams"
-      },
-      "result": {
-        "$ref": "#/$defs/Approval"
-      }
-    },
-    "approval.list": {
-      "params": {
-        "$ref": "#/$defs/NoParams"
-      },
-      "result": {
-        "items": {
-          "$ref": "#/$defs/Approval"
-        },
-        "type": "array"
-      }
-    },
     "ask.answer": {
       "params": {
         "$ref": "#/$defs/AskAnswerParams"
@@ -2497,7 +2368,6 @@
     "crew",
     "badge",
     "ask",
-    "approval",
     "session",
     "restart",
     "wake"
