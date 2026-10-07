@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 pub const SCHEMA_VERSION: i64 = 4;
 
-const V1: &str = r#"
+pub(crate) const V1: &str = r#"
 BEGIN;
 CREATE TABLE meta(
   key TEXT PRIMARY KEY,
@@ -93,7 +93,7 @@ COMMIT;
 /// v2（M2b，spec §16）：执行器类型字段。`sessions.agent_kind` 改名 `executor`、
 /// `crews.captain_agent_kind` 改名 `captain_executor`，词表改成 `claude` / `codex` /
 /// `acp:<registry-id>`；旧数据里的 `terminal` / `unknown` 原样保留。
-const V2: &str = r#"
+pub(crate) const V2: &str = r#"
 BEGIN;
 ALTER TABLE sessions RENAME COLUMN agent_kind TO executor;
 UPDATE sessions SET executor='claude' WHERE executor='claude_code';
@@ -508,7 +508,8 @@ ALTER TABLE crews ADD COLUMN archived_at TEXT;
 
 /// 一个事务：DDL → 回填 → 唯一索引 → 外键检查 → 版本号。任何一步失败整体回滚，库保持 v3；
 /// 错误一律带上「v4 迁移失败，已回滚（库保持 v3）」——crewd 拒绝启动时人看到的就是这句加原因。
-/// 只用传进来的连接（N4 的守卫在外面先做迁移前快照，再调 `migrate`）。
+/// 只用传进来的连接。由 `migrate_guarded` 的版本链调用：文件库的迁移前快照（integrity_check +
+/// `VACUUM INTO`，S20）在链的开头、任何写之前就已拍好；拍不成整条链不跑。
 fn migrate_v4(conn: &Connection) -> Result<()> {
     // 事务在 `migrate_v4_in_tx` 返回时已经落定（提交或随 drop 回滚），这里只补上下文。
     migrate_v4_in_tx(conn)
@@ -516,7 +517,7 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
 }
 
 fn migrate_v4_in_tx(conn: &Connection) -> Result<()> {
-    // N4 的迁移前快照必须在这之前（计划「次序与外部依赖」）。
+    // 迁移前快照已由 `migrate_guarded` 在链开头拍好（v3 及更早的写也都在它之后）。
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(V4_DDL)?;
     backfill_v4(&tx)?;
@@ -603,11 +604,26 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
 }
 
 pub fn migrate(conn: &Connection) -> Result<()> {
+    migrate_guarded(conn, None)
+}
+
+/// 迁移。`backups` = 文件库的备份目录：给了、且库是非空的旧版本时，先过 `integrity_check`、再
+/// `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{时间}.db`；任何一步不成就拒绝迁移，库原样不动（S20 / S25）。
+pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v > SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
             "数据库版本 {v} 比本程序支持的 {SCHEMA_VERSION} 新，拒绝打开"
         )));
+    }
+    if let Some(dir) = backups
+        && (1..SCHEMA_VERSION).contains(&v)
+        && has_data(conn)?
+    {
+        protect_before_migrating(conn, v, dir).map_err(|e| StoreError::MigrationRefused {
+            from: v,
+            source: Box::new(e),
+        })?;
     }
     if v < 1 {
         conn.execute_batch(V1)?;
@@ -622,6 +638,25 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         migrate_v4(conn)?;
     }
     Ok(())
+}
+
+/// 有没有值得保的数据（v1 起就有这两张表）。
+fn has_data(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages)",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+fn protect_before_migrating(conn: &Connection, v: i64, dir: &std::path::Path) -> Result<()> {
+    crate::backup::ensure_ok(conn, crate::backup::Check::Integrity)?;
+    let name = format!(
+        "crewd-v{v}-pre-v{SCHEMA_VERSION}-{}.db",
+        crate::backup::stamp_from_ms(crate::now_ms())
+    );
+    crate::backup::vacuum_into(conn, &dir.join(name))
 }
 
 #[cfg(test)]
@@ -689,13 +724,8 @@ mod tests {
 
     use crate::{archive, channels, messages};
 
-    /// 一个停在 v2 的库（真实用户升级前的样子）。
-    fn v2_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
-        conn.execute_batch(
-            r#"
+    /// v2 库里的合成数据（真实用户升级前的样子）。
+    const V2_SEED: &str = r#"
 INSERT INTO crews(id,title,number,builtin,created_at,updated_at,extra) VALUES
   ('crew-a','示例机组',1,0,'2026-09-01T00:00:00.000Z','2026-09-01T00:00:00.000Z','{"titleSource":"human"}'),
   ('crew-b','子机组',2,0,'2026-09-02T00:00:00.000Z','2026-09-02T00:00:00.000Z',NULL),
@@ -712,10 +742,146 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
   ('m2','crew-a','session','worker-a1','收到','[{"kind":"session","targetId":"captain-new"}]','2026-09-01T01:01:00.000Z'),
   ('m3','crew-b','pendingcrew',NULL,'系统通知','[{"kind":"human"}]','2026-09-02T01:00:00.000Z'),
   ('m4','crew-a','captain','captain-new','@人类 请看','[{"kind":"human"},{"kind":"broadcast"}]','2026-09-01T02:00:00.000Z');
-"#,
-        )
-        .unwrap();
+"#;
+
+    /// 一个停在 v2 的库。
+    fn v2_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        seed_v2(&conn);
         conn
+    }
+
+    fn seed_v2(conn: &Connection) {
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
+        conn.execute_batch(V2_SEED).unwrap();
+    }
+
+    /// 同一份 v2 数据，落在文件里（快照只对文件库做）。
+    fn v2_file(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        let _: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+            .unwrap();
+        seed_v2(&conn);
+    }
+
+    fn snapshots(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return vec![];
+        };
+        let mut v: Vec<_> = rd.map(|e| e.unwrap().path()).collect();
+        v.sort();
+        v
+    }
+
+    /// S20：非空的旧版本库，迁移前先在 backups/ 里留一份迁移前的完整快照（旧版本号、旧数据、能通过 quick_check）。
+    #[test]
+    fn migrating_a_non_empty_file_db_snapshots_it_first() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        let s = crate::Store::open(&p).unwrap();
+        assert_eq!(one::<i64>(s.conn(), "PRAGMA user_version"), SCHEMA_VERSION);
+        let snaps = snapshots(&d.path().join("backups"));
+        assert_eq!(snaps.len(), 1, "{snaps:?}");
+        let name = snaps[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!("crewd-v2-pre-v{SCHEMA_VERSION}-")) && name.ends_with(".db"),
+            "{name}"
+        );
+        let snap = Connection::open(&snaps[0]).unwrap();
+        assert_eq!(one::<i64>(&snap, "PRAGMA user_version"), 2);
+        assert_eq!(one::<i64>(&snap, "SELECT COUNT(*) FROM messages"), 4);
+        assert_eq!(one::<String>(&snap, "PRAGMA quick_check"), "ok");
+        // 已经是新版本的库再打开，不再拍。
+        drop(s);
+        drop(crate::Store::open(&p).unwrap());
+        assert_eq!(snapshots(&d.path().join("backups")).len(), 1);
+    }
+
+    /// S20：快照拍不出来（这里是 backups/ 只读）就不迁：库保持 v2、一个字节都不动。
+    #[test]
+    fn a_failed_snapshot_refuses_the_migration_and_leaves_the_db_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        let b = d.path().join("backups");
+        std::fs::create_dir(&b).unwrap();
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let r = crate::Store::open(&p);
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let err = r.err().expect("快照失败必须拒绝迁移");
+        assert!(err.to_string().contains("拒绝迁移"), "{err}");
+        let c = Connection::open(&p).unwrap();
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 2);
+        assert_eq!(one::<i64>(&c, "SELECT COUNT(*) FROM messages"), 4);
+        assert!(snapshots(&b).is_empty(), "不留半截快照");
+    }
+
+    /// S25：迁移前先过 integrity_check；没过就不迁、不快照、不删，原样留给人。
+    #[test]
+    fn a_corrupt_old_db_is_not_migrated() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(
+                "CREATE TABLE filler(id INTEGER PRIMARY KEY, t TEXT);
+                 CREATE INDEX filler_t ON filler(t);
+                 WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<5000)
+                 INSERT INTO filler(t) SELECT hex(randomblob(50)) FROM n;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .unwrap();
+        }
+        crate::testing::scribble_near_end(&p);
+        let err = crate::Store::open(&p).err().expect("坏库不能迁");
+        assert_eq!(
+            err.storage_kind(),
+            Some(crate::StorageKind::Corrupt),
+            "{err}"
+        );
+        assert!(err.to_string().contains("拒绝迁移"), "{err}");
+        assert!(p.exists(), "绝不删");
+        assert!(snapshots(&d.path().join("backups")).is_empty());
+    }
+
+    /// S25：坏处只在索引里、拷贝照样能成的库，也要被迁移前的 integrity_check 拦住（不靠快照失败顶替）。
+    #[test]
+    fn an_old_db_that_copies_fine_but_fails_integrity_check_is_not_migrated() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        v2_file(&p);
+        crate::testing::corrupt_an_index(&Connection::open(&p).unwrap());
+        let err = crate::Store::open(&p).err().expect("没过检查的库不能迁");
+        assert!(
+            matches!(&err, StoreError::MigrationRefused { source, .. }
+                if matches!(**source, StoreError::Integrity { .. })),
+            "{err:?}"
+        );
+        assert_eq!(
+            one::<i64>(&Connection::open(&p).unwrap(), "PRAGMA user_version"),
+            2
+        );
+        assert!(snapshots(&d.path().join("backups")).is_empty());
+    }
+
+    /// 空的旧库和全新的库都没有要保的东西：不拍快照，也不建 backups/。
+    #[test]
+    fn empty_or_fresh_dbs_are_not_snapshotted() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(V1).unwrap();
+            c.execute_batch(V2).unwrap();
+        }
+        drop(crate::Store::open(&p).unwrap());
+        drop(crate::Store::open(&d.path().join("fresh.db")).unwrap());
+        assert!(!d.path().join("backups").exists());
     }
 
     fn one<T: rusqlite::types::FromSql>(c: &Connection, sql: &str) -> T {

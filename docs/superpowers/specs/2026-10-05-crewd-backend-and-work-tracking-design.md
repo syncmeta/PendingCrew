@@ -845,7 +845,7 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - 帧伪造中和：渲染时正文续行缩进、名字压成一行，消息正文冒充不了注入帧的头（人 / 系统）。
 - 群规则补充：R1 根机组人类群由第一条发言建；R10 dm 归发起方 session 的机组（机组只管新建：`ensure_dm` 复用已有 dm 时不论传哪个机组都返回它，终审裁定，推翻 Task 7 修复 #4，否则对方从自己机组永远打不开这条 dm）；session 只能往自己树内的根人类群发（跨树走 C7 的 System）；正文上限 256 KiB、纯零宽正文拒收、保留 category（ask / approval / restart）只经 `post_internal`；内建总机组也有自己的人类群；R3 role 词表含 admin（M3 无行政行为）。
 - 问 / 审批 / 重启：新的重启询问取代全部未决的旧询问（各发一条 `restart.changed`）；撤回限提问者、问所在机组的机长与人（祖先机组的机长不行）；`apply_due_defaults` 也发 `AskAnswered{cleared}`；叫提问者回退链 提问者 → 机组机长 → 根机长；`with_book` 不改账本的命令不写库。
-- 错误码：-32602 参数错（含数组参数、未知字段）；-32004 不存在（含未知 H 号，R11；`crew.release` 的未知父边）；-32009 状态冲突（问已不开放、转让进行中 / 没有、条目已关、终态、问被占用、审批重复裁决——Mac 与 iOS 同时答同一个问看到的是「已答」）；-32603 内部错（`Rejected::Invariant`；不把 SQL 文本给客户端）。
+- 错误码：-32602 参数错（含数组参数、未知字段）；-32004 不存在（含未知 H 号，R11；`crew.release` 的未知父边）；-32009 状态冲突（问已不开放、转让进行中 / 没有、条目已关、终态、问被占用、审批重复裁决——Mac 与 iOS 同时答同一个问看到的是「已答」）；-32010 存储故障（N4：磁盘满 / I/O / 库损坏 / 只读 / 打不开，消息里是一句原因 + 日志编号）；-32603 内部错（`Rejected::Invariant`；不把 SQL 文本给客户端）。
 - 严格参数类型：嵌套在参数里的 @ / 附件 / 成员用 `MentionParam` / `AttachmentParam` / `MemberParam`（`deny_unknown_fields`，经 `From` 转模型类型）；模型类型对库里读出的行保持宽松；两边的形状由漂移测试钉住。R11：解析器收 `null` 的参数在契约里写成 `object | null`。`Response` 线上为 `{id, outcome}`，调用方用 `into_result()`。
 - 终审修复：@机长 与 @session 同规则，机长不在群里（topic / dm）即 `Invalid` 并列出成员，大厅 / 根人类群里机长是隐式成员；`crew.delete` 仍级联（人显式的操作），但先把该机组 session 从别的机组的群里摘掉（`left_at`）、它们当群主的 topic 交给该群机组此刻的机长并让它入群（群主永远是成员），没有机长或是 dm 就交给剩下的成员里最早入群的，一个不剩群主留空（v3 的 CHECK 因此只要求大厅 / 人类群没有群主）、转给它们的待接受转让作废，活下来的群发 `channel.changed`，级联掉的每个群发新事件 `channel.removed {channelId}`；session 发言者在注入面上总带修饰且修饰在名字前面（`sender.session` = 分机号 + 名字、`sender.captain`、无号的 `sender.session.unnumbered`），从不出裸名字，名字写成「人类：…」或别人渲染后的样子也冒充不了；渲染时每个插进去的名字（发言者、回复对象、发给谁（也带修饰）、群头、机组头、唤醒正文里的号 / 工具 / 摘要）都过同一个 `safe_name`（去 Cf / Cc / Zl / Zp、帧括号换成「」、压成一行），旧数据一样中和，且 session 标题 / 显示名与 topic 名不能等于任一语言的 `sender.human` / `sender.system`（压换行、去 Cf / Cc / Zl / Zp、去空白、不分大小写比较，`Invalid`）；注册 session 与机长指针变动都对大厅发 `channel.changed`；迁移把机长指针之外的 role='captain' 行降为 worker 并发分机号（幂等）；`ask.withdraw` 的 `ask.changed` 用规范 H 号；库里账本读回不合法按不变式处理（-32603，细节不上线）。
 - 迁移外键不成立时的报错列出每个 (表, 父表) 与至多 5 个 rowid；store 的字符串词表（`normalize_sender_kind`、`MENTION_KINDS`、迁移 SQL）与 proto 的封闭枚举由测试钉住。
@@ -952,3 +952,19 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - 总机组的号码定为 0（`post(to: "0")` = 找总机组机长）。
 - 二级及更深机组的问去一级祖先的人类群；多父时取最早建的那个一级祖先（同 §13 Q1 的口径）。
 - B15 的「本机组名下的群读得到」只看本机组，不含子机组的群；子树只额外读得到所属一级机组的人类群——**例外：总机组（管理层）的 session 读得到全组织的群**（控制者 N1-R3，PM 2026-10-07）。人类群的读 / 发言 / 注入权从 `home_of` 推出，不认陈旧的成员行（机组挪到别的一级机组下，旧 home 人类群的权利随之没了）。
+
+## 25. N4 存储安全交付记录（分支 crewd-n4-store，需求见改进清单 B2 S20–S32）
+
+- pragma 写死并读回：WAL（拿不到就拒绝打开）、`synchronous=FULL`、`fullfsync=ON`（本机实测单行提交 p50 3.9ms / p99 6ms，关掉是 40µs / 60µs）、`checkpoint_fullfsync=ON`、`busy_timeout=5000`、`journal_size_limit=64MiB`、`foreign_keys=ON`。
+- 权限（PM 2026-10-07）：数据目录 0700（已有的去掉组 / 其他人位）；库在打开前以 0600 预建，SQLite 让 -wal / -shm 沿用库文件权限；快照 0600。数据库不加密（FileVault）；离开本盘的导出要加密，未实现，`crewd backup` 只写 `backups/`。
+- 身份：`PRAGMA application_id`=「CRWD」，`meta.dbId`，旁放 `crewd.db.id`。`Store::open_data_dir`：库不在而 id 文件或备份在 → `DbMissing`；dbId 对不上 → `DbIdMismatch`（迁移之前就拒绝）；别人的 SQLite 文件拒绝。serve 与 import 都走它。
+- 迁移前：非空旧库先 `integrity_check` 再 `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{ts}.db`，任一步失败 → `MigrationRefused`，库原样不动。
+- 备份：serve 起 `backup::Ticker`（D-8，serve 自己的线程，不进 Core）：启动时与每小时一 tick；到点（24h）的那次对在用的库跑 `integrity_check` 并拍 `crewd-auto-*`，其他 tick 只跑 `quick_check`；快照自己过 `quick_check` 才改名；轮转 = 最近 7 个有备份的日子各一份 + 更早 4 个 ISO 周各一份；备份失败或在用的库没过检查时不淘汰。`crewd backup` / `crewd check [--quick]` / `crewd restore --from`（拿数据目录锁；旧库连 -wal/-shm 改名为 `crewd.db.replaced-{ts}`，永不覆盖）。
+- 检查连接用 READ_WRITE + `query_only`，不用 `SQLITE_OPEN_READ_ONLY`：只读打开时 SQLite 不解析 CHECK 约束，检查会漏（实测）。快照用真只读连接（`query_only` 会挡 `VACUUM INTO`）。
+- 错误：`StorageKind`（DiskFull / Io / Corrupt / ReadOnly / CantOpen）经 `From<rusqlite::Error>` 自动归类（collab 的 From 也走它）；RPC -32010「存储故障：{原因}」+ 日志编号。只读降级、健康事件未做。
+- 停机：库线程退出前 `PRAGMA optimize` + `wal_checkpoint(TRUNCATE)`；serve 先停 Ticker、再 `Db::shutdown`（spawn_blocking），之后才放锁。M3c 计划 Task 11 ⑤「只能 drop」那段已过时。
+- `crew.delete`：删之前 `Store::snapshot_before_purge` → `backups/crewd-pre-delete-{机组}-{ts}.db`，拍不成不删。默认归档由 N1 做；合并时这一步移到永久删除（purge）上。
+- 旁路文件：`fsutil::atomic_write` / `rename_durably`（rename 后 fsync 目录）；登记表与 jev key 补上目录 fsync；导入时附件逐个 fsync。
+- 量级（合成 367066 条消息，约 145MiB，release）：quick_check 0.16s，integrity_check 0.29s，+外键 0.32s，在线备份 0.38s。
+- 复审第 1 轮：`crewd.db.id` 在时，打开前只读偷看——没有 dbId 的库（典型：迁移前快照被 `cp` 回来）→ `DbUnmarked`，空文件 → `DbMissing`，dbId 不同 → `DbIdMismatch`，都在任何 pragma / 迁移之前，文件不动；提示「挪出数据目录再 `crewd restore --from`，或删 `crewd.db.id` 认领；找原库看 backups/ 与 `crewd.db.replaced-*`」。认人（application_id / 版本 / 有无表）挪到 pragma 之前。检查连接与 restore 的检查点连接也设 fullfsync / checkpoint_fullfsync。快照 + 删除在同一个库线程任务里：`Store::snapshot_then`、`AppState::collab_after_snapshot`（N1 的 `crew.purge` 复用它）。backups/ 收紧到 0700，快照临时文件以 0600 预建，Ticker 启动时清死进程留下的 `.*.tmp-<pid>`；socket 绑不上时同样先停 Ticker、关库再放锁。
+- 复审第 2 轮：偷看改成 `immutable=1` 只读主文件（旧 WAL 不能替换进来的库「作证」，也不留旁路文件）；写 `crewd.db.id` 之前先检查点，保证 dbId 在主文件里；`crewd.db.id` 第二行记库文件 inode，inode 变了而旁边有非空 -wal → `DbReplaced`。restore 不管库在不在，残留 -wal/-shm 一律挪成 `replaced-*`。快照前先跑只读前置条件（`crews::check_deletable`）：删不了的不拍整库快照。Ticker 启动时同步清死进程的临时文件（backups/ 与数据目录）；Ticker 起不来也先关库再放锁。

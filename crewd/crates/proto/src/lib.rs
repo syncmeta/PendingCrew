@@ -130,6 +130,8 @@ impl RpcError {
     pub const NOT_FOUND: i32 = -32004;
     /// 与当前状态冲突（已经答过 / 撤回的问、还有在跑 session 的机组……）。
     pub const CONFLICT: i32 = -32009;
+    /// 存储故障（磁盘满、I/O 错、库损坏、只读、打不开）：不是这次请求的错，重试多半没用，要人处理（N4 / S26）。
+    pub const STORAGE: i32 = -32010;
 
     pub fn new(code: i32, message: impl Into<String>) -> Self {
         Self {
