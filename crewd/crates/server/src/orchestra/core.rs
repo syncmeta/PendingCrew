@@ -574,7 +574,8 @@ pub struct Core<P: Port> {
     pub(crate) hibernation: Option<Hibernation>,
     /// 上次休眠的记录（`boot` 读进来）：恢复时据它给休眠附言（[`Core::resume_note`]），给过就记「已恢复」。
     pub(crate) hibernated: Option<HibernateRecord>,
-    /// 休眠回执发出去了（不论全退没有）= true：serve（T11）据此走自己的停机次序退出（[`super::Handle::exit_requested`]）。
+    /// 休眠回执交给了等它的 oneshot（不论全退没有）= true：serve（T11）据此先排空在途回复、再走停机次序退出
+    /// （语义见 [`super::Handle::exit_requested`]）。actor 结束时它随 Core 一起被丢掉：接收端的 `changed()` 回 `Err`。
     pub(crate) exit: watch::Sender<bool>,
 }
 

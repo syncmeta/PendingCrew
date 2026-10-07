@@ -322,7 +322,7 @@ impl<P: Port> Core<P> {
             let _ = w.send(Ok(report.clone()));
         }
         h.report = Some(report);
-        // 回执发出去了：serve 可以收尾退出（T11；U6「休眠之后再更新」）。
+        // 回执交给了 oneshot（还没写到 socket 上）：serve 排空在途回复之后收尾退出（T11；U6「休眠之后再更新」）。
         self.exit.send_replace(true);
     }
 

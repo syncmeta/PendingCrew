@@ -104,7 +104,7 @@ pub struct Handle {
 }
 
 /// 跑着的 actor 任务（C25：不能悄悄留下一个死句柄）。serve 必须等它：[`Actor::finished`] 回 `Err` = actor panic 了，
-/// serve 要大声地非零退出（让 app 重启它，下次启动由 `boot` 回收），不能带着一个只会回「编排已停止」的句柄继续跑。
+/// serve 要大声地非零退出（让 app 重启它，下次启动由 `boot` 回收），不能带着一个只会回 `ShuttingDown` 的句柄继续跑。
 pub struct Actor {
     task: tokio::task::JoinHandle<()>,
 }
@@ -157,7 +157,7 @@ pub async fn spawn<P: Port>(
 }
 
 /// actor 循环：输入一条条处理；没输入时睡到下一次定时拍（`next_deadline`：最早的未来 not_before、退避 / 错开的
-/// 时刻、待决策升级时刻，都没有就心跳）。停机完成就结束（之后句柄的调用都回「编排已停止」）。
+/// 时刻、待决策升级时刻，都没有就心跳）。停机完成就结束（之后句柄的调用都回 `ShuttingDown`）。
 /// 心跳另有一个固定节拍的 `interval`（评审 I2）：每条输入都会让「睡到下一拍」重新起算，输入比心跳勤的忙 actor 光靠它
 /// 一拍都等不到；`interval` 不随输入重置，所以默认方案到点、清旧唤醒、已过点的唤醒重扫至少每个心跳一次。
 async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>) {
@@ -185,8 +185,11 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
     }
 }
 
+/// actor 已经结束（停机 / 休眠收尾，或崩了）之后句柄的每个调用：`ShuttingDown`（-32009 `orchestra.shutting_down`，
+/// 修复轮 I1）——客户端看到的是「crewd 正在停」，不是一个编号的内部错误（休眠之后 serve 还在把回执写出去、
+/// 收尾的那一小段里，晚到的请求就落在这里）。
 fn stopped() -> ControlError {
-    ControlError::Internal("编排已停止".into())
+    ControlError::ShuttingDown
 }
 
 impl Handle {
@@ -315,7 +318,13 @@ impl Handle {
         self.call(|reply| Cmd::Receipts { message_id, reply }).await
     }
 
-    /// 休眠回执发出去之后读到 true（T11 的 serve 据此走停机次序退出）。
+    /// serve 该退出了（T11 消费它；U6「先休眠再更新」）。语义（修复轮 I3）：
+    /// - 值变 `true` = 休眠回执已经交给等它的 oneshot（不论全退没有）。**此刻回执还没写到 socket 上**：RPC 那一路
+    ///   还要把它序列化、写给客户端。所以 serve 收到它之后必须先让在途的回复写完（排空各连接正在处理的请求），
+    ///   再走停机次序退出——否则调 `crewd.hibernate` 的客户端可能收不到回执。
+    /// - `changed()` 回 `Err`（发送端没了）= actor 已经结束而没有休眠（普通停机收尾，或崩了）：同样意味着退出；
+    ///   是不是崩了看 [`Actor::finished`]。
+    /// - 之后句柄的调用都回 `ShuttingDown`（见 `stopped`）。
     pub fn exit_requested(&self) -> watch::Receiver<bool> {
         self.exit.clone()
     }
@@ -433,7 +442,7 @@ mod tests {
         assert_eq!(exec.lock().stops, std::slice::from_ref(&row.id));
         assert!(
             h.live(&row.id).await.is_err(),
-            "停机完了 actor 就结束了：句柄回「编排已停止」"
+            "停机完了 actor 就结束了：句柄回 ShuttingDown"
         );
         assert!(actor.finished().await.is_ok(), "正常收尾");
     }
@@ -718,5 +727,66 @@ mod tests {
             h.live(&row.id).await.is_err(),
             "死了的 actor：句柄回错，不挂住"
         );
+    }
+
+    /// 修复轮 I1 / I3：休眠收尾、actor 结束之后，句柄的调用（再休眠一次、读设置、wake.list）都回 `ShuttingDown`
+    /// （线上 -32009 `orchestra.shutting_down`），不是编号的内部错误；`exit_requested` 读到 true，发送端随 actor 没了
+    /// 之后 `changed()` 回 Err（同样意味着退出）。
+    #[tokio::test]
+    async fn after_the_actor_has_exited_every_call_says_shutting_down() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let (h, actor) = spawn(
+            port,
+            Executors::new(),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        let mut exit = h.exit_requested();
+        let r = h.hibernate(None).await.unwrap();
+        assert!(r.completed);
+        assert!(actor.finished().await.is_ok());
+        assert!(*exit.borrow_and_update(), "回执之后读到 true");
+        assert!(exit.changed().await.is_err(), "actor 没了：发送端随之没了");
+        assert_eq!(
+            h.hibernate(Some(Duration::ZERO)).await,
+            Err(ControlError::ShuttingDown),
+            "第二次休眠"
+        );
+        assert_eq!(h.settings().await, Err(ControlError::ShuttingDown));
+        let e = h.wakes(None).await.unwrap_err();
+        assert_eq!(e, ControlError::ShuttingDown);
+        let wire = rpc::rpc_err(e);
+        assert_eq!(
+            (wire.code, wire.data.map(|d| d.refusal)),
+            (
+                crewd_proto::RpcError::CONFLICT,
+                Some("orchestra.shutting_down".into())
+            )
+        );
+    }
+
+    /// 修复轮 I3：没休眠、普通停机收尾的 actor：值一直是 false，`changed()` 回 Err——同样是「退出」。
+    #[tokio::test]
+    async fn exit_requested_errs_when_the_actor_ends_without_hibernating() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let (h, actor) = spawn(
+            port,
+            Executors::new(),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        let mut exit = h.exit_requested();
+        assert!(h.shutdown(Duration::from_secs(5)).await);
+        assert!(actor.finished().await.is_ok());
+        assert!(!*exit.borrow());
+        assert!(exit.changed().await.is_err());
     }
 }
