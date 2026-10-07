@@ -156,6 +156,12 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     // 核对库的身份：该在的库不在 / 被换掉时拒绝启动，不新建空库（N4 / S24）。
     let store = Store::open_data_dir(&data_dir)?;
     let db = Db::spawn(store)?;
+    // 定时备份（N4 / D-8：serve 自己的 interval，不进编排 Core）：启动时拍一次，之后每小时看一次到没到点。
+    let backups = crewd_store::backup::Ticker::start(
+        data_dir.join(crewd_store::DB_FILE),
+        std::time::Duration::from_secs(3600),
+        crewd_store::backup::Policy::default(),
+    )?;
     let state = Arc::new(AppState::new(db));
     let listener = UnixListener::bind(&sock)?;
 
@@ -187,7 +193,11 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     let _ = std::fs::remove_file(&sock);
     // 放锁之前关库：已入队的写跑完，optimize + WAL 截断，库线程 join（N4 / S16）。
     let db = state.db.clone();
-    tokio::task::spawn_blocking(move || db.shutdown()).await?;
+    tokio::task::spawn_blocking(move || {
+        backups.stop();
+        db.shutdown()
+    })
+    .await?;
     drop(lock);
     Ok(())
 }
