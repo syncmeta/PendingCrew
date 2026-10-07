@@ -3303,4 +3303,23 @@ mod tests {
         assert_eq!(last.1, Vec::<String>::new());
         assert_eq!(last.0.len(), 1);
     }
+
+    /// 修复轮 M1：额度唤醒到点、但它此刻在干活（readiness 不过）——不清额度 health、不投；停下时才清、才投。
+    #[tokio::test]
+    async fn a_due_quota_wake_does_not_clear_health_while_the_target_is_busy() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit(
+            "w1",
+            SessionEvent::Health(Some(Health::new(HealthKind::UsageLimit, "x"))),
+        )
+        .await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.tick(45 * MIN).await;
+        assert!(rig.exec.lock().cleared_quota.is_empty(), "在干活：不清");
+        assert!(rig.exec.sent("w1").is_empty());
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(rig.exec.lock().cleared_quota, ["w1"], "停下：先清再投");
+        assert_eq!(rig.exec.sent("w1").len(), 1);
+    }
 }
