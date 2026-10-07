@@ -2220,8 +2220,7 @@
       "type": "object"
     },
     "ToolHints": {
-      "additionalProperties": false,
-      "description": "MCP `ToolAnnotations` hints, under their MCP wire names (`readOnlyHint` …); `crewd mcp` passes\nthem through as they are. Every crewd tool works inside crewd only: `openWorldHint` is false.",
+      "description": "MCP `ToolAnnotations` hints, under their MCP wire names (`readOnlyHint` …); `crewd mcp` passes\nthem through as they are. Every crewd tool works inside crewd only: `openWorldHint` is false.\nNot `deny_unknown_fields`: a newer serve may add a hint (MCP's `title` …) that an older helper\nshould skip, not fail the whole tool list on.",
       "properties": {
         "destructiveHint": {
           "type": "boolean"

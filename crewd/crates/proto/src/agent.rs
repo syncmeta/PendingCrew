@@ -53,8 +53,10 @@ pub struct ToolDef {
 
 /// MCP `ToolAnnotations` hints, under their MCP wire names (`readOnlyHint` …); `crewd mcp` passes
 /// them through as they are. Every crewd tool works inside crewd only: `openWorldHint` is false.
+/// Not `deny_unknown_fields`: a newer serve may add a hint (MCP's `title` …) that an older helper
+/// should skip, not fail the whole tool list on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolHints {
     pub read_only_hint: bool,
     pub destructive_hint: bool,
@@ -243,6 +245,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.annotations, None);
+        // A hint this helper does not know yet is skipped, not a failure.
+        let newer: ToolDef = serde_json::from_value(json!({
+            "name": "post", "description": "x", "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true,
+                            "openWorldHint": false, "title": "Post"}
+        }))
+        .unwrap();
+        assert!(newer.annotations.unwrap().read_only_hint);
         assert!(
             serde_json::to_value(&old)
                 .unwrap()
