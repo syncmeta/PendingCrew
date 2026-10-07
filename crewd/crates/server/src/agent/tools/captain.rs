@@ -36,16 +36,21 @@ async fn target_crew(cx: &Ctx<'_>, arg: Option<&str>) -> Step<CrewView> {
     }
 }
 
-/// `r.not_your_crew`: the crew is not mine to act on; the receipt says whom to ask.
+/// `r.not_your_crew`: the crew is not mine to act on; the receipt says whom to ask (its number,
+/// or without one `r.not_your_crew_unnumbered`: a raw id is never shown as a label, C5).
+///
+/// Deliberately not "not found" (unlike T13's unreadable channel, which answers like a missing
+/// one): `directory` already lists every crew and session number, so naming the crew hides
+/// nothing.
 fn not_your_crew(cx: &Ctx<'_>, crew: &CrewView) -> CallResult {
-    let number = crew
-        .number
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| crew.id.clone());
-    cx.err(
-        "r.not_your_crew",
-        &[("crew", &cx.name(&crew.title)), ("number", &number)],
-    )
+    let name = cx.name(&crew.title);
+    match crew.number {
+        Some(n) => cx.err(
+            "r.not_your_crew",
+            &[("crew", &name), ("number", &n.to_string())],
+        ),
+        None => cx.err("r.not_your_crew_unnumbered", &[("crew", &name)]),
+    }
 }
 
 /// The target-crew rule: I act as the captain of `crew` (collab's rule, C2).
@@ -169,10 +174,10 @@ async fn stop_session_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
     let crew = crew_in_reach(cx, &who).await?;
     let target = cx.name(&who.label);
     // The reason goes into the target's lobby first, as me (a management session posts there
-    // without joining, C2), then the session is stopped.
-    let lobby = port::lobby_of(cx.st, &crew.id)
-        .await
-        .map_err(|e| cx.fail(e))?;
+    // without joining, C2), then the session is stopped. No notice = nothing stopped (fail
+    // closed); a stop that fails after the notice says the notice is out and nothing stopped.
+    let not_done = |e| cx.err("r.stop_not_done", &[("detail", &cx.detail(e))]);
+    let lobby = port::lobby_of(cx.st, &crew.id).await.map_err(not_done)?;
     let notice = cx.r("r.stop_notice", &[("target", &target), ("reason", reason)]);
     post_as(
         cx,
@@ -184,10 +189,15 @@ async fn stop_session_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
         PostSender::Session(cx.me.session_id.clone()),
     )
     .await
-    .map_err(|e| cx.fail(e))?;
+    .map_err(not_done)?;
     port::stop_session(cx.st, &who.session_id, reason)
         .await
-        .map_err(|e| cx.fail(e))?;
+        .map_err(|e| {
+            cx.err(
+                "r.stop_failed_after_notice",
+                &[("target", &target), ("detail", &cx.detail(e))],
+            )
+        })?;
     Ok(cx.ok(
         "r.session_stopped",
         &[("target", &target), ("crew", &cx.name(&crew.title))],
@@ -323,11 +333,12 @@ pub async fn handoff_captain(cx: &Ctx<'_>, v: Value) -> CallResult {
     done(handoff_captain_(cx, v).await)
 }
 
-/// Whose captaincy I may hand off: my own crew, a direct child of it, or any crew I act as the
-/// captain of (the management captain, C2).
+/// Whose captaincy I may hand off: a direct child of my crew (the one rule of the tool's own), or
+/// any crew I act as the captain of (collab, C2: my own crew, every crew for the management
+/// captain).
 async fn handoff_crew(cx: &Ctx<'_>, arg: Option<&str>) -> Step<CrewView> {
     let crew = target_crew(cx, arg).await?;
-    if crew.id == cx.me.crew_id || crew.parent_ids.contains(&cx.me.crew_id) {
+    if crew.parent_ids.contains(&cx.me.crew_id) {
         return Ok(crew);
     }
     require_captain_of(cx, &crew).await?;
@@ -398,10 +409,17 @@ async fn handoff_captain_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
         let id = port::start_session(cx.st, req)
             .await
             .map_err(|e| cx.fail(e))?;
+        let new_name = cx.name(&title);
+        // Started but not handed over: it runs as a worker; say so, so it is not started twice.
         port::handoff_captain(cx.st, &crew.id, &id)
             .await
-            .map_err(|e| cx.fail(e))?;
-        (id, cx.name(&title))
+            .map_err(|e| {
+                cx.err(
+                    "r.handoff_started_not_handed",
+                    &[("new", &new_name), ("id", &id), ("detail", &cx.detail(e))],
+                )
+            })?;
+        (id, new_name)
     };
     let mut text = match &old {
         Some(o) => cx.r(
@@ -436,7 +454,7 @@ mod tests {
     use crate::agent::testkit::Fixture;
     use crate::agent::text::{self, Locale};
     use crate::agent::tools::call;
-    use crate::control::{FakeCall, StartRequest};
+    use crate::control::{ControlError, FakeCall, FakeMethod, StartRequest};
 
     async fn run(
         f: &Fixture,
@@ -1278,6 +1296,117 @@ mod tests {
         refused(
             &r,
             Refusal::new(Code::SessionNotFound).arg("session", "human"),
+        );
+    }
+
+    /// I1: the notice is posted before the stop; a stop that fails after it says the notice is out
+    /// and nothing was stopped (a stop run before the post would fail with no notice: red).
+    #[tokio::test]
+    async fn a_stop_that_fails_after_the_notice_says_so() {
+        let f = Fixture::new().await;
+        f.fail_method(
+            FakeMethod::Stop,
+            ControlError::Failed("示例：进程没响应".into()),
+        );
+        let r = run(
+            &f,
+            &f.captain,
+            "stop_session",
+            json!({"session_id": f.worker, "reason": "示例：任务取消"}),
+        )
+        .await;
+        says(
+            &r,
+            true,
+            "r.stop_failed_after_notice",
+            &[("target", "示例 worker"), ("detail", "示例：进程没响应")],
+        );
+        let m = last_lobby_message(&f, &f.crew).await;
+        assert_eq!(
+            m.text,
+            text::r(
+                Locale::Zh,
+                "r.stop_notice",
+                &[("target", "示例 worker"), ("reason", "示例：任务取消")]
+            )
+        );
+        assert_eq!(calls_of(&f, "Stop(").len(), 1);
+    }
+
+    /// I1: no notice, no stop (fail closed): a lobby collab refuses to post in stops nothing.
+    #[tokio::test]
+    async fn a_stop_whose_notice_cannot_be_posted_stops_nothing() {
+        let f = Fixture::new().await;
+        f.rpc("crew.remove", json!({"crewId": f.crew})).await;
+        let r = run(
+            &f,
+            &f.captain,
+            "stop_session",
+            json!({"session_id": f.worker, "reason": "示例"}),
+        )
+        .await;
+        let lobby = port::lobby_of(&f.state, &f.crew).await.unwrap().id;
+        let detail = Refusal::new(Code::ChannelArchived)
+            .arg("channel", lobby.as_str())
+            .text(Locale::Zh);
+        says(&r, true, "r.stop_not_done", &[("detail", &detail)]);
+        assert!(calls_of(&f, "Stop(").is_empty());
+    }
+
+    /// I2: a new captain that started but was not handed the role is reported as such, with its
+    /// id, so it is not started twice.
+    #[tokio::test]
+    async fn a_new_captain_started_but_not_handed_over_says_so() {
+        let f = Fixture::new().await;
+        f.fail_method(
+            FakeMethod::Handoff,
+            ControlError::Failed("示例：交接失败".into()),
+        );
+        let id = next_fake_id(&f);
+        let r = run(
+            &f,
+            &f.captain,
+            "handoff_captain",
+            json!({"runner": "codex"}),
+        )
+        .await;
+        says(
+            &r,
+            true,
+            "r.handoff_started_not_handed",
+            &[("new", "机长"), ("id", &id), ("detail", "示例：交接失败")],
+        );
+        assert_eq!(calls_of(&f, "Start(").len(), 1);
+        assert_eq!(
+            calls_of(&f, "Handoff("),
+            [format!(
+                "{:?}",
+                FakeCall::Handoff(f.crew.clone(), id.clone())
+            )]
+        );
+    }
+
+    /// M4 / C5: a crew without a number gets the variant without `post(to:)`, never its raw id.
+    #[tokio::test]
+    async fn a_crew_without_a_number_is_named_not_numbered() {
+        let f = Fixture::new().await;
+        let other = f.add_crew("示例无号组", None).await;
+        let id = other.clone();
+        f.state
+            .db
+            .call(move |s| {
+                s.conn()
+                    .execute("UPDATE crews SET number=NULL WHERE id=?1", [&id])
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let r = run(&f, &f.captain, "list_sessions", json!({"crew": other})).await;
+        says(
+            &r,
+            true,
+            "r.not_your_crew_unnumbered",
+            &[("crew", "示例无号组")],
         );
     }
 }

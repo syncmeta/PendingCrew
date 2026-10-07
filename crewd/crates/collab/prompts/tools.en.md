@@ -704,7 +704,7 @@ reason is empty: write one sentence on why (it is posted publicly to the lobby),
 You cannot stop yourself. To finish, wrap up, say so in the channel, and end your turn.
 
 ## r.stop_notice
-Stopped {target}: {reason}
+Stopping {target}: {reason}
 
 ## r.session_stopped
 Stopped {target}; the reason is in the lobby of "{crew}". If its work must go on, start_session a new one.
@@ -775,3 +775,15 @@ You have just taken over as this crew's captain: read the lobby's recent message
 
 ## r.default_captain_title
 Captain
+
+## r.stop_not_done
+Not stopped: {detail}. The reason could not be posted to the lobby, so nothing was stopped; deal with the above, then call again.
+
+## r.stop_failed_after_notice
+The lobby already says "Stopping {target}", but the stop failed: {detail}. Nothing was stopped; inspect_session to see its state, then retry or correct the notice in the lobby.
+
+## r.handoff_started_not_handed
+Started {new} ({id}), but the captain role was not handed over: {detail}. It is running as a worker; do not start another one: retry with handoff_captain(to_session: "{id}"), or stop_session it if it is not wanted.
+
+## r.not_your_crew_unnumbered
+"{crew}" is not yours: you are not its captain. It has no number, so post(to:) cannot reach it; to get something done there, say so in your crew's lobby or ask the human.

@@ -704,7 +704,7 @@ reason 是空的：写一句为什么停（会公开写进大厅），再调一�
 不能停你自己。要结束就收尾、在群里说一声，然后结束这一轮。
 
 ## r.stop_notice
-停掉了 {target}：{reason}
+正在停掉 {target}：{reason}
 
 ## r.session_stopped
 已停掉 {target}，原因已写进「{crew}」的大厅。它的活还要接着做，就 start_session 另起一个。
@@ -775,3 +775,15 @@ to_session 和 runner 给且只给一个：交给现有 session 用 to_session�
 
 ## r.default_captain_title
 机长
+
+## r.stop_not_done
+没停：{detail}。原因没能写进大厅，所以什么都没停掉；按上面的说明处理后再调一次。
+
+## r.stop_failed_after_notice
+大厅里已经发了「正在停掉 {target}」，但没停成：{detail}。什么都没停掉；先 inspect_session 看它现在的状态，再决定重试还是在大厅更正。
+
+## r.handoff_started_not_handed
+已起 {new}（{id}），但机长没交成：{detail}。它现在在跑、还是 worker；别再起一个：重试就 handoff_captain(to_session: "{id}")，不要它了就 stop_session 停掉。
+
+## r.not_your_crew_unnumbered
+「{crew}」不归你管：你不是它的机长。它没有号，没法 post(to:) 找它；要它做什么，就在本机组大厅说明，或用 ask 问人。
