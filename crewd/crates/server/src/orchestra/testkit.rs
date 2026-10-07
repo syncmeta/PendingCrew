@@ -116,6 +116,25 @@ pub struct MemState {
     pub claim_race: Option<i64>,
     /// 设了就让 `session` 读出一个存储故障（同库：`StoreError::Storage` 经 anyhow 上抛，S26）。
     pub storage_error: Option<crewd_store::StorageKind>,
+    /// 唤醒 id → 结算（delivered / dropped）时刻（同 collab `settled_at`；`prune_wakes` 按它清，见 [`mark_settled`]）。
+    pub settled_at: BTreeMap<i64, Ms>,
+    /// `post_system` 每一条 @ 了谁（与 `posted` 一一对应）：session id，人 = `"human"`（同 DbPort 发出的 mentions）。
+    pub posted_mentions: Vec<Vec<String>>,
+}
+
+/// 刚进 delivered / dropped 的行记下结算时刻（`st.now`）；回到 pending 的（不会发生：终态不再转移）不动。
+/// 每个改状态的 MemPort 方法末尾调一次（同 collab 在转移时写 `settled_at`）。
+fn mark_settled(st: &mut MemState) {
+    let now = st.now;
+    let settled: Vec<i64> = st
+        .wakes
+        .iter()
+        .filter(|w| matches!(w.state, WakeState::Delivered | WakeState::Dropped))
+        .map(|w| w.id)
+        .collect();
+    for id in settled {
+        st.settled_at.entry(id).or_insert(now);
+    }
 }
 
 /// 一个存储故障（`StoreError::Storage`，经 rusqlite 的错误码归类，同库）。
@@ -227,8 +246,9 @@ impl MemPort {
         } else {
             members
         };
+        // 同 DbPort：dm 的 session 各方 = 它的（有效）成员——归档的 dm 里没有人「在」，也就没有各方。
         let dm_sessions = if ch.kind == MemKind::Dm {
-            ch.members.clone()
+            members.clone()
         } else {
             vec![]
         };
@@ -302,6 +322,7 @@ impl MemPort {
         for id in pending {
             note_error(&mut st, id, "crew removed");
         }
+        mark_settled(&mut st);
     }
 
     pub fn wakes_of(&self, session: &str) -> Vec<QueuedWake> {
@@ -456,8 +477,20 @@ impl Port for MemPort {
         Ok(Self::captain_of(&self.lock(), crew))
     }
 
+    /// 同 DbPort（`crews::get` 先查）：没有这个机组 = `crew.not_found`（经 `ControlError::from_port` 成 -32004）。
     async fn crew_removed(&self, crew: &str) -> Result<bool> {
-        Ok(self.lock().removed_crews.contains(crew))
+        let st = self.lock();
+        let known = st.removed_crews.contains(crew)
+            || st.crew_dirs.contains_key(crew)
+            || st.sessions.values().any(|s| s.crew_id == crew)
+            || st.channels.values().any(|c| c.crew == crew);
+        if !known {
+            return Err(anyhow::Error::new(crewd_collab::CollabError::NotFound(
+                crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::CrewNotFound)
+                    .arg("crew", crew),
+            )));
+        }
+        Ok(st.removed_crews.contains(crew))
     }
 
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger> {
@@ -541,6 +574,7 @@ impl Port for MemPort {
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
         let mut st = self.lock();
         apply_event(&mut st.wakes, ids, s.event())?;
+        mark_settled(&mut st);
         // 同 collab `mark_dropped`：作废的原因记进 last_error。
         if let Settle::Dropped { error } = &s {
             for id in ids {
@@ -555,6 +589,7 @@ impl Port for MemPort {
         // 模拟 `pending()` 与 `claim` 之间别人作废了一行（人停、机组移除）：先把它记 dropped，再照常 claim。
         if let Some(id) = st.claim_race.take() {
             apply_event(&mut st.wakes, &[id], lifecycle::WakeEvent::Drop)?;
+            mark_settled(&mut st);
         }
         apply_event(&mut st.wakes, &b.ids(), lifecycle::WakeEvent::Claim).map(|_| ())
     }
@@ -576,7 +611,7 @@ impl Port for MemPort {
                     }
                 }
                 apply_event(&mut wakes, &wake_ids, lifecycle::WakeEvent::Deliver)?;
-                let fate = match riders {
+                let fate = match &riders {
                     Riders::Release => lifecycle::WakeEvent::Requeue,
                     Riders::Drop(_) => lifecycle::WakeEvent::Drop,
                 };
@@ -597,6 +632,13 @@ impl Port for MemPort {
                 }
                 st.wakes = wakes;
                 st.cursors = cursors;
+                mark_settled(&mut st);
+                // 同 collab `ack_delivered(.., Riders::Drop(why), ..)`：作废的随批行记下原因。
+                if let Riders::Drop(why) = &riders {
+                    for id in &rider_ids {
+                        note_error(&mut st, *id, why);
+                    }
+                }
                 let mut origins: Vec<String> = Vec::new();
                 for w in &b.wakes {
                     if !origins.contains(&w.origin) {
@@ -636,6 +678,7 @@ impl Port for MemPort {
                     }
                 }
                 st.wakes = wakes;
+                mark_settled(&mut st);
                 // 同 collab `ack_failed`：每一行记下这次的原因。
                 for id in b.ids() {
                     note_error(&mut st, id, &error);
@@ -675,6 +718,7 @@ impl Port for MemPort {
             }
         }
         st.wakes = wakes;
+        mark_settled(&mut st);
         for id in ids {
             note_error(&mut st, id, error);
         }
@@ -829,13 +873,29 @@ impl Port for MemPort {
         Ok(())
     }
 
+    /// 同 collab `wakes::prune`：删 `before` 之前就已结算（delivered / dropped）的行，按 (结算时刻, id) 至多 `limit` 条；
+    /// pending / inflight 的不碰（契约测试钉住）。另记下每次调用；`prunable` 是「假装还有这么多可清的」（量分批清理的
+    /// 次数，在真行之后从余下的名额里拿）。
     async fn prune_wakes(&self, before: Ms, limit: usize) -> Result<usize> {
-        // MemPort 不记结算时刻：记下每次调用，从「假装可清的」里拿走至多 `limit` 条（真删由 collab 的测试钉住）。
         let mut st = self.lock();
         st.prunes.push((before, limit));
-        let n = st.prunable.min(limit);
-        st.prunable -= n;
-        Ok(n)
+        let mut old: Vec<(Ms, i64)> = st
+            .wakes
+            .iter()
+            .filter(|w| matches!(w.state, WakeState::Delivered | WakeState::Dropped))
+            .filter_map(|w| st.settled_at.get(&w.id).map(|t| (*t, w.id)))
+            .filter(|(t, _)| *t < before)
+            .collect();
+        old.sort();
+        old.truncate(limit);
+        let gone: BTreeSet<i64> = old.into_iter().map(|(_, id)| id).collect();
+        st.wakes.retain(|w| !gone.contains(&w.id));
+        for id in &gone {
+            st.settled_at.remove(id);
+        }
+        let fake = st.prunable.min(limit - gone.len());
+        st.prunable -= fake;
+        Ok(gone.len() + fake)
     }
 
     async fn message(&self, r: &MessageRef) -> Result<Option<(MsgFacts, String)>> {
@@ -915,7 +975,28 @@ impl Port for MemPort {
             Audience::Lobby { crew, .. } => format!("{crew}/lobby"),
             Audience::Channel { channel, .. } => channel.clone(),
         };
+        // @ 谁（同 DbPort）：人类群 @人；`mention_owner` 时 @ 群主（大厅 / 人类群的群主 = 机组机长，别的群看它的群主）。
+        let owner = |st: &MemState, ch: &str| -> Option<String> {
+            let c = st.channels.get(ch)?;
+            match c.kind {
+                MemKind::Lobby | MemKind::Human => Self::captain_of(st, &c.crew),
+                MemKind::Dm | MemKind::Other => c.owner.clone(),
+            }
+        };
+        let mentions: Vec<String> = match &to {
+            Audience::HumanChannel { .. } => vec!["human".into()],
+            Audience::Lobby {
+                mention_owner: true,
+                ..
+            }
+            | Audience::Channel {
+                mention_owner: true,
+                ..
+            } => owner(&st, &channel).into_iter().collect(),
+            _ => vec![],
+        };
         st.posted.push((channel, text.clone()));
+        st.posted_mentions.push(mentions);
         st.posts.push((to, text));
         Ok(())
     }

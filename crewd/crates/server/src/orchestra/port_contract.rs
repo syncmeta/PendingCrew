@@ -59,6 +59,8 @@ trait World: Sized {
     async fn ask_answer_wake(&mut self, session: &str);
     /// 系统发到这个群里的正文（`post_system` 落在哪）。
     async fn system_posts(&self, channel: &str) -> Vec<String>;
+    /// 系统发到这个群里的每一条 @ 了谁（session id；人 = `"human"`），按先后。
+    async fn system_mentions(&self, channel: &str) -> Vec<Vec<String>>;
 }
 
 // —— DbPort 一边
@@ -240,6 +242,28 @@ impl World for DbWorld {
             .map(|m| m.text)
             .collect()
     }
+
+    async fn system_mentions(&self, channel: &str) -> Vec<Vec<String>> {
+        let channel = channel.to_string();
+        self.state
+            .db
+            .call(move |s| collab::messages::list(s.conn(), &channel, None, None, 100))
+            .await
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.sender_kind == crewd_proto::SenderKind::System)
+            .map(|m| {
+                m.mentions
+                    .into_iter()
+                    .map(|x| match x.kind {
+                        crewd_proto::MentionKind::Human => "human".to_string(),
+                        _ => x.target_id.unwrap_or_default(),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 // —— MemPort 一边
@@ -404,14 +428,8 @@ impl World for MemWorld {
     async fn post(&mut self, from: Who<'_>, channel: &str, at: &[&str]) -> MsgFacts {
         self.messages += 1;
         let mut st = self.port.lock();
-        let seq = st
-            .messages
-            .keys()
-            .filter(|(c, _)| c == channel)
-            .map(|(_, s)| *s)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        // 同库：seq 全库唯一（M3a.1），不是每个群各数各的——`message()` 的「群对不上」才测得出来。
+        let seq = st.messages.keys().map(|(_, s)| *s).max().unwrap_or(0) + 1;
         let sender = match from {
             Who::Human => Sender::Human,
             Who::System => Sender::System,
@@ -446,6 +464,8 @@ impl World for MemWorld {
             .insert(channel.to_string());
     }
 
+    /// MemPort 没有 NULL origin（`NewWake.origin` 是 String）：这里直接存 `human`，所以「问的答复读回成人」这条规则
+    /// 只在 DbPort 那一边是真测（`origin_from` 把 NULL 解成 human）；MemPort 这边只是同形。
     async fn ask_answer_wake(&mut self, session: &str) {
         let w = NewWake {
             session: session.into(),
@@ -466,6 +486,16 @@ impl World for MemWorld {
             .iter()
             .filter(|(c, _)| c == channel)
             .map(|(_, t)| t.clone())
+            .collect()
+    }
+
+    async fn system_mentions(&self, channel: &str) -> Vec<Vec<String>> {
+        let st = self.port.lock();
+        st.posted
+            .iter()
+            .zip(&st.posted_mentions)
+            .filter(|((c, _), _)| c == channel)
+            .map(|(_, m)| m.clone())
             .collect()
     }
 }
@@ -993,6 +1023,236 @@ async fn settings_round_trip<W: World>() {
     assert_eq!(p.max_live().await.unwrap(), None);
 }
 
+/// T10a 复审：归档的 dm 里没有人「在」——没有成员、也没有 dm 各方（两边一致；MemPort 曾照旧给 dm 各方）。
+async fn an_archived_dm_has_no_members_and_no_parties<W: World>() {
+    let mut w = W::new().await;
+    let dm = w.dm(Who::S("w-1"), "w-2").await;
+    let now = w.now();
+    let live = w.port().channel_ctx(&dm, now).await.unwrap().unwrap();
+    let mut parties = live.dm_sessions.clone();
+    parties.sort();
+    assert_eq!(parties, ["w-1", "w-2"]);
+    w.archive_channel(&dm).await;
+    let gone = w.port().channel_ctx(&dm, now).await.unwrap().unwrap();
+    assert!(gone.session_members.is_empty(), "{gone:?}");
+    assert!(gone.dm_sessions.is_empty(), "{gone:?}");
+}
+
+/// 不属于一批的结算（`settle`）：Delivered 从 pending；Requeue 从 inflight 回 pending、退回 claim 记的那一次；
+/// 表不认的（已结的再 Delivered、pending 的 Requeue）= 错误、什么都不改。
+async fn settle_delivered_and_requeue_follow_the_table<W: World>() {
+    let w = W::new().await;
+    let p = w.port();
+    p.enqueue(timer("w-1", "a")).await.unwrap();
+    p.enqueue(timer("w-1", "b")).await.unwrap();
+    let rows = p.pending("w-1").await.unwrap();
+    let (a, b) = (rows[0].clone(), rows[1].clone());
+    p.claim(&batch("w-1", vec![b.clone()])).await.unwrap();
+    p.settle(&[a.id], Settle::Delivered, Ms(0)).await.unwrap();
+    p.settle(&[b.id], Settle::Requeue, Ms(0)).await.unwrap();
+    let state = |id: i64, v: &[QueuedWake]| {
+        let r = v.iter().find(|w| w.id == id).unwrap();
+        (r.state, r.attempts)
+    };
+    let all = p.list_wakes(Some("w-1")).await.unwrap();
+    assert_eq!(state(a.id, &all), (WakeState::Delivered, 0));
+    assert_eq!(
+        state(b.id, &all),
+        (WakeState::Pending, 0),
+        "退回 claim 那一次"
+    );
+    assert!(
+        p.settle(&[a.id], Settle::Delivered, Ms(0)).await.is_err(),
+        "已结的不能再结"
+    );
+    assert!(
+        p.settle(&[b.id, a.id], Settle::Requeue, Ms(0))
+            .await
+            .is_err(),
+        "pending 的不能 Requeue；整批不改"
+    );
+    let all = p.list_wakes(Some("w-1")).await.unwrap();
+    assert_eq!(state(b.id, &all), (WakeState::Pending, 0));
+}
+
+/// `ack(Delivered)`：随批行按 `Riders` 办——Release 回 pending（退回那一次）、Drop 作废并记原因；批里有别的 session
+/// 的行 = 错误，一行都不改（两边一致）。
+async fn ack_delivered_releases_or_drops_riders_and_checks_ownership<W: World>() {
+    let w = W::new().await;
+    let p = w.port();
+    for t in ["a", "b", "c", "d"] {
+        p.enqueue(timer("w-1", t)).await.unwrap();
+    }
+    p.enqueue(timer("w-2", "x")).await.unwrap();
+    let rows = p.pending("w-1").await.unwrap();
+    let other = p.pending("w-2").await.unwrap();
+    let mut b1 = batch("w-1", vec![rows[0].clone()]);
+    b1.riders = vec![rows[1].clone()];
+    p.claim(&b1).await.unwrap();
+    p.ack(
+        &b1,
+        Ack::Delivered {
+            riders: Riders::Release,
+        },
+    )
+    .await
+    .unwrap();
+    let mut b2 = batch("w-1", vec![rows[2].clone()]);
+    b2.riders = vec![rows[3].clone()];
+    p.claim(&b2).await.unwrap();
+    p.ack(
+        &b2,
+        Ack::Delivered {
+            riders: Riders::Drop("合成：停了".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let all = p.list_wakes(Some("w-1")).await.unwrap();
+    let got = |id: i64| {
+        let r = all.iter().find(|w| w.id == id).unwrap();
+        (r.state, r.attempts, r.last_error.clone())
+    };
+    assert_eq!(got(rows[0].id), (WakeState::Delivered, 1, None));
+    assert_eq!(
+        got(rows[1].id),
+        (WakeState::Pending, 0, None),
+        "Release：回 pending"
+    );
+    assert_eq!(got(rows[2].id), (WakeState::Delivered, 1, None));
+    assert_eq!(
+        got(rows[3].id),
+        (WakeState::Dropped, 1, Some("合成：停了".into())),
+        "Drop：作废、记原因"
+    );
+    // 批是 w-1 的，里面夹了 w-2 的一行：整批不动。
+    let mut bad = batch("w-1", vec![rows[1].clone()]);
+    bad.riders = vec![other[0].clone()];
+    p.claim(&bad).await.unwrap();
+    assert!(
+        p.ack(
+            &bad,
+            Ack::Delivered {
+                riders: Riders::Release
+            }
+        )
+        .await
+        .is_err(),
+        "别的 session 的行"
+    );
+    let all = p.list_wakes(None).await.unwrap();
+    for id in [rows[1].id, other[0].id] {
+        let r = all.iter().find(|w| w.id == id).unwrap();
+        assert_eq!(r.state, WakeState::Inflight, "一行都没改");
+    }
+}
+
+/// `prune_wakes`：只清早于 `before` 结算的 delivered / dropped，按结算先后、至多 `limit` 条；pending 的不碰。
+async fn prune_wakes_only_clears_rows_settled_before_the_cutoff<W: World>() {
+    let w = W::new().await;
+    let p = w.port();
+    for t in ["a", "b", "c"] {
+        p.enqueue(timer("w-1", t)).await.unwrap();
+    }
+    let rows = p.pending("w-1").await.unwrap();
+    p.settle(&[rows[0].id], Settle::Delivered, Ms(0))
+        .await
+        .unwrap();
+    p.settle(
+        &[rows[1].id],
+        Settle::Dropped {
+            error: "合成".into(),
+        },
+        Ms(0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(p.prune_wakes(Ms(0), 10).await.unwrap(), 0, "都是之后结算的");
+    let later = w.now().add(crewd_wake::HOUR);
+    assert_eq!(p.prune_wakes(later, 1).await.unwrap(), 1, "至多 limit 条");
+    assert_eq!(p.prune_wakes(later, 10).await.unwrap(), 1);
+    assert_eq!(p.prune_wakes(later, 10).await.unwrap(), 0);
+    let left: Vec<i64> = p
+        .list_wakes(Some("w-1"))
+        .await
+        .unwrap()
+        .iter()
+        .map(|w| w.id)
+        .collect();
+    assert_eq!(left, [rows[2].id], "pending 的留着");
+}
+
+/// `post_system`：大厅 / 群 `mention_owner` 时 @ 群主（大厅 = 机长，topic = 它的群主），不要就不 @；人类群 @人。
+async fn post_system_mentions_the_owner_only_when_asked<W: World>() {
+    let mut w = W::new().await;
+    let topic = w.topic("c-1", "w-1", &["w-2"]).await;
+    let p = w.port();
+    let lobby = |mention_owner| Audience::Lobby {
+        crew: "c-1".into(),
+        mention_owner,
+    };
+    p.post_system(lobby(true), "合成甲".into()).await.unwrap();
+    p.post_system(lobby(false), "合成乙".into()).await.unwrap();
+    p.post_system(
+        Audience::Channel {
+            channel: topic.clone(),
+            mention_owner: true,
+        },
+        "合成丙".into(),
+    )
+    .await
+    .unwrap();
+    p.post_system(
+        Audience::HumanChannel { crew: "c-1".into() },
+        "合成丁".into(),
+    )
+    .await
+    .unwrap();
+    let human = w.human_channel("c-1").await;
+    assert_eq!(
+        w.system_mentions("c-1/lobby").await,
+        [vec!["cap-1".to_string()], vec![]]
+    );
+    assert_eq!(w.system_mentions(&topic).await, [vec!["w-1".to_string()]]);
+    assert_eq!(w.system_mentions(&human).await, [vec!["human".to_string()]]);
+}
+
+/// `message()`：seq 全库唯一，群对不上 = 不是这条（两边一致）。
+async fn message_with_the_wrong_channel_is_none<W: World>() {
+    let mut w = W::new().await;
+    let topic = w.topic("c-1", "w-1", &["w-2"]).await;
+    let m = w.post(Who::S("cap-1"), "c-1/lobby", &[]).await;
+    let m2 = w.post(Who::S("w-1"), &topic, &[]).await;
+    let p = w.port();
+    let at = |channel: &str, seq| MessageRef {
+        channel: channel.into(),
+        seq,
+    };
+    let got = p.message(&at("c-1/lobby", m.at.seq)).await.unwrap();
+    assert_eq!(got.map(|(f, _)| f.id), Some(m.id.clone()));
+    assert!(p.message(&at(&topic, m.at.seq)).await.unwrap().is_none());
+    assert!(
+        p.message(&at("c-1/lobby", m2.at.seq))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(p.message(&at(&topic, m2.at.seq)).await.unwrap().is_some());
+}
+
+/// 没有这个机组：`crew_removed` 是 `crew.not_found`（两边一致），编排据此回 -32004（不是内部错误）。
+async fn crew_removed_of_an_unknown_crew_is_not_found<W: World>() {
+    let w = W::new().await;
+    let e = w.port().crew_removed("没有这个").await.unwrap_err();
+    match super::core::ControlError::from_port(e) {
+        super::core::ControlError::Refused { kind, refusal } => {
+            assert_eq!(kind, super::core::RefusedKind::NotFound);
+            assert_eq!(refusal.code, collab::refusal::Code::CrewNotFound);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 macro_rules! both {
     ($($case:ident),* $(,)?) => {
         mod mem {
@@ -1024,4 +1284,11 @@ both!(
     injection_and_planner_agree_on_every_message,
     wakes_for_message_lists_each_target_in_order,
     settings_round_trip,
+    an_archived_dm_has_no_members_and_no_parties,
+    settle_delivered_and_requeue_follow_the_table,
+    ack_delivered_releases_or_drops_riders_and_checks_ownership,
+    prune_wakes_only_clears_rows_settled_before_the_cutoff,
+    post_system_mentions_the_owner_only_when_asked,
+    message_with_the_wrong_channel_is_none,
+    crew_removed_of_an_unknown_crew_is_not_found,
 );

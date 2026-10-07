@@ -3,6 +3,10 @@
 //! 映射表见 T10a 补充 §2.2）。一个 Port 调用 = 一个 `Db::call` 或一个 collab 事务（除非下面另说）。
 //!
 //! 也是协作事件进编排的桥（[`fact_of`] / [`pump_collab`] / [`forward_collab`]）。
+//!
+//! **时间**：DbPort 自己需要「现在」的地方（`render_wake`、`message`、`unread`、`facts_of` 的兜底）读墙上时钟
+//! （`crewd_store::now_ms`），与 collab 事务里写的时刻同源——不读 Core 注入的 `Clock`。所以接 DbPort 的测试即使给 Core
+//! 一个 `ManualClock`，收听过期、陈旧闸、`settled_at` 也按真实时间算（T10a 复审）；要控制这些时刻的测试用 MemPort。
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1419,6 +1423,66 @@ mod tests {
         let after = port.pending("w-1").await.unwrap();
         assert_eq!(after.len(), 1, "没被作废的那一行还是 pending，没被拿走");
         assert_eq!(after[0].id, wakes[0].id);
+    }
+
+    /// `render_wake`：正文按这一批的顺序（不是 id 顺序）；渲染不了的行在同一调用里记 dropped 并报回；游标推进点是带上的消息。
+    #[tokio::test]
+    async fn render_wake_keeps_batch_order_drops_unusable_rows_and_reports_cursor_targets() {
+        let (state, port, _d) = seeded().await;
+        let m = post_as(
+            &state,
+            collab::Sender::Session("cap-1".into()),
+            "c-1/lobby",
+            "合成派活甲",
+            &["w-1"],
+        )
+        .await;
+        let msg = NewWake {
+            session: "w-1".into(),
+            kind: WakeKind::Message,
+            source: source::message(&m.id),
+            priority: Priority::Auto,
+            not_before: Ms(0),
+            note: None,
+            origin: "cap-1".into(),
+        };
+        let gone = NewWake {
+            source: source::message("没有这条"),
+            ..msg.clone()
+        };
+        let timer = NewWake {
+            kind: WakeKind::Timer,
+            source: source::timer("合成"),
+            note: Some("合成提醒乙".into()),
+            origin: "w-1".into(),
+            ..msg.clone()
+        };
+        let a = port.enqueue(msg).await.unwrap().unwrap();
+        let b = port.enqueue(gone).await.unwrap().unwrap();
+        let c = port.enqueue(timer).await.unwrap().unwrap();
+        let rows = port.pending("w-1").await.unwrap();
+        let by = |id: i64| rows.iter().find(|w| w.id == id).unwrap().clone();
+        // 定时（id 最新）排在消息前面：正文跟着这个次序，不是 `by_ids` 的 id 次序。
+        let r = port
+            .render_wake("w-1", &[by(c), by(a), by(b)])
+            .await
+            .unwrap();
+        let (t, mt) = (
+            r.text.find("合成提醒乙").expect("定时的附言"),
+            r.text.find("合成派活甲").expect("消息正文"),
+        );
+        assert!(t < mt, "{}", r.text);
+        assert_eq!(r.dropped, [b], "消息没了 = 渲染不了");
+        assert!(r.deferred.is_empty());
+        assert_eq!(r.cursor_targets, [("c-1/lobby".to_string(), m.seq)]);
+        let all = port.list_wakes(Some("w-1")).await.unwrap();
+        let dropped = all.iter().find(|w| w.id == b).unwrap();
+        assert_eq!(
+            dropped.state,
+            crewd_wake::WakeState::Dropped,
+            "同一调用里记了 dropped"
+        );
+        assert!(dropped.last_error.is_some());
     }
 
     /// Port::ack（Delivered）在同一个事务里推游标，交回这批的来源；Failed 按库里的次数退避或放弃。

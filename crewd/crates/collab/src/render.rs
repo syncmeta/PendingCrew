@@ -1500,6 +1500,152 @@ mod tests {
         assert_eq!(b2.deferred, [last]);
     }
 
+    /// S45（T10a 复审）：一批里的几个群共用一份预算，按群出现的先后、逐行贪心地分（前面的群停下时剩的预算放得下
+    /// 后面群最旧的一行，它就带上）。前面的群把预算用完时，后面的群这一批一行都没有（「0 行的群」）：它的块不出现、被叫的行进 `deferred`、游标不动（`cursor_targets` 里没有它）。它只等一批——
+    /// 前面那个群的被叫行送完、游标推过之后，下一批就只剩它（前面的积压不再随批带，除非又被叫）。等待有界：至多是前面
+    /// 各群的积压按预算切成的批数（每个群又受 `UNREAD_CAP` 封顶）；先后由队列行的次序定，不轮转（记进交付记录）。
+    #[test]
+    fn a_channel_with_no_room_left_waits_one_batch_and_its_cursor_stays() {
+        use crewd_proto::MemberRef;
+        let mut s = store();
+        let topic = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &Sender::Session("w-a2".into()),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: crewd_proto::ChannelKind::Topic,
+                    name: "合成话题".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("w-a1")],
+                },
+            )
+        })
+        .id;
+        let long = "合成长文".repeat(40); // 480 字节
+        let mut lobby = Vec::new();
+        for i in 0..30 {
+            let m = say(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                "crew-a/lobby",
+                &format!("{i} {long}"),
+                vec![],
+                None,
+            );
+            lobby.push(m);
+        }
+        // 话题里的这一条比大厅的任何一行都长一点：大厅停下时剩的那点预算放不下它（不然它会捡剩下的）。
+        let t = say(
+            &mut s,
+            Sender::Session("w-a2".into()),
+            &topic,
+            &format!("话题里的一句 {long}"),
+            vec![],
+            None,
+        );
+        // 叫它的是大厅里最新的一条：窗口是它前面的全部积压（30 条 ≈ 14 KB，超预算）。
+        let in_lobby = wake_msg(&mut s, "w-a1", &lobby[29].id);
+        let in_topic = wake_msg(&mut s, "w-a1", &t.id);
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        let b1 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+        let text = wake_text(Locale::Zh, &b1);
+        assert!(
+            text.len() <= WAKE_MESSAGES_MAX_BYTES + 200,
+            "{}",
+            text.len()
+        );
+        assert!(
+            !text.contains("话题里的一句"),
+            "预算被大厅用完：话题这一批 0 行"
+        );
+        let WakeBody::Messages(blocks) = &b1.items[0].body else {
+            panic!("{b1:?}")
+        };
+        assert_eq!(blocks.len(), 1, "0 行的群不出块");
+        assert!(b1.items[0].wake_ids.is_empty(), "只带积压");
+        assert_eq!(b1.deferred, [in_lobby, in_topic], "两个被叫行都留到下一批");
+        let targets = b1.cursor_targets();
+        assert_eq!(targets.len(), 1, "话题的游标不动：{targets:?}");
+        assert_eq!(targets[0].0, "crew-a/lobby");
+        ok(&mut s, |tx| {
+            crate::cursors::advance(tx, "w-a1", "crew-a/lobby", targets[0].1)
+        });
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        let b2 = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+        assert_eq!(
+            b2.items[0].wake_ids,
+            [in_lobby, in_topic],
+            "下一批：大厅剩下的放得下，话题也轮到了"
+        );
+        assert!(wake_text(Locale::Zh, &b2).contains("话题里的一句"));
+        assert_eq!(
+            b2.cursor_targets(),
+            [
+                ("crew-a/lobby".to_string(), lobby[29].seq),
+                (topic.clone(), t.seq)
+            ]
+        );
+    }
+
+    /// S45：两个群都放得下时共用一份预算、都带上；预算是整批的（两个群加起来），不是每个群一份。
+    #[test]
+    fn two_channels_share_one_budget() {
+        use crewd_proto::MemberRef;
+        let mut s = store();
+        let topic = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &Sender::Session("w-a2".into()),
+                crate::channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: crewd_proto::ChannelKind::Topic,
+                    name: "合成话题".into(),
+                    purpose: None,
+                    members: vec![MemberRef::session("w-a1")],
+                },
+            )
+        })
+        .id;
+        let long = "合成长文".repeat(40); // 480 字节
+        let mut last = Vec::new();
+        for ch in ["crew-a/lobby", topic.as_str()] {
+            for i in 0..12 {
+                let m = say(
+                    &mut s,
+                    Sender::Session("w-a2".into()),
+                    ch,
+                    &format!("{i} {long}"),
+                    vec![],
+                    None,
+                );
+                if i == 11 {
+                    last.push(m);
+                }
+            }
+        }
+        // 每个群的窗口 12 条 ≈ 5.8 KB：单独都放得下预算，两个加起来放不下。
+        let a = wake_msg(&mut s, "w-a1", &last[0].id);
+        let b = wake_msg(&mut s, "w-a1", &last[1].id);
+        let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+        let batch = build_batch(s.conn(), "w-a1", Locale::Zh, &rows, NOW).unwrap();
+        let WakeBody::Messages(blocks) = &batch.items[0].body else {
+            panic!("{batch:?}")
+        };
+        assert_eq!(blocks.len(), 2, "两个群都带上");
+        assert_eq!(blocks[0].lines.len(), 12, "先出现的群整段带上");
+        let rest = blocks[1].lines.len();
+        assert!(rest > 0 && rest < 12, "后面的群只拿到剩下的预算：{rest}");
+        assert_eq!(batch.items[0].wake_ids, [a]);
+        assert_eq!(batch.deferred, [b], "后面那个群的被叫行落在预算之外");
+        let text = wake_text(Locale::Zh, &batch);
+        assert!(
+            text.len() <= WAKE_MESSAGES_MAX_BYTES + 400,
+            "{}",
+            text.len()
+        );
+    }
+
     /// S45：单独一条就超预算（50 KB）→ 只带开头 + 「去读全文 #seq」的提示；游标越过它（下一批不重带）。
     #[test]
     fn a_single_huge_message_is_cut_to_its_head_with_a_hint_and_the_cursor_passes_it() {

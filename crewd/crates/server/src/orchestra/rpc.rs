@@ -1091,4 +1091,35 @@ mod tests {
             "类型不对照样是参数错"
         );
     }
+
+    /// T10a 复审：起一个不存在的机组里的 session = `crew.not_found`（-32004），什么都不建；两个 Port 同一个答（契约测试）。
+    #[tokio::test]
+    async fn starting_in_an_unknown_crew_is_not_found() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let req = StartSession {
+            crew_id: "没有这个".into(),
+            captain: false,
+            executor: "claude".into(),
+            brief: "合成任务".into(),
+            title: None,
+            model: None,
+            effort: None,
+            isolation: false,
+        };
+        let e = rig
+            .cmd(|reply| Cmd::Start {
+                req,
+                origin: Origin::Human,
+                reply,
+            })
+            .await
+            .unwrap_err();
+        let r = rpc_err(e);
+        assert_eq!(
+            (r.code, r.data.map(|d| d.refusal)),
+            (RpcError::NOT_FOUND, Some("crew.not_found".into()))
+        );
+        assert_eq!(rig.port.lock().sessions.len(), 1, "没写行");
+    }
 }
