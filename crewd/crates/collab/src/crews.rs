@@ -951,17 +951,19 @@ mod tests {
     #[test]
     fn release_only_from_a_direct_parent() {
         let mut s = store();
-        assert!(matches!(
-            err(&mut s, |tx| release(tx, "crew-b", "crew-x", None)),
-            CollabError::Invalid(_)
-        ));
-        assert!(
-            matches!(
-                err(&mut s, |tx| release(tx, "crew-b", "crew-x", None)),
-                CollabError::Invalid(_)
-            ),
-            "crew-b 不是 crew-x 的直系子"
-        );
+        // 三种「from 不是 crew 的直系父」：别的机组；反过来（from 是 crew 的子）；crew 本来就是顶层。
+        for (crew, from, why) in [
+            ("crew-b", "crew-x", "crew-b 不是 crew-x 的直系子"),
+            ("crew-a", "crew-b", "crew-b 是 crew-a 的子，不是它的父"),
+            ("crew-x", "crew-a", "crew-x 是顶层，没有父"),
+        ] {
+            match err(&mut s, |tx| release(tx, crew, from, None)) {
+                CollabError::Invalid(r) => assert_eq!(r.code, Code::CrewNotDirectChild, "{why}"),
+                e => panic!("{why}: {e:?}"),
+            }
+        }
+        assert_eq!(edges(&s, "crew-b"), ["crew-a"], "被拒的摘出什么都不动");
+        assert!(edges(&s, "crew-a").is_empty() && edges(&s, "crew-x").is_empty());
         // 控制者裁定 e：不存在的父 = NotFound（-32004），不是「不是直系子机组」（-32602）。
         assert!(matches!(
             err(&mut s, |tx| release(tx, "crew-b", "nope", None)),

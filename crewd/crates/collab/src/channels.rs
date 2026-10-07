@@ -2472,20 +2472,24 @@ mod tests {
             create(tx, &Sender::Session("w-b1".into()), topic("crew-b", vec![]))
         });
         ok(&mut s, |tx| ensure_human_channel(tx, "crew-a"));
+        // 普通的总机组 session（不是机长）一样读全组织：读全组织跟着机组走，不跟着机长身份走。
+        let org_worker = crate::testkit::org_worker(&mut s);
         for id in [
             "crew-x/lobby",
             dm.id.as_str(),
             tb.id.as_str(),
             "crew-a/human",
         ] {
-            assert!(
-                readable_by(s.conn(), id, &chief_cap).unwrap(),
-                "{id}：总机组读全组织"
-            );
-            assert!(
-                !is_member(s.conn(), id, &MemberRef::session(chief_cap.clone())).unwrap(),
-                "{id}：读得到 ≠ 成员"
-            );
+            for who in [&chief_cap, &org_worker] {
+                assert!(
+                    readable_by(s.conn(), id, who).unwrap(),
+                    "{id}：总机组的 {who} 读全组织"
+                );
+                assert!(
+                    !is_member(s.conn(), id, &MemberRef::session(who.clone())).unwrap(),
+                    "{id}：读得到 ≠ 成员"
+                );
+            }
         }
         let all: Vec<String> = {
             let mut st = s
@@ -2499,6 +2503,7 @@ mod tests {
         };
         assert_eq!(all.len(), 7, "四个大厅 + dm + topic + 人类群：{all:?}");
         assert_eq!(readable_channels(s.conn(), &chief_cap).unwrap(), all);
+        assert_eq!(readable_channels(s.conn(), &org_worker).unwrap(), all);
     }
 
     /// N1-R3：除总机组外，上级机组读不到子机组的群（只看自己机组下的 + 自己 home 的人类群）。
