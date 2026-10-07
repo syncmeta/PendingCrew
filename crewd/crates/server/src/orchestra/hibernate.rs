@@ -10,7 +10,7 @@
 //!   serve 再用 `Actor::abort_handle` 收尾（同 9a 的 `Handle::shutdown`）。
 //! - 唤醒一条不丢：叫停用的是 [`Core::halt`]（不是人停）——pending 的原样留着，投到一半的退回 pending。
 //! - 下次启动（`boot`）：重启询问标成「休眠」（`RestartReason::Hibernate`）；恢复时开场给休眠附言
-//!   （[`Core::resume_note`]，`crewd_wake::policy::hibernate_note`），一个 session 只给一次。
+//!   （[`Core::resume_note`]，`crewd_wake::policy::hibernate_note`），一个 session 只给一次；休眠时空闲的静默恢复。
 //! - 客户端（macOS 关机 / 重启通知触发休眠）不在 crewd：这里只给 `Handle::hibernate`（RPC `crewd.hibernate` 由 T10 接）。
 use std::collections::BTreeMap;
 
@@ -268,7 +268,8 @@ impl<P: Port> Core<P> {
     }
 
     /// 恢复一个等人答复的 session 时开场的附言（§22.7 Q1 / C26）：被休眠停下、还没恢复过的 → 休眠附言（只给一次：
-    /// 记录里记下已恢复）；否则上次停在干活中途的 → 崩溃重启的「被打断」；否则没有。
+    /// 记录里记下已恢复；休眠时空闲的没有附言、静默恢复，评审 I1——同样记下已恢复）；否则上次停在干活中途的 →
+    /// 崩溃重启的「被打断」；否则没有。
     pub(crate) async fn resume_note(&mut self, session: &str, was_working: bool) -> Option<String> {
         let lang = self.lang();
         let found = self.hibernated.as_mut().and_then(|r| {
@@ -294,7 +295,7 @@ impl<P: Port> Core<P> {
         if let Err(e) = self.port.put_hibernate(&record).await {
             eprintln!("crewd: 编排：休眠记录（已恢复）写不进去：{e:#}");
         }
-        Some(note)
+        note
     }
 
     /// 这次启动要不要把重启询问标成休眠：待恢复名单里有休眠停下、还没恢复过的。
@@ -723,6 +724,7 @@ mod tests {
                 doing: doing.as_deref(),
             },
         )
+        .expect("在干活 / 被打断的才有附言")
     }
 
     /// C26：休眠之后启动——询问标成休眠；答「恢复」后每个都带休眠附言（被打断的说要重跑；外来文字过 safe_name）、
@@ -747,7 +749,11 @@ mod tests {
         rig.core.handle(Input::Collab(answer)).await;
         rig.settle().await;
         let initial = |s: &str| rig.exec.launches(s)[0].initial.clone().unwrap();
-        assert_eq!(initial("cap"), note(false, false, None));
+        assert_eq!(
+            rig.exec.launches("cap")[0].initial,
+            None,
+            "休眠时空闲的：静默恢复，不给附言（评审 I1）"
+        );
         assert_eq!(
             initial("w1"),
             note(true, false, Some("timer timer:t1: 合成定时"))

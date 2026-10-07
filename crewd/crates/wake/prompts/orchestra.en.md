@@ -90,9 +90,6 @@ The wakes you were handling before you stopped: {doing}
 ## hibernate.doing.unknown
 You were working before you stopped, but crewd did not record which batch of wakes it was — look at the last few turns of your own conversation.
 
-## hibernate.idle
-You were idle when you stopped (your previous turn had finished). Read your unread channel messages first, then decide whether there is anything to do.
-
 ## hibernate.finished
 You finished that turn within the hibernate deadline and were not interrupted. Check the current state before you continue.
 

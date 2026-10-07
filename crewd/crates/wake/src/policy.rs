@@ -145,24 +145,29 @@ pub struct HibernateFacts<'a> {
     pub doing: Option<&'a str>,
 }
 
-/// 休眠恢复时给 agent 的附言：是休眠暂停的；停下时在做什么（或空闲）；被打断的 → 被打断的命令要重跑。
-pub fn hibernate_note(lang: Lang, f: &HibernateFacts<'_>) -> String {
-    let mut parts = vec![get(lang, "hibernate.resume").to_string()];
-    if f.was_working || f.interrupted {
-        parts.push(match f.doing {
-            Some(doing) => render(lang, "hibernate.doing", &[("doing", doing)]),
-            None => get(lang, "hibernate.doing.unknown").to_string(),
-        });
-        let tail = if f.interrupted {
-            "hibernate.interrupted"
-        } else {
-            "hibernate.finished"
-        };
-        parts.push(get(lang, tail).to_string());
-    } else {
-        parts.push(get(lang, "hibernate.idle").to_string());
+/// 休眠恢复时给 agent 的附言：是休眠暂停的；停下时在做什么；做完了 / 被打断了（被打断的 → 被打断的命令要重跑）。
+/// 休眠时空闲的（没在干活、没被打断）= None：没有要交代的，静默恢复（评审 I1，同崩溃重启时没在干活的）。
+pub fn hibernate_note(lang: Lang, f: &HibernateFacts<'_>) -> Option<String> {
+    if !f.was_working && !f.interrupted {
+        return None;
     }
-    parts.join("\n\n")
+    let doing = match f.doing {
+        Some(doing) => render(lang, "hibernate.doing", &[("doing", doing)]),
+        None => get(lang, "hibernate.doing.unknown").to_string(),
+    };
+    let tail = if f.interrupted {
+        "hibernate.interrupted"
+    } else {
+        "hibernate.finished"
+    };
+    Some(
+        [
+            get(lang, "hibernate.resume").to_string(),
+            doing,
+            get(lang, tail).to_string(),
+        ]
+        .join("\n\n"),
+    )
 }
 
 /// [`batch_summary`] 至多多少个字符（含每条附言的截断）。
@@ -342,7 +347,7 @@ mod tests {
         }
     }
 
-    /// C26：休眠恢复的附言——说清是休眠暂停的、停下时在做什么、被打断的要重跑；空闲的说空闲。
+    /// C26：休眠恢复的附言——说清是休眠暂停的、停下时在做什么、被打断的要重跑；空闲的不给附言（评审 I1：静默恢复）。
     #[test]
     fn hibernate_note_says_it_was_suspended_what_it_was_doing_and_to_rerun_if_interrupted() {
         use crate::text::{Lang, get, render};
@@ -355,7 +360,8 @@ mod tests {
                     interrupted: true,
                     doing: Some(doing),
                 },
-            );
+            )
+            .expect("在干活的有附言");
             assert!(cut.starts_with(get(lang, "hibernate.resume")), "{cut}");
             assert!(cut.contains(&render(lang, "hibernate.doing", &[("doing", doing)])));
             assert!(cut.contains(get(lang, "hibernate.interrupted")), "{cut}");
@@ -367,7 +373,8 @@ mod tests {
                     interrupted: false,
                     doing: None,
                 },
-            );
+            )
+            .expect("在干活的有附言");
             assert!(
                 done.contains(get(lang, "hibernate.doing.unknown")),
                 "{done}"
@@ -382,14 +389,7 @@ mod tests {
                     doing: Some(doing),
                 },
             );
-            assert_eq!(
-                idle,
-                format!(
-                    "{}\n\n{}",
-                    get(lang, "hibernate.resume"),
-                    get(lang, "hibernate.idle")
-                )
-            );
+            assert_eq!(idle, None, "空闲的：不给附言，静默恢复");
             // 被打断就一定是在干活（防御：调用方给错了也按「被打断」说，不漏掉「要重跑」）。
             let odd = hibernate_note(
                 lang,
@@ -398,7 +398,8 @@ mod tests {
                     interrupted: true,
                     doing: None,
                 },
-            );
+            )
+            .expect("被打断的一定有附言");
             assert!(odd.contains(get(lang, "hibernate.interrupted")));
         }
     }

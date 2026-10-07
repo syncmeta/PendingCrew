@@ -90,9 +90,6 @@ crewd 重启打断了你上一轮的工作。先核对现状（git status、你�
 ## hibernate.doing.unknown
 停下之前你在干活，但 crewd 没记下是哪一批唤醒——翻一下自己对话的最后几轮。
 
-## hibernate.idle
-停下时你是空闲的（上一轮已经做完）。醒来先看群里的未读，再决定要不要动手。
-
 ## hibernate.finished
 你在休眠期限之内做完了那一轮才停下，没有被打断。先核对一下现状再继续。
 

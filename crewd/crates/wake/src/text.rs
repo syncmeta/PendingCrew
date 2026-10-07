@@ -45,7 +45,6 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
     ("hibernate.resume", &[]),
     ("hibernate.doing", &["doing"]),
     ("hibernate.doing.unknown", &[]),
-    ("hibernate.idle", &[]),
     ("hibernate.finished", &[]),
     ("hibernate.interrupted", &[]),
 ];
