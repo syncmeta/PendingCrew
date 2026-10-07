@@ -37,7 +37,7 @@ struct Fitted {
     text: String,
 }
 
-fn restart_row(r: &SessionRow) -> RestartRow {
+pub(super) fn restart_row(r: &SessionRow) -> RestartRow {
     RestartRow {
         session: r.id.clone(),
         name: r.name(),
@@ -69,6 +69,11 @@ impl<P: Port> Core<P> {
                 Ok(())
             }
             CollabFact::Lagged => self.on_lagged().await,
+            CollabFact::RestartAnswered {
+                prompt,
+                resume,
+                sessions,
+            } => self.on_restart_answered(prompt, resume, sessions).await,
         }
     }
 
@@ -161,6 +166,9 @@ impl<P: Port> Core<P> {
 
     /// 能投就投（裁定 7、8）。返回这次有没有投出 / 拉起。
     pub(crate) async fn try_deliver(&mut self, session: &str) -> anyhow::Result<bool> {
+        if self.shutting_down {
+            return Ok(false); // 停机中不投、不拉起
+        }
         let now = self.now();
         // 每轮可能把「已注入」的消息类唤醒直接记 delivered，然后重选；最多 4 轮。
         for _ in 0..4 {
@@ -691,7 +699,8 @@ impl<P: Port> Core<P> {
         resume: bool,
         sessions: Vec<String>,
     ) -> anyhow::Result<()> {
-        if !resume {
+        // 「先不」= 什么都不做；停机中答的也不入队（下次启动重新问）。
+        if !resume || self.shutting_down {
             return Ok(());
         }
         let mut rows = Vec::new();
@@ -722,8 +731,14 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
-    /// 积压补救（裁定 16）：每个 session 的未读重新规划一遍（不问 Arbiter；6h 陈旧闸照旧；UNIQUE 去重）。
+    /// 积压补救（裁定 16）：每个 session 的未读重新规划一遍（不问 Arbiter；6h 陈旧闸照旧；UNIQUE 去重），再重扫。
     pub(crate) async fn rescue_backlog(&mut self) -> anyhow::Result<()> {
+        self.replan_unread().await?;
+        self.rescan().await
+    }
+
+    /// 积压补救的规划那一半（只入队、不投）：`boot` 要在它与重扫之间记下 C4 的水位（控制者裁定 C3）。
+    pub(crate) async fn replan_unread(&mut self) -> anyhow::Result<()> {
         let now = self.now();
         let mut ctxs: BTreeMap<String, Option<ChannelCtx>> = BTreeMap::new();
         for s in self.port.all_session_ids().await? {
@@ -752,7 +767,7 @@ impl<P: Port> Core<P> {
                 }
             }
         }
-        self.rescan().await
+        Ok(())
     }
 
     pub(crate) async fn set_captain(

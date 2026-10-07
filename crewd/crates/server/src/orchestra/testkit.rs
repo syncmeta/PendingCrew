@@ -57,7 +57,10 @@ pub struct MemState {
     /// 重启询问 id → 答复（`true` = 恢复）；测试里直接写，模拟「人答了但 `RestartAnswered` 事件丢了」。
     pub restart_answers: BTreeMap<i64, bool>,
     pub defaults_applied: usize,
-    pub prunes: usize,
+    /// `prune_wakes` 的每次调用：(截止时刻, 这次至多几条)。
+    pub prunes: Vec<(Ms, usize)>,
+    /// 假装库里有这么多条可清的旧行（MemPort 不记结算时刻）：每次清 min(limit, 剩下的)。
+    pub prunable: usize,
     pub ledgers: BTreeMap<String, Arc<MemoryLedger>>,
     /// 机组 → 工作目录（`Port::crew_workdir`）。
     pub crew_dirs: BTreeMap<String, PathBuf>,
@@ -604,10 +607,13 @@ impl Port for MemPort {
         Ok(())
     }
 
-    async fn prune_wakes(&self, _before: Ms) -> Result<usize> {
-        // MemPort 不记 settled 时刻：只数调用次数（测试只核「定时拍会调」）。
-        self.lock().prunes += 1;
-        Ok(0)
+    async fn prune_wakes(&self, before: Ms, limit: usize) -> Result<usize> {
+        // MemPort 不记结算时刻：记下每次调用，从「假装可清的」里拿走至多 `limit` 条（真删由 collab 的测试钉住）。
+        let mut st = self.lock();
+        st.prunes.push((before, limit));
+        let n = st.prunable.min(limit);
+        st.prunable -= n;
+        Ok(n)
     }
 
     async fn message(&self, r: &MessageRef) -> Result<Option<(MsgFacts, String)>> {

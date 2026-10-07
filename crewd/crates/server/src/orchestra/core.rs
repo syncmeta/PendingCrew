@@ -31,7 +31,7 @@ use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::policy::{self, Gate, LaunchGate};
 use crewd_wake::queue::{self, ids};
 use crewd_wake::text;
-use crewd_wake::{LatchScope, MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
+use crewd_wake::{HOUR, LatchScope, MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
 use tokio::sync::{mpsc, oneshot};
 
 use super::OrchestraConfig;
@@ -39,6 +39,11 @@ use super::clock::Clock;
 use super::exec::{Context, ExecHandle, ExecSendError, Executor, Executors, LaunchRequest};
 use super::hooks::Hooks;
 use super::port::*;
+
+/// 已结（delivered / dropped）的唤醒行保留多久（排障用 `wake.list` 看得到最近一周；控制者裁定 C6）。
+pub(crate) const WAKE_RETENTION_MS: i64 = 7 * 24 * HOUR;
+/// 定时拍里一次至多清多少条旧唤醒（S28：积了很多也不一口气删光、把库卡住；清满了下一拍接着清）。
+pub(crate) const PRUNE_BATCH: usize = 500;
 
 /// 这次投递回执能不能结算 inflight 的那批：只有终局、且不是 `Abandoned`（那是驱动层停掉 / 退出时的 abandon，
 /// 该批由 `on_exited` 按三种情况结算，见模块文档的绑定规则）。
@@ -91,6 +96,12 @@ pub enum CollabFact {
     },
     /// 订阅落后、漏了事件：按未读重新规划一遍（裁定 16）。
     Lagged,
+    /// 人答了重启询问（M3a `restart::answer` 的 `Change::RestartAnswered`）。`resume = false` = 「先不」。
+    RestartAnswered {
+        prompt: i64,
+        resume: bool,
+        sessions: Vec<String>,
+    },
 }
 
 pub enum Input {
@@ -133,6 +144,8 @@ pub enum Input {
         session: String,
         generator: u64,
     },
+    /// 停机（[`Core::begin_shutdown`]）：全部会话都退出之后回执。
+    Shutdown(oneshot::Sender<()>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +185,8 @@ pub enum ControlError {
     CaptainTaken(String),
     /// 请求本身不成立（空的 nudge、在没编号的选择框上发数字）。
     Invalid(String),
+    /// crewd 正在停机：不再起 / 恢复会话。
+    ShuttingDown,
     Internal(String),
 }
 
@@ -201,6 +216,7 @@ impl std::fmt::Display for ControlError {
             }
             Self::NoWorkdir(id) => write!(f, "session {id} 没有可用的工作目录"),
             Self::CaptainTaken(crew) => write!(f, "机组 {crew} 已有机长；换机长用 crew.setCaptain"),
+            Self::ShuttingDown => write!(f, "crewd 正在停机，不再起或恢复会话"),
         }
     }
 }
@@ -258,6 +274,14 @@ pub enum Cmd {
         id: String,
         reply: Reply<()>,
     },
+    /// 可选并发上限（§22.7 Q5；None = 不设）。
+    MaxLive {
+        reply: Reply<Option<usize>>,
+    },
+    SetMaxLive {
+        max: Option<usize>,
+        reply: Reply<()>,
+    },
 }
 
 /// 一笔还没回执的投递。`delivery` = `ExecHandle::send` 的编号（拉起时带的正文 = `BRIEF_DELIVERY_ID`）；
@@ -312,7 +336,11 @@ pub struct Starting {
     pub row: SessionRow,
     /// 随开场正文一起送的那批（已 claim；有要投的东西时一定有正文），同 `Inflight::batch`。
     pub batch: Batch,
+    /// 人在拉起回来之前叫停了（起来了就停、那批丢掉，同人停）。
     pub stop_requested: bool,
+    /// crewd 停机时它还在起（[`Core::begin_shutdown`]）：起来了就 [`Core::halt`]、起不来也一样——那批原样退回，
+    /// 不丢（不是人停）、不算失败。
+    pub halt_requested: bool,
 }
 
 pub struct Raised {
@@ -350,6 +378,14 @@ pub struct Core<P: Port> {
     pub(crate) seen_progress: HashMap<String, Ms>,
     /// 失败重试的抖动（每批没送到时抽一个；种子见 `OrchestraConfig::jitter_seed`）。
     pub(crate) jitter: queue::Jitter,
+    /// 停机闸（控制者裁定 C4：跟回执分开——回执发出去之后闸仍关着）：不投、不拉起、不起 / 恢复会话。
+    pub(crate) shutting_down: bool,
+    /// 停机回执（全部会话退出后发，[`Core::shutdown_done`]）；可能有好几个人在等。
+    pub(crate) shutdown: Vec<oneshot::Sender<()>>,
+    /// 上一次清旧唤醒的时刻（`Ms(0)` = 启动后第一拍就清）。
+    pub(crate) last_prune: Ms,
+    /// 上一次清满了一批：下一拍接着清，不等一小时。
+    pub(crate) prune_more: bool,
 }
 
 impl<P: Port> Core<P> {
@@ -400,6 +436,10 @@ impl<P: Port> Core<P> {
             timers: BTreeSet::new(),
             seen_progress: HashMap::new(),
             jitter,
+            shutting_down: false,
+            shutdown: Vec::new(),
+            last_prune: Ms(0),
+            prune_more: false,
         })
     }
 
@@ -438,6 +478,10 @@ impl<P: Port> Core<P> {
             }
             Input::WriteDone { session, generator } => {
                 self.on_write_done(&session, generator).await
+            }
+            Input::Shutdown(reply) => {
+                self.begin_shutdown(reply);
+                Ok(())
             }
         };
         if let Err(e) = r {
@@ -525,6 +569,13 @@ impl<P: Port> Core<P> {
                 let r = self.recover(scope, &id).await;
                 let _ = reply.send(r);
             }
+            Cmd::MaxLive { reply } => {
+                let _ = reply.send(Ok(self.gate.max_live()));
+            }
+            Cmd::SetMaxLive { max, reply } => {
+                let r = self.set_max_live(max).await;
+                let _ = reply.send(r);
+            }
         }
     }
 
@@ -542,6 +593,10 @@ impl<P: Port> Core<P> {
     /// 起一个新会话。`isolation: true` 时 worktree 在派生任务里建（不堵 actor），建完以 `Input::WorktreeReady`
     /// 回来再写行、拉起；回执在那时才发。
     async fn start_new(&mut self, req: StartSession, origin: Origin, reply: Reply<SessionRow>) {
+        if self.shutting_down {
+            let _ = reply.send(Err(ControlError::ShuttingDown));
+            return;
+        }
         let base = match self.check_start(&req, origin).await {
             Ok(base) => base,
             Err(e) => {
@@ -618,6 +673,12 @@ impl<P: Port> Core<P> {
             self.captain_pending.remove(&req.crew_id);
         }
         let r = match result {
+            // 建 worktree 期间开始停机了：不写行、不起（worktree 留着：crewd 不删，把路径告诉人）。
+            Ok(path) if self.shutting_down => Err(ControlError::Internal(format!(
+                "{}（已建好的 worktree {} 不会被自动删除）",
+                ControlError::ShuttingDown,
+                path.display()
+            ))),
             Ok(path) => self.finish_start(req, Some(path)).await,
             Err(why) => Err(ControlError::Worktree(why)),
         };
@@ -684,6 +745,9 @@ impl<P: Port> Core<P> {
         session: &str,
         origin: Origin,
     ) -> Result<(), ControlError> {
+        if self.shutting_down {
+            return Err(ControlError::ShuttingDown);
+        }
         if self.live.contains_key(session) || self.starting.contains_key(session) {
             return Err(ControlError::AlreadyRunning(session.into()));
         }
@@ -759,9 +823,8 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
-    /// crewd 自己叫停一个在跑的 session（停机用，Task 9）：不改 desired，也不让驱动层 abandon 发来的
+    /// crewd 自己叫停一个在跑的 session（停机，[`Core::begin_shutdown`]）：不改 desired，也不让驱动层 abandon 发来的
     /// `Working(false)` 抹掉 `was_working`——下次启动问人时要知道它是被打断的。带着的唤醒退出时原样退回 pending。
-    #[allow(dead_code)] // Task 9 的停机调它。
     pub(crate) fn halt(&mut self, session: &str) {
         if let Some(l) = self.live.get_mut(session) {
             l.halting = true;
@@ -949,6 +1012,7 @@ impl<P: Port> Core<P> {
                 row,
                 batch,
                 stop_requested: false,
+                halt_requested: false,
             },
         );
         let tx = self.inbox.clone();
@@ -1018,7 +1082,7 @@ impl<P: Port> Core<P> {
         let st = self.starting.remove(session).expect("上面查过");
         match result {
             Ok(handle) => {
-                if st.stop_requested {
+                if st.stop_requested || st.halt_requested {
                     let _ = handle.stop();
                 }
                 let inflight = st.batch.has_work().then(|| Inflight {
@@ -1042,7 +1106,7 @@ impl<P: Port> Core<P> {
                         decision: None,
                         inflight,
                         stopping: st.stop_requested,
-                        halting: false,
+                        halting: st.halt_requested && !st.stop_requested,
                         writes: VecDeque::new(),
                         writing: false,
                     },
@@ -1056,6 +1120,13 @@ impl<P: Port> Core<P> {
                         error: "stopped".into(),
                     };
                     self.port.settle(&held, s, self.now()).await?;
+                }
+            }
+            Err(_) if st.halt_requested => {
+                // crewd 停机时它还在起、结果起不来：那批原样退回（停机不是人停、也不算一次失败；起不来的原因多半就是停机）。
+                let held = st.batch.ids();
+                if !held.is_empty() {
+                    self.port.settle(&held, Settle::Requeue, self.now()).await?;
                 }
             }
             Err(e) => {
@@ -1144,26 +1215,40 @@ impl<P: Port> Core<P> {
             .chain(batch.riders)
             .filter(|w| acked.gave_up.contains(&w.id))
             .collect();
-        if queue::should_alert(&gave_up)
-            && let Some(row) = self.port.session(&session).await?
-            && row.resume_failed_at.is_none()
-        {
-            let attempts = queue::MAX_ATTEMPTS.to_string();
-            let msg = text::render(
-                self.lang(),
-                "delivery.failed.group",
-                &[
-                    ("name", &safe_name(&row.name())),
-                    ("attempts", &attempts),
-                    ("error", &safe_name(error)),
-                ],
-            );
-            self.port
-                .post_system(self.alert_audience(&row.crew_id, row.captain), msg)
-                .await?;
-        }
+        self.alert_gave_up(&session, &gave_up, error).await?;
         self.port.publish(OrchestraEvent::WakeChanged { session });
         Ok(())
+    }
+
+    /// 一个 session 的唤醒到上限放弃了：告警一次（任何优先级，C19）；已记过「起不来」的 session 不再告（那条已经说了）。
+    pub(crate) async fn alert_gave_up(
+        &mut self,
+        session: &str,
+        gave_up: &[QueuedWake],
+        error: &str,
+    ) -> anyhow::Result<()> {
+        if !queue::should_alert(gave_up) {
+            return Ok(());
+        }
+        let Some(row) = self.port.session(session).await? else {
+            return Ok(());
+        };
+        if row.resume_failed_at.is_some() {
+            return Ok(());
+        }
+        let attempts = queue::MAX_ATTEMPTS.to_string();
+        let msg = text::render(
+            self.lang(),
+            "delivery.failed.group",
+            &[
+                ("name", &safe_name(&row.name())),
+                ("attempts", &attempts),
+                ("error", &safe_name(error)),
+            ],
+        );
+        self.port
+            .post_system(self.alert_audience(&row.crew_id, row.captain), msg)
+            .await
     }
 
     // —— 会话事件
@@ -1555,7 +1640,27 @@ impl<P: Port> Core<P> {
         let now = self.now();
         self.timers.retain(|t| *t > now);
         self.escalate_decisions().await?;
+        // 默认方案到点（控制者裁定 C7）与清旧唤醒（C6 / S28）出错只记日志：不能挡住下面的重扫。
+        log_err(self.port.apply_due_defaults().await);
+        log_err(self.prune(now).await);
         self.rescan().await
+    }
+
+    /// 清掉保留期之前就已结的唤醒：最多一小时一次（启动后第一拍就清）；一次至多 [`PRUNE_BATCH`] 条，清满了下一拍接着清。
+    async fn prune(&mut self, now: Ms) -> anyhow::Result<()> {
+        if !self.prune_more && now.since(self.last_prune) < HOUR {
+            return Ok(());
+        }
+        self.last_prune = now;
+        let n = self
+            .port
+            .prune_wakes(Ms(now.0 - WAKE_RETENTION_MS), PRUNE_BATCH)
+            .await?;
+        self.prune_more = n >= PRUNE_BATCH;
+        if n > 0 {
+            eprintln!("crewd: 编排：清掉 {n} 条已结的旧唤醒");
+        }
+        Ok(())
     }
 
     // —— 状态面
