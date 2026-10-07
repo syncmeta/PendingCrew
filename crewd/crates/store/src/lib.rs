@@ -1,5 +1,6 @@
 //! crewd 的持久化层。crewd 是数据库的唯一写者；其他进程一律经 crewd 的 API。
 pub mod archive;
+pub mod backup;
 pub mod channels;
 pub mod crews;
 pub mod db;
@@ -7,6 +8,7 @@ pub mod fsutil;
 pub mod messages;
 pub mod schema;
 pub mod sessions;
+pub mod testing;
 pub mod todos;
 
 pub use db::Db;
@@ -83,6 +85,27 @@ pub enum StoreError {
     /// 交给库线程的闭包 panic 了；该闭包里的事务已回滚，线程照常服务。
     #[error("数据库任务 panic，已回滚")]
     DbJobPanicked,
+    /// 库旁边的文件操作（快照、备份、标识文件）失败。
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// `quick_check` / `integrity_check` 没过（只报告：不删、不替换）。
+    #[error("数据库没通过 {check}：{}", problems.iter().take(5).cloned().collect::<Vec<_>>().join("；"))]
+    Integrity {
+        check: &'static str,
+        problems: Vec<String>,
+    },
+    /// 动手前预检：可用空间不够。
+    #[error("可用空间不够：需要约 {needed} 字节，只剩 {available} 字节")]
+    NoSpace { needed: u64, available: u64 },
+    /// 快照（`VACUUM INTO`）没拍成；不留半截文件。
+    #[error("快照 {} 失败：{source}", dest.display())]
+    Snapshot {
+        dest: std::path::PathBuf,
+        source: Box<StoreError>,
+    },
+    /// 迁移前的保护步骤（完整性检查、快照）没过：没有迁移，库保持原版本、原样。
+    #[error("拒绝迁移（库保持 v{from}，未改动）：{source}")]
+    MigrationRefused { from: i64, source: Box<StoreError> },
 }
 
 impl From<rusqlite::Error> for StoreError {
@@ -99,6 +122,17 @@ impl StoreError {
     pub fn storage_kind(&self) -> Option<StorageKind> {
         match self {
             StoreError::Storage { kind, .. } => Some(*kind),
+            StoreError::Integrity { .. } => Some(StorageKind::Corrupt),
+            StoreError::NoSpace { .. } => Some(StorageKind::DiskFull),
+            StoreError::Io(e) => Some(match e.raw_os_error() {
+                Some(libc::ENOSPC) | Some(libc::EDQUOT) => StorageKind::DiskFull,
+                Some(libc::EROFS) => StorageKind::ReadOnly,
+                Some(libc::EACCES) | Some(libc::EPERM) => StorageKind::CantOpen,
+                _ => StorageKind::Io,
+            }),
+            StoreError::Snapshot { source, .. } | StoreError::MigrationRefused { source, .. } => {
+                source.storage_kind()
+            }
             _ => None,
         }
     }
@@ -113,21 +147,29 @@ pub const FULLFSYNC: bool = true;
 
 pub struct Store {
     conn: Connection,
+    /// 文件库的备份目录（`<库所在目录>/backups`）；内存库没有。
+    backups: Option<std::path::PathBuf>,
 }
 
 impl Store {
+    /// 打开（必要时新建）库文件。旧版本的非空库迁移前先在 `backups/` 拍快照（S20）。
     pub fn open(path: &Path) -> Result<Self> {
-        Self::init(Connection::open(path)?)
+        Self::init(Connection::open(path)?, Some(backup::backups_dir_for(path)))
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
+        Self::init(Connection::open_in_memory()?, None)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(conn: Connection, backups: Option<std::path::PathBuf>) -> Result<Self> {
         pin_pragmas(&conn)?;
-        schema::migrate(&conn)?;
-        Ok(Self { conn })
+        schema::migrate_guarded(&conn, backups.as_deref())?;
+        Ok(Self { conn, backups })
+    }
+
+    /// 备份目录（内存库是 `None`）。
+    pub fn backups_dir(&self) -> Option<&Path> {
+        self.backups.as_deref()
     }
 
     pub fn conn(&self) -> &Connection {
