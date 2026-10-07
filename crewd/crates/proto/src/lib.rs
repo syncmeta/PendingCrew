@@ -23,11 +23,13 @@ pub mod methods {
     pub const CREW_ADOPT: &str = "crew.adopt";
     pub const CREW_REORDER: &str = "crew.reorder";
     pub const CREW_RELEASE: &str = "crew.release";
-    /// 删机组 = 归档（N1 裁定 13）：可逆，返回归档后的 `Crew`。
-    pub const CREW_DELETE: &str = "crew.delete";
-    /// 解档（`crew.delete` 的反操作），返回 `Crew`。
-    pub const CREW_UNARCHIVE: &str = "crew.unarchive";
-    /// 永久删除：只收已归档的机组；先拍一份不轮转的 pre-delete 快照（N4），拍不成就不删。
+    /// 移除机组（PM 2026-10-07）：隐藏并冻结（库里叫归档，`archivedAt`），不删任何东西、可恢复；
+    /// 返回移除后的 `Crew`。
+    pub const CREW_REMOVE: &str = "crew.remove";
+    /// 恢复（`crew.remove` 的反操作），返回 `Crew`。
+    pub const CREW_RESTORE: &str = "crew.restore";
+    /// 永久删除：只收已移除的机组，真的删掉这个机组的一切；删之前拍一份 pre-delete 快照（N4），拍不成就不删；
+    /// 快照只是安全网，30 天后随定时备份轮转删掉。
     pub const CREW_PURGE: &str = "crew.purge";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_CREATE: &str = "channel.create";
@@ -62,8 +64,8 @@ pub mod methods {
         CREW_ADOPT,
         CREW_REORDER,
         CREW_RELEASE,
-        CREW_DELETE,
-        CREW_UNARCHIVE,
+        CREW_REMOVE,
+        CREW_RESTORE,
         CREW_PURGE,
         CHANNEL_LIST,
         CHANNEL_CREATE,
@@ -391,11 +393,11 @@ pub fn api_schema() -> Value {
             m(sub::<CrewReleaseParams>(g), sub::<Crew>(g)),
         ),
         (
-            methods::CREW_DELETE,
+            methods::CREW_REMOVE,
             m(sub::<CrewIdParams>(g), sub::<Crew>(g)),
         ),
         (
-            methods::CREW_UNARCHIVE,
+            methods::CREW_RESTORE,
             m(sub::<CrewIdParams>(g), sub::<Crew>(g)),
         ),
         (

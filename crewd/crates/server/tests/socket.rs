@@ -269,6 +269,14 @@ async fn params_are_strict_and_errors_are_typed() {
             .await,
         -32601
     );
+    // PM 2026-10-07：机组的「移除」（可逆）与「永久删除」分开叫；旧名 crew.delete / crew.unarchive 不留别名。
+    for (id, old) in [(8, "crew.delete"), (9, "crew.unarchive")] {
+        assert_eq!(
+            c.call_err(id, old, json!({"crewId":"a"})).await,
+            -32601,
+            "{old}"
+        );
+    }
     // 控制者裁定 b：params 是数组 = -32602（serde 本会把它按字段顺序读成结构体）。
     assert_eq!(c.call_err(11, "crew.get", json!(["a"])).await, -32602);
     assert_eq!(c.call_err(12, "crew.list", json!([])).await, -32602);
@@ -514,7 +522,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
     )
     .await;
     // 删机组 = 归档（N1 裁定 13）：返回归档后的机组；默认列表里没有它，includeArchived 列得出；解档后回来。
-    let gone = c.call(8, "crew.delete", json!({"crewId":made["id"]})).await;
+    let gone = c.call(8, "crew.remove", json!({"crewId":made["id"]})).await;
     assert_eq!(gone["id"], made["id"]);
     assert!(gone["archivedAt"].is_string(), "{gone}");
     let has = |list: &Value| {
@@ -548,7 +556,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
         "线上带稳定码"
     );
     let back = c
-        .call(12, "crew.unarchive", json!({"crewId":made["id"]}))
+        .call(12, "crew.restore", json!({"crewId":made["id"]}))
         .await;
     assert!(back.get("archivedAt").is_none_or(Value::is_null), "{back}");
     assert!(has(&c.call(13, "crew.list", json!({})).await));
@@ -556,7 +564,7 @@ async fn channels_can_be_created_watched_and_handed_over() {
     assert_eq!(
         c.call_err(
             14,
-            "crew.delete",
+            "crew.remove",
             json!({"crewId":crewd_store::crews::MANAGEMENT_ID})
         )
         .await,
@@ -913,7 +921,7 @@ async fn ask_restart_channel_and_crew_changes_reach_their_topics_once() {
     changed.sort_by_key(|v| v.to_string());
     assert_eq!(changed, std::slice::from_ref(&made));
     // 删机组 = 归档：机组一条 crew.changed、它的大厅一条 channel.changed，什么都没删。
-    let archived = c.call(9, "crew.delete", json!({"crewId":made})).await;
+    let archived = c.call(9, "crew.remove", json!({"crewId":made})).await;
     assert!(archived["archivedAt"].is_string());
     let evs = frames_until_hello(&mut sub, 107).await;
     let mut kinds: Vec<(String, Value)> = evs
@@ -1022,7 +1030,7 @@ async fn session_list_hides_archived_crews_and_archiving_withdraws_their_asks() 
     let n = |v: &Value| v.as_array().unwrap().len();
     assert_eq!(n(&c.call(1, "session.list", Value::Null).await), 2);
     assert_eq!(n(&c.call(2, "ask.list", Value::Null).await), 1);
-    c.call(3, "crew.delete", json!({"crewId":"a"})).await;
+    c.call(3, "crew.remove", json!({"crewId":"a"})).await;
     assert_eq!(n(&c.call(4, "session.list", json!({})).await), 0);
     assert_eq!(
         n(&c.call(5, "session.list", json!({"includeArchived":true}))
@@ -1034,7 +1042,7 @@ async fn session_list_hides_archived_crews_and_archiving_withdraws_their_asks() 
         2
     );
     assert_eq!(n(&c.call(7, "ask.list", Value::Null).await), 0, "问已撤回");
-    c.call(8, "crew.unarchive", json!({"crewId":"a"})).await;
+    c.call(8, "crew.restore", json!({"crewId":"a"})).await;
     assert_eq!(
         n(&c.call(9, "ask.list", Value::Null).await),
         0,
@@ -1044,7 +1052,7 @@ async fn session_list_hides_archived_crews_and_archiving_withdraws_their_asks() 
 }
 
 /// S22 / N4：`crew.purge`（永久删除，只收已归档的）先拍 pre-delete 快照再删；快照里还有这个机组。
-/// `crew.delete` 只是归档（N1 裁定 13）：可逆，不拍快照。
+/// `crew.remove`（移除）只是归档（N1 裁定 13）：可逆，不拍快照。
 #[tokio::test]
 async fn crew_purge_snapshots_before_purging() {
     let dir = tempfile::tempdir().unwrap();
@@ -1060,7 +1068,7 @@ async fn crew_purge_snapshots_before_purging() {
         .as_str()
         .unwrap()
         .to_string();
-    c.call(2, "crew.delete", json!({"crewId":made})).await;
+    c.call(2, "crew.remove", json!({"crewId":made})).await;
     assert!(
         pre_delete_snapshots(dir.path()).is_empty(),
         "归档不拍快照：{:?}",
@@ -1112,7 +1120,7 @@ async fn crew_purge_without_a_snapshot_deletes_nothing() {
         .as_str()
         .unwrap()
         .to_string();
-    c.call(9, "crew.delete", json!({"crewId":made})).await;
+    c.call(9, "crew.remove", json!({"crewId":made})).await;
     let b = dir.path().join("backups");
     // 启动时的定时备份可能正在写 backups/：等它出现再收权限。
     for _ in 0..200 {
@@ -1201,7 +1209,7 @@ async fn crew_purge_that_cannot_happen_takes_no_snapshot() {
         crewd_proto::RpcError::CONFLICT,
         "没归档的不能永久删除"
     );
-    c.call(4, "crew.delete", json!({"crewId":"a"})).await;
+    c.call(4, "crew.remove", json!({"crewId":"a"})).await;
     rusqlite::Connection::open(dir.path().join("crewd.db"))
         .unwrap()
         .execute("UPDATE sessions SET desired='running' WHERE id='cap-a'", [])

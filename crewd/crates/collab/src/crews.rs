@@ -1,4 +1,7 @@
-//! 机组：森林（顶层机组 + DAG）、总机组（管理机组，不在树里）、机长、建 / 改 / 归档、编号。移植 `LocalCrewStore.swift:356-526`、`CrewDirectory.swift:8-13`。
+//! 机组：森林（顶层机组 + DAG）、总机组（管理机组，不在树里）、机长、建 / 改 / 归档、编号。移植
+//! `LocalCrewStore.swift:356-526`、`CrewDirectory.swift:8-13`。「归档」是库里的叫法；客户端与人看到的叫
+//! 「移除」（`crew.remove`，隐藏并冻结、可恢复）/「恢复」（`crew.restore`）；「永久删除」（`crew.purge`）
+//! 才真的删（PM 2026-10-07）。
 use crate::refusal::{Code, Refusal};
 use crate::{Change, CollabError, Result, Tx};
 use crewd_proto::Crew;
@@ -520,7 +523,7 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// 删机组 = 归档（N1 裁定 13；`crew.delete` 调它，可逆，不拍快照）：拒总机组（顶层机组照常可以归档）、拒还有 desired=running 的 session、
+/// 移除机组 = 归档（N1 裁定 13；`crew.remove` 调它，可逆，不拍快照）：拒总机组（顶层机组照常可以归档）、拒还有 desired=running 的 session、
 /// 拒还有**没归档的子机组**（先挪走或归档子机组，不级联）。写 `crews.archived_at`，把**归属这个机组**的群全部标归档
 /// （每个一条 ChannelChanged；topic / dm 上待接受的群主转让随之作废，同 `channels::update` 归档）。
 /// 消息、session 行、成员行、账本全部保留；父子边不动（解档原地回来）。还开着的问撤回（`asks::withdraw_open_for_archive`，
@@ -585,7 +588,7 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     get(tx.conn(), id)
 }
 
-/// 解档（`crew.unarchive`）：清 `archived_at`；大厅解档；是 home 且人类群建过 → 人类群解档（`ensure_human_channel`，
+/// 解档（`crew.restore`，人叫「恢复」）：清 `archived_at`；大厅解档；是 home 且人类群建过 → 人类群解档（`ensure_human_channel`，
 /// 钉机长游标）。topic / dm 留归档（人逐个解档）。上级还归档着 → Conflict（先解档上级：归档的机组下面不挂活的）。
 /// 没归档 = 原样返回、不发变更。
 pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
@@ -2720,7 +2723,7 @@ mod tests {
         ));
     }
 
-    /// 永久删除只收已归档的机组（先 crew.delete 归档）；前置条件也挡总机组与在跑的 session。
+    /// 永久删除只收已归档的机组（先 crew.remove 移除）；前置条件也挡总机组与在跑的 session。
     #[test]
     fn purge_only_takes_an_archived_crew() {
         let mut s = store();
@@ -2823,7 +2826,7 @@ mod tests {
         let (_, ch) = ok_at(&mut s, NOW, |tx| archive(tx, "crew-b"));
         let b = state(&s, "crew-b", &hb);
         assert_eq!(b.state, AskStateView::Withdrawn);
-        assert_eq!(b.withdraw_reason.as_deref(), Some("机组已归档"));
+        assert_eq!(b.withdraw_reason.as_deref(), Some("机组已被移除"));
         assert!(ch.contains(&Change::AskChanged {
             crew_id: "crew-b".into(),
             ask: hb.clone()
@@ -2839,7 +2842,7 @@ mod tests {
         ok(&mut s, |tx| archive(tx, "crew-a"));
         let a = state(&s, "crew-a", &ha);
         assert_eq!(a.state, AskStateView::Withdrawn);
-        assert_eq!(a.withdraw_reason.as_deref(), Some("The crew was archived"));
+        assert_eq!(a.withdraw_reason.as_deref(), Some("The crew was removed"));
         assert!(
             crate::asks::waits(s.conn(), NOW, Some("crew-a"))
                 .unwrap()

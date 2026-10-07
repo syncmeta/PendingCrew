@@ -179,18 +179,18 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
-        methods::CREW_DELETE => {
-            // 删机组 = 归档（N1 裁定 13）：可逆、什么都不删，不拍快照。
+        methods::CREW_REMOVE => {
+            // 移除机组 = 归档（N1 裁定 13；PM 2026-10-07 定名「移除」）：可逆、什么都不删，不拍快照。
             let p: CrewIdParams = parse_params(p)?;
             write(state, move |tx| crews::archive(tx, &p.crew_id)).await
         }
-        methods::CREW_UNARCHIVE => {
+        methods::CREW_RESTORE => {
             let p: CrewIdParams = parse_params(p)?;
             write(state, move |tx| crews::unarchive(tx, &p.crew_id)).await
         }
         methods::CREW_PURGE => {
             let p: CrewIdParams = parse_params(p)?;
-            // N4 / S22：永久删除之前先拍快照（不轮转、永远保留），前置条件 → 快照 → 删除在同一个库线程任务里；
+            // N4 / S22：永久删除之前先拍快照（安全网，30 天后随定时备份轮转删掉），前置条件 → 快照 → 删除在同一个库线程任务里；
             // 前置条件不成立（没有 / 总机组 / 没归档 / 有在跑的 session）不拍；快照拍不成就不删。
             let what = p.crew_id.clone();
             let id = p.crew_id.clone();

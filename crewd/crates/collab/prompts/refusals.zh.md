@@ -11,7 +11,7 @@
 系统身份不能撤回问；请以 session 或人的身份撤回
 
 ## ask.archive_blocked
-机组 {crew} 的 {ask} 还卡着活项；先答掉它或让负责人改道，再归档
+机组 {crew} 的 {ask} 还卡着活项；先答掉它或让负责人改道，再移除机组
 
 ## channel.not_found
 没有群 {channel}；先列出现有的群，核对 id
@@ -44,7 +44,7 @@
 大厅与人类群不能改名，它们的名字跟着机组走；要改就改机组名
 
 ## channel.fixed_no_archive
-大厅与人类群不能手动归档，它们随机组归档；要停用就归档整个机组
+大厅与人类群不能手动归档，它们随机组移除而冻结；要停用就移除整个机组（crew.remove，可恢复）
 
 ## channel.lobby_cannot_add
 大厅成员 = 本机组全体，不能手动加；要让谁进大厅，就让他成为本机组的 session
@@ -53,7 +53,7 @@
 私聊只能两个人；要拉更多人就新建一个 topic 群
 
 ## channel.archived
-群 {channel} 已归档，不收消息；要继续就解档，或新开一个群；它所在的机组若已归档，请人先解档机组
+群 {channel} 已归档，不收消息；要继续就解档，或新开一个群；它所在的机组若已被移除，请人先恢复机组（crew.restore）
 
 ## channel.add_members_member_only
 只有群成员能拉人；请群里的成员来拉，或先让他们拉你进群
@@ -110,10 +110,10 @@
 没有机组 {crew}；先列出机组，核对 id
 
 ## crew.archived
-机组 {crew} 已归档，只读；请人先解档它（解档只有人在客户端能做）
+机组 {crew} 已被移除（隐藏并冻结，没有删除），只读；请人先恢复它（crew.restore，只有人在客户端能做）
 
 ## crew.management_fixed
-总机组是管理机组，不能隐藏、归档或永久删除；保持原样即可，要整理侧栏就隐藏或归档别的机组
+总机组是管理机组，不能隐藏、移除或永久删除；保持原样即可，要整理侧栏就隐藏或移除别的机组
 
 ## crew.management_not_in_tree
 总机组不在机组树里：它不能有上级或下级，别的机组也不能挂到它下面；换一个机组当上级，或者不给 parentId、建成顶层机组
@@ -137,22 +137,22 @@
 机组 {crew} 还有 {running} 个在跑的 session；先停掉它们
 
 ## crew.live_children
-机组 {crew} 下面还有没归档的子机组 {children}；先把它们挪走（crew.release）或归档
+机组 {crew} 下面还有没移除的子机组 {children}；先把它们挪走（crew.release）或移除
 
 ## crew.wakes_inflight
-机组 {crew} 还有 {count} 条唤醒正在投递；等投递结束再归档
+机组 {crew} 还有 {count} 条唤醒正在投递；等投递结束再移除
 
 ## crew.parent_archived
-机组 {crew} 的上级 {parents} 已归档，归档的机组下面不挂活的；请人先解档 {parents}，解档之后若不想让 {crew} 继续挂在它们下面，再用 release 把 {crew} 摘出
+机组 {crew} 的上级 {parents} 已被移除，被移除的机组下面不挂活的；请人先恢复 {parents}，恢复之后若不想让 {crew} 继续挂在它们下面，再用 release 把 {crew} 摘出
 
 ## crew.not_archived
-机组 {crew} 还没归档；永久删除只收已归档的机组，先归档（crew.delete）
+机组 {crew} 还没移除；永久删除只收已移除的机组，先移除（crew.remove）。永久删除会真的删掉这个机组的一切，删前的快照只留 30 天
 
 ## crew.session_not_in_crew
 {session} 不在机组 {crew} 里；机长只能从本机组的 session 里选
 
 ## crew.reorder_mismatch
-crewIds 必须包含这一层所有没归档的机组，不重复、不含别的机组（归档的可带可不带）：现有 {current}
+crewIds 必须包含这一层所有没移除的机组，不重复、不含别的机组（已移除的可带可不带）：现有 {current}
 
 ## crew.no_captain
 机组 {crew} 现在没有机长；先给它指定机长，或改发给具体的 session
@@ -164,7 +164,7 @@ crewIds 必须包含这一层所有没归档的机组，不重复、不含别的
 通讯录里没有 {number} 号机组；核对机组号
 
 ## directory.crew_archived
-{number} 号机组已归档，不收消息；要联系它请先请人解档
+{number} 号机组已被移除，不收消息；要联系它请先请人恢复它
 
 ## directory.no_such_extension
 {number} 号机组没有分机 {ext}；核对分机号

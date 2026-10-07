@@ -8,7 +8,7 @@ crewd restarted. {count} sessions were running before; resume them now? (Or not 
 - {name}
 
 ## notice.ask.crew_archived
-The crew was archived
+The crew was removed
 
 ## sender.human
 Human

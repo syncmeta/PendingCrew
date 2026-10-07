@@ -2244,14 +2244,6 @@
         "$ref": "#/$defs/Crew"
       }
     },
-    "crew.delete": {
-      "params": {
-        "$ref": "#/$defs/CrewIdParams"
-      },
-      "result": {
-        "$ref": "#/$defs/Crew"
-      }
-    },
     "crew.get": {
       "params": {
         "$ref": "#/$defs/CrewIdParams"
@@ -2287,6 +2279,14 @@
         "$ref": "#/$defs/Crew"
       }
     },
+    "crew.remove": {
+      "params": {
+        "$ref": "#/$defs/CrewIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Crew"
+      }
+    },
     "crew.reorder": {
       "params": {
         "$ref": "#/$defs/CrewReorderParams"
@@ -2298,7 +2298,7 @@
         "type": "array"
       }
     },
-    "crew.unarchive": {
+    "crew.restore": {
       "params": {
         "$ref": "#/$defs/CrewIdParams"
       },

@@ -11,7 +11,7 @@ Crew {crew} has no {id}. Check the id first (asks start with H, work items with 
 The system cannot withdraw an ask. Withdraw it as a session or as the human.
 
 ## ask.archive_blocked
-Ask {ask} in crew {crew} still blocks a live work item. Answer it, or have the owner reroute, then archive.
+Ask {ask} in crew {crew} still blocks a live work item. Answer it, or have the owner reroute, then remove the crew.
 
 ## channel.not_found
 There is no channel {channel}. List the existing channels and check the id.
@@ -44,7 +44,7 @@ Only the owner, the captain or the human can change this channel. Ask one of the
 The lobby and the human channel cannot be renamed; their names follow the crew. Rename the crew instead.
 
 ## channel.fixed_no_archive
-The lobby and the human channel cannot be archived by hand; they follow their crew. Archive the whole crew instead.
+The lobby and the human channel cannot be archived by hand; they are frozen when their crew is removed. To retire them, remove the whole crew (crew.remove, reversible).
 
 ## channel.lobby_cannot_add
 The lobby members are the whole crew, so nobody is added by hand. To get someone into the lobby, make them a session of this crew.
@@ -53,7 +53,7 @@ The lobby members are the whole crew, so nobody is added by hand. To get someone
 A DM is limited to two people. To bring in more people, create a topic channel.
 
 ## channel.archived
-Channel {channel} is archived and takes no messages. Unarchive it to continue, or start a new channel; if its crew is archived, ask the human to unarchive the crew first.
+Channel {channel} is archived and takes no messages. Unarchive it to continue, or start a new channel; if its crew was removed, ask the human to restore the crew first (crew.restore).
 
 ## channel.add_members_member_only
 Only members of the channel can add people. Ask a member to add them, or have a member add you first.
@@ -110,10 +110,10 @@ Only the captain or the human can set the owner by force. Ask one of them, or ha
 There is no crew {crew}. List the crews and check the id.
 
 ## crew.archived
-Crew {crew} is archived and read-only. Ask the human to unarchive it (only the human can, from the client) before changing it.
+Crew {crew} has been removed (hidden and frozen, not deleted) and is read-only. Ask the human to restore it (crew.restore; only the human can, from the client) before changing it.
 
 ## crew.management_fixed
-The headquarters crew is the management crew: it cannot be hidden, archived or purged. Leave it as it is; to tidy the sidebar, hide or archive other crews.
+The headquarters crew is the management crew: it cannot be hidden, removed or permanently deleted. Leave it as it is; to tidy the sidebar, hide or remove other crews.
 
 ## crew.management_not_in_tree
 The headquarters crew is outside the crew tree: it cannot have a parent or children, and no crew can be placed under it. Pick another crew as the parent, or leave parentId out to make a top-level crew.
@@ -137,22 +137,22 @@ A crew cannot be placed under itself. Pick a different parent.
 Crew {crew} still has {running} running sessions. Stop them first.
 
 ## crew.live_children
-Crew {crew} still has unarchived child crews: {children}. Move them away (crew.release) or archive them first.
+Crew {crew} still has child crews that are not removed: {children}. Move them away (crew.release) or remove them first.
 
 ## crew.wakes_inflight
-Crew {crew} still has {count} wakes being delivered. Wait for delivery to finish, then archive again.
+Crew {crew} still has {count} wakes being delivered. Wait for delivery to finish, then remove it again.
 
 ## crew.parent_archived
-The parent crews of {crew} ({parents}) are archived, and nothing live may hang under an archived crew. Ask the human to unarchive {parents} first; once that is done, release {crew} from them if you no longer want it there.
+The parent crews of {crew} ({parents}) have been removed, and nothing live may hang under a removed crew. Ask the human to restore {parents} first; once that is done, release {crew} from them if you no longer want it there.
 
 ## crew.not_archived
-Crew {crew} is not archived. Only archived crews can be deleted permanently; archive it first (crew.delete).
+Crew {crew} has not been removed. Only removed crews can be permanently deleted; remove it first (crew.remove). Permanent deletion really deletes everything of the crew; the snapshot taken before it is kept for 30 days only.
 
 ## crew.session_not_in_crew
 {session} is not in crew {crew}. The captain has to be chosen from the crew's own sessions.
 
 ## crew.reorder_mismatch
-crewIds must include every unarchived crew on this level, without repeats and without other crews (archived ones are optional). Currently: {current}
+crewIds must include every crew on this level that is not removed, without repeats and without other crews (removed ones are optional). Currently: {current}
 
 ## crew.no_captain
 Crew {crew} has no captain right now. Appoint a captain first, or address a specific session.
@@ -164,7 +164,7 @@ The address "{address}" is not valid. Write a crew number or crew-extension, e.g
 The directory has no crew number {number}. Check the number.
 
 ## directory.crew_archived
-Crew number {number} is archived and takes no messages. Ask the human to unarchive it before contacting it.
+Crew number {number} has been removed and takes no messages. Ask the human to restore it before contacting it.
 
 ## directory.no_such_extension
 Crew number {number} has no extension {ext}. Check the extension number.

@@ -15,7 +15,7 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 导入旧数据（只读源目录，只写新库）：`cargo run -p crewd -- import [--from DIR]`
 - 运行：`cargo run -p crewd -- serve`
 - 调用：`cargo run -p crewd -- rpc crew.list`
-- API 契约：`schema/crewd-api.schema.json`（改了线协议类型后用 `cargo run -p crewd -- schema > schema/crewd-api.schema.json` 重新生成；测试会检查它是否过期）。契约 v3（N1，spec §26.3）：没有审批（`approval.*` 是 -32601）；`crew.delete` = 归档、返回 `Crew`，另有 `crew.unarchive` 与只收已归档机组的 `crew.purge`（先快照再删）；`crew.list` / `session.list` 默认不含归档机组（`includeArchived: true` 才列）；`crew.reorder` 必须给 `parentId`
+- API 契约：`schema/crewd-api.schema.json`（改了线协议类型后用 `cargo run -p crewd -- schema > schema/crewd-api.schema.json` 重新生成；测试会检查它是否过期）。契约 v3（N1，spec §26.3）：没有审批（`approval.*` 是 -32601）；`crew.remove` = 移除（隐藏并冻结，库里叫归档、`archivedAt`；什么都不删，返回 `Crew`），`crew.restore` = 恢复，`crew.purge` = 永久删除（只收已移除的机组，真的删掉它的一切；先拍快照再删，快照 30 天后轮转删掉）；`crew.list` / `session.list` 默认不含已移除的机组（`includeArchived: true` 才列）；`crew.reorder` 的 `parentId` 可省（省 = 排顶层机组；总机组不在树里：拿它当 `parentId` 是 -32602 `crew.management_not_in_tree`，把它放进 `crewIds` 是 -32602 `crew.reorder_mismatch`）
 - 拒绝码：规则拒绝的 `RpcError` 带 `data.refusal`（稳定码，如 `channel.archived`），`message` 只是中文缺省，客户端按码本地化。码的全集是 `crates/collab/src/refusal.rs` 的 `Code`，文字在 `crates/collab/prompts/refusals.{zh,en}.md`（每码一节、两种语言占位符一致、每句说下一步怎么办，测试钉住）；collab 源码里不写给人 / agent 看的句子。`work.*` 的拒绝与参数解析错误暂时没有码
 - 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`（目录 0700；`crewd.db`、`-wal`、`-shm`、备份文件 0600）
 

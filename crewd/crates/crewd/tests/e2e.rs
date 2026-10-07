@@ -324,8 +324,8 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-bbbb","fromParentId":"local-aaaa","toParentId":"local-aaaa"}"#,
             Ok,
         ),
-        ("crew.delete", r#"{"crewId":"nope"}"#, Code(-32004)),
-        ("crew.unarchive", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.remove", r#"{"crewId":"nope"}"#, Code(-32004)),
+        ("crew.restore", r#"{"crewId":"nope"}"#, Code(-32004)),
         ("crew.purge", r#"{"crewId":"nope"}"#, Code(-32004)),
         // 导入的顶层机组仍在顶层（总机组不在树里），人类群是它自己的（home_of，N1-R2）。
         ("channel.list", r#"{"crewId":"local-aaaa"}"#, Ok),
