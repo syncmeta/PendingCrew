@@ -66,6 +66,22 @@ fn refuse_queued_nudges(l: &mut Live, session: &str) {
     l.writes = kept;
 }
 
+/// 在 actor 里等一个挂钩（QuotaSource / AskAnsweredHook / ContextExtras），最多等 `limit`（C25：挂住的挂钩不能
+/// 卡住 actor）。到期 = `None`（当它没答），记一行日志。IdleHook 不走这里：它在 actor 之外跑（`Input::Idled`）。
+pub(crate) async fn within<T>(
+    limit: Duration,
+    hook: &str,
+    fut: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(v) => Some(v),
+        Err(_) => {
+            eprintln!("crewd: 编排：{hook} 超过 {limit:?} 没答，这次当它没答");
+            None
+        }
+    }
+}
+
 /// 会话事件里顺带的投递出错：记日志、不打断这个事件本身的处理（评审 (7)：`session.changed` 照样要发）。
 fn log_err(r: anyhow::Result<()>) {
     if let Err(e) = r {
@@ -146,6 +162,13 @@ pub enum Input {
     },
     /// 停机（[`Core::begin_shutdown`]）：全部会话都退出之后回执。
     Shutdown(oneshot::Sender<()>),
+    /// IdleHook 在派生任务里答完了（或到期，`wake = None`；C25）。`generator` = 问它时那次拉起：会话已经换了 /
+    /// 没了 / 正被停掉，答案就作废。
+    Idled {
+        session: String,
+        generator: u64,
+        wake: Option<NewWake>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -483,6 +506,11 @@ impl<P: Port> Core<P> {
                 self.begin_shutdown(reply);
                 Ok(())
             }
+            Input::Idled {
+                session,
+                generator,
+                wake,
+            } => self.on_idled(&session, generator, wake).await,
         };
         if let Err(e) = r {
             eprintln!("crewd: 编排：{e:#}");
@@ -1502,7 +1530,14 @@ impl<P: Port> Core<P> {
             return Ok(());
         }
         let now = self.now();
-        let reset = self.hooks.quota.reset_at(executor, now).await;
+        // 拿不到（含挂钩到期）= None → 45 分钟退避、群里照实说。
+        let reset = within(
+            self.cfg.hook_timeout,
+            "QuotaSource",
+            self.hooks.quota.reset_at(executor, now),
+        )
+        .await
+        .flatten();
         let plan = policy::quota_plan(reset, now);
         let lang = self.lang();
         self.port

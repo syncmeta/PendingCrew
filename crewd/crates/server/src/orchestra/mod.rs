@@ -37,6 +37,9 @@ pub struct OrchestraConfig {
     pub lang: Lang,
     /// 问 Arbiter（M5b 的 Jev）最多等多久；超时 = 没答案 → 群主。
     pub arbiter_timeout: Duration,
+    /// 其余挂钩（IdleHook / AskAnsweredHook / QuotaSource / ContextExtras）各自最多等多久（C25：挂住的挂钩不能卡住
+    /// actor）。到期 = 当它没答：IdleHook 没有唤醒、QuotaSource 拿不到重置时刻（45 分钟退避）、ContextExtras 空。
+    pub hook_timeout: Duration,
     /// 没别的事时多久醒一次兜底（到点唤醒由「下一个 not_before」精确唤醒，这只是保险）。
     pub heartbeat_ms: i64,
     /// 本次 serve 启动的标识（重启询问的 promptId、restart 唤醒的 source）。
@@ -55,6 +58,7 @@ impl Default for OrchestraConfig {
             stagger_ms: DEFAULT_STAGGER_MS,
             lang: Lang::Zh,
             arbiter_timeout: Duration::from_secs(15),
+            hook_timeout: Duration::from_secs(5),
             heartbeat_ms: 30_000,
             boot_id: uuid::Uuid::new_v4().to_string(),
             retry_jitter: RETRY_JITTER,
@@ -69,6 +73,7 @@ impl OrchestraConfig {
         Self {
             stagger_ms: 0,
             arbiter_timeout: Duration::from_millis(50),
+            hook_timeout: Duration::from_millis(50),
             boot_id: "boot-1".into(),
             // 测试默认不抖：退避就是 30s / 2min 整（要抖的测试自己给种子）。
             retry_jitter: 0.0,

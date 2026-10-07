@@ -13,7 +13,7 @@ use crewd_wake::{
 };
 
 use super::core::{
-    CollabFact, ControlError, Core, Inflight, Input, Write, delivery_settles_inflight,
+    CollabFact, ControlError, Core, Inflight, Input, Write, delivery_settles_inflight, within,
 };
 use super::exec::Context;
 use super::hooks::ArbiterQuestion;
@@ -58,10 +58,14 @@ impl<P: Port> Core<P> {
             CollabFact::AskAnswered { crew, ask, cleared } => {
                 // 叫醒提问者（或机长转达）的唤醒由 M3a 的 `asks::answer` 在同一事务里入队，它的 `WakeEnqueued`
                 // 会把它投出去；M3c 这里只把 BlockerCleared 交给 M4b 的回调点（§22.6）。
-                self.hooks
-                    .ask
-                    .on_answered(&crew, &ask, &cleared, self.now())
-                    .await;
+                within(
+                    self.cfg.hook_timeout,
+                    "AskAnsweredHook",
+                    self.hooks
+                        .ask
+                        .on_answered(&crew, &ask, &cleared, self.now()),
+                )
+                .await;
                 Ok(())
             }
             CollabFact::Progress { session } => {
@@ -490,7 +494,13 @@ impl<P: Port> Core<P> {
             .get(session)
             .is_some_and(|l| l.handle.accepts_context());
         let extras = if accepts {
-            self.hooks.extras.extras(session).await
+            within(
+                self.cfg.hook_timeout,
+                "ContextExtras",
+                self.hooks.extras.extras(session),
+            )
+            .await
+            .unwrap_or_default()
         } else {
             Context::new()
         };
@@ -630,21 +640,60 @@ impl<P: Port> Core<P> {
     /// IdleHook 只在「没有能投的」时问（评审 (4)(5)）：正在被停掉 / crewd 叫停 / 已经没在跑的不是 idle 边沿
     /// （驱动层 abandon 发的 `Working(false)`）；四轮上限用完、还有此刻就投得出去的 pending 也不问。
     /// 没到点的（明天的定时、额度唤醒、退避中的）和被熔断挡着的**不算**——它们不该让停下即检查失效。
+    /// IdleHook（M4b 要读库）在 actor 之外的派生任务里问、最多等 `hook_timeout`（C25：挂住的 hook 不让 actor 停一刻），
+    /// 答案以 `Input::Idled` 回来（[`Core::on_idled`]）。
     pub(crate) async fn on_idle(&mut self, session: &str) -> anyhow::Result<()> {
         if self.try_deliver(session).await? {
             return Ok(());
         }
-        let idle = self
+        let Some(generator) = self
             .live
             .get(session)
-            .is_some_and(|l| !l.stopping && !l.halting);
+            .filter(|l| !l.stopping && !l.halting)
+            .map(|l| l.generator)
+        else {
+            return Ok(());
+        };
         let now = self.now();
-        if !idle || self.deliverable_now(session, now).await? {
+        if self.shutting_down || self.deliverable_now(session, now).await? {
             return Ok(());
         }
-        if let Some(w) = self.hooks.idle.on_idle(session, now).await
-            && self.port.enqueue(w).await?
-        {
+        let (idle, tx, limit) = (
+            self.hooks.idle.clone(),
+            self.inbox.clone(),
+            self.cfg.hook_timeout,
+        );
+        let session = session.to_string();
+        tokio::spawn(async move {
+            let wake = within(limit, "IdleHook", idle.on_idle(&session, now))
+                .await
+                .flatten();
+            let _ = tx.send(Input::Idled {
+                session,
+                generator,
+                wake,
+            });
+        });
+        Ok(())
+    }
+
+    /// IdleHook 的答案回来了：会话还是问它时那次拉起、没被停 / 叫停、没在停机，才入队并试投——否则作废
+    /// （Task 8 裁定 (4)：不然它入队的唤醒会在退出后的重扫里把刚停掉的 session 拉起来）。
+    pub(crate) async fn on_idled(
+        &mut self,
+        session: &str,
+        generator: u64,
+        wake: Option<NewWake>,
+    ) -> anyhow::Result<()> {
+        let Some(w) = wake else {
+            return Ok(());
+        };
+        let current = !self.shutting_down
+            && self
+                .live
+                .get(session)
+                .is_some_and(|l| l.generator == generator && !l.stopping && !l.halting);
+        if current && self.port.enqueue(w).await? {
             self.try_deliver(session).await?;
         }
         Ok(())
@@ -2063,6 +2112,230 @@ mod tests {
             reply.await.unwrap(),
             Err(ControlError::NotRunning("w1".into()))
         );
+    }
+
+    /// Task 8 裁定 (6) 的 halting 一支：crewd 停机叫停途中，写队列里排着的投递不再写（一串 nudge 键写完回来也不往下写）；
+    /// 那批由退出时的 `on_exited` 原样退回（停机闸关着，不会再被拉起）。
+    #[tokio::test(start_paused = true)]
+    async fn a_halting_session_gets_no_more_writes() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let (tx, _nudged) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Nudge {
+                session: "w1".into(),
+                input: "1".into(),
+                reply: tx,
+            }))
+            .await;
+        assert!(
+            rig.live("w1").unwrap().writing,
+            "一串键在写（数字 + 回车，中间隔着）"
+        );
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        assert!(rig.exec.sent("w1").is_empty(), "排在那串键后面");
+        let generator = rig.live("w1").unwrap().generator;
+        let (tx, _done) = tokio::sync::oneshot::channel();
+        rig.core.handle(Input::Shutdown(tx)).await; // 停机 = 对每个在跑的 `halt`
+        assert!(rig.live("w1").unwrap().halting);
+        rig.core
+            .handle(Input::WriteDone {
+                session: "w1".into(),
+                generator,
+            })
+            .await;
+        assert!(rig.exec.sent("w1").is_empty(), "{:?}", rig.exec.sent("w1"));
+        rig.settle().await;
+        assert!(rig.exec.sent("w1").is_empty());
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!((w.state, w.attempts), (WakeState::Pending, 0), "原样退回");
+    }
+
+    /// Task 8 裁定 (4) 的 halting 一支：crewd 叫停时驱动层 abandon 发的 `Working(false)` 不是 idle 边沿，不问 IdleHook。
+    #[tokio::test]
+    async fn a_halt_does_not_run_the_idle_hook() {
+        let hook = Arc::new(AlwaysCheck::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.core.halt("w1");
+        rig.settle().await;
+        assert!(rig.live("w1").is_none(), "退出了");
+        rig.tick(MIN).await;
+        assert_eq!(hook.0.load(Ordering::SeqCst), 0);
+        assert!(rig.port.wakes_of("w1").is_empty());
+        assert_eq!(rig.exec.launches("w1").len(), 1);
+    }
+
+    /// 永远不返回的 IdleHook（挂住的 M4b 实现）：数被调了几次。
+    #[derive(Default)]
+    struct HangingIdle(std::sync::atomic::AtomicUsize);
+    impl IdleHook for HangingIdle {
+        fn on_idle<'a>(&'a self, _session: &'a str, _now: Ms) -> BoxFut<'a, Option<NewWake>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// C25：IdleHook 不在 actor 里等——挂住的 hook 不让 actor 停一刻（别的会话照常投递），到期限 = 没有唤醒。
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_idle_hook_never_stalls_the_actor() {
+        let guard = std::time::Duration::from_secs(600);
+        let body = async {
+            let hook = Arc::new(HangingIdle::default());
+            let mut rig = Rig::with(Hooks {
+                idle: hook.clone(),
+                ..Hooks::default()
+            })
+            .await;
+            crew_with(&mut rig, &["w1", "w2"], &["w1", "w2"]).await;
+            rig.emit("w1", SessionEvent::Working(true)).await;
+            let before = tokio::time::Instant::now();
+            rig.emit("w1", SessionEvent::Working(false)).await;
+            assert_eq!(hook.0.load(Ordering::SeqCst), 1);
+            assert_eq!(tokio::time::Instant::now(), before, "actor 一刻都没等 hook");
+            rig.post(LOBBY, Rig::sender("cap"), at("w2"), "合成派活乙")
+                .await;
+            assert_eq!(rig.exec.sent("w2"), ["合成派活乙"], "别的会话照常投递");
+            tokio::time::advance(rig.core.cfg.hook_timeout * 2).await;
+            rig.settle().await;
+            assert!(rig.port.wakes_of("w1").is_empty(), "到期限 = 没有唤醒");
+            assert!(rig.exec.sent("w1").is_empty());
+        };
+        tokio::time::timeout(guard, body)
+            .await
+            .expect("actor 卡在 IdleHook 上了");
+    }
+
+    /// 慢的 IdleHook 回来时会话已经被人停了：它的唤醒不入队（否则退出后的重扫会把刚停掉的拉起来，Task 8 裁定 (4)）。
+    struct SlowCheck;
+    impl IdleHook for SlowCheck {
+        fn on_idle<'a>(&'a self, session: &'a str, now: Ms) -> BoxFut<'a, Option<NewWake>> {
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                Some(NewWake {
+                    session: session.into(),
+                    kind: WakeKind::StopCheck,
+                    source: source::system("sc-slow"),
+                    priority: Priority::System,
+                    not_before: now,
+                    note: Some("合成停下即检查".into()),
+                    origin: breaker::SYSTEM.into(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_hook_answer_for_a_session_stopped_meanwhile_is_dropped() {
+        let mut rig = Rig::with(Hooks {
+            idle: Arc::new(SlowCheck),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        rig.cmd(|reply| Cmd::Stop {
+            session: "w1".into(),
+            reply,
+        })
+        .await
+        .unwrap();
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
+        rig.settle().await;
+        rig.tick(MIN).await;
+        assert!(
+            rig.port.wakes_of("w1").is_empty(),
+            "{:?}",
+            rig.port.wakes_of("w1")
+        );
+        assert_eq!(rig.exec.launches("w1").len(), 1, "停掉的没被拉起来");
+    }
+
+    /// 同上，会话还在、还空着：回来的唤醒照常入队、投出去。
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_idle_hook_answer_is_still_delivered() {
+        let mut rig = Rig::with(Hooks {
+            idle: Arc::new(SlowCheck),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert!(rig.exec.sent("w1").is_empty());
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
+        rig.settle().await;
+        assert_eq!(rig.exec.sent("w1"), ["合成停下即检查"]);
+    }
+
+    struct HangingQuota;
+    impl crate::orchestra::hooks::QuotaSource for HangingQuota {
+        fn reset_at<'a>(&'a self, _e: &'a str, _now: Ms) -> BoxFut<'a, Option<Ms>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// C25：QuotaSource 在 actor 里等，但有期限：挂住 = 拿不到重置时刻 → 45 分钟退避、群里照实说。
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_quota_source_falls_back_within_the_budget() {
+        let mut rig = Rig::with(Hooks {
+            quota: Arc::new(HangingQuota),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let before = tokio::time::Instant::now();
+        let event = SessionEvent::Health(Some(Health::new(HealthKind::UsageLimit, "x")));
+        tokio::time::timeout(std::time::Duration::from_secs(600), rig.emit("w1", event))
+            .await
+            .expect("actor 卡在 QuotaSource 上了");
+        assert!(tokio::time::Instant::now() - before <= rig.core.cfg.hook_timeout * 2);
+        let w = rig.port.wakes_of("w1");
+        assert_eq!(w[0].not_before, T0.add(45 * MIN), "按拿不到重置时刻退避");
+    }
+
+    struct HangingAsk;
+    impl AskAnsweredHook for HangingAsk {
+        fn on_answered<'a>(
+            &'a self,
+            _crew: &'a str,
+            _ask: &'a str,
+            _cleared: &'a [(String, Option<String>)],
+            _now: Ms,
+        ) -> BoxFut<'a, ()> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// C25：AskAnsweredHook 同样有期限：挂住的 M4b 回调不让 actor 永远停在这条事件上。
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_ask_hook_is_cut_off_at_the_budget() {
+        let mut rig = Rig::with(Hooks {
+            ask: Arc::new(HangingAsk),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let before = tokio::time::Instant::now();
+        let fact = CollabFact::AskAnswered {
+            crew: "c1".into(),
+            ask: "H1".into(),
+            cleared: vec![],
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            rig.core.handle(Input::Collab(fact)),
+        )
+        .await
+        .expect("actor 卡在 AskAnsweredHook 上了");
+        assert!(tokio::time::Instant::now() - before <= rig.core.cfg.hook_timeout * 2);
     }
 
     /// 裁定 (7)：idle 边沿上的投递出错，`session.changed`（不再干活）照样发出去。
