@@ -329,7 +329,7 @@ pub struct DirEntry {
     pub number: String,
     pub name: String,
     pub crew_title: String,
-    /// 组织路径（根在最左，" / " 分隔；根机组本身是空串）；每一段机组标题都过了 `safe_name`。
+    /// 组织路径（顶层机组在最左，" / " 分隔；顶层机组与总机组本身是空串）；每一段机组标题都过了 `safe_name`。
     pub detail: String,
 }
 
