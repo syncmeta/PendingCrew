@@ -89,19 +89,56 @@ pub struct Handle {
     tx: mpsc::UnboundedSender<Input>,
 }
 
-/// 建 Core、跑一次启动恢复（`boot`）、起 actor 循环。
+/// 跑着的 actor 任务（C25：不能悄悄留下一个死句柄）。serve 必须等它：[`Actor::finished`] 回 `Err` = actor panic 了，
+/// serve 要大声地非零退出（让 app 重启它，下次启动由 `boot` 回收），不能带着一个只会回「编排已停止」的句柄继续跑。
+pub struct Actor {
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// actor 不是正常收尾（停机完成）而是没了：panic 的原话，或任务被取消。
+#[derive(Debug)]
+pub struct ActorDied(pub String);
+
+impl std::fmt::Display for ActorDied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "编排 actor 崩了：{}", self.0)
+    }
+}
+
+impl std::error::Error for ActorDied {}
+
+impl Actor {
+    /// 等 actor 结束：停机完成 = `Ok`；panic / 被取消 = `Err`（带 panic 的原话）。
+    pub async fn finished(self) -> Result<(), ActorDied> {
+        match self.task.await {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_panic() => {
+                let p = e.into_panic();
+                let why = p
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "（panic 没带文字）".into());
+                Err(ActorDied(why))
+            }
+            Err(e) => Err(ActorDied(e.to_string())),
+        }
+    }
+}
+
+/// 建 Core、跑一次启动恢复（`boot`）、起 actor 循环。返回句柄与 actor 任务（serve 要等它，见 [`Actor`]）。
 pub async fn spawn<P: Port>(
     port: Arc<P>,
     execs: Executors,
     hooks: Hooks,
     clock: Arc<dyn Clock>,
     cfg: OrchestraConfig,
-) -> anyhow::Result<Handle> {
+) -> anyhow::Result<(Handle, Actor)> {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut core = Core::new(port, execs, hooks, clock, cfg, tx.clone()).await?;
     core.boot().await?;
-    tokio::spawn(run(core, rx));
-    Ok(Handle { tx })
+    let task = tokio::spawn(run(core, rx));
+    Ok((Handle { tx }, Actor { task }))
 }
 
 /// actor 循环：输入一条条处理；没输入时睡到下一次定时拍（`next_deadline`：最早的未来 not_before、退避 / 错开的
@@ -294,7 +331,7 @@ mod tests {
             .await
             .unwrap();
         let exec = StandIn::default();
-        let h = spawn(
+        let (h, actor) = spawn(
             port.clone(),
             Executors::new().with("claude", Arc::new(exec.clone())),
             Hooks::default(),
@@ -322,6 +359,74 @@ mod tests {
         assert!(
             h.live(&row.id).await.is_err(),
             "停机完了 actor 就结束了：句柄回「编排已停止」"
+        );
+        assert!(actor.finished().await.is_ok(), "正常收尾");
+    }
+
+    struct PanickingQuota;
+    impl hooks::QuotaSource for PanickingQuota {
+        fn reset_at<'a>(
+            &'a self,
+            _e: &'a str,
+            _now: crewd_wake::Ms,
+        ) -> exec::BoxFut<'a, Option<crewd_wake::Ms>> {
+            Box::pin(async { panic!("合成：挂钩崩了") })
+        }
+    }
+
+    /// C25：actor 里 panic 不能悄悄留下一个死句柄——`Actor::finished` 报出来（serve 据此非零退出、让 app 重启它），
+    /// 句柄的调用回错。
+    #[tokio::test]
+    async fn a_panic_in_the_actor_is_surfaced() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let row = port
+            .insert_session(port::NewSession {
+                crew_id: "c1".into(),
+                captain: false,
+                executor: "claude".into(),
+                brief: String::new(),
+                title: Some("w1".into()),
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        let exec = StandIn::default();
+        let (h, actor) = spawn(
+            port.clone(),
+            Executors::new().with("claude", Arc::new(exec.clone())),
+            Hooks {
+                quota: Arc::new(PanickingQuota),
+                ..Hooks::default()
+            },
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        h.resume(&row.id, Origin::Human).await.unwrap();
+        for _ in 0..200 {
+            if h.live(&row.id).await.unwrap().running {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let quota =
+            crewd_exec::health::Health::new(crewd_exec::health::HealthKind::UsageLimit, "x");
+        exec.emit(
+            &row.id,
+            crewd_exec::session::SessionEvent::Health(Some(quota)),
+        );
+        let died = tokio::time::timeout(Duration::from_secs(10), actor.finished())
+            .await
+            .expect("actor 应该已经结束")
+            .expect_err("panic 要报出来");
+        assert!(died.to_string().contains("合成：挂钩崩了"), "{died}");
+        assert!(
+            h.live(&row.id).await.is_err(),
+            "死了的 actor：句柄回错，不挂住"
         );
     }
 }
