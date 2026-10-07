@@ -31,6 +31,10 @@ impl Db {
                 while let Ok(Msg::Job(job)) = rx.recv() {
                     job(&mut store);
                 }
+                // 收尾（S16）：optimize + 把 WAL 折回主库并截断，之后连接随 store 一起关。
+                if let Err(e) = store.finish() {
+                    eprintln!("crewd: 关库收尾没做完：{e}");
+                }
             })?;
         Ok(Db {
             tx,
@@ -140,6 +144,37 @@ mod tests {
         tokio::task::spawn_blocking(move || clone.shutdown())
             .await
             .unwrap();
+    }
+
+    /// S16：关库前把 WAL 折回主库并截成 0（另有一条连接开着时，SQLite 关连接不会自己清 WAL）。
+    #[tokio::test]
+    async fn shutdown_checkpoints_and_truncates_the_wal() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crewd.db");
+        let db = Db::spawn(Store::open(&p).unwrap()).unwrap();
+        // 另一条连接（比如备份 / 外部只读工具）开着：最后一个关的不是库线程。
+        let other = rusqlite::Connection::open(&p).unwrap();
+        db.call(|s| {
+            s.conn()
+                .execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t VALUES('示例');")
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        // 让它真的连上（打开是惰性的）。
+        let _: i64 = other
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        let wal = d.path().join("crewd.db-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0, "WAL 已截断");
+        let n: i64 = other
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[tokio::test(flavor = "current_thread")]

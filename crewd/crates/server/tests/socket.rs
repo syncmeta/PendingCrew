@@ -862,3 +862,196 @@ async fn ask_approval_restart_channel_and_crew_changes_reach_their_topics_once()
         "{evs:?}"
     );
 }
+
+/// S16 / N4：serve 收到停机信号后，先关库（optimize + WAL 截断）再放数据目录锁。
+/// 外面另开一条读连接，库线程就不是最后一个关的：WAL 被截成 0 只能是 serve 主动收的尾。
+#[tokio::test]
+async fn serve_closes_the_db_cleanly_before_releasing_the_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().to_path_buf();
+    seed(&dir);
+    let (tx, rx) = oneshot::channel::<()>();
+    let d = dir.clone();
+    let served = tokio::spawn(async move {
+        crewd_server::serve(d, async {
+            let _ = rx.await;
+        })
+        .await
+    });
+    let mut ok = false;
+    for _ in 0..100 {
+        if UnixStream::connect(dir.join("crewd.sock")).await.is_ok() {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(ok, "crewd 没起来");
+    let mut c = Client::connect(&dir).await;
+    c.call(
+        1,
+        "message.post",
+        json!({"channelId":"a/lobby","text":"关机前的最后一条"}),
+    )
+    .await;
+    let other = rusqlite::Connection::open(dir.join("crewd.db")).unwrap();
+    let _: i64 = other
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap();
+    assert!(std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len() > 0);
+    tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), served)
+        .await
+        .expect("serve 没退出")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len(),
+        0,
+        "serve 返回时库已经收好尾"
+    );
+    drop(c);
+    crewd_server::lock_data_dir(&dir).expect("锁已释放");
+}
+
+/// S22 / N4：`crew.delete`（目前是永久删除）先拍 pre-delete 快照再删；快照里还有这个机组。
+/// N1 把 crew.delete 改成默认归档之后，这一步跟着移到真正的永久删除（purge）上。
+#[tokio::test]
+async fn crew_delete_snapshots_before_purging() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let made = c
+        .call(
+            1,
+            "crew.create",
+            json!({"title":"要删的","workingDirectory":"/tmp/example"}),
+        )
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    c.call(2, "crew.delete", json!({"crewId":made})).await;
+    let snaps: Vec<std::path::PathBuf> = std::fs::read_dir(dir.path().join("backups"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("crewd-pre-delete-")
+        })
+        .collect();
+    assert_eq!(snaps.len(), 1, "{snaps:?}");
+    let snap = rusqlite::Connection::open(&snaps[0]).unwrap();
+    let n: i64 = snap
+        .query_row("SELECT COUNT(*) FROM crews WHERE id=?1", [&made], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(n, 1, "快照是删之前的样子");
+}
+
+/// 复审 3：快照拍不成（这里是 backups/ 只读），crew.delete 报存储故障，机组原样还在。
+#[tokio::test]
+async fn crew_delete_without_a_snapshot_deletes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let made = c
+        .call(
+            1,
+            "crew.create",
+            json!({"title":"删不掉的","workingDirectory":"/tmp/example"}),
+        )
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = dir.path().join("backups");
+    // 启动时的定时备份可能正在写 backups/：等它出现再收权限。
+    for _ in 0..200 {
+        if crewd_store::backup::list_auto(&b)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let code = c.call_err(2, "crew.delete", json!({"crewId":made})).await;
+    std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code, crewd_proto::RpcError::STORAGE);
+    let got = c.call(3, "crew.get", json!({"crewId":made})).await;
+    assert_eq!(got["crew"]["id"], made, "{got}");
+}
+
+/// 复审 M7：socket 绑不上（这里路径上是个目录）时 serve 报错退出，但退出前照样收尾：Ticker 停下（启动时
+/// 那次备份已经拍完）、库关干净（WAL 截断），之后才放锁。
+#[tokio::test]
+async fn a_failed_bind_still_stops_the_ticker_and_closes_the_db_before_unlocking() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().to_path_buf();
+    seed(&dir);
+    std::fs::create_dir(dir.join("crewd.sock")).unwrap();
+    // 外面一条连接写一行、一直开着：WAL 里有东西，而且库线程不是最后一个关的。
+    let other = rusqlite::Connection::open(dir.join("crewd.db")).unwrap();
+    other
+        .execute("INSERT INTO meta(key,value) VALUES('probe','x')", [])
+        .unwrap();
+    assert!(std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len() > 0);
+    let r = crewd_server::serve(dir.clone(), std::future::pending()).await;
+    assert!(r.is_err(), "绑不上必须报错");
+    assert_eq!(
+        std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len(),
+        0,
+        "返回前库已收尾"
+    );
+    assert_eq!(
+        crewd_store::backup::list_auto(&dir.join("backups"))
+            .unwrap()
+            .len(),
+        1,
+        "返回前 Ticker 已停（启动那次备份已拍完）"
+    );
+    crewd_server::lock_data_dir(&dir).expect("锁已释放");
+}
+
+fn pre_delete_snapshots(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir.join("backups"))
+        .map(|rd| {
+            rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("crewd-pre-delete-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 复审 2 轮 1：删不了的（没有这个机组 / 还有在跑的 session）先被前置条件挡下，不拍那份整库快照。
+#[tokio::test]
+async fn crew_delete_that_cannot_happen_takes_no_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    assert_eq!(
+        c.call_err(1, "crew.delete", json!({"crewId":"no-such-crew"}))
+            .await,
+        crewd_proto::RpcError::NOT_FOUND
+    );
+    rusqlite::Connection::open(dir.path().join("crewd.db"))
+        .unwrap()
+        .execute("UPDATE sessions SET desired='running' WHERE id='cap-a'", [])
+        .unwrap();
+    assert_eq!(
+        c.call_err(2, "crew.delete", json!({"crewId":"a"})).await,
+        crewd_proto::RpcError::CONFLICT
+    );
+    assert!(
+        pre_delete_snapshots(dir.path()).is_empty(),
+        "{:?}",
+        pre_delete_snapshots(dir.path())
+    );
+}

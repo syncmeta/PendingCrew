@@ -116,7 +116,8 @@ pub enum CollabError {
 
 impl From<rusqlite::Error> for CollabError {
     fn from(e: rusqlite::Error) -> Self {
-        CollabError::Store(StoreError::Sql(e))
+        // 经 StoreError 的 From 归类：磁盘满 / I/O / 损坏 / 只读 / 打不开不落成普通 SQL 错（S26）。
+        CollabError::Store(StoreError::from(e))
     }
 }
 
@@ -220,6 +221,20 @@ pub fn run<T>(
 mod tests {
     use super::*;
     use crate::testkit::{NOW, count, store};
+
+    /// S26：collab 里 `?` 过来的 rusqlite 错误也要按存储故障归类，不能一律落成 `Sql`。
+    #[test]
+    fn sqlite_storage_failures_keep_their_class_through_collab() {
+        let full = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        );
+        let e = CollabError::from(full);
+        assert!(
+            matches!(&e, CollabError::Store(s) if s.storage_kind() == Some(crewd_store::StorageKind::DiskFull)),
+            "{e:?}"
+        );
+    }
 
     #[test]
     fn run_commits_and_hands_back_changes_once() {

@@ -193,7 +193,10 @@ fn file_store(path: &Path, key: &str) -> Result<(), KeyError> {
         .create(dir)?;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
-    let result = write_private(&tmp, key).and_then(|()| std::fs::rename(&tmp, path));
+    let result = write_private(&tmp, key)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        // 改名本身也落盘（N4 / S31）。
+        .and_then(|()| std::fs::File::open(dir)?.sync_all());
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }

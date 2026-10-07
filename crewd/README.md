@@ -16,7 +16,21 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 运行：`cargo run -p crewd -- serve`
 - 调用：`cargo run -p crewd -- rpc crew.list`
 - API 契约：`schema/crewd-api.schema.json`（改了线协议类型后用 `cargo run -p crewd -- schema > schema/crewd-api.schema.json` 重新生成；测试会检查它是否过期）
-- 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`
+- 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`（目录 0700；`crewd.db`、`-wal`、`-shm`、备份文件 0600）
+
+## 备份与恢复
+
+`crewd.db` 是聊天记录的唯一一份，只在这台机器上。
+
+- 自动：`serve` 启动时、之后每天一次，在 `<数据目录>/backups/crewd-auto-*.db` 拍一份（独立的只读连接上 `VACUUM INTO`，不挡服务；拍完的那份过 `quick_check` 才算数）。保留最近 7 天每天一份 + 更早 4 周每周一份；备份失败或在用的库没通过检查时，旧备份一份不删。每小时对在用的库跑 `quick_check`，每天拍的那次跑 `integrity_check`；出问题只在日志里报，绝不删库、换库
+- 迁移前：旧版本的非空库升级前先过 `integrity_check`，再存成 `backups/crewd-v{旧}-pre-v{新}-*.db`；任何一步失败就拒绝迁移，库原样不动
+- 永久删除机组前：`backups/crewd-pre-delete-{机组}-*.db`（拍不成就不删）
+- 迁移前、删除前、手动的快照不参加轮转，永远保留（要清理请手动删）
+- 立即备份：`cargo run -p crewd -- backup`（serve 在跑也行；写到 `backups/crewd-manual-*.db`。不提供导出到数据目录以外的选项：离开本盘的备份要加密，尚未实现）
+- 检查：`cargo run -p crewd -- check [--quick]`（不改数据；只报告，不修。注意：它的连接关掉时可能把 WAL 检查点进库，这是正常落盘、不改内容）
+- 恢复：先停 serve，再 `cargo run -p crewd -- restore --from <data>/backups/<文件>`。serve 在跑时会被数据目录锁拒绝。来源要是 crewd 的库、版本不比本程序新、过得了 `integrity_check`；原来的库，以及残留的 `-wal`/`-shm`（库文件不在时也一样），改名为 `crewd.db.replaced-*` 留在原地，永不覆盖。自己挪库文件时一定连同它的 `-wal`/`-shm` 一起挪，否则旧 WAL 会被回放到别的库上
+- **绝不要用 `cp` 把备份盖到 `crewd.db` 上**：那是同一个文件（inode 不变），旁边残留的 `crewd.db-wal` 会被回放到盖上去的旧内容上，库就坏了，而 crewd 的身份核对看不出这种覆盖。恢复一律用 `crewd restore`
+- 库丢了 / 被换了：数据目录里有 `crewd.db.id`（或 `backups/` 里有备份）却没有 `crewd.db`，或者 `crewd.db` 的 dbId 和 `crewd.db.id` 对不上时，serve 和 import 拒绝启动，不会悄悄新建空库；按提示用 `restore` 恢复
 
 ## CI
 
