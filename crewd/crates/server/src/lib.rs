@@ -183,11 +183,20 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     let store = Store::open_data_dir(&data_dir)?;
     let db = Db::spawn(store)?;
     // 定时备份（N4 / D-8：serve 自己的 interval，不进编排 Core）：启动时拍一次，之后每小时看一次到没到点。
-    let backups = crewd_store::backup::Ticker::start(
+    let backups = match crewd_store::backup::Ticker::start(
         data_dir.join(crewd_store::DB_FILE),
         std::time::Duration::from_secs(3600),
         crewd_store::backup::Policy::default(),
-    )?;
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            // 起不来也先关库再放锁（复审 2 轮 5）。
+            let db = db.clone();
+            tokio::task::spawn_blocking(move || db.shutdown()).await?;
+            drop(lock);
+            return Err(e.into());
+        }
+    };
     let state = Arc::new(AppState::new(db));
     let listener = match UnixListener::bind(&sock) {
         Ok(l) => l,
