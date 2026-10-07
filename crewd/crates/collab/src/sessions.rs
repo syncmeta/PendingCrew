@@ -62,6 +62,35 @@ pub fn list(conn: &Connection, crew: Option<&str>) -> Result<Vec<Session>> {
     })
 }
 
+/// 客户端的 `session.list`：点名机组 = 照实列它的（归档的也列）；不点名 = 全部，但归档机组的 session 只在
+/// `include_archived` 时列（同 `crew.list` 的口径，N1 裁定 13）。内部调用（M3c 的 running_desired 等）用 `list`。
+pub fn list_for_client(
+    conn: &Connection,
+    crew: Option<&str>,
+    include_archived: bool,
+) -> Result<Vec<Session>> {
+    let all = list(conn, crew)?;
+    if crew.is_some() || include_archived {
+        return Ok(all);
+    }
+    let mut out = Vec::with_capacity(all.len());
+    let mut archived: std::collections::BTreeMap<String, bool> = Default::default();
+    for s in all {
+        let a = match archived.get(&s.crew_id) {
+            Some(a) => *a,
+            None => {
+                let a = crews::is_archived(conn, &s.crew_id)?;
+                archived.insert(s.crew_id.clone(), a);
+                a
+            }
+        };
+        if !a {
+            out.push(s);
+        }
+    }
+    Ok(out)
+}
+
 pub fn crew_of(conn: &Connection, id: &str) -> Result<String> {
     Ok(get(conn, id)?.crew_id)
 }
@@ -410,6 +439,22 @@ mod tests {
             kept.title.as_deref(),
             Some("修滚动"),
             "给的标题也去掉看不见的字符"
+        );
+    }
+
+    /// 客户端的 `session.list`：不带 crewId 时不列归档机组的 session（同 `crew.list`），`include_archived` 才列；
+    /// 点名某个机组 = 照实列它的（归档的也列）。
+    #[test]
+    fn listing_for_clients_hides_sessions_of_archived_crews() {
+        let mut s = store();
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-x"));
+        let ids = |v: Vec<Session>| v.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        let all = ids(list_for_client(s.conn(), None, false).unwrap());
+        assert!(!all.contains(&"cap-x".to_string()) && all.contains(&"cap-a".to_string()));
+        assert!(ids(list_for_client(s.conn(), None, true).unwrap()).contains(&"cap-x".to_string()));
+        assert_eq!(
+            ids(list_for_client(s.conn(), Some("crew-x"), false).unwrap()),
+            ["cap-x"]
         );
     }
 

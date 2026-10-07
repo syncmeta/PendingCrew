@@ -482,7 +482,8 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
 /// 删机组 = 归档（N1 裁定 13；`crew.delete` 调它，可逆，不拍快照）：拒总机组、拒还有 desired=running 的 session、
 /// 拒还有**没归档的子机组**（先挪走或归档子机组，不级联）。写 `crews.archived_at`，把**归属这个机组**的群全部标归档
 /// （每个一条 ChannelChanged；topic / dm 上待接受的群主转让随之作废，同 `channels::update` 归档）。
-/// 消息、session 行、成员行、账本全部保留；父子边不动（解档原地回来）。已归档 = 原样返回、不发变更。
+/// 消息、session 行、成员行、账本全部保留；父子边不动（解档原地回来）。还开着的问撤回（`asks::withdraw_open_for_archive`，
+/// 解档不重开）。已归档 = 原样返回、不发变更。
 pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_org_root(tx.conn(), id)?;
@@ -502,6 +503,8 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
             live_kids.join(", ")
         )));
     }
+    // 它还开着的问一并撤回（Task 9 复审裁定；解档不重开）。
+    crate::asks::withdraw_open_for_archive(tx, id)?;
     let now = tx.now_ts();
     tx.conn().execute(
         "UPDATE crews SET archived_at=?2, updated_at=?2 WHERE id=?1",
@@ -2414,5 +2417,103 @@ mod tests {
         let ids = |v: Vec<Crew>| v.into_iter().map(|c| c.id).collect::<Vec<_>>();
         assert!(!ids(list(s.conn(), false).unwrap()).contains(&"crew-x".to_string()));
         assert!(ids(list(s.conn(), true).unwrap()).contains(&"crew-x".to_string()));
+    }
+
+    fn open_ask(s: &mut crewd_store::Store, asker: &str, q: &str) -> String {
+        ok(s, |tx| {
+            crate::asks::open(
+                tx,
+                asker,
+                crate::asks::OpenAsk {
+                    question: q.into(),
+                    ..Default::default()
+                },
+            )
+        })
+        .ask
+    }
+
+    /// 归档撤回这个机组账本里还开着的问（同一事务，理由取 render md 的 `notice.ask.crew_archived`，按 meta.locale）；
+    /// 子机组先归档，所以挂在这个 home 人类群里的问（含子机组的）都已撤回。解档不重开。
+    #[test]
+    fn archiving_withdraws_open_asks_and_unarchiving_does_not_reopen_them() {
+        use crewd_proto::AskStateView;
+        let mut s = store();
+        let hb = open_ask(&mut s, "w-b1", "乙的问");
+        let ha = open_ask(&mut s, "cap-a", "甲的问");
+        let state = |s: &crewd_store::Store, crew: &str, h: &str| {
+            crate::asks::get(s.conn(), crew, h).unwrap()
+        };
+        let (_, ch) = ok_at(&mut s, NOW, |tx| archive(tx, "crew-b"));
+        let b = state(&s, "crew-b", &hb);
+        assert_eq!(b.state, AskStateView::Withdrawn);
+        assert_eq!(b.withdraw_reason.as_deref(), Some("机组已归档"));
+        assert!(ch.contains(&Change::AskChanged {
+            crew_id: "crew-b".into(),
+            ask: hb.clone()
+        }));
+        assert_eq!(
+            state(&s, "crew-a", &ha).state,
+            AskStateView::Open,
+            "别的机组的问不动"
+        );
+        ok(&mut s, |tx| {
+            crate::settings::set_locale(tx, crate::Locale::En)
+        });
+        ok(&mut s, |tx| archive(tx, "crew-a"));
+        let a = state(&s, "crew-a", &ha);
+        assert_eq!(a.state, AskStateView::Withdrawn);
+        assert_eq!(a.withdraw_reason.as_deref(), Some("The crew was archived"));
+        assert!(
+            crate::asks::waits(s.conn(), NOW, Some("crew-a"))
+                .unwrap()
+                .is_empty(),
+            "人的待确认清单里没有了"
+        );
+        ok(&mut s, |tx| unarchive(tx, "crew-a"));
+        ok(&mut s, |tx| unarchive(tx, "crew-b"));
+        assert_eq!(state(&s, "crew-a", &ha).state, AskStateView::Withdrawn);
+        assert_eq!(state(&s, "crew-b", &hb).state, AskStateView::Withdrawn);
+    }
+
+    /// 还卡着活项的问账本不让撤：归档整体拒（Conflict，指路先答掉或改道），什么都不变。
+    #[test]
+    fn archiving_refuses_while_an_open_ask_still_blocks_a_live_item() {
+        use crewd_work::{Actor, BlockOn, Continuation, NewItem, SessionId};
+        let mut s = store();
+        let h = ok(&mut s, |tx| {
+            crate::asks::with_book(tx, "crew-x", |b, now| {
+                let w = b
+                    .create_item(
+                        &Actor::Human,
+                        now,
+                        NewItem {
+                            owner: Some(SessionId::new("cap-x")),
+                            ..NewItem::titled("示例项")
+                        },
+                    )?
+                    .value;
+                let r = b.block(
+                    &Actor::Human,
+                    now,
+                    w,
+                    vec![BlockOn::NewAsk {
+                        question: "示例问题".into(),
+                        default: None,
+                    }],
+                    Continuation::Nothing,
+                )?;
+                Ok(r.value.asks[0].to_string())
+            })
+        });
+        match err(&mut s, |tx| archive(tx, "crew-x")) {
+            CollabError::Conflict(m) => assert!(m.contains(&h), "{m}"),
+            e => panic!("{e:?}"),
+        }
+        assert!(get(s.conn(), "crew-x").unwrap().archived_at.is_none());
+        assert_eq!(
+            crate::asks::get(s.conn(), "crew-x", &h).unwrap().state,
+            crewd_proto::AskStateView::Open
+        );
     }
 }

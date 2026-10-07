@@ -1832,12 +1832,19 @@
     },
     "SessionListParams": {
       "additionalProperties": false,
-      "description": "全可选：`null` 当 `{}`。",
+      "description": "全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（归档的也列）；不给 = 全部，但归档机组的\nsession 只在 `includeArchived: true` 时列（同 `crew.list`）。",
       "properties": {
         "crewId": {
           "default": null,
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "includeArchived": {
+          "default": null,
+          "type": [
+            "boolean",
             "null"
           ]
         }

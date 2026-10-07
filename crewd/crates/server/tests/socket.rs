@@ -993,6 +993,37 @@ async fn serve_closes_the_db_cleanly_before_releasing_the_lock() {
     crewd_server::lock_data_dir(&dir).expect("锁已释放");
 }
 
+/// `session.list` 不带 crewId 时不列归档机组的 session（同 crew.list），`includeArchived: true` 才列；
+/// 点名机组照实列。归档同时撤回机组还开着的问（`ask.list` 里不再有）。
+#[tokio::test]
+async fn session_list_hides_archived_crews_and_archiving_withdraws_their_asks() {
+    let dir = tempfile::tempdir().unwrap();
+    let _stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let n = |v: &Value| v.as_array().unwrap().len();
+    assert_eq!(n(&c.call(1, "session.list", Value::Null).await), 2);
+    assert_eq!(n(&c.call(2, "ask.list", Value::Null).await), 1);
+    c.call(3, "crew.delete", json!({"crewId":"a"})).await;
+    assert_eq!(n(&c.call(4, "session.list", json!({})).await), 0);
+    assert_eq!(
+        n(&c.call(5, "session.list", json!({"includeArchived":true}))
+            .await),
+        2
+    );
+    assert_eq!(
+        n(&c.call(6, "session.list", json!({"crewId":"a"})).await),
+        2
+    );
+    assert_eq!(n(&c.call(7, "ask.list", Value::Null).await), 0, "问已撤回");
+    c.call(8, "crew.unarchive", json!({"crewId":"a"})).await;
+    assert_eq!(
+        n(&c.call(9, "ask.list", Value::Null).await),
+        0,
+        "解档不重开问"
+    );
+    assert_eq!(n(&c.call(10, "session.list", Value::Null).await), 2);
+}
+
 /// S22 / N4：`crew.purge`（永久删除，只收已归档的）先拍 pre-delete 快照再删；快照里还有这个机组。
 /// `crew.delete` 只是归档（N1 裁定 13）：可逆，不拍快照。
 #[tokio::test]

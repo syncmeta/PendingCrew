@@ -324,7 +324,11 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::SESSION_LIST => {
             let p: SessionListParams = parse_params_or_default(p)?;
-            read(state, move |c| sessions::list(c, p.crew_id.as_deref())).await
+            let all = p.include_archived.unwrap_or(false);
+            read(state, move |c| {
+                sessions::list_for_client(c, p.crew_id.as_deref(), all)
+            })
+            .await
         }
         methods::SESSION_GET => {
             let p: SessionGetParams = parse_params(p)?;

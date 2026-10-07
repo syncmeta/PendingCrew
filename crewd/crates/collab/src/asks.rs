@@ -291,6 +291,43 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
     get(tx.conn(), crew, ask)
 }
 
+/// 机组归档（`crews::archive` 同一事务里调，N1 裁定 13）：以人的身份撤回这个机组账本里全部还开着的问，理由取
+/// render md 的 `notice.ask.crew_archived`（按 meta.locale）。挂在一个 home 人类群里的问只来自它自己和它的下级，
+/// 而下级必须先归档，所以归档到 home 时那里的问都已撤回。解档不重开。还卡着活项的问账本不让撤 →
+/// Conflict（归档整体失败，什么都不变）。每条撤回记 AskChanged。
+pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
+    let open: Vec<AskId> = load(tx.conn(), crew)?
+        .state()
+        .asks
+        .iter()
+        .filter(|(_, a)| a.state == AskState::Open)
+        .map(|(h, _)| *h)
+        .collect();
+    if open.is_empty() {
+        return Ok(());
+    }
+    let reason = crate::prompts::render_file(crate::settings::locale(tx.conn())?)
+        .get("notice.ask.crew_archived")
+        .trim()
+        .to_string();
+    for h in open {
+        with_book(tx, crew, |b, now| {
+            b.withdraw_ask(&Actor::Human, now, h, &reason)
+        })
+        .map_err(|e| match e {
+            CollabError::Work(Rejected::AskInUse(h)) => CollabError::Conflict(format!(
+                "机组 {crew} 的 {h} 还卡着活项；先答掉它或让负责人改道，再归档"
+            )),
+            e => e,
+        })?;
+        tx.note(Change::AskChanged {
+            crew_id: crew.into(),
+            ask: h.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// 默认方案到点的问按默认办（M3c 的定时拍按机组逐个调，控制者裁定 C7）。返回办了的 H 号。
 pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
     let done: Vec<(AskId, bool, Vec<crewd_work::Event>)> = with_book(tx, crew, |b, now| {

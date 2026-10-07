@@ -182,9 +182,13 @@ params!(ReadMarkParams {
     channel_id: String,
     seq: i64
 });
-params!(/// 全可选：`null` 当 `{}`。
-    #[schemars(extend("type" = ["object", "null"]))]
-    SessionListParams { #[serde(default)] crew_id: Option<String> });
+params!(/// 全可选：`null` 当 `{}`。给了 `crewId` = 照实列这个机组的（归档的也列）；不给 = 全部，但归档机组的
+/// session 只在 `includeArchived: true` 时列（同 `crew.list`）。
+#[schemars(extend("type" = ["object", "null"]))]
+SessionListParams {
+    #[serde(default)] crew_id: Option<String>,
+    #[serde(default)] include_archived: Option<bool>,
+});
 params!(SessionGetParams { session_id: String });
 params!(/// 全可选：`null` 当 `{}`。
     #[schemars(extend("type" = ["object", "null"]))]
