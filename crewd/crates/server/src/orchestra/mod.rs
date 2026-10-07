@@ -227,6 +227,8 @@ impl Handle {
         self.call(|reply| Cmd::Live { session, reply }).await
     }
 
+    /// nudge（[`Core`] 的 `nudge`）。文字的 `Ok` = 已排进会话，不是已敲进去：输入框里有人的草稿时执行器挡着它，
+    /// 等草稿清掉再写（T10d fix M4）。
     pub async fn nudge(&self, session: &str, input: String) -> Result<(), ControlError> {
         let session = session.to_string();
         self.call(|reply| Cmd::Nudge {

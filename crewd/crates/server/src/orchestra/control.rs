@@ -96,6 +96,7 @@ pub fn map_error(e: ControlError, l: Locale) -> M3aError {
         | ControlError::NoDecision(_)
         | ControlError::DecisionChanged { .. }
         | ControlError::NeedsTerminal(_)
+        | ControlError::NothingToInterrupt(_)
         | ControlError::InputDraft { .. }
         | ControlError::NoWorkdir(_)
         | ControlError::CaptainTaken(_)
@@ -145,7 +146,8 @@ impl SessionControl for OrchestraControl {
         })
     }
 
-    /// T10c 收窄 nudge（交给人选的框不让 agent 代按）；这里原样转。
+    /// T10c 收窄 nudge（交给人选的框不让 agent 代按）；这里原样转。文字 nudge 的 `Ok` = 已排进会话（执行器写之前再看
+    /// 一次输入框：有人的草稿就挡着，等人清掉再写，T10d fix M4），不是「已敲进去」。
     fn nudge(&self, session_id: String, text: String) -> BoxFuture<'_, Result<(), M3aError>> {
         Box::pin(async move {
             let r = self.h().await?.nudge(&session_id, text).await;
@@ -305,6 +307,7 @@ mod tests {
                 M3aError::Invalid,
             ),
             (ControlError::NeedsTerminal(s()), M3aError::Invalid),
+            (ControlError::NothingToInterrupt(s()), M3aError::Invalid),
             (
                 ControlError::InputDraft {
                     session: s(),

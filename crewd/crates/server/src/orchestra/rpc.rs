@@ -54,6 +54,7 @@ pub fn rpc_err(e: ControlError) -> RpcError {
         | ControlError::NoDecision(_)
         | ControlError::DecisionChanged { .. }
         | ControlError::NeedsTerminal(_)
+        | ControlError::NothingToInterrupt(_)
         | ControlError::InputDraft { .. }
         | ControlError::AtCap { .. }
         | ControlError::ShuttingDown
@@ -492,6 +493,11 @@ mod tests {
                 ControlError::NeedsTerminal("s-1".into()),
                 -32009,
                 "decision.needs_terminal",
+            ),
+            (
+                ControlError::NothingToInterrupt("s-1".into()),
+                -32009,
+                "session.nothing_to_interrupt",
             ),
             (
                 ControlError::InputDraft {

@@ -239,9 +239,11 @@ pub struct MessageReceiptsParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptStateView {
-    /// 排着（没轮到、被挡着；也包括随在途那一批拿走、但这一批不送的窗口外行）。
+    /// 排着（没轮到、被挡着——含输入框里有草稿，`wake.list` 的 `input_draft`；也包括随在途那一批拿走、但这一批不送的
+    /// 窗口外行）。
     Queued,
-    /// 正在送（已拿走，等回执）。
+    /// 正在送（已拿走，等回执）。已交给会话 ≠ 已敲进去：输入框里有人的草稿时会话挡着不写，一直是这一态，草稿清掉才写
+    /// （T10d：queued; held while a draft is present）。
     Delivering,
     /// 送进了它的会话（或它已经从别处读到了）。
     Delivered,

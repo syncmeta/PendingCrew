@@ -336,3 +336,6 @@ The input box of session {session} holds an unsent draft: {text}. Nothing was ty
 
 ## session.input_draft_unknown
 Someone typed into the terminal of session {session}, and it cannot be told whether its input box now holds an unsent draft or only the empty-box hint. Nothing was typed this time; try again once someone sends or clears the input box.
+
+## session.nothing_to_interrupt
+Session {session} is not working and has no pending dialog on screen, so there is nothing to interrupt. Send it a message to give it work.

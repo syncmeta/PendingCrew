@@ -336,3 +336,6 @@ session {session} 的输入框里有一段还没发出的草稿：{text}；这�
 
 ## session.input_draft_unknown
 session {session} 的终端里有人敲过字，此刻分不清它的输入框里是没发出的草稿还是空框的提示；这次什么都没敲进去，等人把输入框发出去或清空再试
+
+## session.nothing_to_interrupt
+session {session} 没在干活、屏上也没有待决策的框，没有可打断的；要它干活就给它发消息

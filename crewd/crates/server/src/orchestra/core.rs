@@ -323,6 +323,8 @@ pub enum ControlError {
     },
     /// 要靠方向键选、但看不出高亮在哪一项（session id）：`decision.needs_terminal`，交给人在终端里选。
     NeedsTerminal(String),
+    /// 要打断（`esc` / `interrupt`），但它没在干活、屏上也没有框（session id）：`session.nothing_to_interrupt`。
+    NothingToInterrupt(String),
     /// 输入框里有还没发出的草稿：什么都不敲（T10d）。`text` = 人打的字；`None` = 有人在终端里敲过、但分不清框里
     /// 是草稿还是占位提示（fix R3：不把看得见的那行当成人的草稿转述）。
     InputDraft {
@@ -415,6 +417,7 @@ impl ControlError {
                 r(Code::DecisionChanged).arg("session", session)
             }
             Self::NeedsTerminal(s) => r(Code::DecisionNeedsTerminal).arg("session", s),
+            Self::NothingToInterrupt(s) => r(Code::SessionNothingToInterrupt).arg("session", s),
             // 草稿是屏上抓来的外来文字：过 safe_name（C20）再进拒绝文字。
             Self::InputDraft {
                 session,
@@ -1221,10 +1224,15 @@ impl<P: Port> Core<P> {
     }
 
     /// nudge（`crewd_wake::notice::nudge_plan` 的契约 + T10d）：空的拒绝（绝不变成一个裸回车）。
-    /// - 文本走 `send`（三拍提交）；输入框里有草稿就拒绝（`session.input_draft`），不往人的草稿上敲。
-    /// - 按键只用来答屏上的待决策框，经执行器的安全按键（`ExecHandle::answer`，`expect` = 收下时的框）：数字按
-    ///   [`notice::answer_plan`] 选第 N 项（没编号的框拒绝数字）；键名（`enter` / `esc` / `up` / `down`）原样按一下。
-    ///   屏上没有框 → `decision.none`；例外：没有框、在干活时的 `esc` = 打断这一轮（`ExecHandle::interrupt`）。
+    /// - 文本走 `send`（三拍提交）。执行器已经报了草稿（[`Live::input_draft`]）就当场拒绝（`session.input_draft` /
+    ///   `session.input_draft_unknown`）。**没报过草稿时收下即回执**：回执的意思是「已排进会话」，不是「已敲进去」——
+    ///   执行器写正文之前还会再看一次输入框，那时有草稿就挡着（T10d 草稿闸），等人清掉再写（fix M4）。
+    /// - 按键只用来答屏上的待决策框，经执行器的安全按键（`ExecHandle::answer`，`expect` = 收下时的框，第一下还核收下时的
+    ///   高亮，fix M1）：数字按 [`notice::answer_plan`] 选第 N 项（没编号的框拒绝数字）；键名（`enter` / `esc` / `up` /
+    ///   `down`）原样按一下。屏上没有框 → `decision.none`。
+    /// - 打断：`interrupt`（fix M7，M3b 的 `nudge_session` 发它）与 `esc` 在屏上没有框时 = 打断这一轮
+    ///   （`ExecHandle::interrupt`）；没在干活 = `session.nothing_to_interrupt`（fix M6）。屏上有框时两者都是对那个框
+    ///   按一下 Esc（同上，经安全按键：框换了就不按）。
     ///
     /// 都排进这个会话的写队列（[`Live::writes`]），与投递按 actor 收下的先后写，不交错。
     async fn nudge(&mut self, session: &str, input: &str, reply: Reply<()>) -> anyhow::Result<()> {
@@ -1237,6 +1245,13 @@ impl<P: Port> Core<P> {
             let r = Refusal::new(Code::OrchestraNudgeEmpty);
             let _ = reply.send(Err(ControlError::Invalid(r)));
             return Ok(());
+        };
+        let token = input.trim();
+        let interrupt = token.eq_ignore_ascii_case("interrupt");
+        let plan = if interrupt {
+            NudgePlan::Keys(vec![vec![0x1b]])
+        } else {
+            plan
         };
         let keys = match plan {
             NudgePlan::Text(text) => {
@@ -1256,14 +1271,16 @@ impl<P: Port> Core<P> {
             }
             NudgePlan::Keys(keys) => keys,
         };
-        let token = input.trim();
         let Some(d) = l.decision.clone() else {
-            if token.eq_ignore_ascii_case("esc") && l.working {
-                // 在干活、屏上没有框：Esc 就是打断这一轮（claude 写一个 Esc；codex 发 turn/interrupt）。
-                let r = l
-                    .handle
-                    .interrupt()
-                    .map_err(|_| ControlError::NotRunning(session.into()));
+            if interrupt || token.eq_ignore_ascii_case("esc") {
+                // 屏上没有框：打断这一轮（claude 写一个 Esc；codex 发 turn/interrupt）；没在干活就没什么可打断的。
+                let r = if l.working {
+                    l.handle
+                        .interrupt()
+                        .map_err(|_| ControlError::NotRunning(session.into()))
+                } else {
+                    Err(ControlError::NothingToInterrupt(session.into()))
+                };
                 let _ = reply.send(r);
                 return Ok(());
             }
@@ -1286,7 +1303,11 @@ impl<P: Port> Core<P> {
                 }
             }
         } else {
-            keys.into_iter().map(|k| (k, None)).collect()
+            // 键名：第一下按之前高亮还得在收下时那一项（被人挪了 = 框变了，fix M1）。
+            keys.into_iter()
+                .enumerate()
+                .map(|(i, k)| (k, if i == 0 { d.selected } else { None }))
+                .collect()
         };
         l.writes.push_back(Write::Answer {
             expect: d.fingerprint(),
@@ -3495,8 +3516,8 @@ mod tests {
         );
         assert_eq!(
             nudge(&mut rig, "cap", "esc").await,
-            Err(ControlError::NoDecision("cap".into())),
-            "空闲、没有框：esc 也没有要按的"
+            Err(ControlError::NothingToInterrupt("cap".into())),
+            "空闲、没有框：没有可打断的（fix M6）"
         );
         rig.emit("cap", SessionEvent::Working(true)).await;
         nudge(&mut rig, "cap", "esc").await.unwrap();
@@ -3863,5 +3884,64 @@ mod tests {
         let text = err.refusal().unwrap().text(crewd_collab::Locale::En);
         assert!(text.contains(&safe_name(HOSTILE)), "{text}");
         assert!(!text.contains('\u{202E}'), "{text}");
+    }
+
+    /// T10d fix M7：`interrupt`（M3b 的 `nudge_session` 发它）= 打断这一轮；没在干活 = `session.nothing_to_interrupt`；
+    /// 屏上有框时同 `esc`：经安全按键对那个框按一下 Esc。
+    #[tokio::test]
+    async fn the_interrupt_token_interrupts_the_turn() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        assert_eq!(
+            nudge(&mut rig, "cap", "interrupt").await,
+            Err(ControlError::NothingToInterrupt("cap".into()))
+        );
+        rig.emit("cap", SessionEvent::Working(true)).await;
+        nudge(&mut rig, "cap", " Interrupt ").await.unwrap();
+        assert_eq!(rig.exec.lock().interrupts, ["cap"]);
+        assert!(rig.exec.sent("cap").is_empty(), "不是文字");
+        let d = decision("Trust?");
+        rig.emit(
+            "cap",
+            SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
+        )
+        .await;
+        nudge(&mut rig, "cap", "interrupt").await.unwrap();
+        let st = rig.exec.lock();
+        assert_eq!(st.interrupts, ["cap"], "有框：不是盲按的打断");
+        assert_eq!(st.raws["cap"], [b"\x1b".to_vec()]);
+        assert_eq!(st.answers["cap"], [d.fingerprint()]);
+    }
+
+    /// T10d fix M1：键名 nudge 的第一下核收下时的高亮——高亮被人挪了（指纹不变）就停手、回 `DecisionChanged`。
+    #[tokio::test]
+    async fn a_named_key_nudge_stops_when_the_highlight_moved() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let d = PendingDecision {
+            numbered: false,
+            ..decision("Trust?")
+        };
+        rig.emit(
+            "cap",
+            SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
+        )
+        .await;
+        let moved = PendingDecision {
+            selected: Some(1),
+            ..d.clone()
+        };
+        rig.exec.lock().boxes.insert("cap".into(), moved.clone());
+        let err = nudge(&mut rig, "cap", "enter").await.unwrap_err();
+        assert_eq!(
+            err,
+            ControlError::DecisionChanged {
+                session: "cap".into(),
+                now: Some(moved)
+            }
+        );
+        assert!(!rig.exec.lock().raws.contains_key("cap"), "回车没按");
     }
 }
