@@ -147,7 +147,12 @@ pub async fn spawn<P: Port>(
 
 /// actor 循环：输入一条条处理；没输入时睡到下一次定时拍（`next_deadline`：最早的未来 not_before、退避 / 错开的
 /// 时刻、待决策升级时刻，都没有就心跳）。停机完成就结束（之后句柄的调用都回「编排已停止」）。
+/// 心跳另有一个固定节拍的 `interval`（评审 I2）：每条输入都会让「睡到下一拍」重新起算，输入比心跳勤的忙 actor 光靠它
+/// 一拍都等不到；`interval` 不随输入重置，所以默认方案到点、清旧唤醒、已过点的唤醒重扫至少每个心跳一次。
 async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>) {
+    let hb = Duration::from_millis(core.cfg.heartbeat_ms.max(1) as u64);
+    let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + hb, hb);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let wait = core.next_deadline().await.since(core.now()).max(0) as u64;
         tokio::select! {
@@ -157,6 +162,7 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
                 None => return,
             },
             _ = tokio::time::sleep(Duration::from_millis(wait)) => core.handle(Input::Tick).await,
+            _ = heartbeat.tick() => core.handle(Input::Tick).await,
         }
         if core.shutdown_done() {
             return;
@@ -504,6 +510,43 @@ mod tests {
             .expect("休眠完了 actor 收尾");
         assert!(done.is_ok());
         assert!(h.hibernate(None).await.is_err(), "actor 没了：句柄回错");
+    }
+
+    /// 评审 I2：心跳不被输入挤掉——actor 每 10 秒收一条输入（比心跳 30 秒勤），定时拍照样按心跳来（默认方案到点、
+    /// 清旧唤醒、重扫都挂在它上面）。原先每条输入都把「睡到下一拍」重新起算，忙着的 actor 一拍都等不到。
+    #[tokio::test(start_paused = true)]
+    async fn a_busy_actor_still_gets_its_heartbeat_ticks() {
+        let port = Arc::new(MemPort::new());
+        port.lock().now = T0;
+        let row = port
+            .insert_session(port::NewSession {
+                crew_id: "c1".into(),
+                captain: true,
+                executor: "claude".into(),
+                brief: String::new(),
+                title: Some("cap".into()),
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        let (h, _actor) = spawn(
+            port.clone(),
+            Executors::new(),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        let before = port.lock().defaults_applied;
+        for _ in 0..12 {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            h.live(&row.id).await.unwrap();
+        }
+        let ticks = port.lock().defaults_applied - before;
+        assert!(ticks >= 3, "120 秒里心跳 30 秒一拍，却只拍了 {ticks} 次");
     }
 
     struct PanickingQuota;
