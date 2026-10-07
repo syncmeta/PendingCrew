@@ -484,7 +484,11 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
-        let r = h.hibernate(Some(Duration::ZERO)).await.unwrap();
+        // 有期限地等：休眠一直不回报（变异 m4：期限永远不到）要红，不能把测试挂住。
+        let r = tokio::time::timeout(Duration::from_secs(10), h.hibernate(Some(Duration::ZERO)))
+            .await
+            .expect("期限 0：应当立刻回报")
+            .unwrap();
         assert_eq!(
             r,
             hibernate::HibernateReport {
